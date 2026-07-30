@@ -3,10 +3,11 @@ import Button from "@mui/material/Button";
 import { useQuery } from "@tanstack/react-query";
 import { clsx } from "clsx";
 import type { UserLocationInfo } from "main/fetch_cross_origin/ip_api";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 
 import { ExternalLink as A, ExternalLink } from "@/components/external_link";
 import { useAppStore } from "@/lib/hooks/use_app_store";
+import { useLocalStorage } from "@/lib/hooks/use_local_storage";
 import { formatDateRange, formatRelativeDate } from "@/lib/time";
 import { useServices } from "@/services";
 import type { SupportedLanguage } from "@/services/i18n/util";
@@ -24,26 +25,6 @@ const KM_TO_MILE = 0.621371;
 const STORAGE_KEY_RADIUS = "nearbyTournamentRadius";
 const STORAGE_KEY_UNITS = "nearbyTournamentUnits";
 const STORAGE_KEY_SORT = "nearbyTournamentSort";
-
-const loadStoredValue = <T,>(key: string, defaultValue: T): T => {
-  try {
-    const stored = localStorage.getItem(key);
-    if (stored !== null) {
-      return JSON.parse(stored) as T;
-    }
-  } catch {
-    // Ignore parse errors
-  }
-  return defaultValue;
-};
-
-const storeValue = <T,>(key: string, value: T): void => {
-  try {
-    localStorage.setItem(key, JSON.stringify(value));
-  } catch {
-    // Ignore storage errors
-  }
-};
 
 const NearbyTournamentCard = ({
   name,
@@ -102,9 +83,9 @@ const NearbyTournamentCard = ({
 
 export const TournamentsNearMe = ({ locationInfo }: { locationInfo: UserLocationInfo }) => {
   const defaultUnits: UnitValue = COUNTRIES_THAT_USE_MILES.includes(locationInfo.countryCode) ? "mi" : "km";
-  const [units, setUnits] = useState<UnitValue>(() => loadStoredValue(STORAGE_KEY_UNITS, defaultUnits));
-  const [radius, setRadius] = useState<DistanceValue>(() => loadStoredValue(STORAGE_KEY_RADIUS, 100));
-  const [sortBy, setSortBy] = useState<SortOption>(() => loadStoredValue(STORAGE_KEY_SORT, "date"));
+  const [units, setUnits] = useLocalStorage<UnitValue>(STORAGE_KEY_UNITS, defaultUnits);
+  const [radius, setRadius] = useLocalStorage<DistanceValue>(STORAGE_KEY_RADIUS, 100);
+  const [sortBy, setSortBy] = useLocalStorage<SortOption>(STORAGE_KEY_SORT, "date");
 
   const sortOptions = [
     { value: "date", label: Messages.sortByDate() },
@@ -129,18 +110,6 @@ export const TournamentsNearMe = ({ locationInfo }: { locationInfo: UserLocation
     staleTime: 5 * 60 * 1000,
     enabled: !!radius,
   });
-
-  useEffect(() => {
-    storeValue(STORAGE_KEY_RADIUS, radius);
-  }, [radius]);
-
-  useEffect(() => {
-    storeValue(STORAGE_KEY_UNITS, units);
-  }, [units]);
-
-  useEffect(() => {
-    storeValue(STORAGE_KEY_SORT, sortBy);
-  }, [sortBy]);
 
   const sortedEvents = useMemo(() => {
     if (!nearbyTournamentsQuery.data) {
