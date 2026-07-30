@@ -12,6 +12,7 @@ export const UserInfo = React.memo(function UserInfo({
   displayName,
   displayPicture,
   connectCode,
+  errorBorder,
   errorMessage,
   tier = "NONE",
   isVip,
@@ -22,12 +23,17 @@ export const UserInfo = React.memo(function UserInfo({
   tier?: "TIER1" | "TIER2" | "TIER3" | "NONE";
   isVip?: boolean;
   connectCode?: string;
+  errorBorder?: boolean;
   errorMessage?: string;
   loading?: boolean;
 }) {
   return (
     <div className={styles.root}>
-      {loading ? <CircularProgress color="inherit" /> : <UserIcon imageUrl={displayPicture} size={42} />}
+      {loading ? (
+        <CircularProgress color="inherit" />
+      ) : (
+        <UserIcon imageUrl={displayPicture} size={42} borderColor={errorBorder ? "var(--red-error)" : undefined} />
+      )}
       <div className={styles.content}>
         <h3 className={styles.displayName}>{displayName}</h3>
         {!loading &&
