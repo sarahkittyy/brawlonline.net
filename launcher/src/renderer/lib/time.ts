@@ -94,12 +94,11 @@ export function formatDateRange(startDate: Date, endDate: Date, timezone: string
   return `${startStr} ${startYear} - ${endStr} ${endYear}`;
 }
 
-export function formatRelativeDate(targetDate: Date, locale = "en-US"): string {
+export function formatRelativeDate(targetDate: Date, locale = "en-US", nowDate: Date = new Date()): string {
   if (!(targetDate instanceof Date) || isNaN(targetDate.getTime())) {
     throw new Error("Invalid targetDate");
   }
 
-  const nowDate = new Date();
   const now = nowDate.getTime();
   const diffMs = targetDate.getTime() - now;
 
@@ -121,7 +120,9 @@ export function formatRelativeDate(targetDate: Date, locale = "en-US"): string {
     return rtf.format(value, "hour");
   }
 
-  const diffDays = Math.round(diffMs / day);
+  // Round up partial days for future events so an event 25 hours away shows "in 2 days"
+  // rather than "tomorrow", but keep nearest rounding for past events.
+  const diffDays = diffMs > 0 ? Math.ceil(diffMs / day) : Math.round(diffMs / day);
 
   if (Math.abs(diffDays) < 14) {
     return rtf.format(diffDays, "day");
