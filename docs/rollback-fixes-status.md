@@ -1,40 +1,90 @@
-# Rollback fixes: status (2026-10-06)
+# Rollback fixes: status
 
-Branch `rollback-fixes` in `dolphin/` (off `harness`). Not pushed. HEAD `8183cc10c5` builds. The harness regression tests are **not written yet**.
+Branch `rollback-fixes` in `dolphin/` (off `harness`). Not pushed. All commits build. The regression tests are in `harness/tests/test_rollback.py` (`pytest -m dolphin tests/test_rollback.py`: 5 tests, about 4 minutes, all passing on HEAD).
 
-All numbers come from two instances on this PC, with another agent's Dolphins running at the same time, so FPS is noisy. Driver and results are in the session scratchpad (`rbtest.py`, `res/*.json`). They are not in the repo.
+Measurement caveat: all numbers come from two instances on one 8-core PC, with another agent's Dolphins running, single core, Null video, muted. FPS is noisy.
 
-## Done (commits, oldest first)
+## Result
 
-| SHA | Fix | Evidence |
+### Scorecard
+
+`python -m ppharness scorecard --presets lan,typical,bad_wifi --sessions 1 --duration 60 --phase auto`. HEAD is compared with `docs/scorecard-baseline.md`.
+
+| Preset | Baseline (`harness`) | HEAD (`4d972aaa29`) |
 |---|---|---|
-| eff14d6c32 | Memory leak: job closures were never destroyed. Each evicted snapshot (~5.5 MB/frame) leaked. Also fixes a stale `page_count`. | Peak private memory was 11-16 GB per instance after ~90 s (one orphan reached 15 GB). Now 1.1 GB. |
-| 5a1cba82b7 | GekkoNet packets were sent with `enet_peer_send` from the CPU thread, racing the netplay thread's `enet_host_service`. They waited for the next received packet before going out. They are now queued and sent and flushed by the netplay thread. | |
-| 581e716610 | `MMU::HostWrite`/`HostTryWrite` (all HLE hook writes) did not mark the dirty bitmap. Now they do. | |
-| 6ac8dd0e15 | (#7) The save was taken before the `stw` of the frame counter at 0x80017504, so each rollback lost one count. Now the store happens first, so save and load share the loop-top boundary. The loop keeps no register state across iterations (checked in the disassembly). | |
-| b74ba2a091 | IOS IPC request/reply queues and `m_last_reply_time` now roll back with the WiiIPC registers and CoreTiming events. | |
-| 7ee1f9ab99 | Harness: `rollback_pad_history`, the pads the game used per GekkoNet frame. | |
-| 744faec247 | (#5) Presented frames used the live local pad, while the peer used it 3-4 frames later. Now every pass injects GekkoNet's gfPadStatus for the player ports only. GekkoNet delay is 1, which gives 2 frames from pad read to use. | Single-poll presses: before, the joiner's X landed at 211/317/489 locally and 214/321/493 on the host (10 button and 424 CRC mismatches out of 1042 frames). After, the frames are identical on both sides and there are 0 mismatches. |
-| f7bcf4a591 | (#1) The AX "audio buffer/voice block" exclusions were removed. They covered AX voice-list .bss. | |
-| 72453dbfe4 | Harness: `cpu_state` (pc, msr, pending exceptions, PI/VI interrupt state). | Frozen side: pc 0x80201e40/74 (AX voice-list walk), msr 0x1032 (EE=0), exceptions 0x5. |
-| 041f4cf2a5 | (#8) `DEFAULT_CPU_THREAD = true` restored, with P+'s description text. Note: the clone at `refs/pplus-Project-Plus-Dolphin` @93eae93 also has `false` ("input lag"), so upstream P+ may have changed its mind. | |
-| 7afaab433a | **(#1) Root cause of the freezes:** JIT stores to compile-time-constant addresses (`WriteToConstRamAddress`, i.e. .bss/.sbss globals) were never marked dirty. Globals were not restored by loads, which corrupted AX voice lists into a cycle. | ROLLBACK_VALIDATE: 80 of 97 loads restored wrong RAM before, 0 of 201 after. to_match runs froze in 2/3 and 3/4 of runs before, 0/12 after (lan and typical). |
-| 204a906682 | (#6) The 6 job helper threads per instance busy-spun forever. Now they block on an atomic epoch. | 3.5-3.7 cores per instance before, 0.1-0.2 after. This was the main cause of 36 FPS with two instances. |
-| ef53aaeee7 | (#3, #2) Resimulation is unthrottled, and the throttle is re-anchored when the presented frame starts. `PauseForLocalAdvantage` sleeps were replaced by a Slippi-style speed nudge (-2%/+1%, every 15 frames). netplay_status has new counters: time_sync_speed, stall_polls, save/load µs. | CSS movement, lan: 51.5 FPS, 58-64 rollbacks, frames ahead +0.56/-0.20 → 59.9 FPS, 0-1 rollbacks, +0.04/+0.03. Typical: 47 → 58.5 FPS. Save is about 1.2 ms, load about 2 ms. |
-| 6992f39aa2 | (#4) Synchronized start: the joiner sends Ready and the host sends Go, then starts after ping/2. This uses 0xB7 control packets on the GekkoNet channel. | Start offset not yet measured. The measurement run was interrupted (`bin/pacing` vs `bin/startsync`, logs in scratchpad `logs/`). |
-| be0ddb58d7 | A stall waits on the host, not with a guest spin, so no emulated time passes between frames. | |
-| 9026c5d1a3 | Resimulation no longer takes shortcuts: render, VI wait, forced completions and the sound-alloc skip are all run as normal (`kResimulationShortcuts=false`). | |
-| 242af80c0e | (#9) The checksum now uses verified fields: frame counter, plus per-port active instance, damage, stocks, X/Y and status. It also records per-frame checksum parts and the gameProc step count in rollback_pad_history. | |
-| 8183cc10c5 | ROLLBACK_VALIDATE reports the 64-byte granules that differ. | |
+| lan | One side froze at 8.3 s (GekkoNet frame 146, CSS). The live side ran alone at 42 FPS. Setup never got past the character pick. | Reached the match. No freeze, no stall over 2 s. 9 rollbacks, desyncs 0. Frames ahead 0.14 / -0.03 (mean). Game FPS 59.4 / 59.4. State compare: match. |
+| typical | One side froze at 7.2 s (frame 161). | Reached the match. No freeze. About 200 rollbacks per side, desyncs 0. Frames ahead 0.15 / 0.00. Game FPS 56.9 / 56.9. State compare: match. |
+| bad_wifi | One side froze at 6.8 s (frame 122). | Reached the match. No freeze. About 240 rollbacks per side (591 / 634 frames resimulated), desyncs 0. Frames ahead 0.29 / 0.05. Game FPS 53.3 / 53.4. State compare: match. |
 
-## Open problems / next steps
+The full JSON is in `run/qa/scorecard-rollback-fixes.json` (local).
 
-1. **Real desyncs remain in matches with rollbacks.** Inputs are identical (0 pad mismatches), but the per-frame fighters checksum diverges about 100 frames after match start, and the g_GameFrame persistent counter drifts by 1-8 frames over 25 s (typical preset, about 4 rollbacks/s). With 0 rollbacks, everything matches.
-   - Not the cause: the gameProc step count (always 1 on both sides).
-   - Next: per-frame 64 KiB chunk hashes, so the first diverging frame and region can be found. Code was drafted but not committed (env `PPR_ROLLBACK_CHUNK_HASHES`, harness `rollback_chunk_hashes`). Suspects: CPU registers/FPSCR/GQR/DEC not restored, IOS device state, dual-core/GPU timing.
-   - A CSS→main-menu divergence (one side backs out) was also seen with identical inputs.
-2. GekkoNet `desyncs_detected` stays high in matches. This is consistent with item 1, not with a checksum bug.
-3. #8 dual core: not yet tested under rollback. The determinism agent found dual core diverges offline. Next: sync the GPU thread at the frame hook, then measure.
-4. Not done: harness regression tests (`harness/tests/`, marked `dolphin`) for freeze, pad history, memory and FPS, plus doc updates. The doc updates needed are: `harness-protocol.md` for `cpu_state`, the new rollback fields, the extra pad-history columns and delay=1; and `harness-implementation.md`.
-5. Not done: before/after with `python -m ppharness scorecard` (baseline in `docs/scorecard-baseline.md`). The binaries to compare are `bin/base` (original) and HEAD.
-6. Audio is not muted during unthrottled resimulation, which matters for real (non-muted) play. Host-side render skip during resimulation (as Orca does) is a possible optimisation.
+### Other checks (scratch driver, two instances, CSS → SSS → match with random input)
+
+- **Desync.** Every per-frame checksum (frame counter, and per port damage, stocks, active-fighter X/Y and status) is identical on both peers on every confirmed frame. Pads are identical too.
+  - typical: 3 of 3 runs, about 1,690 frames each, ~100 rollbacks each.
+  - bad_wifi: 2 of 2 runs, 117-181 rollbacks each.
+  - lan: 2 of 2 runs.
+  - Before: fighters diverged about 100 frames into every match that had rollbacks, and the frame counter drifted 1-8 frames.
+- **Sync test.** `PPR_SYNCTEST=3` in a Training match with random input, 30 s: 0 GekkoNet checksum mismatches.
+- **Memory.** About 1.1 GB peak private bytes per instance. Before: 11-16 GB after 90 s.
+- **CPU.** 0.1-0.2 cores per instance on the CSS. Before: 3.5-3.7 cores, from busy-spinning job threads.
+
+## The nine items
+
+1. **Host freeze at scene transitions — fixed.**
+   - Root cause: JIT stores to constant addresses (globals) never set the dirty bitmap (`7afaab433a`). Loads left AX voice-list globals at their newer values, the lists formed a cycle, and AX's interrupt-time list walk (0x80201E40) spun forever with MSR[EE]=0.
+   - Contributing fixes:
+     - host writes are marked dirty (`581e716610`);
+     - the AX exclusions are removed (`f7bcf4a591`);
+     - the IOS IPC queues roll back (`b74ba2a091`);
+     - packets go out on the netplay thread (`5a1cba82b7`).
+   - Evidence:
+     - ROLLBACK_VALIDATE: 80 of 97 loads restored wrong RAM before, 0 of 201 after.
+     - The new `cpu_state` command (`72453dbfe4`) showed the spin.
+2. **Asymmetric pacing — fixed (`ef53aaeee7`).** The sleeps were repaid by the absolute-timeline throttle. They are replaced by a speed nudge (-2% to +1%, Slippi-style). Frames ahead was about 1.9 / 1.4 on the original build; it is now about 0.0-0.3 (scorecard above).
+3. **Throttled resimulation — fixed (`ef53aaeee7`).** Resimulated iterations run unthrottled, and the throttle is re-anchored when the presented frame starts.
+4. **Synchronized start — fixed (`6992f39aa2`).** The joiner sends Ready, and the host sends Go and starts half a ping later.
+   - Time at which each side simulated GekkoNet frame 1, joiner minus host, typical preset: -19 / -180 / -171 ms before; +6 / +12 / -1 ms after.
+5. **Input timing — confirmed and fixed (`744faec247`).**
+   - Before, a single-frame press landed 3-4 frames later on the peer than locally: 10 button and 424 CRC mismatches over 1,042 frames.
+   - After, it lands on the same frame on both peers with 0 mismatches. Delay is 1, which gives 2 frames from pad read to use.
+   - This uses the harness command `rollback_pad_history` (`7ee1f9ab99`).
+6. **Running at 36 FPS — fixed.** There were three causes:
+   - busy-spinning job workers, about 3.5 cores per instance (`204a906682`);
+   - a ~300 MB/s snapshot leak (`eff14d6c32`);
+   - the sleeps and throttled resimulation of items 2 and 3.
+   - Cost now: a save is about 1.2 ms per frame, a load about 2 ms.
+7. **Save and load at different points — real, fixed.**
+   - The save happened before the frame-counter store (`6ac8dd0e15`).
+   - The save now happens at the loop top, the same instruction boundary as loads, so the CoreTiming position matches (`1a46ce8b61`).
+8. **Dual core.** The default is restored to true (`041f4cf2a5`). Dual core is not yet tested under rollback (next).
+9. **Checksum — fixed (`242af80c0e`).** GekkoNet now checksums verified fields: the frame counter, plus per port the active instance, damage, stocks, X/Y and status kind. The parts are recorded per frame for the harness.
+
+## How the remaining desync was found and fixed
+
+| SHA | Fix |
+|---|---|
+| `92a44d4f68` | Sync test (`PPR_SYNCTEST=N`, a GekkoNet stress session) plus per-frame MEM1/MEM2 chunk hashes with word-level diffs. |
+| `c0a734f8db` | **The main bug: the wrong snapshot slot was restored on every rollback.** The code loaded one frame too old, so each rollback dropped a frame of game progress. A distance-1 sync test replayed the same frame forever. |
+| `dfe25b4651` | The CPU's slice position (downcount) and pending exceptions are restored. Zeroing them shifted resimulated time. |
+| `1a46ce8b61` | Saves happen at the loop top. |
+| `17157c72ad` | The main thread's stack is restored. The live-stack exclusion kept post-snapshot locals. |
+| `de21413848` | GPRs, FPRs, CR, XER, FPSCR and run-time SPRs are saved and restored. |
+| `4d972aaa29` | Pads are read on resimulated frames too. Skipping the read left PAD/SI library state and CPU time different from the first run. |
+| `be0ddb58d7` | Stalls wait on the host rather than in a guest spin, so emulated time doesn't advance between frames. |
+| `9026c5d1a3` | Resimulation shortcuts (render skip, VI-wait bypass, forced completions) are off. |
+
+Sync-test residue (non-gameplay, whole-machine only):
+- PAD/SI buffers, because the local port's SI data is the live controller in resimulated frames too;
+- a few timestamps one tick apart.
+
+None of them reach the gameplay checksum.
+
+## Next steps
+
+1. Dual core under rollback: scorecard with `--cpu-thread on`. If it diverges, sync the GPU thread at the frame hook.
+2. Audio during resimulation. AI/DSP output plays the resimulated frames at unthrottled speed. Mute it while resimulating. XFB presentation of resimulated fields can flash too (Null video hides this).
+3. Gameplay-only rollback (user decision): restrict save/restore to a region set. Inputs to that work:
+   - memory that legitimately differs between peers: PAD/SI library buffers 0x804DE3B0-0x804DE4B0, 0x804F67B0, 0x80584000;
+   - OS thread contexts and timestamps;
+   - the CPU and timing state that must still be restored: registers, downcount, exceptions, CoreTiming.
