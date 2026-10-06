@@ -57,10 +57,10 @@ Environment variables: `PPR_HARNESS_PORT` (port if no flag), `PPR_HARNESS_AUDIO=
 
 ## Known limitations
 
-- **Brawlback rollback hangs on menus (not the harness).** In two runs, harness-driven rollback netplay booted on both instances, reached the CSS, started a GekkoNet session and performed a few rollbacks (2-4 rollbacks, max 4-5 frames, no desyncs detected). Then the host's game loop stalled while the joiner kept running on its own (joiner GekkoNet frame in the thousands, host stuck at 137 / 281). One stall came during cursor movement, when the CSS loads character portraits from SD; the other came at the CSS -> stage select transition. Without moving the cursor, a 30 s CSS session stayed in sync. Rollback mode also ran at about 36 VI fields/s on this PC with two instances, versus 60 in fixed-delay mode. Fixed-delay netplay works, and harness input flows through it as well.
+- **Brawlback rollback hangs on menus: fixed on `rollback-fixes`.** On `harness`, the host's game loop stalled at scene transitions while the joiner ran on (GekkoNet frames 137 / 281), and rollback ran at about 36 VI fields/s with two instances. The causes were: untracked constant-address JIT stores, which corrupted AX voice lists into a cycle that AX then spun on with interrupts off; a snapshot leak; and busy-spinning job threads. See `docs/rollback-fixes-status.md` and the regression tests in `harness/tests/test_rollback.py`.
 - `screenshot` needs running emulation and a real video backend.
 - Memory commands briefly pause the CPU (`CPUThreadGuard`). They block for as long as the CPU thread is itself blocked (e.g. waiting for remote input in fixed-delay netplay).
 - `input_polls` only has per-frame accuracy for Brawl/P+ (see the protocol doc's Deviations). Other games fall back to SI polls (usually 2 per frame).
 - In fixed-delay netplay, local input reaches the game after the pad buffer delay, so `input_polls`-scheduled scripts land `buffer` frames later than in offline play. That's the same delay a real controller gets.
-- Harness netplay is direct-connection only (no traversal or UPnP), and the GekkoNet input delay is fixed at 2 frames by the fork.
+- Harness netplay is direct-connection only (no traversal or UPnP), and the GekkoNet input delay is fixed by the fork (1 on `rollback-fixes`, which gives 2 frames from pad read to use).
 - Linux/macOS: the code is written for POSIX sockets as well but has only been built on Windows.
