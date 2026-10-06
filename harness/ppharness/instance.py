@@ -707,8 +707,14 @@ def probe_harness_support(exe: str | os.PathLike[str] | None = None,
                 time.sleep(0.2)
 
 
-def clean_instances(root: Path | None = None, *, dry_run: bool = False) -> list[tuple[Path, str]]:
-    """Remove instance dirs whose process is gone. Returns [(dir, action)]."""
+def clean_instances(root: Path | None = None, *, dry_run: bool = False,
+                    min_age_s: float = 600.0) -> list[tuple[Path, str]]:
+    """Remove instance dirs whose process is gone. Returns [(dir, action)].
+
+    Skips dirs whose Dolphin is still running, dirs without a recorded pid that are younger
+    than ``min_age_s`` (not launched yet), and dirs another process still has files open in
+    (the rename-then-delete fails on Windows), so it is safe while other sessions run.
+    """
     root = root or paths.instances_root()
     results: list[tuple[Path, str]] = []
     if not root.is_dir():
@@ -723,11 +729,24 @@ def clean_instances(root: Path | None = None, *, dry_run: bool = False) -> list[
         if pid and _platform.pid_alive(int(pid)):
             results.append((d, f"skipped (pid {pid} still running)"))
             continue
+        if not pid and time.time() - d.stat().st_mtime < min_age_s:
+            # Created but not launched yet: another driver may be about to start it.
+            results.append((d, "skipped (no pid yet, recently created)"))
+            continue
         if dry_run:
             results.append((d, "would remove"))
             continue
+        # Rename first: on Windows this fails while any process (e.g. the Python driver that
+        # still holds harness-stdout.txt) has a handle inside, so a dir that another session is
+        # still using is never half-deleted.
+        tomb = d.with_name(d.name + ".deleting")
         try:
-            remove_tree(d, meta.get("linked_dirs", ["Load"]), attempts=3)
+            os.rename(d, tomb)
+        except OSError as e:
+            results.append((d, f"skipped (in use: {e.strerror or e})"))
+            continue
+        try:
+            remove_tree(tomb, meta.get("linked_dirs", ["Load"]), attempts=3)
             results.append((d, "removed"))
         except InstanceError as e:
             results.append((d, f"failed: {e}"))
