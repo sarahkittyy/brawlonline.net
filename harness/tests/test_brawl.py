@@ -411,7 +411,9 @@ class SimGame:
 
     ICON_W, ICON_H = 6.0, 4.0
 
-    def __init__(self, ports=(0, 1)):
+    def __init__(self, ports=(0, 1), delay=0):
+        self.delay = delay          # netplay-like input delay, in frames
+        self.history = []           # pads as sampled each poll, for the delay
         self.w = World()
         self.m = self.w.m
         self.polls = 0
@@ -487,6 +489,9 @@ class SimGame:
         self.polls += 1
         self.scene_age += 1
         pads = {p: self.pad_now(p) for p in range(4)}
+        self.history.append(pads)
+        if self.delay:
+            pads = self.history[-1 - self.delay] if len(self.history) > self.delay else                 {p: {"buttons": set(), "main": (128, 128)} for p in range(4)}
         pressed = {p: pads[p]["buttons"] - self.prev_buttons[p] for p in range(4)}
         self.prev_buttons = {p: set(pads[p]["buttons"]) for p in range(4)}
         if self.scene == "scSelctCharacter":
@@ -593,6 +598,20 @@ class RecipeTests(unittest.TestCase):
         a2 = b.css_pick_character(g, 1, b.CSS_ID["falco"])
         self.assertEqual(a2.character, b.CSS_ID["falco"])
         self.assertLess(g.polls - before, 1500)
+
+    def test_pick_through_netplay_input_delay(self):
+        for delay in (3, 10):
+            b.LEARNED_CSS.clear()
+            b.LEARNED_SSS.clear()
+            g = SimGame(delay=delay)
+            a = b.css_pick_character(g, 0, b.CSS_ID["fox"])
+            self.assertEqual(a.character, b.CSS_ID["fox"])
+            a = b.css_pick_character(g, 1, b.CSS_ID["falco"])
+            self.assertEqual(a.character, b.CSS_ID["falco"])
+            b.css_start(g, 0)
+            b.sss_pick_stage(g, b.STAGE_KIND["final_destination"], 0)
+            b.wait_scene(g, [b.Scene.IN_MATCH], 300)
+            self.assertEqual(b.read_match_setup(g.m).stage_kind, b.STAGE_KIND["final_destination"])
 
     def test_css_repick_from_wrong_token(self):
         g = SimGame()

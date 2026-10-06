@@ -1384,6 +1384,9 @@ def _serpentine(xs: Tuple[float, float], ys: Sequence[float]) -> List[Tuple[floa
     return pts
 
 
+# Cursor speeds at full tilt, units per frame (verified live).
+CSS_HAND_SPEED = 1.0
+SSS_CURSOR_SPEED = 1.6
 # CSS hand range (orca: grid spans about y -5..16; P+ hand speed 1.0/frame at full tilt).
 CSS_SCAN_X = (-30.0, 30.0)
 CSS_SCAN_Y = (15.0, 12.0, 9.0, 6.0, 3.0, 0.5, -2.5)
@@ -1513,13 +1516,89 @@ def css_join(drv: Driver, port: int, pad_port: Optional[int] = None, tries: int 
     return a
 
 
+def _settle(drv: Driver, read_xy: Callable[[], Optional[Tuple[float, float]]], max_frames: int = 45,
+            still_frames: int = 2) -> Optional[Tuple[float, float]]:
+    """Step until the cursor has not moved for ``still_frames`` reads in a row, or ``max_frames``
+    pass. Netplay delays our stick by the pad buffer, so after a change the cursor keeps doing the
+    old thing for that many frames; ``still_frames`` must exceed the input latency (see
+    ``measure_input_latency``) or a pulse still in flight looks like rest."""
+    prev = read_xy()
+    run = 0
+    for _ in range(max_frames):
+        step(drv, 1)
+        cur = read_xy()
+        if cur is None or prev is None:
+            return cur
+        if abs(cur[0] - prev[0]) < 0.02 and abs(cur[1] - prev[1]) < 0.02:
+            run += 1
+            if run >= still_frames:
+                return cur
+        else:
+            run = 0
+        prev = cur
+    return prev
+
+
+def measure_input_latency(drv: Driver, pp: int, read_xy: Callable[[], Optional[Tuple[float, float]]],
+                          direction: Tuple[int, int] = (128, 228), max_frames: int = 40) -> int:
+    """Frames between setting the stick and the cursor moving (about 2 offline; more under
+    fixed-delay netplay). Leaves the cursor at rest a few units from where it was."""
+    neutral(drv, pp)
+    _settle(drv, read_xy, still_frames=3)
+    p0 = read_xy()
+    drv.pad_set(pp, buttons=(), main=direction)
+    n = 0
+    while n < max_frames:
+        step(drv, 1)
+        n += 1
+        p = read_xy()
+        if p is None or p0 is None or math.hypot(p[0] - p0[0], p[1] - p0[1]) > 0.02:
+            break
+    neutral(drv, pp)
+    _settle(drv, read_xy, still_frames=n + 1)
+    log.debug("input latency %d frames", n)
+    return n
+
+
+def _pulse(drv: Driver, pp: int, x: float, y: float, tx: float, ty: float, speed: float) -> None:
+    """Move toward (tx, ty) by roughly the remaining distance with a short, slow stick pulse, then
+    release (used near the target, where a held stick under input delay overshoots). The caller
+    settles afterwards."""
+    dx, dy = tx - x, ty - y
+    dist = math.hypot(dx, dy)
+    if dist < 0.05:
+        return
+    mag = 45.0  # ~45 % tilt
+    frames = max(1, min(12, int(round(dist / (speed * 0.45)))))
+    main = (int(round(128 + dx / dist * mag)), int(round(128 + dy / dist * mag)))
+    neutral(drv, pp)
+    drv.pad_script(pp, [{"buttons": [], "main": list(main), "hold": frames}, {"buttons": [], "hold": 1}])
+    step(drv, frames + 1)
+
+
+# Within this distance of a known target the pickers stop holding the stick and use pulses.
+# It grows to the overshoot actually observed (input delay x cursor speed).
+APPROACH_RADIUS = 7.0
+
+
+def _adapt_radius(radius: float, released_at: Tuple[float, float],
+                  settled: Optional[Tuple[float, float]]) -> float:
+    if settled is None:
+        return radius
+    overshoot = math.hypot(settled[0] - released_at[0], settled[1] - released_at[1])
+    return min(30.0, max(radius, overshoot * 1.3 + 2.0))
+
+
 def css_pick_character(drv: Driver, port: int, css_id: int, pad_port: Optional[int] = None,
-                       timeout_frames: int = 1500) -> CssArea:
+                       timeout_frames: int = 1800) -> CssArea:
     """Closed loop: steer ``port``'s hand until the character under it (area+0x1B8) is ``css_id``
-    and the hand is over the grid holding the token (hand target 7), wait until the hand is still,
-    press A, verify the token is down on ``css_id``. Positions seen while scanning are cached in
-    ``LEARNED_CSS`` so later picks steer directly. Never holds B (B held with the token in hand
-    backs out of the CSS after ~31 frames)."""
+    and the hand is over the grid holding the token (hand target 7), let the hand come to rest,
+    press A, verify the token is down on ``css_id``.
+
+    Steering is delay-tolerant (it works through netplay's input delay): full tilt while far,
+    release at ``APPROACH_RADIUS`` from a known position, wait for the hand to stop, then short
+    pulses. Positions seen while scanning are cached in ``LEARNED_CSS`` (centroids). Never holds
+    B (B held with the token in hand backs out of the CSS after ~31 frames)."""
     pp = port if pad_port is None else pad_port
     start = polls(drv)
     a = css_join(drv, port, pp)
@@ -1531,6 +1610,16 @@ def css_pick_character(drv: Driver, port: int, css_id: int, pad_port: Optional[i
     wp = 0
     prev: Optional[Tuple[float, float]] = None
     stuck = 0
+    presses = 0
+    wp_deadline: Optional[int] = None
+    radius = APPROACH_RADIUS
+
+    def hand_xy() -> Optional[Tuple[float, float]]:
+        ar = read_css_area(drv.read_mem, port)
+        return None if ar is None else (ar.hand_x, ar.hand_y)
+
+    still = measure_input_latency(drv, pp, hand_xy) + 1
+
     while polls(drv) - start < timeout_frames:
         a = read_css_area(drv.read_mem, port)
         if a is None:
@@ -1542,36 +1631,56 @@ def css_pick_character(drv: Driver, port: int, css_id: int, pad_port: Optional[i
             tap(drv, pp, ["B"], hold=1, release=8)
             continue
         x, y = a.hand_x, a.hand_y
-        if a.hand_target == CSS_HAND_GRID_HOLDING and a.character != CSS_NONE \
-                and math.isfinite(x):
+        if a.hand_target == CSS_HAND_GRID_HOLDING and a.character != CSS_NONE:
             LEARNED_CSS.add(a.character, x, y)
         on_target = a.hand_target == CSS_HAND_GRID_HOLDING and a.character == css_id
-        still = prev is not None and abs(x - prev[0]) < 0.05 and abs(y - prev[1]) < 0.05
-        log.debug("css p%d want %#x: hand (%.2f, %.2f) target %d under %#x kind %d on=%s still=%s wp=%d",
-                  port + 1, css_id, x, y, a.hand_target, a.character, a.kind, on_target, still, wp)
-        if on_target and still:
-            drv.pad_set(pp, buttons=(), main=(128, 128))
-            tap(drv, pp, ["A"], hold=3, release=6)
+        log.debug("css p%d want %#x: hand (%.2f, %.2f) target %d under %#x kind %d on=%s wp=%d",
+                  port + 1, css_id, x, y, a.hand_target, a.character, a.kind, on_target, wp)
+        if on_target:
+            neutral(drv, pp)
+            _settle(drv, hand_xy, still_frames=still)
+            a = read_css_area(drv.read_mem, port)
+            if a is not None and a.hand_target == CSS_HAND_GRID_HOLDING and a.character == css_id:
+                presses += 1
+                tap(drv, pp, ["A"], hold=3, release=3)
+                # The press reaches the game after any netplay delay: wait for the token to drop.
+                for _ in range(20):
+                    a = read_css_area(drv.read_mem, port)
+                    if a is None or a.placed or not a.in_hand:
+                        break
+                    step(drv, 1)
             prev = None
             continue
-        if on_target:
-            drv.pad_set(pp, buttons=(), main=(128, 128))
+        if css_id in LEARNED_CSS:
+            tx, ty = LEARNED_CSS[css_id]
+            if math.hypot(tx - x, ty - y) <= radius:
+                neutral(drv, pp)
+                pos = _settle(drv, hand_xy, still_frames=still)
+                radius = _adapt_radius(radius, (x, y), pos)
+                if pos is not None:
+                    a2 = read_css_area(drv.read_mem, port)
+                    if a2 is not None and not (a2.hand_target == CSS_HAND_GRID_HOLDING and a2.character == css_id):
+                        _pulse(drv, pp, pos[0], pos[1], tx, ty, CSS_HAND_SPEED)
+                        _settle(drv, hand_xy, still_frames=still)
+                prev = None
+                continue
+            drv.pad_set(pp, buttons=(), main=steer_toward(x, y, tx, ty, full_tilt_at=3.0))
         else:
-            if css_id in LEARNED_CSS:
-                tx, ty = LEARNED_CSS[css_id]
-            else:
-                tx, ty = route[wp % len(route)]
-                moved = prev is not None and math.hypot(x - prev[0], y - prev[1]) > 0.2
-                stuck = 0 if moved else stuck + 1
-                if math.hypot(tx - x, ty - y) < 1.0 or stuck > 6:  # reached or clamped at an edge
-                    wp, stuck = wp + 1, 0
-                    if wp >= len(route) * 2:
-                        break
+            tx, ty = route[wp % len(route)]
+            moved = prev is not None and math.hypot(x - prev[0], y - prev[1]) > 0.2
+            stuck = 0 if moved else stuck + 1
+            if wp_deadline is None:
+                wp_deadline = polls(drv) + int(math.hypot(tx - x, ty - y) / CSS_HAND_SPEED * 1.5) + 20
+            # Reached, clamped at an edge, or circling it (input delay): next waypoint.
+            if math.hypot(tx - x, ty - y) < 2.5 or stuck > 8 or polls(drv) > wp_deadline:
+                wp, stuck, wp_deadline = wp + 1, 0, None
+                if wp >= len(route) * 2:
+                    break
             drv.pad_set(pp, buttons=(), main=steer_toward(x, y, tx, ty, full_tilt_at=3.0))
         prev = (x, y)
         step(drv, 1)
     neutral(drv, pp)
-    raise RecipeError(f"could not place port {port + 1} on CSS id {css_id:#x}",
+    raise RecipeError(f"could not place port {port + 1} on CSS id {css_id:#x} ({presses} A presses)",
                       {"area": read_css_area(drv.read_mem, port), "learned": dict(LEARNED_CSS)})
 
 
@@ -1589,9 +1698,10 @@ def css_start(drv: Driver, port: int = 0, timeout_frames: int = 600) -> SceneInf
 
 def sss_pick_stage(drv: Driver, stage_kind: int, port: int = 0, timeout_frames: int = 1800) -> SssView:
     """Closed loop on P+'s stage select: map ``stage_kind`` to (page, position) through P+'s live
-    page tables (RSS_PAGES), steer the game cursor (task+0x200 -> +0x3C/+0x40) until the page
-    position under it (task+0x248) matches, wait until still, press A, and confirm the screen took
-    the stage (task+0x224 == 2, +0x258). Positions seen are cached in ``LEARNED_SSS``."""
+    page tables (RSS_PAGES), steer the game cursor (task+0x200 -> +0x3C/+0x40) until the hovered
+    item (task+0x244 = position + 2) matches, let it come to rest, press A, and confirm the screen
+    took the stage (task+0x224 leaves 0, +0x258 = kind). Same delay-tolerant steering as
+    ``css_pick_character``; positions seen are cached in ``LEARNED_SSS``."""
     targets = stage_positions(stage_kind, drv.read_mem)
     if not targets:
         raise RecipeError(f"stage kind {stage_kind:#x} is not on any P+ stage page")
@@ -1603,15 +1713,28 @@ def sss_pick_stage(drv: Driver, stage_kind: int, port: int = 0, timeout_frames: 
         step(drv, 2)
     route = _serpentine(SSS_SCAN_X, SSS_SCAN_Y)
     wp, stuck = 0, 0
+    wp_deadline: Optional[int] = None
+    radius = APPROACH_RADIUS
     prev: Optional[Tuple[float, float]] = None
     last: Optional[SssView] = None
     pressed = False
+
+    def cursor_xy() -> Optional[Tuple[float, float]]:
+        vv = read_sss(drv.read_mem)
+        return None if vv is None else (vv.cursor_x, vv.cursor_y)
+
+    still = measure_input_latency(drv, port, cursor_xy) + 1
+
+    def is_target(vv: SssView) -> bool:
+        pt = [t for t in targets if t[0] == vv.page] or targets
+        return (vv.page, sss_position_under_cursor(vv)) in pt
+
     while polls(drv) - start < timeout_frames:
         v = read_sss(drv.read_mem)
         if v is None:
             info = read_scene(drv.read_mem)
             if info.scene in (Scene.LOADING, Scene.IN_MATCH):
-                # The screen exits ~6 frames after taking a stage, which can be inside our A tap.
+                # The screen exits a few frames after taking a stage, which can be inside our A tap.
                 if not pressed:
                     raise RecipeError("left the SSS without our A press", info)
                 return _confirm_stage(drv, stage_kind, last)
@@ -1626,28 +1749,46 @@ def sss_pick_stage(drv: Driver, stage_kind: int, port: int = 0, timeout_frames: 
         if pos >= 0:
             LEARNED_SSS.add((v.page, pos), x, y)
         page_targets = [t for t in targets if t[0] == v.page] or targets
-        on_target = (v.page, pos) in page_targets
-        still = prev is not None and abs(x - prev[0]) < 0.05 and abs(y - prev[1]) < 0.05
-        if on_target and still:
-            pressed = True
-            tap(drv, port, ["A"], hold=3, release=6)
+        if is_target(v):
+            neutral(drv, port)
+            _settle(drv, cursor_xy, still_frames=still)
+            v2 = read_sss(drv.read_mem)
+            if v2 is not None and is_target(v2):
+                pressed = True
+                tap(drv, port, ["A"], hold=3, release=3)
+                for _ in range(20):
+                    v2 = read_sss(drv.read_mem)
+                    if v2 is None or v2.state != SSS_STATE_CHOOSING:
+                        break
+                    step(drv, 1)
             prev = None
             continue
-        if on_target:
-            drv.pad_set(port, buttons=(), main=(128, 128))
+        known = [LEARNED_SSS[t] for t in page_targets if t in LEARNED_SSS]
+        log.debug("sss want %#x: cursor (%.2f, %.2f) page %d hovered %d state %d known=%s r=%.1f wp=%d",
+                  stage_kind, x, y, v.page, v.hovered_item, v.state, known[:1], radius, wp)
+        if known:
+            tx, ty = known[0]
+            if math.hypot(tx - x, ty - y) <= radius:
+                neutral(drv, port)
+                cur = _settle(drv, cursor_xy, still_frames=still)
+                radius = _adapt_radius(radius, (x, y), cur)
+                v2 = read_sss(drv.read_mem)
+                if cur is not None and v2 is not None and not is_target(v2):
+                    _pulse(drv, port, cur[0], cur[1], tx, ty, SSS_CURSOR_SPEED)
+                    _settle(drv, cursor_xy, still_frames=still)
+                prev = None
+                continue
         else:
-            known = [LEARNED_SSS[t] for t in page_targets if t in LEARNED_SSS]
-            if known:
-                tx, ty = known[0]
-            else:
-                tx, ty = route[wp % len(route)]
-                moved = prev is not None and math.hypot(x - prev[0], y - prev[1]) > 0.2
-                stuck = 0 if moved else stuck + 1
-                if math.hypot(tx - x, ty - y) < 1.5 or stuck > 6:
-                    wp, stuck = wp + 1, 0
-                    if wp >= len(route) * 2:
-                        break
-            drv.pad_set(port, buttons=(), main=steer_toward(x, y, tx, ty, full_tilt_at=4.0))
+            tx, ty = route[wp % len(route)]
+            moved = prev is not None and math.hypot(x - prev[0], y - prev[1]) > 0.2
+            stuck = 0 if moved else stuck + 1
+            if wp_deadline is None:
+                wp_deadline = polls(drv) + int(math.hypot(tx - x, ty - y) / SSS_CURSOR_SPEED * 1.5) + 20
+            if math.hypot(tx - x, ty - y) < 2.5 or stuck > 8 or polls(drv) > wp_deadline:
+                wp, stuck, wp_deadline = wp + 1, 0, None
+                if wp >= len(route) * 2:
+                    break
+        drv.pad_set(port, buttons=(), main=steer_toward(x, y, tx, ty, full_tilt_at=4.0))
         prev = (x, y)
         step(drv, 1)
     neutral(drv, port)
