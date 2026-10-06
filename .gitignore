@@ -1,0 +1,12 @@
+# local-only, large, or third-party
+/dolphin/
+/refs/
+/game/
+/run/
+*.iso
+*.raw
+build*.log
+__pycache__/
+*.pyc
+.venv/
+*.part
