@@ -1,0 +1,34 @@
+# Accounts web service (HTTP on loopback, behind Caddy).
+# Install: /opt/ppserver/bin/accounts, config in /etc/ppserver/accounts.env (mode 0640, root:root).
+[Unit]
+Description=pp accounts web service
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+ExecStart=/opt/ppserver/bin/accounts
+EnvironmentFile=/etc/ppserver/accounts.env
+Restart=on-failure
+RestartSec=2s
+
+# Sandboxing: no state on disk, so a throwaway user and a read-only system.
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

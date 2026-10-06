@@ -1,0 +1,33 @@
+# Matchmaking server (ENet over UDP 43113, public).
+# Install: /opt/ppserver/bin/mm, config in /etc/ppserver/mm.env (mode 0640, root:root).
+[Unit]
+Description=pp matchmaking server
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+ExecStart=/opt/ppserver/bin/mm
+EnvironmentFile=/etc/ppserver/mm.env
+Restart=on-failure
+RestartSec=1s
+
+DynamicUser=yes
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+SystemCallArchitectures=native
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

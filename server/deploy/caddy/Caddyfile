@@ -1,0 +1,29 @@
+# Caddy in front of the accounts service. Hostnames are placeholders under
+# fluffycat.gay until the product name and subdomains are decided.
+# The mm server is UDP and does not go through Caddy.
+{
+	email admin@fluffycat.gay
+}
+
+accounts.fluffycat.gay {
+	encode zstd gzip
+	# Only the API and the two email-link pages are public.
+	@public path /v1/* /user/* /verify-email /reset-password /healthz
+	handle @public {
+		reverse_proxy 127.0.0.1:8080
+	}
+	handle {
+		respond 404
+	}
+	header {
+		Strict-Transport-Security "max-age=31536000"
+		X-Content-Type-Options nosniff
+		Referrer-Policy no-referrer
+		X-Frame-Options DENY
+		-Server
+	}
+	log {
+		output file /var/log/caddy/accounts.log
+		format json
+	}
+}

@@ -1,0 +1,14 @@
+# Nightly logical backup of the database, then an off-box copy with restic.
+# See deploy/README.md "Backups". Runs as root to read /etc/ppserver/backup.env.
+[Unit]
+Description=pp database backup
+After=postgresql.service
+
+[Service]
+Type=oneshot
+EnvironmentFile=/etc/ppserver/backup.env
+ExecStart=/bin/sh -c 'install -d -m 0700 /var/backups/ppserver && \
+  runuser -u postgres -- pg_dump --format=custom --dbname=pp > /var/backups/ppserver/pp-$(date -u +%%Y%%m%%dT%%H%%MZ).dump && \
+  find /var/backups/ppserver -name "pp-*.dump" -mtime +14 -delete && \
+  restic backup --tag ppserver /var/backups/ppserver /etc/ppserver && \
+  restic forget --tag ppserver --keep-daily 14 --keep-weekly 8 --keep-monthly 12 --prune'
