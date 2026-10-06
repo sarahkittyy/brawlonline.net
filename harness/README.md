@@ -178,7 +178,7 @@ Tools (`harness/tools/`):
 - `determinism.py record|compare|matrix`: offline determinism with identical inputs (see `docs/determinism-findings.md`).
 - `qa_reachability.py`: can a netplay player reach the Code Menu, Debug Mode, Giga Bowser/Wario-Man or non-Versus modes?
 
-Two *offline* boots are not bit-identical, even with identical inputs from the same poll index: whole-MEM1 and whole-MEM2 hashes differ (checked on the real build). So determinism tests should hash specific game-state ranges, not all of memory.
+Two *offline* boots are bit-identical (whole MEM1 and MEM2) in single core only if the inputs are submitted at identical emulation points and both boots read the same RTC second; Dolphin's offline custom RTC still follows host seconds, so check the RNG seeds first. Dual core diverges in render-side heap state and occasionally in gameplay. Hash specific game-state ranges (`brawl.gameplay_ranges`, player state), not all of memory. Details: `docs/determinism-findings.md`.
 
 Running the suite:
 

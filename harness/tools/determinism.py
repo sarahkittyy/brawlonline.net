@@ -334,6 +334,7 @@ def compare(timeline: Mapping[str, Any], profile: Profile, runs: int = 2, every:
                 for e in events:
                     schedule.setdefault(int(e["frame"]), []).append(("ev", e))
             diverged_local = 0
+            localized: set = set()
             t0 = time.monotonic()
             input_errors: List[str] = []
             report["input_errors"] = input_errors
@@ -412,13 +413,16 @@ def compare(timeline: Mapping[str, Any], profile: Profile, runs: int = 2, every:
                         vals = [s[k] for s in smalls]
                         if any(v != vals[0] for v in vals[1:]):
                             cp.small[k] = vals
-                    if (cp.differing or cp.small) and diverged_local < localize:
+                    # Localize the first few divergences, and every region the first time it differs.
+                    new_regions = [d for d in cp.differing if not d.startswith("MEM") and d not in localized]
+                    if (cp.differing or cp.small) and (diverged_local < localize or new_regions):
                         diverged_local += 1
+                        localized.update(new_regions)
                         heaps = B.read_heap_table(clients[0].read_mem)
                         for a, n, lbl in rs:
                             if lbl not in cp.differing or lbl.startswith(("MEM1", "MEM2")):
                                 continue
-                            for ca, cn in diff_chunks(clients[0], clients[1], a, n):
+                            for ca, cn in diff_chunks(clients[0], clients[1], a, n, limit=10):
                                 cp.chunks.append({"region": lbl, "addr": f"{ca:#010x}", "where": heap_of(ca, heaps),
                                                   "a": clients[0].read_mem(ca, cn).hex(),
                                                   "b": clients[1].read_mem(ca, cn).hex()})
