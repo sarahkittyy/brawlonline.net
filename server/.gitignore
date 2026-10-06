@@ -1,0 +1,5 @@
+/target/
+# Local secrets (Resend API key, play-key secret, database password). Never commit.
+.env
+.env.*
+!.env.example

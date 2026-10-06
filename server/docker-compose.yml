@@ -1,0 +1,26 @@
+# Local development database. Production runs Postgres 16 from Debian packages
+# (see deploy/README.md); this file is for development and tests only.
+#
+#   docker compose up -d        # start
+#   docker compose down         # stop (data stays in the named volume)
+#   docker compose down -v      # stop and delete the data
+name: ppserver
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: pp
+      POSTGRES_PASSWORD: pp-dev-password
+      POSTGRES_DB: pp
+    ports:
+      # Loopback only, on a non-default port so it does not clash with a local install.
+      - "127.0.0.1:54329:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U pp -d pp"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+volumes:
+  pgdata:

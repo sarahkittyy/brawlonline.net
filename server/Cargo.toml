@@ -1,0 +1,52 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/common",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "GPL-2.0-or-later"
+rust-version = "1.85"
+publish = false
+
+[workspace.dependencies]
+common = { path = "crates/common" }
+accounts = { path = "crates/accounts" }
+mm = { path = "crates/mm" }
+mmclient = { path = "crates/mmclient" }
+
+anyhow = "1"
+argon2 = { version = "0.5", features = ["std"] }
+axum = { version = "0.8", features = ["macros"] }
+base64 = "0.22"
+chrono = { version = "0.4", default-features = false, features = ["clock", "std", "serde"] }
+clap = { version = "4", features = ["derive", "env"] }
+encoding_rs = "0.8"
+hex = "0.4"
+hmac = "0.12"
+rand = "0.8"
+reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
+rusty_enet = "0.4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+sha2 = "0.10"
+sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "postgres", "uuid", "chrono", "migrate", "macros", "json"] }
+subtle = "2"
+thiserror = "2"
+tokio = { version = "1", features = ["full"] }
+tower-http = { version = "0.6", features = ["trace", "limit"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+unicode-normalization = "0.1"
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[profile.release]
+lto = "thin"
+
+# Argon2 at 64 MiB is very slow without optimizations; keep debug builds and tests fast.
+[profile.dev.package.argon2]
+opt-level = 3
+[profile.dev.package.blake2]
+opt-level = 3
