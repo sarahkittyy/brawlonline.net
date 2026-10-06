@@ -256,6 +256,16 @@ class HarnessClient:
             sock = socket.create_connection((self.host, self.port), timeout=t)
         except OSError as e:
             raise HarnessConnectionError(f"cannot connect to {self.host}:{self.port}: {e}") from e
+        try:
+            self_connected = sock.getsockname() == sock.getpeername()
+        except OSError:
+            self_connected = False
+        if self_connected:
+            # TCP simultaneous open: connecting to a free ephemeral port on localhost before
+            # Dolphin listens can connect the socket to itself, which then echoes our requests.
+            sock.close()
+            raise HarnessConnectionError(f"cannot connect to {self.host}:{self.port}: connected to itself "
+                                         f"(no server listening yet)")
         sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
         self._sock = sock
         self._buf.clear()
@@ -621,6 +631,12 @@ class HarnessClient:
 
     def netplay_leave(self) -> None:
         self.call("netplay_leave")
+
+    def rollback_pad_history(self, since: int = 0) -> dict[int, tuple[int, ...]]:
+        """``{gekko_frame: (buttons_p0, buttons_p1, buttons_p2, buttons_p3, crc32)}`` for the
+        pads the game used on each recent rollback frame (see the protocol doc)."""
+        rows = self.call("rollback_pad_history", since=int(since)).get("frames", [])
+        return {int(r[0]): tuple(int(x) for x in r[1:]) for r in rows}
 
     def log_mark(self, text: str) -> None:
         self.call("log_mark", text=str(text))

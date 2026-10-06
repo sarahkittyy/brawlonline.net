@@ -53,6 +53,9 @@ def netplay_seat(client: HarnessClient, name: str = "", local_port: int = 0) -> 
         ingame = mapping.get(str(local_port), mapping.get(local_port))  # type: ignore[call-overload]
     elif isinstance(mapping, Sequence) and local_port < len(mapping):
         ingame = mapping[local_port]
+    if ingame is None and not mapping and local_port == 0:
+        # Servers without the mapping: the default pad map gives the host P1, the joiner P2.
+        ingame = 0 if raw.get("role") == "host" else 1
     if ingame is None or int(ingame) < 0:
         raise HarnessError(f"{name or client}: local port {local_port} drives no in-game port ({mapping!r})")
     return Seat(client, int(ingame), local_port, name)

@@ -163,3 +163,18 @@ def test_two_player_netplay_failure_cleans_processes(template, instances_root, f
                            connect_timeout=10)
     kept = sorted(p.name for p in instances_root.iterdir())
     assert kept == ["npfail-host-0", "npfail-joiner-0"]   # kept for debugging
+
+
+def test_scorecard_session_against_fake_dolphins(template, instances_root, fake_exe):
+    from ppharness import scorecard
+    r = scorecard.run_session("lan", 3, duration=3.0, phase="menus", exe=fake_exe, template=template,
+                              instances_root=instances_root, connect_timeout=20)
+    assert "error" not in r, r
+    assert set(r["sides"]) == {"host", "joiner"}
+    for s in r["sides"].values():
+        assert s["froze"] is False and s["fps"]["vi"] > 0
+    assert "state_compare" in r and "netsim" in r
+    text = scorecard.text_summary({"started": "now", "phase": "menus", "duration_s": 3, "build": "fake",
+                                   "sessions": [r]})
+    assert "[lan seed=3] host" in text and "froze=no" in text
+    assert not any(instances_root.iterdir())        # both instance dirs cleaned up

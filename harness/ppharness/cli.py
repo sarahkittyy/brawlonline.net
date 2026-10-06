@@ -13,6 +13,7 @@ Commands (``python -m ppharness <command> -h`` for options):
   bench     measure netsim accuracy (same as ``python -m ppharness.netsim_bench``)
   clean     delete leftover instance directories
   mock      run a mock harness server
+  scorecard rollback netplay health: N sessions per netsim preset, JSON + text summary
 """
 
 from __future__ import annotations
@@ -326,7 +327,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_clean)
 
     for name, help_ in (("netsim", "UDP impairment proxy"), ("bench", "measure netsim accuracy"),
-                        ("mock", "run a mock harness server")):
+                        ("mock", "run a mock harness server"),
+                        ("scorecard", "rollback netplay health over netsim presets")):
         p = sub.add_parser(name, help=help_, add_help=False)
         p.add_argument("rest", nargs=argparse.REMAINDER)
         p.set_defaults(func=None)
@@ -336,8 +338,10 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     argv = list(sys.argv[1:] if argv is None else argv)
     # Pass-through commands keep their own parsers (and their own -h).
-    if argv and argv[0] in ("netsim", "bench", "mock"):
-        if argv[0] == "netsim":
+    if argv and argv[0] in ("netsim", "bench", "mock", "scorecard"):
+        if argv[0] == "scorecard":
+            from .scorecard import main as m
+        elif argv[0] == "netsim":
             from .netsim import main as m
         elif argv[0] == "bench":
             from .netsim_bench import main as m
