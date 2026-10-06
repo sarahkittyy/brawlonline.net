@@ -1,6 +1,6 @@
-# Online backend design (DRAFT, partial)
+# Online backend design
 
-_Status 2026-10-06: **partial draft**, written under a usage cut-off. Sections marked **TODO** are unfinished. The per-file inventory in section 1 reuses the line references in `research/04-slippi-reference-architecture.md` (HEAD commits listed there). They have not all been re-checked one by one. Of the three read-only code sweeps, only the launcher sweep finished, and its results are folded into sections 1, 2.4 and 4.2. The Dolphin/Rust and Brawlback sweeps did not finish before the cut-off._
+_Status 2026-10-06: complete design. Line references were checked by three read-only sweeps: the launcher, Dolphin plus the Rust extensions, and Brawlback. Some section 1 refs still come from `research/04-slippi-reference-architecture.md` (HEAD commits listed there)._
 
 Path prefixes: `L` = `refs/slippi-launcher`, `R` = `refs/slippi-rust-extensions`, `I` = `refs/slippi-Ishiiruka/Source/Core/Core`, `C` = `refs/slippi-ssbm-c`, `ASM` = `refs/slippi-ssbm-asm`, `OM` = `refs/openmelee`, `LAD` = `refs/ashebennet-ladder`.
 
@@ -22,7 +22,7 @@ New clones made for this doc (source only): `refs/openmelee` (panchaea/openmelee
 | Hosting | One OVH Debian box: systemd units (no Kubernetes), Postgres from Debian packages, Caddy for TLS, restic backups off-box, Prometheus node exporter + a `/metrics` endpoint per service. docker-compose for local development and the harness only. |
 
 **Top risks** (details in section 8):
-1. **Session start model.** Brawlback Gen 2 rolls back the *whole machine* from `scBoot`, using Dolphin's host/guest netplay lobby. Slippi's UX starts the online session *mid-game* at the CSS. Whole-machine rollback needs identical machines at session start, so in-game matchmaking needs either a state transfer, a synchronized reboot, or gameplay-only state. That decision belongs to the netcode work, not the backend, but it shapes the EXI contract in section 5.
+1. **Session start model (5.1).** Brawlback Gen 2 rolls back the *whole machine* from `scBoot`, using Dolphin's netplay lobby. Slippi's UX starts the online session *mid-game* at the CSS. **Recommendation:** an Orca-style host→guest keyframe at connect (with our own delta transfer) for release, and a synchronized reboot as the Phase-1 interim. Do not use Slippi's gameplay-only approach, which Brawlback Gen 1 never got working.
 2. **NAT.** There is no relay in Slippi. CGNAT and symmetric-NAT users fail silently. Mitigation: hole-punch exactly like Slippi, plus a relay fallback.
 3. **Trust in client reports.** Ranked results come only from clients. Slippi cross-checks both reports and keeps replays. We must do the same from day one of ranked, and reject results with banned states (section 6).
 
@@ -78,7 +78,20 @@ Client: `I/Slippi/SlippiMatchmaking.cpp`. Server: closed (`mm.slippi.gg`, dev `m
 6. The client disconnects from mm and ENet-connects to every peer from both sides at once. In 1v1, a failure **requeues** (back to step 3). In teams it shows "Could not connect to players: …" (`handleConnecting` `:810-909`).
 7. There is no relay. User options are "Force Netplay Port" and "Force LAN IP".
 
-Region and ping: the client sends no region or ping field. Slippi infers region server-side, presumably from IP geolocation; three leaderboards exist (NA, EU, Other; Upcomer). **TODO:** confirm from the unfinished Dolphin sweep whether any latency field exists.
+Findings from the Dolphin sweep (Ishiiruka @ `60f7b63`; mainline line numbers are close):
+- **No region, ping or latency field exists anywhere in the mm protocol.** The only message types are `create-ticket`, `create-ticket-resp` and `get-ticket-resp` (`SlippiMatchmaking.cpp:26-28`). The only ping in the code is the P2P ack round-trip (`SlippiNetplay.cpp:428-433`). Slippi must infer region server-side, presumably from the source IP; there are three leaderboards (NA, EU, Other; Upcomer). We do the same with an offline GeoIP DB (2.3).
+- **The client waits indefinitely for a match.** `get-ticket-resp` is polled in 2000 ms windows with no overall cap (`:480-493`). Only an mm disconnect ends the wait ("Lost connection to the mm server"). The server owns ticket expiry, so our 10-minute ticket TTL must send `get-ticket-resp {error}` rather than silently drop.
+- **Other client timeouts:**
+  - mm connect: 20 × 500 ms ≈ 10 s (`:358-373`);
+  - `create-ticket-resp`: 5000 ms (`:440-446`);
+  - ISO-hash wait: about 5.5 s (`:289-300`).
+- **The P2P connect window is 8 s total** (`SlippiNetplay.cpp:778-779, 922-937`). After it, 1v1 requeues with a **new ticket** (back to INITIALIZING, `SlippiMatchmaking.cpp:891-898`). The mm server should therefore avoid re-pairing the same two players immediately after a failed connect.
+- **`search.connectCode` is a JSON array of byte values, not a string** (`std::vector<u8>`, `:422-424`). `players[].chatMessages` must have exactly 16 entries or the client uses defaults (`:548-560`). `items` is a u32 bitfield (`:645`).
+- **Brawlback Gen 1's client** (`refs/brawlback-dolphin` `Source/Core/Core/Brawlback/Netplay/Matchmaking.cpp:493-511`):
+  - sends only `uid` and `playKey` in `user`;
+  - adds `search.game {id:"RSBE01", revision, type, name}`;
+  - ignores `matchId`, `chatMessages`, `rank` and `items`;
+  - pointed at `lylat.gg:43113` for both dev and prod (`Matchmaking.h:88-90`).
 
 Verdict: **R**, byte-compatible JSON, so the ported client code stays unchanged apart from the hostname.
 
@@ -227,11 +240,11 @@ Play key: 32 random bytes in base64url. Store only its SHA-256. Rotate it on pas
 
 ### 2.5 Replay storage
 
-Content-addressed files under `/srv/replays/<yyyy>/<mm>/<sha256>.slp.gz` on the box's second disk. `uploadUrl` is an HMAC-signed, 10-minute PUT URL to the api service, which streams the body to disk with a size cap (10 MB). Keep everything for ranked; prune unranked after 90 days. **TODO:** the Brawl replay format itself is a client-side decision (see research 04 §7 item 10).
+Content-addressed files under `/srv/replays/<yyyy>/<mm>/<sha256>.slp.gz` on the box's second disk. `uploadUrl` is an HMAC-signed, 10-minute PUT URL to the api service, which streams the body to disk with a size cap (10 MB). Keep everything for ranked; prune unranked after 90 days. Under session start B, a replay is the start keyframe plus the confirmed input log, which re-simulates exactly in the same build. The storage path does not care about the format, and the 10 MB cap fits an input log plus a delta keyframe. A full 26-30 MB keyframe would need the cap raised, or the replay could reference the boot instead.
 
 ### 2.6 Website
 
-Server-rendered pages: `/signup`, `/login`, `/reset`, `/user/{code}` (code, display name, rank badge as **text plus a P+/Brawl-derived glyph only**, no new art), `/leaderboard`, `/admin`. **TODO:** wireframes are not needed; they copy slippi.gg's information layout only.
+Server-rendered pages: `/signup`, `/login`, `/reset`, `/user/{code}` (code, display name, rank as **text only**, with no badge art), `/leaderboard`, `/admin`. The layout copies slippi.gg's information layout; no new flows.
 
 ### 2.7 Relay
 
@@ -241,7 +254,12 @@ Recommended. It is a stateless UDP forwarder: both peers send `RELAY_HELLO{token
 
 A CLI in the same binary (`ppo-admin user ban|unban|rename|reset-code|invite create`, `match void`, `rating recompute --season`) plus a read-only `/admin` web page for flagged games. Every action goes into `audit_log`.
 
-**TODO:** per-component scaling notes beyond the mm server; resource budget for the box (expected tiny: under 1 vCPU and under 2 GB RAM at friends scale).
+Scaling notes:
+- **api:** stateless, so it scales by adding processes behind Caddy.
+- **Postgres:** a single instance is ample to six figures of users. Add a read replica only for leaderboard queries, and recompute leaderboards every 2 minutes as Slippi does, not per request.
+- **relay:** CPU-bound per packet, at about 20 kbit/s per relayed player.
+- **replays:** disk. 2-5 MB per gzipped game, ranked only, means 1 TB holds hundreds of thousands of games.
+- **Friends-scale budget:** all services together need under 1 vCPU and under 2 GB RAM. The smallest OVH dedicated box is already oversized; buy for disk and bandwidth, not CPU.
 
 ---
 
@@ -285,7 +303,7 @@ Verified against the launcher: `L/src/renderer/services/slippi/calculate_rank.ts
 - 0 sets is NONE and fewer than 5 sets is PENDING (`:3-9`).
 - Tiers are checked top-down with `>=` on the bucket floors (765.43, 913.72, … 2275, 2350), which is equivalent to the ≤ table above.
 - **Grandmaster** = `rating >= 2191.75 && (dailyGlobalPlacement || dailyRegionalPlacement)` (`:12-14`; `slippi.service.ts:39-53`). The placement fields come from `rankedNetplayProfile{ratingOrdinal ratingUpdateCount dailyGlobalPlacement dailyRegionalPlacement}` (`graphql_endpoints.ts:61-108`).
-- **TODO:** cross-check the Dolphin `rank.rs` copy.
+- Cross-checked against Dolphin's copy `R/user/src/rank_fetcher/rank.rs:29-112` (same values, written as `<=` upper bounds). Fewer than 5 updates means Unranked. Grandmaster is tested **before** Master. Each lower bound is exclusive with a 0.01 gap, so a rating landing in a gap such as 765.425 falls through to Unranked in Dolphin. Our implementation should use one table with half-open intervals in all three places.
 
 ### 4.3 Our choice
 
@@ -306,18 +324,176 @@ Parameters (initial, to tune on our data): mu = 25, sigma = 25/3, beta = 25/6, t
 
 ## 5. Game-integration contract
 
-**TODO (largely unfinished).** Plan:
+Extra path prefixes for this section:
+- `BA` = `refs/brawlback-asm`
+- `BD` = `refs/brawlback-dolphin` @ `savestates-efficiency-v2` (`55b817d`)
+- `G2` = `refs/Project-Plus-Dolphin-brawlback` @ `rollback` (`b7d3413`), the base of our `dolphin/` fork
+- `ORCA` = `refs/orca-netplay`
 
-- Keep Slippi's command *semantics* and numbering where possible, and send them over the channel our fork actually uses. Brawlback Gen 2 has no EXI device: it was deleted in P+ Dolphin `10d50e5d2`, and HLE hooks are used instead (research 01 §3.2). The proposal is a small EXI device (or a Syriinge plugin to HLE mailbox) that carries: `FIND_OPPONENT(mode, code[18])`, `GET_MATCH_STATE` (state IDLE / INITIALIZING / MATCHMAKING / OPPONENT_CONNECTING / CONNECTION_SUCCESS / ERROR, error string, local port, peer names/codes, `isHost`, rules block), `SET_MATCH_SELECTIONS(char, costume, stage, team)`, `CLEANUP_CONNECTION`, `GET_ONLINE_STATUS`, `OPEN_LOGIN`, `UPDATE`, `REPORT_GAME`, `FETCH_CODE_SUGGESTION`, `SEND_CHAT_MESSAGE`, `GET_RANK`/`FETCH_RANK`, and later the ranked GameSetup steps (`GP_COMPLETE_STEP`/`GP_FETCH_STEP`, `OVERWRITE_SELECTIONS`, `REPORT_SET_COMPLETE`).
-- Mapping table Slippi 0xB3-0xC4/0xE1-0xE5 ↔ Brawlback Gen-1 `CMD_*` (`refs/brawlback-asm/include/exi_packet.h`) ↔ ours: **TODO** (the Brawlback sweep did not finish).
-- Menus to build, reusing Brawl's Wi-Fi flow (Main menu → "Play Wi-Fi", relabelled → With Friends = **Direct**, With Anyone = **Unranked/Ranked**, plus Teams), using only existing Brawl/P+ graphics and fonts:
-  1. the online mode list with name and code display;
-  2. connect-code entry (Brawl's name-entry keyboard in code mode, with history autocomplete);
-  3. CSS status panel texts (searching, connecting, opponent name, errors);
-  4. rank text on the CSS and rating change after a set;
-  5. ranked stage strike/counterpick.
-  Screen details and hook addresses: **TODO**.
-- **Session start (top risk 1).** Whole-machine rollback needs identical emulated machines when the session starts. Slippi's UX connects at the CSS, mid-game. The options are (a) a synchronized netplay reboot after matchmaking, (b) a host-to-guest state transfer at connect time, or (c) game-state-only rollback as Slippi does. The backend contract above is the same for all three: the backend's job ends at `get-ticket-resp`. The netcode work must choose; it is listed in Open questions.
+`BA` refs are on branch `origin/master` unless another branch is named.
+
+### 5.1 How the online session starts (top risk 1)
+
+**The problem.** Our fork's rollback is Brawlback Gen 2. It snapshots and restores the **whole emulated machine**:
+- Changes are tracked at 64-byte granularity across MEM1/MEM2, plus Dolphin's non-RAM device state (research 01 §2.3).
+- It runs from `scBoot` onward, menus included (`G2 Source/Core/Core/HLE/HLE_Misc.cpp:147-156`).
+- Both machines boot together through Dolphin's netplay lobby. The host's `NetPlayServer` relays GekkoNet packets (research 01 §2.2).
+
+Whole-machine rollback is only correct if both machines are **bit-identical when the session starts**. That holds for a synchronized netplay boot. It does not hold for Slippi's UX, where each player boots alone, plays with menus, searches from their own character select and connects there. By then the two machines have different heaps, RNG state, timestamps, loaded resources, name tags and saves. Our own measurement already shows menu history changing heap contents: StockResource was filled on one run and empty on the other at the same CSS frame (`docs/determinism-findings.md`, cause 3).
+
+**What the others do**
+
+| Project | Session start | Evidence |
+|---|---|---|
+| **Slippi** | **Gameplay-only rollback started at match start.** Each Dolphin keeps its own menus. At the CSS the players exchange selections and an RNG offset over ENet (`NP_MSG_SLIPPI_MATCH_SELECTIONS` 0x82, `I/Slippi/SlippiNetplay.cpp:550-559, 620-670`). Each game then builds the same match block (`prepareOnlineMatchState`, `I/HW/EXI_DeviceSlippi.cpp:2108-2744`) and starts the match. Savestates cover only fixed Melee RAM ranges plus the main heap (`I/Slippi/SlippiSavestate.cpp:50-119`). | It works for Melee because Melee's match init rebuilds gameplay state from the match block, and the engine is small. Desyncs still happen and ranked recovers from them (research 04 §2.8). |
+| **Brawlback Gen 1** (2021 to mid-2025) | **Same as Slippi.** On entering the online "training room", `setNextAnyOkirakuCaseFive` sends `CMD_START_MATCH` with its `GameSettings` and then `CMD_FIND_OPPONENT` (`BA Brawlback-Online/source/Rollback_Hooks.cpp:1246-1262`). Dolphin merges both sides' `GameSettings` (characters, stage, the host's seed; `BD Source/Core/Core/HW/EXI/EXIBrawlback.cpp:722-805`), and the game boots `scMelee` itself (`BootToScMelee`, `Rollback_Hooks.cpp:1221`). | **It never reached playable** in four years (wiki: "BRAWLBACK IS CURRENTLY NOT PLAYABLE"). Brawl's gameplay state lives in 13+ heaps; Brawlback went from heap allow-lists to dirty pages to page deltas (research 01 §0). |
+| **Brawlback Gen 2** (Dec 2025 to now) | **Synchronized boot.** Dolphin's netplay lobby boots both machines together, and rollback covers boot, menus and match. | It has no matchmaking or in-game online menus (research 01 §2.6). It works in our harness today (`two_player_netplay`, `harness/README.md`). |
+| **Orca** | **Host-to-guest whole-machine keyframe ("drop-in").** The host plays solo with no rollback. When a friend or a matched stranger arrives, the host captures the machine at a frame boundary (8-10 ms) plus the session NAND, then compresses (zstd), encrypts and uploads it. The guest boots the same disc to `BootNandFrame` (`ORCA Data/Sys/Orca/PPLUS32.ini:25` = 600, `RSBE01.ini:13` = 1800), downloads, loads, and replays the host's logged pads to catch up. Both machines then plug port 2 in at an agreed frame (`ORCA ORCA.md` "Drop-in" §1-5; `Source/Core/Core/Orca/Session/Keyframe.h:17-19`). Queue matches use the same drop-in into the host's character select (`ORCA.md` "Matchmaking and results" §3-4). | Keyframes are **26-30 MB**. Over the internet a join took **5.7-7.2 s** (about 1.5 s with a local store). NAND files the boot writes anyway travel as XXH3 hashes, which halved the upload. Keyframes go through YouGame's HTTP store. Each port's name tag and controls travel as "port values" (`ORCA Source/Core/Core/Orca/UX/NameTags.h`). |
+
+**Options for us**
+
+**(A) Synchronized reboot of both games after matchmaking.** On a match, both Dolphins stop emulation and start a Dolphin netplay session, with `isHost` as the server. Then they boot P+ together into a rollback session.
+
+Pros:
+- No new rollback mechanics. This is exactly what our fork and harness run today.
+- Determinism is the easiest of the three. The boot is identical, the netplay RTC uses emulated ticks (`docs/determinism-findings.md`, cause 1), and nothing is transferred.
+- The CSS, SSS and ranked strike/counterpick become ordinary shared game state, driven by both players' inputs. No selection-exchange protocol is needed.
+
+Cons:
+- **Not Slippi's UX.** The screen goes black for a 10-15 s boot: P+ reaches the CSS at about VI field 640 with no input (`docs/brawl-memory-map.md:246`), plus Dolphin teardown and shader warm-up.
+- The pre-search character pick must be re-applied after the boot.
+- Dolphin netplay syncs the host's save, so the guest loses their own name tags and controls unless they are carried as port values (Orca's approach).
+- Each requeue needs another reboot.
+- Dolphin's `NetPlayClient` binds a random port, so it must learn to bind the hole-punched port. That change is small.
+
+**(B) Host-to-guest state transfer at connect time (keyframe).** Both players play locally until they are matched. The host captures its machine at its next frame boundary after `get-ticket-resp` and the P2P connect. It sends the capture to the guest over the already hole-punched ENet link, or over our relay. The guest loads it and catches up through the host's logged pads. Port 2 is plugged in at an agreed frame S, carrying the guest's locked-in character/costume, name and controls as port values.
+
+Pros:
+- **Slippi's UX:** you search from your own CSS, and the opponent appears on it a few seconds later.
+- Keeps whole-machine rollback, so there is no list of gameplay regions to get right.
+- Rematches stay inside one session.
+- Orca has proven the approach on P+ v3.2, with the same Brawl executable and numbers we can plan around. Orca is GPL-2.0-or-later, so its code is license-compatible.
+
+Cons:
+- **Transfer size.** At Orca's 26-30 MB, a 10 Mbit/s home uplink needs about 25 s; at 50 Mbit/s it is about 5 s.
+- Our snapshots skip IOS HLE state (`G2 Source/Core/Core/HW/HW.cpp:117`, research 01 §2.4). A keyframe needs the full `DoState`, including IOS/SD file handles (P+ streams its files from the virtual SD), plus the save/NAND.
+- Orca saw P+'s first frames after its launcher run differently on a machine whose JIT holds other blocks. It therefore refuses to keyframe during the first 300 frames.
+- The guest's own machine is replaced. The guest sees the host's CSS and plays as port 2, not "you on the left" as in Slippi.
+- Taking Orca code verbatim is a community-relations question (memory: "do not start from Orca"). Reimplementing on Brawlback's `RollbackManager` is cleaner.
+
+**Size mitigation (to measure): an rsync-style delta keyframe.** Both machines run the same build and scene with the same archives loaded, so most of the 88 MB should already match.
+- The guest sends 64 KiB block hashes of its own MEM1/MEM2 (1,408 × 8 B = 11 KiB).
+- The host sends only the blocks that differ, zstd-compressed.
+- Device state follows in full, and NAND files go as references by hash (Orca's `BootNandFrame` trick).
+
+**(C) Gameplay-only rollback started at the CSS or match start (Slippi / Brawlback Gen 1).** Each machine keeps its own menus. Selections, seed and rules are exchanged, both enter `scMelee` with the same parameters, and the rollback session starts there.
+
+Pros:
+- Exactly Slippi's UX: no transfer and no reboot.
+- Each player keeps their own save, tags and controls.
+
+Cons:
+- **Determinism risk.** It is the approach Brawlback spent four years on without a playable result.
+  - Brawl's match init does not rebuild all gameplay state from a small block. Heap layout and contents depend on menu history (our StockResource finding).
+  - P+ codes keep their own state, which affects gameplay and would need force-syncing. The Code Menu block alone is 0x2520 bytes at `0x804E0000` (`docs/brawl-memory-map.md`).
+- It gives up Gen 2's main advantage, that nobody has to enumerate gameplay state.
+- Desync detection must compare player state only, because whole-RAM hashes would always differ.
+
+**Recommendation**
+- **Target (B), keyframe at connect, for release.**
+  - The guest's pre-search lock-in travels as port values.
+  - The transfer runs over our own P2P link or relay, using rsync-style deltas.
+- **Use (A), synchronized reboot, as the interim for Phase 1** (two friends, direct connect by code).
+  - It needs no new rollback mechanism, so Phase 1 can ship while the keyframe work proceeds.
+  - The in-game menus up to "match found" are identical under A and B, so no menu work is thrown away.
+- **Reject (C).**
+- **Go/no-go test for B:** in the harness, drop a guest into a host's CSS from a keyframe, with dual core on both machines.
+  - Pass if confirmed-frame state hashes stay equal for 10 minutes across 20 runs, and the median delta keyframe on a P+ CSS is under 8 MB.
+  - If B fails, ship A permanently and tell the user the UX differs from Slippi by one reboot.
+
+The backend contract in section 2 is identical for A and B: it ends at `get-ticket-resp`. This choice does not block backend work.
+
+### 5.2 The channel between game and Dolphin
+
+Gen 2 has **no EXI device**. It was deleted in `10d50e5d2`, and `G2 Source/Core/Core/Config/MainSettings.cpp:136-137` sets Slot B to `None`. Gen 2 uses HLE hooks at the main-loop boundaries instead (`G2 HLE/HLE.cpp:125-141`):
+- `BrawlbackGekkoNetUnconditionalFrame` at `0x800171b4`
+- `BrawlbackGekkoNetFrameEnd` at `0x80017504`
+- `BrawlbackGekkoNetLoopEnd` at `0x80017508`
+
+Under whole-machine rollback, any game-to-Dolphin channel must obey two hard rules:
+1. Nothing that differs between the two machines, or between a first run and a re-run of a frame, may flow into simulated state.
+2. Side effects (search, report) must not fire again when a frame is re-simulated.
+
+EXI makes both rules easy to break, because every DMA read is an input to the simulation. **Proposal: three memory blocks, serviced only at the `FrameEnd` boundary hook.** Slippi's command numbers are kept for familiarity.
+
+| Block | Who writes | In rollback state / desync hash? | Used when |
+|---|---|---|---|
+| **MAILBOX** (request ring + response area, about 1 KiB) | The game writes requests; Dolphin writes responses at the boundary | **Excluded** | Only while **no session** is running, i.e. the game is alone: online menu, code entry, searching. The plugin must not read it during a session. |
+| **SESSION** (about 4 KiB) | Dolphin, on both machines, at an agreed frame S announced in the session handshake (Orca's `RequireValues` pattern) | **Included** | During a session: opponent names and codes, mode, matchId, ruleset and server stage list, visible ranks, chat message sets, per-port values (name, controls, the guest's lock-in) |
+| **LOCAL** (about 512 B) | Dolphin, per machine | **Excluded** | Draw-only data that legitimately differs per player: your rating change after a set, your own "Searching…" state, errors, ping. The plugin may only render it from preallocated buffers: no branching of game logic, no heap allocation. |
+
+The plugin finds the blocks through a magic header (`"PPOM"` plus a version), which the HLE boundary hook scans for once after boot. The block addresses come from P+'s free space and are excluded through the same list as `STATE_EXCLUDED_RANGES`.
+
+During a session the game sends Dolphin **nothing** through the mailbox. Everything the game does is driven by input:
+- **Chat and "hold Z to disconnect"** become one extra byte per player per frame in the GekkoNet input (`input_size = sizeof(gfPadStatus)+1`, `G2 NetPlayClient.cpp:1258-1316`). They are then confirmed and replayed exactly like pads.
+- **Results, set state, banned-state flags and reports** are read by Dolphin from **confirmed frames only**. This is Orca's `Results` reader pattern, using the addresses in `ORCA.md` "Reading results" (`g_GameGlobal 0x805A00E0` and related; it is the same executable as P+). Each report therefore fires exactly once, after its frame can no longer roll back.
+
+### 5.3 Command mapping
+
+Slippi command bytes come from `I/HW/EXI_DeviceSlippi.h:45-111`. Brawlback Gen-1 bytes come from `BA Brawlback-Online/include/exi_packet.h` (master; `savestate-efficiency` adds 35-39) and are handled in `BD EXIBrawlback.cpp:1433-1510`. Brawlback's `project-plus-fork` branch uses a different, rollback-only protocol (1-18: `END_FRAME`, `GET_REMOTE_INPUTS`, `EXECUTE_SAVE/LOAD/ADVANCE`, …). It has no matchmaking commands and no Dolphin handler anywhere.
+
+| Slippi | Brawlback Gen 1 | Ours (block, phase) | Notes |
+|---|---|---|---|
+| 0xB0 ONLINE_INPUTS, 0xB1/0xB2 savestate, 0xD5 GET_DELAY | 1 ONLINE_INPUTS, 2/3 CAPTURE/LOAD_SAVESTATE, 15 FRAMEDATA, 16 TIMESYNC, 17 ROLLBACK, 18 FRAMEADVANCE | **none** | Gen 2 does rollback inside Dolphin (HLE + GekkoNet). Input delay is a Dolphin setting. |
+| 0xB9 GET_ONLINE_STATUS → `{appState 0/1/2, name[31], code[10]}` (`EXI_DeviceSlippi.cpp:3026-3052`) | 10 GET_ONLINE_STATUS (declared, never handled) | **0xB9 MAILBOX** → `{state: 0 logged out / 1 ok / 2 update required, name UTF-16[16], code UTF-16[9]}` | Brawl's text is UTF-16, not Shift-JIS |
+| 0xB6 OPEN_LOGIN, 0xB7 LOGOUT, 0xB8 UPDATE | 9 UPDATE (declared) | **0xB6, 0xB8 MAILBOX**. Dolphin opens the launcher. Logout stays disabled in-game, as on Slippi ("use the launcher"). | |
+| 0xB4 FIND_OPPONENT (mode u8 + Shift-JIS code[18], `:1916`) | 5 FIND_OPPONENT (sent with no payload; Dolphin forces UNRANKED, `BD EXIBrawlback.cpp:1114-1122`) + 13 START_MATCH (`GameSettings`) | **0xB4 MAILBOX** `{mode u8, code UTF-16[9], lockedChar u8, costume u8, team u8}` | The lock-in becomes the guest's port values (5.1 B) |
+| 0xB3 GET_MATCH_STATE (962 bytes; state byte = `ProcessState` 0-5, `SlippiMatchmaking.h:34-42`) | Polls a DMA read for 14 SETUP_PLAYERS + `GameSettings` (`BA Rollback_Hooks.cpp:1043-1069`) | **0xB3 MAILBOX** `{mmState u8 (same 0-5 values), errorText UTF-16[120], peerName UTF-16[16], peerCode UTF-16[9], role host/guest, sessionPhase: none / connecting / transferring % / plugged}` | Valid only until plug-in; after that the SESSION block is authoritative |
+| 0xBA CLEANUP_CONNECTION | 11 CLEANUP_CONNECTION (declared), 34 CANCEL_MATCHMAKING (`BD :1385-1392`) | **0xBA MAILBOX** (cancel search / leave). Inside a session, leaving is the "leave" flag in the input byte. | |
+| 0xBE FETCH_CODE_SUGGESTION (31 B, `:2012-2105`) | none (no code-entry UI exists in any Brawlback branch) | **0xBE MAILBOX** `{prefix UTF-16[9], index i32, scroll s8, mode u8}` → suggestion | `direct-codes.json` / `teams-codes.json` reused unchanged |
+| 0xE3 GET_RANK / 0xE4 FETCH_RANK (15-byte reply, `:3351-3373`) | none | **0xE3/0xE4 MAILBOX** before the search; **SESSION** for ranks both players see; **LOCAL** for your own post-set change | |
+| 0xB5 SET_MATCH_SELECTIONS, 0x82 MATCH_SELECTIONS, 0xBC GET_NEW_SEED | 6 SET_MATCH_SELECTIONS (declared), 12 GET_NEW_SEED (declared), P2P `CMD_GAME_SETTINGS` merge | **none** | The CSS/SSS are shared state driven by inputs. RNG is shared state, seeded by the session RTC (`G2 HLE_Misc.cpp:607-621`). |
+| 0xBB SEND_CHAT_MESSAGE, 0xC3 GET_PLAYER_SETTINGS | none | **Input byte** (chat id) + **SESSION** (each player's 16 message strings) | |
+| 0xBF OVERWRITE_SELECTIONS, 0xC0/0xC1 GP_COMPLETE/FETCH_STEP, 0x85 COMPLETE_STEP | none | **none**: strike/counterpick runs as game logic on shared state, with the server's stage list in SESSION | |
+| 0xBD REPORT_GAME (368 B), 0xC2 REPORT_SET_COMPLETE, 0xC4 REPORT_MATCH_STATUS_UPDATE | 4 MATCH_END (`GameReport` → POST `https://lylat.gg/reports`, `BD :1160-1215`; disabled on the game side with `#if 0`) | **none from the game.** Dolphin's confirmed-frame reader sends `reportOnlineGame`, `reportOnlineMatchStatus`, set completion and `bannedStateFlags`. | Fires once per confirmed event, never on re-sim |
+| 0x86 SYNCED_STATE (ranked desync recovery) | none | Later: a recovery keyframe from the host. With option B, recovery becomes a reload instead of a reconciliation. | |
+| 0x35-0x3C replay recording | 19-26 replay commands | **none**: Dolphin records the replay as the start keyframe (or the boot) plus the confirmed input log | Replay format still open (2.5) |
+| 0xD1/0xD2 file load, 0xD3/0xD4 GCT | 30-33 allocs/dump (Gen-1 heap tracking) | none | |
+
+**Dolphin-side matchmaking client.** Port `I/Slippi/SlippiMatchmaking.cpp`, as Brawlback already did in `BD Source/Core/Core/Brawlback/Netplay/Matchmaking.cpp`.
+- Keep Slippi's wire format, but **add back** what Brawlback dropped: `user.connectCode` and `displayName`. Brawlback sends only uid and playKey (`:495`).
+- Keep Brawlback's useful `search.game {id, revision, type, name}` block (`:496-506`) and add our `buildHash`.
+- Hand the punched local port to Dolphin's `NetPlayServer` (host) or `NetPlayClient` (guest).
+- Have the host send punch datagrams to the guest's external address while the guest connects. Slippi gets the same effect by connecting from both sides (`I/Slippi/SlippiNetplay.cpp:125-152`).
+- Fall back to the relay after 3 s.
+
+### 5.4 Menu screens to build
+
+**Starting point.** Brawlback Gen 1 hijacked Brawl's own Wi-Fi flow (all hooks installed at `BA Rollback_Hooks.cpp:1539-1584`):
+- `SkipDirectlyToCSS` at `sora_menu_main+0x2E4F8` sends the main-menu Wi-Fi path straight to the Wi-Fi character select.
+- Other hooks fake the Nintendo WFC login, Mii rendering, friend code and connection: `setToLoggedIn` `0x8014B5F8`, `disableMiiRender` `0x80033b48`, `forceFriendCode` `0x8014b4bc`, `forceConnection` `0x8014b3b8`.
+- The CSS/SSS countdowns and network-error dialogs are removed (`sora_menu_sel_char+0x4220/0x56A8/0x53A4`, `sora_menu_sel_stage+0x141C/0x30F0`), and so is the disconnect panel (`sel_char+0x4A70`).
+- The game waits for a match in Brawl's online training room, with status text printed on its message bar through `MuMsg::printf` (`ReplaceTrainingRoomText` `0x800fd49c`).
+- Exiting returns to the Direct/Quickplay screen (`sora_scene+0x3770C`).
+
+**No code anywhere relabels the main-menu Wi-Fi button or adds code entry** (Brawlback sweep, all branches). The "Brawlback → Direct / Quickplay" menu in our memory notes is not in any public repo, and research 06 §5 is still pending.
+
+The table maps each Slippi screen to the Brawl/P+ screen we reuse, using existing assets only.
+
+| # | Slippi screen (source) | Our screen | Assets and work |
+|---|---|---|---|
+| 1 | Online submenu: Ranked, Unranked, Direct, Teams (+ Log In / Update when locked), a description line, name + code shown (`ASM/Online/Online.s:70-83`, `HandleOnlineLockedOptions.asm:27-79`) | Brawl's **Wi-Fi top menu**, reached from the main-menu Wi-Fi button (vanilla: With Friends / With Anyone / Spectator / Options; layout to be verified). Buttons relabelled RANKED / UNRANKED / DIRECT / TEAMS through the menu's own message strings. The account line and lock reasons go in the menu's description text. | Existing button frames and font; new strings only. Locked items use the menu's own disabled state if it has one, otherwise a refusal message as on Slippi. |
+| 2 | CSS with a 3-line status panel, "Press START to lock in / search", spinner, "Hold Z to disconnect" (`LoadCSSText.asm:93-160, 509-905`) | Brawl's **Wi-Fi CSS** (`sora_menu_sel_char` in net mode) with Gen 1's timer and error hooks. Status text goes in the CSS's existing message window via `MuMsg`, using Slippi's strings verbatim. | No spinner art: use text dots, or the CSS's own "waiting" animation if one exists. **Wait on the CSS as Slippi does, not in Brawl's training room as Gen 1 did.** |
+| 3 | Connect-code entry: Melee name-tag keyboard in code mode, 8 chars, full-width `＃`, L/R history scroll, Z to accept (`TextEntryScreen/*`, `Allow8Characters.asm`) | Brawl's **name-entry keyboard** (the Names screen used for tags), restricted to A-Z / 0-9 / `#` | Raise Brawl's tag-length limit to 8, as Slippi raised Melee's. History comes through mailbox 0xBE. Direct and Teams share the screen. |
+| 4 | Opponent found: name on the CSS, both press START, VS splash | The CSS shows the opponent's panel (shared state after plug-in) and their name from SESSION | Brawl's Vs mode has no VS splash, so go to Brawl's normal loading screen. No new screen. |
+| 5 | Stage choice: Unranked random, Direct loser picks, Teams P1 picks (research 04 §4.6) | Unranked: skip the SSS (random from the server list). Direct/Teams: P+'s **SSS**, restricted to the server list. | Disallowed stages use the SSS's existing unavailable/hidden state |
+| 6 | Ranked GameSetup: strikes 1-2-1, then winner bans and loser picks; step timers 30/30/10 s for strikes, 30 s ban/pick, 45 s character (`C/Scenes/Ranked/GameSetup.c`, `.h:16-19`) | P+ **SSS in a strike mode**: struck stages greyed, turn text and timer in the SSS message area. Character re-pick happens on the CSS in Slippi's order. | The largest game-side piece. Text plus existing stage icons only; no Slippi rank badges or other art. |
+| 7 | Rank on the CSS: badge + "GOLD 2 1653.5", animated rating change after a set (`C/Scenes/CSS/RankInfo/RankInfo.c`) | A text-only rank line in the CSS info pane, with the rating change from LOCAL | Brawl has no badge art, so text only. Tier names are generic. |
+| 8 | Results → back to the CSS still connected; START to rematch | Brawl's results screen, then back to the Wi-Fi CSS in the same session | Hook the results→CSS transition. Exiting goes back to screen 1 (Gen 1's `ExitWifiCSS…` hook). |
+| 9 | "DISCONNECTED" (red), "DESYNC DETECTED", poor-connection OSD | `MuMsg` text in red, in the CSS and in-game message windows | Existing font |
+| 10 | Quick chat: D-pad category window, 16 messages (`C/Scenes/CSS/Chat/Chat.c`) | A text-only window in the CSS message pane; in-match notifications as text | Later phase |
+
+All new visible content is text in Brawl/P+'s own fonts, placed in existing panes. **No new images, and no AI-generated graphics.** Where Slippi shows art we don't have (rank badges, the chat window frame), we show text instead.
 
 ---
 
@@ -341,7 +517,7 @@ QA finding (`harness/tools/qa_reachability.py`, run `run/artifacts/qa-reachabili
 - **Client side:** the netplay codes GCT that ships with our build gates the Code Menu input handler and the hold-L/hold-B paths while an online session flag is set. Its hash goes into every ticket and report.
 - **Server side:**
   - The mm server refuses tickets whose `buildHash`/`isoHash` is not on the allow-list (Rev 1 and Rev 2 MD5s from the project memory file, plus the current codeset hash).
-  - Game reports carry `bannedStateFlags`: Code Menu opened, debug byte set, transformed fighter, scene left. The client's Rust reporter samples them from memory every frame.
+  - Game reports carry `bannedStateFlags`: Code Menu opened, debug byte set, transformed fighter, scene left. Dolphin samples them from **confirmed frames** (5.2), so a rolled-back frame never raises a flag.
   - Any flag or illegal stage/character voids the game in ranked and flags the account. The two reports are cross-checked, and replays allow audit.
   - The harness can drive exactly these probes against a test backend (phase tests).
 
@@ -349,32 +525,61 @@ QA finding (`harness/tools/qa_reachability.py`, run `run/artifacts/qa-reachabili
 
 ## 7. Phased build plan
 
-Rough effort is for one developer.
+Effort is in developer-weeks for one experienced developer. **Backend** is this document's services. **Dolphin** is C++/Rust in our fork. **Game** is the Syriinge plugin plus the netplay GCT. **Launcher** is the fork of slippi-launcher. The Dolphin and game columns assume the rollback core (another workstream) already plays a stable 1v1 in a synchronized-boot session.
 
-| Phase | Deliverable | Backend effort | Test approach |
-|---|---|---|---|
-| B0 | Repo skeleton (`backend/` Cargo workspace: `core`, `api`, `mm`, `relay`), Postgres migrations, docker-compose for dev, systemd units and Caddyfile for the box | 3-4 days | `cargo test`; compose up on Windows (Docker Desktop) or plain processes |
-| B1 | **Direct connect by code**: accounts (invite-only), connect codes, `user.json` via the launcher fork, mm server direct mode with hole punching plus LAN rule | 2-3 weeks | Unit tests on pairing; protocol golden tests (openmelee's JSON fixtures); **ppharness**: two Dolphin instances with `user.json` for two test accounts → mm on localhost → netsim between peers. Linux CI: network namespaces + nftables masquerade for full-cone, port-restricted and symmetric NAT |
-| B1.5 | Relay fallback | 1 week | Symmetric-NAT namespace pair must connect via the relay |
-| B2 | Unranked queue, region buckets, match reports, replay upload | 2 weeks | Harness: N instance pairs queued concurrently; reports agree; replay stored |
-| B3 | Ranked: OpenSkill, sets, placements, abandon/void rules, rank fetch for in-game display, rules enforcement checks | 3 weeks | Rating unit tests against openskill.js reference vectors; harness QA probes (section 6) must be rejected |
-| B4 | Website (signup, profile, leaderboard), admin CLI and page, email, backups, monitoring | 2 weeks | Snapshot tests of pages; restore drill from restic |
+| Phase | Deliverable | Backend | Dolphin | Game | Launcher | Test approach |
+|---|---|---|---|---|---|---|
+| **P0** Skeleton | `backend/` Cargo workspace (`core`, `api`, `mm`, `relay`), Postgres migrations, docker-compose for dev, systemd units and Caddyfile | 0.5-1 | — | — | — | `cargo test`; `docker compose up` on Windows (Docker Desktop) or plain processes |
+| **P1** Two friends, direct connect by code, with rollback (session start **A**) | Accounts (invite-only), connect codes, mm direct mode with hole punching and the LAN rule. Dolphin: `user` crate from slippi-rust-extensions (user.json watcher), port `SlippiMatchmaking.cpp`, the mailbox (5.2), match-found → netplay session on the punched port (5.3), banned-state blocks (section 6). Game: Wi-Fi menu repurposed (screen 1), code entry (3), CSS status (2, 4, 9), rules lock (section 6). Launcher: rebrand, login/sign-up against our API, `user.json`, ISO and SD/codeset check. | 2-3 | 4-5 | 6-8 | 2-3 | Unit tests for pairing and code assignment. Protocol golden tests using openmelee's JSON fixtures. **ppharness:** mm and api run as plain local processes; two DolphinNoGUI instances each get their own test `user.json` in the instance user dir, search for each other by code through the menus (scripted pads), and their P2P traffic goes through `netsim` presets. NAT tests on Linux CI use network namespaces + nftables masquerade for full-cone, port-restricted and symmetric NAT. `qa_reachability.py` rerun online must find nothing. |
+| **P1.5** Relay fallback | Relay service; client falls back after 3 s | 1 | 1 | — | — | A symmetric-NAT namespace pair must connect through the relay |
+| **P2** Keyframe session start (**B**) | Host→guest delta keyframe over P2P/relay, catch-up, port values (name, controls, lock-in), full `DoState` including IOS/SD | — | 5-7 | 1 | — | Go/no-go test in 5.1: 20 drop-in runs, dual core, confirmed-frame hashes equal for 10 min, keyframe size and join time measured under `typical`/`bad_wifi` |
+| **P3** Unranked matchmaking | Unranked queue with region buckets; confirmed-frame result reader; match reports; replay = keyframe + input log, uploaded | 2 | 3 | 1-2 (random stage, unranked rules) | 0.5 | Harness runs N instance pairs queued at once: every pair matched exactly once, both reports agree, replays stored and re-simulated to the same result |
+| **P4** Ranked | OpenSkill, sets, placements, abandon/void rules, rank fetch. Game: SSS strike/counterpick (screen 6), CSS rank text (7). Dolphin: set tracking, poor-performance termination, rank via mailbox/SESSION/LOCAL | 3 | 2-3 | 6-8 | 1 | Rating unit tests against openskill.js reference vectors. Harness scripts a full Bo3 with strikes on both instances. QA probes and forged reports (disagreeing winners, banned flags) must void the game. |
+| **P5** Website, leaderboard, ops | Sign-up/profile/leaderboard pages, admin CLI and page, email, restic backups, monitoring | 2 | — | — | 0.5 (links) | Page snapshot tests, a restore drill from restic, an external uptime probe |
+| **Later** | Quick chat (screen 10), teams 2v2 (needs rollback core N-player), spectating/broadcast relay | 1-2 | 3-4 | 3-4 | 1-2 | — |
 
-**TODO:** client-side (Dolphin/game) effort per phase; it dominates and depends on top risk 1.
+**Totals to ranked (P0-P4):**
+
+| Area | Weeks |
+|---|---|
+| Backend | about 9-11 |
+| Dolphin | about 15-19 |
+| Game | about 14-19 |
+| Launcher | about 4 |
+
+That is roughly **10-12 months for one person**, or 5-6 months with one person on backend and launcher and another on Dolphin and game. The game-side menus are the least certain estimate: they need Brawl menu reverse engineering beyond what Gen 1 left.
 
 ---
 
 ## 8. Risks (expanded)
 
-1. **Session start model** (section 5). It blocks the in-game flow, not the backend.
-2. **NAT:** mitigated by the relay. It costs bandwidth and adds one more service to run.
-3. **Client-reported results:** mitigated by dual reports, replays, banned-state flags and a build hash allow-list. There is no real anti-cheat; this is the same trust model as Slippi.
-4. **Single box:** an outage stops all matchmaking, though already-connected games survive. Mitigated by backups and a documented rebuild; a second region can come later.
+1. **How the online session starts (5.1).**
+   - Whole-machine rollback needs identical machines at session start, and Slippi's UX connects players mid-game.
+   - Recommendation: option B (Orca-style keyframe at connect, with our own delta transfer), with option A (synchronized reboot) as the Phase 1 interim. Reject C (Slippi/Brawlback-Gen-1 gameplay-only rollback).
+   - Residual risks for B:
+     - transfer time on slow uplinks;
+     - IOS/SD state in the keyframe;
+     - P+'s JIT-dependent first frames;
+     - dual-core determinism after a load. Our dual-core findings show render-side G3D state diverging, which makes a whole-RAM hash noisy.
+   - Fallback: ship A permanently, which costs one visible reboot per connection.
+2. **NAT.** Mitigated by the relay. It costs bandwidth and one more service to run.
+3. **Client-reported results.** Mitigated by:
+   - confirmed-frame reporting from both clients;
+   - dual-report agreement;
+   - replays;
+   - banned-state flags;
+   - the build-hash allow-list.
+
+   There is no real anti-cheat; this is the same trust model as Slippi's.
+4. **Single box.** An outage stops all matchmaking, though games already connected survive. Mitigated by backups and a documented rebuild; a second region can come later.
+5. **Menu reverse engineering.** Gen 1's hooks cover the Wi-Fi CSS path only. The Wi-Fi top menu, the name-entry keyboard in code mode, and the SSS strike mode are new Brawl RE work.
 
 ## 9. Open questions for the user
 
-1. Session start: may matchmaking end in a short synchronized reboot (about 10 s) instead of Slippi's instant CSS connect, if state transfer proves too slow?
-2. Friends phase without email (invite codes, admin password resets): OK?
-3. Domain name and product name for the hostnames and website?
-4. Ruleset (stocks, timer, stage lists for unranked and ranked): adopt P+'s current competitive ruleset, or ask the P+ team?
-5. Keep replays forever for ranked, and 90 days for the rest?
+1. **Session start.** Agree with option B as the target and A for Phase 1? If B's transfer is slow on someone's connection, is a visible reboot (A) acceptable for them?
+2. **Orca code.** May we reuse Orca's GPL keyframe and result-reader code with attribution, or reimplement it? (Reuse is legal; reimplementing avoids "built on Orca" optics.)
+3. **The "Brawlback → Direct / Quickplay" Wi-Fi menu.** Where did you see it? It is in no public Brawlback repo or branch. If it exists unpushed, asking the Brawlback team for it would save weeks.
+4. **Email.** Is a friends phase without email (invite codes, admin password resets) OK?
+5. **Names.** What domain name and product name should the hostnames and website use?
+6. **Ruleset.** Stocks, timer, and stage lists for unranked and ranked: adopt P+'s current competitive ruleset, or ask the P+ team?
+7. **Replay retention.** Keep ranked replays forever and the rest for 90 days?
