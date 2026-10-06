@@ -359,6 +359,16 @@ class RegionTests(unittest.TestCase):
         self.assertEqual(s, [(0x100, 0x40, "x"), (0x160, 0xA0, "x")])
 
 
+class ExclusionTests(unittest.TestCase):
+    def test_disk_id_is_never_hashed(self):
+        # Rev 1 and Rev 2 differ only in the DVDDiskID at 0x80494938 (0x20 bytes).
+        r = b.exclude_state_noise([(0x80400000, 0x100000, "mem")])
+        for a, n, _ in r:
+            self.assertTrue(a + n <= 0x80494938 or a >= 0x80494958, (hex(a), hex(n)))
+        self.assertEqual(sum(n for _, n, _ in r), 0x100000 - 0x20 - 0xC00 - 0x1400)
+        self.assertIn(b.DISK_ID_RANGE, b.STATE_EXCLUDED_RANGES)
+
+
 class IdTests(unittest.TestCase):
     def test_css_to_char_kind(self):
         for name in ("mario", "fox", "falco", "wario", "bowser", "marth", "sonic", "sheik", "zero_suit_samus"):
@@ -529,7 +539,7 @@ class SimGame:
         return -1
 
     def tick_sss(self, pads, pressed):
-        if self.sss_state == 2:
+        if self.sss_state == b.SSS_STATE_TAKEN:
             if self.scene_age > 6:
                 self.w.set_mode(stage=self.taken)
                 self.enter("scMemoryChange")
@@ -539,7 +549,7 @@ class SimGame:
         self.cy = max(-19.5, min(19.5, self.cy + 1.625 * (sy - 128) / 100.0))
         pos = self.stage_pos_at(self.cx, self.cy)
         if "A" in pressed[0] and pos >= 0:
-            self.sss_state, self.taken, self.scene_age = 2, self.stage_pages[0][pos], 0
+            self.sss_state, self.taken, self.scene_age = b.SSS_STATE_TAKEN, self.stage_pages[0][pos], 0
 
     def sync(self):
         m = self.m
@@ -558,10 +568,14 @@ class SimGame:
             m.f32(self.cursor + b.CURSOR_Y, self.cy)
             m.u32(t + b.SSS_STATE, self.sss_state)
             m.u32(t + b.SSS_PAGE, 0)
-            m.s32(t + b.SSS_SELECTED, self.stage_pos_at(self.cx, self.cy))
+            pos = self.stage_pos_at(self.cx, self.cy)
+            # As on the live game: hovered = position + 2 (0 = nothing); "selected" is sticky.
+            m.u32(t + b.SSS_HOVERED_ITEM, pos + b.SSS_ITEM_BASE if pos >= 0 else 0)
+            if pos >= 0:
+                m.s32(t + b.SSS_SELECTED, pos)
             m.u32(t + b.SSS_CLOCK, self.scene_age)
             m.u32(t + b.SSS_CONTROLLER, 0xF0)
-            m.u32(t + b.SSS_TAKEN_KIND, self.taken if self.sss_state == 2 else 0)
+            m.u32(t + b.SSS_TAKEN_KIND, self.taken if self.sss_state == b.SSS_STATE_TAKEN else 0)
 
 
 class RecipeTests(unittest.TestCase):

@@ -27,6 +27,7 @@ source on the SD card (``Project+/Source/**``, ``NETPLAY.TXT``).
 from __future__ import annotations
 
 import enum
+import logging
 import math
 import struct
 import zlib
@@ -34,6 +35,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, Iterable, List, Mapping, Optional, Protocol, Sequence, Tuple
 
 ReadMem = Callable[[int, int], bytes]
+log = logging.getLogger("ppharness.brawl")
 
 # =============================================================================================
 # Address registry
@@ -185,7 +187,7 @@ RI_PLAYER_SIZE = 0x2AC
 RI_DECISION = 0x1378     # 1 time up, 2 win, 3 team win, 9 no contest
 # scMelee (sc_melee.h) / stOperatorRule(Melee)
 SCM_OPERATOR_READY_GO = 0x48
-SCM_OPERATOR_RULE_MELEE = 0x58
+SCM_OPERATOR_RULE_MELEE = 0x54   # verified live; +0x58 is another StOperatorRule-named object
 OPR_IS_GAME_SET = 0x74
 OPR_IS_START = 0xDF
 OPR_REMAINING_FRAMES = 0xE0
@@ -239,14 +241,14 @@ SSS_SCENE_TASK = 0x3AC
 SSS_CURSOR = 0x200
 CURSOR_X = 0x3C
 CURSOR_Y = 0x40              # y up
-SSS_STATE = 0x224            # 0 choosing, 2 taken (screen exits ~6 frames later)
+SSS_STATE = 0x224            # 0 choosing; 11 once a stage is taken on P+ v3.2 (verified live)
 SSS_PAGE = 0x228
-SSS_HOVERED_ITEM = 0x244     # 0 nothing, stage items, 0x35 page button, 0x36 random, 0x37 back
-SSS_SELECTED = 0x248         # page position under the cursor, -1 none ("current selection", P+ Net-Random.asm)
+SSS_HOVERED_ITEM = 0x244     # 0 nothing, page position + 2 on a stage, 0x36 random (verified live)
+SSS_SELECTED = 0x248         # last hovered page position, -1 before any; sticky (P+ "current selection")
 SSS_CLOCK = 0x250            # frames since the screen opened
 SSS_TAKEN_KIND = 0x258       # chosen stage kind, copied out when the screen exits
 SSS_CONTROLLER = 0x278       # 0xF0 any port, else that port
-SSS_STATE_CHOOSING, SSS_STATE_TAKEN = 0, 2
+SSS_STATE_CHOOSING, SSS_STATE_TAKEN = 0, 11
 SSS_ITEM_PAGE, SSS_ITEM_RANDOM, SSS_ITEM_BACK = 0x35, 0x36, 0x37
 
 # =============================================================================================
@@ -264,6 +266,9 @@ CSS_ID: Dict[str, int] = {
     "squirtle": 0x1D, "ivysaur": 0x1E, "king_dedede": 0x1F, "lucario": 0x20, "ike": 0x21,
     "rob": 0x22, "jigglypuff": 0x23, "toon_link": 0x24, "wolf": 0x25, "snake": 0x26,
     "sonic": 0x27, "none": 0x28, "random": 0x29,
+    # P+ v3.2 (verified live): independent Pokemon replace the Trainer on the CSS, plus clones.
+    "charizard_solo": 0x2A, "squirtle_solo": 0x2B, "ivysaur_solo": 0x2C,
+    "roy": 0x2D, "mewtwo": 0x2E, "knuckles": 0x30,
 }
 CSS_NONE = 0x28
 CSS_RANDOM = 0x29
@@ -273,8 +278,10 @@ CSS_RANDOM = 0x29
 CSS_PPLUS_WARIOMAN = 0x36
 CSS_PPLUS_SOPO = 0x37
 CSS_PPLUS_GIGA_BOWSER = 0x38
-# P+ v3.2 CSS icon order (CSS_ROSTER, 43 bytes). The P+-only ids (0x2A-0x2E, 0x30) are clones
-# (Mewtwo, Roy, Knuckles, independent Pokemon); their exact names need live verification.
+# P+ v3.2 CSS icon order (CSS_ROSTER, 43 bytes; matches memory at 0x80680DE0, verified live).
+# The P+-only ids, identified live from P+'s slot table at 0x80585B00 and the CSS screen:
+# 0x2A Charizard, 0x2B Squirtle, 0x2C Ivysaur (independent Pokemon; the vanilla Pokemon Trainer
+# ids 0x1B-0x1E are not on P+'s CSS), 0x2D Roy, 0x2E Mewtwo, 0x30 Knuckles.
 PPLUS_CSS_ROSTER = bytes([
     0x00, 0x09, 0x0D, 0x15, 0x05, 0x0C, 0x01, 0x1A, 0x0A, 0x07, 0x13, 0x25, 0x02, 0x24, 0x0E,
     0x0F, 0x14, 0x08, 0x23, 0x2E, 0x2B, 0x2C, 0x2A, 0x20, 0x03, 0x04, 0x0B, 0x19, 0x06, 0x16,
@@ -290,15 +297,24 @@ CHAR_KIND: Dict[str, int] = {
     "lucas": 0x1B, "diddy_kong": 0x1C, "king_dedede": 0x23, "lucario": 0x24, "ike": 0x25,
     "rob": 0x26, "jigglypuff": 0x27, "toon_link": 0x28, "wolf": 0x29, "snake": 0x2A,
     "sonic": 0x2B, "giga_bowser": 0x2C, "warioman": 0x2D,
+    "popo": 0x11, "charizard_solo": 0x1E, "squirtle_solo": 0x20, "ivysaur_solo": 0x22,
+    # P+ v3.2 clones (byte 0 of P+'s slot table at 0x80585B00, read live):
+    "roy": 0x32, "mewtwo": 0x33, "knuckles": 0x35,
 }
+# Every gmCharacterKind a P+ v3.2 CSS slot can produce without the special-fighter shortcut.
+PPLUS_PLAYABLE_CHAR_KINDS = frozenset(set(range(0x00, 0x11)) | set(range(0x13, 0x2C)) | {0x11, 0x32, 0x33, 0x35})
 CHAR_GIGA_BOWSER = 0x2C
 CHAR_WARIOMAN = 0x2D
-# Byte 0 of each 16-byte entry of the CSS slot table at 0x80455458, read from the Rev 1 DOL:
-# CSS_TO_CHAR_KIND[MuSelchkind] = gmCharacterKind (0xFF: Pokemon Trainer, resolved per Pokemon).
+# Byte 0 of each 16-byte entry of P+'s CSS slot table (0x80585B00, a copy of the Rev 1 DOL
+# table at 0x80455458 extended by P+; read live): CSS_TO_CHAR_KIND[MuSelchkind] =
+# gmCharacterKind. 0xFF: Pokemon Trainer (resolved per Pokemon) / none / random; 0x00 past 0x2E
+# is unused, except 0x30 Knuckles and the special-fighter slots 0x36-0x38.
 CSS_TO_CHAR_KIND = bytes([
     0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E,
     0x0F, 0x10, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1A, 0x1B, 0x1C, 0xFF, 0x1D, 0x1F,
-    0x21, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B])
+    0x21, 0x23, 0x24, 0x25, 0x26, 0x27, 0x28, 0x29, 0x2A, 0x2B, 0xFF, 0xFF, 0x1E, 0x20, 0x22,
+    0x32, 0x33, 0x00, 0x35, 0x00, 0x00, 0x00, 0x00, 0x00, 0x2D, 0x11, 0x2C])
+assert len(CSS_TO_CHAR_KIND) == 0x39
 
 # ftKind (ft_entry.h): the live fighter's kind (Fighter+0x110, ftEntry instances).
 FT_KIND: Dict[str, int] = {
@@ -772,10 +788,11 @@ def read_results(read_mem: ReadMem) -> Optional[Dict[str, Any]]:
         ri = _game_global(m, GG_RESULT_INFO)
         players = []
         for p in range(4):
-            b = m.read(ri + RI_PLAYERS + p * RI_PLAYER_SIZE, 0x18)
+            b = m.read(ri + RI_PLAYERS + p * RI_PLAYER_SIZE, 0x1C)
             players.append({"port": p, "character": b[0], "state": b[1], "stocks": struct.unpack(">b", b[0xA:0xB])[0],
                             "place": b[0xE], "kos": struct.unpack(">I", b[0x10:0x14])[0],
-                            "falls": struct.unpack(">I", b[0x14:0x18])[0]})
+                            "falls": struct.unpack(">I", b[0x14:0x18])[0],
+                            "sds": struct.unpack(">H", b[0x18:0x1A])[0]})
         return {"rule": m.u8(ri + RI_RULE), "stage": m.u16(ri + RI_STAGE),
                 "winning_player": m.s8(ri + RI_WINNING_PLAYER), "decision": m.u8(ri + RI_DECISION),
                 "players": players}
@@ -812,12 +829,34 @@ BRAWLBACK_CHECKSUM_FIELDS: Tuple[ChecksumField, ...] = (
     ChecksumField("p1_vel", 0x80494F30, size=8), ChecksumField("p2_vel", 0x8049DEE4, size=8),
     ChecksumField("p3_vel", 0x80494F98, size=8), ChecksumField("p4_vel", 0x80495000, size=8),
 )
+# Verified live (Rev 1, P+ v3.2): Brawlback's damage/stock "addresses" are ftEntry fields that
+# hold *pointers* (0x80623318 + i*0x244 = entry+0x28 = ftOwner*, 0x80623324 + i*0x244 = entry+0x34
+# = instance 0's Fighter*), and its "velocity" words are static .bss words holding heap pointers.
+# None of them changes during a match, so Brawlback's checksum only covers the frame counter and
+# positions. These are the same fields read through the REL-verified ftOwner accessors
+# (owner->data+0x24 damage f32, +0x34 stocks s32), using Brawlback's pointer-chain semantics.
+def _owner_field(port: int, off: int) -> Tuple[int, ...]:
+    return (FTE_OWNER + port * FTE_SIZE, OWNER_DATA, off)
+
+
+CORRECTED_CHECKSUM_FIELDS: Tuple[ChecksumField, ...] = (
+    ChecksumField("persistentFrameCounter", 0x901812A0 + 0x14),
+    *(ChecksumField(f"p{i + 1}_damage", FT_ENTRY_MANAGER, _owner_field(i, OWNER_DAMAGE)) for i in range(4)),
+    *(ChecksumField(f"p{i + 1}_stocks", FT_ENTRY_MANAGER, _owner_field(i, OWNER_STOCKS)) for i in range(4)),
+    *(f for f in BRAWLBACK_CHECKSUM_FIELDS if f.name.endswith(("_x", "_y"))),
+)
 # Ranges Brawlback leaves out of its rollback savestates (RollbackManager.cpp:272-276).
 BRAWLBACK_EXCLUDED_RANGES: Tuple[Tuple[int, int, str], ...] = (
     (0x804E7C00, 0xC00, "AX Wii audio buffers"),
     (0x8049A4EA, 0x1400, "AX Wii voice parameter blocks"),
     (0x90000800, 0x12C800, "Brawl framebuffer buffers"),
 )
+# The disc's DVDDiskID (bss 0x80494938, 0x20 bytes). Rev 1 and Rev 2 main.dol differ in exactly
+# one word (0x8001BC9C, the game version passed when this ID is filled in), so a Rev 1 and a
+# Rev 2 peer differ here and nowhere else (research/00-summary.md, addendum). Never hash it.
+DISK_ID_RANGE: Tuple[int, int, str] = (0x80494938, 0x20, "DVDDiskID (differs between Rev 1 and Rev 2)")
+# Everything state comparisons subtract: Brawlback's exclusions plus the disc ID.
+STATE_EXCLUDED_RANGES: Tuple[Tuple[int, int, str], ...] = BRAWLBACK_EXCLUDED_RANGES + (DISK_ID_RANGE,)
 
 
 def resolve_checksum_field(read_mem: ReadMem, f: ChecksumField) -> Optional[Tuple[int, int]]:
@@ -837,24 +876,26 @@ def resolve_checksum_field(read_mem: ReadMem, f: ChecksumField) -> Optional[Tupl
     return (addr, f.size) if is_mem_addr(addr, f.size) else None
 
 
-def brawlback_checksum_ranges(read_mem: ReadMem) -> List[Tuple[int, int]]:
-    """The [addr, len] list to feed ``hash_mem`` to cover exactly Brawlback's checksum fields."""
+def brawlback_checksum_ranges(read_mem: ReadMem,
+                              fields: Sequence[ChecksumField] = BRAWLBACK_CHECKSUM_FIELDS) -> List[Tuple[int, int]]:
+    """The [addr, len] list to feed ``hash_mem`` to cover exactly Brawlback's checksum fields
+    (or ``CORRECTED_CHECKSUM_FIELDS``)."""
     out = []
-    for f in BRAWLBACK_CHECKSUM_FIELDS:
+    for f in fields:
         r = resolve_checksum_field(read_mem, f)
         if r is not None:
             out.append(r)
     return out
 
 
-def brawlback_checksum(read_mem: ReadMem) -> int:
+def brawlback_checksum(read_mem: ReadMem, fields: Sequence[ChecksumField] = BRAWLBACK_CHECKSUM_FIELDS) -> int:
     """Brawlback's CalculateBrawlbackDesyncChecksum: zlib CRC32 over the raw big-endian bytes of the
     resolved fields in order; 0 outside scMelee. Same value Brawlback feeds GekkoNet."""
     info = read_scene(read_mem)
     if info.name != "scMelee":
         return 0
     crc = 0
-    for addr, size in brawlback_checksum_ranges(read_mem):
+    for addr, size in brawlback_checksum_ranges(read_mem, fields):
         try:
             crc = zlib.crc32(Mem(read_mem).read(addr, size), crc)
         except BadPointer:
@@ -902,7 +943,7 @@ def check_banned(read_mem: ReadMem) -> List[str]:
         for p in setup.players:
             if p.present and p.character in (CHAR_GIGA_BOWSER, CHAR_WARIOMAN):
                 out.append(f"port {p.port + 1} set up as {'Giga Bowser' if p.character == CHAR_GIGA_BOWSER else 'Wario-Man'}")
-            elif p.present and 0x2E <= p.character <= 0x3D:
+            elif p.present and p.character not in PPLUS_PLAYABLE_CHAR_KINDS:
                 out.append(f"port {p.port + 1} set up as non-playable character kind {p.character:#x}")
     if info.scene is Scene.IN_MATCH:
         for ps in read_players(read_mem, setup):
@@ -1014,16 +1055,18 @@ def _static_gameplay_ranges(read_mem: ReadMem) -> List[Tuple[int, int, str]]:
 
 def gameplay_ranges(read_mem: ReadMem, full: bool = False) -> List[Tuple[int, int, str]]:
     """[(addr, len, label)] covering in-match gameplay state, resolved from the live heap table,
-    minus Brawlback's excluded ranges. Feed ``[(a, n) for a, n, _ in ...]`` to ``hash_mem``."""
+    minus ``STATE_EXCLUDED_RANGES`` (Brawlback's exclusions and the Rev 1/Rev 2 disc ID).
+    Feed ``[(a, n) for a, n, _ in ...]`` to ``hash_mem``."""
     names = GAMEPLAY_HEAPS_FULL if full else GAMEPLAY_HEAPS
     heaps = {h.name: h for h in read_heap_table(read_mem)}
     ranges = [(h.start, h.size, h.name) for n in names if (h := heaps.get(n)) is not None]
     ranges += _static_gameplay_ranges(read_mem)
-    return subtract_ranges(merge_ranges(ranges), [(a, n) for a, n, _ in BRAWLBACK_EXCLUDED_RANGES])
+    return subtract_ranges(merge_ranges(ranges), [(a, n) for a, n, _ in STATE_EXCLUDED_RANGES])
 
 
 def menu_ranges(read_mem: ReadMem) -> List[Tuple[int, int, str]]:
-    """Menu-side state (CSS/SSS/rules/code menu/stage switch) for comparing instances on menus."""
+    """Menu-side state (CSS/SSS/rules/code menu/stage switch) for comparing instances on menus,
+    minus ``STATE_EXCLUDED_RANGES``."""
     m = Mem(read_mem)
     heaps = {h.name: h for h in read_heap_table(read_mem)}
     ranges = [(h.start, h.size, h.name) for n in MENU_HEAPS if (h := heaps.get(n)) is not None]
@@ -1044,7 +1087,14 @@ def menu_ranges(read_mem: ReadMem) -> List[Tuple[int, int, str]]:
     pads = _try(lambda: m.ptr(PAD_SYSTEM_PTR))
     if pads:
         ranges.append((pads, 0xB78, "gfPadSystem"))
-    return subtract_ranges(merge_ranges(ranges), [(a, n) for a, n, _ in BRAWLBACK_EXCLUDED_RANGES])
+    return subtract_ranges(merge_ranges(ranges), [(a, n) for a, n, _ in STATE_EXCLUDED_RANGES])
+
+
+def exclude_state_noise(ranges: Iterable[Sequence[Any]]) -> List[Tuple[int, int, str]]:
+    """Subtract ``STATE_EXCLUDED_RANGES`` from arbitrary [addr, len(, label)] ranges, e.g. before
+    hashing whole MEM1."""
+    rs = [(int(r[0]), int(r[1]), str(r[2]) if len(r) > 2 else "") for r in ranges]
+    return subtract_ranges(rs, [(a, n) for a, n, _ in STATE_EXCLUDED_RANGES])
 
 
 def merge_ranges(ranges: Iterable[Tuple[int, int, str]]) -> List[Tuple[int, int, str]]:
@@ -1162,17 +1212,18 @@ def read_sss(read_mem: ReadMem) -> Optional[SssView]:
                    w(SSS_CLOCK), w(SSS_TAKEN_KIND), w(SSS_CONTROLLER))
 
 
-# P+ RankedPPlus.h: "Hovered item values: 0 nothing, 1-0x34 a stage". Assumed position + 1 (live).
-SSS_ITEM_BASE = 1
+# Hovered item (task+0x244) = page position + 2 while the cursor is on a stage icon, 0 over
+# nothing, 0x36 on RANDOM (verified live, Rev 1, P+ v3.2: Battlefield, page 0 position 17, reads
+# 19; FD, position 10, reads 12).
+SSS_ITEM_BASE = 2
 
 
 def sss_position_under_cursor(v: SssView) -> int:
-    """Page position of the stage under the cursor, or -1. Prefers task+0x248 (P+ Net-Random.asm:
-    'Current selection on the stage selection screen', what X strikes); falls back to the hovered
-    item (task+0x244) minus ``SSS_ITEM_BASE``. Both need live verification."""
-    if 0 <= v.selected < SSS_ITEM_PAGE:
-        return v.selected
-    if 1 <= v.hovered_item < SSS_ITEM_PAGE:
+    """Page position of the stage under the cursor, or -1. Uses the hovered item (task+0x244)
+    minus ``SSS_ITEM_BASE``. task+0x248 (P+ 'current selection') is *sticky*: it keeps the last
+    hovered position after the cursor leaves the icons (verified live), so it is only trusted to
+    agree with a hovered stage, never on its own."""
+    if SSS_ITEM_BASE <= v.hovered_item < SSS_ITEM_PAGE:
         return v.hovered_item - SSS_ITEM_BASE
     return -1
 
@@ -1242,7 +1293,7 @@ def polls(drv: Driver) -> int:
     return int(_field_of(drv.status(), "input_polls") or 0)
 
 
-def step(drv: Driver, n: int = 1, timeout_ms: int = 5000) -> int:
+def step(drv: Driver, n: int = 1, timeout_ms: int = 30000) -> int:
     """Let ``n`` pad polls (= game frames) pass. Returns the new poll count."""
     target = polls(drv) + n
     r = drv.wait_frame(input_polls=target, timeout_ms=timeout_ms)
@@ -1297,8 +1348,32 @@ def steer_toward(x: float, y: float, tx: float, ty: float, full_tilt_at: float =
 
 
 # Positions learned while scanning (shared by every recipe in this process). Keyed by screen.
-LEARNED_CSS: Dict[int, Tuple[float, float]] = {}     # MuSelchkind -> hand (x, y) inside its icon
-LEARNED_SSS: Dict[Tuple[int, int], Tuple[float, float]] = {}  # (page, position) -> cursor (x, y)
+class _Learned(dict):
+    """key -> (x, y): the centroid of every position where the key was seen under the cursor. A
+    centroid sits near the icon centre (the first sighting is at the icon's edge, and steering
+    there under netplay input delay overshoots out of the icon)."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._sums: Dict[Any, List[float]] = {}
+
+    def add(self, key: Any, x: float, y: float, cap: int = 400) -> None:
+        if not (math.isfinite(x) and math.isfinite(y)):
+            return
+        sx, sy, n = self._sums.get(key, [0.0, 0.0, 0])
+        if n >= cap:
+            return
+        sx, sy, n = sx + x, sy + y, n + 1
+        self._sums[key] = [sx, sy, n]
+        self[key] = (sx / n, sy / n)
+
+    def clear(self) -> None:
+        super().clear()
+        self._sums.clear()
+
+
+LEARNED_CSS: _Learned = _Learned()   # MuSelchkind -> hand (x, y) inside its icon
+LEARNED_SSS: _Learned = _Learned()   # (page, position) -> cursor (x, y)
 
 
 def _serpentine(xs: Tuple[float, float], ys: Sequence[float]) -> List[Tuple[float, float]]:
@@ -1312,9 +1387,11 @@ def _serpentine(xs: Tuple[float, float], ys: Sequence[float]) -> List[Tuple[floa
 # CSS hand range (orca: grid spans about y -5..16; P+ hand speed 1.0/frame at full tilt).
 CSS_SCAN_X = (-30.0, 30.0)
 CSS_SCAN_Y = (15.0, 12.0, 9.0, 6.0, 3.0, 0.5, -2.5)
-# SSS cursor range x -30..30, y -19.5..19.5 (orca StageCursors.cpp:49); 1.625/frame.
-SSS_SCAN_X = (-29.0, 29.0)
-SSS_SCAN_Y = (18.0, 15.0, 12.0, 9.0, 6.0, 3.0, 0.0, -3.0, -6.0, -9.0, -12.0, -15.0, -18.0)
+# SSS cursor range x -30..30, y -19.5..20.5 (orca StageCursors.cpp:49); 1.6 units/frame. On P+
+# v3.2 the icon grid is 3 rows x 7 (live: rows at y ~ -3.2 / -9.1 / -15.0, x ~ -18 .. 22); the
+# cursor starts at (0.25, -18.45) on RANDOM. Scan the grid rows first, then the rest.
+SSS_SCAN_X = (-22.0, 25.0)
+SSS_SCAN_Y = (-15.0, -9.1, -3.2, 0.0, 3.0, 6.0, 9.0, 12.0, 15.0, -18.0)
 
 
 # =============================================================================================
@@ -1466,17 +1543,18 @@ def css_pick_character(drv: Driver, port: int, css_id: int, pad_port: Optional[i
             continue
         x, y = a.hand_x, a.hand_y
         if a.hand_target == CSS_HAND_GRID_HOLDING and a.character != CSS_NONE \
-                and math.isfinite(x) and a.character not in LEARNED_CSS:
-            LEARNED_CSS[a.character] = (x, y)
+                and math.isfinite(x):
+            LEARNED_CSS.add(a.character, x, y)
         on_target = a.hand_target == CSS_HAND_GRID_HOLDING and a.character == css_id
         still = prev is not None and abs(x - prev[0]) < 0.05 and abs(y - prev[1]) < 0.05
+        log.debug("css p%d want %#x: hand (%.2f, %.2f) target %d under %#x kind %d on=%s still=%s wp=%d",
+                  port + 1, css_id, x, y, a.hand_target, a.character, a.kind, on_target, still, wp)
         if on_target and still:
             drv.pad_set(pp, buttons=(), main=(128, 128))
             tap(drv, pp, ["A"], hold=3, release=6)
             prev = None
             continue
         if on_target:
-            LEARNED_CSS[css_id] = (x, y)
             drv.pad_set(pp, buttons=(), main=(128, 128))
         else:
             if css_id in LEARNED_CSS:
@@ -1540,13 +1618,13 @@ def sss_pick_stage(drv: Driver, stage_kind: int, port: int = 0, timeout_frames: 
             step(drv, 1)
             continue
         last = v
-        if v.state == SSS_STATE_TAKEN:
+        if v.state != SSS_STATE_CHOOSING and v.taken_kind not in (0, 0xFFFFFFFF):
             neutral(drv, port)
             return _confirm_stage(drv, stage_kind, v)
         x, y = v.cursor_x, v.cursor_y
         pos = sss_position_under_cursor(v)
-        if pos >= 0 and (v.page, pos) not in LEARNED_SSS:
-            LEARNED_SSS[(v.page, pos)] = (x, y)
+        if pos >= 0:
+            LEARNED_SSS.add((v.page, pos), x, y)
         page_targets = [t for t in targets if t[0] == v.page] or targets
         on_target = (v.page, pos) in page_targets
         still = prev is not None and abs(x - prev[0]) < 0.05 and abs(y - prev[1]) < 0.05
@@ -1580,7 +1658,8 @@ def sss_pick_stage(drv: Driver, stage_kind: int, port: int = 0, timeout_frames: 
 def _confirm_stage(drv: Driver, stage_kind: int, view: Optional[SssView]) -> Optional[SssView]:
     """After A on the SSS: the taken kind (task+0x258) if still readable, else the match setup's
     stage once it is written. Raises on a mismatch."""
-    if view is not None and view.state == SSS_STATE_TAKEN and view.taken_kind not in (0, 0xFFFFFFFF)             and (view.taken_kind & 0xFF) != stage_kind:
+    if view is not None and view.state != SSS_STATE_CHOOSING and view.taken_kind not in (0, 0xFFFFFFFF) \
+            and (view.taken_kind & 0xFF) != stage_kind:
         raise RecipeError(f"SSS took stage {view.taken_kind:#x}, wanted {stage_kind:#x}", view)
     return view
 
@@ -1608,16 +1687,26 @@ def wait_match_end(drv: Driver, timeout_frames: int = 60 * 60 * 9) -> MatchState
     raise RecipeError("match did not end", read_match_state(drv.read_mem))
 
 
-def results_to_css(drv: Driver, port: int = 0, timeout_frames: int = 60 * 30) -> SceneInfo:
-    """Leave scVsResult with A taps (then Start, orca inputs) and land on the CSS again."""
+def results_to_css(drv: Driver, port: Any = 0, timeout_frames: int = 60 * 30) -> SceneInfo:
+    """Leave scVsResult and land on the CSS again. Every human port has to confirm: on P+ v3.2
+    the first A on a port opens its stats panel and the next one marks it "ready for the next
+    battle" (verified live), so A is tapped on every port in ``port`` (an int or a sequence; the
+    default is port 0 plus every human in the match setup). Start is never pressed: with the P+
+    Code Menu's Debug Mode on, Start toggles a frame-advance freeze."""
+    ports = [port] if isinstance(port, int) else list(port)
+    if isinstance(port, int):
+        setup = read_match_setup(drv.read_mem)
+        if setup is not None:
+            ports += [p.port for p in setup.players if p.state == PLAYER_HUMAN and p.port not in ports]
     last = [-1000]
-    n = [0]
 
     def press(info: SceneInfo) -> None:
         if info.scene is Scene.RESULTS and polls(drv) - last[0] >= 40:
             last[0] = polls(drv)
-            n[0] += 1
-            tap(drv, port, ["A"] if n[0] % 3 else ["START"], hold=3, release=3)
+            for p in ports:
+                neutral(drv, p)
+                drv.pad_script(p, [{"buttons": ["A"], "hold": 3}, {"buttons": [], "hold": 3}])
+            step(drv, 6)
 
     return wait_scene(drv, [Scene.CSS], timeout_frames, every=4, on_frame=press)
 
