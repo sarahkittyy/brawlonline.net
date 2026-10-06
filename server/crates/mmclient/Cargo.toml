@@ -1,0 +1,17 @@
+[package]
+name = "mmclient"
+description = "Matchmaking ticket client (library + CLI) behaving like Slippi's SlippiMatchmaking, for tests and ppharness."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+common.workspace = true
+anyhow.workspace = true
+clap.workspace = true
+rand.workspace = true
+rusty_enet.workspace = true
+serde.workspace = true
+serde_json.workspace = true

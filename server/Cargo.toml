@@ -4,6 +4,8 @@ members = [
     "crates/common",
     "crates/accounts",
     "crates/mm",
+    "crates/admin",
+    "crates/mmclient",
 ]
 
 [workspace.package]
