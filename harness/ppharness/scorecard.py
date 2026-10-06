@@ -10,9 +10,10 @@ Per side (host / joiner) it reports:
   desyncs detected (GekkoNet) and Dolphin's own desync reports;
 * frames ahead over time (sampled about 4x per second): series, mean, min, max;
 * effective speed: VI fields/s, game frames/s (input_polls) and GekkoNet frames/s;
-* freezes: a side counts as frozen when its GekkoNet frame (or, before the session starts, its
-  input_polls) does not move for more than ``--freeze-s`` (2 s) while the run is still going;
-  the first freeze's time, frames, scene and the peer's frame are kept;
+* freezes: a side is *frozen* when its GekkoNet frame (or, before the session starts, its
+  input_polls) stops moving for more than ``--freeze-s`` (2 s) and never moves again before the
+  run ends; the freeze's start time, frames, scene and how far the peer got are kept. Shorter
+  or recovered stalls longer than ``--freeze-s`` are listed separately as ``stalls``;
 * the scene reached, and where the setup failed (phase "match" / "auto").
 
 At the end of each session it compares state between the peers with ``compare_state`` keyed on
@@ -62,6 +63,7 @@ class SideStats:
     froze: bool = False
     freeze: Optional[Dict[str, Any]] = None
     longest_stall_s: float = 0.0
+    stalls: List[Dict[str, Any]] = field(default_factory=list)   # > freeze_s, then recovered
     errors: List[str] = field(default_factory=list)
     actions: int = 0
     scene_end: str = ""
@@ -81,7 +83,8 @@ class SideStats:
             g = [s for s in good if s.get("gekko") is not None]
             if len(g) >= 2:
                 out["fps"]["gekko"] = round((g[-1]["gekko"] - g[0]["gekko"]) / max(1e-6, g[-1]["t"] - g[0]["t"]), 1)
-        out.update({"froze": self.froze, "freeze": self.freeze, "longest_stall_s": round(self.longest_stall_s, 1),
+        out.update({"froze": self.froze, "freeze": self.freeze, "stalls": self.stalls,
+                    "longest_stall_s": round(self.longest_stall_s, 1),
                     "scene_end": self.scene_end, "actions": self.actions, "errors": self.errors[:10]})
         return out
 
@@ -109,6 +112,7 @@ class Side:
         self.freeze_s = freeze_s
         self.busy_until = -1
         self._last_progress = (None, time.monotonic())
+        self._open_stall: Optional[Dict[str, Any]] = None
         self.lock = threading.Lock()
 
     def sample(self, phase: str) -> Dict[str, Any]:
@@ -129,16 +133,28 @@ class Side:
         last_key, since = self._last_progress
         now = s["t"]
         if key is not None and key != last_key:
+            if self._open_stall is not None:     # it moved again: a stall, not a freeze
+                self._open_stall["duration_s"] = round(now - since, 1)
+                self._open_stall["recovered"] = True
+                self.stats.stalls.append(self._open_stall)
+                self._open_stall = None
             self._last_progress = (key, now)
         else:
             stall = now - since
             self.stats.longest_stall_s = max(self.stats.longest_stall_s, stall)
-            if stall > self.freeze_s and not self.stats.froze and key is not None:
-                self.stats.froze = True
-                self.stats.freeze = {"after_s": round(since - self.t0, 1), "phase": phase,
-                                     "gekko": s.get("gekko"), "polls": s.get("polls"), "vi": s.get("vi"),
-                                     "scene": self.scene()}
+            if stall > self.freeze_s and self._open_stall is None and key is not None:
+                self._open_stall = {"after_s": round(since - self.t0, 1), "phase": phase,
+                                    "gekko": s.get("gekko"), "polls": s.get("polls"), "vi": s.get("vi"),
+                                    "scene": self.scene()}
         return s
+
+    def finish(self) -> None:
+        """A stall still open at the end of the run is a freeze."""
+        if self._open_stall is not None:
+            self._open_stall["duration_s"] = round(time.monotonic() - self._last_progress[1], 1)
+            self._open_stall["recovered"] = False
+            self.stats.froze = True
+            self.stats.freeze = self._open_stall
 
     def frozen_now(self) -> bool:
         return time.monotonic() - self._last_progress[1] > self.freeze_s
@@ -279,9 +295,10 @@ def run_session(preset: str, seed: int, duration: float, phase: str, freeze_s: f
         for t in threads:
             t.join(15)
         for s in sides:
+            s.finish()
             s.stats.scene_end = s.scene()
         cmp: Dict[str, Any]
-        if any(s.stats.froze or s.frozen_now() for s in sides):
+        if any(s.stats.froze for s in sides):
             cmp = {"skipped": "a side froze"}
         else:
             try:
@@ -351,6 +368,7 @@ def text_summary(report: Dict[str, Any]) -> str:
                 f"resim={s.get('frames_resimulated')} desyncs={s.get('desyncs_detected')} "
                 f"ahead(mean/min/max)={fa.get('mean')}/{fa.get('min')}/{fa.get('max')} "
                 f"fps(vi/game/gekko)={fps.get('vi')}/{fps.get('game')}/{fps.get('gekko')} "
+                f"stalls>{report.get('freeze_s', 2)}s={len(s.get('stalls') or [])} "
                 f"froze={'YES' if s.get('froze') else 'no'}"
                 + (f" (after ~{fz.get('after_s')}s at gekko {fz.get('gekko')}, polls {fz.get('polls')}, "
                    f"{fz.get('scene')}, peer reached {fz.get('peer_gekko_end')})" if fz else ""))
@@ -383,7 +401,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     cpu = {"on": True, "off": False, "template": None}[args.cpu_thread]
     report: Dict[str, Any] = {"started": time.strftime("%Y-%m-%d %H:%M:%S"), "phase": args.phase,
                               "duration_s": args.duration, "build": str(paths.dolphin_nogui()),
-                              "cpu_thread": cpu, "sessions": []}
+                              "cpu_thread": cpu, "freeze_s": args.freeze_s, "sessions": []}
     for preset in [p for p in args.presets.split(",") if p]:
         for i in range(args.sessions):
             r = run_session(preset, args.seed + i, args.duration, args.phase, args.freeze_s, exe=args.exe,
