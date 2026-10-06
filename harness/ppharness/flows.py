@@ -129,6 +129,7 @@ def to_css(seats: Sequence[Seat], timeout_frames: int = 60 * 90) -> None:
 
     def one(group: List[Seat]) -> None:
         c = group[0].client
+        c.wait_state("running", timeout=120)
         info = B.read_scene(c.read_mem)
         if info.scene is B.Scene.RESULTS:
             B.results_to_css(c, [s.pp for s in group], timeout_frames)
@@ -186,11 +187,6 @@ class FightLog:
 STAGE_EDGE = {B.STAGE_KIND["battlefield"]: 68.0, B.STAGE_KIND["final_destination"]: 85.0}
 
 
-def _press(drv: HarnessClient, pp: int, frames: List[Dict[str, Any]]) -> int:
-    win = drv.pad_script(pp, frames)
-    return win.ends_at
-
-
 def _macro(rng: random.Random, toward: int) -> List[Dict[str, Any]]:
     """One plausible action as a pad_script (no Start, no D-pad, never L and R together)."""
     t = 255 if toward > 0 else 1
@@ -220,22 +216,69 @@ def _macro(rng: random.Random, toward: int) -> List[Dict[str, Any]]:
     return [{"hold": rng.randint(4, 16)}]                                              # idle
 
 
-def fight(seat: Seat, frames: int, *, mode: str = "chase", seed: Any = 0, stage_kind: int | None = None,
-          sample_every: int = 30, stop: Callable[[], bool] | None = None) -> FightLog:
-    """Drive ``seat`` for ``frames`` game frames of a running match.
+class Fighter:
+    """Decides one seat's next input macro from the match state (see ``fight``)."""
 
-    mode "chase": walk to the nearest opponent and jab/tilt when in range (reliably deals damage).
-    mode "random": seeded random macros (``_macro``) biased toward the opponent.
-    mode "idle":   stand still (but still recover to the stage).
-    Both recover when off stage (steer to the centre, jump, up-B). Never presses Start or the D-pad.
+    def __init__(self, seat: Seat, mode: str = "chase", seed: Any = 0, stage_kind: int | None = None):
+        if mode not in ("chase", "random", "idle"):
+            raise ValueError(f"unknown fight mode {mode!r}")
+        self.seat, self.mode = seat, mode
+        self.rng = random.Random(f"{seed}:{seat.port}")
+        self.edge = STAGE_EDGE.get(stage_kind if stage_kind is not None else -1, 65.0)
+        self.busy_until = -1
+        self.log = FightLog(seat.name)
+
+    def decide(self, st: B.MatchState) -> List[Dict[str, Any]]:
+        me = next((p for p in st.players if p.port == self.seat.port), None)
+        if me is None or me.x is None or me.y is None:
+            return [{"hold": 2}]
+        opps = [p for p in st.players if p.port != self.seat.port and p.x is not None]
+        opp = min(opps, key=lambda p: abs((p.x or 0) - me.x)) if opps else None
+        dx = (opp.x - me.x) if opp is not None and opp.x is not None else -me.x
+        dy = (opp.y - me.y) if opp is not None and opp.y is not None else 0.0
+        toward = 1 if dx > 0 else -1
+        t = 255 if toward > 0 else 1
+        if abs(me.x) > self.edge - 2 or me.y < -8:                # off stage: recover
+            to_c = 255 if me.x < 0 else 1
+            if me.y < -8:
+                return [{"main": [to_c, 128], "buttons": ["X"], "hold": 2}, {"main": [to_c, 128], "hold": 10},
+                        {"main": [to_c, 255], "buttons": ["B"], "hold": 2}, {"main": [to_c, 160], "hold": 30}]
+            return [{"main": [to_c, 128], "hold": 8}]
+        if self.mode == "idle":
+            return [{"hold": 10}]
+        if self.mode == "chase":
+            if abs(dx) < 14 and abs(dy) < 10:
+                return [{"main": [t, 128], "hold": 1}, {"buttons": ["A"], "hold": 2}, {"hold": 6}]
+            if dy > 15 and abs(dx) < 30:
+                return [{"buttons": ["X"], "hold": 2}, {"main": [t, 128], "hold": 12}]
+            if dy < -15 and abs(dx) < 30:
+                return [{"main": [128, 1], "hold": 4}, {"hold": 10}]   # drop through a platform
+            return [{"main": [t, 128], "hold": 4}]
+        return _macro(self.rng, toward)
+
+
+def fight(seats: Seat | Sequence[Seat], frames: int, *, mode: str | Sequence[str] = "chase", seed: Any = 0,
+          stage_kind: int | None = None, sample_every: int = 30,
+          stop: Callable[[], bool] | None = None) -> List[FightLog]:
+    """Drive ``seats`` (all on the same instance) for ``frames`` game frames of a running match.
+
+    mode (one, or one per seat): "chase" walks to the nearest opponent and jabs/tilts in range
+    (reliably deals damage); "random" plays seeded random macros (``_macro``) biased toward the
+    opponent; "idle" stands still. All modes recover when off stage. Never presses Start or the
+    D-pad. For netplay, run one ``fight`` per instance in its own thread (``play``).
     """
-    c, pp = seat.client, seat.pp
-    rng = random.Random(f"{seed}:{seat.port}")
-    edge = STAGE_EDGE.get(stage_kind or -1, 65.0)
-    lg = FightLog(seat.name)
+    seats = [seats] if isinstance(seats, Seat) else list(seats)
+    if not seats:
+        return []
+    c = seats[0].client
+    if any(s.client is not c for s in seats):
+        raise ValueError("fight() drives seats of one instance; use play() for several")
+    modes = [mode] * len(seats) if isinstance(mode, str) else list(mode)
+    fighters = [Fighter(s, m, seed, stage_kind) for s, m in zip(seats, modes)]
     start = B.polls(c)
     last_sample = -10 ** 9
-    B.neutral(c, pp)
+    for f in fighters:
+        B.neutral(c, f.seat.pp)
     while True:
         now = B.polls(c)
         if now - start >= frames or (stop is not None and stop()):
@@ -245,48 +288,43 @@ def fight(seat: Seat, frames: int, *, mode: str = "chase", seed: Any = 0, stage_
             break
         if now - last_sample >= sample_every:
             last_sample = now
-            lg.samples.append({"poll": now, "damage": {p.port: p.damage for p in st.players},
-                               "stocks": {p.port: p.stocks for p in st.players}})
-        me = next((p for p in st.players if p.port == seat.port), None)
-        opps = [p for p in st.players if p.port != seat.port and p.x is not None]
-        if me is None or me.x is None or me.y is None:
-            B.step(c, 2)
-            continue
-        opp = min(opps, key=lambda p: abs((p.x or 0) - me.x)) if opps else None
-        dx = (opp.x - me.x) if opp is not None and opp.x is not None else -me.x
-        dy = (opp.y - me.y) if opp is not None and opp.y is not None else 0.0
-        toward = 1 if dx > 0 else -1
-        if abs(me.x) > edge - 2 or me.y < -8:                 # off stage: recover
-            to_c = 255 if me.x < 0 else 1
-            if me.y < -8:
-                seq = [{"main": [to_c, 128], "buttons": ["X"], "hold": 2}, {"main": [to_c, 128], "hold": 10},
-                       {"main": [to_c, 255], "buttons": ["B"], "hold": 2}, {"main": [to_c, 160], "hold": 30}]
-            else:
-                seq = [{"main": [to_c, 128], "hold": 8}]
-        elif mode == "idle":
-            seq = [{"hold": 10}]
-        elif mode == "chase":
-            if abs(dx) < 14 and abs(dy) < 10:
-                seq = [{"main": [255 if toward > 0 else 1, 128], "hold": 1}, {"buttons": ["A"], "hold": 2},
-                       {"hold": 6}]
-            elif dy > 15 and abs(dx) < 30:
-                seq = [{"buttons": ["X"], "hold": 2}, {"main": [255 if toward > 0 else 1, 128], "hold": 12}]
-            elif dy < -15 and abs(dx) < 30:
-                seq = [{"main": [128, 1], "hold": 4}, {"hold": 10}]   # drop through a platform
-            else:
-                seq = [{"main": [255 if toward > 0 else 1, 128], "hold": 4}]
-        else:
-            seq = _macro(rng, toward)
-        end = _press(c, pp, seq)
-        lg.actions += 1
+            sample = {"poll": now, "damage": {p.port: p.damage for p in st.players},
+                      "stocks": {p.port: p.stocks for p in st.players}}
+            for f in fighters:
+                f.log.samples.append(sample)
+        for f in fighters:
+            if f.busy_until <= now:
+                seq = f.decide(st)
+                f.busy_until = c.pad_script(f.seat.pp, seq).ends_at
+                f.log.actions += 1
+        wake = min(f.busy_until for f in fighters)
         try:
-            c.wait_frame(input_polls=end, timeout_ms=30000)
+            c.wait_frame(input_polls=max(wake, now + 1), timeout_ms=30000)
         except HarnessError:
             break
-    with contextlib.suppress(HarnessError):
-        B.neutral(c, pp)
-    lg.frames = B.polls(c) - start
-    return lg
+    for f in fighters:
+        with contextlib.suppress(HarnessError):
+            B.neutral(c, f.seat.pp)
+        f.log.frames = B.polls(c) - start
+    return [f.log for f in fighters]
+
+
+def play(plan: Sequence[tuple[Seat, str]], frames: int, *, seed: Any = 0, stage_kind: int | None = None,
+         stop: Callable[[], bool] | None = None) -> List[FightLog]:
+    """``fight`` for every (seat, mode), one thread per instance. Returns logs in plan order."""
+    groups: Dict[int, List[int]] = {}
+    for i, (seat, _) in enumerate(plan):
+        groups.setdefault(id(seat.client), []).append(i)
+    out: List[Any] = [None] * len(plan)
+
+    def run(idx: List[int]) -> None:
+        logs = fight([plan[i][0] for i in idx], frames, mode=[plan[i][1] for i in idx], seed=seed,
+                     stage_kind=stage_kind, stop=stop)
+        for i, lg in zip(idx, logs):
+            out[i] = lg
+
+    run_parallel([lambda g=g: run(g) for g in groups.values()])
+    return out
 
 
 def menu_wander(seat: Seat, frames: int, seed: Any = 0, stop: Callable[[], bool] | None = None) -> int:
@@ -318,3 +356,42 @@ def menu_wander(seat: Seat, frames: int, seed: Any = 0, stop: Callable[[], bool]
     with contextlib.suppress(HarnessError):
         B.neutral(c, pp)
     return n
+
+
+# --------------------------------------------------------------------------- diagnostics
+
+
+def diagnose(instances: Sequence[Any], art: Artifacts | None = None, label: str = "fail",
+             log_lines: int = 40) -> Dict[str, Any]:
+    """Status, netplay_status, scene, rollback counters and dolphin.log tail of each instance
+    (``DolphinInstance``), plus a screenshot each when ``art`` is given. Never raises."""
+    out: Dict[str, Any] = {}
+    for inst in instances:
+        d: Dict[str, Any] = {}
+        c = getattr(inst, "client", None)
+        for key, fn in (("status", lambda: c.status().raw),
+                        ("netplay_status", lambda: c.netplay_status().raw),
+                        ("scene", lambda: B.read_scene(c.read_mem).name),
+                        ("frames", lambda: B.read_frame_counters(c.read_mem))):
+            try:
+                d[key] = fn() if c is not None else None
+            except Exception as e:  # noqa: BLE001
+                d[key] = f"error: {e}"
+        with contextlib.suppress(Exception):
+            d["log_tail"] = inst.log.tail(log_lines)
+        with contextlib.suppress(Exception):
+            # The interesting lines are often far back behind ENet chatter.
+            keep = ("Brawlback", "OSREPORT", "HARNESS", " E[", " W[", "-> sc", "-> sq")
+            lines = [ln for ln in inst.log.lines() if any(k in ln for k in keep)
+                     and "dirty granules" not in ln]
+            d["log_key_lines"] = "\n".join(lines[-log_lines:])
+        if art is not None and c is not None:
+            p = art.shoot(c, f"{inst.name}-{label}", timeout=10.0)
+            d["screenshot"] = str(p) if p else None
+        out[inst.name] = d
+    if art is not None:
+        with contextlib.suppress(Exception):
+            import json
+            art.root.mkdir(parents=True, exist_ok=True)
+            (art.root / f"diagnose-{label}.json").write_text(json.dumps(out, indent=2, default=str))
+    return out
