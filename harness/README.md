@@ -67,8 +67,9 @@ That writes `Muted = False`, drops the `-C` flag and sets `PPR_HARNESS_AUDIO=1` 
 | `probe` | Does the build answer `ping` on `--harness-port`? |
 | `netsim ...` | The UDP impairment proxy (same as `python -m ppharness.netsim`). |
 | `bench [--preset P]` | Measures netsim accuracy (same as `python -m ppharness.netsim_bench`). |
-| `clean [--dry-run]` | Deletes leftover instance dirs whose process is gone. |
+| `clean [--dry-run]` | Deletes leftover instance dirs whose process is gone. Skips dirs another session still has files open in, and unlaunched dirs younger than 10 minutes. |
 | `mock [--port P]` | Runs a mock harness server (fake memory and frames). |
+| `scorecard [--presets lan,typical,bad_wifi] [--sessions N] [--duration S] [--phase menus\|match\|auto] [--json F]` | Rollback health benchmark: N two-instance rollback sessions per netsim preset with seeded random input; per side rollbacks, max depth, frames resimulated, desyncs, frames ahead over time, VI/game/GekkoNet FPS and freezes (>2 s without progress), plus a peer state comparison. Robust to a frozen side. JSON + text summary. |
 
 Common instance flags:
 
@@ -169,6 +170,13 @@ def test_rollback_survives_typical_network(request, dolphin_exe):
         cmp = compare_state(s.instances, [[0x80000000, 0x100]], key=FrameKey.netplay())
         assert cmp.match, cmp.describe()
 ```
+
+Game-level flows live in `ppharness/brawl.py` (memory map and recipes, see `docs/brawl-memory-map.md`) and `ppharness/flows.py` (seats, CSS/SSS/match flows, a chase/random fighter, `diagnose`). `tests/test_e2e_match.py` drives Fox vs Falco offline (Battlefield, FD) and over fixed-delay and rollback netplay; artifacts go to `run/artifacts/<test>/`.
+
+Tools (`harness/tools/`):
+
+- `determinism.py record|compare|matrix`: offline determinism with identical inputs (see `docs/determinism-findings.md`).
+- `qa_reachability.py`: can a netplay player reach the Code Menu, Debug Mode, Giga Bowser/Wario-Man or non-Versus modes?
 
 Two *offline* boots are not bit-identical, even with identical inputs from the same poll index: whole-MEM1 and whole-MEM2 hashes differ (checked on the real build). So determinism tests should hash specific game-state ranges, not all of memory.
 

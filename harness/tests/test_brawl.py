@@ -389,7 +389,7 @@ class IdTests(unittest.TestCase):
 
     def test_registry(self):
         for name, a in b.ADDRESSES.items():
-            self.assertIn(a.verify, {"dol-verified", "decomp", "headers", "orca", "brawlback", "pplus", "live"}, name)
+            self.assertIn(a.verify, {"dol-verified", "decomp", "headers", "orca", "brawlback", "pplus", "live", "live-verified", "wrong"}, name)
             self.assertTrue(b.is_mem_addr(a.addr), name)
 
     def test_steer(self):

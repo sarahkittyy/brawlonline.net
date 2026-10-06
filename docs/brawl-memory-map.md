@@ -476,12 +476,12 @@ Generated from `brawl.ADDRESSES`. Struct offsets are in the sections above and i
 | `FT_MANAGER` | `0x80629A00` | ftManager (System heap) | P+ FSMeter.asm, IC-Basics.asm | verified live (Rev 1, P+ v3.2) |
 | `G_FT_ENTRY_MANAGER_PTR` | `0x80B87C48` | sora_melee .bss g_ftEntryManager (should hold 0x80624780) | P+ NETPLAY.TXT .alias; decomp rels/sora_melee bss+0x2E88 with the module at 0x8070A940 | verified live (Rev 1, P+ v3.2) |
 | `GAME_FRAME` | `0x901812A0` | GameFrame {+4 frameCounter, +0xC frameDelta, +0x14 persistentFrameCounter} | BrawlHeaders RSBE01.lst:21 g_GameFrame; brawlback RollbackManager.cpp:28 | verified live (Rev 1, P+ v3.2) |
-| `SC_MELEE_OBJ` | `0x90FF50C0` | scMelee object (also reachable as the current scene in a match) | BrawlHeaders RSBE01.lst:22 | live |
-| `GAME_GLOBAL_OBJ` | `0x90181300` | *g_GameGlobal | orca Results.h:24 | live |
+| `SC_MELEE_OBJ` | `0x90FF50C0` | scMelee object (also reachable as the current scene in a match) | BrawlHeaders RSBE01.lst:22 | **wrong on this build**: the scMelee object was at 0x90FD22C0 in two boots; use the scene manager |
+| `GAME_GLOBAL_OBJ` | `0x90181300` | *g_GameGlobal | orca Results.h:24 | verified live (Rev 1, P+ v3.2) |
 | `MODE_MELEE_OBJ` | `0x90180F20` | gmGlobalModeMelee | orca Results.h; BrawlHeaders RSBE01.lst:24 | verified live (Rev 1, P+ v3.2) |
 | `RESULT_INFO_OBJ` | `0x9017F420` | gmResultInfo | orca Results.h | verified live (Rev 1, P+ v3.2) |
 | `SET_RULE_OBJ` | `0x9017F360` | gmSetRule (P+ 'Default Settings Modifier' writes it) | orca Results.h; P+ NETPLAY.TXT:353 | verified live (Rev 1, P+ v3.2) |
-| `RECORD_MENU_DATA` | `0x9017BE50` | gmGlobalRecord+0x810 menu data (+0 item frequency) | orca RSBE01.patches / OnlineRules.cpp:59 | live |
+| `RECORD_MENU_DATA` | `0x9017BE50` | gmGlobalRecord+0x810 menu data (+0 item frequency) | orca RSBE01.patches / OnlineRules.cpp:59 | verified live (Rev 1, P+ v3.2) |
 | `RSS_EXDATA` | `0x8042C4E8` | P+ stage-switch data (0x320 bytes, loaded from pf/stage/switch/SwitchFF.rss on netplay) | P+ Source/Netplay/Net-Random.asm; orca RankedPPlus.h | pplus |
 | `RSS_PAGES` | `0x8042C524` | STAGE_PAGES: per page {u8 count, u8 slot[39]}, stride 0x28, 5 pages | P+ Net-Random.asm | pplus |
 | `RSS_SLOT_KINDS` | `0x8042C5EC` | slot -> {u8 stage kind, u8 cosmetic} (STAGE_SLOTS_COSMETIC) | P+ Net-Random.asm; orca RankedPPlus.cpp:71 | pplus |
@@ -525,7 +525,8 @@ Done on 2026-10-06 with the frozen harness build `run/bin/harness-100b8fd189`: N
 | 12 | Heap table | Verified in a match (Section 5). |
 | 13 | Boot path | Verified: CSS with no input at all (both launchers). |
 | — | gmResultInfo | Verified, plus `+0x18` self-destructs; leaving the results needs two A presses per human port. |
-| — | `SC_MELEE_OBJ` 0x90FF50C0, `GAME_GLOBAL_OBJ`, `RECORD_MENU_DATA`, `BOOT_PADS` | Not used by the parsers (they follow pointers). The scMelee object was at 0x90FD22C0 in two separate boots (CSS 0x90FD3300, SSS 0x90FD42C0, results 0x90FD2180), not at 0x90FF50C0, so `SC_MELEE_OBJ` is wrong for this build; the parsers read the scene manager's current scene instead. The other three are unchecked. |
+| — | GameGlobal objects | Verified: `[0x805A00E0]` = 0x90181300, modeMelee 0x90180F20, selChar 0x90180B40, resultInfo 0x9017F420, setRule 0x9017F360, record 0x9017B640 (+0x810 = 0x9017BE50); gfPadSystem 0x805BACC0, gfApplication 0x805B4FD8. |
+| — | `SC_MELEE_OBJ` 0x90FF50C0, `BOOT_PADS` | Not used by the parsers (they follow pointers). The scMelee object was at 0x90FD22C0 in two separate boots (CSS 0x90FD3300, SSS 0x90FD42C0, results 0x90FD2180), not at 0x90FF50C0, so `SC_MELEE_OBJ` is wrong for this build; the parsers read the scene manager's current scene instead. `BOOT_PADS` is unchecked. |
 
 Still unknown: the exact meaning of `stOperatorRuleMelee+0x254`, state 1 (CPU) in a live match setup, and ftManager (0x80629A00), which no parser reads.
 

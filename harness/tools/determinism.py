@@ -359,20 +359,37 @@ def compare(timeline: Mapping[str, Any], profile: Profile, runs: int = 2, every:
                         with contextlib.suppress(Exception):
                             c.resume()
 
+            # Both must be booting normally before the first pause (a dual-core boot was seen to
+            # hang in the launcher); checkpoints start after the frame both have reached.
+            boot_deadline = time.monotonic() + 90
+            while min(c.status().frame for c in clients) < 120:
+                if time.monotonic() > boot_deadline:
+                    raise RuntimeError("boot stalled: VI frames " + str([c.status().frame for c in clients]))
+                time.sleep(0.2)
+            floor = max(c.status().frame for c in clients) + 2
+            for f in [f for f in order if f < floor]:
+                if any(k == "ev" for k, _ in schedule[f]):
+                    raise RuntimeError(f"instances passed input frame {f} before the replay could stop there")
+                skipped.append(f)
+            order = [f for f in order if f >= floor]
             for idx, target in enumerate(order):
-                try:
-                    list(pool.map(lambda c: pause_at(c, target, FrameKey.frame(), margin=STAY_PAUSED + 1, timeout=120,
-                                                     max_advance=STAY_PAUSED + 200),
-                                  clients))
-                except OvershotError as e:
-                    if any(k == "ev" for k, _ in schedule[target]):
-                        raise RuntimeError(f"could not stop at input frame {target}: {e}") from e
-                    skipped.append(target)
-                    for c in clients:
-                        with contextlib.suppress(Exception):
-                            if c.status().state == "paused":
-                                c.resume()
-                    continue
+                futs = [pool.submit(pause_at, c, target, FrameKey.frame(), margin=STAY_PAUSED + 1, timeout=60,
+                                    max_advance=STAY_PAUSED + 200) for c in clients]
+                errs = []
+                for f in futs:
+                    try:
+                        f.result()
+                    except Exception as e:  # noqa: BLE001
+                        errs.append(e)
+                if errs:
+                    if all(isinstance(e, OvershotError) for e in errs) and not any(k == "ev" for k, _ in schedule[target]):
+                        skipped.append(target)
+                        for c in clients:
+                            with contextlib.suppress(Exception):
+                                if c.status().state == "paused":
+                                    c.resume()
+                        continue
+                    raise RuntimeError(f"could not stop both runs at frame {target}: {errs[0]!r}")
                 items = schedule[target]
                 if not any(k == "cp" for k, _ in items):
                     for _, e in items:

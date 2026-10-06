@@ -17,7 +17,8 @@ Every address carries a provenance tag in ``ADDRESSES`` (and in ``docs/brawl-mem
 * ``headers``       a struct offset from BrawlHeaders / BrawlHeaders-sammi (reverse engineered).
 * ``orca``/``brawlback``/``pplus``  taken from that project's code (Orca's were found live under
                     its harness on Rev 2 + P+ v3.2; P+'s are hard-coded in its v3.2 codeset).
-* ``live``          a heap object or field that only exists at runtime: NEEDS LIVE VERIFICATION.
+* ``live``          a heap object or field that only exists at runtime, not yet checked live.
+* ``live-verified`` checked on the running game (Rev 1, P+ v3.2; docs/brawl-memory-map.md section 7).
 
 Sources (all under ``refs/``): orca-netplay (Harness.cpp, Orca/UX/*.cpp|h, Data/Sys/Orca/*,
 Tools/orca/inputs/*), Project-Plus-Dolphin-brawlback (Rollback/RollbackManager.cpp,
@@ -47,7 +48,7 @@ class Addr:
     addr: int
     what: str
     source: str
-    verify: str  # "dol-verified" | "decomp" | "headers" | "orca" | "brawlback" | "pplus" | "live"
+    verify: str  # "dol-verified" | "decomp" | "headers" | "orca" | "brawlback" | "pplus" | "live" | "live-verified" | "wrong"
 
 
 ADDRESSES: Dict[str, Addr] = {}
@@ -93,25 +94,25 @@ CSS_SLOT_TABLE_VANILLA = _a(
 # ---- Heap objects at fixed addresses in P+ v3.2 (hard-coded by P+'s own codes) -------------
 FT_ENTRY_MANAGER = _a(
     "FT_ENTRY_MANAGER", 0x80624780, "ftEntryManager {ftEntry* entries @0, u32 count @4} (System heap)",
-    "P+ Community/FSMeter.asm; brawlback RollbackManager.cpp:278 / EXIBrawlback.h:145", "live")
+    "P+ Community/FSMeter.asm; brawlback RollbackManager.cpp:278 / EXIBrawlback.h:145", "live-verified")
 FT_MANAGER = _a(
     "FT_MANAGER", 0x80629A00, "ftManager (System heap)", "P+ FSMeter.asm, IC-Basics.asm", "live")
 G_FT_ENTRY_MANAGER_PTR = _a(
     "G_FT_ENTRY_MANAGER_PTR", 0x80B87C48, "sora_melee .bss g_ftEntryManager (should hold 0x80624780)",
-    "P+ NETPLAY.TXT .alias; decomp rels/sora_melee bss+0x2E88 with the module at 0x8070A940", "live")
+    "P+ NETPLAY.TXT .alias; decomp rels/sora_melee bss+0x2E88 with the module at 0x8070A940", "live-verified")
 GAME_FRAME = _a(
     "GAME_FRAME", 0x901812A0, "GameFrame {+4 frameCounter, +0xC frameDelta, +0x14 persistentFrameCounter}",
-    "BrawlHeaders RSBE01.lst:21 g_GameFrame; brawlback RollbackManager.cpp:28", "live")
+    "BrawlHeaders RSBE01.lst:21 g_GameFrame; brawlback RollbackManager.cpp:28", "live-verified")
 SC_MELEE_OBJ = _a(
-    "SC_MELEE_OBJ", 0x90FF50C0, "scMelee object (also reachable as the current scene in a match)",
-    "BrawlHeaders RSBE01.lst:22", "live")
-GAME_GLOBAL_OBJ = _a("GAME_GLOBAL_OBJ", 0x90181300, "*g_GameGlobal", "orca Results.h:24", "live")
-MODE_MELEE_OBJ = _a("MODE_MELEE_OBJ", 0x90180F20, "gmGlobalModeMelee", "orca Results.h; BrawlHeaders RSBE01.lst:24", "live")
-RESULT_INFO_OBJ = _a("RESULT_INFO_OBJ", 0x9017F420, "gmResultInfo", "orca Results.h", "live")
+    "SC_MELEE_OBJ", 0x90FF50C0, "scMelee object per BrawlHeaders; live it was at 0x90FD22C0 in two boots, so read the current scene instead",
+    "BrawlHeaders RSBE01.lst:22", "wrong")
+GAME_GLOBAL_OBJ = _a("GAME_GLOBAL_OBJ", 0x90181300, "*g_GameGlobal", "orca Results.h:24", "live-verified")
+MODE_MELEE_OBJ = _a("MODE_MELEE_OBJ", 0x90180F20, "gmGlobalModeMelee", "orca Results.h; BrawlHeaders RSBE01.lst:24", "live-verified")
+RESULT_INFO_OBJ = _a("RESULT_INFO_OBJ", 0x9017F420, "gmResultInfo", "orca Results.h", "live-verified")
 SET_RULE_OBJ = _a("SET_RULE_OBJ", 0x9017F360, "gmSetRule (P+ 'Default Settings Modifier' writes it)",
-                  "orca Results.h; P+ NETPLAY.TXT:353", "live")
+                  "orca Results.h; P+ NETPLAY.TXT:353", "live-verified")
 RECORD_MENU_DATA = _a("RECORD_MENU_DATA", 0x9017BE50, "gmGlobalRecord+0x810 menu data (+0 item frequency)",
-                      "orca RSBE01.patches / OnlineRules.cpp:59", "live")
+                      "orca RSBE01.patches / OnlineRules.cpp:59", "live-verified")
 
 # ---- P+ codeset data (static addresses in the codeset/.bss area) --------------------------
 RSS_EXDATA = _a("RSS_EXDATA", 0x8042C4E8, "P+ stage-switch data (0x320 bytes, loaded from pf/stage/switch/SwitchFF.rss on netplay)",
@@ -127,7 +128,7 @@ CODE_MENU_BASE = _a("CODE_MENU_BASE", 0x804E0000, "P+ Code Menu data (pf/menu3/d
                     "Brawlback memLocations.txt (data.cmnu read to 0x804e0000); SD card", "pplus")
 CODE_MENU_SIZE = 0x2520
 CODE_MENU_STATE = _a("CODE_MENU_STATE", 0x804E0034, "Code Menu state word (4 = menu drawn)",
-                     "P+ Net-CodeMenu.asm 'Print Code Menu' (cmpwi r31,4)", "live")
+                     "P+ Net-CodeMenu.asm 'Print Code Menu' (cmpwi r31,4)", "live-verified")
 DEBUG_FLAGS = _a("DEBUG_FLAGS", 0x80583FF4, "P+ debug bytes 0x80583FF4..FFF (Code Menu copies its Debug Mode "
                  "lines here every frame)", "P+ Net-CodeMenu.asm:1167-1190, Debug/modifiedDebug.asm", "pplus")
 DEBUG_MODE_HALF = _a("DEBUG_MODE_HALF", 0x80583FFE, "u16, bit 0 = Debug Mode on (byte 0x80583FFF)",
