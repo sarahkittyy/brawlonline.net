@@ -26,6 +26,13 @@ use crate::engine::{ConnId, Engine, EngineConfig, FetchResult, Input, MatchRecor
 
 const TICK: Duration = Duration::from_millis(100);
 const IDLE_SLEEP: Duration = Duration::from_millis(2);
+/// How long the server waits before carrying out its own disconnect of a client (after a match or
+/// a refusal). Slippi's client disconnects itself as soon as it has the answer and then waits up
+/// to 3 s for the server to acknowledge before it binds its P2P port. When the server disconnected
+/// at the same moment the two disconnects crossed and the client's was sometimes never answered,
+/// which cost that client 3 s of its 8 s P2P connect window. Waiting a moment lets the client go
+/// first; a client that does not is still disconnected.
+const DISCONNECT_GRACE: Duration = Duration::from_secs(1);
 
 enum DbJob {
     Fetch { conn: ConnId, seq: u64, uid: Uuid },
@@ -140,6 +147,8 @@ struct Loop {
     peer_conn: HashMap<PeerID, ConnId>,
     conn_peer: HashMap<ConnId, PeerID>,
     next_conn: ConnId,
+    /// Server-initiated disconnects waiting for DISCONNECT_GRACE.
+    pending_disconnects: Vec<(ConnId, Instant)>,
 }
 
 impl Loop {
@@ -161,8 +170,8 @@ impl Loop {
                 }
             }
             Output::Disconnect { conn } => {
-                if let Some(pid) = self.conn_peer.get(&conn) {
-                    self.host.peer_mut(*pid).disconnect_later(0);
+                if self.conn_peer.contains_key(&conn) && !self.pending_disconnects.iter().any(|(c, _)| *c == conn) {
+                    self.pending_disconnects.push((conn, Instant::now() + DISCONNECT_GRACE));
                 }
             }
             Output::FetchUser { conn, seq, uid } => {
@@ -172,6 +181,31 @@ impl Loop {
                 let _ = self.jobs.send(DbJob::Record(m));
             }
         }
+    }
+
+    /// Carries out the server-initiated disconnects whose grace period is over, unless the client
+    /// has disconnected meanwhile.
+    fn run_pending_disconnects(&mut self, now: Instant) -> bool {
+        if self.pending_disconnects.is_empty() {
+            return false;
+        }
+        let mut busy = false;
+        let mut i = 0;
+        while i < self.pending_disconnects.len() {
+            let (conn, due) = self.pending_disconnects[i];
+            if !self.conn_peer.contains_key(&conn) {
+                self.pending_disconnects.swap_remove(i);
+            } else if now >= due {
+                self.pending_disconnects.swap_remove(i);
+                if let Some(pid) = self.conn_peer.get(&conn) {
+                    self.host.peer_mut(*pid).disconnect_later(0);
+                    busy = true;
+                }
+            } else {
+                i += 1;
+            }
+        }
+        busy
     }
 
     fn on_event(&mut self, ev: EventNoRef) {
@@ -210,7 +244,15 @@ fn event_loop(
     done: std_mpsc::Receiver<Fetched>,
     stop: Arc<AtomicBool>,
 ) {
-    let mut lp = Loop { host, engine, jobs, peer_conn: HashMap::new(), conn_peer: HashMap::new(), next_conn: 1 };
+    let mut lp = Loop {
+        host,
+        engine,
+        jobs,
+        peer_conn: HashMap::new(),
+        conn_peer: HashMap::new(),
+        next_conn: 1,
+        pending_disconnects: Vec::new(),
+    };
     let mut last_tick = Instant::now();
     let mut last_stats = Instant::now();
     while !stop.load(Ordering::Relaxed) {
@@ -233,6 +275,9 @@ fn event_loop(
         while let Ok((conn, seq, result)) = done.try_recv() {
             busy = true;
             lp.feed(Input::UserFetched { conn, seq, result });
+        }
+        if lp.run_pending_disconnects(Instant::now()) {
+            busy = true;
         }
         if last_tick.elapsed() >= TICK {
             last_tick = Instant::now();

@@ -155,6 +155,18 @@ pub struct SearchResult {
     pub remote_addresses: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub p2p: Option<P2pResult>,
+    /// How the client's own disconnect from mm after the match went (Slippi waits up to 3 s for
+    /// it before resetting the peer, and only then binds the P2P port).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mm_disconnect: Option<MmDisconnect>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MmDisconnect {
+    /// The server acknowledged the disconnect (false: the 3 s wait ran out).
+    pub acknowledged: bool,
+    pub elapsed_ms: u64,
 }
 
 pub fn resolve(server: &str) -> anyhow::Result<SocketAddr> {
@@ -211,17 +223,23 @@ fn receive(host: &mut Host<EnetSocket>, mm: PeerID, timeout: Duration) -> Recv {
     Recv::Timeout
 }
 
-fn disconnect_mm(host: &mut Host<EnetSocket>, mm: PeerID) {
+/// Slippi's `disconnectFromServer`: disconnect, wait up to 3 s for the server's answer, else
+/// reset the peer.
+fn disconnect_mm(host: &mut Host<EnetSocket>, mm: PeerID) -> MmDisconnect {
+    let start = Instant::now();
     host.peer_mut(mm).disconnect(0);
-    let deadline = Instant::now() + Duration::from_secs(3);
+    let deadline = start + Duration::from_secs(3);
     while Instant::now() < deadline {
         match host.service() {
-            Ok(Some(Event::Disconnect { peer, .. })) if peer.id() == mm => return,
+            Ok(Some(Event::Disconnect { peer, .. })) if peer.id() == mm => {
+                return MmDisconnect { acknowledged: true, elapsed_ms: start.elapsed().as_millis() as u64 };
+            }
             Ok(Some(_)) => {}
             _ => std::thread::sleep(Duration::from_millis(2)),
         }
     }
     host.peer_mut(mm).reset();
+    MmDisconnect { acknowledged: false, elapsed_ms: start.elapsed().as_millis() as u64 }
 }
 
 /// Connects to the mm server and returns the peer id (Slippi: 20 × 500 ms).
@@ -316,6 +334,7 @@ pub fn search(opts: &SearchOptions) -> anyhow::Result<SearchResult> {
         ticket_response: None,
         remote_addresses: vec![],
         p2p: None,
+        mm_disconnect: None,
     };
 
     let Some(mm) = connect_mm(&mut host, opts.server) else {
@@ -407,7 +426,7 @@ pub fn search(opts: &SearchOptions) -> anyhow::Result<SearchResult> {
     }
     result.remote_addresses = choose_remote_addresses(&resp);
     result.status = Status::Matched;
-    disconnect_mm(&mut host, mm);
+    result.mm_disconnect = Some(disconnect_mm(&mut host, mm));
 
     if opts.punch {
         let Some(remote) = result.remote_addresses.first().and_then(|a| a.parse::<SocketAddr>().ok()) else {
@@ -423,6 +442,50 @@ pub fn search(opts: &SearchOptions) -> anyhow::Result<SearchResult> {
         result.p2p = Some(p2p);
     }
     Ok(result)
+}
+
+/// Creates a Direct ticket and, once matched, does *not* disconnect (unlike Slippi's client):
+/// returns whether it matched and how long after `get-ticket-resp` the server disconnected it
+/// (None if it did not within `wait`). For server tests.
+pub fn search_and_linger(
+    server: SocketAddr,
+    creds: Credentials,
+    target: &str,
+    wait: Duration,
+) -> anyhow::Result<(bool, Option<Duration>)> {
+    let opts = SearchOptions::direct(server, creds, target);
+    let (mut host, local_port) = bind_host(&opts)?;
+    let mm = connect_mm(&mut host, server).ok_or_else(|| anyhow::anyhow!("could not connect to mm"))?;
+    let ticket = CreateTicket {
+        kind: CREATE_TICKET.into(),
+        user: TicketUser {
+            uid: opts.creds.uid.clone(),
+            play_key: opts.creds.play_key.clone(),
+            connect_code: opts.creds.connect_code.clone(),
+            display_name: opts.creds.display_name.clone(),
+        },
+        search: Search { mode: 2, connect_code: encode_search_code_fullwidth(target), game: None },
+        app_version: opts.app_version.clone(),
+        ip_address_lan: format!("127.0.0.1:{local_port}"),
+    };
+    send_raw(&mut host, mm, serde_json::to_vec(&ticket)?.as_slice());
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut matched_at = None;
+    while Instant::now() < deadline {
+        match receive(&mut host, mm, Duration::from_millis(200)) {
+            Recv::Message(v) if v.get("type").and_then(|t| t.as_str()) == Some(GET_TICKET_RESP) => {
+                matched_at = Some(Instant::now());
+                break;
+            }
+            Recv::Message(_) | Recv::Timeout => {}
+            Recv::Disconnected => return Ok((false, None)),
+        }
+    }
+    let Some(matched_at) = matched_at else { return Ok((false, None)) };
+    match receive(&mut host, mm, wait) {
+        Recv::Disconnected => Ok((true, Some(matched_at.elapsed()))),
+        _ => Ok((true, None)),
+    }
 }
 
 fn send_raw(host: &mut Host<EnetSocket>, peer: PeerID, data: &[u8]) {

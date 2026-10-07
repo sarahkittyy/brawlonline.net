@@ -91,6 +91,50 @@ async fn two_friends_direct_connect_by_code() {
     stack.shutdown().await;
 }
 
+/// Slippi's client disconnects from mm itself right after `get-ticket-resp` and waits up to 3 s
+/// for the server's answer before it binds the P2P port, so an unanswered disconnect costs 3 s of
+/// the 8 s connect window (and the peer's first connects hit a port that cannot accept them).
+/// The server used to start its own disconnect at the same moment; when the two crossed, the
+/// client's was sometimes never answered (2 of 16 in a Dolphin run).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn client_disconnect_after_match_is_answered() {
+    let stack = Stack::start(StackOptions::default()).await.unwrap();
+    for i in 0..10 {
+        let (_, a) = stack.create_player(&format!("dca{i}@example.test"), "dca", "dca").await;
+        let (_, b) = stack.create_player(&format!("dcb{i}@example.test"), "dcb", "dcb").await;
+        let oa = SearchOptions::direct(stack.mm_addr, creds(&a), &b.connect_code);
+        let ob = SearchOptions::direct(stack.mm_addr, creds(&b), &a.connect_code);
+        let (ra, rb) = tokio::join!(search(oa), search(ob));
+        for r in [&ra, &rb] {
+            assert_eq!(r.status, Status::Matched, "{r:?}");
+            let d = r.mm_disconnect.as_ref().unwrap();
+            assert!(d.acknowledged && d.elapsed_ms < 1000, "round {i}: mm disconnect {d:?}");
+        }
+    }
+    stack.shutdown().await;
+}
+
+/// A client that never disconnects after its match is still disconnected by the server.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn server_disconnects_a_lingering_client_after_a_match() {
+    let stack = Stack::start(StackOptions::default()).await.unwrap();
+    let (_, a) = stack.create_player("linger-a@example.test", "la", "la").await;
+    let (_, b) = stack.create_player("linger-b@example.test", "lb", "lb").await;
+    let addr = stack.mm_addr;
+    let (ca, b_code) = (creds(&a), b.connect_code.clone());
+    let linger = tokio::task::spawn_blocking(move || {
+        mmclient::search_and_linger(addr, ca, &b_code, Duration::from_secs(10)).unwrap()
+    });
+    let rb = search(SearchOptions::direct(stack.mm_addr, creds(&b), &a.connect_code)).await;
+    assert_eq!(rb.status, Status::Matched, "{rb:?}");
+    let (matched, disconnected_after) = linger.await.unwrap();
+    assert!(matched);
+    let after = disconnected_after.expect("the server never disconnected the lingering client");
+    // After the server's grace period (1 s), not at once.
+    assert!(after >= Duration::from_millis(800) && after <= Duration::from_secs(5), "{after:?}");
+    stack.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ticket_expiry_wrong_code_bad_key_and_unsupported_modes() {
     let engine = EngineConfig { ticket_ttl: Duration::from_secs(2), ..Default::default() };

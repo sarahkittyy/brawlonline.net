@@ -132,6 +132,7 @@ Byte-compatible with Slippi's client: ENet on UDP 43113, reliable JSON packets o
 
 - **Failed P2P connects**: after a match, Slippi's client tries the peer for 8 s and, on failure in 1v1, requeues with a new ticket. If the same pair searches again within 60 s of being matched, mm treats the last connect as failed and waits before re-pairing (last match + 8 s + 5 s × failures). After the third failed connect it tells both players `Could not connect to <code> after 3 tries. A firewall or strict NAT may block it.` A pair that searches again more than 60 s after a match (they played) is paired at once.
 - A client disconnect (the CSS cancel) removes its ticket at once. Garbage and oversized packets get an error and a disconnect; the loop never panics on input.
+- **Disconnects after an answer**: after `get-ticket-resp` (or a refusal) the server waits 1 s before disconnecting the client itself. Slippi's client disconnects on its own as soon as it has the answer and waits up to 3 s for that to be acknowledged before it binds its P2P port; when both sides disconnected at the same moment, the client's disconnect was sometimes never answered (2 of 16 matches with Dolphin), which cost it 3 s of the 8 s connect window. `mmclient` reports the outcome as `mmDisconnect`.
 
 ## Admin CLI
 
