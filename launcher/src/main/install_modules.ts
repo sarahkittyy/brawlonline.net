@@ -1,8 +1,7 @@
-import setupBroadcastIpc from "@broadcast/setup";
-import setupConsoleIpc from "@console/setup";
+import setupAccountsIpc from "@accounts/setup";
 import { DolphinManager } from "@dolphin/manager";
 import setupDolphinIpc from "@dolphin/setup";
-import setupRemoteIpc from "@remote/setup";
+import setupGameAssetsIpc from "@game_assets/setup";
 import setupReplaysIpc from "@replays/setup";
 import { SettingsManager } from "@settings/settings_manager";
 import setupSettingsIpc from "@settings/setup";
@@ -17,11 +16,10 @@ export function installModules(flags: ConfigFlags) {
   const appUpdater = new AppUpdater(settingsManager);
   const dolphinManager = new DolphinManager(settingsManager);
   setupDolphinIpc({ dolphinManager });
-  const { getSpectateController } = setupBroadcastIpc({ settingsManager, dolphinManager });
+  setupAccountsIpc();
   setupReplaysIpc();
   setupSettingsIpc({ settingsManager, dolphinManager });
-  setupConsoleIpc({ dolphinManager });
-  setupRemoteIpc({ dolphinManager, settingsManager, getSpectateController });
+  setupGameAssetsIpc({ settingsManager, dolphinManager });
   const browserWindowManager = new BrowserWindowManager();
   setupMainIpc({ dolphinManager, settingsManager, flags, browserWindowManager, appUpdater });
   return { dolphinManager, settingsManager, browserWindowManager, appUpdater };

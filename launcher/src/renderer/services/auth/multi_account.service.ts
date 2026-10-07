@@ -1,50 +1,36 @@
 /**
  * Multi-Account Service
  *
- * Manages multiple Firebase authentication sessions using Firebase's multi-app support.
- *
- * ## Firebase Persistence
- * Firebase automatically persists authentication state in IndexedDB (browser storage).
- * Each Firebase app instance (identified by name) gets its own IndexedDB database:
- * - firebaseLocalStorageDb:app-account-{uid}
- * This means accounts stay logged in across app restarts automatically.
- *
- * ## No Refresh Token Needed
- * Firebase's built-in IndexedDB persistence handles everything automatically.
- * We don't need to manually store refresh tokens - Firebase does it for us.
+ * Manages several signed-in accounts (up to 5), like Slippi's launcher did with
+ * one Firebase app per account. Sessions are opaque tokens from our accounts
+ * service; the main process stores them (encrypted with the OS keychain when
+ * available) and makes every API call, so the renderer only ever names an
+ * account by its uid.
  *
  * ## Account Switching
- * When switching accounts, we simply change which Firebase app instance is "active"
- * and notify listeners. All accounts remain logged in simultaneously.
+ * Switching only changes which stored account is active; every account stays
+ * logged in until its session expires or the user logs it out.
  */
 
+import type { AccountsMe } from "@accounts/types";
+import { AccountsError, SESSION_EXPIRED_CODES } from "@accounts/types";
 import type { AccountData, StoredAccount } from "@settings/types";
 import log from "electron-log";
-import type { FirebaseApp } from "firebase/app";
-import { deleteApp, getApp, getApps, initializeApp } from "firebase/app";
-import type { Auth, User } from "firebase/auth";
-import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, signOut } from "firebase/auth";
-import { getFunctions, httpsCallable } from "firebase/functions";
 import multicast from "observable-fns/multicast";
 import Subject from "observable-fns/subject";
 
 import { generateDisplayPicture } from "@/lib/display_picture";
 
-import type { MultiAccountService } from "./types";
+import type { MultiAccountService, SignUpArgs } from "./types";
 import { SessionExpiredError } from "./types";
 
-const firebaseConfig = {
-  apiKey: process.env.FIREBASE_API_KEY,
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-  databaseURL: process.env.FIREBASE_DATABASE_URL,
-  projectId: process.env.FIREBASE_PROJECT_ID,
-  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.FIREBASE_APP_ID,
-  measurementId: process.env.FIREBASE_MEASUREMENT_ID,
-};
-
 const MAX_ACCOUNTS_TO_RESTORE = 5;
+
+const accounts = () => window.electron.accounts;
+
+function isSessionExpired(err: unknown): boolean {
+  return err instanceof AccountsError && SESSION_EXPIRED_CODES.has(err.code);
+}
 
 class MultiAccountClient implements MultiAccountService {
   private _accountsSubject = new Subject<{
@@ -52,10 +38,11 @@ class MultiAccountClient implements MultiAccountService {
     activeId: string | null;
   }>();
   private _onAccountsChanged = multicast(this._accountsSubject);
-  private _firebaseApps = new Map<string, FirebaseApp>();
-  private _authInstances = new Map<string, Auth>();
+  private _activeUserSubject = new Subject<AccountsMe | null>();
+  private _onActiveUserChanged = multicast(this._activeUserSubject);
   private _activeAccountId: string | null = null;
   private _accounts: StoredAccount[] = [];
+  private _records = new Map<string, AccountsMe>();
   private _initialized = false;
 
   /**
@@ -67,26 +54,14 @@ class MultiAccountClient implements MultiAccountService {
     }
 
     try {
-      // Load stored accounts
-      await this._loadStoredAccounts();
-
-      // Migrate existing session from default Firebase app (if any)
-      await this._migrateExistingSession();
-
-      // Notify listeners of initial accounts state
+      this._loadStoredAccounts();
       this._notifyAccountsChanged();
 
-      // If we have accounts, restore their sessions
-      if (this._activeAccountId && this._accounts.length > 0) {
+      if (this._activeAccountId) {
         const activeAccount = this._accounts.find((acc) => acc.id === this._activeAccountId);
         if (activeAccount) {
           await this._restoreAccount(activeAccount);
         }
-      }
-
-      // Initialize default Firebase app if none exist
-      if (getApps().length === 0) {
-        initializeApp(firebaseConfig);
       }
 
       this._initialized = true;
@@ -100,20 +75,11 @@ class MultiAccountClient implements MultiAccountService {
   /**
    * Sign up a new user and add them to accounts
    */
-  async signUp(email: string, password: string, displayName: string): Promise<StoredAccount> {
+  async signUp(args: SignUpArgs): Promise<StoredAccount> {
     try {
-      // Use default Firebase app for signup
-      const defaultApp = getApps().find((app) => app.name === "[DEFAULT]") ?? initializeApp(firebaseConfig);
-      const functions = getFunctions(defaultApp);
-      const createUser = httpsCallable(functions, "createUserNew");
-
-      // Create the user account via cloud function
-      await createUser({ email, password, displayName });
-
+      const user = await accounts().signUp(args);
       log.info(`Successfully created new user account`);
-
-      // Now login with the new account (which will add it via addAccount)
-      return await this.addAccount(email, password);
+      return await this._addLoggedInAccount(user, args.email);
     } catch (err) {
       log.error("Failed to sign up new user:", err);
       throw err;
@@ -123,7 +89,7 @@ class MultiAccountClient implements MultiAccountService {
   /**
    * Load stored accounts from settings
    */
-  private async _loadStoredAccounts(): Promise<void> {
+  private _loadStoredAccounts(): void {
     try {
       const settings = window.electron.settings.getAppSettingsSync();
       const accountData = settings.accounts;
@@ -163,86 +129,6 @@ class MultiAccountClient implements MultiAccountService {
   }
 
   /**
-   * Migrate existing session from default Firebase app to multi-account system
-   * This is a one-time migration for users who were logged in before multi-account support
-   *
-   * Strategy: Keep using the [DEFAULT] Firebase app for the migrated account.
-   * New accounts added later will use named apps (app-account-{uid}).
-   */
-  private async _migrateExistingSession(): Promise<void> {
-    // Skip if we already have accounts (migration already done or user started fresh)
-    if (this._accounts.length > 0) {
-      log.info("Accounts already exist, skipping migration");
-      return;
-    }
-
-    try {
-      // Check if there's a default Firebase app with an active session
-      let defaultApp: FirebaseApp | null = null;
-      try {
-        defaultApp = getApp("[DEFAULT]");
-      } catch {
-        // No default app exists, try to initialize it to check for persisted session
-        defaultApp = initializeApp(firebaseConfig);
-      }
-
-      if (!defaultApp) {
-        log.info("No default Firebase app found, skipping migration");
-        return;
-      }
-
-      const defaultAuth = getAuth(defaultApp);
-
-      // Wait for Firebase to restore auth state from IndexedDB
-      const user = await new Promise<typeof defaultAuth.currentUser>((resolve) => {
-        const unsubscribe = onAuthStateChanged(defaultAuth, (user) => {
-          unsubscribe();
-          resolve(user);
-        });
-      });
-
-      if (!user) {
-        log.info("No existing session found in default app, skipping migration");
-        return;
-      }
-
-      // Verify the session is actually valid by checking if we can obtain a token.
-      // This prevents migrating stale/expired sessions into phantom accounts.
-      try {
-        await user.getIdToken();
-      } catch {
-        log.warn(`Found expired/stale session for ${user.email ?? user.uid}, clearing and skipping migration`);
-        await signOut(defaultAuth);
-        return;
-      }
-
-      log.info(`Found existing session for user: ${user.displayName || user.uid}, migrating to multi-account system`);
-
-      // Create stored account from existing user
-      const migratedAccount = mapFirebaseUserToStoredAccount(user);
-      migratedAccount.useDefaultApp = true;
-
-      // Add to accounts list
-      this._accounts.push(migratedAccount);
-      this._activeAccountId = user.uid;
-
-      // Store the default Firebase app and auth for this migrated account
-      // We use the default app to preserve the existing session
-      this._firebaseApps.set(user.uid, defaultApp);
-      this._authInstances.set(user.uid, defaultAuth);
-
-      // Save the migrated account
-      await this.saveAccounts();
-
-      log.info("Successfully migrated existing session to multi-account system");
-      log.info("User session preserved - no re-authentication required!");
-    } catch (err) {
-      log.error("Failed to migrate existing session:", err);
-      // Don't throw - this is a best-effort migration
-    }
-  }
-
-  /**
    * Save accounts to settings
    */
   async saveAccounts(): Promise<void> {
@@ -274,133 +160,70 @@ class MultiAccountClient implements MultiAccountService {
     });
   }
 
+  private _notifyActiveUserChanged(): void {
+    this._activeUserSubject.next(this.getActiveUser());
+  }
+
   /**
-   * Restore a Firebase session for an account using stored refresh token
+   * Restore the session of a stored account by fetching its record.
+   * Returns false if the session is gone and the user has to log in again.
    */
-  private async _restoreAccount(account: StoredAccount): Promise<void> {
+  private async _restoreAccount(account: StoredAccount): Promise<boolean> {
     try {
-      // Create or get Firebase app for this account
-      const app = this._getOrCreateFirebaseApp(account.id, account.useDefaultApp);
-      const auth = getAuth(app);
-
-      // Store auth instance
-      this._authInstances.set(account.id, auth);
-
-      // Wait for Firebase to check IndexedDB and restore auth state
-      await new Promise<void>((resolve) => {
-        const unsubscribe = onAuthStateChanged(auth, (user) => {
-          // Unsubscribe after first event (initial state loaded)
-          unsubscribe();
-
-          if (user) {
-            log.info(`Session restored for account: ${account.displayName}`);
-          } else {
-            log.warn(`No active session for account ${account.id} - will need re-authentication`);
-          }
-
-          resolve();
-        });
-      });
+      const user = await accounts().me(account.id);
+      this._records.set(account.id, user);
+      this._updateStoredAccount(account, user);
+      log.info(`Session restored for account: ${account.displayName}`);
+      return true;
     } catch (err) {
-      log.error(`Failed to restore account ${account.id}:`, err);
-    }
-  }
-
-  /**
-   * Get or create a Firebase app instance for an account
-   */
-  private _getOrCreateFirebaseApp(accountId: string, useDefaultApp?: boolean): FirebaseApp {
-    let app = this._firebaseApps.get(accountId);
-
-    if (!app) {
-      if (useDefaultApp) {
-        app = initializeApp(firebaseConfig);
-      } else {
-        try {
-          // Try to get existing app
-          app = getApp(accountId);
-        } catch {
-          // App doesn't exist, create it
-          app = initializeApp(firebaseConfig, accountId);
-        }
+      if (isSessionExpired(err)) {
+        log.warn(`No active session for account ${account.id} - will need re-authentication`);
+        this._records.delete(account.id);
+        return false;
       }
-      this._firebaseApps.set(accountId, app);
+      // Offline or server trouble: stay logged in with what we knew, like Firebase's cached user.
+      log.warn(`Could not refresh account ${account.id}, using the stored account details:`, err);
+      if (!this._records.has(account.id) && (await accounts().hasSession(account.id))) {
+        this._records.set(account.id, offlineRecord(account));
+      }
+      return this._records.has(account.id);
     }
+  }
 
-    return app;
+  private _updateStoredAccount(account: StoredAccount, user: AccountsMe) {
+    account.email = user.email;
+    account.displayName = user.displayName;
+  }
+
+  private async _addLoggedInAccount(user: AccountsMe, fallbackEmail: string): Promise<StoredAccount> {
+    this._records.set(user.uid, user);
+    let account = this._accounts.find((acc) => acc.id === user.uid);
+    if (!account) {
+      account = mapUserToStoredAccount(user, fallbackEmail);
+      this._accounts.push(account);
+    } else {
+      this._updateStoredAccount(account, user);
+    }
+    this._activeAccountId = account.id;
+    account.lastActive = new Date();
+    await this.saveAccounts();
+    this._notifyActiveUserChanged();
+    return account;
   }
 
   /**
-   * Add a new account
+   * Add a new account (or re-authenticate an existing one)
    */
   async addAccount(email: string, password: string): Promise<StoredAccount> {
-    // Check if account already exists by email before enforcing the limit.
-    // This allows re-authentication of existing accounts even when at the cap,
-    // preventing users from being locked out by stale/phantom accounts.
-    const existingAccountByEmail = this._accounts.find((acc) => acc.email === email);
-
-    if (existingAccountByEmail) {
-      log.info("Account with that email already exists, re-authenticating...");
-      try {
-        // Re-authenticate using the existing account's Firebase app
-        // This avoids persistence conflicts that can occur with temp apps
-        await this._signInWithStoredAccount(existingAccountByEmail, password);
-        log.info(`Successfully re-authenticated and switched to account: ${existingAccountByEmail.displayName}`);
-        return existingAccountByEmail;
-      } catch (err) {
-        log.error(`Failed to re-authenticate existing account:`, err);
-        throw err;
-      }
-    }
-
-    // Account doesn't exist - create a temporary Firebase app for login
-    const tempAppName = `temp-${Date.now()}`;
-    const tempApp = initializeApp(firebaseConfig, tempAppName);
-    const tempAuth = getAuth(tempApp);
-
     try {
-      // Login to get user details
-      const { user } = await signInWithEmailAndPassword(tempAuth, email, password);
-      if (!user) {
-        throw new Error("Login failed");
-      }
-
-      // Create stored account (we know it's new because we already checked by email)
-      const storedAccount = mapFirebaseUserToStoredAccount(user, email);
-
-      // Add to accounts list
-      this._accounts.push(storedAccount);
-
-      // Create permanent Firebase app for this account
-      await this._signInWithStoredAccount(storedAccount, password);
-
-      // Clean up temp app
-      await deleteApp(tempApp);
-
-      log.info(`Added and switched to account: ${storedAccount.displayName}`);
-
-      return storedAccount;
+      const user = await accounts().login(email, password);
+      const account = await this._addLoggedInAccount(user, email);
+      log.info(`Added and switched to account: ${account.displayName}`);
+      return account;
     } catch (err) {
-      // Clean up temp app on error
-      await deleteApp(tempApp);
       log.error("Failed to add account:", err);
       throw err;
     }
-  }
-
-  private async _signInWithStoredAccount(account: StoredAccount, password: string): Promise<void> {
-    const app = this._getOrCreateFirebaseApp(account.id, account.useDefaultApp);
-    const auth = getAuth(app);
-    this._authInstances.set(account.id, auth);
-
-    await signInWithEmailAndPassword(auth, account.email, password);
-
-    // Set as active account
-    this._activeAccountId = account.id;
-    account.lastActive = new Date();
-
-    // Save to storage
-    await this.saveAccounts();
   }
 
   /**
@@ -420,35 +243,16 @@ class MultiAccountClient implements MultiAccountService {
     }
 
     try {
-      // Get or restore Firebase app for this account
-      let auth = this._authInstances.get(accountId);
-
-      if (!auth) {
-        // Need to restore the account
-        await this._restoreAccount(account);
-        auth = this._authInstances.get(accountId);
-      }
-
-      if (!auth) {
-        throw new Error("Failed to restore account authentication");
-      }
-
-      // Check if user is still logged in
-      const currentUser = auth.currentUser;
-
-      if (!currentUser) {
+      const restored = await this._restoreAccount(account);
+      if (!restored) {
         // Session expired - throw special error with account info
         throw new SessionExpiredError(account.email, accountId);
       }
 
-      // Update active account
       this._activeAccountId = accountId;
-
-      // Update last active timestamp
       account.lastActive = new Date();
-
-      // Save to storage
       await this.saveAccounts();
+      this._notifyActiveUserChanged();
 
       log.info(`Switched to account: ${account.displayName}`);
     } catch (err) {
@@ -468,52 +272,27 @@ class MultiAccountClient implements MultiAccountService {
     }
 
     try {
-      // Sign out first to clear IndexedDB persistence before deleting the app
-      // This prevents session resurrection on next startup
-      const auth = this._authInstances.get(accountId);
-      if (auth) {
-        await signOut(auth);
-      }
+      // End the session first so it cannot be resurrected on next startup
+      await accounts().logout(accountId);
+      this._records.delete(accountId);
 
-      // Check if this is the default app before deleting
-      const app = this._firebaseApps.get(accountId);
-      const isDefaultApp = app && app.name === "[DEFAULT]";
-
-      if (app) {
-        await deleteApp(app);
-        this._firebaseApps.delete(accountId);
-      }
-
-      // Remove auth instance
-      this._authInstances.delete(accountId);
-
-      // Remove from accounts list
       const removedAccount = this._accounts[accountIndex];
       this._accounts.splice(accountIndex, 1);
 
       // If this was the active account, switch to another or clear
       if (this._activeAccountId === accountId) {
-        if (this._accounts.length > 0) {
-          // Switch to most recently active account
-          const sortedAccounts = [...this._accounts].sort((a, b) => b.lastActive.getTime() - a.lastActive.getTime());
-          await this.switchAccount(sortedAccounts[0].id);
-        } else {
-          // No accounts left
-          this._activeAccountId = null;
+        this._activeAccountId = null;
+        const sortedAccounts = [...this._accounts].sort((a, b) => b.lastActive.getTime() - a.lastActive.getTime());
+        for (const next of sortedAccounts) {
+          if (await this._restoreAccount(next)) {
+            this._activeAccountId = next.id;
+            break;
+          }
         }
       }
 
-      // If we deleted the default app and no accounts remain, recreate it
-      // This ensures password reset and other features still work
-      if (isDefaultApp && this._accounts.length === 0) {
-        if (getApps().length === 0) {
-          initializeApp(firebaseConfig);
-          log.info("Recreated default Firebase app after removing last account");
-        }
-      }
-
-      // Save to storage
       await this.saveAccounts();
+      this._notifyActiveUserChanged();
 
       log.info(`Removed account: ${removedAccount.displayName}`);
     } catch (err) {
@@ -522,35 +301,55 @@ class MultiAccountClient implements MultiAccountService {
     }
   }
 
-  /**
-   * Get all stored accounts
-   */
   getAccounts(): readonly StoredAccount[] {
     // Return sorted by last active (most recent first)
     return [...this._accounts].sort((a, b) => b.lastActive.getTime() - a.lastActive.getTime());
   }
 
-  /**
-   * Get the active account ID
-   */
   getActiveAccountId(): string | null {
     return this._activeAccountId;
   }
 
-  /**
-   * Get the active Firebase Auth instance (for AuthService to use)
-   */
-  getActiveAuth(): Auth | null {
+  getActiveUser(): AccountsMe | null {
     if (!this._activeAccountId) {
       return null;
     }
-
-    return this._authInstances.get(this._activeAccountId) ?? null;
+    return this._records.get(this._activeAccountId) ?? null;
   }
 
-  /**
-   * Subscribe to accounts list changes
-   */
+  async refreshActiveUser(): Promise<AccountsMe | null> {
+    const id = this._activeAccountId;
+    if (!id) {
+      return null;
+    }
+    try {
+      const user = await accounts().me(id);
+      this.setUserRecord(user);
+      return user;
+    } catch (err) {
+      if (isSessionExpired(err)) {
+        this._records.delete(id);
+        this._notifyActiveUserChanged();
+      }
+      throw err;
+    }
+  }
+
+  setUserRecord(user: AccountsMe): void {
+    const previous = this._records.get(user.uid);
+    this._records.set(user.uid, user);
+    const account = this._accounts.find((acc) => acc.id === user.uid);
+    if (account && (account.displayName !== user.displayName || account.email !== user.email)) {
+      this._updateStoredAccount(account, user);
+      void this.saveAccounts().catch(log.error);
+    }
+    // Only identity changes are user changes (Slippi's onAuthStateChanged): refreshing the
+    // record from the server must not re-trigger the listeners that refresh it.
+    if (user.uid === this._activeAccountId && identityChanged(previous, user)) {
+      this._notifyActiveUserChanged();
+    }
+  }
+
   onAccountsChange(
     onChange: (data: { accounts: readonly StoredAccount[]; activeId: string | null }) => void,
   ): () => void {
@@ -559,12 +358,48 @@ class MultiAccountClient implements MultiAccountService {
       subscription.unsubscribe();
     };
   }
+
+  onActiveUserChange(onChange: (user: AccountsMe | null) => void): () => void {
+    const subscription = this._onActiveUserChanged.subscribe(onChange);
+    return () => {
+      subscription.unsubscribe();
+    };
+  }
 }
 
-function mapFirebaseUserToStoredAccount(user: User, defaultEmail: string = ""): StoredAccount {
+function identityChanged(a: AccountsMe | undefined, b: AccountsMe): boolean {
+  return (
+    !a ||
+    a.uid !== b.uid ||
+    a.email !== b.email ||
+    a.displayName !== b.displayName ||
+    a.emailVerified !== b.emailVerified ||
+    a.emailVerificationRequired !== b.emailVerificationRequired
+  );
+}
+
+/** What we show for a logged-in account while the server cannot be reached. */
+function offlineRecord(account: StoredAccount): AccountsMe {
+  return {
+    uid: account.id,
+    email: account.email,
+    emailVerified: true,
+    emailVerificationRequired: false,
+    displayName: account.displayName,
+    connectCode: null,
+    playKey: null,
+    rulesVersion: 0,
+    currentRulesVersion: 0,
+    latestVersion: "",
+    role: "user",
+    userJson: null,
+  };
+}
+
+function mapUserToStoredAccount(user: AccountsMe, defaultEmail: string = ""): StoredAccount {
   return {
     id: user.uid,
-    email: user.email ?? defaultEmail,
+    email: user.email || defaultEmail,
     displayName: user.displayName ?? "",
     displayPicture: generateDisplayPicture(user.uid),
     lastActive: new Date(),

@@ -7,6 +7,7 @@ export const LoginFormMessages = {
   password: () => "Password",
   togglePasswordVisibility: () => "Toggle password visibility",
   confirmPassword: () => "Confirm password",
+  inviteCode: () => "Invite code",
   alreadyHaveAnAccount: () => "I already have an account",
   signUp: () => "Sign up",
   forgotPassword: () => "Forgot your password?",

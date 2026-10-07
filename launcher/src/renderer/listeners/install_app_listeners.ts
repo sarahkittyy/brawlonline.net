@@ -1,55 +1,27 @@
-import type { ConsoleService } from "@console/types";
-import type { SpectateRemoteService } from "@remote/types";
 import type { Progress, ReplayService } from "@replays/types";
 import throttle from "lodash/throttle";
 
 import { getReplayPresenter } from "@/lib/hooks/use_replays";
-import { refreshChatMessages, useChatMessagesStore } from "@/pages/settings/chat_settings/use_chat_messages";
 import type { AuthService } from "@/services/auth/types";
 
 import { clearUserData, refreshUserData, useAccount } from "../lib/hooks/use_account";
 import { useAppStore } from "../lib/hooks/use_app_store";
-import { useConsoleDiscoveryStore } from "../lib/hooks/use_console_discovery";
-import { useSpectateRemoteServerStateStore } from "../lib/hooks/use_spectate_remote_server";
-import type { NotificationService } from "../services/notification/types";
 import type { Services } from "../services/types";
-import { installBroadcastListeners } from "./install_broadcast_listeners";
 import { installDolphinListeners } from "./install_dolphin_listeners";
 import { installSettingsChangeListeners } from "./install_settings_change_listeners";
 
 export function installAppListeners(services: Services) {
-  const {
-    authService,
-    broadcastService,
-    consoleService,
-    notificationService,
-    slippiBackendService,
-    dolphinService,
-    spectateRemoteService,
-    replayService,
-  } = services;
+  const { authService, notificationService, backendService, dolphinService, replayService } = services;
 
   authService.onUserChange((user) => {
-    const oldUserId = useAccount.getState().user?.uid;
     useAccount.getState().setUser(user);
 
-    // Refresh the play key and chat messages
+    // Refresh the play key
     if (user) {
-      void refreshUserData(slippiBackendService);
-      void refreshChatMessages(slippiBackendService, user.uid);
+      void refreshUserData(backendService);
     } else {
       // We've logged out so clear any pending requests for user data.
       clearUserData();
-      useChatMessagesStore.getState().resetStore();
-    }
-
-    // If we switched users, stop broadcasting and disconnect from the spectate server.
-    const didSwitchUser = oldUserId != null && user != null && user.uid !== oldUserId;
-    if (didSwitchUser) {
-      // technically we don't need to stop broadcasting cause we don't allow
-      // switching accounts when netplay is open. better to be safe
-      void broadcastService.stopBroadcast();
-      void broadcastService.disconnectFromSpectateServer();
     }
   });
 
@@ -81,37 +53,8 @@ export function installAppListeners(services: Services) {
   });
 
   installDolphinListeners({ dolphinService, notificationService });
-  installBroadcastListeners({ broadcastService, authService });
-  installConsoleListeners({ consoleService, notificationService });
   installReplayListeners({ replayService, authService });
   installSettingsChangeListeners({ replayService, authService });
-  installSpectateListeners({ spectateRemoteService });
-}
-
-function installConsoleListeners(services: {
-  consoleService: ConsoleService;
-  notificationService: NotificationService;
-}) {
-  const { consoleService, notificationService } = services;
-  // Update the discovered console list
-  consoleService.onDiscoveredConsolesUpdated((consoles) => {
-    useConsoleDiscoveryStore.getState().updateConsoleItems(consoles);
-  });
-
-  // Update the mirroring console status
-  consoleService.onConsoleMirrorStatusUpdated((status) => {
-    useConsoleDiscoveryStore.getState().updateConsoleStatus(status);
-  });
-
-  consoleService.onConsoleMirrorErrorMessage((message) => {
-    notificationService.showError(message);
-  });
-}
-
-function installSpectateListeners({ spectateRemoteService }: { spectateRemoteService: SpectateRemoteService }) {
-  spectateRemoteService.onSpectateRemoteServerStateChange((state) =>
-    useSpectateRemoteServerStateStore.getState().setState(state),
-  );
 }
 
 export function installReplayListeners({

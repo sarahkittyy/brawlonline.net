@@ -21,6 +21,10 @@ class MockDolphinClient implements DolphinService {
   private eventSubject = new Subject<DolphinEvent>();
   private events = Observable.from(this.eventSubject);
 
+  async getDolphinPaths(_dolphinType: DolphinLaunchType) {
+    return { executable: "Dolphin.exe", userFolder: "User", playKeyFile: "User/Online/user.json" };
+  }
+
   @delayAndMaybeError(SHOULD_ERROR)
   async downloadDolphin(dolphinType: DolphinLaunchType): Promise<void> {
     // Mock installation percentage
@@ -81,7 +85,7 @@ class MockDolphinClient implements DolphinService {
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
-  async launchNetplayDolphin(_options: { bootToCss?: boolean | undefined }): Promise<void> {
+  async launchNetplayDolphin(): Promise<void> {
     throw new Error("Method not implemented.");
   }
 

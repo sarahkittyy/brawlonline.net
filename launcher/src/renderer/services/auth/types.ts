@@ -1,3 +1,8 @@
+// Multi-account types
+// Note: StoredAccount and AccountData are defined in @settings/types.ts
+import type { AccountsMe } from "@accounts/types";
+import type { StoredAccount } from "@settings/types";
+
 export type AuthUser = {
   uid: string;
   displayName: string;
@@ -13,9 +18,12 @@ export class SessionExpiredError extends Error {
   }
 }
 
+export type SignUpArgs = { email: string; password: string; displayName: string; inviteCode?: string };
+
 export interface AuthService {
   getCurrentUser(): AuthUser | undefined;
-  getUserToken(): Promise<string>;
+  /** The full account record from the accounts API for the active account (cached). */
+  getCurrentAccount(): AccountsMe | undefined;
   init(): Promise<AuthUser | undefined>;
   login(args: { email: string; password: string }): Promise<AuthUser | undefined>;
   logout(): Promise<void>;
@@ -23,23 +31,18 @@ export interface AuthService {
   sendVerificationEmail(): Promise<void>;
   onUserChange(onChange: (user: AuthUser | undefined) => void): () => void;
   resetPassword(email: string): Promise<void>;
-  signUp(args: { email: string; password: string; displayName: string }): Promise<AuthUser | undefined>;
+  signUp(args: SignUpArgs): Promise<AuthUser | undefined>;
   updateDisplayName(displayName: string): Promise<void>;
   // Multi-account support
   getMultiAccountService(): MultiAccountService;
 }
-
-// Multi-account types
-// Note: StoredAccount and AccountData are defined in @settings/types.ts
-import type { StoredAccount } from "@settings/types";
-import type { Auth } from "firebase/auth";
 
 export interface MultiAccountService {
   // Initialization
   init(): Promise<void>;
 
   // Account Management
-  signUp(email: string, password: string, displayName: string): Promise<StoredAccount>;
+  signUp(args: SignUpArgs): Promise<StoredAccount>;
   addAccount(email: string, password: string): Promise<StoredAccount>;
   removeAccount(accountId: string): Promise<void>;
   switchAccount(accountId: string): Promise<void>;
@@ -47,11 +50,16 @@ export interface MultiAccountService {
   getActiveAccountId(): string | null;
   saveAccounts(): Promise<void>;
 
-  // Get the active Firebase Auth instance for AuthService to use
-  getActiveAuth(): Auth | null; // Returns firebase Auth instance
+  /** The last known account record of the active account, or null when logged out. */
+  getActiveUser(): AccountsMe | null;
+  /** Re-fetches the active account record from the server. */
+  refreshActiveUser(): Promise<AccountsMe | null>;
+  /** Replaces the cached record of an account (after a mutation returned a fresh one). */
+  setUserRecord(user: AccountsMe): void;
 
   // Notifications
   onAccountsChange(
     onChange: (data: { accounts: readonly StoredAccount[]; activeId: string | null }) => void,
   ): () => void;
+  onActiveUserChange(onChange: (user: AccountsMe | null) => void): () => void;
 }

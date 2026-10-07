@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "@common/product";
 import { DolphinLaunchType } from "@dolphin/types";
 import log from "electron-log";
 
@@ -6,10 +7,10 @@ import type { AuthUser } from "@/services/auth/types";
 import type { Services } from "@/services/types";
 
 import { InitializeAppMessages as Messages } from "./initialize_app.messages";
-import type { UserData } from "./services/slippi/types";
+import type { UserData } from "./services/backend/types";
 
 export async function initializeApp(services: Services) {
-  const { authService, slippiBackendService, dolphinService, notificationService } = services;
+  const { authService, backendService, dolphinService, notificationService } = services;
   const { showError } = notificationService;
 
   log.info("Initializing app...");
@@ -31,12 +32,12 @@ export async function initializeApp(services: Services) {
       let serverError = false;
       if (user) {
         try {
-          userData = await slippiBackendService.fetchUserData();
+          userData = await backendService.fetchUserData();
           serverError = false;
         } catch (err) {
           serverError = true;
-          const reason = !navigator.onLine ? Messages.youAreOffline() : Messages.slippiMayBeDown();
-          const message = `${Messages.failedToCommunicateWithSlippiServers()} ${reason}`;
+          const reason = !navigator.onLine ? Messages.youAreOffline() : Messages.serversMayBeDown(PRODUCT_NAME);
+          const message = `${Messages.failedToCommunicateWithServers(PRODUCT_NAME)} ${reason}`;
           showError(message);
         }
       }
@@ -75,7 +76,7 @@ export async function initializeApp(services: Services) {
   const updateState = window.electron.bootstrap.updateState;
   if (updateState) {
     if (updateState.status === "succeeded") {
-      notificationService.showInfo(Messages.updatedToVersion(updateState.version));
+      notificationService.showInfo(Messages.updatedToVersion(PRODUCT_NAME, updateState.version));
     } else {
       showError(Messages.updateFailed(updateState.version));
     }

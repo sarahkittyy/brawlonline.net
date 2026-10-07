@@ -1,11 +1,9 @@
 export const UserMenuMessages = {
   activateOnlinePlay: () => "Activate online play",
-  viewProfile: () => "View profile",
-  manageAccount: () => "Manage account",
   editDisplayName: () => "Edit display name",
   logout: () => "Log out",
   offline: () => "Offline",
-  slippiServerError: () => "Slippi server error",
+  serverError: () => "Server error",
   onlineActivationRequired: () => "Online activation required",
   emailVerificationRequired: () => "Email verification required",
   areYouSureYouWantToLogout: () => "Are you sure you want to log out?",

@@ -5,7 +5,6 @@ import React from "react";
 
 import { UserIcon } from "@/components/user_icon";
 
-import { SupportBadge } from "./support_badge";
 import styles from "./user_info.module.css";
 
 export const UserInfo = React.memo(function UserInfo({
@@ -14,14 +13,10 @@ export const UserInfo = React.memo(function UserInfo({
   connectCode,
   errorBorder,
   errorMessage,
-  tier = "NONE",
-  isVip,
   loading,
 }: {
   displayName: string;
   displayPicture: string;
-  tier?: "TIER1" | "TIER2" | "TIER3" | "NONE";
-  isVip?: boolean;
   connectCode?: string;
   errorBorder?: boolean;
   errorMessage?: string;
@@ -42,7 +37,6 @@ export const UserInfo = React.memo(function UserInfo({
           ) : (
             <div className={styles.subtitle}>
               <span>{connectCode}</span>
-              {tier !== "NONE" && <SupportBadge tier={tier} isVip={isVip} />}
             </div>
           ))}
       </div>
