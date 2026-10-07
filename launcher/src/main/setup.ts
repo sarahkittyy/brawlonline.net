@@ -13,16 +13,12 @@ import { fileExists } from "utils/file_exists";
 import type { AppUpdater } from "./app_updater";
 import { getAppBootstrap } from "./bootstrap";
 import type { BrowserWindowManager } from "./browser_window_manager";
-import { dispatchContentManagementService } from "./content_management/dispatcher";
-import { getLatestRelease } from "./fetch_cross_origin/github";
 import type { ConfigFlags } from "./flags/flags";
 import {
   ipc_checkForUpdate,
   ipc_checkValidIso,
   ipc_clearTempFolder,
-  ipc_contentManagementService,
   ipc_copyLogsToClipboard,
-  ipc_getLatestGitHubReleaseVersion,
   ipc_installUpdate,
   ipc_launcherUpdateDownloadingEvent,
   ipc_launcherUpdateFoundEvent,
@@ -32,14 +28,16 @@ import {
   ipc_showOpenDialog,
 } from "./ipc";
 import { getNetworkDiagnostics } from "./network_diagnostics";
-import { clearTempFolder, getAssetPath, readLastLines } from "./util";
-import { verifyIso } from "./verify_iso";
+import { clearTempFolder, readLastLines } from "./util";
+import { verifyIsoCached } from "./verify_iso";
 
 const log = electronLog.scope("main/listeners");
-const isDevelopment = process.env.NODE_ENV !== "production";
 const isMac = process.platform === "darwin";
 
 const LINES_TO_READ = 200;
+
+const TRANSPARENT_PIXEL_PNG =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
 
 export default function setupMainIpc({
   dolphinManager,
@@ -59,7 +57,8 @@ export default function setupMainIpc({
     // so we'll just cast it as unknown for now.
     event.sender.startDrag({
       files,
-      icon: nativeImage.createFromPath(getAssetPath("include", "file.png")),
+      // Slippi drags with its file icon; a transparent pixel keeps drag-and-drop working without art.
+      icon: nativeImage.createFromDataURL(TRANSPARENT_PIXEL_PNG),
     } as unknown as Electron.Item);
   });
 
@@ -67,34 +66,24 @@ export default function setupMainIpc({
     event.returnValue = getAppBootstrap(flags, appUpdater.getUpdateState());
   });
 
-  ipc_contentManagementService.main!.handle(async ({ service, params }) => {
-    const data = await dispatchContentManagementService(service, params);
-    return { data };
-  });
-
-  ipc_checkValidIso.main!.handle(async ({ path }) => {
+  ipc_checkValidIso.main!.handle(async ({ path: isoPath }) => {
     // Make sure we have a valid path
-    if (!path) {
-      return { path, valid: IsoValidity.UNVALIDATED };
+    if (!isoPath) {
+      return { path: isoPath, valid: IsoValidity.UNVALIDATED };
     }
 
     try {
-      const result = await verifyIso(path);
-      return { path, valid: result };
+      const cacheFile = path.join(app.getPath("userData"), "iso-verification.json");
+      const result = await verifyIsoCached(isoPath, cacheFile);
+      return { path: isoPath, valid: result };
     } catch (err) {
-      return { path, valid: IsoValidity.INVALID };
+      return { path: isoPath, valid: IsoValidity.INVALID };
     }
   });
 
   ipc_copyLogsToClipboard.main!.handle(async () => {
-    let logsFolder = isMac ? app.getPath("logs") : path.resolve(app.getPath("userData"), "logs");
-    if (isDevelopment) {
-      if (isMac) {
-        logsFolder = path.join(logsFolder, "..", "Slippi Launcher");
-      } else {
-        logsFolder = path.join(logsFolder, "../../", "Slippi Launcher", "logs");
-      }
-    }
+    // The app name is set before logging starts (main.ts), so dev and packaged builds agree.
+    const logsFolder = isMac ? app.getPath("logs") : path.resolve(app.getPath("userData"), "logs");
 
     const mainLogPath = path.join(logsFolder, "main.log");
     const rendererLogPath = path.join(logsFolder, "renderer.log");
@@ -157,13 +146,6 @@ export default function setupMainIpc({
   ipc_checkForUpdate.main!.handle(async () => {
     const result = await autoUpdater.checkForUpdatesAndNotify();
     return { updateAvailable: result != null };
-  });
-
-  ipc_getLatestGitHubReleaseVersion.main!.handle(async ({ owner, repo }) => {
-    const release = await getLatestRelease(owner, repo);
-    const tag: string = release.tag_name;
-    const version = tag.slice(1);
-    return { version };
   });
 
   ipc_clearTempFolder.main!.handle(async () => {

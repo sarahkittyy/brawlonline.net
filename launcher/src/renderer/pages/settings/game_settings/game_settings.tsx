@@ -1,3 +1,4 @@
+import { GAME_NAME } from "@common/product";
 import { IsoValidity } from "@common/types";
 import { css } from "@emotion/react";
 import styled from "@emotion/styled";
@@ -13,10 +14,9 @@ import React from "react";
 import { PathInput } from "@/components/path_input/path_input";
 import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { useIsoVerification } from "@/lib/hooks/use_iso_verification";
-import { useIsoPath, useLaunchMeleeOnPlay } from "@/lib/hooks/use_settings";
+import { useIsoPath, useLaunchGameOnPlay } from "@/lib/hooks/use_settings";
 
 import { SettingItem } from "../setting_item_section";
-import { GameMusicToggle } from "./game_music_toggle/game_music_toggle";
 import { GameSettingsMessages as Messages } from "./game_settings.messages";
 
 const renderValidityStatus = (isoValidity: IsoValidity) => {
@@ -54,7 +54,7 @@ export const GameSettings = React.memo(() => {
   const verifying = useIsoVerification((state) => state.isValidating);
   const isoValidity = useIsoVerification((state) => state.validity);
   const [isoPath, setIsoPath] = useIsoPath();
-  const [launchMeleeOnPlay, setLaunchMelee] = useLaunchMeleeOnPlay();
+  const [launchMeleeOnPlay, setLaunchMelee] = useLaunchGameOnPlay();
   const netplayDolphinOpen = useDolphinStore((store) => store.netplayOpened);
   const playbackDolphinOpen = useDolphinStore((store) => store.playbackOpened);
 
@@ -73,7 +73,7 @@ export const GameSettings = React.memo(() => {
           placeholder={Messages.noFileSet()}
           disabled={verifying || netplayDolphinOpen || playbackDolphinOpen}
           options={{
-            filters: [{ name: "Melee ISO", extensions: ["iso", "gcm", "gcz", "ciso"] }],
+            filters: [{ name: "Brawl ISO", extensions: ["iso"] }],
           }}
           endAdornment={
             <ValidationContainer className={verifying ? undefined : isoValidity.toLowerCase()}>
@@ -93,11 +93,10 @@ export const GameSettings = React.memo(() => {
       </SettingItem>
       <SettingItem name={Messages.playButtonAction()} description={Messages.playButtonActionDescription()}>
         <RadioGroup value={launchMeleeOnPlay} onChange={(_event, value) => onLaunchMeleeChange(value)}>
-          <FormControlLabel value={true} label={Messages.launchMelee()} control={<Radio />} />
+          <FormControlLabel value={true} label={Messages.launchMelee(GAME_NAME)} control={<Radio />} />
           <FormControlLabel value={false} label={Messages.launchDolphin()} control={<Radio />} />
         </RadioGroup>
       </SettingItem>
-      <GameMusicToggle />
     </div>
   );
 });

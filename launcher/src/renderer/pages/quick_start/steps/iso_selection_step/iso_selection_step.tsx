@@ -1,15 +1,13 @@
+import { PRODUCT_NAME } from "@common/product";
 import { IsoValidity } from "@common/types";
 import { css } from "@emotion/react";
 import styled from "@emotion/styled";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
-import { useTheme } from "@mui/material/styles";
-import useMediaQuery from "@mui/material/useMediaQuery";
 import { useQuery } from "@tanstack/react-query";
 import React, { useCallback } from "react";
 import { useDropzone } from "react-dropzone";
 
-import { ConfirmationModal } from "@/components/confirmation_modal/confirmation_modal";
 import { useIsoPath } from "@/lib/hooks/use_settings";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { hasBorder } from "@/styles/has_border";
@@ -22,7 +20,7 @@ const getColor = (props: any, defaultColor = "#eeeeee") => {
     return "#00e676";
   }
   if (props.isDragActive) {
-    return "var(--green-primary)";
+    return "var(--accent-primary)";
   }
   return defaultColor;
 };
@@ -67,8 +65,6 @@ export const IsoSelectionStep = () => {
     enabled: Boolean(tempIsoPath),
   });
 
-  const theme = useTheme();
-  const fullScreen = useMediaQuery(theme.breakpoints.down("sm"));
   const loading = validIsoPathQuery.isLoading;
   const [, setIsoPath] = useIsoPath();
   const nativeFilesRef = React.useRef<File[] | null>(null);
@@ -94,8 +90,8 @@ export const IsoSelectionStep = () => {
     if (filePath.endsWith(".7z")) {
       showError(Messages.sevenZFilesMustBeUncompressed());
       return;
-    } else if (filePath.endsWith(".rvz")) {
-      showError(Messages.rvzFilesAreIncompatible());
+    } else if (filePath.endsWith(".rvz") || filePath.endsWith(".wbfs")) {
+      showError(Messages.rvzFilesAreIncompatible(PRODUCT_NAME));
       return;
     }
 
@@ -106,7 +102,7 @@ export const IsoSelectionStep = () => {
 
   const { open, getRootProps, getInputProps, isDragActive, isDragAccept, isDragReject } = useDropzone({
     accept: {
-      "application/octet-stream": [".iso", ".gcm", ".gcz", ".ciso", ".rvz"],
+      "application/octet-stream": [".iso", ".wbfs", ".rvz"],
       "application/x-7z-compressed": [".7z"],
     },
     onDrop,
@@ -116,15 +112,13 @@ export const IsoSelectionStep = () => {
   });
 
   const invalidIso = Boolean(tempIsoPath) && !loading && validIsoPath === IsoValidity.INVALID;
-  const unknownIso = Boolean(tempIsoPath) && !loading && validIsoPath === IsoValidity.UNKNOWN;
-  const handleClose = () => setTempIsoPath("");
   const onConfirm = useCallback(() => {
     setIsoPath(tempIsoPath).catch(showError);
   }, [showError, setIsoPath, tempIsoPath]);
 
   React.useEffect(() => {
     if (invalidIso) {
-      showError(Messages.providedIsoWillNotWork());
+      showError(Messages.providedIsoWillNotWork(PRODUCT_NAME));
     }
   }, [showError, invalidIso]);
 
@@ -168,17 +162,6 @@ export const IsoSelectionStep = () => {
         )}
         <p>{loading ? Messages.verifyingIso() : Messages.orDragAndDropHere()}</p>
       </Container>
-
-      <ConfirmationModal
-        fullWidth={fullScreen}
-        open={unknownIso}
-        onClose={handleClose}
-        onSubmit={onConfirm}
-        confirmText={Messages.useAnyway()}
-        title={Messages.unknownIso()}
-      >
-        {Messages.isoIsUnsupported()}
-      </ConfirmationModal>
     </Box>
   );
 };

@@ -2,141 +2,97 @@ import { Preconditions } from "@common/preconditions";
 import { IsoValidity } from "@common/types";
 import crypto from "crypto";
 import fs from "fs";
+import { open } from "node:fs/promises";
 import { fileExists } from "utils/file_exists";
+
 type IsoHashInfo = {
   valid: IsoValidity;
   name: string;
 };
 
-const compressedExts = [".gcz", ".ciso"];
-const isoHashes = new Map<string, IsoHashInfo>();
+/**
+ * The only disc images we accept: full, unmodified NTSC-U Super Smash Bros. Brawl
+ * dumps. Both revisions have identical game files; main.dol differs by one word
+ * (the disc version the game expects), which has no gameplay effect.
+ * Every other image is rejected (no "unknown, use anyway" as in Slippi), because
+ * all players must run the same data for rollback to stay in sync.
+ */
+export const ACCEPTED_ISO_MD5S: ReadonlyMap<string, IsoHashInfo> = new Map([
+  ["d18726e6dfdc8bdbdad540b561051087", { valid: IsoValidity.VALID, name: "NTSC-U Rev 1" }],
+  ["52ce7160ced2505ad5e397477d0ea4fe", { valid: IsoValidity.VALID, name: "NTSC-U Rev 2" }],
+]);
 
-// Valid ISOs
-isoHashes.set("d4e70c064cc714ba8400a849cf299dbd1aa326fc", {
-  valid: IsoValidity.VALID,
-  name: "NTSC-U 1.02",
-});
-isoHashes.set("6e83240872d47cd080a28dea7b8907140c44bef5", {
-  valid: IsoValidity.VALID,
-  name: "NTSC-U 1.02 NKIT",
-});
-isoHashes.set("3bf23f7c87caadfc983954eb8c6cf2823fa8713b", {
-  valid: IsoValidity.VALID,
-  name: "NTSC-U 1.02 GCZ",
-});
-isoHashes.set("2a2a5d42b0d4f8773e313c29ab0df095392f20d4", {
-  valid: IsoValidity.VALID,
-  name: "NTSC-U 1.02 CISO",
-});
-isoHashes.set("e63d50e63a0cdd357f867342d542e7cec0c3a7c7", {
-  valid: IsoValidity.VALID,
-  name: "NTSC-U 1.02 Scrubbed #1",
-});
-isoHashes.set("55109bc139b947c8b96b5fc913fbd91245104db8", {
-  valid: IsoValidity.VALID,
-  name: "NTSC-U 1.02 Scrubbed #2",
-});
-isoHashes.set("2ce0ccfc8c31eafe2ff354fe03ac2dd94c20b937", {
-  valid: IsoValidity.VALID,
-  name: "NTSC-U 1.02 Scrubbed #3",
-});
-isoHashes.set("49a04772e0a5d1974a4b1c8a7c0d1d71184f3978", {
-  valid: IsoValidity.VALID,
-  name: "NTSC-U 1.02 Scrubbed #4",
-});
-isoHashes.set("71255a30a47b4c6aabb90308d7a514d09d93a7b5", {
-  valid: IsoValidity.VALID,
-  name: "NTSC-J 1.02",
-});
-isoHashes.set("e9ab27b4f8fdfb72adae214f834e201d14944f50", {
-  valid: IsoValidity.VALID,
-  name: "NTSC-J 1.02 GCZ",
-});
+/** Game ID of NTSC-U Brawl, at offset 0 of the disc header. */
+const BRAWL_GAME_ID = "RSBE01";
+/** Disc revisions we accept (header byte 7). */
+const ACCEPTED_REVISIONS = new Set([1, 2]);
 
-// Invalid ISOs
-isoHashes.set("2f0bed5e1d92ebb187840c6e1a2f368ce35f6816", {
-  valid: IsoValidity.INVALID,
-  name: "20XX 3.02",
-});
-isoHashes.set("7f6926f2f35940f5f697eb449c9f3fbd3639dd45", {
-  valid: IsoValidity.INVALID,
-  name: "20XX 4.07++",
-});
-isoHashes.set("49fd53b0a5eb0da9215846cd653ccc4c3548ec69", {
-  valid: IsoValidity.INVALID,
-  name: "20XX 4.07++ UCF",
-});
-isoHashes.set("4521c1753b0c9d5c747264fce63e84b832bd80a1", {
-  valid: IsoValidity.INVALID,
-  name: "Training Mode v1.1",
-});
-isoHashes.set("c89cb9b694f0f26ee07a6ee0a3633ba579e5fa12", {
-  valid: IsoValidity.INVALID,
-  name: "NTSC-U 1.00 Scrubbed # 1",
-});
-isoHashes.set("5ab1553a941307bb949020fd582b68aabebecb30", {
-  valid: IsoValidity.INVALID,
-  name: "NTSC-U 1.00",
-});
-isoHashes.set("5ecab83cd72c0ff515d750280f92713f19fa46f1", {
-  valid: IsoValidity.INVALID,
-  name: "NTSC-U 1.01",
-});
-isoHashes.set("d0a925866379c546ceb739eeb780d011383cb07c", {
-  valid: IsoValidity.INVALID,
-  name: "PAL",
-});
-isoHashes.set("fe23c91b63b0731ef727c13253b6a8c6757432ac", {
-  valid: IsoValidity.INVALID,
-  name: "NTSC-J 1.00",
-});
-isoHashes.set("f7ff7664b231042f2c0802041736fb9396a94b83", {
-  valid: IsoValidity.INVALID,
-  name: "NTSC-J 1.01",
-});
-isoHashes.set("c7c0866fbe6d7ebf3b9c4236f4f32f4c8f65b578", {
-  valid: IsoValidity.INVALID,
-  name: "Taikenban (demo)",
-});
+/** Fast check of the disc header, so other games and dumps fail without hashing 8 GB. */
+export async function checkIsoHeader(isoPath: string): Promise<boolean> {
+  const handle = await open(isoPath, "r");
+  try {
+    const header = Buffer.alloc(8);
+    const { bytesRead } = await handle.read(header, 0, 8, 0);
+    if (bytesRead < 8) {
+      return false;
+    }
+    return header.toString("latin1", 0, 6) === BRAWL_GAME_ID && ACCEPTED_REVISIONS.has(header.readUInt8(7));
+  } finally {
+    await handle.close();
+  }
+}
+
+export function md5ToValidity(md5: string): IsoValidity {
+  return ACCEPTED_ISO_MD5S.get(md5.toLowerCase())?.valid ?? IsoValidity.INVALID;
+}
 
 export async function verifyIso(isoPath: string): Promise<IsoValidity> {
   const exists = await fileExists(isoPath);
   Preconditions.checkState(exists, `Error verifying ISO: File ${isoPath} does not exist`);
 
+  if (!(await checkIsoHeader(isoPath))) {
+    return IsoValidity.INVALID;
+  }
+
+  const md5 = await hashFile(isoPath);
+  return md5ToValidity(md5);
+}
+
+function hashFile(isoPath: string): Promise<string> {
   return new Promise((resolve, reject) => {
-    const hash = crypto.createHash("sha1");
-    const input = fs.createReadStream(isoPath);
-    let checkedRevision = false;
-
-    input.on("error", (err) => {
-      reject(`Error reading ISO file ${isoPath}: ${err}`);
-    });
-
-    input.on("readable", () => {
-      const data: Buffer = input.read();
-      if (data) {
-        if (!checkedRevision && !compressedExts.some((ext) => isoPath.endsWith(ext))) {
-          // fast invalidation for things like 1.00, 1.01, and PAL
-          checkedRevision = true;
-          const revision = data.readInt8(7);
-          if (revision !== 2) {
-            resolve(IsoValidity.INVALID);
-            return;
-          }
-        }
-
-        hash.update(new Uint8Array(data));
-        return;
-      }
-
-      // Reading complete, check hash
-      const resultHash = hash.digest("hex");
-      const isoInfo = isoHashes.get(resultHash);
-      if (isoInfo) {
-        resolve(isoInfo.valid);
-      } else {
-        resolve(IsoValidity.UNKNOWN);
-      }
-    });
+    const hash = crypto.createHash("md5");
+    const input = fs.createReadStream(isoPath, { highWaterMark: 4 * 1024 * 1024 });
+    input.on("error", (err) => reject(`Error reading ISO file ${isoPath}: ${err}`));
+    input.on("data", (chunk) => hash.update(chunk as Buffer));
+    input.on("end", () => resolve(hash.digest("hex")));
   });
+}
+
+type CacheEntry = { size: number; mtimeMs: number; valid: IsoValidity };
+
+/**
+ * `verifyIso` with a small on-disk cache keyed by path, size and modification
+ * time: hashing an 8.5 GB Brawl image takes a while, and the launcher checks the
+ * ISO on every start.
+ */
+export async function verifyIsoCached(isoPath: string, cacheFile: string): Promise<IsoValidity> {
+  const stat = await fs.promises.stat(isoPath);
+  let cache: Record<string, CacheEntry> = {};
+  try {
+    cache = JSON.parse(await fs.promises.readFile(cacheFile, "utf8"));
+  } catch {
+    cache = {};
+  }
+  const hit = cache[isoPath];
+  if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs) {
+    return hit.valid;
+  }
+  const valid = await verifyIso(isoPath);
+  cache[isoPath] = { size: stat.size, mtimeMs: stat.mtimeMs, valid };
+  try {
+    await fs.promises.writeFile(cacheFile, JSON.stringify(cache, null, 2));
+  } catch {
+    // The cache is an optimisation only.
+  }
+  return valid;
 }
