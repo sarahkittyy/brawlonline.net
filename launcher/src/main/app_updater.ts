@@ -1,3 +1,4 @@
+import { resolveServiceUrls } from "@accounts/config";
 import type { SettingsManager } from "@settings/settings_manager";
 import { app } from "electron";
 import log from "electron-log";
@@ -25,6 +26,9 @@ export class AppUpdater {
     // Disable differential downloads to fix Windows NSIS update issues
     // See: https://github.com/electron-userland/electron-builder/issues/9181
     autoUpdater.disableDifferentialDownload = true;
+    // Same hooks as Slippi (electron-updater), but our feed comes from the host config:
+    // a "generic" provider at launcherUpdates (electron-builder.json publishes to the same URL).
+    autoUpdater.setFeedURL({ provider: "generic", url: resolveServiceUrls().launcherUpdates });
   }
 
   async verifyPendingUpdate(): Promise<void> {

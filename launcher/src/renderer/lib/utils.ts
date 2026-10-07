@@ -1,39 +1,27 @@
-import { characters as charUtils, stages as stageUtils } from "@slippi/slippi-js";
+import { assetUrl, useGameAssets } from "@/styles/game_theme";
 
-import unknownCharacterIcon from "@/styles/images/unknown.png";
+/** A 1x1 transparent image, for when no stock icon is available (no placeholder art). */
+const EMPTY_IMAGE = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
-const characterIcons = require.context("../styles/images/characters", true);
-const stageIcons = require.context("../styles/images/stages");
+/**
+ * Character IDs in our replays -> stock icon keys of the extracted asset manifest.
+ * Filled in when our replay format is defined (PPLUS_PORTING.md, "Replays").
+ */
+export const characterStockKeys: Record<number, string> = {};
 
-export const getCharacterIcon = (characterId: number | undefined, characterColor: number | undefined = 0): string => {
-  if (characterId != null) {
-    const characterInfo = charUtils.getCharacterInfo(characterId);
-    if (characterInfo.id !== charUtils.UnknownCharacter.id) {
-      const allColors = characterInfo.colors;
-      // Make sure it's a valid color, otherwise use the default color
-      const color = characterColor != null && characterColor <= allColors.length - 1 ? characterColor : 0;
-      try {
-        return characterIcons(`./${characterId}/${color}/stock.png`);
-      } catch (err) {
-        console.warn(`Failed to find stock icon for character ID ${characterId} and color ${color}.`);
-      }
-    }
-  }
-  return unknownCharacterIcon;
+/**
+ * Stock icon for a character, from the stock icons extracted from the user's own
+ * Brawl disc / P+ SD card. Slippi bundles Melee stock icons; we cannot bundle game art.
+ */
+export const getCharacterIcon = (characterId: number | undefined, _characterColor: number | undefined = 0): string => {
+  const manifest = useGameAssets.getState().state?.manifest;
+  const key = characterId != null ? characterStockKeys[characterId] : undefined;
+  const stock = key && manifest ? manifest.stocks[key] : undefined;
+  return stock ? assetUrl(stock.file) : EMPTY_IMAGE;
 };
 
-export const getStageImage = (stageId: number): string => {
-  const stageInfo = stageUtils.getStageInfo(stageId);
-  if (stageInfo.id !== stageUtils.UnknownStage.id) {
-    if (stageInfo.id >= 33 && stageInfo.id <= 58) {
-      return stageIcons(`./targets.png`);
-    }
-    try {
-      return stageIcons(`./${stageId}.png`);
-    } catch (err) {
-      console.warn(`Failed to find stage image for stage ID ${stageId}`);
-    }
-  }
+/** Stage images: none yet (Slippi bundles Melee stage art; ours would also have to come from the disc). */
+export const getStageImage = (_stageId: number): string => {
   return "";
 };
 

@@ -4,7 +4,6 @@ import React from "react";
 
 import { getColor } from "@/lib/player_colors";
 import { getCharacterIcon } from "@/lib/utils";
-import crownImage from "@/styles/images/crown.png";
 
 type CommonPlayerBadgeProps = {
   characterId?: number;
@@ -25,7 +24,7 @@ const BadgeContainer = styled.div<{ color: string; isWinner: boolean }>`
   font-size: 13px;
   font-weight: 500;
   padding: 2px;
-  ${(p) => (p.isWinner ? `box-shadow: 0px 0px 10px #6847BA;` : "")}
+  ${(p) => (p.isWinner ? `box-shadow: 0px 0px 10px var(--accent-primary);` : "")}
 `;
 
 const CharIcon = styled.img`
@@ -40,12 +39,6 @@ const BadgeContent = styled.div`
   padding: 5px 15px;
   border-radius: 100px;
   white-space: nowrap;
-`;
-
-const CrownContainer = styled.div`
-  position: absolute;
-  top: -4px;
-  right: 0px;
 `;
 
 const InternalPlayerBadge = ({
@@ -63,11 +56,6 @@ const InternalPlayerBadge = ({
     <BadgeContainer color={color} isWinner={!!isWinner}>
       <CharIcon src={charIcon} />
       <BadgeContent>{children}</BadgeContent>
-      {isWinner && (
-        <CrownContainer>
-          <img src={crownImage} height={16} alt="winner" />
-        </CrownContainer>
-      )}
     </BadgeContainer>
   );
 };

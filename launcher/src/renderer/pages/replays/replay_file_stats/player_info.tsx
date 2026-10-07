@@ -1,4 +1,3 @@
-import { ExternalLink as A } from "@/components/external_link";
 import { getColor } from "@/lib/player_colors";
 import { getCharacterIcon } from "@/lib/utils";
 
@@ -30,7 +29,6 @@ export const PlayerInfo = ({
   const port = playerIndex + 1;
   const backupName = type === 1 ? "CPU" : `Player ${port}`;
   const charIcon = getCharacterIcon(characterId, characterColor);
-  const slippiProfileUrl = `https://slippi.gg/user/${connectCode?.split("#").join("-")}`;
   return (
     <div className={styles.outer}>
       <div className={styles.iconContainer}>
@@ -50,9 +48,8 @@ export const PlayerInfo = ({
         </div>
         {connectCode && (
           <div className={styles.connectCodeRow}>
-            <A className={styles.slippiLink} href={slippiProfileUrl}>
-              {connectCode}
-            </A>
+            {/* Slippi links the code to its slippi.gg profile page; we have no profile pages yet. */}
+            <span className={styles.codeLink}>{connectCode}</span>
           </div>
         )}
       </div>

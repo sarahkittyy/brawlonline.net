@@ -141,8 +141,8 @@ const Outer = styled.div<{
   margin: 10px;
   background: ${(p) =>
     p.backgroundImage
-      ? `linear-gradient(to right, var(--purple-dark) 20%, transparent 35%, transparent 65%, var(--purple-dark) 80%)`
-      : "var(--purple-dark)"};
+      ? `linear-gradient(to right, var(--surface-1) 20%, transparent 35%, transparent 65%, var(--surface-1) 80%)`
+      : "var(--surface-1)"};
   will-change: border-color;
   &::before {
     z-index: -1;
@@ -206,7 +206,7 @@ const ActionButton = React.memo(({ action }: { action: ReplayFileAction }) => {
 
   return (
     <ReplayActionButton
-      color={primary ? "var(--green-dark)" : undefined}
+      color={primary ? "var(--accent-primary-dark)" : undefined}
       label={finalLabel}
       onClick={onClick}
       disabled={finalDisabled}
@@ -224,7 +224,7 @@ const ReplayActionButton = React.memo(({ label, color, onClick, ...rest }: Repla
           css={css`
             padding: 5px;
             margin: 0 5px;
-            color: ${color ?? "var(--purple-primary)"};
+            color: ${color ?? "var(--accent-secondary)"};
           `}
           size="large"
           onClick={(e) => {

@@ -289,7 +289,7 @@ export const ReplayBrowser = React.memo(() => {
               <IconButton onClick={() => window.electron.shell.openPath(currentFolder)} size="small">
                 <FolderIcon
                   css={css`
-                    color: var(--purple-light);
+                    color: var(--surface-3);
                   `}
                 />
               </IconButton>

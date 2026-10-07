@@ -6,7 +6,7 @@ import { combine } from "zustand/middleware";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useSettings, useSettingsStore } from "@/lib/hooks/use_settings";
 import type { AuthUser } from "@/services/auth/types";
-import type { UserData } from "@/services/slippi/types";
+import type { UserData } from "@/services/backend/types";
 
 export const enum QuickStartStep {
   LOGIN = "LOGIN",

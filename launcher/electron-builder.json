@@ -1,6 +1,6 @@
 {
-  "productName": "Slippi Launcher",
-  "appId": "com.github.projectslippi.slippidesktopapp",
+  "productName": "PlusOnline",
+  "appId": "gay.fluffycat.plusonline",
   "asar": true,
   "asarUnpack": [
     "**\\*.{node,dll}",
@@ -16,21 +16,23 @@
   ],
   "afterSign": ".erb/scripts/notarize.js",
   "fileAssociations": {
-    "ext": "slp",
-    "name": "slp",
-    "description": "Slippi File Format",
-    "icon": "./assets/file.ico"
+    "ext": "rep",
+    "name": "rep",
+    "description": "PlusOnline replay"
   },
-  "artifactName": "Slippi-Launcher-${version}-${arch}-${os}.${ext}",
+  "artifactName": "PlusOnline-${version}-${arch}-${os}.${ext}",
   "mac": {
     "target": [
       {
         "target": "default",
-        "arch": ["x64", "arm64"]
+        "arch": [
+          "x64",
+          "arm64"
+        ]
       }
     ],
     "fileAssociations": {
-      "ext": "slp",
+      "ext": "rep",
       "role": "Viewer"
     },
     "type": "distribution",
@@ -48,8 +50,7 @@
     "minimumSystemVersion": "10.13.6"
   },
   "dmg": {
-    "artifactName": "Slippi-Launcher-${version}-${arch}.${ext}",
-    "icon": "assets/icon.icns",
+    "artifactName": "PlusOnline-${version}-${arch}.${ext}",
     "contents": [
       {
         "x": 130,
@@ -64,18 +65,13 @@
     ]
   },
   "win": {
-    "target": ["nsis"],
-    "icon": "assets/icon.ico",
-    "signAndEditExecutable": true,
-    "azureSignOptions": {
-      "publisherName": "Slippi LLC",
-      "endpoint": "https://eus.codesigning.azure.net",
-      "codeSigningAccountName": "slippi",
-      "certificateProfileName": "slippi-release"
-    }
+    "target": [
+      "nsis"
+    ],
+    "signAndEditExecutable": false
   },
   "nsis": {
-    "artifactName": "Slippi-Launcher-Setup-${version}.${ext}",
+    "artifactName": "PlusOnline-Setup-${version}.${ext}",
     "include": ".erb/scripts/installer.nsh",
     "differentialPackage": false,
     "warningsAsErrors": false,
@@ -85,37 +81,27 @@
     "createStartMenuShortcut": true
   },
   "linux": {
-    "target": ["AppImage"],
+    "target": [
+      "AppImage"
+    ],
     "category": "Game",
-    "icon": "assets/icons/",
     "desktop": {
       "entry": {
-        "StartupWMClass": "Slippi Launcher"
+        "StartupWMClass": "PlusOnline"
       }
     }
   },
   "appImage": {
-    "artifactName": "Slippi-Launcher-${version}-x86_64.${ext}"
+    "artifactName": "PlusOnline-${version}-x86_64.${ext}"
   },
-  "protocols": [
-    {
-      "name": "slippi",
-      "role": "Viewer",
-      "schemes": ["slippi"]
-    }
-  ],
   "directories": {
     "app": "release/app",
     "buildResources": "assets",
     "output": "release/build"
   },
-  "extraResources": [
-    "./assets/include/**",
-    "./assets/icon.png"
-  ],
+  "extraResources": [],
   "publish": {
-    "provider": "github",
-    "owner": "project-slippi",
-    "repo": "slippi-launcher"
+    "provider": "generic",
+    "url": "https://updates.fluffycat.gay/launcher"
   }
 }

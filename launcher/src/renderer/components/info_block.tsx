@@ -29,7 +29,7 @@ const Header = ({ children }: { children: React.ReactNode }) => {
         align-items: center;
         h3 {
           flex: 1;
-          color: #39d05d;
+          color: var(--accent-primary);
           margin: 0;
           margin-bottom: 20px;
         }

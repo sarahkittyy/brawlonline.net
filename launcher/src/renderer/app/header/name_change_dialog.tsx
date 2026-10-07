@@ -21,7 +21,7 @@ export const NameChangeDialog = ({
   open: boolean;
   handleClose: () => void;
 }) => {
-  const { slippiBackendService } = useServices();
+  const { backendService } = useServices();
   const { handleSubmit, watch, control } = useForm<{ displayName: string }>({ values: { displayName } });
 
   const name = watch("displayName");
@@ -31,7 +31,7 @@ export const NameChangeDialog = ({
 
   const submitNameChange = useAsync(async () => {
     try {
-      await slippiBackendService.changeDisplayName(name);
+      await backendService.changeDisplayName(name);
       setDisplayName(name);
     } catch (err) {
       console.error(err);

@@ -17,7 +17,7 @@ export const NetworkDiagnosticsResultMessages = {
     "You may have trouble connecting to other players. Also known as 'hard', 'strict', or 'symmetric' NAT. " +
     "If possible, please check your router settings to see if this can be changed to 'easy', 'full cone', 'normal', or 'open' NAT.",
   failedNatTypeDescription: () =>
-    "Please try again later. If the failure persists, this network may block UDP. In that case it will not be possible to use Slippi as well as many other online games and apps.",
+    "Please try again later. If the failure persists, this network may block UDP. In that case it will not be possible to play online, as with many other online games and apps.",
   failedToDeterminePortMapping: () => "Failed to determine port mapping availability",
   portMapping: () => "Port mapping",
   notAvailable: () => "Not available",

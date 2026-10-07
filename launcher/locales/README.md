@@ -2,11 +2,11 @@
 
 The translations (in gettext format) for this app are stored in this folder. The `messages.pot` file contains the template for the original English text.
 
-For information on how to contribute new translations check out [CONTRIBUTING.md](../CONTRIBUTING.md). We only accept translations for new languages if there is also a volunteer willing to provide ongoing assistance with future translation updates.
+These translations come from the Slippi Launcher, where they were made by the volunteers below. Strings that this fork changed fall back to English until they are translated again (`npm run i18n:extract && npm run i18n:sync` refreshes the catalogs).
 
 ## Supported Languages
 
-In addition to English we support a number of additional languages. The currently supported languages, listed along with their overseers, are as follows:
+Languages and their original Slippi Launcher translators:
 - `es` - Spanish (Español)
   * @rapito (`rapito` on Discord)
 - `ja` - Japanese (日本語)

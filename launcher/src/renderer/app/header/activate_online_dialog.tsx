@@ -22,10 +22,10 @@ export const ActivateOnlineDialog = ({ open, onClose, onSubmit }: ActivateOnline
   const theme = useTheme();
   const fullScreen = useMediaQuery(theme.breakpoints.down("sm"));
   const { showError } = useToasts();
-  const { slippiBackendService } = useServices();
+  const { backendService } = useServices();
 
   const handleSubmit = () => {
-    void refreshUserData(slippiBackendService)
+    void refreshUserData(backendService)
       .then(() => {
         onClose();
         onSubmit();

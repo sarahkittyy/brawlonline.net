@@ -33,7 +33,7 @@ var InstallType
     !insertmacro MUI_HEADER_TEXT "Select components to install" ""
     nsDialogs::Create /NOUNLOAD 1018
     Pop $0
-    ${NSD_CreateRadioButton} 0 50u 100% 10u "Only install Slippi Launcher"
+    ${NSD_CreateRadioButton} 0 50u 100% 10u "Only install ${PRODUCT_NAME}"
     pop $1
     ${NSD_CreateRadioButton} 0 70u 100% 10u "Also install GameCube adapter drivers (optional)"
     pop $2
@@ -65,26 +65,6 @@ var InstallType
 !macroend
 
 !macro customInstall
-  ; Add slippi URI Handling
-  DetailPrint "Register slippi URI Handler"
-  ${If} $installMode == "all"
-    DeleteRegKey HKCR "slippi"
-    WriteRegStr HKCR "slippi" "" "URL:slippi"
-    WriteRegStr HKCR "slippi" "URL Protocol" ""
-    WriteRegStr HKCR "slippi\DefaultIcon" "" "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
-    WriteRegStr HKCR "slippi\shell" "" ""
-    WriteRegStr HKCR "slippi\shell\Open" "" ""
-    WriteRegStr HKCR "slippi\shell\Open\command" "" "$\"$INSTDIR\${APP_EXECUTABLE_FILENAME}$\" $\"%1$\""
-  ${Else}
-    DeleteRegKey HKCU "SOFTWARE\Classes\slippi"
-    WriteRegStr HKCU "SOFTWARE\Classes\slippi" "" "URL:slippi"
-    WriteRegStr HKCU "SOFTWARE\Classes\slippi" "URL Protocol" ""
-    WriteRegStr HKCU "SOFTWARE\Classes\slippi\DefaultIcon" "" "$INSTDIR\${APP_EXECUTABLE_FILENAME}"
-    WriteRegStr HKCU "SOFTWARE\Classes\slippi\shell" "" ""
-    WriteRegStr HKCU "SOFTWARE\Classes\slippi\shell\Open" "" ""
-    WriteRegStr HKCU "SOFTWARE\Classes\slippi\shell\Open\command" "" "$\"$INSTDIR\${APP_EXECUTABLE_FILENAME}$\" $\"%1$\""
-  ${EndIf}
-
   ; Check if we should also install the GC drivers
   ${If} $InstallType == INSTALL
     ; Automatically run gamecube adapter driver installer
@@ -94,11 +74,7 @@ var InstallType
 !macroend
 
 !macro customUnInstall
-  ; Clean up Slippi URI Handling
-  DeleteRegKey HKCR "slippi"
-  DeleteRegKey HKCU "SOFTWARE\Classes\slippi"
-
-  MessageBox MB_YESNO|MB_DEFBUTTON2|MB_ICONQUESTION "Would you like to also clear Slippi Launcher and Slippi Dolphin application data?" \
+  MessageBox MB_YESNO|MB_DEFBUTTON2|MB_ICONQUESTION "Would you like to also clear ${PRODUCT_NAME} application data (including its Dolphin settings)?" \
     /SD IDNO IDNO Done IDYES Accepted
 
   Accepted:

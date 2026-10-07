@@ -3,7 +3,7 @@ import { css } from "@emotion/react";
 export const UserIcon = ({
   imageUrl,
   size = 45,
-  borderColor = "var(--purple-light)",
+  borderColor = "var(--surface-3)",
 }: {
   imageUrl: string;
   size?: number;
