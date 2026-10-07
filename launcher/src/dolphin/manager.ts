@@ -1,4 +1,5 @@
 import { Preconditions } from "@common/preconditions";
+import { readTestMode } from "@common/test_mode";
 import type { SettingsManager } from "@settings/settings_manager";
 import { app } from "electron";
 import electronLog from "electron-log";
@@ -10,8 +11,15 @@ import { fileExists } from "utils/file_exists";
 import { fetchLatestVersion } from "./install/fetch_latest_version";
 import { LocalDolphinInstallation } from "./install/local_installation";
 import type { DolphinPathEnv } from "./install/paths";
-import { defaultDolphinExecutable, defaultUserTemplate } from "./install/paths";
+import {
+  defaultDolphinExecutable,
+  defaultPluginLocation,
+  defaultUserTemplate,
+  patchedSdCardFolder,
+} from "./install/paths";
+import { installPluginOnSdCard, loadPlugin } from "./install/sd_card";
 import { DolphinInstance, MacOsRosettaRequiredError, PlaybackDolphinInstance } from "./instance";
+import { buildNetplayDolphinArgs } from "./netplay_args";
 import type { DolphinEvent, ReplayCommunication } from "./types";
 import { DolphinErrorType, DolphinEventType, DolphinLaunchType } from "./types";
 
@@ -160,8 +168,9 @@ export class DolphinManager {
     await netplayInstallation.ensureUserFolder();
     await this._updateDolphinSettings(DolphinLaunchType.NETPLAY);
 
-    const params = [...netplayInstallation.userArgs()];
+    const testMode = readTestMode(process.env, app.isPackaged);
     const launchGameOnPlay = this.settingsManager.get().settings.launchGameOnPlay;
+    let bootFile: string | null = null;
     if (launchGameOnPlay) {
       // Boot P+ the way P+ does: its netplay launcher DOL applies the codeset from the
       // virtual SD card, then boots Dolphin's default ISO (the Brawl disc).
@@ -169,8 +178,15 @@ export class DolphinManager {
       Preconditions.checkExists(isoPath, "No Brawl disc image set. Choose one in Settings > Game.");
       await netplayInstallation.assertProjectPlusFiles();
       await netplayInstallation.setDefaultIso(isoPath);
-      params.push("-e", netplayInstallation.netplayLauncherDol);
+      bootFile = netplayInstallation.netplayLauncherDol;
     }
+    const sdCardImage = await this._installOnlinePlugin(netplayInstallation, launchGameOnPlay);
+    const params = buildNetplayDolphinArgs({
+      userArgs: netplayInstallation.userArgs(),
+      sdCardImage,
+      bootFile,
+      testMode,
+    });
     log.info(`Launching dolphin at path: ${dolphinPath} ${params.join(" ")}`);
 
     // Create the Dolphin instance and start it
@@ -292,6 +308,43 @@ export class DolphinManager {
       await installation.resetUserFolder();
     }
     await this.installDolphin(launchType);
+  }
+
+  /**
+   * Puts our game plugin on a launcher-managed copy of the user's P+ SD card
+   * (`<userData>/netplay/pponline-sd/sd.raw`) and returns its path for Dolphin. The user's
+   * card (`<User>/Wii/sd.raw`) and the User template are never written. Without a card,
+   * nothing is installed unless Play boots the game (`required`), which then fails.
+   */
+  private async _installOnlinePlugin(
+    installation: LocalDolphinInstallation,
+    required: boolean,
+  ): Promise<string | null> {
+    const sourceImage = installation.sdCardImage;
+    if (!required && !(await fileExists(sourceImage))) {
+      return null;
+    }
+    const env = this._pathEnv();
+    const template = defaultUserTemplate(env);
+    try {
+      const plugin = await loadPlugin(defaultPluginLocation({ ...env, resourcesPath: process.resourcesPath }));
+      const result = await installPluginOnSdCard({
+        sourceImage,
+        outputDir: patchedSdCardFolder(env.userDataDir),
+        plugin,
+        protectedPaths: template ? [template] : [],
+        log: (message) => log.info(message),
+      });
+      log.info(`Online plugin ${plugin.sha256.slice(0, 12)} on ${result.image}: ${result.action}`);
+      return result.image;
+    } catch (err) {
+      log.error(err);
+      throw new Error(
+        `Could not install the online game plugin on the Project+ SD card: ${
+          err instanceof Error ? err.message : String(err)
+        }`,
+      );
+    }
   }
 
   private async _getIsoPath(): Promise<string | undefined> {

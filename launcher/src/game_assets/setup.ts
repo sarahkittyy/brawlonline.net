@@ -23,14 +23,16 @@ const readEnv = (name: string): string | undefined => {
 /**
  * Cache location: `PPO_ASSET_CACHE`, else `<launcher repo>/.asset-cache` in development
  * (gitignored), else `<userData>/game-assets`. The extracted files live in a `theme`
- * subfolder that is replaced on every extraction.
+ * subfolder that is replaced on every extraction. A test instance with its own
+ * `PPO_USER_DATA_DIR` keeps its cache there too, so side-by-side launchers never extract
+ * into the same folder.
  */
 function cacheRoot(): string {
   const fromEnv = readEnv("PPO_ASSET_CACHE");
   if (fromEnv) {
     return fromEnv;
   }
-  if (!app.isPackaged) {
+  if (!app.isPackaged && !readEnv("PPO_USER_DATA_DIR")) {
     return path.join(process.cwd(), ".asset-cache");
   }
   return path.join(app.getPath("userData"), "game-assets");

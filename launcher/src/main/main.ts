@@ -12,6 +12,7 @@
 import { delay } from "@common/delay";
 import { Preconditions } from "@common/preconditions";
 import { PRODUCT_NAME } from "@common/product";
+import { readTestMode } from "@common/test_mode";
 import { DolphinLaunchType } from "@dolphin/types";
 import { registerGameAssetScheme } from "@game_assets/protocol";
 import { ipc_statsPageRequestedEvent } from "@replays/ipc";
@@ -21,6 +22,7 @@ import { app, BrowserWindow, shell } from "electron";
 import log from "electron-log";
 import get from "lodash/get";
 import last from "lodash/last";
+import { mkdirSync } from "node:fs";
 import path from "path";
 import { fileExists } from "utils/file_exists";
 
@@ -46,9 +48,22 @@ if (!app.isPackaged) {
   app.setName(`${PRODUCT_NAME}-dev`);
 }
 
+// Test switches (unpackaged runs, or PPO_TEST_MODE=1; see common/test_mode.ts). The userData
+// override must come before anything reads userData: the log file, settings, sessions, the
+// replay database and Chromium's profile (sessionData) all live there, so two launchers with
+// different PPO_USER_DATA_DIRs run side by side without sharing state.
+const testMode = readTestMode(process.env, app.isPackaged);
+if (testMode.userDataDir) {
+  const userDataDir = path.resolve(testMode.userDataDir);
+  mkdirSync(userDataDir, { recursive: true });
+  app.setPath("userData", userDataDir);
+  app.setPath("sessionData", userDataDir);
+}
+
 log.initialize();
 log.errorHandler.startCatching();
-log.transports.file.level = isDevelopment ? "info" : "warn";
+// Test mode logs at info level too, so a test can read the Dolphin command line from main.log.
+log.transports.file.level = isDevelopment || testMode.active ? "info" : "warn";
 
 // Only allow a single app instance in production
 const lockObtained = !app.isPackaged || app.requestSingleInstanceLock();
@@ -67,9 +82,16 @@ if (isDevelopment) {
   // Disable IPC hooks in development to prevent duplicate console logs
   // In dev mode, both main and renderer import electron-log, which causes duplication
   log.transports.ipc.level = false;
+}
 
-  // Enable remote debugging for React DevTools
-  app.commandLine.appendSwitch("remote-debugging-port", "9222");
+// Remote debugging (React DevTools, and the DevTools protocol for end-to-end tests):
+// PPO_REMOTE_DEBUGGING_PORT in test mode, else 9222 in development.
+const remoteDebuggingPort = testMode.remoteDebuggingPort ?? (isDevelopment ? 9222 : null);
+if (remoteDebuggingPort !== null) {
+  app.commandLine.appendSwitch("remote-debugging-port", String(remoteDebuggingPort));
+}
+if (testMode.active) {
+  log.info(`Test mode: userData ${app.getPath("userData")}, remote debugging port ${remoteDebuggingPort ?? "off"}`);
 }
 
 const installExtensions = async () => {
@@ -117,7 +139,12 @@ const createWindow = async () => {
 
     webPreferences: {
       sandbox: false,
-      preload: app.isPackaged ? path.join(__dirname, "preload.js") : path.join(__dirname, "../../.erb/dll/preload.js"),
+      // The production build (packaged, or run unpackaged from release/app) has preload.js next to
+      // main.js; development (ts-node) uses the webpack dev build in .erb/dll.
+      preload:
+        app.isPackaged || process.env.NODE_ENV === "production"
+          ? path.join(__dirname, "preload.js")
+          : path.join(__dirname, "../../.erb/dll/preload.js"),
     },
   });
 
@@ -297,8 +324,9 @@ const main = async () => {
   await appUpdater.verifyPendingUpdate();
   await createWindow();
 
-  // Handle a replay file if provided
-  const argURI = get(process.argv, 1);
+  // Handle a replay file if provided. Started as `electron <app folder>` (process.defaultApp),
+  // argv[1] is the app folder, not a file to open.
+  const argURI = get(process.argv, process.defaultApp ? 2 : 1);
   if (argURI) {
     handleOpenFile(argURI);
   }

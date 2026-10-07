@@ -99,7 +99,16 @@
     "buildResources": "assets",
     "output": "release/build"
   },
-  "extraResources": [],
+  "extraResources": [
+    {
+      "from": "release/plugins",
+      "to": "plugins",
+      "filter": [
+        "PPOnline.rel",
+        "PPOnline.json"
+      ]
+    }
+  ],
   "publish": {
     "provider": "generic",
     "url": "https://updates.fluffycat.gay/launcher"

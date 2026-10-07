@@ -110,9 +110,11 @@ async function initDatabaseAndRunMigrations(
   // Apply performance optimizations via PRAGMA settings
   await applyPragmaSettings(database);
 
-  const migrationsFolder = app.isPackaged
-    ? path.join(app.getAppPath(), "dist", "migrations")
-    : path.join(__dirname, "./migrations");
+  // Production builds (packaged, or run unpackaged from release/app) ship them in dist/migrations.
+  const migrationsFolder =
+    app.isPackaged || process.env.NODE_ENV === "production"
+      ? path.join(app.getAppPath(), "dist", "migrations")
+      : path.join(__dirname, "./migrations");
   log.info(`Running migrations in ${migrationsFolder}`);
 
   const results = await migrateToLatest(database, migrationsFolder);

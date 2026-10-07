@@ -73,3 +73,47 @@ export function defaultUserTemplate(ctx: DolphinPathEnv): string | null {
   }
   return null;
 }
+
+/** Our game plugin's file name; P+'s Syriinge loads every `/Project+/pf/plugins/*.rel`. */
+export const PLUGIN_FILE_NAME = "PPOnline.rel";
+/** Where the plugin goes on the P+ SD card (see docs/game-code.md section 2). */
+export const PLUGIN_SD_PATH = `/Project+/pf/plugins/${PLUGIN_FILE_NAME}`;
+
+export type PluginLocation = {
+  /** The plugin binary. */
+  binary: string;
+  /**
+   * A manifest shipped with it (`{"file", "size", "sha256"}`) that the binary must match, or
+   * null where none is expected (development builds, `PPO_PLUGIN_PATH`).
+   */
+  manifest: string | null;
+};
+
+/**
+ * Where the game plugin (`PPOnline.rel`) installed on the SD card on Play comes from:
+ *
+ * 1. `PPO_PLUGIN_PATH` if set (no manifest).
+ * 2. Development: game-code's build output next to the launcher repo,
+ *    `<repo>/../game-code/PPOnline/PPOnline.rel` (no manifest).
+ * 3. Packaged: `<resources>/plugins/PPOnline.rel` with its manifest `<resources>/plugins/PPOnline.json`,
+ *    shipped through electron-builder's `extraResources` (see PPLUS_PORTING.md, "Shipping the plugin").
+ */
+export function defaultPluginLocation(ctx: DolphinPathEnv & { resourcesPath: string }): PluginLocation {
+  const fromEnv = ctx.env.PPO_PLUGIN_PATH;
+  if (fromEnv && fromEnv.trim() !== "") {
+    return { binary: fromEnv.trim(), manifest: null };
+  }
+  if (ctx.isDevelopment) {
+    return { binary: path.resolve(ctx.devRepoRoot, "..", "game-code", "PPOnline", PLUGIN_FILE_NAME), manifest: null };
+  }
+  const dir = path.join(ctx.resourcesPath, "plugins");
+  return { binary: path.join(dir, PLUGIN_FILE_NAME), manifest: path.join(dir, "PPOnline.json") };
+}
+
+/**
+ * The launcher-managed copy of the user's P+ SD card with the plugin installed:
+ * `<userData>/netplay/pponline-sd/sd.raw`, plus `manifest.json` next to it.
+ */
+export function patchedSdCardFolder(userDataDir: string): string {
+  return path.join(userDataDir, launchTypeFolder(DolphinLaunchType.NETPLAY), "pponline-sd");
+}
