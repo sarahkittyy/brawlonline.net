@@ -2,93 +2,115 @@ import { Preconditions } from "@common/preconditions";
 import type { SettingsManager } from "@settings/settings_manager";
 import { app } from "electron";
 import electronLog from "electron-log";
-import { move } from "fs-extra";
-import { rm } from "node:fs/promises";
+import { existsSync } from "fs";
 import { Observable, Subject } from "observable-fns";
-import os from "os";
 import path from "path";
 import { fileExists } from "utils/file_exists";
 
-import { type DolphinVersionResponse, fetchLatestVersion } from "./install/fetch_latest_version";
-import { IshiirukaDolphinInstallation } from "./install/ishiiruka_installation";
-import { MainlineDolphinInstallation } from "./install/mainline_installation";
+import { fetchLatestVersion } from "./install/fetch_latest_version";
+import { LocalDolphinInstallation } from "./install/local_installation";
+import type { DolphinPathEnv } from "./install/paths";
+import { defaultDolphinExecutable, defaultUserTemplate } from "./install/paths";
 import { DolphinInstance, MacOsRosettaRequiredError, PlaybackDolphinInstance } from "./instance";
-import type { DolphinEvent, DolphinInstallation, ReplayCommunication } from "./types";
+import type { DolphinEvent, ReplayCommunication } from "./types";
 import { DolphinErrorType, DolphinEventType, DolphinLaunchType } from "./types";
 
 const log = electronLog.scope("dolphin/manager");
 
 // DolphinManager should be in control of all dolphin instances that get opened for actual use.
-// This includes playing netplay, viewing replays, watching broadcasts (spectating), and configuring Dolphin.
+// This includes playing netplay, viewing replays and configuring Dolphin.
+//
+// Differences from Slippi: one Dolphin build (ours) serves both netplay and playback; it is
+// not downloaded (see install/fetch_latest_version.ts for the update hook); and Play boots
+// P+'s netplay launcher DOL with the Brawl disc as Dolphin's default ISO, the way P+ does.
 export class DolphinManager {
-  private betaFlags = {
-    [DolphinLaunchType.NETPLAY]: {
-      betaAvailable: false,
-      promotedToStable: false,
-    },
-    [DolphinLaunchType.PLAYBACK]: {
-      betaAvailable: false,
-      promotedToStable: false,
-    },
-  };
-
   private playbackDolphinInstances = new Map<string, PlaybackDolphinInstance>();
   private netplayDolphinInstance: DolphinInstance | null = null;
+  private versionCache = new Map<string, string>();
   private eventSubject = new Subject<DolphinEvent>();
   events = Observable.from(this.eventSubject);
 
-  constructor(private settingsManager: SettingsManager) {
-    this.betaFlags[DolphinLaunchType.NETPLAY].promotedToStable = settingsManager.getDolphinPromotedToStable(
-      DolphinLaunchType.NETPLAY,
-    );
-    this.betaFlags[DolphinLaunchType.PLAYBACK].promotedToStable = settingsManager.getDolphinPromotedToStable(
-      DolphinLaunchType.PLAYBACK,
-    );
+  constructor(private settingsManager: SettingsManager) {}
+
+  private _pathEnv(): DolphinPathEnv {
+    return {
+      env: process.env,
+      isDevelopment: !app.isPackaged,
+      devRepoRoot: process.cwd(),
+      userDataDir: app.getPath("userData"),
+    };
   }
 
-  getInstallation(launchType: DolphinLaunchType): DolphinInstallation {
-    const { betaAvailable, promotedToStable } = this.betaFlags[launchType];
-    if (betaAvailable || promotedToStable) {
-      const betaSuffix = promotedToStable ? "" : "-beta";
-      return new MainlineDolphinInstallation(launchType, betaSuffix);
-    }
-    return new IshiirukaDolphinInstallation(launchType);
+  /** The configured executable, or the default for this machine. */
+  getDolphinExecutablePath(launchType: DolphinLaunchType): string {
+    return this.settingsManager.getDolphinPath(launchType) ?? defaultDolphinExecutable(launchType, this._pathEnv());
   }
 
+  getInstallation(launchType: DolphinLaunchType): LocalDolphinInstallation {
+    const exePath = this.getDolphinExecutablePath(launchType);
+    const portable = existsSync(path.join(path.dirname(exePath), "portable.txt"));
+    // Only the netplay User folder is seeded with P+'s files (2 GB SD card). Playback has
+    // nothing to play until our replay format exists, so it gets a plain User folder.
+    const template = launchType === DolphinLaunchType.NETPLAY ? defaultUserTemplate(this._pathEnv()) : null;
+    return new LocalDolphinInstallation(launchType, exePath, app.getPath("userData"), template, portable);
+  }
+
+  /**
+   * Slippi downloads or updates its Dolphin here. We check the configured build
+   * and prepare its User folder; the update channel hook is a stub for now.
+   */
   async installDolphin(dolphinType: DolphinLaunchType): Promise<void> {
-    const useBeta = this.settingsManager.getUseDolphinBeta(dolphinType);
-    let dolphinDownloadInfo: DolphinVersionResponse | undefined = undefined;
-    try {
-      dolphinDownloadInfo = await fetchLatestVersion(dolphinType, useBeta);
-      await this._updateDolphinFlags(dolphinDownloadInfo, dolphinType);
-    } catch (err) {
-      log.error(`Failed to fetch latest Dolphin version: ${err}`);
-      this._onOffline(dolphinType);
-      return;
+    const useBeta = false;
+    const update = await fetchLatestVersion(dolphinType, useBeta).catch((err) => {
+      log.warn(`Could not check for Dolphin updates: ${err}`);
+      return null;
+    });
+    if (update) {
+      log.info(`Dolphin ${update.version} is available, but installing updates is not implemented yet`);
     }
 
     const dolphinInstall = this.getInstallation(dolphinType);
-    await dolphinInstall.validate({
-      onStart: () => this._onStart(dolphinType),
-      onProgress: (current, total) => this._onProgress(dolphinType, current, total),
-      onComplete: () =>
-        dolphinInstall.getDolphinVersion().then((version) => {
-          this._onComplete(dolphinType, version);
-        }),
-      dolphinDownloadInfo,
-    });
+    try {
+      await dolphinInstall.validate({
+        onStart: () => this._onStart(dolphinType),
+        onProgress: (current, total) => this._onProgress(dolphinType, current, total),
+        onComplete: () => undefined,
+        dolphinDownloadInfo: { version: "", downloadUrls: { darwin: "", linux: "", win32: "" } },
+      });
+    } catch (err) {
+      log.error(err);
+      // Still mark it as ready so Play shows the real error (missing executable) when pressed.
+      this._onComplete(dolphinType, undefined);
+      throw err;
+    }
 
     const isoPath = this.settingsManager.get().settings.isoPath;
     if (isoPath) {
       const gameDir = path.dirname(isoPath);
       await dolphinInstall.addGamePath(gameDir);
+      if (dolphinType === DolphinLaunchType.NETPLAY) {
+        await dolphinInstall.setDefaultIso(isoPath);
+      }
+    }
+
+    // Ready as soon as the build is found. `--version` can take many seconds (our build
+    // initialises Qt first), so report the version when it arrives, cached per executable.
+    const exePath = this.getDolphinExecutablePath(dolphinType);
+    this._onComplete(dolphinType, this.versionCache.get(exePath));
+    if (!this.versionCache.has(exePath)) {
+      void dolphinInstall.getDolphinVersion().then((version) => {
+        if (version) {
+          this.versionCache.set(exePath, version);
+        }
+        this._onComplete(dolphinType, version);
+      });
     }
   }
 
   async launchPlaybackDolphin(id: string, replayComm: ReplayCommunication): Promise<void> {
     const playbackInstallation = this.getInstallation(DolphinLaunchType.PLAYBACK);
     const dolphinPath = await playbackInstallation.findDolphinExecutable();
-    const meleeIsoPath = await this._getIsoPath();
+    await playbackInstallation.ensureUserFolder();
 
     const configuring = this.playbackDolphinInstances.get("configure");
     if (configuring) {
@@ -96,7 +118,7 @@ export class DolphinManager {
     }
     let playbackInstance = this.playbackDolphinInstances.get(id);
     if (!playbackInstance) {
-      playbackInstance = new PlaybackDolphinInstance(dolphinPath, meleeIsoPath);
+      playbackInstance = new PlaybackDolphinInstance(dolphinPath, playbackInstallation.userArgs());
       playbackInstance.on("close", async (exitCode) => {
         this.eventSubject.next({
           type: DolphinEventType.CLOSED,
@@ -133,16 +155,26 @@ export class DolphinManager {
   async launchNetplayDolphin() {
     Preconditions.checkState(this.netplayDolphinInstance == null, "Netplay dolphin is already open!");
 
-    await this._updateDolphinSettings(DolphinLaunchType.NETPLAY);
-
     const netplayInstallation = this.getInstallation(DolphinLaunchType.NETPLAY);
     const dolphinPath = await netplayInstallation.findDolphinExecutable();
-    log.info(`Launching dolphin at path: ${dolphinPath}`);
-    const launchMeleeOnPlay = this.settingsManager.get().settings.launchMeleeOnPlay;
-    const meleeIsoPath = launchMeleeOnPlay ? await this._getIsoPath() : undefined;
+    await netplayInstallation.ensureUserFolder();
+    await this._updateDolphinSettings(DolphinLaunchType.NETPLAY);
+
+    const params = [...netplayInstallation.userArgs()];
+    const launchGameOnPlay = this.settingsManager.get().settings.launchGameOnPlay;
+    if (launchGameOnPlay) {
+      // Boot P+ the way P+ does: its netplay launcher DOL applies the codeset from the
+      // virtual SD card, then boots Dolphin's default ISO (the Brawl disc).
+      const isoPath = await this._getIsoPath();
+      Preconditions.checkExists(isoPath, "No Brawl disc image set. Choose one in Settings > Game.");
+      await netplayInstallation.assertProjectPlusFiles();
+      await netplayInstallation.setDefaultIso(isoPath);
+      params.push("-e", netplayInstallation.netplayLauncherDol);
+    }
+    log.info(`Launching dolphin at path: ${dolphinPath} ${params.join(" ")}`);
 
     // Create the Dolphin instance and start it
-    const dolphinInstance = new DolphinInstance(dolphinPath, meleeIsoPath);
+    const dolphinInstance = new DolphinInstance(dolphinPath, params);
     dolphinInstance.on("close", async (exitCode: number | null, signal: string | null) => {
       try {
         await this._updateLauncherSettings(DolphinLaunchType.NETPLAY);
@@ -182,12 +214,12 @@ export class DolphinManager {
   async configureDolphin(launchType: DolphinLaunchType) {
     log.debug(`configuring ${launchType} dolphin...`);
 
-    await this._updateDolphinSettings(launchType);
-
     const installation = this.getInstallation(launchType);
     const dolphinPath = await installation.findDolphinExecutable();
+    await installation.ensureUserFolder();
+    await this._updateDolphinSettings(launchType);
     if (launchType === DolphinLaunchType.NETPLAY && !this.netplayDolphinInstance) {
-      const instance = new DolphinInstance(dolphinPath);
+      const instance = new DolphinInstance(dolphinPath, installation.userArgs());
       instance.on("close", async (exitCode) => {
         try {
           await this._updateLauncherSettings(launchType);
@@ -209,7 +241,7 @@ export class DolphinManager {
       this.netplayDolphinInstance = instance;
     } else if (launchType === DolphinLaunchType.PLAYBACK && this.playbackDolphinInstances.size === 0) {
       const instanceId = "configure";
-      const instance = new PlaybackDolphinInstance(dolphinPath);
+      const instance = new PlaybackDolphinInstance(dolphinPath, installation.userArgs());
       instance.on("close", async (exitCode) => {
         this.eventSubject.next({
           type: DolphinEventType.CLOSED,
@@ -230,6 +262,11 @@ export class DolphinManager {
     }
   }
 
+  /**
+   * Slippi's "Reset Dolphin" re-downloads its build. Ours is not downloaded, so a
+   * soft reset clears the cache and a hard reset also recreates the User folder
+   * (the online `user.json` is rewritten on the next Play).
+   */
   async reinstallDolphin(launchType: DolphinLaunchType, cleanInstall?: boolean) {
     switch (launchType) {
       case DolphinLaunchType.NETPLAY: {
@@ -248,42 +285,24 @@ export class DolphinManager {
       }
     }
 
-    const useBeta = this.settingsManager.getUseDolphinBeta(launchType);
-    let dolphinDownloadInfo: DolphinVersionResponse | undefined = undefined;
-    try {
-      dolphinDownloadInfo = await fetchLatestVersion(launchType, useBeta);
-      await this._updateDolphinFlags(dolphinDownloadInfo, launchType);
-    } catch (err) {
-      log.error(`Failed to fetch latest Dolphin version: ${err}`);
-      this._onOffline(launchType);
-      return;
-    }
     const installation = this.getInstallation(launchType);
     this._onStart(launchType);
-    await installation.downloadAndInstall({
-      dolphinDownloadInfo,
-      cleanInstall,
-      onProgress: (current, total) => this._onProgress(launchType, current, total),
-    });
-
-    const isoPath = this.settingsManager.get().settings.isoPath;
-    if (isoPath) {
-      const gameDir = path.dirname(isoPath);
-      await installation.addGamePath(gameDir);
+    await installation.clearCache();
+    if (cleanInstall) {
+      await installation.resetUserFolder();
     }
-    const version = await installation.getDolphinVersion();
-    this._onComplete(launchType, version);
+    await this.installDolphin(launchType);
   }
 
   private async _getIsoPath(): Promise<string | undefined> {
-    const meleeIsoPath = this.settingsManager.get().settings.isoPath ?? undefined;
-    if (meleeIsoPath) {
+    const isoPath = this.settingsManager.get().settings.isoPath ?? undefined;
+    if (isoPath) {
       // Make sure the file actually exists
-      if (!(await fileExists(meleeIsoPath))) {
-        throw new Error(`Could not find ISO file: ${meleeIsoPath}`);
+      if (!(await fileExists(isoPath))) {
+        throw new Error(`Could not find ISO file: ${isoPath}`);
       }
     }
-    return meleeIsoPath;
+    return isoPath;
   }
 
   async importConfig(launchType: DolphinLaunchType, dolphinPath: string): Promise<void> {
@@ -300,7 +319,6 @@ export class DolphinManager {
       replayPath: this.settingsManager.getRootSlpPath(),
       enableNetplayReplays: this.settingsManager.getEnableNetplayReplays(),
       enableMonthlySubfolders: this.settingsManager.getEnableMonthlySubfolders(),
-      enableJukebox: this.settingsManager.getEnableJukebox(),
     });
   }
 
@@ -322,11 +340,6 @@ export class DolphinManager {
       this.settingsManager.getEnableMonthlySubfolders(),
       newSettings.enableMonthlySubfolders,
       (val) => this.settingsManager.updateSetting("useMonthlySubfolders", val),
-    );
-    await this._updateLauncherSetting(
-      this.settingsManager.get().settings.enableJukebox,
-      newSettings.enableJukebox,
-      (val) => this.settingsManager.updateSetting("enableJukebox", val),
     );
   }
 
@@ -358,49 +371,5 @@ export class DolphinManager {
       dolphinType,
       dolphinVersion,
     });
-  }
-
-  private _onOffline(dolphinType: DolphinLaunchType) {
-    this.eventSubject.next({
-      type: DolphinEventType.ERROR,
-      errorType: DolphinErrorType.NETWORK_ERROR,
-      dolphinType,
-    });
-  }
-
-  // Run after fetchLatestVersion to update the necessary flags
-  private async _updateDolphinFlags(downloadInfo: DolphinVersionResponse, dolphinType: DolphinLaunchType) {
-    const isBeta = (downloadInfo.version as string).includes("-beta");
-    const isMainline = downloadInfo.downloadUrls.win32.includes("project-slippi/dolphin");
-
-    if (!this.betaFlags[dolphinType].promotedToStable && !isBeta && isMainline) {
-      // if this is the first time we're handling the promotion then delete {dolphinType}-beta and move {dolphinType}
-      // we want to delete the beta folder so that any defaults that got changed during the beta are properly updated
-      const dolphinFolder = dolphinType === DolphinLaunchType.NETPLAY ? "netplay" : "playback";
-      const betaPath = path.join(app.getPath("userData"), `${dolphinFolder}-beta`);
-      const stablePath = path.join(app.getPath("userData"), dolphinFolder);
-      const legacyPath = path.join(app.getPath("userData"), `${dolphinFolder}-legacy`);
-      try {
-        await rm(betaPath, { recursive: true, force: true });
-        await move(stablePath, legacyPath, { overwrite: true });
-        if (process.platform === "darwin") {
-          // mainline on macOS will take over the old user folder so move it on promotion
-          // windows keeps everything contained in the install dir
-          // linux will be using a new user folder path
-          const configPath = path.join(os.homedir(), "Library", "Application Support", "com.project-slippi.dolphin");
-          const oldUserFolderName = `${dolphinFolder}/User`;
-          const legacyUserFolderName = `${dolphinFolder}/User-legacy`;
-          const oldPath = path.join(configPath, oldUserFolderName);
-          const newPath = path.join(configPath, legacyUserFolderName);
-          await move(oldPath, newPath, { overwrite: true });
-        }
-        this.betaFlags[dolphinType].promotedToStable = true;
-        await this.settingsManager.setDolphinPromotedToStable(dolphinType, true);
-      } catch (err) {
-        log.warn(`could not handle promotion: ${err}`);
-      }
-    }
-
-    this.betaFlags[dolphinType].betaAvailable = isBeta;
   }
 }

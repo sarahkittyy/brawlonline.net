@@ -4,7 +4,9 @@ export const HeaderMessages = {
   checkingForUpdates: () => "Checking for updates...",
   failedToGetUpdates: () => "Failed to get updates",
   noUpdateAvailable: () => "No update available",
-  noMeleeIsoFile: () => "No Melee ISO file specified",
+  noMeleeIsoFile: () => "No Brawl ISO file specified",
+  isoWillNotWork: (productName: string) =>
+    "Provided ISO will not work with {0}. Please provide an unmodified NTSC-U Brawl ISO (revision 1 or 2).",
   settings: () => "Settings",
   chooseAConnectCode: () => "Choose a connect code",
   youAreNotLoggedIn: () => "You are not logged in",

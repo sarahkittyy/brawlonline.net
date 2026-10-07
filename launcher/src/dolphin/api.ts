@@ -7,6 +7,7 @@ import {
   ipc_dolphinEvent,
   ipc_downloadDolphin,
   ipc_fetchGeckoCodes,
+  ipc_getDolphinPaths,
   ipc_hardResetDolphin,
   ipc_installRosetta,
   ipc_launchNetplayDolphin,
@@ -30,6 +31,10 @@ const dolphinApi: DolphinService = {
   async installRosetta(): Promise<{ exitCode: number }> {
     const { result } = await ipc_installRosetta.renderer!.trigger({});
     return { exitCode: result.exitCode };
+  },
+  async getDolphinPaths(dolphinType: DolphinLaunchType) {
+    const { result } = await ipc_getDolphinPaths.renderer!.trigger({ dolphinType });
+    return result;
   },
   async downloadDolphin(dolphinType: DolphinLaunchType) {
     await ipc_downloadDolphin.renderer!.trigger({ dolphinType });
@@ -59,8 +64,8 @@ const dolphinApi: DolphinService = {
   async viewSlpReplay(files: ReplayQueueItem[]): Promise<void> {
     await ipc_viewSlpReplay.renderer!.trigger({ files });
   },
-  async launchNetplayDolphin(options: { bootToCss?: boolean }): Promise<void> {
-    await ipc_launchNetplayDolphin.renderer!.trigger(options);
+  async launchNetplayDolphin(): Promise<void> {
+    await ipc_launchNetplayDolphin.renderer!.trigger({});
   },
   async fetchGeckoCodes(dolphinType: DolphinLaunchType): Promise<GeckoCode[]> {
     const { result } = await ipc_fetchGeckoCodes.renderer!.trigger({ dolphinType });

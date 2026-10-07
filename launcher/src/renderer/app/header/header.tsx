@@ -1,3 +1,5 @@
+import { PRODUCT_NAME } from "@common/product";
+import { IsoValidity } from "@common/types";
 import { css } from "@emotion/react";
 import styled from "@emotion/styled";
 import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
@@ -14,13 +16,14 @@ import { DolphinStatus, useDolphinStore } from "@/lib/dolphin/use_dolphin_store"
 import { useAccount } from "@/lib/hooks/use_account";
 import { useAppStore } from "@/lib/hooks/use_app_store";
 import { useAppUpdate } from "@/lib/hooks/use_app_update";
+import { useIsoVerification } from "@/lib/hooks/use_iso_verification";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
 import { useSettings } from "@/lib/hooks/use_settings";
 import { useSettingsModal } from "@/lib/hooks/use_settings_modal";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { useServices } from "@/services";
-import slippiLogo from "@/styles/images/slippi_logo.svg";
 import { platformTitleBarStyles } from "@/styles/platform_title_bar_styles";
+import { titleFont } from "@/styles/with_font";
 
 import { ActivateOnlineDialog } from "./activate_online_dialog";
 import { HeaderMessages as Messages } from "./header.messages";
@@ -33,13 +36,12 @@ import { UserMenu } from "./user_menu/user_menu";
 const isMac = window.electron.bootstrap.isMac;
 
 const OuterBox = styled(Box)`
-  background: radial-gradient(circle at left, #5c1394, transparent 30%);
-  background-color: var(--purple);
+  background-color: var(--surface-1);
   height: 70px;
 `;
 
 export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
-  const { dolphinService, slippiBackendService } = useServices();
+  const { dolphinService, backendService } = useServices();
   const [startGameModalOpen, setStartGameModalOpen] = React.useState(false);
   const [activateOnlineModal, setActivateOnlineModal] = React.useState(false);
   const openModal = useLoginModal((store) => store.openModal);
@@ -70,7 +72,7 @@ export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
         if (userData?.playKey) {
           // Ensure the play key is saved to disk
           try {
-            await slippiBackendService.assertPlayKey(userData.playKey);
+            await backendService.assertPlayKey(userData.playKey);
           } catch (err) {
             showError(err);
             return;
@@ -83,11 +85,17 @@ export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
         return;
       }
 
-      launchNetplay(offlineOnly ?? false);
+      // Only the two NTSC-U Brawl images are accepted (every player must run the same data).
+      if (useIsoVerification.getState().validity === IsoValidity.INVALID) {
+        showError(Messages.isoWillNotWork(PRODUCT_NAME));
+        return;
+      }
+
+      launchNetplay();
 
       return;
     },
-    [currentUser, isOnline, launchNetplay, meleeIsoPath, userData, serverError, showError, slippiBackendService],
+    [currentUser, isOnline, launchNetplay, meleeIsoPath, userData, serverError, showError, backendService],
   );
 
   return (
@@ -203,7 +211,18 @@ const CheckForUpdatesButton = () => {
         onClick={checkForUpdatesHandler}
         disabled={checkingForUpdates}
       >
-        <img src={slippiLogo} width="38px" />
+        {/* Slippi shows its logo here. We have no logo (no invented art), so the product name is shown in
+            the game's title font once the assets are extracted. */}
+        <span
+          css={css`
+            font-family: ${titleFont};
+            font-size: 18px;
+            color: var(--off-white);
+            text-transform: none;
+          `}
+        >
+          {PRODUCT_NAME}
+        </span>
       </Button>
     </Tooltip>
   );

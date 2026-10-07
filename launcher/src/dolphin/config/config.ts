@@ -1,14 +1,13 @@
+import { DOLPHIN_INI_SECTION } from "@common/product";
 import { defaultAppSettings } from "@settings/default_settings";
 
-import type { GeckoCode } from "./gecko_code";
-import { loadGeckoCodes, setCodes } from "./gecko_code";
 import type { IniFile } from "./ini_file";
 
+/** Settings the launcher and Dolphin keep in sync (Slippi's replay settings). */
 export type SyncedDolphinSettings = {
   replayPath: string;
   enableNetplayReplays: boolean;
   enableMonthlySubfolders: boolean;
-  enableJukebox: boolean;
 };
 
 export async function addGamePath(iniFile: IniFile, gameDir: string): Promise<void> {
@@ -19,99 +18,43 @@ export async function addGamePath(iniFile: IniFile, gameDir: string): Promise<vo
   await iniFile.save();
 }
 
-export async function setSlippiMainlineSettings(
-  iniFile: IniFile,
-  options: Partial<SyncedDolphinSettings>,
-): Promise<void> {
-  const enableNetplayReplays = convertBooleanToIniVal(options.enableNetplayReplays);
-  const enableMonthlySubfolders = convertBooleanToIniVal(options.enableMonthlySubfolders);
-  const enableJukebox = convertBooleanToIniVal(options.enableJukebox);
-  const slippiSection = iniFile.getOrCreateSection("Slippi");
+/** P+'s launcher DOL boots Dolphin's default ISO after applying its Gecko codes. */
+export async function setDefaultIso(iniFile: IniFile, isoPath: string): Promise<void> {
+  const coreSection = iniFile.getOrCreateSection("Core");
+  if (coreSection.get("DefaultISO", "") !== isoPath) {
+    coreSection.set("DefaultISO", isoPath);
+    await iniFile.save();
+  }
+}
+
+/**
+ * Writes the synced settings with Slippi mainline's key names (`ReplayDir`,
+ * `SaveReplays`, `ReplayMonthlyFolders`) into our own section of Dolphin.ini.
+ */
+export async function setOnlineSettings(iniFile: IniFile, options: Partial<SyncedDolphinSettings>): Promise<void> {
+  const section = iniFile.getOrCreateSection(DOLPHIN_INI_SECTION);
 
   if (options.replayPath !== undefined) {
-    slippiSection.set("ReplayDir", options.replayPath);
+    section.set("ReplayDir", options.replayPath);
   }
   if (options.enableNetplayReplays !== undefined) {
-    slippiSection.set("SaveReplays", enableNetplayReplays);
+    section.set("SaveReplays", convertBooleanToIniVal(options.enableNetplayReplays));
   }
   if (options.enableMonthlySubfolders !== undefined) {
-    slippiSection.set("ReplayMonthlyFolders", enableMonthlySubfolders);
-  }
-  if (options.enableJukebox !== undefined) {
-    slippiSection.set("EnableJukebox", enableJukebox);
+    section.set("ReplayMonthlyFolders", convertBooleanToIniVal(options.enableMonthlySubfolders));
   }
 
   await iniFile.save();
 }
 
-export async function setSlippiIshiiSettings(iniFile: IniFile, options: Partial<SyncedDolphinSettings>): Promise<void> {
-  const enableNetplayReplays = convertBooleanToIniVal(options.enableNetplayReplays);
-  const enableMonthlySubfolders = convertBooleanToIniVal(options.enableMonthlySubfolders);
-  const enableJukebox = convertBooleanToIniVal(options.enableJukebox);
+export async function getOnlineSettings(iniFile: IniFile): Promise<SyncedDolphinSettings> {
+  const section = iniFile.getOrCreateSection(DOLPHIN_INI_SECTION);
 
-  const coreSection = iniFile.getOrCreateSection("Core");
-  if (options.replayPath !== undefined) {
-    coreSection.set("SlippiReplayDir", options.replayPath);
-  }
-  if (options.enableNetplayReplays !== undefined) {
-    coreSection.set("SlippiSaveReplays", enableNetplayReplays);
-  }
-  if (options.enableMonthlySubfolders !== undefined) {
-    coreSection.set("SlippiReplayMonthFolders", enableMonthlySubfolders);
-  }
-  if (options.enableJukebox !== undefined) {
-    coreSection.set("SlippiJukeboxEnabled", enableJukebox);
-  }
-  await iniFile.save();
-}
+  const replayPath = section.get("ReplayDir", defaultAppSettings.settings.rootSlpPath);
+  const enableNetplayReplays = section.get("SaveReplays", "True") === "True";
+  const enableMonthlySubfolders = section.get("ReplayMonthlyFolders", "True") === "True";
 
-export async function getSlippiMainlineSettings(iniFile: IniFile): Promise<SyncedDolphinSettings> {
-  const slippiSection = iniFile.getOrCreateSection("Slippi");
-
-  const replayPath = slippiSection.get("ReplayDir", defaultAppSettings.settings.rootSlpPath);
-  const enableNetplayReplays = slippiSection.get("SaveReplays", "True") === "True";
-  const enableMonthlySubfolders = slippiSection.get("ReplayMonthlyFolders", "True") === "True";
-  const enableJukebox = slippiSection.get("EnableJukebox", "True") === "True";
-
-  return { replayPath, enableNetplayReplays, enableMonthlySubfolders, enableJukebox };
-}
-
-export async function getSlippiIshiiSettings(iniFile: IniFile): Promise<SyncedDolphinSettings> {
-  const coreSection = iniFile.getOrCreateSection("Core");
-
-  const replayPath = coreSection.get("SlippiReplayDir", defaultAppSettings.settings.rootSlpPath);
-  const enableNetplayReplays = coreSection.get("SlippiSaveReplays", "True") === "True";
-  const enableMonthlySubfolders = coreSection.get("SlippiReplayMonthFolders", "False") === "True";
-  const enableJukebox = coreSection.get("SlippiJukeboxEnabled", "True") === "True";
-
-  return { replayPath, enableNetplayReplays, enableMonthlySubfolders, enableJukebox };
-}
-
-export async function setBootToCss(globalIni: IniFile, localIni: IniFile, enable: boolean): Promise<void> {
-  const geckoCodes = loadGeckoCodes(globalIni, localIni);
-  const bootCode = geckoCodes.find((code) => code.name === "Boot to CSS");
-  if (bootCode) {
-    if (bootCode.enabled === enable) {
-      return;
-    } else {
-      bootCode.enabled = enable;
-    }
-  } else {
-    const bootToCssCode: GeckoCode = {
-      codeLines: ["041BFA20 38600002"],
-      creator: "Dan Salvato, Achilles",
-      defaultEnabled: false,
-      enabled: enable,
-      name: "Boot to CSS",
-      notes: [],
-      userDefined: true,
-    };
-    geckoCodes.push(bootToCssCode);
-  }
-
-  setCodes(localIni, geckoCodes);
-
-  await localIni.save();
+  return { replayPath, enableNetplayReplays, enableMonthlySubfolders };
 }
 
 function convertBooleanToIniVal(value?: boolean): string {

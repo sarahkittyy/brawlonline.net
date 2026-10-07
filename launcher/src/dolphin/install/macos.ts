@@ -1,43 +1,14 @@
 import { copy } from "fs-extra";
-import { chmod, chown, readdir, rm } from "node:fs/promises";
+import { chmod, chown } from "node:fs/promises";
 import os from "os";
 import path from "path";
 
-import { extractDmg, mountDmg, unmountDmg } from "./extract_dmg";
+import { mountDmg, unmountDmg } from "./extract_dmg";
 
-export async function installIshiirukaDolphinOnMac({
-  assetPath,
-  destinationFolder,
-  log = console.log,
-}: {
-  assetPath: string;
-  destinationFolder: string;
-  log?: (message: string) => void;
-}) {
-  log(`Extracting to: ${destinationFolder}`);
-  await extractDmg(assetPath, destinationFolder);
+/** Bundle name of our Dolphin build (mainline Dolphin's default). */
+const DOLPHIN_APP = "Dolphin.app";
 
-  const files = await readdir(destinationFolder);
-  const filesToRemove = files.filter((file) => file !== "Slippi Dolphin.app");
-
-  for (let i = 0; i < filesToRemove.length; i++) {
-    const file = filesToRemove[i];
-    await rm(path.join(destinationFolder, file), { recursive: true, force: true });
-  }
-
-  // sometimes permissions aren't set properly after the extraction so we will forcibly set them on install
-  const binaryLocation = path.join(destinationFolder, "Slippi Dolphin.app", "Contents", "MacOS", "Slippi Dolphin");
-  const userInfo = os.userInfo();
-
-  await Promise.all([
-    chmod(path.join(destinationFolder, "Slippi Dolphin.app"), "777"),
-    chown(path.join(destinationFolder, "Slippi Dolphin.app"), userInfo.uid, userInfo.gid),
-    chmod(binaryLocation, "777"),
-    chown(binaryLocation, userInfo.uid, userInfo.gid),
-  ]);
-}
-
-export async function installMainlineDolphinOnMac({
+export async function installDolphinOnMac({
   assetPath,
   destinationFolder,
   log = console.log,
@@ -50,8 +21,8 @@ export async function installMainlineDolphinOnMac({
 
   const mountPath = await mountDmg(assetPath);
   try {
-    const appMountPath = path.join(mountPath, "Slippi_Dolphin.app");
-    const destPath = path.join(destinationFolder, "Slippi_Dolphin.app");
+    const appMountPath = path.join(mountPath, DOLPHIN_APP);
+    const destPath = path.join(destinationFolder, DOLPHIN_APP);
     // Use fs-extra's copy() for macOS .app bundles.
     // Replacing this with fs.cp() has previously caused copied apps to fail
     // macOS code-signature validation ("app is damaged" errors).
@@ -64,12 +35,12 @@ export async function installMainlineDolphinOnMac({
 
   try {
     // sometimes permissions aren't set properly after the extraction so we will forcibly set them on install
-    const binaryLocation = path.join(destinationFolder, "Slippi_Dolphin.app", "Contents", "MacOS", "Slippi_Dolphin");
+    const binaryLocation = path.join(destinationFolder, DOLPHIN_APP, "Contents", "MacOS", "Dolphin");
     const userInfo = os.userInfo();
 
     await Promise.all([
-      chmod(path.join(destinationFolder, "Slippi_Dolphin.app"), "777"),
-      chown(path.join(destinationFolder, "Slippi_Dolphin.app"), userInfo.uid, userInfo.gid),
+      chmod(path.join(destinationFolder, DOLPHIN_APP), "777"),
+      chown(path.join(destinationFolder, DOLPHIN_APP), userInfo.uid, userInfo.gid),
       chmod(binaryLocation, "777"),
       chown(binaryLocation, userInfo.uid, userInfo.gid),
     ]);

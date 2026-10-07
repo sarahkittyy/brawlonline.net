@@ -8,14 +8,7 @@ import set from "lodash/set";
 
 import { defaultAppSettings } from "./default_settings";
 import { ipc_settingChangedEvent } from "./ipc";
-import type {
-  AppSettings,
-  RootSettingsSchema,
-  SettingKey,
-  SettingsSchema,
-  SettingUpdate,
-  StoredConnection,
-} from "./types";
+import type { AppSettings, RootSettingsSchema, SettingKey, SettingsSchema, SettingUpdate } from "./types";
 
 electronSettings.configure({
   fileName: "Settings",
@@ -131,80 +124,14 @@ export class SettingsManager extends EventEmitter {
     return this.get().settings.useMonthlySubfolders;
   }
 
-  getEnableJukebox(): boolean {
-    return this.get().settings.enableJukebox;
-  }
-
-  getUseDolphinBeta(type: DolphinLaunchType): boolean {
+  getDolphinPath(type: DolphinLaunchType): string | null {
     const settings = this.get().settings;
     switch (type) {
       case DolphinLaunchType.NETPLAY:
-        return settings.useNetplayBeta;
+        return settings.netplayDolphinPath;
       case DolphinLaunchType.PLAYBACK:
-        return settings.usePlaybackBeta;
+        return settings.playbackDolphinPath ?? settings.netplayDolphinPath;
     }
-  }
-
-  getDolphinPromotedToStable(type: DolphinLaunchType): boolean {
-    const settings = this.get();
-    switch (type) {
-      case DolphinLaunchType.NETPLAY:
-        return settings.netplayPromotedToStable;
-      case DolphinLaunchType.PLAYBACK:
-        return settings.playbackPromotedToStable;
-    }
-  }
-
-  /**
-   * Add a new console connection
-   */
-  async addConsoleConnection(conn: Omit<StoredConnection, "id">): Promise<void> {
-    const connections = this.get().connections;
-    // Auto-generate an ID
-    let prevId = 0;
-    if (connections.length > 0) {
-      prevId = Math.max(...connections.map((c) => c.id));
-    }
-    connections.push({ id: prevId + 1, ...conn });
-    await this.updateSetting("connections", connections);
-  }
-
-  /**
-   * Edit an existing console connection
-   */
-  async editConsoleConnection(id: number, conn: Omit<StoredConnection, "id">): Promise<void> {
-    const connections = this.get().connections;
-    const index = connections.findIndex((c) => c.id === id);
-    if (index === -1) {
-      throw new Error(`Could not find console connection with id: ${id}`);
-    }
-
-    connections[index] = { id, ...conn };
-    await this.updateSetting("connections", connections);
-  }
-
-  /**
-   * Delete a console connection
-   */
-  async deleteConsoleConnection(id: number): Promise<void> {
-    const connections = this.get().connections.filter((c) => c.id !== id);
-    await this.updateSetting("connections", connections);
-  }
-
-  /**
-   * Set whether Dolphin beta is used (for backward compatibility with DolphinManager)
-   */
-  async setUseDolphinBeta(dolphinType: DolphinLaunchType, useBeta: boolean): Promise<void> {
-    const key = dolphinType === DolphinLaunchType.NETPLAY ? "useNetplayBeta" : "usePlaybackBeta";
-    await this.updateSetting(key, useBeta);
-  }
-
-  /**
-   * Set whether Dolphin has been promoted to stable (internal use)
-   */
-  async setDolphinPromotedToStable(dolphinType: DolphinLaunchType, promotedToStable: boolean): Promise<void> {
-    const key = dolphinType === DolphinLaunchType.NETPLAY ? "netplayPromotedToStable" : "playbackPromotedToStable";
-    await this.updateSetting(key, promotedToStable);
   }
 
   /**
