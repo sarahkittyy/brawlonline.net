@@ -29,7 +29,9 @@ namespace OnlineMenu {
         char status[128];
         bool statusDirty;
         u32 lastButtons;
-        u32 searchSeq;
+        u32 searchSeq;          // seq of the current FIND_OPPONENT (0 = no search)
+        bool pollPending;       // a GET_MATCH_STATE (or the FIND_OPPONENT) awaits its answer
+        u32 pollFrames;         // frames it has been waiting
         char lastScene[24];
         // the CSS rule-line message window, captured from its MuMsg::printIndex call
         MuMsg* cssMsg;
@@ -73,6 +75,7 @@ namespace OnlineMenu {
 
     static void setStatus(const char* text)
     {
+        if (strcmp(s.status, text) == 0) return;   // polls repeat the same state every frame
         strncpy(s.status, text, sizeof(s.status) - 1);
         s.status[sizeof(s.status) - 1] = 0;
         s.statusDirty = true;
@@ -121,9 +124,11 @@ namespace OnlineMenu {
 
     static void leave()
     {
-        if (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING) {
+        if (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING || s.phase == PH_CONNECTED) {
             PPOM::post(PPOM::CMD_CLEANUP_CONNECTION, NULL, 0);
         }
+        s.searchSeq = 0;
+        s.pollPending = false;
         s.mode = -1;
         s.phase = PH_IDLE;
         s.cssMsg = NULL;
@@ -154,6 +159,8 @@ namespace OnlineMenu {
         req.lockedChar = 0xFF;
         PPOM::asciiToU16(req.code, s.code, PPOM::CODE_LEN);
         s.searchSeq = PPOM::post(PPOM::CMD_FIND_OPPONENT, &req, sizeof(req));
+        s.pollPending = true;   // Dolphin answers FIND_OPPONENT with the match state
+        s.pollFrames = 0;
         s.phase = PH_SEARCHING;
         char buf[96];
         if (s.mode == PPOM::MODE_DIRECT && s.code[0]) {
@@ -170,6 +177,13 @@ namespace OnlineMenu {
         PPOM::u16ToAscii(name, m.peerName, sizeof(name));
         PPOM::u16ToAscii(code, m.peerCode, sizeof(code));
         switch (m.mmState) {
+        case PPOM::MM_IDLE:
+            // The search or connection ended without an error (cleanup, peer gone): back to
+            // the idle prompt, as Slippi's CSS does (design 5.6).
+            s.phase = PH_IDLE;
+            s.searchSeq = 0;
+            idleStatus();
+            return;
         case PPOM::MM_INITIALIZING:
         case PPOM::MM_MATCHMAKING:
             return; // keep "Searching ..."
@@ -198,7 +212,9 @@ namespace OnlineMenu {
         const PPOM::Response* r = PPOM::pollResponse();
         if (!r) return;
         if (r->cmd == PPOM::CMD_GET_MATCH_STATE) {
-            if (s.mode >= 0 && r->seq == s.searchSeq) {
+            // The answer to FIND_OPPONENT or to one of the polls that follow it.
+            if (s.mode >= 0 && s.searchSeq && r->seq >= s.searchSeq) {
+                s.pollPending = false;
                 onMatchState(*(const PPOM::MatchState*)r->payload);
             }
         } else if (r->cmd == PPOM::CMD_GET_ONLINE_STATUS) {
@@ -209,6 +225,18 @@ namespace OnlineMenu {
                 s.haveAccount = true;
             }
         }
+    }
+
+    // Slippi's CSS asks for the match state every frame while it searches or is connected
+    // (GET_MATCH_STATE). One poll at a time: the next goes out once Dolphin has answered.
+    static void pollMatchState()
+    {
+        if (s.mode < 0 || !s.searchSeq) return;
+        if (s.phase != PH_SEARCHING && s.phase != PH_CONNECTING && s.phase != PH_CONNECTED) return;
+        if (s.pollPending && ++s.pollFrames < 60) return;   // re-ask if an answer got lost
+        PPOM::post(PPOM::CMD_GET_MATCH_STATE, NULL, 0);
+        s.pollPending = true;
+        s.pollFrames = 0;
     }
 
     void tick()
@@ -226,6 +254,7 @@ namespace OnlineMenu {
             }
         }
         pollMailbox();
+        pollMatchState();
 
         bool onCss = g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0;
         if (!onCss) {
@@ -257,6 +286,8 @@ namespace OnlineMenu {
             if (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING || s.phase == PH_ERROR) {
                 PPOM::post(PPOM::CMD_CLEANUP_CONNECTION, NULL, 0);
                 s.phase = PH_IDLE;
+                s.searchSeq = 0;
+                s.pollPending = false;
                 idleStatus();
             }
         }

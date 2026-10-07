@@ -1,9 +1,18 @@
 #pragma once
 // Game <-> Dolphin channel (docs/backend-design.md section 5.2).
 //
-// One static block inside the plugin's data, found by Dolphin/the harness through its magic
-// header: scan the Syringe heap (0x817BA5A0 .. +0x10000 on P+ v3.2) for "PPOM" + version.
+// One static block inside the plugin's data. Dolphin (Source/Core/Core/Online/GameBridge.cpp)
+// finds it through the game's own OSModuleInfo list (0x800030C8): the module with our REL id
+// (20560, Makefile RELID; do not change it), then the "PPOM" + version header in that module's
+// data sections. Once per boot; afterwards it checks the magic word each frame.
 // All multi-byte fields are big-endian (the game's native order). Text is UTF-16BE.
+//
+// Servicing (Dolphin, at the frame-end boundary, never during a netplay session):
+//   - requests are consumed in order (reqRead); CLEANUP_CONNECTION has no answer;
+//   - at most one response per frame, and only once the game has taken the previous one
+//     (respSeen == respCount), so a response is never overwritten unread;
+//   - FIND_OPPONENT is answered with a GET_MATCH_STATE payload; the game then polls
+//     GET_MATCH_STATE (one outstanding poll at a time) while it searches or is connected.
 //
 //   MAILBOX  game writes requests, Dolphin writes responses. Only used while no session runs.
 //            Excluded from rollback state and desync hashes.
