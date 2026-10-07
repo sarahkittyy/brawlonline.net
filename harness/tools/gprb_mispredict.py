@@ -152,6 +152,12 @@ def one_run(args, inp: Dict[str, Any], mode: str, run: int) -> Dict[str, Any]:
                 if args.sound_mode != "play":
                     opts[f"{args.sound_mode}_resim_sounds"] = True
                 c.call("gprb_synctest", **opts)
+                if args.trace_frame:
+                    # The first run and the resimulation of that game frame (main thread), for
+                    # gprb_resimtrace.diff: the first load whose value differs is the leaked state.
+                    Path(args.trace_out).mkdir(parents=True, exist_ok=True)
+                    c.call("cpu_trace", path=str(Path(args.trace_out, "resim.bin").resolve()),
+                           first_frame=args.trace_frame, frames=1, occurrences=2, max_records=80_000_000)
                 c.resume()
                 snd_samples: List[Dict[str, Any]] = []
                 stop_poll = threading.Event()
@@ -169,8 +175,15 @@ def one_run(args, inp: Dict[str, Any], mode: str, run: int) -> Dict[str, Any]:
                     th = threading.Thread(target=poller, daemon=True)
                     th.start()
                 last = 0.0
+                interp_resumed = False
                 while True:
                     time.sleep(0.5)
+                    if os.environ.get("PPR_GPRB_INTERP_FROM") and not interp_resumed:
+                        # The session switched to the interpreter and broke: continue.
+                        with contextlib.suppress(Exception):
+                            if c.status().state.lower() in ("paused", "pause"):
+                                c.resume()
+                                interp_resumed = True
                     s = c.call("gprb_status")
                     gf = G.game_frame(c)
                     if gf >= until or s["phase"] in ("ended", "error") or time.monotonic() - t0 > args.timeout:
@@ -305,7 +318,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--cpu", default="dc", choices=("sc", "dc"))
     p.add_argument("--modes", default="ref,mp")
     p.add_argument("--distance", type=int, default=2)
-    p.add_argument("--region-set", default="gp-v11")
+    p.add_argument("--region-set", default="gp-v12")
     p.add_argument("--start-frame", type=int, default=240)
     p.add_argument("--mispredict-ports", type=int, default=3)
     p.add_argument("--offset", type=int, default=-7)
@@ -316,6 +329,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--every", type=int, default=1)
     p.add_argument("--frames", type=int, default=0)
     p.add_argument("--interpreter", action="store_true")
+    p.add_argument("--trace-frame", type=int, default=0,
+                   help="cpu_trace the first run and the resimulation of this game frame (use --interpreter)")
+    p.add_argument("--trace-out", default="run/qa/gprbw/trace")
     p.add_argument("--speed", type=float, default=0, help="emulation speed (0 = unthrottled)")
     p.add_argument("--poll", action="store_true", help="read guest memory continuously, as closed-loop players do")
     p.add_argument("--sound-mode", default="play", choices=("play", "suppress", "dedupe"),

@@ -96,6 +96,17 @@ def run_scenario(name: str, args: argparse.Namespace) -> Dict[str, Any]:
     rep: Dict[str, Any] = {"scenario": name, "p1": p1, "p2": p2, "stage": stage, "items": items,
                            "distance": args.distance, "region_set": args.region_set, "cpu": args.cpu}
     t0 = time.monotonic()
+    tag = None
+    if args.pass_log:
+        # Diagnostics: the passes (PPR_GPRB_PASS_LOG) and a countdown savestate, so that this run
+        # can be replayed exactly (gprb_mispredict.py run --state <sav> --modes replay=<log>).
+        Path(args.pass_log).mkdir(parents=True, exist_ok=True)
+        n = 1
+        while (Path(args.pass_log) / f"{name}-{n}.sav").exists():
+            n += 1
+        tag = Path(args.pass_log, f"{name}-{n}").resolve()
+        __import__("os").environ["PPR_GPRB_PASS_LOG"] = str(tag)
+        rep["pass_log"] = str(tag) + ".synctest.m0"
     try:
         with G.instances([(f"{args.name_prefix}-st-{name}", dict(cpu_thread=args.cpu == "dc"))]) as (inst,):
             c = inst.client
@@ -104,6 +115,17 @@ def run_scenario(name: str, args: argparse.Namespace) -> Dict[str, Any]:
                         hash_regions=not args.no_hash, start_frame=args.start_frame,
                         suppress_resim_sounds=args.suppress_resim_sounds,
                         dedupe_resim_sounds=args.dedupe_resim_sounds)
+            if tag is not None:
+                deadline = time.monotonic() + 300
+                while not (c.call("gprb_status")["phase"] == "countdown" and
+                           (B.read_frame_counters(c.read_mem).get("game_frame") or 0) >= 60):
+                    if time.monotonic() > deadline:
+                        raise RuntimeError("no countdown to save")
+                    time.sleep(0.05)
+                c.pause()
+                c.save_state(str(tag) + ".sav")
+                rep["countdown_state"] = str(tag) + ".sav"
+                c.resume()
             deadline = time.monotonic() + 300
             while c.call("gprb_status")["phase"] != "running":
                 if time.monotonic() > deadline:
@@ -198,7 +220,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scenario", default="ps2-peach-gw", help=f"comma list or 'all' ({', '.join(SCENARIOS)})")
     ap.add_argument("--distance", type=int, default=2)
-    ap.add_argument("--region-set", default="gp-v11")
+    ap.add_argument("--region-set", default="gp-v12")
     ap.add_argument("--frames", type=int, default=30000)
     ap.add_argument("--start-frame", type=int, default=240)
     ap.add_argument("--cpu", default="sc", choices=("sc", "dc"))
@@ -211,6 +233,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--log-dir", default=None, help="copy each instance's dolphin.log here")
     ap.add_argument("--name-prefix", default="gprb", help="instance name prefix (ppharness clean --prefix)")
     ap.add_argument("--runs", type=int, default=1, help="run every scenario this many times")
+    ap.add_argument("--pass-log", default=None,
+                    help="diagnostics: per run, the passes and a countdown savestate in this directory")
     args = ap.parse_args(argv)
     names = list(SCENARIOS) if args.scenario == "all" else args.scenario.split(",")
     out = []
