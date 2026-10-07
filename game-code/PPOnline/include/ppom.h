@@ -81,6 +81,30 @@ namespace PPOM {
         u16 errorText[ERROR_LEN];
     };
 
+    // Slippi's scroll constants for FETCH_CODE_SUGGESTION (TextEntryScreen/AutoComplete.s).
+    enum Scroll { SCROLL_NONE = 0, SCROLL_OLDER = 1, SCROLL_NEWER = 2, SCROLL_RESET = 3 };
+
+    // 0xBE FETCH_CODE_SUGGESTION request payload (Slippi handleNameEntryLoad): the recent code
+    // (direct-codes.json / teams-codes.json of the logged-in account) that starts with what was
+    // typed. One in flight at a time.
+    struct CodeSuggestionRequest {
+        u8 mode;          // MODE_DIRECT or MODE_TEAMS: which history
+        u8 scroll;        // Scroll: 1 older (L), 2 newer (R), 3 reset (opened, typed, deleted)
+        u8 inputLen;      // committed characters
+        u8 _pad;
+        u32 index;        // index of the current suggestion (from the last answer; 0 before any)
+        u16 input[CODE_LEN];   // the committed characters, NUL after inputLen
+    };                    // 0x1C
+
+    // 0xBE response payload (cmd 0xBE, status 0).
+    struct CodeSuggestion {
+        u8 found;         // 1: `code` is a recent code starting with the input (case-insensitive)
+        u8 len;           // characters in `code`
+        u8 _pad[2];
+        u32 index;        // the suggestion's index in the history (newest = 0); else the request's
+        u16 code[CODE_LEN];    // found: the whole code, upper-case ASCII; else the input echoed
+    };                    // 0x1C
+
     // 0xB9 GET_ONLINE_STATUS response payload.
     struct OnlineStatus {
         u8 state;         // 0 logged out, 1 ok, 2 update required

@@ -29,9 +29,23 @@
 //     into "cancel" for the CSS, so the CSS never writes the code into the player's name tag
 //     (and never copies 8 characters into its 5-character stack buffer).
 //
-// Not done: Slippi's recent-code suggestions (L/R/Z, grey completion text, 0xBE
-// FETCH_CODE_SUGGESTION). They need the 0xBE request/response in the mailbox, which the
-// Dolphin side does not define yet (docs/game-code.md section 7).
+// Recent codes (Slippi TextEntryScreen/AutoComplete.s and friends, 0xBE FETCH_CODE_SUGGESTION):
+// see the "Recent codes" block below.
+//
+// The keypad's state (MuSelctChrNameEntry, 0x94 bytes, as far as we use it):
+//   +0x00 active  +0x04 text buffer (UTF-8)  +0x08 max characters
+//   +0x24 page list, +0x38 page count, +0x3C current page
+//   +0x40 highlighted key (0 erase, 1-11 characters, 0xC page, 0xD OK)
+//   +0x44 keypad model (key highlight = material frame key+1), +0x48.. page models,
+//   +0x5C selector model, +0x60 underline model (frame = cursor+1), +0x64 text MuMsg,
+//   +0x70 its window, +0x78 current page model
+//   +0x7C last character committed (0 = multi-tap: the same key again cycles it)
+//   +0x80 key UP from OK goes back to, +0x84 cursor (character index), +0x88 no-empty flag,
+//   +0x8C hold-B counter (35 frames clears the text), +0x90 pad port
+// update (text+0x998) = input decoder (+0x1670: A/B/START/held B -> action) + action (+0xE18:
+// 1 OK, 2 cancel, 3 character key with multi-tap, 4 erase, 5 page, 6 clear) + cursor (+0xBBC:
+// d-pad/stick repeat bits, START jumps to OK). Every edit reprints the field with
+// MuMsg::printf(+0x64, +0x70, text).
 #include <mu/mu_msg.h>
 #include <string.h>
 #include "online_menu.h"
@@ -149,6 +163,227 @@ namespace CodeEntry {
         return n;
     }
 
+    // ----------------------------------------------------------------------------------------
+    // Recent codes (Slippi: TextEntryScreen/AutoComplete.s, NameEntryThinkOneShot.asm,
+    // OnEnterText.asm, OnBPressAutoComplete.asm, OnLPress/OnRPress.asm, CheckTriggersAndZ.asm,
+    // HandleAutocompleteText.asm, OnConfirmButtonHandler.asm; Dolphin handleNameEntryLoad).
+    //
+    //   - opened, a character typed, cycled (multi-tap) or deleted: FETCH_CODE_SUGGESTION
+    //     "reset" with the new text: the newest recent code that starts with it;
+    //   - L / R: "older" / "newer" from the current suggestion's index. Brawl's keypad does not
+    //     use L, R or Z at all (its input decoder, MuSelctChrNameEntry text+0x1670, reads A, B,
+    //     START and held B; its cursor, +0xBBC, reads the d-pad/stick repeat bits and START),
+    //     so these are added rather than replaced; they are taken out of the pad copy the
+    //     keypad gets;
+    //   - Z: the suggestion becomes the text (success sound) and the highlight moves to OK, as
+    //     Slippi moves it to Confirm; no suggestion (or nothing left to complete): error sound;
+    //   - the rest of the suggestion is drawn after the typed characters in the field's own
+    //     window, in Slippi's grey (0x8E9196, HandleAutocompleteText.asm): beginPrint, the typed
+    //     text in the window's colour, then the Message's colour commands and the remainder;
+    //   - the keypad's buffer only ever holds the typed characters, so Confirm sends exactly
+    //     those (Slippi truncates the suggestion, OnConfirmButtonHandler.asm), and B deletes the
+    //     last typed character (or leaves on an empty field) as before.
+    // One 0xBE in flight at a time; what is asked meanwhile waits in a small queue and goes out
+    // when the answer arrives (with the then-current text and index).
+    typedef void (*MsgBeginPrintFn)(MuMsg*, u32);
+    typedef void (*MessagePrintfFn)(void* message, const char* fmt, ...);
+    typedef void (*MessageColorFn)(void* message, const u8* rgba);
+    typedef void (*ObjFrameFn)(void* obj, float frame);
+    static const MsgBeginPrintFn s_beginPrint = (MsgBeginPrintFn)0x800B8EE8;   // MuMsg::beginPrint
+    static const MessagePrintfFn s_msgPrintf = (MessagePrintfFn)0x80069D40;    // Message::printf
+    static const MessageColorFn s_msgColorTop = (MessageColorFn)0x8006A170;    // colour command 0xC
+    static const MessageColorFn s_msgColorBottom = (MessageColorFn)0x8006A28C; // colour command 0x4
+    static const ObjFrameFn s_setFrameMatCol = (ObjFrameFn)0x800B7A18;         // MuObject::setFrameMatCol
+    static const ObjFrameFn s_setFrame = (ObjFrameFn)0x800B7798;               // MuObject frame (selector, underline)
+    static const u8 SUGGESTION_GREY[4] = {0x8E, 0x91, 0x96, 0xFF};
+
+    static char s_sugCode[PPOM::CODE_LEN + 1];   // last answer (ASCII), valid if s_sugFound
+    static bool s_sugFound = false;
+    static u32 s_sugIndex = 0;
+    static u32 s_sugSeq = 0;            // the 0xBE in flight (0 = none)
+    static u32 s_sugIgnore = 0;         // in flight from an earlier keypad: drop its payload
+    static u32 s_sugWait = 0;
+    static u8 s_sugQueue[8];
+    static int s_sugQueued = 0;
+    static char s_lastBuf[64];          // the keypad's text when we last looked
+    static char s_drawn[64];            // the field as we last drew it ("\x01" = must redraw)
+
+    static int utf8Chars(const char* s)
+    {
+        int n = 0;
+        for (; *s; s++) {
+            if (((u8)*s & 0xC0) != 0x80) n++;
+        }
+        return n;
+    }
+
+    // "AB#1" -> full-width UTF-8, the way the keypad's keys type it.
+    static void toFullWidth(const char* in, char* out)
+    {
+        int o = 0;
+        for (; *in; in++) {
+            u32 x = (u8)*in - 0x20;   // U+FF00 + x
+            out[o++] = (char)0xEF;
+            out[o++] = (char)(0xBC + (x >> 6));
+            out[o++] = (char)(0x80 + (x & 0x3F));
+        }
+        out[o] = 0;
+    }
+
+    static bool startsWith(const char* code, const char* prefix, int n)
+    {
+        for (int i = 0; i < n; i++) {
+            char c = code[i];
+            if (c >= 'a' && c <= 'z') c -= 0x20;
+            if (c != prefix[i]) return false;
+        }
+        return true;
+    }
+
+    static void sugSend(u8 scroll)
+    {
+        PPOM::CodeSuggestionRequest req;
+        memset(&req, 0, sizeof(req));
+        char in[16];
+        int n = decodeFullWidth(s_buf, in, CODE_CHARS);
+        req.mode = (u8)OnlineMenu::currentMode();
+        req.scroll = scroll;
+        req.inputLen = (u8)n;
+        req.index = s_sugIndex;
+        PPOM::asciiToU16(req.input, in, PPOM::CODE_LEN);
+        s_sugSeq = PPOM::post(PPOM::CMD_FETCH_CODE_SUGGESTION, &req, sizeof(req));
+        s_sugWait = 0;
+        PPOM::g_block.debug.scratch[0]++;   // 0xBE requests sent
+    }
+
+    static void sugRequest(u8 scroll)
+    {
+        if (!s_sugSeq) {
+            sugSend(scroll);
+            return;
+        }
+        if (scroll == PPOM::SCROLL_RESET) s_sugQueued = 0;   // a reset supersedes queued scrolls
+        if (s_sugQueued < (int)sizeof(s_sugQueue)) s_sugQueue[s_sugQueued++] = scroll;
+    }
+
+    void onSuggestion(const PPOM::Response& r)
+    {
+        if (!s_sugSeq || r.seq != s_sugSeq) return;
+        u32 seq = s_sugSeq;
+        s_sugSeq = 0;
+        if (seq != s_sugIgnore && s_active) {
+            if (r.status == 0) {
+                const PPOM::CodeSuggestion& c = *(const PPOM::CodeSuggestion*)r.payload;
+                s_sugIndex = c.index;
+                s_sugFound = c.found != 0;
+                PPOM::u16ToAscii(s_sugCode, c.code, sizeof(s_sugCode));
+            } else {
+                s_sugFound = false;   // a Dolphin without recent codes: no suggestions
+            }
+            // scratch[2]: Z accepts << 24 | found << 16 | index (harness/tests)
+            PPOM::g_block.debug.scratch[2] = (PPOM::g_block.debug.scratch[2] & 0xFF000000u) |
+                                             (s_sugFound ? 0x10000u : 0) | (s_sugIndex & 0xFFFF);
+        }
+        s_sugIgnore = 0;
+        if (s_active && s_sugQueued > 0) {
+            u8 next = s_sugQueue[0];
+            for (int i = 1; i < s_sugQueued; i++) s_sugQueue[i - 1] = s_sugQueue[i];
+            s_sugQueued--;
+            sugSend(next);
+        } else {
+            s_sugQueued = 0;
+        }
+    }
+
+    // The suggestion's characters after the typed ones ("" if there is none that fits).
+    static const char* suggestionTail()
+    {
+        char in[16];
+        int n = decodeFullWidth(s_buf, in, CODE_CHARS);
+        if (!s_sugFound || !startsWith(s_sugCode, in, n) || (int)strlen(s_sugCode) <= n) return "";
+        return s_sugCode + n;
+    }
+
+    // The text field (helper+0x64 MuMsg, window +0x70): typed text in the window's colour, then
+    // the rest of the suggestion in grey. Only when it changed (the keypad prints the plain text
+    // itself whenever its text changes; s_drawn is reset then).
+    static void drawField(u8* helper)
+    {
+        const char* tail = suggestionTail();
+        char want[64];
+        int n = 0;
+        for (const char* p = s_buf; *p && n < 40; p++) want[n++] = *p;
+        want[n++] = '|';
+        for (const char* p = tail; *p && n < 60; p++) want[n++] = *p;
+        want[n] = 0;
+        if (strcmp(want, s_drawn) == 0) return;
+        strcpy(s_drawn, want);
+        MuMsg* msg = *(MuMsg**)(helper + 0x64);
+        if (!msg) return;
+        u32 win = *(u32*)(helper + 0x70);
+        s_beginPrint(msg, win);
+        void* m = msg->m_message;
+        if (s_buf[0]) s_msgPrintf(m, "%s", s_buf);
+        if (*tail) {
+            char fw[40];
+            toFullWidth(tail, fw);
+            s_msgColorTop(m, SUGGESTION_GREY);
+            s_msgColorBottom(m, SUGGESTION_GREY);
+            s_msgPrintf(m, "%s", fw);
+        }
+    }
+
+    // Highlight a key the way the keypad's cursor code does (text+0xBBC): the key's material
+    // frame on the keypad and page models, the selector model, and +0x80 (where UP from OK
+    // goes back to; START sets 0xC there too).
+    static void selectKey(u8* helper, int key)
+    {
+        float f = (float)(key + 1);
+        void* keypad = *(void**)(helper + 0x44);
+        void* page = *(void**)(helper + 0x78);
+        void* selector = *(void**)(helper + 0x5C);
+        if (keypad) s_setFrameMatCol(keypad, f);
+        if (page) s_setFrameMatCol(page, f);
+        if (selector) s_setFrame(selector, f);
+        *(int*)(helper + 0x80) = 0xC;
+        *(int*)(helper + 0x40) = key;
+    }
+
+    // Replace the text the way the keypad does after an edit: last character committed
+    // (+0x7C = 1, no multi-tap pending), cursor (+0x84) and its underline (+0x60) after the text.
+    static void setText(u8* helper, const char* utf8)
+    {
+        strncpy(s_buf, utf8, sizeof(s_buf) - 1);
+        s_buf[sizeof(s_buf) - 1] = 0;
+        *(u8*)(helper + 0x7C) = 1;
+        int max = *(int*)(helper + 8);
+        int cur = utf8Chars(s_buf);
+        if (cur > max - 1) cur = max - 1;
+        if (cur < 0) cur = 0;
+        void* underline = *(void**)(helper + 0x60);
+        if (underline) s_setFrame(underline, (float)(cur + 1));
+        *(int*)(helper + 0x84) = cur;
+        strcpy(s_lastBuf, s_buf);
+        s_drawn[0] = 1;
+        s_drawn[1] = 0;
+    }
+
+    // Z (CheckTriggersAndZ.asm): take the suggestion.
+    static void acceptSuggestion(u8* helper)
+    {
+        const char* tail = suggestionTail();
+        if (!*tail) {
+            playSE(3);
+            return;
+        }
+        playSE(1);
+        char fw[40];
+        toFullWidth(s_sugCode, fw);
+        setText(helper, fw);
+        selectKey(helper, 0xD);
+        PPOM::g_block.debug.scratch[2] += 0x1000000u;
+    }
+
     void open(int port)
     {
         s_port = port;
@@ -169,6 +404,15 @@ namespace CodeEntry {
         s_confirmed = false;
         s_openTries = 30;
         PPOM::g_block.debug.scratch[4] = 1;
+        // Slippi NameEntryThinkOneShot.asm: the first suggestion as the keypad appears.
+        s_sugFound = false;
+        s_sugIndex = 0;
+        s_sugQueued = 0;
+        s_sugIgnore = s_sugSeq;   // an answer for an earlier keypad may still come
+        s_lastBuf[0] = 0;
+        s_drawn[0] = 1;
+        s_drawn[1] = 0;
+        sugRequest(PPOM::SCROLL_RESET);
     }
 
     static void finish()
@@ -184,6 +428,11 @@ namespace CodeEntry {
     {
         s_startPressed = startPressed;
         if (!s_active) return;
+        if (s_sugSeq && ++s_sugWait > 120) {
+            // no answer for 2 s (lost): ask again for the current text
+            s_sugSeq = 0;
+            sugRequest(PPOM::SCROLL_NONE);
+        }
         u8* area = cssArea(s_port);
         if (!area) { finish(); return; }
         u8* hand = *(u8**)(area + 0x1A8);
@@ -226,7 +475,20 @@ namespace CodeEntry {
         u8* ps = (u8*)pad;
         u32* pressed = (u32*)(ps + 0xC);     // gfPadStatus::m_buttonsPressedThisFrame
         u32* pressed2 = (u32*)(ps + 0x14);
-        const u32 A = 0x100;
+        const u32 A = 0x100, Z = 0x10, R = 0x20, L = 0x40;
+        u32 trig = *pressed;
+        if (trig & (L | R | Z)) {
+            // Recent codes: L older, R newer, Z take it (see above). The keypad has no use
+            // for these buttons; take them out of its pad copy all the same.
+            *pressed &= ~(L | R | Z);
+            *pressed2 &= ~(L | R | Z);
+            if (trig & L) {
+                sugRequest(PPOM::SCROLL_OLDER);
+            } else if (trig & R) {
+                sugRequest(PPOM::SCROLL_NEWER);
+            }
+            if (trig & Z) acceptSuggestion(helper);
+        }
         int page = ((u32*)(helper + 0x24))[*(u32*)(helper + 0x3C) & 7];
         int key = *(int*)(helper + 0x40);
         bool empty = s_buf[0] == 0;
@@ -252,6 +514,18 @@ namespace CodeEntry {
             // OK: we take the code; the CSS takes its cancel path (keeps the name tag).
             s_confirmed = true;
             return 1;
+        }
+        if (r == 2) {
+            // Typed, cycled or deleted (B, the erase key, hold B): the keypad has printed its
+            // plain text; ask for the newest code that starts with the new text (Slippi
+            // OnEnterText.asm / OnBPressAutoComplete.asm: scroll reset).
+            if (strcmp(s_buf, s_lastBuf) != 0) {
+                strcpy(s_lastBuf, s_buf);
+                s_drawn[0] = 1;
+                s_drawn[1] = 0;
+                sugRequest(PPOM::SCROLL_RESET);
+            }
+            drawField(helper);
         }
         return r;
     }

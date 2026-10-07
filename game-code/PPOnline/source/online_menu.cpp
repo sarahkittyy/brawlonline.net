@@ -24,6 +24,12 @@ extern "C" {
     int sprintf(char* buf, const char* fmt, ...);
 }
 
+extern "C" {
+    // 1 while the player is locked in on the online CSS (searching, connecting, connected or an
+    // error not yet cleared): the CSS hooks below then ignore A/B on the character.
+    u8 g_onlineCssLock = 0;
+}
+
 namespace OnlineMenu {
 
     enum Phase { PH_IDLE = 0, PH_SEARCHING = 1, PH_CONNECTING = 2, PH_CONNECTED = 3, PH_ERROR = 4 };
@@ -273,7 +279,92 @@ namespace OnlineMenu {
 
     // ----------------------------------------------------------------------------------------
 
-    void install(CoreApi* api) { CodeEntry::install(api); }
+    // ----------------------------------------------------------------------------------------
+    // Lock the character while locked in (Slippi PreventAPressCharUnselect.asm and
+    // PreventBPressCharUnselect.asm: on the online CSS, while MSRB_IS_LOCAL_PLAYER_READY, i.e.
+    // from the lock-in that starts a search until CLEANUP_CONNECTION clears it, A and B on the
+    // character do nothing, nor does a costume change (PreventColorChange.asm); holding B to
+    // leave still works). Brawl's CSS handles one player's
+    // pad in sel_char+0x6FFC (pad = getSysPadStatus copy at sp+0x48):
+    //   +0x726C  r29 = B pressed this frame; +0x74F4.. uses it to take the coin back to the hand
+    //   +0x75B4  hand over the character grid: +0x8500 handles A (drop the held coin on a
+    //            character, or pick up a placed coin)
+    // Holding B to leave is the hand's own counter (sel_char+0x1B794, held B from the sys pad),
+    // which is not touched, and A on LEAVE and the other buttons goes through +0x7A94/+0x883C.
+
+    // +0x726C `rlwinm r29,r0,23,31,31`: B pressed, unless locked. Back to +0x7270.
+    __attribute__((naked)) void cssBPressed()
+    {
+        asm volatile(
+            "rlwinm 29, 0, 23, 31, 31\n\t"
+            "lis 12, g_onlineCssLock@ha\n\t"
+            "lbz 12, g_onlineCssLock@l(12)\n\t"
+            "cmpwi 12, 0\n\t"
+            "beq 1f\n\t"
+            "li 29, 0\n\t"
+            "1:\n\t"
+            "lis 12, 0x8068\n\t"
+            "ori 12, 12, 0x9B34\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t");
+    }
+
+    // +0x7280 `cmpwi r27,0`: r27/r3 are the two costume buttons (X/Y on the GameCube pad,
+    // sel_char+0x19508/+0x19604); +0x7290..+0x74F0 changes the costume. Slippi blocks that too
+    // while locked in (PreventColorChange.asm): go straight to the B part at +0x74F4.
+    __attribute__((naked)) void cssCostume()
+    {
+        asm volatile(
+            "lis 12, g_onlineCssLock@ha\n\t"
+            "lbz 12, g_onlineCssLock@l(12)\n\t"
+            "cmpwi 12, 0\n\t"
+            "bne 1f\n\t"
+            "cmpwi 27, 0\n\t"
+            "lis 12, 0x8068\n\t"
+            "ori 12, 12, 0x9B48\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t"
+            "1:\n\t"
+            "lis 12, 0x8068\n\t"
+            "ori 12, 12, 0x9DB8\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t");
+    }
+
+    // +0x75B4 `mr r3,r24`, the start of `coinAPress(task, port, pad)`'s call: skip the call
+    // (to +0x75E8, the function's exit) when locked, else carry on at +0x75B8.
+    __attribute__((naked)) void cssCoinAPress()
+    {
+        asm volatile(
+            "lis 12, g_onlineCssLock@ha\n\t"
+            "lbz 12, g_onlineCssLock@l(12)\n\t"
+            "cmpwi 12, 0\n\t"
+            "bne 1f\n\t"
+            "mr 3, 24\n\t"
+            "lis 12, 0x8068\n\t"
+            "ori 12, 12, 0x9E7C\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t"
+            "1:\n\t"
+            "lis 12, 0x8068\n\t"
+            "ori 12, 12, 0x9EAC\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t");
+    }
+
+    static bool lockedIn()
+    {
+        return s.phase == PH_SEARCHING || s.phase == PH_CONNECTING || s.phase == PH_CONNECTED ||
+               s.phase == PH_ERROR;
+    }
+
+    void install(CoreApi* api)
+    {
+        CodeEntry::install(api);
+        api->sySimpleHookRel(0x726C, reinterpret_cast<void*>(cssBPressed), 10 /* sora_menu_sel_char */);
+        api->sySimpleHookRel(0x7280, reinterpret_cast<void*>(cssCostume), 10);
+        api->sySimpleHookRel(0x75B4, reinterpret_cast<void*>(cssCoinAPress), 10);
+    }
 
     void enter(int mode)
     {
@@ -320,6 +411,8 @@ namespace OnlineMenu {
         s.pollFrames = 0;
         s.phase = PH_SEARCHING;
     }
+
+    int currentMode() { return s.mode; }
 
     void codeEntered(const char* code)
     {
@@ -375,6 +468,11 @@ namespace OnlineMenu {
     {
         const PPOM::Response* r = PPOM::pollResponse();
         if (!r) return;
+        // Responses to different commands share the one slot: route them by command.
+        if (r->cmd == PPOM::CMD_FETCH_CODE_SUGGESTION) {
+            CodeEntry::onSuggestion(*r);
+            return;
+        }
         if (r->cmd == PPOM::CMD_GET_MATCH_STATE) {
             // The answer to FIND_OPPONENT or to one of the polls that follow it.
             if (s.mode >= 0 && s.searchSeq && r->seq >= s.searchSeq) {
@@ -415,7 +513,11 @@ namespace OnlineMenu {
         pollMatchState();
 
         bool onCss = g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0;
-        if (!onCss) return;
+        g_onlineCssLock = (onCss && lockedIn()) ? 1 : 0;
+        if (!onCss) {
+            PPOM::g_block.debug.scratch[1] = 0;
+            return;
+        }
 
         hideHeaderArt();
         u32 b = padButtons(0x8);
@@ -456,6 +558,8 @@ namespace OnlineMenu {
                 }
             }
         }
+        g_onlineCssLock = lockedIn() ? 1 : 0;
+        PPOM::g_block.debug.scratch[1] = (u32)g_onlineCssLock | ((u32)s.phase << 4);   // harness/tests
         updateStatus();
         if (s.statusDirty && s.cssMsg) {
             printCssStatus();
