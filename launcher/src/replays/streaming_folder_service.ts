@@ -1,6 +1,7 @@
 import * as fs from "fs";
 import path from "path";
 
+import { isReplayFileName } from "./replay_format";
 import type { FolderResult } from "./types";
 
 export interface FolderScanProgress {
@@ -102,7 +103,7 @@ export async function listSubFoldersAsync(folder: string): Promise<FolderResult[
 }
 
 /**
- * Streams .slp files from a folder for database sync.
+ * Streams replay files (see replay_format.ts) from a folder for database sync.
  * Uses async iteration to avoid blocking when scanning large directories.
  *
  * @param folder - The folder path to scan for .slp files
@@ -119,7 +120,7 @@ export async function* streamSlpFiles(folder: string, chunkSize = 200): AsyncGen
     for await (const dirent of dir) {
       scanned++;
 
-      if (dirent.isFile() && path.extname(dirent.name) === ".slp") {
+      if (dirent.isFile() && isReplayFileName(dirent.name)) {
         slpFiles.push(dirent.name);
       }
 

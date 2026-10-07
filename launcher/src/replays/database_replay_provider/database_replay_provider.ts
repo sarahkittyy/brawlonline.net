@@ -7,15 +7,14 @@ import type { Database, FileRecord, GameRecord, NewFile, NewGame, NewPlayer, Pla
 import { boolToInt, boolToIntOrNull } from "@database/utils";
 import type { FileResult, Progress, ReplayProvider } from "@replays/types";
 import type { StadiumStatsType, StatsType } from "@slippi/slippi-js/node";
-import { SlippiGame } from "@slippi/slippi-js/node";
 import { shell } from "electron";
 import log from "electron-log";
 import { pathExists } from "fs-extra";
 import type { Kysely, Transaction } from "kysely";
-import { stat } from "node:fs/promises";
 import path from "path";
 
 import { extractPlayerNames } from "../extract_player_names";
+import { readReplayFileInfo } from "../replay_format";
 import type { ParsedFileInfo } from "../replay_indexing_pool/replay_indexing.worker.interface";
 import type { ReplayIndexingPoolManager } from "../replay_indexing_pool/replay_indexing_pool_manager";
 import { Continuation } from "./continuation";
@@ -213,23 +212,13 @@ export class DatabaseReplayProvider implements ReplayProvider {
     return mapGameRecordToFileResult(gameAndFileRecord, playerRecords);
   }
 
-  async calculateGameStats(fullPath: string): Promise<StatsType | undefined> {
-    const game = new SlippiGame(fullPath);
-    const settings = game.getSettings();
-    if (!settings || settings.players.length === 0) {
-      throw new Error("Game settings could not be properly loaded.");
-    }
-
-    if (settings.players.length !== 2) {
-      throw new Error("Stats can only be calculated for 1v1s.");
-    }
-
-    return game.getStats();
+  async calculateGameStats(_fullPath: string): Promise<StatsType | undefined> {
+    // Slippi computes stats from .slp files with slippi-js; our replay format has no parser yet.
+    throw new Error("Stats are not available for this replay format yet.");
   }
 
-  async calculateStadiumStats(fullPath: string): Promise<StadiumStatsType | undefined> {
-    const game = new SlippiGame(fullPath);
-    return game.getStadiumStats();
+  async calculateStadiumStats(_fullPath: string): Promise<StadiumStatsType | undefined> {
+    return undefined;
   }
 
   async deleteReplays(fileIds: string[]): Promise<void> {
@@ -608,27 +597,7 @@ export class DatabaseReplayProvider implements ReplayProvider {
       return result.data!;
     } else {
       // Fallback to main thread parsing
-      const fullPath = path.resolve(folder, filename);
-      const game = new SlippiGame(fullPath);
-
-      let sizeBytes = 0;
-      let birthTime: string | undefined = undefined;
-      try {
-        const fileInfo = await stat(fullPath);
-        sizeBytes = fileInfo.size;
-        birthTime = fileInfo.birthtime.toISOString();
-      } catch (err) {
-        log.warn(`Error running stat for file ${fullPath}: `, err);
-      }
-
-      return {
-        filename,
-        sizeBytes,
-        birthTime,
-        settings: game.getSettings(),
-        metadata: game.getMetadata(),
-        winnerIndices: game.getWinners().map((winner) => winner.playerIndex),
-      };
+      return await readReplayFileInfo(folder, filename);
     }
   }
 
@@ -695,7 +664,22 @@ function generateNewGame(file: FileRecord, parsedInfo: ParsedFileInfo): NewGame 
   // Load settings
   const settings = parsedInfo.settings;
   if (!settings || settings.players.length === 0) {
-    return null;
+    // Our replay format has no parser yet (replay_format.ts): list the file with
+    // only its date, so the browser shows it instead of skipping it.
+    return {
+      file_id: file._id,
+      is_ranked: boolToInt(false),
+      is_teams: boolToInt(false),
+      stage: null,
+      start_time: inferStartTime(null, file.name, file.birth_time),
+      platform: null,
+      console_nickname: null,
+      mode: null,
+      last_frame: null,
+      timer_type: null,
+      starting_timer_secs: null,
+      session_id: null,
+    };
   }
   const metadata = parsedInfo.metadata;
 
