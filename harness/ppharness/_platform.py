@@ -153,16 +153,38 @@ _job_lock = threading.Lock()
 _job_handle: Any = None
 
 
-def popen_kwargs() -> dict[str, Any]:
-    """Extra subprocess.Popen kwargs: own process group, no console window."""
+def _low_priority() -> bool:
+    # Dolphins saturating every core starved the harness sockets, the test Postgres and the
+    # user's desktop ("localhost outages"). Below-normal keeps Dolphins fair among themselves
+    # while everything else stays responsive. PPHARNESS_DOLPHIN_PRIORITY=normal opts out.
+    return os.environ.get("PPHARNESS_DOLPHIN_PRIORITY", "low").lower() != "normal"
+
+
+def popen_kwargs(dolphin: bool = False) -> dict[str, Any]:
+    """Extra subprocess.Popen kwargs: own process group, no console window.
+
+    ``dolphin=True`` also lowers the priority (see ``_low_priority``); servers keep theirs.
+    """
+    low = dolphin and _low_priority()
     if IS_WINDOWS:
         flags = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.CREATE_NO_WINDOW
+        if low:
+            flags |= subprocess.BELOW_NORMAL_PRIORITY_CLASS
         return {"creationflags": flags}
     kw: dict[str, Any] = {"start_new_session": True}
-    if IS_LINUX and threading.current_thread() is threading.main_thread():
+    main = threading.current_thread() is threading.main_thread()
+    if (IS_LINUX and main) or low:
         # PDEATHSIG fires when the *thread* that forked exits, so only use it from main.
-        kw["preexec_fn"] = _linux_set_pdeathsig
+        kw["preexec_fn"] = lambda: _posix_child_setup(IS_LINUX and main, low)
     return kw
+
+
+def _posix_child_setup(pdeathsig: bool, low_priority: bool) -> None:
+    if pdeathsig:
+        _linux_set_pdeathsig()
+    if low_priority:
+        with contextlib.suppress(OSError):
+            os.nice(5)
 
 
 def _linux_set_pdeathsig() -> None:

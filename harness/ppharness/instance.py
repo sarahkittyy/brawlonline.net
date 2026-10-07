@@ -451,7 +451,7 @@ class DolphinInstance:
         env.update(self.env)
         self._stdout_f = open(self.stdout_path, "wb")
         self._stderr_f = open(self.stderr_path, "wb")
-        kw = _platform.popen_kwargs()
+        kw = _platform.popen_kwargs(dolphin=True)
         if self.detach and _platform.IS_WINDOWS:
             kw["creationflags"] |= 0x01000000  # CREATE_BREAKAWAY_FROM_JOB
         log.info("launching %s", " ".join(self.args))
@@ -692,7 +692,7 @@ def probe_harness_support(exe: str | os.PathLike[str] | None = None,
         with open(out_path, "wb") as out:
             proc = subprocess.Popen(cmd, stdout=out, stderr=subprocess.STDOUT,
                                     stdin=subprocess.DEVNULL, cwd=str(user),
-                                    **_platform.popen_kwargs())
+                                    **_platform.popen_kwargs(dolphin=True))
             _platform.bind_to_parent(proc)
             try:
                 c = HarnessClient.connect_with_retry(port, total_timeout=timeout,
