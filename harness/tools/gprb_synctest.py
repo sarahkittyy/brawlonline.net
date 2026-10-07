@@ -220,7 +220,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scenario", default="ps2-peach-gw", help=f"comma list or 'all' ({', '.join(SCENARIOS)})")
     ap.add_argument("--distance", type=int, default=2)
-    ap.add_argument("--region-set", default="gp-v12")
+    ap.add_argument("--region-set", default="gp-v19")
     ap.add_argument("--frames", type=int, default=30000)
     ap.add_argument("--start-frame", type=int, default=240)
     ap.add_argument("--cpu", default="sc", choices=("sc", "dc"))

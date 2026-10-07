@@ -323,6 +323,8 @@ def run_session(preset: str, cpu: str, args: argparse.Namespace, run: int) -> Di
     def mk(name, **kw):
         if "join" in name and rtc_b:
             kw["rtc"] = rtc_b
+        if "host" in name and args.rtc_a:
+            kw["rtc"] = args.rtc_a
         return orig(name, **kw)
     G.make_instance = mk
     if args.pass_log:
@@ -404,9 +406,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--p2", default="falco")
     ap.add_argument("--stage", default="battlefield")
     ap.add_argument("--delay", type=int, default=2)
-    ap.add_argument("--region-set", default="gp-v12")
+    ap.add_argument("--region-set", default="gp-v19")
     ap.add_argument("--start-frame", type=int, default=240)
     ap.add_argument("--frames", type=int, default=30000)
+    ap.add_argument("--rtc-a", type=lambda x: int(x, 0), default=0, help="A's custom RTC (0: the fixed default)")
     ap.add_argument("--rtc-b", type=lambda x: int(x, 0), default=0x69C9A3D0, help="B's custom RTC (A: the default)")
     ap.add_argument("--timeout", type=float, default=1200)
     ap.add_argument("--resim-sounds", choices=("play", "suppress", "dedupe"), default="dedupe",

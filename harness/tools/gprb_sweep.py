@@ -1,8 +1,8 @@
 """Coverage sweep of gameplay-only rollback: every P+ v3.2 character, the legal stages, items,
 Final Smashes, and two-instance sessions (docs/gprb-coverage.md).
 
-Build: ``run/bin/gprb-b79fe057cf`` (``--build``; ``PPHARNESS_DOLPHIN_DIR`` wins if set), region
-set gp-v12 (``--region-set``).
+Build: ``run/bin/gprb-e642b3ce98`` (``--build``; ``PPHARNESS_DOLPHIN_DIR`` wins if set), region
+set gp-v19 (``--region-set``).
 
 Runs (``plan()``), each written to ``<out>/runs/<id>.json`` when it finishes, so the sweep is
 resumable (finished runs are skipped unless ``--rerun``; ``--retry-errors`` repeats harness errors):
@@ -20,7 +20,9 @@ resumable (finished runs are skipped unless ``--rerun``; ``--retry-errors`` repe
   - ``mirror``: each character against itself, Battlefield, items off;
   - ``stage``: Fox vs Falco on each stage of P+'s legal list, items off;
   - ``items``: all items at the highest frequency;
-  - ``fs``: Smash Ball only at the highest frequency (Final Smashes, FS transformations).
+  - ``fs``: Smash Ball only at the highest frequency (Final Smashes, FS transformations);
+  - ``ffs``: Smash Ball only, and both ports get their Final Smash at the last countdown frame
+    (``PPR_GPRB_FORCE_FINAL=3``, also in the ground truth), so it runs at their first neutral B.
 - ``session`` (two instances, ``gprb_connect`` through a netsim preset, single and dual core):
   independent menu paths, each side plays its own port, then the confirmed checksums and the
   per-frame traces are compared.
@@ -74,7 +76,7 @@ from ppharness.client import HarnessClient, HarnessError  # noqa: E402
 from ppharness.netsim import NetSim  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_BUILD = ROOT / "run" / "bin" / "gprb-b79fe057cf"   # frozen dolphin-gprb b79fe057cf (gp-v12)
+DEFAULT_BUILD = ROOT / "run" / "bin" / "gprb-e642b3ce98"   # frozen dolphin-gprb e642b3ce98 (gp-v19)
 PREFIX = "sweep"                 # instance dir prefix: `python -m ppharness clean --prefix sweep`
 MAIN_THREAD = 0x804DD558         # the main OSThread (gprb_synctest's stall report)
 
@@ -109,6 +111,15 @@ FS_RUNS = [("samus", "zero_suit_samus", "battlefield"), ("wario", "bowser", "fin
            ("zelda", "sheik", "battlefield"), ("charizard_solo", "squirtle_solo", "smashville"),
            ("ivysaur_solo", "pikachu", "battlefield"), ("ice_climbers", "peach", "final_destination"),
            ("olimar", "lucario", "battlefield")]
+# Forced Final Smashes (``ffs``): both ports get their Final Smash at the last countdown frame
+# (PPR_GPRB_FORCE_FINAL=3: ftManager::setFinal, as a broken Smash Ball does), in the sync test and in
+# its ground-truth replay; the random fighters use it at their first neutral B. One pair per kind:
+# transformations, a beam and a suit, a cutscene and a beam, cutscenes, projectiles, a transformation
+# and a cutscene, arrows.
+FFS_RUNS = [("wario", "bowser", "final_destination"), ("samus", "zero_suit_samus", "battlefield"),
+            ("olimar", "lucario", "battlefield"), ("marth", "ike", "battlefield"),
+            ("mario", "pikachu", "final_destination"), ("captain_falcon", "ganondorf", "battlefield"),
+            ("zelda", "sheik", "battlefield")]
 SESSION_RUNS = [("fox", "falco", "battlefield"), ("mario", "marth", "final_destination"),
                 ("peach", "game_and_watch", "pokemon_stadium_2"), ("ice_climbers", "olimar", "smashville"),
                 ("zelda", "sheik", "battlefield"), ("squirtle_solo", "charizard_solo", "dream_land"),
@@ -120,7 +131,7 @@ SESSION_RUNS = [("fox", "falco", "battlefield"), ("mario", "marth", "final_desti
 
 # Lines in dolphin.log worth reporting: the game's own OSReport text (Japanese assertion
 # messages, exception reports), emulator exceptions, gprb warnings.
-NOTABLE = re.compile(r"存在しない|Article|changeMotion|Exception|exception|DSI|ISI|Invalid (read|write)|"
+NOTABLE = re.compile(r"存在しない|Article|changeMotion|force final|fighter change|Exception|exception|DSI|ISI|Invalid (read|write)|"
                      r"Unknown instruction|[Pp]anic|assert|ASSERT|gprb synctest: checksum|gprb: desync|"
                      r"stall|crash|HALT|Unhandled|PROGRAM|\bSRR0\b|OSPanic|Fatal|fatal")
 NOISE = re.compile(r"frame_trace|rollback_timings|log_mark")
@@ -130,9 +141,10 @@ def plan(args: argparse.Namespace) -> List[Dict[str, Any]]:
     d, m = args.distance, args.minutes
     runs: List[Dict[str, Any]] = []
 
-    def sync(rid, group, p1, p2, stage="battlefield", items="off", distance=d, cpu="sc", minutes=m):
+    def sync(rid, group, p1, p2, stage="battlefield", items="off", distance=d, cpu="sc", minutes=m,
+             force_final=False):
         runs.append(dict(id=rid, kind="sync", group=group, p1=p1, p2=p2, stage=stage, items=items,
-                         distance=distance, cpu=cpu, minutes=minutes, weight=1))
+                         distance=distance, cpu=cpu, minutes=minutes, weight=1, force_final=force_final))
     for ch in CHARACTERS:
         if ch != "fox":
             sync(f"v-{ch}", "vsfox", ch, "fox")
@@ -145,6 +157,8 @@ def plan(args: argparse.Namespace) -> List[Dict[str, Any]]:
         sync(f"i-{p1}-{p2}", "items", p1, p2, st, items="all")
     for p1, p2, st in FS_RUNS:
         sync(f"f-{p1}-{p2}", "fs", p1, p2, st, items="smashball")
+    for p1, p2, st in FFS_RUNS:
+        sync(f"ff-{p1}-{p2}", "ffs", p1, p2, st, items="smashball", force_final=True)
     for cpu in ("sc", "dc"):
         for p1, p2, st in SESSION_RUNS:
             runs.append(dict(id=f"n-{cpu}-{p1}-{p2}", kind="session", group=f"session-{cpu}", p1=p1, p2=p2,
@@ -439,6 +453,11 @@ def extra_flags(args: argparse.Namespace) -> str:
     return f
 
 
+def force_final_env(run: Dict[str, Any]) -> Dict[str, str]:
+    """``ffs`` runs: both ports get their Final Smash before rollback starts (and in the ground truth)."""
+    return {"PPR_GPRB_FORCE_FINAL": "3"} if run.get("force_final") else {}
+
+
 def run_sync(run: Dict[str, Any], args: argparse.Namespace, out: Path) -> Dict[str, Any]:
     rep: Dict[str, Any] = dict(run)
     rep["started"] = time.strftime("%Y-%m-%d %H:%M:%S")
@@ -454,6 +473,7 @@ def run_sync(run: Dict[str, Any], args: argparse.Namespace, out: Path) -> Dict[s
     work.mkdir(parents=True, exist_ok=True)
     tag = (work / run["id"]).resolve()
     env = {} if args.no_ground_truth else {"PPR_GPRB_PASS_LOG": str(tag)}
+    env.update(force_final_env(run))
     with instance(f"{PREFIX}-{run['id']}", run["cpu"], args.video, unthrottled=not args.throttled, env=env) as inst:
         failed = True
         # Last resort: a driver call that never returns. Killing Dolphin makes every call fail.
@@ -565,7 +585,8 @@ def ground_truth(run: Dict[str, Any], args: argparse.Namespace, out: Path, tag: 
     gtrace: List[Any] = []
     s: Dict[str, Any] = {}
     t0 = time.monotonic()
-    with instance(f"{PREFIX}-{run['id']}-gt", run["cpu"], "Null", unthrottled=True) as inst:
+    with instance(f"{PREFIX}-{run['id']}-gt", run["cpu"], "Null", unthrottled=True,
+                  env=force_final_env(run)) as inst:
         try:
             c = inst.client
             G.load_fixture(c, sav)
@@ -1146,10 +1167,11 @@ def cmd_report(args: argparse.Namespace) -> int:
             print(f"| {st} | 0x{k:02X} | {cell('s-' + st)}{extra} |")
     print(f"\n| Items run | items | result{cmp_hdr.replace('vs Fox, ', '')} | forms seen |\n|---|---|---{'|---' if cmp_ else ''}|---|")
     for rid, r in res.items():
-        if r.get("group") in ("items", "fs"):
+        if r.get("group") in ("items", "fs", "ffs"):
             forms = sorted({f for src in (res, cmp_) for v in ((src.get(rid) or {}).get("forms") or {}).values() for f in v})
             extra = f" | {cell(rid, cmp_)}" if cmp_ else ""
-            print(f"| {r['p1']} vs {r['p2']}, {r['stage']} | {r['items']} | {cell(rid)}{extra} | {', '.join(forms)} |")
+            items = r["items"] + (", Final Smash forced" if r.get("force_final") else "")
+            print(f"| {r['p1']} vs {r['p2']}, {r['stage']} | {items} | {cell(rid)}{extra} | {', '.join(forms)} |")
     print("\n| Session | stage | single core | dual core |\n|---|---|---|---|")
     for p1, p2, st in SESSION_RUNS:
         print(f"| {p1} vs {p2} | {st} | {cell(f'n-sc-{p1}-{p2}')} | {cell(f'n-dc-{p1}-{p2}')} |")
@@ -1170,14 +1192,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("command", choices=("run", "list", "report"))
     ap.add_argument("--out", default="run/qa/sweep")
     ap.add_argument("--only", default=None, help="regex on run ids")
-    ap.add_argument("--groups", default=None, help="comma list: vsfox,mirror,stage,items,fs,session-sc,session-dc,sync,session")
+    ap.add_argument("--groups", default=None, help="comma list: vsfox,mirror,stage,items,fs,ffs,session-sc,session-dc,sync,session")
     ap.add_argument("--rerun", action="store_true", help="run again even if a result exists")
     ap.add_argument("--retry-errors", action="store_true", help="run again runs whose result is 'error'")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--jobs", type=int, default=3, help="Dolphin instances at a time (a session uses 2)")
     ap.add_argument("--distance", type=int, default=7, help="sync test: restore the state this many frames back")
     ap.add_argument("--minutes", type=int, default=2, help="time limit of every match (4 stocks)")
-    ap.add_argument("--region-set", default="gp-v12")
+    ap.add_argument("--region-set", default="gp-v19")
     ap.add_argument("--build", default=str(DEFAULT_BUILD),
                     help="Dolphin binaries dir (PPHARNESS_DOLPHIN_DIR wins if set)")
     ap.add_argument("--no-ground-truth", action="store_true",

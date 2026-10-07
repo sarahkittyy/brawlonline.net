@@ -318,7 +318,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--cpu", default="dc", choices=("sc", "dc"))
     p.add_argument("--modes", default="ref,mp")
     p.add_argument("--distance", type=int, default=2)
-    p.add_argument("--region-set", default="gp-v12")
+    p.add_argument("--region-set", default="gp-v19")
     p.add_argument("--start-frame", type=int, default=240)
     p.add_argument("--mispredict-ports", type=int, default=3)
     p.add_argument("--offset", type=int, default=-7)
