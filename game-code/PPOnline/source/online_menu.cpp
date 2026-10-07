@@ -67,6 +67,8 @@ namespace OnlineMenu {
         // while connected, START locks in with these unless another character is picked.
         int lastCss;
         int lastCostume;
+        // The name tag on the player's panel when the CSS was left (save tag index, -1 none).
+        int lastTag;
     };
     static State s;
 
@@ -195,6 +197,45 @@ namespace OnlineMenu {
         return s.phase == PH_CONNECTED ? s.lastCss : -1;
     }
 
+    // ----------------------------------------------------------------------------------------
+    // Name tags and their controls (the design's port values, 5.1). The player picks a tag on the
+    // CSS's own name button (muSelCharPlayerArea+0x1C8: the save's tag index, -1 none); its
+    // controls go with the lock-in, and the match applies them to this player's port on both
+    // machines (online_match.cpp).
+
+    static const int TAG_SLOTS = 120;     // the save's tag records (0x78 = "no tag")
+    static const u32 TAG_SIZE = 0x124;
+
+    static u8* tagRecord(int index)
+    {
+        if (index < 0 || index >= TAG_SLOTS) return NULL;
+        u32 gg = *(u32*)0x805A00E0;    // g_GameGlobal
+        if (!isPtr(gg)) return NULL;
+        u32 rec = *(u32*)(gg + 0x28);  // the save's name records
+        if (!isPtr(rec)) return NULL;
+        u8* t = (u8*)(rec + 0xE0 + index * TAG_SIZE);
+        return *(u16*)t ? t : NULL;    // an empty name is an unused slot
+    }
+
+    static int selectedTag()
+    {
+        u8* area = playerArea();
+        if (!area) return -1;
+        int t = *(int*)(area + 0x1C8);
+        return tagRecord(t) ? t : -1;
+    }
+
+    static void portValuesOf(int tag, PPOM::PortValues* pv)
+    {
+        memset(pv, 0, sizeof(*pv));
+        u8* t = tagRecord(tag);
+        if (!t) return;
+        pv->flags = PPOM::PV_TAG;
+        pv->rumble = t[0x0C];
+        for (int i = 0; i < PPOM::TAG_CHARS; i++) pv->tag[i] = ((u16*)t)[i];
+        memcpy(pv->layout, t + 0x14, PPOM::LAYOUT_SIZE);
+    }
+
     // Slippi's lock-in (MSRB_IS_LOCAL_PLAYER_READY + SET_MATCH_SELECTIONS) into LOCAL.
     static void lockIn(int game, u16 stagePick, u8 asl)
     {
@@ -202,16 +243,53 @@ namespace OnlineMenu {
         int css = resolveCss(lockChar());
         if (css < 0) return;
         int costume = picked >= 0 ? selectedCostume() : s.lastCostume;
-        PPOM::writeLockIn(true, (u8)css, charKindOf(css), (u8)costume, stagePick, asl, (u8)game);
+        int tag = picked >= 0 ? selectedTag() : s.lastTag;
+        PPOM::PortValues pv;
+        portValuesOf(tag, &pv);
+        PPOM::writeLockIn(true, (u8)css, charKindOf(css), (u8)costume, stagePick, asl, (u8)game, &pv);
         s.lockedGame = game;
         s.lastCss = picked >= 0 ? picked : s.lastCss;
         s.lastCostume = costume;
+        s.lastTag = tag;
     }
     static void unlock()
     {
-        PPOM::writeLockIn(false, 0xFF, 0xFF, 0, 0xFFFF, 0, 0);
+        PPOM::writeLockIn(false, 0xFF, 0xFF, 0, 0xFFFF, 0, 0, NULL);
         s.lockedGame = 0;
         OnlineMatch::clearPickedStage();
+    }
+
+    // The CSS remembers the placed character (Slippi: after a match or the stage select the
+    // character is still selected, coin and costume included). Brawl's Wi-Fi CSS writes no
+    // selection into gmSelCharData when it leaves, and it rebuilds the player's panel from
+    // gmSelCharData when it starts: the character from its per-port byte (+0x0A + 4 * port), the
+    // costume, state and name tag from the player's record (+0xB8: +0x01 state, +0x05 colour,
+    // +0x18 tag). So the coin is noted here when the CSS is left, and written back before the CSS
+    // starts again (OnlineMatch's way back to the CSS).
+    static void rememberCss()
+    {
+        int c = selectedChar();
+        if (c < 0) return;   // coin in the hand: keep the last lock-in's
+        s.lastCss = c;
+        s.lastCostume = selectedCostume();
+        s.lastTag = selectedTag();
+    }
+
+    void restoreCss()
+    {
+        if (s.mode < 0 || s.lastCss < 0) return;
+        u32 gg = *(u32*)0x805A00E0;
+        if (!isPtr(gg)) return;
+        u32 selp = *(u32*)(gg + 0x10);   // gmSelCharData
+        if (!isPtr(selp)) return;
+        u8* sel = (u8*)selp;
+        u8* rec = sel + 0xB8 + LOCAL_PORT * 0x5C;
+        sel[0x0A + 4 * LOCAL_PORT] = (u8)s.lastCss;
+        if (s.lastCss != 0x29) rec[0x00] = charKindOf(s.lastCss);
+        rec[0x01] = 0;                                   // human
+        rec[0x05] = (u8)s.lastCostume;                   // colour
+        rec[0x18] = tagRecord(s.lastTag) ? (u8)s.lastTag : 0x78;
+        PPOM::g_block.debug.scratch[12] = 0x10000 | ((u32)s.lastCss << 8) | (u8)s.lastCostume;
     }
 
     // Leave the CSS scene with an exit code (the scene manager's own mechanism, as every scene
@@ -219,6 +297,7 @@ namespace OnlineMenu {
     // online_match.cpp takes over.
     static void leaveCss(int code)
     {
+        rememberCss();
         u32 mgr = *(u32*)0x805A0060;
         if (!isPtr(mgr)) return;
         *(int*)(mgr + 0x284) = code;
@@ -504,13 +583,19 @@ namespace OnlineMenu {
         unlock();
         s.lastCss = -1;
         s.lastCostume = 0;
+        s.lastTag = -1;
         g_onlineMatchGame = 0;
         g_onlinePickStage = 0;
         g_onlineCss = 1;
         // Leaving the CSS goes back to the page the mode was picked on (netmenu.cpp
         // exitToOnlinePage): Direct to the ONLINE page, Unranked/Teams to WITH ANYONE.
-        g_onlineReturnPage = (mode == PPOM::MODE_DIRECT) ? 0x1F : 0;
-        g_onlineFriendsCursor = (mode == PPOM::MODE_DIRECT) ? 1 : 0;
+        // Direct (BASIC VERSUS) goes back to WITH FRIENDS' page (sqMenuMain entry 0x1C reopens
+        // muProcWifiAnybody with BASIC VERSUS highlighted; Teams' sqNetAnyTeamMelee returns
+        // with 0x1D, TEAM BATTLE highlighted), and from there B lands on WITH FRIENDS; Unranked
+        // and Ranked go back to the ONLINE page (0x1F) with WITH ANYONE highlighted.
+        bool friends = mode == PPOM::MODE_DIRECT || mode == PPOM::MODE_TEAMS;
+        g_onlineReturnPage = friends ? 0 : 0x1F;
+        g_onlineFriendsCursor = friends ? 1 : 0;
         PPOM::g_block.debug.menuState = (u32)(mode + 1);
     }
 
@@ -664,6 +749,7 @@ namespace OnlineMenu {
 
     void tick()
     {
+        AnyoneMenu::tick();
         const char* scene = Online::currentSceneName();
         // In a match: nothing that differs between the machines may change the game while the
         // match runs under rollback, so no mailbox here (OnlineMatch::tickMatch only reacts to
@@ -781,16 +867,17 @@ namespace Text {
     };
 
     // Slippi's own descriptions (SdMenu.usd patch, OnMenuPrep.asm:511-520): "Online Play"
-    // 0x644, Unranked 0x646, Direct 0x647, Teams 0x64B. Brawl groups Unranked and Teams under
-    // WITH ANYONE, which gets Slippi's group description.
+    // 0x644, Ranked 0x645, Unranked 0x646, Direct 0x647, Teams 0x64B. Brawl groups the modes in
+    // two pages: WITH FRIENDS = the code-based ones (Direct, Teams), WITH ANYONE = matchmaking
+    // (Unranked, Ranked: anyone_menu.cpp, which prints those two pages' lines).
     static const Relabel RELABELS[] = {
         // main menu PLAY ONLINE = Slippi's 1P-menu "Online Play"
         {"muMenuMain", "Play different modes online", "Compete against online opponents."},
         // ONLINE page (button art stays WITH FRIENDS / WITH ANYONE)
         {"muMenuMain", "registered as Friends", "Play a specific person."},
         {"muMenuMain", "Play against random people", "Compete against online opponents."},
-        // WITH ANYONE page (button art stays BASIC VERSUS / TEAM BATTLE)
-        {"muMenuMain", "quick fight with someone", "Play unranked matches."},
+        // WITH FRIENDS page (Brawl's WITH ANYONE page; button art stays BASIC VERSUS / TEAM BATTLE)
+        {"muMenuMain", "quick fight with someone", "Play a specific person."},
         {"muMenuMain", "Form a team with someone", "Play teams games."},
     };
 
@@ -798,6 +885,8 @@ namespace Text {
     {
         const char* css = OnlineMenu::cssLine(msg, window, line, msbin, caller);
         if (css) return css;
+        const char* anyone = AnyoneMenu::line(msg, window, line, msbin);
+        if (anyone) return anyone;
         const char* scene = Online::currentSceneName();
         for (u32 i = 0; i < sizeof(RELABELS) / sizeof(RELABELS[0]); i++) {
             const Relabel& r = RELABELS[i];

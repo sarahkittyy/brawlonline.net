@@ -14,6 +14,7 @@
 #include "online_menu.h"
 #include "netmenu.h"
 #include "ppom.h"
+#include "stage_legal.h"
 
 namespace Online {
 
@@ -104,6 +105,7 @@ namespace Online {
         s_origPadUpdate(padSystem);
         PPOM::g_block.debug.frames++;
         OnlineMenu::tick();
+        StageLegal::tick();
     }
 
     // MuMsg::beginPrint: log MuMsg::printf calls (line = -2, data = printf's caller).
@@ -134,6 +136,8 @@ namespace Online {
         api->syReplaceFunc(0x800B8930, reinterpret_cast<void*>(hkMsgCreate), (void**)&s_origMsgCreate);
         NetMenu::install(api);
         OnlineMenu::install(api);
+        StageLegal::install(api);
+        AnyoneMenu::install(api);
     }
 }
 

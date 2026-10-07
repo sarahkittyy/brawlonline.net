@@ -32,7 +32,7 @@
 namespace PPOM {
 
     const u32 MAGIC = 0x50504F4D; // "PPOM"
-    const u16 VERSION = 2;
+    const u16 VERSION = 3;
 
     // Slippi command bytes (EXI_DeviceSlippi.h), kept for familiarity (design 5.3).
     enum Cmd {
@@ -145,6 +145,26 @@ namespace PPOM {
         Response resp;
     };
 
+    // ---- Port values (design 5.1, "port values"; Orca's NameTags.h) ----
+
+    // A player's name tag and its controls, as P+ keeps them in the save's tag records
+    // (g_GameGlobal+0x28 -> records, tag i at +0xE0 + i * 0x124: name u16[5] at +0x00, rumble at
+    // +0x0C, the controls layout at +0x14..+0x40: GameCube 12 bytes (L, R, Z, D-pad up, side, down,
+    // A, B, C-stick, Y, X, then flags: tap jump 0x80), Wii Remote 8, with Nunchuk 12, Classic 13).
+    // Each player's own values travel with their lock-in; the match applies each port's layout on
+    // both machines (online_match.cpp, the ipPadConfig hook), so everyone keeps their own buttons.
+    const int TAG_CHARS = 5;
+    const int LAYOUT_SIZE = 0x2D;
+    enum PortValueFlags { PV_TAG = 1 };   // the values are a tag's (else: the game's defaults)
+
+    struct PortValues {
+        u8 flags;         // PortValueFlags
+        u8 rumble;        // the tag's rumble byte (local only; not applied online)
+        u16 tag[TAG_CHARS];          // the tag's name (UTF-16, as the save keeps it)
+        u8 layout[LAYOUT_SIZE];      // the tag's controls layout
+        u8 _pad[3];
+    };                    // 0x3C
+
     // ---- LOCAL ----
 
     // The player's lock-in on the online CSS (game -> Dolphin). Slippi's
@@ -171,7 +191,11 @@ namespace PPOM {
         u16 peerName[NAME_LEN];
         LockIn lockIn;    // written by the game
         u32 _reserved[3];
-    };                    // 0x40
+        PortValues own;   // written by the game with the lock-in (its seq covers both)
+        u8 hudDisconnected;  // game: 1 once it draws DISCONNECTED in the match (Dolphin's OSD
+                             // stands in only when the game does not); 0 at each match setup
+        u8 _reserved2[3];
+    };                    // 0x80
 
     // ---- SESSION ----
 
@@ -185,7 +209,9 @@ namespace PPOM {
         u16 name[NAME_LEN];
         u16 code[CODE_LEN];
         u8 _pad2[0x0A];
-    };                    // 0x40
+        PortValues pv;    // the player's name tag and controls (from their lock-in)
+        u32 _pad3;
+    };                    // 0x80
 
     enum SessionState { SS_NONE = 0, SS_LOBBY = 1, SS_MATCH_READY = 2 };
 
@@ -200,7 +226,7 @@ namespace PPOM {
         u8 numPlayers;
         SessionPlayer players[SESSION_PLAYERS];   // by in-game port (P1 = the host/decider)
         u32 _reserved;
-    };                    // 0x110
+    };                    // 0x210
 
     const int DEBUG_LOG = 32;
     struct PrintLog {
@@ -227,6 +253,8 @@ namespace PPOM {
         CFG_WIFI_HOOKS = 1 << 1,  // fake Nintendo WFC/Wiimmfi login (Brawlback Gen 1 NetMenu hooks)
         CFG_LOG = 1 << 2,         // log MuMsg::printIndex calls
         CFG_CSS_AUTOWIDTH = 1 << 3, // shrink the CSS status line to fit (experiment)
+        CFG_SSS_LEGAL = 1 << 4,   // every stage select offers only the legal stages (debug; for Ranked strikes later)
+        CFG_TEST_DISCONNECT = 1 << 5, // tests: act as if disconnected in the next scMelee frame (cleared when seen)
     };
 
     struct Block {
@@ -245,7 +273,8 @@ namespace PPOM {
     };
 
     // The lock-in (LOCAL): write it and bump its sequence.
-    void writeLockIn(bool ready, u8 cssChar, u8 charKind, u8 costume, u16 stagePick, u8 asl, u8 game);
+    void writeLockIn(bool ready, u8 cssChar, u8 charKind, u8 costume, u16 stagePick, u8 asl, u8 game,
+                     const PortValues* pv);
 
     extern Block g_block;
 

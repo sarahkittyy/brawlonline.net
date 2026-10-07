@@ -20,9 +20,10 @@ namespace PPOM {
     // The contract with Dolphin (GameBridge.cpp): sizes and the mailbox/LOCAL adjacency.
     static_assert(sizeof(Mailbox) == 0x410, "mailbox");
     static_assert(sizeof(LockIn) == 0x0C, "lock-in");
-    static_assert(sizeof(Local) == 0x40, "local");
-    static_assert(sizeof(SessionPlayer) == 0x40, "session player");
-    static_assert(sizeof(Session) == 0x110, "session");
+    static_assert(sizeof(PortValues) == 0x3C, "port values");
+    static_assert(sizeof(Local) == 0x80, "local");
+    static_assert(sizeof(SessionPlayer) == 0x80, "session player");
+    static_assert(sizeof(Session) == 0x210, "session");
     static_assert(__builtin_offsetof(Block, local) == __builtin_offsetof(Block, mailbox) + sizeof(Mailbox), "local after mailbox");
 
     static u32 s_lastSeq = 0;
@@ -74,13 +75,29 @@ namespace PPOM {
 
     const Response* lastResponse() { return s_last; }
 
-    void writeLockIn(bool ready, u8 cssChar, u8 charKind, u8 costume, u16 stagePick, u8 asl, u8 game)
+    static bool samePv(const PortValues& a, const PortValues* b)
+    {
+        const u8* x = (const u8*)&a;
+        const u8* y = (const u8*)b;
+        for (u32 i = 0; i < sizeof(PortValues); i++) {
+            if (x[i] != (b ? y[i] : 0)) return false;
+        }
+        return true;
+    }
+
+    void writeLockIn(bool ready, u8 cssChar, u8 charKind, u8 costume, u16 stagePick, u8 asl, u8 game,
+                     const PortValues* pv)
     {
         LockIn& l = g_block.local.lockIn;
+        PortValues& own = g_block.local.own;
         if (l.seq && l.ready == (ready ? 1 : 0) && l.cssChar == cssChar && l.charKind == charKind &&
-            l.costume == costume && l.stagePick == stagePick && l.asl == asl && l.game == game) {
+            l.costume == costume && l.stagePick == stagePick && l.asl == asl && l.game == game &&
+            samePv(own, pv)) {
             return;
         }
+        if (pv) memcpy(&own, (void*)pv, sizeof(own));
+        else memset(&own, 0, sizeof(own));
+        flushRange(&own, sizeof(own));
         l.ready = ready ? 1 : 0;
         l.cssChar = cssChar;
         l.charKind = charKind;
