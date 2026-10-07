@@ -15,6 +15,17 @@ namespace OnlineMenu {
     const char* cssLine(MuMsg* msg, u32 window, u32 line, const void* msbin, u32 caller);
 }
 
+namespace OnlineMatch {
+    // Online matches from the online CSS (online_match.cpp): sqNetAnyOkiraku hooks, the match
+    // setup from SESSION, the in-match disconnect.
+    void install(CoreApi* api);
+    void tickMatch();                 // every frame in scMelee
+    bool disconnectShown();
+    u16 pickedStage();                // the loser's stage pick (0xFFFF none)
+    u8 pickedAsl();
+    void clearPickedStage();
+}
+
 namespace NetMenu {
     void onlineMenuEntered(int mode);
 }

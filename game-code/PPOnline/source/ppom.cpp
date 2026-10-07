@@ -11,11 +11,19 @@ namespace PPOM {
         VERSION,
         (u16)sizeof(Block),
         (u16)__builtin_offsetof(Block, mailbox), (u16)sizeof(Mailbox),
-        0, 0,
-        0, 0,
+        (u16)__builtin_offsetof(Block, session), (u16)sizeof(Session),
+        (u16)__builtin_offsetof(Block, local), (u16)sizeof(Local),
         (u16)__builtin_offsetof(Block, debug), (u16)sizeof(Debug),
         {0, 0, 0},
     };
+
+    // The contract with Dolphin (GameBridge.cpp): sizes and the mailbox/LOCAL adjacency.
+    static_assert(sizeof(Mailbox) == 0x410, "mailbox");
+    static_assert(sizeof(LockIn) == 0x0C, "lock-in");
+    static_assert(sizeof(Local) == 0x40, "local");
+    static_assert(sizeof(SessionPlayer) == 0x40, "session player");
+    static_assert(sizeof(Session) == 0x110, "session");
+    static_assert(__builtin_offsetof(Block, local) == __builtin_offsetof(Block, mailbox) + sizeof(Mailbox), "local after mailbox");
 
     static u32 s_lastSeq = 0;
     static const Response* s_last = NULL;
@@ -65,6 +73,24 @@ namespace PPOM {
     }
 
     const Response* lastResponse() { return s_last; }
+
+    void writeLockIn(bool ready, u8 cssChar, u8 charKind, u8 costume, u16 stagePick, u8 asl, u8 game)
+    {
+        LockIn& l = g_block.local.lockIn;
+        if (l.seq && l.ready == (ready ? 1 : 0) && l.cssChar == cssChar && l.charKind == charKind &&
+            l.costume == costume && l.stagePick == stagePick && l.asl == asl && l.game == game) {
+            return;
+        }
+        l.ready = ready ? 1 : 0;
+        l.cssChar = cssChar;
+        l.charKind = charKind;
+        l.costume = costume;
+        l.stagePick = stagePick;
+        l.asl = asl;
+        l.game = game;
+        l.seq++;     // written last
+        flushRange(&l, sizeof(l));
+    }
 
     void asciiToU16(u16* dst, const char* src, int max)
     {

@@ -14,10 +14,14 @@
 //   - FIND_OPPONENT is answered with a GET_MATCH_STATE payload; the game then polls
 //     GET_MATCH_STATE (one outstanding poll at a time) while it searches or is connected.
 //
-//   MAILBOX  game writes requests, Dolphin writes responses. Only used while no session runs.
+//   MAILBOX  game writes requests, Dolphin writes responses. Only used outside matches.
 //            Excluded from rollback state and desync hashes.
-//   SESSION  (reserved, size 0 in v1) Dolphin writes at an agreed frame; part of game state.
-//   LOCAL    (reserved, size 0 in v1) per-machine draw-only data.
+//   LOCAL    per machine, right after the mailbox and excluded from rollback with it: Dolphin's
+//            view of this player's session (local port, opponent ready, disconnected) and the
+//            game's lock-in on the online CSS (LockIn), which Dolphin sends to the opponent.
+//   SESSION  the same on every machine of a session: the lobby and the setup of the next game
+//            (players, stage), written by Dolphin only outside matches, so it is constant
+//            (and equal on both machines) while a match runs under rollback.
 //   DEBUG    plugin diagnostics (MuMsg::printIndex call log, counters). Never read by Dolphin
 //            in production; the harness uses it to find message ids.
 //
@@ -28,7 +32,7 @@
 namespace PPOM {
 
     const u32 MAGIC = 0x50504F4D; // "PPOM"
-    const u16 VERSION = 1;
+    const u16 VERSION = 2;
 
     // Slippi command bytes (EXI_DeviceSlippi.h), kept for familiarity (design 5.3).
     enum Cmd {
@@ -141,6 +145,63 @@ namespace PPOM {
         Response resp;
     };
 
+    // ---- LOCAL ----
+
+    // The player's lock-in on the online CSS (game -> Dolphin). Slippi's
+    // MSRB_IS_LOCAL_PLAYER_READY plus its SET_MATCH_SELECTIONS payload.
+    struct LockIn {
+        u32 seq;          // game: bumped on every change (0 = never written)
+        u8 ready;         // 1 = locked in for `game`
+        u8 cssChar;       // CSS id (diagnostics)
+        u8 charKind;      // gmCharacterKind (random resolved)
+        u8 costume;       // colour number
+        u16 stagePick;    // stage kind picked on the stage select (Direct loser), 0xFFFF none
+        u8 asl;           // P+ alternate-stage buttons held for that pick
+        u8 game;          // game number (1-based) this lock-in is for
+    };                    // 0x0C
+
+    enum LocalState { LS_NONE = 0, LS_CONNECTING = 1, LS_CONNECTED = 2, LS_IN_MATCH = 3 };
+
+    struct Local {
+        u32 seq;          // Dolphin: bumped after each update
+        u8 state;         // LocalState
+        u8 localPort;     // in-game port of this player (0 = P1), 0xFF none
+        u8 remoteReady;   // the opponent is locked in for the next game
+        u8 disconnected;  // the opponent left or went silent (Slippi ONLINE_INPUTS result 3)
+        u16 peerName[NAME_LEN];
+        LockIn lockIn;    // written by the game
+        u32 _reserved[3];
+    };                    // 0x40
+
+    // ---- SESSION ----
+
+    const int SESSION_PLAYERS = 4;   // a 1v1 session uses two; four for code-based Teams later
+
+    struct SessionPlayer {
+        u8 present;
+        u8 charKind;      // gmCharacterKind
+        u8 costume;       // colour number
+        u8 _pad;
+        u16 name[NAME_LEN];
+        u16 code[CODE_LEN];
+        u8 _pad2[0x0A];
+    };                    // 0x40
+
+    enum SessionState { SS_NONE = 0, SS_LOBBY = 1, SS_MATCH_READY = 2 };
+
+    struct Session {
+        u32 seq;          // Dolphin: bumped after each update
+        u8 state;         // SessionState
+        u8 mode;          // Mode of the search that made the session
+        u8 game;          // the next game (1-based); its setup once state == SS_MATCH_READY
+        u8 lastWinner;    // in-game port of the last game's winner; 0xFE draw, 0xFF none
+        u16 stageKind;    // stage of the next game (srStageKind)
+        u8 asl;           // P+ alternate-stage buttons for it
+        u8 numPlayers;
+        SessionPlayer players[SESSION_PLAYERS];   // by in-game port (P1 = the host/decider)
+        u32 _reserved;
+    };                    // 0x110
+
     const int DEBUG_LOG = 32;
     struct PrintLog {
         u32 lr;           // caller of MuMsg::printIndex
@@ -157,7 +218,7 @@ namespace PPOM {
         u32 lastError;
         u32 cfg;          // feature flags, see Cfg (harness may write for experiments)
         u32 menuState;    // plugin's online-menu state machine (OnlineMenu::State)
-        u32 scratch[10];
+        u32 scratch[16];
         PrintLog log[DEBUG_LOG];
     };
 
@@ -178,8 +239,13 @@ namespace PPOM {
         u16 debugOff, debugSize;
         u32 _reserved[3];     // header = 0x24 bytes
         Mailbox mailbox;
+        Local local;          // must follow the mailbox (one range excluded from rollback)
+        Session session;
         Debug debug;
     };
+
+    // The lock-in (LOCAL): write it and bump its sequence.
+    void writeLockIn(bool ready, u8 cssChar, u8 charKind, u8 costume, u16 stagePick, u8 asl, u8 game);
 
     extern Block g_block;
 

@@ -28,6 +28,8 @@ extern "C" {
     // 1 while the player is locked in on the online CSS (searching, connecting, connected or an
     // error not yet cleared): the CSS hooks below then ignore A/B on the character.
     u8 g_onlineCssLock = 0;
+    extern u8 g_onlineMatchGame;
+    extern u8 g_onlinePickStage;
 }
 
 namespace OnlineMenu {
@@ -57,6 +59,14 @@ namespace OnlineMenu {
         bool haveSavedRules;
         u8 savedRule[0x88];
         u8 savedItemFrequency;
+        // Connected (the gameplay session's lobby, SESSION/LOCAL): the game this player is
+        // locked in for (0 = not locked in; game 1 is locked in by the search itself).
+        int lockedGame;
+        // The last character and costume locked in. Brawl's Wi-Fi CSS comes back from a match or
+        // the stage select with the coin in the hand (it restores no selection in Wi-Fi mode);
+        // while connected, START locks in with these unless another character is picked.
+        int lastCss;
+        int lastCostume;
     };
     static State s;
 
@@ -130,15 +140,111 @@ namespace OnlineMenu {
         return isPtr(task) ? (u8*)task : NULL;
     }
 
-    // muSelCharPlayerArea+0x1B8: the character on the player's coin, 0x28 = none.
-    static int selectedChar()
+    // muSelCharPlayerArea+0x1B8: the character on the player's coin, 0x28 = none; +0x1BC its
+    // colour number. 0x29 is Random.
+    static u8* playerArea()
     {
         u8* task = cssTask();
-        if (!task) return -1;
+        if (!task) return NULL;
         u32 area = *(u32*)(task + 0x44 + 4 * LOCAL_PORT);
-        if (!isPtr(area)) return -1;
+        return isPtr(area) ? (u8*)area : NULL;
+    }
+
+    static int selectedChar()
+    {
+        u8* area = playerArea();
+        if (!area) return -1;
         int c = *(int*)(area + 0x1B8);
-        return (c >= 0 && c < 0x28) ? c : -1;
+        return (c >= 0 && c < 0x40 && c != 0x28) ? c : -1;
+    }
+
+    static int selectedCostume()
+    {
+        u8* area = playerArea();
+        if (!area) return 0;
+        int c = *(int*)(area + 0x1BC);
+        return (c >= 0 && c < 0x20) ? c : 0;
+    }
+
+    // The gmCharacterKind of a CSS id (P+'s table, through the game's own conversion); Random is
+    // drawn here, so that the lock-in Dolphin sends is a real character, as Slippi resolves
+    // random before it sends its selections.
+    static const u8 PPLUS_ROSTER[] = {
+        0x00, 0x09, 0x0D, 0x15, 0x05, 0x0C, 0x01, 0x1A, 0x0A, 0x07, 0x13, 0x25, 0x02, 0x24, 0x0E,
+        0x0F, 0x14, 0x08, 0x23, 0x2E, 0x2B, 0x2C, 0x2A, 0x20, 0x03, 0x04, 0x0B, 0x19, 0x06, 0x16,
+        0x1F, 0x11, 0x2D, 0x21, 0x12, 0x22, 0x10, 0x17, 0x18, 0x26, 0x27, 0x30};
+    static int resolveCss(int css)
+    {
+        if (css != 0x29) return css;
+        typedef int (*RandiFn)(int);
+        int i = ((RandiFn)0x8003FC7C)((int)sizeof(PPLUS_ROSTER));
+        return PPLUS_ROSTER[i % sizeof(PPLUS_ROSTER)];
+    }
+    static u8 charKindOf(int css)
+    {
+        typedef int (*ExchangeFn)(int);
+        return (u8)((ExchangeFn)0x800AF80C)(css);   // muMenu::exchangeMuSelchkind2GmCharacterKind
+    }
+
+    // The character to lock in: the one on the coin, else (connected, back from a match or
+    // the stage select) the last one locked in.
+    static int lockChar()
+    {
+        int c = selectedChar();
+        if (c >= 0) return c;
+        return s.phase == PH_CONNECTED ? s.lastCss : -1;
+    }
+
+    // Slippi's lock-in (MSRB_IS_LOCAL_PLAYER_READY + SET_MATCH_SELECTIONS) into LOCAL.
+    static void lockIn(int game, u16 stagePick, u8 asl)
+    {
+        int picked = selectedChar();
+        int css = resolveCss(lockChar());
+        if (css < 0) return;
+        int costume = picked >= 0 ? selectedCostume() : s.lastCostume;
+        PPOM::writeLockIn(true, (u8)css, charKindOf(css), (u8)costume, stagePick, asl, (u8)game);
+        s.lockedGame = game;
+        s.lastCss = picked >= 0 ? picked : s.lastCss;
+        s.lastCostume = costume;
+    }
+    static void unlock()
+    {
+        PPOM::writeLockIn(false, 0xFF, 0xFF, 0, 0xFFFF, 0, 0);
+        s.lockedGame = 0;
+        OnlineMatch::clearPickedStage();
+    }
+
+    // Leave the CSS scene with an exit code (the scene manager's own mechanism, as every scene
+    // does): 1 = go on, which sqNetAnyOkiraku turns into the stage select (state 3), where
+    // online_match.cpp takes over.
+    static void leaveCss(int code)
+    {
+        u32 mgr = *(u32*)0x805A0060;
+        if (!isPtr(mgr)) return;
+        *(int*)(mgr + 0x284) = code;
+        *(int*)(mgr + 0x288) = 2;
+    }
+
+    static int sessionGame()
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        return se.state != PPOM::SS_NONE ? se.game : 0;
+    }
+
+    // Direct: the loser of the last game picks the stage (a draw: both pick), Slippi's
+    // HandleInputsOnCSS ISWINNER_LOST.
+    static bool picksStage()
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        u8 me = PPOM::g_block.local.localPort;
+        return s.mode == PPOM::MODE_DIRECT && se.state != PPOM::SS_NONE && se.lastWinner != 0xFF &&
+               me < 4 && se.lastWinner != me;
+    }
+
+    static bool lockedForNext()
+    {
+        int g = sessionGame();
+        return g && s.lockedGame == g;
     }
 
     // The CSS header models that only make sense for Brawl's Wi-Fi mode: the mode title
@@ -254,8 +360,22 @@ namespace OnlineMenu {
             setStatus(buf, false);
             return;
         case PH_CONNECTED:
-            sprintf(buf, "Playing: %s", s.peerName);
-            setStatus(buf, false);
+            // Slippi's lines when connected (LoadCSSText.asm): "Press START to lock in" /
+            // "select stage", "Locked in" + "Waiting on opponent", and "Playing: <name>".
+            if (lockedForNext()) {
+                if (PPOM::g_block.local.remoteReady || PPOM::g_block.session.state == PPOM::SS_MATCH_READY) {
+                    sprintf(buf, "Playing: %s", s.peerName);
+                    setStatus(buf, false);
+                } else {
+                    setStatus("Waiting on opponent", false);
+                }
+            } else if (lockChar() < 0) {
+                setStatus("Select your character", false);
+            } else if (picksStage() && OnlineMatch::pickedStage() == 0xFFFF) {
+                setStatus("Press START to select stage", false);
+            } else {
+                setStatus("Press START to lock in", false);
+            }
             return;
         case PH_ERROR:
         default:
@@ -354,13 +474,16 @@ namespace OnlineMenu {
 
     static bool lockedIn()
     {
-        return s.phase == PH_SEARCHING || s.phase == PH_CONNECTING || s.phase == PH_CONNECTED ||
-               s.phase == PH_ERROR;
+        // Connected: locked while locked in for the next game (between games the character can
+        // change until START locks it in again, as on Slippi).
+        if (s.phase == PH_CONNECTED) return lockedForNext() || g_onlineMatchGame != 0;
+        return s.phase == PH_SEARCHING || s.phase == PH_CONNECTING || s.phase == PH_ERROR;
     }
 
     void install(CoreApi* api)
     {
         CodeEntry::install(api);
+        OnlineMatch::install(api);
         api->sySimpleHookRel(0x726C, reinterpret_cast<void*>(cssBPressed), 10 /* sora_menu_sel_char */);
         api->sySimpleHookRel(0x7280, reinterpret_cast<void*>(cssCostume), 10);
         api->sySimpleHookRel(0x75B4, reinterpret_cast<void*>(cssCoinAPress), 10);
@@ -378,6 +501,11 @@ namespace OnlineMenu {
         s.searchSeq = 0;
         s.pollPending = false;
         s.status[0] = 0;
+        unlock();
+        s.lastCss = -1;
+        s.lastCostume = 0;
+        g_onlineMatchGame = 0;
+        g_onlinePickStage = 0;
         g_onlineCss = 1;
         // Leaving the CSS goes back to the page the mode was picked on (netmenu.cpp
         // exitToOnlinePage): Direct to the ONLINE page, Unranked/Teams to WITH ANYONE.
@@ -393,6 +521,9 @@ namespace OnlineMenu {
         s.searchSeq = 0;
         s.pollPending = false;
         s.cssMsg = NULL;
+        unlock();
+        g_onlineMatchGame = 0;
+        g_onlinePickStage = 0;
         g_onlineCss = 0;
         restoreRules();
         PPOM::g_block.debug.menuState = 0;
@@ -405,7 +536,11 @@ namespace OnlineMenu {
         req.mode = (u8)s.mode;
         int c = selectedChar();
         req.lockedChar = c < 0 ? 0xFF : (u8)c;
+        req.costume = (u8)selectedCostume();
         PPOM::asciiToU16(req.code, s.code, PPOM::CODE_LEN);
+        // The search locks the player in for game 1 (Slippi FN_LOCK_IN_AND_SEARCH); the session
+        // gets the lock-in from LOCAL as soon as it exists.
+        lockIn(1, 0xFFFF, 0);
         s.searchSeq = PPOM::post(PPOM::CMD_FIND_OPPONENT, &req, sizeof(req));
         s.pollPending = true;   // Dolphin answers FIND_OPPONENT with the match state
         s.pollFrames = 0;
@@ -424,6 +559,7 @@ namespace OnlineMenu {
     static void cleanup()
     {
         PPOM::post(PPOM::CMD_CLEANUP_CONNECTION, NULL, 0);
+        unlock();
         s.phase = PH_IDLE;
         s.searchSeq = 0;
         s.pollPending = false;
@@ -441,6 +577,7 @@ namespace OnlineMenu {
             // the idle prompt, as Slippi's CSS does (design 5.6).
             s.phase = PH_IDLE;
             s.searchSeq = 0;
+            unlock();
             break;
         case PPOM::MM_INITIALIZING:
         case PPOM::MM_MATCHMAKING:
@@ -462,6 +599,37 @@ namespace OnlineMenu {
         // state, back when a connection goes away.
         if (s.phase == PH_ERROR && before != PH_ERROR) playSE(SE_ERROR);
         if (before == PH_CONNECTED && s.phase != PH_CONNECTED && s.phase != PH_ERROR) playSE(SE_BACK);
+    }
+
+    // Connected on the CSS (Slippi HandleInputsOnCSS.asm HANDLE_CONNECTED): lock in with START
+    // (Direct's loser first picks a stage on the stage select), and once SESSION has the setup
+    // of the game this player is locked in for, leave the CSS for that match.
+    static void tickConnected(u32 pressed)
+    {
+        if (s.phase != PH_CONNECTED || g_onlineMatchGame) return;
+        int game = sessionGame();
+        if (!game) return;
+        if (s.lockedGame == game) {
+            const PPOM::Session& se = PPOM::g_block.session;
+            if (se.state == PPOM::SS_MATCH_READY && se.game == game) {
+                g_onlineMatchGame = (u8)game;
+                PPOM::g_block.debug.scratch[10] = 0x100 * game;   // tests: the match started
+                leaveCss(1);
+            }
+            return;
+        }
+        if (OnlineMatch::pickedStage() != 0xFFFF && lockChar() >= 0) {
+            // Back from the stage select: locked in with the stage (ExitSSSUponStageSelect).
+            lockIn(game, OnlineMatch::pickedStage(), OnlineMatch::pickedAsl());
+            return;
+        }
+        if (!(pressed & BTN_START) || lockChar() < 0) return;
+        if (picksStage()) {
+            g_onlinePickStage = 1;
+            leaveCss(1);
+        } else {
+            lockIn(game, 0xFFFF, 0);
+        }
     }
 
     static void pollMailbox()
@@ -497,6 +665,13 @@ namespace OnlineMenu {
     void tick()
     {
         const char* scene = Online::currentSceneName();
+        // In a match: nothing that differs between the machines may change the game while the
+        // match runs under rollback, so no mailbox here (OnlineMatch::tickMatch only reacts to
+        // a disconnect, which Dolphin reports after the rollback session has ended).
+        if (strcmp(scene, "scMelee") == 0) {
+            OnlineMatch::tickMatch();
+            return;
+        }
         bool sceneChanged = strcmp(scene, s.lastScene) != 0;
         if (sceneChanged) {
             strncpy(s.lastScene, scene, sizeof(s.lastScene) - 1);
@@ -556,6 +731,7 @@ namespace OnlineMenu {
                 } else {
                     s.zHeld = 0;
                 }
+                tickConnected(pressed);
             }
         }
         g_onlineCssLock = lockedIn() ? 1 : 0;
