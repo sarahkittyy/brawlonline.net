@@ -20,6 +20,8 @@ node_modules
 
 release/app/dist
 release/build
+# Game plugin staged for packaging (npm run stage:plugin)
+release/plugins
 .erb/dll
 
 .idea

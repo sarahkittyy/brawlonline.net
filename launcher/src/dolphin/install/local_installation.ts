@@ -71,6 +71,11 @@ export class LocalDolphinInstallation implements DolphinInstallation {
     return path.join(this.userFolder, "Launcher", PPLUS_NETPLAY_LAUNCHER_DOL);
   }
 
+  /** The user's P+ SD card in the User folder. Only read: Play boots a patched copy (sd_card.ts). */
+  get sdCardImage(): string {
+    return path.join(this.userFolder, "Wii", "sd.raw");
+  }
+
   async findDolphinExecutable(): Promise<string> {
     if (!(await pathExists(this.executablePath))) {
       throw new Error(
@@ -113,7 +118,7 @@ export class LocalDolphinInstallation implements DolphinInstallation {
 
   /** Throws a user-facing error if P+'s files are missing from the User folder. */
   async assertProjectPlusFiles(): Promise<void> {
-    const sd = path.join(this.userFolder, "Wii", "sd.raw");
+    const sd = this.sdCardImage;
     const missing: string[] = [];
     if (!(await pathExists(this.netplayLauncherDol))) {
       missing.push(path.join("Launcher", PPLUS_NETPLAY_LAUNCHER_DOL));

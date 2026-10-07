@@ -23,7 +23,7 @@ Decision: **Replace** (same feature, our implementation), **Keep** (unchanged or
 | `user.json` (play key file) | Written on Play if different, `{uid, playKey, connectCode, displayName, latestVersion}`, never deleted by the launcher | **Keep** | Same content, same key order, same write-on-Play logic. Location: `<Dolphin User folder>/Online/user.json` (Slippi: `<User>/Slippi/user.json`). Verified identical to the server's `GET /v1/me/user-json`. |
 | Dolphin download and update (`getLatestDolphin`, Ishiiruka/mainline installations, beta channel, promotion to stable) | `dolphin/install/*`, `manager.ts` | **Replace** | One local installation (`dolphin/install/local_installation.ts`) for the Dolphin build configured in Settings. Nothing is downloaded. `fetch_latest_version.ts` is a stub hook returning `null` for our future update channel; the installers (`download.ts`, `windows.ts`, `macos.ts`, `linux.ts`) are kept for it. The beta release channel setting is dropped (nothing to choose). |
 | Netplay / playback Dolphin split | Two installations under `userData/netplay` and `userData/playback` | **Keep** | Both use our single build (playback defaults to the netplay executable); each has its own User folder under `userData/{netplay,playback}/User`, as on Slippi for Windows. |
-| Play button / boot | `Dolphin -b -e <Melee ISO>`, optional "Boot to CSS" Gecko code | **Replace** | `Dolphin -u <User> -e "<User>/Launcher/Project+ Netplay Launcher.dol"` with `[Core] DefaultISO = <Brawl ISO>` in Dolphin.ini: P+'s own boot chain (launcher DOL applies the GCT from the virtual SD card, then boots the disc). No `-b`. Boot to CSS is a Melee code and is dropped. "Launch Dolphin" (Play button action) is kept. |
+| Play button / boot | `Dolphin -b -e <Melee ISO>`, optional "Boot to CSS" Gecko code | **Replace** | `Dolphin -u <User> -C Dolphin.General.WiiSDCardPath=<patched sd.raw> … -e "<User>/Launcher/Project+ Netplay Launcher.dol"` with `[Core] DefaultISO = <Brawl ISO>` in Dolphin.ini: P+'s own boot chain (launcher DOL applies the GCT from the virtual SD card, then boots the disc), on a launcher-managed copy of the user's SD card with our game plugin installed (section 3.1). No `-b`. Boot to CSS is a Melee code and is dropped. "Launch Dolphin" (Play button action) is kept. |
 | Gecko code manager | Edits `GALE01` (Melee) codes | **Keep, retarget** | Edits `RSBE01` (`Sys/GameSettings/RSBE01.ini` + `User/GameSettings/RSBE01.ini`). P+'s own codeset (GCT on the SD card) is not touched. |
 | Synced Dolphin settings (replay folder, save replays, monthly folders, jukebox) | `[Slippi]` section of Dolphin.ini | **Keep, rename section** | Same keys in `[Online]`. Jukebox (Melee HPS music) dropped. |
 | ISO verification | SHA-1 table of Melee images, "unknown ISO, use anyway" | **Replace** | MD5 of exactly NTSC-U Brawl Rev 1 `d18726e6dfdc8bdbdad540b561051087` and Rev 2 `52ce7160ced2505ad5e397477d0ea4fe`; a header check (`RSBE01`, revision 1/2) rejects other files instantly. Everything else is **Invalid** (no "use anyway"), and Play refuses an invalid ISO with Slippi's message style. Results are cached by path, size and mtime (hashing 8.5 GB takes ~25 s). |
@@ -70,9 +70,53 @@ renderer: LoginForm / VerifyEmailForm / ActivateOnlineForm / AcceptRules  (Slipp
 - **Executable**: Settings > Dolphin, else `PPO_DOLPHIN_PATH`, else in development `../dolphin/build/release/x64/Binaries/Dolphin.exe` (`D:\code\pm_rollback\dolphin\build\release\x64\Binaries\Dolphin.exe` here), else `<userData>/netplay/Dolphin.exe` where a future installer will put it.
 - **User folder**: `<install>/User` if the build is portable (`portable.txt` next to the binary), else `<userData>/{netplay,playback}/User`. Dolphin always gets `-u <User folder>`.
 - **P+ files**: the netplay User folder needs `Launcher/Project+ Netplay Launcher.dol` and `Wii/sd.raw`. In development a new folder is seeded once from `../run/template-user` (`PPO_DOLPHIN_USER_TEMPLATE`), skipping `Load/`, `Logs/` and caches. Without them, Play shows which files are missing. A packaged release will need these files from our Dolphin release (open issue).
+- **Online plugin**: Play installs our game plugin on a copy of the SD card and points Dolphin at it (section 3.1).
 - **Update hook**: `src/dolphin/install/fetch_latest_version.ts` returns `null`. To enable updates, serve `GET /v1/dolphin/latest?purpose=&beta=` and return `{version, downloadUrls}` there; `DolphinManager` already has the download/install plumbing.
 - **Soft/hard reset**: soft clears the cache; hard also removes `Config/`, `GameSettings/`, `Logs/` and `Online/` but keeps `Wii/` (SD card and saves) and `Launcher/`.
 - **Version**: shown from `Dolphin --version`. Our build takes ~27 s to answer it, so Play no longer waits for it (Slippi did); it is fetched in the background and cached per executable.
+
+### 3.1 Play: the online plugin on the SD card
+
+Our game code is one Syriinge plugin, `/Project+/pf/plugins/PPOnline.rel` on P+'s SD card (`docs/game-code.md` sections 2-3). On every Play, before Dolphin starts, `DolphinManager.launchNetplayDolphin` calls `installPluginOnSdCard` (`src/dolphin/install/sd_card.ts`):
+
+- **Source**: the user's card, `<netplay User>/Wii/sd.raw`. It is only ever read, as is the User template (`PPO_DOLPHIN_USER_TEMPLATE`, dev `../run/template-user`): the installer refuses any output that is, or is inside, either of them (path and file identity are checked).
+- **Output**: `<userData>/netplay/pponline-sd/sd.raw` (~2 GB) and `manifest.json` next to it: `{version, source: {path, size, mtimeMs}, plugin: {sha256, size, sdPath, from}, updatedAt}`.
+- **Decision**:
+
+  | State | Action (logged as) |
+  |---|---|
+  | copy or manifest missing, or source path/size/mtime differ from the manifest | copy the source to `sd.raw.partial` (`fs.copyFile` with `COPYFILE_FICLONE`, falling back to a plain copy), patch, verify, rename (`copied`) |
+  | plugin sha256 differs from the manifest | replace the plugin inside the existing copy, keeping what the game wrote to its card (`replaced`) |
+  | nothing changed | read the plugin back from the copy (~24 KB) and compare its sha256; rewrite it only on a mismatch (`repaired`), else write nothing (`unchanged`) |
+
+  The manifest is deleted before any write and written last, so an interrupted copy or patch is redone on the next Play. If patching the existing copy fails, the copy is recreated from the source once. Any failure fails Play with "Could not install the online game plugin on the Project+ SD card: …".
+- **Verification after every write**: the plugin is re-read through the launcher's independent FAT reader (`src/brawl_assets/fat32.ts`) and compared by sha256, and the FAT check runs (every chain valid, file chains match their sizes, no shared clusters, no lost chains). Problems the card already had before patching are logged, not fatal; new ones fail Play.
+- **FAT32 writer**: `src/brawl_assets/fat32_writer.ts`, a port of the write side of `tools/sdcard/fat32.py` (same allocation and 8.3/long-name rules): partitionless and MBR images, VFAT long names, directory creation and growth, add/replace/delete, both FATs and the FSInfo free count updated on flush. Plain Node positioned reads and writes; only the first FAT (4 MB on P+'s card) is held in memory. `check()` is `patch_sd.py --check`.
+- **Timing** (P+'s 2 GB card on the D: drive): the first Play takes 14-34 s for the copy (no progress UI; Play just takes longer); later Plays spend ~5 ms on the check.
+- **Plugin binary** (`defaultPluginLocation` in `src/dolphin/install/paths.ts`): `PPO_PLUGIN_PATH`, else in development `<launcher repo>/../game-code/PPOnline/PPOnline.rel` (game-code's build output), else `process.resourcesPath/plugins/PPOnline.rel`, which must match the sha256 (and size) in `plugins/PPOnline.json` next to it.
+
+**Dolphin contract.** The card is selected for this run only, through Dolphin's command-line config layer (`-C <System>.<Section>.<Key>=<Value>`, never saved to Dolphin.ini). `buildNetplayDolphinArgs` (`src/dolphin/netplay_args.ts`) builds:
+
+```
+Dolphin -u <User>
+        -C Dolphin.General.WiiSDCardPath=<userData>/netplay/pponline-sd/sd.raw   # MAIN_WII_SD_CARD_IMAGE_PATH
+        -C Dolphin.Core.WiiSDCard=True                                           # card inserted
+        -C Dolphin.Core.WiiSDCardEnableFolderSync=False                          # never rebuild the image from a folder
+        -e "<User>/Launcher/Project+ Netplay Launcher.dol"
+        [--harness-port <PPO_HARNESS_PORT>] [<PPO_DOLPHIN_EXTRA_ARGS>...]         # test mode only
+```
+
+Dolphin splits `-C` values at `=`, so a card path containing `=` is refused. "Configure Dolphin" still opens Dolphin with the user's own card (no plugin).
+
+### 3.2 Shipping the plugin in a release
+
+The packaged launcher reads `<resources>/plugins/PPOnline.rel` and `<resources>/plugins/PPOnline.json` (`{"file", "size", "sha256"}`). It refuses to install a binary that does not match the manifest ("Reinstall the launcher"). A release build:
+
+1. builds the plugin in `game-code/PPOnline` (`make`);
+2. runs `npm run stage:plugin` (`.erb/scripts/stage-plugin.js`), which copies it to `release/plugins/` (gitignored) and writes the manifest; `PPO_PLUGIN_PATH` overrides the source;
+3. runs `npm run package`: `electron-builder.json` ships `release/plugins/{PPOnline.rel,PPOnline.json}` as `extraResources` to `<resources>/plugins/`.
+
+Without step 2, electron-builder only warns ("file source doesn't exist"), and Play in that package fails with "The online game plugin was not found". Upstream's CI workflow (`npm run package`) has no game-code checkout, so staging is not part of `package`.
 
 ## 4. Disc verification
 
@@ -114,7 +158,39 @@ What the browser needs from the format (to fill Slippi's existing UI): per game 
 ## 7. Testing
 
 - `npm run typecheck`, `npm run lint`, `npm test` (after `npm run build`, as upstream CI does): all pass. New tests cover the accounts client, session store and error handling, ISO verification, Dolphin paths, the asset cache manager and protocol, replay listing, product identity, and every decoder (synthetic data, plus integration tests on the real disc and SD card when present).
+- SD card and Play: the FAT32 writer on synthetic images (partitionless and MBR, 512 B and 2 KB clusters, long names including 13- and 26-unit names without a terminator, nested new directories, directory growth, replacing a file without leaking clusters, the FSInfo free count, the check finding lost chains and shared clusters; everything is read back byte-identical with the existing reader, also on images from the reader tests' independent builder). The installer: the first Play copies, a second writes nothing, a plugin change replaces in place and keeps the game's files, a source change re-copies, a corrupted or deleted plugin in the copy is repaired, an unreadable copy is recreated, the source and template are never written, and the packaged manifest is checked. Also the argument builder and test-mode parsing. Images written by the TypeScript writer pass `patch_sd.py --check` and list correctly with `--list`.
+- Real card: the installer on a copy of `run/template-user/Wii/sd.raw` with the real `game-code/PPOnline/PPOnline.rel` gives `patch_sd.py --check` clean; `--list /Project+/pf/plugins` shows P+'s four plugins plus `PPOnline.rel` (24344 bytes, same sha256); both FATs are identical and the FSInfo free count is exact. The second run is `unchanged` in 6 ms. The template's `sd.raw` is byte-identical (sha256, size and mtime) before and after.
+- Built launcher: two instances from `release/app` with separate `PPO_USER_DATA_DIR`s and debugging ports 9301/9302 ran at once. Each was listed on its own `/json` and logged to its own `<userData>/logs`; nothing was created under the default `%APPDATA%` folders. Play driven over the DevTools protocol (`window.electron.dolphin.launchNetplayDolphin()`, no login) copied and patched the card (`copied`, then `unchanged` on the next Play). It started Dolphin with the command line above plus `--harness-port 50101 -C Dolphin.DSP.Muted=True` (the frozen build, killed right after it started).
 - End to end against the local `accounts` service (invite from `admin invite create`, file mailer): sign-up with invite → verification link from the mail file → check verification → accept rules → connect code `SARA#996` assigned → ISO verified → assets extracted and the theme applied without a restart → Play wrote `user.json` (identical to `GET /v1/me/user-json`) and started Dolphin with the P+ launcher DOL → log out → wrong password shows the server's error → log in → password reset request sends the reset mail. Session restore across restarts verified.
+
+### Test mode
+
+`src/common/test_mode.ts`. Active when the launcher is not packaged (`npm start`, or Electron on the production build in `release/app`) or when `PPO_TEST_MODE=1`. An installed launcher ignores these variables otherwise.
+
+| Variable | Effect |
+|---|---|
+| `PPO_USER_DATA_DIR` | `app.setPath("userData")` and `sessionData`, first thing in `main.ts`, before the log file, settings, sessions, replay database, Dolphin User folders and Chromium's profile are touched. The game-asset cache moves there too (`<dir>/game-assets`, unless `PPO_ASSET_CACHE` is set). |
+| `PPO_REMOTE_DEBUGGING_PORT` | Chromium remote-debugging port (otherwise 9222, in development only). `http://127.0.0.1:<port>/json` lists the window. |
+| `PPO_HARNESS_PORT` | appends `--harness-port <port>` to the netplay Dolphin. |
+| `PPO_DOLPHIN_EXTRA_ARGS` | JSON array of extra netplay Dolphin arguments, appended last, e.g. `["-v","D3D11","-C","Dolphin.DSP.Muted=True"]`. |
+
+A malformed port or extra-argument list throws when the launcher starts (`main.ts` parses all four), so a test sees the mistake at once. In test mode `main.log` is written at info level, so the "Launching dolphin at path: …" line with the full Dolphin command line is in `<userData>/logs/main.log`. Nothing else is global: the single-instance lock is only taken when packaged, and the only fixed port (1212) belongs to the webpack dev server, which the built launcher does not use. Other useful variables: `PPO_DOLPHIN_PATH`, `PPO_DOLPHIN_USER_TEMPLATE`, `PPO_PLUGIN_PATH`, `PPO_ASSET_CACHE`, `PPO_ACCOUNTS_URL`.
+
+**Starting built instances side by side** (no webpack dev server). Run from the `launcher` directory: development defaults such as `../dolphin`, `../run/template-user` and `../game-code` are resolved from the working directory.
+
+```sh
+npm run build        # production webpack build into release/app/dist
+# One instance per user-data dir and debugging port (Git Bash; in PowerShell set $env:... first).
+PPO_USER_DATA_DIR=D:/tmp/ppo-a PPO_REMOTE_DEBUGGING_PORT=9301 PPO_HARNESS_PORT=50101 \
+PPO_DOLPHIN_PATH=D:/path/to/Dolphin.exe PPO_DOLPHIN_EXTRA_ARGS='["-C","Dolphin.DSP.Muted=True"]' \
+  node_modules/electron/dist/electron.exe release/app &
+PPO_USER_DATA_DIR=D:/tmp/ppo-b PPO_REMOTE_DEBUGGING_PORT=9302 PPO_HARNESS_PORT=50102 \
+PPO_DOLPHIN_PATH=D:/path/to/Dolphin.exe PPO_DOLPHIN_EXTRA_ARGS='["-C","Dolphin.DSP.Muted=True"]' \
+  node_modules/electron/dist/electron.exe release/app &
+curl http://127.0.0.1:9301/json   # each lists its own page: file:///.../release/app/dist/renderer/index.html#/landing
+```
+
+Each new user-data dir seeds its netplay User folder from the template on start-up (2 GB: the SD card) and makes its own patched copy on the first Play (another 2 GB). Kill the instances with their process tree (`taskkill /T /F /PID <pid>`): Electron starts GPU and renderer child processes. Three fixes were needed for this mode: the preload script and the replay database migrations are taken from the production build whenever `NODE_ENV` is `production` (they were looked up in the dev locations when unpackaged), and `electron release/app` no longer treats the app folder (`argv[1]`) as a replay file to open (it started a playback Dolphin with `-i`).
 
 ## Server issues
 
@@ -136,6 +212,9 @@ Found while porting; not fixed here (server/ is out of scope):
 ## Open issues
 
 - **Product name, icons, website**: placeholder name; no app/installer/tray icon (Electron default); privacy policy, terms, profile and account pages do not exist.
+- **SD card space**: P+'s 2 GB card has only ~40 MB (20,441 clusters) free. The plugin is 24 KB, but anything bigger we put on the card later has to fit there.
+- **First Play is slow and silent**: copying the 2 GB card takes 14-34 s with no progress shown (Slippi's Play has no such step). On a copy-on-write file system (ReFS, APFS, Btrfs), `COPYFILE_FICLONE` makes it instant.
+- **"Configure Dolphin" uses the user's own card**, without the plugin. If the user boots P+ from there and the game writes to that card, the next Play sees a changed source and re-copies it, dropping what the game wrote on the patched copy.
 - **Packaging the P+ files**: the netplay User folder needs P+'s launcher DOL and `sd.raw`. Development seeds them from `run/template-user`; a release must ship or obtain them (P+'s files have no public license: ask the P+DT, research 04 section 5).
 - **Disc-only theme**: without the P+ SD card there is no background gradient, so frames stay untinted grey on the neutral palette. Fine as a fallback, but P+ users always have the SD card.
 - **MUI glyph icons** remain (see section 5).
