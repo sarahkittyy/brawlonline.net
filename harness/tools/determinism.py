@@ -65,12 +65,13 @@ class Profile:
     fixed_rtc: bool
     gpu_determinism: Optional[str]  # None: keep the launcher INI ("fake-completion"); else override
     note: str = ""
+    video: str = "Null"  # a real backend renders, so the GPU thread lags the CPU as in play
 
     def config(self) -> InstanceConfig:
         args = []
         if self.fixed_rtc:
             args += ["Dolphin.Core.EnableCustomRTC=True", f"Dolphin.Core.CustomRTCValue={FIXED_RTC:#x}"]
-        return InstanceConfig(cpu_thread=self.cpu_thread, video_backend="Null", config_args=args)
+        return InstanceConfig(cpu_thread=self.cpu_thread, video_backend=self.video, config_args=args)
 
 
 PROFILES: Dict[str, Profile] = {p.name: p for p in (
@@ -81,6 +82,10 @@ PROFILES: Dict[str, Profile] = {p.name: p for p in (
     Profile("dc-rtc-gpuauto", True, True, "auto", "dual core, fixed RTC, GPUDeterminismMode auto (Dolphin default)"),
     Profile("dc-rtc-gpunone", True, True, "none", "dual core, fixed RTC, GPUDeterminismMode none"),
     Profile("sc-rtc-gpuauto", False, True, "auto", "single core, fixed RTC, GPUDeterminismMode auto"),
+    Profile("dc-rtc-d3d11", True, True, None, "dual core, fixed RTC, fake-completion, D3D11 (real rendering)",
+            video="D3D11"),
+    Profile("sc-rtc-d3d11", False, True, None, "single core, fixed RTC, D3D11 (real rendering)",
+            video="D3D11"),
 )}
 
 LAUNCHER_INI = "ID-Project+ Offline Launcher.ini"

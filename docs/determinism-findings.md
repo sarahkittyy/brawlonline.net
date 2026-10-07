@@ -2,6 +2,8 @@
 
 Measured 2026-10-06 with `harness/tools/determinism.py` on the frozen harness build `run/bin/harness-100b8fd189`, Windows 11, 8 cores shared with another agent's Dolphin instances. The question: with identical controller input from boot, do two Dolphin runs stay identical, and where do they diverge first? And does dual core make gameplay-state divergence worse?
 
+> **Update (round 3, `docs/rollback-fixes-status.md` section 3).** On the current build (`a1f9ec2685` no longer drops GPU commands under pauses), dual core with Null video was bit-identical in whole MEM1/MEM2 in 2 of 3 pairs; the third differed only in boot-time timestamps. Cause 3 below is a render-side screen-colour probe: Brawl copies 4x4 EFB pixels into .bss 0x804951C0 and feeds their average into NW4R G3D light objects, so its value depends on when the GPU thread wrote it and on how the frame was rendered. With D3D11 even single core is not bit-identical (shader compile timing under `AsynchronousSkipRendering`). Player state, damage, stocks and RNG stayed equal in every run. New profiles: `dc-rtc-d3d11`, `sc-rtc-d3d11`.
+
 ## Method
 
 1. **Record once** (`determinism.py record`, single core, fixed RTC). Boot the Offline Launcher with no input; P+ boots straight to the CSS. Then, with the closed-loop recipes, P1 picks Fox and P2 Falco, P1 picks Battlefield, and both play 1200 game frames (P1 "chase", P2 seeded "random"). The recording ran from VI field 461 (first input) to 2964, with GO at field 1760.

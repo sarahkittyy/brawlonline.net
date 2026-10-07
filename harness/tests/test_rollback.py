@@ -327,3 +327,82 @@ def test_rollback_presents_one_frame_per_displayed_frame(request, dolphin_exe, g
         assert hist_after[1] == sum(hist_after) > 0, info
         # And the presenter showed about one frame per displayed frame (it runs a little behind).
         assert abs(d["presents"] - d["displayed_frames"]) <= 5, info
+
+
+# --------------------------------------------------------------------------- dual-core stress
+
+
+def _save_samples(client, since: int) -> tuple[int, list[int], list[int]]:
+    try:
+        r = client.call("rollback_timings", since=since)
+    except HarnessError as e:
+        pytest.skip(f"build without rollback_timings: {e}")
+    return int(r["next"]), list(r["save_us"]), list(r["sync_us"])
+
+
+@pytest.mark.slow
+@pytest.mark.gpu
+@pytest.mark.parametrize("preset", ["bad_wifi", "awful"])
+def test_dualcore_real_backend_long_session_no_desync(request, dolphin_exe, gpu_backend, preset):
+    """Dual core with a real video backend over a bad link, several matches in a row (about
+    PPR_TEST_LONG_SECONDS of match time, default 150): the GPU thread renders and writes EFB copies
+    to RAM while the CPU thread snapshots, loads and resimulates up to 7 frames. Both peers must
+    feed the game identical pads and compute identical checksums on every confirmed frame, GekkoNet
+    must see no desync, no side may freeze, the GPU thread must run in deterministic mode, and the
+    snapshots must not wait for the GPU thread (they did, 1.5-3.5 ms each, with 0.2-1 s spikes)."""
+    import os
+
+    seconds = float(os.environ.get("PPR_TEST_LONG_SECONDS", "150"))
+    rng = random.Random(preset)
+    with two_player_netplay(preset, rollback=True, exe=dolphin_exe, name=f"rb-dcstress-{preset}",
+                            config=InstanceConfig(cpu_thread=True, video_backend=gpu_backend),
+                            seed=11) as s:
+        host, joiner = s.clients
+        _require_rollback_history(host)
+        hs, js = F.netplay_seat(host, "host"), F.netplay_seat(joiner, "joiner")
+        nexts = [0, 0]
+        saves: list[int] = []
+        syncs: list[int] = []
+        played, matches = 0.0, 0
+        with Watch(s.instances) as w:
+            while played < seconds:
+                F.to_css([hs, js])
+                F.pick_characters([(hs, rng.choice(["fox", "falco"])), (js, rng.choice(["fox", "falco"]))])
+                F.start_and_pick_stage(hs, "battlefield")
+                F.wait_match_started([host, joiner])
+                matches += 1
+                for i, c in enumerate((host, joiner)):
+                    nexts[i], _, _ = _save_samples(c, nexts[i])
+                t0 = time.monotonic()
+                F.play([(hs, "random"), (js, "random")], int(60 * min(seconds - played, 75)),
+                       seed=rng.randrange(1 << 30))
+                played += time.monotonic() - t0
+                for i, c in enumerate((host, joiner)):
+                    nexts[i], sv, sy = _save_samples(c, nexts[i])
+                    saves += sv
+                    syncs += sy
+                st = B.read_match_state(host.read_mem)
+                if st.in_match and not st.game_set:
+                    break
+                B.wait_scene(host, [B.Scene.RESULTS], 60 * 20)
+            for c, seat in ((host, hs), (joiner, js)):
+                B.neutral(c, seat.pp)
+            time.sleep(2)
+            cmp = _compare_histories(host, joiner)
+            stats = {i.name: i.client.netplay_status().rollback for i in s.instances}
+    for name in w.frames:
+        assert w.longest_stall(name) < 3.0, f"{name} froze: {w.frames[name][-5:]}"
+    assert cmp["compared"] > 1000 and cmp["in_match"] > 600, cmp
+    assert not cmp["pad_mismatch"], cmp
+    assert not cmp["state_mismatch"], cmp
+    for name, rb in stats.items():
+        assert rb["desyncs_detected"] == 0, (name, rb)
+        assert rb["rollbacks"] > 100, (name, rb)
+        assert rb.get("gpu_deterministic") is True, (name, rb)
+    # Snapshots run without waiting for the GPU thread: at most a handful of waits for a capture
+    # the video thread had not reached a whole ring of snapshots later.
+    saves.sort()
+    assert len(saves) > 60 * 30, len(saves)
+    assert sum(1 for x in syncs if x > 0) <= len(syncs) // 100, sorted(syncs)[-20:]
+    p99 = saves[int(0.99 * (len(saves) - 1))]
+    assert p99 < 10_000, ("save p99 us", p99, saves[-20:])

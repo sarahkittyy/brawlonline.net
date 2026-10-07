@@ -1,8 +1,147 @@
 # Rollback fixes: status
 
-Branch `rollback-fixes` in `dolphin/` (off `harness`). Not pushed. All commits build. The regression tests are in `harness/tests/test_rollback.py` (`pytest -m dolphin tests/test_rollback.py`: 12 tests, single and dual core plus a real-backend presentation test, about 10 minutes, all passing on `996a9dea34`; the 6 dual-core tests also on `a1f9ec2685`).
+Branch `rollback-fixes` in `dolphin/` (off `harness`). Not pushed. All commits build. The regression tests are in `harness/tests/test_rollback.py` (`pytest -m dolphin tests/test_rollback.py`: 14 tests, single and dual core, a real-backend presentation test and a long dual-core real-backend stress test; all 14 passed on `7b2227fd5e` in 16 minutes).
 
 Measurement caveat: all numbers come from two instances on one 8-core PC, with another agent's Dolphins running most of the time, muted. Unless a section says otherwise: single core, Null video. FPS is noisy; before/after pairs were run back to back under the same conditions.
+
+## Round 3: Linux merge, dual-core snapshots without a GPU sync, the stall desync
+
+| SHA | Change |
+|---|---|
+| `2d6fd89d29` | Merge of `linux-build` (`f3e902488b`, `107af7a6f3`, `f166669140`, `4cecd8e97f`): GCC build fixes, the same snapshot code on every platform, the cached interpreter for rollback off x86-64, Docker tooling and CI. |
+| `7ad875cd2c` | Instrumentation: per-snapshot timing samples (`rollback_timings`), GPU-sync and video-thread compile counters, GPU-thread writes to guest RAM. |
+| `5defc02845` | **Dual-core snapshots no longer sync the GPU thread** (task 1). |
+| `7b2227fd5e` | Fix for `5defc02845`: the restored FIFO is put in place on the video thread. A CPU-side pointer reset raced with the idle video thread; the dual-core sync test crashed 3 of 3, and passes 5 of 5 after the fix. |
+| `05616daf01` | Rollback sessions always run the deterministic GPU thread (task 3). |
+| `463c711a12` | GekkoNet: a local stall no longer drops a healthy peer; disconnect events raised by a network poll are no longer lost (task 2). |
+| `1e04ab552a` | NetPlay: a two-player rollback game ends cleanly when GekkoNet drops the peer instead of desyncing silently; counters for the silent-desync paths; snapshot phase timings; raw pads in `rollback_pad_history` (task 2). |
+
+New tool: `harness/tools/dc_rollback.py`. It runs two-instance sessions over netsim with any backend and reports:
+- per-snapshot percentiles and game FPS;
+- a comparison of every confirmed frame, with chunk hashes and raw pad bytes at the first mismatch.
+
+`--freeze` suspends one or both Dolphins. Raw data: `run/qa/dc/` (local).
+
+### 0. Linux merge (`2d6fd89d29`)
+
+The four commits merged cleanly into `rollback-fixes` (merge commit, so their SHAs are kept). Windows: `test_rollback.py` 12/12 passed on the merge build (`run/bin/rf-2d6fd89d29`). On the first run two tests failed for harness reasons and passed on rerun:
+- `synctest[4-dc]`: CSS navigation timed out under load;
+- `presents_one_frame[sc]`: once too few rollbacks on the CSS, once the joiner never reported the game ready at session start.
+
+The Linux rebuild was skipped. Docker Desktop's engine answers every request with "Internal Server Error" again (the hang described in `docs/linux-build.md`), and restarting Docker Desktop on the shared machine was not done. The new C++ in this round has not been compiled with GCC yet.
+
+### 1. Dual-core snapshot stalls (`5defc02845`)
+
+**Why the sync was there.** A rollback snapshot serializes the video state (`VideoCommon_DoState`). In dual core that ran on the GPU thread as a blocking request after `SyncGPUForDoState` drained it, because the state has to match the CPU thread's position in the command stream. In deterministic dual core (always the case in rollback netplay, see 3) the state is owned by two threads:
+
+- CPU thread: the FIFO preprocessing position (`pp_read_ptr`, `write_ptr`), the CP registers and the PE registers. PE tokens and finish interrupts are raised by the CPU-side preprocessor, in emulated time. Bounding box and EFB access are disabled in this fork.
+- GPU thread: BP/CP/XF memory, texture memory and TMEM, the pixel/vertex/geometry shader managers, the vertex manager, the presenter.
+- Guest RAM written by the GPU thread: EFB copies to RAM. This fork copies EFB and XFB to RAM (`EFBToTextureEnable` and `XFBToTextureEnable` are off), deferred until the next draw-done/token. Measured in a match, about 5 per frame:
+  - two 614 KB keep-frame-buffer copies, at 0x91329EE0 and 0x913BFF00;
+  - a 256 KB copy at 0x933A99C0;
+  - two 64-byte copies into .bss, at 0x804951C0 and 0x80495200;
+  - the XFB, in the excluded framebuffer region.
+
+  Each readback waits for the host GPU: 80-170 us on average, up to 50-210 ms when the GPU is contended.
+
+**Fix.** Snapshots are split along that line:
+- The CPU part is serialized on the CPU thread in place of the video section. Of the FIFO only the bytes after `pp_read_ptr` are kept (a command not yet seen complete); before, the whole 2 MB buffer was copied.
+- The GPU part is captured by the video thread itself (`Fifo::QueueVideoThreadCapture`) into the slot, once it has executed every command preprocessed before the snapshot.
+- The CPU never waits, except when the video thread is a whole ring of snapshots behind. That never happened in the runs below.
+- Loads still drain the GPU thread, then restore the CPU part and, in one blocking request on the video thread, the FIFO bytes and the slot's capture. The FIFO pointers must not be reset on the CPU thread: the idle video thread wakes up every 100 ms and runs the FIFO whenever `write_ptr > seen_ptr`. That race crashed the dual-core sync test (`7b2227fd5e`).
+
+Guest-RAM writes by the GPU thread were already timing-dependent in dual core. With the async capture a copy can land just after the snapshot instead of before it. That changes which slot holds the bytes of the EFB copy buffers, never gameplay memory (see 3). Single core and `PPR_ROLLBACK_SYNC_VIDEO=1` keep the old path (used for the A/B below).
+
+**Results.** Same binary, old path via `PPR_ROLLBACK_SYNC_VIDEO=1`, runs interleaved, dual core, 3x IR, 60 s of match per run. p50/p99 are the medians over runs and sides; max is over all runs:
+
+| preset, backend | snapshot p50 / p99 / max, old | snapshot p50 / p99 / max, new | GPU-sync part of old (new: 0) | game FPS old / new |
+|---|---|---|---|---|
+| typical, D3D11 (final build `7b2227fd5e`, 2 runs each) | 1643 / 2699 / 4581 us | 791 / 1218 / 1890 us | 786 / 1700 / 3537 us | 59.85 / 60.04 |
+| typical, D3D11 (earlier old-path runs) | 1523 / 3020 / 41641 us | (new-path runs failed in setup) | 813 / 2242 / 40970 us | 60.00 |
+| typical, Vulkan | 1288 / 3059 / 130810 us | 649 / 1067 / 16992 us | 590 / 2248 / 129774 us | 59.83 / 60.32 |
+| bad_wifi, D3D11 | 1460 / 2912 / 40062 us | 633 / 1020 / 9372 us | 787 / 2162 / 39418 us | 58.78 / 59.47 |
+| bad_wifi, Vulkan | 1280 / 2921 / 15782 us | 623 / 987 / 11887 us | 592 / 2200 / 7783 us | 58.98 / 59.55 |
+| awful, D3D11 (stress runs, 1 old / 3 new, heavier load) | 1578 / 4514 us | 691-802 / 1115-1438 us | 893 / 3460 us | 48.7 / 47.6-50.8 |
+
+Snapshots now cost about 0.65-0.8 ms (p50) and 1.0-1.2 ms (p99) in dual core, about what they cost in single core, and the 40-130 ms spikes from the GPU sync are gone. On this PC the game runs at its 60 FPS cap on typical and bad_wifi either way. On awful (CPU-bound by 7-frame resimulations) FPS depends on resimulation and machine load.
+
+**The 0.2-1 s spikes.**
+
+- *Not shader compilation.* The fork defaults to `ShaderCompilationMode = AsynchronousSkipRendering`, so GX shaders never block the video thread. A session compiles only about 8 pipelines synchronously: the EFB-copy and texture-conversion utility pipelines, compiled from source on first use and never cached on disk, 2-15 ms each, all on boot or the CSS. Of the sync spikes over 50 ms, none overlapped a compile. Ubershaders would not change anything here. One caveat, from 3 below: skip-rendering makes the pixels a frame shows depend on compile timing.
+- *Old path, up to about 130 ms.* The sync waited for whatever the video thread was blocked on: mostly the EFB-copy readbacks above (up to 210 ms each under contention), plus presents. Gone with the async capture.
+- *Remaining outliers of 0.2-17 s in both paths.* These fall outside every snapshot phase: the phase breakdown (eviction wait, DoState, RAM copy) stayed at microseconds and about 1 ms. Both Dolphins' logs stop and resume at the same millisecond, so the cause is a host-wide I/O stall:
+  - D: was 99 % full;
+  - each test instance copies a 2 GB `sd.raw` onto it;
+  - the harness logs at Info level, synchronously from the CPU thread (several lines per frame).
+
+  These are test-environment artefacts, not rollback cost. They did expose the desync in 2.
+
+### 2. The "dual-core" desync: a GekkoNet disconnect after a stall (`463c711a12`, `1e04ab552a`)
+
+**Reproduction.** Stress campaign: dual core, D3D11 and Vulkan, bad_wifi and awful, about 2 minutes each, every confirmed frame compared. 10 sessions completed; 3 ended in setup errors (menu navigation or join under awful). Two runs desynced, one with the new snapshot path and one with the old. Both followed a host-wide stall of 8-14 s (above), and neither depended on dual core:
+
+- The first symptom, on a confirmed frame where every checksum still matched, is a pad slot that differs:
+  - on one peer, the remote player's `gfPadStatus` is all zeros;
+  - the other peer has that player's real (neutral) input, which differs only in the game-owned bytes 0x39-0x3B (`CC CC CC`).
+
+  The state checksums diverge 1-20 frames later.
+- Freezing one Dolphin for 7 s with `NtSuspendProcess` (`dc_rollback.py --freeze 7 --freeze-who joiner`) reproduces it every time: 6 of 6 runs, single and dual core, Null and D3D11. The first pad mismatch came 5-30 s into the match, then 1900-2700 mismatching confirmed frames. GekkoNet's `desyncs_detected` stayed 0.
+
+**Cause.**
+
+1. GekkoNet drops a peer it has not heard from for 5 s (`DISCONNECT_TIMEOUT`). From an agreed frame on, it feeds that player its neutral "disconnected" input: zeros, hence the all-zero slot.
+2. In a two-player game, both sides do this to each other at different frames, and each keeps its own player moving. The game cannot stay in agreement, and GekkoNet's checksum exchange stops for a dropped peer.
+3. After a *local* stall, GekkoNet dropped a peer that was fine. The timeout compared the host clock with the last packet's arrival, while the peer's packets were waiting in our socket.
+4. The disconnect event was lost. `gekko_network_poll` raised it, and the next `gekko_update_session` cleared it before `gekko_session_events` returned it, so the client never knew.
+5. When the client did see it, `ProcessGekkoEvents` returned false and that update's game events were dropped. This left the client a frame behind GekkoNet's numbering for good, which matches the off-by-one frame counter in the first desync.
+
+**Fix.**
+- GekkoNet restarts its timeout clocks after a gap of over 1 s between two checks (our own stall), and keeps session events until they have been read.
+- The client processes every event. On a peer disconnect in a two-player game it shows an OSD message and requests a game stop, which the server relays to both peers.
+
+**Verified.**
+- One peer suspended for 7 s (2 runs): the host logs `GekkoNet: Player 1 disconnected` and both games stop. No silent desync.
+- Both suspended for 10 s: no disconnect, no mismatch on 3780 confirmed frames, and the match continues. A second attempt failed only because the harness's own 10 s `read_mem` timeout expired during the freeze.
+
+**New counters.**
+- `peer_disconnects`, `skipped_loads` and `dropped_advances` stayed 0 in all normal runs.
+- `stall_fallbacks` counts stall waits that a pause request turned into a guest-side spin, which lets emulated time run between two frames on one peer. Every harness read during a stall does this: 1665 in 60 s under bad_wifi, with no mismatch on 4490 confirmed frames.
+- Keeping the CPU on a host-side wait through such a lock was tried and dropped: it cost 8 FPS (51 vs 59), because harness reads then held the CPU thread.
+
+**Not found: a dual-core-specific gameplay desync.** With the stall cases removed, all 27 dual-core sessions of this round compared clean: 66,944 confirmed frames in 11 runs compared end to end, plus the last 2048 frames of 16 earlier runs (32,593), over typical, bad_wifi and awful, D3D11 and Vulkan, old and new snapshot path. What differs between peers in dual core is render-side state only (3).
+
+**Stress test.** `test_dualcore_real_backend_long_session_no_desync[bad_wifi|awful]` (`slow`, `gpu`) runs dual core with a real backend, several matches back to back, about 150 s of match time (`PPR_TEST_LONG_SECONDS`). It asserts:
+- pads and checksums equal on every confirmed frame, no GekkoNet desync, no freeze;
+- the deterministic GPU thread is in use;
+- at most 1 % of snapshots waited for the video thread, and snapshot p99 is under 10 ms.
+
+Both variants passed on `7b2227fd5e`.
+
+### 3. Offline dual-core reproducibility vs netplay (`05616daf01`)
+
+**Why both observations hold.**
+
+- In rollback netplay the deterministic GPU thread raises PE tokens and finish interrupts and runs the CP on the CPU thread, in emulated time. So the CPU never sees GPU-thread timing, except through guest RAM written by the GPU thread.
+- Brawl reads back exactly one such thing, a screen-colour probe:
+  - `fn_80025314` projects a 3D point to the screen and copies 4x4 pixels into the .bss buffer at 0x804951C0 (two 64-byte EFB copies);
+  - `fn_80025520` averages them into a colour;
+  - `gfSceneRoot`'s update (`fn_8000EB1C`) feeds that colour to NW4R G3D light objects (0x801A7xxx). That is the System-heap G3D object that diverged in `docs/determinism-findings.md` (cause 3).
+- In dual core the CPU reads the probe before or after the video thread wrote this frame's copy, depending on host timing. On every backend the pixels also depend on rendering: the GPU, the driver, and with `AsynchronousSkipRendering` the shader compile timing. Offline with D3D11 even single core is not bit-reproducible (menu instances differ from field 420).
+- So the offline whole-heap hashes see render-side differences. Netplay's per-frame checksum covers gameplay fields (frame counter and fighters), which never take these values.
+- Lockstep and rollback do not mask anything: peers keep their own render-side state, and a rollback restores the local snapshot.
+- The gameplay divergence once seen offline came from the harness pauses on the old build: a sync while paused dropped GPU commands (fixed in `a1f9ec2685`).
+
+**Checked on the current build** (`determinism.py compare`, the same 528-input timeline, about 500 pauses per run):
+
+| profile | runs | result |
+|---|---|---|
+| dual core, Null (`dc-rtc`) | 3 pairs | 2 bit-identical in whole MEM1/MEM2 at all 175 checkpoints, including the 1200-frame match. 1 differed in timestamps only (`__OSStartTime` by 6 ticks at boot, then the timestamp in gfPadSystem and once MenuInstance), with player state equal throughout. Before: 1 of 6 identical, 4 of 6 crashed, 1 gameplay divergence. |
+| dual core, D3D11 (`dc-rtc-d3d11`, new) | 3 pairs | Players, damage, stocks and RNG equal at the end in all 3. 2 differed in the match instance heaps (G3D scene state) from field 2440-2450; 1 differed from boot (MenuInstance). |
+| single core, D3D11 (`sc-rtc-d3d11`, new) | 1 pair | Also not bit-identical (MenuInstance from field 420); players equal. |
+
+**Can dual core diverge gameplay in a netplay session?** Only if the deterministic GPU thread is off. `GPUDeterminismMode` was never part of the netplay settings. A user with "none" in their config therefore ran rollback dual core with the GPU thread owning the FIFO and PE interrupts: with two instances whose Dolphin.ini and game INIs say "none", `gpu_deterministic` was false. `05616daf01` makes the netplay layer force `fake-completion` for rollback sessions (checked true afterwards).
+
+The render-side probe stays timing-dependent by design. It would matter only if a later region-set rollback put the G3D light objects into the compared or restored set, so leave them out.
 
 ## Round 2: presentation, dual-core tests, delay setting, rollback window
 
@@ -214,4 +353,4 @@ None of them reach the gameplay checksum.
    - OS thread contexts and timestamps;
    - the CPU and timing state that must still be restored: registers, downcount, exceptions, CoreTiming;
    - the ranges that differ between peers outside the gameplay heaps (table above).
-3. Investigate the single dual-core desync seen with the 7-frame window (round 2, item 5).
+3. Done (round 3): the dual-core desync was a GekkoNet disconnect after a multi-second stall; fixed. Open: decide the UX for a dropped peer (now: the game ends on both sides with an OSD message), and compile round 3 with GCC once Docker works again.

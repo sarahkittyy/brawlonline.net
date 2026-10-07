@@ -176,7 +176,8 @@ Game-level flows live in `ppharness/brawl.py` (memory map and recipes, see `docs
 
 Tools (`harness/tools/`):
 
-- `determinism.py record|compare|matrix`: offline determinism with identical inputs (see `docs/determinism-findings.md`).
+- `determinism.py record|compare|matrix`: offline determinism with identical inputs (see `docs/determinism-findings.md`). Profiles `dc-rtc-d3d11`/`sc-rtc-d3d11` render with D3D11.
+- `dc_rollback.py run|matrix`: two-instance rollback sessions with any backend and CPU mode; snapshot percentiles (`rollback_timings`), game FPS, every confirmed frame compared, chunk hashes and raw pad bytes at the first mismatch, `--freeze` to suspend one or both Dolphins (see `docs/rollback-fixes-status.md`, round 3).
 - `qa_reachability.py`: can a netplay player reach the Code Menu, Debug Mode, Giga Bowser/Wario-Man or non-Versus modes?
 - `gameplay_rollback.py prep|simstart|diff|play|replay|synctest`: the gameplay-only rollback spike (independent menu histories, start-of-match memory diffs, lockstep A/B play with sync variants, single-instance region save/restore sync tests). See `docs/gameplay-rollback-feasibility.md`. Needs numpy. `gprb_late_divergence.py` analyses the late A/B divergence; `gprb-sets/` holds region-set JSON files.
 

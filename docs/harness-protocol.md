@@ -59,6 +59,7 @@ Let automated scripts (and Claude) run Dolphin instances end to end with no huma
 | `netplay_start` | — | `{}` (host only; boots the game on every client) |
 | `netplay_status` | — | `{"role": "host"\|"client"\|null, "connected": bool, "players": [{"pid", "name", "ping_ms"}], "game_running": bool, "rollback": {...}}`. The `rollback` fields are listed under "Rollback counters" below |
 | `rollback_pad_history` | `since` (GekkoNet frame, default 0) | `{"frames": [[frame, buttons_p0..p3, crc32, gekko_checksum, legacy_checksum, frame_counter, fighters_checksum, logic_steps], ...]}`. See "Rollback debugging commands" |
+| `rollback_timings` | `since` (sample index, default 0) | `{"next", "first", "save_us": [...], "sync_us": [...], "compiles": [...], "evict_us": [...], "dostate_us": [...], "ram_us": [...]}`: one sample per rollback snapshot (the last 32768). See "Rollback debugging commands" |
 | `rollback_chunk_hashes` | `frame` (GekkoNet frame) | `{"frame", "chunk_size", "hashes": [...]}`. Needs `PPR_ROLLBACK_CHUNK_HASHES` or a sync test |
 | `cpu_state` | — | `{"pc", "npc", "msr", "lr", "ctr", "srr0", "srr1", "sp", "exceptions", "pi_cause", "pi_mask", "vi_display_interrupts": [4], "current_thread"}` (debugging) |
 | `netplay_leave` | — | `{}` |
@@ -102,6 +103,11 @@ Everything in this section was added while fixing Brawlback's rollback (`rollbac
 | `stall_polls` | GekkoNet polls that gave no frame to advance; the CPU thread waits about 0.25 ms per poll |
 | `synctest`, `synctest_mismatches` | sync test running; re-runs whose MEM1/MEM2 differed from the first run |
 | `netplay_desync_reports` | Dolphin's own netplay desync messages |
+| `save_sync_count`, `save_sync_us_total`, `save_sync_us_max` | snapshots that waited for the GPU thread (dual core), and the wait |
+| `gpu_deterministic` | dual core with the deterministic GPU thread (always the case in rollback sessions since `05616daf01`) |
+| `gpu_sync_compiles`, `gpu_sync_compile_us_total`, `gpu_sync_compile_us_max`, `gpu_sync_utility_compiles`, `gpu_sync_utility_compile_us_total`, `shader_compilation_mode` | pipelines the video thread compiled synchronously (all; EFB-copy/texture-conversion ones), and the configured mode |
+| `peer_disconnects`, `skipped_loads`, `dropped_advances` | GekkoNet dropped the peer (the game is then stopped); rollbacks deeper than the snapshot ring; advances beyond one update's capacity. All should stay 0 |
+| `stall_fallbacks` | stall waits a pause request (e.g. a harness read) turned into a guest-side spin |
 
 ### Rollback input delay
 
@@ -120,12 +126,15 @@ During a rollback the resimulated frames are run and rendered in full but not pr
 | `copy_decision_misses` | dual core: XFB copies the GPU thread ran without a CPU-side decision (should stay 0) |
 | `presents`, `duplicate_presents` | frames the presenter showed; of those, the same XFB as the previous one |
 | `displayed_frames`, `displayed_frames_after_resim` | displayed (not resimulated) frames of the rollback loop; of those, frames right after a resimulation |
+| `gpu_ram_writes` | `{efb_copies, efb_copies_deferred, efb_copy_flushes, xfb_copies, fills, bytes, readback_us_total, readback_us_max}`: what the video thread wrote to guest RAM, and how long EFB copy readbacks waited for the host GPU |
 | `outputs_per_frame`, `outputs_per_frame_after_resim` | histograms (index 0-7, the last bucket is 7 or more): frames sent to the presenter per displayed frame. With the fix every displayed frame is in bucket 1 |
 
 ### Rollback debugging commands
 
 - **`rollback_pad_history`**, args `since` (GekkoNet frame, default 0): `{"frames": [[frame, buttons_p0, buttons_p1, buttons_p2, buttons_p3, crc32, gekko_checksum, legacy_checksum, frame_counter, fighters_checksum, logic_steps], ...]}` for the last 2048 GekkoNet frames, oldest first. Per frame: the raw `gfPadStatus` slots (`0x805BAD00 + 0x40 * port`) the game actually used (the first u32 of each port, and a CRC32 over all four 0x40-byte slots). A resimulation overwrites the frame's entry, so once a frame is confirmed both peers must report identical rows. The last five columns are written when the frame's snapshot is taken: the GekkoNet checksum, Brawlback's old checksum, the `g_GameFrame` persistent frame counter, the fighters checksum (per port: active instance, damage, stocks, X/Y, status kind) and the number of game-logic steps (`gameProc` calls) the iteration ran. The checksums are 0 outside `scMelee`. Errors with "no netplay session" outside netplay.
 - **`rollback_chunk_hashes`**, args `frame`: `{"frame", "chunk_size", "hashes": [16 hex chars, ...]}`, an XXH3 hash of each `chunk_size` bytes of MEM1 then MEM2 at the end of that GekkoNet frame (last simulation wins), kept for the last 256 frames. `chunk_size` is the size actually used. Only recorded with `PPR_ROLLBACK_CHUNK_HASHES` or in a sync test; errors otherwise. Costs a few ms per frame. Used to find where two peers diverged.
+- **`rollback_timings`**, args `since`: per snapshot, the wall-clock save time, the time spent waiting for the GPU thread (the old drain, or with the split video state only a wait for a capture a whole ring behind), the synchronous pipeline compiles meanwhile, the eviction wait, the non-RAM DoState and the RAM-copy time. `next` is the index to pass next time; `first` the index of the first returned sample.
+- **`rollback_pad_history`** also takes `raw: true`: each row then ends with the 256 raw bytes (hex) of the four `gfPadStatus` slots.
 - **`cpu_state`**: `{"pc", "npc", "msr", "lr", "ctr", "srr0", "srr1", "sp", "exceptions", "pi_cause", "pi_mask", "vi_display_interrupts": [4], "current_thread"}`, read under a `CPUThreadGuard`. A hung game shows whether it spins with interrupts off (`msr` bit 0x8000 clear while `exceptions` has pending bits) or idles (`current_thread` 0).
 
 ### Environment switches
@@ -134,6 +143,8 @@ During a rollback the resimulated frames are run and rendered in full but not pr
 |---|---|
 | `PPR_SYNCTEST=N` (N = 1 to the rollback window) | A host that starts rollback netplay alone runs a GekkoNet stress session: every frame, the state from N frames back is loaded and resimulated with the same inputs (GGPO's SyncTest). `rollback.synctest` is true and `desyncs_detected` counts checksum mismatches between a frame and its re-runs. Memory hashing is on: a re-run whose MEM1/MEM2 differs increments `synctest_mismatches` and logs `SYNCTEST: frame F ...` lines with the differing chunks and words. N = 1 only reloads the latest snapshot; use N >= 2. Holding L on port 0 while booting reaches P+'s Training mode (one player plus a CPU), a single-instance match. |
 | `PPR_ROLLBACK_CHUNK_HASHES=1` or `=<bytes>` | record `rollback_chunk_hashes` (64 KiB chunks, or the given size, at least 64) |
+| `PPR_ROLLBACK_SYNC_VIDEO=1` | dual core: drain the GPU thread for every snapshot and serialize the whole video state there, as before `5defc02845` (A/B runs) |
+| `PPR_LOG_GPU_RAM_WRITES=<file>` | append one line per guest-RAM write by the video thread (Brawl match frame, kind, address, size) |
 | `PPR_ROLLBACK_PRESENT_RESIM=1` | present resimulated frames again (the behaviour before `2025577415`), for before/after measurements |
 | `PPR_HARNESS_PORT`, `PPR_HARNESS_AUDIO=1`, `PPR_HARNESS_POLL_SOURCE=si` | see above and "Deviations" |
 
