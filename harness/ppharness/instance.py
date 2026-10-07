@@ -397,6 +397,14 @@ class DolphinInstance:
         ini_path = d / "Config" / "Dolphin.ini"
         ini = IniFile.load(ini_path)
         ini.update(cfg.dolphin_ini_values(linked_load="Load" in self.linked_dirs))
+        iso = paths.game_iso()
+        if iso is None:
+            # The template stores an absolute host path; it may not exist on this OS.
+            cur = ini.get("Core", "DefaultISO")
+            if cur and not Path(cur).is_file() and paths.fallback_iso().is_file():
+                iso = paths.fallback_iso()
+        if iso is not None:
+            ini.set("Core", "DefaultISO", str(iso))
         ini.save(ini_path)
 
         pad_path = d / "Config" / "GCPadNew.ini"

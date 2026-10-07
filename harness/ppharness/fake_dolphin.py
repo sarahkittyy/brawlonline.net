@@ -11,7 +11,7 @@ writes ``<user>/Logs/dolphin.log`` and prints a little to stdout/stderr.
 Misbehaviour for tests is selected with the ``PPH_FAKE`` environment variable, a
 comma-separated list of:
 
-``ignore_quit``       answer ``quit`` but keep running (tests the kill path)
+``ignore_quit``       answer ``quit`` but keep running, and ignore SIGTERM (tests the kill path)
 ``crash``             exit with code 3 before listening
 ``no_harness``        reject ``--harness-port`` like an old build (exit code 2)
 ``listen_delay=S``    wait S seconds before listening (tests connect-with-retry)
@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import signal
 import sys
 import threading
 import time
@@ -94,6 +95,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if "listen_delay" in knobs:
         time.sleep(float(knobs["listen_delay"]))
+
+    if "ignore_quit" in knobs and hasattr(signal, "SIGTERM") and sys.platform != "win32":
+        # Stubborn for real: the POSIX shutdown path tries SIGTERM before SIGKILL.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
 
     from .mock_server import MockHarnessServer
 

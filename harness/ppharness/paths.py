@@ -5,8 +5,12 @@ what                   default                                     override
 =====================  ==========================================  ==========================
 workspace root         two levels above this package               ``PPHARNESS_ROOT``
 Dolphin binaries dir   ``<root>/dolphin/build/release/x64/Binaries``  ``PPHARNESS_DOLPHIN_DIR``
-DolphinNoGUI           ``<binaries>/DolphinNoGUI[.exe]``           ``PPHARNESS_DOLPHIN``
+DolphinNoGUI           ``<binaries>/DolphinNoGUI.exe``             ``PPHARNESS_DOLPHIN``
+                       (``dolphin-emu-nogui`` on Linux/macOS)
 template user dir      ``<root>/run/template-user``                ``PPHARNESS_TEMPLATE``
+game disc              the template's ``[Core] DefaultISO``         ``PPHARNESS_ISO``
+                       (``<root>/game/SSBB_NTSC.iso`` if that path
+                       doesn't exist here)
 instance dirs          ``<root>/run/instances``                    ``PPHARNESS_INSTANCES``
 =====================  ==========================================  ==========================
 """
@@ -37,11 +41,25 @@ def binaries_dir() -> Path:
 
 
 def dolphin_nogui() -> Path:
-    return _env_path("PPHARNESS_DOLPHIN") or binaries_dir() / _platform.exe_name("DolphinNoGUI")
+    return _env_path("PPHARNESS_DOLPHIN") or binaries_dir() / _platform.nogui_exe_name()
 
 
 def dolphin_gui() -> Path:
-    return binaries_dir() / _platform.exe_name("Dolphin")
+    return binaries_dir() / _platform.gui_exe_relpath()
+
+
+def game_iso() -> Path | None:
+    """``PPHARNESS_ISO`` if set, else None.
+
+    With None, DolphinInstance keeps the template's ``[Core] DefaultISO``, unless that path
+    doesn't exist on this machine (e.g. a Windows path inside a Linux container) and
+    ``fallback_iso()`` does.
+    """
+    return _env_path("PPHARNESS_ISO")
+
+
+def fallback_iso() -> Path:
+    return workspace_root() / "game" / "SSBB_NTSC.iso"
 
 
 def template_user_dir() -> Path:

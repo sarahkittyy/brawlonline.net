@@ -29,6 +29,24 @@ def exe_name(stem: str) -> str:
     return stem + ".exe" if IS_WINDOWS else stem
 
 
+def nogui_exe_name() -> str:
+    """The headless frontend's file name in the binaries dir.
+
+    CMake names it DolphinNoGUI.exe on Windows and dolphin-emu-nogui elsewhere
+    (Source/Core/DolphinNoGUI/CMakeLists.txt).
+    """
+    return "DolphinNoGUI.exe" if IS_WINDOWS else "dolphin-emu-nogui"
+
+
+def gui_exe_relpath() -> str:
+    """The Qt frontend, relative to the binaries dir (Source/Core/DolphinQt/CMakeLists.txt)."""
+    if IS_WINDOWS:
+        return "Dolphin.exe"
+    if IS_MACOS:
+        return "DolphinQt.app/Contents/MacOS/DolphinQt"
+    return "project-plus-dolphin"
+
+
 def default_binaries_dir(dolphin_root: Path) -> Path:
     if IS_WINDOWS:
         return dolphin_root / "build" / "release" / "x64" / "Binaries"

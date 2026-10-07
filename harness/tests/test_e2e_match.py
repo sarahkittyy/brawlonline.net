@@ -14,7 +14,9 @@ Run:  pytest -m dolphin tests/test_e2e_match.py      (needs PPHARNESS_DOLPHIN_DI
 
 from __future__ import annotations
 
+import os
 import shutil
+import sys
 import time
 from pathlib import Path
 
@@ -30,7 +32,9 @@ pytestmark = pytest.mark.dolphin
 
 P1, P2 = "fox", "falco"
 PLAY_FRAMES = 1200          # ~20 s of match
-VIDEO = "D3D11"              # screenshots need a real backend (headless D3D11 on Windows)
+# Screenshots need a real backend (headless D3D11 on Windows). Elsewhere default to Null (no GPU in
+# containers or CI; screenshots are then skipped, they are best effort); PPHARNESS_E2E_VIDEO overrides.
+VIDEO = os.environ.get("PPHARNESS_E2E_VIDEO") or ("D3D11" if sys.platform == "win32" else "Null")
 
 
 @pytest.fixture

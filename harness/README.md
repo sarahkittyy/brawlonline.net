@@ -26,8 +26,9 @@ What it expects (each path can be overridden with an environment variable):
 
 | what | default | override |
 |---|---|---|
-| DolphinNoGUI | `dolphin/build/release/x64/Binaries/DolphinNoGUI.exe` | `PPHARNESS_DOLPHIN` (or `PPHARNESS_DOLPHIN_DIR`) |
+| DolphinNoGUI | `dolphin/build/release/x64/Binaries/DolphinNoGUI.exe` (`build/Binaries/dolphin-emu-nogui` on Linux/macOS) | `PPHARNESS_DOLPHIN` (or `PPHARNESS_DOLPHIN_DIR`) |
 | template user dir | `run/template-user` | `PPHARNESS_TEMPLATE` |
+| game disc | the template's `[Core] DefaultISO`, or `game/SSBB_NTSC.iso` if that path doesn't exist on this OS | `PPHARNESS_ISO` |
 | instance dirs | `run/instances/<name>-<n>` | `PPHARNESS_INSTANCES` |
 | keep instance dirs | off | `PPHARNESS_KEEP=1` |
 

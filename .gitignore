@@ -1,5 +1,6 @@
 # local-only, large, or third-party
 /dolphin/
+/dolphin-linux/
 /refs/
 /game/
 /run/
