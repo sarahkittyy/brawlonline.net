@@ -1,13 +1,12 @@
 import "@/styles/styles.scss";
 
-import { ThemeProvider } from "@emotion/react";
-import { StyledEngineProvider, ThemeProvider as MuiThemeProvider } from "@mui/material/styles";
+import { StyledEngineProvider } from "@mui/material/styles";
 import log from "electron-log";
 import React, { Suspense } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ToastProvider } from "@/components/toast_provider";
-import { slippiTheme } from "@/styles/theme";
+import { GameThemeProvider } from "@/styles/game_theme";
 
 import { createApp } from "./app/create";
 import { ErrorBoundary } from "./components/error_boundary";
@@ -37,7 +36,7 @@ const LazyApp = React.lazy(async () => {
   }
 });
 
-// We only initialize theme providers and toast providers here, before the rest of the
+// We only initialize theme providers (fallback look until the game assets load) and toast providers here, before the rest of the
 // the app. We need the toast provider so we can show errors and notify during suspense,
 // and we need the theme providers so the notifications are styled correctly.
 const container = document.getElementById("app");
@@ -48,18 +47,16 @@ const root = createRoot(container);
 root.render(
   <React.StrictMode>
     <StyledEngineProvider injectFirst={true}>
-      <MuiThemeProvider theme={slippiTheme}>
-        <ThemeProvider theme={slippiTheme as any}>
-          <ToastProvider>
-            <ErrorBoundary padding="50px">
-              {/* Don't use a message here since the i18nService is not yet initialized at this point. */}
-              <Suspense fallback={<LoadingScreen message="" />}>
-                <LazyApp />
-              </Suspense>
-            </ErrorBoundary>
-          </ToastProvider>
-        </ThemeProvider>
-      </MuiThemeProvider>
+      <GameThemeProvider>
+        <ToastProvider>
+          <ErrorBoundary padding="50px">
+            {/* Don't use a message here since the i18nService is not yet initialized at this point. */}
+            <Suspense fallback={<LoadingScreen message="" />}>
+              <LazyApp />
+            </Suspense>
+          </ErrorBoundary>
+        </ToastProvider>
+      </GameThemeProvider>
     </StyledEngineProvider>
   </React.StrictMode>,
 );

@@ -11,7 +11,9 @@
  */
 import { delay } from "@common/delay";
 import { Preconditions } from "@common/preconditions";
+import { PRODUCT_NAME } from "@common/product";
 import { DolphinLaunchType } from "@dolphin/types";
+import { registerGameAssetScheme } from "@game_assets/protocol";
 import { ipc_statsPageRequestedEvent } from "@replays/ipc";
 import { ipc_openSettingsModalEvent } from "@settings/ipc";
 import type CrossProcessExports from "electron";
@@ -19,18 +21,16 @@ import { app, BrowserWindow, shell } from "electron";
 import log from "electron-log";
 import get from "lodash/get";
 import last from "lodash/last";
-import { mkdir } from "node:fs/promises";
 import path from "path";
-import url from "url";
-import { download } from "utils/download";
 import { fileExists } from "utils/file_exists";
 
 import { getConfigFlags } from "./flags/flags";
 import { installModules } from "./install_modules";
 import { MenuBuilder } from "./menu";
-import { clearTempFolder, getAssetPath, resolveHtmlPath } from "./util";
+import { clearTempFolder, resolveHtmlPath } from "./util";
 
-const BACKGROUND_COLOR = "#1B0B28";
+// Neutral until the renderer applies the theme (see renderer/styles/theme.ts).
+const BACKGROUND_COLOR = "#1c1c1c";
 
 const isDevelopment = process.env.NODE_ENV === "development" || process.env.DEBUG_PROD === "true";
 
@@ -40,15 +40,23 @@ let menu: CrossProcessExports.Menu | null = null;
 let mainWindow: BrowserWindow | null = null;
 let didFinishLoad = false;
 
+// In development Electron would use the generic "Electron" profile folder, shared by every dev app;
+// keep ours separate (and apart from an installed copy, which uses the product name).
+if (!app.isPackaged) {
+  app.setName(`${PRODUCT_NAME}-dev`);
+}
+
 log.initialize();
 log.errorHandler.startCatching();
 log.transports.file.level = isDevelopment ? "info" : "warn";
 
-// Only allow a single Slippi App instance in production
+// Only allow a single app instance in production
 const lockObtained = !app.isPackaged || app.requestSingleInstanceLock();
 if (!lockObtained) {
   app.quit();
 }
+
+registerGameAssetScheme();
 
 const flags = getConfigFlags();
 const { dolphinManager, appUpdater, browserWindowManager } = installModules(flags);
@@ -100,7 +108,7 @@ const createWindow = async () => {
     minHeight: isDevelopment ? undefined : 450,
     minWidth: isDevelopment ? undefined : 900,
     backgroundColor: BACKGROUND_COLOR,
-    icon: getAssetPath("icon.png"),
+    // No app icon: Slippi's icon is its branding and we have no art of our own (Electron default).
 
     // This setting only takes effect on macOS, and simply opts it into the modern
     // Big-Sur frame UI for the window style.
@@ -179,8 +187,6 @@ app.on("window-all-closed", () => {
   app.quit();
 });
 
-const slippiProtocol = "slippi";
-
 const waitForMainWindow = async () => {
   let retryIdx = 0;
   while (!didFinishLoad && retryIdx < 200) {
@@ -196,25 +202,20 @@ const waitForMainWindow = async () => {
   log.info(`Found mainWindow after ${retryIdx} tries.`);
 };
 
-const handleSlippiURIAsync = async (aUrl: string) => {
-  log.info("Handling URL...");
+/**
+ * Opens a replay file passed on the command line or through the OS file association.
+ * Slippi also registers a `slippi://` URL scheme that downloads replays from its cloud
+ * storage; we have no replay storage yet, so only local files are handled.
+ */
+const handleOpenFileAsync = async (aUrl: string) => {
+  log.info("Handling file...");
   log.info(aUrl);
 
-  // Check if the input is
-  // Specifying a base will provide sane defaults if the input is null or wrong
-  const myUrl = new url.URL(aUrl, `null://null`);
-  let protocol = myUrl.protocol;
-  log.info(`protocol: ${myUrl.protocol}, hostname: ${myUrl.hostname}`);
-  if (myUrl.protocol !== `${slippiProtocol}:`) {
-    if (await fileExists(aUrl)) {
-      log.info(`File ${aUrl} exists`);
-      protocol = "file:";
-    } else {
-      return;
-    }
+  if (!(await fileExists(aUrl))) {
+    return;
   }
 
-  // When handling a Slippi request, focus the window
+  // When handling a request, focus the window
   if (mainWindow) {
     if (mainWindow.isMinimized()) {
       mainWindow.restore();
@@ -224,71 +225,29 @@ const handleSlippiURIAsync = async (aUrl: string) => {
     await createWindow();
   }
 
-  // Parse optional startFrame from query params
-  const startFrameParam = myUrl.searchParams.get("startFrame");
-  const startFrame = startFrameParam != null ? parseInt(startFrameParam, 10) : undefined;
-
-  switch (protocol) {
-    case "slippi:": {
-      let replayPath = myUrl.searchParams.get("path");
-      if (!replayPath) {
-        return;
-      }
-      // For some reason the file refuses to download if it's prefixed with "/"
-      if (replayPath[0] === "/") {
-        replayPath = replayPath.slice(1);
-      }
-
-      const tmpDir = path.join(app.getPath("userData"), "temp");
-      await mkdir(tmpDir, { recursive: true });
-      const destination = path.join(tmpDir, path.basename(replayPath));
-
-      const fileAlreadyExists = await fileExists(destination);
-      if (!fileAlreadyExists) {
-        const dlUrl = replayPath.startsWith("http")
-          ? replayPath
-          : `https://storage.googleapis.com/slippi.appspot.com/${replayPath}`;
-        log.info(`Downloading file ${replayPath} to ${destination}`);
-        // Dowload file
-        await download({ url: dlUrl, destinationFile: destination, overwrite: true });
-        log.info(`Finished download`);
-      } else {
-        log.info(`${destination} already exists. Skipping download...`);
-      }
-      await playReplayAndShowStats(destination, startFrame);
-      break;
-    }
-    case "file:": {
-      log.info(myUrl.pathname);
-      await playReplayAndShowStats(aUrl, startFrame);
-      break;
-    }
-    default: {
-      break; // Do nothing
-    }
-  }
+  await playReplayAndShowStats(aUrl);
 };
 
-const handleSlippiURI = (aUrl: string) => {
+const handleOpenFile = (aUrl: string) => {
   // Filter out command line parameters and invalid urls
   if (aUrl.startsWith("-")) {
     return;
   }
 
-  handleSlippiURIAsync(aUrl).catch((err) => {
-    log.error("Handling URI encountered error");
+  handleOpenFileAsync(aUrl).catch((err) => {
+    log.error("Handling file encountered error");
     log.error(err);
   });
 };
 
 app.on("open-url", (_, aUrl) => {
   log.info(`Received open-url event: ${aUrl}`);
-  handleSlippiURI(aUrl);
+  handleOpenFile(aUrl);
 });
 
 app.on("open-file", (_, aUrl) => {
   log.info(`Received open-file event: ${aUrl}`);
-  handleSlippiURI(aUrl);
+  handleOpenFile(aUrl);
 });
 
 app.on("second-instance", (_, argv) => {
@@ -300,7 +259,7 @@ app.on("second-instance", (_, argv) => {
     return;
   }
 
-  handleSlippiURI(lastItem);
+  handleOpenFile(lastItem);
 });
 
 app.on("activate", () => {
@@ -338,10 +297,10 @@ const main = async () => {
   await appUpdater.verifyPendingUpdate();
   await createWindow();
 
-  // Handle Slippi URI if provided
+  // Handle a replay file if provided
   const argURI = get(process.argv, 1);
   if (argURI) {
-    handleSlippiURI(argURI);
+    handleOpenFile(argURI);
   }
 };
 

@@ -5,9 +5,9 @@
  */
 
 $scrolltrack-width: 10px;
-$scrolltrack-background-color: #221130;
-$scrollbar-color: #8665a0;
-$scrollbar-color-hover: #9f74c0;
+$scrolltrack-background-color: var(--surface-1);
+$scrollbar-color: var(--surface-3);
+$scrollbar-color-hover: var(--surface-4);
 $scrollbar-min-height: 50px;
 
 /* total width */
