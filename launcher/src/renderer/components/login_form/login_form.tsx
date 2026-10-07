@@ -23,12 +23,14 @@ const useLoginStore = create(
       displayName: "",
       password: "",
       confirmPassword: "",
+      inviteCode: "",
     },
     (set) => ({
       setEmail: (email: string) => set({ email }),
       setDisplayName: (displayName: string) => set({ displayName }),
       setPassword: (password: string) => set({ password }),
       setConfirmPassword: (confirmPassword: string) => set({ confirmPassword }),
+      setInviteCode: (inviteCode: string) => set({ inviteCode }),
     }),
   ),
 );
@@ -62,6 +64,8 @@ export const LoginForm = ({ onSuccess, disableAutoFocus, defaultEmail }: LoginFo
   const setPassword = useLoginStore((store) => store.setPassword);
   const confirmPassword = useLoginStore((store) => store.confirmPassword);
   const setConfirmPassword = useLoginStore((store) => store.setConfirmPassword);
+  const inviteCode = useLoginStore((store) => store.inviteCode);
+  const setInviteCode = useLoginStore((store) => store.setInviteCode);
   const [showPassword, setShowPassword] = React.useState(false);
   const [showPasswordResetForm, setShowPasswordResetForm] = React.useState(false);
   const [isSignUp, setIsSignUp] = React.useState(false);
@@ -73,7 +77,7 @@ export const LoginForm = ({ onSuccess, disableAutoFocus, defaultEmail }: LoginFo
       if (password !== confirmPassword) {
         throw new Error(Messages.passwordsDoNotMatch());
       }
-      user = await authService.signUp({ email: email.trim(), displayName, password });
+      user = await authService.signUp({ email: email.trim(), displayName, password, inviteCode: inviteCode.trim() });
     } else {
       user = await authService.login({ email: email.trim(), password });
     }
@@ -83,6 +87,7 @@ export const LoginForm = ({ onSuccess, disableAutoFocus, defaultEmail }: LoginFo
       setDisplayName("");
       setPassword("");
       setConfirmPassword("");
+      setInviteCode("");
 
       if (onSuccess) {
         onSuccess();
@@ -169,6 +174,17 @@ export const LoginForm = ({ onSuccess, disableAutoFocus, defaultEmail }: LoginFo
               value={confirmPassword}
               onChange={(e) => setConfirmPassword(e.target.value)}
               type="password"
+              fullWidth={true}
+              required={true}
+            />
+          )}
+          {isSignUp && (
+            <TextField
+              disabled={loading}
+              variant="filled"
+              label={Messages.inviteCode()}
+              value={inviteCode}
+              onChange={(e) => setInviteCode(e.target.value)}
               fullWidth={true}
               required={true}
             />

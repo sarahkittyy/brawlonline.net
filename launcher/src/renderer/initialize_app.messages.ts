@@ -1,12 +1,12 @@
 export const InitializeAppMessages = {
-  failedToCommunicateWithSlippiServers: () => "Failed to communicate with Slippi servers.",
+  failedToCommunicateWithServers: (productName: string) => "Failed to communicate with {0} servers.",
   youAreOffline: () => "You are offline.",
-  slippiMayBeDown: () => `Slippi may be experiencing some downtime. Playing online may or may not work.`,
+  serversMayBeDown: (productName: string) =>
+    `{0} may be experiencing some downtime. Playing online may or may not work.`,
   failedToInstallDolphin: (dolphinTypeName: string) =>
-    "Failed to install {0}. Try closing all Dolphin instances and restarting the launcher.",
+    "Failed to find {0}. Check the Dolphin executable in Settings and restart the launcher.",
   netplayDolphin: () => "Netplay Dolphin",
   playbackDolphin: () => "Playback Dolphin",
-  updatedToVersion: (version: string) => `Slippi Launcher has been updated to version {0}`,
-  updateFailed: (version: string) =>
-    `Auto-update to version {0} failed. Try manually downloading the latest version from slippi.gg.`,
+  updatedToVersion: (productName: string, version: string) => `{0} has been updated to version {1}`,
+  updateFailed: (version: string) => `Auto-update to version {0} failed. Try manually downloading the latest version.`,
 };

@@ -45,7 +45,7 @@
   cursor: default;
   font-weight: 500;
   opacity: 1;
-  border-bottom: solid 2px var(--purple-lighter);
+  border-bottom: solid 2px var(--surface-4);
 }
 
 .trigger:hover:not(:focus) {

@@ -6,7 +6,7 @@
 }
 
 .expandMoreIcon {
-  color: var(--purple-lighter);
+  color: var(--surface-4);
   margin-left: 16px;
 }
 
@@ -16,7 +16,7 @@
   display: flex;
   align-items: center;
   gap: 8px;
-  color: var(--purple-light);
+  color: var(--surface-3);
 }
 
 .error {

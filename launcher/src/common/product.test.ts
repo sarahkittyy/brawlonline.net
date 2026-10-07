@@ -1,0 +1,25 @@
+import { readFileSync } from "fs";
+import path from "path";
+import { describe, expect, it } from "vitest";
+
+import { defaultServiceUrls, PRODUCT_NAME } from "./product";
+
+const root = path.resolve(__dirname, "..", "..");
+const readJson = (rel: string) => JSON.parse(readFileSync(path.join(root, rel), "utf8"));
+
+describe("product identity", () => {
+  it("is set in one place: package metadata must match PRODUCT_NAME", () => {
+    expect(readJson("package.json").productName).toBe(PRODUCT_NAME);
+    expect(readJson("release/app/package.json").productName).toBe(PRODUCT_NAME);
+    expect(readJson("electron-builder.json").productName).toBe(PRODUCT_NAME);
+  });
+
+  it("publishes launcher updates to the configured feed", () => {
+    expect(readJson("electron-builder.json").publish.url).toBe(defaultServiceUrls.launcherUpdates);
+  });
+
+  it("defaults every host to a subdomain of the base domain", () => {
+    expect(defaultServiceUrls.accountsApi).toMatch(/^https:\/\/[a-z]+\.fluffycat\.gay$/);
+    expect(defaultServiceUrls.matchmakingHost).toBe("mm.fluffycat.gay");
+  });
+});

@@ -8,16 +8,17 @@ import React from "react";
 
 import { useAccount } from "@/lib/hooks/use_account";
 import { useServices } from "@/services";
-import type { Rank, RankedProfile } from "@/services/slippi/types";
+import type { Rank, RankedProfile } from "@/services/backend/types";
 
 import { getRankDetails } from "./get_rank_details";
-import { getRankIcon } from "./get_rank_icon";
 import { MyRankingMessages as Messages } from "./my_ranking.messages";
 import styles from "./ranked_user_profile.module.css";
 
 export const RankedUserProfile = ({ rankedProfile, onHide }: { rankedProfile: RankedProfile; onHide: () => void }) => {
   const { rating, rank } = rankedProfile;
-  const { name, color } = getRankDetails(rank);
+  // Slippi shows its rank badge art and a tier colour here; we show the tier as text only.
+  const { name } = getRankDetails(rank);
+  const color = "var(--accent-primary)";
   const isUnrankedRank = isUnranked(rank);
 
   const rankNameLabel = React.useMemo(() => {
@@ -32,18 +33,6 @@ export const RankedUserProfile = ({ rankedProfile, onHide }: { rankedProfile: Ra
 
   return (
     <div className={styles.container}>
-      <div
-        className={styles.iconContainer}
-        style={{
-          backgroundImage: `url(${getRankIcon(rank)})`,
-        }}
-      />
-      <div
-        className={styles.gradientContainer}
-        style={{
-          background: `linear-gradient(to right, transparent 20%, ${color} 175%)`,
-        }}
-      />
       <div className={styles.content}>
         <div>
           <h3 className={styles.rankNameLabel}>{rankNameLabel}</h3>
@@ -68,11 +57,11 @@ const RefreshRatingButton = () => {
   const updateRanking = useAccount((s) => s.updateRanking);
   const user = useAccount((s) => s.user);
 
-  const { slippiBackendService } = useServices();
+  const { backendService } = useServices();
 
   const mutation = useMutation({
     mutationFn: async (uid: string) => {
-      const profile = await slippiBackendService.fetchRankedNetplayProfile(uid);
+      const profile = await backendService.fetchRankedNetplayProfile(uid);
 
       // protect against auth changes during request
       if (user?.uid !== uid) {
@@ -102,7 +91,7 @@ const RefreshRatingButton = () => {
       {mutation.isPending ? (
         <CircularProgress color="inherit" size={16} />
       ) : (
-        <CachedIcon color="inherit" sx={{ fontSize: "16px", color: "var(--purple-light)" }} />
+        <CachedIcon color="inherit" sx={{ fontSize: "16px", color: "var(--surface-3)" }} />
       )}
       <span>{Messages.refresh()}</span>
     </Button>

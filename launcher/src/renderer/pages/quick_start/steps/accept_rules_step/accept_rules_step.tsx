@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "@common/product";
 import { css } from "@emotion/react";
 import Button from "@mui/material/Button";
 import Checkbox from "@mui/material/Checkbox";
@@ -5,8 +6,8 @@ import CircularProgress from "@mui/material/CircularProgress";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import { useState } from "react";
 
-import { SlippiOnlineRules } from "@/components/slippi_online_rules/slippi_online_rules";
-import { SlippiUsagePolicyList } from "@/components/slippi_usage_policy_list/slippi_usage_policy_list";
+import { OnlineRules } from "@/components/online_rules/online_rules";
+import { UsagePolicyList } from "@/components/usage_policy_list/usage_policy_list";
 import { refreshUserData } from "@/lib/hooks/use_account";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { useServices } from "@/services";
@@ -15,7 +16,7 @@ import { StepContainer } from "../../step_container";
 import { AcceptRulesStepMessages as Messages } from "./accept_rules_step.messages";
 
 export const AcceptRulesStep = () => {
-  const { slippiBackendService } = useServices();
+  const { backendService } = useServices();
   const { showError } = useToasts();
   const [rulesChecked, setRulesChecked] = useState(false);
   const [policiesChecked, setPoliciesChecked] = useState(false);
@@ -25,8 +26,8 @@ export const AcceptRulesStep = () => {
     setProcessing(true);
 
     try {
-      await slippiBackendService.acceptRules();
-      await refreshUserData(slippiBackendService);
+      await backendService.acceptRules();
+      await refreshUserData(backendService);
     } catch (err: any) {
       showError(err.message);
     } finally {
@@ -36,9 +37,9 @@ export const AcceptRulesStep = () => {
 
   return (
     <StepContainer header={Messages.acceptRulesAndPolicies()}>
-      <SlippiOnlineRules />
+      <OnlineRules />
       <FormControlLabel
-        label={Messages.acceptSlippiRules()}
+        label={Messages.acceptOnlineRules(PRODUCT_NAME)}
         control={
           <Checkbox
             checked={rulesChecked}
@@ -48,9 +49,9 @@ export const AcceptRulesStep = () => {
           />
         }
       />
-      <SlippiUsagePolicyList />
+      <UsagePolicyList />
       <FormControlLabel
-        label={Messages.acceptPrivacyPolicyAndTos()}
+        label={Messages.acceptPrivacyPolicyAndTos(PRODUCT_NAME)}
         control={
           <Checkbox
             checked={policiesChecked}

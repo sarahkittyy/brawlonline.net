@@ -1,9 +1,7 @@
-import { slippiManagePage } from "@common/constants";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import Button from "@mui/material/Button";
 import { useEffect } from "react";
 
-import { ExternalLink as A } from "@/components/external_link";
 import { useLocalStorage } from "@/lib/hooks/use_local_storage";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { useServices } from "@/services";
@@ -81,9 +79,7 @@ export function VerifyEmailForm({ user }: { user: AuthUser }) {
     <div>
       <div className={styles.message}>{Messages.aConfirmationEmailHasBeenSentTo()}</div>
       <div className={styles.emailContainer}>{user.email}</div>
-      <div className={styles.incorrectEmailContainer}>
-        {Messages.wrongEmail()} <A href={slippiManagePage}>{Messages.changeEmail()}</A>
-      </div>
+      {/* Slippi links "Wrong email? Change email" to slippi.gg/manage; our accounts service has no email change yet. */}
       {user.emailVerified ? postVerification : preVerification}
     </div>
   );

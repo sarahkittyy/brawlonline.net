@@ -31,17 +31,17 @@ const ranks = [
   {
     key: "silver1",
     name: "Silver 1",
-    color: "#B5A5B7",
+    color: "var(--accent-primary)",
   },
   {
     key: "silver2",
     name: "Silver 2",
-    color: "#B5A5B7",
+    color: "var(--accent-primary)",
   },
   {
     key: "silver3",
     name: "Silver 3",
-    color: "#B5A5B7",
+    color: "var(--accent-primary)",
   },
   {
     key: "gold1",
@@ -91,17 +91,17 @@ const ranks = [
   {
     key: "master1",
     name: "Master 1",
-    color: "#6847BA",
+    color: "var(--accent-primary)",
   },
   {
     key: "master2",
     name: "Master 2",
-    color: "#6847BA",
+    color: "var(--accent-primary)",
   },
   {
     key: "master3",
     name: "Master 3",
-    color: "#6847BA",
+    color: "var(--accent-primary)",
   },
   {
     key: "grandmaster",

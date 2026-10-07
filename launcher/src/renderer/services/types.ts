@@ -1,24 +1,16 @@
-import type { BroadcastService } from "@broadcast/types";
-import type { ConsoleService } from "@console/types";
 import type { DolphinService } from "@dolphin/types";
-import type { SpectateRemoteService } from "@remote/types";
 import type { ReplayService } from "@replays/types";
-import type { ContentManagementService } from "main/content_management/content_management_api";
 
 import type { AuthService } from "./auth/types";
+import type { BackendService } from "./backend/types";
 import type { I18nService } from "./i18n/types";
 import type { NotificationService } from "./notification/types";
-import type { SlippiBackendService } from "./slippi/types";
 
 export type Services = {
   authService: AuthService;
-  slippiBackendService: SlippiBackendService;
+  backendService: BackendService;
   dolphinService: DolphinService;
-  broadcastService: BroadcastService;
-  consoleService: ConsoleService;
   replayService: ReplayService;
   notificationService: NotificationService;
   i18nService: I18nService;
-  spectateRemoteService: SpectateRemoteService;
-  contentManagementService: ContentManagementService;
 };

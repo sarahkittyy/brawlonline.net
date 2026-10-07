@@ -37,7 +37,7 @@ if (!requiredByDLLConfig && !(fs.existsSync(webpackPaths.dllPath) && fs.existsSy
   execSync("npm run postinstall");
 }
 
-const allMockableServices: readonly string[] = ["auth", "slippi", "dolphin", "replay"];
+const allMockableServices: readonly string[] = ["auth", "backend", "dolphin", "replay"];
 
 const parseMockServices = (envString?: string | true): readonly string[] => {
   if (envString === true) {

@@ -1,34 +1,12 @@
-import type { DolphinLaunchType } from "@dolphin/types";
-
-/**
- * Console connection configuration
- */
-export type StoredConnection = {
-  id: number;
-  ipAddress: string;
-  folderPath: string;
-  isRealtime: boolean;
-  port?: number;
-  consoleNick?: string;
-  enableAutoSwitcher: boolean;
-  obsIP?: string;
-  obsPort?: string;
-  obsSourceName?: string;
-  obsPassword?: string;
-  enableRelay: boolean;
-  useNicknameFolders: boolean;
-};
-
 /**
  * Stored account information (for multi-account support)
  */
 export interface StoredAccount {
-  id: string; // Firebase UID
+  id: string; // account uid from the accounts service
   email: string;
   displayName: string;
   displayPicture: string;
   lastActive: Date;
-  useDefaultApp?: boolean;
 }
 
 /**
@@ -47,24 +25,17 @@ export interface SettingsSchema {
   // Path settings
   isoPath: string | null;
   rootSlpPath: string;
-  spectateSlpPath: string;
   extraSlpPaths: string[];
 
   // Behavior settings
   enableNetplayReplays: boolean;
   useMonthlySubfolders: boolean;
-  enableJukebox: boolean;
-  launchMeleeOnPlay: boolean;
+  launchGameOnPlay: boolean;
   autoUpdateLauncher: boolean;
-  enableLocationAccess: boolean;
 
-  // Dolphin settings
-  useNetplayBeta: boolean;
-  usePlaybackBeta: boolean;
-
-  // Spectate settings
-  enableSpectateRemoteControl: boolean;
-  spectateRemoteControlPort: number;
+  // Dolphin settings: the executable of our Dolphin build (null = default, see dolphin/install/paths.ts)
+  netplayDolphinPath: string | null;
+  playbackDolphinPath: string | null;
 
   // Appearance settings
   enableRankDisplay: boolean;
@@ -74,12 +45,9 @@ export interface SettingsSchema {
  * Root-level app settings that aren't nested under "settings"
  */
 export interface RootSettingsSchema {
-  connections: StoredConnection[];
   accounts: AccountData;
   previousVersion?: string;
   pendingUpdateVersion?: string;
-  netplayPromotedToStable: boolean;
-  playbackPromotedToStable: boolean;
 }
 
 /**
@@ -110,18 +78,4 @@ export type SettingValue<K extends SettingKey> = K extends keyof SettingsSchema
 export interface SettingUpdate<K extends SettingKey = SettingKey> {
   key: K;
   value: SettingValue<K>;
-}
-
-/**
- * Special update types for complex operations
- */
-export interface ConsoleConnectionUpdate {
-  type: "add" | "edit" | "delete";
-  id?: number;
-  connection?: Omit<StoredConnection, "id">;
-}
-
-export interface DolphinBetaUpdate {
-  dolphinType: DolphinLaunchType;
-  useBeta: boolean;
 }

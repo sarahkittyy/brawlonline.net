@@ -1,218 +1,105 @@
+import type { AccountsMe } from "@accounts/types";
 import type { StoredAccount } from "@settings/types";
-import log from "electron-log";
-import type { Auth } from "firebase/auth";
 import multicast from "observable-fns/multicast";
 import Subject from "observable-fns/subject";
 
 import { generateDisplayPicture } from "@/lib/display_picture";
 
-import type { AuthUser, MultiAccountService } from "./types";
+import type { MultiAccountService, SignUpArgs } from "./types";
 import { SessionExpiredError } from "./types";
 
-type MockAuth = {
-  currentUser: {
-    uid: string;
-    displayName: string | null;
-    email: string | null;
-    emailVerified: boolean;
-    reload: () => Promise<void>;
-  };
-};
-
+// Log in with test/test or admin/admin in mock mode.
 const testUsers = [
-  {
-    email: "test",
-    password: "test",
-    displayName: "Test User",
-    emailVerified: true,
-  },
-  {
-    email: "admin",
-    password: "admin",
-    displayName: "Admin User",
-    emailVerified: true,
-  },
+  { email: "test", password: "test", displayName: "Test User" },
+  { email: "admin", password: "admin", displayName: "Admin User" },
 ];
 
+function fakeRecord(email: string, displayName: string): AccountsMe {
+  return {
+    uid: `mock-${email}`,
+    email,
+    emailVerified: true,
+    emailVerificationRequired: true,
+    displayName,
+    connectCode: null,
+    playKey: null,
+    rulesVersion: 0,
+    currentRulesVersion: 1,
+    latestVersion: "0.0.0",
+    role: "user",
+    userJson: null,
+  };
+}
+
 class MockMultiAccountClient implements MultiAccountService {
-  private _accountsSubject = new Subject<{
-    accounts: readonly StoredAccount[];
-    activeId: string | null;
-  }>();
+  private _accountsSubject = new Subject<{ accounts: readonly StoredAccount[]; activeId: string | null }>();
   private _onAccountsChanged = multicast(this._accountsSubject);
-  private _authInstances = new Map<string, Auth>();
+  private _userSubject = new Subject<AccountsMe | null>();
+  private _onUserChanged = multicast(this._userSubject);
   private _activeAccountId: string | null = null;
   private _accounts: StoredAccount[] = [];
-  private _initialized = false;
-  private _usersMap = new Map<string, AuthUser>();
-
-  constructor() {
-    // Add our fake user
-    for (const user of testUsers) {
-      const fakeUser = generateFakeUser({
-        uid: user.email,
-        email: user.email,
-        displayName: user.displayName,
-        emailVerified: user.emailVerified,
-      });
-
-      this._usersMap.set(this._hashEmailPassword(user.email, user.password), fakeUser);
-    }
-  }
+  private _records = new Map<string, AccountsMe>();
+  private _passwords = new Map<string, string>(testUsers.map((u) => [u.email, u.password]));
+  private _names = new Map<string, string>(testUsers.map((u) => [u.email, u.displayName]));
 
   async init(): Promise<void> {
-    if (this._initialized) {
-      return;
-    }
-
-    try {
-      this._notifyAccountsChanged();
-      this._initialized = true;
-      log.info("Multi-account service initialized");
-    } catch (err) {
-      log.error("Failed to initialize multi-account service:", err);
-      this._initialized = true;
-    }
+    // Nothing to restore in mock mode
   }
 
-  async signUp(email: string, password: string, displayName: string): Promise<StoredAccount> {
-    try {
-      const uid = email + displayName;
-      const newUser = generateFakeUser({
-        email,
-        uid,
-        displayName,
-      });
-      this._usersMap.set(this._hashEmailPassword(email, password), newUser);
-
-      return await this.addAccount(email, password);
-    } catch (err) {
-      log.error("Failed to sign up new user:", err);
-      throw err;
-    }
-  }
-
-  private _hashEmailPassword(email: string, password: string): string {
-    return `email:${email}+password:${password}`;
-  }
-
-  private _notifyAccountsChanged(): void {
-    this._accountsSubject.next({
-      accounts: [...this._accounts],
-      activeId: this._activeAccountId,
-    });
+  async signUp({ email, password, displayName }: SignUpArgs): Promise<StoredAccount> {
+    this._passwords.set(email, password);
+    this._names.set(email, displayName);
+    return this.addAccount(email, password);
   }
 
   async addAccount(email: string, password: string): Promise<StoredAccount> {
-    const existingAccountByEmail = this._accounts.find((acc) => acc.email === email);
-
-    if (existingAccountByEmail) {
-      log.info("Account with that email already exists, re-authenticating...");
-      try {
-        await this._signInWithStoredAccount(existingAccountByEmail);
-        log.info(`Successfully re-authenticated and switched to account: ${existingAccountByEmail.displayName}`);
-        return existingAccountByEmail;
-      } catch (err) {
-        log.error(`Failed to re-authenticate existing account:`, err);
-        throw err;
-      }
+    if (this._passwords.get(email) !== password) {
+      throw new Error("Wrong email or password");
     }
-
-    const hash = this._hashEmailPassword(email, password);
-    const user = this._usersMap.get(hash);
-    if (!user) {
-      throw new Error(`Invalid username or password. Try '${testUsers[0].email}' and '${testUsers[0].password}' or
-        '${testUsers[1].email}' and '${testUsers[1].password}'.`);
-    }
-
-    try {
-      const storedAccount = mapUserToStoredAccount(user, email);
-      const mockAuth = this._createMockAuth(user);
-      this._authInstances.set(storedAccount.id, mockAuth);
-      await this._signInWithStoredAccount(storedAccount);
-      log.info(`Added and switched to account: ${storedAccount.displayName}`);
-      return storedAccount;
-    } catch (err) {
-      log.error("Failed to add account:", err);
-      throw err;
-    }
-  }
-
-  private async _signInWithStoredAccount(account: StoredAccount): Promise<void> {
-    this._activeAccountId = account.id;
-    account.lastActive = new Date();
-
-    if (!this._accounts.some((acc) => acc.id === this._activeAccountId)) {
+    const record = fakeRecord(email, this._names.get(email) ?? email);
+    this._records.set(record.uid, record);
+    let account = this._accounts.find((a) => a.id === record.uid);
+    if (!account) {
+      account = {
+        id: record.uid,
+        email,
+        displayName: record.displayName,
+        displayPicture: generateDisplayPicture(record.uid),
+        lastActive: new Date(),
+      };
       this._accounts.push(account);
     }
-    this._notifyAccountsChanged();
-  }
-
-  async switchAccount(accountId: string): Promise<void> {
-    const account = this._accounts.find((acc) => acc.id === accountId);
-
-    if (!account) {
-      throw new Error(`Account ${accountId} not found`);
-    }
-
-    if (this._activeAccountId === accountId) {
-      log.info("Account already active, no switch needed");
-      return;
-    }
-
-    try {
-      const auth = this._authInstances.get(accountId);
-
-      if (!auth) {
-        throw new Error("Failed to restore account authentication");
-      }
-
-      const currentUser = auth.currentUser;
-      if (!currentUser) {
-        throw new SessionExpiredError(account.email, accountId);
-      }
-
-      this._activeAccountId = accountId;
-      account.lastActive = new Date();
-      this._notifyAccountsChanged();
-      log.info(`Switched to account: ${account.displayName}`);
-    } catch (err) {
-      log.error(`Failed to switch to account ${accountId}:`, err);
-      throw err;
-    }
+    this._activeAccountId = account.id;
+    await this.saveAccounts();
+    this._userSubject.next(record);
+    return account;
   }
 
   async removeAccount(accountId: string): Promise<void> {
-    const accountIndex = this._accounts.findIndex((acc) => acc.id === accountId);
-
-    if (accountIndex === -1) {
-      throw new Error(`Account ${accountId} not found`);
+    this._accounts = this._accounts.filter((a) => a.id !== accountId);
+    this._records.delete(accountId);
+    if (this._activeAccountId === accountId) {
+      this._activeAccountId = this._accounts[0]?.id ?? null;
     }
-    try {
-      this._authInstances.delete(accountId);
-
-      const removedAccount = this._accounts[accountIndex];
-      this._accounts.splice(accountIndex, 1);
-
-      if (this._activeAccountId === accountId) {
-        if (this._accounts.length > 0) {
-          const sortedAccounts = [...this._accounts].sort((a, b) => b.lastActive.getTime() - a.lastActive.getTime());
-          await this.switchAccount(sortedAccounts[0].id);
-        } else {
-          this._activeAccountId = null;
-        }
-      }
-
-      this._notifyAccountsChanged();
-      log.info(`Removed account: ${removedAccount.displayName}`);
-    } catch (err) {
-      log.error(`Failed to remove account ${accountId}:`, err);
-      throw err;
-    }
+    await this.saveAccounts();
+    this._userSubject.next(this.getActiveUser());
   }
 
-  getAccounts(): StoredAccount[] {
-    return [...this._accounts].sort((a, b) => b.lastActive.getTime() - a.lastActive.getTime());
+  async switchAccount(accountId: string): Promise<void> {
+    const account = this._accounts.find((a) => a.id === accountId);
+    if (!account) {
+      throw new Error(`Account ${accountId} not found`);
+    }
+    if (!this._records.has(accountId)) {
+      throw new SessionExpiredError(account.email, accountId);
+    }
+    this._activeAccountId = accountId;
+    await this.saveAccounts();
+    this._userSubject.next(this.getActiveUser());
+  }
+
+  getAccounts(): readonly StoredAccount[] {
+    return [...this._accounts];
   }
 
   getActiveAccountId(): string | null {
@@ -220,60 +107,33 @@ class MockMultiAccountClient implements MultiAccountService {
   }
 
   async saveAccounts(): Promise<void> {
-    // No-op for mock
+    this._accountsSubject.next({ accounts: this.getAccounts(), activeId: this._activeAccountId });
   }
 
-  getActiveAuth(): Auth | null {
-    if (!this._activeAccountId) {
-      return null;
-    }
+  getActiveUser(): AccountsMe | null {
+    return this._activeAccountId ? this._records.get(this._activeAccountId) ?? null : null;
+  }
 
-    return this._authInstances.get(this._activeAccountId) ?? null;
+  async refreshActiveUser(): Promise<AccountsMe | null> {
+    return this.getActiveUser();
+  }
+
+  setUserRecord(user: AccountsMe): void {
+    this._records.set(user.uid, user);
+    this._userSubject.next(this.getActiveUser());
   }
 
   onAccountsChange(
     onChange: (data: { accounts: readonly StoredAccount[]; activeId: string | null }) => void,
   ): () => void {
-    const subscription = this._onAccountsChanged.subscribe(onChange);
-    return () => {
-      subscription.unsubscribe();
-    };
+    const sub = this._onAccountsChanged.subscribe(onChange);
+    return () => sub.unsubscribe();
   }
-  private _createMockAuth(user: AuthUser): Auth {
-    const mockAuth: MockAuth = {
-      currentUser: {
-        uid: user.uid,
-        displayName: user.displayName,
-        email: user.email,
-        emailVerified: user.emailVerified,
-        reload: async () => {},
-      },
-    };
 
-    return mockAuth as unknown as Auth;
+  onActiveUserChange(onChange: (user: AccountsMe | null) => void): () => void {
+    const sub = this._onUserChanged.subscribe(onChange);
+    return () => sub.unsubscribe();
   }
-}
-
-function mapUserToStoredAccount(user: AuthUser, defaultEmail: string = ""): StoredAccount {
-  return {
-    id: user.uid,
-    email: user.email ?? defaultEmail,
-    displayName: user.displayName ?? "",
-    displayPicture: generateDisplayPicture(user.uid),
-    lastActive: new Date(),
-  };
-}
-
-function generateFakeUser(options: Partial<AuthUser>): AuthUser {
-  const uid = options.uid ?? "userid";
-  const fakeUser: AuthUser = {
-    uid,
-    displayName: options.displayName ?? "Demo user",
-    displayPicture: options.displayPicture ?? generateDisplayPicture(uid),
-    email: options.email ?? "fake@user.com",
-    emailVerified: options.emailVerified ?? false,
-  };
-  return fakeUser;
 }
 
 export function createMultiAccountService(): MultiAccountService {

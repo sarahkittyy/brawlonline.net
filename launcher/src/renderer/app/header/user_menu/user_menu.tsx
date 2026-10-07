@@ -25,7 +25,7 @@ import { UserMenuItems } from "./user_menu_items";
 const MAX_ACCOUNTS = 5;
 
 export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (error: any) => void }) => {
-  const { authService, slippiBackendService } = useServices();
+  const { authService, backendService } = useServices();
   const userData = useAccount((store) => store.userData);
   const displayName = useAccount((store) => store.displayName);
   const loading = useAccount((store) => store.loading);
@@ -101,7 +101,7 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
       }
 
       // Refresh user data for new account
-      await slippiBackendService.fetchUserData().catch(() => {
+      await backendService.fetchUserData().catch(() => {
         // Ignore errors here - user data will be fetched by other listeners
       });
     } catch (err: any) {
@@ -161,7 +161,7 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
   if (!isOnline) {
     errMessage = Messages.offline();
   } else if (serverError) {
-    errMessage = Messages.slippiServerError();
+    errMessage = Messages.serverError();
   } else if (!userData?.playKey) {
     errMessage = Messages.onlineActivationRequired();
     isUserErrorMessage = true;
@@ -177,8 +177,6 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
           displayName={displayName}
           displayPicture={user.displayPicture}
           connectCode={userData?.playKey?.connectCode}
-          tier={userData?.activeSubscription.level}
-          isVip={userData?.activeSubscription.hasGiftSub}
           errorBorder={isUserErrorMessage}
           errorMessage={errMessage}
           loading={loading}
@@ -208,16 +206,6 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
           onActivateOnline={() => {
             closeMenu();
             setOpenActivationDialog(true);
-          }}
-          onViewProfile={() => {
-            const profileUrl = `https://slippi.gg/user/${userData?.playKey?.connectCode.replace("#", "-")}`;
-            void window.electron.shell.openExternal(profileUrl).catch(log.error);
-            closeMenu();
-          }}
-          onManageAccount={() => {
-            const manageUrl = `https://slippi.gg/manage?expectedUid=${user.uid}`;
-            void window.electron.shell.openExternal(manageUrl).catch(log.error);
-            closeMenu();
           }}
           onEditDisplayName={() => {
             closeMenu();

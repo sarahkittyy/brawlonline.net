@@ -1,11 +1,8 @@
 import styled from "@emotion/styled";
-import AccountBoxIcon from "@mui/icons-material/AccountBox";
 import EditIcon from "@mui/icons-material/Edit";
 import EmailIcon from "@mui/icons-material/Email";
 import LanguageIcon from "@mui/icons-material/Language";
 import LogoutIcon from "@mui/icons-material/Logout";
-import ManageAccountsIcon from "@mui/icons-material/ManageAccounts";
-import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import ListItemIcon from "@mui/material/ListItemIcon";
 import ListItemText from "@mui/material/ListItemText";
 import MenuItem from "@mui/material/MenuItem";
@@ -30,8 +27,6 @@ type UserMenuItemsProps = {
   isEmailVerified: boolean; // Whether the user has verified their email
   serverError: boolean;
   onActivateOnline: () => void;
-  onViewProfile: () => void;
-  onManageAccount: () => void;
   onEditDisplayName: () => void;
   onVerifyEmail: () => void;
   onLogout: () => void;
@@ -47,8 +42,6 @@ export const UserMenuItems = ({
   isEmailVerified,
   serverError,
   onActivateOnline,
-  onViewProfile,
-  onManageAccount,
   onEditDisplayName,
   onVerifyEmail,
   onLogout,
@@ -92,20 +85,7 @@ export const UserMenuItems = ({
 
       {isOnlineActivated && (
         <>
-          <MenuItem onClick={onViewProfile}>
-            <ListItemIcon>
-              <AccountBoxIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText primary={Messages.viewProfile()} />
-            <OpenInNewIcon fontSize="small" />
-          </MenuItem>
-          <MenuItem onClick={onManageAccount}>
-            <ListItemIcon>
-              <ManageAccountsIcon fontSize="small" />
-            </ListItemIcon>
-            <ListItemText primary={Messages.manageAccount()} />
-            <OpenInNewIcon fontSize="small" />
-          </MenuItem>
+          {/* Slippi's "View profile" and "Manage account" open slippi.gg pages; we have no website yet. */}
           <MenuItem onClick={onEditDisplayName}>
             <ListItemIcon>
               <EditIcon fontSize="small" />

@@ -1,13 +1,12 @@
+import type { AccountsMe } from "@accounts/types";
 import { Preconditions } from "@common/preconditions";
-import type { User } from "firebase/auth";
 import multicast from "observable-fns/multicast";
 import Subject from "observable-fns/subject";
 
-import { generateDisplayPicture } from "@/lib/display_picture";
-
 import { delayAndMaybeError } from "../utils";
+import { mapAccountToAuthUser } from "./map_user";
 import { createMultiAccountService } from "./multi_account.service.mock";
-import type { AuthService, AuthUser, MultiAccountService } from "./types";
+import type { AuthService, AuthUser, MultiAccountService, SignUpArgs } from "./types";
 
 const SHOULD_ERROR = false;
 
@@ -18,10 +17,8 @@ class MockAuthClient implements AuthService {
 
   constructor() {
     this._multiAccountService = createMultiAccountService();
-
-    this._multiAccountService.onAccountsChange(() => {
-      const user = this.getCurrentUser();
-      this._userSubject.next(user);
+    this._multiAccountService.onActiveUserChange((user) => {
+      this._userSubject.next(user ? mapAccountToAuthUser(user) : undefined);
     });
   }
 
@@ -35,16 +32,16 @@ class MockAuthClient implements AuthService {
     const activeAccountId = this._multiAccountService.getActiveAccountId();
     if (activeAccountId) {
       await this._multiAccountService.removeAccount(activeAccountId);
-      this._userSubject.next(undefined);
     }
   }
 
   getCurrentUser(): AuthUser | undefined {
-    const auth = this._multiAccountService.getActiveAuth();
-    if (!auth || !auth.currentUser) {
-      return undefined;
-    }
-    return this._mapFirebaseUserToAuthUser(auth.currentUser);
+    const user = this._multiAccountService.getActiveUser();
+    return user ? mapAccountToAuthUser(user) : undefined;
+  }
+
+  getCurrentAccount(): AccountsMe | undefined {
+    return this._multiAccountService.getActiveUser() ?? undefined;
   }
 
   onUserChange(onChange: (user: AuthUser | undefined) => void): () => void {
@@ -56,59 +53,31 @@ class MockAuthClient implements AuthService {
 
   @delayAndMaybeError(SHOULD_ERROR)
   async resetPassword(): Promise<void> {
-    throw new Error("Mock reset password is not implemented");
+    // Nothing to send in mock mode
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
   async login(args: { email: string; password: string }): Promise<AuthUser | undefined> {
     await this._multiAccountService.addAccount(args.email, args.password);
-    const user = this.getCurrentUser();
-
-    this._userSubject.next(user);
-    return user;
+    return this.getCurrentUser();
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
-  async signUp(args: { email: string; password: string; displayName: string }): Promise<AuthUser | undefined> {
-    await this._multiAccountService.signUp(args.email, args.password, args.displayName);
-    const user = this.getCurrentUser();
-    this._userSubject.next(user);
-    return user;
-  }
-
-  @delayAndMaybeError(SHOULD_ERROR)
-  async getUserToken(): Promise<string> {
-    return "dummyToken";
+  async signUp(args: SignUpArgs): Promise<AuthUser | undefined> {
+    await this._multiAccountService.signUp(args);
+    return this.getCurrentUser();
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
   async updateDisplayName(displayName: string): Promise<void> {
-    const auth = this._multiAccountService.getActiveAuth();
-    Preconditions.checkExists(auth?.currentUser, "User is not logged in.");
-
-    // Update stored account info
-    const activeAccountId = this._multiAccountService.getActiveAccountId();
-    if (activeAccountId) {
-      const accounts = this._multiAccountService.getAccounts();
-      const account = accounts.find((acc) => acc.id === activeAccountId);
-      if (account) {
-        account.displayName = displayName;
-        // The multi-account service will handle saving
-      }
-    }
-
-    // Notify listeners
-    this._userSubject.next(this.getCurrentUser());
+    const user = this._multiAccountService.getActiveUser();
+    Preconditions.checkExists(user, "User is not logged in.");
+    this._multiAccountService.setUserRecord({ ...user, displayName });
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
   async refreshUser(): Promise<void> {
-    const auth = this._multiAccountService.getActiveAuth();
-    Preconditions.checkExists(auth?.currentUser, "User is not logged in.");
-
-    await auth.currentUser.reload();
-    // Notify listeners of the new user object
-    this._userSubject.next(this.getCurrentUser());
+    await this._multiAccountService.refreshActiveUser();
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
@@ -116,20 +85,8 @@ class MockAuthClient implements AuthService {
     // Do nothing
   }
 
-  getMultiAccountService(): any {
-    // Mock implementation - return a basic mock
+  getMultiAccountService(): MultiAccountService {
     return this._multiAccountService;
-  }
-  private _mapFirebaseUserToAuthUser(user: Pick<User, "uid" | "displayName" | "email" | "emailVerified">): AuthUser {
-    const displayPicture = generateDisplayPicture(user.uid);
-    const userObject = {
-      uid: user.uid,
-      displayName: user.displayName || "",
-      displayPicture,
-      email: user.email || "",
-      emailVerified: user.emailVerified,
-    };
-    return userObject;
   }
 }
 

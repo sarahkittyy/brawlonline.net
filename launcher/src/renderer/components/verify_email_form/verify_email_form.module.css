@@ -3,7 +3,7 @@
 }
 
 .emailContainer {
-  background: var(--purple-dark);
+  background: var(--surface-1);
   padding: 10px 20px;
   border-radius: 5px;
   margin: 10px;
@@ -19,7 +19,7 @@
 }
 
 .incorrectEmailContainer a {
-  color: var(--purple-primary);
+  color: var(--accent-secondary);
 }
 
 .instructions {
@@ -35,13 +35,13 @@
 }
 
 .emailNotFoundContainer a {
-  color: var(--purple-primary);
+  color: var(--accent-secondary);
 }
 
 .confirmationContainer {
   margin-top: 30px;
   font-size: 28px;
-  color: var(--green-primary);
+  color: var(--accent-primary);
   display: grid;
   align-items: center;
   gap: 8px;

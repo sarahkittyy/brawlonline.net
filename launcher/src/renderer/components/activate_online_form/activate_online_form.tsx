@@ -18,10 +18,10 @@ import { ActivateOnlineFormMessages as Messages } from "./activate_online_form.m
 
 export const ActivateOnlineForm = ({ onSubmit }: { onSubmit?: () => void }) => {
   const user = useAccount((store) => store.user);
-  const { slippiBackendService } = useServices();
+  const { backendService } = useServices();
   const refreshActivation = useCallback(() => {
-    void refreshUserData(slippiBackendService);
-  }, [slippiBackendService]);
+    void refreshUserData(backendService);
+  }, [backendService]);
   return (
     <div>
       <div>{Messages.yourConnectCodeDescription()}</div>
@@ -36,7 +36,7 @@ type ConnectCodeSetterProps = {
 };
 
 const ConnectCodeSetter = ({ displayName, onSuccess }: ConnectCodeSetterProps) => {
-  const { slippiBackendService } = useServices();
+  const { backendService } = useServices();
   const { showError } = useToasts();
   const getStartTag = () => {
     const safeName = displayName ?? "";
@@ -53,7 +53,7 @@ const ConnectCodeSetter = ({ displayName, onSuccess }: ConnectCodeSetterProps) =
   const onFormSubmit = handleSubmit(({ tag }) => {
     setIsLoading(true);
 
-    slippiBackendService
+    backendService
       .initializeNetplay(tag)
       .then(
         () => {

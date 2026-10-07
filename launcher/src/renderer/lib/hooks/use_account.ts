@@ -5,7 +5,7 @@ import { create } from "zustand";
 import { combine } from "zustand/middleware";
 
 import type { AuthUser } from "@/services/auth/types";
-import type { RankedProfile, SlippiBackendService, UserData } from "@/services/slippi/types";
+import type { BackendService, RankedProfile, UserData } from "@/services/backend/types";
 
 export const useAccount = create(
   combine(
@@ -50,7 +50,7 @@ export const useAccount = create(
 );
 
 let requestId = 0;
-export async function refreshUserData(slippiBackendService: SlippiBackendService) {
+export async function refreshUserData(backendService: BackendService) {
   // We're already refreshing the key
   if (useAccount.getState().loading) {
     return;
@@ -59,7 +59,7 @@ export async function refreshUserData(slippiBackendService: SlippiBackendService
   const currentRequestId = ++requestId;
   useAccount.getState().setLoading(true);
   try {
-    const userData = await slippiBackendService.fetchUserData();
+    const userData = await backendService.fetchUserData();
     if (requestId !== currentRequestId) {
       // We've already got a new request so just do nothing.
       return;

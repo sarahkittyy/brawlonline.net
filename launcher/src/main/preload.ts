@@ -1,7 +1,6 @@
-import broadcastApi from "@broadcast/api";
-import consoleApi from "@console/api";
+import accountsApi from "@accounts/api";
 import dolphinApi from "@dolphin/api";
-import spectateRemoteApi from "@remote/api";
+import gameAssetsApi from "@game_assets/api";
 import replaysApi from "@replays/api";
 import settingsApi from "@settings/api";
 import { contextBridge, ipcRenderer, shell, webUtils } from "electron";
@@ -11,20 +10,17 @@ import { isSubdirectory } from "utils/is_subdirectory";
 
 import commonApi from "./api";
 import type { AppBootstrap } from "./bootstrap";
-import { contentManagementApi } from "./content_management/content_management_api";
 
 const bootstrap = ipcRenderer.sendSync("getAppBootstrapSync") as AppBootstrap;
 
 const api = {
   bootstrap,
   common: commonApi,
-  console: consoleApi,
   settings: settingsApi,
-  broadcast: broadcastApi,
+  accounts: accountsApi,
+  gameAssets: gameAssetsApi,
   dolphin: dolphinApi,
   replays: replaysApi,
-  remote: spectateRemoteApi,
-  contentManagement: contentManagementApi,
   utils: {
     isSubdirectory,
     pathExists: (folder: string) => pathExists(folder),
