@@ -514,7 +514,7 @@ No reboot and no Dolphin window change: each player's game stays on its own onli
 3. **SESSION** (written by GameBridge only outside matches, the same on both machines) gets the setup; each game leaves its CSS for the match, builds it with the Versus sequence's own setup from SESSION, and loads (`docs/game-code.md` §11).
 4. **The match** starts exactly as in Phases 4-6: at the first pass through `scMelee` both seed the RNGs from the session seed and the match index and the joiner takes the host's init block; at the first simulation frame the barrier compares the setup hash and copies the host's frame counters, RNGs, serial counter and task order; the countdown runs without rollback; GekkoNet starts at frame 240 behind the start barrier; region mode gp-v12.
 5. **Game set:** both end on the same frame, the game goes straight back to the online CSS (no results screen), the connection stays, `match_index` + 1. START locks in for the next game; Direct's loser picks the stage on P+'s stage select first.
-6. **Disconnects** (design 5.6): a peer that leaves (hold Z) or goes silent (7.2 s) ends the session; LOCAL `disconnected` is set; in a match the game plays the error sound and ends the game through its own game set (the departed player dies on its last stock), then goes back to the CSS; GameBridge's next `GET_MATCH_STATE` cleans up and reads IDLE. A red OSD "DISCONNECTED" stands in for the HUD text.
+6. **Disconnects** (design 5.6): a peer that leaves (hold Z) or goes silent (7.2 s) ends the session; LOCAL `disconnected` is set; in a match the game plays the error sound, draws "DISCONNECTED" in red at the top of its HUD and, 90 frames later, ends the match as the pause screen's quit does (no "GAME!"), then goes back to the CSS; GameBridge's next `GET_MATCH_STATE` cleans up and reads IDLE. Dolphin's red OSD "DISCONNECTED" only stands in if the game did not show the text within 30 frames.
 
 What the plugin must never do in a match, and does not: read the mailbox, or let anything that differs between the machines change game state. Its `.data`/`.bss` is in the region set; the mailbox and LOCAL are excluded (one range); SESSION is constant during a match.
 
@@ -555,8 +555,30 @@ The launcher path (`harness/tools/e2e_launcher.py`) logs in through both launche
 ### Open issues of Phase 7
 
 1. **Real network conditions** were not exercised through the in-game flow: the matchmaking P2P link is direct on localhost (the netsim tests of Phases 4 and 6 drive `gprb_connect` directly). The session code is the same; a netsim between two in-game peers is still to do.
-2. The game-side gaps (`docs/game-code.md` §11): the CSS does not show the coin placed again after a match or the stage select (START locks in with the last character); DISCONNECTED is an OSD message, and the disconnect end shows Brawl's "GAME!"; every player has the default controls (no name tags, no port values yet).
+2. ~~The game-side gaps~~ (`docs/game-code.md` §11): done 2026-10-07, see "Slippi parity round" below.
 3. Ranked and code-based Teams are not exercised (Unranked is since 2026-10-07: `harness/tests/test_online_unranked.py`, a two-game set from the in-game Unranked search); SESSION and the lobby are sized for 4 players, the session itself runs 2.
+
+### Slippi parity round (2026-10-07)
+
+Game side `game-code` `pponline` `7ca3a7e` (PPOM v3), Dolphin `rollback-fixes` `c27636d256`; details in `docs/game-code.md` §6 and §11.
+- **Each player's own controls.** The name tag a player picks on the online CSS travels with the lock-in as the design's port values (the tag's name, rumble byte and P+'s 0x2D-byte controls layout): LOCAL `own` → `Gprb::Session::LockIn::port_values` → the control messages (`"pv"`) → the host's `MatchSetup` → SESSION `players[i].pv` on both machines. At the match start the game's hook on ipPadConfig's setter (`0x80110550`) gives each port its player's layout from SESSION, the same on both machines. `SetupKey` (compared at the barrier) now includes `g_PadConfig`'s GameCube layouts and player → pad map. Dolphin's own controller mapping is applied before the game reads the pad, so it reaches the peer as that player's input.
+- **The CSS remembers** the character, costume and tag after a match and after the stage select.
+- **Disconnect in a match:** DISCONNECTED in the game's HUD with the game's font, the LRAS-type end without "GAME!" (`stOperatorInfoMelee` flags `0x70`), Dolphin's OSD only as a fallback (`game_bridge_status.osd_disconnects`).
+- **Direct's loser's stage select is not restricted** (Slippi parity); P+'s stage striking is kept behind a debug flag for Ranked.
+- **Menus:** WITH FRIENDS → Direct / Teams, WITH ANYONE → Unranked / Ranked (Brawl's Wi-Fi OPTIONS page, labels in the game's font).
+
+Results (`harness/tests/test_online_game.py`, DolphinNoGUI built from this change, both peers on localhost, dual core, D3D11, muted):
+
+| Test | Result |
+|---|---|
+| `test_direct_set_under_the_gameplay_session` | game 1 Yoshi's Island (0x0D, random): 1,604 frames, rollbacks 0/3, 1,589 confirmed checksums, **0 mismatches**; game 2 Final Destination (the loser's pick): 1,440 frames, rollbacks 0/6, 1,425, **0**; both CSSs showed the character again after game 1 and after the stage select |
+| `test_each_player_keeps_their_tag_controls` | A ("NoTap") held up by A's Dolphin mapping stayed on the ground, B (defaults) jumped, on both machines; **0 mismatches** over the confirmed frames |
+| `test_opponent_leaves_in_the_middle_of_a_game` | dropped after 7.31 s; HUD text at once; quit flags 90 frames later; `scMelee` left 110 frames after the text; back on the CSS idle, character selected; no OSD message |
+| the whole of `test_online_game.py` (9 tests, `rollback-fixes` `c27636d256`, plugin `7ca3a7e`) | **9 passed**; its set: game 1 741 frames (rollbacks 0/11, 726 confirmed, 0 mismatches), game 2 1,983 frames (0/1, 1,968, 0) |
+| `test_online.py`, `test_rollback.py` (same build) | **7 passed**, **14 passed** |
+| `e2e_launcher.py`, two launchers (rebuilt bundle) and two Qt `Dolphin.exe` (`run/artifacts/e2e-launcher/slp-e2e-20261007-144841/`) | game 1 Metal Cavern (0x05, random): 2,641 frames, rollbacks 0/2, 2,626 confirmed, **0 mismatches**; game 2 Final Destination (Bob lost and picked): 4,076 frames, 0/7, 4,061, **0**; Bob's CSS showed his character again after the stage select; both launchers' rules checkbox read "I accept the Brawl Online Rules" |
+
+**The launcher label.** The earlier e2e runs still saw "PlusOnline Online Rules" because they drove a stale bundle: `launcher/release/app/dist` was built at 06:49-06:58, before the rename commit `6d0c6913` (09:37), and nothing checked it (`launcher_app_dir()` existed but was never called). Rebuilt with `npm run build`; `e2e_launcher.py` now refuses a bundle older than `launcher/`'s last commit or any file under `src/`/`locales/` (`--allow-stale-launcher` overrides) and records and checks the rules label (`summary.json` `rules_labels`).
 
 ## Open issues
 
@@ -625,3 +647,4 @@ Diagnostics through environment variables:
 | `aedcf62a51` | the gameplay session as the default online backend (registered by both frontends); the lobby; PPOM v2 SESSION/LOCAL in GameBridge; IDLE after a disconnect; OSD DISCONNECTED |
 | `da2cf9b595` | DolphinQt: Brawl Online main window title and About; no Project+ Discord link |
 | `b882222f2b` | the render window's title starts with Brawl Online |
+| `c27636d256` | PPOM v3: per-player port values through the lobby into SESSION, the applied layouts in the setup key; the OSD DISCONNECTED only as a fallback |

@@ -135,10 +135,14 @@ def dolphin(request: pytest.FixtureRequest, dolphin_exe: Path) -> Iterator[Calla
     made: list[DolphinInstance] = []
     keep = request.config.getoption("--keep")
 
+    # PPHARNESS_INSTANCE_PREFIX: prepended to every instance name, so that concurrent runs on one
+    # machine have their own instance dirs (and `ppharness clean --prefix` only touches theirs).
+    prefix = os.environ.get("PPHARNESS_INSTANCE_PREFIX", "")
+
     def factory(name: str | None = None, **kw: Any) -> DolphinInstance:
         kw.setdefault("exe", dolphin_exe)
         kw.setdefault("keep", keep)
-        inst = DolphinInstance(name or request.node.name, **kw)
+        inst = DolphinInstance(prefix + (name or request.node.name), **kw)
         made.append(inst)
         return inst
 

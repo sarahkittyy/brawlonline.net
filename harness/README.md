@@ -31,6 +31,7 @@ What it expects (each path can be overridden with an environment variable):
 | game disc | the template's `[Core] DefaultISO`, or `game/SSBB_NTSC.iso` if that path doesn't exist on this OS | `PPHARNESS_ISO` |
 | instance dirs | `run/instances/<name>-<n>` | `PPHARNESS_INSTANCES` |
 | keep instance dirs | off | `PPHARNESS_KEEP=1` |
+| instance name prefix (pytest's `dolphin` fixture) | none | `PPHARNESS_INSTANCE_PREFIX` (e.g. `me-`, then `ppharness clean --prefix me-`) |
 
 To check whether the Dolphin build has harness support:
 

@@ -86,6 +86,30 @@ def local(c: HarnessClient) -> Dict[str, Any]:
     return ppom.read_local(c, block(c))
 
 
+def css_panel(c: HarnessClient) -> Dict[str, int]:
+    """The local player's panel on the CSS (muSelCharPlayerArea, port 0): the character the coin
+    is on (0x28 = none), the costume, the name tag (save index, 0xFFFFFFFF none) and whether the
+    coin is in the hand (hand+0xA0 != 0) or placed."""
+    u = c.read_u32
+    area = u(u(u(u(0x805A0060) + 4) + 0x400) + 0x44)
+    hand = u(area + 0x1A8)
+    return {"char": u(area + 0x1B8), "costume": u(area + 0x1BC), "tag": u(area + 0x1C8),
+            "coin_in_hand": int(u(hand + 0xA0) != 0)}
+
+
+def check_css_remembers(p: Any, before: Dict[str, int], where: str) -> Dict[str, int]:
+    """Slippi: back on the CSS (after a match or the stage select) the character is still
+    selected: the coin on it, the same costume and name tag."""
+    now = wait(lambda: (lambda x: x if x["coin_in_hand"] == 0 else None)(css_panel(p.c)), 10,
+               f"{p.name}: the coin placed again {where}")
+    assert (now["char"], now["costume"], now["tag"]) == (before["char"], before["costume"],
+                                                         before["tag"]), (p.name, where, before, now)
+    return now
+
+
+STRIKE_TABLE = 0x8042C822   # P+'s stage striking (5 pages x 6 bytes); all zero = nothing struck
+
+
 # --------------------------------------------------------------------------- no reboot
 
 
@@ -186,13 +210,17 @@ def _gentle_macro():
     return gentle_macro
 
 
-def back_on_css(players: Sequence[Any], game: int) -> Dict[str, Any]:
+def back_on_css(players: Sequence[Any], game: int,
+                panels: Optional[Dict[str, Dict[str, int]]] = None) -> Dict[str, Any]:
     """After game set: both straight back on the online CSS, still connected, lobby at the next
-    game (Slippi: no results screen, connection kept)."""
+    game (Slippi: no results screen, connection kept), each with the character still selected
+    (`panels`: what each panel showed before the set)."""
     wait(lambda: all(scene(p.c) == CSS for p in players), 120, f"after game {game}: both on the CSS")
     for p in players:
         p.steps("wait 60")
         p.shot(f"g{game}-back-on-css")
+        if panels and p.name in panels:
+            check_css_remembers(p, panels[p.name], f"after game {game}")
     out = {}
     for p in players:
         lo, se, mm = local(p.c), session(p.c), p.c.mm_status()
@@ -206,14 +234,16 @@ def back_on_css(players: Sequence[Any], game: int) -> Dict[str, Any]:
 
 
 def lock_in_next(players: Sequence[Any], game: int, mode: str = "direct",
-                 log: Callable[[str], None] = print) -> Dict[str, Any]:
-    """START on both CSSs. Direct: the loser of the last game picks the stage first (a draw:
-    both pick); the winner locks in with START."""
+                 log: Callable[[str], None] = print,
+                 panels: Optional[Dict[str, Dict[str, int]]] = None) -> Dict[str, Any]:
+    """START on both CSSs. Direct: the loser of the last game picks the stage (a draw: both
+    pick) and comes back to the CSS locked in, the character still selected; then the winner
+    locks in with START."""
     info: Dict[str, Any] = {}
     se = session(players[0].c)
     winner = se["last_winner"]
-    order = sorted(players, key=lambda p: local(p.c)["local_port"] == winner, reverse=True)
-    for p in order:   # the winner first: then it waits for the loser's pick
+    order = sorted(players, key=lambda p: local(p.c)["local_port"] == winner)
+    for p in order:   # the loser first: it waits on the CSS for the winner
         lo = local(p.c)
         picks = mode == "direct" and winner != 0xFF and lo["local_port"] != winner
         n = lo["lock"]["seq"]
@@ -222,9 +252,16 @@ def lock_in_next(players: Sequence[Any], game: int, mode: str = "direct",
             wait(lambda: scene(p.c) == "scSelStage", 60, f"{p.name}: the stage select (loser picks)")
             p.steps("wait 40")
             p.shot(f"g{game}-loser-stage-select")
+            # Slippi parity: Direct's loser may pick any stage, nothing is struck.
+            assert p.c.read_mem(STRIKE_TABLE, 30) == bytes(30), (p.name, "stages struck on the SSS")
             B.sss_pick_stage(p.c, B.STAGE_KIND[STAGE_PICK], 0)
             wait(lambda: scene(p.c) in (CSS, "scMemoryChange", "scMelee"), 60, f"{p.name}: back from the stage select")
             info["picked_by"] = p.name
+            if panels and p.name in panels and all(scene(q.c) == CSS for q in players):
+                wait(lambda: scene(p.c) == CSS, 30, f"{p.name}: on the CSS")
+                p.steps("wait 30")
+                info["after_sss"] = check_css_remembers(p, panels[p.name], "after the stage select")
+                p.shot(f"g{game}-back-from-stage-select")
             log(f"game {game}: {p.name} lost the last game and picked {STAGE_PICK}")
         wait(lambda: local(p.c)["lock"]["seq"] > n and local(p.c)["lock"]["ready"]
              and local(p.c)["lock"]["game"] == game, 30, f"{p.name}: locked in for game {game}")
@@ -234,21 +271,26 @@ def lock_in_next(players: Sequence[Any], game: int, mode: str = "direct",
 
 
 def play_set(players: Sequence[Any], games: int = 2, mode: str = "direct",
-             log: Callable[[str], None] = print) -> Dict[str, Any]:
+             log: Callable[[str], None] = print,
+             panels: Optional[Dict[str, Dict[str, int]]] = None) -> Dict[str, Any]:
     """Games 1..`games` on the session the players are connected in; returns the report.
     Raises AssertionError / TimeoutError on the first thing that is not as expected."""
     rep: Dict[str, Any] = {"games": []}
     marks = {p.name: boot_marks(p.c) for p in players}
+    # What each player's panel showed before game 1 (css_panel after picking): the CSS must show
+    # it again after every game and after the stage select.
+    panels = panels or {}
+    rep["panels"] = panels
     rep["marks_start"] = marks
     for game in range(1, games + 1):
         if game > 1:
-            rep.setdefault("lock_ins", []).append(lock_in_next(players, game, mode, log))
+            rep.setdefault("lock_ins", []).append(lock_in_next(players, game, mode, log, panels))
         g = play_game(players, game, log=log)
         rep["games"].append(g)
         assert g["checksums"]["mismatches"] == 0 and g["checksums"]["compared"] > 300, g
         assert g["trace"].get("diverged_at") is None, g["trace"]
         assert all(e == "game set" for e in g["end"]), g
-        g["after"] = back_on_css(players, game)
+        g["after"] = back_on_css(players, game, panels)
         if game > 1 and mode == "direct" and rep["lock_ins"][-1].get("picked_by"):
             assert g["stage"] == B.STAGE_KIND[STAGE_PICK], ("the loser's pick was not played", g)
     for p in players:

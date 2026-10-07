@@ -120,11 +120,40 @@ def electron_exe() -> Path:
     return exe
 
 
-def launcher_app_dir() -> Path:
+def launcher_build_stale() -> list[str]:
+    """Why the built launcher (release/app/dist) is older than its sources, if it is: the bundle
+    must be newer than launcher/'s last commit and than every file under src/ and locales/ (an
+    e2e run once drove a bundle built before the Brawl Online rename and still saw "PlusOnline
+    Online Rules")."""
+    app = LAUNCHER / "release" / "app" / "dist"
+    bundles = [app / "main" / "main.js", app / "renderer" / "renderer.js"]
+    built = min(b.stat().st_mtime for b in bundles if b.exists()) if all(
+        b.exists() for b in bundles) else 0.0
+    why: list[str] = []
+    try:
+        head = subprocess.run(["git", "-C", str(LAUNCHER), "log", "-1", "--format=%ct %h"],
+                              capture_output=True, text=True, timeout=30).stdout.split()
+        if head and float(head[0]) > built:
+            why.append(f"launcher commit {head[1]} is newer than the bundle")
+    except (OSError, subprocess.TimeoutExpired, ValueError):
+        pass
+    for d in ("src", "locales"):
+        for f in (LAUNCHER / d).rglob("*"):
+            if f.is_file() and f.stat().st_mtime > built:
+                why.append(f"{f.relative_to(LAUNCHER)} is newer than the bundle")
+                break
+    return why
+
+
+def launcher_app_dir(allow_stale: bool = False) -> Path:
     app = LAUNCHER / "release" / "app"
     if not (app / "dist" / "main" / "main.js").exists():
         raise SystemExit(f"the launcher is not built ({app / 'dist' / 'main' / 'main.js'} is "
                          "missing): run `npm run build` in launcher/")
+    stale = launcher_build_stale()
+    if stale and not allow_stale:
+        raise SystemExit("the launcher build is stale (" + "; ".join(stale) + "): run "
+                         "`npm run build` in launcher/, or pass --allow-stale-launcher")
     return app
 
 
@@ -324,9 +353,11 @@ class Launcher:
             if self._home_ready():
                 return
             if "Accept rules and policies" in text:
-                # The rules checkbox's label as the page has it ("I accept the <product> Rules",
-                # "... Online Rules" in some launcher builds).
+                # The rules checkbox's label as the page has it: "I accept the Brawl Online
+                # Rules" since the rename (launcher 6d0c6913); a stale bundle said "PlusOnline
+                # Online Rules". Kept for the summary and checked by run().
                 m = re.search(r"I accept the [^\n]*?Rules", text)
+                self.rules_label = m.group(0) if m else None
                 self.call("checkLabel", m.group(0) if m else f"I accept the {self._product()} Rules")
                 self.call("checkLabel",
                           f"I accept the {self._product()} Privacy Policy and Terms of Service")
@@ -478,11 +509,14 @@ class Player:
         self.shot("02-play-online")
         self.steps("tap A", "wait 90")
         self.shot("03-online-page")
-        # WITH FRIENDS = Direct.
+        # WITH FRIENDS -> its page (BASIC VERSUS = Direct, TEAM BATTLE = Teams).
+        self.steps("tap A", "wait 90")
+        self.shot("03b-with-friends")
         self.steps("tap A", "wait 400", "until scSelctCharacter 600")
         # A character (the hand starts on the P1 panel; up to the second row).
         self.steps("stick up 30", "wait 5", "tap A 8", "wait 30")
         self.shot("04-css-direct")
+        self.panel = online_set.css_panel(self.c)   # the pick the CSS must show again later
 
     def open_keypad(self) -> None:
         for _ in range(6):
@@ -588,6 +622,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         raise SystemExit(f"{PLUGIN} not built (game-code/build.sh)")
     if not dolphin.exists():
         raise SystemExit(f"{dolphin} not found")
+    if not args.direct_dolphin:
+        launcher_app_dir(args.allow_stale_launcher)   # built, and not older than its sources
     summary: dict[str, Any] = {"run": run_name, "dolphin": str(dolphin), "iso": str(iso),
                                "direct_dolphin": args.direct_dolphin, "ok": False}
     log(f"run {run_name}: dolphin {dolphin}, iso {iso}")
@@ -632,6 +668,11 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 p.launcher.shot("00-start")
                 p.launcher.login(p.user)
                 p.launcher.finish_quick_start(iso)
+                # The rules page of the quick start (seen in login or finish_quick_start).
+                label = getattr(p.launcher, "rules_label", None)
+                summary.setdefault("rules_labels", {})[p.name] = label
+                if label is not None and label != "I accept the Brawl Online Rules":
+                    raise RuntimeError(f"{p.name}: the launcher's rules label is {label!r}")
                 p.launcher.play()
 
             both(lambda: launch(players[0]), lambda: launch(players[1]))
@@ -700,7 +741,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
             assert any(t == "Brawl Online" for t in p.facts["windows"]), p.facts["windows"]
 
         # 5. The set: two games, no reboot (online_set checks it), back on the CSS after each.
-        set_rep = online_set.play_set(players, games=2, mode="direct", log=log)
+        set_rep = online_set.play_set(players, games=2, mode="direct", log=log,
+                                      panels={p.name: p.panel for p in players})
         summary["set"] = set_rep
         for p in players:
             assert p.c
@@ -838,6 +880,8 @@ def build_parser() -> argparse.ArgumentParser:
     ap.add_argument("--keep", action="store_true", help="keep the run dir (sd.raw removed)")
     ap.add_argument("--direct-dolphin", action="store_true",
                     help="start Dolphin.exe directly instead of through the launchers")
+    ap.add_argument("--allow-stale-launcher", action="store_true",
+                    help="drive the launcher bundle even if it is older than launcher/'s sources")
     return ap
 
 

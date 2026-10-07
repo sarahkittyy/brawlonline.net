@@ -206,15 +206,42 @@ class Game:
         self.steps("tap A", "wait 90")
         self.shot("02-online-page")
 
-    def to_css(self, mode: str) -> None:
-        """WITH FRIENDS = Direct; WITH ANYONE -> BASIC VERSUS = Unranked. Then pick a character
-        (the hand starts on the P1 panel; up to the second row, Fox): as on Slippi, START does
-        nothing on the online CSS until a character is selected."""
-        if mode == "unranked":
+    def to_css(self, mode: str, tag: int = 0) -> None:
+        """From the ONLINE page (WITH FRIENDS highlighted) to the mode's CSS: WITH FRIENDS ->
+        BASIC VERSUS = Direct, TEAM BATTLE = Teams; WITH ANYONE -> Unranked (the first entry),
+        Ranked (the second). Then pick a character (the hand starts on the P1 panel; up to the
+        second row, Fox): as on Slippi, START does nothing on the online CSS until a character is
+        selected. `tag` > 0 first picks the `tag`-th of the save's name tags on the panel's name
+        button (pick_tag)."""
+        if mode in ("unranked", "ranked"):
             self.steps("tap DRIGHT 4", "wait 30", "tap A", "wait 90")
+            if mode == "ranked":
+                self.steps("tap DDOWN 4", "wait 30")
+        else:
+            self.steps("tap A", "wait 90")
+            if mode == "teams":
+                self.steps("tap DDOWN 4", "wait 30")
+        self.shot(f"02-mode-{mode}")
         self.steps("tap A", "wait 400", "until scSelctCharacter 600")
+        if tag:
+            self.pick_tag(tag)
         self.steps("stick up 30", "wait 5", "tap A 8", "wait 30")
         self.shot(f"03-css-{mode}")
+
+    def pick_tag(self, n: int) -> None:
+        """The hand rests on the player's name plate when the CSS opens. A opens Brawl's tag list
+        (New entry, PLAYER 1 highlighted, then the save's tags in the save's order); DOWN `n` times
+        and A picks that tag (in run/template-user's save, 1 = "NoTap": tap jump off)."""
+        self.steps("tap A 8", "wait 40", *(["tap DDOWN 8", "wait 20"] * n), "tap A 8", "wait 40")
+        self.shot("03-tag-picked")
+        self.picked_tag = self.tag()
+
+    def tag(self) -> int:
+        """The save's tag index on the local player's panel (muSelCharPlayerArea+0x1C8), -1 none."""
+        u = self.c.read_u32
+        area = u(u(u(u(0x805A0060) + 4) + 0x400) + 0x44)
+        t = u(area + 0x1C8)
+        return t if t < 120 else -1
 
     def open_keypad(self) -> None:
         """START on the Direct CSS opens Brawl's keypad. The hand sometimes refuses right after
@@ -324,11 +351,14 @@ def test_keypad_steps_cover_every_code_shape() -> None:
 
 
 def _boot(dolphin: Callable[..., DolphinInstance], name: str, be: OnlineBackend, user: OnlineUser,
-          video: str, test: str, session_backend: str, artifacts: Path = ARTIFACTS) -> Game:
+          video: str, test: str, session_backend: str, artifacts: Path = ARTIFACTS,
+          gcpad_ini: dict[str, dict[str, Any]] | None = None,
+          dolphin_ini: dict[str, dict[str, Any]] | None = None) -> Game:
     if not PLUGIN.exists():
         pytest.skip(f"{PLUGIN} not built (game-code/build.sh)")
     cfg = InstanceConfig(cpu_thread=True, video_backend=video, dolphin_ini={"Online": {
-        "UseDevServer": True, "MatchmakingPort": be.mm_port, "DevAccountsUrl": be.accounts_url}})
+        "UseDevServer": True, "MatchmakingPort": be.mm_port, "DevAccountsUrl": be.accounts_url},
+        **(dolphin_ini or {})}, gcpad_ini=gcpad_ini or {})
     inst = dolphin(name, config=cfg, client_timeout=60.0)
     d = inst.create()
     patch_sd.patch_image(d / "Wii" / "sd.raw",
@@ -610,20 +640,26 @@ def test_character_locked_while_searching(backend: OnlineBackend,
 
 def _connected_direct(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                       gpu_backend: str, test: str, names: tuple[str, str],
-                      stocks: int = 2) -> tuple[Game, Game, OnlineUser, OnlineUser]:
+                      stocks: int = 2, tags: tuple[int, int] = (0, 0),
+                      gcpad_ini: tuple[Any, Any] = (None, None),
+                      dolphin_ini: tuple[Any, Any] = (None, None)
+                      ) -> tuple[Game, Game, OnlineUser, OnlineUser]:
     """Two games on the Direct CSS with the gameplay backend (the default), searching for each
     other from the keypad until both are connected. Shorter rules than P+'s (`stocks` stocks,
     2 minutes, written into the set rule on both CSSs where the online rules are) keep the games
     short; they are part of the setup both games build, so both must have the same."""
     ua = backend.create_user(names[0], names[0][:4].upper())
     ub = backend.create_user(names[1], names[1][:4].upper())
-    a = _boot(dolphin, "game-a", backend, ua, gpu_backend, test, "gameplay")
-    b = _boot(dolphin, "game-b", backend, ub, gpu_backend, test, "gameplay")
+    a = _boot(dolphin, "game-a", backend, ua, gpu_backend, test, "gameplay", gcpad_ini=gcpad_ini[0],
+              dolphin_ini=dolphin_ini[0])
+    b = _boot(dolphin, "game-b", backend, ub, gpu_backend, test, "gameplay", gcpad_ini=gcpad_ini[1],
+              dolphin_ini=dolphin_ini[1])
     _both(a.to_main_menu, b.to_main_menu)
     _both(a.to_online_page, b.to_online_page)
-    _both(lambda: a.to_css("direct"), lambda: b.to_css("direct"))
+    _both(lambda: a.to_css("direct", tags[0]), lambda: b.to_css("direct", tags[1]))
     for g in (a, b):
         B.write_rules(g.c, stocks=stocks, minutes=2, items_off=True)
+        g.panel = online_set.css_panel(g.c)   # the pick the CSS must show again later
     a.open_keypad()
     a.type_code(ub.connect_code)
     _searching(a, ub.connect_code)
@@ -666,7 +702,11 @@ def test_direct_set_under_the_gameplay_session(backend: OnlineBackend,
         assert lo["lock"]["ready"] and lo["lock"]["game"] == 1, lo
         # Both games keep running their own scenes: no netplay session, no boot.
         assert not g.c.netplay_status().game_running
-    rep = online_set.play_set([a, b], games=2, mode="direct")
+    rep = online_set.play_set([a, b], games=2, mode="direct",
+                              panels={g.name: g.panel for g in (a, b)})
+    # The CSS remembered each player's character (coin placed, same costume) after each game and
+    # after the loser's stage select.
+    assert rep["lock_ins"][0].get("after_sss"), rep["lock_ins"]
     stages = [g["stage"] for g in rep["games"]]
     assert stages[0] in LEGAL_STAGES, stages
     assert stages[1] == B.STAGE_KIND[online_set.STAGE_PICK], stages
@@ -683,9 +723,11 @@ def test_opponent_leaves_in_the_middle_of_a_game(backend: OnlineBackend,
                                                   dolphin: Callable[..., DolphinInstance],
                                                   gpu_backend: str) -> None:
     """Slippi's disconnect flow (backend-design 5.6) in a match: the opponent closes Dolphin; after
-    the silence limit (7.2 s at delay 2) the remaining game plays the error sound, ends the game
-    and goes straight back to its online CSS, where the next GET_MATCH_STATE reads IDLE: the
-    idle prompt, no error."""
+    the silence limit (7.2 s at delay 2) the remaining game plays the error sound, draws
+    DISCONNECTED in red at the top of its HUD with the game's own font (Dolphin's OSD message is
+    not used), ends the game LRAS-style after 90 frames (the pause screen's quit: no "GAME!", no
+    contest) and goes straight back to its online CSS, where the next GET_MATCH_STATE reads
+    IDLE: the idle prompt, no error, the character still selected."""
     a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, "gameplay-leave", ("kate", "liam"),
                                      stocks=4)
     online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)), 240,
@@ -696,15 +738,40 @@ def test_opponent_leaves_in_the_middle_of_a_game(backend: OnlineBackend,
     _wait(lambda: online_set.gstatus(a.c)["disconnected"], 15, "the drop", interval=0.05)
     dropped = time.monotonic() - t0
     assert 6.5 < dropped < 9.5, dropped
+    # The game draws the text on the frame it sees the drop and keeps it until the scene ends.
+    _wait(lambda: online_set.local(a.c)["hud_disconnected"] == 1, 5, "DISCONNECTED in the HUD",
+          interval=0.05)
+    f0 = a.c.status().frame
     a.shot("01-dropped-in-match")
+    # The end: the match's info operator gets the pause screen's quit (0x30) and "stop" (0x40) in
+    # its flags (scMelee+0x68 -> stOperatorInfoMelee, +0x11B) 90 frames later, so the match ends
+    # without "GAME!".
+    def quit_flags() -> int | None:
+        u = a.c.read_u32
+        if online_set.scene(a.c) != "scMelee":
+            return None
+        oi = u(u(u(0x805A0060) + 4) + 0x68)
+        return a.c.read_mem(oi + 0x11B, 1)[0]
+    flags = _wait(lambda: (lambda f: f if f is not None and f & 0x70 == 0x70 else None)(quit_flags()),
+                  10, "the LRAS-type end", interval=0.02)
+    f1 = a.c.status().frame
+    a.shot("02-ending-no-game")
+    _wait(lambda: online_set.scene(a.c) != "scMelee", 10, "the match to end", interval=0.05)
+    f2 = a.c.status().frame
     _wait(lambda: online_set.scene(a.c) == online_set.CSS, 60, "back on the CSS")
     _wait(lambda: a.c.mm_status()["state"] == "idle", 30, "idle")
     a.steps("wait 60")
-    a.shot("02-back-on-css-idle")
+    a.shot("03-back-on-css-idle")
     assert a.debug_scratch()[10] & 0x30000 == 0x30000   # the error sound, the game ended
     assert not a.locked()
     lo = ppom.read_local(a.c, ppom.find_block(a.c))
     assert lo["disconnected"] == 1 and lo["state"] == 0, lo
+    # Dolphin's red OSD message stood in only if the game had not shown the text itself.
+    assert a.bridge().get("osd_disconnects", 0) == 0, a.bridge()
+    online_set.check_css_remembers(a, a.panel, "after the disconnect")
+    print(f"drop after {dropped:.2f} s; end requested {f1 - f0} frames after the text "
+          f"(flags {flags:#x}); scMelee left {f2 - f0} frames after it")
+    assert f1 - f0 < 140 and f2 - f0 < 200, (f0, f1, f2)
 
 
 @pytest.mark.slow
@@ -758,3 +825,174 @@ def test_direct_from_the_game_menus_hands_off_to_netplay(
     # Leaving ends the session on both sides (the peer's game stops too), so only after the shots.
     for g in (a, b):
         g.c.mm_cancel()
+
+
+def _confirmed_checksums(host: Game, join: Game) -> dict[str, Any]:
+    """Both peers' confirmed-frame checksums of the running (or last) match, compared."""
+    st = [online_set.gstatus(g.c) for g in (host, join)]
+    limit = min(s["current_frame"] for s in st) - online_set.CONFIRM_MARGIN
+    cks = [g.c.call("gprb_checksums", since=0)["rows"] for g in (host, join)]
+    ma = {r[0]: r[1] for r in cks[0] if r[0] <= limit}
+    mb = {r[0]: r[1] for r in cks[1] if r[0] <= limit}
+    common = sorted(set(ma) & set(mb))
+    bad = [f for f in common if ma[f] != mb[f]]
+    return {"compared": len(common), "mismatches": len(bad), "first_mismatch": bad[0] if bad else None}
+
+
+# Dolphin's own controller config (GCPadNew.ini) for player A's machine: the main stick's Up
+# bound to a constant, i.e. held up whenever the harness does not drive the pad. Dolphin maps the
+# controller before the game reads it (GCPad::GetStatus -> SI -> the game's pad thread -> the
+# gfPadStatus slots the gameplay session sends), so a remap in Dolphin reaches both peers as that
+# player's input.
+# "Always Connected": the pad has no physical device (the harness's), and Dolphin reports a pad
+# whose device is missing as unplugged.
+STICK_UP_BY_DOLPHIN_MAPPING = {"GCPad1": {"Main Stick/Up": "1", "Options/Always Connected": "True"}}
+# Dolphin evaluates controller mappings only while its input gate is open: with the render window
+# focused, or with background input. Headless test instances have no focus, so A's instance takes
+# background input. Nothing physical can leak in: the harness clears every pad's device and
+# bindings, and the only binding is the constant above.
+BACKGROUND_INPUT = {"Input": {"BackgroundInput": True}}
+NOTAP_TAG = 1   # run/template-user's save: the first tag in the CSS's list, "NoTap" (tap jump off)
+
+
+@pytest.mark.slow
+def test_each_player_keeps_their_tag_controls(backend: OnlineBackend,
+                                             dolphin: Callable[..., DolphinInstance],
+                                             gpu_backend: str) -> None:
+    """Per-player controls (the design's port values, 5.1): player A picks the name tag "NoTap"
+    (P+ tag controls with tap jump off) on the online CSS, player B plays without a tag (the
+    defaults: tap jump on). The tag's controls travel with A's lock-in through SESSION and are
+    applied to A's port on both machines at the match start. In the match A's stick is held up by
+    A's own Dolphin controller mapping (not the harness) and B's by the harness: on both peers A
+    stays on the ground and B jumps, and the confirmed frames of both peers agree.
+    Screenshots: run/artifacts/game-bridge/tag-controls/."""
+    a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, "tag-controls", ("nora", "otto"),
+                                     stocks=4, tags=(NOTAP_TAG, 0),
+                                     gcpad_ini=(STICK_UP_BY_DOLPHIN_MAPPING, None),
+                                     dolphin_ini=(BACKGROUND_INPUT, None))
+    assert a.picked_tag == 0, a.picked_tag   # the save's slot 0, "NoTap"
+    for g in (a, b):
+        lo = online_set.local(g.c)
+        assert lo["own"]["tag"] == (g is a), lo["own"]
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)), 240,
+                    "the match to run on both")
+    # The setup both games built the match from (SESSION, constant during the match).
+    for g in (a, b):
+        se = online_set.session(g.c)
+        assert se["state"] == 2, se
+        by_name = {p["name"]: p for p in se["players"]}
+        pa, pb = by_name[ua.display_name], by_name[ub.display_name]
+        assert pa["pv"]["tag"] and pa["pv"]["tag_name"] == "ＮｏＴａｐ" and not pa["pv"]["tap_jump"], pa
+        assert not pb["pv"]["tag"], pb
+    port_a = online_set.local(a.c)["local_port"]
+    port_b = online_set.local(b.c)["local_port"]
+    host, join = (a, b) if port_a == 0 else (b, a)
+    # Both machines gave A's port the tag's controls (tap jump off) and B's the defaults.
+    for g in (a, b):
+        cfg = g.c.read_mem(0x805B7480, 0xB9)
+        pads = {p: cfg[0xB5 + p] for p in (0, 1)}
+        assert cfg[pads[port_a] * 0xC + 11] & 0x80 == 0, ("A's pad has tap jump on", g.name, cfg[:0x30].hex())
+        assert cfg[pads[port_b] * 0xC + 11] & 0x80, ("B's pad has tap jump off", g.name, cfg[:0x30].hex())
+        assert g.debug_scratch()[13] == 1 << port_a, g.debug_scratch()[13]
+    a.steps("wait 120")
+    for g in (a, b):
+        g.shot("01-match-before")
+
+    def heights(g: Game) -> dict[int, float]:
+        return {p.port: p.y for p in B.read_players(g.c.read_mem) if p.y is not None}
+
+    base = {g.name: heights(g) for g in (a, b)}
+    # A: the harness lets go of A's pad; A's Dolphin mapping holds the stick up. B: the harness.
+    a.c.pad_clear(0)
+    b.c.pad_set(0, main=(128, 255))
+    peak = {g.name: dict(base[g.name]) for g in (a, b)}
+    # What each machine's game reads for each port: gfPadSystem's game pads (+0x444 + 0x40 * port,
+    # main stick Y at +0x31), filled by the session from that player's machine.
+    stick_a = {g.name: 0 for g in (a, b)}
+    stick_b = {g.name: 0 for g in (a, b)}
+    t_end = time.monotonic() + 4.0
+    while time.monotonic() < t_end:
+        for g in (a, b):
+            for port, y in heights(g).items():
+                peak[g.name][port] = max(peak[g.name].get(port, y), y)
+            pads = g.c.read_u32(0x805A0040) + 0x444   # gfPadSystem's game pads
+            sy = struct.unpack(">b", g.c.read_mem(pads + 0x40 * port_a + 0x31, 1))[0]
+            stick_a[g.name] = max(stick_a[g.name], sy)
+            sy = struct.unpack(">b", g.c.read_mem(pads + 0x40 * port_b + 0x31, 1))[0]
+            stick_b[g.name] = max(stick_b[g.name], sy)
+        time.sleep(0.05)
+    slots = {g.name: g.c.read_mem(g.c.read_u32(0x805A0040) + 0x444, 0x80).hex() for g in (a, b)}
+    a.shot("02-holding-up")
+    b.shot("02-holding-up")
+    a.c.pad_set(0)
+    b.c.pad_set(0)
+    # A's stick was up on both machines, from A's Dolphin mapping (the harness had let go).
+    assert all(v > 50 for v in stick_b.values()), (stick_b, slots)
+    assert all(v > 50 for v in stick_a.values()), (stick_a, slots)
+    for g in (a, b):
+        rise_a = peak[g.name][port_a] - base[g.name][port_a]
+        rise_b = peak[g.name][port_b] - base[g.name][port_b]
+        assert rise_a < 1.0, (g.name, "A jumped with tap jump off", rise_a)
+        assert rise_b > 5.0, (g.name, "B did not jump with tap jump on", rise_b)
+    a.steps("wait 120")
+    ck = _confirmed_checksums(host, join)
+    assert ck["mismatches"] == 0 and ck["compared"] > 300, ck
+    for g in (a, b):
+        g.c.mm_cancel()
+
+
+def test_online_menus_match_the_modes(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                      gpu_backend: str) -> None:
+    """The ONLINE page follows the mode set (Direct, Unranked, Ranked, Teams): WITH FRIENDS opens
+    the code-based modes on Brawl's two-button page, retitled WITH FRIENDS (BASIC VERSUS =
+    Direct, TEAM BATTLE = Teams); WITH ANYONE opens the matchmaking modes on Brawl's Wi-Fi
+    OPTIONS page, whose two buttons are labelled with the game's font: "Unranked" and "Ranked".
+    Each entry reaches the online CSS in its mode (the plugin's menuState = mode + 1, and the
+    search's FIND_OPPONENT mode byte), and leaving the CSS goes back to the page the mode was
+    picked on. Screenshots: run/artifacts/game-code/menu-modes/game-m/."""
+    u = backend.create_user("mona", "MONA")
+    g = _boot(dolphin, "game-m", backend, u, gpu_backend, "menu-modes", "record", GAME_CODE_ARTIFACTS)
+    g.to_main_menu()
+    g.to_online_page()
+    blk = ppom.find_block(g.c)
+
+    def mode_on_css() -> int:
+        g.steps("until scSelctCharacter 600", "wait 30")
+        return ppom.read_debug(g.c, blk)["menuState"] - 1
+
+    def leave_css(shot: str) -> None:
+        g.steps("hold B 90", "until muMenuMain 600", "wait 90")
+        g.shot(shot)
+
+    # WITH FRIENDS -> its page: BASIC VERSUS (Direct) highlighted.
+    g.steps("tap A", "wait 90")
+    g.shot("10-with-friends-basic-versus")
+    g.steps("tap DDOWN 4", "wait 30")
+    g.shot("11-with-friends-team-battle")
+    g.steps("tap DUP 4", "wait 30", "tap A", "wait 400")
+    assert mode_on_css() == 2                     # Direct
+    g.shot("12-direct-css")
+    leave_css("13-back-on-with-friends")          # BASIC VERSUS highlighted again
+    g.steps("tap DDOWN 4", "wait 30", "tap A", "wait 400")
+    assert mode_on_css() == 3                     # Teams
+    g.shot("14-teams-css")
+    leave_css("15-back-on-with-friends-team")     # TEAM BATTLE highlighted
+    g.steps("tap B", "wait 90")
+    g.shot("16-online-page-with-friends")         # back on the ONLINE page, WITH FRIENDS
+    # WITH ANYONE -> Unranked / Ranked, labelled with the game's font.
+    g.steps("tap DRIGHT 4", "wait 30", "tap A", "wait 90")
+    g.shot("17-with-anyone-unranked")
+    g.steps("tap DDOWN 4", "wait 30")
+    g.shot("18-with-anyone-ranked")
+    g.steps("tap DUP 4", "wait 30", "tap A", "wait 400")
+    assert mode_on_css() == 1                     # Unranked
+    g.shot("19-unranked-css")
+    leave_css("20-back-on-online-page")           # ONLINE page, WITH ANYONE highlighted
+    g.steps("tap A", "wait 90", "tap DDOWN 4", "wait 30", "tap A", "wait 400")
+    assert mode_on_css() == 0                     # Ranked
+    g.steps("stick up 30", "wait 5", "tap A 8", "wait 30")
+    g.press_until("START", lambda: g.finds() > 0, "FIND_OPPONENT")
+    _find_logged(g, 0, "")
+    g.steps("wait 60")
+    g.shot("21-ranked-css-searching")
+    g.c.mm_cancel()

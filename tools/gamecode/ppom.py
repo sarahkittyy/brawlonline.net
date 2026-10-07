@@ -88,7 +88,7 @@ def find_block(c: HarnessClient) -> Block:
         if i < 0:
             raise SystemExit("PPOM block not found in the Syringe heap (plugin not loaded?)")
         ver, sz, mbo, mbs, so, ss, lo, ls, dbo, dbs = struct.unpack_from(">HHHHHHHHHH", mem, i + 4)
-        if ver in (1, 2) and 0x100 < sz < 0x4000 and mbo and dbo:
+        if ver in (1, 2, 3) and 0x100 < sz < 0x4000 and mbo and dbo:
             a = start + i
             return Block(a, ver, sz, a + mbo, mbs, a + dbo, dbs, a + so if ss else 0, ss,
                          a + lo if ls else 0, ls)
@@ -195,28 +195,46 @@ def read_debug(c: HarnessClient, b: Block) -> dict:
     return vals
 
 
+PORT_VALUES_SIZE = 0x3C
+LAYOUT_SIZE = 0x2D
+
+
+def port_values(d: bytes) -> dict:
+    """PortValues (v3): a player's name tag and its controls (ppom.h)."""
+    flags, rumble = d[0], d[1]
+    return {"tag": bool(flags & 1), "rumble": rumble, "tag_name": from_u16s(d[2:12]),
+            "layout": d[12:12 + LAYOUT_SIZE].hex(), "tap_jump": bool(d[12 + 11] & 0x80)}
+
+
 def read_local(c: HarnessClient, b: Block) -> dict:
-    """LOCAL (v2): Dolphin's view of this player's session and the game's lock-in."""
-    d = c.read_mem(b.local, 0x40)
+    """LOCAL (v3): Dolphin's view of this player's session and the game's lock-in (with the
+    player's port values)."""
+    d = c.read_mem(b.local, b.local_size or 0x40)
     seq, state, port, rready, disc = struct.unpack_from(">IBBBB", d, 0)
     lseq, ready, css, kind, costume, stage, asl, game = struct.unpack_from(">IBBBBHBB", d, 0x28)
     return {"seq": seq, "state": state, "local_port": port, "remote_ready": rready,
             "disconnected": disc, "peer_name": from_u16s(d[8:8 + 2 * NAME_LEN]),
             "lock": {"seq": lseq, "ready": ready, "css": css, "char_kind": kind, "costume": costume,
-                     "stage_pick": stage, "asl": asl, "game": game}}
+                     "stage_pick": stage, "asl": asl, "game": game},
+            **({"own": port_values(d[0x40:0x40 + PORT_VALUES_SIZE]),
+                "hud_disconnected": d[0x7C]} if len(d) >= 0x80 else {})}
 
 
 def read_session(c: HarnessClient, b: Block) -> dict:
-    """SESSION (v2): the lobby and the next game's setup, the same on both machines."""
-    d = c.read_mem(b.session, 0x110)
+    """SESSION (v2/v3): the lobby and the next game's setup, the same on both machines."""
+    d = c.read_mem(b.session, b.session_size or 0x110)
+    stride = 0x80 if len(d) >= 0x210 else 0x40
     seq, state, mode, game, winner, stage, asl, n = struct.unpack_from(">IBBBBHBB", d, 0)
     players = []
     for i in range(4):
-        o = 0x0C + 0x40 * i
+        o = 0x0C + stride * i
         present, kind, costume = d[o], d[o + 1], d[o + 2]
-        players.append({"present": present, "char_kind": kind, "costume": costume,
-                        "name": from_u16s(d[o + 4:o + 4 + 2 * NAME_LEN]),
-                        "code": from_u16s(d[o + 0x24:o + 0x24 + 2 * CODE_LEN])})
+        pl = {"present": present, "char_kind": kind, "costume": costume,
+              "name": from_u16s(d[o + 4:o + 4 + 2 * NAME_LEN]),
+              "code": from_u16s(d[o + 0x24:o + 0x24 + 2 * CODE_LEN])}
+        if stride == 0x80:
+            pl["pv"] = port_values(d[o + 0x40:o + 0x40 + PORT_VALUES_SIZE])
+        players.append(pl)
     return {"seq": seq, "state": state, "mode": mode, "game": game, "last_winner": winner,
             "stage": stage, "asl": asl, "num_players": n, "players": players[:max(n, 0)]}
 
