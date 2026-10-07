@@ -659,6 +659,20 @@ class HarnessClient:
     def mm_cancel(self) -> dict[str, Any]:
         return self.call("mm_cancel")
 
+    def online_session_backend(self, backend: str) -> dict[str, Any]:
+        """Replace the session backend: ``netplay`` (default), ``record`` (records the
+        hand-off and holds the P2P link; the game keeps running) or ``none``."""
+        return self.call("online_session_backend", backend=backend)
+
+    def game_bridge_status(self) -> dict[str, Any]:
+        """Dolphin's side of the game's PPOM mailbox (Online/GameBridge.h)."""
+        return self.call("game_bridge_status")
+
+    def game_bridge_config(self, **args: Any) -> dict[str, Any]:
+        """``enabled`` (servicing on/off), ``hand_off`` (FIND_OPPONENT hands the match to the
+        session backend)."""
+        return self.call("game_bridge_config", **args)
+
     def log_mark(self, text: str) -> None:
         self.call("log_mark", text=str(text))
 

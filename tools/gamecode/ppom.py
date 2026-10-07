@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
 """Harness side of the PPOM game<->Dolphin channel (mirror of game-code/PPOnline/include/ppom.h).
 
-The C++ Dolphin side (another workstream) will do the same through HLE at the frame boundary;
-this lets the harness exercise the contract with `read_mem` / `write_mem` today.
+Dolphin services the mailbox itself (Source/Core/Core/Online/GameBridge.cpp, at the frame-end
+boundary). `serve` here and `drive.py mbx-serve` play Dolphin's part with `read_mem` / `write_mem`
+for experiments without a server: turn Dolphin's servicing off first
+(`python -m ppharness cmd --port P game_bridge_config enabled=false`).
 
     python tools/gamecode/ppom.py --port P find
     python tools/gamecode/ppom.py --port P dump               # header, mailbox, debug counters

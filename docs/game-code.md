@@ -146,7 +146,7 @@ Notes:
 `include/ppom.h` is the contract, and `tools/gamecode/ppom.py` mirrors it.
 - The block lives in the plugin's `.data`. It is 0x674 bytes, aligned to 32, and big-endian.
 - Header: magic `"PPOM"`, version 1, then offset/size pairs for MAILBOX, SESSION, LOCAL and DEBUG. The header is 0x24 bytes.
-- Dolphin finds it by scanning the Syringe heap (`0x817BA5A0..+0x10000`) for the magic. That is what design §5.2 proposes, done once after boot.
+- **How Dolphin finds it** (`Source/Core/Core/Online/GameBridge.cpp`): it walks the game's `OSModuleInfo` list (`0x800030C8`) to the module with our REL id **20560** (`PPOnline/Makefile` `RELID`; do not change it), then looks for the header in that module's data sections only. It does this once per boot. After that it checks the magic word each frame. The harness tools (`ppom.py`) still scan the Syringe heap (`0x817BA5A0..+0x10000`), which is fine for debugging.
 - SESSION and LOCAL are declared with size 0 in v1; only the mailbox is prototyped.
 
 **Mailbox.**
@@ -163,7 +163,15 @@ Payloads follow design §5.3, with Slippi's command bytes. Text is UTF-16BE.
 | `0xB9 GET_ONLINE_STATUS` | `{state, name[16], code[9]}` |
 | `0xBA CLEANUP_CONNECTION` | none |
 
-The game only touches the mailbox outside sessions: menus and the CSS before plug-in. DEBUG holds counters, the `cfg` feature flags and the message log. Neither DEBUG nor the mailbox may be included in state hashes.
+The game only touches the mailbox outside sessions: menus and the CSS before plug-in. DEBUG holds counters, the `cfg` feature flags and the message log. Neither DEBUG nor the mailbox may be included in state hashes. Dolphin excludes the mailbox from rollback state (`RollbackManager::SetMailboxRegion`) and never services it while netplay runs.
+
+**Protocol rules the game must follow** (agreed with Dolphin's GameBridge, `pponline` `42036d6`):
+1. Dolphin services requests at the frame-end boundary. It writes **at most one response per frame**, and only when `respSeen == respCount`, i.e. once the game has taken the previous response. `pollResponse()` every frame (the tick already does).
+2. `FIND_OPPONENT` is answered with a `GET_MATCH_STATE` payload. A fresh search reads as `mmState 1`. A refusal reads as `mmState 5` with the text in `errorText`.
+3. While searching or connected, **poll `GET_MATCH_STATE`**, as Slippi's CSS does every frame. Keep one poll in flight: post the next only after the answer arrives (re-post after 60 frames without one). The ring has 4 slots, so unthrottled posting overwrites requests.
+4. Accept every `GET_MATCH_STATE` answer with `seq >= searchSeq` of the current search, not only the answer to the FIND itself. Forget the search (`searchSeq = 0`) on Z/cleanup and when leaving the menus.
+5. Handle `mmState 0` (idle: cleaned up, peer gone) by going back to the idle prompt, as Slippi does (design §5.6). Handle `mmState 4` with `peerName`/`peerCode` as "opponent found".
+6. `CLEANUP_CONNECTION` gets no answer. Commands Dolphin does not implement yet (`0xB6`, `0xB8`, `0xBE`, `0xE3`) are answered with `status 0xFF`.
 
 ---
 
@@ -248,19 +256,17 @@ This avoids the CSS name path and its 5-character stack buffer.
 
 ---
 
-## 8. Mailbox round trip (task 5)
+## 8. Mailbox round trip: Dolphin plays its part
 
-Run in `online_unranked.txt` and `online_direct.txt`. The harness plays the Dolphin side through `drive.py mbx-serve`, using only `read_mem`/`write_mem`:
-1. On entering muMenuMain the plugin posts `0xB9 GET_ONLINE_STATUS`. The harness answers `{state 1, "Sarah", "SARA#001"}`, and the PLAY ONLINE description shows "(Sarah, SARA#001)" (`01-main-play-online.png`).
-2. On the CSS, START posts `0xB4 FIND_OPPONENT {mode=unranked}` and the line shows "Searching for opponent" (`08`). The harness reads the request, answers `0xB3 {mmState 4, peer "Opponent", "OPPO#123"}`, bumps `respCount` and advances `reqRead`. The plugin then shows "Playing: Opponent" (`09`).
-3. Direct does the same with the code from the keypad: request `code='EG#123'`, response shown as "Playing: Friend" (`15`).
-4. Z cancels a search with `0xBA` (implemented, not screenshotted). Re-entering the menus also sends `0xBA`, as Slippi does.
+Dolphin services the mailbox itself (`GameBridge`, dolphin branch `game-bridge`; design §5.2 has the details). No harness server is involved. Verified by `harness/tests/test_online_game.py` against our `accounts` + `mm` servers. Each instance has its own `user.json` and its own copy of the SD card, patched with `PPOnline.rel` through `tools/sdcard/patch_sd.py`. Screenshots are in `run/artifacts/game-bridge/`.
+1. **Main menu.** The plugin posts `0xB9`. Dolphin answers from `user.json` and the accounts lookup. PLAY ONLINE then reads "(carl, CARL#322)" (`unranked/game-u/01-main-play-online.png`).
+2. **Direct.** START opens the keypad, and the test types the other account's code. Typing needs these rules: the cursor does not wrap; UP from row 1 reaches backspace; the same key twice needs a move off and back, because there is no multi-tap timeout. OK posts `0xB4 {mode 2, code}`. Dolphin starts the search and answers `mmState 1`, and the header reads "Searching for BOB#610" (`direct/game-a/05-searching.png`).
+3. **Z cancels.** The game posts `0xBA` and Dolphin cleans up. The header goes back to "Direct: START to search BOB#610" (`06-cancelled.png`).
+4. **Match.** The other player searches and START searches again. The server pairs them (mm log `matched`). Both games are told `mmState 4` with the peer's name, code and role, and show "Playing: bob" / "Playing: alice" (`07-opponent.png`). `Online::Session::Start` was called on both sides with the match (harness `record` backend).
+5. **Unranked.** The server refuses the ticket. The game gets `mmState 5` with "Unranked is not supported yet. Only Direct works for now." and prints it in the header (`unranked/game-u/05-unranked-error.png`). Z clears the error.
+6. **Hand-off to netplay.** With the real backend (whole-machine netplay, design §5.1 A), both Dolphins stop their games right after the match and boot P+ together under rollback. The plugin is loaded again and the block is found again, but servicing is paused while netplay runs (`direct-netplay/*/06-netplay-boot.png`).
 
-The C++ side (`mm_search_direct` in Dolphin) should implement exactly what `drive.py mbx-serve` does, from the HLE frame-end hook:
-1. Find the block once.
-2. Read slots with `seq > reqRead`.
-3. Write the response body, then increment `respCount`.
-4. Write `reqRead`.
+`drive.py mbx-serve` and `ppom.py serve` still work for experiments without a server. Turn Dolphin's servicing off first: `ppharness cmd --port P game_bridge_config enabled=false`.
 
 ---
 
@@ -270,7 +276,7 @@ The C++ side (`mm_search_direct` in Dolphin) should implement exactly what `driv
 2. CSS: put P+'s competitive rules into the Wi-Fi rules, handle LEAVE / "hold Z to disconnect", lock in on START (don't search without a character), and block A/B on the name tag while searching.
 3. Own code-entry task (section 7), with history through `0xBE`.
 4. Ranked/Teams placement once the user decides (section 6).
-5. SESSION/LOCAL blocks, once the Dolphin side lands.
+5. SESSION/LOCAL blocks. MAILBOX is serviced by Dolphin now (§8); SESSION/LOCAL need the gameplay-only session.
 
 ---
 
@@ -279,4 +285,5 @@ The C++ side (`mm_search_direct` in Dolphin) should implement exactly what `driv
 - `game-code` (fork of brawlback-asm, branch `pponline`; upstream refs under `refs/remotes/upstream/*`):
   - `0a4c153`: plugin skeleton, PPOM block, hello world.
   - `fb4fd87`: Wi-Fi flow, mailbox, Direct code entry.
+  - `42036d6`: `GET_MATCH_STATE` polling and the protocol rules for Dolphin's GameBridge (§5).
 - Top-level repo: `docs/game-code.md`, `tools/gamecode/`, `tools/sdcard/`. `.gitignore` already listed `/game-code/` and `/toolchains/`.

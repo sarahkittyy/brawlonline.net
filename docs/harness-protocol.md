@@ -68,6 +68,9 @@ Let automated scripts (and Claude) run Dolphin instances end to end with no huma
 | `mm_search` | `mode`: `ranked`\|`unranked`\|`direct`\|`teams`\|`party`, `code` (optional), same options | Same for any mode (our server refuses all but Direct) |
 | `mm_status` | — | `{"state", "state_code", "searching", "error", "error_source", "mode", "opponent_code", "server", "local_port", "lan_address", "tickets", "connect_attempts", "match": {...}, "handoff", "handoff_error", "session": {...}}`. See "Online play" |
 | `mm_cancel` | — | Slippi's `CLEANUP_CONNECTION`: ends the search, the P2P link and the session; returns the fresh (idle) `mm_status` |
+| `online_session_backend` | `backend`: `"netplay"` \| `"record"` \| `"none"` | Replaces the session backend that a connected match is handed to; returns `mm_status`. See "Online play" |
+| `game_bridge_status` | — | Dolphin's side of the game's PPOM mailbox: `{"enabled", "hand_off", "found", "block", "mailbox", "mailbox_size", "module", "module_id", "frames", "locate_attempts", "netplay_paused", "requests", "responses", "lost", "deferred_frames", "by_cmd": {name: count}, "last_request", "last_response"}`. See "Online play" |
+| `game_bridge_config` | optional `enabled`, `hand_off` (bools) | Servicing on/off (off lets `tools/gamecode/drive.py mbx-serve` play Dolphin's part); whether the game's FIND_OPPONENT hands the match to the session backend. Returns `game_bridge_status` |
 | `log_mark` | `text` | `{}`. Writes `[HARNESS] <text>` into dolphin.log, used to correlate log lines with test steps |
 | `quit` | — | `{}`, then a clean shutdown (flushes logs and exits the process) |
 
@@ -155,7 +158,7 @@ During a rollback the resimulated frames are run and rendered in full but not pr
 
 ## Online play
 
-The online client (`Source/Core/Core/Online/`) logs in from `user.json` and finds a Direct opponent through our matchmaking server (`server/crates/mm`), as Slippi's Dolphin does with Slippi's. The game's online menus do not exist yet; these commands drive the same calls (`Online::Client`).
+The online client (`Source/Core/Core/Online/`) logs in from `user.json` and finds a Direct opponent through our matchmaking server (`server/crates/mm`), as Slippi's Dolphin does with Slippi's. The game's own online menus drive the same calls (`Online::Client`) through the PPOM mailbox (`Online/GameBridge.cpp`, docs/backend-design.md 5.2); these commands drive them directly.
 
 **Configuration** (`[Online]` in Dolphin.ini, or `-C Dolphin.Online.<Key>=<Value>`):
 
@@ -188,7 +191,11 @@ The online client (`Source/Core/Core/Online/`) logs in from `user.json` and find
 
 **Peer timeout.** A rollback session drops a peer that has been silent for Slippi's in-match limit, about 7.2 s at delay 2 (`Online::PeerSilenceTimeoutMs`: the 7-frame window plus 421 halted frames), instead of GekkoNet's 5 s; dolphin.log says `GekkoNet: disconnect timeout 7191 ms`. The game then stops on both sides (`peer_disconnects` = 1), with an OSD `DISCONNECTED` until the game shows it itself (docs/backend-design.md 5.6).
 
-**Tests.** `harness/tests/test_online.py` (markers `dolphin` and `server`) runs Postgres, `accounts` and `mm` locally (`ppharness/backend.py`), creates accounts over HTTP and the admin CLI, writes each instance's `Online/user.json` and drives these commands. The variant through netsim puts each client's *matchmaking* traffic through a proxy; the P2P traffic cannot go through it, because the server tells each client the other's real address (the proxy would need to be a NAT both clients route through).
+**The game's mailbox.** `game_bridge_status` shows whether Dolphin found the plugin's PPOM block (through the `OSModuleInfo` list, module id 20560), what the game asked last and what it was told (`last_request`/`last_response`, the same text as the `GameBridge:` lines in dolphin.log; `GET_MATCH_STATE` polls are logged only when the answer changes). `netplay_paused` is true while a netplay session runs: the mailbox is not serviced then. A search started from the game hands off to the session backend like `session: "auto"` (`game_bridge_config hand_off=false` keeps the link instead).
+
+**`online_session_backend`.** `netplay` is what DolphinNoGUI registers at start. `record` is for tests of the game's menus: `Start` records the match (`session.phase` `held`, `detail`: `starts`, `role`, `local_port`, `match_id`, `peer_name`, `peer_code`, `selections`, `link_open`) and holds the P2P link, so the game keeps running on its character select instead of being stopped for the netplay boot; dolphin.log says `Online session (record): Start match <id>`. `none` unregisters (hand-off `kept`).
+
+**Tests.** `harness/tests/test_online_game.py` drives two instances through the game's own menus (main menu → PLAY ONLINE → WITH FRIENDS → START → code on the keypad → OK) with the plugin on each instance's SD card, and checks the mailbox in game memory, `mm_status`, the mm server's log and screenshots; it also covers Unranked's server error and the hand-off to whole-machine netplay. `harness/tests/test_online.py` (markers `dolphin` and `server`) runs Postgres, `accounts` and `mm` locally (`ppharness/backend.py`), creates accounts over HTTP and the admin CLI, writes each instance's `Online/user.json` and drives these commands. The variant through netsim puts each client's *matchmaking* traffic through a proxy; the P2P traffic cannot go through it, because the server tells each client the other's real address (the proxy would need to be a NAT both clients route through).
 
 ## Deviations
 
