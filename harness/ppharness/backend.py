@@ -176,7 +176,17 @@ class OnlineBackend:
             self.pg_mode = "docker"
             self._start_docker()
         self.db_name = f"ppe2e_{int(time.time())}_{secrets.token_hex(3)}"
-        self._sql(self.admin_url, f"CREATE DATABASE {self.db_name}")
+        # A freshly started portable server sometimes drops or times out the first connections
+        # on Windows (seen with several clusters starting at once): retry a few times.
+        for attempt in range(6):
+            try:
+                self._sql(self.admin_url, f"CREATE DATABASE {self.db_name}")
+                break
+            except BackendError as e:
+                if attempt == 5 or "already exists" in str(e):
+                    raise
+                log.warning("CREATE DATABASE failed (%s); retrying", str(e).splitlines()[0][-120:])
+                time.sleep(2.0)
         self.database_url = self.admin_url.rsplit("/", 1)[0] + "/" + self.db_name
         log.info("postgres (%s): %s", self.pg_mode, self.database_url)
 
@@ -282,7 +292,11 @@ class OnlineBackend:
         deadline = time.monotonic() + 60
         while True:
             if accounts.poll() is not None:
-                raise BackendError(f"accounts exited ({accounts.returncode}):\n{self.log_text('accounts')}")
+                pg_log = self.run_dir / "postgres.log"
+                pg_tail = "\n".join(pg_log.read_text(errors="replace").splitlines()[-15:]) \
+                    if pg_log.exists() else ""
+                raise BackendError(f"accounts exited ({accounts.returncode}):\n"
+                                   f"{self.log_text('accounts')}\npostgres.log:\n{pg_tail}")
             try:
                 if self._http("GET", "/healthz", raw=True) == "ok":
                     break

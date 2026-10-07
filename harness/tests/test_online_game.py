@@ -46,12 +46,20 @@ pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 
 PLUGIN = ROOT / "game-code" / "PPOnline" / "PPOnline.rel"
 ARTIFACTS = ROOT / "run" / "artifacts" / "game-bridge"
+GAME_CODE_ARTIFACTS = ROOT / "run" / "artifacts" / "game-code"
 
 UNRANKED_ERROR = "Unranked is not supported yet. Only Direct works for now."
 
 # PPOM layout (game-code/PPOnline/include/ppom.h)
 MB_RESP = 0x210
 CMD_GET_MATCH_STATE = 0xB3
+CMD_FETCH_CODE_SUGGESTION = 0xBE
+# DEBUG scratch words the plugin keeps for tests (tools/gamecode/ppom.py read_debug)
+SCR_SUGGEST_REQUESTS, SCR_CSS_LOCK, SCR_SUGGESTION = 0, 1, 2
+
+# The CSS's player area (BrawlHeaders mu_selchar_player_area.h / mu_selchar_hand.h)
+AREA_HAND, AREA_CHAR, AREA_COSTUME = 0x1A8, 0x1B8, 0x1BC
+HAND_COIN, HAND_MODE = 0xA0, 0xA4
 
 
 @pytest.fixture(scope="module")
@@ -107,7 +115,40 @@ class Game:
             r.update(mm_state=p[0], role=p[1], session_phase=p[2],
                      peer_name=_u16text(p[4:0x24]), peer_code=_u16text(p[0x24:0x36]),
                      error=_u16text(p[0x38:0x38 + 240]))
+        elif cmd == CMD_FETCH_CODE_SUGGESTION:
+            r.update(found=bool(p[0]), index=struct.unpack_from(">I", p, 4)[0],
+                     code=_u16text(p[8:8 + 18]))
         return r
+
+    def css(self) -> dict[str, int]:
+        """The local player's coin and character on the CSS (muSelCharPlayerArea, port 0)."""
+        u = self.c.read_u32
+        task = u(u(u(0x805A0060) + 4) + 0x400)
+        area = u(task + 0x44)
+        hand = u(area + AREA_HAND)
+        return {"char": u(area + AREA_CHAR), "costume": u(area + AREA_COSTUME),
+                "hand_coin": u(hand + HAND_COIN), "hand_mode": u(hand + HAND_MODE)}
+
+    def locked(self) -> bool:
+        return bool(self.debug_scratch()[SCR_CSS_LOCK] & 1)
+
+    def suggestions(self) -> int:
+        return int(self.bridge()["by_cmd"].get("FETCH_CODE_SUGGESTION", 0))
+
+    def mark(self) -> int:
+        return self.inst.log.mark()
+
+    def suggestion_logged(self, inp: str, scroll: int, code: str | None, index: int,
+                          since: int = 0, timeout: float = 10) -> None:
+        """Dolphin answered a FETCH_CODE_SUGGESTION for `inp` with `code` (None: no suggestion)."""
+        ans = (f"suggestion '{re.escape(code)}' index={index}" if code
+               else f"no suggestion index={index}")
+        self.inst.wait_for_log(r"GameBridge: request \d+ FETCH_CODE_SUGGESTION mode=2 scroll="
+                               + str(scroll) + " input='" + re.escape(inp) + r"' index=\d+ -> "
+                               + ans, timeout=timeout, since=since)
+
+    def recent_codes(self, **kw: Any) -> dict[str, Any]:
+        return self.c.call("online_recent_codes", mode="direct", **kw)
 
     def debug_scratch(self) -> list[int]:
         st = self.bridge()
@@ -277,7 +318,7 @@ def test_keypad_steps_cover_every_code_shape() -> None:
 
 
 def _boot(dolphin: Callable[..., DolphinInstance], name: str, be: OnlineBackend, user: OnlineUser,
-          video: str, test: str, session_backend: str) -> Game:
+          video: str, test: str, session_backend: str, artifacts: Path = ARTIFACTS) -> Game:
     if not PLUGIN.exists():
         pytest.skip(f"{PLUGIN} not built (game-code/build.sh)")
     cfg = InstanceConfig(cpu_thread=True, video_backend=video, dolphin_ini={"Online": {
@@ -289,7 +330,7 @@ def _boot(dolphin: Callable[..., DolphinInstance], name: str, be: OnlineBackend,
     user.write_user_json(d)
     inst.launch()
     inst.connect()
-    out = ARTIFACTS / test / name
+    out = artifacts / test / name
     shutil.rmtree(out, ignore_errors=True)
     g = Game(inst, user, out)
     g.c.online_session_backend(session_backend)
@@ -427,9 +468,169 @@ def test_unranked_shows_the_server_error(backend: OnlineBackend,
     assert st["error_source"] == "create_ticket"
     g.steps("wait 30")
     g.shot("05-unranked-error")
+    # Still locked in while the error shows (Slippi clears the lock with the error, on Z).
+    assert g.locked()
+    before = g.css()
+    g.steps("tap B 8", "wait 20")
+    assert g.css() == before
     # Z clears the error (Slippi: "Press Z to clear error").
     g.press_until("Z", lambda: g.c.mm_status()["state"] == "idle", "the cleanup")
+    _wait(lambda: not g.locked(), 5, "the CSS to unlock")
     g.shot("06-after-clear")
+
+
+# Recent codes, oldest first (Dolphin keeps them newest first: ABCD#999, ADGJ#123, CARL#123,
+# BOB#610), as `online_recent_codes add` writes them to <User>/Online/<uid>/direct-codes.json.
+RECENT = ["BOB#610", "CARL#123", "ADGJ#123", "ABCD#999"]
+SCROLL_NONE, SCROLL_OLDER, SCROLL_NEWER, SCROLL_RESET = 0, 1, 2, 3
+
+
+def _seeded_direct_css(dolphin: Callable[..., DolphinInstance], be: OnlineBackend,
+                       gpu_backend: str, test: str, name: str, user: OnlineUser) -> Game:
+    """One logged-in game on the Direct CSS with Fox picked and a seeded code history."""
+    g = _boot(dolphin, name, be, user, gpu_backend, test, "record", GAME_CODE_ARTIFACTS)
+    g.to_main_menu()
+    r = g.recent_codes(clear=True, add=RECENT)
+    assert r["codes"] == list(reversed(RECENT)), r
+    g.to_online_page()
+    g.to_css("direct")
+    return g
+
+
+def test_recent_codes_on_the_keypad(backend: OnlineBackend,
+                                    dolphin: Callable[..., DolphinInstance],
+                                    gpu_backend: str) -> None:
+    """Slippi's recent connect codes on Brawl's keypad (0xBE FETCH_CODE_SUGGESTION): the newest
+    code is suggested when the keypad opens, typing narrows it, L/R scroll older/newer, Z takes
+    the suggestion and moves to OK, START searches with it; a typed prefix alone is sent as
+    typed (the suggestion is only shown). Screenshots: run/artifacts/game-code/recent-codes/."""
+    u = backend.create_user("gina", "GINA")
+    g = _seeded_direct_css(dolphin, backend, gpu_backend, "recent-codes", "game-r", u)
+
+    # Opened: the newest code (Slippi NameEntryThinkOneShot.asm).
+    m = g.mark()
+    g.open_keypad()
+    g.suggestion_logged("", SCROLL_RESET, "ABCD#999", 0, since=m)
+    g.steps("wait 20")
+    g.shot("01-keypad-suggestion")
+    r = g.response()
+    assert r["cmd"] == CMD_FETCH_CODE_SUGGESTION and r["found"] and r["code"] == "ABCD#999", r
+
+    # Typing narrows it (OnEnterText.asm: reset with the new text).
+    m = g.mark()
+    g.steps(*keypad_steps("AD"))
+    g.suggestion_logged("A", SCROLL_RESET, "ABCD#999", 0, since=m)
+    g.suggestion_logged("AD", SCROLL_RESET, "ADGJ#123", 1, since=m)
+    g.steps("wait 20")
+    g.shot("02-typed-AD")
+
+    # B deletes (and asks again); on the empty field the newest code is back.
+    m = g.mark()
+    g.steps("tap B 8", "wait 20", "tap B 8", "wait 30")
+    g.suggestion_logged("A", SCROLL_RESET, "ABCD#999", 0, since=m)
+    g.suggestion_logged("", SCROLL_RESET, "ABCD#999", 0, since=m)
+    assert g.debug_scratch()[4] == 1, "B on a non-empty field must not leave the keypad"
+
+    # L = older, R = newer (OnLPress/OnRPress.asm).
+    for button, scroll, code, index, shot in (("L", SCROLL_OLDER, "ADGJ#123", 1, "03-L-older"),
+                                              ("L", SCROLL_OLDER, "CARL#123", 2, "04-L-older"),
+                                              ("R", SCROLL_NEWER, "ADGJ#123", 1, "05-R-newer")):
+        m = g.mark()
+        n = g.suggestions()
+        g.press_until(button, lambda n=n: g.suggestions() > n, f"FETCH_CODE_SUGGESTION ({button})",
+                      tries=3)
+        g.suggestion_logged("", scroll, code, index, since=m)
+        g.steps("wait 20")
+        g.shot(shot)
+
+    # Z takes it (CheckTriggersAndZ.asm): success sound, highlight on OK.
+    accepted = g.debug_scratch()[SCR_SUGGESTION] >> 24
+    g.press_until("Z", lambda: g.debug_scratch()[SCR_SUGGESTION] >> 24 > accepted, "Z to accept",
+                  tries=3)
+    g.steps("wait 20")
+    g.shot("06-z-accepted")
+
+    # START searches with the whole code, which becomes the newest recent code.
+    n = g.finds()
+    g.press_until("START", lambda: g.finds() > n, "FIND_OPPONENT")
+    _searching(g, "ADGJ#123")
+    g.steps("wait 40")
+    g.shot("07-searching-accepted")
+    assert g.recent_codes()["codes"][0] == "ADGJ#123"
+    g.press_until("Z", lambda: g.c.mm_status()["state"] == "idle", "the cleanup")
+
+    # A typed prefix with a suggestion shown is sent as typed (OnConfirmButtonHandler.asm).
+    m = g.mark()
+    g.open_keypad()
+    g.suggestion_logged("", SCROLL_RESET, "ADGJ#123", 0, since=m)
+    g.steps(*keypad_steps("CA"))
+    g.suggestion_logged("CA", SCROLL_RESET, "CARL#123", 2, since=m)
+    g.steps("wait 20")
+    g.shot("08-typed-CA")
+    n = g.finds()
+    g.press_until("START", lambda: g.finds() > n, "FIND_OPPONENT")
+    _searching(g, "CA")
+    g.press_until("Z", lambda: g.c.mm_status()["state"] == "idle", "the cleanup")
+
+    # No history: no suggestion, and Z only buzzes.
+    g.recent_codes(clear=True)
+    m = g.mark()
+    g.open_keypad()
+    g.suggestion_logged("", SCROLL_RESET, None, 0, since=m)
+    accepted = g.debug_scratch()[SCR_SUGGESTION] >> 24
+    g.steps("tap Z 8", "wait 20")
+    assert g.debug_scratch()[SCR_SUGGESTION] >> 24 == accepted
+    g.shot("09-no-history")
+    g.c.mm_cancel()
+
+
+def test_character_locked_while_searching(backend: OnlineBackend,
+                                          dolphin: Callable[..., DolphinInstance],
+                                          gpu_backend: str) -> None:
+    """While locked in (searching, connected, or an error not yet cleared) A and B on the
+    character and the costume buttons do nothing, as on Slippi (PreventAPressCharUnselect.asm,
+    PreventBPressCharUnselect.asm, PreventColorChange.asm); Z unlocks; holding B still leaves.
+    Screenshots: run/artifacts/game-code/css-lock/."""
+    u = backend.create_user("hank", "HANK")
+    g = _seeded_direct_css(dolphin, backend, gpu_backend, "css-lock", "game-l", u)
+    before = g.css()
+    assert before["char"] == 0x7 and before["hand_coin"] == 0, before   # Fox, coin placed
+
+    g.open_keypad()
+    g.press_until("Z", lambda: g.debug_scratch()[SCR_SUGGESTION] >> 24 > 0, "Z to accept", tries=3)
+    n = g.finds()
+    g.press_until("START", lambda: g.finds() > n, "FIND_OPPONENT")
+    _searching(g, "ABCD#999")
+    _wait(g.locked, 5, "the CSS lock")
+    g.shot("01-searching-locked")
+
+    # The hand is over the placed coin: A would pick it up, B would take it back, X/Y would
+    # change the costume. None of it happens.
+    g.steps("tap A 8", "wait 20", "tap B 8", "wait 20", "tap X 8", "wait 20", "tap Y 8", "wait 20")
+    assert g.css() == before, g.css()
+    assert g.c.mm_status()["state"] in ("initializing", "matchmaking")
+    g.shot("02-after-A-B-X-Y")
+
+    # Z cancels: unlocked, B takes the coin back to the hand, A puts it down again.
+    g.press_until("Z", lambda: g.c.mm_status()["state"] == "idle", "the cleanup")
+    _wait(lambda: not g.locked(), 5, "the CSS to unlock")
+    g.press_until("B", lambda: g.css()["hand_coin"] != 0, "B to take the coin back")
+    g.shot("03-unlocked-B-coin-in-hand")
+    g.press_until("A", lambda: g.css()["hand_coin"] == 0, "A to place the coin")
+    assert g.css()["char"] == 0x7
+    g.shot("04-unlocked-A-coin-placed")
+    g.press_until("X", lambda: g.css()["costume"] != before["costume"], "X to change costume")
+
+    # Locked again; holding B still leaves the CSS (Slippi keeps Melee's hold B).
+    g.open_keypad()
+    g.press_until("Z", lambda: g.debug_scratch()[SCR_SUGGESTION] >> 24 > 1, "Z to accept", tries=3)
+    n = g.finds()
+    g.press_until("START", lambda: g.finds() > n, "FIND_OPPONENT")
+    _wait(g.locked, 10, "the CSS lock")
+    g.steps("hold B 90", "until muMenuMain 600", "wait 30")
+    g.shot("05-hold-B-left")
+    _wait(lambda: g.c.mm_status()["state"] == "idle", 10, "the cleanup on the menu")
+    assert not g.locked()
 
 
 @pytest.mark.slow

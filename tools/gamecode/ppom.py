@@ -11,7 +11,9 @@ for experiments without a server: turn Dolphin's servicing off first
     python tools/gamecode/ppom.py --port P log                 # MuMsg::printIndex call log
     python tools/gamecode/ppom.py --port P cfg 0x7             # set feature flags
     python tools/gamecode/ppom.py --port P serve [--peer-name N --peer-code C --state 4]
-          answer every request once (FIND_OPPONENT -> GET_MATCH_STATE response)
+          [--codes ABCD#123,EFGH#456]
+          answer every request once (FIND_OPPONENT -> GET_MATCH_STATE response;
+          FETCH_CODE_SUGGESTION from --codes, newest first, with Dolphin's search)
 """
 
 from __future__ import annotations
@@ -34,6 +36,8 @@ CMD = {0xB3: "GET_MATCH_STATE", 0xB4: "FIND_OPPONENT", 0xB6: "OPEN_LOGIN", 0xB8:
        0xB9: "GET_ONLINE_STATUS", 0xBA: "CLEANUP_CONNECTION", 0xBE: "FETCH_CODE_SUGGESTION",
        0xE3: "GET_RANK"}
 MODES = {0: "ranked", 1: "unranked", 2: "direct", 3: "teams"}
+
+SCROLL = {0: "none", 1: "older", 2: "newer", 3: "reset"}   # Slippi AutoComplete.s
 
 REQ_SLOTS, REQ_SIZE, REQ_PAYLOAD = 4, 0x80, 0x78
 RESP_PAYLOAD = 0x1F8
@@ -97,7 +101,51 @@ def read_requests(c: HarnessClient, b: Block):
     return (wr, rd, rc, rs), reqs
 
 
+def code_suggestion_request(payload: bytes) -> dict:
+    """0xBE request: {mode u8, scroll u8, inputLen u8, pad, index u32, input u16[9]}."""
+    mode, scroll, n = payload[0], payload[1], payload[2]
+    index = struct.unpack_from(">I", payload, 4)[0]
+    text = from_u16s(payload[8:8 + 2 * CODE_LEN])
+    text = "".join(chr(ord(ch) - 0xFEE0) if 0xFF01 <= ord(ch) <= 0xFF5E else ch for ch in text)
+    return {"mode": mode, "scroll": scroll, "input": text[:n], "index": index}
+
+
+def code_suggestion_payload(found: bool, code: str, index: int) -> bytes:
+    """0xBE response: {found u8, len u8, pad[2], index u32, code u16[9]}; not found: the input."""
+    return struct.pack(">BBxxI", 1 if found else 0, len(code), index) + u16s(code, CODE_LEN)
+
+
+def decode_code_suggestion(payload: bytes) -> dict:
+    found, n = payload[0], payload[1]
+    index = struct.unpack_from(">I", payload, 4)[0]
+    return {"found": bool(found), "len": n, "index": index,
+            "code": from_u16s(payload[8:8 + 2 * CODE_LEN])}
+
+
+def suggest(codes: list[str], prefix: str, index: int, scroll: int) -> tuple[bool, int, str]:
+    """Slippi's handleNameEntryLoad (and Dolphin's RecentCodes::SuggestFrom) over `codes`, newest
+    first: (found, index, code)."""
+    prefix = prefix.upper()
+
+    def match(i: int) -> bool:
+        return 0 <= i < len(codes) and codes[i].upper().startswith(prefix)
+
+    cur = {1: index + 1, 2: max(index - 1, 0) if index > 0 else index, 3: 0}.get(scroll, index)
+    step = -1 if scroll == 2 else 1
+    while 0 <= cur < len(codes) and not match(cur):
+        cur += step
+    if match(cur):
+        return True, cur, codes[cur].upper()
+    if match(index):
+        return True, index, codes[index].upper()
+    return False, index, prefix
+
+
 def describe_request(cmd: int, payload: bytes) -> str:
+    if cmd == 0xBE:
+        r = code_suggestion_request(payload)
+        return (f"FETCH_CODE_SUGGESTION mode={MODES.get(r['mode'], r['mode'])} "
+                f"scroll={SCROLL.get(r['scroll'], r['scroll'])} input={r['input']!r} index={r['index']}")
     if cmd == 0xB4:
         mode, ch, cos, team = payload[:4]
         code = from_u16s(payload[4:4 + 2 * CODE_LEN])
@@ -130,6 +178,9 @@ def read_debug(c: HarnessClient, b: Block) -> dict:
     d = c.read_mem(b.debug, b.debug_size)
     vals = dict(zip(DEBUG_FIELDS, struct.unpack_from(">6I", d, 0)))
     vals["scratch"] = list(struct.unpack_from(">10I", d, 0x18))
+    # scratch[0] 0xBE requests sent; [1] CSS lock | phase << 4; [2] Z accepts << 24 |
+    # found << 16 | suggestion index; [3] rules applied; [4] keypad 1 open / 2 OK / 3 closed;
+    # [5] hand mode (8 = keypad); [6]-[9] menu hooks (netmenu.cpp)
     log = []
     for k in range(32):
         lr, msg, win, line, data = struct.unpack_from(">IIHhI", d, 0x40 + 16 * k)
@@ -153,6 +204,7 @@ def main() -> int:
     p.add_argument("--error", default="")
     p.add_argument("--timeout", type=float, default=120.0)
     p.add_argument("--once", action="store_true")
+    p.add_argument("--codes", default="", help="recent codes for FETCH_CODE_SUGGESTION, newest first")
     a = ap.parse_args()
 
     c = HarnessClient.connect(a.port, timeout=30)
@@ -165,6 +217,13 @@ def main() -> int:
         for seq, cmd, pl in reqs:
             if seq:
                 print(f"  req seq={seq}: {describe_request(cmd, pl)}")
+        resp = c.read_mem(b.mailbox + MB_RESP, 8 + 0x40)
+        rseq, rcmd, rstatus = struct.unpack_from(">IBB", resp, 0)
+        if rseq:
+            extra = ""
+            if rcmd == 0xBE and rstatus == 0:
+                extra = f" {decode_code_suggestion(resp[8:])}"
+            print(f"  last response seq={rseq} {CMD.get(rcmd, hex(rcmd))} status={rstatus:#x}{extra}")
         d = read_debug(c, b)
         print({k: (hex(v) if k == "cfg" else v) for k, v in d.items() if k != "log"})
     elif a.cmd == "log":
@@ -194,6 +253,12 @@ def main() -> int:
                                                       role=1)
                         write_response(c, b, seq, 0xB3, payload)
                         print(f"  -> GET_MATCH_STATE mmState={a.state} peer={a.peer_name} ({a.peer_code or code})")
+                    elif cmd == 0xBE:
+                        r = code_suggestion_request(pl)
+                        codes = [x for x in a.codes.split(",") if x]
+                        found, idx, code = suggest(codes, r["input"], r["index"], r["scroll"])
+                        write_response(c, b, seq, 0xBE, code_suggestion_payload(found, code, idx))
+                        print(f"  -> FETCH_CODE_SUGGESTION found={found} {code!r} index={idx}")
                     elif cmd == 0xB9:
                         payload = struct.pack(">BB", 1, 0) + u16s("Sarah", NAME_LEN) + u16s("SARA#001", CODE_LEN)
                         write_response(c, b, seq, 0xB9, payload)
