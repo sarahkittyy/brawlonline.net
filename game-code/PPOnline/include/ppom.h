@@ -132,6 +132,7 @@ namespace PPOM {
         CFG_TEXT = 1 << 0,        // relabel texts
         CFG_WIFI_HOOKS = 1 << 1,  // fake Nintendo WFC/Wiimmfi login (Brawlback Gen 1 NetMenu hooks)
         CFG_LOG = 1 << 2,         // log MuMsg::printIndex calls
+        CFG_CSS_AUTOWIDTH = 1 << 3, // shrink the CSS status line to fit (experiment)
     };
 
     struct Block {

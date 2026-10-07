@@ -18,7 +18,7 @@ namespace Online {
 
 namespace Text {
     // Replacement for a MuMsg::printIndex call, or NULL to print the original.
-    const char* overrideFor(MuMsg* msg, u32 window, u32 line, const void* msbin);
+    const char* overrideFor(MuMsg* msg, u32 window, u32 line, const void* msbin, u32 caller);
     // Print `text` into a message window keeping the original line's style tags.
     void printStyled(MuMsg* msg, u32 window, const void* msbin, u32 line, const char* text);
 }

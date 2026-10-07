@@ -2,7 +2,9 @@
 //
 // Hooks (all verified clear of P+ v3.2 codeset patches with tools/gamecode/pplus_hooks.py):
 //   MuMsg::printIndex      0x800B91B8  replace  -> relabel message lines (Text::overrideFor)
-//   gfSceneManager::process 0x8002D1A0 replace  -> per-frame tick (menus only; mailbox polling)
+//   gfPadSystem::updateSystem 0x8002A210 replace -> per-frame tick (menus only; mailbox polling)
+//   MuMsg::beginPrint      0x800B8EE8  replace  -> debug log of MuMsg::printf callers
+//   MuMsg::create          0x800B8930  replace  -> debug log of message objects
 #include <gf/gf_scene.h>
 #include <memory.h>
 #include <mu/mu_msg.h>
@@ -10,15 +12,33 @@
 
 #include "online.h"
 #include "online_menu.h"
+#include "netmenu.h"
 #include "ppom.h"
 
 namespace Online {
 
     typedef bool (*PrintIndexFn)(MuMsg*, u32, u32, void*);
-    typedef void (*SceneProcessFn)(gfSceneManager*);
+    typedef void (*PadUpdateFn)(void*);
+    typedef void (*BeginPrintFn)(MuMsg*, u32);
+    typedef MuMsg* (*MsgCreateFn)(u32, u32, u32);
 
     static PrintIndexFn s_origPrintIndex = NULL;
-    static SceneProcessFn s_origSceneProcess = NULL;
+    static PadUpdateFn s_origPadUpdate = NULL;
+    static BeginPrintFn s_origBeginPrint = NULL;
+    static MsgCreateFn s_origMsgCreate = NULL;
+
+    static void logEntry(u32 lr, u32 msg, u32 window, s16 line, u32 data)
+    {
+        PPOM::Debug& dbg = PPOM::g_block.debug;
+        if (!(dbg.cfg & PPOM::CFG_LOG)) return;
+        PPOM::PrintLog& e = dbg.log[dbg.printCount % PPOM::DEBUG_LOG];
+        e.lr = lr;
+        e.msg = msg;
+        e.window = (u16)window;
+        e.line = line;
+        e.data = data;
+        dbg.printCount++;
+    }
 
     static bool isPtr(u32 p) { return (p >= 0x80000000 && p < 0x81800000) || (p >= 0x90000000 && p < 0x94000000); }
 
@@ -64,19 +84,11 @@ namespace Online {
     {
         PPOM::Debug& dbg = PPOM::g_block.debug;
         u32 lr = (u32)__builtin_return_address(0);
-        if (dbg.cfg & PPOM::CFG_LOG) {
-            PPOM::PrintLog& e = dbg.log[dbg.printCount % PPOM::DEBUG_LOG];
-            e.lr = lr;
-            e.msg = (u32)self;
-            e.window = (u16)window;
-            e.line = (s16)line;
-            e.data = (u32)(msbin ? msbin : self->m_msgData);
-        }
-        dbg.printCount++;
+        logEntry(lr, (u32)self, window, (s16)line, (u32)(msbin ? msbin : self->m_msgData));
         if (dbg.cfg & PPOM::CFG_TEXT) {
             // A NULL msbin means "the MuMsg's own data" (MuMsg::setMsgData).
             const void* data = msbin ? msbin : self->m_msgData;
-            const char* text = Text::overrideFor(self, window, line, data);
+            const char* text = Text::overrideFor(self, window, line, data, lr);
             if (text) {
                 dbg.overrides++;
                 Text::printStyled(self, window, data, line, text);
@@ -86,18 +98,41 @@ namespace Online {
         return s_origPrintIndex(self, window, line, msbin);
     }
 
-    static void hkSceneProcess(gfSceneManager* mgr)
+    // gfPadSystem::updateSystem runs once per game frame on the main thread: our tick.
+    static void hkPadUpdate(void* padSystem)
     {
+        s_origPadUpdate(padSystem);
         PPOM::g_block.debug.frames++;
         OnlineMenu::tick();
-        s_origSceneProcess(mgr);
+    }
+
+    // MuMsg::beginPrint: log MuMsg::printf calls (line = -2, data = printf's caller).
+    static void hkBeginPrint(MuMsg* self, u32 window)
+    {
+        u32 lr = (u32)__builtin_return_address(0);
+        if (lr >= 0x800B9230 && lr < 0x800B92D8) {
+            u32 caller = *(u32*)(*(u32*)(*(u32*)__builtin_frame_address(0)) + 4);
+            logEntry(caller, (u32)self, window, -2, 0);
+        }
+        s_origBeginPrint(self, window);
+    }
+
+    // MuMsg::create: log message objects (line = -3, window = their window count).
+    static MuMsg* hkMsgCreate(u32 font, u32 heap, u32 windows)
+    {
+        MuMsg* m = s_origMsgCreate(font, heap, windows);
+        logEntry((u32)__builtin_return_address(0), (u32)m, windows, -3, font);
+        return m;
     }
 
     void install(CoreApi* api)
     {
         PPOM::g_block.debug.cfg = PPOM::CFG_TEXT | PPOM::CFG_WIFI_HOOKS | PPOM::CFG_LOG;
         api->syReplaceFunc(0x800B91B8, reinterpret_cast<void*>(hkPrintIndex), (void**)&s_origPrintIndex);
-        api->syReplaceFunc(0x8002D1A0, reinterpret_cast<void*>(hkSceneProcess), (void**)&s_origSceneProcess);
+        api->syReplaceFunc(0x8002A210, reinterpret_cast<void*>(hkPadUpdate), (void**)&s_origPadUpdate);
+        api->syReplaceFunc(0x800B8EE8, reinterpret_cast<void*>(hkBeginPrint), (void**)&s_origBeginPrint);
+        api->syReplaceFunc(0x800B8930, reinterpret_cast<void*>(hkMsgCreate), (void**)&s_origMsgCreate);
+        NetMenu::install(api);
         OnlineMenu::install(api);
     }
 }
@@ -128,7 +163,8 @@ namespace Text {
     {
         int len = 0;
         const char* orig = Online::msbinLine(msbin, line, &len);
-        int pre = (orig && len > 0) ? textStart(orig, len) : 0;
+        // Only lines that open with a style group (0x12) carry a prefix to keep.
+        int pre = (orig && len > 0 && orig[0] == 0x12) ? textStart(orig, len) : 0;
         if (pre > 64) pre = 0;
         int n = 0;
         for (int i = 0; i < pre; i++) s_buf[n++] = orig[i];
