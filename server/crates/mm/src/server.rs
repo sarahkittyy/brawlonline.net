@@ -129,8 +129,16 @@ async fn db_worker(pool: PgPool, mut jobs: tk_mpsc::UnboundedReceiver<DbJob>, do
                 }
                 DbJob::Record(m) => {
                     let stages: Vec<i16> = m.stages.iter().map(|s| *s as i16).collect();
-                    if let Err(e) =
-                        db::insert_match(&pool, &m.match_id, m.mode.as_u8() as i16, &m.players, m.host, &stages).await
+                    if let Err(e) = db::insert_match(
+                        &pool,
+                        &m.match_id,
+                        m.mode.as_u8() as i16,
+                        &m.players,
+                        m.host,
+                        &stages,
+                        &m.region,
+                    )
+                    .await
                     {
                         tracing::error!(match_id = %m.match_id, "recording match failed: {e}");
                     }

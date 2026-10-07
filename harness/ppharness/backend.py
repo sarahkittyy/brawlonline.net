@@ -91,12 +91,15 @@ class OnlineUser:
 class OnlineBackend:
     def __init__(self, run_dir: str | os.PathLike[str] | None = None, *,
                  latest_version: str = "0.1.0", min_app_version: str | None = None,
-                 ticket_ttl_secs: int | None = None, keep: bool = False):
+                 ticket_ttl_secs: int | None = None,
+                 rulesets_file: str | os.PathLike[str] | None = None, keep: bool = False):
         root = paths.workspace_root() / "run" / "backends"
         self.run_dir = Path(run_dir) if run_dir else root / f"be-{int(time.time())}-{secrets.token_hex(3)}"
         self.latest_version = latest_version
         self.min_app_version = min_app_version
         self.ticket_ttl_secs = ticket_ttl_secs
+        # mm's per-mode rules (stage lists); None: the built-in server/config/rulesets.json.
+        self.rulesets_file = Path(rulesets_file) if rulesets_file else None
         self.keep = keep
         self.pg_mode = ""
         self.admin_url = ""
@@ -313,6 +316,8 @@ class OnlineBackend:
             env["MM_MIN_APP_VERSION"] = self.min_app_version
         if self.ticket_ttl_secs is not None:
             env["MM_TICKET_TTL_SECS"] = str(self.ticket_ttl_secs)
+        if self.rulesets_file is not None:
+            env["MM_RULESETS_FILE"] = str(self.rulesets_file.resolve())
         mm = self._spawn("mm", env)
         deadline = time.monotonic() + 30
         while "mm listening" not in self.log_text("mm"):

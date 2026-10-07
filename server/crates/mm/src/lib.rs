@@ -2,9 +2,11 @@
 //!
 //! It speaks Slippi's ENet + JSON ticket protocol (docs/backend-design.md
 //! section 1.4) so a client ported from Slippi or Brawlback only needs a new
-//! hostname. Phase 1 supports Direct mode: two tickets that name each other's
-//! connect codes are paired, and both clients get each other's external and
-//! LAN addresses for hole punching. Other modes get a clear error.
+//! hostname. Direct mode pairs two tickets that name each other's connect codes;
+//! Unranked pairs strangers from a FIFO queue (region-aware when a region table
+//! is configured). Both clients get each other's external and LAN addresses for
+//! hole punching, and the stage list of the mode's ruleset. Other modes get a
+//! clear error.
 //!
 //! Play keys are checked by reading `users` from Postgres directly. That is
 //! simpler than an internal HTTP call to `accounts`: no extra endpoint to
@@ -14,6 +16,7 @@
 
 pub mod config;
 pub mod engine;
+pub mod region;
 pub mod ruleset;
 pub mod server;
 

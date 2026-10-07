@@ -18,6 +18,7 @@ Needs the real Dolphin build, a working video backend for screenshots, the built
 from __future__ import annotations
 
 import concurrent.futures
+import os
 import re
 import shutil
 import struct
@@ -48,11 +49,11 @@ from ppharness import brawl as B  # noqa: E402
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 
-PLUGIN = ROOT / "game-code" / "PPOnline" / "PPOnline.rel"
+# The plugin put on each instance's SD card. PPHARNESS_PLUGIN picks another build (e.g. one frozen
+# at the game-code commit the Dolphin under test speaks PPOM with).
+PLUGIN = Path(os.environ.get("PPHARNESS_PLUGIN") or ROOT / "game-code" / "PPOnline" / "PPOnline.rel")
 ARTIFACTS = ROOT / "run" / "artifacts" / "game-bridge"
 GAME_CODE_ARTIFACTS = ROOT / "run" / "artifacts" / "game-code"
-
-UNRANKED_ERROR = "Unranked is not supported yet. Only Direct works for now."
 
 # PPOM layout (game-code/PPOnline/include/ppom.h)
 MB_RESP = 0x210
@@ -451,37 +452,6 @@ def test_direct_from_the_game_menus(backend: OnlineBackend, dolphin: Callable[..
 
     for g in (a, b):
         g.c.mm_cancel()
-
-
-def test_unranked_shows_the_server_error(backend: OnlineBackend,
-                                         dolphin: Callable[..., DolphinInstance],
-                                         gpu_backend: str) -> None:
-    """UNRANKED -> START: the server refuses the ticket and the game shows its text."""
-    test = "unranked"
-    u = backend.create_user("carl", "CARL")
-    g = _boot(dolphin, "game-u", backend, u, gpu_backend, test, "record")
-    g.to_main_menu()
-    g.to_online_page()
-    g.to_css("unranked")
-    g.press_until("START", lambda: g.finds() > 0, "FIND_OPPONENT")
-    _find_logged(g, 1, "")
-    r = _wait(lambda: (lambda r: r if r["cmd"] == CMD_GET_MATCH_STATE and r["mm_state"] == 5
-                       else None)(g.response()), 30, "the error in the mailbox")
-    assert r["error"] == UNRANKED_ERROR, r
-    st = g.c.mm_status()
-    assert st["state"] == "error" and st["error"] == UNRANKED_ERROR
-    assert st["error_source"] == "create_ticket"
-    g.steps("wait 30")
-    g.shot("05-unranked-error")
-    # Still locked in while the error shows (Slippi clears the lock with the error, on Z).
-    assert g.locked()
-    before = g.css()
-    g.steps("tap B 8", "wait 20")
-    assert g.css() == before
-    # Z clears the error (Slippi: "Press Z to clear error").
-    g.press_until("Z", lambda: g.c.mm_status()["state"] == "idle", "the cleanup")
-    _wait(lambda: not g.locked(), 5, "the CSS to unlock")
-    g.shot("06-after-clear")
 
 
 # Recent codes, oldest first (Dolphin keeps them newest first: ABCD#999, ADGJ#123, CARL#123,

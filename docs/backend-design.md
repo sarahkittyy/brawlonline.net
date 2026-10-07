@@ -556,7 +556,7 @@ namespace Online::Session { void SetBackend(std::unique_ptr<SessionBackend>);
 
 **Backend 1 (implemented): whole-machine netplay**, the synchronized boot of option A (5.1). It lives in `Online/NetPlaySession.{h,cpp}` (`NetPlayOnlineBackend`) with a `NetPlayUI` that has no UI, so no netplay window ever opens, as on Slippi. A frontend makes it available with `NetPlaySession::SetFrontend` (a callback that boots a game): **DolphinQt's main window does so at start-up** (the netplay game then boots through `MainWindow::StartGame`, in the usual render window), and DolphinNoGUI does so under the harness. Backends are named factories (`Online::Session::RegisterFactory/Select`); the one used is `[Online] SessionBackend` (default `netplay` until 2026-10-07, `gameplay` since). The Qt NetPlay window refuses to open while an online session runs, and the online session refuses to start while that window has a session. Verified from the launcher to the rollback session with two `Dolphin.exe` (`harness/tools/e2e_launcher.py`). The decider stops any running game, hosts a rollback `NetPlayServer` on its punched port and boots the game once the guest has joined and has it; the guest joins from its punched port (`NetPlayClient` gained a `local_port` argument) to the address the P2P connection came up with. Verified end to end (`harness/tests/test_online.py::test_direct_match_hands_off_to_rollback_session`): both instances boot P+ under GekkoNet with the host on the decider's punched port.
 
-**Backend 2 (merged 2026-10-07, the default): the gameplay-only session** (`Gprb::Session`, `Core/Rollback/GameplayOnlineBackend.cpp`, from branch `gameplay-rollback`). Both frontends register it at start-up (`Gprb::RegisterOnlineBackend()`: DolphinQt's main window, DolphinNoGUI's `main`) and select `[Online] SessionBackend`, now `gameplay` by default; `netplay` stays selectable (`-C Dolphin.Online.SessionBackend=netplay`, or the harness's `online_session_backend` / `mm_search_direct backend=`). The server's `stages` list of the match goes to the session (empty: P+'s legal list). The match then starts from both games' own character select (`docs/game-code.md` §11). The mapping as it was planned:
+**Backend 2 (merged 2026-10-07, the default): the gameplay-only session** (`Gprb::Session`, `Core/Rollback/GameplayOnlineBackend.cpp`, from branch `gameplay-rollback`). Both frontends register it at start-up (`Gprb::RegisterOnlineBackend()`: DolphinQt's main window, DolphinNoGUI's `main`) and select `[Online] SessionBackend`, now `gameplay` by default; `netplay` stays selectable (`-C Dolphin.Online.SessionBackend=netplay`, or the harness's `online_session_backend` / `mm_search_direct backend=`). The server's `stages` list of the match goes to the session: the host draws every random stage from it with Slippi's stage pool (no repeats until the list is used up), and a stage pick must be in it (empty: P+'s legal list, Slippi's fallback). The match then starts from both games' own character select (`docs/game-code.md` §11). The mapping as it was planned:
 
 | `Online::Match` | `Gprb::Session` |
 |---|---|
@@ -637,6 +637,17 @@ QA finding (`harness/tools/qa_reachability.py`, run `run/artifacts/qa-reachabili
 ---
 
 ## 7. Phased build plan
+
+**Status (2026-10-07):**
+- **P0, P1: Direct by code works end to end** (backend, Dolphin and game; `server/README.md`, 5.5, `docs/game-code.md`), with the gameplay-only session (5.1 C) as the session start instead of A or B. Not done from P1: the section 6 rules locks (Code Menu, debug bytes, transformations) and the NAT namespace tests.
+- **P3: Unranked matchmaking done; reports and replays not started.**
+  - Server (`server/crates/mm`): Slippi's Unranked queue, first come first served, with region buckets inferred from the source address through a prefix table (`MM_REGIONS_FILE`; no table = one bucket, which is the friends-only setting). No rating band yet (it needs P4's rating).
+  - The failed-connect rule: after Slippi's 1v1 requeue, the two players are paired with someone else first, and with each other only after a backoff. The ticket TTL ends with an explicit `get-ticket-resp` error. Cancel removes the ticket.
+  - Stage lists: `server/config/rulesets.json` has P+'s legal list (15 `srStageKind` ids) for Direct, Unranked and Ranked, sent as `get-ticket-resp.stages`.
+  - Dolphin (branch `unranked`, `6449517bc1`): Slippi's stage pool over the server's list for every random stage, and a stage pick must be in the list.
+  - Verified from the in-game menus (`harness/tests/test_online_unranked.py`): two strangers search Unranked, are paired, and play a two-game set on stages from the server's list.
+  - The game side needed no change: BASIC VERSUS already searches Unranked. Pending game-side items are in `docs/game-code.md` §12.
+- **P1.5, P4, P5: not started.** P2 (keyframe start) was replaced by the gameplay-only session.
 
 Effort is in developer-weeks for one experienced developer. **Backend** is this document's services. **Dolphin** is C++/Rust in our fork. **Game** is the Syriinge plugin plus the netplay GCT. **Launcher** is the fork of slippi-launcher. The Dolphin and game columns assume the rollback core (another workstream) already plays a stable 1v1 in a synchronized-boot session.
 

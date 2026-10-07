@@ -67,6 +67,10 @@ enum Cmd {
         /// After matching, open the P2P connection from the same port (8 s window).
         #[arg(long)]
         punch: bool,
+        /// With --punch: after a failed P2P connect, search again with a new ticket up to N times
+        /// (Slippi's 1v1 behaviour).
+        #[arg(long, default_value_t = 0)]
+        requeue: u32,
     },
     /// Send one raw packet and print the replies.
     Raw {
@@ -112,6 +116,7 @@ fn run() -> anyhow::Result<i32> {
             lan_ip,
             timeout_secs,
             punch,
+            requeue,
         } => {
             let creds: Credentials = match (user_json, uid, play_key) {
                 (Some(path), _, _) => serde_json::from_str::<UserJsonFile>(&std::fs::read_to_string(path)?)?.into(),
@@ -142,6 +147,7 @@ fn run() -> anyhow::Result<i32> {
                 match_timeout: (timeout_secs > 0).then(|| Duration::from_secs(timeout_secs)),
                 punch,
                 punch_timeout: Duration::from_secs(8),
+                requeue,
             };
             let result = mmclient::search(&opts)?;
             println!("{}", serde_json::to_string(&result)?);

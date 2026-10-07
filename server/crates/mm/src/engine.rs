@@ -15,6 +15,20 @@
 //!
 //! Every refusal is an explicit `error` the game shows: tickets are never
 //! dropped silently.
+//!
+//! Two queues:
+//! - **Direct**: two tickets that name each other's codes are paired.
+//! - **Unranked**: a FIFO. The oldest waiting ticket is paired with the next one in arrival order
+//!   that is in its region (any region once either has waited `region_widen`) and that it did not
+//!   just fail to connect to. Slippi's tickets carry no region field, so the region comes from the
+//!   ticket's source address ([`crate::region`]); with no region table there is one bucket.
+//!
+//! Both queues share the failed-connect rule: Slippi's 1v1 client requeues with a new ticket when
+//! its 8 s P2P window fails, so a pair matched again within `requeue_window` is taken to have
+//! failed. Direct holds such a pair back (P2P window + `repair_backoff` × failures) and errors
+//! after `max_connect_failures`; Unranked pairs each of them with someone else when it can, re-pairs
+//! them only after the same backoff, and after `max_connect_failures` stops pairing them with
+//! each other (they keep searching) until the window has passed.
 
 use std::collections::HashMap;
 use std::net::SocketAddr;
@@ -32,6 +46,7 @@ use common::ratelimit::{RateLimiter, Window};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::region::RegionMap;
 use crate::ruleset::Rulesets;
 
 pub type ConnId = u64;
@@ -65,6 +80,10 @@ pub struct EngineConfig {
     /// Sent with version errors so the client can show the update option.
     pub latest_version: Option<String>,
     pub rulesets: Rulesets,
+    /// Region of a ticket's source address (Unranked buckets).
+    pub regions: RegionMap,
+    /// An Unranked ticket that has waited this long takes an opponent from any region.
+    pub region_widen: Duration,
 }
 
 impl Default for EngineConfig {
@@ -79,6 +98,8 @@ impl Default for EngineConfig {
             min_app_version: None,
             latest_version: None,
             rulesets: Rulesets::default(),
+            regions: RegionMap::default(),
+            region_widen: Duration::from_secs(30),
         }
     }
 }
@@ -107,6 +128,8 @@ pub struct MatchRecord {
     pub players: Vec<Uuid>,
     pub host: Uuid,
     pub stages: Vec<u16>,
+    /// The players' region, or `a+b` when they differ.
+    pub region: String,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -134,7 +157,8 @@ struct Pending {
     since: Instant,
     play_key: String,
     mode: Mode,
-    target: ConnectCode,
+    /// Direct: the code typed in-game. Unranked: none (Slippi sends `[]`).
+    target: Option<ConnectCode>,
     lan: String,
 }
 
@@ -144,8 +168,10 @@ struct Waiting {
     user: MmUser,
     code: String,
     mode: Mode,
+    /// Direct only; empty for Unranked.
     target: String,
     lan: String,
+    region: String,
 }
 
 #[derive(Debug, Clone)]
@@ -174,6 +200,8 @@ pub struct Engine {
     conns: HashMap<ConnId, Conn>,
     /// Direct tickets waiting, keyed by (own code, target code).
     direct: HashMap<(String, String), ConnId>,
+    /// Unranked tickets waiting, oldest first.
+    unranked: Vec<ConnId>,
     /// Recently matched pairs (sorted uids), to space out re-pairing after a
     /// failed P2P connect.
     history: HashMap<(Uuid, Uuid), PairHistory>,
@@ -194,6 +222,13 @@ fn uid_hash(uid: Uuid) -> [u8; 32] {
     Sha256::digest(uid.as_bytes()).into()
 }
 
+/// "10 minutes", "1 minute", "20 seconds": the ticket TTL in expiry errors.
+fn wait_text(d: Duration) -> String {
+    let secs = d.as_secs().max(1);
+    let (n, unit) = if secs >= 60 { (secs / 60, "minute") } else { (secs, "second") };
+    format!("{n} {unit}{}", if n == 1 { "" } else { "s" })
+}
+
 /// Parses `major.minor.patch[-suffix]` into a comparable tuple. Missing parts are 0.
 pub fn parse_version(v: &str) -> (u64, u64, u64) {
     let core = v.trim().trim_start_matches('v').split(['-', '+']).next().unwrap_or("");
@@ -209,6 +244,7 @@ impl Engine {
             secret,
             conns: HashMap::new(),
             direct: HashMap::new(),
+            unranked: Vec::new(),
             history: HashMap::new(),
             ticket_limiter,
             next_seq: 1,
@@ -276,6 +312,7 @@ impl Engine {
 
     fn unindex(&mut self, conn: ConnId) {
         self.direct.retain(|_, c| *c != conn);
+        self.unranked.retain(|c| *c != conn);
     }
 
     fn on_packet(&mut self, now: Instant, conn: ConnId, data: &[u8], out: &mut Vec<Output>) {
@@ -309,15 +346,18 @@ impl Engine {
         let Some(mode) = Mode::from_u8(t.search.mode) else {
             return self.refuse(out, conn, "Unknown game mode");
         };
-        if mode != Mode::Direct {
-            let name = match mode {
-                Mode::Ranked => "Ranked",
-                Mode::Unranked => "Unranked",
-                Mode::Teams => "Teams",
-                Mode::Party => "Party",
-                Mode::Direct => unreachable!(),
-            };
-            return self.refuse(out, conn, format!("{name} is not supported yet. Only Direct works for now."));
+        let unsupported = match mode {
+            Mode::Direct | Mode::Unranked => None,
+            Mode::Ranked => Some("Ranked"),
+            Mode::Teams => Some("Teams"),
+            Mode::Party => Some("Party"),
+        };
+        if let Some(name) = unsupported {
+            return self.refuse(
+                out,
+                conn,
+                format!("{name} is not supported yet. Only Direct and Unranked work for now."),
+            );
         }
         if let Some(min) = &self.cfg.min_app_version {
             if parse_version(&t.app_version) < parse_version(min) {
@@ -331,9 +371,13 @@ impl Engine {
         if t.user.play_key.is_empty() || t.user.play_key.len() > 128 {
             return self.refuse(out, conn, "Not logged in. Log in again in the launcher.");
         }
-        let target = match decode_search_code(&t.search.connect_code) {
-            Ok(c) => c,
-            Err(_) => return self.refuse(out, conn, "Invalid connect code"),
+        // Queue modes send an empty code; whatever they send is ignored.
+        let target = match mode {
+            Mode::Direct => match decode_search_code(&t.search.connect_code) {
+                Ok(c) => Some(c),
+                Err(_) => return self.refuse(out, conn, "Invalid connect code"),
+            },
+            _ => None,
         };
         if self.ticket_limiter.check(&uid, now).is_err() {
             return self.refuse(out, conn, "Searching too often. Wait a few seconds and try again.");
@@ -386,8 +430,8 @@ impl Engine {
         let Some(code) = user.connect_code.clone() else {
             return self.refuse(out, conn, "Pick a connect code in the launcher first.");
         };
-        let target = p.target.to_string();
-        if target == code {
+        let target = p.target.as_ref().map(|t| t.to_string()).unwrap_or_default();
+        if p.mode == Mode::Direct && target == code {
             return self.refuse(out, conn, "That is your own connect code. Enter your opponent's code.");
         }
         // One active ticket per account: a newer search replaces an older one.
@@ -401,19 +445,26 @@ impl Engine {
             self.fail_ticket(out, old, "This search was replaced by a newer one from the same account.", None);
         }
         Self::send(out, conn, &CreateTicketResp::ok());
-        tracing::info!(conn, %code, %target, "direct ticket waiting");
-        if let Some(c) = self.conns.get_mut(&conn) {
-            c.state = State::Waiting(Waiting {
-                since: now,
-                user,
-                code: code.clone(),
-                mode: p.mode,
-                target: target.clone(),
-                lan: p.lan,
-            });
+        let Some(c) = self.conns.get_mut(&conn) else { return };
+        let region = self.cfg.regions.region_of(c.addr);
+        c.state = State::Waiting(Waiting {
+            since: now,
+            user,
+            code: code.clone(),
+            mode: p.mode,
+            target: target.clone(),
+            lan: p.lan,
+            region: region.clone(),
+        });
+        if p.mode == Mode::Unranked {
+            tracing::info!(conn, %code, %region, queued = self.unranked.len() + 1, "unranked ticket waiting");
+            self.unranked.push(conn);
+            self.pair_unranked(now, wall, out);
+        } else {
+            tracing::info!(conn, %code, %target, "direct ticket waiting");
+            self.direct.insert((code, target), conn);
+            self.try_pair(now, wall, conn, out);
         }
-        self.direct.insert((code, target), conn);
-        self.try_pair(now, wall, conn, out);
     }
 
     fn on_tick(&mut self, now: Instant, wall: DateTime<Utc>, out: &mut Vec<Output>) {
@@ -423,9 +474,9 @@ impl Engine {
         for (id, c) in &self.conns {
             match &c.state {
                 State::Waiting(w) if now.saturating_duration_since(w.since) >= self.cfg.ticket_ttl => {
-                    expired.push((*id, w.target.clone()))
+                    expired.push((*id, w.mode, w.target.clone()))
                 }
-                State::Waiting(_) => waiting.push(*id),
+                State::Waiting(w) if w.mode == Mode::Direct => waiting.push(*id),
                 State::Validating(p) if now.saturating_duration_since(p.since) >= self.cfg.auth_timeout => {
                     auth_late.push(*id)
                 }
@@ -435,21 +486,22 @@ impl Engine {
         for id in auth_late {
             self.refuse(out, id, "Matchmaking is temporarily unavailable. Try again later.");
         }
-        let minutes = (self.cfg.ticket_ttl.as_secs() / 60).max(1);
-        for (id, target) in expired {
-            let unit = if minutes == 1 { "minute" } else { "minutes" };
-            self.fail_ticket(
-                out,
-                id,
-                format!("Search timed out: {target} did not connect within {minutes} {unit}."),
-                None,
-            );
+        let ttl = wait_text(self.cfg.ticket_ttl);
+        for (id, mode, target) in expired {
+            let msg = if mode == Mode::Direct {
+                format!("Search timed out: {target} did not connect within {ttl}.")
+            } else {
+                format!("Search timed out: no opponent found within {ttl}.")
+            };
+            self.fail_ticket(out, id, msg, None);
         }
-        // Retry pairs that were held back by the re-pair backoff.
+        // Retry pairs that were held back by the re-pair backoff, and Unranked tickets whose
+        // region search has widened.
         waiting.sort_unstable();
         for id in waiting {
             self.try_pair(now, wall, id, out);
         }
+        self.pair_unranked(now, wall, out);
         let window = self.cfg.requeue_window;
         self.history.retain(|_, h| now.saturating_duration_since(h.last_match) < window);
     }
@@ -501,6 +553,66 @@ impl Engine {
         self.make_match(wall, &[conn, other], out);
     }
 
+    /// Pairs Unranked tickets until no pair is possible.
+    fn pair_unranked(&mut self, now: Instant, wall: DateTime<Utc>, out: &mut Vec<Output>) {
+        while let Some((a, b, failures)) = self.next_unranked_pair(now) {
+            let (ua, ub) = match (self.conns.get(&a), self.conns.get(&b)) {
+                (Some(Conn { state: State::Waiting(x), .. }), Some(Conn { state: State::Waiting(y), .. })) => {
+                    (x.user.uid, y.user.uid)
+                }
+                _ => break,
+            };
+            self.history.insert(pair_key(ua, ub), PairHistory { last_match: now, failures });
+            let before = self.unranked.len();
+            self.make_match(wall, &[a, b], out);
+            if self.unranked.len() == before {
+                break; // make_match refused; never loop forever
+            }
+        }
+    }
+
+    /// The pair the Unranked queue makes next: the oldest ticket and the first later one (in
+    /// arrival order) it can play. Same region unless either has waited `region_widen`. A pair
+    /// matched within `requeue_window` failed its P2P connect (Slippi requeues with a new ticket):
+    /// anyone else in the queue goes first; the same two again only after the backoff, and not
+    /// at all after `max_connect_failures`. Returns (older, newer, failures so far).
+    fn next_unranked_pair(&self, now: Instant) -> Option<(ConnId, ConnId, u32)> {
+        let queue: Vec<(ConnId, &Waiting)> = self
+            .unranked
+            .iter()
+            .filter_map(|id| match self.conns.get(id) {
+                Some(Conn { state: State::Waiting(w), .. }) => Some((*id, w)),
+                _ => None,
+            })
+            .collect();
+        let widened = |w: &Waiting| now.saturating_duration_since(w.since) >= self.cfg.region_widen;
+        for (i, (a, wa)) in queue.iter().enumerate() {
+            let mut retry: Option<(ConnId, u32)> = None;
+            for (b, wb) in &queue[i + 1..] {
+                if wa.user.uid == wb.user.uid {
+                    continue;
+                }
+                if wa.region != wb.region && !widened(wa) && !widened(wb) {
+                    continue;
+                }
+                let recent = self
+                    .history
+                    .get(&pair_key(wa.user.uid, wb.user.uid))
+                    .filter(|h| now.saturating_duration_since(h.last_match) < self.cfg.requeue_window);
+                let Some(h) = recent else { return Some((*a, *b, 0)) };
+                let failures = h.failures + 1;
+                let not_before = h.last_match + P2P_CONNECT_WINDOW + self.cfg.repair_backoff * failures;
+                if failures < self.cfg.max_connect_failures && now >= not_before && retry.is_none() {
+                    retry = Some((*b, failures));
+                }
+            }
+            if let Some((b, failures)) = retry {
+                return Some((*a, b, failures));
+            }
+        }
+        None
+    }
+
     fn make_match(&mut self, wall: DateTime<Utc>, conns: &[ConnId], out: &mut Vec<Output>) {
         let mut entrants: Vec<(ConnId, SocketAddr, Waiting)> = conns
             .iter()
@@ -540,8 +652,13 @@ impl Engine {
                 is_bot: false,
             })
             .collect();
+        let mut regions: Vec<&str> = entrants.iter().map(|(_, _, w)| w.region.as_str()).collect();
+        regions.sort_unstable();
+        regions.dedup();
+        let region = regions.join("+");
         tracing::info!(
             %match_id,
+            %region,
             players = ?entrants.iter().map(|(_, a, w)| format!("{}@{}", w.code, a)).collect::<Vec<_>>(),
             "matched"
         );
@@ -565,6 +682,7 @@ impl Engine {
             players: entrants.iter().map(|(_, _, w)| w.user.uid).collect(),
             host: host_uid,
             stages: rules.stages.clone(),
+            region,
         }));
         for (conn, _, _) in &entrants {
             self.finish(out, *conn);
@@ -751,7 +869,7 @@ mod tests {
             let msgs = sent(&out, conn);
             assert_eq!(msgs.len(), 1);
             assert_eq!(msgs[0]["type"], "get-ticket-resp");
-            assert_eq!(msgs[0]["error"], format!("Search timed out: {target} did not connect within 1 minute."));
+            assert_eq!(msgs[0]["error"], format!("Search timed out: {target} did not connect within 30 seconds."));
             assert!(disconnected(&out, conn));
         }
         assert_eq!(h.e.waiting_count(), 0);
@@ -816,15 +934,17 @@ mod tests {
         let mut h = Harness::new(EngineConfig::default());
         let a = user("AA#1", "a");
         h.add(&a);
-        for (i, (mode, name)) in [(0u8, "Ranked"), (1, "Unranked"), (3, "Teams"), (4, "Party")].into_iter().enumerate()
-        {
+        for (i, (mode, name)) in [(0u8, "Ranked"), (3, "Teams"), (4, "Party")].into_iter().enumerate() {
             let conn = 10 + i as u64;
             h.connect(conn, conn as u16);
             let v = h.ticket_json(&a, "", mode);
             let out = h.raw(conn, v.to_string().as_bytes());
             let msgs = sent(&out, conn);
             assert_eq!(msgs[0]["type"], "create-ticket-resp");
-            assert_eq!(msgs[0]["error"], format!("{name} is not supported yet. Only Direct works for now."));
+            assert_eq!(
+                msgs[0]["error"],
+                format!("{name} is not supported yet. Only Direct and Unranked work for now.")
+            );
             assert!(disconnected(&out, conn));
         }
         h.connect(20, 20);
@@ -1041,6 +1161,258 @@ mod tests {
         h.connect(4, 2);
         h.ticket(3, &a, "BB#1");
         assert!(h.ticket(4, &b, "AA#1").iter().any(|o| matches!(o, Output::RecordMatch(_))));
+    }
+
+    // ------------------------------------------------------------------ Unranked
+
+    impl Harness {
+        /// An Unranked ticket as Slippi's client sends it (mode 1, `connectCode: []`).
+        fn unranked(&mut self, conn: ConnId, u: &MmUser) -> Vec<Output> {
+            let v = self.ticket_json(u, "", 1);
+            self.raw(conn, v.to_string().as_bytes())
+        }
+        fn users(&mut self, n: usize) -> Vec<MmUser> {
+            (0..n)
+                .map(|i| {
+                    let u = user(&format!("U{}#{}", (b'A' + i as u8) as char, i + 1), &format!("p{i}"));
+                    self.add(&u);
+                    u
+                })
+                .collect()
+        }
+    }
+
+    fn matches(out: &[Output]) -> Vec<MatchRecord> {
+        out.iter()
+            .filter_map(|o| match o {
+                Output::RecordMatch(m) => Some(m.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    fn pair_of(m: &MatchRecord) -> (Uuid, Uuid) {
+        pair_key(m.players[0], m.players[1])
+    }
+
+    fn default_rules() -> EngineConfig {
+        EngineConfig { rulesets: Rulesets::parse(crate::ruleset::DEFAULT_RULESETS).unwrap(), ..Default::default() }
+    }
+
+    #[test]
+    fn unranked_pairs_strangers_in_arrival_order() {
+        let mut h = Harness::new(default_rules());
+        let u = h.users(4);
+        for c in 1..=4 {
+            h.connect(c, 41000 + c as u16);
+        }
+        let out = h.unranked(1, &u[0]);
+        assert_eq!(sent(&out, 1), vec![json!({"type": "create-ticket-resp"})]);
+        assert!(!disconnected(&out, 1));
+        h.now += Duration::from_secs(1);
+
+        let out = h.unranked(2, &u[1]);
+        let m = matches(&out);
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
+        assert_eq!(m[0].mode, Mode::Unranked);
+        assert_eq!(m[0].region, crate::region::DEFAULT_REGION);
+        let (ga, gb) = (&sent(&out, 1)[0], &sent(&out, 2)[1]);
+        for g in [ga, gb] {
+            assert_eq!(g["type"], "get-ticket-resp");
+            assert!(g["matchId"].as_str().unwrap().starts_with("mode.unranked-"), "{g}");
+            assert_eq!(g["players"].as_array().unwrap().len(), 2);
+            assert_eq!(g["players"].as_array().unwrap().iter().filter(|p| p["isLocalPlayer"] == true).count(), 1);
+            // The ruleset's stage list, as Slippi's server sends it for the mode.
+            assert_eq!(g["stages"], json!([1, 2, 3, 4, 5, 6, 9, 12, 13, 28, 31, 33, 35, 45, 46]));
+            assert_eq!(g["items"], 0);
+            for p in g["players"].as_array().unwrap() {
+                assert_eq!(p["chatMessages"].as_array().unwrap().len(), 16);
+                assert!(p["ipAddress"].as_str().unwrap().starts_with("203.0.113."));
+            }
+        }
+        assert_eq!(ga["matchId"], gb["matchId"]);
+        assert_ne!(ga["isHost"], gb["isHost"]);
+        assert!(disconnected(&out, 1) && disconnected(&out, 2));
+
+        // The third waits; the fourth is paired with it.
+        assert!(matches(&h.unranked(3, &u[2])).is_empty());
+        assert_eq!(h.e.waiting_count(), 1);
+        let m = matches(&h.unranked(4, &u[3]));
+        assert_eq!(pair_of(&m[0]), pair_key(u[2].uid, u[3].uid));
+        assert_eq!(h.e.waiting_count(), 0);
+    }
+
+    #[test]
+    fn unranked_ignores_the_code_and_never_meets_direct() {
+        let mut h = Harness::new(EngineConfig::default());
+        let u = h.users(3);
+        for c in 1..=3 {
+            h.connect(c, c as u16);
+        }
+        // A Direct ticket naming u1's code does not take u1's Unranked ticket, nor the reverse.
+        h.ticket(1, &u[0], &u[1].connect_code.clone().unwrap());
+        // Whatever bytes an Unranked ticket carries as its code are ignored.
+        let mut v = h.ticket_json(&u[1], "", 1);
+        v["search"]["connectCode"] = json!([0x41, 0x41]);
+        let out = h.raw(2, v.to_string().as_bytes());
+        assert_eq!(sent(&out, 2), vec![json!({"type": "create-ticket-resp"})]);
+        assert!(matches(&out).is_empty());
+        assert_eq!(h.e.waiting_count(), 2);
+        let m = matches(&h.unranked(3, &u[2]));
+        assert_eq!(pair_of(&m[0]), pair_key(u[1].uid, u[2].uid));
+        assert_eq!(h.e.waiting_count(), 1, "the Direct ticket still waits");
+    }
+
+    #[test]
+    fn unranked_expiry_is_an_explicit_error() {
+        let mut h = Harness::new(EngineConfig { ticket_ttl: Duration::from_secs(30), ..Default::default() });
+        let u = h.users(1);
+        h.connect(1, 1);
+        h.unranked(1, &u[0]);
+        assert!(h.advance(Duration::from_secs(29)).is_empty());
+        let out = h.advance(Duration::from_secs(1));
+        let msgs = sent(&out, 1);
+        assert_eq!(msgs.len(), 1);
+        assert_eq!(msgs[0]["type"], "get-ticket-resp");
+        assert_eq!(msgs[0]["error"], "Search timed out: no opponent found within 30 seconds.");
+        assert_eq!(wait_text(Duration::from_secs(600)), "10 minutes");
+        assert_eq!(wait_text(Duration::from_secs(60)), "1 minute");
+        assert_eq!(wait_text(Duration::from_secs(1)), "1 second");
+        assert!(disconnected(&out, 1));
+        assert_eq!(h.e.waiting_count(), 0);
+    }
+
+    #[test]
+    fn unranked_cancel_and_replacement() {
+        let mut h = Harness::new(EngineConfig::default());
+        let u = h.users(3);
+        for c in 1..=5 {
+            h.connect(c, c as u16);
+        }
+        // Cancelled (the CSS's Z disconnects): never paired.
+        h.unranked(1, &u[0]);
+        h.input(Input::Disconnected { conn: 1 });
+        assert!(matches(&h.unranked(2, &u[1])).is_empty());
+        // A second search from the same account replaces the first, and is not paired with it.
+        h.now += Duration::from_secs(3);
+        let out = h.unranked(3, &u[1]);
+        assert_eq!(sent(&out, 2)[0]["error"], "This search was replaced by a newer one from the same account.");
+        assert!(matches(&out).is_empty());
+        assert_eq!(h.e.waiting_count(), 1);
+        let m = matches(&h.unranked(4, &u[2]));
+        assert_eq!(pair_of(&m[0]), pair_key(u[1].uid, u[2].uid));
+    }
+
+    /// Slippi's client requeues with a new ticket when the P2P connect fails. The two players who
+    /// just failed are not paired again while someone else is searching, and only after a backoff
+    /// when they are alone.
+    #[test]
+    fn unranked_failed_connect_prefers_someone_else() {
+        let mut h = Harness::new(EngineConfig::default());
+        let u = h.users(4);
+        for c in 1..=8 {
+            h.connect(c, c as u16);
+        }
+        h.unranked(1, &u[0]);
+        let t = h.now;
+        assert_eq!(matches(&h.unranked(2, &u[1])).len(), 1);
+
+        // Both requeue after the 8 s window: held back from each other.
+        h.now = t + Duration::from_secs(9);
+        assert!(matches(&h.unranked(3, &u[0])).is_empty());
+        assert!(matches(&h.unranked(4, &u[1])).is_empty());
+        assert_eq!(h.e.waiting_count(), 2);
+        // A third player arrives: the oldest of the two gets them.
+        h.now = t + Duration::from_secs(10);
+        let m = matches(&h.unranked(5, &u[2]));
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
+        h.now = t + Duration::from_secs(11);
+        let m = matches(&h.unranked(6, &u[3]));
+        assert_eq!(pair_of(&m[0]), pair_key(u[1].uid, u[3].uid));
+    }
+
+    #[test]
+    fn unranked_failed_pair_backs_off_then_stops_pairing_them() {
+        let mut h = Harness::new(EngineConfig::default());
+        let u = h.users(3);
+        let mut conn = 0;
+        let mut requeue = |h: &mut Harness| -> Vec<Output> {
+            conn += 2;
+            h.connect(conn - 1, 1);
+            h.connect(conn, 2);
+            let mut out = h.unranked(conn - 1, &u[0]);
+            out.extend(h.unranked(conn, &u[1]));
+            out
+        };
+        assert_eq!(matches(&requeue(&mut h)).len(), 1);
+        let first = h.now;
+
+        // Alone together after a failed connect: re-paired at last match + 8 s + 5 s.
+        h.now = first + Duration::from_secs(9);
+        assert!(matches(&requeue(&mut h)).is_empty());
+        h.now = first + Duration::from_secs(12);
+        assert!(matches(&h.advance(Duration::ZERO)).is_empty());
+        h.now = first + Duration::from_secs(13);
+        assert_eq!(matches(&h.advance(Duration::ZERO)).len(), 1);
+        let second = h.now;
+
+        // Second failure: + 10 s.
+        h.now = second + Duration::from_secs(9);
+        assert!(matches(&requeue(&mut h)).is_empty());
+        h.now = second + Duration::from_secs(17);
+        assert!(matches(&h.advance(Duration::ZERO)).is_empty());
+        h.now = second + Duration::from_secs(18);
+        assert_eq!(matches(&h.advance(Duration::ZERO)).len(), 1);
+        let third = h.now;
+
+        // Third failure: no more pairing of these two, but no error either: they keep searching
+        // and anyone else is welcome.
+        h.now = third + Duration::from_secs(9);
+        let out = requeue(&mut h);
+        assert!(matches(&out).is_empty());
+        assert!(out.iter().all(|o| !matches!(o, Output::Send { json, .. } if json.contains("error"))));
+        h.now = third + Duration::from_secs(50);
+        assert!(matches(&h.advance(Duration::ZERO)).is_empty());
+        assert_eq!(h.e.waiting_count(), 2);
+        h.connect(100, 3);
+        let m = matches(&h.unranked(100, &u[2]));
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
+        // Once the window has passed they are strangers again.
+        h.now = third + Duration::from_secs(61);
+        h.advance(Duration::ZERO);
+        let m = matches(&requeue(&mut h));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
+    }
+
+    #[test]
+    fn unranked_regions_then_widening() {
+        let regions = RegionMap::parse(r#"{"na": ["203.0.113.0/28"], "eu": ["203.0.113.16/28"]}"#).unwrap();
+        let mut h = Harness::new(EngineConfig { regions, ..Default::default() });
+        let u = h.users(6);
+        // conn n connects from 203.0.113.n: 1-15 are na, 16-31 eu.
+        for c in [1, 2, 3, 16, 17, 18] {
+            h.connect(c, 41000);
+        }
+        h.unranked(1, &u[0]); // na
+        assert!(matches(&h.unranked(16, &u[1])).is_empty()); // eu: not with na yet
+        let m = matches(&h.unranked(2, &u[2])); // na: takes the na ticket, not the older eu one
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
+        assert_eq!(m[0].region, "na");
+        let m = matches(&h.unranked(17, &u[3]));
+        assert_eq!(pair_of(&m[0]), pair_key(u[1].uid, u[3].uid));
+        assert_eq!(m[0].region, "eu");
+
+        // One na, one eu: they wait 30 s for their own region, then take each other.
+        h.unranked(3, &u[4]);
+        h.now += Duration::from_secs(5);
+        assert!(matches(&h.unranked(18, &u[5])).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(24))).is_empty());
+        let m = matches(&h.advance(Duration::from_secs(1)));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[4].uid, u[5].uid));
+        assert_eq!(m[0].region, "eu+na");
     }
 
     #[test]

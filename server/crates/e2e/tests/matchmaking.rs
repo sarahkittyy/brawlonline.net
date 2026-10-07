@@ -152,7 +152,7 @@ async fn ticket_expiry_wrong_code_bad_key_and_unsupported_modes() {
     assert_eq!(rb.status, Status::TicketError, "{rb:?}");
     assert_eq!(
         ra.error.as_deref(),
-        Some(format!("Search timed out: {} did not connect within 1 minute.", bob.connect_code).as_str())
+        Some(format!("Search timed out: {} did not connect within 2 seconds.", bob.connect_code).as_str())
     );
     assert_eq!(ra.create_response.as_ref().unwrap().error, None, "ticket was accepted first");
 
@@ -179,13 +179,13 @@ async fn ticket_expiry_wrong_code_bad_key_and_unsupported_modes() {
     let r = search(SearchOptions::direct(stack.mm_addr, ghost, &bob.connect_code)).await;
     assert_eq!(r.error.as_deref(), Some("Account not found. Log in again in the launcher."));
 
-    // Queue modes are refused clearly in Phase 1.
-    for (mode, name) in [(0u8, "Ranked"), (1, "Unranked"), (3, "Teams")] {
+    // Modes not built yet are refused clearly.
+    for (mode, name) in [(0u8, "Ranked"), (3, "Teams")] {
         let mut o = SearchOptions::direct(stack.mm_addr, creds(&carol), "");
         o.mode = mode;
         let r = search(o).await;
         assert_eq!(r.status, Status::CreateError);
-        assert_eq!(r.error, Some(format!("{name} is not supported yet. Only Direct works for now.")));
+        assert_eq!(r.error, Some(format!("{name} is not supported yet. Only Direct and Unranked work for now.")));
     }
 
     // A banned account cannot queue: the ban rotates the play key, so the

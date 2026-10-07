@@ -300,8 +300,8 @@ def test_search_errors(backend: OnlineBackend, dolphin: Callable[..., DolphinIns
     inst = _launch(dolphin, "online-err", _online_config(backend), me)
     _logged_in(inst, me)
 
-    st = _search_error(inst, mode="unranked")
-    assert st["error"] == "Unranked is not supported yet. Only Direct works for now."
+    st = _search_error(inst, mode="ranked")
+    assert st["error"] == "Ranked is not supported yet. Only Direct and Unranked work for now."
     assert st["error_source"] == "create_ticket"
 
     st = _search_error(inst, code=me.connect_code)

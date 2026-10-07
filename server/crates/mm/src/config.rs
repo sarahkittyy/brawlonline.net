@@ -4,6 +4,7 @@ use std::time::Duration;
 use clap::Parser;
 
 use crate::engine::EngineConfig;
+use crate::region::RegionMap;
 use crate::ruleset::Rulesets;
 
 #[derive(Debug, Clone, Parser)]
@@ -37,6 +38,15 @@ pub struct Config {
     #[arg(long, env = "MM_RULESETS_FILE")]
     pub rulesets_file: Option<String>,
 
+    /// Region table for the Unranked queue: JSON `{"region": ["a.b.c.d/len", ...]}`. Without it
+    /// every ticket is in one region.
+    #[arg(long, env = "MM_REGIONS_FILE")]
+    pub regions_file: Option<String>,
+
+    /// Seconds an Unranked ticket waits for an opponent in its own region before any region will do.
+    #[arg(long, env = "MM_REGION_WIDEN_SECS", default_value_t = 30)]
+    pub region_widen_secs: u64,
+
     /// Maximum simultaneous ENet peers.
     #[arg(long, env = "MM_MAX_PEERS", default_value_t = 4000)]
     pub max_peers: usize,
@@ -54,6 +64,8 @@ impl Config {
             min_app_version: self.min_app_version.clone().filter(|s| !s.is_empty()),
             latest_version: self.latest_version.clone().filter(|s| !s.is_empty()),
             rulesets: Rulesets::load(self.rulesets_file.as_deref())?,
+            regions: RegionMap::load(self.regions_file.as_deref())?,
+            region_widen: Duration::from_secs(self.region_widen_secs),
             ..EngineConfig::default()
         })
     }
@@ -67,6 +79,8 @@ impl Config {
             min_app_version: None,
             latest_version: None,
             rulesets_file: None,
+            regions_file: None,
+            region_widen_secs: 30,
             max_peers: 64,
             ticket_interval_secs: 2,
         }

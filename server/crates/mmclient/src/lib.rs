@@ -83,6 +83,9 @@ pub struct SearchOptions {
     /// After a match, try the P2P connection.
     pub punch: bool,
     pub punch_timeout: Duration,
+    /// Slippi's 1v1 behaviour after a failed P2P connect: search again with a new ticket (and a
+    /// new local port), at most this many times. 0: report the failure.
+    pub requeue: u32,
 }
 
 impl SearchOptions {
@@ -99,7 +102,13 @@ impl SearchOptions {
             match_timeout: Some(Duration::from_secs(30)),
             punch: false,
             punch_timeout: Duration::from_secs(8),
+            requeue: 0,
         }
+    }
+
+    /// An Unranked search (mode 1, `connectCode: []`), as Slippi's client sends it.
+    pub fn unranked(server: SocketAddr, creds: Credentials) -> Self {
+        SearchOptions { mode: 1, target: String::new(), ..Self::direct(server, creds, "") }
     }
 }
 
@@ -159,6 +168,9 @@ pub struct SearchResult {
     /// it before resetting the peer, and only then binds the P2P port).
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mm_disconnect: Option<MmDisconnect>,
+    /// Matches whose P2P connect failed before this result, when `requeue` is set.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub failed_matches: Vec<GetTicketResp>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -320,8 +332,25 @@ fn punch(host: &mut Host<EnetSocket>, remote: SocketAddr, timeout: Duration) -> 
     P2pResult { connected: ok, elapsed_ms, peer_address: remote.to_string() }
 }
 
-/// Runs one search, like one pass of Slippi's matchmaking thread.
+/// Runs a search like Slippi's matchmaking thread: one ticket, and with `requeue` a new ticket
+/// after each failed P2P connect in 1v1 modes (`SlippiMatchmaking.cpp:891-898`; Teams reports the
+/// failure instead).
 pub fn search(opts: &SearchOptions) -> anyhow::Result<SearchResult> {
+    let mut failed = vec![];
+    loop {
+        let mut r = search_once(opts)?;
+        let can_requeue = opts.mode != 3 && (failed.len() as u32) < opts.requeue;
+        if r.status == Status::P2pFailed && can_requeue {
+            failed.extend(r.ticket_response.take());
+            continue;
+        }
+        r.failed_matches = failed;
+        return Ok(r);
+    }
+}
+
+/// One pass of Slippi's matchmaking thread: one ticket, one P2P attempt.
+fn search_once(opts: &SearchOptions) -> anyhow::Result<SearchResult> {
     let (mut host, local_port) = bind_host(opts)?;
     let lan_ip = opts.lan_ip.or_else(|| local_ip_towards(opts.server));
     let lan_address = lan_ip.map(|ip| SocketAddrV4::new(ip, local_port).to_string()).unwrap_or_default();
@@ -335,6 +364,7 @@ pub fn search(opts: &SearchOptions) -> anyhow::Result<SearchResult> {
         remote_addresses: vec![],
         p2p: None,
         mm_disconnect: None,
+        failed_matches: vec![],
     };
 
     let Some(mm) = connect_mm(&mut host, opts.server) else {

@@ -36,6 +36,7 @@ pub async fn fetch_mm_user(pool: &sqlx::PgPool, uid: Uuid) -> sqlx::Result<Optio
 }
 
 /// Records a pairing (best effort; mm does not wait for it).
+#[allow(clippy::too_many_arguments)]
 pub async fn insert_match(
     pool: &sqlx::PgPool,
     match_id: &str,
@@ -43,9 +44,10 @@ pub async fn insert_match(
     players: &[Uuid],
     is_host: Uuid,
     stages: &[i16],
+    region: &str,
 ) -> sqlx::Result<()> {
     sqlx::query(
-        "INSERT INTO mm_matches (match_id, mode, players, is_host, stages) VALUES ($1, $2, $3, $4, $5)
+        "INSERT INTO mm_matches (match_id, mode, players, is_host, stages, region) VALUES ($1, $2, $3, $4, $5, $6)
          ON CONFLICT (match_id) DO NOTHING",
     )
     .bind(match_id)
@@ -53,6 +55,7 @@ pub async fn insert_match(
     .bind(players)
     .bind(is_host)
     .bind(stages)
+    .bind(region)
     .execute(pool)
     .await
     .map(|_| ())

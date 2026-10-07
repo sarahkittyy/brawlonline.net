@@ -1,6 +1,6 @@
 [package]
 name = "mm"
-description = "Matchmaking server speaking Slippi's ENet + JSON ticket protocol (direct mode in Phase 1)."
+description = "Matchmaking server speaking Slippi's ENet + JSON ticket protocol (Direct and Unranked)."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

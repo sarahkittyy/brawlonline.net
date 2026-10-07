@@ -1,5 +1,20 @@
 {
-  "direct": { "stages": [], "items": 0 },
-  "unranked": { "stages": [], "stocks": 4, "timeMinutes": 8, "items": 0 },
-  "ranked": { "stages": [], "stocks": 4, "timeMinutes": 8, "items": 0 }
+  "direct": {
+    "stages": [1, 2, 3, 4, 5, 6, 9, 12, 13, 28, 31, 33, 35, 45, 46],
+    "stocks": 4,
+    "timeMinutes": 8,
+    "items": 0
+  },
+  "unranked": {
+    "stages": [1, 2, 3, 4, 5, 6, 9, 12, 13, 28, 31, 33, 35, 45, 46],
+    "stocks": 4,
+    "timeMinutes": 8,
+    "items": 0
+  },
+  "ranked": {
+    "stages": [1, 2, 3, 4, 5, 6, 9, 12, 13, 28, 31, 33, 35, 45, 46],
+    "stocks": 4,
+    "timeMinutes": 8,
+    "items": 0
+  }
 }
