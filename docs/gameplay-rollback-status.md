@@ -1,6 +1,6 @@
 # Gameplay-only rollback: status
 
-Branch `gameplay-rollback` in the worktree `dolphin-gprb/` (off `rollback-fixes`, merged with `rollback-fixes` at `a1f9ec2685` and again at `d36794a6e1`, the online client). Not pushed. Head: `fe35002ead`.
+Branch `gameplay-rollback` in the worktree `dolphin-gprb/` (off `rollback-fixes`, merged with `rollback-fixes` at `a1f9ec2685`, at `d36794a6e1` (the online client) and at `ad474c0358` (GameBridge, recent codes, Qt session backend)). Not pushed. Head: `b79fe057cf`. **Default region set: gp-v12** (Phase 6).
 
 **The session model** (user decision):
 - Each player boots and uses the menus alone.
@@ -27,6 +27,10 @@ All in `harness/tools/`. They need numpy.
 | `gprb_resimtrace.py` | Instruction-trace diff of a frame's first run against its resimulation. |
 | `gprb_rngcmp.py` | Compares two peers' `PPR_GPRB_RNG_LOG` logs frame by frame (newest pass) and shows the first differing `mtRand` calls with their callers. |
 | `gprb_changed_mem.py` | Memory outside the region set that changes from frame to frame in a match. |
+| `gprb_mispredict.py` | Phase 6: one instance from a countdown savestate with recorded input: `ref` (sync test), `mp` (misprediction sync test), `replay=<pass log>` (a network session's peer, exactly), `--no-rollback` (ground truth); traces compared with a reference; sound sampling. |
+| `gprb_passlog.py` | Phase 6: show and edit pass logs (`fix`, `norb`, `flat`). |
+| `gprb_memdiff.py` | Phase 6: whole-memory dump diffs outside/inside the set, the DOL objects behind them, and a scan for global list heads whose nodes are rolled back. |
+| `gprb_hang.py` | `cdb` stacks of every thread of a hung instance. |
 
 New harness commands (`Source/Core/Core/Harness/HarnessServer.cpp`), listed under [Harness commands](#harness-commands): `frame_trace`, `frame_trace_config`, `game_pads`, `cpu_trace`, `mem_chunk_hashes`, `disasm`, `timing_nudge`, `gprb_synctest`, `gprb_connect`, `gprb_set_selections`, `gprb_status`, `gprb_checksums`, `gprb_stop`.
 
@@ -283,7 +287,9 @@ Earlier single-core sessions, all 0 mismatches:
   - The fix: the joiner now takes the host's init block at its first pass through `scMelee`, before the match loads, and waits for it if needed.
   - The joiner logged `took the host's match init block (…0300… -> …0600…)`, and the Smashville match then ran identically.
 
-### Dual core: rollback sessions diverge on some content (open)
+### Dual core: rollback sessions diverge on some content (resolved in Phase 6)
+
+**Resolved:** the cause was not dual core but the ground-collision list heads outside the set (gp-v11, see [Phase 6](#the-dual-core-divergence-ground-collision-list-heads-gp-v11)). The investigation as it stood:
 
 Dual-core sessions of Fox/Falco on Battlefield are identical (the table above, and 4 more). **Mario/Marth on Final Destination diverged in 6 of 7 dual-core sessions** under `typical`, also as the first match of a session. So it is the content, not the match index. The divergence came anywhere from game frame 797 to 7,245.
 
@@ -378,22 +384,127 @@ Brawl's sound system is not rolled back: the Sound heap and the AX state are out
 
 In a sync test the input never changes, so dedupe suppresses nearly everything.
 
-**Not done:**
-- Stopping a sound that a mispredicted run started and the corrected run does not. Slippi stops those; it needs the handle.
-- Re-attaching the game object's handle to the still-playing sound instead of leaving it null.
-- Neither can be judged by ear here: every instance is muted.
+Stopping mispredicted sounds and re-attaching the game's handles: done in Phase 6 ([Sound: stop and re-attach](#sound-stop-and-re-attach-slippi-style-bookkeeping)).
+
+## Phase 6: the FIFO tail, the slow manager, the ground-collision lists, sound bookkeeping
+
+Commits `e8c3bc2000` (gp-v10, FIFO tail), `980673530a` (replays, diagnostics, sound bookkeeping), `fade07580e` (merge of `rollback-fixes`), `e7b2076039` (gp-v11 as the default, `no_rollback`), `d31f69fc54` (sound bookkeeping by default in sessions), `b79fe057cf` (gp-v12 as the default). Builds used for the runs: `run/bin/gprbw-p` (`980673530a` plus the full dumps), `gprbw-s` (`e7b2076039`), `gprbw-t` (`d31f69fc54`), `gprbw-v`/`gprbw-w` (`b79fe057cf`). Raw results: `run/qa/gprbw/`.
+
+### New tools
+
+| Tool / command | What it does |
+|---|---|
+| `PPR_GPRB_PASS_LOG` / `gprb_session.py --pass-log DIR --save-countdown DIR` | Every GekkoNet update of a network session (load depth, initial save, every pass's frame, save flag and input slots), per peer and run, plus each peer's countdown savestate. |
+| `gprb_mispredict.py run --state <peer's countdown save> --modes replay=<pass log>` | Runs that peer's whole session again in one instance, exactly: same loads, same passes, same inputs. Also in dual core: the replays' traces equal the real peers' traces frame for frame, and two replays of one log have byte-identical MEM1 and MEM2 at every dumped frame. |
+| `gprb_passlog.py` | `show` the updates around a frame; make variants of a log: `fix` (mispredicted passes get the final input, rollbacks stay), `norb` (an update neither loads nor resimulates), `flat` (no rollbacks at all: the session's ground truth). |
+| `PPR_GPRB_DUMP_FRAMES` + `PPR_GPRB_DUMP_DIR` (+ `PPR_GPRB_DUMP_FULL=1`) | The region set (and with `FULL` all of MEM1 and MEM2) at every save of the chosen session frames. |
+| `gprb_memdiff.py` | `diff`: granules that differ between two runs' dumps, outside (or inside) the set; `dol`: the DOL data objects (symbols.txt) behind them; `scan`: DOL words outside the set that point into the set's heaps and change during a match (global list heads whose nodes are rolled back). |
+| `gprb_mispredict.py` `ref` / `mp` modes, `gprb_synctest` `inject_input`, `mispredict_ports/offset/every` | Sync test with recorded input; misprediction sync test (the first run of every frame gets another frame's input). |
+| `gprb_samples` (`gprb_session.py --sample-every`) | Chunk hashes of the region set every N confirmed frames, compared between peers. |
+| `PPR_GPRB_CENSUS=1` + `gprb_census` | Every granule outside the set written during the match. |
+| `gpu_state` | CP FIFO, PI FIFO, PE control, interrupt cause/mask, deterministic-GPU flag. |
+| `gprb_sound_state` | The sound archive player's allocated sounds: id, general handle, owned or orphaned, duplicate ids. |
+| `gprb_hang.py` | `cdb` stacks of every thread of a hung instance (the tools call it on harness time-outs). |
+
+### The GX FIFO ring tail: the draw-done hangs and the Peach article crash
+
+**Root cause.** Region-mode loads restore whole 64-byte granules, and a range that starts or ends inside a granule takes the rest of it along. The System heap starts at 0x80611F60. The granule 0x80611F40-0x80611F80 also holds the last 32 bytes of the GX FIFO ring: `gpu_state` in a match shows CP FIFO base 0x805D1E60 and end 0x80611F40 (the RenderFifo heap, outside the set). Every time the CPU wrote that 32-byte block (the ring wraps every few frames), the next save captured it with the System heap's first bytes, and a load wrote the stale commands back. When the command processor had not yet read the block, the GPU ran stale or half-overwritten commands:
+- a lost draw-done (PE finish) command: the main thread waits forever in `GXWaitDrawDone` (`fn_801F0A30`, called from `fn_80023AE4`, the frame's render start, which waits for the previous frame's `GXSetDrawDone`). That is the hang of open issue 3.
+- extra or missing draw-done interrupts. The draw-done callback (0x80023DD4 → `moMeleeDrawDownCallback`) drives `soDisposeInstanceManager::notifyDrawDone`, which frees the instances (fighters' articles among them) disposed in earlier frames. Freed at the wrong time, a Peach article was gone while her fighter state still referred to it: the burst of `存在しないArticleへのchangeMotion命令です` and the crash of open issue 2. (This chain is inferred from the code and from the fix; the crash itself was not traced instruction by instruction.)
+- garbage commands on the GPU thread: indexed-XF loads from addresses outside RAM (the Phase 3 `LoadIndexedXF` crash, seen twice more this round in dual-core sessions).
+
+**Evidence.**
+- Loads now count how often excluded bytes differed from the snapshot, i.e. how often the old code would have written different bytes: in a Peach sync test 2,288 of 13,453 loads for 0x80611F40 (17 %), and 732 of 1,818 in a dual-core misprediction test. No other granule shared with non-gameplay memory changed during a match.
+- Before: Peach crashed in 4 of 5 sync tests (2,600-7,500 frames); 2-3 of about 20 long sync tests hung in `GXWaitDrawDone`.
+- After (gp-v10/gp-v11, sync tests to game set, single core, `distance` 2): Peach/Game & Watch on PS2 21,191, 21,347 and 25,939 frames, 0 mismatches, no crash; Peach/Game & Watch on Smashville 15,674. The other article users: Link/Snake (bombs, grenades) 28,729 and 28,299 (gp-v11), Toon Link/Diddy (bombs, bananas) 20,493 and 26,034 (gp-v11), R.O.B./Olimar (gyro, Pikmin) 28,793. Every one reached game set. No hang in the 20 long sync tests and the 16 dual-core sessions run since (below).
+
+**Fix (`e8c3bc2000`).** Region sets have an `exclude` list: bytes a load never writes, even inside a granule the set touches; those granules are restored byte by byte, all others whole. gp-v10 excludes 0x80611F40+0x20. A first version restored every partly covered granule byte by byte; that dropped DOL gameplay globals sharing granules with the `dolw-g1` ranges (Peach: 12 desyncs), so only the FIFO tail is excluded.
+
+### The global slow-motion manager (gp-v10)
+
+The first gp-v10 sync test of Ice Climbers/Charizard with items desynced. A slow-motion request made by a run that was rolled back stayed active: `gfSlowManager` lives in DOL .bss/.sbss/.sdata, outside the set. gp-v10 adds the requests (0x804953B0+0x20), `s_needsUpdate` (.sbss 0x805A0080) and `s_maxSlowRate` (.sdata 0x8059C690). With all three: 14,805 frames, 0 mismatches.
+
+### The dual-core divergence: ground-collision list heads (gp-v11)
+
+**It is not dual-core specific.** A single-core Mario/Marth FD session diverged too (980/927 rollbacks, game frame ~19,100), with the same first difference (one peer's effect command draws 6 `randf`). Dual core only has more rollbacks. Not the input (both peers' confirmed pads are identical), not the sound mode (play, suppress and dedupe all diverge), not GPU timing, not harness polling. Misprediction sync tests on one instance seemed clean, but only because their reference was itself a sync test with the same fault (see the ground truth below).
+
+**Reproduction.** The pass log and countdown savestate of each peer of a diverged dual-core session (Mario/Marth FD, `typical`, run `s7` 1: the traces diverge at game frame 6,661 = session frame 6,421) replay that peer's session exactly: replay host = real host, replay join = real join, and the two replays diverge at the same frame. Variants of the logs (`gprb_passlog.py`) then show which rollback matters:
+
+| Replay | vs the other peer | vs ground truth (`flat`) |
+|---|---|---|
+| join as recorded (misprediction at 6,399, 1-frame rollback) | diverges at 6,661 | identical |
+| join without that misprediction / without that rollback | diverges at 6,661 | identical |
+| host as recorded (mispredictions at 6,413-6,414, 2-frame rollback at 6,415) | diverges at 6,661 | diverges at 6,661 |
+| host, rollback kept but **input corrected** (`fix`) | diverges | diverges |
+| host **without that rollback** (`norb`) | identical | identical |
+
+So the host's rollback at 6,415 changed the outcome even when it resimulated with the input the first run already had. Whole-memory dumps of the `fix` and `norb` replays (`gprb_memdiff.py`) are identical up to 6,412. At 6,415 the set differs only in Mario's instance heap, in the links of two list nodes; outside the set in the list head `lbl_8049E594` (.bss, `{count, sentinel next, sentinel prev}`), count 4 against 3.
+
+**Mechanism.** `lbl_8049E594` and its neighbours (`lbl_8049E570`, `g_grCollisionList` 0x8049E57C, `lbl_8049E588`) are intrusive lists of ground-collision objects (`fn_80133C1C` links, `fn_80133C78`/`fn_80133B98` unlink; `fn_80112AD4`/`fn_80112B7C` iterate and update each object). The objects live in the fighters' instance heaps (in the set); the list heads did not. When a frame that creates (or destroys) such an object is rolled back, the load restores the objects and their neighbours' links but leaves the head's count and sentinel links as the discarded run left them. The resimulation creates the object again at the same address and links it after `sentinel.prev`, which is the object itself: it ends up linked to itself, and iteration from the sentinel skips it. That peer then stops updating that collision object, and gameplay differs some frames later (here the first visible difference was again an effect command's `randf`). The sync test's own check cannot see it: both runs of every frame start from the same corrupted list.
+
+**Fix (gp-v11, `e7b2076039`).** gp-v10 plus 0x8049E570+0x30 (the four ground-collision list heads). `gprb_memdiff.py scan` over a whole match (7 dumps from game frame 100 to 8,900) finds one more DOL object outside the set that points into the set's heaps and changes: the last 0x14-byte record of the array at 0x8049EDE0 (`lbl_8049EDD8`, entries pointing into the Effect heap), half covered by `dolw-g1`; gp-v11 adds 0x8049EE40+0x20. (The other hits are thread stacks and contexts, AX/DSP buffers, GX display lists and `gfSceneRoot`/`gfKeepFrameBuffer`.) gp-v11 is the default region set of sync tests, sessions and the online backend.
+
+**The sync test against the ground truth.** The new sync-test option `no_rollback` runs the same session machinery but simulates every frame exactly once (`gprb_mispredict.py --no-rollback`): the game as it would run without rollback. Every rolled-back run with the same recorded input must end with the same per-frame trace.
+
+| Recorded input | Run | gp-v10 | gp-v11 |
+|---|---|---|---|
+| Mario/Marth FD, dual core, `distance` 4 | sync test (`ref`) | **differs from frame 312** (RNG; fighters from 368) | identical, 7,926 frames |
+| same | misprediction test, `play` / `suppress` / `dedupe` sounds | (the old reference had the same fault) | identical, 7,932-7,934 frames, all three |
+| Ice Climbers/Olimar PS2, single core | sync test | differs from frame 2,687 (`distance` 2) | identical, 21,766 frames, to game set |
+
+So with gp-v10 even a plain sync test drifted from the real game within seconds, and its own first-run-against-resimulation check stayed silent. The other variants pin it to the list heads: restoring only `lbl_8049E594` (12 bytes) is enough to match the ground truth; restoring only the effect record is not.
+
+**Evidence in sessions.**
+- Replays of the three diverged `s7` sessions with gp-v11: host and join replays identical to the end (they had diverged at game frames 6,661, 17,877 and 5,690). The host replay of run 1 equals the no-rollback ground truth.
+- Mario/Marth on Final Destination, **dual core**, `typical` (40 ms, ±8 ms, 0.5 % loss), gp-v11, sound bookkeeping on (`s8`, build `gprbw-p`; `s10`, build `gprbw-t`): **10 complete matches, all to game set with 0 confirmed-checksum mismatches and identical per-frame traces**: 24,870, 23,283, 19,473, 21,602, 27,664 (`s8`) and 21,082, 23,513, 14,661, 23,252, 26,875 frames (`s10`), 647-1,039 rollbacks per peer, deepest 7. Before the fix the same matchup diverged in 6 of 7 (Phase 4), and in 3 of 4 with gp-v10 (`s7`). Five more `s8` sessions ended early, not by a desync: four with `peer timed out` (237-13,457 frames, 0 mismatches up to there) while the machine ran 10+ Dolphin instances, one failed to start (harness time-out); three `s10` runs failed to start for the same reason (harness port collision or time-out under load).
+- Fox/Falco on Battlefield, dual core, `typical`, gp-v11 (`s9`): 3,835 and 7,581 frames, both to game set, 0 mismatches, traces identical.
+- Sync tests with gp-v11, single core, `distance` 2, all to game set with 0 mismatches: Ice Climbers/Olimar PS2 28,793; Ice Climbers/Charizard with items 11,408; Mario/Marth FD 10,356; Mario/Marth FD with items 19,205; Link/Snake 28,299; Toon Link/Diddy 26,034; Peach/Game & Watch PS2 22,581 and Smashville 10,165; Fox/Falco 3,981; Squirtle/Zelda 28,793; R.O.B./Olimar 28,793, 28,122, 22,248 and 28,793; Ice Climbers/Olimar 28,793 and 25,027; Ice Climbers/Charizard with items 16,615 and 18,926. Two of these runs had one 11-frame burst each (R.O.B./Olimar at game frame 8,445, Ice Climbers/Olimar at 25,178): the camera quake, fixed in gp-v12 (below).
+
+**Not restored, on purpose:** the task-id counter `gUnk8059c66c` (0x8059C66C, `gfTask::updateId`). A resimulated frame gives new objects ids one higher than the other peer's (seen in the dumps: 0x8000000F against 0x8000000E). Ids are compared for equality only as far as seen, and restoring the counter would hand out ids still held by tasks that survive a rollback outside the set. No divergence traced to it.
+
+### 11-frame desync bursts in sync tests: the camera quake (gp-v12)
+
+Rare sync-test bursts of exactly 11 consecutive frames whose fighters' checksum differed between first run and resimulation, then agreed again: gp-v10 Ice Climbers/Olimar at frames 11,748 and 11,807, Ice Climbers/Charizard with items at 11,284; gp-v11 R.O.B./Olimar at game frame 8,445 and Ice Climbers/Olimar at 25,178 (about one per 100,000 frames).
+
+**Reproduction.** Sync tests now write pass logs as well (`gprb_synctest.py --pass-log DIR` saves a countdown state and `<name>-<n>.synctest.m0`). The replay of the Ice Climbers/Olimar run reproduced the burst at the same frames with the same checksums. `PPR_GPRB_INTERP_FROM=25172` ran the replay with the JIT up to 6 frames before the burst and then under the interpreter, and `cpu_trace` recorded game frame 25,178's first run and its resimulation (`gprb_mispredict.py --trace-frame 25178`): 1.9 M instructions each. `gprb_resimtrace.diff` shows the first value difference that is not a tick: in `cmReqQuake__FiP5Vec3f` → `fn_8009D564`, a load of `+0x270` of the camera quake controller (0x805B69E0, pointer at .sbss 0x805A0280) returns 0 in the first run and 0x10 in the resimulation; control flow splits right after.
+
+**Cause.** The quake controller is a System FW block (0x805B69C0, 0x2A0 bytes with its header) next to `gfCameraManager`, outside the set. A quake request sets the flag at +0x270 and the amplitude at +0x268. The first run of the frame set them; the load did not clear them; the resimulation took the "quake already running" path with another amplitude, and the fighters' checksum (instance, damage, stocks, posture x/y, status kind) differed for the quake's 11 frames, then agreed again. Which field moved was not isolated; the in-set difference at the first burst frame is in the fighters' model matrices (translations about 3.5 units apart).
+
+**Fix (gp-v12, `b79fe057cf`, the default):** gp-v11 plus 0x805B69E0+0x280. The same replay with gp-v12: 0 differences (gp-v11: 11). Ground truth with gp-v12: Mario/Marth FD sync test and dedupe misprediction test identical for 7,919 and 7,932 frames, Ice Climbers/Olimar sync test identical for 21,766 frames. On the final build (`gprbw-w`, gp-v12 and sound bookkeeping by default): sync tests R.O.B./Olimar 28,439, Peach/Game & Watch PS2 17,030 and Mario/Marth FD with items 19,595 frames, 0 mismatches (three more runs failed to start under load); dual-core Mario/Marth FD sessions (`s11`) 24,152, 28,793, 26,048, 22,492 and 11,650 frames to game set, 0 mismatches, traces identical, and one ended by `peer timed out` at 3,491 frames (0 mismatches).
+
+### Sound: stop and re-attach (Slippi-style bookkeeping)
+
+`dedupe_resim_sounds` (`980673530a`) now does what Slippi's sound handling does:
+- every sound a frame starts is recorded with the game's handle (`GprbSoundAttachHook`, a Start hook at `detail_SetupSound`'s attach path 0x801C9C70, plus the allocation hooks);
+- a resimulated pass that starts a sound id an earlier run of the same frame started, while that sound still plays, does not start it again: `detail_SetupSound` continues at its attach path with the old sound, so **the game's handle is re-attached** to the playing sound. If another handle took the sound over in the meantime (`sndSystem::playSE` keeps its own 16-slot handle table, outside the set, and a resimulation picks a different slot), that handle gives it up first;
+- sounds an earlier run started that the corrected run does not start are **stopped** at the top of the next loop: a guest call of the sound's `Stop(0)` (vtable +0x18), with the CPU registers saved and restored around it.
+
+**How it is verified (every instance is muted).** `gprb_sound_state` walks the sound archive player's three instance managers (wave, sequence, stream: SAP+0x38/0x60/0x88) and lists every allocated sound: id, general handle (+0x8), whether a handle owns it, and sound ids allocated more than once. `gprb_mispredict.py --sound-sample` samples it twice a second during a dual-core misprediction test (Mario/Marth FD, `distance` 4, both ports mispredicted, the same recorded input in every mode), and the session status counts re-attaches, moves, stops and sounds already gone.
+
+Dual core, `distance` 4, Mario/Marth FD, both ports mispredicted on every frame's first run (input of 3 frames earlier), 7,930 frames, about 270 samples each (raw `run/qa/gprbw/f-fmp*.json`):
+
+| Mode | Sounds playing (avg / max) | Sound ids allocated twice at once (avg / max) | Orphans | Resimulated allocations | Gameplay vs ground truth |
+|---|---|---|---|---|---|
+| `play` (resimulations start sounds again) | 3.99 / 18 | **1.79 / 12** | 0 | 3,072 started again | identical |
+| `suppress` (Brawlback: resimulations get no channel) | 4.42 / 11 | 2.41 / 7 (the mispredicted runs' sounds are never stopped) | 0 | 3,105 suppressed | identical |
+| `dedupe` (stop + re-attach) | 1.55 / 6 | **0.03 / 1** | 0 | 2,926 matched an earlier run: 2,656 re-attached, 270 already finished (not restarted); 146 new; 15 stopped (29 already finished) | identical |
+
+"Allocated twice at once" is a sound playing twice; it is what a player hears as a doubled sound. "Orphans" are sounds no handle owns: none in any mode (sounds the game starts through `sndSystem::playSE` are owned by its own handle table). The 2,656 re-attaches also show that the game's handles end up on the playing sounds, so the game can still stop or change them (a charge loop, a held move). This test is far harsher than a session: every frame is rolled back and resimulated with changed input.
+
+`dedupe` is now the default of network sessions (`d31f69fc54`) and of the online backend; `suppress_resim_sounds` still selects Brawlback's behaviour, `dedupe_resim_sounds=false` the old one. The dual-core sessions `s8`/`s10` above ran with it.
+
+**What this cannot show:** audible artefacts (a stop cuts a sound without a fade; a re-attached sound keeps the pitch or volume the discarded run gave it). Those need ears on an unmuted instance.
 
 ## Open issues
 
-1. **Dual-core divergence with rollbacks on some content** (Mario/Marth, FD): see Phase 4. Single core is clean.
-2. **Peach crashes the game in sync tests**: 4 crashes in the last 5 Peach runs (the fifth lost the harness connection), with gp-v8, gp-v9 and gp-v10, after 2,600-7,500 frames.
-   - The game's own exception report follows a burst of `存在しないArticleへのchangeMotion命令です kind:2` ("changeMotion on a non-existent article, kind 2"), then a jump to 0x20/0xF8.
-   - Fighter state in the set refers to an article whose registration lives outside the set.
-   - Adding the Tmp heap (gp-v10, not committed) did not fix it.
-   - The earlier `__fwrite` crash was the same failure printing in a loop.
-3. **Main-thread stalls** in 2 of about 20 long sync tests: Squirtle/Zelda frame 3,339 and Ice Climbers/Charizard frame 2,056. The main thread waits in `GXWaitDrawDone` for a draw-done interrupt that never comes; the flag is at 0x805A08C0, outside the set.
-4. The rollback count in the sessions is low (random macros predict well). A harder input model would stress deeper rollbacks between peers.
+Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds.
+
+1. **Sync tests must be checked against the ground truth.** Their own check (first run against resimulation) missed a fault that changed the game within seconds. `gprb_mispredict.py` with a recording, `--no-rollback`, and a comparison of the traces is the stronger test; only Mario/Marth FD and Ice Climbers/Olimar PS2 have recordings so far. The closed-loop scenario sync tests (`gprb_synctest.py`) cannot be compared this way.
+2. **State outside the set that only rare events touch** is still found one case at a time. `gprb_memdiff.py scan` finds global list heads that point into the set; counters and flags need a census (`PPR_GPRB_CENSUS`) and a reason. Known and left alone: the task-id counter `gUnk8059c66c` (ids of objects created in resimulated frames differ between peers; no effect found).
+3. **Sessions end with `peer timed out` when the machine is overloaded**: 4 of the 10 `s8` sessions ended between 237 and 13,457 frames, both peers on the same frame and with 0 mismatches, while 10+ other Dolphin instances ran. The GekkoNet silence limit (7.2 s at delay 2) was exceeded by stalls of a starved process, not by the network.
+4. The rollback count in the sessions is low (random macros predict well). A harder input model would stress deeper rollbacks between peers; the misprediction test covers that on one instance.
 5. The online backend is not registered outside the harness (above).
+6. The coverage sweep (`gprb_sweep.py`, another agent's tool) still defaults to gp-v9, while the session and sync-test tools it uses now default to gp-v11.
 
 ## Harness commands
 
@@ -403,16 +514,24 @@ In a sync test the input never changes, so dedupe suppresses nearly everything.
 | `game_pads` | record, inject and anchor the per-frame pad slots |
 | `cpu_trace` | interpreter instruction trace (pc, op, ea, value), optional all threads, N occurrences |
 | `mem_chunk_hashes`, `disasm`, `timing_nudge` | memory hashes by chunk, disassembly, emulated-time nudges |
-| `gprb_synctest` | arm a sync test (`distance`, `region_set`, `hash_regions`, `start_frame`, `suppress_resim_sounds`, `dedupe_resim_sounds`) |
+| `gprb_synctest` | arm a sync test (`distance`, `region_set`, `hash_regions`, `start_frame`, `suppress_resim_sounds`, `dedupe_resim_sounds`; Phase 6: `inject_input`, `mispredict_ports`/`mispredict_offset`/`mispredict_every`, `replay_path`, `no_rollback`) |
 | `gprb_connect` | network session (`role`, `port`, `host`, `remote_port`, `region_set`, `delay`, `start_frame`, sound options) |
 | `gprb_set_selections`, `gprb_status`, `gprb_checksums`, `gprb_stop` | selections, status (phase, peer, `disconnected`, sound counters, save/load cost), confirmed checksums, leave |
 | `mm_search_direct` / `mm_search` with `backend="gameplay"` | online hand-off to `Gprb::Session` |
+| `gprb_samples` | chunk hashes (and watched bytes) of the region set every N confirmed frames |
+| `gprb_census` | granules outside the set written during the match (`PPR_GPRB_CENSUS=1`) |
+| `gpu_state` | CP FIFO, PI FIFO, PE control, interrupt cause/mask, deterministic-GPU flag |
+| `gprb_sound_state` | the sound archive player's allocated sounds (id, handle, owned/orphaned, duplicate ids) |
 
 Diagnostics through environment variables:
 - `PPR_GPRB_DIFF_FRAME=N`: byte diff of the region set, first run against resimulation.
 - `PPR_GPRB_RNG_LOG=1`: every `mtRand` call, with 8 stack levels.
 - `PPR_GPRB_PROBE=addr,…`: registers at those addresses.
 - `PPR_GPRB_INPUT_LOG`: per-pass input.
+- `PPR_GPRB_PASS_LOG=path`: every GekkoNet update of a network session, for `replay_path` (`<path>.<host|join>.m<match>`).
+- `PPR_GPRB_DUMP_FRAMES=f1,…` + `PPR_GPRB_DUMP_DIR=dir` (+ `PPR_GPRB_DUMP_FULL=1`): the region set (all of MEM1/MEM2) at every save of those session frames.
+- `PPR_GPRB_CENSUS=1`: record non-set granules written during the match (`gprb_census`).
+- `PPR_GPRB_INTERP_FROM=<game frame>`: JIT up to that frame, then the interpreter (and a break the harness resumes), for `cpu_trace` of late frames.
 
 ## Commits (`dolphin-gprb`, branch `gameplay-rollback`)
 
@@ -428,3 +547,9 @@ Diagnostics through environment variables:
 | `ee7a1273cb` | gp-v9 (camera manager), host's init block, register probes |
 | `ecbd88b92e` | merge `rollback-fixes` `d36794a6e1` (online client); gameplay online backend |
 | `fe35002ead` | session ends when GekkoNet drops a silent peer; gp-v9 by default |
+| `e8c3bc2000` | never restore the GX FIFO ring tail (region-set `exclude`); gp-v10 (FIFO tail, slow manager) |
+| `980673530a` | pass logs and replays, misprediction sync test, dumps, census, samples, `gpu_state`, `gprb_sound_state`; sound bookkeeping (re-attach, stop) |
+| `fade07580e` | merge `rollback-fixes` `ad474c0358` (GameBridge, recent codes, Qt session backend); the PPOM mailbox is excluded from region sets |
+| `e7b2076039` | gp-v11 (ground-collision list heads) as the default; sync-test `no_rollback` (ground truth) |
+| `d31f69fc54` | sound bookkeeping (`dedupe_resim_sounds`) by default in network sessions |
+| `b79fe057cf` | gp-v12 (camera quake controller) as the default; sync-test pass logs; `PPR_GPRB_INTERP_FROM` |
