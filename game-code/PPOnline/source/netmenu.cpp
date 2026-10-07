@@ -13,6 +13,10 @@
 extern "C" {
     // Set while our online flow owns the Wi-Fi CSS (read by removeDisconnectPanel).
     u8 g_onlineCss = 0;
+    // sqMenuMain entry used when the online CSS is left, 0 = the game's own (exitToOnlinePage).
+    u8 g_onlineReturnPage = 0;
+    // Set while Direct owns the CSS: the ONLINE page then opens on WITH FRIENDS (onlinePageCursor).
+    u8 g_onlineFriendsCursor = 0;
 }
 
 namespace NetMenu {
@@ -83,24 +87,62 @@ namespace NetMenu {
 
     // sora_menu_main+0x2E4F8 is muProcWifiAnybody's vtable slot 3 (vtable .data+0x3AC8; class
     // name string "muProcWifiAnybody" at .data+0x3AF0), run when the WITH ANYONE page opens.
-    // Gen 1's SkipDirectlyToCSS replaces it: leave muMenuMain with menu decision 0x1E (Wi-Fi
-    // "anyone" basic), which sqMenuMain turns into sqNetAnyOkiraku -> the Wi-Fi character select.
+    // WITH FRIENDS (= DIRECT) is rerouted to this page (friendsToAnybody below) and leaves at
+    // once, as Gen 1's SkipDirectlyToCSS did: menu decision 0x1E, which sqMenuMain turns into
+    // sqNetAnyOkiraku -> the Wi-Fi character select. WITH ANYONE itself shows the page, whose
+    // two buttons are UNRANKED (BASIC VERSUS) and TEAMS (TEAM BATTLE), design 5.4 screen 1.
     static bool s_friendsPicked = false;   // set by friendsToAnybody() below
+    typedef int (*ProcFn)(void*, void*, void*);  // (this, menu, resources)
+    static ProcFn s_origAnybodyEnter = NULL;
 
-    static void leaveMenuToWifiCss(int choice)
+    static void leaveMenuToWifiCss(int mode)
     {
         u8* mgr = *(u8**)0x805A0060;              // gfSceneManager::getInstance()
         *(int*)(mgr + 0x284) = 0x1E;              // menu decision / next sequence id
         *(int*)(mgr + 0x288) = 2;                 // processStep: leave the scene
         pp_startKeepScreen((void*)0x805b50a8);    // keep the last menu frame up during the load
-        g_onlineCss = 1;
-        onlineMenuEntered(choice);
+        onlineMenuEntered(mode);
     }
 
-    void skipDirectlyToCSS()
+    static int anybodyEnter(void* proc, void* a, void* b)
     {
-        leaveMenuToWifiCss(s_friendsPicked ? OnlineMenu::MENU_FRIENDS : OnlineMenu::MENU_ANYONE);
-        s_friendsPicked = false;
+        if (s_friendsPicked && (PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS)) {
+            s_friendsPicked = false;
+            leaveMenuToWifiCss(PPOM::MODE_DIRECT);
+            return 0;
+        }
+        return s_origAnybodyEnter(proc, a, b);
+    }
+
+    // sora_menu_main+0x2E934 / +0x2EB70 `mr r3,r30` in muProcWifiAnybody's two A handlers,
+    // just after the `beq` that skips "no button" (an inline hook does not keep CR): r4 is the
+    // menu decision for the highlighted button: 0x1E BASIC VERSUS, 0x1F TEAM BATTLE (0x1D is
+    // a third cursor slot this page does not show). The game then leaves muMenuMain with it
+    // (sora_menu_rule text+0x1AE0) and sqMenuMain starts sqNetAnyOkiraku or
+    // sqNetAnyTeamMelee. We only note which mode was picked.
+    void anybodyDecision(u32 r3, u32 decision)
+    {
+        (void)r3;
+        PPOM::g_block.debug.scratch[8] = decision;
+        if (!(PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS)) return;
+        if (decision == 0x1E) onlineMenuEntered(PPOM::MODE_UNRANKED);
+        else if (decision == 0x1F) onlineMenuEntered(PPOM::MODE_TEAMS);
+    }
+
+    // Brawl's "Connect to Nintendo WFC?" window (WifiCnctWnd task, sora_menu_main text+0x385C0),
+    // with its "Connected." and first-time "Choose a profile name." steps. Slippi has no such
+    // screens: PLAY ONLINE goes straight to the mode list. The main menu creates the window at
+    // four places and stores it in this+0x66C; each frame it polls the window: state
+    // (wnd+0x138) 0xC = finished, result (wnd+0x128) 0 = connected, which changes to the ONLINE
+    // page (this+0x634 = 3) and deletes the window (text+0x14FD8). Marking the new window as
+    // finished and connected skips all of it; nothing of the window is shown or run. The WFC
+    // login itself is already faked by the hooks above, so no online state is missing.
+    void skipConnectWindow(u8* wnd)
+    {
+        if (!wnd || !(PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS)) return;
+        *(u32*)(wnd + 0x128) = 0;
+        *(u32*)(wnd + 0x138) = 0xC;
+        PPOM::g_block.debug.scratch[9]++;
     }
 
     // ---------------------------------------------------------------------------------------
@@ -183,6 +225,72 @@ namespace NetMenu {
             "bctr\n\t");
     }
 
+    // ---------------------------------------------------------------------------------------
+    // sqNetAnyOkiraku (sora_scene, module 1, resident: .text 0x806BB554). Its scene-decide
+    // function (text+0x36D74) is a state machine on this+8 (jump table 0x80703B3C).
+
+    // sora_scene is resident (.text 0x806BB554), but it is loaded after the plugins, so its
+    // hooks must be module hooks (an absolute patch is overwritten by the module load). The
+    // jumps back are absolute, as for sel_char.
+
+    // State 0 (text+0x36E50) writes Brawl's Wi-Fi rules into g_GameGlobal->m_setRule (time,
+    // 2 minutes, no pause, ...). text+0x36EA0 `stw r0,0xC(r15)` is right after: put the online
+    // rules there instead (OnlineMenu::applyRules, design 4.6 / P+ competitive defaults).
+    // sqNetAnyTeamMelee's state 0 does the same at text+0x3B7E0; its text+0x3B81C
+    // `stw r26,8(r15)` is right after. Both are followed only by stores of non-volatile
+    // registers, so calling C here is safe; the function saved LR in its prologue.
+    extern "C" void pponline_afterWifiRules()
+    {
+        if (g_onlineCss) OnlineMenu::applyRules();
+    }
+    __attribute__((naked)) void afterWifiRulesAny()
+    {
+        asm volatile(
+            "stw 0, 0xC(15)\n\t"
+            "lis 12, pponline_afterWifiRules@ha\n\t"
+            "addi 12, 12, pponline_afterWifiRules@l\n\t"
+            "mtctr 12\n\t"
+            "bctrl\n\t"
+            "lis 12, 0x806F\n\t"
+            "ori 12, 12, 0x23F8\n\t"   // text+0x36EA4
+            "mtctr 12\n\t"
+            "bctr\n\t");
+    }
+    __attribute__((naked)) void afterWifiRulesTeam()
+    {
+        asm volatile(
+            "stw 26, 8(15)\n\t"
+            "lis 12, pponline_afterWifiRules@ha\n\t"
+            "addi 12, 12, pponline_afterWifiRules@l\n\t"
+            "mtctr 12\n\t"
+            "bctrl\n\t"
+            "lis 12, 0x806F\n\t"
+            "ori 12, 12, 0x6D74\n\t"   // text+0x3B820
+            "mtctr 12\n\t"
+            "bctr\n\t");
+    }
+
+    // State 0x10 (text+0x376F0) leaves the CSS for the menus: setNextSequence("sqMenuMain",
+    // 0x1C). 0x1C reopens the WITH ANYONE page with BASIC VERSUS (Unranked) highlighted, which
+    // is Slippi's "back to the online menu on the current mode" (OnMenuPrep.asm:134-162).
+    // Direct came from WITH FRIENDS: 0x1F opens the ONLINE page instead, with the cursor on the
+    // button last used. (sqNetAnyTeamMelee returns with 0x1D, TEAM BATTLE highlighted.)
+    __attribute__((naked)) void exitToOnlinePage()
+    {
+        asm volatile(
+            "li 5, 0x1c\n\t"
+            "lis 12, g_onlineReturnPage@ha\n\t"
+            "lbz 12, g_onlineReturnPage@l(12)\n\t"
+            "cmpwi 12, 0\n\t"
+            "beq 1f\n\t"
+            "mr 5, 12\n\t"
+            "1:\n\t"
+            "lis 12, 0x806F\n\t"
+            "ori 12, 12, 0x2C64\n\t"   // sora_scene text+0x37710
+            "mtctr 12\n\t"
+            "bctr\n\t");
+    }
+
     // sora_menu_main+0x2DDB8 is muProcWifiFriend's vtable slot 3 (vtable .data+0x3A48, name
     // "muProcWifiFriend" at .data+0x3A70): WITH FRIENDS = Slippi's DIRECT. Same exit as above;
     // the plugin keeps the mode, the CSS is the same Wi-Fi CSS.
@@ -209,6 +317,24 @@ namespace NetMenu {
         (void)keepFrame[0];
     }
 
+    // muProcWifi (the ONLINE page) enter, sora_menu_main text+0x1616C, picks the cursor from
+    // where the menu came from (text+0x16318..+0x16408, this+0x42). Coming back from the CSS
+    // (sqMenuMain entry 0x1F) it lands on WITH ANYONE; after Direct it must be WITH FRIENDS.
+    // Inline hook at text+0x1640C `mr r3,r30` (r3 = this): set the cursor and the r31 the
+    // function passes on to the highlight call (mod18 text+0x1D48), in the stub's saved
+    // registers (stmw r3,0xC(r1): r31 at +0x7C).
+    __attribute__((noinline)) void onlinePageCursor(u8* page)
+    {
+        volatile u32 keepFrame[2];
+        keepFrame[0] = 0;
+        if (!g_onlineFriendsCursor) return;
+        g_onlineFriendsCursor = 0;
+        u32 stubFrame = *(u32*)__builtin_frame_address(0);
+        *(u16*)(page + 0x42) = 0;
+        *(u32*)(stubFrame + 0x7C) = 0;
+        (void)keepFrame[0];
+    }
+
     void pollPendingExit() {}
 
     void install(CoreApi* api)
@@ -220,7 +346,18 @@ namespace NetMenu {
         api->sySimpleHook(0x8014b4bc, reinterpret_cast<void*>(forceFriendCode));
         api->sySimpleHook(0x8014b3b8, reinterpret_cast<void*>(forceConnection));
 
-        api->sySimpleHookRel(0x0002E4F8, reinterpret_cast<void*>(skipDirectlyToCSS), 2 /* SORA_MENU_MAIN */);
+        api->syReplaceFuncRel(0x0002E4F8, reinterpret_cast<void*>(anybodyEnter), (void**)&s_origAnybodyEnter, 2 /* SORA_MENU_MAIN */);
+        api->syInlineHookRel(0x0002E934, reinterpret_cast<void*>(anybodyDecision), 2);
+        api->syInlineHookRel(0x0002EB70, reinterpret_cast<void*>(anybodyDecision), 2);
+        // the four `stw r3,0x66C(r29)` after WifiCnctWnd's create (text+0x38530)
+        api->syInlineHookRel(0x00015288, reinterpret_cast<void*>(skipConnectWindow), 2);
+        api->syInlineHookRel(0x00015460, reinterpret_cast<void*>(skipConnectWindow), 2);
+        api->syInlineHookRel(0x0001674C, reinterpret_cast<void*>(skipConnectWindow), 2);
+        api->syInlineHookRel(0x0001694C, reinterpret_cast<void*>(skipConnectWindow), 2);
+        api->sySimpleHookRel(0x00036EA0, reinterpret_cast<void*>(afterWifiRulesAny), 1 /* SORA_SCENE */);
+        api->sySimpleHookRel(0x0003B81C, reinterpret_cast<void*>(afterWifiRulesTeam), 1);
+        api->sySimpleHookRel(0x0003770C, reinterpret_cast<void*>(exitToOnlinePage), 1);
+        api->syInlineHookRel(0x0001640C, reinterpret_cast<void*>(onlinePageCursor), 2 /* SORA_MENU_MAIN */);
         api->syInlineHookRel(0x000166B8, reinterpret_cast<void*>(friendsToAnybody), 2 /* SORA_MENU_MAIN */);
         api->syInlineHookRel(0x00016518, reinterpret_cast<void*>(friendsToAnybody), 2 /* SORA_MENU_MAIN */);
         api->syInlineHookRel(0x000168B8, reinterpret_cast<void*>(friendsToAnybody), 2 /* SORA_MENU_MAIN */);

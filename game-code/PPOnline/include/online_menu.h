@@ -7,22 +7,20 @@ class MuMsg;
 namespace OnlineMenu {
     void install(CoreApi* api);
     void tick();
-    void enter(int mode);               // PPOM::Mode
-    void setDirectCode(const char* code);
+    void enter(int mode);               // PPOM::Mode, picked on the ONLINE page
+    void applyRules();                  // sqNetAnyOkiraku start: online rules into the set rule
     void codeEntered(const char* code);  // from CodeEntry: set the code and start the search
     const char* cssLine(MuMsg* msg, u32 window, u32 line, const void* msbin, u32 caller);
-    const char* accountLine();
-
-    enum MenuChoice { MENU_NONE = 0, MENU_FRIENDS = 1, MENU_ANYONE = 2 };
 }
 
 namespace NetMenu {
-    void onlineMenuEntered(int choice);
+    void onlineMenuEntered(int mode);
 }
 
 namespace CodeEntry {
-    // Open the connect-code entry (Direct). See code_entry.cpp.
-    void open();
-    void tick();
+    // Open the connect-code entry (Direct, Teams). See code_entry.cpp.
+    void install(CoreApi* api);
+    void open(int port);
+    void tick(bool startPressed);
     bool active();
 }
