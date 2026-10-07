@@ -246,29 +246,26 @@ namespace OnlineMatch {
             return;
         }
         if (++s_discFrames == 30) {
-            // End the game through the game's own end flow: the players who left lose their last
-            // stock (one stock left, moved past the blast zone), so the match reaches its
-            // ordinary game set and tears itself down normally; state 10 (afterMatch) then goes
-            // straight back to the CSS. Leaving the scene directly (the scene manager's exit
-            // code) hangs in scMelee's teardown mid-match, and P+'s stock timer ignores
-            // stOperatorRuleMelee's remaining time. Slippi ends it without "GAME!" (an LRAS-type
-            // end); Brawl shows its "GAME!" here.
-            u32 entries = *(u32*)0x80624780;   // ftEntryManager -> ftEntry[], stride 0x244
+            // End the game through the game's own end flow: each player who left is on its last
+            // stock and dies the way a fighter's own code ends itself (ftManager::setDead, sora_melee
+            // text+0x10B604, called as Fighter does at text+0x131220: reason 5, no killer), so the
+            // match reaches its ordinary game set and tears itself down normally; state 10
+            // (afterMatch) then goes straight back to the CSS. Leaving the scene directly (the
+            // scene manager's exit code) hangs in scMelee's teardown mid-match, P+'s stock timer
+            // ignores stOperatorRuleMelee's remaining time, and a fighter moved past the blast
+            // zone while standing is put back on the ground. Slippi ends it without "GAME!" (an
+            // LRAS-type end); Brawl shows its "GAME!" here.
+            typedef void (*SetDeadFn)(u32 mgr, int entryId, int reason, int killer);
+            u32 mgr = *(u32*)0x80B87C28;         // g_ftManager
+            u32 entries = *(u32*)0x80624780;     // ftEntryManager -> ftEntry[], stride 0x244
             for (int port = 0; port < s_matchPlayers && port < 4; port++) {
-                if (port == s_matchLocalPort || !isPtr(entries)) continue;
+                if (port == s_matchLocalPort || !isPtr(entries) || !isPtr(mgr)) continue;
                 u32 entry = entries + port * 0x244;
                 u32 owner = *(u32*)(entry + 0x28);
                 u32 data = isPtr(owner) ? *(u32*)owner : 0;
-                if (isPtr(data)) *(s32*)(data + 0x34) = 1;   // stocks
-                u32 inst = *(u8*)(entry + 0x0A) & 3;
-                u32 fighter = *(u32*)(entry + 0x34 + 8 * inst);
-                u32 acc = isPtr(fighter) ? *(u32*)(fighter + 0x60) : 0;
-                u32 en = isPtr(acc) ? *(u32*)(acc + 0xD8) : 0;
-                u32 posture = isPtr(en) ? *(u32*)(en + 0x0C) : 0;
-                if (isPtr(posture)) {
-                    *(float*)(posture + 0x0C) = 100000.0f;
-                    *(float*)(posture + 0x10) = 100000.0f;
-                }
+                if (!isPtr(data)) continue;
+                *(s32*)(data + 0x34) = 1;        // last stock
+                ((SetDeadFn)0x80816018)(mgr, *(int*)(entry + 0x04), 5, -1);
             }
             PPOM::g_block.debug.scratch[10] |= 0x20000;
         }
