@@ -18,6 +18,24 @@ Measurement caveat: all numbers come from two instances on one 8-core PC, with a
 
 The full JSON is in `run/qa/scorecard-rollback-fixes.json` (local).
 
+### Scorecard, dual core
+
+Same command with `--cpu-thread on`, HEAD `7ff324a940`. The JSON is in `run/qa/scorecard-rollback-fixes-dualcore.json` (local).
+
+| Preset | Result |
+|---|---|
+| lan | Reached the match. No freeze, no stall. 44 / 47 rollbacks, desyncs 0. Game FPS 59.0 / 57.9. State compare: hashes differ, `checksum_fields_match: true` (see below). |
+| typical | Reached the match. No freeze. 199 / 223 rollbacks, desyncs 0. Game FPS 57.8 / 57.0. State compare: match. |
+| bad_wifi | Reached the match. No freeze. 292 / 321 rollbacks (645 / 679 frames resimulated), desyncs 0. Game FPS 58.9 / 58.6. State compare: match. |
+
+Before the two dual-core fixes, the first rollback in dual core either crashed (`memmove` with a negative size in `Fifo::SyncGPU`) or each save took about 100 ms, giving 5.8-7.7 FPS. After: save 2.4-4.3 ms, load 2.0-2.4 ms, about 58 FPS.
+
+The lan state-compare mismatch is in the heap-range hash only; every checksum field matches. The scratch driver's chunk diff (MEM1/MEM2 in 64 KiB chunks, at a frame both peers have confirmed, typical preset, in a match) shows where peers still differ:
+- single core: 4 chunks, 0x94320000, 0x94330000, 0x94380000 and 0x94390000;
+- dual core: 1 chunk, 0x94390000.
+
+These addresses lie above the 64 MB of MEM2 that the Brawl heaps use (P+'s extra area, not a game heap). The per-frame fighter checksums matched on all 1,530 compared frames. They are candidates to exclude from the gameplay region set rather than desyncs.
+
 ### Other checks (scratch driver, two instances, CSS → SSS → match with random input)
 
 - **Desync.** Every per-frame checksum (frame counter, and per port damage, stocks, active-fighter X/Y and status) is identical on both peers on every confirmed frame. Pads are identical too.
@@ -57,7 +75,10 @@ The full JSON is in `run/qa/scorecard-rollback-fixes.json` (local).
 7. **Save and load at different points — real, fixed.**
    - The save happened before the frame-counter store (`6ac8dd0e15`).
    - The save now happens at the loop top, the same instruction boundary as loads, so the CoreTiming position matches (`1a46ce8b61`).
-8. **Dual core.** The default is restored to true (`041f4cf2a5`). Dual core is not yet tested under rollback (next).
+8. **Dual core — default restored and working under rollback.** The default is true again (`041f4cf2a5`). Two fixes were needed (single core is never forced):
+   - `d8359cde64`: the GPU thread is synced (`Fifo::SyncGPU`) before every rollback save and load, so the video DoState doesn't run against a moving FIFO. Before: a crash on the first rollback.
+   - `7ff324a940`: `AsyncRequests::QueueEvent` wakes the GPU thread. In deterministic dual core the GPU loop slept until the next timeout, so each save waited about 100 ms. Before: 5.8-7.7 FPS; after: about 58 FPS.
+   - Result: the dual-core scorecard above, with desyncs 0 on all presets.
 9. **Checksum — fixed (`242af80c0e`).** GekkoNet now checksums verified fields: the frame counter, plus per port the active instance, damage, stocks, X/Y and status kind. The parts are recorded per frame for the harness.
 
 ## How the remaining desync was found and fixed
@@ -82,9 +103,9 @@ None of them reach the gameplay checksum.
 
 ## Next steps
 
-1. Dual core under rollback: scorecard with `--cpu-thread on`. If it diverges, sync the GPU thread at the frame hook.
-2. Audio during resimulation. AI/DSP output plays the resimulated frames at unthrottled speed. Mute it while resimulating. XFB presentation of resimulated fields can flash too (Null video hides this).
-3. Gameplay-only rollback (user decision): restrict save/restore to a region set. Inputs to that work:
+1. Audio during resimulation. AI/DSP output plays the resimulated frames at unthrottled speed. Mute it while resimulating. XFB presentation of resimulated fields can flash too (Null video hides this).
+2. Gameplay-only rollback (user decision): restrict save/restore to a region set. Inputs to that work:
    - memory that legitimately differs between peers: PAD/SI library buffers 0x804DE3B0-0x804DE4B0, 0x804F67B0, 0x80584000;
    - OS thread contexts and timestamps;
-   - the CPU and timing state that must still be restored: registers, downcount, exceptions, CoreTiming.
+   - the CPU and timing state that must still be restored: registers, downcount, exceptions, CoreTiming;
+   - the 0x9432xxxx-0x9439xxxx chunks that differ between peers outside any game heap (dual-core section above).
