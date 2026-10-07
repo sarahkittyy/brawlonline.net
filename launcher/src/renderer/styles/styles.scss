@@ -1,5 +1,4 @@
 @use "variables";
-@use "fonts";
 @use "scrollbar";
 
 html,
@@ -11,9 +10,9 @@ body,
 }
 
 body {
-  font-family: Rubik, Helvetica, Arial, sans-serif;
+  font-family: var(--font-body, system-ui, sans-serif);
   color: var(--off-white);
-  background-color: #1B0B28,
+  background-color: var(--surface-0);
 }
 
 *,
@@ -42,7 +41,7 @@ h3,
 h4,
 h5,
 h6 {
-  font-family: "Maven Pro", Helvetica, Arial, sans-serif;
+  font-family: var(--font-title, system-ui, sans-serif);
   font-weight: 400;
 }
 
