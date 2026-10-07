@@ -177,6 +177,7 @@ Tools (`harness/tools/`):
 
 - `determinism.py record|compare|matrix`: offline determinism with identical inputs (see `docs/determinism-findings.md`).
 - `qa_reachability.py`: can a netplay player reach the Code Menu, Debug Mode, Giga Bowser/Wario-Man or non-Versus modes?
+- `gameplay_rollback.py prep|simstart|diff|play|replay|synctest`: the gameplay-only rollback spike (independent menu histories, start-of-match memory diffs, lockstep A/B play with sync variants, single-instance region save/restore sync tests). See `docs/gameplay-rollback-feasibility.md`. Needs numpy. `gprb_late_divergence.py` analyses the late A/B divergence; `gprb-sets/` holds region-set JSON files.
 
 Two *offline* boots are bit-identical (whole MEM1 and MEM2) in single core only if the inputs are submitted at identical emulation points and both boots read the same RTC second; Dolphin's offline custom RTC still follows host seconds, so check the RNG seeds first. Dual core diverges in render-side heap state and occasionally in gameplay. Hash specific game-state ranges (`brawl.gameplay_ranges`, player state), not all of memory. Details: `docs/determinism-findings.md`.
 
