@@ -1,15 +1,44 @@
+# Unranked: ONLINE page -> WITH ANYONE -> BASIC VERSUS -> CSS. START does nothing until a
+# character is picked, then searches; Z cancels; an error from Dolphin shows in red and Z clears
+# it; hold B goes back to the WITH ANYONE page with BASIC VERSUS highlighted.
 @to_online.txt
 tap DRIGHT 4
 wait 30
-shot {out}/06-online-unranked.png
+shot {out}/11-online-unranked.png
+tap A
+wait 90
+shot {out}/12-anyone-basic.png
 tap A
 wait 400
 scene
-shot {out}/07-css-unranked.png
+tap START
+wait 20
+shot {out}/13-css-unranked.png
+stick up 30
+wait 5
+tap A
+wait 30
+shot {out}/14-css-unranked-selected.png
 tap START
 wait 30
-shot {out}/08-css-unranked-searching.png
+shot {out}/15-css-unranked-searching.png
 mbx-dump
-mbx-serve 300 4 Opponent OPPO#123
+mbx-serve 300 3 Opponent OPPO#123
 wait 20
-shot {out}/09-css-unranked-found.png
+shot {out}/16-css-unranked-connecting.png
+tap Z
+wait 20
+shot {out}/17-css-unranked-cancelled.png
+tap START
+wait 30
+mbx-serve 300 5 - - Failed to connect to mm server
+wait 20
+shot {out}/18-css-unranked-error.png
+tap Z
+wait 20
+shot {out}/19-css-unranked-error-cleared.png
+hold B 120
+until muMenuMain 600
+wait 120
+shot {out}/20-unranked-back-anyone.png
+mbx-dump

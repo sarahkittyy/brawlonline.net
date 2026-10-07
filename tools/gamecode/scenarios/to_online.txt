@@ -1,6 +1,7 @@
-# Boot (P+ boots to the Versus CSS), hold B back to the main menu, answer the account request,
-# open PLAY ONLINE, accept Brawl's connect dialog (WFC is faked), and set the first-time
-# Wi-Fi profile name ("B"), ending on the ONLINE page with WITH FRIENDS (DIRECT) highlighted.
+# Boot (P+ boots to the Versus CSS), hold B back to the main menu, answer the menu's mailbox
+# requests (CLEANUP_CONNECTION, GET_ONLINE_STATUS), and open PLAY ONLINE. Brawl's connect
+# dialog and first-time profile-name keypad are skipped, so this lands on the ONLINE page at
+# once, with WITH FRIENDS (DIRECT) highlighted.
 until scSelctCharacter 3000
 wait 60
 hold B 60
@@ -14,21 +15,4 @@ wait 40
 shot {out}/01-main-play-online.png
 tap A
 wait 90
-shot {out}/02-connect-dialog.png
-tap DLEFT 4
-wait 20
-tap A
-wait 300
-shot {out}/03-connected.png
-tap A
-wait 150
-shot {out}/04-profile-name-keypad.png
-tap DRIGHT 4
-wait 10
-tap A
-wait 20
-tap START
-wait 20
-tap A
-wait 250
-shot {out}/05-online-direct.png
+shot {out}/02-online-direct.png

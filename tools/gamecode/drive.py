@@ -16,10 +16,11 @@ Steps (each one argument):
     u32 ADDR                 read a u32
     w32 ADDR VALUE           write a u32 (debug only)
     port N                   which controller port the following input steps use (default 0)
-    mbx-serve MAXFRAMES [STATE [NAME [CODE]]]
+    mbx-serve MAXFRAMES [STATE [NAME [CODE [ERROR TEXT...]]]]
                              PPOM mailbox: wait up to MAXFRAMES for game requests and answer
                              each (FIND_OPPONENT -> GET_MATCH_STATE with mmState STATE, default 4;
                              GET_ONLINE_STATUS -> logged in). Stops after the first FIND_OPPONENT.
+                             CODE "-" = echo the requested code; ERROR TEXT fills errorText (STATE 5).
     mbx-dump                 print the mailbox state
 """
 
@@ -124,7 +125,8 @@ def run(c: HarnessClient, steps: list[str], port: int = 0, out: str = "run/artif
             mx = int(a[1])
             state = int(a[2]) if len(a) > 2 else 4
             name = a[3] if len(a) > 3 else "Opponent"
-            code = a[4] if len(a) > 4 else ""
+            code = a[4] if len(a) > 4 and a[4] != "-" else ""
+            error = " ".join(a[5:])
             start = polls(c)
             done = False
             while not done and polls(c) - start <= mx:
@@ -136,7 +138,7 @@ def run(c: HarnessClient, steps: list[str], port: int = 0, out: str = "run/artif
                     if cmd == 0xB4:
                         want = ppom.from_u16s(pl[4:4 + 2 * ppom.CODE_LEN])
                         ppom.write_response(c, b, seq, 0xB3, ppom.match_state_payload(
-                            state, name, code or want or "OPPO#123", role=1))
+                            state, name, code or want or "OPPO#123", error=error, role=1))
                         print(f"  answered GET_MATCH_STATE mmState={state} peer={name} ({code or want})")
                         done = True
                     elif cmd == 0xB9:

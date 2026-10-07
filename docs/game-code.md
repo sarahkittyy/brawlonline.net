@@ -8,7 +8,9 @@ Paths:
 - Scripts: `tools/gamecode/` and `tools/sdcard/`.
 - Screenshots: `run/artifacts/game-code/` (local only, `run/` is gitignored).
 
-Everything here was verified on NTSC-U Rev 1 + P+ v3.2, booting the P+ Offline Launcher with headless D3D11 in dual core, with the Dolphin build `run/bin/menu-7b2227fd5e` (a frozen copy of `dolphin/build/release/x64/Binaries` at `7b2227fd5e`). The Netplay Launcher also loads the plugin and shows the relabelled main menu (`screens/netplay-launcher-main.png`).
+Everything here was verified on NTSC-U Rev 1 + P+ v3.2, booting the P+ Offline Launcher with headless D3D11 in dual core. The menu screenshots (§6) come from `run/bin/menu-7b2227fd5e` (a frozen copy of `dolphin/build/release/x64/Binaries` at `7b2227fd5e`, no GameBridge, so `drive.py mbx-serve` plays Dolphin's part). `harness/tests/test_online_game.py` passes (4/4) with `run/bin/menu3-42b2129395` (GameBridge, real servers). The Netplay Launcher also loads the plugin and shows the relabelled main menu (`screens/netplay-launcher-main.png`).
+
+**Do not use `rollback-fixes` `d36794a6e1` for menu work.** With that build (`run/bin/menu2-d36794a6e1`) Dolphin's CPU thread blocked about 20 frames after the code keypad opened, in 2 runs of 3 (no CPU use, no presents, the harness times out; once the harness stopped answering too). The same plugin and inputs passed 6 of 6 on `7b2227fd5e` and passed the tests on `42b2129395`.
 
 ---
 
@@ -110,8 +112,8 @@ The writer was checked against an independent implementation (pyfatfs, in a scra
 | Tool | Use |
 |---|---|
 | `ppboot.py run --plugin X.rel [--boot netplay] STEPS...` | Boot an isolated instance (muted, headless D3D11, dual core) with the plugin on its SD, run the steps, quit, and delete the dir. On failure the dir is kept with `sd.raw` removed. `boot`/`stop` cover interactive work. |
-| `drive.py --port P STEPS...` | The step language: `until SCENE`, `tap BTN N`, `hold`, `wait`, `shot`, `mem`, `@scenario.txt`. Also `mbx-serve` / `mbx-dump`, which act as the Dolphin side of the mailbox. |
-| `scenarios/to_online.txt`, `online_unranked.txt`, `online_direct.txt` | The verification runs that produced the screenshots below. |
+| `drive.py --port P STEPS...` | The step language: `until SCENE`, `tap BTN N`, `hold`, `wait`, `shot`, `mem`, `@scenario.txt`. Also `mbx-serve` / `mbx-dump`, which act as the Dolphin side of the mailbox (`mbx-serve MAX STATE NAME CODE ERROR TEXT...`; CODE `-` echoes the requested code). |
+| `scenarios/to_online.txt`, `online_direct.txt`, `online_unranked.txt`, `online_teams.txt` | The verification runs that produced the screenshots in §6 (`ppboot.py run --plugin game-code/PPOnline/PPOnline.rel @online_direct.txt`). |
 | `ppom.py --port P find\|dump\|log\|cfg\|serve` | Finds the PPOM block and dumps the mailbox and debug counters. `log` shows the last 32 `MuMsg::printIndex`/`printf`/`create` calls with their callers, which is how message ids were found. |
 | `modules.py --port P` | Loaded RELs with live addresses, from the `OSModuleInfo` list at `0x800030C8`. |
 | `reltool.py info\|dis\|relocs\|diff\|check\|dol` | REL/DOL inspection. Optional capstone for disassembly, installed with `pip --target run/scratch/gc/pylib`. |
@@ -130,14 +132,22 @@ The harness accepts one client at a time. That is why the mailbox server is a `d
 | `gfPadSystem::updateSystem` | `0x8002A210` | replace | Per-frame tick: online menu state, mailbox polling, code entry |
 | `MuMsg::beginPrint`, `MuMsg::create` | `0x800B8EE8`, `0x800B8930` | replace | Debug log of `printf` callers and message objects (`CFG_LOG`) |
 | WFC/Wiimmfi login bypass | `0x8014B5F8/5FC`, `0x8014B4BC`, `0x8014B3B8`, `0x80033B48`, `0x800CCF70` | simple | Ported from Gen 1 `NetMenu`: logged in, friend code, connection, Mii render, matchmaking error |
-| muProcWifiAnybody page enter | `sora_menu_main+0x2E4F8` | simple | Gen 1's `SkipDirectlyToCSS`: leave muMenuMain with decision `0x1E`, which lands in `sqNetAnyOkiraku` → the Wi-Fi CSS |
+| WifiCnctWnd created | `sora_menu_main+0x15288`, `+0x15460`, `+0x1674C`, `+0x1694C` | inline | Mark Brawl's connect window (connect dialog, "Connected.", first-time profile name) finished and connected (`wnd+0x138 = 0xC`, `+0x128 = 0`) as soon as the main menu creates it; the menu then opens the ONLINE page |
+| muProcWifiAnybody page enter | `sora_menu_main+0x2E4F8` | replace | After WITH FRIENDS: Gen 1's `SkipDirectlyToCSS` (decision `0x1E` → `sqNetAnyOkiraku`), mode Direct. After WITH ANYONE: the original page (BASIC VERSUS / TEAM BATTLE) |
+| muProcWifiAnybody A press | `sora_menu_main+0x2E934`, `+0x2EB70` | inline | The decision picked: `0x1E` BASIC VERSUS = Unranked (`sqNetAnyOkiraku`), `0x1F` TEAM BATTLE = Teams (`sqNetAnyTeamMelee`) |
 | muProcWifi A press | `sora_menu_main+0x168B8` (and `+0x166B8`, `+0x16518`) | inline | Turn page id `0x1A` (friends) into `0x1B` (anybody) and remember that FRIENDS was picked |
+| muProcWifi enter, cursor | `sora_menu_main+0x1640C` | inline | Back from a Direct CSS: cursor on WITH FRIENDS (`this+0x42` and the stub's saved r31) |
+| Wi-Fi rules written | `sora_scene+0x36EA0` (`sqNetAnyOkiraku` state 0), `+0x3B81C` (`sqNetAnyTeamMelee`) | simple | Replace the Wi-Fi rules with the online rules (§6, rules) |
+| Leave the CSS for the menus | `sora_scene+0x3770C` | simple | `setNextSequence("sqMenuMain", 0x1C)`: `0x1F` after Direct (ONLINE page), else unchanged (`0x1C` = WITH ANYONE page, BASIC highlighted; Teams' own exit uses `0x1D`, TEAM highlighted) |
+| CSS keypad update call | `sel_char+0x18F30` | simple | Our wrapper of `MuSelctChrNameEntry::update` for the connect-code keypad (§7) |
 | Wi-Fi CSS countdown, timer, network error, disconnect panel | `sel_char+0x4220`, `+0x56A8`, `+0x53A4`, `+0x4A70` | simple | Ported from Gen 1. The disconnect-panel hook is now one naked hook, without Gen 1's `SaveRegs` |
 | Wi-Fi SSS countdown, network error | `sel_stage+0x141C`, `+0x30F0` | simple | Ported from Gen 1; not exercised yet |
 
 Notes:
 - P+ v3.2's `sora_menu_main.rel` is vanilla's with the same `.text` size. Its 152 non-relocation word differences are confined to a few P+ edits (`reltool.py diff`), so Gen 1's offsets hold.
 - P+ keeps `sel_char` (`.text 0x806828C4`), `sel_stage` (`0x806B0984`), `sora_menu_name` (`0x8067406C`), `sora_scene` (`0x806BB554`) and others resident. That is why Gen 1's absolute jump-back addresses are valid on P+.
+- **Resident modules still need module hooks.** They are loaded after the plugins, so an absolute `sySimpleHook` on their code is overwritten when the module loads (checked: the patch log shows it, memory has the original).
+- **Never patch an instruction that carries a relocation against a module loaded later.** The `bl MuSelctChrNameEntry::update` at `sel_char+0x18F34` is relocated against module 16. The loader applied that relocation after Syriinge's patch and kept the opcode bits, which turned the patch into `b update` (no link) and hung the game. The hook now sits on the `addi` before it.
 - `sora_menu_main` is loaded into MenuInstance at `0x81164C00` while in the menus.
 - **Gen 1 bug, not ported.** `turnOffSSSTimer` is installed on `sel_char+0x35A4`, which is a `blr`, but jumps into `sel_stage+0x35A8`. It was meant for `sel_stage+0x35A4`.
 
@@ -177,32 +187,45 @@ The game only touches the mailbox outside sessions: menus and the CSS before plu
 
 ## 6. Screens (Slippi → ours)
 
-Screenshots are in `run/artifacts/game-code/screens/` from the last runs of `online_unranked.txt` and `online_direct.txt`. Vanilla P+ references are in `explore/`; the step-by-step discovery shots are in `wifi/`.
+Screenshots are in `run/artifacts/game-code/screens/`, from the last runs of `online_direct.txt` (01-10), `online_unranked.txt` (11-20) and `online_teams.txt` (21-25). Vanilla P+ references are in `explore/`; the step-by-step discovery shots are in `wifi/`. Slippi's strings below come from its sources (`refs/slippi-ssbm-asm`, `slippi-ssbm-c`, Dolphin) and from its `SdMenu.usd` / `SdSlChr.usd` patches.
 
 | # (design §5.4) | Slippi | What you see now | Status | Screenshot |
 |---|---|---|---|---|
-| 0 | hello world | Main-menu PLAY ONLINE description replaced through `MuMsg` in the game's font | done | `hello/main-online-hover.png` |
-| 1 | Online menu entry | Main menu: PLAY ONLINE description = "Play online: Ranked, Unranked, Direct, Teams. (Sarah, SARA#001)". The account line comes from mailbox `0xB9`. | done | `screens/01-main-play-online.png` |
-| 1 | (no Slippi equivalent) | Brawl's connect dialog relabelled "Connect to online play?" (Yes/No), then "Connected." The WFC login is faked, so nothing goes online and no error is shown. | works, **not Slippi UX yet** | `02-connect-dialog.png`, `03-connected.png` |
-| 1 | (no Slippi equivalent) | First-time Wi-Fi "Choose a profile name." keypad. It appears once per save. | still shown | `04-profile-name-keypad.png` |
-| 1 | Online submenu | ONLINE page: WITH FRIENDS = DIRECT, WITH ANYONE = UNRANKED. Button art unchanged, descriptions relabelled. | done | `05-online-direct.png`, `06-online-unranked.png` |
-| 2 | CSS with status | Brawl's Wi-Fi CSS (`sqNetAnyOkiraku`/`scSelctCharacter`), no countdown, no network-error dialog, Brawl's own "Seeking..." panels. Status in the header rule line: "Unranked: START to search" → "Searching for opponent" → "Playing: Opponent". | done (prototype) | `07-css-unranked.png`, `08-…-searching.png`, `09-…-found.png` |
-| 3 | Connect-code entry | Direct CSS: "Direct: START to enter code". START opens Brawl's name keypad on the CSS; type letters, then digits; OK → "Searching for EG#123" → "Playing: Friend". | prototype | `10-css-direct.png` … `15-direct-found.png` |
-| 4-10 | Opponent on CSS, stage choice, ranked setup, rank, results, disconnect, chat | not started | — | — |
+| 1 | 1P menu "Online Play": "Compete against online opponents." | Main menu PLAY ONLINE with Slippi's description. The account is not printed: Slippi's online menu does not show it. | done | `01-main-play-online.png` |
+| 1 | (no Slippi equivalent) | Brawl's connect dialog, "Connected." and the first-time "Choose a profile name." keypad are skipped: PLAY ONLINE opens the ONLINE page at once. | done | `02-online-direct.png` |
+| 1 | Online submenu: Direct "Play a specific person.", Unranked "Play unranked matches.", Teams "Play teams games." | ONLINE page: WITH FRIENDS = Direct ("Play a specific person."), WITH ANYONE ("Compete against online opponents.") opens Brawl's page with BASIC VERSUS = Unranked and TEAM BATTLE = Teams, with Slippi's descriptions. Button art unchanged. | done | `02`, `11`, `12`, `21` |
+| 2 | CSS: "Select your character" → "Press START to search / enter code" → "Searching for opponent / ABCD#123" → "Connecting to …" → "Playing: …"; errors in red; Z cancels, hold Z disconnects | Brawl's Wi-Fi CSS with P+'s competitive rules. Header art hidden; one status line with Slippi's strings (below). START works once a character is picked. | done | `03`-`09`, `13`-`19`, `22`, `24` |
+| 3 | Connect-code entry: name-tag keyboard in code mode, 8 characters with '#', START confirms | Brawl's name keypad in code mode: 8 characters, alphabet and digits only, upper case, '#' key, unusable keys refused, START confirms, the name tag is untouched (§7). | done; recent codes not done | `05`, `06`, `23` |
+| 1 | Leaving: hold B on the CSS → online menu, cursor on the mode; CLEANUP_CONNECTION on menu load | Brawl's hold B (or LEAVE) → the page the mode was picked on, cursor on it; `0xBA` on every menu load. | done | `10`, `20`, `25` |
+| 5 | Stage: Unranked random, Direct random then loser picks, Teams random then P1 picks | Rules are set; the stage is picked by the session, which does not exist in the game yet (see below). | open | — |
+| 4, 6-10 | Opponent on CSS, ranked setup, rank, results, in-match disconnect, chat | not started | — | — |
 
-Known gaps on these screens:
-- **CSS header.** The art says "HOME-RUN CONTEST" next to LEAVE, and the rule line shows a "2" numeral. Both are art from the Wi-Fi mode: the mode title is a texture, and the numeral is the rule count. We print our status after the numeral. Fix: load P+'s competitive ruleset into the Wi-Fi rules (Gen 1's `Get/SetRulesFromCSSBoot`, not ported yet), so it reads "4-stock" and the line becomes ours.
-- **Status line style.** `MuMsg::printf` does not apply msbin style tags, so we set the colour to the original line's black with `setFontColor`. Longer texts are clipped by the fixed, right-aligned window, so the strings are kept short.
+**CSS status line.** The Brawl CSS has one text window in its header (the rule line). Slippi shows a mode header, three status lines and a hint; we show the one line that carries the state, in Slippi's words (`LoadCSSText.asm:95-157`):
+- idle: "Select your character", then "Press START to search" (Unranked) or "Press START to enter code" (Direct, Teams);
+- "Searching for opponent" / "Searching for ADGJ#123", "Connecting to opponent" / "Connecting to ADGJ#123", "Playing: <name>";
+- an error: the text from Dolphin or the server, in Slippi's red (`FF0000`), e.g. "Teams is not supported yet. Only Direct works for now." (`24-css-teams-error.png`).
+- Not shown: "<Mode> Mode", the hint line ("Press Z to cancel", "Hold Z to disconnect", "Press Z to clear error") and "Use D-Pad to Chat". The window narrows its font to fit, so long errors stay readable (54 characters in `24`); Slippi's 120-character errors would be very narrow.
+
+**CSS header art (item 1).** "HOME-RUN CONTEST" is the Wi-Fi mode title texture `MenSelchrTitleW` (muSelCharTask+0x418) and the "2" is the rule numeral `MenSelchrRnum1/2` (+0x158/+0x15C). Both are images with no text slot, so they are hidden every frame on the online CSS (`nwSMSetVisibility`, `0x80043D20`). The status line keeps the rule line's own window.
+
+**Input on the online CSS (Slippi `HandleInputsOnCSS.asm`).**
+- START: lock in and search (Unranked) or open the code keypad (Direct, Teams), only once a character is picked. START is removed from all of the game's pad statuses on the online CSS, so Brawl's own "READY TO FIGHT" start never runs.
+- Z: cancels a search or clears an error (`0xBA`, back sound); hold Z 48 frames (`DISCONNECT_HOLD_DELAY 0x30`) disconnects when connected. Error sound when an error arrives, back sound when a connection ends.
+- Buttons come from the pad system's own pressed/held fields (`gfPadSystem+0x244`), so short presses are not missed when a game frame spans several pad reads.
+- B: Brawl's own. A press takes the coin back; holding B leaves the CSS (Slippi keeps Melee's hold B, unblocked in every state). LEAVE does the same. The menus load with `0xBA`, as Slippi's `OnMenuLoad.asm` does, and reopen where the mode was picked: WITH ANYONE with BASIC VERSUS or TEAM BATTLE highlighted, or the ONLINE page with WITH FRIENDS highlighted (`sqMenuMain` entry `0x1F` plus the cursor hook).
+- Not done: Slippi blocks A/B on the character while locked in (`PreventAPress/PreventBPressCharUnselect.asm`); ours still lets the coin move while searching.
+
+**Rules (item 2).** Slippi uses one fixed ruleset in every online mode (`EXI_DeviceSlippi.cpp:2114-2133`): 4 stocks, 8 minutes, items off, real pause only in Direct. P+ v3.2's competitive defaults are its codeset's "Default Settings Modifier" (`RSBE01.txt`, `NETPLAY.txt`), which writes the set rule `0x9017F360 = 00 00 01 00 04 00 0A 00 08 01 01 00`: stock, 4 stocks, damage 1.0, 8-minute stock time limit (P+ uses `stockTimeMinutes` as the stock timer, `Rules.asm`), team attack on, pause on. Items off is item frequency 0 in the menu record (`getGlobalRecordMenuDatap()[0]`, what the ITEM screen edits). The plugin writes these right after `sqNetAnyOkiraku`/`sqNetAnyTeamMelee` write Brawl's Wi-Fi rules (2-minute time, no pause), sets pause on for Direct only, and puts the player's own set rule and item frequency back when the menus load.
+
+**Stage choice (item 2).** Slippi's game picks no stage on the CSS for game 1 in any mode: Unranked, Direct and Teams all lock in with "random", and the stage comes from the server's `stages` list (Dolphin's fallback is FoD, PS, YS, DL, BF, FD), drawn without repeats. After a game, Unranked stays random, Direct's loser picks on the SSS (a draw: both pick), Teams' port-1 player picks, and Ranked uses its strike screen (`HandleInputsOnCSS.asm:160-163, 259-307`, `main.asm:452-491, 757-764`, `EXI_DeviceSlippi.cpp:2179-2186, 2407-2418, 2746-2764`). In our game the CSS never leaves for Brawl's SSS on its own (START is ours), so game 1 is "random" as on Slippi. The pick itself belongs to the session: the server's `stages` list in `Online::Match` (design §5.5), drawn from P+'s legal list. **P+ v3.2's own legal list** is its random-stage switch "Default" preset (`/Project+/pf/stage/switch/Switch00.rss`, identical to the netplay `SwitchFF.rss`): Battlefield, Final Destination, Dream Land, Pokémon Stadium 2, Smashville, Yoshi's Island, Fountain of Dreams, Green Hill Zone, Wario Land, Frigate Husk, Temple of Time, Metal Cavern, Bowser's Castle, Delfino's Secret, Luigi's Mansion (15 on; Yoshi's Story, Castle Siege, Sky Sanctuary Zone, Golden Temple, Ceres Space Colony and Distant Planet listed but off). The other presets (PMBR, 2023/2024 Proposed, Midwest, Australia, Japan) are in `Switch01-06.rss`. Loser's pick on Brawl's SSS for Direct game 2+ needs the results → CSS flow (screen 8), which does not exist yet.
+
+**Teams (item 7).** Teams follows the design's mapping (TEAM BATTLE on the WITH ANYONE page) and uses the same code keypad as Direct. Slippi has no "not supported yet" behaviour: unavailable options are only locked and skipped (`HandleOnlineLockedOptions.asm`), and server refusals are shown as errors. Our server refuses Teams, so the option stays and the server's text shows in red (`24-css-teams-error.png`). The Teams code help text (Slippi: "Enter any code to start a lobby...") has no place on our screen.
+
+Other notes:
+- **Status line style.** `MuMsg::printf` does not apply msbin style tags, so we set the colour ourselves with `setFontColor`.
 - **Do not print a lone `" "` into the CSS rule window.** It froze the display: presents stopped while the game kept running. This was found by bisecting with `ppom.py cfg`.
 - **WITH FRIENDS must not open Brawl's friend page.** Leaving muMenuMain from inside that page froze the display the same way, so the A-press hook reroutes it to the Anybody path instead.
-- **Leaving the online CSS is not handled yet.** Holding B with no token does nothing; LEAVE was not tested. Gen 1's `ExitWifiCSSReturnsToDirectOrQuickplayScreen` (`sora_scene+0x3770C/0x37708`) is the starting point.
-- **Description strings.** Mode names and order follow Slippi (Online.s). Slippi's exact description strings live in its patched Melee menu files, which are not in `refs/`. Ours are placeholders to replace verbatim once someone extracts them from a Slippi ISO patch.
-
-**Ranked and Teams placement.**
-- P+'s ONLINE page has two buttons whose labels are art, so we can't add a third button without new art.
-- WITH ANYONE in vanilla Brawl opens a page with BASIC VERSUS and TEAM BATTLE (`wifi/b1-anyone.png`). We currently skip that page so that WITH ANYONE = UNRANKED.
-- **Proposal for P4:** keep that page. BASIC VERSUS = UNRANKED, TEAM BATTLE = TEAMS. RANKED goes on the same page as a third option once a reusable button panel is identified (the vanilla page layout may have hidden slots). Until then RANKED is listed in the menu text only, like Slippi's locked items.
-- **This needs the user's decision.** The alternative (one button toggling Unranked/Ranked) would be a new flow.
+- **Ranked.** There is no third button without new art; Ranked stays out of the menus until the user decides where it goes (P4).
 
 ---
 
@@ -233,36 +256,27 @@ Static research (sub-agent) plus live checks. Scratch notes are in `run/scratch/
 - **The friend-code pad** (`sora_menu_friend_list`, id 14, not resident) is numeric-only, 12 digits, and does not use this widget. It is not usable for codes.
 - **Don't reuse Vs > Names** (`muNameTask`): its OK writes the save file's name list.
 
-**Prototype: Direct's START opens it from the CSS.** This mirrors Slippi, which opens Melee's name-tag keyboard from the CSS.
-- The CSS opens "New entry" with `sel_char+0x18E1C`: `area+0x400 = area+0x1DC`, then `helper(area+0x370).open(NULL, NULL, 5)`. It then sets the hand to mode 8 with `sel_char+0x1A348`.
-- `code_entry.cpp` does the same two calls, but with `open(NULL, ourBuffer, 7)`. It re-asks for mode 8 for up to 30 frames, because the hand sometimes refuses right after START.
-- It reads our buffer each frame. When the keypad closes, it converts full-width text to ASCII and inserts `#` between the letters and digits ("EG123" → "EG#123"), then starts the search.
-- Verified: `11-direct-code-keypad.png` → `13-direct-code-typed.png` → `14-direct-searching.png`. The mailbox received `FIND_OPPONENT mode=direct code='EG#123'`.
+**Connect-code mode (`code_entry.cpp`).** Slippi opens Melee's name-tag keyboard from the CSS in "connect code mode" (`TextEntryScreen/*`). We open Brawl's keypad the way the CSS opens it for a new name tag:
+- The CSS's "New entry" is `sel_char+0x18E1C`: `area+0x400 = area+0x1DC`, then `helper(area+0x370).open(NULL, NULL, 5)`, then the hand goes to mode 8 with `sel_char+0x1A348`. `code_entry.cpp` makes the same calls with `open(NULL, ourBuffer, 8)`. It re-asks for mode 8 for up to 30 frames, because the hand sometimes refuses right after START.
+- **8 characters** with '#', as Slippi (`Allow8Characters.asm`). The text field's font narrows to fit (`MuMsg::setFontWidthModeAuto`); the underline animation only has 5 positions.
+- **Pages:** alphabet and digits only (`helper+0x24` page list = {2, 3}, `+0x38` count = 2, `+0x3C` current), as Slippi forces the English layout. Restored on close.
+- **Keys:** the key table (`0x8067BEB0`, shared by every keypad) gets upper-case strings for the alphabet keys and "＃" on the symbols key while the keypad is ours, restored on close. The labels are the game's textures and stay as they are, so the '#' key is labelled "@()~;". The keys that cannot be part of a code (`!?&%$`, `・,./~`, `-+×=`) are refused with the error sound.
+- **Buttons:** START confirms (Slippi: "Start = A on Confirm"); Confirm with an empty field plays the error sound and stays (`OnConfirmButtonHandler.asm:30-42`); B deletes, and on an empty field goes back to the CSS (vanilla; also Slippi); Random is off.
+- **The name tag is untouched.** The CSS's call of `update` (`sel_char+0x18F34`) goes through our wrapper, which gives the widget our own output buffer and turns OK into "cancel" for the CSS. The CSS never runs its new-name path, so no 8-character copy into its 5-character stack buffer and no reserved-name check either.
+- The code is sent as typed, '#' included ("ADGJ#123"). The client does not check it; neither does Slippi's.
+- Verified: `05-direct-code-keypad.png` → `06-direct-code-typed.png` → `07-direct-searching.png`; the mailbox received `FIND_OPPONENT mode=direct code='ADGJ#123' char=0x7`.
 
-Prototype limits:
-- The key labels show lower case and symbols.
-- The underline stops at 5.
-- OK also runs the CSS's own new-name path. The player's name tag shows "EG123" afterwards, and the reserved-name check runs.
-- The CSS copies the result into a stack buffer sized for 5 characters, so we cap at 7 (21 UTF-8 bytes + NUL). Codes of 8 typed characters would need the next step.
-- L/R history (mailbox `0xBE`) and Z-to-accept are not wired.
-
-**Recommended next step.** Drive the same helper from our own gfTask, as `WifiCnctWnd` does at `sora_menu_main 0x38800–0x38A54`. That task creates the eight `MenSelchrW*` models from `mu_menumain.pac` and a MuMsg, then calls init with `line=NULL`. Then:
-- open with max 8 and our buffer;
-- limit pages to alphabet/digits (`helper+0x24 = {2,3}`, `+0x38 = 2`);
-- point one key at "＃" while open, and restore it on close (the table is shared);
-- handle L/R/Z ourselves before calling `update`.
-
-This avoids the CSS name path and its 5-character stack buffer.
+**Recent codes (item 5): not implemented.** Slippi's history: as you type, Dolphin suggests the newest matching code (`0xBE FETCH_CODE_SUGGESTION`, prefix-filtered, `EXI_DeviceSlippi.cpp:1992-2106`), shown as grey completion text; L/R scroll older/newer, Z accepts and jumps to Confirm (error sound without a suggestion), B on an empty field still leaves. History files are `direct-codes.json` / `teams-codes.json` (`{connectCode, lastPlayed}`, newest first, no limit), updated when a search starts. All of it needs `0xBE` in the mailbox, whose request/response layout the Dolphin side has not defined yet (GameBridge answers `0xBE` with `status 0xFF`), and the grey text needs a second colour in the keypad's text field. Without new art it is possible: the suggestion can be drawn in the field's own window in a grey font colour.
 
 ---
 
 ## 8. Mailbox round trip: Dolphin plays its part
 
 Dolphin services the mailbox itself (`GameBridge`, dolphin branch `game-bridge`; design §5.2 has the details). No harness server is involved. Verified by `harness/tests/test_online_game.py` against our `accounts` + `mm` servers. Each instance has its own `user.json` and its own copy of the SD card, patched with `PPOnline.rel` through `tools/sdcard/patch_sd.py`. Screenshots are in `run/artifacts/game-bridge/`.
-1. **Main menu.** The plugin posts `0xB9`. Dolphin answers from `user.json` and the accounts lookup. PLAY ONLINE then reads "(carl, CARL#322)" (`unranked/game-u/01-main-play-online.png`).
-2. **Direct.** START opens the keypad, and the test types the other account's code. Typing needs these rules: the cursor does not wrap; UP from row 1 reaches backspace; the same key twice needs a move off and back, because there is no multi-tap timeout. OK posts `0xB4 {mode 2, code}`. Dolphin starts the search and answers `mmState 1`, and the header reads "Searching for BOB#610" (`direct/game-a/05-searching.png`).
-3. **Z cancels.** The game posts `0xBA` and Dolphin cleans up. The header goes back to "Direct: START to search BOB#610" (`06-cancelled.png`).
-4. **Match.** The other player searches and START searches again. The server pairs them (mm log `matched`). Both games are told `mmState 4` with the peer's name, code and role, and show "Playing: bob" / "Playing: alice" (`07-opponent.png`). `Online::Session::Start` was called on both sides with the match (harness `record` backend).
+1. **Main menu.** The plugin posts `0xBA` (Slippi cleans up on every menu load) and `0xB9`. Dolphin answers `0xB9` from `user.json` and the accounts lookup. The menus no longer print the account: Slippi's online menu does not show it either (`OnMenuLoad.asm:34-37`).
+2. **Direct.** The test picks a character, START opens the keypad, and the test types the other account's code, '#' included. Typing needs these rules: the cursor does not wrap; UP from row 1 reaches backspace; the same key twice needs a move off and back, because there is no multi-tap timeout. START confirms and posts `0xB4 {mode 2, lockedChar, code}`. Dolphin starts the search and answers `mmState 1`, and the header reads "Searching for BOB#610" (`direct/game-a/05-searching.png`).
+3. **Z cancels.** The game posts `0xBA` and Dolphin cleans up. The header goes back to "Press START to enter code" (`06-cancelled.png`).
+4. **Match.** The other player searches, and START opens the keypad again for the second search. The server pairs them (mm log `matched`). Both games are told `mmState 4` with the peer's name, code and role, and show "Playing: bob" / "Playing: alice" (`07-opponent.png`). `Online::Session::Start` was called on both sides with the match (harness `record` backend).
 5. **Unranked.** The server refuses the ticket. The game gets `mmState 5` with "Unranked is not supported yet. Only Direct works for now." and prints it in the header (`unranked/game-u/05-unranked-error.png`). Z clears the error.
 6. **Hand-off to netplay.** With the real backend (whole-machine netplay, design §5.1 A), both Dolphins stop their games right after the match and boot P+ together under rollback. The plugin is loaded again and the block is found again, but servicing is paused while netplay runs (`direct-netplay/*/06-netplay-boot.png`).
 
@@ -272,10 +286,10 @@ Dolphin services the mailbox itself (`GameBridge`, dolphin branch `game-bridge`;
 
 ## 9. Next steps
 
-1. Skip Brawl's connect dialog and the first-time profile-name prompt, so PLAY ONLINE goes straight to the ONLINE page as on Slippi. These are `muWifiCnctWndTask` states (`sora_menu_main` rodata+0x1698 jump table).
-2. CSS: put P+'s competitive rules into the Wi-Fi rules, handle LEAVE / "hold Z to disconnect", lock in on START (don't search without a character), and block A/B on the name tag while searching.
-3. Own code-entry task (section 7), with history through `0xBE`.
-4. Ranked/Teams placement once the user decides (section 6).
+1. Recent codes through `0xBE` once its payload is agreed with the GameBridge side (§7).
+2. CSS: block A/B on the character while locked in (Slippi `PreventAPress/PreventBPressCharUnselect.asm`); show the opponent on the CSS after plug-in (screen 4).
+3. Stage choice in the session: random from the server list for game 1; Direct's loser picks on P+'s SSS after the results → CSS flow (screen 8).
+4. Ranked placement once the user decides (§6).
 5. SESSION/LOCAL blocks. MAILBOX is serviced by Dolphin now (§8); SESSION/LOCAL need the gameplay-only session.
 
 ---
@@ -286,4 +300,5 @@ Dolphin services the mailbox itself (`GameBridge`, dolphin branch `game-bridge`;
   - `0a4c153`: plugin skeleton, PPOM block, hello world.
   - `fb4fd87`: Wi-Fi flow, mailbox, Direct code entry.
   - `42036d6`: `GET_MATCH_STATE` polling and the protocol rules for Dolphin's GameBridge (§5).
+  - `75d3647`: Slippi-style menus: no connect dialogs, Teams entry, P+ competitive rules, header art hidden, Slippi's strings and CSS input, leaving the CSS, the 8-character code keypad.
 - Top-level repo: `docs/game-code.md`, `tools/gamecode/`, `tools/sdcard/`. `.gitignore` already listed `/game-code/` and `/toolchains/`.

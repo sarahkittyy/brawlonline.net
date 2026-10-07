@@ -1,0 +1,66 @@
+# Teams: ONLINE page -> WITH ANYONE -> TEAM BATTLE -> CSS (sqNetAnyTeamMelee). START opens the
+# connect-code keypad as in Direct; the search gets the server's refusal ("Teams is not
+# supported yet..."), shown in red as Slippi shows server errors; hold B goes back to the WITH
+# ANYONE page with TEAM BATTLE highlighted.
+@to_online.txt
+tap DRIGHT 4
+wait 30
+tap A
+wait 90
+tap DDOWN 4
+wait 30
+shot {out}/21-anyone-team.png
+tap A
+wait 400
+scene
+stick up 30
+wait 5
+tap A
+wait 30
+shot {out}/22-css-teams-selected.png
+tap START
+wait 40
+# A, '#', 1 (the cursor starts on the '#' key)
+tap DRIGHT 4
+wait 6
+tap A
+wait 10
+tap DLEFT 4
+wait 6
+tap A
+wait 10
+tap DDOWN 4
+wait 6
+tap DDOWN 4
+wait 6
+tap DDOWN 4
+wait 6
+tap DRIGHT 4
+wait 6
+tap DRIGHT 4
+wait 6
+tap A
+wait 12
+tap DUP 4
+wait 6
+tap DUP 4
+wait 6
+tap DUP 4
+wait 6
+tap DLEFT 4
+wait 6
+tap DLEFT 4
+wait 6
+tap A
+wait 10
+shot {out}/23-teams-code-typed.png
+tap START
+wait 30
+mbx-dump
+mbx-serve 300 5 - - Teams is not supported yet. Only Direct works for now.
+wait 20
+shot {out}/24-css-teams-error.png
+hold B 120
+until muMenuMain 600
+wait 120
+shot {out}/25-teams-back-anyone.png

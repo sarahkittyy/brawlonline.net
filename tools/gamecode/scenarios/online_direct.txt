@@ -1,22 +1,38 @@
+# Direct: ONLINE page -> WITH FRIENDS -> CSS; pick a character; START opens the connect-code
+# keypad; type ADGJ#123 (8 characters, Slippi's limit); START confirms and searches; the
+# harness answers as the Dolphin side; hold Z disconnects; hold B goes back to the ONLINE page.
 @to_online.txt
 tap A
 wait 400
 scene
-shot {out}/10-css-direct.png
+shot {out}/03-css-direct.png
+# the hand starts on the P1 panel: up to the second row (Fox), A
+stick up 30
+wait 5
+tap A
+wait 30
+shot {out}/04-css-direct-selected.png
 tap START
 wait 40
-shot {out}/11-direct-code-keypad.png
-# The START that opened the keypad also moved its cursor to OK. Up 4 = ABC.
-wait 20
+shot {out}/05-direct-code-keypad.png
+# a key that cannot be part of a code (!?&%$, bottom left): error sound, nothing typed
+tap DDOWN 4
+wait 6
+tap DDOWN 4
+wait 6
+tap DDOWN 4
+wait 6
+tap A
+wait 10
 tap DUP 4
 wait 6
 tap DUP 4
 wait 6
 tap DUP 4
 wait 6
-tap DUP 4
+# the cursor is on the '#' key (top left); A, D, G, J
+tap DRIGHT 4
 wait 6
-# type A, D, G on the alphabet page (one press each = the key's first letter)
 tap A
 wait 10
 tap DRIGHT 4
@@ -31,7 +47,20 @@ tap DLEFT 4
 wait 6
 tap A
 wait 10
-# to the page key (bottom right), cycle to the number page
+tap DRIGHT 4
+wait 6
+tap A
+wait 10
+# '#'
+tap DUP 4
+wait 6
+tap DLEFT 4
+wait 6
+tap A
+wait 10
+# page key (bottom right) -> digits; 1, 2, 3
+tap DDOWN 4
+wait 6
 tap DDOWN 4
 wait 6
 tap DDOWN 4
@@ -42,13 +71,6 @@ tap DRIGHT 4
 wait 6
 tap A
 wait 12
-tap A
-wait 12
-tap A
-wait 12
-tap A
-wait 12
-shot {out}/12-direct-code-numbers.png
 tap DUP 4
 wait 6
 tap DUP 4
@@ -69,13 +91,23 @@ tap DRIGHT 4
 wait 6
 tap A
 wait 10
-shot {out}/13-direct-code-typed.png
+shot {out}/06-direct-code-typed.png
+# START = Confirm (Slippi)
 tap START
-wait 10
-tap A
-wait 60
-shot {out}/14-direct-searching.png
+wait 40
+shot {out}/07-direct-searching.png
 mbx-dump
-mbx-serve 300 4 Friend ADG#123
+mbx-serve 300 4 Friend -
 wait 20
-shot {out}/15-direct-found.png
+shot {out}/08-direct-found.png
+# hold Z 48+ frames: disconnect (CLEANUP_CONNECTION), back to the idle prompt
+hold Z 60
+wait 20
+shot {out}/09-direct-disconnected.png
+mbx-dump
+# hold B (Brawl's own) leaves the CSS: back to the ONLINE page, WITH FRIENDS highlighted
+hold B 120
+until muMenuMain 600
+wait 120
+shot {out}/10-direct-back-online.png
+mbx-dump

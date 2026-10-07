@@ -2,8 +2,8 @@
 
 Each instance boots P+ with our plugin (``game-code/PPOnline/PPOnline.rel``) on its own copy of
 the SD card, logs in from its own ``user.json`` and is driven with controller input only:
-main menu -> PLAY ONLINE -> WITH FRIENDS (Direct) -> START on the character select -> the connect
-code typed on Brawl's keypad -> OK. The plugin posts PPOM mailbox requests; Dolphin's GameBridge
+main menu -> PLAY ONLINE -> WITH FRIENDS (Direct) -> a character -> START on the character select
+-> the connect code typed on Brawl's keypad -> START. The plugin posts PPOM mailbox requests; Dolphin's GameBridge
 (``Source/Core/Core/Online/GameBridge.cpp``) services them at the frame boundary and drives the
 matchmaking client against our ``mm`` server. Nothing plays Dolphin's part from the outside.
 
@@ -151,25 +151,22 @@ class Game:
                    "wait 60")
 
     def to_online_page(self) -> None:
-        """Main menu -> PLAY ONLINE -> Brawl's connect dialog (WFC faked) -> first-time profile
-        name -> the ONLINE page with WITH FRIENDS (Direct) highlighted.
-
-        This is the flow of the plugin on game-code `pponline` (tools/gamecode/scenarios/
-        to_online.txt at the same time). The menu work that skips the connect dialog and the
-        profile name changes it: update these steps together with that scenario."""
+        """Main menu -> PLAY ONLINE -> the ONLINE page with WITH FRIENDS (Direct) highlighted.
+        The plugin skips Brawl's connect dialog and first-time profile name, as Slippi goes
+        straight to its online menu (same steps as tools/gamecode/scenarios/to_online.txt)."""
         self.steps("tap B", "wait 60", "tap DDOWN 4", "wait 40")
         self.shot("01-main-play-online")
-        self.steps("tap A", "wait 90", "tap DLEFT 4", "wait 20", "tap A", "wait 300",
-                   "tap A", "wait 150",
-                   # profile name: one letter, then OK
-                   "tap DRIGHT 4", "wait 10", "tap A", "wait 20", "tap START", "wait 20", "tap A",
-                   "wait 250")
+        self.steps("tap A", "wait 90")
         self.shot("02-online-page")
 
     def to_css(self, mode: str) -> None:
+        """WITH FRIENDS = Direct; WITH ANYONE -> BASIC VERSUS = Unranked. Then pick a character
+        (the hand starts on the P1 panel; up to the second row, Fox): as on Slippi, START does
+        nothing on the online CSS until a character is selected."""
         if mode == "unranked":
-            self.steps("tap DRIGHT 4", "wait 30")
+            self.steps("tap DRIGHT 4", "wait 30", "tap A", "wait 90")
         self.steps("tap A", "wait 400", "until scSelctCharacter 600")
+        self.steps("stick up 30", "wait 5", "tap A 8", "wait 30")
         self.shot(f"03-css-{mode}")
 
     def open_keypad(self) -> None:
@@ -187,31 +184,31 @@ class Game:
     def type_code(self, code: str, settle: bool = True) -> None:
         self.steps(*keypad_steps(code))
         self.shot("04-code-typed")
-        # START moves the cursor to OK, A presses it; the plugin then posts FIND_OPPONENT.
-        self.steps("tap START 8", "wait 10")
+        # START confirms (Slippi); the plugin then posts FIND_OPPONENT.
         if settle:
             n = self.finds()
-            self.press_until("A", lambda: self.finds() > n, "FIND_OPPONENT")
+            self.press_until("START", lambda: self.finds() > n, "FIND_OPPONENT")
         else:
             # Press without waiting for frames: with the netplay backend this search matches at
             # once and the game is stopped for the netplay boot.
-            self.c.pad_script(0, [PadInput(buttons=["A"], hold=8), PadInput(hold=6)])
+            self.c.pad_script(0, [PadInput(buttons=["START"], hold=8), PadInput(hold=6)])
 
 
-# Brawl's name keypad (MuSelctChrNameEntry), as laid out on screen (docs/game-code.md section 7):
-# row 0 is the text field and backspace, rows 1-4 are 3 columns of multi-tap keys, row 5 is OK.
-# The cursor does not wrap; UP from row 1 goes to backspace, DOWN from there into row 1.
-ALPHA_KEYS = {(1, 1): "ABC", (1, 2): "DEF", (2, 0): "GHI", (2, 1): "JKL", (2, 2): "MNO",
-              (3, 0): "PQRS", (3, 1): "TUV", (3, 2): "WXYZ"}
+# Brawl's name keypad (MuSelctChrNameEntry) in the plugin's connect-code mode, as laid out on
+# screen (docs/game-code.md section 7): row 0 is the text field and backspace, rows 1-4 are 3
+# columns of multi-tap keys, row 5 is OK. Upper case only; the symbols key (1, 0) types '#'. The
+# cursor does not wrap; UP from row 1 goes to backspace, DOWN from there into row 1.
+ALPHA_KEYS = {(1, 0): "#", (1, 1): "ABC", (1, 2): "DEF", (2, 0): "GHI", (2, 1): "JKL",
+              (2, 2): "MNO", (3, 0): "PQRS", (3, 1): "TUV", (3, 2): "WXYZ"}
 DIGIT_KEYS = {(1, 0): "1", (1, 1): "2", (1, 2): "3", (2, 0): "4", (2, 1): "5", (2, 2): "6",
               (3, 0): "7", (3, 1): "8", (3, 2): "9", (4, 1): "0"}
 PAGE_KEY = (4, 2)
-PAGES_TO_DIGITS = 4  # alphabet -> accented -> hiragana -> katakana -> digits
+PAGES_TO_DIGITS = 1  # connect-code mode has two pages: alphabet <-> digits
 
 
 def keypad_steps(code: str) -> list[str]:
-    """drive.py steps that type `code` ("ABCD#123": letters, then digits; the plugin inserts the
-    '#') on a freshly opened keypad, wherever its cursor starts."""
+    """drive.py steps that type `code` ("ABCD#123": letters and '#', then digits) on a freshly
+    opened keypad, wherever its cursor starts."""
     steps: list[str] = []
 
     def move(d: str) -> None:
@@ -243,8 +240,8 @@ def keypad_steps(code: str) -> list[str]:
         for _ in range(times):
             steps.extend(["tap A 8", "wait 10"])
 
-    letters = re.match(r"[A-Z]*", code.replace("#", "")).group(0)
-    digits = code.replace("#", "")[len(letters):]
+    letters = re.match(r"[A-Z#]*", code).group(0)
+    digits = code[len(letters):]
     assert digits.isdigit() or not digits, code
     for ch in letters:
         key = next(k for k, v in ALPHA_KEYS.items() if ch in v)
@@ -275,7 +272,7 @@ def keypad_steps(code: str) -> list[str]:
 def test_keypad_steps_cover_every_code_shape() -> None:
     """Pure check of the typing plan: repeated keys move off and back, digits switch pages."""
     s = keypad_steps("AB#11")
-    assert s.count("tap A 8") == 1 + 2 + PAGES_TO_DIGITS + 2
+    assert s.count("tap A 8") == 1 + 2 + 1 + PAGES_TO_DIGITS + 2
     assert keypad_steps("WXYZ#990")[-2:] == ["tap A 8", "wait 10"]
 
 
@@ -357,7 +354,7 @@ def test_direct_from_the_game_menus(backend: OnlineBackend, dolphin: Callable[..
     assert a.response()["mm_state"] in (1, 2)
 
     # Z cancels the search (CLEANUP_CONNECTION): Dolphin goes idle, the game back to its prompt
-    # (the code stays, so START searches for it again).
+    # ("Press START to enter code": START opens the keypad again, as on Slippi).
     a.press_until("Z", lambda: a.c.mm_status()["state"] == "idle", "the cleanup")
     assert a.bridge()["by_cmd"].get("CLEANUP_CONNECTION", 0) >= 1
     a.shot("06-cancelled")
@@ -371,8 +368,8 @@ def test_direct_from_the_game_menus(backend: OnlineBackend, dolphin: Callable[..
     b.shot("05-searching")
     assert b.c.mm_status()["state"] in ("initializing", "matchmaking")
     time.sleep(2.2)  # the server takes one ticket per account per 2 s
-    n = a.finds()
-    a.press_until("START", lambda: a.finds() > n, "the second FIND_OPPONENT")
+    a.open_keypad()
+    a.type_code(ub.connect_code)
 
     # The server pairs them, both connect, both games are told who it is.
     ra = _peer_shown(a, ub)
