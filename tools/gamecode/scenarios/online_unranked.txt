@@ -1,0 +1,15 @@
+@to_online.txt
+tap DRIGHT 4
+wait 30
+shot {out}/06-online-unranked.png
+tap A
+wait 400
+scene
+shot {out}/07-css-unranked.png
+tap START
+wait 30
+shot {out}/08-css-unranked-searching.png
+mbx-dump
+mbx-serve 300 4 Opponent OPPO#123
+wait 20
+shot {out}/09-css-unranked-found.png

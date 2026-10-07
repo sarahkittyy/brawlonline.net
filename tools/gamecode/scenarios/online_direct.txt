@@ -1,0 +1,81 @@
+@to_online.txt
+tap A
+wait 400
+scene
+shot {out}/10-css-direct.png
+tap START
+wait 40
+shot {out}/11-direct-code-keypad.png
+# The START that opened the keypad also moved its cursor to OK. Up 4 = ABC.
+wait 20
+tap DUP 4
+wait 6
+tap DUP 4
+wait 6
+tap DUP 4
+wait 6
+tap DUP 4
+wait 6
+# type A, D, G on the alphabet page (one press each = the key's first letter)
+tap A
+wait 10
+tap DRIGHT 4
+wait 6
+tap A
+wait 10
+tap DDOWN 4
+wait 6
+tap DLEFT 4
+wait 6
+tap DLEFT 4
+wait 6
+tap A
+wait 10
+# to the page key (bottom right), cycle to the number page
+tap DDOWN 4
+wait 6
+tap DDOWN 4
+wait 6
+tap DRIGHT 4
+wait 6
+tap DRIGHT 4
+wait 6
+tap A
+wait 12
+tap A
+wait 12
+tap A
+wait 12
+tap A
+wait 12
+shot {out}/12-direct-code-numbers.png
+tap DUP 4
+wait 6
+tap DUP 4
+wait 6
+tap DUP 4
+wait 6
+tap DLEFT 4
+wait 6
+tap DLEFT 4
+wait 6
+tap A
+wait 10
+tap DRIGHT 4
+wait 6
+tap A
+wait 10
+tap DRIGHT 4
+wait 6
+tap A
+wait 10
+shot {out}/13-direct-code-typed.png
+tap START
+wait 10
+tap A
+wait 60
+shot {out}/14-direct-searching.png
+mbx-dump
+mbx-serve 300 4 Friend ADG#123
+wait 20
+shot {out}/15-direct-found.png
