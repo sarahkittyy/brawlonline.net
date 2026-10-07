@@ -12,3 +12,7 @@ __pycache__/
 .venv/
 *.part
 /launcher/
+/game-code/
+/toolchains/
+/dolphin-linux/
+/dolphin-gprb/
