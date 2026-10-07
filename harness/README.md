@@ -87,7 +87,7 @@ python -m ppharness cmd --port 5xxxx pad_set port=0 'buttons=["A"]'
 python -m ppharness cmd --port 5xxxx wait_frame frame=2000
 python -m ppharness shot out.png --port 5xxxx       # needs a non-Null video backend
 python -m ppharness stop --port 5xxxx
-python -m ppharness clean
+python -m ppharness clean --prefix <your-run-prefix>   # never touches kept-* dirs without --include-kept
 ```
 
 ## Python API
@@ -191,7 +191,10 @@ cd harness
 ..\.venv\Scripts\python -m pytest -m "not dolphin and not slow"   # quick, no build needed
 ..\.venv\Scripts\python -m pytest -m dolphin --keep               # only the end-to-end tests
 ..\.venv\Scripts\python -m pytest -m dolphin tests/test_rollback.py -k dc   # rollback tests, dual core only
+..\.venv\Scripts\python -m pytest -m "dolphin and server" tests/test_online.py  # online: login, matchmaking, hand-off
 ```
+
+The `server` tests need the online backend: build it (`cargo build --workspace` in `server/`) and have a Postgres (`PPHARNESS_PG_URL`, a portable Postgres in `run/postgres-portable/pgsql`, or Docker; see `server/README.md`). `ppharness/backend.py` (`OnlineBackend`) starts a throw-away database, `accounts` and `mm` on free ports, creates accounts with the admin CLI and HTTP, and writes `user.json` the way the launcher does; everything it starts is stopped again.
 
 The rollback tests run in single core (`sc`) and dual core (`dc`). Tests marked `gpu` need a real video backend (D3D11 on Windows, Vulkan elsewhere; `--video NAME` or `PPHARNESS_VIDEO` picks another). It is probed once with a screenshot, and the tests are skipped if it doesn't work; `--no-gpu` skips them without probing.
 
@@ -311,6 +314,7 @@ ppharness/
   netsim.py        UDP impairment proxy + CLI
   netsim_bench.py  accuracy measurement
   session.py       two_player_netplay, compare_state, pause_at, FrameKey
+  backend.py       OnlineBackend: Postgres + accounts + mm for the online tests
   mock_server.py   protocol implementation with fake memory/frames/netplay
   fake_dolphin.py  DolphinNoGUI stand-in running the mock server
   _platform.py     everything OS-specific

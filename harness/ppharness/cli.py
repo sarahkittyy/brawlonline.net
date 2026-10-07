@@ -250,7 +250,9 @@ def cmd_probe(args: argparse.Namespace) -> int:
 
 def cmd_clean(args: argparse.Namespace) -> int:
     root = Path(args.root) if args.root else None
-    for d, action in clean_instances(root, dry_run=args.dry_run):
+    for d, action in clean_instances(root, dry_run=args.dry_run,
+                                     prefix=None if args.all else args.prefix,
+                                     include_kept=args.include_kept):
         print(f"{action}: {d}")
     return 0
 
@@ -324,6 +326,12 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("clean", help="remove instance dirs whose process is gone")
     p.add_argument("--root", help=f"default {paths.instances_root()}")
     p.add_argument("--dry-run", action="store_true")
+    g = p.add_mutually_exclusive_group(required=True)
+    g.add_argument("--prefix", help="only dirs whose name starts with this (your own runs)")
+    g.add_argument("--all", action="store_true",
+                   help="every instance dir, including other sessions' (use with care)")
+    p.add_argument("--include-kept", action="store_true",
+                   help="also remove kept-* dirs that another session kept after a failure")
     p.set_defaults(func=cmd_clean)
 
     for name, help_ in (("netsim", "UDP impairment proxy"), ("bench", "measure netsim accuracy"),

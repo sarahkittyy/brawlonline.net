@@ -716,12 +716,17 @@ def probe_harness_support(exe: str | os.PathLike[str] | None = None,
 
 
 def clean_instances(root: Path | None = None, *, dry_run: bool = False,
-                    min_age_s: float = 600.0) -> list[tuple[Path, str]]:
+                    min_age_s: float = 600.0, prefix: str | None = None,
+                    include_kept: bool = False) -> list[tuple[Path, str]]:
     """Remove instance dirs whose process is gone. Returns [(dir, action)].
 
     Skips dirs whose Dolphin is still running, dirs without a recorded pid that are younger
     than ``min_age_s`` (not launched yet), and dirs another process still has files open in
     (the rename-then-delete fails on Windows), so it is safe while other sessions run.
+
+    Only dirs whose name starts with ``prefix`` are considered (``None`` means all). Dirs kept
+    after a failure (``kept-*``) are evidence another session chose to keep, so they are only
+    removed with ``include_kept``.
     """
     root = root or paths.instances_root()
     results: list[tuple[Path, str]] = []
@@ -729,6 +734,12 @@ def clean_instances(root: Path | None = None, *, dry_run: bool = False,
         return results
     for d in sorted(root.iterdir()):
         if not d.is_dir():
+            continue
+        if d.name.startswith("kept-") and not include_kept:
+            results.append((d, "skipped (kept; pass --include-kept)"))
+            continue
+        name = d.name.split("-", 2)[-1] if d.name.startswith("kept-") else d.name
+        if prefix is not None and not (d.name.startswith(prefix) or name.startswith(prefix)):
             continue
         meta: dict[str, Any] = {}
         with contextlib.suppress(OSError, ValueError):
