@@ -1,6 +1,6 @@
-# Online backend (Phase 1)
+# Brawl Online backend (Phase 1)
 
-Accounts, connect codes and Direct matchmaking for the Project+ rollback client. Phase 1 goal: two friends log in, get connect codes and connect to each other by code, the way Slippi's Direct mode works. Design: `docs/backend-design.md` (sections 1-4 and 7).
+Accounts, connect codes and Direct matchmaking for Brawl Online, the Project+ rollback client. Phase 1 goal: two friends log in, get connect codes and connect to each other by code, the way Slippi's Direct mode works. Design: `docs/backend-design.md` (sections 1-4 and 7).
 
 | Crate | What it is |
 |---|---|

@@ -316,7 +316,7 @@ class Launcher:
             if self._home_ready():
                 return
             if "Accept rules and policies" in text:
-                self.call("checkLabel", f"I accept the {self._product()} Online Rules")
+                self.call("checkLabel", f"I accept the {self._product()} Rules")
                 self.call("checkLabel",
                           f"I accept the {self._product()} Privacy Policy and Terms of Service")
                 self.shot("02-accept-rules")
@@ -334,8 +334,8 @@ class Launcher:
         raise TimeoutError(f"{self.name}: the quick start did not finish; page says:\n{self.body()[:800]}")
 
     def _product(self) -> str:
-        m = re.search(r"I accept the (\S+) Online Rules", self.body())
-        return m.group(1) if m else "PlusOnline"
+        m = re.search(r"I accept the (.+?) Privacy Policy and Terms of Service", self.body())
+        return m.group(1) if m else "Brawl Online"
 
     def _home_ready(self) -> bool:
         return bool(self.eval(

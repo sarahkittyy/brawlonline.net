@@ -218,7 +218,7 @@ async fn main() -> anyhow::Result<()> {
             if send_email {
                 let key = std::env::var("RESEND_API_KEY")
                     .map_err(|_| anyhow::anyhow!("--send-email needs RESEND_API_KEY"))?;
-                let from = std::env::var("MAIL_FROM").unwrap_or_else(|_| "noreply@fluffycat.gay".into());
+                let from = std::env::var("MAIL_FROM").unwrap_or_else(|_| "Brawl Online <noreply@fluffycat.gay>".into());
                 let api = std::env::var("RESEND_API_URL").unwrap_or_else(|_| "https://api.resend.com/emails".into());
                 mail::ResendMailer::new(&api, &key, &from)
                     .send(&mail::reset_email(&u.email, &u.display_name, &link))

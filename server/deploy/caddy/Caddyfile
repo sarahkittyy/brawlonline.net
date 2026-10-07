@@ -1,5 +1,5 @@
-# Caddy in front of the accounts service. Hostnames are placeholders under
-# fluffycat.gay until the product name and subdomains are decided.
+# Caddy in front of the accounts service (Brawl Online). Hostnames are placeholders under
+# fluffycat.gay until the subdomains are decided.
 # The mm server is UDP and does not go through Caddy.
 {
 	email admin@fluffycat.gay

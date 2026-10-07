@@ -4,6 +4,7 @@
 use axum::extract::{Form, Query, State};
 use axum::http::StatusCode;
 use axum::response::Html;
+use common::PRODUCT_NAME;
 use serde::Deserialize;
 
 use crate::store::{self, TokenPurpose};
@@ -23,9 +24,11 @@ fn page(title: &str, body: &str) -> Html<String> {
     Html(format!(
         "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
          <meta name=\"viewport\" content=\"width=device-width, initial-scale=1\">\
-         <meta name=\"referrer\" content=\"no-referrer\"><title>{}</title></head>\
-         <body><h1>{}</h1>{}</body></html>",
+         <meta name=\"referrer\" content=\"no-referrer\"><title>{} - {}</title></head>\
+         <body><p>{}</p><h1>{}</h1>{}</body></html>",
         esc(title),
+        esc(PRODUCT_NAME),
+        esc(PRODUCT_NAME),
         esc(title),
         body
     ))

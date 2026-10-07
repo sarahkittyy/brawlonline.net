@@ -13,6 +13,10 @@ pub mod playkey;
 pub mod proto;
 pub mod ratelimit;
 
+/// The product name shown to users: email subjects and bodies, the web pages, the default sender
+/// name. Hostnames are configuration (`PUBLIC_BASE_URL`, `MAIL_FROM`, the Caddyfile).
+pub const PRODUCT_NAME: &str = "Brawl Online";
+
 /// The 16 default quick-chat messages, in Slippi's order
 /// (`slippi-rust-extensions/user/src/chat.rs`). Sent in `get-ticket-resp` and from `/user/{uid}`
 /// because the Slippi client falls back to defaults unless it gets exactly 16.

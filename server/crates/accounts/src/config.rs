@@ -46,7 +46,8 @@ pub struct Config {
     #[arg(long, env = "RESEND_API_URL", default_value = "https://api.resend.com/emails")]
     pub resend_api_url: String,
 
-    #[arg(long, env = "MAIL_FROM", default_value = "noreply@fluffycat.gay")]
+    /// Sender, as Resend takes it: `Name <address>` or a bare address.
+    #[arg(long, env = "MAIL_FROM", default_value = "Brawl Online <noreply@fluffycat.gay>")]
     pub mail_from: String,
 
     /// File for the `file` mailer.
@@ -113,7 +114,7 @@ impl Config {
             mailer: Some(MailerKind::Stdout),
             resend_api_key: None,
             resend_api_url: "http://127.0.0.1:9/never".into(),
-            mail_from: "noreply@fluffycat.gay".into(),
+            mail_from: "Brawl Online <noreply@fluffycat.gay>".into(),
             mail_file: "mail.jsonl".into(),
             mail_daily_limit: 1000,
             signup_invite_only: true,

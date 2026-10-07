@@ -683,6 +683,6 @@ That is roughly **10-12 months for one person**, or 5-6 months with one person o
 2. **Orca code.** May we reuse Orca's GPL keyframe and result-reader code with attribution, or reimplement it? (Reuse is legal; reimplementing avoids "built on Orca" optics.)
 3. **The "Brawlback → Direct / Quickplay" Wi-Fi menu.** Where did you see it? It is in no public Brawlback repo or branch. If it exists unpushed, asking the Brawlback team for it would save weeks.
 4. **Email.** Is a friends phase without email (invite codes, admin password resets) OK?
-5. **Names.** What domain name and product name should the hostnames and website use?
+5. **Names.** What domain name and product name should the hostnames and website use? _Answered 2026-10-07: the product is **Brawl Online**. The hostnames stay placeholder subdomains of `fluffycat.gay` (`accounts.`, `mm.`, `updates.`) until the subdomains are chosen._
 6. **Ruleset.** Stocks, timer, and stage lists for unranked and ranked: adopt P+'s current competitive ruleset, or ask the P+ team?
 7. **Replay retention.** Keep ranked replays forever and the rest for 90 days?

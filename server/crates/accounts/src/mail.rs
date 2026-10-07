@@ -8,6 +8,7 @@ use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 use chrono::{NaiveDate, Utc};
+use common::PRODUCT_NAME;
 use serde::{Deserialize, Serialize};
 
 use crate::config::{Config, MailerKind};
@@ -203,15 +204,16 @@ fn escape_html(s: &str) -> String {
 pub fn verification_email(to: &str, display_name: &str, link: &str) -> Email {
     Email {
         to: to.into(),
-        subject: "Verify your email".into(),
+        subject: format!("Verify your {PRODUCT_NAME} email"),
         text: format!(
-            "Hi {display_name},\n\nOpen this link to verify your email address:\n\n{link}\n\nThe link expires in 48 hours. If you did not sign up, ignore this email.\n"
+            "Hi {display_name},\n\nOpen this link to verify the email address of your {PRODUCT_NAME} account:\n\n{link}\n\nThe link expires in 48 hours. If you did not sign up for {PRODUCT_NAME}, ignore this email.\n"
         ),
         html: format!(
-            "<p>Hi {},</p><p>Open this link to verify your email address:</p><p><a href=\"{}\">{}</a></p><p>The link expires in 48 hours. If you did not sign up, ignore this email.</p>",
+            "<p>Hi {},</p><p>Open this link to verify the email address of your {p} account:</p><p><a href=\"{}\">{}</a></p><p>The link expires in 48 hours. If you did not sign up for {p}, ignore this email.</p>",
             escape_html(display_name),
             escape_html(link),
-            escape_html(link)
+            escape_html(link),
+            p = escape_html(PRODUCT_NAME)
         ),
     }
 }
@@ -219,15 +221,16 @@ pub fn verification_email(to: &str, display_name: &str, link: &str) -> Email {
 pub fn reset_email(to: &str, display_name: &str, link: &str) -> Email {
     Email {
         to: to.into(),
-        subject: "Reset your password".into(),
+        subject: format!("Reset your {PRODUCT_NAME} password"),
         text: format!(
-            "Hi {display_name},\n\nSomeone asked to reset the password for this account. Open this link to choose a new one:\n\n{link}\n\nThe link expires in 1 hour. If this was not you, ignore this email; your password has not changed.\n"
+            "Hi {display_name},\n\nSomeone asked to reset the password for your {PRODUCT_NAME} account. Open this link to choose a new one:\n\n{link}\n\nThe link expires in 1 hour. If this was not you, ignore this email; your password has not changed.\n"
         ),
         html: format!(
-            "<p>Hi {},</p><p>Someone asked to reset the password for this account. Open this link to choose a new one:</p><p><a href=\"{}\">{}</a></p><p>The link expires in 1 hour. If this was not you, ignore this email; your password has not changed.</p>",
+            "<p>Hi {},</p><p>Someone asked to reset the password for your {p} account. Open this link to choose a new one:</p><p><a href=\"{}\">{}</a></p><p>The link expires in 1 hour. If this was not you, ignore this email; your password has not changed.</p>",
             escape_html(display_name),
             escape_html(link),
-            escape_html(link)
+            escape_html(link),
+            p = escape_html(PRODUCT_NAME)
         ),
     }
 }
@@ -273,7 +276,7 @@ mod tests {
         let body = &seen[0].1;
         assert_eq!(body["from"], "noreply@fluffycat.gay");
         assert_eq!(body["to"], serde_json::json!(["a@b.test"]));
-        assert_eq!(body["subject"], "Verify your email");
+        assert_eq!(body["subject"], "Verify your Brawl Online email");
         assert!(body["text"].as_str().unwrap().contains("token=abc"));
         assert!(body["html"].as_str().unwrap().contains("href="));
     }

@@ -2,7 +2,7 @@
 
 Not deployed yet. These files follow the plan in `docs/backend-design.md` section 2.1: one OVH dedicated Debian box, Postgres 16 from Debian packages, Caddy for TLS, systemd units, nightly backups off the box. No containers in production; `docker-compose.yml` is only for development and tests.
 
-The product name and subdomains are not decided. The examples use placeholder subdomains of `fluffycat.gay`: `accounts.fluffycat.gay` (HTTP API) and `mm.fluffycat.gay` (UDP matchmaking). Change them in one place each: the Caddyfile, `PUBLIC_BASE_URL`, and the client build's mm hostname.
+The product is called Brawl Online (`PRODUCT_NAME` in `crates/common`: email subjects and bodies, page titles; `MAIL_FROM` sets the sender name). The subdomains are not decided. The examples use placeholder subdomains of `fluffycat.gay`: `accounts.fluffycat.gay` (HTTP API) and `mm.fluffycat.gay` (UDP matchmaking). Change them in one place each: the Caddyfile, `PUBLIC_BASE_URL`, and the client build's mm hostname.
 
 Do not put these services on the existing VPSes (`sarahvps`, `sarahvps2`). They are saturated.
 

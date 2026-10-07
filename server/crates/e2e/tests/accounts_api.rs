@@ -83,12 +83,12 @@ async fn signup_verification_and_code_assignment() {
 
     // Verification email went through the (fake) mailer with a working link.
     let mail = s.mailer.last_to("sarah@x.test").unwrap();
-    assert_eq!(mail.subject, "Verify your email");
+    assert_eq!(mail.subject, "Verify your Brawl Online email");
     assert!(mail.text.contains(&format!("{}/verify-email?token=", s.base)));
     let token = s.mailed_token("sarah@x.test");
     let page = s.http.get(s.url(&format!("/verify-email?token={token}"))).send().await.unwrap();
     assert_eq!(page.status(), 200);
-    assert!(page.text().await.unwrap().contains("Email verified"));
+    assert!(page.text().await.unwrap().contains("<title>Email verified - Brawl Online</title>"));
     // Tokens are single-use.
     let (st, _) = s.post("/v1/auth/verify-email", None, json!({"token": token})).await;
     assert_eq!(st, 400);
@@ -193,7 +193,7 @@ async fn password_reset_and_change_rotate_the_play_key() {
     let (st, _) = s.post("/v1/auth/password-reset/request", None, json!({"email": "P@x.test"})).await;
     assert_eq!(st, 202);
     let mail = s.mailer.last_to("p@x.test").unwrap();
-    assert_eq!(mail.subject, "Reset your password");
+    assert_eq!(mail.subject, "Reset your Brawl Online password");
     let token = s.mailed_token("p@x.test");
 
     // The link opens a form.
