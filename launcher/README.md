@@ -1,82 +1,46 @@
-# ![Launcher icon](assets/icons/48x48.png) Slippi Launcher
+# PlusOnline Launcher
 
-[![Build Status](https://github.com/project-slippi/slippi-launcher/actions/workflows/build.yml/badge.svg?branch=main)](https://github.com/project-slippi/slippi-launcher/actions/workflows/build.yml?query=branch%3Amain)
-[![License](https://img.shields.io/badge/license-GPLv3-blue)](https://github.com/project-slippi/slippi-launcher/blob/main/LICENSE)
-[![Translations](https://img.shields.io/endpoint?&url=https://jsonhosting.com/api/json/e785d45e/raw)](./CONTRIBUTING.md)
+Desktop launcher for Project+ online play with rollback netcode: log in, get a connect code, press Play to start our Dolphin build with Project+, browse replays, and change settings.
 
-The Slippi Launcher acts as a one stop shop for everything Slippi related. It handles updating Slippi Dolphin, playing Slippi Online, launching and analyzing replays, and more.
+"PlusOnline" is a placeholder name. The product name lives in one constant (`src/common/product.ts`); the service hosts are configuration there too (subdomains of `fluffycat.gay` by default).
 
-This repository is part of the Project Slippi ecosystem. For more information about all of the Project Slippi projects, visit https://github.com/project-slippi/project-slippi.
+This is a fork of the [Slippi Launcher](https://github.com/project-slippi/slippi-launcher) by Project Slippi, with its git history kept. See [NOTICE](NOTICE) for attribution and [PPLUS_PORTING.md](PPLUS_PORTING.md) for what changed and why.
 
-## Build Instructions
+## Game assets are never bundled
 
-### Prerequisites
+The launcher's look comes from the user's own copy of Super Smash Bros. Brawl and Project+ SD card. At first run, after a disc is chosen, it extracts menu frames, fonts and stock icons into a local cache (`src/brawl_assets`, `src/game_assets`). Until then it shows a plain, unstyled fallback. Nothing from the game is committed or distributed; `.asset-cache/` is gitignored.
 
-These are the applications you will need to install in order to build this project:
+## Development
 
-- [Git](https://git-scm.com/downloads)
-- [Node v20+](https://nodejs.org/en/)
+Needs Node 20+ and Git.
 
-### Build Steps
+```sh
+npm ci
+npm run build          # main, renderer and migrations (needed before the tests)
+npm run typecheck
+npm run lint
+npm test
+npm start              # run the app in development mode
+```
 
-- Clone the repo via: `git clone https://github.com/project-slippi/slippi-launcher.git`
-- Navigate into the directory and run: `npm install` to install all dependencies
-- Use `npm run dev` to run the app in develop mode using **mocked services**
-- Use `npm run package` to build a release
+`npm run dev` runs the renderer with mocked services (log in as `test` / `test`).
 
-#### Development Commands
+Development defaults (all overridable, see `.env.example`):
 
-- `npm run dev`: **(Recommended)** Runs the app with mocked services (see `src/renderer/services`). No production keys are required, but not every service feature is supported in this mode. To test logged in features, you can login using the test account using username `test` and password `test`.
-- `npm run start`: Runs the app against production services. This may require production API keys, which are provided at discretion for specific feature work. Ask in the `#launcher` Discord channel if you need production API keys.
+| What | Default in development | Override |
+|---|---|---|
+| Accounts API | `https://accounts.fluffycat.gay` | `PPO_ACCOUNTS_URL` (e.g. `http://127.0.0.1:8080` for `server/`) |
+| Dolphin executable | `../dolphin/build/release/x64/Binaries/Dolphin.exe` | Settings > Dolphin, or `PPO_DOLPHIN_PATH` |
+| Dolphin User folder seed (P+ launcher DOLs, `Wii/sd.raw`) | `../run/template-user` | `PPO_DOLPHIN_USER_TEMPLATE` |
+| Disc files for asset extraction | `../game/rev1-extract/DATA/files` if present, else the chosen ISO via DolphinTool | `PPO_DISC_FOLDER` |
+| Asset cache | `./.asset-cache` | `PPO_ASSET_CACHE` |
 
-#### Recommended IDE
+The asset extractor also has a CLI:
 
-For development, we recommend using [VSCode](https://code.visualstudio.com/) with the following plugins:
-
-- [ESLint](https://marketplace.visualstudio.com/items?itemName=dbaeumer.vscode-eslint)
-
-These extensions will provide automatic formatting and warnings about code quality issues before you commit/push.
-
-## Project Structure
-
-### The `src` folder is split into the following:
-
-- `common`
-  - Code shared between both `main` and `renderer` processes. Code written here should be agnostic to which process it is imported from.
-- `main`
-  - Code for the main process (e.g. Electron config, menu bars, window management).
-- `renderer`
-  - Code for the renderer process (the React application).
-- `<module>`
-  - Main process modules that handle specific tasks (e.g. `broadcast`, `dolphin`, `database`) are kept in their own top-level folders.
-
-### The `renderer` folder is organised as follows:
-
-- `app`
-  - Core application logic, setup, and global layout.
-- `components`
-  - Reusable display components. These should generally not access global state directly.
-- `lib`
-  - Shared utilities and helper functions.
-- `listeners`
-  - IPC listeners for handling communication from the main process.
-- `pages`
-  - The root page components for different views in the app.
-- `services`
-  - Service layer for handling business logic and API interactions.
-- `styles`
-  - Global styles and theming configuration.
-
-## Contributing
-
-Contributions are welcome! The [issues section](https://github.com/project-slippi/slippi-launcher/issues) contains some good first ideas. When making a PR, ensure you are not PRing your `main` branch and always describe the feature and what testing you've done so far.
-
-For more information on how to contribute, as well as information on adding app translations see the [CONTRIBUTING.md](./CONTRIBUTING.md) file.
-
-## Acknowledgements
-
-This application uses [Electron React Boilerplate](https://github.com/electron-react-boilerplate/electron-react-boilerplate) as a base and includes most changes up to commit [10c22e5](https://github.com/electron-react-boilerplate/electron-react-boilerplate/commit/10c22e5).
+```sh
+npx ts-node --transpile-only src/brawl_assets/cli.ts --disc-folder <DATA/files> --sd <sd.raw> --out .asset-cache
+```
 
 ## License
 
-Slippi Launcher is released as open source software under the [GPL v3](https://opensource.org/licenses/gpl-3.0.html) license. See the [LICENSE](./LICENSE) file in the project root for the full license text.
+GPL-3.0, like the Slippi Launcher. See [LICENSE](LICENSE).

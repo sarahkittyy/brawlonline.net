@@ -1,0 +1,30 @@
+PlusOnline Launcher
+Copyright (C) 2026 Sarah Ohlin and contributors
+
+This program is a fork of the Slippi Launcher by Project Slippi
+(https://github.com/project-slippi/slippi-launcher), Copyright (C) Jas Laferriere
+and the Project Slippi contributors, licensed under the GNU General Public License
+version 3. The full upstream git history is kept in this repository. Most of the
+application (its screens, flows, replay database, Dolphin management, settings,
+IPC layer and build setup) is their work; the changes made for Project+ are
+described in PPLUS_PORTING.md.
+
+This fork is not affiliated with or endorsed by Project Slippi. "Slippi" and the
+Slippi logos are Project Slippi's; none of their branding or artwork is used here.
+
+The translations in locales/ were made by the Slippi Launcher's translators for
+the Slippi Launcher and are reused under the same license.
+
+Parts of src/brawl_assets (archive, texture and compression decoding) are ported
+from BrawlCrate / BrawlLib (https://github.com/soopercool101/BrawlCrate,
+GPL-3.0). The BRFNT/RFNT layout follows the format documentation on the Custom
+Mario Kart Wiiki (wiki.tockdom.com).
+
+Project+ is made by the Project+ Development Team; Super Smash Bros. Brawl is
+Nintendo's. No game data is included in this program or its distributions: the
+launcher reads the user's own disc image and SD card at run time and caches what
+it needs locally.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License (LICENSE) for details.
