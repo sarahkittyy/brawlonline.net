@@ -642,7 +642,8 @@ def _connected_direct(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
                       gpu_backend: str, test: str, names: tuple[str, str],
                       stocks: int = 2, tags: tuple[int, int] = (0, 0),
                       gcpad_ini: tuple[Any, Any] = (None, None),
-                      dolphin_ini: tuple[Any, Any] = (None, None)
+                      dolphin_ini: tuple[Any, Any] = (None, None),
+                      inst_names: tuple[str, str] = ("game-a", "game-b")
                       ) -> tuple[Game, Game, OnlineUser, OnlineUser]:
     """Two games on the Direct CSS with the gameplay backend (the default), searching for each
     other from the keypad until both are connected. Shorter rules than P+'s (`stocks` stocks,
@@ -650,10 +651,10 @@ def _connected_direct(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
     short; they are part of the setup both games build, so both must have the same."""
     ua = backend.create_user(names[0], names[0][:4].upper())
     ub = backend.create_user(names[1], names[1][:4].upper())
-    a = _boot(dolphin, "game-a", backend, ua, gpu_backend, test, "gameplay", gcpad_ini=gcpad_ini[0],
-              dolphin_ini=dolphin_ini[0])
-    b = _boot(dolphin, "game-b", backend, ub, gpu_backend, test, "gameplay", gcpad_ini=gcpad_ini[1],
-              dolphin_ini=dolphin_ini[1])
+    a = _boot(dolphin, inst_names[0], backend, ua, gpu_backend, test, "gameplay",
+              gcpad_ini=gcpad_ini[0], dolphin_ini=dolphin_ini[0])
+    b = _boot(dolphin, inst_names[1], backend, ub, gpu_backend, test, "gameplay",
+              gcpad_ini=gcpad_ini[1], dolphin_ini=dolphin_ini[1])
     _both(a.to_main_menu, b.to_main_menu)
     _both(a.to_online_page, b.to_online_page)
     _both(lambda: a.to_css("direct", tags[0]), lambda: b.to_css("direct", tags[1]))

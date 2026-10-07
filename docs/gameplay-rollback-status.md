@@ -510,7 +510,7 @@ Game side: `game-code` `pponline` `441eb31`, `3c0fdb6` (`docs/game-code.md` §11
 No reboot and no Dolphin window change: each player's game stays on its own online CSS.
 
 1. **Matchmaking** (Direct, from the in-game keypad) hands the connected peer to `Gprb::Session` on the punched port (Phase 4, "Online hand-off"). The game's search already locked the player in for game 1; the lock-in reaches the session through LOCAL.
-2. **The lobby** (`Gprb::Session`, Slippi's `MATCH_SELECTIONS`): both peers send their lock-in (gmCharacterKind, costume, stage pick, the game number it is for, ready) in their control messages. When every player is locked in for the next game, the **host decides the setup**: P1 = the host, P2 = the joiner; the stage is the losing player's pick (Direct), else any pick, else random from the match's `stages` list (the server's list for the mode, P+ v3.2's legal list in `server/config/rulesets.json`; `Gprb::Session::DefaultStages()` if the server sends none). Since branch `unranked` (2026-10-07) the random stage comes from Slippi's stage pool (no stage again until the list is used up), and a pick outside the list is ignored. The joiner takes the host's setup. The winner of each game is read from the state both peers end on (more stocks, then less damage), so it is the same on both.
+2. **The lobby** (`Gprb::Session`, Slippi's `MATCH_SELECTIONS`): both peers send their lock-in (gmCharacterKind, costume, stage pick, the game number it is for, ready) in their control messages. When every player is locked in for the next game, the **host decides the setup**: P1 = the host, P2 = the joiner; the stage is the losing player's pick (Direct), else any pick, else random from the match's `stages` list (the server's list for the mode, P+ v3.2's legal list in `server/config/rulesets.json`; `Gprb::Session::DefaultStages()` if the server sends none). Since branch `unranked` (2026-10-07, merged as `4944245954`) the random stage comes from Slippi's stage pool (no stage again until the list is used up). A pick is played as it is, even outside the list: Slippi does not restrict Direct's stage select. The joiner takes the host's setup. The winner of each game is read from the state both peers end on (more stocks, then less damage), so it is the same on both.
 3. **SESSION** (written by GameBridge only outside matches, the same on both machines) gets the setup; each game leaves its CSS for the match, builds it with the Versus sequence's own setup from SESSION, and loads (`docs/game-code.md` §11).
 4. **The match** starts exactly as in Phases 4-6: at the first pass through `scMelee` both seed the RNGs from the session seed and the match index and the joiner takes the host's init block; at the first simulation frame the barrier compares the setup hash and copies the host's frame counters, RNGs, serial counter and task order; the countdown runs without rollback; GekkoNet starts at frame 240 behind the start barrier; region mode gp-v12.
 5. **Game set:** both end on the same frame, the game goes straight back to the online CSS (no results screen), the connection stays, `match_index` + 1. START locks in for the next game; Direct's loser picks the stage on P+'s stage select first.
@@ -580,6 +580,18 @@ Results (`harness/tests/test_online_game.py`, DolphinNoGUI built from this chang
 
 **The launcher label.** The earlier e2e runs still saw "PlusOnline Online Rules" because they drove a stale bundle: `launcher/release/app/dist` was built at 06:49-06:58, before the rename commit `6d0c6913` (09:37), and nothing checked it (`launcher_app_dir()` existed but was never called). Rebuilt with `npm run build`; `e2e_launcher.py` now refuses a bundle older than `launcher/`'s last commit or any file under `src/`/`locales/` (`--allow-stale-launcher` overrides) and records and checks the rules label (`summary.json` `rules_labels`).
 
+### The `unranked` merge (2026-10-07)
+
+Dolphin `rollback-fixes` `4944245954` merges branch `unranked` (`6449517bc1`): the server's `stages` list with Slippi's stage pool for every random stage (every Unranked game, Direct's game 1). Kept from `rollback-fixes`: GameBridge and the PPOM v3 SESSION/LOCAL layout (the branch never touched it). Dropped from `unranked`: replacing a Direct loser's pick outside the list with a random stage (Slippi does not restrict Direct). Plugin `pponline` `7ca3a7e`; DolphinNoGUI built from the merge, muted, D3D11, both peers on localhost.
+
+| Test | Result |
+|---|---|
+| `test_online_unranked.py` (3 tests, two-stage server lists) | **3 passed**. Unranked: game 1 Smashville (2,363 frames, 0 mismatches), game 2 Dream Land (4,282, 0). Direct: game 1 Dream Land from the list (2,883, 0), game 2 Final Destination, the loser's pick from outside the list (2,399, 0) |
+| `test_online_game.py` (9 tests) | 8 passed in the full run; `test_each_player_keeps_their_tag_controls` read A's stick at 0 on both machines once (A's Dolphin mapping did not reach the game) and passed when run again |
+| `test_online.py`, `test_rollback.py` | **7 passed**; **14 passed** over two runs (the cases that failed did so connecting to their own harness port, see open issue 8) |
+| `e2e_launcher.py` (`run/artifacts/e2e-launcher/mrg-e2e-20261007-162710/`) | game 1 Green Hill Zone (0x23, random): 755 frames, 0 mismatches; game 2 Final Destination (Bob lost and picked): 4,595 frames, 0 mismatches |
+| `cargo test --workspace` (server) | all passed |
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds.
@@ -590,6 +602,8 @@ Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v
 4. The rollback count in the sessions is low (random macros predict well). A harder input model would stress deeper rollbacks between peers; the misprediction test covers that on one instance.
 5. ~~The online backend is not registered outside the harness.~~ Done in Phase 7: both frontends register it, and it is the default.
 6. The coverage sweep (`gprb_sweep.py`, another agent's tool) still defaults to gp-v9, while the session and sync-test tools it uses now default to gp-v11.
+7. **A desync from frame 0 on Smashville, seen once** (2026-10-07, the first `test_online_unranked.py` run after the `unranked` merge; log `run/scratch/merge-unranked/unranked.log`). Equal setup keys, the barrier passed, the RNGs seeded alike (`4f960b68 6b6c6b20 5048c23a`), yet at frame 0 (game frame 240) the first RNG word differed (`1240120447` against `2104839129`; the other two equal) and the fighters from frame 2; the host ended at "game set" after 573 frames, the joiner with "peer timed out". It happened at 14:59:2x local time, under a minute before the hour, and Smashville's lighting follows the console clock: the two instances' RTCs may have been on either side of an hour boundary. Two later Smashville games ran identically. Not reproduced or fixed.
+8. **Localhost TCP connections sometimes time out on this machine** while several agents run Dolphins: a harness port another process answered ("another harness client is already connected"), a fresh harness port that never accepted, and the portable Postgres of `OnlineBackend` refusing or timing out its first connections (`CREATE DATABASE`, the services' pools). Runs on 2026-10-07 used one portable Postgres cluster started by hand and `PPHARNESS_PG_URL` (the harness's external-Postgres mode), which held up. `OnlineBackend`'s external-Postgres mode passed the URL before psql's options, which psql on Windows ignores; fixed.
 
 ## Harness commands
 
@@ -648,3 +662,4 @@ Diagnostics through environment variables:
 | `da2cf9b595` | DolphinQt: Brawl Online main window title and About; no Project+ Discord link |
 | `b882222f2b` | the render window's title starts with Brawl Online |
 | `c27636d256` | PPOM v3: per-player port values through the lobby into SESSION, the applied layouts in the setup key; the OSD DISCONNECTED only as a fallback |
+| `4944245954` | merge `unranked` (`6449517bc1`): the server's stage list with Slippi's stage pool for every random stage (Unranked, Direct's game 1); Direct's loser's pick is not restricted to the list; PPOM v3 kept |

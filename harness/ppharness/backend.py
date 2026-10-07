@@ -236,7 +236,9 @@ class OnlineBackend:
                   url.rsplit("/", 1)[1], "-v", "ON_ERROR_STOP=1", "-c", sql], cwd=server_dir())
         else:
             psql = shutil.which("psql") or str(portable_pg_bin() / _platform.exe_name("psql"))
-            _run([psql, url, "-v", "ON_ERROR_STOP=1", "-c", sql])
+            # The URL as -d, before the other options: psql on Windows stops parsing options at
+            # the first non-option argument and ignores the rest (with only a warning).
+            _run([psql, "-d", url, "-v", "ON_ERROR_STOP=1", "-c", sql])
 
     def _stop_postgres(self) -> None:
         if self.db_name and self.pg_mode in ("external", "docker"):

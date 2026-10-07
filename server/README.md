@@ -169,7 +169,7 @@ Byte-compatible with Slippi's client: ENet on UDP 43113, reliable JSON packets o
 | 4 (0x04) | Luigi's Mansion | 13 (0x0D) | Yoshi's Island | 35 (0x23) | Green Hill Zone |
 | 5 (0x05) | Metal Cavern | 45 (0x2D) | Dream Land | 46 (0x2E) | Pokémon Stadium 2 |
 
-How Dolphin uses it (as Slippi's client does): the host draws every random stage from it without repeats until the list is used up (Slippi's stage pool). That covers every Unranked game and Direct's game 1. Direct's loser picks games 2+ on P+'s stage select, and the pick must be in the list; otherwise the stage is drawn at random. With no list, Dolphin falls back to its built-in copy of the same legal list.
+How Dolphin uses it (as Slippi's client does): the host draws every random stage from it without repeats until the list is used up (Slippi's stage pool). That covers every Unranked game and Direct's game 1. Direct's loser picks games 2+ on P+'s whole stage select, and Dolphin plays that pick even when it is not in the list (Slippi does not restrict Direct). With no list, Dolphin falls back to its built-in copy of the same legal list.
 
 ## Admin CLI
 
