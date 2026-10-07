@@ -11,7 +11,7 @@
  */
 import { delay } from "@common/delay";
 import { Preconditions } from "@common/preconditions";
-import { PRODUCT_NAME } from "@common/product";
+import { LEGACY_PRODUCT_NAMES, PRODUCT_NAME } from "@common/product";
 import { readTestMode } from "@common/test_mode";
 import { DolphinLaunchType } from "@dolphin/types";
 import { registerGameAssetScheme } from "@game_assets/protocol";
@@ -28,6 +28,7 @@ import { fileExists } from "utils/file_exists";
 
 import { getConfigFlags } from "./flags/flags";
 import { installModules } from "./install_modules";
+import { legacyUserDataNames, migrateLegacyUserData } from "./legacy_user_data";
 import { MenuBuilder } from "./menu";
 import { clearTempFolder, resolveHtmlPath } from "./util";
 
@@ -60,6 +61,16 @@ if (testMode.userDataDir) {
   app.setPath("sessionData", userDataDir);
 }
 
+// The userData folder is named after the product. A profile left from an earlier name is renamed
+// to the current one; if that fails (an old launcher still holds files open), this run uses it as is.
+const legacyUserData = testMode.userDataDir
+  ? null
+  : migrateLegacyUserData(app.getPath("userData"), legacyUserDataNames(LEGACY_PRODUCT_NAMES, app.isPackaged));
+if (legacyUserData?.kind === "kept") {
+  app.setPath("userData", legacyUserData.from);
+  app.setPath("sessionData", legacyUserData.from);
+}
+
 log.initialize();
 log.errorHandler.startCatching();
 // Test mode logs at info level too, so a test can read the Dolphin command line from main.log.
@@ -89,6 +100,11 @@ if (isDevelopment) {
 const remoteDebuggingPort = testMode.remoteDebuggingPort ?? (isDevelopment ? 9222 : null);
 if (remoteDebuggingPort !== null) {
   app.commandLine.appendSwitch("remote-debugging-port", String(remoteDebuggingPort));
+}
+if (legacyUserData?.kind === "moved") {
+  log.info(`Moved the userData folder from ${legacyUserData.from} to ${legacyUserData.to}`);
+} else if (legacyUserData?.kind === "kept") {
+  log.warn(`Could not move ${legacyUserData.from} to ${legacyUserData.to} (${legacyUserData.error}); using it as is`);
 }
 if (testMode.active) {
   log.info(`Test mode: userData ${app.getPath("userData")}, remote debugging port ${remoteDebuggingPort ?? "off"}`);

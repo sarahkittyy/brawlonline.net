@@ -1,8 +1,8 @@
-# PlusOnline Launcher
+# Brawl Online Launcher
 
 Desktop launcher for Project+ online play with rollback netcode: log in, get a connect code, press Play to start our Dolphin build with Project+, browse replays, and change settings.
 
-"PlusOnline" is a placeholder name. The product name lives in one constant (`src/common/product.ts`); the service hosts are configuration there too (subdomains of `fluffycat.gay` by default).
+The product is called Brawl Online (it was "PlusOnline" while the name was a placeholder). The name lives in one constant (`src/common/product.ts`); the service hosts are configuration there too (subdomains of `fluffycat.gay` by default).
 
 This is a fork of the [Slippi Launcher](https://github.com/project-slippi/slippi-launcher) by Project Slippi, with its git history kept. See [NOTICE](NOTICE) for attribution and [PPLUS_PORTING.md](PPLUS_PORTING.md) for what changed and why.
 
@@ -24,6 +24,8 @@ npm start              # run the app in development mode
 ```
 
 `npm run dev` runs the renderer with mocked services (log in as `test` / `test`).
+
+Development profiles live in Electron's userData folder, `<appData>/Brawl Online-dev` (`%APPDATA%\Brawl Online-dev` on Windows); an installed launcher uses `<appData>/Brawl Online`. On start, a folder left from the placeholder name (`PlusOnline-dev`, or `PlusOnline` when installed) is renamed to the new one if the new one does not exist yet; if the rename fails (for example because an old launcher is still running), that start uses the old folder and the next start tries again. The default replay folder `Documents/PlusOnline` is kept while it exists and `Documents/Brawl Online` does not. `PPO_USER_DATA_DIR` skips all of this.
 
 Development defaults (all overridable, see `.env.example`):
 

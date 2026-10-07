@@ -1,5 +1,5 @@
 import { appVersion } from "@common/constants";
-import { PRODUCT_NAME } from "@common/product";
+import { PRODUCT_SLUG } from "@common/product";
 import { app, safeStorage } from "electron";
 import electronLog from "electron-log";
 
@@ -27,7 +27,7 @@ const log = electronLog.scope("accounts");
 export default function setupAccountsIpc() {
   const urls = resolveServiceUrls();
   log.info(`Accounts API: ${urls.accountsApi}`);
-  const client = new AccountsHttpClient(urls.accountsApi, `${PRODUCT_NAME}-launcher/${appVersion}`);
+  const client = new AccountsHttpClient(urls.accountsApi, `${PRODUCT_SLUG}-launcher/${appVersion}`);
   const sessions = new SessionStore(SessionStore.defaultPath(app.getPath("userData")), safeStorage);
   const manager = new AccountsManager(client, sessions);
 

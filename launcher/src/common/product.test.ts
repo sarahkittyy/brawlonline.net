@@ -2,7 +2,7 @@ import { readFileSync } from "fs";
 import path from "path";
 import { describe, expect, it } from "vitest";
 
-import { defaultServiceUrls, PRODUCT_NAME } from "./product";
+import { defaultServiceUrls, LEGACY_PRODUCT_NAMES, PRODUCT_NAME, PRODUCT_SLUG } from "./product";
 
 const root = path.resolve(__dirname, "..", "..");
 const readJson = (rel: string) => JSON.parse(readFileSync(path.join(root, rel), "utf8"));
@@ -12,6 +12,15 @@ describe("product identity", () => {
     expect(readJson("package.json").productName).toBe(PRODUCT_NAME);
     expect(readJson("release/app/package.json").productName).toBe(PRODUCT_NAME);
     expect(readJson("electron-builder.json").productName).toBe(PRODUCT_NAME);
+  });
+
+  it("derives a filesystem- and URL-safe slug", () => {
+    expect(PRODUCT_SLUG).toBe("brawl-online");
+    expect(readJson("electron-builder.json").appId).toBe(`gay.fluffycat.${PRODUCT_SLUG.replace(/-/g, "")}`);
+  });
+
+  it("does not list the current name as a legacy name", () => {
+    expect(LEGACY_PRODUCT_NAMES).not.toContain(PRODUCT_NAME);
   });
 
   it("publishes launcher updates to the configured feed", () => {

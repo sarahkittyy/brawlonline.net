@@ -2,7 +2,7 @@
 
 This repository is the Slippi Launcher (GPL-3.0) forked with its full history (branch `main-pplus`, upstream `0930a2b6`). The goal is Slippi's launcher UX one-to-one: same screens, flows and features, pointed at our own services, our Dolphin fork and Project+. No new UI or flows were invented; the few places where a field or setting had to be added are listed under "Adaptations" below.
 
-The product name is not decided: everything user-visible reads `PRODUCT_NAME` (placeholder `PlusOnline`) from `src/common/product.ts`, and the hosts default to subdomains of `fluffycat.gay` there. A unit test (`src/common/product.test.ts`) checks that `package.json`, `release/app/package.json` and `electron-builder.json` agree with the constant.
+The product is called **Brawl Online**. Everything user-visible reads `PRODUCT_NAME` from `src/common/product.ts`, and the hosts default to subdomains of `fluffycat.gay` there. A unit test (`src/common/product.test.ts`) checks that `package.json`, `release/app/package.json` and `electron-builder.json` agree with the constant. Until 2026-10-07 the placeholder name was `PlusOnline` (`LEGACY_PRODUCT_NAMES`); see "Renaming the product" below for what a rename moves.
 
 ## 1. Inventory of Slippi-specific integrations
 
@@ -40,7 +40,7 @@ Decision: **Replace** (same feature, our implementation), **Keep** (unchanged or
 | Profile / manage-account links (slippi.gg) | User menu, replay stats, "Wrong email? Change email" | **Drop** | No website pages yet. |
 | Discord/Bluesky links, footer, Help menu, support text | various | **Drop** | Slippi's community links. Support text now says to copy logs and send them. |
 | Branding: name, logos, icons, colours, fonts (Rubik, Maven Pro), rank badges, Melee stock/stage images, bouncing logo, crown | everywhere | **Replace / Drop** | See section 5. `assets/` keeps only the macOS entitlements and the GameCube adapter driver installer. App and installer icons are Electron's defaults until we have art. |
-| Package metadata, appId, NSIS installer, file association, AppImage names | `package.json`, `electron-builder.json`, `installer.nsh` | **Replace** | `PlusOnline`, `gay.fluffycat.plusonline`, `.rep` files, generic publish feed, no Slippi signing config or URL handler. |
+| Package metadata, appId, NSIS installer, file association, AppImage names | `package.json`, `electron-builder.json`, `installer.nsh` | **Replace** | `Brawl Online`, `gay.fluffycat.brawlonline`, `.rep` files, generic publish feed, no Slippi signing config or URL handler. |
 | Translations (es, ja, pt, ru) | `locales/` | **Keep** | Re-synced with `i18n:sync`; Slippi-only strings were removed, changed strings fall back to English. |
 
 ### Adaptations to Slippi's UI (where the field set differs)
@@ -192,6 +192,14 @@ curl http://127.0.0.1:9301/json   # each lists its own page: file:///.../release
 
 Each new user-data dir seeds its netplay User folder from the template on start-up (2 GB: the SD card) and makes its own patched copy on the first Play (another 2 GB). Kill the instances with their process tree (`taskkill /T /F /PID <pid>`): Electron starts GPU and renderer child processes. Three fixes were needed for this mode: the preload script and the replay database migrations are taken from the production build whenever `NODE_ENV` is `production` (they were looked up in the dev locations when unpackaged), and `electron release/app` no longer treats the app folder (`argv[1]`) as a replay file to open (it started a playback Dolphin with `-i`).
 
+## 8. Renaming the product
+
+`PRODUCT_NAME` and the three `productName` fields name the app (window title, macOS menu, installer, artifacts, Linux `StartupWMClass`), and Electron names its **userData folder** after it: `<appData>/<productName>` when installed, `<appData>/<productName>-dev` unpackaged (`main.ts`). So a rename would move every profile (settings, sessions, Dolphin User folders, the patched SD card, logs, Chromium's profile) to a new, empty folder. To avoid that, `src/main/legacy_user_data.ts` runs first thing in `main.ts`, before anything reads userData: if the current folder does not exist and one named after an entry of `LEGACY_PRODUCT_NAMES` does (with the same `-dev` suffix), it is renamed to the current name. If the rename fails (an old launcher still running holds files open), that run uses the old folder and logs a warning; the next start tries again. `PPO_USER_DATA_DIR` turns this off. The default replay folder (`Documents/<productName>`, never persisted because defaults are merged at read time) keeps the old `Documents/PlusOnline` while it exists and the new one does not (`default_settings.ts`).
+
+Not migrated: the macOS log folder (`~/Library/Logs/<productName>`, logs only), stored logins on macOS and Linux (Electron's `safeStorage` key there is per app name, "<productName> Safe Storage", so `SessionStore` cannot decrypt the old sessions, logs a warning and the user logs in again; Windows DPAPI is per user and unaffected), and an installed copy. The `appId` changed with the name (`gay.fluffycat.plusonline` to `gay.fluffycat.brawlonline`), and electron-builder derives the Windows uninstall key, the AppUserModelID and the macOS bundle id from it, so a `PlusOnline` install is not upgraded in place: uninstall it (keeping its app data; the new launcher moves it on first start) and install `Brawl Online`.
+
+Deliberately not renamed (internal, and renaming would move user files or break the game-code/Dolphin contracts): `DOLPHIN_ONLINE_DIR`/`DOLPHIN_INI_SECTION` (`Online`), the plugin `PPOnline.rel`/`PPOnline.json` and the `pponline-sd` folder, and the `PPO_*` environment variables.
+
 ## Server issues
 
 Found while porting; not fixed here (server/ is out of scope):
@@ -211,7 +219,7 @@ Found while porting; not fixed here (server/ is out of scope):
 
 ## Open issues
 
-- **Product name, icons, website**: placeholder name; no app/installer/tray icon (Electron default); privacy policy, terms, profile and account pages do not exist.
+- **Icons, website**: no app/installer/tray icon (Electron default); privacy policy, terms, profile and account pages do not exist.
 - **SD card space**: P+'s 2 GB card has only ~40 MB (20,441 clusters) free. The plugin is 24 KB, but anything bigger we put on the card later has to fit there.
 - **First Play is slow and silent**: copying the 2 GB card takes 14-34 s with no progress shown (Slippi's Play has no such step). On a copy-on-write file system (ReFS, APFS, Btrfs), `COPYFILE_FICLONE` makes it instant.
 - **"Configure Dolphin" uses the user's own card**, without the plugin. If the user boots P+ from there and the game writes to that card, the next Play sees a changed source and re-copies it, dropping what the game wrote on the patched copy.
