@@ -1,5 +1,5 @@
 export const OnlineRulesMessages = {
-  onlineRules: (productName: string) => "{0} Online Rules",
+  onlineRules: (productName: string) => "{0} Rules",
   onlineRulesDescription: (productName: string) =>
     "These are a set of rules to follow when using {0}. " +
     "Breaking these rules may result in a suspension or ban depending on severity and frequency. " +

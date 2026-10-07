@@ -1,6 +1,6 @@
 {
-  "name": "plusonline-launcher",
-  "productName": "PlusOnline",
+  "name": "brawl-online-launcher",
+  "productName": "Brawl Online",
   "description": "Launcher for Project+ online play with rollback netcode",
   "license": "GPL-3.0",
   "scripts": {
@@ -62,7 +62,7 @@
     "poTemplateName": "messages.pot",
     "poOutputDirectory": "./locales",
     "argMode": "indexed",
-    "projectId": "plusonline-launcher 1.0"
+    "projectId": "brawl-online-launcher 1.0"
   },
   "electronmon": {
     "patterns": [

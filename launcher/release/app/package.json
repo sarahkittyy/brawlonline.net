@@ -1,6 +1,6 @@
 {
-  "name": "plusonline-launcher",
-  "productName": "PlusOnline",
+  "name": "brawl-online-launcher",
+  "productName": "Brawl Online",
   "description": "Launcher for Project+ online play with rollback netcode",
   "version": "0.1.0",
   "main": "./dist/main/main.js",

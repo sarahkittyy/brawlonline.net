@@ -1,6 +1,6 @@
 {
-  "productName": "PlusOnline",
-  "appId": "gay.fluffycat.plusonline",
+  "productName": "Brawl Online",
+  "appId": "gay.fluffycat.brawlonline",
   "asar": true,
   "asarUnpack": [
     "**\\*.{node,dll}",
@@ -18,9 +18,9 @@
   "fileAssociations": {
     "ext": "rep",
     "name": "rep",
-    "description": "PlusOnline replay"
+    "description": "Brawl Online replay"
   },
-  "artifactName": "PlusOnline-${version}-${arch}-${os}.${ext}",
+  "artifactName": "Brawl-Online-${version}-${arch}-${os}.${ext}",
   "mac": {
     "target": [
       {
@@ -50,7 +50,7 @@
     "minimumSystemVersion": "10.13.6"
   },
   "dmg": {
-    "artifactName": "PlusOnline-${version}-${arch}.${ext}",
+    "artifactName": "Brawl-Online-${version}-${arch}.${ext}",
     "contents": [
       {
         "x": 130,
@@ -71,7 +71,7 @@
     "signAndEditExecutable": false
   },
   "nsis": {
-    "artifactName": "PlusOnline-Setup-${version}.${ext}",
+    "artifactName": "Brawl-Online-Setup-${version}.${ext}",
     "include": ".erb/scripts/installer.nsh",
     "differentialPackage": false,
     "warningsAsErrors": false,
@@ -87,12 +87,12 @@
     "category": "Game",
     "desktop": {
       "entry": {
-        "StartupWMClass": "PlusOnline"
+        "StartupWMClass": "Brawl Online"
       }
     }
   },
   "appImage": {
-    "artifactName": "PlusOnline-${version}-x86_64.${ext}"
+    "artifactName": "Brawl-Online-${version}-x86_64.${ext}"
   },
   "directories": {
     "app": "release/app",
