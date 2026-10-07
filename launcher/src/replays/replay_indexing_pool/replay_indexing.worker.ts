@@ -3,10 +3,10 @@
 // when in Node worker context.
 
 import type { GameStartType, MetadataType } from "@slippi/slippi-js/node";
-import { SlippiGame } from "@slippi/slippi-js/node";
-import { stat } from "node:fs/promises";
 import type { ModuleMethods } from "threads/dist/types/master";
 import { expose } from "threads/worker";
+
+import { readReplayFileInfo } from "../replay_format";
 
 /**
  * Parsed file information returned from worker
@@ -45,37 +45,9 @@ const methods: WorkerSpec = {
 
   async parseReplayFile(folder: string, filename: string): Promise<ParseFileResult> {
     try {
-      const fullPath = `${folder}/${filename}`;
-
-      // Get file stats
-      let sizeBytes = 0;
-      let birthTime: string | undefined = undefined;
-      try {
-        const fileInfo = await stat(fullPath);
-        sizeBytes = fileInfo.size;
-        birthTime = fileInfo.birthtime.toISOString();
-      } catch (err) {
-        // Continue even if stat fails - we'll use defaults
-      }
-
-      // Parse the replay file
-      const game = new SlippiGame(fullPath);
-      const settings = game.getSettings();
-      const metadata = game.getMetadata();
-      const winnerIndices = game.getWinners().map((winner) => winner.playerIndex);
-
-      return {
-        success: true,
-        filename,
-        data: {
-          filename,
-          sizeBytes,
-          birthTime,
-          settings,
-          metadata,
-          winnerIndices,
-        },
-      };
+      // Our replay format is not decided yet: list the file with what the filesystem knows.
+      const data = await readReplayFileInfo(folder, filename);
+      return { success: true, filename, data };
     } catch (err) {
       return {
         success: false,

@@ -19,7 +19,7 @@ import {
 import { createManagedReplayIndexingPool } from "./replay_indexing_pool/replay_indexing_pool_manager";
 import type { Progress } from "./types";
 
-const REPLAY_DATABASE_NAME = "slippi.sqlite";
+const REPLAY_DATABASE_NAME = "replays.sqlite";
 
 const isDevelopment = process.env.NODE_ENV === "development";
 
