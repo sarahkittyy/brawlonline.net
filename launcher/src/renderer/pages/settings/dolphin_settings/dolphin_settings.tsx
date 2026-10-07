@@ -2,17 +2,14 @@ import { DolphinLaunchType } from "@dolphin/types";
 import { css } from "@emotion/react";
 import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
-import FormControlLabel from "@mui/material/FormControlLabel";
-import Radio from "@mui/material/Radio";
-import RadioGroup from "@mui/material/RadioGroup";
 import Typography from "@mui/material/Typography";
 import React from "react";
 
 import { ConfirmationModal } from "@/components/confirmation_modal/confirmation_modal";
+import { PathInput } from "@/components/path_input/path_input";
 import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
 import { DolphinStatus, useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
-import { useDolphinBeta } from "@/lib/hooks/use_settings";
-import { useToasts } from "@/lib/hooks/use_toasts";
+import { useDolphinPath } from "@/lib/hooks/use_settings";
 import { useServices } from "@/services";
 
 import { SettingItem } from "../setting_item_section";
@@ -61,12 +58,12 @@ export const DolphinSettings = ({ dolphinType }: { dolphinType: DolphinLaunchTyp
   const dolphinVersion = useDolphinStore((store) =>
     dolphinType === DolphinLaunchType.NETPLAY ? store.netplayDolphinVersion : store.playbackDolphinVersion,
   );
-  const [dolphinBeta, setDolphinBeta] = useDolphinBeta(dolphinType);
+  const [dolphinPath, setDolphinPath] = useDolphinPath(dolphinType);
+  const [defaultPath, setDefaultPath] = React.useState<string>("");
   const [resetModalOpen, setResetModalOpen] = React.useState(false);
   const [isResetType, setResetType] = React.useState<ResetType | undefined>();
   const { dolphinService } = useServices();
   const { openConfigureDolphin, hardResetDolphin, softResetDolphin } = useDolphinActions(dolphinService);
-  const { showWarning } = useToasts();
   const dolphinIsReady = dolphinStatus === DolphinStatus.READY && !dolphinIsOpen && isResetType == null;
   const versionString: string =
     dolphinStatus === DolphinStatus.UNKNOWN
@@ -75,16 +72,13 @@ export const DolphinSettings = ({ dolphinType }: { dolphinType: DolphinLaunchTyp
       ? Messages.unknown()
       : dolphinVersion;
 
-  const onDolphinBetaChange = async (value: string) => {
-    setResetType(ResetType.SOFT);
-    const useBeta = value === "true";
-    if (useBeta) {
-      showWarning(Messages.mainlineDolphinHasUpdatedOsRequirements());
-    }
-    await setDolphinBeta(useBeta);
-    await softResetDolphin(dolphinType);
-    setResetType(undefined);
-  };
+  React.useEffect(() => {
+    void dolphinService.getDolphinPaths(dolphinType).then(({ executable }) => {
+      if (!dolphinPath) {
+        setDefaultPath(executable);
+      }
+    });
+  }, [dolphinService, dolphinType, dolphinPath]);
 
   const openDolphinDirectoryHandler = React.useCallback(async () => {
     await dolphinService.openDolphinSettingsFolder(dolphinType);
@@ -112,6 +106,18 @@ export const DolphinSettings = ({ dolphinType }: { dolphinType: DolphinLaunchTyp
       <Typography variant="h5">{getDolphinSettingsName(dolphinType)}</Typography>
       <Typography variant="caption">{Messages.version(versionString)}</Typography>
 
+      <SettingItem
+        name={Messages.dolphinExecutable(dolphinTypeName)}
+        description={Messages.dolphinExecutableDescription()}
+      >
+        <PathInput
+          value={dolphinPath ?? ""}
+          placeholder={defaultPath}
+          onSelect={(p) => void setDolphinPath(p)}
+          disabled={dolphinIsOpen}
+          tooltipText={dolphinIsOpen ? Messages.closeDolphinToChange() : ""}
+        />
+      </SettingItem>
       <SettingItem name={Messages.configureDolphin(dolphinTypeName)}>
         <div
           css={css`
@@ -193,17 +199,6 @@ export const DolphinSettings = ({ dolphinType }: { dolphinType: DolphinLaunchTyp
           </Button>
         </div>
       </SettingItem>
-      {dolphinType === DolphinLaunchType.NETPLAY && (
-        <SettingItem
-          name={Messages.netplayDolphinReleaseChannel()}
-          description={Messages.netplayDolphinReleaseChannelDescription()}
-        >
-          <RadioGroup value={dolphinBeta} onChange={(_event, value) => onDolphinBetaChange(value)}>
-            <FormControlLabel value={false} label={Messages.stable()} control={<Radio disabled={!dolphinIsReady} />} />
-            <FormControlLabel value={true} label={Messages.beta()} control={<Radio disabled={!dolphinIsReady} />} />
-          </RadioGroup>
-        </SettingItem>
-      )}
     </div>
   );
 };

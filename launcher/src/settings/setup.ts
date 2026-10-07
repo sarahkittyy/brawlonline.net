@@ -4,7 +4,7 @@ import { ipcMain } from "electron";
 import { autoUpdater } from "electron-updater";
 import path from "path";
 
-import { ipc_addNewConnection, ipc_deleteConnection, ipc_editConnection, ipc_updateSettings } from "./ipc";
+import { ipc_updateSettings } from "./ipc";
 import type { SettingsManager } from "./settings_manager";
 
 export default function setupSettingsIpc({
@@ -29,22 +29,6 @@ export default function setupSettingsIpc({
     await settingsManager.updateSettings(updates);
     return { success: true };
   });
-
-  // Connection management (special handling for ID generation)
-  ipc_addNewConnection.main!.handle(async ({ connection }) => {
-    await settingsManager.addConsoleConnection(connection);
-    return { success: true };
-  });
-
-  ipc_editConnection.main!.handle(async ({ id, connection }) => {
-    await settingsManager.editConsoleConnection(id, connection);
-    return { success: true };
-  });
-
-  ipc_deleteConnection.main!.handle(async ({ id }) => {
-    await settingsManager.deleteConsoleConnection(id);
-    return { success: true };
-  });
 }
 
 /**
@@ -60,7 +44,11 @@ function setupSettingsSubscriptions(settingsManager: SettingsManager, dolphinMan
       const gameDir = path.dirname(isoPath);
       const netplayInstall = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
       const playbackInstall = dolphinManager.getInstallation(DolphinLaunchType.PLAYBACK);
-      await Promise.all([netplayInstall.addGamePath(gameDir), playbackInstall.addGamePath(gameDir)]);
+      await Promise.all([
+        netplayInstall.addGamePath(gameDir),
+        playbackInstall.addGamePath(gameDir),
+        netplayInstall.setDefaultIso(isoPath),
+      ]);
     }
   });
 
@@ -79,9 +67,13 @@ function setupSettingsSubscriptions(settingsManager: SettingsManager, dolphinMan
     await installation.updateSettings({ enableMonthlySubfolders });
   });
 
-  settingsManager.onSettingChange("enableJukebox", async (enableJukebox) => {
-    const installation = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
-    await installation.updateSettings({ enableJukebox });
+  // A different Dolphin build: re-check it like Slippi re-checks after an install
+  settingsManager.onSettingChange("netplayDolphinPath", async () => {
+    await dolphinManager.installDolphin(DolphinLaunchType.NETPLAY);
+  });
+
+  settingsManager.onSettingChange("playbackDolphinPath", async () => {
+    await dolphinManager.installDolphin(DolphinLaunchType.PLAYBACK);
   });
 
   settingsManager.onSettingChange("autoUpdateLauncher", (autoUpdateLauncher) => {

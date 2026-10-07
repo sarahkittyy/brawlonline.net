@@ -29,7 +29,7 @@ const generateTempCommunicationFile = (): string => {
   const tmpDir = path.join(app.getPath("userData"), "temp");
   mkdirSync(tmpDir, { recursive: true });
   const uniqueId = randomBytes(12).toString("hex");
-  const commFileName = `slippi-comms-${uniqueId}.json`;
+  const commFileName = `playback-comms-${uniqueId}.json`;
   const commFileFullPath = path.join(tmpDir, commFileName);
   return commFileFullPath;
 };
@@ -37,11 +37,16 @@ const generateTempCommunicationFile = (): string => {
 export class DolphinInstance extends EventEmitter {
   protected process: ChildProcess | null = null;
   private executablePath: string;
-  private isoPath: string | null = null;
+  private baseParams: string[];
 
-  constructor(execPath: string, isoPath?: string) {
+  /**
+   * @param baseParams always passed first: the User folder (`-u`) and, for Play, the boot target (`-e`).
+   * Unlike Slippi we do not pass `-b`: P+'s launcher DOL hands over to the disc, and batch mode
+   * must not treat that hand-over as the end of emulation.
+   */
+  constructor(execPath: string, baseParams: string[] = []) {
     super();
-    this.isoPath = isoPath ?? null;
+    this.baseParams = [...baseParams];
     this.executablePath = execPath;
   }
 
@@ -49,12 +54,7 @@ export class DolphinInstance extends EventEmitter {
    * Spawns the Dolphin instance with any additional command line parameters
    */
   async start(additionalParams?: string[]): Promise<void> {
-    const params: string[] = [];
-
-    // Auto-start the ISO if provided
-    if (this.isoPath) {
-      params.push("-b", "-e", this.isoPath);
-    }
+    const params: string[] = [...this.baseParams];
 
     // Add additional params if necessary
     if (additionalParams && additionalParams.length > 0) {
@@ -134,8 +134,8 @@ export class PlaybackDolphinInstance extends DolphinInstance {
   private commPath: string;
   private lastWriteMs: number;
 
-  constructor(execPath: string, isoPath?: string) {
-    super(execPath, isoPath);
+  constructor(execPath: string, baseParams: string[] = []) {
+    super(execPath, baseParams);
     this.commPath = generateTempCommunicationFile();
     this.lastWriteMs = 0;
 
@@ -153,7 +153,7 @@ export class PlaybackDolphinInstance extends DolphinInstance {
   }
 
   private async writeCommsFile(options: ReplayCommunication) {
-    // Playback Slippi Dolphin can't pick up comms file changes within the same second, so
+    // Playback Dolphin can't pick up comms file changes within the same second, so
     // defer writing comms file if it's been less than 1 second since last write.
     //
     // However this will only work if only one invocation comes 'early'.

@@ -1,15 +1,8 @@
 /* eslint-disable import/no-default-export */
 import { ipcRenderer } from "electron";
 
-import {
-  ipc_addNewConnection,
-  ipc_deleteConnection,
-  ipc_editConnection,
-  ipc_openSettingsModalEvent,
-  ipc_settingChangedEvent,
-  ipc_updateSettings,
-} from "./ipc";
-import type { AppSettings, SettingUpdate, StoredConnection } from "./types";
+import { ipc_openSettingsModalEvent, ipc_settingChangedEvent, ipc_updateSettings } from "./ipc";
+import type { AppSettings, SettingUpdate } from "./types";
 
 export default {
   /**
@@ -50,20 +43,5 @@ export default {
    */
   async updateSettings(updates: SettingUpdate[]): Promise<void> {
     await ipc_updateSettings.renderer!.trigger({ updates });
-  },
-
-  /**
-   * Connection management
-   */
-  async addNewConnection(connection: Omit<StoredConnection, "id">): Promise<void> {
-    await ipc_addNewConnection.renderer!.trigger({ connection });
-  },
-
-  async editConnection(id: number, connection: Omit<StoredConnection, "id">): Promise<void> {
-    await ipc_editConnection.renderer!.trigger({ id, connection });
-  },
-
-  async deleteConnection(id: number): Promise<void> {
-    await ipc_deleteConnection.renderer!.trigger({ id });
   },
 };

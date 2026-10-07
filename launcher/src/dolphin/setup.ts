@@ -1,7 +1,9 @@
+import { DOLPHIN_ONLINE_DIR } from "@common/product";
 import { shell } from "electron";
 import log from "electron-log";
 import isEqual from "lodash/isEqual";
 import { readFile } from "node:fs/promises";
+import path from "path";
 import { fileExists } from "utils/file_exists";
 
 import {
@@ -10,6 +12,7 @@ import {
   ipc_dolphinEvent,
   ipc_downloadDolphin,
   ipc_fetchGeckoCodes,
+  ipc_getDolphinPaths,
   ipc_hardResetDolphin,
   ipc_installRosetta,
   ipc_launchNetplayDolphin,
@@ -24,7 +27,7 @@ import type { DolphinManager } from "./manager";
 import { deletePlayKeyFile, writePlayKeyFile } from "./playkey";
 import { installRosettaElevated } from "./rosetta/install_rosetta";
 import { DolphinLaunchType } from "./types";
-import { fetchGeckoCodes, saveGeckoCodes, updateBootToCssCode } from "./util";
+import { fetchGeckoCodes, saveGeckoCodes } from "./util";
 
 export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: DolphinManager }) {
   dolphinManager.events.subscribe((event) => {
@@ -49,14 +52,10 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
   });
 
   ipc_openDolphinSettingsFolder.main!.handle(async ({ dolphinType }) => {
+    // Our Dolphin always runs with `-u <User folder>`, so that is where its settings are.
     const dolphinInstall = dolphinManager.getInstallation(dolphinType);
-    if (process.platform === "win32") {
-      const path = dolphinInstall.installationFolder;
-      await shell.openPath(path);
-    } else {
-      const path = dolphinInstall.userFolder;
-      await shell.openPath(path);
-    }
+    await dolphinInstall.ensureUserFolder();
+    await shell.openPath(dolphinInstall.userFolder);
     return { success: true };
   });
 
@@ -64,6 +63,13 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     console.log("hard resetting dolphin...");
     await dolphinManager.reinstallDolphin(dolphinType, true);
     return { success: true };
+  });
+
+  ipc_getDolphinPaths.main!.handle(async ({ dolphinType }) => {
+    const installation = dolphinManager.getInstallation(dolphinType);
+    const userFolder = installation.userFolder;
+    const playKeyFile = path.join(userFolder, DOLPHIN_ONLINE_DIR, "user.json");
+    return { executable: dolphinManager.getDolphinExecutablePath(dolphinType), userFolder, playKeyFile };
   });
 
   ipc_storePlayKeyFile.main!.handle(async ({ key }) => {
@@ -105,12 +111,7 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     return { success: true };
   });
 
-  ipc_launchNetplayDolphin.main!.handle(async ({ bootToCss }) => {
-    // Boot straight to CSS if necessary
-    const installation = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
-    await updateBootToCssCode(installation, { enable: Boolean(bootToCss) });
-
-    // Actually launch Dolphin
+  ipc_launchNetplayDolphin.main!.handle(async () => {
     await dolphinManager.launchNetplayDolphin();
     return { success: true };
   });

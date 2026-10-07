@@ -1,6 +1,4 @@
 export const DolphinSettingsMessages = {
-  mainlineDolphinHasUpdatedOsRequirements: () =>
-    "Mainline Slippi Dolphin has updated OS requirements, check the Help Section for more info",
   configureDolphin: (dolphinTypeName: string) => `Configure {0}`,
   netplayDolphin: () => "Netplay Dolphin",
   playbackDolphin: () => "Playback Dolphin",
@@ -18,8 +16,7 @@ export const DolphinSettingsMessages = {
   thisWillRemoveAllYourDolphinSettings: (dolphinTypeName: string) => `This will remove all your {0} settings.`,
   softReset: () => "Soft reset",
   hardReset: () => "Hard reset",
-  netplayDolphinReleaseChannel: () => "Netplay Dolphin Release Channel",
-  netplayDolphinReleaseChannelDescription: () => "Choose which Slippi Dolphin release to install",
-  stable: () => "Stable (Ishiiruka)",
-  beta: () => "Beta (Mainline)",
+  dolphinExecutable: (dolphinTypeName: string) => `{0} Executable`,
+  dolphinExecutableDescription: () => "The Dolphin build to launch. Leave empty to use the default shown.",
+  closeDolphinToChange: () => "Close Dolphin to change this setting",
 };

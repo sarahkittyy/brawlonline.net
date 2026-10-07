@@ -36,6 +36,12 @@ export const ipc_openDolphinSettingsFolder = makeEndpoint.main(
   <SuccessPayload>_,
 );
 
+export const ipc_getDolphinPaths = makeEndpoint.main(
+  "getDolphinPaths",
+  <{ dolphinType: DolphinLaunchType }>_,
+  <{ executable: string; userFolder: string; playKeyFile: string }>_,
+);
+
 export const ipc_storePlayKeyFile = makeEndpoint.main("storePlayKeyFile", <{ key: PlayKey }>_, <SuccessPayload>_);
 
 export const ipc_checkPlayKeyExists = makeEndpoint.main(
@@ -48,11 +54,7 @@ export const ipc_removePlayKeyFile = makeEndpoint.main("removePlayKeyFile", <Emp
 
 export const ipc_viewSlpReplay = makeEndpoint.main("viewSlpReplay", <{ files: ReplayQueueItem[] }>_, <SuccessPayload>_);
 
-export const ipc_launchNetplayDolphin = makeEndpoint.main(
-  "launchNetplayDolphin",
-  <{ bootToCss?: boolean }>_,
-  <SuccessPayload>_,
-);
+export const ipc_launchNetplayDolphin = makeEndpoint.main("launchNetplayDolphin", <EmptyPayload>_, <SuccessPayload>_);
 
 export const ipc_fetchGeckoCodes = makeEndpoint.main(
   "fetchGeckoCodes",

@@ -16,10 +16,7 @@ export const useSettingsStore = create(
   combine(
     {
       settings: initialState.settings as SettingsSchema,
-      connections: initialState.connections,
       previousVersion: initialState.previousVersion,
-      netplayPromotedToStable: initialState.netplayPromotedToStable,
-      playbackPromotedToStable: initialState.playbackPromotedToStable,
     },
     (set) => ({
       /**
@@ -73,42 +70,19 @@ export function useSetting<K extends keyof SettingsSchema>(
 
 export const useIsoPath = () => useSetting("isoPath");
 
-export const useEnableSpectateRemoteControl = () => useSetting("enableSpectateRemoteControl");
-
-export const useSpectateRemoteControlPort = () => useSetting("spectateRemoteControlPort");
-
 export const useRootSlpPath = () => useSetting("rootSlpPath");
 
 export const useEnableNetplayReplays = () => useSetting("enableNetplayReplays");
 
 export const useEnableMonthlySubfolders = () => useSetting("useMonthlySubfolders");
 
-export const useEnableJukebox = () => useSetting("enableJukebox");
-
-export const useSpectateSlpPath = () => useSetting("spectateSlpPath");
-
 export const useExtraSlpPaths = () => useSetting("extraSlpPaths");
 
-export const useLaunchMeleeOnPlay = () => useSetting("launchMeleeOnPlay");
+export const useLaunchGameOnPlay = () => useSetting("launchGameOnPlay");
 
 export const useAutoUpdateLauncher = () => useSetting("autoUpdateLauncher");
 
-export const useEnableLocationAccess = () => useSetting("enableLocationAccess");
-
 export const useEnableRankDisplay = () => useSetting("enableRankDisplay");
 
-export const useDolphinBeta = (dolphinType: DolphinLaunchType) => {
-  const netplayBeta = useSettingsStore((state) => state.settings.useNetplayBeta);
-  const playbackBeta = useSettingsStore((state) => state.settings.usePlaybackBeta);
-
-  const setDolphinBeta = useCallback(
-    async (useBeta: boolean) => {
-      const key = dolphinType === DolphinLaunchType.NETPLAY ? "useNetplayBeta" : "usePlaybackBeta";
-      await window.electron.settings.updateSettings([{ key, value: useBeta }]);
-    },
-    [dolphinType],
-  );
-
-  const useBeta = dolphinType === DolphinLaunchType.NETPLAY ? netplayBeta : playbackBeta;
-  return [useBeta, setDolphinBeta] as const;
-};
+export const useDolphinPath = (dolphinType: DolphinLaunchType) =>
+  useSetting(dolphinType === DolphinLaunchType.NETPLAY ? "netplayDolphinPath" : "playbackDolphinPath");

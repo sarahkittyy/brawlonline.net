@@ -1,3 +1,4 @@
+import { PRODUCT_NAME } from "@common/product";
 import { app } from "electron";
 import log from "electron-log";
 import path from "path";
@@ -14,11 +15,10 @@ function getDefaultRootSlpPath(): string {
       log.error("Couldn't get the documents path");
     }
   }
-  return path.join(root, "Slippi");
+  return path.join(root, PRODUCT_NAME);
 }
 
 export const defaultAppSettings: AppSettings = {
-  connections: [],
   accounts: {
     activeId: null,
     list: [],
@@ -28,18 +28,11 @@ export const defaultAppSettings: AppSettings = {
     rootSlpPath: getDefaultRootSlpPath(),
     enableNetplayReplays: true,
     useMonthlySubfolders: true,
-    enableJukebox: true,
-    spectateSlpPath: path.join(getDefaultRootSlpPath(), "Spectate"),
     extraSlpPaths: [],
-    launchMeleeOnPlay: true,
+    launchGameOnPlay: true,
     autoUpdateLauncher: true,
-    enableLocationAccess: false,
-    useNetplayBeta: false,
-    usePlaybackBeta: false,
-    enableSpectateRemoteControl: false,
-    spectateRemoteControlPort: 49809,
+    netplayDolphinPath: null,
+    playbackDolphinPath: null,
     enableRankDisplay: true,
   },
-  netplayPromotedToStable: false,
-  playbackPromotedToStable: false,
 };

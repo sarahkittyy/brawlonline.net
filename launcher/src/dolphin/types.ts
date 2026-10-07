@@ -115,6 +115,10 @@ export type DolphinEvent = DolphinEventMap[DolphinEventType];
 export interface DolphinService {
   installRosetta(): Promise<{ exitCode: number }>;
   downloadDolphin(dolphinType: DolphinLaunchType): Promise<void>;
+  /** The Dolphin executable in use (configured or default), its User folder and the user.json path. */
+  getDolphinPaths(
+    dolphinType: DolphinLaunchType,
+  ): Promise<{ executable: string; userFolder: string; playKeyFile: string }>;
   configureDolphin(dolphinType: DolphinLaunchType): Promise<void>;
   softResetDolphin(dolphinType: DolphinLaunchType): Promise<void>;
   hardResetDolphin(dolphinType: DolphinLaunchType): Promise<void>;
@@ -123,7 +127,7 @@ export interface DolphinService {
   checkPlayKeyExists(key: PlayKey): Promise<boolean>;
   removePlayKeyFile(): Promise<void>;
   viewSlpReplay(files: ReplayQueueItem[]): Promise<void>;
-  launchNetplayDolphin(options: { bootToCss?: boolean }): Promise<void>;
+  launchNetplayDolphin(): Promise<void>;
   fetchGeckoCodes(dolphinLaunchType: DolphinLaunchType): Promise<GeckoCode[]>;
   saveGeckoCodes(dolphinLaunchType: DolphinLaunchType, geckoCodes: GeckoCode[]): Promise<void>;
   onEvent<T extends DolphinEventType>(eventType: T, handle: (event: DolphinEventMap[T]) => void): () => void;
