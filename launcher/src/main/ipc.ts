@@ -2,8 +2,6 @@ import type { IsoValidity, NatType, PortMapping, Presence } from "@common/types"
 import type { EmptyPayload, SuccessPayload } from "utils/ipc";
 import { _, makeEndpoint } from "utils/ipc";
 
-import type { ContentManagementServiceName } from "./content_management/registry";
-
 export const ipc_checkValidIso = makeEndpoint.main(
   "checkValidIso",
   <{ path: string }>_,
@@ -20,12 +18,6 @@ export const ipc_installUpdate = makeEndpoint.main(
   <{ success: boolean; error?: string }>_,
 );
 
-export const ipc_getLatestGitHubReleaseVersion = makeEndpoint.main(
-  "getLatestGitHubReleaseVersion",
-  <{ owner: string; repo: string }>_,
-  <{ version: string }>_,
-);
-
 export const ipc_showOpenDialog = makeEndpoint.main(
   "showOpenDialog",
   <Electron.OpenDialogOptions>_,
@@ -38,12 +30,6 @@ export const ipc_runNetworkDiagnostics = makeEndpoint.main(
   "runNetworkDiagnostics",
   <EmptyPayload>_,
   <{ address: string; cgnat: Presence; natType: NatType; portMapping: PortMapping }>_,
-);
-
-export const ipc_contentManagementService = makeEndpoint.main(
-  "contentManagementService",
-  <{ service: ContentManagementServiceName; params: Record<string, unknown> }>_,
-  <{ data: unknown }>_,
 );
 
 // Events

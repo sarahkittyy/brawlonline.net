@@ -2,7 +2,7 @@ export const ReplayBrowserMessages = {
   filesDeleted: (count: number) => "{0, plural, one {# file} other {# files}} successfully deleted.",
   revealLocation: () => "Reveal location",
   currentFolder: () => "Current folder",
-  noSlpFilesFound: () => "No SLP files found",
+  noSlpFilesFound: () => "No replay files found",
   clearFilter: () => "Clear filter",
   processedReplayCount: (count: number, total: number) =>
     "{0, number} of {1, plural, one {# replay} other {# replays}} processed.",

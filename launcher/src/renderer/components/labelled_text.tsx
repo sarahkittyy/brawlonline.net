@@ -1,7 +1,7 @@
 import { css } from "@emotion/react";
 import React from "react";
 
-import { withFont } from "@/styles/with_font";
+import { titleFont } from "@/styles/with_font";
 
 type LabelledTextProps = {
   className?: string;
@@ -23,8 +23,8 @@ export const LabelledText = ({ label, children, className }: React.PropsWithChil
           font-weight: bold;
           margin-bottom: 4px;
           text-transform: uppercase;
-          color: var(--purple-light);
-          font-family: ${withFont("Maven Pro")};
+          color: var(--surface-3);
+          font-family: ${titleFont};
         `}
       >
         {label}

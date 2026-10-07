@@ -1,13 +1,10 @@
-import { socials } from "@common/constants";
 import { css } from "@emotion/react";
 import FileCopyIcon from "@mui/icons-material/FileCopy";
 import LiveHelpIcon from "@mui/icons-material/LiveHelp";
 import log from "electron-log";
 
-import { ExternalLink as A } from "@/components/external_link";
 import { Button } from "@/components/form/button";
 import { useToasts } from "@/lib/hooks/use_toasts";
-import { ReactComponent as DiscordIcon } from "@/styles/images/discord.svg";
 
 import { NetworkDiagnosticsButton } from "./network_diagnostics_button/network_diagnostics_button";
 import { SupportBoxMessages as Messages } from "./support_box.messages";
@@ -46,15 +43,6 @@ export const SupportBox = () => {
           }
         `}
       >
-        <div>
-          <Button
-            LinkComponent={A}
-            startIcon={<DiscordIcon fill="var(--purple-lighter)" style={{ height: 18, width: 18 }} />}
-            href={socials.discordUrl}
-          >
-            {Messages.joinDiscord()}
-          </Button>
-        </div>
         <div>
           <Button startIcon={<FileCopyIcon />} onClick={onCopy}>
             {Messages.copyLogs()}

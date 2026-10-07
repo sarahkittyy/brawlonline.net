@@ -2,7 +2,6 @@ import { css } from "@emotion/react";
 import { format } from "date-fns";
 import React from "react";
 
-import { ExternalLink as A } from "@/components/external_link";
 import { useAdvancedUser } from "@/lib/hooks/use_advanced_user";
 import { useToasts } from "@/lib/hooks/use_toasts";
 
@@ -56,21 +55,7 @@ export const BuildInfo = ({ className, enableAdvancedUserClick }: BuildInfoProps
       `}
     >
       <div>
-        Version {appVersion} (
-        {isAdvancedUser ? (
-          <A
-            css={css`
-              text-decoration: underline;
-              cursor: pointer;
-            `}
-            href={`https://github.com/project-slippi/slippi-launcher/commit/${commitHash}`}
-          >
-            {commitHash}
-          </A>
-        ) : (
-          `${commitHash}`
-        )}
-        )
+        Version {appVersion} ({commitHash})
       </div>
       <div>
         Build

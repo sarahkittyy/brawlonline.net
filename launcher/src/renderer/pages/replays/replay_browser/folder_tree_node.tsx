@@ -23,14 +23,14 @@ export const FolderTreeNode = ({ nestLevel = 0, folder, collapsedFolders, onClic
   const hasChildren = folder.subdirectories.length > 0;
   const isCollapsed = collapsedFolders.includes(folder.fullPath);
   const isSelected = currentFolder === folder.fullPath;
-  const labelColor = isSelected ? "var(--gray-dark)" : "rgba(255, 255, 255, 0.5)";
+  const labelColor = isSelected ? "var(--surface-gray)" : "rgba(255, 255, 255, 0.5)";
   return (
     <div>
       <ListItem
         onClick={() => onClick(folder.fullPath)}
         button={true}
         style={{
-          backgroundColor: isSelected ? "var(--green-primary)" : undefined,
+          backgroundColor: isSelected ? "var(--accent-primary)" : undefined,
           color: labelColor,
           padding: 0,
           paddingLeft: nestLevel * 15,

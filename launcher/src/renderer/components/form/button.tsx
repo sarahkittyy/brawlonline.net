@@ -7,12 +7,12 @@ export const Button = ({ children, ...rest }: ButtonProps) => {
       variant="contained"
       color="inherit"
       sx={{
-        color: "var(--purple-darker)",
+        color: "var(--surface-0)",
         fontWeight: 500,
         fontSize: 12,
         backgroundColor: "white",
         "& .MuiButton-startIcon": {
-          color: "var(--purple-lighter)",
+          color: "var(--surface-4)",
         },
         "&:hover": {
           backgroundColor: "rgba(255, 255, 255, 0.7)",

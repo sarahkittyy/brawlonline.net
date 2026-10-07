@@ -1,6 +1,4 @@
-import CastOutlinedIcon from "@mui/icons-material/CastOutlined";
 import HomeOutlinedIcon from "@mui/icons-material/HomeOutlined";
-import LiveTvOutlinedIcon from "@mui/icons-material/LiveTvOutlined";
 import SlowMotionVideoIcon from "@mui/icons-material/SlowMotionVideo";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
@@ -10,14 +8,12 @@ import { useAppStore } from "@/lib/hooks/use_app_store";
 import { useLastPageTracker } from "@/lib/hooks/use_last_page";
 import { usePageRequestListeners } from "@/lib/hooks/use_page_request_listeners";
 import { usePageNavigationShortcuts } from "@/lib/hooks/use_shortcuts";
-import { createConsoleMirrorPage } from "@/pages/console_mirror/create";
 import { HomePage } from "@/pages/home/home_page";
 import { NotFoundPage } from "@/pages/not_found/not_found_page";
 import { createQuickStartPage } from "@/pages/quick_start/create";
 import { useQuickStartStore } from "@/pages/quick_start/use_quick_start";
 import { createReplaysPage } from "@/pages/replays/create";
 import { createSettingsPage } from "@/pages/settings/create";
-import { createSpectatePage } from "@/pages/spectate/create";
 import { createServiceProvider } from "@/services";
 import type { Services } from "@/services/types";
 
@@ -31,8 +27,6 @@ export function createApp({ services }: { services: Services }): {
   const { Page: SettingsPage } = createSettingsPage();
   const { Page: QuickStartPage } = createQuickStartPage();
   const { Page: ReplaysPage } = createReplaysPage();
-  const { Page: SpectatePage } = createSpectatePage({ broadcastService: services.broadcastService });
-  const { Page: ConsoleMirrorPage } = createConsoleMirrorPage();
 
   const menuItems: MainMenuItem[] = [
     {
@@ -47,19 +41,6 @@ export function createApp({ services }: { services: Services }): {
       title: () => Messages.replays(),
       Component: ReplaysPage,
       Icon: SlowMotionVideoIcon,
-    },
-    {
-      subpath: "spectate",
-      title: () => Messages.spectate(),
-      Component: SpectatePage,
-      Icon: LiveTvOutlinedIcon,
-      private: true,
-    },
-    {
-      subpath: "console",
-      title: () => Messages.console(),
-      Component: ConsoleMirrorPage,
-      Icon: CastOutlinedIcon,
     },
   ];
 

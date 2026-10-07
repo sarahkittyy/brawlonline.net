@@ -4,7 +4,6 @@ import { Navigate, Route, Routes } from "react-router-dom";
 import { Header } from "@/app/header/header";
 import { LoginDialog } from "@/app/header/login_dialog";
 import type { MenuItem } from "@/app/header/main_menu";
-import { AdDialog } from "@/components/ad_dialog";
 import { AuthGuard } from "@/components/auth_guard";
 import { LoginNotice } from "@/components/login_notice/login_notice";
 import { PersistentNotification } from "@/components/persistent_notification/persistent_notification";
@@ -54,7 +53,6 @@ export const App = React.memo(({ menuItems }: { menuItems: readonly MainMenuItem
       </div>
       <LoginDialog />
       <PersistentNotification />
-      <AdDialog />
       <RosettaInstallDialog />
     </div>
   );

@@ -19,7 +19,7 @@ import { useSettingsModal } from "@/lib/hooks/use_settings_modal";
 import { useTabMemory } from "@/lib/hooks/use_tab_memory";
 import type { SettingSection } from "@/pages/settings/types";
 import { platformTitleBarStyles } from "@/styles/platform_title_bar_styles";
-import { withSlippiBackground } from "@/styles/with_slippi_background";
+import { withThemeBackground } from "@/styles/with_theme_background";
 
 import { SettingsPageMessages as Messages } from "./settings_page.messages";
 
@@ -28,7 +28,7 @@ const Outer = styled.div`
   display: flex;
   height: 100%;
   width: 100%;
-  ${withSlippiBackground}
+  ${withThemeBackground}
 `;
 
 const MenuColumn = styled.div`
@@ -91,7 +91,7 @@ export const SettingsPage = React.memo(({ settings }: { settings: SettingSection
       <DualPane
         id="settings-view"
         width={275}
-        leftStyle={{ backgroundColor: "var(--purple-dark)" }}
+        leftStyle={{ backgroundColor: "var(--surface-1)" }}
         leftSide={
           <MenuColumn>
             <div
@@ -120,7 +120,7 @@ export const SettingsPage = React.memo(({ settings }: { settings: SettingSection
                             margin-top: 10px;
                             margin-bottom: 5px;
                             font-size: 14px;
-                            color: var(--purple-light);
+                            color: var(--surface-3);
                           `}
                         >
                           {section.title?.()}

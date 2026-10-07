@@ -3,7 +3,7 @@
   height: fit-content;
   border-radius: 4px;
   border: none;
-  background-color: var(--purple-dark);
+  background-color: var(--surface-1);
   overflow: hidden;
   background-image: linear-gradient(rgb(255 255 255 / 5%), rgb(255 255 255 / 5%));
 }

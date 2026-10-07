@@ -2,7 +2,7 @@ import styled from "@emotion/styled";
 import ReactMarkdown from "react-markdown";
 
 import { ExternalLink as A } from "@/components/external_link";
-import { withFont } from "@/styles/with_font";
+import { bodyFont, titleFont } from "@/styles/with_font";
 
 import { CodeBlock } from "./code_block";
 
@@ -43,12 +43,12 @@ const Outer = styled.div`
   * {
     user-select: text;
   }
-  font-family: ${withFont("Rubik")};
+  font-family: ${bodyFont};
 
   h1,
   h2,
   h3 {
-    font-family: ${withFont("Maven Pro")};
+    font-family: ${titleFont};
   }
 
   img {

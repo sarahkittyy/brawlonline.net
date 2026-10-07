@@ -2,7 +2,7 @@ import Box from "@mui/material/Box";
 import React from "react";
 import { Navigate } from "react-router-dom";
 
-import { withSlippiBackground } from "@/styles/with_slippi_background";
+import { withThemeBackground } from "@/styles/with_theme_background";
 
 import { QuickStart } from "./quick_start";
 import { useQuickStart, useQuickStartStore } from "./use_quick_start";
@@ -20,7 +20,7 @@ export function createQuickStartPage(): { Page: React.ComponentType } {
     }
 
     return (
-      <Box css={withSlippiBackground} display="flex" style={{ height: "100%", width: "100%" }}>
+      <Box css={withThemeBackground} display="flex" style={{ height: "100%", width: "100%" }}>
         <QuickStart
           allSteps={steps}
           currentStep={currentStep}

@@ -1,3 +1,4 @@
+import { defaultServiceUrls } from "@common/product";
 import { css } from "@emotion/react";
 import styled from "@emotion/styled";
 import ButtonBase from "@mui/material/ButtonBase";
@@ -31,7 +32,7 @@ export const PersistentNotification = React.memo(() => {
   }, [installAppUpdate]);
 
   const handleManualDownload = useCallback(() => {
-    window.electron.shell.openExternal("https://slippi.gg/downloads").catch(log.error);
+    window.electron.shell.openExternal(defaultServiceUrls.launcherUpdates).catch(log.error);
   }, []);
 
   // The handleInstall callback should provide immediate feedback i.e. it should immediately restart the
@@ -100,7 +101,7 @@ const Outer = styled.div`
   gap: 10px;
   position: relative;
   height: 30px;
-  background-color: var(--purple-light);
+  background-color: var(--surface-3);
   text-align: center;
   font-size: 14px;
 `;

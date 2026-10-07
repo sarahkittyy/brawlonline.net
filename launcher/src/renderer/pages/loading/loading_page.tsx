@@ -2,7 +2,7 @@ import { css } from "@emotion/react";
 
 import { BuildInfo } from "@/components/build_info/build_info";
 import { LoadingScreen } from "@/components/loading_screen/loading_screen";
-import { withSlippiBackground } from "@/styles/with_slippi_background";
+import { withThemeBackground } from "@/styles/with_theme_background";
 
 import { LoadingPageMessages as Messages } from "./loading_page.messages";
 
@@ -14,7 +14,7 @@ export const LoadingPage = () => {
         width: 100%;
       `}
     >
-      <LoadingScreen css={withSlippiBackground} message={Messages.justASec()} />
+      <LoadingScreen css={withThemeBackground} message={Messages.justASec()} />
       <div
         css={css`
           position: fixed;

@@ -5,7 +5,6 @@ import {
   ipc_checkValidIso,
   ipc_clearTempFolder,
   ipc_copyLogsToClipboard,
-  ipc_getLatestGitHubReleaseVersion,
   ipc_installUpdate,
   ipc_launcherUpdateDownloadingEvent,
   ipc_launcherUpdateFoundEvent,
@@ -33,10 +32,6 @@ export default {
   async installAppUpdate(): Promise<{ success: boolean; error?: string }> {
     const { result } = await ipc_installUpdate.renderer!.trigger({});
     return result;
-  },
-  async getLatestGithubReleaseVersion(owner: string, repo: string): Promise<string> {
-    const { result } = await ipc_getLatestGitHubReleaseVersion.renderer!.trigger({ owner, repo });
-    return result.version;
   },
   async clearTempFolder() {
     const { result } = await ipc_clearTempFolder.renderer!.trigger({});

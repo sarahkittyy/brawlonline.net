@@ -1,9 +1,3 @@
-import type { BaseNewsItem, SourceId } from "main/content_management/news_feed/types";
-
-export type NewsItem = BaseNewsItem & {
-  source: SourceId;
-};
-
 export const enum IsoValidity {
   VALID = "VALID",
   UNKNOWN = "UNKNOWN",

@@ -1,6 +1,7 @@
 /* eslint-disable import/no-default-export */
+import { PRODUCT_NAME } from "@common/product";
 import type { BrowserWindow, MenuItemConstructorOptions } from "electron";
-import { app, dialog, Menu, shell } from "electron";
+import { app, dialog, Menu } from "electron";
 
 import type { BrowserWindowManager } from "./browser_window_manager";
 
@@ -66,10 +67,10 @@ export class MenuBuilder {
 
   private buildDarwinTemplate(): MenuItemConstructorOptions[] {
     const subMenuAbout: DarwinMenuItemConstructorOptions = {
-      label: "Slippi Launcher",
+      label: PRODUCT_NAME,
       submenu: [
         {
-          label: "About Slippi Launcher",
+          label: `About ${PRODUCT_NAME}`,
           selector: "orderFrontStandardAboutPanel:",
         },
         { type: "separator" },
@@ -92,7 +93,7 @@ export class MenuBuilder {
         { label: "Services", submenu: [] },
         { type: "separator" },
         {
-          label: "Hide Slippi Launcher",
+          label: `Hide ${PRODUCT_NAME}`,
           accelerator: "Command+H",
           selector: "hide:",
         },
@@ -198,7 +199,7 @@ export class MenuBuilder {
         },
         {
           id: "macos-window-toggle",
-          label: "Slippi Launcher",
+          label: PRODUCT_NAME,
           accelerator: "Cmd+0",
           visible: false,
           enabled: false,
@@ -210,19 +211,8 @@ export class MenuBuilder {
         },
       ],
     };
-    const subMenuHelp: MenuItemConstructorOptions = {
-      label: "Help",
-      submenu: [
-        {
-          label: "Open Slippi Discord Server",
-          click() {
-            void shell.openExternal("https://slippi.gg/discord");
-          },
-        },
-      ],
-    };
-
-    return [subMenuAbout, subMenuFile, subMenuEdit, subMenuView, subMenuWindow, subMenuHelp];
+    // Slippi's Help menu only links its Discord server; there is no equivalent yet.
+    return [subMenuAbout, subMenuFile, subMenuEdit, subMenuView, subMenuWindow];
   }
 
   private buildDefaultTemplate() {
@@ -296,17 +286,6 @@ export class MenuBuilder {
             checked: this.browserWindowManager.isAlwaysOnTop(),
             click: (menuItem) => {
               this.browserWindowManager.setAlwaysOnTop(menuItem.checked);
-            },
-          },
-        ],
-      },
-      {
-        label: "Help",
-        submenu: [
-          {
-            label: "Open Slippi Discord Server",
-            click() {
-              void shell.openExternal("https://slippi.gg/discord");
             },
           },
         ],

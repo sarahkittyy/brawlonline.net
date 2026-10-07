@@ -64,7 +64,7 @@ export const NetworkDiagnosticsButton = React.memo(() => {
   return (
     <div>
       <ActionButton
-        startIcon={<NetworkCheckIcon fill="var(--purple-lighter)" className={styles.icon} />}
+        startIcon={<NetworkCheckIcon fill="var(--surface-4)" className={styles.icon} />}
         color="secondary"
         variant="contained"
         onClick={openDialog}

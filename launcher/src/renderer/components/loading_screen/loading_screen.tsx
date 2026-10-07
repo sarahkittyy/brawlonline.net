@@ -1,8 +1,7 @@
 import { css } from "@emotion/react";
+import CircularProgress from "@mui/material/CircularProgress";
 import LinearProgress from "@mui/material/LinearProgress";
 import React from "react";
-
-import { BouncingSlippiLogo } from "@/components/bouncing_slippi_logo/bouncing_slippi_logo";
 
 import { Message } from "../message";
 import { LoadingScreenMessages as Messages } from "./loading_screen.messages";
@@ -17,7 +16,7 @@ export const LoadingScreen = ({
   style?: React.CSSProperties;
 }) => {
   return (
-    <Message className={className} style={style} icon={<BouncingSlippiLogo />}>
+    <Message className={className} style={style} icon={<CircularProgress color="inherit" />}>
       <p
         css={css`
           text-align: center;
@@ -35,7 +34,7 @@ export const LoadingScreen = ({
 
 export function LoadingScreenWithProgress({ current = 0, total = 100 }: { current?: number; total?: number }) {
   return (
-    <Message icon={<BouncingSlippiLogo />}>
+    <Message icon={<CircularProgress color="inherit" />}>
       <div
         style={{
           color: "var(--off-white)",

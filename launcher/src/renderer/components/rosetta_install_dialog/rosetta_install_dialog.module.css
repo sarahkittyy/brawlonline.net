@@ -4,7 +4,7 @@
 
 .appleSlaLink {
   margin-left: 4px;
-  color: var(--purple-lighter);
+  color: var(--surface-4);
 
   &:hover {
     text-decoration: underline;

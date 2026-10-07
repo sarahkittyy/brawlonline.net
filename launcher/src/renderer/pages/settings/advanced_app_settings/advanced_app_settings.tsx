@@ -1,8 +1,9 @@
+import { PRODUCT_NAME } from "@common/product";
 import Button from "@mui/material/Button";
 import React from "react";
 
 import { Toggle } from "@/components/form/toggle";
-import { useAutoUpdateLauncher, useEnableLocationAccess } from "@/lib/hooks/use_settings";
+import { useAutoUpdateLauncher } from "@/lib/hooks/use_settings";
 import { useToasts } from "@/lib/hooks/use_toasts";
 
 import { SettingItem } from "../setting_item_section";
@@ -10,7 +11,6 @@ import { AdvancedAppSettingsMessages as Messages } from "./advanced_app_settings
 
 export const AdvancedAppSettings = React.memo(() => {
   const [autoUpdateLauncher, setAutoUpdateLauncher] = useAutoUpdateLauncher();
-  const [enableLocationAccess, setEnableLocationAccess] = useEnableLocationAccess();
 
   return (
     <div>
@@ -19,15 +19,7 @@ export const AdvancedAppSettings = React.memo(() => {
           value={autoUpdateLauncher}
           onChange={(checked) => setAutoUpdateLauncher(checked)}
           label={Messages.enableAutoUpdates()}
-          description={Messages.enableAutoUpdatesDescription()}
-        />
-      </SettingItem>
-      <SettingItem>
-        <Toggle
-          value={enableLocationAccess}
-          onChange={(checked) => setEnableLocationAccess(checked)}
-          label={Messages.enableLocationAccess()}
-          description={Messages.enableLocationAccessDescription()}
+          description={Messages.enableAutoUpdatesDescription(PRODUCT_NAME)}
         />
       </SettingItem>
       <ClearTempFilesForm />
