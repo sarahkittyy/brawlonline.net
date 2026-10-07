@@ -1,6 +1,6 @@
 # Gameplay-only rollback: status
 
-Branch `gameplay-rollback` in the worktree `dolphin-gprb/` (off `rollback-fixes`, merged with `rollback-fixes` at `a1f9ec2685`, at `d36794a6e1` (the online client) and at `ad474c0358` (GameBridge, recent codes, Qt session backend)). Not pushed. Head: `b79fe057cf`. **Default region set: gp-v12** (Phase 6).
+Branch `gameplay-rollback` in the worktree `dolphin-gprb/` (off `rollback-fixes`, merged with `rollback-fixes` at `a1f9ec2685`, at `d36794a6e1` (the online client) and at `ad474c0358` (GameBridge, recent codes, Qt session backend)). Not pushed. Head: `b79fe057cf`. **Default region set: gp-v12** (Phase 6). **Merged into `rollback-fixes`** (`df44299556`, 2026-10-07), where the gameplay session is now the default online backend and starts matches from the game's own online CSS (Phase 7).
 
 **The session model** (user decision):
 - Each player boots and uses the menus alone.
@@ -495,6 +495,69 @@ Dual core, `distance` 4, Mario/Marth FD, both ports mispredicted on every frame'
 
 **What this cannot show:** audible artefacts (a stop cuts a sound without a fade; a re-attached sound keeps the pitch or volume the discarded run gave it). Those need ears on an unmuted instance.
 
+## Phase 7: the real online path (the default backend, from the online CSS)
+
+**Merged** into `rollback-fixes` (`dolphin/`, merge `df44299556`, 2026-10-07; the worktree `dolphin-gprb` is unchanged). On `rollback-fixes`:
+- `aedcf62a51`: the gameplay session is **the default online backend** (`[Online] SessionBackend = gameplay`; `netplay`, the synchronized reboot, stays selectable). DolphinQt's main window and DolphinNoGUI's `main` register it at start-up (`Gprb::RegisterOnlineBackend()` = `RegisterFactory("gameplay", Gprb::MakeOnlineBackend)`), before `SelectConfigured()`. The lobby and PPOM version 2 (SESSION, LOCAL), below.
+- `da2cf9b595`: Brawl Online branding in DolphinQt.
+
+- `b882222f2b`: the render window's title starts with Brawl Online.
+
+Game side: `game-code` `pponline` `441eb31`, `3c0fdb6` (`docs/game-code.md` §11). Harness: `harness/tools/online_set.py` (the set, shared by the test and the launcher run).
+
+### How a real session runs now
+
+No reboot and no Dolphin window change: each player's game stays on its own online CSS.
+
+1. **Matchmaking** (Direct, from the in-game keypad) hands the connected peer to `Gprb::Session` on the punched port (Phase 4, "Online hand-off"). The game's search already locked the player in for game 1; the lock-in reaches the session through LOCAL.
+2. **The lobby** (`Gprb::Session`, Slippi's `MATCH_SELECTIONS`): both peers send their lock-in (gmCharacterKind, costume, stage pick, the game number it is for, ready) in their control messages. When every player is locked in for the next game, the **host decides the setup**: P1 = the host, P2 = the joiner; the stage is the losing player's pick (Direct), else any pick, else random from the match's `stages` list (empty from our server today, so P+ v3.2's legal list, `Gprb::Session::DefaultStages()`), without repeating the last stage. The joiner takes the host's setup. The winner of each game is read from the state both peers end on (more stocks, then less damage), so it is the same on both.
+3. **SESSION** (written by GameBridge only outside matches, the same on both machines) gets the setup; each game leaves its CSS for the match, builds it with the Versus sequence's own setup from SESSION, and loads (`docs/game-code.md` §11).
+4. **The match** starts exactly as in Phases 4-6: at the first pass through `scMelee` both seed the RNGs from the session seed and the match index and the joiner takes the host's init block; at the first simulation frame the barrier compares the setup hash and copies the host's frame counters, RNGs, serial counter and task order; the countdown runs without rollback; GekkoNet starts at frame 240 behind the start barrier; region mode gp-v12.
+5. **Game set:** both end on the same frame, the game goes straight back to the online CSS (no results screen), the connection stays, `match_index` + 1. START locks in for the next game; Direct's loser picks the stage on P+'s stage select first.
+6. **Disconnects** (design 5.6): a peer that leaves (hold Z) or goes silent (7.2 s) ends the session; LOCAL `disconnected` is set; in a match the game plays the error sound and ends the game through its own game set (the departed player dies on its last stock), then goes back to the CSS; GameBridge's next `GET_MATCH_STATE` cleans up and reads IDLE. A red OSD "DISCONNECTED" stands in for the HUD text.
+
+What the plugin must never do in a match, and does not: read the mailbox, or let anything that differs between the machines change game state. Its `.data`/`.bss` is in the region set; the mailbox and LOCAL are excluded (one range); SESSION is constant during a match.
+
+### Results
+
+All on this PC (shared with another agent's three Dolphin instances), both peers on localhost, dual core, D3D11, muted, P+'s rules shortened by the tests to 2 stocks / 2 minutes (written into the set rule on both CSSs; part of the setup both build).
+
+Two-game Direct sets from the in-game menus (`online_set.play_set`). Rollbacks per peer are low: both peers are on localhost and the random macros predict well.
+
+| Run | Game | Stage | Frames (both) | Rollbacks | Confirmed checksums | Traces |
+|---|---|---|---|---|---|---|
+| `test_direct_set_under_the_gameplay_session`, build `b882222f2b` (DolphinNoGUI) | 1 | 0x0C Frigate Husk (random) | 7,193 | 0, 3 | 7,178 compared, **0 mismatches** | identical |
+| | 2 | 0x02 Final Destination (the loser's pick) | 1,361 | 0, 3 | 1,346, **0** | identical |
+| the same test, build `da2cf9b595` | 1 | 0x01 Battlefield (random) | 1,427 | 1, 3 | 1,412, **0** | identical |
+| | 2 | 0x02 Final Destination (the loser's pick) | 1,507 | 0, 1 | 1,492, **0** | identical |
+| `e2e_launcher.py`, two launchers and two Qt `Dolphin.exe`, build `b882222f2b` (`run/artifacts/e2e-launcher/gpon-e2e-final-20261007-125651/`) | 1 | 0x05 Metal Cavern (random) | 1,593 | 0, 3 | 1,578, **0** | identical |
+| | 2 | 0x02 Final Destination (Alice lost and picked) | 1,376 | 0, 5 | 1,361, **0** | identical |
+| `e2e_launcher.py`, build `da2cf9b595` (`gpon-e2e-20261007-115717/`) | 1 | 0x2D Dream Land (random) | 4,086 | 11, 0 | 4,071, **0** | identical |
+| | 2 | 0x02 Final Destination (Bob lost and picked) | 3,448 | 3, 0 | 3,433, **0** | identical |
+
+Every game ended with game set on both peers on the same frame.
+
+No reboot (checked by `harness/tools/online_set.py`): the emulated frame count, the plugin's own frame counter and the PPOM block address only moved forward / stayed put, no netplay session ran, and GameBridge never lost the block. Both games built the same `gmGlobalModeMelee` setup (compared field by field) with the same setup hash, and both were back on the online CSS after each game, still connected, with the lobby at the next game and the same winner.
+
+Development runs of the same flow (a scratch driver, 1-3 games each): 10 more games, 847-2,584 frames, all to game set with 0 confirmed-checksum mismatches.
+
+`test_opponent_leaves_in_the_middle_of_a_game`: the guest's Dolphin is closed in a match; the host sees the drop after 7.3-7.4 s, the game ends and the host is back on its CSS, idle. The same with the host's Dolphin closed (the guest survives): dropped after 7.4 s, back on the CSS.
+
+The launcher path (`harness/tools/e2e_launcher.py`) logs in through both launchers, presses Play, and drives both Qt `Dolphin.exe` from the main menu through the set above: both Dolphins' windows are "Brawl Online" (main window) and "Brawl Online | Project+ Dolphin b882222f2b | JIT64 DC | Direct3D 11 | HLE | ..." (render window), no NetPlay window, muted.
+
+**Regression runs on the final build** (`b882222f2b`, frozen as `run/bin/gpon-final`):
+- `harness/tests/test_online_game.py`: 8 passed (the menus, recent codes, CSS lock, Unranked's server error, the set above, the in-match leave, the netplay fallback hand-off);
+- `harness/tests/test_online.py`: 7 passed (the netplay hand-off test now selects `backend="netplay"`);
+- `harness/tests/test_rollback.py`: 14 passed (whole-machine netplay rollback, sc and dc);
+- sync tests (`gprb_synctest.py`, gp-v12, single core, `distance` 2): Fox/Falco Battlefield 3,689 frames, Peach/Game & Watch PS2 26,175 frames, both to game set, 0 desyncs;
+- network sessions through netsim (`gprb_session.py`, `typical`): single core 4,506 confirmed frames, dual core 4,780, 7,451 and 2,058, all 0 mismatches with identical traces. Two more dual-core runs failed to start (the harness's first `pad_set` timed out at start-up while the machine also ran another agent's three instances; Phase 6 open issue 3 saw the same), and the pre-merge build started its one try.
+
+### Open issues of Phase 7
+
+1. **Real network conditions** were not exercised through the in-game flow: the matchmaking P2P link is direct on localhost (the netsim tests of Phases 4 and 6 drive `gprb_connect` directly). The session code is the same; a netsim between two in-game peers is still to do.
+2. The game-side gaps (`docs/game-code.md` §11): the CSS does not show the coin placed again after a match or the stage select (START locks in with the last character); DISCONNECTED is an OSD message, and the disconnect end shows Brawl's "GAME!"; every player has the default controls (no name tags, no port values yet).
+3. Ranked, Unranked (the server refuses it today) and code-based Teams are not exercised; SESSION and the lobby are sized for 4 players, the session itself runs 2.
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds.
@@ -503,7 +566,7 @@ Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v
 2. **State outside the set that only rare events touch** is still found one case at a time. `gprb_memdiff.py scan` finds global list heads that point into the set; counters and flags need a census (`PPR_GPRB_CENSUS`) and a reason. Known and left alone: the task-id counter `gUnk8059c66c` (ids of objects created in resimulated frames differ between peers; no effect found).
 3. **Sessions end with `peer timed out` when the machine is overloaded**: 4 of the 10 `s8` sessions ended between 237 and 13,457 frames, both peers on the same frame and with 0 mismatches, while 10+ other Dolphin instances ran. The GekkoNet silence limit (7.2 s at delay 2) was exceeded by stalls of a starved process, not by the network.
 4. The rollback count in the sessions is low (random macros predict well). A harder input model would stress deeper rollbacks between peers; the misprediction test covers that on one instance.
-5. The online backend is not registered outside the harness (above).
+5. ~~The online backend is not registered outside the harness.~~ Done in Phase 7: both frontends register it, and it is the default.
 6. The coverage sweep (`gprb_sweep.py`, another agent's tool) still defaults to gp-v9, while the session and sync-test tools it uses now default to gp-v11.
 
 ## Harness commands
@@ -553,3 +616,12 @@ Diagnostics through environment variables:
 | `e7b2076039` | gp-v11 (ground-collision list heads) as the default; sync-test `no_rollback` (ground truth) |
 | `d31f69fc54` | sound bookkeeping (`dedupe_resim_sounds`) by default in network sessions |
 | `b79fe057cf` | gp-v12 (camera quake controller) as the default; sync-test pass logs; `PPR_GPRB_INTERP_FROM` |
+
+## Commits (`dolphin/`, branch `rollback-fixes`, Phase 7)
+
+| SHA | What |
+|---|---|
+| `df44299556` | merge `gameplay-rollback` (`b79fe057cf`) into `rollback-fixes` |
+| `aedcf62a51` | the gameplay session as the default online backend (registered by both frontends); the lobby; PPOM v2 SESSION/LOCAL in GameBridge; IDLE after a disconnect; OSD DISCONNECTED |
+| `da2cf9b595` | DolphinQt: Brawl Online main window title and About; no Project+ Discord link |
+| `b882222f2b` | the render window's title starts with Brawl Online |

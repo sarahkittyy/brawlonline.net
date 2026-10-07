@@ -5,7 +5,10 @@
       -> Dolphin.exe (Qt, windowed, D3D11, muted) with the launcher-patched SD card (PPOnline.rel)
       -> the game's own menus: main menu -> PLAY ONLINE -> WITH FRIENDS -> a character -> START
       -> the other player's connect code on Brawl's keypad -> START
-      -> matchmaking (our local accounts + mm services) -> the hand-off -> a rollback session.
+      -> matchmaking (our local accounts + mm services) -> the hand-off to the gameplay-only
+         (Slippi-style) session -> a two-game Direct set from the online CSS, no reboot:
+         game 1 on a random legal stage, back to the CSS, the loser picks game 2's stage on the
+         stage select, game 2, back to the CSS (harness/tools/online_set.py).
 
 Two launcher instances run with separate Electron user-data dirs (``PPO_USER_DATA_DIR``), each
 logs in as its own account through the launcher's login form and presses Play. The launcher's
@@ -62,6 +65,8 @@ from ppharness.client import HarnessClient, HarnessError  # noqa: E402
 from ppharness.instance import find_free_port  # noqa: E402
 
 import drive  # noqa: E402
+import online_set  # noqa: E402
+from ppharness import brawl as B  # noqa: E402
 
 LAUNCHER = ROOT / "launcher"
 ARTIFACTS = ROOT / "run" / "artifacts" / "e2e-launcher"
@@ -75,7 +80,10 @@ CMD_GET_MATCH_STATE = 0xB3
 
 
 def log(msg: str) -> None:
-    print(f"[{time.strftime('%H:%M:%S')}] {msg}", flush=True)
+    line = f"[{time.strftime('%H:%M:%S')}] {msg}"
+    # Page text can hold characters the console's code page cannot print (a zero-width space).
+    enc = getattr(sys.stdout, "encoding", None) or "utf-8"
+    print(line.encode(enc, errors="replace").decode(enc, errors="replace"), flush=True)
 
 
 def wait_until(pred: Callable[[], Any], timeout: float, what: str, interval: float = 0.25) -> Any:
@@ -316,7 +324,10 @@ class Launcher:
             if self._home_ready():
                 return
             if "Accept rules and policies" in text:
-                self.call("checkLabel", f"I accept the {self._product()} Rules")
+                # The rules checkbox's label as the page has it ("I accept the <product> Rules",
+                # "... Online Rules" in some launcher builds).
+                m = re.search(r"I accept the [^\n]*?Rules", text)
+                self.call("checkLabel", m.group(0) if m else f"I accept the {self._product()} Rules")
                 self.call("checkLabel",
                           f"I accept the {self._product()} Privacy Policy and Terms of Service")
                 self.shot("02-accept-rules")
@@ -437,7 +448,7 @@ class Player:
         assert self.c
         block = int(self.bridge()["block"])
         debug_off = struct.unpack(">H", self.c.read_mem(block + 0x14, 2))[0]
-        return list(struct.unpack(">10I", self.c.read_mem(block + debug_off + 0x18, 40)))
+        return list(struct.unpack(">16I", self.c.read_mem(block + debug_off + 0x18, 64)))
 
     def finds(self) -> int:
         return int(self.bridge()["by_cmd"].get("FIND_OPPONENT", 0))
@@ -650,6 +661,12 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                 f"GET_ONLINE_STATUS state=1 name='{p.user.display_name}' "
                 f"code='{p.user.connect_code}'"), p.facts["online_status"]
         both(players[0].to_online_css, players[1].to_online_css)
+        # Test shortcut: 2 stocks and 2 minutes instead of P+'s 4 and 8 (written into the set
+        # rule, where the plugin put the online rules; both must be the same, they are part of
+        # the match setup), so that the two games take minutes, not a quarter of an hour.
+        for p in players:
+            assert p.c
+            B.write_rules(p.c, stocks=2, minutes=2, items_off=True)
 
         # 3. Each enters the other's code. Alice first, then Bob: the server pairs them.
         a, b = players
@@ -662,7 +679,8 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         time.sleep(2.2)  # the server takes one ticket per account per 2 s
         b.enter_code(a.user.connect_code, settle=False)
 
-        # 4. Matched, connected, handed off; both games stop and boot together under rollback.
+        # 4. Matched, connected, handed off to the gameplay session ([Online] SessionBackend's
+        # default): both games stay where they are, on their own online CSS.
         sa = wait_until(lambda: (lambda s: s if s["handoff"] == "started" else None)(a.c.mm_status()),  # type: ignore[union-attr]
                         90, "alice's hand-off")
         sb = wait_until(lambda: (lambda s: s if s["handoff"] == "started" else None)(b.c.mm_status()),  # type: ignore[union-attr]
@@ -672,40 +690,29 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                             "alice_role": "host" if sa["match"]["is_host"] else "guest",
                             "bob_role": "host" if sb["match"]["is_host"] else "guest"}
         log(f"matched {summary['match']}")
-
-        def running(p: Player) -> bool:
-            assert p.c
-            ns = p.c.netplay_status()
-            return bool(ns.game_running and ns.rollback and ns.rollback.get("session_started"))
-
-        wait_until(lambda: running(a) and running(b), 180, "the rollback session on both")
-        log("rollback session running on both")
-        # The game runs: GekkoNet frames advance, no desyncs, the plugin is back and paused.
-        f0 = {p.name: p.c.netplay_status().rollback["current_frame"] for p in players}  # type: ignore[union-attr]
-        time.sleep(5)
         for p in players:
             assert p.c
-            ns = p.c.netplay_status()
-            rb = ns.rollback
             p.facts["session"] = p.c.mm_status()["session"]
-            p.facts["rollback"] = {k: rb.get(k) for k in (
-                "current_frame", "input_delay", "rollbacks", "desyncs_detected",
-                "peer_disconnects", "session_started")}
-            p.facts["frames_in_5s"] = rb["current_frame"] - f0[p.name]
-            assert p.facts["frames_in_5s"] > 100, p.facts
-            assert rb.get("desyncs_detected", 0) == 0, rb
-            assert p.facts["session"]["backend"] == "netplay", p.facts["session"]
+            assert p.facts["session"]["backend"] == "gameplay", p.facts["session"]
             p.facts["windows"] = window_titles(p.dolphin_pid) if p.dolphin_pid else []
-            # Slippi shows no netplay window; neither do we.
+            # Slippi shows no netplay window; neither do we. The main window is Brawl Online's.
             assert not any("netplay" in t.lower() for t in p.facts["windows"]), p.facts["windows"]
-        wait_until(lambda: all(p.bridge()["found"] and p.bridge()["netplay_paused"] for p in players),
-                   120, "the plugin found again under netplay, mailbox paused")
-        both(lambda: a.steps("wait 120"), lambda: b.steps("wait 120"))
+            assert any(t == "Brawl Online" for t in p.facts["windows"]), p.facts["windows"]
+
+        # 5. The set: two games, no reboot (online_set checks it), back on the CSS after each.
+        set_rep = online_set.play_set(players, games=2, mode="direct", log=log)
+        summary["set"] = set_rep
         for p in players:
-            p.shot("08-rollback-session")
+            assert p.c
+            p.facts["rollback"] = {
+                "session_started": True,
+                "games": [{k: g[k] for k in ("stage", "frames", "end", "rollbacks", "checksums")}
+                          for g in set_rep["games"]],
+                "desyncs_detected": sum(g["checksums"]["mismatches"] for g in set_rep["games"])}
+            p.facts["windows"] = window_titles(p.dolphin_pid) if p.dolphin_pid else []
         if not args.direct_dolphin:
             for p in players:
-                p.launcher.shot("07-in-session")  # type: ignore[union-attr]
+                p.launcher.shot("07-after-the-set")  # type: ignore[union-attr]
         if not args.direct_dolphin:
             for p in players:
                 assert p.launcher

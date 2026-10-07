@@ -151,7 +151,11 @@ The harness accepts one client at a time. That is why the mailbox server is a `d
 | CSS keypad update call | `sel_char+0x18F30` | simple | Our wrapper of `MuSelctChrNameEntry::update` for the connect-code keypad and its recent codes (§7) |
 | CSS character lock | `sel_char+0x726C` (B pressed), `+0x7280` (costume buttons), `+0x75B4` (A on the coin) | simple | While locked in, B does not take the coin back, X/Y do not change the costume, A does not pick up or drop the coin (§6, Input on the online CSS) |
 | Wi-Fi CSS countdown, timer, network error, disconnect panel | `sel_char+0x4220`, `+0x56A8`, `+0x53A4`, `+0x4A70` | simple | Ported from Gen 1. The disconnect-panel hook is now one naked hook, without Gen 1's `SaveRegs` |
-| Wi-Fi SSS countdown, network error | `sel_stage+0x141C`, `+0x30F0` | simple | Ported from Gen 1; not exercised yet |
+| Wi-Fi SSS countdown, network error | `sel_stage+0x141C`, `+0x30F0` | simple | Ported from Gen 1 |
+| sqNetAnyOkiraku state 3 (stage select) | `sora_scene+0x36F64` | simple | Online match: no stage select, set the match up at once; Direct loser's pick: open P+'s stage select the Versus way (§11) |
+| sqNetAnyOkiraku state 4 (after the stage select) | `sora_scene+0x36F8C` | simple | The loser's pick: keep the stage, back to the CSS locked in with it |
+| sqNetAnyOkiraku state 5 (training room setup) | `sora_scene+0x36FDC` | simple | Fallback: set the online match up instead of Brawl's training room |
+| sqNetAnyOkiraku state 10 (after the match) | `sora_scene+0x37580` | simple | Straight back to the online CSS, no results screen (Slippi) |
 
 Notes:
 - P+ v3.2's `sora_menu_main.rel` is vanilla's with the same `.text` size. Its 152 non-relocation word differences are confined to a few P+ edits (`reltool.py diff`), so Gen 1's offsets hold.
@@ -167,7 +171,7 @@ Notes:
 - The block lives in the plugin's `.data`. It is 0x674 bytes, aligned to 32, and big-endian.
 - Header: magic `"PPOM"`, version 1, then offset/size pairs for MAILBOX, SESSION, LOCAL and DEBUG. The header is 0x24 bytes.
 - **How Dolphin finds it** (`Source/Core/Core/Online/GameBridge.cpp`): it walks the game's `OSModuleInfo` list (`0x800030C8`) to the module with our REL id **20560** (`PPOnline/Makefile` `RELID`; do not change it), then looks for the header in that module's data sections only. It does this once per boot. After that it checks the magic word each frame. The harness tools (`ppom.py`) still scan the Syringe heap (`0x817BA5A0..+0x10000`), which is fine for debugging.
-- SESSION and LOCAL are declared with size 0 in v1; only the mailbox is prototyped.
+- **Version 2** (gameplay session): MAILBOX, then LOCAL right after it (Dolphin excludes both from rollback as one range), SESSION and DEBUG. §11 has SESSION and LOCAL.
 
 **Mailbox.**
 - `reqWrite` (game), `reqRead` (Dolphin), `respCount` (Dolphin, bumped last) and `respSeen` (game).
@@ -217,8 +221,11 @@ Screenshots are in `run/artifacts/game-code/screens/`, from the last runs of `on
 | 2 | CSS: "Select your character" → "Press START to search / enter code" → "Searching for opponent / ABCD#123" → "Connecting to …" → "Playing: …"; errors in red; Z cancels, hold Z disconnects | Brawl's Wi-Fi CSS with P+'s competitive rules. Header art hidden; one status line with Slippi's strings (below). START works once a character is picked. | done | `03`-`09`, `13`-`19`, `22`, `24` |
 | 3 | Connect-code entry: name-tag keyboard in code mode, 8 characters with '#', START confirms; recent codes as grey completion text, L/R scroll, Z accepts | Brawl's name keypad in code mode: 8 characters, alphabet and digits only, upper case, '#' key, unusable keys refused, START confirms, the name tag is untouched; the newest matching recent code in grey after the typed characters, L/R older/newer, Z accepts and jumps to OK (§7). | done | `05`, `06`, `23`; `recent-codes/` |
 | 1 | Leaving: hold B on the CSS → online menu, cursor on the mode; CLEANUP_CONNECTION on menu load | Brawl's hold B (or LEAVE) → the page the mode was picked on, cursor on it; `0xBA` on every menu load. | done | `10`, `20`, `25` |
-| 5 | Stage: Unranked random, Direct random then loser picks, Teams random then P1 picks | Rules are set; the stage is picked by the session, which does not exist in the game yet (see below). | open | — |
-| 4, 6-10 | Opponent on CSS, ranked setup, rank, results, in-match disconnect, chat | not started | — | — |
+| 4 | Opponent found: both locked in, the match starts; no opponent's character on the CSS (Slippi shows it only on its VS splash) | The match starts from the CSS once both are locked in; "Waiting on opponent" / "Playing: <name>" | done (§11) | `gameplay-set/` |
+| 5 | Stage: Unranked random, Direct random then loser picks, Teams random then P1 picks | Game 1 random from P+'s legal list (the host's Dolphin draws it); Direct game 2+: the loser presses START, picks on P+'s stage select, comes back locked in | done for 1v1 (§11) | `gameplay-set/` |
+| 8 | Results → back to the CSS still connected | Straight back to the online CSS after game set (Slippi skips the results screen online), still connected; START locks in for the next game | done (§11) | `gameplay-set/` |
+| 9 | "DISCONNECTED", back to the CSS | In a match: the error sound, the game ends (Brawl's "GAME!"), back to the CSS idle; DISCONNECTED as a red Dolphin OSD message for now. On the CSS: back to the idle prompt | done, with the gaps in §11 | `gameplay-leave/` |
+| 6, 7, 10 | Ranked setup, rank, chat | not started | — | — |
 
 **CSS status line.** The Brawl CSS has one text window in its header (the rule line). Slippi shows a mode header, three status lines and a hint; we show the one line that carries the state, in Slippi's words (`LoadCSSText.asm:95-157`):
 - idle: "Select your character", then "Press START to search" (Unranked) or "Press START to enter code" (Direct, Teams);
@@ -338,8 +345,9 @@ Dolphin services the mailbox itself (`GameBridge`, dolphin branch `game-bridge`;
 3. **Z cancels.** The game posts `0xBA` and Dolphin cleans up. The header goes back to "Press START to enter code" (`06-cancelled.png`).
 4. **Match.** The other player searches, and START opens the keypad again for the second search. The server pairs them (mm log `matched`). Both games are told `mmState 4` with the peer's name, code and role, and show "Playing: bob" / "Playing: alice" (`07-opponent.png`). `Online::Session::Start` was called on both sides with the match (harness `record` backend).
 5. **Unranked.** The server refuses the ticket. The game gets `mmState 5` with "Unranked is not supported yet. Only Direct works for now." and prints it in the header (`unranked/game-u/05-unranked-error.png`). Z clears the error.
-6. **Hand-off to netplay.** With the real backend (whole-machine netplay, design §5.1 A), both Dolphins stop their games right after the match and boot P+ together under rollback. The plugin is loaded again and the block is found again, but servicing is paused while netplay runs (`direct-netplay/*/06-netplay-boot.png`).
-7. **As a player does it: launcher and Dolphin.exe.** `harness/tools/e2e_launcher.py` runs the same flow from two built launchers. Each logs in through the launcher's quick start and presses Play. The launcher installs `PPOnline.rel` on its own patched copy of the user's SD card and passes it with `-C Dolphin.General.WiiSDCardPath=...`. Each `Dolphin.exe` (Qt, D3D11, muted) is then driven from the main menu to the match. DolphinQt now registers the whole-machine backend itself, so the hand-off boots the rollback session in the usual render window, with no NetPlay window (`run/artifacts/e2e-launcher/<run>/`).
+6. **The gameplay session (the default).** Both games stay on their online CSS; the match starts from there (§11). `test_direct_set_under_the_gameplay_session` plays a two-game Direct set; `test_opponent_leaves_in_the_middle_of_a_game` the disconnect.
+7. **Hand-off to netplay (the fallback, `[Online] SessionBackend = netplay`).** Both Dolphins stop their games right after the match and boot P+ together under rollback. The plugin is loaded again and the block is found again, but servicing is paused while netplay runs (`direct-netplay/*/06-netplay-boot.png`).
+8. **As a player does it: launcher and Dolphin.exe.** `harness/tools/e2e_launcher.py` runs the same flow from two built launchers. Each logs in through the launcher's quick start and presses Play. The launcher installs `PPOnline.rel` on its own patched copy of the user's SD card and passes it with `-C Dolphin.General.WiiSDCardPath=...`. Each `Dolphin.exe` (Qt, D3D11, muted, main window "Brawl Online") is then driven from the main menu to a two-game set under the gameplay session (`harness/tools/online_set.py`; `run/artifacts/e2e-launcher/<run>/`).
 
 `drive.py mbx-serve` and `ppom.py serve` still work for experiments without a server. Turn Dolphin's servicing off first: `ppharness cmd --port P game_bridge_config enabled=false`.
 
@@ -347,10 +355,10 @@ Dolphin services the mailbox itself (`GameBridge`, dolphin branch `game-bridge`;
 
 ## 9. Next steps
 
-1. CSS: show the opponent on the CSS after plug-in (screen 4).
-2. Stage choice in the session: random from the server list for game 1; Direct's loser picks on P+'s SSS after the results → CSS flow (screen 8).
-3. Ranked placement once the user decides (§6).
-4. SESSION/LOCAL blocks. MAILBOX is serviced by Dolphin now (§8); SESSION/LOCAL need the gameplay-only session.
+1. The CSS after a match or the stage select: put the coin back on the character (§11, open issues).
+2. DISCONNECTED in the game's HUD instead of Dolphin's OSD, and an LRAS-type end without "GAME!" (§11).
+3. Name tags and their controls as the design's port values (§11).
+4. Ranked placement once the user decides (§6). Teams goes to the code-based side (user, 2026-10-07); nothing here is built for it.
 
 ---
 
@@ -362,4 +370,63 @@ Dolphin services the mailbox itself (`GameBridge`, dolphin branch `game-bridge`;
   - `42036d6`: `GET_MATCH_STATE` polling and the protocol rules for Dolphin's GameBridge (§5).
   - `75d3647`: Slippi-style menus: no connect dialogs, Teams entry, P+ competitive rules, header art hidden, Slippi's strings and CSS input, leaving the CSS, the 8-character code keypad.
   - `9b1ba11`: recent connect codes on the keypad (`0xBE FETCH_CODE_SUGGESTION`: grey completion, L/R, Z), the character lock while searching (A/B/costume), DEBUG scratch words for the tests.
+  - `441eb31`: online matches from the CSS under the gameplay session (sqNetAnyOkiraku hooks, the match setup from SESSION, Direct's loser picks, back to the CSS after game set), PPOM v2 SESSION/LOCAL (§11).
+  - `3c0fdb6`: the game after a disconnect ends through `ftManager::setDead`.
 - Top-level repo: `docs/game-code.md`, `tools/gamecode/`, `tools/sdcard/`. `.gitignore` already listed `/game-code/` and `/toolchains/`.
+
+---
+
+## 11. Online matches from the CSS (the gameplay session)
+
+The real online path since 2026-10-07: matchmaking hands the connected opponent to the gameplay-only session (`Gprb::Session`, Dolphin's default `[Online] SessionBackend = gameplay`; design §5.1 C). Nothing reboots: both games stay on their own online CSS, agree on the match through Dolphin, and each starts it from there. Dolphin's side is in `docs/gameplay-rollback-status.md` (Phase 7); the plugin's is `source/online_match.cpp` and the connected part of `source/online_menu.cpp`. Slippi's flow is copied from `HandleInputsOnCSS.asm`, `LoadCSSText.asm` and `Slippi Online Scene/main.asm`.
+
+### The flow, as a player sees it
+
+1. **Search.** START on the CSS (Unranked) or the keypad's START (Direct) locks the player in for game 1 (Slippi's `FN_LOCK_IN_AND_SEARCH`) and searches. The lock-in goes to Dolphin through LOCAL.
+2. **Connected.** Both are locked in, so the host's Dolphin decides game 1's setup at once: P1 = the host's lock-in, P2 = the guest's, the stage drawn at random from the server's `stages` list (empty today, so P+'s legal list: the 15 stages of `Switch00.rss`, see below). Both Dolphins write it into SESSION. The CSS line reads "Playing: <name>" for a moment.
+3. **The match.** Each game sees SESSION's setup for the game it is locked in for and leaves the CSS (the scene manager's exit code 1, the way every scene leaves). `sqNetAnyOkiraku` goes on to its stage select state, where our hook builds the match instead (below) and goes to `scMelee` through the load screen. Dolphin's session meets the other game at the first simulation frame (RNG, frame counters, the host's match init block, task order), runs the countdown without rollback and the game under rollback from frame 240.
+4. **Game set.** Both sessions end on the same frame (`MAX_ROLLBACK_FRAMES + 12` after game set) and know the winner (more stocks, then less damage). The match's own end runs ("GAME!"), and state 10 sends the game straight back to the online CSS: Slippi online has no results screen.
+5. **Between games.** Still connected. The line reads "Press START to lock in"; in Direct the loser of the last game reads "Press START to select stage" (a draw: both). START locks in for the next game; the loser's START opens P+'s stage select, and picking a stage comes back to the CSS locked in with it (Slippi's `ExitSSSUponStageSelect`). Locked in, waiting: "Waiting on opponent". Once both are locked in, the host's Dolphin decides the setup (the loser's stage, else random without repeating the last) and the next match starts as in 3. Unranked is always random.
+6. **Leaving.** Hold Z (48 frames) on the CSS: `CLEANUP_CONNECTION`; the opponent's Dolphin hears a "leave" at once and its game goes back to the idle prompt with the back sound (its next `GET_MATCH_STATE` reads IDLE, as on Slippi). Hold B leaves for the menus, which also cleans up.
+7. **The opponent drops in a match** (closes Dolphin, loses the connection): after the silence limit (7.2 s at delay 2) Dolphin ends the rollback session and sets LOCAL `disconnected`. The game plays the error sound and, 30 frames later, ends the match through its own end: each player who left is put on its last stock and dies the way a fighter's own code ends itself (`ftManager::setDead`, sora_melee text+0x10B604, reason 5, no killer), so the match reaches its ordinary game set at once and tears itself down. Two other ways failed: leaving the scene directly (the scene manager's exit code) hangs in `scMelee`'s teardown mid-match, and a standing fighter moved past the blast zone is put back on the ground; then straight back to the CSS, idle. Dolphin shows "DISCONNECTED" as a red OSD message.
+
+### SESSION and LOCAL (PPOM v2)
+
+Both live in the plugin's `.data` with the mailbox (`include/ppom.h`, mirrored by `tools/gamecode/ppom.py`; Dolphin: `Online/GameBridge.cpp` `SyncSession`, every frame at the frame-end hook, never while a match runs under rollback).
+
+| Block | Who writes | Rollback | Contents |
+|---|---|---|---|
+| **LOCAL** (0x40, right after the mailbox) | Dolphin: `state` (0 none, 1 connecting, 2 connected, 3 in a match), `localPort` (0 host / P1, 1 guest), `remoteReady`, `disconnected`, `peerName`. The game: `lockIn` | excluded (one range with the mailbox) | what differs between the two machines |
+| **SESSION** (0x110) | Dolphin only, never while a match runs | in the region set, constant during a match | `state` (0 none, 1 lobby, 2 the next game's setup is ready), `mode`, `game` (the next game, 1-based), `lastWinner` (port; 0xFE draw), `stageKind`, `asl`, `numPlayers`, `players[4]` {present, gmCharacterKind, costume, name, code} by in-game port |
+
+`LockIn` = {seq, ready, cssChar, charKind (gmCharacterKind, Random already drawn), costume, stagePick (0xFFFF none), asl, game}. The game bumps `seq` on every change. SESSION is sized for four players so that code-based Teams can use it later; a session has two today.
+
+### The match setup (`online_match.cpp`)
+
+The Wi-Fi sequence's decide function (`sora_scene+0x36D74`) is a state machine on `seq+8` (jump table 0x80703B3C): 1/2 CSS, 3/4 stage select ("vote"), 5-7 Brawl's training room, 8-10 the network match, 11-13 results, 14/15 `scMemoryChange` (type `seq+0x11`, then `seq+0xC`), 16 back to the menus. Four module hooks run at the first instruction of states 3, 4, 5 and 10 (only non-volatile registers are live there: r15 = the sequence, r17 = loop again, r19 = the scene manager), call C, and either set the next state or run the original instruction.
+
+- **State 3** with an online match armed: `gmSelCharData` (GameGlobal+0x10) players 0-3 are filled from SESSION, each from one fixed template (the empty record the online CSS starts with, `m_nameIndex` 0x78 = no name tag), with character, state human, colour and controller set; the others are "none". The local CSS's own records are saved first. P+'s alternate-stage buttons (0x800B9EA2) get SESSION's `asl`. Then **`sqVsMelee`'s own match setup** (`sora_scene` 0x806DCE94, `(seq, stageKind)`, which P+ also patches) builds `gmGlobalModeMelee` from them and the set rule, as a local Versus match does; the controller numbers are set to 1, 2 by port; then load screen and state 9 (`scMelee`).
+- **State 3** for Direct's loser's pick: `gmSelCharData+4` (the menus' mode, 0x10 Wi-Fi) becomes 0 and the stage select is opened the Versus way, `setNextScene("scSelStage", 0)`. The Wi-Fi sequence opens it with 1 (Brawl's network stage vote), which waits for the other players' votes forever, and with mode 0x10 the stage select crashed.
+- **State 4** after the pick: the stage (GameGlobal+0x14, +0x22, where `sqVsMelee`'s setup reads it) and the alternate-stage buttons are kept; back to the CSS (state 1 sets mode 0x10 again).
+- **State 10** after the match: the saved CSS records are put back and the sequence goes to the CSS (load screen type 0xD, as state 13 does).
+
+**Stages.** P+ v3.2's legal list as `srStageKind` (page 0 of `Switch00.rss` with the random bit set, through its slot table at +0x104): 0x01 Battlefield, 0x02 Final Destination, 0x03 Delfino's Secret, 0x04 Luigi's Mansion, 0x05 Metal Cavern, 0x06 Bowser's Castle, 0x09 Temple of Time, 0x0C Frigate Husk, 0x0D Yoshi's Island, 0x1C Wario Land, 0x1F Fountain of Dreams, 0x21 Smashville, 0x23 Green Hill Zone, 0x2D Dream Land, 0x2E Pokémon Stadium 2. P+'s stage file loader keys on the stage kind and the alternate-stage buttons (`Net-StageFiles.asm`), so these two pick the stage without the stage select.
+
+**In a match** the plugin's tick does nothing but watch LOCAL's `disconnected` (which Dolphin sets only after it has ended the rollback session): no mailbox; nothing that differs between the machines may change the game while frames are resimulated. The plugin's `.data`/`.bss` is part of the region set (`rel_data`), except the mailbox and LOCAL.
+
+DEBUG scratch for the tests: `[10]` the match flow (low byte: the last sequence hook, 3 setup, 0x33 stage select opened, 4 back from it with the exit code `<< 8`, 10 back from the match; `0x100 * game` when the CSS starts a match; `0x10000` disconnect seen, `0x20000` the game ended); `[11]` the last setup, `stage << 16 | P1 char << 8 | P2 char`.
+
+### Verified
+
+`harness/tests/test_online_game.py`:
+- `test_direct_set_under_the_gameplay_session`: two games from the in-game Direct flow (screenshots `run/artifacts/game-bridge/gameplay-set/`), results in `docs/gameplay-rollback-status.md` Phase 7;
+- `test_opponent_leaves_in_the_middle_of_a_game` (`gameplay-leave/`).
+
+`harness/tools/e2e_launcher.py` plays the same set from the two launchers (`run/artifacts/e2e-launcher/<run>/`).
+
+### Open issues
+
+1. **The CSS forgets the placed coin.** Brawl's Wi-Fi CSS (mode 0x10) restores no selection when it comes back from a match or the stage select: the coin is in the hand and the line reads "Press START to lock in". START locks in with the character and costume of the last lock-in (picking another character first uses that one). Slippi shows the character still selected. Restoring the coin needs the CSS's player-area init (`sel_char+0x58B8`...) or the hand and coin objects; not done.
+2. **No DISCONNECTED in the HUD.** Dolphin shows it as a red OSD message; Slippi draws it in the game. And the game ends with Brawl's "GAME!" (a game set the plugin causes), where Slippi ends without it.
+3. **Default controls for everyone.** Name tags (and P+'s tag controls) are cleared from the match setup so that both machines read the same controls; the player's own tag and controls would be the design's port values (5.1).
+4. **Ranked** (strikes) and **Teams** (code-based, later) are not built. The server's `stages` lists are empty, so the client's P+ legal list is used.

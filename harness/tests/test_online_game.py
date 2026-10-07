@@ -38,9 +38,13 @@ from test_online import _logged_in, _make_backend, _wait
 ROOT = paths.workspace_root()
 sys.path.insert(0, str(ROOT / "tools" / "gamecode"))
 sys.path.insert(0, str(ROOT / "tools" / "sdcard"))
+sys.path.insert(0, str(ROOT / "harness" / "tools"))
 
 import drive  # noqa: E402
+import online_set  # noqa: E402
 import patch_sd  # noqa: E402
+import ppom  # noqa: E402
+from ppharness import brawl as B  # noqa: E402
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 
@@ -92,6 +96,7 @@ class Game:
         self.user = user
         self.out = out
         self.c: HarnessClient = inst.client
+        self.name = user.display_name
 
     # -- mailbox in game memory
     def bridge(self) -> dict[str, Any]:
@@ -154,7 +159,7 @@ class Game:
         st = self.bridge()
         block = int(st["block"])
         debug_off = struct.unpack(">H", self.c.read_mem(block + 0x14, 2))[0]
-        return list(struct.unpack(">10I", self.c.read_mem(block + debug_off + 0x18, 40)))
+        return list(struct.unpack(">16I", self.c.read_mem(block + debug_off + 0x18, 64)))
 
     # -- driving
     def steps(self, *steps: str) -> None:
@@ -633,12 +638,111 @@ def test_character_locked_while_searching(backend: OnlineBackend,
     assert not g.locked()
 
 
+def _connected_direct(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                      gpu_backend: str, test: str, names: tuple[str, str],
+                      stocks: int = 2) -> tuple[Game, Game, OnlineUser, OnlineUser]:
+    """Two games on the Direct CSS with the gameplay backend (the default), searching for each
+    other from the keypad until both are connected. Shorter rules than P+'s (`stocks` stocks,
+    2 minutes, written into the set rule on both CSSs where the online rules are) keep the games
+    short; they are part of the setup both games build, so both must have the same."""
+    ua = backend.create_user(names[0], names[0][:4].upper())
+    ub = backend.create_user(names[1], names[1][:4].upper())
+    a = _boot(dolphin, "game-a", backend, ua, gpu_backend, test, "gameplay")
+    b = _boot(dolphin, "game-b", backend, ub, gpu_backend, test, "gameplay")
+    _both(a.to_main_menu, b.to_main_menu)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("direct"), lambda: b.to_css("direct"))
+    for g in (a, b):
+        B.write_rules(g.c, stocks=stocks, minutes=2, items_off=True)
+    a.open_keypad()
+    a.type_code(ub.connect_code)
+    _searching(a, ub.connect_code)
+    time.sleep(2.2)  # the server takes one ticket per account per 2 s
+    b.open_keypad()
+    b.type_code(ua.connect_code)
+    _peer_shown(a, ub)
+    _peer_shown(b, ua)
+    for g in (a, b):
+        st = _wait(lambda g=g: (lambda s: s if s["handoff"] == "started" else None)(g.c.mm_status()),
+                   30, "the hand-off")
+        assert st["session"]["backend"] == "gameplay", st["session"]
+    return a, b, ua, ub
+
+
+LEGAL_STAGES = (0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x09, 0x0C, 0x0D, 0x1C, 0x1F, 0x21, 0x23,
+                0x2D, 0x2E)
+
+
+@pytest.mark.slow
+def test_direct_set_under_the_gameplay_session(backend: OnlineBackend,
+                                               dolphin: Callable[..., DolphinInstance],
+                                               gpu_backend: str) -> None:
+    """The real online path (backend-design 5.1 C): two players connect from the online CSS and
+    play a two-game Direct set without any reboot. Game 1 starts by itself (both locked in by
+    their search) on a random stage from P+'s legal list; both games build the same match from
+    SESSION and start it in step at the first simulation frame (RNG, frame counters and setup
+    synced); the confirmed frames of both peers agree and both reach game set on the same frame;
+    both go straight back to the online CSS, still connected. Game 2: the loser picks the stage
+    on P+'s stage select, the winner locks in with START, and that stage is played.
+    Screenshots: run/artifacts/game-bridge/gameplay-set/."""
+    a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, "gameplay-set", ("iris", "jack"))
+    for g, other in ((a, ub), (b, ua)):
+        blk = ppom.find_block(g.c)
+        se = ppom.read_session(g.c, blk)
+        assert se["num_players"] == 2 and se["mode"] == 2, se
+        assert {p["name"] for p in se["players"]} == {ua.display_name, ub.display_name}, se
+        lo = ppom.read_local(g.c, blk)
+        assert lo["peer_name"] == other.display_name, lo
+        assert lo["lock"]["ready"] and lo["lock"]["game"] == 1, lo
+        # Both games keep running their own scenes: no netplay session, no boot.
+        assert not g.c.netplay_status().game_running
+    rep = online_set.play_set([a, b], games=2, mode="direct")
+    stages = [g["stage"] for g in rep["games"]]
+    assert stages[0] in LEGAL_STAGES, stages
+    assert stages[1] == B.STAGE_KIND[online_set.STAGE_PICK], stages
+    for g in (a, b):
+        assert g.bridge()["lost"] == 0
+        # No reboot: the GameBridge found the plugin's block once and never lost it.
+        assert "is gone" not in (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+    for g in (a, b):
+        g.c.mm_cancel()
+
+
+@pytest.mark.slow
+def test_opponent_leaves_in_the_middle_of_a_game(backend: OnlineBackend,
+                                                  dolphin: Callable[..., DolphinInstance],
+                                                  gpu_backend: str) -> None:
+    """Slippi's disconnect flow (backend-design 5.6) in a match: the opponent closes Dolphin; after
+    the silence limit (7.2 s at delay 2) the remaining game plays the error sound, ends the game
+    and goes straight back to its online CSS, where the next GET_MATCH_STATE reads IDLE: the
+    idle prompt, no error."""
+    a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, "gameplay-leave", ("kate", "liam"),
+                                     stocks=4)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)), 240,
+                    "the match to run on both")
+    a.steps("wait 300")
+    t0 = time.monotonic()
+    b.inst.kill()
+    _wait(lambda: online_set.gstatus(a.c)["disconnected"], 15, "the drop", interval=0.05)
+    dropped = time.monotonic() - t0
+    assert 6.5 < dropped < 9.5, dropped
+    a.shot("01-dropped-in-match")
+    _wait(lambda: online_set.scene(a.c) == online_set.CSS, 60, "back on the CSS")
+    _wait(lambda: a.c.mm_status()["state"] == "idle", 30, "idle")
+    a.steps("wait 60")
+    a.shot("02-back-on-css-idle")
+    assert a.debug_scratch()[10] & 0x30000 == 0x30000   # the error sound, the game ended
+    assert not a.locked()
+    lo = ppom.read_local(a.c, ppom.find_block(a.c))
+    assert lo["disconnected"] == 1 and lo["state"] == 0, lo
+
+
 @pytest.mark.slow
 def test_direct_from_the_game_menus_hands_off_to_netplay(
         backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str) -> None:
-    """The same Direct flow with the real session backend (whole-machine netplay): after the
-    match both Dolphins stop their games and boot P+ together under rollback. The mailbox is
-    not serviced while netplay runs."""
+    """The same Direct flow with the fallback session backend (whole-machine netplay, selected
+    with [Online] SessionBackend = netplay): after the match both Dolphins stop their games and
+    boot P+ together under rollback. The mailbox is not serviced while netplay runs."""
     test = "direct-netplay"
     ua, ub = backend.create_user("dora", "DORA"), backend.create_user("eve", "EVE")
     a = _boot(dolphin, "game-c", backend, ua, gpu_backend, test, "netplay")

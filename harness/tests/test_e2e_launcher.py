@@ -4,7 +4,8 @@ menus -> matchmaking -> the rollback session. A thin wrapper around ``tools/e2e_
 
     ..\\.venv\\Scripts\\python -m pytest tests/test_e2e_launcher.py -m launcher
 
-It opens real windows (two launchers and two Dolphins, all muted) and takes 3-5 minutes.
+It opens real windows (two launchers and two Dolphins, all muted) and takes 6-10 minutes
+(a two-game set).
 """
 
 from __future__ import annotations
@@ -51,8 +52,12 @@ def test_launcher_to_rollback_session(direct: bool) -> None:
         args.append("--direct-dolphin")
     summary = e2e_launcher.run(e2e_launcher.build_parser().parse_args(args))
     assert summary["ok"], summary.get("error", "") + "\n" + summary.get("traceback", "")
+    # The gameplay-only session: two games from the online CSS, no reboot, equal confirmed frames.
+    games = summary["set"]["games"]
+    assert len(games) == 2 and all(g["checksums"]["mismatches"] == 0 for g in games), games
     for name in ("alice", "bob"):
         facts = summary["players"][name]["facts"]
+        assert facts["session"]["backend"] == "gameplay", facts["session"]
         assert facts["rollback"]["session_started"] and facts["rollback"]["desyncs_detected"] == 0
         assert facts["audio_muted"] is True
         assert not any("netplay" in t.lower() for t in facts["windows"])

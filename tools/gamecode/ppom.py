@@ -58,6 +58,10 @@ class Block:
     mailbox_size: int
     debug: int
     debug_size: int
+    session: int = 0
+    session_size: int = 0
+    local: int = 0
+    local_size: int = 0
 
 
 def u16s(s: str, n: int) -> bytes:
@@ -83,10 +87,11 @@ def find_block(c: HarnessClient) -> Block:
         i = mem.find(MAGIC, i)
         if i < 0:
             raise SystemExit("PPOM block not found in the Syringe heap (plugin not loaded?)")
-        ver, sz, mbo, mbs, _so, _ss, _lo, _ls, dbo, dbs = struct.unpack_from(">HHHHHHHHHH", mem, i + 4)
-        if ver == 1 and 0x100 < sz < 0x4000 and mbo and dbo:
+        ver, sz, mbo, mbs, so, ss, lo, ls, dbo, dbs = struct.unpack_from(">HHHHHHHHHH", mem, i + 4)
+        if ver in (1, 2) and 0x100 < sz < 0x4000 and mbo and dbo:
             a = start + i
-            return Block(a, ver, sz, a + mbo, mbs, a + dbo, dbs)
+            return Block(a, ver, sz, a + mbo, mbs, a + dbo, dbs, a + so if ss else 0, ss,
+                         a + lo if ls else 0, ls)
         i += 4
 
 
@@ -177,16 +182,43 @@ DEBUG_FIELDS = ("frames", "printCount", "overrides", "lastError", "cfg", "menuSt
 def read_debug(c: HarnessClient, b: Block) -> dict:
     d = c.read_mem(b.debug, b.debug_size)
     vals = dict(zip(DEBUG_FIELDS, struct.unpack_from(">6I", d, 0)))
-    vals["scratch"] = list(struct.unpack_from(">10I", d, 0x18))
+    nscratch = 16 if b.version >= 2 else 10
+    vals["scratch"] = list(struct.unpack_from(f">{nscratch}I", d, 0x18))
     # scratch[0] 0xBE requests sent; [1] CSS lock | phase << 4; [2] Z accepts << 24 |
     # found << 16 | suggestion index; [3] rules applied; [4] keypad 1 open / 2 OK / 3 closed;
     # [5] hand mode (8 = keypad); [6]-[9] menu hooks (netmenu.cpp)
     log = []
     for k in range(32):
-        lr, msg, win, line, data = struct.unpack_from(">IIHhI", d, 0x40 + 16 * k)
+        lr, msg, win, line, data = struct.unpack_from(">IIHhI", d, 0x18 + 4 * nscratch + 16 * k)
         log.append((lr, msg, win, line, data))
     vals["log"] = log
     return vals
+
+
+def read_local(c: HarnessClient, b: Block) -> dict:
+    """LOCAL (v2): Dolphin's view of this player's session and the game's lock-in."""
+    d = c.read_mem(b.local, 0x40)
+    seq, state, port, rready, disc = struct.unpack_from(">IBBBB", d, 0)
+    lseq, ready, css, kind, costume, stage, asl, game = struct.unpack_from(">IBBBBHBB", d, 0x28)
+    return {"seq": seq, "state": state, "local_port": port, "remote_ready": rready,
+            "disconnected": disc, "peer_name": from_u16s(d[8:8 + 2 * NAME_LEN]),
+            "lock": {"seq": lseq, "ready": ready, "css": css, "char_kind": kind, "costume": costume,
+                     "stage_pick": stage, "asl": asl, "game": game}}
+
+
+def read_session(c: HarnessClient, b: Block) -> dict:
+    """SESSION (v2): the lobby and the next game's setup, the same on both machines."""
+    d = c.read_mem(b.session, 0x110)
+    seq, state, mode, game, winner, stage, asl, n = struct.unpack_from(">IBBBBHBB", d, 0)
+    players = []
+    for i in range(4):
+        o = 0x0C + 0x40 * i
+        present, kind, costume = d[o], d[o + 1], d[o + 2]
+        players.append({"present": present, "char_kind": kind, "costume": costume,
+                        "name": from_u16s(d[o + 4:o + 4 + 2 * NAME_LEN]),
+                        "code": from_u16s(d[o + 0x24:o + 0x24 + 2 * CODE_LEN])})
+    return {"seq": seq, "state": state, "mode": mode, "game": game, "last_winner": winner,
+            "stage": stage, "asl": asl, "num_players": n, "players": players[:max(n, 0)]}
 
 
 def main() -> int:
@@ -226,6 +258,10 @@ def main() -> int:
             print(f"  last response seq={rseq} {CMD.get(rcmd, hex(rcmd))} status={rstatus:#x}{extra}")
         d = read_debug(c, b)
         print({k: (hex(v) if k == "cfg" else v) for k, v in d.items() if k != "log"})
+        if b.local:
+            print("local", read_local(c, b))
+        if b.session:
+            print("session", read_session(c, b))
     elif a.cmd == "log":
         d = read_debug(c, b)
         n = d["printCount"]

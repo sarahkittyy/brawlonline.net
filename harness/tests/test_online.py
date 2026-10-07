@@ -209,9 +209,10 @@ def _freeze(pid: int, suspend: bool) -> None:
 @pytest.mark.slow
 def test_direct_match_hands_off_to_rollback_session(
         backend: OnlineBackend, dolphin: Callable[..., DolphinInstance]) -> None:
-    """After the match the connected peer is handed to the rollback session (whole-machine
-    netplay for now): the decider hosts on its punched port, the other joins from its punched
-    port, the game boots on both under GekkoNet. Then Slippi's disconnect rule: a peer silent for
+    """After the match the connected peer is handed to the whole-machine netplay backend (the
+    fallback; the default is the gameplay session, tests/test_online_game.py): the decider hosts
+    on its punched port, the other joins from its punched port, the game boots on both under
+    GekkoNet. Then Slippi's disconnect rule: a peer silent for
     6 s stays in (GekkoNet's old 5 s would have dropped it); one silent for longer is dropped
     after ~7.2 s (Online::PeerSilenceTimeoutMs) and the game ends on both sides."""
     ua, ub = backend.create_user("frank", "FRAN"), backend.create_user("gina", "GINA")
@@ -220,7 +221,7 @@ def test_direct_match_hands_off_to_rollback_session(
     b = _launch(dolphin, "online-ho-b", cfg, ub)
     _logged_in(a, ua)
     _logged_in(b, ub)
-    sa, sb = _search_both(a, b, ua, ub, session="auto")
+    sa, sb = _search_both(a, b, ua, ub, session="auto", backend="netplay")
     _check_match(sa, sb, ua, ub)
     host, guest = (a, b) if sa["match"]["is_host"] else (b, a)
     hs, gs = (sa, sb) if host is a else (sb, sa)
