@@ -42,6 +42,11 @@ SCENARIOS: Dict[str, tuple] = {
     "fd-mario-marth-items": ("mario", "marth", "final_destination", True),
     "fd-mario-marth": ("mario", "marth", "final_destination", False),
     "sv-ics-charizard-items": ("ice_climbers", "charizard_solo", "smashville", True),
+    # Article users (projectiles/props the fighters create): bombs, grenades, Pikmin, gyro, bananas.
+    "bf-link-snake": ("link", "snake", "battlefield", False),
+    "bf-toonlink-diddy": ("toon_link", "diddy_kong", "battlefield", False),
+    "fd-rob-olimar": ("rob", "olimar", "final_destination", False),
+    "sv-peach-gw": ("peach", "game_and_watch", "smashville", False),
 }
 
 
@@ -92,7 +97,7 @@ def run_scenario(name: str, args: argparse.Namespace) -> Dict[str, Any]:
                            "distance": args.distance, "region_set": args.region_set, "cpu": args.cpu}
     t0 = time.monotonic()
     try:
-        with G.instances([(f"gprb-st-{name}", dict(cpu_thread=args.cpu == "dc"))]) as (inst,):
+        with G.instances([(f"{args.name_prefix}-st-{name}", dict(cpu_thread=args.cpu == "dc"))]) as (inst,):
             c = inst.client
             setup_match(c, p1, p2, stage, items)
             st = c.call("gprb_synctest", distance=args.distance, region_set=args.region_set,
@@ -122,6 +127,8 @@ def run_scenario(name: str, args: argparse.Namespace) -> Dict[str, Any]:
                         progress["frame"], progress["since"] = s["current_frame"], time.monotonic()
                     elif time.monotonic() - progress["since"] > 30:
                         rep["stalled"] = {"frame": s["current_frame"], "cpu": c.call("cpu_state")}
+                        with contextlib.suppress(Exception):
+                            rep["stalled"]["gpu"] = c.call("gpu_state")
                         try:
                             sys.path.insert(0, str(Path(__file__).resolve().parent))
                             from gprb_debug import thread_backtrace
@@ -151,6 +158,8 @@ def run_scenario(name: str, args: argparse.Namespace) -> Dict[str, Any]:
                 final = c.call("gprb_status")
                 rep["status"] = final
                 rep["match"] = G.small_state(c)
+                if __import__("os").environ.get("PPR_GPRB_CENSUS"):
+                    rep["census"] = c.call("gprb_census")["ranges"]
                 rep["fps"] = round(final["frames"] / max(1e-6, time.monotonic() - t0), 1)
             finally:
                 rep["exit_code"] = inst.process.poll() if inst.process else None
@@ -189,7 +198,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--scenario", default="ps2-peach-gw", help=f"comma list or 'all' ({', '.join(SCENARIOS)})")
     ap.add_argument("--distance", type=int, default=2)
-    ap.add_argument("--region-set", default="gp-v9")
+    ap.add_argument("--region-set", default="gp-v11")
     ap.add_argument("--frames", type=int, default=30000)
     ap.add_argument("--start-frame", type=int, default=240)
     ap.add_argument("--cpu", default="sc", choices=("sc", "dc"))
@@ -200,10 +209,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--timeout", type=float, default=3600)
     ap.add_argument("--json", default=None)
     ap.add_argument("--log-dir", default=None, help="copy each instance's dolphin.log here")
+    ap.add_argument("--name-prefix", default="gprb", help="instance name prefix (ppharness clean --prefix)")
+    ap.add_argument("--runs", type=int, default=1, help="run every scenario this many times")
     args = ap.parse_args(argv)
     names = list(SCENARIOS) if args.scenario == "all" else args.scenario.split(",")
     out = []
-    for n in names:
+    for n in [n for n in names for _ in range(args.runs)]:
         out.append(run_scenario(n, args))
         if args.json:
             p = Path(args.json)

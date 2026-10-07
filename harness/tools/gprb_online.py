@@ -179,7 +179,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--p2", default="falco")
     ap.add_argument("--stage", default="battlefield")
     ap.add_argument("--delay", type=int, default=2)
-    ap.add_argument("--region-set", default="gp-v9")
+    ap.add_argument("--region-set", default="gp-v11")
     ap.add_argument("--start-frame", type=int, default=240)
     ap.add_argument("--frames", type=int, default=30000)
     ap.add_argument("--minutes", type=int, default=2)
