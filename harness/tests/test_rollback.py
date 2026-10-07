@@ -13,8 +13,14 @@ Each test checks a bug that was fixed in the rollback core:
   compute identical per-frame checksums (desyncs), and GekkoNet must report no desync.
 * ``test_netplay_press_lands_on_same_frame``: a single-frame press on either side lands on the
   same GekkoNet frame on both peers (the live-vs-delayed input asymmetry).
+* ``test_rollback_presents_one_frame_per_displayed_frame``: with a real video backend, frames of
+  resimulated iterations never reach the presenter: exactly one frame is sent to the presenter per
+  displayed game frame, also right after a rollback (marked ``gpu``; skipped without one).
 
-Run: ``pytest -m dolphin tests/test_rollback.py`` (several minutes; uses 1-2 Dolphins at a time).
+Every test runs in single core (``sc``) and dual core (``dc``, CPUThread = True, the default).
+
+Run: ``pytest -m dolphin tests/test_rollback.py`` (about 15 minutes; uses 1-2 Dolphins at a time).
+``-k sc`` or ``-k dc`` picks one mode; ``--no-gpu`` skips the real-backend test.
 """
 
 from __future__ import annotations
@@ -36,6 +42,9 @@ from ppharness.session import two_player_netplay
 
 pytestmark = pytest.mark.dolphin
 
+# Single core and dual core (CPUThread = True, Dolphin's and the fork's default).
+CPU_MODES = [pytest.param(False, id="sc"), pytest.param(True, id="dc")]
+
 # Peak private memory allowed per Dolphin. The leak grew instances to 11-16 GB in ~90 s; a healthy
 # rollback instance stays around 1.1 GB.
 MAX_PRIVATE_MB = 3000
@@ -45,7 +54,16 @@ MAX_PRIVATE_MB = 3000
 
 
 def _private_mb(pid: int) -> float | None:
-    """Private bytes of a process in MiB (Windows only; None elsewhere)."""
+    """Private memory of a process in MiB (Windows: private bytes; Linux: anonymous RSS + swap;
+    None elsewhere)."""
+    if sys.platform.startswith("linux"):
+        try:
+            with open(f"/proc/{pid}/status") as f:
+                kb = {k: int(v.split()[0]) for k, v in (ln.split(":", 1) for ln in f if ":" in ln)
+                      if k in ("RssAnon", "VmSwap")}
+        except (OSError, ValueError):
+            return None
+        return sum(kb.values()) / 1024 if kb else None
     if sys.platform != "win32":
         return None
     import ctypes
@@ -142,10 +160,11 @@ def _compare_histories(host, joiner) -> dict:
 # --------------------------------------------------------------------------- sync test
 
 
-def _synctest_training(dolphin_exe, distance: int, seconds: float, name: str) -> dict:
+def _synctest_training(dolphin_exe, distance: int, seconds: float, name: str,
+                       cpu_thread: bool = False) -> dict:
     env = {"PPR_SYNCTEST": str(distance)}
     rng = random.Random(distance)
-    with DolphinInstance(name, exe=dolphin_exe, config=InstanceConfig(cpu_thread=False), boot=None,
+    with DolphinInstance(name, exe=dolphin_exe, config=InstanceConfig(cpu_thread=cpu_thread), boot=None,
                          env=env, connect_timeout=90) as inst:
         c = inst.client
         c.netplay_host(find_free_port(kind=socket.SOCK_DGRAM), inst.netplay_launcher(), name="solo",
@@ -192,9 +211,10 @@ def _synctest_training(dolphin_exe, distance: int, seconds: float, name: str) ->
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("cpu_thread", CPU_MODES)
 @pytest.mark.parametrize("distance", [2, 4])
-def test_synctest_training_match_has_no_desync(request, dolphin_exe, distance):
-    rb = _synctest_training(dolphin_exe, distance, 20, f"st-{request.node.name}")
+def test_synctest_training_match_has_no_desync(request, dolphin_exe, distance, cpu_thread):
+    rb = _synctest_training(dolphin_exe, distance, 20, f"st-{request.node.name}", cpu_thread)
     # Enough re-runs to mean something. Distance 4 resimulates 4 frames per frame and runs slowly
     # when the machine is busy (494 in 20 s with four other Dolphins running), so keep this loose.
     assert rb["rollbacks"] > 200, rb
@@ -206,10 +226,12 @@ def test_synctest_training_match_has_no_desync(request, dolphin_exe, distance):
 
 
 @pytest.mark.slow
+@pytest.mark.parametrize("cpu_thread", CPU_MODES)
 @pytest.mark.parametrize("preset", ["lan", "typical"])
-def test_netplay_match_no_freeze_no_desync_bounded_memory(request, dolphin_exe, preset):
-    with two_player_netplay(preset, rollback=True, exe=dolphin_exe, name=f"rb-{preset}",
-                            config=InstanceConfig(cpu_thread=False), seed=7) as s:
+def test_netplay_match_no_freeze_no_desync_bounded_memory(request, dolphin_exe, preset, cpu_thread):
+    mode = "dc" if cpu_thread else "sc"
+    with two_player_netplay(preset, rollback=True, exe=dolphin_exe, name=f"rb-{preset}-{mode}",
+                            config=InstanceConfig(cpu_thread=cpu_thread), seed=7) as s:
         host, joiner = s.clients
         _require_rollback_history(host)
         with Watch(s.instances) as w:
@@ -235,9 +257,11 @@ def test_netplay_match_no_freeze_no_desync_bounded_memory(request, dolphin_exe, 
 
 
 @pytest.mark.slow
-def test_netplay_press_lands_on_same_frame(request, dolphin_exe):
-    with two_player_netplay("typical", rollback=True, exe=dolphin_exe, name="rb-press",
-                            config=InstanceConfig(cpu_thread=False), seed=3) as s:
+@pytest.mark.parametrize("cpu_thread", CPU_MODES)
+def test_netplay_press_lands_on_same_frame(request, dolphin_exe, cpu_thread):
+    mode = "dc" if cpu_thread else "sc"
+    with two_player_netplay("typical", rollback=True, exe=dolphin_exe, name=f"rb-press-{mode}",
+                            config=InstanceConfig(cpu_thread=cpu_thread), seed=3) as s:
         host, joiner = s.clients
         _require_rollback_history(host)
         F.to_css([F.netplay_seat(host, "host"), F.netplay_seat(joiner, "joiner")])
@@ -254,3 +278,52 @@ def test_netplay_press_lands_on_same_frame(request, dolphin_exe):
                           "p0_Y": sorted(f for f, r in h.items() if r[0] & 0x800)}
         assert seen["host"]["p1_X"] and seen["host"]["p0_Y"], seen
         assert seen["host"] == seen["joiner"], seen
+
+
+# --------------------------------------------------------------------------- presentation
+
+
+def _presentation(client) -> dict:
+    p = client.status().raw.get("presentation")
+    if p is None:
+        pytest.skip("build without presentation counters")
+    return p
+
+
+@pytest.mark.slow
+@pytest.mark.gpu
+@pytest.mark.parametrize("cpu_thread", CPU_MODES)
+def test_rollback_presents_one_frame_per_displayed_frame(request, dolphin_exe, gpu_backend, cpu_thread):
+    """bad_wifi on the CSS (both players moving): plenty of rollbacks. Before the fix a rollback of
+    N frames sent N+1 frames to the presenter within one real frame (a flash/stutter)."""
+    mode = "dc" if cpu_thread else "sc"
+    with two_player_netplay("bad_wifi", rollback=True, exe=dolphin_exe, name=f"rb-present-{mode}",
+                            config=InstanceConfig(cpu_thread=cpu_thread, video_backend=gpu_backend),
+                            seed=5) as s:
+        host, joiner = s.clients
+        hs, js = F.netplay_seat(host, "host"), F.netplay_seat(joiner, "joiner")
+        F.to_css([hs, js])
+        before = {i.name: _presentation(i.client) for i in s.instances}
+        F.run_parallel([lambda: F.menu_wander(hs, 60 * 15, seed=1),
+                        lambda: F.menu_wander(js, 60 * 15, seed=2)])
+        after = {i.name: _presentation(i.client) for i in s.instances}
+        rb = {i.name: i.client.netplay_status().rollback for i in s.instances}
+    for name in after:
+        a, b = before[name], after[name]
+        d = {k: b[k] - a[k] for k in ("displayed_frames", "displayed_frames_after_resim", "presents",
+                                      "xfb_copies_skipped", "xfb_fields_skipped", "copy_decision_misses")}
+        hist = [y - x for x, y in zip(a["outputs_per_frame"], b["outputs_per_frame"])]
+        hist_after = [y - x for x, y in zip(a["outputs_per_frame_after_resim"],
+                                            b["outputs_per_frame_after_resim"])]
+        info = (name, d, hist, hist_after, rb[name])
+        assert not b["present_resimulated"], info
+        assert d["displayed_frames"] > 300, info
+        # Enough rollbacks to mean something, and their frames were kept off the screen.
+        assert d["displayed_frames_after_resim"] >= 10, info
+        assert d["xfb_copies_skipped"] + d["xfb_fields_skipped"] > 0, info
+        assert d["copy_decision_misses"] == 0, info
+        # Exactly one frame sent to the presenter per displayed frame, including right after a rollback.
+        assert sum(hist) > 300 and hist[1] == sum(hist), info
+        assert hist_after[1] == sum(hist_after) > 0, info
+        # And the presenter showed about one frame per displayed frame (it runs a little behind).
+        assert abs(d["presents"] - d["displayed_frames"]) <= 5, info

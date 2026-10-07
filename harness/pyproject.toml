@@ -25,4 +25,5 @@ addopts = "-ra"
 markers = [
     "dolphin: needs the real Dolphin build with harness support (skipped otherwise)",
     "slow: takes more than a few seconds",
+    "gpu: needs a real video backend (D3D11/Vulkan); skipped with --no-gpu or when none works",
 ]

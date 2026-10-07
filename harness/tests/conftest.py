@@ -4,6 +4,9 @@ Options:
   --keep             keep every instance dir (also PPHARNESS_KEEP=1)
   --dolphin-exe PATH DolphinNoGUI to use for @pytest.mark.dolphin tests
   --no-dolphin       skip @pytest.mark.dolphin tests without probing
+  --no-gpu           skip @pytest.mark.gpu tests (real video backend) without probing
+  --video NAME       video backend for gpu tests (default: D3D11 on Windows, else Vulkan;
+                     also PPHARNESS_VIDEO)
 """
 
 from __future__ import annotations
@@ -22,6 +25,8 @@ def pytest_addoption(parser: pytest.Parser) -> None:
     parser.addoption("--keep", action="store_true", help="keep instance dirs")
     parser.addoption("--dolphin-exe", default=None, help="DolphinNoGUI for dolphin tests")
     parser.addoption("--no-dolphin", action="store_true", help="skip dolphin tests")
+    parser.addoption("--no-gpu", action="store_true", help="skip gpu (real video backend) tests")
+    parser.addoption("--video", default=None, help="video backend for gpu tests")
 
 
 @pytest.hookimpl(hookwrapper=True)
@@ -143,3 +148,36 @@ def dolphin(request: pytest.FixtureRequest, dolphin_exe: Path) -> Iterator[Calla
         if failed:
             inst.mark_failed()
         inst.cleanup(not failed)
+
+_gpu_probe: dict[str, tuple[bool, str]] = {}
+
+
+@pytest.fixture(scope="session")
+def gpu_backend(request: pytest.FixtureRequest, dolphin_exe: Path) -> str:
+    """A real video backend that works here (boots and takes a screenshot), or skip.
+
+    D3D11 on Windows, Vulkan elsewhere; --video or PPHARNESS_VIDEO picks another. Probed once."""
+    if request.config.getoption("--no-gpu"):
+        pytest.skip("--no-gpu")
+    import sys
+    import tempfile
+
+    from ppharness.instance import InstanceConfig
+
+    backend = (request.config.getoption("--video") or os.environ.get("PPHARNESS_VIDEO")
+               or ("D3D11" if sys.platform == "win32" else "Vulkan"))
+    if backend not in _gpu_probe:
+        try:
+            with DolphinInstance("gpu-probe", exe=dolphin_exe, connect_timeout=60,
+                                 config=InstanceConfig(video_backend=backend, cpu_thread=False)) as inst:
+                inst.client.wait_state("running", timeout=60)
+                inst.client.wait_frame(120, timeout_ms=60000)
+                with tempfile.TemporaryDirectory() as tmp:
+                    shot = inst.client.screenshot(str(Path(tmp) / "probe.png"))
+                _gpu_probe[backend] = (shot.width > 0, f"{shot.width}x{shot.height}")
+        except Exception as e:  # noqa: BLE001 - any failure means "no usable GPU backend here"
+            _gpu_probe[backend] = (False, f"{type(e).__name__}: {e}")
+    ok, detail = _gpu_probe[backend]
+    if not ok:
+        pytest.skip(f"video backend {backend} not usable here: {detail}")
+    return backend

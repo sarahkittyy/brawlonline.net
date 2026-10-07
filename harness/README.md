@@ -188,7 +188,10 @@ cd harness
 ..\.venv\Scripts\python -m pytest              # everything (real-Dolphin tests run if supported)
 ..\.venv\Scripts\python -m pytest -m "not dolphin and not slow"   # quick, no build needed
 ..\.venv\Scripts\python -m pytest -m dolphin --keep               # only the end-to-end tests
+..\.venv\Scripts\python -m pytest -m dolphin tests/test_rollback.py -k dc   # rollback tests, dual core only
 ```
+
+The rollback tests run in single core (`sc`) and dual core (`dc`). Tests marked `gpu` need a real video backend (D3D11 on Windows, Vulkan elsewhere; `--video NAME` or `PPHARNESS_VIDEO` picks another). It is probed once with a screenshot, and the tests are skipped if it doesn't work; `--no-gpu` skips them without probing.
 
 ## Comparing state at "the same frame"
 
