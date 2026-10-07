@@ -30,11 +30,23 @@ Same command with `--cpu-thread on`, HEAD `7ff324a940`. The JSON is in `run/qa/s
 
 Before the two dual-core fixes, the first rollback in dual core either crashed (`memmove` with a negative size in `Fifo::SyncGPU`) or each save took about 100 ms, giving 5.8-7.7 FPS. After: save 2.4-4.3 ms, load 2.0-2.4 ms, about 58 FPS.
 
-The lan state-compare mismatch is in the heap-range hash only; every checksum field matches. The scratch driver's chunk diff (MEM1/MEM2 in 64 KiB chunks, at a frame both peers have confirmed, typical preset, in a match) shows where peers still differ:
-- single core: 4 chunks, 0x94320000, 0x94330000, 0x94380000 and 0x94390000;
-- dual core: 1 chunk, 0x94390000.
+The lan state-compare mismatch is in the heap-range hash only; every checksum field matches.
 
-These addresses lie above the 64 MB of MEM2 that the Brawl heaps use (P+'s extra area, not a game heap). The per-frame fighter checksums matched on all 1,530 compared frames. They are candidates to exclude from the gameplay region set rather than desyncs.
+### Where the peers still differ
+
+Measured with the scratch driver on a frame both peers have confirmed (typical preset, in a match). It compares MEM1/MEM2 hashes in 4 KiB chunks (`PPR_ROLLBACK_CHUNK_HASHES=4096`), then reads the differing chunks from both peers and keeps the words that are stable on each side but differ between them. An earlier version of this section listed 0x9432xxxx-0x9439xxxx. Those addresses were wrong: `rollback_chunk_hashes` reported the 64 KiB default chunk size whatever the env value was (fixed in `2332460493`).
+
+8 chunks and 36 words differ, none of them in a gameplay heap:
+
+| Address | Area | What it looks like |
+|---|---|---|
+| 0x804C9FA8 | .bss | a saved return address, i.e. an OS thread stack in .bss |
+| 0x804DE4B8, 0x80584008 | .bss | PAD/SI status words (0x40808080 vs 0xC0808080), the known sync-test residue |
+| 0x804F67C4 | .bss | PAD/SI library counter, known residue |
+| 0x805B2E14-0x805B37C8 | between the DOL's .bss end (0x805A5154) and the System FW heap (0x805B5160) | thread stacks: return addresses (0x801B85xx, 0x801E1Axx), OSThread pointers (0x804DD558) |
+| 0x805B9A40, 0x805B9F84-0x805B9F8C | System FW heap | a hash-like word and two pointers (one to gfPadSystem 0x805BACC0) |
+
+The fighter checksums matched on all compared frames. These ranges are candidates to leave out of the gameplay region set; they are not desyncs.
 
 ### Other checks (scratch driver, two instances, CSS → SSS → match with random input)
 
@@ -81,6 +93,15 @@ These addresses lie above the 64 MB of MEM2 that the Brawl heaps use (P+'s extra
    - Result: the dual-core scorecard above, with desyncs 0 on all presets.
 9. **Checksum — fixed (`242af80c0e`).** GekkoNet now checksums verified fields: the frame counter, plus per port the active instance, damage, stocks, X/Y and status kind. The parts are recorded per frame for the harness.
 
+## Audio during resimulation (`15de378723`)
+
+Samples produced while resimulating are dropped in `AudioCommon::SendAIBuffer`; those frames were already heard when they first ran. Measured with the DSP audio dump (typical preset, both peers moving on the CSS, about 2,330 presented frames):
+
+| | Samples per presented frame |
+|---|---|
+| Before | 592.6 / 604.3: 533 for each presented frame, plus each resimulated frame again |
+| After | 533.7 / 533.5, which is 32,000 Hz / 60 |
+
 ## How the remaining desync was found and fixed
 
 | SHA | Fix |
@@ -103,9 +124,9 @@ None of them reach the gameplay checksum.
 
 ## Next steps
 
-1. Audio during resimulation. AI/DSP output plays the resimulated frames at unthrottled speed. Mute it while resimulating. XFB presentation of resimulated fields can flash too (Null video hides this).
+1. XFB presentation of resimulated fields can flash on a real video backend (Null video hides this). Not yet handled.
 2. Gameplay-only rollback (user decision): restrict save/restore to a region set. Inputs to that work:
    - memory that legitimately differs between peers: PAD/SI library buffers 0x804DE3B0-0x804DE4B0, 0x804F67B0, 0x80584000;
    - OS thread contexts and timestamps;
    - the CPU and timing state that must still be restored: registers, downcount, exceptions, CoreTiming;
-   - the 0x9432xxxx-0x9439xxxx chunks that differ between peers outside any game heap (dual-core section above).
+   - the ranges that differ between peers outside the gameplay heaps (table above).
