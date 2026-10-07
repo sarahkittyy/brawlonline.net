@@ -96,11 +96,14 @@ DOL_SECTIONS: Tuple[Tuple[str, int, int], ...] = (
 
 
 def make_instance(name: str, *, cpu_thread: bool = False, rtc: Optional[int] = FIXED_RTC, video: str = "Null",
-                  gpu_determinism: Optional[str] = None, keep: bool = False) -> DolphinInstance:
+                  gpu_determinism: Optional[str] = None, keep: bool = False,
+                  dolphin_ini: Optional[Dict[str, Dict[str, Any]]] = None) -> DolphinInstance:
     args = []
     if rtc is not None:
         args += ["Dolphin.Core.EnableCustomRTC=True", f"Dolphin.Core.CustomRTCValue={rtc:#x}"]
-    inst = DolphinInstance(name, config=InstanceConfig(cpu_thread=cpu_thread, video_backend=video, config_args=args),
+    cfg_kw: Dict[str, Any] = {"dolphin_ini": dolphin_ini} if dolphin_ini else {}
+    inst = DolphinInstance(name, config=InstanceConfig(cpu_thread=cpu_thread, video_backend=video, config_args=args,
+                                                       **cfg_kw),
                            keep=keep, connect_timeout=120)
     inst.create()
     for fname in (LAUNCHER_INI, "RSBE01.ini"):
