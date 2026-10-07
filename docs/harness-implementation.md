@@ -47,7 +47,9 @@ Every message is one JSON object per line, sent to 127.0.0.1:port. There's a min
 
 Test user dirs: copy `run\template-user` (robocopy /E). In the copy, set `SIDevice0`/`SIDevice1` to `6` (Standard Controller) so the game sees harness input immediately. The template uses `12` (Wii U adapter) for ports 0, 1 and 3.
 
-Environment variables: `PPR_HARNESS_PORT` (port if no flag), `PPR_HARNESS_AUDIO=1` (don't force mute), `PPR_HARNESS_POLL_SOURCE=si` (count SI polls instead of Brawl pad reads).
+Environment variables: `PPR_HARNESS_PORT` (port if no flag), `PPR_HARNESS_AUDIO=1` (don't force mute), `PPR_HARNESS_POLL_SOURCE=si` (count SI polls instead of Brawl pad reads). Rollback switches (`PPR_SYNCTEST`, `PPR_ROLLBACK_CHUNK_HASHES`, `PPR_ROLLBACK_PRESENT_RESIM`) are listed in the protocol doc.
+
+Profiling: the Tracy client is only built with `-DENABLE_TRACY=ON` (off by default; when on, it starts a profiler thread at process start and listens on the network).
 
 ### Useful Brawl addresses (P+ / RSBE01)
 
@@ -62,5 +64,5 @@ Environment variables: `PPR_HARNESS_PORT` (port if no flag), `PPR_HARNESS_AUDIO=
 - Memory commands briefly pause the CPU (`CPUThreadGuard`). They block for as long as the CPU thread is itself blocked (e.g. waiting for remote input in fixed-delay netplay).
 - `input_polls` only has per-frame accuracy for Brawl/P+ (see the protocol doc's Deviations). Other games fall back to SI polls (usually 2 per frame).
 - In fixed-delay netplay, local input reaches the game after the pad buffer delay, so `input_polls`-scheduled scripts land `buffer` frames later than in offline play. That's the same delay a real controller gets.
-- Harness netplay is direct-connection only (no traversal or UPnP), and the GekkoNet input delay is fixed by the fork (1 on `rollback-fixes`, which gives 2 frames from pad read to use).
+- Harness netplay is direct-connection only (no traversal or UPnP). The rollback input delay is a host setting (`netplay_host` `delay`, 1-9 frames from pad read to use, default 2; see the protocol doc's "Rollback input delay").
 - Linux/macOS: the code is written for POSIX sockets as well but has only been built on Windows.

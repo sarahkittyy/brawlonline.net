@@ -1,8 +1,92 @@
 # Rollback fixes: status
 
-Branch `rollback-fixes` in `dolphin/` (off `harness`). Not pushed. All commits build. The regression tests are in `harness/tests/test_rollback.py` (`pytest -m dolphin tests/test_rollback.py`: 5 tests, about 4 minutes, all passing on HEAD).
+Branch `rollback-fixes` in `dolphin/` (off `harness`). Not pushed. All commits build. The regression tests are in `harness/tests/test_rollback.py` (`pytest -m dolphin tests/test_rollback.py`: 12 tests, single and dual core plus a real-backend presentation test, about 10 minutes, all passing on `996a9dea34`; the 6 dual-core tests also on `a1f9ec2685`).
 
-Measurement caveat: all numbers come from two instances on one 8-core PC, with another agent's Dolphins running, single core, Null video, muted. FPS is noisy.
+Measurement caveat: all numbers come from two instances on one 8-core PC, with another agent's Dolphins running most of the time, muted. Unless a section says otherwise: single core, Null video. FPS is noisy; before/after pairs were run back to back under the same conditions.
+
+## Round 2: presentation, dual-core tests, delay setting, rollback window
+
+| SHA | Change |
+|---|---|
+| `2025577415` | Resimulated frames are no longer presented (item 1 below). |
+| `0951d7afa1` | Per-depth load and resimulation timing (`netplay_status.rollback.by_depth`). |
+| `15b94ca0ad` | Rollback input delay is a host setting, 1-9, default 2 (item 4). |
+| `9e8c9bf6fd` | Tracy profiler client opt-in (`ENABLE_TRACY`, off): `--version` took 17-19 s. |
+| `64bfbdb681` | Inherited P+ updater removed; stub for our own update channel. |
+| `8408ee9506` | Harness: a replaced `pad_script` keeps the port overridden until the new one starts (proposed change 12). |
+| `0e49c345e2` | Offline custom RTC advances with emulated time (proposed change 14). |
+| `996a9dea34` | Rollback window 5 -> 7 frames (item 5). |
+| `a1f9ec2685` | Dual-core `SyncGPU` no longer drops unexecuted GPU commands while paused: the dual-core pause/frame_advance crash (proposed change 13). |
+
+### 1. Resimulated frames on screen (`2025577415`)
+
+Resimulated frames were presented. A rollback of N frames sent N+1 frames to the presenter within one real frame: the screen briefly showed the re-run frames (a rewind-and-catch-up flash), and the presents also cost time. Null video hid it.
+
+- This fork presents with **Immediate XFB** by default (`GFX_HACK_IMMEDIATE_XFB = true`, also synced by netplay), i.e. when the GPU executes the XFB copy, not at the VI field. Skipping only the VI path did nothing: presents stayed equal to XFB copies.
+- Fix: the guest still runs and renders every resimulated frame (skipping guest rendering changes game memory), but their output does not reach the presenter. For Immediate XFB the decision is made where the CPU thread processes the copy command: in single core when it runs, in deterministic dual core in the FIFO preprocessor, with the GPU thread taking the decisions in command order. For VI presentation the field is not sent. Both use the CoreTiming flag that already drops resimulated audio.
+- `BrawlbackSkipResimRenderHook` is still patched at 0x80017404, but its skip is off (it is a resimulation shortcut that changes game memory). It replicates `lbz r0,0xed(r23); rlwinm. r0,r0,28,31,31; beq 0x80017464` correctly: both targets start with a call, so leaving r0/cr0 unset is safe (checked against the code at 0x80017404-0x8001746c).
+- `PPR_ROLLBACK_PRESENT_RESIM=1` restores the old behaviour for A/B runs; `status.presentation` has the counters.
+
+Frames sent to the presenter per displayed frame, D3D11 (3x), bad_wifi, in a match, 20 s, host / joiner (same binary, switch on/off):
+
+| | single core before | single core after | dual core before | dual core after |
+|---|---|---|---|---|
+| right after a rollback (mean) | 4.18 / 3.31 | 1.00 / 1.00 | 4.55 / 3.82 | 1.00 / 1.00 |
+| right after a rollback, host (frames sent: count) | 2:20 3:21 4:20 5:39 6:22 | 1:83 | 2:14 3:8 4:20 5:39 6:29 | 1:108 |
+| presents per displayed frame, all frames | 1.31 / 1.14 | 0.999 / 0.999 | 1.32 / 1.10 | 0.999 / 0.999 |
+| game FPS | 42.5 | 50.4 | 33.1 | 52.0 |
+
+Cross-check with Dolphin's frame dumping (a PNG per presented frame, 1x, bad_wifi on the CSS for 15 s, both instances paused before counting), old binary `15de378723` against the new one, host / joiner:
+
+| | dumped frames | VI fields | displayed + resimulated frames |
+|---|---|---|---|
+| old, single core | 1156 / 1134 | 1156 / 1134 | 907+248 / 912+222 |
+| new, single core | 911 / 910 | 1015 / 1123 | 910+105 / 910+213 |
+| old, dual core | 1219 / 1012 | 1218 / 1012 | 910+308 / 906+106 |
+| new, dual core | 913 / 910 | 1362 / 946 | 914+445 / 910+35 |
+
+Before, every resimulated frame was dumped (that is, presented); after, exactly the displayed frames are. The JSON files are in `run/qa/present/` (local).
+
+Remaining stutter is the CPU cost of the rollback itself, not presentation: the displayed frame after a rollback of N frames comes about N x 5-6 ms late (see item 5). In dual core with a real backend, each snapshot also syncs the GPU thread (`SyncGPUForDoState`), so snapshot time rises from about 1 ms to 1.5-3.5 ms mean, with rare spikes of 0.2-1 s (likely GPU-thread shader compilation; not seen in single core). Worth a follow-up: capture the video register state in command order without draining the GPU.
+
+### 2. Dual-core regression tests
+
+`harness/tests/test_rollback.py` now runs every test in single core (`sc`) and dual core (`dc`), plus `test_rollback_presents_one_frame_per_displayed_frame[sc|dc]`. That test is marked `gpu`: it needs D3D11 or Vulkan, which is probed once with a screenshot; `--no-gpu` skips it and `--video` picks the backend. It asserts that every displayed frame sends exactly one frame to the presenter, also right after rollbacks, with no dual-core decision misses. On `996a9dea34`: 12 passed in 598 s.
+
+### 3. Protocol docs
+
+`docs/harness-protocol.md` has a new "Rollback" section: every `netplay_status.rollback` field (including `by_depth`, `input_delay`, `announced_delay`, `max_rollback_window`), `status.presentation`, `rollback_pad_history`, `rollback_chunk_hashes`, `cpu_state`, the delay setting and the environment switches (`PPR_SYNCTEST`, `PPR_ROLLBACK_CHUNK_HASHES`, `PPR_ROLLBACK_PRESENT_RESIM`). The command table lists the extra commands, and proposed changes 1 and 12-14 are marked resolved.
+
+### 4. Input delay setting (`15b94ca0ad`)
+
+`NetPlay.RollbackDelay` (1-9, default 2) is the number of frames from pad read to use, like Slippi's delay frames; GekkoNet's delay is that minus one (the local sample already lags a frame). The host's value is announced to clients (new `MessageID::RollbackDelay`, also on join), shown in the Qt netplay dialog ("Rollback Delay", host only) and sent with the start-game settings; `InitGekkoSession` uses it. Harness: `netplay_host` `delay` in rollback mode (1-9), `rollback.input_delay` and `announced_delay`.
+
+Measured on lan: a press scheduled at a known pad read lands 2 frames later with delay 4 than with 2, and 7 frames later with 9, on the same GekkoNet frame on both peers. The default behaves like 2, the previous feel.
+
+### 5. Rollback window (`996a9dea34`)
+
+awful preset (150 +- 50 ms RTT, 5 % loss) to force deep rollbacks, in a match, D3D11 at 3x unless noted. Per rollback depth (`by_depth`):
+
+| | load | resimulation per frame | 5-frame rollback | 7-frame rollback | snapshot (mean) |
+|---|---|---|---|---|---|
+| single core | 1.4-2.2 ms | 5-6 ms (8-11 ms under heavy load) | 29-30 ms | 58-62 ms (busy machine) | 0.85-1.6 ms |
+| dual core | 1.4-2.2 ms | 5.3-5.6 ms | 26-30 ms | 34-39 ms, max about 55 ms | 1.5-3.5 ms |
+| dual core, Null video | 2.0 ms | 4.9-5.2 ms | 24 ms | 34-37 ms | 1.8 ms |
+
+Window 5 against 7, dual core, same conditions, about 32 s each: 7,000-10,600 stalled GekkoNet polls (waiting for the peer because the prediction window ran out) against 2,500-4,200; game speed 44-47 against 42-49.5 FPS. A 7-frame rollback costs about 2.3 real frames of CPU; with a 5-frame window the game freezes instead while it waits on such links. Chosen: **7** (Slippi's value). On lan and typical, rollbacks rarely exceed 3 frames, so nothing changes there. Two more snapshot slots cost about 12 MB.
+
+One dual-core D3D11 run with the 7-frame build desynced: GekkoNet reported 863 / 868 checksum mismatches from some point on, and the run also had 0.4-0.8 s resimulation spikes. It did not reproduce in 3 repeats (each compared about 2,030 confirmed frames with identical pads and checksums) or with the Null backend, and no 5-frame or single-core run desynced. Open: it may be the rare dual-core divergence from `docs/determinism-findings.md` (cause 3), which does not depend on the window. Two runs (one per window) also failed to leave the CSS under awful in the scripted navigation; both instances kept running. Raw data: `run/qa/window/` (local).
+
+### Harness fixes (protocol proposed changes 12-14)
+
+- **12, `pad_script` gap (`8408ee9506`):** checked offline. X was held by a long script, then replaced by a 3-poll Y press starting 20 polls later. Before: the game read 0 for those 20 polls (the port was back on the unbound real controller). After: X, then Y for exactly 3 polls, then neutral.
+- **13, dual-core `pause`/`frame_advance` crash (`a1f9ec2685`):** reproduced with `tools/determinism.py compare --profile dc-rtc` (about 500 pauses per instance): DolphinNoGUI died in 2 of 5 runs, on both the old harness build and `996a9dea34`; a stress loop of 3,000 plain pause/frame_advance cycles in a match never crashed. A small debugger (`DebugActiveProcess` + dbghelp) attached to every instance caught it: an access violation on the GPU thread in `memmove` in `VertexShaderManager::SetConstants`, after `LoadIndexedXF`. Cause: in deterministic dual core, `Fifo::SyncGPU` moved the video buffer from the preprocessor's position, assuming the GPU thread had executed everything up to it. While the emulator is paused the GPU loop does nothing, so a sync then (`PauseAndLock` from a `CPUThreadGuard` during a pause) dropped the unexecuted commands and the GPU thread resumed mid-stream. Now the unexecuted part is kept and run on resume; the normal case is unchanged. After the fix: 0 crashes in 18 runs; with VIDEO logging the case occurs 600-800 times per run (about 150 bytes each), each of which used to drop commands. This may also explain part of the dual-core divergence under pauses in `docs/determinism-findings.md` (cause 3): every pause dropped GPU commands. Netplay without harness pauses is not affected (the GPU thread runs while syncing). The dual-core rollback tests (6) pass with the fix.
+- **14, custom RTC (`0e49c345e2`):** the RTC is the custom value plus emulated seconds. The old divergence did not reproduce here (six pre-fix boots, two at 25 % speed, had identical RNG seeds at field 400), so this is a fix by construction.
+
+### Launcher-related (coordinator items)
+
+- **`Dolphin.exe --version` took 17-19 s (`9e8c9bf6fd`).** The version printed at once; the exit then waited for Tracy's profiler thread, which was initialising symbol lookup over the working directory (slow from the workspace root). The Tracy client was always compiled in (it also listens on the network). It is now opt-in. `--version` from the workspace root: 16.7-19.3 s before, 0.09-0.13 s after.
+- **P+ auto-updater (`64bfbdb681`).** The P+ GitHub update check, its dialogs and its downloader are removed; Dolphin's own auto-updater is not started; the toolbar Update button is hidden. `MainWindow::CheckForUpdatesAuto` and `ShowUpdateDialog` are a marked stub for our update channel (config `AutoUpdate.CheckForUpdates`, default off, no network call). `Dolphin.exe -u <dir> -e "Project+ Netplay Launcher.dol"` without the harness reached the character select with no dialog and no remote TCP connection; with the harness, a screenshot shows the character select (`run/qa/updater/qt-netplay-launcher.png`).
 
 ## Result
 
@@ -124,9 +208,10 @@ None of them reach the gameplay checksum.
 
 ## Next steps
 
-1. XFB presentation of resimulated fields can flash on a real video backend (Null video hides this). Not yet handled.
+1. Done: resimulated frames are not presented (round 2, item 1). Follow-up: dual-core snapshots drain the GPU thread (`SyncGPUForDoState`), which costs FPS with a real backend.
 2. Gameplay-only rollback (user decision): restrict save/restore to a region set. Inputs to that work:
    - memory that legitimately differs between peers: PAD/SI library buffers 0x804DE3B0-0x804DE4B0, 0x804F67B0, 0x80584000;
    - OS thread contexts and timestamps;
    - the CPU and timing state that must still be restored: registers, downcount, exceptions, CoreTiming;
    - the ranges that differ between peers outside the gameplay heaps (table above).
+3. Investigate the single dual-core desync seen with the 7-frame window (round 2, item 5).
