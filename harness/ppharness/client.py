@@ -638,6 +638,27 @@ class HarnessClient:
         rows = self.call("rollback_pad_history", since=int(since)).get("frames", [])
         return {int(r[0]): tuple(int(x) for x in r[1:]) for r in rows}
 
+    # ------------------------------------------------------------------ online play
+
+    def online_status(self) -> dict[str, Any]:
+        """Login state from ``<User>/Online/user.json`` (no play key)."""
+        return self.call("online_status")
+
+    def mm_search_direct(self, code: str, *, session: str = "auto", **args: Any) -> dict[str, Any]:
+        """Start a Direct search for ``code``; returns ``mm_status``. ``session="none"`` keeps
+        the P2P link instead of handing it to the netplay session. Extra args: ``game``,
+        ``delay``, ``auto_start``, ``selections``."""
+        return self.call("mm_search_direct", code=code, session=session, **args)
+
+    def mm_search(self, mode: str, code: str = "", **args: Any) -> dict[str, Any]:
+        return self.call("mm_search", mode=mode, code=code, **args)
+
+    def mm_status(self) -> dict[str, Any]:
+        return self.call("mm_status")
+
+    def mm_cancel(self) -> dict[str, Any]:
+        return self.call("mm_cancel")
+
     def log_mark(self, text: str) -> None:
         self.call("log_mark", text=str(text))
 

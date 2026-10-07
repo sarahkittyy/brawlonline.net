@@ -63,6 +63,11 @@ Let automated scripts (and Claude) run Dolphin instances end to end with no huma
 | `rollback_chunk_hashes` | `frame` (GekkoNet frame) | `{"frame", "chunk_size", "hashes": [...]}`. Needs `PPR_ROLLBACK_CHUNK_HASHES` or a sync test |
 | `cpu_state` | — | `{"pc", "npc", "msr", "lr", "ctr", "srr0", "srr1", "sp", "exceptions", "pi_cause", "pi_mask", "vi_display_interrupts": [4], "current_thread"}` (debugging) |
 | `netplay_leave` | — | `{}` |
+| `online_status` | — | Login state from `<User>/Online/user.json`: `{"logged_in", "app_state" 0/1/2, "app_state_name", "uid", "display_name", "connect_code", "latest_version", "app_version", "has_play_key", "user_fetch", "watching", "user_json_path", "mm_server", "accounts_url"}`. Never returns the play key. See "Online play" |
+| `mm_search_direct` | `code` (the opponent's connect code), `session`: `"auto"` (default) \| `"none"`, optional `game`, `delay`, `auto_start`, `selections` | Starts a Direct search; returns `mm_status`. See "Online play" |
+| `mm_search` | `mode`: `ranked`\|`unranked`\|`direct`\|`teams`\|`party`, `code` (optional), same options | Same for any mode (our server refuses all but Direct) |
+| `mm_status` | — | `{"state", "state_code", "searching", "error", "error_source", "mode", "opponent_code", "server", "local_port", "lan_address", "tickets", "connect_attempts", "match": {...}, "handoff", "handoff_error", "session": {...}}`. See "Online play" |
+| `mm_cancel` | — | Slippi's `CLEANUP_CONNECTION`: ends the search, the P2P link and the session; returns the fresh (idle) `mm_status` |
 | `log_mark` | `text` | `{}`. Writes `[HARNESS] <text>` into dolphin.log, used to correlate log lines with test steps |
 | `quit` | — | `{}`, then a clean shutdown (flushes logs and exits the process) |
 
@@ -147,6 +152,43 @@ During a rollback the resimulated frames are run and rendered in full but not pr
 | `PPR_LOG_GPU_RAM_WRITES=<file>` | append one line per guest-RAM write by the video thread (Brawl match frame, kind, address, size) |
 | `PPR_ROLLBACK_PRESENT_RESIM=1` | present resimulated frames again (the behaviour before `2025577415`), for before/after measurements |
 | `PPR_HARNESS_PORT`, `PPR_HARNESS_AUDIO=1`, `PPR_HARNESS_POLL_SOURCE=si` | see above and "Deviations" |
+
+## Online play
+
+The online client (`Source/Core/Core/Online/`) logs in from `user.json` and finds a Direct opponent through our matchmaking server (`server/crates/mm`), as Slippi's Dolphin does with Slippi's. The game's online menus do not exist yet; these commands drive the same calls (`Online::Client`).
+
+**Configuration** (`[Online]` in Dolphin.ini, or `-C Dolphin.Online.<Key>=<Value>`):
+
+| key | default | meaning |
+|---|---|---|
+| `MatchmakingHost`, `MatchmakingPort` | `mm.fluffycat.gay`, `43113` | the mm server |
+| `UseDevServer` | `False` | Slippi's dev host: matchmaking on `127.0.0.1:MatchmakingPort`, accounts at `DevAccountsUrl` |
+| `AccountsUrl`, `DevAccountsUrl` | `https://accounts.fluffycat.gay`, `http://127.0.0.1:8080` | for the users-rest lookup after a login |
+| `ForceNetplayPort`, `NetplayPort` | `False`, `2626` | Slippi's "Force Netplay Port"; otherwise a random port in 41000-50999 |
+| `ForceLanIP`, `LanIP` | `False`, `""` | Slippi's "Force LAN IP" |
+
+**`online_status`.** Dolphin polls for `<User>/Online/user.json` every 500 ms until it parses (`watching` is true meanwhile), then stops, as Slippi does: a file written after the login is not reread. After reading the file it fetches `GET <accounts>/user/{uid}?additionalFields=chatMessages,rank` and takes the display name, code and latest version from there (`user_fetch`: `not_fetched`, `fetching`, `fetched`, `error`; on error the file's values stay). `app_state` is Slippi's: 0 logged out, 1 logged in, 2 `latestVersion` is newer than `app_version`.
+
+**`mm_status.state`** is Slippi's `ProcessState`; `state_code` is its value, which is what the game will read:
+
+| state | code | meaning |
+|---|---|---|
+| `idle` | 0 | nothing (after `mm_cancel`) |
+| `initializing` | 1 | binding the port, connecting to mm (20 × 500 ms), `create-ticket`, waiting 5 s for `create-ticket-resp` |
+| `matchmaking` | 2 | waiting for `get-ticket-resp` (no client-side limit; the server expires tickets) |
+| `opponent_connecting` | 3 | the 8 s P2P connect window. On failure Direct goes back to `initializing` with a new ticket (`tickets`, `connect_attempts` count them) |
+| `connection_success` | 4 | connected; `handoff` says what happened next |
+| `error` | 5 | `error` is the text the game shows: the server's own message, or Slippi's client messages ("Failed to connect to mm server", "Failed to join mm queue", "Lost connection to the mm server", ...) |
+
+`error_source`: `create_ticket` (the server refused the ticket: bad play key, unsupported mode, own code, out of date, ...), `get_ticket` (the server ended the search: expired, replaced, too many failed connects), `connection` (lost mm while waiting; teams P2P failure), `client` (local or protocol failure).
+
+`match` (from `opponent_connecting` on): `match_id`, `is_host` (Slippi's decider), `local_player_index` (0-based), `local_port` (the punched port), `players` (`uid`, `display_name`, `connect_code`, `port` 1-4, `is_local`, `is_bot`, `ip_address` as the server saw it, `ip_address_lan`), `stages`, `items`, `remote_addresses` (chosen with Slippi's rule: the LAN address when both share an external IP), `connected_addresses` (the source address the P2P connection came up with) and `connect_ms`.
+
+**Hand-off.** With `session: "auto"` the connected match goes to the registered session backend (`Online::Session`, `OnlineSession.h`). In DolphinNoGUI that is whole-machine netplay: the decider hosts a rollback netplay session on its punched port, the other joins from its punched port, and the host boots `game` (default `<User>/Launcher/Project+ Netplay Launcher.dol`) once the guest is in (`auto_start`, default true; `delay` is the rollback input delay). A running game is stopped first. `handoff`: `started`, `failed` (`handoff_error`), or `kept` (no backend, or `session: "none"`: the P2P link stays open until `mm_cancel`). `session`: `{"backend": "netplay", "phase", "error", "detail": {"role", "local_port", "peer", "match_id", "game"}}`; `phase` goes `starting` → (`stopping_game`) → `hosting`/`joining` → `waiting_for_peer` → `started`/`joined` → `running`, or `error`, and `ended` after `mm_cancel`. The netplay session itself is then visible in `netplay_status`.
+
+**Peer timeout.** A rollback session drops a peer that has been silent for Slippi's in-match limit, about 7.2 s at delay 2 (`Online::PeerSilenceTimeoutMs`: the 7-frame window plus 421 halted frames), instead of GekkoNet's 5 s; dolphin.log says `GekkoNet: disconnect timeout 7191 ms`. The game then stops on both sides (`peer_disconnects` = 1), with an OSD `DISCONNECTED` until the game shows it itself (docs/backend-design.md 5.6).
+
+**Tests.** `harness/tests/test_online.py` (markers `dolphin` and `server`) runs Postgres, `accounts` and `mm` locally (`ppharness/backend.py`), creates accounts over HTTP and the admin CLI, writes each instance's `Online/user.json` and drives these commands. The variant through netsim puts each client's *matchmaking* traffic through a proxy; the P2P traffic cannot go through it, because the server tells each client the other's real address (the proxy would need to be a NAT both clients route through).
 
 ## Deviations
 

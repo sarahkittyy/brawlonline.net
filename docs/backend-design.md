@@ -460,7 +460,7 @@ Slippi command bytes come from `I/HW/EXI_DeviceSlippi.h:45-111`. Brawlback Gen-1
 | 0x35-0x3C replay recording | 19-26 replay commands | **none**: Dolphin records the replay as the start keyframe (or the boot) plus the confirmed input log | Replay format still open (2.5) |
 | 0xD1/0xD2 file load, 0xD3/0xD4 GCT | 30-33 allocs/dump (Gen-1 heap tracking) | none | |
 
-**Dolphin-side matchmaking client.** Port `I/Slippi/SlippiMatchmaking.cpp`, as Brawlback already did in `BD Source/Core/Core/Brawlback/Netplay/Matchmaking.cpp`.
+**Dolphin-side matchmaking client.** Port `I/Slippi/SlippiMatchmaking.cpp`, as Brawlback already did in `BD Source/Core/Core/Brawlback/Netplay/Matchmaking.cpp`. _Done: see 5.5._
 - Keep Slippi's wire format, but **add back** what Brawlback dropped: `user.connectCode` and `displayName`. Brawlback sends only uid and playKey (`:495`).
 - Keep Brawlback's useful `search.game {id, revision, type, name}` block (`:496-506`) and add our `buildHash`.
 - Hand the punched local port to Dolphin's `NetPlayServer` (host) or `NetPlayClient` (guest).
@@ -494,6 +494,101 @@ The table maps each Slippi screen to the Brawl/P+ screen we reuse, using existin
 | 10 | Quick chat: D-pad category window, 16 messages (`C/Scenes/CSS/Chat/Chat.c`) | A text-only window in the CSS message pane; in-match notifications as text | Later phase |
 
 All new visible content is text in Brawl/P+'s own fonts, placed in existing panes. **No new images, and no AI-generated graphics.** Where Slippi shows art we don't have (rank badges, the chat window frame), we show text instead.
+
+### 5.5 Matchmaking client and the session hand-off (implemented)
+
+_Added 2026-10-07 with the `matchmaking` branch of `dolphin/` (off `rollback-fixes`)._
+
+**What exists.** `Source/Core/Core/Online/` in our Dolphin fork:
+
+| File | What it is |
+|---|---|
+| `User.{h,cpp}` | Slippi's user handling (the Rust `user` crate behind `SlippiUser`): reads `<User>/Online/user.json` (`D_ONLINE_IDX`, the launcher's `DOLPHIN_ONLINE_DIR`), polls for it every 500 ms until it parses and then stops, fetches users-rest `GET <accounts>/user/{uid}?additionalFields=chatMessages,rank`, logout deletes the file, app state 0/1/2 by comparing `latestVersion` with `Online::APP_VERSION` (0.1.0). |
+| `Matchmaking.{h,cpp}` | A port of `SlippiMatchmaking.cpp` plus the connect phase of `SlippiNetplay.cpp` (`ThreadFunc` up to "connection successful"), same states, timeouts, messages and wire format: punched port `41000 + rand % 10000`, mm connect 20 × 500 ms, `create-ticket` with `user{uid, playKey, connectCode, displayName}`, `search{mode, connectCode: [full-width Shift-JIS bytes]}`, `appVersion`, `ipAddressLan`; 5 s for `create-ticket-resp`; `get-ticket-resp` in 2 s windows with no client limit; Slippi's LAN rule; 8 s P2P window from both sides; Direct requeues with a new ticket on failure, Teams reports "Could not connect to players: ...". Deviations: no ISO-hash wait (the build-hash check is section 6 work), no default Melee stage list, an unusable peer address is an error instead of an exception, and a 500 ms settle after the P2P connect (see below). |
+| `OnlineSession.{h,cpp}` | The hand-off interface (below). |
+| `OnlineClient.{h,cpp}` | What Slippi's EXI device does with `user` / `matchmaking` / `slippi_netplay`: `FindMatch` (FIND_OPPONENT), `Cleanup` (CLEANUP_CONNECTION: a fresh IDLE matchmaking at once, the teardown on a thread), status for the mailbox and the harness. |
+| `Timeouts.h` | Slippi's online timeouts in one place (5.6). |
+| `Config/OnlineSettings.{h,cpp}` | `[Online]`: `MatchmakingHost` (`mm.fluffycat.gay`), `MatchmakingPort` (43113), `UseDevServer` (127.0.0.1), `AccountsUrl`, `DevAccountsUrl`, and Slippi's `ForceNetplayPort`/`NetplayPort`/`ForceLanIP`/`LanIP`. |
+
+The harness drives it with `online_status`, `mm_search_direct`, `mm_search`, `mm_status` and `mm_cancel` (`docs/harness-protocol.md`, "Online play"); the game will drive the same calls through MAILBOX 0xB9/0xB4/0xB3/0xBA (5.2, 5.3).
+
+**The hand-off contract** (`OnlineSession.h`). Matchmaking ends, like Slippi's, with a live ENet connection to every remote player, made from the punched local port. It hands over:
+
+```cpp
+struct Match {
+  std::string match_id;
+  bool is_host;                   // Slippi's "decider" (port 1)
+  int local_player_index;         // 0-based
+  u16 local_port;                 // the punched UDP port (mm and P2P)
+  std::vector<PlayerInfo> players;  // uid, display_name, connect_code, port 1-4, is_local, ip_address, ip_address_lan, chat_messages
+  std::vector<u16> stages; u32 items;
+  std::vector<Endpoint> remotes;    // per remote player, Slippi's LAN rule applied
+  std::vector<Endpoint> connected;  // the source address the P2P connection came up with
+};
+class P2PLink;  // the connected ENet host and peers; Release() or TakeHost()
+
+class SessionBackend {
+  virtual std::optional<std::string> Start(const Match&, P2PLink, const picojson::object& selections) = 0;
+  virtual void Stop() = 0;           // CLEANUP_CONNECTION / leave
+  virtual SessionStatus Status() const = 0;
+};
+namespace Online::Session { void SetBackend(std::unique_ptr<SessionBackend>);
+                            std::optional<std::string> Start(const Match&, P2PLink, const picojson::object& selections); }
+```
+
+`Start` runs on the matchmaking thread and must return quickly. A backend that binds its own UDP socket calls `link.Release()` first: it disconnects every ENet peer, waits (up to 1 s) until the peer has acknowledged, and destroys the host, so the port can be bound again with the NAT mapping the peer already uses. Waiting for the acknowledgement matters: both sides release at the same moment and rebind the same ports, and a disconnect still being retransmitted reaches the peer's next socket, where ENet accepts it into a connection still being set up (the session id is not checked yet) and kills it; that made the guest's first netplay join fail for 5 s. For the same reason matchmaking waits 500 ms after the P2P connect before handing over, so the peer's side of the handshake has finished.
+
+**Backend 1 (implemented): whole-machine netplay**, the synchronized boot of option A (5.1). Registered by the harness in DolphinNoGUI (`Harness/HarnessNetPlay.cpp`, `NetPlayOnlineBackend`), because the harness has the only headless `NetPlayUI`; DolphinQt needs the same class against its NetPlay dialog. The decider stops any running game, hosts a rollback `NetPlayServer` on its punched port and boots the game once the guest has joined and has it; the guest joins from its punched port (`NetPlayClient` gained a `local_port` argument) to the address the P2P connection came up with. Verified end to end (`harness/tests/test_online.py::test_direct_match_hands_off_to_rollback_session`): both instances boot P+ under GekkoNet with the host on the decider's punched port.
+
+**Backend 2 (to merge): the gameplay-only session** (`Gprb::Session`, `dolphin-gprb`, branch `gameplay-rollback`). Its current entry points map directly:
+
+| `Online::Match` | `Gprb::Session` |
+|---|---|
+| `is_host` | `ConnectOptions::host` |
+| `local_port` | `ConnectOptions::local_port` (after `link.Release()`) |
+| `connected[0]` (guest) | `ConnectOptions::remote_host`, `remote_port` |
+| the local player's `display_name` | `ConnectOptions::name` |
+| `selections` | `SetSelections(selections)` |
+| `Stop()` | `Gprb::Session::Stop()` |
+| `Status()` | `Gprb::Session::Status()` (`phase`, peer, RTT) |
+
+A `GameplaySessionBackend : Online::SessionBackend` of about 40 lines does it, registered where the Brawl HLE hooks are installed. Three points for the merge:
+1. **The host must send first too.** `Gprb::Session` lets the host wait for the joiner's first packet (`HandleControl` learns `peer_ip` from it). Behind a NAT that only works if the host's mapping is open to the joiner, which the P2P window did a moment ago; to keep it open the host should send its control packets to `connected[0]` from the start, as Slippi connects from both sides.
+2. **The peer timeout.** `Gprb::Session` sets `gekko_set_disconnect_timeout(..., 10000)`; it should use `Online::PeerSilenceTimeoutMs(delay)` (5.6).
+3. **Leaving.** `Stop()` must tell the peer (a "leave" control message) so the other side reacts at once, as Slippi's graceful ENet disconnect does, instead of after the 7 s timeout.
+
+Alternatively the gameplay session could keep the ENet link (`P2PLink::TakeHost()`), as Slippi's `SlippiNetplayClient` keeps its host; `Gprb::Session` speaks raw UDP today, so re-binding is the smaller change.
+
+### 5.6 Disconnects: Slippi's behaviour and what our game must do
+
+Source: Slippi Dolphin `SD` = `refs/slippi-dolphin/Source/Core/Core` (Ishiiruka has the same logic, e.g. `I/HW/EXI_DeviceSlippi.cpp:1286-1301, 1440-1462`), the game side `ASM/Online` and `C`. ENet defaults from `refs/slippi-Ishiiruka/Externals/enet` 1.3.13 and our `dolphin/Externals/enet` 1.3.18 (same timeout logic).
+
+**Detection in a match.**
+- **A silent peer: about 7.2 s.** The game asks Dolphin for inputs once per frame (ONLINE_INPUTS, hooked after `PAD_Read`, `ASM/Online/Core/TriggerSendInput.asm`). When the newest remote input is more than `ROLLBACK_MAX_FRAMES` (7) frames old, the frame is halted (`SD/HW/EXI/EXI_DeviceSlippi.cpp:1383-1384`; the remote input already carries its delay) and `stall_frame_counts[i]` grows by one per halted frame (`:1391`); any frame with enough input resets it (`:1387`). Above `60 * 7` (`:1394`) Dolphin force-disconnects that player (`:1399`, `SD/Slippi/SlippiNetplay.cpp:1577-1585`). That is (delay + 8 + 421) frames ≈ 7.2 s after the last packet at delay 2.
+- **ENet's own timeout** runs alongside: Slippi never calls `enet_peer_timeout`, so the defaults apply (limit 32, minimum 5000 ms, maximum 30000 ms, ping every 500 ms). Pads travel unsequenced (`SlippiNetplay.cpp:707-714`), so only ENet's pings are reliable; ENet drops a silent peer somewhere between 5 and 10.5 s depending on RTT. Either detection leads to the same flow; the stall counter is the deterministic rule.
+- **A peer that leaves on purpose** (closes Dolphin, holds Z) sends an ENet disconnect (`SlippiNetplay.cpp:741`), which the other side sees after RTT/2 plus a frame.
+- No other timeout exists in a session: the CSS lobby and the selection exchange wait indefinitely ("Waiting on opponent"). Ranked's between-games steps have their own timers (`C/Scenes/Ranked/GameSetup.c:231-357, 848-853`).
+
+**What we do now (Dolphin side).** GekkoNet's disconnect timeout is `Online::PeerSilenceTimeoutMs(delay)` (7191 ms at delay 2) instead of GekkoNet's 5000 ms default (`NetPlayClient::InitGekkoSession`). On the drop, whole-machine netplay stops the game on both sides (the server relays the stop) and shows an OSD `DISCONNECTED` in red until the game can show it itself. Measured (`test_direct_match_hands_off_to_rollback_session`): a guest frozen for 6 s stays in the match; a guest frozen for longer is dropped 7.22-7.23 s after the freeze (4 runs, polled every 50 ms), and both games stop, with both processes still alive.
+
+Fixed on the way: the stopping side crashed every time a dropped peer ended the game (an access violation 5-7 s into the freeze, also on `rollback-fixes` `7b2227fd5e`). `NetPlayClient::StopGame` ran on the netplay thread and destroyed the GekkoNet session while the CPU thread was still in a frame whose queued save writes a checksum into GekkoNet's memory. The session now lives until the next game's `InitGekkoSession` or the client's destructor. (Round 3 reported that both games stop; with the round 3 binary, `run/bin/menu-7b2227fd5e`, the stopping host crashes in our reproduction, both early in the boot and on the CSS.)
+
+**What the game must do (the in-game UI to build).** Dolphin reports a disconnect to the game as Slippi's ONLINE_INPUTS result 3 does: in the gameplay-only session as a `disconnected` flag in the LOCAL block (5.2), read at the frame-end boundary; under whole-machine netplay the game is simply stopped until the reboot model goes away. Copy Slippi's flow exactly:
+
+1. **In a match** (`ASM/Online/Core/TriggerSendInput.asm:257-266`, `StartEngineLoop.asm:280-311`, `224-244`):
+   - play the ERROR sound (Melee common sound 3; Brawl's equivalent system "error" sound);
+   - draw `DISCONNECTED` in red (`0xFF0000FF`, scale 0.7) centred near the top of the HUD (`StartEngineLoop.asm:33-39`, canvas `Menus/InGame/InitInGame.asm:170-191`); it stays until the scene ends;
+   - end the game as an LRAS-type end (end type 7, the local player as the "pauser"), with **no "GAME!"** graphic or announcer (`Core/CustomizeMessageLRAS.asm:58`), and an end screen of **90 frames (1.5 s)** instead of 110;
+   - report the game with winner index −3 (`Core/InitOnlinePlay.asm:374-385`); ranked also reports set completion `abnormal_completion` (`SD/HW/EXI/EXI_DeviceSlippi.cpp:3218-3228`) and, on the side that closed Dolphin, `abandoned` (`:206-214`);
+   - go straight to the **character select** (Unranked, Direct, Teams; no results screen). Party goes to the results screen (`Slippi Online Scene/main.asm:584-735`).
+2. **On the character select** (also when the opponent drops while both wait there between games): the next GET_MATCH_STATE finds the peer gone, cleans up and becomes IDLE (`EXI_DeviceSlippi.cpp:2155-2208, 3000-3034`). The CSS plays the BACK sound and returns to its idle text: `<Mode> Mode`, "Character selected", and "Press START to enter code" (Direct, Teams) or "Press START to search" (Unranked, Ranked) (`ASM/Online/Menus/CSS/HandleInputsOnCSS.asm:72-85`, `LoadCSSText.asm:517-645, 762-905`). **No error state and no disconnect text**; the player's character stays locked in and START searches again.
+3. **Ranked between games** (`C/Scenes/Ranked/GameSetup.c:793-806, 614-628, 1276-1307`): the red DISCONNECTED image (text in our case) and the ERROR sound; after 30 frames the "return to the CSS" prompt, and A or START goes to the CSS.
+4. **Leaving on purpose**: on the CSS while connected, hold Z for 48 frames (`DISCONNECT_HOLD_DELAY = 0x30`, about 0.8 s; the hint reads "Hold Z to disconnect") sends CLEANUP_CONNECTION, a graceful disconnect; while searching, one press of Z cancels ("Press Z to cancel"); in the error state the header reads "Error" and Z clears it ("Press Z to clear error") (`HandleInputsOnCSS.asm:14, 172-205, 539-561`).
+5. **LRAS** ends the game for both players without disconnecting: Direct through the real pause, Unranked and Teams through Slippi's client-side pause, none in Ranked and Party (`EXI_DeviceSlippi.cpp:2515-2518`, `Core/InitPause.asm:13-41, 65-101, 146-169`). No "GAME!"; the other player hears the PAUSE sound; both return to the CSS still connected. A disconnect while paused unpauses (`Core/PreventPauseStranding.asm:18-29`).
+6. **Poor performance** (ranked only): Dolphin terminates the match and both sides show a red OSD message for 15 s (`EXI_DeviceSlippi.cpp:1220-1227, 1337-1348`). It is the only OSD message in Slippi's disconnect paths. Ranked does not exist yet.
+7. **Teams**: one dropped player is despawned on every client at the same frame and the match continues; DISCONNECTED and the end only come once every remote player is gone (`EXI_DeviceSlippi.cpp:1674-1697`, `SlippiNetplay.cpp:1565-1585`).
+
+In Brawl terms: the HUD text goes through the in-game message window (`MuMsg`, 5.4 screen 9), the LRAS-style end needs the same hook as P+'s own LRAS (end without "GAME!"), and the CSS idle state is screen 2 of 5.4.
 
 ---
 

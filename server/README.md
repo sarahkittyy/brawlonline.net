@@ -48,6 +48,21 @@ cargo build --workspace
 
 Without Docker, point `DATABASE_URL` at any Postgres 14+ database you own.
 
+**Portable Postgres (Windows, no install, no Docker).** When Docker Desktop is broken, the EDB "binaries" zip runs from any folder without touching the system or WSL. The ppharness online tests use it automatically when it is at `run/postgres-portable/pgsql`:
+
+```powershell
+# once: https://get.enterprisedb.com/postgresql/postgresql-16.10-1-windows-x64-binaries.zip
+# extracted to D:\code\pm_rollback\run\postgres-portable (pgAdmin, StackBuilder and doc can be deleted)
+$pg = "D:\code\pm_rollback\run\postgres-portable\pgsql\bin"
+"pp-dev-password" | Out-File -Encoding ascii pw.txt
+& $pg\initdb -D pgdata -U pp -A scram-sha-256 --pwfile=pw.txt -E UTF8 --no-locale; Remove-Item pw.txt
+& $pg\pg_ctl -D pgdata -l pg.log -o "-p 54329 -h 127.0.0.1" -w start   # same URL as the compose service
+# ... cargo test --workspace / the services ...
+& $pg\pg_ctl -D pgdata -m fast -w stop
+```
+
+With another port, set `TEST_DATABASE_URL=postgres://pp:pp-dev-password@127.0.0.1:<port>/postgres` for `cargo test` (the e2e tests create and drop their own databases).
+
 Every setting is an environment variable (or a flag; `--help` lists them). The binaries load `.env` from the current directory. With `MAILER=stdout` (the default when `RESEND_API_KEY` is empty) emails are printed instead of sent, so the verification link appears in the accounts terminal. `MAILER=file` appends them to `MAIL_FILE` as JSON lines.
 
 ### Try it end to end
