@@ -237,7 +237,7 @@ yml_field() { # file key: first "key: value" at top level
 }
 
 publish_client() { # dir
-  local src feed version f url sha size want got upd dl n count
+  local src feed version f url sha size got upd dl n count checked
   src=$(source_dir "$1")
   new_stage
   mapfile -t names < <(as_caller find "$src" -maxdepth 1 -type f -printf '%f\n' | sort)
@@ -257,17 +257,27 @@ publish_client() { # dir
   for feed in "$STAGE"/latest*.yml; do
     version=$(yml_field "$feed" version)
     [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || die "$(basename "$feed"): bad version '$version'"
+    checked=0
+    # One line per "files" entry: url, sha512 and size ("-" when the feed gives none, as in
+    # NSIS feeds without a blockmap).
     while read -r url sha size; do
       [[ "$url" =~ $ART_RE ]] || die "$(basename "$feed") names unexpected file '$url'"
       [ -f "$STAGE/$url" ] || die "$(basename "$feed") names $url, which is missing"
-      want="$sha"
+      [ -n "$sha" ] && [ "$sha" != "-" ] || die "$(basename "$feed") gives no sha512 for $url"
       got=$(openssl dgst -sha512 -binary "$STAGE/$url" | base64 -w0)
-      [ "$want" = "$got" ] || die "$url: sha512 differs from $(basename "$feed")"
-      [ "$(stat -c %s "$STAGE/$url")" = "$size" ] || die "$url: size differs from $(basename "$feed")"
+      [ "$sha" = "$got" ] || die "$url: sha512 differs from $(basename "$feed")"
+      if [ "$size" != "-" ]; then
+        [ "$(stat -c %s "$STAGE/$url")" = "$size" ] || die "$url: size differs from $(basename "$feed")"
+      fi
+      checked=$((checked + 1))
     done < <(awk '
-      /^  - url: / {u=$3}
-      /^    sha512: / {s=$2}
-      /^    size: / {print u, s, $2}' "$feed")
+      function flush() { if (u != "") print u, (s == "" ? "-" : s), (z == "" ? "-" : z); u = s = z = "" }
+      /^  - url: / {flush(); u=$3; next}
+      /^    sha512: / {s=$2; next}
+      /^    size: / {z=$2; next}
+      /^[^ ]/ {flush()}
+      END {flush()}' "$feed")
+    [ "$checked" -gt 0 ] || die "$(basename "$feed") names no files"
     echo "$(basename "$feed"): $version"
   done
   upd="$WWW/updates/launcher"
