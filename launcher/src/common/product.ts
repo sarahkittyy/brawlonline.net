@@ -6,7 +6,8 @@
  * release/app/package.json and electron-builder.json (a unit test checks they
  * agree). Add the old name to LEGACY_PRODUCT_NAMES so existing profiles move over.
  *
- * Hostnames are configuration. They default to subdomains of BASE_DOMAIN and can
+ * Hostnames are configuration. They default to BASE_DOMAIN (website, accounts API,
+ * update feed) and its "mm" subdomain (matchmaking), and can
  * be overridden at runtime in the main process with environment variables
  * (see `resolveServiceUrls` in src/accounts/config.ts), e.g. for a local
  * accounts service during development.
@@ -27,20 +28,20 @@ export const LEGACY_PRODUCT_NAMES: readonly string[] = ["PlusOnline"];
 /** The game the client is for. Shown in copy such as "Launch Project+". */
 export const GAME_NAME = "Project+";
 
-export const BASE_DOMAIN = "fluffycat.gay";
+export const BASE_DOMAIN = "brawlonline.net";
 
 export const defaultServiceUrls = {
-  /** HTTP accounts API (server/crates/accounts). */
-  accountsApi: `https://accounts.${BASE_DOMAIN}`,
-  /** Matchmaking server (ENet/UDP); Dolphin uses it, the launcher only displays it. */
+  /** HTTP accounts API (server/crates/accounts), served under /v1 on the apex domain. */
+  accountsApi: `https://${BASE_DOMAIN}`,
+  /** Matchmaking server (ENet/UDP 43113, a DNS-only record); Dolphin uses it, the launcher only displays it. */
   matchmakingHost: `mm.${BASE_DOMAIN}`,
   /**
-   * Web pages for an account (email verification, password reset). Served by the
-   * accounts service until a website exists.
+   * The website, which also serves the pages the account emails link to (email
+   * verification, password reset; proxied to the accounts service).
    */
-  website: `https://accounts.${BASE_DOMAIN}`,
+  website: `https://${BASE_DOMAIN}`,
   /** electron-updater "generic" feed with the launcher releases (latest.yml etc.); also the manual download page. */
-  launcherUpdates: `https://updates.${BASE_DOMAIN}/launcher`,
+  launcherUpdates: `https://${BASE_DOMAIN}/updates/launcher`,
 };
 
 export type ServiceUrls = typeof defaultServiceUrls;

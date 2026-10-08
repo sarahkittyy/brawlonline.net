@@ -27,8 +27,10 @@ describe("product identity", () => {
     expect(readJson("electron-builder.json").publish.url).toBe(defaultServiceUrls.launcherUpdates);
   });
 
-  it("defaults every host to a subdomain of the base domain", () => {
-    expect(defaultServiceUrls.accountsApi).toMatch(/^https:\/\/[a-z]+\.fluffycat\.gay$/);
-    expect(defaultServiceUrls.matchmakingHost).toBe("mm.fluffycat.gay");
+  it("defaults every host to the brawlonline.net domain", () => {
+    expect(defaultServiceUrls.accountsApi).toBe("https://brawlonline.net");
+    expect(defaultServiceUrls.website).toBe("https://brawlonline.net");
+    expect(defaultServiceUrls.matchmakingHost).toBe("mm.brawlonline.net");
+    expect(defaultServiceUrls.launcherUpdates).toBe("https://brawlonline.net/updates/launcher");
   });
 });

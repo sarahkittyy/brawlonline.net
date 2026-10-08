@@ -2,7 +2,7 @@
 
 Desktop launcher for Project+ online play with rollback netcode: log in, get a connect code, press Play to start our Dolphin build with Project+, browse replays, and change settings.
 
-The product is called Brawl Online (it was "PlusOnline" while the name was a placeholder). The name lives in one constant (`src/common/product.ts`); the service hosts are configuration there too (subdomains of `fluffycat.gay` by default).
+The product is called Brawl Online (it was "PlusOnline" while the name was a placeholder). The name lives in one constant (`src/common/product.ts`); the service hosts are configuration there too (`brawlonline.net` by default: website, accounts API and update feed on the apex, matchmaking on `mm.brawlonline.net`).
 
 This is a fork of the [Slippi Launcher](https://github.com/project-slippi/slippi-launcher) by Project Slippi, with its git history kept. See [NOTICE](NOTICE) for attribution and [PPLUS_PORTING.md](PPLUS_PORTING.md) for what changed and why.
 
@@ -31,7 +31,7 @@ Development defaults (all overridable, see `.env.example`):
 
 | What | Default in development | Override |
 |---|---|---|
-| Accounts API | `https://accounts.fluffycat.gay` | `PPO_ACCOUNTS_URL` (e.g. `http://127.0.0.1:8080` for `server/`) |
+| Accounts API | `https://brawlonline.net` | `PPO_ACCOUNTS_URL` (e.g. `http://127.0.0.1:8080` for `server/`) |
 | Dolphin executable | `../dolphin/build/release/x64/Binaries/Dolphin.exe` | Settings > Dolphin, or `PPO_DOLPHIN_PATH` |
 | Dolphin User folder seed (P+ launcher DOLs, `Wii/sd.raw`) | `../run/template-user` | `PPO_DOLPHIN_USER_TEMPLATE` |
 | Disc files for asset extraction | `../game/rev1-extract/DATA/files` if present, else the chosen ISO via DolphinTool | `PPO_DISC_FOLDER` |

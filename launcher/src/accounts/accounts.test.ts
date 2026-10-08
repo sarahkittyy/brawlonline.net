@@ -70,8 +70,8 @@ describe("accounts", () => {
   });
 
   it("resolves hosts from config with env overrides", () => {
-    expect(resolveServiceUrls({}).accountsApi).toBe("https://accounts.fluffycat.gay");
-    expect(resolveServiceUrls({}).matchmakingHost).toBe("mm.fluffycat.gay");
+    expect(resolveServiceUrls({}).accountsApi).toBe("https://brawlonline.net");
+    expect(resolveServiceUrls({}).matchmakingHost).toBe("mm.brawlonline.net");
     const local = resolveServiceUrls({ PPO_ACCOUNTS_URL: "http://127.0.0.1:8080/" });
     expect(local.accountsApi).toBe("http://127.0.0.1:8080");
     expect(local.website).toBe("http://127.0.0.1:8080");
