@@ -1,0 +1,229 @@
+import { PRODUCT_NAME } from "@common/product";
+import { IsoValidity } from "@common/types";
+import { css } from "@emotion/react";
+import styled from "@emotion/styled";
+import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
+import Box from "@mui/material/Box";
+import Button from "@mui/material/Button";
+import IconButton from "@mui/material/IconButton";
+import Tooltip from "@mui/material/Tooltip";
+import log from "electron-log";
+import debounce from "lodash/debounce";
+import React, { useCallback, useMemo } from "react";
+
+import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
+import { DolphinStatus, useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
+import { useAccount } from "@/lib/hooks/use_account";
+import { useAppStore } from "@/lib/hooks/use_app_store";
+import { useAppUpdate } from "@/lib/hooks/use_app_update";
+import { useIsoVerification } from "@/lib/hooks/use_iso_verification";
+import { useLoginModal } from "@/lib/hooks/use_login_modal";
+import { useSettings } from "@/lib/hooks/use_settings";
+import { useSettingsModal } from "@/lib/hooks/use_settings_modal";
+import { useToasts } from "@/lib/hooks/use_toasts";
+import { useServices } from "@/services";
+import { platformTitleBarStyles } from "@/styles/platform_title_bar_styles";
+import { titleFont } from "@/styles/with_font";
+
+import { ActivateOnlineDialog } from "./activate_online_dialog";
+import { HeaderMessages as Messages } from "./header.messages";
+import type { MenuItem } from "./main_menu";
+import { MainMenu } from "./main_menu";
+import { PlayButton as PlayButtonImpl, UpdatingButton } from "./play_button/play_button";
+import { StartGameOfflineDialog } from "./start_game_offline_dialog";
+import { UserMenu } from "./user_menu/user_menu";
+
+const isMac = window.electron.bootstrap.isMac;
+
+const OuterBox = styled(Box)`
+  background-color: var(--surface-1);
+  height: 70px;
+`;
+
+export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
+  const { dolphinService, backendService } = useServices();
+  const [startGameModalOpen, setStartGameModalOpen] = React.useState(false);
+  const [activateOnlineModal, setActivateOnlineModal] = React.useState(false);
+  const openModal = useLoginModal((store) => store.openModal);
+  const { open } = useSettingsModal();
+  const currentUser = useAccount((store) => store.user);
+  const userData = useAccount((store) => store.userData);
+  const serverError = useAccount((store) => store.serverError);
+  const meleeIsoPath = useSettings((store) => store.settings.isoPath) || undefined;
+  const { showError } = useToasts();
+  const { launchNetplay } = useDolphinActions(dolphinService);
+  const isOnline = useAppStore((state) => state.isOnline);
+
+  const onPlay = useCallback(
+    async (offlineOnly?: boolean) => {
+      if (!offlineOnly) {
+        // Ensure user is logged in
+        if (!currentUser || !isOnline) {
+          setStartGameModalOpen(true);
+          return;
+        }
+
+        // Ensure user has a valid play key
+        if (!userData?.playKey && !serverError) {
+          setActivateOnlineModal(true);
+          return;
+        }
+
+        if (userData?.playKey) {
+          // Ensure the play key is saved to disk
+          try {
+            await backendService.assertPlayKey(userData.playKey);
+          } catch (err) {
+            showError(err);
+            return;
+          }
+        }
+      }
+
+      if (!meleeIsoPath) {
+        showError(Messages.noMeleeIsoFile());
+        return;
+      }
+
+      // Only the two NTSC-U Brawl images are accepted (every player must run the same data).
+      if (useIsoVerification.getState().validity === IsoValidity.INVALID) {
+        showError(Messages.isoWillNotWork(PRODUCT_NAME));
+        return;
+      }
+
+      launchNetplay();
+
+      return;
+    },
+    [currentUser, isOnline, launchNetplay, meleeIsoPath, userData, serverError, showError, backendService],
+  );
+
+  return (
+    <OuterBox
+      css={css`
+        display: flex;
+        justify-content: space-between;
+        ${platformTitleBarStyles()}
+      `}
+    >
+      <div
+        css={css`
+          display: flex;
+          align-items: center;
+          padding-left: 5px;
+        `}
+      >
+        <CheckForUpdatesButton />
+        <div
+          css={css`
+            margin: 0 10px;
+          `}
+        >
+          <PlayButton onClick={() => onPlay()} />
+        </div>
+        <MainMenu menuItems={menuItems} />
+      </div>
+      <Box display="flex" alignItems="center">
+        {currentUser ? (
+          <UserMenu user={currentUser} handleError={showError} />
+        ) : (
+          <Button onClick={openModal} sx={{ color: "var(--off-white)" }}>
+            {Messages.logIn()}
+          </Button>
+        )}
+        <Tooltip title={Messages.settings()}>
+          <IconButton
+            onClick={() => open()}
+            css={css`
+              opacity: 0.5;
+              margin-right: 10px;
+            `}
+            size="large"
+          >
+            <SettingsOutlinedIcon />
+          </IconButton>
+        </Tooltip>
+      </Box>
+      <StartGameOfflineDialog
+        open={startGameModalOpen}
+        onCancel={() => setStartGameModalOpen(false)}
+        onPlayOffline={() => onPlay(true)}
+      />
+      <ActivateOnlineDialog
+        open={activateOnlineModal}
+        onClose={() => setActivateOnlineModal(false)}
+        onSubmit={() => onPlay()}
+      />
+    </OuterBox>
+  );
+};
+
+const PlayButton = ({ onClick }: { onClick: () => void }) => {
+  const installStatus = useDolphinStore((store) => store.netplayStatus);
+  const installProgress = useDolphinStore((store) => store.netplayDownloadProgress);
+  const fillPercent = useMemo(() => {
+    if (installStatus === DolphinStatus.READY) {
+      return 1;
+    }
+    if (installProgress && installProgress.total > 0) {
+      return installProgress.current / installProgress.total;
+    }
+    return 0;
+  }, [installProgress, installStatus]);
+
+  if (installStatus === DolphinStatus.READY) {
+    return <PlayButtonImpl onClick={onClick} />;
+  }
+
+  return <UpdatingButton onClick={onClick} fillPercent={fillPercent} />;
+};
+
+const CheckForUpdatesButton = () => {
+  const { dolphinService } = useServices();
+  const { updateDolphin } = useDolphinActions(dolphinService);
+  const { checkForAppUpdates } = useAppUpdate();
+  const { showInfo, showError } = useToasts();
+  const [checkingForUpdates, setCheckingForUpdates] = React.useState(false);
+
+  const checkForUpdatesHandler = useMemo(() => {
+    const checkForUpdates = async () => {
+      setCheckingForUpdates(true);
+      try {
+        const updateResult = await checkForAppUpdates();
+        if (updateResult && !updateResult.updateAvailable) {
+          showInfo(Messages.noUpdateAvailable());
+        }
+        await updateDolphin();
+      } catch (err) {
+        log.error(err);
+        showError(Messages.failedToGetUpdates());
+      } finally {
+        setCheckingForUpdates(false);
+      }
+    };
+    return debounce(checkForUpdates, 500);
+  }, [checkForAppUpdates, updateDolphin, showInfo, showError]);
+
+  return (
+    <Tooltip title={checkingForUpdates ? Messages.checkingForUpdates() : Messages.checkForUpdates()}>
+      <Button
+        style={isMac ? { marginTop: 10 } : undefined}
+        onClick={checkForUpdatesHandler}
+        disabled={checkingForUpdates}
+      >
+        {/* Slippi shows its logo here. We have no logo (no invented art), so the product name is shown in
+            the game's title font once the assets are extracted. */}
+        <span
+          css={css`
+            font-family: ${titleFont};
+            font-size: 18px;
+            color: var(--off-white);
+            text-transform: none;
+          `}
+        >
+          {PRODUCT_NAME}
+        </span>
+      </Button>
+    </Tooltip>
+  );
+};

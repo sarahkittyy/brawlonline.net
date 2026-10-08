@@ -1,0 +1,59 @@
+import styled from "@emotion/styled";
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import MenuItem from "@mui/material/MenuItem";
+import MatSelect from "@mui/material/Select";
+import React from "react";
+
+type DropdownProps<T> = {
+  value: T;
+  options: readonly {
+    value: T;
+    label: string;
+  }[];
+  onChange: (val: T) => void;
+};
+
+export function Dropdown<T>({ value, options, onChange }: DropdownProps<T>) {
+  const handleChange = React.useCallback(
+    (event: any) => {
+      onChange(JSON.parse(event.target.value));
+    },
+    [onChange],
+  );
+
+  return (
+    <Select
+      variant="outlined"
+      value={JSON.stringify(value)}
+      onChange={handleChange}
+      IconComponent={KeyboardArrowDownIcon}
+    >
+      {options.map(({ value, label }) => {
+        return (
+          <MenuItem key={`option-${label}`} value={JSON.stringify(value)}>
+            {label}
+          </MenuItem>
+        );
+      })}
+    </Select>
+  );
+}
+
+const Select = styled(MatSelect)`
+  .MuiOutlinedInput-notchedOutline {
+    border-width: 2px;
+    border-radius: 10px;
+    border-color: var(--surface-1);
+  }
+  .MuiSelect-outlined {
+    padding: 8px;
+    padding-left: 15px;
+    padding-right: 50px;
+    font-size: 12px;
+  }
+  .MuiSelect-icon {
+    color: var(--surface-3);
+    top: 50%;
+    transform: translateY(-50%);
+  }
+`;

@@ -1,0 +1,84 @@
+import { PRODUCT_NAME } from "@common/product";
+import { DolphinLaunchType } from "@dolphin/types";
+import log from "electron-log";
+
+import { generateQuickStartSteps } from "@/pages/quick_start/use_quick_start";
+import type { AuthUser } from "@/services/auth/types";
+import type { Services } from "@/services/types";
+
+import { InitializeAppMessages as Messages } from "./initialize_app.messages";
+import type { UserData } from "./services/backend/types";
+
+export async function initializeApp(services: Services) {
+  const { authService, backendService, dolphinService, notificationService } = services;
+  const { showError } = notificationService;
+
+  log.info("Initializing app...");
+
+  const promises: Promise<any>[] = [];
+
+  // If we're logged in, check they have a valid play key
+  promises.push(
+    (async () => {
+      let user: AuthUser | undefined = undefined;
+      try {
+        user = await authService.init();
+        // useAccount.getState().setUser(user);
+      } catch (err) {
+        log.warn(err);
+      }
+
+      let userData: UserData | undefined = undefined;
+      let serverError = false;
+      if (user) {
+        try {
+          userData = await backendService.fetchUserData();
+          serverError = false;
+        } catch (err) {
+          serverError = true;
+          const reason = !navigator.onLine ? Messages.youAreOffline() : Messages.serversMayBeDown(PRODUCT_NAME);
+          const message = `${Messages.failedToCommunicateWithServers(PRODUCT_NAME)} ${reason}`;
+          showError(message);
+        }
+      }
+
+      // Generate the quick start steps based on the current state
+      generateQuickStartSteps({ user, userData, serverError });
+    })(),
+  );
+
+  // Download Dolphins if necessary
+  [DolphinLaunchType.NETPLAY, DolphinLaunchType.PLAYBACK].map((dolphinType) => {
+    void dolphinService.downloadDolphin(dolphinType).catch((err) => {
+      log.error(err);
+      const dolphinTypeName =
+        dolphinType === DolphinLaunchType.NETPLAY ? Messages.netplayDolphin() : Messages.playbackDolphin();
+      showError(Messages.failedToInstallDolphin(dolphinTypeName));
+    });
+  });
+
+  // Check if there is an update to the launcher
+  promises.push(window.electron.common.checkForAppUpdates());
+
+  // Ensure the fonts are loaded to prevent FOUT (Flash of Unstyled Text)
+  promises.push(document.fonts.ready);
+
+  // Wait for all the promises to complete before returning
+  const results = await Promise.allSettled(promises);
+  results
+    .filter((result): result is PromiseRejectedResult => result.status === "rejected")
+    .forEach((result) => {
+      log.error(result.reason);
+    });
+
+  // Show the update result after awaiting the promises since we load the app
+  // via React.Suspense so nothing is visible anyway while the promises are being awaited.
+  const updateState = window.electron.bootstrap.updateState;
+  if (updateState) {
+    if (updateState.status === "succeeded") {
+      notificationService.showInfo(Messages.updatedToVersion(PRODUCT_NAME, updateState.version));
+    } else {
+      showError(Messages.updateFailed(updateState.version));
+    }
+  }
+}

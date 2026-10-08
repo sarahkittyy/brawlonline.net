@@ -1,0 +1,28 @@
+{
+  "name": "brawl-online-launcher",
+  "productName": "Brawl Online",
+  "description": "Launcher for Project+ online play with rollback netcode",
+  "version": "0.1.0",
+  "main": "./dist/main/main.js",
+  "author": {
+    "name": "Sarah Ohlin"
+  },
+  "contributors": [
+    {
+      "name": "Jas Laferriere (Project Slippi, original Slippi Launcher)",
+      "url": "https://github.com/project-slippi/slippi-launcher"
+    }
+  ],
+  "scripts": {
+    "electron-rebuild": "node -r ts-node/register ../../.erb/scripts/electron-rebuild.js",
+    "link-modules": "node -r ts-node/register ../../.erb/scripts/link-modules.ts",
+    "postinstall": "npm run electron-rebuild && npm run link-modules"
+  },
+  "dependencies": {
+    "better-sqlite3": "^11.8.1",
+    "kysely": "^0.28.17",
+    "kysely-sqlite-worker": "^1.2.1",
+    "threads": "^1.6.5"
+  },
+  "license": "GPL-3.0"
+}

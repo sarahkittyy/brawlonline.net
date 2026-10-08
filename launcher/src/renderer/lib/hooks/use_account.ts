@@ -1,0 +1,84 @@
+import type { StoredAccount } from "@settings/types";
+import log from "electron-log";
+import { produce } from "immer";
+import { create } from "zustand";
+import { combine } from "zustand/middleware";
+
+import type { AuthUser } from "@/services/auth/types";
+import type { BackendService, RankedProfile, UserData } from "@/services/backend/types";
+
+export const useAccount = create(
+  combine(
+    {
+      user: undefined as AuthUser | undefined,
+      loading: false,
+      userData: undefined as UserData | undefined,
+      serverError: false,
+      displayName: "",
+      // Multi-account state
+      accounts: [] as readonly StoredAccount[],
+      activeAccountId: null as string | null,
+    },
+    (set) => ({
+      setUser: (user: AuthUser | undefined) => {
+        if (!user) {
+          set({ user: undefined });
+          return;
+        }
+
+        const displayName = user.displayName || "";
+        set({ user, displayName });
+      },
+      setLoading: (loading: boolean) => set({ loading }),
+      setUserData: (userData: UserData | undefined) => set({ userData }),
+      setServerError: (serverError: boolean) => set({ serverError }),
+      setDisplayName: (displayName: string) => set({ displayName }),
+      // Used to only fetch and update the user's rank and rating
+      updateRanking: (rankedProfile: RankedProfile) =>
+        set((state) =>
+          produce(state, (draft) => {
+            if (draft.userData) {
+              draft.userData.rankedNetplayProfile = rankedProfile;
+            }
+          }),
+        ),
+      // Multi-account actions
+      setAccounts: (accounts: readonly StoredAccount[]) => set({ accounts }),
+      setActiveAccountId: (activeAccountId: string | null) => set({ activeAccountId }),
+    }),
+  ),
+);
+
+let requestId = 0;
+export async function refreshUserData(backendService: BackendService) {
+  // We're already refreshing the key
+  if (useAccount.getState().loading) {
+    return;
+  }
+
+  const currentRequestId = ++requestId;
+  useAccount.getState().setLoading(true);
+  try {
+    const userData = await backendService.fetchUserData();
+    if (requestId !== currentRequestId) {
+      // We've already got a new request so just do nothing.
+      return;
+    }
+
+    useAccount.getState().setUserData(userData);
+    useAccount.getState().setServerError(false);
+  } catch (err) {
+    log.warn("Error fetching play key: ", err);
+    useAccount.getState().setUserData(undefined);
+    useAccount.getState().setServerError(true);
+  } finally {
+    useAccount.getState().setLoading(false);
+  }
+}
+
+export function clearUserData() {
+  // Disregard any pending requests for user data.
+  requestId += 1;
+
+  useAccount.getState().setUserData(undefined);
+}

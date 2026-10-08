@@ -1,0 +1,75 @@
+import { css } from "@emotion/react";
+import { format } from "date-fns";
+import React from "react";
+
+import { useAdvancedUser } from "@/lib/hooks/use_advanced_user";
+import { useToasts } from "@/lib/hooks/use_toasts";
+
+import { BuildInfoMessages as Messages } from "./build_info.messages";
+
+const osInfo = window.electron.bootstrap.operatingSystem;
+
+const appVersion = __VERSION__;
+const buildDate = new Date(__DATE__);
+const commitHash = __COMMIT__;
+
+type BuildInfoProps = {
+  enableAdvancedUserClick?: boolean;
+  className?: string;
+};
+
+const DEV_THRESHOLD = 7;
+
+export const BuildInfo = ({ className, enableAdvancedUserClick }: BuildInfoProps) => {
+  const [clickCount, setClickCount] = React.useState(0);
+  const isAdvancedUser = useAdvancedUser((store) => store.isAdvancedUser);
+  const setIsAdvancedUser = useAdvancedUser((store) => store.setIsAdvancedUser);
+  const { showWarning } = useToasts();
+  const handleBuildNumberClick = () => {
+    if (!enableAdvancedUserClick) {
+      return;
+    }
+
+    setClickCount(clickCount + 1);
+    if (clickCount < DEV_THRESHOLD - 1) {
+      // We haven't clicked enough yet
+      return;
+    }
+
+    if (!isAdvancedUser) {
+      showWarning(Messages.warnUser());
+    }
+
+    setIsAdvancedUser(!isAdvancedUser);
+    setClickCount(0);
+  };
+
+  return (
+    <div
+      className={className}
+      css={css`
+        color: rgba(255, 255, 255, 0.3);
+        font-size: 12px;
+        padding: 10px;
+        line-height: 15px;
+      `}
+    >
+      <div>
+        Version {appVersion} ({commitHash})
+      </div>
+      <div>
+        Build
+        <span
+          onClick={handleBuildNumberClick}
+          css={css`
+            text-decoration: ${enableAdvancedUserClick && isAdvancedUser ? "underline" : "initial"};
+            margin-left: 4px;
+          `}
+        >
+          {format(buildDate, "yyyyMMdd")}
+        </span>
+      </div>
+      <div>{osInfo}</div>
+    </div>
+  );
+};

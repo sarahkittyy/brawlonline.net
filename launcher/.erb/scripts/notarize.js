@@ -1,0 +1,50 @@
+/* eslint-disable @typescript-eslint/no-var-requires */
+const fs = require("fs");
+const path = require("path");
+const electronNotarize = require("@electron/notarize");
+const electronBuilderConfig = require("../../electron-builder.json");
+
+const ACCEPTED_TRUE_VALUES = ["true", "yes", "1"];
+
+module.exports = async function (params) {
+  const ENABLE_SIGNING = ACCEPTED_TRUE_VALUES.includes((process.env.ENABLE_SIGNING ?? "").toLowerCase());
+  if (process.platform !== "darwin" || !ENABLE_SIGNING) {
+    return;
+  }
+
+  console.log("afterSign hook triggered", params);
+
+  // Bail early if this is a fork-caused PR build, which doesn't get
+  // secrets.
+  if (!process.env.APPLE_API_KEY_ID || !process.env.APPLE_API_KEY || !process.env.APPLE_API_ISSUER) {
+    console.log("Bailing, no secrets found.");
+    return;
+  }
+
+  const appId = electronBuilderConfig.appId;
+  const appPath = path.join(params.appOutDir, `${params.packager.appInfo.productFilename}.app`);
+  if (!fs.existsSync(appPath)) {
+    throw new Error(`Cannot find application at: ${appPath}`);
+  }
+
+  const keyPath = path.join(process.env.HOME, `private_keys/AuthKey_${process.env.APPLE_API_KEY_ID}.p8`);
+  if (!fs.existsSync(keyPath)) {
+    throw new Error(`Cannot find Apple API key at: ${keyPath}`);
+  }
+
+  console.log(`Notarizing ${appId} found at ${appPath} (this could take awhile, get some coffee...)`);
+  try {
+    await electronNotarize.notarize({
+      tool: "notarytool",
+      appBundleId: appId,
+      appPath,
+      appleApiKeyId: process.env.APPLE_API_KEY_ID,
+      appleApiKey: keyPath,
+      appleApiIssuer: process.env.APPLE_API_ISSUER,
+    });
+
+    console.log(`Successfully notarized ${appId}`);
+  } catch (error) {
+    console.error(error);
+  }
+};

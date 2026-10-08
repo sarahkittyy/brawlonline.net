@@ -1,0 +1,62 @@
+import type { FileResult } from "@replays/types";
+import { Frames } from "@slippi/slippi-js";
+import compareFunc from "compare-func";
+
+export const enum ReplaySortOption {
+  DATE = "DATE",
+  GAME_DURATION = "GAME_DURATION",
+}
+
+export const enum SortDirection {
+  ASC = "ASC",
+  DESC = "DESC",
+}
+
+export function replayFileSort(
+  key: ReplaySortOption,
+  direction: SortDirection,
+): (a: FileResult, b: FileResult) => number {
+  const ordering = [{ key, direction }, ...defaultSortOrder];
+  return (a, b) => {
+    for (const order of ordering) {
+      const sortFunc = compareFunc(sortByValue(order.key));
+      const sortValue = sortFunc(a, b);
+
+      // If the value is the same, then sort by the next criteria
+      if (sortValue === 0) {
+        continue;
+      }
+
+      // Handle the reverse direction sorting
+      if (order.direction === SortDirection.ASC) {
+        return sortValue;
+      }
+      return sortValue * -1;
+    }
+
+    return 0;
+  };
+}
+
+const sortByValue = (key: ReplaySortOption): ((val: FileResult) => any) => {
+  return (file) => {
+    switch (key) {
+      case ReplaySortOption.GAME_DURATION: {
+        return file.game.lastFrame ?? Frames.FIRST;
+      }
+      case ReplaySortOption.DATE: {
+        return file.game.startTime ? Date.parse(file.game.startTime) : 0;
+      }
+    }
+  };
+};
+
+const defaultSortOrder: Array<{
+  key: ReplaySortOption;
+  direction: SortDirection;
+}> = [
+  {
+    key: ReplaySortOption.DATE,
+    direction: SortDirection.DESC,
+  },
+];

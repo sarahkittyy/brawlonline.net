@@ -1,0 +1,35 @@
+import React from "react";
+
+import { Dropdown } from "@/components/form/dropdown";
+import { useAppStore } from "@/lib/hooks/use_app_store";
+import { useServices } from "@/services";
+import { SUPPORTED_LANGUAGES } from "@/services/i18n/util";
+
+import { SettingItem } from "../../setting_item_section";
+import { LanguageSelectorMessages as Messages } from "./language_selector.messages";
+
+const sortedSupportedLanguages = [...SUPPORTED_LANGUAGES].sort((a, b) => a.label.localeCompare(b.label));
+
+const configFlags = window.electron.bootstrap.flags;
+
+export const LanguageSelector = React.memo(() => {
+  const { i18nService } = useServices();
+  const currentLanguage = useAppStore((state) => state.currentLanguage);
+
+  const handleLanguageChange = React.useCallback(
+    (language: string) => {
+      void i18nService.setLanguage(language);
+    },
+    [i18nService],
+  );
+
+  if (!configFlags.enableI18n) {
+    return null;
+  }
+
+  return (
+    <SettingItem name={Messages.appLanguage()} description={Messages.appLanguageDescription()}>
+      <Dropdown value={currentLanguage} options={sortedSupportedLanguages} onChange={handleLanguageChange} />
+    </SettingItem>
+  );
+});

@@ -1,0 +1,105 @@
+import { BrowserWindow, Menu, shell } from "electron";
+import log from "electron-log";
+
+const isDevelopment = process.env.NODE_ENV !== "production";
+
+const BACKGROUND_COLOR = "#1B0B28";
+
+/**
+ * Manages browser windows that are opened from the main app. Used for external URLs.
+ * This is primarily used for opening tournament streams in a separate always-on-top window.
+ */
+export class BrowserWindowManager {
+  private externalWindowsByUrl = new Map<string, BrowserWindow>();
+  private alwaysOnTop = false;
+
+  setAlwaysOnTop(enabled: boolean): void {
+    this.alwaysOnTop = enabled;
+    for (const win of this.externalWindowsByUrl.values()) {
+      if (!win.isDestroyed()) {
+        win.setAlwaysOnTop(enabled);
+      }
+    }
+  }
+
+  isAlwaysOnTop(): boolean {
+    return this.alwaysOnTop;
+  }
+
+  async openInNewBrowserWindow(url: string) {
+    const existing = this.externalWindowsByUrl.get(url);
+    if (existing && !existing.isDestroyed()) {
+      if (existing.isMinimized()) {
+        existing.restore();
+      }
+      existing.show();
+      existing.focus();
+      return;
+    }
+
+    const { hostname } = new URL(url);
+    const win = new BrowserWindow({
+      width: 960,
+      height: 540,
+      alwaysOnTop: this.alwaysOnTop,
+      fullscreenable: false, // When a website requests fullscreen, fill only the browser window
+      show: false,
+      backgroundColor: BACKGROUND_COLOR,
+      autoHideMenuBar: true,
+      webPreferences: {
+        sandbox: true,
+        // We partition by hostname to isolate cookies and other data
+        partition: `temp:${hostname}`,
+      },
+    });
+
+    // This menu will only exist on Windows and Linux
+    const menu = Menu.buildFromTemplate([
+      {
+        label: "Window",
+        submenu: [
+          {
+            type: "checkbox",
+            label: "Always on Top",
+            checked: this.alwaysOnTop,
+            click: (menuItem) => {
+              win.setAlwaysOnTop(menuItem.checked);
+            },
+          },
+        ],
+      },
+    ]);
+    // This win.setMenu is a no-op on MacOS.
+    // So for MacOS, we have a global handler in the menu template, since it doesn't support per-window menus.
+    win.setMenu(menu);
+
+    if (isDevelopment) {
+      // Devtools automatically opens when a new browser window is created in development mode.
+      // We don't really care about devtools in this situation so just close it immediately.
+      win.webContents.on("devtools-opened", () => {
+        win.webContents.closeDevTools();
+      });
+    }
+
+    win.on("closed", () => {
+      this.externalWindowsByUrl.delete(url);
+    });
+
+    win.on("ready-to-show", () => {
+      win.show();
+    });
+
+    win.webContents.setWindowOpenHandler((edata) => {
+      void shell.openExternal(edata.url);
+      return { action: "deny" };
+    });
+
+    try {
+      await win.loadURL(url);
+      this.externalWindowsByUrl.set(url, win);
+    } catch (err) {
+      log.error(err);
+      throw err;
+    }
+  }
+}

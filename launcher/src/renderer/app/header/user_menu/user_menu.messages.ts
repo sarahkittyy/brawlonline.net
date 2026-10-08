@@ -1,0 +1,18 @@
+export const UserMenuMessages = {
+  activateOnlinePlay: () => "Activate online play",
+  editDisplayName: () => "Edit display name",
+  logout: () => "Log out",
+  offline: () => "Offline",
+  serverError: () => "Server error",
+  onlineActivationRequired: () => "Online activation required",
+  emailVerificationRequired: () => "Email verification required",
+  areYouSureYouWantToLogout: () => "Are you sure you want to log out?",
+  youWillNeedToLogInAgain: () => "You will need to log in again next time you want to play.",
+  failedToRemoveAccount: () => "Failed to remove account",
+  failedToSwitchAccount: () => "Failed to switch account",
+  maxAccountsReached: (max: number) => `Maximum {0} accounts reached. Remove an account to add another.`,
+  accountRemoved: (accountName: string) => `Removed {0}`,
+  switchedTo: (accountName: string) => `Switched to {0}`,
+  closeDolphinToSwitchAccounts: () => "Dolphin is currently running. Close Dolphin to switch accounts",
+  verifyEmail: () => "Verify email",
+};

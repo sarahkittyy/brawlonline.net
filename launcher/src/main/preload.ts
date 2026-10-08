@@ -1,0 +1,45 @@
+import accountsApi from "@accounts/api";
+import dolphinApi from "@dolphin/api";
+import gameAssetsApi from "@game_assets/api";
+import replaysApi from "@replays/api";
+import settingsApi from "@settings/api";
+import { contextBridge, ipcRenderer, shell, webUtils } from "electron";
+import { pathExists } from "fs-extra";
+import path from "path";
+import { isSubdirectory } from "utils/is_subdirectory";
+
+import commonApi from "./api";
+import type { AppBootstrap } from "./bootstrap";
+
+const bootstrap = ipcRenderer.sendSync("getAppBootstrapSync") as AppBootstrap;
+
+const api = {
+  bootstrap,
+  common: commonApi,
+  settings: settingsApi,
+  accounts: accountsApi,
+  gameAssets: gameAssetsApi,
+  dolphin: dolphinApi,
+  replays: replaysApi,
+  utils: {
+    isSubdirectory,
+    pathExists: (folder: string) => pathExists(folder),
+    // This is needed since Electron won't return the full file path anymore
+    getFilePath: (file: File): string => {
+      // This returns the absolute path on disk
+      return webUtils.getPathForFile(file);
+    },
+  },
+  path: {
+    join: path.join,
+  },
+  shell: {
+    openPath: shell.openPath,
+    openExternal: shell.openExternal,
+    showItemInFolder: shell.showItemInFolder,
+  },
+};
+
+contextBridge.exposeInMainWorld("electron", api);
+
+export type API = typeof api;

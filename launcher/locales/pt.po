@@ -1,0 +1,1379 @@
+msgid ""
+msgstr ""
+"Project-Id-Version: brawl-online-launcher 1.0\n"
+"mime-version: 1.0\n"
+"Content-Type: text/plain; charset=utf-8\n"
+"Content-Transfer-Encoding: 8bit\n"
+"Plural-Forms: nplurals=2; plural=(n != 1);\n"
+"x-generator: i18next-auto-keys CLI\n"
+"Language: pt-BR\n"
+"PO-Revision-Date: 2026-10-08T01:25:15.356Z\n"
+
+#: src/renderer/components/activate_online_form/activate_online_form.messages.ts:3:30
+msgid "2-4 uppercase English characters"
+msgstr "2-4 caracteres maiúsculos em inglês"
+
+#: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:9:40
+msgid "7z files must be uncompressed to be used in Dolphin."
+msgstr "Arquivos 7z devem ser descompactados para serem usados no Dolphin."
+
+#: src/renderer/components/verify_email_form/verify_email_form.messages.ts:7:42
+msgid "A confirmation email has been sent to:"
+msgstr "Um e-mail de confirmação foi enviado para:"
+
+#: src/renderer/listeners/listeners.messages.ts:3:23
+msgid "A network error occurred."
+msgstr "Ocorreu um erro de rede."
+
+#: src/renderer/pages/quick_start/steps/accept_rules_step/accept_rules_step.messages.ts:3:20
+msgid "Accept All"
+msgstr "Aceitar Tudo"
+
+#: src/renderer/pages/quick_start/steps/accept_rules_step/accept_rules_step.messages.ts:4:33
+msgid "Accept rules and policies"
+msgstr "Aceitar regras e políticas"
+
+#: src/renderer/app/header/user_menu/user_menu.messages.ts:2:29
+msgid "Activate online play"
+msgstr "Ativar jogo online"
+
+#: src/renderer/components/multi_path_input/multi_path_input.messages.ts:3:14
+#: src/renderer/pages/settings/dolphin_settings/gecko_codes/add_codes/add_codes.messages.ts:6:14
+#: src/renderer/pages/settings/dolphin_settings/gecko_codes/gecko_codes.messages.ts:6:14
+msgid "Add"
+msgstr "Adicionar"
+
+#: src/renderer/app/header/account_switcher/account_switcher.messages.ts:2:28
+msgid "Add another account"
+msgstr "Adicionar outra conta"
+
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:8:31
+msgid "Additional Replay Folders"
+msgstr ""
+
+#: src/renderer/pages/settings/create.messages.ts:10:19
+msgid "Advanced"
+msgstr "Avançado"
+
+#: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:12:26
+msgid "Agree and Install"
+msgstr ""
+
+#: src/renderer/pages/replays/replay_browser/file_selection_toolbar/file_selection_toolbar.messages.ts:3:40
+#. {0} count: number
+msgid "All {0, plural, one {# file} other {# files}} selected"
+msgstr ""
+"{0, plural, one {Todo # arquivo selecionado} other {Todos # arquivos "
+"selecionados}}"
+
+#: src/renderer/pages/quick_start/steps/verify_email_step/verify_email_step.messages.ts:3:27
+msgid "An error occurred. The application does not have a user."
+msgstr "Ocorreu um erro. O aplicativo não tem um usuário."
+
+#: src/renderer/pages/settings/appearance_settings/language_selector/language_selector.messages.ts:2:22
+msgid "App Language"
+msgstr "Idioma do Aplicativo"
+
+#: src/renderer/pages/settings/create.messages.ts:8:22
+msgid "App Settings"
+msgstr "Configurações do Aplicativo"
+
+#: src/renderer/pages/settings/create.messages.ts:9:21
+msgid "Appearance"
+msgstr "Aparência"
+
+#: src/renderer/pages/settings/dolphin_settings/gecko_codes/manage_codes/manage_codes.messages.ts:5:21
+msgid "Are you sure you want to delete this code?"
+msgstr "Tem certeza de que deseja excluir este código?"
+
+#: src/renderer/app/header/user_menu/user_menu.messages.ts:9:36
+msgid "Are you sure you want to log out?"
+msgstr "Tem certeza de que deseja sair?"
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:15:21
+msgid "Are you sure?"
+msgstr "Tem certeza?"
+
+#: src/renderer/initialize_app.messages.ts:11:38
+#. {0} version: string
+msgid ""
+"Auto-update to version {0} failed. Try manually downloading the latest "
+"version."
+msgstr ""
+
+#: src/renderer/pages/settings/advanced_app_settings/advanced_app_settings.messages.ts:4:5
+#. {0} productName: string
+msgid "Automatically install {0} updates when they become available."
+msgstr ""
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:24:20
+msgid "Available"
+msgstr "Disponível"
+
+#: src/renderer/pages/quick_start/stepper_dots/stepper_dots.messages.ts:3:15
+msgid "Back"
+msgstr "Voltar"
+
+#: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:2:24
+msgid "Back to replays"
+msgstr "Voltar para replays"
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:2:23
+msgid "Brawl ISO File"
+msgstr ""
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:30:27
+msgid "CGNAT or Double NAT"
+msgstr "CGNAT ou NAT Duplo"
+
+#: src/renderer/components/activate_online_form/activate_online_form.messages.ts:5:23
+msgid "Can be changed once later on request"
+msgstr ""
+
+#: src/renderer/components/verify_email_form/verify_email_form.messages.ts:4:24
+msgid "Can't find the email? Check your spam folder. Still missing? "
+msgstr "Não encontra o e-mail? Verifique sua pasta de spam. Ainda não aparece? "
+
+#: src/renderer/app/header/header.messages.ts:17:17
+#: src/renderer/components/confirmation_modal/confirmation_modal.messages.ts:3:17
+#: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:9:17
+msgid "Cancel"
+msgstr "Cancelar"
+
+#: src/renderer/components/multi_path_input/multi_path_input.messages.ts:5:36
+msgid "Cannot add subfolders of the Root Replay Folder."
+msgstr ""
+
+#: src/renderer/components/verify_email_form/verify_email_form.messages.ts:3:28
+msgid "Check Verification"
+msgstr "Verificar Confirmação"
+
+#: src/renderer/app/header/header.messages.ts:3:26
+msgid "Check for updates"
+msgstr "Verificar atualizações"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostics_button.messages.ts:6:29
+#: src/renderer/pages/settings/help_page/support_box/support_box.messages.ts:6:29
+msgid "Check network issues"
+msgstr "Verificar problemas de rede"
+
+#: src/renderer/app/header/header.messages.ts:4:29
+msgid "Checking for updates..."
+msgstr "Verificando atualizações..."
+
+#: src/renderer/app/header/header.messages.ts:11:29
+#: src/renderer/pages/quick_start/steps/activate_online_step/activate_online_step.messages.ts:2:29
+msgid "Choose a connect code"
+msgstr "Escolha um código de conexão"
+
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:10:5
+msgid ""
+"Choose any additional replay folders that should show up in the replay "
+"browser."
+msgstr ""
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:8:38
+msgid "Choose what happens when the Play button is pressed."
+msgstr "Escolha o que acontece quando o botão de Jogar é pressionado."
+
+#: src/renderer/pages/replays/replay_browser/file_selection_toolbar/file_selection_toolbar.messages.ts:5:16
+msgid "Clear"
+msgstr "Limpar"
+
+#: src/renderer/pages/settings/advanced_app_settings/advanced_app_settings.messages.ts:5:25
+msgid "Clear Temporary Files"
+msgstr "Limpar Arquivos Temporários"
+
+#: src/renderer/pages/settings/advanced_app_settings/advanced_app_settings.messages.ts:7:21
+msgid "Clear files"
+msgstr "Limpar arquivos"
+
+#: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:6:22
+msgid "Clear filter"
+msgstr "Limpar filtro"
+
+#: src/renderer/pages/settings/settings_page.messages.ts:2:16
+msgid "Close"
+msgstr "Fechar"
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:21:31
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:4:31
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:5:38
+msgid "Close Dolphin to change this setting"
+msgstr "Feche o Dolphin para alterar esta configuração"
+
+#: src/renderer/pages/settings/dolphin_settings/gecko_codes/manage_codes/manage_codes.messages.ts:7:32
+msgid "Code copied to clipboard!"
+msgstr "Código copiado para a área de transferência!"
+
+#: src/renderer/lib/validate/validate.messages.ts:6:24
+msgid "Code is too long"
+msgstr "Código muito longo"
+
+#: src/renderer/lib/validate/validate.messages.ts:5:25
+msgid "Code is too short"
+msgstr "Código muito curto"
+
+#: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:11:5
+#. {0} productName: string
+msgid ""
+"Compressed disc images (RVZ, WBFS) are not supported by {0}. Please provide "
+"an uncompressed ISO."
+msgstr ""
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:8:33
+msgid "Configure Dolphin"
+msgstr "Configurar Dolphin"
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:2:50
+#. {0} dolphinTypeName: string
+msgid "Configure {0}"
+msgstr "Configurar {0}"
+
+#: src/renderer/app/header/header.messages.ts:19:18
+#: src/renderer/components/confirmation_modal/confirmation_modal.messages.ts:2:18
+msgid "Confirm"
+msgstr "Confirmar"
+
+#: src/renderer/pages/replays/replay_browser/file_selection_toolbar/file_selection_toolbar.messages.ts:8:30
+msgid "Confirm File Deletion"
+msgstr "Confirmar Exclusão de Arquivo"
+
+#: src/renderer/components/activate_online_form/activate_online_form.messages.ts:6:22
+msgid "Confirm code"
+msgstr "Confirmar código"
+
+#: src/renderer/components/login_form/login_form.messages.ts:9:26
+msgid "Confirm password"
+msgstr "Confirmar senha"
+
+#: src/renderer/components/login_form/login_form.messages.ts:16:19
+#: src/renderer/pages/quick_start/steps/setup_complete_step/setup_complete_step.messages.ts:3:19
+msgid "Continue"
+msgstr "Continuar"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:7:17
+msgid "Copied!"
+msgstr "Copiado!"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:6:15
+msgid "Copy"
+msgstr "Copiar"
+
+#: src/renderer/pages/settings/help_page/support_box/support_box.messages.ts:5:19
+msgid "Copy logs"
+msgstr "Copiar logs"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:8:22
+msgid "Copy results"
+msgstr "Copiar resultados"
+
+#: src/renderer/pages/settings/dolphin_settings/gecko_codes/manage_codes/manage_codes.messages.ts:3:26
+msgid "Copy to Clipboard"
+msgstr "Copiar para Área de Transferência"
+
+#: src/renderer/components/login_form/login_form.messages.ts:2:26
+msgid "Create an account"
+msgstr "Criar uma conta"
+
+#: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:5:27
+msgid "Crunching numbers..."
+msgstr "Processando..."
+
+#: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:9:22
+msgid "Current file"
+msgstr "Arquivo atual"
+
+#: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:4:24
+msgid "Current folder"
+msgstr "Pasta atual"
+
+#: src/renderer/pages/replays/replay_browser/file_list/file_list.messages.ts:3:17
+#: src/renderer/pages/replays/replay_browser/file_selection_toolbar/file_selection_toolbar.messages.ts:4:17
+#: src/renderer/pages/settings/dolphin_settings/gecko_codes/manage_codes/manage_codes.messages.ts:6:17
+msgid "Delete"
+msgstr "Excluir"
+
+#: src/renderer/pages/settings/dolphin_settings/gecko_codes/manage_codes/manage_codes.messages.ts:2:21
+msgid "Delete Code"
+msgstr "Excluir Código"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:33:36
+msgid "Detected (it could also be a VPN)"
+msgstr "Detectado (também pode ser uma VPN)"
+
+#: src/renderer/app/header/header.messages.ts:20:22
+#: src/renderer/components/login_form/login_form.messages.ts:5:22
+msgid "Display Name"
+msgstr "Nome de Exibição"
+
+#: src/renderer/lib/validate/validate.messages.ts:10:31
+msgid "Display name is too long"
+msgstr "Nome de exibição muito longo"
+
+#: src/renderer/lib/validate/validate.messages.ts:9:32
+msgid "Display name is too short"
+msgstr "Nome de exibição muito curto"
+
+#: src/renderer/lib/validate/validate.messages.ts:8:5
+msgid ""
+"Display names can only contain letters, numbers, Hiragana, Katakana, and "
+"special characters"
+msgstr ""
+"Nomes de exibição podem conter apenas letras, números, Hiragana, Katakana e "
+"caracteres especiais"
+
+#: src/renderer/pages/settings/create.messages.ts:5:26
+msgid "Dolphin Settings"
+msgstr "Configurações do Dolphin"
+
+#: src/renderer/lib/dolphin/handle_dolphin_exit_code.messages.ts:9:5
+#. {0} exitCode: string
+msgid ""
+"Dolphin exited with error code: {0}. If you're in need of assistance, "
+"screenshot this and send it to us with some context regarding the crash."
+msgstr ""
+
+#: src/renderer/lib/dolphin/handle_dolphin_exit_code.messages.ts:5:5
+msgid ""
+"Dolphin has crashed. Please go to the Help section of the settings page, "
+"click \"Copy logs\", and send them to us with some context regarding the "
+"crash."
+msgstr ""
+
+#: src/renderer/app/header/user_menu/user_menu.messages.ts:16:39
+msgid "Dolphin is currently running. Close Dolphin to switch accounts"
+msgstr "Dolphin está executando. Feche o Dolphin para trocar a conta"
+
+#: src/renderer/pages/replays/replay_browser/replay_file/replay_file.messages.ts:6:28
+#: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:6:28
+msgid "Dolphin is updating"
+msgstr "Dolphin está atualizando"
+
+#: src/renderer/lib/dolphin/dolphin.messages.ts:2:28
+msgid "Dolphin is updating. Try again later."
+msgstr "Dolphin está atualizando. Tente novamente mais tarde."
+
+#: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:13:15
+msgid "Done"
+msgstr ""
+
+#: src/renderer/components/persistent_notification/persistent_notification.messages.ts:6:27
+msgid "Download manually"
+msgstr "Baixar manualmente"
+
+#: src/renderer/components/persistent_notification/persistent_notification.messages.ts:2:44
+#. {0} version: string
+msgid "Downloading version {0}..."
+msgstr "Baixando versão {0}..."
+
+#: src/renderer/pages/settings/dolphin_settings/gecko_codes/add_codes/add_codes.messages.ts:4:28
+msgid "Duplicate code name"
+msgstr "Nome de código duplicado"
+
+#: src/renderer/app/header/header.messages.ts:18:26
+#: src/renderer/app/header/user_menu/user_menu.messages.ts:3:26
+msgid "Edit display name"
+msgstr "Editar nome de exibição"
+
+#: src/renderer/components/login_form/login_form.messages.ts:6:16
+msgid "Email"
+msgstr "E-mail"
+
+#: src/renderer/components/verify_email_form/verify_email_form.messages.ts:8:29
+msgid "Email is not yet verified. Have you checked your spam folder?"
+msgstr "E-mail ainda não verificado. Você verificou sua pasta de spam?"
+
+#: src/renderer/app/header/user_menu/user_menu.messages.ts:8:36
+msgid "Email verification required"
+msgstr ""
+
+#: src/renderer/components/verify_email_form/verify_email_form.messages.ts:6:24
+msgid "Email verified"
+msgstr "E-mail verificado"
+
+#: src/renderer/pages/settings/advanced_app_settings/advanced_app_settings.messages.ts:2:28
+msgid "Enable Auto Updates"
+msgstr "Ativar Atualizações Automáticas"
+
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:12:31
+msgid "Enable Netplay Replays"
+msgstr "Ativar Replays de Netplay"
+
+#: src/renderer/pages/settings/dolphin_settings/gecko_codes/gecko_codes.messages.ts:3:53
+#. {0} errorMessage: string
+msgid "Error reading gecko codes: {0}"
+msgstr "Erro ao ler códigos gecko: {0}"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostics_button.messages.ts:3:34
+msgid "Error running network diagnostics"
+msgstr "Erro ao executar diagnósticos de rede"
+
+#: src/renderer/pages/settings/dolphin_settings/gecko_codes/gecko_codes.messages.ts:4:52
+#. {0} errorMessage: string
+msgid "Error saving gecko codes: {0}"
+msgstr "Erro ao salvar códigos gecko: {0}"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:3:28
+msgid "External IP Address"
+msgstr "Endereço IP Externo"
+
+#: src/renderer/initialize_app.messages.ts:2:60
+#. {0} productName: string
+msgid "Failed to communicate with {0} servers."
+msgstr ""
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:29:44
+msgid "Failed to determine CGNAT or Double NAT presence"
+msgstr "Falha ao determinar presença de CGNAT ou NAT Duplo"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:2:37
+msgid "Failed to determine IP Address"
+msgstr "Falha ao determinar Endereço IP"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:11:35
+msgid "Failed to determine NAT type"
+msgstr "Falha ao determinar tipo de NAT"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:21:39
+msgid "Failed to determine port mapping availability"
+msgstr "Falha ao determinar disponibilidade de mapeamento de porta"
+
+#: src/renderer/initialize_app.messages.ts:7:5
+#. {0} dolphinTypeName: string
+msgid ""
+"Failed to find {0}. Check the Dolphin executable in Settings and restart "
+"the launcher."
+msgstr ""
+
+#: src/renderer/app/header/header.messages.ts:5:29
+msgid "Failed to get updates"
+msgstr "Falha ao obter atualizações"
+
+#: src/renderer/lib/dolphin/dolphin.messages.ts:4:5
+#. {0} dolphinTypeName: string
+msgid ""
+"Failed to install {0}. Try closing all Dolphin instances and restarting the "
+"launcher."
+msgstr ""
+"Falha ao instalar {0}. Tente fechar todas as instâncias do Dolphin e "
+"reiniciar o launcher."
+
+#: src/renderer/pages/settings/dolphin_settings/gecko_codes/gecko_codes.messages.ts:2:33
+msgid "Failed to read gecko codes"
+msgstr "Falha ao ler códigos gecko"
+
+#: src/renderer/app/header/user_menu/user_menu.messages.ts:11:32
+msgid "Failed to remove account"
+msgstr "Falha ao remover conta"
+
+#: src/renderer/app/header/user_menu/user_menu.messages.ts:12:32
+msgid "Failed to switch account"
+msgstr "Falha ao trocar conta"
+
+#: src/renderer/components/login_form/login_form.messages.ts:13:25
+msgid "Forgot your password?"
+msgstr "Esqueceu sua senha?"
+
+#: src/renderer/pages/settings/create.messages.ts:3:15
+msgid "Game"
+msgstr "Jogo"
+
+#: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:7:47
+msgid "Game stats for team battles is unsupported"
+msgstr "Estatísticas de jogo para batalhas em equipe não são suportadas"
+
+#: src/renderer/pages/settings/create.messages.ts:2:26
+msgid "General Settings"
+msgstr "Configurações Gerais"
+
+#: src/renderer/components/login_form/login_form.messages.ts:18:17
+#: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:3:17
+msgid "Go back"
+msgstr "Voltar"
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:18:20
+msgid "Hard reset"
+msgstr "Reset completo"
+
+#: src/renderer/pages/settings/create.messages.ts:11:15
+msgid "Help"
+msgstr "Ajuda"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:4:15
+msgid "Hide"
+msgstr "Ocultar"
+
+#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:6:15
+msgid "Hide ranking"
+msgstr "Ocultar ranking"
+
+#: src/renderer/pages/replays/replay_browser/filter_toolbar/filter_toolbar.messages.ts:7:25
+msgid "Hide short games"
+msgstr "Ocultar jogos curtos"
+
+#: src/renderer/app/create.messages.ts:2:15
+msgid "Home"
+msgstr "Início"
+
+#: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:5:25
+msgid "Home-Run Contest"
+msgstr "Home-Run Contest"
+
+#: src/renderer/pages/quick_start/steps/accept_rules_step/accept_rules_step.messages.ts:2:47
+#. {0} productName: string
+msgid "I accept the {0} Rules"
+msgstr ""
+
+#: src/renderer/components/login_form/login_form.messages.ts:11:31
+msgid "I already have an account"
+msgstr "Já tenho uma conta"
+
+#: src/renderer/components/build_info/build_info.messages.ts:2:19
+msgid "I hope you know what you're doing..."
+msgstr "Espero que você saiba o que está fazendo..."
+
+#: src/renderer/pages/settings/appearance_settings/rank_display_toggle/rank_display_toggle.messages.ts:3:33
+msgid "If enabled, your current rank and rating will be displayed on the Home page."
+msgstr ""
+"Se ativado, seu ranking e classificação atuais serão exibidos na página "
+"Início."
+
+#: src/renderer/pages/settings/help_page/support_box/support_box.messages.ts:4:5
+msgid ""
+"If something does not work, copy your logs and send them to us along with a "
+"description of the problem."
+msgstr ""
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:35:31
+msgid ""
+"If the failure persists, you can test this in your computer's terminal app. "
+"See below:"
+msgstr ""
+"Se a falha persistir, você pode testar isso no aplicativo de terminal do "
+"seu computador. Veja abaixo:"
+
+#: src/renderer/components/persistent_notification/persistent_notification.messages.ts:3:24
+msgid "Install update"
+msgstr "Instalar atualização"
+
+#: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:8:25
+msgid "Installation completed successfully. You can now relaunch Dolphin."
+msgstr ""
+
+#: src/renderer/components/persistent_notification/persistent_notification.messages.ts:5:24
+msgid "Installation failed."
+msgstr "Falha na instalação."
+
+#: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:4:21
+msgid "Installing... This may take a few minutes."
+msgstr ""
+
+#: src/renderer/components/online_rules/online_rules.messages.ts:13:16
+msgid ""
+"Intentionally manipulating the game performance for your own gain is not "
+"allowed."
+msgstr ""
+"Manipular intencionalmente o desempenho do jogo para seu próprio benefício "
+"não é permitido."
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:13:18
+msgid "Invalid"
+msgstr "Inválido"
+
+#: src/renderer/pages/settings/dolphin_settings/gecko_codes/add_codes/add_codes.messages.ts:2:27
+msgid "Invalid Gecko code"
+msgstr "Código Gecko inválido"
+
+#: src/renderer/lib/validate/validate.messages.ts:2:27
+msgid "Invalid IP address"
+msgstr "Endereço IP inválido"
+
+#: src/renderer/lib/validate/validate.messages.ts:3:22
+msgid "Invalid code"
+msgstr "Código inválido"
+
+#: src/renderer/components/login_form/login_form.messages.ts:10:21
+msgid "Invite code"
+msgstr ""
+
+#: src/renderer/components/loading_screen/loading_screen.messages.ts:2:19
+#: src/renderer/pages/loading/loading_page.messages.ts:2:19
+msgid "Just a sec..."
+msgstr "Só um segundo..."
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:10:24
+msgid "Launch Dolphin"
+msgstr "Iniciar Dolphin"
+
+#: src/renderer/pages/replays/replay_browser/replay_file/replay_file.messages.ts:5:23
+#: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:7:23
+msgid "Launch replay"
+msgstr "Iniciar replay"
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:9:38
+#. {0} gameName: string
+msgid "Launch {0}"
+msgstr ""
+
+#: src/renderer/pages/replays/replay_browser/filter_toolbar/filter_toolbar.messages.ts:4:22
+msgid "Least recent"
+msgstr "Menos recente"
+
+#: src/renderer/pages/quick_start/quick_start.messages.ts:3:23
+msgid "Let's get set up"
+msgstr "Vamos iniciar a configuração"
+
+#: src/renderer/app/header/header.messages.ts:21:18
+msgid "Loading"
+msgstr "Carregando"
+
+#: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:4:18
+msgid "Loading..."
+msgstr "Carregando..."
+
+#: src/renderer/app/header/header.messages.ts:2:16
+#: src/renderer/components/login_form/login_form.messages.ts:3:16
+#: src/renderer/components/login_notice/login_notice.messages.ts:3:16
+msgid "Log in"
+msgstr "Entrar"
+
+#: src/renderer/app/header/user_menu/user_menu.messages.ts:4:17
+msgid "Log out"
+msgstr "Sair"
+
+#: src/renderer/pages/replays/replay_browser/filter_toolbar/filter_toolbar.messages.ts:5:22
+msgid "Longest game"
+msgstr "Jogo mais longo"
+
+#: src/renderer/components/online_rules/online_rules.messages.ts:14:16
+msgid "Macros and bots are not allowed."
+msgstr "Macros e bots não são permitidos."
+
+#: src/renderer/pages/settings/dolphin_settings/gecko_codes/gecko_codes.messages.ts:5:17
+msgid "Manage"
+msgstr "Gerenciar"
+
+#: src/renderer/pages/settings/dolphin_settings/gecko_codes/gecko_codes.messages.ts:7:27
+msgid "Manage Gecko codes"
+msgstr "Gerenciar códigos Gecko"
+
+#: src/renderer/app/header/user_menu/user_menu.messages.ts:13:40
+#. {0} max: number
+msgid "Maximum {0} accounts reached. Remove an account to add another."
+msgstr "Máximo de {0} contas atingido. Remova uma conta para adicionar outra."
+
+#: src/renderer/pages/replays/replay_browser/replay_file/replay_file.messages.ts:3:22
+msgid "More options"
+msgstr "Mais opções"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:10:5
+msgid ""
+"More than one hop to your external IP address indicates CGNAT or Double NAT "
+"(or VPN)."
+msgstr ""
+"Mais de um salto para seu endereço IP externo indica CGNAT ou NAT Duplo (ou "
+"VPN)."
+
+#: src/renderer/pages/replays/replay_browser/filter_toolbar/filter_toolbar.messages.ts:3:21
+msgid "Most recent"
+msgstr "Mais recente"
+
+#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:2:20
+msgid "My Ranking"
+msgstr "Meu Ranking"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:12:18
+msgid "NAT Type"
+msgstr "Tipo de NAT"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:26:17
+msgid "NAT-PMP."
+msgstr "NAT-PMP."
+
+#: src/renderer/pages/settings/dolphin_settings/gecko_codes/add_codes/add_codes.messages.ts:3:23
+msgid "Name is required"
+msgstr "Nome é obrigatório"
+
+#: src/renderer/pages/settings/help_page/support_box/support_box.messages.ts:2:19
+msgid "Need help?"
+msgstr "Precisa de ajuda?"
+
+#: src/renderer/pages/settings/create.messages.ts:6:18
+msgid "Netplay"
+msgstr "Netplay"
+
+#: src/renderer/initialize_app.messages.ts:8:25
+#: src/renderer/lib/dolphin/dolphin.messages.ts:5:25
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:3:25
+msgid "Netplay Dolphin"
+msgstr "Dolphin Netplay"
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:6:33
+msgid "Netplay Dolphin Settings"
+msgstr "Configurações do Dolphin Netplay"
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:12:28
+msgid "Netplay Gecko Codes"
+msgstr "Códigos Gecko Netplay"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostics_button.messages.ts:4:29
+msgid "Network Diagnostics"
+msgstr "Diagnósticos de Rede"
+
+#: src/renderer/pages/quick_start/stepper_dots/stepper_dots.messages.ts:2:15
+msgid "Next"
+msgstr "Próximo"
+
+#: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:9:21
+msgid "Next replay"
+msgstr "Próximo replay"
+
+#: src/renderer/pages/quick_start/steps/setup_complete_step/setup_complete_step.messages.ts:2:19
+msgid "Nice work!"
+msgstr "Bom trabalho!"
+
+#: src/renderer/app/header/header.messages.ts:7:25
+msgid "No Brawl ISO file specified"
+msgstr ""
+
+#: src/renderer/components/multi_path_input/multi_path_input.messages.ts:2:35
+msgid "No additional folders added."
+msgstr "Nenhuma pasta adicional adicionada."
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:5:20
+msgid "No file set"
+msgstr "Nenhum arquivo definido"
+
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:6:22
+msgid "No folder set"
+msgstr "Nenhuma pasta definida"
+
+#: src/renderer/app/header/header.messages.ts:14:30
+msgid "No network connection"
+msgstr "Sem conexão de rede"
+
+#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:4:20
+msgid "No ranking"
+msgstr "Sem ranking"
+
+#: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:5:26
+msgid "No replay files found"
+msgstr ""
+
+#: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:6:26
+msgid "No stats computed"
+msgstr "Nenhuma estatística calculada"
+
+#: src/renderer/app/header/header.messages.ts:6:28
+msgid "No update available"
+msgstr "Nenhuma atualização disponível"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:13:20
+msgid "Normal NAT"
+msgstr "NAT Normal"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:23:23
+msgid "Not available"
+msgstr "Não disponível"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:31:22
+msgid "Not detected."
+msgstr "Não detectado."
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:10:19
+msgid "Not found"
+msgstr "Não encontrado"
+
+#: src/renderer/app/header/user_menu/user_menu.messages.ts:5:18
+msgid "Offline"
+msgstr "Offline"
+
+#: src/renderer/app/header/user_menu/user_menu.messages.ts:7:35
+msgid "Online activation required"
+msgstr "Ativação online necessária"
+
+#: src/renderer/lib/validate/validate.messages.ts:4:39
+msgid "Only English characters are allowed"
+msgstr "Apenas caracteres em inglês são permitidos"
+
+#: src/renderer/app/header/header.messages.ts:13:41
+msgid "Only logged in users can play online."
+msgstr "Apenas usuários conectados podem jogar online."
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:9:35
+msgid "Open settings folder"
+msgstr "Abrir pasta de configurações"
+
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:14:60
+#. {0} currentDate: string
+msgid "Organize into monthly subfolders (e.g. {0})."
+msgstr "Organizar em subpastas mensais (ex.: {0})."
+
+#: src/renderer/pages/home/home_page.messages.ts:2:19
+msgid "Overview"
+msgstr "Visão Geral"
+
+#: src/renderer/components/login_form/login_form.messages.ts:7:19
+msgid "Password"
+msgstr "Senha"
+
+#: src/renderer/components/login_form/login_form.messages.ts:14:24
+msgid "Password reset"
+msgstr "Redefinição de senha"
+
+#: src/renderer/components/login_form/login_form.messages.ts:15:53
+#. {0} email: string
+msgid "Password reset instructions have been sent to {0}."
+msgstr "Instruções de redefinição de senha foram enviadas para {0}."
+
+#: src/renderer/components/login_form/login_form.messages.ts:4:30
+msgid "Passwords do not match"
+msgstr "As senhas não coincidem"
+
+#: src/renderer/pages/settings/dolphin_settings/gecko_codes/add_codes/add_codes.messages.ts:5:26
+msgid "Paste Gecko Codes"
+msgstr "Colar Códigos Gecko"
+
+#: src/renderer/app/header/play_button/play_button.messages.ts:2:15
+msgid "Play"
+msgstr "Jogar"
+
+#: src/renderer/pages/replays/replay_browser/file_selection_toolbar/file_selection_toolbar.messages.ts:7:18
+msgid "Play All"
+msgstr "Jogar Todos"
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:7:27
+msgid "Play Button Action"
+msgstr "Ação do Botão Jogar"
+
+#: src/renderer/app/header/header.messages.ts:16:22
+msgid "Play offline"
+msgstr "Jogar offline"
+
+#: src/renderer/pages/settings/create.messages.ts:7:19
+msgid "Playback"
+msgstr "Reprodução"
+
+#: src/renderer/initialize_app.messages.ts:9:26
+#: src/renderer/lib/dolphin/dolphin.messages.ts:6:26
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:4:26
+msgid "Playback Dolphin"
+msgstr "Dolphin de Reprodução"
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:7:34
+msgid "Playback Dolphin Settings"
+msgstr "Configurações do Dolphin de Reprodução"
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:13:29
+msgid "Playback Gecko Codes"
+msgstr "Códigos Gecko de Reprodução"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:28:30
+msgid "Please try again later."
+msgstr "Por favor, tente novamente mais tarde."
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:20:5
+msgid ""
+"Please try again later. If the failure persists, this network may block "
+"UDP. In that case it will not be possible to play online, as with many "
+"other online games and apps."
+msgstr ""
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:22:22
+msgid "Port mapping"
+msgstr "Mapeamento de porta"
+
+#: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:8:25
+msgid "Previous replay"
+msgstr "Replay anterior"
+
+#: src/renderer/app/header/header.messages.ts:9:5
+#: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:8:5
+#. {0} productName: string
+msgid ""
+"Provided ISO will not work with {0}. Please provide an unmodified NTSC-U "
+"Brawl ISO (revision 1 or 2)."
+msgstr ""
+
+#: src/renderer/components/online_rules/online_rules.messages.ts:8:5
+msgid ""
+"Racist, homophobic, transphobic, or otherwise bigoted names and codes are "
+"not allowed. Targeted harassment in names and codes is also not allowed."
+msgstr ""
+"Nomes e códigos racistas, homofóbicos, transfóbicos ou intolerantes não são "
+"permitidos. Assédio direcionado em nomes e códigos também não é permitido."
+
+#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:5:22
+msgid "Rank pending"
+msgstr "Rank pendente"
+
+#: src/renderer/app/header/account_switcher/account_switcher.messages.ts:3:32
+msgid "Re-authenticate account"
+msgstr "Re-autenticar conta"
+
+#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:3:18
+#: src/renderer/pages/replays/replay_browser/filter_toolbar/filter_toolbar.messages.ts:2:18
+msgid "Refresh"
+msgstr "Atualizar"
+
+#: src/renderer/app/header/account_switcher/account_switcher.messages.ts:4:17
+#: src/renderer/components/multi_path_input/multi_path_input.messages.ts:4:17
+msgid "Remove"
+msgstr "Remover"
+
+#: src/renderer/app/header/user_menu/user_menu.messages.ts:14:44
+#. {0} accountName: string
+msgid "Removed {0}"
+msgstr "{0} removido"
+
+#: src/renderer/pages/settings/advanced_app_settings/advanced_app_settings.messages.ts:6:36
+msgid "Removes temporary downloads and files used for Dolphin communication."
+msgstr ""
+
+#: src/renderer/app/create.messages.ts:3:18
+#: src/renderer/pages/settings/create.messages.ts:4:18
+msgid "Replays"
+msgstr "Replays"
+
+#: src/renderer/lib/dolphin/handle_dolphin_exit_code.messages.ts:3:5
+msgid ""
+"Required DLLs for launching Dolphin are missing. Check the Help section in "
+"the settings page to fix this issue."
+msgstr ""
+"As DLLs necessárias para iniciar o Dolphin estão faltando. Verifique a "
+"seção Ajuda na página de configurações para corrigir este problema."
+
+#: src/renderer/lib/dolphin/handle_dolphin_exit_code.messages.ts:12:5
+msgid ""
+"Required libraries for launching Dolphin may be missing. Check the Help "
+"section in the settings page for guidance."
+msgstr ""
+
+#: src/renderer/components/login_form/login_form.messages.ts:17:16
+msgid "Reset"
+msgstr "Redefinir"
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:14:46
+#. {0} dolphinTypeName: string
+msgid "Reset {0}"
+msgstr "Redefinir {0}"
+
+#: src/renderer/pages/not_found/not_found_page.messages.ts:4:21
+msgid "Return home"
+msgstr "Retornar ao início"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:5:17
+msgid "Reveal"
+msgstr "Revelar"
+
+#: src/renderer/pages/replays/replay_browser/file_list/file_list.messages.ts:2:25
+#: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:3:25
+#: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:8:25
+msgid "Reveal location"
+msgstr "Revelar localização"
+
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:2:24
+msgid "Root Replay Folder"
+msgstr ""
+
+#: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:2:22
+msgid "Rosetta Required"
+msgstr ""
+
+#: src/renderer/pages/settings/create.messages.ts:12:27
+#: src/renderer/pages/settings/rules_and_policies_page/rules_and_policies_page.messages.ts:2:27
+msgid "Rules & Policies"
+msgstr ""
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:36:25
+msgid "Run this command"
+msgstr "Execute este comando"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostics_button.messages.ts:2:29
+msgid "Running network diagnostics..."
+msgstr "Executando diagnósticos de rede..."
+
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:13:42
+msgid "Save replays for netplay games to the Root Replay Folder."
+msgstr ""
+
+#: src/renderer/pages/replays/replay_browser/filter_toolbar/filter_toolbar.messages.ts:8:17
+msgid "Search"
+msgstr "Pesquisar"
+
+#: src/renderer/components/path_input/path_input.messages.ts:2:17
+#: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:12:17
+msgid "Select"
+msgstr "Selecionar"
+
+#: src/renderer/pages/replays/replay_browser/file_selection_toolbar/file_selection_toolbar.messages.ts:6:20
+msgid "Select All"
+msgstr "Selecionar Tudo"
+
+#: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:2:25
+msgid "Select Brawl ISO"
+msgstr ""
+
+#: src/renderer/pages/settings/appearance_settings/language_selector/language_selector.messages.ts:3:33
+msgid "Select your preferred language for the app."
+msgstr "Selecione seu idioma preferido para o aplicativo."
+
+#: src/renderer/components/verify_email_form/verify_email_form.messages.ts:5:20
+msgid "Send verification email again"
+msgstr "Enviar e-mail de verificação novamente"
+
+#: src/renderer/app/header/user_menu/user_menu.messages.ts:6:22
+msgid "Server error"
+msgstr ""
+
+#: src/renderer/app/header/header.messages.ts:10:19
+msgid "Settings"
+msgstr "Configurações"
+
+#: src/renderer/pages/replays/replay_browser/filter_toolbar/filter_toolbar.messages.ts:6:23
+msgid "Shortest game"
+msgstr "Jogo mais curto"
+
+#: src/renderer/pages/settings/appearance_settings/rank_display_toggle/rank_display_toggle.messages.ts:2:22
+msgid "Show Ranking on Home Page"
+msgstr "Mostrar Ranking na Página Inicial"
+
+#: src/renderer/pages/replays/replay_browser/replay_file/replay_file.messages.ts:4:20
+msgid "Show stats"
+msgstr "Mostrar estatísticas"
+
+#: src/renderer/components/login_form/login_form.messages.ts:12:17
+msgid "Sign up"
+msgstr "Cadastrar-se"
+
+#: src/renderer/pages/quick_start/quick_start.messages.ts:4:20
+msgid "Skip setup"
+msgstr "Pular configuração"
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:17:20
+msgid "Soft reset"
+msgstr "Reset parcial"
+
+#: src/renderer/listeners/listeners.messages.ts:4:39
+msgid "Some functionality of the Launcher and Dolphin will be unavailable."
+msgstr "Algumas funcionalidades do Launcher e do Dolphin estarão indisponíveis."
+
+#: src/renderer/pages/not_found/not_found_page.messages.ts:3:29
+msgid "Something went wrong."
+msgstr "Algo deu errado."
+
+#: src/renderer/pages/settings/advanced_app_settings/advanced_app_settings.messages.ts:8:28
+msgid "Successfully cleared temporary files."
+msgstr "Arquivos temporários limpos com sucesso."
+
+#: src/renderer/pages/settings/help_page/support_box/support_box.messages.ts:7:29
+msgid "Successfully copied logs to clipboard"
+msgstr "Logs copiados com sucesso para a área de transferência"
+
+#: src/renderer/app/header/user_menu/user_menu.messages.ts:15:40
+#. {0} accountName: string
+msgid "Switched to {0}"
+msgstr "Alterado para {0}"
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:15:23
+msgid "Symmetric NAT"
+msgstr "NAT Simétrico"
+
+#: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:4:21
+msgid "Target Test"
+msgstr "Target Test"
+
+#: src/renderer/components/multi_path_input/multi_path_input.messages.ts:6:38
+msgid "That folder is already included."
+msgstr "Essa pasta já está incluída."
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:20:39
+msgid "The Dolphin build to launch. Leave empty to use the default shown."
+msgstr ""
+
+#: src/renderer/pages/settings/dolphin_settings/gecko_codes/manage_codes/manage_codes.messages.ts:4:44
+#. {0} codeName: string
+msgid "The code <{0}> will be deleted. This cannot be undone."
+msgstr "O código <{0}> será excluído. Isso não pode ser desfeito."
+
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:3:35
+msgid "The folder where your replays should be saved."
+msgstr ""
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:3:34
+msgid "The path to an NTSC-U Super Smash Bros. Brawl disc image (revision 1 or 2)."
+msgstr ""
+
+#: src/renderer/components/online_rules/online_rules.messages.ts:4:5
+#. {0} productName: string
+msgid ""
+"These are a set of rules to follow when using {0}. Breaking these rules may "
+"result in a suspension or ban depending on severity and frequency. This is "
+"not an exhaustive list, we reserve the right to suspend or ban an account "
+"for any reason."
+msgstr ""
+
+#: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:3:22
+msgid ""
+"This Dolphin build requires Rosetta on Apple Silicon Macs. Would you like "
+"to install it now?"
+msgstr ""
+
+#: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:4:5
+msgid ""
+"This application uses an NTSC-U Super Smash Bros. Brawl game backup "
+"(revision 1 or 2)."
+msgstr ""
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:32:33
+msgid "This is the optimal result."
+msgstr "Este é o resultado ideal."
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:14:31
+msgid ""
+"This is the optimal result. Also known as 'easy', 'full cone', or 'open' "
+"NAT."
+msgstr ""
+"Este é o resultado ideal. Também conhecido como NAT 'fácil', 'cone "
+"completo' ou 'aberto'."
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:16:70
+#. {0} dolphinTypeName: string
+msgid "This will remove all your {0} settings."
+msgstr "Isso removerá todas as suas configurações de {0}."
+
+#: src/renderer/components/login_form/login_form.messages.ts:8:35
+msgid "Toggle password visibility"
+msgstr "Alternar visibilidade da senha"
+
+#: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:13:41
+#. {0} readableBytes: string
+msgid "Total size: {0}"
+msgstr "Tamanho total: {0}"
+
+#: src/renderer/components/activate_online_form/activate_online_form.messages.ts:4:26
+msgid "Trailing numbers will be auto-generated"
+msgstr "Números finais serão gerados automaticamente"
+
+#: src/renderer/lib/dolphin/handle_dolphin_exit_code.messages.ts:7:5
+msgid ""
+"Try a different video backend in Dolphin. If the issue persists, install "
+"the latest Windows update available and then restart your computer."
+msgstr ""
+"Tente um backend de vídeo diferente no Dolphin. Se o problema persistir, "
+"instale a atualização mais recente do Windows disponível e reinicie o "
+"computador."
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostics_button.messages.ts:5:21
+msgid "Turn VPN off for best results."
+msgstr "Desative a VPN para melhores resultados."
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:27:24
+msgid "UPnP and NAT-PMP."
+msgstr "UPnP e NAT-PMP."
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:25:15
+msgid "UPnP."
+msgstr "UPnP."
+
+#: src/renderer/pages/not_found/not_found_page.messages.ts:2:15
+msgid "Uh oh."
+msgstr "Ops."
+
+#: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:2:32
+msgid "Uh oh. We couldn't open that file. It's probably corrupted."
+msgstr "Ops. Não conseguimos abrir esse arquivo. Provavelmente está corrompido."
+
+#: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:3:18
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:11:18
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:12:18
+msgid "Unknown"
+msgstr "Desconhecido"
+
+#: src/renderer/pages/replays/replay_browser/replay_file/replay_file.messages.ts:2:23
+msgid "Unknown stage"
+msgstr "Fase desconhecida"
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:14:22
+msgid "Unvalidated"
+msgstr "Não validado"
+
+#: src/renderer/app/header/play_button/play_button.messages.ts:3:19
+msgid "Updating"
+msgstr "Atualizando"
+
+#: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:11:5
+msgid ""
+"Use of Rosetta is subject to Apple's software license agreement. A list of "
+"Apple SLAs may be found here:"
+msgstr ""
+
+#: src/renderer/components/login_notice/login_notice.messages.ts:2:28
+msgid "User is not logged in"
+msgstr "Usuário não está conectado"
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:11:16
+msgid "Valid"
+msgstr "Válido"
+
+#: src/renderer/app/header/user_menu/user_menu.messages.ts:17:22
+msgid "Verify email"
+msgstr ""
+
+#: src/renderer/app/header/header.messages.ts:22:26
+#: src/renderer/pages/quick_start/steps/verify_email_step/verify_email_step.messages.ts:2:26
+msgid "Verify your email"
+msgstr "Verifique seu e-mail"
+
+#: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:5:23
+msgid "Verifying ISO..."
+msgstr "Verificando ISO..."
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:6:20
+msgid "Verifying..."
+msgstr "Verificando..."
+
+#: src/renderer/components/persistent_notification/persistent_notification.messages.ts:4:47
+#. {0} version: string
+msgid "Version {0} is now available!"
+msgstr "Versão {0} está disponível!"
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:5:39
+#. {0} versionString: string
+msgid "Version: {0}"
+msgstr "Versão: {0}"
+
+#: src/renderer/components/verify_email_form/verify_email_form.messages.ts:2:25
+msgid ""
+"Visit your email, click the link in the verification email, and then check "
+"verification"
+msgstr ""
+"Visite seu e-mail, clique no link no e-mail de verificação e depois "
+"verifique."
+
+#: src/renderer/app/header/header.messages.ts:15:36
+msgid "Would you like to play offline?"
+msgstr "Você gostaria de jogar offline?"
+
+#: src/renderer/app/header/header.messages.ts:12:28
+msgid "You are not logged in"
+msgstr "Você não está conectado"
+
+#: src/renderer/initialize_app.messages.ts:3:24
+#: src/renderer/listeners/listeners.messages.ts:2:24
+msgid "You are offline."
+msgstr "Você está offline."
+
+#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:7:36
+msgid "You can re-enable rank display in the settings."
+msgstr "Você pode reativar a exibição do ranking nas configurações."
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:34:28
+msgid "You may have trouble connecting to other players."
+msgstr "Você pode ter problemas para se conectar a outros jogadores."
+
+#: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:17:5
+msgid ""
+"You may have trouble connecting to other players. Also known as 'hard', "
+"'strict', or 'symmetric' NAT. If possible, please check your router "
+"settings to see if this can be changed to 'easy', 'full cone', 'normal', or "
+"'open' NAT."
+msgstr ""
+"Você pode ter problemas para se conectar a outros jogadores. Também "
+"conhecido como NAT 'rígido', 'estrito' ou 'simétrico'. Se possível, "
+"verifique as configurações do seu roteador para ver se isso pode ser "
+"alterado para NAT 'fácil', 'cone completo', 'normal' ou 'aberto'."
+
+#: src/renderer/app/header/user_menu/user_menu.messages.ts:10:34
+msgid "You will need to log in again next time you want to play."
+msgstr "Você precisará fazer login novamente na próxima vez que quiser jogar."
+
+#: src/renderer/pages/quick_start/quick_start.messages.ts:2:25
+msgid "You're all set up"
+msgstr "Está tudo configurado"
+
+#: src/renderer/components/activate_online_form/activate_online_form.messages.ts:2:37
+msgid "Your connect code is used for players to connect with you directly."
+msgstr ""
+"Seu código de conexão é usado para jogadores se conectarem diretamente com "
+"você."
+
+#: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:6:28
+msgid "or drag and drop here"
+msgstr "ou arraste e solte aqui"
+
+#: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:8:5
+#. {0} count: number
+#. {1} total: number
+msgid "{0, number} of {1, plural, one {# replay} other {# replays}} processed."
+msgstr ""
+"{0, number} de {1, plural, one {# replay processado} other {# replays "
+"processados}}."
+
+#: src/renderer/pages/replays/replay_browser/file_selection_toolbar/file_selection_toolbar.messages.ts:2:37
+#. {0} count: number
+msgid "{0, plural, one {# file} other {# files}} selected"
+msgstr "{0, plural, one {# arquivo selecionado} other {# arquivos selecionados}}"
+
+#: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:2:36
+#. {0} count: number
+msgid "{0, plural, one {# file} other {# files}} successfully deleted."
+msgstr ""
+"{0, plural, one {# arquivo excluído com sucesso} other {# arquivos "
+"excluídos com sucesso}}."
+
+#: src/renderer/pages/replays/replay_browser/file_selection_toolbar/file_selection_toolbar.messages.ts:9:37
+#. {0} count: number
+msgid "{0, plural, one {# file} other {# files}} will be deleted."
+msgstr ""
+"{0, plural, one {# arquivo será excluído} other {# arquivos serão "
+"excluídos}}."
+
+#: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:10:43
+#. {0} count: number
+msgid "{0, plural, one {# replay} other {# replays}} filtered."
+msgstr "{0, plural, one {# replay filtrado} other {# replays filtrados}}."
+
+#: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:9:40
+#. {0} count: number
+msgid "{0, plural, one {# replay} other {# replays}} found."
+msgstr "{0, plural, one {# replay encontrado} other {# replays encontrados}}."
+
+#: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:12:40
+#. {0} count: number
+msgid "{0, plural, one {# replay} other {# replays}} had errors."
+msgstr "{0, plural, one {# replay com erros} other {# replays com erros}}."
+
+#: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:11:41
+#. {0} count: number
+msgid "{0, plural, one {# replay} other {# replays}} hidden."
+msgstr "{0, plural, one {# replay oculto} other {# replays ocultos}}."
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:19:51
+#. {0} dolphinTypeName: string
+msgid "{0} Executable"
+msgstr ""
+
+#: src/renderer/components/online_rules/online_rules.messages.ts:2:41
+#. {0} productName: string
+msgid "{0} Rules"
+msgstr ""
+
+#: src/renderer/components/online_rules/online_rules.messages.ts:11:5
+#. {0} productName: string
+msgid ""
+"{0} does its best to promote fairness in terms of player matching, result "
+"reporting, etc. Attempting to circumvent these systems is not allowed."
+msgstr ""
+
+#: src/renderer/initialize_app.messages.ts:10:63
+#. {0} productName: string
+#. {1} version: string
+msgid "{0} has been updated to version {1}"
+msgstr ""
+
+#: src/renderer/initialize_app.messages.ts:5:5
+#. {0} productName: string
+msgid "{0} may be experiencing some downtime. Playing online may or may not work."
+msgstr ""

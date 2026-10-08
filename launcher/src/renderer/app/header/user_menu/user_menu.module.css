@@ -1,0 +1,8 @@
+.userInfoButton {
+  border-radius: 10px;
+  transition: background-color 0.2s ease;
+}
+
+.userInfoButton:hover {
+  background-color: rgb(255 255 255 / 7%);
+}
