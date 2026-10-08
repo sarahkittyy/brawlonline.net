@@ -40,23 +40,22 @@ mkdir -p "$CCACHE_DIR" "$tools"
 if [ -f "$build/CMakeCache.txt" ] && ! grep -qx "CMAKE_HOME_DIRECTORY:INTERNAL=$src" "$build/CMakeCache.txt"; then
   rm -rf "$build"
 fi
-if [ ! -f "$build/build.ninja" ]; then
-  extra=()
-  if [ "$(cmake --version | sed -n 's/^cmake version \([0-9]*\).*/\1/p')" -ge 4 ]; then
-    extra+=(-DCMAKE_POLICY_VERSION_MINIMUM=3.5)
-  fi
-  nice -n 19 cmake -S "$src" -B "$build" -G Ninja \
-    -DCMAKE_BUILD_TYPE=Release \
-    -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
-    -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
-    -DENABLE_AUTOUPDATE=OFF -DENABLE_ANALYTICS=OFF -DUSE_DISCORD_PRESENCE=OFF \
-    -DENABLE_LLVM=OFF -DENABLE_TESTS=OFF -DENABLE_NOGUI=OFF \
-    -DDISTRIBUTOR=brawlonline.net \
-    "${extra[@]}"
-else
-  # Re-run CMake so the revision header picks up the new tag (ScmRevGen runs at configure time).
-  nice -n 19 cmake "$build" >/dev/null
+extra=()
+if [ "$(cmake --version | sed -n 's/^cmake version \([0-9]*\).*/\1/p')" -ge 4 ]; then
+  extra+=(-DCMAKE_POLICY_VERSION_MINIMUM=3.5)
 fi
+# Configured on every run (cheap when nothing changed): ScmRevGen reads the new tag at configure
+# time. The link rule wraps the libraries in --start-group/--end-group: core and uicommon refer
+# to each other (NetPlayIndex), which GNU ld's single pass cannot resolve for dolphin-tool.
+nice -n 19 cmake -S "$src" -B "$build" -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
+  -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON \
+  "-DCMAKE_CXX_LINK_EXECUTABLE=<CMAKE_CXX_COMPILER> <FLAGS> <CMAKE_CXX_LINK_FLAGS> <LINK_FLAGS> <OBJECTS> -o <TARGET> -Wl,--start-group <LINK_LIBRARIES> -Wl,--end-group" \
+  -DENABLE_AUTOUPDATE=OFF -DENABLE_ANALYTICS=OFF -DUSE_DISCORD_PRESENCE=OFF \
+  -DENABLE_LLVM=OFF -DENABLE_TESTS=OFF -DENABLE_NOGUI=OFF \
+  -DDISTRIBUTOR=brawlonline.net \
+  "${extra[@]}" >"$build.configure.log" 2>&1 || { tail -n 40 "$build.configure.log"; exit 1; }
 
 ccache -z >/dev/null
 nice -n 19 ionice -c 3 cmake --build "$build" --parallel "$jobs" --target project-plus-dolphin dolphin-tool
