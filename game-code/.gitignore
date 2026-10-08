@@ -1,0 +1,13 @@
+*.rel
+*.map
+Brawlback-Online/*.elf
+lib/Syriinge/*.elf
+*.exe
+*.dll
+*.GCT
+
+build/
+.idea/
+.vscode/
+sd-card/vBrawl/pf
+PPOnline/*.elf

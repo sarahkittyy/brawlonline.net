@@ -1,0 +1,40 @@
+pm_rollback game code (PPOnline plugin)
+=======================================
+
+This repository is a fork of brawlback-asm:
+  https://github.com/Brawlback-Team/brawlback-asm
+  forked from branch savestate-efficiency at 2123165 ("Fix entering match returning to main
+  menu sequence"); full upstream history is kept, and the upstream branches master,
+  project-plus-fork and others are available as refs/remotes/upstream/*.
+
+Licenses
+--------
+- brawlback-asm (everything outside PPOnline/ unless noted): MIT License, see LICENSE
+  ("Copyright (c) 2023 Sammi Husky"; the file is upstream's root LICENSE). Contributors are
+  listed in the git history.
+- lib/Syriinge (vendored in upstream): MIT License, see lib/Syriinge/LICENSE
+  (Copyright (c) 2023 Sammi Husky). Syriinge 0.6.0, the same API version as the sy_core.rel that
+  Project+ v3.2 ships inside pf/system/common2.pac.
+- lib/BrawlHeaders (git submodule, JaredWhiteOne/BrawlHeaders @ 12544f8) and its OpenRVL
+  submodule (JaredWhiteOne/open_rvl @ d6aa79c): no license file in either repository. They are
+  referenced as submodules only and not redistributed by this repository.
+- lib/brawlback-common (git submodule, Brawlback-Team/brawlback-common @ 33d728c): used only by
+  the upstream Brawlback-Online plugin, not by PPOnline.
+
+PPOnline/
+---------
+New code for this project (Slippi-style online menus for Project+). Parts are ported from
+Brawlback-Online (MIT, see above):
+- PPOnline/source/netmenu.cpp: the Nintendo WFC login bypass and the Wi-Fi CSS timer/error
+  hooks, from Brawlback-Online/source/Rollback_Hooks.cpp, namespace NetMenu.
+- PPOnline/source/rel.cpp: the Syriinge 0.6 plugin entry, after Brawlback-Online/source/rel.cpp
+  (project-plus-fork).
+- PPOnline/Makefile: from Brawlback-Online/Makefile.
+
+Reverse-engineering references (no code copied): refs/brawl-decomp symbol maps, BrawlHeaders,
+the Project+ v3.2 codeset sources on its SD card, and Slippi's design (copied as UX, not code).
+
+Game assets
+-----------
+Nothing from the game or from Project+ is stored here. All visible text is printed through the
+game's own message system (MuMsg) with its own fonts; no images are added.

@@ -1,0 +1,45 @@
+name: Brawlback Syriinge Online Plugin
+
+on:
+  push:
+    branches: [ "master" ]
+  pull_request:
+    branches: [ "master" ]
+
+jobs:
+  build:
+    name: ubuntu-latest
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v3
+      with:
+        submodules: 'recursive'
+    - name: Cache toolchains
+      id: cache-toolchains
+      uses: actions/cache@v3
+      with:
+        path: tools/
+        key: toolchains-${{ runner.os }}-${{ hashFiles('bbk.py') }}
+    - name: Set up for build
+      run: |
+        # install python deps; set up toolchains
+        python3 -m pip install --user -r tools/requirements.txt
+        python3 bbk.py setup
+    - name: Build
+      run: make
+    - name: "Package"
+      if: success()
+      working-directory: ${{ github.workspace }}
+      run: |
+           mkdir SDCard artifact
+           mv sy_core.rel Brawlback-Online.rel ./SDCard
+           FILE_NAME=Brawlback-Online.zip
+           zip -r "${FILE_NAME}" "./SDCard"
+           mv "${FILE_NAME}" ./artifact/
+    - name: "Publish"
+      if: success()
+      uses: actions/upload-artifact@v3
+      with:
+        name: "Brawlback-Online"
+        path: "./artifact/"
