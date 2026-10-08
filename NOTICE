@@ -1,0 +1,15 @@
+brawlonline.net
+===============
+
+Components with their own licenses (the license files are in each directory):
+
+- dolphin/    Dolphin, via Brawlback's Project-Plus-Dolphin: GPL-2.0-or-later.
+              See dolphin/COPYING, dolphin/LICENSES/ and dolphin/NOTICE-BRAWLONLINE.txt.
+- launcher/   Fork of Project Slippi's Slippi Launcher: GPL-3.0.
+              See launcher/LICENSE and launcher/NOTICE.
+- game-code/  Fork of Brawlback-Team/brawlback-asm: MIT.
+              See game-code/LICENSE and game-code/NOTICE.
+- server/     GPL-2.0-or-later (declared in server/Cargo.toml).
+
+Super Smash Bros. Brawl is Nintendo's. Project+ is made by the Project+ Development Team.
+No game data is included in this repository.
