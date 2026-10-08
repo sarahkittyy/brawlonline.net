@@ -2,7 +2,7 @@
 
 This repository is the Slippi Launcher (GPL-3.0) forked with its full history (branch `main-pplus`, upstream `0930a2b6`). The goal is Slippi's launcher UX one-to-one: same screens, flows and features, pointed at our own services, our Dolphin fork and Project+. No new UI or flows were invented; the few places where a field or setting had to be added are listed under "Adaptations" below.
 
-The product is called **Brawl Online**. Everything user-visible reads `PRODUCT_NAME` from `src/common/product.ts`, and the hosts default to subdomains of `fluffycat.gay` there. A unit test (`src/common/product.test.ts`) checks that `package.json`, `release/app/package.json` and `electron-builder.json` agree with the constant. Until 2026-10-07 the placeholder name was `PlusOnline` (`LEGACY_PRODUCT_NAMES`); see "Renaming the product" below for what a rename moves.
+The product is called **Brawl Online**. Everything user-visible reads `PRODUCT_NAME` from `src/common/product.ts`, and the hosts default to `brawlonline.net` there (website, accounts API under `/v1` and the update feed on the apex; matchmaking on `mm.brawlonline.net`, UDP 43113). A unit test (`src/common/product.test.ts`) checks that `package.json`, `release/app/package.json` and `electron-builder.json` agree with the constant. Until 2026-10-07 the placeholder name was `PlusOnline` (`LEGACY_PRODUCT_NAMES`); see "Renaming the product" below for what a rename moves.
 
 ## 1. Inventory of Slippi-specific integrations
 
@@ -31,7 +31,7 @@ Decision: **Replace** (same feature, our implementation), **Keep** (unchanged or
 | Console mirroring (Wii + Slippi Nintendont, OBS switching) | `src/console`, Console Mirror page | **Drop** | Melee/Nintendont only. |
 | News feed (Bluesky, GitHub releases, Medium), upcoming tournaments (meleemajors.gg, smash-map.com, ip-api.com location) | Home tabs, `main/content_management`, `main/fetch_cross_origin` | **Drop** | Slippi/Melee content sources (backend-design.md 1.10). The Home page keeps its Overview tab with the ranking widget. "Location access" setting dropped with it. |
 | Telemetry / Sentry | none in the launcher | — | Nothing to remove; no analytics added. Logs stay local ("Copy logs"). |
-| Launcher self-update (electron-updater, GitHub `project-slippi/slippi-launcher`) | `main/app_updater.ts` | **Keep, re-point** | Same hooks and UI. Feed: `generic` provider at `launcherUpdates` (`https://updates.fluffycat.gay/launcher`, `PPO_UPDATES_URL`); `electron-builder.json` publishes there. |
+| Launcher self-update (electron-updater, GitHub `project-slippi/slippi-launcher`) | `main/app_updater.ts` | **Keep, re-point** | Same hooks and UI. Feed: `generic` provider at `launcherUpdates` (`https://brawlonline.net/updates/launcher`, `PPO_UPDATES_URL`); `electron-builder.json` publishes there. |
 | `slippi://` URL scheme (downloads replays from Slippi's GCS bucket) | `main.ts`, NSIS registry keys | **Drop** | No replay storage. Opening a local replay file (file association) is kept. |
 | Replay parsing, stats and indexing (`@slippi/slippi-js`, `.slp`) | Worker pool, SQLite, stats pages | **Replace (minimal)** | Our replay format is undecided. The browser lists `.rep`/`.json` files with name, size and date only (`src/replays/replay_format.ts`); stats pages report "not available". slippi-js stays a dependency for the stats types only. See section 6. |
 | Network diagnostics (Google STUN, UPnP/NAT-PMP, CGNAT traceroute) | Help page | **Keep** | Unchanged (Google's public STUN). Later: our own STUN (backend-design.md 1.10). |
@@ -57,7 +57,7 @@ renderer: LoginForm / VerifyEmailForm / ActivateOnlineForm / AcceptRules  (Slipp
    -> AuthService + MultiAccountService + BackendService   (src/renderer/services, Slippi's interfaces)
    -> window.electron.accounts                              (preload, src/accounts/api.ts)
    -> AccountsManager + SessionStore                        (main process, src/accounts)
-   -> https://accounts.fluffycat.gay  (PPO_ACCOUNTS_URL)    (server/crates/accounts)
+   -> https://brawlonline.net/v1  (PPO_ACCOUNTS_URL)        (server/crates/accounts)
 ```
 
 - Errors come back as values, so the UI shows the server's own message ("Wrong email or password", "Sign-up needs an invite code"…) exactly where Slippi showed Firebase's.
