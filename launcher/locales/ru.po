@@ -8,7 +8,7 @@ msgstr ""
 "n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
 "x-generator: i18next-auto-keys CLI\n"
 "Language: ru-RU\n"
-"PO-Revision-Date: 2026-10-07T13:34:50.801Z\n"
+"PO-Revision-Date: 2026-10-08T01:25:15.349Z\n"
 
 #: src/renderer/components/activate_online_form/activate_online_form.messages.ts:3:30
 msgid "2-4 uppercase English characters"
@@ -26,11 +26,11 @@ msgstr "Письмо с подтверждением было отправлен
 msgid "A network error occurred."
 msgstr "Произошла сетевая ошибка."
 
-#: src/renderer/pages/quick_start/steps/accept_rules_step/accept_rules_step.messages.ts:4:20
+#: src/renderer/pages/quick_start/steps/accept_rules_step/accept_rules_step.messages.ts:3:20
 msgid "Accept All"
 msgstr "Принять"
 
-#: src/renderer/pages/quick_start/steps/accept_rules_step/accept_rules_step.messages.ts:5:33
+#: src/renderer/pages/quick_start/steps/accept_rules_step/accept_rules_step.messages.ts:4:33
 msgid "Accept rules and policies"
 msgstr "Принять правила и политики"
 
@@ -192,10 +192,6 @@ msgstr "Удалить файлы"
 #: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:6:22
 msgid "Clear filter"
 msgstr "Сбросить фильтр"
-
-#: src/renderer/components/usage_policy_list/usage_policy_list.messages.ts:3:29
-msgid "Click the links below to review:"
-msgstr "Кликните ссылки ниже для просмотра:"
 
 #: src/renderer/pages/settings/settings_page.messages.ts:2:16
 msgid "Close"
@@ -524,11 +520,6 @@ msgstr "Главная"
 #: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:5:25
 msgid "Home-Run Contest"
 msgstr "Home-Run Contest"
-
-#: src/renderer/pages/quick_start/steps/accept_rules_step/accept_rules_step.messages.ts:3:55
-#. {0} productName: string
-msgid "I accept the {0} Privacy Policy and Terms of Service"
-msgstr ""
 
 #: src/renderer/pages/quick_start/steps/accept_rules_step/accept_rules_step.messages.ts:2:47
 #. {0} productName: string
@@ -891,10 +882,6 @@ msgstr "Port mapping"
 #: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:8:25
 msgid "Previous replay"
 msgstr "Предыдущий реплей"
-
-#: src/renderer/components/usage_policy_list/usage_policy_list.messages.ts:2:41
-msgid "Privacy Policy and Terms of Service"
-msgstr "Privacy Policy и Terms of Service"
 
 #: src/renderer/app/header/header.messages.ts:9:5
 #: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:8:5
@@ -1373,19 +1360,9 @@ msgstr ""
 msgid "{0} Executable"
 msgstr ""
 
-#: src/renderer/components/usage_policy_list/usage_policy_list.messages.ts:4:43
-#. {0} productName: string
-msgid "{0} Privacy Policy"
-msgstr ""
-
 #: src/renderer/components/online_rules/online_rules.messages.ts:2:41
 #. {0} productName: string
 msgid "{0} Rules"
-msgstr ""
-
-#: src/renderer/components/usage_policy_list/usage_policy_list.messages.ts:5:44
-#. {0} productName: string
-msgid "{0} Terms of Service"
 msgstr ""
 
 #: src/renderer/components/online_rules/online_rules.messages.ts:11:5
