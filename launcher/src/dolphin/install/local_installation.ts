@@ -129,7 +129,8 @@ export class LocalDolphinInstallation implements DolphinInstallation {
     if (missing.length > 0) {
       throw new Error(
         `Project+ files are missing from the Dolphin User folder (${this.userFolder}): ${missing.join(", ")}. ` +
-          `Copy them from a Project+ netplay release.`,
+          `They are downloaded from Project+'s official release when the launcher starts; ` +
+          `check your connection and restart the launcher.`,
       );
     }
   }
