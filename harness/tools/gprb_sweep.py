@@ -341,6 +341,13 @@ def first_desync(status: Dict[str, Any]) -> Dict[str, Any]:
 VIDEO = {"backend": "D3D11"}
 
 
+def rel(path: Path) -> str:
+    """A path for the report: relative to the workspace root when inside it, else absolute (an
+    --out outside the checkout, e.g. on the Unraid test farm)."""
+    path = Path(path).resolve()
+    return str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path)
+
+
 def shot(c: Optional[HarnessClient], path: Path) -> Optional[str]:
     if c is None:
         return None
@@ -349,7 +356,7 @@ def shot(c: Optional[HarnessClient], path: Path) -> Optional[str]:
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         c.call("screenshot", path=str(path.resolve()), timeout=20)
-        return str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path)
+        return rel(path)
     except Exception as e:  # noqa: BLE001
         return f"screenshot failed: {e}"
 
@@ -530,7 +537,7 @@ def run_sync(run: Dict[str, Any], args: argparse.Namespace, out: Path) -> Dict[s
         lasts = sorted((p for p in (out / "shots").glob(f"{run['id']}-last?.png") if p.stat().st_size > 0),
                        key=lambda p: p.stat().st_mtime) if (out / "shots").exists() else []
         if failed and lasts:
-            rep["last_screenshot"] = str(lasts[-1].relative_to(ROOT))
+            rep["last_screenshot"] = rel(lasts[-1])
             lasts = lasts[:-1]
         for p in lasts:
             with contextlib.suppress(OSError):
@@ -556,8 +563,8 @@ def run_sync(run: Dict[str, Any], args: argparse.Namespace, out: Path) -> Dict[s
     else:
         # Keep the countdown state and the pass log: `gprb_mispredict.py run --state <sav>
         # --modes replay=<log>` replays this run exactly.
-        rep["replay"] = {"state": str((work / (run["id"] + ".sav")).relative_to(ROOT)),
-                         "pass_log": str((work / (run["id"] + ".synctest.m0")).relative_to(ROOT))}
+        rep["replay"] = {"state": rel(work / (run["id"] + ".sav")),
+                         "pass_log": rel(work / (run["id"] + ".synctest.m0"))}
         for p in work.glob("*.flat"):
             with contextlib.suppress(OSError):
                 p.unlink()
