@@ -308,6 +308,15 @@ link_stable() { # updir dldir feed glob stable
   local upd="$1" dl="$2" feed="$1/$3" glob="$4" stable="$5" path
   [ -f "$feed" ] || return 0
   path=$(yml_field "$feed" path)
+  # The feed's path is the updater's file: the installer on Windows and Linux, but the zip on
+  # macOS, where the download is the DMG listed among the feed's files.
+  # shellcheck disable=SC2053
+  if [[ -z "$path" || "$path" != $glob ]]; then
+    path=$(sed -n "s/^ *- url: *'\{0,1\}\([^']*\)'\{0,1\} *$/\1/p" "$feed" | while read -r u; do
+      # shellcheck disable=SC2053
+      [[ "$u" == $glob ]] && { echo "$u"; break; }
+    done)
+  fi
   # shellcheck disable=SC2053
   [[ -n "$path" && "$path" == $glob && -f "$upd/$path" ]] || return 0
   ln -f "$upd/$path" "$dl/.$stable.tmp"
