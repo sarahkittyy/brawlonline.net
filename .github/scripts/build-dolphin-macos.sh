@@ -83,7 +83,9 @@ rm -rf "$app/Contents/MacOS/platforms" "$app/Contents/MacOS/styles"
 "$qt_dir/bin/macdeployqt" "$app" -verbose=1
 
 # ---- Sign (ad-hoc) ------------------------------------------------------------------------
-# Apple silicon refuses unsigned code. Dolphin's own script signs nested code first.
+# Apple silicon refuses unsigned code. Dolphin's own script signs the dylibs and frameworks, then
+# the bundle; dolphin-tool, a second executable in Contents/MacOS, is signed first by hand.
+codesign --force --sign - "$app/Contents/MacOS/dolphin-tool"
 "$src/Tools/mac-codesign.sh" -e "$src/Source/Core/DolphinQt/DolphinEmu.entitlements" - "$app"
 codesign --verify --deep --strict "$app"
 
