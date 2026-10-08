@@ -1,6 +1,6 @@
 # Online backend design
 
-_Status 2026-10-06: complete design. Line references were checked by three read-only sweeps: the launcher, Dolphin plus the Rust extensions, and Brawlback. Some section 1 refs still come from `research/04-slippi-reference-architecture.md` (HEAD commits listed there)._
+_Status 2026-10-06: complete design. Line references were checked by three read-only sweeps: the launcher, Dolphin plus the Rust extensions, and Brawlback. Some section 1 refs come from an earlier survey of Slippi's repositories._
 
 Path prefixes: `L` = `refs/slippi-launcher`, `R` = `refs/slippi-rust-extensions`, `I` = `refs/slippi-Ishiiruka/Source/Core/Core`, `C` = `refs/slippi-ssbm-c`, `ASM` = `refs/slippi-ssbm-asm`, `OM` = `refs/openmelee`, `LAD` = `refs/ashebennet-ladder`.
 

@@ -1,12 +1,12 @@
 # Production deployment notes
 
-**Production now runs on `sarahvps2` (user decision, 2026-10-07), with nginx instead of Caddy and Postgres 17. See `PROD.md` for what is installed there; the files used are in `sarahvps2/`.** The rest of this page is the original generic plan.
+**Production now runs on `sarahvps2` (user decision, 2026-10-07), with nginx instead of Caddy and Postgres 17. The files used are in `sarahvps2/`; the box's operations notes are kept outside the repository.** The rest of this page is the original generic plan.
 
 These files follow the plan in `docs/backend-design.md` section 2.1: one OVH dedicated Debian box, Postgres 16 from Debian packages, Caddy for TLS, systemd units, nightly backups off the box. No containers in production; `docker-compose.yml` is only for development and tests.
 
 The product is called Brawl Online (`PRODUCT_NAME` in `crates/common`: email subjects and bodies, page titles; `MAIL_FROM` sets the sender name). The domain is `brawlonline.net` (user, 2026-10-07): the apex serves the website (`website/` in the repository) and the HTTP API (`/v1`, plus the email-link pages), and `mm.brawlonline.net` is UDP matchmaking on 43113. The launcher's update feed is `https://brawlonline.net/updates/launcher`, a folder in the web root. The hostnames are set in the Caddyfile (or the nginx site), `PUBLIC_BASE_URL`, the launcher's `src/common/product.ts` and Dolphin's `[Online] MatchmakingHost` and `AccountsUrl` defaults (`Core/Config/OnlineSettings.cpp`).
 
-The original plan kept these services off the existing VPSes (`sarahvps`, `sarahvps2`). The user later chose `sarahvps2` for production; `PROD.md` covers how it shares that box.
+The original plan kept these services off the existing VPSes (`sarahvps`, `sarahvps2`). The user later chose `sarahvps2` for production.
 
 ## Files
 

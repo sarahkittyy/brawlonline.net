@@ -854,7 +854,7 @@ BRAWLBACK_EXCLUDED_RANGES: Tuple[Tuple[int, int, str], ...] = (
 )
 # The disc's DVDDiskID (bss 0x80494938, 0x20 bytes). Rev 1 and Rev 2 main.dol differ in exactly
 # one word (0x8001BC9C, the game version passed when this ID is filled in), so a Rev 1 and a
-# Rev 2 peer differ here and nowhere else (research/00-summary.md, addendum). Never hash it.
+# Rev 2 peer differ here and nowhere else (a full diff of both discs). Never hash it.
 DISK_ID_RANGE: Tuple[int, int, str] = (0x80494938, 0x20, "DVDDiskID (differs between Rev 1 and Rev 2)")
 # Everything state comparisons subtract: Brawlback's exclusions plus the disc ID.
 STATE_EXCLUDED_RANGES: Tuple[Tuple[int, int, str], ...] = BRAWLBACK_EXCLUDED_RANGES + (DISK_ID_RANGE,)

@@ -12,7 +12,7 @@ Path prefixes used below:
 - `GB` = `dolphin/Source/Core/Core/Online/GameBridge.cpp`
 - `STATUS` = `docs/gameplay-rollback-status.md`
 - `L` = `launcher/`
-- `R04` = `../research/04-slippi-reference-architecture.md`
+- `R04` = an earlier survey of Slippi's repositories and formats (not in this repository)
 - `ISH` = `../refs/slippi-Ishiiruka/Source/Core`
 
 ## 1. Summary

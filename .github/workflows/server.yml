@@ -1,7 +1,7 @@
 # Server: build accounts, mm, admin and mmclient on sarahvps2 and deploy them with pp-release
 # (install, back up the database, switch, restart pp-accounts and pp-mm, health check, automatic
 # rollback to the previous release on failure). Binaries equal to the active release's are not
-# redeployed, so a rebuild without changes restarts nothing. See server/deploy/PROD.md.
+# redeployed, so a rebuild without changes restarts nothing. See server/deploy/README.md.
 #
 # Runs only on pushes to main and by hand, never on pull requests: this runs on a self-hosted
 # runner on the production box.

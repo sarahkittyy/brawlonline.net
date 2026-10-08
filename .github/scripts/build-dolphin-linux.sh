@@ -8,7 +8,7 @@
 #   linuxdeploy + its Qt plugin), COPYING, Licenses/, dolphin.json (manifest).
 #
 # Incremental: the build tree and ccache live in $CI_CACHE (default ~/ci-cache), outside the
-# checkout. Low priority (nice 19, idle IO) and $JOBS jobs (default 3; the Unraid runner sets 12).
+# checkout. Low priority (nice 19, idle IO) and $JOBS jobs (default 3).
 # Needs Dolphin's Linux build dependencies (see docs/ci.md) and stamp-version.sh run first.
 set -euo pipefail
 version="${1:?version}"
@@ -64,10 +64,8 @@ echo "stack limit: $(ulimit -s) (hard $(ulimit -H -s)); memory: $(free -g | awk 
 ulimit -s unlimited 2>/dev/null || ulimit -s "$(ulimit -H -s)" 2>/dev/null || true
 echo "stack limit: $(ulimit -s)"
 build_dolphin() { nice -n 19 ionice -c 3 cmake --build "$build" --parallel "$1" --target project-plus-dolphin dolphin-tool; }
-# On the Unraid runner cc1plus crashes now and then under parallel load ("internal compiler
-# error: Segmentation fault" in ggc_set_mark, a different file each time; the same file compiles
-# cleanly when built alone; 2026-10-08: about 1 in 12 compiles of a DolphinQt file with 12 at
-# once). The build is incremental, so it is resumed a few times with fewer jobs.
+# A compiler crash under parallel load (seen on an unstable build machine) shouldn't fail the
+# whole job: the build is incremental, so it is resumed a few times with fewer jobs.
 attempt=1
 until build_dolphin "$jobs"; do
   attempt=$((attempt + 1))

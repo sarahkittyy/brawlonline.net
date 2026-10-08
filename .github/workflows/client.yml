@@ -9,16 +9,14 @@
 # Runners:
 #   - Linux builds (plugin, Dolphin, launcher tests, AppImage): LINUX_RUNNER in the plugin and
 #     linux jobs; the optional repository variable CLIENT_LINUX_RUNNER (a JSON list of labels)
-#     overrides it. Default for now: GitHub-hosted ubuntu-24.04, because the Unraid runner
-#     (["self-hosted","linux","x64","unraid","brawlonline"], docs/unraid-runner.md) corrupts
-#     compiles under load (GCC internal compiler errors on varying files and CPUs, see docs/ci.md).
-#     Switch back once its memory is stable. On a GitHub-hosted runner the jobs install the build
-#     packages and keep ccache and the plugin toolchain in the Actions cache; on a self-hosted one
-#     they use the runner's own packages and $CI_CACHE. sarahvps2 (production) only publishes.
+#     overrides it. Default: GitHub-hosted ubuntu-24.04. On a GitHub-hosted runner the jobs install
+#     the build packages and keep ccache and the plugin toolchain in the Actions cache; on a
+#     self-hosted one they use the runner's own packages and $CI_CACHE. sarahvps2 (production)
+#     only publishes.
 #   - Windows: GitHub-hosted (minutes are limited on a private repository: paths below, caches).
 #   - Publishing: always sarahvps2 (pp-release client). Builds from other machines arrive as
 #     Actions artifacts (1-day retention, deleted after publishing).
-#   - macOS: cross-compiled on the Unraid runner (see the macos job; DISABLE_MACOS="true" skips it).
+#   - macOS: GitHub-hosted Apple silicon, only while the repository is public (see the macos job).
 #     A failed or skipped macOS build never holds back the Linux and Windows release.
 #
 # Runs only on pushes to main and by hand, never on pull requests (self-hosted runners).
@@ -270,30 +268,50 @@ jobs:
           if-no-files-found: error
 
   macos:
-    # Cross-compiled on the Unraid runner: osxcross with Apple's SDK and LLVM 20 are in its image,
-    # Qt for macOS, rcodesign and libdmg-hfsplus in $CI_CACHE (setup-macos-toolchain.sh). Apple
-    # silicon (arm64) only for now. Ad-hoc signed, not notarized (no Apple Developer ID yet).
-    # Runs on every client build; the repository variable DISABLE_MACOS="true" turns it off. The
-    # Unraid box has corrupted compiles under load (docs/ci.md "Unraid"): a bad build would only
-    # show up on Macs, so watch Mac reports until its memory is fixed.
-    if: ${{ vars.DISABLE_MACOS != 'true' }}
+    # GitHub-hosted Apple silicon runner: a native build (Xcode's clang, Qt from aqtinstall,
+    # macdeployqt, codesign). Apple silicon only for now; ad-hoc signed, not notarized (no Apple
+    # Developer ID yet). macOS minutes are free on a public repository and count ten times on a
+    # private one, so the job only runs while the repository is public. DISABLE_MACOS="true"
+    # turns it off. A failed or skipped macOS build never holds back the Linux and Windows release.
+    if: ${{ !github.event.repository.private && vars.DISABLE_MACOS != 'true' }}
     needs: plugin
-    runs-on: [self-hosted, linux, x64, unraid, brawlonline]
-    timeout-minutes: 240
+    runs-on: macos-15
+    timeout-minutes: 150
     env:
       NODE_OPTIONS: --max-old-space-size=4096
       USE_HARD_LINKS: "false"
+      CI_CACHE: ${{ github.workspace }}/ci-cache
     steps:
       - uses: actions/checkout@v6
         with:
           path: client
           persist-credentials: false
-      - name: Toolchain
-        run: client/.github/scripts/setup-macos-toolchain.sh >> "$GITHUB_PATH"
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: client/launcher/package-lock.json
+      - name: Build tools
+        run: brew install ninja ccache
+      - uses: actions/cache@v5
+        with:
+          path: ci-cache/qt
+          key: mac-qt-6.8.3
+      - uses: actions/cache/restore@v5
+        with:
+          path: ci-cache/ccache
+          key: mac-ccache-${{ github.run_id }}
+          restore-keys: mac-ccache-
       - name: Stamp version ${{ env.VERSION }}
         run: client/.github/scripts/stamp-version.sh "$VERSION"
       - name: Dolphin
         run: client/.github/scripts/build-dolphin-macos.sh "$VERSION" "$GITHUB_WORKSPACE/client/launcher/release/dolphin" arm64
+      # Saved right after the build, also when a later step fails.
+      - uses: actions/cache/save@v5
+        if: ${{ !cancelled() }}
+        with:
+          path: ci-cache/ccache
+          key: mac-ccache-${{ github.run_id }}
       - uses: actions/download-artifact@v7
         with:
           name: plugin
@@ -301,7 +319,7 @@ jobs:
       - name: Launcher dependencies
         working-directory: client/launcher
         run: |
-          nice -n 19 npm ci --no-audit --no-fund
+          npm ci --no-audit --no-fund
           node node_modules/electron/install.js
       - name: Launcher build
         working-directory: client/launcher
@@ -309,9 +327,12 @@ jobs:
           PPO_PLUGIN_PATH: ${{ runner.temp }}/plugin/PPOnline.rel
         run: |
           npm run stage:plugin
-          nice -n 19 npm run build
-      - name: Package (app, zip, DMG)
-        run: client/.github/scripts/package-launcher-macos.sh "$VERSION" "$RUNNER_TEMP/out-mac" arm64
+          npm run build
+      - name: Package (app, DMG, zip)
+        run: client/.github/scripts/package-launcher-macos.sh "$RUNNER_TEMP/out-mac" arm64
+      - name: Check the package
+        working-directory: client/launcher/release/build
+        run: ../../../.github/scripts/check-package.sh mac-arm64
       - uses: actions/upload-artifact@v7
         with:
           name: launcher-mac
@@ -319,11 +340,6 @@ jobs:
           retention-days: 1
           compression-level: 0
           if-no-files-found: error
-      - name: Clean up
-        if: always()
-        run: |
-          rm -rf "$RUNNER_TEMP/out-mac" "$RUNNER_TEMP/plugin" client/launcher/release/build client/launcher/release/dolphin
-          du -sh "${CI_CACHE:-$HOME/ci-cache}"/* 2>/dev/null || true
 
   publish:
     needs: [linux, windows, macos]

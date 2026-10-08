@@ -416,7 +416,7 @@ Heap positions change per scene (memory layout), so resolve them at runtime from
   | 0x804E7C00 + 0xC00 | AX audio buffers |
   | 0x8049A4EA + 0x1400 | AX voice parameter blocks |
   | 0x90000800 + 0x12C800 | framebuffers |
-  | 0x80494938 + 0x20 | the disc's DVDDiskID. Rev 1 and Rev 2 `main.dol` differ in exactly one word (0x8001BC9C, the game version passed when this ID is filled in), so this is the only place a Rev 1 and a Rev 2 peer differ (`research/00-summary.md`, addendum). Both discs are supported. |
+  | 0x80494938 + 0x20 | the disc's DVDDiskID. Rev 1 and Rev 2 `main.dol` differ in exactly one word (0x8001BC9C, the game version passed when this ID is filled in), so this is the only place a Rev 1 and a Rev 2 peer differ (a full diff of both discs). Both discs are supported. |
 
   `exclude_state_noise(ranges)` subtracts the same set from arbitrary ranges (e.g. whole MEM1).
 

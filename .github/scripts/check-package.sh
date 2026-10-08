@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Checks an unpacked launcher package (electron-builder's linux-unpacked / win-unpacked) before it
+# Checks an unpacked launcher package (electron-builder's linux-unpacked / win-unpacked / mac-arm64) before it
 # is published: no docs (.md) anywhere, including inside app.asar; LICENSE and NOTICE (GPL) and
 # the bundled Dolphin and game plugin are present; no game files.
 #
@@ -7,6 +7,10 @@
 set -euo pipefail
 dir="${1:?unpacked dir}"
 res="$dir/resources"
+# macOS: the app bundle's Contents/Resources.
+for app in "$dir"/*.app; do
+  if [ -d "$app" ]; then res="$app/Contents/Resources"; fi
+done
 fail=0
 err() { echo "check-package: $*" >&2; fail=1; }
 
@@ -22,7 +26,8 @@ docs=$(find "$dir" -type f \( -iname '*.md' -o -iname '*.markdown' \) | head -n 
 game=$(find "$dir" -type f \( -iname '*.iso' -o -iname '*.raw' -o -iname '*.dol' -o -iname '*.rvz' \
   -o -iname '*.wbfs' -o -iname '*.pac' -o -iname '*.brres' -o -iname '*.brstm' \) | head -n 20)
 [ -z "$game" ] || err "game files in the package:"$'\n'"$game"
-[ ! -e "$res/dolphin/Sys/NetplaySave" ] && [ ! -e "$res/dolphin/usr/bin/Sys/NetplaySave" ] ||
+[ ! -e "$res/dolphin/Sys/NetplaySave" ] && [ ! -e "$res/dolphin/usr/bin/Sys/NetplaySave" ] &&
+  [ ! -e "$res/dolphin/Dolphin.app/Contents/Resources/Sys/NetplaySave" ] ||
   err "the Brawl save template (Sys/NetplaySave) is in the package"
 
 asar_md=$(node -e '
