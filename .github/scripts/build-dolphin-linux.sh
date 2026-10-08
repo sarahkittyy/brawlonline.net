@@ -58,6 +58,11 @@ nice -n 19 cmake -S "$src" -B "$build" -G Ninja \
   "${extra[@]}" >"$build.configure.log" 2>&1 || { tail -n 40 "$build.configure.log"; exit 1; }
 
 ccache -z >/dev/null
+# GCC recurses deeply on <format>-heavy files (its garbage collector marks recursively); a
+# small stack limit crashes it with an "internal compiler error" in ggc_set_mark.
+echo "stack limit: $(ulimit -s) (hard $(ulimit -H -s)); memory: $(free -g | awk '/Mem/{print $2" GB, "$7" GB available"}')"
+ulimit -s unlimited 2>/dev/null || ulimit -s "$(ulimit -H -s)" 2>/dev/null || true
+echo "stack limit: $(ulimit -s)"
 build_dolphin() { nice -n 19 ionice -c 3 cmake --build "$build" --parallel "$1" --target project-plus-dolphin dolphin-tool; }
 # GCC 13 has crashed (internal compiler error) on a heavy <format> file with many jobs in a
 # memory-limited container; one retry with half the jobs resumes the incremental build.
