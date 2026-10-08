@@ -8,6 +8,7 @@ import { Observable, Subject } from "observable-fns";
 import path from "path";
 import { fileExists } from "utils/file_exists";
 
+import { ensureBrawlSave } from "./install/brawl_save";
 import { bundledDolphinSource, installBundledDolphin } from "./install/bundled_dolphin";
 import { fetchLatestVersion } from "./install/fetch_latest_version";
 import { LocalDolphinInstallation } from "./install/local_installation";
@@ -26,6 +27,7 @@ import {
   installProjectPlusFiles,
   missingProjectPlusFiles,
   NETPLAY_SAVE_DIR,
+  netplaySaveStore,
   PPLUS_RELEASE,
 } from "./install/pplus_release";
 import { installPluginOnSdCard, loadPlugin } from "./install/sd_card";
@@ -209,7 +211,9 @@ export class DolphinManager {
       const isoPath = await this._getIsoPath();
       Preconditions.checkExists(isoPath, "No Brawl disc image set. Choose one in Settings > Game.");
       await netplayInstallation.assertProjectPlusFiles();
-      await ensureNetplaySave(projectPlusStoreFolder(app.getPath("userData")), netplayInstallation.sysFolder);
+      const storeDir = projectPlusStoreFolder(app.getPath("userData"));
+      await ensureNetplaySave(storeDir, netplayInstallation.sysFolder);
+      await this._ensureBrawlSave(netplayInstallation, storeDir);
       await netplayInstallation.setDefaultIso(isoPath);
       bootFile = netplayInstallation.netplayLauncherDol;
     }
@@ -459,6 +463,26 @@ export class DolphinManager {
       });
     }
     return this.projectPlusInstall;
+  }
+
+  /**
+   * Seeds the NAND Play boots with P+'s Brawl save template when it has no Brawl save, so P+
+   * never asks "Create save file for Project+?" (install/brawl_save.ts). An existing save is never
+   * touched. A failure is logged and Play goes on: the game then asks, as P+ does.
+   */
+  private async _ensureBrawlSave(installation: LocalDolphinInstallation, storeDir: string): Promise<void> {
+    try {
+      const result = await ensureBrawlSave({
+        nandRoot: await installation.nandRoot(),
+        templateRoots: [netplaySaveStore(storeDir), path.join(installation.sysFolder, NETPLAY_SAVE_DIR)],
+        log: (message) => log.info(message),
+      });
+      if (result.action !== "seeded") {
+        log.info(`Brawl save: ${result.action} (${result.dir})`);
+      }
+    } catch (err) {
+      log.error(`Could not seed the Brawl save: ${err instanceof Error ? err.message : String(err)}`);
+    }
   }
 
   /**

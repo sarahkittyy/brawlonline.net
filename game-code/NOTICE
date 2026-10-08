@@ -33,6 +33,9 @@ Brawlback-Online (MIT, see above):
 
 Reverse-engineering references (no code copied): refs/brawl-decomp symbol maps, BrawlHeaders,
 the Project+ v3.2 codeset sources on its SD card, and Slippi's design (copied as UX, not code).
+PPOnline/source/boot_menu.cpp (boot to the ONLINE page) follows Orca's approach and uses its
+addresses (Orca, GPL-3.0-or-later: ORCA.md "Boot and friends from the menus" and
+Data/Sys/Orca/PPLUS32.patches), with attribution; no Orca code is copied.
 
 Game assets
 -----------

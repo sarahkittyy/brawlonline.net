@@ -88,6 +88,13 @@ The chain, found on the SD card (`run/template-user/Wii/sd.raw`):
 - Our module id is 20560, which is unique. AsyncRSP and Physics share 202, and lavaInjectLoader uses 8192.
 - Dolphin's log confirms the load: `[Syringe] Loaded plugin (PPOnline, v0.1.0)`.
 
+**Heap budget.** The plugin lives in P+'s Syringe heap (heap 60, `0x10000` bytes at `0x817BA5A0`), with `sy_core.rel` and P+'s four plugins. `gfModule::create` needs the REL's sections plus its `.bss` in one block of that heap (the relocations are not kept); the hooks' trampolines are allocated elsewhere. Measured on 2026-10-08 by growing the REL header's `.bss` size (offset `0x20`) of a built plugin by K bytes and booting it (`Loaded plugin (PPOnline` or the error below in Dolphin's log):
+- the plugin before the boot redirect (`.text 0x9984`) loaded with up to `0x100` more bytes and failed with `0x180`;
+- with the boot redirect (`boot_menu.cpp`) it needed about `0x3E8` more and **did not load at all**: Dolphin's log shows `gfModule::create Error : Can't Alloc Heap Buffer`, nothing of the plugin runs, and the game boots as plain P+;
+- the fix: `boot_menu.cpp`, `ppom.cpp` and `match_hud.cpp` are built with `-Os` (`PPOnline/Makefile`; the rest of the plugin is built without optimisation). The plugin now needs `0x98` bytes less than before the redirect and loads with up to `0x180` more bytes (fails at `0x200`).
+
+So about 400 bytes of section + `.bss` growth are left. Anything bigger must make room first, e.g. more files built with `-Os` (files whose inline hooks read the Syriinge stub's frame through `__builtin_frame_address` need their `volatile` local, as `boot_menu.cpp` and `netmenu.cpp` have; `boot_menu.cpp`'s two such hooks run correctly at `-Os`). Check the Dolphin log for `Loaded plugin (PPOnline` after any change.
+
 **Hook conflicts.** `python tools/gamecode/pplus_hooks.py ADDR...` parses every `HOOK/op/CODE @` and raw gecko line of the four codesets, following `.include`s (3,176 patch sites). It reports any patch within 0x10 bytes of the given addresses. Every DOL address we hook is clear. The closest is P+'s `CODE @ $800B91C8` inside `MuMsg::printIndex`; we only replace that function's entry, at `0x800B91B8`.
 
 ---
@@ -163,6 +170,8 @@ The harness accepts one client at a time. That is why the mailbox server is a `d
 | ipPadConfig setter call | `0x80110550` (DOL) | simple | Each port's controls from SESSION's port values at the match start (§11, per-player controls) |
 | gfApplication frame loop, after drawing | `0x8001792C` (DOL) | inline | DISCONNECTED in the match HUD; the 90-frame end before the LRAS-type end (§11) |
 | Stage select (debug only) | `sel_stage+0x4EDC`, `+0x525C`, `+0x54C0`, `+0x4CF4` | simple | P+'s stage striking as an "allowed stages" filter, `CFG_SSS_LEGAL` only; no online mode uses it (§11) |
+| `gfSceneManager::setNextSequence` | `0x8002D640` (DOL) | replace | The boot: P+'s "Boot Directly to CSS" default case (`sqVsMelee`, 0 from `sqBoot`) becomes the Start case (`sqPrizeCheck`, `0x14`), and the `sqMenuMain` that follows gets 30, the ONLINE page (§13) |
+| scTitle's process | `sora_scene+0xECA4`, `+0xECB0` | inline | On that boot only: the opening movie (state 3) and the "press Start" logo (12) become 16, the title's exit (§13) |
 
 Notes:
 - P+ v3.2's `sora_menu_main.rel` is vanilla's with the same `.text` size. Its 152 non-relocation word differences are confined to a few P+ edits (`reltool.py diff`), so Gen 1's offsets hold.
@@ -213,7 +222,7 @@ The game only touches the mailbox outside sessions: menus and the CSS before plu
 6. `CLEANUP_CONNECTION` gets no answer. Commands Dolphin does not implement yet (`0xB6`, `0xB8`, `0xE3`) are answered with `status 0xFF`.
 7. Responses to different commands share the one response slot: route them by `cmd` (and `seq`). The keypad keeps at most one `0xBE` in flight. What the player asks for meanwhile (a new character, L, R) waits in a small queue and is sent when the answer arrives, with the text and index of that moment. A request is sent again after 120 frames without an answer. A `0xBE` answer with `status != 0` means no suggestions.
 
-DEBUG `scratch` words the tests read: `[0]` `0xBE` requests sent; `[1]` CSS lock (bit 0) and the CSS phase (`<< 4`); `[2]` Z accepts `<< 24`, last answer found `<< 16`, its index; `[3]` online rules applied; `[4]` keypad 1 open, 2 OK, 3 closed; `[5]` the hand's mode (8 = keypad); `[6]`-`[9]` menu hooks (`netmenu.cpp`).
+DEBUG `scratch` words the tests read: `[0]` `0xBE` requests sent; `[1]` CSS lock (bit 0) and the CSS phase (`<< 4`); `[2]` Z accepts `<< 24`, last answer found `<< 16`, its index; `[3]` online rules applied; `[4]` keypad 1 open, 2 OK, 3 closed; `[5]` the hand's mode (8 = keypad); `[6]`-`[9]` menu hooks (`netmenu.cpp`); `[14]` the boot (`boot_menu.cpp`, §13): bit 0 redirected, bits 1/2 the title's movie/logo skipped, bit 3 the ONLINE page opened, bits 16-23 the argument `sqTitle` asked `sqMenuMain` for (0).
 
 ---
 
@@ -223,6 +232,7 @@ Screenshots are in `run/artifacts/game-code/screens/`, from the last runs of `on
 
 | # (design §5.4) | Slippi | What you see now | Status | Screenshot |
 |---|---|---|---|---|
+| 1 | Slippi boots to its main menu with Online Play; Melee asks nothing about saves | Play boots straight to the ONLINE page (WITH FRIENDS highlighted), no save prompt (the launcher seeds the save), no title, no Versus CSS; B goes to the main menu (§13) | done | `run/design/boot-flow/` |
 | 1 | 1P menu "Online Play": "Compete against online opponents." | Main menu PLAY ONLINE with Slippi's description. The account is not printed: Slippi's online menu does not show it. | done | `01-main-play-online.png` |
 | 1 | (no Slippi equivalent) | Brawl's connect dialog, "Connected." and the first-time "Choose a profile name." keypad are skipped: PLAY ONLINE opens the ONLINE page at once. | done | `02-online-direct.png` |
 | 1 | Online submenu: Ranked "Play ranked matches.", Unranked "Play unranked matches.", Direct "Play a specific person.", Teams "Play teams games." | ONLINE page: WITH FRIENDS ("Play a specific person.") opens the code-based modes on Brawl's two-button page, retitled WITH FRIENDS: BASIC VERSUS = Direct ("Play a specific person."), TEAM BATTLE = Teams ("Play teams games."). WITH ANYONE ("Compete against online opponents.") opens the matchmaking modes on Brawl's Wi-Fi OPTIONS page, whose buttons are labelled in the game's font: "Unranked" / "Ranked" with Slippi's descriptions (below). | done | `menu-modes/game-m/` |
@@ -492,3 +502,46 @@ Found while adding Unranked matchmaking and the server's stage lists (Dolphin br
 1. ~~The stage select is not restricted to the server's list.~~ Not wanted: Slippi does not restrict Direct's loser's pick (coordinator's correction, 2026-10-07; §11 "The stage select"). Dolphin's branch `unranked` took the pick only if it was in the match's `stages`; that check was dropped at the merge (`4944245954`), so Dolphin plays the loser's pick as it is (`test_online_unranked.py::test_direct_loser_picks_off_the_server_list`). The game-side mechanism (P+'s stage striking) is kept behind `CFG_SSS_LEGAL` for Ranked.
 2. **Unranked always draws the stage.** Correct as it is: the plugin opens no stage select in Unranked (`online_menu.cpp`, the loser's pick is Direct-only), as Slippi.
 3. ~~**PPOM v3.**~~ Done: the merge (`4944245954`) kept `rollback-fixes`' GameBridge and its v3 SESSION/LOCAL layout; the `unranked` branch never touched the layout (its stage list reaches the game only as SESSION's `stageKind`). `test_online_unranked.py` now runs against the current plugin (`pponline` `7ca3a7e`) and its menu: WITH ANYONE → Unranked on the Wi-Fi OPTIONS page.
+
+---
+
+## 13. The boot: no save prompt, straight to the ONLINE page
+
+Player reports (2026-10-08): P+ asked to create a save file on start-up, and Play opened P+'s single-player Versus character select, from which players had to know to back out to the online menu. Screenshots of every step below: `run/design/boot-flow/` (local).
+
+### The save prompt (launcher)
+
+**What asks, and when.** Brawl's boot save check (`scBoot`, the `muBootNandTask` of `sora_menu_boot`, state 5) opens P+'s "Create save file for Project+?" whenever the NAND has no Brawl save under `/title/00010000/52534245/data` (`0-before/01-empty-nand-save-prompt.png`, reproduced with an empty NAND). Play boots P+ from the User folder's own NAND (`<User>/Wii`; Dolphin's `Sys/NetplaySave` only goes into the temporary NAND of a Dolphin netplay session), and a new install's NAND is empty, so every new player met it on the first Play; with No, on every Play. Yes spends about 13 s writing a 14.6 MB save. The development User template already has a save (byte-identical to P+'s `NetplaySave`), which is why no test ever showed the prompt.
+
+**The fix: the launcher seeds the save** (`launcher/src/dolphin/install/brawl_save.ts`, called by `DolphinManager.launchNetplayDolphin` before every Play that boots the game). When the NAND's Brawl save folder has no file, the save files of P+'s official Brawl save template are copied in: `<userData>/netplay/pplus/NetplaySave` (from P+'s release, already downloaded at setup), else `<Dolphin>/Sys/NetplaySave`. Only the 10 data files (16.7 MB, well under a second): Dolphin writes the title's TMD itself when the disc boots. The copy goes to `data.seeding` and is renamed into place, so an interrupted copy is never taken for a save. A save folder with any file is never touched, so what the game writes stays. The NAND is Dolphin.ini's `[General] NANDRootPath` when set, else `<User>/Wii`. A failure is logged and Play goes on (the game then asks, as P+ does).
+
+Why this rather than answering in the game (Orca's way: the boot check's own "continue without saving"): without a save the game keeps nothing, and name tags with their controls (which online play carries as port values, §11) would be lost at every restart; answering Yes in the game costs 13 s on the first boot. The template is P+'s own netplay save, the same for every player, with P+'s preset tags (Chrg1/2, Tilt1/2, ...).
+
+**Online determinism.** Nothing online reads the save beyond what the session already syncs: the match setup (characters, stage, rules, items) comes from SESSION and the plugin's online rules, each player's controls travel as port values, and the setup key compared at the barrier (§11) refuses a match whose applied setup differs. Players had arbitrary saves before (the template, or one written by the game); the seeded template makes them more alike, not less.
+
+**Verified** (harness instance booted through the launcher's boot path: Netplay Launcher DOL, patched SD with the plugin, the NAND seeded by the launcher's own `ensureBrawlSave` through `ts-node`):
+- fresh NAND: `seeded` (10 files), no prompt, the ONLINE page first (`1-fresh-nand/01-first-screen.png`);
+- the same NAND again: `present`, files unchanged, no prompt (`2-second-boot/01-first-screen.png`);
+- a name tag "D" made in Versus > Names: the game rewrote `autosv0/1.bin` when leaving the screen; the next Play: `present`, the game's files unchanged, the tag still listed (`4-next-play-keeps-save/02-names-kept.png`);
+- `brawl_save.test.ts` (7 tests: seed, never overwrite, partial save kept, Dolphin's empty folder filled, interrupted copy redone, template order, NAND root).
+
+### Boot to the ONLINE page (plugin)
+
+`boot_menu.cpp`, after Orca's "Boot and friends from the menus" (approach and addresses; ORCA.md, `PPLUS32.patches`). P+'s codeset boots to its Versus CSS through "Boot Directly to CSS v5.4" (`BootToCSS.asm`, a HOOK at `sqBoot::setNext` 0x806DD5F8 whose code is in `NETBOOST.GCT`/`BOOST.GCT`, read to 0x80550010): with no special input held, `setNextSequence("sqVsMelee", 0)` instead of the game's `setNextSequence("sqPrizeCheck", 0x14)`. Going to `sqMenuMain` straight from `sqBoot` runs out of the OverlayMenu heap (Orca), so the boot takes the game's own way to the menus, P+'s Start case:
+1. The plugin replaces `gfSceneManager::setNextSequence` (0x8002D640). A call from `sqBoot` with `"sqVsMelee"`, 0 becomes `"sqPrizeCheck"` (the game's string at 0x80701C94), `0x14`, only while P+'s default case is exactly BootToCSS v5.4's words (Orca's guard: `41A0FF84 38951B54 38A00000 48000038 38951C94 38A00014` at 0x80559C20 in `NETBOOST.GCT`, 0x80559C30 in `BOOST.GCT`). The hook's branch is rewritten by the code handler every frame, so the plugin does not patch it; the codeset's memory is not written at all. Another codeset (a P+ update, a player's own boot code) keeps its boot; L/R (Training), Z (Replays) and Start (the title) at boot are P+'s as before.
+2. On that way only, scTitle's opening movie and "press Start" logo become state 16, the title's exit with result 0 (inline hooks at `sora_scene+0xECA4`/`+0xECB0`, Orca's 0x806CA1F8/0x806CA204), so the title shows nothing.
+3. `sqTitle` asks for `sqMenuMain` with 0; the plugin gives 30, the menu's argument for the ONLINE page with WITH FRIENDS highlighted (`sqMenuMain` turns 30/31 into the menu modes 34/35, the ONLINE page on WITH FRIENDS / WITH ANYONE).
+
+After that the plugin leaves every sequence alone: B on the ONLINE page goes to the main menu (PLAY ONLINE highlighted), B there to P+'s title as in P+, leaving a CSS goes back where it did (§6), and "Configure Dolphin" (the user's own card, no plugin) is P+ as shipped.
+
+The plugin first did not load with this code: see "Heap budget" in §2.
+
+**Startup time.** P+'s Versus CSS appeared at application frame 220-221; the ONLINE page at 227-231 (one run 244), about 0.15 s later. With an empty NAND (no launcher) the save prompt still comes first, then the ONLINE page.
+
+**Verified** (Netplay Launcher DOL unless noted, Dolphin `rollback-fixes` build of 2026-10-07, `run/design/boot-flow/`): the first screen on a fresh and on a second boot is the ONLINE page (`1-fresh-nand/01`, `2-second-boot/01`); B to the main menu (`1-fresh-nand/02`), PLAY ONLINE back to the ONLINE page (`03`), WITH ANYONE's Unranked / Ranked page (`04`), the Unranked CSS (`05`), hold B back to the ONLINE page with WITH ANYONE highlighted (`06`), B to the main menu (`07`); the Offline Launcher too (`5-offline-launcher/01-first-screen.png`). DEBUG `scratch[14]` = `0xB` on every boot. Before: `0-before/02-pplus-default-boot-versus-css.png`.
+
+**Tests.** `to_main_menu` in `test_online_game.py` (and `e2e_launcher.py`, `scenarios/to_online.txt`) now expects the ONLINE page after the boot and checks `scratch[14]`; with `PPHARNESS_PLUGIN` set to an older plugin build it still takes P+'s Versus CSS route. Passed on 2026-10-08: `test_online_menus_match_the_modes`, `test_direct_from_the_game_menus`, `test_recent_codes_on_the_keypad`, `test_character_locked_while_searching`, `test_direct_set_under_the_gameplay_session`, `test_opponent_leaves_in_the_middle_of_a_game`, `test_each_player_keeps_their_tag_controls`, `test_direct_from_the_game_menus_hands_off_to_netplay` (second run; in the first, one instance stopped answering frame waits while entering the CSS, as in the machine's known stalls under load), `test_online_unranked.py` 3/3 (`test_direct_loser_picks_off_the_server_list` on its second run; the first desynced from session frame 0 on Smashville, below). `test_e2e_launcher.py` was not run.
+
+**Noted, not changed:**
+- The netplay fallback (`[Online] SessionBackend = netplay`) boots P+ again under Dolphin netplay with the plugin, so its players now land on the ONLINE page instead of P+'s Versus CSS (`direct-netplay/*/06-netplay-boot.png`). The default gameplay session never reboots.
+- A Smashville desync from session frame 0 came back once in `test_direct_loser_picks_off_the_server_list` (game 1 on Smashville, equal setup keys, the barrier passed, the first RNG word different from frame 1; logs in `run/scratch/bootflow-smashville-desync/`): `docs/gameplay-rollback-status.md` open issue 7, which the session's match-start changes did not remove. The boot and the save do not reach the match setup; the rerun passed.

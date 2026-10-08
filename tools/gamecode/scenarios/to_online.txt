@@ -1,17 +1,14 @@
-# Boot (P+ boots to the Versus CSS), hold B back to the main menu, answer the menu's mailbox
-# requests (CLEANUP_CONNECTION, GET_ONLINE_STATUS), and open PLAY ONLINE. Brawl's connect
-# dialog and first-time profile-name keypad are skipped, so this lands on the ONLINE page at
-# once, with WITH FRIENDS (DIRECT) highlighted.
-until scSelctCharacter 3000
+# Boot (with the plugin P+ boots to the main menu's ONLINE page, WITH FRIENDS highlighted),
+# answer the menu's mailbox requests (CLEANUP_CONNECTION, GET_ONLINE_STATUS), B to the main
+# menu (PLAY ONLINE highlighted), and open PLAY ONLINE again. Brawl's connect dialog and
+# first-time profile-name keypad are skipped, so this lands on the ONLINE page at once, with
+# WITH FRIENDS (DIRECT) highlighted.
+until muMenuMain 3000
 wait 60
-hold B 60
-until muMenuMain 600
-wait 60
+shot {out}/00-boot-online-page.png
 mbx-serve 60
 tap B
 wait 60
-tap DDOWN 4
-wait 40
 shot {out}/01-main-play-online.png
 tap A
 wait 90
