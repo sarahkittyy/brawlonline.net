@@ -6,7 +6,7 @@
 set -euo pipefail
 dir="${1:?dir}"; version="${2:?version}"; exe="${3:?executable}"
 [ -f "$dir/$exe" ] || { echo "$dir/$exe is missing" >&2; exit 1; }
-find "$dir" -type f \( -iname '*.md' -o -iname 'README*' \) -print -delete
+find "$dir" -type f \( -iname '*.md' -o -iname '*.markdown' \) -print -delete
 DIR="$dir" V="$version" EXE="$exe" node -e '
   const fs = require("fs"), path = require("path");
   const dir = process.env.DIR;

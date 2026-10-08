@@ -123,6 +123,7 @@ cp -r "$src/LICENSES" "$out/Licenses"
 rm -rf "$(dirname "$appdir")"
 
 "$repo/.github/scripts/dolphin-manifest.sh" "$out" "$version" usr/bin/project-plus-dolphin
-# The version string is compiled in ("Project+ Dolphin v<version>"); the binary needs a display to run.
-grep -a -q "Project+ Dolphin v$version" "$out/usr/bin/project-plus-dolphin" ||
-  { echo "the build does not report v$version" >&2; exit 1; }
+# The version string Dolphin reports ("Project+ Dolphin v<version>") comes from the generated
+# revision header (GCC may store the literal as immediates, so the binary is not searched).
+grep -q "^#define SCM_DESC_STR \"v$version\"" "$build/Source/Core/Common/scmrev.h" ||
+  { echo "the build does not report v$version:" >&2; grep SCM_ "$build/Source/Core/Common/scmrev.h" >&2; exit 1; }
