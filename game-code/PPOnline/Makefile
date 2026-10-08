@@ -139,6 +139,12 @@ boot_menu.o ppom.o match_hud.o: CXXFLAGS += -Os
 #---------------------------------------------------------------------------------
 # object files
 #---------------------------------------------------------------------------------
+# Size, too: P+'s Syringe heap leaves PPOnline about 0xB2E0 bytes (text + data + bss); with the
+# connect-code keypad, the status line layout and the online rules (2026-10-08) the -O0 build
+# of these files no longer fitted ("gfModule::create Error : Can't Alloc Heap Buffer" in the
+# boot log). They hold no frame-layout tricks (their hooks are naked functions).
+code_entry.o online_menu.o online_match.o stage_legal.o: CXXFLAGS += -Os
+
 %.o: %.cpp
 #	$(info $<)
 	$(SILENTMSG) $(notdir $<)

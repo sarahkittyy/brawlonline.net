@@ -178,6 +178,24 @@ def consume(c: HarnessClient, b: Block, upto: int) -> None:
 
 DEBUG_FIELDS = ("frames", "printCount", "overrides", "lastError", "cfg", "menuState")
 
+CFG_TEST_RULES = 1 << 6   # ppom.h Cfg: the online ruleset keeps the set rule's stocks and times
+
+
+def set_cfg_bits(c: HarnessClient, bits: int, on: bool = True) -> int:
+    """Set (or clear) DEBUG cfg feature bits; returns the new cfg."""
+    b = find_block(c)
+    cfg = struct.unpack(">I", c.read_mem(b.debug + 0x10, 4))[0]
+    cfg = (cfg | bits) if on else (cfg & ~bits)
+    c.write_mem(b.debug + 0x10, struct.pack(">I", cfg))
+    return cfg
+
+
+def allow_test_rules(c: HarnessClient) -> None:
+    """Tests that write short rules (brawl.write_rules) into an online CSS: the plugin forces the
+    online ruleset at every match setup, and with this flag keeps the written stocks and times
+    (both machines must write the same). Items, pause and hazards are still forced."""
+    set_cfg_bits(c, CFG_TEST_RULES)
+
 
 def read_debug(c: HarnessClient, b: Block) -> dict:
     d = c.read_mem(b.debug, b.debug_size)

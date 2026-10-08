@@ -655,12 +655,17 @@ def _connected_direct(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
                       stocks: int = 2, tags: tuple[int, int] = (0, 0),
                       gcpad_ini: tuple[Any, Any] = (None, None),
                       dolphin_ini: tuple[Any, Any] = (None, None),
-                      inst_names: tuple[str, str] = ("game-a", "game-b")
+                      inst_names: tuple[str, str] = ("game-a", "game-b"),
+                      test_rules: bool = True,
+                      before_online: tuple[Any, Any] = (None, None),
                       ) -> tuple[Game, Game, OnlineUser, OnlineUser]:
     """Two games on the Direct CSS with the gameplay backend (the default), searching for each
     other from the keypad until both are connected. Shorter rules than P+'s (`stocks` stocks,
     2 minutes, written into the set rule on both CSSs where the online rules are) keep the games
-    short; they are part of the setup both games build, so both must have the same."""
+    short; they are part of the setup both games build, so both must have the same. The match
+    setup forces the online ruleset; `test_rules` (DEBUG cfg CFG_TEST_RULES) lets it keep these
+    stocks and times. `before_online`: a function per game, run on its main menu (offline)
+    before it goes online."""
     ua = backend.create_user(names[0], names[0][:4].upper())
     ub = backend.create_user(names[1], names[1][:4].upper())
     a = _boot(dolphin, inst_names[0], backend, ua, gpu_backend, test, "gameplay",
@@ -668,10 +673,15 @@ def _connected_direct(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
     b = _boot(dolphin, inst_names[1], backend, ub, gpu_backend, test, "gameplay",
               gcpad_ini=gcpad_ini[1], dolphin_ini=dolphin_ini[1])
     _both(a.to_main_menu, b.to_main_menu)
+    for g, fn in zip((a, b), before_online):
+        if fn:
+            fn(g)
     _both(a.to_online_page, b.to_online_page)
     _both(lambda: a.to_css("direct", tags[0]), lambda: b.to_css("direct", tags[1]))
     for g in (a, b):
-        B.write_rules(g.c, stocks=stocks, minutes=2, items_off=True)
+        if test_rules:
+            B.write_rules(g.c, stocks=stocks, minutes=2, items_off=True)
+            ppom.allow_test_rules(g.c)   # the match setup keeps these stocks and times
         g.panel = online_set.css_panel(g.c)   # the pick the CSS must show again later
     a.open_keypad()
     a.type_code(ub.connect_code)

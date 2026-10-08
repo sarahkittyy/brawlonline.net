@@ -255,6 +255,8 @@ namespace PPOM {
         CFG_CSS_AUTOWIDTH = 1 << 3, // shrink the CSS status line to fit (experiment)
         CFG_SSS_LEGAL = 1 << 4,   // every stage select offers only the legal stages (debug; for Ranked strikes later)
         CFG_TEST_DISCONNECT = 1 << 5, // tests: act as if disconnected in the next scMelee frame (cleared when seen)
+        CFG_TEST_RULES = 1 << 6,  // tests: the online ruleset keeps the set rule's stocks and times
+                                  // (short games; both machines must have written the same)
     };
 
     struct Block {

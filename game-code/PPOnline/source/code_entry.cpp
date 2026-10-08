@@ -16,11 +16,18 @@
 //   - it is opened with our own buffer and Slippi's 8-character limit;
 //   - only the alphabet and digit pages exist (helper+0x24 page list, +0x38 count, +0x3C
 //     current; restored on close), as Slippi forces the English layout;
-//   - the alphabet keys type upper case only, the "@()^:;" key types the full-width '#'
-//     (Slippi's extra '#' key), and the keys that cannot be part of a code (!?&%$, .,/~ and
-//     -+x=) are disabled: A on them plays the error sound. The key labels are the game's own
-//     textures and stay as they are. The key table is shared with every other keypad, so the
-//     strings are swapped in on open and restored on close;
+//   - a code is letters, '#', digits (Slippi's connect codes; our server: 2-4 letters, 1-4
+//     digits, 8 characters in all), and the keypad follows it (the user's design, 2026-10-08):
+//     the alphabet page's first key is '#' (its "@()^:;" label hidden, a "＃" printed on it in
+//     the game's font); typing '#' turns to the digits page at once, and erasing the '#' turns
+//     back to the letters. The page key is not used. A key that cannot be valid where the
+//     cursor is (a letter after four letters, '#' before two letters or a second time, a digit
+//     after four digits, the symbol keys) plays the error sound; the symbol keys' labels are
+//     hidden. A digit is committed at once (no multi-tap on single-character keys, so "11"
+//     needs no move off the key and back). The keys' strings, labels and the page list are
+//     shared with every other keypad: swapped in on open, restored on close;
+//   - the empty field shows "PLYR#123" in the suggestion grey as a placeholder; a recent-code
+//     suggestion takes its place;
 //   - START confirms (Slippi: "Start = A on Confirm"); Confirm with an empty field plays the
 //     error sound and stays (OnConfirmButtonHandler.asm:30-42); B deletes, and on an empty
 //     field goes back to the CSS (vanilla, also Slippi);
@@ -99,10 +106,49 @@ namespace CodeEntry {
     };
 
     // helper+0x40 is the highlighted key: 0 delete, 1-11 character keys, 0xC page, 0xD OK.
-    static bool keyDisabled(int page, int key)
+    // Page index (+0x3C) 0 = letters, 1 = digits (our page list).
+    const int KEY_ERASE = 0, KEY_HASH = 1, KEY_PAGE = 0xC, KEY_OK = 0xD;
+    const int MIN_LETTERS = 2, MAX_LETTERS = 4, MAX_DIGITS = 4;   // server/crates/common codes.rs
+    static int s_lastKey = -1;          // the last character key that typed (multi-tap)
+
+    // What has been typed: letters before the '#', whether there is one, digits after it.
+    struct CodeShape {
+        int len, letters, digits;
+        bool hash;
+    };
+    static int decodeFullWidth(const char* in, char* out, int max);
+    static CodeShape shapeOf(const char* buf)
     {
-        if (page == PAGE_ALPHA) return key == 10 || key == 11;
-        if (page == PAGE_DIGITS) return key == 10;   // -+x=
+        char in[16];
+        CodeShape c;
+        c.len = decodeFullWidth(buf, in, 15);
+        c.letters = c.digits = 0;
+        c.hash = false;
+        for (int i = 0; i < c.len; i++) {
+            if (in[i] == '#') c.hash = true;
+            else if (c.hash) c.digits++;
+            else c.letters++;
+        }
+        return c;
+    }
+
+    // May `key` be pressed on page `page` with the text as it is? `cycles`: the press only
+    // cycles the last character (multi-tap on the key that typed it), it adds nothing.
+    static bool keyAllowed(int page, int key, const CodeShape& c, bool cycles)
+    {
+        if (key == KEY_ERASE) return true;
+        if (key == KEY_OK) return c.len > 0;
+        if (key == KEY_PAGE || key < 1 || key > 11) return false;
+        if (page == PAGE_ALPHA) {
+            if (key == 10 || key == 11) return false;   // !?&%$ and .,/~
+            if (key == KEY_HASH) return !c.hash && c.letters >= MIN_LETTERS && c.len < CODE_CHARS;
+            if (cycles) return true;
+            return !c.hash && c.letters < MAX_LETTERS && c.len < CODE_CHARS;
+        }
+        if (page == PAGE_DIGITS) {
+            if (key == 10) return false;                // -+x=
+            return c.hash && c.digits < MAX_DIGITS && c.len < CODE_CHARS;
+        }
         return false;
     }
 
@@ -196,6 +242,9 @@ namespace CodeEntry {
     static const ObjFrameFn s_setFrameMatCol = (ObjFrameFn)0x800B7A18;         // MuObject::setFrameMatCol
     static const ObjFrameFn s_setFrame = (ObjFrameFn)0x800B7798;               // MuObject frame (selector, underline)
     static const u8 SUGGESTION_GREY[4] = {0x8E, 0x91, 0x96, 0xFF};
+    static const char* const PLACEHOLDER = "PLYR#123";   // the empty field's placeholder
+    // The placeholder: the suggestion's grey at half opacity (a hint, not something Z takes).
+    static const u8 PLACEHOLDER_GREY[4] = {0x8E, 0x91, 0x96, 0x80};
 
     static char s_sugCode[PPOM::CODE_LEN + 1];   // last answer (ASCII), valid if s_sugFound
     static bool s_sugFound = false;
@@ -310,6 +359,8 @@ namespace CodeEntry {
     static void drawField(u8* helper)
     {
         const char* tail = suggestionTail();
+        // The empty field without a suggestion shows the placeholder, in the same grey.
+        if (!s_buf[0] && !*tail) tail = PLACEHOLDER;
         char want[64];
         int n = 0;
         for (const char* p = s_buf; *p && n < 40; p++) want[n++] = *p;
@@ -327,8 +378,9 @@ namespace CodeEntry {
         if (*tail) {
             char fw[40];
             toFullWidth(tail, fw);
-            s_msgColorTop(m, SUGGESTION_GREY);
-            s_msgColorBottom(m, SUGGESTION_GREY);
+            const u8* grey = tail == PLACEHOLDER ? PLACEHOLDER_GREY : SUGGESTION_GREY;
+            s_msgColorTop(m, grey);
+            s_msgColorBottom(m, grey);
             s_msgPrintf(m, "%s", fw);
         }
     }
@@ -351,10 +403,17 @@ namespace CodeEntry {
 
     // Replace the text the way the keypad does after an edit: last character committed
     // (+0x7C = 1, no multi-tap pending), cursor (+0x84) and its underline (+0x60) after the text.
+    static void commitText(u8* helper);
     static void setText(u8* helper, const char* utf8)
     {
         strncpy(s_buf, utf8, sizeof(s_buf) - 1);
         s_buf[sizeof(s_buf) - 1] = 0;
+        commitText(helper);
+    }
+
+    // The text as it is, committed: no multi-tap pending, the cursor after it.
+    static void commitText(u8* helper)
+    {
         *(u8*)(helper + 0x7C) = 1;
         int max = *(int*)(helper + 8);
         int cur = utf8Chars(s_buf);
@@ -384,6 +443,189 @@ namespace CodeEntry {
         PPOM::g_block.debug.scratch[2] += 0x1000000u;
     }
 
+    // ----------------------------------------------------------------------------------------
+    // Pages. The keypad's own page key (action 5, text+0xE18 case 5) does: next index (+0x3C),
+    // take the current page model (+0x78) off the keypad's scene group (+0x6C, vtable +0x3C with
+    // the model's ScnMdlSimple at MuObject+0x10), put the new one on its node "cpos<n>" (+0x74 + 1)
+    // with 0x801B4D94, commit the multi-tap (+0x7C = 1) and play SE 0x23. setPage does the same
+    // for a given index, and keeps the highlighted key's frame on the new page.
+    typedef void (*GroupRemoveFn)(void* group, void* scnMdl);
+    typedef void (*GroupAttachFn)(void* group, void* scnMdl, const char* node);
+    extern "C" int sprintf(char* buf, const char* fmt, ...);
+
+    static int pageIndex(u8* helper) { return *(int*)(helper + 0x3C); }
+    static int pageOf(u8* helper) { return ((int*)(helper + 0x24))[pageIndex(helper) & 7]; }
+
+    static void setPage(u8* helper, int idx)
+    {
+        if (pageIndex(helper) == idx || idx < 0 || idx >= *(int*)(helper + 0x38)) return;
+        u8* group = *(u8**)(helper + 0x6C);
+        u8* cur = *(u8**)(helper + 0x78);
+        int page = ((int*)(helper + 0x24))[idx];
+        u8* next = *(u8**)(helper + 0x48 + 4 * page);
+        if (!group || !next) return;
+        *(int*)(helper + 0x3C) = idx;
+        if (cur) {
+            GroupRemoveFn remove = *(GroupRemoveFn*)(*(u32*)group + 0x3C);
+            remove(group, *(void**)(cur + 0x10));
+            *(u8**)(helper + 0x78) = NULL;
+        }
+        char node[16];
+        sprintf(node, "cpos%d", *(int*)(helper + 0x74) + 1);
+        ((GroupAttachFn)0x801B4D94)(group, *(void**)(next + 0x10), node);
+        *(u8**)(helper + 0x78) = next;
+        *(u8*)(helper + 0x7C) = 1;
+        s_setFrameMatCol(next, (float)(*(int*)(helper + 0x40) + 1));
+        playSE(0x23);   // the page key's own sound
+        s_lastKey = -1;
+    }
+
+    // ----------------------------------------------------------------------------------------
+    // Key labels. Each page model (MenSelchrWalphabet / MenSelchrWnumber) has one bone per key
+    // label with a visibility (VIS0) entry; found live by hiding them one by one: pPlane54 ABC,
+    // pPlane55 DEF, pPlane65 the symbol key (key 1), pPlane66-71 GHI..WXYZ, pPlane72 key 10,
+    // pPlane73 key 11 (the same bones on the digits page). An entry's flags word made constant
+    // off (2) hides the label; the key itself stays. The VIS0 data is the loaded resource, shared
+    // by the four players' keypads, so the flags are put back on close (as anyone_menu.cpp).
+    struct VisSave {
+        u32* flags;
+        u32 old;
+    };
+    static VisSave s_vis[8];
+    static int s_visCount = 0;
+
+    static bool nameIs(const char* s, const char* want)
+    {
+        int i = 0;
+        for (; want[i]; i++) if (s[i] != want[i]) return false;
+        return s[i] == 0;
+    }
+
+    static bool isPtr(u32 p) { return (p >= 0x80000000 && p < 0x81800000) || (p >= 0x90000000 && p < 0x94000000); }
+
+    // The VIS0 entry flags of `bone` in the MuObject's visibility animation
+    // (+0x14 gfModelAnimation -> +0x08 AnmObjVisRes -> +0x2C ResAnmVis data).
+    static u32* visFlags(u8* obj, const char* bone)
+    {
+        if (!obj) return NULL;
+        u32 anim = *(u32*)(obj + 0x14);
+        if (!isPtr(anim)) return NULL;
+        u32 visRes = *(u32*)(anim + 0x8);
+        if (!isPtr(visRes)) return NULL;
+        u8* vis0 = *(u8**)(visRes + 0x2C);
+        if (!isPtr((u32)vis0) || *(u32*)vis0 != 0x56495330 /* "VIS0" */) return NULL;
+        u8* grp = vis0 + *(s32*)(vis0 + 0x10);
+        u32 n = *(u32*)(grp + 4);
+        for (u32 i = 1; i <= n && i < 64; i++) {
+            u8* e = grp + 8 + 16 * i;
+            if (nameIs((const char*)(grp + *(s32*)(e + 8)), bone)) return (u32*)(grp + *(s32*)(e + 12) + 4);
+        }
+        return NULL;
+    }
+
+    static void hideLabel(u8* obj, const char* bone)
+    {
+        u32* f = visFlags(obj, bone);
+        if (!f || s_visCount >= (int)(sizeof(s_vis) / sizeof(s_vis[0]))) return;
+        s_vis[s_visCount].flags = f;
+        s_vis[s_visCount].old = *f;
+        s_visCount++;
+        *f = 2;   // constant, invisible
+    }
+
+    static void restoreLabels()
+    {
+        while (s_visCount > 0) {
+            s_visCount--;
+            *s_vis[s_visCount].flags = s_vis[s_visCount].old;
+        }
+    }
+
+    // The '#' label: a MuMsg window of our own on the alphabet page's key-1 bone (pPlane65), in
+    // the game's font, made the way the character select makes its windows (MuMsg::create(3,
+    // 0x2A, 0x2B), allocMsgBuf, then Message::attachMsgBuf to the model node, which is what
+    // MuMsg::attachScnMdlSimple does for "textN<n>" nodes). It lives in the CSS's heap (0x2A),
+    // so it exists only while the keypad is open: made on open, taken off the model and deleted
+    // on close (a block left in MenuInstance when the CSS ends stops the scene change: "Heap
+    // (MenuInstance) has allocated block", the game hangs in scMemoryChange). attachMsgBuf hooks
+    // the message buffer into the model's draw callback (ScnMdlSimple+0xD4, chaining the one
+    // that was there), so that pointer is put back before the delete.
+    typedef MuMsg* (*MsgCreateFn)(u32, u32, u32);
+    typedef void (*MsgAllocFn)(MuMsg*, u32 size, u32 count);
+    typedef void (*MsgInitWsFn)(MuMsg*, void* ws);
+    typedef void (*MsgSetFaceFn)(MuMsg*, u32 window, u32 face);
+    typedef void (*MsgDeleteFn)(MuMsg*, int);   // MuMsg's destructor (0x800B8A0C), 1 = free it
+    typedef void (*MessageAttachFn)(void* message, u32 idx, void* scnMdl, const char* node, u8, int, float);
+    static MuMsg* s_hashMsg = NULL;
+    static u8* s_hashMdl = NULL;
+    static u32 s_hashOldCallback = 0;
+    static u32 s_hashCallback = 0;
+    static const char* const HASH_LABEL = "\xEF\xBC\x83";   // ＃
+
+    void forgetLabels()
+    {
+        s_hashMsg = NULL;   // the CSS (and its heap) is gone
+        s_hashMdl = NULL;
+    }
+
+    static void hideHashLabel()
+    {
+        if (!s_hashMsg) return;
+        if (s_hashMdl && *(u32*)(s_hashMdl + 0xD4) == s_hashCallback) *(u32*)(s_hashMdl + 0xD4) = s_hashOldCallback;
+        ((MsgDeleteFn)0x800B8A0C)(s_hashMsg, 1);
+        s_hashMsg = NULL;
+        s_hashMdl = NULL;
+    }
+
+    static void showHashLabel(u8* helper)
+    {
+        u8* alpha = *(u8**)(helper + 0x48 + 4 * PAGE_ALPHA);
+        u8* mdl = alpha ? *(u8**)(alpha + 0x10) : NULL;
+        if (!isPtr((u32)mdl)) return;
+        hideHashLabel();
+        {
+            MuMsg* m = ((MsgCreateFn)0x800B8930)(3, 0x2A, 0x2B);
+            if (!m) return;
+            ((MsgAllocFn)0x800B8B08)(m, 0x40, 1);
+            s_hashOldCallback = *(u32*)(mdl + 0xD4);
+            ((MessageAttachFn)0x8006B518)(m->m_message, 0, mdl, "pPlane65", 0, 3, *(float*)0x806A0D64);
+            s_hashCallback = *(u32*)(mdl + 0xD4);
+            u8* ws = *(u8**)((u8*)m + 0xC);
+            ((MsgInitWsFn)0x800B8BE0)(m, ws);
+            float* rect = (float*)(ws + 4);   // the character select's one-character windows
+            rect[0] = -20.0f;                 // (-16..16, 4 to the left: centred on the key)
+            rect[1] = 12.8f;
+            rect[2] = 12.0f;
+            rect[3] = -16.0f;
+            float* scale = (float*)(ws + 0x30);    // the size of the keys' printed labels
+            scale[0] = scale[1] = 1.3f;
+            ((MsgSetFaceFn)0x800B9488)(m, 0, 1);   // the face the CSS gives its windows
+            m->setAlignMode(0, MuMsg::Align_Center);
+            m->setFontColor(0, 0x30, 0x30, 0x30, 0xFF);   // as the keys' printed labels
+            s_hashMsg = m;
+            s_hashMdl = mdl;
+        }
+        s_hashMsg->printf(0, "%s", HASH_LABEL);
+    }
+
+    static void patchLabels(u8* helper)
+    {
+        restoreLabels();
+        u8* alpha = *(u8**)(helper + 0x48 + 4 * PAGE_ALPHA);
+        u8* digits = *(u8**)(helper + 0x48 + 4 * PAGE_DIGITS);
+        hideLabel(alpha, "pPlane65");   // "@()^:;" -> our '#'
+        hideLabel(alpha, "pPlane72");   // !?&%$
+        hideLabel(alpha, "pPlane73");   // .,/~
+        hideLabel(digits, "pPlane72");  // -+x=
+        // The keypad base (MenSelchrWbase): the page key's arrows (the pages follow the '#') and
+        // the "Z RANDOM" tab (Random is off; Z takes a recent code here).
+        u8* base = *(u8**)(helper + 0x44);
+        hideLabel(base, "kirikae");
+        hideLabel(base, "randam");
+        hideLabel(base, "zz_Gc");
+        showHashLabel(helper);
+    }
+
     void open(int port)
     {
         s_port = port;
@@ -394,6 +636,8 @@ namespace CodeEntry {
         memset(s_buf, 0, sizeof(s_buf));
         *(u32*)(area + 0x400) = *(u32*)(area + 0x1DC);
         patchKeys(helper);
+        patchLabels(helper);
+        s_lastKey = -1;
         ((KeypadOpenFn)(NAME_TEXT + 0x5A8))(helper, NULL, s_buf, CODE_CHARS);
         // The text field is sized for Brawl's 5-character names: let the font narrow to fit 8.
         MuMsg* msg = *(MuMsg**)(helper + 0x64);
@@ -417,6 +661,15 @@ namespace CodeEntry {
 
     static void finish()
     {
+        u8* area = cssArea(s_port);
+        if (s_helper && area && area + 0x370 == s_helper) {
+            // The CSS is still there: its resources and our '#' window too.
+            restoreLabels();
+            hideHashLabel();
+        } else {
+            s_visCount = 0;
+            forgetLabels();
+        }
         restoreKeys(s_helper);
         s_active = false;
         s_helper = NULL;
@@ -489,7 +742,7 @@ namespace CodeEntry {
             }
             if (trig & Z) acceptSuggestion(helper);
         }
-        int page = ((u32*)(helper + 0x24))[*(u32*)(helper + 0x3C) & 7];
+        int page = pageOf(helper);
         int key = *(int*)(helper + 0x40);
         bool empty = s_buf[0] == 0;
         if (s_startPressed) {
@@ -502,11 +755,18 @@ namespace CodeEntry {
                 *pressed |= A;
             }
         }
+        int typedKey = -1;
         if (*pressed & A) {
-            if (keyDisabled(page, key) || (key == 0xD && empty)) {
+            CodeShape shape = shapeOf(s_buf);
+            bool cycles = *(u8*)(helper + 0x7C) == 0 && key == s_lastKey;
+            if (!keyAllowed(page, key, shape, cycles)) {
                 playSE(3);
                 *pressed &= ~A;
                 *pressed2 &= ~A;
+                u32& sc = PPOM::g_block.debug.scratch[15];
+                sc = (sc & ~0xFF0000u) | ((sc + 0x10000u) & 0xFF0000u);   // refused keys (tests)
+            } else if (key >= 1 && key <= 11) {
+                typedKey = key;
             }
         }
         int r = s_origUpdate(helper, pad, s_out, 0 /* no Random */, se);
@@ -520,11 +780,27 @@ namespace CodeEntry {
             // plain text; ask for the newest code that starts with the new text (Slippi
             // OnEnterText.asm / OnBPressAutoComplete.asm: scroll reset).
             if (strcmp(s_buf, s_lastBuf) != 0) {
+                if (typedKey >= 0) {
+                    s_lastKey = typedKey;
+                    // Single-character keys ('#', the digits) commit at once: pressing the same
+                    // key again types another character instead of cycling this one.
+                    if (typedKey == KEY_HASH || page == PAGE_DIGITS) {
+                        commitText(helper);
+                        s_lastKey = -1;
+                    }
+                } else {
+                    s_lastKey = -1;
+                }
                 strcpy(s_lastBuf, s_buf);
                 s_drawn[0] = 1;
                 s_drawn[1] = 0;
                 sugRequest(PPOM::SCROLL_RESET);
             }
+            // The page follows the text: digits once there is a '#' (typed, or a recent code
+            // taken with Z), letters when there is none (the '#' erased, the field cleared).
+            setPage(helper, shapeOf(s_buf).hash ? 1 : 0);
+            u32& sc = PPOM::g_block.debug.scratch[15];
+            sc = (sc & ~0xFF00u) | ((u32)(pageIndex(helper) & 0xFF) << 8);   // tests: the page
             drawField(helper);
         }
         return r;

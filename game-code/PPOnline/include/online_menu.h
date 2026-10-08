@@ -47,6 +47,7 @@ namespace CodeEntry {
     void tick(bool startPressed);
     bool active();
     void onSuggestion(const PPOM::Response& r);   // a FETCH_CODE_SUGGESTION answer
+    void forgetLabels();                          // off the CSS: its '#' label window is gone
 }
 
 namespace BootMenu {
