@@ -7,7 +7,9 @@
 #include "Core/Online/Matchmaking.h"
 
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
+#include <optional>
 #include <utility>
 
 #include <enet/enet.h>
@@ -21,6 +23,7 @@
 #include "Core/Config/OnlineSettings.h"
 #include "Core/Online/Timeouts.h"
 #include "Core/Online/User.h"
+#include "Core/Rollback/PeerData.h"
 
 #ifdef _WIN32
 #include <winsock2.h>
@@ -61,10 +64,42 @@ double GetNum(const picojson::object& o, const char* key, double def = 0)
   return it != o.end() && it->second.is<double>() ? it->second.get<double>() : def;
 }
 
+// A whole number in [lo, hi] (the server's numbers are not trusted to be in range; casting a
+// double outside the target type's range is undefined behaviour), else nullopt.
+std::optional<s64> GetInt(const picojson::object& o, const char* key, s64 lo, s64 hi)
+{
+  const auto it = o.find(key);
+  if (it == o.end() || !it->second.is<double>())
+    return std::nullopt;
+  const double d = it->second.get<double>();
+  if (!std::isfinite(d) || std::floor(d) != d || d < static_cast<double>(lo) ||
+      d > static_cast<double>(hi))
+  {
+    return std::nullopt;
+  }
+  return static_cast<s64>(d);
+}
+
+// The host part of "a.b.c.d:port" ("" for anything else; SplitString("") is empty).
+std::string HostPart(const std::string& addr)
+{
+  const auto parts = SplitString(addr, ':');
+  return parts.empty() ? std::string() : parts[0];
+}
+
 bool GetBool(const picojson::object& o, const char* key, bool def = false)
 {
   const auto it = o.find(key);
   return it != o.end() && it->second.is<bool>() ? it->second.get<bool>() : def;
+}
+
+// ENet's defaults accept 32 MiB packets and 32 MiB of queued data per peer, and up to 32
+// connections from one address. Our messages (mm JSON, the P2P handshake) are a few KiB.
+void LimitHost(ENetHost* host)
+{
+  host->maximumPacketSize = 64 * 1024;
+  host->maximumWaitingData = 256 * 1024;
+  host->duplicatePeers = 4;  // Teams: players behind one NAT share an address
 }
 
 // "a.b.c.d:port" -> Endpoint. False if it does not have that shape.
@@ -357,7 +392,9 @@ int Matchmaking::ReceiveMmMessage(picojson::value& msg, int timeout_ms)
                             net_event.packet->dataLength);
       enet_packet_destroy(net_event.packet);
       msg = picojson::value();
-      if (!picojson::parse(msg, str).empty())
+      // picojson recurses without a depth limit: a deeply nested message would overflow the
+      // stack, so the depth is checked first.
+      if (!Gprb::PeerData::JsonSafeToParse(str, 16) || !picojson::parse(msg, str).empty())
         msg = picojson::value();
       return 0;
     }
@@ -470,6 +507,8 @@ void Matchmaking::StartMatchmaking()
     m_client = enet_host_create(&client_addr, 1, MM_CHANNELS, 0, 0);
     retry_count++;
   }
+  if (m_client)
+    LimitHost(m_client);
 
   if (m_client == nullptr)
   {
@@ -682,6 +721,7 @@ void Matchmaking::HandleMatchmaking()
 
   Match match;
   match.match_id = GetStr(get_resp, "matchId");
+  match.mode = static_cast<int>(m_search_settings.mode);
   match.local_port = m_host_port;
   INFO_LOG_FMT(NETPLAY, "[Matchmaking] Match ID: {}", match.match_id);
 
@@ -700,7 +740,8 @@ void Matchmaking::HandleMatchmaking()
       player.uid = GetStr(el, "uid");
       player.display_name = GetStr(el, "displayName");
       player.connect_code = GetStr(el, "connectCode");
-      player.port = static_cast<int>(GetNum(el, "port"));
+      // In-game port 1-4 (it becomes an index); anything else makes the response unusable.
+      player.port = static_cast<int>(GetInt(el, "port", 1, 4).value_or(0));
       player.is_bot = GetBool(el, "isBot");
       player.ip_address = GetStr(el, "ipAddress", "1.1.1.1:123");
       player.ip_address_lan = GetStr(el, "ipAddressLan", "1.1.1.1:123");
@@ -713,11 +754,18 @@ void Matchmaking::HandleMatchmaking()
         for (const auto& m : chat->second.get<picojson::array>())
           player.chat_messages.push_back(m.is<std::string>() ? m.get<std::string>() : "");
       }
+      if (player.port == 0)
+      {
+        ERROR_LOG_FMT(NETPLAY, "[Matchmaking] A player without a valid port in get-ticket-resp");
+        m_state = State::ErrorEncountered;
+        SetError(ErrorSource::Client, "Invalid response when getting mm status");
+        return;
+      }
       match.players.push_back(player);
 
       if (player.is_local)
       {
-        local_external_ip = SplitString(player.ip_address, ':')[0];
+        local_external_ip = HostPart(player.ip_address);
         match.local_player_index = player.port - 1;
       }
     }
@@ -732,7 +780,7 @@ void Matchmaking::HandleMatchmaking()
       const std::string& lan_ip = player.ip_address_lan;
       INFO_LOG_FMT(NETPLAY, "[Matchmaking] LAN IP: {}", lan_ip);
 
-      if (SplitString(ext_ip, ':')[0] != local_external_ip || lan_ip.empty())
+      if (HostPart(ext_ip) != local_external_ip || lan_ip.empty())
       {
         // If external IPs are different, just use that address
         remote_ips.push_back(ext_ip);
@@ -753,13 +801,18 @@ void Matchmaking::HandleMatchmaking()
   const auto stages_it = get_resp.find("stages");
   if (stages_it != get_resp.end() && stages_it->second.is<picojson::array>())
   {
+    // Only stage kinds a versus match can be played on (Gprb::PeerData::ValidStageKind): the
+    // host draws random stages from this list and its pick reaches the game.
+    picojson::object probe;
     for (const auto& s : stages_it->second.get<picojson::array>())
     {
-      if (s.is<double>())
-        match.stages.push_back(static_cast<u16>(s.get<double>()));
+      probe["s"] = s;
+      const auto kind = GetInt(probe, "s", 0, 0xFFFF);
+      if (kind && Gprb::PeerData::ValidStageKind(static_cast<u32>(*kind)) && match.stages.size() < 256)
+        match.stages.push_back(static_cast<u16>(*kind));
     }
   }
-  match.items = static_cast<u32>(GetNum(get_resp, "items"));
+  match.items = static_cast<u32>(GetInt(get_resp, "items", 0, 0xFFFFFFFF).value_or(0));
   INFO_LOG_FMT(NETPLAY, "[Matchmaking] Stages from the server: {}", fmt::join(match.stages, ","));
 
   for (const auto& ip : remote_ips)
@@ -818,6 +871,8 @@ void Matchmaking::HandleConnecting()
   local_addr.host = ENET_HOST_ANY;
   local_addr.port = m_host_port;
   P2PLink::HostPtr client{enet_host_create(&local_addr, 10, MM_CHANNELS, 0, 0)};
+  if (client)
+    LimitHost(client.get());
   if (!client)
   {
     // Slippi: PanicAlert("Couldn't Create Client").
@@ -896,6 +951,7 @@ void Matchmaking::HandleConnecting()
           break;
         }
 
+        bool matched = false;
         for (size_t i = 0; i < servers.size(); i++)
         {
           // Slippi matches the host only, not the port: "for some people, their internet will
@@ -906,8 +962,16 @@ void Matchmaking::HandleConnecting()
                          IpToString(net_event.peer->address.host), net_event.peer->address.port);
             servers[i] = net_event.peer;
             connections[i] = true;
+            matched = true;
             break;
           }
+        }
+        if (!matched)
+        {
+          // Not one of the players the server matched us with: nobody else gets a connection.
+          WARN_LOG_FMT(NETPLAY, "[Netplay] Dropping a connection from an unknown address {}:{}",
+                       IpToString(net_event.peer->address.host), net_event.peer->address.port);
+          enet_peer_reset(net_event.peer);
         }
         break;
       }

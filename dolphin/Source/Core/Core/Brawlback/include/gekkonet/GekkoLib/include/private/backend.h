@@ -148,6 +148,12 @@ namespace Gekko {
 
         std::deque<std::unique_ptr<u8[]>>& GetNetPlayerQueue(Handle player);
 
+        // packets dropped as malformed or out of range (they come from the network).
+        u64 GetDroppedPackets() const { return _dropped_packets; }
+
+        // no packet we send is larger (inputs are split at 1 KiB); larger ones are dropped.
+        static constexpr u32 MAX_PACKET_SIZE = 16 * 1024;
+
 	public:
 		std::vector<std::unique_ptr<Player>> locals;
 
@@ -233,6 +239,8 @@ namespace Gekko {
 		u32 _input_size;
 
 		u16 _session_magic;
+
+		u64 _dropped_packets = 0;
 
 		u64 _disconnect_timeout;
 

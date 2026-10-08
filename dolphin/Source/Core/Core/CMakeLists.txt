@@ -604,6 +604,8 @@ add_library(core
   Rollback/GprbCpuTrace.cpp
   Rollback/FullMemcpySaveSlot.h
   Rollback/IRollbackSaveSlot.h
+  Rollback/PeerData.cpp
+  Rollback/PeerData.h
   Rollback/Perf.cpp
   Rollback/Perf.h
   Rollback/PresentStats.cpp
@@ -800,10 +802,12 @@ if(MSVC)
   )
 else()
   # Dolphin builds with -fno-exceptions on GCC/Clang (MSVC uses /EHsc everywhere), but the harness
-  # server reports command errors with exceptions and GekkoNet's replay code catches
-  # deserialization failures. Both throw and catch within the same file.
+  # server reports command errors with exceptions and GekkoNet's replay code and network packet
+  # handling (backend.cpp, packets from the peer) catch deserialization failures. All throw and
+  # catch within the same file.
   set_source_files_properties(
     Harness/HarnessServer.cpp
+    Brawlback/include/gekkonet/GekkoLib/src/backend.cpp
     Brawlback/include/gekkonet/GekkoLib/src/replay.cpp
     Brawlback/include/gekkonet/GekkoLib/src/replay_session.cpp
     PROPERTIES COMPILE_OPTIONS "-fexceptions"

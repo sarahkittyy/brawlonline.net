@@ -559,7 +559,7 @@ inline void JobTaskThread::kick_and_wait_for(Job& j)
 {
   j.is_waiting = true;
   j.kick();
-  while (j.unfinished_jobs.load(std::memory_order_relaxed) != 0)
+  while (j.unfinished_jobs.load(std::memory_order_acquire) != 0)
   {
     Job* k = this->get_valid_job();
     if (k != nullptr)
@@ -649,12 +649,21 @@ inline bool Job::try_kick(void)
 
 inline void Job::finish(void)
 {
-  uint32_t res = this->unfinished_jobs.fetch_sub(1, std::memory_order_relaxed);
-  if (this->parent != nullptr && res == 1) /* last child */
-    this->parent->finish();
+  /* Everything this job needs after the count drops is read first: once a waited-for root job
+   * reaches 0, its waiter releases the job's block (DrainJobsUntilComplete), and the old order
+   * wrote is_done into it afterwards. */
+  Job* const parent_job = this->parent;
+  const bool waited = this->is_waiting;
+  JobAllocBlock& block = this->alloc_block;
   this->is_done = true;
-  if (!this->is_waiting) /* a thread is waiting for job, it must release */
-    this->alloc_block.deref();
+  /* Release: what the job wrote (a restored granule, a merged snapshot) is visible to the thread
+   * whose acquire load sees the count reach 0 (DrainJobsUntilComplete). Relaxed was enough on
+   * x86 only by accident of the hardware, and never stopped the compiler from reordering. */
+  uint32_t res = this->unfinished_jobs.fetch_sub(1, std::memory_order_acq_rel);
+  if (parent_job != nullptr && res == 1) /* last child */
+    parent_job->finish();
+  if (!waited) /* a thread is waiting for job, it must release */
+    block.deref();
 }
 
 static inline job::Job* KickRootJob(job::JobTaskThread* dt, job::JobFunction fn)
@@ -668,7 +677,7 @@ static inline job::Job* KickRootJob(job::JobTaskThread* dt, job::JobFunction fn)
 // Helper: Drain remaining jobs until the root job and all children are complete.
 static inline void DrainJobsUntilComplete(job::JobTaskThread* dt, job::Job* root)
 {
-  while (root->unfinished_jobs.load(std::memory_order_relaxed) != 0)
+  while (root->unfinished_jobs.load(std::memory_order_acquire) != 0)
   {
     job::Job* k = dt->get_valid_job();
     if (k != nullptr)

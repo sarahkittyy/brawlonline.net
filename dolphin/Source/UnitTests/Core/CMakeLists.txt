@@ -47,3 +47,21 @@ target_sources(PowerPCTest PRIVATE
   PowerPC/TestValues.h
   StubJit.h
 )
+
+# What the other player's machine sends to the gameplay session (Core/Rollback/PeerData) and
+# GekkoNet's packet handling against malformed and hostile packets.
+add_dolphin_test(OnlineSecurityTest
+  Rollback/PeerDataTest.cpp
+  Rollback/GekkoNetFuzzTest.cpp
+)
+target_include_directories(OnlineSecurityTest PRIVATE
+  ${CMAKE_SOURCE_DIR}/Source/Core/Core/Brawlback/include/gekkonet/GekkoLib/include
+  ${CMAKE_SOURCE_DIR}/Source/Core/Core/Brawlback/include/gekkonet/GekkoLib/include/private
+  ${CMAKE_SOURCE_DIR}/Source/Core/Core/Brawlback/include/gekkonet/GekkoLib/thirdparty
+)
+target_compile_definitions(OnlineSecurityTest PRIVATE GEKKONET_STATIC GEKKONET_NO_ASIO)
+if(MSVC)
+  # zpp_bits (GekkoNet's serializer) trips /W4 warnings; GekkoNet's own sources do the same.
+  set_source_files_properties(Rollback/GekkoNetFuzzTest.cpp
+    PROPERTIES COMPILE_FLAGS "/WX- /wd4018 /wd4189 /wd4244 /wd4267 /wd4389")
+endif()

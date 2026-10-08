@@ -70,6 +70,9 @@ struct Endpoint
 struct Match
 {
   std::string match_id;
+  // The search mode that made this match (Matchmaking::Mode: 0 ranked, 1 unranked, 2 direct,
+  // 3 teams); -1 unknown.
+  int mode = -1;
   bool is_host = false;          // Slippi's "decider"
   int local_player_index = 0;    // 0-based (players[].port - 1 of the local player)
   u16 local_port = 0;            // the punched UDP port this side used for mm and P2P
