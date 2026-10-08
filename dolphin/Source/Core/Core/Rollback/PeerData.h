@@ -63,9 +63,10 @@ bool ValidCharKind(u32 kind);
 // Colour numbers: the character select's own bound (game-code online_menu.cpp selectedCostume).
 constexpr u32 MAX_COSTUME = 0x1F;
 bool ValidCostume(u32 costume);
-// srStageKind values a versus match can be played on: 0x01-0x33 without the menu/result kinds.
-// The game plugin checks the exact list against P+'s stage select table (game-code
-// online_match.cpp); this rejects what is never a stage.
+// srStageKind values a versus match can be played on (0x01-0x7F without menus, results and
+// single-player modes; P+ v3.2's stage select uses 0x01-0x33, 0x37 and 0x40-0x52). The game
+// plugin checks the exact list against P+'s stage select tables (game-code online_match.cpp);
+// this rejects what is never a stage.
 bool ValidStageKind(u32 kind);
 
 // The host's gmGlobalModeMelee init block (0x20 bytes): both machines build it from the same

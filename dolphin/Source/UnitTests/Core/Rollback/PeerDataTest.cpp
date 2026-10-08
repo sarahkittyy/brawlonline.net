@@ -102,11 +102,13 @@ TEST(PeerData, Whitelists)
   EXPECT_FALSE(ValidCostume(MAX_COSTUME + 1));
   EXPECT_FALSE(ValidCostume(0xFF));
 
-  // P+'s legal list, and the rest of the versus stages.
-  for (u32 k : {0x01u, 0x02u, 0x03u, 0x0Cu, 0x1Cu, 0x21u, 0x2Du, 0x2Eu, 0x33u})
+  // P+'s legal list, the rest of Brawl's versus stages, and P+'s own stages (all on P+ v3.2's
+  // stage select, read from its tables).
+  for (u32 k : {0x01u, 0x02u, 0x03u, 0x0Cu, 0x1Cu, 0x21u, 0x2Du, 0x2Eu, 0x33u, 0x37u, 0x40u, 0x41u,
+                0x52u})
     EXPECT_TRUE(ValidStageKind(k)) << k;
-  // None, Config, Result, Home-Run Contest, Subspace, "no stage", garbage.
-  for (u32 k : {0x00u, 0x26u, 0x28u, 0x34u, 0x3Du, 0x41u, 0xFFFFu, 0x7FFFu})
+  // None, Config, Result, Home-Run Contest, Target Smash, Subspace, "no stage", garbage.
+  for (u32 k : {0x00u, 0x26u, 0x28u, 0x34u, 0x38u, 0x3Du, 0x80u, 0xFFFFu, 0x7FFFu})
     EXPECT_FALSE(ValidStageKind(k)) << k;
 }
 

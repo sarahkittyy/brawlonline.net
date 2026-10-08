@@ -163,9 +163,18 @@ bool ValidCostume(u32 costume)
 
 bool ValidStageKind(u32 kind)
 {
-  // 0x26 Config (the rules menu), 0x27 unused, 0x28 Result: never a versus stage; from 0x34 on
-  // Home-Run Contest, Stage Builder, rest area, Target Smash, roll call, Subspace.
-  return kind >= 0x01 && kind <= 0x33 && kind != 0x26 && kind != 0x27 && kind != 0x28;
+  // P+ v3.2's stage select offers 0x01-0x33 and 0x37 (Brawl's kinds) and 0x40-0x52 (P+'s own
+  // stages), read from its page and slot tables. Never a versus stage: 0x26 Config (the rules
+  // menu), 0x27, 0x28 Result, and the single-player modes 0x34-0x36 (Home-Run Contest, Stage
+  // Builder, rest area) and 0x38-0x3F (Target Smash, roll call, Subspace). 0x7F bounds room for
+  // more of P+'s stages; the game plugin checks the exact list.
+  if (kind < 0x01 || kind > 0x7F)
+    return false;
+  if (kind >= 0x26 && kind <= 0x28)
+    return false;
+  if ((kind >= 0x34 && kind <= 0x36) || (kind >= 0x38 && kind <= 0x3F))
+    return false;
+  return true;
 }
 
 std::vector<u8> MergeInitBlock(const std::vector<u8>& mine, const std::vector<u8>& host,
