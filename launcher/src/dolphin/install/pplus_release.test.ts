@@ -338,24 +338,22 @@ describe("verifyReleaseZip", () => {
 });
 
 describe("ensureNetplaySave", () => {
-  it("copies the save template into Dolphin's Sys folder once", async () => {
+  it("copies the save template into Dolphin's User folder once", async () => {
     const release = await serve(makeZip(releaseFiles()));
     await installProjectPlusFiles({ target, release });
-    const sys = path.join(root, `dolphin-${n}`, "Sys");
-    await fs.promises.mkdir(sys, { recursive: true });
+    const user = target.userFolder;
 
-    expect(await ensureNetplaySave(target.storeDir, sys)).toBe(true);
-    const tmd = path.join(sys, "NetplaySave", "title", "00010000", "52534245", "content", "title.tmd");
+    expect(await ensureNetplaySave(target.storeDir, user)).toBe(true);
+    const tmd = path.join(user, "NetplaySave", "title", "00010000", "52534245", "content", "title.tmd");
     expect(await read(tmd)).toEqual(SAVE_TMD);
     // An existing template is left as it is.
     await fs.promises.writeFile(tmd, "changed");
-    expect(await ensureNetplaySave(target.storeDir, sys)).toBe(true);
+    expect(await ensureNetplaySave(target.storeDir, user)).toBe(true);
     expect((await read(tmd)).toString()).toBe("changed");
   });
 
   it("reports false when there is nothing to copy yet", async () => {
-    const sys = path.join(root, `dolphin-${n}`, "Sys");
-    await fs.promises.mkdir(sys, { recursive: true });
-    expect(await ensureNetplaySave(target.storeDir, sys)).toBe(false);
+    expect(await ensureNetplaySave(target.storeDir, target.userFolder)).toBe(false);
+    expect(fs.existsSync(path.join(target.userFolder, "NetplaySave"))).toBe(false);
   });
 });

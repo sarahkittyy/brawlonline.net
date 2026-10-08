@@ -7,7 +7,7 @@
 //   user/Launcher/Project+ Offline Launcher.dol -> <User>/Launcher/
 //   Sys/NetplaySave/**                          -> <store>/NetplaySave/ (the Brawl save template that
 //                                                  Dolphin's WiiRoot.cpp copies into the netplay NAND;
-//                                                  copied into Dolphin's Sys folder by ensureNetplaySave)
+//                                                  copied into <User>/NetplaySave by ensureNetplaySave)
 //
 // The zip is checked against the pinned size and sha256 before anything is extracted, and every
 // entry's CRC is checked while it is extracted. Files already in the User folder are never
@@ -56,7 +56,7 @@ export const PPLUS_LAUNCHER_DOL_ENTRIES = [
 ];
 export const PPLUS_NETPLAY_SAVE_PREFIX = "Sys/NetplaySave/";
 
-/** Name of the save template folder in Dolphin's Sys folder (Dolphin's NETPLAY_SAVE_DIR). */
+/** Name of the save template folder in Dolphin's User (or, older builds, Sys) folder: Dolphin's NETPLAY_SAVE_DIR. */
 export const NETPLAY_SAVE_DIR = "NetplaySave";
 const MARKER_NAME = "pplus.json";
 
@@ -304,16 +304,18 @@ export async function extractProjectPlusFiles(
 }
 
 /**
- * Puts the Brawl save template into Dolphin's Sys folder (`<Sys>/NetplaySave`), where WiiRoot.cpp
- * looks for it, if it is not there. Returns false when we have no template to copy yet.
+ * Puts the Brawl save template into Dolphin's User folder (`<User>/NetplaySave`), where WiiRoot.cpp
+ * looks for it first, if it is not there. Never into Dolphin's Sys folder: on macOS that is inside
+ * the signed app bundle, and an added file breaks its signature ("Dolphin is damaged").
+ * Returns false when we have no template to copy yet.
  */
-export async function ensureNetplaySave(storeDir: string, sysFolder: string): Promise<boolean> {
-  const dest = path.join(sysFolder, NETPLAY_SAVE_DIR);
+export async function ensureNetplaySave(storeDir: string, userFolder: string): Promise<boolean> {
+  const dest = path.join(userFolder, NETPLAY_SAVE_DIR);
   if (await exists(dest)) {
     return true;
   }
   const store = netplaySaveStore(storeDir);
-  if (!(await exists(store)) || !(await exists(sysFolder))) {
+  if (!(await exists(store))) {
     return false;
   }
   await fs.promises.cp(store, dest, { recursive: true, force: false });
