@@ -1,0 +1,296 @@
+# Client: the game plugin, our Dolphin (Linux and Windows) and the launcher packages (AppImage,
+# NSIS installer), published to https://brawlonline.net/downloads/ and to the launcher's
+# electron-updater feed https://brawlonline.net/updates/launcher/ (generic provider). Installed
+# launchers update themselves from that feed; the bundled Dolphin and plugin update with them.
+#
+# Version: 0.1.<run number of this workflow>, stamped into the launcher, Dolphin's version string
+# and its matchmaking appVersion (.github/scripts/stamp-version.sh).
+#
+# Runners:
+#   - Linux builds: the labels in the config job (one line; a repository variable
+#     CLIENT_LINUX_RUNNER overrides it, e.g. ["self-hosted","linux","x64","unraid","brawlonline"]).
+#     sarahvps2 is the production box: builds there run at nice 19 with ccache and incremental
+#     build trees in ~/ci-cache.
+#   - Windows: GitHub-hosted (minutes are limited on a private repository: paths below, caches).
+#   - Publishing: always sarahvps2 (pp-release client). Builds from other machines arrive as
+#     Actions artifacts (1-day retention, deleted after publishing).
+#   - macOS: disabled until a runner exists (see the macos job).
+#
+# Runs only on pushes to main and by hand, never on pull requests (self-hosted runners).
+name: client
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "dolphin/**"
+      - "launcher/**"
+      - "game-code/**"
+      - "tools/gamecode/**"
+      - "NOTICE"
+      - ".github/workflows/client.yml"
+      - ".github/scripts/**"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: client
+  cancel-in-progress: true
+
+env:
+  VERSION: 0.1.${{ github.run_number }}
+  NODE_VERSION: "24"
+
+jobs:
+  config:
+    runs-on: [self-hosted, linux, x64, sarahvps2, brawlonline]
+    timeout-minutes: 5
+    outputs:
+      # The runner for the Linux client builds. Switch to the Unraid runner here (or with the
+      # repository variable CLIENT_LINUX_RUNNER): ["self-hosted","linux","x64","unraid","brawlonline"]
+      linux-runner: ${{ vars.CLIENT_LINUX_RUNNER || '["self-hosted","linux","x64","sarahvps2","brawlonline"]' }}
+    steps:
+      - run: echo "version $VERSION"
+
+  plugin:
+    # The game plugin (PPOnline.rel) is platform independent: built once, on Linux.
+    needs: config
+    runs-on: ${{ fromJSON(needs.config.outputs.linux-runner) }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: client
+          persist-credentials: false
+      - name: Build
+        working-directory: client
+        run: |
+          git submodule update --init --recursive --depth 1 -- game-code
+          cache="$HOME/ci-cache"; mkdir -p "$cache/toolchains"
+          # setup_toolchain.py installs into <repo>/toolchains; keep the toolchain between runs.
+          ln -sfn "$cache/toolchains" toolchains
+          python3 tools/gamecode/setup_toolchain.py
+          nice -n 19 sh game-code/build.sh
+      - uses: actions/upload-artifact@v7
+        with:
+          name: plugin
+          path: client/game-code/PPOnline/PPOnline.rel
+          retention-days: 1
+          if-no-files-found: error
+
+  linux:
+    needs: [config, plugin]
+    runs-on: ${{ fromJSON(needs.config.outputs.linux-runner) }}
+    timeout-minutes: 240
+    env:
+      JOBS: "3"
+      NODE_OPTIONS: --max-old-space-size=4096
+      USE_HARD_LINKS: "false"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          path: client
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+      - name: Stamp version ${{ env.VERSION }}
+        run: client/.github/scripts/stamp-version.sh "$VERSION"
+      - name: Dolphin
+        run: client/.github/scripts/build-dolphin-linux.sh "$VERSION" "$GITHUB_WORKSPACE/client/launcher/release/dolphin"
+      - uses: actions/download-artifact@v7
+        with:
+          name: plugin
+          path: ${{ runner.temp }}/plugin
+      - name: Launcher dependencies
+        working-directory: client/launcher
+        run: |
+          nice -n 19 npm ci --no-audit --no-fund
+          node node_modules/electron/install.js
+      - name: Launcher checks and tests
+        working-directory: client/launcher
+        run: |
+          npm run typecheck
+          nice -n 19 npm test
+      - name: Package (AppImage)
+        working-directory: client/launcher
+        env:
+          PPO_PLUGIN_PATH: ${{ runner.temp }}/plugin/PPOnline.rel
+        run: |
+          npm run stage:plugin
+          nice -n 19 npm run build
+          nice -n 19 npx electron-builder build --linux --publish never
+          ls -l release/build
+      - name: Check the package
+        working-directory: client/launcher/release/build
+        run: |
+          ../../../.github/scripts/check-package.sh linux-unpacked
+          mkdir -p "$RUNNER_TEMP/out-linux"
+          mv latest-linux.yml *.AppImage "$RUNNER_TEMP/out-linux/"
+          ls -l "$RUNNER_TEMP/out-linux"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: launcher-linux
+          path: ${{ runner.temp }}/out-linux/
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+      - name: Clean up
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/out-linux" "$RUNNER_TEMP/plugin" client/launcher/release/build client/launcher/release/dolphin
+          # Keep the caches bounded (ccache trims itself to CCACHE_MAXSIZE).
+          du -sh "${CI_CACHE:-$HOME/ci-cache}"/* 2>/dev/null || true
+          df -h / | tail -n 1
+
+  windows:
+    needs: plugin
+    runs-on: windows-latest
+    timeout-minutes: 180
+    env:
+      CCACHE_DIR: ${{ github.workspace }}\.ccache
+      CCACHE_BASEDIR: ${{ github.workspace }}
+      CCACHE_NOHASHDIR: "1"
+      CCACHE_COMPRESS: "1"
+      CCACHE_MAXSIZE: 1500M
+      NODE_OPTIONS: --max-old-space-size=8192
+      USE_HARD_LINKS: "false"
+      # Code signing is deferred. To sign later: add the repository secrets WIN_CSC_LINK (base64
+      # .pfx or a URL) and WIN_CSC_KEY_PASSWORD, and set "win.signAndEditExecutable" to true in
+      # launcher/electron-builder.json. While the secrets are unset the build stays unsigned.
+      CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
+      CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
+      CSC_IDENTITY_AUTO_DISCOVERY: "false"
+    steps:
+      - name: Long paths
+        run: git config --global core.longpaths true
+      - uses: actions/checkout@v6
+        with:
+          submodules: recursive
+          persist-credentials: false
+      - uses: actions/setup-node@v6
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+          cache-dependency-path: launcher/package-lock.json
+      - name: ccache
+        shell: pwsh
+        run: |
+          $v = "4.14.1"
+          $sha = "6219f3865ca59aec41ee4b678df171d5d35855ecb2b6dbbbd20690b3a68af7b4"
+          $zip = "$env:RUNNER_TEMP\ccache.zip"
+          Invoke-WebRequest "https://github.com/ccache/ccache/releases/download/v$v/ccache-$v-windows-x86_64.zip" -OutFile $zip
+          if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() -ne $sha) { throw "ccache sha256 mismatch" }
+          Expand-Archive $zip "$env:RUNNER_TEMP\ccache"
+          (Get-ChildItem "$env:RUNNER_TEMP\ccache" -Directory)[0].FullName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - uses: actions/cache@v5
+        with:
+          path: .ccache
+          key: win-ccache-${{ github.sha }}
+          restore-keys: win-ccache-
+      - uses: actions/cache@v5
+        with:
+          path: ~/AppData/Local/electron/Cache
+          key: win-electron-${{ hashFiles('launcher/package-lock.json') }}
+          restore-keys: win-electron-
+      - name: Stamp version ${{ env.VERSION }}
+        shell: bash
+        run: .github/scripts/stamp-version.sh "$VERSION"
+      - name: Dolphin
+        shell: pwsh
+        run: .github/scripts/build-dolphin-windows.ps1 -Version $env:VERSION -Out launcher/release/dolphin
+      - uses: actions/download-artifact@v7
+        with:
+          name: plugin
+          path: ${{ runner.temp }}/plugin
+      - name: Launcher dependencies
+        working-directory: launcher
+        run: |
+          npm ci --no-audit --no-fund
+          node node_modules/electron/install.js
+      - name: Package (NSIS)
+        working-directory: launcher
+        shell: bash
+        env:
+          PPO_PLUGIN_PATH: ${{ runner.temp }}/plugin/PPOnline.rel
+        run: |
+          npm run stage:plugin
+          npm run build
+          npx electron-builder build --win --publish never
+          ls -l release/build
+      - name: Check the package
+        working-directory: launcher/release/build
+        shell: bash
+        run: |
+          ../../../.github/scripts/check-package.sh win-unpacked
+          mkdir -p "$RUNNER_TEMP/out-win"
+          mv latest.yml *.exe *.exe.blockmap "$RUNNER_TEMP/out-win/"
+          ls -l "$RUNNER_TEMP/out-win"
+      - uses: actions/upload-artifact@v7
+        with:
+          name: launcher-windows
+          path: ${{ runner.temp }}/out-win/
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+
+  macos:
+    # Disabled: there is no macOS runner yet. Set the repository variable ENABLE_MACOS to "true"
+    # once one exists. Plan: cross-compile on the Unraid runner with osxcross (Apple's SDK from
+    # Xcode, x86_64 + arm64; Dolphin's own BuildMacOSUniversalBinary.py shows the CMake flags),
+    # then package the DMG/ZIP with electron-builder on a Mac or with its Linux DMG support, and
+    # upload "launcher-mac" (latest-mac.yml, *.dmg, *.zip) like the other jobs. Notarization
+    # needs the Apple secrets (APPLE_API_KEY, APPLE_API_KEY_ID, APPLE_API_ISSUER, CSC_LINK,
+    # CSC_KEY_PASSWORD), as in upstream Slippi's build.yml.
+    if: ${{ vars.ENABLE_MACOS == 'true' }}
+    needs: plugin
+    runs-on: macos-15
+    timeout-minutes: 180
+    steps:
+      - run: |
+          echo "The macOS build is not set up yet; see the comment on this job." >&2
+          exit 1
+
+  publish:
+    needs: [linux, windows, macos]
+    if: ${{ !cancelled() && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos.result != 'failure' }}
+    runs-on: [self-hosted, linux, x64, sarahvps2, brawlonline]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write # delete this run's artifacts after publishing
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: launcher-*
+          path: ${{ runner.temp }}/client
+          merge-multiple: true
+      - name: Publish
+        run: |
+          ls -l "$RUNNER_TEMP/client"
+          sudo -n /usr/local/sbin/pp-release client "$RUNNER_TEMP/client"
+      - name: Check
+        run: |
+          base=https://brawlonline.net
+          for f in latest.yml latest-linux.yml; do
+            got=$(curl -fsS --max-time 20 "$base/updates/launcher/$f?nocache=$GITHUB_RUN_ID" | sed -n 's/^version: //p')
+            echo "$f: $got"
+            [ "$got" = "$VERSION" ] || { echo "$f does not name $VERSION" >&2; exit 1; }
+          done
+          for f in BrawlOnline-Setup.exe BrawlOnline.AppImage; do
+            curl -fsS --max-time 20 -o /dev/null -r 0-0 -w "$f: %{http_code}\n" "$base/downloads/$f?v=$VERSION"
+          done
+      - name: Delete this run's artifacts
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions"
+          ids=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "$api/runs/$GITHUB_RUN_ID/artifacts?per_page=100" |
+            python3 -c 'import json,sys; print(" ".join(str(a["id"]) for a in json.load(sys.stdin)["artifacts"]))')
+          for id in $ids; do
+            curl -fsS -X DELETE -H "Authorization: Bearer $GH_TOKEN" "$api/artifacts/$id" && echo "deleted artifact $id"
+          done
+          rm -rf "$RUNNER_TEMP/client"
