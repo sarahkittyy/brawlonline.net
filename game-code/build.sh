@@ -20,4 +20,5 @@ fi
 $MK -C PPOnline
 ls -l PPOnline/PPOnline.rel
 # Fail on calls to symbols that are neither defined nor in the symbol maps (they would hang).
-python ../tools/gamecode/reltool.py check PPOnline/PPOnline.rel
+PY="${PYTHON:-$(command -v python || command -v python3)}"   # Debian/Ubuntu only have python3
+"$PY" ../tools/gamecode/reltool.py check PPOnline/PPOnline.rel
