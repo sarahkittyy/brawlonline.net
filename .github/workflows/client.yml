@@ -17,7 +17,8 @@
 #   - Publishing: always sarahvps2 (pp-release client). Builds from other machines arrive as
 #     Actions artifacts (1-day retention, deleted after publishing).
 #   - macOS: GitHub-hosted Apple silicon, only while the repository is public (see the macos job).
-#     A failed or skipped macOS build never holds back the Linux and Windows release.
+#     Developer ID signed and notarized (repository secrets, see the macos job). A failed or
+#     skipped macOS build never holds back the Linux and Windows release.
 #
 # Runs only on pushes to main and by hand, never on pull requests (self-hosted runners).
 name: client
@@ -269,10 +270,17 @@ jobs:
 
   macos:
     # GitHub-hosted Apple silicon runner: a native build (Xcode's clang, Qt from aqtinstall,
-    # macdeployqt, codesign). Apple silicon only for now; ad-hoc signed, not notarized (no Apple
-    # Developer ID yet). macOS minutes are free on a public repository and count ten times on a
-    # private one, so the job only runs while the repository is public. DISABLE_MACOS="true"
-    # turns it off. A failed or skipped macOS build never holds back the Linux and Windows release.
+    # macdeployqt, codesign). Apple silicon only for now. macOS minutes are free on a public
+    # repository and count ten times on a private one, so the job only runs while the repository
+    # is public. DISABLE_MACOS="true" turns it off. A failed or skipped macOS build never holds
+    # back the Linux and Windows release.
+    #
+    # Signed with the Developer ID Application certificate and notarized with an App Store Connect
+    # API key (repository secrets MACOS_SIGNING_P12 (base64 .p12 with the certificate, its key and
+    # Apple's intermediate), MACOS_SIGNING_P12_PASSWORD, APPLE_API_KEY_P8 (the .p8's text),
+    # APPLE_API_KEY_ID, APPLE_API_ISSUER). The job fails without them: the launcher updates itself
+    # on macOS (MAC_SELF_UPDATE in launcher/src/common/product.ts), and an ad-hoc build in the
+    # feed could not be installed over a signed one. npm ci runs before the signing keychain exists.
     if: ${{ !github.event.repository.private && vars.DISABLE_MACOS != 'true' }}
     needs: plugin
     runs-on: macos-15
@@ -304,14 +312,6 @@ jobs:
           restore-keys: mac-ccache-
       - name: Stamp version ${{ env.VERSION }}
         run: client/.github/scripts/stamp-version.sh "$VERSION"
-      - name: Dolphin
-        run: client/.github/scripts/build-dolphin-macos.sh "$VERSION" "$GITHUB_WORKSPACE/client/launcher/release/dolphin" arm64
-      # Saved right after the build, also when a later step fails.
-      - uses: actions/cache/save@v5
-        if: ${{ !cancelled() }}
-        with:
-          path: ci-cache/ccache
-          key: mac-ccache-${{ github.run_id }}
       - uses: actions/download-artifact@v7
         with:
           name: plugin
@@ -328,11 +328,61 @@ jobs:
         run: |
           npm run stage:plugin
           npm run build
+      - name: Signing keychain
+        env:
+          P12: ${{ secrets.MACOS_SIGNING_P12 }}
+          P12_PASSWORD: ${{ secrets.MACOS_SIGNING_P12_PASSWORD }}
+          API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: |
+          for v in P12 P12_PASSWORD API_KEY_P8 API_KEY_ID API_ISSUER; do
+            [ -n "${!v}" ] || { echo "::error::a signing secret is missing ($v), see the macos job"; exit 1; }
+          done
+          # A throwaway keychain, unlocked for this job only, first in the search list (codesign
+          # and Dolphin's mac-codesign.sh find the identity there).
+          kc="$RUNNER_TEMP/signing.keychain-db"
+          kc_pass="$(openssl rand -hex 24)"
+          echo "::add-mask::$kc_pass"
+          security create-keychain -p "$kc_pass" "$kc"
+          security set-keychain-settings -lut 21600 "$kc"
+          security unlock-keychain -p "$kc_pass" "$kc"
+          umask 077
+          printf '%s' "$P12" | base64 --decode >"$RUNNER_TEMP/signing.p12"
+          security import "$RUNNER_TEMP/signing.p12" -k "$kc" -f pkcs12 -P "$P12_PASSWORD" \
+            -T /usr/bin/codesign -T /usr/bin/security
+          rm -f "$RUNNER_TEMP/signing.p12"
+          security set-key-partition-list -S apple-tool:,apple: -s -k "$kc_pass" "$kc" >/dev/null
+          security list-keychains -d user -s "$kc" $(security list-keychains -d user | tr -d '"')
+          security find-identity -v -p codesigning "$kc"
+          identity="$(security find-identity -v -p codesigning "$kc" | awk '/"Developer ID Application: / { print $2; exit }')"
+          [ -n "$identity" ] || { echo "::error::MACOS_SIGNING_P12 has no valid Developer ID Application identity"; exit 1; }
+          printf '%s\n' "$API_KEY_P8" >"$RUNNER_TEMP/notary-key.p8"
+          {
+            echo "MAC_SIGN_IDENTITY=$identity"
+            echo "MAC_SIGN_KEYCHAIN=$kc"
+            echo "APPLE_API_KEY_PATH=$RUNNER_TEMP/notary-key.p8"
+            echo "APPLE_API_KEY_ID=$API_KEY_ID"
+            echo "APPLE_API_ISSUER=$API_ISSUER"
+          } >>"$GITHUB_ENV"
+      - name: Dolphin
+        run: client/.github/scripts/build-dolphin-macos.sh "$VERSION" "$GITHUB_WORKSPACE/client/launcher/release/dolphin" arm64
+      # Saved right after the build, also when a later step fails.
+      - uses: actions/cache/save@v5
+        if: ${{ !cancelled() }}
+        with:
+          path: ci-cache/ccache
+          key: mac-ccache-${{ github.run_id }}
       - name: Package (app, DMG, zip)
         run: client/.github/scripts/package-launcher-macos.sh "$RUNNER_TEMP/out-mac" arm64
       - name: Check the package
         working-directory: client/launcher/release/build
         run: ../../../.github/scripts/check-package.sh mac-arm64
+      - name: Remove the signing keychain
+        if: always()
+        run: |
+          security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
+          rm -f "$RUNNER_TEMP/notary-key.p8" "$RUNNER_TEMP/signing.p12"
       - uses: actions/upload-artifact@v7
         with:
           name: launcher-mac

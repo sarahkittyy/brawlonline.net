@@ -16,9 +16,9 @@ describe("getLauncherUpdateMode", () => {
     expect(getLauncherUpdateMode("darwin", true)).toBe("install");
   });
 
-  it("downloads on macOS with the current build (ad-hoc signed)", () => {
-    expect(MAC_SELF_UPDATE).toBe(false);
-    expect(getLauncherUpdateMode("darwin")).toBe("download");
+  it("installs in place on macOS with the current build (Developer ID signed)", () => {
+    expect(MAC_SELF_UPDATE).toBe(true);
+    expect(getLauncherUpdateMode("darwin")).toBe("install");
     expect(getLauncherUpdateMode("win32")).toBe("install");
     expect(getLauncherUpdateMode("linux")).toBe("install");
   });
