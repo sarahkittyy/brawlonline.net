@@ -6,6 +6,7 @@ import React, { Suspense } from "react";
 import { createRoot } from "react-dom/client";
 
 import { ToastProvider } from "@/components/toast_provider";
+import { VersionLabel } from "@/components/version_label/version_label";
 import { GameThemeProvider } from "@/styles/game_theme";
 
 import { createApp } from "./app/create";
@@ -55,6 +56,7 @@ root.render(
               <LazyApp />
             </Suspense>
           </ErrorBoundary>
+          <VersionLabel />
         </ToastProvider>
       </GameThemeProvider>
     </StyledEngineProvider>
