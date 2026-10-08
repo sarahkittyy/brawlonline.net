@@ -343,7 +343,7 @@ VIDEO = {"backend": "D3D11"}
 
 def rel(path: Path) -> str:
     """A path for the report: relative to the workspace root when inside it, else absolute (an
-    --out outside the checkout, e.g. on the Unraid test farm)."""
+    --out outside the checkout)."""
     path = Path(path).resolve()
     return str(path.relative_to(ROOT)) if path.is_relative_to(ROOT) else str(path)
 

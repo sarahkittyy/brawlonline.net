@@ -2,7 +2,7 @@
 
 _2026-10-08. A design for the user to decide on before any drop-in work starts. It covers screens and flows only, not the engine. Each concept ends with a short note on what it would need technically._
 
-Sources: `docs/game-code.md` §6 and §11 (today's online screens and flow), `docs/backend-design.md` §1.5, §5.1 and §5.6, `docs/gameplay-rollback-status.md` (header), `research/04-slippi-reference-architecture.md` §4.3-4.7 (Slippi's flows), `refs/orca-netplay/ORCA.md` (Drop-in, Port values, Rooms, Going home, Online menu, Matchmaking and results, On-screen UI), `research/03-hbox-crunch-controversy.md` §3, `launcher/PPLUS_PORTING.md`.
+Sources: `docs/game-code.md` §6 and §11 (today's online screens and flow), `docs/backend-design.md` §1.5, §5.1 and §5.6, `docs/gameplay-rollback-status.md` (header), Slippi's own flows, `refs/orca-netplay/ORCA.md` (Drop-in, Port values, Rooms, Going home, Online menu, Matchmaking and results, On-screen UI), `launcher/PPLUS_PORTING.md`.
 
 ---
 
