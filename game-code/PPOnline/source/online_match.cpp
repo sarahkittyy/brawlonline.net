@@ -185,6 +185,9 @@ namespace OnlineMatch {
         *(u16*)ASL_BUTTONS = se.asl;
         keepPortValues(se);
         PPOM::g_block.local.hudDisconnected = 0;
+        // The online ruleset, written again right before the setup reads it: nothing set on this
+        // machine since the Wi-Fi sequence started (or left over from offline play) gets in.
+        OnlineMenu::applyRules();
         ((VsSetupFn)VS_SETUP)(seq, se.stageKind);
         // The match's controller numbers follow the in-game ports on both machines.
         for (int i = 0; i < se.numPlayers && i < 4; i++) {
@@ -230,7 +233,17 @@ namespace OnlineMatch {
             PPOM::g_block.debug.scratch[10] = (PPOM::g_block.debug.scratch[10] & ~0xFF) | 0x33;
             return 2;   // state set; leave the decide function (the stage select runs now)
         }
-        if (!g_onlineCss || !g_onlineMatchGame) return 0;
+        if (!g_onlineCss) return 0;
+        if (!g_onlineMatchGame) {
+            // The CSS was left by the game's own path (its READY TO FIGHT start: A on the banner,
+            // or any other way), not by ours: no match and no stage pick is armed. Brawl's state
+            // 3 would open its network stage vote (scSelStage with 1 in Wi-Fi mode), which hangs
+            // the game. Online the game's own start never runs: straight back to the CSS.
+            PPOM::g_block.debug.scratch[10] = (PPOM::g_block.debug.scratch[10] & ~0xFF) | 0x3F;
+            PPOM::g_block.debug.lastError = 0x5E7F;   // "setup": the CSS left by its own start
+            backToCss(seq);
+            return 1;
+        }
         PPOM::g_block.debug.scratch[10] = (PPOM::g_block.debug.scratch[10] & ~0xFF) | 3;
         if (setupMatch(seq)) return 1;
         // No setup (should not happen): back to the CSS instead of Brawl's stage vote.

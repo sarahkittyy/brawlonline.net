@@ -43,6 +43,8 @@ namespace OnlineMenu {
         char peerName[PPOM::NAME_LEN + 1];
         char peerCode[PPOM::CODE_LEN + 1];
         char error[PPOM::ERROR_LEN + 1];
+        char ownCode[PPOM::CODE_LEN + 1];   // this player's connect code (GET_ONLINE_STATUS)
+        bool ownShown;                      // the own-code window is attached on this CSS
         char status[128];
         bool statusRed;
         bool statusDirty;
@@ -55,10 +57,15 @@ namespace OnlineMenu {
         // the CSS rule-line message window, captured from its MuMsg::printIndex call
         MuMsg* cssMsg;
         u32 cssWindow;
-        // the player's own Vs rules, put back when the online flow ends
+        // the window's own vertical extent and line spacing (restored for one-line texts)
+        bool haveWindow;
+        float windowY1, windowY2, windowLineSpace;
+        // the player's own settings, put back when the online flow ends (saveRules)
         bool haveSavedRules;
         u8 savedRule[0x88];
         u8 savedItemFrequency;
+        u8 savedItemSwitch[8];
+        u8 savedHazard;
         // Connected (the gameplay session's lobby, SESSION/LOCAL): the game this player is
         // locked in for (0 = not locked in; game 1 is locked in by the search itself).
         int lockedGame;
@@ -112,14 +119,37 @@ namespace OnlineMenu {
     // Confirm in the code keypad). Brawl's own CSS would also act on it ("READY TO FIGHT" ->
     // leave for the stage select), so it is removed from every pad status the game reads this
     // frame. Called right after gfPadSystem::updateSystem, before any scene code runs.
-    static void maskStart()
+    static void maskButtons(u32 mask)
     {
         u8* ps = padSystem();
         if (!ps) return;
         for (u32 off = 0x244; off < 0x944; off += 0x40) {
             u32* f = (u32*)(ps + off);
-            for (int i = 0; i < 6; i++) f[i] &= ~BTN_START;
+            for (int i = 0; i < 6; i++) f[i] &= ~mask;
         }
+    }
+    static void maskStart() { maskButtons(BTN_START); }
+
+    // P+'s Code Menu opens with L + R + D-pad Down on the CSS (and the stage select). It holds
+    // settings that change the match (Special Modes, per-player codes, Debug Mode...), none of
+    // which is the player's choice online. Its control code (P+ "Control Code Menu", a hook at
+    // 0x80029574 inside the pad update, before our tick) reads the pads itself and opens the
+    // menu in the same pass: state word 0x804E0034 = 4, the menus' freeze flag 0x805B8A08 = 1
+    // (its old value kept at 0x804E006C), 0x805B6DF8 kept at 0x804E0074. While the online flow
+    // owns the CSS or the online stage select, a menu that has just opened is closed again right
+    // after the pad update, before anything is drawn, the way its B closes it (found live: the
+    // freeze flag and 0x805B6DF8 put back, 0x804E0074 cleared, state 0). Only its open sound is
+    // heard. (A Code Menu opened offline keeps its settings; docs/game-code.md §6.)
+    static void blockCodeMenu()
+    {
+        volatile u32* state = (volatile u32*)0x804E0034;
+        if (*state != 4) return;
+        *(volatile u32*)0x805B8A08 = *(volatile u32*)0x804E006C;
+        u32 kept = *(volatile u32*)0x804E0074;
+        if (kept) *(volatile u32*)0x805B6DF8 = kept;
+        *(volatile u32*)0x804E0074 = 0;
+        *state = 0;
+        PPOM::g_block.debug.scratch[15] += 0x1000000u;   // tests: Code Menu opens refused
     }
 
     static void playSE(int id)
@@ -344,10 +374,15 @@ namespace OnlineMenu {
     // The CSS header models that only make sense for Brawl's Wi-Fi mode: the mode title
     // texture (MenSelchrTitleW, "HOME-RUN CONTEST" in P+'s files) and the rule numeral
     // (MenSelchrRnum1/2, the "2" of "2-minute"), whose rule text line carries our status.
-    // Both are images with no text slot, so they are hidden (nwSMSetVisibility).
+    // Both are images with no text slot, so they are hidden (nwSMSetVisibility). So are the
+    // ITEM and STAGE buttons at the right end of the bar (MenSelchrState0005 / 0006, found live
+    // by hiding the CSS's models one at a time): they open P+'s item and stage switches, which
+    // are locked online (cssSwitchButtons below), and the status line takes their place.
     static void hideHeaderArt()
     {
-        static const u32 OBJS[] = {0x418 /* TitleW */, 0x158 /* Rnum1 */, 0x15C /* Rnum2 */};
+        static const u32 OBJS[] = {0x418 /* TitleW */, 0x158 /* Rnum1 */, 0x15C /* Rnum2 */,
+                                   0x420 /* State0005: ITEM */, 0x424 /* State0006: STAGE */,
+                                   0x3C4 /* Ready: the READY TO FIGHT banner (cssReadyBanner) */};
         typedef void (*SetVisFn)(void* scnMdl, bool vis);
         u8* task = cssTask();
         if (!task) return;
@@ -384,13 +419,100 @@ namespace OnlineMenu {
         return isPtr(rec) ? (u8*)(rec + 0x810) : NULL;
     }
 
+    // The stage select's data (GameGlobal+0x14): +0x25 is P+'s hazard switch for the picked stage
+    // (0 = hazards on, P+'s stage select default; Z on a stage, or the hazard switch for a random
+    // pick, sets 1 = off; P+ Net-StageFiles.asm muSelectStageTask::pointPointer and dispPreview).
+    // sqVsMelee's match setup copies it into the match (gmGlobalModeMelee+0x29 bit 0x20, P+
+    // Random.asm hook at 0x806DCEE8), outside the setup the session compares at its barrier.
+    static u8* stageSelData()
+    {
+        u32 gg = *(u32*)0x805A00E0;
+        if (!isPtr(gg)) return NULL;
+        u32 st = *(u32*)(gg + 0x14);
+        return isPtr(st) ? (u8*)st : NULL;
+    }
+
+    static const int HAZARD = 0x25;
+    static const int ITEM_SWITCH = 8;   // menu record +0x818: the ITEM SWITCH screen's switches
+    // P+ v3.2's item switch after a fresh boot (its save's default; frequency 0 = items off).
+    static const u8 PPLUS_ITEM_SWITCH[8] = {0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
+
+    // P+'s Code Menu (pf/menu3/dnet.cmnu, loaded at boot to 0x804E0000, 0x2520 bytes) keeps its
+    // settings in its own lines, which P+'s codes read directly: the Special Modes (Random
+    // Angle, War, Big Head, flight, the gameplay modifiers: hitstun, hitlag, SDI, shields,
+    // staling, jumpsquat...), each player's codes (character select incl. transformations,
+    // infinite shield, percent select, input buffer, automatic L-cancelling), Debug Mode and
+    // its displays, Alternate Stages, Tag-Based Costumes, Endless Friendlies and more. None of
+    // it is in the match setup the gameplay session compares, so a value set offline would
+    // reach an online match on one machine only. Online every line holds its default (the
+    // file's value, which is P+'s competitive setup): each value line keeps its value at +8 and
+    // its default at +0x10 (fudgepop's Code Menu layout: +0 size u16, +2 type 0 selection /
+    // 1 integer / 2 float, +6 the text's offset; a selection line has its options' base, a
+    // pointer into the menu, at +0x18; integer and float lines have their text at +0x20). The
+    // lines are found by that layout (all 85 value lines of P+ v3.2's menu, checked against a
+    // dump; docs/game-code.md §6); their values are saved on the way in and put back when the
+    // menus load, as the set rule.
+    static const u32 CODE_MENU = 0x804E0000, CODE_MENU_SIZE = 0x2520;
+    static const int CODE_MENU_LINES = 112;
+    static u32 s_codeMenuSaved[CODE_MENU_LINES];
+    static int s_codeMenuSavedCount = -1;
+    // The defaults as the menu file has them, read once at boot: a line's +0x10 is not always
+    // fixed (the per-player Character Select lines keep the current character there during a
+    // match, found live), so the online values come from this copy.
+    static u32 s_codeMenuDefault[CODE_MENU_LINES];
+    static int s_codeMenuDefaults = 0;
+
+    static bool codeMenuLine(u32 p)
+    {
+        u8* l = (u8*)p;
+        u32 size = *(u16*)l, type = l[2], text = l[6];
+        if ((size & 3) || size < 0x20 || size > 0x400 || p + size > CODE_MENU + CODE_MENU_SIZE) return false;
+        if (type > 2 || text < 0x1C || text >= size) return false;
+        u32 options = *(u32*)(l + 0x18);
+        if (type == 0 ? (options < CODE_MENU || options >= CODE_MENU + CODE_MENU_SIZE) : text != 0x20) return false;
+        const char* t = (const char*)l + text;
+        if (!((t[0] >= 'A' && t[0] <= 'Z') || (t[0] >= 'a' && t[0] <= 'z'))) return false;
+        for (u32 i = 0; text + i < size && t[i]; i++) {
+            if (t[i] == '%') return true;
+            if ((u8)t[i] < 0x20 || (u8)t[i] >= 0x7F) return false;
+        }
+        return false;
+    }
+
+    // mode 0: save the values, 1: put the defaults in, 2: put the saved values back,
+    // 3: read the defaults (at boot).
+    static int codeMenuLines(int mode)
+    {
+        int n = 0;
+        for (u32 p = CODE_MENU; p + 0x20 <= CODE_MENU + CODE_MENU_SIZE && n < CODE_MENU_LINES; p += 4) {
+            if (!codeMenuLine(p)) continue;
+            u32* value = (u32*)(p + 8);
+            if (mode == 0) s_codeMenuSaved[n] = *value;
+            else if (mode == 1) *value = n < s_codeMenuDefaults ? s_codeMenuDefault[n] : *(u32*)(p + 0x10);
+            else if (mode == 2) { if (n < s_codeMenuSavedCount) *value = s_codeMenuSaved[n]; }
+            else s_codeMenuDefault[n] = *(u32*)(p + 0x10);
+            n++;
+        }
+        return n;
+    }
+
+    // Every frame until the Code Menu is loaded (at boot, before any match): its defaults.
+    static void readCodeMenuDefaults()
+    {
+        if (s_codeMenuDefaults <= 0) s_codeMenuDefaults = codeMenuLines(3);
+    }
+
     static void saveRules()
     {
         u8* r = setRule();
         u8* m = menuRecord();
-        if (!r || !m || s.haveSavedRules) return;
+        u8* st = stageSelData();
+        if (!r || !m || !st || s.haveSavedRules) return;
         memcpy(s.savedRule, r, sizeof(s.savedRule));
         s.savedItemFrequency = m[0];
+        memcpy(s.savedItemSwitch, m + ITEM_SWITCH, sizeof(s.savedItemSwitch));
+        s.savedHazard = st[HAZARD];
+        s_codeMenuSavedCount = codeMenuLines(0);
         s.haveSavedRules = true;
     }
 
@@ -398,12 +520,24 @@ namespace OnlineMenu {
     {
         u8* r = setRule();
         u8* m = menuRecord();
-        if (!r || !m || !s.haveSavedRules) return;
+        u8* st = stageSelData();
+        if (!r || !m || !st || !s.haveSavedRules) return;
         memcpy(r, s.savedRule, sizeof(s.savedRule));
         m[0] = s.savedItemFrequency;
+        memcpy(m + ITEM_SWITCH, s.savedItemSwitch, sizeof(s.savedItemSwitch));
+        st[HAZARD] = s.savedHazard;
+        codeMenuLines(2);
         s.haveSavedRules = false;
     }
 
+    // The online ruleset, the same on every machine whatever was set offline: the set rule's 16
+    // bytes P+'s code writes (P+'s competitive defaults above), pause only in Direct, item
+    // frequency 0 with P+'s default item switch, hazards on (also for Direct's loser's pick: its
+    // hazard toggle is not part of the setup the other machine gets), every Code Menu line at
+    // its default. Written when the Wi-Fi
+    // sequence starts (in place of Brawl's Wi-Fi rules) and again by every online match setup,
+    // right before sqVsMelee's setup reads them (OnlineMatch::setupMatch), so a setting changed
+    // in between (or left over from offline play) never reaches an online match.
     void applyRules()
     {
         static const u8 PPLUS_RULE[16] = {0x00, 0x00, 0x01, 0x00, 0x04, 0x00, 0x0A, 0x00,
@@ -411,10 +545,21 @@ namespace OnlineMenu {
         u8* r = setRule();
         u8* m = menuRecord();
         if (!r || !m) return;
+        u8 time = r[3], stocks = r[4], stockTime = r[8];
+        // (only the 16 bytes P+ writes: the set rule's size is not known, what follows may be other data)
         memcpy(r, PPLUS_RULE, sizeof(PPLUS_RULE));
+        if (PPOM::g_block.debug.cfg & PPOM::CFG_TEST_RULES) {
+            r[3] = time;            // tests: shorter games (harness ppom.test_rules)
+            r[4] = stocks;
+            r[8] = stockTime;
+        }
         r[0xA] = (s.mode == PPOM::MODE_DIRECT) ? 1 : 0;   // m_allowPause
         m[0] = 0;                                          // item frequency: none
-        PPOM::g_block.debug.scratch[3]++;
+        memcpy(m + ITEM_SWITCH, PPLUS_ITEM_SWITCH, sizeof(PPLUS_ITEM_SWITCH));
+        u8* st = stageSelData();
+        if (st) st[HAZARD] = 0;                            // hazards on
+        int lines = codeMenuLines(1);                      // every Code Menu line at its default
+        PPOM::g_block.debug.scratch[3] = ((u32)lines << 16) | ((PPOM::g_block.debug.scratch[3] + 1) & 0xFFFF);
     }
 
     // ----------------------------------------------------------------------------------------
@@ -425,6 +570,16 @@ namespace OnlineMenu {
 
     static void setStatus(const char* text, bool red)
     {
+        // Texts from Dolphin, the server and the opponent's name: printable ASCII only (the
+        // message system reads control bytes as commands; u16ToAscii already made the rest '?').
+        char clean[sizeof(s.status)];
+        int n = 0;
+        for (; text[n] && n < (int)sizeof(clean) - 1; n++) {
+            u8 c = (u8)text[n];
+            clean[n] = (c < 0x20 || c >= 0x7F) ? ' ' : (char)c;
+        }
+        clean[n] = 0;
+        text = clean;
         if (strcmp(text, s.status) == 0 && red == s.statusRed) return;
         strncpy(s.status, text, sizeof(s.status) - 1);
         s.status[sizeof(s.status) - 1] = 0;
@@ -478,8 +633,176 @@ namespace OnlineMenu {
         }
     }
 
-    // The rule line is a fixed-width, right-aligned window: MuMsg::printf does not apply the
-    // msbin's style tags, so set the colour (black as the original line, red for errors).
+    // The status line: the rule line's own MuMsg window (MenSelchrRule's textN0), left-aligned,
+    // whose font narrows to fit the window (MuMsg width mode 0). Long texts used to be squeezed
+    // unreadably narrow (a 68-character server error at about a third of the font's width), so
+    // the line is laid out here and never relies on the narrowing:
+    //   - the window is widened over the whole bar: to the left over the hidden "2" rule numeral
+    //     and mode title, to the right over the hidden ITEM / STAGE buttons (up to the screen's
+    //     safe area). It then fits about 675 font units (about 38 average characters; 21 "W"s)
+    //     at the font's normal size, against 352 for the rule line's own window;
+    //   - a text that fits is printed as one line at the normal size;
+    //   - a longer one is wrapped at a space onto two lines at 0.7 of the size (both lines inside
+    //     the bar, the font's proportions kept), and if even that is too long, the second line
+    //     is cut at a space and ends with "...".
+    // The width is measured with the window's own font (ut::Font::GetGlyph through the Message,
+    // the advance ms::CharWriter::Print uses; match_hud.cpp), in font units.
+    //
+    // MuMsg+0xC is its window settings (0x48 bytes each): +0x00 flags, +0x04..+0x10 the window
+    // rect (x1, y1, x2, y2; y up), +0x2C line spacing (-1 = the font's), +0x30/+0x34 the font
+    // scale x/y (MuMsg::beginPrint applies them with Message::setScale).
+    struct WindowSetting {
+        u32 flags;
+        float x1, y1, x2, y2;
+        u8 _14[0x2C - 0x14];
+        float lineSpace;
+        float scaleX, scaleY;
+        u8 _38[0x48 - 0x38];
+    };
+
+    static const float STATUS_X1 = -318.0f;     // the rule window's own: -208 .. 144
+    static const float STATUS_X2 = 330.0f;
+    static const float WRAP_SCALE = 0.7f;
+    static const float WRAP_LINE_SPACE = 22.0f; // two lines at 0.7 inside the bar
+    static const float WRAP_Y = 27.0f;          // the rule window's own is +-18.4
+    // Font units that fit in the widened window at scale 1: at scale 1 a font unit is a window
+    // unit (measured live, docs/game-code.md §6); a few units of margin.
+    static const int STATUS_FIT = 640;
+
+    static WindowSetting* cssWindowSetting()
+    {
+        if (!s.cssMsg) return NULL;
+        u32 ws = *(u32*)((u8*)s.cssMsg + 0xC);
+        if (!isPtr(ws) || s.cssWindow >= *(u32*)((u8*)s.cssMsg + 0x10)) return NULL;
+        return (WindowSetting*)(ws + 0x48 * s.cssWindow);
+    }
+
+    // Width of `text` in the status font's units, and the advance of each character into `adv`.
+    static int statusWidths(const char* text, int len, int* adv)
+    {
+        void* message = s.cssMsg ? s.cssMsg->m_message : NULL;
+        void* font = message ? *(void**)((u8*)message + 0x48) : NULL;
+        if (!isPtr((u32)font) || !isPtr(*(u32*)font)) font = NULL;
+        int w = 0;
+        for (int i = 0; i < len; i++) {
+            int a = 30;   // no font yet: a typical glyph
+            if (font) {
+                typedef void (*GetGlyphFn)(void* font, void* out, u16 ch);
+                GetGlyphFn getGlyph = (GetGlyphFn)(*(u32*)(*(u32*)font + 0x50));
+                u8 glyph[0x40];
+                memset(glyph, 0, sizeof(glyph));
+                getGlyph(font, glyph, (u16)(u8)text[i]);
+                a = (s8)glyph[6];
+            }
+            if (adv) adv[i] = a;
+            w += a;
+        }
+        return w;
+    }
+
+    // Layouts of the status line (layoutStatus).
+    enum { LAYOUT_ONE = 1, LAYOUT_TWO = 2, LAYOUT_ONE_SMALL = 3 };
+
+    // Lay the status out into `out` (room for 164 bytes): one line at the normal size if it
+    // fits; else two lines at WRAP_SCALE, split at the space that makes the longer line
+    // shortest; a single word too long for the normal size: one small line; a text too long
+    // even for two small lines: the first line as much as fits (cut at a space), the second
+    // cut at a space and ended with "...".
+    static int layoutStatus(const char* text, char* out, int fit)
+    {
+        static const int MAX = 159;
+        int adv[MAX];
+        int len = (int)strlen(text);
+        if (len > MAX) len = MAX;
+        int total = statusWidths(text, len, adv);
+        memcpy(out, text, len);
+        out[len] = 0;
+        if (total <= fit) return LAYOUT_ONE;
+        int wide = (int)(fit / WRAP_SCALE);
+        // Balanced split: line 1 = [0, i), line 2 = (i, len) for a space at i.
+        int best = -1, bestMax = 0x7FFFFFFF, left = 0;
+        for (int i = 0; i < len; i++) {
+            if (text[i] == ' ') {
+                int right = total - left - adv[i];
+                int m = left > right ? left : right;
+                if (left <= wide && right <= wide && m < bestMax) {
+                    best = i;
+                    bestMax = m;
+                }
+            }
+            left += adv[i];
+        }
+        if (best >= 0) {
+            out[best] = '\n';
+            return LAYOUT_TWO;
+        }
+        if (total <= wide) return LAYOUT_ONE_SMALL;
+        // Too long: fill line 1 (cut at a space), then line 2 with "...".
+        int w = 0, a = 0, cut = -1;
+        while (a < len && w + adv[a] <= wide) {
+            if (text[a] == ' ') cut = a;
+            w += adv[a++];
+        }
+        if (cut > 0 && a < len) a = cut;
+        int o = a;
+        out[o++] = '\n';
+        int r = a;
+        while (r < len && text[r] == ' ') r++;
+        int room = wide - statusWidths("...", 3, NULL);
+        int b = r;
+        w = 0;
+        cut = -1;
+        while (b < len && w + adv[b] <= room) {
+            if (text[b] == ' ') cut = b;
+            w += adv[b++];
+        }
+        if (b < len && cut > r) b = cut;
+        while (b > r && (text[b - 1] == ' ' || text[b - 1] == '.' || text[b - 1] == ',')) b--;
+        memcpy(out + o, text + r, b - r);
+        o += b - r;
+        memcpy(out + o, "...", 4);
+        return LAYOUT_TWO;
+    }
+
+    // The player's own connect code (Slippi's CSS shows it in Direct: LoadCSSText.asm "Set to 2
+    // to display connect code (for direct only)"; ours in both code-based modes, Direct and
+    // Teams), so that it can be told to a friend: at the top between LEAVE and the status line,
+    // in the rule line's font. It is window 1 of the rule line's MuMsg (muSelCharTask+0x5C4,
+    // 8 windows, only window 0 used), attached to the same node (MenSelchrRule textN0, with
+    // MuMsg::attachScnMdlSimple as the CSS attaches window 0, at the same size) and placed left
+    // of the bar, right-aligned against it. The code comes from GET_ONLINE_STATUS (Dolphin
+    // reads it from user.json), which the menus ask for.
+    static const u32 OWN_WINDOW = 1;
+    static const float OWN_X1 = -640.0f, OWN_X2 = -395.0f;
+    static void showOwnCode()
+    {
+        if (!s.cssMsg || !usesCode() || !s.ownCode[0] || s.ownShown) return;
+        MuMsg* m = s.cssMsg;
+        u8* task = cssTask();
+        u32 obj = task ? *(u32*)(task + 0x150) : 0;   // MenSelchrRule, the rule line's model
+        u32 mdl = isPtr(obj) ? *(u32*)(obj + 0x10) : 0;
+        u8* message = (u8*)m->m_message;
+        u32 bufs = isPtr((u32)message) ? *(u32*)(message + 0x1D8) : 0;
+        if (!isPtr(mdl) || !isPtr(bufs) || *(u32*)((u8*)m + 0x10) <= OWN_WINDOW) return;
+        float size = *(float*)(*(u32*)bufs + 0x28);   // window 0's (Message::attachMsgBuf)
+        typedef void (*AttachFn)(MuMsg*, u32, u32 scnMdl, u32 node, float size);
+        ((AttachFn)0x800B8C90)(m, OWN_WINDOW, mdl, 0, size);   // MuMsg::attachScnMdlSimple
+        WindowSetting* ws = (WindowSetting*)(*(u32*)((u8*)m + 0xC) + 0x48 * OWN_WINDOW);
+        ws->x1 = OWN_X1;
+        ws->x2 = OWN_X2;
+        if (s.haveWindow) {
+            ws->y1 = s.windowY1;
+            ws->y2 = s.windowY2;
+        }
+        m->setAlignMode(OWN_WINDOW, MuMsg::Align_Right);
+        m->setFontColor(OWN_WINDOW, 0xFF, 0xFF, 0xFF, 0xFF);
+        m->printf(OWN_WINDOW, "%s", s.ownCode);
+        s.ownShown = true;
+        PPOM::g_block.debug.scratch[12] |= 0x80000000u;   // tests: the own code is shown
+    }
+
+    // MuMsg::printf does not apply the msbin's style tags, so set the colour (black as the
+    // original line, red for errors).
     static void printCssStatus()
     {
         if (s.statusRed) {
@@ -487,8 +810,32 @@ namespace OnlineMenu {
         } else {
             s.cssMsg->setFontColor(s.cssWindow, 0, 0, 0, 255);
         }
-        if (PPOM::g_block.debug.cfg & PPOM::CFG_CSS_AUTOWIDTH) s.cssMsg->setFontWidthModeAuto(s.cssWindow);
-        s.cssMsg->printf(s.cssWindow, "%s", s.status);
+        WindowSetting* ws = cssWindowSetting();
+        char text[164];
+        int layout = LAYOUT_ONE;
+        if (ws) {
+            if (!s.haveWindow) {
+                s.haveWindow = true;
+                s.windowY1 = ws->y1;
+                s.windowY2 = ws->y2;
+                s.windowLineSpace = ws->lineSpace;
+            }
+            ws->x1 = STATUS_X1;
+            ws->x2 = STATUS_X2;
+            layout = layoutStatus(s.status, text, STATUS_FIT);
+            bool two = layout == LAYOUT_TWO;
+            ws->scaleX = ws->scaleY = layout == LAYOUT_ONE ? 1.0f : WRAP_SCALE;
+            ws->lineSpace = two ? WRAP_LINE_SPACE : s.windowLineSpace;
+            ws->y1 = two ? WRAP_Y : s.windowY1;
+            ws->y2 = two ? -WRAP_Y : s.windowY2;
+        } else {
+            strncpy(text, s.status, sizeof(text) - 1);
+            text[sizeof(text) - 1] = 0;
+        }
+        // tests: the layout << 24 | the text's width in font units
+        PPOM::g_block.debug.scratch[14] = ((u32)layout << 24) |
+                                          ((u32)statusWidths(s.status, (int)strlen(s.status), NULL) & 0xFFFFFF);
+        s.cssMsg->printf(s.cssWindow, "%s", text);
     }
 
     // ----------------------------------------------------------------------------------------
@@ -566,6 +913,75 @@ namespace OnlineMenu {
             "bctr\n\t");
     }
 
+    // The CSS's ITEM and STAGE buttons (hand buttons 0x19 and 0x1A) open P+'s item switch
+    // (frequency and item switches) and its random stage switch with the hazard switch, all of
+    // which change the match on the machine where they are set. Online nothing in the rules is
+    // the player's choice (Slippi), so on the online CSS they are hidden (hideHeaderArt) and A
+    // where they were does nothing.
+    // muSelCharTask::buttonProcInAllArea, sel_char+0x7CCC `cmpwi r29,0x19` (r29 = the button):
+    // 0x19 -> open the item switch (+0x105D8 with 1), 0x1A -> the stage switch (with 2), else on
+    // at +0x7D10. Ours: the two buttons go to the function's exit (+0x8334) instead.
+    extern "C" void pponline_cssLockedButton()
+    {
+        PPOM::g_block.debug.scratch[15] = (PPOM::g_block.debug.scratch[15] & ~0xFFu) |
+                                          ((PPOM::g_block.debug.scratch[15] + 1) & 0xFF);
+    }
+    __attribute__((naked)) void cssSwitchButtons()
+    {
+        asm volatile(
+            "lis 12, g_onlineCss@ha\n\t"
+            "lbz 12, g_onlineCss@l(12)\n\t"
+            "cmpwi 12, 0\n\t"
+            "beq 1f\n\t"
+            "cmpwi 29, 0x19\n\t"
+            "beq 2f\n\t"
+            "cmpwi 29, 0x1a\n\t"
+            "beq 2f\n\t"
+            "1:\n\t"
+            "cmpwi 29, 0x19\n\t"
+            "lis 12, 0x8068\n\t"
+            "ori 12, 12, 0xA594\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t"
+            "2:\n\t"
+            "lis 12, pponline_cssLockedButton@ha\n\t"
+            "addi 12, 12, pponline_cssLockedButton@l\n\t"
+            "mtctr 12\n\t"
+            "bctrl\n\t"
+            "lis 12, 0x8068\n\t"
+            "ori 12, 12, 0xABF8\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t");
+    }
+
+    // The READY TO FIGHT banner. Once every player on the CSS has a character, Brawl shows it
+    // (muSelCharTask+0x510 bit 0x80, model MenSelchrReady at +0x3C4) and the hand over it is
+    // hand target 5: A there (as START anywhere) starts the CSS's own countdown (state 1),
+    // setToGlobal and the scene's exit, and sqNetAnyOkiraku then opens Brawl's network stage
+    // vote, which hangs the game (the user's crash, 2026-10-08). Online START is ours (maskStart)
+    // and the match starts from SESSION; the banner is hidden (hideHeaderArt) and never hit:
+    // the hand's hit test, sel_char+0xDDB0 `cmpwi r0,1` (the banner shown?), goes to its "not
+    // over the banner" branch (+0xDE3C). OnlineMatch::onSelStage turns any other way out of the
+    // CSS back to the CSS.
+    __attribute__((naked)) void cssReadyBanner()
+    {
+        asm volatile(
+            "lis 12, g_onlineCss@ha\n\t"
+            "lbz 12, g_onlineCss@l(12)\n\t"
+            "cmpwi 12, 0\n\t"
+            "beq 1f\n\t"
+            "lis 12, 0x8069\n\t"
+            "ori 12, 12, 0x0700\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t"
+            "1:\n\t"
+            "cmpwi 0, 1\n\t"
+            "lis 12, 0x8069\n\t"
+            "ori 12, 12, 0x0678\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t");
+    }
+
     static bool lockedIn()
     {
         // Connected: locked while locked in for the next game (between games the character can
@@ -581,6 +997,8 @@ namespace OnlineMenu {
         api->sySimpleHookRel(0x726C, reinterpret_cast<void*>(cssBPressed), 10 /* sora_menu_sel_char */);
         api->sySimpleHookRel(0x7280, reinterpret_cast<void*>(cssCostume), 10);
         api->sySimpleHookRel(0x75B4, reinterpret_cast<void*>(cssCoinAPress), 10);
+        api->sySimpleHookRel(0x7CCC, reinterpret_cast<void*>(cssSwitchButtons), 10);
+        api->sySimpleHookRel(0xDDB0, reinterpret_cast<void*>(cssReadyBanner), 10);
     }
 
     void enter(int mode)
@@ -741,6 +1159,27 @@ namespace OnlineMenu {
             CodeEntry::onSuggestion(*r);
             return;
         }
+        if (r->cmd == PPOM::CMD_GET_ONLINE_STATUS) {
+            // The account (Dolphin reads user.json): keep the connect code for the CSS header.
+            const PPOM::OnlineStatus& st = *(const PPOM::OnlineStatus*)r->payload;
+            char code[PPOM::CODE_LEN + 1];
+            PPOM::u16ToAscii(code, st.code, sizeof(code));
+            int n = 0;
+            if (st.state == 1) {
+                for (; code[n]; n++) {
+                    char ch = code[n];
+                    bool ok = (ch >= 'A' && ch <= 'Z') || (ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9') ||
+                              ch == '#';
+                    if (!ok) {
+                        n = 0;   // not a connect code: show none
+                        break;
+                    }
+                }
+            }
+            memcpy(s.ownCode, code, n);
+            s.ownCode[n] = 0;
+            return;
+        }
         if (r->cmd == PPOM::CMD_GET_MATCH_STATE) {
             // The answer to FIND_OPPONENT or to one of the polls that follow it.
             if (s.mode >= 0 && s.searchSeq && r->seq >= s.searchSeq) {
@@ -773,9 +1212,19 @@ namespace OnlineMenu {
             OnlineMatch::tickMatch();
             return;
         }
+        readCodeMenuDefaults();
         bool sceneChanged = strcmp(scene, s.lastScene) != 0;
         if (sceneChanged) {
             strncpy(s.lastScene, scene, sizeof(s.lastScene) - 1);
+            // The status line's window belongs to the CSS that just ended (its MuMsg is freed
+            // with the scene): forget it until the next CSS prints its rule line (cssLine).
+            // Using it later read the freed MuMsg's font and hung the game after a Direct set's
+            // second game (found with test_direct_set_under_the_gameplay_session).
+            if (strcmp(scene, "scSelctCharacter") != 0) {
+                s.cssMsg = NULL;
+                s.haveWindow = false;
+                s.ownShown = false;
+            }
             if (strcmp(scene, "muMenuMain") == 0) {
                 // Slippi sends CLEANUP_CONNECTION whenever the menus load (OnMenuLoad.asm:73-92):
                 // backing out of the CSS cancels a search or disconnects. The menu also asks
@@ -790,6 +1239,15 @@ namespace OnlineMenu {
 
         bool onCss = g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0;
         g_onlineCssLock = (onCss && lockedIn()) ? 1 : 0;
+        if (g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelStage") == 0) {
+            // Direct's loser picks the stage on P+'s stage select. The pick is the stage and its
+            // alternate (L/R); P+'s hazard toggle (Z on a stage or on Random) is a rule, which the
+            // match setup forces on both machines, so Z is taken out here; so is the Code Menu.
+            maskButtons(BTN_Z);
+            blockCodeMenu();
+        }
+        if (onCss) blockCodeMenu();
+        if (strcmp(scene, "scSelctCharacter") != 0 && !CodeEntry::active()) CodeEntry::forgetLabels();
         if (!onCss) {
             PPOM::g_block.debug.scratch[1] = 0;
             return;
@@ -842,6 +1300,7 @@ namespace OnlineMenu {
             printCssStatus();
             s.statusDirty = false;
         }
+        showOwnCode();
     }
 
     // Called from the printIndex hook for every message line; returns a replacement or NULL.
@@ -856,6 +1315,7 @@ namespace OnlineMenu {
               Online::msbinLineContains(msbin, (int)line, "beat 'em up"))) {
             return NULL;
         }
+        if (msg != s.cssMsg || window != s.cssWindow) s.haveWindow = s.ownShown = false;   // a new CSS
         s.cssMsg = msg;
         s.cssWindow = window;
         s.statusDirty = true;   // re-printed by the next tick with our colour

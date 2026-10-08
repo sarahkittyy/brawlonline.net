@@ -66,6 +66,7 @@ from ppharness.instance import find_free_port  # noqa: E402
 
 import drive  # noqa: E402
 import online_set  # noqa: E402
+import ppom  # noqa: E402
 from ppharness import brawl as B  # noqa: E402
 
 LAUNCHER = ROOT / "launcher"
@@ -708,6 +709,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
         for p in players:
             assert p.c
             B.write_rules(p.c, stocks=2, minutes=2, items_off=True)
+            ppom.allow_test_rules(p.c)   # the plugin's match setup keeps these stocks and times
 
         # 3. Each enters the other's code. Alice first, then Bob: the server pairs them.
         a, b = players
