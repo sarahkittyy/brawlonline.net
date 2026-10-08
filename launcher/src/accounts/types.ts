@@ -4,8 +4,9 @@
  * The launcher talks to it from the main process (no CORS, and the session
  * tokens never reach the renderer's storage). Endpoint names mirror the Slippi
  * operations they replace: `createUserNew` -> signup, `signInWithEmailAndPassword`
- * -> login, `getUser` -> me, `userInitNetplay` -> netplay, `userRename` -> rename,
- * `userAcceptRules` -> accept-rules.
+ * -> login, `getUser` -> me, `userInitNetplay` -> netplay, `userRename` -> rename.
+ * Slippi's `userAcceptRules` has no caller: the launcher shows no rules yet, so
+ * the server's accept-rules endpoint and `rulesVersion` fields go unused.
  */
 
 import type { ServiceUrls } from "@common/product";
@@ -28,8 +29,6 @@ export type AccountsMe = {
   displayName: string;
   connectCode: string | null;
   playKey: string | null;
-  rulesVersion: number;
-  currentRulesVersion: number;
   latestVersion: string;
   role: string;
   userJson: UserJson | null;
@@ -80,7 +79,6 @@ export interface AccountsApi {
   requestPasswordReset(email: string): Promise<void>;
   initNetplay(uid: string, codeStart: string): Promise<AccountsMe>;
   rename(uid: string, displayName: string): Promise<AccountsMe>;
-  acceptRules(uid: string, num: number): Promise<AccountsMe>;
   publicUser(uid: string): Promise<AccountsPublicUser>;
   /** The resolved service URLs (for display and links). */
   getServiceUrls(): Promise<ServiceUrls>;

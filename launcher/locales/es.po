@@ -7,7 +7,7 @@ msgstr ""
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 "x-generator: i18next-auto-keys CLI\n"
 "Language: es\n"
-"PO-Revision-Date: 2026-10-08T08:13:05.735Z\n"
+"PO-Revision-Date: 2026-10-08T08:37:41.935Z\n"
 
 #: src/renderer/components/activate_online_form/activate_online_form.messages.ts:3:30
 msgid "2-4 uppercase English characters"
@@ -24,14 +24,6 @@ msgstr "Se ha enviado un correo de confirmación a:"
 #: src/renderer/listeners/listeners.messages.ts:3:23
 msgid "A network error occurred."
 msgstr "Ocurrió un error de red."
-
-#: src/renderer/pages/quick_start/steps/accept_rules_step/accept_rules_step.messages.ts:3:20
-msgid "Accept All"
-msgstr "Aceptar todo"
-
-#: src/renderer/pages/quick_start/steps/accept_rules_step/accept_rules_step.messages.ts:4:33
-msgid "Accept rules and policies"
-msgstr "Aceptar reglas y políticas"
 
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:2:29
 msgid "Activate online play"
@@ -530,11 +522,6 @@ msgstr "Inicio"
 msgid "Home-Run Contest"
 msgstr "Home-Run Contest"
 
-#: src/renderer/pages/quick_start/steps/accept_rules_step/accept_rules_step.messages.ts:2:47
-#. {0} productName: string
-msgid "I accept the {0} Rules"
-msgstr ""
-
 #: src/renderer/components/login_form/login_form.messages.ts:10:31
 msgid "I already have an account"
 msgstr "Ya tengo una cuenta"
@@ -579,14 +566,6 @@ msgstr ""
 #: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:4:21
 msgid "Installing... This may take a few minutes."
 msgstr ""
-
-#: src/renderer/components/online_rules/online_rules.messages.ts:13:16
-msgid ""
-"Intentionally manipulating the game performance for your own gain is not "
-"allowed."
-msgstr ""
-"No está permitido manipular intencionalmente el rendimiento del juego para "
-"tu propio beneficio."
 
 #: src/renderer/pages/settings/game_settings/game_settings.messages.ts:13:18
 msgid "Invalid"
@@ -652,10 +631,6 @@ msgstr "Cerrar sesión"
 #: src/renderer/pages/replays/replay_browser/filter_toolbar/filter_toolbar.messages.ts:5:22
 msgid "Longest game"
 msgstr "Juego más largo"
-
-#: src/renderer/components/online_rules/online_rules.messages.ts:14:16
-msgid "Macros and bots are not allowed."
-msgstr "Los macros y bots no están permitidos."
 
 #: src/renderer/pages/settings/dolphin_settings/gecko_codes/gecko_codes.messages.ts:5:17
 msgid "Manage"
@@ -905,15 +880,6 @@ msgid ""
 "Brawl ISO (revision 1 or 2)."
 msgstr ""
 
-#: src/renderer/components/online_rules/online_rules.messages.ts:8:5
-msgid ""
-"Racist, homophobic, transphobic, or otherwise bigoted names and codes are "
-"not allowed. Targeted harassment in names and codes is also not allowed."
-msgstr ""
-"No se permiten nombres y códigos racistas, homofóbicos, transfóbicos o de "
-"cualquier otra forma intolerantes. Tampoco se permite el acoso dirigido en "
-"nombres y códigos."
-
 #: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:5:22
 msgid "Rank pending"
 msgstr "Clasificación pendiente"
@@ -989,11 +955,6 @@ msgstr ""
 
 #: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:2:22
 msgid "Rosetta Required"
-msgstr ""
-
-#: src/renderer/pages/settings/create.messages.ts:12:27
-#: src/renderer/pages/settings/rules_and_policies_page/rules_and_policies_page.messages.ts:2:27
-msgid "Rules & Policies"
 msgstr ""
 
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:36:25
@@ -1113,15 +1074,6 @@ msgstr ""
 
 #: src/renderer/pages/settings/game_settings/game_settings.messages.ts:3:34
 msgid "The path to an NTSC-U Super Smash Bros. Brawl disc image (revision 1 or 2)."
-msgstr ""
-
-#: src/renderer/components/online_rules/online_rules.messages.ts:4:5
-#. {0} productName: string
-msgid ""
-"These are a set of rules to follow when using {0}. Breaking these rules may "
-"result in a suspension or ban depending on severity and frequency. This is "
-"not an exhaustive list, we reserve the right to suspend or ban an account "
-"for any reason."
 msgstr ""
 
 #: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:3:22
@@ -1367,18 +1319,6 @@ msgstr "{0, plural, one {# archivo oculto} other {# archivos ocultos}}."
 #: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:19:51
 #. {0} dolphinTypeName: string
 msgid "{0} Executable"
-msgstr ""
-
-#: src/renderer/components/online_rules/online_rules.messages.ts:2:41
-#. {0} productName: string
-msgid "{0} Rules"
-msgstr ""
-
-#: src/renderer/components/online_rules/online_rules.messages.ts:11:5
-#. {0} productName: string
-msgid ""
-"{0} does its best to promote fairness in terms of player matching, result "
-"reporting, etc. Attempting to circumvent these systems is not allowed."
 msgstr ""
 
 #: src/renderer/initialize_app.messages.ts:10:63

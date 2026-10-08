@@ -23,8 +23,6 @@ function fakeRecord(email: string, displayName: string): AccountsMe {
     displayName,
     connectCode: null,
     playKey: null,
-    rulesVersion: 0,
-    currentRulesVersion: 1,
     latestVersion: "0.0.0",
     role: "user",
     userJson: null,

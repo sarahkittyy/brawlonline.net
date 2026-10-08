@@ -68,10 +68,6 @@ export class AccountsManager {
     return this._withSession(uid, (token) => this.client.rename(token, displayName));
   }
 
-  acceptRules(uid: string, num: number): Promise<AccountsResult<AccountsMe>> {
-    return this._withSession(uid, (token) => this.client.acceptRules(token, num));
-  }
-
   publicUser(uid: string): Promise<AccountsResult<AccountsPublicUser>> {
     return wrap(() => this.client.publicUser(uid));
   }

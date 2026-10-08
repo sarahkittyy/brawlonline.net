@@ -1,6 +1,5 @@
 /* eslint-disable import/no-default-export */
 import {
-  ipc_accountsAcceptRules,
   ipc_accountsHasSession,
   ipc_accountsInitNetplay,
   ipc_accountsLogin,
@@ -51,9 +50,6 @@ const accountsApi: AccountsApi = {
   },
   async rename(uid, displayName) {
     return unwrap(await ipc_accountsRename.renderer!.trigger({ uid, displayName }));
-  },
-  async acceptRules(uid, num) {
-    return unwrap(await ipc_accountsAcceptRules.renderer!.trigger({ uid, num }));
   },
   async publicUser(uid) {
     return unwrap(await ipc_accountsPublicUser.renderer!.trigger({ uid }));

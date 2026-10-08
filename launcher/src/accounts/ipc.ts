@@ -43,12 +43,6 @@ export const ipc_accountsRename = makeEndpoint.main(
   <R<AccountsMe>>_,
 );
 
-export const ipc_accountsAcceptRules = makeEndpoint.main(
-  "accounts_acceptRules",
-  <{ uid: string; num: number }>_,
-  <R<AccountsMe>>_,
-);
-
 export const ipc_accountsPublicUser = makeEndpoint.main(
   "accounts_publicUser",
   <{ uid: string }>_,

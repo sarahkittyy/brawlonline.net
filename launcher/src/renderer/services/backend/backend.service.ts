@@ -1,5 +1,4 @@
 import type { AccountsMe, AccountsPublicUser } from "@accounts/types";
-import { currentRulesVersion } from "@common/constants";
 import { Preconditions } from "@common/preconditions";
 import type { DolphinService, PlayKey } from "@dolphin/types";
 import log from "electron-log";
@@ -18,7 +17,6 @@ import type { BackendService, RankedProfile, UserData } from "./types";
  * | validateUserIdQuery            | GET /user/{uid}                   |
  * | rankedNetplayProfile           | GET /user/{uid} `rank`            |
  * | userRename                     | POST /v1/me/rename                |
- * | userAcceptRules                | POST /v1/me/accept-rules          |
  * | userInitNetplay                | POST /v1/me/netplay               |
  * | getLatestDolphin.version       | `latestVersion` in /v1/me         |
  */
@@ -84,7 +82,6 @@ class AccountsBackendClient implements BackendService {
       // If we don't have a connect code or play key, this is undefined so that the
       // logic handling it asks the user to set them up.
       playKey: playKeyFromAccount(me),
-      rulesAccepted: me.rulesVersion ?? 0,
       rankedNetplayProfile,
     };
   }
@@ -112,15 +109,6 @@ class AccountsBackendClient implements BackendService {
     const user = this.authService.getCurrentUser();
     if (user?.displayName !== name) {
       throw new Error("Could not change name.");
-    }
-  }
-
-  async acceptRules() {
-    const uid = this._activeUid();
-    const me = await this._api.acceptRules(uid, currentRulesVersion);
-    this.authService.getMultiAccountService().setUserRecord(me);
-    if (me.rulesVersion !== currentRulesVersion) {
-      throw new Error("Could not accept rules");
     }
   }
 
