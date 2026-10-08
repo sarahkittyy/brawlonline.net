@@ -1,13 +1,13 @@
 # brawlonline.net
 
-The landing page for Brawl Online. It is a static site with no build step, no analytics, no cookies and no external requests (a Content-Security-Policy meta tag in `index.html` enforces `'self'` only). The page shows a logo, one download button for the visitor's OS, a tiny "download for other operating systems" toggle, and a dim looping gameplay video behind them. There is no other text, by design.
+The landing page for Brawl Online. It is a static site with no build step, no analytics, no cookies and no external requests (a Content-Security-Policy meta tag in `index.html` enforces `'self'` only). The page shows a logo, one download button for the visitor's OS, a tiny "download for other operating systems" toggle, and a dim looping gameplay video behind them. The logo and the button sit together in the middle of the screen, both on green menu-button frames in the style of Project M's menus. There is no other text, by design.
 
 | File | What it is |
 | --- | --- |
 | `index.html` | The page. Icons are inline SVG. |
-| `style.css` | All styles. `--video-opacity` sets how dim the video is. |
+| `style.css` | All styles, including the menu-button frame (`.plate`). `--video-opacity` sets how dim the video is; the `--pm-*` variables set the frame colours. |
 | `script.js` | The download links (`DOWNLOADS` at the top), OS detection and video start. |
-| `assets/fonts/` | The wordmark font (Barlow Condensed ExtraBold Italic, OFL) and its licence. |
+| `assets/fonts/` | The wordmark font (Barlow Condensed Black Italic, OFL) and its licence. |
 | `assets/bg.webm`, `assets/bg.mp4`, `assets/bg-poster.jpg` | Background video and its still frame. **Not present yet.** |
 | `LICENSES.txt` | Credits for the font, the icons and (later) the video. Deploy it with the site. |
 
@@ -20,16 +20,26 @@ cd website
 python -m http.server 8765    # then open http://localhost:8765
 ```
 
-## Swapping the logo
+## The logo and the menu-button frames
 
-The logo is a typographic placeholder (the text "BRAWL ONLINE" in the self-hosted font). To use a real logo:
+The logo is a two-line wordmark: "BRAWL" at the top left and "ONLINE" offset to the bottom right, in white with a heavy dark outline, on a green menu-button frame. The download button uses the same frame. Both frames are one CSS rule, `.plate::before` in `style.css`: a slanted (`skewX`) rounded plate with a dark outer rim, a thin light-green inner border, a green top-to-bottom gradient face, a glossy upper half, a lit top edge and a shaded bottom edge, plus a faint outer hairline so the dark rim reads on the dark page. It is sized in `em`, so it scales with the element's font size (`.logo.plate` and `.dl.plate`). The colours are the `--pm-*` variables at the top of `style.css`.
+
+**This is a hand-built CSS recreation.** No game textures, screenshots or AI-generated graphics are in it or anywhere on the site; the frame was drawn from scratch by matching these references by eye:
+
+- **Shape, rim and bevel:** Brawl's own menu textures as extracted by the launcher from the user's disc and SD card (`launcher/.asset-cache/survey/`, not part of the site): `MenCmn00` (the common menu button plate: rounded, thick black rim, bevelled face, in `frames_sd.png` / `mm_cand.png`) for the rim and bevel, and `MenMainFrMul01` / the `mm_disc_a.png` main-menu panels (rounded panels with a slanted side) for the slant. These textures are greyscale masks that the game tints at run time, so they give the shape only.
+- **Colour:** Project M's green menu colour scheme (PM 3.6 main menu). No reference image of it was stored with the project; the greens were picked by eye to that scheme and are easy to retune in the `--pm-*` variables.
+- **Lettering:** the white, heavily outlined mode labels on the P+ menus (`VERSUS`, `SOLO`, `CLASSIC` in `frames_sd.png`). Barlow Condensed **Black (900) Italic** is the closest free match: the menu labels are black-weight and condensed, and the italic leans the same way as the frame and the Smash series' logos.
+
+### Swapping the logo for an image
+
+To use a drawn logo instead of the wordmark:
 
 1. Put the file at `assets/logo.svg` (or `assets/logo.png`; a PNG should be about 1200 px wide for sharp phones).
-2. In `index.html`, inside `<h1 class="logo">`, delete the `<span class="wordmark">` line and uncomment the `<img>` line under it (change the extension if it is a PNG).
+2. In `index.html`, inside `<h1 class="logo plate">`, delete the `<span class="wordmark">` line and uncomment the `<img>` line under it (change the extension if it is a PNG). Remove `plate` from the `<h1>`'s class if the image brings its own frame.
 
 `style.css` already sizes `.logo img` (at most 560 px wide and 30% of the screen height). If nothing else uses the font any more, also delete the `<link rel="preload">` for it in `index.html`, the `@font-face` and `.wordmark` rules in `style.css`, `assets/fonts/`, and section 1 of `LICENSES.txt`.
 
-No AI-generated graphics: the logo has to be made by a person.
+No AI-generated graphics: the logo has to be made by a person, and it must not reuse Nintendo's or Project M/P+'s actual textures.
 
 ## Swapping the background video
 

@@ -3,9 +3,9 @@
 @font-face {
   font-family: "Barlow Condensed";
   font-style: italic;
-  font-weight: 800;
+  font-weight: 900;
   font-display: block;
-  src: url("assets/fonts/barlow-condensed-800-italic.woff2") format("woff2");
+  src: url("assets/fonts/barlow-condensed-900-italic.woff2") format("woff2");
 }
 
 :root {
@@ -13,6 +13,16 @@
   --fg: #f1f1f4;
   --dim: rgba(241, 241, 244, 0.42);
   --video-opacity: 0.16;
+
+  /* Menu-button frame colours: a hand-made take on Project M's green menu buttons (see README.md). */
+  --pm-rim: #03190a;        /* dark outer stroke */
+  --pm-edge: #b9f59a;       /* light inner border */
+  --pm-hi: #74de55;         /* face, top */
+  --pm-mid: #2c9d34;        /* face, middle */
+  --pm-lo: #0f5f20;         /* face, bottom */
+  --pm-glow: rgba(116, 222, 85, 0.35);
+  --pm-skew: -11deg;        /* the slant of the frame, in step with the italic lettering */
+
   color-scheme: dark;
 }
 
@@ -58,6 +68,7 @@ body::after {
   z-index: 1;
 }
 
+/* The logo and the button sit together in the middle of the screen. */
 main {
   position: relative;
   z-index: 2;
@@ -66,13 +77,46 @@ main {
   display: flex;
   flex-direction: column;
   align-items: center;
-  justify-content: space-between;
+  justify-content: center;
+  gap: clamp(28px, 6vh, 52px);
   padding:
-    max(48px, calc(env(safe-area-inset-top) + 32px))
+    max(32px, calc(env(safe-area-inset-top) + 24px))
     max(16px, env(safe-area-inset-right))
-    max(40px, calc(env(safe-area-inset-bottom) + 24px))
+    max(72px, calc(env(safe-area-inset-bottom) + 56px))
     max(16px, env(safe-area-inset-left));
   text-align: center;
+}
+
+/* ---- Menu-button frame ------------------------------------------------------
+   Drawn entirely in CSS, after the menu buttons of Brawl / Project M: a slanted,
+   rounded plate with a dark rim, a thin light inner border, a green gradient face,
+   a glossy upper half and a bevel (lighter top edge, darker bottom edge).
+   Everything is in em, so the frame scales with the element's font-size. */
+.plate {
+  position: relative;
+  isolation: isolate;
+}
+
+.plate::before {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: -1;
+  transform: skewX(var(--pm-skew));
+  border: 0.16em solid var(--pm-rim);
+  border-radius: 0.5em 0.22em 0.5em 0.22em;
+  background:
+    /* gloss: a soft light band over the top half */
+    linear-gradient(180deg, rgba(255, 255, 255, 0.3) 0%, rgba(255, 255, 255, 0.1) 46%, rgba(255, 255, 255, 0) 47%) padding-box,
+    linear-gradient(180deg, var(--pm-hi) 0%, var(--pm-mid) 52%, var(--pm-lo) 100%) padding-box,
+    var(--pm-rim);
+  box-shadow:
+    inset 0 0 0 0.06em var(--pm-edge),              /* light inner border */
+    inset 0 0.14em 0.12em rgba(255, 255, 255, 0.28),/* bevel: lit top edge */
+    inset 0 -0.22em 0.24em rgba(0, 20, 6, 0.45),    /* bevel: shaded bottom edge */
+    0 0 0 0.04em rgba(150, 235, 130, 0.28),         /* hairline so the dark rim reads on a dark page */
+    0 0.3em 1.2em rgba(0, 0, 0, 0.6);               /* drop shadow */
+  transition: filter 0.15s, box-shadow 0.15s;
 }
 
 /* Logo */
@@ -83,17 +127,39 @@ main {
   line-height: 1;
 }
 
+.logo.plate {
+  /* Size of the whole logo: the frame and the lettering follow it. */
+  font-size: clamp(2rem, min(14vw, 12vh), 5.25rem);
+  padding: 0.2em 0.62em 0.24em 0.56em;
+}
+
 .wordmark {
   display: block;
   font-family: "Barlow Condensed", system-ui, sans-serif;
   font-style: italic;
-  font-weight: 800;
+  font-weight: 900;
   font-synthesis: none;
-  font-size: clamp(2.6rem, 15vw, 6rem);
-  letter-spacing: 0.02em;
+  font-size: 1em;
+  line-height: 0.86;
+  letter-spacing: 0.015em;
   text-transform: uppercase;
   white-space: nowrap;
-  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.6);
+  text-align: left;
+  color: #fff;
+  /* Smash menu lettering: white with a heavy dark outline. */
+  -webkit-text-stroke: 0.1em var(--pm-rim);
+  paint-order: stroke fill;
+  text-shadow: 0 0.05em 0 var(--pm-rim), 0 0.06em 0.18em rgba(0, 0, 0, 0.45);
+}
+
+/* "BRAWL" top left, "ONLINE" bottom right, offset. */
+.wordmark .w1,
+.wordmark .w2 {
+  display: block;
+}
+
+.wordmark .w2 {
+  padding-left: 1.55em;
 }
 
 .logo img {
@@ -106,45 +172,63 @@ main {
 
 /* Download button and the other-OS list */
 .get {
+  position: relative;
   display: flex;
   flex-direction: column;
   align-items: center;
-  gap: 14px;
+  gap: 16px;
 }
 
-.dl {
+.dl.plate {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 136px;
-  height: 64px;
-  border-radius: 32px;
-  background: rgba(241, 241, 244, 0.92);
-  color: #0b0b0f;
-  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
-  transition: background-color 0.15s, transform 0.15s, box-shadow 0.15s;
+  font-size: 22px; /* sizes the frame */
+  width: 7em;
+  height: 3em;
+  color: #fff;
   -webkit-tap-highlight-color: transparent;
+  transition: transform 0.15s;
 }
 
 .dl svg {
-  height: 30px;
+  height: 32px;
   width: auto;
+  filter: drop-shadow(0 0 1px var(--pm-rim)) drop-shadow(0 2px 0 var(--pm-rim));
 }
 
 .dl:hover {
-  background: #fff;
   transform: translateY(-1px);
-  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6), 0 0 0 4px rgba(255, 255, 255, 0.08);
+}
+
+.dl:hover::before,
+.dl:focus-visible::before {
+  filter: brightness(1.14) saturate(1.05);
+  box-shadow:
+    inset 0 0 0 0.06em #e2ffd0,
+    inset 0 0.14em 0.12em rgba(255, 255, 255, 0.34),
+    inset 0 -0.22em 0.24em rgba(0, 20, 6, 0.4),
+    0 0 0 0.06em rgba(190, 255, 170, 0.55),
+    0 0 1.1em var(--pm-glow),
+    0 0.3em 1.2em rgba(0, 0, 0, 0.6);
 }
 
 .dl:active {
-  transform: translateY(0);
+  transform: translateY(1px);
+}
+
+.dl:active::before {
+  filter: brightness(0.95);
 }
 
 a:focus-visible,
 summary:focus-visible {
   outline: 2px solid var(--fg);
   outline-offset: 4px;
+}
+
+.dl:focus-visible {
+  outline-offset: 7px;
 }
 
 .more {
@@ -175,12 +259,19 @@ summary:focus-visible {
   text-underline-offset: 3px;
 }
 
+/* The list hangs below the toggle, so opening it does not move the logo or the button. */
 .more ul {
+  position: absolute;
+  top: 100%;
+  left: 50%;
+  transform: translateX(-50%);
+  width: max-content;
+  max-width: calc(100vw - 32px);
   display: flex;
   flex-wrap: wrap;
   justify-content: center;
   gap: 8px 24px;
-  margin: 10px 0 0;
+  margin: 8px 0 0;
   padding: 0;
   list-style: none;
 }
@@ -207,10 +298,12 @@ summary:focus-visible {
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .dl {
+  .dl,
+  .plate::before {
     transition: none;
   }
-  .dl:hover {
+  .dl:hover,
+  .dl:active {
     transform: none;
   }
 }

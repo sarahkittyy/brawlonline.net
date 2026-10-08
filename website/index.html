@@ -9,17 +9,18 @@
 <meta name="theme-color" content="#08080b">
 <title>Brawl Online</title>
 <link rel="icon" href="data:,">
-<link rel="preload" href="assets/fonts/barlow-condensed-800-italic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="preload" href="assets/fonts/barlow-condensed-900-italic.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="style.css">
 <script src="script.js" defer></script>
 <!--
   Brawl Online. Credits (full texts in LICENSES.txt):
-  - Wordmark font: Barlow Condensed ExtraBold Italic, Copyright 2017 The Barlow Project Authors
+  - Wordmark font: Barlow Condensed Black Italic, Copyright 2017 The Barlow Project Authors
     (https://github.com/jpt/barlow), SIL Open Font License 1.1 (assets/fonts/OFL.txt).
   - Icons: Font Awesome Free 7.3.1 by @fontawesome (https://fontawesome.com), CC BY 4.0
     (https://creativecommons.org/licenses/by/4.0/). Copyright 2026 Fonticons, Inc.
     Brand icons: windows, apple, linux. Solid icon: download. Unmodified paths.
   - Background video: not chosen yet (placeholder slots assets/bg.webm, assets/bg.mp4, assets/bg-poster.jpg).
+  - The green menu-button frames are drawn in CSS (style.css, ".plate"); no game textures are used.
 -->
 </head>
 <body>
@@ -30,14 +31,14 @@
 </video>
 
 <main>
-  <h1 class="logo">
+  <h1 class="logo plate">
     <!-- Logo: swap the wordmark for an image by replacing the next line with the commented one. See README.md. -->
-    <span class="wordmark">Brawl Online</span>
+    <span class="wordmark"><span class="w1">Brawl</span> <span class="w2">Online</span></span>
     <!-- <img src="assets/logo.svg" alt="Brawl Online"> -->
   </h1>
 
   <div class="get">
-    <a class="dl" id="dl" href="#other" aria-label="Download">
+    <a class="dl plate" id="dl" href="#other" aria-label="Download">
       <!-- Font Awesome Free 7.3.1 "download" (solid), CC BY 4.0, https://fontawesome.com -->
       <svg viewBox="0 0 448 512" aria-hidden="true"><path fill="currentColor" d="M256 32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 210.7-41.4-41.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l96 96c12.5 12.5 32.8 12.5 45.3 0l96-96c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L256 242.7 256 32zM64 320c-35.3 0-64 28.7-64 64l0 32c0 35.3 28.7 64 64 64l320 0c35.3 0 64-28.7 64-64l0-32c0-35.3-28.7-64-64-64l-46.9 0-56.6 56.6c-31.2 31.2-81.9 31.2-113.1 0L110.9 320 64 320zm304 56a24 24 0 1 1 0 48 24 24 0 1 1 0-48z"/></svg>
     </a>
