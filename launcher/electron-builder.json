@@ -78,7 +78,8 @@
     "allowElevation": true,
     "oneClick": false,
     "allowToChangeInstallationDirectory": true,
-    "createStartMenuShortcut": true
+    "createDesktopShortcut": false,
+    "createStartMenuShortcut": false
   },
   "linux": {
     "target": [
