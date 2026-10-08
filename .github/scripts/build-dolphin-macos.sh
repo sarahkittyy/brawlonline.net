@@ -6,8 +6,10 @@
 #
 # <out dir> gets the bundle the launcher copies into <userData>/netplay on first start:
 #   Dolphin.app (Contents/MacOS/Dolphin and dolphin-tool, Qt frameworks and plugins deployed by
-#   macdeployqt, Sys in Contents/Resources), COPYING, Licenses/, dolphin.json (manifest). Ad-hoc
-#   signed with Dolphin's entitlements; notarization needs an Apple Developer ID (not done yet).
+#   macdeployqt, Sys in Contents/Resources), COPYING, Licenses/, dolphin.json (manifest). Signed
+#   with Dolphin's entitlements: with the Developer ID identity in $MAC_SIGN_IDENTITY (a name or
+#   SHA-1 hash, its keychain in the search list) when it is set, ad-hoc otherwise. Notarized as part
+#   of the launcher app (package-launcher-macos.sh), which carries this bundle.
 #
 # Needs Xcode's command line tools, CMake, Ninja, ccache, Node (dolphin-manifest.sh) and Qt for
 # macOS in $QT_DIR (default $CI_CACHE/qt/<QT_VERSION>/macos; installed with aqtinstall when
@@ -82,14 +84,25 @@ cp "$build/Binaries/dolphin-tool" "$app/Contents/MacOS/dolphin-tool"
 rm -rf "$app/Contents/MacOS/platforms" "$app/Contents/MacOS/styles"
 "$qt_dir/bin/macdeployqt" "$app" -verbose=1
 
-# ---- Sign (ad-hoc) ------------------------------------------------------------------------
+# ---- Sign -------------------------------------------------------------------------------
 # Apple silicon refuses unsigned code. Dolphin's own script signs the dylibs and frameworks, then
-# the bundle; dolphin-tool, a second executable in Contents/MacOS, is signed first by hand.
-# No docs ship (dolphin-manifest.sh deletes them too, but after signing that would break the seal).
+# the bundle (hardened runtime, Dolphin's entitlements); dolphin-tool, a second executable in
+# Contents/MacOS, is signed first by hand. A Developer ID signature also gets a secure timestamp,
+# which notarization requires. No docs ship (dolphin-manifest.sh deletes them too, but after
+# signing that would break the seal).
 find "$app" -type f \( -iname '*.md' -o -iname '*.markdown' \) -print -delete
-codesign --force --sign - "$app/Contents/MacOS/dolphin-tool"
-"$src/Tools/mac-codesign.sh" -e "$src/Source/Core/DolphinQt/DolphinEmu.entitlements" - "$app"
+identity="${MAC_SIGN_IDENTITY:--}"
+if [ "$identity" = "-" ]; then
+  codesign --force --sign - "$app/Contents/MacOS/dolphin-tool"
+  "$src/Tools/mac-codesign.sh" -e "$src/Source/Core/DolphinQt/DolphinEmu.entitlements" - "$app"
+else
+  # The identity's keychain must be in the search list (mac-codesign.sh has no --keychain).
+  codesign --force --sign "$identity" --timestamp --options runtime \
+    "$app/Contents/MacOS/dolphin-tool"
+  "$src/Tools/mac-codesign.sh" -t -e "$src/Source/Core/DolphinQt/DolphinEmu.entitlements" "$identity" "$app"
+fi
 codesign --verify --deep --strict "$app"
+codesign -dv "$app" 2>&1 | grep -E '^(Authority|TeamIdentifier|Timestamp|CodeDirectory)' || true
 
 cp "$src/COPYING" "$out/"
 cp -R "$src/LICENSES" "$out/Licenses"

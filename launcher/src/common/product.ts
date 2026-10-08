@@ -49,13 +49,13 @@ export type ServiceUrls = typeof defaultServiceUrls;
 /**
  * Whether the macOS launcher updates itself in place, as on Windows and Linux.
  *
- * The macOS build is only ad-hoc signed (no Apple Developer ID yet). electron-updater installs on
- * macOS through Squirrel.Mac, which refuses an update whose code signature does not match the running
- * app's, and ad-hoc signatures never match, so an in-place update always fails. Until then the
- * launcher only checks the feed (latest-mac.yml) and offers MAC_DOWNLOAD_URL instead
- * (src/common/launcher_update.ts). Flip this to true once the macOS build is signed with a Developer ID.
+ * electron-updater installs on macOS through Squirrel.Mac, which refuses an update whose code
+ * signature does not match the running app's. Released macOS builds are signed with our Developer
+ * ID and notarized (.github/scripts/package-launcher-macos.sh), so they update in place. With
+ * false (an ad-hoc signed build, whose signature never matches) the launcher only checks the feed
+ * (latest-mac.yml) and offers MAC_DOWNLOAD_URL instead (src/common/launcher_update.ts).
  */
-export const MAC_SELF_UPDATE = false;
+export const MAC_SELF_UPDATE = true;
 
 /** The website's macOS download, offered for updates while MAC_SELF_UPDATE is false. */
 export const MAC_DOWNLOAD_URL = `https://${BASE_DOMAIN}/downloads/BrawlOnline.dmg`;

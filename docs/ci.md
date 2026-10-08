@@ -16,7 +16,7 @@ are excluded from every package.
 1. `plugin` (Linux client runner): `tools/gamecode/setup_toolchain.py` (toolchain kept in `$CI_CACHE/toolchains`), `game-code/build.sh` → artifact `plugin`.
 2. `linux` (Linux client runner): `stamp-version.sh` (an annotated tag `v<version>` in the CI checkout, so Dolphin reports `Project+ Dolphin v<version>`; Dolphin's `Online::APP_VERSION`; `launcher/release/app/package.json`), `build-dolphin-linux.sh` (ccache and the build tree in `$CI_CACHE`; linuxdeploy + its Qt plugin, pinned by sha256, make an AppDir with the libraries), launcher `npm ci`, build, `typecheck`, `npm test`, `electron-builder --linux` (AppImage), `check-package.sh` → artifact `launcher-linux` (`latest-linux.yml`, `*.AppImage`).
 3. `windows` (GitHub-hosted `windows-latest`): same stamping, `build-dolphin-windows.ps1` (MSVC, the `ninja-release-x64` preset, ccache 4.14.1 pinned by sha256 with its cache in the Actions cache), `electron-builder --win` (NSIS) → artifact `launcher-windows` (`latest.yml`, `*.exe`, `*.exe.blockmap`).
-4. `macos` (GitHub-hosted `macos-15`, Apple silicon; only while the repository is public, and the repository variable `DISABLE_MACOS` = `true` skips it): the same stamping, `build-dolphin-macos.sh` (native build, Qt from aqtinstall, `macdeployqt`, ad-hoc `codesign`) and `package-launcher-macos.sh` (ad-hoc signed app, DMG, updater zip, `latest-mac.yml`) → artifact `launcher-mac`. See "macOS" below. A failed or skipped macOS build does not hold back the Linux and Windows release.
+4. `macos` (GitHub-hosted `macos-15`, Apple silicon; only while the repository is public, and the repository variable `DISABLE_MACOS` = `true` skips it): the same stamping, `build-dolphin-macos.sh` (native build, Qt from aqtinstall, `macdeployqt`, Developer ID `codesign`) and `package-launcher-macos.sh` (Developer ID signed, notarized and stapled app; signed and notarized DMG; updater zip; `latest-mac.yml`) → artifact `launcher-mac`. See "macOS" below. A failed or skipped macOS build does not hold back the Linux and Windows release.
 5. `publish` (sarahvps2): downloads the `launcher-*` artifacts, `sudo pp-release client <dir>`, checks the feed on https://brawlonline.net, deletes the run's artifacts (they also expire after a day).
 
 The Linux client runner is written in the `plugin` and `linux` jobs; the optional repository variable `CLIENT_LINUX_RUNNER` (a JSON list of labels) overrides both. The default is GitHub-hosted `ubuntu-24.04`. On a GitHub-hosted runner the jobs install Dolphin's build packages with apt and keep ccache (`linux-ccache-*`) and the game-code toolchain in the Actions cache; on a self-hosted runner they use its image and `$CI_CACHE`.
@@ -62,10 +62,11 @@ The Linux Dolphin is built against Ubuntu 24.04's glibc (2.39) either way: it ru
 
 GitHub-hosted `macos-15` (Apple silicon), a native build. It only runs while the repository is public: macOS minutes are free there and count ten times on a private repository.
 
-- **Dolphin** (`build-dolphin-macos.sh`): Qt 6.8.3 for macOS from Qt's online repository via aqtinstall (cached in the Actions cache), Ninja and ccache from Homebrew, Release, `-DENABLE_VULKAN=OFF` (Metal and OpenGL remain; MoltenVK can come later), `-DMACOS_CODE_SIGNING=OFF`. The bundle is renamed to what the launcher runs (`Dolphin.app/Contents/MacOS/Dolphin`, with `dolphin-tool` next to it), `macdeployqt` deploys Qt's frameworks and plugins, and Dolphin's own `Tools/mac-codesign.sh` signs it ad-hoc with Dolphin's entitlements.
-- **Launcher** (`package-launcher-macos.sh`): `electron-builder --mac dir` without signing, the launcher's frameworks, helpers and native modules and then the app signed ad-hoc with `codesign` (Dolphin.app inside keeps its own signature and entitlements), then `--prepackaged` makes the DMG, the updater zip and `latest-mac.yml` from that signed app. `pp-release` accepts these names and links the DMG as `/downloads/BrawlOnline.dmg`.
-- **What ad-hoc signing means for players.** Apple silicon runs it. Gatekeeper blocks the first start until the user allows it (System Settings > Privacy & Security > Open Anyway). The launcher can't update itself in place (Squirrel.Mac checks the new version's signature against the running one, and ad-hoc signatures never match), so on macOS it offers the new DMG instead (`MAC_SELF_UPDATE` in `launcher/src/common/product.ts`). A Developer ID certificate and notarization (secrets below) fix both.
-- **Not yet:** Intel Macs (a second build on `macos-13`, or a universal one), Vulkan via MoltenVK, and the first run (it starts once the repository is public).
+- **Dolphin** (`build-dolphin-macos.sh`): Qt 6.8.3 for macOS from Qt's online repository via aqtinstall (cached in the Actions cache), Ninja and ccache from Homebrew, Release, `-DENABLE_VULKAN=OFF` (Metal and OpenGL remain; MoltenVK can come later), `-DMACOS_CODE_SIGNING=OFF`. The bundle is renamed to what the launcher runs (`Dolphin.app/Contents/MacOS/Dolphin`, with `dolphin-tool` next to it), `macdeployqt` deploys Qt's frameworks and plugins, and Dolphin's own `Tools/mac-codesign.sh` signs it with the Developer ID (hardened runtime, secure timestamp, Dolphin's entitlements).
+- **Launcher** (`package-launcher-macos.sh`): `electron-builder --mac dir` without signing, `app-update.yml` added, then `@electron/osx-sign` signs every Mach-O file inside out and then the app (Developer ID, hardened runtime, secure timestamp, `assets/entitlements.mac.plist`); Dolphin.app inside keeps its own signature and entitlements. The app is notarized (`notarytool`, an App Store Connect API key, at most 40 minutes per submission) and stapled, `spctl` must accept it, then `--prepackaged` makes the DMG (signed by electron-builder), the updater zip and `latest-mac.yml` from that app. The DMG is notarized too but not stapled (stapling would change it after `latest-mac.yml` recorded its sha512; the app inside carries its own ticket). `pp-release` accepts these names and links the DMG as `/downloads/BrawlOnline.dmg`.
+- **Signing in CI.** The step "Signing keychain" decodes `MACOS_SIGNING_P12` into a throwaway keychain (random password, unlocked for the job, first in the search list), exports the identity's SHA-1 as `MAC_SIGN_IDENTITY` and writes the API key to `$RUNNER_TEMP`; the last steps delete both. It runs after `npm ci` and the launcher build. Without the secrets the job fails: the launcher updates itself in place on macOS (`MAC_SELF_UPDATE` in `launcher/src/common/product.ts`, through Squirrel.Mac, which requires the new version's signature to match the running one's), so an ad-hoc build must never reach the feed. Without `MAC_SIGN_IDENTITY` the two scripts still sign ad-hoc, for local test builds.
+- **For players.** Gatekeeper opens the app without a prompt (notarized, Developer ID "Sarah Ohlin"), and the launcher updates itself like on Windows and Linux.
+- **Not yet:** Intel Macs (a second build on `macos-13`, or a universal one), Vulkan via MoltenVK, and the first run (the next client push to `main` since the repository went public).
 - Dolphin also builds when cross-compiled from Linux with osxcross (the fixes are in Dolphin: `ScmRevGen.cmake`, `DolphinInjectVersionInfo.cmake` without PlistBuddy, the hidapi rename), but CI doesn't use that.
 
 ### Windows
@@ -80,10 +81,21 @@ GitHub-hosted `windows-latest` (Visual Studio 18). Caches: `.ccache` (key `win-c
 
 ## Secrets and settings
 
-None are needed today. Signing is deferred; the builds are unsigned:
+Windows signing is deferred; the Windows build is unsigned:
 
 - Windows: add repository secrets `WIN_CSC_LINK` (base64 of the `.pfx`, or an https URL) and `WIN_CSC_KEY_PASSWORD`, then set `"signAndEditExecutable": true` in `launcher/electron-builder.json` (`win`). The windows job already passes them as `CSC_LINK`/`CSC_KEY_PASSWORD`.
-- macOS: a Developer ID certificate and Apple's notary API key (`APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`), with `codesign --sign "Developer ID Application: …" --options runtime` and `notarytool` in place of the ad-hoc signing in `build-dolphin-macos.sh` and `package-launcher-macos.sh`, and `MAC_SELF_UPDATE` flipped in the launcher.
+
+macOS (Apple Developer Program, the `macos` job):
+
+| Secret | Value |
+|---|---|
+| `MACOS_SIGNING_P12` | base64 of a `.p12` with the Developer ID Application certificate, its private key and Apple's Developer ID intermediate |
+| `MACOS_SIGNING_P12_PASSWORD` | the `.p12`'s password |
+| `APPLE_API_KEY_P8` | the text of the App Store Connect API key (`AuthKey_<id>.p8`, Developer role) |
+| `APPLE_API_KEY_ID` | its key ID |
+| `APPLE_API_ISSUER` | the issuer ID shown above the team keys |
+
+The certificate's private key was made on the Mac and lives in its login keychain (`codesign --sign "Developer ID Application: …"` works there for any app; `xcrun notarytool … --keychain-profile notary` uses the stored API key). The certificate (team `CNM6N64AS4`, issued by Apple's G2 Developer ID CA) expires on 2031-09-17: make a new one from a new CSR, import it on the Mac, and replace `MACOS_SIGNING_P12` and its password. Revoking the API key in App Store Connect only stops notarization; make a new key and replace the three `APPLE_API_*` secrets.
 
 Repository variables (optional, none set): `CLIENT_LINUX_RUNNER` (JSON list of labels, overrides the default in `client.yml`), `DISABLE_MACOS` (`true` skips the macOS job).
 
