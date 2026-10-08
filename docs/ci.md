@@ -70,7 +70,7 @@ GitHub-hosted `macos-15` (Apple silicon), a native build. It only runs while the
 
 ### Windows
 
-GitHub-hosted `windows-latest` (Visual Studio 18). Caches: `.ccache` (key `win-ccache-<run id>`, saved right after the Dolphin build), Electron downloads, npm. A rebuild takes about 35 minutes: ccache hits 99.9% of what it can cache, but 746 of Dolphin's ~2,000 compiles use Dolphin's own MSVC precompiled header (`Source/PCH`, `use_pch`), which ccache cannot cache. An option in Dolphin's CMake to build without `use_pch` would cut that; it is a Dolphin change, not done here.
+GitHub-hosted `windows-latest` (Visual Studio 18). Caches: `.ccache` (key `win-ccache-<run id>`, saved right after the Dolphin build), Electron downloads, npm. Dolphin is configured with `DOLPHIN_MSVC_PCH=OFF` (our option in `dolphin/Source/PCH/CMakeLists.txt`, default ON): `pch.h` is still force-included (`/FI`) into the 746 `use_pch` compiles, but as an ordinary header, without `/Yu`, which ccache cannot cache. With Dolphin's precompiled header a rebuild took about 35 minutes even with ccache hitting 99.9% of what it could cache, since those 746 of ~2,000 compiles always ran. Now all of them are cacheable; a build from a cold cache (or after a change to a header most files include) is slower than with the precompiled header.
 
 ## Verified end to end (2026-10-08)
 

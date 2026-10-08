@@ -25,9 +25,10 @@ cmd /c "`"$vcvars`" >nul && set" | ForEach-Object {
 
 Push-Location $src
 try {
+  # DOLPHIN_MSVC_PCH=OFF: pch.h as a plain forced include, no /Yu, so ccache can cache every compile.
   cmake --preset ninja-release-x64 `
     -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache `
-    -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON `
+    -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON -DDOLPHIN_MSVC_PCH=OFF `
     -DENABLE_AUTOUPDATE=OFF -DENABLE_ANALYTICS=OFF -DUSE_DISCORD_PRESENCE=OFF `
     -DENABLE_TESTS=OFF -DENABLE_NOGUI=OFF "-DDISTRIBUTOR=brawlonline.net"  # quoted: PowerShell splits -D...=x.net at the dot
   if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
