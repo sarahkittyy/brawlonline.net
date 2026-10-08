@@ -15,6 +15,7 @@ import { useToasts } from "@/lib/hooks/use_toasts";
 import { hasBorder } from "@/styles/has_border";
 
 import { QuickStartHeader } from "../../step_container";
+import { findNativeFile, getIsoFileKind, ISO_STEP_EXTENSIONS } from "./iso_file";
 import { IsoSelectionStepMessages as Messages } from "./iso_selection_step.messages";
 
 const getColor = (props: any, defaultColor = "#eeeeee") => {
@@ -73,38 +74,50 @@ export const IsoSelectionStep = () => {
   const [, setIsoPath] = useIsoPath();
   const nativeFilesRef = React.useRef<File[] | null>(null);
 
+  const chooseIsoPath = (filePath: string) => {
+    if (loading || !filePath) {
+      return;
+    }
+    switch (getIsoFileKind(filePath)) {
+      case "7z":
+        showError(Messages.sevenZFilesMustBeUncompressed());
+        return;
+      case "compressed":
+        showError(Messages.rvzFilesAreIncompatible(PRODUCT_NAME));
+        return;
+    }
+    setTempIsoPath(filePath);
+  };
+
   const onDrop = (acceptedFiles: File[]) => {
     if (loading || acceptedFiles.length === 0) {
       return;
     }
 
-    // Use the validated file from react-dropzone
+    // Use the validated file from react-dropzone, through its native-backed twin from the drop event
+    // (see onDropCapture below). A file that did not come from a drop is used as it is.
     const accepted = acceptedFiles[0];
+    const isoFile = findNativeFile(accepted, nativeFilesRef.current) ?? accepted;
+    nativeFilesRef.current = null;
+    chooseIsoPath(window.electron.utils.getFilePath(isoFile));
+  };
 
-    // Find corresponding native-backed file
-    const isoFile = nativeFilesRef.current?.find(
-      (f) => f.name === accepted.name && f.size === accepted.size && f.lastModified === accepted.lastModified,
-    );
-
-    if (!isoFile) {
+  // Select opens the native file dialog, as Settings > Game does: it gives the path directly and
+  // filters by extension on every OS.
+  const onSelect = async () => {
+    const result = await window.electron.common.showOpenDialog({
+      properties: ["openFile"],
+      filters: [{ name: "Brawl ISO", extensions: [...ISO_STEP_EXTENSIONS] }],
+    });
+    if (result.canceled || result.filePaths.length === 0) {
       return;
     }
-
-    const filePath = window.electron.utils.getFilePath(isoFile);
-    if (filePath.endsWith(".7z")) {
-      showError(Messages.sevenZFilesMustBeUncompressed());
-      return;
-    } else if (filePath.endsWith(".rvz") || filePath.endsWith(".wbfs")) {
-      showError(Messages.rvzFilesAreIncompatible(PRODUCT_NAME));
-      return;
-    }
-
-    setTempIsoPath(filePath);
+    chooseIsoPath(result.filePaths[0]);
   };
 
   const validIsoPath = validIsoPathQuery.data?.valid ?? IsoValidity.UNVALIDATED;
 
-  const { open, getRootProps, getInputProps, isDragActive, isDragAccept, isDragReject } = useDropzone({
+  const { getRootProps, getInputProps, isDragActive, isDragAccept, isDragReject } = useDropzone({
     accept: {
       "application/octet-stream": [".iso", ".wbfs", ".rvz"],
       "application/x-7z-compressed": [".7z"],
@@ -160,7 +173,7 @@ export const IsoSelectionStep = () => {
       >
         <input {...getInputProps()} />
         {!loading && (
-          <Button color="primary" variant="contained" onClick={open}>
+          <Button color="primary" variant="contained" onClick={() => void onSelect().catch(showError)}>
             {Messages.select()}
           </Button>
         )}
