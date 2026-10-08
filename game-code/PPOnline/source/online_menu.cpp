@@ -188,6 +188,21 @@ namespace OnlineMenu {
         return (u8)((ExchangeFn)0x800AF80C)(css);   // muMenu::exchangeMuSelchkind2GmCharacterKind
     }
 
+    // SESSION's characters come from the other player's machine. Only what this CSS could lock in
+    // reaches the match setup: the roster, plus P+'s hold-shield slots (0x36 Wario-Man, 0x37 solo
+    // Popo, 0x38 Giga Bowser; docs/brawl-memory-map.md).
+    bool selectableCharKind(int kind)
+    {
+        if (kind < 0 || kind > 0xFF) return false;
+        for (u32 i = 0; i < sizeof(PPLUS_ROSTER); i++) {
+            if (charKindOf(PPLUS_ROSTER[i]) == kind) return true;
+        }
+        for (int css = 0x36; css <= 0x38; css++) {
+            if (charKindOf(css) == kind) return true;
+        }
+        return false;
+    }
+
     // The character to lock in: the one on the coin, else (connected, back from a match or
     // the stage select) the last one locked in.
     static int lockChar()

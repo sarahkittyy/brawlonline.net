@@ -32,6 +32,7 @@
 #include "online.h"
 #include "online_menu.h"
 #include "ppom.h"
+#include "stage_legal.h"
 
 extern "C" {
     extern u8 g_onlineCss;
@@ -136,6 +137,22 @@ namespace OnlineMatch {
         if (!sel || !mm || se.state != PPOM::SS_MATCH_READY || se.game != g_onlineMatchGame) {
             PPOM::g_block.debug.lastError = 0x5E70;   // "setup": no ready session
             return false;
+        }
+        // SESSION's setup is the host's decision and its characters, costumes and stage are the
+        // players' lock-ins: another machine's bytes. The game indexes its tables with them, so
+        // only what this game's own menus could produce is used (Dolphin checks the same ranges
+        // when it receives them, Gprb::PeerData). Anything else: no match, back to the CSS (the
+        // other machine then fails the barrier's setup check and the session ends).
+        if (!StageLegal::selectableKind(se.stageKind) || se.numPlayers < 1 || se.numPlayers > 4) {
+            PPOM::g_block.debug.lastError = 0x5E71;   // "setup": a stage this SSS cannot pick
+            return false;
+        }
+        for (int i = 0; i < se.numPlayers; i++) {
+            if (!se.players[i].present) continue;
+            if (!OnlineMenu::selectableCharKind(se.players[i].charKind) || se.players[i].costume >= 0x20) {
+                PPOM::g_block.debug.lastError = 0x5E72;   // "setup": a character this CSS cannot pick
+                return false;
+            }
         }
         if (!s_haveSaved) {
             memcpy(s_savedSel, sel + SEL_PLAYERS, sizeof(s_savedSel));

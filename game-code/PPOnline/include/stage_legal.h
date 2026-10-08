@@ -9,4 +9,5 @@ namespace StageLegal {
     bool active();                         // Direct's loser's pick, or PPOM CFG_SSS_LEGAL
     void setList(const u8* kinds, int n);  // srStageKind list (SESSION later); n <= 0: P+'s legal list
     bool allowedKind(int kind);
+    bool selectableKind(int kind);         // a srStageKind on any page of P+'s stage select
 }

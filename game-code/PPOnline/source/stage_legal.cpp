@@ -69,6 +69,25 @@ namespace StageLegal {
         s_count = n;
     }
 
+    // SESSION's stage comes from the host's machine (another player's): only a stage this stage
+    // select offers reaches the match setup. P+'s page table lists the slots of each page, the
+    // slot table their srStageKind.
+    bool selectableKind(int kind)
+    {
+        if (kind <= 0 || kind > 0xFF) return false;
+        for (int p = 0; p < PAGES; p++) {
+            const u8* page = (const u8*)(STAGE_PAGES + 0x28 * p);
+            int count = page[0];
+            if (count > 39) count = 39;
+            for (int i = 0; i < count; i++) {
+                const u8 slot = page[1 + i];
+                if (slot >= 0x80) continue;
+                if (((const u8*)SLOT_KINDS)[2 * slot] == kind) return true;
+            }
+        }
+        return false;
+    }
+
     bool allowedKind(int kind)
     {
         const u8* k = s_count < 0 ? PPLUS_LEGAL : s_kinds;
