@@ -8,7 +8,7 @@
 #   linuxdeploy + its Qt plugin), COPYING, Licenses/, dolphin.json (manifest).
 #
 # Incremental: the build tree and ccache live in $CI_CACHE (default ~/ci-cache), outside the
-# checkout. Low priority (nice 19, idle IO) and $JOBS jobs: this runs on the production box.
+# checkout. Low priority (nice 19, idle IO) and $JOBS jobs (default 3; the Unraid runner sets 12).
 # Needs Dolphin's Linux build dependencies (see docs/ci.md) and stamp-version.sh run first.
 set -euo pipefail
 version="${1:?version}"

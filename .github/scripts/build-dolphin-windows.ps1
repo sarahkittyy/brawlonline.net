@@ -29,7 +29,7 @@ try {
     -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache `
     -DCMAKE_DISABLE_PRECOMPILE_HEADERS=ON `
     -DENABLE_AUTOUPDATE=OFF -DENABLE_ANALYTICS=OFF -DUSE_DISCORD_PRESENCE=OFF `
-    -DENABLE_TESTS=OFF -DENABLE_NOGUI=OFF -DDISTRIBUTOR=brawlonline.net
+    -DENABLE_TESTS=OFF -DENABLE_NOGUI=OFF "-DDISTRIBUTOR=brawlonline.net"  # quoted: PowerShell splits -D...=x.net at the dot
   if ($LASTEXITCODE -ne 0) { throw "cmake configure failed" }
   ccache -z | Out-Null
   cmake --build $build --target project-plus-dolphin dolphin-tool
