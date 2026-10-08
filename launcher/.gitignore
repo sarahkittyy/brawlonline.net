@@ -22,6 +22,8 @@ release/app/dist
 release/build
 # Game plugin staged for packaging (npm run stage:plugin)
 release/plugins
+# Our Dolphin build staged for packaging (CI: .github/scripts/build-dolphin-*.sh/ps1)
+release/dolphin
 .erb/dll
 
 .idea
