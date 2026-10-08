@@ -1,0 +1,76 @@
+# Server: build accounts, mm, admin and mmclient on sarahvps2 and deploy them with pp-release
+# (install, back up the database, switch, restart pp-accounts and pp-mm, health check, automatic
+# rollback to the previous release on failure). Binaries equal to the active release's are not
+# redeployed, so a rebuild without changes restarts nothing. See server/deploy/PROD.md.
+#
+# Runs only on pushes to main and by hand, never on pull requests: this runs on a self-hosted
+# runner on the production box.
+name: server
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "server/**"
+      - "!server/deploy/**"
+      - "!server/**/*.md"
+      - ".github/workflows/server.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: server-deploy
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: [self-hosted, linux, x64, sarahvps2, brawlonline]
+    timeout-minutes: 60
+    env:
+      # Kept between runs (incremental builds), outside the checkout. Bounded below.
+      CARGO_TARGET_DIR: /home/brawlrunner/ci-cache/server-target
+      CARGO_INCREMENTAL: "0"
+      RUSTUP_TOOLCHAIN: stable
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Own folder in the runner's workspace, which all workflows of this repository share.
+          path: srv
+          sparse-checkout: server
+          persist-credentials: false
+
+      - name: Rust toolchain
+        run: |
+          if [ ! -x "$HOME/.cargo/bin/cargo" ]; then
+            curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs -o "$RUNNER_TEMP/rustup-init.sh"
+            sh "$RUNNER_TEMP/rustup-init.sh" -y --profile minimal --default-toolchain stable --no-modify-path
+          fi
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+          "$HOME/.cargo/bin/rustup" update stable --no-self-update >/dev/null
+          "$HOME/.cargo/bin/cargo" --version
+
+      - name: Build (nice 19, idle IO, 2 jobs)
+        working-directory: srv/server
+        run: |
+          nice -n 19 ionice -c 3 cargo build --release --locked -j 2 \
+            -p accounts -p mm -p admin -p mmclient
+          out="$RUNNER_TEMP/server-release"
+          rm -rf "$out" && mkdir -p "$out"
+          cp "$CARGO_TARGET_DIR"/release/{accounts,mm,admin,mmclient} "$out/"
+          ls -l "$out"
+
+      - name: Deploy
+        run: |
+          name="$(date -u +%Y%m%d)-${GITHUB_SHA::10}"
+          sudo -n /usr/local/sbin/pp-release deploy "$RUNNER_TEMP/server-release" "$name"
+          curl -fsS --max-time 10 http://127.0.0.1:43180/healthz && echo
+
+      - name: Bound the build cache
+        if: always()
+        run: |
+          size=$(du -sm "$CARGO_TARGET_DIR" 2>/dev/null | cut -f1 || echo 0)
+          echo "target dir: ${size} MB"
+          if [ "${size:-0}" -gt 3000 ]; then rm -rf "$CARGO_TARGET_DIR"; echo "cleared"; fi
+          rm -rf "$RUNNER_TEMP/server-release"

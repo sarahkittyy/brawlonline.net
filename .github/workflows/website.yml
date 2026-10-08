@@ -1,0 +1,62 @@
+# Website: publish website/ (without its README) to /var/www/brawlonline on sarahvps2 through
+# `pp-release website`, which leaves downloads/ and updates/ there alone.
+#
+# Cloudflare and browsers cache .js/.css/media for hours (index.html is not cached), so the
+# staged index.html asks for script.js, style.css and the video with ?v=<commit>.
+name: website
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "website/**"
+      - "!website/README.md"
+      - ".github/workflows/website.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: website-deploy
+  cancel-in-progress: true
+
+jobs:
+  publish:
+    runs-on: [self-hosted, linux, x64, sarahvps2, brawlonline]
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          # Own folder in the runner's workspace, which all workflows of this repository share.
+          path: web
+          sparse-checkout: website
+          persist-credentials: false
+
+      - name: Stage
+        run: |
+          site="$RUNNER_TEMP/site"
+          rm -rf "$site" && mkdir -p "$site"
+          rsync -a --exclude='*.md' web/website/ "$site/"
+          v="${GITHUB_SHA::10}"
+          sed -i -E "s#(href|src|poster)=\"(style\.css|script\.js|assets/bg[^\"?]*)\"#\1=\"\2?v=$v\"#g" "$site/index.html"
+          grep -c "?v=$v" "$site/index.html"
+          find "$site" -type f | sort
+
+      - name: Publish
+        run: sudo -n /usr/local/sbin/pp-release website "$RUNNER_TEMP/site"
+
+      - name: Check
+        run: |
+          v="${GITHUB_SHA::10}"
+          ok=""
+          for i in $(seq 1 10); do
+            if curl -fsS --max-time 10 "https://brawlonline.net/?nocache=$v-$i" | grep -q "script.js?v=$v"; then ok=1; break; fi
+            sleep 3
+          done
+          [ -n "$ok" ] || { echo "https://brawlonline.net/ does not serve this commit's index.html"; exit 1; }
+          echo "live: https://brawlonline.net/ (index.html of ${GITHUB_SHA::10})"
+
+      - name: Clean up
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/site"
