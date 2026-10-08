@@ -1,6 +1,6 @@
 # Gameplay-only rollback: status
 
-Branch `gameplay-rollback` in the worktree `dolphin-gprb/` (off `rollback-fixes`, merged with `rollback-fixes` at `a1f9ec2685`, at `d36794a6e1` (the online client), at `ad474c0358` (GameBridge, recent codes, Qt session backend), and in Phase 8 with `c27636d256`, `4944245954` and `50e800b9d6`). Not pushed. Head: `7788a27738`. **Default region set: gp-v19** (Phase 8). **Merged into `rollback-fixes`** (`df44299556`, 2026-10-07), where the gameplay session is now the default online backend and starts matches from the game's own online CSS (Phase 7).
+Branch `gameplay-rollback` in the worktree `dolphin-gprb/` (off `rollback-fixes`, merged with `rollback-fixes` at `a1f9ec2685`, at `d36794a6e1` (the online client), at `ad474c0358` (GameBridge, recent codes, Qt session backend), and in Phase 8 with `c27636d256`, `4944245954` and `50e800b9d6`). Not pushed. Head: `7788a27738`. **Default region set: gp-v19** (Phase 8). **Merged into `rollback-fixes`** (`df44299556`, 2026-10-07), where the gameplay session is now the default online backend and starts matches from the game's own online CSS (Phase 7). Phase 9 (open issue 9, a race in the snapshot code) is on `rollback-fixes` at `001dd0b2df`.
 
 **The session model** (user decision):
 - Each player boots and uses the menus alone.
@@ -31,6 +31,7 @@ All in `harness/tools/`. They need numpy.
 | `gprb_passlog.py` | Phase 6: show and edit pass logs (`fix`, `norb`, `flat`). |
 | `gprb_memdiff.py` | Phase 6: whole-memory dump diffs outside/inside the set, the DOL objects behind them, and a scan for global list heads whose nodes are rolled back. |
 | `gprb_hang.py` | `cdb` stacks of every thread of a hung instance. |
+| `gprb_replay_stress.py` | Phase 9: one pass log replayed N times (J at a time), optionally with CPU-burning processes at normal priority (`--burn`); each replay is classified (identical to the ground truth, drift, hang with `cpu_state` and back chain, crash, harness error). |
 
 New harness commands (`Source/Core/Core/Harness/HarnessServer.cpp`), listed under [Harness commands](#harness-commands): `frame_trace`, `frame_trace_config`, `game_pads`, `cpu_trace`, `mem_chunk_hashes`, `disasm`, `timing_nudge`, `gprb_synctest`, `gprb_connect`, `gprb_set_selections`, `gprb_status`, `gprb_checksums`, `gprb_stop`.
 
@@ -711,9 +712,65 @@ No session-specific cause was looked for: the failing pairs were run again on th
 
 Every sync test also matched its no-rollback ground truth to game set. In the `ffs` runs the forms seen include Wario-Man and Giga Bowser, and the logs show the fighter changes (Zelda/Sheik, Wario/Bowser).
 
+## Phase 9: the base snapshot race (open issue 9)
+
+Dolphin `rollback-fixes`, `001dd0b2df` (on `7788a27738`). Frozen build: `run/bin/gprb-001dd0b2df`.
+
+### Cause
+
+Not guest state: a race in the snapshot code (`RollbackManager`, Brawlback's, used by every mode).
+- A save keeps only the 64-byte granules written since the previous save (the JIT's dirty bitmap) in a ring of 8 slots. A **base snapshot** holds all of RAM as of the frame before the oldest slot.
+- When the ring is full, `SaveFrame` takes the oldest slot's granules out and merges them into the base snapshot **on a job thread** (`m_eviction_job`), then returns.
+- `LoadFrame` restores each granule written since the target frame from the newest slot at or before the target that holds it, and **from the base snapshot** when no slot in the ring does. It never waited for the eviction job. The next save waited for it; the load did not.
+- In a session or sync test the load comes right after a save (the last pass of an update saves, the next update loads). With the sync test's distance 7 the target is the oldest slot, so most granules come from the base snapshot.
+
+If the job had not finished, the load read the base snapshot while it was being written. A granule last written in the evicted slot's frame came back one frame older, or torn. On an idle machine the job finishes first almost every time. A job thread that is slow to wake or is preempted loses the race. Since `204a906682` (2026-10-06) idle job threads sleep instead of spinning, so a kick has to wake them. The test instances also run at below-normal priority. Under load, both make the lag longer.
+
+This matches every observation of issue 9:
+- flat replays never failed (no loads);
+- clean replays were byte-identical (no lost race, same memory);
+- region dumps of a crashing replay matched a passing one until it lost the race;
+- the crashes clustered when the machine was loaded;
+- they hit nw4r ef/g3d first: effect and particle objects are written every frame, so one frame of staleness there means stale list links and vtable pointers.
+
+### Reproduction
+
+New tool: `gprb_replay_stress.py`. It replays one pass log N times (J at a time), optionally with N CPU-burning processes at normal priority (`--burn`). Each replay is compared with the ground truth (the flattened log); a stall in the running phase counts as a hang and keeps `cpu_state` and the main thread's back chain. The log: a fresh `m-yoshi` sync test on the frozen gp-v19 build (`gprb_sweep.py --keep-work`, new option; it passed); 7,194 frames. Then the same log cut at session frame 2,400 (every failure below happened before session frame 2,210), so that 50 replays on a loaded machine fit in about an hour.
+
+| Build | Log | Load | Replays | Result |
+|---|---|---|---|---|
+| fixed, old load (`PPR_GPRB_EVICT_NO_WAIT=1`) | full | idle | 4 | 4 identical; 0-1 loads per replay found the eviction unfinished |
+| fixed, old load, eviction delayed 3 ms (`PPR_GPRB_EVICT_DELAY_US=3000`) | full | idle | 4 | **4 hangs, all at session frame 51** (`srr0 0x20`, `lr 0x8072AB3C`) |
+| fixed, eviction delayed 3 ms | full | idle | 4 | 4 identical to game set (7,185 loads per replay waited for the job) |
+| old (`run/bin/gprb-e642b3ce98`) | full | `--burn 12` | 25 | **25 hangs** at session frames 51-1,143 |
+| old | 2,400 | `--burn 12` | 12 | **11 hangs** at 51-2,202, 1 harness timeout |
+| fixed | full | `--burn 12` | 1 | identical to game set (640 loads waited) |
+| fixed | 2,400 | `--burn 12` | 54 | **53 identical, 0 hangs, 0 drifts**, 1 harness timeout while loading the savestate (open issue 8); in each replay 13-191 of its 2,393 loads (51 on average) found the job unfinished and waited |
+
+So host load turns the failure from intermittent into certain, and the wait makes it disappear. The old build's hangs under load have the same signatures as the original reports: `fn_8005C2B0 ← fn_80017618` (the effect manager's list walk, as in the sweep's `m-yoshi`/`m-ness` hangs), `fn_8005B6F0`, `fn_80163FAC`, `fn_8019A874` jumping to `0x4E6F6464`, `fn_8016C870`, `GXSetFog`, and jumps to lowmem `0x20`. The other leads did not need testing: the failing replays used the Null video backend (no EFB copies to RAM) and single core (no GPU thread), and the forced delay alone produced the crash on an idle machine.
+
+### Fix (`001dd0b2df`)
+
+- `LoadFrame` waits for the eviction job before it reads anything (`WaitForEviction`). This costs nothing when the job is done; under `--burn 12` the longest wait was 57 ms.
+- The job system: a job's completion count is decremented with release order and read with acquire (it was relaxed, which is correct on x86 only by accident of the hardware, and matters on ARM64 Macs). `Job::finish` no longer writes `is_done` into a job after the count drops, when its waiter may already have released the job's block.
+- Diagnostics: `PPR_GPRB_EVICT_DELAY_US=N` (every eviction first sleeps N µs) and `PPR_GPRB_EVICT_NO_WAIT=1` (the old load). `gprb_status` reports `load_evict_waits` (loads that found the job unfinished) and `load_evict_wait_us_max`.
+
+The race is in Brawlback's own snapshot code, so whole-machine rollback (netplay) had it too. Nothing in it is specific to Windows or D3D11: the replays used the Null backend in single core, and the code is the same on every platform, so the Linux and macOS builds had it too.
+
+### Regression check: mirrors and forced Final Smashes
+
+The fixed build (`run/bin/gprb-001dd0b2df`, gp-v19) ran the sweep's `mirror` and `ffs` groups: `gprb_sweep.py run --out run/qa/sweep4-i9 --groups mirror,ffs --jobs 3 --build run/bin/gprb-001dd0b2df`. The machine was otherwise idle apart from two instances of another agent.
+
+| Group | gp-v19 (`sweep3`) | `001dd0b2df` (`sweep4-i9`) |
+|---|---|---|
+| mirrors | 42 / 42 (`m-yoshi`, `m-ness` after reruns) | **42 / 42** |
+| forced Final Smashes | 7 / 7 | **7 / 7** |
+
+Every run reached game set (7,193 session frames) with no sync-test mismatch. Every mirror matched its ground truth to game set. One run (`m-diddy_kong`) first failed while booting to the CSS: the harness connection was reset (open issue 8). It passed on `--retry-errors`. The forms seen include Wario-Man, Giga Bowser and the Zelda/Sheik changes. The ground-truth comparison of `ff-wario-bowser` and `ff-olimar-lucario` covers only the first 62 frames and none, respectively, as it did on gp-v19 (196 and 96 frames). That is an existing limit of the trace for these two forced runs, not a change.
+
 ## Open issues
 
-Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait).
+Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it).
 
 1. **Sync tests must be checked against the ground truth.** Their own check (first run against resimulation) missed a fault that changed the game within seconds. `gprb_mispredict.py` with a recording, `--no-rollback`, and a comparison of the traces is the stronger test; only Mario/Marth FD and Ice Climbers/Olimar PS2 have recordings so far. The closed-loop scenario sync tests (`gprb_synctest.py`) cannot be compared this way.
 2. **State outside the set that only rare events touch** is still found one case at a time. `gprb_memdiff.py scan` finds global list heads that point into the set (Phase 8 found three more: camera subjects, archives, and the IO manager's requests, all only touched when objects are created or freed mid-match); DOL objects that the set covers only in part (`dolw-g1`) caused two more (draw strategies, scene records), and the rest of them (nw4r g3d's statics `lbl_804A4540`, `lbl_804A5514`, `lbl_804A7F40`, `lbl_804A9A80`, and a few small ones) are still covered in part; counters and flags need a census (`PPR_GPRB_CENSUS`) and a reason. Known and left alone: the task-id counter `gUnk8059c66c` (ids of objects created in resimulated frames differ between peers; no effect found).
@@ -723,7 +780,7 @@ Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v
 6. ~~The coverage sweep still defaults to an old region set.~~ Every tool defaults to gp-v19 and the sweep to `run/bin/gprb-e642b3ce98` (Phase 8).
 7. **A desync from frame 0 on Smashville, seen once** (2026-10-07, the first `test_online_unranked.py` run after the `unranked` merge; log `run/scratch/merge-unranked/unranked.log`). Equal setup keys, the barrier passed, the RNGs seeded alike (`4f960b68 6b6c6b20 5048c23a`), yet at frame 0 (game frame 240) the first RNG word differed (`1240120447` against `2104839129`; the other two equal) and the fighters from frame 2; the host ended at "game set" after 573 frames, the joiner with "peer timed out". It happened at 14:59:2x local time, under a minute before the hour, and Smashville's lighting follows the console clock: the two instances' RTCs may have been on either side of an hour boundary. Two later Smashville games ran identically. Not reproduced. Phase 8 ("The clock and the match start"): no clock-derived value was found that reaches the RNG before the barrier; P1 had entered at the other start point, which the stage's constructor shuffles with `g_mtRand` during the load. The match start now also runs at the stage's constructor if it has not run yet, and the joiner takes the host's start points at the barrier; new log lines show either if it happens again.
 8. **Localhost TCP connections sometimes time out on this machine** while several agents run Dolphins: a harness port another process answered ("another harness client is already connected"), a fresh harness port that never accepted, and the portable Postgres of `OnlineBackend` refusing or timing out its first connections (`CREATE DATABASE`, the services' pools). Runs on 2026-10-07 used one portable Postgres cluster started by hand and `PPHARNESS_PG_URL` (the harness's external-Postgres mode), which held up. `OnlineBackend`'s external-Postgres mode passed the URL before psql's options, which psql on Windows ignores; fixed.
-9. **A rare hang in render and effect code that a replay does not always reproduce** (Phase 8). In the gp-v19 sweep `m-yoshi` and `m-ness` first failed for harness reasons, then hung when run again (`m-yoshi` at session frame 4,270 and `m-ness` at 3,865, both in `fn_8005C2B0` ← `fn_80017618`, the effect manager's list walk), then passed when run a third time. Their pass logs (`run/qa/sweep3/work/m-yoshi/`, `m-ness/`; the hung runs' JSON in `run/qa/sweep3-hangs/`) replayed exactly: `m-ness` 3 of 3 to the end; `m-yoshi` 18 of 25 to the end, 7 crashed at session frames 130-1,901 in nw4r ef/g3d code (`fn_8005B6F0` calling a list node's `vtable+0x14`, `fn_80163FAC`, `fn_8019A874` jumping to `0x4E6F6464`), with gp-v18 as with gp-v19; the flattened log never crashed. Two replays that did not crash were byte-identical in all of MEM1 and MEM2 at session frames 300 and 600, and region dumps of a crashing and a passing replay were identical at 50-400. So something in a rolled-back run is not determined by the emulated state alone (host timing, or a host thread touching guest memory), and it shows in effect/render objects. The crashes came in clusters while this machine was loaded (other agents' instances); not resolved.
+9. ~~**A rare hang in render and effect code that a replay does not always reproduce** (Phase 8). In the gp-v19 sweep `m-yoshi` and `m-ness` first failed for harness reasons, then hung when run again (`m-yoshi` at session frame 4,270 and `m-ness` at 3,865, both in `fn_8005C2B0` ← `fn_80017618`, the effect manager's list walk), then passed when run a third time. Their pass logs (`run/qa/sweep3/work/m-yoshi/`, `m-ness/`; the hung runs' JSON in `run/qa/sweep3-hangs/`) replayed exactly: `m-ness` 3 of 3 to the end; `m-yoshi` 18 of 25 to the end, 7 crashed at session frames 130-1,901 in nw4r ef/g3d code (`fn_8005B6F0` calling a list node's `vtable+0x14`, `fn_80163FAC`, `fn_8019A874` jumping to `0x4E6F6464`), with gp-v18 as with gp-v19; the flattened log never crashed. Two replays that did not crash were byte-identical in all of MEM1 and MEM2 at session frames 300 and 600, and region dumps of a crashing and a passing replay were identical at 50-400. So something in a rolled-back run is not determined by the emulated state alone (host timing, or a host thread touching guest memory), and it shows in effect/render objects. The crashes came in clusters while this machine was loaded (other agents' instances).~~ Resolved in Phase 9: not guest state but a race in the snapshot code. `LoadFrame` read the base snapshot without waiting for the eviction job that `SaveFrame` had just kicked; under host load the job lost the race. On a loaded machine the old build hung in 25 of 25 replays of an `m-yoshi` log, and the fixed build (`001dd0b2df`) replayed its first 2,400 frames identically in 53 of 54 replays (the other was a harness timeout before the start).
 
 ## Harness commands
 
@@ -739,6 +796,7 @@ Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v
 | `mm_search_direct` / `mm_search` with `backend="gameplay"` | online hand-off to `Gprb::Session` |
 | `gprb_samples` | chunk hashes (and watched bytes) of the region set every N confirmed frames |
 | `gprb_census` | granules outside the set written during the match (`PPR_GPRB_CENSUS=1`) |
+| `gprb_status` (Phase 9 fields) | `load_evict_waits` (loads that found the base snapshot's eviction job unfinished and waited for it), `load_evict_wait_us_max` |
 | `gpu_state` | CP FIFO, PI FIFO, PE control, interrupt cause/mask, deterministic-GPU flag |
 | `gprb_sound_state` | the sound archive player's allocated sounds (id, handle, owned/orphaned, duplicate ids) |
 
@@ -752,6 +810,8 @@ Diagnostics through environment variables:
 - `PPR_GPRB_CENSUS=1`: record non-set granules written during the match (`gprb_census`).
 - `PPR_GPRB_INTERP_FROM=<game frame>`: JIT up to that frame, then the interpreter (and a break the harness resumes), for `cpu_trace` of late frames.
 - `PPR_GPRB_FORCE_FINAL=<port mask>`: those ports get their Final Smash at the last countdown frame (Phase 8; the sweep's `ffs` group).
+- `PPR_GPRB_EVICT_DELAY_US=N`: every eviction job (the oldest slot merged into the base snapshot) sleeps N µs first, as on a starved machine (Phase 9).
+- `PPR_GPRB_EVICT_NO_WAIT=1`: loads do not wait for the eviction job (the behaviour before Phase 9, to reproduce the race).
 
 ## Commits (`dolphin-gprb`, branch `gameplay-rollback`)
 
@@ -786,7 +846,7 @@ Diagnostics through environment variables:
 | `e642b3ce98` | gp-v19 as the default (frozen as `run/bin/gprb-e642b3ce98`) |
 | `7788a27738` | merge `rollback-fixes` `50e800b9d6` (online default hosts) |
 
-## Commits (`dolphin/`, branch `rollback-fixes`, Phase 7)
+## Commits (`dolphin/`, branch `rollback-fixes`, Phases 7 and 9)
 
 | SHA | What |
 |---|---|
@@ -796,3 +856,4 @@ Diagnostics through environment variables:
 | `b882222f2b` | the render window's title starts with Brawl Online |
 | `c27636d256` | PPOM v3: per-player port values through the lobby into SESSION, the applied layouts in the setup key; the OSD DISCONNECTED only as a fallback |
 | `4944245954` | merge `unranked` (`6449517bc1`): the server's stage list with Slippi's stage pool for every random stage (Unranked, Direct's game 1); Direct's loser's pick is not restricted to the list; PPOM v3 kept |
+| `001dd0b2df` | Phase 9: a load waits for the base snapshot's eviction job; job completion with release/acquire order, no write to a finished job; `PPR_GPRB_EVICT_DELAY_US`, `PPR_GPRB_EVICT_NO_WAIT`, `load_evict_waits` (frozen as `run/bin/gprb-001dd0b2df`) |
