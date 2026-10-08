@@ -7,7 +7,7 @@ msgstr ""
 "Plural-Forms: nplurals=1; plural=0\n"
 "x-generator: i18next-auto-keys CLI\n"
 "Language: ja-JP\n"
-"PO-Revision-Date: 2026-10-08T01:25:15.359Z\n"
+"PO-Revision-Date: 2026-10-08T06:36:43.177Z\n"
 
 #: src/renderer/components/activate_online_form/activate_online_form.messages.ts:3:30
 msgid "2-4 uppercase English characters"
@@ -245,7 +245,7 @@ msgstr "コードを確認"
 msgid "Confirm password"
 msgstr "パスワードを確認"
 
-#: src/renderer/components/login_form/login_form.messages.ts:16:19
+#: src/renderer/components/login_form/login_form.messages.ts:15:19
 #: src/renderer/pages/quick_start/steps/setup_complete_step/setup_complete_step.messages.ts:3:19
 msgid "Continue"
 msgstr "続ける"
@@ -465,7 +465,7 @@ msgstr "アカウントの削除に失敗しました"
 msgid "Failed to switch account"
 msgstr "アカウントの切り替えに失敗しました"
 
-#: src/renderer/components/login_form/login_form.messages.ts:13:25
+#: src/renderer/components/login_form/login_form.messages.ts:12:25
 msgid "Forgot your password?"
 msgstr "パスワードをお忘れですか？"
 
@@ -481,7 +481,7 @@ msgstr "チーム戦の試合統計は未対応です"
 msgid "General Settings"
 msgstr "一般設定"
 
-#: src/renderer/components/login_form/login_form.messages.ts:18:17
+#: src/renderer/components/login_form/login_form.messages.ts:17:17
 #: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:3:17
 msgid "Go back"
 msgstr "戻る"
@@ -519,7 +519,7 @@ msgstr "ホームランコンテスト"
 msgid "I accept the {0} Rules"
 msgstr ""
 
-#: src/renderer/components/login_form/login_form.messages.ts:11:31
+#: src/renderer/components/login_form/login_form.messages.ts:10:31
 msgid "I already have an account"
 msgstr "すでにアカウントを持っています"
 
@@ -580,10 +580,6 @@ msgstr "無効なIPアドレス"
 #: src/renderer/lib/validate/validate.messages.ts:3:22
 msgid "Invalid code"
 msgstr "無効なコード"
-
-#: src/renderer/components/login_form/login_form.messages.ts:10:21
-msgid "Invite code"
-msgstr ""
 
 #: src/renderer/components/loading_screen/loading_screen.messages.ts:2:19
 #: src/renderer/pages/loading/loading_page.messages.ts:2:19
@@ -804,11 +800,11 @@ msgstr "概要"
 msgid "Password"
 msgstr "パスワード"
 
-#: src/renderer/components/login_form/login_form.messages.ts:14:24
+#: src/renderer/components/login_form/login_form.messages.ts:13:24
 msgid "Password reset"
 msgstr "パスワードリセット"
 
-#: src/renderer/components/login_form/login_form.messages.ts:15:53
+#: src/renderer/components/login_form/login_form.messages.ts:14:53
 #. {0} email: string
 msgid "Password reset instructions have been sent to {0}."
 msgstr "パスワードリセット手順を {0} に送信しました。"
@@ -934,7 +930,7 @@ msgid ""
 "section in the settings page for guidance."
 msgstr ""
 
-#: src/renderer/components/login_form/login_form.messages.ts:17:16
+#: src/renderer/components/login_form/login_form.messages.ts:16:16
 msgid "Reset"
 msgstr "リセット"
 
@@ -1027,7 +1023,7 @@ msgstr ""
 msgid "Show stats"
 msgstr "統計を表示"
 
-#: src/renderer/components/login_form/login_form.messages.ts:12:17
+#: src/renderer/components/login_form/login_form.messages.ts:11:17
 msgid "Sign up"
 msgstr "新規登録"
 

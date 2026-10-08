@@ -7,7 +7,7 @@ msgstr ""
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 "x-generator: i18next-auto-keys CLI\n"
 "Language: pt-BR\n"
-"PO-Revision-Date: 2026-10-08T01:25:15.356Z\n"
+"PO-Revision-Date: 2026-10-08T06:36:43.174Z\n"
 
 #: src/renderer/components/activate_online_form/activate_online_form.messages.ts:3:30
 msgid "2-4 uppercase English characters"
@@ -247,7 +247,7 @@ msgstr "Confirmar código"
 msgid "Confirm password"
 msgstr "Confirmar senha"
 
-#: src/renderer/components/login_form/login_form.messages.ts:16:19
+#: src/renderer/components/login_form/login_form.messages.ts:15:19
 #: src/renderer/pages/quick_start/steps/setup_complete_step/setup_complete_step.messages.ts:3:19
 msgid "Continue"
 msgstr "Continuar"
@@ -471,7 +471,7 @@ msgstr "Falha ao remover conta"
 msgid "Failed to switch account"
 msgstr "Falha ao trocar conta"
 
-#: src/renderer/components/login_form/login_form.messages.ts:13:25
+#: src/renderer/components/login_form/login_form.messages.ts:12:25
 msgid "Forgot your password?"
 msgstr "Esqueceu sua senha?"
 
@@ -487,7 +487,7 @@ msgstr "Estatísticas de jogo para batalhas em equipe não são suportadas"
 msgid "General Settings"
 msgstr "Configurações Gerais"
 
-#: src/renderer/components/login_form/login_form.messages.ts:18:17
+#: src/renderer/components/login_form/login_form.messages.ts:17:17
 #: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:3:17
 msgid "Go back"
 msgstr "Voltar"
@@ -525,7 +525,7 @@ msgstr "Home-Run Contest"
 msgid "I accept the {0} Rules"
 msgstr ""
 
-#: src/renderer/components/login_form/login_form.messages.ts:11:31
+#: src/renderer/components/login_form/login_form.messages.ts:10:31
 msgid "I already have an account"
 msgstr "Já tenho uma conta"
 
@@ -592,10 +592,6 @@ msgstr "Endereço IP inválido"
 #: src/renderer/lib/validate/validate.messages.ts:3:22
 msgid "Invalid code"
 msgstr "Código inválido"
-
-#: src/renderer/components/login_form/login_form.messages.ts:10:21
-msgid "Invite code"
-msgstr ""
 
 #: src/renderer/components/loading_screen/loading_screen.messages.ts:2:19
 #: src/renderer/pages/loading/loading_page.messages.ts:2:19
@@ -818,11 +814,11 @@ msgstr "Visão Geral"
 msgid "Password"
 msgstr "Senha"
 
-#: src/renderer/components/login_form/login_form.messages.ts:14:24
+#: src/renderer/components/login_form/login_form.messages.ts:13:24
 msgid "Password reset"
 msgstr "Redefinição de senha"
 
-#: src/renderer/components/login_form/login_form.messages.ts:15:53
+#: src/renderer/components/login_form/login_form.messages.ts:14:53
 #. {0} email: string
 msgid "Password reset instructions have been sent to {0}."
 msgstr "Instruções de redefinição de senha foram enviadas para {0}."
@@ -950,7 +946,7 @@ msgid ""
 "section in the settings page for guidance."
 msgstr ""
 
-#: src/renderer/components/login_form/login_form.messages.ts:17:16
+#: src/renderer/components/login_form/login_form.messages.ts:16:16
 msgid "Reset"
 msgstr "Redefinir"
 
@@ -1043,7 +1039,7 @@ msgstr "Mostrar Ranking na Página Inicial"
 msgid "Show stats"
 msgstr "Mostrar estatísticas"
 
-#: src/renderer/components/login_form/login_form.messages.ts:12:17
+#: src/renderer/components/login_form/login_form.messages.ts:11:17
 msgid "Sign up"
 msgstr "Cadastrar-se"
 

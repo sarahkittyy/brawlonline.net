@@ -31,10 +31,6 @@ export class AccountsHttpClient {
 
   signUp(req: SignUpRequest): Promise<SessionResponse> {
     const body: SignUpRequest = { email: req.email, password: req.password, displayName: req.displayName };
-    const invite = req.inviteCode?.trim();
-    if (invite) {
-      body.inviteCode = invite;
-    }
     return this._request("POST", "/v1/auth/signup", { body });
   }
 

@@ -18,7 +18,7 @@ export class SessionExpiredError extends Error {
   }
 }
 
-export type SignUpArgs = { email: string; password: string; displayName: string; inviteCode?: string };
+export type SignUpArgs = { email: string; password: string; displayName: string };
 
 export interface AuthService {
   getCurrentUser(): AuthUser | undefined;
