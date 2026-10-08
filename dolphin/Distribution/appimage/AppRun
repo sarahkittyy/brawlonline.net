@@ -1,0 +1,15 @@
+#!/bin/bash
+
+mkdir -p $HOME/.local/share/icons/hicolor/scalable/apps && cp $APPDIR/project-plus-dolphin.svg $HOME/.local/share/icons/hicolor/scalable/apps
+mkdir -p $HOME/.local/share/project-plus-dolphin && cp -R $APPDIR/usr/share/project-plus-dolphin $HOME/.local/share/
+
+GITVER=$(wget -qO- https://www.github.com/Project-Plus-Development-Team/Project-Plus-Dolphin/releases/latest | grep '<p>DOLPHIN' | awk '{print $NF}' | cut -d '<' -f 1)
+APPVER=$(cat $APPDIR/version.txt)
+
+if [[ -z "$GITVER" ]]; then
+	$APPDIR/AppRun-patched "$@"
+elif [ "$GITVER" = "$APPVER" ]; then
+	$APPDIR/AppRun-patched "$@"
+else
+	$APPDIR/update.sh "$@"
+fi

@@ -1,0 +1,254 @@
+// Copyright 2016 Dolphin Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+#include "Core/ConfigLoaders/NetPlayConfigLoader.h"
+
+#include <memory>
+#include <utility>
+
+#include <fmt/format.h>
+
+#include "Common/CommonPaths.h"
+#include "Common/FileUtil.h"
+
+#include "Core/Config/AchievementSettings.h"
+#include "Core/Config/GraphicsSettings.h"
+#include "Core/Config/MainSettings.h"
+#include "Core/Config/SYSCONFSettings.h"
+#include "Core/Config/SessionSettings.h"
+#include "Core/Config/WiimoteSettings.h"
+#include "Core/HW/EXI/EXI.h"
+#include "Core/HW/SI/SI.h"
+#include "Core/HW/SI/SI_Device.h"
+#include "Core/HW/Wiimote.h"
+#include "Core/NetPlayProto.h"
+#include "Core/PowerPC/PowerPC.h"
+
+#include "InputCommon/GCAdapter.h"
+
+namespace ConfigLoaders
+{
+// Rollback snapshots only copy the memory that the dirty bitmap says changed. Jit64 marks every
+// guest store in that bitmap; JitArm64 has no such barrier yet, so a rollback session on any other
+// host runs the cached interpreter, whose stores all go through the MMU and are marked there.
+static PowerPC::CPUCore NetPlayCPUCore(const NetPlay::NetSettings& settings)
+{
+#ifndef _M_X86_64
+  if (settings.m_RollbackMode && settings.cpu_core != PowerPC::CPUCore::Interpreter)
+    return PowerPC::CPUCore::CachedInterpreter;
+#endif
+  return settings.cpu_core;
+}
+
+class NetPlayConfigLayerLoader final : public Config::ConfigLayerLoader
+{
+public:
+  explicit NetPlayConfigLayerLoader(NetPlay::NetSettings settings)
+      : ConfigLayerLoader(Config::LayerType::Netplay), m_settings(std::move(settings))
+  {
+  }
+
+  void Load(Config::Layer* layer) override
+  {
+    layer->Set(Config::MAIN_CPU_THREAD, m_settings.cpu_thread);
+    layer->Set(Config::MAIN_CPU_CORE, NetPlayCPUCore(m_settings));
+    // Rollback in dual core needs the deterministic GPU thread: the CPU thread then processes the
+    // FIFO, PE tokens/finish interrupts and CP registers in emulated time, and the GPU thread only
+    // renders. Without it ("none" in a local game INI or the global config), when interrupts fire
+    // and what the CPU reads from the CP depend on host timing, so peers diverge, and the rollback
+    // snapshot could not separate the two threads' state either. The netplay layer overrides the
+    // game INIs, so both peers run it whatever their local settings.
+    if (m_settings.m_RollbackMode)
+      layer->Set(Config::MAIN_GPU_DETERMINISM_MODE, std::string("fake-completion"));
+    layer->Set(Config::MAIN_ENABLE_CHEATS, m_settings.enable_cheats);
+#ifdef USE_RETRO_ACHIEVEMENTS
+    layer->Set(Config::RA_HARDCORE_ENABLED, m_settings.enable_hardcore);
+#endif  // USE_RETRO_ACHIEVEMENTS
+    layer->Set(Config::MAIN_GC_LANGUAGE, m_settings.selected_language);
+    layer->Set(Config::MAIN_OVERRIDE_REGION_SETTINGS, m_settings.override_region_settings);
+    layer->Set(Config::MAIN_DSP_HLE, m_settings.dsp_hle);
+    layer->Set(Config::MAIN_OVERCLOCK_ENABLE, m_settings.oc_enable);
+    layer->Set(Config::MAIN_OVERCLOCK, m_settings.oc_factor);
+    layer->Set(Config::MAIN_VI_OVERCLOCK_ENABLE, m_settings.vi_oc_enable);
+    layer->Set(Config::MAIN_VI_OVERCLOCK, m_settings.vi_oc_factor);
+    for (ExpansionInterface::Slot slot : ExpansionInterface::SLOTS)
+      layer->Set(Config::GetInfoForEXIDevice(slot), m_settings.exi_device[slot]);
+    layer->Set(Config::MAIN_MEMORY_CARD_SIZE, m_settings.memcard_size_override);
+    layer->Set(Config::SESSION_SAVE_DATA_WRITABLE, m_settings.savedata_write);
+    layer->Set(Config::MAIN_RAM_OVERRIDE_ENABLE, m_settings.ram_override_enable);
+    layer->Set(Config::MAIN_MEM1_SIZE, m_settings.mem1_size);
+    layer->Set(Config::MAIN_MEM2_SIZE, m_settings.mem2_size);
+    layer->Set(Config::MAIN_FALLBACK_REGION, m_settings.fallback_region);
+    layer->Set(Config::MAIN_ALLOW_SD_WRITES, m_settings.allow_sd_writes);
+    layer->Set(Config::MAIN_DSP_JIT, m_settings.dsp_enable_jit);
+
+    for (size_t i = 0; i < Config::SYSCONF_SETTINGS.size(); ++i)
+    {
+      std::visit(
+          [&](auto* info) {
+            layer->Set(*info, static_cast<decltype(info->GetDefaultValue())>(
+                                  m_settings.sysconf_settings[i]));
+          },
+          Config::SYSCONF_SETTINGS[i].config_info);
+    }
+
+    layer->Set(Config::GFX_HACK_EFB_ACCESS_ENABLE, m_settings.efb_access_enable);
+    layer->Set(Config::GFX_HACK_BBOX_ENABLE, m_settings.bbox_enable);
+    layer->Set(Config::GFX_HACK_FORCE_PROGRESSIVE, m_settings.force_progressive);
+    layer->Set(Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM, m_settings.efb_to_texture_enable);
+    layer->Set(Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM, m_settings.xfb_to_texture_enable);
+    layer->Set(Config::GFX_HACK_DISABLE_COPY_TO_VRAM, m_settings.disable_copy_to_vram);
+    layer->Set(Config::GFX_HACK_IMMEDIATE_XFB, m_settings.immediate_xfb_enable);
+    layer->Set(Config::GFX_HACK_EFB_EMULATE_FORMAT_CHANGES, m_settings.efb_emulate_format_changes);
+    layer->Set(Config::GFX_SAFE_TEXTURE_CACHE_COLOR_SAMPLES,
+               m_settings.safe_texture_cache_color_samples);
+    layer->Set(Config::GFX_PERF_QUERIES_ENABLE, m_settings.perf_queries_enable);
+    layer->Set(Config::MAIN_FLOAT_EXCEPTIONS, m_settings.float_exceptions);
+    layer->Set(Config::MAIN_DIVIDE_BY_ZERO_EXCEPTIONS, m_settings.divide_by_zero_exceptions);
+    layer->Set(Config::MAIN_FPRF, m_settings.fprf);
+    layer->Set(Config::MAIN_ACCURATE_NANS, m_settings.accurate_nans);
+    layer->Set(Config::MAIN_ACCURATE_FMADDS, m_settings.accurate_fmadds);
+    layer->Set(Config::MAIN_DISABLE_ICACHE, m_settings.disable_icache);
+    layer->Set(Config::MAIN_SYNC_ON_SKIP_IDLE, m_settings.sync_on_skip_idle);
+    layer->Set(Config::MAIN_SYNC_GPU, m_settings.sync_gpu);
+    layer->Set(Config::MAIN_SYNC_GPU_MAX_DISTANCE, m_settings.sync_gpu_max_distance);
+    layer->Set(Config::MAIN_SYNC_GPU_MIN_DISTANCE, m_settings.sync_gpu_min_distance);
+    layer->Set(Config::MAIN_SYNC_GPU_OVERCLOCK, m_settings.sync_gpu_overclock);
+
+    layer->Set(Config::MAIN_JIT_FOLLOW_BRANCH, m_settings.jit_follow_branch);
+    layer->Set(Config::MAIN_FAST_DISC_SPEED, m_settings.fast_disc_speed);
+    layer->Set(Config::MAIN_MMU, m_settings.mmu);
+    layer->Set(Config::MAIN_FASTMEM, m_settings.fastmem);
+    layer->Set(Config::MAIN_SKIP_IPL, m_settings.skip_ipl);
+    layer->Set(Config::SESSION_LOAD_IPL_DUMP, m_settings.load_ipl_dump);
+
+    layer->Set(Config::GFX_HACK_DEFER_EFB_COPIES, m_settings.defer_efb_copies);
+    layer->Set(Config::GFX_HACK_EFB_ACCESS_TILE_SIZE, m_settings.efb_access_tile_size);
+    layer->Set(Config::GFX_HACK_EFB_DEFER_INVALIDATION, m_settings.efb_access_defer_invalidation);
+
+    layer->Set(Config::SESSION_USE_FMA, m_settings.use_fma);
+
+    layer->Set(Config::MAIN_BLUETOOTH_PASSTHROUGH_ENABLED, false);
+
+    if (m_settings.strict_settings_sync)
+    {
+      layer->Set(Config::GFX_HACK_VERTEX_ROUNDING, m_settings.vertex_rounding);
+      layer->Set(Config::GFX_EFB_SCALE, m_settings.internal_resolution);
+      layer->Set(Config::GFX_HACK_COPY_EFB_SCALED, m_settings.efb_scaled_copy);
+      layer->Set(Config::GFX_FAST_DEPTH_CALC, m_settings.fast_depth_calc);
+      layer->Set(Config::GFX_ENABLE_PIXEL_LIGHTING, m_settings.enable_pixel_lighting);
+      layer->Set(Config::GFX_WIDESCREEN_HACK, m_settings.widescreen_hack);
+      layer->Set(Config::GFX_ENHANCE_FORCE_TEXTURE_FILTERING, m_settings.force_texture_filtering);
+      layer->Set(Config::GFX_ENHANCE_MAX_ANISOTROPY, m_settings.max_anisotropy);
+      layer->Set(Config::GFX_ENHANCE_FORCE_TRUE_COLOR, m_settings.force_true_color);
+      layer->Set(Config::GFX_ENHANCE_DISABLE_COPY_FILTER, m_settings.disable_copy_filter);
+      layer->Set(Config::GFX_DISABLE_FOG, m_settings.disable_fog);
+      layer->Set(Config::GFX_ENHANCE_ARBITRARY_MIPMAP_DETECTION,
+                 m_settings.arbitrary_mipmap_detection);
+      layer->Set(Config::GFX_ENHANCE_ARBITRARY_MIPMAP_DETECTION_THRESHOLD,
+                 m_settings.arbitrary_mipmap_detection_threshold);
+      layer->Set(Config::GFX_ENABLE_GPU_TEXTURE_DECODING, m_settings.enable_gpu_texture_decoding);
+
+      // Disable AA as it isn't deterministic across GPUs
+      layer->Set(Config::GFX_MSAA, 1);
+      layer->Set(Config::GFX_SSAA, false);
+    }
+
+    u8 local_pad = 0;
+    for (int i = 0; i < SerialInterface::MAX_SI_CHANNELS; ++i)
+    {
+      const NetPlay::PlayerId player_id = m_settings.pad_map[i];
+      const SerialInterface::SIDevices si_device =
+          Config::Get(Config::GetInfoForSIDevice(local_pad));
+      const auto config_info = Config::GetInfoForSIDevice(i);
+
+      if (m_settings.gba_config[i].enabled && player_id > 0)
+      {
+        layer->Set(config_info, SerialInterface::SIDEVICE_GC_GBA_EMULATED);
+      }
+      else if (player_id == m_settings.local_player_id)
+      {
+        // Use local controller types for local controllers if they are compatible
+        if (SerialInterface::SIDevice_IsGCController(si_device))
+        {
+          layer->Set(config_info, si_device);
+
+          if (si_device == SerialInterface::SIDEVICE_WIIU_ADAPTER)
+          {
+            GCAdapter::ResetDeviceType(local_pad);
+          }
+        }
+        else
+        {
+          layer->Set(config_info, SerialInterface::SIDEVICE_GC_CONTROLLER);
+        }
+        local_pad++;
+      }
+      else if (player_id > 0)
+      {
+        if (si_device != SerialInterface::SIDEVICE_AM_BASEBOARD)
+          layer->Set(config_info, SerialInterface::SIDEVICE_GC_CONTROLLER);
+      }
+      else
+      {
+        layer->Set(config_info, SerialInterface::SIDEVICE_NONE);
+      }
+    }
+
+    for (int i = 0; i < MAX_WIIMOTES; ++i)
+    {
+      NetPlay::PlayerId player_id = m_settings.wiimote_map[i];
+      layer->Set(Config::GetInfoForWiimoteSource(i),
+                 player_id > 0 ? WiimoteSource::Emulated : WiimoteSource::None);
+    }
+
+    if (m_settings.savedata_load)
+    {
+      if (!m_settings.is_hosting)
+      {
+        const std::string path = File::GetUserPath(D_GCUSER_IDX) + GC_MEMCARD_NETPLAY DIR_SEP;
+        layer->Set(Config::MAIN_GCI_FOLDER_A_PATH_OVERRIDE, path + "Card A");
+        layer->Set(Config::MAIN_GCI_FOLDER_B_PATH_OVERRIDE, path + "Card B");
+
+        const auto make_memcard_path = [this](char letter) {
+          return fmt::format("{}{}{}.{}.raw", File::GetUserPath(D_GCUSER_IDX), GC_MEMCARD_NETPLAY,
+                             letter, m_settings.save_data_region);
+        };
+        layer->Set(Config::MAIN_MEMCARD_A_PATH, make_memcard_path('A'));
+        layer->Set(Config::MAIN_MEMCARD_B_PATH, make_memcard_path('B'));
+      }
+
+      layer->Set(Config::SESSION_GCI_FOLDER_CURRENT_GAME_ONLY, true);
+    }
+
+#ifdef HAS_LIBMGBA
+    for (size_t i = 0; i < m_settings.gba_rom_paths.size(); ++i)
+    {
+      layer->Set(Config::MAIN_GBA_ROM_PATHS[i], m_settings.gba_rom_paths[i]);
+    }
+#endif
+
+    // Check To Override Client's Cheat Codes
+    if (m_settings.sync_codes && !m_settings.is_hosting)
+    {
+      // Raise flag to use host's codes
+      layer->Set(Config::SESSION_CODE_SYNC_OVERRIDE, true);
+    }
+  }
+
+  void Save(Config::Layer* layer) override
+  {
+    // Do Nothing
+  }
+
+private:
+  const NetPlay::NetSettings m_settings;
+};
+
+// Loader generation
+std::unique_ptr<Config::ConfigLayerLoader>
+GenerateNetPlayConfigLoader(const NetPlay::NetSettings& settings)
+{
+  return std::make_unique<NetPlayConfigLayerLoader>(settings);
+}
+}  // namespace ConfigLoaders
