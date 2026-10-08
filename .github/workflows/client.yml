@@ -362,12 +362,19 @@ jobs:
       - name: Check
         run: |
           base=https://brawlonline.net
-          for f in latest.yml latest-linux.yml; do
+          feeds="latest.yml latest-linux.yml"
+          downloads="BrawlOnline-Setup.exe BrawlOnline.AppImage"
+          # The macOS build is optional: checked only when this run produced it.
+          if [ -f "$RUNNER_TEMP/client/latest-mac.yml" ]; then
+            feeds="$feeds latest-mac.yml"
+            downloads="$downloads BrawlOnline.dmg"
+          fi
+          for f in $feeds; do
             got=$(curl -fsS --max-time 20 "$base/updates/launcher/$f?nocache=$GITHUB_RUN_ID" | sed -n 's/^version: //p')
             echo "$f: $got"
             [ "$got" = "$VERSION" ] || { echo "$f does not name $VERSION" >&2; exit 1; }
           done
-          for f in BrawlOnline-Setup.exe BrawlOnline.AppImage; do
+          for f in $downloads; do
             curl -fsS --max-time 20 -o /dev/null -r 0-0 -w "$f: %{http_code}\n" "$base/downloads/$f?v=$VERSION"
           done
       - name: Delete this run's artifacts
