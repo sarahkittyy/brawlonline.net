@@ -8,6 +8,17 @@ add_library(use_pch INTERFACE)
 # Uncomment this return to disable PCH
 #return()
 
+# OFF: pch.h is still force-included into every source file, but as an ordinary header instead of a
+# precompiled one. The sources see the same declarations, and every compile can be cached by ccache
+# (which cannot cache /Yu). Slower from a cold cache, much faster from a warm one; used by CI.
+option(DOLPHIN_MSVC_PCH "Precompile pch.h (OFF: force-include it as an ordinary header)" ON)
+if(NOT DOLPHIN_MSVC_PCH)
+  target_include_directories(use_pch INTERFACE ${CMAKE_CURRENT_SOURCE_DIR})
+  target_link_libraries(use_pch INTERFACE fmt::fmt)
+  target_compile_options(use_pch INTERFACE $<$<COMPILE_LANGUAGE:CXX>:/FIpch.h>)
+  return()
+endif()
+
 add_library(build_pch pch.h pch.cpp)
 
 # fmt/format.h is included in the PCH
