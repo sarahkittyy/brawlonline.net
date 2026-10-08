@@ -1,19 +1,24 @@
-# local-only, large, or third-party
-/dolphin/
-/dolphin-linux/
+# Local-only: game files, local runs, toolchains, notes
 /refs/
 /game/
 /run/
+/toolchains/
+/research/
+/MONOREPO.md
 *.iso
 *.raw
+*.rvz
+*.wbfs
+*.gcz
+*.ciso
+*.part
+
+# Build outputs and dependencies
 build*.log
+node_modules/
+target/
+.asset-cache/
 __pycache__/
 *.pyc
 .venv/
-*.part
-/launcher/
-/game-code/
-/toolchains/
-/dolphin-linux/
-/dolphin-gprb/
-/dolphin-mm/
+/game-code/**/*.rel
