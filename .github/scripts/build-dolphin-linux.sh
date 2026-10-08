@@ -58,7 +58,10 @@ nice -n 19 cmake -S "$src" -B "$build" -G Ninja \
   "${extra[@]}" >"$build.configure.log" 2>&1 || { tail -n 40 "$build.configure.log"; exit 1; }
 
 ccache -z >/dev/null
-nice -n 19 ionice -c 3 cmake --build "$build" --parallel "$jobs" --target project-plus-dolphin dolphin-tool
+build_dolphin() { nice -n 19 ionice -c 3 cmake --build "$build" --parallel "$1" --target project-plus-dolphin dolphin-tool; }
+# GCC 13 has crashed (internal compiler error) on a heavy <format> file with many jobs in a
+# memory-limited container; one retry with half the jobs resumes the incremental build.
+build_dolphin "$jobs" || { echo "build failed; retrying with $(( (jobs + 1) / 2 )) jobs"; build_dolphin $(( (jobs + 1) / 2 )); }
 ccache -s | sed -n '1,12p'
 
 # ---- AppDir (linuxdeploy bundles the shared libraries and Qt plugins) ----------------------
