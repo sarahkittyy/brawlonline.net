@@ -1,3 +1,7 @@
 # Deploy files are copied to Linux hosts as-is; keep them LF even on Windows checkouts.
 deploy/** text eol=lf
 *.sh text eol=lf
+# sqlx checksums each migration's bytes: a CRLF copy (core.autocrlf on Windows,
+# also applied by `git archive`) is "previously applied but has been modified".
+migrations/** text eol=lf
+config/** text eol=lf
