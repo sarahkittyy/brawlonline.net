@@ -1,39 +1,154 @@
 # Gameplay rollback: coverage sweep
 
-A sweep of the gameplay-only rollback mode over every Project+ v3.2 character, the legal stages, items, Final Smashes, and two-instance sessions. This is a test report: nothing in the C++ was changed.
+A sweep of the gameplay-only rollback mode over every Project+ v3.2 character, the legal stages, items, Final Smashes, and two-instance sessions. It ran twice:
 
-- **Build:** `run/bin/gprb-b79fe057cf` (`dolphin-gprb` `b79fe057cf`), region set **gp-v12**, sound bookkeeping on by default.
-- **Tool:** `harness/tools/gprb_sweep.py`. Raw results: `run/qa/sweep2/runs/<id>.json`, logs of failed runs in `run/qa/sweep2/logs/`, screenshots in `run/qa/sweep2/shots/`, replay files in `run/qa/sweep2/work/`.
-- **Date:** 2026-10-07. One 16-thread Windows PC, shared with other agents' Dolphin instances; at most 3 of the sweep's instances at a time.
-- The first pass ran on the older build `gprb-fe35002ead` (gp-v9). Its results are compared at the end ([gp-v9 against gp-v12](#gp-v9-against-gp-v12)).
+- **gp-v12** (`run/bin/gprb-b79fe057cf`, `dolphin-gprb` `b79fe057cf`; `run/qa/sweep2`): 101 of 136 passed. Its failures were the work list of Phase 8 of `docs/gameplay-rollback-status.md`; their record is kept below ([gp-v12 failures](#failures-of-the-gp-v12-sweep-by-family)).
+- **gp-v19** (`run/bin/gprb-e642b3ce98`, `dolphin-gprb` `e642b3ce98`; `run/qa/sweep3`), after the fixes: **143 of 143** passed, the same 136 runs plus 7 with forced Final Smashes.
+
+Both: tool `harness/tools/gprb_sweep.py` (raw results `<out>/runs/<id>.json`, logs of failed runs in `<out>/logs/`, screenshots in `<out>/shots/`, replay files of failed runs in `<out>/work/`); 2026-10-07, one 16-thread Windows PC shared with other agents' Dolphin instances, at most 3 of the sweep's instances at a time. The first pass on `gprb-fe35002ead` (gp-v9) is compared at the end ([gp-v9 against gp-v12](#gp-v9-against-gp-v12)).
 
 ## Summary
 
-| Mode | Pass | Failures |
+| Mode | gp-v12 | gp-v19 |
 |---|---|---|
-| Sync test, each character vs Fox (Battlefield) | **38 / 41** | Zelda, Sheik (drift), Meta Knight (hang) |
-| Sync test, mirror matches (Battlefield) | **29 / 42** | 8 early hangs, Zelda, Sheik, Meta Knight (hang), Donkey Kong (desync), Mewtwo, Wolf (drift) |
-| Sync test, legal stages (Fox vs Falco) | **10 / 10** | none |
-| Sync test, all items, highest frequency | **1 / 6** | 4 drift, 2 hang |
-| Sync test, Smash Ball only (Final Smashes) | **0 / 7** | 4 drift, 3 hang |
-| Sessions through netsim `typical`, single core | **13 / 15** | Zelda/Sheik, Ice Climbers/Olimar |
-| Sessions through netsim `typical`, dual core | **10 / 15** | Fox/Falco, Zelda/Sheik, Samus/ZSS, Lucario/Mewtwo, Sonic/Knuckles |
-| **All** | **101 / 136 (74 %)** | 35 |
+| Sync test, each character vs Fox (Battlefield) | 38 / 41 | **41 / 41** |
+| Sync test, mirror matches (Battlefield) | 29 / 42 | **42 / 42** |
+| Sync test, legal stages (Fox vs Falco) | 10 / 10 | **10 / 10** |
+| Sync test, all items, highest frequency | 1 / 6 | **6 / 6** |
+| Sync test, Smash Ball only | 0 / 7 | **7 / 7** |
+| Sync test, Smash Ball only, Final Smash forced (new, `ffs`) | - | **7 / 7** |
+| Sessions through netsim `typical`, single core | 13 / 15 | **15 / 15** |
+| Sessions through netsim `typical`, dual core | 10 / 15 | **15 / 15** |
+| **All** | **101 / 136 (74 %)** | **143 / 143 (100 %)** |
 
-Every run reached a verdict: the 4 runs that first failed for harness reasons (a lost harness connection or a time-out while launching under load) were run again and passed. No run crashed Dolphin itself. On gp-v9, 11 runs did (see the end).
+Every gp-v19 sync test also matched its no-rollback ground truth through game set; every session ended in game set on both peers with 0 confirmed-checksum mismatches and identical traces.
 
-**Priorities for the fixing agent,** most cases first:
-1. **Items and Smash Balls** (9 of 13 item runs fail): the RNG drifts from no-rollback play, then the fighters. See [Family D](#d-items-and-smash-balls-drift-and-hangs).
-2. **Early hang in mirror matches**: the main thread jumps to 0x20 from a layout-pane loop, 26-123 frames after rollback starts (8 runs). See [Family B](#b-early-hang-null-virtual-call-from-a-layout-pane-loop).
-3. **Zelda/Sheik transformation** (7 runs, including both session modes): the transformed fighter's state is garbage under rollback. See [Family A](#a-zeldasheik-transformation).
-4. **Dual-core sessions** desync on content where single core passes (4 of 15, Fox/Falco among them). See [Family F](#f-sessions).
-5. Meta Knight hangs (2 of 2), and rare late drifts in mirror matches (Donkey Kong, Mewtwo, Wolf).
+**Retries on gp-v19.** `m-yoshi` (in the driver) and `m-ness` (in its ground-truth replay) first failed to launch an instance ("another harness client is already connected", the harness-port collision of open issue 8 in the status doc). Run again together with `--retry-errors`, both **hung** (`m-yoshi` at session frame 4,270, `m-ness` at 3,865, both in the effect manager's list walk `fn_8005C2B0`; JSON kept in `run/qa/sweep3-hangs/`), and a third run (`--rerun`) passed both. Their exact replays mostly run to the end, but `m-yoshi`'s crashed in 7 of 25 replays in effect/render code: a nondeterministic fault, open issue 9 in the status doc. The table counts the third runs.
+
+### Before and after, per failure family
+
+| Family (gp-v12) | gp-v12 failures | Cause | Fix | Exact replays of the kept failures on gp-v19 | gp-v19 sweep |
+|---|---|---|---|---|---|
+| D. Items and Smash Balls | 9 of 13 (7 drifts, 2 hangs; plus `i-rob-game_and_watch`, Family B) | stale list heads when items appear or vanish (camera subjects, archives), mid-match file loads completing on emulated time | gp-v14, gp-v15 + the file IO wait, gp-v16 | `f-wario-bowser`, `f-samus-zero_suit_samus`, `i-mario-marth`: identical through game set; `i-fox-falco`, `f-ice_climbers-peach`, `f-olimar-lucario`: no hang, identical | 13 / 13 |
+| B. Early hang in mirrors | 8 (7 mirrors + 1 item run) | nw4r::ef draw strategies: function-local statics partly in the set, guards outside | gp-v13 | `m-yoshi`, `m-ice_climbers`: past the hang point, identical | all pass |
+| A. Zelda/Sheik | 7 (2 drifts, 3 hangs, 2 session desyncs) | the transformation's file loads, the archive list, the scene's per-model records | gp-v15/IO wait, gp-v16, gp-v17 | `v-zelda`, `v-sheik`, `m-zelda`, `m-sheik`, `f-zelda-sheik`: identical | all pass |
+| C. Meta Knight | 2 hangs | the scene's per-model records | gp-v17 | `v-meta_knight`, `m-meta_knight`: past the hang point, identical | both pass |
+| E. Late mirror drifts | 3 (DK, Mewtwo, Wolf) | Mewtwo, Wolf: covered by gp-v13 to gp-v17; DK: the controller configuration's stick state | gp-v18 | all three identical through game set | all pass |
+| F. Session desyncs | 7 (5 dual core, 2 single core) | the families above, hit more often by dual core's 2-4 times as many rollbacks | - | (sessions keep no replay) | 30 / 30 |
+| Final Smashes | never seen executing | the EffectSystem partly in the set (a forced Wario-Man hung on turning back) | gp-v19, `PPR_GPRB_FORCE_FINAL` | forced FS replays of 6 kept logs: identical | `ffs` 7 / 7 |
+
+### Final Smashes
+
+The `ffs` group gives both ports their Final Smash at the last countdown frame (`PPR_GPRB_FORCE_FINAL=3`: the session calls `ftManager::setFinal`, as a broken Smash Ball does, in the sync test and in its ground truth alike); the random fighters use it at their first neutral B. One pair per kind: Wario/Bowser (transformations), Samus/ZSS (beam, suit), Olimar/Lucario (cutscene, beam), Marth/Ike (cutscenes), Mario/Pikachu (projectile, Volt Tackle), Captain Falcon/Ganondorf (cutscene, transformation), Zelda/Sheik (arrows). All 7 passed against ground truth through game set. Evidence that they ran: the forms seen include Wario-Man and Giga Bowser, the logs show the fighter changes (Wario/Bowser at game frames 333 and 1,339; Zelda/Sheik's), and in the replays of kept logs (status doc, Phase 8) the forced Final Smash changed the match from the first neutral B on (Olimar's status 274 → 278/279; the matches ended 1,000-3,500 frames earlier) while the rolled-back run stayed identical to its ground truth. Without forcing, Wario-Man also appeared in the gp-v19 Smash Ball run `f-wario-bowser`, which passed.
+
+## Matrices (gp-v19, with gp-v12 for comparison)
+
+"gf N" is the first game frame that differs; "@N" the session frame at which a hang stopped. Mirror results on gp-v12, for the runs that failed there: Yoshi, Dedede, G&W, R.O.B., Ice Climbers, Knuckles, Lucas: early hang (Family B); Zelda, Sheik, Meta Knight: hang; Donkey Kong: desync; Mewtwo, Wolf: drift.
+
+| Character | vs Fox | vs Fox, gp-v12 | Mirror | Forms seen |
+|---|---|---|---|---|
+| mario | pass | pass | pass | mario |
+| luigi | pass | pass | pass | luigi |
+| peach | pass | pass | pass | peach |
+| wario | pass | pass | pass | wario |
+| yoshi | pass | pass | pass | yoshi |
+| bowser | pass | pass | pass | bowser |
+| donkey_kong | pass | pass | pass | donkey_kong |
+| diddy_kong | pass | pass | pass | diddy_kong |
+| captain_falcon | pass | pass | pass | captain_falcon |
+| fox | pass | pass | pass | fox |
+| falco | pass | pass | pass | falco |
+| wolf | pass | pass | pass | wolf |
+| link | pass | pass | pass | link |
+| toon_link | pass | pass | pass | toon_link |
+| zelda | pass | **DRIFT** gf 929 | pass | sheik, zelda |
+| sheik | pass | **DRIFT** gf 788 | pass | sheik, zelda |
+| ganondorf | pass | pass | pass | ganondorf |
+| pikachu | pass | pass | pass | pikachu |
+| jigglypuff | pass | pass | pass | jigglypuff |
+| mewtwo | pass | pass | pass | mewtwo |
+| squirtle_solo | pass | pass | pass | squirtle |
+| ivysaur_solo | pass | pass | pass | ivysaur |
+| charizard_solo | pass | pass | pass | charizard |
+| lucario | pass | pass | pass | lucario |
+| samus | pass | pass | pass | samus |
+| zero_suit_samus | pass | pass | pass | zero_suit_samus |
+| ness | pass | pass | pass | ness |
+| lucas | pass | pass | pass | lucas |
+| kirby | pass | pass | pass | kirby |
+| meta_knight | pass | **HANG** @921 | pass | meta_knight |
+| king_dedede | pass | pass | pass | king_dedede |
+| marth | pass | pass | pass | marth |
+| roy | pass | pass | pass | roy |
+| ike | pass | pass | pass | ike |
+| game_and_watch | pass | pass | pass | game_and_watch |
+| rob | pass | pass | pass | rob |
+| ice_climbers | pass | pass | pass | popo |
+| pit | pass | pass | pass | pit |
+| olimar | pass | pass | pass | olimar |
+| snake | pass | pass | pass | snake |
+| sonic | pass | pass | pass | sonic |
+| knuckles | pass | pass | pass | knuckles |
+
+| Stage | kind | Fox vs Falco | gp-v12 |
+|---|---|---|---|
+| battlefield | 0x01 | pass | pass |
+| final_destination | 0x02 | pass | pass |
+| pokemon_stadium_2 | 0x2E | pass | pass |
+| smashville | 0x21 | pass | pass |
+| luigis_mansion | 0x04 | pass | pass |
+| temple_of_time | 0x09 | pass | pass |
+| green_hill_zone | 0x23 | pass | pass |
+| bowsers_castle | 0x06 | pass | pass |
+| frigate_husk | 0x0C | pass | pass |
+| dream_land | 0x2D | pass | pass |
+
+| Items run | items | result | gp-v12 | forms seen |
+|---|---|---|---|---|
+| charizard_solo vs squirtle_solo, smashville | smashball | pass | **DRIFT** gf 1534 | charizard, squirtle |
+| ice_climbers vs peach, final_destination | smashball | pass | **HANG** @1971 | peach, popo |
+| ivysaur_solo vs pikachu, battlefield | smashball | pass | **DRIFT** gf 1728 | ivysaur, pikachu |
+| olimar vs lucario, battlefield | smashball | pass | **HANG** @4492 | lucario, olimar |
+| samus vs zero_suit_samus, battlefield | smashball | pass | **DRIFT** gf 1662 | samus, zero_suit_samus |
+| wario vs bowser, final_destination | smashball | pass | **DRIFT** gf 1706 | bowser, wario, warioman |
+| zelda vs sheik, battlefield | smashball | pass | **HANG** @2154 | sheik, zelda |
+| captain_falcon vs ganondorf, battlefield | smashball, Final Smash forced | pass | - | captain_falcon, ganondorf |
+| mario vs pikachu, final_destination | smashball, Final Smash forced | pass | - | mario, pikachu |
+| marth vs ike, battlefield | smashball, Final Smash forced | pass | - | ike, marth |
+| olimar vs lucario, battlefield | smashball, Final Smash forced | pass | - | lucario, olimar |
+| samus vs zero_suit_samus, battlefield | smashball, Final Smash forced | pass | - | samus, zero_suit_samus |
+| wario vs bowser, final_destination | smashball, Final Smash forced | pass | - | bowser, giga_bowser, wario, warioman |
+| zelda vs sheik, battlefield | smashball, Final Smash forced | pass | - | sheik, zelda |
+| fox vs falco, battlefield | all | pass | **HANG** @6104 | falco, fox |
+| mario vs marth, final_destination | all | pass | **DRIFT** gf 4097 | mario, marth |
+| peach vs diddy_kong, smashville | all | pass | **DRIFT** gf 3866 | diddy_kong, peach |
+| pikachu vs olimar, dream_land | all | pass | **DRIFT** gf 3382 | olimar, pikachu |
+| rob vs game_and_watch, battlefield | all | pass | **HANG** @40 | game_and_watch, rob |
+| snake vs ice_climbers, pokemon_stadium_2 | all | pass | pass | popo, snake |
+
+| Session | stage | single core | dual core |
+|---|---|---|---|
+| fox vs falco | battlefield | pass | pass |
+| mario vs marth | final_destination | pass | pass |
+| peach vs game_and_watch | pokemon_stadium_2 | pass | pass |
+| ice_climbers vs olimar | smashville | pass | pass |
+| zelda vs sheik | battlefield | pass | pass |
+| squirtle_solo vs charizard_solo | dream_land | pass | pass |
+| samus vs zero_suit_samus | frigate_husk | pass | pass |
+| snake vs rob | luigis_mansion | pass | pass |
+| pikachu vs jigglypuff | green_hill_zone | pass | pass |
+| diddy_kong vs king_dedede | temple_of_time | pass | pass |
+| link vs toon_link | bowsers_castle | pass | pass |
+| marth vs roy | smashville | pass | pass |
+| lucario vs mewtwo | pokemon_stadium_2 | pass | pass |
+| sonic vs knuckles | battlefield | pass | pass |
+| wolf vs captain_falcon | final_destination | pass | pass |
 
 ## How it was run
 
 ### Runs
 
-Command: `python harness/tools/gprb_sweep.py run --out run/qa/sweep2 --jobs 3 --retry-errors` (136 runs; `list` prints them).
+Command: `python harness/tools/gprb_sweep.py run --out run/qa/sweep2 --jobs 3 --retry-errors` (136 runs; `list` prints them). The gp-v19 sweep: `python harness/tools/gprb_sweep.py run --out run/qa/sweep3 --jobs 3 --retry-errors` (143 runs, the build and region set are the tool's defaults now), then `--retry-errors` and `--rerun --only "^m-(yoshi|ness)$"` (see Summary).
 
 | Group | Runs | P1 vs P2 | Stage | Items |
 |---|---|---|---|---|
@@ -85,7 +200,7 @@ The ground truth catches what check 1 cannot: on gp-v10, the Mario mirror ran to
   `--inputs` is required by the tool and unused by a replay; `empty-inputs.json` is `{"pads": []}`. Checked for `v-zelda`: the replay ends at the same 2,915 frames, with the same broken Sheik values at game frames 928-930 as the run. Replay files of a failure family's duplicates were deleted to save disk (about 45 MB each); their JSON names the kept one.
 - **Sessions** keep no pass log. `gprb_session.py --p1 … --p2 … --stage … --cpu dc --preset typical --pass-log DIR --save-countdown DIR` records one for `gprb_mispredict.py replay=`.
 
-## Matrices (gp-v12)
+## Matrices of the gp-v12 sweep
 
 "gf N" is the first game frame that differs: for a drift, from the no-rollback replay; for a desync, also from the sync test's own check. "@N" is the session frame at which a hang stopped. The game frame is the session frame plus 240.
 
@@ -193,7 +308,9 @@ The ground truth catches what check 1 cannot: on gp-v10, the Mario mirror ran to
 
 Rollbacks per peer: 13-95 in single core (deepest 1-7), 81-352 in dual core (deepest 3-7). Passing sessions ran to game set: 7,193 frames at the time limit, or earlier by stocks.
 
-## Failures by family
+## Failures of the gp-v12 sweep, by family
+
+All fixed on gp-v19; the causes and fixes are in `docs/gameplay-rollback-status.md`, Phase 8 (family letters as here).
 
 ### A. Zelda/Sheik transformation
 
@@ -216,6 +333,8 @@ Rollbacks per peer: 13-95 in single core (deepest 1-7), 81-352 in dual core (dee
 **Lead:** the second fighter instance (the form not active at the match start) or its articles are created and initialised outside the region set, or are torn down by a rolled-back run.
 
 ### B. Early hang: null virtual call from a layout-pane loop
+
+**Cause found in Phase 8:** not a layout pane but nw4r::ef: `fn_801638D0` walks an emitter's particle managers, and the call through the zero vtable is a draw strategy's (`fn_8016DE08`), a function-local static that `dolw-g1` restored without its guard. Fixed in gp-v13.
 
 | Run | Stuck at |
 |---|---|
@@ -301,7 +420,7 @@ So these are rollbacks with corrected input, which the sync test (same input on 
 
 **To reproduce:** rerun with `gprb_session.py --cpu dc --preset typical --pass-log … --save-countdown …` and replay the peers' logs.
 
-## All failures
+## All failures of the gp-v12 sweep
 
 "Replay kept": `run/qa/sweep2/work/<id>/` holds the savestate and the pass log.
 
@@ -384,17 +503,18 @@ Smash attacks are what makes a camera quake, so this is most likely the quake co
 - **Load.** Up to 10 other Dolphin instances ran on the machine at times. Four runs failed to launch or lost their harness connection and passed on the retry. No result above is a harness error.
 - **`distance` 7** resimulates 6 frames every frame. Phase 6's sync tests mostly used `distance` 2. A failure here that does not reproduce at `distance` 2 still happens in sessions only when a rollback is that deep.
 - **Mirrors** use the same costume twice (see Runs).
-- **Final Smashes** were not verified (see Items and Final Smashes).
+- **Final Smashes** were not verified in the gp-v12 sweep (see Items and Final Smashes); the gp-v19 sweep forces them (`ffs`).
 - **No session** was compared with a no-rollback replay; their criterion is agreement between the peers.
 
 ## Files
 
 - `harness/tools/gprb_sweep.py`: the driver.
-  - `run` (resumable, `--jobs`, `--retry-errors`, `--only`, `--groups`, `--macro-exclude`, `--no-ground-truth`, `--video`, `--throttled`, `--distance`, `--minutes`);
+  - `run` (resumable, `--jobs`, `--retry-errors`, `--only`, `--groups` (now also `ffs`), `--macro-exclude`, `--no-ground-truth`, `--video`, `--throttled`, `--distance`, `--minutes`);
   - `list`;
   - `report` (these matrices from a result directory; `--compare DIR` adds a column from a second pass).
   
   Touch `<out>/dump-stacks` to get the driver's thread stacks in `<out>/stacks.txt`.
 - `run/qa/sweep2/`: gp-v12 results (`runs/`, `logs/`, `shots/`, `work/`).
+- `run/qa/sweep3/`: gp-v19 results; `run/qa/sweep3-hangs/`: the two hung retry runs; `run/qa/gfx-sess1/`: the failing session pairs rerun on the fixed build first.
 - `run/qa/sweep/`, `run/qa/sweep-nocstick-d2/`, `run/qa/bisect/`, `run/qa/factorial/`, `run/qa/sweep-ctl-*`: gp-v9 results and controls.
 - `run/qa/sweep2-control-gpv10/`: the gp-v10 drift control.
