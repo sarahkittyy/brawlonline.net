@@ -64,7 +64,13 @@ The Linux Dolphin is built against Ubuntu 24.04's glibc (2.39) either way: it ru
 
 ### Windows
 
-GitHub-hosted `windows-latest`. Caches: `.ccache` (key `win-ccache-<sha>`), Electron downloads, npm.
+GitHub-hosted `windows-latest` (Visual Studio 18). Caches: `.ccache` (key `win-ccache-<run id>`, saved right after the Dolphin build), Electron downloads, npm. A rebuild takes about 35 minutes: ccache hits 99.9% of what it can cache, but 746 of Dolphin's ~2,000 compiles use Dolphin's own MSVC precompiled header (`Source/PCH`, `use_pch`), which ccache cannot cache. An option in Dolphin's CMake to build without `use_pch` would cut that; it is a Dolphin change, not done here.
+
+## Verified end to end (2026-10-08)
+
+- Server: run `server #1` deployed `20261008-618d212ddc` (backup, switch, restart, health check); `server #2` built the same binaries and changed nothing. Later pushes deployed by themselves.
+- Client `#12` published 0.1.12, `#13` 0.1.13 (Linux and Windows, feeds checked by `pp-release` against sha512). The NSIS installer and the AppImage contain no `.md`, no game files, `LICENSE`, `NOTICE`, the plugin and the Dolphin bundle (Qt libraries bundled on Linux).
+- On a Windows PC: 0.1.12 installed silently (`/S`, per user), started with a temporary profile (`PPO_TEST_MODE=1`, `PPO_USER_DATA_DIR`); it installed its Dolphin into the profile, downloaded P+ v3.2.0 (1.86 GB, sha256 verified, 2.5 min), extracted the SD card, both launcher DOLs (identical to a local P+ install's) and the 12 files of `Sys/NetplaySave`, deleted the zip, and showed the progress on Slippi's Play button. After 0.1.13 was published, its update check downloaded `Brawl-Online-Setup-0.1.13.exe`, "install update" ran the installer and restarted the launcher; the next start logged `Auto-update succeeded: version 0.1.13`, replaced the profile's Dolphin 0.1.12 with 0.1.13, put the save template back into `Sys/` and kept the P+ files. Then uninstalled (`/S /currentuser`).
 
 ## Secrets and settings
 
