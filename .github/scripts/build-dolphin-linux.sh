@@ -64,9 +64,17 @@ echo "stack limit: $(ulimit -s) (hard $(ulimit -H -s)); memory: $(free -g | awk 
 ulimit -s unlimited 2>/dev/null || ulimit -s "$(ulimit -H -s)" 2>/dev/null || true
 echo "stack limit: $(ulimit -s)"
 build_dolphin() { nice -n 19 ionice -c 3 cmake --build "$build" --parallel "$1" --target project-plus-dolphin dolphin-tool; }
-# GCC 13 has crashed (internal compiler error) on a heavy <format> file with many jobs in a
-# memory-limited container; one retry with half the jobs resumes the incremental build.
-build_dolphin "$jobs" || { echo "build failed; retrying with $(( (jobs + 1) / 2 )) jobs"; build_dolphin $(( (jobs + 1) / 2 )); }
+# On the Unraid runner cc1plus crashes now and then under parallel load ("internal compiler
+# error: Segmentation fault" in ggc_set_mark, a different file each time; the same file compiles
+# cleanly when built alone; 2026-10-08: about 1 in 12 compiles of a DolphinQt file with 12 at
+# once). The build is incremental, so it is resumed a few times with fewer jobs.
+attempt=1
+until build_dolphin "$jobs"; do
+  attempt=$((attempt + 1))
+  [ "$attempt" -le 6 ] || { echo "Dolphin build failed 6 times" >&2; exit 1; }
+  jobs=$(( jobs > 4 ? jobs * 2 / 3 : jobs ))
+  echo "::warning::Dolphin build failed; retry $attempt with $jobs jobs"
+done
 ccache -s | sed -n '1,12p'
 
 # ---- AppDir (linuxdeploy bundles the shared libraries and Qt plugins) ----------------------
