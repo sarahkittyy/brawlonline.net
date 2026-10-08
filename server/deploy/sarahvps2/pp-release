@@ -319,6 +319,9 @@ link_stable() { # updir dldir feed glob stable
   fi
   # shellcheck disable=SC2053
   [[ -n "$path" && "$path" == $glob && -f "$upd/$path" ]] || return 0
+  rm -f "$dl/.$stable.tmp"
+  # Already linked (e.g. a release without a new macOS build): mv would refuse "the same file".
+  if [ "$upd/$path" -ef "$dl/$stable" ]; then echo "downloads/$stable = $path"; return 0; fi
   ln -f "$upd/$path" "$dl/.$stable.tmp"
   mv -f "$dl/.$stable.tmp" "$dl/$stable"
   echo "downloads/$stable -> $path"
