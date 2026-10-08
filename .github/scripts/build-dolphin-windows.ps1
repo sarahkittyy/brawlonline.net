@@ -34,7 +34,7 @@ try {
   ccache -z | Out-Null
   cmake --build $build --target project-plus-dolphin dolphin-tool
   if ($LASTEXITCODE -ne 0) { throw "build failed" }
-  ccache -s
+  ccache -s -v   # verbose: shows why calls are uncacheable
 } finally {
   Pop-Location
 }
