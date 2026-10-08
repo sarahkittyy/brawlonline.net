@@ -27,6 +27,11 @@ export function installSettingsChangeListeners({
   // Also initialize it once on app startup - preserve the folder loaded from localStorage
   initReplayBrowser(true);
 
+  // Progress of every ISO check (start-up, Settings, the quick start's ISO step).
+  window.electron.common.onIsoVerificationProgress((progress) => {
+    useIsoVerification.getState().setProgress(progress);
+  });
+
   // Validate the ISO file on app startup
   const initialIsoPath = useSettingsStore.getState().settings.isoPath;
   if (initialIsoPath) {
@@ -61,7 +66,8 @@ export function installSettingsChangeListeners({
 
 let requestId = 0;
 async function validateIsoFile(isoPath: string | null) {
-  const { setIsValid, setIsValidating } = useIsoVerification.getState();
+  const { setIsValid, setIsValidating, setProgress } = useIsoVerification.getState();
+  setProgress(null);
   if (!isoPath) {
     setIsValid(IsoValidity.UNVALIDATED);
     setIsValidating(false);

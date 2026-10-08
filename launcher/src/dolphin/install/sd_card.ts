@@ -9,12 +9,15 @@ import { Fat32Volume } from "@brawl_assets/fat32_writer";
 import { createHash } from "crypto";
 import fs from "fs";
 import path from "path";
+import type { ByteProgress, CopyOptions } from "utils/copy_file";
+import { copyFileWithProgress } from "utils/copy_file";
 
 import type { PluginLocation } from "./paths";
 import { PLUGIN_SD_PATH } from "./paths";
 
 export const PATCHED_SD_IMAGE_NAME = "sd.raw";
 export const PATCHED_SD_MANIFEST_NAME = "manifest.json";
+const SD_COPY_SYNC_BYTES = 64 * 1024 * 1024;
 
 export type PluginBinary = {
   data: Buffer;
@@ -57,6 +60,13 @@ export type SdInstallOptions = {
   /** Files or folders that must never be written (the source card, the User template). */
   protectedPaths?: string[];
   log?: (message: string) => void;
+  /**
+   * Bytes of the card copied so far, while a fresh copy is made (the first Play: 2 GB). Not
+   * called when the existing copy is only checked or patched (milliseconds).
+   */
+  onProgress?: ByteProgress;
+  /** Test hook: the copy-on-write clone tried before the chunked copy. */
+  clone?: CopyOptions["clone"];
 };
 
 export class SdCardError extends Error {}
@@ -125,18 +135,6 @@ export async function assertNotProtected(target: string, protectedPaths: string[
     if (samePathOrInside(target, p) || (await sameFile(target, p))) {
       throw new SdCardError(`Refusing to modify ${target}: it is the user's original SD card or template (${p}).`);
     }
-  }
-}
-
-/** Copies a file, cloning it (copy-on-write) where the file system supports it. */
-export async function fastCopy(src: string, dst: string): Promise<void> {
-  try {
-    await fs.promises.copyFile(src, dst, fs.constants.COPYFILE_FICLONE);
-  } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === "ENOSPC") {
-      throw err;
-    }
-    await fs.promises.copyFile(src, dst);
   }
 }
 
@@ -281,15 +279,26 @@ export async function installPluginOnSdCard(opts: SdInstallOptions): Promise<SdI
     await fs.promises.rm(partial, { force: true });
     const started = Date.now();
     log(`Copying the SD card ${opts.sourceImage} to ${image}`);
+    let how: string;
     try {
-      await fastCopy(opts.sourceImage, partial);
+      // A copy-on-write clone where the file system has one (instant), else a chunked copy
+      // with progress. Either way into `.partial`, renamed only after the patch verified.
+      // Flushed every 64 MB: the patch below syncs the file, and without this that sync would
+      // write the whole card after the progress already said 100 %.
+      how = await copyFileWithProgress(opts.sourceImage, partial, {
+        onProgress: opts.onProgress,
+        clone: opts.clone,
+        syncEvery: SD_COPY_SYNC_BYTES,
+      });
+      const copiedIn = ((Date.now() - started) / 1000).toFixed(1);
       await patchImage(partial, plugin.data, sdPath, { protectedPaths, log });
+      how = `${how} in ${copiedIn} s`;
     } catch (err) {
       await fs.promises.rm(partial, { force: true }).catch(() => undefined);
       throw err;
     }
     await fs.promises.rename(partial, image);
-    log(`SD card copied and patched in ${((Date.now() - started) / 1000).toFixed(1)} s`);
+    log(`SD card ${how}, patched; ${((Date.now() - started) / 1000).toFixed(1)} s in all`);
     return finish("copied");
   };
 

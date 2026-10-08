@@ -1,3 +1,4 @@
+import type { DolphinSetupPhase } from "@dolphin/types";
 import { DolphinLaunchType } from "@dolphin/types";
 import { unstable_batchedUpdates } from "react-dom";
 import { create } from "zustand";
@@ -8,12 +9,15 @@ export const enum DolphinStatus {
   DOWNLOADING = "DOWNLOADING",
 }
 
+export type DolphinProgress = { current: number; total: number; phase?: DolphinSetupPhase };
+
 export const useDolphinStore = create(() => ({
   netplayStatus: DolphinStatus.UNKNOWN,
   playbackStatus: DolphinStatus.UNKNOWN,
   netplayOpened: false,
   playbackOpened: false,
-  netplayDownloadProgress: undefined as { current: number; total: number } | undefined,
+  /** The running set-up step's progress, shown on the Play button. */
+  netplayDownloadProgress: undefined as DolphinProgress | undefined,
   netplayDolphinVersion: undefined as string | undefined,
   playbackDolphinVersion: undefined as string | undefined,
 }));
@@ -51,7 +55,7 @@ export const setDolphinVersion = (dolphinVersion: string | undefined, dolphinTyp
   }
 };
 
-export const updateNetplayDownloadProgress = (progress: { current: number; total: number } | undefined) => {
+export const updateNetplayDownloadProgress = (progress: DolphinProgress | undefined) => {
   unstable_batchedUpdates(() => {
     useDolphinStore.setState({ netplayDownloadProgress: progress });
   });

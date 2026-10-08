@@ -47,4 +47,10 @@ export const ipc_launcherUpdateDownloadingEvent = makeEndpoint.renderer(
   <{ progressPercent: number }>_,
 );
 
+/** Bytes of the disc image hashed so far while `checkValidIso` verifies `path`. */
+export const ipc_isoVerificationProgressEvent = makeEndpoint.renderer(
+  "isoVerification_progress",
+  <{ path: string; current: number; total: number }>_,
+);
+
 export const ipc_launcherUpdateReadyEvent = makeEndpoint.renderer("launcherupdate_ready", <EmptyPayload>_);

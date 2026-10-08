@@ -7,7 +7,7 @@ msgstr ""
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 "x-generator: i18next-auto-keys CLI\n"
 "Language: pt-BR\n"
-"PO-Revision-Date: 2026-10-08T06:36:43.174Z\n"
+"PO-Revision-Date: 2026-10-08T08:13:05.729Z\n"
 
 #: src/renderer/components/activate_online_form/activate_online_form.messages.ts:3:30
 msgid "2-4 uppercase English characters"
@@ -272,6 +272,10 @@ msgstr "Copiar resultados"
 msgid "Copy to Clipboard"
 msgstr "Copiar para Área de Transferência"
 
+#: src/renderer/app/header/play_button/play_button.messages.ts:6:23
+msgid "Copying files"
+msgstr ""
+
 #: src/renderer/components/login_form/login_form.messages.ts:2:26
 msgid "Create an account"
 msgstr "Criar uma conta"
@@ -362,6 +366,10 @@ msgstr ""
 msgid "Download manually"
 msgstr "Baixar manualmente"
 
+#: src/renderer/app/header/play_button/play_button.messages.ts:7:33
+msgid "Downloading Project+"
+msgstr ""
+
 #: src/renderer/components/persistent_notification/persistent_notification.messages.ts:2:44
 #. {0} version: string
 msgid "Downloading version {0}..."
@@ -417,6 +425,10 @@ msgstr "Erro ao salvar códigos gecko: {0}"
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:3:28
 msgid "External IP Address"
 msgstr "Endereço IP Externo"
+
+#: src/renderer/app/header/play_button/play_button.messages.ts:9:32
+msgid "Extracting Project+"
+msgstr ""
 
 #: src/renderer/initialize_app.messages.ts:2:60
 #. {0} productName: string
@@ -564,6 +576,11 @@ msgstr ""
 #: src/renderer/components/persistent_notification/persistent_notification.messages.ts:5:24
 msgid "Installation failed."
 msgstr "Falha na instalação."
+
+#: src/renderer/app/header/play_button/play_button.messages.ts:5:28
+#. What the button says while a set-up step runs (DolphinSetupPhase).
+msgid "Installing Dolphin"
+msgstr ""
 
 #: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:4:21
 msgid "Installing... This may take a few minutes."
@@ -879,6 +896,10 @@ msgstr ""
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:22:22
 msgid "Port mapping"
 msgstr "Mapeamento de porta"
+
+#: src/renderer/app/header/play_button/play_button.messages.ts:10:26
+msgid "Preparing SD card"
+msgstr ""
 
 #: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:8:25
 msgid "Previous replay"
@@ -1225,6 +1246,10 @@ msgstr "Verifique seu e-mail"
 #: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:5:23
 msgid "Verifying ISO..."
 msgstr "Verificando ISO..."
+
+#: src/renderer/app/header/play_button/play_button.messages.ts:8:31
+msgid "Verifying Project+"
+msgstr ""
 
 #: src/renderer/pages/settings/game_settings/game_settings.messages.ts:6:20
 msgid "Verifying..."

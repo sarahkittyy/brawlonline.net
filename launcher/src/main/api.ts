@@ -6,6 +6,7 @@ import {
   ipc_clearTempFolder,
   ipc_copyLogsToClipboard,
   ipc_installUpdate,
+  ipc_isoVerificationProgressEvent,
   ipc_launcherUpdateDownloadingEvent,
   ipc_launcherUpdateFoundEvent,
   ipc_launcherUpdateReadyEvent,
@@ -57,6 +58,13 @@ export default {
   onAppUpdateDownloadProgress(handle: (percent: number) => void) {
     const { destroy } = ipc_launcherUpdateDownloadingEvent.renderer!.handle(async ({ progressPercent }) => {
       handle(progressPercent);
+    });
+    return destroy;
+  },
+  /** Progress of a running `checkValidIso` (bytes hashed), for the "Verifying" indicators. */
+  onIsoVerificationProgress(handle: (progress: { path: string; current: number; total: number }) => void) {
+    const { destroy } = ipc_isoVerificationProgressEvent.renderer!.handle(async (progress) => {
+      handle(progress);
     });
     return destroy;
   },

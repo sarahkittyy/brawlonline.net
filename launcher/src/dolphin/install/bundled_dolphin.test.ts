@@ -4,7 +4,12 @@ import path from "path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import type { DolphinBundleManifest } from "./bundled_dolphin";
-import { bundledDolphinSource, installBundledDolphin, readDolphinManifest } from "./bundled_dolphin";
+import {
+  bundledDolphinSource,
+  installBundledDolphin,
+  PROGRESS_BYTES_PER_FILE,
+  readDolphinManifest,
+} from "./bundled_dolphin";
 
 let root: string;
 let n = 0;
@@ -60,7 +65,14 @@ describe("installBundledDolphin", () => {
     expect(await read("Dolphin.exe")).toBe("exe-1");
     expect(await read("Sys", "GameSettings", "RSBE01.ini")).toBe("ini-1");
     expect((await readDolphinManifest(dest))?.version).toBe("0.1.1");
-    expect(progress[progress.length - 1]).toEqual([10, 10]);
+    // Bytes plus a fixed share per file, monotonic up to the total.
+    const total = 10 + 2 * PROGRESS_BYTES_PER_FILE;
+    expect(progress[0]).toEqual([0, total]);
+    expect(progress[progress.length - 1]).toEqual([total, total]);
+    progress.forEach(([c, t], i) => {
+      expect(t).toBe(total);
+      expect(c).toBeGreaterThanOrEqual(i > 0 ? progress[i - 1][0] : 0);
+    });
 
     progress.length = 0;
     const second = await installBundledDolphin({

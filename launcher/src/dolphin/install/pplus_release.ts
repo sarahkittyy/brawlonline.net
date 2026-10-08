@@ -15,11 +15,12 @@
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-import { createHash } from "crypto";
 import fs from "fs";
 import { async as AsyncStreamZip } from "node-stream-zip";
 import path from "path";
 import { pipeline } from "stream/promises";
+import type { ByteProgress } from "utils/copy_file";
+import { hashFileWithProgress } from "utils/copy_file";
 import { download as httpDownload } from "utils/download";
 
 export type PPlusRelease = {
@@ -73,7 +74,8 @@ export type PPlusTarget = {
 
 export type PPlusMarker = { version: string; sha256: string; installedAt: string };
 
-export type PPlusProgress = { phase: "download" | "extract"; current: number; total: number };
+/** `download`: bytes received; `verify`: bytes of the zip hashed; `extract`: bytes written. */
+export type PPlusProgress = { phase: "download" | "verify" | "extract"; current: number; total: number };
 
 type Downloader = (options: {
   url: string;
@@ -126,19 +128,20 @@ export async function missingProjectPlusFiles(target: PPlusTarget, release = PPL
   return missing;
 }
 
-export async function sha256File(file: string): Promise<string> {
-  const hash = createHash("sha256");
-  await pipeline(fs.createReadStream(file), hash);
-  return hash.digest("hex");
+export async function sha256File(file: string, onProgress?: ByteProgress): Promise<string> {
+  return hashFileWithProgress(file, "sha256", onProgress);
 }
 
-/** Checks a downloaded release zip against the pinned size and sha256; throws if it differs. */
-export async function verifyReleaseZip(file: string, release: PPlusRelease): Promise<void> {
+/**
+ * Checks a downloaded release zip against the pinned size and sha256; throws if it differs.
+ * Hashing the 1.9 GB zip takes several seconds, so it reports progress.
+ */
+export async function verifyReleaseZip(file: string, release: PPlusRelease, onProgress?: ByteProgress): Promise<void> {
   const { size } = await fs.promises.stat(file);
   if (size !== release.size) {
     throw new Error(`The Project+ ${release.version} download has ${size} bytes, expected ${release.size}.`);
   }
-  const sha = await sha256File(file);
+  const sha = await sha256File(file, onProgress);
   if (sha !== release.sha256) {
     throw new Error(`The Project+ ${release.version} download is corrupt (sha256 ${sha}, expected ${release.sha256}).`);
   }
@@ -171,11 +174,13 @@ export async function installProjectPlusFiles({
   const zipPath = path.join(target.downloadDir, `pplus-${release.version}.zip`);
   const partPath = `${zipPath}.part`;
 
+  const verifyProgress: ByteProgress = (current, total) => onProgress?.({ phase: "verify", current, total });
+
   // A zip left by an interrupted extraction is reused if it still verifies.
   let haveZip = false;
   if (await exists(zipPath)) {
     try {
-      await verifyReleaseZip(zipPath, release);
+      await verifyReleaseZip(zipPath, release, verifyProgress);
       haveZip = true;
       log(`Reusing the verified download ${zipPath}`);
     } catch (err) {
@@ -194,7 +199,7 @@ export async function installProjectPlusFiles({
         onProgress?.({ phase: "download", current: transferredBytes, total: totalBytes || release.size }),
     });
     try {
-      await verifyReleaseZip(partPath, release);
+      await verifyReleaseZip(partPath, release, verifyProgress);
     } catch (err) {
       await fs.promises.rm(partPath, { force: true });
       throw err;

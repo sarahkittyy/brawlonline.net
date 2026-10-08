@@ -40,8 +40,26 @@ export const PlayIcon = ({ children, fillPercent = 1 }: React.PropsWithChildren<
         }
       `}
     >
+      {fillPercent < 1 && (
+        // The game's frame (border-image with `fill`) covers the background above, so the filled
+        // part is also drawn over the face, where it shows in both looks.
+        <div
+          data-testid="play-button-fill"
+          css={css`
+            position: absolute;
+            left: 0;
+            top: 0;
+            bottom: 0;
+            width: ${offset};
+            background-color: currentColor;
+            opacity: 0.2;
+            pointer-events: none;
+          `}
+        />
+      )}
       <div
         css={css`
+          position: relative;
           font-family: ${titleFont};
           font-weight: bold;
           text-transform: uppercase;

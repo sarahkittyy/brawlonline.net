@@ -20,18 +20,29 @@ import {
   patchedSdCardFolder,
   projectPlusStoreFolder,
 } from "./install/paths";
-import type { PPlusTarget } from "./install/pplus_release";
+import type { PPlusProgress, PPlusTarget } from "./install/pplus_release";
 import {
   ensureNetplaySave,
   installProjectPlusFiles,
   missingProjectPlusFiles,
   NETPLAY_SAVE_DIR,
+  PPLUS_RELEASE,
 } from "./install/pplus_release";
 import { installPluginOnSdCard, loadPlugin } from "./install/sd_card";
 import { DolphinInstance, MacOsRosettaRequiredError, PlaybackDolphinInstance } from "./instance";
 import { buildNetplayDolphinArgs } from "./netplay_args";
-import type { DolphinEvent, ReplayCommunication } from "./types";
+import { createProgressThrottle, runWithProgress } from "./setup_progress";
+import type { DolphinEvent, DolphinSetupPhase, ReplayCommunication } from "./types";
 import { DolphinErrorType, DolphinEventType, DolphinLaunchType } from "./types";
+
+/** Progress events are sent at most this often per launch type (a 2 GB step has thousands of chunks). */
+const PROGRESS_INTERVAL_MS = 100;
+
+const PPLUS_PHASES: Record<PPlusProgress["phase"], DolphinSetupPhase> = {
+  download: "downloadProjectPlus",
+  verify: "verifyProjectPlus",
+  extract: "extractProjectPlus",
+};
 
 const log = electronLog.scope("dolphin/manager");
 
@@ -51,6 +62,7 @@ export class DolphinManager {
   private bundledInstall: Promise<void> | null = null;
   private projectPlusInstall: Promise<void> | null = null;
   private eventSubject = new Subject<DolphinEvent>();
+  private shouldSendProgress = createProgressThrottle(PROGRESS_INTERVAL_MS);
   events = Observable.from(this.eventSubject);
 
   constructor(private settingsManager: SettingsManager) {}
@@ -96,7 +108,7 @@ export class DolphinManager {
     try {
       await this._installBundledDolphin();
       if (dolphinType === DolphinLaunchType.NETPLAY) {
-        await dolphinInstall.ensureUserFolder();
+        await this.ensureNetplayUserFolder();
         await this._ensureProjectPlusFiles(dolphinInstall);
       }
       await dolphinInstall.validate({
@@ -124,7 +136,7 @@ export class DolphinManager {
     // Ready as soon as the build is found. `--version` can take many seconds (our build
     // initialises Qt first), so report the version when it arrives, cached per executable.
     const exePath = this.getDolphinExecutablePath(dolphinType);
-    this._onComplete(dolphinType, this.versionCache.get(exePath));
+    this._onComplete(dolphinType, this._cachedVersion(dolphinType));
     if (!this.versionCache.has(exePath)) {
       void dolphinInstall.getDolphinVersion().then((version) => {
         if (version) {
@@ -201,7 +213,9 @@ export class DolphinManager {
       await netplayInstallation.setDefaultIso(isoPath);
       bootFile = netplayInstallation.netplayLauncherDol;
     }
-    const sdCardImage = await this._installOnlinePlugin(netplayInstallation, launchGameOnPlay);
+    const sdCardImage = await this._withProgress(DolphinLaunchType.NETPLAY, "prepareSdCard", (onProgress) =>
+      this._installOnlinePlugin(netplayInstallation, launchGameOnPlay, onProgress),
+    );
     const params = buildNetplayDolphinArgs({
       userArgs: netplayInstallation.userArgs(),
       sdCardImage,
@@ -332,6 +346,39 @@ export class DolphinManager {
   }
 
   /**
+   * The netplay User folder, seeded from the development template the first time (2 GB, with the
+   * Play button's progress). Start-up's theme extraction waits for the same seed.
+   */
+  ensureNetplayUserFolder(): Promise<void> {
+    const installation = this.getInstallation(DolphinLaunchType.NETPLAY);
+    let started = false;
+    return installation.ensureUserFolder((current, total) => {
+      if (!started) {
+        started = true;
+        this._onStart(DolphinLaunchType.NETPLAY);
+      }
+      this._onProgress(DolphinLaunchType.NETPLAY, current, total, "copyUserFolder");
+    });
+  }
+
+  /** A step shown on the Play button from its first progress report until it ends (see runWithProgress). */
+  private _withProgress<T>(
+    dolphinType: DolphinLaunchType,
+    phase: DolphinSetupPhase,
+    step: (onProgress: (current: number, total: number) => void) => Promise<T>,
+  ): Promise<T> {
+    return runWithProgress(step, {
+      start: () => this._onStart(dolphinType),
+      progress: (current, total) => this._onProgress(dolphinType, current, total, phase),
+      complete: () => this._onComplete(dolphinType, this._cachedVersion(dolphinType)),
+    });
+  }
+
+  private _cachedVersion(dolphinType: DolphinLaunchType): string | undefined {
+    return this.versionCache.get(this.getDolphinExecutablePath(dolphinType));
+  }
+
+  /**
    * Installs the Dolphin build bundled with the launcher into `<userData>/netplay` when it is
    * missing or older (after a launcher update). Shared by the netplay and playback set-up, which
    * run at the same time on start-up. Progress is reported like Slippi's Dolphin download.
@@ -355,7 +402,7 @@ export class DolphinManager {
             started = true;
             this._onStart(DolphinLaunchType.NETPLAY);
           }
-          this._onProgress(DolphinLaunchType.NETPLAY, current, total);
+          this._onProgress(DolphinLaunchType.NETPLAY, current, total, "installDolphin");
         },
         log: (message) => log.info(message),
       })
@@ -384,16 +431,25 @@ export class DolphinManager {
         storeDir,
         downloadDir: path.join(storeDir, "downloads"),
       };
+      const release = readTestMode(process.env, app.isPackaged).pplusRelease ?? PPLUS_RELEASE;
       this.projectPlusInstall = (async () => {
-        let missing = await missingProjectPlusFiles(target);
+        let missing = await missingProjectPlusFiles(target, release);
         if (missing.includes(NETPLAY_SAVE_DIR) && existsSync(path.join(installation.sysFolder, NETPLAY_SAVE_DIR))) {
           missing = missing.filter((m) => m !== NETPLAY_SAVE_DIR);
         }
         if (missing.length > 0) {
-          this._onStart(DolphinLaunchType.NETPLAY);
+          // The button changes with the first progress report (installDolphin ends it).
+          let started = false;
           await installProjectPlusFiles({
             target,
-            onProgress: ({ current, total }) => this._onProgress(DolphinLaunchType.NETPLAY, current, total),
+            release,
+            onProgress: ({ phase, current, total }) => {
+              if (!started) {
+                started = true;
+                this._onStart(DolphinLaunchType.NETPLAY);
+              }
+              this._onProgress(DolphinLaunchType.NETPLAY, current, total, PPLUS_PHASES[phase]);
+            },
             log: (message) => log.info(message),
           });
         }
@@ -414,6 +470,7 @@ export class DolphinManager {
   private async _installOnlinePlugin(
     installation: LocalDolphinInstallation,
     required: boolean,
+    onProgress?: (current: number, total: number) => void,
   ): Promise<string | null> {
     const sourceImage = installation.sdCardImage;
     if (!required && !(await fileExists(sourceImage))) {
@@ -429,6 +486,7 @@ export class DolphinManager {
         plugin,
         protectedPaths: template ? [template] : [],
         log: (message) => log.info(message),
+        onProgress,
       });
       log.info(`Online plugin ${plugin.sha256.slice(0, 12)} on ${result.image}: ${result.action}`);
       return result.image;
@@ -505,11 +563,18 @@ export class DolphinManager {
     });
   }
 
-  private _onProgress(dolphinType: DolphinLaunchType, current: number, total: number) {
+  /**
+   * Sends progress, at most every PROGRESS_INTERVAL_MS per launch type; the start and end of a
+   * step and a change of phase are always sent.
+   */
+  private _onProgress(dolphinType: DolphinLaunchType, current: number, total: number, phase?: DolphinSetupPhase) {
+    if (!this.shouldSendProgress(dolphinType, current, total, phase)) {
+      return;
+    }
     this.eventSubject.next({
       type: DolphinEventType.DOWNLOAD_PROGRESS,
       dolphinType,
-      progress: { current, total },
+      progress: { current, total, phase },
     });
   }
 

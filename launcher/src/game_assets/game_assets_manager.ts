@@ -93,6 +93,7 @@ export class GameAssetsManager {
       manifest: this.state.manifest,
       progress: { done: 0, total: 1, label: "" },
     });
+    const started = Date.now();
     try {
       // Start from an empty cache so assets from another disc never linger.
       await rm(this.cacheDir, { recursive: true, force: true });
@@ -109,6 +110,12 @@ export class GameAssetsManager {
       if (manifest.missing.length > 0) {
         log.warn(`Assets not found: ${manifest.missing.join(", ")}`);
       }
+      log.info(
+        `Extracted the game assets from ${sources.disc.kind}${sources.sdRawPath ? " and the SD card" : ""} in ${(
+          (Date.now() - started) /
+          1000
+        ).toFixed(1)} s`,
+      );
       this._setState({ status: GameAssetsStatus.READY, manifest });
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
