@@ -4,7 +4,7 @@
 
 These files follow the plan in `docs/backend-design.md` section 2.1: one OVH dedicated Debian box, Postgres 16 from Debian packages, Caddy for TLS, systemd units, nightly backups off the box. No containers in production; `docker-compose.yml` is only for development and tests.
 
-The product is called Brawl Online (`PRODUCT_NAME` in `crates/common`: email subjects and bodies, page titles; `MAIL_FROM` sets the sender name). The subdomains are not decided. The examples use placeholder subdomains of `fluffycat.gay`: `accounts.fluffycat.gay` (HTTP API) and `mm.fluffycat.gay` (UDP matchmaking). Change them in one place each: the Caddyfile, `PUBLIC_BASE_URL`, and the client build's mm hostname.
+The product is called Brawl Online (`PRODUCT_NAME` in `crates/common`: email subjects and bodies, page titles; `MAIL_FROM` sets the sender name). The domain is `brawlonline.net` (user, 2026-10-07): the apex serves the website (`website/` in the repository) and the HTTP API (`/v1`, plus the email-link pages), and `mm.brawlonline.net` is UDP matchmaking on 43113. The launcher's update feed is `https://brawlonline.net/updates/launcher`, a folder in the web root. The hostnames are set in the Caddyfile (or the nginx site), `PUBLIC_BASE_URL`, the launcher's `src/common/product.ts` and Dolphin's `[Online] MatchmakingHost` and `AccountsUrl` defaults (`Core/Config/OnlineSettings.cpp`).
 
 The original plan kept these services off the existing VPSes (`sarahvps`, `sarahvps2`). The user later chose `sarahvps2` for production; `PROD.md` covers how it shares that box.
 
@@ -62,8 +62,8 @@ Firewall (nftables or OVH's network firewall): allow TCP 22, 80, 443 and **UDP 4
 
 ## Cloudflare DNS
 
-- `mm.fluffycat.gay`: an A record, **DNS only (grey cloud)**. Cloudflare's proxy does not carry arbitrary UDP, and the mm server must see each player's real address and port: that observed address is what the peer hole-punches to.
-- `accounts.fluffycat.gay`: start with **DNS only** too. Caddy then gets its certificate directly and sees real client IPs, which the rate limits use (`TRUST_PROXY_HEADERS=true` reads Caddy's `X-Forwarded-For`).
+- `mm.brawlonline.net`: an A record, **DNS only (grey cloud)**. Cloudflare's proxy does not carry arbitrary UDP, and the mm server must see each player's real address and port: that observed address is what the peer hole-punches to.
+- `brawlonline.net` (and `www.brawlonline.net`, which redirects to it): start with **DNS only** too. Caddy then gets its certificate directly and sees real client IPs, which the rate limits use (`TRUST_PROXY_HEADERS=true` reads Caddy's `X-Forwarded-For`).
   If you later turn the orange cloud on: set SSL mode to Full (strict), add Cloudflare's ranges to Caddy's `trusted_proxies` so `X-Forwarded-For` carries the real client IP, and make sure the ACME HTTP challenge still reaches Caddy (or use a Cloudflare Origin certificate).
 - Email (Resend): add the SPF, DKIM and (optionally) DMARC records Resend shows for `fluffycat.gay` when you verify the sending domain. Until the domain is verified, Resend refuses to send from `noreply@fluffycat.gay`.
 
@@ -92,5 +92,5 @@ At friends scale a nightly dump is enough. Add WAL archiving (for point-in-time 
 ## Monitoring
 
 - `journalctl -u pp-accounts -u pp-mm`. mm logs a `mm stats` line (connections, waiting tickets) every minute.
-- `GET https://accounts.fluffycat.gay/healthz` returns `ok` when the service can reach Postgres; point a free external uptime check at it.
+- `GET https://brawlonline.net/healthz` returns `ok` when the service can reach Postgres; point a free external uptime check at it.
 - The Prometheus `/metrics` endpoints from the design are not built yet (Phase 5).

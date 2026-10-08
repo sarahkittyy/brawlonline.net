@@ -1,19 +1,27 @@
-# Caddy in front of the accounts service (Brawl Online). Hostnames are placeholders under
-# fluffycat.gay until the subdomains are decided.
-# The mm server is UDP and does not go through Caddy.
+# Caddy in front of the accounts service and the website (Brawl Online): the generic plan.
+# Production on sarahvps2 uses nginx instead (deploy/sarahvps2/brawl-online.conf), with the
+# same layout: brawlonline.net serves the static website (website/ in the repository, plus
+# /downloads/ and the launcher feed /updates/launcher/) and proxies the accounts paths.
+# The mm server (mm.brawlonline.net, UDP 43113) does not go through Caddy.
 {
 	email admin@fluffycat.gay
 }
 
-accounts.fluffycat.gay {
+www.brawlonline.net {
+	redir https://brawlonline.net{uri} permanent
+}
+
+brawlonline.net {
 	encode zstd gzip
-	# Only the API and the two email-link pages are public.
-	@public path /v1/* /user/* /verify-email /reset-password /healthz
-	handle @public {
+	# The API and the two email-link pages go to the accounts service.
+	@accounts path /v1/* /user/* /verify-email /reset-password /healthz
+	handle @accounts {
 		reverse_proxy 127.0.0.1:8080
 	}
+	# Everything else is the static website.
 	handle {
-		respond 404
+		root * /var/www/brawlonline
+		file_server
 	}
 	header {
 		Strict-Transport-Security "max-age=31536000"
@@ -23,7 +31,7 @@ accounts.fluffycat.gay {
 		-Server
 	}
 	log {
-		output file /var/log/caddy/accounts.log
+		output file /var/log/caddy/brawlonline.log
 		format json
 	}
 }

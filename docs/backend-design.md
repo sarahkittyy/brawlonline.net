@@ -525,7 +525,7 @@ _Added 2026-10-07 with the `matchmaking` branch of `dolphin/` (off `rollback-fix
 | `OnlineSession.{h,cpp}` | The hand-off interface (below). |
 | `OnlineClient.{h,cpp}` | What Slippi's EXI device does with `user` / `matchmaking` / `slippi_netplay`: `FindMatch` (FIND_OPPONENT), `Cleanup` (CLEANUP_CONNECTION: a fresh IDLE matchmaking at once, the teardown on a thread), status for the mailbox and the harness. |
 | `Timeouts.h` | Slippi's online timeouts in one place (5.6). |
-| `Config/OnlineSettings.{h,cpp}` | `[Online]`: `MatchmakingHost` (`mm.fluffycat.gay`), `MatchmakingPort` (43113), `UseDevServer` (127.0.0.1), `AccountsUrl`, `DevAccountsUrl`, and Slippi's `ForceNetplayPort`/`NetplayPort`/`ForceLanIP`/`LanIP`. |
+| `Config/OnlineSettings.{h,cpp}` | `[Online]`: `MatchmakingHost` (`mm.brawlonline.net`), `MatchmakingPort` (43113), `UseDevServer` (127.0.0.1), `AccountsUrl`, `DevAccountsUrl`, and Slippi's `ForceNetplayPort`/`NetplayPort`/`ForceLanIP`/`LanIP`. |
 
 The harness drives it with `online_status`, `mm_search_direct`, `mm_search`, `mm_status` and `mm_cancel` (`docs/harness-protocol.md`, "Online play"). The game drives the same calls through MAILBOX 0xB9/0xB4/0xB3/0xBA (`Online/GameBridge.cpp`, 5.2), verified end to end from the in-game menus by `harness/tests/test_online_game.py`.
 
@@ -705,6 +705,6 @@ That is roughly **10-12 months for one person**, or 5-6 months with one person o
 2. **Orca code.** May we reuse Orca's GPL keyframe and result-reader code with attribution, or reimplement it? (Reuse is legal; reimplementing avoids "built on Orca" optics.)
 3. **The "Brawlback → Direct / Quickplay" Wi-Fi menu.** Where did you see it? It is in no public Brawlback repo or branch. If it exists unpushed, asking the Brawlback team for it would save weeks.
 4. **Email.** Is a friends phase without email (invite codes, admin password resets) OK?
-5. **Names.** What domain name and product name should the hostnames and website use? _Answered 2026-10-07: the product is **Brawl Online**. The hostnames stay placeholder subdomains of `fluffycat.gay` (`accounts.`, `mm.`, `updates.`) until the subdomains are chosen._
+5. **Names.** What domain name and product name should the hostnames and website use? _Answered 2026-10-07: the product is **Brawl Online**. The hostnames stay placeholder subdomains of `fluffycat.gay` (`accounts.`, `mm.`, `updates.`) until the subdomains are chosen. Later the same day: the domain is **brawlonline.net**. The apex serves the website, the accounts API (`/v1`) and the launcher update feed (`/updates/launcher`); `mm.brawlonline.net` is matchmaking (UDP 43113, a DNS-only record)._
 6. **Ruleset.** Stocks, timer, and stage lists for unranked and ranked: adopt P+'s current competitive ruleset, or ask the P+ team?
 7. **Replay retention.** Keep ranked replays forever and the rest for 90 days?

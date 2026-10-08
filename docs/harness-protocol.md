@@ -165,9 +165,9 @@ The online client (`Source/Core/Core/Online/`) logs in from `user.json` and find
 
 | key | default | meaning |
 |---|---|---|
-| `MatchmakingHost`, `MatchmakingPort` | `mm.fluffycat.gay`, `43113` | the mm server |
+| `MatchmakingHost`, `MatchmakingPort` | `mm.brawlonline.net`, `43113` | the mm server |
 | `UseDevServer` | `False` | Slippi's dev host: matchmaking on `127.0.0.1:MatchmakingPort`, accounts at `DevAccountsUrl` |
-| `AccountsUrl`, `DevAccountsUrl` | `https://accounts.fluffycat.gay`, `http://127.0.0.1:8080` | for the users-rest lookup after a login |
+| `AccountsUrl`, `DevAccountsUrl` | `https://brawlonline.net`, `http://127.0.0.1:8080` | for the users-rest lookup after a login |
 | `ForceNetplayPort`, `NetplayPort` | `False`, `2626` | Slippi's "Force Netplay Port"; otherwise a random port in 41000-50999 |
 | `ForceLanIP`, `LanIP` | `False`, `""` | Slippi's "Force LAN IP" |
 
