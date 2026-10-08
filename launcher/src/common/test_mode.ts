@@ -6,6 +6,8 @@
 //   PPO_REMOTE_DEBUGGING_PORT  Chromium remote-debugging port (DevTools protocol)
 //   PPO_HARNESS_PORT           appended to the netplay Dolphin as `--harness-port <port>`
 //   PPO_DOLPHIN_EXTRA_ARGS     JSON array of extra netplay Dolphin arguments
+//   PPO_PPLUS_RELEASE          JSON {version, url, size, sha256}: the P+ release zip to install instead
+//                              of the pinned one (a small zip served from localhost)
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -16,6 +18,8 @@ export type TestModeOptions = {
   remoteDebuggingPort: number | null;
   harnessPort: number | null;
   dolphinExtraArgs: string[];
+  /** Replaces the pinned P+ release (`PPLUS_RELEASE` in pplus_release.ts). */
+  pplusRelease: { version: string; url: string; size: number; sha256: string } | null;
 };
 
 export const INACTIVE_TEST_MODE: TestModeOptions = {
@@ -24,6 +28,7 @@ export const INACTIVE_TEST_MODE: TestModeOptions = {
   remoteDebuggingPort: null,
   harnessPort: null,
   dolphinExtraArgs: [],
+  pplusRelease: null,
 };
 
 export class TestModeError extends Error {}
@@ -65,11 +70,36 @@ export function readTestMode(env: Record<string, string | undefined>, isPackaged
     }
     dolphinExtraArgs = parsed;
   }
+  let pplusRelease: TestModeOptions["pplusRelease"] = null;
+  const release = value(env, "PPO_PPLUS_RELEASE");
+  if (release !== null) {
+    let parsed: any;
+    try {
+      parsed = JSON.parse(release);
+    } catch {
+      parsed = null;
+    }
+    if (
+      !parsed ||
+      typeof parsed.version !== "string" ||
+      typeof parsed.url !== "string" ||
+      !Number.isInteger(parsed.size) ||
+      parsed.size <= 0 ||
+      typeof parsed.sha256 !== "string" ||
+      !/^[0-9a-f]{64}$/.test(parsed.sha256)
+    ) {
+      throw new TestModeError(
+        `PPO_PPLUS_RELEASE must be JSON {"version", "url", "size", "sha256" (lowercase hex)}, got ${release}`,
+      );
+    }
+    pplusRelease = { version: parsed.version, url: parsed.url, size: parsed.size, sha256: parsed.sha256 };
+  }
   return {
     active,
     userDataDir: value(env, "PPO_USER_DATA_DIR"),
     remoteDebuggingPort: port(env, "PPO_REMOTE_DEBUGGING_PORT"),
     harnessPort: port(env, "PPO_HARNESS_PORT"),
     dolphinExtraArgs,
+    pplusRelease,
   };
 }

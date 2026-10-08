@@ -8,6 +8,8 @@ import { useQuery } from "@tanstack/react-query";
 import React, { useCallback } from "react";
 import { useDropzone } from "react-dropzone";
 
+import { ProgressBar } from "@/components/loading_screen/loading_screen";
+import { useIsoVerificationFraction } from "@/lib/hooks/use_iso_verification";
 import { useIsoPath } from "@/lib/hooks/use_settings";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { hasBorder } from "@/styles/has_border";
@@ -66,6 +68,8 @@ export const IsoSelectionStep = () => {
   });
 
   const loading = validIsoPathQuery.isLoading;
+  // Hashing the image takes ~25 s the first time: show how far along it is.
+  const verifyFraction = useIsoVerificationFraction(tempIsoPath);
   const [, setIsoPath] = useIsoPath();
   const nativeFilesRef = React.useRef<File[] | null>(null);
 
@@ -161,6 +165,7 @@ export const IsoSelectionStep = () => {
           </Button>
         )}
         <p>{loading ? Messages.verifyingIso() : Messages.orDragAndDropHere()}</p>
+        {loading && verifyFraction !== null && <ProgressBar current={verifyFraction} total={1} />}
       </Container>
     </Box>
   );

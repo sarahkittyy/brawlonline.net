@@ -8,6 +8,7 @@ import electronLog from "electron-log";
 import type { ProgressInfo, UpdateInfo } from "electron-updater";
 import { autoUpdater } from "electron-updater";
 import path from "path";
+import { throttleProgress } from "utils/copy_file";
 import { fileExists } from "utils/file_exists";
 
 import type { AppUpdater } from "./app_updater";
@@ -20,6 +21,7 @@ import {
   ipc_clearTempFolder,
   ipc_copyLogsToClipboard,
   ipc_installUpdate,
+  ipc_isoVerificationProgressEvent,
   ipc_launcherUpdateDownloadingEvent,
   ipc_launcherUpdateFoundEvent,
   ipc_launcherUpdateReadyEvent,
@@ -74,7 +76,17 @@ export default function setupMainIpc({
 
     try {
       const cacheFile = path.join(app.getPath("userData"), "iso-verification.json");
-      const result = await verifyIsoCached(isoPath, cacheFile);
+      // Hashing the 8.5 GB image takes ~25 s: report it (a cache hit reports nothing).
+      let hashed = false;
+      const onProgress = throttleProgress((current, total) => {
+        hashed = true;
+        ipc_isoVerificationProgressEvent.main!.trigger({ path: isoPath, current, total }).catch(log.warn);
+      });
+      const started = Date.now();
+      const result = await verifyIsoCached(isoPath, cacheFile, onProgress);
+      if (hashed) {
+        log.info(`Verified ${isoPath} (${result}) in ${((Date.now() - started) / 1000).toFixed(1)} s`);
+      }
       return { path: isoPath, valid: result };
     } catch (err) {
       return { path: isoPath, valid: IsoValidity.INVALID };

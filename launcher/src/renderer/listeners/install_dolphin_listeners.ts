@@ -33,6 +33,10 @@ export function installDolphinListeners({
   });
 
   dolphinService.onEvent(DolphinEventType.DOWNLOAD_START, (event) => {
+    if (event.dolphinType === DolphinLaunchType.NETPLAY) {
+      // A new step: never show the last one's progress.
+      updateNetplayDownloadProgress(undefined);
+    }
     setDolphinStatus(event.dolphinType, DolphinStatus.DOWNLOADING);
   });
 

@@ -13,7 +13,7 @@ import React from "react";
 
 import { PathInput } from "@/components/path_input/path_input";
 import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
-import { useIsoVerification } from "@/lib/hooks/use_iso_verification";
+import { useIsoVerification, useIsoVerificationFraction } from "@/lib/hooks/use_iso_verification";
 import { useIsoPath, useLaunchGameOnPlay } from "@/lib/hooks/use_settings";
 
 import { SettingItem } from "../setting_item_section";
@@ -54,6 +54,7 @@ export const GameSettings = React.memo(() => {
   const verifying = useIsoVerification((state) => state.isValidating);
   const isoValidity = useIsoVerification((state) => state.validity);
   const [isoPath, setIsoPath] = useIsoPath();
+  const verifyFraction = useIsoVerificationFraction(verifying ? isoPath : null);
   const [launchMeleeOnPlay, setLaunchMelee] = useLaunchGameOnPlay();
   const netplayDolphinOpen = useDolphinStore((store) => store.netplayOpened);
   const playbackDolphinOpen = useDolphinStore((store) => store.playbackOpened);
@@ -84,9 +85,22 @@ export const GameSettings = React.memo(() => {
                   font-weight: 500;
                 `}
               >
-                {verifying ? Messages.verifying() : renderValidityText(isoValidity)}
+                {verifying
+                  ? verifyFraction !== null
+                    ? `${Messages.verifying()} ${Math.floor(verifyFraction * 100)}%`
+                    : Messages.verifying()
+                  : renderValidityText(isoValidity)}
               </span>
-              {verifying ? <CircularProgress size={25} color="inherit" /> : renderValidityStatus(isoValidity)}
+              {verifying ? (
+                // The same spinner, filling up as the image is hashed (~25 s the first time).
+                <CircularProgress
+                  size={25}
+                  color="inherit"
+                  {...(verifyFraction !== null ? { variant: "determinate", value: verifyFraction * 100 } : {})}
+                />
+              ) : (
+                renderValidityStatus(isoValidity)
+              )}
             </ValidationContainer>
           }
         />

@@ -7,7 +7,7 @@ msgstr ""
 "Plural-Forms: nplurals=1; plural=0\n"
 "x-generator: i18next-auto-keys CLI\n"
 "Language: ja-JP\n"
-"PO-Revision-Date: 2026-10-08T06:36:43.177Z\n"
+"PO-Revision-Date: 2026-10-08T08:13:05.732Z\n"
 
 #: src/renderer/components/activate_online_form/activate_online_form.messages.ts:3:30
 msgid "2-4 uppercase English characters"
@@ -270,6 +270,10 @@ msgstr "結果をコピー"
 msgid "Copy to Clipboard"
 msgstr "クリップボードにコピー"
 
+#: src/renderer/app/header/play_button/play_button.messages.ts:6:23
+msgid "Copying files"
+msgstr ""
+
 #: src/renderer/components/login_form/login_form.messages.ts:2:26
 msgid "Create an account"
 msgstr "アカウントを作成"
@@ -358,6 +362,10 @@ msgstr ""
 msgid "Download manually"
 msgstr ""
 
+#: src/renderer/app/header/play_button/play_button.messages.ts:7:33
+msgid "Downloading Project+"
+msgstr ""
+
 #: src/renderer/components/persistent_notification/persistent_notification.messages.ts:2:44
 #. {0} version: string
 msgid "Downloading version {0}..."
@@ -413,6 +421,10 @@ msgstr "Geckoコードの保存エラー：{0}"
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:3:28
 msgid "External IP Address"
 msgstr "外部IPアドレス"
+
+#: src/renderer/app/header/play_button/play_button.messages.ts:9:32
+msgid "Extracting Project+"
+msgstr ""
 
 #: src/renderer/initialize_app.messages.ts:2:60
 #. {0} productName: string
@@ -553,6 +565,11 @@ msgstr ""
 
 #: src/renderer/components/persistent_notification/persistent_notification.messages.ts:5:24
 msgid "Installation failed."
+msgstr ""
+
+#: src/renderer/app/header/play_button/play_button.messages.ts:5:28
+#. What the button says while a set-up step runs (DolphinSetupPhase).
+msgid "Installing Dolphin"
 msgstr ""
 
 #: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:4:21
@@ -865,6 +882,10 @@ msgstr ""
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:22:22
 msgid "Port mapping"
 msgstr "ポートマッピング"
+
+#: src/renderer/app/header/play_button/play_button.messages.ts:10:26
+msgid "Preparing SD card"
+msgstr ""
 
 #: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:8:25
 msgid "Previous replay"
@@ -1206,6 +1227,10 @@ msgstr "メールアドレスを確認"
 #: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:5:23
 msgid "Verifying ISO..."
 msgstr "ISO確認中..."
+
+#: src/renderer/app/header/play_button/play_button.messages.ts:8:31
+msgid "Verifying Project+"
+msgstr ""
 
 #: src/renderer/pages/settings/game_settings/game_settings.messages.ts:6:20
 msgid "Verifying..."

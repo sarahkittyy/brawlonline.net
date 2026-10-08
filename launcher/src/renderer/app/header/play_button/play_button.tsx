@@ -1,6 +1,9 @@
+import type { DolphinSetupPhase } from "@dolphin/types";
 import { css } from "@emotion/react";
 import ButtonBase from "@mui/material/ButtonBase";
 import React from "react";
+
+import { bodyFont } from "@/styles/with_font";
 
 import { PlayButtonMessages as Messages } from "./play_button.messages";
 import { PlayIcon } from "./play_icon";
@@ -35,17 +38,77 @@ export const PlayButton = React.memo((props: PlayButtonProps) => {
   return <MainButton {...props}>{Messages.play()}</MainButton>;
 });
 
-type UpdatingButtonProps = Omit<MainButtonProps, "children">;
+/** The button's words for a set-up step; Slippi's "Updating" for steps without a name. */
+export function setupPhaseLabel(phase: DolphinSetupPhase | undefined): string {
+  switch (phase) {
+    case "installDolphin":
+      return Messages.installingDolphin();
+    case "copyUserFolder":
+      return Messages.copyingFiles();
+    case "downloadProjectPlus":
+      return Messages.downloadingProjectPlus();
+    case "verifyProjectPlus":
+      return Messages.verifyingProjectPlus();
+    case "extractProjectPlus":
+      return Messages.extractingProjectPlus();
+    case "prepareSdCard":
+      return Messages.preparingSdCard();
+    default:
+      return Messages.updating();
+  }
+}
 
-export const UpdatingButton = React.memo((props: UpdatingButtonProps) => {
+type UpdatingButtonProps = Omit<MainButtonProps, "children"> & {
+  /** The step that is running. Without one the button says "Updating", as Slippi's does. */
+  phase?: DolphinSetupPhase;
+};
+
+export const UpdatingButton = React.memo(({ phase, ...props }: UpdatingButtonProps) => {
+  if (!phase) {
+    return (
+      <MainButton disabled={true} {...props}>
+        <span
+          css={css`
+            font-size: 0.9em;
+          `}
+        >
+          {Messages.updating()}
+        </span>
+      </MainButton>
+    );
+  }
+  // A named step: its name, and how far along it is under it.
+  const percent = Math.floor(Math.min(1, Math.max(0, props.fillPercent ?? 0)) * 100);
   return (
     <MainButton disabled={true} {...props}>
       <span
         css={css`
-          font-size: 0.9em;
+          display: flex;
+          flex-direction: column;
+          align-items: center;
+          line-height: 1.15;
         `}
       >
-        {Messages.updating()}
+        <span
+          css={css`
+            /* The menu font, as written: the wide title capitals do not fit "Downloading Project+". */
+            font-family: ${bodyFont};
+            text-transform: none;
+            font-size: 12px;
+            max-width: 156px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+          `}
+        >
+          {setupPhaseLabel(phase)}
+        </span>
+        <span
+          css={css`
+            font-size: 14px;
+          `}
+        >
+          {percent}%
+        </span>
       </span>
     </MainButton>
   );

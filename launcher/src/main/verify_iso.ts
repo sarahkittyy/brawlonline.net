@@ -1,8 +1,9 @@
 import { Preconditions } from "@common/preconditions";
 import { IsoValidity } from "@common/types";
-import crypto from "crypto";
 import fs from "fs";
 import { open } from "node:fs/promises";
+import type { ByteProgress } from "utils/copy_file";
+import { hashFileWithProgress } from "utils/copy_file";
 import { fileExists } from "utils/file_exists";
 
 type IsoHashInfo = {
@@ -46,7 +47,8 @@ export function md5ToValidity(md5: string): IsoValidity {
   return ACCEPTED_ISO_MD5S.get(md5.toLowerCase())?.valid ?? IsoValidity.INVALID;
 }
 
-export async function verifyIso(isoPath: string): Promise<IsoValidity> {
+/** `onProgress` gets the bytes hashed (8.5 GB, ~25 s); it is not called when the header check fails. */
+export async function verifyIso(isoPath: string, onProgress?: ByteProgress): Promise<IsoValidity> {
   const exists = await fileExists(isoPath);
   Preconditions.checkState(exists, `Error verifying ISO: File ${isoPath} does not exist`);
 
@@ -54,18 +56,13 @@ export async function verifyIso(isoPath: string): Promise<IsoValidity> {
     return IsoValidity.INVALID;
   }
 
-  const md5 = await hashFile(isoPath);
+  let md5: string;
+  try {
+    md5 = await hashFileWithProgress(isoPath, "md5", onProgress);
+  } catch (err) {
+    throw new Error(`Error reading ISO file ${isoPath}: ${err}`);
+  }
   return md5ToValidity(md5);
-}
-
-function hashFile(isoPath: string): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const hash = crypto.createHash("md5");
-    const input = fs.createReadStream(isoPath, { highWaterMark: 4 * 1024 * 1024 });
-    input.on("error", (err) => reject(`Error reading ISO file ${isoPath}: ${err}`));
-    input.on("data", (chunk) => hash.update(chunk as Buffer));
-    input.on("end", () => resolve(hash.digest("hex")));
-  });
 }
 
 type CacheEntry = { size: number; mtimeMs: number; valid: IsoValidity };
@@ -75,7 +72,11 @@ type CacheEntry = { size: number; mtimeMs: number; valid: IsoValidity };
  * time: hashing an 8.5 GB Brawl image takes a while, and the launcher checks the
  * ISO on every start.
  */
-export async function verifyIsoCached(isoPath: string, cacheFile: string): Promise<IsoValidity> {
+export async function verifyIsoCached(
+  isoPath: string,
+  cacheFile: string,
+  onProgress?: ByteProgress,
+): Promise<IsoValidity> {
   const stat = await fs.promises.stat(isoPath);
   let cache: Record<string, CacheEntry> = {};
   try {
@@ -87,7 +88,7 @@ export async function verifyIsoCached(isoPath: string, cacheFile: string): Promi
   if (hit && hit.size === stat.size && hit.mtimeMs === stat.mtimeMs) {
     return hit.valid;
   }
-  const valid = await verifyIso(isoPath);
+  const valid = await verifyIso(isoPath, onProgress);
   cache[isoPath] = { size: stat.size, mtimeMs: stat.mtimeMs, valid };
   try {
     await fs.promises.writeFile(cacheFile, JSON.stringify(cache, null, 2));

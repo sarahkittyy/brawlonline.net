@@ -15,6 +15,8 @@ import path from "path";
 
 export const BUNDLED_DOLPHIN_DIR = "dolphin";
 export const DOLPHIN_MANIFEST_NAME = "dolphin.json";
+/** What one file counts for in the install progress, on top of its size. */
+export const PROGRESS_BYTES_PER_FILE = 128 * 1024;
 
 /** Entries of the install folder that belong to the user or the launcher, never replaced. */
 export const PROTECTED_ENTRIES = new Set(["User", "pponline-sd", "pplus", "downloads", DOLPHIN_MANIFEST_NAME]);
@@ -117,7 +119,10 @@ export async function installBundledDolphin({
     }
   }
 
-  const total = manifest.size || 1;
+  // Progress counts each file as its bytes plus a fixed cost: most of the bundle's ~1000 files are
+  // small, and creating them takes longer than copying their bytes (by bytes alone the last 7 %
+  // took most of the time).
+  const total = Math.max(1, (manifest.size || 0) + (manifest.files || 0) * PROGRESS_BYTES_PER_FILE);
   let done = 0;
   onProgress?.(0, total);
   const copy = async (from: string, to: string) => {
@@ -132,12 +137,15 @@ export async function installBundledDolphin({
     } else {
       await fs.promises.copyFile(from, to);
       await fs.promises.chmod(to, st.mode & 0o777);
-      done += st.size;
+      done += st.size + PROGRESS_BYTES_PER_FILE;
       onProgress?.(Math.min(done, total), total);
     }
   };
   for (const name of manifest.entries) {
     await copy(path.join(sourceDir, name), path.join(destDir, name));
+  }
+  if (done < total) {
+    onProgress?.(total, total);
   }
   await fs.promises.writeFile(path.join(destDir, DOLPHIN_MANIFEST_NAME), JSON.stringify(manifest, null, 2) + "\n");
   log(`Dolphin ${manifest.version} installed (${manifest.files} files)`);

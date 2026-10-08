@@ -5,8 +5,10 @@ import { addGamePath, getOnlineSettings, setDefaultIso, setOnlineSettings } from
 import { IniFile } from "@dolphin/config/ini_file";
 import electronLog from "electron-log";
 import { pathExists } from "fs-extra";
-import { cp, mkdir, readdir, rm } from "node:fs/promises";
+import { cp, lstat, mkdir, readdir, rename, rm } from "node:fs/promises";
 import path from "path";
+import type { ByteProgress } from "utils/copy_file";
+import { copyFileWithProgress } from "utils/copy_file";
 
 import type { DolphinInstallation, DolphinLaunchType } from "../types";
 import { executeCommand } from "./execute_command";
@@ -21,6 +23,15 @@ const semverRegex =
 
 /** Folders of a template User folder that are never copied (logs, caches, P+ HD textures). */
 const TEMPLATE_SKIP = new Set(["Cache", "Logs", "Load", "Dump", "ScreenShots", "StateSaves", "Shaders"]);
+
+/**
+ * Seeds in flight, by User folder. Start-up asks for the User folder from two places at once (the
+ * Dolphin set-up and the theme extraction); both wait for the same copy and both get its progress.
+ */
+const seeds = new Map<
+  string,
+  { promise: Promise<void>; listeners: Set<ByteProgress>; last: [number, number] | null }
+>();
 
 /**
  * A Dolphin build already on disk (our Dolphin fork), used for both netplay and
@@ -91,29 +102,89 @@ export class LocalDolphinInstallation implements DolphinInstallation {
   }
 
   /**
-   * Makes sure the User folder exists. A new one is seeded from the template (if
-   * configured) so P+'s launcher DOLs and SD card are in place.
+   * Makes sure the User folder exists. A new one is seeded from the template (if configured, in
+   * development) so P+'s launcher DOLs and SD card are in place. That copies ~2 GB, so it reports
+   * the bytes copied. Each file is copied to `<name>.partial` and renamed, so an interrupted seed
+   * leaves no truncated file, and the next start copies what is still missing.
    */
-  async ensureUserFolder(): Promise<void> {
+  async ensureUserFolder(onProgress?: ByteProgress): Promise<void> {
     await mkdir(this.userFolder, { recursive: true });
-    if (this.userTemplate && !(await pathExists(this.netplayLauncherDol))) {
-      if (await pathExists(this.userTemplate)) {
-        log.info(`Seeding Dolphin User folder ${this.userFolder} from ${this.userTemplate}`);
-        const entries = await readdir(this.userTemplate);
-        for (const entry of entries) {
-          if (TEMPLATE_SKIP.has(entry)) {
-            continue;
-          }
-          const dest = path.join(this.userFolder, entry);
-          if (await pathExists(dest)) {
-            continue;
-          }
-          await cp(path.join(this.userTemplate, entry), dest, { recursive: true, force: false });
-        }
-      } else {
-        log.warn(`Dolphin User template not found: ${this.userTemplate}`);
+    const template = this.userTemplate;
+    if (!template) {
+      return;
+    }
+    const key = path.resolve(this.userFolder);
+    let seed = seeds.get(key);
+    if (!seed) {
+      const listeners = new Set<ByteProgress>();
+      const entry = { promise: Promise.resolve(), listeners, last: null as [number, number] | null };
+      entry.promise = this._seedFromTemplate(template, (done, total) => {
+        entry.last = [done, total];
+        listeners.forEach((l) => l(done, total));
+      }).finally(() => seeds.delete(key));
+      seeds.set(key, entry);
+      seed = entry;
+    }
+    if (onProgress) {
+      seed.listeners.add(onProgress);
+      if (seed.last) {
+        onProgress(...seed.last);
       }
     }
+    try {
+      await seed.promise;
+    } finally {
+      if (onProgress) {
+        seed.listeners.delete(onProgress);
+      }
+    }
+  }
+
+  private async _seedFromTemplate(template: string, onProgress: ByteProgress): Promise<void> {
+    if ((await pathExists(this.netplayLauncherDol)) && (await pathExists(this.sdCardImage))) {
+      return;
+    }
+    if (!(await pathExists(template))) {
+      log.warn(`Dolphin User template not found: ${template}`);
+      return;
+    }
+    log.info(`Seeding Dolphin User folder ${this.userFolder} from ${template}`);
+    const started = Date.now();
+    // Every template file that is not in the User folder yet (existing files are never replaced).
+    const files: { from: string; to: string; size: number }[] = [];
+    const walk = async (from: string, to: string) => {
+      const st = await lstat(from);
+      if (st.isDirectory()) {
+        await mkdir(to, { recursive: true });
+        for (const child of await readdir(from)) {
+          await walk(path.join(from, child), path.join(to, child));
+        }
+      } else if (st.isFile() && !(await pathExists(to))) {
+        files.push({ from, to, size: st.size });
+      }
+    };
+    for (const entry of await readdir(template)) {
+      if (!TEMPLATE_SKIP.has(entry)) {
+        await walk(path.join(template, entry), path.join(this.userFolder, entry));
+      }
+    }
+    const total = files.reduce((sum, f) => sum + f.size, 0);
+    let reported = 0;
+    const report = (done: number) => {
+      // Monotonic and capped, also if a template file changes size while it is copied.
+      reported = Math.min(Math.max(reported, done), total);
+      onProgress(reported, total);
+    };
+    report(0);
+    let done = 0;
+    for (const f of files) {
+      const partial = `${f.to}.partial`;
+      await copyFileWithProgress(f.from, partial, { onProgress: (d) => report(done + d) });
+      await rename(partial, f.to);
+      done += f.size;
+      report(done);
+    }
+    log.info(`Seeded ${files.length} files (${total} bytes) in ${((Date.now() - started) / 1000).toFixed(1)} s`);
   }
 
   /** Throws a user-facing error if P+'s files are missing from the User folder. */

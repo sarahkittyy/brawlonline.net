@@ -175,7 +175,7 @@ const PlayButton = ({ onClick }: { onClick: () => void }) => {
     return <PlayButtonImpl onClick={onClick} />;
   }
 
-  return <UpdatingButton onClick={onClick} fillPercent={fillPercent} />;
+  return <UpdatingButton onClick={onClick} fillPercent={fillPercent} phase={installProgress?.phase} />;
 };
 
 const CheckForUpdatesButton = () => {

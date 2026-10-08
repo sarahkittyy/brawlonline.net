@@ -203,6 +203,86 @@ describe("installPluginOnSdCard", () => {
     expect(fs.readdirSync(template)).toEqual([]);
   });
 
+  it("reports the copy's progress on the first Play only", async () => {
+    const p = plugin(11);
+    const { size } = await fs.promises.stat(source);
+    const calls: [number, number][] = [];
+    const first = await installPluginOnSdCard({
+      ...opts(p),
+      onProgress: (d, t) => calls.push([d, t]),
+      clone: async () => {
+        throw Object.assign(new Error("no reflinks here"), { code: "ENOTSUP" });
+      },
+    });
+    expect(first.action).toBe("copied");
+    expect(calls.length).toBeGreaterThan(2);
+    calls.forEach(([d, t], i) => {
+      expect(t).toBe(size);
+      expect(d).toBeLessThanOrEqual(t);
+      if (i > 0) {
+        expect(d).toBeGreaterThanOrEqual(calls[i - 1][0]);
+      }
+    });
+    expect(calls[0]).toEqual([0, size]);
+    expect(calls[calls.length - 1]).toEqual([size, size]);
+
+    // Nothing to copy later: no progress (the Play button never changes).
+    calls.length = 0;
+    expect((await installPluginOnSdCard({ ...opts(p), onProgress: (d, t) => calls.push([d, t]) })).action).toBe(
+      "unchanged",
+    );
+    expect(
+      (await installPluginOnSdCard({ ...opts(plugin(12)), onProgress: (d, t) => calls.push([d, t]) })).action,
+    ).toBe("replaced");
+    expect(calls).toEqual([]);
+  });
+
+  it("takes the clone when the file system has one", async () => {
+    const p = plugin(13);
+    const cloned: string[] = [];
+    const res = await installPluginOnSdCard({
+      ...opts(p),
+      clone: async (s, d) => {
+        cloned.push(d);
+        await fs.promises.copyFile(s, d);
+      },
+    });
+    expect(res.action).toBe("copied");
+    expect(cloned).toEqual([`${res.image}.partial`]);
+    expect(logs.some((m) => /SD card cloned in/.test(m))).toBe(true);
+    expect(await readFileHashFromImage(res.image, PLUGIN_SD_PATH)).toBe(p.sha256);
+  });
+
+  it("leaves nothing that looks done when the copy is interrupted, and copies again next time", async () => {
+    const p = plugin(14);
+    const srcHash = await fileHash(source);
+    let calls = 0;
+    const interrupted = installPluginOnSdCard({
+      ...opts(p),
+      clone: async () => {
+        throw new Error("no clone");
+      },
+      onProgress: () => {
+        // The launcher closing mid-copy, as seen from the copy.
+        if (++calls === 3) {
+          throw new Error("closed");
+        }
+      },
+    });
+    await expect(interrupted).rejects.toThrow("closed");
+    expect(fs.existsSync(path.join(out, "sd.raw"))).toBe(false);
+    expect(fs.existsSync(path.join(out, "sd.raw.partial"))).toBe(false);
+    expect(fs.existsSync(path.join(out, "manifest.json"))).toBe(false);
+    expect(await fileHash(source)).toBe(srcHash);
+
+    // A partial file left by a killed launcher (no clean-up ran) is replaced too.
+    await fs.promises.writeFile(path.join(out, "sd.raw.partial"), "half a card");
+    const res = await installPluginOnSdCard(opts(p));
+    expect(res.action).toBe("copied");
+    expect(await readFileHashFromImage(res.image, PLUGIN_SD_PATH)).toBe(p.sha256);
+    expect(fs.existsSync(path.join(out, "sd.raw.partial"))).toBe(false);
+  });
+
   it("fails clearly without a source card", async () => {
     await expect(
       installPluginOnSdCard({ ...opts(plugin(1)), sourceImage: path.join(dir, "missing.raw") }),

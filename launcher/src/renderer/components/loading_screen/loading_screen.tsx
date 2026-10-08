@@ -35,28 +35,43 @@ export const LoadingScreen = ({
 export function LoadingScreenWithProgress({ current = 0, total = 100 }: { current?: number; total?: number }) {
   return (
     <Message icon={<CircularProgress color="inherit" />}>
-      <div
-        style={{
-          color: "var(--off-white)",
-          padding: 3,
-          borderRadius: 10,
-          borderStyle: "solid",
-          borderWidth: 2,
-          width: 180,
-          marginTop: 30,
-        }}
-      >
-        <LinearProgress
-          variant="determinate"
-          value={(current / total) * 100}
-          sx={{
-            borderRadius: 10,
-            height: 8,
-            "& .MuiLinearProgress-bar": { borderRadius: 10, transitionDuration: "50ms" },
-          }}
-          color="inherit"
-        />
-      </div>
+      <ProgressBar current={current} total={total} style={{ marginTop: 30 }} />
     </Message>
+  );
+}
+
+/** The loading screen's progress bar on its own (also used by the ISO check). */
+export function ProgressBar({
+  current = 0,
+  total = 100,
+  style,
+}: {
+  current?: number;
+  total?: number;
+  style?: React.CSSProperties;
+}) {
+  return (
+    <div
+      style={{
+        color: "var(--off-white)",
+        padding: 3,
+        borderRadius: 10,
+        borderStyle: "solid",
+        borderWidth: 2,
+        width: 180,
+        ...style,
+      }}
+    >
+      <LinearProgress
+        variant="determinate"
+        value={total > 0 ? Math.min(100, (current / total) * 100) : 0}
+        sx={{
+          borderRadius: 10,
+          height: 8,
+          "& .MuiLinearProgress-bar": { borderRadius: 10, transitionDuration: "50ms" },
+        }}
+        color="inherit"
+      />
+    </div>
   );
 }

@@ -1,5 +1,5 @@
 import type { DolphinManager } from "@dolphin/manager";
-import { DolphinLaunchType } from "@dolphin/types";
+import { DolphinEventType, DolphinLaunchType } from "@dolphin/types";
 import type { SettingsManager } from "@settings/settings_manager";
 import { app } from "electron";
 import electronLog from "electron-log";
@@ -77,6 +77,9 @@ export default function setupGameAssetsIpc({
   dolphinManager: DolphinManager;
 }) {
   const cacheDir = path.join(cacheRoot(), "theme");
+  const netplaySdCard = () => dolphinManager.getInstallation(DolphinLaunchType.NETPLAY).sdCardImage;
+  /** Whether the last look at the sources (with a disc set) found the P+ SD card. */
+  let sdCardSeen = false;
 
   const manager = new GameAssetsManager(
     cacheDir,
@@ -85,8 +88,8 @@ export default function setupGameAssetsIpc({
       if (!isoPath || !existsSync(isoPath)) {
         return null;
       }
-      const installation = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
-      const sdRawPath = path.join(installation.userFolder, "Wii", "sd.raw");
+      const sdRawPath = netplaySdCard();
+      sdCardSeen = existsSync(sdRawPath);
       const folder = devDiscFolder();
       const disc: DiscSource = folder
         ? { kind: "folder", path: folder }
@@ -95,7 +98,7 @@ export default function setupGameAssetsIpc({
             path: isoPath,
             dolphinToolPath: dolphinToolNextTo(dolphinManager.getDolphinExecutablePath(DolphinLaunchType.NETPLAY)),
           };
-      return { disc, sdRawPath: existsSync(sdRawPath) ? sdRawPath : undefined };
+      return { disc, sdRawPath: sdCardSeen ? sdRawPath : undefined };
     },
     extractGameAssets,
   );
@@ -115,6 +118,21 @@ export default function setupGameAssetsIpc({
       .ensureUserFolder()
       .catch(() => undefined);
     await manager.refresh();
+  });
+
+  // First run: the disc is often chosen while P+'s files (the SD card, with the background
+  // gradient) are still downloading, so the first extraction is disc-only. Extract again once the
+  // Dolphin set-up has put the SD card in place, instead of on the next start.
+  dolphinManager.events.subscribe((event) => {
+    if (
+      event.type === DolphinEventType.DOWNLOAD_COMPLETE &&
+      event.dolphinType === DolphinLaunchType.NETPLAY &&
+      !sdCardSeen &&
+      settingsManager.get().settings.isoPath &&
+      existsSync(netplaySdCard())
+    ) {
+      void manager.refresh().catch(log.error);
+    }
   });
 
   const onReady = async () => {

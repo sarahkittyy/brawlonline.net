@@ -75,12 +75,30 @@ export type DolphinDownloadStartEvent = {
   dolphinType: DolphinLaunchType;
 };
 
+/**
+ * The step a Dolphin download/progress event belongs to, so the Play button can name it. Slippi
+ * had one step (its Dolphin download) and showed "Updating"; ours are:
+ * - `installDolphin`: the bundled Dolphin copied into `<userData>/netplay` (bytes);
+ * - `copyUserFolder`: development only, a new User folder seeded from the template (bytes);
+ * - `downloadProjectPlus`, `verifyProjectPlus`, `extractProjectPlus`: P+'s release zip (bytes);
+ * - `prepareSdCard`: the first Play's copy of the 2 GB SD card (bytes).
+ */
+export type DolphinSetupPhase =
+  | "installDolphin"
+  | "copyUserFolder"
+  | "downloadProjectPlus"
+  | "verifyProjectPlus"
+  | "extractProjectPlus"
+  | "prepareSdCard";
+
 export type DolphinDownloadProgressEvent = {
   type: DolphinEventType.DOWNLOAD_PROGRESS;
   dolphinType: DolphinLaunchType;
   progress: {
     current: number;
     total: number;
+    /** Absent from Slippi-style events (Slippi's Dolphin download). */
+    phase?: DolphinSetupPhase;
   };
 };
 

@@ -17,6 +17,7 @@ describe("readTestMode", () => {
       remoteDebuggingPort: 9301,
       harnessPort: 50001,
       dolphinExtraArgs: ["-v", "D3D11"],
+      pplusRelease: null,
     });
     expect(readTestMode(env, true)).toMatchObject({
       active: false,
@@ -36,7 +37,18 @@ describe("readTestMode", () => {
       remoteDebuggingPort: null,
       harnessPort: null,
       dolphinExtraArgs: [],
+      pplusRelease: null,
     });
+  });
+
+  it("reads a replacement P+ release", () => {
+    const release = { version: "test", url: "http://127.0.0.1:8123/p.zip", size: 1234, sha256: "ab".repeat(32) };
+    expect(readTestMode({ PPO_PPLUS_RELEASE: JSON.stringify(release) }, false).pplusRelease).toEqual(release);
+    expect(readTestMode({ PPO_PPLUS_RELEASE: JSON.stringify(release) }, true).pplusRelease).toBeNull();
+    expect(() => readTestMode({ PPO_PPLUS_RELEASE: "{}" }, false)).toThrow(/PPO_PPLUS_RELEASE/);
+    expect(() => readTestMode({ PPO_PPLUS_RELEASE: JSON.stringify({ ...release, size: -1 }) }, false)).toThrow(
+      TestModeError,
+    );
   });
 
   it("rejects malformed values", () => {

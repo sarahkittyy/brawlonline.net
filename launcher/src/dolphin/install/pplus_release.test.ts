@@ -213,6 +213,22 @@ describe("installProjectPlusFiles", () => {
     const extracts = progress.filter((p) => p.phase === "extract");
     const extractTotal = SD.length + NETPLAY_DOL.length + OFFLINE_DOL.length + SAVE_TMD.length + SAVE_DATA.length;
     expect(extracts[extracts.length - 1]).toEqual({ phase: "extract", current: extractTotal, total: extractTotal });
+    // The check of the download (sha256 over the whole zip) reports progress too.
+    const verifies = progress.filter((p) => p.phase === "verify");
+    expect(verifies[0]).toEqual({ phase: "verify", current: 0, total: release.size });
+    expect(verifies[verifies.length - 1]).toEqual({ phase: "verify", current: release.size, total: release.size });
+    // Phases come in order, each one monotonic and never past its total.
+    const order = progress.map((p) => p.phase).filter((ph, i, all) => i === 0 || all[i - 1] !== ph);
+    expect(order).toEqual(["download", "verify", "extract"]);
+    for (const phase of order) {
+      const values = progress.filter((p) => p.phase === phase);
+      values.forEach((p, i) => {
+        expect(p.current).toBeLessThanOrEqual(p.total);
+        if (i > 0) {
+          expect(p.current).toBeGreaterThanOrEqual(values[i - 1].current);
+        }
+      });
+    }
     expect(await missingProjectPlusFiles(target, release)).toEqual([]);
   });
 
@@ -289,8 +305,11 @@ describe("installProjectPlusFiles", () => {
     const release = await serve(zip);
     await fs.promises.mkdir(target.downloadDir, { recursive: true });
     await fs.promises.writeFile(path.join(target.downloadDir, `pplus-${release.version}.zip`), zip);
-    await installProjectPlusFiles({ target, release });
+    const phases = new Set<string>();
+    await installProjectPlusFiles({ target, release, onProgress: (p) => phases.add(p.phase) });
     expect(requests).toEqual([]);
+    // The kept zip is checked again (with progress) before it is used; nothing is downloaded.
+    expect([...phases]).toEqual(["verify", "extract"]);
     expect(await read(path.join(target.userFolder, "Wii", "sd.raw"))).toEqual(SD);
   });
 
