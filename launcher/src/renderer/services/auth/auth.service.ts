@@ -60,8 +60,8 @@ class AuthClient implements AuthService {
     return this._multiAccountService.getActiveUser() ?? undefined;
   }
 
-  async signUp({ email, displayName, password, inviteCode }: SignUpArgs) {
-    await this._multiAccountService.signUp({ email, password, displayName, inviteCode });
+  async signUp({ email, displayName, password }: SignUpArgs) {
+    await this._multiAccountService.signUp({ email, password, displayName });
     const user = this.getCurrentUser();
     if (user) {
       // Unlike Firebase, our server already sent the verification email at sign-up.

@@ -54,7 +54,6 @@ export type SignUpRequest = {
   email: string;
   password: string;
   displayName: string;
-  inviteCode?: string;
 };
 
 /** Error body: `{"error": {"code": "...", "message": "..."}}`. */

@@ -244,7 +244,7 @@ msgstr ""
 msgid "Confirm password"
 msgstr ""
 
-#: src/renderer/components/login_form/login_form.messages.ts:16:19
+#: src/renderer/components/login_form/login_form.messages.ts:15:19
 #: src/renderer/pages/quick_start/steps/setup_complete_step/setup_complete_step.messages.ts:3:19
 msgid "Continue"
 msgstr ""
@@ -464,7 +464,7 @@ msgstr ""
 msgid "Failed to switch account"
 msgstr ""
 
-#: src/renderer/components/login_form/login_form.messages.ts:13:25
+#: src/renderer/components/login_form/login_form.messages.ts:12:25
 msgid "Forgot your password?"
 msgstr ""
 
@@ -480,7 +480,7 @@ msgstr ""
 msgid "General Settings"
 msgstr ""
 
-#: src/renderer/components/login_form/login_form.messages.ts:18:17
+#: src/renderer/components/login_form/login_form.messages.ts:17:17
 #: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:3:17
 msgid "Go back"
 msgstr ""
@@ -518,7 +518,7 @@ msgstr ""
 msgid "I accept the {0} Rules"
 msgstr ""
 
-#: src/renderer/components/login_form/login_form.messages.ts:11:31
+#: src/renderer/components/login_form/login_form.messages.ts:10:31
 msgid "I already have an account"
 msgstr ""
 
@@ -578,10 +578,6 @@ msgstr ""
 
 #: src/renderer/lib/validate/validate.messages.ts:3:22
 msgid "Invalid code"
-msgstr ""
-
-#: src/renderer/components/login_form/login_form.messages.ts:10:21
-msgid "Invite code"
 msgstr ""
 
 #: src/renderer/components/loading_screen/loading_screen.messages.ts:2:19
@@ -803,11 +799,11 @@ msgstr ""
 msgid "Password"
 msgstr ""
 
-#: src/renderer/components/login_form/login_form.messages.ts:14:24
+#: src/renderer/components/login_form/login_form.messages.ts:13:24
 msgid "Password reset"
 msgstr ""
 
-#: src/renderer/components/login_form/login_form.messages.ts:15:53
+#: src/renderer/components/login_form/login_form.messages.ts:14:53
 #. {0} email: string
 msgid "Password reset instructions have been sent to {0}."
 msgstr ""
@@ -931,7 +927,7 @@ msgid ""
 "section in the settings page for guidance."
 msgstr ""
 
-#: src/renderer/components/login_form/login_form.messages.ts:17:16
+#: src/renderer/components/login_form/login_form.messages.ts:16:16
 msgid "Reset"
 msgstr ""
 
@@ -1024,7 +1020,7 @@ msgstr ""
 msgid "Show stats"
 msgstr ""
 
-#: src/renderer/components/login_form/login_form.messages.ts:12:17
+#: src/renderer/components/login_form/login_form.messages.ts:11:17
 msgid "Sign up"
 msgstr ""
 

@@ -8,7 +8,7 @@ msgstr ""
 "n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
 "x-generator: i18next-auto-keys CLI\n"
 "Language: ru-RU\n"
-"PO-Revision-Date: 2026-10-08T01:25:15.349Z\n"
+"PO-Revision-Date: 2026-10-08T06:36:43.169Z\n"
 
 #: src/renderer/components/activate_online_form/activate_online_form.messages.ts:3:30
 msgid "2-4 uppercase English characters"
@@ -248,7 +248,7 @@ msgstr "Подтвердите код"
 msgid "Confirm password"
 msgstr "Подтвердите пароль"
 
-#: src/renderer/components/login_form/login_form.messages.ts:16:19
+#: src/renderer/components/login_form/login_form.messages.ts:15:19
 #: src/renderer/pages/quick_start/steps/setup_complete_step/setup_complete_step.messages.ts:3:19
 msgid "Continue"
 msgstr "Продолжить"
@@ -472,7 +472,7 @@ msgstr "Не получилось удалить аккаунт"
 msgid "Failed to switch account"
 msgstr "Не получилось переключить аккаунт"
 
-#: src/renderer/components/login_form/login_form.messages.ts:13:25
+#: src/renderer/components/login_form/login_form.messages.ts:12:25
 msgid "Forgot your password?"
 msgstr "Забыли пароль?"
 
@@ -488,7 +488,7 @@ msgstr "Сбор игровой статистики для командных �
 msgid "General Settings"
 msgstr "Основные настройки"
 
-#: src/renderer/components/login_form/login_form.messages.ts:18:17
+#: src/renderer/components/login_form/login_form.messages.ts:17:17
 #: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:3:17
 msgid "Go back"
 msgstr "Вернуться"
@@ -526,7 +526,7 @@ msgstr "Home-Run Contest"
 msgid "I accept the {0} Rules"
 msgstr ""
 
-#: src/renderer/components/login_form/login_form.messages.ts:11:31
+#: src/renderer/components/login_form/login_form.messages.ts:10:31
 msgid "I already have an account"
 msgstr "У меня уже есть аккаунт"
 
@@ -587,10 +587,6 @@ msgstr "Некорректный IP адрес"
 #: src/renderer/lib/validate/validate.messages.ts:3:22
 msgid "Invalid code"
 msgstr "Некорректный код"
-
-#: src/renderer/components/login_form/login_form.messages.ts:10:21
-msgid "Invite code"
-msgstr ""
 
 #: src/renderer/components/loading_screen/loading_screen.messages.ts:2:19
 #: src/renderer/pages/loading/loading_page.messages.ts:2:19
@@ -813,11 +809,11 @@ msgstr "Обзор"
 msgid "Password"
 msgstr "Пароль"
 
-#: src/renderer/components/login_form/login_form.messages.ts:14:24
+#: src/renderer/components/login_form/login_form.messages.ts:13:24
 msgid "Password reset"
 msgstr "Пароль сброшен"
 
-#: src/renderer/components/login_form/login_form.messages.ts:15:53
+#: src/renderer/components/login_form/login_form.messages.ts:14:53
 #. {0} email: string
 msgid "Password reset instructions have been sent to {0}."
 msgstr "Инструкции по сбросу пароля были отправлены на {0}."
@@ -946,7 +942,7 @@ msgid ""
 "section in the settings page for guidance."
 msgstr ""
 
-#: src/renderer/components/login_form/login_form.messages.ts:17:16
+#: src/renderer/components/login_form/login_form.messages.ts:16:16
 msgid "Reset"
 msgstr "Сбросить"
 
@@ -1039,7 +1035,7 @@ msgstr "Показывать ранк на домашней странице"
 msgid "Show stats"
 msgstr "Показать статы"
 
-#: src/renderer/components/login_form/login_form.messages.ts:12:17
+#: src/renderer/components/login_form/login_form.messages.ts:11:17
 msgid "Sign up"
 msgstr "Зарегистрироваться"
 

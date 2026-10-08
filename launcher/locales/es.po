@@ -7,7 +7,7 @@ msgstr ""
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 "x-generator: i18next-auto-keys CLI\n"
 "Language: es\n"
-"PO-Revision-Date: 2026-10-08T01:25:15.362Z\n"
+"PO-Revision-Date: 2026-10-08T06:36:43.180Z\n"
 
 #: src/renderer/components/activate_online_form/activate_online_form.messages.ts:3:30
 msgid "2-4 uppercase English characters"
@@ -245,7 +245,7 @@ msgstr "Confirmar código"
 msgid "Confirm password"
 msgstr "Confirmar contraseña"
 
-#: src/renderer/components/login_form/login_form.messages.ts:16:19
+#: src/renderer/components/login_form/login_form.messages.ts:15:19
 #: src/renderer/pages/quick_start/steps/setup_complete_step/setup_complete_step.messages.ts:3:19
 msgid "Continue"
 msgstr "Continuar"
@@ -469,7 +469,7 @@ msgstr "Error al eliminar cuenta"
 msgid "Failed to switch account"
 msgstr "Error al cambiar de cuenta"
 
-#: src/renderer/components/login_form/login_form.messages.ts:13:25
+#: src/renderer/components/login_form/login_form.messages.ts:12:25
 msgid "Forgot your password?"
 msgstr "¿Olvidaste tu contraseña?"
 
@@ -485,7 +485,7 @@ msgstr "No hay soporte de estadísticas de juego por equipos"
 msgid "General Settings"
 msgstr "Configuración General"
 
-#: src/renderer/components/login_form/login_form.messages.ts:18:17
+#: src/renderer/components/login_form/login_form.messages.ts:17:17
 #: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:3:17
 msgid "Go back"
 msgstr "Volver"
@@ -523,7 +523,7 @@ msgstr "Home-Run Contest"
 msgid "I accept the {0} Rules"
 msgstr ""
 
-#: src/renderer/components/login_form/login_form.messages.ts:11:31
+#: src/renderer/components/login_form/login_form.messages.ts:10:31
 msgid "I already have an account"
 msgstr "Ya tengo una cuenta"
 
@@ -586,10 +586,6 @@ msgstr "Dirección IP inválida"
 #: src/renderer/lib/validate/validate.messages.ts:3:22
 msgid "Invalid code"
 msgstr "Código inválido"
-
-#: src/renderer/components/login_form/login_form.messages.ts:10:21
-msgid "Invite code"
-msgstr ""
 
 #: src/renderer/components/loading_screen/loading_screen.messages.ts:2:19
 #: src/renderer/pages/loading/loading_page.messages.ts:2:19
@@ -810,11 +806,11 @@ msgstr "Resumen"
 msgid "Password"
 msgstr "Contraseña"
 
-#: src/renderer/components/login_form/login_form.messages.ts:14:24
+#: src/renderer/components/login_form/login_form.messages.ts:13:24
 msgid "Password reset"
 msgstr "Restablecer contraseña"
 
-#: src/renderer/components/login_form/login_form.messages.ts:15:53
+#: src/renderer/components/login_form/login_form.messages.ts:14:53
 #. {0} email: string
 msgid "Password reset instructions have been sent to {0}."
 msgstr "Las instrucciones para restablecer la contraseña han sido enviadas a {0}."
@@ -943,7 +939,7 @@ msgid ""
 "section in the settings page for guidance."
 msgstr ""
 
-#: src/renderer/components/login_form/login_form.messages.ts:17:16
+#: src/renderer/components/login_form/login_form.messages.ts:16:16
 msgid "Reset"
 msgstr "Restablecer"
 
@@ -1036,7 +1032,7 @@ msgstr ""
 msgid "Show stats"
 msgstr "Mostrar estadísticas"
 
-#: src/renderer/components/login_form/login_form.messages.ts:12:17
+#: src/renderer/components/login_form/login_form.messages.ts:11:17
 msgid "Sign up"
 msgstr "Registrarse"
 

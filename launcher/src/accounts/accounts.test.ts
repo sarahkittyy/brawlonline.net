@@ -77,7 +77,7 @@ describe("accounts", () => {
     expect(local.website).toBe("http://127.0.0.1:8080");
   });
 
-  it("signs up with the invite code, stores the session encrypted, and uses it", async () => {
+  it("signs up, stores the session encrypted, and uses it", async () => {
     const { impl, calls } = fakeFetch({
       "POST /v1/auth/signup": () => ({ status: 201, body: { sessionToken: "tok-1", user: me() } }),
       "GET /v1/me": (c) => (c.headers.authorization === "Bearer tok-1" ? { status: 200, body: me() } : unauthorized),
@@ -92,14 +92,12 @@ describe("accounts", () => {
       email: "alice@example.test",
       password: "a long password",
       displayName: "alice",
-      inviteCode: " ABCD-EFGH ",
     });
     expect(res.ok).toBe(true);
     expect(calls[0].body).toEqual({
       email: "alice@example.test",
       password: "a long password",
       displayName: "alice",
-      inviteCode: "ABCD-EFGH",
     });
     const file = await readFile(sessionsFile, "utf8");
     expect(file).not.toContain("tok-1");
