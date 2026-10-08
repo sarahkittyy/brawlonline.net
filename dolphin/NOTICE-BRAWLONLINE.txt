@@ -2,7 +2,7 @@ Brawl Online: Dolphin snapshot
 ==============================
 
 dolphin/ is a snapshot (no history) of our Dolphin fork, branch rollback-fixes at
-  8eaf11763866eb6004bfa056d1a1c8cb0a2a2eca ("macOS: build fixes for the cross-compiled (osxcross) build")
+  95149f627b34d02b5676c10513e0f8195bd43a7f ("DolphinQt: on macOS, point an adapter open error at GCAdapterDriver")
 
 Our fork is based on Brawlback's Project-Plus-Dolphin (https://github.com/Brawlback-Team/Project-Plus-Dolphin.git),
 which is based on Dolphin (https://github.com/dolphin-emu/dolphin). Upstream base commits:
