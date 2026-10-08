@@ -28,6 +28,8 @@ void GCPadWiiUConfigDialog::CreateLayout()
 
   m_layout = new QVBoxLayout();
   m_status_label = new QLabel();
+  m_status_label->setWordWrap(true);
+  m_status_label->setOpenExternalLinks(true);
   m_poll_rate_label = new QLabel;
   m_rumble = new QCheckBox(tr("Enable Rumble"));
   m_simulate_bongos = new QCheckBox(tr("Simulate DK Bongos"));
@@ -69,6 +71,14 @@ void GCPadWiiUConfigDialog::UpdateAdapterStatus()
   else if (error_message)
   {
     status_text = tr("Error Opening Adapter: %1").arg(QString::fromUtf8(error_message));
+#ifdef __APPLE__
+    // macOS keeps the adapter for itself unless a driver hands it over; the driver the Mac
+    // Slippi community uses is GCAdapterDriver (open source, no SIP changes needed).
+    status_text = status_text.toHtmlEscaped() + QStringLiteral("<br><br>") +
+                  tr("On macOS the adapter needs a driver: install <a href=\"%1\">GCAdapterDriver</a> and "
+                     "follow its setup, then unplug and replug the adapter.")
+                      .arg(QStringLiteral("https://secretkeys.io/gcadapterdriver"));
+#endif
   }
   else
   {
