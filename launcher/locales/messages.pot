@@ -24,11 +24,11 @@ msgstr ""
 msgid "A network error occurred."
 msgstr ""
 
-#: src/renderer/pages/quick_start/steps/accept_rules_step/accept_rules_step.messages.ts:4:20
+#: src/renderer/pages/quick_start/steps/accept_rules_step/accept_rules_step.messages.ts:3:20
 msgid "Accept All"
 msgstr ""
 
-#: src/renderer/pages/quick_start/steps/accept_rules_step/accept_rules_step.messages.ts:5:33
+#: src/renderer/pages/quick_start/steps/accept_rules_step/accept_rules_step.messages.ts:4:33
 msgid "Accept rules and policies"
 msgstr ""
 
@@ -187,10 +187,6 @@ msgstr ""
 
 #: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:6:22
 msgid "Clear filter"
-msgstr ""
-
-#: src/renderer/components/usage_policy_list/usage_policy_list.messages.ts:3:29
-msgid "Click the links below to review:"
 msgstr ""
 
 #: src/renderer/pages/settings/settings_page.messages.ts:2:16
@@ -515,11 +511,6 @@ msgstr ""
 
 #: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:5:25
 msgid "Home-Run Contest"
-msgstr ""
-
-#: src/renderer/pages/quick_start/steps/accept_rules_step/accept_rules_step.messages.ts:3:55
-#. {0} productName: string
-msgid "I accept the {0} Privacy Policy and Terms of Service"
 msgstr ""
 
 #: src/renderer/pages/quick_start/steps/accept_rules_step/accept_rules_step.messages.ts:2:47
@@ -880,10 +871,6 @@ msgstr ""
 
 #: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:8:25
 msgid "Previous replay"
-msgstr ""
-
-#: src/renderer/components/usage_policy_list/usage_policy_list.messages.ts:2:41
-msgid "Privacy Policy and Terms of Service"
 msgstr ""
 
 #: src/renderer/app/header/header.messages.ts:9:5
@@ -1330,19 +1317,9 @@ msgstr ""
 msgid "{0} Executable"
 msgstr ""
 
-#: src/renderer/components/usage_policy_list/usage_policy_list.messages.ts:4:43
-#. {0} productName: string
-msgid "{0} Privacy Policy"
-msgstr ""
-
 #: src/renderer/components/online_rules/online_rules.messages.ts:2:41
 #. {0} productName: string
 msgid "{0} Rules"
-msgstr ""
-
-#: src/renderer/components/usage_policy_list/usage_policy_list.messages.ts:5:44
-#. {0} productName: string
-msgid "{0} Terms of Service"
 msgstr ""
 
 #: src/renderer/components/online_rules/online_rules.messages.ts:11:5

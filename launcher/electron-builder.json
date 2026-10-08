@@ -1,6 +1,6 @@
 {
   "productName": "Brawl Online",
-  "appId": "gay.fluffycat.brawlonline",
+  "appId": "net.brawlonline.launcher",
   "asar": true,
   "asarUnpack": [
     "**\\*.{node,dll}",

@@ -7,7 +7,6 @@ import FormControlLabel from "@mui/material/FormControlLabel";
 import { useState } from "react";
 
 import { OnlineRules } from "@/components/online_rules/online_rules";
-import { UsagePolicyList } from "@/components/usage_policy_list/usage_policy_list";
 import { refreshUserData } from "@/lib/hooks/use_account";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { useServices } from "@/services";
@@ -19,7 +18,6 @@ export const AcceptRulesStep = () => {
   const { backendService } = useServices();
   const { showError } = useToasts();
   const [rulesChecked, setRulesChecked] = useState(false);
-  const [policiesChecked, setPoliciesChecked] = useState(false);
   const [processing, setProcessing] = useState(false);
 
   const handleAcceptClick = async () => {
@@ -49,18 +47,6 @@ export const AcceptRulesStep = () => {
           />
         }
       />
-      <UsagePolicyList />
-      <FormControlLabel
-        label={Messages.acceptPrivacyPolicyAndTos(PRODUCT_NAME)}
-        control={
-          <Checkbox
-            checked={policiesChecked}
-            disabled={processing}
-            onChange={(_event, value) => setPoliciesChecked(value)}
-            sx={{ "& .MuiSvgIcon-root": { fontSize: 28 } }}
-          />
-        }
-      />
       <div>
         <Button
           css={css`
@@ -70,7 +56,7 @@ export const AcceptRulesStep = () => {
           `}
           onClick={handleAcceptClick}
           variant="contained"
-          disabled={!policiesChecked || !rulesChecked || processing}
+          disabled={!rulesChecked || processing}
           size="large"
         >
           {processing ? <CircularProgress color="inherit" size={24} /> : Messages.acceptAll()}
