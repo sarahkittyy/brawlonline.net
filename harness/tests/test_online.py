@@ -301,17 +301,17 @@ def test_search_errors(backend: OnlineBackend, dolphin: Callable[..., DolphinIns
     _logged_in(inst, me)
 
     st = _search_error(inst, mode="ranked")
-    assert st["error"] == "Ranked is not supported yet. Only Direct and Unranked work for now."
+    assert st["error"] == "Ranked isn't available yet."   # server/crates/mm/src/messages.rs
     assert st["error_source"] == "create_ticket"
 
     st = _search_error(inst, code=me.connect_code)
-    assert st["error"] == "That is your own connect code. Enter your opponent's code."
+    assert st["error"] == "That is your own connect code."
 
     time.sleep(2.2)  # the server takes one ticket per account per 2 s
     # A rotated play key (password change, ban, admin): the file's key is no longer valid.
     backend.admin("user", "rotate-play-key", me.email)
     st = _search_error(inst, code=other.connect_code)
-    assert st["error"] == "Invalid play key. Log in again in the launcher."
+    assert st["error"] == "Login expired. Log in again."
     assert st["error_source"] == "create_ticket"
 
 
@@ -324,7 +324,7 @@ def test_search_expires(dolphin: Callable[..., DolphinInstance]) -> None:
         inst = _launch(dolphin, "online-exp", _online_config(be), me)
         _logged_in(inst, me)
         st = _search_error(inst, timeout=30, code=other.connect_code)
-        assert st["error"].startswith(f"Search timed out: {other.connect_code} did not connect")
+        assert st["error"] == f"{other.connect_code} didn't connect in time."
         assert st["error_source"] == "get_ticket"
     finally:
         be.stop()

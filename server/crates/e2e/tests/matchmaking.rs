@@ -150,10 +150,7 @@ async fn ticket_expiry_wrong_code_bad_key_and_unsupported_modes() {
     let (ra, rb) = tokio::join!(search(a), search(b));
     assert_eq!(ra.status, Status::TicketError, "{ra:?}");
     assert_eq!(rb.status, Status::TicketError, "{rb:?}");
-    assert_eq!(
-        ra.error.as_deref(),
-        Some(format!("Search timed out: {} did not connect within 2 seconds.", bob.connect_code).as_str())
-    );
+    assert_eq!(ra.error.as_deref(), Some(mm::messages::did_not_connect(&bob.connect_code).as_str()));
     assert_eq!(ra.create_response.as_ref().unwrap().error, None, "ticket was accepted first");
 
     // A code that belongs to nobody behaves the same (no account enumeration).
@@ -163,7 +160,7 @@ async fn ticket_expiry_wrong_code_bad_key_and_unsupported_modes() {
     // Malformed code.
     let r = search(SearchOptions::direct(stack.mm_addr, creds(&carol), "nonsense")).await;
     assert_eq!(r.status, Status::CreateError);
-    assert_eq!(r.error.as_deref(), Some("Invalid connect code"));
+    assert_eq!(r.error.as_deref(), Some(mm::messages::INVALID_CODE));
 
     // Bad play key.
     let mut bad = creds(&alice);
@@ -171,13 +168,13 @@ async fn ticket_expiry_wrong_code_bad_key_and_unsupported_modes() {
     tokio::time::sleep(Duration::from_secs(2)).await; // per-account ticket interval
     let r = search(SearchOptions::direct(stack.mm_addr, bad, &bob.connect_code)).await;
     assert_eq!(r.status, Status::CreateError);
-    assert_eq!(r.error.as_deref(), Some("Invalid play key. Log in again in the launcher."));
+    assert_eq!(r.error.as_deref(), Some(mm::messages::LOGIN_EXPIRED));
 
     // Unknown uid.
     let mut ghost = creds(&alice);
     ghost.uid = uuid::Uuid::new_v4().to_string();
     let r = search(SearchOptions::direct(stack.mm_addr, ghost, &bob.connect_code)).await;
-    assert_eq!(r.error.as_deref(), Some("Account not found. Log in again in the launcher."));
+    assert_eq!(r.error.as_deref(), Some(mm::messages::ACCOUNT_NOT_FOUND));
 
     // Modes not built yet are refused clearly.
     for (mode, name) in [(0u8, "Ranked"), (3, "Teams")] {
@@ -185,7 +182,7 @@ async fn ticket_expiry_wrong_code_bad_key_and_unsupported_modes() {
         o.mode = mode;
         let r = search(o).await;
         assert_eq!(r.status, Status::CreateError);
-        assert_eq!(r.error, Some(format!("{name} is not supported yet. Only Direct and Unranked work for now.")));
+        assert_eq!(r.error, Some(mm::messages::not_available(name)));
     }
 
     // A banned account cannot queue: the ban rotates the play key, so the
@@ -195,7 +192,7 @@ async fn ticket_expiry_wrong_code_bad_key_and_unsupported_modes() {
     tokio::time::sleep(Duration::from_secs(2)).await;
     let r = search(SearchOptions::direct(stack.mm_addr, creds(&bob), &alice.connect_code)).await;
     assert_eq!(r.status, Status::CreateError);
-    assert_eq!(r.error.as_deref(), Some("Invalid play key. Log in again in the launcher."));
+    assert_eq!(r.error.as_deref(), Some(mm::messages::LOGIN_EXPIRED));
 
     assert!(stack.mm_running());
     stack.shutdown().await;
@@ -212,7 +209,7 @@ async fn spoofed_uid_tickets_do_not_lock_out_the_owner() {
         let mut spoof = creds(&alice);
         spoof.play_key = "x".into();
         let r = search(SearchOptions::direct(stack.mm_addr, spoof, &bob.connect_code)).await;
-        assert_eq!(r.error.as_deref(), Some("Invalid play key. Log in again in the launcher."));
+        assert_eq!(r.error.as_deref(), Some(mm::messages::LOGIN_EXPIRED));
     }
     let a = SearchOptions::direct(stack.mm_addr, creds(&alice), &bob.connect_code);
     let b = SearchOptions::direct(stack.mm_addr, creds(&bob), &alice.connect_code);

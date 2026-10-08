@@ -112,7 +112,7 @@ async fn unranked_is_first_come_first_served_and_expires_with_an_error() {
 
     assert_eq!(rc.status, Status::TicketError, "{rc:?}");
     assert_eq!(rc.create_response.as_ref().unwrap().error, None, "the ticket was accepted first");
-    assert_eq!(rc.error.as_deref(), Some("Search timed out: no opponent found within 3 seconds."));
+    assert_eq!(rc.error.as_deref(), Some(mm::messages::NO_OPPONENT));
     assert!(stack.mm_running());
     stack.shutdown().await;
 }

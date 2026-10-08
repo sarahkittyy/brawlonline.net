@@ -47,7 +47,7 @@ DIRECT_STAGES = [0x21, 0x2D]
 # Long enough for the pairing test (the second player searches seconds after the first), short
 # enough for the expiry test.
 TICKET_TTL_SECS = 20
-TIMEOUT_ERROR = "Search timed out: no opponent found within 20 seconds."
+TIMEOUT_ERROR = "No opponent found. Try again."   # server/crates/mm/src/messages.rs NO_OPPONENT
 
 
 def _backend(tmp_path_factory: pytest.TempPathFactory, **kw: Any) -> Iterator[OnlineBackend]:
@@ -111,6 +111,7 @@ def test_unranked_pairs_strangers_on_a_server_stage(backend: OnlineBackend,
     for g in (a, b):
         _unranked_css_reached(g)
         B.write_rules(g.c, stocks=2, minutes=2, items_off=True)
+        ppom.allow_test_rules(g.c)   # the match setup keeps these stocks and times
 
     # A searches alone first: queued, the game shows "Searching for opponent".
     _search_unranked(a)
