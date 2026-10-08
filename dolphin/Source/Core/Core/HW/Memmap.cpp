@@ -814,8 +814,8 @@ void MemoryManager::MarkRangeDirty(u32 address, size_t size)
   const uint32_t phys_addr = address & 0x1FFFFFFFu;
 
   uint8_t* const entries = Rollback::JITDirtyBitmap::Get().entries;
-  const uint32_t first_page = phys_addr >> ::PAGE_SHIFT;
-  const uint32_t last_page = (phys_addr + static_cast<uint32_t>(size) - 1) >> ::PAGE_SHIFT;
+  const uint32_t first_page = phys_addr >> ::ROLLBACK_PAGE_SHIFT;
+  const uint32_t last_page = (phys_addr + static_cast<uint32_t>(size) - 1) >> ::ROLLBACK_PAGE_SHIFT;
   for (uint32_t p = first_page; p <= last_page; ++p)
   {
     if (p >= static_cast<uint32_t>(Rollback::JITDirtyBitmap::ENTRY_COUNT))

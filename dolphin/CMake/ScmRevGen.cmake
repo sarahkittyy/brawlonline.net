@@ -66,7 +66,8 @@ endfunction()
 
 configure_source_file("Source/Core/Common/scmrev.h")
 
-if(APPLE)
+# Script mode: APPLE describes the host, DOLPHIN_TARGET_APPLE the target (cross builds).
+if(APPLE OR DOLPHIN_TARGET_APPLE)
   configure_source_file("Source/Core/VersionInfo.plist")
 endif()
 

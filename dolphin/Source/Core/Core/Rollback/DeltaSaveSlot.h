@@ -17,10 +17,10 @@
 #include "Core/Rollback/IRollbackSaveSlot.h"
 
 // One cache line. A 4 KB granule turned every stray 4-byte store into 4 KB of snapshot.
-static constexpr size_t PAGE_SIZE = 64;
-static constexpr uint32_t PAGE_SHIFT = 6;
+static constexpr size_t ROLLBACK_PAGE_SIZE = 64;
+static constexpr uint32_t ROLLBACK_PAGE_SHIFT = 6;
 static constexpr uint32_t MEM2_BASE = 0x10000000u;
-static constexpr uint32_t MEM2_FIRST_PAGE = MEM2_BASE >> PAGE_SHIFT;
+static constexpr uint32_t MEM2_FIRST_PAGE = MEM2_BASE >> ROLLBACK_PAGE_SHIFT;
 
 namespace Rollback
 {
@@ -120,13 +120,13 @@ void savestateMemcpy(void* dst, const void* src, size_t size, uint32_t dst_phys,
 namespace Rollback
 {
 
-// One byte per PAGE_SIZE-byte physical granule in the Wii fastmem arena (0x00000000-0x1FFFFFFF).
-// JIT stores write 1 to entries[phys_addr >> PAGE_SHIFT]
+// One byte per ROLLBACK_PAGE_SIZE-byte physical granule in the Wii fastmem arena (0x00000000-0x1FFFFFFF).
+// JIT stores write 1 to entries[phys_addr >> ROLLBACK_PAGE_SHIFT]
 // Plain global so jit can embed its address as an absolute immediate (see EmitJITDirtyBitmapUpdate)
 struct alignas(64) JITDirtyBitmap
 {
   static constexpr size_t ARENA_SIZE = 512ULL * 1024 * 1024;  // 512 MB
-  static constexpr size_t ENTRY_COUNT = ARENA_SIZE / PAGE_SIZE;
+  static constexpr size_t ENTRY_COUNT = ARENA_SIZE / ROLLBACK_PAGE_SIZE;
 
   uint8_t entries[ENTRY_COUNT];
 
@@ -147,7 +147,7 @@ struct RegionDelta
 {
   uint32_t page_count = 0;
   Common::UniqueBuffer<uint32_t> page_indices;  // [page_count] relative granule indices
-  Common::UniqueBuffer<uint8_t> page_data;      // [page_count * PAGE_SIZE] saved granule contents
+  Common::UniqueBuffer<uint8_t> page_data;      // [page_count * ROLLBACK_PAGE_SIZE] saved granule contents
 
   void Reset()
   {

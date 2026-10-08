@@ -603,8 +603,8 @@ void RollbackManager::Init(Core::System& system)
     m_slots[i].Init(m_mem1_ptr, m_mem1_size, m_mem2_ptr, m_mem2_size, m_l1_cache_ptr,
                     m_l1_cache_size);
 
-  m_needs_source_mem1.assign(m_mem1_size / PAGE_SIZE, 0);
-  m_needs_source_mem2.assign(m_mem2_size / PAGE_SIZE, 0);
+  m_needs_source_mem1.assign(m_mem1_size / ROLLBACK_PAGE_SIZE, 0);
+  m_needs_source_mem2.assign(m_mem2_size / ROLLBACK_PAGE_SIZE, 0);
 
   JITDirtyBitmap::Get().Clear();
 
@@ -677,8 +677,8 @@ void RollbackManager::Shutdown()
 void RollbackManager::BeginRegionMode(const std::vector<std::pair<uint32_t, uint32_t>>& ranges,
                                       const std::vector<std::pair<uint32_t, uint32_t>>& exclude)
 {
-  const size_t mem1_pages = m_mem1_size / PAGE_SIZE;
-  const size_t mem2_pages = m_mem2_size / PAGE_SIZE;
+  const size_t mem1_pages = m_mem1_size / ROLLBACK_PAGE_SIZE;
+  const size_t mem2_pages = m_mem2_size / ROLLBACK_PAGE_SIZE;
   m_region_mask.assign(mem1_pages + mem2_pages, 0);
   m_region_partial.clear();
   m_census.clear();
@@ -708,8 +708,8 @@ void RollbackManager::BeginRegionMode(const std::vector<std::pair<uint32_t, uint
     {
       return false;
     }
-    *first = off / PAGE_SIZE;
-    *last = (static_cast<size_t>(off) + size - 1) / PAGE_SIZE;
+    *first = off / ROLLBACK_PAGE_SIZE;
+    *last = (static_cast<size_t>(off) + size - 1) / ROLLBACK_PAGE_SIZE;
     return true;
   };
   // Saves and loads work on whole granules: a range that starts or ends inside a granule takes
@@ -742,8 +742,8 @@ void RollbackManager::BeginRegionMode(const std::vector<std::pair<uint32_t, uint
     {
       if (m_region_mask[base + p] == 0)
         continue;
-      const u64 lo = std::max<u64>(off, p * PAGE_SIZE) - p * PAGE_SIZE;
-      const u64 hi = std::min<u64>(off + size, (p + 1) * PAGE_SIZE) - p * PAGE_SIZE;
+      const u64 lo = std::max<u64>(off, p * ROLLBACK_PAGE_SIZE) - p * ROLLBACK_PAGE_SIZE;
+      const u64 hi = std::min<u64>(off + size, (p + 1) * ROLLBACK_PAGE_SIZE) - p * ROLLBACK_PAGE_SIZE;
       const u64 excluded = (hi - lo == 64 ? ~0ULL : ((1ULL << (hi - lo)) - 1)) << lo;
       const u32 key = key_base + static_cast<u32>(p);
       const auto it = m_region_partial.find(key);
@@ -772,17 +772,17 @@ void RollbackManager::BeginRegionMode(const std::vector<std::pair<uint32_t, uint
 std::vector<std::pair<u32, u32>> RollbackManager::CensusRanges() const
 {
   std::vector<std::pair<u32, u32>> out;
-  const size_t mem1_pages = m_mem1_size / PAGE_SIZE;
+  const size_t mem1_pages = m_mem1_size / ROLLBACK_PAGE_SIZE;
   for (size_t i = 0; i < m_census.size(); ++i)
   {
     if (!m_census[i])
       continue;
-    const u32 addr = i < mem1_pages ? 0x80000000u + static_cast<u32>(i * PAGE_SIZE) :
-                                      0x90000000u + static_cast<u32>((i - mem1_pages) * PAGE_SIZE);
+    const u32 addr = i < mem1_pages ? 0x80000000u + static_cast<u32>(i * ROLLBACK_PAGE_SIZE) :
+                                      0x90000000u + static_cast<u32>((i - mem1_pages) * ROLLBACK_PAGE_SIZE);
     if (!out.empty() && out.back().first + out.back().second == addr)
-      out.back().second += PAGE_SIZE;
+      out.back().second += ROLLBACK_PAGE_SIZE;
     else
-      out.emplace_back(addr, static_cast<u32>(PAGE_SIZE));
+      out.emplace_back(addr, static_cast<u32>(ROLLBACK_PAGE_SIZE));
   }
   return out;
 }
@@ -956,15 +956,15 @@ void RollbackManager::SaveFrame(Core::System& system)
           const uint8_t* src = evicted->mem1.page_data.data();
           for (uint32_t i = 0; i < evicted->mem1.page_count; ++i)
           {
-            const size_t dst_off = static_cast<size_t>(evicted->mem1.page_indices[i]) * PAGE_SIZE;
-            std::memcpy(m_base_snapshot.mem1.get() + dst_off, src + i * PAGE_SIZE, PAGE_SIZE);
+            const size_t dst_off = static_cast<size_t>(evicted->mem1.page_indices[i]) * ROLLBACK_PAGE_SIZE;
+            std::memcpy(m_base_snapshot.mem1.get() + dst_off, src + i * ROLLBACK_PAGE_SIZE, ROLLBACK_PAGE_SIZE);
           }
 
           src = evicted->mem2.page_data.data();
           for (uint32_t i = 0; i < evicted->mem2.page_count; ++i)
           {
-            const size_t dst_off = static_cast<size_t>(evicted->mem2.page_indices[i]) * PAGE_SIZE;
-            std::memcpy(m_base_snapshot.mem2.get() + dst_off, src + i * PAGE_SIZE, PAGE_SIZE);
+            const size_t dst_off = static_cast<size_t>(evicted->mem2.page_indices[i]) * ROLLBACK_PAGE_SIZE;
+            std::memcpy(m_base_snapshot.mem2.get() + dst_off, src + i * ROLLBACK_PAGE_SIZE, ROLLBACK_PAGE_SIZE);
           }
         });
   }
@@ -977,8 +977,8 @@ void RollbackManager::SaveFrame(Core::System& system)
   if (census && m_region_mode)
   {
     const u8* entries = JITDirtyBitmap::Get().entries;
-    const size_t mem1_pages = m_mem1_size / PAGE_SIZE;
-    const size_t mem2_pages = m_mem2_size / PAGE_SIZE;
+    const size_t mem1_pages = m_mem1_size / ROLLBACK_PAGE_SIZE;
+    const size_t mem2_pages = m_mem2_size / ROLLBACK_PAGE_SIZE;
     if (m_census.size() != mem1_pages + mem2_pages)
       m_census.assign(mem1_pages + mem2_pages, 0);
     for (size_t i = 0; i < mem1_pages; ++i)
@@ -1015,7 +1015,7 @@ void RollbackManager::SaveFrame(Core::System& system)
   {
     const auto& saved = m_slots[slot];
     const u32 dirty_pages = saved.m_mem1_delta.page_count + saved.m_mem2_delta.page_count;
-    const size_t total_bytes = static_cast<size_t>(dirty_pages) * PAGE_SIZE +
+    const size_t total_bytes = static_cast<size_t>(dirty_pages) * ROLLBACK_PAGE_SIZE +
                                saved.m_l1_cache_snapshot.size() + saved.m_save_buffer.size();
     DEBUG_LOG_FMT(BRAWLBACK,
                  "SaveFrame: slot {} dirty granules {} (mem1 {}, mem2 {}), size {:.2f} MB", slot,
@@ -1245,16 +1245,16 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
                 const bool isMem2 = (page_key >= MEM2_FIRST_PAGE);
                 const u32 local_page = isMem2 ? (page_key - MEM2_FIRST_PAGE) : page_key;
                 uint8_t* const dst =
-                    (isMem2 ? m_mem2_ptr : m_mem1_ptr) + static_cast<size_t>(local_page) * PAGE_SIZE;
+                    (isMem2 ? m_mem2_ptr : m_mem1_ptr) + static_cast<size_t>(local_page) * ROLLBACK_PAGE_SIZE;
                 const uint32_t dst_phys =
-                    (isMem2 ? MEM2_BASE : 0u) + local_page * static_cast<uint32_t>(PAGE_SIZE);
+                    (isMem2 ? MEM2_BASE : 0u) + local_page * static_cast<uint32_t>(ROLLBACK_PAGE_SIZE);
 
                 const uint8_t* src;
                 if (source_entry.slot == BASE_SNAPSHOT_SENTINEL)
                 {
                   const uint8_t* const snap_base =
                       isMem2 ? m_base_snapshot.mem2.get() : m_base_snapshot.mem1.get();
-                  src = snap_base + static_cast<size_t>(local_page) * PAGE_SIZE;
+                  src = snap_base + static_cast<size_t>(local_page) * ROLLBACK_PAGE_SIZE;
                 }
                 else
                 {
@@ -1262,20 +1262,20 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
                       isMem2 ? m_slots[source_entry.slot].m_mem2_delta :
                                m_slots[source_entry.slot].m_mem1_delta;
                   src = src_delta.page_data.data() +
-                        static_cast<size_t>(source_entry.local_idx) * PAGE_SIZE;
+                        static_cast<size_t>(source_entry.local_idx) * ROLLBACK_PAGE_SIZE;
                 }
 
                 if (m_region_mode)
                 {
                   const size_t mask_idx =
-                      isMem2 ? m_mem1_size / PAGE_SIZE + local_page : local_page;
+                      isMem2 ? m_mem1_size / ROLLBACK_PAGE_SIZE + local_page : local_page;
                   if (m_region_mask[mask_idx] == 2)
                   {
                     // Only the bytes inside the set: the rest of the granule is live memory
                     // outside it (another heap, the GX FIFO, ...).
                     const u64 bits = m_region_partial.at(page_key);
                     bool outside_differs = false;
-                    for (u32 b = 0; b < PAGE_SIZE; ++b)
+                    for (u32 b = 0; b < ROLLBACK_PAGE_SIZE; ++b)
                     {
                       if (bits & (1ULL << b))
                         dst[b] = src[b];
@@ -1291,7 +1291,7 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
                     continue;
                   }
                 }
-                savestateMemcpy(dst, src, PAGE_SIZE, dst_phys, *sorted_exclude_regions);
+                savestateMemcpy(dst, src, ROLLBACK_PAGE_SIZE, dst_phys, *sorted_exclude_regions);
               }
             }));
       }
@@ -1365,9 +1365,9 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
   {
     ROLLBACK_ZONE_N("Clear JIT dirty bitmap");
     auto& bitmap = JITDirtyBitmap::Get();
-    bitmap.ClearRange(0, static_cast<uint32_t>(m_mem1_size / PAGE_SIZE));
+    bitmap.ClearRange(0, static_cast<uint32_t>(m_mem1_size / ROLLBACK_PAGE_SIZE));
     if (m_mem2_ptr && m_mem2_size > 0)
-      bitmap.ClearRange(MEM2_FIRST_PAGE, static_cast<uint32_t>(m_mem2_size / PAGE_SIZE));
+      bitmap.ClearRange(MEM2_FIRST_PAGE, static_cast<uint32_t>(m_mem2_size / ROLLBACK_PAGE_SIZE));
   }
 
   RecordTiming(timing_start, m_stat_load_count, m_stat_load_us_total, m_stat_load_us_max);
