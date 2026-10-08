@@ -54,6 +54,7 @@ namespace PPOM {
         if (payload && size) {
             memcpy(r.payload, (void*)payload, size);
         }
+        asm volatile("" ::: "memory");   // (built with -Os: keep the stores in this order)
         r.seq = seq; // written last: a reader that sees seq sees the whole request
         mb.reqWrite = seq;
         flushRange(&mb, sizeof(mb));
@@ -105,6 +106,7 @@ namespace PPOM {
         l.stagePick = stagePick;
         l.asl = asl;
         l.game = game;
+        asm volatile("" ::: "memory");
         l.seq++;     // written last
         flushRange(&l, sizeof(l));
     }

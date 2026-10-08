@@ -11,6 +11,7 @@ import type { ByteProgress } from "utils/copy_file";
 import { copyFileWithProgress } from "utils/copy_file";
 
 import type { DolphinInstallation, DolphinLaunchType } from "../types";
+import { nandRootFor } from "./brawl_save";
 import { executeCommand } from "./execute_command";
 import type { DolphinVersionResponse } from "./fetch_latest_version";
 import { launchTypeFolder } from "./paths";
@@ -273,6 +274,13 @@ export class LocalDolphinInstallation implements DolphinInstallation {
   async setDefaultIso(isoPath: string): Promise<void> {
     const iniFile = await IniFile.init(this._dolphinIniPath());
     await setDefaultIso(iniFile, isoPath);
+  }
+
+  /** The NAND Dolphin uses with this User folder (`[General] NANDRootPath`, else `<User>/Wii`). */
+  async nandRoot(): Promise<string> {
+    const iniFile = await IniFile.init(this._dolphinIniPath());
+    const configured = iniFile.getSection("General")?.get("NANDRootPath", "");
+    return nandRootFor(this.userFolder, configured);
   }
 
   async getSettings(): Promise<SyncedDolphinSettings> {

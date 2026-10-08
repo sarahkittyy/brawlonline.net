@@ -61,6 +61,7 @@ CMD_GET_MATCH_STATE = 0xB3
 CMD_FETCH_CODE_SUGGESTION = 0xBE
 # DEBUG scratch words the plugin keeps for tests (tools/gamecode/ppom.py read_debug)
 SCR_SUGGEST_REQUESTS, SCR_CSS_LOCK, SCR_SUGGESTION = 0, 1, 2
+SCR_BOOT = 14   # the boot redirect (boot_menu.cpp): 1 redirected, 2/4 title skipped, 8 ONLINE page
 
 # The CSS's player area (BrawlHeaders mu_selchar_player_area.h / mu_selchar_hand.h)
 AREA_HAND, AREA_CHAR, AREA_COSTUME = 0x1A8, 0x1B8, 0x1BC
@@ -193,15 +194,26 @@ class Game:
         return drive.scene(self.c).name
 
     def to_main_menu(self) -> None:
-        # P+ boots to the Versus character select; hold B back to the main menu.
-        self.steps("until scSelctCharacter 3000", "wait 60", "hold B 60", "until muMenuMain 600",
-                   "wait 60")
+        """The boot: with the plugin, P+ boots to the main menu's ONLINE page (WITH FRIENDS
+        highlighted), not to its Versus character select (game-code boot_menu.cpp; the plugin's
+        DEBUG scratch[14] bits 0 and 3 say it redirected the boot and opened the ONLINE page)."""
+        self.c.wait_state("running", timeout=120)
+        _wait(lambda: self.scene() in ("muMenuMain", "scSelctCharacter"), 120, "the first menu")
+        if self.scene() == "scSelctCharacter" and os.environ.get("PPHARNESS_PLUGIN"):
+            # An older plugin build: P+'s own boot to the Versus CSS; hold B back to the menus.
+            self.steps("wait 60", "hold B 60", "until muMenuMain 600", "wait 60", "tap B", "wait 60",
+                       "tap DDOWN 4", "wait 40", "tap A", "wait 90")
+            return
+        self.steps("until muMenuMain 600", "wait 60")
+        assert self.debug_scratch()[SCR_BOOT] & 0x9 == 0x9, hex(self.debug_scratch()[SCR_BOOT])
+        self.shot("00-boot-online-page")
 
     def to_online_page(self) -> None:
-        """Main menu -> PLAY ONLINE -> the ONLINE page with WITH FRIENDS (Direct) highlighted.
-        The plugin skips Brawl's connect dialog and first-time profile name, as Slippi goes
-        straight to its online menu (same steps as tools/gamecode/scenarios/to_online.txt)."""
-        self.steps("tap B", "wait 60", "tap DDOWN 4", "wait 40")
+        """From the ONLINE page the boot opened: B to the main menu (PLAY ONLINE highlighted),
+        then PLAY ONLINE -> the ONLINE page with WITH FRIENDS (Direct) highlighted. The plugin
+        skips Brawl's connect dialog and first-time profile name, as Slippi goes straight to its
+        online menu (same steps as tools/gamecode/scenarios/to_online.txt)."""
+        self.steps("tap B", "wait 60")
         self.shot("01-main-play-online")
         self.steps("tap A", "wait 90")
         self.shot("02-online-page")

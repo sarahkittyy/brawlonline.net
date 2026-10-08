@@ -121,6 +121,11 @@ $(OUTPUT).elf: $(LDFILES) $(OFILES)
 
 $(OFILES_SOURCES) : $(HFILES)
 
+# The plugin shares P+'s 64 KB Syringe heap with sy_core and P+'s own plugins and must fit in
+# what they leave (docs/game-code.md section 2, "Heap budget"). Most of it is built without
+# optimisation; these files are built for size.
+boot_menu.o ppom.o match_hud.o: CXXFLAGS += -Os
+
 # REL linking
 %.rel: %.elf
 	@echo output ... $(notdir $@)

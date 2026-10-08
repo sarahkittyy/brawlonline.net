@@ -49,6 +49,11 @@ namespace CodeEntry {
     void onSuggestion(const PPOM::Response& r);   // a FETCH_CODE_SUGGESTION answer
 }
 
+namespace BootMenu {
+    // The boot lands on the ONLINE page instead of P+'s Versus CSS (boot_menu.cpp).
+    void install(CoreApi* api);
+}
+
 namespace AnyoneMenu {
     // WITH ANYONE -> Unranked / Ranked on Brawl's Wi-Fi OPTIONS page (anyone_menu.cpp).
     void install(CoreApi* api);

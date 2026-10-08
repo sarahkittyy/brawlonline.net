@@ -499,13 +499,13 @@ class Player:
         assert self.c
         wait_until(lambda: self.c.status().state == "running", 120, f"{self.name}: emulation")
         wait_until(lambda: self.bridge()["found"], 180, f"{self.name}: the plugin's PPOM block")
-        # P+ boots to the Versus character select; hold B back to the main menu.
-        self.steps("until scSelctCharacter 4000", "wait 60", "hold B 60", "until muMenuMain 600",
-                   "wait 60")
-        self.shot("01-main-menu")
+        # With the plugin, Play boots to the main menu's ONLINE page (game-code boot_menu.cpp).
+        self.steps("until muMenuMain 4000", "wait 60")
+        self.shot("01-boot-online-page")
 
     def to_online_css(self) -> None:
-        self.steps("tap B", "wait 60", "tap DDOWN 4", "wait 40")
+        # B to the main menu (PLAY ONLINE highlighted) and back into the ONLINE page.
+        self.steps("tap B", "wait 60")
         self.shot("02-play-online")
         self.steps("tap A", "wait 90")
         self.shot("03-online-page")
