@@ -7,10 +7,14 @@
 # and its matchmaking appVersion (.github/scripts/stamp-version.sh).
 #
 # Runners:
-#   - Linux builds (plugin, Dolphin, launcher tests, AppImage): the Unraid runner
-#     (unraid-brawlonline, docs/unraid-runner.md), caches in $CI_CACHE (/cache there). The optional
-#     repository variable CLIENT_LINUX_RUNNER (a JSON list of labels) overrides it; the default is
-#     in the plugin and linux jobs below. sarahvps2 (production) only publishes.
+#   - Linux builds (plugin, Dolphin, launcher tests, AppImage): LINUX_RUNNER in the plugin and
+#     linux jobs; the optional repository variable CLIENT_LINUX_RUNNER (a JSON list of labels)
+#     overrides it. Default for now: GitHub-hosted ubuntu-24.04, because the Unraid runner
+#     (["self-hosted","linux","x64","unraid","brawlonline"], docs/unraid-runner.md) corrupts
+#     compiles under load (GCC internal compiler errors on varying files and CPUs, see docs/ci.md).
+#     Switch back once its memory is stable. On a GitHub-hosted runner the jobs install the build
+#     packages and keep ccache and the plugin toolchain in the Actions cache; on a self-hosted one
+#     they use the runner's own packages and $CI_CACHE. sarahvps2 (production) only publishes.
 #   - Windows: GitHub-hosted (minutes are limited on a private repository: paths below, caches).
 #   - Publishing: always sarahvps2 (pp-release client). Builds from other machines arrive as
 #     Actions artifacts (1-day retention, deleted after publishing).
@@ -48,13 +52,18 @@ jobs:
   plugin:
     # The game plugin (PPOnline.rel) is platform independent: built once, on Linux.
     # Linux client runner (same default as the linux job):
-    runs-on: ${{ fromJSON(vars.CLIENT_LINUX_RUNNER || '["self-hosted","linux","x64","unraid","brawlonline"]') }}
+    runs-on: ${{ fromJSON(vars.CLIENT_LINUX_RUNNER || '["ubuntu-24.04"]') }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
         with:
           path: client
           persist-credentials: false
+      - uses: actions/cache@v5
+        if: runner.environment == 'github-hosted'
+        with:
+          path: ~/ci-cache/toolchains
+          key: gamecode-toolchain-${{ hashFiles('client/tools/gamecode/setup_toolchain.py') }}
       - name: Build
         working-directory: client
         run: |
@@ -74,7 +83,7 @@ jobs:
   linux:
     needs: plugin
     # Linux client runner (same default as the plugin job):
-    runs-on: ${{ fromJSON(vars.CLIENT_LINUX_RUNNER || '["self-hosted","linux","x64","unraid","brawlonline"]') }}
+    runs-on: ${{ fromJSON(vars.CLIENT_LINUX_RUNNER || '["ubuntu-24.04"]') }}
     timeout-minutes: 240
     env:
       NODE_OPTIONS: --max-old-space-size=4096
@@ -87,10 +96,31 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
+      - name: Build packages (GitHub-hosted runner)
+        if: runner.environment == 'github-hosted'
+        run: |
+          # Dolphin's Linux build dependencies (dolphin/Tools/docker/linux-build.Dockerfile) and
+          # qmake6 for linuxdeploy's Qt plugin. The self-hosted runners have them in their image.
+          sudo apt-get update -q
+          sudo apt-get install -y -q --no-install-recommends             cmake ninja-build ccache pkg-config gettext qt6-base-dev qt6-base-private-dev qt6-svg-dev             qmake6 qt6-qpa-plugins libavcodec-dev libavformat-dev libavutil-dev libswscale-dev             libxi-dev libxrandr-dev libudev-dev libevdev-dev libsfml-dev libminiupnpc-dev             libmbedtls-dev libcurl4-openssl-dev libhidapi-dev libsystemd-dev libbluetooth-dev             libasound2-dev libpulse-dev libpugixml-dev libbz2-dev libzstd-dev liblzo2-dev libpng-dev             libusb-1.0-0-dev libgl-dev libegl-dev file patchelf
+          echo "JOBS=$(nproc)" >> "$GITHUB_ENV"
+          echo "CCACHE_MAXSIZE=2G" >> "$GITHUB_ENV"
+      - uses: actions/cache/restore@v5
+        if: runner.environment == 'github-hosted'
+        with:
+          path: ~/ci-cache/ccache
+          key: linux-ccache-${{ github.run_id }}
+          restore-keys: linux-ccache-
       - name: Stamp version ${{ env.VERSION }}
         run: client/.github/scripts/stamp-version.sh "$VERSION"
       - name: Dolphin
         run: client/.github/scripts/build-dolphin-linux.sh "$VERSION" "$GITHUB_WORKSPACE/client/launcher/release/dolphin"
+      # Saved right after the build, also when a later step fails.
+      - uses: actions/cache/save@v5
+        if: ${{ runner.environment == 'github-hosted' && !cancelled() }}
+        with:
+          path: ~/ci-cache/ccache
+          key: linux-ccache-${{ github.run_id }}
       - uses: actions/download-artifact@v7
         with:
           name: plugin
