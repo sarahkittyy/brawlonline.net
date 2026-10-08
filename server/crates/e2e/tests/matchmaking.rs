@@ -201,6 +201,27 @@ async fn ticket_expiry_wrong_code_bad_key_and_unsupported_modes() {
     stack.shutdown().await;
 }
 
+/// The server sends each player's uid to their opponent, and `/user/{uid}` is public. Tickets
+/// with someone else's uid and a wrong play key must not use up that account's ticket limit.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn spoofed_uid_tickets_do_not_lock_out_the_owner() {
+    let stack = Stack::start(StackOptions::default()).await.unwrap();
+    let (_, alice) = stack.create_player("alice@example.test", "alice", "AL").await;
+    let (_, bob) = stack.create_player("bob@example.test", "bob", "BO").await;
+    for _ in 0..3 {
+        let mut spoof = creds(&alice);
+        spoof.play_key = "x".into();
+        let r = search(SearchOptions::direct(stack.mm_addr, spoof, &bob.connect_code)).await;
+        assert_eq!(r.error.as_deref(), Some("Invalid play key. Log in again in the launcher."));
+    }
+    let a = SearchOptions::direct(stack.mm_addr, creds(&alice), &bob.connect_code);
+    let b = SearchOptions::direct(stack.mm_addr, creds(&bob), &alice.connect_code);
+    let (ra, rb) = tokio::join!(search(a), search(b));
+    assert_eq!(ra.status, Status::Matched, "{ra:?}");
+    assert_eq!(rb.status, Status::Matched, "{rb:?}");
+    stack.shutdown().await;
+}
+
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn malformed_packets_do_not_crash_the_server() {
     let stack = Stack::start(StackOptions::default()).await.unwrap();

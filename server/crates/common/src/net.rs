@@ -1,7 +1,7 @@
 //! Networking helpers shared by the mm server and `mmclient`.
 
 use std::io::{self, ErrorKind};
-use std::net::{IpAddr, Ipv4Addr, SocketAddr, SocketAddrV4, UdpSocket};
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, UdpSocket};
 
 use rusty_enet::{PacketReceived, Socket, SocketOptions, MTU_MAX};
 
@@ -75,6 +75,18 @@ pub fn to_v4(addr: SocketAddr) -> Option<SocketAddrV4> {
     }
 }
 
+/// The key for per-source limits: an IPv4 address (IPv4-mapped IPv6 unwrapped), or the /64 of
+/// an IPv6 address, since one IPv6 customer usually has a whole /64 to pick addresses from.
+pub fn ip_key(ip: IpAddr) -> IpAddr {
+    match ip {
+        IpAddr::V4(v4) => IpAddr::V4(v4),
+        IpAddr::V6(v6) => match v6.to_ipv4_mapped() {
+            Some(v4) => IpAddr::V4(v4),
+            None => IpAddr::V6(Ipv6Addr::from(u128::from(v6) & !((1u128 << 64) - 1))),
+        },
+    }
+}
+
 /// Sanitizes the `ipAddressLan` a client reported. Slippi sends `"a.b.c.d:port"`,
 /// or `""` when it could not find a local address; "Force LAN IP" lets users
 /// type anything. Anything that is not an IPv4 `ip:port` with a non-zero port
@@ -125,6 +137,16 @@ mod tests {
         assert_eq!(to_v4(mapped).unwrap().to_string(), "1.2.3.4:5");
         let v6: SocketAddr = "[2001:db8::1]:5".parse().unwrap();
         assert!(to_v4(v6).is_none());
+    }
+
+    #[test]
+    fn ip_keys() {
+        let key = |s: &str| ip_key(s.parse().unwrap()).to_string();
+        assert_eq!(key("1.2.3.4"), "1.2.3.4");
+        assert_eq!(key("::ffff:1.2.3.4"), "1.2.3.4");
+        assert_eq!(key("2001:db8:1:2:3:4:5:6"), "2001:db8:1:2::");
+        assert_eq!(ip_key("2001:db8:1:2::9".parse().unwrap()), ip_key("2001:db8:1:2:ffff::1".parse().unwrap()));
+        assert_ne!(ip_key("2001:db8:1:2::9".parse().unwrap()), ip_key("2001:db8:1:3::9".parse().unwrap()));
     }
 
     #[test]
