@@ -9,7 +9,7 @@ are excluded from every package.
 |---|---|---|---|
 | `server.yml` | `server/**` except `server/deploy/**` and `*.md` | sarahvps2 | `cargo build --release` (nice 19, idle IO, `-j 2`, target dir kept in `~/ci-cache/server-target`, cleared above 3 GB), then `sudo pp-release deploy <binaries> <yyyymmdd>-<sha10>`: installs, backs up the database, switches, restarts `pp-accounts`/`pp-mm`, health-checks, rolls back by itself on failure, keeps 3 releases. Binaries equal to the active release's are not redeployed (nothing restarts). |
 | `website.yml` | `website/**` except `README.md` | sarahvps2 | Stages `website/` without `*.md`, adds `?v=<sha>` to `script.js`, `style.css` and the video in `index.html` (Cloudflare and browsers cache those for 4 h; `index.html` is not cached), `sudo pp-release website <dir>`, then checks https://brawlonline.net/ serves it. |
-| `client.yml` | `dolphin/**`, `launcher/**`, `game-code/**`, `tools/gamecode/**`, `NOTICE`, `.github/scripts/**` | Unraid (builds), GitHub Windows, sarahvps2 (publish) | Version `0.1.<run number>`. Plugin, Dolphin (Linux + Windows), launcher tests and packages, then `sudo pp-release client <dir>`. |
+| `client.yml` | `dolphin/**`, `launcher/**`, `game-code/**`, `tools/gamecode/**`, `NOTICE`, `.github/scripts/**` | GitHub-hosted Linux and Windows (builds), sarahvps2 (publish) | Version `0.1.<run number>`. Plugin, Dolphin (Linux + Windows), launcher tests and packages, then `sudo pp-release client <dir>`. |
 
 ## client.yml
 
@@ -19,9 +19,9 @@ are excluded from every package.
 4. `macos`: disabled (`ENABLE_MACOS` repository variable). Plan: osxcross on the Unraid runner, which has macOS SDKs (see the job's comment).
 5. `publish` (sarahvps2): downloads the `launcher-*` artifacts, `sudo pp-release client <dir>`, checks the feed on https://brawlonline.net, deletes the run's artifacts (they also expire after a day).
 
-The Linux client runner is the Unraid runner (`unraid-brawlonline`, labels `self-hosted, linux, x64, unraid, brawlonline`, `docs/unraid-runner.md`). The default is written in the `plugin` and `linux` jobs; the optional repository variable `CLIENT_LINUX_RUNNER` (a JSON list of labels) overrides both.
+The Linux client runner is written in the `plugin` and `linux` jobs; the optional repository variable `CLIENT_LINUX_RUNNER` (a JSON list of labels) overrides both. It is meant to be the Unraid runner (`["self-hosted","linux","x64","unraid","brawlonline"]`), but is GitHub-hosted `ubuntu-24.04` for now (see "Unraid" below). On a GitHub-hosted runner the jobs install Dolphin's build packages with apt and keep ccache (`linux-ccache-*`) and the game-code toolchain in the Actions cache; on a self-hosted runner they use its image and `$CI_CACHE`.
 
-The Windows job costs hosted minutes (private repository: Windows minutes count double). It only runs when the client paths change, and ccache plus the npm and Electron caches keep a rebuild short.
+The Linux and Windows jobs cost hosted minutes (private repository: 2,000 a month on the free plan, Windows minutes count double). They only run when the client paths change, and ccache plus the npm and Electron caches keep a rebuild short.
 
 `check-package.sh` fails the build if a package contains any `.md` (also inside `app.asar`), game files (`.iso`, `.raw`, `.dol`, ...) or `Sys/NetplaySave`, or lacks `LICENSE`, `NOTICE`, the plugin, the Dolphin bundle or Dolphin's `COPYING`.
 
@@ -54,9 +54,13 @@ Each workflow checks out into its own folder of the shared runner workspace (`sr
 
 Dolphin's Linux build packages were installed here on 2026-10-08 for a first plan (client builds on this box) and purged again the same day, exactly the 247 packages of that apt transaction, once the Unraid runner took the client builds. Do not point `CLIENT_LINUX_RUNNER` at sarahvps2.
 
-### Unraid: Linux client builds
+### Unraid: Linux client builds (on hold: unstable under load)
 
-`unraid-brawlonline` (`docs/unraid-runner.md`): Ubuntu 24.04 image with Dolphin's build dependencies, Node 24, Python 3.12, Xvfb; `CI_CACHE=/cache` (ccache, the Dolphin build tree, toolchains, linuxdeploy, npm and Electron caches), `JOBS=12`. The Linux Dolphin is therefore built against Ubuntu 24.04's glibc (2.39): it runs on distributions at least that new (SteamOS 3.6+, Ubuntu 24.04+, Debian 13, Fedora 40+, Arch).
+`unraid-brawlonline` (`docs/unraid-runner.md`): Ubuntu 24.04 image with Dolphin's build dependencies, Node 24, Python 3.12, Xvfb; `CI_CACHE=/cache` (ccache, the Dolphin build tree, toolchains, linuxdeploy, npm and Electron caches), `JOBS=12`.
+
+**Not used yet, 2026-10-08:** compiles there fail at random under parallel load. The Linux Dolphin build stopped with GCC "internal compiler error: Segmentation fault" (in `ggc_set_mark`, the compiler's garbage collector) and even parse errors inside unchanged system headers (`atomic_base.h: expected '{' before '=' token`), on a different DolphinQt file each time, also when resumed with 8, 5 and 3 jobs. The same file compiled cleanly 3 times out of 3 when built alone; compiled 16 at a time, one per CPU (`taskset`), 4 of 80 compiles failed, on CPUs 3, 8, 10 and 15, without ccache. Data corruption on several cores points at the machine (memory or CPU stability, e.g. an EXPO/XMP memory profile or a Curve Optimizer/PBO undervolt), not at one bad core or the build; a memory test (MemTest86) and stock memory/CPU settings are the next step. A build from such a machine cannot be shipped: a corruption that does not crash the compiler ends up in the binary, and ccache would keep it. Once it is stable, set the default in `client.yml` back to the Unraid labels (one line in each of the two jobs) and clear `/cache/ccache` and `/cache/dolphin-build-linux` there first.
+
+The Linux Dolphin is built against Ubuntu 24.04's glibc (2.39) either way: it runs on distributions at least that new (SteamOS 3.6+, Ubuntu 24.04+, Debian 13, Fedora 40+, Arch).
 
 ### Windows
 
@@ -69,6 +73,6 @@ None are needed today. Signing is deferred; the builds are unsigned:
 - Windows: add repository secrets `WIN_CSC_LINK` (base64 of the `.pfx`, or an https URL) and `WIN_CSC_KEY_PASSWORD`, then set `"signAndEditExecutable": true` in `launcher/electron-builder.json` (`win`). The windows job already passes them as `CSC_LINK`/`CSC_KEY_PASSWORD`.
 - macOS (when the job exists): `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, and `"notarize": true`.
 
-Repository variables (optional, none set): `CLIENT_LINUX_RUNNER` (JSON list of labels, overrides the Unraid default), `ENABLE_MACOS` (`true` once a macOS build exists).
+Repository variables (optional, none set): `CLIENT_LINUX_RUNNER` (JSON list of labels, overrides the default in `client.yml`), `ENABLE_MACOS` (`true` once a macOS build exists).
 
 Artifacts: the account's free Actions storage is 500 MB and shared with other repositories; the client artifacts (~400 MB per run) live at most a day and are deleted by `publish` right after use.
