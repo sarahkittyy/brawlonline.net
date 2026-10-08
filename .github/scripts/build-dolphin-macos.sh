@@ -102,7 +102,7 @@ else
   "$src/Tools/mac-codesign.sh" -t -e "$src/Source/Core/DolphinQt/DolphinEmu.entitlements" "$identity" "$app"
 fi
 codesign --verify --deep --strict "$app"
-codesign -dv "$app" 2>&1 | grep -E '^(Authority|TeamIdentifier|Timestamp|CodeDirectory)' || true
+codesign -dvv "$app" 2>&1 | grep -E '^(Authority|TeamIdentifier|Timestamp|CodeDirectory)' || true
 
 cp "$src/COPYING" "$out/"
 cp -R "$src/LICENSES" "$out/Licenses"

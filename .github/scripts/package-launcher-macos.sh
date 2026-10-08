@@ -88,7 +88,7 @@ else
   done
   [ -f "$APPLE_API_KEY_PATH" ] || { echo "no API key at APPLE_API_KEY_PATH" >&2; exit 1; }
   # Dolphin.app must already carry this identity's signature (build-dolphin-macos.sh).
-  case "$(codesign -dv "$launcher/release/dolphin/Dolphin.app" 2>&1)" in
+  case "$(codesign -dvv "$launcher/release/dolphin/Dolphin.app" 2>&1)" in
     *"Authority=Developer ID Application:"*) ;;
     *) echo "release/dolphin/Dolphin.app is not Developer ID signed" >&2; exit 1 ;;
   esac
@@ -115,7 +115,7 @@ signAsync({
 );
 JS
   codesign --verify --deep --strict "$app"
-  codesign -dv "$app" 2>&1 | grep -E '^(Authority|TeamIdentifier|Timestamp)' || true
+  codesign -dvv "$app" 2>&1 | grep -E '^(Authority|TeamIdentifier|Timestamp)' || true
 
   tmp="$(mktemp -d)"
   ditto -c -k --keepParent "$app" "$tmp/app.zip"
@@ -135,7 +135,7 @@ npx electron-builder build --mac dmg zip "--$arch" --publish never --prepackaged
 if [ "$identity" != "-" ]; then
   for dmg in release/build/*.dmg; do
     codesign --verify --strict "$dmg"
-    case "$(codesign -dv "$dmg" 2>&1)" in
+    case "$(codesign -dvv "$dmg" 2>&1)" in
       *"Timestamp="*) ;;
       *) echo "$dmg has no secure timestamp" >&2; exit 1 ;;
     esac
