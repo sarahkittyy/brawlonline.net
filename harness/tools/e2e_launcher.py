@@ -327,8 +327,8 @@ class Launcher:
         return str(self.eval("document.body.innerText") or "")
 
     def login(self, user: OnlineUser) -> None:
-        """The quick start's login step: email + password, Log in. (Sign-up, the invite and the
-        connect code were done for the account beforehand, as a returning player would have.)"""
+        """The quick start's login step: email + password, Log in. (Sign-up and the connect
+        code were done for the account beforehand, as a returning player would have.)"""
         wait_until(lambda: self.call("hasInput", "Email") or self.call("hasText", "Log in"), 60,
                    f"{self.name}: login form")
         if not self.call("hasInput", "Email"):
