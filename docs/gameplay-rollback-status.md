@@ -1,6 +1,6 @@
 # Gameplay-only rollback: status
 
-Branch `gameplay-rollback` in the worktree `dolphin-gprb/` (off `rollback-fixes`, merged with `rollback-fixes` at `a1f9ec2685`, at `d36794a6e1` (the online client) and at `ad474c0358` (GameBridge, recent codes, Qt session backend)). Not pushed. Head: `b79fe057cf`. **Default region set: gp-v12** (Phase 6). **Merged into `rollback-fixes`** (`df44299556`, 2026-10-07), where the gameplay session is now the default online backend and starts matches from the game's own online CSS (Phase 7).
+Branch `gameplay-rollback` in the worktree `dolphin-gprb/` (off `rollback-fixes`, merged with `rollback-fixes` at `a1f9ec2685`, at `d36794a6e1` (the online client), at `ad474c0358` (GameBridge, recent codes, Qt session backend), and in Phase 8 with `c27636d256`, `4944245954` and `50e800b9d6`). Not pushed. Head: `7788a27738`. **Default region set: gp-v19** (Phase 8). **Merged into `rollback-fixes`** (`df44299556`, 2026-10-07), where the gameplay session is now the default online backend and starts matches from the game's own online CSS (Phase 7).
 
 **The session model** (user decision):
 - Each player boots and uses the menus alone.
@@ -592,18 +592,138 @@ Dolphin `rollback-fixes` `4944245954` merges branch `unranked` (`6449517bc1`): t
 | `e2e_launcher.py` (`run/artifacts/e2e-launcher/mrg-e2e-20261007-162710/`) | game 1 Green Hill Zone (0x23, random): 755 frames, 0 mismatches; game 2 Final Destination (Bob lost and picked): 4,595 frames, 0 mismatches |
 | `cargo test --workspace` (server) | all passed |
 
+## Phase 8: the coverage sweep's failures (gp-v13 to gp-v19)
+
+Worktree `dolphin-gprb`, branch `gameplay-rollback`, after merging `rollback-fixes` (`c27636d256` fast-forward, then `4944245954`, the `unranked` merge). The failures are the coverage sweep's (`docs/gprb-coverage.md`, gp-v12). Frozen build: `run/bin/gprb-e642b3ce98`. **Default region set: gp-v19** (C++ defaults and every tool).
+
+### Method
+
+Every failure the sweep kept a replay for (18 runs: the countdown savestate and the pass log in `run/qa/sweep2/work/<id>/`) was replayed exactly, with rollbacks as recorded, and compared with its ground truth (the same pass log flattened, `gprb_passlog.py flat`, no rollback). First, on the merged build with gp-v12, four of them were run again and reproduced the sweep's result to the frame (`f-wario-bowser` RNG at game frame 1706, `i-mario-marth` 4097, `v-zelda` 929, `m-yoshi` hung at session frame 97). A region set under test is passed to the replay as a JSON path, so no rebuild is needed for a region-set change.
+
+Tools used (scratch scripts, the same harness commands as before):
+- the replay against its ground truth with a stall detector (20 s without progress = hang, then the main thread's saved context and a back chain);
+- `PPR_GPRB_PROBE` (now also r5/r6, and in every session phase) and `PPR_GPRB_RNG_LOG` (now also during the load and the countdown) on both runs;
+- `cpu_trace` of one game frame in the flattened and in the rolled-back replay (`PPR_GPRB_INTERP_FROM`), diffed with resynchronisation after interrupts (interrupts arrive at different instructions in the two runs; the old diff stopped at the first one), loads and stores separately;
+- region-set dumps (`PPR_GPRB_DUMP_FRAMES`) of both runs at a few frames, diffed per heap, and full dumps of one run at several frames, scanned for words outside the set that change and point into it;
+- a list of every function-local static in the DOL (guard byte plus `__register_global_object`) and of every DOL object the set covers only in part.
+
+Every dump was deleted after use.
+
+### Family B: the early hang in mirror matches (gp-v13)
+
+**Cause.** `fn_80174434` returns one of nw4r::ef's seven draw strategies: function-local statics in DOL .bss (`lbl_804A3E90`, 0x578 bytes), each built on first use behind a guard byte in .sbss (0x805A04F0-0x805A04F6). The guards are outside the set; `dolw-g1` restored four granules of the objects, among them strategy 1's vtable (0x804A3F64). When the first particle drawn with strategy 1 appeared in a frame that was then rolled back, the load put the pre-construction zeros back while the guard stayed set; the object was never built again. The next draw (`fn_801638D0` walks an emitter's particle managers, `fn_8016DE08` calls `strategy->vtable[3]`) called through a zero vtable: the main thread ran lowmem from 0 to 0x20 (`lr 0x80163918`). Mirrors hit it early because both fighters' effects use the same draw types. The replay with probes showed the zeroed object in the hung state; the partly covered statics list shows it is the only DOL static whose object and guard straddle the set.
+
+**Fix.** gp-v13 removes 0x804A3E90+0x578 from the set (rendering state only); gp-v19 also excludes it byte-precisely, because a range added later shares a granule with it.
+
+### Family D: items and Smash Balls (gp-v14 to gp-v16, the file IO wait)
+
+Four separate causes, found in this order with the replays of `f-wario-bowser` and `i-mario-marth`:
+
+1. **The camera subject list (gp-v14).** `cmSubjectList` (DOL .bss `lbl_8049DEDC`, `{count, first, last}`; `getSubjectByPlayerNo__13cmSubjectListFUl`) links the camera subjects of fighters and items, which live in the instance heaps. An item created or removed in a rolled-back frame left the head pointing at the discarded run's node: the re-created node was linked to itself. Flat and rolled-back runs then had different cameras from frame ~1000 (dumps: `gfCameraManager` and every view matrix), the Smash Ball, whose flight is bounded by the camera range (`stPositions` code among its RNG callers), moved differently, and at game frame 1706 the rolled-back run drew 5 extra randoms for a spawn the flat run did not make (RNG logs of both runs). The dumps also showed the self-linked node: `0x814CA340 → {0x814CA340, 0x814CA340}` against `{0x8049DEE0, 0x812C72C0}`. This list is also what Family A's mirror hang looped on (`fn_8009EFCC ← fn_8009EC5C`).
+2. **Mid-match file loads (the file IO wait, gp-v15).** Items preload Pokémon and Assist Trophy resources during the match, and Final Smashes and transformations read fighter files (below). `gfFileIOManager` (`*0x8059FFF4`) queues requests; the main loop's IO update (`fn_80022F84`, called once per pass) hands them to the IO thread, which reads while the main thread waits for the retrace. So the frame on which a load completed depended on emulated time, which region mode does not rewind, and a rollback could restore the destination buffer under a read in flight. Now, at every loop top of a session (and before the base snapshot), while the IO manager has a queued request, the main thread runs the manager's update and waits one more retrace, as guest calls that return to the loop top (`RunIoWait`, GameplaySession.cpp). A load requested in frame N is complete before frame N+1 on every peer and in every pass, and nothing is in flight at a save or a load. gp-v15 adds the IO manager's queues and request pool (System FW 0x805BF860+0x5760, the manager 0x805CA1C0+0xA0): requests are allocated by the game and held for a few frames, and the pool must roll back with the handles. `gprb_status` counts `io_waits`, `io_wait_retraces`, `io_wait_timeouts` (600 retraces).
+3. **The archive manager (gp-v16).** `gfArchiveManager` (System FW 0x805BB860, `*0x8059FFA0`) lists every loaded `gfArchive`; the archives live in the heaps they were loaded into. An archive loaded or released in a rolled-back frame (Pokémon and Assist Trophy preloads, transformation and Final Smash files) left the head stale and the re-created archive linked to itself (dumps: node 0x91A6A420 `{0x91A6A340, 0x91A6A340}` against `{0x91A6A340, 0x80BD4A00}`). `gfArchive::update`'s "File Clone" looks archives up in this list.
+4. With 1-3, `f-wario-bowser` and `i-mario-marth` replay identically to their ground truth through game set (4,348 and 5,173 frames).
+
+The three item hangs (`i-fox-falco` in nw4r g3d, the two `GXWaitDrawDone` waits of `f-ice_climbers-peach` and `f-olimar-lucario`) replay to the end of their logs without a hang and without a difference from the ground truth from gp-v17 on.
+
+### Family A: Zelda/Sheik transformations (gp-v15 to gp-v17)
+
+A transformation is a fighter change (`#fighter change begin` / `end`): both instances exist from the start, but the fighter's resource heap gets the other form's motion and model files (`FitSheikMotionEtc.pac` 3.1 MB and `FitSheik00.pac`, read from the SD card; or `File Clone` from a loaded archive). In the rolled-back replay every resimulation of the frame that started it issued the reads again and they completed at game frame 923 or 924 depending on the pass; `change end` was never logged, and at game frame 929 the active instance read garbage (x = 0x80789790). With the IO wait the reads complete at 923 in every pass; with the archive list (gp-v16) `change end` appears and the change completes; then a later render hang remained (game frame 1224, main thread at 0x20 with `lr 0x8019D990`, in `gfTaskScheduler::render → fn_8000E214 → fn_8000F4F0 → fn_8000EB1C`): the scene keeps per-model records in DOL .bss (`lbl_80494E00`, `lbl_80494EE8`, 0x80494E00+0x3C0) with pointers into the fighter's resource heap (0x915712A0 ↔ 0x915FB960 at each transformation) and instance heap, and `dolw-g1` restored only two of their granules. gp-v17 restores them whole. `v-zelda`, `v-sheik`, `m-zelda`, `m-sheik`, `f-zelda-sheik` then replay without a difference.
+
+### Family C: Meta Knight (gp-v17)
+
+Both Meta Knight hangs had the same signature as Family A's last one (`lr 0x8019D990`, `fn_8019D950` calling a g3d object's `vtable[3]` through a garbage pointer, from the render). With gp-v17 `v-meta_knight` and `m-meta_knight` replay to the end of their logs (921 and 725 session frames, where they had hung) without a hang or a difference.
+
+### Family E: late drifts in mirrors (gp-v18)
+
+`m-mewtwo` and `m-wolf` replay identically from gp-v17 on (Wolf's `changeStatus` messages pointed at articles; one of gp-v13 to gp-v17 covers them; not bisected further). `m-donkey_kong` still drifted at game frame 5644: P1's x stayed at -16.24 for five frames where play without rollback moved it. The traces of that frame were identical in the flat and the rolled-back run (loads and stores), so the state differed before the frame; the first run of the frame against its resimulation differed in two bytes at 0x805B75DA/DB (0x01 against 0x41), written by the stick conversion (`fn_8004897C`) and P+'s hook in it (0x80579398). They belong to the controller configuration object (System FW 0x805B7480+0x1E0, `*0x805A00C8`): the per-port button layouts, then per-port stick state the main thread updates every frame. gp-v18 adds it (and excludes the first 32 bytes of the next block, the bottom of a thread stack that shares the last granule). `m-donkey_kong` then replays identically through game set.
+
+### Final Smashes (gp-v19, `PPR_GPRB_FORCE_FINAL`)
+
+The sweep never saw a Final Smash. To force one, `PPR_GPRB_FORCE_FINAL=<port mask>` (diagnostics) makes the session call `ftManager::setFinal(entry id, false)` (sora_melee .text+0x10D878), as a broken Smash Ball does, for those ports at the last countdown frame, before the base snapshot; the ground-truth replay does the same. (Setting only the owner's final flag, `ftOwner::setFinal`'s bit, did not start one.) The random fighters then use it at their first neutral B.
+
+With gp-v18, Wario/Bowser hung at game frame 815, when Wario-Man turned back into Wario: the main thread looped in `fn_8016EBB4` (`fn_8016EDA8 ← fn_8001ACC4`), nw4r::ef. The EffectSystem (DOL .bss `lbl_8049EDD8`, 0x5068 bytes: the effect, emitter and particle managers' activity lists and pools, whose objects live in the Effect heap) was covered by `dolw-g1` only in a few granules; Brawlback restores it whole. gp-v19 adds it and ef's resource list (`lbl_804A3E70`).
+
+Forced Final Smashes on gp-v19, each a replay of a sweep pass log with both ports given their Final Smash, against its own ground truth:
+
+| Pair (kept pass log) | Final Smash types | Evidence it ran | Ground truth without vs with the FS | Rolled back vs ground truth |
+|---|---|---|---|---|
+| Wario vs Bowser, FD | transformations (Wario-Man, Giga Bowser) | `#fighter change begin` at game frame 402, back at 812; game set at 2,881 instead of 4,348 | differ from game frame 332 | **identical**, 2,881 frames to game set (gp-v18: hang at 815) |
+| Olimar vs Lucario, BF | cutscene (End of Day), beam (Aura Storm) | P1 status 274 (neutral B) becomes 278/279 at game frame 525 | differ from 525 | **identical**, 3,161 frames to game set |
+| Mario vs Marth, FD | projectile (Mario Finale), cutscene (Critical Hit) | match ends at 4,182 instead of 5,173 | differ from 492 | **identical**, 4,182 frames to game set |
+| Samus vs ZSS, BF | beam (Zero Laser), transformation (Power Suit) | match ends at 3,639 instead of 7,161 | differ from 404 | **identical**, 3,639 frames to game set |
+| Zelda vs Sheik, BF | arrows (Light Arrow) | | differ from 405 | **identical** to the end of the log (2,154) |
+| Ice Climbers vs Peach, FD | Iceberg, Peach Blossom | | differ from 627 | **identical** to the end of the log (1,971) |
+
+The sweep has a new group for this, `ffs` (7 pairs, below).
+
+### Results on the kept replays
+
+All 18 kept replays, rolled back as recorded, against their ground truth (raw: the scratch results of this phase, summarised here):
+
+| Run | gp-v12 (sweep) | gp-v19 |
+|---|---|---|
+| `m-yoshi`, `m-ice_climbers` (Family B) | hang at session frame 97 / 26 | to the end of the log, identical |
+| `f-wario-bowser`, `f-samus-zero_suit_samus` (D) | drift at 1706 / 1662 | identical through game set |
+| `i-mario-marth` (D) | drift at 4097 | identical through game set |
+| `i-fox-falco`, `f-ice_climbers-peach`, `f-olimar-lucario` (D) | hang | to the end of the log, identical |
+| `v-zelda`, `v-sheik` (A) | drift at 929 / 788 | identical (`v-sheik` through game set) |
+| `m-zelda`, `m-sheik`, `f-zelda-sheik` (A) | hang | to the end of the log, identical |
+| `v-meta_knight`, `m-meta_knight` (C) | hang | to the end of the log, identical |
+| `m-donkey_kong`, `m-mewtwo`, `m-wolf` (E) | drift at 5644 / 5529 / 4088 | identical through game set |
+
+(`m-sheik`'s log ends where it hung, at game frame 2115; the two runs differ only after it, when the replay has no more input.)
+
+### The clock and the match start (open issue 7)
+
+What reads the console clock around a match (every `bl` to `OSGetTime` 0x801E1B34 and `OSTicksToCalendarTime` 0x801E1D80 in the DOL, the loaded RELs and P+'s code area, with Smashville loaded):
+- the calendar (`OSTicksToCalendarTime`): Smashville's clock face (`st_village` `fn_70_CFAC`: hour and minute → the two hands' angles, two floats in a stage object, drawn only), the stage select's date strings (`sora_menu_sel_stage`), and two P+ codes that name files by the date (0x80568A10, 0x8056A22C); the stage select also writes the clock-derived Smashville variant into the `gmGlobalModeMelee` init block, which the joiner already replaces with the host's;
+- the time base alone (`OSGetTime`): OS, GX, sound, network and profiling code, and the P+ counters in `sora_melee` `fn_27_1E8FEC` (the known tick-derived values of Phase 3). None of these was found to feed `g_mtRand` or fighter state.
+
+So no clock-derived value was found that reaches the RNG before the barrier on its own. The failure's trace has a better lead: at game frame 242 P1 stands at x = -49.41 on the host and +50.59 on the joiner, i.e. at the other start point. The stage's constructor (`__ct__7stMelee`, sora_melee .text+0x238BDC) shuffles the fighters' start points (`stMelee +0x1B4`, 32 swaps of `randi`, which uses `g_mtRand`) and reads the init block (game mode, players), all during the load, before the barrier copies the host's RNG. The joiner's init block and both peers' seeds are applied at the first loop top in `scMelee`; a path into the match that builds the stage within the pass that switches the scene (the online CSS's Versus setup, unlike the stage select's path used by `gprb_session.py`) would shuffle with an unseeded RNG and a stale init block. With RTCs on both sides of 15:00 (`gprb_session.py --rtc-a 14:57:00 --rtc-b 15:00:00`, new option), Smashville sessions through the stage select passed (two matches, 0 mismatches), and the RNG logs of both peers between the seeding and the barrier were identical (105 calls; the shuffle right after the seeding).
+
+Changes (`0422682986`), all in the session:
+- **The match start** (the host's init block for the joiner, the three seeds, the serial counter) now runs at the first of: a loop top with the change to `scMelee` pending, the first loop top in `scMelee`, or **stMelee's constructor** (HLE hook at 0x809435F0). In the stage-select path it still runs at the loop top, before the constructor (log: `gprb: stage constructed (match N, seeded true)`); where the constructor came first the log says `RNG seeded ... at the stage's construction`.
+- **The barrier's sync block carries the start point table** (`*0x80B8A428 + 0x1B4`, 4 words); the joiner takes the host's and logs `joiner took the host's fighter start points (...)` if it differed. The fighters are created after the barrier (game frames 2 and 92) and enter at these points.
+- Diagnostics: `PPR_GPRB_PROBE` logs r5 and r6 too, and probes and `PPR_GPRB_RNG_LOG` also cover the load and the countdown.
+
+Not done: the original failure was not reproduced (it needs the online CSS path between two logged-in instances), so whether the constructor ran before the seeding there is not confirmed; the new log lines will say so the next time.
+
+### Family F: dual-core sessions
+
+No session-specific cause was looked for: the failing pairs were run again on the fixed build first (`gprb_sweep.py` session runs, `typical`, delay 2, raw `run/qa/gfx-sess1`): Fox/Falco, Lucario/Mewtwo, Samus/ZSS, Sonic/Knuckles and Zelda/Sheik in dual core, and Zelda/Sheik in single core, all to game set with 0 confirmed-checksum mismatches and identical traces (161-333 rollbacks per peer in dual core). Then all 30 sessions of the full sweep passed (below). Their failures on gp-v12 fit the families above: dual core makes 2-4 times as many rollbacks, so a rare restore fault (a stale list head when an object is created or freed in a rolled-back frame, a load in flight) hits more often; Zelda/Sheik's were Family A.
+
+### The full sweep on gp-v19
+
+`run/bin/gprb-e642b3ce98`, gp-v19, the same 136 runs as the gp-v12 sweep plus the 7 forced Final Smash runs (`ffs`); `gprb_sweep.py run --out run/qa/sweep3 --jobs 3 --retry-errors`; details and matrices in `docs/gprb-coverage.md`.
+
+| Group | gp-v12 | gp-v19 |
+|---|---|---|
+| vs Fox | 38 / 41 | **41 / 41** |
+| mirrors | 29 / 42 | **42 / 42** (2 after reruns, see open issue 9) |
+| stages | 10 / 10 | **10 / 10** |
+| all items | 1 / 6 | **6 / 6** |
+| Smash Ball only | 0 / 7 | **7 / 7** |
+| forced Final Smashes (new) | - | **7 / 7** |
+| sessions, single core | 13 / 15 | **15 / 15** |
+| sessions, dual core | 10 / 15 | **15 / 15** |
+| **all** | **101 / 136** | **143 / 143** |
+
+Every sync test also matched its no-rollback ground truth to game set. In the `ffs` runs the forms seen include Wario-Man and Giga Bowser, and the logs show the fighter changes (Zelda/Sheik, Wario/Bowser).
+
 ## Open issues
 
-Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds.
+Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait).
 
 1. **Sync tests must be checked against the ground truth.** Their own check (first run against resimulation) missed a fault that changed the game within seconds. `gprb_mispredict.py` with a recording, `--no-rollback`, and a comparison of the traces is the stronger test; only Mario/Marth FD and Ice Climbers/Olimar PS2 have recordings so far. The closed-loop scenario sync tests (`gprb_synctest.py`) cannot be compared this way.
-2. **State outside the set that only rare events touch** is still found one case at a time. `gprb_memdiff.py scan` finds global list heads that point into the set; counters and flags need a census (`PPR_GPRB_CENSUS`) and a reason. Known and left alone: the task-id counter `gUnk8059c66c` (ids of objects created in resimulated frames differ between peers; no effect found).
+2. **State outside the set that only rare events touch** is still found one case at a time. `gprb_memdiff.py scan` finds global list heads that point into the set (Phase 8 found three more: camera subjects, archives, and the IO manager's requests, all only touched when objects are created or freed mid-match); DOL objects that the set covers only in part (`dolw-g1`) caused two more (draw strategies, scene records), and the rest of them (nw4r g3d's statics `lbl_804A4540`, `lbl_804A5514`, `lbl_804A7F40`, `lbl_804A9A80`, and a few small ones) are still covered in part; counters and flags need a census (`PPR_GPRB_CENSUS`) and a reason. Known and left alone: the task-id counter `gUnk8059c66c` (ids of objects created in resimulated frames differ between peers; no effect found).
 3. **Sessions end with `peer timed out` when the machine is overloaded**: 4 of the 10 `s8` sessions ended between 237 and 13,457 frames, both peers on the same frame and with 0 mismatches, while 10+ other Dolphin instances ran. The GekkoNet silence limit (7.2 s at delay 2) was exceeded by stalls of a starved process, not by the network.
 4. The rollback count in the sessions is low (random macros predict well). A harder input model would stress deeper rollbacks between peers; the misprediction test covers that on one instance.
 5. ~~The online backend is not registered outside the harness.~~ Done in Phase 7: both frontends register it, and it is the default.
-6. The coverage sweep (`gprb_sweep.py`, another agent's tool) still defaults to gp-v9, while the session and sync-test tools it uses now default to gp-v11.
-7. **A desync from frame 0 on Smashville, seen once** (2026-10-07, the first `test_online_unranked.py` run after the `unranked` merge; log `run/scratch/merge-unranked/unranked.log`). Equal setup keys, the barrier passed, the RNGs seeded alike (`4f960b68 6b6c6b20 5048c23a`), yet at frame 0 (game frame 240) the first RNG word differed (`1240120447` against `2104839129`; the other two equal) and the fighters from frame 2; the host ended at "game set" after 573 frames, the joiner with "peer timed out". It happened at 14:59:2x local time, under a minute before the hour, and Smashville's lighting follows the console clock: the two instances' RTCs may have been on either side of an hour boundary. Two later Smashville games ran identically. Not reproduced or fixed.
+6. ~~The coverage sweep still defaults to an old region set.~~ Every tool defaults to gp-v19 and the sweep to `run/bin/gprb-e642b3ce98` (Phase 8).
+7. **A desync from frame 0 on Smashville, seen once** (2026-10-07, the first `test_online_unranked.py` run after the `unranked` merge; log `run/scratch/merge-unranked/unranked.log`). Equal setup keys, the barrier passed, the RNGs seeded alike (`4f960b68 6b6c6b20 5048c23a`), yet at frame 0 (game frame 240) the first RNG word differed (`1240120447` against `2104839129`; the other two equal) and the fighters from frame 2; the host ended at "game set" after 573 frames, the joiner with "peer timed out". It happened at 14:59:2x local time, under a minute before the hour, and Smashville's lighting follows the console clock: the two instances' RTCs may have been on either side of an hour boundary. Two later Smashville games ran identically. Not reproduced. Phase 8 ("The clock and the match start"): no clock-derived value was found that reaches the RNG before the barrier; P1 had entered at the other start point, which the stage's constructor shuffles with `g_mtRand` during the load. The match start now also runs at the stage's constructor if it has not run yet, and the joiner takes the host's start points at the barrier; new log lines show either if it happens again.
 8. **Localhost TCP connections sometimes time out on this machine** while several agents run Dolphins: a harness port another process answered ("another harness client is already connected"), a fresh harness port that never accepted, and the portable Postgres of `OnlineBackend` refusing or timing out its first connections (`CREATE DATABASE`, the services' pools). Runs on 2026-10-07 used one portable Postgres cluster started by hand and `PPHARNESS_PG_URL` (the harness's external-Postgres mode), which held up. `OnlineBackend`'s external-Postgres mode passed the URL before psql's options, which psql on Windows ignores; fixed.
+9. **A rare hang in render and effect code that a replay does not always reproduce** (Phase 8). In the gp-v19 sweep `m-yoshi` and `m-ness` first failed for harness reasons, then hung when run again (`m-yoshi` at session frame 4,270 and `m-ness` at 3,865, both in `fn_8005C2B0` ← `fn_80017618`, the effect manager's list walk), then passed when run a third time. Their pass logs (`run/qa/sweep3/work/m-yoshi/`, `m-ness/`; the hung runs' JSON in `run/qa/sweep3-hangs/`) replayed exactly: `m-ness` 3 of 3 to the end; `m-yoshi` 18 of 25 to the end, 7 crashed at session frames 130-1,901 in nw4r ef/g3d code (`fn_8005B6F0` calling a list node's `vtable+0x14`, `fn_80163FAC`, `fn_8019A874` jumping to `0x4E6F6464`), with gp-v18 as with gp-v19; the flattened log never crashed. Two replays that did not crash were byte-identical in all of MEM1 and MEM2 at session frames 300 and 600, and region dumps of a crashing and a passing replay were identical at 50-400. So something in a rolled-back run is not determined by the emulated state alone (host timing, or a host thread touching guest memory), and it shows in effect/render objects. The crashes came in clusters while this machine was loaded (other agents' instances); not resolved.
 
 ## Harness commands
 
@@ -625,12 +745,13 @@ Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v
 Diagnostics through environment variables:
 - `PPR_GPRB_DIFF_FRAME=N`: byte diff of the region set, first run against resimulation.
 - `PPR_GPRB_RNG_LOG=1`: every `mtRand` call, with 8 stack levels.
-- `PPR_GPRB_PROBE=addr,…`: registers at those addresses.
+- `PPR_GPRB_PROBE=addr,…`: registers (r3-r6, r12, ctr, lr) at those addresses, in every phase of a session (the load and the countdown too).
 - `PPR_GPRB_INPUT_LOG`: per-pass input.
 - `PPR_GPRB_PASS_LOG=path`: every GekkoNet update of a network session, for `replay_path` (`<path>.<host|join>.m<match>`).
 - `PPR_GPRB_DUMP_FRAMES=f1,…` + `PPR_GPRB_DUMP_DIR=dir` (+ `PPR_GPRB_DUMP_FULL=1`): the region set (all of MEM1/MEM2) at every save of those session frames.
 - `PPR_GPRB_CENSUS=1`: record non-set granules written during the match (`gprb_census`).
 - `PPR_GPRB_INTERP_FROM=<game frame>`: JIT up to that frame, then the interpreter (and a break the harness resumes), for `cpu_trace` of late frames.
+- `PPR_GPRB_FORCE_FINAL=<port mask>`: those ports get their Final Smash at the last countdown frame (Phase 8; the sweep's `ffs` group).
 
 ## Commits (`dolphin-gprb`, branch `gameplay-rollback`)
 
@@ -652,6 +773,18 @@ Diagnostics through environment variables:
 | `e7b2076039` | gp-v11 (ground-collision list heads) as the default; sync-test `no_rollback` (ground truth) |
 | `d31f69fc54` | sound bookkeeping (`dedupe_resim_sounds`) by default in network sessions |
 | `b79fe057cf` | gp-v12 (camera quake controller) as the default; sync-test pass logs; `PPR_GPRB_INTERP_FROM` |
+| (fast-forward) | `rollback-fixes` `c27636d256` (Phase 7, the online CSS path) |
+| `5870549d59` | gp-v13: nw4r::ef's draw strategies are never restored (Family B) |
+| `04d894ad28` | gp-v14: the camera subject list head |
+| `6960df9843` | the file IO wait at the loop top (`RunIoWait`); gp-v15: the IO manager's queues and request pool |
+| `54e2de9199` | gp-v16: the archive manager's list |
+| `d8958f4ea2` | gp-v17: the scene's per-model records, whole |
+| `fa8f2e39cf` | gp-v18: the controller configuration's per-port stick state |
+| `fd0e89973e` | gp-v19: nw4r::ef's EffectSystem whole, the draw strategies excluded byte-precisely; `PPR_GPRB_FORCE_FINAL` |
+| `0422682986` | match start before the stage is built (stMelee constructor hook); start points in the barrier's sync block; probes and RNG log in every phase |
+| `e3f0451ed1` | merge `rollback-fixes` `4944245954` (`unranked`) |
+| `e642b3ce98` | gp-v19 as the default (frozen as `run/bin/gprb-e642b3ce98`) |
+| `7788a27738` | merge `rollback-fixes` `50e800b9d6` (online default hosts) |
 
 ## Commits (`dolphin/`, branch `rollback-fixes`, Phase 7)
 
