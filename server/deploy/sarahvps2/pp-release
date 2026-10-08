@@ -1,15 +1,40 @@
 #!/bin/bash
-# pp-release: install and switch Brawl Online server releases on sarahvps2.
-# Installed to /usr/local/sbin/pp-release.
+# pp-release: install and switch Brawl Online server releases, and publish the website and the
+# launcher builds, on sarahvps2. Installed to /usr/local/sbin/pp-release (root:root 0755).
+# The CI runner user (brawlrunner) may run it through sudo; that is its only sudo rule.
 #
 #   sudo pp-release install DIR NAME   copy accounts, mm, admin (and mmclient) from DIR
 #                                      into /opt/ppserver/releases/NAME
-#   sudo pp-release activate NAME      back up the database, point /opt/ppserver/bin at
-#                                      NAME, restart pp-accounts and pp-mm, health-check
+#   sudo pp-release activate NAME      back up the database, point /opt/ppserver/bin at NAME,
+#                                      restart pp-accounts and pp-mm, health-check; on failure
+#                                      switch back to the previous release automatically
+#   sudo pp-release deploy DIR NAME    install + activate (CI); nothing happens when the binaries
+#                                      equal the active release's; keeps the newest releases only
+#   sudo pp-release website DIR        publish the static website from DIR to /var/www/brawlonline
+#                                      (downloads/ and updates/ there are left alone)
+#   sudo pp-release client DIR         publish launcher builds from DIR: the electron-updater feed
+#                                      in updates/launcher/ and the stable names in downloads/
 #   pp-release list                    releases; the active one is marked with *
+#
+# DIR must be under one of SOURCE_ROOTS. Files are read from DIR with the CALLER's own
+# permissions (runuser), never root's, so a symlink in DIR cannot expose a root-only file.
+# Everything is checked in a root-only staging directory before it is installed.
 set -euo pipefail
+umask 022
+export PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
 ROOT=/opt/ppserver
 REL=$ROOT/releases
+WWW=/var/www/brawlonline
+SOURCE_ROOTS=(/home/brawlrunner/actions-runner/_work /home/debian)
+KEEP_RELEASES=3        # server releases kept by deploy: the active, the previous and 1 more
+KEEP_CLIENT=3          # launcher versions kept in updates/launcher
+MAX_BIN=$((200 << 20)) # per server binary
+MAX_SITE=$((200 << 20))
+MAX_CLIENT=$((1536 << 20))
+
+die() { echo "pp-release: $*" >&2; exit 1; }
+need_root() { [ "$(id -u)" -eq 0 ] || die "run with sudo"; }
 
 health() {
   for _ in $(seq 1 30); do
@@ -21,40 +46,321 @@ health() {
   return 1
 }
 
-case "${1:-}" in
-install)
-  src=${2:?DIR}
-  name=${3:?NAME}
-  dest=$REL/$name
-  if [ -e "$dest" ]; then echo "$dest already exists" >&2; exit 1; fi
-  for b in accounts mm admin; do
-    if [ ! -x "$src/$b" ]; then echo "missing $src/$b" >&2; exit 1; fi
+# The user that ran sudo; source files are read as this user.
+caller() {
+  local u="${SUDO_USER:-root}"
+  id -u "$u" >/dev/null 2>&1 || die "unknown caller $u"
+  echo "$u"
+}
+
+as_caller() { # command... (runs with the caller's permissions)
+  local u
+  u=$(caller)
+  if [ "$u" = root ]; then "$@"; else runuser -u "$u" -- "$@"; fi
+}
+
+# Resolves DIR (as the caller) and checks it is inside SOURCE_ROOTS.
+source_dir() {
+  local d="$1" real r
+  real=$(as_caller realpath -e -- "$d" 2>/dev/null) || die "$d does not exist"
+  for r in "${SOURCE_ROOTS[@]}"; do
+    case "$real/" in "$r"/*) echo "$real"; return 0 ;; esac
   done
-  install -d -m 0755 "$dest"
+  die "$real is not under ${SOURCE_ROOTS[*]}"
+}
+
+STAGE=""
+cleanup() { [ -n "$STAGE" ] && rm -rf -- "$STAGE"; true; }
+trap cleanup EXIT
+new_stage() {
+  install -d -m 0700 /var/tmp/pp-release
+  STAGE=$(mktemp -d /var/tmp/pp-release/stage.XXXXXX)
+}
+
+# Copies DIR/NAME (as the caller) into the staging dir as a root-owned regular file.
+stage_file() { # dir name maxbytes
+  local src="$1/$2" dst="$STAGE/$2" max="$3" size
+  as_caller test -f "$src" || die "missing $src"
+  as_caller head -c $((max + 1)) -- "$src" >"$dst" || die "cannot read $src"
+  size=$(stat -c %s "$dst")
+  [ "$size" -le "$max" ] || die "$src is larger than $max bytes"
+  [ "$size" -gt 0 ] || die "$src is empty"
+}
+
+# x86-64 ELF executable: magic, 64-bit, little endian, e_machine 0x3e.
+is_elf_x64() {
+  [ "$(od -An -tx1 -N6 "$1" | tr -d ' \n')" = "7f454c460201" ] &&
+    [ "$(od -An -tx1 -j18 -N2 "$1" | tr -d ' \n')" = "3e00" ]
+}
+
+valid_name() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$ ]] || die "bad release name '$1'"; }
+
+active_name() { local t; t=$(readlink "$ROOT/bin" 2>/dev/null || true); echo "${t#releases/}"; }
+
+# Stages the server binaries from DIR, validated. Sets SRC (not run in a subshell: the
+# staging dir must outlive it).
+SRC=""
+stage_server() { # dir
+  local b
+  SRC=$(source_dir "$1")
+  new_stage
+  for b in accounts mm admin; do stage_file "$SRC" "$b" "$MAX_BIN"; done
+  if as_caller test -f "$SRC/mmclient"; then stage_file "$SRC" mmclient "$MAX_BIN"; fi
   for b in accounts mm admin mmclient; do
-    if [ -f "$src/$b" ]; then install -m 0755 "$src/$b" "$dest/$b"; fi
+    [ -f "$STAGE/$b" ] || continue
+    is_elf_x64 "$STAGE/$b" || die "$b is not an x86-64 ELF binary"
   done
+}
+
+same_as_release() { # name: staged binaries equal that release's
+  local n="$1" b
+  [ -n "$n" ] && [ -d "$REL/$n" ] || return 1
+  for b in accounts mm admin mmclient; do
+    if [ -f "$STAGE/$b" ] || [ -f "$REL/$n/$b" ]; then
+      cmp -s "$STAGE/$b" "$REL/$n/$b" || return 1
+    fi
+  done
+}
+
+install_staged() { # name src
+  local name="$1" src="$2" dest="$REL/$1" b
+  [ -e "$dest" ] && die "$dest already exists"
+  install -d -m 0755 "$REL/.$name.new"
+  for b in accounts mm admin mmclient; do
+    if [ -f "$STAGE/$b" ]; then install -m 0755 "$STAGE/$b" "$REL/.$name.new/$b"; fi
+  done
+  {
+    echo "name=$name"
+    echo "installed=$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+    echo "installed_by=$(caller)"
+    echo "source=$src"
+    (cd "$REL/.$name.new" && sha256sum accounts mm admin $( [ -f mmclient ] && echo mmclient))
+  } >"$REL/.$name.new/BUILD_INFO"
+  chmod 0644 "$REL/.$name.new/BUILD_INFO"
+  mv -T "$REL/.$name.new" "$dest"
   echo "installed $dest"
-  ;;
-activate)
-  name=${2:?NAME}
-  if [ ! -x "$REL/$name/accounts" ]; then echo "no release $name" >&2; exit 1; fi
-  prev=$(readlink "$ROOT/bin" 2>/dev/null || echo none)
+}
+
+switch_to() { # name
+  ln -sfn "releases/$1" "$ROOT/bin.new"
+  mv -T "$ROOT/bin.new" "$ROOT/bin"
+  systemctl restart pp-accounts pp-mm
+}
+
+do_activate() { # name
+  local name="$1" prev
+  [ -x "$REL/$name/accounts" ] || die "no release $name"
+  prev=$(active_name)
   if [ -e /etc/systemd/system/pp-backup.service ] && systemctl is-active --quiet postgresql; then
     echo "backing up the database first"
     systemctl start pp-backup.service
   fi
-  ln -sfn "releases/$name" "$ROOT/bin.new"
-  mv -T "$ROOT/bin.new" "$ROOT/bin"
-  systemctl restart pp-accounts pp-mm
+  switch_to "$name"
   if health; then
-    echo "active: $name (previous: $prev)"
-  else
-    echo "HEALTH CHECK FAILED for $name (previous: $prev)" >&2
-    echo "Logs: journalctl -u pp-accounts -u pp-mm -n 50" >&2
-    echo "Roll back: sudo pp-release activate ${prev#releases/}" >&2
-    exit 1
+    echo "active: $name (previous: ${prev:-none})"
+    return 0
   fi
+  echo "HEALTH CHECK FAILED for $name (previous: ${prev:-none})" >&2
+  journalctl -u pp-accounts -n 20 --no-pager >&2 || true
+  journalctl -u pp-mm -n 5 --no-pager >&2 || true
+  if [ -n "$prev" ] && [ "$prev" != "$name" ] && [ -x "$REL/$prev/accounts" ]; then
+    echo "rolling back to $prev" >&2
+    switch_to "$prev"
+    if health; then
+      echo "rolled back: $prev is active again" >&2
+    else
+      echo "ROLLBACK HEALTH CHECK FAILED too; see PROD.md, Rolling back" >&2
+    fi
+  fi
+  return 1
+}
+
+prune_releases() { # previous: the release that was active before this deploy (kept)
+  local prev="$1" active n i=0
+  active=$(active_name)
+  # Newest first by install time; the active and the previous release are always kept.
+  for n in $(ls -1t "$REL" | grep -v '^\.'); do
+    [ "$n" = "$active" ] || [ "$n" = "$prev" ] && continue
+    i=$((i + 1))
+    [ "$i" -le $((KEEP_RELEASES - 2)) ] && continue
+    echo "removing old release $n"
+    rm -rf -- "${REL:?}/$n"
+  done
+}
+
+# ---- website ---------------------------------------------------------------------------------
+
+publish_website() { # dir
+  local src tarf bad new st
+  src=$(source_dir "$1")
+  new_stage
+  tarf="$STAGE/site.tar"
+  # The tar stream is produced by the caller; root only reads the finished, root-owned file.
+  set +o pipefail
+  as_caller tar -C "$src" --numeric-owner -cf - . | head -c $((MAX_SITE + 1)) >"$tarf"
+  st=("${PIPESTATUS[@]}")
+  set -o pipefail
+  [ "$(stat -c %s "$tarf")" -le "$MAX_SITE" ] || die "website is larger than $MAX_SITE bytes"
+  [ "${st[0]}" -eq 0 ] || die "could not read $src"
+  # Only directories and regular files; no absolute names, no "..", nothing docs-like.
+  bad=$(tar -tvf "$tarf" | awk '$1 !~ /^[-d]/ {print}' | head -n5)
+  [ -z "$bad" ] || die "website has links or special files: $bad"
+  while IFS= read -r n; do
+    case "$n" in
+      /* | *..*) die "bad path in website: $n" ;;
+      ./downloads | ./downloads/* | ./updates | ./updates/*) die "website must not contain $n" ;;
+      *.md | *.MD) die "docs are not published: $n" ;;
+    esac
+    [[ "$n" =~ ^[A-Za-z0-9._/+-]*$ ]] || die "unexpected file name in website: $n"
+  done < <(tar -tf "$tarf")
+  tar -tf "$tarf" | grep -qx './index.html' || die "website has no index.html"
+  new="$STAGE/site"
+  mkdir "$new"
+  tar -C "$new" --no-same-owner --no-same-permissions -xf "$tarf"
+  chown -R root:root "$new"
+  find "$new" -type d -exec chmod 0755 {} +
+  find "$new" -type f -exec chmod 0644 {} +
+  install -d -m 0755 "$WWW"
+  rsync -rlt --delete --delay-updates --exclude=/downloads/ --exclude=/updates/ "$new/" "$WWW/"
+  chown root:root "$WWW"
+  echo "published website from $src ($(find "$new" -type f | wc -l) files)"
+}
+
+# ---- launcher builds -------------------------------------------------------------------------
+
+# electron-builder's feed files: latest.yml (Windows), latest-linux.yml, latest-mac.yml.
+FEED_RE='^latest(-linux|-mac)?\.yml$'
+ART_RE='^Brawl-Online(-Setup)?-[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(-(x86_64|x64|arm64|universal))?(-(win|linux|mac))?\.(exe|AppImage|dmg|zip)(\.blockmap)?$'
+
+yml_field() { # file key: first "key: value" at top level
+  sed -n "s/^$2: *'\{0,1\}\([^']*\)'\{0,1\} *$/\1/p" "$1" | head -n1
+}
+
+publish_client() { # dir
+  local src feed version f url sha size want got upd dl n count
+  src=$(source_dir "$1")
+  new_stage
+  mapfile -t names < <(as_caller find "$src" -maxdepth 1 -type f -printf '%f\n' | sort)
+  count=0
+  for n in "${names[@]}"; do
+    if [[ "$n" =~ $FEED_RE ]]; then
+      stage_file "$src" "$n" 65536
+    elif [[ "$n" =~ $ART_RE ]]; then
+      stage_file "$src" "$n" "$MAX_CLIENT"
+    else
+      die "unexpected file $n"
+    fi
+    count=$((count + 1))
+  done
+  ls "$STAGE"/latest*.yml >/dev/null 2>&1 || die "no latest*.yml in $src"
+  # Every file a feed names must be here, with the size and sha512 the feed gives.
+  for feed in "$STAGE"/latest*.yml; do
+    version=$(yml_field "$feed" version)
+    [[ "$version" =~ ^[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$ ]] || die "$(basename "$feed"): bad version '$version'"
+    while read -r url sha size; do
+      [[ "$url" =~ $ART_RE ]] || die "$(basename "$feed") names unexpected file '$url'"
+      [ -f "$STAGE/$url" ] || die "$(basename "$feed") names $url, which is missing"
+      want="$sha"
+      got=$(openssl dgst -sha512 -binary "$STAGE/$url" | base64 -w0)
+      [ "$want" = "$got" ] || die "$url: sha512 differs from $(basename "$feed")"
+      [ "$(stat -c %s "$STAGE/$url")" = "$size" ] || die "$url: size differs from $(basename "$feed")"
+    done < <(awk '
+      /^  - url: / {u=$3}
+      /^    sha512: / {s=$2}
+      /^    size: / {print u, s, $2}' "$feed")
+    echo "$(basename "$feed"): $version"
+  done
+  upd="$WWW/updates/launcher"
+  dl="$WWW/downloads"
+  install -d -m 0755 "$WWW/updates" "$upd" "$dl"
+  # Installers first (temporary name, then rename), the feeds last: a client never sees a feed
+  # that names a file which is not there yet.
+  for f in "$STAGE"/*; do
+    n=$(basename "$f")
+    [[ "$n" =~ $FEED_RE ]] && continue
+    install -m 0644 "$f" "$upd/.$n.tmp"
+    mv -f "$upd/.$n.tmp" "$upd/$n"
+  done
+  for f in "$STAGE"/latest*.yml; do
+    n=$(basename "$f")
+    install -m 0644 "$f" "$upd/.$n.tmp"
+    mv -f "$upd/.$n.tmp" "$upd/$n"
+  done
+  # Stable download names for the website (hard links: no extra disk).
+  link_stable "$upd" "$dl" latest.yml 'Brawl-Online-Setup-*.exe' BrawlOnline-Setup.exe
+  link_stable "$upd" "$dl" latest-linux.yml '*.AppImage' BrawlOnline.AppImage
+  link_stable "$upd" "$dl" latest-mac.yml '*.dmg' BrawlOnline.dmg
+  prune_client "$upd"
+  echo "published $count files from $src"
+}
+
+link_stable() { # updir dldir feed glob stable
+  local upd="$1" dl="$2" feed="$1/$3" glob="$4" stable="$5" path
+  [ -f "$feed" ] || return 0
+  path=$(yml_field "$feed" path)
+  # shellcheck disable=SC2053
+  [[ -n "$path" && "$path" == $glob && -f "$upd/$path" ]] || return 0
+  ln -f "$upd/$path" "$dl/.$stable.tmp"
+  mv -f "$dl/.$stable.tmp" "$dl/$stable"
+  echo "downloads/$stable -> $path"
+}
+
+prune_client() { # updir: keep the newest KEEP_CLIENT versions and whatever a feed names
+  local upd="$1" keep v n
+  keep=$(ls -1 "$upd" | sed -n -E 's/^Brawl-Online(-Setup)?-([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?)[-.].*/\2/p' |
+    sort -u -V | tail -n "$KEEP_CLIENT")
+  for f in "$upd"/latest*.yml; do [ -f "$f" ] && keep="$keep $(yml_field "$f" version)"; done
+  for n in $(ls -1 "$upd"); do
+    [[ "$n" =~ $ART_RE ]] || continue
+    v=$(echo "$n" | sed -n -E 's/^Brawl-Online(-Setup)?-([0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?)[-.].*/\2/p')
+    if ! echo " $keep " | tr '\n' ' ' | grep -q -- " $v "; then
+      echo "removing old launcher file $n"
+      rm -f -- "${upd:?}/$n"
+    fi
+  done
+}
+
+# ---- main ------------------------------------------------------------------------------------
+
+lock() { exec 9>/run/pp-release.lock; flock -w 600 9 || die "another pp-release is running"; }
+
+case "${1:-}" in
+install)
+  need_root; lock
+  dir=${2:?DIR}; name=${3:?NAME}; valid_name "$name"
+  stage_server "$dir"
+  install_staged "$name" "$SRC"
+  ;;
+activate)
+  need_root; lock
+  name=${2:?NAME}; valid_name "$name"
+  do_activate "$name"
+  ;;
+deploy)
+  need_root; lock
+  dir=${2:?DIR}; name=${3:?NAME}; valid_name "$name"
+  stage_server "$dir"
+  active=$(active_name)
+  if same_as_release "$active"; then
+    echo "unchanged: the binaries equal the active release $active; nothing to do"
+    exit 0
+  fi
+  if [ -e "$REL/$name" ]; then
+    same_as_release "$name" || die "$REL/$name exists with other binaries"
+    echo "$REL/$name already installed"
+  else
+    install_staged "$name" "$SRC"
+  fi
+  do_activate "$name"
+  prune_releases "$active"
+  ;;
+website)
+  need_root; lock
+  publish_website "${2:?DIR}"
+  ;;
+client)
+  need_root; lock
+  publish_client "${2:?DIR}"
   ;;
 list)
   cur=$(readlink "$ROOT/bin" 2>/dev/null || true)
@@ -64,7 +370,7 @@ list)
   done
   ;;
 *)
-  sed -n '4,10p' "$0"
+  sed -n '4,22p' "$0"
   exit 2
   ;;
 esac
