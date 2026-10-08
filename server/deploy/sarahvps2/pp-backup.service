@@ -1,0 +1,29 @@
+# Nightly pg_dump of the Brawl Online database to /var/lib/ppserver/backups (14 days kept).
+# Started by pp-backup.timer, and by pp-release before it switches releases.
+# Off-box copies are not set up yet (TODO, see ../PROD.md).
+[Unit]
+Description=Brawl Online database backup (pg_dump)
+After=postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=oneshot
+User=postgres
+Group=postgres
+ExecStart=/opt/ppserver/libexec/pp-backup.sh
+Environment=PP_BACKUP_DIR=/var/lib/ppserver/backups PP_BACKUP_KEEP_DAYS=14
+UMask=0077
+Nice=19
+IOSchedulingClass=idle
+
+ReadWritePaths=/var/lib/ppserver/backups
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=

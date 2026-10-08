@@ -1,10 +1,12 @@
 # Production deployment notes
 
-Not deployed yet. These files follow the plan in `docs/backend-design.md` section 2.1: one OVH dedicated Debian box, Postgres 16 from Debian packages, Caddy for TLS, systemd units, nightly backups off the box. No containers in production; `docker-compose.yml` is only for development and tests.
+**Production now runs on `sarahvps2` (user decision, 2026-10-07), with nginx instead of Caddy and Postgres 17. See `PROD.md` for what is installed there; the files used are in `sarahvps2/`.** The rest of this page is the original generic plan.
+
+These files follow the plan in `docs/backend-design.md` section 2.1: one OVH dedicated Debian box, Postgres 16 from Debian packages, Caddy for TLS, systemd units, nightly backups off the box. No containers in production; `docker-compose.yml` is only for development and tests.
 
 The product is called Brawl Online (`PRODUCT_NAME` in `crates/common`: email subjects and bodies, page titles; `MAIL_FROM` sets the sender name). The subdomains are not decided. The examples use placeholder subdomains of `fluffycat.gay`: `accounts.fluffycat.gay` (HTTP API) and `mm.fluffycat.gay` (UDP matchmaking). Change them in one place each: the Caddyfile, `PUBLIC_BASE_URL`, and the client build's mm hostname.
 
-Do not put these services on the existing VPSes (`sarahvps`, `sarahvps2`). They are saturated.
+The original plan kept these services off the existing VPSes (`sarahvps`, `sarahvps2`). The user later chose `sarahvps2` for production; `PROD.md` covers how it shares that box.
 
 ## Files
 
@@ -39,6 +41,9 @@ sudo -u postgres psql -d pp <<'SQL'
 GRANT USAGE ON SCHEMA public TO pp_mm;
 GRANT SELECT (uid, display_name, connect_code, play_key_version, banned_until, email_verified_at) ON users TO pp_mm;
 GRANT INSERT ON mm_matches TO pp_mm;
+-- mm inserts with ON CONFLICT (match_id) DO NOTHING, which needs SELECT on the
+-- conflict column. Without it every match fails to record ("permission denied").
+GRANT SELECT (match_id) ON mm_matches TO pp_mm;
 SQL
 
 # Binaries (built with `cargo build --release` on the same Debian release, or in CI)

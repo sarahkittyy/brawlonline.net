@@ -1,0 +1,13 @@
+#!/bin/sh
+# pp-admin: the Brawl Online admin CLI with the production settings.
+# Installed to /usr/local/sbin/pp-admin. Usage: sudo pp-admin invite create --note "alice"
+set -eu
+if [ "$(id -u)" -ne 0 ]; then exec sudo "$0" "$@"; fi
+set -a
+. /etc/ppserver/accounts.env
+set +a
+# audit_log records the actor as admin-cli:$USER.
+USER="${SUDO_USER:-root}"
+export USER
+cd /var/lib/ppserver
+exec /opt/ppserver/bin/admin "$@"

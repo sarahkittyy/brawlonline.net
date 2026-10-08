@@ -1,0 +1,58 @@
+# Brawl Online accounts web service on sarahvps2: HTTP on 127.0.0.1:43180, behind nginx.
+# Installed to /etc/systemd/system/. Binaries: /opt/ppserver/bin -> releases/<name>.
+# Config: /etc/ppserver/accounts.env (root:ppserver 0640). See ../PROD.md.
+[Unit]
+Description=Brawl Online accounts web service
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+StartLimitIntervalSec=120
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=ppserver
+Group=ppserver
+ExecStart=/opt/ppserver/bin/accounts
+EnvironmentFile=/etc/ppserver/accounts.env
+WorkingDirectory=/var/lib/ppserver
+Restart=on-failure
+RestartSec=3s
+UMask=0027
+# Plain log lines in journald (no ANSI colours).
+Environment=NO_COLOR=1
+
+# Shared box: the live game server has priority. Argon2 (64 MiB per hash) is the
+# heaviest thing this service does.
+CPUWeight=50
+MemoryMax=1G
+TasksMax=256
+
+# Sandboxing. The only writable path is the mail log (MAILER=file).
+ReadWritePaths=/var/log/ppserver
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

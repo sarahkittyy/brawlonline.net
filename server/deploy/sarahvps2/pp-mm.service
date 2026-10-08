@@ -1,0 +1,54 @@
+# Brawl Online matchmaking server on sarahvps2: ENet over UDP 0.0.0.0:43113 (public).
+# Installed to /etc/systemd/system/. Binaries: /opt/ppserver/bin -> releases/<name>.
+# Config: /etc/ppserver/mm.env (root:ppserver 0640). See ../PROD.md.
+[Unit]
+Description=Brawl Online matchmaking server
+After=network-online.target postgresql.service
+Wants=network-online.target postgresql.service
+StartLimitIntervalSec=120
+StartLimitBurst=10
+
+[Service]
+Type=simple
+User=ppserver
+Group=ppserver
+ExecStart=/opt/ppserver/bin/mm
+EnvironmentFile=/etc/ppserver/mm.env
+WorkingDirectory=/var/lib/ppserver
+Restart=on-failure
+RestartSec=2s
+UMask=0027
+# Plain log lines in journald (no ANSI colours).
+Environment=NO_COLOR=1
+
+MemoryMax=512M
+TasksMax=256
+
+# Sandboxing: mm writes nothing to disk.
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+ProtectProc=invisible
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+RemoveIPC=yes
+SystemCallArchitectures=native
+SystemCallFilter=@system-service
+SystemCallErrorNumber=EPERM
+CapabilityBoundingSet=
+AmbientCapabilities=
+
+[Install]
+WantedBy=multi-user.target

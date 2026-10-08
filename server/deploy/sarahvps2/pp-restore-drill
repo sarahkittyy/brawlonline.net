@@ -1,0 +1,20 @@
+#!/bin/bash
+# pp-restore-drill: restores the newest dump in /var/lib/ppserver/backups into a scratch
+# database, compares it with the live one, then drops it. Installed to /usr/local/sbin.
+# Usage: sudo pp-restore-drill
+set -euo pipefail
+D=$(ls -1t /var/lib/ppserver/backups/pp-*.dump | head -1)
+echo "drill dump: $D"
+runuser -u postgres -- dropdb --if-exists pp_restore_drill
+runuser -u postgres -- createdb pp_restore_drill
+runuser -u postgres -- pg_restore --no-owner --no-acl --exit-on-error -d pp_restore_drill "$D"
+Q="SELECT format('%s users, %s audit rows, %s invites, %s matches, migrations [%s], %s tables',
+  (SELECT count(*) FROM users), (SELECT count(*) FROM audit_log), (SELECT count(*) FROM invites),
+  (SELECT count(*) FROM mm_matches), (SELECT string_agg(version::text, ',') FROM _sqlx_migrations),
+  (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'))"
+for db in pp pp_restore_drill; do
+  echo "$db: $(runuser -u postgres -- psql -d $db -Atc "$Q")"
+done
+runuser -u postgres -- psql -d pp_restore_drill -Atc "SELECT 'last audit row in restore: ' || action || ' ' || coalesce(target, '') FROM audit_log ORDER BY id DESC LIMIT 1"
+runuser -u postgres -- dropdb pp_restore_drill
+echo "drill ok; pp_restore_drill dropped"

@@ -1,0 +1,70 @@
+#!/bin/bash
+# pp-release: install and switch Brawl Online server releases on sarahvps2.
+# Installed to /usr/local/sbin/pp-release.
+#
+#   sudo pp-release install DIR NAME   copy accounts, mm, admin (and mmclient) from DIR
+#                                      into /opt/ppserver/releases/NAME
+#   sudo pp-release activate NAME      back up the database, point /opt/ppserver/bin at
+#                                      NAME, restart pp-accounts and pp-mm, health-check
+#   pp-release list                    releases; the active one is marked with *
+set -euo pipefail
+ROOT=/opt/ppserver
+REL=$ROOT/releases
+
+health() {
+  for _ in $(seq 1 30); do
+    if curl -fsS --max-time 2 http://127.0.0.1:43180/healthz >/dev/null 2>&1; then
+      systemctl is-active --quiet pp-mm && return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+case "${1:-}" in
+install)
+  src=${2:?DIR}
+  name=${3:?NAME}
+  dest=$REL/$name
+  if [ -e "$dest" ]; then echo "$dest already exists" >&2; exit 1; fi
+  for b in accounts mm admin; do
+    if [ ! -x "$src/$b" ]; then echo "missing $src/$b" >&2; exit 1; fi
+  done
+  install -d -m 0755 "$dest"
+  for b in accounts mm admin mmclient; do
+    if [ -f "$src/$b" ]; then install -m 0755 "$src/$b" "$dest/$b"; fi
+  done
+  echo "installed $dest"
+  ;;
+activate)
+  name=${2:?NAME}
+  if [ ! -x "$REL/$name/accounts" ]; then echo "no release $name" >&2; exit 1; fi
+  prev=$(readlink "$ROOT/bin" 2>/dev/null || echo none)
+  if [ -e /etc/systemd/system/pp-backup.service ] && systemctl is-active --quiet postgresql; then
+    echo "backing up the database first"
+    systemctl start pp-backup.service
+  fi
+  ln -sfn "releases/$name" "$ROOT/bin.new"
+  mv -T "$ROOT/bin.new" "$ROOT/bin"
+  systemctl restart pp-accounts pp-mm
+  if health; then
+    echo "active: $name (previous: $prev)"
+  else
+    echo "HEALTH CHECK FAILED for $name (previous: $prev)" >&2
+    echo "Logs: journalctl -u pp-accounts -u pp-mm -n 50" >&2
+    echo "Roll back: sudo pp-release activate ${prev#releases/}" >&2
+    exit 1
+  fi
+  ;;
+list)
+  cur=$(readlink "$ROOT/bin" 2>/dev/null || true)
+  for d in "$REL"/*/; do
+    n=$(basename "$d")
+    if [ "releases/$n" = "$cur" ]; then echo "* $n"; else echo "  $n"; fi
+  done
+  ;;
+*)
+  sed -n '4,10p' "$0"
+  exit 2
+  ;;
+esac
