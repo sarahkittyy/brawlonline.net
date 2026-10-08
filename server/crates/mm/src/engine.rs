@@ -53,6 +53,7 @@ use common::ratelimit::{RateLimiter, Window};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::messages as msg;
 use crate::region::RegionMap;
 use crate::ruleset::Rulesets;
 
@@ -248,13 +249,6 @@ fn uid_hash(uid: Uuid) -> [u8; 32] {
     Sha256::digest(uid.as_bytes()).into()
 }
 
-/// "10 minutes", "1 minute", "20 seconds": the ticket TTL in expiry errors.
-fn wait_text(d: Duration) -> String {
-    let secs = d.as_secs().max(1);
-    let (n, unit) = if secs >= 60 { (secs / 60, "minute") } else { (secs, "second") };
-    format!("{n} {unit}{}", if n == 1 { "" } else { "s" })
-}
-
 /// Parses `major.minor.patch[-suffix]` into a comparable tuple. Missing parts are 0.
 pub fn parse_version(v: &str) -> (u64, u64, u64) {
     let core = v.trim().trim_start_matches('v').split(['-', '+']).next().unwrap_or("");
@@ -347,7 +341,7 @@ impl Engine {
         if from_key >= self.cfg.max_conns_per_ip {
             tracing::warn!(conn, %addr, from_key, "connection refused: too many from this address");
             // The game reads this as the answer to the ticket it sends next.
-            Self::send(out, conn, &CreateTicketResp::error("Too many connections from your network. Try again later."));
+            Self::send(out, conn, &CreateTicketResp::error(msg::TOO_MANY_CONNECTIONS));
             out.push(Output::Close { conn });
             return;
         }
@@ -360,23 +354,23 @@ impl Engine {
             State::Done => return,
             // One account lookup in flight per connection: the game never sends a second
             // ticket before the answer to its first.
-            State::Validating(_) => return self.refuse(out, conn, "Invalid matchmaking request"),
+            State::Validating(_) => return self.refuse(out, conn, msg::INVALID_REQUEST),
             State::Idle | State::Waiting(_) => {}
         }
         if data.len() > MAX_PACKET {
-            self.refuse(out, conn, "Invalid matchmaking request");
+            self.refuse(out, conn, msg::INVALID_REQUEST);
             return;
         }
         let ticket = match parse_client_message(data) {
             Ok(ClientMessage::CreateTicket(t)) => t,
             Ok(ClientMessage::Unknown(kind)) => {
                 tracing::warn!(conn, %kind, "unknown message type");
-                self.refuse(out, conn, "Unknown matchmaking request. Your game may need an update.");
+                self.refuse(out, conn, msg::UNKNOWN_REQUEST);
                 return;
             }
             Err(e) => {
                 tracing::warn!(conn, "malformed packet: {e}");
-                self.refuse(out, conn, "Invalid matchmaking request");
+                self.refuse(out, conn, msg::INVALID_REQUEST);
                 return;
             }
         };
@@ -387,7 +381,7 @@ impl Engine {
 
     fn on_create_ticket(&mut self, now: Instant, conn: ConnId, t: CreateTicket, out: &mut Vec<Output>) {
         let Some(mode) = Mode::from_u8(t.search.mode) else {
-            return self.refuse(out, conn, "Unknown game mode");
+            return self.refuse(out, conn, msg::UNKNOWN_MODE);
         };
         let unsupported = match mode {
             Mode::Direct | Mode::Unranked => None,
@@ -396,29 +390,25 @@ impl Engine {
             Mode::Party => Some("Party"),
         };
         if let Some(name) = unsupported {
-            return self.refuse(
-                out,
-                conn,
-                format!("{name} is not supported yet. Only Direct and Unranked work for now."),
-            );
+            return self.refuse(out, conn, msg::not_available(name));
         }
         if let Some(min) = &self.cfg.min_app_version {
             if parse_version(&t.app_version) < parse_version(min) {
                 let latest = self.cfg.latest_version.clone().unwrap_or_else(|| min.clone());
-                return self.refuse(out, conn, format!("Your game is out of date. Update to {latest} to play online."));
+                return self.refuse(out, conn, msg::update_to(&latest));
             }
         }
         let Ok(uid) = Uuid::parse_str(t.user.uid.trim()) else {
-            return self.refuse(out, conn, "Not logged in. Log in again in the launcher.");
+            return self.refuse(out, conn, msg::NOT_LOGGED_IN);
         };
         if t.user.play_key.is_empty() || t.user.play_key.len() > 128 {
-            return self.refuse(out, conn, "Not logged in. Log in again in the launcher.");
+            return self.refuse(out, conn, msg::NOT_LOGGED_IN);
         }
         // Queue modes send an empty code; whatever they send is ignored.
         let target = match mode {
             Mode::Direct => match decode_search_code(&t.search.connect_code) {
                 Ok(c) => Some(c),
-                Err(_) => return self.refuse(out, conn, "Invalid connect code"),
+                Err(_) => return self.refuse(out, conn, msg::INVALID_CODE),
             },
             _ => None,
         };
@@ -426,10 +416,10 @@ impl Engine {
         // The game cannot use an IPv6 peer address (it splits `ipAddress` on ':'), and an empty
         // one crashes older clients, so such tickets are refused before they can be matched.
         if to_v4(addr).is_none() {
-            return self.refuse(out, conn, "Online play needs IPv4. Your game reached the server over IPv6.");
+            return self.refuse(out, conn, msg::NEEDS_IPV4);
         }
         if self.ip_limiter.check(&ip_key(addr.ip()), now).is_err() {
-            return self.refuse(out, conn, "Too many searches from your network. Wait a few seconds and try again.");
+            return self.refuse(out, conn, msg::TOO_MANY_SEARCHES);
         }
         let seq = self.next_seq;
         self.next_seq += 1;
@@ -464,29 +454,29 @@ impl Engine {
         let p = p.clone();
         let user = match result {
             FetchResult::Found(u) => u,
-            FetchResult::NotFound => return self.refuse(out, conn, "Account not found. Log in again in the launcher."),
+            FetchResult::NotFound => return self.refuse(out, conn, msg::ACCOUNT_NOT_FOUND),
             FetchResult::Error(e) => {
                 tracing::error!("account lookup failed: {e}");
-                return self.refuse(out, conn, "Matchmaking is temporarily unavailable. Try again later.");
+                return self.refuse(out, conn, msg::UNAVAILABLE);
             }
         };
         if !self.secret.verify(user.uid, user.play_key_version, &p.play_key) {
-            return self.refuse(out, conn, "Invalid play key. Log in again in the launcher.");
+            return self.refuse(out, conn, msg::LOGIN_EXPIRED);
         }
         // Only after the play key: otherwise anyone knowing a uid (opponents see it) could keep
         // that account from searching.
         if self.ticket_limiter.check(&user.uid, now).is_err() {
-            return self.refuse(out, conn, "Searching too often. Wait a few seconds and try again.");
+            return self.refuse(out, conn, msg::SEARCHING_TOO_OFTEN);
         }
         if user.is_banned(wall) {
-            return self.refuse(out, conn, "This account is banned from online play.");
+            return self.refuse(out, conn, msg::BANNED);
         }
         let Some(code) = user.connect_code.clone() else {
-            return self.refuse(out, conn, "Pick a connect code in the launcher first.");
+            return self.refuse(out, conn, msg::NO_CONNECT_CODE);
         };
         let target = p.target.as_ref().map(|t| t.to_string()).unwrap_or_default();
         if p.mode == Mode::Direct && target == code {
-            return self.refuse(out, conn, "That is your own connect code. Enter your opponent's code.");
+            return self.refuse(out, conn, msg::OWN_CODE);
         }
         // One active ticket per account: a newer search replaces an older one.
         let older: Vec<ConnId> = self
@@ -496,7 +486,7 @@ impl Engine {
             .map(|(id, _)| *id)
             .collect();
         for old in older {
-            self.fail_ticket(out, old, "This search was replaced by a newer one from the same account.", None);
+            self.fail_ticket(out, old, msg::REPLACED, None);
         }
         Self::send(out, conn, &CreateTicketResp::ok());
         let Some(c) = self.conns.get_mut(&conn) else { return };
@@ -540,19 +530,14 @@ impl Engine {
             }
         }
         for id in idle {
-            self.refuse(out, id, "No matchmaking request received. Try again.");
+            self.refuse(out, id, msg::NO_REQUEST);
         }
         for id in auth_late {
-            self.refuse(out, id, "Matchmaking is temporarily unavailable. Try again later.");
+            self.refuse(out, id, msg::UNAVAILABLE);
         }
-        let ttl = wait_text(self.cfg.ticket_ttl);
         for (id, mode, target) in expired {
-            let msg = if mode == Mode::Direct {
-                format!("Search timed out: {target} did not connect within {ttl}.")
-            } else {
-                format!("Search timed out: no opponent found within {ttl}.")
-            };
-            self.fail_ticket(out, id, msg, None);
+            let text = if mode == Mode::Direct { msg::did_not_connect(&target) } else { msg::NO_OPPONENT.to_string() };
+            self.fail_ticket(out, id, text, None);
         }
         // Retry pairs that were held back by the re-pair backoff, and Unranked tickets whose
         // region search has widened.
@@ -580,22 +565,9 @@ impl Engine {
                 if failures >= self.cfg.max_connect_failures {
                     self.history.remove(&key);
                     let n = failures;
-                    self.fail_ticket(
-                        out,
-                        conn,
-                        format!(
-                            "Could not connect to {their_code} after {n} tries. A firewall or strict NAT may block it."
-                        ),
-                        None,
-                    );
-                    self.fail_ticket(
-                        out,
-                        other,
-                        format!(
-                            "Could not connect to {my_code} after {n} tries. A firewall or strict NAT may block it."
-                        ),
-                        None,
-                    );
+                    tracing::info!(%my_code, %their_code, tries = n, "giving up on a pair that cannot connect");
+                    self.fail_ticket(out, conn, msg::cannot_connect(&their_code), None);
+                    self.fail_ticket(out, other, msg::cannot_connect(&my_code), None);
                     return;
                 }
                 let not_before = h.last_match + P2P_CONNECT_WINDOW + self.cfg.repair_backoff * failures;
@@ -932,7 +904,7 @@ mod tests {
             let msgs = sent(&out, conn);
             assert_eq!(msgs.len(), 1);
             assert_eq!(msgs[0]["type"], "get-ticket-resp");
-            assert_eq!(msgs[0]["error"], format!("Search timed out: {target} did not connect within 30 seconds."));
+            assert_eq!(msgs[0]["error"], msg::did_not_connect(target));
             assert!(disconnected(&out, conn));
         }
         assert_eq!(h.e.waiting_count(), 0);
@@ -947,7 +919,7 @@ mod tests {
         let mut v = h.ticket_json(&a, "BB#1", 2);
         v["user"]["playKey"] = json!("not-the-key");
         let out = h.raw(1, v.to_string().as_bytes());
-        assert_eq!(sent(&out, 1)[0]["error"], "Invalid play key. Log in again in the launcher.");
+        assert_eq!(sent(&out, 1)[0]["error"], msg::LOGIN_EXPIRED);
         assert!(disconnected(&out, 1));
 
         // Rotated key (password change): the old key stops working.
@@ -958,18 +930,18 @@ mod tests {
         h.now += Duration::from_secs(3);
         let v = h.ticket_json(&a, "BB#1", 2);
         let out = h.raw(2, v.to_string().as_bytes());
-        assert_eq!(sent(&out, 2)[0]["error"], "Invalid play key. Log in again in the launcher.");
+        assert_eq!(sent(&out, 2)[0]["error"], msg::LOGIN_EXPIRED);
 
         let stranger = user("ZZ#9", "z");
         h.connect(3, 3);
         let out = h.ticket(3, &stranger, "AA#1");
-        assert_eq!(sent(&out, 3)[0]["error"], "Account not found. Log in again in the launcher.");
+        assert_eq!(sent(&out, 3)[0]["error"], msg::ACCOUNT_NOT_FOUND);
 
         h.connect(4, 4);
         let mut v = h.ticket_json(&a, "BB#1", 2);
         v["user"]["uid"] = json!("not-a-uuid");
         let out = h.raw(4, v.to_string().as_bytes());
-        assert_eq!(sent(&out, 4)[0]["error"], "Not logged in. Log in again in the launcher.");
+        assert_eq!(sent(&out, 4)[0]["error"], msg::NOT_LOGGED_IN);
     }
 
     #[test]
@@ -984,12 +956,12 @@ mod tests {
             h.add(u);
         }
         h.connect(1, 1);
-        assert_eq!(sent(&h.ticket(1, &banned, "AA#1"), 1)[0]["error"], "This account is banned from online play.");
+        assert_eq!(sent(&h.ticket(1, &banned, "AA#1"), 1)[0]["error"], msg::BANNED);
         h.connect(2, 2);
-        assert_eq!(sent(&h.ticket(2, &nocode, "AA#1"), 2)[0]["error"], "Pick a connect code in the launcher first.");
+        assert_eq!(sent(&h.ticket(2, &nocode, "AA#1"), 2)[0]["error"], msg::NO_CONNECT_CODE);
         h.connect(3, 3);
         let err = &sent(&h.ticket(3, &me, "me#1"), 3)[0]["error"];
-        assert_eq!(err, "That is your own connect code. Enter your opponent's code.");
+        assert_eq!(err, msg::OWN_CODE);
     }
 
     #[test]
@@ -1004,10 +976,7 @@ mod tests {
             let out = h.raw(conn, v.to_string().as_bytes());
             let msgs = sent(&out, conn);
             assert_eq!(msgs[0]["type"], "create-ticket-resp");
-            assert_eq!(
-                msgs[0]["error"],
-                format!("{name} is not supported yet. Only Direct and Unranked work for now.")
-            );
+            assert_eq!(msgs[0]["error"], msg::not_available(name));
             assert!(disconnected(&out, conn));
         }
         h.connect(20, 20);
@@ -1078,7 +1047,7 @@ mod tests {
         h.ticket(1, &a, "BB#1");
         h.now += Duration::from_secs(3);
         let out = h.ticket(2, &a, "CC#1");
-        assert_eq!(sent(&out, 1)[0]["error"], "This search was replaced by a newer one from the same account.");
+        assert_eq!(sent(&out, 1)[0]["error"], msg::REPLACED);
         assert!(disconnected(&out, 1));
         assert_eq!(sent(&out, 2), vec![json!({"type": "create-ticket-resp"})]);
     }
@@ -1092,7 +1061,7 @@ mod tests {
         h.connect(2, 2);
         h.ticket(1, &a, "BB#1");
         let out = h.ticket(2, &a, "BB#1");
-        assert_eq!(sent(&out, 2)[0]["error"], "Searching too often. Wait a few seconds and try again.");
+        assert_eq!(sent(&out, 2)[0]["error"], msg::SEARCHING_TOO_OFTEN);
     }
 
     /// Anyone can send a ticket with someone else's uid (opponents see it, `/user/{uid}` is
@@ -1108,7 +1077,7 @@ mod tests {
             let mut v = h.ticket_json(&victim, "BB#1", 2);
             v["user"]["playKey"] = json!("x");
             let out = h.raw(conn, v.to_string().as_bytes());
-            assert_eq!(sent(&out, conn)[0]["error"], "Invalid play key. Log in again in the launcher.");
+            assert_eq!(sent(&out, conn)[0]["error"], msg::LOGIN_EXPIRED);
         }
         h.connect(10, 1);
         let out = h.ticket(10, &victim, "BB#1");
@@ -1130,13 +1099,13 @@ mod tests {
             let v = h.ticket_json(&user("RA#1", "r"), "BB#1", 2);
             let out = h.raw(conn, v.to_string().as_bytes());
             assert_eq!(fetches(&out), 1);
-            assert_eq!(sent(&out, conn)[0]["error"], "Account not found. Log in again in the launcher.");
+            assert_eq!(sent(&out, conn)[0]["error"], msg::ACCOUNT_NOT_FOUND);
         }
         h.connect_from(4, "198.51.100.7:40004");
         let v = h.ticket_json(&user("RA#1", "r"), "BB#1", 2);
         let out = h.raw(4, v.to_string().as_bytes());
         assert_eq!(fetches(&out), 0);
-        assert_eq!(sent(&out, 4)[0]["error"], "Too many searches from your network. Wait a few seconds and try again.");
+        assert_eq!(sent(&out, 4)[0]["error"], msg::TOO_MANY_SEARCHES);
         assert!(disconnected(&out, 4));
         // Another address is not affected; the limit frees up after its window.
         h.connect_from(5, "198.51.100.8:40000");
@@ -1163,7 +1132,7 @@ mod tests {
         let Some(Output::FetchUser { seq, .. }) = out.last().cloned() else { panic!("{out:?}") };
         let out = h.input(Input::Packet { conn: 1, data: v.to_string().into_bytes() });
         assert!(!out.iter().any(|o| matches!(o, Output::FetchUser { .. })));
-        assert_eq!(sent(&out, 1)[0]["error"], "Invalid matchmaking request");
+        assert_eq!(sent(&out, 1)[0]["error"], msg::INVALID_REQUEST);
         assert!(disconnected(&out, 1));
         assert!(h.input(Input::UserFetched { conn: 1, seq, result: FetchResult::Found(a) }).is_empty());
         assert_eq!(h.e.waiting_count(), 0);
@@ -1179,10 +1148,7 @@ mod tests {
         h.ticket(2, &a, "BB#1");
         assert!(h.advance(Duration::from_secs(9)).is_empty());
         let out = h.advance(Duration::from_secs(1));
-        assert_eq!(
-            sent(&out, 1),
-            vec![json!({"type": "create-ticket-resp", "error": "No matchmaking request received. Try again."})]
-        );
+        assert_eq!(sent(&out, 1), vec![json!({"type": "create-ticket-resp", "error": msg::NO_REQUEST})]);
         assert!(disconnected(&out, 1));
         // The searching connection is not idle.
         assert!(sent(&out, 2).is_empty() && !disconnected(&out, 2));
@@ -1199,7 +1165,7 @@ mod tests {
         }
         let addr: SocketAddr = "198.51.100.7:40004".parse().unwrap();
         let out = h.input(Input::Connected { conn: 4, addr });
-        assert_eq!(sent(&out, 4)[0]["error"], "Too many connections from your network. Try again later.");
+        assert_eq!(sent(&out, 4)[0]["error"], msg::TOO_MANY_CONNECTIONS);
         assert!(out.contains(&Output::Close { conn: 4 }));
         assert_eq!(h.e.connection_count(), 3);
         // The refused connection is not tracked: its packets and disconnect are ignored.
@@ -1235,7 +1201,7 @@ mod tests {
         let v = h.ticket_json(&a, "BB#1", 2);
         let out = h.raw(1, v.to_string().as_bytes());
         assert!(!out.iter().any(|o| matches!(o, Output::FetchUser { .. })));
-        assert_eq!(sent(&out, 1)[0]["error"], "Online play needs IPv4. Your game reached the server over IPv6.");
+        assert_eq!(sent(&out, 1)[0]["error"], msg::NEEDS_IPV4);
         assert!(disconnected(&out, 1));
 
         h.now += Duration::from_secs(3);
@@ -1262,7 +1228,7 @@ mod tests {
             _ => panic!(),
         };
         let out = h.advance(Duration::from_secs(4));
-        assert_eq!(sent(&out, 1)[0]["error"], "Matchmaking is temporarily unavailable. Try again later.");
+        assert_eq!(sent(&out, 1)[0]["error"], msg::UNAVAILABLE);
         // A late answer is ignored.
         assert!(h.input(Input::UserFetched { conn: 1, seq, result: FetchResult::Found(a) }).is_empty());
         // A database error is reported the same way.
@@ -1275,7 +1241,7 @@ mod tests {
             _ => panic!(),
         };
         let out = h.input(Input::UserFetched { conn: 2, seq, result: FetchResult::Error("down".into()) });
-        assert_eq!(sent(&out, 2)[0]["error"], "Matchmaking is temporarily unavailable. Try again later.");
+        assert_eq!(sent(&out, 2)[0]["error"], msg::UNAVAILABLE);
     }
 
     #[test]
@@ -1289,7 +1255,7 @@ mod tests {
         h.add(&a);
         h.connect(1, 1);
         let out = h.ticket(1, &a, "BB#1"); // sends 3.4.0
-        assert_eq!(sent(&out, 1)[0]["error"], "Your game is out of date. Update to 3.5.2 to play online.");
+        assert_eq!(sent(&out, 1)[0]["error"], msg::update_to("3.5.2"));
         assert!(parse_version("3.5.0-beta.1") >= parse_version("3.5.0"));
         assert!(parse_version("v10.0") > parse_version("9.9.9"));
         assert_eq!(parse_version("garbage"), (0, 0, 0));
@@ -1351,10 +1317,8 @@ mod tests {
                 _ => None,
             })
             .collect();
-        assert!(errors
-            .contains(&"Could not connect to BB#1 after 3 tries. A firewall or strict NAT may block it.".to_string()));
-        assert!(errors
-            .contains(&"Could not connect to AA#1 after 3 tries. A firewall or strict NAT may block it.".to_string()));
+        assert!(errors.contains(&msg::cannot_connect("BB#1")));
+        assert!(errors.contains(&msg::cannot_connect("AA#1")));
         assert_eq!(h.e.waiting_count(), 0);
 
         // Searching again later starts fresh.
@@ -1493,10 +1457,7 @@ mod tests {
         let msgs = sent(&out, 1);
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0]["type"], "get-ticket-resp");
-        assert_eq!(msgs[0]["error"], "Search timed out: no opponent found within 30 seconds.");
-        assert_eq!(wait_text(Duration::from_secs(600)), "10 minutes");
-        assert_eq!(wait_text(Duration::from_secs(60)), "1 minute");
-        assert_eq!(wait_text(Duration::from_secs(1)), "1 second");
+        assert_eq!(msgs[0]["error"], msg::NO_OPPONENT);
         assert!(disconnected(&out, 1));
         assert_eq!(h.e.waiting_count(), 0);
     }
@@ -1515,7 +1476,7 @@ mod tests {
         // A second search from the same account replaces the first, and is not paired with it.
         h.now += Duration::from_secs(3);
         let out = h.unranked(3, &u[1]);
-        assert_eq!(sent(&out, 2)[0]["error"], "This search was replaced by a newer one from the same account.");
+        assert_eq!(sent(&out, 2)[0]["error"], msg::REPLACED);
         assert!(matches(&out).is_empty());
         assert_eq!(h.e.waiting_count(), 1);
         let m = matches(&h.unranked(4, &u[2]));
