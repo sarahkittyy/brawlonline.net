@@ -7,10 +7,10 @@
 # and its matchmaking appVersion (.github/scripts/stamp-version.sh).
 #
 # Runners:
-#   - Linux builds: the labels in the config job (one line; a repository variable
-#     CLIENT_LINUX_RUNNER overrides it, e.g. ["self-hosted","linux","x64","unraid","brawlonline"]).
-#     sarahvps2 is the production box: builds there run at nice 19 with ccache and incremental
-#     build trees in ~/ci-cache.
+#   - Linux builds (plugin, Dolphin, launcher tests, AppImage): the Unraid runner
+#     (unraid-brawlonline, docs/unraid-runner.md), caches in $CI_CACHE (/cache there). The optional
+#     repository variable CLIENT_LINUX_RUNNER (a JSON list of labels) overrides it; the default is
+#     in the plugin and linux jobs below. sarahvps2 (production) only publishes.
 #   - Windows: GitHub-hosted (minutes are limited on a private repository: paths below, caches).
 #   - Publishing: always sarahvps2 (pp-release client). Builds from other machines arrive as
 #     Actions artifacts (1-day retention, deleted after publishing).
@@ -44,20 +44,10 @@ env:
   NODE_VERSION: "24"
 
 jobs:
-  config:
-    runs-on: [self-hosted, linux, x64, sarahvps2, brawlonline]
-    timeout-minutes: 5
-    outputs:
-      # The runner for the Linux client builds. Switch to the Unraid runner here (or with the
-      # repository variable CLIENT_LINUX_RUNNER): ["self-hosted","linux","x64","unraid","brawlonline"]
-      linux-runner: ${{ vars.CLIENT_LINUX_RUNNER || '["self-hosted","linux","x64","sarahvps2","brawlonline"]' }}
-    steps:
-      - run: echo "version $VERSION"
-
   plugin:
     # The game plugin (PPOnline.rel) is platform independent: built once, on Linux.
-    needs: config
-    runs-on: ${{ fromJSON(needs.config.outputs.linux-runner) }}
+    # Linux client runner (same default as the linux job):
+    runs-on: ${{ fromJSON(vars.CLIENT_LINUX_RUNNER || '["self-hosted","linux","x64","unraid","brawlonline"]') }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
@@ -68,7 +58,7 @@ jobs:
         working-directory: client
         run: |
           git submodule update --init --recursive --depth 1 -- game-code
-          cache="$HOME/ci-cache"; mkdir -p "$cache/toolchains"
+          cache="${CI_CACHE:-$HOME/ci-cache}"; mkdir -p "$cache/toolchains"
           # setup_toolchain.py installs into <repo>/toolchains; keep the toolchain between runs.
           ln -sfn "$cache/toolchains" toolchains
           python3 tools/gamecode/setup_toolchain.py
@@ -81,11 +71,11 @@ jobs:
           if-no-files-found: error
 
   linux:
-    needs: [config, plugin]
-    runs-on: ${{ fromJSON(needs.config.outputs.linux-runner) }}
+    needs: plugin
+    # Linux client runner (same default as the plugin job):
+    runs-on: ${{ fromJSON(vars.CLIENT_LINUX_RUNNER || '["self-hosted","linux","x64","unraid","brawlonline"]') }}
     timeout-minutes: 240
     env:
-      JOBS: "3"
       NODE_OPTIONS: --max-old-space-size=4096
       USE_HARD_LINKS: "false"
     steps:
