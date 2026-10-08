@@ -12,7 +12,13 @@ for app in "$dir"/*.app; do
   if [ -d "$app" ]; then res="$app/Contents/Resources"; fi
 done
 fail=0
-err() { echo "check-package: $*" >&2; fail=1; }
+# In GitHub Actions the errors also become annotations, which anyone can read (step logs need a
+# signed-in user).
+err() {
+  echo "check-package: $*" >&2
+  if [ -n "${GITHUB_ACTIONS:-}" ]; then echo "::error title=check-package::$(echo "$*" | head -n 1)"; fi
+  fail=1
+}
 
 for f in LICENSE NOTICE plugins/PPOnline.rel plugins/PPOnline.json dolphin/dolphin.json app.asar app-update.yml; do
   [ -e "$res/$f" ] || err "missing resources/$f"

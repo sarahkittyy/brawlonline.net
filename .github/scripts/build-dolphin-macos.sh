@@ -85,6 +85,8 @@ rm -rf "$app/Contents/MacOS/platforms" "$app/Contents/MacOS/styles"
 # ---- Sign (ad-hoc) ------------------------------------------------------------------------
 # Apple silicon refuses unsigned code. Dolphin's own script signs the dylibs and frameworks, then
 # the bundle; dolphin-tool, a second executable in Contents/MacOS, is signed first by hand.
+# No docs ship (dolphin-manifest.sh deletes them too, but after signing that would break the seal).
+find "$app" -type f \( -iname '*.md' -o -iname '*.markdown' \) -print -delete
 codesign --force --sign - "$app/Contents/MacOS/dolphin-tool"
 "$src/Tools/mac-codesign.sh" -e "$src/Source/Core/DolphinQt/DolphinEmu.entitlements" - "$app"
 codesign --verify --deep --strict "$app"

@@ -32,6 +32,18 @@ npx electron-builder build --mac dir "--$arch" --publish never \
 app="release/build/$dir_name/$product.app"
 [ -d "$app" ] || { echo "electron-builder made no $app" >&2; exit 1; }
 
+# The updater's config: electron-builder doesn't write it for the dir target. Same content as the
+# Linux and Windows packages get (the launcher also sets the feed URL itself).
+yml="$app/Contents/Resources/app-update.yml"
+if [ ! -f "$yml" ]; then
+  name="$(node -p 'require("./release/app/package.json").name')"
+  cat >"$yml" <<EOF
+provider: generic
+url: https://brawlonline.net/updates/launcher
+updaterCacheDirName: $name-updater
+EOF
+fi
+
 # Ad-hoc signature over the whole app. Dolphin.app inside Resources is already signed with its own
 # entitlements; --deep would re-sign it without them, so the launcher's nested code is signed
 # explicitly (frameworks and helper apps), then the app itself.
