@@ -92,6 +92,77 @@ impl Mailer for ResendMailer {
     }
 }
 
+/// Brevo's transactional email API
+/// (<https://developers.brevo.com/reference/sendtransacemail>): `POST /v3/smtp/email`
+/// with an `api-key` header (an API v3 key, `xkeysib-...`). Brevo restricts keys
+/// to authorised IPs, so it only works from the production box.
+pub struct BrevoMailer {
+    client: reqwest::Client,
+    api_url: String,
+    api_key: String,
+    sender: BrevoAddress,
+}
+
+#[derive(Serialize, Clone)]
+struct BrevoAddress {
+    #[serde(skip_serializing_if = "Option::is_none")]
+    name: Option<String>,
+    email: String,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BrevoRequest<'a> {
+    sender: &'a BrevoAddress,
+    to: [BrevoAddress; 1],
+    subject: &'a str,
+    html_content: &'a str,
+    text_content: &'a str,
+}
+
+impl BrevoMailer {
+    /// `from` is `MAIL_FROM` (`Name <address>` or `address`).
+    pub fn new(api_url: &str, api_key: &str, from: &str) -> anyhow::Result<Self> {
+        let mb: Mailbox = from.parse().map_err(|e| {
+            anyhow::anyhow!("MAIL_FROM {from:?} is not a valid sender (`Name <address>` or `address`): {e}")
+        })?;
+        Ok(BrevoMailer {
+            client: reqwest::Client::builder().timeout(Duration::from_secs(15)).build().context("http client")?,
+            api_url: api_url.into(),
+            api_key: api_key.into(),
+            sender: BrevoAddress { name: mb.name.filter(|n| !n.is_empty()), email: mb.email.to_string() },
+        })
+    }
+}
+
+#[async_trait]
+impl Mailer for BrevoMailer {
+    async fn send(&self, email: &Email) -> anyhow::Result<()> {
+        let resp = self
+            .client
+            .post(&self.api_url)
+            .header("api-key", &self.api_key)
+            .header(reqwest::header::ACCEPT, "application/json")
+            .json(&BrevoRequest {
+                sender: &self.sender,
+                to: [BrevoAddress { name: None, email: email.to.clone() }],
+                subject: &email.subject,
+                html_content: &email.html,
+                text_content: &email.text,
+            })
+            .send()
+            .await
+            // reqwest's error text names the URL, never the headers.
+            .map_err(|e| anyhow::anyhow!("brevo {}: {e}", self.api_url))?;
+        let status = resp.status();
+        if !status.is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("brevo {} returned {status}: {}", self.api_url, body.chars().take(300).collect::<String>());
+        }
+        Ok(())
+    }
+}
+
 /// Prints emails (development).
 pub struct StdoutMailer;
 
@@ -294,6 +365,17 @@ pub fn from_config(cfg: &MailConfig) -> anyhow::Result<Arc<dyn Mailer>> {
                 cfg.mail_daily_limit,
             ))
         }
+        MailerKind::Brevo => {
+            let key = cfg
+                .brevo_api_key
+                .as_ref()
+                .filter(|k| !k.is_empty())
+                .ok_or_else(|| anyhow::anyhow!("MAILER=brevo needs BREVO_API_KEY"))?;
+            Arc::new(DailyCapMailer::new(
+                BrevoMailer::new(&cfg.brevo_api_url, key.expose(), &cfg.mail_from)?,
+                cfg.mail_daily_limit,
+            ))
+        }
         MailerKind::Smtp => Arc::new(DailyCapMailer::new(SmtpMailer::new(cfg)?, cfg.mail_daily_limit)),
         MailerKind::Stdout => Arc::new(StdoutMailer),
         MailerKind::File => Arc::new(DailyCapMailer::new(FileMailer::new(&cfg.mail_file), cfg.mail_daily_limit)),
@@ -304,6 +386,7 @@ pub fn from_config(cfg: &MailConfig) -> anyhow::Result<Arc<dyn Mailer>> {
 pub fn describe(cfg: &MailConfig) -> String {
     match cfg.mailer_kind() {
         MailerKind::Resend => format!("resend {}", cfg.resend_api_url),
+        MailerKind::Brevo => format!("brevo {}", cfg.brevo_api_url),
         MailerKind::Smtp => format!(
             "smtp {}:{} tls={:?} auth={}",
             cfg.smtp_host.as_deref().unwrap_or("?"),
@@ -409,6 +492,97 @@ mod tests {
         let m = ResendMailer::new(&format!("http://{addr}/emails"), "k", "f@x.test");
         let err = m.send(&reset_email("a@b.test", "x", "l")).await.unwrap_err();
         assert!(err.to_string().contains("401"));
+    }
+
+    /// A local stand-in for api.brevo.com: records (api-key header, body) and
+    /// answers with `status`.
+    async fn fake_brevo(
+        status: axum::http::StatusCode,
+    ) -> (std::net::SocketAddr, Arc<Mutex<Vec<(Option<String>, serde_json::Value)>>>) {
+        type Seen = Arc<Mutex<Vec<(Option<String>, serde_json::Value)>>>;
+        let seen: Seen = Default::default();
+        let s2 = seen.clone();
+        let app = Router::new().route(
+            "/v3/smtp/email",
+            post(move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
+                let seen = s2.clone();
+                async move {
+                    let key = headers.get("api-key").map(|v| v.to_str().unwrap().to_string());
+                    seen.lock().unwrap().push((key, body));
+                    if status.is_success() {
+                        (status, Json(serde_json::json!({"messageId": "<fake@smtp-relay.mailin.fr>"})))
+                    } else {
+                        (status, Json(serde_json::json!({"code": "unauthorized", "message": "Key not found"})))
+                    }
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (addr, seen)
+    }
+
+    fn brevo_cfg(addr: std::net::SocketAddr) -> MailConfig {
+        let mut c = MailConfig::for_tests();
+        c.mailer = Some(MailerKind::Brevo);
+        c.brevo_api_key = Some(Secret::new("xkeysib-test-key-must-not-leak"));
+        c.brevo_api_url = format!("http://{addr}/v3/smtp/email");
+        c.mail_from = "Brawl Online <noreply@brawlonline.test>".into();
+        c
+    }
+
+    #[tokio::test]
+    async fn brevo_request_shape_against_fake_server() {
+        let (addr, seen) = fake_brevo(axum::http::StatusCode::CREATED).await;
+        let m = from_config(&brevo_cfg(addr)).unwrap();
+        let email = verification_email("a@b.test", "Sarah", "http://x/verify-email?token=abc");
+        m.send(&email).await.unwrap();
+        let seen = seen.lock().unwrap();
+        assert_eq!(seen.len(), 1);
+        assert_eq!(seen[0].0.as_deref(), Some("xkeysib-test-key-must-not-leak"));
+        let body = &seen[0].1;
+        assert_eq!(body["sender"], serde_json::json!({"name": "Brawl Online", "email": "noreply@brawlonline.test"}));
+        assert_eq!(body["to"], serde_json::json!([{"email": "a@b.test"}]));
+        assert_eq!(body["subject"], "Verify your Brawl Online email");
+        assert_eq!(body["textContent"], email.text);
+        assert_eq!(body["htmlContent"], email.html);
+    }
+
+    #[tokio::test]
+    async fn brevo_error_status_is_a_clear_error_without_the_key() {
+        let (addr, _) = fake_brevo(axum::http::StatusCode::UNAUTHORIZED).await;
+        let m = from_config(&brevo_cfg(addr)).unwrap();
+        let err = m.send(&reset_email("a@b.test", "x", "l")).await.unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.starts_with(&format!("brevo http://{addr}/v3/smtp/email returned 401")), "{msg}");
+        assert!(msg.contains("Key not found"), "{msg}");
+        assert!(!msg.contains("xkeysib"), "{msg}");
+        assert!(!describe(&brevo_cfg(addr)).contains("xkeysib"));
+    }
+
+    #[tokio::test]
+    async fn brevo_unreachable_is_an_error_without_the_key() {
+        let mut c = brevo_cfg("127.0.0.1:9".parse().unwrap());
+        c.brevo_api_url = "http://127.0.0.1:9/v3/smtp/email".into();
+        let err = from_config(&c).unwrap().send(&reset_email("a@b.test", "x", "l")).await.unwrap_err();
+        let msg = format!("{err:#}");
+        assert!(msg.starts_with("brevo http://127.0.0.1:9/v3/smtp/email: "), "{msg}");
+        assert!(!msg.contains("xkeysib"), "{msg}");
+    }
+
+    #[test]
+    fn brevo_settings_are_checked_up_front() {
+        let mut c = brevo_cfg("127.0.0.1:9".parse().unwrap());
+        c.brevo_api_key = None;
+        assert!(from_config(&c).err().unwrap().to_string().contains("BREVO_API_KEY"));
+        let mut c = brevo_cfg("127.0.0.1:9".parse().unwrap());
+        c.mail_from = "nope".into();
+        assert!(from_config(&c).err().unwrap().to_string().contains("MAIL_FROM"));
+        // A key alone selects brevo when MAILER is unset.
+        let mut c = brevo_cfg("127.0.0.1:9".parse().unwrap());
+        c.mailer = None;
+        assert_eq!(c.mailer_kind(), MailerKind::Brevo);
     }
 
     #[tokio::test]
@@ -574,6 +748,8 @@ mod tests {
             c.mailer = Some(kind);
             c.resend_api_key = Some(Secret::new("re_must_not_be_used"));
             c.resend_api_url = format!("http://{}/emails", tripwire.addr);
+            c.brevo_api_key = Some(Secret::new("xkeysib-must-not-be-used"));
+            c.brevo_api_url = format!("http://{}/v3/smtp/email", tripwire.addr);
             c.mail_file = path.to_string_lossy().into_owned();
             from_config(&c).unwrap().send(&reset_email("a@b.test", "x", "http://x/?token=t")).await.unwrap();
         }

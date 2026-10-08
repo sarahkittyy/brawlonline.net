@@ -119,7 +119,7 @@ Rules:
 - **Display names**: 1-15 characters of printable ASCII, Hiragana or Katakana, without `\` or `` ` `` (the Slippi launcher rule).
 - **Passwords**: 8-256 characters, Argon2id with m = 64 MiB, t = 3, p = 1.
 - **Rate limits**: per IP and per email on login, sign-up and reset: 5 per minute and 20 per hour. One mm ticket per account per 2 s.
-- **Email**: an SMTP provider (`MAILER=smtp`) or Resend's HTTP API (`MAILER=resend`) in production, with a daily cap per process (`MAIL_DAILY_LIMIT`, default 90). A `Mailer` trait has SMTP, Resend, stdout, file and in-memory implementations, and `mail::from_config` is the one place that picks one: `accounts` and the admin CLI's `reset-password --send-email` build their mailer from the same settings. Tests only use the in-memory and file mailers, plus the SMTP client against a local fake server (`crates/fakesmtp`) and the Resend client against a local fake HTTP server.
+- **Email**: an SMTP provider (`MAILER=smtp`), Brevo's HTTP API (`MAILER=brevo`) or Resend's (`MAILER=resend`) in production, with a daily cap per process (`MAIL_DAILY_LIMIT`, default 90). A `Mailer` trait has SMTP, Brevo, Resend, stdout, file and in-memory implementations, and `mail::from_config` is the one place that picks one: `accounts` and the admin CLI's `reset-password --send-email` build their mailer from the same settings. Tests only use the in-memory and file mailers, plus the SMTP client against a local fake server (`crates/fakesmtp`) and the Brevo and Resend clients against local fake HTTP servers.
 
 ## Email providers
 
@@ -127,7 +127,7 @@ Rules:
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `MAILER` | `stdout` (`resend` when `RESEND_API_KEY` is set) | `smtp`, `resend`, `stdout` or `file` |
+| `MAILER` | `stdout` (`resend` when `RESEND_API_KEY` is set, else `brevo` when `BREVO_API_KEY` is set) | `smtp`, `brevo`, `resend`, `stdout` or `file` |
 | `MAIL_FROM` | `Brawl Online <noreply@brawlonline.net>` | Sender. Its domain must be verified at the provider |
 | `SMTP_HOST` | (required) | The provider's SMTP host |
 | `SMTP_PORT` | 587 (465 with `SMTP_TLS=tls`) | |
@@ -137,7 +137,9 @@ Rules:
 
 Configuration mistakes (no host, username without password, invalid `MAIL_FROM`, `none` with a remote host) stop `accounts` at start and `admin --send-email` before it issues a token. A failed send is logged by accounts as one `ERROR` line naming the server and the provider's answer, for example `sending verification email failed: smtp smtp-relay.brevo.com:587 (starttls): permanent error (535): 5.7.8 Authentication failed`, or `... no answer within 15 s`. At start accounts logs `mail=smtp <host>:<port> tls=Starttls auth=true` (never the username or password).
 
-**Switching providers** is a settings change only: set `MAILER=smtp` and the `SMTP_*` values, then restart accounts. Example submission servers, all STARTTLS on 587 (**verify in provider docs**; hosts, ports and login schemes change):
+`MAILER=brevo` sends through Brevo's transactional email HTTP API instead of SMTP: `POST https://api.brevo.com/v3/smtp/email` with the header `api-key: $BREVO_API_KEY` and `sender{name,email}` (from `MAIL_FROM`), `to[{email}]`, `subject`, `textContent` and `htmlContent` (the same content as the other mailers), 15 s timeout. `BREVO_API_KEY` is an API v3 key (`xkeysib-...`), not an SMTP key; Brevo can restrict a key to authorised IP addresses, in which case it only works from the production box. `BREVO_API_URL` exists for tests against a local fake. Errors read `brevo <url> returned 401 Unauthorized: {"code":"unauthorized","message":"Key not found"}`; the key is never logged.
+
+**Switching providers** is a settings change only: set `MAILER=smtp` and the `SMTP_*` values (or, for Brevo's API, `MAILER=brevo` and `BREVO_API_KEY`), then restart accounts. Example submission servers, all STARTTLS on 587 (**verify in provider docs**; hosts, ports and login schemes change):
 
 | Provider | `SMTP_HOST:SMTP_PORT` | Login |
 |---|---|---|
@@ -223,7 +225,7 @@ admin user rotate-play-key IDENT
 admin user set-code IDENT CODE
 ```
 
-Every change is written to `audit_log`. `reset-password --send-email` reads the same mail settings as accounts (`MAILER`, `MAIL_*`, `SMTP_*`, `RESEND_*`; `admin user reset-password --help` lists them), so with `MAILER=file` the email is appended to `MAIL_FILE` and nothing goes over the network. A bad mail setting fails before the token is issued; the audit row records `emailed` and the mailer.
+Every change is written to `audit_log`. `reset-password --send-email` reads the same mail settings as accounts (`MAILER`, `MAIL_*`, `SMTP_*`, `BREVO_*`, `RESEND_*`; `admin user reset-password --help` lists them), so with `MAILER=file` the email is appended to `MAIL_FILE` and nothing goes over the network. A bad mail setting fails before the token is issued; the audit row records `emailed` and the mailer.
 
 ## mmclient
 
@@ -245,8 +247,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 Without Docker, start the portable Postgres (above) and point the tests at it, e.g. `TEST_DATABASE_URL=postgres://pp:pp-dev-password@127.0.0.1:54329/postgres`. The e2e helpers only fall back to `docker compose up` when `TEST_DATABASE_URL` is unset and nothing answers on 54329.
 
-- Unit tests: code and name rules, Shift-JIS decoding, protocol parsing and wire shape (openmelee and Brawlback fixtures), play keys, rate limiter, Argon2, mailers (SMTP against `fakesmtp`: multipart text + HTML, auth, 535 errors without the password, timeout, STARTTLS required; Resend against a local fake; stdout and file never connecting), and the ticket state machine (pairing, host choice, expiry, wrong code, bad key, bans, unsupported modes, malformed input, cancel, replacement, rate limit, DB timeout, version gate, re-pair backoff), the Unranked queue (arrival order, response fields and stage list, code ignored, never paired with Direct, expiry error, cancel, replacement, failed-connect preference and backoff, regions and widening), the region table and the rulesets file.
-- `crates/admin/tests/send_email.rs`: runs the `admin` binary (`user reset-password --send-email`) with `MAILER=file`, `stdout` and `smtp` while `RESEND_API_URL` (with a key) and `SMTP_HOST` point at listeners that count connections: file and stdout never connect, smtp reaches only the fake SMTP server, `resend` without a key fails before issuing a token; and the in-process reset path with an in-memory mailer.
+- Unit tests: code and name rules, Shift-JIS decoding, protocol parsing and wire shape (openmelee and Brawlback fixtures), play keys, rate limiter, Argon2, mailers (SMTP against `fakesmtp`: multipart text + HTML, auth, 535 errors without the password, timeout, STARTTLS required; Brevo and Resend against local fakes: request shape, errors without the key; stdout and file never connecting), and the ticket state machine (pairing, host choice, expiry, wrong code, bad key, bans, unsupported modes, malformed input, cancel, replacement, rate limit, DB timeout, version gate, re-pair backoff), the Unranked queue (arrival order, response fields and stage list, code ignored, never paired with Direct, expiry error, cancel, replacement, failed-connect preference and backoff, regions and widening), the region table and the rulesets file.
+- `crates/admin/tests/send_email.rs`: runs the `admin` binary (`user reset-password --send-email`) with `MAILER=file`, `stdout`, `smtp` and `brevo` while `RESEND_API_URL`, `BREVO_API_URL` (with keys) and `SMTP_HOST` point at listeners that count connections: file and stdout never connect, smtp and brevo reach only their own fake server, `resend` without a key fails before issuing a token; and the in-process reset path with an in-memory mailer.
 - `crates/e2e/tests/accounts_api.rs`: the HTTP API against Postgres (invites, validation, verification, code assignment, `user.json`, reset and change password rotating the play key, bans, rate limits).
 - `crates/e2e/tests/matchmaking.rs`: Postgres + accounts + mm in process, accounts created over HTTP, two fake ENet clients: matching peer info and a real P2P connection, expiry, wrong code, bad play key, unsupported modes, malformed packets and raw UDP garbage (server keeps running and still pairs), cancel.
 - `crates/e2e/tests/unranked.rs`:

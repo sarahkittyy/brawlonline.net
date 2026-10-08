@@ -26,3 +26,4 @@ uuid.workspace = true
 [dev-dependencies]
 e2e.workspace = true
 fakesmtp.workspace = true
+axum.workspace = true

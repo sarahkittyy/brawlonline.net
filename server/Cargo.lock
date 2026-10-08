@@ -35,6 +35,7 @@ version = "0.1.0"
 dependencies = [
  "accounts",
  "anyhow",
+ "axum",
  "chrono",
  "clap",
  "common",

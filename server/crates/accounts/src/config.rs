@@ -9,6 +9,8 @@ use clap::{Args, Parser, ValueEnum};
 pub enum MailerKind {
     /// Send through Resend's HTTP API (needs RESEND_API_KEY).
     Resend,
+    /// Send through Brevo's transactional email HTTP API (needs BREVO_API_KEY, an API v3 key).
+    Brevo,
     /// Send through an SMTP submission server (needs SMTP_HOST; see SMTP_*).
     Smtp,
     /// Print emails to stdout (development).
@@ -62,7 +64,8 @@ impl std::str::FromStr for Secret {
 /// (`user reset-password --send-email`), so both send mail the same way.
 #[derive(Debug, Clone, Args)]
 pub struct MailConfig {
-    /// Mail transport. Defaults to `resend` when RESEND_API_KEY is set, else `stdout`.
+    /// Mail transport. Defaults to `resend` when RESEND_API_KEY is set, else `brevo` when
+    /// BREVO_API_KEY is set, else `stdout`.
     #[arg(long, env = "MAILER", value_enum)]
     pub mailer: Option<MailerKind>,
 
@@ -72,6 +75,14 @@ pub struct MailConfig {
     /// Resend API endpoint (overridable for tests against a fake server).
     #[arg(long, env = "RESEND_API_URL", default_value = "https://api.resend.com/emails")]
     pub resend_api_url: String,
+
+    /// Brevo API v3 key (`xkeysib-...`) for MAILER=brevo. Not an SMTP key.
+    #[arg(long, env = "BREVO_API_KEY", hide_env_values = true)]
+    pub brevo_api_key: Option<Secret>,
+
+    /// Brevo transactional email endpoint (overridable for tests against a fake server).
+    #[arg(long, env = "BREVO_API_URL", default_value = "https://api.brevo.com/v3/smtp/email")]
+    pub brevo_api_url: String,
 
     /// Sender: `Name <address>` or a bare address. The provider must accept its domain.
     #[arg(long, env = "MAIL_FROM", default_value = "Brawl Online <noreply@brawlonline.net>")]
@@ -112,8 +123,11 @@ pub struct MailConfig {
 
 impl MailConfig {
     pub fn mailer_kind(&self) -> MailerKind {
-        self.mailer.unwrap_or(if self.resend_api_key.as_ref().is_some_and(|k| !k.is_empty()) {
+        let set = |k: &Option<Secret>| k.as_ref().is_some_and(|k| !k.is_empty());
+        self.mailer.unwrap_or(if set(&self.resend_api_key) {
             MailerKind::Resend
+        } else if set(&self.brevo_api_key) {
+            MailerKind::Brevo
         } else {
             MailerKind::Stdout
         })
@@ -129,6 +143,8 @@ impl MailConfig {
             mailer: Some(MailerKind::Stdout),
             resend_api_key: None,
             resend_api_url: "http://127.0.0.1:9/never".into(),
+            brevo_api_key: None,
+            brevo_api_url: "http://127.0.0.1:9/never".into(),
             mail_from: "Brawl Online <noreply@brawlonline.net>".into(),
             mail_file: "mail.jsonl".into(),
             mail_daily_limit: 1000,
@@ -237,9 +253,11 @@ mod tests {
         let mut cfg = Config::for_tests("postgres://x");
         cfg.mail.smtp_password = Some(Secret::new("hunter2-smtp"));
         cfg.mail.resend_api_key = Some(Secret::new("re_live_key"));
+        cfg.mail.brevo_api_key = Some(Secret::new("xkeysib-test-key"));
         let dbg = format!("{cfg:?}");
         assert!(!dbg.contains("hunter2-smtp"));
         assert!(!dbg.contains("re_live_key"));
+        assert!(!dbg.contains("xkeysib-test-key"));
         assert!(dbg.contains("Secret(<redacted>)"));
     }
 

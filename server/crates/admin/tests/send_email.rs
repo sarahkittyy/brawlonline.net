@@ -3,7 +3,7 @@
 //! network connection.
 //!
 //! The binary tests run the real `admin` executable against a fresh database,
-//! with every network setting (RESEND_API_URL with a key, SMTP_HOST/PORT)
+//! with every network setting (RESEND_API_URL and BREVO_API_URL with keys, SMTP_HOST/PORT)
 //! pointing at a local listener that counts connections. Before the fix the
 //! admin CLI ignored MAILER and always called Resend, which these tests catch.
 
@@ -69,6 +69,8 @@ async fn run_admin(db: &Db, mailer: &str, resend: &FakeSmtp, smtp: &FakeSmtp, re
         .env("MAILER", mailer)
         .env("RESEND_API_KEY", resend_key)
         .env("RESEND_API_URL", format!("http://{}/emails", resend.addr))
+        .env("BREVO_API_KEY", "xkeysib-must-not-be-used")
+        .env("BREVO_API_URL", format!("http://{}/v3/smtp/email", resend.addr))
         .env("SMTP_HOST", "127.0.0.1")
         .env("SMTP_PORT", smtp.port().to_string())
         .env("SMTP_TLS", "none")
@@ -191,5 +193,61 @@ async fn resend_without_a_key_fails_before_issuing_a_token() {
     assert_eq!(resend.connections(), 0);
     assert_eq!(smtp.connections(), 0);
     assert_eq!(db.reset_tokens().await, 0);
+    db.finish().await;
+}
+
+#[tokio::test]
+async fn brevo_mailer_posts_to_the_configured_api() {
+    use axum::{http::HeaderMap, routing::post, Json, Router};
+    use std::sync::{Arc, Mutex};
+    type Seen = Arc<Mutex<Vec<(Option<String>, serde_json::Value)>>>;
+    let seen: Seen = Default::default();
+    let s2 = seen.clone();
+    let app = Router::new().route(
+        "/v3/smtp/email",
+        post(move |headers: HeaderMap, Json(body): Json<serde_json::Value>| {
+            let seen = s2.clone();
+            async move {
+                let key = headers.get("api-key").map(|v| v.to_str().unwrap().to_string());
+                seen.lock().unwrap().push((key, body));
+                (axum::http::StatusCode::CREATED, Json(serde_json::json!({"messageId": "<fake>"})))
+            }
+        }),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let brevo_addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+
+    let db = setup().await;
+    let (resend, smtp) = tripwires().await;
+    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_admin"))
+        .args(["user", "reset-password", EMAIL, "--send-email"])
+        .current_dir(&db.dir)
+        .env("DATABASE_URL", &db.url)
+        .env("PUBLIC_BASE_URL", BASE)
+        .env("MAILER", "brevo")
+        .env("BREVO_API_KEY", "xkeysib-test")
+        .env("BREVO_API_URL", format!("http://{brevo_addr}/v3/smtp/email"))
+        .env("RESEND_API_KEY", "re_must_not_be_used")
+        .env("RESEND_API_URL", format!("http://{}/emails", resend.addr))
+        .env("SMTP_HOST", "127.0.0.1")
+        .env("SMTP_PORT", smtp.port().to_string())
+        .env("SMTP_TLS", "none")
+        .env("MAIL_FROM", "Brawl Online <noreply@brawlonline.test>")
+        .output()
+        .await
+        .unwrap();
+    assert!(out.status.success(), "{}", String::from_utf8_lossy(&out.stderr));
+    let seen = seen.lock().unwrap().clone();
+    assert_eq!(seen.len(), 1);
+    assert_eq!(seen[0].0.as_deref(), Some("xkeysib-test"));
+    assert_eq!(seen[0].1["to"], serde_json::json!([{"email": EMAIL}]));
+    assert!(seen[0].1["textContent"].as_str().unwrap().contains(&format!("{BASE}/reset-password?token=")));
+    assert_eq!(resend.connections(), 0);
+    assert_eq!(smtp.connections(), 0);
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(stdout.contains("(mailer: brevo "), "{stdout}");
+    assert!(!stdout.contains("xkeysib"));
+    assert_eq!(db.last_audit().await["mailer"], "brevo");
     db.finish().await;
 }

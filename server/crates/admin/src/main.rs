@@ -66,7 +66,7 @@ enum UserCmd {
         #[arg(long, env = "PUBLIC_BASE_URL", default_value = "http://127.0.0.1:8080")]
         public_base_url: String,
         #[command(flatten)]
-        mail: MailConfig,
+        mail: Box<MailConfig>,
     },
     /// Ban an account (permanent unless --days). Ends its sessions and rotates its play key.
     Ban {
