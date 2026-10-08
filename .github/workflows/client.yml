@@ -37,7 +37,8 @@ permissions:
 
 concurrency:
   group: client
-  cancel-in-progress: true
+  # Not cancelled: a newer push waits, so a running build finishes and saves its caches.
+  cancel-in-progress: false
 
 env:
   VERSION: 0.1.${{ github.run_number }}
