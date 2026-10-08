@@ -17,7 +17,7 @@ so no ``server/.env`` is read; every setting comes from the environment given he
 Usage::
 
     with OnlineBackend() as be:
-        alice = be.create_user("alice", "ALIC")   # invite, sign-up, verify, code, user.json
+        alice = be.create_user("alice", "ALIC")   # sign-up, verify, code, user.json
         be.mm_port, be.accounts_url, alice.user_json, alice.connect_code
 """
 
@@ -113,7 +113,6 @@ class OnlineBackend:
         self._compose_started = False
         self._procs: dict[str, subprocess.Popen[bytes]] = {}
         self._logs: dict[str, Any] = {}
-        self._invite: str | None = None
 
     # ------------------------------------------------------------------ lifecycle
 
@@ -283,7 +282,6 @@ class OnlineBackend:
         env.update({
             "ACCOUNTS_LISTEN": f"127.0.0.1:{self.accounts_port}",
             "PUBLIC_BASE_URL": f"http://127.0.0.1:{self.accounts_port}",
-            "SIGNUP_INVITE_ONLY": "true",
             "REQUIRE_EMAIL_VERIFICATION": "true",
             "MAILER": "file",
             "MAIL_FILE": str(self.run_dir / "mail.jsonl"),
@@ -357,14 +355,11 @@ class OnlineBackend:
 
     def create_user(self, display_name: str, code_start: str, *,
                     email: str | None = None, password: str = "a long test password") -> OnlineUser:
-        """Invite (admin CLI), sign-up (HTTP), verify (admin CLI), pick a code (HTTP) and fetch
+        """Sign-up (HTTP; open to everyone), verify (admin CLI), pick a code (HTTP) and fetch
         the launcher's user.json (HTTP)."""
-        if self._invite is None:
-            self._invite = self.admin("invite", "create", "--uses", "100", "--note", "ppharness").splitlines()[-1].strip()
         email = email or f"{display_name.lower()}-{secrets.token_hex(4)}@example.test"
         res = self._http("POST", "/v1/auth/signup", {"email": email, "password": password,
-                                                     "displayName": display_name,
-                                                     "inviteCode": self._invite})
+                                                     "displayName": display_name})
         token = res["sessionToken"]
         uid = res["user"]["uid"]
         self.admin("user", "verify-email", email)
