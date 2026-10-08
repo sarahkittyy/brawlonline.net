@@ -1,0 +1,62 @@
+import "@/styles/styles.scss";
+
+import { StyledEngineProvider } from "@mui/material/styles";
+import log from "electron-log";
+import React, { Suspense } from "react";
+import { createRoot } from "react-dom/client";
+
+import { ToastProvider } from "@/components/toast_provider";
+import { GameThemeProvider } from "@/styles/game_theme";
+
+import { createApp } from "./app/create";
+import { ErrorBoundary } from "./components/error_boundary";
+import { LoadingScreen } from "./components/loading_screen/loading_screen";
+import { initializeApp } from "./initialize_app";
+import { installAppListeners } from "./listeners/install_app_listeners";
+import { installServices } from "./services/install";
+
+// Create a lazy-loaded component that waits for async initialization
+const LazyApp = React.lazy(async () => {
+  try {
+    // Install services and wait for initialization
+    const services = await installServices();
+
+    // Install app listeners first
+    installAppListeners(services);
+
+    // Then do things that might require us having been listening to changes
+    await initializeApp(services);
+
+    // Create and return the app component
+    const { App } = createApp({ services });
+    return { default: App };
+  } catch (error) {
+    log.error(error);
+    throw error;
+  }
+});
+
+// We only initialize theme providers (fallback look until the game assets load) and toast providers here, before the rest of the
+// the app. We need the toast provider so we can show errors and notify during suspense,
+// and we need the theme providers so the notifications are styled correctly.
+const container = document.getElementById("app");
+if (!container) {
+  throw new Error("Failed to find the app element");
+}
+const root = createRoot(container);
+root.render(
+  <React.StrictMode>
+    <StyledEngineProvider injectFirst={true}>
+      <GameThemeProvider>
+        <ToastProvider>
+          <ErrorBoundary padding="50px">
+            {/* Don't use a message here since the i18nService is not yet initialized at this point. */}
+            <Suspense fallback={<LoadingScreen message="" />}>
+              <LazyApp />
+            </Suspense>
+          </ErrorBoundary>
+        </ToastProvider>
+      </GameThemeProvider>
+    </StyledEngineProvider>
+  </React.StrictMode>,
+);

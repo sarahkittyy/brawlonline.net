@@ -1,0 +1,44 @@
+# Logs
+logs
+*.log
+
+# Runtime data
+pids
+*.pid
+*.seed
+
+# Coverage directory used by tools like istanbul
+coverage
+.eslintcache
+
+# Dependency directory
+# https://www.npmjs.org/doc/misc/npm-faq.html#should-i-check-my-node_modules-folder-into-git
+node_modules
+
+# OSX
+.DS_Store
+
+release/app/dist
+release/build
+# Game plugin staged for packaging (npm run stage:plugin)
+release/plugins
+.erb/dll
+
+.idea
+npm-debug.log.*
+*.css.d.ts
+*.sass.d.ts
+*.scss.d.ts
+
+# Ignore env variables
+.env
+
+# windows code signing tool
+CodeSignTool
+
+# asdf tools file
+.tool-versions
+
+# Game assets extracted from the user's own Brawl disc and P+ SD card.
+# Nintendo's assets are never committed or distributed (see PPLUS_PORTING.md).
+.asset-cache/

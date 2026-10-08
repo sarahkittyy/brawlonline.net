@@ -1,0 +1,51 @@
+@use "variables";
+@use "scrollbar";
+
+html,
+body,
+#app {
+  height: 100%;
+  width: 100%;
+  margin: 0;
+}
+
+body {
+  font-family: var(--font-body, system-ui, sans-serif);
+  color: var(--off-white);
+  background-color: var(--surface-0);
+}
+
+*,
+*::after,
+*::before {
+  user-select: none;
+  -webkit-user-drag: none;
+  -webkit-app-region: no-drag;
+  -webkit-tap-highlight-color: rgb(255 255 255 / 0%);
+  -webkit-focus-ring-color: rgb(255 255 255 / 0%);
+
+  /**
+   * This should only affect rendering on macOS. Light text on dark backgrounds can appear
+   * to render in a less-than-ideal-manner on macOS due to the way font rendering works on 
+   * that platform. Setting this across the board makes the text on the app much more readable.
+   *
+   * For more context: https://usabilitypost.com/2012/11/05/stop-fixing-font-smoothing/
+   */
+  -webkit-font-smoothing: antialiased;
+  outline: none;
+}
+
+h1,
+h2,
+h3,
+h4,
+h5,
+h6 {
+  font-family: var(--font-title, system-ui, sans-serif);
+  font-weight: 400;
+}
+
+a {
+  text-decoration: none;
+  color: inherit;
+}

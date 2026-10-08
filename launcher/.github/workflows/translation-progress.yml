@@ -1,0 +1,142 @@
+name: Translation Progress Badge
+
+on:
+  push:
+    branches: [ main ]
+    paths:
+      - 'locales/**'  # Only run when translation files (.po/.pot) change
+      - 'src/renderer/**/*.messages.ts'  # Track message files for unstaged changes
+      - '!**/*.md'  # Ignore markdown file changes
+
+concurrency:
+  group: translations-badge-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  calculate-translation:
+    runs-on: ubuntu-latest
+    outputs:
+      translation_pct: ${{ steps.calc.outputs.translation_pct }}
+      has_unstaged: ${{ steps.check-unstaged.outputs.has_unstaged }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: '24.x'
+          cache: 'npm'
+
+      - name: Cache node modules
+        uses: actions/cache@v5
+        id: cache
+        with:
+          path: node_modules
+          key: ${{ runner.OS }}-build-${{ secrets.CACHE_CONTROL }}-${{ hashFiles('**/package-lock.json') }}
+          restore-keys: |
+            ${{ runner.OS }}-build-${{ secrets.CACHE_CONTROL }}-${{ env.cache-name }}-
+            ${{ runner.OS }}-build-${{ secrets.CACHE_CONTROL }}
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Display updated translation percentage
+        run: |
+          npm run i18n:extract
+          npm run i18n:sync
+          npm run i18n:status
+
+      - name: Check for unstaged translation changes
+        id: check-unstaged
+        run: |
+          # Check if messages.pot has unstaged changes after extract
+          if git diff --name-only | grep -q "locales/messages.pot"; then
+            echo "has_unstaged=true" >> $GITHUB_OUTPUT
+            echo "Detected unstaged changes to messages.pot"
+          else
+            echo "has_unstaged=false" >> $GITHUB_OUTPUT
+            echo "No unstaged changes to messages.pot"
+          fi
+
+      - name: Calculate translation percentage
+        id: calc
+        run: |
+          TRANSLATION_PCT=$(npm run --silent i18n:status -- --percent-only)
+          echo "translation_pct=${TRANSLATION_PCT}" >> $GITHUB_OUTPUT
+
+  publish-badge:
+    needs: calculate-translation
+    runs-on: ubuntu-latest
+    steps:
+      - name: Restore previous badge JSON
+        uses: actions/cache/restore@v5
+        id: cache-restore
+        with:
+          path: previous-badge.json
+          key: translation-badge-json-${{ github.run_id }}
+          restore-keys: |
+            translation-badge-json-
+
+      - name: Build and conditionally publish badge JSON
+        id: badge-update
+        env:
+          TRANSLATION_PCT: ${{ needs.calculate-translation.outputs.translation_pct }}
+          HAS_UNSTAGED: ${{ needs.calculate-translation.outputs.has_unstaged }}
+        run: |
+          # Determine color based on translation percentage
+          if [ "${TRANSLATION_PCT}" -ge 90 ]; then
+            COLOR="brightgreen"
+          elif [ "${TRANSLATION_PCT}" -ge 70 ]; then
+            COLOR="yellowgreen"
+          elif [ "${TRANSLATION_PCT}" -ge 50 ]; then
+            COLOR="orange"
+          else
+            COLOR="red"
+          fi
+
+          # Set label based on whether there are unstaged changes
+          if [ "${HAS_UNSTAGED}" = "true" ]; then
+            LABEL="*translations"
+          else
+            LABEL="translations"
+          fi
+
+          # Build JSON payload
+          cat > current-badge.json << EOF
+          {
+            "schemaVersion": 1,
+            "label": "${LABEL}",
+            "message": "${TRANSLATION_PCT}%",
+            "color": "${COLOR}"
+          }
+          EOF
+
+          # Check if badge JSON has changed
+          if [ -f "previous-badge.json" ] && cmp -s "current-badge.json" "previous-badge.json"; then
+            echo "Badge JSON unchanged - skipping API call to avoid rate limits"
+            echo "badge_updated=false" >> $GITHUB_OUTPUT
+          else
+            echo "Badge JSON changed - updating via API"
+
+            # Read the JSON content
+            OUTPUT_JSON=$(cat current-badge.json)
+
+            # Update the badge via API
+            curl -X PATCH "https://jsonhosting.com/api/json/e785d45e" \
+              -H "Content-Type: application/json" \
+              -H "X-Edit-Key: ${{ secrets.TRANSLATION_STATUS_EDIT_KEY }}" \
+              -d "${OUTPUT_JSON}"
+
+            # Update cache for next run
+            cp current-badge.json previous-badge.json
+            echo "Badge updated successfully"
+            echo "badge_updated=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Save updated badge JSON to cache
+        if: steps.cache-restore.outputs.cache-hit != 'true' || steps.badge-update.outputs.badge_updated == 'true'
+        uses: actions/cache/save@v5
+        with:
+          path: previous-badge.json
+          key: translation-badge-json-${{ github.run_id }}

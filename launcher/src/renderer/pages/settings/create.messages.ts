@@ -1,0 +1,13 @@
+export const SettingsCreateMessages = {
+  generalSettings: () => "General Settings",
+  game: () => "Game",
+  replays: () => "Replays",
+  dolphinSettings: () => "Dolphin Settings",
+  netplay: () => "Netplay",
+  playback: () => "Playback",
+  appSettings: () => "App Settings",
+  appearance: () => "Appearance",
+  advanced: () => "Advanced",
+  help: () => "Help",
+  rulesAndPolicies: () => "Rules & Policies",
+};

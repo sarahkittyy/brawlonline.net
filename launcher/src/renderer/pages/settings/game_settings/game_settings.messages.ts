@@ -1,0 +1,15 @@
+export const GameSettingsMessages = {
+  meleeIsoFile: () => "Brawl ISO File",
+  meleeIsoFileDescription: () => "The path to an NTSC-U Super Smash Bros. Brawl disc image (revision 1 or 2).",
+  closeDolphinToChange: () => "Close Dolphin to change this setting",
+  noFileSet: () => "No file set",
+  verifying: () => "Verifying...",
+  playButtonAction: () => "Play Button Action",
+  playButtonActionDescription: () => "Choose what happens when the Play button is pressed.",
+  launchMelee: (gameName: string) => "Launch {0}",
+  launchDolphin: () => "Launch Dolphin",
+  valid: () => "Valid",
+  unknown: () => "Unknown",
+  invalid: () => "Invalid",
+  unvalidated: () => "Unvalidated",
+};

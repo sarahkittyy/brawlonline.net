@@ -1,0 +1,101 @@
+import { css } from "@emotion/react";
+import CircularProgress from "@mui/material/CircularProgress";
+import TextField from "@mui/material/TextField";
+import { Controller, useForm } from "react-hook-form";
+
+import { ConfirmationModal } from "@/components/confirmation_modal/confirmation_modal";
+import { useAccount } from "@/lib/hooks/use_account";
+import { useAsync } from "@/lib/hooks/use_async";
+import { useToasts } from "@/lib/hooks/use_toasts";
+import { validateDisplayName } from "@/lib/validate/validate";
+import { useServices } from "@/services";
+
+import { HeaderMessages as Messages } from "./header.messages";
+
+export const NameChangeDialog = ({
+  displayName,
+  open,
+  handleClose,
+}: {
+  displayName: string;
+  open: boolean;
+  handleClose: () => void;
+}) => {
+  const { backendService } = useServices();
+  const { handleSubmit, watch, control } = useForm<{ displayName: string }>({ values: { displayName } });
+
+  const name = watch("displayName");
+
+  const setDisplayName = useAccount((store) => store.setDisplayName);
+  const { showError } = useToasts();
+
+  const submitNameChange = useAsync(async () => {
+    try {
+      await backendService.changeDisplayName(name);
+      setDisplayName(name);
+    } catch (err) {
+      console.error(err);
+      showError(err);
+    } finally {
+      handleClose();
+    }
+  });
+
+  const onFormSubmit = handleSubmit(() => void submitNameChange.execute());
+
+  return (
+    <div>
+      <ConfirmationModal
+        title={Messages.editDisplayName()}
+        open={open}
+        onClose={handleClose}
+        closeOnSubmit={false}
+        onSubmit={onFormSubmit}
+        confirmProps={{
+          disabled: submitNameChange.loading,
+        }}
+        confirmText={
+          submitNameChange.loading ? (
+            <span
+              css={css`
+                display: flex;
+                align-items: center;
+              `}
+            >
+              {Messages.loading()}
+              <CircularProgress
+                size={16}
+                color="inherit"
+                css={css`
+                  margin-left: 10px;
+                `}
+              />
+            </span>
+          ) : (
+            Messages.confirm()
+          )
+        }
+      >
+        <Controller
+          name="displayName"
+          control={control}
+          defaultValue=""
+          render={({ field, fieldState: { error } }) => (
+            <TextField
+              {...field}
+              label={Messages.displayName()}
+              required={true}
+              error={Boolean(error)}
+              helperText={error ? error.message : undefined}
+              autoFocus={true}
+              inputProps={{
+                maxLength: 15,
+              }}
+            />
+          )}
+          rules={{ validate: (val) => validateDisplayName(val.trim()) }}
+        />
+      </ConfirmationModal>
+    </div>
+  );
+};

@@ -1,0 +1,116 @@
+{
+  "productName": "Brawl Online",
+  "appId": "net.brawlonline.launcher",
+  "asar": true,
+  "asarUnpack": [
+    "**\\*.{node,dll}",
+    "./dist/main/*.js",
+    "./node_modules/**/*.{js,json}"
+  ],
+  "files": [
+    "dist",
+    "node_modules",
+    "package.json",
+    "!**/*.map",
+    "!**/*.md"
+  ],
+  "afterSign": ".erb/scripts/notarize.js",
+  "fileAssociations": {
+    "ext": "rep",
+    "name": "rep",
+    "description": "Brawl Online replay"
+  },
+  "artifactName": "Brawl-Online-${version}-${arch}-${os}.${ext}",
+  "mac": {
+    "target": [
+      {
+        "target": "default",
+        "arch": [
+          "x64",
+          "arm64"
+        ]
+      }
+    ],
+    "fileAssociations": {
+      "ext": "rep",
+      "role": "Viewer"
+    },
+    "type": "distribution",
+    "hardenedRuntime": true,
+    "notarize": false,
+    "entitlements": "assets/entitlements.mac.plist",
+    "entitlementsInherit": "assets/entitlements.mac.plist",
+    "category": "public.app-category.games",
+    "gatekeeperAssess": false,
+    "extendInfo": {
+      "NSAppTransportSecurity": {
+        "NSAllowsArbitraryLoads": true
+      }
+    },
+    "minimumSystemVersion": "10.13.6"
+  },
+  "dmg": {
+    "artifactName": "Brawl-Online-${version}-${arch}.${ext}",
+    "contents": [
+      {
+        "x": 130,
+        "y": 220
+      },
+      {
+        "x": 410,
+        "y": 220,
+        "type": "link",
+        "path": "/Applications"
+      }
+    ]
+  },
+  "win": {
+    "target": [
+      "nsis"
+    ],
+    "signAndEditExecutable": false
+  },
+  "nsis": {
+    "artifactName": "Brawl-Online-Setup-${version}.${ext}",
+    "include": ".erb/scripts/installer.nsh",
+    "differentialPackage": false,
+    "warningsAsErrors": false,
+    "allowElevation": true,
+    "oneClick": false,
+    "allowToChangeInstallationDirectory": true,
+    "createStartMenuShortcut": true
+  },
+  "linux": {
+    "target": [
+      "AppImage"
+    ],
+    "category": "Game",
+    "desktop": {
+      "entry": {
+        "StartupWMClass": "Brawl Online"
+      }
+    }
+  },
+  "appImage": {
+    "artifactName": "Brawl-Online-${version}-x86_64.${ext}"
+  },
+  "directories": {
+    "app": "release/app",
+    "buildResources": "assets",
+    "output": "release/build"
+  },
+  "extraResources": [
+    {
+      "from": "release/plugins",
+      "to": "plugins",
+      "filter": [
+        "PPOnline.rel",
+        "PPOnline.json"
+      ]
+    }
+  ],
+  "publish": {
+    "provider": "generic",
+    "url": "https://brawlonline.net/updates/launcher"
+  }
+}

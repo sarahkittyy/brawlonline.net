@@ -1,0 +1,23 @@
+export const HeaderMessages = {
+  logIn: () => "Log in",
+  checkForUpdates: () => "Check for updates",
+  checkingForUpdates: () => "Checking for updates...",
+  failedToGetUpdates: () => "Failed to get updates",
+  noUpdateAvailable: () => "No update available",
+  noMeleeIsoFile: () => "No Brawl ISO file specified",
+  isoWillNotWork: (productName: string) =>
+    "Provided ISO will not work with {0}. Please provide an unmodified NTSC-U Brawl ISO (revision 1 or 2).",
+  settings: () => "Settings",
+  chooseAConnectCode: () => "Choose a connect code",
+  youAreNotLoggedIn: () => "You are not logged in",
+  onlyLoggedInUsersCanPlayOnline: () => "Only logged in users can play online.",
+  noNetworkConnection: () => "No network connection",
+  wouldYouLikeToPlayOffline: () => "Would you like to play offline?",
+  playOffline: () => "Play offline",
+  cancel: () => "Cancel",
+  editDisplayName: () => "Edit display name",
+  confirm: () => "Confirm",
+  displayName: () => "Display Name",
+  loading: () => "Loading",
+  verifyYourEmail: () => "Verify your email",
+};
