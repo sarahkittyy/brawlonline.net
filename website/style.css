@@ -1,0 +1,216 @@
+/* Brawl Online landing page. No external requests: everything is served from this folder. */
+
+@font-face {
+  font-family: "Barlow Condensed";
+  font-style: italic;
+  font-weight: 800;
+  font-display: block;
+  src: url("assets/fonts/barlow-condensed-800-italic.woff2") format("woff2");
+}
+
+:root {
+  --bg: #08080b;
+  --fg: #f1f1f4;
+  --dim: rgba(241, 241, 244, 0.42);
+  --video-opacity: 0.16;
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  height: 100%;
+}
+
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 400 15px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+  overflow-x: hidden;
+}
+
+/* Background gameplay video: full-bleed, very dim. With no video file the page is plain dark. */
+.bg {
+  position: fixed;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  opacity: var(--video-opacity);
+  pointer-events: none;
+  z-index: 0;
+}
+
+/* Darkens the edges so the logo and button read over any footage. */
+body::after {
+  content: "";
+  position: fixed;
+  inset: 0;
+  background: radial-gradient(ellipse at center, transparent 40%, rgba(0, 0, 0, 0.55) 100%);
+  pointer-events: none;
+  z-index: 1;
+}
+
+main {
+  position: relative;
+  z-index: 2;
+  min-height: 100vh;
+  min-height: 100svh;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: space-between;
+  padding:
+    max(48px, calc(env(safe-area-inset-top) + 32px))
+    max(16px, env(safe-area-inset-right))
+    max(40px, calc(env(safe-area-inset-bottom) + 24px))
+    max(16px, env(safe-area-inset-left));
+  text-align: center;
+}
+
+/* Logo */
+.logo {
+  margin: 0;
+  max-width: 100%;
+  font: inherit;
+  line-height: 1;
+}
+
+.wordmark {
+  display: block;
+  font-family: "Barlow Condensed", system-ui, sans-serif;
+  font-style: italic;
+  font-weight: 800;
+  font-synthesis: none;
+  font-size: clamp(2.6rem, 15vw, 6rem);
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  text-shadow: 0 2px 24px rgba(0, 0, 0, 0.6);
+}
+
+.logo img {
+  display: block;
+  width: min(560px, 100%);
+  height: auto;
+  max-height: 30vh;
+  object-fit: contain;
+}
+
+/* Download button and the other-OS list */
+.get {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+}
+
+.dl {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 136px;
+  height: 64px;
+  border-radius: 32px;
+  background: rgba(241, 241, 244, 0.92);
+  color: #0b0b0f;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.5);
+  transition: background-color 0.15s, transform 0.15s, box-shadow 0.15s;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.dl svg {
+  height: 30px;
+  width: auto;
+}
+
+.dl:hover {
+  background: #fff;
+  transform: translateY(-1px);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.6), 0 0 0 4px rgba(255, 255, 255, 0.08);
+}
+
+.dl:active {
+  transform: translateY(0);
+}
+
+a:focus-visible,
+summary:focus-visible {
+  outline: 2px solid var(--fg);
+  outline-offset: 4px;
+}
+
+.more {
+  font-size: 12px;
+  color: var(--dim);
+}
+
+.more summary {
+  display: inline-block;
+  list-style: none;
+  cursor: pointer;
+  padding: 4px 6px;
+  border-radius: 4px;
+  user-select: none;
+}
+
+.more summary::-webkit-details-marker {
+  display: none;
+}
+
+.more summary:hover,
+.more[open] summary {
+  color: var(--fg);
+}
+
+.more summary:hover {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.more ul {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 24px;
+  margin: 10px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.more ul a {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 4px;
+  color: var(--fg);
+  text-decoration: none;
+  font-size: 13px;
+  opacity: 0.75;
+  transition: opacity 0.15s;
+}
+
+.more ul a:hover {
+  opacity: 1;
+}
+
+.more ul svg {
+  height: 18px;
+  width: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .dl {
+    transition: none;
+  }
+  .dl:hover {
+    transform: none;
+  }
+}
