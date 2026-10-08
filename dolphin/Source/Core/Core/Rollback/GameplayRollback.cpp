@@ -105,6 +105,19 @@ bool IsSceneMelee(const Guest& g)
   return CurrentSceneName(g) == "scMelee";
 }
 
+bool IsNextSceneMelee(const Guest& g)
+{
+  // gfSceneManager: +0x4 the current scene, +0x8 the scene a pending change switches to.
+  const auto manager = g.Ptr32(Addr::SCENE_MANAGER_PTR);
+  if (!manager)
+    return false;
+  const auto next = g.Ptr32(*manager + 8);
+  if (!next)
+    return false;
+  const auto name_ptr = g.Ptr32(*next);
+  return name_ptr && g.CStr(*name_ptr, 32).value_or("") == "scMelee";
+}
+
 std::vector<HeapInfo> ReadHeapTable(const Guest& g)
 {
   std::vector<HeapInfo> out;

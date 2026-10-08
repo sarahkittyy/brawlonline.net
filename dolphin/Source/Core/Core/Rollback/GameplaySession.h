@@ -41,7 +41,7 @@ namespace Gprb::Session
 struct SyncTestOptions
 {
   int distance = 2;                 // frames rolled back on every frame (1..MAX_ROLLBACK_FRAMES)
-  std::string region_set = "gp-v12";  // Sys/Rollback/<name>.json or a path
+  std::string region_set = "gp-v19";  // Sys/Rollback/<name>.json or a path
   bool hash_regions = true;          // also compare a hash of the whole region set per frame
   u32 start_frame = 240;             // game frame the rollback starts at (after GO, see Connect)
   u32 ports = 3;                     // local controller ports that play (bit per port)
@@ -76,7 +76,7 @@ struct ConnectOptions
   // confirms or corrects the address.
   std::string remote_host;
   u16 remote_port = 0;
-  std::string region_set = "gp-v12";
+  std::string region_set = "gp-v19";
   // The match's first frames are the countdown, during which the game loads RNG-chosen resources
   // (Pokemon, Assist Trophies) on a loader thread into heaps of the region set. Rolling those
   // heaps back under an in-flight load corrupts it, and nobody can act before GO anyway. So from
@@ -224,5 +224,8 @@ picojson::value Samples(const std::vector<s64>& frames_full);
 // Diagnostics (PPR_GPRB_RNG_LOG): one mtRand::generate call.
 void OnRngCall(u32 rng, const std::array<u32, 8>& callers, u32 state);
 // Diagnostics (PPR_GPRB_PROBE): r3, r4, r12, ctr, lr at a probed address.
-void OnProbe(u32 pc, const std::array<u32, 5>& regs);
+void OnProbe(u32 pc, const std::array<u32, 7>& regs);
+// HLE hook at stMelee's constructor: a network match's setup and seeds are applied before the
+// stage is built (it shuffles the fighters' start points with g_mtRand), if not done yet.
+void OnStageCreate(const Core::CPUThreadGuard& guard);
 }  // namespace Gprb::Session

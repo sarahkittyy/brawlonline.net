@@ -1,0 +1,426 @@
+{
+  "name": "gp-v15",
+  "notes": [
+    "gp-v14 plus the file IO manager's bookkeeping (System FW, the same addresses on every boot;",
+    "g_gfFileIOManager .sbss 0x8059FFF4 -> 0x805CA1C0): its two request queues (utQueue 0x805BF860, queue",
+    "0x805BFAA0, utQueue 0x805BFAE0, queue 0x805BFD20), the request pool (bitmap 0x805BFD60, 128",
+    "gfFileIORequest of 0xA4 bytes from 0x805BFD74, pool header 0x805C4FA0) and the manager (0x805CA1C0",
+    "+0x9C). Mid-match loads (a Zelda/Sheik transformation reads the other form's motion and model files",
+    "into the fighter's resource heap; items preload Pokemon and Assist Trophy resources) allocate",
+    "requests that the game holds for some frames: without the pool, a rollback across a request left the",
+    "game's handles pointing at requests the pool had freed or given to another load. Needs the session's",
+    "file IO wait (GameplaySession.cpp RunIoWait): at every loop top the main thread waits until no",
+    "request is queued, so the IO thread is idle at every save and load and these bytes are quiescent.",
+    "Not the IO thread itself (its gfThread/OSThread at 0x805BF4E0 and its stack).",
+    "--- gp-v14 notes ---",
+    "gp-v13 plus the camera subject list head (cmSubjectList, DOL .bss lbl_8049DEDC: {count, first, last};",
+    "getSubjectByPlayerNo__13cmSubjectListFUl, fn_8009EC5C, fn_8009C38C). Its nodes are the camera",
+    "subjects of fighters and items (Smash Balls, other items), in the instance heaps (in the set); the",
+    "head was not. A rolled-back frame that created or removed a subject (an item spawning or vanishing,",
+    "a fighter instance changing at a Zelda/Sheik transformation) left the head pointing at the discarded",
+    "run's nodes: the re-created node ended up linked to itself (the camera ignored that subject, so the",
+    "camera, the Smash Ball's flight inside the camera range and then the RNG drifted from play without",
+    "rollback: sweep Family D), or the list formed a cycle (the main thread looping in fn_8009EFCC <-",
+    "fn_8009EC5C: Family A's hangs). Whole granules 0x8049DEC0-0x8049DF00 are restored; the rest of",
+    "them (a pointer at 0x8049DEC8, the static destructor entry 0x8049DED0, constant tag codes from",
+    "0x8049DEE8) does not change during a match.",
+    "--- gp-v13 notes ---",
+    "gp-v12 minus nw4r::ef's draw strategies (DOL .bss 0x804A3E90+0x578, lbl_804A3E90): seven function-local",
+    "statics of fn_80174434 (the draw-strategy getter), each built on first use behind a guard byte in .sbss",
+    "(0x805A04F0..0x805A04F6, outside the set). dolw-g1 restored some of their granules, among them the",
+    "vtable of strategy 1 (0x804A3F64). When the first effect drawn with that strategy appeared in a frame",
+    "that was rolled back, the load zeroed the object again while its guard stayed set, so it was never",
+    "rebuilt; the next draw (fn_801638D0 -> fn_8016DE08) called through its zero vtable and the main thread",
+    "jumped to 0x20 (sweep Family B: early hangs in the Yoshi, Dedede, G&W, R.O.B., Ice Climbers, Knuckles",
+    "and Lucas mirrors, lr 0x80163918). The strategies are rendering state only; now neither they nor their",
+    "guards are restored.",
+    "--- gp-v12 notes ---",
+    "gp-v11 plus the camera quake controller (System FW block at 0x805B69C0, object 0x805B69E0+0x280,",
+    "reached through the .sbss pointer 0x805A0280; cmReqQuake__FiP5Vec3f -> fn_8009D564). A quake request",
+    "sets a flag at +0x270 (and its amplitude at +0x268). A frame that requested a quake and was rolled",
+    "back left the flag set, so the resimulation took the 'quake already running' path and shook the",
+    "camera differently; for the quake's 11 frames the fighters' checksum differed between first run",
+    "and resimulation (sync tests: Ice Climbers/Olimar, R.O.B./Olimar, Ice Climbers/Charizard). Found",
+    "by replaying a sync test's passes and tracing the burst frame's first run against its",
+    "resimulation (gprb_mispredict.py --trace-frame, PPR_GPRB_INTERP_FROM).",
+    "--- gp-v11 notes ---",
+    "gp-v10 plus the ground-collision object lists in DOL .bss (0x8049E570..0x8049E5A0: lbl_8049E570,",
+    "g_grCollisionList 0x8049E57C, lbl_8049E588, lbl_8049E594; the lists are {count, sentinel next,",
+    "sentinel prev}, 0x8049E570/0x8049E588 are their static destructor-chain entries). The nodes",
+    "(ground-collision objects) live in the fighters' heaps, in the set; the heads did not. A rolled-back",
+    "frame that created such an object left the head pointing at the discarded run's node; the re-run",
+    "linked the object to itself and iteration skipped it. Peers with different rollbacks diverged",
+    "(dual-core Mario/Marth FD sessions), and even a plain sync test drifted from the game without",
+    "rollback (Mario/Marth FD, game frame 312), unseen because both runs of a frame shared the corruption.",
+    "Whole granules 0x8049E540-0x8049E5C0 are restored; the bytes beside the lists stay zero in a match.",
+    "Also the last record of the array at 0x8049EDE0 (lbl_8049EDD8, entries pointing into the Effect",
+    "heap): dolw-g1 restored it only up to 0x8049EE40.",
+    "--- gp-v10 notes ---",
+    "gp-v9 plus the whole global slow-motion manager (gf_slow_manager.o: the requests in .bss",
+    "0x804953B0+0x20, s_needsUpdate in .sbss 0x805A0080, s_maxSlowRate in .sdata 0x8059C690): a slow",
+    "request made by a mispredicted run stayed active after the rollback. And 'exclude': loads restore whole 64-byte granules, so a",
+    "range that starts or ends inside a granule took the rest of it along. The System heap starts at",
+    "0x80611F60, inside the granule that holds the last 32 bytes of the GX FIFO ring (RenderFifo,",
+    "CP FIFO end 0x80611F40): a load wrote stale commands into the ring, and the GPU then ran them",
+    "(missing draw-done interrupts, GXWaitDrawDone hangs, garbage indexed-XF loads). Excluded bytes are",
+    "never written by a load.",
+    "gp-v8 plus gfCameraManager (0x805B6D20+0x740, allocated in System FW at boot, the same",
+    "address on every boot; pointer at r13-0x4460 = 0x8059FFC0). The camera's state lived outside the",
+    "set, so a resimulated frame started from the newer camera; the cameras of two peers drifted apart",
+    "with their different rollback histories. In dual-core sessions this changed gameplay (a fighter",
+    "near the edge of the screen took 1% on one peer only: off-screen damage depends on the camera).",
+    "gp-v7 plus two areas P+ uses for its own data, outside every heap: 0x935F0000+0x1000 (high",
+    "MEM2 above the last heap: per-port input buffers and counters of P+ codes) and",
+    "0x805A7400+0x2000 (the never-used bottom of the boot stack: P+ scratch, including the pad",
+    "struct at 0x805A9338 that the game's controller conversion reads). A resimulated frame read",
+    "the newer input there.",
+    "gp-v6 plus the Replay heap (the replay recorder's buffers and counters, which the input code",
+    "reads back every frame) and the main thread's outer stack frames above the game loop",
+    "(main/mainLoop locals stay live across iterations; one is a frame counter the input code",
+    "reads at 0x805B50D8). Below the loop's stack pointer the stack is dead at the loop top.",
+    "gp-v5 with the WiiPad heap back, together with the object that owns its lists (0x805B62A0 in",
+    "System FW, next to AreaManager): the main thread's pad manager (fn_8001750C -> fn_8002C614)",
+    "keeps per-frame state in WiiPad, and a resimulated frame read the newer values. gp-v3 had",
+    "dropped WiiPad because restoring its nodes without the owner's list heads made a cycle; both",
+    "halves are restored now. Only the main thread writes either (all-threads trace).",
+    "gp-v4 plus the gfTaskScheduler object (list heads, pending list) and the one gfTask outside the",
+    "set (AreaManager, its links): tasks live in set heaps but their list heads live in System FW.",
+    "Restoring the nodes without the heads, after tasks were created or removed in the rolled-back",
+    "frames, left a cycle and gfTaskScheduler::process never returned.",
+    "gp-v3 plus the input history the main thread derives every frame, and small globals that only",
+    "the main thread writes during a match (found with an all-threads interpreter trace of 15",
+    "frames after GO: main-thread stores outside the set, minus stack, render and sound memory).",
+    "Without the pad history a resimulated frame computed 'pressed this frame' against the newest",
+    "frame's pads and diverged as soon as a button was pressed.",
+    "gp-v2 minus the WiiPad heap: it holds list nodes of a pad manager whose list heads live in",
+    "System FW (outside the set, walked by fn_8001750C every main-loop pass). Restoring the nodes",
+    "alone linked them into a cycle and the main thread spun forever with interrupts off. Input",
+    "is injected per frame (Gprb::Pads), so the pad plumbing is not rollback state.",
+    "gp-v1 minus 0x80493EC0+0x40: that granule is the C stdio FILE table (__files, 0x80493E60",
+    "+0x140), written by whichever thread prints (OSReport). Restoring it under other threads'",
+    "prints broke __fwrite (main thread hung in __memrchr with a trashed stack). Not gameplay.",
+    "Gameplay region set for gameplay-only (Slippi-style) rollback, from the feasibility spike",
+    "(docs/gameplay-rollback-feasibility.md, Experiment 3). Heaps are resolved by name from the live",
+    "heap table (g_HeapInfos 0x80494958) at the start of the match; rel_data adds the data and bss",
+    "sections of every loaded REL (OS module list 0x800030C8). 'add' entries are static ranges:",
+    "[effective address, size, label]. 'remove' punches holes: [address, size, label].",
+    "Not in the set on purpose: OS state (lowmem, stacks, SystemFW, thread/alarm state in .bss),",
+    "audio (Sound heap, AX .bss), video (RenderFifo, CopyFB, XFB), Network, Replay, Tmp, all code."
+  ],
+  "heaps": [
+    "System",
+    "Effect",
+    "Fighter1Instance",
+    "Fighter2Instance",
+    "Fighter3Instance",
+    "Fighter4Instance",
+    "FighterTechqniq",
+    "StageInstance",
+    "ItemInstance",
+    "WeaponInstance",
+    "EnemyInstance",
+    "Physics",
+    "InfoInstance",
+    "GameGlobal",
+    "GlobalMode",
+    "FighterEffect",
+    "Fighter1Resoruce",
+    "Fighter2Resoruce",
+    "Fighter3Resoruce",
+    "Fighter4Resoruce",
+    "Fighter1Resoruce2",
+    "Fighter2Resoruce2",
+    "Fighter3Resoruce2",
+    "Fighter4Resoruce2",
+    "StageResoruce",
+    "IteamResource",
+    "PokemonResource",
+    "AssistFigureResource",
+    "ItemExtraResource",
+    "WiiPad",
+    "Replay"
+  ],
+  "rel_data": true,
+  "add": [
+    [
+      "0x805A00B8",
+      "0x8",
+      "g_mtRand"
+    ],
+    [
+      "0x805A0420",
+      "0x8",
+      "g_mtRandOther"
+    ],
+    [
+      "0x8059FF58",
+      "0x4",
+      "libc rand next"
+    ],
+    [
+      "0x804977B4",
+      "0xC",
+      "g_mtPrngLogManager"
+    ],
+    [
+      "0x807824d4",
+      "0x4",
+      "P+ code-embedded variable in sora_melee .text"
+    ],
+    [
+      "0x80494f20",
+      "0x40",
+      "dolw-g1"
+    ],
+    [
+      "0x80494fa0",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x8049e020",
+      "0x40",
+      "dolw-g1"
+    ],
+    [
+      "0x8049ede0",
+      "0x60",
+      "dolw-g1"
+    ],
+    [
+      "0x804a3de0",
+      "0x60",
+      "dolw-g1"
+    ],
+    [
+      "0x804a3e60",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x804a3ec0",
+      "0x40",
+      "dolw-g1"
+    ],
+    [
+      "0x804a3f20",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x804a3f60",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x804a3fe0",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x804a4580",
+      "0x40",
+      "dolw-g1"
+    ],
+    [
+      "0x804a4680",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x804a56c0",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x804a5700",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x804a5740",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x804a7f40",
+      "0x40",
+      "dolw-g1"
+    ],
+    [
+      "0x804a9a80",
+      "0xb20",
+      "dolw-g1"
+    ],
+    [
+      "0x804aa640",
+      "0x40",
+      "dolw-g1"
+    ],
+    [
+      "0x804aa6e0",
+      "0x40",
+      "dolw-g1"
+    ],
+    [
+      "0x804aa740",
+      "0x2e0",
+      "dolw-g1"
+    ],
+    [
+      "0x804adb20",
+      "0x140",
+      "dolw-g1"
+    ],
+    [
+      "0x804adc80",
+      "0x100",
+      "dolw-g1"
+    ],
+    [
+      "0x804afa80",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x805BAF04",
+      "0x700",
+      "gfPadSystem debug/game/menu/merged pads (input history, main thread)"
+    ],
+    [
+      "0x805BB608",
+      "0x238",
+      "gfPadSystem updateSystem bookkeeping (main thread)"
+    ],
+    [
+      "0x805BBFC0",
+      "0x100",
+      "controller config/ipSwitch pad struct (0x805BC060, main thread)"
+    ],
+    [
+      "0x805A0000",
+      "0x40",
+      ".sbss main-thread globals"
+    ],
+    [
+      "0x805A0100",
+      "0x80",
+      ".sbss main-thread globals"
+    ],
+    [
+      "0x805A0280",
+      "0x80",
+      ".sbss main-thread globals"
+    ],
+    [
+      "0x805A0340",
+      "0x40",
+      ".sbss main-thread globals"
+    ],
+    [
+      "0x805A03C0",
+      "0x40",
+      ".sbss main-thread globals"
+    ],
+    [
+      "0x8059C480",
+      "0x40",
+      ".sdata main-thread globals (gameProc)"
+    ],
+    [
+      "0x8059E900",
+      "0x40",
+      ".sdata main-thread globals"
+    ],
+    [
+      "0x805B8A00",
+      "0x140",
+      "gfTaskScheduler (list heads, pending list)"
+    ],
+    [
+      "0x805B6200",
+      "0x200",
+      "AreaManager gfTask and the pad manager object owning WiiPad's lists (System FW)"
+    ],
+    [
+      "0x805B4E80",
+      "0x2E0",
+      "main thread stack above the game loop (outer frames)"
+    ],
+    [
+      "0x935F0000",
+      "0x1000",
+      "P+ data above the heaps (input buffers, counters)"
+    ],
+    [
+      "0x805A7400",
+      "0x2000",
+      "P+ scratch at the bottom of the boot stack (pad struct 0x805A9338)"
+    ],
+    [
+      "0x805B6D20",
+      "0x740",
+      "gfCameraManager (System FW): cameras the game logic reads"
+    ],
+    [
+      "0x804953B0",
+      "0x20",
+      "gfSlowManager: s_gfSlowManager requests (.bss)"
+    ],
+    [
+      "0x805A0080",
+      "0x8",
+      "gfSlowManager: s_needsUpdate (.sbss)"
+    ],
+    [
+      "0x8059C690",
+      "0x8",
+      "gfSlowManager: s_maxSlowRate (.sdata)"
+    ],
+    [
+      "0x8049E570",
+      "0x30",
+      "ground collision object lists (grCollision: lbl_8049E570, g_grCollisionList, lbl_8049E588, lbl_8049E594)"
+    ],
+    [
+      "0x8049EE40",
+      "0x20",
+      "tail of the 0x14-byte record array at 0x8049EDE0 (lbl_8049EDD8; records point into the Effect heap); dolw-g1 covered only up to 0x8049EE40"
+    ],
+    [
+      "0x805B69E0",
+      "0x280",
+      "camera quake controller (System FW, *0x805A0280): quake flag +0x270, amplitude +0x268"
+    ],
+    [
+      "0x8049DEDC",
+      "0xC",
+      "camera subject list head (cmSubjectList: count, first, last)"
+    ],
+    [
+      "0x805BF860",
+      "0x5760",
+      "file IO manager: request queues and request pool (System FW)"
+    ],
+    [
+      "0x805CA1C0",
+      "0xA0",
+      "file IO manager (gfFileIOManager, System FW)"
+    ]
+  ],
+  "remove": [
+    [
+      "0x804A3E90",
+      "0x578",
+      "nw4r::ef draw strategies (function-local statics, guards in .sbss outside the set)"
+    ]
+  ],
+  "remove_heaps": [],
+  "exclude": [
+    [
+      "0x80611F40",
+      "0x20",
+      "GX FIFO ring tail (RenderFifo heap, below the System heap)"
+    ]
+  ]
+}
