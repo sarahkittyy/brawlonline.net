@@ -62,10 +62,6 @@ export class AccountsHttpClient {
     return this._request("POST", "/v1/me/rename", { token, body: { displayName } });
   }
 
-  acceptRules(token: string, num: number): Promise<AccountsMe> {
-    return this._request("POST", "/v1/me/accept-rules", { token, body: { num } });
-  }
-
   userJson(token: string): Promise<UserJson> {
     return this._request("GET", "/v1/me/user-json", { token });
   }

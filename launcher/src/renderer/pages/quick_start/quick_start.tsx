@@ -14,7 +14,6 @@ import { platformTitleBarStyles } from "@/styles/platform_title_bar_styles";
 
 import { QuickStartMessages as Messages } from "./quick_start.messages";
 import { StepperDots } from "./stepper_dots/stepper_dots";
-import { AcceptRulesStep } from "./steps/accept_rules_step/accept_rules_step";
 import { ActivateOnlineStep } from "./steps/activate_online_step/activate_online_step";
 import { IsoSelectionStep } from "./steps/iso_selection_step/iso_selection_step";
 import { LoginStep } from "./steps/login_step";
@@ -44,8 +43,6 @@ const getStepContent = (step: QuickStartStep | undefined) => {
       return <LoginStep />;
     case QuickStartStep.VERIFY_EMAIL:
       return <VerifyEmailStep />;
-    case QuickStartStep.ACCEPT_RULES:
-      return <AcceptRulesStep />;
     case QuickStartStep.ACTIVATE_ONLINE:
       return <ActivateOnlineStep />;
     case QuickStartStep.SET_ISO_PATH:

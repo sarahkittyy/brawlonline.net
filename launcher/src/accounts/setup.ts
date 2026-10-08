@@ -7,7 +7,6 @@ import { AccountsManager } from "./accounts_manager";
 import { AccountsHttpClient } from "./client";
 import { resolveServiceUrls } from "./config";
 import {
-  ipc_accountsAcceptRules,
   ipc_accountsHasSession,
   ipc_accountsInitNetplay,
   ipc_accountsLogin,
@@ -40,7 +39,6 @@ export default function setupAccountsIpc() {
   ipc_accountsRequestPasswordReset.main!.handle(async ({ email }) => manager.requestPasswordReset(email));
   ipc_accountsInitNetplay.main!.handle(async ({ uid, codeStart }) => manager.initNetplay(uid, codeStart));
   ipc_accountsRename.main!.handle(async ({ uid, displayName }) => await manager.rename(uid, displayName));
-  ipc_accountsAcceptRules.main!.handle(async ({ uid, num }) => await manager.acceptRules(uid, num));
   ipc_accountsPublicUser.main!.handle(async ({ uid }) => await manager.publicUser(uid));
   ipc_accountsServiceUrls.main!.handle(async () => urls);
 

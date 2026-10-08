@@ -1,4 +1,3 @@
-import { currentRulesVersion } from "@common/constants";
 import React from "react";
 import { create } from "zustand";
 import { combine } from "zustand/middleware";
@@ -11,7 +10,6 @@ import type { UserData } from "@/services/backend/types";
 export const enum QuickStartStep {
   LOGIN = "LOGIN",
   VERIFY_EMAIL = "VERIFY_EMAIL",
-  ACCEPT_RULES = "ACCEPT_RULES",
   ACTIVATE_ONLINE = "ACTIVATE_ONLINE",
   SET_ISO_PATH = "SET_ISO_PATH",
   COMPLETE = "COMPLETE",
@@ -39,7 +37,6 @@ const useQuickStartOptions = () => {
       hasIso: Boolean(savedIsoPath),
       hasVerifiedEmail: Boolean(user?.emailVerified),
       hasPlayKey: Boolean(userData?.playKey),
-      showRules: Boolean((userData?.rulesAccepted ?? 0) < currentRulesVersion),
       serverError: Boolean(serverError),
     };
   }, [user, userData, serverError, savedIsoPath]);
@@ -60,10 +57,6 @@ export const useQuickStart = () => {
       stepToShow = QuickStartStep.ACTIVATE_ONLINE;
     }
 
-    if (options.showRules && !options.serverError) {
-      stepToShow = QuickStartStep.ACCEPT_RULES;
-    }
-
     if (!options.hasVerifiedEmail && !options.serverError) {
       stepToShow = QuickStartStep.VERIFY_EMAIL;
     }
@@ -73,14 +66,7 @@ export const useQuickStart = () => {
     }
 
     setCurrentStep(stepToShow);
-  }, [
-    options.hasIso,
-    options.hasVerifiedEmail,
-    options.hasPlayKey,
-    options.hasUser,
-    options.showRules,
-    options.serverError,
-  ]);
+  }, [options.hasIso, options.hasVerifiedEmail, options.hasPlayKey, options.hasUser, options.serverError]);
 
   const nextStep = () => {
     const currentIndex = steps.findIndex((s) => s === currentStep);
@@ -123,11 +109,6 @@ export function generateQuickStartSteps(state: {
   const hasVerifiedEmail = Boolean(user?.emailVerified);
   if (!hasVerifiedEmail && !serverError) {
     steps.push(QuickStartStep.VERIFY_EMAIL);
-  }
-
-  const showRules = Boolean((userData?.rulesAccepted ?? 0) < currentRulesVersion);
-  if (showRules && !serverError) {
-    steps.push(QuickStartStep.ACCEPT_RULES);
   }
 
   const hasPlayKey = Boolean(userData?.playKey);

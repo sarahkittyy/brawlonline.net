@@ -20,8 +20,6 @@ const me = (overrides: Partial<AccountsMe> = {}): AccountsMe => ({
   displayName: "alice",
   connectCode: "ALIC#1",
   playKey: "pk",
-  rulesVersion: 1,
-  currentRulesVersion: 1,
   latestVersion: "0.1.0",
   role: "user",
   userJson: { uid: UID, playKey: "pk", connectCode: "ALIC#1", displayName: "alice", latestVersion: "0.1.0" },

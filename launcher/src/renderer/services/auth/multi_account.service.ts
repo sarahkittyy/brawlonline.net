@@ -388,8 +388,6 @@ function offlineRecord(account: StoredAccount): AccountsMe {
     displayName: account.displayName,
     connectCode: null,
     playKey: null,
-    rulesVersion: 0,
-    currentRulesVersion: 0,
     latestVersion: "",
     role: "user",
     userJson: null,

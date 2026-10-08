@@ -32,7 +32,6 @@ export type RankedProfile = {
 
 export type UserData = {
   playKey?: PlayKey;
-  rulesAccepted: number;
   rankedNetplayProfile?: RankedProfile;
 };
 
@@ -43,6 +42,5 @@ export interface BackendService {
   assertPlayKey(playKey: PlayKey): Promise<void>;
   deletePlayKey(): Promise<void>;
   changeDisplayName(name: string): Promise<void>;
-  acceptRules(): Promise<void>;
   initializeNetplay(codeStart: string): Promise<void>;
 }

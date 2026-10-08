@@ -1,4 +1,3 @@
-import { currentRulesVersion } from "@common/constants";
 import { Preconditions } from "@common/preconditions";
 import type { PlayKey } from "@dolphin/types";
 
@@ -57,7 +56,6 @@ class MockBackendClient implements BackendService {
         playKey: "playkey",
         displayName: displayName ?? `Demo user ${numUsers}`,
       },
-      rulesAccepted: 0,
       savedMessages,
       rankedNetplayProfile: mockRankedProfile,
     });
@@ -118,17 +116,6 @@ class MockBackendClient implements BackendService {
     userData.playKey!.displayName = name;
     this.fakeUsers.set(user.uid, userData);
     await this.authService.updateDisplayName(name);
-  }
-
-  @delayAndMaybeError(SHOULD_ERROR)
-  async acceptRules() {
-    const user = this.authService.getCurrentUser();
-    Preconditions.checkExists(user, "No user logged in");
-    const userData = this.fakeUsers.get(user.uid);
-    Preconditions.checkExists(userData, `No user with id: ${user.uid}`);
-
-    userData.rulesAccepted = currentRulesVersion;
-    this.fakeUsers.set(user.uid, userData);
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
