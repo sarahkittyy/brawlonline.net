@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand};
 use sqlx::PgPool;
 
 #[derive(Parser)]
-#[command(name = "admin", version, about = "Admin CLI: invites, users, password resets, bans")]
+#[command(name = "admin", version, about = "Admin CLI: users, password resets, bans")]
 struct Cli {
     #[arg(long, env = "DATABASE_URL", global = true, hide_env_values = true)]
     database_url: Option<String>,
@@ -26,29 +26,9 @@ enum Cmd {
     Migrate,
     /// Print a new random PLAY_KEY_SECRET.
     GenSecret,
-    /// Invite codes for sign-up.
-    #[command(subcommand)]
-    Invite(InviteCmd),
     /// Accounts. IDENT is a uid, an email or a connect code.
     #[command(subcommand)]
     User(UserCmd),
-}
-
-#[derive(Subcommand)]
-enum InviteCmd {
-    /// Create an invite code.
-    Create {
-        #[arg(long, default_value_t = 1)]
-        uses: i32,
-        #[arg(long)]
-        expires_days: Option<i64>,
-        #[arg(long)]
-        note: Option<String>,
-    },
-    List,
-    Revoke {
-        code: String,
-    },
 }
 
 #[derive(Subcommand)]
@@ -91,6 +71,14 @@ enum UserCmd {
     SetCode {
         ident: String,
         code: String,
+    },
+    /// Delete an account with its sessions and email tokens. Its connect code is free again
+    /// at once. Cannot be undone.
+    Delete {
+        ident: String,
+        /// Required: confirms the deletion.
+        #[arg(long)]
+        yes: bool,
     },
 }
 
@@ -146,50 +134,6 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Migrate => {
             common::db::MIGRATOR.run(&pool).await?;
             println!("migrations applied");
-        }
-        Cmd::Invite(InviteCmd::Create { uses, expires_days, note }) => {
-            anyhow::ensure!(uses > 0, "--uses must be at least 1");
-            let expires = expires_days.map(|d| Utc::now() + Duration::days(d));
-            let inv = store::create_invite(&pool, uses, expires, note.as_deref(), &actor).await?;
-            store::audit(
-                &pool,
-                &actor,
-                "invite.create",
-                Some(&inv.code),
-                serde_json::json!({"uses": uses, "expires": expires, "note": note}),
-            )
-            .await?;
-            println!("{}", inv.code);
-        }
-        Cmd::Invite(InviteCmd::List) => {
-            println!("{:<20} {:>9} {:<17} {:<8} note", "code", "uses", "expires", "state");
-            for i in store::list_invites(&pool).await? {
-                let state = if i.revoked_at.is_some() {
-                    "revoked"
-                } else if i.expires_at.is_some_and(|t| t <= Utc::now()) {
-                    "expired"
-                } else if i.uses >= i.max_uses {
-                    "used"
-                } else {
-                    "open"
-                };
-                let expires =
-                    i.expires_at.map(|t| t.format("%Y-%m-%d %H:%M").to_string()).unwrap_or_else(|| "never".into());
-                println!(
-                    "{:<20} {:>4}/{:<4} {:<17} {:<8} {}",
-                    i.code,
-                    i.uses,
-                    i.max_uses,
-                    expires,
-                    state,
-                    i.note.unwrap_or_default()
-                );
-            }
-        }
-        Cmd::Invite(InviteCmd::Revoke { code }) => {
-            anyhow::ensure!(store::revoke_invite(&pool, &code).await?, "no open invite {code}");
-            store::audit(&pool, &actor, "invite.revoke", Some(&code), serde_json::json!({})).await?;
-            println!("revoked");
         }
         Cmd::User(UserCmd::List) => {
             println!("{:<36} {:<10} {:<16} {:<30} {:<5} banned", "uid", "code", "name", "email", "ver.");
@@ -283,6 +227,20 @@ async fn main() -> anyhow::Result<()> {
             )
             .await?;
             println!("{} now has connect code {code}", u.email);
+        }
+        Cmd::User(UserCmd::Delete { ident, yes }) => {
+            let u = find(&pool, &ident).await?;
+            anyhow::ensure!(yes, "this deletes {} ({}) for good; add --yes to confirm", u.email, u.uid);
+            anyhow::ensure!(store::delete_user(&pool, u.uid).await?, "{} was already gone", u.uid);
+            store::audit(
+                &pool,
+                &actor,
+                "user.delete",
+                Some(&u.uid.to_string()),
+                serde_json::json!({"email": u.email, "connect_code": u.connect_code}),
+            )
+            .await?;
+            println!("deleted {} ({})", u.email, u.uid);
         }
     }
     Ok(())

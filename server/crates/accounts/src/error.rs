@@ -40,6 +40,10 @@ impl ApiError {
             retry_after: Some(secs),
         }
     }
+    pub fn with_message(mut self, message: impl Into<String>) -> Self {
+        self.message = message.into();
+        self
+    }
     pub fn internal(err: impl std::fmt::Display) -> Self {
         tracing::error!("internal error: {err}");
         Self::new(StatusCode::INTERNAL_SERVER_ERROR, "internal", "Internal server error")

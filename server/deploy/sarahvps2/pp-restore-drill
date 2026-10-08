@@ -8,8 +8,8 @@ echo "drill dump: $D"
 runuser -u postgres -- dropdb --if-exists pp_restore_drill
 runuser -u postgres -- createdb pp_restore_drill
 runuser -u postgres -- pg_restore --no-owner --no-acl --exit-on-error -d pp_restore_drill "$D"
-Q="SELECT format('%s users, %s audit rows, %s invites, %s matches, migrations [%s], %s tables',
-  (SELECT count(*) FROM users), (SELECT count(*) FROM audit_log), (SELECT count(*) FROM invites),
+Q="SELECT format('%s users, %s audit rows, %s matches, migrations [%s], %s tables',
+  (SELECT count(*) FROM users), (SELECT count(*) FROM audit_log),
   (SELECT count(*) FROM mm_matches), (SELECT string_agg(version::text, ',') FROM _sqlx_migrations),
   (SELECT count(*) FROM information_schema.tables WHERE table_schema = 'public'))"
 for db in pp pp_restore_drill; do

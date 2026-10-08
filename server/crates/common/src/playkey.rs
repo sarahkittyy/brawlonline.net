@@ -109,15 +109,6 @@ pub fn hash_token(token: &str) -> Vec<u8> {
     Sha256::digest(token.as_bytes()).to_vec()
 }
 
-/// A short human-typable invite code: 4 groups of 4 from an unambiguous alphabet.
-pub fn random_invite_code() -> String {
-    const ALPHABET: &[u8] = b"ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
-    let mut b = [0u8; 16];
-    rand::rngs::OsRng.fill_bytes(&mut b);
-    let chars: Vec<char> = b.iter().map(|x| ALPHABET[(*x as usize) % ALPHABET.len()] as char).collect();
-    chars.chunks(4).map(|c| c.iter().collect::<String>()).collect::<Vec<_>>().join("-")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -159,8 +150,5 @@ mod tests {
         assert_ne!(a, b);
         assert_eq!(hash_token(&a), hash_token(&a));
         assert_eq!(hash_token(&a).len(), 32);
-        let inv = random_invite_code();
-        assert_eq!(inv.len(), 19);
-        assert_eq!(inv.matches('-').count(), 3);
     }
 }

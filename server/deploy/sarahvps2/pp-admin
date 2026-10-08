@@ -1,6 +1,6 @@
 #!/bin/sh
 # pp-admin: the Brawl Online admin CLI with the production settings.
-# Installed to /usr/local/sbin/pp-admin. Usage: sudo pp-admin invite create --note "alice"
+# Installed to /usr/local/sbin/pp-admin. Usage: sudo pp-admin user list
 set -eu
 if [ "$(id -u)" -ne 0 ]; then exec sudo "$0" "$@"; fi
 set -a

@@ -92,7 +92,9 @@ pub struct MailConfig {
     #[arg(long, env = "MAIL_FILE", default_value = "mail.jsonl")]
     pub mail_file: String,
 
-    /// Stop sending after this many emails per UTC day (per process).
+    /// Stop sending after this many emails per UTC day (per process). accounts gives two
+    /// thirds of it to verification emails and the rest to password resets. Keep it below the
+    /// provider's daily quota (Brevo free: 300), leaving room for the admin CLI.
     #[arg(long, env = "MAIL_DAILY_LIMIT", default_value_t = 90)]
     pub mail_daily_limit: u32,
 
@@ -181,10 +183,6 @@ pub struct Config {
     #[command(flatten)]
     pub mail: MailConfig,
 
-    /// Require an invite code to sign up (friends-only phase).
-    #[arg(long, env = "SIGNUP_INVITE_ONLY", default_value_t = true, action = clap::ArgAction::Set)]
-    pub signup_invite_only: bool,
-
     /// Require a verified email before a connect code and play key are issued.
     #[arg(long, env = "REQUIRE_EMAIL_VERIFICATION", default_value_t = true, action = clap::ArgAction::Set)]
     pub require_email_verification: bool,
@@ -231,7 +229,6 @@ impl Config {
             play_key_secret: "11".repeat(32),
             public_base_url: "http://127.0.0.1:0".into(),
             mail: MailConfig::for_tests(),
-            signup_invite_only: true,
             require_email_verification: true,
             latest_version: "0.1.0".into(),
             trust_proxy_headers: false,

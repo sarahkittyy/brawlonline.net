@@ -1,9 +1,10 @@
 //! A small keyed sliding-window rate limiter.
 //!
 //! Design section 3: per-IP and per-account limits on login, sign-up and
-//! password reset (5/min and 20/h), and `create-ticket` limited per uid.
-//! The state is in memory; at friends scale one process holds it all. Time is
-//! passed in so tests are deterministic.
+//! password reset, and `create-ticket` limited per uid. The window sets for
+//! accounts are below; `server/README.md` ("Rate limits") explains them. The
+//! state is in memory; one process holds it all. Time is passed in so tests
+//! are deterministic.
 
 use std::collections::{HashMap, VecDeque};
 use std::hash::Hash;
@@ -21,9 +22,22 @@ impl Window {
     }
 }
 
+const MINUTE: Duration = Duration::from_secs(60);
+const HOUR: Duration = Duration::from_secs(3600);
+pub const DAY: Duration = Duration::from_secs(24 * 3600);
+
 /// The design's default for auth endpoints: 5 per minute and 20 per hour.
-pub const AUTH_WINDOWS: [Window; 2] =
-    [Window::new(5, Duration::from_secs(60)), Window::new(20, Duration::from_secs(3600))];
+/// Login (per IP and per email), password-reset requests and sign-up attempts
+/// (per IP), password changes (per account).
+pub const AUTH_WINDOWS: [Window; 2] = [Window::new(5, MINUTE), Window::new(20, HOUR)];
+
+/// Accounts created per client IP (an IPv6 /64 counts as one): 3 per hour and
+/// 10 per day. Each new account sends one verification email.
+pub const SIGNUP_IP_WINDOWS: [Window; 2] = [Window::new(3, HOUR), Window::new(10, DAY)];
+
+/// Emails to one recipient, per kind (verification resends per account,
+/// password resets per address): 1 per minute, 3 per hour and 5 per day.
+pub const MAIL_RECIPIENT_WINDOWS: [Window; 3] = [Window::new(1, MINUTE), Window::new(3, HOUR), Window::new(5, DAY)];
 
 #[derive(Debug)]
 pub struct RateLimiter<K> {

@@ -2,7 +2,7 @@
 
 use chrono::{DateTime, Duration, Utc};
 use common::codes::{candidate_numbers, ConnectCode};
-use common::playkey::{hash_token, random_invite_code, random_token};
+use common::playkey::{hash_token, random_token};
 use rand::Rng;
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
@@ -58,16 +58,10 @@ pub fn normalize_email(input: &str) -> Result<String, &'static str> {
     Ok(e)
 }
 
-pub fn normalize_invite(code: &str) -> String {
-    code.trim().to_ascii_uppercase()
-}
-
 #[derive(Debug, thiserror::Error)]
 pub enum CreateUserError {
     #[error("An account with this email already exists")]
     EmailTaken,
-    #[error("Invalid or expired invite code")]
-    BadInvite,
     #[error(transparent)]
     Db(#[from] sqlx::Error),
 }
@@ -77,43 +71,24 @@ fn is_unique_violation(e: &sqlx::Error, constraint: &str) -> bool {
         && db.constraint().is_some_and(|c| c.contains(constraint)))
 }
 
-/// Creates an account, consuming one use of `invite` when given.
+/// Creates an account.
 pub async fn create_user(
     pool: &PgPool,
     email: &str,
     pw_hash: &str,
     display_name: &str,
-    invite: Option<&str>,
 ) -> Result<UserRow, CreateUserError> {
-    let mut tx = pool.begin().await?;
-    let invite = invite.map(normalize_invite);
-    if let Some(code) = &invite {
-        let used = sqlx::query_scalar::<_, String>(
-            "UPDATE invites SET uses = uses + 1
-              WHERE code = $1 AND revoked_at IS NULL AND uses < max_uses
-                AND (expires_at IS NULL OR expires_at > now())
-          RETURNING code",
-        )
-        .bind(code)
-        .fetch_optional(&mut *tx)
-        .await?;
-        if used.is_none() {
-            return Err(CreateUserError::BadInvite);
-        }
-    }
     let row = sqlx::query_as::<_, UserRow>(&format!(
-        "INSERT INTO users (uid, email, pw_hash, display_name, invite_code)
-         VALUES ($1, $2, $3, $4, $5) RETURNING {USER_COLS}"
+        "INSERT INTO users (uid, email, pw_hash, display_name)
+         VALUES ($1, $2, $3, $4) RETURNING {USER_COLS}"
     ))
     .bind(Uuid::new_v4())
     .bind(email)
     .bind(pw_hash)
     .bind(display_name)
-    .bind(&invite)
-    .fetch_one(&mut *tx)
+    .fetch_one(pool)
     .await
     .map_err(|e| if is_unique_violation(&e, "email") { CreateUserError::EmailTaken } else { e.into() })?;
-    tx.commit().await?;
     Ok(row)
 }
 
@@ -389,53 +364,10 @@ pub async fn accept_rules(pool: &PgPool, uid: Uuid, version: i32) -> sqlx::Resul
 
 // ---------------------------------------------------------------- admin
 
-#[derive(Debug, Clone, sqlx::FromRow)]
-pub struct InviteRow {
-    pub code: String,
-    pub created_at: DateTime<Utc>,
-    pub expires_at: Option<DateTime<Utc>>,
-    pub max_uses: i32,
-    pub uses: i32,
-    pub note: Option<String>,
-    pub created_by: String,
-    pub revoked_at: Option<DateTime<Utc>>,
-}
-
-pub async fn create_invite(
-    pool: &PgPool,
-    max_uses: i32,
-    expires_at: Option<DateTime<Utc>>,
-    note: Option<&str>,
-    actor: &str,
-) -> sqlx::Result<InviteRow> {
-    sqlx::query_as(
-        "INSERT INTO invites (code, max_uses, expires_at, note, created_by) VALUES ($1, $2, $3, $4, $5)
-         RETURNING code, created_at, expires_at, max_uses, uses, note, created_by, revoked_at",
-    )
-    .bind(random_invite_code())
-    .bind(max_uses)
-    .bind(expires_at)
-    .bind(note)
-    .bind(actor)
-    .fetch_one(pool)
-    .await
-}
-
-pub async fn list_invites(pool: &PgPool) -> sqlx::Result<Vec<InviteRow>> {
-    sqlx::query_as(
-        "SELECT code, created_at, expires_at, max_uses, uses, note, created_by, revoked_at FROM invites ORDER BY created_at",
-    )
-    .fetch_all(pool)
-    .await
-}
-
-pub async fn revoke_invite(pool: &PgPool, code: &str) -> sqlx::Result<bool> {
-    Ok(sqlx::query("UPDATE invites SET revoked_at = now() WHERE code = $1 AND revoked_at IS NULL")
-        .bind(normalize_invite(code))
-        .execute(pool)
-        .await?
-        .rows_affected()
-        == 1)
+/// Deletes an account. Its sessions and email tokens go with it (`ON DELETE CASCADE`);
+/// `mm_matches` rows keep the uid. The connect code is free again at once.
+pub async fn delete_user(pool: &PgPool, uid: Uuid) -> sqlx::Result<bool> {
+    Ok(sqlx::query("DELETE FROM users WHERE uid = $1").bind(uid).execute(pool).await?.rows_affected() == 1)
 }
 
 /// Bans until `until` (or lifts the ban with `None`). A ban also ends all
@@ -496,10 +428,5 @@ mod tests {
         for bad in ["", "a", "a@", "@b.c", "a@b", "a@@b.c", "a b@c.d", "a@.b", "a@b.", "a@b@c.de"] {
             assert!(normalize_email(bad).is_err(), "{bad}");
         }
-    }
-
-    #[test]
-    fn invite_normalization() {
-        assert_eq!(normalize_invite(" abcd-efgh "), "ABCD-EFGH");
     }
 }

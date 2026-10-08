@@ -1,6 +1,6 @@
 [package]
 name = "accounts"
-description = "Accounts web service: invite/email sign-up, login, connect codes, play keys, user.json data."
+description = "Accounts web service: open sign-up with email verification, login, connect codes, play keys, user.json data."
 version.workspace = true
 edition.workspace = true
 license.workspace = true
