@@ -1,11 +1,12 @@
 //! The ENet event loop around [`Engine`].
 //!
 //! One thread owns the ENet host and the engine (design 2.3: single-threaded
-//! loop, all queue state in memory). Database work goes to a tokio task over a
-//! channel and comes back as [`Input::UserFetched`], so a slow database never
-//! blocks the loop.
+//! loop, all queue state in memory). Account lookups go to a tokio task over a
+//! bounded channel and come back as [`Input::UserFetched`], so a slow database
+//! never blocks the loop; a full queue refuses the ticket instead of growing.
 
 use std::collections::HashMap;
+use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc as std_mpsc, Arc};
@@ -19,7 +20,8 @@ use common::playkey::PlayKeySecret;
 use common::proto::{MM_CHANNEL, MM_CHANNEL_COUNT};
 use rusty_enet::{EventNoRef, Host, HostSettings, Packet, PeerID};
 use sqlx::PgPool;
-use tokio::sync::mpsc as tk_mpsc;
+use tokio::sync::mpsc::error::TrySendError;
+use tokio::sync::{mpsc as tk_mpsc, Semaphore};
 use uuid::Uuid;
 
 use crate::engine::{ConnId, Engine, EngineConfig, FetchResult, Input, MatchRecord, Output};
@@ -33,10 +35,17 @@ const IDLE_SLEEP: Duration = Duration::from_millis(2);
 /// which cost that client 3 s of its 8 s P2P connect window. Waiting a moment lets the client go
 /// first; a client that does not is still disconnected.
 const DISCONNECT_GRACE: Duration = Duration::from_secs(1);
+/// Account lookups waiting for the database worker. When the queue is full the ticket is refused
+/// ("temporarily unavailable") instead of the queue growing without bound.
+const FETCH_QUEUE: usize = 256;
+/// Account lookups running at once. The pool has 5 connections; the rest wait for one (up to the
+/// lookup timeout), and further lookups wait in [`FETCH_QUEUE`].
+const MAX_FETCHES_IN_FLIGHT: usize = 16;
 
-enum DbJob {
-    Fetch { conn: ConnId, seq: u64, uid: Uuid },
-    Record(MatchRecord),
+struct FetchJob {
+    conn: ConnId,
+    seq: u64,
+    uid: Uuid,
 }
 
 type Fetched = (ConnId, u64, FetchResult);
@@ -97,61 +106,96 @@ pub fn start(
     )
     .map_err(|e| anyhow::anyhow!("creating ENet host: {e:?}"))?;
 
-    let (job_tx, job_rx) = tk_mpsc::unbounded_channel::<DbJob>();
+    let (job_tx, job_rx) = tk_mpsc::channel::<FetchJob>(FETCH_QUEUE);
     let (done_tx, done_rx) = std_mpsc::channel::<Fetched>();
-    rt.spawn(db_worker(pool, job_rx, done_tx));
+    let fetch_pool = pool.clone();
+    rt.spawn(fetch_worker(
+        move |uid| fetch_user(fetch_pool.clone(), uid),
+        job_rx,
+        done_tx.clone(),
+        MAX_FETCHES_IN_FLIGHT,
+    ));
 
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = stop.clone();
     let engine = Engine::new(engine_cfg, secret);
+    let db = Db { fetches: job_tx, fetched: done_tx, pool, rt };
     let thread = std::thread::Builder::new()
         .name("mm-enet".into())
-        .spawn(move || event_loop(host, engine, job_tx, done_rx, stop2))?;
+        .spawn(move || event_loop(host, engine, db, done_rx, stop2))?;
     tracing::info!("mm listening on udp://{addr}");
     Ok(MmHandle { addr, stop, thread: Some(thread) })
 }
 
-async fn db_worker(pool: PgPool, mut jobs: tk_mpsc::UnboundedReceiver<DbJob>, done: std_mpsc::Sender<Fetched>) {
+/// Runs account lookups from `jobs`, at most `max_in_flight` at once. While all slots are busy it
+/// stops taking jobs, so the bounded channel fills and [`queue_fetch`] refuses further tickets.
+async fn fetch_worker<F, Fut>(
+    fetch: F,
+    mut jobs: tk_mpsc::Receiver<FetchJob>,
+    done: std_mpsc::Sender<Fetched>,
+    max_in_flight: usize,
+) where
+    F: Fn(Uuid) -> Fut,
+    Fut: Future<Output = FetchResult> + Send + 'static,
+{
+    let slots = Arc::new(Semaphore::new(max_in_flight.max(1)));
     while let Some(job) = jobs.recv().await {
-        let pool = pool.clone();
+        let Ok(slot) = slots.clone().acquire_owned().await else { break };
+        let lookup = fetch(job.uid);
         let done = done.clone();
         tokio::spawn(async move {
-            match job {
-                DbJob::Fetch { conn, seq, uid } => {
-                    let result = match tokio::time::timeout(Duration::from_secs(3), db::fetch_mm_user(&pool, uid)).await
-                    {
-                        Ok(Ok(Some(u))) => FetchResult::Found(u),
-                        Ok(Ok(None)) => FetchResult::NotFound,
-                        Ok(Err(e)) => FetchResult::Error(e.to_string()),
-                        Err(_) => FetchResult::Error("account lookup timed out".into()),
-                    };
-                    let _ = done.send((conn, seq, result));
-                }
-                DbJob::Record(m) => {
-                    let stages: Vec<i16> = m.stages.iter().map(|s| *s as i16).collect();
-                    if let Err(e) = db::insert_match(
-                        &pool,
-                        &m.match_id,
-                        m.mode.as_u8() as i16,
-                        &m.players,
-                        m.host,
-                        &stages,
-                        &m.region,
-                    )
-                    .await
-                    {
-                        tracing::error!(match_id = %m.match_id, "recording match failed: {e}");
-                    }
-                }
-            }
+            let result = lookup.await;
+            drop(slot);
+            let _ = done.send((job.conn, job.seq, result));
         });
     }
+}
+
+async fn fetch_user(pool: PgPool, uid: Uuid) -> FetchResult {
+    match tokio::time::timeout(Duration::from_secs(3), db::fetch_mm_user(&pool, uid)).await {
+        Ok(Ok(Some(u))) => FetchResult::Found(u),
+        Ok(Ok(None)) => FetchResult::NotFound,
+        Ok(Err(e)) => FetchResult::Error(e.to_string()),
+        Err(_) => FetchResult::Error("account lookup timed out".into()),
+    }
+}
+
+/// Hands an account lookup to the worker, or answers it at once with an error when the queue is
+/// full (the engine then refuses the ticket as "temporarily unavailable").
+fn queue_fetch(jobs: &tk_mpsc::Sender<FetchJob>, done: &std_mpsc::Sender<Fetched>, job: FetchJob) {
+    let (job, why) = match jobs.try_send(job) {
+        Ok(()) => return,
+        Err(TrySendError::Full(job)) => (job, "account lookup queue full"),
+        Err(TrySendError::Closed(job)) => (job, "account lookup worker stopped"),
+    };
+    tracing::warn!(conn = job.conn, "{why}");
+    let _ = done.send((job.conn, job.seq, FetchResult::Error(why.into())));
+}
+
+/// Match records are not queued with the lookups: they need two verified, rate-limited accounts,
+/// and must not be lost when the lookup queue is full.
+async fn record_match(pool: PgPool, m: MatchRecord) {
+    let stages: Vec<i16> = m.stages.iter().map(|s| *s as i16).collect();
+    if let Err(e) =
+        db::insert_match(&pool, &m.match_id, m.mode.as_u8() as i16, &m.players, m.host, &stages, &m.region).await
+    {
+        tracing::error!(match_id = %m.match_id, "recording match failed: {e}");
+    }
+}
+
+/// The event loop's way to the database.
+struct Db {
+    fetches: tk_mpsc::Sender<FetchJob>,
+    /// Where lookup results come back; also used to refuse a lookup when the queue is full.
+    fetched: std_mpsc::Sender<Fetched>,
+    pool: PgPool,
+    rt: tokio::runtime::Handle,
 }
 
 struct Loop {
     host: Host<EnetSocket>,
     engine: Engine,
-    jobs: tk_mpsc::UnboundedSender<DbJob>,
+    db: Db,
     peer_conn: HashMap<PeerID, ConnId>,
     conn_peer: HashMap<ConnId, PeerID>,
     next_conn: ConnId,
@@ -182,11 +226,16 @@ impl Loop {
                     self.pending_disconnects.push((conn, Instant::now() + DISCONNECT_GRACE));
                 }
             }
+            Output::Close { conn } => {
+                if let Some(pid) = self.conn_peer.get(&conn) {
+                    self.host.peer_mut(*pid).disconnect_later(0);
+                }
+            }
             Output::FetchUser { conn, seq, uid } => {
-                let _ = self.jobs.send(DbJob::Fetch { conn, seq, uid });
+                queue_fetch(&self.db.fetches, &self.db.fetched, FetchJob { conn, seq, uid });
             }
             Output::RecordMatch(m) => {
-                let _ = self.jobs.send(DbJob::Record(m));
+                self.db.rt.spawn(record_match(self.db.pool.clone(), m));
             }
         }
     }
@@ -248,14 +297,14 @@ impl Loop {
 fn event_loop(
     host: Host<EnetSocket>,
     engine: Engine,
-    jobs: tk_mpsc::UnboundedSender<DbJob>,
+    db: Db,
     done: std_mpsc::Receiver<Fetched>,
     stop: Arc<AtomicBool>,
 ) {
     let mut lp = Loop {
         host,
         engine,
-        jobs,
+        db,
         peer_conn: HashMap::new(),
         conn_peer: HashMap::new(),
         next_conn: 1,
@@ -307,4 +356,84 @@ fn event_loop(
     }
     lp.host.flush();
     tracing::info!("mm stopped");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::atomic::AtomicUsize;
+
+    fn job(conn: ConnId) -> FetchJob {
+        FetchJob { conn, seq: conn * 10, uid: Uuid::new_v4() }
+    }
+
+    #[test]
+    fn full_or_closed_fetch_queue_answers_with_an_error() {
+        let (tx, mut rx) = tk_mpsc::channel(1);
+        let (done_tx, done_rx) = std_mpsc::channel();
+        queue_fetch(&tx, &done_tx, job(1));
+        queue_fetch(&tx, &done_tx, job(2));
+        assert!(matches!(done_rx.try_recv(), Ok((2, 20, FetchResult::Error(_)))));
+        assert!(done_rx.try_recv().is_err(), "the first job was queued, not answered");
+        assert_eq!(rx.try_recv().unwrap().conn, 1);
+        drop(rx);
+        queue_fetch(&tx, &done_tx, job(3));
+        assert!(matches!(done_rx.try_recv(), Ok((3, 30, FetchResult::Error(_)))));
+    }
+
+    /// A flood of lookups against a stuck database: at most `max_in_flight` run, the queue holds
+    /// its capacity, everything else is refused at once, and all queued lookups finish once the
+    /// database answers again.
+    #[tokio::test]
+    async fn fetch_worker_bounds_lookups_in_flight() {
+        let running = Arc::new(AtomicUsize::new(0));
+        let peak = Arc::new(AtomicUsize::new(0));
+        let gate = Arc::new(Semaphore::new(0));
+        let (r, p, g) = (running.clone(), peak.clone(), gate.clone());
+        let fetch = move |_uid| {
+            let (r, p, g) = (r.clone(), p.clone(), g.clone());
+            async move {
+                p.fetch_max(r.fetch_add(1, Ordering::SeqCst) + 1, Ordering::SeqCst);
+                let _open = g.acquire().await;
+                r.fetch_sub(1, Ordering::SeqCst);
+                FetchResult::NotFound
+            }
+        };
+        let (tx, rx) = tk_mpsc::channel(4);
+        let (done_tx, done_rx) = std_mpsc::channel();
+        let worker = tokio::spawn(fetch_worker(fetch, rx, done_tx.clone(), 2));
+
+        queue_fetch(&tx, &done_tx, job(1));
+        queue_fetch(&tx, &done_tx, job(2));
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while running.load(Ordering::SeqCst) < 2 {
+            assert!(Instant::now() < deadline, "lookups did not start");
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        for conn in 3..=20 {
+            queue_fetch(&tx, &done_tx, job(conn));
+        }
+        let mut refused = vec![];
+        while let Ok((conn, _, result)) = done_rx.try_recv() {
+            assert!(matches!(result, FetchResult::Error(_)));
+            refused.push(conn);
+        }
+        // The worker holds at most one job waiting for a slot; the channel holds 4.
+        assert!((13..=14).contains(&refused.len()), "{refused:?}");
+
+        gate.add_permits(1000);
+        let mut found = 0;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        while found < 20 - refused.len() {
+            assert!(Instant::now() < deadline, "queued lookups did not finish ({found} done)");
+            match done_rx.try_recv() {
+                Ok((_, _, FetchResult::NotFound)) => found += 1,
+                Ok(other) => panic!("unexpected {other:?}"),
+                Err(_) => tokio::time::sleep(Duration::from_millis(5)).await,
+            }
+        }
+        assert_eq!(peak.load(Ordering::SeqCst), 2);
+        drop(tx);
+        tokio::time::timeout(Duration::from_secs(5), worker).await.expect("worker stops").unwrap();
+    }
 }

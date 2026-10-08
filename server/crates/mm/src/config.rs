@@ -54,6 +54,11 @@ pub struct Config {
     /// Seconds between tickets from one account.
     #[arg(long, env = "MM_TICKET_INTERVAL_SECS", default_value_t = 2)]
     pub ticket_interval_secs: u64,
+
+    /// Simultaneous connections from one address (IPv6: one /64). Raise it for venues where many
+    /// players share one public address.
+    #[arg(long, env = "MM_MAX_CONNS_PER_IP", default_value_t = 8)]
+    pub max_conns_per_ip: usize,
 }
 
 impl Config {
@@ -66,6 +71,7 @@ impl Config {
             rulesets: Rulesets::load(self.rulesets_file.as_deref())?,
             regions: RegionMap::load(self.regions_file.as_deref())?,
             region_widen: Duration::from_secs(self.region_widen_secs),
+            max_conns_per_ip: self.max_conns_per_ip.max(1),
             ..EngineConfig::default()
         })
     }
@@ -83,6 +89,7 @@ impl Config {
             region_widen_secs: 30,
             max_peers: 64,
             ticket_interval_secs: 2,
+            max_conns_per_ip: 8,
         }
     }
 }

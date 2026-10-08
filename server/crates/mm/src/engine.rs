@@ -10,8 +10,15 @@
 //! Idle --create-ticket--> Validating --account ok--> Waiting --paired--> Done
 //!   |                        |                          |
 //!   |                        +--error/timeout--> Done   +--TTL--> Done (get-ticket-resp error)
+//!   +--no ticket within idle_timeout--> Done
 //!   +-- (client disconnect at any point removes the connection)
 //! ```
+//!
+//! Abuse limits, all checked before the database is asked anything: at most
+//! `max_conns_per_ip` connections per source address (IPv6: per /64), tickets per source
+//! address (`ip_ticket_window`), and one account lookup in flight per connection. The
+//! per-account limit (`ticket_interval`) is checked only after the play key is verified, so
+//! nobody can use up someone else's limit by sending tickets with their uid.
 //!
 //! Every refusal is an explicit `error` the game shows: tickets are never
 //! dropped silently.
@@ -31,13 +38,13 @@
 //! each other (they keep searching) until the window has passed.
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
 use common::codes::{decode_search_code, ConnectCode};
 use common::db::MmUser;
-use common::net::{sanitize_lan_addr, to_v4};
+use common::net::{ip_key, sanitize_lan_addr, to_v4};
 use common::playkey::PlayKeySecret;
 use common::proto::{
     parse_client_message, ClientMessage, CreateTicket, CreateTicketResp, GetTicketResp, Mode, Player, GET_TICKET_RESP,
@@ -65,8 +72,16 @@ pub struct EngineConfig {
     /// How long an account lookup may take before the ticket is refused. The
     /// client gives up on `create-ticket-resp` after 5 s.
     pub auth_timeout: Duration,
-    /// Tickets per uid: at most 1 per this interval (design 3: 1 per 2 s).
+    /// Tickets per uid: at most 1 per this interval (design 3: 1 per 2 s). Checked once the
+    /// play key is verified.
     pub ticket_interval: Duration,
+    /// Tickets per source address (IPv6: per /64), checked before the account lookup.
+    pub ip_ticket_window: Window,
+    /// Connections per source address (IPv6: per /64). Further connections are refused at once.
+    pub max_conns_per_ip: usize,
+    /// A connection that has sent no ticket this long after connecting is closed. The game sends
+    /// its ticket right after the ENet handshake.
+    pub idle_timeout: Duration,
     /// A pair that is matched again within this window of its last match is
     /// assumed to have failed the P2P connect.
     pub requeue_window: Duration,
@@ -92,6 +107,9 @@ impl Default for EngineConfig {
             ticket_ttl: Duration::from_secs(600),
             auth_timeout: Duration::from_secs(4),
             ticket_interval: Duration::from_secs(2),
+            ip_ticket_window: Window::new(30, Duration::from_secs(10)),
+            max_conns_per_ip: 8,
+            idle_timeout: Duration::from_secs(10),
             requeue_window: Duration::from_secs(60),
             repair_backoff: Duration::from_secs(5),
             max_connect_failures: 3,
@@ -143,6 +161,11 @@ pub enum Output {
     Disconnect {
         conn: ConnId,
     },
+    /// Disconnect after queued packets are delivered, without the grace period: a connection the
+    /// engine refused as soon as it connected (it does not track it).
+    Close {
+        conn: ConnId,
+    },
     FetchUser {
         conn: ConnId,
         seq: u64,
@@ -185,6 +208,8 @@ enum State {
 #[derive(Debug)]
 struct Conn {
     addr: SocketAddr,
+    /// When the connection was made (for `idle_timeout`).
+    since: Instant,
     state: State,
 }
 
@@ -206,6 +231,7 @@ pub struct Engine {
     /// failed P2P connect.
     history: HashMap<(Uuid, Uuid), PairHistory>,
     ticket_limiter: RateLimiter<Uuid>,
+    ip_limiter: RateLimiter<IpAddr>,
     next_seq: u64,
     match_counter: u64,
 }
@@ -239,6 +265,7 @@ pub fn parse_version(v: &str) -> (u64, u64, u64) {
 impl Engine {
     pub fn new(cfg: EngineConfig, secret: PlayKeySecret) -> Self {
         let ticket_limiter = RateLimiter::new(&[Window::new(1, cfg.ticket_interval)]);
+        let ip_limiter = RateLimiter::new(&[cfg.ip_ticket_window]);
         Engine {
             cfg,
             secret,
@@ -247,6 +274,7 @@ impl Engine {
             unranked: Vec::new(),
             history: HashMap::new(),
             ticket_limiter,
+            ip_limiter,
             next_seq: 1,
             match_counter: 0,
         }
@@ -263,9 +291,7 @@ impl Engine {
     pub fn handle(&mut self, now: Instant, wall: DateTime<Utc>, input: Input) -> Vec<Output> {
         let mut out = Vec::new();
         match input {
-            Input::Connected { conn, addr } => {
-                self.conns.insert(conn, Conn { addr, state: State::Idle });
-            }
+            Input::Connected { conn, addr } => self.on_connect(now, conn, addr, &mut out),
             Input::Disconnected { conn } => {
                 if let Some(c) = self.conns.remove(&conn) {
                     if let State::Waiting(w) = &c.state {
@@ -315,10 +341,27 @@ impl Engine {
         self.unranked.retain(|c| *c != conn);
     }
 
+    fn on_connect(&mut self, now: Instant, conn: ConnId, addr: SocketAddr, out: &mut Vec<Output>) {
+        let key = ip_key(addr.ip());
+        let from_key = self.conns.values().filter(|c| ip_key(c.addr.ip()) == key).count();
+        if from_key >= self.cfg.max_conns_per_ip {
+            tracing::warn!(conn, %addr, from_key, "connection refused: too many from this address");
+            // The game reads this as the answer to the ticket it sends next.
+            Self::send(out, conn, &CreateTicketResp::error("Too many connections from your network. Try again later."));
+            out.push(Output::Close { conn });
+            return;
+        }
+        self.conns.insert(conn, Conn { addr, since: now, state: State::Idle });
+    }
+
     fn on_packet(&mut self, now: Instant, conn: ConnId, data: &[u8], out: &mut Vec<Output>) {
         let Some(c) = self.conns.get(&conn) else { return };
-        if matches!(c.state, State::Done) {
-            return;
+        match c.state {
+            State::Done => return,
+            // One account lookup in flight per connection: the game never sends a second
+            // ticket before the answer to its first.
+            State::Validating(_) => return self.refuse(out, conn, "Invalid matchmaking request"),
+            State::Idle | State::Waiting(_) => {}
         }
         if data.len() > MAX_PACKET {
             self.refuse(out, conn, "Invalid matchmaking request");
@@ -379,8 +422,14 @@ impl Engine {
             },
             _ => None,
         };
-        if self.ticket_limiter.check(&uid, now).is_err() {
-            return self.refuse(out, conn, "Searching too often. Wait a few seconds and try again.");
+        let Some(addr) = self.conns.get(&conn).map(|c| c.addr) else { return };
+        // The game cannot use an IPv6 peer address (it splits `ipAddress` on ':'), and an empty
+        // one crashes older clients, so such tickets are refused before they can be matched.
+        if to_v4(addr).is_none() {
+            return self.refuse(out, conn, "Online play needs IPv4. Your game reached the server over IPv6.");
+        }
+        if self.ip_limiter.check(&ip_key(addr.ip()), now).is_err() {
+            return self.refuse(out, conn, "Too many searches from your network. Wait a few seconds and try again.");
         }
         let seq = self.next_seq;
         self.next_seq += 1;
@@ -423,6 +472,11 @@ impl Engine {
         };
         if !self.secret.verify(user.uid, user.play_key_version, &p.play_key) {
             return self.refuse(out, conn, "Invalid play key. Log in again in the launcher.");
+        }
+        // Only after the play key: otherwise anyone knowing a uid (opponents see it) could keep
+        // that account from searching.
+        if self.ticket_limiter.check(&user.uid, now).is_err() {
+            return self.refuse(out, conn, "Searching too often. Wait a few seconds and try again.");
         }
         if user.is_banned(wall) {
             return self.refuse(out, conn, "This account is banned from online play.");
@@ -470,9 +524,11 @@ impl Engine {
     fn on_tick(&mut self, now: Instant, wall: DateTime<Utc>, out: &mut Vec<Output>) {
         let mut expired = Vec::new();
         let mut auth_late = Vec::new();
+        let mut idle = Vec::new();
         let mut waiting = Vec::new();
         for (id, c) in &self.conns {
             match &c.state {
+                State::Idle if now.saturating_duration_since(c.since) >= self.cfg.idle_timeout => idle.push(*id),
                 State::Waiting(w) if now.saturating_duration_since(w.since) >= self.cfg.ticket_ttl => {
                     expired.push((*id, w.mode, w.target.clone()))
                 }
@@ -482,6 +538,9 @@ impl Engine {
                 }
                 _ => {}
             }
+        }
+        for id in idle {
+            self.refuse(out, id, "No matchmaking request received. Try again.");
         }
         for id in auth_late {
             self.refuse(out, id, "Matchmaking is temporarily unavailable. Try again later.");
@@ -617,7 +676,7 @@ impl Engine {
         let mut entrants: Vec<(ConnId, SocketAddr, Waiting)> = conns
             .iter()
             .filter_map(|id| match self.conns.get(id) {
-                Some(Conn { addr, state: State::Waiting(w) }) => Some((*id, *addr, w.clone())),
+                Some(Conn { addr, state: State::Waiting(w), .. }) => Some((*id, *addr, w.clone())),
                 _ => None,
             })
             .collect();
@@ -645,6 +704,7 @@ impl Engine {
                 connect_code: w.code.clone(),
                 port: (i + 1) as u8,
                 is_local_player: false,
+                // Never empty: tickets without an IPv4 address are refused in on_create_ticket.
                 ip_address: to_v4(*addr).map(|a| a.to_string()).unwrap_or_default(),
                 ip_address_lan: w.lan.clone(),
                 chat_messages: common::DEFAULT_CHAT_MESSAGES.iter().map(|s| s.to_string()).collect(),
@@ -732,7 +792,10 @@ mod tests {
             self.input(Input::Tick)
         }
         fn connect(&mut self, conn: ConnId, port: u16) {
-            let addr: SocketAddr = format!("203.0.113.{}:{port}", conn).parse().unwrap();
+            self.connect_from(conn, &format!("203.0.113.{}:{port}", conn));
+        }
+        fn connect_from(&mut self, conn: ConnId, addr: &str) {
+            let addr: SocketAddr = addr.parse().unwrap();
             assert!(self.input(Input::Connected { conn, addr }).is_empty());
         }
         fn ticket_json(&self, u: &MmUser, target: &str, mode: u8) -> Value {
@@ -1030,6 +1093,161 @@ mod tests {
         h.ticket(1, &a, "BB#1");
         let out = h.ticket(2, &a, "BB#1");
         assert_eq!(sent(&out, 2)[0]["error"], "Searching too often. Wait a few seconds and try again.");
+    }
+
+    /// Anyone can send a ticket with someone else's uid (opponents see it, `/user/{uid}` is
+    /// public). Without the play key such tickets must not use up that account's ticket limit.
+    #[test]
+    fn uid_rate_limit_needs_the_play_key() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (victim, b) = (user("VI#1", "victim"), user("BB#1", "b"));
+        h.add(&victim);
+        h.add(&b);
+        for conn in 1..=5 {
+            h.connect(conn, 1);
+            let mut v = h.ticket_json(&victim, "BB#1", 2);
+            v["user"]["playKey"] = json!("x");
+            let out = h.raw(conn, v.to_string().as_bytes());
+            assert_eq!(sent(&out, conn)[0]["error"], "Invalid play key. Log in again in the launcher.");
+        }
+        h.connect(10, 1);
+        let out = h.ticket(10, &victim, "BB#1");
+        assert_eq!(sent(&out, 10), vec![json!({"type": "create-ticket-resp"})]);
+        assert_eq!(h.e.waiting_count(), 1);
+    }
+
+    /// Tickets per source address are limited before the account lookup, so random uids cannot
+    /// flood the database.
+    #[test]
+    fn ip_ticket_limit_applies_before_the_account_lookup() {
+        let mut h = Harness::new(EngineConfig {
+            ip_ticket_window: Window::new(3, Duration::from_secs(10)),
+            ..Default::default()
+        });
+        let fetches = |out: &[Output]| out.iter().filter(|o| matches!(o, Output::FetchUser { .. })).count();
+        for conn in 1..=3 {
+            h.connect_from(conn, &format!("198.51.100.7:{}", 40000 + conn));
+            let v = h.ticket_json(&user("RA#1", "r"), "BB#1", 2);
+            let out = h.raw(conn, v.to_string().as_bytes());
+            assert_eq!(fetches(&out), 1);
+            assert_eq!(sent(&out, conn)[0]["error"], "Account not found. Log in again in the launcher.");
+        }
+        h.connect_from(4, "198.51.100.7:40004");
+        let v = h.ticket_json(&user("RA#1", "r"), "BB#1", 2);
+        let out = h.raw(4, v.to_string().as_bytes());
+        assert_eq!(fetches(&out), 0);
+        assert_eq!(sent(&out, 4)[0]["error"], "Too many searches from your network. Wait a few seconds and try again.");
+        assert!(disconnected(&out, 4));
+        // Another address is not affected; the limit frees up after its window.
+        h.connect_from(5, "198.51.100.8:40000");
+        let v = h.ticket_json(&user("RA#1", "r"), "BB#1", 2);
+        assert_eq!(fetches(&h.raw(5, v.to_string().as_bytes())), 1);
+        h.now += Duration::from_secs(10);
+        h.connect_from(6, "198.51.100.7:40006");
+        let a = user("AA#1", "a");
+        h.add(&a);
+        let out = h.ticket(6, &a, "BB#1");
+        assert_eq!(sent(&out, 6), vec![json!({"type": "create-ticket-resp"})]);
+    }
+
+    /// One account lookup in flight per connection: a second ticket before the first is answered
+    /// is refused, and the late answer to the first is ignored.
+    #[test]
+    fn second_ticket_during_lookup_is_refused() {
+        let mut h = Harness::new(EngineConfig::default());
+        let a = user("AA#1", "a");
+        h.add(&a);
+        h.connect(1, 1);
+        let v = h.ticket_json(&a, "BB#1", 2);
+        let out = h.input(Input::Packet { conn: 1, data: v.to_string().into_bytes() });
+        let Some(Output::FetchUser { seq, .. }) = out.last().cloned() else { panic!("{out:?}") };
+        let out = h.input(Input::Packet { conn: 1, data: v.to_string().into_bytes() });
+        assert!(!out.iter().any(|o| matches!(o, Output::FetchUser { .. })));
+        assert_eq!(sent(&out, 1)[0]["error"], "Invalid matchmaking request");
+        assert!(disconnected(&out, 1));
+        assert!(h.input(Input::UserFetched { conn: 1, seq, result: FetchResult::Found(a) }).is_empty());
+        assert_eq!(h.e.waiting_count(), 0);
+    }
+
+    #[test]
+    fn idle_connection_is_closed() {
+        let mut h = Harness::new(EngineConfig::default());
+        let a = user("AA#1", "a");
+        h.add(&a);
+        h.connect(1, 1);
+        h.connect(2, 2);
+        h.ticket(2, &a, "BB#1");
+        assert!(h.advance(Duration::from_secs(9)).is_empty());
+        let out = h.advance(Duration::from_secs(1));
+        assert_eq!(
+            sent(&out, 1),
+            vec![json!({"type": "create-ticket-resp", "error": "No matchmaking request received. Try again."})]
+        );
+        assert!(disconnected(&out, 1));
+        // The searching connection is not idle.
+        assert!(sent(&out, 2).is_empty() && !disconnected(&out, 2));
+        assert_eq!(h.e.waiting_count(), 1);
+        // A closed connection is not closed again.
+        assert!(h.advance(Duration::from_secs(10)).is_empty());
+    }
+
+    #[test]
+    fn connections_per_address_are_capped() {
+        let mut h = Harness::new(EngineConfig { max_conns_per_ip: 3, ..Default::default() });
+        for conn in 1..=3 {
+            h.connect_from(conn, &format!("198.51.100.7:{}", 40000 + conn));
+        }
+        let addr: SocketAddr = "198.51.100.7:40004".parse().unwrap();
+        let out = h.input(Input::Connected { conn: 4, addr });
+        assert_eq!(sent(&out, 4)[0]["error"], "Too many connections from your network. Try again later.");
+        assert!(out.contains(&Output::Close { conn: 4 }));
+        assert_eq!(h.e.connection_count(), 3);
+        // The refused connection is not tracked: its packets and disconnect are ignored.
+        let a = user("AA#1", "a");
+        h.add(&a);
+        assert!(h.ticket(4, &a, "BB#1").is_empty());
+        assert!(h.input(Input::Disconnected { conn: 4 }).is_empty());
+        // Other addresses are not affected, and a slot frees up when a connection goes away.
+        h.connect_from(5, "198.51.100.8:40000");
+        h.input(Input::Disconnected { conn: 1 });
+        h.connect_from(6, "198.51.100.7:40006");
+        assert_eq!(h.e.connection_count(), 4);
+
+        // IPv6 addresses count per /64; IPv4-mapped ones as their IPv4 address.
+        for conn in 10..=12 {
+            h.connect_from(conn, &format!("[2001:db8:1:2::{conn}]:41000"));
+        }
+        let addr: SocketAddr = "[2001:db8:1:2:ffff::1]:41000".parse().unwrap();
+        assert!(h.input(Input::Connected { conn: 13, addr }).contains(&Output::Close { conn: 13 }));
+        let addr: SocketAddr = "[::ffff:198.51.100.7]:41000".parse().unwrap();
+        assert!(h.input(Input::Connected { conn: 14, addr }).contains(&Output::Close { conn: 14 }));
+    }
+
+    /// The game cannot use an IPv6 peer address, and an empty `ipAddress` crashes older clients:
+    /// such tickets get an explicit error before the account lookup. IPv4-mapped addresses work.
+    #[test]
+    fn ipv6_tickets_are_refused_ipv4_mapped_work() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b) = (user("AA#1", "a"), user("BB#1", "b"));
+        h.add(&a);
+        h.add(&b);
+        h.connect_from(1, "[2001:db8::1]:41000");
+        let v = h.ticket_json(&a, "BB#1", 2);
+        let out = h.raw(1, v.to_string().as_bytes());
+        assert!(!out.iter().any(|o| matches!(o, Output::FetchUser { .. })));
+        assert_eq!(sent(&out, 1)[0]["error"], "Online play needs IPv4. Your game reached the server over IPv6.");
+        assert!(disconnected(&out, 1));
+
+        h.now += Duration::from_secs(3);
+        h.connect_from(2, "[::ffff:198.51.100.9]:41002");
+        h.connect(3, 41003);
+        h.ticket(2, &a, "BB#1");
+        let out = h.ticket(3, &b, "AA#1");
+        let g = &sent(&out, 2)[0];
+        let ips: Vec<&str> =
+            g["players"].as_array().unwrap().iter().map(|p| p["ipAddress"].as_str().unwrap()).collect();
+        assert!(ips.contains(&"198.51.100.9:41002"), "{ips:?}");
+        assert!(ips.contains(&"203.0.113.3:41003"), "{ips:?}");
     }
 
     #[test]
