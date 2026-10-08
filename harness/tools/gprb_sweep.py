@@ -77,7 +77,7 @@ from ppharness.netsim import NetSim  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
 DEFAULT_BUILD = ROOT / "run" / "bin" / "gprb-e642b3ce98"   # frozen dolphin-gprb e642b3ce98 (gp-v19)
-PREFIX = "sweep"                 # instance dir prefix: `python -m ppharness clean --prefix sweep`
+PREFIX = os.environ.get("GPRB_NAME_PREFIX", "sweep")  # instance dir prefix: `python -m ppharness clean --prefix sweep`
 MAIN_THREAD = 0x804DD558         # the main OSThread (gprb_synctest's stall report)
 
 # ------------------------------------------------------------------------------------- content
@@ -551,7 +551,7 @@ def run_sync(run: Dict[str, Any], args: argparse.Namespace, out: Path) -> Dict[s
             rep["symptom"] = f"{rep['symptom']}; {what}" if rep["result"] != "pass" else what
             if rep["result"] == "pass":
                 rep["result"] = "drift"
-    if rep["result"] in ("pass", "error") or args.no_ground_truth:
+    if (rep["result"] in ("pass", "error") and not args.keep_work) or args.no_ground_truth:
         shutil.rmtree(work, ignore_errors=True)
     else:
         # Keep the countdown state and the pass log: `gprb_mispredict.py run --state <sav>
@@ -1202,6 +1202,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--region-set", default="gp-v19")
     ap.add_argument("--build", default=str(DEFAULT_BUILD),
                     help="Dolphin binaries dir (PPHARNESS_DOLPHIN_DIR wins if set)")
+    ap.add_argument("--keep-work", action="store_true",
+                    help="keep every sync run's countdown state and pass log, passed runs too (replays)")
     ap.add_argument("--no-ground-truth", action="store_true",
                     help="sync tests: skip the no-rollback replay and the trace comparison")
     ap.add_argument("--start-frame", type=int, default=240)
