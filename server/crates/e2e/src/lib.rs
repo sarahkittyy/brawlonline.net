@@ -102,6 +102,11 @@ pub async fn fresh_db() -> anyhow::Result<(PgPool, String)> {
     Ok((pool, name))
 }
 
+/// The connection URL of a database made by [`fresh_db`].
+pub async fn db_url(name: &str) -> anyhow::Result<String> {
+    Ok(with_db(&ensure_postgres().await?, name))
+}
+
 pub async fn drop_db(name: &str) {
     if let Ok(admin) = ensure_postgres().await {
         if let Some(p) = try_connect(&admin).await {

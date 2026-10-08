@@ -65,7 +65,7 @@ Firewall (nftables or OVH's network firewall): allow TCP 22, 80, 443 and **UDP 4
 - `mm.brawlonline.net`: an A record, **DNS only (grey cloud)**. Cloudflare's proxy does not carry arbitrary UDP, and the mm server must see each player's real address and port: that observed address is what the peer hole-punches to.
 - `brawlonline.net` (and `www.brawlonline.net`, which redirects to it): start with **DNS only** too. Caddy then gets its certificate directly and sees real client IPs, which the rate limits use (`TRUST_PROXY_HEADERS=true` reads Caddy's `X-Forwarded-For`).
   If you later turn the orange cloud on: set SSL mode to Full (strict), add Cloudflare's ranges to Caddy's `trusted_proxies` so `X-Forwarded-For` carries the real client IP, and make sure the ACME HTTP challenge still reaches Caddy (or use a Cloudflare Origin certificate).
-- Email (Resend): add the SPF, DKIM and (optionally) DMARC records Resend shows for `fluffycat.gay` when you verify the sending domain. Until the domain is verified, Resend refuses to send from `noreply@fluffycat.gay`.
+- Email: add the SPF, DKIM and DMARC records your mail provider (an SMTP provider or Resend) shows for `brawlonline.net` when you verify the sending domain (`../README.md`, "Email providers"). Until the domain is verified, the provider refuses or spam-folders mail from `noreply@brawlonline.net`.
 
 ## Backups
 

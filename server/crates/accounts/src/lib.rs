@@ -92,8 +92,13 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
     if cfg.run_migrations {
         common::db::MIGRATOR.run(&pool).await?;
     }
-    let mailer = mail::from_config(&cfg)?;
-    tracing::info!(mailer = ?cfg.mailer_kind(), invite_only = cfg.signup_invite_only, "accounts starting");
+    let mailer = mail::from_config(&cfg.mail)?;
+    tracing::info!(
+        mailer = ?cfg.mailer_kind(),
+        mail = %mail::describe(&cfg.mail),
+        invite_only = cfg.signup_invite_only,
+        "accounts starting"
+    );
     let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
     tracing::info!("listening on http://{}", listener.local_addr()?);
     let state = AppState::new(pool, cfg, mailer)?;

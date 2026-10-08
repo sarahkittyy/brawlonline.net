@@ -4,8 +4,9 @@
 
 use std::time::Duration as StdDuration;
 
-use accounts::mail::{self, Mailer};
-use accounts::store::{self, TokenPurpose, UserRow};
+use accounts::config::MailConfig;
+use accounts::mail;
+use accounts::store::{self, UserRow};
 use chrono::{Duration, Utc};
 use clap::{Parser, Subcommand};
 use sqlx::PgPool;
@@ -56,13 +57,16 @@ enum UserCmd {
     Show {
         ident: String,
     },
-    /// Issue a one-time password-reset link (valid 24 h). Prints it, or emails it with --send-email.
+    /// Issue a one-time password-reset link (valid 24 h). Prints it, or with --send-email
+    /// sends it through the mailer the MAILER/SMTP_*/MAIL_* settings select, as accounts does.
     ResetPassword {
         ident: String,
         #[arg(long)]
         send_email: bool,
         #[arg(long, env = "PUBLIC_BASE_URL", default_value = "http://127.0.0.1:8080")]
         public_base_url: String,
+        #[command(flatten)]
+        mail: MailConfig,
     },
     /// Ban an account (permanent unless --days). Ends its sessions and rotates its play key.
     Ban {
@@ -96,7 +100,7 @@ fn actor() -> String {
 }
 
 async fn find(pool: &PgPool, ident: &str) -> anyhow::Result<UserRow> {
-    store::find_user(pool, ident).await?.ok_or_else(|| anyhow::anyhow!("no user matches {ident:?}"))
+    admin::find(pool, ident).await
 }
 
 fn print_user(u: &UserRow) {
@@ -202,30 +206,24 @@ async fn main() -> anyhow::Result<()> {
             }
         }
         Cmd::User(UserCmd::Show { ident }) => print_user(&find(&pool, &ident).await?),
-        Cmd::User(UserCmd::ResetPassword { ident, send_email, public_base_url }) => {
-            let u = find(&pool, &ident).await?;
-            let token =
-                store::create_email_token(&pool, u.uid, TokenPurpose::ResetPassword, Duration::hours(24)).await?;
-            let link = format!("{}/reset-password?token={token}", public_base_url.trim_end_matches('/'));
-            store::audit(
+        Cmd::User(UserCmd::ResetPassword { ident, send_email, public_base_url, mail: mail_cfg }) => {
+            // The same mailer accounts would build from these settings (MAILER=file,
+            // stdout, smtp or resend). Built first, so a bad setting fails before a
+            // token is issued.
+            let mailer = if send_email { Some(mail::from_config(&mail_cfg)?) } else { None };
+            let kind = format!("{:?}", mail_cfg.mailer_kind()).to_lowercase();
+            let r = admin::reset_password(
                 &pool,
                 &actor,
-                "user.reset_password",
-                Some(&u.uid.to_string()),
-                serde_json::json!({"emailed": send_email}),
+                &ident,
+                &public_base_url,
+                mailer.as_deref().map(|m| (m, kind.as_str())),
             )
             .await?;
             if send_email {
-                let key = std::env::var("RESEND_API_KEY")
-                    .map_err(|_| anyhow::anyhow!("--send-email needs RESEND_API_KEY"))?;
-                let from = std::env::var("MAIL_FROM").unwrap_or_else(|_| "Brawl Online <noreply@fluffycat.gay>".into());
-                let api = std::env::var("RESEND_API_URL").unwrap_or_else(|_| "https://api.resend.com/emails".into());
-                mail::ResendMailer::new(&api, &key, &from)
-                    .send(&mail::reset_email(&u.email, &u.display_name, &link))
-                    .await?;
-                println!("reset link emailed to {} (valid 24 h)", u.email);
+                println!("reset link for {} sent (mailer: {}; valid 24 h)", r.email, mail::describe(&mail_cfg));
             } else {
-                println!("one-time reset link for {} (valid 24 h):\n{link}", u.email);
+                println!("one-time reset link for {} (valid 24 h):\n{}", r.email, r.link);
             }
         }
         Cmd::User(UserCmd::Ban { ident, days, reason }) => {

@@ -7,6 +7,7 @@ members = [
     "crates/admin",
     "crates/mmclient",
     "crates/e2e",
+    "crates/fakesmtp",
 ]
 
 [workspace.package]
@@ -21,6 +22,8 @@ common = { path = "crates/common" }
 accounts = { path = "crates/accounts" }
 mm = { path = "crates/mm" }
 mmclient = { path = "crates/mmclient" }
+e2e = { path = "crates/e2e" }
+fakesmtp = { path = "crates/fakesmtp" }
 
 anyhow = "1"
 argon2 = { version = "0.5", features = ["std"] }
@@ -30,6 +33,7 @@ chrono = { version = "0.4", default-features = false, features = ["clock", "std"
 clap = { version = "4", features = ["derive", "env"] }
 encoding_rs = "0.8"
 hex = "0.4"
+lettre = { version = "0.11", default-features = false, features = ["builder", "hostname", "smtp-transport", "tokio1-rustls-tls"] }
 hmac = "0.12"
 rand = "0.8"
 reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }

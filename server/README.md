@@ -10,6 +10,7 @@ Accounts, connect codes, and Direct and Unranked matchmaking for Brawl Online, t
 | `crates/mmclient` | Ticket client library and CLI that behaves like Slippi's `SlippiMatchmaking.cpp`. For tests, ppharness and game-integration work. |
 | `crates/common` | Shared code: connect-code and display-name rules, the mm message types, play keys, rate limiter, migrations. |
 | `crates/e2e` | End-to-end tests (Postgres + both services + fake game clients). |
+| `crates/fakesmtp` | A tiny in-process SMTP server for tests (records what it receives, counts connections). |
 | `migrations/` | Postgres schema (applied by `accounts` on start, or `admin migrate`). |
 | `config/rulesets.json` | Per-mode rules: the stage list sent in `get-ticket-resp` (P+'s legal stages), items, stocks/timer. See "Rulesets and stage lists". |
 | `deploy/` | systemd units, Caddyfile, env examples, backup notes for the OVH box. |
@@ -19,7 +20,7 @@ Parts of `common` are derived from [openmelee](https://github.com/panchaea/openm
 
 ## Running locally
 
-Needs Rust 1.85+ and Docker (for Postgres only; the services run as plain processes).
+Needs Rust 1.85+ and a Postgres: Docker (for Postgres only; the services run as plain processes) or the portable Postgres below.
 
 ### Windows (PowerShell)
 
@@ -63,7 +64,7 @@ $pg = "D:\code\pm_rollback\run\postgres-portable\pgsql\bin"
 
 With another port, set `TEST_DATABASE_URL=postgres://pp:pp-dev-password@127.0.0.1:<port>/postgres` for `cargo test` (the e2e tests create and drop their own databases).
 
-Every setting is an environment variable (or a flag; `--help` lists them). The binaries load `.env` from the current directory. With `MAILER=stdout` (the default when `RESEND_API_KEY` is empty) emails are printed instead of sent, so the verification link appears in the accounts terminal. `MAILER=file` appends them to `MAIL_FILE` as JSON lines.
+Every setting is an environment variable (or a flag; `--help` lists them). The binaries load `.env` from the current directory. With `MAILER=stdout` (the default when `RESEND_API_KEY` is empty) emails are printed instead of sent, so the verification link appears in the accounts terminal. `MAILER=file` appends them to `MAIL_FILE` as JSON lines. `MAILER=smtp` sends through a real provider (see "Email providers").
 
 ### Try it end to end
 
@@ -118,7 +119,41 @@ Rules:
 - **Display names**: 1-15 characters of printable ASCII, Hiragana or Katakana, without `\` or `` ` `` (the Slippi launcher rule).
 - **Passwords**: 8-256 characters, Argon2id with m = 64 MiB, t = 3, p = 1.
 - **Rate limits**: per IP and per email on login, sign-up and reset: 5 per minute and 20 per hour. One mm ticket per account per 2 s.
-- **Email**: Resend's HTTP API in production, with a daily cap (`MAIL_DAILY_LIMIT`, default 90, under the free tier's 100). A `Mailer` trait has Resend, stdout, file and in-memory implementations; tests only use the in-memory one, and the Resend client is tested against a local fake server.
+- **Email**: an SMTP provider (`MAILER=smtp`) or Resend's HTTP API (`MAILER=resend`) in production, with a daily cap per process (`MAIL_DAILY_LIMIT`, default 90). A `Mailer` trait has SMTP, Resend, stdout, file and in-memory implementations, and `mail::from_config` is the one place that picks one: `accounts` and the admin CLI's `reset-password --send-email` build their mailer from the same settings. Tests only use the in-memory and file mailers, plus the SMTP client against a local fake server (`crates/fakesmtp`) and the Resend client against a local fake HTTP server.
+
+## Email providers
+
+`MAILER=smtp` sends through any provider's SMTP submission server with [lettre](https://lettre.rs) and rustls (no OpenSSL). Each email is a `multipart/alternative` message with the same text and HTML parts the Resend mailer sends, a `Message-ID` on the `MAIL_FROM` domain, and one connection per email.
+
+| Setting | Default | Meaning |
+|---|---|---|
+| `MAILER` | `stdout` (`resend` when `RESEND_API_KEY` is set) | `smtp`, `resend`, `stdout` or `file` |
+| `MAIL_FROM` | `Brawl Online <noreply@brawlonline.net>` | Sender. Its domain must be verified at the provider |
+| `SMTP_HOST` | (required) | The provider's SMTP host |
+| `SMTP_PORT` | 587 (465 with `SMTP_TLS=tls`) | |
+| `SMTP_USERNAME`, `SMTP_PASSWORD` | unset | Both or neither. Never logged (`Debug` prints `Secret(<redacted>)`) |
+| `SMTP_TLS` | `starttls` | `starttls`: plain connect, then STARTTLS, which is required (a server without it is an error; credentials never go out unencrypted). `tls`: TLS from the first byte (port 465). `none`: no encryption, refused unless `SMTP_HOST` is `localhost`, `127.0.0.1` or `::1` (local test servers only) |
+| `SMTP_TIMEOUT_SECS` | 15 | Limit for one whole send, connect to QUIT |
+
+Configuration mistakes (no host, username without password, invalid `MAIL_FROM`, `none` with a remote host) stop `accounts` at start and `admin --send-email` before it issues a token. A failed send is logged by accounts as one `ERROR` line naming the server and the provider's answer, for example `sending verification email failed: smtp smtp-relay.brevo.com:587 (starttls): permanent error (535): 5.7.8 Authentication failed`, or `... no answer within 15 s`. At start accounts logs `mail=smtp <host>:<port> tls=Starttls auth=true` (never the username or password).
+
+**Switching providers** is a settings change only: set `MAILER=smtp` and the `SMTP_*` values, then restart accounts. Example submission servers, all STARTTLS on 587 (**verify in provider docs**; hosts, ports and login schemes change):
+
+| Provider | `SMTP_HOST:SMTP_PORT` | Login |
+|---|---|---|
+| Brevo | `smtp-relay.brevo.com:587` (verify in provider docs) | the account's SMTP login and an SMTP key (Brevo's SMTP & API settings) |
+| SMTP2GO | `mail.smtp2go.com:587` (verify in provider docs) | an SMTP user created in SMTP2GO |
+| Mailjet | `in-v3.mailjet.com:587` (verify in provider docs) | API key as username, secret key as password |
+| Postmark | `smtp.postmarkapp.com:587` (verify in provider docs) | the server API token as both username and password |
+
+**DNS for the sending domain** (`brawlonline.net`). Every provider asks you to verify the domain and shows the exact records in its dashboard; add those, not values from here. In general:
+
+- **SPF**: one TXT record on the domain, `v=spf1 include:<provider's SPF domain> ~all`. A domain has exactly one SPF record: when switching or adding providers, edit the existing record's `include:` list instead of adding a second record. Some providers cover SPF with a return-path (bounce) subdomain CNAME instead of an `include` on the apex; follow their dashboard.
+- **DKIM**: a TXT or CNAME record at `<selector>._domainkey.brawlonline.net` with the provider's public key. Copy it exactly; the selector is provider-specific, so two providers can coexist during a switch.
+- **DMARC**: a TXT record at `_dmarc.brawlonline.net`, for example `v=DMARC1; p=none; rua=mailto:<an address you read>` to start; tighten to `p=quarantine` once reports show SPF and DKIM pass.
+- In Cloudflare, these records are DNS-only (TXT and CNAME records are never proxied anyway). Some providers also ask for a verification TXT or a return-path CNAME.
+
+Until the provider shows the domain as verified, it refuses or spam-folders mail from `noreply@brawlonline.net`. Send a test (sign up with an invite, or `admin user reset-password <your account> --send-email`) and check the headers for `spf=pass`, `dkim=pass` and `dmarc=pass`.
 
 ## Matchmaking server
 
@@ -180,7 +215,7 @@ admin invite create [--uses N] [--expires-days D] [--note TEXT]
 admin invite list | revoke CODE
 admin user list
 admin user show IDENT                          # IDENT = uid, email or connect code
-admin user reset-password IDENT [--send-email] # prints (or emails) a one-time link valid 24 h
+admin user reset-password IDENT [--send-email] # prints a one-time link valid 24 h, or sends it with the MAILER accounts uses
 admin user ban IDENT [--days N] [--reason TEXT]  # permanent without --days; ends sessions, rotates play key
 admin user unban IDENT
 admin user verify-email IDENT
@@ -188,7 +223,7 @@ admin user rotate-play-key IDENT
 admin user set-code IDENT CODE
 ```
 
-Every change is written to `audit_log`.
+Every change is written to `audit_log`. `reset-password --send-email` reads the same mail settings as accounts (`MAILER`, `MAIL_*`, `SMTP_*`, `RESEND_*`; `admin user reset-password --help` lists them), so with `MAILER=file` the email is appended to `MAIL_FILE` and nothing goes over the network. A bad mail setting fails before the token is issued; the audit row records `emailed` and the mailer.
 
 ## mmclient
 
@@ -210,7 +245,8 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 Without Docker, start the portable Postgres (above) and point the tests at it, e.g. `TEST_DATABASE_URL=postgres://pp:pp-dev-password@127.0.0.1:54329/postgres`. The e2e helpers only fall back to `docker compose up` when `TEST_DATABASE_URL` is unset and nothing answers on 54329.
 
-- Unit tests: code and name rules, Shift-JIS decoding, protocol parsing and wire shape (openmelee and Brawlback fixtures), play keys, rate limiter, Argon2, mailers (Resend against a local fake), and the ticket state machine (pairing, host choice, expiry, wrong code, bad key, bans, unsupported modes, malformed input, cancel, replacement, rate limit, DB timeout, version gate, re-pair backoff), the Unranked queue (arrival order, response fields and stage list, code ignored, never paired with Direct, expiry error, cancel, replacement, failed-connect preference and backoff, regions and widening), the region table and the rulesets file.
+- Unit tests: code and name rules, Shift-JIS decoding, protocol parsing and wire shape (openmelee and Brawlback fixtures), play keys, rate limiter, Argon2, mailers (SMTP against `fakesmtp`: multipart text + HTML, auth, 535 errors without the password, timeout, STARTTLS required; Resend against a local fake; stdout and file never connecting), and the ticket state machine (pairing, host choice, expiry, wrong code, bad key, bans, unsupported modes, malformed input, cancel, replacement, rate limit, DB timeout, version gate, re-pair backoff), the Unranked queue (arrival order, response fields and stage list, code ignored, never paired with Direct, expiry error, cancel, replacement, failed-connect preference and backoff, regions and widening), the region table and the rulesets file.
+- `crates/admin/tests/send_email.rs`: runs the `admin` binary (`user reset-password --send-email`) with `MAILER=file`, `stdout` and `smtp` while `RESEND_API_URL` (with a key) and `SMTP_HOST` point at listeners that count connections: file and stdout never connect, smtp reaches only the fake SMTP server, `resend` without a key fails before issuing a token; and the in-process reset path with an in-memory mailer.
 - `crates/e2e/tests/accounts_api.rs`: the HTTP API against Postgres (invites, validation, verification, code assignment, `user.json`, reset and change password rotating the play key, bans, rate limits).
 - `crates/e2e/tests/matchmaking.rs`: Postgres + accounts + mm in process, accounts created over HTTP, two fake ENet clients: matching peer info and a real P2P connection, expiry, wrong code, bad play key, unsupported modes, malformed packets and raw UDP garbage (server keeps running and still pairs), cancel.
 - `crates/e2e/tests/unranked.rs`:
@@ -228,7 +264,7 @@ When finished: `docker compose down` (add `-v` to delete the data volume).
 
 - **Layout and names**: the workspace is `server/` (not `backend/`), the HTTP service is `accounts` (the design's `api`), and the shared crate is `common` (`core` clashes with Rust's `core`). There is no `relay` crate yet (Phase 1.5).
 - **Play keys are derived, not hashed**: the design says to store only a SHA-256 of the play key, but Slippi's launcher re-fetches the key on every Play (`getUser` → `private.playKey`), so it must be retrievable. The key is `HMAC-SHA256(PLAY_KEY_SECRET, uid, version)`; the database stores only the version. A database dump still reveals no key, and rotation is a version bump.
-- **Email from day 1** (user decision, 2026-10-06): verification at sign-up and self-service reset through Resend, with invite codes kept as an optional gate. Login is by email; no separate username.
+- **Email from day 1** (user decision, 2026-10-06): verification at sign-up and self-service reset through a mail provider (Resend at first; any SMTP provider since the Resend domain slot was used up), with invite codes kept as an optional gate. Login is by email; no separate username.
 - **Direct and Unranked**: Ranked, Teams and Party are refused with a clear error. Unranked has no rating band (the design's "widening rating band" needs Phase 4's rating). Regions come from a prefix table instead of a GeoIP database (see above). No rating, reports or replays yet.
 - **Not built yet**: GraphQL facade for the unmodified launcher (the JSON endpoints mirror its operations one to one), `/metrics`, build-hash/ISO allow-list on tickets (`search.game` is accepted and ignored), the reserved-code period after account deletion (accounts cannot be deleted yet), website pages beyond the two email-link pages.
 - **Known limit**: `rusty_enet` does not expose ENet's maximum packet size (32 MB default), so a client can make the server buffer a large reliable packet before mm rejects it (> 8 KiB is refused after reassembly). Fine for a friends-only server; revisit before opening sign-ups.

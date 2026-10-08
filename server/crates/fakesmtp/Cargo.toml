@@ -1,0 +1,12 @@
+[package]
+name = "fakesmtp"
+description = "A tiny in-process SMTP server for tests. Never use it for real mail."
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64.workspace = true
+tokio.workspace = true
