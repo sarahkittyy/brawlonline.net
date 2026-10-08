@@ -109,6 +109,13 @@ jobs:
         run: |
           nice -n 19 npm ci --no-audit --no-fund
           node node_modules/electron/install.js
+      - name: Launcher build
+        working-directory: client/launcher
+        env:
+          PPO_PLUGIN_PATH: ${{ runner.temp }}/plugin/PPOnline.rel
+        run: |
+          npm run stage:plugin
+          nice -n 19 npm run build
       - name: Launcher checks and tests
         working-directory: client/launcher
         run: |
@@ -116,11 +123,7 @@ jobs:
           nice -n 19 npm test
       - name: Package (AppImage)
         working-directory: client/launcher
-        env:
-          PPO_PLUGIN_PATH: ${{ runner.temp }}/plugin/PPOnline.rel
         run: |
-          npm run stage:plugin
-          nice -n 19 npm run build
           nice -n 19 npx electron-builder build --linux --publish never
           ls -l release/build
       - name: Check the package
