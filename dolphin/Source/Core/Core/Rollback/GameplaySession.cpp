@@ -121,6 +121,10 @@ struct SyncBlock
   u32 app_counter = 0;
   std::array<u32, 3> rng{};
   u32 serial = 0;
+  // The stage's fighter start points (stMelee +0x1B4, 4 words): the stage's constructor shuffles
+  // them with g_mtRand during the load, before the barrier.
+  std::array<u32, 4> start_pos{};
+  bool has_start_pos = false;
   bool valid = false;
 };
 
@@ -337,6 +341,19 @@ struct State
     u16 xer_stringctrl = 0;
     u32 lr = 0, ctr = 0;
   } gcall_saved;
+  // Waiting for the file IO thread at the loop top (RunIoWait): the registers to restore, and
+  // counters (loop tops that waited, retraces waited).
+  bool io_wait_active = false;
+  bool io_wait_update = false;  // the next guest call is the manager's update (else a retrace)
+  int io_wait_n = 0;
+  GuestRegs io_saved;
+  u64 io_waits = 0, io_wait_retraces = 0, io_wait_timeouts = 0;
+  // Diagnostics (PPR_GPRB_FORCE_FINAL): ports still to be given their Final Smash before the match
+  // starts under rollback, and whether a guest call for it is running.
+  u32 force_final_todo = 0;
+  bool force_final_inited = false;  // read for the coming match (reset when a match starts)
+  bool force_final_active = false;
+  GuestRegs force_final_saved;
   u64 pass_serial = 0;  // counts session passes (diagnostics)
   u64 mispredicted_passes = 0;  // misprediction sync test: first runs given a wrong input
   // Pass log (PPR_GPRB_PASS_LOG=path): every GekkoNet update's load and passes, for replays.
@@ -365,6 +382,9 @@ namespace
 // Sound bookkeeping (defined with OnSoundAlloc below).
 bool RunSoundStops(const Core::CPUThreadGuard& guard);
 void CommitSoundPass();
+// File loads in a match (defined with RunSoundStops below).
+bool RunIoWait(const Core::CPUThreadGuard& guard);
+bool RunForceFinal(const Core::CPUThreadGuard& guard);
 
 // ---------------------------------------------------------------------------------------------
 // Guest helpers
@@ -552,6 +572,18 @@ int ApplyTaskOrder(Core::System& system, const std::vector<std::vector<std::stri
   return changed;
 }
 
+// Stage* of the match (sora_melee .bss), and the fighter start point table in it (stMelee).
+constexpr u32 STAGE_PTR = 0x80B8A428;
+constexpr u32 STAGE_START_POS = 0x1B4;
+
+std::optional<u32> StageStartPosAddr(const Guest& g)
+{
+  const auto stage = g.Ptr32(STAGE_PTR);
+  if (!stage || !g.Ptr(*stage + STAGE_START_POS, 16))
+    return std::nullopt;
+  return *stage + STAGE_START_POS;
+}
+
 SyncBlock ReadSyncBlock(Core::System& system)
 {
   const Guest g(system.GetMemory());
@@ -563,6 +595,12 @@ SyncBlock ReadSyncBlock(Core::System& system)
   b.rng = {g.U32(Addr::MTRAND_DEFAULT_SEED).value_or(0), g.U32(Addr::MTRAND_OTHER_SEED).value_or(0),
            g.U32(Addr::LIBC_RAND_NEXT).value_or(0)};
   b.serial = g.U32(Addr::OBJECT_SERIAL_COUNTER).value_or(0);
+  if (const auto sp = StageStartPosAddr(g))
+  {
+    for (u32 i = 0; i < 4; ++i)
+      b.start_pos[i] = g.U32(*sp + 4 * i).value_or(0);
+    b.has_start_pos = true;
+  }
   b.valid = true;
   return b;
 }
@@ -578,6 +616,22 @@ void WriteSyncBlock(Core::System& system, const SyncBlock& b)
   WriteU32(system, Addr::MTRAND_OTHER_SEED, b.rng[1]);
   WriteU32(system, Addr::LIBC_RAND_NEXT, b.rng[2]);
   WriteU32(system, Addr::OBJECT_SERIAL_COUNTER, b.serial);
+  // The fighters enter after the barrier (game frames 2 and 92), at the start points of this
+  // table: if the peers' loads shuffled it differently, P1 would start on the other side.
+  if (const auto sp = StageStartPosAddr(g); sp && b.has_start_pos)
+  {
+    std::array<u32, 4> mine{};
+    for (u32 i = 0; i < 4; ++i)
+      mine[i] = g.U32(*sp + 4 * i).value_or(0);
+    if (mine != b.start_pos)
+    {
+      for (u32 i = 0; i < 4; ++i)
+        WriteU32(system, *sp + 4 * i, b.start_pos[i]);
+      WARN_LOG_FMT(BRAWLBACK, "gprb: joiner took the host's fighter start points ({} {} {} {} -> {} {} {} {})",
+                   mine[0], mine[1], mine[2], mine[3], b.start_pos[0], b.start_pos[1],
+                   b.start_pos[2], b.start_pos[3]);
+    }
+  }
 }
 
 // The RNG state every match starts from: derived from the host's session seed and the match index.
@@ -664,6 +718,13 @@ picojson::value SyncBlockJson(const SyncBlock& b)
     rng.emplace_back(static_cast<double>(v));
   o["rng"] = picojson::value(rng);
   o["serial"] = picojson::value(static_cast<double>(b.serial));
+  if (b.has_start_pos)
+  {
+    picojson::array sp;
+    for (u32 v : b.start_pos)
+      sp.emplace_back(static_cast<double>(v));
+    o["start_pos"] = picojson::value(sp);
+  }
   return picojson::value(o);
 }
 
@@ -692,6 +753,13 @@ std::optional<SyncBlock> SyncBlockFromJson(const picojson::value& v)
   {
     for (int i = 0; i < 3; ++i)
       b.rng[i] = static_cast<u32>(rng->second.get<picojson::array>()[i].get<double>());
+  }
+  const auto sp = o.find("start_pos");
+  if (sp != o.end() && sp->second.is<picojson::array>() && sp->second.get<picojson::array>().size() == 4)
+  {
+    for (int i = 0; i < 4; ++i)
+      b.start_pos[i] = static_cast<u32>(sp->second.get<picojson::array>()[i].get<double>());
+    b.has_start_pos = true;
   }
   b.valid = true;
   return b;
@@ -1315,6 +1383,10 @@ void ResetRunStats()
   s.sound_reattached = s.sound_reattach_gone = s.sound_stopped = s.sound_stop_gone = 0;
   s.snd_gone_why.fill(0);
   s.sound_moved = 0;
+  s.io_wait_active = false;
+  s.io_wait_n = 0;
+  s.io_waits = s.io_wait_retraces = s.io_wait_timeouts = 0;
+  s.force_final_inited = false;  // the next match's countdown reads PPR_GPRB_FORCE_FINAL again
   s.mispredicted_passes = 0;
   s.sample_chunks.clear();
   s.sample_bytes.clear();
@@ -2474,6 +2546,9 @@ picojson::value Status()
   o["sound_stopped"] = picojson::value(static_cast<double>(s.sound_stopped));
   o["sound_stop_gone"] = picojson::value(static_cast<double>(s.sound_stop_gone));
   o["sound_moved"] = picojson::value(static_cast<double>(s.sound_moved));
+  o["io_waits"] = picojson::value(static_cast<double>(s.io_waits));
+  o["io_wait_retraces"] = picojson::value(static_cast<double>(s.io_wait_retraces));
+  o["io_wait_timeouts"] = picojson::value(static_cast<double>(s.io_wait_timeouts));
   o["sound_gone_why"] = picojson::value(picojson::array{
       picojson::value(static_cast<double>(s.snd_gone_why[0])),
       picojson::value(static_cast<double>(s.snd_gone_why[1])),
@@ -2565,6 +2640,67 @@ picojson::value Checksums(s64 since)
 // ---------------------------------------------------------------------------------------------
 // CPU-thread hooks
 
+
+enum class MatchStart
+{
+  Done,
+  Stopped,  // the emulation is stopping (the joiner was waiting for the host's setup)
+  Error,
+};
+
+// The start of a match on this connection, before the match scene loads anything: the joiner
+// takes the host's gmGlobalModeMelee init block (stage, rules, the clock-derived stage variant),
+// both seed the three RNGs from the session seed and the match index, and the object serial
+// counter starts from the same value. Runs at the first of: the loop top that sees the change to
+// scMelee pending or the first one in scMelee, or the stage's constructor (OnStageCreate; some paths
+// into the match construct the stage within the pass that switches the scene, and the
+// constructor shuffles the fighters' start points with g_mtRand).
+MatchStart ApplyMatchStart(Core::System& system, std::string_view when)
+{
+  const Guest g(system.GetMemory());
+  if (s.net_opts.host)
+  {
+    s.init_block = InitBlock(g);
+    s.init_match = s.match_index;
+  }
+  else
+  {
+    const auto since = Clock::now();
+    while (!(s.peer.init_match == static_cast<s64>(s.match_index) && !s.peer.init_block.empty()))
+    {
+      if (Clock::now() - since > std::chrono::seconds(60))
+      {
+        s.error = "the host's match setup never arrived";
+        s.phase = Phase::Error;
+        return MatchStart::Error;
+      }
+      if (!CpuRunning(system))
+        return MatchStart::Stopped;
+      s.mutex.unlock();
+      std::this_thread::sleep_for(std::chrono::milliseconds(1));
+      s.mutex.lock();
+    }
+    const auto mine = InitBlock(g);
+    const auto mm = ModeMeleeAddr(g);
+    if (mm && mine.size() == s.peer.init_block.size() && mine != s.peer.init_block)
+    {
+      system.GetMemory().CopyToEmu(*mm + INIT_BLOCK_OFFSET, s.peer.init_block.data(),
+                                   s.peer.init_block.size());
+      INFO_LOG_FMT(BRAWLBACK, "gprb: joiner took the host's match init block ({} -> {})", Hex(mine),
+                   Hex(s.peer.init_block));
+    }
+  }
+  const auto seeds = MatchSeeds(s.session_seed, s.match_index);
+  WriteU32(system, Addr::MTRAND_DEFAULT_SEED, seeds[0]);
+  WriteU32(system, Addr::MTRAND_OTHER_SEED, seeds[1]);
+  WriteU32(system, Addr::LIBC_RAND_NEXT, seeds[2]);
+  WriteU32(system, Addr::OBJECT_SERIAL_COUNTER, SERIAL_COUNTER_START);
+  s.did_frame0 = true;
+  INFO_LOG_FMT(BRAWLBACK, "gprb: match {} RNG seeded ({:08x} {:08x} {:08x}){}{}", s.match_index,
+               seeds[0], seeds[1], seeds[2], when.empty() ? "" : " ", when);
+  return MatchStart::Done;
+}
+
 bool OnLoopTop(const Core::CPUThreadGuard& guard)
 {
   s.cpu_where = "looptop";
@@ -2603,7 +2739,11 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
   }
 
   if (s.phase == Phase::Running)
+  {
+    if (RunIoWait(guard))
+      return true;
     return RunFrame(guard);
+  }
 
   const Guest g(system.GetMemory());
 
@@ -2619,6 +2759,11 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     PadsOnLoopTop(system);
     if (s.phase == Phase::Countdown && fc + 1 < StartFrame())
       return false;  // run the frame normally (the HLE hook's default)
+    // No file read may be in flight when the base snapshot is taken (countdown preloads).
+    if (s.phase == Phase::Countdown && RunIoWait(guard))
+      return true;
+    if (s.phase == Phase::Countdown && RunForceFinal(guard))
+      return true;
     if (s.mode == Mode::SyncTest)
     {
       if (auto err = PrepareRegionSet(system, s.st_opts.region_set))
@@ -2743,7 +2888,13 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
 
   if (s.phase == Phase::Connected || s.phase == Phase::Connecting)
   {
-    if (!IsSceneMelee(g))
+    // The match setup and seeds are applied at the first loop top that sees the scene change to
+    // scMelee pending, or else the first one in scMelee: before the match scene starts loading.
+    // (Some paths into the match, e.g. the online CSS's Versus setup, construct the stage within
+    // the pass that switches the scene; the stage's constructor shuffles the fighters' start
+    // points with g_mtRand and reads the stage variant from the init block.)
+    const bool melee_pending = !IsSceneMelee(g) && IsNextSceneMelee(g) && !s.await_scene_exit;
+    if (!IsSceneMelee(g) && !melee_pending)
     {
       s.did_frame0 = false;
       s.await_scene_exit = false;
@@ -2753,53 +2904,19 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       return false;
     if (!s.did_frame0 && s.phase == Phase::Connected && (s.net_opts.host || s.peer.session_seed))
     {
-      if (s.net_opts.host)
+      switch (ApplyMatchStart(system, melee_pending ? "before the scene change" : ""))
       {
-        s.init_block = InitBlock(g);
-        s.init_match = s.match_index;
+      case MatchStart::Error:
+        return false;
+      case MatchStart::Stopped:
+        Spin(ppc);
+        return true;
+      case MatchStart::Done:
+        break;
       }
-      else
-      {
-        // Take the host's init block (the stage variant may differ) before the match loads.
-        const auto since = Clock::now();
-        while (!(s.peer.init_match == static_cast<s64>(s.match_index) && !s.peer.init_block.empty()))
-        {
-          if (Clock::now() - since > std::chrono::seconds(60))
-          {
-            s.error = "the host's match setup never arrived";
-            s.phase = Phase::Error;
-            return false;
-          }
-          if (!CpuRunning(system))
-          {
-            Spin(ppc);
-            return true;
-          }
-          s.mutex.unlock();
-          std::this_thread::sleep_for(std::chrono::milliseconds(1));
-          s.mutex.lock();
-        }
-        const auto mine = InitBlock(g);
-        const auto mm = ModeMeleeAddr(g);
-        if (mm && mine.size() == s.peer.init_block.size() && mine != s.peer.init_block)
-        {
-          system.GetMemory().CopyToEmu(*mm + INIT_BLOCK_OFFSET, s.peer.init_block.data(),
-                                       s.peer.init_block.size());
-          INFO_LOG_FMT(BRAWLBACK, "gprb: joiner took the host's match init block ({} -> {})",
-                       Hex(mine), Hex(s.peer.init_block));
-        }
-      }
-      // First pass through the match scene: before anything RNG-dependent is loaded, start
-      // both peers' RNGs from the same seed, and the object serial numbers from the same value.
-      const auto seeds = MatchSeeds(s.session_seed, s.match_index);
-      WriteU32(system, Addr::MTRAND_DEFAULT_SEED, seeds[0]);
-      WriteU32(system, Addr::MTRAND_OTHER_SEED, seeds[1]);
-      WriteU32(system, Addr::LIBC_RAND_NEXT, seeds[2]);
-      WriteU32(system, Addr::OBJECT_SERIAL_COUNTER, SERIAL_COUNTER_START);
-      s.did_frame0 = true;
-      INFO_LOG_FMT(BRAWLBACK, "gprb: match {} RNG seeded ({:08x} {:08x} {:08x})", s.match_index,
-                   seeds[0], seeds[1], seeds[2]);
     }
+    if (melee_pending)
+      return false;
     u32 fc;
     if (s.phase != Phase::Connected || !IsSimStart(g, &fc))
       return false;
@@ -2925,6 +3042,18 @@ bool OnLoopEnd(const Core::CPUThreadGuard& guard)
   return true;
 }
 
+void OnStageCreate(const Core::CPUThreadGuard& guard)
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  if (s.mode != Mode::Network)
+    return;
+  INFO_LOG_FMT(BRAWLBACK, "gprb: stage constructed (match {}, seeded {})", s.match_index, s.did_frame0);
+  if (s.phase != Phase::Connected || s.did_frame0 || s.await_scene_exit ||
+      !(s.net_opts.host || s.peer.session_seed))
+    return;
+  ApplyMatchStart(guard.GetSystem(), "at the stage's construction");
+}
+
 bool IsResimulationPass()
 {
   return s.phase == Phase::Running && s.resim_pass;
@@ -3045,6 +3174,154 @@ void RestoreGuestRegs(PowerPC::PowerPCState& ppc, const State::GuestRegs& in)
   ppc.xer_stringctrl = in.xer_stringctrl;
   ppc.spr[SPR_LR] = in.lr;
   ppc.spr[SPR_CTR] = in.ctr;
+}
+
+// Mid-match file loads (gfFileIOManager): a Zelda/Sheik transformation reads the other form's
+// motion and model files into the fighter's resource heap, items preload Pokemon and Assist Trophy
+// resources. The IO thread reads while the main thread waits for the retrace, so the number of
+// game frames a load takes depended on emulated time, which region mode does not rewind (every
+// resimulated pass spends some): peers (and the passes of one instance) saw a load complete on
+// different frames, and a rollback restored the destination buffer under a read that was still
+// in flight or already reported done. Now, at every loop top of the match, while a request is
+// queued or being read, the main thread runs the manager's update (which the game loop calls once
+// per pass; it hands queued requests to the IO thread and retires finished ones) and waits one
+// more retrace, both as guest calls that return to the loop top, before the frame runs. A load requested in a frame is complete
+// before the next frame, on every peer and in every pass, and no read is in flight at a save or
+// a load; the IO manager's queues and requests are in the region set (gp-v15), so a rollback also
+// rolls back which requests the game holds. Returns true while waiting (the hook must not do
+// anything else).
+constexpr u32 FILE_IO_MANAGER_PTR = 0x8059FFF4;  // g_gfFileIOManager (.sbss)
+constexpr u32 FILE_IO_UPDATE = 0x80022F84;  // gfFileIOManager::update (mainLoop 0x8001725C, fn_80017618)
+constexpr u32 VI_WAIT_FOR_RETRACE = 0x801E892C;
+constexpr int IO_WAIT_MAX = 600;  // retraces (10 s of emulated time)
+
+u32 FileIoPending(const Core::CPUThreadGuard& guard)
+{
+  // gfFileIOManager: +0x8 / +0xC the two request queues; a queue holds its utQueue at +0x18,
+  // whose count is the low half of the first word.
+  const u32 mgr = ReadGuest(guard, FILE_IO_MANAGER_PTR);
+  if (!mgr)
+    return 0;
+  u32 n = 0;
+  for (const u32 off : {0x8u, 0xCu})
+  {
+    const u32 q = ReadGuest(guard, mgr + off);
+    const u32 uq = q ? ReadGuest(guard, q + 0x18) : 0;
+    if (uq)
+      n += ReadGuest(guard, uq) & 0xFFFF;
+  }
+  return n;
+}
+
+bool RunIoWait(const Core::CPUThreadGuard& guard)
+{
+  auto& ppc = guard.GetSystem().GetPPCState();
+  if (FileIoPending(guard) != 0 && s.io_wait_n < IO_WAIT_MAX)
+  {
+    if (!s.io_wait_active)
+    {
+      SaveGuestRegs(ppc, &s.io_saved);
+      s.io_wait_active = true;
+      s.io_wait_update = true;
+      s.io_wait_n = 0;
+      ++s.io_waits;
+    }
+    ppc.spr[SPR_LR] = LOOP_TOP;
+    if (s.io_wait_update)
+    {
+      ppc.gpr[3] = ReadGuest(guard, FILE_IO_MANAGER_PTR);
+      ppc.npc = FILE_IO_UPDATE;
+    }
+    else
+    {
+      ppc.npc = VI_WAIT_FOR_RETRACE;
+      ++s.io_wait_n;
+      ++s.io_wait_retraces;
+    }
+    s.io_wait_update = !s.io_wait_update;
+    s.cpu_where = "iowait";
+    return true;
+  }
+  if (s.io_wait_active)
+  {
+    if (s.io_wait_n >= IO_WAIT_MAX)
+    {
+      ++s.io_wait_timeouts;
+      WARN_LOG_FMT(BRAWLBACK, "gprb: file IO still busy after {} retraces, going on", s.io_wait_n);
+    }
+    RestoreGuestRegs(ppc, s.io_saved);
+    s.io_wait_active = false;
+    s.io_wait_n = 0;
+  }
+  return false;
+}
+
+// Diagnostics (PPR_GPRB_FORCE_FINAL=<port mask>): at the last countdown frame, before the base
+// snapshot, give those ports their Final Smash as breaking a Smash Ball does: a guest call of
+// ftManager::setFinal(entry id, false) per port, returning to the loop top. Both a rolled-back run
+// and its ground truth (the same session machinery without rollback) do it at the same point, so a
+// sync test can check that a Final Smash executes under rollback. Returns true while calling.
+constexpr u32 FT_MANAGER = 0x80629A00;          // g_ftManager (System heap, every boot)
+constexpr u32 FT_ENTRY_MANAGER = 0x80624780;    // {ftEntry* entries, count}
+constexpr u32 FT_MANAGER_SET_FINAL = 0x8081828C;  // ftManager::setFinal(int, bool), sora_melee .text+0x10D878
+constexpr u32 FT_ENTRY_SIZE = 0x244;
+
+bool RunForceFinal(const Core::CPUThreadGuard& guard)
+{
+  auto& ppc = guard.GetSystem().GetPPCState();
+  if (!s.force_final_inited)
+  {
+    const char* ff = std::getenv("PPR_GPRB_FORCE_FINAL");
+    s.force_final_todo = ff ? static_cast<u32>(std::strtoul(ff, nullptr, 0)) & 0xF : 0;
+    s.force_final_inited = true;
+  }
+  if (s.force_final_active && s.force_final_todo == 0)
+  {
+    RestoreGuestRegs(ppc, s.force_final_saved);
+    s.force_final_active = false;
+    return false;
+  }
+  while (s.force_final_todo)
+  {
+    const u32 port = static_cast<u32>(std::countr_zero(s.force_final_todo));
+    s.force_final_todo &= s.force_final_todo - 1;
+    // The REL must be where P+ loads it (stwu r1,-0x20(r1) at the function's entry).
+    if (ReadGuest(guard, FT_MANAGER_SET_FINAL) != 0x9421FFE0)
+    {
+      WARN_LOG_FMT(BRAWLBACK, "gprb: force final: ftManager::setFinal not found");
+      s.force_final_todo = 0;
+      break;
+    }
+    const u32 entries = ReadGuest(guard, FT_ENTRY_MANAGER);
+    const u32 count = std::min<u32>(ReadGuest(guard, FT_ENTRY_MANAGER + 4), 16);
+    u32 entry_id = 0xFFFFFFFF;
+    for (u32 i = 0; i < count; ++i)
+    {
+      const u32 e = entries + i * FT_ENTRY_SIZE;
+      if (ReadGuest(guard, e + 0x28) != 0 && ReadGuest(guard, e + 0x58) == port)
+        entry_id = ReadGuest(guard, e + 4);
+    }
+    if (entry_id == 0xFFFFFFFF)
+      continue;
+    if (!s.force_final_active)
+    {
+      SaveGuestRegs(ppc, &s.force_final_saved);
+      s.force_final_active = true;
+    }
+    INFO_LOG_FMT(BRAWLBACK, "gprb: force final: port {} entry {:#x}", port, entry_id);
+    ppc.gpr[3] = FT_MANAGER;
+    ppc.gpr[4] = entry_id;
+    ppc.gpr[5] = 0;
+    ppc.spr[SPR_LR] = LOOP_TOP;
+    ppc.npc = FT_MANAGER_SET_FINAL;
+    return true;
+  }
+  if (s.force_final_active)
+  {
+    RestoreGuestRegs(ppc, s.force_final_saved);
+    s.force_final_active = false;
+  }
+  return false;
 }
 
 // Loop top: stop the queued sounds of mispredicted runs, one guest call of BasicSound::Stop(0)
@@ -3253,20 +3530,22 @@ picojson::value Samples(const std::vector<s64>& frames_full)
   return picojson::value(o);
 }
 
-void OnProbe(u32 pc, const std::array<u32, 5>& r)
+void OnProbe(u32 pc, const std::array<u32, 7>& r)
 {
-  if (s.phase != Phase::Running)
+  // Every phase of a match (the countdown and the load included): probes are diagnostics.
+  if (s.phase == Phase::Idle)
     return;
   INFO_LOG_FMT(BRAWLBACK,
-               "gprb probe: frame {} {} pass {} pc {:08x} r3 {:08x} r4 {:08x} r12 {:08x} ctr {:08x} "
-               "lr {:08x}",
+               "gprb probe: frame {} {} pass {} pc {:08x} r3 {:08x} r4 {:08x} r5 {:08x} r6 {:08x} "
+               "r12 {:08x} ctr {:08x} lr {:08x}",
                s.snd_frame, s.snd_first_run ? "first" : "again", s.pass_serial, pc, r[0], r[1], r[2],
-               r[3], r[4]);
+               r[3], r[4], r[5], r[6]);
 }
 
 void OnRngCall(u32 rng, const std::array<u32, 8>& callers, u32 state)
 {
-  if (s.phase != Phase::Running)
+  // Every phase of a match (the load and the countdown included); PPR_GPRB_RNG_LOG is diagnostics.
+  if (s.phase == Phase::Idle)
     return;
   INFO_LOG_FMT(BRAWLBACK,
                "gprb rng: frame {} {} pass {} rng {:08x} lr {:08x} state {:08x} up {:08x} {:08x} "

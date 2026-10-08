@@ -73,6 +73,7 @@ private:
 
 bool IsMemAddr(u32 addr, u32 size = 1);
 std::string CurrentSceneName(const Guest& g);
+bool IsNextSceneMelee(const Guest& g);  // a scene change to scMelee is pending
 bool IsSceneMelee(const Guest& g);
 
 struct HeapInfo

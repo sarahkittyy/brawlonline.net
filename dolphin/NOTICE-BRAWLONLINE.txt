@@ -2,7 +2,7 @@ Brawl Online: Dolphin snapshot
 ==============================
 
 dolphin/ is a snapshot (no history) of our Dolphin fork, branch rollback-fixes at
-  50e800b9d6e765c3cf9bef69d073d939bdb11fac ("Online: default hosts on brawlonline.net")
+  7788a277388f5857b097ae78b9ef52b23367a177 ("Merge branch 'rollback-fixes' into gameplay-rollback")
 
 Our fork is based on Brawlback's Project-Plus-Dolphin (https://github.com/Brawlback-Team/Project-Plus-Dolphin.git),
 which is based on Dolphin (https://github.com/dolphin-emu/dolphin). Upstream base commits:

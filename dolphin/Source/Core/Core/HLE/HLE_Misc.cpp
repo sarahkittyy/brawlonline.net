@@ -676,8 +676,8 @@ void GprbRngTraceHook(const Core::CPUThreadGuard& guard)
 void GprbProbeHook(const Core::CPUThreadGuard& guard)
 {
   const auto& ppc = guard.GetSystem().GetPPCState();
-  Gprb::Session::OnProbe(ppc.pc, {ppc.gpr[3], ppc.gpr[4], ppc.gpr[12], ppc.spr[SPR_CTR],
-                                  ppc.spr[SPR_LR]});
+  Gprb::Session::OnProbe(ppc.pc, {ppc.gpr[3], ppc.gpr[4], ppc.gpr[5], ppc.gpr[6], ppc.gpr[12],
+                                  ppc.spr[SPR_CTR], ppc.spr[SPR_LR]});
 }
 
 void GprbPacingStepsHook(const Core::CPUThreadGuard& guard)
@@ -753,6 +753,11 @@ static constexpr u32 BRAWL_SETUP_SOUND_ATTACH_ADDR = 0x801c9c70;
 
 // Start hook at BRAWL_SETUP_SOUND_ATTACH_ADDR: the game's handle (r28) gets the sound (r24) with
 // sound id r29. The gameplay session's sound bookkeeping records it.
+void GprbStageCreateHook(const Core::CPUThreadGuard& guard)
+{
+  Gprb::Session::OnStageCreate(guard);
+}
+
 void GprbSoundAttachHook(const Core::CPUThreadGuard& guard)
 {
   const auto& ppc = guard.GetSystem().GetPPCState();
