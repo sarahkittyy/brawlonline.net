@@ -19,9 +19,13 @@ Brawl Online website (brawlonline.net): third-party material and credits
    belong to their owners (Microsoft, Apple, and Linus Torvalds for Linux/Tux).
 
 3. Background video (assets/bg.webm, assets/bg.mp4, assets/bg-poster.jpg)
-   Not chosen yet. Add the source, author, licence and any required attribution here
-   when the footage is picked. If its licence requires visible attribution, the page
-   needs a small visible credit as well (see README.md).
+   Our own recording, made for this site: four level 9 CPUs (Fox, Marth, Mario, Pikachu,
+   default costumes) on Battlefield, items off, recorded with the Brawl Online Dolphin
+   build (offline, frame dump). A ~39 s excerpt, looped with a 1 s crossfade, encoded
+   1280x720 30 fps without audio. No third-party footage is used, so no visible credit
+   is needed.
+   Game content shown: Super Smash Bros. Brawl (Nintendo), modified by Project+
+   (https://projectplusgame.com).
 
 Super Smash Bros. Brawl is a trademark of Nintendo. Project+ is a fan modification of it.
 Brawl Online is not affiliated with or endorsed by Nintendo.
