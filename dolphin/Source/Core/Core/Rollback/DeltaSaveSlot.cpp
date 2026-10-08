@@ -26,7 +26,7 @@ namespace Rollback
 {
 
 // memcpy that skips subranges that are in our exclusion list.
-// Callers copy one PAGE_SIZE (64-byte) granule at a time, so a plain memcpy is as fast as any
+// Callers copy one ROLLBACK_PAGE_SIZE (64-byte) granule at a time, so a plain memcpy is as fast as any
 // wide non-temporal loop (the old AVX2 one never ran for blocks under 256 bytes) and it is
 // portable: no AVX2 requirement on x86-64 and nothing x86-specific on ARM64.
 // TODO: profile this, if it's slow maybe we can sort the exclusion list beforehand
@@ -99,8 +99,8 @@ void DeltaSaveSlot::Init(uint8_t* mem1_ptr, size_t mem1_size, uint8_t* mem2_ptr,
   m_mem2_size = mem2_size;
   m_l1_cache_ptr = l1_cache_ptr;
   m_l1_cache_size = l1_cache_size;
-  m_mem1_page_count = static_cast<uint32_t>(mem1_size / PAGE_SIZE);
-  m_mem2_page_count = static_cast<uint32_t>(mem2_size / PAGE_SIZE);
+  m_mem1_page_count = static_cast<uint32_t>(mem1_size / ROLLBACK_PAGE_SIZE);
+  m_mem2_page_count = static_cast<uint32_t>(mem2_size / ROLLBACK_PAGE_SIZE);
 
   if (l1_cache_ptr && l1_cache_size > 0)
     m_l1_cache_snapshot.reset(l1_cache_size);
@@ -125,10 +125,10 @@ void RestoreRegionDelta(const RegionDelta& delta, uint8_t* region_base, uint32_t
   for (uint32_t i = 0; i < delta.page_count; ++i)
   {
     const uint32_t page_idx = delta.page_indices[i];
-    uint8_t* const dst = region_base + static_cast<size_t>(page_idx) * PAGE_SIZE;
-    const uint8_t* const src = delta.page_data.data() + static_cast<size_t>(i) * PAGE_SIZE;
-    const uint32_t dst_phys = region_phys_base + page_idx * static_cast<uint32_t>(PAGE_SIZE);
-    savestateMemcpy(dst, src, PAGE_SIZE, dst_phys, excl);
+    uint8_t* const dst = region_base + static_cast<size_t>(page_idx) * ROLLBACK_PAGE_SIZE;
+    const uint8_t* const src = delta.page_data.data() + static_cast<size_t>(i) * ROLLBACK_PAGE_SIZE;
+    const uint32_t dst_phys = region_phys_base + page_idx * static_cast<uint32_t>(ROLLBACK_PAGE_SIZE);
+    savestateMemcpy(dst, src, ROLLBACK_PAGE_SIZE, dst_phys, excl);
   }
 }
 
@@ -159,8 +159,8 @@ void enqueueSubsectionJobs(u32 first_page, u32 page_count, const uint8_t* region
     ROLLBACK_ZONE_N("delta buffer alloc");
     if (out.page_indices.size() < num_dirty)
       out.page_indices.reset(num_dirty);
-    if (out.page_data.size() < (num_dirty * PAGE_SIZE))
-      out.page_data.reset(num_dirty * PAGE_SIZE);
+    if (out.page_data.size() < (num_dirty * ROLLBACK_PAGE_SIZE))
+      out.page_data.reset(num_dirty * ROLLBACK_PAGE_SIZE);
   }
 
   // Capture pointers to the already-allocated buffers to avoid reference capture issues
@@ -184,8 +184,8 @@ void enqueueSubsectionJobs(u32 first_page, u32 page_count, const uint8_t* region
       // pageidx is global; subtract first_page to get region-relative index
       u32 relative_page_idx = pageidx - first_page;
       page_indices_ptr[dirtyPagesIndex] = relative_page_idx;
-      std::memcpy(page_data_ptr + static_cast<size_t>(dirtyPagesIndex) * PAGE_SIZE,
-                  region_base + static_cast<size_t>(relative_page_idx) * PAGE_SIZE, PAGE_SIZE);
+      std::memcpy(page_data_ptr + static_cast<size_t>(dirtyPagesIndex) * ROLLBACK_PAGE_SIZE,
+                  region_base + static_cast<size_t>(relative_page_idx) * ROLLBACK_PAGE_SIZE, ROLLBACK_PAGE_SIZE);
       ++this_split_written;
     }
 #if defined(HAVE_TRACY)

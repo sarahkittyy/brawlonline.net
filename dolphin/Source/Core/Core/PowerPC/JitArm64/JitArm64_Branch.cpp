@@ -232,19 +232,6 @@ void JitArm64::bcx(UGeckoInstruction inst)
     }
     else
     {
-      if (IsDebuggingEnabled())
-      {
-        ARM64Reg bw_reg_a, bw_reg_b;
-        // WC is only allocated when WA is needed for WriteExit and cannot be clobbered.
-        if (WC == ARM64Reg::INVALID_REG)
-          bw_reg_a = WA, bw_reg_b = WB;
-        else
-          bw_reg_a = WB, bw_reg_b = WC;
-        const BitSet32 gpr_caller_save =
-            gpr.GetCallerSavedUsed() & ~BitSet32{DecodeReg(bw_reg_a), DecodeReg(bw_reg_b)};
-        WriteBranchWatch<true>(js.compilerPC, js.op->branchTo, inst, bw_reg_a, bw_reg_b,
-                               gpr_caller_save, fpr.GetCallerSavedUsed());
-      }
       WriteExit(js.op->branchTo, inst.LK, js.compilerPC + 4, WA);
     }
 

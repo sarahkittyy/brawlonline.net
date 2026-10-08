@@ -26,8 +26,8 @@ using namespace Gen;
 namespace
 {
 constexpr u32 ROLLBACK_PHYSICAL_ADDRESS_MASK = 0x1FFFFFFFu;
-static_assert(PAGE_SIZE == (size_t{1} << PAGE_SHIFT));
-static_assert((ROLLBACK_PHYSICAL_ADDRESS_MASK + size_t{1}) >> PAGE_SHIFT ==
+static_assert(ROLLBACK_PAGE_SIZE == (size_t{1} << ROLLBACK_PAGE_SHIFT));
+static_assert((ROLLBACK_PHYSICAL_ADDRESS_MASK + size_t{1}) >> ROLLBACK_PAGE_SHIFT ==
               Rollback::JITDirtyBitmap::ENTRY_COUNT);
 
 OpArg SwapImmediate(int access_size, const OpArg& reg_value)
@@ -151,7 +151,7 @@ static void FailedDirtyBitmapBoundsCheck()
 
 void EmuCodeBlock::EmitJITDirtyBitmapUpdate(X64Reg reg_addr, s32 offset)
 {
-  // dirty_bitmap[((effective_addr + offset) & 0x1FFFFFFF) >> PAGE_SHIFT] = 1
+  // dirty_bitmap[((effective_addr + offset) & 0x1FFFFFFF) >> ROLLBACK_PAGE_SHIFT] = 1
 
   PUSH(RSCRATCH);   // RAX
   PUSH(RSCRATCH2);  // RDX
@@ -162,7 +162,7 @@ void EmuCodeBlock::EmitJITDirtyBitmapUpdate(X64Reg reg_addr, s32 offset)
     ADD(32, R(RSCRATCH), Imm32(static_cast<u32>(offset)));
 
   AND(32, R(RSCRATCH), Imm32(ROLLBACK_PHYSICAL_ADDRESS_MASK));
-  SHR(32, R(RSCRATCH), Imm8(::PAGE_SHIFT));
+  SHR(32, R(RSCRATCH), Imm8(::ROLLBACK_PAGE_SHIFT));
 
 #if ROLLBACK_VALIDATE
   CMP(32, R(RSCRATCH), Imm32(static_cast<u32>(Rollback::JITDirtyBitmap::ENTRY_COUNT)));
@@ -741,9 +741,9 @@ bool EmuCodeBlock::WriteToConstAddress(int accessSize, OpArg arg, u32 address,
 void EmuCodeBlock::EmitJITDirtyBitmapUpdateConst(u32 address, int accessSize)
 {
   // Constant-address variant of EmitJITDirtyBitmapUpdate: the granule is known at compile time.
-  const u32 first = (address & ROLLBACK_PHYSICAL_ADDRESS_MASK) >> ::PAGE_SHIFT;
+  const u32 first = (address & ROLLBACK_PHYSICAL_ADDRESS_MASK) >> ::ROLLBACK_PAGE_SHIFT;
   const u32 last =
-      ((address + (accessSize >> 3) - 1) & ROLLBACK_PHYSICAL_ADDRESS_MASK) >> ::PAGE_SHIFT;
+      ((address + (accessSize >> 3) - 1) & ROLLBACK_PHYSICAL_ADDRESS_MASK) >> ::ROLLBACK_PAGE_SHIFT;
   u8* const entries = Rollback::JITDirtyBitmap::Get().entries;
 
   PUSH(RSCRATCH2);

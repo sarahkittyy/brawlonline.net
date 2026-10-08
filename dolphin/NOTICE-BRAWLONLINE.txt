@@ -2,7 +2,7 @@ Brawl Online: Dolphin snapshot
 ==============================
 
 dolphin/ is a snapshot (no history) of our Dolphin fork, branch rollback-fixes at
-  3b3539e7f7b20524a7cecbc89bb043eebfe11674 ("Online: P+'s own stages are valid stage kinds")
+  8eaf11763866eb6004bfa056d1a1c8cb0a2a2eca ("macOS: build fixes for the cross-compiled (osxcross) build")
 
 Our fork is based on Brawlback's Project-Plus-Dolphin (https://github.com/Brawlback-Team/Project-Plus-Dolphin.git),
 which is based on Dolphin (https://github.com/dolphin-emu/dolphin). Upstream base commits:
