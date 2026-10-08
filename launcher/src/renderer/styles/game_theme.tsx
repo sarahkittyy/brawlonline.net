@@ -30,7 +30,19 @@ export const assetUrl = (file: string) => `${GAME_ASSET_BASE_URL}${file.split("/
 const STYLE_ELEMENT_ID = "game-theme";
 const MENU_FONT_FAMILY = "GameMenuFont";
 const TITLE_FONT_FAMILY = "GameTitleFont";
-const FRAME_KEYS = ["button", "buttonSelected", "panel"] as const;
+const FRAME_KEYS = ["button", "buttonHover", "panel"] as const;
+type FrameKey = (typeof FRAME_KEYS)[number];
+
+/** Manifest texture each frame is cut from. The hover frame is a brighter tint of the button plate. */
+const FRAME_TEXTURE: Record<FrameKey, string> = { button: "button", buttonHover: "button", panel: "panel" };
+
+/**
+ * CSS pixels per texel for each frame. MenCmn00 is the plate of Brawl's notice window
+ * (MenCmnNotice0000_TopN), where its corners take about a tenth of the window's height. Drawn 1:1 on a
+ * 36-45 px button its 7-texel black rim and 16-texel corners swamp the button, so buttons show it at
+ * half size (a 3.5 px rim). The name-entry panel frame has thin insets and stays 1:1.
+ */
+export const FRAME_SCALE: Record<FrameKey, number> = { button: 0.5, buttonHover: 0.5, panel: 1 };
 
 type RGB = [number, number, number];
 
@@ -55,25 +67,28 @@ export function useStockIconUrl(character: string | undefined): string | undefin
 export type PreparedTheme = {
   palette: ThemePalette | null;
   images: Partial<Record<string, string>>;
+  /** Shade over the part of a framed Play button that is not filled yet (P+'s dark gradient middle). */
+  progressTrack?: string;
 };
 
-export function frameCss(manifest: GameAssetManifest, key: string, imageUrl?: string): FrameCss | undefined {
-  const tex = manifest.textures[key];
+export function frameCss(manifest: GameAssetManifest, key: FrameKey, imageUrl?: string): FrameCss | undefined {
+  const tex = manifest.textures[FRAME_TEXTURE[key]];
   if (!tex) {
     return undefined;
   }
   const s = tex.slice ?? { top: 0, right: 0, bottom: 0, left: 0 };
+  const px = (v: number) => `${Math.round(v * FRAME_SCALE[key] * 100) / 100}px`;
   return {
     source: `url("${imageUrl ?? assetUrl(tex.file)}")`,
     slice: `${s.top} ${s.right} ${s.bottom} ${s.left} fill`,
-    width: `${s.top}px ${s.right}px ${s.bottom}px ${s.left}px`,
+    width: `${px(s.top)} ${px(s.right)} ${px(s.bottom)} ${px(s.left)}`,
   };
 }
 
 export function framesFromManifest(manifest: GameAssetManifest, prepared?: PreparedTheme): ThemeFrames {
   return {
     button: frameCss(manifest, "button", prepared?.images.button),
-    buttonSelected: frameCss(manifest, "buttonSelected", prepared?.images.buttonSelected),
+    buttonHover: frameCss(manifest, "buttonHover", prepared?.images.buttonHover),
     panel: frameCss(manifest, "panel", prepared?.images.panel),
   };
 }
@@ -118,8 +133,14 @@ export function buildThemeCss(manifest: GameAssetManifest, prepared: PreparedThe
         vars.push(`--theme-${key}-width: ${frame.width};`);
       }
     }
+    if (prepared.images.buttonHover) {
+      vars.push(`--theme-play-hover-opacity: 1;`);
+    }
     if (prepared.images.cursor) {
       vars.push(`--theme-cursor-image: url("${prepared.images.cursor}");`);
+    }
+    if (prepared.progressTrack) {
+      vars.push(`--theme-progress-track: ${prepared.progressTrack};`);
     }
     const p = prepared.palette;
     if (p) {
@@ -231,8 +252,9 @@ export async function prepareTheme(manifest: GameAssetManifest): Promise<Prepare
 
   let palette: ThemePalette | null = null;
   let frameTint: RGB = [255, 255, 255];
-  let selectedTint: RGB = [255, 255, 255];
+  let hoverTint: RGB = [255, 255, 255];
   let panelTint: RGB = [255, 255, 255];
+  let progressTrack: string | undefined;
   if (gradient) {
     const accent = toLuminance(gradient.top, Math.max(luminance(gradient.top), 0.45));
     const secondary = toLuminance(gradient.bottom, Math.max(luminance(gradient.bottom), 0.4));
@@ -244,24 +266,28 @@ export async function prepareTheme(manifest: GameAssetManifest): Promise<Prepare
       backgroundPaper: hex(toLuminance(gradient.middle, luminance(gradient.middle) * 0.7)),
     };
     frameTint = gradient.top;
-    selectedTint = toLuminance(gradient.top, Math.min(0.85, luminance(gradient.top) * 1.6));
+    // A modest lift: the light label must stay readable on the highlighted plate.
+    hoverTint = toLuminance(gradient.top, Math.min(0.85, luminance(gradient.top) * 1.2));
     panelTint = gradient.bottom;
+    const [r, g, b] = gradient.middle.map(clamp);
+    progressTrack = `rgba(${r}, ${g}, ${b}, 0.7)`;
   }
 
-  const tinted: Array<[string, RGB, number]> = [
-    ["button", frameTint, 1],
-    ["buttonSelected", selectedTint, 1],
-    ["panel", panelTint, 1],
-    ["backgroundTile", [255, 255, 255], 0.12],
-    ["cursor", [255, 255, 255], 1],
+  // [image key, manifest texture, tint, alpha]
+  const tinted: Array<[string, string, RGB, number]> = [
+    ["button", "button", frameTint, 1],
+    ["buttonHover", "button", hoverTint, 1],
+    ["panel", "panel", panelTint, 1],
+    ["backgroundTile", "backgroundTile", [255, 255, 255], 0.12],
+    ["cursor", "cursor", [255, 255, 255], 1],
   ];
-  for (const [key, color, alpha] of tinted) {
-    const tex = manifest.textures[key];
+  for (const [key, texture, color, alpha] of tinted) {
+    const tex = manifest.textures[texture];
     if (tex) {
       images[key] = (await tint(assetUrl(tex.file), color, alpha)) ?? assetUrl(tex.file);
     }
   }
-  return { palette, images };
+  return { palette, images, progressTrack };
 }
 
 /**

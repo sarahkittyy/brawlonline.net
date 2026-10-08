@@ -155,14 +155,14 @@ Rules: no AI-generated or invented art, no Slippi art, no generic icon pack as t
   | Role | Source | Texture |
   |---|---|---|
   | Page background | P+ `menu2/sc_selmap.pac` | `bg_gradient` (RGBA8) + `bg_grid` tile (I4) |
-  | Button frame / selected frame | `menu2/mu_menumain(_en).pac` | `MenCmn00`, `MenSelchrEntryW01b` (IA4, nine-slice) |
+  | Button frame | `menu2/mu_menumain(_en).pac` | `MenCmn00` (IA4, nine-slice; `MenSelchrEntryW01b` is extracted too but unused) |
   | Panel (dialogs) | `menu2/mu_menumain(_en).pac` | `MenSelchrEntryW01` (IA4, nine-slice) |
   | Cursor | `menu2/mu_menumain(_en).pac` | `MenSelmapCursorPly.1` |
   | Menu / title / small fonts | `system/font/font_latin1.arc`, `font_hira.brfnt`, `font_melee.brfnt` (P+ `system/common2/3.pac` hold the same) | RFNT → TTF |
   | Stock icons (44 with P+, 40 disc-only) | P+ `menu/common/StockFaceTex.brres`, disc `StockFaceTex_en.brres` | `InfStc.*` (C8/C4 + palette) |
 
   Logos (Smash Bros., Project+) are deliberately excluded.
-- **Theme** (`src/renderer/styles/game_theme.tsx`): Brawl's menu frames are greyscale masks that the game tints at run time. The renderer tints them the same way (multiply), with colours sampled from P+'s own background gradient texture (teal top, dark middle, blue bottom), so every colour also comes from the game. Frames are applied with CSS `border-image` (nine-slice), fonts with `@font-face`. A disc-only extraction has no gradient and keeps the neutral colours.
+- **Theme** (`src/renderer/styles/game_theme.tsx`): Brawl's menu frames are greyscale masks that the game tints at run time. The renderer tints them the same way (multiply), with colours sampled from P+'s own background gradient texture (teal top, dark middle, blue bottom), so every colour also comes from the game. Frames are applied with CSS `border-image` (nine-slice), fonts with `@font-face`. A disc-only extraction has no gradient and keeps the neutral colours. `MenCmn00` is the plate of Brawl's notice window (`MenCmnNotice0000_TopN`: TEV `TEXC × RASC`, material colour white, so its 7-texel rim really is black), whose corners take about a tenth of the window's height; buttons therefore draw it at half size (`FRAME_SCALE`), with `border-width` equal to `border-image-width` so nothing shows through its transparent corners. Hover swaps only the image, to the same plate tinted brighter (Brawl highlights a plate by recolouring it), so the button keeps its size.
 - **Not replaced**: Material UI's functional glyphs (settings cog, search, check marks…) remain in both looks. They are not used as the product's identity, but they are a generic icon set; replacing them with game icons is an open question.
 
 Screenshots taken during development (app window only, via the DevTools protocol) are in the session's scratchpad, not in the repository: fallback quick start, sign-up form (then with an invite code field, removed since), verify email, accept rules, connect code, the themed "all set up" page, home, user menu, login dialog with a server error, Game and Netplay Dolphin settings, replay browser.

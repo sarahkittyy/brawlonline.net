@@ -23,6 +23,9 @@ export const PlayIcon = ({ children, fillPercent = 1 }: React.PropsWithChildren<
         justify-content: center;
         border: 2px solid var(--accent-primary);
         border-color: var(--accent-primary);
+        /* With the game frame the border is as wide as the frame's corners: a thinner border would let
+           the fill below show through the frame's transparent rounded corners. */
+        border-width: var(--theme-button-width, 2px);
         border-image-source: var(--theme-button-source, none);
         border-image-slice: var(--theme-button-slice, 0);
         border-image-width: var(--theme-button-width, 2px);
@@ -35,8 +38,19 @@ export const PlayIcon = ({ children, fillPercent = 1 }: React.PropsWithChildren<
           transparent 100%
         );
         background-clip: padding-box;
+        /* The game frame's face is opaque and hides that fill: shade the part not filled yet instead. */
+        &::before {
+          content: "";
+          position: absolute;
+          top: 0;
+          right: 0;
+          bottom: 0;
+          left: ${offset};
+          background: var(--theme-progress-track, transparent);
+          pointer-events: none;
+        }
         button:hover > & {
-          border-image-source: var(--theme-buttonSelected-source, var(--theme-button-source, none));
+          border-image-source: var(--theme-buttonHover-source, var(--theme-button-source, none));
         }
       `}
     >

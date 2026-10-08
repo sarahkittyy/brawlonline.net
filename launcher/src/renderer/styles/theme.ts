@@ -29,16 +29,21 @@ export const fallbackPalette: ThemePalette = {
 /** Nine-slice frames from the game, as CSS values ready for `border-image`. */
 export type ThemeFrames = {
   button?: FrameCss;
-  buttonSelected?: FrameCss;
+  /** The same plate as `button`, tinted brighter: Brawl highlights a menu plate by recolouring it. */
+  buttonHover?: FrameCss;
   panel?: FrameCss;
 };
 
 export type FrameCss = {
   /** `url("game-asset://cache/...")` */
   source: string;
-  /** `border-image-slice`, e.g. "12 20 12 20 fill" */
+  /** `border-image-slice` in source pixels, e.g. "12 20 12 20 fill" */
   slice: string;
-  /** `border-width` / `border-image-width`, e.g. "12px 20px 12px 20px" */
+  /**
+   * `border-width` / `border-image-width` in CSS pixels, e.g. "6px 10px 6px 10px" (the slice times the
+   * frame's display scale). Both must be equal: a thinner border lets the padding-box background show
+   * through the frame's transparent corners, a different width between states makes the element jump.
+   */
   width: string;
 };
 
@@ -92,15 +97,21 @@ export function createAppTheme(palette: ThemePalette = fallbackPalette, frames: 
 }
 
 const addOverrides = (theme: Theme, palette: ThemePalette, frames: ThemeFrames) => {
+  // The frame's border replaces MUI's vertical padding, so a framed button keeps about MUI's height.
   const containedButton = frames.button
     ? {
         ...frameStyles(frames.button),
         borderRadius: 0,
         boxShadow: "none",
+        padding: "0 8px",
         color: palette.textPrimary,
-        "&:hover": frames.buttonSelected
-          ? { ...frameStyles(frames.buttonSelected), boxShadow: "none" }
-          : { backgroundColor: "transparent", filter: "brightness(1.15)", boxShadow: "none" },
+        textShadow: "0 1px 0 rgba(0, 0, 0, 0.6)",
+        // Hover only swaps the image: same slice and width, so the button keeps its size.
+        "&:hover": {
+          borderImageSource: (frames.buttonHover ?? frames.button).source,
+          backgroundColor: "transparent",
+          boxShadow: "none",
+        },
         "&.Mui-disabled": { opacity: 0.5, color: palette.textSecondary },
       }
     : {};

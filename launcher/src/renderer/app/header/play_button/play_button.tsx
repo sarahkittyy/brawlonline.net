@@ -23,7 +23,12 @@ const MainButton = React.memo((props: MainButtonProps) => {
           opacity: 0.5;
         }
         &:hover {
-          opacity: 0.8;
+          /* The game theme highlights the frame instead of fading the button. */
+          opacity: var(--theme-play-hover-opacity, 0.8);
+        }
+        /* Keep the press ripple inside the game frame's face (not over its transparent corners). */
+        & > .MuiTouchRipple-root {
+          inset: var(--theme-button-width, 0px);
         }
       `}
     >
