@@ -47,6 +47,20 @@ export const defaultServiceUrls = {
 export type ServiceUrls = typeof defaultServiceUrls;
 
 /**
+ * Whether the macOS launcher updates itself in place, as on Windows and Linux.
+ *
+ * The macOS build is only ad-hoc signed (no Apple Developer ID yet). electron-updater installs on
+ * macOS through Squirrel.Mac, which refuses an update whose code signature does not match the running
+ * app's, and ad-hoc signatures never match, so an in-place update always fails. Until then the
+ * launcher only checks the feed (latest-mac.yml) and offers MAC_DOWNLOAD_URL instead
+ * (src/common/launcher_update.ts). Flip this to true once the macOS build is signed with a Developer ID.
+ */
+export const MAC_SELF_UPDATE = false;
+
+/** The website's macOS download, offered for updates while MAC_SELF_UPDATE is false. */
+export const MAC_DOWNLOAD_URL = `https://${BASE_DOMAIN}/downloads/BrawlOnline.dmg`;
+
+/**
  * Contract with our Dolphin fork (keep in sync with its CommonPaths.h / settings):
  *
  * - `user.json` lives in `<Dolphin User folder>/<DOLPHIN_ONLINE_DIR>/user.json`. Slippi's Dolphin

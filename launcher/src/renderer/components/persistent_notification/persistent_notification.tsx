@@ -1,4 +1,4 @@
-import { defaultServiceUrls } from "@common/product";
+import { defaultServiceUrls, MAC_DOWNLOAD_URL, PRODUCT_NAME } from "@common/product";
 import { css } from "@emotion/react";
 import styled from "@emotion/styled";
 import ButtonBase from "@mui/material/ButtonBase";
@@ -34,6 +34,37 @@ export const PersistentNotification = React.memo(() => {
   const handleManualDownload = useCallback(() => {
     window.electron.shell.openExternal(defaultServiceUrls.launcherUpdates).catch(log.error);
   }, []);
+
+  const handleDownload = useCallback(() => {
+    window.electron.shell.openExternal(MAC_DOWNLOAD_URL).catch(log.error);
+  }, []);
+
+  // macOS while the build cannot update itself (MAC_SELF_UPDATE): the update is found but not
+  // downloaded, and the same bar offers the website's download instead of a restart.
+  if (window.electron.bootstrap.launcherUpdateMode === "download") {
+    if (!updateVersion) {
+      return null;
+    }
+    return (
+      <Outer>
+        <div
+          css={css`
+            display: flex;
+            justify-content: center;
+          `}
+        >
+          <span
+            css={css`
+              margin-right: 10px;
+            `}
+          >
+            {Messages.versionIsNowAvailable(updateVersion)}
+          </span>
+          <RestartButton onClick={handleDownload}>{Messages.downloadProduct(PRODUCT_NAME)}</RestartButton>
+        </div>
+      </Outer>
+    );
+  }
 
   // The handleInstall callback should provide immediate feedback i.e. it should immediately restart the
   // launcher so I don't think it's worth showing an 'Installing...' message that would need to be localised.
