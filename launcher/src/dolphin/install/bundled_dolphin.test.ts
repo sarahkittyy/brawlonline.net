@@ -102,7 +102,7 @@ describe("installBundledDolphin", () => {
     expect(await read("Sys", "new.txt")).toBe("new");
     expect(fs.existsSync(path.join(dest, "Sys", "old.txt"))).toBe(false);
     expect(fs.existsSync(path.join(dest, "Old.dll"))).toBe(false);
-    // Sys was replaced, so the save template has to be copied again (ensureNetplaySave).
+    // Sys was replaced (the save template now lives in <User>/NetplaySave, see ensureNetplaySave).
     expect(fs.existsSync(path.join(dest, "Sys", "NetplaySave"))).toBe(false);
     expect(await read("User", "Wii", "sd.raw")).toBe("card");
     expect(await read("pponline-sd", "sd.raw")).toBe("patched");

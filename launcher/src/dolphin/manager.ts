@@ -212,7 +212,7 @@ export class DolphinManager {
       Preconditions.checkExists(isoPath, "No Brawl disc image set. Choose one in Settings > Game.");
       await netplayInstallation.assertProjectPlusFiles();
       const storeDir = projectPlusStoreFolder(app.getPath("userData"));
-      await ensureNetplaySave(storeDir, netplayInstallation.sysFolder);
+      await ensureNetplaySave(storeDir, netplayInstallation.userFolder);
       await this._ensureBrawlSave(netplayInstallation, storeDir);
       await netplayInstallation.setDefaultIso(isoPath);
       bootFile = netplayInstallation.netplayLauncherDol;
@@ -423,8 +423,8 @@ export class DolphinManager {
 
   /**
    * Downloads P+'s files from P+'s official release (pinned, sha256-checked) into the netplay
-   * User folder when they are missing, and puts the Brawl save template into Dolphin's Sys
-   * folder. Nothing is downloaded when they are in place (also when a development User
+   * User folder when they are missing, and puts the Brawl save template into the User folder
+   * (`<User>/NetplaySave`). Nothing is downloaded when they are in place (also when a development User
    * template provided them and the Dolphin build has its own save template).
    */
   private _ensureProjectPlusFiles(installation: LocalDolphinInstallation): Promise<void> {
@@ -438,6 +438,7 @@ export class DolphinManager {
       const release = readTestMode(process.env, app.isPackaged).pplusRelease ?? PPLUS_RELEASE;
       this.projectPlusInstall = (async () => {
         let missing = await missingProjectPlusFiles(target, release);
+        // A development build may carry its own template in Sys (Dolphin falls back to it).
         if (missing.includes(NETPLAY_SAVE_DIR) && existsSync(path.join(installation.sysFolder, NETPLAY_SAVE_DIR))) {
           missing = missing.filter((m) => m !== NETPLAY_SAVE_DIR);
         }
@@ -457,7 +458,7 @@ export class DolphinManager {
             log: (message) => log.info(message),
           });
         }
-        await ensureNetplaySave(storeDir, installation.sysFolder);
+        await ensureNetplaySave(storeDir, installation.userFolder);
       })().finally(() => {
         this.projectPlusInstall = null;
       });
@@ -474,7 +475,11 @@ export class DolphinManager {
     try {
       const result = await ensureBrawlSave({
         nandRoot: await installation.nandRoot(),
-        templateRoots: [netplaySaveStore(storeDir), path.join(installation.sysFolder, NETPLAY_SAVE_DIR)],
+        templateRoots: [
+          netplaySaveStore(storeDir),
+          path.join(installation.userFolder, NETPLAY_SAVE_DIR),
+          path.join(installation.sysFolder, NETPLAY_SAVE_DIR),
+        ],
         log: (message) => log.info(message),
       });
       if (result.action !== "seeded") {

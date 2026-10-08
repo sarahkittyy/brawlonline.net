@@ -221,7 +221,12 @@ void InitializeWiiRoot(bool use_temporary)
     MoveToBackupIfExists(s_temp_redirect_root);
 
     File::SetUserPath(D_SESSION_WIIROOT_IDX, s_temp_wii_root);
-	File::Copy(File::GetSysDirectory() + NETPLAY_SAVE_DIR, s_temp_wii_root);
+    // The Brawl save template: the launcher puts it in the User folder (on macOS, Sys is inside
+    // the signed app bundle, and any file added there breaks its signature); Sys is the old place.
+    std::string netplay_save = File::GetUserPath(D_USER_IDX) + NETPLAY_SAVE_DIR;
+    if (!File::IsDirectory(netplay_save))
+      netplay_save = File::GetSysDirectory() + NETPLAY_SAVE_DIR;
+    File::Copy(netplay_save, s_temp_wii_root);
   }
   else
   {
