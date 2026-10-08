@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<Project>
+  <ItemDefinitionGroup>
+    <ClCompile>
+      <AdditionalIncludeDirectories>$(CoreDir)Core\Brawlback\include\GekkoNet\GekkoLib\include;%(AdditionalIncludeDirectories)</AdditionalIncludeDirectories>
+      <PreprocessorDefinitions>GEKKONET_STATIC;%(PreprocessorDefinitions)</PreprocessorDefinitions>
+    </ClCompile>
+  </ItemDefinitionGroup>
+  <ItemGroup>
+    <ProjectReference Include="$(CoreDir)Core\Brawlback\include\GekkoNet\GekkoLib\GekkoLib.vcxproj">
+      <Project>{F984AF21-C578-4124-B8D5-F817C2EAB13C}</Project>
+    </ProjectReference>
+  </ItemGroup>
+</Project>

@@ -6,3 +6,138 @@
 	path = game-code/lib/brawlback-common
 	url = https://github.com/Brawlback-Team/brawlback-common
 	branch = unstable/syringe-refactor
+[submodule "dolphin/Externals/Qt"]
+	path = dolphin/Externals/Qt
+	url = https://github.com/dolphin-emu/ext-win-qt.git
+	shallow = true
+[submodule "dolphin/Externals/mGBA/mgba"]
+	path = dolphin/Externals/mGBA/mgba
+	url = https://github.com/mgba-emu/mgba.git
+	shallow = true
+[submodule "dolphin/Externals/FFmpeg-bin"]
+	path = dolphin/Externals/FFmpeg-bin
+	url = https://github.com/dolphin-emu/ext-win-ffmpeg.git
+	shallow = true
+[submodule "dolphin/Externals/libusb/libusb"]
+	path = dolphin/Externals/libusb/libusb
+	url = https://github.com/libusb/libusb.git
+	shallow = true
+[submodule "dolphin/Externals/spirv_cross/SPIRV-Cross"]
+	path = dolphin/Externals/spirv_cross/SPIRV-Cross
+	url = https://github.com/KhronosGroup/SPIRV-Cross.git
+	shallow = true
+[submodule "dolphin/Externals/SDL/SDL"]
+	path = dolphin/Externals/SDL/SDL
+	url = https://github.com/libsdl-org/SDL.git
+	shallow = true
+[submodule "dolphin/Externals/zlib-ng/zlib-ng"]
+	path = dolphin/Externals/zlib-ng/zlib-ng
+	url = https://github.com/zlib-ng/zlib-ng.git
+	shallow = true
+[submodule "dolphin/Externals/libspng/libspng"]
+	path = dolphin/Externals/libspng/libspng
+	url = https://github.com/randy408/libspng.git
+	shallow = true
+[submodule "dolphin/Externals/VulkanMemoryAllocator"]
+	path = dolphin/Externals/VulkanMemoryAllocator
+	url = https://github.com/GPUOpen-LibrariesAndSDKs/VulkanMemoryAllocator.git
+	shallow = true
+[submodule "dolphin/Externals/cubeb/cubeb"]
+	path = dolphin/Externals/cubeb/cubeb
+	url = https://github.com/mozilla/cubeb.git
+	shallow = true
+[submodule "dolphin/Externals/implot/implot"]
+	path = dolphin/Externals/implot/implot
+	url = https://github.com/epezent/implot.git
+	shallow = true
+[submodule "dolphin/Externals/gtest"]
+	path = dolphin/Externals/gtest
+	url = https://github.com/google/googletest.git
+	shallow = true
+[submodule "dolphin/Externals/rcheevos/rcheevos"]
+	path = dolphin/Externals/rcheevos/rcheevos
+	url = https://github.com/RetroAchievements/rcheevos.git
+	shallow = true
+[submodule "dolphin/Externals/libadrenotools"]
+	path = dolphin/Externals/libadrenotools
+	url = https://github.com/bylaws/libadrenotools.git
+	shallow = true
+[submodule "dolphin/Externals/curl/curl"]
+	path = dolphin/Externals/curl/curl
+	url = https://github.com/curl/curl.git
+	shallow = true
+[submodule "dolphin/Externals/fmt/fmt"]
+	path = dolphin/Externals/fmt/fmt
+	url = https://github.com/fmtlib/fmt.git
+	shallow = true
+[submodule "dolphin/Externals/lz4/lz4"]
+	path = dolphin/Externals/lz4/lz4
+	url = https://github.com/lz4/lz4.git
+	shallow = true
+[submodule "dolphin/Externals/xxhash/xxHash"]
+	path = dolphin/Externals/xxhash/xxHash
+	url = https://github.com/Cyan4973/xxHash.git
+	shallow = true
+[submodule "dolphin/Externals/enet/enet"]
+	path = dolphin/Externals/enet/enet
+	url = https://github.com/lsalzman/enet.git
+	shallow = true
+[submodule "dolphin/Externals/hidapi/hidapi-src"]
+	path = dolphin/Externals/hidapi/hidapi-src
+	url = https://github.com/libusb/hidapi.git
+	shallow = true
+[submodule "dolphin/Externals/tinygltf/tinygltf"]
+	path = dolphin/Externals/tinygltf/tinygltf
+	url = https://github.com/syoyo/tinygltf.git
+	shallow = true
+[submodule "dolphin/Externals/minizip-ng/minizip-ng"]
+	path = dolphin/Externals/minizip-ng/minizip-ng
+	url = https://github.com/zlib-ng/minizip-ng.git
+	shallow = true
+[submodule "dolphin/Externals/Vulkan-Headers"]
+	path = dolphin/Externals/Vulkan-Headers
+	url = https://github.com/KhronosGroup/Vulkan-Headers.git
+	shallow = true
+[submodule "dolphin/Externals/SFML/SFML"]
+	path = dolphin/Externals/SFML/SFML
+	url = https://github.com/SFML/SFML.git
+	shallow = true
+[submodule "dolphin/Externals/zstd/zstd"]
+	path = dolphin/Externals/zstd/zstd
+	url = https://github.com/facebook/zstd.git
+	shallow = true
+[submodule "dolphin/Externals/watcher/watcher"]
+	path = dolphin/Externals/watcher/watcher
+	url = https://github.com/e-dant/watcher.git
+[submodule "dolphin/Externals/miniupnpc/miniupnp"]
+	path = dolphin/Externals/miniupnpc/miniupnp
+	url = https://github.com/miniupnp/miniupnp.git
+	shallow = true
+[submodule "dolphin/Externals/glslang/glslang"]
+	path = dolphin/Externals/glslang/glslang
+	url = https://github.com/KhronosGroup/glslang.git
+	shallow = true
+[submodule "dolphin/Externals/pugixml/pugixml"]
+	path = dolphin/Externals/pugixml/pugixml
+	url = https://github.com/zeux/pugixml.git
+	shallow = true
+[submodule "dolphin/Externals/cpp-ipc/cpp-ipc"]
+	path = dolphin/Externals/cpp-ipc/cpp-ipc
+	url = https://github.com/mutouyun/cpp-ipc.git
+	shallow = true
+[submodule "dolphin/Externals/cpp-optparse/cpp-optparse"]
+	path = dolphin/Externals/cpp-optparse/cpp-optparse
+	url = https://github.com/weisslj/cpp-optparse.git
+	shallow = true
+[submodule "dolphin/Externals/bzip2/bzip2"]
+	path = dolphin/Externals/bzip2/bzip2
+	url = https://gitlab.com/bzip2/bzip2.git
+	shallow = true
+[submodule "dolphin/Externals/imgui/imgui"]
+	path = dolphin/Externals/imgui/imgui
+	url = https://github.com/ocornut/imgui.git
+	shallow = true
+[submodule "dolphin/Externals/wil"]
+	path = dolphin/Externals/wil
+	url = https://github.com/microsoft/wil.git
+	shallow = true

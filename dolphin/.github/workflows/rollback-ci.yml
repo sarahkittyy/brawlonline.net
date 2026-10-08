@@ -1,0 +1,176 @@
+# Builds and headless tests for the P+ rollback fork on every supported desktop platform.
+#
+# Hosted jobs build Release on Windows x64, Ubuntu 24.04 x64 (in the same Docker image used for
+# local Linux testing, Tools/docker/linux-build.Dockerfile), macOS arm64 and macOS x86-64, and
+# run Dolphin's gtest unit tests (the `unittests` target runs ctest).
+#
+# The game-dependent tests (rollback sync test, two-instance rollback netplay, offline match)
+# need the Brawl disc and the P+ user dir, which can't be in public CI. They run on a
+# self-hosted runner labelled `pplus-game` whose machine has a workspace laid out like
+# D:\code\pm_rollback (harness/, game/SSBB_NTSC.iso, run/template-user) at $PPLUS_WORKSPACE.
+# Those jobs only run on manual dispatch or on pushes to this repo's own branches, never on PRs
+# from forks.
+#
+# Modelled on the existing ci.yml (P+ Dolphin builder) and Slippi's CI layout.
+
+name: Rollback CI
+
+on:
+  push:
+    branches: [rollback-fixes, linux-build, "rollback/**"]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      game_tests:
+        description: "Run the game-dependent tests on the self-hosted runner"
+        type: boolean
+        default: true
+
+concurrency:
+  group: rollback-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  linux:
+    name: Linux (Ubuntu 24.04, x86-64)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - name: Build the build image
+        run: docker build -t pplus-dolphin-linux:ubuntu24.04 -f Tools/docker/linux-build.Dockerfile Tools/docker
+      - name: Build Dolphin and the unit tests
+        run: |
+          mkdir -p build
+          docker run --rm -v "$PWD:/src:ro" -v "$PWD/build:/build" \
+            -e TARGETS="dolphin-nogui project-plus-dolphin tests" \
+            pplus-dolphin-linux:ubuntu24.04 build
+      - name: Unit tests
+        run: |
+          docker run --rm -v "$PWD:/src:ro" -v "$PWD/build:/build" pplus-dolphin-linux:ubuntu24.04 \
+            ctest --test-dir /build --output-on-failure
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pplus-rollback-linux-x86_64
+          path: |
+            build/Binaries/dolphin-emu-nogui
+            build/Binaries/project-plus-dolphin
+            build/Binaries/Sys
+
+  windows:
+    name: Windows (x64)
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Configure
+        run: cmake --preset ninja-release-x64
+      - name: Build Dolphin and the unit tests
+        run: cmake --build --preset ninja-build-release-x64 --target dolphin-nogui project-plus-dolphin tests
+      - name: Unit tests
+        run: ctest --test-dir build/release/x64 --output-on-failure
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pplus-rollback-windows-x64
+          path: build/release/x64/Binaries/
+
+  macos:
+    name: macOS (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: arm64
+            runner: macos-15
+          - arch: x86_64
+            runner: macos-15-intel
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+          fetch-depth: 0
+      - name: Install packages
+        env:
+          HOMEBREW_NO_INSTALL_CLEANUP: 1
+          HOMEBREW_NO_ANALYTICS: 1
+        run: brew install ninja qt@6 libspng
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_OSX_ARCHITECTURES=${{ matrix.arch }} \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=11.0 \
+            -DCMAKE_PREFIX_PATH="$(brew --prefix qt@6)" \
+            -DMACOS_CODE_SIGNING=OFF \
+            -DENABLE_AUTOUPDATE=OFF \
+            -DENABLE_ANALYTICS=OFF \
+            -DUSE_DISCORD_PRESENCE=OFF \
+            -DCMAKE_POLICY_VERSION_MINIMUM=3.5
+      - name: Build Dolphin and the unit tests
+        run: cmake --build build --target dolphin-nogui project-plus-dolphin tests
+      - name: Unit tests
+        run: ctest --test-dir build --output-on-failure
+      - name: Package
+        run: tar -C build/Binaries -cJf pplus-rollback-macos-${{ matrix.arch }}.tar.xz .
+      - uses: actions/upload-artifact@v4
+        with:
+          name: pplus-rollback-macos-${{ matrix.arch }}
+          path: pplus-rollback-macos-${{ matrix.arch }}.tar.xz
+
+  # ------------------------------------------------------------------ needs the disc (self-hosted)
+
+  game-tests:
+    name: Game tests (${{ matrix.os }}, self-hosted)
+    if: >-
+      (github.event_name == 'workflow_dispatch' && inputs.game_tests) ||
+      (github.event_name == 'push' && github.repository_owner == github.event.repository.owner.login)
+    needs: [linux, windows, macos]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: linux
+            artifact: pplus-rollback-linux-x86_64
+          - os: windows
+            artifact: pplus-rollback-windows-x64
+          - os: macos
+            artifact: pplus-rollback-macos-arm64
+    runs-on: [self-hosted, pplus-game, "${{ matrix.os }}"]
+    timeout-minutes: 60
+    env:
+      # Set on the runner: a workspace with harness/, game/SSBB_NTSC.iso and run/template-user.
+      PPLUS_WORKSPACE: ${{ vars.PPLUS_WORKSPACE }}
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: ${{ matrix.artifact }}
+          path: bin
+      - name: Unpack (macOS)
+        if: matrix.os == 'macos'
+        shell: bash
+        run: cd bin && tar -xJf *.tar.xz && rm *.tar.xz
+      - name: Rollback and offline-match tests
+        shell: bash
+        env:
+          PPHARNESS_ROOT: ${{ vars.PPLUS_WORKSPACE }}
+          PPHARNESS_DOLPHIN_DIR: ${{ github.workspace }}/bin
+          PPHARNESS_INSTANCES: ${{ runner.temp }}/instances
+        run: |
+          chmod +x bin/dolphin-emu-nogui 2>/dev/null || true
+          cd "$PPLUS_WORKSPACE/harness"
+          python3 -m pytest -p no:cacheprovider -m dolphin \
+            tests/test_rollback.py "tests/test_e2e_match.py::test_offline_match" \
+            --junitxml="$RUNNER_TEMP/game-tests.xml"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: game-tests-${{ matrix.os }}
+          path: ${{ runner.temp }}/game-tests.xml

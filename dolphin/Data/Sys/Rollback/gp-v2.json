@@ -1,0 +1,192 @@
+{
+  "name": "gp-v2",
+  "notes": [
+    "gp-v1 minus 0x80493EC0+0x40: that granule is the C stdio FILE table (__files, 0x80493E60",
+    "+0x140), written by whichever thread prints (OSReport). Restoring it under other threads'",
+    "prints broke __fwrite (main thread hung in __memrchr with a trashed stack). Not gameplay.",
+    "Gameplay region set for gameplay-only (Slippi-style) rollback, from the feasibility spike",
+    "(docs/gameplay-rollback-feasibility.md, Experiment 3). Heaps are resolved by name from the live",
+    "heap table (g_HeapInfos 0x80494958) at the start of the match; rel_data adds the data and bss",
+    "sections of every loaded REL (OS module list 0x800030C8). 'add' entries are static ranges:",
+    "[effective address, size, label]. 'remove' punches holes: [address, size, label].",
+    "Not in the set on purpose: OS state (lowmem, stacks, SystemFW, thread/alarm state in .bss),",
+    "audio (Sound heap, AX .bss), video (RenderFifo, CopyFB, XFB), Network, Replay, Tmp, all code."
+  ],
+  "heaps": [
+    "System",
+    "Effect",
+    "Fighter1Instance",
+    "Fighter2Instance",
+    "Fighter3Instance",
+    "Fighter4Instance",
+    "FighterTechqniq",
+    "StageInstance",
+    "ItemInstance",
+    "WeaponInstance",
+    "EnemyInstance",
+    "Physics",
+    "InfoInstance",
+    "GameGlobal",
+    "GlobalMode",
+    "WiiPad",
+    "FighterEffect",
+    "Fighter1Resoruce",
+    "Fighter2Resoruce",
+    "Fighter3Resoruce",
+    "Fighter4Resoruce",
+    "Fighter1Resoruce2",
+    "Fighter2Resoruce2",
+    "Fighter3Resoruce2",
+    "Fighter4Resoruce2",
+    "StageResoruce",
+    "IteamResource",
+    "PokemonResource",
+    "AssistFigureResource",
+    "ItemExtraResource"
+  ],
+  "rel_data": true,
+  "add": [
+    [
+      "0x805A00B8",
+      "0x8",
+      "g_mtRand"
+    ],
+    [
+      "0x805A0420",
+      "0x8",
+      "g_mtRandOther"
+    ],
+    [
+      "0x8059FF58",
+      "0x4",
+      "libc rand next"
+    ],
+    [
+      "0x804977B4",
+      "0xC",
+      "g_mtPrngLogManager"
+    ],
+    [
+      "0x807824d4",
+      "0x4",
+      "P+ code-embedded variable in sora_melee .text"
+    ],
+    [
+      "0x80494f20",
+      "0x40",
+      "dolw-g1"
+    ],
+    [
+      "0x80494fa0",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x8049e020",
+      "0x40",
+      "dolw-g1"
+    ],
+    [
+      "0x8049ede0",
+      "0x60",
+      "dolw-g1"
+    ],
+    [
+      "0x804a3de0",
+      "0x60",
+      "dolw-g1"
+    ],
+    [
+      "0x804a3e60",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x804a3ec0",
+      "0x40",
+      "dolw-g1"
+    ],
+    [
+      "0x804a3f20",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x804a3f60",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x804a3fe0",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x804a4580",
+      "0x40",
+      "dolw-g1"
+    ],
+    [
+      "0x804a4680",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x804a56c0",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x804a5700",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x804a5740",
+      "0x20",
+      "dolw-g1"
+    ],
+    [
+      "0x804a7f40",
+      "0x40",
+      "dolw-g1"
+    ],
+    [
+      "0x804a9a80",
+      "0xb20",
+      "dolw-g1"
+    ],
+    [
+      "0x804aa640",
+      "0x40",
+      "dolw-g1"
+    ],
+    [
+      "0x804aa6e0",
+      "0x40",
+      "dolw-g1"
+    ],
+    [
+      "0x804aa740",
+      "0x2e0",
+      "dolw-g1"
+    ],
+    [
+      "0x804adb20",
+      "0x140",
+      "dolw-g1"
+    ],
+    [
+      "0x804adc80",
+      "0x100",
+      "dolw-g1"
+    ],
+    [
+      "0x804afa80",
+      "0x20",
+      "dolw-g1"
+    ]
+  ],
+  "remove": [],
+  "remove_heaps": []
+}
