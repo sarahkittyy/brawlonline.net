@@ -16,7 +16,9 @@ echo "git describe: $(git describe --always --long)"
 
 user_h=dolphin/Source/Core/Core/Online/User.h
 if [ -f "$user_h" ]; then
-  sed -i -E "s/^(constexpr char APP_VERSION\[\] = )\"[^\"]*\";/\1\"$version\";/" "$user_h"
+  # Not `sed -i`: GNU and BSD (macOS) sed take its argument differently.
+  sed -E "s/^(constexpr char APP_VERSION\[\] = )\"[^\"]*\";/\1\"$version\";/" "$user_h" >"$user_h.tmp"
+  mv "$user_h.tmp" "$user_h"
   grep -q "APP_VERSION\[\] = \"$version\";" "$user_h" || { echo "could not stamp $user_h" >&2; exit 1; }
   echo "$user_h: APP_VERSION $version"
 fi
