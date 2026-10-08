@@ -173,7 +173,8 @@ def test_hostile_peer_cannot_crash_or_write_the_lobby(joiner: DolphinInstance) -
             return {"game": 1, "stage": stage, "asl": 0, "players": players}
 
         good_players = [[0x07, 0, PV_HEX], [0x15, 1, PV_HEX]]
-        for bad in (setup(0x26, good_players), setup(0xFFFF, good_players), setup(0x40, good_players),
+        for bad in (setup(0x26, good_players), setup(0xFFFF, good_players), setup(0x38, good_players),
+                    setup(0x80, good_players),
                     setup(0x01, [[0x99, 0, PV_HEX], [0x15, 1, PV_HEX]]),
                     setup(0x01, [[0x07, 0x80, PV_HEX], [0x15, 1, PV_HEX]]),
                     setup(0x01, [[0x07, 0, PV_HEX]]),
