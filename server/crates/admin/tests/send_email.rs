@@ -29,7 +29,7 @@ struct Db {
 async fn setup() -> Db {
     let (pool, name) = e2e::fresh_db().await.expect("postgres (see server/README.md)");
     let url = e2e::db_url(&name).await.unwrap();
-    store::create_user(&pool, EMAIL, "not-a-real-hash", "MailTest", None).await.unwrap();
+    store::create_user(&pool, EMAIL, "not-a-real-hash", "MailTest").await.unwrap();
     // A working directory without a .env, for the mail file.
     let dir = std::env::temp_dir().join(format!("pp-admin-mail-{name}"));
     std::fs::create_dir_all(&dir).unwrap();

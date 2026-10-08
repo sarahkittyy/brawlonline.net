@@ -4,9 +4,9 @@ Accounts, connect codes, and Direct and Unranked matchmaking for Brawl Online, t
 
 | Crate | What it is |
 |---|---|
-| `crates/accounts` | HTTP service (axum + sqlx): sign-up with invite code and email verification, login, sessions, password reset, connect codes, play keys, the data for `user.json`, Slippi's users-rest endpoint. |
+| `crates/accounts` | HTTP service (axum + sqlx): open sign-up with email verification, login, sessions, password reset, connect codes, play keys, the data for `user.json`, Slippi's users-rest endpoint. |
 | `crates/mm` | Matchmaking server: ENet over UDP 43113, speaking Slippi's `create-ticket` / `get-ticket-resp` JSON protocol. Direct and Unranked; per-mode stage lists. |
-| `crates/admin` | Admin CLI: invites, users, password resets, bans. |
+| `crates/admin` | Admin CLI: users, password resets, bans, account deletion. |
 | `crates/mmclient` | Ticket client library and CLI that behaves like Slippi's `SlippiMatchmaking.cpp`. For tests, ppharness and game-integration work. |
 | `crates/common` | Shared code: connect-code and display-name rules, the mm message types, play keys, rate limiter, migrations. |
 | `crates/e2e` | End-to-end tests (Postgres + both services + fake game clients). |
@@ -69,23 +69,20 @@ Every setting is an environment variable (or a flag; `--help` lists them). The b
 ### Try it end to end
 
 ```sh
-# 1. An invite (sign-up is invite-only while SIGNUP_INVITE_ONLY=true)
-cargo run -p admin -- invite create --note "alice"
-
-# 2. Sign up; the verification link is printed by accounts (MAILER=stdout)
+# 1. Sign up (open to everyone); the verification link is printed by accounts (MAILER=stdout)
 curl -s localhost:8080/v1/auth/signup -H 'content-type: application/json' \
-  -d '{"email":"alice@example.test","password":"a long password","displayName":"alice","inviteCode":"XXXX-XXXX-XXXX-XXXX"}'
+  -d '{"email":"alice@example.test","password":"a long password","displayName":"alice"}'
 #    -> {"sessionToken": "...", "user": {...}}
 curl -s "localhost:8080/verify-email?token=..."
 
-# 3. Pick the code prefix; the server appends #N
+# 2. Pick the code prefix; the server appends #N
 curl -s localhost:8080/v1/me/netplay -H "authorization: Bearer $SESSION" \
   -H 'content-type: application/json' -d '{"codeStart":"alic"}'
 
-# 4. Write user.json exactly as the launcher would
+# 3. Write user.json exactly as the launcher would
 curl -s localhost:8080/v1/me/user-json -H "authorization: Bearer $SESSION" > alice.user.json
 
-# 5. Do the same for bob, then search for each other
+# 4. Do the same for bob, then search for each other
 cargo run -p mmclient -- search --user-json alice.user.json --code BOB#123 --punch &
 cargo run -p mmclient -- search --user-json bob.user.json --code ALIC#456 --punch
 ```
@@ -98,12 +95,12 @@ JSON in and out. Errors are `{"error": {"code": "...", "message": "..."}}`. Auth
 
 | Endpoint | Slippi equivalent | Notes |
 |---|---|---|
-| `POST /v1/auth/signup {email, password, displayName, inviteCode?}` | `createUserNew` | 201 with a session. Sends a verification email. Invite required while `SIGNUP_INVITE_ONLY=true`. |
+| `POST /v1/auth/signup {email, password, displayName}` | `createUserNew` | 201 with a session. Open to everyone. Sends a verification email. 409 `email_taken`; 429 when a limit below is reached. |
 | `POST /v1/auth/login {email, password}` | `signInWithEmailAndPassword` | `{sessionToken, user}`. Sessions slide for 90 days. |
 | `POST /v1/auth/logout` | | |
 | `POST /v1/auth/verify-email {token}`, `GET /verify-email?token=` | Firebase verification | The GET is the page the email links to. |
-| `POST /v1/auth/verify-email/resend` | | Rate-limited. |
-| `POST /v1/auth/password-reset/request {email}` | Firebase reset | Always 202. Emails a 1-hour link. |
+| `POST /v1/auth/verify-email/resend` | | Rate-limited (see below). |
+| `POST /v1/auth/password-reset/request {email}` | Firebase reset | 202 whether or not the account exists (429 only from the per-IP and per-address limits). Emails a 1-hour link. |
 | `POST /v1/auth/password-reset/confirm {token, newPassword}`, `GET/POST /reset-password` | | The page is the emailed link's form. Rotates the play key and ends all sessions. |
 | `POST /v1/auth/change-password {currentPassword, newPassword}` | | Same rotation; returns a new session. |
 | `GET /v1/me` | `getUser` | Includes `playKey` and `userJson` once the email is verified and a code is set. |
@@ -118,8 +115,23 @@ Rules:
 - **Connect codes**: the user picks 2-4 letters (`/^[a-zA-Z]+$/`, stored uppercase). The server appends `#N`, the lowest free number from a random start in 1-999, falling back to 1000-9999 only if all 999 are taken and the code stays at most 8 characters (so a 4-letter prefix never gets 4 digits). Codes are unique and immutable (`admin user set-code` for the one approved change). Codes typed in-game are matched case- and width-insensitively, and leading zeros in the number are ignored (`ＡＢ＃００７` = `AB#7`).
 - **Display names**: 1-15 characters of printable ASCII, Hiragana or Katakana, without `\` or `` ` `` (the Slippi launcher rule).
 - **Passwords**: 8-256 characters, Argon2id with m = 64 MiB, t = 3, p = 1.
-- **Rate limits**: per IP and per email on login, sign-up and reset: 5 per minute and 20 per hour. One mm ticket per account per 2 s.
-- **Email**: an SMTP provider (`MAILER=smtp`), Brevo's HTTP API (`MAILER=brevo`) or Resend's (`MAILER=resend`) in production, with a daily cap per process (`MAIL_DAILY_LIMIT`, default 90). A `Mailer` trait has SMTP, Brevo, Resend, stdout, file and in-memory implementations, and `mail::from_config` is the one place that picks one: `accounts` and the admin CLI's `reset-password --send-email` build their mailer from the same settings. Tests only use the in-memory and file mailers, plus the SMTP client against a local fake server (`crates/fakesmtp`) and the Brevo and Resend clients against local fake HTTP servers.
+- **Rate limits** (in memory, per process; `common::ratelimit` and `accounts::Limits`). Sign-up is open to everyone, so every path that sends an email is limited, and neither one client nor one kind of email can use up the email quota (Brevo's free plan: 300 a day). The client IP is the last `X-Forwarded-For` entry behind the proxy, and an IPv6 /64 counts as one address. A refusal is 429 `rate_limited` with `Retry-After`.
+
+  | What | Key | Limit |
+  |---|---|---|
+  | Login | IP, and email | 5 per minute, 20 per hour (a successful login clears the email's count) |
+  | Sign-up attempts, valid or not | IP | 5 per minute, 20 per hour |
+  | Accounts created (each sends one verification email) | IP | 3 per hour, 10 per day. A taken email is refused (409) before this count |
+  | Verification email resends | account | 1 per minute, 3 per hour, 5 per day |
+  | Password-reset requests | IP | 5 per minute, 20 per hour |
+  | Password-reset emails | address | 1 per minute, 3 per hour, 5 per day |
+  | Verification emails (sign-ups + resends), all clients | global | 2/3 of `MAIL_DAILY_LIMIT` per 24 h (60 with 90). After that, sign-up and resend answer 429 "Too many sign-ups right now", so no account is created whose email cannot go out |
+  | Password-reset emails, all clients | global | the other 1/3 (30 with 90). After that, the request still answers 202 (no account enumeration), no email is sent, and accounts logs a WARN |
+  | Password change | account | 5 per minute, 20 per hour |
+  | mm tickets | account | 1 per 2 s |
+
+  Worst case for one IP: 10 verification emails a day. For one inbox: 1 + 5 verification emails (one account per address) and 5 reset emails a day. The two global shares add up to `MAIL_DAILY_LIMIT`, so accounts never sends more than that per UTC day. Set it below the provider's quota, with room for `admin user reset-password --send-email` (a separate process with its own count).
+- **Email**: an SMTP provider (`MAILER=smtp`), Brevo's HTTP API (`MAILER=brevo`) or Resend's (`MAILER=resend`) in production, with a daily cap per process (`MAIL_DAILY_LIMIT`, default 90, split as above). A `Mailer` trait has SMTP, Brevo, Resend, stdout, file and in-memory implementations, and `mail::from_config` is the one place that picks one: `accounts` and the admin CLI's `reset-password --send-email` build their mailer from the same settings. Tests only use the in-memory and file mailers, plus the SMTP client against a local fake server (`crates/fakesmtp`) and the Brevo and Resend clients against local fake HTTP servers.
 
 ## Email providers
 
@@ -155,7 +167,7 @@ Configuration mistakes (no host, username without password, invalid `MAIL_FROM`,
 - **DMARC**: a TXT record at `_dmarc.brawlonline.net`, for example `v=DMARC1; p=none; rua=mailto:<an address you read>` to start; tighten to `p=quarantine` once reports show SPF and DKIM pass.
 - In Cloudflare, these records are DNS-only (TXT and CNAME records are never proxied anyway). Some providers also ask for a verification TXT or a return-path CNAME.
 
-Until the provider shows the domain as verified, it refuses or spam-folders mail from `noreply@brawlonline.net`. Send a test (sign up with an invite, or `admin user reset-password <your account> --send-email`) and check the headers for `spf=pass`, `dkim=pass` and `dmarc=pass`.
+Until the provider shows the domain as verified, it refuses or spam-folders mail from `noreply@brawlonline.net`. Send a test (sign up, or `admin user reset-password <your account> --send-email`) and check the headers for `spf=pass`, `dkim=pass` and `dmarc=pass`.
 
 ## Matchmaking server
 
@@ -213,8 +225,6 @@ How Dolphin uses it (as Slippi's client does): the host draws every random stage
 ```sh
 admin migrate
 admin gen-secret
-admin invite create [--uses N] [--expires-days D] [--note TEXT]
-admin invite list | revoke CODE
 admin user list
 admin user show IDENT                          # IDENT = uid, email or connect code
 admin user reset-password IDENT [--send-email] # prints a one-time link valid 24 h, or sends it with the MAILER accounts uses
@@ -223,6 +233,7 @@ admin user unban IDENT
 admin user verify-email IDENT
 admin user rotate-play-key IDENT
 admin user set-code IDENT CODE
+admin user delete IDENT --yes                  # with its sessions and email tokens; the connect code is free again at once
 ```
 
 Every change is written to `audit_log`. `reset-password --send-email` reads the same mail settings as accounts (`MAILER`, `MAIL_*`, `SMTP_*`, `BREVO_*`, `RESEND_*`; `admin user reset-password --help` lists them), so with `MAILER=file` the email is appended to `MAIL_FILE` and nothing goes over the network. A bad mail setting fails before the token is issued; the audit row records `emailed` and the mailer.
@@ -249,7 +260,7 @@ Without Docker, start the portable Postgres (above) and point the tests at it, e
 
 - Unit tests: code and name rules, Shift-JIS decoding, protocol parsing and wire shape (openmelee and Brawlback fixtures), play keys, rate limiter, Argon2, mailers (SMTP against `fakesmtp`: multipart text + HTML, auth, 535 errors without the password, timeout, STARTTLS required; Brevo and Resend against local fakes: request shape, errors without the key; stdout and file never connecting), and the ticket state machine (pairing, host choice, expiry, wrong code, bad key, bans, unsupported modes, malformed input, cancel, replacement, rate limit, DB timeout, version gate, re-pair backoff), the Unranked queue (arrival order, response fields and stage list, code ignored, never paired with Direct, expiry error, cancel, replacement, failed-connect preference and backoff, regions and widening), the region table and the rulesets file.
 - `crates/admin/tests/send_email.rs`: runs the `admin` binary (`user reset-password --send-email`) with `MAILER=file`, `stdout`, `smtp` and `brevo` while `RESEND_API_URL`, `BREVO_API_URL` (with keys) and `SMTP_HOST` point at listeners that count connections: file and stdout never connect, smtp and brevo reach only their own fake server, `resend` without a key fails before issuing a token; and the in-process reset path with an in-memory mailer.
-- `crates/e2e/tests/accounts_api.rs`: the HTTP API against Postgres (invites, validation, verification, code assignment, `user.json`, reset and change password rotating the play key, bans, rate limits).
+- `crates/e2e/tests/accounts_api.rs`: the HTTP API against Postgres (open sign-up, validation, verification, code assignment, `user.json`, reset and change password rotating the play key, bans, rate limits, the per-IP account limit with IPv6 /64s, the daily email shares).
 - `crates/e2e/tests/matchmaking.rs`: Postgres + accounts + mm in process, accounts created over HTTP, two fake ENet clients: matching peer info and a real P2P connection, expiry, wrong code, bad play key, unsupported modes, malformed packets and raw UDP garbage (server keeps running and still pairs), cancel.
 - `crates/e2e/tests/unranked.rs`:
   - two strangers meet: response fields, the ruleset's 15 stages, a real P2P connection, and the `mm_matches` row with mode, stages and region;
@@ -266,7 +277,7 @@ When finished: `docker compose down` (add `-v` to delete the data volume).
 
 - **Layout and names**: the workspace is `server/` (not `backend/`), the HTTP service is `accounts` (the design's `api`), and the shared crate is `common` (`core` clashes with Rust's `core`). There is no `relay` crate yet (Phase 1.5).
 - **Play keys are derived, not hashed**: the design says to store only a SHA-256 of the play key, but Slippi's launcher re-fetches the key on every Play (`getUser` → `private.playKey`), so it must be retrievable. The key is `HMAC-SHA256(PLAY_KEY_SECRET, uid, version)`; the database stores only the version. A database dump still reveals no key, and rotation is a version bump.
-- **Email from day 1** (user decision, 2026-10-06): verification at sign-up and self-service reset through a mail provider (Resend at first; any SMTP provider since the Resend domain slot was used up), with invite codes kept as an optional gate. Login is by email; no separate username.
+- **Email from day 1** (user decision, 2026-10-06): verification at sign-up and self-service reset through a mail provider (Resend at first; any SMTP provider since the Resend domain slot was used up). Login is by email; no separate username. Invite codes (the friends-phase gate) were removed on 2026-10-08 (user decision: anyone can create an account); migration 0002 drops the `invites` table and `users.invite_code`.
 - **Direct and Unranked**: Ranked, Teams and Party are refused with a clear error. Unranked has no rating band (the design's "widening rating band" needs Phase 4's rating). Regions come from a prefix table instead of a GeoIP database (see above). No rating, reports or replays yet.
-- **Not built yet**: GraphQL facade for the unmodified launcher (the JSON endpoints mirror its operations one to one), `/metrics`, build-hash/ISO allow-list on tickets (`search.game` is accepted and ignored), the reserved-code period after account deletion (accounts cannot be deleted yet), website pages beyond the two email-link pages.
-- **Known limit**: `rusty_enet` does not expose ENet's maximum packet size (32 MB default), so a client can make the server buffer a large reliable packet before mm rejects it (> 8 KiB is refused after reassembly). Fine for a friends-only server; revisit before opening sign-ups.
+- **Not built yet**: GraphQL facade for the unmodified launcher (the JSON endpoints mirror its operations one to one), `/metrics`, build-hash/ISO allow-list on tickets (`search.game` is accepted and ignored), the reserved-code period after account deletion (only `admin user delete` deletes accounts, and their code is free again at once), website pages beyond the two email-link pages.
+- **Known limit**: `rusty_enet` does not expose ENet's maximum packet size (32 MB default), so a client can make the server buffer a large reliable packet before mm rejects it (> 8 KiB is refused after reassembly). Sign-ups are open since 2026-10-08, so this needs revisiting.

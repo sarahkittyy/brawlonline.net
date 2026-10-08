@@ -1,5 +1,5 @@
-//! The accounts web service: sign-up (invite code and email verification),
-//! login, sessions, connect codes, play keys and the data the launcher writes
+//! The accounts web service: sign-up (open to everyone, with email
+//! verification), login, sessions, connect codes, play keys and the data the launcher writes
 //! to `user.json`. See docs/backend-design.md sections 2.4 and 3.
 
 pub mod api;
@@ -10,13 +10,13 @@ pub mod pages;
 pub mod password;
 pub mod store;
 
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 
 use axum::routing::{get, post};
 use axum::Router;
 use common::playkey::PlayKeySecret;
-use common::ratelimit::{RateLimiter, AUTH_WINDOWS};
+use common::ratelimit::{RateLimiter, Window, AUTH_WINDOWS, DAY, MAIL_RECIPIENT_WINDOWS, SIGNUP_IP_WINDOWS};
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
 use tower_http::limit::RequestBodyLimitLayer;
@@ -30,7 +30,7 @@ pub struct AppState {
     pub cfg: Arc<Config>,
     pub secret: PlayKeySecret,
     pub mailer: Arc<dyn mail::Mailer>,
-    pub limiter: Arc<Mutex<RateLimiter<String>>>,
+    pub limits: Arc<Mutex<Limits>>,
     pub hash_params: password::HashParams,
     pub dummy_hash: String,
 }
@@ -43,11 +43,50 @@ impl AppState {
             pool,
             secret,
             mailer,
-            limiter: Arc::new(Mutex::new(RateLimiter::new(&AUTH_WINDOWS))),
+            limits: Arc::new(Mutex::new(Limits::new(cfg.mail.mail_daily_limit))),
             hash_params,
             dummy_hash: password::dummy_hash(hash_params),
             cfg: Arc::new(cfg),
         })
+    }
+}
+
+/// The rate limiters (in memory, per process). Values and reasons: `server/README.md`, "Rate limits".
+pub struct Limits {
+    /// [`AUTH_WINDOWS`], keyed `<what>:<ip, email or uid>`.
+    pub auth: RateLimiter<String>,
+    /// Accounts created per client IP (IPv6 per /64): [`SIGNUP_IP_WINDOWS`].
+    pub signup_ip: RateLimiter<IpAddr>,
+    /// Emails to one recipient: [`MAIL_RECIPIENT_WINDOWS`], keyed `verify:<uid>` or `reset:<email>`.
+    pub mail_to: RateLimiter<String>,
+    /// Verification emails (sign-ups and resends) from all clients together.
+    pub verify_mail: RateLimiter<()>,
+    /// Password-reset emails from all clients together.
+    pub reset_mail: RateLimiter<()>,
+}
+
+impl Limits {
+    /// Splits the daily email cap (`MAIL_DAILY_LIMIT`) between the two kinds of email, so a
+    /// flood of one cannot use up the other's share: two thirds for verification emails, the
+    /// rest for password resets (60 and 30 with the default 90). Sign-up answers 429 once the
+    /// verification share of the last 24 hours is used up, rather than creating accounts whose
+    /// email cannot be sent.
+    pub fn new(mail_daily_limit: u32) -> Self {
+        let (verify, reset) = Self::mail_budgets(mail_daily_limit);
+        Limits {
+            auth: RateLimiter::new(&AUTH_WINDOWS),
+            signup_ip: RateLimiter::new(&SIGNUP_IP_WINDOWS),
+            mail_to: RateLimiter::new(&MAIL_RECIPIENT_WINDOWS),
+            verify_mail: RateLimiter::new(&[Window::new(verify, DAY)]),
+            reset_mail: RateLimiter::new(&[Window::new(reset, DAY)]),
+        }
+    }
+
+    /// (verification, reset) emails per 24 hours for a daily cap. Each at least 1.
+    pub fn mail_budgets(mail_daily_limit: u32) -> (usize, usize) {
+        let total = mail_daily_limit as usize;
+        let verify = (total * 2 / 3).max(1);
+        (verify, total.saturating_sub(verify).max(1))
     }
 }
 
@@ -96,11 +135,25 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
     tracing::info!(
         mailer = ?cfg.mailer_kind(),
         mail = %mail::describe(&cfg.mail),
-        invite_only = cfg.signup_invite_only,
+        mail_daily_limit = cfg.mail.mail_daily_limit,
         "accounts starting"
     );
     let listener = tokio::net::TcpListener::bind(cfg.listen).await?;
     tracing::info!("listening on http://{}", listener.local_addr()?);
     let state = AppState::new(pool, cfg, mailer)?;
     serve(listener, state).await
+}
+
+#[cfg(test)]
+mod tests {
+    use super::Limits;
+
+    #[test]
+    fn mail_budgets_split_the_daily_cap() {
+        assert_eq!(Limits::mail_budgets(90), (60, 30));
+        assert_eq!(Limits::mail_budgets(250), (166, 84));
+        // Never a zero-sized window.
+        assert_eq!(Limits::mail_budgets(1), (1, 1));
+        assert_eq!(Limits::mail_budgets(0), (1, 1));
+    }
 }

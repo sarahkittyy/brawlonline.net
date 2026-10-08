@@ -53,9 +53,6 @@ install -m 0755 target/release/{accounts,mm,admin} /opt/ppserver/bin/
 
 systemctl daemon-reload
 systemctl enable --now pp-accounts pp-mm caddy pp-backup.timer
-
-# First invite
-DATABASE_URL=... /opt/ppserver/bin/admin invite create --note "first friend"
 ```
 
 Firewall (nftables or OVH's network firewall): allow TCP 22, 80, 443 and **UDP 43113**. Nothing else needs to be public; Postgres listens on localhost only (Debian's default).

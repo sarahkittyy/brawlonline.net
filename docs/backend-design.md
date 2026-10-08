@@ -222,7 +222,7 @@ Option: serve a tiny GraphQL endpoint with exactly these operations (async-graph
 
 | Endpoint | Mirrors | Auth |
 |---|---|---|
-| `POST /v1/auth/signup {email?, password, displayName}` | `createUserNew` | invite code (friends phase) |
+| `POST /v1/auth/signup {email, password, displayName}` | `createUserNew` | open to everyone, email verification (no invite codes since 2026-10-08) |
 | `POST /v1/auth/login` → `{sessionToken}` | `signInWithEmailAndPassword` | — |
 | `POST /v1/auth/logout`, `POST /v1/auth/password-reset/{request,confirm}` | Firebase | session |
 | `GET /v1/me` → `{uid, displayName, connectCode, playKey, rulesVersion, ...}` | `getUser` incl. `private.playKey` | session |
@@ -252,7 +252,7 @@ Recommended. It is a stateless UDP forwarder: both peers send `RELAY_HELLO{token
 
 ### 2.8 Admin tooling
 
-A CLI in the same binary (`ppo-admin user ban|unban|rename|reset-code|invite create`, `match void`, `rating recompute --season`) plus a read-only `/admin` web page for flagged games. Every action goes into `audit_log`.
+A CLI in the same binary (`ppo-admin user ban|unban|rename|reset-code|delete`, `match void`, `rating recompute --season`) plus a read-only `/admin` web page for flagged games. Every action goes into `audit_log`.
 
 Scaling notes:
 - **api:** stateless, so it scales by adding processes behind Caddy.
@@ -268,7 +268,7 @@ Scaling notes:
 - **Hashing:** Argon2id (m=64 MiB, t=3, p=1) via the `argon2` crate, as openmelee does (`OM/src/models.rs:249-256`).
 - **Sessions:** opaque 32-byte tokens, hashed at rest, sliding 90-day expiry; the launcher stores them the way it stores Firebase refresh tokens. **Play key** as in 2.4: Dolphin never sees the password or session.
 - **Client-visible flow** stays identical: launcher login → `GET /v1/me` → write `user.json {uid, playKey, connectCode, displayName, latestVersion}` → Dolphin's Rust crate watches it. Logout deletes it.
-- **Email:** *not required* for the friends phase. Sign-up takes an **invite code** issued by the admin CLI, and password reset is an admin-issued one-time link. Add email (verification plus self-service reset through an SMTP relay) before opening sign-ups publicly. The Quick Start `VERIFY_EMAIL` step is skipped when the server reports `emailVerificationRequired: false`.
+- **Email:** verification at sign-up and self-service password reset through a mail provider from day 1 (user decision, 2026-10-06). **Sign-up is open to everyone** (user decision, 2026-10-08): the invite codes of the friends phase are gone. Per-IP limits on new accounts and daily shares of the email cap for verification and reset emails keep abuse from using up the provider quota (`server/README.md`, "Rate limits"). The Quick Start `VERIFY_EMAIL` step is skipped when the server reports `emailVerificationRequired: false`.
 - **Rate limiting:** per-IP and per-account token buckets on login, signup and reset (5/min, 20/h); mm `create-ticket` limited to 1 per 2 s per uid. Use fail2ban on Caddy logs for floods.
 
 ---
@@ -655,7 +655,7 @@ Effort is in developer-weeks for one experienced developer. **Backend** is this 
 | Phase | Deliverable | Backend | Dolphin | Game | Launcher | Test approach |
 |---|---|---|---|---|---|---|
 | **P0** Skeleton | `backend/` Cargo workspace (`core`, `api`, `mm`, `relay`), Postgres migrations, docker-compose for dev, systemd units and Caddyfile | 0.5-1 | — | — | — | `cargo test`; `docker compose up` on Windows (Docker Desktop) or plain processes |
-| **P1** Two friends, direct connect by code, with rollback (session start **A**) | Accounts (invite-only), connect codes, mm direct mode with hole punching and the LAN rule. Dolphin: `user` crate from slippi-rust-extensions (user.json watcher), port `SlippiMatchmaking.cpp`, the mailbox (5.2), match-found → netplay session on the punched port (5.3), banned-state blocks (section 6). Game: Wi-Fi menu repurposed (screen 1), code entry (3), CSS status (2, 4, 9), rules lock (section 6). Launcher: rebrand, login/sign-up against our API, `user.json`, ISO and SD/codeset check. | 2-3 | 4-5 | 6-8 | 2-3 | Unit tests for pairing and code assignment. Protocol golden tests using openmelee's JSON fixtures. **ppharness:** mm and api run as plain local processes; two DolphinNoGUI instances each get their own test `user.json` in the instance user dir, search for each other by code through the menus (scripted pads), and their P2P traffic goes through `netsim` presets. NAT tests on Linux CI use network namespaces + nftables masquerade for full-cone, port-restricted and symmetric NAT. `qa_reachability.py` rerun online must find nothing. |
+| **P1** Two friends, direct connect by code, with rollback (session start **A**) | Accounts (open sign-up with email verification; invite-only until 2026-10-08), connect codes, mm direct mode with hole punching and the LAN rule. Dolphin: `user` crate from slippi-rust-extensions (user.json watcher), port `SlippiMatchmaking.cpp`, the mailbox (5.2), match-found → netplay session on the punched port (5.3), banned-state blocks (section 6). Game: Wi-Fi menu repurposed (screen 1), code entry (3), CSS status (2, 4, 9), rules lock (section 6). Launcher: rebrand, login/sign-up against our API, `user.json`, ISO and SD/codeset check. | 2-3 | 4-5 | 6-8 | 2-3 | Unit tests for pairing and code assignment. Protocol golden tests using openmelee's JSON fixtures. **ppharness:** mm and api run as plain local processes; two DolphinNoGUI instances each get their own test `user.json` in the instance user dir, search for each other by code through the menus (scripted pads), and their P2P traffic goes through `netsim` presets. NAT tests on Linux CI use network namespaces + nftables masquerade for full-cone, port-restricted and symmetric NAT. `qa_reachability.py` rerun online must find nothing. |
 | **P1.5** Relay fallback | Relay service; client falls back after 3 s | 1 | 1 | — | — | A symmetric-NAT namespace pair must connect through the relay |
 | **P2** Keyframe session start (**B**) | Host→guest delta keyframe over P2P/relay, catch-up, port values (name, controls, lock-in), full `DoState` including IOS/SD | — | 5-7 | 1 | — | Go/no-go test in 5.1: 20 drop-in runs, dual core, confirmed-frame hashes equal for 10 min, keyframe size and join time measured under `typical`/`bad_wifi` |
 | **P3** Unranked matchmaking | Unranked queue with region buckets; confirmed-frame result reader; match reports; replay = keyframe + input log, uploaded | 2 | 3 | 1-2 (random stage, unranked rules) | 0.5 | Harness runs N instance pairs queued at once: every pair matched exactly once, both reports agree, replays stored and re-simulated to the same result |
@@ -704,7 +704,7 @@ That is roughly **10-12 months for one person**, or 5-6 months with one person o
 1. **Session start.** Agree with option B as the target and A for Phase 1? If B's transfer is slow on someone's connection, is a visible reboot (A) acceptable for them?
 2. **Orca code.** May we reuse Orca's GPL keyframe and result-reader code with attribution, or reimplement it? (Reuse is legal; reimplementing avoids "built on Orca" optics.)
 3. **The "Brawlback → Direct / Quickplay" Wi-Fi menu.** Where did you see it? It is in no public Brawlback repo or branch. If it exists unpushed, asking the Brawlback team for it would save weeks.
-4. **Email.** Is a friends phase without email (invite codes, admin password resets) OK?
+4. **Email.** Is a friends phase without email (invite codes, admin password resets) OK? _Answered: email from day 1 (2026-10-06), and on 2026-10-08 invite codes were removed: anyone can create an account._
 5. **Names.** What domain name and product name should the hostnames and website use? _Answered 2026-10-07: the product is **Brawl Online**. The hostnames stay placeholder subdomains of `fluffycat.gay` (`accounts.`, `mm.`, `updates.`) until the subdomains are chosen. Later the same day: the domain is **brawlonline.net**. The apex serves the website, the accounts API (`/v1`) and the launcher update feed (`/updates/launcher`); `mm.brawlonline.net` is matchmaking (UDP 43113, a DNS-only record)._
 6. **Ruleset.** Stocks, timer, and stage lists for unranked and ranked: adopt P+'s current competitive ruleset, or ask the P+ team?
 7. **Replay retention.** Keep ranked replays forever and the rest for 90 days?

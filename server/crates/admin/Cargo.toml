@@ -1,6 +1,6 @@
 [package]
 name = "admin"
-description = "Admin CLI: invites, users, password resets, bans."
+description = "Admin CLI: users, password resets, bans."
 version.workspace = true
 edition.workspace = true
 license.workspace = true

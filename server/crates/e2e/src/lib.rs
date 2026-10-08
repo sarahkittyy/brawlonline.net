@@ -15,7 +15,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use accounts::mail::{extract_token, MemoryMailer};
-use accounts::store;
 use anyhow::Context;
 use mm::engine::EngineConfig;
 use rand::Rng;
@@ -119,6 +118,10 @@ pub async fn drop_db(name: &str) {
 pub struct StackOptions {
     pub engine: EngineConfig,
     pub rate_limits: bool,
+    /// `MAIL_DAILY_LIMIT` (the test default is 1000).
+    pub mail_daily_limit: Option<u32>,
+    /// `TRUST_PROXY_HEADERS`, so a test can pose as several client IPs with X-Forwarded-For.
+    pub trust_proxy_headers: bool,
 }
 
 /// accounts + mm + a database, all for one test.
@@ -142,6 +145,10 @@ impl Stack {
         cfg.play_key_secret = TEST_SECRET.into();
         cfg.public_base_url = format!("http://{addr}");
         cfg.disable_rate_limits = !opts.rate_limits;
+        cfg.trust_proxy_headers = opts.trust_proxy_headers;
+        if let Some(n) = opts.mail_daily_limit {
+            cfg.mail.mail_daily_limit = n;
+        }
         let mailer = MemoryMailer::new();
         let state = accounts::AppState::new(pool.clone(), cfg, Arc::new(mailer.clone()))?;
         let accounts_task = tokio::spawn(async move {
@@ -178,10 +185,6 @@ impl Stack {
         self.mm.as_ref().is_some_and(|m| m.is_running())
     }
 
-    pub async fn invite(&self) -> String {
-        store::create_invite(&self.pool, 1, None, Some("test"), "test").await.unwrap().code
-    }
-
     pub async fn post(&self, path: &str, token: Option<&str>, body: Value) -> (u16, Value) {
         let mut req = self.http.post(self.url(path)).json(&body);
         if let Some(t) = token {
@@ -213,12 +216,11 @@ impl Stack {
     /// Sign-up → verify email → pick code prefix → user.json, all over HTTP.
     /// Returns (session token, user.json).
     pub async fn create_player(&self, email: &str, name: &str, prefix: &str) -> (String, UserJson) {
-        let invite = self.invite().await;
         let (st, body) = self
             .post(
                 "/v1/auth/signup",
                 None,
-                json!({"email": email, "password": "correct horse battery", "displayName": name, "inviteCode": invite}),
+                json!({"email": email, "password": "correct horse battery", "displayName": name}),
             )
             .await;
         assert_eq!(st, 201, "signup: {body}");

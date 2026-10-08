@@ -9,44 +9,22 @@ const PW: &str = "correct horse battery";
 async fn signup_verification_and_code_assignment() {
     let s = Stack::start(StackOptions::default()).await.unwrap();
 
-    // Invite-only sign-up.
-    let (st, body) =
-        s.post("/v1/auth/signup", None, json!({"email": "a@x.test", "password": PW, "displayName": "sarah"})).await;
-    assert_eq!((st, body["error"]["code"].as_str()), (403, Some("invite_required")));
-    let (st, body) = s
-        .post(
-            "/v1/auth/signup",
-            None,
-            json!({"email": "a@x.test", "password": PW, "displayName": "sarah", "inviteCode": "NOPE-NOPE"}),
-        )
-        .await;
-    assert_eq!((st, body["error"]["code"].as_str()), (403, Some("bad_invite")));
-
     // Validation.
-    let invite = s.invite().await;
     for (body, code) in [
-        (json!({"email": "bad", "password": PW, "displayName": "x", "inviteCode": invite}), "invalid_email"),
-        (
-            json!({"email": "a@x.test", "password": "short", "displayName": "x", "inviteCode": invite}),
-            "invalid_password",
-        ),
-        (json!({"email": "a@x.test", "password": PW, "displayName": "", "inviteCode": invite}), "invalid_display_name"),
-        (
-            json!({"email": "a@x.test", "password": PW, "displayName": "sixteen chars!!!", "inviteCode": invite}),
-            "invalid_display_name",
-        ),
-        (
-            json!({"email": "a@x.test", "password": PW, "displayName": "back\\slash", "inviteCode": invite}),
-            "invalid_display_name",
-        ),
+        (json!({"email": "bad", "password": PW, "displayName": "x"}), "invalid_email"),
+        (json!({"email": "a@x.test", "password": "short", "displayName": "x"}), "invalid_password"),
+        (json!({"email": "a@x.test", "password": PW, "displayName": ""}), "invalid_display_name"),
+        (json!({"email": "a@x.test", "password": PW, "displayName": "sixteen chars!!!"}), "invalid_display_name"),
+        (json!({"email": "a@x.test", "password": PW, "displayName": "back\\slash"}), "invalid_display_name"),
     ] {
         let (st, resp) = s.post("/v1/auth/signup", None, body).await;
         assert_eq!((st, resp["error"]["code"].as_str()), (400, Some(code)));
     }
+    assert!(s.mailer.sent().is_empty());
 
-    // A good sign-up (the invite was not consumed by the failures above).
+    // Sign-up is open: no invite code.
     let (st, body) = s
-        .post("/v1/auth/signup", None, json!({"email": " Sarah@X.test ", "password": PW, "displayName": "sarah", "inviteCode": invite.to_lowercase()}))
+        .post("/v1/auth/signup", None, json!({"email": " Sarah@X.test ", "password": PW, "displayName": "sarah"}))
         .await;
     assert_eq!(st, 201, "{body}");
     let session = body["sessionToken"].as_str().unwrap().to_string();
@@ -56,24 +34,20 @@ async fn signup_verification_and_code_assignment() {
     assert!(body["user"]["playKey"].is_null());
     assert!(body["user"]["userJson"].is_null());
 
-    // The invite is single-use, and emails are unique.
-    let (st, _) = s
-        .post(
-            "/v1/auth/signup",
-            None,
-            json!({"email": "other@x.test", "password": PW, "displayName": "o", "inviteCode": invite}),
-        )
-        .await;
-    assert_eq!(st, 403);
-    let invite2 = s.invite().await;
+    // Emails are unique, and a taken email sends nothing.
+    let (st, body) =
+        s.post("/v1/auth/signup", None, json!({"email": "SARAH@x.test", "password": PW, "displayName": "o"})).await;
+    assert_eq!((st, body["error"]["code"].as_str()), (409, Some("email_taken")));
+    assert_eq!(s.mailer.sent().len(), 1);
+    // An older launcher that still sends an invite code field is not refused.
     let (st, body) = s
         .post(
             "/v1/auth/signup",
             None,
-            json!({"email": "SARAH@x.test", "password": PW, "displayName": "o", "inviteCode": invite2}),
+            json!({"email": "old@x.test", "password": PW, "displayName": "old", "inviteCode": "ABCD-EFGH"}),
         )
         .await;
-    assert_eq!((st, body["error"]["code"].as_str()), (409, Some("email_taken")));
+    assert_eq!(st, 201, "{body}");
 
     // No code or play key before the email is verified.
     let (st, body) = s.post("/v1/me/netplay", Some(&session), json!({"codeStart": "sara"})).await;
@@ -132,14 +106,8 @@ async fn signup_verification_and_code_assignment() {
     assert_eq!(login["user"]["userJson"], uj);
 
     // Same prefix for another account gives a different number.
-    let invite3 = s.invite().await;
-    let (_, body) = s
-        .post(
-            "/v1/auth/signup",
-            None,
-            json!({"email": "b@x.test", "password": PW, "displayName": "sara b", "inviteCode": invite3}),
-        )
-        .await;
+    let (_, body) =
+        s.post("/v1/auth/signup", None, json!({"email": "b@x.test", "password": PW, "displayName": "sara b"})).await;
     let session_b = body["sessionToken"].as_str().unwrap().to_string();
     let token_b = s.mailed_token("b@x.test");
     s.post("/v1/auth/verify-email", None, json!({"token": token_b})).await;
@@ -298,10 +266,87 @@ async fn login_and_reset_are_rate_limited() {
         s.http.post(s.url("/v1/auth/login")).json(&json!({"email": "x@x.test", "password": "p"})).send().await.unwrap();
     assert!(resp.headers().get("retry-after").is_some());
 
+    // Password reset: one email per address per minute...
     let mut statuses = vec![];
-    for _ in 0..7 {
+    for _ in 0..3 {
         statuses.push(s.post("/v1/auth/password-reset/request", None, json!({"email": "y@x.test"})).await.0);
     }
-    assert_eq!(statuses, vec![202, 202, 202, 202, 202, 429, 429]);
+    assert_eq!(statuses, vec![202, 429, 429]);
+    // ...and 5 requests per minute per IP, whatever the address.
+    let mut statuses = vec![];
+    for i in 0..3 {
+        statuses
+            .push(s.post("/v1/auth/password-reset/request", None, json!({"email": format!("z{i}@x.test")})).await.0);
+    }
+    assert_eq!(statuses, vec![202, 202, 429]);
+    s.shutdown().await;
+}
+
+/// Open sign-up: accounts per IP (an IPv6 /64 counts as one) and the daily share of
+/// `MAIL_DAILY_LIMIT` for verification emails keep sign-ups from using up the email quota,
+/// and password resets have their own share.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn signups_and_emails_are_limited() {
+    // 9 emails a day: 6 for verification, 3 for password resets.
+    let s = Stack::start(StackOptions {
+        rate_limits: true,
+        trust_proxy_headers: true,
+        mail_daily_limit: Some(9),
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let post = |path: &'static str, ip: &'static str, token: Option<String>, body: serde_json::Value| {
+        let mut req = s.http.post(s.url(path)).header("x-forwarded-for", format!("10.9.9.9, {ip}")).json(&body);
+        if let Some(t) = token {
+            req = req.bearer_auth(t);
+        }
+        async move {
+            let resp = req.send().await.unwrap();
+            let status = resp.status().as_u16();
+            let retry = resp.headers().get("retry-after").is_some();
+            let body: serde_json::Value = resp.json().await.unwrap_or_default();
+            (status, retry, body)
+        }
+    };
+    let signup = |ip: &'static str, email: &str| {
+        post("/v1/auth/signup", ip, None, json!({"email": email, "password": PW, "displayName": "n"}))
+    };
+
+    // 3 accounts per IP per hour.
+    for i in 0..3 {
+        let (st, _, body) = signup("203.0.113.1", &format!("a{i}@x.test")).await;
+        assert_eq!(st, 201, "{body}");
+    }
+    let (st, retry, body) = signup("203.0.113.1", "a3@x.test").await;
+    assert_eq!((st, retry), (429, true));
+    assert_eq!(body["error"]["message"], "Too many new accounts from this network. Please try again later.");
+    // A taken email is refused before the per-IP count, so it costs no slot.
+    assert_eq!(signup("203.0.113.2", "a0@x.test").await.0, 409);
+
+    // An IPv6 /64 is one network.
+    for (i, ip) in ["2001:db8:1:2::1", "2001:db8:1:2::2", "2001:db8:1:2:ffff::9"].into_iter().enumerate() {
+        let (st, _, body) = signup(ip, &format!("b{i}@x.test")).await;
+        assert_eq!(st, 201, "{body}");
+    }
+    assert_eq!(signup("2001:db8:1:2::3", "b3@x.test").await.0, 429);
+    assert_eq!(s.mailer.sent().len(), 6);
+
+    // The 6 verification emails of the day are used up: sign-ups from anywhere wait.
+    let (st, retry, body) = signup("198.51.100.7", "c0@x.test").await;
+    assert_eq!((st, retry), (429, true));
+    assert_eq!(body["error"]["message"], "Too many sign-ups right now. Please try again later.");
+    let (_, _, login) =
+        post("/v1/auth/login", "198.51.100.8", None, json!({"email": "a0@x.test", "password": PW})).await;
+    let token = login["sessionToken"].as_str().unwrap().to_string();
+    assert_eq!(post("/v1/auth/verify-email/resend", "198.51.100.8", Some(token), json!({})).await.0, 429);
+    assert_eq!(s.mailer.sent().len(), 6);
+
+    // Password resets have their own 3: the 4th is still 202 (no account enumeration) but sends nothing.
+    for (i, email) in ["a0@x.test", "a1@x.test", "a2@x.test", "b0@x.test"].into_iter().enumerate() {
+        let (st, _, _) = post("/v1/auth/password-reset/request", "198.51.100.9", None, json!({"email": email})).await;
+        assert_eq!(st, 202);
+        assert_eq!(s.mailer.sent().len(), 6 + (i + 1).min(3), "{email}");
+    }
     s.shutdown().await;
 }

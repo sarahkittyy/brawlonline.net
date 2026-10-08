@@ -9,6 +9,7 @@ use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use chrono::Duration;
 use common::codes::{validate_code_start, validate_display_name};
+use common::net::ip_key;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -16,7 +17,7 @@ use crate::error::{ApiError, ApiResult};
 use crate::mail;
 use crate::password::{self, validate_password};
 use crate::store::{self, CreateUserError, TokenPurpose, UserRow};
-use crate::AppState;
+use crate::{AppState, Limits};
 
 /// Slippi's `currentRulesVersion` (launcher `src/common/constants.ts:10`).
 pub const CURRENT_RULES_VERSION: i32 = 1;
@@ -107,11 +108,33 @@ pub fn client_ip(state: &AppState, headers: &HeaderMap, peer: SocketAddr) -> IpA
     peer.ip()
 }
 
-pub fn rate_limit(state: &AppState, key: String) -> ApiResult<()> {
+/// Runs one limiter check (`DISABLE_RATE_LIMITS` skips them all). `Err` is the wait.
+fn limit(
+    state: &AppState,
+    check: impl FnOnce(&mut Limits, Instant) -> Result<(), std::time::Duration>,
+) -> Result<(), std::time::Duration> {
     if state.cfg.disable_rate_limits {
         return Ok(());
     }
-    state.limiter.lock().unwrap().check(&key, Instant::now()).map_err(ApiError::rate_limited)
+    check(&mut state.limits.lock().unwrap(), Instant::now())
+}
+
+/// [`common::ratelimit::AUTH_WINDOWS`] for `key`.
+pub fn rate_limit(state: &AppState, key: String) -> ApiResult<()> {
+    limit(state, |l, now| l.auth.check(&key, now)).map_err(ApiError::rate_limited)
+}
+
+/// One email to one recipient ([`common::ratelimit::MAIL_RECIPIENT_WINDOWS`]).
+fn mail_to_limit(state: &AppState, key: String) -> ApiResult<()> {
+    limit(state, |l, now| l.mail_to.check(&key, now)).map_err(ApiError::rate_limited)
+}
+
+/// One verification email from the daily share for them ([`Limits::new`]).
+fn verify_mail_budget(state: &AppState) -> ApiResult<()> {
+    limit(state, |l, now| l.verify_mail.check(&(), now)).map_err(|wait| {
+        tracing::warn!("daily verification email budget used up; refusing sign-ups and resends");
+        ApiError::rate_limited(wait).with_message("Too many sign-ups right now. Please try again later.")
+    })
 }
 
 fn bearer(headers: &HeaderMap) -> Option<&str> {
@@ -162,33 +185,39 @@ pub struct SignupReq {
     pub email: String,
     pub password: String,
     pub display_name: String,
-    #[serde(default)]
-    pub invite_code: Option<String>,
 }
 
-/// `createUserNew({email, password, displayName})` plus an invite code.
+/// `createUserNew({email, password, displayName})`. Open to everyone; the limits on
+/// accounts per IP and on verification emails protect the email quota.
 pub async fn signup(
     State(state): State<AppState>,
     ConnectInfo(peer): ConnectInfo<SocketAddr>,
     headers: HeaderMap,
     Json(req): Json<SignupReq>,
 ) -> ApiResult<(StatusCode, Json<SessionResponse>)> {
-    rate_limit(&state, format!("signup-ip:{}", client_ip(&state, &headers, peer)))?;
+    let ip = ip_key(client_ip(&state, &headers, peer));
+    // Every attempt, including invalid ones.
+    rate_limit(&state, format!("signup-ip:{ip}"))?;
     let email = store::normalize_email(&req.email).map_err(|m| ApiError::bad_request("invalid_email", m))?;
     validate_display_name(&req.display_name)
         .map_err(|e| ApiError::bad_request("invalid_display_name", e.to_string()))?;
     validate_password(&req.password).map_err(|m| ApiError::bad_request("invalid_password", m))?;
-    let invite = req.invite_code.as_deref().map(str::trim).filter(|s| !s.is_empty());
-    if state.cfg.signup_invite_only && invite.is_none() {
-        return Err(ApiError::forbidden("invite_required", "Sign-up needs an invite code"));
+    if store::user_by_email(&state.pool, &email).await?.is_some() {
+        return Err(ApiError::conflict("email_taken", CreateUserError::EmailTaken.to_string()));
+    }
+    // Accounts per IP, then the shared verification email budget (in that order, so one
+    // IP cannot use up the shared budget).
+    limit(&state, |l, now| l.signup_ip.check(&ip, now)).map_err(|wait| {
+        ApiError::rate_limited(wait).with_message("Too many new accounts from this network. Please try again later.")
+    })?;
+    if state.cfg.require_email_verification {
+        verify_mail_budget(&state)?;
     }
     let pw_hash = password::hash_async(state.hash_params, req.password).await?;
-    let user =
-        store::create_user(&state.pool, &email, &pw_hash, &req.display_name, invite).await.map_err(|e| match e {
-            CreateUserError::EmailTaken => ApiError::conflict("email_taken", e.to_string()),
-            CreateUserError::BadInvite => ApiError::forbidden("bad_invite", e.to_string()),
-            CreateUserError::Db(e) => ApiError::internal(e),
-        })?;
+    let user = store::create_user(&state.pool, &email, &pw_hash, &req.display_name).await.map_err(|e| match e {
+        CreateUserError::EmailTaken => ApiError::conflict("email_taken", e.to_string()),
+        CreateUserError::Db(e) => ApiError::internal(e),
+    })?;
     tracing::info!(uid = %user.uid, "account created");
     if state.cfg.require_email_verification {
         send_verification(&state, &user).await?;
@@ -212,7 +241,7 @@ pub async fn login(
     Json(req): Json<LoginReq>,
 ) -> ApiResult<Json<SessionResponse>> {
     let ip = client_ip(&state, &headers, peer);
-    rate_limit(&state, format!("login-ip:{ip}"))?;
+    rate_limit(&state, format!("login-ip:{}", ip_key(ip)))?;
     let email = store::normalize_email(&req.email).unwrap_or_default();
     rate_limit(&state, format!("login-email:{email}"))?;
     let user = store::user_by_email(&state.pool, &email).await?;
@@ -226,7 +255,7 @@ pub async fn login(
         return Err(banned_error(&user));
     }
     if !state.cfg.disable_rate_limits {
-        state.limiter.lock().unwrap().reset(&format!("login-email:{email}"));
+        state.limits.lock().unwrap().auth.reset(&format!("login-email:{email}"));
     }
     let ua = headers.get("user-agent").and_then(|v| v.to_str().ok());
     let token = store::create_session(&state.pool, user.uid, state.cfg.session_days, ua).await?;
@@ -244,7 +273,8 @@ pub async fn resend_verification(State(state): State<AppState>, headers: HeaderM
     if user.email_verified() {
         return Err(ApiError::conflict("already_verified", "Email is already verified"));
     }
-    rate_limit(&state, format!("verify-resend:{}", user.uid))?;
+    mail_to_limit(&state, format!("verify:{}", user.uid))?;
+    verify_mail_budget(&state)?;
     send_verification(&state, &user).await?;
     Ok(StatusCode::ACCEPTED)
 }
@@ -276,13 +306,18 @@ pub async fn password_reset_request(
     headers: HeaderMap,
     Json(req): Json<ResetRequestReq>,
 ) -> ApiResult<StatusCode> {
-    rate_limit(&state, format!("reset-ip:{}", client_ip(&state, &headers, peer)))?;
+    rate_limit(&state, format!("reset-ip:{}", ip_key(client_ip(&state, &headers, peer))))?;
     let Ok(email) = store::normalize_email(&req.email) else {
         return Ok(StatusCode::ACCEPTED);
     };
-    rate_limit(&state, format!("reset-email:{email}"))?;
+    mail_to_limit(&state, format!("reset:{email}"))?;
     if let Some(user) = store::user_by_email(&state.pool, &email).await? {
-        if !user.is_banned() {
+        if user.is_banned() {
+            // Nothing to send.
+        } else if limit(&state, |l, now| l.reset_mail.check(&(), now)).is_err() {
+            // Still 202, so the answer does not reveal that the account exists.
+            tracing::warn!(uid = %user.uid, "daily password-reset email budget used up; reset email not sent");
+        } else {
             let token = store::create_email_token(
                 &state.pool,
                 user.uid,
