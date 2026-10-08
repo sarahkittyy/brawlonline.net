@@ -178,10 +178,10 @@ jobs:
           if ((Get-FileHash $zip -Algorithm SHA256).Hash.ToLower() -ne $sha) { throw "ccache sha256 mismatch" }
           Expand-Archive $zip "$env:RUNNER_TEMP\ccache"
           (Get-ChildItem "$env:RUNNER_TEMP\ccache" -Directory)[0].FullName | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
-      - uses: actions/cache@v5
+      - uses: actions/cache/restore@v5
         with:
           path: .ccache
-          key: win-ccache-${{ github.sha }}
+          key: win-ccache-${{ github.run_id }}
           restore-keys: win-ccache-
       - uses: actions/cache@v5
         with:
@@ -194,6 +194,12 @@ jobs:
       - name: Dolphin
         shell: pwsh
         run: .github/scripts/build-dolphin-windows.ps1 -Version $env:VERSION -Out launcher/release/dolphin
+      # Saved right after the build, also when a later step fails (actions/cache saves on success only).
+      - uses: actions/cache/save@v5
+        if: ${{ !cancelled() }}
+        with:
+          path: .ccache
+          key: win-ccache-${{ github.run_id }}
       - uses: actions/download-artifact@v7
         with:
           name: plugin
