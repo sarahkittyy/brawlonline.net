@@ -16,7 +16,7 @@ are excluded from every package.
 1. `plugin` (Linux client runner): `tools/gamecode/setup_toolchain.py` (toolchain kept in `$CI_CACHE/toolchains`), `game-code/build.sh` → artifact `plugin`.
 2. `linux` (Linux client runner): `stamp-version.sh` (an annotated tag `v<version>` in the CI checkout, so Dolphin reports `Project+ Dolphin v<version>`; Dolphin's `Online::APP_VERSION`; `launcher/release/app/package.json`), `build-dolphin-linux.sh` (ccache and the build tree in `$CI_CACHE`; linuxdeploy + its Qt plugin, pinned by sha256, make an AppDir with the libraries), launcher `npm ci`, build, `typecheck`, `npm test`, `electron-builder --linux` (AppImage), `check-package.sh` → artifact `launcher-linux` (`latest-linux.yml`, `*.AppImage`).
 3. `windows` (GitHub-hosted `windows-latest`): same stamping, `build-dolphin-windows.ps1` (MSVC, the `ninja-release-x64` preset, ccache 4.14.1 pinned by sha256 with its cache in the Actions cache), `electron-builder --win` (NSIS) → artifact `launcher-windows` (`latest.yml`, `*.exe`, `*.exe.blockmap`).
-4. `macos`: disabled (`ENABLE_MACOS` repository variable). Plan: osxcross on the Unraid runner, which has macOS SDKs (see the job's comment).
+4. `macos` (Unraid runner, only when the repository variable `ENABLE_MACOS` is `true`): `setup-macos-toolchain.sh` (Qt, rcodesign, libdmg-hfsplus into `$CI_CACHE/toolchains/macos`), the same stamping, `build-dolphin-macos.sh` (osxcross cross-compile, Apple silicon) and `package-launcher-macos.sh` (ad-hoc signed app, updater zip, DMG, `latest-mac.yml`) → artifact `launcher-mac`. See "macOS" below. A failed or skipped macOS build does not hold back the Linux and Windows release.
 5. `publish` (sarahvps2): downloads the `launcher-*` artifacts, `sudo pp-release client <dir>`, checks the feed on https://brawlonline.net, deletes the run's artifacts (they also expire after a day).
 
 The Linux client runner is written in the `plugin` and `linux` jobs; the optional repository variable `CLIENT_LINUX_RUNNER` (a JSON list of labels) overrides both. It is meant to be the Unraid runner (`["self-hosted","linux","x64","unraid","brawlonline"]`), but is GitHub-hosted `ubuntu-24.04` for now (see "Unraid" below). On a GitHub-hosted runner the jobs install Dolphin's build packages with apt and keep ccache (`linux-ccache-*`) and the game-code toolchain in the Actions cache; on a self-hosted runner they use its image and `$CI_CACHE`.
@@ -62,6 +62,17 @@ Dolphin's Linux build packages were installed here on 2026-10-08 for a first pla
 
 The Linux Dolphin is built against Ubuntu 24.04's glibc (2.39) either way: it runs on distributions at least that new (SteamOS 3.6+, Ubuntu 24.04+, Debian 13, Fedora 40+, Arch).
 
+### macOS (cross-compiled on Unraid)
+
+There is no Mac runner. The Unraid runner cross-compiles, the way legacycraft's release workflow does:
+
+- **Toolchain.** In the runner image (`docs/unraid-runner.md`): LLVM 20 from apt.llvm.org (Apple's SDK 26.5 libc++ headers need clang 19 or newer; Ubuntu's clang 18 fails on `__builtin_ctzg`) and osxcross (llvm flavor, arm64 and x86_64, deployment target 12.0) with the SDK from the legacycraft folder, plus compiler-rt's darwin builtins. osxcross's `<triple>-ranlib` is a wrapper that drops Apple's `-no_warning_for_no_symbols -c`: CMake's Darwin rules always pass them, llvm-ranlib refuses them, and overriding `CMAKE_RANLIB` or `CMAKE_<LANG>_ARCHIVE_FINISH` doesn't stick (the platform files reset them). In `$CI_CACHE/toolchains/macos` (`setup-macos-toolchain.sh`): Qt 6.8.3 for macOS (universal frameworks, from Qt's online repository via aqtinstall) and the same Qt's Linux host tools (`QT_HOST_PATH`), rcodesign 0.29.0 and libdmg-hfsplus's `dmg`.
+- **Dolphin** (`build-dolphin-macos.sh`): osxcross's cmake wrapper, Ninja, ccache, Release, `-DENABLE_VULKAN=OFF` (Dolphin builds MoltenVK with xcodebuild; Metal and OpenGL remain), `-DMACOS_CODE_SIGNING=OFF`. The bundle is renamed to what the launcher runs (`Dolphin.app/Contents/MacOS/Dolphin`, with `dolphin-tool` next to it), Qt's frameworks and the cocoa, style and SVG plugins are copied in (`qt.conf` points at `PlugIns`), and the app is ad-hoc signed with rcodesign and Dolphin's entitlements.
+- **Launcher** (`package-launcher-macos.sh`): better-sqlite3's prebuilt macOS binary for our Electron version, `electron-builder --mac dir` with no signing and no native rebuild, the whole app ad-hoc signed with rcodesign, then the updater zip (symlinks kept), a DMG (genisoimage HFS hybrid compressed by `dmg`) and `latest-mac.yml`. `pp-release` already accepts these names and links the DMG as `/downloads/BrawlOnline.dmg`.
+- **What ad-hoc signing means for players.** Apple silicon runs it. Gatekeeper blocks the first start until the user allows it (System Settings > Privacy & Security > Open Anyway). The launcher can't update itself in place: Squirrel.Mac checks the new version's signature against the running one, and ad-hoc signatures never match. A Developer ID certificate and notarization (secrets below) fix both.
+- **Not yet:** Intel Macs (x86_64 is in the toolchain; it needs a second Dolphin and launcher build, or a universal one), Vulkan via a prebuilt MoltenVK, and a run on a real Mac.
+- **The Unraid memory problem applies here too** (see "Unraid" above): keep `ENABLE_MACOS` off for releases until the box is stable.
+
 ### Windows
 
 GitHub-hosted `windows-latest` (Visual Studio 18). Caches: `.ccache` (key `win-ccache-<run id>`, saved right after the Dolphin build), Electron downloads, npm. A rebuild takes about 35 minutes: ccache hits 99.9% of what it can cache, but 746 of Dolphin's ~2,000 compiles use Dolphin's own MSVC precompiled header (`Source/PCH`, `use_pch`), which ccache cannot cache. An option in Dolphin's CMake to build without `use_pch` would cut that; it is a Dolphin change, not done here.
@@ -77,8 +88,8 @@ GitHub-hosted `windows-latest` (Visual Studio 18). Caches: `.ccache` (key `win-c
 None are needed today. Signing is deferred; the builds are unsigned:
 
 - Windows: add repository secrets `WIN_CSC_LINK` (base64 of the `.pfx`, or an https URL) and `WIN_CSC_KEY_PASSWORD`, then set `"signAndEditExecutable": true` in `launcher/electron-builder.json` (`win`). The windows job already passes them as `CSC_LINK`/`CSC_KEY_PASSWORD`.
-- macOS (when the job exists): `CSC_LINK`, `CSC_KEY_PASSWORD`, `APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`, and `"notarize": true`.
+- macOS: a Developer ID certificate and Apple's notary API key (`APPLE_API_KEY`, `APPLE_API_KEY_ID`, `APPLE_API_ISSUER`). The cross build signs with rcodesign, which can sign with a Developer ID (`--p12-file`) and notarize (`rcodesign notary-submit`) on Linux; `package-launcher-macos.sh` and `build-dolphin-macos.sh` sign ad-hoc until then.
 
-Repository variables (optional, none set): `CLIENT_LINUX_RUNNER` (JSON list of labels, overrides the default in `client.yml`), `ENABLE_MACOS` (`true` once a macOS build exists).
+Repository variables (optional, none set): `CLIENT_LINUX_RUNNER` (JSON list of labels, overrides the default in `client.yml`), `ENABLE_MACOS` (`true` runs the macOS job).
 
 Artifacts: the account's free Actions storage is 500 MB and shared with other repositories; the client artifacts (~400 MB per run) live at most a day and are deleted by `publish` right after use.

@@ -18,7 +18,8 @@
 #   - Windows: GitHub-hosted (minutes are limited on a private repository: paths below, caches).
 #   - Publishing: always sarahvps2 (pp-release client). Builds from other machines arrive as
 #     Actions artifacts (1-day retention, deleted after publishing).
-#   - macOS: disabled until a runner exists (see the macos job).
+#   - macOS: cross-compiled on the Unraid runner when ENABLE_MACOS is "true" (see the macos job).
+#     A failed or skipped macOS build never holds back the Linux and Windows release.
 #
 # Runs only on pushes to main and by hand, never on pull requests (self-hosted runners).
 name: client
@@ -269,25 +270,63 @@ jobs:
           if-no-files-found: error
 
   macos:
-    # Disabled: there is no macOS runner yet. Set the repository variable ENABLE_MACOS to "true"
-    # once one exists. Plan: cross-compile on the Unraid runner with osxcross (Apple's SDK from
-    # Xcode, x86_64 + arm64; Dolphin's own BuildMacOSUniversalBinary.py shows the CMake flags),
-    # then package the DMG/ZIP with electron-builder on a Mac or with its Linux DMG support, and
-    # upload "launcher-mac" (latest-mac.yml, *.dmg, *.zip) like the other jobs. Notarization
-    # needs the Apple secrets (APPLE_API_KEY, APPLE_API_KEY_ID, APPLE_API_ISSUER, CSC_LINK,
-    # CSC_KEY_PASSWORD), as in upstream Slippi's build.yml.
+    # Cross-compiled on the Unraid runner: osxcross with Apple's SDK and LLVM 20 are in its image,
+    # Qt for macOS, rcodesign and libdmg-hfsplus in $CI_CACHE (setup-macos-toolchain.sh). Apple
+    # silicon (arm64) only for now. Ad-hoc signed, not notarized (no Apple Developer ID yet).
+    # Enabled by the repository variable ENABLE_MACOS="true". The Unraid box corrupts compiles
+    # under load until its memory is fixed (docs/ci.md), so don't enable it for releases before.
     if: ${{ vars.ENABLE_MACOS == 'true' }}
     needs: plugin
-    runs-on: macos-15
-    timeout-minutes: 180
+    runs-on: [self-hosted, linux, x64, unraid, brawlonline]
+    timeout-minutes: 240
+    env:
+      NODE_OPTIONS: --max-old-space-size=4096
+      USE_HARD_LINKS: "false"
     steps:
-      - run: |
-          echo "The macOS build is not set up yet; see the comment on this job." >&2
-          exit 1
+      - uses: actions/checkout@v6
+        with:
+          path: client
+          persist-credentials: false
+      - name: Toolchain
+        run: client/.github/scripts/setup-macos-toolchain.sh >> "$GITHUB_PATH"
+      - name: Stamp version ${{ env.VERSION }}
+        run: client/.github/scripts/stamp-version.sh "$VERSION"
+      - name: Dolphin
+        run: client/.github/scripts/build-dolphin-macos.sh "$VERSION" "$GITHUB_WORKSPACE/client/launcher/release/dolphin" arm64
+      - uses: actions/download-artifact@v7
+        with:
+          name: plugin
+          path: ${{ runner.temp }}/plugin
+      - name: Launcher dependencies
+        working-directory: client/launcher
+        run: |
+          nice -n 19 npm ci --no-audit --no-fund
+          node node_modules/electron/install.js
+      - name: Launcher build
+        working-directory: client/launcher
+        env:
+          PPO_PLUGIN_PATH: ${{ runner.temp }}/plugin/PPOnline.rel
+        run: |
+          npm run stage:plugin
+          nice -n 19 npm run build
+      - name: Package (app, zip, DMG)
+        run: client/.github/scripts/package-launcher-macos.sh "$VERSION" "$RUNNER_TEMP/out-mac" arm64
+      - uses: actions/upload-artifact@v7
+        with:
+          name: launcher-mac
+          path: ${{ runner.temp }}/out-mac/
+          retention-days: 1
+          compression-level: 0
+          if-no-files-found: error
+      - name: Clean up
+        if: always()
+        run: |
+          rm -rf "$RUNNER_TEMP/out-mac" "$RUNNER_TEMP/plugin" client/launcher/release/build client/launcher/release/dolphin
+          du -sh "${CI_CACHE:-$HOME/ci-cache}"/* 2>/dev/null || true
 
   publish:
     needs: [linux, windows, macos]
-    if: ${{ !cancelled() && needs.linux.result == 'success' && needs.windows.result == 'success' && needs.macos.result != 'failure' }}
+    if: ${{ !cancelled() && needs.linux.result == 'success' && needs.windows.result == 'success' }}
     runs-on: [self-hosted, linux, x64, sarahvps2, brawlonline]
     timeout-minutes: 30
     permissions:
