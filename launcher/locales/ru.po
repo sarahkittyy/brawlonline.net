@@ -8,7 +8,7 @@ msgstr ""
 "n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
 "x-generator: i18next-auto-keys CLI\n"
 "Language: ru-RU\n"
-"PO-Revision-Date: 2026-10-08T08:37:41.923Z\n"
+"PO-Revision-Date: 2026-10-08T18:02:53.859Z\n"
 
 #: src/renderer/components/activate_online_form/activate_online_form.messages.ts:3:30
 msgid "2-4 uppercase English characters"
@@ -358,6 +358,11 @@ msgstr ""
 #: src/renderer/components/persistent_notification/persistent_notification.messages.ts:6:27
 msgid "Download manually"
 msgstr "Скачать вручную"
+
+#: src/renderer/components/persistent_notification/persistent_notification.messages.ts:7:45
+#. {0} productName: string
+msgid "Download {0}"
+msgstr ""
 
 #: src/renderer/app/header/play_button/play_button.messages.ts:7:33
 msgid "Downloading Project+"

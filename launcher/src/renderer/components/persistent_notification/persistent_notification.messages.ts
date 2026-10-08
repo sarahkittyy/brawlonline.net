@@ -4,4 +4,5 @@ export const PersistentNotificationMessages = {
   versionIsNowAvailable: (version: string) => `Version {0} is now available!`,
   installFailed: () => "Installation failed.",
   downloadManually: () => "Download manually",
+  downloadProduct: (productName: string) => "Download {0}",
 };

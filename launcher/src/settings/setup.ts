@@ -1,3 +1,4 @@
+import { getLauncherUpdateMode } from "@common/launcher_update";
 import type { DolphinManager } from "@dolphin/manager";
 import { DolphinLaunchType } from "@dolphin/types";
 import { ipcMain } from "electron";
@@ -77,6 +78,7 @@ function setupSettingsSubscriptions(settingsManager: SettingsManager, dolphinMan
   });
 
   settingsManager.onSettingChange("autoUpdateLauncher", (autoUpdateLauncher) => {
-    autoUpdater.autoInstallOnAppQuit = autoUpdateLauncher;
+    // Nothing is downloaded in "download" mode (macOS, see main/app_updater.ts), so nothing to install on quit.
+    autoUpdater.autoInstallOnAppQuit = autoUpdateLauncher && getLauncherUpdateMode(process.platform) === "install";
   });
 }

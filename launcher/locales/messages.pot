@@ -353,6 +353,11 @@ msgstr ""
 msgid "Download manually"
 msgstr ""
 
+#: src/renderer/components/persistent_notification/persistent_notification.messages.ts:7:45
+#. {0} productName: string
+msgid "Download {0}"
+msgstr ""
+
 #: src/renderer/app/header/play_button/play_button.messages.ts:7:33
 msgid "Downloading Project+"
 msgstr ""

@@ -156,7 +156,11 @@ export default function setupMainIpc({
   });
 
   ipc_checkForUpdate.main!.handle(async () => {
-    const result = await autoUpdater.checkForUpdatesAndNotify();
+    // In "download" mode (macOS, see AppUpdater) nothing is downloaded, so there is nothing to notify about.
+    const result =
+      appUpdater.mode === "download"
+        ? await autoUpdater.checkForUpdates()
+        : await autoUpdater.checkForUpdatesAndNotify();
     return { updateAvailable: result != null };
   });
 

@@ -1,4 +1,6 @@
 import { resolveServiceUrls } from "@accounts/config";
+import type { LauncherUpdateMode } from "@common/launcher_update";
+import { getLauncherUpdateMode } from "@common/launcher_update";
 import type { SettingsManager } from "@settings/settings_manager";
 import { app } from "electron";
 import log from "electron-log";
@@ -14,9 +16,18 @@ const INSTALL_UPDATE_TIMEOUT_MS = 5000; // 5 seconds
 export class AppUpdater {
   private updateState: UpdateState | undefined;
 
+  /** "download" on macOS while the build cannot update itself (MAC_SELF_UPDATE in @common/product). */
+  readonly mode: LauncherUpdateMode = getLauncherUpdateMode(process.platform);
+
   constructor(private readonly settingsManager: SettingsManager) {
     autoUpdater.logger = log;
     autoUpdater.autoInstallOnAppQuit = settingsManager.get().settings.autoUpdateLauncher;
+    if (this.mode === "download") {
+      // Squirrel.Mac would reject the update (signature mismatch), so it is only found, never
+      // downloaded; the update bar links the website's download instead.
+      autoUpdater.autoDownload = false;
+      autoUpdater.autoInstallOnAppQuit = false;
+    }
 
     // This is going to be the default at some point, right now if we don't
     // explicitly set this to true then electron-builder prints a (harmless)

@@ -1,3 +1,5 @@
+import type { LauncherUpdateMode } from "@common/launcher_update";
+import { getLauncherUpdateMode } from "@common/launcher_update";
 import { app } from "electron";
 import log from "electron-log";
 import os from "os";
@@ -15,6 +17,8 @@ export type AppBootstrap = {
   isWindows: boolean;
   locale: string;
   updateState?: UpdateState;
+  /** How a launcher update is offered: installed in place, or as a download (macOS, see MAC_SELF_UPDATE). */
+  launcherUpdateMode: LauncherUpdateMode;
 };
 
 export function getAppBootstrap(flags: ConfigFlags, updateState?: UpdateState): AppBootstrap {
@@ -35,6 +39,7 @@ export function getAppBootstrap(flags: ConfigFlags, updateState?: UpdateState): 
     isWindows: process.platform === "win32",
     locale: app.getLocale(),
     updateState,
+    launcherUpdateMode: getLauncherUpdateMode(process.platform),
   };
   return bootstrap;
 }
