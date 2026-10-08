@@ -25,7 +25,7 @@ app_pkg=launcher/release/app/package.json
 if [ -f "$app_pkg" ]; then
   V="$version" node -e '
     const fs = require("fs");
-    for (const f of process.argv.slice(2)) {
+    for (const f of process.argv.slice(1)) { // node -e: argv[1] is the first argument
       if (!fs.existsSync(f)) continue;
       const j = JSON.parse(fs.readFileSync(f, "utf8"));
       j.version = process.env.V;

@@ -256,7 +256,9 @@ jobs:
         run: |
           ../../../.github/scripts/check-package.sh win-unpacked
           mkdir -p "$RUNNER_TEMP/out-win"
-          mv latest.yml *.exe *.exe.blockmap "$RUNNER_TEMP/out-win/"
+          mv latest.yml *.exe "$RUNNER_TEMP/out-win/"
+          # No blockmap while nsis.differentialPackage is false (the updater downloads in full).
+          mv *.exe.blockmap "$RUNNER_TEMP/out-win/" 2>/dev/null || true
           ls -l "$RUNNER_TEMP/out-win"
       - uses: actions/upload-artifact@v7
         with:
