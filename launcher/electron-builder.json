@@ -103,6 +103,14 @@
     "LICENSE",
     "NOTICE",
     {
+      "from": "release/dolphin",
+      "to": "dolphin",
+      "filter": [
+        "**/*",
+        "!**/*.md"
+      ]
+    },
+    {
       "from": "release/plugins",
       "to": "plugins",
       "filter": [

@@ -8,8 +8,10 @@ import {
   defaultPluginLocation,
   defaultUserTemplate,
   dolphinExecutableName,
+  installedDolphinExecutable,
   patchedSdCardFolder,
   PLUGIN_SD_PATH,
+  projectPlusStoreFolder,
 } from "./paths";
 
 const ctx = (over: Partial<DolphinPathEnv> = {}): DolphinPathEnv => ({
@@ -32,6 +34,15 @@ describe("dolphin paths", () => {
     expect(exe).toBe(path.join(path.resolve("/userdata"), "netplay", "Dolphin.exe"));
   });
 
+  it("uses the installed bundle's AppDir layout on Linux", () => {
+    const exe = defaultDolphinExecutable(DolphinLaunchType.NETPLAY, ctx({ platform: "linux" }));
+    expect(exe).toBe(path.join(path.resolve("/userdata"), "netplay", "usr", "bin", "project-plus-dolphin"));
+    expect(installedDolphinExecutable("win32")).toBe("Dolphin.exe");
+    expect(projectPlusStoreFolder(path.resolve("/userdata"))).toBe(
+      path.join(path.resolve("/userdata"), "netplay", "pplus"),
+    );
+  });
+
   it("honours PPO_DOLPHIN_PATH", () => {
     const exe = defaultDolphinExecutable(DolphinLaunchType.NETPLAY, ctx({ env: { PPO_DOLPHIN_PATH: " /x/D.exe " } }));
     expect(exe).toBe("/x/D.exe");
@@ -39,7 +50,7 @@ describe("dolphin paths", () => {
 
   it("names the binary per OS", () => {
     expect(dolphinExecutableName("win32")).toBe("Dolphin.exe");
-    expect(dolphinExecutableName("linux")).toBe("dolphin-emu");
+    expect(dolphinExecutableName("linux")).toBe("project-plus-dolphin");
     expect(dolphinExecutableName("darwin")).toBe(path.join("Dolphin.app", "Contents", "MacOS", "Dolphin"));
   });
 

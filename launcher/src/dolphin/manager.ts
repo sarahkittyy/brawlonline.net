@@ -8,6 +8,7 @@ import { Observable, Subject } from "observable-fns";
 import path from "path";
 import { fileExists } from "utils/file_exists";
 
+import { bundledDolphinSource, installBundledDolphin } from "./install/bundled_dolphin";
 import { fetchLatestVersion } from "./install/fetch_latest_version";
 import { LocalDolphinInstallation } from "./install/local_installation";
 import type { DolphinPathEnv } from "./install/paths";
@@ -15,8 +16,17 @@ import {
   defaultDolphinExecutable,
   defaultPluginLocation,
   defaultUserTemplate,
+  netplayInstallFolder,
   patchedSdCardFolder,
+  projectPlusStoreFolder,
 } from "./install/paths";
+import type { PPlusTarget } from "./install/pplus_release";
+import {
+  ensureNetplaySave,
+  installProjectPlusFiles,
+  missingProjectPlusFiles,
+  NETPLAY_SAVE_DIR,
+} from "./install/pplus_release";
 import { installPluginOnSdCard, loadPlugin } from "./install/sd_card";
 import { DolphinInstance, MacOsRosettaRequiredError, PlaybackDolphinInstance } from "./instance";
 import { buildNetplayDolphinArgs } from "./netplay_args";
@@ -28,13 +38,18 @@ const log = electronLog.scope("dolphin/manager");
 // DolphinManager should be in control of all dolphin instances that get opened for actual use.
 // This includes playing netplay, viewing replays and configuring Dolphin.
 //
-// Differences from Slippi: one Dolphin build (ours) serves both netplay and playback; it is
-// not downloaded (see install/fetch_latest_version.ts for the update hook); and Play boots
-// P+'s netplay launcher DOL with the Brawl disc as Dolphin's default ISO, the way P+ does.
+// Differences from Slippi: one Dolphin build (ours) serves both netplay and playback; it ships
+// inside the launcher package and is installed into userData/netplay from there (so it updates
+// with the launcher) instead of being downloaded; P+'s own files (SD card, launcher DOLs, Brawl
+// save template) are downloaded from P+'s official release at setup, with Slippi's Dolphin
+// download progress; and Play boots P+'s netplay launcher DOL with the Brawl disc as Dolphin's
+// default ISO, the way P+ does.
 export class DolphinManager {
   private playbackDolphinInstances = new Map<string, PlaybackDolphinInstance>();
   private netplayDolphinInstance: DolphinInstance | null = null;
   private versionCache = new Map<string, string>();
+  private bundledInstall: Promise<void> | null = null;
+  private projectPlusInstall: Promise<void> | null = null;
   private eventSubject = new Subject<DolphinEvent>();
   events = Observable.from(this.eventSubject);
 
@@ -79,6 +94,11 @@ export class DolphinManager {
 
     const dolphinInstall = this.getInstallation(dolphinType);
     try {
+      await this._installBundledDolphin();
+      if (dolphinType === DolphinLaunchType.NETPLAY) {
+        await dolphinInstall.ensureUserFolder();
+        await this._ensureProjectPlusFiles(dolphinInstall);
+      }
       await dolphinInstall.validate({
         onStart: () => this._onStart(dolphinType),
         onProgress: (current, total) => this._onProgress(dolphinType, current, total),
@@ -177,6 +197,7 @@ export class DolphinManager {
       const isoPath = await this._getIsoPath();
       Preconditions.checkExists(isoPath, "No Brawl disc image set. Choose one in Settings > Game.");
       await netplayInstallation.assertProjectPlusFiles();
+      await ensureNetplaySave(projectPlusStoreFolder(app.getPath("userData")), netplayInstallation.sysFolder);
       await netplayInstallation.setDefaultIso(isoPath);
       bootFile = netplayInstallation.netplayLauncherDol;
     }
@@ -308,6 +329,80 @@ export class DolphinManager {
       await installation.resetUserFolder();
     }
     await this.installDolphin(launchType);
+  }
+
+  /**
+   * Installs the Dolphin build bundled with the launcher into `<userData>/netplay` when it is
+   * missing or older (after a launcher update). Shared by the netplay and playback set-up, which
+   * run at the same time on start-up. Progress is reported like Slippi's Dolphin download.
+   */
+  private _installBundledDolphin(): Promise<void> {
+    const source = bundledDolphinSource({
+      env: process.env,
+      isPackaged: app.isPackaged,
+      resourcesPath: process.resourcesPath,
+    });
+    if (!source) {
+      return Promise.resolve();
+    }
+    if (!this.bundledInstall) {
+      let started = false;
+      this.bundledInstall = installBundledDolphin({
+        sourceDir: source,
+        destDir: netplayInstallFolder(app.getPath("userData")),
+        onProgress: (current, total) => {
+          if (!started) {
+            started = true;
+            this._onStart(DolphinLaunchType.NETPLAY);
+          }
+          this._onProgress(DolphinLaunchType.NETPLAY, current, total);
+        },
+        log: (message) => log.info(message),
+      })
+        .then(({ action, manifest }) => {
+          log.info(`Bundled Dolphin ${manifest.version}: ${action}`);
+        })
+        .catch((err) => {
+          this.bundledInstall = null;
+          throw err;
+        });
+    }
+    return this.bundledInstall;
+  }
+
+  /**
+   * Downloads P+'s files from P+'s official release (pinned, sha256-checked) into the netplay
+   * User folder when they are missing, and puts the Brawl save template into Dolphin's Sys
+   * folder. Nothing is downloaded when they are in place (also when a development User
+   * template provided them and the Dolphin build has its own save template).
+   */
+  private _ensureProjectPlusFiles(installation: LocalDolphinInstallation): Promise<void> {
+    if (!this.projectPlusInstall) {
+      const storeDir = projectPlusStoreFolder(app.getPath("userData"));
+      const target: PPlusTarget = {
+        userFolder: installation.userFolder,
+        storeDir,
+        downloadDir: path.join(storeDir, "downloads"),
+      };
+      this.projectPlusInstall = (async () => {
+        let missing = await missingProjectPlusFiles(target);
+        if (missing.includes(NETPLAY_SAVE_DIR) && existsSync(path.join(installation.sysFolder, NETPLAY_SAVE_DIR))) {
+          missing = missing.filter((m) => m !== NETPLAY_SAVE_DIR);
+        }
+        if (missing.length > 0) {
+          this._onStart(DolphinLaunchType.NETPLAY);
+          await installProjectPlusFiles({
+            target,
+            onProgress: ({ current, total }) => this._onProgress(DolphinLaunchType.NETPLAY, current, total),
+            log: (message) => log.info(message),
+          });
+        }
+        await ensureNetplaySave(storeDir, installation.sysFolder);
+      })().finally(() => {
+        this.projectPlusInstall = null;
+      });
+    }
+    return this.projectPlusInstall;
   }
 
   /**
