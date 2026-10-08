@@ -35,7 +35,10 @@ namespace Gekko {
             return result;
         }
 
-        static std::vector<uint8_t> RLEDecode(const uint8_t* data, u32 length) {
+        // max_out bounds the output (the input comes from the network and RLE expands up to
+        // 127x); an input that would exceed it decodes to nothing.
+        static std::vector<uint8_t> RLEDecode(const uint8_t* data, u32 length,
+                                              u32 max_out = UINT32_MAX) {
             std::vector<uint8_t> result;
 
             u32 idx = 0;
@@ -46,9 +49,10 @@ namespace Gekko {
                 count = data[idx];
                 value = data[idx + 1];
 
-                for (i32 x = 0; x < count; x++) {
-                    result.push_back(value);
+                if ((u64)result.size() + count > max_out) {
+                    return {};
                 }
+                result.insert(result.end(), count, value);
 
                 idx += 2;
             }

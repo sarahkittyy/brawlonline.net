@@ -3,6 +3,7 @@
 #include <cassert>
 #include <climits>
 #include <cstring>
+#include <exception>
 
 #include "zpp/zpp_bits.h"
 
@@ -140,14 +141,23 @@ void Gekko::MessageSystem::HandleData(GekkoNetAdapter* host, GekkoNetResult** da
         _bin_buffer.clear();
         _bin_buffer.insert(_bin_buffer.begin(), (u8*)res->data, (u8*)res->data + res->data_len);
 
+        // Packets come from the other player's machine and are not trusted. The size fields of
+        // the input vectors are read before the bytes behind them: without an allocation limit a
+        // packet claiming a 4 GiB vector made zpp resize to it (std::bad_alloc, or seconds of
+        // zero-filling). No legitimate packet carries more than MAX_PACKET_SIZE bytes.
         NetPacket pkt;
-        zpp::bits::in in(_bin_buffer);
+        zpp::bits::in in(_bin_buffer, zpp::bits::alloc_limit<MAX_PACKET_SIZE>{});
 
-        if (failure(in(pkt.header, pkt.body))) {
-            printf("failed to deserialize packet\n");
+        try {
+            if (res->data_len > MAX_PACKET_SIZE || failure(in(pkt.header, pkt.body))) {
+                ++_dropped_packets;
+            }
+            else {
+                ParsePacket(addr, pkt, res->data_len);
+            }
         }
-        else {
-            ParsePacket(addr, pkt, res->data_len);
+        catch (const std::exception&) {
+            ++_dropped_packets;
         }
 
         // cleanup :)
@@ -796,7 +806,8 @@ void Gekko::MessageSystem::ParsePacket(NetAddress& addr, NetPacket& pkt, u32 pac
             OnDisconnectClaim(addr, pkt);
             return;
         default:
-            assert(false && "cannot process an unknown event!");
+            // an unknown type from the network: drop it (an assert would abort debug builds).
+            ++_dropped_packets;
             return;
         }
     }
@@ -901,13 +912,27 @@ void Gekko::MessageSystem::OnInputs(NetAddress& addr, NetPacket& pkt)
 
     const bool is_spectator = (pkt.header.type == SpectatorInputs);
 
+    // spectator inputs carry every player's input, the local players' too: only a spectator
+    // session (no local players) takes them. A player's session would otherwise queue a peer's
+    // inputs for its own local players.
+    if (is_spectator && !locals.empty()) {
+        ++_dropped_packets;
+        return;
+    }
+
     // reverse RLE + delta if the sender compressed this packet
     if (body->compressed) {
         if (body->inputs.size() % 2 != 0) {
             return;
         }
 
-        auto decompressed = Compression::RLEDecode(body->inputs.data(), (u32)body->inputs.size());
+        // RLE expands up to 127x: bound the output by what one packet can legitimately hold.
+        auto decompressed = Compression::RLEDecode(body->inputs.data(), (u32)body->inputs.size(),
+                                                   MAX_PACKET_SIZE);
+        if (decompressed.empty() && !body->inputs.empty()) {
+            ++_dropped_packets;
+            return;
+        }
         const u32 stride = is_spectator ? _input_size * _num_players : _input_size;
         body->inputs = Compression::DeltaDecode(decompressed.data(), (u32)decompressed.size(), stride);
     }
@@ -965,6 +990,13 @@ void Gekko::MessageSystem::OnInputAck(NetAddress& addr, NetPacket& pkt)
     const Frame ack_frame = body->ack_frame;
     const i8 remote_advantage = (i8)body->frame_advantage;
 
+    // nobody can acknowledge a frame we have not sent yet; such an ack would trim inputs the
+    // peer still needs (and overflow the queue arithmetic near INT_MAX).
+    if (ack_frame < -1 || (!locals.empty() && ack_frame > GetLastAddedInput(false))) {
+        ++_dropped_packets;
+        return;
+    }
+
     for (auto& player : remotes) {
         if (player->address.Equals(addr) && player->stats.last_acked_frame < ack_frame) {
             player->stats.last_acked_frame = ack_frame;
@@ -992,6 +1024,13 @@ void Gekko::MessageSystem::OnSessionHealth(NetAddress& addr, NetPacket& pkt)
 
     for (auto& player : remotes) {
         if (player->address.Equals(addr)) {
+            // only frames near the inputs we hold from this player: anything else would never
+            // be pruned below and could grow the map without bound.
+            const Frame last = _net_player_queue[player->handle].last_added_input;
+            if (frame < 0 || frame > last + 256 || frame < last - 128) {
+                ++_dropped_packets;
+                break;
+            }
             player->SetChecksum(frame, checksum);
 
             for (auto iter = player->session_health.begin();
@@ -1103,9 +1142,13 @@ void Gekko::MessageSystem::OnDisconnectClaim(NetAddress& addr, NetPacket& pkt)
         return;
     }
 
-    // the carried inputs must cover the claimed frame range.
-    const u64 expected = (u64)(body->last_frame - body->start_frame + 1) * _input_size;
-    if (body->last_frame < body->start_frame || body->inputs.size() < expected) {
+    // the carried inputs must cover the claimed frame range (computed in 64 bits: the frames
+    // come from the network and their difference overflows an i32).
+    if (body->start_frame < 0 || body->last_frame < body->start_frame) {
+        return;
+    }
+    const u64 expected = ((u64)((i64)body->last_frame - (i64)body->start_frame) + 1) * _input_size;
+    if (body->inputs.size() < expected) {
         return;
     }
 

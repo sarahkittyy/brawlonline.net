@@ -1684,6 +1684,18 @@ void RequestQuit()
       true);
 }
 
+// Every request is one JSON object per line. Anything else (an HTTP request a web page made the
+// browser send to 127.0.0.1, say) closes the connection before a later line can be taken as a
+// command: a page cannot read the answers, but without this its request body would still run.
+bool LooksLikeRequest(const std::string& line)
+{
+  const size_t first = line.find_first_not_of(" \t");
+  return first != std::string::npos && line[first] == '{';
+}
+
+// A line longer than this without a newline is not a harness request.
+constexpr size_t MAX_REQUEST_BYTES = 64 * 1024 * 1024;
+
 void ClientThread(socket_t sock)
 {
   Common::SetCurrentThreadName("Harness client");
@@ -1707,6 +1719,8 @@ void ClientThread(socket_t sock)
     if (received <= 0)
       break;
     buffer.append(chunk.data(), static_cast<size_t>(received));
+    if (buffer.size() > MAX_REQUEST_BYTES && buffer.find('\n') == std::string::npos)
+      break;
 
     size_t newline;
     bool closed = false;
@@ -1718,6 +1732,13 @@ void ClientThread(socket_t sock)
         line.pop_back();
       if (line.empty())
         continue;
+      if (!LooksLikeRequest(line))
+      {
+        WARN_LOG_FMT(HARNESS, "Harness: a line that is not a JSON request; closing the connection");
+        (void)SendAll(sock, "{\"id\":null,\"ok\":false,\"error\":\"not a harness request\"}\n");
+        closed = true;
+        break;
+      }
 
       const std::string response = HandleLine(line);
       if (!SendAll(sock, response))
@@ -1813,6 +1834,12 @@ bool StartServer(u16 port)
 #ifndef _WIN32
   int reuse = 1;
   setsockopt(s_listen_socket, SOL_SOCKET, SO_REUSEADDR, &reuse, sizeof(reuse));
+#else
+  // No other socket may bind this port while we hold it (Windows lets a SO_REUSEADDR socket of
+  // the same user take over a bound port otherwise).
+  BOOL exclusive = TRUE;
+  setsockopt(s_listen_socket, SOL_SOCKET, SO_EXCLUSIVEADDRUSE,
+             reinterpret_cast<const char*>(&exclusive), sizeof(exclusive));
 #endif
 
   sockaddr_in addr{};

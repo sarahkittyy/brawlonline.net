@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 
 #include <fmt/format.h>
@@ -16,6 +17,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
 #include "Common/Thread.h"
+#include "Core/Rollback/PeerData.h"
 
 namespace Online
 {
@@ -152,7 +154,8 @@ void User::FetchFromServer(const std::string& uid)
                                       m_accounts_url, request.EscapeComponent(uid));
   const auto response = request.Get(url);
   picojson::value root;
-  if (!response || !picojson::parse(root, std::string(response->begin(), response->end())).empty() ||
+  const std::string body = response ? std::string(response->begin(), response->end()) : "";
+  if (!response || !Gprb::PeerData::JsonSafeToParse(body, 16) || !picojson::parse(root, body).empty() ||
       !root.is<picojson::object>())
   {
     WARN_LOG_FMT(NETPLAY, "Online: failed to fetch the user info from {} (HTTP {})", url,
@@ -177,7 +180,9 @@ void User::FetchFromServer(const std::string& uid)
       const auto& r = rank->second.get<picojson::object>();
       auto num = [&r](const char* key) {
         const auto it = r.find(key);
-        return it != r.end() && it->second.is<double>() ? it->second.get<double>() : 0.0;
+        // finite and within int range before the casts below (they are undefined otherwise)
+        const double v = it != r.end() && it->second.is<double>() ? it->second.get<double>() : 0.0;
+        return std::isfinite(v) ? std::clamp(v, -1e9, 1e9) : 0.0;
       };
       m_info.ranked_rating = static_cast<float>(num("ratingOrdinal"));
       m_info.ranked_update_count = static_cast<int>(num("ratingUpdateCount"));

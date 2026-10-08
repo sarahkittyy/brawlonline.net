@@ -81,6 +81,10 @@ public:
     u64 load_count = 0, load_us_total = 0, load_us_max = 0;
     // Dual core: time the snapshot spent waiting for the GPU thread (part of save_us).
     u64 save_sync_count = 0, save_sync_us_total = 0, save_sync_us_max = 0;
+    // Loads that found the previous save's eviction job (the base snapshot update) unfinished and
+    // waited for it (part of load_us). Without that wait the load read the base snapshot while the
+    // job was writing it.
+    u64 load_evict_waits = 0, load_evict_wait_us_max = 0;
   };
   TimingStats GetTimingStats() const;
 
@@ -129,6 +133,7 @@ public:
   std::atomic<u64> m_stat_save_count{0}, m_stat_save_us_total{0}, m_stat_save_us_max{0};
   std::atomic<u64> m_stat_load_count{0}, m_stat_load_us_total{0}, m_stat_load_us_max{0};
   std::atomic<u64> m_stat_sync_count{0}, m_stat_sync_us_total{0}, m_stat_sync_us_max{0};
+  std::atomic<u64> m_stat_evict_waits{0}, m_stat_evict_wait_us_max{0};
   mutable std::mutex m_sample_mutex;
   std::vector<SaveSample> m_save_samples;  // ring, SAVE_SAMPLE_RING entries once used
   u64 m_save_sample_next = 0;
@@ -187,7 +192,11 @@ public:
   // Rolling base: full MEM1+MEM2 state at the oldest reachable frame
   RollbackSnapshot m_base_snapshot;
 
+  // The oldest slot's deltas being merged into m_base_snapshot (kicked by SaveFrame). Every reader
+  // of the base snapshot (LoadFrame) and the next eviction wait for it: WaitForEviction().
   job::Job* m_eviction_job = nullptr;
+  // Returns the microseconds spent waiting (0 if there was no job or it had finished).
+  u64 WaitForEviction(bool* was_pending = nullptr);
 
   // one byte per page, 1 = needs a source, 0 = satisfied.
   std::vector<u8> m_needs_source_mem1;

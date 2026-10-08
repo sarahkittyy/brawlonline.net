@@ -11,6 +11,7 @@
 #include <cstring>
 #include <fmt/format.h>
 #include <optional>
+#include <thread>
 #include <vector>
 
 #include <Core/State.h>
@@ -814,7 +815,8 @@ void RollbackManager::ToggleFrameSave()
     m_ring_count = 0;
     for (auto* stat : {&m_stat_save_count, &m_stat_save_us_total, &m_stat_save_us_max,
                        &m_stat_load_count, &m_stat_load_us_total, &m_stat_load_us_max,
-                       &m_stat_sync_count, &m_stat_sync_us_total, &m_stat_sync_us_max})
+                       &m_stat_sync_count, &m_stat_sync_us_total, &m_stat_sync_us_max,
+                       &m_stat_evict_waits, &m_stat_evict_wait_us_max})
     {
       stat->store(0, std::memory_order_relaxed);
     }
@@ -878,6 +880,8 @@ RollbackManager::TimingStats RollbackManager::GetTimingStats() const
   stats.save_sync_count = m_stat_sync_count.load(std::memory_order_relaxed);
   stats.save_sync_us_total = m_stat_sync_us_total.load(std::memory_order_relaxed);
   stats.save_sync_us_max = m_stat_sync_us_max.load(std::memory_order_relaxed);
+  stats.load_evict_waits = m_stat_evict_waits.load(std::memory_order_relaxed);
+  stats.load_evict_wait_us_max = m_stat_evict_wait_us_max.load(std::memory_order_relaxed);
   return stats;
 }
 
@@ -888,6 +892,23 @@ u64 RollbackManager::GetSaveSamples(u64 since, std::vector<SaveSample>& out) con
   for (u64 i = std::max(since, first); i < m_save_sample_next; ++i)
     out.push_back(m_save_samples[i % SAVE_SAMPLE_RING]);
   return m_save_sample_next;
+}
+
+u64 RollbackManager::WaitForEviction(bool* was_pending)
+{
+  if (was_pending)
+    *was_pending = false;
+  if (!m_eviction_job)
+    return 0;
+  const bool pending = m_eviction_job->unfinished_jobs.load(std::memory_order_acquire) != 0;
+  const auto start = std::chrono::steady_clock::now();
+  job::DrainJobsUntilComplete(m_dispatch_thread, m_eviction_job);
+  m_eviction_job = nullptr;
+  if (was_pending)
+    *was_pending = pending;
+  return static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
+                              std::chrono::steady_clock::now() - start)
+                              .count());
 }
 
 void RollbackManager::SaveFrame(Core::System& system)
@@ -917,19 +938,19 @@ void RollbackManager::SaveFrame(Core::System& system)
   {
     ROLLBACK_ZONE_N("Prep eviction");
     // Wait for any in-flight eviction — typically completes within the same frame.
-    if (m_eviction_job)
-    {
-      const auto evict_start = std::chrono::steady_clock::now();
-      job::DrainJobsUntilComplete(m_dispatch_thread, m_eviction_job);
-      m_eviction_job = nullptr;
-      evict_us = static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
-                                      std::chrono::steady_clock::now() - evict_start)
-                                      .count());
-    }
+    evict_us = WaitForEviction();
     auto evicted = std::make_shared<Rollback::EvictedDelta>(m_slots[slot].ExtractDeltas());
     m_eviction_job = job::KickRootJob(
         m_dispatch_thread, [this, evicted](job::JobTaskThread&, job::Job&) mutable {
           ROLLBACK_ZONE_N("BaseSnapshot::Evict");
+          // Diagnostics: a slow eviction, as on a starved machine (docs/gameplay-rollback-status.md,
+          // open issue 9).
+          static const long delay_us = [] {
+            const char* e = std::getenv("PPR_GPRB_EVICT_DELAY_US");
+            return e ? std::strtol(e, nullptr, 10) : 0L;
+          }();
+          if (delay_us > 0)
+            std::this_thread::sleep_for(std::chrono::microseconds(delay_us));
           std::unique_lock lk(m_base_snapshot.mutex);
 
           const uint8_t* src = evicted->mem1.page_data.data();
@@ -1078,6 +1099,30 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
   static std::vector<SourceEntry> restore_srcs;
 
   DeltaSaveSlot& deltaSave = m_slots[target_slot];
+
+  // The restore takes every granule that no slot in the ring holds from the base snapshot, and the
+  // base snapshot is complete only once the eviction the last SaveFrame kicked has merged the
+  // evicted slot into it. A load right after a save (every resimulation) used to read it while
+  // that job was still copying, whenever the job pool's threads were slow to wake or preempted:
+  // granules last written in the evicted slot's frame came back one frame older (or torn), so
+  // rolled-back runs went wrong only under host load, mostly in effect/render objects that change
+  // every frame (open issue 9 of docs/gameplay-rollback-status.md).
+  {
+    static const bool no_wait = std::getenv("PPR_GPRB_EVICT_NO_WAIT") != nullptr;  // diagnostics
+    bool pending = false;
+    if (no_wait)
+    {
+      pending = m_eviction_job &&
+                m_eviction_job->unfinished_jobs.load(std::memory_order_acquire) != 0;
+    }
+    const u64 wait_us = no_wait ? 0 : WaitForEviction(&pending);
+    if (pending)
+    {
+      m_stat_evict_waits.fetch_add(1, std::memory_order_relaxed);
+      if (wait_us > m_stat_evict_wait_us_max.load(std::memory_order_relaxed))
+        m_stat_evict_wait_us_max.store(wait_us, std::memory_order_relaxed);
+    }
+  }
 
   // indexing + RAM restore happens on a worker thread so they overlap with DoState on the main
   // thread

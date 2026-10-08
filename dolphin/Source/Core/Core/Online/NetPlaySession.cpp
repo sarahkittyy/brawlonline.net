@@ -37,6 +37,7 @@
 #include "Core/NetPlayClient.h"
 #include "Core/NetPlayProto.h"
 #include "Core/NetPlayServer.h"
+#include "Core/Online/Matchmaking.h"
 #include "Core/Online/OnlineSession.h"
 #include "Core/System.h"
 #include "Core/TitleDatabase.h"
@@ -696,6 +697,14 @@ public:
                                    const picojson::object&) override
   {
     StopWorker();
+    // Dolphin's netplay trusts its host: the host's Gecko codes and save data are synced to the
+    // guest and run there. That is fine between friends who exchanged codes (Direct, Teams), not
+    // with a stranger from Unranked or Ranked matchmaking.
+    if (match.mode != static_cast<int>(Online::Matchmaking::Mode::Direct) &&
+        match.mode != static_cast<int>(Online::Matchmaking::Mode::Teams))
+    {
+      return "the netplay session backend is only for Direct and Teams (code-based) games";
+    }
     OnlineOptions options;
     {
       std::lock_guard lk(s_online_options_mutex);

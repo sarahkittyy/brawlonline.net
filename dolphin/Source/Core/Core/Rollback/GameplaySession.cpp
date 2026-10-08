@@ -8,6 +8,7 @@
 #include <atomic>
 #include <bit>
 #include <chrono>
+#include <cmath>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
@@ -40,6 +41,7 @@
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/GameplayRollback.h"
+#include "Core/Rollback/PeerData.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/RollbackManager.h"
 #include "Core/System.h"
@@ -208,6 +210,8 @@ struct State
   // The host may know the joiner's address in advance (matchmaking) and sends to it from the
   // start; the joiner's first packet then confirms (or corrects) it.
   bool peer_confirmed = false;
+  // Packets from an address that is not the peer's, dropped (status: foreign_packets).
+  u64 foreign_packets = 0;
   // The peer left (a "leave" message) or went silent: handled on the CPU thread for a match.
   bool peer_left = false;
   std::string peer_left_reason;
@@ -608,8 +612,30 @@ SyncBlock ReadSyncBlock(Core::System& system)
 void WriteSyncBlock(Core::System& system, const SyncBlock& b)
 {
   auto& memory = system.GetMemory();
-  memory.CopyToEmu(Addr::GAME_FRAME, b.game_frame.data(), b.game_frame.size());
   const Guest g(memory);
+  // g_GameFrame: only its counters (+0x04 frameCounter, +0x14 persistentFrameCounter) and, when
+  // it is a finite number, the frame delta (+0x0C) are taken from the host. The other words are
+  // never the host's (they are not known to differ between machines).
+  if (const u8* mine = g.Ptr(Addr::GAME_FRAME, Addr::GAME_FRAME_SIZE))
+  {
+    std::array<u8, Addr::GAME_FRAME_SIZE> frame;
+    std::memcpy(frame.data(), mine, frame.size());
+    for (u32 off : {0x04u, 0x14u})
+      std::memcpy(frame.data() + off, b.game_frame.data() + off, 4);
+    u32 delta_be;
+    std::memcpy(&delta_be, b.game_frame.data() + 0x0C, 4);
+    if (std::isfinite(std::bit_cast<float>(Common::swap32(delta_be))))
+      std::memcpy(frame.data() + 0x0C, b.game_frame.data() + 0x0C, 4);
+    for (u32 off : {0x00u, 0x08u, 0x10u})
+    {
+      if (std::memcmp(frame.data() + off, b.game_frame.data() + off, 4) != 0)
+      {
+        WARN_LOG_FMT(BRAWLBACK, "gprb: g_GameFrame+{:#x} differs from the host's (kept ours)",
+                     off);
+      }
+    }
+    memory.CopyToEmu(Addr::GAME_FRAME, frame.data(), frame.size());
+  }
   if (const auto app = g.Ptr32(Addr::APPLICATION_PTR))
     WriteU32(system, *app + Addr::APP_FRAME_COUNTER_OFF, b.app_counter);
   WriteU32(system, Addr::MTRAND_DEFAULT_SEED, b.rng[0]);
@@ -623,7 +649,15 @@ void WriteSyncBlock(Core::System& system, const SyncBlock& b)
     std::array<u32, 4> mine{};
     for (u32 i = 0; i < 4; ++i)
       mine[i] = g.U32(*sp + 4 * i).value_or(0);
-    if (mine != b.start_pos)
+    // The host's table must be a shuffle of ours (the stage indexes its start points with it).
+    if (mine != b.start_pos && !PeerData::IsPermutation(mine, b.start_pos))
+    {
+      WARN_LOG_FMT(BRAWLBACK, "gprb: the host's fighter start points are not ours shuffled; kept "
+                              "ours ({} {} {} {} against {} {} {} {})",
+                   mine[0], mine[1], mine[2], mine[3], b.start_pos[0], b.start_pos[1],
+                   b.start_pos[2], b.start_pos[3]);
+    }
+    else if (mine != b.start_pos)
     {
       for (u32 i = 0; i < 4; ++i)
         WriteU32(system, *sp + 4 * i, b.start_pos[i]);
@@ -730,6 +764,8 @@ picojson::value SyncBlockJson(const SyncBlock& b)
 
 std::optional<SyncBlock> SyncBlockFromJson(const picojson::value& v)
 {
+  // From the host: every field is checked before use (PeerData.h). A malformed block is ignored
+  // as a whole; the joiner then waits at the barrier until the session times out.
   if (!v.is<picojson::object>())
     return std::nullopt;
   const auto& o = v.get<picojson::object>();
@@ -737,40 +773,58 @@ std::optional<SyncBlock> SyncBlockFromJson(const picojson::value& v)
   const auto gf = o.find("game_frame");
   if (gf == o.end() || !gf->second.is<std::string>())
     return std::nullopt;
-  const std::string& hex = gf->second.get<std::string>();
-  if (hex.size() != 2 * b.game_frame.size())
+  const auto frame = PeerData::ParseHex(gf->second.get<std::string>(), b.game_frame.size());
+  if (!frame)
     return std::nullopt;
-  for (size_t i = 0; i < b.game_frame.size(); ++i)
-    b.game_frame[i] = static_cast<u8>(std::stoul(hex.substr(2 * i, 2), nullptr, 16));
-  auto num = [&](const char* k) -> u32 {
+  std::copy(frame->begin(), frame->end(), b.game_frame.begin());
+  auto num = [&](const char* k) -> std::optional<u32> {
     const auto it = o.find(k);
-    return it != o.end() && it->second.is<double>() ? static_cast<u32>(it->second.get<double>()) : 0;
+    if (it == o.end())
+      return 0u;
+    const auto n = PeerData::JsonUInt(&it->second, 0xFFFFFFFF);
+    return n ? std::optional<u32>(static_cast<u32>(*n)) : std::nullopt;
   };
-  b.app_counter = num("app");
-  b.serial = num("serial");
-  const auto rng = o.find("rng");
-  if (rng != o.end() && rng->second.is<picojson::array>() && rng->second.get<picojson::array>().size() == 3)
-  {
-    for (int i = 0; i < 3; ++i)
-      b.rng[i] = static_cast<u32>(rng->second.get<picojson::array>()[i].get<double>());
-  }
-  const auto sp = o.find("start_pos");
-  if (sp != o.end() && sp->second.is<picojson::array>() && sp->second.get<picojson::array>().size() == 4)
-  {
-    for (int i = 0; i < 4; ++i)
-      b.start_pos[i] = static_cast<u32>(sp->second.get<picojson::array>()[i].get<double>());
-    b.has_start_pos = true;
-  }
+  auto words = [&](const char* k, auto& out) -> std::optional<bool> {
+    const auto it = o.find(k);
+    if (it == o.end())
+      return false;
+    if (!it->second.is<picojson::array>() ||
+        it->second.get<picojson::array>().size() != out.size())
+    {
+      return std::nullopt;
+    }
+    const auto& a = it->second.get<picojson::array>();
+    for (size_t i = 0; i < out.size(); ++i)
+    {
+      const auto n = PeerData::JsonUInt(&a[i], 0xFFFFFFFF);
+      if (!n)
+        return std::nullopt;
+      out[i] = static_cast<u32>(*n);
+    }
+    return true;
+  };
+  const auto app = num("app");
+  const auto serial = num("serial");
+  const auto rng = words("rng", b.rng);
+  const auto sp = words("start_pos", b.start_pos);
+  if (!app || !serial || !rng || !sp)
+    return std::nullopt;
+  b.app_counter = *app;
+  b.serial = *serial;
+  b.has_start_pos = *sp;
   b.valid = true;
   return b;
 }
 
 // ---- Lobby ----
 
-double JsonNum(const picojson::object& o, const char* k, double def)
+// A whole number in [0, max] under key `k`, else `def` (a missing or malformed field).
+u64 JsonNum(const picojson::object& o, const char* k, u64 max, u64 def)
 {
   const auto it = o.find(k);
-  return it != o.end() && it->second.is<double>() ? it->second.get<double>() : def;
+  if (it == o.end())
+    return def;
+  return PeerData::JsonUInt(&it->second, max).value_or(def);
 }
 
 picojson::value LockJson(const LockIn& l)
@@ -793,14 +847,11 @@ PortValues PortValuesFromHex(const picojson::value* v)
   PortValues pv{};
   if (!v || !v->is<std::string>())
     return pv;
-  const std::string& h = v->get<std::string>();
-  if (h.size() != 2 * pv.size())
+  const auto bytes = PeerData::ParseHex(v->get<std::string>(), pv.size());
+  if (!bytes)
     return pv;
-  for (size_t i = 0; i < pv.size(); ++i)
-  {
-    const auto byte = std::strtoul(h.substr(2 * i, 2).c_str(), nullptr, 16);
-    pv[i] = static_cast<u8>(byte);
-  }
+  std::copy(bytes->begin(), bytes->end(), pv.begin());
+  PeerData::SanitizePortValues(pv);
   return pv;
 }
 
@@ -809,14 +860,33 @@ LockIn LockFromJson(const picojson::object& o)
   LockIn l;
   const auto r = o.find("ready");
   l.ready = r != o.end() && r->second.is<bool>() && r->second.get<bool>();
-  l.css = static_cast<u8>(JsonNum(o, "css", 0xFF));
-  l.char_kind = static_cast<u8>(JsonNum(o, "kind", 0xFF));
-  l.costume = static_cast<u8>(JsonNum(o, "costume", 0));
-  l.stage_pick = static_cast<u16>(JsonNum(o, "stage", NO_STAGE));
-  l.asl = static_cast<u8>(JsonNum(o, "asl", 0));
-  l.game = static_cast<u32>(JsonNum(o, "game", 0));
+  l.css = static_cast<u8>(JsonNum(o, "css", 0xFF, 0xFF));
+  l.char_kind = static_cast<u8>(JsonNum(o, "kind", 0xFF, 0xFF));
+  l.costume = static_cast<u8>(JsonNum(o, "costume", 0xFF, 0));
+  l.stage_pick = static_cast<u16>(JsonNum(o, "stage", 0xFFFF, NO_STAGE));
+  l.asl = static_cast<u8>(JsonNum(o, "asl", 0xFF, 0));
+  l.game = static_cast<u32>(JsonNum(o, "game", 0xFFFFFFFF, 0));
   const auto pv = o.find("pv");
   l.port_values = PortValuesFromHex(pv != o.end() ? &pv->second : nullptr);
+  // A character, costume or stage the game cannot produce is not a lock-in: the peer is not
+  // ready, and nothing of it reaches SESSION (the game would index its tables with it).
+  if (!PeerData::ValidCharKind(l.char_kind) || !PeerData::ValidCostume(l.costume))
+  {
+    if (l.ready)
+    {
+      WARN_LOG_FMT(BRAWLBACK, "gprb lobby: peer lock-in refused (char {:#x}, costume {})",
+                   l.char_kind, l.costume);
+    }
+    l.ready = false;
+    l.char_kind = 0xFF;
+    l.costume = 0;
+  }
+  if (l.stage_pick != NO_STAGE && !PeerData::ValidStageKind(l.stage_pick))
+  {
+    WARN_LOG_FMT(BRAWLBACK, "gprb lobby: peer stage pick {:#x} refused", l.stage_pick);
+    l.stage_pick = NO_STAGE;
+    l.asl = 0;
+  }
   return l;
 }
 
@@ -842,12 +912,15 @@ picojson::value SetupJson(const MatchSetup& st)
 std::optional<MatchSetup> SetupFromJson(const picojson::object& o)
 {
   MatchSetup st;
-  st.game = static_cast<u32>(JsonNum(o, "game", 0));
-  st.stage = static_cast<u16>(JsonNum(o, "stage", NO_STAGE));
-  st.asl = static_cast<u8>(JsonNum(o, "asl", 0));
+  st.game = static_cast<u32>(JsonNum(o, "game", 0xFFFFFFFF, 0));
+  st.stage = static_cast<u16>(JsonNum(o, "stage", 0xFFFF, NO_STAGE));
+  st.asl = static_cast<u8>(JsonNum(o, "asl", 0xFF, 0));
   const auto it = o.find("players");
-  if (st.game == 0 || it == o.end() || !it->second.is<picojson::array>())
+  if (st.game == 0 || !PeerData::ValidStageKind(st.stage) || it == o.end() ||
+      !it->second.is<picojson::array>())
+  {
     return std::nullopt;
+  }
   for (const auto& p : it->second.get<picojson::array>())
   {
     if (st.num_players >= MAX_LOBBY_PLAYERS || !p.is<picojson::array>() ||
@@ -858,10 +931,20 @@ std::optional<MatchSetup> SetupFromJson(const picojson::object& o)
     const auto& a = p.get<picojson::array>();
     auto& pl = st.players[st.num_players++];
     pl.present = true;
-    pl.char_kind = static_cast<u8>(a[0].is<double>() ? a[0].get<double>() : 0xFF);
-    pl.costume = static_cast<u8>(a[1].is<double>() ? a[1].get<double>() : 0);
+    const auto kind = PeerData::JsonUInt(&a[0], 0xFF);
+    const auto costume = PeerData::JsonUInt(&a[1], 0xFF);
+    if (!kind || !costume || !PeerData::ValidCharKind(static_cast<u32>(*kind)) ||
+        !PeerData::ValidCostume(static_cast<u32>(*costume)))
+    {
+      return std::nullopt;
+    }
+    pl.char_kind = static_cast<u8>(*kind);
+    pl.costume = static_cast<u8>(*costume);
     pl.port_values = PortValuesFromHex(&a[2]);
   }
+  // A session has two players (the host's and the joiner's port).
+  if (st.num_players != 2)
+    return std::nullopt;
   return st;
 }
 
@@ -1004,14 +1087,39 @@ void SendState()
   SendRaw(pkt);
 }
 
-void HandleControl(const std::string& text, const sf::IpAddress& from, u16 from_port)
+// Whether a control packet from `from:from_port` is the peer's (under s.mutex). Once the peer is
+// known only its address counts. Before that, the host takes the first sender as its peer: with
+// matchmaking only one from the joiner's address (its port may differ behind a NAT), without
+// (harness sessions, `gprb_connect` with no remote) anyone.
+bool FromPeer(const sf::IpAddress& from, u16 from_port, bool* confirm)
 {
-  picojson::value v;
-  if (!picojson::parse(v, text).empty() || !v.is<picojson::object>())
-    return;
-  const auto& o = v.get<picojson::object>();
-  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  *confirm = false;
   if (s.net_opts.host && !s.peer_confirmed)
+  {
+    if (s.peer_ip && *s.peer_ip != from)
+      return false;
+    *confirm = true;
+    return true;
+  }
+  return s.peer_ip && *s.peer_ip == from && s.peer_port == from_port;
+}
+
+void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_port)
+{
+  // Everything here comes from the other player's machine (or anyone who can send UDP to this
+  // port): sizes, depth and every value are checked before use (PeerData.h).
+  const auto parsed = PeerData::ParseControl(text);
+  if (!parsed)
+    return;
+  const auto& o = *parsed;
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  bool confirm = false;
+  if (!FromPeer(from, from_port, &confirm))
+  {
+    ++s.foreign_packets;
+    return;
+  }
+  if (confirm)
   {
     s.peer_ip = from;
     s.peer_port = from_port;
@@ -1037,7 +1145,7 @@ void HandleControl(const std::string& text, const sf::IpAddress& from, u16 from_
     return it == o.end() ? nullptr : &it->second;
   };
   if (const auto* x = get("name"); x && x->is<std::string>())
-    p.name = x->get<std::string>();
+    p.name = PeerData::TruncateName(x->get<std::string>());
   if (const auto* x = get("sel"); x && x->is<picojson::object>())
     p.selections = x->get<picojson::object>();
   if (const auto* x = get("at_s"); x && x->is<bool>())
@@ -1048,24 +1156,33 @@ void HandleControl(const std::string& text, const sf::IpAddress& from, u16 from_
     p.at_start = x->get<bool>();
   if (const auto* x = get("go"); x && x->is<bool>())
     p.go = x->get<bool>();
-  if (const auto* x = get("match"); x && x->is<double>())
-    p.match_index = static_cast<u32>(x->get<double>());
+  if (const auto n = PeerData::JsonUInt(get("match"), 0xFFFFFFFF))
+    p.match_index = static_cast<u32>(*n);
   if (const auto* x = get("init"); x && x->is<std::string>())
   {
-    const std::string& h = x->get<std::string>();
-    std::vector<u8> b;
-    for (size_t i = 0; i + 1 < h.size(); i += 2)
-      b.push_back(static_cast<u8>(std::strtoul(h.substr(i, 2).c_str(), nullptr, 16)));
-    p.init_block = std::move(b);
-    if (const auto* m = get("init_match"); m && m->is<double>())
-      p.init_match = static_cast<s64>(m->get<double>());
+    // Exactly the block's size, or nothing (the joiner then waits for a valid one).
+    const auto b = PeerData::ParseHex(x->get<std::string>(), PeerData::INIT_BLOCK_SIZE);
+    const auto m = PeerData::JsonUInt(get("init_match"), 0xFFFFFFFF);
+    if (b && m)
+    {
+      p.init_block = *b;
+      p.init_match = static_cast<s64>(*m);
+    }
   }
   if (const auto* x = get("setup"); x && x->is<std::string>())
-    p.setup_hash = std::strtoull(x->get<std::string>().c_str(), nullptr, 16);
+  {
+    if (const auto h = PeerData::ParseHex(x->get<std::string>(), 8))
+    {
+      u64 v = 0;
+      for (u8 c : *h)
+        v = (v << 8) | c;
+      p.setup_hash = v;
+    }
+  }
   if (const auto* x = get("lock"); x && x->is<picojson::object>())
     p.lock = LockFromJson(x->get<picojson::object>());
-  if (const auto* x = get("winner"); x && x->is<double>())
-    p.last_winner = static_cast<u8>(x->get<double>());
+  if (const auto n = PeerData::JsonUInt(get("winner"), 0xFF))
+    p.last_winner = static_cast<u8>(*n);
   if (const auto* x = get("match_setup"); x && x->is<picojson::object>() && !s.net_opts.host)
   {
     if (auto st = SetupFromJson(x->get<picojson::object>()))
@@ -1080,9 +1197,9 @@ void HandleControl(const std::string& text, const sf::IpAddress& from, u16 from_
       p.setup = *st;
     }
   }
-  if (const auto* x = get("seed"); x && x->is<double>() && !s.net_opts.host)
+  if (const auto n = PeerData::JsonUInt(get("seed"), 0xFFFFFFFF); n && !s.net_opts.host)
   {
-    p.session_seed = static_cast<u32>(x->get<double>());
+    p.session_seed = static_cast<u32>(*n);
     s.session_seed = p.session_seed;
   }
   if (const auto* x = get("sync"))
@@ -1090,20 +1207,36 @@ void HandleControl(const std::string& text, const sf::IpAddress& from, u16 from_
     if (auto b = SyncBlockFromJson(*x))
       p.sync = *b;
   }
-  if (const auto* x = get("tasks"); x && x->is<picojson::array>())
+  // Task order: names only. ApplyTaskOrder only reorders this machine's own tasks, and only
+  // when the host's lists hold exactly the same names.
+  if (const auto* x = get("tasks"); x && x->is<picojson::array>() &&
+                                    x->get<picojson::array>().size() <= PeerData::MAX_TASK_LISTS)
   {
-    p.task_order.clear();
+    std::vector<std::vector<std::string>> lists;
+    bool ok = true;
     for (const auto& l : x->get<picojson::array>())
     {
-      std::vector<std::string> names;
-      if (l.is<picojson::array>())
+      if (!l.is<picojson::array>() ||
+          l.get<picojson::array>().size() > PeerData::MAX_TASKS_PER_LIST)
       {
-        for (const auto& n : l.get<picojson::array>())
-          names.push_back(n.is<std::string>() ? n.get<std::string>() : "?");
+        ok = false;
+        break;
       }
-      p.task_order.push_back(std::move(names));
+      std::vector<std::string> names;
+      for (const auto& n : l.get<picojson::array>())
+      {
+        if (n.is<std::string>() && n.get<std::string>().size() <= PeerData::MAX_TASK_NAME_LEN)
+          names.push_back(n.get<std::string>());
+        else
+          names.push_back("?");
+      }
+      lists.push_back(std::move(names));
     }
-    p.task_order_valid = true;
+    if (ok)
+    {
+      p.task_order = std::move(lists);
+      p.task_order_valid = true;
+    }
   }
   if (first)
     INFO_LOG_FMT(BRAWLBACK, "gprb: peer {}:{} ({}) heard", from.toString(), from_port, p.name);
@@ -1139,40 +1272,53 @@ void NetThread()
         }
         if (received == 0)
           continue;
-        if (buf[0] == 'G')
+        // Only control packets may come from an address that is not the peer's yet
+        // (HandleControl decides); everything else must come from the peer.
+        bool known;
         {
-          bool known;
-          {
-            std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-            known = s.peer_ip && *s.peer_ip == *from && s.peer_port == from_port;
-          }
-          if (known)
-          {
-            std::lock_guard lk(s.gekko_rx_mutex);
+          std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+          known = s.peer_ip && *s.peer_ip == *from && s.peer_port == from_port;
+          if (!known && buf[0] != 'C')
+            ++s.foreign_packets;
+        }
+        if (buf[0] == 'G' && known)
+        {
+          std::lock_guard lk(s.gekko_rx_mutex);
+          // GekkoNet drains this only while a match runs; on the character select a peer could
+          // otherwise grow it without bound.
+          if (s.gekko_rx.size() < PeerData::MAX_QUEUED_GEKKO_PACKETS)
             s.gekko_rx.emplace_back(buf.begin() + 1, buf.begin() + received);
-          }
         }
         else if (buf[0] == 'C')
         {
-          HandleControl(std::string(reinterpret_cast<const char*>(buf.data()) + 1, received - 1),
-                        *from, from_port);
+          if (received - 1 <= PeerData::MAX_CONTROL_SIZE)
+          {
+            HandleControl(std::string_view(reinterpret_cast<const char*>(buf.data()) + 1,
+                                           received - 1),
+                          *from, from_port);
+          }
         }
-        else if (buf[0] == 'P' && received >= 9)
+        else if (buf[0] == 'P' && received == 9 && known)
         {
           // ping: answer with the same payload
           buf[0] = 'Q';
           (void)s.socket->send(buf.data(), received, *from, from_port);
         }
-        else if (buf[0] == 'Q' && received >= 9)
+        else if (buf[0] == 'Q' && received == 9 && known)
         {
+          // Our own ping's timestamp, echoed. A pong from the future or older than a few seconds
+          // is not a measurement (the host waits RTT/2 before it starts the match).
           u64 sent_us;
           std::memcpy(&sent_us, buf.data() + 1, 8);
           const u64 now_us = static_cast<u64>(
               std::chrono::duration_cast<std::chrono::microseconds>(Clock::now().time_since_epoch())
                   .count());
-          std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-          const double rtt = (now_us - sent_us) / 1000.0;
-          s.peer.rtt_ms = s.peer.rtt_ms < 0 ? rtt : 0.8 * s.peer.rtt_ms + 0.2 * rtt;
+          if (sent_us <= now_us && (now_us - sent_us) / 1000.0 <= PeerData::MAX_RTT_MS)
+          {
+            std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+            const double rtt = (now_us - sent_us) / 1000.0;
+            s.peer.rtt_ms = s.peer.rtt_ms < 0 ? rtt : 0.8 * s.peer.rtt_ms + 0.2 * rtt;
+          }
         }
       }
     }
@@ -1812,8 +1958,13 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
           {
             const int port = s.handle_port[h];
             if (port >= 0)
+            {
               std::memcpy(slots.data() + port * INPUT_SIZE, e.data.adv.inputs + h * INPUT_SIZE,
                           INPUT_SIZE);
+              // The remote player's bytes come straight from the network: every player's input
+              // is sanitised the same way on both machines before it reaches the pad slots.
+              PeerData::SanitizePad(slots.data() + port * INPUT_SIZE);
+            }
           }
         }
         s.ops.slots[num_adv] = slots;
@@ -2352,6 +2503,7 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.peer_ip.reset();
   s.peer_port = 0;
   s.peer_confirmed = false;
+  s.foreign_packets = 0;
   s.peer_left = false;
   s.peer_left_reason.clear();
   s.disconnected = false;
@@ -2401,8 +2553,11 @@ std::optional<std::string> SetSelections(const picojson::object& selections)
   return std::nullopt;
 }
 
-void SetLocalLock(const LockIn& lock)
+void SetLocalLock(const LockIn& lock_in)
 {
+  // The same port value bytes on both machines: the peer's are sanitised on receipt.
+  LockIn lock = lock_in;
+  PeerData::SanitizePortValues(lock.port_values);
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
   const bool changed = lock.ready != s.local_lock.ready || lock.game != s.local_lock.game ||
                        lock.char_kind != s.local_lock.char_kind ||
@@ -2570,6 +2725,8 @@ picojson::value Status()
   o["load_count"] = picojson::value(static_cast<double>(t.load_count));
   o["load_us_total"] = picojson::value(static_cast<double>(t.load_us_total));
   o["load_us_max"] = picojson::value(static_cast<double>(t.load_us_max));
+  o["load_evict_waits"] = picojson::value(static_cast<double>(t.load_evict_waits));
+  o["load_evict_wait_us_max"] = picojson::value(static_cast<double>(t.load_evict_wait_us_max));
   if (s.mode == Mode::Network)
   {
     picojson::object p;
@@ -2586,6 +2743,7 @@ picojson::value Status()
               .count()));
     }
     o["peer"] = picojson::value(p);
+    o["foreign_packets"] = picojson::value(static_cast<double>(s.foreign_packets));
     o["selections"] = picojson::value(s.local_selections);
     o["setup_hash"] = picojson::value(fmt::format("{:016x}", s.setup_hash));
     picojson::object lobby;
@@ -2682,12 +2840,22 @@ MatchStart ApplyMatchStart(Core::System& system, std::string_view when)
     }
     const auto mine = InitBlock(g);
     const auto mm = ModeMeleeAddr(g);
-    if (mm && mine.size() == s.peer.init_block.size() && mine != s.peer.init_block)
+    // Only the stage variant may differ (PeerData::MergeInitBlock): the joiner never writes the
+    // host's stage kind, rules or time limit into its game.
+    bool rejected = false;
+    const auto merged = PeerData::MergeInitBlock(mine, s.peer.init_block, &rejected);
+    if (rejected)
     {
-      system.GetMemory().CopyToEmu(*mm + INIT_BLOCK_OFFSET, s.peer.init_block.data(),
-                                   s.peer.init_block.size());
+      WARN_LOG_FMT(BRAWLBACK,
+                   "gprb: the host's match init block differs beyond the stage variant; kept "
+                   "ours ({} against the host's {})",
+                   Hex(mine), Hex(s.peer.init_block));
+    }
+    if (mm && merged != mine)
+    {
+      system.GetMemory().CopyToEmu(*mm + INIT_BLOCK_OFFSET, merged.data(), merged.size());
       INFO_LOG_FMT(BRAWLBACK, "gprb: joiner took the host's match init block ({} -> {})", Hex(mine),
-                   Hex(s.peer.init_block));
+                   Hex(merged));
     }
   }
   const auto seeds = MatchSeeds(s.session_seed, s.match_index);
@@ -2834,7 +3002,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       if (s.net_opts.host && !s.go && s.peer.at_start && s.gekko_started)
       {
         s.go = true;
-        const double rtt = std::max(0.0, s.peer.rtt_ms);
+        const double rtt = std::clamp(s.peer.rtt_ms, 0.0, PeerData::MAX_RTT_MS);
         s.start_at = Clock::now() + std::chrono::microseconds(static_cast<s64>(rtt * 500.0));
       }
       const bool start = s.net_opts.host ? (s.go && s.start_at && Clock::now() >= *s.start_at) :
