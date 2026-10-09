@@ -35,6 +35,7 @@ using Clock = std::chrono::steady_clock;
 
 // Matchmaking::Mode::Ranked (Slippi's mode numbers).
 constexpr int MODE_RANKED = 0;
+constexpr int MODE_DIRECT = 2;
 // Best of three.
 constexpr int WINS_NEEDED = 2;
 constexpr u8 DRAW = 0xFE;
@@ -71,7 +72,8 @@ std::thread s_worker;
 bool s_stop = false;
 
 // The current ranked set.
-bool s_active = false;
+bool s_active = false;     // a ranked set is tracked
+bool s_reporting = false;  // the games of this 1v1 match are reported (every mode but Teams)
 std::string s_match_id;
 std::array<std::string, 2> s_uids;  // by in-game port: the host is 0, the joiner 1
 int s_local_port = 0;
@@ -331,7 +333,10 @@ void OnSessionStart(const Match& match)
   if (s_active && !s_set_over)
     WARN_LOG_FMT(NETPLAY, "Ranked: set {} replaced before it ended", s_match_id);
   s_active = ranked;
-  if (!s_active)
+  // Every online 1v1 game is reported (Slippi's reportOnlineGame), for the players' match
+  // history; only Ranked's are rated.
+  s_reporting = match.players.size() == 2 && match.mode >= MODE_RANKED && match.mode <= MODE_DIRECT;
+  if (!s_reporting)
     return;
   s_match_id = match.match_id;
   s_uids = {};
@@ -349,13 +354,16 @@ void OnSessionStart(const Match& match)
   s_left_reported = false;
   s_change.reset();
   s_last_status = "ASSIGNED";
-  NOTICE_LOG_FMT(NETPLAY, "Ranked: set {} started (best of {})", s_match_id, WINS_NEEDED * 2 - 1);
+  if (s_active)
+    NOTICE_LOG_FMT(NETPLAY, "Ranked: set {} started (best of {})", s_match_id, WINS_NEEDED * 2 - 1);
+  else
+    NOTICE_LOG_FMT(NETPLAY, "Ranked: reporting the games of {}", s_match_id);
 }
 
 void OnGameResult(const Gprb::Session::GameResult& r)
 {
   std::lock_guard lk(s_mutex);
-  if (!s_active || s_set_over)
+  if (!s_reporting || (s_active && s_set_over))
     return;
   picojson::object body;
   body["matchId"] = picojson::value(s_match_id);
@@ -378,6 +386,8 @@ void OnGameResult(const Gprb::Session::GameResult& r)
   ++s_reports_sent;
   Enqueue({fmt::format("game {} of {}", r.game, s_match_id),
            [body] { return Post("game", "/v1/ranked/report-game", body); }});
+  if (!s_active)
+    return;
 
   if (r.winner < 2)
     ++s_wins[r.winner];
@@ -410,6 +420,7 @@ void OnCleanup()
 {
   GameSetup::End();
   std::lock_guard lk(s_mutex);
+  s_reporting = false;
   if (!s_active)
     return;
   if (!s_set_over && !s_peer_gone && !s_left_reported)
@@ -452,6 +463,7 @@ picojson::object Status()
   std::lock_guard lk(s_mutex);
   picojson::object o;
   o["active"] = picojson::value(s_active);
+  o["reporting"] = picojson::value(s_reporting);
   o["match_id"] = picojson::value(s_match_id);
   o["wins"] = picojson::value(picojson::array{picojson::value(static_cast<double>(s_wins[0])),
                                               picojson::value(static_cast<double>(s_wins[1]))});
