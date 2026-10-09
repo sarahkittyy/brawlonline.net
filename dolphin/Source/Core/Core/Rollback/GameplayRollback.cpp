@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -590,6 +591,7 @@ struct PadsState
   u32 anchor_ports = 0;
   bool have_latest = false;
   PadSlots latest{};
+  std::chrono::steady_clock::time_point latest_at{};
 };
 PadsState s_pads;
 
@@ -667,6 +669,7 @@ void PadsOnPadThreadUpdated(Core::System& system)
   std::lock_guard lk(s_pads.mutex);
   memory.CopyFromEmu(s_pads.latest.data(), Addr::PAD_STATUS, s_pads.latest.size());
   s_pads.have_latest = true;
+  s_pads.latest_at = std::chrono::steady_clock::now();
   if (s_pads.current_valid)
     WriteSlots(memory, s_pads.current_ports, s_pads.current);
 }
@@ -675,6 +678,15 @@ PadSlots PadsLatestRaw()
 {
   std::lock_guard lk(s_pads.mutex);
   return s_pads.latest;
+}
+
+double PadsLatestAgeMs()
+{
+  std::lock_guard lk(s_pads.mutex);
+  if (s_pads.latest_at == std::chrono::steady_clock::time_point{})
+    return -1;
+  return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - s_pads.latest_at)
+      .count();
 }
 
 void PadsSetAnchor(u32 port_mask)

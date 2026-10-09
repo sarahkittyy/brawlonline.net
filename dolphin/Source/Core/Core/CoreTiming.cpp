@@ -7,6 +7,7 @@
 #include <mutex>
 #include <string>
 #include <unordered_map>
+#include <utility>
 #include <vector>
 
 #include <fmt/format.h>
@@ -99,6 +100,8 @@ void CoreTimingManager::Init()
   ResetThrottle(0);
   m_rollback_resimulating = false;
   m_rollback_speed_factor = 1.0;
+  m_rollback_burst_pending = false;
+  m_rollback_burst_lateness.reset();
 
   m_event_fifo_id = 0;
   m_ev_lost = RegisterEvent("_lost_event", &EmptyTimedCallback);
@@ -404,6 +407,19 @@ bool CoreTimingManager::IsSpeedUnlimited() const
 
 void CoreTimingManager::SetRollbackResimulating(bool resimulating)
 {
+  if (!resimulating && m_rollback_burst_pending)
+  {
+    // The presented frame after a rollback burst continues the timeline from where it was due
+    // when the burst began: the ticks the re-run used are skipped, the wall-clock time it took
+    // comes out of the frame's slack. If it took longer, Throttle catches up as after any slow
+    // frame (bounded by MaxFallback).
+    m_rollback_burst_pending = false;
+    m_rollback_resimulating = false;
+    m_throttle_reference_cycle = GetTicks();
+    m_throttle_reference_time = m_rollback_burst_due;
+    m_rollback_burst_lateness = Clock::now() - m_rollback_burst_due;
+    return;
+  }
   if (m_rollback_resimulating == resimulating)
     return;
   m_rollback_resimulating = resimulating;
@@ -413,8 +429,27 @@ void CoreTimingManager::SetRollbackResimulating(bool resimulating)
     ResetThrottle(GetTicks());
 }
 
+void CoreTimingManager::BeginRollbackBurst()
+{
+  if (m_rollback_burst_pending)
+    return;
+  if (m_throttle_adj_clock_per_sec == 0 || Core::GetIsThrottlerTempDisabled())
+    return;
+  // Taken at the loop top, before the load: the emulated ticks here are the end of the frame
+  // that was just presented, which the throttle already slept up to.
+  m_rollback_burst_due = m_rollback_resimulating ? Clock::now() :
+                                                   CalculateTargetHostTimeInternal(GetTicks());
+  m_rollback_burst_pending = true;
+}
+
+std::optional<DT> CoreTimingManager::TakeRollbackBurstLateness()
+{
+  return std::exchange(m_rollback_burst_lateness, std::nullopt);
+}
+
 void CoreTimingManager::ResetThrottleToNow()
 {
+  m_rollback_burst_pending = false;
   ResetThrottle(GetTicks());
 }
 

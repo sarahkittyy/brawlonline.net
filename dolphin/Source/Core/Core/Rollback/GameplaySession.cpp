@@ -30,6 +30,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/Swap.h"
 #include "Common/Thread.h"
+#include "Common/Timer.h"
 #include "Core/Brawlback/include/brawlback-common/BrawlbackConstants.h"
 #include "Core/Brawlback/include/gekkonet/GekkoLib/include/gekkonet.h"
 #include "Core/Config/GraphicsSettings.h"
@@ -291,6 +292,24 @@ struct State
   u64 frames = 0;
   float frames_ahead = 0;
   Clock::time_point running_since{};
+  // Network telemetry (NetStatsOnDisplayedFrame): one window of NET_STATS_WINDOW displayed frames,
+  // logged and folded into the session totals.
+  struct NetStats
+  {
+    u64 frames = 0, rollbacks = 0, resim = 0, max_depth = 0;
+    u64 bursts = 0, late = 0;  // rollback bursts, and those whose next frame was late
+    double burst_ms = 0, burst_ms_max = 0, late_ms_max = 0;
+    u64 stalls = 0;  // updates with no frame to run (waited for the peer)
+    double stall_ms = 0, stall_ms_max = 0;
+    double ahead_sum = 0, ahead_min = 1e9, ahead_max = -1e9;
+    double speed_min = 1e9, speed_max = -1e9;
+    double pad_age_sum = 0, pad_age_max = 0;
+    u64 pad_age_n = 0;
+  };
+  NetStats net_window, net_total;
+  s64 net_window_first = -1;
+  Clock::time_point burst_t0{};
+  bool burst_open = false;
   std::vector<FrameRecord> history = std::vector<FrameRecord>(CHECKSUM_HISTORY);
   std::vector<FrameRecord> first_runs = std::vector<FrameRecord>(64);
   std::vector<std::string> desync_log;
@@ -382,6 +401,9 @@ struct State
 };
 
 State s;
+
+std::string NetStatsLine(const State::NetStats& w);
+void NetStatsFold(State::NetStats& t, const State::NetStats& w);
 }  // namespace
 
 bool InMatchPhase();
@@ -1512,6 +1534,9 @@ void ResetRunStats()
   s.last_timesync_frame = UINT32_MAX;
   s.next_ping_display_frame = PING_DISPLAY_INTERVAL;
   s.rollbacks = s.max_rollback = s.frames_resimulated = s.stall_polls = s.desyncs = 0;
+  s.net_window = s.net_total = {};
+  s.net_window_first = -1;
+  s.burst_open = false;
   s.last_desync_frame = -1;
   s.region_mismatches = 0;
   s.region_mismatch_log.clear();
@@ -1557,10 +1582,18 @@ void EndRunning(Core::System& system, const std::string& reason)
   Rollback::RollbackManager::Get().EndRegionMode();
   PadsClearCurrent();
   auto& ct = system.GetCoreTiming();
+  ct.ResetThrottleToNow();  // drops a rollback burst still pending
   ct.SetRollbackResimulating(false);
   ct.SetRollbackSpeedAdjustment(1.0);
   s.resim_pass = false;
   s.end_reason = reason;
+  if (s.mode == Mode::Network)
+  {
+    NetStatsFold(s.net_total, s.net_window);
+    s.net_window = {};
+    if (s.net_total.frames)
+      INFO_LOG_FMT(BRAWLBACK, "gprb net: session: {}", NetStatsLine(s.net_total));
+  }
   s.end_game_frame = GuestOf(system).U32(Addr::GAME_FRAME + 4).value_or(0);
   INFO_LOG_FMT(BRAWLBACK, "gprb: session ended at game frame {} ({}), {} rollbacks, {} desyncs",
                s.end_game_frame, reason, s.rollbacks, s.desyncs);
@@ -1835,8 +1868,10 @@ void PerformQueuedSave(Core::System& system)
         s.region_chunks.erase(s.region_chunks.begin());
     }
   }
+  if (s.mode == Mode::SyncTest)
   {
-    // Sync test diagnostics: compare each part with the frame's first run.
+    // Sync test diagnostics: compare each part with the frame's first run. In a network session a
+    // re-run differs from the first run whenever the prediction was wrong: only noise there.
     auto& first = s.first_runs[static_cast<size_t>(s.queued_save.frame) % s.first_runs.size()];
     if (first.frame == s.queued_save.frame)
     {
@@ -1868,6 +1903,134 @@ void PerformQueuedSave(Core::System& system)
 }
 
 bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count);
+
+// A rollback is about to load: the frames it re-runs must not push the presented frame after them
+// back in wall-clock time (CoreTimingManager::BeginRollbackBurst). PPR_GPRB_OLD_THROTTLE=1 keeps
+// the old behaviour (the throttle re-anchored at the presented frame), for comparisons.
+void BeginBurst(Core::System& system)
+{
+  static const bool old_throttle = std::getenv("PPR_GPRB_OLD_THROTTLE") != nullptr;
+  if (!old_throttle)
+    system.GetCoreTiming().BeginRollbackBurst();
+  if (!s.burst_open)
+  {
+    s.burst_open = true;
+    s.burst_t0 = Clock::now();
+  }
+}
+
+int RemoteHandle()
+{
+  for (int h = 0; h < s.num_players; ++h)
+  {
+    if (std::find(s.local_handles.begin(), s.local_handles.end(), h) == s.local_handles.end())
+      return h;
+  }
+  return -1;
+}
+
+constexpr u64 NET_STATS_WINDOW = 600;  // displayed frames (10 s)
+
+std::string NetStatsLine(const State::NetStats& w)
+{
+  const double n = static_cast<double>(std::max<u64>(w.frames, 1));
+  std::string line = fmt::format(
+      "{} frames, rollbacks {} ({:.1f}%), resimulated {} (avg depth {:.2f}, max {}), "
+      "rollback cost avg {:.2f} ms max {:.2f} ms, late after rollback {} (max {:.2f} ms), "
+      "waits for the peer {} ({:.0f} ms, max {:.1f} ms), frames ahead avg {:.2f} [{:.2f}, {:.2f}], "
+      "speed [{:.4f}, {:.4f}]",
+      w.frames, w.rollbacks, 100.0 * w.rollbacks / n, w.resim,
+      w.rollbacks ? static_cast<double>(w.resim) / w.rollbacks : 0.0, w.max_depth,
+      w.bursts ? w.burst_ms / w.bursts : 0.0, w.burst_ms_max, w.late, w.late_ms_max, w.stalls,
+      w.stall_ms, w.stall_ms_max, w.ahead_sum / n, w.frames ? w.ahead_min : 0.0,
+      w.frames ? w.ahead_max : 0.0, w.frames ? w.speed_min : 1.0, w.frames ? w.speed_max : 1.0);
+  if (w.pad_age_n)
+  {
+    line += fmt::format(", pad sample age avg {:.1f} ms max {:.1f} ms", w.pad_age_sum / w.pad_age_n,
+                        w.pad_age_max);
+  }
+  return line;
+}
+
+void NetStatsFold(State::NetStats& t, const State::NetStats& w)
+{
+  t.frames += w.frames;
+  t.rollbacks += w.rollbacks;
+  t.resim += w.resim;
+  t.max_depth = std::max(t.max_depth, w.max_depth);
+  t.bursts += w.bursts;
+  t.late += w.late;
+  t.burst_ms += w.burst_ms;
+  t.burst_ms_max = std::max(t.burst_ms_max, w.burst_ms_max);
+  t.late_ms_max = std::max(t.late_ms_max, w.late_ms_max);
+  t.stalls += w.stalls;
+  t.stall_ms += w.stall_ms;
+  t.stall_ms_max = std::max(t.stall_ms_max, w.stall_ms_max);
+  t.ahead_sum += w.ahead_sum;
+  t.ahead_min = std::min(t.ahead_min, w.ahead_min);
+  t.ahead_max = std::max(t.ahead_max, w.ahead_max);
+  t.speed_min = std::min(t.speed_min, w.speed_min);
+  t.speed_max = std::max(t.speed_max, w.speed_max);
+  t.pad_age_sum += w.pad_age_sum;
+  t.pad_age_max = std::max(t.pad_age_max, w.pad_age_max);
+  t.pad_age_n += w.pad_age_n;
+}
+
+// Network sessions: every NET_STATS_WINDOW displayed frames, one log line of what the netcode did,
+// with the link's numbers from GekkoNet.
+void NetStatsOnDisplayedFrame(Core::System& system)
+{
+  if (s.mode != Mode::Network)
+    return;
+  auto& w = s.net_window;
+  if (s.net_window_first < 0)
+    s.net_window_first = s.current_frame;
+  ++w.frames;
+  if (s.ops.adv_count > 1)
+  {
+    ++w.rollbacks;
+    w.resim += static_cast<u64>(s.ops.adv_count - 1);
+    w.max_depth = std::max<u64>(w.max_depth, static_cast<u64>(std::max(s.last_load_back, 0)));
+  }
+  if (s.burst_open)
+  {
+    s.burst_open = false;
+    const double ms = std::chrono::duration<double, std::milli>(Clock::now() - s.burst_t0).count();
+    ++w.bursts;
+    w.burst_ms += ms;
+    w.burst_ms_max = std::max(w.burst_ms_max, ms);
+  }
+  if (const auto late = system.GetCoreTiming().TakeRollbackBurstLateness())
+  {
+    const double ms = std::chrono::duration<double, std::milli>(*late).count();
+    if (ms > 0.5)
+    {
+      ++w.late;
+      w.late_ms_max = std::max(w.late_ms_max, ms);
+    }
+  }
+  w.ahead_sum += s.frames_ahead;
+  w.ahead_min = std::min<double>(w.ahead_min, s.frames_ahead);
+  w.ahead_max = std::max<double>(w.ahead_max, s.frames_ahead);
+  w.speed_min = std::min(w.speed_min, s.speed_factor);
+  w.speed_max = std::max(w.speed_max, s.speed_factor);
+  if (w.frames < NET_STATS_WINDOW)
+    return;
+
+  std::string link;
+  if (const int rh = RemoteHandle(); s.gekko && rh >= 0)
+  {
+    GekkoNetworkStats st{};
+    gekko_network_stats(s.gekko, rh, &st);
+    link = fmt::format("; ping {} ms (avg {:.1f}, jitter {:.1f}), {:.1f}/{:.1f} kB/s out/in",
+                       st.last_ping, st.avg_ping, st.jitter, st.kb_sent, st.kb_received);
+  }
+  INFO_LOG_FMT(BRAWLBACK, "gprb net: frames {}-{}: {}{}", s.net_window_first, s.current_frame,
+               NetStatsLine(w), link);
+  NetStatsFold(s.net_total, w);
+  w = {};
+  s.net_window_first = -1;
+}
 
 bool HandleGekkoFrame(Core::System& system)
 {
@@ -2007,6 +2170,7 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
     if (frames_back >= 1 && frames_back <= MAX_ROLLBACK_FRAMES && rbm.m_ring_count >= 2 &&
         frames_back < rbm.m_ring_count)
     {
+      BeginBurst(system);
       rbm.LoadFrame(system, frames_back);
       ++s.rollbacks;
       s.max_rollback = std::max<u64>(s.max_rollback, static_cast<u64>(frames_back));
@@ -2119,7 +2283,10 @@ bool HostWait(Core::System& system, Pred pred, std::chrono::milliseconds max)
     if (!CpuRunning(system) || Clock::now() > deadline)
       return false;
     s.mutex.unlock();
-    std::this_thread::sleep_for(std::chrono::microseconds(250));
+    // A sub-millisecond sleep_for can take a whole scheduler quantum (1-2 ms or more on Windows);
+    // the precision timer keeps the poll at about 100 us.
+    static Common::PrecisionTimer timer;
+    timer.SleepUntil(Clock::now() + std::chrono::microseconds(100));
     s.mutex.lock();
   }
   return true;
@@ -2259,6 +2426,7 @@ bool ReplayNextUpdate(Core::System& system)
   {
     if (load_back < rbm.m_ring_count)
     {
+      BeginBurst(system);
       rbm.LoadFrame(system, load_back);
       ++s.rollbacks;
       s.max_rollback = std::max<u64>(s.max_rollback, static_cast<u64>(load_back));
@@ -2351,6 +2519,15 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   else if (s.iteration == 0)
   {
     CaptureLocalInputs();
+    if (s.mode == Mode::Network)
+    {
+      if (const double age = PadsLatestAgeMs(); age >= 0)
+      {
+        s.net_window.pad_age_sum += age;
+        s.net_window.pad_age_max = std::max(s.net_window.pad_age_max, age);
+        ++s.net_window.pad_age_n;
+      }
+    }
     if (!HandleGekkoFrame(system))
     {
       EndRunning(system, s.error.empty() ? "gekko session failed" : s.error);
@@ -2365,6 +2542,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     if (s.ops.adv_count == 0)
     {
       // The peer is behind: wait on the host, polling GekkoNet, instead of spinning guest code.
+      const auto wait_t0 = Clock::now();
       HostWait(
           system,
           [&] {
@@ -2374,6 +2552,10 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
           },
           std::chrono::milliseconds(2000));
       ct.ResetThrottleToNow();
+      const double ms = std::chrono::duration<double, std::milli>(Clock::now() - wait_t0).count();
+      ++s.net_window.stalls;
+      s.net_window.stall_ms += ms;
+      s.net_window.stall_ms_max = std::max(s.net_window.stall_ms_max, ms);
     }
     UpdateTimeSync(system);
     UpdatePingDisplay();
@@ -2437,6 +2619,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   {
     Rollback::PresentStats::OnDisplayedFrameStart(s.ops.adv_count > 1);
     ++s.frames;
+    NetStatsOnDisplayedFrame(system);
   }
   PadSlots slots = s.ops.slots[i];
   if (s.mode == Mode::SyncTest && s.st_opts.inject_input)
