@@ -23,12 +23,12 @@ Dolphin's harness status (`gprb_status`) reports `gone_flag_addr`, and per peer 
 
 ### The team byte
 
-Each player's lock-in carries a team, `0xFF` = no team (free-for-all), else Brawl's team number (`gmPlayerInitData::m_teamNo`: 0 red, 1 blue, 2 green; 0-3 accepted).
+Each player's lock-in carries a team, `0xFF` = no team (free-for-all), else Brawl's team colour (`gmPlayerInitData::m_teamNo`: 0 red, 1 blue, 2 green; Brawl has three, so 0-2).
 
 | Where | Field |
 |---|---|
 | Dolphin | `Gprb::Session::LockIn::team`, `LobbyPlayer::team` (and so `Lobby::players[port].team`) |
-| Wire | the `"lock"` object of the control messages: `"team": <0-3 or 255>`; the host's `"match_setup"` players carry it too. Anything else from a peer reads as 255. |
+| Wire | the `"lock"` object of the control messages: `"team": <0-2 or 255>`; the host's `"match_setup"` players carry it too. Anything else from a peer reads as 255. |
 | LOCAL (game -> Dolphin) | offset **0x34** (the first byte of the old `_reserved[3]`), `u8 team`, written by the game with its lock-in (covered by the lock-in's `seq`). |
 | SESSION (Dolphin -> game) | `players[port]` offset **0x03** (the old `_pad`), `u8 team`; 0xFF for an absent port. |
 
@@ -70,9 +70,9 @@ State messages go to every peer every 50 ms (one JSON per peer), pings every 200
 
 ### The lobby with N players
 
-Each player's lock-in (now with the team) goes to every peer. The host decides a game's setup once every player still in the session has been heard and is locked in: players by port (`MatchSetup::players[port]`, `present`), the stage from the last game's loser's pick (`GameResult::loser`), else the first pick by port, else random. The setup's wire form: a 1v1 keeps `[kind, costume, pv]` per player; anything else (ports with gaps, teams) sends `[kind, costume, pv, team, port]`; the joiner accepts both and the setup branch's `[kind, costume, pv, team]`, checks every field (ports 0-3 and unique, 2-4 players, teams 0-3 or none) and ignores a setup without a player on its own port. The setup branch replaces the stage pick and team rules (`GameSetup::DecideTeams`, `StagePickPort`, `DecideOutcome`); this branch only makes the lobby carry 2-4 players by port.
+Each player's lock-in (now with the team) goes to every peer. The host decides a game's setup once every player still in the session has been heard and is locked in: players by port (`MatchSetup::players[port]`, `present`), the stage from the last game's loser's pick (`GameResult::loser`), else the first pick by port, else random. The setup's wire form: a 1v1 keeps `[kind, costume, pv]` per player; anything else (ports with gaps, teams) sends `[kind, costume, pv, team, port]`; the joiner accepts both and the setup branch's `[kind, costume, pv, team]`, checks every field (ports 0-3 and unique, 2-4 players, teams 0-2 or none; a team battle (`"teams": true`) must pass `GameSetup::DecideTeams` again) and ignores a setup without a player on its own port. The team and stage rules are the setup branch's (`GameSetup::DecideTeams`, `StagePickPort`, `DecideOutcome`, `docs/nplayer/setup.md`), called with the players by port.
 
-Game results (`GameResult`, read from the state every peer ended on) cover 2-4 players: per port stocks and damage (fighter entries name their port at +0x58; the session falls back to entry = port), and teams from the match's setup. Winner: the most stocks, then the least damage (summed per team in a team battle); loser: last place (the lowest port among equals), a 1v1 draw has none.
+Game results (`GameResult`, read from the state every peer ended on) cover 2-4 players: per port stocks and damage (`ReadFighterFields` looks fighters up by player number, the setup branch's fix: Brawl has no fighter entry for an empty port), the teams from the match's setup and each port's elimination order (SESSION `out`). A 1v1 keeps its rule (more stocks, then less damage; the loser picks the stage, both after a draw); 3-4 players use `GameSetup::DecideOutcome` (`GameResult::place`, `winner`, `pickers`). A player who left the match is not placed.
 
 ### A player leaves a 3-4 player match
 

@@ -86,4 +86,72 @@ picojson::object Status();
 // The default starters (P+'s competitive five: Battlefield, Final Destination, Smashville,
 // Dream Land, Pokemon Stadium 2) as srStageKind.
 const std::vector<u16>& DefaultStarters();
+
+// ---- 3-4 player matches: free-for-all and teams (rooms; docs/nplayer/setup.md) ----
+// Pure functions: the session calls them with what every machine has (the lock-ins, the end state
+// of the last game, read from the rolled-back state), so every machine decides the same. Ports
+// are in-game ports (0 = P1); a room's slot is its port, and ports may be empty (P1, P3).
+
+constexpr int MAX_PORTS = 4;
+constexpr u8 NO_TEAM = 0xFF;
+// Brawl's team colours (gmPlayerInitData+0x0B; Slippi's order): 0 red, 1 blue, 2 green.
+constexpr u8 NUM_TEAMS = 3;
+
+enum class SetupError : u8
+{
+  None = 0,
+  SameTeam = 1,       // a team battle with everyone on one colour
+  NoTeam = 2,         // a team battle and a player without a colour
+  TooFewPlayers = 3,  // fewer than two players
+};
+// The CSS's status text for an error ("Pick different teams"), "" for None.
+const char* SetupErrorText(SetupError error);
+
+// A port's player for the next game: whether the port is taken, and the team colour from their
+// lock-in (another machine's byte: anything but 0-2 is "no team").
+struct Seat
+{
+  bool present = false;
+  u8 team = NO_TEAM;
+};
+struct TeamSetup
+{
+  SetupError error = SetupError::None;
+  bool teams = false;                                  // a team battle
+  std::array<u8, MAX_PORTS> team{NO_TEAM, NO_TEAM, NO_TEAM, NO_TEAM};  // NO_TEAM in a free-for-all
+};
+// `teams_on` is the room's Teams switch. With two players it has no effect (a 1v1, as Slippi).
+// A team battle needs every player on one of the three colours and at least two colours (2v2, 2v1,
+// 3v1, 2v1v1 and 1v1v1 are fine; everyone on one colour is refused, "Pick different teams").
+TeamSetup DecideTeams(bool teams_on, const std::array<Seat, MAX_PORTS>& seats);
+
+// One port at the end of a game: as set up, and what the game's end state shows.
+struct PortEnd
+{
+  bool present = false;
+  u8 team = NO_TEAM;  // the port's team in a team battle
+  s32 stocks = 0;
+  float damage = 0;
+  u8 out = 0;  // the game's elimination order (SESSION `out`): 1 = first out, 0 = still in
+};
+struct Outcome
+{
+  std::array<u8, MAX_PORTS> place{};  // 1 = first (shared by a tie), 0 = not playing
+  // Free-for-all: the winner's port; teams: the lowest port of the winning team. 0xFE: no single
+  // winner (a draw), 0xFF: nobody played.
+  u8 winner = 0xFF;
+  // Ports (a bit each) that pick the next game's stage (the loser's pick): the last place; in a
+  // team battle the losing team's lowest port; a tie for last place: the lowest port among them;
+  // everyone tied (a draw): each side's lowest port (a 1v1 draw: both, as Direct).
+  u8 pickers = 0;
+};
+// A side is a player (free-for-all) or a team. Sides still in at the end come first, ranked by
+// their stocks (more is better) and then their damage (less is better), P+'s time-out rule; sides
+// that were eliminated come after them, the later out the better.
+Outcome DecideOutcome(bool teams, const std::array<PortEnd, MAX_PORTS>& ports);
+
+// The port whose stage pick the next game is played on: the first picker (in port order) that
+// picked a stage, else the first port that did; -1: none (a random stage). `picks` holds each
+// port's pick, 0xFFFF none.
+int StagePickPort(u8 pickers, const std::array<u16, MAX_PORTS>& picks);
 }  // namespace Online::GameSetup

@@ -63,7 +63,8 @@ bool ValidCharKind(u32 kind);
 // Colour numbers: the character select's own bound (game-code online_menu.cpp selectedCostume).
 constexpr u32 MAX_COSTUME = 0x1F;
 bool ValidCostume(u32 costume);
-// A lock-in's team: Brawl's team numbers 0-3 (gmPlayerInitData::m_teamNo), or 0xFF for none.
+// A lock-in's team: Brawl's three team colours 0-2 (gmPlayerInitData::m_teamNo; 0 red, 1 blue,
+// 2 green), or 0xFF for none.
 bool ValidTeam(u32 team);
 // In-game ports (the session's player slots): 0-3.
 constexpr int MAX_PORTS = 4;

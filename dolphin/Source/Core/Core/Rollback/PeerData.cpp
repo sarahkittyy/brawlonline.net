@@ -163,7 +163,7 @@ bool ValidCostume(u32 costume)
 
 bool ValidTeam(u32 team)
 {
-  return team <= 3 || team == 0xFF;
+  return team <= 2 || team == 0xFF;
 }
 
 bool ValidPort(u64 port)

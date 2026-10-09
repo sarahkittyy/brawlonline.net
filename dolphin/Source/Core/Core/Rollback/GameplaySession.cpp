@@ -41,6 +41,7 @@
 #include "Core/HW/CPU.h"
 #include "Core/HW/Memmap.h"
 #include "Core/Online/GameBridge.h"
+#include "Core/Online/GameSetup.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/GameplayRollback.h"
@@ -143,6 +144,7 @@ struct MatchSetup
   u8 asl = 0;
   int num_players = 0;
   std::array<LobbyPlayer, MAX_LOBBY_PLAYERS> players{};
+  bool teams = false;  // a team battle (players[i].team)
 };
 
 // One other player of the session, by in-game port (State::peers). Everything here that came
@@ -259,7 +261,10 @@ struct State
   LockIn local_lock;
   MatchSetup setup;
   u8 last_winner = 0xFF;
-  u8 last_loser = 0xFF;
+  // Ports (bits) that pick the next game's stage (GameSetup::DecideOutcome; a 1v1: the loser,
+  // both after a draw), and why the next game cannot be set up (GameSetup::SetupError).
+  u8 last_pickers = 0;
+  u8 setup_error = 0;
   u16 last_stage = NO_STAGE;
   // The ports of the running match (a bit per in-game port), from the game's own match setup at
   // the barrier, which every peer compares; GekkoNet's handles follow them in port order.
@@ -1148,6 +1153,8 @@ picojson::value SetupJson(const MatchSetup& st)
     players.emplace_back(p);
   }
   o["players"] = picojson::value(players);
+  if (st.teams)
+    o["teams"] = picojson::value(true);
   return picojson::value(o);
 }
 
@@ -1166,6 +1173,11 @@ std::optional<MatchSetup> SetupFromJson(const picojson::object& o)
   {
     return std::nullopt;
   }
+  // A team battle ("teams"): every player carries a team colour (0-2), and the host's DecideTeams
+  // allowed the split; the joiner checks it the same way.
+  const auto teams_it = o.find("teams");
+  st.teams = teams_it != o.end() && teams_it->second.is<bool>() && teams_it->second.get<bool>();
+  std::array<Online::GameSetup::Seat, Online::GameSetup::MAX_PORTS> seats{};
   u64 index = 0;
   for (const auto& p : it->second.get<picojson::array>())
   {
@@ -1192,9 +1204,14 @@ std::optional<MatchSetup> SetupFromJson(const picojson::object& o)
     pl.char_kind = static_cast<u8>(*kind);
     pl.costume = static_cast<u8>(*costume);
     pl.port_values = PortValuesFromHex(&a[2]);
-    pl.team = static_cast<u8>(*team);
+    pl.team = st.teams ? static_cast<u8>(*team) : NO_TEAM;
+    if (st.teams && pl.team == NO_TEAM)
+      return std::nullopt;
+    seats[*port] = {true, pl.team};
     ++st.num_players;
   }
+  if (st.teams && !Online::GameSetup::DecideTeams(true, seats).teams)
+    return std::nullopt;
   if (st.num_players < 2)
     return std::nullopt;
   return st;
@@ -1281,29 +1298,47 @@ void MaybeDecideSetup()
   }
   if (!all_seen || count < 2)
     return;
+  // Free-for-all or a team battle (the room's Teams switch, each player's lock-in team).
+  std::array<Online::GameSetup::Seat, Online::GameSetup::MAX_PORTS> seats{};
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    if (locks[port])
+      seats[port] = {true, locks[port]->team};
+  }
+  const Online::GameSetup::TeamSetup teams = Online::GameSetup::DecideTeams(s.net_opts.teams, seats);
+  if (teams.error != Online::GameSetup::SetupError::None)
+  {
+    if (s.setup_error != static_cast<u8>(teams.error))
+    {
+      NOTICE_LOG_FMT(BRAWLBACK, "gprb lobby: game {} not set up: {}", game,
+                     Online::GameSetup::SetupErrorText(teams.error));
+    }
+    s.setup_error = static_cast<u8>(teams.error);
+    return;
+  }
+  s.setup_error = 0;
   const StageDecision decided = DecideStage(game);
   if (decided.applies && decided.wait)
     return;
   MatchSetup st;
   st.game = game;
   st.num_players = count;
+  st.teams = teams.teams;
   for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
   {
     if (const LockIn* l = locks[port])
-      st.players[port] = {true, l->char_kind, l->costume, l->port_values, l->team};
+      st.players[port] = {true, l->char_kind, l->costume, l->port_values, teams.team[port]};
   }
-  // The stage: the last game's loser's pick (GameResult::loser), else the first pick by port.
-  const LockIn* pick = nullptr;
-  if (s.last_loser < MAX_LOBBY_PLAYERS && locks[s.last_loser] &&
-      locks[s.last_loser]->stage_pick != NO_STAGE)
+  // The stage pick: the last game's loser's (s.last_pickers: a 1v1's loser, both after a draw),
+  // else any player's, in port order.
+  std::array<u16, Online::GameSetup::MAX_PORTS> picks{NO_STAGE, NO_STAGE, NO_STAGE, NO_STAGE};
+  for (size_t i = 0; i < locks.size(); ++i)
   {
-    pick = locks[s.last_loser];
+    if (locks[i])
+      picks[i] = locks[i]->stage_pick;
   }
-  for (const LockIn* l : locks)
-  {
-    if (!pick && l && l->stage_pick != NO_STAGE)
-      pick = l;
-  }
+  const int pick_port = Online::GameSetup::StagePickPort(s.last_pickers, picks);
+  const LockIn* pick = pick_port >= 0 ? locks[pick_port] : nullptr;
   if (decided.applies)
   {
     st.stage = decided.stage;
@@ -1999,9 +2034,11 @@ void ReportGameResult(const GameResult& r)
 }
 
 // The result of a game that ended with game set, from the state every peer ended on: per port of
-// the match its stocks and damage (the fighter entries name their port at +0x58), and the winner
-// and the player who picks the next stage (GameResult). Higher stocks, then lower damage, rank
-// first (P+'s time-out rule); teams rank by their summed stocks and damage.
+// the match its stocks and damage (ReadFighterFields, by player number), its team and its place in
+// the game's elimination order (SESSION `out`, rolled back with the match), the winner and who
+// picks the next stage. A 1v1 keeps its rule: more stocks, then less damage (P+'s time-out rule),
+// the loser picks (both after a draw). 3-4 players: Online::GameSetup::DecideOutcome. A player who
+// left the match (its gone flag, the same on every peer) is not placed.
 GameResult ReadGameResult(Core::System& system)
 {
   const Guest g = GuestOf(system);
@@ -2010,97 +2047,52 @@ GameResult ReadGameResult(Core::System& system)
   r.stage = s.setup.stage;
   r.frames = s.end_game_frame;
   const auto f = ReadFighterFields(g);
-  const auto entries = g.Ptr32(0x80624780u);
   const auto teams = MatchTeams(g);
-  // Entry -> port. Unless the entries name each port of the match exactly once, entry i is port i.
-  std::array<u32, MAX_LOBBY_PLAYERS> entry_port{0, 1, 2, 3};
-  {
-    std::array<u32, MAX_LOBBY_PLAYERS> named{0, 1, 2, 3};
-    u32 seen = 0;
-    bool ok = entries.has_value();
-    for (u32 i = 0; ok && i < MAX_LOBBY_PLAYERS; ++i)
-    {
-      const auto no = g.U32(*entries + i * 0x244u + 0x58);
-      if (no && *no < MAX_LOBBY_PLAYERS && (s.match_ports & (1u << *no)))
-      {
-        ok = !(seen & (1u << *no));
-        seen |= 1u << *no;
-        named[i] = *no;
-      }
-      else
-      {
-        named[i] = 0xFF;
-      }
-    }
-    if (ok && seen == s.match_ports)
-      entry_port = named;
-  }
-  for (u32 i = 0; i < MAX_LOBBY_PLAYERS; ++i)
-  {
-    const u32 port = entry_port[i];
-    // A player who left the match (its gone flag, the same on every peer) is not ranked.
-    if (port >= MAX_LOBBY_PLAYERS || !(s.match_ports & (1u << port)) || r.present[port] ||
-        (s.gone_enabled && s.gone_written[port]))
-    {
-      continue;
-    }
-    r.present[port] = true;
-    r.stocks[port] = static_cast<s32>(f[i][2]);
-    std::memcpy(&r.damage[port], &f[i][1], 4);
-    r.char_kind[port] = s.setup.players[port].char_kind;
-    r.team[port] = teams[port];
-    ++r.num_players;
-  }
-  // Rank "sides": one per team in a team battle, else one per port.
-  struct Side
-  {
-    s32 stocks = 0;
-    float damage = 0;
-    int first_port = -1;
-  };
-  std::map<int, Side> sides;
+  const u32 session = Online::GameBridge::SessionAddress();
+  std::array<Online::GameSetup::PortEnd, Online::GameSetup::MAX_PORTS> ends{};
+  bool team_battle = false;
   for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
   {
-    if (!r.present[port])
+    if (!(s.match_ports & (1u << port)) || (s.gone_enabled && s.gone_written[port]))
       continue;
-    const int key = r.team[port] != NO_TEAM ? 100 + r.team[port] : port;
-    Side& sd = sides[key];
-    sd.stocks += r.stocks[port];
-    sd.damage += r.damage[port];
-    if (sd.first_port < 0)
-      sd.first_port = port;
+    r.present[port] = true;
+    r.stocks[port] = static_cast<s32>(f[port][2]);
+    std::memcpy(&r.damage[port], &f[port][1], 4);
+    r.char_kind[port] = s.setup.players[port].char_kind;
+    r.team[port] = teams[port];
+    team_battle = team_battle || teams[port] != NO_TEAM;
+    ++r.num_players;
+    auto& e = ends[port];
+    e.present = true;
+    e.team = teams[port];
+    e.stocks = r.stocks[port];
+    e.damage = r.damage[port];
+    if (const u8* out = session ? g.Ptr(session + Online::GameBridge::SESSION_PLAYERS_OFF +
+                                            port * Online::GameBridge::SESSION_PLAYER_SIZE +
+                                            Online::GameBridge::SESSION_PLAYER_OUT,
+                                        1) :
+                                  nullptr)
+    {
+      e.out = *out;
+    }
   }
-  // a ranks above b
-  const auto better = [](const Side& a, const Side& b) {
-    return a.stocks != b.stocks ? a.stocks > b.stocks : a.damage < b.damage;
-  };
-  const auto tied = [](const Side& a, const Side& b) {
-    return a.stocks == b.stocks && a.damage == b.damage;
-  };
-  if (sides.size() < 2)
+  if (std::popcount(s.match_ports) == 2)
   {
-    r.winner = r.loser = 0xFE;
+    const int a = std::countr_zero(s.match_ports);
+    const int b = 31 - std::countl_zero(s.match_ports);
+    const s32 sa = r.stocks[a], sb = r.stocks[b];
+    const float da = r.damage[a], db = r.damage[b];
+    r.winner = static_cast<u8>(sa != sb ? (sa > sb ? a : b) : (da != db ? (da < db ? a : b) : 0xFE));
+    r.pickers = r.winner == 0xFE ? static_cast<u8>(s.match_ports) :
+                                   static_cast<u8>(s.match_ports & ~(1u << r.winner));
     return r;
   }
-  const Side* best = nullptr;
-  const Side* worst = nullptr;
-  for (const auto& [key, sd] : sides)
-  {
-    if (!best || better(sd, *best))
-      best = &sd;
-    // Last place; among equals the lower port (the first one seen).
-    if (!worst || better(*worst, sd))
-      worst = &sd;
-  }
-  bool best_tied = false;
-  for (const auto& [key, sd] : sides)
-    best_tied = best_tied || (&sd != best && tied(sd, *best));
-  r.winner = best_tied ? 0xFE : static_cast<u8>(best->first_port);
-  // A 1v1 draw has no loser (both pick, as Direct); otherwise last place picks.
-  r.loser = sides.size() == 2 && best_tied ? 0xFE : static_cast<u8>(worst->first_port);
+  const auto outcome = Online::GameSetup::DecideOutcome(team_battle, ends);
+  r.winner = outcome.winner;
+  r.pickers = outcome.pickers;
+  r.place = outcome.place;
   return r;
 }
-
 void EndRunning(Core::System& system, const std::string& reason)
 {
   PassLogClose();
@@ -2137,15 +2129,19 @@ void EndRunning(Core::System& system, const std::string& reason)
     {
       const GameResult r = ReadGameResult(system);
       s.last_winner = r.winner;
-      s.last_loser = r.loser;
+      s.last_pickers = r.pickers;
       std::string who;
       for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
       {
         if (r.present[port])
+        {
           who += fmt::format(" P{} {}/{}", port + 1, r.stocks[port], r.damage[port]);
+          if (r.num_players > 2)
+            who += fmt::format(" place {}", r.place[port]);
+        }
       }
-      INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} winner {} loser {} (stocks/damage:{})", r.game,
-                   r.winner, r.loser, who);
+      INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} winner {} stage pickers {:#x} (stocks/damage:{})",
+                   r.game, r.winner, r.pickers, who);
       ReportGameResult(r);
     }
     // Ready for the next match on the same connection.
@@ -3550,7 +3546,8 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.match_index = 0;
   s.setup = {};
   s.last_winner = 0xFF;
-  s.last_loser = 0xFF;
+  s.last_pickers = 0;
+  s.setup_error = 0;
   s.last_stage = NO_STAGE;
   s.stage_pool.clear();
   s.await_scene_exit = false;
@@ -3594,7 +3591,7 @@ void SetLocalLock(const LockIn& lock_in)
   const bool changed = lock.ready != s.local_lock.ready || lock.game != s.local_lock.game ||
                        lock.char_kind != s.local_lock.char_kind ||
                        lock.stage_pick != s.local_lock.stage_pick ||
-                       lock.port_values != s.local_lock.port_values;
+                       lock.port_values != s.local_lock.port_values || lock.team != s.local_lock.team;
   s.local_lock = lock;
   if (changed)
   {
@@ -3682,9 +3679,11 @@ Lobby GetLobby()
     l.stage = s.setup.stage;
     l.asl = s.setup.asl;
     l.players = s.setup.players;
+    l.teams = s.setup.teams;
   }
   l.last_winner = s.last_winner;
-  l.last_loser = s.last_loser;
+  l.stage_pickers = s.last_pickers;
+  l.setup_error = s.setup_error;
   return l;
 }
 
@@ -3872,7 +3871,9 @@ picojson::value Status()
     lobby["peer_lock"] = LockJson(fp >= 0 ? s.peers[fp].lock : LockIn{});
     lobby["setup"] = SetupJson(s.setup);
     lobby["last_winner"] = picojson::value(static_cast<double>(s.last_winner));
-    lobby["last_loser"] = picojson::value(static_cast<double>(s.last_loser));
+    lobby["stage_pickers"] = picojson::value(static_cast<double>(s.last_pickers));
+    lobby["setup_error"] = picojson::value(static_cast<double>(s.setup_error));
+    lobby["teams"] = picojson::value(s.net_opts.teams);
     lobby["last_stage"] = picojson::value(static_cast<double>(s.last_stage));
     picojson::array stages;
     for (const u16 st : AllowedStages())
@@ -4003,7 +4004,7 @@ MatchStart ApplyMatchStart(Core::System& system, std::string_view when)
         const size_t comma = rest.find(',');
         const std::string_view item = rest.substr(0, comma);
         rest = comma == std::string_view::npos ? std::string_view() : rest.substr(comma + 1);
-        if (item.size() == 1 && item[0] >= '0' && item[0] <= '3')
+        if (item.size() == 1 && item[0] >= '0' && item[0] <= '2')
         {
           const u8 team = static_cast<u8>(item[0] - '0');
           system.GetMemory().CopyToEmu(*mm + MM_PLAYERS + port * MM_PLAYER_SIZE + PI_TEAM, &team, 1);

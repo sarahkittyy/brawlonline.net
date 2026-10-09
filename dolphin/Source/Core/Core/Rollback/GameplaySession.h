@@ -121,6 +121,9 @@ struct ConnectOptions
   // without repeats until it is used up (Slippi's stage pool). A stage pick (Direct's loser) is
   // not checked against it: Slippi does not restrict Direct's stage select.
   std::vector<u16> stages;
+  // The room's Teams switch (docs/nplayer/setup.md): 3-4 players play a team battle with each
+  // player's lock-in team (Online::GameSetup::DecideTeams); with 2 players it has no effect.
+  bool teams = false;
 };
 
 // ---- The lobby: the online character select between matches (Slippi's MATCH_SELECTIONS). ----
@@ -130,9 +133,10 @@ struct ConnectOptions
 // it; every game then starts that match from its own character select. A session has 2 to
 // MAX_LOBBY_PLAYERS players, by in-game port (gaps allowed).
 constexpr int MAX_LOBBY_PLAYERS = 4;
-// A lock-in's team (gmPlayerInitData::m_teamNo: 0 red, 1 blue, 2 green), or none (free-for-all).
+// A lock-in's team (gmPlayerInitData::m_teamNo: 0 red, 1 blue, 2 green; Brawl's three team
+// colours, Online::GameSetup::NUM_TEAMS), or none (free-for-all).
 constexpr u8 NO_TEAM = 0xFF;
-constexpr u8 MAX_TEAM = 3;
+constexpr u8 MAX_TEAM = 2;
 
 // The gone flags (docs/nplayer/session.md, "The gone flag"): `u8 gone[4]` by in-game port at this
 // offset into the game's PPOM SESSION block (game-code/PPOnline/include/ppom.h). In a 3-4 player
@@ -159,7 +163,7 @@ struct LockIn
   u8 asl = 0;             // P+ alternate-stage buttons of that pick
   u32 game = 0;           // the game (1-based) this lock-in is for
   PortValues port_values{};  // the player's name tag and controls (all zero: the defaults)
-  u8 team = NO_TEAM;      // the player's team (0-3), NO_TEAM: none
+  u8 team = NO_TEAM;      // the player's team colour for a team battle (0-2), NO_TEAM none
 };
 void SetLocalLock(const LockIn& lock);
 
@@ -169,7 +173,7 @@ struct LobbyPlayer
   u8 char_kind = 0xFF;
   u8 costume = 0;
   PortValues port_values{};
-  u8 team = NO_TEAM;
+  u8 team = NO_TEAM;  // in a team battle (MatchSetup / Lobby `teams`), else NO_TEAM
 };
 
 struct Lobby
@@ -187,7 +191,9 @@ struct Lobby
   u8 asl = 0;
   std::array<LobbyPlayer, MAX_LOBBY_PLAYERS> players{};  // by in-game port
   u8 last_winner = 0xFF;      // in-game port of the last game's winner, 0xFE draw, 0xFF none
-  u8 last_loser = 0xFF;       // in-game port that picks the next stage (see GameResult)
+  bool teams = false;         // the next game is a team battle (players[i].team)
+  u8 stage_pickers = 0;       // ports (bits) that pick the next stage (GameSetup::Outcome)
+  u8 setup_error = 0;         // GameSetup::SetupError: why the next game is not set up
 };
 Lobby GetLobby();
 
@@ -197,9 +203,11 @@ struct GameResult
 {
   u32 game = 0;           // 1-based, counting draws
   u8 winner = 0xFF;       // in-game port, 0xFE draw; teams: the lowest port of the winning team
-  // 2 players: the other port. Free-for-all: last place (fewest stocks, then most damage, then
-  // the lower port). Teams: the lowest port of the last team. 0xFE draw.
-  u8 loser = 0xFF;
+  // Ports (a bit each) that pick the next game's stage: a 1v1's loser (both after a draw); 3-4
+  // players: Online::GameSetup::DecideOutcome (last place, by the elimination order too).
+  u8 pickers = 0;
+  // 3-4 players: each port's place (1 = first), 0 = not playing (DecideOutcome).
+  std::array<u8, MAX_LOBBY_PLAYERS> place{};
   int num_players = 0;
   std::array<bool, MAX_LOBBY_PLAYERS> present{};
   std::array<s32, MAX_LOBBY_PLAYERS> stocks{};
