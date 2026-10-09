@@ -124,7 +124,7 @@ namespace PPOM {
     };                    // 0x10
 
     // Ranked's game setup (Dolphin Online/GameSetup.h; Slippi's GP_FETCH_STEP / GP_COMPLETE_STEP):
-    // stage strikes 1-2-1 for game 1, then the winner's ban, the loser's pick and the characters
+    // stage strikes 1-2-1 for game 1, then the winner's two bans, the loser's pick and the characters
     // (winner first). 0xC0 GP_COMPLETE_STEP request payload: {u8 stage kind} (a strike or pick).
     enum StepType { STEP_NONE = 0, STEP_STRIKE = 1, STEP_PICK = 2, STEP_CHAR = 3, STEP_DONE = 4 };
     struct GameStep {     // 0xC1 GP_FETCH_STEP response payload

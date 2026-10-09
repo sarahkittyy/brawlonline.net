@@ -8,7 +8,7 @@
 // host, in-game port 0) strikes one, player 2 strikes two, player 1 strikes one; the stage left is
 // played. The characters are the ones locked in on the CSS before the search (after a draw: the
 // last game's; the CSS locks in again at once, time_up).
-// Games 2+: the winner of the last game bans one stage of the counterpick list, then the loser
+// Games 2+: the winner of the last game bans two stages of the counterpick list, then the loser
 // picks the stage from the rest; the loser cannot pick the stage they last won on once they have
 // won a game (Slippi's "Dave's stupid rule"). Then the winner may change character, and after the
 // winner has locked in, the loser (who sees the winner's choice).
@@ -67,7 +67,7 @@ struct View
 };
 
 // The ranked set starts: this player's in-game port (0 host, 1 joiner) and the stage lists.
-// Empty or unusable lists (not five starters, fewer than three counterpicks) fall back to P+'s
+// Empty or unusable lists (not five starters, fewer than four counterpicks) fall back to P+'s
 // starters / the legal list.
 void Begin(int local_port, std::vector<u16> starters, std::vector<u16> counterpicks);
 void End();
