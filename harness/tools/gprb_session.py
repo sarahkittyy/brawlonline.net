@@ -611,11 +611,37 @@ def run_session_n(preset: str, cpu: str, args: argparse.Namespace, run: int) -> 
     orig = G.make_instance
 
     def mk(name, rtc=None, **kw):
-        return orig(name, **kw) if rtc is None else orig(name, rtc=rtc, **kw)
+        inst = orig(name, **kw) if rtc is None else orig(name, rtc=rtc, **kw)
+        if args.plugin:
+            # Our game plugin on the SD card: its PPOM block holds SESSION, where the session writes
+            # the gone flags and the plugin removes a gone player's fighter (docs/nplayer/setup.md).
+            sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools" / "sdcard"))
+            import patch_sd
+            plugin = Path(args.plugin)
+            patch_sd.patch_image(inst.user_dir / "Wii" / "sd.raw",
+                                 [(plugin.read_bytes(), f"{patch_sd.PLUGIN_DIR}/{plugin.name}")])
+        return inst
     G.make_instance = mk
     try:
         with G.instances(specs) as insts, _keep_logs(args, insts, rep):
             clients = [i.client for i in insts]
+            if args.plugin:
+                # With the plugin P+ boots to the online menus: back to the main menu, then Versus.
+                def to_css(c, port: int) -> None:
+                    deadline = time.monotonic() + 120
+                    while time.monotonic() < deadline:
+                        sc = B.read_scene(c.read_mem).scene
+                        if sc is B.Scene.CSS:
+                            break
+                        if sc is B.Scene.MAIN_MENU:
+                            B.boot_to_css(c, port)
+                            break
+                        B.tap(c, port, ["B"], hold=3, release=40)
+                    sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools" / "gamecode"))
+                    import ppom
+                    # The plugin removes a gone player's fighter in a local Versus match too.
+                    ppom.set_cfg_bits(c, ppom.CFG_TEST_GONE, True)
+                G.par([lambda c=c: to_css(c, ports[0]) for c in clients])
             G.par([lambda c=c: B.wait_scene(c, [B.Scene.CSS], 60 * 120) for c in clients])
             udp = [free_udp_port() for _ in ports]
             # One proxy per port that has a higher port in the match: everyone above sends through it.
@@ -696,6 +722,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--chars", default="fox,falco,mario,marth", help="with --ports: one character per port")
     ap.add_argument("--teams", default="",
                     help="with --ports: a team battle, the team (0 red, 1 blue, 2 green) of P1..P4, e.g. 0,1,0,1")
+    ap.add_argument("--plugin", default="",
+                    help="with --ports: our game plugin (PPOnline.rel) on every SD card; the session writes the "
+                         "gone flags into its SESSION block and the plugin removes the gone player's fighter")
     ap.add_argument("--drop", default="",
                     help="with --ports: PORT:SECONDS[:stop|kill], that player leaves the match after SECONDS "
                          "(stop = it leaves the session, kill = its Dolphin is killed)")
