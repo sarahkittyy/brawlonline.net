@@ -228,13 +228,14 @@ Option: serve a tiny GraphQL endpoint with exactly these operations (async-graph
 | `GET /v1/me` → `{uid, displayName, connectCode, playKey, rulesVersion, ...}` | `getUser` incl. `private.playKey` | session |
 | `POST /v1/me/netplay {codeStart}` | `userInitNetplay` | session |
 | `POST /v1/me/rename`, `POST /v1/me/accept-rules` | `userRename`, `userAcceptRules` | session |
-| `GET /user/{uid}?additionalFields=chatMessages,rank` | users-rest | public (as Slippi) |
+| `GET /user/{uid}?additionalFields=chatMessages,rank` (built; `rank` has the Elo rating, rated sets, leaderboard `position` and `rankedPlayers`) | users-rest | public (as Slippi) |
 | `GET /v1/dolphin/latest?purpose=&beta=` | `getLatestDolphin` | — |
-| `POST /v1/ranked/report-game` (built, ranked games only; no `uploadUrl` yet) | `reportOnlineGame` | play key |
+| `POST /v1/ranked/report-game` (built; Ranked, Unranked and Direct games, only Ranked rated; no `uploadUrl` yet) | `reportOnlineGame` | play key |
 | `POST /v1/ranked/report-leave {kind: left \| opponent_left}` (built) | `reportOnlineMatchStatus` (`abandoned`) | play key |
 | (none: the server decides the set from the game reports) | 0xC2 path | |
 | `GET /v1/ranked/result?matchId=&uid=` (built) | `getRankedMatchPersonalResult` | public |
-| `GET /v1/leaderboard?region=&season=` | slippi.gg | — |
+| `GET /v1/ranked/leaderboard?limit=&after=` (built; keyset pages, no regions or seasons) | slippi.gg | public, per-IP limit |
+| `GET /v1/me/matches?mode=all\|ranked\|unranked&limit=&before=` (built) | slippi.gg profile | session |
 
 Play key: 32 random bytes in base64url. Store only its SHA-256. Rotate it on password change and on admin action.
 
@@ -660,8 +661,8 @@ QA finding (`harness/tools/qa_reachability.py`, run `run/artifacts/qa-reachabili
 - **P4 Ranked (2026-10-08): the rating pipeline works end to end; the ranked set screens do not exist yet.**
   - Server: the Ranked queue (closest Elo within ±150, +50 every 15 s), both clients' game and leave reports, the set settled once from them with the 4.4 rules, Elo with no tiers (4.3), `GET /v1/ranked/result`, the rating in `/user/{uid}` (`server/README.md` "Ranked").
   - Dolphin (`Online/Ranked.cpp`): reports every ranked game and early leaves, counts the best of three, closes the connection once the games are back on the CSS after the deciding game, fetches the result; `GET_RANK` (0xE3) for the game.
-  - Game: the Ranked CSS shows the rating (and the last set's change) where Direct shows the player's code. Launcher: the rating as a number instead of Slippi's tier.
-  - Not built: Ranked's strike / counterpick stage screens (every ranked game is random from the server's Ranked list, like Unranked), the character lock for the set, poor-performance termination, abandonment cooldowns, the build-hash allow-list on reports, replays, seasons, leaderboards.
+  - Game: the Ranked CSS shows the rating (and the last set's change) where Direct shows the player's code. Launcher: the rating as a number instead of Slippi's tier, the leaderboard position, and the Leaderboard and Profile (match history) pages over `GET /v1/ranked/leaderboard` and `GET /v1/me/matches`.
+  - Not built: Ranked's strike / counterpick stage screens (every ranked game is random from the server's Ranked list, like Unranked), the character lock for the set, poor-performance termination, abandonment cooldowns, the build-hash allow-list on reports, replays, seasons.
 - **P1.5, P5: not started.** P2 (keyframe start) was replaced by the gameplay-only session.
 
 Effort is in developer-weeks for one experienced developer. **Backend** is this document's services. **Dolphin** is C++/Rust in our fork. **Game** is the Syriinge plugin plus the netplay GCT. **Launcher** is the fork of slippi-launcher. The Dolphin and game columns assume the rollback core (another workstream) already plays a stable 1v1 in a synchronized-boot session.
