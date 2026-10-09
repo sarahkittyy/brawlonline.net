@@ -628,6 +628,10 @@ def run_session_n(preset: str, cpu: str, args: argparse.Namespace, run: int) -> 
             if args.plugin:
                 # With the plugin P+ boots to the online menus: back to the main menu, then Versus.
                 def to_css(c, port: int) -> None:
+                    # GameBridge only locates the block (SessionAddress): it does not service the
+                    # plugin's mailbox, whose CLEANUP_CONNECTION (leaving the online menus) would
+                    # stop the session, and does not write SESSION.
+                    c.call("game_bridge_config", enabled=False)
                     # The ONLINE page; B: the main menu's top page on PLAY ONLINE; up: Brawl.
                     B.wait_scene(c, [B.Scene.MAIN_MENU, B.Scene.CSS], 60 * 120)
                     if B.read_scene(c.read_mem).scene is B.Scene.MAIN_MENU:
