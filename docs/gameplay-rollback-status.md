@@ -768,6 +768,26 @@ The fixed build (`run/bin/gprb-001dd0b2df`, gp-v19) ran the sweep's `mirror` and
 
 Every run reached game set (7,193 session frames) with no sync-test mismatch. Every mirror matched its ground truth to game set. One run (`m-diddy_kong`) first failed while booting to the CSS: the harness connection was reset (open issue 8). It passed on `--retry-errors`. The forms seen include Wario-Man, Giga Bowser and the Zelda/Sheik changes. The ground-truth comparison of `ff-wario-bowser` and `ff-olimar-lucario` covers only the first 62 frames and none, respectively, as it did on gp-v19 (196 and 96 frames). That is an existing limit of the trace for these two forced runs, not a change.
 
+## Phase 10: installs ran without the deterministic GPU thread
+
+Dolphin `rollback-fixes`, `bd9ba09eb6`. Build used: `run/bin/gpudet-fix` (`bd9ba09eb6` plus the uncommitted `WiiRoot.cpp` NetplaySave change that 0.1.28 shipped).
+
+**Symptom.** Client 0.1.28, Unranked over the internet, dual core, D3D11: two games in a row froze within seconds of the start (2026-10-08). The host's log: `session running (host; dual core true, deterministic GPU thread false)`, then `GFX FIFO: Unknown Opcode (0xcc)`; the CPU thread kept running JIT code while the video thread waited for work. The peer's side ended with the peer gone.
+
+**Cause.** The dual-core design (this document's definitions, `docs/rollback-fixes-status.md` round 3) needs `GPUDeterminismMode = fake-completion`. It came only from P+'s `GameSettings/ID-Project+ Netplay Launcher.ini`, which the harness template has and installs do not: the launcher takes only the SD card, the launcher DOLs and `Sys/NetplaySave` from P+'s release (`launcher/src/dolphin/install/pplus_release.ts`), and the Dolphin bundle ships `Sys/` only. The netplay layer's override (`NetPlayConfigLoader`) does not apply to gameplay sessions, which start in-game long after boot chose the mode. So every install ran "auto", i.e. off.
+
+**Fix (`bd9ba09eb6`).** The fork's default is `fake-completion`. A session that still runs dual core without the deterministic GPU thread (an explicit `none`/`auto`) logs an error. `gprb_session.py` takes `--gpu <mode>|unset` (`unset` removes the key from the template's INIs, as on an install) and `--video`.
+
+| Build | `--gpu` | Preset | Result |
+|---|---|---|---|
+| `gprb-001dd0b2df` | `auto` | typical | host hung at frame 89 (7 rollbacks), joiner `peer timed out` |
+| `gprb-001dd0b2df` | `unset` | typical | host hung at frame 59 (7 rollbacks), joiner `peer timed out` |
+| `gprb-001dd0b2df` | template (`fake-completion`) | typical | game set, 6,784 frames, 396/250 rollbacks, 0 mismatches |
+| `gpudet-fix` | `unset` | typical | game set, 4,176 frames, 174/218 rollbacks, 0 mismatches |
+| `gpudet-fix` | `unset` | bad_wifi | game set, 3,268 frames, 272/322 rollbacks, 0 mismatches |
+
+All dual core, Null video, 2-minute rule, raw results in `run/qa/gpudet/`. In network sessions `gprb synctest: checksum differs from the first run` is not a symptom: a mispredicted first run differs from its resimulation by design (the passing runs above log 100-200 of them each, the cap). Workaround for an installed 0.1.28: put P+'s `ID-Project+ Netplay Launcher.ini` (in the fork's `Data/user/GameSettings/`) into `<User>/GameSettings/` on both machines; the session line then says `deterministic GPU thread true`.
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it).
@@ -857,3 +877,4 @@ Diagnostics through environment variables:
 | `c27636d256` | PPOM v3: per-player port values through the lobby into SESSION, the applied layouts in the setup key; the OSD DISCONNECTED only as a fallback |
 | `4944245954` | merge `unranked` (`6449517bc1`): the server's stage list with Slippi's stage pool for every random stage (Unranked, Direct's game 1); Direct's loser's pick is not restricted to the list; PPOM v3 kept |
 | `001dd0b2df` | Phase 9: a load waits for the base snapshot's eviction job; job completion with release/acquire order, no write to a finished job; `PPR_GPRB_EVICT_DELAY_US`, `PPR_GPRB_EVICT_NO_WAIT`, `load_evict_waits` (frozen as `run/bin/gprb-001dd0b2df`) |
+| `bd9ba09eb6` | Phase 10: `GPUDeterminismMode` defaults to fake-completion; an error when a session runs dual core without the deterministic GPU thread |

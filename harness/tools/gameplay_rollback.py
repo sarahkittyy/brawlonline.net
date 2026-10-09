@@ -114,10 +114,15 @@ def make_instance(name: str, *, cpu_thread: bool = False, rtc: Optional[int] = F
         upd: Dict[str, Any] = {}
         if fname == "RSBE01.ini":
             upd["CPUThread"] = cpu_thread   # the template forces CPUThread = True here
-        if gpu_determinism is not None:
+        changed = False
+        if gpu_determinism == "unset":
+            # As on an install without P+'s GameSettings: the mode falls back to Dolphin's default.
+            changed = ini.remove("Core", "GPUDeterminismMode")
+        elif gpu_determinism is not None:
             upd["GPUDeterminismMode"] = gpu_determinism
         if upd:
             ini.update({"Core": upd})
+        if upd or changed:
             ini.save(p)
     return inst
 
