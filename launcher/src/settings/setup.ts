@@ -41,14 +41,18 @@ function setupSettingsSubscriptions(settingsManager: SettingsManager, dolphinMan
   // The callback receives properly typed values - no casting needed! ✓
   settingsManager.onSettingChange("isoPath", async (isoPath) => {
     if (isoPath) {
+      // A disc to boot: Play launches P+ again.
+      await settingsManager.updateSetting("launchGameOnPlay", true);
+
       // TypeScript knows isoPath is string | null here
       const gameDir = path.dirname(isoPath);
       const netplayInstall = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
       const playbackInstall = dolphinManager.getInstallation(DolphinLaunchType.PLAYBACK);
+      // Both netplay writes read, change and save the same Dolphin.ini: run them one after the
+      // other, or the later save puts back the value the earlier one replaced.
       await Promise.all([
-        netplayInstall.addGamePath(gameDir),
+        netplayInstall.addGamePath(gameDir).then(() => netplayInstall.setDefaultIso(isoPath)),
         playbackInstall.addGamePath(gameDir),
-        netplayInstall.setDefaultIso(isoPath),
       ]);
     }
   });

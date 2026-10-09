@@ -200,7 +200,8 @@ def test_unranked_search_ends_with_the_server_error(backend: OnlineBackend,
                                                     gpu_backend: str) -> None:
     """A lone Unranked search: the client waits forever (as Slippi's), so the server ends the
     ticket at its TTL with an explicit get-ticket-resp error, and the game shows the text. While
-    the error shows the character stays locked; Z clears it (Slippi: "Press Z to clear error")."""
+    the error shows the character stays locked; B clears it, as Z does (Slippi: "Press Z to
+    clear error"), without taking the coin back."""
     test = "unranked-timeout"
     u = backend.create_user("pia", "PIA")
     g = _boot(dolphin, "unr-t", backend, u, gpu_backend, test, "record")
@@ -220,8 +221,10 @@ def test_unranked_search_ends_with_the_server_error(backend: OnlineBackend,
     g.shot("05-unranked-timeout")
     assert g.locked()
     before = g.css()
-    g.steps("tap B 8", "wait 20")
+    g.steps("tap A 8", "wait 20")
     assert g.css() == before
-    g.press_until("Z", lambda: g.c.mm_status()["state"] == "idle", "the cleanup")
+    g.press_until("B", lambda: g.c.mm_status()["state"] == "idle", "the cleanup")
     _wait(lambda: not g.locked(), 5, "the CSS to unlock")
+    g.steps("wait 20")
+    assert g.css() == before
     g.shot("06-after-clear")

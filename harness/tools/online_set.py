@@ -158,9 +158,10 @@ def expected_shades(setup: B.MatchSetup) -> List[int]:
 
 
 def play_game(players: Sequence[Any], game: int, timeout: float = 900,
-              log: Callable[[str], None] = print) -> Dict[str, Any]:
+              log: Callable[[str], None] = print, winner: Optional[Any] = None) -> Dict[str, Any]:
     """Wait for the match to run under rollback on both, play it to game set closed-loop (each
-    side drives its own in-game port with its own controller, port 0), and compare."""
+    side drives its own in-game port with its own controller, port 0), and compare. With
+    `winner` (one of `players`), that player stands still and the other walks off the stage."""
     wait(lambda: all(gstatus(p.c)["phase"] in ("running", "error", "ended") for p in players), 240,
          f"game {game}: both sessions running")
     st = [gstatus(p.c) for p in players]
@@ -193,13 +194,17 @@ def play_game(players: Sequence[Any], game: int, timeout: float = 900,
     def stop() -> bool:
         return stop_flag.is_set() or time.monotonic() > stop_at
 
-    def play(seat: Any, seed: str) -> None:
+    def play(seat: Any, seed: str, mode: str) -> None:
         with contextlib.suppress(HarnessError):
-            F.fight([seat], 60 * 60 * 9, mode="random", seed=seed,
+            F.fight([seat], 60 * 60 * 9, mode=mode, seed=seed,
                     stage_kind=rep["stage"], stop=stop)
         stop_flag.set()
 
-    th = [threading.Thread(target=play, args=(s, f"{game}-{s.name}")) for s in seats]
+    def mode_of(p: Any) -> str:
+        return "random" if winner is None else "idle" if p is winner else "selfdestruct"
+
+    th = [threading.Thread(target=play, args=(s, f"{game}-{s.name}", mode_of(p)))
+          for s, p in zip(seats, (host, join))]
     for t in th:
         t.start()
     while any(t.is_alive() for t in th):

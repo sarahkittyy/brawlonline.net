@@ -8,6 +8,7 @@ import setupSettingsIpc from "@settings/setup";
 
 import { AppUpdater } from "./app_updater";
 import { BrowserWindowManager } from "./browser_window_manager";
+import { checkIso } from "./check_iso";
 import type { ConfigFlags } from "./flags/flags";
 import setupMainIpc from "./setup";
 
@@ -19,7 +20,7 @@ export function installModules(flags: ConfigFlags) {
   setupAccountsIpc();
   setupReplaysIpc();
   setupSettingsIpc({ settingsManager, dolphinManager });
-  setupGameAssetsIpc({ settingsManager, dolphinManager });
+  setupGameAssetsIpc({ settingsManager, dolphinManager, checkIso });
   const browserWindowManager = new BrowserWindowManager();
   setupMainIpc({ dolphinManager, settingsManager, flags, browserWindowManager, appUpdater });
   return { dolphinManager, settingsManager, browserWindowManager, appUpdater };
