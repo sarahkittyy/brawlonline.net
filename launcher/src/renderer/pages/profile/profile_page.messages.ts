@@ -1,0 +1,16 @@
+export const ProfilePageMessages = {
+  profile: () => "Profile",
+  rating: () => "Rating",
+  setsPlayed: (sets: number) => (sets === 1 ? "1 ranked set" : `${sets} ranked sets`),
+  notRankedYet: () => "Not on the leaderboard yet: play a ranked set.",
+  matchHistory: () => "Match history",
+  all: () => "All",
+  ranked: () => "Ranked",
+  unranked: () => "Unranked",
+  mode: () => "Mode",
+  date: () => "Date",
+  you: () => "You",
+  score: () => "Score",
+  opponent: () => "Opponent",
+  noMatches: () => "No matches yet.",
+};

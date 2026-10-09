@@ -2,8 +2,10 @@
 import {
   ipc_accountsHasSession,
   ipc_accountsInitNetplay,
+  ipc_accountsLeaderboard,
   ipc_accountsLogin,
   ipc_accountsLogout,
+  ipc_accountsMatchHistory,
   ipc_accountsMe,
   ipc_accountsPublicUser,
   ipc_accountsRename,
@@ -20,7 +22,7 @@ function unwrap<T>(res: { result: AccountsResult<T> }): T {
   if (r.ok) {
     return r.value;
   }
-  throw new AccountsError(r.error.code, r.error.message, r.error.status);
+  throw new AccountsError(r.error.code, r.error.message, r.error.status, r.error.retryAfter);
 }
 
 const accountsApi: AccountsApi = {
@@ -53,6 +55,12 @@ const accountsApi: AccountsApi = {
   },
   async publicUser(uid) {
     return unwrap(await ipc_accountsPublicUser.renderer!.trigger({ uid }));
+  },
+  async leaderboard(query) {
+    return unwrap(await ipc_accountsLeaderboard.renderer!.trigger(query));
+  },
+  async matchHistory(uid, query) {
+    return unwrap(await ipc_accountsMatchHistory.renderer!.trigger({ uid, ...query }));
   },
   async getServiceUrls() {
     const { result } = await ipc_accountsServiceUrls.renderer!.trigger({});

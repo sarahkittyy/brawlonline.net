@@ -39,6 +39,9 @@ pub const WINS_NEEDED: u32 = BEST_OF / 2 + 1;
 /// Highest game index a report may name: a best of three plus room for drawn games, which are
 /// replayed (a draw counts for nobody).
 pub const MAX_GAME_INDEX: u32 = 9;
+/// Highest game index a report of an Unranked or Direct game may name. Those matches are not
+/// sets: the two players play game after game until one leaves.
+pub const MAX_SESSION_GAME_INDEX: u32 = 999;
 
 /// K for a player who has played `sets_played` rated sets before this one.
 pub fn k_factor(sets_played: u32) -> f64 {
@@ -260,6 +263,29 @@ pub fn resolve(
         return Outcome::Void { status: "ORPHANED", reason: "no result was reported".into(), wins };
     }
     Outcome::InProgress { wins }
+}
+
+/// Games won per player (in the order of `players`) in a match that is not rated (Unranked,
+/// Direct): the simple form of [`resolve`]'s counting. A game counts when its reports agree or
+/// only one player reported it, at once (nothing waits on these). Reports that disagree, draws,
+/// reports from anyone but the players and winners who are not players count for nobody.
+pub fn count_wins(players: &[Uuid], games: &[GameReport]) -> Vec<u32> {
+    let idx = |u: Uuid| players.iter().position(|p| *p == u);
+    let mut by_game: std::collections::BTreeMap<u32, Vec<Option<Uuid>>> = std::collections::BTreeMap::new();
+    for g in games.iter().filter(|g| idx(g.reporter).is_some()) {
+        by_game.entry(g.game_index).or_default().push(g.winner);
+    }
+    let mut wins = vec![0u32; players.len()];
+    for winners in by_game.values() {
+        let first = winners[0];
+        if winners.iter().any(|w| *w != first) {
+            continue;
+        }
+        if let Some(i) = first.and_then(idx) {
+            wins[i] += 1;
+        }
+    }
+    wins
 }
 
 /// A player's rating row: the rating and the rated sets so far.
@@ -489,6 +515,21 @@ mod tests {
         s.both(1, Some(0), 20);
         assert_eq!(s.at_min(49), Outcome::InProgress { wins: [1, 0] });
         assert!(matches!(s.at_min(50), Outcome::Void { status: "ORPHANED", wins: [1, 0], .. }));
+    }
+
+    #[test]
+    fn unrated_matches_count_agreeing_and_lone_reports() {
+        let mut s = Set::new();
+        // Game 1 agreed, game 2 only one report, game 3 a draw, game 4 disagreeing,
+        // game 12 (past a best of three) agreed.
+        s.both(1, Some(0), 1).game(1, 2, Some(1), 2).both(3, None, 3);
+        s.game(0, 4, Some(0), 4).game(1, 4, Some(1), 4).both(12, Some(1), 12);
+        assert_eq!(count_wins(&s.p, &s.games), vec![1, 2]);
+        // Strangers' reports and winners who are not players count for nobody.
+        s.games.push(GameReport { game_index: 20, reporter: uid(9), winner: Some(s.p[0]), at: s.at(20) });
+        s.games.push(GameReport { game_index: 21, reporter: s.p[0], winner: Some(uid(9)), at: s.at(21) });
+        assert_eq!(count_wins(&s.p, &s.games), vec![1, 2]);
+        assert_eq!(count_wins(&s.p, &[]), vec![0, 0]);
     }
 
     #[test]
