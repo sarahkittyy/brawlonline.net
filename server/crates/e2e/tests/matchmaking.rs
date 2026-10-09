@@ -176,8 +176,8 @@ async fn ticket_expiry_wrong_code_bad_key_and_unsupported_modes() {
     let r = search(SearchOptions::direct(stack.mm_addr, ghost, &bob.connect_code)).await;
     assert_eq!(r.error.as_deref(), Some(mm::messages::ACCOUNT_NOT_FOUND));
 
-    // Modes not built yet are refused clearly.
-    for (mode, name) in [(0u8, "Ranked"), (3, "Teams")] {
+    // Modes not built yet are refused clearly (Ranked works since the ranked queue).
+    for (mode, name) in [(3u8, "Teams"), (4, "Party")] {
         let mut o = SearchOptions::direct(stack.mm_addr, creds(&carol), "");
         o.mode = mode;
         let r = search(o).await;

@@ -8,6 +8,7 @@ pub mod error;
 pub mod mail;
 pub mod pages;
 pub mod password;
+pub mod ranked;
 pub mod store;
 
 use std::net::{IpAddr, SocketAddr};
@@ -106,6 +107,9 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/me/accept-rules", post(api::accept_rules))
         .route("/v1/me/user-json", get(api::user_json))
         .route("/user/{uid}", get(api::public_user))
+        .route("/v1/ranked/report-game", post(ranked::report_game))
+        .route("/v1/ranked/report-leave", post(ranked::report_leave))
+        .route("/v1/ranked/result", get(ranked::result))
         .route("/verify-email", get(pages::verify_email_page))
         .route("/reset-password", get(pages::reset_password_page).post(pages::reset_password_submit))
         .route("/healthz", get(api::healthz))
@@ -118,10 +122,18 @@ pub async fn connect_db(url: &str) -> anyhow::Result<PgPool> {
     Ok(PgPoolOptions::new().max_connections(10).connect(url).await?)
 }
 
-/// Serves on an already-bound listener.
+/// Serves on an already-bound listener, with the ranked sweeper ([`ranked::sweeper`]) alongside.
 pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> anyhow::Result<()> {
+    let sweeper = ranked::sweeper(
+        state.pool.clone(),
+        state.cfg.ranked_timing(),
+        std::time::Duration::from_secs(state.cfg.ranked_sweep_secs),
+    );
     let app = router(state).into_make_service_with_connect_info::<SocketAddr>();
-    axum::serve(listener, app).await?;
+    tokio::select! {
+        r = axum::serve(listener, app) => r?,
+        () = sweeper => {}
+    }
     Ok(())
 }
 

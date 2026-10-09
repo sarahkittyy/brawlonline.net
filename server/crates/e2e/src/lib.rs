@@ -122,6 +122,9 @@ pub struct StackOptions {
     pub mail_daily_limit: Option<u32>,
     /// `TRUST_PROXY_HEADERS`, so a test can pose as several client IPs with X-Forwarded-For.
     pub trust_proxy_headers: bool,
+    /// `RANKED_REPORT_GRACE_SECS` and `RANKED_SWEEP_SECS` (defaults: the service's).
+    pub ranked_report_grace_secs: Option<u64>,
+    pub ranked_sweep_secs: Option<u64>,
 }
 
 /// accounts + mm + a database, all for one test.
@@ -148,6 +151,12 @@ impl Stack {
         cfg.trust_proxy_headers = opts.trust_proxy_headers;
         if let Some(n) = opts.mail_daily_limit {
             cfg.mail.mail_daily_limit = n;
+        }
+        if let Some(n) = opts.ranked_report_grace_secs {
+            cfg.ranked_report_grace_secs = n;
+        }
+        if let Some(n) = opts.ranked_sweep_secs {
+            cfg.ranked_sweep_secs = n;
         }
         let mailer = MemoryMailer::new();
         let state = accounts::AppState::new(pool.clone(), cfg, Arc::new(mailer.clone()))?;

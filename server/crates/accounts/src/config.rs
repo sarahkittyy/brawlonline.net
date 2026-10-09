@@ -214,11 +214,31 @@ pub struct Config {
     /// Disable rate limiting (tests only).
     #[arg(long, env = "DISABLE_RATE_LIMITS", default_value_t = false, action = clap::ArgAction::Set, hide = true)]
     pub disable_rate_limits: bool,
+
+    /// Ranked: seconds a game report or an "opponent left" waits for the other client before it
+    /// counts on its own (`common::ranked::Timing`).
+    #[arg(long, env = "RANKED_REPORT_GRACE_SECS", default_value_t = 120)]
+    pub ranked_report_grace_secs: u64,
+
+    /// Ranked: a set with no report for this many seconds is void (ORPHANED).
+    #[arg(long, env = "RANKED_STALE_SECS", default_value_t = 1800)]
+    pub ranked_stale_secs: u64,
+
+    /// Ranked: seconds between sweeps that settle sets whose waits have run out.
+    #[arg(long, env = "RANKED_SWEEP_SECS", default_value_t = 30)]
+    pub ranked_sweep_secs: u64,
 }
 
 impl Config {
     pub fn mailer_kind(&self) -> MailerKind {
         self.mail.mailer_kind()
+    }
+
+    pub fn ranked_timing(&self) -> common::ranked::Timing {
+        common::ranked::Timing {
+            report_grace: chrono::Duration::seconds(self.ranked_report_grace_secs as i64),
+            stale_after: chrono::Duration::seconds(self.ranked_stale_secs as i64),
+        }
     }
 
     /// A config for tests: everything local, cheap password hashing.
@@ -237,6 +257,9 @@ impl Config {
             session_days: 90,
             run_migrations: true,
             disable_rate_limits: false,
+            ranked_report_grace_secs: 120,
+            ranked_stale_secs: 1800,
+            ranked_sweep_secs: 30,
         }
     }
 }

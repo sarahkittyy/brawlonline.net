@@ -23,19 +23,23 @@
 //! Every refusal is an explicit `error` the game shows: tickets are never
 //! dropped silently.
 //!
-//! Two queues:
+//! Three queues:
 //! - **Direct**: two tickets that name each other's codes are paired.
 //! - **Unranked**: a FIFO. The oldest waiting ticket is paired with the next one in arrival order
 //!   that is in its region (any region once either has waited `region_widen`) and that it did not
 //!   just fail to connect to. Slippi's tickets carry no region field, so the region comes from the
 //!   ticket's source address ([`crate::region`]); with no region table there is one bucket.
+//! - **Ranked**: like Unranked, but the oldest ticket takes the closest-rated opponent whose
+//!   rating is within the rating band: `ranked_band` points, widened by `ranked_band_step` for
+//!   every `ranked_band_interval` the longer-waiting of the two has waited (design 2.3: ±150,
+//!   +50 every 15 s). The ratings are the accounts' Elo ([`common::ranked`]).
 //!
-//! Both queues share the failed-connect rule: Slippi's 1v1 client requeues with a new ticket when
+//! The queues share the failed-connect rule: Slippi's 1v1 client requeues with a new ticket when
 //! its 8 s P2P window fails, so a pair matched again within `requeue_window` is taken to have
 //! failed. Direct holds such a pair back (P2P window + `repair_backoff` × failures) and errors
-//! after `max_connect_failures`; Unranked pairs each of them with someone else when it can, re-pairs
-//! them only after the same backoff, and after `max_connect_failures` stops pairing them with
-//! each other (they keep searching) until the window has passed.
+//! after `max_connect_failures`; Unranked and Ranked pair each of them with someone else when they
+//! can, re-pair them only after the same backoff, and after `max_connect_failures` stop pairing
+//! them with each other (they keep searching) until the window has passed.
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
@@ -47,7 +51,8 @@ use common::db::MmUser;
 use common::net::{ip_key, sanitize_lan_addr, to_v4};
 use common::playkey::PlayKeySecret;
 use common::proto::{
-    parse_client_message, ClientMessage, CreateTicket, CreateTicketResp, GetTicketResp, Mode, Player, GET_TICKET_RESP,
+    parse_client_message, ClientMessage, CreateTicket, CreateTicketResp, GetTicketResp, Mode, Player, Rank,
+    GET_TICKET_RESP,
 };
 use common::ratelimit::{RateLimiter, Window};
 use sha2::{Digest, Sha256};
@@ -98,8 +103,14 @@ pub struct EngineConfig {
     pub rulesets: Rulesets,
     /// Region of a ticket's source address (Unranked buckets).
     pub regions: RegionMap,
-    /// An Unranked ticket that has waited this long takes an opponent from any region.
+    /// An Unranked or Ranked ticket that has waited this long takes an opponent from any region.
     pub region_widen: Duration,
+    /// Ranked: the largest rating difference of a pair at first ...
+    pub ranked_band: f64,
+    /// ... widened by this much ...
+    pub ranked_band_step: f64,
+    /// ... for every this long the longer-waiting player has waited.
+    pub ranked_band_interval: Duration,
 }
 
 impl Default for EngineConfig {
@@ -119,6 +130,9 @@ impl Default for EngineConfig {
             rulesets: Rulesets::default(),
             regions: RegionMap::default(),
             region_widen: Duration::from_secs(30),
+            ranked_band: 150.0,
+            ranked_band_step: 50.0,
+            ranked_band_interval: Duration::from_secs(15),
         }
     }
 }
@@ -228,6 +242,8 @@ pub struct Engine {
     direct: HashMap<(String, String), ConnId>,
     /// Unranked tickets waiting, oldest first.
     unranked: Vec<ConnId>,
+    /// Ranked tickets waiting, oldest first.
+    ranked: Vec<ConnId>,
     /// Recently matched pairs (sorted uids), to space out re-pairing after a
     /// failed P2P connect.
     history: HashMap<(Uuid, Uuid), PairHistory>,
@@ -266,6 +282,7 @@ impl Engine {
             conns: HashMap::new(),
             direct: HashMap::new(),
             unranked: Vec::new(),
+            ranked: Vec::new(),
             history: HashMap::new(),
             ticket_limiter,
             ip_limiter,
@@ -333,6 +350,7 @@ impl Engine {
     fn unindex(&mut self, conn: ConnId) {
         self.direct.retain(|_, c| *c != conn);
         self.unranked.retain(|c| *c != conn);
+        self.ranked.retain(|c| *c != conn);
     }
 
     fn on_connect(&mut self, now: Instant, conn: ConnId, addr: SocketAddr, out: &mut Vec<Output>) {
@@ -384,8 +402,7 @@ impl Engine {
             return self.refuse(out, conn, msg::UNKNOWN_MODE);
         };
         let unsupported = match mode {
-            Mode::Direct | Mode::Unranked => None,
-            Mode::Ranked => Some("Ranked"),
+            Mode::Direct | Mode::Unranked | Mode::Ranked => None,
             Mode::Teams => Some("Teams"),
             Mode::Party => Some("Party"),
         };
@@ -503,7 +520,15 @@ impl Engine {
         if p.mode == Mode::Unranked {
             tracing::info!(conn, %code, %region, queued = self.unranked.len() + 1, "unranked ticket waiting");
             self.unranked.push(conn);
-            self.pair_unranked(now, wall, out);
+            self.pair_queue(Mode::Unranked, now, wall, out);
+        } else if p.mode == Mode::Ranked {
+            let rating = self.conns.get(&conn).and_then(|c| match &c.state {
+                State::Waiting(w) => Some(w.user.rating),
+                _ => None,
+            });
+            tracing::info!(conn, %code, %region, ?rating, queued = self.ranked.len() + 1, "ranked ticket waiting");
+            self.ranked.push(conn);
+            self.pair_queue(Mode::Ranked, now, wall, out);
         } else {
             tracing::info!(conn, %code, %target, "direct ticket waiting");
             self.direct.insert((code, target), conn);
@@ -539,13 +564,14 @@ impl Engine {
             let text = if mode == Mode::Direct { msg::did_not_connect(&target) } else { msg::NO_OPPONENT.to_string() };
             self.fail_ticket(out, id, text, None);
         }
-        // Retry pairs that were held back by the re-pair backoff, and Unranked tickets whose
-        // region search has widened.
+        // Retry pairs that were held back by the re-pair backoff, and queued tickets whose
+        // region search or rating band has widened.
         waiting.sort_unstable();
         for id in waiting {
             self.try_pair(now, wall, id, out);
         }
-        self.pair_unranked(now, wall, out);
+        self.pair_queue(Mode::Unranked, now, wall, out);
+        self.pair_queue(Mode::Ranked, now, wall, out);
         let window = self.cfg.requeue_window;
         self.history.retain(|_, h| now.saturating_duration_since(h.last_match) < window);
     }
@@ -584,9 +610,17 @@ impl Engine {
         self.make_match(wall, &[conn, other], out);
     }
 
-    /// Pairs Unranked tickets until no pair is possible.
-    fn pair_unranked(&mut self, now: Instant, wall: DateTime<Utc>, out: &mut Vec<Output>) {
-        while let Some((a, b, failures)) = self.next_unranked_pair(now) {
+    fn queue(&self, mode: Mode) -> &Vec<ConnId> {
+        if mode == Mode::Ranked {
+            &self.ranked
+        } else {
+            &self.unranked
+        }
+    }
+
+    /// Pairs the tickets of a queue (Unranked or Ranked) until no pair is possible.
+    fn pair_queue(&mut self, mode: Mode, now: Instant, wall: DateTime<Utc>, out: &mut Vec<Output>) {
+        while let Some((a, b, failures)) = self.next_queue_pair(mode, now) {
             let (ua, ub) = match (self.conns.get(&a), self.conns.get(&b)) {
                 (Some(Conn { state: State::Waiting(x), .. }), Some(Conn { state: State::Waiting(y), .. })) => {
                     (x.user.uid, y.user.uid)
@@ -594,31 +628,47 @@ impl Engine {
                 _ => break,
             };
             self.history.insert(pair_key(ua, ub), PairHistory { last_match: now, failures });
-            let before = self.unranked.len();
+            let before = self.queue(mode).len();
             self.make_match(wall, &[a, b], out);
-            if self.unranked.len() == before {
+            if self.queue(mode).len() == before {
                 break; // make_match refused; never loop forever
             }
         }
     }
 
-    /// The pair the Unranked queue makes next: the oldest ticket and the first later one (in
-    /// arrival order) it can play. Same region unless either has waited `region_widen`. A pair
-    /// matched within `requeue_window` failed its P2P connect (Slippi requeues with a new ticket):
-    /// anyone else in the queue goes first; the same two again only after the backoff, and not
-    /// at all after `max_connect_failures`. Returns (older, newer, failures so far).
-    fn next_unranked_pair(&self, now: Instant) -> Option<(ConnId, ConnId, u32)> {
+    /// The largest rating difference a Ranked ticket accepts after waiting `waited`.
+    fn rating_band(&self, waited: Duration) -> f64 {
+        let steps = if self.cfg.ranked_band_interval.is_zero() {
+            0.0
+        } else {
+            (waited.as_secs_f64() / self.cfg.ranked_band_interval.as_secs_f64()).floor()
+        };
+        self.cfg.ranked_band + self.cfg.ranked_band_step * steps
+    }
+
+    /// The pair a queue makes next: the oldest ticket and a later one it can play. Same region
+    /// unless either has waited `region_widen`. Unranked takes the first such ticket in arrival
+    /// order; Ranked the closest-rated one within the rating band of the longer-waiting of the
+    /// two (ties: arrival order). A pair matched within `requeue_window` failed its P2P connect
+    /// (Slippi requeues with a new ticket): anyone else in the queue goes first; the same two
+    /// again only after the backoff, and not at all after `max_connect_failures`. Returns
+    /// (older, newer, failures so far).
+    fn next_queue_pair(&self, mode: Mode, now: Instant) -> Option<(ConnId, ConnId, u32)> {
+        let ranked = mode == Mode::Ranked;
         let queue: Vec<(ConnId, &Waiting)> = self
-            .unranked
+            .queue(mode)
             .iter()
             .filter_map(|id| match self.conns.get(id) {
                 Some(Conn { state: State::Waiting(w), .. }) => Some((*id, w)),
                 _ => None,
             })
             .collect();
-        let widened = |w: &Waiting| now.saturating_duration_since(w.since) >= self.cfg.region_widen;
+        let waited = |w: &Waiting| now.saturating_duration_since(w.since);
+        let widened = |w: &Waiting| waited(w) >= self.cfg.region_widen;
         for (i, (a, wa)) in queue.iter().enumerate() {
-            let mut retry: Option<(ConnId, u32)> = None;
+            // (ticket, rating difference); Unranked compares 0 everywhere, so the first wins.
+            let mut fresh: Option<(ConnId, f64)> = None;
+            let mut retry: Option<(ConnId, u32, f64)> = None;
             for (b, wb) in &queue[i + 1..] {
                 if wa.user.uid == wb.user.uid {
                     continue;
@@ -626,18 +676,33 @@ impl Engine {
                 if wa.region != wb.region && !widened(wa) && !widened(wb) {
                     continue;
                 }
+                let diff = if ranked { (wa.user.rating - wb.user.rating).abs() } else { 0.0 };
+                if ranked && diff > self.rating_band(waited(wa).max(waited(wb))) {
+                    continue;
+                }
                 let recent = self
                     .history
                     .get(&pair_key(wa.user.uid, wb.user.uid))
                     .filter(|h| now.saturating_duration_since(h.last_match) < self.cfg.requeue_window);
-                let Some(h) = recent else { return Some((*a, *b, 0)) };
+                let Some(h) = recent else {
+                    if fresh.is_none_or(|(_, d)| diff < d) {
+                        fresh = Some((*b, diff));
+                    }
+                    continue;
+                };
                 let failures = h.failures + 1;
                 let not_before = h.last_match + P2P_CONNECT_WINDOW + self.cfg.repair_backoff * failures;
-                if failures < self.cfg.max_connect_failures && now >= not_before && retry.is_none() {
-                    retry = Some((*b, failures));
+                if failures < self.cfg.max_connect_failures
+                    && now >= not_before
+                    && retry.is_none_or(|(_, _, d)| diff < d)
+                {
+                    retry = Some((*b, failures, diff));
                 }
             }
-            if let Some((b, failures)) = retry {
+            if let Some((b, _)) = fresh {
+                return Some((*a, b, 0));
+            }
+            if let Some((b, failures, _)) = retry {
                 return Some((*a, b, failures));
             }
         }
@@ -680,7 +745,13 @@ impl Engine {
                 ip_address: to_v4(*addr).map(|a| a.to_string()).unwrap_or_default(),
                 ip_address_lan: w.lan.clone(),
                 chat_messages: common::DEFAULT_CHAT_MESSAGES.iter().map(|s| s.to_string()).collect(),
-                rank: None,
+                // Slippi sends each player's rank with a ranked match; the rating is all we have.
+                rank: (mode == Mode::Ranked).then(|| Rank {
+                    rating: w.user.rating as f32,
+                    update_count: w.user.ranked_sets.max(0) as u32,
+                    global_placement: 0,
+                    regional_placement: 0,
+                }),
                 is_bot: false,
             })
             .collect();
@@ -744,6 +815,8 @@ mod tests {
             play_key_version: 1,
             banned_until: None,
             email_verified: true,
+            rating: common::ranked::DEFAULT_RATING,
+            ranked_sets: 0,
         }
     }
 
@@ -969,7 +1042,7 @@ mod tests {
         let mut h = Harness::new(EngineConfig::default());
         let a = user("AA#1", "a");
         h.add(&a);
-        for (i, (mode, name)) in [(0u8, "Ranked"), (3, "Teams"), (4, "Party")].into_iter().enumerate() {
+        for (i, (mode, name)) in [(3u8, "Teams"), (4, "Party")].into_iter().enumerate() {
             let conn = 10 + i as u64;
             h.connect(conn, conn as u16);
             let v = h.ticket_json(&a, "", mode);
@@ -1606,5 +1679,102 @@ mod tests {
         h.ticket(1, &a, "BB#1");
         let out = h.ticket(2, &b, "AA#1");
         assert_eq!(sent(&out, 1)[0]["stages"], json!([1, 2, 3]));
+    }
+
+    // ------------------------------------------------------------------ Ranked
+
+    impl Harness {
+        /// A Ranked ticket (mode 0, `connectCode: []`).
+        fn ranked(&mut self, conn: ConnId, u: &MmUser) -> Vec<Output> {
+            let v = self.ticket_json(u, "", 0);
+            self.raw(conn, v.to_string().as_bytes())
+        }
+        /// Players with these ratings.
+        fn rated(&mut self, ratings: &[f64]) -> Vec<MmUser> {
+            ratings
+                .iter()
+                .enumerate()
+                .map(|(i, r)| {
+                    let mut u = user(&format!("R{}#{}", (b'A' + i as u8) as char, i + 1), &format!("r{i}"));
+                    u.rating = *r;
+                    u.ranked_sets = 12;
+                    self.add(&u);
+                    u
+                })
+                .collect()
+        }
+    }
+
+    #[test]
+    fn ranked_pairs_close_ratings_and_sends_them() {
+        let mut h = Harness::new(default_rules());
+        let u = h.rated(&[1400.0, 1900.0, 1500.0]);
+        for c in 1..=3 {
+            h.connect(c, 41000 + c as u16);
+        }
+        assert!(matches(&h.ranked(1, &u[0])).is_empty());
+        // 500 apart: outside the band.
+        assert!(matches(&h.ranked(2, &u[1])).is_empty());
+        let out = h.ranked(3, &u[2]);
+        let m = matches(&out);
+        assert_eq!(m.len(), 1);
+        assert_eq!(m[0].mode, Mode::Ranked);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
+        let g = &sent(&out, 3)[1];
+        assert!(g["matchId"].as_str().unwrap().starts_with("mode.ranked-"), "{g}");
+        assert_eq!(g["stages"].as_array().unwrap().len(), 15);
+        let ps = g["players"].as_array().unwrap();
+        for p in ps {
+            let me = if p["uid"] == u[0].uid.to_string() { &u[0] } else { &u[2] };
+            assert_eq!(p["rank"]["rating"].as_f64().unwrap(), me.rating);
+            assert_eq!(p["rank"]["updateCount"], 12);
+        }
+        // The unmatched one keeps waiting, and never meets the Unranked queue.
+        let v = h.users(1);
+        h.connect(4, 41004);
+        assert!(matches(&h.unranked(4, &v[0])).is_empty());
+        assert_eq!(h.e.waiting_count(), 2);
+    }
+
+    #[test]
+    fn ranked_takes_the_closest_rating_in_the_band() {
+        let mut h = Harness::new(default_rules());
+        let u = h.rated(&[1500.0, 1400.0, 1360.0, 1610.0]);
+        for c in 1..=4 {
+            h.connect(c, 41000 + c as u16);
+        }
+        // 1500 waits; 1400 is 100 away, inside ±150.
+        h.ranked(1, &u[0]);
+        let m = matches(&h.ranked(2, &u[1]));
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
+        // Now 1360 waits; 1610 comes: 250 apart, outside ±150 at first.
+        h.ranked(3, &u[2]);
+        assert!(matches(&h.ranked(4, &u[3])).is_empty());
+        // The band grows 50 every 15 s of the longer wait: 250 needs 30 s (150 + 2 × 50).
+        assert!(matches(&h.advance(Duration::from_secs(29))).is_empty());
+        let m = matches(&h.advance(Duration::from_secs(1)));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[2].uid, u[3].uid));
+    }
+
+    #[test]
+    fn ranked_prefers_the_closer_of_several_opponents() {
+        let mut h = Harness::new(default_rules());
+        let u = h.rated(&[1500.0, 1700.0, 1450.0, 1520.0]);
+        for c in 1..=4 {
+            h.connect(c, 41000 + c as u16);
+        }
+        h.ranked(1, &u[0]);
+        h.ranked(2, &u[1]);
+        // After 15 s the band is ±200, so 1700 would fit 1500 now; but the next ticket, 1450, is
+        // closer, and the closest goes first.
+        h.now += Duration::from_secs(15);
+        let m = matches(&h.ranked(3, &u[2]));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
+        let m = matches(&h.ranked(4, &u[3]));
+        // 1700 and 1520 (180 apart, 1700 waited 15 s: ±200) take each other.
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[1].uid, u[3].uid));
     }
 }
