@@ -5,9 +5,9 @@ Accounts, connect codes, and Direct and Unranked matchmaking for Brawl Online, t
 | Crate | What it is |
 |---|---|
 | `crates/accounts` | HTTP service (axum + sqlx): open sign-up with email verification, login, sessions, password reset, connect codes, play keys, the data for `user.json`, Slippi's users-rest endpoint. |
-| `crates/mm` | Matchmaking server: ENet over UDP 43113, speaking Slippi's `create-ticket` / `get-ticket-resp` JSON protocol. Direct, Unranked and Ranked (rating band); per-mode stage lists. |
+| `crates/mm` | Matchmaking server: ENet over UDP 43113, speaking Slippi's `create-ticket` / `get-ticket-resp` JSON protocol. Direct, Unranked and Ranked (rating band); per-mode stage lists. Rooms and the online count (`docs/rooms-protocol.md`), with a loopback status listener for accounts. |
 | `crates/admin` | Admin CLI: users, password resets, bans, account deletion. |
-| `crates/mmclient` | Ticket client library and CLI that behaves like Slippi's `SlippiMatchmaking.cpp`. For tests, ppharness and game-integration work. |
+| `crates/mmclient` | Ticket client library and CLI that behaves like Slippi's `SlippiMatchmaking.cpp`, plus a room client (`online`, `room`). For tests, ppharness and game-integration work. |
 | `crates/common` | Shared code: connect-code and display-name rules, the mm message types, play keys, rate limiter, migrations. |
 | `crates/e2e` | End-to-end tests (Postgres + both services + fake game clients). |
 | `crates/fakesmtp` | A tiny in-process SMTP server for tests (records what it receives, counts connections). |
@@ -114,6 +114,7 @@ JSON in and out. Errors are `{"error": {"code": "...", "message": "..."}}`. Auth
 | `POST /v1/ranked/report-leave {uid, playKey, matchId, kind}` | `reportOnlineMatchStatus(abandoned)` | `kind`: `left` (this player left the set) or `opponent_left`. |
 | `GET /v1/ranked/result?matchId=&uid=` | `getRankedMatchPersonalResult` | Public. `{matchId, status, players, wins, winner, reason, rating: {before, after, change, setsPlayed} \| null}`. |
 | `GET /v1/ranked/leaderboard?limit=&after=` | | Public. `{entries: [{position, uid, displayName, connectCode, rating, setsPlayed, wins, losses}], next, total}` (see "Leaderboard"). `limit` 50 by default, at most 100; `after` is the previous page's `next`. |
+| `GET /v1/rooms` | | Session auth. Players online and the public rooms for the launcher's Home page, read from mm's status listener (`MM_STATUS_URL`) and cached 1 s: `{online, rooms: [{code, host, players, openSlots, mode, status, names, joinable}], updatedAt}`. 503 `mm_unavailable` when mm does not answer. See `docs/rooms-protocol.md`. |
 | `GET /healthz` | | `ok` if Postgres answers. |
 
 Rules:
@@ -135,7 +136,11 @@ Rules:
   | Password change | account | 5 per minute, 20 per hour |
   | Leaderboard pages | IP | 30 per minute, 600 per hour |
   | Match history pages | account | 60 per minute |
+  | Room list (`/v1/rooms`) | account | 60 per minute |
   | mm tickets | account | 1 per 2 s |
+  | mm `hello` (online connection) | account | 10 per minute |
+  | Rooms created / join attempts | account | 5 per minute and 30 per hour / 10 per minute and 60 per hour |
+  | Room requests | online connection | 40 per 10 s |
 
   Worst case for one IP: 10 verification emails a day. For one inbox: 1 + 5 verification emails (one account per address) and 5 reset emails a day. The two global shares add up to `MAIL_DAILY_LIMIT`, so accounts never sends more than that per UTC day. Set it below the provider's quota, with room for `admin user reset-password --send-email` (a separate process with its own count).
 - **Email**: an SMTP provider (`MAILER=smtp`), Brevo's HTTP API (`MAILER=brevo`) or Resend's (`MAILER=resend`) in production, with a daily cap per process (`MAIL_DAILY_LIMIT`, default 90, split as above). A `Mailer` trait has SMTP, Brevo, Resend, stdout, file and in-memory implementations, and `mail::from_config` is the one place that picks one: `accounts` and the admin CLI's `reset-password --send-email` build their mailer from the same settings. Tests only use the in-memory and file mailers, plus the SMTP client against a local fake server (`crates/fakesmtp`) and the Brevo and Resend clients against local fake HTTP servers.
@@ -189,7 +194,8 @@ Byte-compatible with Slippi's client: ENet on UDP 43113, reliable JSON packets o
 
 | Situation | Message |
 |---|---|
-| Teams, Party | `<Mode> isn't available yet.` |
+| Party | `Party isn't available yet.` |
+| Mode 3 (Teams) without a starting room the player is in | `Room not found.` / `You are not in this room.` / `The room is not starting a game.` (mode 3 is a room's game ticket, `docs/rooms-protocol.md`) |
 | Direct ticket waited `MM_TICKET_TTL_SECS` (10 min) | `Search timed out: <code> did not connect within 10 minutes.` (`get-ticket-resp`) |
 | Unranked ticket waited `MM_TICKET_TTL_SECS` | `Search timed out: no opponent found within 10 minutes.` (`get-ticket-resp`; Slippi's client waits forever, so the server owns expiry) |
 | Bad play key (or rotated by password change or ban) | `Invalid play key. Log in again in the launcher.` |
@@ -211,6 +217,15 @@ Byte-compatible with Slippi's client: ENet on UDP 43113, reliable JSON packets o
   - A pair that searches again more than 60 s after a match (they played) is paired at once, as strangers.
 - A client disconnect (the CSS cancel) removes its ticket at once. Garbage and oversized packets get an error and a disconnect; the loop never panics on input.
 - **Disconnects after an answer**: after `get-ticket-resp` (or a refusal) the server waits 1 s before disconnecting the client itself. Slippi's client disconnects on its own as soon as it has the answer and waits up to 3 s for that to be acknowledged before it binds its P2P port; when both sides disconnected at the same moment, the client's disconnect was sometimes never answered (2 of 16 matches with Dolphin), which cost it 3 s of the 8 s connect window. `mmclient` reports the outcome as `mmDisconnect`.
+
+## Rooms
+
+2-4 players meet by a 4-letter room code (no vowels), in memory in mm (`crates/mm/src/rooms.rs`; wire types in `crates/common/src/rooms.rs`). The whole protocol, the rules, the errors, the launcher endpoint and the launcher-game hand-off are in `docs/rooms-protocol.md`. In short:
+
+- A running, logged-in game keeps an **online connection** to mm (`hello`, then `room-*` requests; mm pushes `room-state` to every member). ENet's keepalive is the heartbeat. **Players online** = accounts with such a connection.
+- Rooms: slots 1-2 open and 3-4 closed at first; the host opens and closes slots and switches Teams between games (closing an occupied slot removes its player); public by default; the host passes to the earliest-joined player; a room closes when empty, and its code is free again.
+- The room starts once every open slot is taken and everyone is ready: each member sends an ordinary ticket in mode 3 with the room code from its P2P port, and gets one `get-ticket-resp` listing every member (ports = slots, `isHost` = the room's host, Direct's stages). Rooms are never ranked and not recorded.
+- mm publishes the count and the public rooms on `MM_STATUS_LISTEN` (default `127.0.0.1:43181`, `GET /status`, loopback only); accounts serves them as `GET /v1/rooms` from `MM_STATUS_URL` (default `http://127.0.0.1:43181/status`). The defaults match when both run on one machine, so production needs no new setting or proxy rule. `MM_ROOM_START_TIMEOUT_SECS` (15) is how long a start waits for every ticket.
 
 ## Ranked
 
@@ -266,7 +281,12 @@ mmclient search [--server HOST[:PORT]] (--user-json FILE | --uid U --play-key K)
                 [--mode direct|unranked|ranked|teams|party | --mode-number N] [--encoding fullwidth|ascii]
                 [--port P] [--lan-ip IP] [--timeout-secs S] [--punch [--requeue N]] [--app-version V]
 mmclient raw [--server HOST[:PORT]] --data 'JSON' [--wait-secs S]
+mmclient online [--server HOST[:PORT]] (--user-json FILE | --uid U --play-key K) [--hold-secs S]
+mmclient room [--server HOST[:PORT]] (--user-json FILE | --uid U --play-key K) (--create [--private] [--open 3,4] [--close N] [--teams] | --join CODE)
+              [--team N] [--ready [--character N --costume N]] [--play [--back-after-secs S | --quit-after-match]] [--hold-secs S]
 ```
+
+`online` and `room` keep an online connection open like a running game and print every message from mm as one JSON line; `--play` sends the room's game ticket when the room starts (`docs/rooms-protocol.md`, section 6).
 
 `search` prints one JSON object (`status`, `error`, `localPort`, `lanAddress`, `createResponse`, `ticketResponse`, `remoteAddresses`, `p2p`) and exits 0 matched, 2 create-ticket error, 3 get-ticket error, 4 client timeout, 5 P2P failed, 1 other. `--port` and `--lan-ip` mirror Slippi's "Force Netplay Port" and "Force LAN IP". `MM_SERVER` sets the default server.
 
@@ -279,12 +299,14 @@ cargo clippy --workspace --all-targets -- -D warnings
 
 Without Docker, start the portable Postgres (above) and point the tests at it, e.g. `TEST_DATABASE_URL=postgres://pp:pp-dev-password@127.0.0.1:54329/postgres`. The e2e helpers only fall back to `docker compose up` when `TEST_DATABASE_URL` is unset and nothing answers on 54329.
 
+- Unit tests (rooms): room codes and requests (`common::rooms`), the room model (`mm::rooms`: unique codes, slots and their rules, kick, hand-over, the public list and its order, the start, tickets, start timeout and a player leaving during it, Teams splits, rate limits), the engine paths (`hello`, one online connection per account, the online count, a room game from `room-create` to `get-ticket-resp`), and that every room message and status line fits the game's line.
 - Unit tests: code and name rules, Shift-JIS decoding, protocol parsing and wire shape (openmelee and Brawlback fixtures), play keys, rate limiter, Argon2, mailers (SMTP against `fakesmtp`: multipart text + HTML, auth, 535 errors without the password, timeout, STARTTLS required; Brevo and Resend against local fakes: request shape, errors without the key; stdout and file never connecting), and the ticket state machine (pairing, host choice, expiry, wrong code, bad key, bans, unsupported modes, malformed input, cancel, replacement, rate limit, DB timeout, version gate, re-pair backoff), the Unranked queue (arrival order, response fields and stage list, code ignored, never paired with Direct, expiry error, cancel, replacement, failed-connect preference and backoff, regions and widening), the region table and the rulesets file, the ranked rules (Elo, sets, the win count of unrated matches) and the leaderboard and history cursors.
 - `crates/admin/tests/send_email.rs`: runs the `admin` binary (`user reset-password --send-email`) with `MAILER=file`, `stdout`, `smtp` and `brevo` while `RESEND_API_URL`, `BREVO_API_URL` (with keys) and `SMTP_HOST` point at listeners that count connections: file and stdout never connect, smtp and brevo reach only their own fake server, `resend` without a key fails before issuing a token; and the in-process reset path with an in-memory mailer.
 - `crates/e2e/tests/accounts_api.rs`: the HTTP API against Postgres (open sign-up, validation, verification, code assignment, `user.json`, reset and change password rotating the play key, bans, rate limits, the per-IP account limit with IPv6 /64s, the daily email shares).
 - `crates/e2e/tests/matchmaking.rs`: Postgres + accounts + mm in process, accounts created over HTTP, two fake ENet clients: matching peer info and a real P2P connection, expiry, wrong code, bad play key, unsupported modes, malformed packets and raw UDP garbage (server keeps running and still pairs), cancel.
 - `crates/e2e/tests/ranked.rs`: two players meet in the Ranked queue (each player's rank in the response), both report two games, the set is rated once (±100 for two first-timers), the rating comes back from `/user/{uid}`, the result endpoint and the next ranked ticket; leaving before and after a game, both leaving, disagreeing reports, forged play keys, strangers, bad winners and game indexes, an Unranked match's report accepted unrated; a lone report settled by the background sweep after the grace period.
 - `crates/e2e/tests/leaderboard_history.rs`: the leaderboard in pages of 7 and 5 (positions 1..N across pages, ties by uid, players without a rated set left out), the cursor while one player jumps to the top and another drops (page 2 continues after page 1's last row with the new positions; the same cursor gives the same page), bad cursors, `/user/{uid}` positions; the rate limits (30 leaderboard pages a minute per IP and per IPv6 /64, `Retry-After`; 60 history pages a minute per account); Unranked and Direct reports (agreeing, lone, drawn, disagreeing, game 15, the same checks as Ranked, never rated, untouched by the sweep); the match history of Ranked (complete, abandoned with no game, in progress then orphaned), Unranked and Direct matches with every field, the filters, pages of 2 with a newer match added between pages, matches left out (no reports, orphaned without reports, other players'), auth and bad parameters.
+- `crates/e2e/tests/rooms.rs`: create (code format), join by code in lower case, full, not found, host-only slots, closing an occupied slot (removed, cannot rejoin), host hand-over when the host's game closes, the room closing with its last player; the public list over HTTP (401 logged out, the row fields, private rooms left out and joinable by code, made public, modes 1v1/FFA/Teams), the online count rising and falling with the games, 503 when mm is gone; a 3-player Teams room (one colour refused, 2v1 starts) whose three tickets get one response each with ports 1-3 and the host deciding, the room in game in the list, a player whose game closes mid-match (slot open, room joinable) and a joiner who waits, then back to waiting; `hello` with an old version or a forged play key, bad room requests answered without a disconnect.
 - `crates/e2e/tests/unranked.rs`:
   - two strangers meet: response fields, the ruleset's 15 stages, a real P2P connection, and the `mm_matches` row with mode, stages and region;
   - first come, first served, and the third ticket ends with the expiry error;
@@ -301,7 +323,7 @@ When finished: `docker compose down` (add `-v` to delete the data volume).
 - **Layout and names**: the workspace is `server/` (not `backend/`), the HTTP service is `accounts` (the design's `api`), and the shared crate is `common` (`core` clashes with Rust's `core`). There is no `relay` crate yet (Phase 1.5).
 - **Play keys are derived, not hashed**: the design says to store only a SHA-256 of the play key, but Slippi's launcher re-fetches the key on every Play (`getUser` → `private.playKey`), so it must be retrievable. The key is `HMAC-SHA256(PLAY_KEY_SECRET, uid, version)`; the database stores only the version. A database dump still reveals no key, and rotation is a version bump.
 - **Email from day 1** (user decision, 2026-10-06): verification at sign-up and self-service reset through a mail provider (Resend at first; any SMTP provider since the Resend domain slot was used up). Login is by email; no separate username. Invite codes (the friends-phase gate) were removed on 2026-10-08 (user decision: anyone can create an account); migration 0002 drops the `invites` table and `users.invite_code`.
-- **Direct, Unranked and Ranked**: Teams and Party are refused with a clear error. Unranked has no rating band (Slippi's Unranked MMR is hidden; ours is first come, first served). Regions come from a prefix table instead of a GeoIP database (see above).
+- **Direct, Unranked, Ranked and rooms**: Party is refused with a clear error; mode 3 (Teams) tickets are rooms' game tickets. Unranked has no rating band (Slippi's Unranked MMR is hidden; ours is first come, first served). Regions come from a prefix table instead of a GeoIP database (see above).
 - **Rating: Elo, not OpenSkill** (user decision, 2026-10-08): the design's OpenSkill with a scaled ordinal and Slippi's tier table is replaced by plain Elo with no tiers (see "Ranked"). Reports exist for every online game, ratings only for Ranked; no replays, no seasons, no rank tiers.
 - **Not built yet**: GraphQL facade for the unmodified launcher (the JSON endpoints mirror its operations one to one), `/metrics`, build-hash/ISO allow-list on tickets (`search.game` is accepted and ignored), the reserved-code period after account deletion (only `admin user delete` deletes accounts, and their code is free again at once), website pages beyond the two email-link pages.
 - **Known limit**: `rusty_enet` does not expose ENet's maximum packet size (32 MB default), so a client can make the server buffer a large reliable packet before mm rejects it (> 8 KiB is refused after reassembly). Sign-ups are open since 2026-10-08, so this needs revisiting.
