@@ -2,11 +2,12 @@ import { DOLPHIN_ONLINE_DIR } from "@common/product";
 import { shell } from "electron";
 import log from "electron-log";
 import isEqual from "lodash/isEqual";
-import { readFile } from "node:fs/promises";
+import { mkdir, readFile } from "node:fs/promises";
 import path from "path";
 import { fileExists } from "utils/file_exists";
 
 import {
+  ipc_cancelRoomLaunch,
   ipc_checkPlayKeyExists,
   ipc_configureDolphin,
   ipc_dolphinEvent,
@@ -15,8 +16,10 @@ import {
   ipc_getDolphinPaths,
   ipc_hardResetDolphin,
   ipc_installRosetta,
+  ipc_joinRoomInGame,
   ipc_launchNetplayDolphin,
   ipc_openDolphinSettingsFolder,
+  ipc_prepareRoomLaunch,
   ipc_removePlayKeyFile,
   ipc_saveGeckoCodes,
   ipc_softResetDolphin,
@@ -25,6 +28,7 @@ import {
 } from "./ipc";
 import type { DolphinManager } from "./manager";
 import { deletePlayKeyFile, writePlayKeyFile } from "./playkey";
+import { clearRoomRequest, handOffRoom, isRoomCode, writeRoomRequest } from "./room_handoff";
 import { installRosettaElevated } from "./rosetta/install_rosetta";
 import { DolphinLaunchType } from "./types";
 import { fetchGeckoCodes, saveGeckoCodes } from "./util";
@@ -113,6 +117,33 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
 
   ipc_launchNetplayDolphin.main!.handle(async () => {
     await dolphinManager.launchNetplayDolphin();
+    return { success: true };
+  });
+
+  ipc_joinRoomInGame.main!.handle(async ({ code }) => {
+    if (!isRoomCode(code)) {
+      throw new Error(`Not a room code: ${code}`);
+    }
+    if (!dolphinManager.isNetplayRunning()) {
+      return { outcome: "not-running" };
+    }
+    const onlineDir = dolphinManager.netplayOnlineDir();
+    await mkdir(onlineDir, { recursive: true });
+    const result = await handOffRoom(onlineDir, code);
+    log.info(`Room ${code} handed to the running game: ${result.outcome}`);
+    return result;
+  });
+
+  ipc_prepareRoomLaunch.main!.handle(async ({ code }) => {
+    const onlineDir = dolphinManager.netplayOnlineDir();
+    await mkdir(onlineDir, { recursive: true });
+    const req = await writeRoomRequest(onlineDir, code);
+    log.info(`Room ${code} requested for the game about to start (${req.id})`);
+    return { id: req.id };
+  });
+
+  ipc_cancelRoomLaunch.main!.handle(async ({ id }) => {
+    await clearRoomRequest(dolphinManager.netplayOnlineDir(), id);
     return { success: true };
   });
 

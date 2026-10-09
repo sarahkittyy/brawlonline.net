@@ -8,6 +8,7 @@ import type {
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
+  RoomList,
   SignUpRequest,
 } from "./types";
 
@@ -89,6 +90,10 @@ export class AccountsManager {
     query: { mode: MatchHistoryFilter; limit?: number; before?: string },
   ): Promise<AccountsResult<MatchHistoryPage>> {
     return this._withSession(uid, (token) => this.client.matchHistory(token, query));
+  }
+
+  rooms(uid: string): Promise<AccountsResult<RoomList>> {
+    return this._withSession(uid, (token) => this.client.rooms(token));
   }
 
   private _withSession<T>(uid: string, fn: (token: string) => Promise<T>): Promise<AccountsResult<T>> {

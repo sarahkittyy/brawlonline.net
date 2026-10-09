@@ -2,6 +2,7 @@
 
 import type { GeckoCode } from "./config/gecko_code";
 import {
+  ipc_cancelRoomLaunch,
   ipc_checkPlayKeyExists,
   ipc_configureDolphin,
   ipc_dolphinEvent,
@@ -10,8 +11,10 @@ import {
   ipc_getDolphinPaths,
   ipc_hardResetDolphin,
   ipc_installRosetta,
+  ipc_joinRoomInGame,
   ipc_launchNetplayDolphin,
   ipc_openDolphinSettingsFolder,
+  ipc_prepareRoomLaunch,
   ipc_removePlayKeyFile,
   ipc_saveGeckoCodes,
   ipc_softResetDolphin,
@@ -66,6 +69,17 @@ const dolphinApi: DolphinService = {
   },
   async launchNetplayDolphin(): Promise<void> {
     await ipc_launchNetplayDolphin.renderer!.trigger({});
+  },
+  async joinRoomInGame(code: string) {
+    const { result } = await ipc_joinRoomInGame.renderer!.trigger({ code });
+    return result;
+  },
+  async prepareRoomLaunch(code: string) {
+    const { result } = await ipc_prepareRoomLaunch.renderer!.trigger({ code });
+    return result;
+  },
+  async cancelRoomLaunch(id: string) {
+    await ipc_cancelRoomLaunch.renderer!.trigger({ id });
   },
   async fetchGeckoCodes(dolphinType: DolphinLaunchType): Promise<GeckoCode[]> {
     const { result } = await ipc_fetchGeckoCodes.renderer!.trigger({ dolphinType });
