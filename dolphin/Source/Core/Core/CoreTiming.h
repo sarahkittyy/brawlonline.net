@@ -17,6 +17,7 @@
 //   ScheduleEvent(periodInCycles - cyclesLate, callback, "whatever")
 
 #include <mutex>
+#include <optional>
 #include <string>
 #include <tuple>
 #include <unordered_map>
@@ -172,6 +173,15 @@ public:
   // Re-anchor the throttle at the current time, e.g. after the CPU thread waited on the host for
   // the peer, so the emulator does not race to make up for that wait.
   void ResetThrottleToNow();
+  // Gameplay-only rollback (region snapshots, the emulated ticks are not rewound): call before a
+  // rollback's load. The next SetRollbackResimulating(false) resumes the throttle at the host time
+  // the timeline was due at here, so the load and the re-run cost no wall-clock time when they fit
+  // into the frame's slack (without this, every rollback pushed the frames after it back by the
+  // re-run's duration). Ignored while the speed is unlimited.
+  void BeginRollbackBurst();
+  // How late the presented frame after the last burst resumed against its due time (zero or less:
+  // on time), or nullopt if no burst ended since the last call.
+  std::optional<DT> TakeRollbackBurstLateness();
 
   // May be used from CPU or GPU thread.
   void SleepUntil(TimePoint time_point);
@@ -233,6 +243,9 @@ private:
   double m_emulation_speed = 1.0;
   bool m_rollback_resimulating = false;
   double m_rollback_speed_factor = 1.0;
+  bool m_rollback_burst_pending = false;
+  TimePoint m_rollback_burst_due{};
+  std::optional<DT> m_rollback_burst_lateness;
 
   bool IsSpeedUnlimited() const;
   void UpdateSpeedLimit(s64 cycle, double new_speed);

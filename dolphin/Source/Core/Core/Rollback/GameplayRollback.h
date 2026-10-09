@@ -188,6 +188,8 @@ void PadsOnLoopTop(Core::System& system);
 void PadsOnPadThreadUpdated(Core::System& system);
 // The newest slots the pad thread produced (the local controllers' latest sample).
 PadSlots PadsLatestRaw();
+// Milliseconds since the pad thread produced that sample (-1: none yet).
+double PadsLatestAgeMs();
 
 // Anchor (recorder): at every loop top the frame's slots become the pad thread's newest sample for
 // the ports in `port_mask`, and stay constant for the whole main-thread frame.
