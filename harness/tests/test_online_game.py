@@ -21,6 +21,7 @@ import concurrent.futures
 import os
 import re
 import shutil
+import socket
 import struct
 import sys
 import time
@@ -33,6 +34,7 @@ from ppharness import paths
 from ppharness.backend import OnlineBackend, OnlineUser
 from ppharness.client import HarnessClient, PadInput
 from ppharness.instance import DolphinInstance, InstanceConfig
+from ppharness.netsim import NetSim
 
 from test_online import _logged_in, _make_backend, _wait
 
@@ -368,9 +370,11 @@ def _boot(dolphin: Callable[..., DolphinInstance], name: str, be: OnlineBackend,
           dolphin_ini: dict[str, dict[str, Any]] | None = None) -> Game:
     if not PLUGIN.exists():
         pytest.skip(f"{PLUGIN} not built (game-code/build.sh)")
-    cfg = InstanceConfig(cpu_thread=True, video_backend=video, dolphin_ini={"Online": {
-        "UseDevServer": True, "MatchmakingPort": be.mm_port, "DevAccountsUrl": be.accounts_url},
-        **(dolphin_ini or {})}, gcpad_ini=gcpad_ini or {})
+    ini: dict[str, dict[str, Any]] = {"Online": {
+        "UseDevServer": True, "MatchmakingPort": be.mm_port, "DevAccountsUrl": be.accounts_url}}
+    for section, values in (dolphin_ini or {}).items():
+        ini.setdefault(section, {}).update(values)
+    cfg = InstanceConfig(cpu_thread=True, video_backend=video, dolphin_ini=ini, gcpad_ini=gcpad_ini or {})
     inst = dolphin(name, config=cfg, client_timeout=60.0)
     d = inst.create()
     patch_sd.patch_image(d / "Wii" / "sd.raw",
@@ -818,6 +822,99 @@ def test_opponent_leaves_in_the_middle_of_a_game(backend: OnlineBackend,
     print(f"drop after {dropped:.2f} s; end requested {f1 - f0} frames after the text "
           f"(flags {flags:#x}); scMelee left {f2 - f0} frames after it")
     assert f1 - f0 < 140 and f2 - f0 < 200, (f0, f1, f2)
+
+
+def _p2p_through_netsim(preset: str) -> tuple[list[NetSim], tuple[dict[str, Any], dict[str, Any]]]:
+    """Both games' P2P traffic through one netsim relay (the matchmaking server hands out real
+    addresses). Both games are on 127.0.0.1, so each takes the other's LAN address (Slippi's
+    rule for the same external IP); they announce loopback aliases instead ([Online] ForceLanIP /
+    LanIP, with fixed netplay ports), and the relay owns both aliases (NetSim upstream_bind /
+    client), so every packet between them crosses it and arrives from the address its receiver
+    knows the sender by (the gameplay session takes packets only from its peer's address)."""
+    ports = []
+    for _ in range(2):
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            ports.append(probe.getsockname()[1])
+    aliases = ("127.0.0.2", "127.0.0.3")
+    sim = NetSim(("127.0.0.1", ports[1]), (aliases[1], ports[1]), preset, seed="p2p",
+                 upstream_bind=(aliases[0], ports[0]), client=("127.0.0.1", ports[0])).start()
+    inis = [{"Online": {"ForceNetplayPort": True, "NetplayPort": ports[i], "ForceLanIP": True,
+                        "LanIP": aliases[i]}} for i in range(2)]
+    return [sim], (inis[0], inis[1])
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("preset", ["lan", "bad_wifi"])
+def test_pause_quit_in_a_direct_match(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                      gpu_backend: str, preset: str) -> None:
+    """Direct allows the real pause: one player pauses and quits with L+R+A+START in the middle of
+    a game under rollback while the other keeps moving. Brawl tears the match down 4 frames after
+    its quit, and under latency the other game rolled back across that teardown and hung in the
+    match for good (frozen on the stage) while the quitter went back to the CSS. Now the plugin
+    holds the quit on the pause screen until the rollback session has ended on it (on the same
+    frame on both), then the match ends (no contest) and both games go back to the online CSS,
+    still connected, at the next game. `bad_wifi`: the P2P traffic goes through netsim
+    (_p2p_through_netsim), so both games roll back through the pause and the quit.
+    Screenshots: run/artifacts/game-bridge/gameplay-lras-<preset>/."""
+    sims, inis = _p2p_through_netsim(preset) if preset != "lan" else ([], (None, None))
+    try:
+        _pause_quit(backend, dolphin, gpu_backend, preset, inis)
+    finally:
+        for sim in sims:
+            sim.stop()
+
+
+def _pause_quit(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str,
+                preset: str, inis: tuple[Any, Any]) -> None:
+    a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, f"gameplay-lras-{preset}",
+                                     ("mona", "nell"), stocks=4, dolphin_ini=inis)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)), 240,
+                    "the match to run on both")
+    # Both move (input changes are what the other side mispredicts), then A pauses and quits while
+    # B keeps moving.
+    walk = [PadInput(main=(40, 128), hold=7), PadInput(main=(216, 128), hold=7)]
+    b.c.pad_script(0, walk * 80)
+    a.c.pad_script(0, walk * 20)
+    a.steps("wait 300")
+    a.steps("tap START 8", "wait 60")
+    a.shot("01-paused")
+    b.shot("01-paused")
+    a.steps("hold L+R+A+START 20")
+    trail: list[tuple] = []
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < 45:
+        row = []
+        for g in (a, b):
+            try:
+                st = online_set.gstatus(g.c)
+                row.append((g.name, online_set.scene(g.c), st["phase"], st.get("end_reason"),
+                            st.get("match_index"), st.get("current_frame")))
+            except Exception as e:  # noqa: BLE001
+                row.append((g.name, "error", repr(e)))
+        if not trail or [r[:4] for r in trail[-1][1]] != [r[:4] for r in row]:
+            trail.append((round(time.monotonic() - t0, 2), row))
+            print(trail[-1])
+        if all(r[1] == online_set.CSS for r in row) and time.monotonic() - t0 > 10:
+            break
+        time.sleep(0.25)
+    for g in (a, b):
+        g.shot("02-after-quit")
+    assert all(online_set.scene(g.c) == online_set.CSS for g in (a, b)), trail
+    ends = [online_set.gstatus(g.c) for g in (a, b)]
+    print("rollbacks", [s["rollbacks"] for s in ends], "frames", [s["current_frame"] for s in ends])
+    assert [s["end_reason"] for s in ends] == ["quit", "quit"], ends
+    assert ends[0]["current_frame"] == ends[1]["current_frame"], [s["current_frame"] for s in ends]
+    if preset != "lan":
+        assert all(s["rollbacks"] > 0 for s in ends), [s["rollbacks"] for s in ends]
+    for g in (a, b):
+        # The plugin held the quit (0x40000) and then ended the match (0x80000).
+        assert g.debug_scratch()[10] & 0xC0000 == 0xC0000, hex(g.debug_scratch()[10])
+        st = online_set.gstatus(g.c)
+        assert st["phase"] == "connected", (g.name, st["phase"], st.get("error"))
+        lo, se = online_set.local(g.c), online_set.session(g.c)
+        assert lo["state"] == 2 and not lo["disconnected"], (g.name, lo)
+        assert se["game"] == 2, (g.name, se)
 
 
 @pytest.mark.slow

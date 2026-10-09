@@ -499,7 +499,17 @@ class _Session:
 
 
 class NetSim:
-    """The proxy. Start with ``start()`` or use as a context manager."""
+    """The proxy. Start with ``start()`` or use as a context manager.
+
+    ``upstream_bind`` and ``client`` make it a symmetric relay between two peers that know each
+    other only by addresses the proxy owns (e.g. two games on one machine that announce loopback
+    aliases as their LAN addresses): ``client`` is the one fixed client (peer A's real address),
+    whose session and upstream socket exist from the start, so the forward target (peer B) can
+    send first; every packet on the listen socket (B's alias) belongs to it; the upstream socket
+    is bound to ``upstream_bind`` (A's alias), so B sees A's packets come from A's alias and its
+    replies to that alias come back through the proxy ("down"), and A sees them come from B's
+    alias (the listen address). "up" is then A -> B.
+    """
 
     def __init__(
         self,
@@ -511,6 +521,8 @@ class NetSim:
         idle_timeout: float = 300.0,
         sample_limit: int = 200_000,
         recv_buffer: int = 4 << 20,
+        upstream_bind: tuple[str, int] | None = None,
+        client: tuple[str, int] | None = None,
     ):
         self.forward = parse_hostport(forward) if isinstance(forward, str) else tuple(forward)
         self.listen_requested = parse_hostport(listen) if isinstance(listen, str) else tuple(listen)
@@ -518,6 +530,8 @@ class NetSim:
         self.seed = seed
         self.idle_timeout = idle_timeout
         self.recv_buffer = recv_buffer
+        self.upstream_bind = tuple(upstream_bind) if upstream_bind else None
+        self.fixed_client = tuple(client) if client else None
         self.epoch = clock()
         self.started_at = self.epoch
 
@@ -555,6 +569,8 @@ class NetSim:
         self._sel = selectors.DefaultSelector()
         self._sel.register(s, selectors.EVENT_READ, None)
         self.started_at = self.epoch = clock()
+        if self.fixed_client:
+            self._new_session(self.fixed_client, self.epoch)
         ready = threading.Event()
         self._threads = [
             threading.Thread(target=self._recv_loop, daemon=True, name="netsim-recv"),
@@ -625,7 +641,7 @@ class NetSim:
         self._tune(up)
         bind_host = fhost if fhost in ("127.0.0.1", "::1", "localhost") else (
             "::" if _family(fhost) == socket.AF_INET6 else "0.0.0.0")
-        up.bind((bind_host, 0))
+        up.bind(self.upstream_bind or (bind_host, 0))
         up.setblocking(False)
         sess = _Session(next(self._session_counter), client, up, self.seed, now)
         self._sessions[client] = sess
@@ -670,7 +686,11 @@ class NetSim:
                     except OSError:
                         break
                     now = clock()
-                    if sess is None:
+                    if sess is None and self.fixed_client:
+                        s = self._sessions[self.fixed_client]
+                        s.client = addr   # replies go where the client really sends from
+                        self._ingest("up", s, data, now)
+                    elif sess is None:
                         s = self._sessions.get(addr) or self._new_session(addr, now)
                         self._ingest("up", s, data, now)
                     else:
@@ -679,7 +699,7 @@ class NetSim:
             if now - last_gc > 1.0:
                 last_gc = now
                 for s in list(self._sessions.values()):
-                    if now - s.last_activity > self.idle_timeout:
+                    if now - s.last_activity > self.idle_timeout and not self.fixed_client:
                         self._close_session(s)
 
     def _ingest(self, direction: str, sess: _Session, data: bytes, now: float) -> None:

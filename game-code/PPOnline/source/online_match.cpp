@@ -77,6 +77,10 @@ namespace OnlineMatch {
     static u16 s_pickedStage = 0xFFFF;
     static u8 s_pickedAsl = 0;
     static int s_discFrames = -1;   // frames since the opponent was lost in a match
+    // A pause-screen quit waiting for the rollback session to end (pponline_pauseResult).
+    static u8* s_quitOp = NULL;   // the operator a quit is pending on
+    static u8 s_quitKind = 0;     // the pause screen's result: 3 or 4
+    static u16 s_quitFrames = 0;
 
     // Each port's controls for this match (SESSION's port values, kept at the setup: SESSION is
     // the same on both machines, so are these). Applied by the ipPadConfig hook below.
@@ -213,6 +217,7 @@ namespace OnlineMatch {
                                           ((u32)se.players[0].charKind << 8) | se.players[1].charKind;
         memoryChangeTo(seq, 9, 0);   // then state 9: scMelee
         s_discFrames = -1;
+        s_quitOp = NULL;
         return true;
     }
 
@@ -364,6 +369,79 @@ namespace OnlineMatch {
 
     bool disconnectShown() { return s_discFrames >= 0; }
 
+    // ---- The pause screen's quit (L+R+A+START) in an online match ----
+    // While the game is paused, the operator's process (text+0x256B70) asks the pause screen
+    // for its result every frame (text+0x256EE4) and switches on it at text+0x256EF0: 2 resume,
+    // 3 quit (sound 0x2052, flags |= 0x30), 4 the other quit (sound 0x13, flags |= 0x20); both
+    // quits jump to the operator's end (text+0x25748C) in the same frame, and the match is torn
+    // down 4 frames later (ftManager::removeEntry). The rollback session cannot confirm the quit
+    // that fast: the other machine learns of it up to the prediction window plus the input delay
+    // later and has to roll back across the teardown, which hangs it (docs/game-code.md).
+    // So online the quit is only marked when it is chosen: the quit bits are set (Dolphin ends
+    // the session MAX_ROLLBACK_FRAMES + 12 frames later, as after a game set) and its sound
+    // plays, while the game stays paused and every other pause result is ignored. The operator's
+    // own end runs once LOCAL says the session is over, or after QUIT_MAX_FRAMES with an older
+    // Dolphin. The pending quit lives in the plugin's .bss, which the session rolls back.
+    static const u16 QUIT_MAX_FRAMES = 600;
+    static const int PAUSE_END_QUIT = 0x100;   // asm: the quit's flags and end, without its sound
+
+    typedef void (*PlaySEArgsFn)(void*, int, int, int, int, int);
+
+    extern "C" int pponline_pauseResult(int result, u8* op)
+    {
+        if (!g_onlineCss || !g_onlineMatchGame) return result;
+        PPOM::Debug& dbg = PPOM::g_block.debug;
+        if (s_quitOp != op) {
+            if (result != 3 && result != 4) return result;
+            s_quitOp = op;
+            s_quitKind = (u8)result;
+            s_quitFrames = 0;
+            op[0x11B] |= result == 3 ? 0x30 : 0x20;
+            void* snd = *(void**)0x805A01D0;   // g_sndSystem, as the game's own call
+            if (snd) ((PlaySEArgsFn)0x800742b0)(snd, result == 3 ? 0x2052 : 0x13, 0x10000, 0, 0, -1);
+            dbg.scratch[10] |= 0x40000;
+            return 0;   // stay paused
+        }
+        ++s_quitFrames;
+        if (PPOM::g_block.local.state == PPOM::LS_IN_MATCH && s_quitFrames < QUIT_MAX_FRAMES) return 0;
+        int kind = s_quitKind;
+        s_quitOp = NULL;
+        dbg.scratch[10] |= 0x80000;
+        return PAUSE_END_QUIT | kind;
+    }
+
+    // text+0x256EF0 (0x80961904) `cmpwi r3,3`, right after the call that returned the pause
+    // screen's result in r3 (nothing else volatile is live; the function saved LR). Quit kinds
+    // go to their flag writes, past the sound: kind 3 text+0x256F80, kind 4 text+0x256FB0.
+    __attribute__((naked)) void hookPauseResult()
+    {
+        asm volatile(
+            "mr 4, 30\n\t"
+            "lis 12, pponline_pauseResult@ha\n\t"
+            "addi 12, 12, pponline_pauseResult@l\n\t"
+            "mtctr 12\n\t"
+            "bctrl\n\t"
+            "cmpwi 3, 0x103\n\t"
+            "bne 1f\n\t"
+            "lis 12, 0x8096\n\t"
+            "ori 12, 12, 0x1994\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t"
+            "1:\n\t"
+            "cmpwi 3, 0x104\n\t"
+            "bne 2f\n\t"
+            "lis 12, 0x8096\n\t"
+            "ori 12, 12, 0x19C4\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t"
+            "2:\n\t"
+            "cmpwi 3, 3\n\t"
+            "lis 12, 0x8096\n\t"
+            "ori 12, 12, 0x1908\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t");
+    }
+
     // ---- Each player's own controls (the design's port values) ----
     // At the start of a match the game gives every player's controller its layout:
     // fn_801104C4(gmGlobalModeMelee*) calls ipPadConfig's setter fn_8004A2C8(g_PadConfig, player,
@@ -458,5 +536,6 @@ namespace OnlineMatch {
         api->sySimpleHookRel(0x00036FDC, reinterpret_cast<void*>(hookState5), 1);
         api->sySimpleHookRel(0x00037580, reinterpret_cast<void*>(hookState10), 1);
         api->sySimpleHook(0x80110550, reinterpret_cast<void*>(hookPadConfigSet));
+        api->sySimpleHookRel(0x00256EF0, reinterpret_cast<void*>(hookPauseResult), 27 /* SORA_MELEE */);
     }
 }

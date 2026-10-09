@@ -55,6 +55,12 @@ constexpr u32 PAD_STATUS = 0x805BAD00;  // gfPadStatus[4], stride 0x40, what the
 constexpr u32 PAD_STRIDE = 0x40;
 constexpr u32 SCM_OPERATOR_RULE_MELEE = 0x54;
 constexpr u32 OPR_IS_GAME_SET = 0x74;
+// scMelee's stOperatorInfoMelee (its gfTask name at +0) and its flags byte: 0x80 running, 0x40 stop
+// requested, 0x30 the pause screen's L+R+A+START quit (sora_melee text+0x256F80), 0x20 its other
+// quit (+0x256FB0).
+constexpr u32 SCM_OPERATOR_INFO = 0x68;
+constexpr u32 OPI_FLAGS = 0x11B;
+constexpr u8 OPI_QUIT = 0x30;
 }  // namespace Addr
 
 class Guest
@@ -104,6 +110,9 @@ u32 FightersCrc(const FighterFields& f);
 
 // scMelee's stOperatorRuleMelee "is game set" byte (0 if not in a match).
 bool IsGameSet(const Guest& g);
+// A pause-screen quit is chosen (online the plugin marks it and keeps the game paused until the
+// session has ended: docs/game-code.md, the pause-screen quit).
+bool IsQuitRequested(const Guest& g);
 
 // ---------------------------------------------------------------------------------------------
 // Region set: what gameplay-only rollback saves and restores.
