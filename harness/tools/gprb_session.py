@@ -412,7 +412,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--p2", default="falco")
     ap.add_argument("--stage", default="battlefield")
     ap.add_argument("--delay", type=int, default=2)
-    ap.add_argument("--region-set", default="gp-v19")
+    ap.add_argument("--region-set", default="gp-v21")
     ap.add_argument("--start-frame", type=int, default=240)
     ap.add_argument("--frames", type=int, default=30000)
     ap.add_argument("--rtc-a", type=lambda x: int(x, 0), default=0, help="A's custom RTC (0: the fixed default)")

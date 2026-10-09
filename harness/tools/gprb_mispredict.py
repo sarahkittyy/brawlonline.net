@@ -229,6 +229,13 @@ def _one_run(args, inp: Dict[str, Any], mode: str, run: int) -> Dict[str, Any]:
                                 interp_resumed = True
                     s = c.call("gprb_status")
                     gf = G.game_frame(c)
+                    if s["phase"] == "running":
+                        # Cost per frame (docs/nplayer/determinism.md): wall time and frames of the
+                        # running phase only, without boot, load and countdown.
+                        if "run_t0" not in rep:
+                            rep["run_t0"], rep["run_f0"] = time.monotonic(), s["current_frame"]
+                        rep["run_wall_s"] = round(time.monotonic() - rep["run_t0"], 2)
+                        rep["run_frames"] = s["current_frame"] - rep["run_f0"]
                     if gf >= until or s["phase"] in ("ended", "error") or time.monotonic() - t0 > args.timeout:
                         break
                     if args.sound_sample and s["phase"] == "running":
@@ -264,7 +271,13 @@ def _one_run(args, inp: Dict[str, Any], mode: str, run: int) -> Dict[str, Any]:
                                                         "resim_sound_allocs", "suppressed_sound_allocs",
                                                         "sound_reattached", "sound_reattach_gone", "sound_stopped",
                                                         "sound_stop_gone", "sound_gone_why", "sound_moved",
-                                                        "desyncs_detected", "desync_log")}
+                                                        "desyncs_detected", "desync_log", "region_bytes",
+                                                        "region_ranges", "save_count", "save_us_total",
+                                                        "save_us_max", "load_count", "load_us_total",
+                                                        "load_us_max", "save_granules_total", "save_granules_max",
+                                                        "load_granules_total", "load_granules_max")}
+                rep.pop("run_t0", None)
+                rep.pop("run_f0", None)
                 rep["trace"] = c.call("frame_trace", since=args.start_frame)["rows"]
                 rep["final"] = G.small_state(c)
                 if os.environ.get("PPR_GPRB_CENSUS"):
@@ -319,6 +332,14 @@ def cmd_run(args) -> int:
               f"vs ref: compared {cmp.get('compared')} diverged at {cmp.get('diverged_at')} "
               f"{json.dumps(cmp.get('first_diff'))[:400] if cmp.get('first_diff') else ''}; error {rep.get('error')} "
               f"wall {rep['wall_s']} s", flush=True)
+        if rep.get("run_frames"):
+            sv, ld = max(1, st.get("save_count") or 0), max(1, st.get("load_count") or 0)
+            print(f"    cost: {1000 * rep['run_wall_s'] / rep['run_frames']:.2f} ms per frame (unthrottled, "
+                  f"{rep['run_frames']} frames), save avg {(st.get('save_us_total') or 0) / sv:.0f} us max "
+                  f"{st.get('save_us_max')}, load avg {(st.get('load_us_total') or 0) / ld:.0f} us max "
+                  f"{st.get('load_us_max')}, granules per save {(st.get('save_granules_total') or 0) / sv:.0f} "
+                  f"max {st.get('save_granules_max')}, per load {(st.get('load_granules_total') or 0) / ld:.0f} "
+                  f"max {st.get('load_granules_max')}, set {(st.get('region_bytes') or 0) / 2**20:.1f} MiB", flush=True)
         if st.get("desyncs_detected"):
             print(f"    sync-test desyncs {st.get('desyncs_detected')}: {(st.get('desync_log') or [])[:3]}", flush=True)
         if args.save_traces:
@@ -361,7 +382,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--cpu", default="dc", choices=("sc", "dc"))
     p.add_argument("--modes", default="ref,mp")
     p.add_argument("--distance", type=int, default=2)
-    p.add_argument("--region-set", default="gp-v19")
+    p.add_argument("--region-set", default="gp-v21")
     p.add_argument("--start-frame", type=int, default=240)
     p.add_argument("--mispredict-ports", type=int, default=None,
                    help="port mask whose first runs get another frame's input (default: every port of the fixture)")

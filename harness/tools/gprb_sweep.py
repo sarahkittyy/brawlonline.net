@@ -1277,7 +1277,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--jobs", type=int, default=3, help="Dolphin instances at a time (a session uses 2)")
     ap.add_argument("--distance", type=int, default=7, help="sync test: restore the state this many frames back")
     ap.add_argument("--minutes", type=int, default=2, help="time limit of every match (4 stocks)")
-    ap.add_argument("--region-set", default="gp-v19")
+    ap.add_argument("--region-set", default="gp-v21")
     ap.add_argument("--build", default=str(DEFAULT_BUILD),
                     help="Dolphin binaries dir (PPHARNESS_DOLPHIN_DIR wins if set)")
     ap.add_argument("--keep-work", action="store_true",
