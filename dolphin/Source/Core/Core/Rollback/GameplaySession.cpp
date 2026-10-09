@@ -249,15 +249,27 @@ struct State
   bool did_frame0 = false;
   Clock::time_point barrier_since{};
   std::optional<Clock::time_point> start_at;
+  // Joiner: when it leaves the barrier for the countdown (RTT/2 after it applied the host's
+  // values, when the host hears that it did), so both countdowns start together.
+  std::optional<Clock::time_point> countdown_at;
 
   // GekkoNet.
   GekkoSession* gekko = nullptr;
   GekkoNetAdapter adapter{};
   bool gekko_started = false;
-  // The start barrier's GekkoNet update that saw the peer synced may already return frame 0's
-  // events; they are kept here for the first RunFrame.
+  // The GekkoNet update that saw the peer synced (during the countdown or at the start barrier)
+  // may already return frame 0's events; they are kept here for the first RunFrame.
   bool ops_prefetched = false;
   PendingOps prefetched_ops;
+  // During the countdown the handshake's frame 0 save is held back until the start barrier,
+  // where the region set is in place: ProcessGekkoUpdate only records it.
+  bool defer_initial_save = false;
+  bool initial_save_deferred = false;
+  unsigned int* deferred_initial_checksum = nullptr;
+  // Start-of-match time sync (HardTimeSync): the last session frame it checked; the last frame
+  // StartTelemetry logged.
+  s64 last_hard_sync_frame = -1;
+  s64 last_start_log_frame = -1;
   int num_players = 0;
   std::array<int, 4> handle_port{-1, -1, -1, -1};  // gekko handle -> in-game port
   std::vector<int> local_handles;
@@ -1451,6 +1463,9 @@ void DestroyGekko()
   s.gekko = nullptr;
   s.gekko_started = false;
   s.ops_prefetched = false;
+  s.defer_initial_save = false;
+  s.initial_save_deferred = false;
+  s.deferred_initial_checksum = nullptr;
   for (auto* r : s.gekko_rx_ptrs)
     (void)r;  // owned and freed by GekkoNet
   s.gekko_rx_ptrs.clear();
@@ -1574,6 +1589,8 @@ void ResetRunStats()
   s.current_frame = -1;
   s.speed_factor = 1.0;
   s.last_timesync_frame = UINT32_MAX;
+  s.last_hard_sync_frame = -1;
+  s.last_start_log_frame = -1;
   s.next_ping_display_frame = PING_DISPLAY_INTERVAL;
   s.rollbacks = s.max_rollback = s.frames_resimulated = s.stall_polls = s.desyncs = 0;
   s.net_window = s.net_total = {};
@@ -1690,6 +1707,7 @@ void EndRunning(Core::System& system, const std::string& reason)
     s.did_frame0 = false;
     s.sync = {};
     s.start_at.reset();
+    s.countdown_at.reset();
     s.peer.at_s = s.peer.applied = s.peer.at_start = s.peer.go = false;
     s.peer.sync = {};
     s.peer.task_order_valid = false;
@@ -1968,6 +1986,16 @@ void PerformQueuedSave(Core::System& system)
     }
   }
   RecordFrame(s.queued_save.frame, crc, rec);
+}
+
+// GekkoNet's save of frame 0 (the session's first state): the first snapshot of the region set.
+void InitialSave(Core::System& system, unsigned int* checksum)
+{
+  Rollback::RollbackManager::Get().SaveFrame(system);
+  FrameRecord rec;
+  const u32 crc = FrameChecksum(GuestOf(system), &rec);
+  if (checksum)
+    *checksum = crc;
 }
 
 bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count);
@@ -2272,13 +2300,15 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
                    rbm.m_ring_count);
     }
   }
-  if (initial_save)
+  if (initial_save && s.defer_initial_save)
   {
-    Rollback::RollbackManager::Get().SaveFrame(system);
-    FrameRecord rec;
-    const u32 crc = FrameChecksum(GuestOf(system), &rec);
-    if (initial_checksum)
-      *initial_checksum = crc;
+    // The countdown's handshake (PumpGekkoInCountdown): frame 0 is saved at the start barrier.
+    s.initial_save_deferred = true;
+    s.deferred_initial_checksum = initial_checksum;
+  }
+  else if (initial_save)
+  {
+    InitialSave(system, initial_checksum);
   }
   s.ops.adv_count = num_adv;
   if (num_adv == 0)
@@ -2377,6 +2407,104 @@ bool HostWait(Core::System& system, Pred pred, std::chrono::milliseconds max)
     static Common::PrecisionTimer timer;
     timer.SleepUntil(Clock::now() + std::chrono::microseconds(100));
     s.mutex.lock();
+  }
+  return true;
+}
+
+// Slippi's start-of-match time sync (CEXISlippi::shouldSkipOnlineFrame): in the first
+// HARD_SYNC_UNTIL session frames, every HARD_SYNC_INTERVAL, a peer that is a frame or more ahead
+// of the other waits on the host for the whole frames it is ahead (at most HARD_SYNC_MAX_FRAMES).
+// The speed nudge alone (UpdateTimeSync, at most -2% / +1%) takes seconds to close a gap of a
+// few frames, and the peer that is ahead rolls back on nearly every frame meanwhile.
+constexpr s64 HARD_SYNC_UNTIL = 120;
+constexpr s64 HARD_SYNC_INTERVAL = 30;
+constexpr int HARD_SYNC_MAX_FRAMES = 5;
+constexpr double FRAME_US = 1e6 * 1001.0 / 60000.0;
+
+void HardTimeSync(Core::System& system)
+{
+  if (s.mode != Mode::Network || !s.gekko || s.current_frame <= 0 ||
+      s.current_frame > HARD_SYNC_UNTIL || s.current_frame % HARD_SYNC_INTERVAL != 0 ||
+      s.current_frame == s.last_hard_sync_frame)
+  {
+    return;
+  }
+  s.last_hard_sync_frame = s.current_frame;
+  const float ahead = s.frames_ahead;
+  if (ahead < 1.0f)
+    return;
+  const int frames = std::min(static_cast<int>(std::lround(ahead)), HARD_SYNC_MAX_FRAMES);
+  const auto t0 = Clock::now();
+  const auto until = t0 + std::chrono::microseconds(static_cast<s64>(frames * FRAME_US));
+  HostWait(
+      system,
+      [&] {
+        gekko_network_poll(s.gekko);
+        return Clock::now() >= until;
+      },
+      std::chrono::milliseconds(frames * 17 + 100));
+  system.GetCoreTiming().ResetThrottleToNow();
+  const double ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+  ++s.net_window.stalls;
+  s.net_window.stall_ms += ms;
+  s.net_window.stall_ms_max = std::max(s.net_window.stall_ms_max, ms);
+  INFO_LOG_FMT(BRAWLBACK, "gprb: time sync at frame {}: {:.2f} frames ahead, held {} frames ({:.1f} ms)",
+               s.current_frame, ahead, frames, ms);
+}
+
+// The first seconds of a network session in more detail than the NET_STATS_WINDOW lines: the
+// totals so far at these session frames.
+void StartTelemetry()
+{
+  static constexpr std::array<s64, 7> AT{30, 60, 120, 180, 300, 600, 900};
+  if (s.mode != Mode::Network || std::find(AT.begin(), AT.end(), s.current_frame) == AT.end() ||
+      s.current_frame == s.last_start_log_frame)
+  {
+    return;
+  }
+  s.last_start_log_frame = s.current_frame;
+  std::string link;
+  if (s.gekko && s.remote_handle >= 0)
+  {
+    GekkoNetworkStats st{};
+    gekko_network_stats(s.gekko, s.remote_handle, &st);
+    link = fmt::format(", ping {} ms (avg {:.1f}, jitter {:.1f})", st.last_ping, st.avg_ping,
+                       st.jitter);
+  }
+  INFO_LOG_FMT(BRAWLBACK,
+               "gprb net start: frame {}: {:.2f} frames ahead, speed {:.4f}, rollbacks {} "
+               "(resimulated {}, max depth {}), waits for the peer {}{}",
+               s.current_frame, s.frames_ahead, s.speed_factor, s.rollbacks, s.frames_resimulated,
+               s.max_rollback, s.stall_polls, link);
+}
+
+// Countdown (network): GekkoNet's handshake (a sync request and NUM_TO_SYNC responses, about five
+// round trips) runs here, while the countdown plays, instead of at the start barrier, where the
+// game stood still for it right after GO. The update that sees the peer synced may return frame
+// 0's save (held back for the start barrier, see defer_initial_save) and advance events (kept for
+// the first RunFrame); after that only the network is polled. False: the session failed.
+bool PumpGekkoInCountdown(Core::System& system)
+{
+  if (!s.gekko)
+    return true;
+  if (s.gekko_started)
+  {
+    gekko_network_poll(s.gekko);
+    return true;
+  }
+  int count = 0;
+  GekkoGameEvent** events = gekko_update_session(s.gekko, &count);
+  if (!ProcessGekkoUpdate(system, events, count))
+    return false;
+  if (s.ops.adv_count > 0)
+  {
+    s.prefetched_ops = s.ops;
+    s.ops_prefetched = true;
+  }
+  if (s.gekko_started)
+  {
+    INFO_LOG_FMT(BRAWLBACK, "gprb: GekkoNet handshake done in the countdown ({:.0f} ms)",
+                 std::chrono::duration<double, std::milli>(Clock::now() - s.barrier_since).count());
   }
   return true;
 }
@@ -2610,6 +2738,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   }
   else if (s.iteration == 0)
   {
+    HardTimeSync(system);
     CaptureLocalInputs();
     if (s.mode == Mode::Network)
     {
@@ -2650,6 +2779,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
       s.net_window.stall_ms_max = std::max(s.net_window.stall_ms_max, ms);
     }
     UpdateTimeSync(system);
+    StartTelemetry();
     UpdatePingDisplay();
     PassLogWrite();
   }
@@ -2801,6 +2931,7 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.peer = PeerView{};
   s.error.clear();
   s.at_s = s.applied = s.at_start = s.go = false;
+  s.countdown_at.reset();
   s.did_frame0 = false;
   s.match_index = 0;
   s.setup = {};
@@ -3276,6 +3407,14 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     const u32 fc = g.U32(Addr::GAME_FRAME + 4).value_or(0);
     PadsSetCurrent(0xF, NeutralSlots());
     PadsOnLoopTop(system);
+    if (s.mode == Mode::Network && s.phase == Phase::Countdown && !PumpGekkoInCountdown(system))
+    {
+      s.error = s.error.empty() ? "gekko session failed in the countdown" : s.error;
+      EndRunning(system, s.error);
+      s.phase = Phase::Error;
+      SetLoopDefault(ppc);
+      return true;
+    }
     if (s.phase == Phase::Countdown && fc + 1 < StartFrame())
       return false;  // run the frame normally (the HLE hook's default)
     // No file read may be in flight when the base snapshot is taken (countdown preloads).
@@ -3308,16 +3447,27 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
         s.error = *err;
         return false;
       }
-      if (!CreateGekko(false, 2))
+      // Normally created when the countdown started (PumpGekkoInCountdown).
+      if (!s.gekko && !CreateGekko(false, 2))
       {
         s.phase = Phase::Error;
         s.error = "gekko_create failed";
         return false;
       }
+      // The region set is in place now: the save of frame 0 the countdown's handshake returned.
+      s.defer_initial_save = false;
+      if (s.initial_save_deferred)
+      {
+        s.initial_save_deferred = false;
+        InitialSave(system, s.deferred_initial_checksum);
+        s.deferred_initial_checksum = nullptr;
+      }
       s.at_start = true;
       s.barrier_since = Clock::now();
       s.phase = Phase::StartBarrier;
-      INFO_LOG_FMT(BRAWLBACK, "gprb: at the start barrier (game frame {})", fc + 1);
+      SendState();  // the peer's barrier waits for at_start: not until the next 50 ms tick
+      INFO_LOG_FMT(BRAWLBACK, "gprb: at the start barrier (game frame {}, GekkoNet synced {})",
+                   fc + 1, s.gekko_started);
     }
     // StartBarrier: wait on the host for GekkoNet's handshake and the peer.
     s.cpu_where = "startbarrier";
@@ -3354,12 +3504,19 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       {
         s.go = true;
         const double rtt = std::clamp(s.peer.rtt_ms, 0.0, PeerData::MAX_RTT_MS);
+        // Sent now: the joiner starts when "go" arrives, the host RTT/2 after sending it. On the
+        // 50 ms state tick the joiner started up to 50 ms (3 frames) after the host, and time
+        // sync then needed seconds to close that gap.
+        SendState();
         s.start_at = Clock::now() + std::chrono::microseconds(static_cast<s64>(rtt * 500.0));
       }
       const bool start = s.net_opts.host ? (s.go && s.start_at && Clock::now() >= *s.start_at) :
                                            (s.peer.go && s.gekko_started);
       if (start)
       {
+        INFO_LOG_FMT(BRAWLBACK, "gprb: start barrier passed after {:.0f} ms",
+                     std::chrono::duration<double, std::milli>(Clock::now() - s.barrier_since)
+                         .count());
         StartRunning(system);
         ct.ResetThrottleToNow();
         return RunFrame(guard);
@@ -3448,6 +3605,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     s.applied = s.net_opts.host;
     s.barrier_since = Clock::now();
     s.phase = Phase::Barrier;
+    SendState();
     INFO_LOG_FMT(BRAWLBACK, "gprb: at the barrier (setup {:016x}: {})", s.setup_hash,
                  Hex(SetupKey(g)));
   }
@@ -3480,14 +3638,25 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       INFO_LOG_FMT(BRAWLBACK, "gprb: joiner applied the host's sync block (task lists relinked: {})",
                    relinked);
       s.applied = true;
+      SendState();
+      const double rtt = std::clamp(s.peer.rtt_ms, 0.0, PeerData::MAX_RTT_MS);
+      s.countdown_at = Clock::now() + std::chrono::microseconds(static_cast<s64>(rtt * 500.0));
     }
-    // Both proceed into the countdown once the joiner has copied the host's values; the
-    // countdown runs without rollback, so the peers need not be in step until start_frame.
-    const bool proceed = s.net_opts.host ? (s.peer.at_s && s.peer.applied) : s.applied;
+    // Both proceed into the countdown once the joiner has copied the host's values: the host when
+    // it hears so, the joiner RTT/2 after it told the host, so the countdowns (which run without
+    // rollback) start together and the peers reach the start barrier together.
+    const bool proceed =
+        s.net_opts.host ? (s.peer.at_s && s.peer.applied) :
+                          (s.applied && s.countdown_at && Clock::now() >= *s.countdown_at);
     if (proceed)
     {
       s.phase = Phase::Countdown;
       ct.ResetThrottleToNow();
+      // GekkoNet's handshake runs during the countdown (PumpGekkoInCountdown).
+      if (CreateGekko(false, 2))
+        s.defer_initial_save = true;
+      else
+        WARN_LOG_FMT(BRAWLBACK, "gprb: gekko_create failed; retried at the start barrier");
       PadsSetCurrent(0xF, NeutralSlots());
       PadsOnLoopTop(system);
       INFO_LOG_FMT(BRAWLBACK, "gprb: barrier passed, countdown until game frame {}", StartFrame());
