@@ -54,19 +54,44 @@ fi
 
 identity="${MAC_SIGN_IDENTITY:--}"
 ents=assets/entitlements.mac.plist
-# Submits a zip or DMG to Apple's notary service and waits (at most 40 minutes); fails with the
-# notary log unless Apple accepts it.
+notary() {
+  xcrun notarytool "$@" --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER"
+}
+json_field() {
+  node -e 'try { console.log(JSON.parse(process.argv[1])[process.argv[2]] || "") } catch { console.log("") }' "$1" "$2"
+}
+# Submits a zip or DMG to Apple's notary service and waits for Apple's answer (at most 40 minutes),
+# logging the submission ID as soon as the upload is done and the status every 30 seconds, so a slow
+# queue shows in the log and the submission can be looked up (`notarytool info <id>`). Fails with
+# the notary log unless Apple accepts it.
 notarize() {
-  local file="$1" result id status
-  result="$(xcrun notarytool submit "$file" --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" \
-    --issuer "$APPLE_API_ISSUER" --wait --timeout 40m --output-format json)" || true
-  echo "$result"
-  id="$(node -e 'try { console.log(JSON.parse(process.argv[1]).id || "") } catch { console.log("") }' "$result")"
-  status="$(node -e 'try { console.log(JSON.parse(process.argv[1]).status || "") } catch { console.log("") }' "$result")"
+  local file="$1" name result id status start t
+  name="$(basename "$file")"
+  start=$SECONDS
+  echo "notarization: uploading $name ($(du -h "$file" | cut -f1))"
+  result="$(notary submit "$file" --output-format json)" || { echo "$result" >&2; echo "notarytool submit failed" >&2; return 1; }
+  id="$(json_field "$result" id)"
+  [ -n "$id" ] || { echo "$result" >&2; echo "notarytool submit gave no submission ID" >&2; return 1; }
+  echo "notarization: $name uploaded in $((SECONDS - start))s, submission $id"
+  status=""
+  while :; do
+    sleep 30
+    t=$((SECONDS - start))
+    if result="$(notary info "$id" --output-format json 2>&1)"; then
+      status="$(json_field "$result" status)"
+      echo "notarization: $name $((t / 60))m$((t % 60))s: ${status:-unknown ($result)}"
+    else
+      echo "notarization: $name $((t / 60))m$((t % 60))s: notarytool info failed, retrying: $result"
+    fi
+    case "$status" in Accepted | Invalid | Rejected) break ;; esac
+    if [ "$t" -ge 2400 ]; then
+      echo "notarization of $name: no answer from Apple after 40 minutes (submission $id)" >&2
+      return 1
+    fi
+  done
   if [ "$status" != "Accepted" ]; then
-    echo "notarization of $(basename "$file") failed: ${status:-no result}" >&2
-    [ -z "$id" ] || xcrun notarytool log "$id" --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" \
-      --issuer "$APPLE_API_ISSUER" >&2 || true
+    echo "notarization of $name failed: $status (submission $id)" >&2
+    notary log "$id" >&2 || true
     return 1
   fi
 }
