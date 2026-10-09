@@ -2038,8 +2038,12 @@ GameResult ReadGameResult(Core::System& system)
   for (u32 i = 0; i < MAX_LOBBY_PLAYERS; ++i)
   {
     const u32 port = entry_port[i];
-    if (port >= MAX_LOBBY_PLAYERS || !(s.match_ports & (1u << port)) || r.present[port])
+    // A player who left the match (its gone flag, the same on every peer) is not ranked.
+    if (port >= MAX_LOBBY_PLAYERS || !(s.match_ports & (1u << port)) || r.present[port] ||
+        (s.gone_enabled && s.gone_written[port]))
+    {
       continue;
+    }
     r.present[port] = true;
     r.stocks[port] = static_cast<s32>(f[i][2]);
     std::memcpy(&r.damage[port], &f[i][1], 4);

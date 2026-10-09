@@ -420,11 +420,13 @@ def _alive(insts) -> None:
 def play_match_n(insts, clients, ports: List[int], sims, args, preset: str, cpu: str, run: int,
                  chars: List[str], stage: str, rep: Dict[str, Any]) -> None:
     n = len(ports)
-    drop = None
-    if args.drop:
-        dport, dat, dhow = (args.drop.split(":") + ["stop"])[:3]
-        drop = (int(dport) - 1, float(dat), dhow)
-        rep["drop"] = {"port": drop[0] + 1, "after_s": drop[1], "how": drop[2]}
+    # Players who leave: [(port, seconds after the start, stop|kill)], in order.
+    drops = []
+    for item in filter(None, args.drop.split(",")):
+        dport, dat, dhow = (item.split(":") + ["stop"])[:3]
+        drops.append((int(dport) - 1, float(dat), dhow))
+    rep["drop"] = [{"port": p + 1, "after_s": a, "how": h} for p, a, h in drops]
+    dropped_ports: set = set()
     try:
         for c in clients:
             c.call("gprb_set_selections", selections={"character": chars, "stage": stage, "match": 0})
@@ -478,7 +480,6 @@ def play_match_n(insts, clients, ports: List[int], sims, args, preset: str, cpu:
         stop_at = time.monotonic() + args.timeout
         stop_flag = threading.Event()
         gone_seen: Dict[int, Dict[str, Any]] = {}
-        dropped = threading.Event()
 
         def stop() -> bool:
             return stop_flag.is_set() or time.monotonic() > stop_at
@@ -488,8 +489,8 @@ def play_match_n(insts, clients, ports: List[int], sims, args, preset: str, cpu:
             with contextlib.suppress(HarnessError, OSError, ConnectionError):
                 F.fight([seat], args.frames, mode="random", seed=f"{run}-{ports[k]}",
                         stage_kind=setup.stage_kind if setup else None,
-                        stop=lambda: stop() or (dropped.is_set() and drop is not None and ports[k] == drop[0]))
-            if drop is None or ports[k] != drop[0]:
+                        stop=lambda: stop() or ports[k] in dropped_ports)
+            if ports[k] not in dropped_ports:
                 stop_flag.set()
 
         th = [threading.Thread(target=play, args=(k,)) for k in range(n)]
@@ -499,19 +500,25 @@ def play_match_n(insts, clients, ports: List[int], sims, args, preset: str, cpu:
         last = 0.0
         while any(t.is_alive() for t in th):
             time.sleep(0.5)
-            live = [k for k in range(n) if not (drop and dropped.is_set() and ports[k] == drop[0])]
-            if drop and not dropped.is_set() and time.monotonic() - t0 >= drop[1]:
-                k = ports.index(drop[0])
-                rep["drop"]["at_frames"] = [clients[j].call("gprb_status")["current_frame"] for j in live]
-                if drop[2] == "kill":
+            live = [k for k in range(n) if ports[k] not in dropped_ports]
+            due = [d for d in drops if d[0] not in dropped_ports and time.monotonic() - t0 >= d[1]]
+            if due:
+                dport, _, dhow = due[0]
+                k = ports.index(dport)
+                frames = []
+                for j in live:
+                    with contextlib.suppress(Exception):
+                        frames.append(clients[j].call("gprb_status")["current_frame"])
+                rep["drop"][drops.index(due[0])]["at_frames"] = frames
+                if dhow == "kill":
                     insts[k].kill()
                 else:
                     clients[k].call("gprb_stop")
-                dropped.set()
-                print(f"  dropped P{drop[0] + 1} ({drop[2]}) at frames {rep['drop']['at_frames']}", flush=True)
+                dropped_ports.add(dport)
+                print(f"  dropped P{dport + 1} ({dhow}) at frames {frames}", flush=True)
                 continue
             # The gone flags as the remaining games see them (memory, inside the region set).
-            if dropped.is_set():
+            if dropped_ports:
                 for j in live:
                     with contextlib.suppress(Exception):
                         s = clients[j].call("gprb_status")
@@ -535,13 +542,17 @@ def play_match_n(insts, clients, ports: List[int], sims, args, preset: str, cpu:
                     stop_flag.set()
         for t in th:
             t.join(timeout=60)
-        live = [k for k in range(n) if not (drop and ports[k] == drop[0])]
+        live = [k for k in range(n) if ports[k] not in dropped_ports]
         rep["gone_seen"] = gone_seen
         lc = [clients[k] for k in live]
         with contextlib.suppress(RuntimeError):
             wait(lambda: all(c.call("gprb_status")["phase"] != "running" for c in lc), 60, "the sessions to end")
         st = [c.call("gprb_status") for c in lc]
         rep["status"] = st
+        if len(lc) < 2:
+            # Fewer than two players left: the session ended (the 1v1 DISCONNECTED flow).
+            rep["checksums"], rep["trace"] = [], []
+            raise RuntimeError(f"one player left: {[(s['phase'], s['end_reason'], s['disconnected']) for s in st]}")
         limit = min(s["current_frame"] for s in st) - CONFIRM_MARGIN
         cks = [c.call("gprb_checksums", since=0)["rows"] for c in lc]
         rep["checksums"] = [compare_checksums(cks[0], ck, limit) for ck in cks[1:]]
