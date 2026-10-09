@@ -8,7 +8,15 @@ msgstr ""
 "n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
 "x-generator: i18next-auto-keys CLI\n"
 "Language: ru-RU\n"
-"PO-Revision-Date: 2026-10-08T18:02:53.859Z\n"
+"PO-Revision-Date: 2026-10-09T19:57:34.540Z\n"
+
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:4:19
+msgid "#"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:9:23
+msgid "1v1"
+msgstr ""
 
 #: src/renderer/components/activate_online_form/activate_online_form.messages.ts:3:30
 msgid "2-4 uppercase English characters"
@@ -25,6 +33,10 @@ msgstr "Письмо с подтверждением было отправлен
 #: src/renderer/listeners/listeners.messages.ts:3:23
 msgid "A network error occurred."
 msgstr "Произошла сетевая ошибка."
+
+#: src/renderer/lib/ranked_format.messages.ts:8:20
+msgid "Abandoned"
+msgstr ""
 
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:2:29
 msgid "Activate online play"
@@ -50,6 +62,10 @@ msgstr "Дополнительные"
 
 #: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:12:26
 msgid "Agree and Install"
+msgstr ""
+
+#: src/renderer/pages/profile/profile_page.messages.ts:7:14
+msgid "All"
 msgstr ""
 
 #: src/renderer/pages/replays/replay_browser/file_selection_toolbar/file_selection_toolbar.messages.ts:3:40
@@ -126,6 +142,10 @@ msgstr ""
 #: src/renderer/components/verify_email_form/verify_email_form.messages.ts:4:24
 msgid "Can't find the email? Check your spam folder. Still missing? "
 msgstr "Не можете найти письмо? Проверьте спам-каталог. Все еще не пришло? "
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:6:22
+msgid "Can't reach the server right now."
+msgstr ""
 
 #: src/renderer/app/header/header.messages.ts:17:17
 #: src/renderer/components/confirmation_modal/confirmation_modal.messages.ts:3:17
@@ -240,6 +260,10 @@ msgstr "Подтвердите код"
 msgid "Confirm password"
 msgstr "Подтвердите пароль"
 
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:6:22
+msgid "Connect code"
+msgstr ""
+
 #: src/renderer/components/login_form/login_form.messages.ts:15:19
 #: src/renderer/pages/quick_start/steps/setup_complete_step/setup_complete_step.messages.ts:3:19
 msgid "Continue"
@@ -285,6 +309,10 @@ msgstr "Текущий файл"
 msgid "Current folder"
 msgstr "Текущий каталог"
 
+#: src/renderer/pages/profile/profile_page.messages.ts:11:15
+msgid "Date"
+msgstr ""
+
 #: src/renderer/pages/replays/replay_browser/file_list/file_list.messages.ts:3:17
 #: src/renderer/pages/replays/replay_browser/file_selection_toolbar/file_selection_toolbar.messages.ts:4:17
 #: src/renderer/pages/settings/dolphin_settings/gecko_codes/manage_codes/manage_codes.messages.ts:6:17
@@ -298,6 +326,10 @@ msgstr "Удалить код"
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:33:36
 msgid "Detected (it could also be a VPN)"
 msgstr "Обнаружен (так же может быть VPN)"
+
+#: src/renderer/lib/ranked_format.messages.ts:4:17
+msgid "Direct"
+msgstr ""
 
 #: src/renderer/app/header/header.messages.ts:20:22
 #: src/renderer/components/login_form/login_form.messages.ts:5:22
@@ -428,6 +460,10 @@ msgstr "Внешний IP адрес"
 msgid "Extracting Project+"
 msgstr ""
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:10:18
+msgid "FFA"
+msgstr ""
+
 #: src/renderer/initialize_app.messages.ts:2:60
 #. {0} productName: string
 msgid "Failed to communicate with {0} servers."
@@ -481,9 +517,17 @@ msgstr "Не получилось удалить аккаунт"
 msgid "Failed to switch account"
 msgstr "Не получилось переключить аккаунт"
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:20:26
+msgid "Finish your current game first."
+msgstr ""
+
 #: src/renderer/components/login_form/login_form.messages.ts:12:25
 msgid "Forgot your password?"
 msgstr "Забыли пароль?"
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:14:15
+msgid "Full"
+msgstr ""
 
 #: src/renderer/pages/settings/create.messages.ts:3:15
 msgid "Game"
@@ -514,7 +558,7 @@ msgstr "Помощь"
 msgid "Hide"
 msgstr "Спрятать"
 
-#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:6:15
+#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:7:15
 msgid "Hide ranking"
 msgstr "Спрятать ранк"
 
@@ -554,6 +598,14 @@ msgid ""
 "See below:"
 msgstr "Если проблема осталась, можете протестировать в командной строке. См. ниже:"
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:13:23
+msgid "In game"
+msgstr ""
+
+#: src/renderer/lib/ranked_format.messages.ts:6:21
+msgid "In progress"
+msgstr ""
+
 #: src/renderer/components/persistent_notification/persistent_notification.messages.ts:3:24
 msgid "Install update"
 msgstr "Установить обновление"
@@ -591,6 +643,18 @@ msgstr "Некорректный IP адрес"
 msgid "Invalid code"
 msgstr "Некорректный код"
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:15:15
+msgid "Join"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:17:22
+msgid "Join this room"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:18:28
+msgid "Join this room. You'll wait in it until the game ends."
+msgstr ""
+
 #: src/renderer/components/loading_screen/loading_screen.messages.ts:2:19
 #: src/renderer/pages/loading/loading_page.messages.ts:2:19
 msgid "Just a sec..."
@@ -608,6 +672,11 @@ msgstr "Запустить реплей"
 #: src/renderer/pages/settings/game_settings/game_settings.messages.ts:9:38
 #. {0} gameName: string
 msgid "Launch {0}"
+msgstr ""
+
+#: src/renderer/app/create.messages.ts:4:22
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:2:22
+msgid "Leaderboard"
 msgstr ""
 
 #: src/renderer/pages/replays/replay_browser/filter_toolbar/filter_toolbar.messages.ts:4:22
@@ -629,8 +698,13 @@ msgstr "Загрузка..."
 #: src/renderer/app/header/header.messages.ts:2:16
 #: src/renderer/components/login_form/login_form.messages.ts:3:16
 #: src/renderer/components/login_notice/login_notice.messages.ts:3:16
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:5:16
 msgid "Log in"
 msgstr "Войти"
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:4:20
+msgid "Log in to see who's online and join public rooms."
+msgstr ""
 
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:4:17
 msgid "Log out"
@@ -648,10 +722,19 @@ msgstr "Управлять"
 msgid "Manage Gecko codes"
 msgstr "Управление Gecko кодами"
 
+#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:6:23
+#: src/renderer/pages/profile/profile_page.messages.ts:6:23
+msgid "Match history"
+msgstr ""
+
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:13:40
 #. {0} max: number
 msgid "Maximum {0} accounts reached. Remove an account to add another."
 msgstr "Достигнут лимит в {0} аккаунтов. Удалите аккаунт, чтобы добавить новый."
+
+#: src/renderer/pages/profile/profile_page.messages.ts:10:15
+msgid "Mode"
+msgstr ""
 
 #: src/renderer/pages/replays/replay_browser/replay_file/replay_file.messages.ts:3:22
 msgid "More options"
@@ -739,13 +822,19 @@ msgstr "Файл не указан"
 msgid "No folder set"
 msgstr "Каталог не указан"
 
+#: src/renderer/pages/profile/profile_page.messages.ts:15:20
+msgid "No matches yet."
+msgstr ""
+
 #: src/renderer/app/header/header.messages.ts:14:30
 msgid "No network connection"
 msgstr "Нет сетевого соединения"
 
-#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:4:20
-msgid "No ranking"
-msgstr "Нет рейтинга"
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:8:18
+msgid ""
+"No public rooms right now. Create one in game: Online > With Friends > "
+"Create Room."
+msgstr ""
 
 #: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:5:26
 msgid "No replay files found"
@@ -758,6 +847,10 @@ msgstr "Нет собранных статов"
 #: src/renderer/app/header/header.messages.ts:6:28
 msgid "No update available"
 msgstr "Нет доступных обновлений"
+
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:9:16
+msgid "Nobody has played a ranked set yet."
+msgstr ""
 
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:13:20
 msgid "Normal NAT"
@@ -774,6 +867,10 @@ msgstr "Не обнаружен"
 #: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:10:19
 msgid "Not found"
 msgstr "Не найден"
+
+#: src/renderer/pages/profile/profile_page.messages.ts:5:23
+msgid "Not on the leaderboard yet: play a ranked set."
+msgstr ""
 
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:5:18
 msgid "Offline"
@@ -794,6 +891,10 @@ msgstr "Залогиньтесь для игры онлайн."
 #: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:9:35
 msgid "Open settings folder"
 msgstr "Открыть каталог настроек"
+
+#: src/renderer/pages/profile/profile_page.messages.ts:14:19
+msgid "Opponent"
+msgstr ""
 
 #: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:14:60
 #. {0} currentDate: string
@@ -859,6 +960,10 @@ msgstr "Настройки Playback Dolphin"
 msgid "Playback Gecko Codes"
 msgstr "Playback Gecko коды"
 
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:5:17
+msgid "Player"
+msgstr ""
+
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:28:30
 msgid "Please try again later."
 msgstr "Пожалуйста, попробуйте позже."
@@ -882,6 +987,14 @@ msgstr ""
 msgid "Previous replay"
 msgstr "Предыдущий реплей"
 
+#: src/renderer/pages/profile/profile_page.messages.ts:2:18
+msgid "Profile"
+msgstr ""
+
+#: src/renderer/app/create.messages.ts:5:18
+msgid "Profile & match history"
+msgstr ""
+
 #: src/renderer/app/header/header.messages.ts:9:5
 #: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:8:5
 #. {0} productName: string
@@ -890,9 +1003,20 @@ msgid ""
 "Brawl ISO (revision 1 or 2)."
 msgstr ""
 
-#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:5:22
-msgid "Rank pending"
-msgstr "Ожидание ранга"
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:2:22
+msgid "Public rooms"
+msgstr ""
+
+#: src/renderer/lib/ranked_format.messages.ts:2:17
+#: src/renderer/pages/profile/profile_page.messages.ts:8:17
+msgid "Ranked"
+msgstr ""
+
+#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:4:17
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:7:17
+#: src/renderer/pages/profile/profile_page.messages.ts:3:17
+msgid "Rating"
+msgstr ""
 
 #: src/renderer/app/header/account_switcher/account_switcher.messages.ts:3:32
 msgid "Re-authenticate account"
@@ -945,6 +1069,11 @@ msgstr "Сбросить"
 msgid "Reset {0}"
 msgstr "Сбросить {0}"
 
+#: src/renderer/components/paged_list_status/paged_list_status.messages.ts:4:16
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:7:16
+msgid "Retry"
+msgstr ""
+
 #: src/renderer/pages/not_found/not_found_page.messages.ts:4:21
 msgid "Return home"
 msgstr "Вернуться на главную"
@@ -977,6 +1106,10 @@ msgstr "Идет сетевая диагностика..."
 
 #: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:13:42
 msgid "Save replays for netplay games to the Root Replay Folder."
+msgstr ""
+
+#: src/renderer/pages/profile/profile_page.messages.ts:13:16
+msgid "Score"
 msgstr ""
 
 #: src/renderer/pages/replays/replay_browser/filter_toolbar/filter_toolbar.messages.ts:8:17
@@ -1044,6 +1177,10 @@ msgstr "Некоторый функционал лаунчера и Dolphin бу
 msgid "Something went wrong."
 msgstr "Что-то пошло не так."
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:22:26
+msgid "Starting the game. It will open the room."
+msgstr ""
+
 #: src/renderer/pages/settings/advanced_app_settings/advanced_app_settings.messages.ts:8:28
 msgid "Successfully cleared temporary files."
 msgstr "Временные файлы успешно удалены."
@@ -1064,6 +1201,10 @@ msgstr "Симметричный NAT"
 #: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:4:21
 msgid "Target Test"
 msgstr "Target Test"
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:11:20
+msgid "Teams"
+msgstr ""
 
 #: src/renderer/components/multi_path_input/multi_path_input.messages.ts:6:38
 msgid "That folder is already included."
@@ -1109,6 +1250,10 @@ msgid ""
 msgstr ""
 "это оптимальный результат. Так же известный как 'easy', 'full cone' или "
 "'open' NAT."
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:19:22
+msgid "This room is full."
+msgstr ""
 
 #: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:16:70
 #. {0} dolphinTypeName: string
@@ -1162,9 +1307,18 @@ msgstr "Ой. Мы не смогли открыть этот файл. Возм�
 msgid "Unknown"
 msgstr "Неизвестно"
 
+#: src/renderer/lib/ranked_format.messages.ts:5:24
+msgid "Unknown player"
+msgstr ""
+
 #: src/renderer/pages/replays/replay_browser/replay_file/replay_file.messages.ts:2:23
 msgid "Unknown stage"
 msgstr "Неизвестный уровень"
+
+#: src/renderer/lib/ranked_format.messages.ts:3:19
+#: src/renderer/pages/profile/profile_page.messages.ts:9:19
+msgid "Unranked"
+msgstr ""
 
 #: src/renderer/pages/settings/game_settings/game_settings.messages.ts:14:22
 msgid "Unvalidated"
@@ -1227,9 +1381,37 @@ msgstr ""
 "Зайдите в ваш email, кликните на линк в письме с подтверждением, и затем "
 "нажмите проверку подтверждения"
 
+#: src/renderer/lib/ranked_format.messages.ts:12:20
+msgid "Void: no rating change"
+msgstr ""
+
+#: src/renderer/lib/ranked_format.messages.ts:11:23
+msgid "Void: no result was reported, no rating change"
+msgstr ""
+
+#: src/renderer/lib/ranked_format.messages.ts:9:25
+msgid "Void: the connection broke, no rating change"
+msgstr ""
+
+#: src/renderer/lib/ranked_format.messages.ts:10:27
+msgid "Void: the reports disagree, no rating change"
+msgstr ""
+
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:8:17
+msgid "W-L"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:12:24
+msgid "Waiting"
+msgstr ""
+
 #: src/renderer/app/header/header.messages.ts:15:36
 msgid "Would you like to play offline?"
 msgstr "Хотите ли вы играть оффлайн?"
+
+#: src/renderer/pages/profile/profile_page.messages.ts:12:14
+msgid "You"
+msgstr ""
 
 #: src/renderer/app/header/header.messages.ts:12:28
 msgid "You are not logged in"
@@ -1240,7 +1422,7 @@ msgstr "Вы не залогинены"
 msgid "You are offline."
 msgstr "Вы оффлайн."
 
-#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:7:36
+#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:8:36
 msgid "You can re-enable rank display in the settings."
 msgstr "Показ ранка можно включить обратно в настройках."
 
@@ -1273,6 +1455,14 @@ msgid "Your connect code is used for players to connect with you directly."
 msgstr ""
 "Ваш коннект-код будет использоваться другими игроками для прямого "
 "соединения с вами."
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:23:22
+msgid "Your game can't join a room right now."
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:21:24
+msgid "Your game is going to the room."
+msgstr ""
 
 #: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:6:28
 msgid "or drag and drop here"

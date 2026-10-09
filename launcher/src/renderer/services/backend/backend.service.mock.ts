@@ -11,6 +11,7 @@ import type {
   MatchHistoryItem,
   MatchHistoryPage,
   RankedProfile,
+  RoomList,
   UserData,
 } from "./types";
 
@@ -50,6 +51,46 @@ const mockRankedProfile: RankedProfile = {
 };
 
 const MOCK_PAGE_SIZE = 50;
+
+/** The room list the mock backend serves (the same rooms as the Storybook stories). */
+export function mockRoomList(): RoomList {
+  return {
+    online: 128,
+    updatedAt: new Date().toISOString(),
+    rooms: [
+      {
+        code: "KFQB",
+        host: "Sarah",
+        players: 1,
+        openSlots: 2,
+        mode: "1v1",
+        status: "waiting",
+        names: ["Sarah"],
+        joinable: true,
+      },
+      {
+        code: "TRZM",
+        host: "Wario Fan",
+        players: 3,
+        openSlots: 4,
+        mode: "ffa",
+        status: "in-game",
+        names: ["Wario Fan", "Ness", "Lucas"],
+        joinable: true,
+      },
+      {
+        code: "HBPL",
+        host: "Mango",
+        players: 4,
+        openSlots: 4,
+        mode: "teams",
+        status: "in-game",
+        names: ["Mango", "Zain", "Cody", "Hbox"],
+        joinable: false,
+      },
+    ],
+  };
+}
 
 // 137 players; the mock user (`DEMO#0`) is 23rd, as in `mockRankedProfile`.
 const mockLeaderboard: LeaderboardEntry[] = Array.from({ length: 137 }, (_, i) => {
@@ -204,6 +245,11 @@ class MockBackendClient implements BackendService {
     const all = mockMatchHistory().filter((m) => mode === "all" || (mode === "ranked") === m.ranked);
     const { rows, next } = mockPage(all, before, 20);
     return { matches: rows, next };
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async fetchRooms(): Promise<RoomList> {
+    return mockRoomList();
   }
 
   @delayAndMaybeError(SHOULD_ERROR)

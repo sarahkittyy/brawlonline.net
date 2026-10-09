@@ -81,18 +81,21 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
     [dolphinService, showError],
   );
 
-  const launchNetplay = useCallback(() => {
+  /** Starts the netplay Dolphin; resolves to whether it started (errors are shown). */
+  const launchNetplay = useCallback(async (): Promise<boolean> => {
     if (getInstallStatus(DolphinLaunchType.NETPLAY) !== DolphinStatus.READY) {
       showError(Messages.dolphinIsUpdating());
-      return;
+      return false;
     }
 
-    dolphinService
-      .launchNetplayDolphin()
-      .then(() => {
-        setDolphinOpened(DolphinLaunchType.NETPLAY);
-      })
-      .catch(showError);
+    try {
+      await dolphinService.launchNetplayDolphin();
+      setDolphinOpened(DolphinLaunchType.NETPLAY);
+      return true;
+    } catch (err) {
+      showError(err);
+      return false;
+    }
   }, [getInstallStatus, dolphinService, showError]);
 
   const viewReplays = useCallback(

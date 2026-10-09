@@ -1,6 +1,7 @@
 import type { SyncedDolphinSettings } from "./config/config";
 import type { GeckoCode } from "./config/gecko_code";
 import type { DolphinVersionResponse } from "./install/fetch_latest_version";
+import type { RoomHandOffResult } from "./room_handoff";
 
 export type ReplayCommunication = {
   mode: "normal" | "mirror" | "queue"; // default normal
@@ -146,6 +147,12 @@ export interface DolphinService {
   removePlayKeyFile(): Promise<void>;
   viewSlpReplay(files: ReplayQueueItem[]): Promise<void>;
   launchNetplayDolphin(): Promise<void>;
+  /** Hands a room code to the running game; `not-running` when no netplay Dolphin is open. */
+  joinRoomInGame(code: string): Promise<RoomHandOffResult>;
+  /** Leaves a room request for the game that Play is about to start. */
+  prepareRoomLaunch(code: string): Promise<{ id: string }>;
+  /** Takes a prepared room request back. */
+  cancelRoomLaunch(id: string): Promise<void>;
   fetchGeckoCodes(dolphinLaunchType: DolphinLaunchType): Promise<GeckoCode[]>;
   saveGeckoCodes(dolphinLaunchType: DolphinLaunchType, geckoCodes: GeckoCode[]): Promise<void>;
   onEvent<T extends DolphinEventType>(eventType: T, handle: (event: DolphinEventMap[T]) => void): () => void;

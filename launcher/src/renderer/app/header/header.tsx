@@ -1,5 +1,4 @@
 import { PRODUCT_NAME } from "@common/product";
-import { IsoValidity } from "@common/types";
 import { css } from "@emotion/react";
 import styled from "@emotion/styled";
 import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
@@ -9,16 +8,14 @@ import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import log from "electron-log";
 import debounce from "lodash/debounce";
-import React, { useCallback, useMemo } from "react";
+import React, { useMemo } from "react";
 
 import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
 import { DolphinStatus, useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
+import { usePlay, usePlayDialogs } from "@/lib/dolphin/use_play";
 import { useAccount } from "@/lib/hooks/use_account";
-import { useAppStore } from "@/lib/hooks/use_app_store";
 import { useAppUpdate } from "@/lib/hooks/use_app_update";
-import { useIsoVerification } from "@/lib/hooks/use_iso_verification";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
-import { useSettings } from "@/lib/hooks/use_settings";
 import { useSettingsModal } from "@/lib/hooks/use_settings_modal";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { useServices } from "@/services";
@@ -41,62 +38,14 @@ const OuterBox = styled(Box)`
 `;
 
 export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
-  const { dolphinService, backendService } = useServices();
-  const [startGameModalOpen, setStartGameModalOpen] = React.useState(false);
-  const [activateOnlineModal, setActivateOnlineModal] = React.useState(false);
   const openModal = useLoginModal((store) => store.openModal);
   const { open } = useSettingsModal();
   const currentUser = useAccount((store) => store.user);
-  const userData = useAccount((store) => store.userData);
-  const serverError = useAccount((store) => store.serverError);
-  const meleeIsoPath = useSettings((store) => store.settings.isoPath) || undefined;
   const { showError } = useToasts();
-  const { launchNetplay } = useDolphinActions(dolphinService);
-  const isOnline = useAppStore((state) => state.isOnline);
-
-  const onPlay = useCallback(
-    async (offlineOnly?: boolean) => {
-      if (!offlineOnly) {
-        // Ensure user is logged in
-        if (!currentUser || !isOnline) {
-          setStartGameModalOpen(true);
-          return;
-        }
-
-        // Ensure user has a valid play key
-        if (!userData?.playKey && !serverError) {
-          setActivateOnlineModal(true);
-          return;
-        }
-
-        if (userData?.playKey) {
-          // Ensure the play key is saved to disk
-          try {
-            await backendService.assertPlayKey(userData.playKey);
-          } catch (err) {
-            showError(err);
-            return;
-          }
-        }
-      }
-
-      if (!meleeIsoPath) {
-        showError(Messages.noMeleeIsoFile());
-        return;
-      }
-
-      // Only the two NTSC-U Brawl images are accepted (every player must run the same data).
-      if (useIsoVerification.getState().validity === IsoValidity.INVALID) {
-        showError(Messages.isoWillNotWork(PRODUCT_NAME));
-        return;
-      }
-
-      launchNetplay();
-
-      return;
-    },
-    [currentUser, isOnline, launchNetplay, meleeIsoPath, userData, serverError, showError, backendService],
-  );
+  // The Play checks and launch live in `usePlay`, so a room in Home's list can start the game too.
+  const play = usePlay();
+  const onPlay = (offlineOnly?: boolean) => void play(offlineOnly);
+  const { startGameOpen, activateOnlineOpen, setStartGameOpen, setActivateOnlineOpen } = usePlayDialogs();
 
   return (
     <OuterBox
@@ -145,13 +94,13 @@ export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
         </Tooltip>
       </Box>
       <StartGameOfflineDialog
-        open={startGameModalOpen}
-        onCancel={() => setStartGameModalOpen(false)}
+        open={startGameOpen}
+        onCancel={() => setStartGameOpen(false)}
         onPlayOffline={() => onPlay(true)}
       />
       <ActivateOnlineDialog
-        open={activateOnlineModal}
-        onClose={() => setActivateOnlineModal(false)}
+        open={activateOnlineOpen}
+        onClose={() => setActivateOnlineOpen(false)}
         onSubmit={() => onPlay()}
       />
     </OuterBox>

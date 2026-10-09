@@ -7,7 +7,15 @@ msgstr ""
 "Plural-Forms: nplurals=1; plural=0\n"
 "x-generator: i18next-auto-keys CLI\n"
 "Language: ja-JP\n"
-"PO-Revision-Date: 2026-10-08T18:02:53.868Z\n"
+"PO-Revision-Date: 2026-10-09T19:57:34.549Z\n"
+
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:4:19
+msgid "#"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:9:23
+msgid "1v1"
+msgstr ""
 
 #: src/renderer/components/activate_online_form/activate_online_form.messages.ts:3:30
 msgid "2-4 uppercase English characters"
@@ -24,6 +32,10 @@ msgstr "確認メールを送信しました："
 #: src/renderer/listeners/listeners.messages.ts:3:23
 msgid "A network error occurred."
 msgstr "ネットワークエラーが発生しました。"
+
+#: src/renderer/lib/ranked_format.messages.ts:8:20
+msgid "Abandoned"
+msgstr ""
 
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:2:29
 msgid "Activate online play"
@@ -49,6 +61,10 @@ msgstr "詳細"
 
 #: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:12:26
 msgid "Agree and Install"
+msgstr ""
+
+#: src/renderer/pages/profile/profile_page.messages.ts:7:14
+msgid "All"
 msgstr ""
 
 #: src/renderer/pages/replays/replay_browser/file_selection_toolbar/file_selection_toolbar.messages.ts:3:40
@@ -123,6 +139,10 @@ msgstr ""
 #: src/renderer/components/verify_email_form/verify_email_form.messages.ts:4:24
 msgid "Can't find the email? Check your spam folder. Still missing? "
 msgstr "メールが見つかりませんか？迷惑メールフォルダを確認しましたか？それでも見つからない場合は "
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:6:22
+msgid "Can't reach the server right now."
+msgstr ""
 
 #: src/renderer/app/header/header.messages.ts:17:17
 #: src/renderer/components/confirmation_modal/confirmation_modal.messages.ts:3:17
@@ -237,6 +257,10 @@ msgstr "コードを確認"
 msgid "Confirm password"
 msgstr "パスワードを確認"
 
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:6:22
+msgid "Connect code"
+msgstr ""
+
 #: src/renderer/components/login_form/login_form.messages.ts:15:19
 #: src/renderer/pages/quick_start/steps/setup_complete_step/setup_complete_step.messages.ts:3:19
 msgid "Continue"
@@ -282,6 +306,10 @@ msgstr "現在のファイル"
 msgid "Current folder"
 msgstr "現在のフォルダ"
 
+#: src/renderer/pages/profile/profile_page.messages.ts:11:15
+msgid "Date"
+msgstr ""
+
 #: src/renderer/pages/replays/replay_browser/file_list/file_list.messages.ts:3:17
 #: src/renderer/pages/replays/replay_browser/file_selection_toolbar/file_selection_toolbar.messages.ts:4:17
 #: src/renderer/pages/settings/dolphin_settings/gecko_codes/manage_codes/manage_codes.messages.ts:6:17
@@ -295,6 +323,10 @@ msgstr "コードを削除"
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:33:36
 msgid "Detected (it could also be a VPN)"
 msgstr "検出されました（VPNの可能性もあります）"
+
+#: src/renderer/lib/ranked_format.messages.ts:4:17
+msgid "Direct"
+msgstr ""
 
 #: src/renderer/app/header/header.messages.ts:20:22
 #: src/renderer/components/login_form/login_form.messages.ts:5:22
@@ -423,6 +455,10 @@ msgstr "外部IPアドレス"
 msgid "Extracting Project+"
 msgstr ""
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:10:18
+msgid "FFA"
+msgstr ""
+
 #: src/renderer/initialize_app.messages.ts:2:60
 #. {0} productName: string
 msgid "Failed to communicate with {0} servers."
@@ -474,9 +510,17 @@ msgstr "アカウントの削除に失敗しました"
 msgid "Failed to switch account"
 msgstr "アカウントの切り替えに失敗しました"
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:20:26
+msgid "Finish your current game first."
+msgstr ""
+
 #: src/renderer/components/login_form/login_form.messages.ts:12:25
 msgid "Forgot your password?"
 msgstr "パスワードをお忘れですか？"
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:14:15
+msgid "Full"
+msgstr ""
 
 #: src/renderer/pages/settings/create.messages.ts:3:15
 msgid "Game"
@@ -507,7 +551,7 @@ msgstr "ヘルプ"
 msgid "Hide"
 msgstr "非表示"
 
-#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:6:15
+#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:7:15
 msgid "Hide ranking"
 msgstr ""
 
@@ -547,6 +591,14 @@ msgid ""
 "See below:"
 msgstr "エラーが続く場合は、コンピューターのターミナルアプリでテストできます。以下を参照してください："
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:13:23
+msgid "In game"
+msgstr ""
+
+#: src/renderer/lib/ranked_format.messages.ts:6:21
+msgid "In progress"
+msgstr ""
+
 #: src/renderer/components/persistent_notification/persistent_notification.messages.ts:3:24
 msgid "Install update"
 msgstr "アップデートをインストール"
@@ -584,6 +636,18 @@ msgstr "無効なIPアドレス"
 msgid "Invalid code"
 msgstr "無効なコード"
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:15:15
+msgid "Join"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:17:22
+msgid "Join this room"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:18:28
+msgid "Join this room. You'll wait in it until the game ends."
+msgstr ""
+
 #: src/renderer/components/loading_screen/loading_screen.messages.ts:2:19
 #: src/renderer/pages/loading/loading_page.messages.ts:2:19
 msgid "Just a sec..."
@@ -601,6 +665,11 @@ msgstr "リプレイを起動"
 #: src/renderer/pages/settings/game_settings/game_settings.messages.ts:9:38
 #. {0} gameName: string
 msgid "Launch {0}"
+msgstr ""
+
+#: src/renderer/app/create.messages.ts:4:22
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:2:22
+msgid "Leaderboard"
 msgstr ""
 
 #: src/renderer/pages/replays/replay_browser/filter_toolbar/filter_toolbar.messages.ts:4:22
@@ -622,8 +691,13 @@ msgstr "読み込み中..."
 #: src/renderer/app/header/header.messages.ts:2:16
 #: src/renderer/components/login_form/login_form.messages.ts:3:16
 #: src/renderer/components/login_notice/login_notice.messages.ts:3:16
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:5:16
 msgid "Log in"
 msgstr "ログイン"
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:4:20
+msgid "Log in to see who's online and join public rooms."
+msgstr ""
 
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:4:17
 msgid "Log out"
@@ -641,10 +715,19 @@ msgstr "管理"
 msgid "Manage Gecko codes"
 msgstr "Geckoコードを管理"
 
+#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:6:23
+#: src/renderer/pages/profile/profile_page.messages.ts:6:23
+msgid "Match history"
+msgstr ""
+
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:13:40
 #. {0} max: number
 msgid "Maximum {0} accounts reached. Remove an account to add another."
 msgstr "最大{0}アカウントに達しました。追加するにはアカウントを削除してください。"
+
+#: src/renderer/pages/profile/profile_page.messages.ts:10:15
+msgid "Mode"
+msgstr ""
 
 #: src/renderer/pages/replays/replay_browser/replay_file/replay_file.messages.ts:3:22
 msgid "More options"
@@ -730,13 +813,19 @@ msgstr "未設定"
 msgid "No folder set"
 msgstr "フォルダ未設定"
 
+#: src/renderer/pages/profile/profile_page.messages.ts:15:20
+msgid "No matches yet."
+msgstr ""
+
 #: src/renderer/app/header/header.messages.ts:14:30
 msgid "No network connection"
 msgstr "ネットワーク接続なし"
 
-#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:4:20
-msgid "No ranking"
-msgstr "順位なし"
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:8:18
+msgid ""
+"No public rooms right now. Create one in game: Online > With Friends > "
+"Create Room."
+msgstr ""
 
 #: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:5:26
 msgid "No replay files found"
@@ -748,6 +837,10 @@ msgstr "統計データがありません"
 
 #: src/renderer/app/header/header.messages.ts:6:28
 msgid "No update available"
+msgstr ""
+
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:9:16
+msgid "Nobody has played a ranked set yet."
 msgstr ""
 
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:13:20
@@ -765,6 +858,10 @@ msgstr "検出されませんでした。"
 #: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:10:19
 msgid "Not found"
 msgstr "見つかりません"
+
+#: src/renderer/pages/profile/profile_page.messages.ts:5:23
+msgid "Not on the leaderboard yet: play a ranked set."
+msgstr ""
 
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:5:18
 msgid "Offline"
@@ -785,6 +882,10 @@ msgstr "オンラインでプレイできるのはログインユーザーのみ
 #: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:9:35
 msgid "Open settings folder"
 msgstr "設定フォルダを開く"
+
+#: src/renderer/pages/profile/profile_page.messages.ts:14:19
+msgid "Opponent"
+msgstr ""
 
 #: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:14:60
 #. {0} currentDate: string
@@ -850,6 +951,10 @@ msgstr "再生用Dolphin設定"
 msgid "Playback Gecko Codes"
 msgstr "再生用Geckoコード"
 
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:5:17
+msgid "Player"
+msgstr ""
+
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:28:30
 msgid "Please try again later."
 msgstr "後でもう一度お試しください。"
@@ -873,6 +978,14 @@ msgstr ""
 msgid "Previous replay"
 msgstr "前のリプレイ"
 
+#: src/renderer/pages/profile/profile_page.messages.ts:2:18
+msgid "Profile"
+msgstr ""
+
+#: src/renderer/app/create.messages.ts:5:18
+msgid "Profile & match history"
+msgstr ""
+
 #: src/renderer/app/header/header.messages.ts:9:5
 #: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:8:5
 #. {0} productName: string
@@ -881,9 +994,20 @@ msgid ""
 "Brawl ISO (revision 1 or 2)."
 msgstr ""
 
-#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:5:22
-msgid "Rank pending"
-msgstr "順位確定待ち"
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:2:22
+msgid "Public rooms"
+msgstr ""
+
+#: src/renderer/lib/ranked_format.messages.ts:2:17
+#: src/renderer/pages/profile/profile_page.messages.ts:8:17
+msgid "Ranked"
+msgstr ""
+
+#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:4:17
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:7:17
+#: src/renderer/pages/profile/profile_page.messages.ts:3:17
+msgid "Rating"
+msgstr ""
 
 #: src/renderer/app/header/account_switcher/account_switcher.messages.ts:3:32
 msgid "Re-authenticate account"
@@ -934,6 +1058,11 @@ msgstr "リセット"
 msgid "Reset {0}"
 msgstr "{0}をリセット"
 
+#: src/renderer/components/paged_list_status/paged_list_status.messages.ts:4:16
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:7:16
+msgid "Retry"
+msgstr ""
+
 #: src/renderer/pages/not_found/not_found_page.messages.ts:4:21
 msgid "Return home"
 msgstr "ホームに戻る"
@@ -966,6 +1095,10 @@ msgstr "ネットワーク診断を実行中..."
 
 #: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:13:42
 msgid "Save replays for netplay games to the Root Replay Folder."
+msgstr ""
+
+#: src/renderer/pages/profile/profile_page.messages.ts:13:16
+msgid "Score"
 msgstr ""
 
 #: src/renderer/pages/replays/replay_browser/filter_toolbar/filter_toolbar.messages.ts:8:17
@@ -1033,6 +1166,10 @@ msgstr "ランチャーとDolphinの一部機能が利用できません。"
 msgid "Something went wrong."
 msgstr "問題が発生しました。"
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:22:26
+msgid "Starting the game. It will open the room."
+msgstr ""
+
 #: src/renderer/pages/settings/advanced_app_settings/advanced_app_settings.messages.ts:8:28
 msgid "Successfully cleared temporary files."
 msgstr "一時ファイルを削除しました。"
@@ -1053,6 +1190,10 @@ msgstr "対称型NAT"
 #: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:4:21
 msgid "Target Test"
 msgstr "ターゲットをこわせ"
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:11:20
+msgid "Teams"
+msgstr ""
 
 #: src/renderer/components/multi_path_input/multi_path_input.messages.ts:6:38
 msgid "That folder is already included."
@@ -1096,6 +1237,10 @@ msgid ""
 "This is the optimal result. Also known as 'easy', 'full cone', or 'open' "
 "NAT."
 msgstr "これは最適な結果です。「easy」「full cone」「open」NATとも呼ばれます。"
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:19:22
+msgid "This room is full."
+msgstr ""
 
 #: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:16:70
 #. {0} dolphinTypeName: string
@@ -1149,9 +1294,18 @@ msgstr "おっと…。ファイルを開けませんでした。たぶん壊れ
 msgid "Unknown"
 msgstr "不明"
 
+#: src/renderer/lib/ranked_format.messages.ts:5:24
+msgid "Unknown player"
+msgstr ""
+
 #: src/renderer/pages/replays/replay_browser/replay_file/replay_file.messages.ts:2:23
 msgid "Unknown stage"
 msgstr "不明なステージ"
+
+#: src/renderer/lib/ranked_format.messages.ts:3:19
+#: src/renderer/pages/profile/profile_page.messages.ts:9:19
+msgid "Unranked"
+msgstr ""
 
 #: src/renderer/pages/settings/game_settings/game_settings.messages.ts:14:22
 msgid "Unvalidated"
@@ -1212,9 +1366,37 @@ msgid ""
 "verification"
 msgstr "メールを開き、確認メール内のリンクをクリックしてから、確認を実行してください。"
 
+#: src/renderer/lib/ranked_format.messages.ts:12:20
+msgid "Void: no rating change"
+msgstr ""
+
+#: src/renderer/lib/ranked_format.messages.ts:11:23
+msgid "Void: no result was reported, no rating change"
+msgstr ""
+
+#: src/renderer/lib/ranked_format.messages.ts:9:25
+msgid "Void: the connection broke, no rating change"
+msgstr ""
+
+#: src/renderer/lib/ranked_format.messages.ts:10:27
+msgid "Void: the reports disagree, no rating change"
+msgstr ""
+
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:8:17
+msgid "W-L"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:12:24
+msgid "Waiting"
+msgstr ""
+
 #: src/renderer/app/header/header.messages.ts:15:36
 msgid "Would you like to play offline?"
 msgstr "オフラインでプレイしますか？"
+
+#: src/renderer/pages/profile/profile_page.messages.ts:12:14
+msgid "You"
+msgstr ""
 
 #: src/renderer/app/header/header.messages.ts:12:28
 msgid "You are not logged in"
@@ -1225,7 +1407,7 @@ msgstr "ログインしていません"
 msgid "You are offline."
 msgstr "オフラインです。"
 
-#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:7:36
+#: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:8:36
 msgid "You can re-enable rank display in the settings."
 msgstr ""
 
@@ -1254,6 +1436,14 @@ msgstr "準備完了！"
 #: src/renderer/components/activate_online_form/activate_online_form.messages.ts:2:37
 msgid "Your connect code is used for players to connect with you directly."
 msgstr "接続コードはプレイヤーがあなたと直接接続するために使用されます。"
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:23:22
+msgid "Your game can't join a room right now."
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:21:24
+msgid "Your game is going to the room."
+msgstr ""
 
 #: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:6:28
 msgid "or drag and drop here"

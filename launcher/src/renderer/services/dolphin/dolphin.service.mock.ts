@@ -1,5 +1,6 @@
 import { delay } from "@common/delay";
 import type { GeckoCode } from "@dolphin/config/gecko_code";
+import type { RoomHandOffResult } from "@dolphin/room_handoff";
 import type {
   DolphinDownloadProgressEvent,
   DolphinEvent,
@@ -87,6 +88,21 @@ class MockDolphinClient implements DolphinService {
   @delayAndMaybeError(SHOULD_ERROR)
   async launchNetplayDolphin(): Promise<void> {
     throw new Error("Method not implemented.");
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async joinRoomInGame(_code: string): Promise<RoomHandOffResult> {
+    return { outcome: "not-running" };
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async prepareRoomLaunch(_code: string): Promise<{ id: string }> {
+    return { id: "mock-request" };
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async cancelRoomLaunch(_id: string): Promise<void> {
+    // Nothing was written.
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
