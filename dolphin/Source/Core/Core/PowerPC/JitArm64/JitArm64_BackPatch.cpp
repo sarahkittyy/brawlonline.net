@@ -8,6 +8,7 @@
 #include <string>
 
 #include "Common/Align.h"
+#include "Common/Assert.h"
 #include "Common/BitSet.h"
 #include "Common/CommonFuncs.h"
 #include "Common/CommonTypes.h"
@@ -21,6 +22,7 @@
 #include "Core/PowerPC/JitArmCommon/BackPatch.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/DeltaSaveSlot.h"
 #include "Core/System.h"
 
 using namespace Arm64Gen;
@@ -146,6 +148,22 @@ void JitArm64::EmitBackpatchRoutine(u32 flags, MemAccessMode mode, ARM64Reg RS, 
         LDRB(RS, memory_base, memory_offset);
 
       ByteswapAfterLoad(this, &m_float_emit, RS, RS, flags, true, false);
+    }
+
+    // Rollback snapshots copy only the granules marked in JITDirtyBitmap. Jit64 marks its fast
+    // stores in EmuCodeBlock::UnsafeWriteRegToReg; slow accesses mark in MMU::Write. Inside the
+    // fast access area, so a backpatched access skips it and the slow path marks instead.
+    if (flags & (BackPatchInfo::FLAG_STORE | BackPatchInfo::FLAG_ZERO_256))
+    {
+      const ARM64Reg idx = ARM64Reg::W1;
+      const ARM64Reg ptr = emitting_routine ? ARM64Reg::X0 : ARM64Reg::X30;
+      // dcbz's address is 32-byte aligned, so its line is within one granule.
+      const u32 last = flags & BackPatchInfo::FLAG_ZERO_256 ? 0 : access_size / 8 - 1;
+      ASSERT(DecodeReg(addr) != DecodeReg(ptr));
+      ASSERT(DecodeReg(addr) != DecodeReg(idx) || last == 0);
+      EmitJITDirtyBitmapUpdate(addr, 0, idx, ptr);
+      if (last != 0)
+        EmitJITDirtyBitmapUpdate(addr, last, idx, ptr);
     }
   }
   const u8* fast_access_end = GetCodePtr();
@@ -309,6 +327,26 @@ void JitArm64::EmitBackpatchRoutine(u32 flags, MemAccessMode mode, ARM64Reg RS, 
       SwitchToNearCode();
     }
   }
+}
+
+void JitArm64::EmitJITDirtyBitmapUpdate(ARM64Reg addr, u32 offset, ARM64Reg idx, ARM64Reg ptr)
+{
+  static_assert(Rollback::JITDirtyBitmap::ENTRY_COUNT == size_t{1} << (29 - ROLLBACK_PAGE_SHIFT));
+
+  const ARM64Reg idx32 = EncodeRegTo32(idx);
+  if (offset != 0)
+  {
+    ADD(idx32, EncodeRegTo32(addr), offset);
+    UBFX(idx32, idx32, ROLLBACK_PAGE_SHIFT, 29 - ROLLBACK_PAGE_SHIFT);
+  }
+  else
+  {
+    UBFX(idx32, EncodeRegTo32(addr), ROLLBACK_PAGE_SHIFT, 29 - ROLLBACK_PAGE_SHIFT);
+  }
+  MOVP2R(EncodeRegTo64(ptr), Rollback::JITDirtyBitmap::Get().entries);
+  ADD(EncodeRegTo64(ptr), EncodeRegTo64(ptr), EncodeRegTo64(idx));
+  MOVI2R(idx32, 1);
+  STRB(IndexType::Unsigned, idx32, EncodeRegTo64(ptr), 0);
 }
 
 void JitArm64::FlushPPCStateBeforeSlowAccess(ARM64Reg temp_gpr, ARM64Reg temp_fpr)
