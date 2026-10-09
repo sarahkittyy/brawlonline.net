@@ -587,6 +587,8 @@ add_library(core
   Online/OnlineClient.h
   Online/OnlineSession.cpp
   Online/OnlineSession.h
+  Online/Ranked.cpp
+  Online/Ranked.h
   Online/RecentCodes.cpp
   Online/RecentCodes.h
   Online/Timeouts.h

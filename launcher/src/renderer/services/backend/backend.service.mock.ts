@@ -4,7 +4,6 @@ import type { PlayKey } from "@dolphin/types";
 import type { AuthService } from "../auth/types";
 import { delayAndMaybeError } from "../utils";
 import type { BackendService, RankedProfile, UserData } from "./types";
-import { Rank } from "./types";
 
 const SHOULD_ERROR = false;
 
@@ -35,8 +34,8 @@ const savedMessages = [
 ];
 
 const mockRankedProfile: RankedProfile = {
-  rank: Rank.GRANDMASTER,
-  rating: 9001,
+  rating: 1523.4,
+  setsPlayed: 42,
 };
 
 class MockBackendClient implements BackendService {

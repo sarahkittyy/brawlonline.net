@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <bit>
 #include <map>
 #include <mutex>
 #include <optional>
@@ -18,6 +19,7 @@
 #include "Core/Core.h"
 #include "Core/NetPlayClient.h"
 #include "Core/Online/OnlineClient.h"
+#include "Core/Online/Ranked.h"
 #include "Core/Online/RecentCodes.h"
 #include "Core/Online/User.h"
 #include "Core/PowerPC/MMU.h"
@@ -75,6 +77,7 @@ constexpr u8 CMD_FIND_OPPONENT = 0xB4;
 constexpr u8 CMD_GET_ONLINE_STATUS = 0xB9;
 constexpr u8 CMD_CLEANUP_CONNECTION = 0xBA;
 constexpr u8 CMD_FETCH_CODE_SUGGESTION = 0xBE;
+constexpr u8 CMD_GET_RANK = 0xE3;
 
 constexpr u8 STATUS_OK = 0;
 constexpr u8 STATUS_UNSUPPORTED = 0xFF;
@@ -91,6 +94,8 @@ constexpr u32 OS_NAME = 2, OS_CODE = 0x22;
 constexpr u32 CSQ_INDEX = 4, CSQ_INPUT = 8;
 // CodeSuggestion response payload: found, len, pad[2], index u32, code u16[9]
 constexpr u32 CS_INDEX = 4, CS_CODE = 8;
+// RankInfo response payload: state, hasChange, pad[2], rating f32, setsPlayed u32, change f32
+constexpr u32 RK_RATING = 4, RK_SETS = 8, RK_CHANGE = 12;
 constexpr u8 MODE_TEAMS = 3;
 
 // The game's OSModuleInfo list (first, last).
@@ -413,6 +418,32 @@ Response FindOpponent(const Core::CPUThreadGuard& guard, u32 payload, std::strin
   return MatchStateResponse(Client::GetMatchState(), true);
 }
 
+void PutU32(std::vector<u8>& buf, u32 off, u32 v)
+{
+  buf[off] = static_cast<u8>(v >> 24);
+  buf[off + 1] = static_cast<u8>(v >> 16);
+  buf[off + 2] = static_cast<u8>(v >> 8);
+  buf[off + 3] = static_cast<u8>(v);
+}
+
+// Slippi's GET_RANK (the CSS rank box, RankInfo.c): this player's Elo rating and the change of
+// the last ranked set. There are no rank tiers.
+Response RankResponse()
+{
+  const Ranked::RankInfo info = Ranked::GetRankInfo();
+  Response r;
+  r.cmd = CMD_GET_RANK;
+  r.payload[0] = static_cast<u8>(info.state);
+  r.payload[1] = info.change ? 1 : 0;
+  PutU32(r.payload, RK_RATING, std::bit_cast<u32>(info.rating));
+  PutU32(r.payload, RK_SETS, info.sets_played);
+  PutU32(r.payload, RK_CHANGE, std::bit_cast<u32>(info.change.value_or(0.0f)));
+  r.summary = fmt::format("GET_RANK state={} rating={:.1f} sets={}{}", u8(info.state), info.rating,
+                          info.sets_played,
+                          info.change ? fmt::format(" change={:+.1f}", *info.change) : std::string());
+  return r;
+}
+
 // Slippi's FETCH_CODE_SUGGESTION (handleNameEntryLoad): the recent code that starts with what
 // was typed. Not found: the input comes back with the request's index (Slippi echoes it too).
 Response CodeSuggestion(const Core::CPUThreadGuard& guard, u32 payload, std::string* request)
@@ -466,7 +497,7 @@ const char* CmdName(u8 cmd)
     return "UPDATE";
   case CMD_FETCH_CODE_SUGGESTION:
     return "FETCH_CODE_SUGGESTION";
-  case 0xE3:
+  case CMD_GET_RANK:
     return "GET_RANK";
   default:
     return "?";
@@ -557,6 +588,15 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox)
     case CMD_GET_MATCH_STATE:
     {
       Client::MatchState ms = Client::GetMatchState();
+      // A ranked set ends after the game that decides it, once the game is back on the character
+      // select: the connection closes and the CSS reads as idle (Slippi's ranked set end). The
+      // rating change is fetched meanwhile (GET_RANK).
+      if (ms.handoff == "started" && Ranked::IsSetOver())
+      {
+        NOTICE_LOG_FMT(NETPLAY, "GameBridge: the ranked set is over; closing the connection");
+        Client::Cleanup();
+        ms = Client::GetMatchState();
+      }
       // Slippi: the next GET_MATCH_STATE after the peer left or timed out cleans up and reads
       // as IDLE (EXI_DeviceSlippi.cpp handleConnectionCleanup); the CSS goes back to its idle
       // prompt without an error (docs/backend-design.md 5.6).
@@ -577,6 +617,9 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox)
       break;
     case CMD_FETCH_CODE_SUGGESTION:
       response = CodeSuggestion(guard, payload, &request);
+      break;
+    case CMD_GET_RANK:
+      response = RankResponse();
       break;
     default:
       response = Response{};
@@ -707,6 +750,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   {
     NOTICE_LOG_FMT(NETPLAY, "GameBridge: the opponent disconnected{}",
                    s_was_in_match ? " in a match" : "");
+    Ranked::OnPeerGone();
     s_hud_wait = s_was_in_match ? HUD_WAIT_FRAMES : -1;
   }
   if (s_hud_wait >= 0)

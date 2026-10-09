@@ -1,11 +1,11 @@
 # Brawl Online backend
 
-Accounts, connect codes, and Direct and Unranked matchmaking for Brawl Online, the Project+ rollback client. Phase 1 goal: two friends log in, get connect codes and connect to each other by code, the way Slippi's Direct mode works. Phase 3 (started): strangers meet through Slippi's Unranked queue. Design: `docs/backend-design.md` (sections 1-4 and 7).
+Accounts, connect codes, and Direct and Unranked matchmaking for Brawl Online, the Project+ rollback client. Phase 1 goal: two friends log in, get connect codes and connect to each other by code, the way Slippi's Direct mode works. Phase 3 (started): strangers meet through Slippi's Unranked queue. Phase 4: Ranked, best-of-three sets rated with Elo (see "Ranked"). Design: `docs/backend-design.md` (sections 1-4 and 7).
 
 | Crate | What it is |
 |---|---|
 | `crates/accounts` | HTTP service (axum + sqlx): open sign-up with email verification, login, sessions, password reset, connect codes, play keys, the data for `user.json`, Slippi's users-rest endpoint. |
-| `crates/mm` | Matchmaking server: ENet over UDP 43113, speaking Slippi's `create-ticket` / `get-ticket-resp` JSON protocol. Direct and Unranked; per-mode stage lists. |
+| `crates/mm` | Matchmaking server: ENet over UDP 43113, speaking Slippi's `create-ticket` / `get-ticket-resp` JSON protocol. Direct, Unranked and Ranked (rating band); per-mode stage lists. |
 | `crates/admin` | Admin CLI: users, password resets, bans, account deletion. |
 | `crates/mmclient` | Ticket client library and CLI that behaves like Slippi's `SlippiMatchmaking.cpp`. For tests, ppharness and game-integration work. |
 | `crates/common` | Shared code: connect-code and display-name rules, the mm message types, play keys, rate limiter, migrations. |
@@ -108,7 +108,10 @@ JSON in and out. Errors are `{"error": {"code": "...", "message": "..."}}`. Auth
 | `POST /v1/me/rename {displayName}` | `userRename` | |
 | `POST /v1/me/accept-rules {num}` | `userAcceptRules` | |
 | `GET /v1/me/user-json` | launcher `user.json` | Exactly `{uid, playKey, connectCode, displayName, latestVersion}`. |
-| `GET /user/{uid}?additionalFields=chatMessages,rank` | users-rest | Public, as on Slippi. Default chat messages, zero rank. |
+| `GET /user/{uid}?additionalFields=chatMessages,rank` | users-rest | Public, as on Slippi. Default chat messages; `rank.ratingOrdinal` is the Elo rating (1400 before the first set), `rank.ratingUpdateCount` the rated sets, no placements. |
+| `POST /v1/ranked/report-game {uid, playKey, matchId, gameIndex, winner, stageId, durationFrames, players}` | `reportOnlineGame` | Play key, as mm's ticket. One client's result of one ranked game (`winner` a uid, null for a draw). Idempotent; another winner for the same game is 409. Answers the set's state (below). |
+| `POST /v1/ranked/report-leave {uid, playKey, matchId, kind}` | `reportOnlineMatchStatus(abandoned)` | `kind`: `left` (this player left the set) or `opponent_left`. |
+| `GET /v1/ranked/result?matchId=&uid=` | `getRankedMatchPersonalResult` | Public. `{matchId, status, players, wins, winner, reason, rating: {before, after, change, setsPlayed} \| null}`. |
 | `GET /healthz` | | `ok` if Postgres answers. |
 
 Rules:
@@ -182,7 +185,7 @@ Byte-compatible with Slippi's client: ENet on UDP 43113, reliable JSON packets o
 
 | Situation | Message |
 |---|---|
-| Ranked, Teams, Party | `<Mode> is not supported yet. Only Direct and Unranked work for now.` |
+| Teams, Party | `<Mode> isn't available yet.` |
 | Direct ticket waited `MM_TICKET_TTL_SECS` (10 min) | `Search timed out: <code> did not connect within 10 minutes.` (`get-ticket-resp`) |
 | Unranked ticket waited `MM_TICKET_TTL_SECS` | `Search timed out: no opponent found within 10 minutes.` (`get-ticket-resp`; Slippi's client waits forever, so the server owns expiry) |
 | Bad play key (or rotated by password change or ban) | `Invalid play key. Log in again in the launcher.` |
@@ -196,6 +199,7 @@ Byte-compatible with Slippi's client: ENet on UDP 43113, reliable JSON packets o
 | Client older than `MM_MIN_APP_VERSION` | `Your game is out of date. Update to <version> to play online.` |
 
 - **Unranked queue** (mode 1; `search.connectCode` is `[]` and ignored): first come, first served. The oldest waiting ticket is paired with the next ticket in arrival order that is in its region and that it did not just fail to connect to. The answer is the same `get-ticket-resp` as Direct's, with `matchId` `mode.unranked-<time>-<n>` and the Unranked stage list. Direct and Unranked tickets never meet.
+- **Ranked queue** (mode 0, `connectCode: []`): like Unranked, but the oldest ticket takes the closest-rated opponent (Elo, from `ratings`) within the rating band: ±`MM_RANKED_BAND` (150), widened by `MM_RANKED_BAND_STEP` (50) for every `MM_RANKED_BAND_STEP_SECS` (15 s) the longer-waiting of the two has waited, so after 5 minutes anyone is in range. `matchId` is `mode.ranked-<time>-<n>`, the stage list is the Ranked one, and every player carries `rank {rating, updateCount}`.
 - **Regions**: Slippi's tickets carry no region, ping or latency field, so the server infers the region from the ticket's source address. For the friends-only start that is a small prefix table, `MM_REGIONS_FILE` (JSON `{"na": ["203.0.113.0/24", ...], "eu": [...]}`; the longest prefix wins, everything else is `other`). Without the file there is one bucket, i.e. plain FIFO. A ticket that has waited `MM_REGION_WIDEN_SECS` (30 s) takes an opponent from any region. The region goes into `mm_matches.region` (`a+b` for a cross-region match). The design's GeoIP database (DB-IP Lite) can replace the table later without touching the queue.
 - **Failed P2P connects**: after a match, Slippi's client tries the peer for 8 s and, on failure in 1v1, requeues with a new ticket. If the same pair searches again within 60 s of being matched, mm treats the last connect as failed.
   - Direct: it waits before re-pairing them (last match + 8 s + 5 s × failures). After the third failed connect it tells both players `Could not connect to <code> after 3 tries. A firewall or strict NAT may block it.`
@@ -203,6 +207,16 @@ Byte-compatible with Slippi's client: ENet on UDP 43113, reliable JSON packets o
   - A pair that searches again more than 60 s after a match (they played) is paired at once, as strangers.
 - A client disconnect (the CSS cancel) removes its ticket at once. Garbage and oversized packets get an error and a disconnect; the loop never panics on input.
 - **Disconnects after an answer**: after `get-ticket-resp` (or a refusal) the server waits 1 s before disconnecting the client itself. Slippi's client disconnects on its own as soon as it has the answer and waits up to 3 s for that to be acknowledged before it binds its P2P port; when both sides disconnected at the same moment, the client's disconnect was sometimes never answered (2 of 16 matches with Dolphin), which cost it 3 s of the 8 s connect window. `mmclient` reports the outcome as `mmDisconnect`.
+
+## Ranked
+
+Rules in `crates/common/src/ranked.rs` (unit-tested), storage and endpoints in `crates/accounts/src/ranked.rs`, schema in `migrations/0003_ranked.sql`.
+
+- **Rating**: standard Elo on Slippi's scale, no tiers. Expected score `1 / (1 + 10^((opp - own) / 400))`, new rating `own + K × (score - expected)`, score 1 for a set win and 0 for a loss, one update per set (Slippi updates per set). Everyone starts at **1400**, the middle of Slippi's range. K is the player's own: **200** for the first set, falling linearly to **32** at the tenth, then 32 (an even set is ±16). A new player who wins (or loses) their first ten even sets moves about 620 points, so nobody stays at the default for long; an established opponent of a new player still moves by their own K only.
+- **Sets**: best of three. Both clients report every game. A game counts when both reports agree; different winners void the set as `ERROR` (held for review, nobody rated). A game only one client reported counts on that report after `RANKED_REPORT_GRACE_SECS` (120 s). Games count in order; a draw counts for nobody and is replayed. Two wins decide the set (`COMPLETE`).
+- **Leaving**: `left` abandons the set (`ABANDONED`): the leaver loses, and the other player wins only if at least one game was played. `opponent_left` blames the opponent once the grace period passes without the opponent saying the same; both saying `opponent_left` is a broken connection (`TERMINATED`, nobody rated). A set with no report for `RANKED_STALE_SECS` (30 min) is `ORPHANED` (nobody rated).
+- **Once**: the set is settled in one transaction that locks its `mm_matches` row and both `ratings` rows (in uid order), applies the changes, writes `rating_events` and closes the row, so it is rated exactly once. accounts settles after every report and sweeps open sets every `RANKED_SWEEP_SECS` (30 s) for waits that ran out.
+- The client side (Dolphin `Online/Ranked.cpp`) reports, counts the wins, ends the session after the deciding game and fetches the result for the game's CSS.
 
 ## Rulesets and stage lists
 
@@ -262,6 +276,7 @@ Without Docker, start the portable Postgres (above) and point the tests at it, e
 - `crates/admin/tests/send_email.rs`: runs the `admin` binary (`user reset-password --send-email`) with `MAILER=file`, `stdout`, `smtp` and `brevo` while `RESEND_API_URL`, `BREVO_API_URL` (with keys) and `SMTP_HOST` point at listeners that count connections: file and stdout never connect, smtp and brevo reach only their own fake server, `resend` without a key fails before issuing a token; and the in-process reset path with an in-memory mailer.
 - `crates/e2e/tests/accounts_api.rs`: the HTTP API against Postgres (open sign-up, validation, verification, code assignment, `user.json`, reset and change password rotating the play key, bans, rate limits, the per-IP account limit with IPv6 /64s, the daily email shares).
 - `crates/e2e/tests/matchmaking.rs`: Postgres + accounts + mm in process, accounts created over HTTP, two fake ENet clients: matching peer info and a real P2P connection, expiry, wrong code, bad play key, unsupported modes, malformed packets and raw UDP garbage (server keeps running and still pairs), cancel.
+- `crates/e2e/tests/ranked.rs`: two players meet in the Ranked queue (each player's rank in the response), both report two games, the set is rated once (±100 for two first-timers), the rating comes back from `/user/{uid}`, the result endpoint and the next ranked ticket; leaving before and after a game, both leaving, disagreeing reports, forged play keys, strangers, bad winners and game indexes, non-ranked matches; a lone report settled by the background sweep after the grace period.
 - `crates/e2e/tests/unranked.rs`:
   - two strangers meet: response fields, the ruleset's 15 stages, a real P2P connection, and the `mm_matches` row with mode, stages and region;
   - first come, first served, and the third ticket ends with the expiry error;
@@ -278,6 +293,7 @@ When finished: `docker compose down` (add `-v` to delete the data volume).
 - **Layout and names**: the workspace is `server/` (not `backend/`), the HTTP service is `accounts` (the design's `api`), and the shared crate is `common` (`core` clashes with Rust's `core`). There is no `relay` crate yet (Phase 1.5).
 - **Play keys are derived, not hashed**: the design says to store only a SHA-256 of the play key, but Slippi's launcher re-fetches the key on every Play (`getUser` → `private.playKey`), so it must be retrievable. The key is `HMAC-SHA256(PLAY_KEY_SECRET, uid, version)`; the database stores only the version. A database dump still reveals no key, and rotation is a version bump.
 - **Email from day 1** (user decision, 2026-10-06): verification at sign-up and self-service reset through a mail provider (Resend at first; any SMTP provider since the Resend domain slot was used up). Login is by email; no separate username. Invite codes (the friends-phase gate) were removed on 2026-10-08 (user decision: anyone can create an account); migration 0002 drops the `invites` table and `users.invite_code`.
-- **Direct and Unranked**: Ranked, Teams and Party are refused with a clear error. Unranked has no rating band (the design's "widening rating band" needs Phase 4's rating). Regions come from a prefix table instead of a GeoIP database (see above). No rating, reports or replays yet.
+- **Direct, Unranked and Ranked**: Teams and Party are refused with a clear error. Unranked has no rating band (Slippi's Unranked MMR is hidden; ours is first come, first served). Regions come from a prefix table instead of a GeoIP database (see above).
+- **Rating: Elo, not OpenSkill** (user decision, 2026-10-08): the design's OpenSkill with a scaled ordinal and Slippi's tier table is replaced by plain Elo with no tiers (see "Ranked"). Reports exist for ranked games only; no replays, no seasons, no leaderboard yet.
 - **Not built yet**: GraphQL facade for the unmodified launcher (the JSON endpoints mirror its operations one to one), `/metrics`, build-hash/ISO allow-list on tickets (`search.game` is accepted and ignored), the reserved-code period after account deletion (only `admin user delete` deletes accounts, and their code is free again at once), website pages beyond the two email-link pages.
 - **Known limit**: `rusty_enet` does not expose ENet's maximum packet size (32 MB default), so a client can make the server buffer a large reliable packet before mm rejects it (> 8 KiB is refused after reassembly). Sign-ups are open since 2026-10-08, so this needs revisiting.

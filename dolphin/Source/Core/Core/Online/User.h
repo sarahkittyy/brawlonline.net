@@ -90,6 +90,8 @@ public:
   void LogOut();
   // The mm server sends latestVersion with "out of date" errors.
   void OverwriteLatestVersion(const std::string& version);
+  // A ranked set's result carries the new rating (Online/Ranked.h).
+  void SetRankedRating(float rating, int sets_played);
 
   UserInfo GetUserInfo() const;
   bool IsLoggedIn() const;
