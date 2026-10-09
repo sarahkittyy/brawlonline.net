@@ -36,15 +36,10 @@ CREATE ROLE pp_accounts LOGIN PASSWORD 'CHANGE_ME';
 CREATE ROLE pp_mm LOGIN PASSWORD 'CHANGE_ME';
 CREATE DATABASE pp OWNER pp_accounts;
 SQL
-# After the first start of pp-accounts (which creates the tables):
-sudo -u postgres psql -d pp <<'SQL'
-GRANT USAGE ON SCHEMA public TO pp_mm;
-GRANT SELECT (uid, display_name, connect_code, play_key_version, banned_until, email_verified_at) ON users TO pp_mm;
-GRANT INSERT ON mm_matches TO pp_mm;
--- mm inserts with ON CONFLICT (match_id) DO NOTHING, which needs SELECT on the
--- conflict column. Without it every match fails to record ("permission denied").
-GRANT SELECT (match_id) ON mm_matches TO pp_mm;
-SQL
+# pp_mm's privileges come from migration 0005_mm_grants.sql, applied when
+# pp-accounts starts (it grants only if pp_mm exists, so create the role first).
+# A migration that adds something mm reads or writes must grant it there too;
+# the e2e test mm_grants runs mm's queries as pp_mm.
 
 # Binaries (built with `cargo build --release` on the same Debian release, or in CI)
 install -d /opt/ppserver/bin /etc/ppserver
