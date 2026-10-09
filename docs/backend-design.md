@@ -15,7 +15,7 @@ New clones made for this doc (source only): `refs/openmelee` (panchaea/openmelee
 | Matchmaking server | **New Rust service** (tokio + `rusty_enet` or the `enet` C bindings) that speaks Slippi's `create-ticket` / `get-ticket-resp` ENet+JSON protocol byte for byte. Use openmelee **as a protocol reference only** (GPL-2.0, so we could take code, but it is a 2022 alpha with blocking bugs; see 2.3). |
 | Accounts, codes, rating, reports, website API | **One Rust (axum + sqlx) HTTP service** backed by **PostgreSQL 16**, exposing a small GraphQL-shaped JSON API that mirrors the operations the Slippi launcher and Rust extensions call. One codebase and one language with the matchmaking server, and the matchmaking server shares the crate for types and play-key checks. |
 | Auth | Self-hosted: Argon2id password hashes, opaque random session tokens for the launcher, and a separate long-lived **play key** for Dolphin, exactly as Slippi does. Email is optional at the friends-only stage (see 3). |
-| Rating | **OpenSkill (Weng-Lin, Plackett-Luce) with `tau` and `limitSigma`**, displayed as the ordinal (mu - 3 sigma) scaled onto Slippi's 0-2500-ish range. This is very likely what Slippi itself uses (see 4.1). It also handles doubles natively. |
+| Rating | **Elo, no rank tiers** (user decision 2026-10-08, see 4.3): standard Elo on Slippi's 0-2500-ish range, start 1400, high K for the first sets. Replaces the earlier recommendation, OpenSkill (Weng-Lin) with a scaled ordinal and Slippi's tier table. |
 | Replays | Object storage on the box's disk (MinIO or plain files behind signed URLs). The client gzips and PUTs, like Slippi. |
 | Website | Server-rendered pages (askama/minijinja templates) from the same axum service: sign-up, login, profile (code, rank), leaderboard. No SPA. |
 | Relay | **Yes, add a minimal UDP relay** (TURN-like, ENet-agnostic) as a fallback only. Slippi has none and CGNAT users simply cannot play; with a tiny friends group, one CGNAT friend blocks the whole project. |
@@ -230,10 +230,10 @@ Option: serve a tiny GraphQL endpoint with exactly these operations (async-graph
 | `POST /v1/me/rename`, `POST /v1/me/accept-rules` | `userRename`, `userAcceptRules` | session |
 | `GET /user/{uid}?additionalFields=chatMessages,rank` | users-rest | public (as Slippi) |
 | `GET /v1/dolphin/latest?purpose=&beta=` | `getLatestDolphin` | — |
-| `POST /v1/report/game` → `{uploadUrl}` | `reportOnlineGame` | play key |
-| `POST /v1/report/match-status` | `reportOnlineMatchStatus` | play key |
-| `POST /v1/report/set-complete` | 0xC2 path | play key |
-| `GET /v1/ranked/result?matchId=` | `getRankedMatchPersonalResult` | play key |
+| `POST /v1/ranked/report-game` (built, ranked games only; no `uploadUrl` yet) | `reportOnlineGame` | play key |
+| `POST /v1/ranked/report-leave {kind: left \| opponent_left}` (built) | `reportOnlineMatchStatus` (`abandoned`) | play key |
+| (none: the server decides the set from the game reports) | 0xC2 path | |
+| `GET /v1/ranked/result?matchId=&uid=` (built) | `getRankedMatchPersonalResult` | public |
 | `GET /v1/leaderboard?region=&season=` | slippi.gg | — |
 
 Play key: 32 random bytes in base64url. Store only its SHA-256. Rotate it on password change and on admin action.
@@ -306,6 +306,15 @@ Verified against the launcher: `L/src/renderer/services/slippi/calculate_rank.ts
 - Cross-checked against Dolphin's copy `R/user/src/rank_fetcher/rank.rs:29-112` (same values, written as `<=` upper bounds). Fewer than 5 updates means Unranked. Grandmaster is tested **before** Master. Each lower bound is exclusive with a 0.01 gap, so a rating landing in a gap such as 765.425 falls through to Unranked in Dolphin. Our implementation should use one table with half-open intervals in all three places.
 
 ### 4.3 Our choice
+
+**Decision (user, 2026-10-08): Elo, no ranks.** "No ranks, just elo. Standard elo algorithm, same / similar numbers as slippi, with high variance for the first few games to get people out of the default elo faster." Built as (`server/crates/common/src/ranked.rs`, `server/README.md` "Ranked"):
+
+- Standard Elo with the 400-point scale (400 points = 10:1), one update per best-of-three set, score 1 or 0. No tiers, no placements: the launcher and the game show the number.
+- Start **1400**, the middle of Slippi's range (Silver 3 / Gold 1 in the table above). A 1,200-point gap is a 999:1 favourite, so the field spreads over Slippi's few hundred to 2,500+.
+- K is each player's own: **200** for the first set, falling linearly to **32** at the tenth set (an even set then moves ±16). Ten straight even wins (or losses) move a new player about 620 points.
+- The set rules of 4.4 below, decided by the server from both clients' reports.
+
+The rest of this section is the earlier OpenSkill recommendation, kept for the record.
 
 **OpenSkill** (Rust crate or a direct port of openskill.js PL, MIT-licensed so it is GPL-compatible), not Glicko-2:
 - It matches Slippi's behaviour, including "your rating never drops after a win" (`limitSigma`).
@@ -648,7 +657,12 @@ QA finding (`harness/tools/qa_reachability.py`, run `run/artifacts/qa-reachabili
   - Dolphin (branch `unranked`, `6449517bc1`, merged into `rollback-fixes` as `4944245954`): Slippi's stage pool over the server's list for every random stage (every Unranked game, Direct's game 1). At the merge the branch's check that replaced a Direct loser's pick outside the list with a random stage was dropped: Slippi does not restrict Direct, so the list only feeds random stages. The merge kept `rollback-fixes`' PPOM v3 GameBridge; the branch had been written against v2 but never touched the layout.
   - Verified from the in-game menus (`harness/tests/test_online_unranked.py`, plugin `pponline` `7ca3a7e`, PPOM v3, merged Dolphin): two strangers go WITH ANYONE → Unranked, search, are paired, and play a two-game set on both stages of a two-stage server list (no repeat); a lone search ends with the server's timeout error; a Direct set draws game 1 from the server's Direct list and plays the loser's Final Destination pick for game 2 although the list does not have it.
   - The game side needed no change: BASIC VERSUS already searches Unranked. Pending game-side items are in `docs/game-code.md` §12.
-- **P1.5, P4, P5: not started.** P2 (keyframe start) was replaced by the gameplay-only session.
+- **P4 Ranked (2026-10-08): the rating pipeline works end to end; the ranked set screens do not exist yet.**
+  - Server: the Ranked queue (closest Elo within ±150, +50 every 15 s), both clients' game and leave reports, the set settled once from them with the 4.4 rules, Elo with no tiers (4.3), `GET /v1/ranked/result`, the rating in `/user/{uid}` (`server/README.md` "Ranked").
+  - Dolphin (`Online/Ranked.cpp`): reports every ranked game and early leaves, counts the best of three, closes the connection once the games are back on the CSS after the deciding game, fetches the result; `GET_RANK` (0xE3) for the game.
+  - Game: the Ranked CSS shows the rating (and the last set's change) where Direct shows the player's code. Launcher: the rating as a number instead of Slippi's tier.
+  - Not built: Ranked's strike / counterpick stage screens (every ranked game is random from the server's Ranked list, like Unranked), the character lock for the set, poor-performance termination, abandonment cooldowns, the build-hash allow-list on reports, replays, seasons, leaderboards.
+- **P1.5, P5: not started.** P2 (keyframe start) was replaced by the gameplay-only session.
 
 Effort is in developer-weeks for one experienced developer. **Backend** is this document's services. **Dolphin** is C++/Rust in our fork. **Game** is the Syriinge plugin plus the netplay GCT. **Launcher** is the fork of slippi-launcher. The Dolphin and game columns assume the rollback core (another workstream) already plays a stable 1v1 in a synchronized-boot session.
 

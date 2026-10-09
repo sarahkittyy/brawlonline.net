@@ -1541,6 +1541,20 @@ void ResetRunStats()
 
 void PassLogClose();
 
+std::mutex s_result_callback_mutex;
+std::function<void(const GameResult&)> s_result_callback;
+
+void ReportGameResult(const GameResult& r)
+{
+  std::function<void(const GameResult&)> cb;
+  {
+    std::lock_guard lk(s_result_callback_mutex);
+    cb = s_result_callback;
+  }
+  if (cb)
+    cb(r);
+}
+
 void EndRunning(Core::System& system, const std::string& reason)
 {
   PassLogClose();
@@ -1573,6 +1587,15 @@ void EndRunning(Core::System& system, const std::string& reason)
       s.last_winner = st0 != st1 ? (st0 > st1 ? 0 : 1) : (d0 != d1 ? (d0 < d1 ? 0 : 1) : 0xFE);
       INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} winner {} (stocks {} {}, damage {} {})",
                    NextGame(), s.last_winner, st0, st1, d0, d1);
+      GameResult r;
+      r.game = NextGame();
+      r.winner = s.last_winner;
+      r.stocks = {st0, st1};
+      r.damage = {d0, d1};
+      r.char_kind = {s.setup.players[0].char_kind, s.setup.players[1].char_kind};
+      r.stage = s.setup.stage;
+      r.frames = s.end_game_frame;
+      ReportGameResult(r);
     }
     // Ready for the next match on the same connection.
     s.phase = s.peer.seen ? Phase::Connected : Phase::Ended;
@@ -2572,6 +2595,12 @@ void SetLocalLock(const LockIn& lock_in)
                  lock.stage_pick, (lock.port_values[0] & 1) ? "yes" : "no");
   }
   MaybeDecideSetup();
+}
+
+void SetGameResultCallback(std::function<void(const GameResult&)> callback)
+{
+  std::lock_guard lk(s_result_callback_mutex);
+  s_result_callback = std::move(callback);
 }
 
 Lobby GetLobby()

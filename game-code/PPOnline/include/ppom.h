@@ -109,6 +109,18 @@ namespace PPOM {
         u16 code[CODE_LEN];    // found: the whole code, upper-case ASCII; else the input echoed
     };                    // 0x1C
 
+    // 0xE3 GET_RANK response payload (Slippi's RankInfo, ExiSlippi.h:159-167): this player's
+    // rating, an Elo number (there are no rank tiers), and the change of the last ranked set.
+    enum RankState { RANK_UNKNOWN = 0, RANK_FETCHING = 1, RANK_READY = 2 };
+    struct RankInfo {
+        u8 state;         // RankState: unknown (logged out, not read), a set's result on its way, ready
+        u8 hasChange;     // 1: `change` is the last ranked set's
+        u8 _pad[2];
+        float rating;
+        u32 setsPlayed;
+        float change;
+    };                    // 0x10
+
     // 0xB9 GET_ONLINE_STATUS response payload.
     struct OnlineStatus {
         u8 state;         // 0 logged out, 1 ok, 2 update required

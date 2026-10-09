@@ -22,6 +22,7 @@
 
 #include <array>
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <utility>
@@ -160,6 +161,21 @@ struct Lobby
   u8 last_winner = 0xFF;      // in-game port of the last game's winner, 0xFE draw, 0xFF none
 };
 Lobby GetLobby();
+
+// A game of a network session that ended with GAME SET, read from the state both peers ended on
+// (Online/Ranked.h reports it). Ports are in-game ports: the host is 0, the joiner 1.
+struct GameResult
+{
+  u32 game = 0;           // 1-based, counting draws
+  u8 winner = 0xFF;       // in-game port, 0xFE draw
+  std::array<s32, 2> stocks{};
+  std::array<float, 2> damage{};
+  std::array<u8, 2> char_kind{};
+  u16 stage = NO_STAGE;
+  u32 frames = 0;  // game frames the match ran
+};
+// Called on the CPU thread for every such game; must not block. nullptr removes it.
+void SetGameResultCallback(std::function<void(const GameResult&)> callback);
 // P+ v3.2's legal stages: its random-stage switch "Default" preset (pf/stage/switch/Switch00.rss,
 // identical to the netplay SwitchFF.rss), as srStageKind values.
 const std::vector<u16>& DefaultStages();

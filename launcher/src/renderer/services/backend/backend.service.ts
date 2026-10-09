@@ -4,7 +4,6 @@ import type { DolphinService, PlayKey } from "@dolphin/types";
 import log from "electron-log";
 
 import type { AuthService } from "../auth/types";
-import { calculateRank } from "./calculate_rank";
 import type { BackendService, RankedProfile, UserData } from "./types";
 
 /**
@@ -22,10 +21,7 @@ import type { BackendService, RankedProfile, UserData } from "./types";
  */
 
 function mapRankedProfile(user: AccountsPublicUser): RankedProfile {
-  const rating = user.rank.ratingOrdinal ?? 0;
-  const setsPlayed = user.rank.ratingUpdateCount ?? 0;
-  const hasPlacement = Boolean(user.rank.dailyGlobalPlacement) || Boolean(user.rank.dailyRegionalPlacement);
-  return { rating, rank: calculateRank(rating, hasPlacement, setsPlayed) };
+  return { rating: user.rank.ratingOrdinal ?? 0, setsPlayed: user.rank.ratingUpdateCount ?? 0 };
 }
 
 /** user.json content in Slippi's key order: uid, playKey, connectCode, displayName, latestVersion. */
