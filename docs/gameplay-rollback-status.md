@@ -788,6 +788,31 @@ Dolphin `rollback-fixes`, `bd9ba09eb6`. Build used: `run/bin/gpudet-fix` (`bd9ba
 
 All dual core, Null video, 2-minute rule, raw results in `run/qa/gpudet/`. In network sessions `gprb synctest: checksum differs from the first run` is not a symptom: a mispredicted first run differs from its resimulation by design (the passing runs above log 100-200 of them each, the cap). Workaround for an installed 0.1.28: put P+'s `ID-Project+ Netplay Launcher.ini` (in the fork's `Data/user/GameSettings/`) into `<User>/GameSettings/` on both machines; the session line then says `deterministic GPU thread true`.
 
+## Phase 11: rollbacks no longer push the frames after them back
+
+Monorepo `9ec95463` (with telemetry `be93d264`). Branch `netcode-pacing` in the fork's worktree `dolphin-netcode`.
+
+**Symptom.** A real Unranked set between two nearby players (2026-10-08, the host's `dolphin.log`) rolled back on 26% and 40% of frames ("playable, but not as smooth as Slippi"). Harness sessions with the random macros roll back on 4-5%.
+
+**Cause.** Region snapshots do not rewind the emulated ticks, so `CoreTimingManager::SetRollbackResimulating(false)` re-anchored the throttle at the presented frame after every re-run. Each rollback pushed that frame and every later one back by the re-run's wall-clock time (load, re-run frames, saves: about 4 ms for one frame on this PC). The peer that rolled back fell behind faster than time sync (at most -2%/+1%) could correct. The other peer then got its inputs later and rolled back more and deeper: a feedback loop. Brawlback's newest code (Nyx, 2026-10-08) restores the throttle reference after a load for the same reason; whole-machine loads rewind the ticks, so a plain restore works there.
+
+**Fix.** `CoreTimingManager::BeginRollbackBurst` (called before every load) remembers the host time the timeline is due at; the presented frame after the re-run resumes there, skipping the ticks the re-run used. A re-run that fits into the frame's slack costs no time; a longer one is caught up as after any slow frame. `PPR_GPRB_OLD_THROTTLE=1` keeps the old behaviour. Also: the sync test's first-run comparison runs only in sync tests (it logged up to 200 WARN lines per online session), and the wait for the peer polls every ~100 us with the precision timer instead of `sleep_for(250 us)`.
+
+**Telemetry.** Every 600 displayed frames and at the end, network sessions log a `gprb net:` line: rollbacks, re-run frames and depth, rollback cost, late frames (more than 2 ms behind the throttle's schedule), waits for the peer, frames ahead, time-sync speed, ping, jitter and bandwidth (GekkoNet), the local pad sample's age, the present interval spread, and "screen hitches" (presents that repeat or skip a refresh on a 59.94 Hz screen without VSync, averaged over four phases).
+
+**Results.** `gprb_session.py` through netsim `typical` (40 +- 8 ms RTT, 0.5% loss), dual core, D3D11, 2-minute rule, Fox/Falco Battlefield, with a human-like input model (the stick changes every 1-3 frames while moving; scratch `busy_session.py`). Same build, the old behaviour by the environment variable. Raw: `run/qa/netcode/`.
+
+| Run | Rollbacks (host / joiner) | Re-run frames | Depth avg / max | Frames ahead | Time-sync speed | Mismatches |
+|---|---|---|---|---|---|---|
+| old 1 | 9.6% / 13.8% | 1,053 / 1,629 | 1.7-1.8 / 5 | -3.2 .. 3.4 | at its limits (0.98-1.01) | 0 |
+| new 1 | 7.3% / 7.1% | 553 / 532 | 1.05 / 3 | -0.4 .. 0.8 (one 2.2 at the start) | 0.993-1.002 | 0 |
+| old 2 | 9.9% / 13.0% | 1,184 / 1,753 | 1.7-1.9 / 4 | -2.9 .. 3.0 | at its limits | 0 |
+| new 2 | 8.0% / 6.8% | 454 / 378 | 1.05 / 2 | -1.2 .. 1.4 | 0.987-1.006 | 0 |
+
+No waits for the peer in any of these runs. Screen hitches did not improve on this PC (old 10-12% of presents, new 12-13%; the present interval spread is 4-8 ms in every mode with two instances on one machine): the frame after a rollback is still shown late, and now the next one catches up. Orca 0.3.34's `PresentPacer` (present at a steady offset from each copy's VI time) was tried on top (`netcode-pacing` `0c98069d30`): spread 4.8-5.2 ms against 6.8-7.8, but hitches unchanged (12-13%), 2.9% late frames against 1.4%, and rollback costs up to 110 ms (the GPU thread sleeping before a present holds the CPU thread in dual core). Not merged.
+
+Regression on main's build (`run/bin/main-9f8981ea`, with the ping line, music off and fake-completion): game set, 4,394 frames, 351/333 rollbacks (depth max 3/2), 0 mismatches; `0x90E60F34` read 0 on both peers during the match (1.0 on a build without the Music Off change).
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it).
