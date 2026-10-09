@@ -6,13 +6,19 @@
 #include <algorithm>
 #include <cstddef>
 #include <fstream>
+#include <iterator>
 #include <map>
 #include <string>
 #include <string_view>
 #include <utility>
 #include <vector>
 
+#include <fmt/format.h>
+
+#include "Common/CommonTypes.h"
 #include "Common/FileUtil.h"
+#include "Common/IOFile.h"
+#include "Common/Random.h"
 #include "Common/StringUtil.h"
 
 namespace Common
@@ -318,38 +324,42 @@ bool IniFile::Load(const std::string& filename, bool keep_current_data)
 
 bool IniFile::Save(const std::string& filename)
 {
-  std::ofstream out;
-  std::string temp = File::GetTempFilenameForAtomicWrite(filename);
-  File::OpenFStream(out, temp, std::ios::out);
-
-  if (out.fail())
-  {
-    return false;
-  }
-
+  std::string text;
   for (const Section& section : sections)
   {
     if (!section.keys_order.empty() || !section.m_lines.empty())
-      out << '[' << section.name << ']' << std::endl;
+      fmt::format_to(std::back_inserter(text), "[{}]\n", section.name);
 
     if (section.keys_order.empty())
     {
       for (const std::string& s : section.m_lines)
-        out << s << std::endl;
+        fmt::format_to(std::back_inserter(text), "{}\n", s);
     }
     else
     {
       for (const std::string& kvit : section.keys_order)
       {
         auto pair = section.values.find(kvit);
-        out << pair->first << " = " << pair->second << std::endl;
+        fmt::format_to(std::back_inserter(text), "{} = {}\n", pair->first, pair->second);
       }
     }
   }
 
-  out.close();
+  // Two saves of the same file can run at once (two threads, or two Dolphins sharing a User
+  // folder), so each one writes its own temp file. A shared temp name let their writes interleave
+  // into a garbled file before the rename.
+  const std::string temp = fmt::format("{}.{:016x}", File::GetTempFilenameForAtomicWrite(filename),
+                                       Common::Random::GenerateValue<u64>());
 
-  return File::RenameSync(temp, filename);
+  // Text mode, so line endings stay CRLF on Windows.
+  File::IOFile out(temp, "w");
+  const bool written = out.WriteString(text);
+  if (!out.Close() || !written || !File::RenameSync(temp, filename))
+  {
+    File::Delete(temp, File::IfAbsentBehavior::NoConsoleWarning);
+    return false;
+  }
+  return true;
 }
 
 // Unit test. TODO: Move to the real unit test framework.
