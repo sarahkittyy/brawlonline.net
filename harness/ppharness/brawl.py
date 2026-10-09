@@ -214,6 +214,10 @@ ENUM_POSTURE = 0x0C          # verified (getLr)
 ENUM_DAMAGE = 0x38           # P+ DoubleCherry.asm
 ENUM_STATUS = 0x70           # verified (getStatusKind @.text+0x8CBF4)
 ENUM_KINETIC = 0x7C
+ENUM_COLOR_BLEND = 0xAC      # soColorBlendModule (BrawlHeaders so_module_accesser.h)
+CB_SUB_COLOR = 0x14A         # GXColor; +0x14F enabled (soColorBlendModuleImpl::setSubColor, sora_melee .text+0xC0EF0)
+CB_SUB_COLOR_ON = 0x14F
+PI_SHADE = 0x0A              # gmPlayerInitData: team-battle shade, drawn as the sub colour (1 dark, 2 grey, 3 light)
 POSTURE_POS = 0x0C           # Vec3f; Brawlback reads x @+0xC, y @+0x10
 POSTURE_PREV_POS = 0x18
 POSTURE_LR = 0x40
@@ -735,6 +739,28 @@ def read_entry(m: Mem, entry: int, index: int) -> PlayerState:
         ps.anim_frame = m.f32(motion + MOTION_FRAME)
         ps.motion_kind = m.s32(motion + MOTION_KIND)
     return ps
+
+
+def read_shades(read_mem: ReadMem, max_entries: int = 4) -> Dict[str, Any]:
+    """The colour-clash shades of a match: each port's gmPlayerInitData shade (``init``) and, per
+    port with a live fighter, its colour blend module's sub colour as RRGGBBAA hex or None when
+    off (``sub``). Brawl draws shade 1/2/3 as 000000/808080/FFFFFF at alpha 0x80."""
+    m = Mem(read_mem)
+    mm = _game_global(m, GG_MODE_MELEE)
+    out: Dict[str, Any] = {"init": [m.u8(mm + MM_PLAYERS + p * MM_PLAYER_SIZE + PI_SHADE) for p in range(4)],
+                           "sub": {}}
+    entries = m.ptr(FT_ENTRY_MANAGER)
+    count = m.u32(FT_ENTRY_MANAGER + 4)
+    for i in range(max(0, min(count if 0 < count <= 16 else max_entries, max_entries))):
+        entry = entries + i * FTE_SIZE
+        try:
+            port = m.s32(entry + FTE_PLAYER_NO)
+            cb = m.ptr(m.chain(_fighter_of_entry(m, entry) + FIGHTER_ACCESSER, ACC_ENUMERATION) + ENUM_COLOR_BLEND)
+        except BadPointer:
+            continue
+        on = m.u8(cb + CB_SUB_COLOR_ON) != 0
+        out["sub"][port] = m.read(cb + CB_SUB_COLOR, 4).hex() if on else None
+    return out
 
 
 def read_players(read_mem: ReadMem, setup: Optional[MatchSetup] = None, max_entries: int = 4) -> List[PlayerState]:

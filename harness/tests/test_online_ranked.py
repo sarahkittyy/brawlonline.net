@@ -204,7 +204,7 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
     w = _ranked(a)["wins"]
     assert w == _ranked(b)["wins"], (w, _ranked(b)["wins"])
     winner_port = 0 if w[0] >= 2 else 1
-    winner = a if local_port["rk-a"] == winner_port else b
+    winner = a if local_port[a.inst.name] == winner_port else b
     winner_user, loser_user = (ua, ub) if winner is a else (ub, ua)
 
     for g in players:
@@ -226,7 +226,7 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
         pub = backend._http("GET", f"/user/{u.uid}?additionalFields=chatMessages,rank")
         assert abs(pub["rank"]["ratingOrdinal"] - want) < 0.01 and pub["rank"]["ratingUpdateCount"] == 1, pub
     log = backend.log_text("accounts")
-    assert log.count("ranked game reported") == 2 * len(games), log[-3000:]
+    assert log.count(" game reported") == 2 * len(games), log[-3000:]
     assert "ranked set settled" in log and "ranked leave reported" not in log
     for g in players:
         assert g.bridge()["lost"] == 0

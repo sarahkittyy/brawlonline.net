@@ -261,6 +261,7 @@ void OnRngCall(u32 rng, const std::array<u32, 8>& callers, u32 state);
 // Diagnostics (PPR_GPRB_PROBE): r3, r4, r12, ctr, lr at a probed address.
 void OnProbe(u32 pc, const std::array<u32, 7>& regs);
 // HLE hook at stMelee's constructor: a network match's setup and seeds are applied before the
-// stage is built (it shuffles the fighters' start points with g_mtRand), if not done yet.
+// stage is built (it shuffles the fighters' start points with g_mtRand) if not done yet, and the
+// RNGs are seeded again if they were.
 void OnStageCreate(const Core::CPUThreadGuard& guard);
 }  // namespace Gprb::Session

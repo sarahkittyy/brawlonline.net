@@ -95,6 +95,8 @@ The chain, found on the SD card (`run/template-user/Wii/sd.raw`):
 
 So about 400 bytes of section + `.bss` growth are left. Anything bigger must make room first, e.g. more files built with `-Os` (files whose inline hooks read the Syriinge stub's frame through `__builtin_frame_address` need their `volatile` local, as `boot_menu.cpp` and `netmenu.cpp` have; `boot_menu.cpp`'s two such hooks run correctly at `-Os`). Check the Dolphin log for `Loaded plugin (PPOnline` after any change.
 
+Later every file was `-Os`, and the `ranked` merge (2026-10-08, main `890ecee5`) did not load again: `.text 0x95D0`, `Can't Alloc Heap Buffer 0000b44c` against `0xb2e0` free, the game booting as plain P+ (it never reached the first menu in the tests). Summing the REL header's section sizes and `.bss` gives about `0x2D3` less than `gfModule::create` asks for, so that sum is no check; the log is. Now every file is built with `-Oz`: `.text 0x8998` (3,128 bytes less), and the online tests pass with it (§11).
+
 **Hook conflicts.** `python tools/gamecode/pplus_hooks.py ADDR...` parses every `HOOK/op/CODE @` and raw gecko line of the four codesets, following `.include`s (3,176 patch sites). It reports any patch within 0x10 bytes of the given addresses. Every DOL address we hook is clear. The closest is P+'s `CODE @ $800B91C8` inside `MuMsg::printIndex`; we only replace that function's entry, at `0x800B91B8`.
 
 ---
@@ -506,6 +508,12 @@ Slippi keeps the character selected after a game and after the stage select. Bra
 
 In every online match (Direct, Unranked, Ranked) each player's account display name is drawn under their damage, as Slippi shows the display name under the percent (user request, 2026-10-08). Brawl's HUD has no text there (its name tags float over the fighters, and online matches keep "no tag"), so `match_hud.cpp` draws it with the game's own text renderer the way it draws DISCONNECTED: after the frame is drawn, white with a black edge, scale 0.55 of the system font, centred under each damage panel (Brawl spreads the panels about the HUD's centre in port order, 154 apart in its 640-wide space) at y 449. The names are SESSION's `players[i].name` (the matchmaking server's display names, the same on both machines; UTF-16, so kana print too). Nothing in the game's state changes. Verified in `run/artifacts/game-bridge/ranked-set/*/g1-match.png`.
 
+### Colour clash
+
+Each player picks on their own CSS, so both can come in with the same character and costume (Brawl's CSS gives the second player another costume, but the two CSSs never see each other). Slippi lightens one of them (`prepareOnlineMatchState`: in port order, each player whose character and colour an earlier one has gets the next of Melee's shades, written at `+0x67` of the player's match block). Brawl has the same for team battles: `gmPlayerInitData+0x0A` is a shade, set by the game when two players of one team have the same character, and the fighter's colour blend module draws it as its sub colour (`soColorBlendModuleImpl::setSubColor`, `sora_melee .text+0xC0EF0`: RGBA at module `+0x14A`, enabled `+0x14F`): 1 = `000000` (darker), 2 = `808080`, 3 = `FFFFFF` (lighter), alpha `0x80`. In a free-for-all the game writes no shade, but it draws one it finds, and sets it again after a respawn (checked: shade 3 on P2 of a Mario ditto, P2 lost a stock, the sub colour was `FFFFFF80` before and after).
+
+So `online_match.cpp` writes the shades after `sqVsMelee`'s setup, in port order from SESSION: a player with the same character and costume as an earlier one gets 3 (lighter, as Slippi's first shade), a third 1, a fourth 2. Both machines build it from the same SESSION, so the match setup stays identical. Teams (when it comes) should leave it to the game, which shades by team. `online_set.play_game` checks the shades and the fighters' sub colours on both machines in every online test game.
+
 ### DISCONNECTED in the match, and the end without "GAME!"
 
 Slippi (design 5.6): the error sound, "DISCONNECTED" in red (`FF0000FF`) centred near the top of the HUD until the scene ends, and an LRAS-type end (no "GAME!", a 90-frame end screen). Ours (`online_match.cpp`, `match_hud.cpp`):
@@ -595,4 +603,4 @@ The plugin first did not load with this code: see "Heap budget" in §2.
 
 **Noted, not changed:**
 - The netplay fallback (`[Online] SessionBackend = netplay`) boots P+ again under Dolphin netplay with the plugin, so its players now land on the ONLINE page instead of P+'s Versus CSS (`direct-netplay/*/06-netplay-boot.png`). The default gameplay session never reboots.
-- A Smashville desync from session frame 0 came back once in `test_direct_loser_picks_off_the_server_list` (game 1 on Smashville, equal setup keys, the barrier passed, the first RNG word different from frame 1; logs in `run/scratch/bootflow-smashville-desync/`): `docs/gameplay-rollback-status.md` open issue 7, which the session's match-start changes did not remove. The boot and the save do not reach the match setup; the rerun passed.
+- A Smashville desync from session frame 0 came back once in `test_direct_loser_picks_off_the_server_list` (game 1 on Smashville, equal setup keys, the barrier passed, the first RNG word different from frame 1; logs in `run/scratch/bootflow-smashville-desync/`): `docs/gameplay-rollback-status.md` open issue 7, which the session's match-start changes did not remove. The boot and the save do not reach the match setup; the rerun passed. Resolved in Phase 12 of that file (a second song pick on one machine).

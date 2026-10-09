@@ -3200,6 +3200,13 @@ MatchStart ApplyMatchStart(Core::System& system, std::string_view when)
   s.did_frame0 = true;
   INFO_LOG_FMT(BRAWLBACK, "gprb: match {} RNG seeded ({:08x} {:08x} {:08x}){}{}", s.match_index,
                seeds[0], seeds[1], seeds[2], when.empty() ? "" : " ", when);
+  // Tests (PPR_GPRB_TEST_RNG_SKEW): the joiner's g_mtRand moves on after the seeding, as a song
+  // that P+ picks again on one machine only moves it (OnStageCreate).
+  if (!s.net_opts.host && std::getenv("PPR_GPRB_TEST_RNG_SKEW"))
+  {
+    WriteU32(system, Addr::MTRAND_DEFAULT_SEED, (seeds[0] * 0x5D588B65u + 0x269EC3u) & 0x7fffffff);
+    WARN_LOG_FMT(BRAWLBACK, "gprb: PPR_GPRB_TEST_RNG_SKEW: joiner's g_mtRand moved on");
+  }
   return MatchStart::Done;
 }
 
@@ -3550,10 +3557,30 @@ void OnStageCreate(const Core::CPUThreadGuard& guard)
   if (s.mode != Mode::Network)
     return;
   INFO_LOG_FMT(BRAWLBACK, "gprb: stage constructed (match {}, seeded {})", s.match_index, s.did_frame0);
-  if (s.phase != Phase::Connected || s.did_frame0 || s.await_scene_exit ||
-      !(s.net_opts.host || s.peer.session_seed))
+  if (s.phase != Phase::Connected || s.await_scene_exit || !(s.net_opts.host || s.peer.session_seed))
     return;
-  ApplyMatchStart(guard.GetSystem(), "at the stage's construction");
+  auto& system = guard.GetSystem();
+  if (!s.did_frame0)
+  {
+    ApplyMatchStart(system, "at the stage's construction");
+    return;
+  }
+  // Seeded at the loop top already: seed the RNGs again here, so that the stage and everything
+  // built after it start from the same RNG state on both machines, whatever ran in between. The
+  // stage music is picked when the match scene starts, and P+ picks it again (with g_mtRand) when
+  // the first pick read a stale tracklist, which depends on what this machine played before: on
+  // one peer only (open issue 7, docs/gameplay-rollback-status.md). The object serial counter is
+  // left alone: objects made since the loop top keep their serials.
+  const Guest g(system.GetMemory());
+  const std::array<u32, 3> before = {g.U32(Addr::MTRAND_DEFAULT_SEED).value_or(0),
+                                     g.U32(Addr::MTRAND_OTHER_SEED).value_or(0),
+                                     g.U32(Addr::LIBC_RAND_NEXT).value_or(0)};
+  const auto seeds = MatchSeeds(s.session_seed, s.match_index);
+  WriteU32(system, Addr::MTRAND_DEFAULT_SEED, seeds[0]);
+  WriteU32(system, Addr::MTRAND_OTHER_SEED, seeds[1]);
+  WriteU32(system, Addr::LIBC_RAND_NEXT, seeds[2]);
+  INFO_LOG_FMT(BRAWLBACK, "gprb: match {} RNG seeded again at the stage's construction (was {:08x} "
+               "{:08x} {:08x})", s.match_index, before[0], before[1], before[2]);
 }
 
 bool IsResimulationPass()

@@ -140,6 +140,23 @@ def roles(players: Sequence[Any]) -> tuple:
     return host, join
 
 
+# Colour clash (PPOnline online_match.cpp, as Slippi): in port order, each player with the same
+# character and costume as an earlier one gets the next of Brawl's team-battle shades.
+SHADES = (0, 3, 1, 2)
+SHADE_SUB_COLOR = {1: "00000080", 2: "80808080", 3: "ffffff80"}
+
+
+def expected_shades(setup: B.MatchSetup) -> List[int]:
+    seen: List[tuple] = []
+    out = []
+    for pl in setup.players[:setup.num_players]:
+        key = (pl.character, pl.color)
+        out.append(SHADES[seen.count(key)] if pl.present else 0)
+        if pl.present:
+            seen.append(key)
+    return out
+
+
 def play_game(players: Sequence[Any], game: int, timeout: float = 900,
               log: Callable[[str], None] = print) -> Dict[str, Any]:
     """Wait for the match to run under rollback on both, play it to game set closed-loop (each
@@ -157,10 +174,17 @@ def play_game(players: Sequence[Any], game: int, timeout: float = 900,
     assert setups[0] == setups[1], ("the two games set up different matches", setups)
     assert rep["setup_hash"][0] == rep["setup_hash"][1], rep
     assert len({s["match_index"] for s in st}) == 1, rep
+    want = expected_shades(setups[0])
+    rep["shades"] = [B.read_shades(p.c.read_mem) for p in (host, join)]
+    for got in rep["shades"]:
+        assert got["init"][:len(want)] == want, ("colour clash shades", want, rep["shades"])
+        for port, shade in enumerate(want):
+            if port in got["sub"]:
+                assert got["sub"][port] == SHADE_SUB_COLOR.get(shade), ("colour clash", want, rep["shades"])
     for p in players:
         p.c.call("game_pads", record=True)
         p.shot(f"g{game}-match")
-    log(f"game {game}: running on both, stage {rep['stage']:#x}, host {host.name}")
+    log(f"game {game}: running on both, stage {rep['stage']:#x}, host {host.name}, shades {want}")
     F._macro = _gentle_macro()
     seats = [F.Seat(host.c, 0, 0, "H"), F.Seat(join.c, 1, 0, "J")]
     stop_flag = threading.Event()
