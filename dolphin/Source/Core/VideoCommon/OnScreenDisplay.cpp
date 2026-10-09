@@ -25,7 +25,7 @@
 
 namespace OSD
 {
-constexpr float LEFT_MARGIN = 10.0f;         // Pixels to the left of OSD messages.
+constexpr float LEFT_MARGIN = 8.0f;          // Pixels to the left of OSD messages (as the FPS box).
 constexpr float TOP_MARGIN = 10.0f;          // Pixels above the first OSD message.
 constexpr float WINDOW_PADDING = 4.0f;       // Pixels between subsequent OSD messages.
 constexpr float MESSAGE_FADE_TIME = 1000.f;  // Ms to fade OSD messages at the end of their life.
@@ -152,12 +152,15 @@ void AddMessage(std::string message, u32 ms, u32 argb,
   s_messages.emplace(MessageType::Typeless, Message(std::move(message), ms, argb, icon));
 }
 
-void DrawMessages()
+void DrawMessages(float min_top)
 {
   const bool draw_messages = Config::Get(Config::MAIN_OSD_MESSAGES);
-  const float current_x =
-      (LEFT_MARGIN + 100.0f) * ImGui::GetIO().DisplayFramebufferScale.x + s_obscured_pixels_left;
-  float current_y = (TOP_MARGIN - 2.5f) * ImGui::GetIO().DisplayFramebufferScale.y + s_obscured_pixels_top;
+  const ImVec2 scale = ImGui::GetIO().DisplayFramebufferScale;
+  // P+ change: the FPS box is in the top-left corner, so the messages go under it, as in Slippi.
+  const float current_x = LEFT_MARGIN * scale.x + s_obscured_pixels_left;
+  float current_y = TOP_MARGIN * scale.y + s_obscured_pixels_top;
+  if (min_top > 0.0f)
+    current_y = std::max(current_y, min_top + WINDOW_PADDING * scale.y);
   int index = 0;
 
   std::lock_guard lock{s_messages_mutex};
