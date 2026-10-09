@@ -119,7 +119,27 @@ main {
   transition: filter 0.15s, box-shadow 0.15s;
 }
 
-/* Logo */
+/* Logo, with the tagline under its bottom right corner. */
+.brand {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  max-width: 100%;
+}
+
+.tagline {
+  margin: 0.55em 0.4em 0 0;
+  font-family: "Barlow Condensed", system-ui, sans-serif;
+  font-style: italic;
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: clamp(0.95rem, min(3.6vw, 3.2vh), 1.4rem);
+  line-height: 1;
+  letter-spacing: 0.03em;
+  white-space: nowrap;
+  color: var(--dim);
+}
+
 .logo {
   margin: 0;
   max-width: 100%;
