@@ -12,6 +12,7 @@ pub mod mail;
 pub mod pages;
 pub mod password;
 pub mod ranked;
+pub mod rooms;
 pub mod store;
 
 use std::net::{IpAddr, SocketAddr};
@@ -22,7 +23,7 @@ use axum::Router;
 use common::playkey::PlayKeySecret;
 use common::ratelimit::{
     RateLimiter, Window, AUTH_WINDOWS, DAY, HISTORY_WINDOWS, LEADERBOARD_IP_WINDOWS, MAIL_RECIPIENT_WINDOWS,
-    SIGNUP_IP_WINDOWS,
+    ROOMS_WINDOWS, SIGNUP_IP_WINDOWS,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -40,6 +41,8 @@ pub struct AppState {
     pub limits: Arc<Mutex<Limits>>,
     pub hash_params: password::HashParams,
     pub dummy_hash: String,
+    /// mm's status (online count, public rooms) for `GET /v1/rooms`.
+    pub mm_status: Arc<rooms::MmStatusSource>,
 }
 
 impl AppState {
@@ -53,6 +56,7 @@ impl AppState {
             limits: Arc::new(Mutex::new(Limits::new(cfg.mail.mail_daily_limit))),
             hash_params,
             dummy_hash: password::dummy_hash(hash_params),
+            mm_status: Arc::new(rooms::MmStatusSource::new(&cfg.mm_status_url)),
             cfg: Arc::new(cfg),
         })
     }
@@ -74,6 +78,8 @@ pub struct Limits {
     pub leaderboard_ip: RateLimiter<IpAddr>,
     /// Match history pages per account: [`HISTORY_WINDOWS`].
     pub history: RateLimiter<uuid::Uuid>,
+    /// Room list requests per account: [`ROOMS_WINDOWS`].
+    pub rooms: RateLimiter<uuid::Uuid>,
 }
 
 impl Limits {
@@ -92,6 +98,7 @@ impl Limits {
             reset_mail: RateLimiter::new(&[Window::new(reset, DAY)]),
             leaderboard_ip: RateLimiter::new(&LEADERBOARD_IP_WINDOWS),
             history: RateLimiter::new(&HISTORY_WINDOWS),
+            rooms: RateLimiter::new(&ROOMS_WINDOWS),
         }
     }
 
@@ -124,6 +131,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/ranked/report-leave", post(ranked::report_leave))
         .route("/v1/ranked/result", get(ranked::result))
         .route("/v1/ranked/leaderboard", get(leaderboard::leaderboard))
+        .route("/v1/rooms", get(rooms::rooms))
         .route("/verify-email", get(pages::verify_email_page))
         .route("/reset-password", get(pages::reset_password_page).post(pages::reset_password_submit))
         .route("/healthz", get(api::healthz))

@@ -5,8 +5,9 @@
 //! hostname. Direct mode pairs two tickets that name each other's connect codes;
 //! Unranked pairs strangers from a FIFO queue (region-aware when a region table
 //! is configured). Both clients get each other's external and LAN addresses for
-//! hole punching, and the stage list of the mode's ruleset. Other modes get a
-//! clear error.
+//! hole punching, and the stage list of the mode's ruleset. Rooms (`rooms`) hold
+//! 2-4 players who meet by a room code and play from one `get-ticket-resp` that
+//! lists all of them. Party gets a clear error.
 //!
 //! Play keys are checked by reading `users` from Postgres directly. That is
 //! simpler than an internal HTTP call to `accounts`: no extra endpoint to
@@ -18,6 +19,7 @@ pub mod config;
 pub mod engine;
 pub mod messages;
 pub mod region;
+pub mod rooms;
 pub mod ruleset;
 pub mod server;
 
@@ -35,7 +37,7 @@ pub fn run(cfg: Config) -> anyhow::Result<()> {
             .acquire_timeout(std::time::Duration::from_secs(3))
             .connect(&cfg.database_url),
     )?;
-    let handle = start(cfg.listen, cfg.max_peers, engine_cfg, secret, pool, rt.handle().clone())?;
+    let handle = start(cfg.listen, cfg.status_addr()?, cfg.max_peers, engine_cfg, secret, pool, rt.handle().clone())?;
     handle.join();
     Ok(())
 }

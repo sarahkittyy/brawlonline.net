@@ -227,6 +227,10 @@ pub struct Config {
     /// Ranked: seconds between sweeps that settle sets whose waits have run out.
     #[arg(long, env = "RANKED_SWEEP_SECS", default_value_t = 30)]
     pub ranked_sweep_secs: u64,
+
+    /// mm's status listener (`MM_STATUS_LISTEN` on mm), read for `GET /v1/rooms`.
+    #[arg(long, env = "MM_STATUS_URL", default_value = "http://127.0.0.1:43181/status")]
+    pub mm_status_url: String,
 }
 
 impl Config {
@@ -260,6 +264,7 @@ impl Config {
             ranked_report_grace_secs: 120,
             ranked_stale_secs: 1800,
             ranked_sweep_secs: 30,
+            mm_status_url: "http://127.0.0.1:9/never".into(),
         }
     }
 }
