@@ -1,6 +1,6 @@
 # brawlonline.net
 
-The landing page for Brawl Online. It is a static site with no build step, no analytics, no cookies and no external requests (a Content-Security-Policy meta tag in `index.html` enforces `'self'` only). The page shows a logo, one download button for the visitor's OS, a tiny "download for other operating systems" toggle, and a dim looping gameplay video behind them. The logo and the button sit together in the middle of the screen, both on green menu-button frames in the style of Project M's menus. There is no other text, by design.
+The landing page for Brawl Online. It is a static site with no build step, no analytics, no cookies and no external requests (a Content-Security-Policy meta tag in `index.html` enforces `'self'` only). The page shows a logo with the tagline "rollback + matchmaking for pm" under its bottom right corner, one download button for the visitor's OS, a tiny "download for other operating systems" toggle, and a dim looping gameplay video behind them. The logo and the button sit together in the middle of the screen, both on green menu-button frames in the style of Project M's menus. There is no other text, by design (the tagline is `.tagline` in `index.html` and `style.css`).
 
 | File | What it is |
 | --- | --- |
