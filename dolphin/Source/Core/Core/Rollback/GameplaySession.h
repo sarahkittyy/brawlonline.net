@@ -105,6 +105,9 @@ struct ConnectOptions
   // without repeats until it is used up (Slippi's stage pool). A stage pick (Direct's loser) is
   // not checked against it: Slippi does not restrict Direct's stage select.
   std::vector<u16> stages;
+  // The room's Teams switch (docs/nplayer/setup.md): 3-4 players play a team battle with each
+  // player's lock-in team (Online::GameSetup::DecideTeams); with 2 players it has no effect.
+  bool teams = false;
 };
 
 // ---- The lobby: the online character select between matches (Slippi's MATCH_SELECTIONS). ----
@@ -133,6 +136,7 @@ struct LockIn
   u8 asl = 0;             // P+ alternate-stage buttons of that pick
   u32 game = 0;           // the game (1-based) this lock-in is for
   PortValues port_values{};  // the player's name tag and controls (all zero: the defaults)
+  u8 team = 0xFF;         // the player's team colour for a team battle (0-2), 0xFF none
 };
 void SetLocalLock(const LockIn& lock);
 
@@ -142,6 +146,7 @@ struct LobbyPlayer
   u8 char_kind = 0xFF;
   u8 costume = 0;
   PortValues port_values{};
+  u8 team = 0xFF;  // in a team battle (MatchSetup / Lobby `teams`), else 0xFF
 };
 
 struct Lobby
@@ -159,6 +164,9 @@ struct Lobby
   u8 asl = 0;
   std::array<LobbyPlayer, MAX_LOBBY_PLAYERS> players{};
   u8 last_winner = 0xFF;      // in-game port of the last game's winner, 0xFE draw, 0xFF none
+  bool teams = false;         // the next game is a team battle (players[i].team)
+  u8 stage_pickers = 0;       // ports (bits) that pick the next stage (GameSetup::Outcome)
+  u8 setup_error = 0;         // GameSetup::SetupError: why the next game is not set up
 };
 Lobby GetLobby();
 

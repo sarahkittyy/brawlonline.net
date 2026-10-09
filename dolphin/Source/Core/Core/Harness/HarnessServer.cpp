@@ -1289,6 +1289,7 @@ Result CmdGprbConnect(const Args& args)
   o.suppress_resim_sounds = GetBool(args, "suppress_resim_sounds", false);
   o.dedupe_resim_sounds = GetBool(args, "dedupe_resim_sounds", !o.suppress_resim_sounds);
   o.name = GetString(args, "name", std::string(""));
+  o.teams = GetBool(args, "teams", false);
   if (const auto err = Gprb::Session::Connect(o))
     Fail(*err);
   return Gprb::Session::Status().get<picojson::object>();

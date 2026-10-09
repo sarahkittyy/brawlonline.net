@@ -182,14 +182,24 @@ FighterFields ReadFighterFields(const Guest& g)
   // +0x28 ftOwner*, +0x30 + 8*k {u32 kind, Fighter*}. ftOwner -> +0 data -> +0x24 damage, +0x34
   // stocks. Fighter -> +0x60 accesser -> +0xD8 enumeration -> +0x0C posture (+0x0C x, +0x10 y),
   // +0x70 status (+0x34 kind). See Rollback::CalculateDesyncChecksums.
+  // The entries are not indexed by port: a match has 9, the used ones first in port order, with
+  // none for an empty port (P1 + P3 + P4: entries 0, 1, 2), so each entry's player number (+0x58)
+  // says whose it is (docs/nplayer/setup.md).
   FighterFields out{};
+  for (auto& f : out)
+    f[0] = 0xff;
   const auto entries = g.Ptr32(0x80624780u);
   if (!entries)
     return out;
-  for (u32 port = 0; port < 4; ++port)
+  const u32 count = std::min<u32>(g.U32(0x80624784u).value_or(0), 9);
+  for (u32 k = 0; k < count; ++k)
   {
+    const u32 entry = *entries + k * 0x244u;
+    const auto player = g.U32(entry + 0x58);
+    if (!player || *player >= 4)
+      continue;
+    const u32 port = *player;
     auto& f = out[port];
-    const u32 entry = *entries + port * 0x244u;
     const u8* inst = g.Ptr(entry + 0x0a, 1);
     f[0] = inst ? *inst : 0xff;
     if (const auto owner = g.Ptr32(entry + 0x28))
