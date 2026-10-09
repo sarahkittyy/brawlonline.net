@@ -52,4 +52,8 @@ void SetHandOff(bool hand_off);
 
 // For the harness (`game_bridge_status`).
 picojson::object Status();
+
+// SESSION's address in game memory, 0 before the plugin's block is found. The gameplay session
+// writes the gone flags there (Gprb::Session::GONE_FLAG_OFFSET).
+u32 SessionAddress();
 }  // namespace Online::GameBridge

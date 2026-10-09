@@ -1289,6 +1289,29 @@ Result CmdGprbConnect(const Args& args)
   o.suppress_resim_sounds = GetBool(args, "suppress_resim_sounds", false);
   o.dedupe_resim_sounds = GetBool(args, "dedupe_resim_sounds", !o.suppress_resim_sounds);
   o.name = GetString(args, "name", std::string(""));
+  // 2-4 players: `slot` (this player's in-game port 0-3) and `peers` [{slot, host, port}, ...]
+  // (host "" / port 0: learned from that peer's first message); `host_slot` for joiners.
+  if (Find(args, "slot"))
+  {
+    o.local_slot = static_cast<int>(GetU64(args, "slot"));
+    o.host_slot = static_cast<int>(GetU64(args, "host_slot", 0xFF));
+    if (o.host_slot == 0xFF)
+      o.host_slot = -1;
+    const picojson::value* peers = Find(args, "peers");
+    if (!peers || !peers->is<picojson::array>())
+      Fail("'peers' must be an array of {slot, host, port}");
+    for (const auto& e : peers->get<picojson::array>())
+    {
+      if (!e.is<picojson::object>())
+        Fail("'peers' entries must be objects");
+      const auto& po = e.get<picojson::object>();
+      Gprb::Session::ConnectOptions::Peer p;
+      p.slot = static_cast<int>(GetU64(po, "slot"));
+      p.host = GetString(po, "host", std::string(""));
+      p.port = static_cast<u16>(GetU64(po, "port", 0));
+      o.peers.push_back(p);
+    }
+  }
   if (const auto err = Gprb::Session::Connect(o))
     Fail(*err);
   return Gprb::Session::Status().get<picojson::object>();

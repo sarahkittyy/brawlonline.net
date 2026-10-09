@@ -63,6 +63,21 @@ bool ValidCharKind(u32 kind);
 // Colour numbers: the character select's own bound (game-code online_menu.cpp selectedCostume).
 constexpr u32 MAX_COSTUME = 0x1F;
 bool ValidCostume(u32 costume);
+// A lock-in's team: Brawl's team numbers 0-3 (gmPlayerInitData::m_teamNo), or 0xFF for none.
+bool ValidTeam(u32 team);
+// In-game ports (the session's player slots): 0-3.
+constexpr int MAX_PORTS = 4;
+bool ValidPort(u64 port);
+// The gone marker (docs/nplayer/session.md): GekkoNet hands this input for a player that left a
+// 3-4 player match, from the agreed frame on. The marker sits in gfPadStatus padding (+0x39..+0x3B,
+// between the error byte and the controller type), which the game never reads; local input has
+// those bytes cleared before it is sent, so no real input carries it. TakeGoneMarker reports
+// whether `pad` carries it and clears it (the pad is then a neutral, connected GameCube controller).
+constexpr size_t GONE_MARK_OFFSET = 0x39;
+constexpr std::array<u8, 3> GONE_MARK{'G', 'O', 'N'};
+void SetGoneMarker(u8* pad);
+bool TakeGoneMarker(u8* pad);
+void ClearGoneMarkerBytes(u8* pad);
 // srStageKind values a versus match can be played on (0x01-0x7F without menus, results and
 // single-player modes; P+ v3.2's stage select uses 0x01-0x33, 0x37 and 0x40-0x52). The game
 // plugin checks the exact list against P+'s stage select tables (game-code online_match.cpp);
