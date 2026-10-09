@@ -13,10 +13,10 @@ Needs Pillow and NumPy. Drawn by this script, not generated:
 
 Outputs:
   launcher/assets/icon.png   1024x1024 (Linux, BrowserWindow)
-  launcher/assets/icon.ico   16-256 (Windows exe, installer)
-  launcher/assets/icon.icns  16-1024 (macOS app, DMG)
-  website/favicon.ico        16, 32, 48
-  website/assets/icon-180.png (apple-touch-icon), icon-512.png
+  launcher/assets/icon.ico   16-256 (Windows exe, installer; up to 48 the ball alone)
+  launcher/assets/icon.icns  16-1024 (macOS app, DMG; 16 and 32 the ball alone)
+  website/favicon.ico        16, 32, 48 (the ball alone, no glow)
+  website/assets/icon-180.png (apple-touch-icon), icon-512.png (the same)
 """
 
 import sys
@@ -28,8 +28,10 @@ from PIL import Image, ImageFilter
 HERE = Path(__file__).resolve().parent
 REPO = HERE.parent.parent
 
-# The ball in smash-ball.png (pixels): centre and radius.
+# The ball in smash-ball.png (pixels): centre and radius, and the radius of its coloured part
+# (inside the white rim).
 CX, CY, R = 293.5, 297.0, 99.0
+R_COLOUR = 89.0
 # The Smash cross: vertical and horizontal bar (x0, y0, x1, y1), clipped to the ball.
 # Each with its white edge highlight.
 BARS = ((221, 190, 285, 405), (185, 311, 400, 340))
@@ -98,7 +100,7 @@ def fill_cross(a):
     return np.clip(f, 0, 255)
 
 
-def symbol_alpha(h, w, scale):
+def symbol_alpha(h, w, scale, arcs=3):
     """Coverage of the Wi-Fi symbol at the given scale, wrapped onto the ball."""
     cx, cy, r = CX * scale, CY * scale, R * scale
     yy, xx = np.mgrid[0:h, 0:w].astype(np.float64)
@@ -112,8 +114,9 @@ def symbol_alpha(h, w, scale):
     dx = R * lon
     dy = R * lat
     # Wi-Fi: dot at P, arcs 45 degrees each side of straight up.
-    w_arc, gap, dot = 17.0, 9.0, 12.5
-    py = 44.0  # P below the centre, so the symbol sits centred on the ball
+    w_arc, gap, dot = (21.0, 11.0, 15.5) if arcs == 3 else (30.0, 16.0, 22.0)
+    outer = dot + arcs * (gap + w_arc)
+    py = (outer - dot) / 2 + 4  # P below the centre: the symbol sits centred, a little low
     qx, qy = dx, dy - py
     rho = np.hypot(qx, qy)
     theta = np.arctan2(qx, -qy)  # 0 = up
@@ -123,7 +126,7 @@ def symbol_alpha(h, w, scale):
     # Past an arc's radial end: the distance to the end line.
     ang_d = np.where(np.abs(theta) > half, rho * np.sin(np.minimum(ang, np.pi / 2)), -1e9)
     r_in = dot + gap
-    for _ in range(3):
+    for _ in range(arcs):
         rc = r_in + w_arc / 2
         radial = np.abs(rho - rc) - w_arc / 2
         arc = np.where(np.abs(theta) > half, np.maximum(radial, ang_d),
@@ -137,20 +140,20 @@ def symbol_alpha(h, w, scale):
     return cov * on, edge * on, np.hypot(u, v)
 
 
-def compose():
+def compose(arcs=3, edges=True):
     a = load()
     filled = fill_cross(a)
     big = Image.fromarray(filled.astype(np.uint8)).resize(
         (filled.shape[1] * SCALE, filled.shape[0] * SCALE), Image.LANCZOS)
     b = np.array(big).astype(np.float64)
     h, w = b.shape[:2]
-    cov, edge, dist = symbol_alpha(h, w, SCALE)
+    cov, edge, dist = symbol_alpha(h, w, SCALE, arcs)
     # Keep the orbit ring in front of the symbol.
     _, _, ring = cross_mask(a)
     ring = Image.fromarray((ring * 255).astype(np.uint8)).resize((w, h), Image.BILINEAR)
     ring = np.array(ring) / 255
     cov = cov * (1 - ring)
-    e = (edge * (1 - ring) * 0.85)[..., None]
+    e = (edge * (1 - ring) * (0.85 if edges else 0))[..., None]
     b[..., :3] = b[..., :3] * (1 - e) + np.array([255, 255, 246]) * e
     # The cross's colour: near black, a little maroon towards the rim.
     t = np.clip(dist, 0, 1)[..., None] ** 2
@@ -176,6 +179,19 @@ def square(img, side_r, size):
     return Image.fromarray(arr.astype(np.uint8))
 
 
+def ball(img, size):
+    """Just the coloured ball, filling a size x size square (transparent corners)."""
+    half = R_COLOUR * SCALE
+    cx, cy = CX * SCALE, CY * SCALE
+    crop = img.crop((round(cx - half), round(cy - half), round(cx + half), round(cy + half)))
+    crop = crop.resize((size, size), Image.LANCZOS)
+    arr = np.array(crop).astype(np.float64)
+    yy, xx = np.mgrid[0:size, 0:size]
+    d = np.hypot(xx + 0.5 - size / 2, yy + 0.5 - size / 2)
+    arr[..., 3] = np.clip(size / 2 - d, 0, 1) * 255
+    return Image.fromarray(arr.astype(np.uint8))
+
+
 def sized(img, size):
     # Small sizes crop tighter so the ball stays readable.
     return square(img, 2.2 if size <= 48 else 2.6 if size <= 64 else 3.1, size)
@@ -183,16 +199,24 @@ def sized(img, size):
 
 def main():
     img = compose()
+    tiny = compose(arcs=2, edges=False)  # 16 px: two arcs, no edge highlight, so it stays legible
+
+    def ball_at(size):
+        return ball(tiny if size <= 16 else img, size)
+
     la = REPO / "launcher" / "assets"
     web = REPO / "website"
     sized(img, 1024).save(la / "icon.png", optimize=True)
-    ico = [sized(img, s) for s in (16, 24, 32, 48, 64, 128, 256)]
+    # Taskbar and title-bar sizes: the ball alone, like the website (the glow is a white blotch there).
+    ico = [ball_at(s) for s in (16, 24, 32, 48)] + [sized(img, s) for s in (64, 128, 256)]
     ico[-1].save(la / "icon.ico", sizes=[(i.width, i.height) for i in ico], append_images=ico[:-1])
-    sized(img, 1024).save(la / "icon.icns", append_images=[sized(img, s) for s in (16, 32, 64, 128, 256, 512)])
-    fav = [sized(img, s) for s in (16, 32, 48)]
+    sized(img, 1024).save(la / "icon.icns", append_images=[ball_at(s) for s in (16, 32)]
+                          + [sized(img, s) for s in (64, 128, 256, 512)])
+    # The website: the ball alone, no glow (it reads as a white blotch on a browser tab).
+    fav = [ball_at(s) for s in (16, 32, 48)]
     fav[-1].save(web / "favicon.ico", sizes=[(i.width, i.height) for i in fav], append_images=fav[:-1])
-    sized(img, 180).save(web / "assets" / "icon-180.png", optimize=True)
-    sized(img, 512).save(web / "assets" / "icon-512.png", optimize=True)
+    ball(img, 180).save(web / "assets" / "icon-180.png", optimize=True)
+    ball(img, 512).save(web / "assets" / "icon-512.png", optimize=True)
     if "--preview" in sys.argv:
         out = Path(sys.argv[sys.argv.index("--preview") + 1])
         sizes = (256, 128, 64, 48, 32, 16)
@@ -201,7 +225,8 @@ def main():
             bg.alpha_composite(sized(img, 1024), (0, 0))
             x = 1040
             for s in sizes:
-                bg.alpha_composite(sized(img, s), (x, 512 - s // 2))
+                bg.alpha_composite(sized(img, s), (x, 300 - s // 2))
+                bg.alpha_composite(ball_at(s), (x, 700 - s // 2))
                 x += s + 16
             bg.save(out / f"preview-{name}.png")
 
