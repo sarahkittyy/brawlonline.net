@@ -101,7 +101,7 @@ void CoreTimingManager::Init()
   m_rollback_resimulating = false;
   m_rollback_speed_factor = 1.0;
   m_rollback_burst_pending = false;
-  m_rollback_burst_lateness.reset();
+  m_max_behind_schedule = {};
 
   m_event_fifo_id = 0;
   m_ev_lost = RegisterEvent("_lost_event", &EmptyTimedCallback);
@@ -417,7 +417,6 @@ void CoreTimingManager::SetRollbackResimulating(bool resimulating)
     m_rollback_resimulating = false;
     m_throttle_reference_cycle = GetTicks();
     m_throttle_reference_time = m_rollback_burst_due;
-    m_rollback_burst_lateness = Clock::now() - m_rollback_burst_due;
     return;
   }
   if (m_rollback_resimulating == resimulating)
@@ -442,9 +441,9 @@ void CoreTimingManager::BeginRollbackBurst()
   m_rollback_burst_pending = true;
 }
 
-std::optional<DT> CoreTimingManager::TakeRollbackBurstLateness()
+DT CoreTimingManager::TakeMaxBehindSchedule()
 {
-  return std::exchange(m_rollback_burst_lateness, std::nullopt);
+  return std::exchange(m_max_behind_schedule, DT{});
 }
 
 void CoreTimingManager::ResetThrottleToNow()
@@ -498,6 +497,13 @@ void CoreTimingManager::SleepUntil(TimePoint time_point)
 void CoreTimingManager::Throttle(const s64 target_cycle)
 {
   const TimePoint time = Clock::now();
+
+  if (!IsSpeedUnlimited())
+  {
+    m_max_behind_schedule =
+        std::max(m_max_behind_schedule,
+                 std::chrono::duration_cast<DT>(time - CalculateTargetHostTimeInternal(target_cycle)));
+  }
 
   const bool already_throttled =
       m_throttled_after_presentation.exchange(true, std::memory_order_relaxed);

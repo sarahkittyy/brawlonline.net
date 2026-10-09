@@ -179,9 +179,9 @@ public:
   // into the frame's slack (without this, every rollback pushed the frames after it back by the
   // re-run's duration). Ignored while the speed is unlimited.
   void BeginRollbackBurst();
-  // How late the presented frame after the last burst resumed against its due time (zero or less:
-  // on time), or nullopt if no burst ended since the last call.
-  std::optional<DT> TakeRollbackBurstLateness();
+  // How far behind its schedule the throttle found the emulation at worst since the last call
+  // (zero: never behind). Only throttled time counts, not re-runs.
+  DT TakeMaxBehindSchedule();
 
   // May be used from CPU or GPU thread.
   void SleepUntil(TimePoint time_point);
@@ -245,7 +245,7 @@ private:
   double m_rollback_speed_factor = 1.0;
   bool m_rollback_burst_pending = false;
   TimePoint m_rollback_burst_due{};
-  std::optional<DT> m_rollback_burst_lateness;
+  DT m_max_behind_schedule{};
 
   bool IsSpeedUnlimited() const;
   void UpdateSpeedLimit(s64 cycle, double new_speed);

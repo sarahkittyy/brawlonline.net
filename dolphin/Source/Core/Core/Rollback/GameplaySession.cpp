@@ -297,17 +297,23 @@ struct State
   struct NetStats
   {
     u64 frames = 0, rollbacks = 0, resim = 0, max_depth = 0;
-    u64 bursts = 0, late = 0;  // rollback bursts, and those whose next frame was late
-    double burst_ms = 0, burst_ms_max = 0, late_ms_max = 0;
+    u64 bursts = 0;  // rollback bursts (a load and its re-run)
+    double burst_ms = 0, burst_ms_max = 0;
+    // Displayed frames that ran over their schedule by more than LATE_MS (the screen sees them
+    // late), and those of them that followed a rollback.
+    u64 late = 0, late_after_rollback = 0;
+    double late_ms_max = 0;
     u64 stalls = 0;  // updates with no frame to run (waited for the peer)
     double stall_ms = 0, stall_ms_max = 0;
     double ahead_sum = 0, ahead_min = 1e9, ahead_max = -1e9;
     double speed_min = 1e9, speed_max = -1e9;
     double pad_age_sum = 0, pad_age_max = 0;
     u64 pad_age_n = 0;
+    Rollback::PresentStats::Cadence cadence;  // presents, and hitches on a 59.94 Hz screen
   };
   NetStats net_window, net_total;
   s64 net_window_first = -1;
+  bool prev_frame_rolled_back = false;
   Clock::time_point burst_t0{};
   bool burst_open = false;
   std::vector<FrameRecord> history = std::vector<FrameRecord>(CHECKSUM_HISTORY);
@@ -1536,6 +1542,9 @@ void ResetRunStats()
   s.rollbacks = s.max_rollback = s.frames_resimulated = s.stall_polls = s.desyncs = 0;
   s.net_window = s.net_total = {};
   s.net_window_first = -1;
+  s.prev_frame_rolled_back = false;
+  Core::System::GetInstance().GetCoreTiming().TakeMaxBehindSchedule();
+  Rollback::PresentStats::TakeCadence();
   s.burst_open = false;
   s.last_desync_frame = -1;
   s.region_mismatches = 0;
@@ -1589,6 +1598,7 @@ void EndRunning(Core::System& system, const std::string& reason)
   s.end_reason = reason;
   if (s.mode == Mode::Network)
   {
+    s.net_window.cadence = Rollback::PresentStats::TakeCadence();
     NetStatsFold(s.net_total, s.net_window);
     s.net_window = {};
     if (s.net_total.frames)
@@ -1930,20 +1940,29 @@ int RemoteHandle()
 }
 
 constexpr u64 NET_STATS_WINDOW = 600;  // displayed frames (10 s)
+constexpr double LATE_MS = 2.0;
 
 std::string NetStatsLine(const State::NetStats& w)
 {
   const double n = static_cast<double>(std::max<u64>(w.frames, 1));
   std::string line = fmt::format(
       "{} frames, rollbacks {} ({:.1f}%), resimulated {} (avg depth {:.2f}, max {}), "
-      "rollback cost avg {:.2f} ms max {:.2f} ms, late after rollback {} (max {:.2f} ms), "
+      "rollback cost avg {:.2f} ms max {:.2f} ms, late frames {} ({} after a rollback, max {:.1f} ms), "
       "waits for the peer {} ({:.0f} ms, max {:.1f} ms), frames ahead avg {:.2f} [{:.2f}, {:.2f}], "
       "speed [{:.4f}, {:.4f}]",
       w.frames, w.rollbacks, 100.0 * w.rollbacks / n, w.resim,
       w.rollbacks ? static_cast<double>(w.resim) / w.rollbacks : 0.0, w.max_depth,
-      w.bursts ? w.burst_ms / w.bursts : 0.0, w.burst_ms_max, w.late, w.late_ms_max, w.stalls,
+      w.bursts ? w.burst_ms / w.bursts : 0.0, w.burst_ms_max, w.late, w.late_after_rollback,
+      w.late_ms_max, w.stalls,
       w.stall_ms, w.stall_ms_max, w.ahead_sum / n, w.frames ? w.ahead_min : 0.0,
       w.frames ? w.ahead_max : 0.0, w.frames ? w.speed_min : 1.0, w.frames ? w.speed_max : 1.0);
+  if (const auto& c = w.cadence; c.presents)
+  {
+    const double mean = c.interval_ms_sum / c.presents;
+    const double sd = std::sqrt(std::max(0.0, c.interval_ms_sq / c.presents - mean * mean));
+    line += fmt::format(", presents {} (interval sd {:.2f} ms, max {:.1f} ms), screen hitches {:.1f}",
+                        c.presents, sd, c.interval_ms_max, c.hitches);
+  }
   if (w.pad_age_n)
   {
     line += fmt::format(", pad sample age avg {:.1f} ms max {:.1f} ms", w.pad_age_sum / w.pad_age_n,
@@ -1960,6 +1979,7 @@ void NetStatsFold(State::NetStats& t, const State::NetStats& w)
   t.max_depth = std::max(t.max_depth, w.max_depth);
   t.bursts += w.bursts;
   t.late += w.late;
+  t.late_after_rollback += w.late_after_rollback;
   t.burst_ms += w.burst_ms;
   t.burst_ms_max = std::max(t.burst_ms_max, w.burst_ms_max);
   t.late_ms_max = std::max(t.late_ms_max, w.late_ms_max);
@@ -1974,6 +1994,11 @@ void NetStatsFold(State::NetStats& t, const State::NetStats& w)
   t.pad_age_sum += w.pad_age_sum;
   t.pad_age_max = std::max(t.pad_age_max, w.pad_age_max);
   t.pad_age_n += w.pad_age_n;
+  t.cadence.presents += w.cadence.presents;
+  t.cadence.hitches += w.cadence.hitches;
+  t.cadence.interval_ms_sum += w.cadence.interval_ms_sum;
+  t.cadence.interval_ms_sq += w.cadence.interval_ms_sq;
+  t.cadence.interval_ms_max = std::max(t.cadence.interval_ms_max, w.cadence.interval_ms_max);
 }
 
 // Network sessions: every NET_STATS_WINDOW displayed frames, one log line of what the netcode did,
@@ -2000,14 +2025,19 @@ void NetStatsOnDisplayedFrame(Core::System& system)
     w.burst_ms += ms;
     w.burst_ms_max = std::max(w.burst_ms_max, ms);
   }
-  if (const auto late = system.GetCoreTiming().TakeRollbackBurstLateness())
   {
-    const double ms = std::chrono::duration<double, std::milli>(*late).count();
-    if (ms > 0.5)
+    // The throttle points since the previous displayed frame started: that frame's own.
+    const double ms = std::chrono::duration<double, std::milli>(
+                          system.GetCoreTiming().TakeMaxBehindSchedule())
+                          .count();
+    if (ms > LATE_MS)
     {
       ++w.late;
+      if (s.prev_frame_rolled_back)
+        ++w.late_after_rollback;
       w.late_ms_max = std::max(w.late_ms_max, ms);
     }
+    s.prev_frame_rolled_back = s.ops.adv_count > 1;
   }
   w.ahead_sum += s.frames_ahead;
   w.ahead_min = std::min<double>(w.ahead_min, s.frames_ahead);
@@ -2016,6 +2046,7 @@ void NetStatsOnDisplayedFrame(Core::System& system)
   w.speed_max = std::max(w.speed_max, s.speed_factor);
   if (w.frames < NET_STATS_WINDOW)
     return;
+  w.cadence = Rollback::PresentStats::TakeCadence();
 
   std::string link;
   if (const int rh = RemoteHandle(); s.gekko && rh >= 0)
