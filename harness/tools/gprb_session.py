@@ -12,6 +12,11 @@ frame behind the barrier. During the match each instance plays only its local pl
 
     python harness/tools/gprb_session.py --preset typical --cpu sc
     python harness/tools/gprb_session.py --preset lan,typical,bad_wifi --cpu sc,dc --json run/qa/gprb2/sessions.json
+
+With --ports, 2-4 players, one instance each (docs/nplayer/session.md, "Harness"):
+
+    python harness/tools/gprb_session.py --ports 1,2,3,4 --chars fox,falco,mario,marth --region-set gp-v20
+    python harness/tools/gprb_session.py --ports 1,2,3,4 --teams 0,0,1,1 --drop 4:40:stop --plugin game-code/PPOnline/PPOnline.rel
 """
 
 from __future__ import annotations
