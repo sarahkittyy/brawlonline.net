@@ -153,7 +153,38 @@ Forms seen: Zelda and Sheik transforming (in free-for-all, team battle and the Z
 
 ## Cost per frame
 
-(in progress: the cost series on gp-v21)
+**Method.** The cost series: one Battlefield match with 2, 3 and 4 of the same characters (`f2-bf-zelda-ics`, `f3-bf-zelda-ics-olimar`, `f4-bf-zelda-ics-olimar-peach`, recorded input). Each fixture ran three ways, one instance at a time, unthrottled, video Null, for 3,600 session frames: without rollback (`--no-rollback`), and as a sync test at `distance` 2 and 7. The misprediction tool's `cost:` line gives the wall time per frame of the running phase and the snapshot statistics (`gprb_status`). A sync-test frame at distance d is one load, d-1 resimulated frames and one new frame, each with a save, so the cost of one resimulated frame (emulation and its save) is F = (T7 - T2) / 5. Raw: `run/qa/nplayer/cost/cost1` (gp-v20, the other agent's 4 instances running) and `cost2` (gp-v21, with 2 sweep instances of this work running too, noisier).
+
+| | 2 players | 3 players | 4 players |
+|---|---|---|---|
+| Main-thread instructions per frame (interpreter trace) | 2.0 M | | 3.7 M |
+| Granules (64 B) copied per save | 8,991 (562 KB) | 10,163 (635 KB) | 12,208 (763 KB) |
+| Granules restored per load (distance 7) | 10,343 | 11,665 | 13,436 |
+| Save, average | 0.40 ms | 0.40 ms | 0.46 ms |
+| Load, average (max) | 0.86 ms (2.0) | 0.85 ms (2.1) | 0.91 ms (2.1) |
+| Frame without rollback, single core (T0) | 4.1 ms | 4.7 ms | 6.1 ms |
+| Sync test distance 2 / 7, single core (T2 / T7) | 9.3 / 25.0 ms | 9.9 / 27.7 ms | 10.3 / 34.4 ms |
+| **One resimulated frame, single core (F)** | **3.1 ms** | **3.5 ms** | **4.8 ms** |
+| Frame without rollback, dual core (T0) | 3.3 ms | 3.3 ms | 3.8 ms |
+| Sync test distance 2 / 7, dual core (T2 / T7) | 7.7 / 19.3 ms | 7.3 / 22.9 ms | 8.6 / 30.5 ms |
+| **One resimulated frame, dual core (F)** | **2.3 ms** | **3.1 ms** | **4.4 ms** |
+
+(gp-v20 numbers, `cost1`. With gp-v21 (`cost2`): 240 more granules per save for every player count (the Tmp heap), saves and loads within the noise, F 3.4 / 4.0 / 4.9 ms single core and - / 3.5 / 3.4 ms dual core; the 2-player dual-core distance-7 run failed to start, a harness time-out.) The region set is 43.4-43.6 MiB whatever the player count: it names all four fighters' heaps; only the dirty granules cost.
+
+**The budget.** A frame that rolls back k frames costs, on top of its own frame, one load and k resimulated frames: L + k·F. At 60 fps a frame has 16.7 ms. With the dual-core numbers (the CPU thread's work; the GPU thread runs alongside) the deepest rollback that still fits into the frame it happens in is floor((16.7 - T0 - L) / F):
+
+| | 2 players | 3 players | 4 players |
+|---|---|---|---|
+| Dual core: rollback depth that fits into one frame | 5 | 4 (3 in `cost2`) | **2** (3 in `cost2`) |
+| Dual core: the deepest rollback the window allows (7) | 17 ms | 23 ms | 32 ms |
+| Single core: rollback depth that fits | 3 | 3 | 1 (1.99) |
+
+So with 4 players, rollbacks of 1-2 frames fit into the frame in dual core, as 1-5 frames do with 2 players; deeper ones overrun the frame by up to two frames' time and are caught up by the throttle after it (status doc, Phase 11: the presented frame resumes at the time it was due, a slow frame is caught up as after any slow frame). Network sessions with human-like input averaged rollback depths of 1.05 (status doc, Phase 11), but with 4 players every frame's rollback depth follows the slowest peer, so deep rollbacks will be more frequent. These numbers come from a loaded 8-core PC with the Null video backend; the deterministic GPU thread with a real backend adds GPU-thread work that runs alongside.
+
+**Where the time goes.** Saving and loading are a small part: a rollback of k frames spends about 0.9 + 0.4·k ms in the snapshot code, and k times 2-4 ms re-running the game. The 4-player frame runs 1.85 times as many instructions as the 2-player one. In the traced frames about 40-45 % of the main thread's instructions are `gfTaskScheduler::process` (game logic) and 55-60 % `renderPre` and `render` (building the frame's display lists), and a resimulated frame renders like any other. Suggestions, none implemented (each changes the session's frame loop and needs the sync and misprediction tests against ground truth again):
+1. **Skip `gfTaskScheduler::render` in resimulated passes.** Its output is display lists for frames nobody sees. It would roughly halve F if render touches no state the next frame's logic reads; `renderPre` probably cannot be skipped (it may compute matrices the logic reads), and the scene's per-model records (gp-v17) are written from render, so this needs a careful check.
+2. **Input delay by player count.** One more frame of delay in 4-player sessions (3 instead of 2) moves most rollbacks into the 1-2 frame range that fits; a session-layer choice (`docs/nplayer/session.md`).
+3. Not worth it: trimming the region set (the fourth fighter's empty heaps cost nothing; dirty tracking only copies written granules) or a smaller ring.
 
 ## Harness changes
 
