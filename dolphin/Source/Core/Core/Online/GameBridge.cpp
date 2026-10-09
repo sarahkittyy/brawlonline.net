@@ -34,7 +34,9 @@ namespace
 {
 // ---- The contract: game-code/PPOnline/include/ppom.h (docs/game-code.md, "PPOM block"). ----
 constexpr u32 MAGIC = 0x50504F4D;  // "PPOM"
-constexpr u16 VERSION = 3;
+// 4: 3-4 player matches (docs/nplayer/setup.md): SESSION 0x220 with each player's team, the
+// stage pickers, the elimination order, the gone flags and the teams switch; LOCAL's lock team.
+constexpr u16 VERSION = 4;
 constexpr u32 HEADER_SIZE = 0x24;
 
 // Header fields (u16 unless noted)
@@ -65,12 +67,17 @@ constexpr int HUD_WAIT_FRAMES = 30;
 // LockIn (game-written): seq u32, ready, cssChar, charKind, costume, stagePick u16, asl, game
 constexpr u32 LK_SEQ = 0x00, LK_READY = 0x04, LK_CSS = 0x05, LK_KIND = 0x06, LK_COSTUME = 0x07,
               LK_STAGE = 0x08, LK_ASL = 0x0A, LK_GAME = 0x0B;
-// SESSION (the same on every machine of a session; written only outside a match).
-constexpr u32 SESSION_SIZE = 0x210;
+// The lock-in's team colour (game-written with the lock-in; 0xFF none).
+constexpr u32 L_LOCK_TEAM = 0x34;
+// SESSION (the same on every machine of a session; written only outside a match, except the
+// gone flags and the elimination order, which are rolled-back match state).
+constexpr u32 SESSION_SIZE = 0x220;
 constexpr u32 S_SEQ = 0x00, S_STATE = 0x04, S_MODE = 0x05, S_GAME = 0x06, S_LAST_WINNER = 0x07,
-              S_STAGE = 0x08, S_ASL = 0x0A, S_NUM_PLAYERS = 0x0B, S_PLAYERS = 0x0C;
-constexpr u32 SP_SIZE = 0x80, SP_PRESENT = 0, SP_KIND = 1, SP_COSTUME = 2, SP_NAME = 4,
-              SP_CODE = 0x24, SP_PORT_VALUES = 0x40;
+              S_STAGE = 0x08, S_ASL = 0x0A, S_NUM_PLAYERS = 0x0B, S_PLAYERS = 0x0C,
+              S_TEAMS = 0x210, S_SETUP_ERROR = 0x211;
+constexpr u32 SP_SIZE = 0x80, SP_PRESENT = 0, SP_KIND = 1, SP_COSTUME = 2, SP_TEAM = 3,
+              SP_NAME = 4, SP_CODE = 0x24, SP_PICKS_STAGE = 0x36, SP_PORT_VALUES = 0x40;
+static_assert(SESSION_GONE + 4 <= S_TEAMS && SESSION_PLAYER_OUT == SP_PICKS_STAGE + 1);
 constexpr int SESSION_PLAYERS = 4;
 
 constexpr u8 CMD_GET_MATCH_STATE = 0xB3;
@@ -754,6 +761,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     l.stage_pick = R16(guard, lock + LK_STAGE);
     l.asl = R8(guard, lock + LK_ASL);
     l.game = R8(guard, lock + LK_GAME);
+    l.team = R8(guard, loc.local + L_LOCK_TEAM);
     for (u32 i = 0; i < l.port_values.size(); ++i)
       l.port_values[i] = R8(guard, loc.local + L_OWN + i);
     Gprb::Session::SetLocalLock(l);
@@ -768,6 +776,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
       s_lock_seen["costume"] = picojson::value(static_cast<double>(l.costume));
       s_lock_seen["stage_pick"] = picojson::value(static_cast<double>(l.stage_pick));
       s_lock_seen["game"] = picojson::value(static_cast<double>(l.game));
+      s_lock_seen["team"] = picojson::value(static_cast<double>(l.team));
       s_lock_seen["tag"] = picojson::value((l.port_values[0] & 1) != 0);
     }
   }
@@ -853,6 +862,8 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     session[S_STAGE + 1] = static_cast<u8>(lobby.stage);
     session[S_ASL] = lobby.asl;
     session[S_NUM_PLAYERS] = static_cast<u8>(lobby.num_players);
+    session[S_TEAMS] = lobby.teams ? 1 : 0;
+    session[S_SETUP_ERROR] = lobby.setup_error;
     for (int i = 0; i < SESSION_PLAYERS; ++i)
     {
       const u32 p = S_PLAYERS + i * SP_SIZE;
@@ -860,6 +871,8 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
       session[p + SP_PRESENT] = pl.present ? 1 : 0;
       session[p + SP_KIND] = pl.present ? pl.char_kind : 0xFF;
       session[p + SP_COSTUME] = pl.costume;
+      session[p + SP_TEAM] = pl.present && lobby.teams ? pl.team : GameSetup::NO_TEAM;
+      session[p + SP_PICKS_STAGE] = (lobby.stage_pickers >> i) & 1;
       PutU16Text(session, p + SP_NAME, names[i], NAME_LEN);
       PutU16Text(session, p + SP_CODE, codes[i], CODE_LEN);
       if (pl.present)
@@ -870,6 +883,8 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   {
     session[S_STAGE] = session[S_STAGE + 1] = 0xFF;
     session[S_LAST_WINNER] = 0xFF;
+    for (int i = 0; i < SESSION_PLAYERS; ++i)
+      session[S_PLAYERS + i * SP_SIZE + SP_TEAM] = GameSetup::NO_TEAM;
   }
   WriteBlock(guard, loc.session, session, &s_session_written, &s_session_seq);
 }
@@ -956,6 +971,12 @@ void Reset()
 void SetEnabled(bool enabled)
 {
   s_enabled = enabled;
+}
+
+u32 SessionAddress()
+{
+  std::lock_guard lk(s_mutex);
+  return s_located ? s_located->session : 0;
 }
 
 void SetHandOff(bool hand_off)

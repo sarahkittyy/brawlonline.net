@@ -40,6 +40,8 @@
 #include "Core/CoreTiming.h"
 #include "Core/HW/CPU.h"
 #include "Core/HW/Memmap.h"
+#include "Core/Online/GameBridge.h"
+#include "Core/Online/GameSetup.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/GameplayRollback.h"
@@ -142,6 +144,7 @@ struct MatchSetup
   u8 asl = 0;
   int num_players = 0;
   std::array<LobbyPlayer, MAX_LOBBY_PLAYERS> players{};
+  bool teams = false;  // a team battle (players[i].team)
 };
 
 struct PeerView
@@ -234,6 +237,10 @@ struct State
   LockIn local_lock;
   MatchSetup setup;
   u8 last_winner = 0xFF;
+  // Ports (bits) that pick the next game's stage (GameSetup::DecideOutcome; a 1v1: the loser,
+  // both after a draw), and why the next game cannot be set up (GameSetup::SetupError).
+  u8 last_pickers = 0;
+  u8 setup_error = 0;
   u16 last_stage = NO_STAGE;
   // Host: the stages not drawn yet (Slippi's stage_pool, refilled from the match's list when empty).
   std::vector<u16> stage_pool;
@@ -884,6 +891,7 @@ picojson::value LockJson(const LockIn& l)
   o["asl"] = picojson::value(static_cast<double>(l.asl));
   o["game"] = picojson::value(static_cast<double>(l.game));
   o["pv"] = picojson::value(Hex({l.port_values.begin(), l.port_values.end()}));
+  o["team"] = picojson::value(static_cast<double>(l.team));
   return picojson::value(o);
 }
 
@@ -914,6 +922,10 @@ LockIn LockFromJson(const picojson::object& o)
   l.game = static_cast<u32>(JsonNum(o, "game", 0xFFFFFFFF, 0));
   const auto pv = o.find("pv");
   l.port_values = PortValuesFromHex(pv != o.end() ? &pv->second : nullptr);
+  // A team colour is 0-2 (Online::GameSetup::NUM_TEAMS); anything else is "no team".
+  l.team = static_cast<u8>(JsonNum(o, "team", 0xFF, Online::GameSetup::NO_TEAM));
+  if (l.team >= Online::GameSetup::NUM_TEAMS)
+    l.team = Online::GameSetup::NO_TEAM;
   // A character, costume or stage the game cannot produce is not a lock-in: the peer is not
   // ready, and nothing of it reaches SESSION (the game would index its tables with it).
   if (!PeerData::ValidCharKind(l.char_kind) || !PeerData::ValidCostume(l.costume))
@@ -949,9 +961,13 @@ picojson::value SetupJson(const MatchSetup& st)
     p.emplace_back(static_cast<double>(st.players[i].char_kind));
     p.emplace_back(static_cast<double>(st.players[i].costume));
     p.emplace_back(Hex({st.players[i].port_values.begin(), st.players[i].port_values.end()}));
+    if (st.teams)
+      p.emplace_back(static_cast<double>(st.players[i].team));
     players.emplace_back(p);
   }
   o["players"] = picojson::value(players);
+  if (st.teams)
+    o["teams"] = picojson::value(true);
   return picojson::value(o);
 }
 
@@ -967,15 +983,20 @@ std::optional<MatchSetup> SetupFromJson(const picojson::object& o)
   {
     return std::nullopt;
   }
+  // A team battle: every player carries a team colour (0-2) as a fourth element, and the host's
+  // DecideTeams allowed the split; the joiner checks it the same way.
+  const auto teams_it = o.find("teams");
+  st.teams = teams_it != o.end() && teams_it->second.is<bool>() && teams_it->second.get<bool>();
+  std::array<Online::GameSetup::Seat, Online::GameSetup::MAX_PORTS> seats{};
   for (const auto& p : it->second.get<picojson::array>())
   {
     if (st.num_players >= MAX_LOBBY_PLAYERS || !p.is<picojson::array>() ||
-        p.get<picojson::array>().size() != 3)
+        p.get<picojson::array>().size() != (st.teams ? 4u : 3u))
     {
       return std::nullopt;
     }
     const auto& a = p.get<picojson::array>();
-    auto& pl = st.players[st.num_players++];
+    auto& pl = st.players[st.num_players];
     pl.present = true;
     const auto kind = PeerData::JsonUInt(&a[0], 0xFF);
     const auto costume = PeerData::JsonUInt(&a[1], 0xFF);
@@ -987,7 +1008,18 @@ std::optional<MatchSetup> SetupFromJson(const picojson::object& o)
     pl.char_kind = static_cast<u8>(*kind);
     pl.costume = static_cast<u8>(*costume);
     pl.port_values = PortValuesFromHex(&a[2]);
+    if (st.teams)
+    {
+      const auto team = PeerData::JsonUInt(&a[3], 0xFF);
+      if (!team || *team >= Online::GameSetup::NUM_TEAMS)
+        return std::nullopt;
+      pl.team = static_cast<u8>(*team);
+    }
+    seats[st.num_players] = {true, pl.team};
+    ++st.num_players;
   }
+  if (st.teams && !Online::GameSetup::DecideTeams(true, seats).teams)
+    return std::nullopt;
   // A session has two players (the host's and the joiner's port).
   if (st.num_players != 2)
     return std::nullopt;
@@ -1061,26 +1093,41 @@ void MaybeDecideSetup()
     if (!LockedFor(*l, game))
       return;
   }
+  // Free-for-all or a team battle (the room's Teams switch, each player's lock-in team).
+  std::array<Online::GameSetup::Seat, Online::GameSetup::MAX_PORTS> seats{};
+  for (size_t i = 0; i < locks.size(); ++i)
+    seats[i] = {true, locks[i]->team};
+  const Online::GameSetup::TeamSetup teams = Online::GameSetup::DecideTeams(s.net_opts.teams, seats);
+  if (teams.error != Online::GameSetup::SetupError::None)
+  {
+    if (s.setup_error != static_cast<u8>(teams.error))
+    {
+      NOTICE_LOG_FMT(BRAWLBACK, "gprb lobby: game {} not set up: {}", game,
+                     Online::GameSetup::SetupErrorText(teams.error));
+    }
+    s.setup_error = static_cast<u8>(teams.error);
+    return;
+  }
+  s.setup_error = 0;
   const StageDecision decided = DecideStage(game);
   if (decided.applies && decided.wait)
     return;
   MatchSetup st;
   st.game = game;
   st.num_players = static_cast<int>(locks.size());
+  st.teams = teams.teams;
   for (size_t i = 0; i < locks.size(); ++i)
-    st.players[i] = {true, locks[i]->char_kind, locks[i]->costume, locks[i]->port_values};
-  const LockIn* pick = nullptr;
-  if (s.last_winner < locks.size())
   {
-    const LockIn* loser = locks[1 - s.last_winner];
-    if (loser->stage_pick != NO_STAGE)
-      pick = loser;
+    st.players[i] = {true, locks[i]->char_kind, locks[i]->costume, locks[i]->port_values,
+                     teams.team[i]};
   }
-  for (const LockIn* l : locks)
-  {
-    if (!pick && l->stage_pick != NO_STAGE)
-      pick = l;
-  }
+  // The stage pick: the last game's loser's (s.last_pickers: a 1v1's loser, both after a draw),
+  // else any player's, in port order.
+  std::array<u16, Online::GameSetup::MAX_PORTS> picks{NO_STAGE, NO_STAGE, NO_STAGE, NO_STAGE};
+  for (size_t i = 0; i < locks.size(); ++i)
+    picks[i] = locks[i]->stage_pick;
+  const int pick_port = Online::GameSetup::StagePickPort(s.last_pickers, picks);
+  const LockIn* pick = pick_port >= 0 ? locks[pick_port] : nullptr;
   if (decided.applies)
   {
     st.stage = decided.stage;
@@ -1689,6 +1736,40 @@ void EndRunning(Core::System& system, const std::string& reason)
       std::memcpy(&d0, &f[0][1], 4);
       std::memcpy(&d1, &f[1][1], 4);
       s.last_winner = st0 != st1 ? (st0 > st1 ? 0 : 1) : (d0 != d1 ? (d0 < d1 ? 0 : 1) : 0xFE);
+      // The next stage's pickers: a 1v1's loser (both after a draw), as the game has done since
+      // Direct's loser's pick; 3-4 players: the placings from the end state and the game's
+      // elimination order (SESSION `out`, rolled back with the match, so the same here as on
+      // every other machine).
+      s.last_pickers = s.last_winner < 2 ? static_cast<u8>(1u << (1 - s.last_winner)) :
+                       s.last_winner == 0xFE ? 3 : 0;
+      if (s.setup.num_players > 2)
+      {
+        std::array<Online::GameSetup::PortEnd, Online::GameSetup::MAX_PORTS> ends{};
+        const u32 session = Online::GameBridge::SessionAddress();
+        const Guest g = GuestOf(system);
+        for (int i = 0; i < s.setup.num_players && i < Online::GameSetup::MAX_PORTS; ++i)
+        {
+          auto& e = ends[i];
+          e.present = s.setup.players[i].present;
+          e.team = s.setup.teams ? s.setup.players[i].team : Online::GameSetup::NO_TEAM;
+          e.stocks = static_cast<s32>(f[i][2]);
+          std::memcpy(&e.damage, &f[i][1], 4);
+          if (const u8* out = session ? g.Ptr(session + Online::GameBridge::SESSION_PLAYERS_OFF +
+                                                  i * Online::GameBridge::SESSION_PLAYER_SIZE +
+                                                  Online::GameBridge::SESSION_PLAYER_OUT,
+                                              1) :
+                                        nullptr)
+          {
+            e.out = *out;
+          }
+        }
+        const auto outcome = Online::GameSetup::DecideOutcome(s.setup.teams, ends);
+        s.last_winner = outcome.winner;
+        s.last_pickers = outcome.pickers;
+        INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {}: places {} {} {} {}, stage pickers {:#x}",
+                     NextGame(), outcome.place[0], outcome.place[1], outcome.place[2],
+                     outcome.place[3], outcome.pickers);
+      }
       INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} winner {} (stocks {} {}, damage {} {})",
                    NextGame(), s.last_winner, st0, st1, d0, d1);
       GameResult r;
@@ -2936,6 +3017,8 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.match_index = 0;
   s.setup = {};
   s.last_winner = 0xFF;
+  s.last_pickers = 0;
+  s.setup_error = 0;
   s.last_stage = NO_STAGE;
   s.stage_pool.clear();
   s.await_scene_exit = false;
@@ -3001,7 +3084,7 @@ void SetLocalLock(const LockIn& lock_in)
   const bool changed = lock.ready != s.local_lock.ready || lock.game != s.local_lock.game ||
                        lock.char_kind != s.local_lock.char_kind ||
                        lock.stage_pick != s.local_lock.stage_pick ||
-                       lock.port_values != s.local_lock.port_values;
+                       lock.port_values != s.local_lock.port_values || lock.team != s.local_lock.team;
   s.local_lock = lock;
   if (changed)
   {
@@ -3068,8 +3151,11 @@ Lobby GetLobby()
     l.stage = s.setup.stage;
     l.asl = s.setup.asl;
     l.players = s.setup.players;
+    l.teams = s.setup.teams;
   }
   l.last_winner = s.last_winner;
+  l.stage_pickers = s.last_pickers;
+  l.setup_error = s.setup_error;
   return l;
 }
 
@@ -3227,6 +3313,9 @@ picojson::value Status()
     lobby["peer_lock"] = LockJson(s.peer.lock);
     lobby["setup"] = SetupJson(s.setup);
     lobby["last_winner"] = picojson::value(static_cast<double>(s.last_winner));
+    lobby["stage_pickers"] = picojson::value(static_cast<double>(s.last_pickers));
+    lobby["setup_error"] = picojson::value(static_cast<double>(s.setup_error));
+    lobby["teams"] = picojson::value(s.net_opts.teams);
     lobby["last_stage"] = picojson::value(static_cast<double>(s.last_stage));
     picojson::array stages;
     for (const u16 st : AllowedStages())

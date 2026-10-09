@@ -88,7 +88,7 @@ def find_block(c: HarnessClient) -> Block:
         if i < 0:
             raise SystemExit("PPOM block not found in the Syringe heap (plugin not loaded?)")
         ver, sz, mbo, mbs, so, ss, lo, ls, dbo, dbs = struct.unpack_from(">HHHHHHHHHH", mem, i + 4)
-        if ver in (1, 2, 3) and 0x100 < sz < 0x4000 and mbo and dbo:
+        if ver in (1, 2, 3, 4) and 0x100 < sz < 0x4000 and mbo and dbo:
             a = start + i
             return Block(a, ver, sz, a + mbo, mbs, a + dbo, dbs, a + so if ss else 0, ss,
                          a + lo if ls else 0, ls)
@@ -234,7 +234,8 @@ def read_local(c: HarnessClient, b: Block) -> dict:
     return {"seq": seq, "state": state, "local_port": port, "remote_ready": rready,
             "disconnected": disc, "peer_name": from_u16s(d[8:8 + 2 * NAME_LEN]),
             "lock": {"seq": lseq, "ready": ready, "css": css, "char_kind": kind, "costume": costume,
-                     "stage_pick": stage, "asl": asl, "game": game},
+                     "stage_pick": stage, "asl": asl, "game": game,
+                     **({"team": d[0x34]} if b.version >= 4 else {})},
             **({"own": port_values(d[0x40:0x40 + PORT_VALUES_SIZE]),
                 "hud_disconnected": d[0x7C]} if len(d) >= 0x80 else {})}
 
@@ -253,9 +254,60 @@ def read_session(c: HarnessClient, b: Block) -> dict:
               "code": from_u16s(d[o + 0x24:o + 0x24 + 2 * CODE_LEN])}
         if stride == 0x80:
             pl["pv"] = port_values(d[o + 0x40:o + 0x40 + PORT_VALUES_SIZE])
+        if len(d) >= 0x220:   # v4: 3-4 player matches
+            pl.update(team=d[o + 3], picks_stage=d[o + 0x36], out=d[o + 0x37])
         players.append(pl)
-    return {"seq": seq, "state": state, "mode": mode, "game": game, "last_winner": winner,
-            "stage": stage, "asl": asl, "num_players": n, "players": players[:max(n, 0)]}
+    se = {"seq": seq, "state": state, "mode": mode, "game": game, "last_winner": winner,
+          "stage": stage, "asl": asl, "num_players": n, "players": players[:max(n, 0)]}
+    if len(d) >= 0x220:
+        se.update(gone=list(d[0x20C:0x210]), teams=d[0x210], setup_error=d[0x211],
+                  out_count=d[0x212])
+    return se
+
+
+# ---- v4: 3-4 player matches (docs/nplayer/setup.md) ----
+S_GONE, S_TEAMS, S_SETUP_ERROR, S_OUT_COUNT = 0x20C, 0x210, 0x211, 0x212
+SP_TEAM, SP_PICKS_STAGE, SP_OUT = 0x03, 0x36, 0x37
+CFG_TEST_GONE = 1 << 7   # ppom.h Cfg: Debug.testGone* set gone flags; removal in local matches too
+DEBUG_TEST_GONE = 0x18 + 4 * 16 + 16 * 32   # Debug.testGoneFrame, then testGonePorts
+
+
+def write_session(c: HarnessClient, b: Block, *, game: int, stage: int, players: list,
+                  teams: bool = False, mode: int = 2, last_winner: int = 0xFF, asl: int = 0,
+                  state: int = 2, pickers: int = 0) -> None:
+    """Tests (Dolphin's GameBridge off): write a SESSION as Dolphin would, with `players` by port:
+    None for an empty port, else {"char_kind", "costume", "team" (0-2 / 0xFF)}. Bumps the seq."""
+    d = bytearray(c.read_mem(b.session, b.session_size))
+    seq = struct.unpack_from(">I", d, 0)[0]
+    d[4:] = bytes(len(d) - 4)
+    n = max((i + 1 for i, p in enumerate(players) if p), default=0)
+    struct.pack_into(">BBBBHBB", d, 4, state, mode, game, last_winner, stage, asl, n)
+    for i in range(4):
+        o = 0x0C + 0x80 * i
+        p = players[i] if i < len(players) else None
+        d[o + SP_TEAM] = 0xFF
+        d[o + 1] = 0xFF
+        if p:
+            d[o] = 1
+            d[o + 1] = p["char_kind"]
+            d[o + 2] = p.get("costume", 0)
+            d[o + SP_TEAM] = p.get("team", 0xFF) if teams else 0xFF
+            d[o + 4:o + 4 + 2 * NAME_LEN] = u16s(p.get("name", f"P{i + 1}"), NAME_LEN)
+        d[o + SP_PICKS_STAGE] = (pickers >> i) & 1
+    if len(d) > S_TEAMS:
+        d[S_TEAMS] = 1 if teams else 0
+    c.write_mem(b.session + 4, bytes(d[4:]))
+    c.write_mem(b.session, struct.pack(">I", seq + 1))
+
+
+def set_test_gone(c: HarnessClient, b: Block, frame: int, ports: int, later_ports: int = 0,
+                  later_by: int = 0) -> None:
+    """CFG_TEST_GONE: from game frame `frame` on (g_GameFrame +4), the ports in the bit mask
+    `ports` are gone, and `later_by` frames after that also `later_ports`. Before the match only:
+    the plugin's data is rolled back with it."""
+    c.write_mem(b.debug + DEBUG_TEST_GONE,
+                struct.pack(">II", frame, (ports & 0xF) | (later_ports & 0xF) << 8 | later_by << 16))
+    set_cfg_bits(c, CFG_TEST_GONE, True)
 
 
 def main() -> int:
