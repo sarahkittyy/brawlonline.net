@@ -91,7 +91,9 @@ def cmd_diff(args) -> None:
             g = (x != y).reshape(-1, 64).any(axis=1)
             inset = granule_mask(rs, base, len(x))
             n_in = int((g & inset).sum())
-            if not args.inset:
+            if args.only_inset:
+                g &= inset
+            elif not args.inset:
                 g &= ~inset
             if base in noise:
                 g &= ~noise[base]
@@ -178,6 +180,7 @@ def main() -> int:
     p.add_argument("frames")
     p.add_argument("--noise", nargs=2)
     p.add_argument("--inset", action="store_true")
+    p.add_argument("--only-inset", action="store_true", help="only granules inside the set")
     p.add_argument("--max", type=int, default=300)
     p = sub.add_parser("dol")
     p.add_argument("a")
