@@ -45,6 +45,8 @@ namespace PPOM {
         CMD_CLEANUP_CONNECTION = 0xBA,
         CMD_FETCH_CODE_SUGGESTION = 0xBE,
         CMD_GET_RANK = 0xE3,
+        CMD_GP_COMPLETE_STEP = 0xC0,
+        CMD_GP_FETCH_STEP = 0xC1,
     };
 
     // Online modes, Slippi order (Online.s: Ranked, Unranked, Direct, Teams).
@@ -120,6 +122,23 @@ namespace PPOM {
         u32 setsPlayed;
         float change;
     };                    // 0x10
+
+    // Ranked's game setup (Dolphin Online/GameSetup.h; Slippi's GP_FETCH_STEP / GP_COMPLETE_STEP):
+    // stage strikes 1-2-1 for game 1, then the winner's ban, the loser's pick and the characters
+    // (winner first). 0xC0 GP_COMPLETE_STEP request payload: {u8 stage kind} (a strike or pick).
+    enum StepType { STEP_NONE = 0, STEP_STRIKE = 1, STEP_PICK = 2, STEP_CHAR = 3, STEP_DONE = 4 };
+    struct GameStep {     // 0xC1 GP_FETCH_STEP response payload
+        u8 active;        // a ranked game setup runs (else the CSS works as in Unranked)
+        u8 type;          // StepType
+        u8 myTurn;        // this player strikes / picks / chooses now
+        u8 count;         // selections left in the step
+        u8 toSss;         // a stage step: be on the stage select
+        u8 mayLock;       // CSS: START may lock in
+        u8 nKinds;        // entries in kinds
+        u8 seconds;       // seconds left in the step
+        u8 kinds[40];     // the stages still selectable (srStageKind)
+        u16 text[64];     // the line to show ("" = the game's own)
+    };                    // 0xB0
 
     // 0xB9 GET_ONLINE_STATUS response payload.
     struct OnlineStatus {

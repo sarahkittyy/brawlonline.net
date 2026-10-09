@@ -812,6 +812,18 @@ void Matchmaking::HandleMatchmaking()
         match.stages.push_back(static_cast<u16>(*kind));
     }
   }
+  const auto starters_it = get_resp.find("starters");
+  if (starters_it != get_resp.end() && starters_it->second.is<picojson::array>())
+  {
+    picojson::object probe;
+    for (const auto& s : starters_it->second.get<picojson::array>())
+    {
+      probe["s"] = s;
+      const auto kind = GetInt(probe, "s", 0, 0xFFFF);
+      if (kind && Gprb::PeerData::ValidStageKind(static_cast<u32>(*kind)) && match.starters.size() < 16)
+        match.starters.push_back(static_cast<u16>(*kind));
+    }
+  }
   match.items = static_cast<u32>(GetInt(get_resp, "items", 0, 0xFFFFFFFF).value_or(0));
   INFO_LOG_FMT(NETPLAY, "[Matchmaking] Stages from the server: {}", fmt::join(match.stages, ","));
 

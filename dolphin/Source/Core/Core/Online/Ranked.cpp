@@ -20,6 +20,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/Thread.h"
 #include "Core/Config/OnlineSettings.h"
+#include "Core/Online/GameSetup.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/OnlineSession.h"
 #include "Core/Online/User.h"
@@ -309,10 +310,27 @@ void OnSessionStart(const Match& match)
 {
   // The gameplay session tells us about every game; only ranked sets are tracked.
   Gprb::Session::SetGameResultCallback(OnGameResult);
+  // Ranked's stage striking (GameSetup.h). Outside s_mutex: it talks to the session, which calls
+  // OnGameResult with its own lock held.
+  const bool ranked = match.mode == MODE_RANKED && match.players.size() == 2;
+  if (ranked)
+  {
+    int local_port = 0;
+    for (const auto& p : match.players)
+    {
+      if (p.is_local)
+        local_port = p.is_local == match.is_host ? 0 : 1;
+    }
+    GameSetup::Begin(local_port, match.starters, match.stages);
+  }
+  else
+  {
+    GameSetup::End();
+  }
   std::lock_guard lk(s_mutex);
   if (s_active && !s_set_over)
     WARN_LOG_FMT(NETPLAY, "Ranked: set {} replaced before it ended", s_match_id);
-  s_active = match.mode == MODE_RANKED && match.players.size() == 2;
+  s_active = ranked;
   if (!s_active)
     return;
   s_match_id = match.match_id;
@@ -363,6 +381,7 @@ void OnGameResult(const Gprb::Session::GameResult& r)
 
   if (r.winner < 2)
     ++s_wins[r.winner];
+  GameSetup::OnGameResult(r.winner, r.stage);
   NOTICE_LOG_FMT(NETPLAY, "Ranked: game {} {} ({}-{})", r.game,
                  r.winner == DRAW ? "drawn" :
                  r.winner == s_local_port ? "won" : "lost",
@@ -389,6 +408,7 @@ void OnPeerGone()
 
 void OnCleanup()
 {
+  GameSetup::End();
   std::lock_guard lk(s_mutex);
   if (!s_active)
     return;
@@ -446,6 +466,7 @@ picojson::object Status()
   o["last_status"] = picojson::value(s_last_status);
   o["rating"] = s_rating ? picojson::value(static_cast<double>(*s_rating)) : picojson::value();
   o["change"] = s_change ? picojson::value(static_cast<double>(*s_change)) : picojson::value();
+  o["setup"] = picojson::value(GameSetup::Status());
   return o;
 }
 

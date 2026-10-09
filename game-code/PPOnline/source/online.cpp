@@ -116,6 +116,7 @@ namespace Online {
         if (lr >= 0x800B9230 && lr < 0x800B92D8) {
             u32 caller = *(u32*)(*(u32*)(*(u32*)__builtin_frame_address(0)) + 4);
             logEntry(caller, (u32)self, window, -2, 0);
+            StageLegal::onSssPrint(caller);
         }
         s_origBeginPrint(self, window);
     }
@@ -125,6 +126,7 @@ namespace Online {
     {
         MuMsg* m = s_origMsgCreate(font, heap, windows);
         logEntry((u32)__builtin_return_address(0), (u32)m, windows, -3, font);
+        StageLegal::onMsgCreate(m, (u32)__builtin_return_address(0));
         return m;
     }
 

@@ -157,6 +157,9 @@ pub struct GetTicketResp {
     pub players: Option<Vec<Player>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stages: Option<Vec<u16>>,
+    /// Ranked: the starter stages struck for game 1 (ours; Slippi's client has them built in).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub starters: Option<Vec<u16>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub items: Option<u32>,
 }

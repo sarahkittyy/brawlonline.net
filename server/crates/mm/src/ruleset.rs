@@ -36,6 +36,10 @@ pub const MAX_STAGE_ID: u16 = 0xFF;
 pub struct ModeRules {
     #[serde(default)]
     pub stages: Vec<u16>,
+    /// Ranked: the starters struck 1-2-1 for game 1 (a subset of `stages`); `stages` is the
+    /// counterpick list for the games after.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub starters: Vec<u16>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub stocks: Option<u8>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -68,6 +72,15 @@ impl Rulesets {
                 anyhow::ensure!(s <= MAX_STAGE_ID, "{name}: stage id {s} out of range");
                 anyhow::ensure!(seen.insert(s), "{name}: stage id {s} listed twice");
             }
+            let mut starters = HashSet::new();
+            for &s in &rules.starters {
+                anyhow::ensure!(seen.contains(&s), "{name}: starter {s} is not in the stage list");
+                anyhow::ensure!(starters.insert(s), "{name}: starter {s} listed twice");
+            }
+            anyhow::ensure!(
+                rules.starters.is_empty() || rules.starters.len() == 5,
+                "{name}: Ranked strikes 1-2-1, so it needs 5 starters"
+            );
         }
         Ok(r)
     }

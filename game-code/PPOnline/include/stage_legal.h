@@ -2,6 +2,8 @@
 #include <sy_core.h>
 #include <types.h>
 
+class MuMsg;
+
 // Legal stages only on P+'s stage select (stage_legal.cpp).
 namespace StageLegal {
     void install(CoreApi* api);
@@ -10,4 +12,6 @@ namespace StageLegal {
     void setList(const u8* kinds, int n);  // srStageKind list (SESSION later); n <= 0: P+'s legal list
     bool allowedKind(int kind);
     bool selectableKind(int kind);         // a srStageKind on any page of P+'s stage select
+    void onMsgCreate(MuMsg* m, u32 caller);  // the stage select's message object (its rule line)
+    void onSssPrint(u32 caller);             // the stage select printed its rule line itself
 }

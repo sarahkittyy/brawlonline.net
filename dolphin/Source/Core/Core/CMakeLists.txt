@@ -579,6 +579,8 @@ add_library(core
   PowerPC/SignatureDB/SignatureDB.h
   Online/GameBridge.cpp
   Online/GameBridge.h
+  Online/GameSetup.cpp
+  Online/GameSetup.h
   Online/Matchmaking.cpp
   Online/Matchmaking.h
   Online/NetPlaySession.cpp

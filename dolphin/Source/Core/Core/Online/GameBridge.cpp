@@ -18,6 +18,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
 #include "Core/NetPlayClient.h"
+#include "Core/Online/GameSetup.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/Ranked.h"
 #include "Core/Online/RecentCodes.h"
@@ -78,6 +79,8 @@ constexpr u8 CMD_GET_ONLINE_STATUS = 0xB9;
 constexpr u8 CMD_CLEANUP_CONNECTION = 0xBA;
 constexpr u8 CMD_FETCH_CODE_SUGGESTION = 0xBE;
 constexpr u8 CMD_GET_RANK = 0xE3;
+constexpr u8 CMD_GP_COMPLETE_STEP = 0xC0;
+constexpr u8 CMD_GP_FETCH_STEP = 0xC1;
 
 constexpr u8 STATUS_OK = 0;
 constexpr u8 STATUS_UNSUPPORTED = 0xFF;
@@ -96,6 +99,9 @@ constexpr u32 CSQ_INDEX = 4, CSQ_INPUT = 8;
 constexpr u32 CS_INDEX = 4, CS_CODE = 8;
 // RankInfo response payload: state, hasChange, pad[2], rating f32, setsPlayed u32, change f32
 constexpr u32 RK_RATING = 4, RK_SETS = 8, RK_CHANGE = 12;
+// GameStep response payload: active, type, myTurn, count, toSss, mayLock, nKinds, seconds,
+// kinds[40], text u16[64]
+constexpr u32 GS_KINDS = 8, GS_MAX_KINDS = 40, GS_TEXT = 0x30, GS_TEXT_LEN = 64;
 constexpr u8 MODE_TEAMS = 3;
 
 // The game's OSModuleInfo list (first, last).
@@ -444,6 +450,31 @@ Response RankResponse()
   return r;
 }
 
+// Ranked's game setup for the CSS and the stage select (Online/GameSetup.h; Slippi's
+// GP_FETCH_STEP): the step, whose turn it is, the selectable stages and the line to show.
+Response GameStepResponse()
+{
+  const GameSetup::View v = GameSetup::Current();
+  Response r;
+  r.cmd = CMD_GP_FETCH_STEP;
+  r.payload[0] = v.active ? 1 : 0;
+  r.payload[1] = static_cast<u8>(v.type);
+  r.payload[2] = v.my_turn ? 1 : 0;
+  r.payload[3] = v.count;
+  r.payload[4] = v.to_sss ? 1 : 0;
+  r.payload[5] = v.may_lock ? 1 : 0;
+  const size_t n = std::min<size_t>(v.selectable.size(), GS_MAX_KINDS);
+  r.payload[6] = static_cast<u8>(n);
+  r.payload[7] = v.seconds;
+  for (size_t i = 0; i < n; ++i)
+    r.payload[GS_KINDS + i] = v.selectable[i];
+  WriteU16Text(r.payload, GS_TEXT, v.text, GS_TEXT_LEN);
+  r.summary = fmt::format("GP_FETCH_STEP active={} type={} turn={} count={} sss={} lock={} "
+                          "stages={} text='{}'",
+                          v.active, u8(v.type), v.my_turn, v.count, v.to_sss, v.may_lock, n, v.text);
+  return r;
+}
+
 // Slippi's FETCH_CODE_SUGGESTION (handleNameEntryLoad): the recent code that starts with what
 // was typed. Not found: the input comes back with the request's index (Slippi echoes it too).
 Response CodeSuggestion(const Core::CPUThreadGuard& guard, u32 payload, std::string* request)
@@ -499,6 +530,10 @@ const char* CmdName(u8 cmd)
     return "FETCH_CODE_SUGGESTION";
   case CMD_GET_RANK:
     return "GET_RANK";
+  case CMD_GP_COMPLETE_STEP:
+    return "GP_COMPLETE_STEP";
+  case CMD_GP_FETCH_STEP:
+    return "GP_FETCH_STEP";
   default:
     return "?";
   }
@@ -621,6 +656,16 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox)
     case CMD_GET_RANK:
       response = RankResponse();
       break;
+    case CMD_GP_FETCH_STEP:
+      response = GameStepResponse();
+      break;
+    case CMD_GP_COMPLETE_STEP:
+    {
+      const u8 kind = R8(guard, payload);
+      const bool ok = GameSetup::Act(kind);
+      request = fmt::format("GP_COMPLETE_STEP stage={:#x}{}", kind, ok ? "" : " (refused)");
+      break;
+    }
     default:
       response = Response{};
       response->cmd = cmd;
@@ -633,18 +678,20 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox)
       WriteResponse(guard, mailbox, seq, *response);
       responded = true;
     }
-    // Polls are once per frame while searching; keep them out of the log unless they change.
-    if (cmd != CMD_GET_MATCH_STATE)
+    // Polls (the match state and the ranked step every frame, the rank every second) stay out
+    // of the log unless their answer changes.
+    const bool poll = cmd == CMD_GET_MATCH_STATE || cmd == CMD_GP_FETCH_STEP || cmd == CMD_GET_RANK;
+    if (!poll)
     {
       NOTICE_LOG_FMT(NETPLAY, "GameBridge: request {} {}{}", seq, request,
                      response ? " -> " + response->summary : std::string());
     }
     else
     {
-      static std::string s_last_poll;
-      if (response && response->summary != s_last_poll)
+      static std::map<u8, std::string> s_last_poll;
+      if (response && response->summary != s_last_poll[cmd])
       {
-        s_last_poll = response->summary;
+        s_last_poll[cmd] = response->summary;
         NOTICE_LOG_FMT(NETPLAY, "GameBridge: request {} {} -> {}", seq, request,
                        response->summary);
       }
