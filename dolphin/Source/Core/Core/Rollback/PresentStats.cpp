@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <chrono>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -125,11 +126,67 @@ void OnDisplayedFrameStart(bool after_resimulation)
     s_displayed_frames_after_resim.fetch_add(1, std::memory_order_relaxed);
 }
 
+namespace
+{
+constexpr double REFRESH_MS = 1000.0 / 59.94;
+constexpr int PHASES = 4;
+std::mutex s_cadence_mutex;
+Cadence s_cadence;
+bool s_have_last_present = false;
+std::chrono::steady_clock::time_point s_cadence_origin, s_last_present;
+std::array<s64, PHASES> s_last_bucket{};
+u64 s_cadence_hitches = 0;  // summed over the phases
+
+void RecordPresentCadence()
+{
+  const auto now = std::chrono::steady_clock::now();
+  std::lock_guard lk(s_cadence_mutex);
+  if (!s_have_last_present)
+  {
+    s_have_last_present = true;
+    s_cadence_origin = now;
+  }
+  const double t = std::chrono::duration<double, std::milli>(now - s_cadence_origin).count();
+  const bool first = s_last_present == std::chrono::steady_clock::time_point{};
+  const double ms =
+      first ? 0.0 : std::chrono::duration<double, std::milli>(now - s_last_present).count();
+  // The first present, or one after a gap of over 0.5 s (menus, a load): no interval to judge.
+  const bool judged = !first && ms < 500;
+  for (int p = 0; p < PHASES; ++p)
+  {
+    const s64 bucket = static_cast<s64>(t / REFRESH_MS + static_cast<double>(p) / PHASES);
+    if (judged && bucket - s_last_bucket[p] != 1)
+      ++s_cadence_hitches;
+    s_last_bucket[p] = bucket;
+  }
+  if (judged)
+  {
+    s_cadence.interval_ms_sum += ms;
+    s_cadence.interval_ms_sq += ms * ms;
+    s_cadence.interval_ms_max = std::max(s_cadence.interval_ms_max, ms);
+    ++s_cadence.presents;
+  }
+  s_last_present = now;
+}
+}  // namespace
+
 void OnPresent(bool duplicate)
 {
   s_presents.fetch_add(1, std::memory_order_relaxed);
   if (duplicate)
     s_duplicate_presents.fetch_add(1, std::memory_order_relaxed);
+  else
+    RecordPresentCadence();
+}
+
+Cadence TakeCadence()
+{
+  std::lock_guard lk(s_cadence_mutex);
+  Cadence c = s_cadence;
+  c.hitches = static_cast<double>(s_cadence_hitches) / PHASES;
+  s_cadence = {};
+  s_cadence_hitches = 0;
+  return c;
 }
 
 Stats Get()

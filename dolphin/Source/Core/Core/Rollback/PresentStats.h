@@ -46,6 +46,18 @@ void OnDisplayedFrameStart(bool after_resimulation);
 // Video thread: the presenter showed a frame (`duplicate`: the same XFB as the previous one).
 void OnPresent(bool duplicate);
 
+// Present cadence as a 59.94 Hz screen without VSync would show it: a hitch is a present that does
+// not land in the refresh right after the previous present's (a repeated or a skipped frame),
+// averaged over four refresh phases. Taken (and reset) by the online session's telemetry.
+struct Cadence
+{
+  u64 presents = 0;
+  double hitches = 0;
+  double interval_ms_max = 0;
+  double interval_ms_sum = 0, interval_ms_sq = 0;
+};
+Cadence TakeCadence();
+
 struct Stats
 {
   bool present_resimulated = false;  // PPR_ROLLBACK_PRESENT_RESIM=1: old behaviour, for A/B runs
