@@ -315,8 +315,10 @@ def run_session(preset: str, cpu: str, args: argparse.Namespace, run: int) -> Di
                            "delay": args.delay, "region_set": args.region_set}
     t0 = time.monotonic()
     sim: Optional[NetSim] = None
-    specs = [(f"{args.name_prefix}-host-{preset}-{cpu}", dict(cpu_thread=cpu == "dc")),
-             (f"{args.name_prefix}-join-{preset}-{cpu}", dict(cpu_thread=cpu == "dc"))]
+    specs = [(f"{args.name_prefix}-host-{preset}-{cpu}", dict(cpu_thread=cpu == "dc", gpu_determinism=args.gpu,
+                                                              video=args.video)),
+             (f"{args.name_prefix}-join-{preset}-{cpu}", dict(cpu_thread=cpu == "dc", gpu_determinism=args.gpu,
+                                                              video=args.video))]
     rtc_b = args.rtc_b
     orig = G.make_instance
 
@@ -401,6 +403,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--preset", default="typical")
     ap.add_argument("--cpu", default="sc")
+    ap.add_argument("--gpu", default=None,
+                    help="GPUDeterminismMode for both instances (default: the template's P+ INI, fake-completion); "
+                         "'unset' removes it, as on an install without P+'s launcher INI")
+    ap.add_argument("--video", default="Null", help="video backend (Null, D3D11, Vulkan)")
     ap.add_argument("--runs", type=int, default=1)
     ap.add_argument("--p1", default="fox")
     ap.add_argument("--p2", default="falco")
