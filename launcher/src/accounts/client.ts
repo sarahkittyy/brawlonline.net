@@ -1,16 +1,30 @@
-import type { AccountsErrorBody, AccountsMe, AccountsPublicUser, SignUpRequest, UserJson } from "./types";
+import type {
+  AccountsErrorBody,
+  AccountsMe,
+  AccountsPublicUser,
+  LeaderboardPage,
+  MatchHistoryFilter,
+  MatchHistoryPage,
+  SignUpRequest,
+  UserJson,
+} from "./types";
 
 export type SessionResponse = { sessionToken: string; user: AccountsMe };
 
 /** An error answer from the accounts API (or a transport failure, code `network`). */
 export class AccountsHttpError extends Error {
-  constructor(readonly code: string, message: string, readonly status?: number) {
+  /** `retryAfter`: seconds, from a 429's `Retry-After` header. */
+  constructor(readonly code: string, message: string, readonly status?: number, readonly retryAfter?: number) {
     super(message);
     this.name = "AccountsHttpError";
   }
 
   toBody(): AccountsErrorBody {
-    return { code: this.code, message: this.message, status: this.status };
+    const body: AccountsErrorBody = { code: this.code, message: this.message, status: this.status };
+    if (this.retryAfter !== undefined) {
+      body.retryAfter = this.retryAfter;
+    }
+    return body;
   }
 }
 
@@ -70,6 +84,17 @@ export class AccountsHttpClient {
     return this._request("GET", `/user/${encodeURIComponent(uid)}?additionalFields=chatMessages,rank`, {});
   }
 
+  leaderboard(query: { limit?: number; after?: string }): Promise<LeaderboardPage> {
+    return this._request("GET", `/v1/ranked/leaderboard${queryString(query)}`, {});
+  }
+
+  matchHistory(
+    token: string,
+    query: { mode: MatchHistoryFilter; limit?: number; before?: string },
+  ): Promise<MatchHistoryPage> {
+    return this._request("GET", `/v1/me/matches${queryString(query)}`, { token });
+  }
+
   private async _request<T>(
     method: "GET" | "POST",
     path: string,
@@ -100,7 +125,7 @@ export class AccountsHttpClient {
 
     const text = await res.text();
     if (!res.ok) {
-      throw parseError(res.status, text);
+      throw parseError(res.status, text, parseRetryAfter(res.headers.get("retry-after")));
     }
     if (res.status === 204 || text.trim() === "") {
       return undefined as T;
@@ -113,16 +138,37 @@ export class AccountsHttpClient {
   }
 }
 
-function parseError(status: number, text: string): AccountsHttpError {
+/** `?a=1&b=x` from the defined, non-empty values (`""` when there are none). */
+export function queryString(params: Record<string, string | number | undefined>): string {
+  const q = new URLSearchParams();
+  for (const [key, value] of Object.entries(params)) {
+    if (value !== undefined && value !== "") {
+      q.set(key, String(value));
+    }
+  }
+  const s = q.toString();
+  return s === "" ? "" : `?${s}`;
+}
+
+/** Seconds from a `Retry-After` header (the server sends whole seconds). */
+function parseRetryAfter(header: string | null): number | undefined {
+  if (header == null || header.trim() === "") {
+    return undefined;
+  }
+  const secs = Number(header.trim());
+  return Number.isFinite(secs) && secs >= 0 ? secs : undefined;
+}
+
+function parseError(status: number, text: string, retryAfter?: number): AccountsHttpError {
   try {
     const parsed = JSON.parse(text);
     const err = parsed?.error;
     if (err && typeof err.message === "string") {
-      return new AccountsHttpError(String(err.code ?? "error"), err.message, status);
+      return new AccountsHttpError(String(err.code ?? "error"), err.message, status, retryAfter);
     }
   } catch {
     // Not JSON: axum's own rejections (malformed body) are plain text.
   }
   const message = text.trim() !== "" && text.length < 300 ? text.trim() : `Account server error (HTTP ${status}).`;
-  return new AccountsHttpError(status === 401 ? "unauthorized" : "error", message, status);
+  return new AccountsHttpError(status === 401 ? "unauthorized" : "error", message, status, retryAfter);
 }

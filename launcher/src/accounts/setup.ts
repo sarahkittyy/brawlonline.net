@@ -9,8 +9,10 @@ import { resolveServiceUrls } from "./config";
 import {
   ipc_accountsHasSession,
   ipc_accountsInitNetplay,
+  ipc_accountsLeaderboard,
   ipc_accountsLogin,
   ipc_accountsLogout,
+  ipc_accountsMatchHistory,
   ipc_accountsMe,
   ipc_accountsPublicUser,
   ipc_accountsRename,
@@ -40,6 +42,10 @@ export default function setupAccountsIpc() {
   ipc_accountsInitNetplay.main!.handle(async ({ uid, codeStart }) => manager.initNetplay(uid, codeStart));
   ipc_accountsRename.main!.handle(async ({ uid, displayName }) => await manager.rename(uid, displayName));
   ipc_accountsPublicUser.main!.handle(async ({ uid }) => await manager.publicUser(uid));
+  ipc_accountsLeaderboard.main!.handle(async ({ limit, after }) => await manager.leaderboard({ limit, after }));
+  ipc_accountsMatchHistory.main!.handle(
+    async ({ uid, mode, limit, before }) => await manager.matchHistory(uid, { mode, limit, before }),
+  );
   ipc_accountsServiceUrls.main!.handle(async () => urls);
 
   return { accountsManager: manager, serviceUrls: urls };
