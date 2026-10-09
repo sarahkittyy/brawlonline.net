@@ -221,11 +221,15 @@ async fn abandoning_disagreeing_and_bad_reports() {
     assert_eq!(report(&stack, a, &id, 0, Some(a)).await.0, 400);
     assert_eq!(report(&stack, a, "mode.ranked-nope", 1, Some(a)).await.0, 404);
     assert_eq!(leave(&stack, a, &id, "rage_quit").await.0, 400);
-    // Not a ranked set.
+    // Not a ranked set: the report is stored, never rated (tests/leaderboard_history.rs), and
+    // leaving is for ranked sets only.
     let unranked = format!("mode.unranked-test-{}", Uuid::new_v4());
     let ids = [Uuid::parse_str(&a.uid).unwrap(), Uuid::parse_str(&b.uid).unwrap()];
     common::db::insert_match(&stack.pool, &unranked, 1, &ids, ids[0], &[], "other").await.unwrap();
-    assert_eq!(report(&stack, a, &unranked, 1, Some(a)).await.0, 404);
+    let (st, s) = report(&stack, a, &unranked, 1, Some(a)).await;
+    assert_eq!((st, s["status"].as_str()), (200, Some("ASSIGNED")), "{s}");
+    assert!(s["rating"].is_null());
+    assert_eq!(leave(&stack, a, &unranked, "left").await.0, 404);
     stack.shutdown().await;
 }
 

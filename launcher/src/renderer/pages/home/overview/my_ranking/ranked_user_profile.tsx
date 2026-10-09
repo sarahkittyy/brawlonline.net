@@ -1,11 +1,14 @@
 import { Button } from "@base-ui/react";
 import CachedIcon from "@mui/icons-material/Cached";
 import CloseIcon from "@mui/icons-material/Close";
+import HistoryIcon from "@mui/icons-material/History";
 import CircularProgress from "@mui/material/CircularProgress";
 import Tooltip from "@mui/material/Tooltip";
 import { useMutation } from "@tanstack/react-query";
+import { useNavigate } from "react-router-dom";
 
 import { useAccount } from "@/lib/hooks/use_account";
+import { formatPosition } from "@/lib/ranked_format";
 import { useServices } from "@/services";
 import type { RankedProfile } from "@/services/backend/types";
 
@@ -14,6 +17,8 @@ import styles from "./ranked_user_profile.module.css";
 
 export const RankedUserProfile = ({ rankedProfile, onHide }: { rankedProfile: RankedProfile; onHide: () => void }) => {
   const { rating, setsPlayed } = rankedProfile;
+  const position = formatPosition(rankedProfile.position, rankedProfile.rankedPlayers);
+  const navigate = useNavigate();
   // Slippi shows its rank badge and tier here. We have no tiers: the Elo rating is the rank.
 
   return (
@@ -22,9 +27,18 @@ export const RankedUserProfile = ({ rankedProfile, onHide }: { rankedProfile: Ra
         <div>
           <h3 className={styles.rankNameLabel}>{Messages.rating()}</h3>
           <div style={{ color: "var(--accent-primary)", fontWeight: "bold" }}>{rating.toFixed(1)}</div>
-          <div style={{ fontSize: "12px", opacity: 0.7 }}>{Messages.setsPlayed(setsPlayed)}</div>
+          <div style={{ fontSize: "12px", opacity: 0.7 }}>
+            {Messages.setsPlayed(setsPlayed)}
+            {position && ` · ${position}`}
+          </div>
         </div>
-        <RefreshRatingButton />
+        <div style={{ display: "flex", gap: 16 }}>
+          <RefreshRatingButton />
+          <Button className={styles.refreshButton} onClick={() => navigate("/main/profile")}>
+            <HistoryIcon color="inherit" sx={{ fontSize: "16px", color: "var(--surface-3)" }} />
+            <span>{Messages.matchHistory()}</span>
+          </Button>
+        </div>
       </div>
       <Tooltip title={Messages.hide()}>
         <Button className={styles.hideRankButton} onClick={onHide}>

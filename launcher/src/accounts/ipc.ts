@@ -1,7 +1,15 @@
 import type { ServiceUrls } from "@common/product";
 import { _, makeEndpoint } from "utils/ipc";
 
-import type { AccountsMe, AccountsPublicUser, AccountsResult, SignUpRequest } from "./types";
+import type {
+  AccountsMe,
+  AccountsPublicUser,
+  AccountsResult,
+  LeaderboardPage,
+  MatchHistoryFilter,
+  MatchHistoryPage,
+  SignUpRequest,
+} from "./types";
 
 type R<T> = AccountsResult<T>;
 
@@ -47,6 +55,18 @@ export const ipc_accountsPublicUser = makeEndpoint.main(
   "accounts_publicUser",
   <{ uid: string }>_,
   <R<AccountsPublicUser>>_,
+);
+
+export const ipc_accountsLeaderboard = makeEndpoint.main(
+  "accounts_leaderboard",
+  <{ limit?: number; after?: string }>_,
+  <R<LeaderboardPage>>_,
+);
+
+export const ipc_accountsMatchHistory = makeEndpoint.main(
+  "accounts_matchHistory",
+  <{ uid: string; mode: MatchHistoryFilter; limit?: number; before?: string }>_,
+  <R<MatchHistoryPage>>_,
 );
 
 export const ipc_accountsServiceUrls = makeEndpoint.main(
