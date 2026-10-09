@@ -152,7 +152,7 @@ std::optional<u64> JsonUInt(const picojson::value* v, u64 max)
 
 bool ValidCharKind(u32 kind)
 {
-  return kind <= 0x11 || (kind >= 0x13 && kind <= 0x2D) || kind == 0x32 || kind == 0x33 ||
+  return kind <= 0x11 || (kind >= 0x13 && kind <= 0x2B) || kind == 0x32 || kind == 0x33 ||
          kind == 0x35;
 }
 

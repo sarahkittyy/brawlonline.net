@@ -56,9 +56,9 @@ std::optional<std::vector<u8>> ParseHex(std::string_view hex, size_t bytes);
 // the target type's range is undefined behaviour, so nothing is cast before this check.)
 std::optional<u64> JsonUInt(const picojson::value* v, u64 max);
 
-// gmCharacterKind values P+'s character select can produce (docs/brawl-memory-map.md): the
-// playable kinds 0x00-0x11 and 0x13-0x2B, the hold-shield forms 0x2C (Giga Bowser) and 0x2D
-// (Wario-Man), and P+'s Roy 0x32, Mewtwo 0x33 and Knuckles 0x35.
+// gmCharacterKind values the online character select can lock in (docs/brawl-memory-map.md):
+// the playable kinds 0x00-0x11 and 0x13-0x2B, and P+'s Roy 0x32, Mewtwo 0x33 and Knuckles 0x35.
+// Not P+'s hold-shield forms 0x2C (Giga Bowser) and 0x2D (Wario-Man): they are not played online.
 bool ValidCharKind(u32 kind);
 // Colour numbers: the character select's own bound (game-code online_menu.cpp selectedCostume).
 constexpr u32 MAX_COSTUME = 0x1F;
