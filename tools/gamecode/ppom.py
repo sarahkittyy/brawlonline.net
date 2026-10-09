@@ -204,7 +204,8 @@ def read_debug(c: HarnessClient, b: Block) -> dict:
     vals["scratch"] = list(struct.unpack_from(f">{nscratch}I", d, 0x18))
     # scratch[0] 0xBE requests sent; [1] CSS lock | phase << 4; [2] Z accepts << 24 |
     # found << 16 | suggestion index; [3] rules applied; [4] keypad 1 open / 2 OK / 3 closed;
-    # [5] hand mode (8 = keypad); [6]-[9] menu hooks (netmenu.cpp)
+    # [5] hand mode (8 = keypad); [6], [8], [9] menu hooks (netmenu.cpp); [7] the ONLINE page lock:
+    # GET_ONLINE_STATUS state + 1 (0 = no answer yet) | A presses refused << 8
     log = []
     for k in range(32):
         lr, msg, win, line, data = struct.unpack_from(">IIHhI", d, 0x18 + 4 * nscratch + 16 * k)

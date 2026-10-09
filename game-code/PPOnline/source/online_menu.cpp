@@ -44,6 +44,8 @@ namespace OnlineMenu {
         char peerCode[PPOM::CODE_LEN + 1];
         char error[PPOM::ERROR_LEN + 1];
         char ownCode[PPOM::CODE_LEN + 1];   // this player's connect code (GET_ONLINE_STATUS)
+        int appState;                       // GET_ONLINE_STATUS state (-1 = no answer yet)
+        u32 statusFrames;                   // frames since the menus last asked for it
         bool ownShown;                      // the own-code window is attached on this CSS
         char status[128];
         bool statusRed;
@@ -1067,6 +1069,10 @@ namespace OnlineMenu {
 
     int currentMode() { return s.mode; }
 
+    // Slippi's HandleOnlineLockedOptions.asm: logged out (0) or with an update required (2),
+    // Ranked, Unranked, Direct and Teams are locked. Not before Dolphin has answered.
+    bool modesLocked() { return s.appState >= 0 && s.appState != 1; }
+
     void codeEntered(const char* code)
     {
         strncpy(s.code, code, PPOM::CODE_LEN);
@@ -1178,6 +1184,9 @@ namespace OnlineMenu {
             }
             memcpy(s.ownCode, code, n);
             s.ownCode[n] = 0;
+            s.appState = st.state;
+            u32& lockDebug = PPOM::g_block.debug.scratch[7];
+            lockDebug = (lockDebug & ~0xFFu) | (u8)(st.state + 1);   // tests: the state seen
             return;
         }
         if (r->cmd == PPOM::CMD_GET_MATCH_STATE) {
@@ -1232,7 +1241,14 @@ namespace OnlineMenu {
                 if (s.mode >= 0) leave();
                 PPOM::post(PPOM::CMD_CLEANUP_CONNECTION, NULL, 0);
                 PPOM::post(PPOM::CMD_GET_ONLINE_STATUS, NULL, 0);
+                s.statusFrames = 0;
             }
+        }
+        // Dolphin logs in by itself once the launcher writes user.json (Slippi's watcher), so
+        // the menus ask again every second: the online modes unlock without leaving the page.
+        if (strcmp(scene, "muMenuMain") == 0 && ++s.statusFrames >= 60) {
+            PPOM::post(PPOM::CMD_GET_ONLINE_STATUS, NULL, 0);
+            s.statusFrames = 0;
         }
         pollMailbox();
         pollMatchState();
@@ -1325,7 +1341,7 @@ namespace OnlineMenu {
     }
 
     struct Init {
-        Init() { s.mode = -1; s.lastScene[0] = 0; }
+        Init() { s.mode = -1; s.lastScene[0] = 0; s.appState = -1; }
     };
     static Init s_init;
 }

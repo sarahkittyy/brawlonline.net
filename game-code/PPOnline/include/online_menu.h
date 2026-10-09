@@ -12,6 +12,7 @@ namespace OnlineMenu {
     void applyRules();                  // sqNetAnyOkiraku start: online rules into the set rule
     void codeEntered(const char* code);  // from CodeEntry: set the code and start the search
     int currentMode();                  // PPOM::Mode of the online CSS, -1 outside it
+    bool modesLocked();                 // logged out or update required: no online mode
     void restoreCss();                  // before the CSS starts again: the remembered coin
     bool selectableCharKind(int kind);  // a gmCharacterKind P+'s CSS can lock in
     const char* cssLine(MuMsg* msg, u32 window, u32 line, const void* msbin, u32 caller);
