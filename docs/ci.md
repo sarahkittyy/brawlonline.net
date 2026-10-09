@@ -17,7 +17,10 @@ are excluded from every package.
 2. `linux` (Linux client runner): `stamp-version.sh` (an annotated tag `v<version>` in the CI checkout, so Dolphin reports `Project+ Dolphin v<version>`; Dolphin's `Online::APP_VERSION`; `launcher/release/app/package.json`), `build-dolphin-linux.sh` (ccache and the build tree in `$CI_CACHE`; linuxdeploy + its Qt plugin, pinned by sha256, make an AppDir with the libraries), launcher `npm ci`, build, `typecheck`, `npm test`, `electron-builder --linux` (AppImage), `check-package.sh` → artifact `launcher-linux` (`latest-linux.yml`, `*.AppImage`).
 3. `windows` (GitHub-hosted `windows-latest`): same stamping, `build-dolphin-windows.ps1` (MSVC, the `ninja-release-x64` preset, ccache 4.14.1 pinned by sha256 with its cache in the Actions cache), `electron-builder --win` (NSIS) → artifact `launcher-windows` (`latest.yml`, `*.exe`, `*.exe.blockmap`).
 4. `macos` (GitHub-hosted `macos-15`, Apple silicon; only while the repository is public, and the repository variable `DISABLE_MACOS` = `true` skips it): the same stamping, `build-dolphin-macos.sh` (native build, Qt from aqtinstall, `macdeployqt`, Developer ID `codesign`) and `package-launcher-macos.sh` (Developer ID signed, notarized and stapled app; signed and notarized DMG; updater zip; `latest-mac.yml`) → artifact `launcher-mac`. See "macOS" below. A failed or skipped macOS build does not hold back the Linux and Windows release.
-5. `publish` (sarahvps2): downloads the `launcher-*` artifacts, `sudo pp-release client <dir>`, checks the feed on https://brawlonline.net, deletes the run's artifacts (they also expire after a day).
+5. `publish` (sarahvps2), after `linux` and `windows`: downloads `launcher-linux` and `launcher-windows`, `sudo pp-release client <dir>`, checks `latest.yml` and `latest-linux.yml` on https://brawlonline.net, deletes those two artifacts (they also expire after a day). It does not wait for `macos`.
+6. `publish-mac` (sarahvps2), after `macos`: the same for `launcher-mac` (`latest-mac.yml`, the DMG), whenever Apple's notary service is done; then deletes `launcher-mac` and `plugin`. Apple usually answers in minutes, but sometimes holds submissions for hours, so the macOS release can trail the others or be skipped (a notarization still waiting after 40 minutes fails the job).
+
+Concurrency is per job (`client-plugin`, `client-linux`, …, never cancelled while running), not per run: a newer push's builds start as soon as the previous push's same job is done, also while that run's `macos` job still waits for Apple. Each platform's feed is still published in push order. As with any GitHub concurrency group, a job waiting for its turn is replaced (cancelled) by a newer push's, and a run whose `linux` or `windows` job was replaced publishes nothing for Linux and Windows.
 
 The Linux client runner is written in the `plugin` and `linux` jobs; the optional repository variable `CLIENT_LINUX_RUNNER` (a JSON list of labels) overrides both. The default is GitHub-hosted `ubuntu-24.04`. On a GitHub-hosted runner the jobs install Dolphin's build packages with apt and keep ccache (`linux-ccache-*`) and the game-code toolchain in the Actions cache; on a self-hosted runner they use its image and `$CI_CACHE`.
 
@@ -42,7 +45,7 @@ Versions: `0.1.<run number of client.yml>`. `LATEST_VERSION` in `/etc/ppserver/a
 
 ### sarahvps2 (production box): server builds and publishing only
 
-Runner `sarahvps2-brawlonline`, labels `self-hosted, linux, x64, sarahvps2, brawlonline`, service `actions.runner.sarahkittyy-brawlonline.net.sarahvps2-brawlonline`, user `brawlrunner` (unprivileged; home `/home/brawlrunner`, runner in `~/actions-runner`). It runs `server.yml`, `website.yml` and `client.yml`'s `publish` job. Its only sudo rule is `/etc/sudoers.d/brawlrunner` (copy in `server/deploy/sarahvps2/sudoers.d-brawlrunner`):
+Runner `sarahvps2-brawlonline`, labels `self-hosted, linux, x64, sarahvps2, brawlonline`, service `actions.runner.sarahkittyy-brawlonline.net.sarahvps2-brawlonline`, user `brawlrunner` (unprivileged; home `/home/brawlrunner`, runner in `~/actions-runner`). It runs `server.yml`, `website.yml` and `client.yml`'s `publish` and `publish-mac` jobs. Its only sudo rule is `/etc/sudoers.d/brawlrunner` (copy in `server/deploy/sarahvps2/sudoers.d-brawlrunner`):
 
 ```
 brawlrunner ALL=(root) NOPASSWD: /usr/local/sbin/pp-release
@@ -99,4 +102,4 @@ The certificate's private key was made on the Mac and lives in its login keychai
 
 Repository variables (optional, none set): `CLIENT_LINUX_RUNNER` (JSON list of labels, overrides the default in `client.yml`), `DISABLE_MACOS` (`true` skips the macOS job).
 
-Artifacts: the account's free Actions storage is 500 MB and shared with other repositories; the client artifacts (~400 MB per run) live at most a day and are deleted by `publish` right after use.
+Artifacts: the account's free Actions storage is 500 MB and shared with other repositories; the client artifacts (~400 MB per run) live at most a day and are deleted by `publish` and `publish-mac` right after use.

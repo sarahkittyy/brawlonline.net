@@ -17,8 +17,14 @@
 #   - Publishing: always sarahvps2 (pp-release client). Builds from other machines arrive as
 #     Actions artifacts (1-day retention, deleted after publishing).
 #   - macOS: GitHub-hosted Apple silicon, only while the repository is public (see the macos job).
-#     Developer ID signed and notarized (repository secrets, see the macos job). A failed or
-#     skipped macOS build never holds back the Linux and Windows release.
+#     Developer ID signed and notarized (repository secrets, see the macos job). It publishes on
+#     its own (publish-mac): Apple's notary service can take minutes or hours, so Linux and
+#     Windows never wait for it, and a failed or skipped macOS build never holds them back.
+#
+# Concurrency is per job (group client-<job>, never cancelled while running): a newer push's
+# Linux and Windows builds start as soon as the previous ones finish, even while that run's macOS
+# job still waits for Apple; each job still finishes and saves its caches, and each platform's
+# feed is published in push order. A job waiting for its turn is replaced by a newer push's.
 #
 # Runs only on pushes to main and by hand, never on pull requests (self-hosted runners).
 name: client
@@ -39,11 +45,6 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: client
-  # Not cancelled: a newer push waits, so a running build finishes and saves its caches.
-  cancel-in-progress: false
-
 env:
   VERSION: 0.1.${{ github.run_number }}
   NODE_VERSION: "24"
@@ -51,6 +52,9 @@ env:
 jobs:
   plugin:
     # The game plugin (PPOnline.rel) is platform independent: built once, on Linux.
+    concurrency:
+      group: client-plugin
+      cancel-in-progress: false
     # Linux client runner (same default as the linux job):
     runs-on: ${{ fromJSON(vars.CLIENT_LINUX_RUNNER || '["ubuntu-24.04"]') }}
     timeout-minutes: 20
@@ -82,6 +86,9 @@ jobs:
 
   linux:
     needs: plugin
+    concurrency:
+      group: client-linux
+      cancel-in-progress: false
     # Linux client runner (same default as the plugin job):
     runs-on: ${{ fromJSON(vars.CLIENT_LINUX_RUNNER || '["ubuntu-24.04"]') }}
     timeout-minutes: 240
@@ -171,6 +178,9 @@ jobs:
 
   windows:
     needs: plugin
+    concurrency:
+      group: client-windows
+      cancel-in-progress: false
     runs-on: windows-latest
     timeout-minutes: 180
     env:
@@ -283,6 +293,9 @@ jobs:
     # feed could not be installed over a signed one. npm ci runs before the signing keychain exists.
     if: ${{ !github.event.repository.private && vars.DISABLE_MACOS != 'true' }}
     needs: plugin
+    concurrency:
+      group: client-macos
+      cancel-in-progress: false
     runs-on: macos-15
     timeout-minutes: 150
     env:
@@ -392,8 +405,12 @@ jobs:
           if-no-files-found: error
 
   publish:
-    needs: [linux, windows, macos]
+    # Linux and Windows. The macOS build publishes on its own (publish-mac).
+    needs: [linux, windows]
     if: ${{ !cancelled() && needs.linux.result == 'success' && needs.windows.result == 'success' }}
+    concurrency:
+      group: client-publish
+      cancel-in-progress: false
     runs-on: [self-hosted, linux, x64, sarahvps2, brawlonline]
     timeout-minutes: 30
     permissions:
@@ -402,40 +419,91 @@ jobs:
     steps:
       - uses: actions/download-artifact@v7
         with:
-          pattern: launcher-*
+          name: launcher-linux
           path: ${{ runner.temp }}/client
-          merge-multiple: true
+      - uses: actions/download-artifact@v7
+        with:
+          name: launcher-windows
+          path: ${{ runner.temp }}/client
       - name: Publish
         run: |
           ls -l "$RUNNER_TEMP/client"
           sudo -n /usr/local/sbin/pp-release client "$RUNNER_TEMP/client"
       - name: Check
+        env:
+          FEEDS: latest.yml latest-linux.yml
+          DOWNLOADS: BrawlOnline-Setup.exe BrawlOnline.AppImage
         run: |
           base=https://brawlonline.net
-          feeds="latest.yml latest-linux.yml"
-          downloads="BrawlOnline-Setup.exe BrawlOnline.AppImage"
-          # The macOS build is optional: checked only when this run produced it.
-          if [ -f "$RUNNER_TEMP/client/latest-mac.yml" ]; then
-            feeds="$feeds latest-mac.yml"
-            downloads="$downloads BrawlOnline.dmg"
-          fi
-          for f in $feeds; do
+          for f in $FEEDS; do
             got=$(curl -fsS --max-time 20 "$base/updates/launcher/$f?nocache=$GITHUB_RUN_ID" | sed -n 's/^version: //p')
             echo "$f: $got"
             [ "$got" = "$VERSION" ] || { echo "$f does not name $VERSION" >&2; exit 1; }
           done
-          for f in $downloads; do
+          for f in $DOWNLOADS; do
             curl -fsS --max-time 20 -o /dev/null -r 0-0 -w "$f: %{http_code}\n" "$base/downloads/$f?v=$VERSION"
           done
-      - name: Delete this run's artifacts
+      - name: Delete the published artifacts
         if: always()
         env:
           GH_TOKEN: ${{ github.token }}
+          NAMES: launcher-linux launcher-windows
         run: |
           api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions"
           ids=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "$api/runs/$GITHUB_RUN_ID/artifacts?per_page=100" |
-            python3 -c 'import json,sys; print(" ".join(str(a["id"]) for a in json.load(sys.stdin)["artifacts"]))')
+            python3 -c 'import json,os,sys; names=os.environ["NAMES"].split(); print(" ".join(str(a["id"]) for a in json.load(sys.stdin)["artifacts"] if a["name"] in names))')
           for id in $ids; do
             curl -fsS -X DELETE -H "Authorization: Bearer $GH_TOKEN" "$api/artifacts/$id" && echo "deleted artifact $id"
           done
           rm -rf "$RUNNER_TEMP/client"
+
+  publish-mac:
+    # The macOS build, whenever Apple's notary service is done with it (see publish).
+    needs: macos
+    if: ${{ !cancelled() && needs.macos.result == 'success' }}
+    concurrency:
+      group: client-publish-mac
+      cancel-in-progress: false
+    runs-on: [self-hosted, linux, x64, sarahvps2, brawlonline]
+    timeout-minutes: 30
+    permissions:
+      contents: read
+      actions: write # delete this run's artifacts after publishing
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: launcher-mac
+          path: ${{ runner.temp }}/client-mac
+      - name: Publish
+        run: |
+          ls -l "$RUNNER_TEMP/client-mac"
+          sudo -n /usr/local/sbin/pp-release client "$RUNNER_TEMP/client-mac"
+      - name: Check
+        env:
+          FEEDS: latest-mac.yml
+          DOWNLOADS: BrawlOnline.dmg
+        run: |
+          base=https://brawlonline.net
+          for f in $FEEDS; do
+            got=$(curl -fsS --max-time 20 "$base/updates/launcher/$f?nocache=$GITHUB_RUN_ID" | sed -n 's/^version: //p')
+            echo "$f: $got"
+            [ "$got" = "$VERSION" ] || { echo "$f does not name $VERSION" >&2; exit 1; }
+          done
+          for f in $DOWNLOADS; do
+            curl -fsS --max-time 20 -o /dev/null -r 0-0 -w "$f: %{http_code}\n" "$base/downloads/$f?v=$VERSION"
+          done
+      - name: Delete the published artifacts
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # plugin too: the macos job is the last to use it (publish can't delete it, a macos job
+          # waiting for its turn may not have downloaded it yet).
+          NAMES: launcher-mac plugin
+        run: |
+          api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions"
+          ids=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "$api/runs/$GITHUB_RUN_ID/artifacts?per_page=100" |
+            python3 -c 'import json,os,sys; names=os.environ["NAMES"].split(); print(" ".join(str(a["id"]) for a in json.load(sys.stdin)["artifacts"] if a["name"] in names))')
+          for id in $ids; do
+            curl -fsS -X DELETE -H "Authorization: Bearer $GH_TOKEN" "$api/artifacts/$id" && echo "deleted artifact $id"
+          done
+          rm -rf "$RUNNER_TEMP/client-mac"
