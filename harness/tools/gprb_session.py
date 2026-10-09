@@ -628,15 +628,13 @@ def run_session_n(preset: str, cpu: str, args: argparse.Namespace, run: int) -> 
             if args.plugin:
                 # With the plugin P+ boots to the online menus: back to the main menu, then Versus.
                 def to_css(c, port: int) -> None:
-                    deadline = time.monotonic() + 120
-                    while time.monotonic() < deadline:
-                        sc = B.read_scene(c.read_mem).scene
-                        if sc is B.Scene.CSS:
-                            break
-                        if sc is B.Scene.MAIN_MENU:
-                            B.boot_to_css(c, port)
-                            break
-                        B.tap(c, port, ["B"], hold=3, release=40)
+                    # The ONLINE page; B: the main menu's top page on PLAY ONLINE; up: Brawl.
+                    B.wait_scene(c, [B.Scene.MAIN_MENU, B.Scene.CSS], 60 * 120)
+                    if B.read_scene(c.read_mem).scene is B.Scene.MAIN_MENU:
+                        B.step(c, 60)
+                        B.tap(c, port, ["B"], hold=3, release=60)
+                        B.tap(c, port, ["DUP"], hold=4, release=40)
+                        B.boot_to_css(c, port)
                     sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools" / "gamecode"))
                     import ppom
                     # The plugin removes a gone player's fighter in a local Versus match too.
