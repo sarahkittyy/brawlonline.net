@@ -2302,6 +2302,12 @@ void StartRunning(Core::System& system)
                s.mode == Mode::SyncTest ? "sync test" : (s.net_opts.host ? "host" : "joiner"),
                system.IsDualCoreMode(),
                system.GetFifo().UseDeterministicGPUThread());
+  if (system.IsDualCoreMode() && !system.GetFifo().UseDeterministicGPUThread())
+  {
+    ERROR_LOG_FMT(BRAWLBACK, "gprb: dual core without the deterministic GPU thread (GPUDeterminismMode "
+                             "\"{}\"): rollbacks can desync the GPU FIFO and hang. Use fake-completion.",
+                  Config::Get(Config::MAIN_GPU_DETERMINISM_MODE));
+  }
 }
 
 bool RunFrame(const Core::CPUThreadGuard& guard)

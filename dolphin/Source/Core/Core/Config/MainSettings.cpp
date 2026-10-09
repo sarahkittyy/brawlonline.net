@@ -254,8 +254,13 @@ const Info<HSP::HSPDeviceType> MAIN_HSP_DEVICE{{System::Main, "Core", "HSPDevice
                                                HSP::HSPDeviceType::None};
 const Info<u32> MAIN_ARAM_EXPANSION_SIZE{{System::Main, "Core", "ARAMExpansionSize"}, 0x400000};
 
+// Brawl Online: fake-completion by default (upstream: "auto"). Gameplay rollback in dual core
+// needs the deterministic GPU thread (the rollback snapshot owns the CPU-side FIFO state), and
+// an online session starts in-game, long after boot decided the mode. P+ sets this in its
+// launcher game INI, but installs do not get P+'s GameSettings, so they ran "auto", i.e. no
+// deterministic GPU thread: GFX FIFO "Unknown Opcode" hangs after rollbacks.
 const Info<std::string> MAIN_GPU_DETERMINISM_MODE{{System::Main, "Core", "GPUDeterminismMode"},
-                                                  "auto"};
+                                                  "fake-completion"};
 const Info<s32> MAIN_OVERRIDE_BOOT_IOS{{System::Main, "Core", "OverrideBootIOS"}, -1};
 
 GPUDeterminismMode GetGPUDeterminismMode()
