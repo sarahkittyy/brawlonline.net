@@ -223,7 +223,7 @@ class Fighter:
     """Decides one seat's next input macro from the match state (see ``fight``)."""
 
     def __init__(self, seat: Seat, mode: str = "chase", seed: Any = 0, stage_kind: int | None = None):
-        if mode not in ("chase", "random", "idle"):
+        if mode not in ("chase", "random", "idle", "selfdestruct"):
             raise ValueError(f"unknown fight mode {mode!r}")
         self.seat, self.mode = seat, mode
         self.rng = random.Random(f"{seed}:{seat.port}")
@@ -241,6 +241,8 @@ class Fighter:
         dy = (opp.y - me.y) if opp is not None and opp.y is not None else 0.0
         toward = 1 if dx > 0 else -1
         t = 255 if toward > 0 else 1
+        if self.mode == "selfdestruct":                            # walk off the nearer edge
+            return [{"main": [255 if me.x >= 0 else 1, 128], "hold": 10}]
         if abs(me.x) > self.edge - 2 or me.y < -8:                # off stage: recover
             to_c = 255 if me.x < 0 else 1
             if me.y < -8:
@@ -267,7 +269,8 @@ def fight(seats: Seat | Sequence[Seat], frames: int, *, mode: str | Sequence[str
 
     mode (one, or one per seat): "chase" walks to the nearest opponent and jabs/tilts in range
     (reliably deals damage); "random" plays seeded random macros (``_macro``) biased toward the
-    opponent; "idle" stands still. All modes recover when off stage. Never presses Start or the
+    opponent; "idle" stands still; "selfdestruct" walks off the nearer edge (to lose on purpose).
+    All modes but "selfdestruct" recover when off stage. Never presses Start or the
     D-pad. For netplay, run one ``fight`` per instance in its own thread (``play``).
     """
     seats = [seats] if isinstance(seats, Seat) else list(seats)

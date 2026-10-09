@@ -1,3 +1,4 @@
+import { IsoValidity } from "@common/types";
 import type { DolphinManager } from "@dolphin/manager";
 import { DolphinEventType, DolphinLaunchType } from "@dolphin/types";
 import type { SettingsManager } from "@settings/settings_manager";
@@ -72,9 +73,12 @@ function dolphinToolNextTo(dolphinExecutable: string): string {
 export default function setupGameAssetsIpc({
   settingsManager,
   dolphinManager,
+  checkIso,
 }: {
   settingsManager: SettingsManager;
   dolphinManager: DolphinManager;
+  /** The launcher's ISO verification, shared with the Settings page. */
+  checkIso: (isoPath: string) => Promise<IsoValidity>;
 }) {
   const cacheDir = path.join(cacheRoot(), "theme");
   const netplaySdCard = () => dolphinManager.getInstallation(DolphinLaunchType.NETPLAY).sdCardImage;
@@ -86,6 +90,10 @@ export default function setupGameAssetsIpc({
     async () => {
       const isoPath = settingsManager.get().settings.isoPath;
       if (!isoPath || !existsSync(isoPath)) {
+        return null;
+      }
+      // Only an accepted Brawl image gets its look on the launcher, and only once it is verified.
+      if ((await checkIso(isoPath)) !== IsoValidity.VALID) {
         return null;
       }
       const sdRawPath = netplaySdCard();

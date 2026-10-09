@@ -604,10 +604,10 @@ def test_recent_codes_on_the_keypad(backend: OnlineBackend,
 def test_character_locked_while_searching(backend: OnlineBackend,
                                           dolphin: Callable[..., DolphinInstance],
                                           gpu_backend: str) -> None:
-    """While locked in (searching, connected, or an error not yet cleared) A and B on the
-    character and the costume buttons do nothing, as on Slippi (PreventAPressCharUnselect.asm,
-    PreventBPressCharUnselect.asm, PreventColorChange.asm); Z unlocks; holding B still leaves.
-    Screenshots: run/artifacts/game-code/css-lock/."""
+    """While locked in (searching, connected, or an error not yet cleared) A on the character
+    and the costume buttons do nothing, as on Slippi (PreventAPressCharUnselect.asm,
+    PreventColorChange.asm). Z or a B press cancels the search and unlocks; that B does not
+    also take the coin back. Holding B still leaves. Screenshots: run/artifacts/game-code/css-lock/."""
     u = backend.create_user("hank", "HANK")
     g = _seeded_direct_css(dolphin, backend, gpu_backend, "css-lock", "game-l", u)
     before = g.css()
@@ -621,14 +621,27 @@ def test_character_locked_while_searching(backend: OnlineBackend,
     _wait(g.locked, 5, "the CSS lock")
     g.shot("01-searching-locked")
 
-    # The hand is over the placed coin: A would pick it up, B would take it back, X/Y would
-    # change the costume. None of it happens.
-    g.steps("tap A 8", "wait 20", "tap B 8", "wait 20", "tap X 8", "wait 20", "tap Y 8", "wait 20")
+    # The hand is over the placed coin: A would pick it up, X/Y would change the costume.
+    # None of it happens.
+    g.steps("tap A 8", "wait 20", "tap X 8", "wait 20", "tap Y 8", "wait 20")
     assert g.css() == before, g.css()
     assert g.c.mm_status()["state"] in ("initializing", "matchmaking")
-    g.shot("02-after-A-B-X-Y")
+    g.shot("02-after-A-X-Y")
 
-    # Z cancels: unlocked, B takes the coin back to the hand, A puts it down again.
+    # B cancels: unlocked, and the coin stays placed (the press is used up by the cancel).
+    g.press_until("B", lambda: g.c.mm_status()["state"] == "idle", "B to cancel")
+    _wait(lambda: not g.locked(), 5, "the CSS to unlock")
+    g.steps("wait 20")
+    assert g.css() == before, g.css()
+    g.shot("02b-B-cancelled")
+
+    # Searching again; Z cancels too: unlocked, B takes the coin back to the hand, A puts it
+    # down again.
+    g.open_keypad()
+    g.press_until("Z", lambda: g.debug_scratch()[SCR_SUGGESTION] >> 24 > 1, "Z to accept", tries=3)
+    n = g.finds()
+    g.press_until("START", lambda: g.finds() > n, "FIND_OPPONENT")
+    _wait(g.locked, 10, "the CSS lock")
     g.press_until("Z", lambda: g.c.mm_status()["state"] == "idle", "the cleanup")
     _wait(lambda: not g.locked(), 5, "the CSS to unlock")
     g.press_until("B", lambda: g.css()["hand_coin"] != 0, "B to take the coin back")
@@ -640,7 +653,7 @@ def test_character_locked_while_searching(backend: OnlineBackend,
 
     # Locked again; holding B still leaves the CSS (Slippi keeps Melee's hold B).
     g.open_keypad()
-    g.press_until("Z", lambda: g.debug_scratch()[SCR_SUGGESTION] >> 24 > 1, "Z to accept", tries=3)
+    g.press_until("Z", lambda: g.debug_scratch()[SCR_SUGGESTION] >> 24 > 2, "Z to accept", tries=3)
     n = g.finds()
     g.press_until("START", lambda: g.finds() > n, "FIND_OPPONENT")
     _wait(g.locked, 10, "the CSS lock")

@@ -6,7 +6,7 @@
 //                          WITH ANYONE  -> BASIC VERSUS = UNRANKED, TEAM BATTLE = TEAMS -> CSS
 //   CSS (sqNetAnyOkiraku)  P+'s competitive rules; status in the CSS's own rule-line window;
 //                          START = search (Unranked) or connect-code entry (Direct, Teams);
-//                          Z = cancel / clear error, hold Z = disconnect (Slippi);
+//                          Z or B = cancel / clear error, hold Z = disconnect (Slippi);
 //                          hold B (Brawl's own) = back to the ONLINE page, which sends
 //                          CLEANUP_CONNECTION when the menu loads (Slippi OnMenuLoad.asm)
 #include <mu/mu_msg.h>
@@ -142,6 +142,19 @@ namespace OnlineMenu {
         }
     }
     static void maskStart() { maskButtons(BTN_START); }
+
+    // Takes `mask` out of this frame's presses only (pressed, pressed2), so a press the plugin
+    // has used does nothing else, while the held bits (Brawl's hold-B-to-leave counter) stay.
+    static void maskPressed(u32 mask)
+    {
+        u8* ps = padSystem();
+        if (!ps) return;
+        for (u32 off = 0x244; off < 0x944; off += 0x40) {
+            u32* f = (u32*)(ps + off);
+            f[3] &= ~mask;
+            f[5] &= ~mask;
+        }
+    }
 
     // P+'s Code Menu opens with L + R + D-pad Down on the CSS, the stage select and in a match.
     // It holds settings that change the match (Special Modes, per-player codes incl. a character
@@ -1438,9 +1451,12 @@ namespace OnlineMenu {
                 }
             }
             // Z (HandleInputsOnCSS.asm:172-205, 539-561): press to cancel a search or clear an
-            // error, hold 48 frames to disconnect.
+            // error, hold 48 frames to disconnect. B cancels and clears as well (Slippi's B does
+            // nothing while locked in); that press is used up, so the coin stays where it is and
+            // the next B takes it back. Holding on still leaves the CSS.
             if (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING || s.phase == PH_ERROR) {
-                if (pressed & BTN_Z) {
+                if (pressed & (BTN_Z | BTN_B)) {
+                    if (pressed & BTN_B) maskPressed(BTN_B);
                     cleanup();
                     playSE(SE_BACK);
                 }
