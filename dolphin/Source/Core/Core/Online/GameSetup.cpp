@@ -158,7 +158,7 @@ Eval Evaluate(u32 game, const std::vector<u8>& mine, const std::vector<u8>& thei
   {
     const int winner = s_last_winner;
     loser = 1 - winner;
-    e.steps = {{winner, StepType::Strike, 1, 30}, {loser, StepType::Pick, 1, 30}};
+    e.steps = {{winner, StepType::Strike, 2, 30}, {loser, StepType::Pick, 1, 30}};
   }
   else
   {
@@ -301,15 +301,15 @@ void Begin(int local_port, std::vector<u16> starters, std::vector<u16> counterpi
     std::lock_guard lk(s_mutex);
     s_active = true;
     s_local = local_port == 1 ? 1 : 0;
-    // Striking 1-2-1 leaves one of exactly five; a game 2+ needs a stage after the ban and Dave's
-    // rule. Both machines get the same lists from the server, so both fall back alike.
+    // Striking 1-2-1 leaves one of exactly five; a game 2+ needs a stage after the two bans and
+    // Dave's rule. Both machines get the same lists from the server, so both fall back alike.
     if (!starters.empty() && (starters.size() != 5 || Usable(starters) != 5))
     {
       WARN_LOG_FMT(NETPLAY, "GameSetup: {} starters from the server; using P+'s five",
                    starters.size());
       starters.clear();
     }
-    if (!counterpicks.empty() && Usable(counterpicks) < 3)
+    if (!counterpicks.empty() && Usable(counterpicks) < 4)
     {
       WARN_LOG_FMT(NETPLAY, "GameSetup: {} counterpick stages from the server; using P+'s list",
                    counterpicks.size());
@@ -460,8 +460,10 @@ View Current()
       std::string what;
       if (st.type == StepType::Pick)
         what = mine ? "Pick a stage" : "Opponent is picking";
+      else if (!e.striking && mine)
+        what = e.left == 1 ? "Ban 1 stage" : fmt::format("Ban {} stages", e.left);
       else if (!e.striking)
-        what = mine ? "Ban 1 stage" : "Opponent is banning";
+        what = "Opponent is banning";
       else if (mine)
         what = e.left == 1 ? "Strike 1 stage" : fmt::format("Strike {} stages", e.left);
       else

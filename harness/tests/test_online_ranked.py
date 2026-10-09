@@ -11,7 +11,7 @@ on P+'s own stage select with its stage striking (Dolphin ``Online/GameSetup.cpp
   player 1 (the host) strikes one, player 2 two, player 1 one, with X, each only on their turn
   (an X out of turn changes nothing); the strikes show on both; START and B do nothing there (the
   stage select used to leave for the CSS mid-strike); the stage left is played;
-- games 2+: the winner of the last game bans one stage (X), the loser picks the stage (A); then the
+- games 2+: the winner of the last game bans two stages (X), the loser picks the stage (A); then the
   winner locks in a character first: the loser's START does nothing until then, and the loser's
   line names the winner's character; in game 2 the loser lets the 45 s (and Slippi's 3 s of grace)
   run out and the CSS locks in the character on it;
@@ -169,17 +169,20 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
         winner = a if _ranked(a)["local_port"] == winner_port else b
         loser = b if winner is a else a
 
-        # The winner bans one stage, the loser picks one.
+        # The winner bans two stages, the loser picks one.
         _both_on(players, SSS, f"game {game}: both on the stage select")
         v = _wait_view(winner, lambda v: v["game"] == game and v["type"] == 1 and v["my_turn"], "the ban")
-        assert v["text"].startswith("Ban 1 stage"), v
+        assert v["text"].startswith("Ban 2 stages") and v["count"] == 2, v
         assert _wait_view(loser, lambda v: v["game"] == game and v["type"] == 1, "waits")["text"].startswith(
             "Opponent is banning")
         sel = v["selectable"]
-        ban, pick = sel[0], sel[1]
-        _strike(winner, ban, loser)
+        bans, pick = sel[:2], sel[2]
+        _strike(winner, bans[0], loser)
+        v = _wait_view(winner, lambda v: v["type"] == 1 and v["my_turn"] and v["count"] == 1, "the second ban")
+        assert v["text"].startswith("Ban 1 stage"), v
+        _strike(winner, bans[1], loser)
         v = _wait_view(loser, lambda v: v["type"] == 2 and v["my_turn"], "the pick")
-        assert ban not in v["selectable"] and v["text"].startswith("Pick a stage"), v
+        assert not set(bans) & set(v["selectable"]) and v["text"].startswith("Pick a stage"), v
         loser.shot(f"g{game}-sss-loser-picks")
         B.sss_pick_stage(loser.c, pick, 0)
         _both_on(players, online_set.CSS, f"game {game}: both back on the CSS")
