@@ -11,6 +11,7 @@ pub mod db;
 pub mod net;
 pub mod playkey;
 pub mod proto;
+pub mod ranked;
 pub mod ratelimit;
 
 /// The product name shown to users: email subjects and bodies, the web pages, the default sender

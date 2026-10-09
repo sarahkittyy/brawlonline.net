@@ -502,10 +502,12 @@ pub struct PublicUser {
 
 /// Slippi's users-rest `GET /user/{uid}?additionalFields=chatMessages,rank`,
 /// which Dolphin's `user` crate polls (`slippi-rust-extensions/user/src/lib.rs:354-421`).
-/// Public, as on Slippi. Ranked data is zero until ranked exists.
+/// Public, as on Slippi. `rank.ratingOrdinal` is the Elo rating (`common::ranked`; the default
+/// before the first set) and `ratingUpdateCount` the rated sets. There are no placements.
 pub async fn public_user(State(state): State<AppState>, Path(uid): Path<String>) -> ApiResult<Json<PublicUser>> {
     let uid = Uuid::parse_str(&uid).map_err(|_| ApiError::not_found())?;
     let user = store::user_by_uid(&state.pool, uid).await?.ok_or_else(ApiError::not_found)?;
+    let standing = crate::ranked::standing(&state.pool, uid).await?;
     Ok(Json(PublicUser {
         uid: user.uid,
         display_name: user.display_name,
@@ -513,8 +515,8 @@ pub async fn public_user(State(state): State<AppState>, Path(uid): Path<String>)
         latest_version: state.cfg.latest_version.clone(),
         chat_messages: common::DEFAULT_CHAT_MESSAGES.iter().map(|s| s.to_string()).collect(),
         rank: PublicRank {
-            rating_ordinal: 0.0,
-            rating_update_count: 0,
+            rating_ordinal: standing.rating as f32,
+            rating_update_count: standing.sets_played,
             daily_global_placement: None,
             daily_regional_placement: None,
         },
