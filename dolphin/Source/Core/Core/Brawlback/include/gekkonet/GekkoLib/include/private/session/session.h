@@ -12,6 +12,7 @@ struct GekkoSession {
     virtual i32 AddActor(GekkoPlayerType type, GekkoNetAddress* addr) { return -1; }
     virtual bool DisconnectActor(i32 actor) { return false; }
     virtual void SetDisconnectTimeout(u32 timeout) {}
+    virtual void SetDisconnectedInput(const void* input) {}
     virtual void AddLocalInput(i32 player, void* input) {}
     virtual GekkoGameEvent** UpdateSession(i32* count) = 0;
     virtual GekkoSessionEvent** Events(i32* count) = 0;

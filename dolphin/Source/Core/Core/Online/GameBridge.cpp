@@ -780,17 +780,32 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     const Client::MatchState ms = Client::GetMatchState();
     if (ms.match && ms.handoff == "started")
     {
-      // In-game ports: the decider (host) is P1, as in the gameplay session.
+      // In-game ports: a 1v1's decider (host) is P1, as in the gameplay session; with more
+      // players each sits on its server port (GameplayOnlineBackend).
       std::vector<const PlayerInfo*> order;
-      for (const auto& p : ms.match->players)
+      if (ms.match->players.size() > 2)
       {
-        if (p.is_local == ms.match->is_host)
-          order.insert(order.begin(), &p);
-        else
-          order.push_back(&p);
+        order.assign(SESSION_PLAYERS, nullptr);
+        for (const auto& p : ms.match->players)
+        {
+          if (p.port >= 1 && p.port <= SESSION_PLAYERS)
+            order[p.port - 1] = &p;
+        }
+      }
+      else
+      {
+        for (const auto& p : ms.match->players)
+        {
+          if (p.is_local == ms.match->is_host)
+            order.insert(order.begin(), &p);
+          else
+            order.push_back(&p);
+        }
       }
       for (size_t i = 0; i < order.size() && i < names.size(); ++i)
       {
+        if (!order[i])
+          continue;
         names[i] = order[i]->display_name;
         codes[i] = order[i]->connect_code;
         if (!order[i]->is_local && peer_name.empty())
@@ -839,9 +854,14 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     local[i] = R8(guard, loc.local + i);
   WriteBlock(guard, loc.local, local, &s_local_written, &s_local_seq);
 
-  // SESSION: never while a match runs, so it is the same on both machines for the whole match.
+  // SESSION: never while a match runs, so it is the same on every machine for the whole match.
+  // (The gameplay session writes only the gone flags in it, in 3-4 player matches.) After a match
+  // it is written again in full, which also clears those flags.
   if (lobby.in_match)
+  {
+    s_session_written.clear();
     return;
+  }
   std::vector<u8> session(SESSION_SIZE, 0);
   if (lobby.active)
   {
@@ -998,5 +1018,11 @@ picojson::object Status()
   o["last_request"] = picojson::value(s_last_request);
   o["last_response"] = picojson::value(s_last_response);
   return o;
+}
+
+u32 SessionAddress()
+{
+  std::lock_guard lk(s_mutex);
+  return s_located ? s_located->session : 0;
 }
 }  // namespace Online::GameBridge

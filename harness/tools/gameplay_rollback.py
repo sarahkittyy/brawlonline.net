@@ -56,7 +56,7 @@ import numpy as np  # noqa: E402  (tool-only dependency: pip install numpy)
 
 from ppharness import brawl as B  # noqa: E402
 from ppharness import flows as F  # noqa: E402
-from ppharness.client import HarnessClient  # noqa: E402
+from ppharness.client import HarnessClient, HarnessCommandError  # noqa: E402
 from ppharness.inifile import IniFile  # noqa: E402
 from ppharness.instance import DolphinInstance, InstanceConfig  # noqa: E402
 
@@ -97,11 +97,15 @@ DOL_SECTIONS: Tuple[Tuple[str, int, int], ...] = (
 
 def make_instance(name: str, *, cpu_thread: bool = False, rtc: Optional[int] = FIXED_RTC, video: str = "Null",
                   gpu_determinism: Optional[str] = None, keep: bool = False,
-                  dolphin_ini: Optional[Dict[str, Dict[str, Any]]] = None) -> DolphinInstance:
+                  dolphin_ini: Optional[Dict[str, Dict[str, Any]]] = None,
+                  controllers: Sequence[int] = (0, 1)) -> DolphinInstance:
+    """``controllers``: the ports with a standard controller (the others have none). 3- and
+    4-player matches need (0, 1, 2) / (0, 1, 2, 3)."""
     args = []
     if rtc is not None:
         args += ["Dolphin.Core.EnableCustomRTC=True", f"Dolphin.Core.CustomRTCValue={rtc:#x}"]
     cfg_kw: Dict[str, Any] = {"dolphin_ini": dolphin_ini} if dolphin_ini else {}
+    cfg_kw["standard_controllers"] = tuple(controllers)
     inst = DolphinInstance(name, config=InstanceConfig(cpu_thread=cpu_thread, video_backend=video, config_args=args,
                                                        **cfg_kw),
                            keep=keep, connect_timeout=120)
@@ -136,7 +140,7 @@ def instances(specs: Sequence[Tuple[str, Dict[str, Any]]], keep: bool = False):
             list(pool.map(lambda i: (i.launch(), i.connect()), insts))
         for i in insts:
             i.client.wait_state("running", timeout=120)
-            for port in (0, 1):
+            for port in controller_ports(i):
                 i.client.pad_set(port)
         yield insts
     finally:
@@ -150,6 +154,11 @@ def instances(specs: Sequence[Tuple[str, Dict[str, Any]]], keep: bool = False):
             with contextlib.suppress(Exception):
                 # Instance dirs hold a 2 GB SD image: remove them on failure too unless asked to keep.
                 i.cleanup(not keep)
+
+
+def controller_ports(inst: DolphinInstance) -> Tuple[int, ...]:
+    """The ports this instance has a standard controller on (make_instance ``controllers``)."""
+    return tuple(sorted(int(p) for p in (inst.config.standard_controllers or (0, 1))))
 
 
 def par(fns: Sequence[Callable[[], Any]]) -> List[Any]:
@@ -482,60 +491,68 @@ def css_drop_token(c: HarnessClient, port: int) -> None:
     B.tap(c, port, ["B"], hold=1, release=20)
 
 
-def history_a(c: HarnessClient, chars: Sequence[str], stage: str, notes: List[str]) -> None:
+def history_a(c: HarnessClient, chars: Sequence[str], stage: str, notes: List[str],
+              ports: Optional[Sequence[int]] = None) -> None:
+    """Straight to the match: ``chars[i]`` on ``ports[i]`` (default: ports 0, 1, ...)."""
+    ports = list(ports) if ports is not None else list(range(len(chars)))
     B.wait_scene(c, [B.Scene.CSS], 60 * 90)
-    B.wait_css_ready(c, [0, 1])
+    B.wait_css_ready(c, ports)
     notes.append(f"CSS at poll {c.status().input_polls}")
-    s1 = F.Seat(c, 0)
-    B.css_pick_character(c, 0, B.CSS_ID[chars[0]])
-    B.css_pick_character(c, 1, B.CSS_ID[chars[1]])
+    s1 = F.Seat(c, ports[0])
+    for port, ch in zip(ports, chars):
+        B.css_pick_character(c, port, B.CSS_ID[ch])
     notes.append(f"picked at poll {c.status().input_polls}")
     F.start_and_pick_stage(s1, stage)
 
 
-def history_b(c: HarnessClient, chars: Sequence[str], stage: str, notes: List[str]) -> None:
+def history_b(c: HarnessClient, chars: Sequence[str], stage: str, notes: List[str],
+              ports: Optional[Sequence[int]] = None, idle: int = 137, linger: int = 77) -> None:
+    """A detour: idle, pick and drop other characters, back out to the main menu, open Rules,
+    come back, pick in the other order, linger on the stage select."""
+    ports = list(ports) if ports is not None else list(range(len(chars)))
+    p0, p1 = ports[0], ports[1]
     B.wait_scene(c, [B.Scene.CSS], 60 * 90)
-    B.wait_css_ready(c, [0, 1])
+    B.wait_css_ready(c, ports)
     notes.append(f"CSS at poll {c.status().input_polls}")
-    B.step(c, 137)                                   # idle a different number of frames
+    B.step(c, idle)                                  # idle a different number of frames
     # Hover and pick other characters, then drop the tokens again.
-    B.css_pick_character(c, 0, B.CSS_ID["mario"])
-    B.css_pick_character(c, 1, B.CSS_ID["ike"])
+    B.css_pick_character(c, p0, B.CSS_ID["mario"])
+    B.css_pick_character(c, p1, B.CSS_ID["ike"])
     notes.append(f"picked Mario/Ike at poll {c.status().input_polls}")
-    css_drop_token(c, 0)
-    css_drop_token(c, 1)
-    B.css_pick_character(c, 0, B.CSS_ID["kirby"])
-    css_drop_token(c, 0)
-    a = B.read_css_area(c.read_mem, 0)
-    notes.append(f"dropped tokens: P1 in_hand={a.in_hand if a else None}")
+    css_drop_token(c, p0)
+    css_drop_token(c, p1)
+    B.css_pick_character(c, p0, B.CSS_ID["kirby"])
+    css_drop_token(c, p0)
+    a = B.read_css_area(c.read_mem, p0)
+    notes.append(f"dropped tokens: P{p0 + 1} in_hand={a.in_hand if a else None}")
     # Back out to the main menu (hold B with the token in hand), open and close Rules.
-    B.neutral(c, 0)
-    c.pad_script(0, [{"buttons": ["B"], "hold": 90}, {"hold": 5}])
+    B.neutral(c, p0)
+    c.pad_script(p0, [{"buttons": ["B"], "hold": 90}, {"hold": 5}])
     B.wait_scene(c, [B.Scene.MAIN_MENU], 600, every=4)
     notes.append(f"main menu at poll {c.status().input_polls}")
     B.step(c, 60)
-    c.pad_script(0, [dict(NEUTRAL, main=[255, 128], hold=4), dict(NEUTRAL, hold=20)])
+    c.pad_script(p0, [dict(NEUTRAL, main=[255, 128], hold=4), dict(NEUTRAL, hold=20)])
     B.step(c, 30)
-    B.tap(c, 0, ["A"], 3, 90)                        # Rules
-    B.tap(c, 0, ["B"], 3, 40)                        # close Rules
-    c.pad_script(0, [dict(NEUTRAL, main=[1, 128], hold=4), dict(NEUTRAL, hold=20)])
+    B.tap(c, p0, ["A"], 3, 90)                       # Rules
+    B.tap(c, p0, ["B"], 3, 40)                       # close Rules
+    c.pad_script(p0, [dict(NEUTRAL, main=[1, 128], hold=4), dict(NEUTRAL, hold=20)])
     B.step(c, 41)
-    B.tap(c, 0, ["A"], 3, 10)                        # FIGHT!
+    B.tap(c, p0, ["A"], 3, 10)                       # FIGHT!
     B.wait_scene(c, [B.Scene.CSS], 1200, every=4)
-    B.wait_css_ready(c, [0, 1])
+    B.wait_css_ready(c, ports)
     notes.append(f"back on CSS at poll {c.status().input_polls}")
     B.step(c, 53)
     # Same characters, other order.
-    for port in (1, 0):
+    for port in reversed(ports):
         a = B.read_css_area(c.read_mem, port)
         if a is not None and a.placed:
             css_drop_token(c, port)
-    B.css_pick_character(c, 1, B.CSS_ID[chars[1]])
-    B.css_pick_character(c, 0, B.CSS_ID[chars[0]])
+    for port, ch in reversed(list(zip(ports, chars))):
+        B.css_pick_character(c, port, B.CSS_ID[ch])
     notes.append(f"picked at poll {c.status().input_polls}")
-    B.css_start(c, 0)
-    B.step(c, 77)                                    # linger on the SSS
-    B.sss_pick_stage(c, B.STAGE_KIND[stage], 0)
+    B.css_start(c, p0)
+    B.step(c, linger)                                # linger on the SSS
+    B.sss_pick_stage(c, B.STAGE_KIND[stage], p0)
 
 
 def to_match_frame0(c: HarnessClient, max_fields: int = 3000) -> Dict[str, Any]:
@@ -566,8 +583,10 @@ def load_fixture(c: HarnessClient, path: Path, timeout: float = 120.0) -> None:
         # Never step here: the fixture must start exactly on the saved field.
         for _ in range(100):
             if B.read_scene(c.read_mem).scene is B.Scene.IN_MATCH:
-                for port in (0, 1):
-                    c.pad_set(port)
+                for port in range(4):
+                    # Ports without a controller (2-player instances) refuse pad_set.
+                    with contextlib.suppress(HarnessCommandError):
+                        c.pad_set(port)
                 return
             time.sleep(0.1)
         c.resume()
@@ -599,6 +618,9 @@ def cmd_simstart(args: argparse.Namespace) -> int:
     d = Path(args.dir)
     prep = json.loads((d / "prep.json").read_text())
     specs = [(f"gprb-sim{lbl}", dict(cpu_thread=args.cpu == "dc", video="Null")) for lbl in ("A", "B")]
+    # 3-4 fighter fixtures: every port of the match has a controller.
+    pads = tuple(range(max(2, len(prep.get("chars", [])))))
+    specs = [(n, dict(kw, controllers=pads)) for n, kw in specs]
     with instances(specs) as insts:
         def one(lbl: str, c: HarnessClient) -> Dict[str, Any]:
             load_fixture(c, d / f"{lbl}0.sav")
@@ -642,6 +664,8 @@ def cmd_prep(args: argparse.Namespace) -> int:
     specs = [("gprb-A", dict(cpu_thread=args.cpu == "dc", rtc=FIXED_RTC, video=args.video)),
              ("gprb-B", dict(cpu_thread=args.cpu == "dc", rtc=rtc_b, video=args.video))]
     report: Dict[str, Any] = {"chars": chars, "stage": args.stage, "cpu": args.cpu, "rtc_b": rtc_b, "runs": {}}
+    # 2-4 fighters, on ports 0..n-1 (both instances drive every port on their own CSS).
+    specs = [(n, dict(kw, controllers=tuple(range(max(2, len(chars)))))) for n, kw in specs]
     with instances(specs) as insts:
         ca, cb = insts[0].client, insts[1].client
         # Boots that straddle a host second read different RTCs (determinism doc, cause 1).

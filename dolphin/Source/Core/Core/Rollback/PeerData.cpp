@@ -161,6 +161,36 @@ bool ValidCostume(u32 costume)
   return costume <= MAX_COSTUME;
 }
 
+bool ValidTeam(u32 team)
+{
+  return team <= 3 || team == 0xFF;
+}
+
+bool ValidPort(u64 port)
+{
+  return port < static_cast<u64>(MAX_PORTS);
+}
+
+void SetGoneMarker(u8* pad)
+{
+  std::memset(pad, 0, PAD_SIZE);
+  std::memcpy(pad + GONE_MARK_OFFSET, GONE_MARK.data(), GONE_MARK.size());
+}
+
+bool TakeGoneMarker(u8* pad)
+{
+  if (std::memcmp(pad + GONE_MARK_OFFSET, GONE_MARK.data(), GONE_MARK.size()) != 0)
+    return false;
+  // A neutral, connected GameCube controller, whatever else the bytes said.
+  std::memset(pad, 0, PAD_SIZE);
+  return true;
+}
+
+void ClearGoneMarkerBytes(u8* pad)
+{
+  std::memset(pad + GONE_MARK_OFFSET, 0, GONE_MARK.size());
+}
+
 bool ValidStageKind(u32 kind)
 {
   // P+ v3.2's stage select offers 0x01-0x33 and 0x37 (Brawl's kinds) and 0x40-0x52 (P+'s own

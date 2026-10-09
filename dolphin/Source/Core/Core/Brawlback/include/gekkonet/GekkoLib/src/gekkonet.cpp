@@ -71,6 +71,11 @@ void gekko_set_disconnect_timeout(GekkoSession* session, unsigned int timeout)
     session->SetDisconnectTimeout(timeout);
 }
 
+void gekko_set_disconnected_input(GekkoSession* session, const void* input)
+{
+    session->SetDisconnectedInput(input);
+}
+
 void gekko_set_local_delay(GekkoSession* session, int player, unsigned char delay)
 {
     session->SetLocalDelay(player, delay);
