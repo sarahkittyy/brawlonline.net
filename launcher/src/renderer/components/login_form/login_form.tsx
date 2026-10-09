@@ -10,6 +10,7 @@ import { create } from "zustand";
 import { combine } from "zustand/middleware";
 
 import { useAsync } from "@/lib/hooks/use_async";
+import { validateDisplayName } from "@/lib/validate/validate";
 import { useServices } from "@/services";
 import type { AuthUser } from "@/services/auth/types";
 
@@ -66,10 +67,16 @@ export const LoginForm = ({ onSuccess, disableAutoFocus, defaultEmail }: LoginFo
   const [showPasswordResetForm, setShowPasswordResetForm] = React.useState(false);
   const [isSignUp, setIsSignUp] = React.useState(false);
   const toggleSignUp = () => setIsSignUp(!isSignUp);
+  // Check the name as it is typed so a bad one is flagged before Sign up is clicked
+  const displayNameCheck = isSignUp && displayName.length > 0 ? validateDisplayName(displayName) : true;
+  const displayNameError = displayNameCheck === true ? undefined : displayNameCheck;
 
   const { execute, loading, error, clearError } = useAsync(async () => {
     let user: AuthUser | undefined;
     if (isSignUp) {
+      if (displayNameError) {
+        throw new Error(displayNameError);
+      }
       if (password !== confirmPassword) {
         throw new Error(Messages.passwordsDoNotMatch());
       }
@@ -124,6 +131,8 @@ export const LoginForm = ({ onSuccess, disableAutoFocus, defaultEmail }: LoginFo
               autoFocus={!disableAutoFocus}
               fullWidth={true}
               required={true}
+              error={Boolean(displayNameError)}
+              helperText={displayNameError}
               onChange={(e) => setDisplayName(e.target.value)}
             />
           )}
@@ -194,7 +203,7 @@ export const LoginForm = ({ onSuccess, disableAutoFocus, defaultEmail }: LoginFo
           >
             {isSignUp ? Messages.alreadyHaveAnAccount() : Messages.createAnAccount()}
           </Button>
-          <Button type="submit" color="primary" disabled={loading} variant="contained">
+          <Button type="submit" color="primary" disabled={loading || Boolean(displayNameError)} variant="contained">
             {isSignUp ? Messages.signUp() : Messages.logIn()}
           </Button>
         </div>
