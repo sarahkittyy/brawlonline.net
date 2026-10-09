@@ -829,6 +829,18 @@ Without the variable, before the fix: 7 of 7 passed with `PPR_GPRB_RNG_LOG` (`ua
 
 Final runs with the fix and the `-Oz` plugin (with the colour clash shades, `docs/game-code.md` §11; raw `run/scratch/sv-runs/`): the skewed test again (Smashville and Dream Land, 0 mismatches), `test_online_unranked.py` 3 of 3 (Unranked: Dream Land 4,121 frames, Smashville 1,304; Direct: Dream Land, then the loser's Final Destination; 0 mismatches each), and `test_online_ranked.py` (a 2-0 set, 0 mismatches, rated; an earlier 2-1 run played clean and only tripped two stale test assertions from the `ranked` merge, fixed: an instance name and the server's `game reported` log line).
 
+## Phase 13: the deterministic GPU thread only during sessions
+
+**Symptom.** Client 0.1.32 (2026-10-09): the menus and the character select felt sluggish ("the cursor moves a bit slow"). With `GPUDeterminismMode = none` the same install felt better.
+
+**Cause.** Phase 10 made `fake-completion` the default and shipped it in `Sys/GameSettings/ID-Project+ Netplay Launcher.ini`, so the deterministic GPU thread ran all the time, menus included. Before that, installs ran `auto`, i.e. without it outside netplay and movies.
+
+**Fix.** The default is `auto` again and the shipped INI no longer sets the mode. In this fork `auto` also means the deterministic GPU thread while a gameplay rollback session runs: `FifoManager::SetRollbackSessionDeterminism(true)` at the top of `StartRunning` (on the CPU thread, at the session's frame 0, before the first `SaveFrame` takes the base snapshot), `false` in `EndRunning` (after `EndRegionMode`). The switch makes the GPU thread idle first (`SyncGPU`, `FlushGpu`), then pauses its loop as `PauseAndLock` does (`EmulatorState(false)`, `Wait`), so a wakeup from another thread cannot run the FIFO while the mode flips, and calls `UpdateWantDeterminism`. Only the FIFO mode changes: Dolphin's "want determinism" (IOS, JIT FMA) is untouched, so there is no mid-game JIT change. An explicit `fake-completion` still keeps it on everywhere; an explicit `none` still logs the Phase 10 error at session start.
+
+Machine state outside the region set at the switch (a pending CP interrupt, a partial command left in the FIFO) can differ between the peers, as it already did with different menu paths; what rollback keeps equal is the region set, and the checksums compare it from the first frames.
+
+**Verification** (a clean worktree with only this change, `--gpu unset` = the install's default, 2-minute rule): `typical` dual core, 2 matches in a row (the mode off between them, on again): game set both, 0 mismatches; `bad_wifi` dual core, 2 matches (343/339 and 735/754 rollbacks): game set both, 0 mismatches; `typical` single core (the switch does nothing): game set, 0 mismatches. Both peers logged `deterministic GPU thread true` at every dual-core session start.
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).
