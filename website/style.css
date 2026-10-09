@@ -146,6 +146,7 @@ main {
   white-space: nowrap;
   text-align: left;
   color: #fff;
+  padding-bottom: 10px;
   /* Smash menu lettering: white with a heavy dark outline. */
   -webkit-text-stroke: 0.1em var(--pm-rim);
   paint-order: stroke fill;
