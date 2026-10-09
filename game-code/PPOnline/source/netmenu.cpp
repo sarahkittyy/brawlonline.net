@@ -141,13 +141,24 @@ namespace NetMenu {
     // (wnd+0x138) 0xC = finished, result (wnd+0x128) 0 = connected, which changes to the ONLINE
     // page (this+0x634 = 3) and deletes the window (text+0x14FD8). Marking the new window as
     // finished and connected skips all of it; nothing of the window is shown or run. The WFC
-    // login itself is already faked by the hooks above, so no online state is missing.
+    // login itself is already faked by the hooks above.
+    //
+    // One thing the window does on the way: once connected it creates muWifiInterfaceTask
+    // (text+0x38EB4: if g_muWifiInterfaceTask 0x805A02A4 is null and the Network heap has room,
+    // create__19muWifiInterfaceTaskFv). The Wi-Fi CSS (sel_char) uses that task every frame
+    // without a null check; without it every CSS frame read and wrote through a null pointer
+    // (24 invalid accesses a frame, each one a formatted panic alert in Dolphin). So the task is
+    // created here, as the window would have.
     void skipConnectWindow(u8* wnd)
     {
         if (!wnd || !(PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS)) return;
         *(u32*)(wnd + 0x128) = 0;
         *(u32*)(wnd + 0x138) = 0xC;
         PPOM::g_block.debug.scratch[9]++;
+        if (*(void**)0x805A02A4 == 0) {
+            typedef void* (*CreateFn)();
+            reinterpret_cast<CreateFn>(0x800C7410)();   // muWifiInterfaceTask::create
+        }
     }
 
     // ---------------------------------------------------------------------------------------
