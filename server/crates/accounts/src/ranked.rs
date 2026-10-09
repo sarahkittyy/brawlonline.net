@@ -9,6 +9,9 @@
 //! `mm_matches` row, so a set is rated exactly once. Sets that wait on a grace period or go
 //! silent are settled by [`sweep`], which runs in the background.
 //!
+//! Unranked and Direct games are reported with the same endpoint and stored the same way (for
+//! the match history, [`crate::history`]); they are never settled or rated.
+//!
 //! `GET /v1/ranked/result?matchId=&uid=` (Slippi's `getRankedMatchPersonalResult`) and
 //! `GET /user/{uid}` (`rank`) give the rating back.
 
@@ -17,7 +20,9 @@ use std::collections::HashMap;
 use axum::extract::{Query, State};
 use axum::Json;
 use chrono::{DateTime, Utc};
-use common::ranked::{self, GameReport, Leave, LeaveReport, Outcome, Standing, Timing, MAX_GAME_INDEX};
+use common::ranked::{
+    self, GameReport, Leave, LeaveReport, Outcome, Standing, Timing, MAX_GAME_INDEX, MAX_SESSION_GAME_INDEX,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
@@ -27,7 +32,7 @@ use crate::store;
 use crate::AppState;
 
 /// `mm_matches.mode` of a ranked set (Slippi's mode numbers).
-const MODE_RANKED: i16 = 0;
+pub(crate) const MODE_RANKED: i16 = 0;
 
 // ---------------------------------------------------------------- store
 
@@ -328,12 +333,20 @@ pub struct ReportGameReq {
     pub players: serde_json::Value,
 }
 
-/// `reportOnlineGame` for a ranked game. Idempotent: the same report again is accepted; a
-/// different winner for a game already reported is refused.
+/// `reportOnlineGame`. For a ranked game the set is settled after the report. Unranked and
+/// Direct games are stored the same way and never rated: the answer is the match's state with
+/// status `ASSIGNED` and the wins counted from the reports ([`ranked::count_wins`]).
+/// Idempotent: the same report again is accepted; a different winner for a game already
+/// reported is refused.
 pub async fn report_game(State(state): State<AppState>, Json(req): Json<ReportGameReq>) -> ApiResult<Json<SetState>> {
     let uid = reporter(&state, &req.uid, &req.play_key).await?;
-    let row = players_match(&state.pool, &req.match_id, uid).await?;
-    if !(1..=MAX_GAME_INDEX).contains(&req.game_index) {
+    let row = match_row(&state.pool, &req.match_id).await?.ok_or_else(ApiError::not_found)?;
+    if !row.players.contains(&uid) {
+        return Err(ApiError::not_found());
+    }
+    let is_ranked = row.mode == MODE_RANKED;
+    let max_game = if is_ranked { MAX_GAME_INDEX } else { MAX_SESSION_GAME_INDEX };
+    if !(1..=max_game).contains(&req.game_index) {
         return Err(ApiError::bad_request("invalid_game_index", "Invalid game index"));
     }
     let winner = match req.winner.as_deref().map(str::trim).filter(|w| !w.is_empty()) {
@@ -372,11 +385,31 @@ pub async fn report_game(State(state): State<AppState>, Json(req): Json<ReportGa
             return Err(ApiError::conflict("already_reported", "This game was already reported with another winner"));
         }
     } else {
-        tracing::info!(match_id = %req.match_id, game = req.game_index, %uid, winner = ?winner, "ranked game reported");
+        tracing::info!(match_id = %req.match_id, mode = row.mode, game = req.game_index, %uid, winner = ?winner, "game reported");
+    }
+    if !is_ranked {
+        return Ok(Json(session_state(&state.pool, &req.match_id, row).await?));
     }
     let timing = state.cfg.ranked_timing();
     settle(&state.pool, &req.match_id, Utc::now(), timing).await?;
     Ok(Json(set_state(&state.pool, &req.match_id, uid, timing).await?))
+}
+
+/// The state of an Unranked or Direct match: never settled or rated.
+async fn session_state(pool: &PgPool, match_id: &str, row: MatchRow) -> ApiResult<SetState> {
+    let mut tx = pool.begin().await?;
+    let (games, _) = reports(&mut tx, match_id).await?;
+    tx.commit().await?;
+    let wins = ranked::count_wins(&row.players, &games);
+    Ok(SetState {
+        match_id: match_id.to_string(),
+        status: "ASSIGNED".into(),
+        wins: [wins.first().copied().unwrap_or(0), wins.get(1).copied().unwrap_or(0)],
+        players: row.players,
+        winner: None,
+        reason: None,
+        rating: None,
+    })
 }
 
 #[derive(Debug, Deserialize)]
