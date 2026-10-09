@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# Builds our Dolphin on macOS (GitHub-hosted Apple silicon runner) and stages it for the launcher
-# package (extraResources "dolphin").
+# Builds our Dolphin on macOS (Apple silicon: the Namespace runner in CI, or a Mac) and stages it
+# for the launcher package (extraResources "dolphin").
 #
 #   .github/scripts/build-dolphin-macos.sh <version> <out dir> [arm64|x86_64]
 #
@@ -53,7 +53,12 @@ if [ -f "$build/CMakeCache.txt" ] && ! grep -qx "CMAKE_HOME_DIRECTORY:INTERNAL=$
 fi
 # Vulkan (MoltenVK) is off for now: Metal and OpenGL remain. Dolphin's own code signing is off
 # because the bundle is changed below; it is signed once at the end.
+# Qt 6.8.3's FindWrapOpenGL.cmake links "-framework AGL" unless find_library finds it, and the
+# macOS 26 SDK (Xcode 26) has no AGL: WrapOpenGL_AGL names OpenGL.framework (linked anyway)
+# instead, so find_library is skipped.
+sdk="$(xcrun --sdk macosx --show-sdk-path)"
 cmake -S "$src" -B "$build" -G Ninja \
+  -DWrapOpenGL_AGL="$sdk/System/Library/Frameworks/OpenGL.framework" \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_OSX_ARCHITECTURES="$arch" -DCMAKE_OSX_DEPLOYMENT_TARGET="$min_macos" \
   -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
