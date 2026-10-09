@@ -27,7 +27,8 @@ Path prefixes used below:
 | Start contract | Slippi's `-i comm.json` (the launcher already writes it). |
 | Seeking | In-memory keyframes taken during playback (our own buffers, never from a file), fast-forward through the existing "resimulating" mode (unthrottled, no audio, no presentation), and an 8-slot snapshot ring for instant frame-by-frame rewind. |
 | Desync in playback | The recorded checksum of every frame is compared; the first mismatch is shown on screen and reported to the launcher. Playback continues. |
-| Old builds | Refuse with a message that names what differs, with a "Play anyway" option. No archive of old builds for now. |
+| Old builds | Refuse with a message that names what differs, with a "Play anyway" option. No archive of old builds (decided: breaking across updates is acceptable; old P+ releases are archived online). |
+| Emulation settings | Recorded with the game and forced in playback through Dolphin's temporary Netplay layer, as live play does. Never saved, so the user's own config is untouched (6.2). |
 | Stats | Record per-frame player state (Slippi's post-frame idea, Brawl fields we have verified). Inputs and checksums alone give only duration, result and input rates. |
 | First milestone (R1) | Record a Direct game on both peers and play it back from a fresh boot, no seeking. Pass criterion: playback's per-frame trace equals both live peers' traces through game set. |
 
@@ -103,6 +104,7 @@ A recording starts at the barrier and covers one game. Games of a set are separa
 | Match setup | mode, match id, game number, tiebreak index (0), number of players, per port: present, `gmCharacterKind`, costume, team, port values (0x3C), display name, connect code; stage kind, ASL buttons, last winner | `MatchSetup` GS:134-141, `LobbyPlayer` GSH:138-144, SESSION as GameBridge writes it GB:743-772, `Online::Match` (`GameplayOnlineBackend.cpp:27-76`) |
 | Match start values | session seed, match index, the three seeds as applied, serial counter start (0x10000), the init block as used (0x20 bytes) | GS:2816-2870, GS:61 |
 | Barrier values | setup key bytes and hash, the host's sync block (`g_GameFrame` 0x18, app counter, three RNG words, serial, start points), the host's task order (names) | GS:412-471, GS:120-131, GS:3091-3101 |
+| Emulation settings | the host's `NetPlay::NetSettings` the session ran with (CPU core, clock override, dual core, DSP, MMU, EFB and texture settings and the rest of what netplay syncs). Playback forces them (6.2) | `NetPlayProto.h:46`, built by `NetPlayServer::SetupNetSettings` (`NetPlayServer.cpp:1427`) |
 | Diagnostics | the host's whole `gmGlobalModeMelee` (0x320 bytes) at the barrier, compare only | `Addr::MODE_MELEE_SIZE` GR.h:51 |
 | Timing | `start_frame` (240), number of countdown frames | GSH:86 |
 | Inputs | per frame from `start_frame`, per playing port: the 0x40-byte `gfPadStatus` slot the frame ran with | the final pass's `ops.slots[i]` (GS:1950-1970, 2408) |
@@ -168,7 +170,7 @@ All container integers are little-endian. Guest data (pad slots, init block, SES
 |---|---|---|---|---|
 | `INFO` | no | no | at the barrier, first chunk | UTF-8 JSON, the metadata (4.3) |
 | `SETP` | yes | no | at the barrier | match setup and match-start values (3.3), fixed binary layout with a field count |
-| `SYNC` | yes | no | at the barrier | the host's sync block; the task order as `u16 lists`, per list `u16 n`, per task `u8 len` + name bytes |
+| `SYNC` | yes | no | at the barrier | the host's sync block; the task order as `u16 lists`, per list `u16 n`, per task `u8 len` + name bytes; the emulation settings (3.3) as a field count, then fixed-size fields |
 | `FRMS` | yes | yes | every 60 confirmed frames, and at the end | `u32 first_frame` (game frame), `u16 count`, `u8 ports`, then per playing port `count × 0x40` pad bytes (each XORed with the previous frame's in the chunk), then `count × u32` checksums, then the checksum parts of frames with `frame % 60 == 0` |
 | `POST` | no | yes | with each `FRMS` | a column list (`u8 field id`, `u8 type`), then the same frames' per-port rows, column by column |
 | `EVNT` | no | yes | batched with `FRMS` | `(u32 frame, u8 type, u16 len, payload)` records |
@@ -327,6 +329,13 @@ Dolphin side:
 - Playback needs the same disc, P+ files and plugin as Play. The launcher ships one Dolphin build for both (`L/src/dolphin/manager.ts:41-46`, `L/src/dolphin/install/paths.ts:52`). Give the playback instance the netplay install's patched SD card with SD writes off, instead of a second 2 GB copy (open question 8). `PlaybackDolphinInstance.play` must add the `-e` boot arguments it does not pass today (`instance.ts:182-187`).
 - The playback User folder has no `user.json`, so nothing logs in or opens a socket.
 
+**Forced settings** (decided 2026-10-09). Playback forces every setting that affects the simulation, but never changes the user's own config:
+- Dolphin builds a `NetSettings` from the recorded values (3.3) and adds it with the same loader live play uses, `ConfigLoaders::GenerateNetPlayConfigLoader` (`BootManager.cpp:86`). That puts it in the Netplay layer, above the user's Base and game INI layers.
+- The layer is never saved. `Config::Save` writes only the Base layer, and `BootManager::RestoreConfig` removes the Netplay layer when emulation ends (`BootManager.cpp:217-223`). After playback the user's config takes effect again unchanged, and nothing from the replay is written to their INI files.
+- If the user changes a forced setting during playback, the change goes to their Base layer as usual. It is hidden while the replay layer is active and takes effect after playback, so a newer user setting is never overwritten.
+- Settings that do not affect the simulation (graphics backend, resolution, audio volume, controls, window) are not forced.
+- A setting changed between replays in a `queue` is re-forced from the next file, because each file carries its own values.
+
 ### 6.3 What the game shows
 
 - The match as played: HUD, stock icons, timer. **No in-game names.** Name tags over fighters are not used online (`docs/game-code.md:441`), and a tag index in `gmSelCharData` selects controls, so writing one would change the match.
@@ -371,7 +380,7 @@ Dolphin side:
 | Rest of Dolphin (UI, video backends) | no | recorded for diagnostics only |
 | Region set | no: playback does not roll back | recorded for diagnosing live desyncs |
 
-Recommendation: refuse with a message that names the differing component ("recorded with Project+ 3.2.1, this install has 3.2.2"), and offer "Play anyway" (the checksums show at once whether it still matches). Do not archive old builds now: the launcher ships Dolphin inside its package, and a P+ release change would also need the old 2 GB of P+ files. `SIM_VERSION` changes should become rare after release; small ones can keep the old behaviour behind a version switch. Server-side Ranked replays keep their build reference for disputes.
+Decided (2026-10-09): replays that break across game updates are acceptable, as in other games' replay systems. The launcher keeps no old builds. Older P+ releases stay archived online, so a dedicated user can still set up the build that matches. Refuse with a message that names the differing component and the version needed ("recorded with Project+ 3.2.1, this install has 3.2.2"), and offer "Play anyway" (the checksums show at once whether it still matches). `SIM_VERSION` changes should become rare after release; small ones can keep the old behaviour behind a version switch. Server-side Ranked replays keep their build reference for disputes.
 
 ## 7. Desync detection in playback
 
@@ -529,14 +538,14 @@ Not run now (shared, CPU-bound machine). In order:
 | A setup field outside the setup key differs between live and playback | The whole `gmGlobalModeMelee` is recorded and diffed at the barrier (log only) |
 | A region-set gap made the live game differ from the no-rollback ground truth | Playback shows the ground truth; the recorded checksums show the difference (it would also have been a live desync between peers) |
 | Keyframe memory or hitch too large | Delta store (6.4), budget, interval setting; measure in R2 |
-| An incompatible P+ or plugin update makes old replays unplayable | Clear refusal, "Play anyway"; keep `SIM_VERSION` stable after release |
+| An incompatible P+ or plugin update makes old replays unplayable | Accepted (2026-10-09). Clear refusal naming the version needed, "Play anyway"; keep `SIM_VERSION` stable after release |
 
 ## 13. Open questions
 
 1. **Extension.** `.rep` is also StarCraft's. Switch to `.brep` before anything ships (the launcher's association and filter change in two places)?
 2. **Offline Versus.** In scope? It needs a local session mode (offline lag would then slow the game instead of skipping frames, as online) and a setup path for any rules, items, CPUs and 4 players.
 3. **Keyframe budget.** Default 1 GB and 10 s? Is a short hitch every 10 s acceptable in playback?
-4. **Old builds.** Refuse with "Play anyway" (recommended), or keep an archive?
+4. ~~**Old builds.**~~ Decided 2026-10-09: refuse with "Play anyway", no archive in the launcher (old P+ releases are archived online). See 6.5.
 5. **Player-state fields.** Combos and punishes need hitstun, shield and last attacker; their offsets are not mapped (`docs/brawl-memory-map.md` has damage, stocks, position, facing, status, motion). Worth the reverse engineering for R3?
 6. **Pass-log chunk.** Store every pass (with mispredictions) behind a setting, for Slippi's `rollbackDisplayMethod: normal` and for bug reports? It is about 0x100 bytes per pass and replays from a fresh boot like the rest.
 7. **Privacy of shared files.** Files carry uids, names and connect codes (Slippi's carry names and codes too). Keep uids?
