@@ -73,7 +73,7 @@ until build_dolphin "$jobs"; do
   jobs=$(( jobs > 4 ? jobs * 2 / 3 : jobs ))
   echo "::warning::Dolphin build failed; retry $attempt with $jobs jobs"
 done
-ccache -s | sed -n '1,12p'
+ccache -s -v   # verbose: shows why calls are uncacheable
 
 # ---- AppDir (linuxdeploy bundles the shared libraries and Qt plugins) ----------------------
 LD_TAG=1-alpha-20251107-1

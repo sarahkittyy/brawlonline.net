@@ -182,8 +182,8 @@ jobs:
       NODE_OPTIONS: --max-old-space-size=8192
       USE_HARD_LINKS: "false"
       # Code signing is deferred. To sign later: add the repository secrets WIN_CSC_LINK (base64
-      # .pfx or a URL) and WIN_CSC_KEY_PASSWORD, and set "win.signAndEditExecutable" to true in
-      # launcher/electron-builder.json. While the secrets are unset the build stays unsigned.
+      # .pfx or a URL) and WIN_CSC_KEY_PASSWORD ("win.signAndEditExecutable" is already true in
+      # launcher/electron-builder.json). While the secrets are unset the build stays unsigned.
       CSC_LINK: ${{ secrets.WIN_CSC_LINK }}
       CSC_KEY_PASSWORD: ${{ secrets.WIN_CSC_KEY_PASSWORD }}
       CSC_IDENTITY_AUTO_DISCOVERY: "false"

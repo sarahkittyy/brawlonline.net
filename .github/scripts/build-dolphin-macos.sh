@@ -67,7 +67,7 @@ cmake -S "$src" -B "$build" -G Ninja \
 
 ccache -z >/dev/null
 cmake --build "$build" --parallel "$jobs" --target project-plus-dolphin dolphin-tool
-ccache -s | sed -n '1,12p'
+ccache -s -v   # verbose: shows why calls are uncacheable
 
 # ---- Bundle -------------------------------------------------------------------------------
 # The launcher runs <netplay>/Dolphin.app/Contents/MacOS/Dolphin and looks for dolphin-tool next
