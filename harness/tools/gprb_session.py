@@ -510,11 +510,12 @@ def play_match_n(insts, clients, ports: List[int], sims, args, preset: str, cpu:
                     with contextlib.suppress(Exception):
                         frames.append(clients[j].call("gprb_status")["current_frame"])
                 rep["drop"][drops.index(due[0])]["at_frames"] = frames
+                # Marked first: the player's own thread must not take its end for the match's.
+                dropped_ports.add(dport)
                 if dhow == "kill":
                     insts[k].kill()
                 else:
                     clients[k].call("gprb_stop")
-                dropped_ports.add(dport)
                 print(f"  dropped P{dport + 1} ({dhow}) at frames {frames}", flush=True)
                 continue
             # The gone flags as the remaining games see them (memory, inside the region set).
@@ -565,6 +566,13 @@ def play_match_n(insts, clients, ports: List[int], sims, args, preset: str, cpu:
             pf = sorted(f for f in set.intersection(*(set(p) for p in pads)) if f <= gf_limit)
             bad = [f for f in pf if any(p[f] != pads[0][f] for p in pads[1:])]
             rep["pads"] = {"compared": len(pf), "mismatches": len(bad), "first": bad[:5]}
+            if bad:
+                # The first frame's slots that differ: per peer and port, the gfPadStatus bytes (hex).
+                f0 = bad[0]
+                rep["pads"]["first_ports"] = {
+                    f"P{ports[live[i]] + 1}": {q + 1: p[f0][q * 128:(q + 1) * 128] for q in range(4)
+                                               if p[f0][q * 128:(q + 1) * 128] != pads[0][f0][q * 128:(q + 1) * 128]}
+                    for i, p in enumerate(pads)}
         rep["final"] = [G.small_state(c) for c in lc]
     except Exception as e:  # noqa: BLE001
         rep["error"] = f"{type(e).__name__}: {e}"
