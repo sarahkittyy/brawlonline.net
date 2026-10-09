@@ -34,7 +34,7 @@ Each player's lock-in carries a team, `0xFF` = no team (free-for-all), else Braw
 
 The barrier's setup check (`SetupKey`) also compares each port's `gmPlayerInitData` team byte (+0x0B), in team battles only (`gmMeleeInitData::m_isTeams`; in a free-for-all the byte holds whatever the character select left there).
 
-On `nplayer-setup` the game side and GameBridge's plumbing of both fields are done (LOCAL `lockTeam` at 0x34, SESSION `players[i].team` at +3, `gone[4]` at 0x20C); this branch only carries the team in the session and writes the gone flags.
+`nplayer-setup` (merged into this branch at `a174637f`, see "Merging" below) has the game side and GameBridge's plumbing of both fields (PPOM version 4: LOCAL `lockTeam` at 0x34, SESSION `players[i].team` at +3, `gone[4]` at 0x20C, SESSION 0x220 bytes) and removes a gone player's fighter at the start of the frame whose flag reads 1; this branch carries the team in the session and writes the gone flags.
 
 ## Design
 
