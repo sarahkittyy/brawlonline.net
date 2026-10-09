@@ -193,6 +193,22 @@ namespace OnlineMatch {
         for (int i = 0; i < se.numPlayers && i < 4; i++) {
             mm[MM_PLAYERS + i * PLAYER_SIZE + 0x07] = (u8)(i + 1);
         }
+        // Colour clash (Slippi's prepareOnlineMatchState: the players are counted in port order
+        // and each one with the same character and colour as an earlier one gets the next shade).
+        // Brawl has the shades for team battles (two of a character on one team): gmPlayerInitData
+        // +0x0A is the shade, and the fighter's colour blend module draws it (sub colour, alpha
+        // 0x80) and sets it again after a respawn. 3 is the lighter one, as Slippi's first shade;
+        // then darker (1) and grey (2). The same SESSION on both machines gives the same shades.
+        static const u8 SHADES[4] = {0, 3, 1, 2};
+        for (int i = 0; i < se.numPlayers && i < 4; i++) {
+            if (!se.players[i].present) continue;
+            int n = 0;
+            for (int j = 0; j < i; j++) {
+                if (se.players[j].present && se.players[j].charKind == se.players[i].charKind &&
+                    se.players[j].costume == se.players[i].costume) n++;
+            }
+            mm[MM_PLAYERS + i * PLAYER_SIZE + 0x0A] = SHADES[n];
+        }
         PPOM::g_block.debug.scratch[11] = ((u32)se.stageKind << 16) |
                                           ((u32)se.players[0].charKind << 8) | se.players[1].charKind;
         memoryChangeTo(seq, 9, 0);   // then state 9: scMelee

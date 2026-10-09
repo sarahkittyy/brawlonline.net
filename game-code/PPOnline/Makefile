@@ -122,9 +122,10 @@ $(OUTPUT).elf: $(LDFILES) $(OFILES)
 $(OFILES_SOURCES) : $(HFILES)
 
 # The plugin shares P+'s 64 KB Syringe heap with sy_core and P+'s own plugins and must fit in
-# what they leave (docs/game-code.md section 2, "Heap budget"). Most of it is built without
-# optimisation; these files are built for size.
-boot_menu.o ppom.o match_hud.o: CXXFLAGS += -Os
+# what they leave (docs/game-code.md section 2, "Heap budget"). Every file is built for size,
+# -Oz: with the ranked merge (2026-10-08) the -Os build (0x95D0 bytes of .text) no longer loaded
+# ("Can't Alloc Heap Buffer 0000b44c" against 0xb2e0 free); -Oz gives 0x8998.
+boot_menu.o ppom.o match_hud.o: CXXFLAGS += -Oz
 
 # REL linking
 %.rel: %.elf
@@ -143,7 +144,7 @@ boot_menu.o ppom.o match_hud.o: CXXFLAGS += -Os
 # connect-code keypad, the status line layout and the online rules (2026-10-08) the -O0 build
 # of these files no longer fitted ("gfModule::create Error : Can't Alloc Heap Buffer" in the
 # boot log). They hold no frame-layout tricks (their hooks are naked functions).
-code_entry.o online_menu.o online_match.o stage_legal.o anyone_menu.o online.o rel.o netmenu.o: CXXFLAGS += -Os
+code_entry.o online_menu.o online_match.o stage_legal.o anyone_menu.o online.o rel.o netmenu.o: CXXFLAGS += -Oz
 
 %.o: %.cpp
 #	$(info $<)

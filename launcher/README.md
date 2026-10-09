@@ -10,8 +10,6 @@ This is a fork of the [Slippi Launcher](https://github.com/project-slippi/slippi
 
 The launcher's look comes from the user's own copy of Super Smash Bros. Brawl and Project+ SD card. At first run, after a disc is chosen, it extracts menu frames, fonts and stock icons into a local cache (`src/brawl_assets`, `src/game_assets`). Until then it shows a plain, unstyled fallback. Nothing from the game is committed or distributed; `.asset-cache/` is gitignored.
 
-The one exception is the app icon (`assets/icon.png`, `.ico`, `.icns`, and the website's favicon): a Smash Ball with a Wi-Fi symbol in place of the Smash cross, made by `tools/icon/make-icon.py` from `tools/icon/smash-ball.png`.
-
 ## Development
 
 Needs Node 20+ and Git.
