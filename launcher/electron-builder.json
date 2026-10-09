@@ -68,7 +68,7 @@
     "target": [
       "nsis"
     ],
-    "signAndEditExecutable": false
+    "signAndEditExecutable": true
   },
   "nsis": {
     "artifactName": "Brawl-Online-Setup-${version}.${ext}",
@@ -86,6 +86,7 @@
       "AppImage"
     ],
     "category": "Game",
+    "icon": "icon.png",
     "desktop": {
       "entry": {
         "StartupWMClass": "Brawl Online"
@@ -103,6 +104,10 @@
   "extraResources": [
     "LICENSE",
     "NOTICE",
+    {
+      "from": "assets/icon.png",
+      "to": "assets/icon.png"
+    },
     {
       "from": "release/dolphin",
       "to": "dolphin",

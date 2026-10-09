@@ -30,7 +30,7 @@ import { getConfigFlags } from "./flags/flags";
 import { installModules } from "./install_modules";
 import { legacyUserDataNames, migrateLegacyUserData } from "./legacy_user_data";
 import { MenuBuilder } from "./menu";
-import { clearTempFolder, resolveHtmlPath } from "./util";
+import { clearTempFolder, getWindowIcon, resolveHtmlPath } from "./util";
 
 // Neutral until the renderer applies the theme (see renderer/styles/theme.ts).
 const BACKGROUND_COLOR = "#1c1c1c";
@@ -146,7 +146,7 @@ const createWindow = async () => {
     minHeight: isDevelopment ? undefined : 450,
     minWidth: isDevelopment ? undefined : 900,
     backgroundColor: BACKGROUND_COLOR,
-    // No app icon: Slippi's icon is its branding and we have no art of our own (Electron default).
+    icon: getWindowIcon(),
 
     // This setting only takes effect on macOS, and simply opts it into the modern
     // Big-Sur frame UI for the window style.

@@ -1,6 +1,8 @@
 import { BrowserWindow, Menu, shell } from "electron";
 import log from "electron-log";
 
+import { getWindowIcon } from "./util";
+
 const isDevelopment = process.env.NODE_ENV !== "production";
 
 const BACKGROUND_COLOR = "#1B0B28";
@@ -45,6 +47,7 @@ export class BrowserWindowManager {
       fullscreenable: false, // When a website requests fullscreen, fill only the browser window
       show: false,
       backgroundColor: BACKGROUND_COLOR,
+      icon: getWindowIcon(),
       autoHideMenuBar: true,
       webPreferences: {
         sandbox: true,

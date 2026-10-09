@@ -2,6 +2,7 @@
 import { Preconditions } from "@common/preconditions";
 import { app } from "electron";
 import { pathExists } from "fs-extra";
+import { existsSync } from "node:fs";
 import { mkdir, open, rm, stat as fsStat } from "node:fs/promises";
 import path from "path";
 import { URL } from "url";
@@ -26,6 +27,13 @@ export const getAssetPath = (...paths: string[]): string => {
     ? path.join(process.resourcesPath, "assets")
     : path.join(__dirname, "../../assets");
   return path.resolve(path.join(resourcesPath, ...paths));
+};
+
+// The window icon on Windows and Linux (macOS uses the bundle's icon.icns). Undefined where the
+// assets aren't next to the build (an unpackaged production build).
+export const getWindowIcon = (): string | undefined => {
+  const icon = getAssetPath("icon.png");
+  return existsSync(icon) ? icon : undefined;
 };
 
 // Implemenation taken from https://github.com/alexbbt/read-last-lines/blob/11945800b013fe5016c4ea36e49d28c67aa75e7c/src/index.js
