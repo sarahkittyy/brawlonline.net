@@ -40,6 +40,21 @@ namespace Online::GameBridge
 // Our plugin's REL module id (game-code/PPOnline/Makefile RELID).
 constexpr u32 PPOM_MODULE_ID = 20560;
 
+// 3-4 player matches (docs/nplayer/setup.md). Offsets in SESSION (ppom.h Session), which is part
+// of the rolled-back state:
+// - SESSION_GONE: u8[4] by in-game port. The session writes 1 for a player who dropped out of a
+//   running match at the start of every frame from the agreed frame on (resimulated frames too,
+//   like an input; never cleared during the match). The game then removes that fighter.
+// - player i's elimination order at SESSION_PLAYERS_OFF + i * SESSION_PLAYER_SIZE +
+//   SESSION_PLAYER_OUT (u8, game-written every frame: 1 = first out, shared by ports out on the
+//   same frame, 0 = still in), read at the end of a game for the placings (GameSetup::Outcome).
+constexpr u32 SESSION_GONE = 0x20C;
+constexpr u32 SESSION_PLAYERS_OFF = 0x0C;
+constexpr u32 SESSION_PLAYER_SIZE = 0x80;
+constexpr u32 SESSION_PLAYER_OUT = 0x37;
+// SESSION's address in game memory, 0 before the plugin's block is found.
+u32 SessionAddress();
+
 // From the frame-end HLE hook (CPU thread), every game frame.
 void OnFrameEnd(const Core::CPUThreadGuard& guard);
 // A new boot: forget the block.
@@ -52,8 +67,4 @@ void SetHandOff(bool hand_off);
 
 // For the harness (`game_bridge_status`).
 picojson::object Status();
-
-// SESSION's address in game memory, 0 before the plugin's block is found. The gameplay session
-// writes the gone flags there (Gprb::Session::GONE_FLAG_OFFSET).
-u32 SessionAddress();
 }  // namespace Online::GameBridge

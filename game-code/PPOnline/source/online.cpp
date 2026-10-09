@@ -133,6 +133,7 @@ namespace Online {
     void install(CoreApi* api)
     {
         PPOM::g_block.debug.cfg = PPOM::CFG_TEXT | PPOM::CFG_WIFI_HOOKS | PPOM::CFG_LOG;
+        PPOM::g_block.local.lockTeam = PPOM::TEAM_NONE;   // no team picked (the CSS has no team control yet)
         api->syReplaceFunc(0x800B91B8, reinterpret_cast<void*>(hkPrintIndex), (void**)&s_origPrintIndex);
         api->syReplaceFunc(0x8002A210, reinterpret_cast<void*>(hkPadUpdate), (void**)&s_origPadUpdate);
         api->syReplaceFunc(0x800B8EE8, reinterpret_cast<void*>(hkBeginPrint), (void**)&s_origBeginPrint);

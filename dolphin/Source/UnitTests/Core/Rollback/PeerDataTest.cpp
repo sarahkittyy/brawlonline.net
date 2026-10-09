@@ -215,9 +215,9 @@ TEST(PeerData, PortValuesAndNames)
 
 TEST(PeerData, TeamsAndPorts)
 {
-  for (u32 t : {0u, 1u, 2u, 3u, 0xFFu})
+  for (u32 t : {0u, 1u, 2u, 0xFFu})
     EXPECT_TRUE(ValidTeam(t)) << t;
-  for (u32 t : {4u, 5u, 0x80u, 0xFEu, 0x100u})
+  for (u32 t : {3u, 4u, 0x80u, 0xFEu, 0x100u})
     EXPECT_FALSE(ValidTeam(t)) << t;
   for (u64 p : {0ull, 1ull, 2ull, 3ull})
     EXPECT_TRUE(ValidPort(p));

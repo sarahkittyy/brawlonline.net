@@ -73,10 +73,16 @@ namespace OnlineMatch {
     // gmSelCharData of the local CSS, saved before the match overwrites it and put back after,
     // so the CSS comes back with this player's own character and not the host's.
     static u8 s_savedSel[4 * PLAYER_SIZE];
+    static u8 s_savedTeams = 0;
     static bool s_haveSaved = false;
+    // gmSelCharData+0x33: the CSS's team battle switch; sqVsMelee's setup copies it into the
+    // match (gmMeleeInitData.m_isTeams, sora_scene text+0x219A4). Each player's team is its
+    // record's +0x0B, which the setup copies too.
+    static const u32 SEL_TEAMS = 0x33;
     static u16 s_pickedStage = 0xFFFF;
     static u8 s_pickedAsl = 0;
     static int s_discFrames = -1;   // frames since the opponent was lost in a match
+    static u32 s_seen = 0;          // ports seen with stocks in this match (tickPlayers)
 
     // Each port's controls for this match (SESSION's port values, kept at the setup: SESSION is
     // the same on both machines, so are these). Applied by the ipPadConfig hook below.
@@ -124,6 +130,32 @@ namespace OnlineMatch {
         seq[0x11] = type;
     }
 
+    // A player's costume in a team battle: the one the CSS would give them for their team. The CSS
+    // calls muMenu::findCharTeamColorNo (0x800AF520) with the CSS character, the team and P+'s
+    // "team set" (which of the team's costumes), and P+ v3.2 replaces that function (Legacy TE
+    // UnboundedTeamEngine.asm) with a walk over the character's costume list in its CSS slot table
+    // (0x80585B00 + slot * 0x10, +8: 2-byte entries whose first byte is the costume's colour,
+    // ending with colour 0x0C); a team's colour is the byte at r2 - 0x7130 + team (0x805A21F0:
+    // 0 red, 1 blue, 3 green). The same walk here: the player's own costume if it already has
+    // the team's colour (they picked that shade), else the character's first costume of it.
+    static u8 teamCostume(u8 charKind, u8 team, u8 costume)
+    {
+        typedef int (*ToSelchFn)(int);
+        int slot = ((ToSelchFn)0x800AF708)(charKind);   // exchangeGmCharacterKind2MuSelchkind
+        u32 list = *(u32*)(0x80585B08 + ((u32)slot & 0xFF) * 0x10);
+        if (!isPtr(list)) return costume;
+        u8 colour = *(u8*)(0x805A21F0 + team);
+        int first = -1;
+        for (int i = 0; i < 0x20; i++) {
+            u8 c = *(u8*)(list + 2 * i);
+            if (c == 0x0C) break;
+            if (c != colour) continue;
+            if (i == costume) return costume;
+            if (first < 0) first = i;
+        }
+        return first < 0 ? costume : (u8)first;
+    }
+
     u16 pickedStage() { return s_pickedStage; }
     u8 pickedAsl() { return s_pickedAsl; }
     void clearPickedStage() { s_pickedStage = 0xFFFF; s_pickedAsl = 0; }
@@ -147,15 +179,22 @@ namespace OnlineMatch {
             PPOM::g_block.debug.lastError = 0x5E71;   // "setup": a stage this SSS cannot pick
             return false;
         }
+        // 2 to 4 players on their own ports (gaps allowed: P1, P3, P4), a free-for-all or a team
+        // battle, where every player has one of Brawl's three team colours (Dolphin refuses a
+        // team battle with everyone on one colour, "Pick different teams", before it gets here).
+        const bool teams = se.teams != 0;
         for (int i = 0; i < se.numPlayers; i++) {
-            if (!se.players[i].present) continue;
-            if (!OnlineMenu::selectableCharKind(se.players[i].charKind) || se.players[i].costume >= 0x20) {
-                PPOM::g_block.debug.lastError = 0x5E72;   // "setup": a character this CSS cannot pick
+            const PPOM::SessionPlayer& pl = se.players[i];
+            if (!pl.present) continue;
+            if (!OnlineMenu::selectableCharKind(pl.charKind) || pl.costume >= 0x20 ||
+                (teams && pl.team >= PPOM::TEAM_COUNT)) {
+                PPOM::g_block.debug.lastError = 0x5E72;   // "setup": a character or team this CSS cannot pick
                 return false;
             }
         }
         if (!s_haveSaved) {
             memcpy(s_savedSel, sel + SEL_PLAYERS, sizeof(s_savedSel));
+            s_savedTeams = sel[SEL_TEAMS];
             s_haveSaved = true;
         }
         // Every player record starts from the same fixed template on every machine: the empty
@@ -168,30 +207,40 @@ namespace OnlineMatch {
             0x78, 0, 0, 0, 0, 0, 0, 0x08, 0, 0, 0, 0, 0, 0x96};
         u8 tmpl[PLAYER_SIZE];
         memcpy(tmpl, TEMPLATE, PLAYER_SIZE);
+        u8 costume[4];
         for (int i = 0; i < 4; i++) {
             u8* p = sel + SEL_PLAYERS + i * PLAYER_SIZE;
             memcpy(p, tmpl, PLAYER_SIZE);
+            se.players[i].out = 0;
+            se.gone[i] = 0;
             if (i < se.numPlayers && se.players[i].present) {
-                p[0x00] = se.players[i].charKind;
+                const PPOM::SessionPlayer& pl = se.players[i];
+                // A team battle: the team's costume, as the CSS gives it in team mode.
+                costume[i] = teams ? teamCostume(pl.charKind, pl.team, pl.costume) : pl.costume;
+                p[0x00] = pl.charKind;
                 p[0x01] = 0;                         // human
-                p[0x05] = se.players[i].costume;     // colour number
+                p[0x05] = costume[i];                // colour number
                 p[0x07] = (u8)i;                     // controller
-                p[0x0B] = 0;                         // team
+                p[0x0B] = teams ? pl.team : 0;       // team
             } else {
                 p[0x00] = 0x28;
                 p[0x01] = 3;                         // none
             }
         }
+        sel[SEL_TEAMS] = teams ? 1 : 0;
+        se.outCount = 0;
+        s_seen = 0;
         *(u16*)ASL_BUTTONS = se.asl;
         keepPortValues(se);
         PPOM::g_block.local.hudDisconnected = 0;
         // The online ruleset, written again right before the setup reads it: nothing set on this
         // machine since the Wi-Fi sequence started (or left over from offline play) gets in.
+        // (Team attack is on in P+'s set rule; it only matters in a team battle.)
         OnlineMenu::applyRules();
         ((VsSetupFn)VS_SETUP)(seq, se.stageKind);
         // The match's controller numbers follow the in-game ports on both machines.
         for (int i = 0; i < se.numPlayers && i < 4; i++) {
-            mm[MM_PLAYERS + i * PLAYER_SIZE + 0x07] = (u8)(i + 1);
+            if (se.players[i].present) mm[MM_PLAYERS + i * PLAYER_SIZE + 0x07] = (u8)(i + 1);
         }
         // Colour clash (Slippi's prepareOnlineMatchState: the players are counted in port order
         // and each one with the same character and colour as an earlier one gets the next shade).
@@ -199,13 +248,15 @@ namespace OnlineMatch {
         // +0x0A is the shade, and the fighter's colour blend module draws it (sub colour, alpha
         // 0x80) and sets it again after a respawn. 3 is the lighter one, as Slippi's first shade;
         // then darker (1) and grey (2). The same SESSION on both machines gives the same shades.
+        // A team battle is left to the game: when the match starts it shades a second one of a
+        // character on a team itself (seen: the second red Mario gets 1, whatever is written here).
         static const u8 SHADES[4] = {0, 3, 1, 2};
-        for (int i = 0; i < se.numPlayers && i < 4; i++) {
+        for (int i = 0; i < se.numPlayers && i < 4 && !teams; i++) {
             if (!se.players[i].present) continue;
             int n = 0;
             for (int j = 0; j < i; j++) {
                 if (se.players[j].present && se.players[j].charKind == se.players[i].charKind &&
-                    se.players[j].costume == se.players[i].costume) n++;
+                    costume[j] == costume[i]) n++;
             }
             mm[MM_PLAYERS + i * PLAYER_SIZE + 0x0A] = SHADES[n];
         }
@@ -220,7 +271,10 @@ namespace OnlineMatch {
     static void backToCss(u8* seq)
     {
         u8* sel = gg(0x10);
-        if (sel && s_haveSaved) memcpy(sel + SEL_PLAYERS, s_savedSel, sizeof(s_savedSel));
+        if (sel && s_haveSaved) {
+            memcpy(sel + SEL_PLAYERS, s_savedSel, sizeof(s_savedSel));
+            sel[SEL_TEAMS] = s_savedTeams;
+        }
         s_haveSaved = false;
         OnlineMenu::restoreCss();
         memoryChangeTo(seq, 1, 0xD);
@@ -324,6 +378,83 @@ namespace OnlineMatch {
 
     static const int DISC_END_FRAMES = 90;   // Slippi: the end screen of an LRAS-type end, 1.5 s
 
+    // ---- 3-4 players: a dropped player's fighter leaves the match; the elimination order ----
+    // The fighters (sora_melee, at fixed addresses during a match): the ftEntryManager at
+    // 0x80624780 (+0 its ftEntry array, stride 0x244, +4 the number of entries: 9 in a match, the
+    // used ones first, in port order, with no entry for an empty port); an ftEntry's +0x04 is
+    // its entry id, +0x58 its player number (the in-game port), +0x28 its ftOwner, whose data
+    // (+0) has the stock count at +0x34.
+    static const u32 FT_ENTRIES = 0x80624780;
+    static const u32 FT_MANAGER = 0x80B87C28;   // g_ftManager
+    static const u32 SET_DEAD = 0x80816018;     // ftManager::setDead (sora_melee text+0x10B604)
+    // A small Fighter function (sora_melee text+0x12D188): its status module changes to status
+    // 0x10B, the status a fighter whose last stock was lost stays in (not drawn, not on the
+    // stage, out of the camera; checked against a fighter that fell off the stage on its last
+    // stock: 0xBD, the dead status, then 0x10B).
+    static const u32 SET_OUT = 0x80837B9C;
+    static const u32 GAME_FRAME = 0x901812A4;   // g_GameFrame's frame counter (rolled back)
+
+    // Every frame of an online match (also resimulated ones), at the start of the frame
+    // (gfPadSystem::updateSystem, before the frame's game code), from the rolled-back state only,
+    // so every machine and every resimulation does the same on the same frame:
+    //  - a port whose SESSION gone flag is set and whose fighter still has stocks leaves the match
+    //    as a fighter that loses its last stock does, without the blast-zone death: put on its
+    //    last stock, ftManager::setDead with reason 5 and no killer (Fighter text+0x131220 calls
+    //    it so: the stock count, no KO credited to anyone), then the fighter's status 0x10B, which
+    //    a fighter out of stocks stays in (setDead alone left it standing on the stage). Its HUD
+    //    panel breaks as on any elimination; the game ends by itself once one player or team is
+    //    left (Brawl's own game set).
+    //  - SESSION's `out`: the order in which the ports ran out of stocks (Dolphin's placings).
+    // s_seen: ports seen with stocks in this match, so that what an earlier match left in the
+    // fighter tables before this one builds its own is never read as "out".
+    static void tickPlayers()
+    {
+        typedef void (*SetDeadFn)(u32 mgr, int entryId, int reason, int killer);
+        typedef void (*SetOutFn)(u32 fighter);
+        PPOM::Session& se = PPOM::g_block.session;
+        PPOM::Debug& dbg = PPOM::g_block.debug;
+        u32 test = 0;
+        if (dbg.cfg & PPOM::CFG_TEST_GONE) {
+            u32 t = dbg.testGonePorts;
+            s32 f = (s32)(*(u32*)GAME_FRAME - dbg.testGoneFrame);
+            if (f >= 0) test = t & 0xF;
+            if (f >= (s32)(t >> 16)) test |= (t >> 8) & 0xF;
+        }
+        u32 entries = *(u32*)FT_ENTRIES;
+        u32 n = *(u32*)(FT_ENTRIES + 4);
+        u32 mgr = *(u32*)FT_MANAGER;
+        if (!isPtr(entries) || !isPtr(mgr) || n > 9) return;   // 9 entries in a match; unused ones have no player number
+        u8 next = se.outCount + 1;   // ports out on the same frame share their place in the order
+        for (u32 k = 0; k < n; k++) {
+            u8* e = (u8*)(entries + k * 0x244);
+            u32 p = *(u32*)(e + 0x58);
+            u32 owner = *(u32*)(e + 0x28);
+            u32 data = isPtr(owner) ? *(u32*)owner : 0;
+            if (p > 3 || !isPtr(data)) continue;
+            s32* stocks = (s32*)(data + 0x34);
+            if (*stocks > 0) {
+                s_seen |= 1u << p;
+                u32 fighter = *(u32*)(e + 0x34 + 8 * (e[0x0A] & 3));   // the active instance
+                if ((se.gone[p] || ((test >> p) & 1)) && isPtr(fighter)) {
+                    se.gone[p] = 1;
+                    *stocks = 1;
+                    ((SetDeadFn)SET_DEAD)(mgr, *(int*)(e + 0x04), 5, -1);
+                    ((SetOutFn)SET_OUT)(fighter);
+                    // Ice Climbers (gmCharacterKind 0x10, ftEntry+0x5C): Nana is the entry's
+                    // second fighter (+0x3C, ftManager::getSubFighter) and leaves too.
+                    u32 nana = *(u32*)(e + 0x3C);
+                    if (*(u32*)(e + 0x5C) == 0x10 && isPtr(nana)) ((SetOutFn)SET_OUT)(nana);
+                }
+            }
+            if (*stocks <= 0 && ((s_seen >> p) & 1) && !se.players[p].out) {
+                se.players[p].out = next;
+                se.outCount = next;
+            }
+        }
+    }
+
+    void offMatch() { s_seen = 0; }
+
     // In a match (scMelee), every frame, also in resimulated frames: nothing here may depend on
     // anything that differs between the machines while the match runs under rollback. LOCAL's
     // `disconnected` only changes once Dolphin has ended the rollback session.
@@ -332,6 +463,7 @@ namespace OnlineMatch {
     void tickMatch()
     {
         PPOM::Debug& dbg = PPOM::g_block.debug;
+        if ((g_onlineCss && g_onlineMatchGame) || (dbg.cfg & PPOM::CFG_TEST_GONE)) tickPlayers();
         bool test = (dbg.cfg & PPOM::CFG_TEST_DISCONNECT) != 0;
         if (test && s_discFrames >= DISC_END_FRAMES) s_discFrames = -1;   // a new test
         if (s_discFrames >= 0) return;   // counted in onFrameDrawn
