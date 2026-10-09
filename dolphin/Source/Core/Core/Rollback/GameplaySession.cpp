@@ -66,9 +66,12 @@ constexpr int MAX_ADVANCE = 16;
 constexpr u32 INPUT_SIZE = Addr::PAD_STRIDE;  // one gfPadStatus per player
 constexpr int CHECKSUM_HISTORY = 1 << 15;
 constexpr s64 PING_DISPLAY_INTERVAL = 60;  // frames (Slippi's SLIPPI_PING_DISPLAY_INTERVAL)
-// The session ends this many frames after the first frame showing game set: past the deepest
-// rollback (prediction window) plus the input delay, so the game set itself can no longer be
-// rolled back. The game-set frame is the same on both peers, so both end on the same frame.
+// The session ends this many frames after the first frame showing game set (or a pause-screen
+// quit): past the deepest rollback (prediction window) plus the input delay, so the end itself can
+// no longer be rolled back. That frame is the same on both peers, so both end on the same frame.
+// Brawl tears the match down 4 frames after its own pause-screen quit; online the plugin keeps the
+// game paused until the session has ended (docs/game-code.md, the pause-screen quit), so no
+// rollback crosses the teardown.
 constexpr s64 END_AFTER_GAME_SET = MAX_ROLLBACK_FRAMES + 12;
 constexpr u32 REGION_CHUNK = 4096;
 
@@ -336,7 +339,8 @@ struct State
   std::map<s64, std::vector<u64>> region_chunks;
   u32 end_game_frame = 0;
   std::string end_reason;
-  s64 game_set_frame = -1;  // first session frame that showed game set (-1: none)
+  s64 game_set_frame = -1;  // first session frame that showed game set or a quit (-1: none)
+  bool game_set_quit = false;  // that frame showed a pause-screen quit (no winner)
   // Set when a network session ends inside the match scene (game set): the next match is armed
   // only after the scene was left, so the old match's last frames are not taken for a new one.
   bool await_scene_exit = false;
@@ -1610,6 +1614,7 @@ void ResetRunStats()
   s.running_since = Clock::now();
   s.end_reason.clear();
   s.game_set_frame = -1;
+  s.game_set_quit = false;
   s.sound_allocs = s.resim_sound_allocs = s.suppressed_sound_allocs = 0;
   for (auto& v : s.snd_played)
     v.clear();
@@ -2798,10 +2803,15 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   // Match end: the state at this loop top is the end of the previous frame.
   {
     const s64 prev_frame = static_cast<s64>(s.ops.adv_frame[i]) - 1;
-    if (IsGameSet(g))
+    const bool game_set = IsGameSet(g);
+    const bool quit = !game_set && IsQuitRequested(g);
+    if (game_set || quit)
     {
       if (s.game_set_frame < 0 || prev_frame < s.game_set_frame)
+      {
         s.game_set_frame = prev_frame;
+        s.game_set_quit = quit;
+      }
     }
     else if (s.game_set_frame >= 0 && prev_frame <= s.game_set_frame)
     {
@@ -2810,7 +2820,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     if (s.game_set_frame >= 0 && !s.resim_pass &&
         static_cast<s64>(s.ops.adv_frame[i]) >= s.game_set_frame + END_AFTER_GAME_SET)
     {
-      EndRunning(system, "game set");
+      EndRunning(system, s.game_set_quit ? "quit" : "game set");
       SetLoopDefault(ppc);
       return true;
     }

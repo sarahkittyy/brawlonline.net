@@ -244,6 +244,21 @@ bool IsGameSet(const Guest& g)
   return p && *p != 0;
 }
 
+bool IsQuitRequested(const Guest& g)
+{
+  const auto scene = CurrentScene(g);
+  if (!scene || !IsSceneMelee(g))
+    return false;
+  const auto info = g.Ptr32(*scene + Addr::SCM_OPERATOR_INFO);
+  if (!info)
+    return false;
+  const auto name = g.Ptr32(*info);
+  if (!name || g.CStr(*name, 32).value_or("") != "StOperatorInfoMelee")
+    return false;
+  const u8* p = g.Ptr(*info + Addr::OPI_FLAGS, 1);
+  return p && (*p & Addr::OPI_QUIT) != 0;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Region sets
 
