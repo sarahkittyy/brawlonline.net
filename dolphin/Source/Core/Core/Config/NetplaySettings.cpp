@@ -46,7 +46,7 @@ const Info<u32> NETPLAY_PLAYER_BUFFER_SIZE{{System::Main, "NetPlay", "PlayerBuff
 const Info<u32> NETPLAY_CLIENT_BUFFER_SIZE{{System::Main, "NetPlay", "BufferSizeClient"}, 1};
 const Info<u32> NETPLAY_ROLLBACK_DELAY{{System::Main, "NetPlay", "RollbackDelay"}, 2};
 
-const Info<bool> NETPLAY_BRAWL_MUSIC_OFF{{System::Main, "NetPlay", "BrawlMusicOff"}, false};
+const Info<bool> NETPLAY_BRAWL_MUSIC_OFF{{System::Main, "NetPlay", "BrawlMusicOff"}, true};
 const Info<bool> NETPLAY_SPECTATOR_MODE{{System::Main, "NetPlay", "IsSpectator"}, false};
 
 const Info<bool> NETPLAY_SAVEDATA_LOAD{{System::Main, "NetPlay", "SyncSaves"}, true};

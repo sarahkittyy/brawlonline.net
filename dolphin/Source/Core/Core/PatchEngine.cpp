@@ -29,7 +29,6 @@
 #include "Core/Config/SessionSettings.h"
 #include "Core/Config/NetplaySettings.h"
 #include "Core/ConfigManager.h"
-#include "Core/NetPlayProto.h"
 #include "Core/Core.h"
 #include "Core/Debugger/PPCDebugInterface.h"
 #include "Core/GeckoCode.h"
@@ -104,16 +103,12 @@ std::string SerializeLine(const PatchEntry& entry)
   }
 }
 
+// P+'s client-side music toggle. Online matches run in a gameplay-rollback session, not through
+// Dolphin's netplay client, so it applies whenever it is on (the patch writes 0x90E60F34, outside
+// the rollback region set).
 static bool IsEnabledMusicCode(const Patch& patch)
 {
-  if (NetPlay::IsNetPlayRunning() && patch.name == "[P+] Music Off" && Config::Get(Config::NETPLAY_BRAWL_MUSIC_OFF))
-  {
-    return SConfig::GetInstance().bBrawlMusicOff;
-  }
-  else
-  {
-    return false;
-  }
+  return patch.name == "[P+] Music Off" && Config::Get(Config::NETPLAY_BRAWL_MUSIC_OFF);
 }
 
 static bool IsDisabledMusicCode(const Patch& patch)
