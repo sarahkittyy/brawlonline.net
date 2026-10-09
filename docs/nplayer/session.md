@@ -32,8 +32,53 @@ Each player's lock-in carries a team, `0xFF` = no team (free-for-all), else Braw
 | LOCAL (game -> Dolphin) | offset **0x34** (the first byte of the old `_reserved[3]`), `u8 team`, written by the game with its lock-in (covered by the lock-in's `seq`). |
 | SESSION (Dolphin -> game) | `players[port]` offset **0x03** (the old `_pad`), `u8 team`; 0xFF for an absent port. |
 
-The barrier's setup check (`SetupKey`) also compares each port's `gmPlayerInitData` team byte (+0x0B).
+The barrier's setup check (`SetupKey`) also compares each port's `gmPlayerInitData` team byte (+0x0B), in team battles only (`gmMeleeInitData::m_isTeams`; in a free-for-all the byte holds whatever the character select left there).
+
+On `nplayer-setup` the game side and GameBridge's plumbing of both fields are done (LOCAL `lockTeam` at 0x34, SESSION `players[i].team` at +3, `gone[4]` at 0x20C); this branch only carries the team in the session and writes the gone flags.
 
 ## Design
 
-(in progress)
+### Players and ports
+
+A session has 2-4 players, each on an in-game port (P1-P4), gaps allowed. `ConnectOptions`:
+
+| Field | Meaning |
+|---|---|
+| `local_slot` | This player's in-game port (0-3). -1 (the default): a 1v1 as before, the host P1 and the joiner P2, the joiner configured with `remote_host`/`remote_port`. |
+| `peers` | Every other player: `{slot, host, port}`. An empty `host` means "learn the address": the first control message that claims that port (its `"slot"` field) confirms it. A known IP with port 0 means: only that IP may claim it (a NAT may change the port). |
+| `host` | This player decides (sends the sync block, decides each game's setup). |
+| `host_slot` | The decider's port as a joiner knows it; -1: learned from the first peer whose messages say `"host": true`. |
+
+`GameplayOnlineBackend` fills these from a matchmaking `Match` with 3-4 players: every player on its server port (`players[i].port - 1`), every remote's address from `connected` (else `remotes`), in the order of `players` without the local one. A 1v1 from matchmaking is unchanged (host P1, joiner P2).
+
+The host is the decider. If it leaves, the player with the lowest port still in the session decides from then on (every peer computes the same once it has seen the leave). A host who leaves at the barrier, before the match starts, ends the match start with an error.
+
+### Network: every pair of players
+
+One UDP socket per player, as before. Every pair of players exchanges packets directly (full mesh), with the same packet types: `C` control (JSON, now with `"slot"`), `P`/`Q` ping, `G` GekkoNet. A packet is the peer's when it comes from that peer's confirmed address; until then only a `C` packet claiming the peer's port (from a matching IP, if one is known) is accepted, and it confirms the address. Packets from anywhere else are counted (`foreign_packets`) and dropped. Nothing changed in the hole punch: Slippi's approach (both sides send from the start when they know the address) works per pair, and every player sends to every peer whose address it knows. There is no relay in this code base.
+
+GekkoNet's addresses are the peers' ports (`"p0"`-`"p3"`); `GekkoSend` sends to that port's peer, `GekkoReceive` tags each packet with its sender's port. GekkoNet supports N players natively: each remote actor syncs, receives inputs and acks on its own.
+
+State messages go to every peer every 50 ms (one JSON per peer), pings every 200 ms, the silence check (7.2 s at delay 2, outside GekkoNet) runs per peer.
+
+### Match start with N players
+
+- **Seeds and init block:** unchanged; the joiners take the host's (`ApplyMatchStart`).
+- **Barrier (first simulation frame):** every player compares its setup hash with every other's; the match ports are the game's own human ports (`gmGlobalModeMelee` players with state 0), which every peer computes from the same setup; each must be this player or a peer of the session, and every peer still in the session must have one (else the match start fails with an error). The host sends its sync block, task order and match ports to everyone; each joiner applies them (and checks the host's ports equal its own). The host goes on when every joiner has applied them, a joiner RTT/2 after it has.
+- **Countdown:** GekkoNet is created with the match's player count; handles follow the match ports in port order (a 1v1: the host handle 0, as before). Its handshake runs with every remote during the countdown.
+- **Start barrier:** the host sends "go" once every player is at the start barrier and GekkoNet has started, and starts the slowest round trip's half later; each joiner starts when the host's "go" arrives.
+
+### The lobby with N players
+
+Each player's lock-in (now with the team) goes to every peer. The host decides a game's setup once every player still in the session has been heard and is locked in: players by port (`MatchSetup::players[port]`, `present`), the stage from the last game's loser's pick (`GameResult::loser`), else the first pick by port, else random. The setup's wire form: a 1v1 keeps `[kind, costume, pv]` per player; anything else (ports with gaps, teams) sends `[kind, costume, pv, team, port]`; the joiner accepts both and the setup branch's `[kind, costume, pv, team]`, checks every field (ports 0-3 and unique, 2-4 players, teams 0-3 or none) and ignores a setup without a player on its own port. The setup branch replaces the stage pick and team rules (`GameSetup::DecideTeams`, `StagePickPort`, `DecideOutcome`); this branch only makes the lobby carry 2-4 players by port.
+
+Game results (`GameResult`, read from the state every peer ended on) cover 2-4 players: per port stocks and damage (fighter entries name their port at +0x58; the session falls back to entry = port), and teams from the match's setup. Winner: the most stocks, then the least damage (summed per team in a team battle); loser: last place (the lowest port among equals), a 1v1 draw has none.
+
+### A player leaves a 3-4 player match
+
+1. **Detection.** A `"leave"` control message (the player stopped the session), the session's silence check outside GekkoNet, or GekkoNet's own timeout in a match (`GekkoPlayerDisconnected`). The leaver is marked `left`; in a match the CPU thread disconnects it in GekkoNet at the next loop top (`ApplyPeerDrops`).
+2. **The agreed frame.** GekkoNet's disconnect claims: every remaining peer sends the inputs it holds for the dropped player; a peer that holds fewer catches up from the claim, and the agreed last frame is the highest one any peer holds (`disconnect_frame`). Until every remaining peer has agreed (or 2 s pass), GekkoNet does not confirm frames past it and does not run more than the prediction window ahead. From `disconnect_frame + 1` = F on, the player's input is GekkoNet's disconnected input, which this session sets to the **gone marker** (`gekko_set_disconnected_input`): a neutral pad with "GON" in gfPadStatus padding (+0x39-0x3B, which the game never reads; local input has those bytes cleared before it is sent).
+3. **The flag.** At the loop top of every pass, before the frame's logic, `WriteGoneFlags` takes the marker out of each port's slot (the game sees a neutral controller) and writes `gone[4]` into SESSION. Because the flag is derived from GekkoNet's input, it follows the same rollbacks: if a late claim raises the agreed frame, GekkoNet overwrites the inputs from the old F on with the real ones; the marker and the real input always differ, so this is a misprediction and the frames from the old F are simulated again with the flag at 0.
+4. **The end.** With fewer than two players left, the session ends as a 1v1 does today (`peer_left`, `disconnected`, the game's DISCONNECTED flow). A 1v1 never writes the flag. Between games the player stays `left`; the next game is set up without it.
+
+A replay of a pass log (`replay_path`) keeps the marker in the slots but does not write the flags (diagnostics only).
