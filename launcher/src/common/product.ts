@@ -30,6 +30,14 @@ export const GAME_NAME = "Project+";
 
 export const BASE_DOMAIN = "brawlonline.net";
 
+/**
+ * The app id: electron-builder.json's appId (the macOS bundle id) and, on Windows, the
+ * AppUserModelID. The NSIS installer gives the Start Menu shortcut this AppUserModelID, and
+ * Windows names notifications after the shortcut carrying the process's id, so main.ts sets it
+ * (Electron's default, "electron.app.Electron", shows up as the notification's sender).
+ */
+export const APP_ID = "net.brawlonline.launcher";
+
 export const defaultServiceUrls = {
   /** HTTP accounts API (server/crates/accounts), served under /v1 on the apex domain. */
   accountsApi: `https://${BASE_DOMAIN}`,

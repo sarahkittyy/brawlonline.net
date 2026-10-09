@@ -11,7 +11,7 @@
  */
 import { delay } from "@common/delay";
 import { Preconditions } from "@common/preconditions";
-import { LEGACY_PRODUCT_NAMES, PRODUCT_NAME } from "@common/product";
+import { APP_ID, LEGACY_PRODUCT_NAMES, PRODUCT_NAME } from "@common/product";
 import { readTestMode } from "@common/test_mode";
 import { DolphinLaunchType } from "@dolphin/types";
 import { registerGameAssetScheme } from "@game_assets/protocol";
@@ -47,6 +47,12 @@ let didFinishLoad = false;
 // keep ours separate (and apart from an installed copy, which uses the product name).
 if (!app.isPackaged) {
   app.setName(`${PRODUCT_NAME}-dev`);
+}
+
+// Windows names notifications after the Start Menu shortcut with the process's AppUserModelID;
+// the installer's shortcut carries APP_ID. Electron's default id shows as "electron.app.Electron".
+if (process.platform === "win32") {
+  app.setAppUserModelId(APP_ID);
 }
 
 // Test switches (unpackaged runs, or PPO_TEST_MODE=1; see common/test_mode.ts). The userData
