@@ -4,6 +4,8 @@
 // Ranked sets: what Slippi's game-reporter and rank fetcher do for a ranked match
 // (slippi-rust-extensions game-reporter, user/src/rank_fetcher; docs/backend-design.md 1.6-1.7).
 //
+// Every online 1v1 game (Ranked, Unranked, Direct) is reported to the accounts service as it ends,
+// for the players' match history; only Ranked's are rated.
 // A ranked match (search mode 0) is a best-of-three set. This module
 // - reports every game to the accounts service as it ends (POST /v1/ranked/report-game: the
 //   winner, stage, characters, stocks and damage, from the state both peers ended on), both

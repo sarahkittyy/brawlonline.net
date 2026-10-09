@@ -500,6 +500,10 @@ P+ players play with their name tag's controls (tap jump off, shield and jump re
 
 Slippi keeps the character selected after a game and after the stage select. Brawl's Wi-Fi CSS writes no selection into `gmSelCharData` when it leaves, but when it starts it builds the player's panel from it: the character from the per-port byte `gmSelCharData+0x0A + 4 * port`, the state, colour and name tag from the player's record (`+0xB8 + 0x5C * port`: `+0x01` state, `+0x05` colour, `+0x18` tag). So the plugin notes the panel (character, costume, tag) whenever the CSS leaves for a match or the stage select, and writes it back before the CSS starts again (states 4 and 10, `OnlineMenu::restoreCss`): the coin is on the character, with its costume and tag. If the coin was in the hand when the CSS was left, the last lock-in's character is used.
 
+### Names under the damage
+
+In every online match (Direct, Unranked, Ranked) each player's account display name is drawn under their damage, as Slippi shows the display name under the percent (user request, 2026-10-08). Brawl's HUD has no text there (its name tags float over the fighters, and online matches keep "no tag"), so `match_hud.cpp` draws it with the game's own text renderer the way it draws DISCONNECTED: after the frame is drawn, white with a black edge, scale 0.55 of the system font, centred under each damage panel (Brawl spreads the panels about the HUD's centre in port order, 154 apart in its 640-wide space) at y 449. The names are SESSION's `players[i].name` (the matchmaking server's display names, the same on both machines; UTF-16, so kana print too). Nothing in the game's state changes. Verified in `run/artifacts/game-bridge/ranked-set/*/g1-match.png`.
+
 ### DISCONNECTED in the match, and the end without "GAME!"
 
 Slippi (design 5.6): the error sound, "DISCONNECTED" in red (`FF0000FF`) centred near the top of the HUD until the scene ends, and an LRAS-type end (no "GAME!", a 90-frame end screen). Ours (`online_match.cpp`, `match_hud.cpp`):

@@ -1,5 +1,9 @@
 // "DISCONNECTED" in the match HUD (Slippi StartEngineLoop.asm:33-39: red FF0000FF, centred near
 // the top, until the scene ends). docs/game-code.md "Online matches", the in-match disconnect.
+// And, in every online match, each player's account name under their damage, as Slippi shows the
+// display name under the percent (Brawl's HUD has no name there; its name tags float over the
+// fighters). The names come from SESSION, the same on both machines; drawing them changes nothing
+// in the game's state.
 //
 // Drawn with the game's own text renderer, ms::CharWriter (the base of Brawl's Message / MuMsg
 // text), and the game's resident system font (font kind 4, the one P+'s Code Menu prints with).
@@ -19,6 +23,10 @@
 #include "online.h"
 #include "online_menu.h"
 #include "ppom.h"
+
+extern "C" {
+    extern u8 g_onlineMatchGame;
+}
 
 namespace MatchHud {
 
@@ -73,24 +81,73 @@ namespace MatchHud {
     // Width of `text` as ms::CharWriter::Print advances it (proportional mode):
     // advance = m_58 * scaleX * (glyph.charWidth * m_68); the glyph is {texture*, s8 left,
     // u8 glyphWidth, s8 charWidth, ...} (Print reads +4 and +6 of it).
-    static float textWidth(const char* text)
+    static float textWidth(const u16* text)
     {
         void* font = *(void**)(s_cw + 0x48);
         if (!font) return 0;
         GetGlyphFn getGlyph = (GetGlyphFn)(*(u32*)(*(u32*)font + 0x50));
         float w = 0;
-        for (const char* p = text; *p; p++) {
+        for (const u16* p = text; *p; p++) {
             u8 glyph[0x40];
             memset(glyph, 0, sizeof(glyph));
-            getGlyph(font, glyph, (u16)(u8)*p);
+            getGlyph(font, glyph, *p);
             w += getF32(0x58) * getF32(0x24) * ((float)(s8)glyph[6] * getF32(0x68));
         }
         return w;
     }
 
+    // `text` (UTF-16, NUL-ended) in `color` with a black edge, centred on x, its top at y.
+    static void printCentred(const u16* text, float x, float y, float scale, u32 color)
+    {
+        setU32(0x08, color); setU32(0x0C, color); setU32(0x10, color); setU32(0x14, color);
+        setU32(0x18, color);
+        s_cw[0x42] = 0xFF;          // alpha
+        s_cw[0x43] = 0;             // proportional
+        setF32(0x24, scale);        // scale x
+        setF32(0x28, scale);        // scale y
+        setF32(0x50, 1.0f);
+        setF32(0x5C, 1.0f);         // edge width
+        setU32(0x60, 0x000000FF);   // edge colour
+        setF32(0x2C, x - textWidth(text) * 0.5f);
+        setF32(0x30, y);
+        setF32(0x34, 0);
+        s_cwSetupGX(s_cw);
+        s_gxZMode(0, 7 /* GX_ALWAYS */, 0);
+        s_gxCullMode(0 /* GX_CULL_NONE */);
+        for (const u16* p = text; *p; p++) s_cwPrint(s_cw, *p);
+    }
+
+    // Brawl's damage panels are spread evenly about the centre of the 640-wide HUD, in port
+    // order (two players: centres 243 and 397); the names go under them, as small as Melee's.
+    static const float PANEL_GAP = 154.0f;
+    static const float NAME_TOP = 449.0f;
+    static const float NAME_SCALE = 0.55f;
+
+    static void drawNames()
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        int n = se.numPlayers;
+        if (n < 1 || n > 4) return;
+        for (int i = 0; i < n; i++) {
+            const PPOM::SessionPlayer& pl = se.players[i];
+            if (!pl.present) continue;
+            u16 name[PPOM::NAME_LEN + 1];
+            int len = 0;
+            for (; len < PPOM::NAME_LEN && pl.name[len]; len++) {
+                u16 c = pl.name[len];
+                name[len] = c < 0x20 ? (u16)' ' : c;   // nothing the renderer reads as a command
+            }
+            name[len] = 0;
+            if (!len) continue;
+            float x = SCREEN_W * 0.5f + ((float)i - (float)(n - 1) * 0.5f) * PANEL_GAP;
+            printCentred(name, x, NAME_TOP, NAME_SCALE, 0xFFFFFFFF);
+        }
+    }
+
     static void draw()
     {
-        if (!s_on) return;
+        bool names = g_onlineMatchGame != 0;
+        if (!s_on && !names) return;
         if (!Online::inScene("scMelee")) {
             s_on = false;   // the text lives as long as the match scene
             return;
@@ -111,26 +168,14 @@ namespace MatchHud {
         s_gxLoadPosMtx(pos, 0);
         s_gxCurrentMtx(0);
 
+        if (names) drawNames();
+        if (!s_on) return;
         // Red (Slippi FF0000FF), opaque, with a thin black edge so it reads on any stage.
-        const u32 RED = 0xFF0000FF;
-        setU32(0x08, RED); setU32(0x0C, RED); setU32(0x10, RED); setU32(0x14, RED);
-        setU32(0x18, RED);
-        s_cw[0x42] = 0xFF;          // alpha
-        s_cw[0x43] = 0;             // proportional
-        setF32(0x24, SCALE);        // scale x
-        setF32(0x28, SCALE);        // scale y
-        setF32(0x50, 1.0f);
-        setF32(0x5C, 1.0f);         // edge width
-        setU32(0x60, 0x000000FF);   // edge colour
-
-        float w = textWidth(s_text);
-        setF32(0x2C, (SCREEN_W - w) * 0.5f);
-        setF32(0x30, TOP);
-        setF32(0x34, 0);
-        s_cwSetupGX(s_cw);
-        s_gxZMode(0, 7 /* GX_ALWAYS */, 0);
-        s_gxCullMode(0 /* GX_CULL_NONE */);
-        for (const char* p = s_text; *p; p++) s_cwPrint(s_cw, (u16)(u8)*p);
+        u16 text[16];
+        int n = 0;
+        for (; s_text[n] && n < 15; n++) text[n] = (u8)s_text[n];
+        text[n] = 0;
+        printCentred(text, SCREEN_W * 0.5f, TOP, SCALE, 0xFF0000FF);
         // Tell Dolphin the game shows it (LOCAL, not part of the rolled-back state): its red OSD
         // message is only the fallback for a game that cannot.
         PPOM::g_block.local.hudDisconnected = 1;
