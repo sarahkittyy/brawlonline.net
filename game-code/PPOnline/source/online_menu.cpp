@@ -54,7 +54,9 @@ namespace OnlineMenu {
         char stepText[64];
         bool stepPending;
         u32 stepFrames;
-        int sssGame;                        // Ranked: the game the stage select was opened for
+        u32 stepSeq;                        // Ranked: seq of the last GP_FETCH_STEP sent
+        u32 stepAnswered;                   // seq the step in `step` answers
+        u32 stepFloor;                      // stepSeq the last time the game was off the CSS
         char status[128];
         bool statusRed;
         bool statusDirty;
@@ -91,6 +93,7 @@ namespace OnlineMenu {
 
     static const u32 BTN_START = 0x1000;
     static const u32 BTN_Z = 0x0010;
+    static const u32 BTN_B = 0x0200;
     static const int DISCONNECT_HOLD_DELAY = 0x30;   // Slippi HandleInputsOnCSS.asm:14 (48 frames)
     static const int SE_BACK = 2, SE_ERROR = 3;      // Brawl menu sounds (cancel, buzzer)
     static const int LOCAL_PORT = 0;                 // the online CSS has one local player area
@@ -1096,7 +1099,9 @@ namespace OnlineMenu {
         s.searchSeq = PPOM::post(PPOM::CMD_FIND_OPPONENT, &req, sizeof(req));
         s.pollPending = true;   // Dolphin answers FIND_OPPONENT with the match state
         s.pollFrames = 0;
-        s.sssGame = 0;
+        // A stage select left after the last connection ended (Direct's pick) leaves its stage
+        // behind; it is not this connection's.
+        OnlineMatch::clearPickedStage();
         s.phase = PH_SEARCHING;
     }
 
@@ -1158,6 +1163,13 @@ namespace OnlineMenu {
         if (before == PH_CONNECTED && s.phase != PH_CONNECTED && s.phase != PH_ERROR) playSE(SE_BACK);
     }
 
+    // Ranked: the step in `s.step` was asked for on this CSS. One asked for before (on the stage
+    // select, before a match) can be out of date: a pick just made, a game just played.
+    static bool stepFresh()
+    {
+        return s.stepAnswered > s.stepFloor;
+    }
+
     // Connected on the CSS (Slippi HandleInputsOnCSS.asm HANDLE_CONNECTED): lock in with START
     // (Direct's loser first picks a stage on the stage select), and once SESSION has the setup
     // of the game this player is locked in for, leave the CSS for that match.
@@ -1167,9 +1179,10 @@ namespace OnlineMenu {
         int game = sessionGame();
         if (!game) return;
         const bool ranked = s.mode == PPOM::MODE_RANKED;
-        if (ranked && s.step.active && s.step.toSss && s.sssGame != game) {
-            // Ranked: both players go to the stage select for the strikes / ban / pick.
-            s.sssGame = game;
+        if (ranked && !stepFresh()) return;
+        if (ranked && s.step.active && s.step.toSss) {
+            // Ranked: both players are on the stage select for the strikes / ban / pick, also
+            // when they come back to the CSS before it is done.
             g_onlinePickStage = 1;
             leaveCss(1);
             return;
@@ -1184,13 +1197,14 @@ namespace OnlineMenu {
             return;
         }
         if (OnlineMatch::pickedStage() != 0xFFFF && lockChar() >= 0) {
-            // Ranked: the characters come after the stage (winner first); the stage is the steps'.
-            if (ranked) {
-                OnlineMatch::clearPickedStage();
-                return;
-            }
             // Back from the stage select: locked in with the stage (ExitSSSUponStageSelect).
             lockIn(game, OnlineMatch::pickedStage(), OnlineMatch::pickedAsl());
+            return;
+        }
+        if (ranked && s.step.active && s.step.mayLock && s.step.timeUp && lockChar() >= 0) {
+            // Ranked: the character step's time is up (Slippi takes the character selected), or
+            // after a draw the characters stay.
+            lockIn(game, 0xFFFF, 0);
             return;
         }
         if (!(pressed & BTN_START) || lockChar() < 0) return;
@@ -1229,16 +1243,16 @@ namespace OnlineMenu {
             return;
         }
         if (s.stepPending && ++s.stepFrames < 60) return;
-        PPOM::post(PPOM::CMD_GP_FETCH_STEP, NULL, 0);
+        s.stepSeq = PPOM::post(PPOM::CMD_GP_FETCH_STEP, NULL, 0);
         s.stepPending = true;
         s.stepFrames = 0;
     }
 
-    // Ranked and connected: the last step (active or not: an inactive step means the stage is
-    // decided, so a ranked stage select leaves). NULL in every other mode.
+    // Ranked: the last step (active or not: an inactive step means the stage is decided, or the
+    // connection is gone, so a ranked stage select leaves). NULL in every other mode.
     const PPOM::GameStep* rankedStep()
     {
-        return s.mode == PPOM::MODE_RANKED && s.phase == PH_CONNECTED ? &s.step : NULL;
+        return s.mode == PPOM::MODE_RANKED ? &s.step : NULL;
     }
 
     const char* rankedText() { return s.stepText; }
@@ -1274,6 +1288,9 @@ namespace OnlineMenu {
             if (s.step.nKinds > sizeof(s.step.kinds)) s.step.nKinds = sizeof(s.step.kinds);
             PPOM::u16ToAscii(s.stepText, s.step.text, sizeof(s.stepText));
             s.stepPending = false;
+            s.stepAnswered = r->seq;
+            // Not connected (any more): no step, whatever the answer was.
+            if (s.phase != PH_CONNECTED) s.step.active = 0;
             return;
         }
         if (r->cmd == PPOM::CMD_GET_ONLINE_STATUS) {
@@ -1329,6 +1346,7 @@ namespace OnlineMenu {
         // match runs under rollback, so no mailbox here (OnlineMatch::tickMatch only reacts to
         // a disconnect, which Dolphin reports after the rollback session has ended).
         if (strcmp(scene, "scMelee") == 0) {
+            s.stepFloor = s.stepSeq;
             OnlineMatch::tickMatch();
             return;
         }
@@ -1366,12 +1384,19 @@ namespace OnlineMenu {
         pollStep();
 
         bool onCss = g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0;
+        if (!onCss) s.stepFloor = s.stepSeq;   // only a step asked for on the CSS counts there
         g_onlineCssLock = (onCss && lockedIn()) ? 1 : 0;
         if (g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelStage") == 0) {
             // Direct's loser picks the stage on P+'s stage select. The pick is the stage and its
             // alternate (L/R); P+'s hazard toggle (Z on a stage or on Random) is a rule, which the
             // match setup forces on both machines, so Z is taken out here; so is the Code Menu.
-            maskButtons(BTN_Z);
+            // Ranked's stage select is Slippi's game setup screen, which nothing leaves before
+            // the steps are done: START (P+'s random pick) and B (back to the CSS) are taken out
+            // too. Taking them out of buttonProc's buttons (stage_legal.cpp) is not enough: the
+            // stage select reads them elsewhere as well, and left for the CSS mid-strike.
+            u32 mask = BTN_Z;
+            if (s.mode == PPOM::MODE_RANKED && g_onlinePickStage) mask |= BTN_START | BTN_B;
+            maskButtons(mask);
             blockCodeMenu();
         }
         if (onCss) blockCodeMenu();

@@ -138,7 +138,9 @@ namespace PPOM {
         u8 seconds;       // seconds left in the step
         u8 kinds[40];     // the stages still selectable (srStageKind)
         u16 text[64];     // the line to show ("" = the game's own)
-    };                    // 0xB0
+        u8 timeUp;        // CSS: lock in now with the character on the CSS (no START needed)
+        u8 _pad[3];
+    };                    // 0xB4
 
     // 0xB9 GET_ONLINE_STATUS response payload.
     struct OnlineStatus {

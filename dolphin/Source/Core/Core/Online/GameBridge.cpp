@@ -101,7 +101,7 @@ constexpr u32 CS_INDEX = 4, CS_CODE = 8;
 constexpr u32 RK_RATING = 4, RK_SETS = 8, RK_CHANGE = 12;
 // GameStep response payload: active, type, myTurn, count, toSss, mayLock, nKinds, seconds,
 // kinds[40], text u16[64]
-constexpr u32 GS_KINDS = 8, GS_MAX_KINDS = 40, GS_TEXT = 0x30, GS_TEXT_LEN = 64;
+constexpr u32 GS_KINDS = 8, GS_MAX_KINDS = 40, GS_TEXT = 0x30, GS_TEXT_LEN = 64, GS_TIME_UP = 0xB0;
 constexpr u8 MODE_TEAMS = 3;
 
 // The game's OSModuleInfo list (first, last).
@@ -469,9 +469,11 @@ Response GameStepResponse()
   for (size_t i = 0; i < n; ++i)
     r.payload[GS_KINDS + i] = v.selectable[i];
   WriteU16Text(r.payload, GS_TEXT, v.text, GS_TEXT_LEN);
+  r.payload[GS_TIME_UP] = v.time_up ? 1 : 0;
   r.summary = fmt::format("GP_FETCH_STEP active={} type={} turn={} count={} sss={} lock={} "
-                          "stages={} text='{}'",
-                          v.active, u8(v.type), v.my_turn, v.count, v.to_sss, v.may_lock, n, v.text);
+                          "time_up={} stages={} text='{}'",
+                          v.active, u8(v.type), v.my_turn, v.count, v.to_sss, v.may_lock,
+                          v.time_up, n, v.text);
   return r;
 }
 
@@ -658,6 +660,15 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox)
       break;
     case CMD_GP_FETCH_STEP:
       response = GameStepResponse();
+      // Slippi's game setup: an opponent whose step ran out long ago without their game
+      // completing it is gone; the connection closes and the set ends as if they had left.
+      if (GameSetup::OpponentStalled())
+      {
+        NOTICE_LOG_FMT(NETPLAY, "GameBridge: the opponent stopped answering the game setup; "
+                                "cleaning up");
+        Ranked::OnPeerGone();
+        Client::Cleanup();
+      }
       break;
     case CMD_GP_COMPLETE_STEP:
     {

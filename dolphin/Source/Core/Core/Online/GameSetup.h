@@ -6,13 +6,17 @@
 //
 // Game 1 (and the game after a draw): the five starter stages are struck 1-2-1: player 1 (the
 // host, in-game port 0) strikes one, player 2 strikes two, player 1 strikes one; the stage left is
-// played. The characters are the ones locked in on the CSS before the search.
+// played. The characters are the ones locked in on the CSS before the search (after a draw: the
+// last game's; the CSS locks in again at once, time_up).
 // Games 2+: the winner of the last game bans one stage of the counterpick list, then the loser
 // picks the stage from the rest; the loser cannot pick the stage they last won on once they have
 // won a game (Slippi's "Dave's stupid rule"). Then the winner may change character, and after the
 // winner has locked in, the loser (who sees the winner's choice).
-// Each step has Slippi's timer (strikes 30 s, the last game-1 strike 10 s, ban and pick 30 s);
-// when it runs out this player's step is done for them with a random stage, as Slippi does.
+// Each step has Slippi's timer (strikes 30 s, the last game-1 strike 10 s, ban and pick 30 s,
+// each character 45 s). When it runs out (plus Slippi's 3 s of grace) this player's step is done
+// for them: a random stage, or the character on the CSS (time_up). An opponent whose step has
+// not ended 15 s after that is gone (Slippi's wait timeout): the set ends as if they had left.
+// Once a player has two wins there are no more steps.
 //
 // Every player's own actions (struck / banned / picked stages, in order) travel in its gameplay
 // session control messages (Gprb::Session::SetLocalExtra). Only one player acts at a time, so both
@@ -54,6 +58,7 @@ struct View
   u8 count = 0;          // selections left in this step
   bool to_sss = false;   // a stage step: the game belongs on the stage select
   bool may_lock = true;  // CSS: START may lock in now
+  bool time_up = false;  // CSS: lock in now with the character on the CSS (no START needed)
   u8 seconds = 0;        // seconds left in this step (0: no timer)
   std::vector<u8> selectable;  // the stages that can still be struck / picked
   u16 stage = 0xFFFF;          // the decided stage
@@ -62,7 +67,8 @@ struct View
 };
 
 // The ranked set starts: this player's in-game port (0 host, 1 joiner) and the stage lists.
-// Empty lists fall back to P+'s starters / the legal list.
+// Empty or unusable lists (not five starters, fewer than three counterpicks) fall back to P+'s
+// starters / the legal list.
 void Begin(int local_port, std::vector<u16> starters, std::vector<u16> counterpicks);
 void End();
 bool IsActive();
@@ -72,6 +78,9 @@ void OnGameResult(u8 winner, u16 stage);
 bool Act(u8 kind);
 // GP_FETCH_STEP; also runs the step timers. CPU thread.
 View Current();
+// The opponent's step ran out long ago without their game completing it (Slippi's wait timeout):
+// the caller treats the opponent as gone.
+bool OpponentStalled();
 picojson::object Status();
 
 // The default starters (P+'s competitive five: Battlefield, Final Destination, Smashville,
