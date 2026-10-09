@@ -7,19 +7,21 @@
 # and its matchmaking appVersion (.github/scripts/stamp-version.sh).
 #
 # Runners:
-#   - Linux builds (plugin, Dolphin, launcher tests, AppImage): LINUX_RUNNER in the plugin and
-#     linux jobs; the optional repository variable CLIENT_LINUX_RUNNER (a JSON list of labels)
-#     overrides it. Default: GitHub-hosted ubuntu-24.04. On a GitHub-hosted runner the jobs install
-#     the build packages and keep ccache and the plugin toolchain in the Actions cache; on a
-#     self-hosted one they use the runner's own packages and $CI_CACHE. sarahvps2 (production)
-#     only publishes.
-#   - Windows: GitHub-hosted (minutes are limited on a private repository: paths below, caches).
+#   - Linux builds (plugin, Dolphin, launcher tests, AppImage): Namespace runner profile
+#     namespace-profile-brawlonline (Ubuntu 24.04, x64) in the plugin and linux jobs; the optional
+#     repository variable CLIENT_LINUX_RUNNER (a JSON list of labels) overrides it. On Namespace
+#     the jobs install the build packages and keep $CI_CACHE (build tree, ccache, plugin toolchain)
+#     on the profile's cache volume; on GitHub-hosted ubuntu-24.04 they install the packages and
+#     keep ccache and the toolchain in the Actions cache; on our own self-hosted machines they use
+#     the runner's own packages and $CI_CACHE. sarahvps2 (production) only publishes.
+#   - Windows: GitHub-hosted (paid per minute on a private repository: paths below, caches).
 #   - Publishing: always sarahvps2 (pp-release client). Builds from other machines arrive as
 #     Actions artifacts (1-day retention, deleted after publishing).
-#   - macOS: GitHub-hosted Apple silicon, only while the repository is public (see the macos job).
-#     Developer ID signed and notarized (repository secrets, see the macos job). It publishes on
-#     its own (publish-mac): Apple's notary service can take minutes or hours, so Linux and
-#     Windows never wait for it, and a failed or skipped macOS build never holds them back.
+#   - macOS: Namespace runner profile namespace-profile-brawlonline-mac (Apple silicon), $CI_CACHE
+#     (Qt, build tree, ccache) on its cache volume. Developer ID signed and notarized (repository
+#     secrets, see the macos job). It publishes on its own (publish-mac): Apple's notary service
+#     can take minutes or hours, so Linux and Windows never wait for it, and a failed or skipped
+#     macOS build never holds them back.
 #
 # Concurrency is per job (group client-<job>, never cancelled while running): a newer push's
 # Linux and Windows builds start as soon as the previous ones finish, even while that run's macOS
@@ -56,13 +58,16 @@ jobs:
       group: client-plugin
       cancel-in-progress: false
     # Linux client runner (same default as the linux job):
-    runs-on: ${{ fromJSON(vars.CLIENT_LINUX_RUNNER || '["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(vars.CLIENT_LINUX_RUNNER || '["namespace-profile-brawlonline"]') }}
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v6
         with:
           path: client
           persist-credentials: false
+      - name: Cache volume (Namespace runner)
+        if: startsWith(runner.name, 'nsc-runner-')
+        run: echo "CI_CACHE=$NSC_CACHE_PATH/ci-cache" >> "$GITHUB_ENV"
       - uses: actions/cache@v5
         if: runner.environment == 'github-hosted'
         with:
@@ -90,7 +95,7 @@ jobs:
       group: client-linux
       cancel-in-progress: false
     # Linux client runner (same default as the plugin job):
-    runs-on: ${{ fromJSON(vars.CLIENT_LINUX_RUNNER || '["ubuntu-24.04"]') }}
+    runs-on: ${{ fromJSON(vars.CLIENT_LINUX_RUNNER || '["namespace-profile-brawlonline"]') }}
     timeout-minutes: 240
     env:
       NODE_OPTIONS: --max-old-space-size=4096
@@ -103,15 +108,21 @@ jobs:
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-      - name: Build packages (GitHub-hosted runner)
-        if: runner.environment == 'github-hosted'
+      - name: Build packages (Namespace or GitHub-hosted runner)
+        if: startsWith(runner.name, 'nsc-runner-') || runner.environment == 'github-hosted'
         run: |
           # Dolphin's Linux build dependencies (dolphin/Tools/docker/linux-build.Dockerfile) and
-          # qmake6 for linuxdeploy's Qt plugin. The self-hosted runners have them in their image.
+          # qmake6 for linuxdeploy's Qt plugin. Our own self-hosted runners have them in their image.
           sudo apt-get update -q
           sudo apt-get install -y -q --no-install-recommends             cmake ninja-build ccache pkg-config gettext qt6-base-dev qt6-base-private-dev qt6-svg-dev             qmake6 qt6-qpa-plugins libavcodec-dev libavformat-dev libavutil-dev libswscale-dev             libxi-dev libxrandr-dev libudev-dev libevdev-dev libsfml-dev libminiupnpc-dev             libmbedtls-dev libcurl4-openssl-dev libhidapi-dev libsystemd-dev libbluetooth-dev             libasound2-dev libpulse-dev libpugixml-dev libbz2-dev libzstd-dev liblzo2-dev libpng-dev             libusb-1.0-0-dev libgl-dev libegl-dev file patchelf
           echo "JOBS=$(nproc)" >> "$GITHUB_ENV"
           echo "CCACHE_MAXSIZE=2G" >> "$GITHUB_ENV"
+      - name: Cache volume (Namespace runner)
+        if: startsWith(runner.name, 'nsc-runner-')
+        run: |
+          # The profile's cache volume (50 GB) keeps the build tree and ccache between runs.
+          echo "CI_CACHE=$NSC_CACHE_PATH/ci-cache" >> "$GITHUB_ENV"
+          echo "CCACHE_MAXSIZE=5G" >> "$GITHUB_ENV"
       - uses: actions/cache/restore@v5
         if: runner.environment == 'github-hosted'
         with:
@@ -279,11 +290,10 @@ jobs:
           if-no-files-found: error
 
   macos:
-    # GitHub-hosted Apple silicon runner: a native build (Xcode's clang, Qt from aqtinstall,
-    # macdeployqt, codesign). Apple silicon only for now. macOS minutes are free on a public
-    # repository and count ten times on a private one, so the job only runs while the repository
-    # is public. DISABLE_MACOS="true" turns it off. A failed or skipped macOS build never holds
-    # back the Linux and Windows release.
+    # Namespace Apple silicon runner (profile namespace-profile-brawlonline-mac): a native build
+    # (Xcode's clang, Qt from aqtinstall, macdeployqt, codesign). Apple silicon only for now. Qt,
+    # the build tree and ccache stay on the profile's cache volume. DISABLE_MACOS="true" turns it
+    # off. A failed or skipped macOS build never holds back the Linux and Windows release.
     #
     # Signed with the Developer ID Application certificate and notarized with an App Store Connect
     # API key (repository secrets MACOS_SIGNING_P12 (base64 .p12 with the certificate, its key and
@@ -291,17 +301,16 @@ jobs:
     # APPLE_API_KEY_ID, APPLE_API_ISSUER). The job fails without them: the launcher updates itself
     # on macOS (MAC_SELF_UPDATE in launcher/src/common/product.ts), and an ad-hoc build in the
     # feed could not be installed over a signed one. npm ci runs before the signing keychain exists.
-    if: ${{ !github.event.repository.private && vars.DISABLE_MACOS != 'true' }}
+    if: ${{ vars.DISABLE_MACOS != 'true' }}
     needs: plugin
     concurrency:
       group: client-macos
       cancel-in-progress: false
-    runs-on: macos-15
+    runs-on: namespace-profile-brawlonline-mac
     timeout-minutes: 150
     env:
       NODE_OPTIONS: --max-old-space-size=4096
       USE_HARD_LINKS: "false"
-      CI_CACHE: ${{ github.workspace }}/ci-cache
     steps:
       - uses: actions/checkout@v6
         with:
@@ -313,16 +322,11 @@ jobs:
           cache: npm
           cache-dependency-path: client/launcher/package-lock.json
       - name: Build tools
-        run: brew install ninja ccache
-      - uses: actions/cache@v5
-        with:
-          path: ci-cache/qt
-          key: mac-qt-6.8.3
-      - uses: actions/cache/restore@v5
-        with:
-          path: ci-cache/ccache
-          key: mac-ccache-${{ github.run_id }}
-          restore-keys: mac-ccache-
+        run: |
+          brew install ninja ccache
+          # The profile's cache volume (50 GB) keeps Qt, the build tree and ccache between runs.
+          echo "CI_CACHE=$NSC_CACHE_PATH/ci-cache" >> "$GITHUB_ENV"
+          echo "CCACHE_MAXSIZE=5G" >> "$GITHUB_ENV"
       - name: Stamp version ${{ env.VERSION }}
         run: client/.github/scripts/stamp-version.sh "$VERSION"
       - uses: actions/download-artifact@v7
@@ -380,12 +384,6 @@ jobs:
           } >>"$GITHUB_ENV"
       - name: Dolphin
         run: client/.github/scripts/build-dolphin-macos.sh "$VERSION" "$GITHUB_WORKSPACE/client/launcher/release/dolphin" arm64
-      # Saved right after the build, also when a later step fails.
-      - uses: actions/cache/save@v5
-        if: ${{ !cancelled() }}
-        with:
-          path: ci-cache/ccache
-          key: mac-ccache-${{ github.run_id }}
       - name: Package (app, DMG, zip)
         run: client/.github/scripts/package-launcher-macos.sh "$RUNNER_TEMP/out-mac" arm64
       - name: Check the package
