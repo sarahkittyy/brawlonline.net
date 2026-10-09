@@ -318,7 +318,33 @@ namespace NetMenu {
         *(u32*)(stubFrame + 8) = 0x1B;
         s_friendsPicked = true;
         PPOM::g_block.debug.scratch[6]++;
-        PPOM::g_block.debug.scratch[7] = stubFrame;
+        (void)keepFrame[0];
+    }
+
+    // The ONLINE page's update (muProcWifi) reads the menu input at text+0x16564 and keeps it in
+    // r30; both of its A handlers (text+0x16688, +0x16888) test bit 0x10 of it, then open the
+    // page under the cursor (this+0x42: 0 WITH FRIENDS, 1 WITH ANYONE). Every online mode is
+    // behind those two buttons, so while the modes are locked (Slippi's
+    // HandleOnlineLockedOptions.asm: logged out, or an update required) A on them only plays the
+    // menus' buzzer. Inline hook at text+0x16568 `mr r30,r3`: the stub's saved r30 (stmw
+    // r3,0xC(r1): +0x78) loses the A bit; r29 (+0x74) is the page.
+    __attribute__((noinline)) void lockedOnlineButtons()
+    {
+        volatile u32 keepFrame[2];
+        keepFrame[0] = 0;
+        if ((PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS) && OnlineMenu::modesLocked()) {
+            u32 stubFrame = *(u32*)__builtin_frame_address(0);
+            u32* input = (u32*)(stubFrame + 0x78);
+            u8* page = *(u8**)(stubFrame + 0x74);
+            if ((*input & 0x10) && (u32)page >= 0x80000000 && (u32)page < 0x81800000 &&
+                *(u16*)(page + 0x42) <= 1) {
+                *input &= ~0x10u;
+                void* snd = *(void**)0x805A01D0;   // g_sndSystem: the buzzer (SE 3)
+                typedef void (*PlaySEFn)(void*, int, int, int, int, int);
+                if (snd) ((PlaySEFn)0x800742b0)(snd, 3, -1, 0, 0, -1);
+                PPOM::g_block.debug.scratch[7] += 0x100;   // tests: A presses refused
+            }
+        }
         (void)keepFrame[0];
     }
 
@@ -385,6 +411,7 @@ namespace NetMenu {
         api->syInlineHookRel(0x000166B8, reinterpret_cast<void*>(friendsToAnybody), 2 /* SORA_MENU_MAIN */);
         api->syInlineHookRel(0x00016518, reinterpret_cast<void*>(friendsToAnybody), 2 /* SORA_MENU_MAIN */);
         api->syInlineHookRel(0x000168B8, reinterpret_cast<void*>(friendsToAnybody), 2 /* SORA_MENU_MAIN */);
+        api->syInlineHookRel(0x00016568, reinterpret_cast<void*>(lockedOnlineButtons), 2 /* SORA_MENU_MAIN */);
 
         api->sySimpleHookRel(0x00004220, reinterpret_cast<void*>(disableCreateCounterOnCSS), 10);
         api->sySimpleHookRel(0x000056A8, reinterpret_cast<void*>(turnOffCSSTimer), 10);
