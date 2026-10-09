@@ -270,6 +270,9 @@ protected:
   // !emitting_routine && mode != AlwaysSlowAccess && !jo.fastmem:                X30
   // !emitting_routine && mode == Auto && jo.fastmem:                             X30
   //
+  // Stores and Zero 256 mark the rollback dirty bitmap after a fast access, with X1 and
+  // (emitting_routine ? X0 : X30). Zero 256 clobbers its addr register (X1) doing so.
+  //
   // Furthermore:
   // - Any callee-saved register which isn't marked in gprs_to_push/fprs_to_push may be
   //   clobbered if mode != AlwaysFastAccess.
@@ -278,6 +281,10 @@ protected:
   void EmitBackpatchRoutine(u32 flags, MemAccessMode mode, Arm64Gen::ARM64Reg RS,
                             Arm64Gen::ARM64Reg addr, BitSet32 gprs_to_push = BitSet32(0),
                             BitSet32 fprs_to_push = BitSet32(0), bool emitting_routine = false);
+  // Rollback: entries[((addr + offset) & 0x1FFFFFFF) >> ROLLBACK_PAGE_SHIFT] = 1 in
+  // JITDirtyBitmap. Clobbers idx and ptr; idx may be addr.
+  void EmitJITDirtyBitmapUpdate(Arm64Gen::ARM64Reg addr, u32 offset, Arm64Gen::ARM64Reg idx,
+                                Arm64Gen::ARM64Reg ptr);
 
   // temp_gpr must be a valid register, but temp_fpr can be INVALID_REG.
   void FlushPPCStateBeforeSlowAccess(Arm64Gen::ARM64Reg temp_gpr, Arm64Gen::ARM64Reg temp_fpr);
