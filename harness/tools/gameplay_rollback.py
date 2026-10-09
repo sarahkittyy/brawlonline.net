@@ -56,7 +56,7 @@ import numpy as np  # noqa: E402  (tool-only dependency: pip install numpy)
 
 from ppharness import brawl as B  # noqa: E402
 from ppharness import flows as F  # noqa: E402
-from ppharness.client import HarnessClient  # noqa: E402
+from ppharness.client import HarnessClient, HarnessCommandError  # noqa: E402
 from ppharness.inifile import IniFile  # noqa: E402
 from ppharness.instance import DolphinInstance, InstanceConfig  # noqa: E402
 
@@ -97,11 +97,15 @@ DOL_SECTIONS: Tuple[Tuple[str, int, int], ...] = (
 
 def make_instance(name: str, *, cpu_thread: bool = False, rtc: Optional[int] = FIXED_RTC, video: str = "Null",
                   gpu_determinism: Optional[str] = None, keep: bool = False,
-                  dolphin_ini: Optional[Dict[str, Dict[str, Any]]] = None) -> DolphinInstance:
+                  dolphin_ini: Optional[Dict[str, Dict[str, Any]]] = None,
+                  controllers: Sequence[int] = (0, 1)) -> DolphinInstance:
+    """``controllers``: the ports with a standard controller (the others have none). 3- and
+    4-player matches need (0, 1, 2) / (0, 1, 2, 3)."""
     args = []
     if rtc is not None:
         args += ["Dolphin.Core.EnableCustomRTC=True", f"Dolphin.Core.CustomRTCValue={rtc:#x}"]
     cfg_kw: Dict[str, Any] = {"dolphin_ini": dolphin_ini} if dolphin_ini else {}
+    cfg_kw["standard_controllers"] = tuple(controllers)
     inst = DolphinInstance(name, config=InstanceConfig(cpu_thread=cpu_thread, video_backend=video, config_args=args,
                                                        **cfg_kw),
                            keep=keep, connect_timeout=120)
@@ -136,7 +140,7 @@ def instances(specs: Sequence[Tuple[str, Dict[str, Any]]], keep: bool = False):
             list(pool.map(lambda i: (i.launch(), i.connect()), insts))
         for i in insts:
             i.client.wait_state("running", timeout=120)
-            for port in (0, 1):
+            for port in controller_ports(i):
                 i.client.pad_set(port)
         yield insts
     finally:
@@ -150,6 +154,11 @@ def instances(specs: Sequence[Tuple[str, Dict[str, Any]]], keep: bool = False):
             with contextlib.suppress(Exception):
                 # Instance dirs hold a 2 GB SD image: remove them on failure too unless asked to keep.
                 i.cleanup(not keep)
+
+
+def controller_ports(inst: DolphinInstance) -> Tuple[int, ...]:
+    """The ports this instance has a standard controller on (make_instance ``controllers``)."""
+    return tuple(sorted(int(p) for p in (inst.config.standard_controllers or (0, 1))))
 
 
 def par(fns: Sequence[Callable[[], Any]]) -> List[Any]:
@@ -566,8 +575,10 @@ def load_fixture(c: HarnessClient, path: Path, timeout: float = 120.0) -> None:
         # Never step here: the fixture must start exactly on the saved field.
         for _ in range(100):
             if B.read_scene(c.read_mem).scene is B.Scene.IN_MATCH:
-                for port in (0, 1):
-                    c.pad_set(port)
+                for port in range(4):
+                    # Ports without a controller (2-player instances) refuse pad_set.
+                    with contextlib.suppress(HarnessCommandError):
+                        c.pad_set(port)
                 return
             time.sleep(0.1)
         c.resume()

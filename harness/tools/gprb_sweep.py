@@ -62,13 +62,14 @@ import time
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import gameplay_rollback as G  # noqa: E402
 import gprb_session as GS  # noqa: E402
+import gprb_synctest as T  # noqa: E402
 from gprb_ab import compare_traces  # noqa: E402
 from ppharness import brawl as B  # noqa: E402
 from ppharness import flows as F  # noqa: E402
@@ -137,14 +138,45 @@ NOTABLE = re.compile(r"存在しない|Article|changeMotion|force final|fighter 
 NOISE = re.compile(r"frame_trace|rollback_timings|log_mark")
 
 
+# 3 and 4 players (docs/nplayer/determinism.md): the scenarios of gprb_synctest (free-for-all,
+# team battles with team attack on), then items, forced Final Smashes and 4-player mirrors.
+NP_ITEM_RUNS = [(("fox", "falco", "peach", "snake"), "battlefield", None),
+                (("ice_climbers", "olimar", "rob", "game_and_watch"), "final_destination", None),
+                (("mario", "marth", "pikachu", "diddy_kong"), "smashville", (0, 0, 1, 1))]
+NP_FFS_RUNS = [(("wario", "bowser", "zelda", "sheik"), "final_destination", None),
+               (("samus", "zero_suit_samus", "olimar", "lucario"), "battlefield", None),
+               (("mario", "pikachu", "marth", "ike"), "final_destination", (0, 0, 1, 1)),
+               (("ice_climbers", "peach", "charizard_solo", "snake"), "smashville", None)]
+NP_MIRRORS = ["ice_climbers", "olimar", "game_and_watch", "yoshi", "peach", "zelda", "meta_knight", "snake"]
+
+
+def run_chars(run: Mapping[str, Any]) -> List[str]:
+    """The run's characters from P1 (2-player runs have only p1 and p2)."""
+    return list(run.get("chars") or [run["p1"], run["p2"]])
+
+
+def run_ports(run: Mapping[str, Any]) -> int:
+    return (1 << len(run_chars(run))) - 1
+
+
+# Per instance (client id): each port's team in a team battle, for sweep_decide.
+TEAMS: Dict[int, Dict[int, int]] = {}
+
+
 def plan(args: argparse.Namespace) -> List[Dict[str, Any]]:
     d, m = args.distance, args.minutes
     runs: List[Dict[str, Any]] = []
 
     def sync(rid, group, p1, p2, stage="battlefield", items="off", distance=d, cpu="sc", minutes=m,
-             force_final=False):
-        runs.append(dict(id=rid, kind="sync", group=group, p1=p1, p2=p2, stage=stage, items=items,
-                         distance=distance, cpu=cpu, minutes=minutes, weight=1, force_final=force_final))
+             force_final=False, chars=None, teams=None):
+        r = dict(id=rid, kind="sync", group=group, p1=p1, p2=p2, stage=stage, items=items,
+                 distance=distance, cpu=cpu, minutes=minutes, weight=1, force_final=force_final)
+        if chars is not None and len(chars) != 2 or teams is not None:
+            r.update(chars=list(chars), teams=list(teams) if teams is not None else None)
+        runs.append(r)
+
+    def nsync(rid, group, chars, stage, teams=None, **kw):
+        sync(rid, group, chars[0], chars[1], stage, chars=chars, teams=teams, **kw)
     for ch in CHARACTERS:
         if ch != "fox":
             sync(f"v-{ch}", "vsfox", ch, "fox")
@@ -159,6 +191,14 @@ def plan(args: argparse.Namespace) -> List[Dict[str, Any]]:
         sync(f"f-{p1}-{p2}", "fs", p1, p2, st, items="smashball")
     for p1, p2, st in FFS_RUNS:
         sync(f"ff-{p1}-{p2}", "ffs", p1, p2, st, items="smashball", force_final=True)
+    for name, sc in T.NP_SCENARIOS.items():
+        nsync(f"np-{name}", f"np-{name[:2]}", sc.chars, sc.stage, sc.teams)
+    for chars, st, teams in NP_ITEM_RUNS:
+        nsync(f"npi-{'-'.join(chars)}", "np-items", chars, st, teams, items="all")
+    for chars, st, teams in NP_FFS_RUNS:
+        nsync(f"npff-{'-'.join(chars)}", "np-ffs", chars, st, teams, items="smashball", force_final=True)
+    for ch in NP_MIRRORS:
+        nsync(f"npm-{ch}", "np-mirror", (ch,) * 4, "battlefield")
     for cpu in ("sc", "dc"):
         for p1, p2, st in SESSION_RUNS:
             runs.append(dict(id=f"n-{cpu}-{p1}-{p2}", kind="session", group=f"session-{cpu}", p1=p1, p2=p2,
@@ -248,7 +288,9 @@ def sweep_decide(self: F.Fighter, st: B.MatchState) -> List[Dict[str, Any]]:
                 {"main": [to_c, 255], "buttons": ["B"], "hold": 2}, {"main": [to_c, 200], "hold": 40}]
     if abs(me.x) > edge - 6:
         return [{"main": [to_c, 128], "hold": 10}]
-    opps = [p for p in st.players if p.port != self.seat.port and p.x is not None]
+    team_of = getattr(self, "team_of", None) or {}
+    opps = [p for p in st.players if p.port != self.seat.port and p.x is not None
+            and (not team_of or team_of.get(p.port) != team_of.get(self.seat.port))]
     opp = min(opps, key=lambda p: abs((p.x or 0) - me.x)) if opps else None
     dx = (opp.x - me.x) if opp is not None and opp.x is not None else -me.x
     toward = 1 if dx > 0 else -1
@@ -263,6 +305,7 @@ _orig_init = F.Fighter.__init__
 def _fighter_init(self, seat, mode="chase", seed=0, stage_kind=None):
     _orig_init(self, seat, mode, seed, stage_kind)
     self.stage_kind = stage_kind
+    self.team_of = TEAMS.get(id(seat.client))
 
 
 F._macro = sweep_macro
@@ -387,11 +430,11 @@ class Forms:
 
 @contextlib.contextmanager
 def instance(name: str, cpu: str, video: str, rtc: Optional[int] = G.FIXED_RTC, unthrottled: bool = False,
-             env: Optional[Dict[str, str]] = None):
+             env: Optional[Dict[str, str]] = None, controllers: Sequence[int] = (0, 1)):
     """One instance, launched with retries: on a busy machine a launch can lose its harness port
     to another process or answer too slowly."""
     for attempt in range(3):
-        inst = G.make_instance(name, cpu_thread=cpu == "dc", video=video, rtc=rtc)
+        inst = G.make_instance(name, cpu_thread=cpu == "dc", video=video, rtc=rtc, controllers=controllers)
         if unthrottled:
             # A sync test resimulates (distance - 1) frames per frame and emulated time keeps
             # running through them; at 100 % speed that caps the game at 60 / distance fps.
@@ -402,7 +445,7 @@ def instance(name: str, cpu: str, video: str, rtc: Optional[int] = G.FIXED_RTC, 
             inst.connect()
             inst.client.timeout = 30.0           # the machine is shared: allow slow answers
             inst.client.wait_state("running", timeout=120)
-            for port in (0, 1):
+            for port in controllers:
                 inst.client.pad_set(port)
             break
         except Exception as e:  # noqa: BLE001
@@ -461,8 +504,8 @@ def extra_flags(args: argparse.Namespace) -> str:
 
 
 def force_final_env(run: Dict[str, Any]) -> Dict[str, str]:
-    """``ffs`` runs: both ports get their Final Smash before rollback starts (and in the ground truth)."""
-    return {"PPR_GPRB_FORCE_FINAL": "3"} if run.get("force_final") else {}
+    """``ffs`` runs: every port gets its Final Smash before rollback starts (and in the ground truth)."""
+    return {"PPR_GPRB_FORCE_FINAL": str(run_ports(run))} if run.get("force_final") else {}
 
 
 def run_sync(run: Dict[str, Any], args: argparse.Namespace, out: Path) -> Dict[str, Any]:
@@ -481,7 +524,11 @@ def run_sync(run: Dict[str, Any], args: argparse.Namespace, out: Path) -> Dict[s
     tag = (work / run["id"]).resolve()
     env = {} if args.no_ground_truth else {"PPR_GPRB_PASS_LOG": str(tag)}
     env.update(force_final_env(run))
-    with instance(f"{PREFIX}-{run['id']}", run["cpu"], args.video, unthrottled=not args.throttled, env=env) as inst:
+    chars = run_chars(run)
+    ports = list(range(len(chars)))
+    teams = run.get("teams")
+    with instance(f"{PREFIX}-{run['id']}", run["cpu"], args.video, unthrottled=not args.throttled, env=env,
+                  controllers=ports) as inst:
         failed = True
         # Last resort: a driver call that never returns. Killing Dolphin makes every call fail.
         dog = threading.Timer(args.match_timeout + 900, lambda: (rep.__setitem__("watchdog", True), inst.kill()))
@@ -490,15 +537,18 @@ def run_sync(run: Dict[str, Any], args: argparse.Namespace, out: Path) -> Dict[s
         try:
             c = inst.client
             B.wait_scene(c, [B.Scene.CSS], 60 * 120)
-            B.wait_css_ready(c, [0, 1])
+            B.wait_css_ready(c, ports)
             configure_rules(c, run["items"], run["minutes"])
-            B.css_pick_character(c, 0, B.CSS_ID["fox"])
-            B.css_pick_character(c, 1, B.CSS_ID["falco"])
+            if teams is not None:
+                T.css_team_battle(c, 0)
+                TEAMS[id(c)] = {p: t for p, t in enumerate(teams)}
+            for p in ports:
+                B.css_pick_character(c, p, B.CSS_ID["fox" if p % 2 == 0 else "falco"])
             B.css_start(c, 0)
-            write_selections(c, [run["p1"], run["p2"]])
+            T.write_selections(c, chars, teams)
             B.sss_pick_stage(c, STAGES[run["stage"]], 0)
             c.call("gprb_synctest", distance=run["distance"], region_set=args.region_set, hash_regions=False,
-                   start_frame=args.start_frame)
+                   start_frame=args.start_frame, ports=run_ports(run))
             with contextlib.suppress(HarnessError):
                 c.call("frame_trace_config", enabled=True)
             if not args.no_ground_truth:
@@ -518,13 +568,22 @@ def run_sync(run: Dict[str, Any], args: argparse.Namespace, out: Path) -> Dict[s
                 time.sleep(0.5)
             setup = B.read_match_setup(c.read_mem)
             rep["setup"] = {"stage_kind": setup.stage_kind if setup else None,
-                            "chars": [p.character for p in setup.players][:2] if setup else None}
-            seats = [F.Seat(c, 0), F.Seat(c, 1)]
+                            "chars": [p.character for p in setup.players][:len(chars)] if setup else None}
+            if len(chars) > 2 or teams is not None:
+                sc = T.Scenario(tuple(chars), run["stage"], run["items"] != "off",
+                                tuple(teams) if teams is not None else None)
+                problems = [x for x in T.check_setup(c, sc)
+                            if not x.startswith(("stage", "time limit"))]   # STAGES kinds, --minutes
+                if problems:
+                    raise RuntimeError(f"match setup: {problems}")
+            seats = [F.Seat(c, p) for p in ports]
             rep.update(_play_sync(inst, c, seats, run, args, forms, rep, out, setup))
         except Exception as e:  # noqa: BLE001
             rep["error"] = f"{type(e).__name__}: {e}"
             rep["traceback"] = traceback.format_exc()[-2000:]
         rep["exit_code"] = inst.process.poll() if inst.process else None
+        with contextlib.suppress(Exception):
+            TEAMS.pop(id(inst.client), None)
         rep["forms"] = forms.named()
         rep["timeline"] = forms.timeline
         rep["wall_s"] = round(time.monotonic() - t0, 1)
@@ -593,13 +652,13 @@ def ground_truth(run: Dict[str, Any], args: argparse.Namespace, out: Path, tag: 
     s: Dict[str, Any] = {}
     t0 = time.monotonic()
     with instance(f"{PREFIX}-{run['id']}-gt", run["cpu"], "Null", unthrottled=True,
-                  env=force_final_env(run)) as inst:
+                  env=force_final_env(run), controllers=range(len(run_chars(run)))) as inst:
         try:
             c = inst.client
             G.load_fixture(c, sav)
             c.call("frame_trace_config", enabled=True)
             c.call("gprb_synctest", distance=7, region_set=args.region_set, hash_regions=False,
-                   start_frame=args.start_frame, replay_path=str(flat.resolve()))
+                   start_frame=args.start_frame, replay_path=str(flat.resolve()), ports=run_ports(run))
             c.resume()
             last_frame, since = -1, time.monotonic()
             while True:
@@ -699,7 +758,7 @@ def _play_sync(inst, c: HarnessClient, seats, run, args, forms: Forms, rep, out:
                     rows = c.call("frame_trace", since=max(0, gf - 30), max=400)["rows"]
                     res["trace_before_desync"] = [
                         [r[0], r[10], r[4], [[r[11][6 * p + 5], round(struct.unpack(">f", struct.pack(">I", r[11][6 * p + 3]))[0], 1)]
-                                             for p in range(2)]] for r in rows if r[0] <= gf + 2]
+                                             for p in range(len(run_chars(run)))]] for r in rows if r[0] <= gf + 2]
         if first_bad["frame"] is not None and s["current_frame"] - first_bad["frame"] > args.after_desync:
             res["stopped_after_desync"] = True
             return True
@@ -714,7 +773,7 @@ def _play_sync(inst, c: HarnessClient, seats, run, args, forms: Forms, rep, out:
         rounds += 1
         t_round = time.monotonic()
         with contextlib.suppress(HarnessError):
-            F.fight(seats, 10 ** 6, mode=["random", "random"], seed=f"{run['id']}-{rounds}",
+            F.fight(seats, 10 ** 6, mode=["random"] * len(seats), seed=f"{run['id']}-{rounds}",
                     stage_kind=setup.stage_kind if setup else None, stop=stop)
         with contextlib.suppress(HarnessError):
             if c.call("gprb_status")["phase"] != "running":
@@ -1074,7 +1133,8 @@ def cmd_run(args: argparse.Namespace) -> int:
         runs = [r for r in runs if re.search(args.only, r["id"])]
     if args.groups:
         gs = set(args.groups.split(","))
-        runs = [r for r in runs if r["group"] in gs or r["kind"] in gs]
+        runs = [r for r in runs if r["group"] in gs or r["kind"] in gs
+                or ("np" in gs and r["group"].startswith("np-"))]
     todo = []
     for r in runs:
         p = out / "runs" / f"{r['id']}.json"
@@ -1182,6 +1242,15 @@ def cmd_report(args: argparse.Namespace) -> int:
     print("\n| Session | stage | single core | dual core |\n|---|---|---|---|")
     for p1, p2, st in SESSION_RUNS:
         print(f"| {p1} vs {p2} | {st} | {cell(f'n-sc-{p1}-{p2}')} | {cell(f'n-dc-{p1}-{p2}')} |")
+    nps = [r for r in res.values() if str(r.get("group", "")).startswith("np-")]
+    if nps:
+        print("\n| 3-4 players | stage | teams | items | result | frames | forms seen |\n|---|---|---|---|---|---|---|")
+        for r in sorted(nps, key=lambda r: (r["group"], r["id"])):
+            forms = sorted({f for v in (r.get("forms") or {}).values() for f in v})
+            items = r["items"] + (", Final Smash forced" if r.get("force_final") else "")
+            teams = "-" if not r.get("teams") else " ".join(str(t) for t in r["teams"])
+            print(f"| {', '.join(run_chars(r))} | {r['stage']} | {teams} | {items} | {cell(r['id'])} | "
+                  f"{r.get('frames')} | {', '.join(forms)} |")
     for label, src in (("main", res), (args.compare_label, cmp_)):
         if not src:
             continue
@@ -1199,7 +1268,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("command", choices=("run", "list", "report"))
     ap.add_argument("--out", default="run/qa/sweep")
     ap.add_argument("--only", default=None, help="regex on run ids")
-    ap.add_argument("--groups", default=None, help="comma list: vsfox,mirror,stage,items,fs,ffs,session-sc,session-dc,sync,session")
+    ap.add_argument("--groups", default=None,
+                    help="comma list: vsfox,mirror,stage,items,fs,ffs,session-sc,session-dc,sync,session; 3-4 "
+                         "players: np-f4,np-f3,np-t4,np-t3,np-items,np-ffs,np-mirror, or np for all of them")
     ap.add_argument("--rerun", action="store_true", help="run again even if a result exists")
     ap.add_argument("--retry-errors", action="store_true", help="run again runs whose result is 'error'")
     ap.add_argument("--dry-run", action="store_true")

@@ -32,7 +32,7 @@ import sys
 import threading
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Sequence
+from typing import Any, Dict, List, Mapping, Optional, Sequence
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -59,37 +59,62 @@ def with_args(extra: Sequence[str]):
     return orig
 
 
+def fixture_meta(state: str) -> Dict[str, Any]:
+    """What ``prep`` wrote next to a countdown savestate (``<state>.json``): the scenario, its
+    ports and teams. Older 2-player fixtures have none: ports 1 and 2."""
+    p = Path(str(state) + ".json")
+    meta = json.loads(p.read_text()) if p.exists() else {}
+    meta.setdefault("players", 2)
+    meta.setdefault("ports", (1 << meta["players"]) - 1)
+    meta.setdefault("teams", None)
+    return meta
+
+
+def controllers(meta: Mapping[str, Any]) -> tuple:
+    return tuple(range(int(meta["players"])))
+
+
 def cmd_prep(args) -> int:
-    p1, p2, stage, items = T.SCENARIOS[args.scenario]
-    with G.instances([(f"{PREFIX}-prep", dict(cpu_thread=args.cpu == "dc"))]) as (inst,):
+    sc = T.scenario(args.scenario)
+    with G.instances([(f"{PREFIX}-prep", dict(cpu_thread=args.cpu == "dc", controllers=sc.controllers))]) as (inst,):
         c = inst.client
-        T.setup_match(c, p1, p2, stage, items)
+        T.setup_match_n(c, sc)
         B.wait_scene(c, [B.Scene.IN_MATCH], 600)
         while not 100 <= G.game_frame(c) < 400:
             time.sleep(0.02)
         c.pause()
         if not 100 <= G.game_frame(c) < 200:
             raise RuntimeError(f"missed the countdown: game frame {G.game_frame(c)}")
+        problems = T.check_setup(c, sc)
+        if problems:
+            raise RuntimeError(f"match setup: {problems}")
         Path(args.out).parent.mkdir(parents=True, exist_ok=True)
         c.save_state(str(Path(args.out).resolve()))
+        Path(str(args.out) + ".json").write_text(json.dumps(
+            {"scenario": args.scenario, "chars": list(sc.chars), "stage": sc.stage, "items": sc.items,
+             "teams": list(sc.teams) if sc.teams is not None else None, "players": len(sc.chars),
+             "ports": sc.ports, "cpu": args.cpu, "game_frame": G.game_frame(c)}, indent=1))
         print("saved at game frame", G.game_frame(c))
     return 0
 
 
 def cmd_record(args) -> int:
     F._macro = gentle_macro
+    meta = fixture_meta(args.state)
+    ports = list(controllers(meta))
+    team_of = {p: t for p, t in enumerate(meta["teams"])} if meta.get("teams") else None
     orig = with_args([f"Dolphin.Core.EmulationSpeed={args.speed}"])
     try:
-        with G.instances([(f"{PREFIX}-rec", dict(cpu_thread=False))]) as (inst,):
+        with G.instances([(f"{PREFIX}-rec", dict(cpu_thread=False, controllers=controllers(meta)))]) as (inst,):
             c = inst.client
             G.load_fixture(c, Path(args.state))
             setup = B.read_match_setup(c.read_mem)
-            c.call("game_pads", record=True, anchor=3)
+            c.call("game_pads", record=True, anchor=meta["ports"])
             c.call("frame_trace_config", enabled=True)
             g0 = G.game_frame(c)
-            fighters = [F.Fighter(F.Seat(c, port), "random", args.seed, setup.stage_kind if setup else None)
-                        for port in (0, 1)]
-            busy = [0, 0]
+            fighters = [T.TeamFighter(F.Seat(c, port), "random", args.seed, setup.stage_kind if setup else None,
+                                      team_of=team_of) for port in ports]
+            busy = [0] * len(ports)
             c.resume()
             t0 = time.monotonic()
             while True:
@@ -113,24 +138,41 @@ def cmd_record(args) -> int:
         G.make_instance = orig
     rows = [r for r in rows if r[0] >= args.start_frame]
     Path(args.out).write_text(json.dumps({"state": args.state, "seed": args.seed, "g0": g0, "end_frame": end,
-                                          "pads": rows}))
+                                          "ports": meta["ports"], "pads": rows}))
     print(f"recorded {len(rows)} frames {rows[0][0] if rows else None}..{rows[-1][0] if rows else None}, "
           f"end {end}")
     return 0
 
 
 def one_run(args, inp: Dict[str, Any], mode: str, run: int) -> Dict[str, Any]:
+    """_one_run, launched again (up to 3 times) when the instance never connected: on a machine
+    shared with other agents a fresh harness port is sometimes taken before Dolphin binds it."""
+    for attempt in range(3):
+        rep = _one_run(args, inp, mode, run)
+        err = rep.get("error") or ""
+        if not ("InstanceError" in err or "refused the connection" in err):
+            break
+        print(f"  [{mode} {run}] launch attempt {attempt + 1} failed: {err[:160]}", flush=True)
+        time.sleep(5)
+    return rep
+
+
+def _one_run(args, inp: Dict[str, Any], mode: str, run: int) -> Dict[str, Any]:
     rows = inp["pads"]
     replay = mode.startswith("replay=")
     until = 10 ** 9 if replay else min(args.frames or 10 ** 9, rows[-1][0] - 2)
-    rep: Dict[str, Any] = {"mode": mode, "run": run, "cpu": args.cpu, "distance": args.distance}
+    meta = fixture_meta(args.state)
+    ports = int(meta["ports"])
+    mp_ports = ports if args.mispredict_ports is None else args.mispredict_ports
+    rep: Dict[str, Any] = {"mode": mode, "run": run, "cpu": args.cpu, "distance": args.distance, "ports": ports}
     extra = [f"Dolphin.Core.EmulationSpeed={args.speed}"]
     if args.interpreter:
         extra.append("Dolphin.Core.CPUCore=0")
     orig = with_args(extra)
     t0 = time.monotonic()
     try:
-        with G.instances([(f"{PREFIX}-mp-{'replay' if replay else mode}", dict(cpu_thread=args.cpu == "dc"))]) as (inst,):
+        with G.instances([(f"{PREFIX}-mp-{'replay' if replay else mode}",
+                           dict(cpu_thread=args.cpu == "dc", controllers=controllers(meta)))]) as (inst,):
             try:
                 c = inst.client
                 G.load_fixture(c, Path(args.state))
@@ -139,16 +181,17 @@ def one_run(args, inp: Dict[str, Any], mode: str, run: int) -> Dict[str, Any]:
                 for k in range(0, len(rows), 400):
                     c.call("game_pads", inject=rows[k:k + 400])
                 opts = dict(distance=args.distance, region_set=args.region_set, hash_regions=False,
-                            start_frame=args.sync_start or args.start_frame, inject_input=True)
+                            start_frame=args.sync_start or args.start_frame, inject_input=True, ports=ports)
                 if args.no_rollback:
                     opts["no_rollback"] = True
                 if mode == "mp":
-                    opts.update(mispredict_ports=args.mispredict_ports, mispredict_offset=args.offset,
+                    opts.update(mispredict_ports=mp_ports, mispredict_offset=args.offset,
                                 mispredict_every=args.every)
                 if replay:
                     # A recorded network session's passes (PPR_GPRB_PASS_LOG), loads and inputs.
                     opts = dict(distance=7, region_set=args.region_set, hash_regions=False,
-                                start_frame=args.start_frame, replay_path=str(Path(mode[7:]).resolve()))
+                                start_frame=args.start_frame, replay_path=str(Path(mode[7:]).resolve()),
+                                ports=ports)
                 if args.sound_mode != "play":
                     opts[f"{args.sound_mode}_resim_sounds"] = True
                 c.call("gprb_synctest", **opts)
@@ -320,7 +363,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--distance", type=int, default=2)
     p.add_argument("--region-set", default="gp-v19")
     p.add_argument("--start-frame", type=int, default=240)
-    p.add_argument("--mispredict-ports", type=int, default=3)
+    p.add_argument("--mispredict-ports", type=int, default=None,
+                   help="port mask whose first runs get another frame's input (default: every port of the fixture)")
     p.add_argument("--offset", type=int, default=-7)
     p.add_argument("--no-rollback", action="store_true",
                    help="ground truth: every frame runs once, no loads (sync test option no_rollback)")
