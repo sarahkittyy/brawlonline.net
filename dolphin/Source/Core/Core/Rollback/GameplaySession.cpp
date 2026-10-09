@@ -2912,6 +2912,12 @@ LockIn GetPeerLock()
   return s.peer.lock;
 }
 
+LockIn GetLocalLock()
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  return s.local_lock;
+}
+
 Lobby GetLobby()
 {
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);

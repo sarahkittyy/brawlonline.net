@@ -9,10 +9,12 @@ on P+'s own stage select with its stage striking (Dolphin ``Online/GameSetup.cpp
 
 - game 1: both games go to the stage select by themselves; only the five starters are selectable;
   player 1 (the host) strikes one, player 2 two, player 1 one, with X, each only on their turn
-  (an X out of turn changes nothing); the strikes show on both; the stage left is played;
+  (an X out of turn changes nothing); the strikes show on both; START and B do nothing there (the
+  stage select used to leave for the CSS mid-strike); the stage left is played;
 - games 2+: the winner of the last game bans one stage (X), the loser picks the stage (A); then the
   winner locks in a character first: the loser's START does nothing until then, and the loser's
-  line names the winner's character;
+  line names the winner's character; in game 2 the loser lets the 45 s (and Slippi's 3 s of grace)
+  run out and the CSS locks in the character on it;
 - until one player has two wins. Both Dolphins report every game, the server rates the set once,
   the connection closes on the CSS after the set, and both CSSs show the rating and its change.
 
@@ -130,13 +132,22 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
     join.shot("g1-sss-join-waits")
     assert _view(host)["text"].startswith("Strike 1 stage"), _view(host)
     assert _view(join)["text"].startswith("Opponent is striking"), _view(join)
-    # Out of turn: the joiner's X does nothing.
+    # Out of turn: the joiner's X does nothing, nor does A on the same stage (it takes no stage).
     B.sss_pick_stage(join.c, 0x01, 0, button="X")
-    join.steps("wait 30")
+    join.steps("wait 30", "tap A 8", "wait 40")
+    assert online_set.scene(join.c) == SSS, online_set.scene(join.c)
     assert sorted(_view(join)["selectable"]) == STARTERS and _view(join)["my_turn"] is False
     _strike(host, 0x02, join)
     v = _wait_view(join, lambda v: v["my_turn"], "the joiner's turn")
     assert v["count"] == 2 and v["text"].startswith("Strike 2 stages"), v
+    # START (P+'s random pick) and B (back to the CSS) leave no ranked stage select: neither the
+    # host who just struck nor the joiner whose turn it is.
+    for g in players:
+        g.steps("tap START 8", "wait 30", "tap B 8", "wait 40")
+    for g in players:
+        assert online_set.scene(g.c) == SSS, (g.inst.name, online_set.scene(g.c))
+    v = _view(join)
+    assert v["my_turn"] and v["count"] == 2 and len(v["selectable"]) == 4, v
     _strike(join, 0x21, host)
     _strike(join, 0x2E, host)
     join.shot("g1-sss-after-join")
@@ -175,7 +186,7 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
 
         # Characters: the winner first; the loser's START does nothing until then.
         v = _wait_view(loser, lambda v: v["type"] == 3, "the character step")
-        assert not v["may_lock"] and v["text"] == "Opponent is choosing", v
+        assert not v["may_lock"] and v["text"].startswith("Opponent is choosing ("), v
         n = _locks(loser)
         loser.steps("tap START 8", "wait 40")
         assert _locks(loser) == n, "the loser locked in before the winner"
@@ -184,7 +195,11 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
         v = _wait_view(loser, lambda v: v["may_lock"], "the loser's turn")
         assert v["text"].startswith("Opponent picked "), v
         loser.shot(f"g{game}-css-loser-turn")
-        loser.steps("tap START 8", "wait 30")
+        if game == 2:
+            # Slippi's character step: 45 s, then 3 s of grace, then the character selected.
+            _wait(lambda: _locks(loser) > n, 75, "the loser's time ran out")
+        else:
+            loser.steps("tap START 8", "wait 30")
         rep = online_set.play_game(players, game)
         assert rep["stage"] == pick, (hex(rep["stage"]), hex(pick))
         games.append(rep)

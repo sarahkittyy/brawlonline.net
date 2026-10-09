@@ -268,9 +268,17 @@ extern "C" {
             return pos;
         }
         if (pos < 0) return pos;
+        const PPOM::GameStep* st = StageLegal::ranked();
+        if (st && !(st->myTurn && st->type == PPOM::STEP_PICK)) {
+            // Ranked: A takes a stage only for this player's pick. H1 takes A out of buttonProc's
+            // buttons, but the stage select also reads START outside them (it left mid-strike), so
+            // nothing but a pick may leave here either.
+            PPOM::g_block.debug.scratch[13]++;
+            return -1;
+        }
         int kind = StageLegal::kindAt(page, pos);
         if (StageLegal::allowedKind(kind)) {
-            if (StageLegal::ranked()) {
+            if (st) {
                 u8 k = (u8)kind;
                 PPOM::post(PPOM::CMD_GP_COMPLETE_STEP, &k, 1);   // the loser's pick
             }

@@ -22,6 +22,16 @@ constexpr u16 NO_STAGE = 0xFFFF;
 constexpr u8 NO_PORT = 0xFF;
 // A player's actions for one game: a best of three needs at most three; bound what a peer sends.
 constexpr size_t MAX_ACTIONS = 8;
+// Best of three.
+constexpr int WINS_NEEDED = 2;
+// Slippi's GameSetup.h: a step's own time is over GRACE_SECONDS after its timer shows 0, and the
+// opponent's WAIT_TIMEOUT_SECONDS after that. Its character steps have 45 s.
+constexpr int GRACE_SECONDS = 3;
+constexpr int WAIT_TIMEOUT_SECONDS = 15;
+constexpr int CHAR_SECONDS = 45;
+// Timer ids of the character steps (after the stage steps' indices).
+constexpr int TIMER_WINNER_CHAR = 100;
+constexpr int TIMER_LOSER_CHAR = 101;
 
 struct Step
 {
@@ -47,6 +57,7 @@ u32 s_timer_game = 0;
 int s_timer_step = -1;
 Clock::time_point s_timer_start;
 u64 s_auto_actions = 0;
+bool s_opponent_stalled = false;
 View s_last_view;  // the last Current() (harness)
 std::mt19937 s_rng{std::random_device{}()};
 
@@ -207,6 +218,50 @@ picojson::object ExtraJson(u32 game, const std::vector<u8>& actions)
   return o;
 }
 
+// Under s_mutex.
+bool SetOver()
+{
+  return s_wins[0] >= WINS_NEEDED || s_wins[1] >= WINS_NEEDED;
+}
+
+// Under s_mutex: whole seconds since timer `step` of `game` started on this machine (it starts
+// the first time it is asked for).
+int Elapsed(u32 game, int step)
+{
+  if (s_timer_game != game || s_timer_step != step)
+  {
+    s_timer_game = game;
+    s_timer_step = step;
+    s_timer_start = Clock::now();
+  }
+  return static_cast<int>(
+      std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - s_timer_start).count());
+}
+
+// Under s_mutex: the seconds a timer of `seconds` shows after `elapsed`; notes an opponent's step
+// that ran out long ago.
+u8 TimerShown(int seconds, int elapsed, bool mine)
+{
+  if (!mine && elapsed > seconds + GRACE_SECONDS + WAIT_TIMEOUT_SECONDS && !s_opponent_stalled)
+  {
+    s_opponent_stalled = true;
+    WARN_LOG_FMT(NETPLAY, "GameSetup: the opponent's step ran out {} s ago", elapsed - seconds);
+  }
+  return static_cast<u8>(std::clamp(seconds - elapsed, 0, 99));
+}
+
+// The distinct stage kinds of a list that a stage step can use.
+size_t Usable(const std::vector<u16>& list)
+{
+  std::vector<u16> seen;
+  for (const u16 k : list)
+  {
+    if (k != 0 && k <= 0xFF && std::find(seen.begin(), seen.end(), k) == seen.end())
+      seen.push_back(k);
+  }
+  return seen.size();
+}
+
 Gprb::Session::StageDecision Decide(u32 game)
 {
   // Called by the session with its lock held: read the peer first, then take ours.
@@ -216,6 +271,12 @@ Gprb::Session::StageDecision Decide(u32 game)
   if (!s_active)
     return d;
   d.applies = true;
+  if (SetOver())
+  {
+    // The set is decided: no game after it (the connection closes on the CSS).
+    d.wait = true;
+    return d;
+  }
   const std::vector<u8> mine = s_act_game == game ? s_actions : std::vector<u8>{};
   const Eval e = Evaluate(game, mine, ActionsFrom(extra, game));
   if (e.step_idx >= 0 || e.stage == NO_STAGE)
@@ -240,6 +301,20 @@ void Begin(int local_port, std::vector<u16> starters, std::vector<u16> counterpi
     std::lock_guard lk(s_mutex);
     s_active = true;
     s_local = local_port == 1 ? 1 : 0;
+    // Striking 1-2-1 leaves one of exactly five; a game 2+ needs a stage after the ban and Dave's
+    // rule. Both machines get the same lists from the server, so both fall back alike.
+    if (!starters.empty() && (starters.size() != 5 || Usable(starters) != 5))
+    {
+      WARN_LOG_FMT(NETPLAY, "GameSetup: {} starters from the server; using P+'s five",
+                   starters.size());
+      starters.clear();
+    }
+    if (!counterpicks.empty() && Usable(counterpicks) < 3)
+    {
+      WARN_LOG_FMT(NETPLAY, "GameSetup: {} counterpick stages from the server; using P+'s list",
+                   counterpicks.size());
+      counterpicks.clear();
+    }
     s_starters = starters.empty() ? DefaultStarters() : std::move(starters);
     s_counterpicks = counterpicks.empty() ? Gprb::Session::DefaultStages() : std::move(counterpicks);
     s_wins = {};
@@ -249,6 +324,7 @@ void Begin(int local_port, std::vector<u16> starters, std::vector<u16> counterpi
     s_actions.clear();
     s_timer_step = -1;
     s_auto_actions = 0;
+    s_opponent_stalled = false;
   }
   Gprb::Session::SetLocalExtra({});
   Gprb::Session::SetStageDecider(Decide);
@@ -322,6 +398,7 @@ View Current()
   const Gprb::Session::Lobby lobby = Gprb::Session::GetLobby();
   const picojson::object extra = Gprb::Session::GetPeerExtra();
   const Gprb::Session::LockIn peer_lock = Gprb::Session::GetPeerLock();
+  const Gprb::Session::LockIn local_lock = Gprb::Session::GetLocalLock();
   View v;
   std::optional<picojson::object> publish;
   {
@@ -339,23 +416,24 @@ View Current()
       s_actions.clear();
       publish = ExtraJson(game, s_actions);
     }
-    Eval e = Evaluate(game, s_actions, ActionsFrom(extra, game));
     v.active = true;
     v.game = game;
+    if (SetOver())
+    {
+      // The set is decided: nothing more to choose (the connection closes on the CSS).
+      v.type = StepType::Done;
+      v.may_lock = false;
+      v.text = "Set complete";
+      s_last_view = v;
+      return v;
+    }
+    Eval e = Evaluate(game, s_actions, ActionsFrom(extra, game));
     if (e.step_idx >= 0)
     {
       const Step& st = e.steps[e.step_idx];
-      if (s_timer_game != game || s_timer_step != e.step_idx)
-      {
-        s_timer_game = game;
-        s_timer_step = e.step_idx;
-        s_timer_start = Clock::now();
-      }
-      const auto elapsed =
-          std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - s_timer_start).count();
-      const int left = std::max<int>(0, st.seconds - static_cast<int>(elapsed));
       const bool mine = st.player == s_local;
-      if (mine && left == 0 && !e.remaining.empty() && s_actions.size() < MAX_ACTIONS)
+      if (mine && Elapsed(game, e.step_idx) >= st.seconds + GRACE_SECONDS &&
+          !e.remaining.empty() && s_actions.size() < MAX_ACTIONS)
       {
         // Slippi: a step whose time runs out is completed with a random selection.
         std::uniform_int_distribution<size_t> pick(0, e.remaining.size() - 1);
@@ -378,9 +456,7 @@ View Current()
       v.count = static_cast<u8>(e.left);
       v.to_sss = true;
       v.may_lock = false;
-      const auto elapsed =
-          std::chrono::duration_cast<std::chrono::seconds>(Clock::now() - s_timer_start).count();
-      v.seconds = static_cast<u8>(std::clamp<int>(st.seconds - static_cast<int>(elapsed), 0, 99));
+      v.seconds = TimerShown(st.seconds, Elapsed(game, e.step_idx), mine);
       std::string what;
       if (st.type == StepType::Pick)
         what = mine ? "Pick a stage" : "Opponent is picking";
@@ -397,21 +473,35 @@ View Current()
       v.stage = e.stage;
       if (e.striking)
       {
+        // Game 1: the characters locked in for the search. After a draw: the last game's (Slippi
+        // strikes again without a character step), so the CSS locks in again at once.
         v.type = StepType::Done;
+        v.time_up = true;
       }
       else
       {
-        // Slippi: the winner chooses a character first, then the loser, seeing it.
+        // Slippi: the winner chooses a character first, then the loser, seeing it; 45 s each,
+        // then the character on the CSS is taken.
         const bool winner = s_last_winner == s_local;
-        const bool peer_locked = lobby.remote_ready;
+        const bool local_locked = local_lock.ready && local_lock.game == game;
+        const bool winner_locked = winner ? local_locked : lobby.remote_ready;
+        const bool loser_locked = winner ? lobby.remote_ready : local_locked;
         v.type = StepType::Char;
-        v.my_turn = winner || peer_locked;
-        v.may_lock = v.my_turn;
-        if (!winner)
+        if (!winner_locked || !loser_locked)
         {
-          v.text = peer_locked ? fmt::format("Opponent picked {}", CharName(peer_lock.char_kind)) :
-                                 "Opponent is choosing";
+          const bool mine = winner != winner_locked;  // the winner's step, then the loser's
+          const int elapsed = Elapsed(game, winner_locked ? TIMER_LOSER_CHAR : TIMER_WINNER_CHAR);
+          v.my_turn = mine;
+          v.seconds = TimerShown(CHAR_SECONDS, elapsed, mine);
+          v.time_up = mine && elapsed >= CHAR_SECONDS + GRACE_SECONDS;
+          if (mine && winner)
+            v.text = fmt::format("Press START to lock in ({})", v.seconds);
+          else if (mine)
+            v.text = fmt::format("Opponent picked {} ({})", CharName(peer_lock.char_kind), v.seconds);
+          else
+            v.text = fmt::format("Opponent is choosing ({})", v.seconds);
         }
+        v.may_lock = v.my_turn;
       }
     }
   }
@@ -422,6 +512,12 @@ View Current()
   if (publish)
     Gprb::Session::SetLocalExtra(*publish);
   return v;
+}
+
+bool OpponentStalled()
+{
+  std::lock_guard lk(s_mutex);
+  return s_active && s_opponent_stalled;
 }
 
 picojson::object Status()
@@ -439,6 +535,7 @@ picojson::object Status()
     a.emplace_back(static_cast<double>(k));
   o["actions"] = picojson::value(a);
   o["auto_actions"] = picojson::value(static_cast<double>(s_auto_actions));
+  o["opponent_stalled"] = picojson::value(s_opponent_stalled);
   picojson::array st;
   for (const u16 k : s_starters)
     st.emplace_back(static_cast<double>(k));
@@ -451,6 +548,7 @@ picojson::object Status()
   view["count"] = picojson::value(static_cast<double>(s_last_view.count));
   view["to_sss"] = picojson::value(s_last_view.to_sss);
   view["may_lock"] = picojson::value(s_last_view.may_lock);
+  view["time_up"] = picojson::value(s_last_view.time_up);
   view["seconds"] = picojson::value(static_cast<double>(s_last_view.seconds));
   view["stage"] = picojson::value(static_cast<double>(s_last_view.stage));
   view["text"] = picojson::value(s_last_view.text);

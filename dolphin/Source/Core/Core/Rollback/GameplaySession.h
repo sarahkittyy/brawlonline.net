@@ -183,6 +183,8 @@ void SetLocalExtra(const picojson::object& extra);
 picojson::object GetPeerExtra();
 // The peer's lock-in as last heard (its character choice between games).
 LockIn GetPeerLock();
+// This player's lock-in as the game last wrote it.
+LockIn GetLocalLock();
 
 // Ranked: who decides the stage of a game instead of the picks / the random draw. `wait` holds
 // the setup back (the stage is not decided yet); otherwise `stage`/`asl` is the stage. The host
