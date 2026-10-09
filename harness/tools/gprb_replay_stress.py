@@ -140,7 +140,7 @@ def main() -> int:
     ap.add_argument("--n", type=int, default=10)
     ap.add_argument("--jobs", type=int, default=3)
     ap.add_argument("--burn", type=int, default=0, help="CPU-burning processes at normal priority")
-    ap.add_argument("--build", default=str(ROOT / "run/bin/gprb-e642b3ce98"))
+    ap.add_argument("--build", default=str(ROOT / "run/bin/npd-d2a443a6"))
     ap.add_argument("--cpu", default="sc", choices=("sc", "dc"))
     ap.add_argument("--cpu-core", type=int, default=None, help="Dolphin.Core.CPUCore (0 interpreter, 1 JIT64, 5 cached interpreter)")
     ap.add_argument("--video", default="Null")

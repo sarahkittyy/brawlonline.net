@@ -145,12 +145,14 @@ def cmd_record(args) -> int:
 
 
 def one_run(args, inp: Dict[str, Any], mode: str, run: int) -> Dict[str, Any]:
-    """_one_run, launched again (up to 3 times) when the instance never connected: on a machine
-    shared with other agents a fresh harness port is sometimes taken before Dolphin binds it."""
+    """_one_run, launched again (up to 3 times) when the instance never connected or did not answer
+    before the session ran: on a machine shared with other agents a fresh harness port is sometimes
+    taken before Dolphin binds it, and a starved instance can miss the first commands' time-out."""
     for attempt in range(3):
         rep = _one_run(args, inp, mode, run)
         err = rep.get("error") or ""
-        if not ("InstanceError" in err or "refused the connection" in err):
+        early = "run_frames" not in rep and "HarnessTimeoutError" in err
+        if not ("InstanceError" in err or "refused the connection" in err or early):
             break
         print(f"  [{mode} {run}] launch attempt {attempt + 1} failed: {err[:160]}", flush=True)
         time.sleep(5)

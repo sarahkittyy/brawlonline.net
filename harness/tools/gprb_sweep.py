@@ -1,8 +1,8 @@
 """Coverage sweep of gameplay-only rollback: every P+ v3.2 character, the legal stages, items,
 Final Smashes, and two-instance sessions (docs/gprb-coverage.md).
 
-Build: ``run/bin/gprb-e642b3ce98`` (``--build``; ``PPHARNESS_DOLPHIN_DIR`` wins if set), region
-set gp-v19 (``--region-set``).
+Build: ``run/bin/npd-d2a443a6`` (``--build``; ``PPHARNESS_DOLPHIN_DIR`` wins if set), region
+set gp-v21 (``--region-set``).
 
 Runs (``plan()``), each written to ``<out>/runs/<id>.json`` when it finishes, so the sweep is
 resumable (finished runs are skipped unless ``--rerun``; ``--retry-errors`` repeats harness errors):
@@ -77,7 +77,7 @@ from ppharness.client import HarnessClient, HarnessError  # noqa: E402
 from ppharness.netsim import NetSim  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[2]
-DEFAULT_BUILD = ROOT / "run" / "bin" / "gprb-e642b3ce98"   # frozen dolphin-gprb e642b3ce98 (gp-v19)
+DEFAULT_BUILD = ROOT / "run" / "bin" / "npd-d2a443a6"   # frozen nplayer-determinism d2a443a6 (gp-v21)
 PREFIX = os.environ.get("GPRB_NAME_PREFIX", "sweep")  # instance dir prefix: `python -m ppharness clean --prefix sweep`
 MAIN_THREAD = 0x804DD558         # the main OSThread (gprb_synctest's stall report)
 
