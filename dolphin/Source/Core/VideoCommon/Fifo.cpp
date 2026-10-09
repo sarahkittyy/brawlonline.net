@@ -215,6 +215,7 @@ void FifoManager::Init()
   if (m_system.IsDualCoreMode())
     m_gpu_mainloop.Prepare();
   m_sync_ticks.store(0);
+  m_rollback_session_determinism = false;
 }
 
 void FifoManager::Shutdown()
@@ -659,11 +660,12 @@ void FifoManager::UpdateWantDeterminism(bool want)
 {
   // We are paused (or not running at all yet), so
   // it should be safe to change this.
+  m_want_determinism = want;
   bool gpu_thread = false;
   switch (Config::GetGPUDeterminismMode())
   {
   case Config::GPUDeterminismMode::Auto:
-    gpu_thread = want;
+    gpu_thread = want || m_rollback_session_determinism;
     break;
   case Config::GPUDeterminismMode::Disabled:
     gpu_thread = false;
@@ -688,6 +690,34 @@ void FifoManager::UpdateWantDeterminism(bool want)
       VertexLoaderManager::MarkAllDirty();
     }
   }
+}
+
+void FifoManager::SetRollbackSessionDeterminism(bool active)
+{
+  if (m_rollback_session_determinism == active)
+    return;
+  m_rollback_session_determinism = active;
+  if (!m_system.IsDualCoreMode())
+  {
+    UpdateWantDeterminism(m_want_determinism);  // no GPU thread: stays off
+    return;
+  }
+  // The GPU thread must be idle before the FIFO changes hands (UpdateWantDeterminism assumes a
+  // paused emulator). On the CPU thread nothing new is written meanwhile: SyncGPU waits for the
+  // deterministic GPU thread to execute what was preprocessed, FlushGpu for the free-running one
+  // to work through the emulated FIFO (it may stop early at a pending CP interrupt or breakpoint;
+  // the rest stays between CPReadPointer and CPWritePointer, and a partial command in the video
+  // buffer, which the CPU-side path picks up as on upstream's switch when a movie starts).
+  SyncGPU(SyncGPUReason::Other);
+  FlushGpu();
+  // Then pause the loop as PauseAndLock does: a wakeup from another thread (AsyncRequests) now
+  // runs nothing, and a run already in progress has finished, before the mode flips.
+  const bool was_running = m_emu_running_state.IsSet();
+  EmulatorState(false);
+  m_gpu_mainloop.Wait();
+  UpdateWantDeterminism(m_want_determinism);
+  if (was_running)
+    EmulatorState(true);
 }
 
 /* This function checks the emulated CPU - GPU distance and may wake up the GPU,

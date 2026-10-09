@@ -59,6 +59,9 @@ public:
   void PauseAndLock();
   void RestoreState(bool was_running);
   void UpdateWantDeterminism(bool want);
+  // Brawl Online: while a gameplay rollback session runs, GPUDeterminismMode "auto" uses the
+  // deterministic GPU thread (as it does for netplay and movies). CPU thread only, between frames.
+  void SetRollbackSessionDeterminism(bool active);
   bool UseDeterministicGPUThread() const { return m_use_deterministic_gpu_thread; }
   bool UseSyncGPU() const { return m_config_sync_gpu; }
 
@@ -129,6 +132,8 @@ private:
   // This could be in SConfig, but it depends on multiple settings
   // and can change at runtime.
   bool m_use_deterministic_gpu_thread = false;
+  bool m_want_determinism = false;
+  bool m_rollback_session_determinism = false;
 
   CoreTiming::EventType* m_event_sync_gpu = nullptr;
 

@@ -1642,6 +1642,7 @@ void EndRunning(Core::System& system, const std::string& reason)
   ct.ResetThrottleToNow();  // drops a rollback burst still pending
   ct.SetRollbackResimulating(false);
   ct.SetRollbackSpeedAdjustment(1.0);
+  system.GetFifo().SetRollbackSessionDeterminism(false);
   s.resim_pass = false;
   s.end_reason = reason;
   if (s.mode == Mode::Network)
@@ -2537,6 +2538,9 @@ bool ReplayNextUpdate(Core::System& system)
 
 void StartRunning(Core::System& system)
 {
+  // Before the first frame (and its base snapshot): GPUDeterminismMode "auto" turns the
+  // deterministic GPU thread on for the session; the menus run without it.
+  system.GetFifo().SetRollbackSessionDeterminism(true);
   ResetRunStats();
   PassLogOpen(system);
   if (s.mode == Mode::SyncTest && !s.st_opts.replay_path.empty())
