@@ -143,16 +143,17 @@ namespace OnlineMenu {
     }
     static void maskStart() { maskButtons(BTN_START); }
 
-    // P+'s Code Menu opens with L + R + D-pad Down on the CSS (and the stage select). It holds
-    // settings that change the match (Special Modes, per-player codes, Debug Mode...), none of
-    // which is the player's choice online. Its control code (P+ "Control Code Menu", a hook at
-    // 0x80029574 inside the pad update, before our tick) reads the pads itself and opens the
-    // menu in the same pass: state word 0x804E0034 = 4, the menus' freeze flag 0x805B8A08 = 1
-    // (its old value kept at 0x804E006C), 0x805B6DF8 kept at 0x804E0074. While the online flow
-    // owns the CSS or the online stage select, a menu that has just opened is closed again right
-    // after the pad update, before anything is drawn, the way its B closes it (found live: the
-    // freeze flag and 0x805B6DF8 put back, 0x804E0074 cleared, state 0). Only its open sound is
-    // heard. (A Code Menu opened offline keeps its settings; docs/game-code.md §6.)
+    // P+'s Code Menu opens with L + R + D-pad Down on the CSS, the stage select and in a match.
+    // It holds settings that change the match (Special Modes, per-player codes incl. a character
+    // switch to Giga Bowser / Wario-Man, Debug Mode...), none of which is the player's choice
+    // online. Its control code (P+ "Control Code Menu", a hook at 0x80029574 inside the pad
+    // update, before our tick) reads the pads itself and opens the menu in the same pass: state
+    // word 0x804E0034 = 4, the menus' freeze flag 0x805B8A08 = 1 (its old value kept at
+    // 0x804E006C), 0x805B6DF8 kept at 0x804E0074. Anywhere in the online flow (CSS, stage select,
+    // match), a menu that has just opened is closed again right after the pad update, before
+    // anything is drawn, the way its B closes it (found live: the freeze flag and 0x805B6DF8 put
+    // back, 0x804E0074 cleared, state 0). Only its open sound is heard. (A Code Menu opened
+    // offline keeps its settings; docs/game-code.md §6.)
     static void blockCodeMenu()
     {
         volatile u32* state = (volatile u32*)0x804E0034;
@@ -231,19 +232,24 @@ namespace OnlineMenu {
         return (u8)((ExchangeFn)0x800AF80C)(css);   // muMenu::exchangeMuSelchkind2GmCharacterKind
     }
 
+    // P+'s hold-shield slots (docs/brawl-memory-map.md): 0x36 Wario-Man and 0x38 Giga Bowser are
+    // not played online in any mode; they lock in as Wario and Bowser. 0x37 (solo Popo) stays.
+    static int plainCss(int css)
+    {
+        if (css == 0x36) return 0x15;
+        if (css == 0x38) return 0x0C;
+        return css;
+    }
+
     // SESSION's characters come from the other player's machine. Only what this CSS could lock in
-    // reaches the match setup: the roster, plus P+'s hold-shield slots (0x36 Wario-Man, 0x37 solo
-    // Popo, 0x38 Giga Bowser; docs/brawl-memory-map.md).
+    // reaches the match setup: the roster, plus solo Popo (P+'s hold-shield slot 0x37).
     bool selectableCharKind(int kind)
     {
         if (kind < 0 || kind > 0xFF) return false;
         for (u32 i = 0; i < sizeof(PPLUS_ROSTER); i++) {
             if (charKindOf(PPLUS_ROSTER[i]) == kind) return true;
         }
-        for (int css = 0x36; css <= 0x38; css++) {
-            if (charKindOf(css) == kind) return true;
-        }
-        return false;
+        return charKindOf(0x37) == kind;
     }
 
     // The character to lock in: the one on the coin, else (connected, back from a match or
@@ -251,8 +257,8 @@ namespace OnlineMenu {
     static int lockChar()
     {
         int c = selectedChar();
-        if (c >= 0) return c;
-        return s.phase == PH_CONNECTED ? s.lastCss : -1;
+        if (c >= 0) return plainCss(c);
+        return s.phase == PH_CONNECTED ? plainCss(s.lastCss) : -1;
     }
 
     // ----------------------------------------------------------------------------------------
@@ -1090,7 +1096,7 @@ namespace OnlineMenu {
         memset(&req, 0, sizeof(req));
         req.mode = (u8)s.mode;
         int c = selectedChar();
-        req.lockedChar = c < 0 ? 0xFF : (u8)c;
+        req.lockedChar = c < 0 ? 0xFF : (u8)plainCss(c);
         req.costume = (u8)selectedCostume();
         PPOM::asciiToU16(req.code, s.code, PPOM::CODE_LEN);
         // The search locks the player in for game 1 (Slippi FN_LOCK_IN_AND_SEARCH); the session
@@ -1347,6 +1353,10 @@ namespace OnlineMenu {
         // a disconnect, which Dolphin reports after the rollback session has ended).
         if (strcmp(scene, "scMelee") == 0) {
             s.stepFloor = s.stepSeq;
+            // The Code Menu opens from this machine's own controller, not the session's inputs:
+            // only the player who pressed it sees it open, and it is closed in the same frame,
+            // before the frame's game code runs, so the match state never sees it.
+            if (g_onlineCss && s.mode >= 0) blockCodeMenu();
             OnlineMatch::tickMatch();
             return;
         }

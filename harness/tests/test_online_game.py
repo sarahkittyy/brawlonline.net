@@ -658,6 +658,8 @@ def _connected_direct(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
                       inst_names: tuple[str, str] = ("game-a", "game-b"),
                       test_rules: bool = True,
                       before_online: tuple[Any, Any] = (None, None),
+                      on_css: tuple[Any, Any] = (None, None),
+                      after_first_search: Any = None,
                       ) -> tuple[Game, Game, OnlineUser, OnlineUser]:
     """Two games on the Direct CSS with the gameplay backend (the default), searching for each
     other from the keypad until both are connected. Shorter rules than P+'s (`stocks` stocks,
@@ -665,7 +667,9 @@ def _connected_direct(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
     short; they are part of the setup both games build, so both must have the same. The match
     setup forces the online ruleset; `test_rules` (DEBUG cfg CFG_TEST_RULES) lets it keep these
     stocks and times. `before_online`: a function per game, run on its main menu (offline)
-    before it goes online."""
+    before it goes online. `on_css`: a function per game, run on its CSS after the character
+    pick, before the search. `after_first_search`: run on the first game once it searches,
+    before the second one does."""
     ua = backend.create_user(names[0], names[0][:4].upper())
     ub = backend.create_user(names[1], names[1][:4].upper())
     a = _boot(dolphin, inst_names[0], backend, ua, gpu_backend, test, "gameplay",
@@ -682,10 +686,16 @@ def _connected_direct(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
         if test_rules:
             B.write_rules(g.c, stocks=stocks, minutes=2, items_off=True)
             ppom.allow_test_rules(g.c)   # the match setup keeps these stocks and times
+    for g, fn in zip((a, b), on_css):
+        if fn:
+            fn(g)
+    for g in (a, b):
         g.panel = online_set.css_panel(g.c)   # the pick the CSS must show again later
     a.open_keypad()
     a.type_code(ub.connect_code)
     _searching(a, ub.connect_code)
+    if after_first_search:
+        after_first_search(a)
     time.sleep(2.2)  # the server takes one ticket per account per 2 s
     b.open_keypad()
     b.type_code(ua.connect_code)

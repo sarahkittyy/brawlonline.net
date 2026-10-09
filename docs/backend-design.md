@@ -630,9 +630,9 @@ QA finding (`harness/tools/qa_reachability.py`, run `run/artifacts/qa-reachabili
 
 | | Direct | Unranked | Ranked |
 |---|---|---|---|
-| Code Menu (L+R+D-Down) | disabled while online | disabled | disabled |
-| Debug Mode / other debug bytes | forced off every frame online | forced off | forced off |
-| Giga Bowser / Wario-Man (hold L) | blocked: the hold-L transform is ignored online | blocked | blocked |
+| Code Menu (L+R+D-Down) | closed in the frame it opens: online CSS, stage select and match (built) | same | same |
+| Debug Mode / other debug bytes | every Code Menu line at its default at each match setup, so they are off (built) | same | same |
+| Giga Bowser / Wario-Man (hold L) | blocked (built): the hold-shield slots lock in as Bowser / Wario; Dolphin and the game refuse 0x2C / 0x2D from the peer | blocked | blocked |
 | Hold B to the main menu | replaced by Slippi's "hold Z to disconnect" (cleanup, return to the online menu) | same | same, counts as abandon after game 1 |
 | Stages | game 1 random from the server `stages` list, then the loser picks any stage on P+'s stage select (as Slippi Direct) | random from the server `stages` list | strike/counterpick from the server list |
 | Rules | P+ competitive default (stocks/timer TBD with the P+ community); pause allowed | fixed, no pause | fixed, no pause |
@@ -650,7 +650,7 @@ QA finding (`harness/tools/qa_reachability.py`, run `run/artifacts/qa-reachabili
 ## 7. Phased build plan
 
 **Status (2026-10-07):**
-- **P0, P1: Direct by code works end to end** (backend, Dolphin and game; `server/README.md`, 5.5, `docs/game-code.md`), with the gameplay-only session (5.1 C) as the session start instead of A or B. Not done from P1: the section 6 rules locks (Code Menu, debug bytes, transformations) and the NAT namespace tests.
+- **P0, P1: Direct by code works end to end** (backend, Dolphin and game; `server/README.md`, 5.5, `docs/game-code.md`), with the gameplay-only session (5.1 C) as the session start instead of A or B. The section 6 rules locks (Code Menu, debug bytes, transformations) were built on 2026-10-09 (`docs/game-code.md` §6). Not done from P1: the NAT namespace tests.
 - **P3: Unranked matchmaking done; reports and replays not started.**
   - Server (`server/crates/mm`): Slippi's Unranked queue, first come first served, with region buckets inferred from the source address through a prefix table (`MM_REGIONS_FILE`; no table = one bucket, which is the friends-only setting). No rating band yet (it needs P4's rating).
   - The failed-connect rule: after Slippi's 1v1 requeue, the two players are paired with someone else first, and with each other only after a backoff. The ticket TTL ends with an explicit `get-ticket-resp` error. Cancel removes the ticket.

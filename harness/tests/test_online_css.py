@@ -408,6 +408,147 @@ def _confirm_checksums(host: Game, join: Game) -> dict[str, Any]:
     return {"compared": len(common), "mismatches": len(bad), "first_mismatch": bad[0] if bad else None}
 
 
+# P+'s hold-shield CSS slots (ProjectM/CSS.asm "Hold Shield for Special Fighter"): Bowser or
+# Wario picked with shield held. Neither form is played online, in any mode.
+CSS_GIGA_SLOT, CSS_WARIOMAN_SLOT = 0x38, 0x36
+HOLD_L_START = [{"buttons": ["L"], "l": 255, "hold": 10},
+                {"buttons": ["L", "START"], "l": 255, "hold": 8},
+                {"buttons": ["L"], "l": 255, "hold": 30},
+                {"hold": 4}]
+TRANSFORMS = ("Giga Bowser", "Wario-Man")
+DEBUG_STATE = ("Code Menu", "Debug Mode", "Display", "Stage Collisions", "Camera Lock")
+
+
+def _banned(g: Game, words: tuple[str, ...]) -> list[str]:
+    return [x for x in B.check_banned(g.c.read_mem) if any(w in x for w in words)]
+
+
+def _area(g: Game) -> int:
+    return _u(g.c, _task(g) + 0x44)
+
+
+def test_hold_shield_forms_lock_in_as_bowser_and_wario(backend: OnlineBackend,
+                                                       dolphin: Callable[..., DolphinInstance],
+                                                       gpu_backend: str) -> None:
+    """Giga Bowser and Wario-Man are not played online. On the Unranked CSS, Bowser and Wario
+    locked in with START while L is held (P+'s way to get the forms) lock in as Bowser and Wario;
+    so does a panel on P+'s special slots themselves."""
+    u = backend.create_user("rosa", "ROSA")
+    g = _boot(dolphin, "game-h", backend, u, gpu_backend, "hold-shield", "record")
+    _shots("hold-shield", g)
+    g.to_main_menu()
+    g.to_online_page()
+    g.to_css("unranked")
+    blk = ppom.find_block(g.c)
+    for name, slot in (("bowser", CSS_GIGA_SLOT), ("wario", CSS_WARIOMAN_SLOT)):
+        for how in ("hold-L", "slot"):
+            B.css_pick_character(g.c, 0, B.CSS_ID[name])
+            g.steps("wait 10")
+            if how == "slot":
+                g.c.write_mem(_area(g) + 0x1B8, struct.pack(">I", slot))
+                g.steps("wait 10")
+            panel = _u(g.c, _area(g) + 0x1B8)
+            n = g.finds()
+            g.c.pad_script(0, HOLD_L_START)
+            _wait(lambda: g.finds() > n, 10, f"{name} {how}: FIND_OPPONENT")
+            g.steps("wait 40")
+            lock = ppom.read_local(g.c, blk)["lock"]
+            g.shot(f"{name}-{how}")
+            assert lock["ready"] and lock["char_kind"] == B.CHAR_KIND[name], (name, how, hex(panel), lock)
+            assert lock["css"] == B.CSS_ID[name], (name, how, hex(panel), lock)
+            g.press_until("Z", lambda: g.c.mm_status()["state"] == "idle", "Z to cancel")
+
+
+@pytest.mark.slow
+def test_no_code_menu_and_no_hold_shield_forms_in_online_match(
+        backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str) -> None:
+    """A Direct match where both panels were on P+'s hold-shield slots (A Giga Bowser, B
+    Wario-Man) is played as Bowser vs Wario. In the match, L + R + D-pad Down on either side
+    (playing, and paused) does not open P+'s Code Menu. It reads the player's own controller, so
+    it only ever opens on that player's machine (the plugin before this change showed it there,
+    mid-match); it is closed again in the frame it opens, the other machine never sees it, the
+    match keeps running, Debug Mode and its displays stay off and the confirmed frames of both
+    machines agree."""
+    def on_slot(slot: int, name: str) -> Callable[[Game], None]:
+        def fn(g: Game) -> None:
+            B.css_pick_character(g.c, 0, B.CSS_ID[name])
+            g.steps("wait 10")
+            g.c.write_mem(_area(g) + 0x1B8, struct.pack(">I", slot))
+            g.steps("wait 10")
+        return fn
+
+    a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, "no-code-menu-match", ("vera", "walt"),
+                                     stocks=4, on_css=(on_slot(CSS_GIGA_SLOT, "bowser"),
+                                                       on_slot(CSS_WARIOMAN_SLOT, "wario")))
+    for g in (a, b):
+        _shots("no-code-menu-match", g)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)), 240,
+                    "the match to run on both")
+    a.steps("wait 120")
+    for g in (a, b):
+        setup = B.read_match_setup(g.c.read_mem)
+        kinds = sorted(p.character for p in setup.players if p.present)
+        assert kinds == sorted([B.CHAR_KIND["bowser"], B.CHAR_KIND["wario"]]), kinds
+        fts = sorted(ps.ft_kind for ps in B.read_players(g.c.read_mem, setup))
+        assert fts == sorted([B.FT_KIND["bowser"], B.FT_KIND["wario"]]), fts
+        assert not _banned(g, TRANSFORMS), _banned(g, TRANSFORMS)
+        g.shot("01-bowser-vs-wario")
+    for who in (a, b):
+        for paused in (False, True):
+            what = f"{who.name}{'-paused' if paused else ''}"
+            if paused:
+                who.steps("tap START 8", "wait 40")
+            refused = [_scratch(g, SCR_CSS) >> 24 for g in (a, b)]
+            frames = [online_set.gstatus(g.c)["current_frame"] for g in (a, b)]
+            who.c.pad_script(0, CODE_MENU_COMBO)
+            who.steps("wait 60")
+            for g in (a, b):
+                assert _u(g.c, CODE_MENU_STATE) != 4, f"{what}: the Code Menu is open on {g.name}"
+                assert not _banned(g, DEBUG_STATE), (what, g.name, _banned(g, DEBUG_STATE))
+            # The pressing player's machine closed the menu it opened; the other saw nothing.
+            now = {g.name: (_scratch(g, SCR_CSS) >> 24) - r for g, r in zip((a, b), refused)}
+            assert now[who.name] > 0 and sum(now.values()) == now[who.name], (what, now)
+            who.shot(f"02-{what}-code-menu-combo")
+            if paused:
+                who.steps("tap START 8", "wait 40")
+            assert all(online_set.gstatus(g.c)["current_frame"] > f + 30 for g, f in zip((a, b), frames)), what
+            assert all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)), what
+    a.steps("wait 300")
+    cks = _confirm_checksums(a, b)
+    assert cks["compared"] > 100 and cks["mismatches"] == 0, cks
+
+
+@pytest.mark.slow
+def test_peer_lock_in_as_giga_bowser_is_refused(backend: OnlineBackend,
+                                                dolphin: Callable[..., DolphinInstance],
+                                                gpu_backend: str) -> None:
+    """A modified game sends a lock-in as Giga Bowser (the bytes the plugin would never write).
+    No match is played with it: Dolphin refuses the lock-in or the setup (Gprb::PeerData), and
+    the games refuse a SESSION with it (OnlineMatch::setupMatch)."""
+    def giga(g: Game) -> None:
+        blk = ppom.find_block(g.c)
+        g.c.write_mem(blk.local + 0x2D, bytes([CSS_GIGA_SLOT, B.CHAR_GIGA_BOWSER]))
+        assert ppom.read_local(g.c, blk)["lock"]["char_kind"] == B.CHAR_GIGA_BOWSER
+
+    a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, "peer-giga", ("xena", "yuri"),
+                                     after_first_search=giga)
+    for g in (a, b):
+        _shots("peer-giga", g)
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < 45:
+        for g in (a, b):
+            assert online_set.scene(g.c) != "scMelee", f"{g.name}: a match started"
+            assert not _banned(g, TRANSFORMS), _banned(g, TRANSFORMS)
+        time.sleep(0.5)
+    for g in (a, b):
+        g.shot("01-no-match")
+    logs = {g.name: (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace") for g in (a, b)}
+    errors = {g.name: ppom.read_debug(g.c, ppom.find_block(g.c))["lastError"] for g in (a, b)}
+    print({n: [ln for ln in t.splitlines() if "refused" in ln or "setup" in ln][-5:] for n, t in logs.items()},
+          {n: hex(e) for n, e in errors.items()})
+    assert "peer lock-in refused (char 0x2c" in logs[b.name] or errors[a.name] == 0x5E72, (errors, b.name)
+
+
 # --------------------------------------------------------------------------- 3. keypad
 
 
