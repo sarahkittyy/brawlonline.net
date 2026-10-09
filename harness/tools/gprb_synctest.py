@@ -98,6 +98,9 @@ NP_SCENARIOS: Dict[str, Scenario] = {
                                                  teams=(0, 0, 1, 1)),
     # team battle, 3 players (2 vs 1)
     "t3-dl-gw-ics-vs-rob": Scenario(("game_and_watch", "ice_climbers", "rob"), "dream_land", teams=(0, 0, 1)),
+    # the cost series: the 4-player Battlefield match above with its first 2 and 3 players
+    "f2-bf-zelda-ics": Scenario(("zelda", "ice_climbers"), "battlefield"),
+    "f3-bf-zelda-ics-olimar": Scenario(("zelda", "ice_climbers", "olimar"), "battlefield"),
 }
 
 
@@ -401,7 +404,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help=f"comma list of names or groups: 'all' (the 2-player ones: {', '.join(SCENARIOS)}), "
                          f"'np' (3-4 players: {', '.join(NP_SCENARIOS)}), 'f4', 'f3', 't4', 't3'")
     ap.add_argument("--distance", type=int, default=2)
-    ap.add_argument("--region-set", default="gp-v19")
+    ap.add_argument("--region-set", default="gp-v21")
     ap.add_argument("--frames", type=int, default=30000)
     ap.add_argument("--start-frame", type=int, default=240)
     ap.add_argument("--cpu", default="sc", choices=("sc", "dc"))
@@ -420,6 +423,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     groups = {"all": list(SCENARIOS), "np": list(NP_SCENARIOS),
               "f4": [n for n in NP_SCENARIOS if n.startswith("f4-")],
               "f3": [n for n in NP_SCENARIOS if n.startswith("f3-")],
+              "f2": [n for n in NP_SCENARIOS if n.startswith("f2-")],
               "t4": [n for n in NP_SCENARIOS if n.startswith("t4-")],
               "t3": [n for n in NP_SCENARIOS if n.startswith("t3-")]}
     names = [n for x in args.scenario.split(",") for n in groups.get(x, [x])]

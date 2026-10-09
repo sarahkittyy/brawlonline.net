@@ -62,14 +62,20 @@ def one(args: argparse.Namespace, idx: int, log: Path, label: str) -> Dict[str, 
     rep: Dict[str, Any] = {"run": idx, "label": label}
     t0 = time.monotonic()
     env = dict(kv.split("=", 1) for kv in args.env)
+    players = args.players
+    if not players:
+        # A gprb_mispredict fixture says how many players it has; sweep work dirs are 2-player.
+        meta = Path(str(args.state) + ".json")
+        players = int(json.loads(meta.read_text()).get("players", 2)) if meta.exists() else 2
     try:
-        with SW.instance(f"{args.prefix}-{label}{idx}", args.cpu, args.video, unthrottled=True, env=env) as inst:
+        with SW.instance(f"{args.prefix}-{label}{idx}", args.cpu, args.video, unthrottled=True, env=env,
+                         controllers=range(players)) as inst:
             try:
                 c = inst.client
                 G.load_fixture(c, Path(args.state))
                 c.call("frame_trace_config", enabled=True)
                 c.call("gprb_synctest", distance=7, region_set=args.region_set, hash_regions=False,
-                       start_frame=args.start_frame, replay_path=str(log.resolve()))
+                       start_frame=args.start_frame, replay_path=str(log.resolve()), ports=(1 << players) - 1)
                 c.resume()
                 last, since = -1, time.monotonic()
                 s: Dict[str, Any] = {}
@@ -138,8 +144,10 @@ def main() -> int:
     ap.add_argument("--cpu", default="sc", choices=("sc", "dc"))
     ap.add_argument("--cpu-core", type=int, default=None, help="Dolphin.Core.CPUCore (0 interpreter, 1 JIT64, 5 cached interpreter)")
     ap.add_argument("--video", default="Null")
-    ap.add_argument("--region-set", default="gp-v19")
+    ap.add_argument("--region-set", default="gp-v21")
     ap.add_argument("--start-frame", type=int, default=240)
+    ap.add_argument("--players", type=int, default=0,
+                    help="players of the fixture (default: <state>.json of gprb_mispredict prep, else 2)")
     ap.add_argument("--env", action="append", default=[], help="K=V for every instance")
     ap.add_argument("--hang-s", type=float, default=30)
     ap.add_argument("--timeout", type=float, default=1800)
