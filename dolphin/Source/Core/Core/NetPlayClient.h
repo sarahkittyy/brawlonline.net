@@ -455,6 +455,7 @@ private:
   void SendGameStatus();
   void ComputeGameDigest(const SyncIdentifier& sync_identifier);
   void DisplayPlayersPing();
+  void DisplayGekkoPing(u32 frame);
   u32 GetPlayersMaxPing() const;
 
   // GekkoNet session management
@@ -568,6 +569,9 @@ private:
   std::string m_gekko_remote_addr;
   bool m_gekko_seen_frame_zero = false;
   int m_gekko_connect_wait_ticks = 0;
+  // Frames between ping line refreshes (Slippi's SLIPPI_PING_DISPLAY_INTERVAL).
+  static constexpr u32 PING_DISPLAY_INTERVAL = 60;
+  u32 m_gekko_next_ping_display_frame = 0;
   bool m_use_gekko_netplay = false;
   gfPadStatus m_gekko_last_local_input{};
   std::array<gfPadStatus, MAX_NUM_PLAYERS> m_gekko_last_synced_pads{};

@@ -32,6 +32,7 @@
 #include "Common/Thread.h"
 #include "Core/Brawlback/include/brawlback-common/BrawlbackConstants.h"
 #include "Core/Brawlback/include/gekkonet/GekkoLib/include/gekkonet.h"
+#include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
@@ -46,6 +47,7 @@
 #include "Core/Rollback/RollbackManager.h"
 #include "Core/System.h"
 #include "VideoCommon/Fifo.h"
+#include "VideoCommon/OnScreenDisplay.h"
 
 namespace Gprb::Session
 {
@@ -62,6 +64,7 @@ constexpr u32 SERIAL_COUNTER_START = 0x10000;  // object serial numbers for the 
 constexpr int MAX_ADVANCE = 16;
 constexpr u32 INPUT_SIZE = Addr::PAD_STRIDE;  // one gfPadStatus per player
 constexpr int CHECKSUM_HISTORY = 1 << 15;
+constexpr s64 PING_DISPLAY_INTERVAL = 60;  // frames (Slippi's SLIPPI_PING_DISPLAY_INTERVAL)
 // The session ends this many frames after the first frame showing game set: past the deepest
 // rollback (prediction window) plus the input delay, so the game set itself can no longer be
 // rolled back. The game-set frame is the same on both peers, so both end on the same frame.
@@ -256,6 +259,7 @@ struct State
   int num_players = 0;
   std::array<int, 4> handle_port{-1, -1, -1, -1};  // gekko handle -> in-game port
   std::vector<int> local_handles;
+  int remote_handle = -1;
 
   // Per-frame CPU-thread state.
   PendingOps ops;
@@ -272,6 +276,7 @@ struct State
   std::array<u8, 4 * INPUT_SIZE> local_inputs{};
   double speed_factor = 1.0;
   u32 last_timesync_frame = UINT32_MAX;
+  s64 next_ping_display_frame = PING_DISPLAY_INTERVAL;
   u32 last_game_frame = 0;
 
   // Region set of the running match.
@@ -1406,6 +1411,7 @@ bool CreateGekko(bool stress, int num_players)
   s.num_players = num_players;
   s.local_handles.clear();
   s.handle_port.fill(-1);
+  s.remote_handle = -1;
   if (stress)
   {
     for (int port = 0; port < 4; ++port)
@@ -1432,6 +1438,7 @@ bool CreateGekko(bool stress, int num_players)
       const int l = gekko_add_actor(s.gekko, GekkoLocalPlayer, nullptr);
       const int r = gekko_add_actor(s.gekko, GekkoRemotePlayer, &addr);
       s.local_handles = {l};
+      s.remote_handle = r;
       s.handle_port[l] = 0;
       s.handle_port[r] = 1;
     }
@@ -1440,6 +1447,7 @@ bool CreateGekko(bool stress, int num_players)
       const int r = gekko_add_actor(s.gekko, GekkoRemotePlayer, &addr);
       const int l = gekko_add_actor(s.gekko, GekkoLocalPlayer, nullptr);
       s.local_handles = {l};
+      s.remote_handle = r;
       s.handle_port[r] = 0;
       s.handle_port[l] = 1;
     }
@@ -1502,6 +1510,7 @@ void ResetRunStats()
   s.current_frame = -1;
   s.speed_factor = 1.0;
   s.last_timesync_frame = UINT32_MAX;
+  s.next_ping_display_frame = PING_DISPLAY_INTERVAL;
   s.rollbacks = s.max_rollback = s.frames_resimulated = s.stall_polls = s.desyncs = 0;
   s.last_desync_frame = -1;
   s.region_mismatches = 0;
@@ -2047,6 +2056,23 @@ void UpdateTimeSync(Core::System& system)
   s.speed_factor = factor;
 }
 
+// Slippi's ping line (SlippiNetplayClient, ack packets): the last round trip to the opponent in ms,
+// cyan, under the FPS box. Refreshed every PING_DISPLAY_INTERVAL frames and left up for
+// Duration::NORMAL, so it stays on screen through the match and fades out after it.
+void UpdatePingDisplay()
+{
+  if (s.mode != Mode::Network || s.remote_handle < 0 || s.current_frame < s.next_ping_display_frame)
+    return;
+  s.next_ping_display_frame = s.current_frame + PING_DISPLAY_INTERVAL;
+  if (!Config::Get(Config::GFX_SHOW_NETPLAY_PING))
+    return;
+
+  GekkoNetworkStats stats{};
+  gekko_network_stats(s.gekko, s.remote_handle, &stats);
+  OSD::AddTypedMessage(OSD::MessageType::NetPlayPing, fmt::format("Ping: {}", stats.last_ping),
+                       OSD::Duration::NORMAL, OSD::Color::CYAN);
+}
+
 void CaptureLocalInputs()
 {
   const PadSlots latest = PadsLatestRaw();
@@ -2344,6 +2370,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
       ct.ResetThrottleToNow();
     }
     UpdateTimeSync(system);
+    UpdatePingDisplay();
     PassLogWrite();
   }
 

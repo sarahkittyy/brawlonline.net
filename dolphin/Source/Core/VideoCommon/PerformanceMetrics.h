@@ -46,7 +46,8 @@ public:
   void SetLatestFrameBufferSize(u32 width, u32 height);
 
   // ImGui Functions
-  void DrawImGuiStats(const float backbuffer_scale);
+  // Returns the bottom edge of the top-left FPS box, or 0 when there is none there.
+  float DrawImGuiStats(const float backbuffer_scale);
 
 private:
   struct FrameBufferSize

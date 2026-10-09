@@ -1383,6 +1383,7 @@ void NetPlayClient::InitGekkoSession(const std::string& remote_addr, unsigned sh
   INFO_LOG_FMT(BRAWLBACK, "GekkoNet: disconnect timeout {} ms", disconnect_timeout_ms);
 
   m_gekko_remote_addr = remote_addr;
+  m_gekko_next_ping_display_frame = PING_DISPLAY_INTERVAL;
   m_use_gekko_netplay = true;
   m_stat_gekko_session = true;
   m_stat_session_started = false;
@@ -1782,16 +1783,8 @@ void NetPlayClient::HandleGekkoFrame()
 
 void NetPlayClient::CheckForLocalAdvantage()
 {
-  {
-    // Display frame advantage
-    const float ahead = gekko_frames_ahead(m_gekko_session);
-    m_stat_frames_ahead = ahead;
-    const u32 color = ahead > 0.5f  ? OSD::Color::YELLOW :
-                      ahead < -0.5f ? OSD::Color::CYAN :
-                                      OSD::Color::GREEN;
-    OSD::AddTypedMessage(OSD::MessageType::NetPlayPing, fmt::format("Frame adv: {:.1f}", ahead),
-                         1000, color);
-  }
+  // Kept for the stats only. Upstream showed it on screen every frame; Slippi shows the ping there.
+  m_stat_frames_ahead = gekko_frames_ahead(m_gekko_session);
 }
 
 int NetPlayClient::SyncTestDistance()
@@ -1985,6 +1978,7 @@ void NetPlayClient::OnFrameStart(std::unique_lock<std::mutex>& lock)
       const u32 last_adv_frame = m_gekko_pending_ops.adv_frames[m_gekko_pending_ops.adv_count - 1];
       current_frame = last_adv_frame;
       m_stat_current_frame = last_adv_frame;
+      DisplayGekkoPing(last_adv_frame);
       UpdateTimeSync();
     }
   }
@@ -2791,6 +2785,24 @@ void NetPlayClient::DisplayPlayersPing()
 
   OSD::AddTypedMessage(OSD::MessageType::NetPlayPing, fmt::format("Ping: {}", GetPlayersMaxPing()),
                        OSD::Duration::SHORT, OSD::Color::CYAN);
+}
+
+// Slippi's ping line (SlippiNetplayClient, ack packets): the last round trip to the opponent in ms,
+// cyan, refreshed every PING_DISPLAY_INTERVAL frames and left up for Duration::NORMAL, so it stays
+// on screen through the match and fades out after it.
+void NetPlayClient::DisplayGekkoPing(u32 frame)
+{
+  if (frame < m_gekko_next_ping_display_frame)
+    return;
+  m_gekko_next_ping_display_frame = frame + PING_DISPLAY_INTERVAL;
+
+  if (!Config::Get(Config::GFX_SHOW_NETPLAY_PING) || m_gekko_remote_handle < 0)
+    return;
+
+  GekkoNetworkStats stats{};
+  gekko_network_stats(m_gekko_session, m_gekko_remote_handle, &stats);
+  OSD::AddTypedMessage(OSD::MessageType::NetPlayPing, fmt::format("Ping: {}", stats.last_ping),
+                       OSD::Duration::NORMAL, OSD::Color::CYAN);
 }
 
 u32 NetPlayClient::GetPlayersMaxPing() const

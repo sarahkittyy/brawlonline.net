@@ -48,7 +48,8 @@ void AddTypedMessage(MessageType type, std::string message, u32 ms = Duration::S
                      const VideoCommon::CustomTextureData::ArraySlice::Level* icon = nullptr);
 
 // Draw the current messages on the screen. Only call once per frame.
-void DrawMessages();
+// The messages start below min_top, the bottom edge of the top-left FPS box (0 for none).
+void DrawMessages(float min_top = 0.0f);
 void ClearMessages();
 
 void SetObscuredPixelsLeft(int width);
