@@ -78,6 +78,9 @@ struct Match
   u16 local_port = 0;            // the punched UDP port this side used for mm and P2P
   std::vector<PlayerInfo> players;  // in server order
   std::vector<u16> stages;
+  // Ranked: the starter stages struck for game 1 (get-ticket-resp `starters`, ours; Slippi's
+  // client has them built in). Empty: Online::GameSetup's default.
+  std::vector<u16> starters;
   u32 items = 0;
   // One per remote player, in the order of `players` without the local one: the address chosen
   // with Slippi's rule (LAN address when both share an external IP) ...

@@ -14,6 +14,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/Config/OnlineSettings.h"
 #include "Core/Online/OnlineSession.h"
+#include "Core/Online/Ranked.h"
 #include "Core/Online/User.h"
 
 namespace Online::Client
@@ -76,6 +77,7 @@ void OnConnected(u64 generation, const Match& match, P2PLink& link, bool hand_of
     SetHandoff("failed", *error);
     return;
   }
+  Ranked::OnSessionStart(match);
   SetHandoff("started");
 }
 
@@ -145,6 +147,8 @@ std::optional<std::string> FindMatch(const SearchOptions& options)
 
 void Cleanup()
 {
+  // Leaving a ranked set before it is over abandons it (reported to the server).
+  Ranked::OnCleanup();
   std::unique_ptr<Matchmaking> old;
   {
     std::lock_guard lk(s_mutex);
@@ -166,6 +170,7 @@ void Cleanup()
 
 void Shutdown()
 {
+  Ranked::Shutdown();
   std::unique_ptr<Matchmaking> mm;
   std::unique_ptr<User> user;
   std::vector<std::thread> threads;
@@ -188,7 +193,7 @@ void Shutdown()
 
 picojson::object OnlineStatus()
 {
-  std::lock_guard lk(s_mutex);
+  std::unique_lock lk(s_mutex);
   User& user = GetUserLocked();
   const UserInfo info = user.GetUserInfo();
   picojson::object o;
@@ -225,6 +230,13 @@ picojson::object OnlineStatus()
   o["mm_server"] = picojson::value(fmt::format("{}:{}", Config::GetMatchmakingHost(),
                                                Config::GetMatchmakingPort()));
   o["accounts_url"] = picojson::value(Config::GetAccountsUrl());
+  lk.unlock();  // GetRankInfo reads the user through GetUser(), which takes s_mutex
+  const Ranked::RankInfo rank = Ranked::GetRankInfo();
+  picojson::object r = Ranked::Status();
+  r["rank_state"] = picojson::value(static_cast<double>(rank.state));
+  r["user_rating"] = picojson::value(static_cast<double>(rank.rating));
+  r["sets_played"] = picojson::value(static_cast<double>(rank.sets_played));
+  o["ranked"] = picojson::value(r);
   return o;
 }
 

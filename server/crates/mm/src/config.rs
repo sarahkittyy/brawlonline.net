@@ -10,7 +10,8 @@ use crate::ruleset::Rulesets;
 #[derive(Debug, Clone, Parser)]
 #[command(name = "mm", about = "Matchmaking server (Slippi ENet + JSON ticket protocol)", version)]
 pub struct Config {
-    /// Postgres connection string. mm only reads `users` and inserts into `mm_matches`.
+    /// Postgres connection string. mm only reads `users` and `ratings` and inserts into
+    /// `mm_matches`.
     #[arg(long, env = "DATABASE_URL")]
     pub database_url: String,
 
@@ -43,9 +44,22 @@ pub struct Config {
     #[arg(long, env = "MM_REGIONS_FILE")]
     pub regions_file: Option<String>,
 
-    /// Seconds an Unranked ticket waits for an opponent in its own region before any region will do.
+    /// Seconds an Unranked or Ranked ticket waits for an opponent in its own region before any
+    /// region will do.
     #[arg(long, env = "MM_REGION_WIDEN_SECS", default_value_t = 30)]
     pub region_widen_secs: u64,
+
+    /// Ranked: the largest rating difference of a pair at first ...
+    #[arg(long, env = "MM_RANKED_BAND", default_value_t = 150.0)]
+    pub ranked_band: f64,
+
+    /// ... widened by this many points ...
+    #[arg(long, env = "MM_RANKED_BAND_STEP", default_value_t = 50.0)]
+    pub ranked_band_step: f64,
+
+    /// ... for every this many seconds the longer-waiting player has waited.
+    #[arg(long, env = "MM_RANKED_BAND_STEP_SECS", default_value_t = 15)]
+    pub ranked_band_step_secs: u64,
 
     /// Maximum simultaneous ENet peers.
     #[arg(long, env = "MM_MAX_PEERS", default_value_t = 4000)]
@@ -71,6 +85,9 @@ impl Config {
             rulesets: Rulesets::load(self.rulesets_file.as_deref())?,
             regions: RegionMap::load(self.regions_file.as_deref())?,
             region_widen: Duration::from_secs(self.region_widen_secs),
+            ranked_band: self.ranked_band.max(0.0),
+            ranked_band_step: self.ranked_band_step.max(0.0),
+            ranked_band_interval: Duration::from_secs(self.ranked_band_step_secs),
             max_conns_per_ip: self.max_conns_per_ip.max(1),
             ..EngineConfig::default()
         })
@@ -87,6 +104,9 @@ impl Config {
             rulesets_file: None,
             regions_file: None,
             region_widen_secs: 30,
+            ranked_band: 150.0,
+            ranked_band_step: 50.0,
+            ranked_band_step_secs: 15,
             max_peers: 64,
             ticket_interval_secs: 2,
             max_conns_per_ip: 8,

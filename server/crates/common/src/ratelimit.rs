@@ -39,6 +39,13 @@ pub const SIGNUP_IP_WINDOWS: [Window; 2] = [Window::new(3, HOUR), Window::new(10
 /// password resets per address): 1 per minute, 3 per hour and 5 per day.
 pub const MAIL_RECIPIENT_WINDOWS: [Window; 3] = [Window::new(1, MINUTE), Window::new(3, HOUR), Window::new(5, DAY)];
 
+/// Leaderboard pages per client IP (IPv6 per /64): 30 per minute and 600 per hour. The
+/// launcher loads a page of 50 as the player scrolls, so this is 1,500 rows a minute.
+pub const LEADERBOARD_IP_WINDOWS: [Window; 2] = [Window::new(30, MINUTE), Window::new(600, HOUR)];
+
+/// Match history pages per account: 60 per minute.
+pub const HISTORY_WINDOWS: [Window; 1] = [Window::new(60, MINUTE)];
+
 #[derive(Debug)]
 pub struct RateLimiter<K> {
     windows: Vec<Window>,

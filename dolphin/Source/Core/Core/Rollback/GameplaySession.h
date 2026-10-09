@@ -22,6 +22,7 @@
 
 #include <array>
 
+#include <functional>
 #include <optional>
 #include <string>
 #include <utility>
@@ -160,6 +161,40 @@ struct Lobby
   u8 last_winner = 0xFF;      // in-game port of the last game's winner, 0xFE draw, 0xFF none
 };
 Lobby GetLobby();
+
+// A game of a network session that ended with GAME SET, read from the state both peers ended on
+// (Online/Ranked.h reports it). Ports are in-game ports: the host is 0, the joiner 1.
+struct GameResult
+{
+  u32 game = 0;           // 1-based, counting draws
+  u8 winner = 0xFF;       // in-game port, 0xFE draw
+  std::array<s32, 2> stocks{};
+  std::array<float, 2> damage{};
+  std::array<u8, 2> char_kind{};
+  u16 stage = NO_STAGE;
+  u32 frames = 0;  // game frames the match ran
+};
+// Called on the CPU thread for every such game; must not block. nullptr removes it.
+void SetGameResultCallback(std::function<void(const GameResult&)> callback);
+
+// A small JSON object of another module (Online/GameSetup.h: Ranked's stage strikes) carried in
+// this player's control messages, and the peer's latest one ({} before any). Sizes are capped.
+void SetLocalExtra(const picojson::object& extra);
+picojson::object GetPeerExtra();
+// The peer's lock-in as last heard (its character choice between games).
+LockIn GetPeerLock();
+
+// Ranked: who decides the stage of a game instead of the picks / the random draw. `wait` holds
+// the setup back (the stage is not decided yet); otherwise `stage`/`asl` is the stage. The host
+// uses it; the joiner checks the host's setup against it. nullptr removes it.
+struct StageDecision
+{
+  bool applies = false;  // false: the usual rule (picks, then random)
+  bool wait = false;
+  u16 stage = NO_STAGE;
+  u8 asl = 0;
+};
+void SetStageDecider(std::function<StageDecision(u32 game)> decider);
 // P+ v3.2's legal stages: its random-stage switch "Default" preset (pf/stage/switch/Switch00.rss,
 // identical to the netplay SwitchFF.rss), as srStageKind values.
 const std::vector<u16>& DefaultStages();

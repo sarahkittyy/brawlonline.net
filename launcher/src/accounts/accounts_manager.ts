@@ -1,7 +1,15 @@
 import type { AccountsHttpClient } from "./client";
 import { AccountsHttpError } from "./client";
 import type { SessionStore } from "./session_store";
-import type { AccountsMe, AccountsPublicUser, AccountsResult, SignUpRequest } from "./types";
+import type {
+  AccountsMe,
+  AccountsPublicUser,
+  AccountsResult,
+  LeaderboardPage,
+  MatchHistoryFilter,
+  MatchHistoryPage,
+  SignUpRequest,
+} from "./types";
 
 /**
  * Main-process side of the accounts integration: owns the session tokens and
@@ -70,6 +78,17 @@ export class AccountsManager {
 
   publicUser(uid: string): Promise<AccountsResult<AccountsPublicUser>> {
     return wrap(() => this.client.publicUser(uid));
+  }
+
+  leaderboard(query: { limit?: number; after?: string }): Promise<AccountsResult<LeaderboardPage>> {
+    return wrap(() => this.client.leaderboard(query));
+  }
+
+  matchHistory(
+    uid: string,
+    query: { mode: MatchHistoryFilter; limit?: number; before?: string },
+  ): Promise<AccountsResult<MatchHistoryPage>> {
+    return this._withSession(uid, (token) => this.client.matchHistory(token, query));
   }
 
   private _withSession<T>(uid: string, fn: (token: string) => Promise<T>): Promise<AccountsResult<T>> {

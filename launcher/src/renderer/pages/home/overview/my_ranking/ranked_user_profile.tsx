@@ -1,44 +1,44 @@
 import { Button } from "@base-ui/react";
 import CachedIcon from "@mui/icons-material/Cached";
 import CloseIcon from "@mui/icons-material/Close";
+import HistoryIcon from "@mui/icons-material/History";
 import CircularProgress from "@mui/material/CircularProgress";
 import Tooltip from "@mui/material/Tooltip";
 import { useMutation } from "@tanstack/react-query";
-import React from "react";
+import { useNavigate } from "react-router-dom";
 
 import { useAccount } from "@/lib/hooks/use_account";
+import { formatPosition } from "@/lib/ranked_format";
 import { useServices } from "@/services";
-import type { Rank, RankedProfile } from "@/services/backend/types";
+import type { RankedProfile } from "@/services/backend/types";
 
-import { getRankDetails } from "./get_rank_details";
 import { MyRankingMessages as Messages } from "./my_ranking.messages";
 import styles from "./ranked_user_profile.module.css";
 
 export const RankedUserProfile = ({ rankedProfile, onHide }: { rankedProfile: RankedProfile; onHide: () => void }) => {
-  const { rating, rank } = rankedProfile;
-  // Slippi shows its rank badge art and a tier colour here; we show the tier as text only.
-  const { name } = getRankDetails(rank);
-  const color = "var(--accent-primary)";
-  const isUnrankedRank = isUnranked(rank);
-
-  const rankNameLabel = React.useMemo(() => {
-    if (rank === "pending") {
-      return Messages.rankPending();
-    }
-    if (isUnrankedRank) {
-      return Messages.noRanking();
-    }
-    return name;
-  }, [rank, isUnrankedRank, name]);
+  const { rating, setsPlayed } = rankedProfile;
+  const position = formatPosition(rankedProfile.position, rankedProfile.rankedPlayers);
+  const navigate = useNavigate();
+  // Slippi shows its rank badge and tier here. We have no tiers: the Elo rating is the rank.
 
   return (
     <div className={styles.container}>
       <div className={styles.content}>
         <div>
-          <h3 className={styles.rankNameLabel}>{rankNameLabel}</h3>
-          {!isUnrankedRank && <div style={{ color, fontWeight: "bold" }}>{rating.toFixed(1)}</div>}
+          <h3 className={styles.rankNameLabel}>{Messages.rating()}</h3>
+          <div style={{ color: "var(--accent-primary)", fontWeight: "bold" }}>{rating.toFixed(1)}</div>
+          <div style={{ fontSize: "12px", opacity: 0.7 }}>
+            {Messages.setsPlayed(setsPlayed)}
+            {position && ` · ${position}`}
+          </div>
         </div>
-        <RefreshRatingButton />
+        <div style={{ display: "flex", gap: 16 }}>
+          <RefreshRatingButton />
+          <Button className={styles.refreshButton} onClick={() => navigate("/main/profile")}>
+            <HistoryIcon color="inherit" sx={{ fontSize: "16px", color: "var(--surface-3)" }} />
+            <span>{Messages.matchHistory()}</span>
+          </Button>
+        </div>
       </div>
       <Tooltip title={Messages.hide()}>
         <Button className={styles.hideRankButton} onClick={onHide}>
@@ -48,10 +48,6 @@ export const RankedUserProfile = ({ rankedProfile, onHide }: { rankedProfile: Ra
     </div>
   );
 };
-
-function isUnranked(rank: Rank) {
-  return rank === "none" || rank === "banned" || rank === "pending";
-}
 
 const RefreshRatingButton = () => {
   const updateRanking = useAccount((s) => s.updateRanking);

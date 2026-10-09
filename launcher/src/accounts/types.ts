@@ -46,7 +46,70 @@ export type AccountsPublicUser = {
     ratingUpdateCount: number;
     dailyGlobalPlacement: number | null;
     dailyRegionalPlacement: number | null;
+    /** 1-based leaderboard position; null before the first rated set. */
+    position: number | null;
+    /** Players on the leaderboard (at least one rated set). */
+    rankedPlayers: number;
   };
+};
+
+/** One row of `GET /v1/ranked/leaderboard`. */
+export type LeaderboardEntry = {
+  /** 1-based; ties (same rating) are ordered by uid and still get their own positions. */
+  position: number;
+  uid: string;
+  displayName: string;
+  connectCode: string;
+  rating: number;
+  setsPlayed: number;
+  /** Sets won and lost. */
+  wins: number;
+  losses: number;
+};
+
+/** `GET /v1/ranked/leaderboard?limit=&after=`: `next` is the `after` of the next page, null on the last. */
+export type LeaderboardPage = {
+  entries: LeaderboardEntry[];
+  next: string | null;
+  /** Players on the leaderboard. */
+  total: number;
+};
+
+/** The `mode` filter of `GET /v1/me/matches`. `unranked` is every mode but Ranked (Unranked and Direct). */
+export type MatchHistoryFilter = "all" | "ranked" | "unranked";
+
+export type MatchHistoryPlayer = {
+  uid: string;
+  /** Empty for a deleted account. */
+  displayName: string;
+  connectCode: string;
+  /** Games won in this match. */
+  wins: number;
+  /** The rating change of a ranked set; null for Unranked and Direct and when the set did not change it. */
+  ratingBefore: number | null;
+  ratingAfter: number | null;
+  ratingChange: number | null;
+};
+
+export type MatchHistoryItem = {
+  matchId: string;
+  mode: "ranked" | "unranked" | "direct";
+  /** RFC 3339. */
+  createdAt: string;
+  /** `ASSIGNED` (undecided, and always for Unranked and Direct), `COMPLETE`, `ABANDONED`, `TERMINATED`, `ERROR`, `ORPHANED`. */
+  status: string;
+  ranked: boolean;
+  players: MatchHistoryPlayer[];
+  /** The set's winner (ranked only). */
+  winner: string | null;
+  /** For example `abandoned by <uid>`, or why a set was void. */
+  endReason: string | null;
+};
+
+/** `GET /v1/me/matches?mode=&limit=&before=`: newest first; `next` is the `before` of the next page. */
+export type MatchHistoryPage = {
+  matches: MatchHistoryItem[];
+  next: string | null;
 };
 
 export type SignUpRequest = {
@@ -56,7 +119,7 @@ export type SignUpRequest = {
 };
 
 /** Error body: `{"error": {"code": "...", "message": "..."}}`. */
-export type AccountsErrorBody = { code: string; message: string; status?: number };
+export type AccountsErrorBody = { code: string; message: string; status?: number; retryAfter?: number };
 
 /**
  * Results cross the IPC boundary as values, not thrown errors, so the renderer
@@ -80,13 +143,21 @@ export interface AccountsApi {
   initNetplay(uid: string, codeStart: string): Promise<AccountsMe>;
   rename(uid: string, displayName: string): Promise<AccountsMe>;
   publicUser(uid: string): Promise<AccountsPublicUser>;
+  /** One leaderboard page (public). */
+  leaderboard(query: { limit?: number; after?: string }): Promise<LeaderboardPage>;
+  /** One page of this account's match history. */
+  matchHistory(
+    uid: string,
+    query: { mode: MatchHistoryFilter; limit?: number; before?: string },
+  ): Promise<MatchHistoryPage>;
   /** The resolved service URLs (for display and links). */
   getServiceUrls(): Promise<ServiceUrls>;
 }
 
 /** Thrown in the renderer for a failed accounts call; `message` is the server's text. */
 export class AccountsError extends Error {
-  constructor(readonly code: string, message: string, readonly status?: number) {
+  /** `retryAfter`: seconds to wait, from a 429's `Retry-After`. */
+  constructor(readonly code: string, message: string, readonly status?: number, readonly retryAfter?: number) {
     super(message);
     this.name = "AccountsError";
   }

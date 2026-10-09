@@ -27,7 +27,7 @@ const me = (overrides: Partial<AccountsMe> = {}): AccountsMe => ({
 });
 
 type Call = { url: string; method: string; headers: Record<string, string>; body?: any };
-type Route = (call: Call) => { status: number; body?: unknown };
+type Route = (call: Call) => { status: number; body?: unknown; headers?: Record<string, string> };
 
 function fakeFetch(routes: Record<string, Route>) {
   const calls: Call[] = [];
@@ -44,7 +44,10 @@ function fakeFetch(routes: Record<string, Route>) {
       return new Response(JSON.stringify({ error: { code: "not_found", message: "Not found" } }), { status: 404 });
     }
     const res = route(call);
-    return new Response(res.body === undefined ? null : JSON.stringify(res.body), { status: res.status });
+    return new Response(res.body === undefined ? null : JSON.stringify(res.body), {
+      status: res.status,
+      headers: res.headers,
+    });
   }) as unknown as typeof fetch;
   return { impl, calls };
 }
@@ -130,6 +133,45 @@ describe("accounts", () => {
     expect(await store.get("uid-1")).toBeUndefined();
     const again = await manager.me("uid-1");
     expect(again.ok === false && again.error.code).toBe("no_session");
+  });
+
+  it("pages the leaderboard and the match history, and passes on a 429's Retry-After", async () => {
+    let limited = false;
+    const page = { entries: [], next: "Y3Vy", total: 0 };
+    const { impl, calls } = fakeFetch({
+      "GET /v1/ranked/leaderboard": () =>
+        limited
+          ? {
+              status: 429,
+              body: { error: { code: "rate_limited", message: "Too many requests. Try again in 17 s." } },
+              headers: { "retry-after": "17" },
+            }
+          : { status: 200, body: page },
+      "GET /v1/me/matches": (c) =>
+        c.headers.authorization === "Bearer tok-1" ? { status: 200, body: { matches: [], next: null } } : unauthorized,
+    });
+    const store = new SessionStore(path.join(dir, "s.json"), null);
+    await store.set(UID, "tok-1");
+    const manager = new AccountsManager(new AccountsHttpClient("http://api", "test", impl), store);
+
+    expect(await manager.leaderboard({})).toEqual({ ok: true, value: page });
+    expect(calls[0].url).toBe("http://api/v1/ranked/leaderboard");
+    await manager.leaderboard({ limit: 50, after: "a+b/c" });
+    expect(calls[1].url).toBe("http://api/v1/ranked/leaderboard?limit=50&after=a%2Bb%2Fc");
+    // Public: no session token.
+    expect(calls[1].headers.authorization).toBeUndefined();
+
+    expect((await manager.matchHistory(UID, { mode: "ranked", before: "Yz" })).ok).toBe(true);
+    expect(calls[2].url).toBe("http://api/v1/me/matches?mode=ranked&before=Yz");
+
+    limited = true;
+    expect(await manager.leaderboard({ after: "x" })).toEqual({
+      ok: false,
+      error: { code: "rate_limited", message: "Too many requests. Try again in 17 s.", status: 429, retryAfter: 17 },
+    });
+    // No session: the history asks for a login.
+    const none = await manager.matchHistory("someone-else", { mode: "all" });
+    expect(none.ok === false && none.error.code).toBe("no_session");
   });
 
   it("reports an unreachable server as a network error", async () => {

@@ -110,6 +110,11 @@ impl SearchOptions {
     pub fn unranked(server: SocketAddr, creds: Credentials) -> Self {
         SearchOptions { mode: 1, target: String::new(), ..Self::direct(server, creds, "") }
     }
+
+    /// A Ranked search (mode 0, `connectCode: []`).
+    pub fn ranked(server: SocketAddr, creds: Credentials) -> Self {
+        SearchOptions { mode: 0, target: String::new(), ..Self::direct(server, creds, "") }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

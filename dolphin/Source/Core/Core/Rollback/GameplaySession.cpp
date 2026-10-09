@@ -147,6 +147,7 @@ struct MatchSetup
 struct PeerView
 {
   bool seen = false;
+  picojson::object extra;  // SetLocalExtra of the peer
   LockIn lock;
   MatchSetup setup;  // the host's setup (joiner)
   u8 last_winner = 0xFF;
@@ -1013,6 +1014,21 @@ u16 DrawRandomStage(u32 game)
   return stage;
 }
 
+std::mutex s_result_callback_mutex;
+std::function<void(const GameResult&)> s_result_callback;
+std::function<StageDecision(u32)> s_stage_decider;  // under s_result_callback_mutex
+picojson::object s_local_extra;                      // under s.mutex
+
+StageDecision DecideStage(u32 game)
+{
+  std::function<StageDecision(u32)> d;
+  {
+    std::lock_guard lk(s_result_callback_mutex);
+    d = s_stage_decider;
+  }
+  return d ? d(game) : StageDecision{};
+}
+
 // Host, under s.mutex: once every player is locked in for the next game, decide its setup. The
 // stage: the pick of the player who lost the last game, else any pick, else random from the
 // match's stage list (DrawRandomStage). Slippi: Unranked random (every game), Direct random for
@@ -1033,6 +1049,9 @@ void MaybeDecideSetup()
     if (!LockedFor(*l, game))
       return;
   }
+  const StageDecision decided = DecideStage(game);
+  if (decided.applies && decided.wait)
+    return;
   MatchSetup st;
   st.game = game;
   st.num_players = static_cast<int>(locks.size());
@@ -1050,7 +1069,12 @@ void MaybeDecideSetup()
     if (!pick && l->stage_pick != NO_STAGE)
       pick = l;
   }
-  if (pick)
+  if (decided.applies)
+  {
+    st.stage = decided.stage;
+    st.asl = decided.asl;
+  }
+  else if (pick)
   {
     st.stage = pick->stage_pick;
     st.asl = pick->asl;
@@ -1064,7 +1088,8 @@ void MaybeDecideSetup()
   s.last_stage = st.stage;
   INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} setup: stage {:#x}{}, P1 {:#x}/{}, P2 {:#x}/{}",
                game, st.stage,
-               pick ? " (picked)" :
+               decided.applies ? " (decided by the ranked game setup)" :
+               pick            ? " (picked)" :
                       fmt::format(" (random from {} stages, {})", AllowedStages().size(),
                                   s.net_opts.stages.empty() ? "P+ legal list" : "server list"),
                st.players[0].char_kind, st.players[0].costume, st.players[1].char_kind,
@@ -1094,6 +1119,8 @@ void SendState()
     if (s.net_opts.host && s.setup.game != 0)
       o["match_setup"] = SetupJson(s.setup);
     o["winner"] = picojson::value(static_cast<double>(s.last_winner));
+    if (!s_local_extra.empty())
+      o["x"] = picojson::value(s_local_extra);
     if (s.net_opts.host && !s.init_block.empty())
     {
       o["init"] = picojson::value(Hex(s.init_block));
@@ -1216,12 +1243,21 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
     p.lock = LockFromJson(x->get<picojson::object>());
   if (const auto n = PeerData::JsonUInt(get("winner"), 0xFF))
     p.last_winner = static_cast<u8>(*n);
+  // Another module's state (GameSetup's strikes): only a small object is kept.
+  if (const auto* x = get("x"); x && x->is<picojson::object>() && x->serialize().size() <= 1024)
+    p.extra = x->get<picojson::object>();
   if (const auto* x = get("match_setup"); x && x->is<picojson::object>() && !s.net_opts.host)
   {
     if (auto st = SetupFromJson(x->get<picojson::object>()))
     {
       if (st->game == NextGame() && s.setup.game != st->game)
       {
+        if (const StageDecision d = DecideStage(st->game); d.applies && !d.wait && d.stage != st->stage)
+        {
+          WARN_LOG_FMT(BRAWLBACK, "gprb lobby: game {}: the host set up stage {:#x}, the stage "
+                                  "strikes decided {:#x}",
+                       st->game, st->stage, d.stage);
+        }
         s.setup = *st;
         s.last_stage = st->stage;
         INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} setup from the host: stage {:#x}", st->game,
@@ -1584,6 +1620,18 @@ void ResetRunStats()
 
 void PassLogClose();
 
+
+void ReportGameResult(const GameResult& r)
+{
+  std::function<void(const GameResult&)> cb;
+  {
+    std::lock_guard lk(s_result_callback_mutex);
+    cb = s_result_callback;
+  }
+  if (cb)
+    cb(r);
+}
+
 void EndRunning(Core::System& system, const std::string& reason)
 {
   PassLogClose();
@@ -1625,6 +1673,15 @@ void EndRunning(Core::System& system, const std::string& reason)
       s.last_winner = st0 != st1 ? (st0 > st1 ? 0 : 1) : (d0 != d1 ? (d0 < d1 ? 0 : 1) : 0xFE);
       INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} winner {} (stocks {} {}, damage {} {})",
                    NextGame(), s.last_winner, st0, st1, d0, d1);
+      GameResult r;
+      r.game = NextGame();
+      r.winner = s.last_winner;
+      r.stocks = {st0, st1};
+      r.damage = {d0, d1};
+      r.char_kind = {s.setup.players[0].char_kind, s.setup.players[1].char_kind};
+      r.stage = s.setup.stage;
+      r.frames = s.end_game_frame;
+      ReportGameResult(r);
     }
     // Ready for the next match on the same connection.
     s.phase = s.peer.seen ? Phase::Connected : Phase::Ended;
@@ -2819,6 +2876,36 @@ void SetLocalLock(const LockIn& lock_in)
                  lock.stage_pick, (lock.port_values[0] & 1) ? "yes" : "no");
   }
   MaybeDecideSetup();
+}
+
+void SetGameResultCallback(std::function<void(const GameResult&)> callback)
+{
+  std::lock_guard lk(s_result_callback_mutex);
+  s_result_callback = std::move(callback);
+}
+
+void SetStageDecider(std::function<StageDecision(u32 game)> decider)
+{
+  std::lock_guard lk(s_result_callback_mutex);
+  s_stage_decider = std::move(decider);
+}
+
+void SetLocalExtra(const picojson::object& extra)
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  s_local_extra = extra;
+}
+
+picojson::object GetPeerExtra()
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  return s.peer.extra;
+}
+
+LockIn GetPeerLock()
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  return s.peer.lock;
 }
 
 Lobby GetLobby()
