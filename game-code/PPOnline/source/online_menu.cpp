@@ -48,6 +48,11 @@ namespace OnlineMenu {
         char ownPrinted[24];                // what that window shows
         char rankText[24];                  // Ranked: the rating (GET_RANK), "" until known
         u32 rankFrames;                     // Ranked: frames until GET_RANK is asked again
+        PPOM::GameStep step;                // Ranked: the game setup step (GP_FETCH_STEP)
+        char stepText[64];
+        bool stepPending;
+        u32 stepFrames;
+        int sssGame;                        // Ranked: the game the stage select was opened for
         char status[128];
         bool statusRed;
         bool statusDirty;
@@ -612,6 +617,11 @@ namespace OnlineMenu {
             setStatus(buf, false);
             return;
         case PH_CONNECTED:
+            // Ranked's game setup has its own line (whose turn it is, the opponent's character).
+            if (rankedStep() && s.step.active && s.stepText[0] && !lockedForNext()) {
+                setStatus(s.stepText, false);
+                return;
+            }
             // Slippi's lines when connected (LoadCSSText.asm): "Press START to lock in" /
             // "select stage", "Locked in" + "Waiting on opponent", and "Playing: <name>".
             if (lockedForNext()) {
@@ -1084,6 +1094,7 @@ namespace OnlineMenu {
         s.searchSeq = PPOM::post(PPOM::CMD_FIND_OPPONENT, &req, sizeof(req));
         s.pollPending = true;   // Dolphin answers FIND_OPPONENT with the match state
         s.pollFrames = 0;
+        s.sssGame = 0;
         s.phase = PH_SEARCHING;
     }
 
@@ -1149,6 +1160,14 @@ namespace OnlineMenu {
         if (s.phase != PH_CONNECTED || g_onlineMatchGame) return;
         int game = sessionGame();
         if (!game) return;
+        const bool ranked = s.mode == PPOM::MODE_RANKED;
+        if (ranked && s.step.active && s.step.toSss && s.sssGame != game) {
+            // Ranked: both players go to the stage select for the strikes / ban / pick.
+            s.sssGame = game;
+            g_onlinePickStage = 1;
+            leaveCss(1);
+            return;
+        }
         if (s.lockedGame == game) {
             const PPOM::Session& se = PPOM::g_block.session;
             if (se.state == PPOM::SS_MATCH_READY && se.game == game) {
@@ -1159,11 +1178,17 @@ namespace OnlineMenu {
             return;
         }
         if (OnlineMatch::pickedStage() != 0xFFFF && lockChar() >= 0) {
+            // Ranked: the characters come after the stage (winner first); the stage is the steps'.
+            if (ranked) {
+                OnlineMatch::clearPickedStage();
+                return;
+            }
             // Back from the stage select: locked in with the stage (ExitSSSUponStageSelect).
             lockIn(game, OnlineMatch::pickedStage(), OnlineMatch::pickedAsl());
             return;
         }
         if (!(pressed & BTN_START) || lockChar() < 0) return;
+        if (ranked && !(s.step.active && s.step.mayLock)) return;
         if (picksStage()) {
             g_onlinePickStage = 1;
             leaveCss(1);
@@ -1187,6 +1212,30 @@ namespace OnlineMenu {
             sprintf(s.rankText, "%d", rating);
         }
     }
+
+    // Ranked, connected: Slippi's GP_FETCH_STEP every frame (one at a time), on the CSS and the
+    // stage select, so turns and strikes show at once.
+    static void pollStep()
+    {
+        if (s.mode != PPOM::MODE_RANKED || s.phase != PH_CONNECTED) {
+            s.step.active = 0;
+            s.stepPending = false;
+            return;
+        }
+        if (s.stepPending && ++s.stepFrames < 60) return;
+        PPOM::post(PPOM::CMD_GP_FETCH_STEP, NULL, 0);
+        s.stepPending = true;
+        s.stepFrames = 0;
+    }
+
+    // Ranked and connected: the last step (active or not: an inactive step means the stage is
+    // decided, so a ranked stage select leaves). NULL in every other mode.
+    const PPOM::GameStep* rankedStep()
+    {
+        return s.mode == PPOM::MODE_RANKED && s.phase == PH_CONNECTED ? &s.step : NULL;
+    }
+
+    const char* rankedText() { return s.stepText; }
 
     // Ranked: GET_RANK once a second on the CSS, so the rating appears as soon as Dolphin has it
     // and the change shows up once the server has rated a finished set.
@@ -1212,6 +1261,13 @@ namespace OnlineMenu {
         }
         if (r->cmd == PPOM::CMD_GET_RANK) {
             onRank(*(const PPOM::RankInfo*)r->payload);
+            return;
+        }
+        if (r->cmd == PPOM::CMD_GP_FETCH_STEP) {
+            memcpy(&s.step, r->payload, sizeof(s.step));
+            if (s.step.nKinds > sizeof(s.step.kinds)) s.step.nKinds = sizeof(s.step.kinds);
+            PPOM::u16ToAscii(s.stepText, s.step.text, sizeof(s.stepText));
+            s.stepPending = false;
             return;
         }
         if (r->cmd == PPOM::CMD_GET_ONLINE_STATUS) {
@@ -1291,6 +1347,7 @@ namespace OnlineMenu {
         }
         pollMailbox();
         pollMatchState();
+        pollStep();
 
         bool onCss = g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0;
         g_onlineCssLock = (onCss && lockedIn()) ? 1 : 0;

@@ -15,6 +15,9 @@ namespace OnlineMenu {
     void restoreCss();                  // before the CSS starts again: the remembered coin
     bool selectableCharKind(int kind);  // a gmCharacterKind P+'s CSS can lock in
     const char* cssLine(MuMsg* msg, u32 window, u32 line, const void* msbin, u32 caller);
+    // Ranked's game setup step while connected in Ranked (NULL otherwise), and its line.
+    const PPOM::GameStep* rankedStep();
+    const char* rankedText();
 }
 
 namespace OnlineMatch {
