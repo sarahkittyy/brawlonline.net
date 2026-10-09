@@ -216,6 +216,10 @@ pub fn clamp_error(mut msg: String) -> String {
 #[derive(Debug)]
 pub enum ClientMessage {
     CreateTicket(Box<CreateTicket>),
+    /// `hello`: opens an online connection (rooms, the online count).
+    Hello(Box<crate::rooms::Hello>),
+    /// A `room-*` request, or why it could not be read.
+    Room(Result<crate::rooms::RoomRequest, String>),
     /// Valid JSON object with a `type` we do not handle.
     Unknown(String),
 }
@@ -241,6 +245,10 @@ pub fn parse_client_message(data: &[u8]) -> Result<ClientMessage, ParseError> {
         CREATE_TICKET => serde_json::from_value::<CreateTicket>(value)
             .map(|t| ClientMessage::CreateTicket(Box::new(t)))
             .map_err(|e| ParseError::Malformed(CREATE_TICKET, e.to_string())),
+        crate::rooms::HELLO => serde_json::from_value::<crate::rooms::Hello>(value)
+            .map(|h| ClientMessage::Hello(Box::new(h)))
+            .map_err(|e| ParseError::Malformed(crate::rooms::HELLO, e.to_string())),
+        k if k.starts_with("room-") => Ok(ClientMessage::Room(crate::rooms::RoomRequest::parse(k, &value))),
         _ => Ok(ClientMessage::Unknown(kind)),
     }
 }

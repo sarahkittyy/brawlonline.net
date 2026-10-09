@@ -73,10 +73,30 @@ pub struct Config {
     /// players share one public address.
     #[arg(long, env = "MM_MAX_CONNS_PER_IP", default_value_t = 8)]
     pub max_conns_per_ip: usize,
+
+    /// Local HTTP address for the status the launcher's room list comes from (`GET /status`:
+    /// the online count and the public rooms). accounts reads it (`MM_STATUS_URL`); keep it on
+    /// loopback. `off` turns it off.
+    #[arg(long, env = "MM_STATUS_LISTEN", default_value = "127.0.0.1:43181")]
+    pub status_listen: String,
+
+    /// Seconds a starting room waits for every member's game ticket.
+    #[arg(long, env = "MM_ROOM_START_TIMEOUT_SECS", default_value_t = 15)]
+    pub room_start_timeout_secs: u64,
 }
 
 impl Config {
+    /// The status listener's address, or None for `off` (or empty).
+    pub fn status_addr(&self) -> anyhow::Result<Option<SocketAddr>> {
+        let v = self.status_listen.trim();
+        if v.is_empty() || v.eq_ignore_ascii_case("off") {
+            return Ok(None);
+        }
+        Ok(Some(v.parse().map_err(|e| anyhow::anyhow!("MM_STATUS_LISTEN {v:?}: {e}"))?))
+    }
+
     pub fn engine_config(&self) -> anyhow::Result<EngineConfig> {
+        let defaults = EngineConfig::default();
         Ok(EngineConfig {
             ticket_ttl: Duration::from_secs(self.ticket_ttl_secs),
             ticket_interval: Duration::from_secs(self.ticket_interval_secs),
@@ -89,7 +109,11 @@ impl Config {
             ranked_band_step: self.ranked_band_step.max(0.0),
             ranked_band_interval: Duration::from_secs(self.ranked_band_step_secs),
             max_conns_per_ip: self.max_conns_per_ip.max(1),
-            ..EngineConfig::default()
+            rooms: crate::rooms::RoomsConfig {
+                start_timeout: Duration::from_secs(self.room_start_timeout_secs.max(1)),
+                ..defaults.rooms.clone()
+            },
+            ..defaults
         })
     }
 
@@ -110,6 +134,8 @@ impl Config {
             max_peers: 64,
             ticket_interval_secs: 2,
             max_conns_per_ip: 8,
+            status_listen: "127.0.0.1:0".into(),
+            room_start_timeout_secs: 15,
         }
     }
 }
