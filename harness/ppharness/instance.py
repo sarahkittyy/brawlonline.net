@@ -39,6 +39,8 @@ log = logging.getLogger("ppharness.instance")
 
 SIDEVICE_NONE = 0
 SIDEVICE_STANDARD_CONTROLLER = 6
+#: SDL hint (Dolphin.ini [SDL_Hints]) that lets SDL open a GameCube adapter; every instance sets it 0.
+SDL_HINT_GC_ADAPTER = "SDL_JOYSTICK_HIDAPI_GAMECUBE"
 
 #: Template subdirectories that Dolphin only reads; linked instead of copied.
 DEFAULT_LINK_DIRS = ("Load",)
@@ -107,6 +109,11 @@ class InstanceConfig:
             v["Core"]["WiiSDCardEnableFolderSync"] = False
         if self.netplay_direct:
             v["NetPlay"] = {"TraversalChoice": "direct", "UseUPNP": False}
+        # Never let SDL's HIDAPI driver open a GameCube adapter (WUP-028): Dolphin sets the hint to
+        # "1" when no port is a Wii U adapter (SDL.cpp), and an instance holding the adapter locks
+        # the user's own Dolphin out of it ("access denied"). [SDL_Hints] in Dolphin.ini is applied
+        # after that default; a -C override would not be (the hints are read from the base layer).
+        v["SDL_Hints"] = {SDL_HINT_GC_ADAPTER: "0"}
         if self.quiet:
             v["Analytics"] = {"Enabled": False, "PermissionAsked": True}
             v["AutoUpdate"] = {"UpdateTrack": ""}
@@ -679,7 +686,8 @@ def probe_harness_support(exe: str | os.PathLike[str] | None = None,
         (user / "Config").mkdir(exist_ok=True)
         ini = IniFile.load(user / "Config" / "Dolphin.ini")
         ini.update({"DSP": {"Muted": True}, "Analytics": {"Enabled": False, "PermissionAsked": True},
-                    "Core": {f"SIDevice{p}": 0 for p in range(4)}})
+                    "Core": {f"SIDevice{p}": 0 for p in range(4)},
+                    "SDL_Hints": {SDL_HINT_GC_ADAPTER: "0"}})
         ini.save(user / "Config" / "Dolphin.ini")
         port = find_free_port()
         cmd = [str(exe_p), "-u", str(user), "-p", "headless", "-v", "Null",
