@@ -16,6 +16,10 @@ pub struct MmUser {
     pub play_key_version: i32,
     pub banned_until: Option<DateTime<Utc>>,
     pub email_verified: bool,
+    /// Elo rating ([`crate::ranked::DEFAULT_RATING`] before the first ranked set).
+    pub rating: f64,
+    /// Rated ranked sets played.
+    pub ranked_sets: i32,
 }
 
 impl MmUser {
@@ -26,11 +30,14 @@ impl MmUser {
 
 pub async fn fetch_mm_user(pool: &sqlx::PgPool, uid: Uuid) -> sqlx::Result<Option<MmUser>> {
     sqlx::query_as::<_, MmUser>(
-        "SELECT uid, display_name, connect_code, play_key_version, banned_until,
-                email_verified_at IS NOT NULL AS email_verified
-           FROM users WHERE uid = $1",
+        "SELECT u.uid, u.display_name, u.connect_code, u.play_key_version, u.banned_until,
+                u.email_verified_at IS NOT NULL AS email_verified,
+                COALESCE(r.rating, $2) AS rating, COALESCE(r.sets_played, 0) AS ranked_sets
+           FROM users u LEFT JOIN ratings r ON r.uid = u.uid
+          WHERE u.uid = $1",
     )
     .bind(uid)
+    .bind(crate::ranked::DEFAULT_RATING)
     .fetch_optional(pool)
     .await
 }

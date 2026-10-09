@@ -1,33 +1,24 @@
+import type { LeaderboardPage, MatchHistoryFilter, MatchHistoryPage } from "@accounts/types";
 import type { PlayKey } from "@dolphin/types";
 
-export const enum Rank {
-  NONE = "none",
-  BANNED = "banned",
-  PENDING = "pending",
-  BRONZE1 = "bronze1",
-  BRONZE2 = "bronze2",
-  BRONZE3 = "bronze3",
-  SILVER1 = "silver1",
-  SILVER2 = "silver2",
-  SILVER3 = "silver3",
-  GOLD1 = "gold1",
-  GOLD2 = "gold2",
-  GOLD3 = "gold3",
-  PLAT1 = "plat1",
-  PLAT2 = "plat2",
-  PLAT3 = "plat3",
-  DIAMOND1 = "diamond1",
-  DIAMOND2 = "diamond2",
-  DIAMOND3 = "diamond3",
-  MASTER1 = "master1",
-  MASTER2 = "master2",
-  MASTER3 = "master3",
-  GRANDMASTER = "grandmaster",
-}
+export type {
+  LeaderboardEntry,
+  LeaderboardPage,
+  MatchHistoryFilter,
+  MatchHistoryItem,
+  MatchHistoryPage,
+  MatchHistoryPlayer,
+} from "@accounts/types";
 
+/** The ranked rating: an Elo number on Slippi's scale (server/crates/common/src/ranked.rs). No tiers. */
 export type RankedProfile = {
   rating: number;
-  rank: Rank;
+  /** Rated ranked sets (Slippi's `ratingUpdateCount`). */
+  setsPlayed: number;
+  /** 1-based leaderboard position; null before the first rated set (or from an older server). */
+  position?: number | null;
+  /** Players on the leaderboard. */
+  rankedPlayers?: number;
 };
 
 export type UserData = {
@@ -39,6 +30,10 @@ export interface BackendService {
   validateUserId(userId: string): Promise<{ displayName: string; connectCode: string }>;
   fetchUserData(): Promise<UserData | undefined>;
   fetchRankedNetplayProfile(userId: string): Promise<RankedProfile | undefined>;
+  /** One leaderboard page; `after` is the previous page's `next`. */
+  fetchLeaderboard(after?: string): Promise<LeaderboardPage>;
+  /** One page of the logged-in player's matches, newest first; `before` is the previous page's `next`. */
+  fetchMatchHistory(mode: MatchHistoryFilter, before?: string): Promise<MatchHistoryPage>;
   assertPlayKey(playKey: PlayKey): Promise<void>;
   deletePlayKey(): Promise<void>;
   changeDisplayName(name: string): Promise<void>;

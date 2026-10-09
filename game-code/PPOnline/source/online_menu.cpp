@@ -47,6 +47,14 @@ namespace OnlineMenu {
         int appState;                       // GET_ONLINE_STATUS state (-1 = no answer yet)
         u32 statusFrames;                   // frames since the menus last asked for it
         bool ownShown;                      // the own-code window is attached on this CSS
+        char ownPrinted[24];                // what that window shows
+        char rankText[24];                  // Ranked: the rating (GET_RANK), "" until known
+        u32 rankFrames;                     // Ranked: frames until GET_RANK is asked again
+        PPOM::GameStep step;                // Ranked: the game setup step (GP_FETCH_STEP)
+        char stepText[64];
+        bool stepPending;
+        u32 stepFrames;
+        int sssGame;                        // Ranked: the game the stage select was opened for
         char status[128];
         bool statusRed;
         bool statusDirty;
@@ -611,6 +619,11 @@ namespace OnlineMenu {
             setStatus(buf, false);
             return;
         case PH_CONNECTED:
+            // Ranked's game setup has its own line (whose turn it is, the opponent's character).
+            if (rankedStep() && s.step.active && s.stepText[0] && !lockedForNext()) {
+                setStatus(s.stepText, false);
+                return;
+            }
             // Slippi's lines when connected (LoadCSSText.asm): "Press START to lock in" /
             // "select stage", "Locked in" + "Waiting on opponent", and "Playing: <name>".
             if (lockedForNext()) {
@@ -774,11 +787,27 @@ namespace OnlineMenu {
     // MuMsg::attachScnMdlSimple as the CSS attaches window 0, at the same size) and placed left
     // of the bar, right-aligned against it. The code comes from GET_ONLINE_STATUS (Dolphin
     // reads it from user.json), which the menus ask for.
+    // In Ranked the same window shows the player's rating instead (Slippi's CSS shows the rank
+    // there): the Elo number and, after a set, its change, e.g. "1523 (+14)".
     static const u32 OWN_WINDOW = 1;
     static const float OWN_X1 = -640.0f, OWN_X2 = -395.0f;
+    static const char* ownText()
+    {
+        if (usesCode()) return s.ownCode;
+        if (s.mode == PPOM::MODE_RANKED) return s.rankText;
+        return "";
+    }
     static void showOwnCode()
     {
-        if (!s.cssMsg || !usesCode() || !s.ownCode[0] || s.ownShown) return;
+        const char* text = ownText();
+        if (!s.cssMsg || !text[0]) return;
+        if (s.ownShown) {
+            if (strcmp(text, s.ownPrinted) != 0) {
+                s.cssMsg->printf(OWN_WINDOW, "%s", text);
+                strncpy(s.ownPrinted, text, sizeof(s.ownPrinted) - 1);
+            }
+            return;
+        }
         MuMsg* m = s.cssMsg;
         u8* task = cssTask();
         u32 obj = task ? *(u32*)(task + 0x150) : 0;   // MenSelchrRule, the rule line's model
@@ -798,7 +827,8 @@ namespace OnlineMenu {
         }
         m->setAlignMode(OWN_WINDOW, MuMsg::Align_Right);
         m->setFontColor(OWN_WINDOW, 0xFF, 0xFF, 0xFF, 0xFF);
-        m->printf(OWN_WINDOW, "%s", s.ownCode);
+        m->printf(OWN_WINDOW, "%s", text);
+        strncpy(s.ownPrinted, text, sizeof(s.ownPrinted) - 1);
         s.ownShown = true;
         PPOM::g_block.debug.scratch[12] |= 0x80000000u;   // tests: the own code is shown
     }
@@ -1008,6 +1038,8 @@ namespace OnlineMenu {
         saveRules();
         s.mode = mode;
         s.phase = PH_IDLE;
+        s.rankText[0] = 0;
+        s.rankFrames = 0;   // Ranked: ask for the rating at once
         s.cssMsg = NULL;
         s.zHeld = 0;
         s.code[0] = 0;
@@ -1064,6 +1096,7 @@ namespace OnlineMenu {
         s.searchSeq = PPOM::post(PPOM::CMD_FIND_OPPONENT, &req, sizeof(req));
         s.pollPending = true;   // Dolphin answers FIND_OPPONENT with the match state
         s.pollFrames = 0;
+        s.sssGame = 0;
         s.phase = PH_SEARCHING;
     }
 
@@ -1133,6 +1166,14 @@ namespace OnlineMenu {
         if (s.phase != PH_CONNECTED || g_onlineMatchGame) return;
         int game = sessionGame();
         if (!game) return;
+        const bool ranked = s.mode == PPOM::MODE_RANKED;
+        if (ranked && s.step.active && s.step.toSss && s.sssGame != game) {
+            // Ranked: both players go to the stage select for the strikes / ban / pick.
+            s.sssGame = game;
+            g_onlinePickStage = 1;
+            leaveCss(1);
+            return;
+        }
         if (s.lockedGame == game) {
             const PPOM::Session& se = PPOM::g_block.session;
             if (se.state == PPOM::SS_MATCH_READY && se.game == game) {
@@ -1143,17 +1184,76 @@ namespace OnlineMenu {
             return;
         }
         if (OnlineMatch::pickedStage() != 0xFFFF && lockChar() >= 0) {
+            // Ranked: the characters come after the stage (winner first); the stage is the steps'.
+            if (ranked) {
+                OnlineMatch::clearPickedStage();
+                return;
+            }
             // Back from the stage select: locked in with the stage (ExitSSSUponStageSelect).
             lockIn(game, OnlineMatch::pickedStage(), OnlineMatch::pickedAsl());
             return;
         }
         if (!(pressed & BTN_START) || lockChar() < 0) return;
+        if (ranked && !(s.step.active && s.step.mayLock)) return;
         if (picksStage()) {
             g_onlinePickStage = 1;
             leaveCss(1);
         } else {
             lockIn(game, 0xFFFF, 0);
         }
+    }
+
+    // Ranked: the rating, rounded ("1523"), and after a set its change ("1523 (+14)").
+    static void onRank(const PPOM::RankInfo& r)
+    {
+        if (r.state == PPOM::RANK_UNKNOWN || !(r.rating > -100000.0f && r.rating < 100000.0f)) {
+            s.rankText[0] = 0;
+            return;
+        }
+        int rating = (int)(r.rating + (r.rating < 0 ? -0.5f : 0.5f));
+        if (r.hasChange && r.change > -100000.0f && r.change < 100000.0f) {
+            int change = (int)(r.change + (r.change < 0 ? -0.5f : 0.5f));
+            sprintf(s.rankText, "%d (%c%d)", rating, change < 0 ? '-' : '+', change < 0 ? -change : change);
+        } else {
+            sprintf(s.rankText, "%d", rating);
+        }
+    }
+
+    // Ranked, connected: Slippi's GP_FETCH_STEP every frame (one at a time), on the CSS and the
+    // stage select, so turns and strikes show at once.
+    static void pollStep()
+    {
+        if (s.mode != PPOM::MODE_RANKED || s.phase != PH_CONNECTED) {
+            s.step.active = 0;
+            s.stepPending = false;
+            return;
+        }
+        if (s.stepPending && ++s.stepFrames < 60) return;
+        PPOM::post(PPOM::CMD_GP_FETCH_STEP, NULL, 0);
+        s.stepPending = true;
+        s.stepFrames = 0;
+    }
+
+    // Ranked and connected: the last step (active or not: an inactive step means the stage is
+    // decided, so a ranked stage select leaves). NULL in every other mode.
+    const PPOM::GameStep* rankedStep()
+    {
+        return s.mode == PPOM::MODE_RANKED && s.phase == PH_CONNECTED ? &s.step : NULL;
+    }
+
+    const char* rankedText() { return s.stepText; }
+
+    // Ranked: GET_RANK once a second on the CSS, so the rating appears as soon as Dolphin has it
+    // and the change shows up once the server has rated a finished set.
+    static void pollRank()
+    {
+        if (s.mode != PPOM::MODE_RANKED) return;
+        if (s.rankFrames > 0) {
+            s.rankFrames--;
+            return;
+        }
+        PPOM::post(PPOM::CMD_GET_RANK, NULL, 0);
+        s.rankFrames = 60;
     }
 
     static void pollMailbox()
@@ -1163,6 +1263,17 @@ namespace OnlineMenu {
         // Responses to different commands share the one slot: route them by command.
         if (r->cmd == PPOM::CMD_FETCH_CODE_SUGGESTION) {
             CodeEntry::onSuggestion(*r);
+            return;
+        }
+        if (r->cmd == PPOM::CMD_GET_RANK) {
+            onRank(*(const PPOM::RankInfo*)r->payload);
+            return;
+        }
+        if (r->cmd == PPOM::CMD_GP_FETCH_STEP) {
+            memcpy(&s.step, r->payload, sizeof(s.step));
+            if (s.step.nKinds > sizeof(s.step.kinds)) s.step.nKinds = sizeof(s.step.kinds);
+            PPOM::u16ToAscii(s.stepText, s.step.text, sizeof(s.stepText));
+            s.stepPending = false;
             return;
         }
         if (r->cmd == PPOM::CMD_GET_ONLINE_STATUS) {
@@ -1252,6 +1363,7 @@ namespace OnlineMenu {
         }
         pollMailbox();
         pollMatchState();
+        pollStep();
 
         bool onCss = g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0;
         g_onlineCssLock = (onCss && lockedIn()) ? 1 : 0;
@@ -1316,6 +1428,7 @@ namespace OnlineMenu {
             printCssStatus();
             s.statusDirty = false;
         }
+        pollRank();
         showOwnCode();
     }
 

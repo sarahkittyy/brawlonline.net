@@ -243,6 +243,13 @@ void User::OverwriteLatestVersion(const std::string& version)
   m_info.latest_version = version;
 }
 
+void User::SetRankedRating(float rating, int sets_played)
+{
+  std::lock_guard lk(m_mutex);
+  m_info.ranked_rating = rating;
+  m_info.ranked_update_count = sets_played;
+}
+
 UserInfo User::GetUserInfo() const
 {
   std::lock_guard lk(m_mutex);

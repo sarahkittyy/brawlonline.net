@@ -30,6 +30,7 @@
 // longer scSelStage (P+'s screenless random also reads the table).
 #include <sy_core.h>
 #include <string.h>
+#include <mu/mu_msg.h>
 
 #include "online.h"
 #include "online_menu.h"
@@ -38,6 +39,7 @@
 
 extern "C" {
     extern u8 g_onlineCss;
+    extern u8 g_onlinePickStage;
 }
 
 namespace StageLegal {
@@ -101,9 +103,51 @@ namespace StageLegal {
     // and only Ranked has its own strike screen (design 5.4 rows 5-6, coordinator's correction
     // 2026-10-07). This is the mechanism a Ranked strike / counterpick step can drive later
     // (setList with the server's list); for now only the debug flag turns it on.
+    // Ranked's stage steps (OnlineMenu::rankedStep, Dolphin's GameSetup): the stage select shows
+    // the stages still selectable and greys the rest with P+'s own strike art, only the player
+    // whose turn it is strikes (X) or picks (A), and the rule line says whose turn it is.
+    static const PPOM::GameStep* ranked()
+    {
+        return g_onlinePickStage ? OnlineMenu::rankedStep() : NULL;
+    }
+
     bool active()
     {
-        return (PPOM::g_block.debug.cfg & PPOM::CFG_SSS_LEGAL) != 0;
+        return (PPOM::g_block.debug.cfg & PPOM::CFG_SSS_LEGAL) != 0 || ranked() != NULL;
+    }
+
+    // The stage select's message object: created by sel_stage+0xC38 (43 windows); window 0 is its
+    // rule line ("4 VERSUS"), printed by sel_stage+0x635C.
+    static MuMsg* s_sssMsg = NULL;
+    static bool s_sssDirty = false;
+    static char s_sssText[64];
+
+    void onMsgCreate(MuMsg* m, u32 caller)
+    {
+        if (caller == 0x806B15BC) s_sssMsg = m;
+    }
+
+    void onSssPrint(u32 caller)
+    {
+        if (caller == 0x806B6CE0) s_sssDirty = true;
+    }
+
+    // Every frame of a ranked stage select: whose turn it is, in the header strip on the
+    // "STAGE SELECT" line (window 0 of the stage select's message object, moved there: it is
+    // otherwise a line left of the stage icons that P+'s layout hides behind them).
+    static void showTurn(const char* text)
+    {
+        if (!s_sssMsg || !text[0]) return;
+        if (!s_sssDirty && strcmp(text, s_sssText) == 0) return;
+        strncpy(s_sssText, text, sizeof(s_sssText) - 1);
+        s_sssDirty = false;
+        float* ws = (float*)*(u32*)((u8*)s_sssMsg + 0xC);   // WindowSetting 0: x1 y1 x2 y2 at +4
+        ws[1] = 237.0f;
+        ws[2] = -347.0f;
+        ws[3] = 537.0f;
+        ws[4] = -387.0f;
+        ws[12] = ws[13] = 0.8f;                             // scaleX, scaleY (+0x30)
+        s_sssMsg->printf(0, "%s", text);
     }
 
     int kindAt(int page, int pos)
@@ -162,6 +206,10 @@ namespace StageLegal {
 
     void tick()
     {
+        if (!Online::inScene("scSelStage")) {
+            s_sssMsg = NULL;
+            s_sssText[0] = 0;
+        }
         // The random switch is the player's own preset: put it back once the stage select (and
         // its random roulette) is gone.
         if (s_switchSaved && !Online::inScene("scSelStage")) {
@@ -173,21 +221,61 @@ namespace StageLegal {
 }
 
 extern "C" {
+    // Ranked: leave the stage select at once (A on any stage: the steps decide the stage).
+    static bool s_autoLeave = false;
+
     // H1: returns the pressed buttons the rest of buttonProc (P+'s hooks) sees in r3.
     __attribute__((used)) u32 pponline_sssButtons(u8* task, u32 pressed)
     {
-        (void)task;
         if (!StageLegal::active()) return pressed;
+        const PPOM::GameStep* st = StageLegal::ranked();
+        if (st) StageLegal::setList(st->kinds, st->nKinds ? st->nKinds : -1);
         StageLegal::apply();
-        return pressed & ~(0x200u | 0x400u | 0x80000u);   // B, X (GameCube), X (Classic)
+        u32 out = pressed & ~(0x200u | 0x400u | 0x80000u);   // B, X (GameCube), X (Classic)
+        if (!st) return out;
+        out &= ~(0x1000u | 0x10u);   // START (random), Z (hazards: the online rules set them)
+        // P+'s striking (Random.asm, the buttonProc hook) runs only while gfSceneManager+0x284
+        // is 1, as after the Versus CSS; the online sequence opens the stage select with 0.
+        u32 mgr = *(u32*)0x805A0060;
+        if (mgr >= 0x80000000 && mgr < 0x81800000) *(int*)(mgr + 0x284) = 1;
+        StageLegal::showTurn(OnlineMenu::rankedText());
+        s_autoLeave = !st->active || (st->type != PPOM::STEP_STRIKE && st->type != PPOM::STEP_PICK);
+        if (s_autoLeave) return out | 0x100u;
+        if (!(st->myTurn && st->type == PPOM::STEP_PICK)) out &= ~0x100u;   // A only to pick
+        if (st->myTurn && st->type == PPOM::STEP_STRIKE && (pressed & (0x400u | 0x80000u))) {
+            int kind = StageLegal::kindAt(*(u8*)StageLegal::CURRENT_PAGE, *(int*)(task + 0x248));
+            if (StageLegal::allowedKind(kind)) {
+                u8 k = (u8)kind;
+                PPOM::post(PPOM::CMD_GP_COMPLETE_STEP, &k, 1);
+            }
+        }
+        return out;
     }
 
     // H2: the selection A/START would take on a normal page, or -1.
     __attribute__((used)) int pponline_sssFilterPos(u8* task, int pos)
     {
-        if (pos < 0 || !StageLegal::active()) return pos;
+        if (!StageLegal::active()) return pos;
         int page = *(u8*)StageLegal::CURRENT_PAGE;
-        if (StageLegal::allowedKind(StageLegal::kindAt(page, pos))) return pos;
+        if (StageLegal::ranked() && s_autoLeave) {
+            // Any stage P+ still lets A take (not struck); the steps decided the real one.
+            for (int p = 0; p < 39; p++) {
+                if (StageLegal::allowedKind(StageLegal::kindAt(page, p))) return p;
+            }
+            for (int p = 0; p < 39; p++) {
+                if (StageLegal::kindAt(page, p) > 0) return p;
+            }
+            return pos;
+        }
+        if (pos < 0) return pos;
+        int kind = StageLegal::kindAt(page, pos);
+        if (StageLegal::allowedKind(kind)) {
+            if (StageLegal::ranked()) {
+                u8 k = (u8)kind;
+                PPOM::post(PPOM::CMD_GP_COMPLETE_STEP, &k, 1);   // the loser's pick
+            }
+            return pos;
+        }
         PPOM::g_block.debug.scratch[13]++;   // refused picks (tests)
         return -1;
     }

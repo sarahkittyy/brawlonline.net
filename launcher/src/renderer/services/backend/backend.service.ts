@@ -1,10 +1,15 @@
-import type { AccountsMe, AccountsPublicUser } from "@accounts/types";
+import type {
+  AccountsMe,
+  AccountsPublicUser,
+  LeaderboardPage,
+  MatchHistoryFilter,
+  MatchHistoryPage,
+} from "@accounts/types";
 import { Preconditions } from "@common/preconditions";
 import type { DolphinService, PlayKey } from "@dolphin/types";
 import log from "electron-log";
 
 import type { AuthService } from "../auth/types";
-import { calculateRank } from "./calculate_rank";
 import type { BackendService, RankedProfile, UserData } from "./types";
 
 /**
@@ -18,14 +23,23 @@ import type { BackendService, RankedProfile, UserData } from "./types";
  * | rankedNetplayProfile           | GET /user/{uid} `rank`            |
  * | userRename                     | POST /v1/me/rename                |
  * | userInitNetplay                | POST /v1/me/netplay               |
+ * | (none: slippi.gg's site)       | GET /v1/ranked/leaderboard        |
+ * | (none: slippi.gg's site)       | GET /v1/me/matches                |
  * | getLatestDolphin.version       | `latestVersion` in /v1/me         |
  */
 
+/** Leaderboard rows per page (the server's default and at most 100). */
+export const LEADERBOARD_PAGE_SIZE = 50;
+/** Match history rows per page (at most 50). */
+export const MATCH_HISTORY_PAGE_SIZE = 20;
+
 function mapRankedProfile(user: AccountsPublicUser): RankedProfile {
-  const rating = user.rank.ratingOrdinal ?? 0;
-  const setsPlayed = user.rank.ratingUpdateCount ?? 0;
-  const hasPlacement = Boolean(user.rank.dailyGlobalPlacement) || Boolean(user.rank.dailyRegionalPlacement);
-  return { rating, rank: calculateRank(rating, hasPlacement, setsPlayed) };
+  return {
+    rating: user.rank.ratingOrdinal ?? 0,
+    setsPlayed: user.rank.ratingUpdateCount ?? 0,
+    position: user.rank.position ?? null,
+    rankedPlayers: user.rank.rankedPlayers ?? 0,
+  };
 }
 
 /** user.json content in Slippi's key order: uid, playKey, connectCode, displayName, latestVersion. */
@@ -88,6 +102,15 @@ class AccountsBackendClient implements BackendService {
 
   async fetchRankedNetplayProfile(userId: string): Promise<RankedProfile | undefined> {
     return mapRankedProfile(await this._api.publicUser(userId));
+  }
+
+  async fetchLeaderboard(after?: string): Promise<LeaderboardPage> {
+    return await this._api.leaderboard({ limit: LEADERBOARD_PAGE_SIZE, after });
+  }
+
+  async fetchMatchHistory(mode: MatchHistoryFilter, before?: string): Promise<MatchHistoryPage> {
+    const uid = this._activeUid();
+    return await this._api.matchHistory(uid, { mode, limit: MATCH_HISTORY_PAGE_SIZE, before });
   }
 
   async assertPlayKey(playKey: PlayKey) {

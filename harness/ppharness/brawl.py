@@ -1697,12 +1697,16 @@ def css_start(drv: Driver, port: int = 0, timeout_frames: int = 600) -> SceneInf
     return wait_scene(drv, [Scene.SSS, Scene.LOADING, Scene.IN_MATCH], timeout_frames, every=2, on_frame=press)
 
 
-def sss_pick_stage(drv: Driver, stage_kind: int, port: int = 0, timeout_frames: int = 1800) -> SssView:
+def sss_pick_stage(drv: Driver, stage_kind: int, port: int = 0, timeout_frames: int = 1800,
+                   button: str = "A") -> SssView:
     """Closed loop on P+'s stage select: map ``stage_kind`` to (page, position) through P+'s live
     page tables (RSS_PAGES), steer the game cursor (task+0x200 -> +0x3C/+0x40) until the hovered
     item (task+0x244 = position + 2) matches, let it come to rest, press A, and confirm the screen
     took the stage (task+0x224 leaves 0, +0x258 = kind). Same delay-tolerant steering as
-    ``css_pick_character``; positions seen are cached in ``LEARNED_SSS``."""
+    ``css_pick_character``; positions seen are cached in ``LEARNED_SSS``.
+
+    ``button`` other than "A" (e.g. "X", P+'s stage strike): press it on the stage instead and
+    return at once, without waiting for the screen to take anything."""
     targets = stage_positions(stage_kind, drv.read_mem)
     if not targets:
         raise RecipeError(f"stage kind {stage_kind:#x} is not on any P+ stage page")
@@ -1755,6 +1759,9 @@ def sss_pick_stage(drv: Driver, stage_kind: int, port: int = 0, timeout_frames: 
             _settle(drv, cursor_xy, still_frames=still)
             v2 = read_sss(drv.read_mem)
             if v2 is not None and is_target(v2):
+                if button != "A":
+                    tap(drv, port, [button], hold=3, release=3)
+                    return v2
                 pressed = True
                 tap(drv, port, ["A"], hold=3, release=3)
                 for _ in range(20):

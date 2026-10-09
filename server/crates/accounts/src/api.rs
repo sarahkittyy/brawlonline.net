@@ -109,7 +109,7 @@ pub fn client_ip(state: &AppState, headers: &HeaderMap, peer: SocketAddr) -> IpA
 }
 
 /// Runs one limiter check (`DISABLE_RATE_LIMITS` skips them all). `Err` is the wait.
-fn limit(
+pub(crate) fn limit(
     state: &AppState,
     check: impl FnOnce(&mut Limits, Instant) -> Result<(), std::time::Duration>,
 ) -> Result<(), std::time::Duration> {
@@ -487,6 +487,11 @@ pub struct PublicRank {
     pub rating_update_count: u32,
     pub daily_global_placement: Option<u16>,
     pub daily_regional_placement: Option<u16>,
+    /// 1-based position on the leaderboard (`GET /v1/ranked/leaderboard`), null before the
+    /// first rated set.
+    pub position: Option<u64>,
+    /// Players on the leaderboard (at least one rated set).
+    pub ranked_players: u64,
 }
 
 #[derive(Debug, Serialize)]
@@ -502,10 +507,14 @@ pub struct PublicUser {
 
 /// Slippi's users-rest `GET /user/{uid}?additionalFields=chatMessages,rank`,
 /// which Dolphin's `user` crate polls (`slippi-rust-extensions/user/src/lib.rs:354-421`).
-/// Public, as on Slippi. Ranked data is zero until ranked exists.
+/// Public, as on Slippi. `rank.ratingOrdinal` is the Elo rating (`common::ranked`; the default
+/// before the first set) and `ratingUpdateCount` the rated sets. There are no daily placements;
+/// `position` and `rankedPlayers` place the player on the leaderboard.
 pub async fn public_user(State(state): State<AppState>, Path(uid): Path<String>) -> ApiResult<Json<PublicUser>> {
     let uid = Uuid::parse_str(&uid).map_err(|_| ApiError::not_found())?;
     let user = store::user_by_uid(&state.pool, uid).await?.ok_or_else(ApiError::not_found)?;
+    let standing = crate::ranked::standing(&state.pool, uid).await?;
+    let (position, ranked_players) = crate::leaderboard::placement(&state.pool, uid, standing).await?;
     Ok(Json(PublicUser {
         uid: user.uid,
         display_name: user.display_name,
@@ -513,10 +522,12 @@ pub async fn public_user(State(state): State<AppState>, Path(uid): Path<String>)
         latest_version: state.cfg.latest_version.clone(),
         chat_messages: common::DEFAULT_CHAT_MESSAGES.iter().map(|s| s.to_string()).collect(),
         rank: PublicRank {
-            rating_ordinal: 0.0,
-            rating_update_count: 0,
+            rating_ordinal: standing.rating as f32,
+            rating_update_count: standing.sets_played,
             daily_global_placement: None,
             daily_regional_placement: None,
+            position,
+            ranked_players,
         },
     }))
 }
