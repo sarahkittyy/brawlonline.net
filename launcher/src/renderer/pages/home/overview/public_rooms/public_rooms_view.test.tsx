@@ -79,6 +79,9 @@ describe("PublicRoomsView", () => {
 
   it("shows the empty, logged-out and unreachable states", () => {
     expect(view({ kind: "ready", online: 1, rooms: [] }).getByText(Messages.noRooms())).toBeTruthy();
+    expect(
+      view({ kind: "ready", online: 1, rooms: [] }).getAllByText(Messages.createInGamePath()).length,
+    ).toBeGreaterThan(0);
     expect(view({ kind: "ready", online: 1, rooms: [] }).getAllByText("1 player online").length).toBeGreaterThan(0);
     expect(view({ kind: "logged-out" }).getByText(Messages.logIn())).toBeTruthy();
     expect(view({ kind: "unreachable" }).getByText(Messages.retry())).toBeTruthy();

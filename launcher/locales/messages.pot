@@ -12,7 +12,7 @@ msgstr ""
 msgid "#"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:9:23
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:12:23
 msgid "1v1"
 msgstr ""
 
@@ -293,6 +293,10 @@ msgstr ""
 msgid "Create an account"
 msgstr ""
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:9:23
+msgid "Create one in game:"
+msgstr ""
+
 #: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:5:27
 msgid "Crunching numbers..."
 msgstr ""
@@ -458,7 +462,7 @@ msgstr ""
 msgid "Extracting Project+"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:10:18
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:13:18
 msgid "FFA"
 msgstr ""
 
@@ -513,7 +517,7 @@ msgstr ""
 msgid "Failed to switch account"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:20:26
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:23:26
 msgid "Finish your current game first."
 msgstr ""
 
@@ -529,7 +533,7 @@ msgid ""
 "and 4 above, at the start of each game."
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:14:15
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:17:15
 msgid "Full"
 msgstr ""
 
@@ -602,7 +606,7 @@ msgid ""
 "See below:"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:13:23
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:16:23
 msgid "In game"
 msgstr ""
 
@@ -651,15 +655,15 @@ msgstr ""
 msgid "Invalid code"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:15:15
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:18:15
 msgid "Join"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:17:22
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:20:22
 msgid "Join this room"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:18:28
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:21:28
 msgid "Join this room. You'll wait in it until the game ends."
 msgstr ""
 
@@ -837,9 +841,7 @@ msgid "No network connection"
 msgstr ""
 
 #: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:8:18
-msgid ""
-"No public rooms right now. Create one in game: Online > With Friends > "
-"Create Room."
+msgid "No public rooms right now."
 msgstr ""
 
 #: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:5:26
@@ -880,6 +882,11 @@ msgstr ""
 
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:5:18
 msgid "Offline"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:11:27
+#. The in-game menu path, kept on one line.
+msgid "Online > With Friends > Create Room"
 msgstr ""
 
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:7:35
@@ -1190,7 +1197,7 @@ msgstr ""
 msgid "Something went wrong."
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:22:26
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:25:26
 msgid "Starting the game. It will open the room."
 msgstr ""
 
@@ -1211,7 +1218,7 @@ msgstr ""
 msgid "Target Test"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:11:20
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:14:20
 msgid "Teams"
 msgstr ""
 
@@ -1258,7 +1265,7 @@ msgid ""
 "NAT."
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:19:22
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:22:22
 msgid "This room is full."
 msgstr ""
 
@@ -1404,7 +1411,7 @@ msgstr ""
 msgid "W-L"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:12:24
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:15:24
 msgid "Waiting"
 msgstr ""
 
@@ -1453,11 +1460,11 @@ msgstr ""
 msgid "Your connect code is used for players to connect with you directly."
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:23:22
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:26:22
 msgid "Your game can't join a room right now."
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:21:24
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:24:24
 msgid "Your game is going to the room."
 msgstr ""
 

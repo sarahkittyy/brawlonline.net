@@ -93,7 +93,12 @@ export const PublicRoomsView = ({
           return (
             <div className={styles.centered}>
               <MeetingRoomOutlinedIcon style={{ fontSize: 48 }} />
-              <p>{Messages.noRooms()}</p>
+              <div>
+                <p>{Messages.noRooms()}</p>
+                <p>
+                  {Messages.createInGame()} <span className={styles.menuPath}>{Messages.createInGamePath()}</span>
+                </p>
+              </div>
             </div>
           );
         }

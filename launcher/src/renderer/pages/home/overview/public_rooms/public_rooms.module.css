@@ -48,6 +48,11 @@
   line-height: 1.5;
 }
 
+/* An in-game menu path ("Online > With Friends > Create Room") never breaks inside. */
+.menuPath {
+  white-space: nowrap;
+}
+
 .list {
   list-style: none;
   margin: 0;

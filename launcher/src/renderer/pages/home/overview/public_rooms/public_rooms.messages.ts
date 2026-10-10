@@ -5,7 +5,10 @@ export const PublicRoomsMessages = {
   logIn: () => "Log in",
   unreachable: () => "Can't reach the server right now.",
   retry: () => "Retry",
-  noRooms: () => "No public rooms right now. Create one in game: Online > With Friends > Create Room.",
+  noRooms: () => "No public rooms right now.",
+  createInGame: () => "Create one in game:",
+  // The in-game menu path, kept on one line.
+  createInGamePath: () => "Online > With Friends > Create Room",
   modeOneVsOne: () => "1v1",
   modeFfa: () => "FFA",
   modeTeams: () => "Teams",
