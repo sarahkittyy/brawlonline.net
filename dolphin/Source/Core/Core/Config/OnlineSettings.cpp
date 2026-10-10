@@ -29,6 +29,8 @@ const Info<std::string> ONLINE_LAN_IP{{System::Main, "Online", "LanIP"}, ""};
 const Info<std::string> ONLINE_SESSION_BACKEND{{System::Main, "Online", "SessionBackend"},
                                                "gameplay"};
 const Info<int> ONLINE_INPUT_DELAY{{System::Main, "Online", "InputDelay"}, 0};
+const Info<bool> ONLINE_CHAT_IN_MATCHES{{System::Main, "Online", "ChatInMatches"}, true};
+const Info<std::string> ONLINE_CHAT_WINDOW{{System::Main, "Online", "ChatWindow"}, ""};
 
 std::string GetMatchmakingHost()
 {

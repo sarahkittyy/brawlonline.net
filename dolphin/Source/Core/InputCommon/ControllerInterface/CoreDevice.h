@@ -142,6 +142,10 @@ public:
   // Doesn't necessarily need to be set to true if the device is virtual.
   virtual bool IsVirtualDevice() const { return false; }
 
+  // The system keyboard and mouse (DInput, Quartz, XInput2): what typing in the online chat box
+  // takes away from the game (SetKeyboardMouseBlocked).
+  virtual bool IsKeyboardAndMouse() const { return false; }
+
   // (e.g. Xbox 360 controllers have controller number LEDs which should match the ID we use.)
   virtual std::optional<int> GetPreferredId() const;
 
@@ -187,6 +191,12 @@ private:
 // Device qualifier used to match devices.
 // Currently has ( source, id, name ) properties which match a device
 //
+// While true, every input of a keyboard-and-mouse device reads 0, for the emulated controllers
+// and for hotkeys alike: the online chat box has the keyboard (docs/chat-protocol.md §6).
+// Controllers and GameCube adapters keep working.
+void SetKeyboardMouseBlocked(bool blocked);
+bool IsKeyboardMouseBlocked();
+
 class DeviceQualifier
 {
 public:

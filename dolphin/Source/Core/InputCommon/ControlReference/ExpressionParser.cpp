@@ -296,6 +296,9 @@ public:
   {
     if (!m_input)
       return 0.0;
+    // The online chat box has the keyboard.
+    if (m_device && m_device->IsKeyboardAndMouse() && ciface::Core::IsKeyboardMouseBlocked())
+      return 0.0;
 
     // Note: Inputs may return negative values in situations where opposing directions are
     // activated. We clamp off the negative values here.

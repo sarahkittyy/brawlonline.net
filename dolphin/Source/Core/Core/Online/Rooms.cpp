@@ -20,6 +20,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/Thread.h"
 #include "Core/Config/OnlineSettings.h"
+#include "Core/Online/Chat.h"
 #include "Core/Online/Matchmaking.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/User.h"
@@ -505,6 +506,7 @@ void OnDropped(Clock::time_point now, const std::string& why, bool count)
   if (s.pending)
     s.pending_sent = false;
   s.outbox.clear();
+  Chat::OnConnectionLost();
   ++s.serial;
   Log(fmt::format("connection down ({}); next try in {} ms", why,
                   std::chrono::duration_cast<std::chrono::milliseconds>(delay).count()));
@@ -859,6 +861,8 @@ void Thread()
   Clock::time_point conn_started{};
   Clock::time_point next_file{};
   bool was_logged_in = false;
+  // The chat identity (docs/chat-protocol.md §1), read or made once, before any lock is held.
+  const std::string chat_key = Chat::IdentityPublicKeyHex();
 
   const auto close = [&](bool polite) {
     if (!host)
@@ -979,10 +983,10 @@ void Thread()
       Actions actions;
       while (host && (n = enet_host_service(host, &ev, 0)) > 0)
       {
-        std::lock_guard lk(s_mutex);
+        std::unique_lock lk(s_mutex);
         if (ev.type == ENET_EVENT_TYPE_CONNECT)
         {
-          Send(peer, HelloJson(info.uid, info.play_key, APP_VERSION, APP_PLATFORM));
+          Send(peer, HelloJson(info.uid, info.play_key, APP_VERSION, APP_PLATFORM, chat_key));
           s.conn = Conn::Hello;
           ++s.hellos;
           conn_started = now;
@@ -992,6 +996,15 @@ void Thread()
           const std::string text(reinterpret_cast<const char*>(ev.packet->data),
                                  ev.packet->dataLength);
           enet_packet_destroy(ev.packet);
+          // Chat checks and decrypts outside the room lock (the CPU thread reads the room).
+          lk.unlock();
+          const bool chat = Chat::OnServerMessage(text);
+          lk.lock();
+          if (chat)
+          {
+            ++s.received;
+            continue;
+          }
           Handle(Parse(text), &actions, now);
           if (actions.drop)
             break;
@@ -1012,6 +1025,15 @@ void Thread()
         StartGame(actions.start, actions.pickers);
       if (actions.abort_game)
         EndGame(false, "", std::nullopt, false);
+
+      // Chat's outgoing messages, signed and encrypted outside the room lock.
+      bool online;
+      {
+        std::lock_guard lk(s_mutex);
+        online = host && s.conn == Conn::Online;
+      }
+      const std::vector<std::string> chat_out =
+          online ? Chat::TakeOutbox() : std::vector<std::string>{};
 
       std::lock_guard lk(s_mutex);
       if (host && (s.conn == Conn::Connecting || s.conn == Conn::Hello) &&
@@ -1034,6 +1056,11 @@ void Thread()
           s.pending_sent = true;
           s.pending_since = now;
           ++s.serial;
+        }
+        for (const std::string& json : chat_out)
+        {
+          Send(peer, json);
+          ++s.sent;
         }
         while (!s.outbox.empty())
         {
@@ -1262,6 +1289,12 @@ Snapshot GetSnapshot()
   snap.error = error;
   snap.serial = s.serial;
   return snap;
+}
+
+Screen GetScreen()
+{
+  std::lock_guard lk(s_mutex);
+  return static_cast<Screen>(s.screen);
 }
 
 picojson::object Status()

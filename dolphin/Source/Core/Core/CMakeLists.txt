@@ -577,6 +577,12 @@ add_library(core
   PowerPC/SignatureDB/MEGASignatureDB.h
   PowerPC/SignatureDB/SignatureDB.cpp
   PowerPC/SignatureDB/SignatureDB.h
+  Online/Chat.cpp
+  Online/Chat.h
+  Online/ChatCrypto.cpp
+  Online/ChatCrypto.h
+  Online/ChatText.cpp
+  Online/ChatText.h
   Online/GameBridge.cpp
   Online/GameBridge.h
   Online/GameSetup.cpp
@@ -764,6 +770,7 @@ PUBLIC
 PRIVATE
   FatFs
   fmt::fmt
+  monocypher
   xxhash::xxhash
   LZO::LZO
   LZ4::LZ4

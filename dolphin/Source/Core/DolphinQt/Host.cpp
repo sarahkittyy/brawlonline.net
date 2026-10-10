@@ -37,6 +37,7 @@
 
 #include "VideoCommon/AbstractGfx.h"
 #include "VideoCommon/Fifo.h"
+#include "VideoCommon/OnlineChatUI.h"
 #include "VideoCommon/Present.h"
 #include "VideoCommon/VideoConfig.h"
 
@@ -284,7 +285,10 @@ void Host_RequestRenderWindowSize(int w, int h)
 bool Host_UIBlocksControllerState()
 {
   // TODO: Remove the Paused check once async presentation is implemented.
+  // The online chat box takes only the keyboard and mouse (OnlineChatUI, ciface's
+  // SetKeyboardMouseBlocked): controllers keep playing while it is open.
   return ImGui::GetCurrentContext() && ImGui::GetIO().WantCaptureKeyboard &&
+         !VideoCommon::OnlineChatUI::IsTyping() &&
          Core::GetState(Core::System::GetInstance()) != Core::State::Paused;
 }
 

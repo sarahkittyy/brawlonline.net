@@ -50,6 +50,8 @@ Dolphin includes or links code of the following third-party software projects:
    [MPL 2.0](https://github.com/mgba-emu/mgba/blob/master/LICENSE)
 - [MiniUPnPc](http://miniupnp.free.fr/):
    [BSD 3-Clause](https://github.com/miniupnp/miniupnp/blob/master/miniupnpc/LICENSE)
+- [Monocypher](https://monocypher.org/):
+   [CC0-1.0 or BSD 2-Clause](https://github.com/LoupVaillant/Monocypher/blob/master/LICENCE.md)
 - [Microsoft Visual C++ Runtime Library](http://www.microsoft.com/en-us/download/details.aspx?id=40784):
    [System Library if not distributed](https://www.gnu.org/licenses/gpl-faq.html#WindowsRuntimeAndGPL)
 - [OpenAL Soft](http://kcat.strangesoft.net/openal.html):
@@ -62,6 +64,8 @@ Dolphin includes or links code of the following third-party software projects:
    [GPLv2](http://pearpc.cvs.sourceforge.net/viewvc/pearpc/pearpc/COPYING?view=markup) (with permission by the author to license under GPLv2+)
 - [mbed TLS](https://tls.mbed.org/):
    [Apache 2.0](https://github.com/ARMmbed/mbedtls/blob/development/LICENSE)
+- [Noto Sans, Noto Sans JP](https://fonts.google.com/noto) (Data/Sys/Resources, online chat):
+   [SIL OFL 1.1](https://openfontlicense.org/)
 - [PulseAudio](http://www.freedesktop.org/wiki/Software/PulseAudio/):
    [LGPLv2.1+](http://cgit.freedesktop.org/pulseaudio/pulseaudio/tree/LICENSE)
 - [Qt5](http://qt-project.org/):
