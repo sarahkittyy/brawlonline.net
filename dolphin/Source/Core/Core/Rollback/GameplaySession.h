@@ -43,19 +43,21 @@ namespace Gprb::Session
 {
 // Input delay in frames. Each player picks the delay of their own inputs, as on Slippi (in every
 // mode, ranked too): a set value, or automatic, from the round trip to the peer when the game's
-// GekkoNet session starts: 2 frames below 70 ms, 3 below 150 ms, else 4. The other player's
-// inputs then mostly arrive before they are needed, so rollbacks stay short, without adding delay
-// on good connections. A round trip not measured yet: the default.
+// GekkoNet session starts: 1 frame below 100 ms, 2 below 150 ms, 3 below 200 ms, else 4. Low
+// delay is what players feel; the rollbacks it costs (a re-run frame is ~1.3 ms on a desktop) fit
+// in the frame at these round trips. A round trip not measured yet: the default.
 constexpr int DEFAULT_INPUT_DELAY = 2;
 constexpr int MAX_INPUT_DELAY = 9;
 constexpr int AutoInputDelay(double rtt_ms)
 {
   if (rtt_ms < 0)
     return DEFAULT_INPUT_DELAY;
-  return rtt_ms < 70 ? 2 : rtt_ms < 150 ? 3 : 4;
+  return rtt_ms < 100 ? 1 : rtt_ms < 150 ? 2 : rtt_ms < 200 ? 3 : 4;
 }
-static_assert(AutoInputDelay(-1) == 2 && AutoInputDelay(69.9) == 2 && AutoInputDelay(70) == 3 &&
-              AutoInputDelay(149.9) == 3 && AutoInputDelay(150) == 4 && AutoInputDelay(400) == 4);
+static_assert(AutoInputDelay(-1) == 2 && AutoInputDelay(0) == 1 && AutoInputDelay(99.9) == 1 &&
+              AutoInputDelay(100) == 2 && AutoInputDelay(149.9) == 2 &&
+              AutoInputDelay(150) == 3 && AutoInputDelay(199.9) == 3 &&
+              AutoInputDelay(200) == 4 && AutoInputDelay(400) == 4);
 
 struct SyncTestOptions
 {
