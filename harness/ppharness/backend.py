@@ -62,7 +62,9 @@ def portable_pg_bin() -> Path:
 
 def _run(cmd: list[str], *, timeout: float = 120.0, env: dict[str, str] | None = None,
          cwd: Path | None = None, check: bool = True) -> subprocess.CompletedProcess[str]:
-    res = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout, env=env, cwd=cwd)
+    # UTF-8 whatever the console's code page (admin prints names and chat texts).
+    res = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="replace",
+                         timeout=timeout, env=env, cwd=cwd)
     if check and res.returncode != 0:
         raise BackendError(f"{' '.join(map(str, cmd))} failed ({res.returncode}): "
                            f"{res.stderr.strip() or res.stdout.strip()}")

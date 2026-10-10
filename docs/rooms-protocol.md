@@ -22,8 +22,10 @@ All messages are JSON in reliable ENet packets on channel 0, like tickets (`serv
 ### `hello` (client → server)
 
 ```json
-{"type": "hello", "user": {"uid": "…", "playKey": "…"}, "appVersion": "0.1.0", "platform": "win"}
+{"type": "hello", "user": {"uid": "…", "playKey": "…"}, "appVersion": "0.1.0", "platform": "win", "chatKey": "3d40…"}
 ```
+
+`chatKey` (optional): the install's chat identity key, 64 hex digits; chat on this connection is `docs/chat-protocol.md`.
 
 The same checks as a ticket, in the same order: the build (below), the uid and play key, the ban, a connect code. Then mm answers and keeps the connection:
 

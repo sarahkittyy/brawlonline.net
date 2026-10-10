@@ -217,7 +217,9 @@ class MmClient:
         cmd = [str(server_binary("mmclient")), *args[:1], "--server", f"127.0.0.1:{be.mm_port}",
                "--user-json", str(uj), *args[1:]]
         self.lines: list[dict[str, Any]] = []
-        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        # UTF-8 whatever the console's code page (names and chat lines aren't ASCII).
+        self.proc = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True,
+                                     encoding="utf-8", errors="replace")
         self._t = threading.Thread(target=self._read, daemon=True)
         self._t.start()
 
