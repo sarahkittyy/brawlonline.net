@@ -1,9 +1,7 @@
 /* eslint import/prefer-default-export: off, import/no-mutable-exports: off */
-import { Preconditions } from "@common/preconditions";
 import { app } from "electron";
-import { pathExists } from "fs-extra";
 import { existsSync } from "node:fs";
-import { mkdir, open, rm, stat as fsStat } from "node:fs/promises";
+import { mkdir, rm } from "node:fs/promises";
 import path from "path";
 import { URL } from "url";
 
@@ -35,57 +33,6 @@ export const getWindowIcon = (): string | undefined => {
   const icon = getAssetPath("icon.png");
   return existsSync(icon) ? icon : undefined;
 };
-
-// Implemenation taken from https://github.com/alexbbt/read-last-lines/blob/11945800b013fe5016c4ea36e49d28c67aa75e7c/src/index.js
-export async function readLastLines(
-  inputFilePath: string,
-  maxLineCount: number,
-  encoding: BufferEncoding = "utf-8",
-): Promise<string> {
-  const fileExists = await pathExists(inputFilePath);
-  Preconditions.checkState(fileExists, `${inputFilePath} does not exist`);
-
-  // Load file Stats.
-  const fileStat = await fsStat(inputFilePath);
-
-  // Open file for reading.
-  const file = await open(inputFilePath, "r");
-
-  const bufferSize = Math.min(16384, fileStat.size);
-  const readBuffer = new Uint8Array(bufferSize);
-  let readBufferRemaining = 0;
-  const allBytes: number[] = [];
-  let lineCount = 0;
-  let fileOffset = fileStat.size;
-
-  while (lineCount < maxLineCount && fileOffset > 0) {
-    // Read the next chunk of the file
-    const readSize = Math.min(readBuffer.length, fileOffset);
-    fileOffset -= readSize;
-    const readResult = await file.read(readBuffer, 0, readSize, fileOffset);
-
-    // If there's still data in our read buffer, then finish processing that
-    readBufferRemaining = readResult.bytesRead;
-    while (readBufferRemaining > 0) {
-      const bufferIndex = readBufferRemaining - 1;
-      if (readBuffer[bufferIndex] === 0x0a && allBytes.length) {
-        ++lineCount;
-        if (lineCount >= maxLineCount) {
-          break;
-        }
-      }
-      allBytes.push(readBuffer[readBufferRemaining - 1]);
-      --readBufferRemaining;
-    }
-  }
-
-  await file.close();
-
-  // Reverse the array
-  allBytes.reverse();
-
-  return Buffer.from(allBytes).toString(encoding);
-}
 
 export async function clearTempFolder() {
   const tmpDir = path.join(app.getPath("userData"), "temp");

@@ -99,6 +99,7 @@
     "@types/semver": "^7.5.3",
     "@types/terser-webpack-plugin": "^5.0.4",
     "@types/webpack-env": "^1.16.3",
+    "@types/yazl": "^3.3.1",
     "@typescript-eslint/eslint-plugin": "^8.18.1",
     "@typescript-eslint/parser": "^8.18.1",
     "babel-loader": "^8.2.3",
@@ -211,6 +212,7 @@
     "semver": "^7.7.4",
     "semver-regex": "^3.1.2",
     "stun": "^2.1.0",
+    "yazl": "^3.3.1",
     "zustand": "^5.0.13"
   }
 }

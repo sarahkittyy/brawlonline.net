@@ -367,6 +367,10 @@ private:
   std::vector<u8> m_temp_page_table;
   std::set<u32> m_removed_mappings;
   std::map<u32, u32> m_added_readonly_mappings;
+
+  // Invalid accesses already reported without MMU emulation, as (PC << 1) | write. Brawl reads
+  // through null pointers every frame, which would otherwise put several alerts a frame in the log.
+  std::set<u64> m_reported_invalid_accesses;
   std::map<u32, u32> m_added_readwrite_mappings;
 
   BatTable m_ibat_table;

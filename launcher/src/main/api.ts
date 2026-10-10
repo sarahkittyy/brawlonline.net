@@ -4,7 +4,7 @@ import {
   ipc_checkForUpdate,
   ipc_checkValidIso,
   ipc_clearTempFolder,
-  ipc_copyLogsToClipboard,
+  ipc_downloadLogs,
   ipc_installUpdate,
   ipc_isoVerificationProgressEvent,
   ipc_launcherUpdateDownloadingEvent,
@@ -23,8 +23,10 @@ export default {
     const { result } = await ipc_checkValidIso.renderer!.trigger({ path });
     return result;
   },
-  async copyLogsToClipboard(): Promise<void> {
-    await ipc_copyLogsToClipboard.renderer!.trigger({});
+  /** The zip's path, or null if the player cancelled the save dialog. */
+  async downloadLogs(): Promise<string | null> {
+    const { result } = await ipc_downloadLogs.renderer!.trigger({});
+    return result.path;
   },
   async checkForAppUpdates(): Promise<{ updateAvailable: boolean }> {
     const { result } = await ipc_checkForUpdate.renderer!.trigger({});
