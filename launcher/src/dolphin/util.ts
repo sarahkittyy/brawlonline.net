@@ -32,9 +32,8 @@ export async function saveGeckoCodes(installation: DolphinInstallation, geckoCod
 
   await mkdir(path.join(userFolder, "GameSettings"), { recursive: true });
   const localIniPath = path.join(userFolder, "GameSettings", `${GECKO_GAME_ID}.ini`);
-  const localIni = await IniFile.init(localIniPath);
-
-  const localCodes = geckoCodes;
-  setCodes(localIni, localCodes);
-  return await localIni.save();
+  await IniFile.modify(localIniPath, async (localIni) => {
+    setCodes(localIni, geckoCodes);
+    await localIni.save();
+  });
 }
