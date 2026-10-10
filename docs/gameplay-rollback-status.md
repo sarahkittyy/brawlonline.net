@@ -889,6 +889,16 @@ Network sessions (`gprb_session.py`, two independently booted instances, dual co
 
 **Not measured here:** music (absent in the harness), and listening. The numbers say the cut-outs are gone, but ears on an unmuted session should confirm it.
 
+## Phase 15: "desync at frame 0" after offline 4-player Versus (staging, 2026-10-10)
+
+**Symptom.** Staging (Mac host, Windows joiner, a room's 1v1): game 8 ended at once with `gprb: desync at frame 0 (local 22c43180, remote d0526b01)`; equal setup keys, the barrier passed, the same RNG seeds, the same song-independent loads in the countdown. Game 7 between the same two machines ran 4,327 frames clean. Between the two games the Windows player had played offline 4-player Versus matches.
+
+**Cause: the confirmed checksum read fighter entries the match does not use.** `ftEntryManager` (0x80624780) keeps 9 entries; a match fills the first n in port order. When the next match has fewer players, Brawl frees the extra entries (`m_entryId` = -1) but leaves their player number (+0x58) and instance index. `ReadFighterFields` (the session's per-frame checksum, `FrameChecksum`, and the game results) took every entry with a player number below 4, so after a 4-player match a 2-player match's entries 2 and 3 counted as P3 and P4, with stale owner and fighter pointers: on that machine only (a machine that never played 4 players has 0xCCCCCCCC there). Measured with one instance (a 4-player Versus match, then a 2-player one): entries 2 and 3 read `entry_id 0xffffffff, player 2 / 3, instance 0`. Neither the platforms (a Mac/Windows `xplat_trace.py` run on Smashville and two Mac/Windows gameplay sessions on Smashville, fixed and host clocks: identical through game set) nor the costumes (a Windows/Windows mirror match, Game & Watch costume 2 on both, Smashville: clean) were involved.
+
+**Fix** (`GameplayRollback.cpp ReadFighterFields`): only the match's own entries count: the first n, n = the players in the match's setup (`gmGlobalModeMelee`, human or CPU), each for a port the setup has, never a freed one (entry id -1), the first entry for a port winning.
+
+**Test.** `harness/tests/test_online_mirror.py::test_direct_after_an_offline_four_player_match`: A plays offline 4-player Versus, then a Direct game with B. Before the fix: both end at once with `desync` (`desync at frame 0`, as in staging); with it: game set on both, 652 confirmed frames, 0 mismatches. (Rollback's whole-machine `CalculateDesyncChecksums` still hashes entries 0-3 by index: the netplay fallback boots both machines together, so their tables are the same.)
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).
