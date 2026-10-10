@@ -121,6 +121,18 @@ $(OUTPUT).elf: $(LDFILES) $(OFILES)
 
 $(OFILES_SOURCES) : $(HFILES)
 
+# Objects are rebuilt when the flags change (make itself only looks at the sources): an object
+# left from an older build is linked as it is, and with LTO its functions keep the flags they
+# were compiled with. One compiled before -mlongcall (2026-10-10) kept a relative branch to
+# the DOL's sscanf out of the plugin (Syringe::Version in rel.cpp), which cannot reach MEM2;
+# a link-time -mattr does not change that (each function carries its own target features).
+FLAGS_STAMP := $(DEPSDIR)/flags.stamp
+FLAGS_NOW := $(strip $(CC) $(CXXFLAGS) $(LDFLAGS) $(LDFILES))
+ifneq ($(strip $(shell cat '$(FLAGS_STAMP)' 2>/dev/null)),$(FLAGS_NOW))
+$(shell printf '%s' '$(FLAGS_NOW)' > '$(FLAGS_STAMP)')
+endif
+$(OFILES_SOURCES) $(OUTPUT).elf : $(FLAGS_STAMP)
+
 # The plugin shares P+'s 64 KB Syringe heap with sy_core and P+'s own plugins and must fit in
 # what they leave (docs/game-code.md section 2, "Heap budget"). Every file is built for size,
 # -Oz: with the ranked merge (2026-10-08) the -Os build (0x95D0 bytes of .text) no longer loaded
@@ -134,7 +146,7 @@ boot_menu.o ppom.o match_hud.o: CXXFLAGS += -Oz
 
 %.elf:
 	@echo linking ... $(notdir $@)
-	$(SILENTCMD)$(LD) $^ $(LDFLAGS) -Map $(OUTPUT).map -o $@
+	$(SILENTCMD)$(LD) $(filter-out %.stamp,$^) $(LDFLAGS) -Map $(OUTPUT).map -o $@
 
 
 #---------------------------------------------------------------------------------
