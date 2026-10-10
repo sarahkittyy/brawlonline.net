@@ -59,3 +59,6 @@ export const Updating = () => {
     </div>
   );
 };
+
+/** A named set-up step at 61%, on the plain frame (before P+'s files give the theme its colours). */
+export const ExtractingProjectPlus = () => <UpdatingButton phase="extractProjectPlus" fillPercent={0.61} />;

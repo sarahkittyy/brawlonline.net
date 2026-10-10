@@ -9,8 +9,6 @@ export const GameSettingsMessages = {
   launchMelee: (gameName: string) => "Launch {0}",
   launchDolphin: () => "Launch Dolphin",
   inputDelay: () => "Input Delay",
-  inputDelayDescription: () =>
-    "Frames between pressing a button and the game using it, for your own inputs. More delay means fewer rollbacks on a laggy connection, but less responsive controls. Auto picks 2 frames under 70 ms ping, 3 under 150 ms and 4 above, at the start of each game.",
   inputDelayAuto: () => "Auto",
   inputDelayFrames: (frames: number) => "{0} frames",
   valid: () => "Valid",

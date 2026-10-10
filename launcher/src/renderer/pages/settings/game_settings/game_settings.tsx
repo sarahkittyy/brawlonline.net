@@ -114,7 +114,7 @@ export const GameSettings = React.memo(() => {
           <FormControlLabel value={false} label={Messages.launchDolphin()} control={<Radio />} />
         </RadioGroup>
       </SettingItem>
-      <SettingItem name={Messages.inputDelay()} description={Messages.inputDelayDescription()}>
+      <SettingItem name={Messages.inputDelay()}>
         <Tooltip title={netplayDolphinOpen ? Messages.closeDolphinToChange() : ""} placement="bottom-start">
           <RadioGroup row={true} value={inputDelay} onChange={(_event, value) => setInputDelay(Number(value))}>
             <FormControlLabel
