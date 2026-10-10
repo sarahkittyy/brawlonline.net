@@ -328,6 +328,125 @@ namespace RoomCss {
         labelWords(*(u8**)(scn + 0x140), 0x1000);
     }
 
+
+    // ------------------------------------------------------------------------------------------
+    // "Open"'s dots: the state model's own three dots (bones dot, dot1, dot2) follow the label
+    // where "Seeking" ended; "Open" is shorter, so they are moved left by about a character
+    // (staging feedback 2026-10-10). Their places are constant translations in the model's CHR0
+    // (node entry +8: x; P+'s values 3.3, 4.2, 5.1, 0.9 apart), shared by the four areas and
+    // loaded again with the CSS: an entry still at P+'s value is moved (other values are left
+    // alone: moved already, or another file).
+    static const float DOT_SHIFT = 1.0f;
+    static const float DOT_X[3] = {3.3f, 4.2f, 5.1f};
+
+    static void moveDots(u8* obj)
+    {
+        u8* anim = *(u8**)(obj + 0x14);
+        u8* chr = isPtr((u32)anim) ? *(u8**)(anim + 0xC) : NULL;
+        u8* res = isPtr((u32)chr) ? *(u8**)(chr + 0x2C) : NULL;
+        if (!isPtr((u32)res) || *(u32*)res != 0x43485230 /* CHR0 */ || *(u32*)(res + 8) != 4) return;
+        u8* dic = res + *(s32*)(res + 0x10);
+        u32 n = *(u32*)(dic + 4);
+        static const char* const NAMES[3] = {"dot", "dot1", "dot2"};
+        for (u32 i = 1; i <= n && i < 128; i++) {
+            u8* e = dic + 8 + 16 * i;
+            const char* name = (const char*)(dic + *(s32*)(e + 8));
+            for (int k = 0; k < 3; k++) {
+                if (strcmp(name, NAMES[k]) != 0) continue;
+                u8* node = dic + *(s32*)(e + 12);
+                if (*(u32*)(node + 4) != 0x013FE039) break;   // constant translation (as found)
+                float* x = (float*)(node + 8);
+                float d = *x - DOT_X[k];
+                if (d > -0.05f && d < 0.05f) *x = DOT_X[k] - DOT_SHIFT;
+            }
+        }
+    }
+
+    // ------------------------------------------------------------------------------------------
+    // The room's two settings on the CSS's own ITEM and STAGE buttons (right end of the bar,
+    // MenSelchrState0005 / 0006 at muSelCharTask +0x420 / +0x424; hidden on the other online
+    // CSSs, online_menu.cpp hideHeaderArt): ITEM shows "PUBLIC" / "PRIVATE", STAGE "FFA" /
+    // "TEAMS", and the game's own press on them (hand buttons 0x19 / 0x1A, online_menu.cpp
+    // cssSwitchButtons) switches them. Their label textures (MenSelchrWifi00Button11 / 12, CMPR
+    // 48x24: a dark rounded border, white letters with a black outline, clear inside; the
+    // button's colour is its material) are copied, once per label, with the new word drawn in
+    // the border (texels 4..44 x 4..20, the border kept), and the button is pointed at the copy
+    // for its state, as the state labels are (labelModel / labelWords).
+    struct HeaderLabel {
+        u32 obj;          // muSelCharTask offset
+        const char* tex;
+        const char* text[2];
+    };
+    static const HeaderLabel HEADER[2] = {
+        {0x420, "MenSelchrWifi00Button11", {"PRIVATE", "PUBLIC"}},
+        {0x424, "MenSelchrWifi00Button12", {"FFA", "TEAMS"}},
+    };
+    static u8* s_hdrCopy[2][2];
+    static u32 s_hdrOrig[2];      // the game's image word of each
+
+    static u32 imageWord(const u8* tex) { return ((u32)(tex + 0x40) & 0x1FFFFFFF) >> 5; }
+
+    static void showHeaderLabel(u8* task, int b, int which)
+    {
+        const HeaderLabel& H = HEADER[b];
+        u8* obj = *(u8**)(task + H.obj);
+        if (!isPtr((u32)obj)) return;
+        u8* mdl = *(u8**)(obj + 8);
+        if (!isPtr((u32)mdl) || *(u32*)mdl != 0x4D444C30) return;
+        u8* cur = Labels::boundTexture(mdl, H.tex);
+        if (!cur) return;
+        bool ours = cur == s_hdrCopy[b][0] || cur == s_hdrCopy[b][1];
+        if (!ours) {
+            u32 bytes = texBytes(cur);
+            if (!bytes || *(u32*)(cur + 0x10) != 0x40) return;
+            s_hdrOrig[b] = imageWord(cur);
+            for (int k = 0; k < 2; k++) {
+                if (s_hdrCopy[b][k]) continue;
+                u8* m = (u8*)gfHeapManager::alloc(Heaps::Network, 0x40 + bytes + 32);
+                if (!m) return;
+                s_hdrCopy[b][k] = (u8*)(((u32)m + 31) & ~31u);
+                memcpy(s_hdrCopy[b][k], cur, 0x40 + bytes);
+                Labels::renderInBox(s_hdrCopy[b][k], H.text[k], 4, 4, 44, 20, 1);
+            }
+        }
+        u8* want = s_hdrCopy[b][which];
+        if (!want) return;
+        if (cur != want) {
+            Labels::rebindTexture(mdl, H.tex, want);
+            u32 size = *(u32*)(mdl + 4);
+            if (size > 0x40 && size < 0x100000) {
+                retarget(mdl, size, imageWord(cur), imageWord(want));
+                DCFlushRange(mdl, size);
+            }
+        }
+        // the ScnMdl's own copies of the texture objects (every frame, as labelScnMdl)
+        u8* scn = *(u8**)(obj + 0xC);
+        if (!isPtr((u32)scn)) return;
+        u32 to = imageWord(want);
+        u32 from[3] = {s_hdrOrig[b], imageWord(s_hdrCopy[b][0]), s_hdrCopy[b][1] ? imageWord(s_hdrCopy[b][1]) : 0};
+        u8* bufs[3] = {scn, *(u8**)(scn + 0x14C), *(u8**)(scn + 0x140)};
+        for (int i = 0; i < 3; i++) {
+            u8* p = bufs[i];
+            if (!isPtr((u32)p)) continue;
+            u32 len = i == 0 ? 0x2000 : 0x1000;
+            for (u32 off = 0; off < len; off += 4) {
+                u32 w = *(u32*)(p + off);
+                u32 r = w >> 24;
+                if (!((r >= 0x94 && r <= 0x97) || (r >= 0xB4 && r <= 0xB7))) continue;
+                u32 a = w & 0xFFFFFF;
+                if (a != to && (a == from[0] || a == from[1] || a == from[2])) *(u32*)(p + off) = (w & 0xFF000000u) | to;
+            }
+        }
+    }
+
+    void headerButtons(bool isPublic, bool teams)
+    {
+        u8* task = cssTask();
+        if (!task) return;
+        showHeaderLabel(task, 0, isPublic ? 1 : 0);
+        showHeaderLabel(task, 1, teams ? 1 : 0);
+    }
+
     static void labelSeeking(u8* a, int ai)
     {
         (void)ai;
@@ -338,6 +457,7 @@ namespace RoomCss {
         if (!isPtr((u32)mdl) || *(u32*)mdl != 0x4D444C30) return;
         labelModel(mdl);
         labelScnMdl(obj);
+        moveDots(obj);
         s_seekingLabelled = true;
     }
 

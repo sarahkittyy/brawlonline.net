@@ -114,6 +114,7 @@ namespace OnlineMenu {
     };
     static State s;
     bool roomCss();
+    static u8 s_headerPress = 0;   // the game's press on ITEM (0x19) / STAGE (0x1A) on a room's CSS
     void u16Name(char* out, const u16* in);   // a name from SESSION / Dolphin: printable ASCII
 
     static const u32 BTN_START = 0x1000;
@@ -469,6 +470,7 @@ namespace OnlineMenu {
     // ITEM and STAGE buttons at the right end of the bar (MenSelchrState0005 / 0006, found live
     // by hiding the CSS's models one at a time): they open P+'s item and stage switches, which
     // are locked online (cssSwitchButtons below), and the status line takes their place.
+    static bool roomIn();
     static void hideHeaderArt()
     {
         static const u32 OBJS[] = {0x418 /* TitleW */, 0x158 /* Rnum1 */, 0x15C /* Rnum2 */,
@@ -477,7 +479,9 @@ namespace OnlineMenu {
         typedef void (*SetVisFn)(void* scnMdl, bool vis);
         u8* task = cssTask();
         if (!task) return;
+        bool roomButtons = roomCss() && roomIn();   // ITEM / STAGE are the room's buttons
         for (u32 i = 0; i < sizeof(OBJS) / sizeof(OBJS[0]); i++) {
+            if (roomButtons && (OBJS[i] == 0x420 || OBJS[i] == 0x424)) continue;
             u32 obj = *(u32*)(task + OBJS[i]);
             if (!isPtr(obj)) continue;
             u32 mdl = *(u32*)(obj + 0xC);   // MuObject::m_scnMdl
@@ -785,7 +789,8 @@ namespace OnlineMenu {
     };
 
     static const float STATUS_X1 = -318.0f;     // the rule window's own: -208 .. 144
-    static const float ROOM_STATUS_X1 = -300.0f;  // on a room's CSS (after Public / Private)
+    static const float ROOM_STATUS_X2 = 222.0f;   // in a room: up to the ITEM / STAGE buttons
+    static const int ROOM_STATUS_FIT = 530;
     static const float STATUS_X2 = 330.0f;
     static const float WRAP_SCALE = 0.7f;
     static const float WRAP_LINE_SPACE = 22.0f; // two lines at 0.7 inside the bar
@@ -901,7 +906,6 @@ namespace OnlineMenu {
     // there): the Elo number and, after a set, its change, e.g. "1523 (+14)".
     static const u32 OWN_WINDOW = 1;
     static const float OWN_X1 = -640.0f, OWN_X2 = -395.0f;
-    static const float ROOM_CODE_X2 = -527.0f;   // a room's code, then its two buttons (roomButtons)
     static char s_roomTop[24];
     static const char* ownText()
     {
@@ -937,6 +941,11 @@ namespace OnlineMenu {
             }
             return;
         }
+        // Attached only once the CSS has printed its rule line (the status window is known):
+        // attached earlier, while the CSS was still being built, the window once stayed a small
+        // left-aligned overlay over LEAVE (found live on a first Direct CSS after boot; staging
+        // feedback 2026-10-10: "KITY#371" over LEAVE).
+        if (!s.haveWindow) return;
         MuMsg* m = s.cssMsg;
         u8* task = cssTask();
         u32 obj = task ? *(u32*)(task + 0x150) : 0;   // MenSelchrRule, the rule line's model
@@ -949,11 +958,9 @@ namespace OnlineMenu {
         ((AttachFn)0x800B8C90)(m, OWN_WINDOW, mdl, 0, size);   // MuMsg::attachScnMdlSimple
         WindowSetting* ws = (WindowSetting*)(*(u32*)((u8*)m + 0xC) + 0x48 * OWN_WINDOW);
         ws->x1 = OWN_X1;
-        ws->x2 = roomCss() ? ROOM_CODE_X2 : OWN_X2;
-        if (s.haveWindow) {
-            ws->y1 = s.windowY1;
-            ws->y2 = s.windowY2;
-        }
+        ws->x2 = OWN_X2;   // a room's code lined up as the connect code
+        ws->y1 = s.windowY1;
+        ws->y2 = s.windowY2;
         m->setAlignMode(OWN_WINDOW, MuMsg::Align_Right);
         m->setFontColor(OWN_WINDOW, 0xFF, 0xFF, 0xFF, 0xFF);
         m->printf(OWN_WINDOW, "%s", text);
@@ -981,9 +988,9 @@ namespace OnlineMenu {
                 s.windowY2 = ws->y2;
                 s.windowLineSpace = ws->lineSpace;
             }
-            ws->x1 = roomCss() ? ROOM_STATUS_X1 : STATUS_X1;
-            ws->x2 = STATUS_X2;
-            layout = layoutStatus(s.status, text, STATUS_FIT);
+            ws->x1 = STATUS_X1;
+            ws->x2 = roomCss() && roomIn() ? ROOM_STATUS_X2 : STATUS_X2;
+            layout = layoutStatus(s.status, text, roomCss() && roomIn() ? ROOM_STATUS_FIT : STATUS_FIT);
             bool two = layout == LAYOUT_TWO;
             ws->scaleX = ws->scaleY = layout == LAYOUT_ONE ? 1.0f : WRAP_SCALE;
             ws->lineSpace = two ? WRAP_LINE_SPACE : s.windowLineSpace;
@@ -1082,8 +1089,9 @@ namespace OnlineMenu {
     // muSelCharTask::buttonProcInAllArea, sel_char+0x7CCC `cmpwi r29,0x19` (r29 = the button):
     // 0x19 -> open the item switch (+0x105D8 with 1), 0x1A -> the stage switch (with 2), else on
     // at +0x7D10. Ours: the two buttons go to the function's exit (+0x8334) instead.
-    extern "C" void pponline_cssLockedButton()
+    extern "C" void pponline_cssLockedButton(u32 button)
     {
+        if (roomCss()) s_headerPress = (u8)button;   // the room's buttons (tickRoom)
         PPOM::g_block.debug.scratch[15] = (PPOM::g_block.debug.scratch[15] & ~0xFFu) |
                                           ((PPOM::g_block.debug.scratch[15] + 1) & 0xFF);
     }
@@ -1105,6 +1113,7 @@ namespace OnlineMenu {
             "mtctr 12\n\t"
             "bctr\n\t"
             "2:\n\t"
+            "mr 3, 29\n\t"
             "lis 12, pponline_cssLockedButton@ha\n\t"
             "addi 12, 12, pponline_cssLockedButton@l\n\t"
             "mtctr 12\n\t"
@@ -1753,53 +1762,21 @@ namespace OnlineMenu {
 
 
     // ----------------------------------------------------------------------------------------
-    // The room's settings on screen (staging feedback 2026-10-10: R and L alone were not found,
-    // and the top line's "Public" looked like plain text): two words the host clicks with A, as
-    // LEAVE is clicked:
-    //   "Public" / "Private"     in the top bar after the room's code (L does the same)
-    //   "FFA" / "Teams"          under LEAVE, left of the characters (R does the same; a room
-    //                            starts as FFA). (The hand does not go further left than that.)
-    // A word turns yellow under the host's hand; for the others they are grey. Below it, the
-    // room's host: "Host: <name>", or for the host how slots are opened and closed. They are
-    // windows 2-4 of the rule line's MuMsg, attached as the own-code window. Positions: window
-    // units are 1.3 screen pixels (2000 wide) from x = 1265 px, 1.42 down from the bar's middle
-    // (140 px); the hand (muSelCharHand +0x90/+0x94) points with its finger at x 205 + 28.3 *
-    // (hx + 32), y 228 - 30.1 * (hy - 14.22) pixels (all found live).
-    static const u32 ROOM_BTN_WINDOW0 = 2;
-    struct WinBox { float x1, x2, y, half, scale; MuMsg::AlignMode align; };
-    static const WinBox ROOM_BTN_WIN[3] = {
-        {-515.0f, -385.0f, 0.0f, 18.4f, 0.85f, MuMsg::Align_Left},     // Public / Private
-        {-808.0f, -700.0f, 77.0f, 20.0f, 0.85f, MuMsg::Align_Left},    // FFA / Teams
-        {-905.0f, -700.0f, 150.0f, 40.0f, 0.5f, MuMsg::Align_Left},    // the host
-    };
-    struct HandBox { float x1, x2, y1, y2; };
-    static const HandBox ROOM_BTN_HAND[2] = {{-18.2f, -12.4f, 15.8f, 18.6f},
-                                             {-32.5f, -28.6f, 12.6f, 14.4f}};
+    // The room's settings on screen (staging feedback 2026-10-10, two rounds): Public / Private
+    // and FFA / Teams are the CSS's own ITEM and STAGE buttons at the right end of the bar,
+    // relabelled (RoomCss::headerButtons) and pressed as the game presses them (the hand's
+    // buttons 0x19 / 0x1A, cssSwitchButtons -> s_headerPress); L and R do the same. Under
+    // LEAVE: the room's host, "Host: <name>", or for the host "A on a slot to toggle it" (window
+    // 2 of the rule line's MuMsg, attached as the own-code window). Window units are 1.3 screen
+    // pixels (2000 wide) from x = 1265 px (found live).
+    static const u32 ROOM_HOST_WINDOW = 2;
+    static const float ROOM_HOST_X1 = -905.0f, ROOM_HOST_X2 = -690.0f;
+    static const float ROOM_HOST_Y = 95.0f, ROOM_HOST_HALF = 40.0f, ROOM_HOST_SCALE = 0.72f;
 
-    static bool handPos(float* x, float* y)
+    static void roomButtons(bool in, bool host)
     {
-        u8* a0 = playerArea();
-        u8* hand = a0 ? *(u8**)(a0 + 0x1A8) : NULL;
-        if (!isPtr((u32)hand)) return false;
-        *x = *(float*)(hand + 0x90);
-        *y = *(float*)(hand + 0x94);
-        return true;
-    }
-
-    // Which button the hand is on (0 public, 1 mode), -1 none.
-    static int roomBtnUnderHand()
-    {
-        float x, y;
-        if (!handPos(&x, &y)) return -1;
-        for (int i = 0; i < 2; i++) {
-            const HandBox& b = ROOM_BTN_HAND[i];
-            if (x >= b.x1 && x <= b.x2 && y >= b.y1 && y <= b.y2) return i;
-        }
-        return -1;
-    }
-
-    static void roomButtons(bool in, bool host, int hover)
-    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        RoomCss::headerButtons(in && (se.roomFlags & PPOM::RF_PUBLIC), in && (se.roomFlags & PPOM::RF_TEAMS));
         MuMsg* m = s.cssMsg;
         if (!m || !s.haveWindow) return;
         if (!s.roomBtnsShown) {
@@ -1808,53 +1785,37 @@ namespace OnlineMenu {
             u32 mdl = isPtr(obj) ? *(u32*)(obj + 0x10) : 0;
             u8* message = (u8*)m->m_message;
             u32 bufs = isPtr((u32)message) ? *(u32*)(message + 0x1D8) : 0;
-            if (!isPtr(mdl) || !isPtr(bufs) || *(u32*)((u8*)m + 0x10) < ROOM_BTN_WINDOW0 + 3) return;
+            if (!isPtr(mdl) || !isPtr(bufs) || *(u32*)((u8*)m + 0x10) <= ROOM_HOST_WINDOW) return;
             float size = *(float*)(*(u32*)bufs + 0x28);
             typedef void (*AttachFn)(MuMsg*, u32, u32 scnMdl, u32 node, float size);
-            for (u32 i = 0; i < 3; i++) {
-                u32 w = ROOM_BTN_WINDOW0 + i;
-                ((AttachFn)0x800B8C90)(m, w, mdl, 0, size);
-                WindowSetting* ws = (WindowSetting*)(*(u32*)((u8*)m + 0xC) + 0x48 * w);
-                const WinBox& b = ROOM_BTN_WIN[i];
-                ws->x1 = b.x1;
-                ws->x2 = b.x2;
-                // the bar's own vertical place (the status window's), b.y lower (window y grows down)
-                float mid = (s.windowY1 + s.windowY2) * 0.5f;
-                ws->y1 = mid + b.half + b.y;
-                ws->y2 = mid - b.half + b.y;
-                ws->scaleX = ws->scaleY = b.scale;
-                if (i == 2) ws->lineSpace = 24.0f;
-                m->setAlignMode(w, b.align);
-                s.roomBtnPrinted[i][0] = 1;   // not printed yet
-            }
-            s.roomBtnHover = -2;
+            ((AttachFn)0x800B8C90)(m, ROOM_HOST_WINDOW, mdl, 0, size);
+            WindowSetting* ws = (WindowSetting*)(*(u32*)((u8*)m + 0xC) + 0x48 * ROOM_HOST_WINDOW);
+            ws->x1 = ROOM_HOST_X1;
+            ws->x2 = ROOM_HOST_X2;
+            // the bar's own vertical place (the status window's), lower (window y grows down)
+            float mid = (s.windowY1 + s.windowY2) * 0.5f;
+            ws->y1 = mid + ROOM_HOST_HALF + ROOM_HOST_Y;
+            ws->y2 = mid - ROOM_HOST_HALF + ROOM_HOST_Y;
+            ws->scaleX = ws->scaleY = ROOM_HOST_SCALE;
+            ws->lineSpace = 30.0f;
+            m->setAlignMode(ROOM_HOST_WINDOW, MuMsg::Align_Left);
+            m->setFontColor(ROOM_HOST_WINDOW, 0xFF, 0xFF, 0xFF, 0xFF);
+            s.roomBtnPrinted[0][0] = 1;   // not printed yet
             s.roomBtnsShown = true;
         }
-        const PPOM::Session& se = PPOM::g_block.session;
-        char text[3][40];
+        char text[40];
+        text[0] = 0;
         if (in) {
-            strcpy(text[0], (se.roomFlags & PPOM::RF_PUBLIC) ? "Public" : "Private");
-            strcpy(text[1], (se.roomFlags & PPOM::RF_TEAMS) ? "Teams" : "FFA");
             char hostName[RoomCss::NAME_CHARS + 1];
             hostName[0] = 0;
             if (se.roomHost < PPOM::SESSION_PLAYERS) u16Name(hostName, se.players[se.roomHost].name);
-            if (host) strcpy(text[2], "You are the host.\nA on a slot opens\nor closes it.");
-            else sprintf(text[2], "Host:\n%s", hostName);
-        } else {
-            text[0][0] = text[1][0] = text[2][0] = 0;
+            if (host) strcpy(text, "A on a slot\nto toggle it");
+            else sprintf(text, "Host:\n%s", hostName);
         }
-        bool hoverChanged = hover != s.roomBtnHover;
-        s.roomBtnHover = (s8)hover;
-        for (int i = 0; i < 3; i++) {
-            if (!hoverChanged && strcmp(text[i], s.roomBtnPrinted[i]) == 0) continue;
-            u32 w = ROOM_BTN_WINDOW0 + i;
-            if (i < 2 && host && hover == i) m->setFontColor(w, 0xFF, 0xD8, 0x20, 0xFF);   // under the hand
-            else if (i < 2 && !host) m->setFontColor(w, 0x90, 0x90, 0x90, 0xFF);           // not the host's
-            else m->setFontColor(w, 0xFF, 0xFF, 0xFF, 0xFF);
-            m->printf(w, "%s", text[i]);
-            strncpy(s.roomBtnPrinted[i], text[i], sizeof(s.roomBtnPrinted[i]) - 1);
-            s.roomBtnPrinted[i][sizeof(s.roomBtnPrinted[i]) - 1] = 0;
-        }
+        if (strcmp(text, s.roomBtnPrinted[0]) == 0) return;
+        m->printf(ROOM_HOST_WINDOW, "%s", text);
+        strncpy(s.roomBtnPrinted[0], text, sizeof(s.roomBtnPrinted[0]) - 1);
+        s.roomBtnPrinted[0][sizeof(s.roomBtnPrinted[0]) - 1] = 0;
     }
 
     static void tickRoom(u32 pressed, u32 held)
@@ -1900,11 +1861,12 @@ namespace OnlineMenu {
             } else {
                 s.roomZHeld = 0;
             }
-            int btn = roomBtnUnderHand();
-            if ((pressed & BTN_A) && btn >= 0) {
-                maskPressed(BTN_A);
-                if (host && btn == 1 && waiting) pressed |= BTN_R;   // as R
-                else if (host && btn == 0) pressed |= BTN_L;         // as L
+            // ITEM (Public / Private) and STAGE (FFA / Teams), pressed with A as the game does
+            u8 hdr = s_headerPress;
+            s_headerPress = 0;
+            if (hdr) {
+                if (host && hdr == 0x1A && waiting) pressed |= BTN_R;   // as R
+                else if (host && hdr == 0x19) pressed |= BTN_L;         // as L
                 else playSE(SE_ERROR);
             }
             if ((pressed & BTN_L) && host) {
@@ -1954,7 +1916,7 @@ namespace OnlineMenu {
         if (in && me >= 0) u16Name(myName, se.players[me].name);
         else strcpy(myName, s.ownName);
         RoomCss::tick(views, teams, myTeam, host, myName, roomLockedForNext());
-        roomButtons(in, host, in ? roomBtnUnderHand() : -1);
+        roomButtons(in, host);
     }
 
     // LOCAL.screen (rooms-game-interface.md §2): where the game is, for the launcher's joins.

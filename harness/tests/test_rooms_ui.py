@@ -38,8 +38,8 @@ ART = ROOT / "run" / "artifacts" / "game-code" / "rooms" / "ui"
 # units (game-code.md "Rooms"); the character grid and the panels in those units.
 HAND_X, HAND_Y = 0x90, 0x94
 FOX = (-23.0, 10.5)                 # Fox's portrait in the grid
-MODE_BUTTON = (-30.5, 13.5)         # "FFA" / "Teams" under LEAVE (online_menu.cpp roomButtons)
-PUBLIC_BUTTON = (-15.3, 17.2)       # "Public" / "Private" after the room's code
+MODE_BUTTON = (27.5, 17.0)          # the CSS's STAGE button as "FFA" / "TEAMS" (room_css.cpp headerButtons)
+PUBLIC_BUTTON = (27.5, 19.5)        # its ITEM button as "PUBLIC" / "PRIVATE"
 MY_FLAG = (-26.0, -4.5)             # our own panel's team flag (room_css.cpp handOverMyFlag)
 SLOT_POS = 16.0 / 0.99              # a panel's model offset per slot (room_css.cpp SLOT_POS)
 PANEL_X = [-22.0, -7.0, 8.0, 23.0]  # the four panels' centres, y about -10
@@ -195,7 +195,7 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     g.wait(30)
     assert sim.room.open[2], sim.room.open
     g.shot("07-slot-3-opened")
-    # The FFA button under LEAVE (A on it, as R): Teams on (three open slots: a team battle);
+    # The FFA button (the bar's STAGE button; A on it, as R): Teams on (three open slots: a team battle);
     # the panels in team colours. A room starts as FFA.
     assert not sim.room.teams
     g.hand_to(*MODE_BUTTON, tol=0.5)
@@ -222,7 +222,7 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     g.tap("Y")
     g.wait(30)
     assert sim.room.members[0].team == team0
-    # The Public button (A on it, as L): private.
+    # The PUBLIC button (the bar's ITEM button; A on it, as L): private.
     g.hand_to(*PUBLIC_BUTTON, tol=0.5)
     g.tap("A")
     g.wait(30)

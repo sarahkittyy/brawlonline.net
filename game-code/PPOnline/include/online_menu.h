@@ -48,6 +48,7 @@ namespace RoomCss {
     int myTeamClicked();                 // the local player's flag changed: the team, else -1
     int panelUnderHand();                // 1-3: the local hand is over that panel, else -1
     bool handOverMyFlag();               // the local hand is over the local panel's team flag
+    void headerButtons(bool isPublic, bool teams);   // ITEM / STAGE as the room's two settings
     void setLocalSlot(int slot, bool inRoom);   // the room slot the local player's panel is shown at
     int portOfArea(int area);            // the room slot an area (1-3) shows
     // (panelUnderHand: the slot (0-3, not the player's own) of the panel under the hand)

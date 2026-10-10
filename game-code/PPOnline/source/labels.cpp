@@ -242,7 +242,19 @@ namespace Labels {
         }
     }
 
+    static bool renderImpl(u8* tex0, const char* text, int x0, int y0, int x1, int y1, int rim, int boxOnly);
+
     bool render(u8* tex0, const char* text, int x0, int y0, int x1, int y1, int rim)
+    {
+        return renderImpl(tex0, text, x0, y0, x1, y1, rim, 0);
+    }
+
+    bool renderInBox(u8* tex0, const char* text, int x0, int y0, int x1, int y1, int rim)
+    {
+        return renderImpl(tex0, text, x0, y0, x1, y1, rim, 1);
+    }
+
+    static bool renderImpl(u8* tex0, const char* text, int x0, int y0, int x1, int y1, int rim, int boxOnly)
     {
         if (!isPtr((u32)tex0) || *(u32*)tex0 != 0x54455830 /* TEX0 */) return false;
         if (!findFont()) return false;
@@ -293,16 +305,21 @@ namespace Labels {
                 for (int bx = 0; bx < bpr; bx++) {
                     u8* blk = data + (by * bpr + bx) * 32;
                     for (int sb = 0; sb < 4; sb++) {
+                        int sx = bx * 8 + (sb & 1) * 4, sy = by * 8 + (sb >> 1) * 4;
+                        // In a box (a button's own art around it): only the sub-blocks inside it,
+                        // white letters on a black outline as Brawl's button labels.
+                        if (boxOnly && (sx < x0 || sy < y0 || sx + 4 > x1 || sy + 4 > y1)) continue;
+                        u32 letter = boxOnly ? 1 : 0, outline = boxOnly ? 0 : 1;
                         u32 idx = 0;
                         for (int yy = 0; yy < 4; yy++) {
                             for (int xx = 0; xx < 4; xx++) {
-                                int x = bx * 8 + (sb & 1) * 4 + xx, y = by * 8 + (sb >> 1) * 4 + yy;
+                                int x = sx + xx, y = sy + yy;
                                 u32 k = 3;
                                 if (x < w && y < h) {
                                     int m = mask[y * w + x], o = rimMask[y * w + x];
-                                    if (m >= 0xA0) k = 0;
+                                    if (m >= 0xA0) k = letter;
                                     else if (m >= 0x50) k = 2;
-                                    else if (o >= 0x40 || m >= 0x20) k = 1;
+                                    else if (o >= 0x40 || m >= 0x20) k = outline;
                                 }
                                 idx = (idx << 2) | k;
                             }
