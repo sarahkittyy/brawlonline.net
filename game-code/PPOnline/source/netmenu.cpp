@@ -508,16 +508,28 @@ namespace NetMenu {
     // without a null check; without it every CSS frame read and wrote through a null pointer
     // (24 invalid accesses a frame, each one a formatted panic alert in Dolphin). So the task is
     // created here, as the window would have.
+    //
+    // The boot to the ONLINE page (boot_menu.cpp) opens no connect window, so the online pages
+    // also create the task when they run (OnlineMenu::menuPageRunning). Without it the first
+    // Wi-Fi CSS after the boot was built on the null task: white, with no panels or background
+    // (prod, 2026-10-10: every packaged build, where P+'s BootToCSS is the boot; the harness
+    // boots through the title and the connect window). Later CSSes in the same run were whole.
+    void ensureWifiTask()
+    {
+        if (!(PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS)) return;
+        if (*(void**)0x805A02A4 == 0) {
+            typedef void* (*CreateFn)();
+            reinterpret_cast<CreateFn>(0x800C7410)();   // muWifiInterfaceTask::create
+        }
+    }
+
     void skipConnectWindow(u8* wnd)
     {
         if (!wnd || !(PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS)) return;
         *(u32*)(wnd + 0x128) = 0;
         *(u32*)(wnd + 0x138) = 0xC;
         PPOM::g_block.debug.scratch[9]++;
-        if (*(void**)0x805A02A4 == 0) {
-            typedef void* (*CreateFn)();
-            reinterpret_cast<CreateFn>(0x800C7410)();   // muWifiInterfaceTask::create
-        }
+        ensureWifiTask();
     }
 
     // ---------------------------------------------------------------------------------------
