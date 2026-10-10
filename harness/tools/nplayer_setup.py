@@ -63,6 +63,10 @@ SCENARIOS: Dict[str, Dict[str, Any]] = {
     "ffa-2": {"teams": False, "stage": 0x01,
               "players": [{"c": "fox"}, {"c": "marth"}, None, None],
               "gone": 0, "gone2": 0b0010, "winner": 0},
+    # Two players with a gap (a room's P1 and P3, rooms: slot 2 closed, slot 3 open).
+    "ffa-2-gap": {"teams": False, "stage": 0x01,
+                  "players": [{"c": "fox"}, None, {"c": "marth"}, None],
+                  "gone": 0, "gone2": 0b0100, "winner": 0},
     # Ice Climbers: Nana is a second fighter of the entry; both have to leave.
     "ffa-ics": {"teams": False, "stage": 0x01,
                 "players": [{"c": "fox"}, {"c": "ice_climbers"}, {"c": "marth"}, None],
