@@ -4,7 +4,10 @@ import { getLauncherUpdateMode } from "@common/launcher_update";
 import type { SettingsManager } from "@settings/settings_manager";
 import { app } from "electron";
 import log from "electron-log";
+import type { UpdateInfo } from "electron-updater";
 import { autoUpdater } from "electron-updater";
+
+import { ipc_launcherUpdateFailedEvent } from "./ipc";
 
 export type UpdateState = {
   status: "succeeded" | "failed";
@@ -12,9 +15,27 @@ export type UpdateState = {
 };
 
 const INSTALL_UPDATE_TIMEOUT_MS = 5000; // 5 seconds
+/** How often a running launcher asks the feed again, so a release reaches a launcher left open. */
+export const UPDATE_CHECK_INTERVAL_MS = 5 * 60 * 1000; // 5 minutes
+/** A check older than this is redone before Dolphin starts, so a release out since the last one counts. */
+const LAUNCH_CHECK_MAX_AGE_MS = 60 * 1000; // 1 minute
+/** How long a start waits for that check; past it (offline, feed down) Dolphin starts on what is known. */
+const LAUNCH_CHECK_TIMEOUT_MS = 5000; // 5 seconds
+
+/** Thrown when Dolphin is asked to start while a newer launcher is out. */
+export class LauncherUpdateRequiredError extends Error {
+  constructor(readonly version: string) {
+    super(`Version ${version} of the launcher is out. Update before starting Dolphin.`);
+    this.name = "LauncherUpdateRequiredError";
+  }
+}
 
 export class AppUpdater {
   private updateState: UpdateState | undefined;
+  /** The newer version the feed last offered, until the feed offers none (then undefined). */
+  private availableVersion: string | undefined;
+  private lastCheckAt = 0;
+  private checkTimer: NodeJS.Timeout | undefined;
 
   /** "download" on macOS while the build cannot update itself (MAC_SELF_UPDATE in @common/product). */
   readonly mode: LauncherUpdateMode = getLauncherUpdateMode(process.platform);
@@ -40,6 +61,67 @@ export class AppUpdater {
     // Same hooks as Slippi (electron-updater), but our feed comes from the host config:
     // a "generic" provider at launcherUpdates (electron-builder.json publishes to the same URL).
     autoUpdater.setFeedURL({ provider: "generic", url: resolveServiceUrls().launcherUpdates });
+    // electron-updater skips an unpackaged launcher (development, the harness); one that is pointed at
+    // a feed with PPO_UPDATES_URL checks it, so the update bar and the launch gate can be tried.
+    if (!app.isPackaged && process.env.PPO_UPDATES_URL) {
+      autoUpdater.forceDevUpdateConfig = true;
+    }
+
+    autoUpdater.on("update-available", (info: UpdateInfo) => {
+      this.availableVersion = info.version;
+    });
+    autoUpdater.on("update-not-available", () => {
+      this.availableVersion = undefined;
+    });
+  }
+
+  /**
+   * Asks the feed for a newer version (electron-updater then downloads it in "install" mode).
+   * `notify` adds the system notification once it is downloaded: for the start and the header's
+   * button, not the periodic checks, which find the same download again each time.
+   */
+  async checkForUpdates(notify = false): Promise<{ updateAvailable: boolean }> {
+    this.lastCheckAt = Date.now();
+    // In "download" mode nothing is downloaded, so there is nothing to notify about.
+    const result =
+      notify && this.mode === "install"
+        ? await autoUpdater.checkForUpdatesAndNotify()
+        : await autoUpdater.checkForUpdates();
+    // Rejects with the download's error (already logged); the bar then offers the website's download.
+    result?.downloadPromise?.catch(() => this.onDownloadFailed());
+    return { updateAvailable: result?.isUpdateAvailable ?? false };
+  }
+
+  private onDownloadFailed(): void {
+    ipc_launcherUpdateFailedEvent.main!.trigger({}).catch(log.warn);
+  }
+
+  /** Checks the feed every UPDATE_CHECK_INTERVAL_MS while the launcher runs. */
+  startPeriodicChecks(): void {
+    if (this.checkTimer) {
+      return;
+    }
+    this.checkTimer = setInterval(() => {
+      // A failed check (offline) is logged by electron-updater's "error" event.
+      this.checkForUpdates().catch(() => undefined);
+    }, UPDATE_CHECK_INTERVAL_MS);
+  }
+
+  /** The newer launcher version that is out, if any; checks again first when the last check is old. */
+  async requiredUpdate(): Promise<string | undefined> {
+    if (Date.now() - this.lastCheckAt > LAUNCH_CHECK_MAX_AGE_MS) {
+      const timeout = new Promise<void>((resolve) => setTimeout(resolve, LAUNCH_CHECK_TIMEOUT_MS));
+      await Promise.race([this.checkForUpdates().catch(() => undefined), timeout]);
+    }
+    return this.availableVersion;
+  }
+
+  /** Throws LauncherUpdateRequiredError while a newer launcher is out (DolphinManager's launch gate). */
+  async assertUpToDate(): Promise<void> {
+    const version = await this.requiredUpdate();
+    if (version) {
+      throw new LauncherUpdateRequiredError(version);
+    }
   }
 
   async verifyPendingUpdate(): Promise<void> {

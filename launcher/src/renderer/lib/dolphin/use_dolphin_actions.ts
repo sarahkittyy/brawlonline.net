@@ -4,6 +4,7 @@ import { DolphinLaunchType } from "@dolphin/types";
 import log from "electron-log";
 import { useCallback } from "react";
 
+import { useAppStore } from "@/lib/hooks/use_app_store";
 import { useToasts } from "@/lib/hooks/use_toasts";
 
 import { DolphinMessages as Messages } from "./dolphin.messages";
@@ -26,6 +27,26 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
     [netplayStatus, playbackStatus],
   );
 
+  /**
+   * False (with the error shown) while a newer launcher is out: no new Dolphin starts until the
+   * launcher is updated (main checks the same in DolphinManager's launch gate). A failed check
+   * does not block.
+   */
+  const launcherIsUpToDate = useCallback(async (): Promise<boolean> => {
+    let version: string | null = null;
+    try {
+      version = await window.electron.common.requiredAppUpdate();
+    } catch (err) {
+      log.warn(err);
+    }
+    if (version) {
+      useAppStore.getState().setUpdateVersion(version);
+      showError(Messages.updateLauncherFirst(version));
+      return false;
+    }
+    return true;
+  }, [showError]);
+
   const updateDolphin = useCallback(async () => {
     return Promise.all(
       [DolphinLaunchType.NETPLAY, DolphinLaunchType.PLAYBACK].map(async (dolphinType) => {
@@ -43,9 +64,12 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
   }, [getInstallStatus, dolphinService, showError]);
 
   const openConfigureDolphin = useCallback(
-    (dolphinType: DolphinLaunchType) => {
+    async (dolphinType: DolphinLaunchType) => {
       if (getInstallStatus(dolphinType) !== DolphinStatus.READY) {
         showError(Messages.dolphinIsUpdating());
+        return;
+      }
+      if (!(await launcherIsUpToDate())) {
         return;
       }
 
@@ -56,7 +80,7 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
         })
         .catch(showError);
     },
-    [getInstallStatus, dolphinService, showError],
+    [getInstallStatus, launcherIsUpToDate, dolphinService, showError],
   );
 
   const softResetDolphin = useCallback(
@@ -87,6 +111,9 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
       showError(Messages.dolphinIsUpdating());
       return false;
     }
+    if (!(await launcherIsUpToDate())) {
+      return false;
+    }
 
     try {
       await dolphinService.launchNetplayDolphin();
@@ -96,12 +123,15 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
       showError(err);
       return false;
     }
-  }, [getInstallStatus, dolphinService, showError]);
+  }, [getInstallStatus, launcherIsUpToDate, dolphinService, showError]);
 
   const viewReplays = useCallback(
-    (...files: ReplayQueueItem[]) => {
+    async (...files: ReplayQueueItem[]) => {
       if (getInstallStatus(DolphinLaunchType.PLAYBACK) !== DolphinStatus.READY) {
         showError(Messages.dolphinIsUpdating());
+        return;
+      }
+      if (!(await launcherIsUpToDate())) {
         return;
       }
 
@@ -112,7 +142,7 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
         })
         .catch(showError);
     },
-    [getInstallStatus, dolphinService, showError],
+    [getInstallStatus, launcherIsUpToDate, dolphinService, showError],
   );
 
   const readGeckoCodes = useCallback(

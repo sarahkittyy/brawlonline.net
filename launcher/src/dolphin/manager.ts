@@ -67,9 +67,16 @@ export class DolphinManager {
   private projectPlusInstall: Promise<void> | null = null;
   private eventSubject = new Subject<DolphinEvent>();
   private shouldSendProgress = createProgressThrottle(PROGRESS_INTERVAL_MS);
+  /** Runs before a new Dolphin starts and throws to stop it (the launcher's update check). */
+  private launchGate: () => Promise<void> = async () => undefined;
   events = Observable.from(this.eventSubject);
 
   constructor(private settingsManager: SettingsManager) {}
+
+  /** No new Dolphin (Play, replays, Configure) starts while `gate` throws. A running one is left alone. */
+  setLaunchGate(gate: () => Promise<void>): void {
+    this.launchGate = gate;
+  }
 
   /** True while the netplay Dolphin the launcher started (Play, or Configure) is running. */
   isNetplayRunning(): boolean {
@@ -172,6 +179,7 @@ export class DolphinManager {
     }
     let playbackInstance = this.playbackDolphinInstances.get(id);
     if (!playbackInstance) {
+      await this.launchGate();
       playbackInstance = new PlaybackDolphinInstance(dolphinPath, playbackInstallation.userArgs());
       playbackInstance.on("close", async (exitCode) => {
         this.eventSubject.next({
@@ -208,6 +216,7 @@ export class DolphinManager {
 
   async launchNetplayDolphin() {
     Preconditions.checkState(this.netplayDolphinInstance == null, "Netplay dolphin is already open!");
+    await this.launchGate();
 
     const netplayInstallation = this.getInstallation(DolphinLaunchType.NETPLAY);
     const dolphinPath = await netplayInstallation.findDolphinExecutable();
@@ -288,6 +297,7 @@ export class DolphinManager {
     await installation.ensureUserFolder();
     await this._updateDolphinSettings(launchType);
     if (launchType === DolphinLaunchType.NETPLAY && !this.netplayDolphinInstance) {
+      await this.launchGate();
       const instance = new DolphinInstance(dolphinPath, installation.userArgs());
       instance.on("close", async (exitCode) => {
         try {
@@ -309,6 +319,7 @@ export class DolphinManager {
       await instance.start();
       this.netplayDolphinInstance = instance;
     } else if (launchType === DolphinLaunchType.PLAYBACK && this.playbackDolphinInstances.size === 0) {
+      await this.launchGate();
       const instanceId = "configure";
       const instance = new PlaybackDolphinInstance(dolphinPath, installation.userArgs());
       instance.on("close", async (exitCode) => {

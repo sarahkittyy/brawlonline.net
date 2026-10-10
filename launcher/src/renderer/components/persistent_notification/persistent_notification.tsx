@@ -13,7 +13,7 @@ import { PersistentNotificationMessages as Messages } from "./persistent_notific
 export const PersistentNotification = React.memo(() => {
   const updateVersion = useAppStore((store) => store.updateVersion);
   const updateReady = useAppStore((store) => store.updateReady);
-  const updateDownloadProgress = useAppStore((store) => store.updateDownloadProgress);
+  const updateDownloadFailed = useAppStore((store) => store.updateDownloadFailed);
 
   const { installAppUpdate } = useAppUpdate();
   const [isInstalling, setIsInstalling] = useState(false);
@@ -82,7 +82,20 @@ export const PersistentNotification = React.memo(() => {
     );
   }
 
-  if (!updateReady && updateDownloadProgress) {
+  if (!updateVersion) {
+    return null;
+  }
+
+  // Shown as soon as the update is found, since no Dolphin starts until it is installed.
+  if (!updateReady) {
+    if (updateDownloadFailed) {
+      return (
+        <Outer>
+          <span>{Messages.versionIsNowAvailable(updateVersion)}</span>
+          <RestartButton onClick={handleManualDownload}>{Messages.downloadManually()}</RestartButton>
+        </Outer>
+      );
+    }
     return (
       <Outer>
         <div
@@ -95,10 +108,6 @@ export const PersistentNotification = React.memo(() => {
         </div>
       </Outer>
     );
-  }
-
-  if (!updateVersion || !updateReady) {
-    return null;
   }
 
   return (

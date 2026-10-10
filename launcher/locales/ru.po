@@ -8,7 +8,7 @@ msgstr ""
 "n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
 "x-generator: i18next-auto-keys CLI\n"
 "Language: ru-RU\n"
-"PO-Revision-Date: 2026-10-10T07:52:49.774Z\n"
+"PO-Revision-Date: 2026-10-10T20:09:17.947Z\n"
 
 #: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:4:19
 msgid "#"
@@ -504,7 +504,7 @@ msgstr ""
 msgid "Failed to get updates"
 msgstr "Ошибка получения обновлений"
 
-#: src/renderer/lib/dolphin/dolphin.messages.ts:4:5
+#: src/renderer/lib/dolphin/dolphin.messages.ts:5:5
 #. {0} dolphinTypeName: string
 msgid ""
 "Failed to install {0}. Try closing all Dolphin instances and restarting the "
@@ -789,7 +789,7 @@ msgid "Netplay"
 msgstr "Игровой"
 
 #: src/renderer/initialize_app.messages.ts:8:25
-#: src/renderer/lib/dolphin/dolphin.messages.ts:5:25
+#: src/renderer/lib/dolphin/dolphin.messages.ts:6:25
 #: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:3:25
 msgid "Netplay Dolphin"
 msgstr "Netplay Dolphin"
@@ -962,7 +962,7 @@ msgid "Playback"
 msgstr "Проигрыватель"
 
 #: src/renderer/initialize_app.messages.ts:9:26
-#: src/renderer/lib/dolphin/dolphin.messages.ts:6:26
+#: src/renderer/lib/dolphin/dolphin.messages.ts:7:26
 #: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:4:26
 msgid "Playback Dolphin"
 msgstr "Playback Dolphin"
@@ -1387,6 +1387,11 @@ msgstr "Проверка..."
 #. {0} version: string
 msgid "Version {0} is now available!"
 msgstr "Версия {0} теперь доступна!"
+
+#: src/renderer/lib/dolphin/dolphin.messages.ts:3:45
+#. {0} version: string
+msgid "Version {0} is out. Update the launcher before starting Dolphin."
+msgstr ""
 
 #: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:5:39
 #. {0} versionString: string
