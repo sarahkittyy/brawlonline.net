@@ -100,6 +100,9 @@ struct RoomGame
   bool saw_session = false;
   bool saw_match = false;
   std::optional<Clock::time_point> match_ended;
+  // Who picks the next stage, read when the match ended (the other players' cleanup may end
+  // this session before this game leaves the match scene).
+  std::optional<u8> pickers;
   bool abort = false;  // the player left the room: end the room's game (no room-back)
 };
 
@@ -180,6 +183,22 @@ void Log(std::string line)
     s.log.pop_front();
 }
 
+bool AwayScreen(u8 screen)
+{
+  return screen == static_cast<u8>(Screen::Menus) || screen == static_cast<u8>(Screen::OnlineCss) ||
+         screen == static_cast<u8>(Screen::OnlineBusy) || screen == static_cast<u8>(Screen::Offline);
+}
+
+// The game away from the room CSS (menus, another CSS, offline) counts from now.
+void RestartAway()
+{
+  // under s_mutex
+  if (AwayScreen(s.screen))
+    s.away_since = Clock::now();
+  else
+    s.away_since.reset();
+}
+
 void SetError(std::string text)
 {
   // under s_mutex
@@ -194,7 +213,7 @@ void ClearRoom()
   // under s_mutex
   s.view.reset();
   s.phase = s.pending ? Phase::Joining : Phase::None;
-  s.away_since.reset();
+  RestartAway();
   ++s.serial;
 }
 
@@ -369,7 +388,7 @@ void Handle(const Message& m, Actions* a, Clock::time_point now)
     {
       // A new room: its games start over (no stage pick carried from another room).
       s.pickers = 0;
-      s.away_since.reset();
+      RestartAway();
       Log(fmt::format("in room {} (slot {}, host {})", v.code, v.you, v.host));
     }
     // The server's ready is the truth: a send is due only if it differs from the game's.
@@ -607,7 +626,7 @@ void DecideLaunch(const DolphinBusy& busy, bool logged_in, Clock::time_point now
   if (s.phase != Phase::In)
     s.phase = Phase::Joining;
   ++s.join_seq;
-  s.away_since.reset();
+  RestartAway();
   ++s.serial;
 }
 
@@ -767,6 +786,8 @@ void SuperviseGame(Clock::time_point now)
       g.saw_match && !lobby.in_match && !(lobby.active && lobby.after_match);
   if (match_over && !g.match_ended)
     g.match_ended = now;
+  if (g.saw_match && !lobby.in_match && lobby.active && !g.pickers)
+    g.pickers = lobby.stage_pickers;
   const bool scene_left =
       screen == static_cast<u8>(Screen::Unknown) ?
           (g.match_ended && now - *g.match_ended > MATCH_SCENE_GRACE) :
@@ -778,11 +799,12 @@ void SuperviseGame(Clock::time_point now)
       s.rg.saw_session = g.saw_session;
       s.rg.saw_match = g.saw_match;
       s.rg.match_ended = g.match_ended;
+      s.rg.pickers = g.pickers;
     }
   }
   if (match_over && scene_left)
   {
-    EndGame(true, "", lobby.active ? std::optional<u8>(lobby.stage_pickers) : std::nullopt, true);
+    EndGame(true, "", g.pickers, true);
     return;
   }
   if (g.saw_session && !g.saw_match && !lobby.active)
@@ -1031,7 +1053,7 @@ void Thread()
           r.op = Op::Leave;
           Send(peer, *RequestJson(r));
           ++s.sent;
-          s.away_since.reset();
+          RestartAway();
           Log("the game is away from the room CSS: left the room");
         }
       }
@@ -1086,14 +1108,15 @@ void Shutdown()
 
 void Submit(const Request& request)
 {
+  if (request.op == Op::Poll)
+    return;
   std::lock_guard lk(s_mutex);
   const auto now = Clock::now();
+  // A new request: the last error goes.
   s.error.clear();
   ++s.serial;
   switch (request.op)
   {
-  case Op::Poll:
-    return;
   case Op::Create:
   case Op::Join:
   {
@@ -1146,14 +1169,7 @@ void SetScreen(u8 screen)
   if (v != s.screen)
   {
     s.screen = v;
-    const bool away = v == static_cast<u8>(Screen::Menus) ||
-                      v == static_cast<u8>(Screen::OnlineCss) ||
-                      v == static_cast<u8>(Screen::OnlineBusy) ||
-                      v == static_cast<u8>(Screen::Offline);
-    if (away)
-      s.away_since = Clock::now();
-    else
-      s.away_since.reset();
+    RestartAway();
   }
 }
 
