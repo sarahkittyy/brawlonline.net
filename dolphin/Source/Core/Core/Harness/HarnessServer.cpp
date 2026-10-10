@@ -1251,7 +1251,7 @@ Result CmdGprbSyncTest(const Args& args)
 {
   Gprb::Session::SyncTestOptions o;
   o.distance = static_cast<int>(GetU64(args, "distance", 2));
-  o.region_set = GetString(args, "region_set", std::string("gp-v19"));
+  o.region_set = GetString(args, "region_set", std::string("gp-v21"));
   o.hash_regions = GetBool(args, "hash_regions", true);
   o.start_frame = static_cast<u32>(GetU64(args, "start_frame", 240));
   o.ports = static_cast<u32>(GetU64(args, "ports", 3));
@@ -1280,7 +1280,7 @@ Result CmdGprbConnect(const Args& args)
   o.local_port = static_cast<u16>(GetU64(args, "port", 0));
   o.remote_host = GetString(args, "host", std::string(""));
   o.remote_port = static_cast<u16>(GetU64(args, "remote_port", 0));
-  o.region_set = GetString(args, "region_set", std::string("gp-v19"));
+  o.region_set = GetString(args, "region_set", std::string("gp-v21"));
   o.start_frame = static_cast<u32>(GetU64(args, "start_frame", 240));
   if (Find(args, "delay"))
     o.delay = static_cast<int>(GetU64(args, "delay"));
@@ -1290,6 +1290,30 @@ Result CmdGprbConnect(const Args& args)
   o.suppress_resim_sounds = GetBool(args, "suppress_resim_sounds", false);
   o.dedupe_resim_sounds = GetBool(args, "dedupe_resim_sounds", !o.suppress_resim_sounds);
   o.name = GetString(args, "name", std::string(""));
+  o.teams = GetBool(args, "teams", false);
+  // 2-4 players: `slot` (this player's in-game port 0-3) and `peers` [{slot, host, port}, ...]
+  // (host "" / port 0: learned from that peer's first message); `host_slot` for joiners.
+  if (Find(args, "slot"))
+  {
+    o.local_slot = static_cast<int>(GetU64(args, "slot"));
+    o.host_slot = static_cast<int>(GetU64(args, "host_slot", 0xFF));
+    if (o.host_slot == 0xFF)
+      o.host_slot = -1;
+    const picojson::value* peers = Find(args, "peers");
+    if (!peers || !peers->is<picojson::array>())
+      Fail("'peers' must be an array of {slot, host, port}");
+    for (const auto& e : peers->get<picojson::array>())
+    {
+      if (!e.is<picojson::object>())
+        Fail("'peers' entries must be objects");
+      const auto& po = e.get<picojson::object>();
+      Gprb::Session::ConnectOptions::Peer p;
+      p.slot = static_cast<int>(GetU64(po, "slot"));
+      p.host = GetString(po, "host", std::string(""));
+      p.port = static_cast<u16>(GetU64(po, "port", 0));
+      o.peers.push_back(p);
+    }
+  }
   if (const auto err = Gprb::Session::Connect(o))
     Fail(*err);
   return Gprb::Session::Status().get<picojson::object>();

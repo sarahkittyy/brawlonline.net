@@ -40,6 +40,8 @@
 #include "Core/CoreTiming.h"
 #include "Core/HW/CPU.h"
 #include "Core/HW/Memmap.h"
+#include "Core/Online/GameBridge.h"
+#include "Core/Online/GameSetup.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/GameplayRollback.h"
@@ -145,10 +147,33 @@ struct MatchSetup
   u8 asl = 0;
   int num_players = 0;
   std::array<LobbyPlayer, MAX_LOBBY_PLAYERS> players{};
+  bool teams = false;  // a team battle (players[i].team)
 };
 
+// One other player of the session, by in-game port (State::peers). Everything here that came
+// from the network was checked on receipt (HandleControl, PeerData.h).
 struct PeerView
 {
+  // The player is part of this session (configured, or the 2-player host's joiner).
+  bool expected = false;
+  // Where its packets come from. Until `confirmed`, the address is a guess (or unknown): the
+  // first control message claiming this port from a matching address confirms it, and from then
+  // on only that address counts.
+  std::optional<sf::IpAddress> ip;
+  u16 port = 0;
+  bool confirmed = false;
+  bool exact = false;  // only ip:port may claim it (the 2-player joiner's host, as before)
+  // It left the session (a "leave" message, silence, or GekkoNet dropped it). In a match of 3-4
+  // players the others play on (it is gone from the agreed frame on); otherwise the session ends.
+  bool left = false;
+  std::string left_reason;
+  bool claims_host = false;  // its messages say it is the decider
+  // In a match: its GekkoNet handle; it must still be disconnected in GekkoNet (CPU thread); the
+  // first session frame its input carried the gone marker (-1: none).
+  int handle = -1;
+  bool drop_requested = false;
+  bool gekko_dropped = false;
+  s64 gone_frame = -1;
   bool seen = false;
   picojson::object extra;  // SetLocalExtra of the peer
   LockIn lock;
@@ -162,6 +187,7 @@ struct PeerView
   bool go = false;
   u64 setup_hash = 0;
   SyncBlock sync;
+  u32 match_ports = 0;  // the host's match ports at the barrier (with its sync block)
   std::vector<std::vector<std::string>> task_order;
   bool task_order_valid = false;
   u32 session_seed = 0;
@@ -213,14 +239,14 @@ struct State
 
   // Network.
   std::unique_ptr<sf::UdpSocket> socket;
-  std::optional<sf::IpAddress> peer_ip;
-  u16 peer_port = 0;
-  // The host may know the joiner's address in advance (matchmaking) and sends to it from the
-  // start; the joiner's first packet then confirms (or corrects) it.
-  bool peer_confirmed = false;
-  // Packets from an address that is not the peer's, dropped (status: foreign_packets).
+  // This player's in-game port, the deciding player's (-1: not known yet), and whether the
+  // session was configured with ports (ConnectOptions::local_slot) rather than as a 1v1.
+  int local_slot = 0;
+  int host_slot = -1;
+  bool ported = false;
+  // Packets from an address that is not a peer's, dropped (status: foreign_packets).
   u64 foreign_packets = 0;
-  // The peer left (a "leave" message) or went silent: handled on the CPU thread for a match.
+  // The session ends (fewer than two players left): handled on the CPU thread for a match.
   bool peer_left = false;
   std::string peer_left_reason;
   bool disconnected = false;  // reported to the game (Slippi's ONLINE_INPUTS result 3)
@@ -233,17 +259,30 @@ struct State
   std::thread net_thread;
   std::atomic<bool> net_run{false};
   std::mutex gekko_rx_mutex;
-  std::deque<std::vector<u8>> gekko_rx;
+  std::deque<std::pair<int, std::vector<u8>>> gekko_rx;  // (sender's port, packet)
   std::vector<GekkoNetResult*> gekko_rx_ptrs;
-  PeerView peer;
+  std::array<PeerView, MAX_LOBBY_PLAYERS> peers;  // by in-game port (this player's unused)
   picojson::object local_selections;
   u32 session_seed = 0;  // host's, used to seed the RNG at the start of every match
+  bool have_seed = false;
   u32 match_index = 0;
   // Lobby (GameplaySession.h): this player's lock-in, the setup of the next game, the last game.
   LockIn local_lock;
   MatchSetup setup;
   u8 last_winner = 0xFF;
+  // Ports (bits) that pick the next game's stage (GameSetup::DecideOutcome; a 1v1: the loser,
+  // both after a draw), and why the next game cannot be set up (GameSetup::SetupError).
+  u8 last_pickers = 0;
+  u8 setup_error = 0;
   u16 last_stage = NO_STAGE;
+  // The ports of the running match (a bit per in-game port), from the game's own match setup at
+  // the barrier, which every peer compares; GekkoNet's handles follow them in port order.
+  u32 match_ports = 0;
+  // 3-4 player matches: the gone flags' guest address (0: the game's PPOM block was not found),
+  // and the flags last written.
+  bool gone_enabled = false;
+  u32 gone_addr = 0;
+  std::array<u8, MAX_LOBBY_PLAYERS> gone_written{};
   // Host: the stages not drawn yet (Slippi's stage_pool, refilled from the match's list when empty).
   std::vector<u16> stage_pool;
 
@@ -258,6 +297,7 @@ struct State
   SyncBlock sync;  // host: the values the joiner copies
   std::vector<std::vector<std::string>> task_order;
   bool did_frame0 = false;
+  int barrier_host = -1;  // the host's port when the barrier started
   Clock::time_point barrier_since{};
   std::optional<Clock::time_point> start_at;
   // Joiner: when it leaves the barrier for the countdown (RTT/2 after it applied the host's
@@ -284,7 +324,7 @@ struct State
   int num_players = 0;
   std::array<int, 4> handle_port{-1, -1, -1, -1};  // gekko handle -> in-game port
   std::vector<int> local_handles;
-  int remote_handle = -1;
+  int remote_handle = -1;  // the first remote player's (the ping line)
   // The local controller port the local player uses this game (fixed in CreateGekko).
   int local_pad = 0;
 
@@ -489,6 +529,10 @@ std::vector<u8> SetupKey(const Guest& g)
     key.push_back(pl[1]);  // state (human/cpu/none)
     key.push_back(pl[4]);  // stocks
     key.push_back(pl[5]);  // costume
+    // The team, in team battles only (gmMeleeInitData::m_isTeams, init +0x0B): outside them the
+    // byte may hold whatever the character select last left there.
+    if (p[0x08 + 0x0B] != 0)
+      key.push_back(pl[0x0B]);
   }
   // Each controller's layout (ipPadConfig, g_PadConfig 0x805B7480: GameCube pads 12 bytes each,
   // then player -> pad at +0xB5). Every player plays with their own name tag's controls, which
@@ -522,6 +566,43 @@ std::vector<u8> InitBlock(const Guest& g)
     return {};
   const u8* p = g.Ptr(*mm + INIT_BLOCK_OFFSET, INIT_BLOCK_SIZE);
   return p ? std::vector<u8>(p, p + INIT_BLOCK_SIZE) : std::vector<u8>{};
+}
+
+// The ports the match's setup (gmGlobalModeMelee) gives a human player (gmPlayerInitData state 0;
+// 1 is a CPU, 3 none), and per port its team when the match is a team battle (else NO_TEAM).
+// Every peer builds the same setup (the barrier compares it), so these are the same everywhere.
+constexpr u32 MM_PLAYERS = 0x98;
+constexpr u32 MM_PLAYER_SIZE = 0x5C;
+constexpr u32 MM_IS_TEAMS = 0x08 + 0x0B;  // gmMeleeInitData::m_isTeams
+constexpr u32 PI_STATE = 0x01;
+constexpr u32 PI_TEAM = 0x0B;  // gmPlayerInitData::m_teamNo
+
+u32 HumanPorts(const Guest& g)
+{
+  const auto mm = ModeMeleeAddr(g);
+  const u8* p = mm ? g.Ptr(*mm, Addr::MODE_MELEE_SIZE) : nullptr;
+  if (!p)
+    return 0;
+  u32 ports = 0;
+  for (u32 port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    if (p[MM_PLAYERS + port * MM_PLAYER_SIZE + PI_STATE] == 0)
+      ports |= 1u << port;
+  }
+  return ports;
+}
+
+std::array<u8, MAX_LOBBY_PLAYERS> MatchTeams(const Guest& g)
+{
+  std::array<u8, MAX_LOBBY_PLAYERS> teams;
+  teams.fill(NO_TEAM);
+  const auto mm = ModeMeleeAddr(g);
+  const u8* p = mm ? g.Ptr(*mm, Addr::MODE_MELEE_SIZE) : nullptr;
+  if (!p || p[MM_IS_TEAMS] == 0)
+    return teams;
+  for (u32 port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+    teams[port] = p[MM_PLAYERS + port * MM_PLAYER_SIZE + PI_TEAM];
+  return teams;
 }
 
 u64 SetupHash(const Guest& g)
@@ -757,51 +838,144 @@ u32 FrameChecksum(const Guest& g, FrameRecord* rec)
 // ---------------------------------------------------------------------------------------------
 // Network
 
-void SendRaw(const std::vector<u8>& data)
+// ---- Peers (under s.mutex) ----
+
+// Every other player of the session, by in-game port.
+template <typename F>
+void ForEachPeer(F&& f)
 {
-  if (!s.socket || !s.peer_ip)
-    return;
-  (void)s.socket->send(data.data(), data.size(), *s.peer_ip, s.peer_port);
+  for (int slot = 0; slot < MAX_LOBBY_PLAYERS; ++slot)
+  {
+    if (slot != s.local_slot && s.peers[slot].expected)
+      f(slot, s.peers[slot]);
+  }
 }
 
-// Tells the peer that this machine found the game states differ, so it ends the match too even
-// if its own check has not (yet) seen it. UDP: sent a few times; `m` keeps a late copy from
-// ending the next match.
+// Players still in the session, this one included.
+int ActivePlayers()
+{
+  int n = 1;
+  ForEachPeer([&](int, const PeerView& p) { n += p.left ? 0 : 1; });
+  return n;
+}
+
+// The other player with the lowest in-game port (the 1v1 peer), or -1.
+int FirstPeer()
+{
+  int first = -1;
+  ForEachPeer([&](int slot, const PeerView&) {
+    if (first < 0)
+      first = slot;
+  });
+  return first;
+}
+
+// The deciding player's port: the configured or announced host, or, once it has left, the player
+// with the lowest port still in the session (every peer agrees once it has seen the leave). -1
+// while a joiner has not heard who the host is.
+int HostSlot()
+{
+  const int h = s.net_opts.host ? s.local_slot : s.host_slot;
+  if (h < 0 || h == s.local_slot || !s.peers[h].left)
+    return h;
+  int lowest = s.local_slot;
+  ForEachPeer([&](int slot, const PeerView& p) {
+    if (!p.left && slot < lowest)
+      lowest = slot;
+  });
+  return lowest;
+}
+
+bool IsHost()
+{
+  return s.mode == Mode::Network && HostSlot() == s.local_slot;
+}
+
+// The host's view (nullptr when this player is the host or the host is not known).
+PeerView* HostPeer()
+{
+  const int h = HostSlot();
+  return h >= 0 && h != s.local_slot ? &s.peers[h] : nullptr;
+}
+
+// The port whose confirmed address `from:from_port` is, or -1.
+int SlotOf(const sf::IpAddress& from, u16 from_port)
+{
+  int found = -1;
+  ForEachPeer([&](int slot, const PeerView& p) {
+    if (p.confirmed && p.ip && *p.ip == from && p.port == from_port)
+      found = slot;
+  });
+  return found;
+}
+
+void SendRaw(int slot, const std::vector<u8>& data)
+{
+  if (!s.socket || slot < 0 || slot >= MAX_LOBBY_PLAYERS)
+    return;
+  const PeerView& p = s.peers[slot];
+  if (!p.expected || !p.ip || p.port == 0)
+    return;
+  (void)s.socket->send(data.data(), data.size(), *p.ip, p.port);
+}
+
+void SendToAll(const std::vector<u8>& data)
+{
+  ForEachPeer([&](int slot, const PeerView& p) {
+    if (!p.left)
+      SendRaw(slot, data);
+  });
+}
+
+// GekkoNet addresses are the peers' in-game ports: "p0" .. "p3".
+std::array<char[2], MAX_LOBBY_PLAYERS> s_gekko_addr{{{'p', '0'}, {'p', '1'}, {'p', '2'}, {'p', '3'}}};
+
+int GekkoAddrSlot(const GekkoNetAddress* addr)
+{
+  if (!addr || addr->size != 2 || !addr->data)
+    return -1;
+  const char* d = static_cast<const char*>(addr->data);
+  return d[0] == 'p' && d[1] >= '0' && d[1] < '0' + MAX_LOBBY_PLAYERS ? d[1] - '0' : -1;
+}
+
+// Tells the other players that this machine found the game states differ, so they end the match
+// too even if their own check has not (yet) seen it. UDP: sent a few times; `m` keeps a late copy
+// from ending the next match.
 void SendDesync()
 {
-  if (!s.socket || !s.peer_ip)
+  if (!s.socket)
     return;
   const std::string text = fmt::format(R"({{"t":"desync","v":1,"m":{}}})", s.match_index);
   std::vector<u8> pkt(text.size() + 1);
   pkt[0] = 'C';
   std::memcpy(pkt.data() + 1, text.data(), text.size());
   for (int i = 0; i < 3; ++i)
-    SendRaw(pkt);
+    SendToAll(pkt);
 }
 
-void GekkoSend(GekkoNetAddress*, const char* data, int length)
+void GekkoSend(GekkoNetAddress* addr, const char* data, int length)
 {
   std::vector<u8> pkt(static_cast<size_t>(length) + 1);
   pkt[0] = 'G';
   std::memcpy(pkt.data() + 1, data, static_cast<size_t>(length));
-  SendRaw(pkt);
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  SendRaw(GekkoAddrSlot(addr), pkt);
 }
 
 GekkoNetResult** GekkoReceive(int* length)
 {
   std::lock_guard lk(s.gekko_rx_mutex);
   s.gekko_rx_ptrs.clear();
-  static const char kAddr[] = "peer";
   while (!s.gekko_rx.empty())
   {
-    auto& pkt = s.gekko_rx.front();
+    auto& [slot, pkt] = s.gekko_rx.front();
     auto* r = static_cast<GekkoNetResult*>(std::malloc(sizeof(GekkoNetResult)));
     r->data_len = static_cast<unsigned int>(pkt.size());
     r->data = std::malloc(pkt.size());
     std::memcpy(r->data, pkt.data(), pkt.size());
-    r->addr.data = std::malloc(sizeof(kAddr) - 1);
-    std::memcpy(r->addr.data, kAddr, sizeof(kAddr) - 1);
-    r->addr.size = sizeof(kAddr) - 1;
+    r->addr.data = std::malloc(2);
+    std::memcpy(r->addr.data, s_gekko_addr[slot], 2);
+    r->addr.size = 2;
     s.gekko_rx_ptrs.push_back(r);
     s.gekko_rx.pop_front();
   }
@@ -913,7 +1087,15 @@ picojson::value LockJson(const LockIn& l)
   o["asl"] = picojson::value(static_cast<double>(l.asl));
   o["game"] = picojson::value(static_cast<double>(l.game));
   o["pv"] = picojson::value(Hex({l.port_values.begin(), l.port_values.end()}));
+  o["team"] = picojson::value(static_cast<double>(l.team));
   return picojson::value(o);
+}
+
+// A team from the peer: 0-3 or none.
+u8 TeamFromJson(const picojson::value* v)
+{
+  const auto t = PeerData::JsonUInt(v, 0xFF);
+  return t && PeerData::ValidTeam(static_cast<u32>(*t)) ? static_cast<u8>(*t) : NO_TEAM;
 }
 
 // Port values from the peer: exactly PORT_VALUES_SIZE bytes of hex, else none (the defaults).
@@ -943,6 +1125,8 @@ LockIn LockFromJson(const picojson::object& o)
   l.game = static_cast<u32>(JsonNum(o, "game", 0xFFFFFFFF, 0));
   const auto pv = o.find("pv");
   l.port_values = PortValuesFromHex(pv != o.end() ? &pv->second : nullptr);
+  const auto team = o.find("team");
+  l.team = TeamFromJson(team != o.end() ? &team->second : nullptr);
   // A character, costume or stage the game cannot produce is not a lock-in: the peer is not
   // ready, and nothing of it reaches SESSION (the game would index its tables with it).
   if (!PeerData::ValidCharKind(l.char_kind) || !PeerData::ValidCostume(l.costume))
@@ -971,19 +1155,40 @@ picojson::value SetupJson(const MatchSetup& st)
   o["game"] = picojson::value(static_cast<double>(st.game));
   o["stage"] = picojson::value(static_cast<double>(st.stage));
   o["asl"] = picojson::value(static_cast<double>(st.asl));
-  picojson::array players;
-  for (int i = 0; i < st.num_players; ++i)
+  // Per present player, by port: [char kind, costume, port values] when the players sit on ports
+  // 0..n-1 without teams (a 1v1, as before), else [char kind, costume, port values, team, port].
+  bool short_form = true;
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
   {
+    const auto& pl = st.players[port];
+    if (pl.present && (port >= st.num_players || pl.team != NO_TEAM))
+      short_form = false;
+  }
+  picojson::array players;
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    const auto& pl = st.players[port];
+    if (!pl.present)
+      continue;
     picojson::array p;
-    p.emplace_back(static_cast<double>(st.players[i].char_kind));
-    p.emplace_back(static_cast<double>(st.players[i].costume));
-    p.emplace_back(Hex({st.players[i].port_values.begin(), st.players[i].port_values.end()}));
+    p.emplace_back(static_cast<double>(pl.char_kind));
+    p.emplace_back(static_cast<double>(pl.costume));
+    p.emplace_back(Hex({pl.port_values.begin(), pl.port_values.end()}));
+    if (!short_form)
+    {
+      p.emplace_back(static_cast<double>(pl.team));
+      p.emplace_back(static_cast<double>(port));
+    }
     players.emplace_back(p);
   }
   o["players"] = picojson::value(players);
+  if (st.teams)
+    o["teams"] = picojson::value(true);
   return picojson::value(o);
 }
 
+// The host's setup of a game. Every field is checked: a malformed setup is ignored as a whole
+// (the joiner then waits for a valid one; nothing of it reaches SESSION).
 std::optional<MatchSetup> SetupFromJson(const picojson::object& o)
 {
   MatchSetup st;
@@ -992,33 +1197,51 @@ std::optional<MatchSetup> SetupFromJson(const picojson::object& o)
   st.asl = static_cast<u8>(JsonNum(o, "asl", 0xFF, 0));
   const auto it = o.find("players");
   if (st.game == 0 || !PeerData::ValidStageKind(st.stage) || it == o.end() ||
-      !it->second.is<picojson::array>())
+      !it->second.is<picojson::array>() ||
+      it->second.get<picojson::array>().size() > static_cast<size_t>(MAX_LOBBY_PLAYERS))
   {
     return std::nullopt;
   }
+  // A team battle ("teams"): every player carries a team colour (0-2), and the host's DecideTeams
+  // allowed the split; the joiner checks it the same way.
+  const auto teams_it = o.find("teams");
+  st.teams = teams_it != o.end() && teams_it->second.is<bool>() && teams_it->second.get<bool>();
+  std::array<Online::GameSetup::Seat, Online::GameSetup::MAX_PORTS> seats{};
+  u64 index = 0;
   for (const auto& p : it->second.get<picojson::array>())
   {
-    if (st.num_players >= MAX_LOBBY_PLAYERS || !p.is<picojson::array>() ||
-        p.get<picojson::array>().size() != 3)
-    {
+    // [kind, costume, pv] (port = index, no team), [kind, costume, pv, team] (port = index) or
+    // [kind, costume, pv, team, port].
+    const size_t n = p.is<picojson::array>() ? p.get<picojson::array>().size() : 0;
+    if (n < 3 || n > 5)
       return std::nullopt;
-    }
     const auto& a = p.get<picojson::array>();
-    auto& pl = st.players[st.num_players++];
-    pl.present = true;
     const auto kind = PeerData::JsonUInt(&a[0], 0xFF);
     const auto costume = PeerData::JsonUInt(&a[1], 0xFF);
-    if (!kind || !costume || !PeerData::ValidCharKind(static_cast<u32>(*kind)) ||
-        !PeerData::ValidCostume(static_cast<u32>(*costume)))
+    const auto team = n >= 4 ? PeerData::JsonUInt(&a[3], 0xFF) : std::optional<u64>(NO_TEAM);
+    const auto port = n == 5 ? PeerData::JsonUInt(&a[4], 0xFF) : std::optional<u64>(index);
+    ++index;
+    if (!kind || !costume || !team || !port || !PeerData::ValidCharKind(static_cast<u32>(*kind)) ||
+        !PeerData::ValidCostume(static_cast<u32>(*costume)) ||
+        !PeerData::ValidTeam(static_cast<u32>(*team)) || !PeerData::ValidPort(*port) ||
+        st.players[*port].present)
     {
       return std::nullopt;
     }
+    auto& pl = st.players[*port];
+    pl.present = true;
     pl.char_kind = static_cast<u8>(*kind);
     pl.costume = static_cast<u8>(*costume);
     pl.port_values = PortValuesFromHex(&a[2]);
+    pl.team = st.teams ? static_cast<u8>(*team) : NO_TEAM;
+    if (st.teams && pl.team == NO_TEAM)
+      return std::nullopt;
+    seats[*port] = {true, pl.team};
+    ++st.num_players;
   }
-  // A session has two players (the host's and the joiner's port).
-  if (st.num_players != 2)
+  if (st.teams && !Online::GameSetup::DecideTeams(true, seats).teams)
+    return std::nullopt;
+  if (st.num_players < 2)
     return std::nullopt;
   return st;
 }
@@ -1078,38 +1301,73 @@ StageDecision DecideStage(u32 game)
 void MaybeDecideSetup()
 {
   const u32 game = NextGame();
-  if (s.mode != Mode::Network || !s.net_opts.host || s.phase != Phase::Connected ||
+  if (s.mode != Mode::Network || !IsHost() || s.phase != Phase::Connected ||
       s.setup.game == game || s.await_scene_exit)
   {
     return;
   }
-  // In-game ports: the host is port 0, the joiner port 1 (CreateGekko).
-  const std::array<const LockIn*, 2> locks{&s.local_lock, &s.peer.lock};
+  // By in-game port: this player and every other player still in the session.
+  std::array<const LockIn*, MAX_LOBBY_PLAYERS> locks{};
+  locks[s.local_slot] = &s.local_lock;
+  bool all_seen = true;
+  ForEachPeer([&](int slot, const PeerView& p) {
+    if (p.left)
+      return;
+    all_seen = all_seen && p.seen;
+    locks[slot] = &p.lock;
+  });
+  int count = 0;
   for (const LockIn* l : locks)
   {
+    if (!l)
+      continue;
     if (!LockedFor(*l, game))
       return;
+    ++count;
   }
+  if (!all_seen || count < 2)
+    return;
+  // Free-for-all or a team battle (the room's Teams switch, each player's lock-in team).
+  std::array<Online::GameSetup::Seat, Online::GameSetup::MAX_PORTS> seats{};
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    if (locks[port])
+      seats[port] = {true, locks[port]->team};
+  }
+  const Online::GameSetup::TeamSetup teams = Online::GameSetup::DecideTeams(s.net_opts.teams, seats);
+  if (teams.error != Online::GameSetup::SetupError::None)
+  {
+    if (s.setup_error != static_cast<u8>(teams.error))
+    {
+      NOTICE_LOG_FMT(BRAWLBACK, "gprb lobby: game {} not set up: {}", game,
+                     Online::GameSetup::SetupErrorText(teams.error));
+    }
+    s.setup_error = static_cast<u8>(teams.error);
+    return;
+  }
+  s.setup_error = 0;
   const StageDecision decided = DecideStage(game);
   if (decided.applies && decided.wait)
     return;
   MatchSetup st;
   st.game = game;
-  st.num_players = static_cast<int>(locks.size());
+  st.num_players = count;
+  st.teams = teams.teams;
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    if (const LockIn* l = locks[port])
+      st.players[port] = {true, l->char_kind, l->costume, l->port_values, teams.team[port]};
+  }
+  // The stage pick: the last game's loser's (s.last_pickers: a 1v1's loser, both after a draw),
+  // else any player's, in port order.
+  std::array<u16, Online::GameSetup::MAX_PORTS> picks{NO_STAGE, NO_STAGE, NO_STAGE, NO_STAGE};
   for (size_t i = 0; i < locks.size(); ++i)
-    st.players[i] = {true, locks[i]->char_kind, locks[i]->costume, locks[i]->port_values};
-  const LockIn* pick = nullptr;
-  if (s.last_winner < locks.size())
   {
-    const LockIn* loser = locks[1 - s.last_winner];
-    if (loser->stage_pick != NO_STAGE)
-      pick = loser;
+    if (locks[i])
+      picks[i] = locks[i]->stage_pick;
   }
-  for (const LockIn* l : locks)
-  {
-    if (!pick && l->stage_pick != NO_STAGE)
-      pick = l;
-  }
+  const int pick_port = Online::GameSetup::StagePickPort(s.last_pickers, picks);
+  const LockIn* pick = pick_port >= 0 ? locks[pick_port] : nullptr;
   if (decided.applies)
   {
     st.stage = decided.stage;
@@ -1127,29 +1385,39 @@ void MaybeDecideSetup()
   }
   s.setup = st;
   s.last_stage = st.stage;
-  INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} setup: stage {:#x}{}, P1 {:#x}/{}, P2 {:#x}/{}",
-               game, st.stage,
+  std::string who;
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    const auto& pl = st.players[port];
+    if (!pl.present)
+      continue;
+    who += fmt::format(", P{} {:#x}/{}", port + 1, pl.char_kind, pl.costume);
+    if (pl.team != NO_TEAM)
+      who += fmt::format(" team {}", pl.team);
+  }
+  INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} setup: stage {:#x}{}{}", game, st.stage,
                decided.applies ? " (decided by the ranked game setup)" :
                pick            ? " (picked)" :
                       fmt::format(" (random from {} stages, {})", AllowedStages().size(),
                                   s.net_opts.stages.empty() ? "P+ legal list" : "server list"),
-               st.players[0].char_kind, st.players[0].costume, st.players[1].char_kind,
-               st.players[1].costume);
+               who);
 }
 
 void SendState()
 {
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
   picojson::object o;
   {
-    std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+    const bool host = IsHost();
     o["t"] = picojson::value("st");
     o["v"] = picojson::value(1.0);
-    o["host"] = picojson::value(s.net_opts.host);
+    o["host"] = picojson::value(host);
+    o["slot"] = picojson::value(static_cast<double>(s.local_slot));
     o["name"] = picojson::value(s.net_opts.name);
     o["game"] = picojson::value(SConfig::GetInstance().GetGameID());
     o["sel"] = picojson::value(s.local_selections);
     o["match"] = picojson::value(static_cast<double>(s.match_index));
-    if (s.net_opts.host)
+    if (host && s.have_seed)
       o["seed"] = picojson::value(static_cast<double>(s.session_seed));
     o["at_s"] = picojson::value(s.at_s);
     o["applied"] = picojson::value(s.applied);
@@ -1157,19 +1425,20 @@ void SendState()
     o["go"] = picojson::value(s.go);
     o["setup"] = picojson::value(fmt::format("{:016x}", s.setup_hash));
     o["lock"] = LockJson(s.local_lock);
-    if (s.net_opts.host && s.setup.game != 0)
+    if (host && s.setup.game != 0)
       o["match_setup"] = SetupJson(s.setup);
     o["winner"] = picojson::value(static_cast<double>(s.last_winner));
     if (!s_local_extra.empty())
       o["x"] = picojson::value(s_local_extra);
-    if (s.net_opts.host && !s.init_block.empty())
+    if (host && !s.init_block.empty())
     {
       o["init"] = picojson::value(Hex(s.init_block));
       o["init_match"] = picojson::value(static_cast<double>(s.init_match));
     }
-    if (s.net_opts.host && s.at_s && s.sync.valid)
+    if (host && s.at_s && s.sync.valid)
     {
       o["sync"] = SyncBlockJson(s.sync);
+      o["ports"] = picojson::value(static_cast<double>(s.match_ports));
       picojson::array lists;
       for (const auto& l : s.task_order)
       {
@@ -1185,56 +1454,83 @@ void SendState()
   std::vector<u8> pkt(text.size() + 1);
   pkt[0] = 'C';
   std::memcpy(pkt.data() + 1, text.data(), text.size());
-  SendRaw(pkt);
+  SendToAll(pkt);
 }
 
-// Whether a control packet from `from:from_port` is the peer's (under s.mutex). Once the peer is
-// known only its address counts. Before that, the host takes the first sender as its peer: with
-// matchmaking only one from the joiner's address (its port may differ behind a NAT), without
-// (harness sessions, `gprb_connect` with no remote) anyone.
-bool FromPeer(const sf::IpAddress& from, u16 from_port, bool* confirm)
+// The port a control packet from `from:from_port` belongs to (under s.mutex), or -1. Once a
+// peer's address is confirmed only that address counts. Before that, the first message that
+// claims the peer's port (its "slot"; a 1v1 has only one peer to claim) from a matching address
+// confirms it: with matchmaking only from the peer's IP (its port may differ behind a NAT),
+// without (harness sessions, `gprb_connect` with no address) from anywhere.
+int ControlSender(const picojson::object& o, const sf::IpAddress& from, u16 from_port)
 {
-  *confirm = false;
-  if (s.net_opts.host && !s.peer_confirmed)
+  if (const int slot = SlotOf(from, from_port); slot >= 0)
+    return slot;
+  int claim = -1;
+  if (s.ported)
   {
-    if (s.peer_ip && *s.peer_ip != from)
-      return false;
-    *confirm = true;
-    return true;
+    const auto it = o.find("slot");
+    const auto n = PeerData::JsonUInt(it != o.end() ? &it->second : nullptr, 0xFF);
+    if (!n || !PeerData::ValidPort(*n))
+      return -1;
+    claim = static_cast<int>(*n);
   }
-  return s.peer_ip && *s.peer_ip == from && s.peer_port == from_port;
+  else
+  {
+    claim = FirstPeer();
+  }
+  if (claim < 0 || claim == s.local_slot || !s.peers[claim].expected)
+    return -1;
+  PeerView& p = s.peers[claim];
+  if (p.confirmed || (p.ip && *p.ip != from))
+    return -1;
+  p.ip = from;
+  p.port = from_port;
+  p.confirmed = true;
+  return claim;
+}
+
+// `slot` has left the session (under s.mutex). Fewer than two players left: the session ends
+// (in a match on the CPU thread, at the next loop top). Otherwise a match of 3-4 players goes on
+// without it: GekkoNet is told on the CPU thread, and the remaining peers agree on the frame its
+// input ends (GekkoNet's disconnect claims); the next game is set up without it.
+void OnPeerLeft(int slot, const std::string& reason)
+{
+  PeerView& p = s.peers[slot];
+  if (!p.expected || p.left)
+    return;
+  p.left = true;
+  p.left_reason = reason;
+  p.drop_requested = true;
+  const int active = ActivePlayers();
+  INFO_LOG_FMT(BRAWLBACK, "gprb: P{} left the session ({}); {} player(s) left", slot + 1, reason,
+               active);
+  if (active < 2 && !s.peer_left)
+  {
+    s.peer_left = true;
+    s.peer_left_reason = reason;
+  }
 }
 
 void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_port)
 {
-  // Everything here comes from the other player's machine (or anyone who can send UDP to this
+  // Everything here comes from the other players' machines (or anyone who can send UDP to this
   // port): sizes, depth and every value are checked before use (PeerData.h).
   const auto parsed = PeerData::ParseControl(text);
   if (!parsed)
     return;
   const auto& o = *parsed;
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-  bool confirm = false;
-  if (!FromPeer(from, from_port, &confirm))
+  const int slot = ControlSender(o, from, from_port);
+  if (slot < 0)
   {
     ++s.foreign_packets;
     return;
   }
-  if (confirm)
-  {
-    s.peer_ip = from;
-    s.peer_port = from_port;
-    s.peer_confirmed = true;
-  }
   if (const auto t = o.find("t"); t != o.end() && t->second.is<std::string>() &&
                                   t->second.get<std::string>() == "leave")
   {
-    if (!s.peer_left)
-    {
-      s.peer_left = true;
-      s.peer_left_reason = "peer left";
-      INFO_LOG_FMT(BRAWLBACK, "gprb: the peer left the session");
-    }
+    OnPeerLeft(slot, "peer left");
     return;
   }
   if (const auto t = o.find("t"); t != o.end() && t->second.is<std::string>() &&
@@ -1249,7 +1545,9 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
     }
     return;
   }
-  auto& p = s.peer;
+  auto& p = s.peers[slot];
+  if (p.left)
+    return;  // a peer that left stays gone (its last packets may still arrive)
   const bool first = !p.seen;
   p.seen = true;
   p.last_heard = Clock::now();
@@ -1259,6 +1557,15 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
   };
   if (const auto* x = get("name"); x && x->is<std::string>())
     p.name = PeerData::TruncateName(x->get<std::string>());
+  // The decider: the first peer that says it is, unless the host was configured.
+  if (const auto* x = get("host"); x && x->is<bool>())
+    p.claims_host = x->get<bool>();
+  if (p.claims_host && s.host_slot < 0 && !s.net_opts.host)
+  {
+    s.host_slot = slot;
+    INFO_LOG_FMT(BRAWLBACK, "gprb: P{} is the host", slot + 1);
+  }
+  const bool from_host = slot == HostSlot() && !IsHost();
   if (const auto* x = get("sel"); x && x->is<picojson::object>())
     p.selections = x->get<picojson::object>();
   if (const auto* x = get("at_s"); x && x->is<bool>())
@@ -1299,9 +1606,16 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
   // Another module's state (GameSetup's strikes): only a small object is kept.
   if (const auto* x = get("x"); x && x->is<picojson::object>() && x->serialize().size() <= 1024)
     p.extra = x->get<picojson::object>();
-  if (const auto* x = get("match_setup"); x && x->is<picojson::object>() && !s.net_opts.host)
+  if (const auto* x = get("match_setup"); x && x->is<picojson::object>() && from_host)
   {
-    if (auto st = SetupFromJson(x->get<picojson::object>()))
+    auto st = SetupFromJson(x->get<picojson::object>());
+    if (st && !st->players[s.local_slot].present)
+    {
+      WARN_LOG_FMT(BRAWLBACK, "gprb lobby: the host's setup of game {} has no player on P{}; ignored",
+                   st->game, s.local_slot + 1);
+      st.reset();
+    }
+    if (st)
     {
       if (st->game == NextGame() && s.setup.game != st->game)
       {
@@ -1319,11 +1633,14 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
       p.setup = *st;
     }
   }
-  if (const auto n = PeerData::JsonUInt(get("seed"), 0xFFFFFFFF); n && !s.net_opts.host)
+  if (const auto n = PeerData::JsonUInt(get("seed"), 0xFFFFFFFF); n && from_host)
   {
     p.session_seed = static_cast<u32>(*n);
     s.session_seed = p.session_seed;
+    s.have_seed = true;
   }
+  if (const auto n = PeerData::JsonUInt(get("ports"), 0xF))
+    p.match_ports = static_cast<u32>(*n);
   if (const auto* x = get("sync"))
   {
     if (auto b = SyncBlockFromJson(*x))
@@ -1361,9 +1678,18 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
     }
   }
   if (first)
-    INFO_LOG_FMT(BRAWLBACK, "gprb: peer {}:{} ({}) heard", from.toString(), from_port, p.name);
+  {
+    INFO_LOG_FMT(BRAWLBACK, "gprb: peer {}:{} ({}, P{}) heard", from.toString(), from_port, p.name,
+                 slot + 1);
+  }
   if (s.phase == Phase::Connecting)
-    s.phase = Phase::Connected;
+  {
+    // Connected once every other player has been heard.
+    bool all = true;
+    ForEachPeer([&](int, const PeerView& q) { all = all && (q.seen || q.left); });
+    if (all)
+      s.phase = Phase::Connected;
+  }
   MaybeDecideSetup();
 }
 
@@ -1394,22 +1720,25 @@ void NetThread()
         }
         if (received == 0)
           continue;
-        // Only control packets may come from an address that is not the peer's yet
-        // (HandleControl decides); everything else must come from the peer.
-        bool known;
+        // Only control packets may come from an address that is not a peer's yet
+        // (HandleControl decides); everything else must come from a peer.
+        int slot;
         {
           std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-          known = s.peer_ip && *s.peer_ip == *from && s.peer_port == from_port;
-          if (!known && buf[0] != 'C')
+          slot = SlotOf(*from, from_port);
+          if (slot >= 0 && s.peers[slot].left)
+            slot = -1;
+          if (slot < 0 && buf[0] != 'C')
             ++s.foreign_packets;
         }
+        const bool known = slot >= 0;
         if (buf[0] == 'G' && known)
         {
           std::lock_guard lk(s.gekko_rx_mutex);
           // GekkoNet drains this only while a match runs; on the character select a peer could
           // otherwise grow it without bound.
           if (s.gekko_rx.size() < PeerData::MAX_QUEUED_GEKKO_PACKETS)
-            s.gekko_rx.emplace_back(buf.begin() + 1, buf.begin() + received);
+            s.gekko_rx.emplace_back(slot, std::vector<u8>(buf.begin() + 1, buf.begin() + received));
         }
         else if (buf[0] == 'C')
         {
@@ -1439,7 +1768,8 @@ void NetThread()
           {
             std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
             const double rtt = (now_us - sent_us) / 1000.0;
-            s.peer.rtt_ms = s.peer.rtt_ms < 0 ? rtt : 0.8 * s.peer.rtt_ms + 0.2 * rtt;
+            auto& p = s.peers[slot];
+            p.rtt_ms = p.rtt_ms < 0 ? rtt : 0.8 * p.rtt_ms + 0.2 * rtt;
           }
         }
       }
@@ -1450,12 +1780,13 @@ void NetThread()
       // match GekkoNet's disconnect timeout (the same value) reports it.
       std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
       const auto silence = std::chrono::milliseconds(Online::PeerSilenceTimeoutMs(s.input_delay));
-      if (s.peer.seen && !s.peer_left && !s.gekko && now - s.peer.last_heard > silence)
-      {
-        s.peer_left = true;
-        s.peer_left_reason = "peer timed out";
-        WARN_LOG_FMT(BRAWLBACK, "gprb: nothing from the peer for {} ms", silence.count());
-      }
+      ForEachPeer([&](int slot, PeerView& p) {
+        if (p.seen && !p.left && !s.gekko && now - p.last_heard > silence)
+        {
+          WARN_LOG_FMT(BRAWLBACK, "gprb: nothing from P{} for {} ms", slot + 1, silence.count());
+          OnPeerLeft(slot, "peer timed out");
+        }
+      });
       if (s.peer_left && (s.phase == Phase::Connected || s.phase == Phase::Connecting))
       {
         s.phase = Phase::Ended;
@@ -1476,7 +1807,8 @@ void NetThread()
       const u64 us = static_cast<u64>(
           std::chrono::duration_cast<std::chrono::microseconds>(now.time_since_epoch()).count());
       std::memcpy(ping.data() + 1, &us, 8);
-      SendRaw(ping);
+      std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+      SendToAll(ping);
     }
   }
 }
@@ -1486,10 +1818,13 @@ void CloseNetwork()
   s.net_run = false;
   if (s.net_thread.joinable())
     s.net_thread.join();
-  if (s.socket)
-    s.socket->unbind();
-  s.socket.reset();
-  s.peer_ip.reset();
+  {
+    // GekkoNet sends from the CPU thread under s.mutex.
+    std::lock_guard<std::recursive_timed_mutex> slk(s.mutex);
+    if (s.socket)
+      s.socket->unbind();
+    s.socket.reset();
+  }
   std::lock_guard lk(s.gekko_rx_mutex);
   s.gekko_rx.clear();
 }
@@ -1510,6 +1845,11 @@ void DestroyGekko()
   for (auto* r : s.gekko_rx_ptrs)
     (void)r;  // owned and freed by GekkoNet
   s.gekko_rx_ptrs.clear();
+  for (auto& p : s.peers)
+  {
+    p.handle = -1;
+    p.drop_requested = false;
+  }
 }
 
 bool CreateGekko(bool stress, int num_players)
@@ -1550,40 +1890,90 @@ bool CreateGekko(bool stress, int num_players)
     s.adapter.receive_data = GekkoReceive;
     s.adapter.free_data = GekkoFree;
     gekko_net_adapter_set(s.gekko, &s.adapter);
-    static char kAddr[] = "peer";
-    GekkoNetAddress addr{kAddr, sizeof(kAddr) - 1};
-    // Handles follow the in-game ports: the host is port 0 (P1), the joiner port 1 (P2).
-    if (s.net_opts.host)
+    // Handles follow the match's in-game ports in order (a 1v1: the host P1, the joiner P2), the
+    // same on every peer. A remote player's address is its port ("p0".."p3", GekkoSend).
+    for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
     {
-      const int l = gekko_add_actor(s.gekko, GekkoLocalPlayer, nullptr);
-      const int r = gekko_add_actor(s.gekko, GekkoRemotePlayer, &addr);
-      s.local_handles = {l};
-      s.remote_handle = r;
-      s.handle_port[l] = 0;
-      s.handle_port[r] = 1;
+      if (!(s.match_ports & (1u << port)))
+        continue;
+      int h;
+      if (port == s.local_slot)
+      {
+        h = gekko_add_actor(s.gekko, GekkoLocalPlayer, nullptr);
+        s.local_handles = {h};
+      }
+      else
+      {
+        GekkoNetAddress addr{s_gekko_addr[port], 2};
+        h = gekko_add_actor(s.gekko, GekkoRemotePlayer, &addr);
+        s.peers[port].handle = h;
+        s.peers[port].gekko_dropped = false;
+        s.peers[port].gone_frame = -1;
+        if (s.remote_handle < 0)
+          s.remote_handle = h;
+      }
+      if (h < 0 || h >= static_cast<int>(s.handle_port.size()))
+      {
+        DestroyGekko();
+        return false;
+      }
+      s.handle_port[h] = port;
     }
-    else
+    if (s.local_handles.empty())
     {
-      const int r = gekko_add_actor(s.gekko, GekkoRemotePlayer, &addr);
-      const int l = gekko_add_actor(s.gekko, GekkoLocalPlayer, nullptr);
-      s.local_handles = {l};
-      s.remote_handle = r;
-      s.handle_port[r] = 0;
-      s.handle_port[l] = 1;
+      DestroyGekko();
+      return false;
     }
     // Each player picks the delay of their own inputs (Slippi): the set value, else from the
-    // round trip measured now. It stays for the whole game.
+    // round trip measured now, to the furthest player still in the session. It stays for the
+    // whole game.
+    double rtt = -1;
+    ForEachPeer([&](int, const PeerView& p) {
+      if (!p.left && p.rtt_ms >= 0)
+        rtt = std::max(rtt, p.rtt_ms);
+    });
     s.input_delay = s.net_opts.delay ? std::clamp(*s.net_opts.delay, 0, MAX_INPUT_DELAY) :
-                                       AutoInputDelay(s.peer.rtt_ms);
+                                       AutoInputDelay(rtt);
     gekko_set_local_delay(s.gekko, s.local_handles[0], static_cast<unsigned char>(s.input_delay));
     gekko_set_disconnect_timeout(s.gekko, Online::PeerSilenceTimeoutMs(s.input_delay));
     // The controller that pressed START to lock in plays this game (Slippi-style: any port).
     s.local_pad = s.local_lock.local_pad < 4 ? s.local_lock.local_pad :
                                                std::clamp(s.net_opts.local_pad, 0, 3);
     INFO_LOG_FMT(BRAWLBACK, "gprb: input delay {} ({}, round trip {:.0f} ms), controller port {}",
-                 s.input_delay, s.net_opts.delay ? "set" : "auto", s.peer.rtt_ms, s.local_pad + 1);
+                 s.input_delay, s.net_opts.delay ? "set" : "auto", rtt, s.local_pad + 1);
+    if (s.gone_enabled)
+    {
+      // A player who leaves a 3-4 player match gets the gone marker as its input from the frame
+      // the remaining peers agree on (docs/nplayer/session.md).
+      std::array<u8, INPUT_SIZE> gone{};
+      PeerData::SetGoneMarker(gone.data());
+      gekko_set_disconnected_input(s.gekko, gone.data());
+      // A player who left before GekkoNet started is gone from frame 0 on.
+      ForEachPeer([&](int, PeerView& p) {
+        if (p.left && p.handle >= 0)
+          p.drop_requested = true;
+      });
+    }
   }
   return true;
+}
+
+// CPU thread, under s.mutex: players that left a 3-4 player match are disconnected in GekkoNet,
+// which then agrees with the other peers on the last frame of their input (disconnect claims).
+void ApplyPeerDrops()
+{
+  if (!s.gekko || s.mode != Mode::Network)
+    return;
+  ForEachPeer([&](int slot, PeerView& p) {
+    if (!p.drop_requested || p.handle < 0)
+      return;
+    p.drop_requested = false;
+    if (!p.gekko_dropped)
+    {
+      gekko_disconnect_actor(s.gekko, p.handle);
+      INFO_LOG_FMT(BRAWLBACK, "gprb: P{} disconnected from GekkoNet ({})", slot + 1, p.left_reason);
+    }
+  });
 }
 
 std::optional<std::string> PrepareRegionSet(Core::System& system, const std::string& set_name)
@@ -1699,6 +2089,66 @@ void ReportGameResult(const GameResult& r)
     cb(r);
 }
 
+// The result of a game that ended with game set, from the state every peer ended on: per port of
+// the match its stocks and damage (ReadFighterFields, by player number), its team and its place in
+// the game's elimination order (SESSION `out`, rolled back with the match), the winner and who
+// picks the next stage. A 1v1 keeps its rule: more stocks, then less damage (P+'s time-out rule),
+// the loser picks (both after a draw). 3-4 players: Online::GameSetup::DecideOutcome. A player who
+// left the match (its gone flag, the same on every peer) is not placed.
+GameResult ReadGameResult(Core::System& system)
+{
+  const Guest g = GuestOf(system);
+  GameResult r;
+  r.game = NextGame();
+  r.stage = s.setup.stage;
+  r.frames = s.end_game_frame;
+  const auto f = ReadFighterFields(g);
+  const auto teams = MatchTeams(g);
+  const u32 session = Online::GameBridge::SessionAddress();
+  std::array<Online::GameSetup::PortEnd, Online::GameSetup::MAX_PORTS> ends{};
+  bool team_battle = false;
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    if (!(s.match_ports & (1u << port)) || (s.gone_enabled && s.gone_written[port]))
+      continue;
+    r.present[port] = true;
+    r.stocks[port] = static_cast<s32>(f[port][2]);
+    std::memcpy(&r.damage[port], &f[port][1], 4);
+    r.char_kind[port] = s.setup.players[port].char_kind;
+    r.team[port] = teams[port];
+    team_battle = team_battle || teams[port] != NO_TEAM;
+    ++r.num_players;
+    auto& e = ends[port];
+    e.present = true;
+    e.team = teams[port];
+    e.stocks = r.stocks[port];
+    e.damage = r.damage[port];
+    if (const u8* out = session ? g.Ptr(session + Online::GameBridge::SESSION_PLAYERS_OFF +
+                                            port * Online::GameBridge::SESSION_PLAYER_SIZE +
+                                            Online::GameBridge::SESSION_PLAYER_OUT,
+                                        1) :
+                                  nullptr)
+    {
+      e.out = *out;
+    }
+  }
+  if (std::popcount(s.match_ports) == 2)
+  {
+    const int a = std::countr_zero(s.match_ports);
+    const int b = 31 - std::countl_zero(s.match_ports);
+    const s32 sa = r.stocks[a], sb = r.stocks[b];
+    const float da = r.damage[a], db = r.damage[b];
+    r.winner = static_cast<u8>(sa != sb ? (sa > sb ? a : b) : (da != db ? (da < db ? a : b) : 0xFE));
+    r.pickers = r.winner == 0xFE ? static_cast<u8>(s.match_ports) :
+                                   static_cast<u8>(s.match_ports & ~(1u << r.winner));
+    return r;
+  }
+  const auto outcome = Online::GameSetup::DecideOutcome(team_battle, ends);
+  r.winner = outcome.winner;
+  r.pickers = outcome.pickers;
+  r.place = outcome.place;
+  return r;
+}
 void EndRunning(Core::System& system, const std::string& reason)
 {
   PassLogClose();
@@ -1733,37 +2183,44 @@ void EndRunning(Core::System& system, const std::string& reason)
     // ended on: more stocks, then less damage (P+'s time-out rule); equal is a draw.
     if (reason == "game set")
     {
-      const auto f = ReadFighterFields(GuestOf(system));
-      const s32 st0 = static_cast<s32>(f[0][2]), st1 = static_cast<s32>(f[1][2]);
-      float d0, d1;
-      std::memcpy(&d0, &f[0][1], 4);
-      std::memcpy(&d1, &f[1][1], 4);
-      s.last_winner = st0 != st1 ? (st0 > st1 ? 0 : 1) : (d0 != d1 ? (d0 < d1 ? 0 : 1) : 0xFE);
-      INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} winner {} (stocks {} {}, damage {} {})",
-                   NextGame(), s.last_winner, st0, st1, d0, d1);
-      GameResult r;
-      r.game = NextGame();
-      r.winner = s.last_winner;
-      r.stocks = {st0, st1};
-      r.damage = {d0, d1};
-      r.char_kind = {s.setup.players[0].char_kind, s.setup.players[1].char_kind};
-      r.stage = s.setup.stage;
-      r.frames = s.end_game_frame;
+      const GameResult r = ReadGameResult(system);
+      s.last_winner = r.winner;
+      s.last_pickers = r.pickers;
+      std::string who;
+      for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+      {
+        if (r.present[port])
+        {
+          who += fmt::format(" P{} {}/{}", port + 1, r.stocks[port], r.damage[port]);
+          if (r.num_players > 2)
+            who += fmt::format(" place {}", r.place[port]);
+        }
+      }
+      INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} winner {} stage pickers {:#x} (stocks/damage:{})",
+                   r.game, r.winner, r.pickers, who);
       ReportGameResult(r);
     }
     // Ready for the next match on the same connection.
-    s.phase = s.peer.seen ? Phase::Connected : Phase::Ended;
+    bool seen = false;
+    ForEachPeer([&](int, PeerView& p) {
+      seen = seen || (p.seen && !p.left);
+      p.at_s = p.applied = p.at_start = p.go = false;
+      p.sync = {};
+      p.task_order_valid = false;
+      p.match_ports = 0;
+    });
+    s.phase = seen && !s.peer_left ? Phase::Connected : Phase::Ended;
     s.at_s = s.applied = s.at_start = s.go = false;
     s.did_frame0 = false;
     s.sync = {};
     s.start_at.reset();
     s.countdown_at.reset();
-    s.peer.at_s = s.peer.applied = s.peer.at_start = s.peer.go = false;
-    s.peer.sync = {};
-    s.peer.task_order_valid = false;
     ++s.match_index;
     s.await_scene_exit = true;
   }
+  s.match_ports = 0;
+  s.gone_enabled = false;
+  s.gone_addr = 0;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -2065,14 +2522,22 @@ void BeginBurst(Core::System& system)
   }
 }
 
-int RemoteHandle()
+// The link to the remote player with the highest ping (a 1v1: the peer); false without one.
+bool WorstLink(GekkoNetworkStats* out)
 {
-  for (int h = 0; h < s.num_players; ++h)
-  {
-    if (std::find(s.local_handles.begin(), s.local_handles.end(), h) == s.local_handles.end())
-      return h;
-  }
-  return -1;
+  if (!s.gekko)
+    return false;
+  bool any = false;
+  ForEachPeer([&](int, const PeerView& p) {
+    if (p.handle < 0 || p.gekko_dropped)
+      return;
+    GekkoNetworkStats st{};
+    gekko_network_stats(s.gekko, p.handle, &st);
+    if (!any || st.avg_ping > out->avg_ping)
+      *out = st;
+    any = true;
+  });
+  return any;
 }
 
 constexpr u64 NET_STATS_WINDOW = 600;  // displayed frames (10 s)
@@ -2185,10 +2650,8 @@ void NetStatsOnDisplayedFrame(Core::System& system)
   w.cadence = Rollback::PresentStats::TakeCadence();
 
   std::string link;
-  if (const int rh = RemoteHandle(); s.gekko && rh >= 0)
+  if (GekkoNetworkStats st{}; WorstLink(&st))
   {
-    GekkoNetworkStats st{};
-    gekko_network_stats(s.gekko, rh, &st);
     link = fmt::format("; ping {} ms (avg {:.1f}, jitter {:.1f}), {:.1f}/{:.1f} kB/s out/in",
                        st.last_ping, st.avg_ping, st.jitter, st.kb_sent, st.kb_received);
   }
@@ -2228,6 +2691,38 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
       s.gekko_started = true;
       break;
     case GekkoPlayerDisconnected:
+      if (s.mode == Mode::Network && s.num_players >= 3)
+      {
+        // A 3-4 player match goes on without the player (GekkoNet's disconnect claims agree on
+        // the frame its input ends; from then on it carries the gone marker) as long as two
+        // players remain.
+        const int h = sev[i]->data.disconnected.handle;
+        const int port = h >= 0 && h < static_cast<int>(s.handle_port.size()) ? s.handle_port[h] : -1;
+        if (port >= 0 && port != s.local_slot)
+        {
+          PeerView& p = s.peers[port];
+          p.gekko_dropped = true;
+          WARN_LOG_FMT(BRAWLBACK, "gprb: GekkoNet dropped P{} at session frame {}", port + 1,
+                       s.current_frame);
+          OnPeerLeft(port, "peer timed out");
+          p.drop_requested = false;
+          if (!s.peer_left)
+            break;
+        }
+        else if (port == s.local_slot)
+        {
+          // GekkoNet dropped every peer (it could not stay in agreement): the session ends.
+          if (!s.peer_left)
+          {
+            s.peer_left = true;
+            s.peer_left_reason = "peer timed out";
+          }
+        }
+        else
+        {
+          break;
+        }
+      }
       // GekkoNet's silence timeout (Online::PeerSilenceTimeoutMs). Reported once: remember it,
       // the next loop top ends the session even if this update ran inside HostWait.
       s.error = "peer disconnected";
@@ -2411,7 +2906,8 @@ void UpdatePingDisplay()
     return;
 
   GekkoNetworkStats stats{};
-  gekko_network_stats(s.gekko, s.remote_handle, &stats);
+  if (!WorstLink(&stats))
+    return;
   OSD::AddTypedMessage(OSD::MessageType::NetPlayPing, fmt::format("Ping: {}", stats.last_ping),
                        OSD::Duration::NORMAL, OSD::Color::CYAN);
 }
@@ -2426,9 +2922,12 @@ void CaptureLocalInputs()
   else
   {
     // The local player's controller (local port `local_pad`) plays the in-game port of this peer.
-    const int port = s.net_opts.host ? 0 : 1;
+    const int port = s.local_slot;
     std::memcpy(s.local_inputs.data() + port * INPUT_SIZE, latest.data() + s.local_pad * INPUT_SIZE,
                 INPUT_SIZE);
+    // Real input never carries the gone marker.
+    if (s.gone_enabled)
+      PeerData::ClearGoneMarkerBytes(s.local_inputs.data() + port * INPUT_SIZE);
   }
 }
 
@@ -2524,10 +3023,8 @@ void StartTelemetry()
   }
   s.last_start_log_frame = s.current_frame;
   std::string link;
-  if (s.gekko && s.remote_handle >= 0)
+  if (GekkoNetworkStats st{}; WorstLink(&st))
   {
-    GekkoNetworkStats st{};
-    gekko_network_stats(s.gekko, s.remote_handle, &st);
     link = fmt::format(", ping {} ms (avg {:.1f}, jitter {:.1f})", st.last_ping, st.avg_ping,
                        st.jitter);
   }
@@ -2587,7 +3084,7 @@ u32 StartFrame()
 PadSlots NeutralSlots()
 {
   PadSlots slots{};
-  const u32 ports = s.mode == Mode::SyncTest ? s.st_opts.ports : 0x3u;
+  const u32 ports = s.mode == Mode::SyncTest ? s.st_opts.ports : s.match_ports ? s.match_ports : 0x3u;
   for (u32 port = 0; port < 4; ++port)
   {
     if (!(ports & (1u << port)))
@@ -2613,7 +3110,10 @@ void PassLogOpen(Core::System& system)
   {
     return;
   }
-  const char* role = s.mode == Mode::SyncTest ? "synctest" : s.net_opts.host ? "host" : "join";
+  const std::string role = s.mode == Mode::SyncTest ? "synctest" :
+                           IsHost()                 ? "host" :
+                           s.ported                 ? fmt::format("p{}", s.local_slot + 1) :
+                                                      "join";
   s.pass_log = std::fopen(fmt::format("{}.{}.m{}", path, role, s.match_index).c_str(), "wb");
   if (!s.pass_log)
     return;
@@ -2747,7 +3247,10 @@ void StartRunning(Core::System& system)
   s.phase = Phase::Running;
   s.frames = 0;
   INFO_LOG_FMT(BRAWLBACK, "gprb: session running ({}; dual core {}, deterministic GPU thread {})",
-               s.mode == Mode::SyncTest ? "sync test" : (s.net_opts.host ? "host" : "joiner"),
+               s.mode == Mode::SyncTest ? "sync test" :
+               !s.ported ? std::string(IsHost() ? "host" : "joiner") :
+                                          fmt::format("{} P{} of {} players", IsHost() ? "host" : "joiner",
+                                                      s.local_slot + 1, s.num_players),
                system.IsDualCoreMode(),
                system.GetFifo().UseDeterministicGPUThread());
   if (system.IsDualCoreMode() && !system.GetFifo().UseDeterministicGPUThread())
@@ -2756,6 +3259,41 @@ void StartRunning(Core::System& system)
                              "\"{}\"): rollbacks can desync the GPU FIFO and hang. Use fake-completion.",
                   Config::Get(Config::MAIN_GPU_DETERMINISM_MODE));
   }
+}
+
+// 3-4 player matches, at the loop top of every pass (first runs and resimulations), before the
+// frame's game logic: the ports whose input carries the gone marker (GekkoNet's input for a player
+// who left, from the frame the remaining peers agreed on) get a neutral controller, and the game's
+// gone flags (SESSION + GONE_FLAG_OFFSET, inside the region set) say which ports are gone in
+// this frame. Every peer computes them from the same confirmed input, so they agree; a rollback
+// that moves the agreed frame resimulates the frames in between with the corrected flags.
+void WriteGoneFlags(Core::System& system, PadSlots* slots, s64 frame)
+{
+  std::array<u8, MAX_LOBBY_PLAYERS> gone{};
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    if (!(s.match_ports & (1u << port)) || port == s.local_slot)
+      continue;
+    gone[port] = PeerData::TakeGoneMarker(slots->data() + port * INPUT_SIZE) ? 1 : 0;
+    PeerView& p = s.peers[port];
+    if (gone[port] && (p.gone_frame < 0 || frame < p.gone_frame))
+    {
+      p.gone_frame = frame;
+      INFO_LOG_FMT(BRAWLBACK, "gprb: P{} gone from session frame {} (game frame {})", port + 1,
+                   frame, frame + StartFrame());
+    }
+    else if (!gone[port] && p.gone_frame >= 0 && frame >= p.gone_frame)
+    {
+      // GekkoNet raised the agreed frame (a peer held more of its input): rolled back and
+      // simulated again with its real input.
+      INFO_LOG_FMT(BRAWLBACK, "gprb: P{} plays at session frame {} after all (was gone from {})",
+                   port + 1, frame, p.gone_frame);
+      p.gone_frame = -1;
+    }
+  }
+  if (s.gone_addr)
+    system.GetMemory().CopyToEmu(s.gone_addr, gone.data(), gone.size());
+  s.gone_written = gone;
 }
 
 bool RunFrame(const Core::CPUThreadGuard& guard)
@@ -2798,6 +3336,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   }
   else if (s.iteration == 0)
   {
+    ApplyPeerDrops();
     HardTimeSync(system);
     CaptureLocalInputs();
     if (s.mode == Mode::Network)
@@ -2909,6 +3448,8 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     NetStatsOnDisplayedFrame(system);
   }
   PadSlots slots = s.ops.slots[i];
+  if (s.gone_enabled)
+    WriteGoneFlags(system, &slots, static_cast<s64>(s.ops.adv_frame[i]));
   if (s.mode == Mode::SyncTest && s.st_opts.inject_input)
   {
     // The frame this pass produces (a load above may have rewound the counter).
@@ -2990,10 +3531,85 @@ std::optional<std::string> Connect(const ConnectOptions& options)
     if (auto err = LoadRegionSet(options.region_set, &spec))
       return err;
   }
+  // The players: a 1v1 (local_slot -1: the host P1, the joiner P2), or this player's port and
+  // every other player's (2-4 players, gaps allowed).
+  std::array<PeerView, MAX_LOBBY_PLAYERS> peers{};
+  int local_slot = options.host ? 0 : 1;
+  int host_slot = options.host ? 0 : -1;
+  const bool ported = options.local_slot >= 0;
+  if (!ported)
+  {
+    PeerView& p = peers[options.host ? 1 : 0];
+    p.expected = true;
+    if (options.host)
+    {
+      // With a known joiner address (matchmaking), send from the start, as Slippi connects from
+      // both sides: it keeps the NAT mapping toward the joiner open.
+      if (!options.remote_host.empty() && options.remote_port != 0)
+      {
+        if (const auto ip = sf::IpAddress::resolve(options.remote_host))
+        {
+          p.ip = *ip;
+          p.port = options.remote_port;
+        }
+      }
+    }
+    else
+    {
+      const auto ip = sf::IpAddress::resolve(options.remote_host);
+      if (!ip || options.remote_port == 0)
+        return "joiner needs remote_host and remote_port";
+      p.ip = *ip;
+      p.port = options.remote_port;
+      p.exact = true;
+      p.confirmed = true;
+      host_slot = 0;
+    }
+  }
+  else
+  {
+    if (!PeerData::ValidPort(static_cast<u64>(options.local_slot)))
+      return "local_slot must be 0-3";
+    local_slot = options.local_slot;
+    host_slot = options.host ? local_slot : -1;
+    if (options.peers.empty() || options.peers.size() >= static_cast<size_t>(MAX_LOBBY_PLAYERS))
+      return "a session has 2-4 players";
+    for (const auto& c : options.peers)
+    {
+      if (c.slot < 0 || c.slot >= MAX_LOBBY_PLAYERS ||
+          c.slot == local_slot || peers[c.slot].expected)
+      {
+        return fmt::format("bad peer port {}", c.slot);
+      }
+      PeerView& p = peers[c.slot];
+      p.expected = true;
+      if (!c.host.empty())
+      {
+        const auto ip = sf::IpAddress::resolve(c.host);
+        if (!ip)
+          return fmt::format("cannot resolve P{}'s address {}", c.slot + 1, c.host);
+        p.ip = *ip;
+        p.port = c.port;
+      }
+    }
+    if (!options.host && options.host_slot >= 0)
+    {
+      if (options.host_slot >= MAX_LOBBY_PLAYERS || !peers[options.host_slot].expected)
+        return "host_slot is not one of the peers";
+      host_slot = options.host_slot;
+    }
+  }
   CloseNetwork();
   s.mode = Mode::Network;
   s.net_opts = options;
-  s.peer = PeerView{};
+  s.peers = peers;
+  s.local_slot = local_slot;
+  s.host_slot = host_slot;
+  s.ported = ported;
+  s.have_seed = options.host;
+  s.match_ports = 0;
+  s.gone_enabled = false;
+  s.gone_addr = 0;
   s.error.clear();
   s.at_s = s.applied = s.at_start = s.go = false;
   s.countdown_at.reset();
@@ -3002,12 +3618,11 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.setup = {};
   s.input_delay = DEFAULT_INPUT_DELAY;
   s.last_winner = 0xFF;
+  s.last_pickers = 0;
+  s.setup_error = 0;
   s.last_stage = NO_STAGE;
   s.stage_pool.clear();
   s.await_scene_exit = false;
-  s.peer_ip.reset();
-  s.peer_port = 0;
-  s.peer_confirmed = false;
   s.foreign_packets = 0;
   s.peer_left = false;
   s.peer_left_reason.clear();
@@ -3025,28 +3640,9 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   {
     std::random_device rd;
     s.session_seed = rd();
-    // With a known joiner address (matchmaking), send from the start, as Slippi connects from
-    // both sides: it keeps the NAT mapping toward the joiner open.
-    if (!options.remote_host.empty() && options.remote_port != 0)
-    {
-      if (const auto ip = sf::IpAddress::resolve(options.remote_host))
-      {
-        s.peer_ip = *ip;
-        s.peer_port = options.remote_port;
-      }
-    }
   }
-  else
-  {
-    const auto ip = sf::IpAddress::resolve(options.remote_host);
-    if (!ip || options.remote_port == 0)
-    {
-      s.socket.reset();
-      return "joiner needs remote_host and remote_port";
-    }
-    s.peer_ip = *ip;
-    s.peer_port = options.remote_port;
-  }
+  INFO_LOG_FMT(BRAWLBACK, "gprb: session as {} on P{} with {} other player(s)",
+               options.host ? "host" : "joiner", s.local_slot + 1, ActivePlayers() - 1);
   s.phase = Phase::Connecting;
   s.net_run = true;
   s.net_thread = std::thread(NetThread);
@@ -3069,7 +3665,7 @@ void SetLocalLock(const LockIn& lock_in)
   const bool changed = lock.ready != s.local_lock.ready || lock.game != s.local_lock.game ||
                        lock.char_kind != s.local_lock.char_kind ||
                        lock.stage_pick != s.local_lock.stage_pick ||
-                       lock.port_values != s.local_lock.port_values;
+                       lock.port_values != s.local_lock.port_values || lock.team != s.local_lock.team;
   s.local_lock = lock;
   if (changed)
   {
@@ -3102,13 +3698,27 @@ void SetLocalExtra(const picojson::object& extra)
 picojson::object GetPeerExtra()
 {
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-  return s.peer.extra;
+  const int slot = FirstPeer();
+  return slot >= 0 ? s.peers[slot].extra : picojson::object{};
 }
 
 LockIn GetPeerLock()
 {
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-  return s.peer.lock;
+  const int slot = FirstPeer();
+  return slot >= 0 ? s.peers[slot].lock : LockIn{};
+}
+
+std::optional<LockIn> GetPlayerLock(int port)
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  if (s.mode != Mode::Network || port < 0 || port >= MAX_LOBBY_PLAYERS)
+    return std::nullopt;
+  if (port == s.local_slot)
+    return s.local_lock;
+  if (!s.peers[port].expected || s.peers[port].left)
+    return std::nullopt;
+  return s.peers[port].lock;
 }
 
 LockIn GetLocalLock()
@@ -3123,22 +3733,32 @@ Lobby GetLobby()
   Lobby l;
   l.active = s.mode == Mode::Network && s.phase != Phase::Idle && s.phase != Phase::Ended &&
              s.phase != Phase::Error;
-  l.connected = l.active && s.peer.seen && !s.peer_left;
+  bool all_seen = true, all_ready = true;
+  ForEachPeer([&](int, const PeerView& p) {
+    if (p.left)
+      return;
+    all_seen = all_seen && p.seen;
+    all_ready = all_ready && LockedFor(p.lock, NextGame());
+  });
+  l.connected = l.active && all_seen && !s.peer_left;
   l.in_match = InMatchPhase();
   l.disconnected = s.disconnected;
   l.desynced = s.desynced;
-  l.local_port = s.mode == Mode::Network ? (s.net_opts.host ? 0 : 1) : -1;
-  l.num_players = s.mode == Mode::Network ? 2 : 0;
+  l.local_port = s.mode == Mode::Network ? s.local_slot : -1;
+  l.num_players = s.mode == Mode::Network ? ActivePlayers() : 0;
   l.game = NextGame();
-  l.remote_ready = LockedFor(s.peer.lock, l.game);
+  l.remote_ready = s.mode == Mode::Network && all_ready;
   l.setup_ready = s.setup.game != 0 && s.setup.game == l.game;
   if (l.setup_ready)
   {
     l.stage = s.setup.stage;
     l.asl = s.setup.asl;
     l.players = s.setup.players;
+    l.teams = s.setup.teams;
   }
   l.last_winner = s.last_winner;
+  l.stage_pickers = s.last_pickers;
+  l.setup_error = s.setup_error;
   return l;
 }
 
@@ -3165,14 +3785,14 @@ void Stop()
     std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
     // Leaving tells the peer at once (Slippi's graceful ENet disconnect), so it does not wait for
     // the 7.2 s silence timeout. UDP: send it a few times.
-    if (s.mode == Mode::Network && s.socket && s.peer_ip)
+    if (s.mode == Mode::Network && s.socket)
     {
-      const std::string text = R"({"t":"leave","v":1})";
+      const std::string text = fmt::format(R"({{"t":"leave","v":1,"slot":{}}})", s.local_slot);
       std::vector<u8> pkt(text.size() + 1);
       pkt[0] = 'C';
       std::memcpy(pkt.data() + 1, text.data(), text.size());
       for (int i = 0; i < 3; ++i)
-        SendRaw(pkt);
+        SendToAll(pkt);
     }
     if (InMatchPhase())
     {
@@ -3212,7 +3832,7 @@ picojson::value Status()
   o["disconnected"] = picojson::value(s.disconnected);
   o["desynced"] = picojson::value(s.desynced);
   o["peer_left"] = picojson::value(s.peer_left);
-  o["role"] = picojson::value(s.mode == Mode::Network ? (s.net_opts.host ? "host" : "joiner") : "");
+  o["role"] = picojson::value(s.mode == Mode::Network ? (IsHost() ? "host" : "joiner") : "");
   o["match_index"] = picojson::value(static_cast<double>(s.match_index));
   o["current_frame"] = picojson::value(static_cast<double>(s.current_frame));
   o["frames"] = picojson::value(static_cast<double>(s.frames));
@@ -3272,22 +3892,55 @@ picojson::value Status()
   o["load_us_max"] = picojson::value(static_cast<double>(t.load_us_max));
   o["load_evict_waits"] = picojson::value(static_cast<double>(t.load_evict_waits));
   o["load_evict_wait_us_max"] = picojson::value(static_cast<double>(t.load_evict_wait_us_max));
+  o["save_granules_total"] = picojson::value(static_cast<double>(t.save_granules_total));
+  o["save_granules_max"] = picojson::value(static_cast<double>(t.save_granules_max));
+  o["load_granules_total"] = picojson::value(static_cast<double>(t.load_granules_total));
+  o["load_granules_max"] = picojson::value(static_cast<double>(t.load_granules_max));
   if (s.mode == Mode::Network)
   {
-    picojson::object p;
-    p["seen"] = picojson::value(s.peer.seen);
-    p["name"] = picojson::value(s.peer.name);
-    p["selections"] = picojson::value(s.peer.selections);
-    p["at_s"] = picojson::value(s.peer.at_s);
-    p["rtt_ms"] = picojson::value(s.peer.rtt_ms);
-    p["setup_hash"] = picojson::value(fmt::format("{:016x}", s.peer.setup_hash));
-    if (s.peer.seen)
-    {
-      p["last_heard_ms"] = picojson::value(static_cast<double>(
-          std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - s.peer.last_heard)
-              .count()));
-    }
-    o["peer"] = picojson::value(p);
+    // Every other player ("peers", by port), and the first of them as "peer" (a 1v1's peer).
+    picojson::array peers;
+    picojson::object first;
+    ForEachPeer([&](int slot, const PeerView& q) {
+      picojson::object p;
+      p["slot"] = picojson::value(static_cast<double>(slot));
+      p["seen"] = picojson::value(q.seen);
+      p["name"] = picojson::value(q.name);
+      p["selections"] = picojson::value(q.selections);
+      p["at_s"] = picojson::value(q.at_s);
+      p["rtt_ms"] = picojson::value(q.rtt_ms);
+      p["setup_hash"] = picojson::value(fmt::format("{:016x}", q.setup_hash));
+      p["left"] = picojson::value(q.left);
+      p["left_reason"] = picojson::value(q.left_reason);
+      p["confirmed"] = picojson::value(q.confirmed);
+      p["address"] = picojson::value(q.ip ? fmt::format("{}:{}", q.ip->toString(), q.port) :
+                                            std::string());
+      p["handle"] = picojson::value(static_cast<double>(q.handle));
+      p["gekko_dropped"] = picojson::value(q.gekko_dropped);
+      p["gone_frame"] = picojson::value(static_cast<double>(q.gone_frame));
+      p["lock"] = LockJson(q.lock);
+      if (q.seen)
+      {
+        p["last_heard_ms"] = picojson::value(static_cast<double>(
+            std::chrono::duration_cast<std::chrono::milliseconds>(Clock::now() - q.last_heard)
+                .count()));
+      }
+      if (first.empty())
+        first = p;
+      peers.emplace_back(p);
+    });
+    o["peer"] = picojson::value(first);
+    o["peers"] = picojson::value(peers);
+    o["local_slot"] = picojson::value(static_cast<double>(s.local_slot));
+    o["host_slot"] = picojson::value(static_cast<double>(HostSlot()));
+    o["players"] = picojson::value(static_cast<double>(ActivePlayers()));
+    o["match_ports"] = picojson::value(static_cast<double>(s.match_ports));
+    o["num_players"] = picojson::value(static_cast<double>(s.num_players));
+    o["gone_flag_addr"] = picojson::value(static_cast<double>(s.gone_addr));
+    picojson::array gone;
+    for (const u8 g : s.gone_written)
+      gone.emplace_back(static_cast<double>(g));
+    o["gone_flags"] = picojson::value(gone);
     o["foreign_packets"] = picojson::value(static_cast<double>(s.foreign_packets));
     o["selections"] = picojson::value(s.local_selections);
     o["setup_hash"] = picojson::value(fmt::format("{:016x}", s.setup_hash));
@@ -3295,9 +3948,13 @@ picojson::value Status()
     picojson::object lobby;
     lobby["game"] = picojson::value(static_cast<double>(NextGame()));
     lobby["lock"] = LockJson(s.local_lock);
-    lobby["peer_lock"] = LockJson(s.peer.lock);
+    const int fp = FirstPeer();
+    lobby["peer_lock"] = LockJson(fp >= 0 ? s.peers[fp].lock : LockIn{});
     lobby["setup"] = SetupJson(s.setup);
     lobby["last_winner"] = picojson::value(static_cast<double>(s.last_winner));
+    lobby["stage_pickers"] = picojson::value(static_cast<double>(s.last_pickers));
+    lobby["setup_error"] = picojson::value(static_cast<double>(s.setup_error));
+    lobby["teams"] = picojson::value(s.net_opts.teams);
     lobby["last_stage"] = picojson::value(static_cast<double>(s.last_stage));
     picojson::array stages;
     for (const u16 st : AllowedStages())
@@ -3362,15 +4019,15 @@ enum class MatchStart
 MatchStart ApplyMatchStart(Core::System& system, std::string_view when)
 {
   const Guest g(system.GetMemory());
-  if (s.net_opts.host)
-  {
-    s.init_block = InitBlock(g);
-    s.init_match = s.match_index;
-  }
-  else
+  const auto host_block_ready = [] {
+    const PeerView* hp = HostPeer();
+    return hp && hp->init_match == static_cast<s64>(s.match_index) && !hp->init_block.empty();
+  };
+  if (!IsHost())
   {
     const auto since = Clock::now();
-    while (!(s.peer.init_match == static_cast<s64>(s.match_index) && !s.peer.init_block.empty()))
+    // (The host may leave meanwhile: the next host is then this player or another peer.)
+    while (!IsHost() && !host_block_ready())
     {
       if (Clock::now() - since > std::chrono::seconds(60))
       {
@@ -3384,24 +4041,57 @@ MatchStart ApplyMatchStart(Core::System& system, std::string_view when)
       std::this_thread::sleep_for(std::chrono::milliseconds(1));
       s.mutex.lock();
     }
+  }
+  if (IsHost())
+  {
+    s.init_block = InitBlock(g);
+    s.init_match = s.match_index;
+  }
+  else
+  {
+    const PeerView& host = *HostPeer();
     const auto mine = InitBlock(g);
     const auto mm = ModeMeleeAddr(g);
     // Only the stage variant may differ (PeerData::MergeInitBlock): the joiner never writes the
     // host's stage kind, rules or time limit into its game.
     bool rejected = false;
-    const auto merged = PeerData::MergeInitBlock(mine, s.peer.init_block, &rejected);
+    const auto merged = PeerData::MergeInitBlock(mine, host.init_block, &rejected);
     if (rejected)
     {
       WARN_LOG_FMT(BRAWLBACK,
                    "gprb: the host's match init block differs beyond the stage variant; kept "
                    "ours ({} against the host's {})",
-                   Hex(mine), Hex(s.peer.init_block));
+                   Hex(mine), Hex(host.init_block));
     }
     if (mm && merged != mine)
     {
       system.GetMemory().CopyToEmu(*mm + INIT_BLOCK_OFFSET, merged.data(), merged.size());
       INFO_LOG_FMT(BRAWLBACK, "gprb: joiner took the host's match init block ({} -> {})", Hex(mine),
                    Hex(merged));
+    }
+  }
+  // Tests only (PPR_GPRB_TEST_TEAMS=t1,t2,t3,t4, a team per port or '-'): every machine makes the
+  // match a team battle before it loads, as a team setup on the character select would. (The
+  // online character select's teams are the game's, docs/nplayer/setup.md.)
+  if (const char* teams = std::getenv("PPR_GPRB_TEST_TEAMS"); teams && *teams)
+  {
+    if (const auto mm = ModeMeleeAddr(g))
+    {
+      const u8 on = 1;
+      system.GetMemory().CopyToEmu(*mm + MM_IS_TEAMS, &on, 1);
+      std::string_view rest(teams);
+      for (u32 port = 0; port < MAX_LOBBY_PLAYERS && !rest.empty(); ++port)
+      {
+        const size_t comma = rest.find(',');
+        const std::string_view item = rest.substr(0, comma);
+        rest = comma == std::string_view::npos ? std::string_view() : rest.substr(comma + 1);
+        if (item.size() == 1 && item[0] >= '0' && item[0] <= '2')
+        {
+          const u8 team = static_cast<u8>(item[0] - '0');
+          system.GetMemory().CopyToEmu(*mm + MM_PLAYERS + port * MM_PLAYER_SIZE + PI_TEAM, &team, 1);
+        }
+      }
+      WARN_LOG_FMT(BRAWLBACK, "gprb: PPR_GPRB_TEST_TEAMS: a team battle ({})", teams);
     }
   }
   const auto seeds = MatchSeeds(s.session_seed, s.match_index);
@@ -3414,7 +4104,7 @@ MatchStart ApplyMatchStart(Core::System& system, std::string_view when)
                seeds[0], seeds[1], seeds[2], when.empty() ? "" : " ", when);
   // Tests (PPR_GPRB_TEST_RNG_SKEW): the joiner's g_mtRand moves on after the seeding, as a song
   // that P+ picks again on one machine only moves it (OnStageCreate).
-  if (!s.net_opts.host && std::getenv("PPR_GPRB_TEST_RNG_SKEW"))
+  if (!IsHost() && std::getenv("PPR_GPRB_TEST_RNG_SKEW"))
   {
     WriteU32(system, Addr::MTRAND_DEFAULT_SEED, (seeds[0] * 0x5D588B65u + 0x269EC3u) & 0x7fffffff);
     WARN_LOG_FMT(BRAWLBACK, "gprb: PPR_GPRB_TEST_RNG_SKEW: joiner's g_mtRand moved on");
@@ -3489,6 +4179,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     const u32 fc = g.U32(Addr::GAME_FRAME + 4).value_or(0);
     PadsSetCurrent(0xF, NeutralSlots());
     PadsOnLoopTop(system);
+    ApplyPeerDrops();
     if (s.mode == Mode::Network && s.phase == Phase::Countdown && !PumpGekkoInCountdown(system))
     {
       s.error = s.error.empty() ? "gekko session failed in the countdown" : s.error;
@@ -3530,7 +4221,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
         return false;
       }
       // Normally created when the countdown started (PumpGekkoInCountdown).
-      if (!s.gekko && !CreateGekko(false, 2))
+      if (!s.gekko && !CreateGekko(false, std::popcount(s.match_ports)))
       {
         s.phase = Phase::Error;
         s.error = "gekko_create failed";
@@ -3582,18 +4273,30 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       {
         gekko_network_poll(s.gekko);
       }
-      if (s.net_opts.host && !s.go && s.peer.at_start && s.gekko_started)
+      ApplyPeerDrops();
+      // Every player still in the match is at the start barrier; the host waits for the slowest
+      // round trip's half (a 1v1: the peer's).
+      bool all_at_start = true;
+      double rtt = 0;
+      ForEachPeer([&](int, const PeerView& p) {
+        if (p.left)
+          return;
+        all_at_start = all_at_start && p.at_start;
+        rtt = std::max(rtt, std::clamp(p.rtt_ms, 0.0, PeerData::MAX_RTT_MS));
+      });
+      const bool host = IsHost();
+      if (host && !s.go && all_at_start && s.gekko_started)
       {
         s.go = true;
-        const double rtt = std::clamp(s.peer.rtt_ms, 0.0, PeerData::MAX_RTT_MS);
-        // Sent now: the joiner starts when "go" arrives, the host RTT/2 after sending it. On the
+        // Sent now: each joiner starts when "go" arrives, the host RTT/2 after sending it. On the
         // 50 ms state tick the joiner started up to 50 ms (3 frames) after the host, and time
         // sync then needed seconds to close that gap.
         SendState();
         s.start_at = Clock::now() + std::chrono::microseconds(static_cast<s64>(rtt * 500.0));
       }
-      const bool start = s.net_opts.host ? (s.go && s.start_at && Clock::now() >= *s.start_at) :
-                                           (s.peer.go && s.gekko_started);
+      const PeerView* hp = HostPeer();
+      const bool start = host ? (s.go && s.start_at && Clock::now() >= *s.start_at) :
+                                (hp && hp->go && s.gekko_started);
       if (start)
       {
         INFO_LOG_FMT(BRAWLBACK, "gprb: start barrier passed after {:.0f} ms",
@@ -3661,7 +4364,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     }
     if (s.await_scene_exit)
       return false;
-    if (!s.did_frame0 && s.phase == Phase::Connected && (s.net_opts.host || s.peer.session_seed))
+    if (!s.did_frame0 && s.phase == Phase::Connected && (IsHost() || s.have_seed))
     {
       switch (ApplyMatchStart(system, melee_pending ? "before the scene change" : ""))
       {
@@ -3682,15 +4385,63 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     // The first frame of the match simulation: the barrier.
     s.setup_hash = SetupHash(g);
     s.task_order = TaskOrderNames(g);
-    if (s.net_opts.host)
+    // The match's ports: a 1v1 is P1 and P2. With ports, the human ports of the game's own match
+    // setup, which the peers compare (the setup hash): each must be this player or a peer of the
+    // session, and every peer still in the session must have one.
+    if (!s.ported)
+    {
+      s.match_ports = 0x3;
+    }
+    else
+    {
+      s.match_ports = HumanPorts(g);
+      std::string problem;
+      if (!(s.match_ports & (1u << s.local_slot)))
+        problem = fmt::format("no player on this player's P{}", s.local_slot + 1);
+      for (int port = 0; port < MAX_LOBBY_PLAYERS && problem.empty(); ++port)
+      {
+        const bool in_match = s.match_ports & (1u << port);
+        if (port == s.local_slot)
+          continue;
+        const PeerView& p = s.peers[port];
+        if (in_match && !p.expected)
+          problem = fmt::format("P{} plays but is not in the session", port + 1);
+        else if (!in_match && p.expected && !p.left)
+          problem = fmt::format("P{} is in the session but has no fighter", port + 1);
+      }
+      if (std::popcount(s.match_ports) < 2)
+        problem = "fewer than two players";
+      if (!problem.empty())
+      {
+        s.error = fmt::format("the match's players differ from the session's: {}", problem);
+        ERROR_LOG_FMT(BRAWLBACK, "gprb: {}", s.error);
+        EndRunning(system, s.error);
+        s.phase = Phase::Error;
+        return false;
+      }
+    }
+    // 3-4 players: a player who leaves is gone from an agreed frame on (WriteGoneFlags), and the
+    // game reads the gone flags in its PPOM SESSION block.
+    s.gone_enabled = std::popcount(s.match_ports) >= 3;
+    s.gone_addr = 0;
+    s.gone_written.fill(0);
+    if (s.gone_enabled)
+    {
+      if (const u32 session = Online::GameBridge::SessionAddress())
+        s.gone_addr = session + GONE_FLAG_OFFSET;
+      else
+        WARN_LOG_FMT(BRAWLBACK, "gprb: the game's PPOM block was not found: no gone flags");
+    }
+    if (IsHost())
       s.sync = ReadSyncBlock(system);
     s.at_s = true;
-    s.applied = s.net_opts.host;
+    s.applied = IsHost();
+    s.barrier_host = HostSlot();
     s.barrier_since = Clock::now();
     s.phase = Phase::Barrier;
     SendState();
-    INFO_LOG_FMT(BRAWLBACK, "gprb: at the barrier (setup {:016x}: {})", s.setup_hash,
-                 Hex(SetupKey(g)));
+    INFO_LOG_FMT(BRAWLBACK, "gprb: at the barrier (P{} of ports {:#x}, setup {:016x}: {})",
+                 s.local_slot + 1, s.match_ports, s.setup_hash, Hex(SetupKey(g)));
   }
 
   if (s.phase != Phase::Barrier)
@@ -3700,43 +4451,65 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
   auto& ct = system.GetCoreTiming();
   for (;;)
   {
-    if (s.peer.at_s && s.peer.setup_hash != 0 && s.setup_hash != 0 &&
-        s.peer.setup_hash != s.setup_hash)
+    std::string differs;
+    bool all_applied = true;
+    ForEachPeer([&](int slot, const PeerView& p) {
+      if (p.left)
+        return;
+      if (p.at_s && p.setup_hash != 0 && s.setup_hash != 0 && p.setup_hash != s.setup_hash &&
+          differs.empty())
+      {
+        differs = s.ported ? fmt::format("match setup differs (local {:016x}, P{} {:016x})",
+                                         s.setup_hash, slot + 1, p.setup_hash) :
+                             fmt::format("match setup differs (local {:016x}, peer {:016x})",
+                                         s.setup_hash, p.setup_hash);
+      }
+      all_applied = all_applied && p.at_s && p.applied;
+    });
+    PeerView* hp = HostPeer();
+    if (differs.empty() && HostSlot() != s.barrier_host)
+      differs = "the host left before the match started";
+    if (differs.empty() && hp && !s.applied && hp->at_s && hp->sync.valid &&
+        hp->match_ports != s.match_ports)
     {
-      s.error = fmt::format("match setup differs (local {:016x}, peer {:016x})", s.setup_hash,
-                            s.peer.setup_hash);
+      differs = fmt::format("the match's ports differ (local {:#x}, host {:#x})", s.match_ports,
+                            hp->match_ports);
+    }
+    if (!differs.empty())
+    {
+      s.error = differs;
       ERROR_LOG_FMT(BRAWLBACK, "gprb: {}", s.error);
       EndRunning(system, s.error);
       s.phase = Phase::Error;
       SetLoopDefault(ppc);
       return true;
     }
-    if (!s.net_opts.host && !s.applied && s.peer.at_s && s.peer.sync.valid &&
-        (!s.net_opts.sync_task_order || s.peer.task_order_valid))
+    if (hp && !s.applied && hp->at_s && hp->sync.valid &&
+        (!s.net_opts.sync_task_order || hp->task_order_valid))
     {
-      WriteSyncBlock(system, s.peer.sync);
+      WriteSyncBlock(system, hp->sync);
       int relinked = 0;
       if (s.net_opts.sync_task_order)
-        relinked = ApplyTaskOrder(system, s.peer.task_order);
+        relinked = ApplyTaskOrder(system, hp->task_order);
       INFO_LOG_FMT(BRAWLBACK, "gprb: joiner applied the host's sync block (task lists relinked: {})",
                    relinked);
       s.applied = true;
       SendState();
-      const double rtt = std::clamp(s.peer.rtt_ms, 0.0, PeerData::MAX_RTT_MS);
+      const double rtt = std::clamp(hp->rtt_ms, 0.0, PeerData::MAX_RTT_MS);
       s.countdown_at = Clock::now() + std::chrono::microseconds(static_cast<s64>(rtt * 500.0));
     }
-    // Both proceed into the countdown once the joiner has copied the host's values: the host when
-    // it hears so, the joiner RTT/2 after it told the host, so the countdowns (which run without
-    // rollback) start together and the peers reach the start barrier together.
+    // Everyone proceeds into the countdown once the joiners have copied the host's values: the
+    // host when it hears so from all, a joiner RTT/2 after it told the host, so the countdowns
+    // (which run without rollback) start about together and the peers reach the start barrier
+    // together.
     const bool proceed =
-        s.net_opts.host ? (s.peer.at_s && s.peer.applied) :
-                          (s.applied && s.countdown_at && Clock::now() >= *s.countdown_at);
+        IsHost() ? all_applied : (s.applied && s.countdown_at && Clock::now() >= *s.countdown_at);
     if (proceed)
     {
       s.phase = Phase::Countdown;
       ct.ResetThrottleToNow();
       // GekkoNet's handshake runs during the countdown (PumpGekkoInCountdown).
-      if (CreateGekko(false, 2))
+      if (CreateGekko(false, std::popcount(s.match_ports)))
         s.defer_initial_save = true;
       else
         WARN_LOG_FMT(BRAWLBACK, "gprb: gekko_create failed; retried at the start barrier");
@@ -3819,7 +4592,7 @@ void OnStageCreate(const Core::CPUThreadGuard& guard)
   if (s.mode != Mode::Network)
     return;
   INFO_LOG_FMT(BRAWLBACK, "gprb: stage constructed (match {}, seeded {})", s.match_index, s.did_frame0);
-  if (s.phase != Phase::Connected || s.await_scene_exit || !(s.net_opts.host || s.peer.session_seed))
+  if (s.phase != Phase::Connected || s.await_scene_exit || !(IsHost() || s.have_seed))
     return;
   auto& system = guard.GetSystem();
   if (!s.did_frame0)

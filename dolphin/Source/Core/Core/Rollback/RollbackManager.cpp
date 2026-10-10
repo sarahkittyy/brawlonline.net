@@ -816,7 +816,8 @@ void RollbackManager::ToggleFrameSave()
     for (auto* stat : {&m_stat_save_count, &m_stat_save_us_total, &m_stat_save_us_max,
                        &m_stat_load_count, &m_stat_load_us_total, &m_stat_load_us_max,
                        &m_stat_sync_count, &m_stat_sync_us_total, &m_stat_sync_us_max,
-                       &m_stat_evict_waits, &m_stat_evict_wait_us_max})
+                       &m_stat_evict_waits, &m_stat_evict_wait_us_max, &m_stat_save_gran_total,
+                       &m_stat_save_gran_max, &m_stat_load_gran_total, &m_stat_load_gran_max})
     {
       stat->store(0, std::memory_order_relaxed);
     }
@@ -882,6 +883,10 @@ RollbackManager::TimingStats RollbackManager::GetTimingStats() const
   stats.save_sync_us_max = m_stat_sync_us_max.load(std::memory_order_relaxed);
   stats.load_evict_waits = m_stat_evict_waits.load(std::memory_order_relaxed);
   stats.load_evict_wait_us_max = m_stat_evict_wait_us_max.load(std::memory_order_relaxed);
+  stats.save_granules_total = m_stat_save_gran_total.load(std::memory_order_relaxed);
+  stats.save_granules_max = m_stat_save_gran_max.load(std::memory_order_relaxed);
+  stats.load_granules_total = m_stat_load_gran_total.load(std::memory_order_relaxed);
+  stats.load_granules_max = m_stat_load_gran_max.load(std::memory_order_relaxed);
   return stats;
 }
 
@@ -1015,6 +1020,9 @@ void RollbackManager::SaveFrame(Core::System& system)
   {
     const auto& saved = m_slots[slot];
     const u32 dirty_pages = saved.m_mem1_delta.page_count + saved.m_mem2_delta.page_count;
+    m_stat_save_gran_total.fetch_add(dirty_pages, std::memory_order_relaxed);
+    if (dirty_pages > m_stat_save_gran_max.load(std::memory_order_relaxed))
+      m_stat_save_gran_max.store(dirty_pages, std::memory_order_relaxed);
     const size_t total_bytes = static_cast<size_t>(dirty_pages) * ROLLBACK_PAGE_SIZE +
                                saved.m_l1_cache_snapshot.size() + saved.m_save_buffer.size();
     DEBUG_LOG_FMT(BRAWLBACK,
@@ -1226,6 +1234,9 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
 #endif
 
       const u32 total = static_cast<u32>(restore_keys.size());
+      m_stat_load_gran_total.fetch_add(total, std::memory_order_relaxed);
+      if (total > m_stat_load_gran_max.load(std::memory_order_relaxed))
+        m_stat_load_gran_max.store(total, std::memory_order_relaxed);
       const u32 chunk = (total + SAVESTATE_NUM_WORK_CHUNKS - 1) / SAVESTATE_NUM_WORK_CHUNKS;
 
       // One job per granule would be millions of jobs, so each job restores a contiguous slice.

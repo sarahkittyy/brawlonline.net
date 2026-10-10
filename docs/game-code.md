@@ -194,6 +194,7 @@ Notes:
 - Header: magic `"PPOM"`, version 1, then offset/size pairs for MAILBOX, SESSION, LOCAL and DEBUG. The header is 0x24 bytes.
 - **How Dolphin finds it** (`Source/Core/Core/Online/GameBridge.cpp`): it walks the game's `OSModuleInfo` list (`0x800030C8`) to the module with our REL id **20560** (`PPOnline/Makefile` `RELID`; do not change it), then looks for the header in that module's data sections only. It does this once per boot. After that it checks the magic word each frame. The harness tools (`ppom.py`) still scan the Syringe heap (`0x817BA5A0..+0x10000`), which is fine for debugging.
 - **Version 2** (gameplay session): MAILBOX, then LOCAL right after it (Dolphin excludes both from rollback as one range), SESSION and DEBUG. §11 has SESSION and LOCAL.
+- **Version 4** (2026-10-09, 3-4 player matches, `docs/nplayer/setup.md`): SESSION grows to 0x220 with each player's team, the stage pickers, the elimination order, the per-port gone flags and the teams switch; LOCAL+0x34 is the lock-in's team.
 - **Version 3** (2026-10-07): each player's port values (name tag and its controls, `PortValues`, 0x3C bytes) in LOCAL (`own`, game-written with the lock-in) and in SESSION (`players[i].pv`); LOCAL grows to 0x80 (with `hudDisconnected` at +0x7C), a SESSION player to 0x80 and SESSION to 0x210. Dolphin and the plugin must speak the same version: GameBridge refuses another (`PPHARNESS_PLUGIN` in the tests picks a plugin build for an older Dolphin).
 
 **Mailbox.**

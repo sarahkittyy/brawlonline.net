@@ -402,14 +402,16 @@ namespace OnlineMenu {
         return se.state != PPOM::SS_NONE ? se.game : 0;
     }
 
-    // Direct: the loser of the last game picks the stage (a draw: both pick), Slippi's
-    // HandleInputsOnCSS ISWINNER_LOST.
+    // Direct (and the code-based rooms): the loser of the last game picks the stage, Slippi's
+    // HandleInputsOnCSS ISWINNER_LOST. Dolphin decides who (SESSION picksStage): 1v1 the loser
+    // (a draw: both), teams the losing team's lower port, a free-for-all the last place (a tie:
+    // the lower port); docs/nplayer/setup.md.
     static bool picksStage()
     {
         const PPOM::Session& se = PPOM::g_block.session;
         u8 me = PPOM::g_block.local.localPort;
-        return s.mode == PPOM::MODE_DIRECT && se.state != PPOM::SS_NONE && se.lastWinner != 0xFF &&
-               me < 4 && se.lastWinner != me;
+        return (s.mode == PPOM::MODE_DIRECT || s.mode == PPOM::MODE_TEAMS) &&
+               se.state != PPOM::SS_NONE && me < 4 && se.players[me].picksStage;
     }
 
     static bool lockedForNext()
@@ -1411,6 +1413,7 @@ namespace OnlineMenu {
             OnlineMatch::tickMatch();
             return;
         }
+        OnlineMatch::offMatch();
         readCodeMenuDefaults();
         bool sceneChanged = strcmp(scene, s.lastScene) != 0;
         if (sceneChanged) {
