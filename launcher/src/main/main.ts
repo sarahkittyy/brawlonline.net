@@ -22,7 +22,7 @@ import { app, BrowserWindow, shell } from "electron";
 import log from "electron-log";
 import get from "lodash/get";
 import last from "lodash/last";
-import { mkdirSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync } from "node:fs";
 import path from "path";
 import { fileExists } from "utils/file_exists";
 
@@ -53,6 +53,23 @@ if (!app.isPackaged) {
 // the installer's shortcut carries APP_ID. Electron's default id shows as "electron.app.Electron".
 if (process.platform === "win32") {
   app.setAppUserModelId(APP_ID);
+}
+
+// A staging build (tools/staging) carries its environment in <resources>/staging-env.json, so it
+// keeps its own profile and servers however it is started (the Dock, Finder, the .exe). Releases
+// never have the file. Only PPO_* keys, and a variable already set wins (`run --profile b`).
+const stagingEnvFile = app.isPackaged ? path.join(process.resourcesPath, "staging-env.json") : null;
+if (stagingEnvFile && existsSync(stagingEnvFile)) {
+  try {
+    const stagingEnv: Record<string, unknown> = JSON.parse(readFileSync(stagingEnvFile, "utf8"));
+    for (const [key, value] of Object.entries(stagingEnv)) {
+      if (key.startsWith("PPO_") && typeof value === "string" && process.env[key] === undefined) {
+        process.env[key] = value;
+      }
+    }
+  } catch (err) {
+    console.error(`staging-env.json: ${err}`);
+  }
 }
 
 // Test switches (unpackaged runs, or PPO_TEST_MODE=1; see common/test_mode.ts). The userData
