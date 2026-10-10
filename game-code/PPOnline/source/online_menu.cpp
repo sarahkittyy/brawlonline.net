@@ -94,8 +94,21 @@ namespace OnlineMenu {
         // The controller port (0-3) that last pressed START on the CSS: the lock-in carries it,
         // and the match plays the local player from that controller.
         u8 startPad;
+        // Rooms (RoomEntry; MODE_TEAMS): how the room CSS was entered, and what Dolphin says.
+        int roomEntry;
+        bool roomCreateSent;
+        bool roomPollPending;
+        u32 roomPollFrames;
+        u8 roomPhase;                       // RoomStatus.phase of the last answer
+        bool roomError;
+        char roomText[96];                  // the status line Dolphin gave (ASCII)
+        u8 roomTaken;                       // SLOT_TAKEN bits seen (sounds)
+        bool roomSeen;                      // roomTaken is from this room's view
+        bool roomReload;                    // a launcher join on an online CSS: build it again
+        int roomZHeld;
     };
     static State s;
+    bool roomCss();
 
     static const u32 BTN_START = 0x1000;
     static const u32 BTN_Z = 0x0010;
@@ -372,8 +385,14 @@ namespace OnlineMenu {
         s.lastTag = selectedTag();
     }
 
+    void prepareCss()
+    {
+        if (roomCss()) RoomCss::prepareRecords();
+    }
+
     void restoreCss()
     {
+        prepareCss();
         if (s.mode < 0 || s.lastCss < 0) return;
         u32 gg = *(u32*)0x805A00E0;
         if (!isPtr(gg)) return;
@@ -676,9 +695,14 @@ namespace OnlineMenu {
 
     static bool usesCode() { return s.mode == PPOM::MODE_DIRECT || s.mode == PPOM::MODE_TEAMS; }
 
+    static void updateRoomStatus();
     static void updateStatus()
     {
         char buf[128];
+        if (roomCss()) {
+            updateRoomStatus();
+            return;
+        }
         switch (s.phase) {
         case PH_IDLE:
             if (selectedChar() < 0) {
@@ -869,8 +893,26 @@ namespace OnlineMenu {
     // there): the Elo number and, after a set, its change, e.g. "1523 (+14)".
     static const u32 OWN_WINDOW = 1;
     static const float OWN_X1 = -640.0f, OWN_X2 = -395.0f;
+    static char s_roomTop[24];
     static const char* ownText()
     {
+        if (roomCss()) {
+            // The room's code where Direct shows the player's own: "KFQB Public" / "KFQB Private"
+            // (rooms.md #5, #17). Not in a room: the player's own connect code, as Direct.
+            const PPOM::Session& se = PPOM::g_block.session;
+            if ((se.roomFlags & PPOM::RF_IN) && PPOM::g_block.local.room == PPOM::RP_IN) {
+                int n = 0;
+                for (int i = 0; i < 4; i++) {
+                    char ch = se.roomCode[i];
+                    if (ch >= 'A' && ch <= 'Z') s_roomTop[n++] = ch;
+                }
+                if (n == 4) {
+                    sprintf(s_roomTop + n, (se.roomFlags & PPOM::RF_PUBLIC) ? " Public" : " Private");
+                    return s_roomTop;
+                }
+            }
+            return s.ownCode;
+        }
         if (usesCode()) return s.ownCode;
         if (s.mode == PPOM::MODE_RANKED) return s.rankText;
         return "";
@@ -1092,8 +1134,10 @@ namespace OnlineMenu {
             "bctr\n\t");
     }
 
+    static bool roomLocked();
     static bool lockedIn()
     {
+        if (roomCss()) return roomLocked();
         // Connected: locked while locked in for the next game (between games the character can
         // change until START locks it in again, as on Slippi).
         if (s.phase == PH_CONNECTED) return lockedForNext() || g_onlineMatchGame != 0;
@@ -1134,6 +1178,15 @@ namespace OnlineMenu {
         g_onlineMatchGame = 0;
         g_onlinePickStage = 0;
         g_onlineCss = 1;
+        s.roomEntry = ROOM_ENTRY_NONE;
+        s.roomCreateSent = false;
+        s.roomPollPending = false;
+        s.roomPhase = PPOM::RP_NONE;
+        s.roomError = false;
+        s.roomText[0] = 0;
+        s.roomSeen = false;
+        s.roomReload = false;
+        s.roomZHeld = 0;
         // Leaving the CSS goes back to the page the mode was picked on (netmenu.cpp
         // exitToOnlinePage): Direct to the ONLINE page, Unranked/Teams to WITH ANYONE.
         // Direct (BASIC VERSUS) goes back to WITH FRIENDS' page (sqMenuMain entry 0x1C reopens
@@ -1146,8 +1199,26 @@ namespace OnlineMenu {
         PPOM::g_block.debug.menuState = (u32)(mode + 1);
     }
 
+    static void postRoom(u8 op, u8 arg, u8 arg2, const char* code)
+    {
+        PPOM::RoomRequest req;
+        memset(&req, 0, sizeof(req));
+        req.op = op;
+        req.arg = arg;
+        req.arg2 = arg2;
+        if (code) PPOM::asciiToU16(req.code, code, PPOM::CODE_LEN);
+        PPOM::post(PPOM::CMD_ROOM, &req, sizeof(req));
+    }
+
+    // In a room (or joining one), as Dolphin reports it.
+    static bool roomActive() { return PPOM::g_block.local.room != PPOM::RP_NONE || s.roomPhase != PPOM::RP_NONE; }
+
     static void leave()
     {
+        // Leaving a room's CSS other than for its match: leave the room (Dolphin would after 5 s
+        // on the menus anyway).
+        if (roomCss() && roomActive()) postRoom(PPOM::ROOM_LEAVE, 0, 0, NULL);
+        s.roomEntry = ROOM_ENTRY_NONE;
         s.mode = -1;
         s.phase = PH_IDLE;
         s.searchSeq = 0;
@@ -1190,6 +1261,16 @@ namespace OnlineMenu {
 
     void codeEntered(const char* code)
     {
+        if (roomCss()) {
+            // Join Room: the code typed on the keypad's room-code mode (4 of the 20 letters).
+            postRoom(PPOM::ROOM_JOIN, 0, 0, code);
+            s.roomError = false;
+            s.roomText[0] = 0;
+            // The keypad's START is still down: no press counts until every button is up (or it
+            // opens the keypad again before Dolphin's answer is in).
+            s.lastButtons = 0xFFFFFFFF;
+            return;
+        }
         strncpy(s.code, code, PPOM::CODE_LEN);
         s.code[PPOM::CODE_LEN] = 0;
         if (usesCode() && s.phase == PH_IDLE && s.code[0]) startSearch();
@@ -1355,6 +1436,7 @@ namespace OnlineMenu {
         s.rankFrames = 60;
     }
 
+    static void onRoomStatus(const PPOM::Response& r);
     static void pollMailbox()
     {
         const PPOM::Response* r = PPOM::pollResponse();
@@ -1402,6 +1484,10 @@ namespace OnlineMenu {
             lockDebug = (lockDebug & ~0xFFu) | (u8)(st.state + 1);   // tests: the state seen
             return;
         }
+        if (r->cmd == PPOM::CMD_ROOM) {
+            onRoomStatus(*r);
+            return;
+        }
         if (r->cmd == PPOM::CMD_GET_MATCH_STATE) {
             // The answer to FIND_OPPONENT or to one of the polls that follow it.
             if (s.mode >= 0 && s.searchSeq && r->seq >= s.searchSeq) {
@@ -1423,10 +1509,386 @@ namespace OnlineMenu {
         s.pollFrames = 0;
     }
 
+
+    // ----------------------------------------------------------------------------------------
+    // Rooms (docs/design/rooms.md; the protocol with Dolphin: docs/rooms-game-interface.md).
+    //
+    // A room's CSS is the Wi-Fi CSS in MODE_TEAMS with a room entry: Create Room asks Dolphin to
+    // create one as soon as the CSS is up; Join Room waits for START, which opens the keypad in
+    // its room-code mode (code_entry.cpp), and its OK sends the code. In a room:
+    //   START       lock in (ready) with Session.game, the room's next game; B takes it back
+    //   hold Z      leave the room and stay on the CSS (then START enters a code again)
+    //   hold B      Brawl's own: back to WITH FRIENDS, which leaves the room (leave())
+    //   L           host, any time: public / private
+    //   R           host, between games: Teams on / off
+    //   A           host, between games, with the hand over another player's panel: open / close
+    //               that slot (closing an occupied one removes the player)
+    //   the flag    Teams on: the player's own team colour (Brawl's team flag on their panel)
+    // The others' panels (room_css.cpp) and the line come from Dolphin: SESSION's room view and
+    // ROOM_POLL's answer, asked one at a time as the match state is.
+
+    void enterRoom(int entry)
+    {
+        enter(PPOM::MODE_TEAMS);
+        s.roomEntry = entry;
+        // Leaving goes back to WITH FRIENDS' page (sqMenuMain 0x1C) with this room button
+        // highlighted again (netmenu.cpp).
+        g_onlineReturnPage = 0;
+        g_onlineFriendsCursor = 1;
+        PPOM::g_block.debug.menuState = 0x10 | (u32)entry;
+    }
+
+    bool roomCss() { return s.mode == PPOM::MODE_TEAMS && s.roomEntry != ROOM_ENTRY_NONE; }
+
+    static int roomGame() { return PPOM::g_block.session.game; }
+
+    static bool roomIn()
+    {
+        return (PPOM::g_block.session.roomFlags & PPOM::RF_IN) && PPOM::g_block.local.room == PPOM::RP_IN;
+    }
+
+    static int roomMe()
+    {
+        int p = PPOM::g_block.local.localPort;
+        return p >= 0 && p < PPOM::SESSION_PLAYERS ? p : -1;
+    }
+
+    static bool roomLockedForNext() { return roomGame() && s.lockedGame == roomGame(); }
+
+    static bool roomLocked()
+    {
+        // Ready, or the room is starting (the lock-in must not change then), or a game is armed.
+        return roomLockedForNext() || g_onlineMatchGame != 0 ||
+               (roomIn() && PPOM::g_block.session.roomStatus == 1);
+    }
+
+    // This player picks the next room game's stage (the last game's loser; of several pickers,
+    // a draw, the lowest port), as Direct's loser.
+    static bool roomPicksStage()
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        int me = roomMe();
+        if (!roomIn() || me < 0) return false;
+        for (int i = 0; i < PPOM::SESSION_PLAYERS; i++) {
+            if (se.players[i].picksStage) return i == me;
+        }
+        return false;
+    }
+
+    static void u16Name(char* out, const u16* in)
+    {
+        int n = 0;
+        for (; n < RoomCss::NAME_CHARS && in[n]; n++) {
+            u16 c = in[n];
+            if (c >= 0xFF01 && c <= 0xFF5E) c = (u16)(c - 0xFEE0);
+            out[n] = (c >= 0x20 && c < 0x7F) ? (char)c : '?';
+        }
+        out[n] = 0;
+    }
+
+    // The CSS id of a gmCharacterKind (the inverse of charKindOf over the CSS's ids).
+    static int cssOfKind(int kind)
+    {
+        for (int css = 0; css < 0x40; css++) {
+            if (css == 0x28 || css == 0x29) continue;
+            if (charKindOf(css) == kind) return css;
+        }
+        return -1;
+    }
+
+    // The three other panels: the other slots in slot order (the local player is always the
+    // first panel, where the hand and coin are).
+    static int s_panelPort[3];
+    static void roomPanels(RoomCss::PanelView v[3], int* myTeam)
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        int me = roomMe();
+        bool in = roomIn();
+        int k = 0;
+        u8 taken = 0;
+        *myTeam = -1;
+        for (int i = 0; i < PPOM::SESSION_PLAYERS && k < 3; i++) {
+            if (in && i == me) {
+                *myTeam = se.players[i].roomTeam;
+                continue;
+            }
+            if (!in && i == 0) continue;   // not in a room: three empty panels
+            RoomCss::PanelView& p = v[k];
+            s_panelPort[k] = in ? i : -1;
+            k++;
+            memset(&p, 0, sizeof(p));
+            p.css = 0x28;
+            p.team = PPOM::TEAM_NONE;
+            if (!in) continue;   // PV_CLOSED
+            const PPOM::SessionPlayer& pl = se.players[i];
+            u8 bits = pl.roomSlot;
+            p.team = pl.roomTeam < PPOM::TEAM_COUNT ? pl.roomTeam : PPOM::TEAM_NONE;
+            if (!(bits & PPOM::SLOT_OPEN)) {
+                p.kind = RoomCss::PV_CLOSED;
+            } else if (!(bits & PPOM::SLOT_TAKEN)) {
+                p.kind = RoomCss::PV_SEARCHING;
+            } else {
+                taken |= (u8)(1 << i);
+                u16Name(p.name, pl.name);
+                int css = (bits & PPOM::SLOT_READY) && pl.roomChar != 0xFF ? cssOfKind(pl.roomChar) : -1;
+                if (bits & PPOM::SLOT_IN_GAME) {
+                    p.kind = RoomCss::PV_IN_GAME;
+                } else if (css >= 0) {
+                    p.kind = RoomCss::PV_READY;
+                    p.css = (u8)css;
+                    p.costume = pl.roomCostume < 0x20 ? pl.roomCostume : 0;
+                } else {
+                    p.kind = RoomCss::PV_CHOOSING;
+                }
+            }
+        }
+        for (; k < 3; k++) {
+            memset(&v[k], 0, sizeof(v[k]));
+            v[k].css = 0x28;
+            v[k].team = PPOM::TEAM_NONE;
+            s_panelPort[k] = -1;
+        }
+        // Sounds (rooms.md #16): a player joining gets Brawl's own join sound (SE 0x2051, what
+        // its Wi-Fi CSS plays when a member arrives, sel_char text+0x12DE8); one leaving the back
+        // sound, as an opponent leaving Direct.
+        if (in && s.roomSeen && taken != s.roomTaken) {
+            if (taken & ~s.roomTaken) playSE(0x2051);
+            else playSE(SE_BACK);
+        }
+        s.roomTaken = taken;
+        s.roomSeen = in;
+    }
+
+    static void onRoomStatus(const PPOM::Response& r)
+    {
+        s.roomPollPending = false;
+        if (r.status != 0) return;
+        const PPOM::RoomStatus& st = *(const PPOM::RoomStatus*)r.payload;
+        char text[sizeof(s.roomText)];
+        PPOM::u16ToAscii(text, st.text, sizeof(text));
+        bool error = st.error != 0;
+        // The error sound when an error appears (Slippi's CSS; rooms-game-interface.md).
+        if (error && (!s.roomError || strcmp(text, s.roomText) != 0)) playSE(SE_ERROR);
+        s.roomPhase = st.phase <= PPOM::RP_IN ? st.phase : PPOM::RP_NONE;
+        s.roomError = error;
+        strncpy(s.roomText, text, sizeof(s.roomText) - 1);
+        s.roomText[sizeof(s.roomText) - 1] = 0;
+    }
+
+    static void pollRoom()
+    {
+        if (s.roomPollPending && ++s.roomPollFrames < 60) return;
+        postRoom(PPOM::ROOM_POLL, 0, 0, NULL);
+        s.roomPollPending = true;
+        s.roomPollFrames = 0;
+    }
+
+    static void updateRoomStatus()
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        if (roomIn() && se.roomStatus == 0 && roomPicksStage() && !roomLockedForNext() && lockChar() >= 0 &&
+            !s.roomError) {
+            setStatus("Press START to select stage", false);   // Direct's (rooms.md §3)
+            return;
+        }
+        if (s.roomText[0] && (roomActive() || s.roomError)) {
+            setStatus(s.roomText, s.roomError);
+            return;
+        }
+        if (s.roomEntry == ROOM_ENTRY_CREATE && !roomIn()) {
+            setStatus("Creating room", false);
+            return;
+        }
+        if (selectedChar() < 0) {
+            setStatus("Select your character", false);
+        } else if (!roomIn()) {
+            setStatus("Press START to enter code", false);
+        } else if (roomLockedForNext()) {
+            setStatus("Ready", false);
+        } else {
+            setStatus("Press START to lock in", false);
+        }
+    }
+
+    // Connected for a room game: Direct's path (tickConnected), with Session.game as the room's
+    // next game also between games.
+    static void roomMatch()
+    {
+        int game = roomGame();
+        if (!game || s.lockedGame != game || g_onlineMatchGame) return;
+        const PPOM::Session& se = PPOM::g_block.session;
+        if (se.state == PPOM::SS_MATCH_READY && se.game == game) {
+            g_onlineMatchGame = (u8)game;
+            PPOM::g_block.debug.scratch[10] = 0x100 * game;
+            leaveCss(1);
+            return;
+        }
+        if (s.lockStage != PPOM::STAGE_PENDING) return;
+        const u16 pick = OnlineMatch::pickedStage();
+        if (pick == OnlineMatch::PICK_CANCELLED) {
+            unlock();
+        } else if (pick != 0xFFFF) {
+            lockIn(game, pick, OnlineMatch::pickedAsl());
+            OnlineMatch::clearPickedStage();
+        } else if (PPOM::g_block.local.remoteReady) {
+            g_onlinePickStage = 1;
+            leaveCss(1);
+        }
+    }
+
+    static void tickRoom(u32 pressed, u32 held)
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        if (s.roomEntry == ROOM_ENTRY_CREATE && !s.roomCreateSent) {
+            postRoom(PPOM::ROOM_CREATE, 1, 0, NULL);   // public by default (rooms.md #17)
+            s.roomCreateSent = true;
+        }
+        pollRoom();
+        bool in = roomIn();
+        int me = roomMe();
+        bool host = in && me >= 0 && se.roomHost == me;
+        bool waiting = in && se.roomStatus == 0;
+        const u32 BTN_A = 0x100, BTN_L = 0x40, BTN_R = 0x20;
+        if (!in) {
+            // Not in a room (Join Room, or after leaving one): START enters a room code.
+            if ((pressed & BTN_START) && selectedChar() >= 0 && s.roomPhase != PPOM::RP_JOINING) {
+                CodeEntry::open(LOCAL_PORT, true);
+            }
+            s.roomZHeld = 0;
+        } else {
+            if (pressed & BTN_START) {
+                if (!roomLockedForNext() && waiting && lockChar() >= 0) {
+                    lockIn(roomGame(), roomPicksStage() ? PPOM::STAGE_PENDING : 0xFFFF, 0);
+                }
+            }
+            if ((pressed & BTN_B) && roomLockedForNext() && waiting && !g_onlineMatchGame) {
+                maskPressed(BTN_B);   // the coin stays where it is (as Direct's B)
+                unlock();
+                playSE(SE_BACK);
+            }
+            if (held & BTN_Z) {
+                if (++s.roomZHeld > DISCONNECT_HOLD_DELAY) {
+                    postRoom(PPOM::ROOM_LEAVE, 0, 0, NULL);
+                    unlock();
+                    s.roomEntry = ROOM_ENTRY_JOIN;
+                    s.roomText[0] = 0;
+                    s.roomError = false;
+                    s.roomZHeld = 0;
+                    playSE(SE_BACK);
+                }
+            } else {
+                s.roomZHeld = 0;
+            }
+            if ((pressed & BTN_L) && host) {
+                postRoom(PPOM::ROOM_PUBLIC, (se.roomFlags & PPOM::RF_PUBLIC) ? 0 : 1, 0, NULL);
+                playSE(1);
+            }
+            if ((pressed & BTN_R) && host && waiting) {
+                postRoom(PPOM::ROOM_TEAMS, (se.roomFlags & PPOM::RF_TEAMS) ? 0 : 1, 0, NULL);
+                playSE(1);
+            }
+            if ((pressed & BTN_A) && host && waiting) {
+                int panel = RoomCss::panelUnderHand();
+                int port = panel >= 1 ? s_panelPort[panel - 1] : -1;
+                if (port >= 0) {
+                    maskPressed(BTN_A);
+                    bool open = (se.players[port].roomSlot & PPOM::SLOT_OPEN) != 0;
+                    postRoom(PPOM::ROOM_SLOT, (u8)port, open ? 0 : 1, NULL);
+                    playSE(1);
+                }
+            }
+            int team = RoomCss::myTeamClicked();
+            if (team >= 0 && waiting) postRoom(PPOM::ROOM_TEAM, (u8)team, 0, NULL);
+            roomMatch();
+        }
+        RoomCss::PanelView views[3];
+        int myTeam = -1;
+        roomPanels(views, &myTeam);
+        bool teams = in && (se.roomFlags & PPOM::RF_TEAMS) && se.roomMode == 2;
+        RoomCss::tick(views, teams, myTeam);
+    }
+
+    // LOCAL.screen (rooms-game-interface.md §2): where the game is, for the launcher's joins.
+    static u32 s_jumpFrame = 0;     // the last frame a menu page we can jump from ran
+    static u8* s_jumpPage = NULL;
+    static void reportScreen(const char* scene)
+    {
+        u8 screen = PPOM::SCREEN_OTHER;
+        if (strcmp(scene, "scMelee") == 0) {
+            screen = PPOM::SCREEN_MATCH;
+        } else if (strcmp(scene, "muMenuMain") == 0) {
+            screen = PPOM::g_block.debug.frames - s_jumpFrame < 3 ? PPOM::SCREEN_MENUS : PPOM::SCREEN_OTHER;
+        } else if (g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0) {
+            if (roomCss()) screen = PPOM::SCREEN_ROOM;
+            else screen = s.phase == PH_IDLE ? PPOM::SCREEN_ONLINE_CSS : PPOM::SCREEN_ONLINE_BUSY;
+        } else if (g_onlineCss && s.mode >= 0) {
+            screen = PPOM::SCREEN_ONLINE_BUSY;   // the online stage select, the loading screens
+        } else if (strncmp(scene, "sc", 2) == 0) {
+            screen = PPOM::SCREEN_OFFLINE;
+        }
+        PPOM::g_block.local.screen = screen;
+    }
+
+    // A menu page the launcher's join can leave from (ONLINE, WITH FRIENDS, WITH ANYONE): its
+    // update runs (netmenu.cpp / anyone_menu.cpp report it every frame).
+    void menuPageRunning(u8* page)
+    {
+        s_jumpFrame = PPOM::g_block.debug.frames;
+        s_jumpPage = page;
+    }
+
+    // The launcher's join (LOCAL.roomJoin bumped: Dolphin has already sent the join): go to the
+    // room's CSS from a menu page (muProcMenu's decision 0x1E, as the WITH FRIENDS buttons) or an
+    // idle online CSS (built again as a room's).
+    static u8 s_roomJoinSeen = 0;
+    static bool s_roomJoinInit = false;
+    static void launcherJoin(const char* scene)
+    {
+        u8 j = PPOM::g_block.local.roomJoin;
+        if (!s_roomJoinInit) {
+            s_roomJoinSeen = j;   // only later bumps are joins (the value at boot is old)
+            s_roomJoinInit = true;
+            return;
+        }
+        if (j == s_roomJoinSeen) return;
+        if (strcmp(scene, "muMenuMain") == 0 && PPOM::g_block.debug.frames - s_jumpFrame < 3 && s_jumpPage) {
+            u32 m = *(u32*)0x800030C8;
+            u32 rule = 0;
+            for (int n = 0; isPtr(m) && n < 64; n++) {
+                if (*(u32*)m == 18) {
+                    u32 sec = *(u32*)(m + 0x10);
+                    rule = isPtr(sec) ? (*(u32*)(sec + 8) & ~1u) : 0;
+                    break;
+                }
+                m = *(u32*)(m + 4);
+            }
+            if (!rule) return;
+            typedef void (*DecideFn)(u8*, int, int);
+            ((DecideFn)(rule + 0x1AE0))(s_jumpPage, 0x1E, 0);
+            playSE(1);
+            enterRoom(ROOM_ENTRY_JOIN);
+            NetMenu::setReturnButton(2);
+            s_roomJoinSeen = j;
+            s_jumpPage = NULL;
+            PPOM::g_block.debug.scratch[9] += 0x10000;   // tests: launcher joins taken
+            return;
+        }
+        if (g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0 && !CodeEntry::active()) {
+            s_roomJoinSeen = j;
+            if (roomCss()) return;   // already on a room's CSS: its panels follow
+            if (s.phase != PH_IDLE) return;
+            enterRoom(ROOM_ENTRY_JOIN);
+            s.roomReload = true;   // the four panels need the CSS built again
+            PPOM::g_block.debug.scratch[9] += 0x10000;
+            leaveCss(1);           // OnlineMatch: no match armed -> back to the CSS (restoreCss)
+        }
+    }
+
     void tick()
     {
         AnyoneMenu::tick();
         const char* scene = Online::currentSceneName();
+        reportScreen(scene);
         // In a match: nothing that differs between the machines may change the game while the
         // match runs under rollback, so no mailbox here (OnlineMatch::tickMatch only reacts to
         // a disconnect, which Dolphin reports after the rollback session has ended).
@@ -1448,6 +1910,7 @@ namespace OnlineMenu {
             // Using it later read the freed MuMsg's font and hung the game after a Direct set's
             // second game (found with test_direct_set_under_the_gameplay_session).
             if (strcmp(scene, "scSelctCharacter") != 0) {
+                RoomCss::reset();
                 s.cssMsg = NULL;
                 s.haveWindow = false;
                 s.ownShown = false;
@@ -1471,6 +1934,7 @@ namespace OnlineMenu {
         pollMailbox();
         pollMatchState();
         pollStep();
+        launcherJoin(scene);
 
         bool onCss = g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0;
         if (!onCss) s.stepFloor = s.stepSeq;   // only a step asked for on the CSS counts there
@@ -1510,12 +1974,14 @@ namespace OnlineMenu {
         maskStart();
         if (CodeEntry::active()) {
             CodeEntry::tick(pressed & BTN_START);
+        } else if (roomCss()) {
+            tickRoom(pressed, b);
         } else {
             // START: lock in and search (Unranked) or enter the code (Direct, Teams), once a
             // character is selected (Slippi shows the START prompt only then).
             if ((pressed & BTN_START) && s.phase == PH_IDLE && selectedChar() >= 0) {
                 if (usesCode()) {
-                    CodeEntry::open(LOCAL_PORT);
+                    CodeEntry::open(LOCAL_PORT, false);
                 } else {
                     startSearch();
                 }
@@ -1601,9 +2067,11 @@ namespace Text {
         // ONLINE page (button art stays WITH FRIENDS / WITH ANYONE)
         {"muMenuMain", "registered as Friends", "Play a specific person."},
         {"muMenuMain", "Play against random people", "Compete against online opponents."},
-        // WITH FRIENDS page (Brawl's WITH ANYONE page; button art stays BASIC VERSUS / TEAM BATTLE)
+        // WITH FRIENDS page (Brawl's WITH ANYONE page): Create Room (its SPECTATOR button),
+        // Direct 1v1 (BASIC VERSUS), Join Room (TEAM BATTLE); labels drawn by netmenu.cpp
+        {"muMenuMain", "Watch someone else fight", "Make a room for 2 to 4 players."},
         {"muMenuMain", "quick fight with someone", "Play a specific person."},
-        {"muMenuMain", "Form a team with someone", "Play teams games."},
+        {"muMenuMain", "Form a team with someone", "Join a room with its code."},
     };
 
     const char* overrideFor(MuMsg* msg, u32 window, u32 line, const void* msbin, u32 caller)

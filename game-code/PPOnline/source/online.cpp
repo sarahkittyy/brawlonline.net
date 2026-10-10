@@ -17,6 +17,8 @@
 #include "ppom.h"
 #include "stage_legal.h"
 
+namespace Rpc { void tick(); }
+
 namespace Online {
 
     typedef bool (*PrintIndexFn)(MuMsg*, u32, u32, void*);
@@ -107,6 +109,7 @@ namespace Online {
         PPOM::g_block.debug.frames++;
         OnlineMenu::tick();
         StageLegal::tick();
+        Rpc::tick();
     }
 
     // MuMsg::beginPrint: log MuMsg::printf calls (line = -2, data = printf's caller).
