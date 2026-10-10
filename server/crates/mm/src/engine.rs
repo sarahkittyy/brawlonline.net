@@ -380,7 +380,7 @@ impl Engine {
     /// newest published build (`update_feed_dir`), or `min_app_version`.
     fn outdated(&self, client: &ClientBuild) -> Option<String> {
         let have = parse_version(&client.app_version);
-        if let Some(f) = self.feed.required(&client.platform).filter(|f| have < parse_version(f)) {
+        if let Some(f) = self.feed.required(&client.platform, &client.app_version).filter(|f| have < parse_version(f)) {
             return Some(f.to_string());
         }
         let min = self.cfg.min_app_version.as_deref().filter(|m| have < parse_version(m))?;
@@ -2244,10 +2244,14 @@ mod tests {
         h.connect(2, 2);
         let out = hello_on(&mut h, 2, &b, "3.5.0", "mac");
         assert_eq!(sent(&out, 2), vec![json!({"type": "hello-resp"})]);
-        // A build older than the platform field is held to the oldest feed.
+        // A build older than the platform field is held to the oldest feed it can be from: a 3.5.0
+        // may be a macOS build, a 3.5.5 cannot (the macOS feed has not reached it).
         h.connect(3, 3);
         let out = h.hello(3, &c, "3.5.0");
         assert_eq!(sent(&out, 3), vec![json!({"type": "hello-resp"})]);
+        h.connect(6, 6);
+        let out = h.hello(6, &c, "3.5.5");
+        assert_eq!(sent(&out, 6)[0]["error"], msg::update_to("3.6.0"));
 
         // Tickets (Direct, Unranked, a room's game) the same way.
         h.connect(4, 4);
