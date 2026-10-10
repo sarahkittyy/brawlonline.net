@@ -35,6 +35,16 @@ TEMPLATE_SD = ROOT / "run" / "template-user" / "Wii" / "sd.raw"
 PLUGIN_DIR = "/Project+/pf/plugins"
 
 
+def plugin_sd_path(path: str | Path) -> str:
+    """Where a plugin file goes on the card. Our packed PPOnline.rel (a loader with the plugin
+    appended, game-code/build.sh) must be named PPOnline.rel there whatever the local name: its
+    loader reads itself again by that name. Any other plugin keeps its own name."""
+    pp = Path(path)
+    data = pp.read_bytes()
+    packed = len(data) >= 16 and data[-16:-12] == b"PPOL"
+    return f"{PLUGIN_DIR}/{'PPOnline.rel' if packed else pp.name}"
+
+
 def fast_copy(src: Path, dst: Path) -> None:
     try:
         sys.path.insert(0, str(ROOT / "harness"))
@@ -86,7 +96,7 @@ def parse_adds(args: argparse.Namespace) -> list[tuple[bytes, str]]:
         adds.append((Path(local).read_bytes(), sd_path))
     for p in args.plugin or []:
         pp = Path(p)
-        adds.append((pp.read_bytes(), f"{PLUGIN_DIR}/{pp.name}"))
+        adds.append((pp.read_bytes(), plugin_sd_path(pp)))
     return adds
 
 

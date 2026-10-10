@@ -79,20 +79,50 @@ def from_u16s(b: bytes) -> str:
     return "".join(out)
 
 
+PPOM_MODULE_ID = 20560          # the plugin's REL id (game-code/PPOnline/Makefile RELID)
+OS_MODULE_LIST = 0x800030C8
+
+
+def _is_mem(a: int, n: int = 4) -> bool:
+    return (0x80000000 <= a and a + n <= 0x81800000) or (0x90000000 <= a and a + n <= 0x94000000)
+
+
+def _module_data_ranges(c: HarnessClient) -> list[tuple[int, int]]:
+    """The data sections of the plugin's module (REL id 20560) from the OS module list, as
+    Dolphin's GameBridge finds the block. The plugin is linked into the Network heap by its
+    loader since 2026-10-10 (docs/game-code.md section 2); older builds sit in the Syringe heap."""
+    out = []
+    m = c.read_u32(OS_MODULE_LIST)
+    for _ in range(64):
+        if not m or not _is_mem(m, 0x40):
+            break
+        mid, nxt, _prv, nsec, secoff = struct.unpack_from(">5I", c.read_mem(m, 0x14), 0)
+        if mid == PPOM_MODULE_ID and 0 < nsec <= 64 and _is_mem(secoff, 8 * nsec):
+            secs = c.read_mem(secoff, 8 * nsec)
+            for i in range(nsec):
+                off, size = struct.unpack_from(">II", secs, 8 * i)
+                if off and not off & 1 and 0x100 < size < 0x40000 and _is_mem(off, size):
+                    out.append((off, size))
+            break
+        m = nxt
+    return out
+
+
 def find_block(c: HarnessClient) -> Block:
-    start, size = SYRINGE_HEAP
-    mem = c.read_mem(start, size)
-    i = 0
-    while True:
-        i = mem.find(MAGIC, i)
-        if i < 0:
-            raise SystemExit("PPOM block not found in the Syringe heap (plugin not loaded?)")
-        ver, sz, mbo, mbs, so, ss, lo, ls, dbo, dbs = struct.unpack_from(">HHHHHHHHHH", mem, i + 4)
-        if ver in (1, 2, 3, 4, 5) and 0x100 < sz < 0x4000 and mbo and dbo:
-            a = start + i
-            return Block(a, ver, sz, a + mbo, mbs, a + dbo, dbs, a + so if ss else 0, ss,
-                         a + lo if ls else 0, ls)
-        i += 4
+    for start, size in _module_data_ranges(c) + [SYRINGE_HEAP]:
+        mem = c.read_mem(start, size)
+        i = 0
+        while True:
+            i = mem.find(MAGIC, i)
+            if i < 0:
+                break
+            ver, sz, mbo, mbs, so, ss, lo, ls, dbo, dbs = struct.unpack_from(">HHHHHHHHHH", mem, i + 4)
+            if ver in (1, 2, 3, 4, 5) and 0x100 < sz < 0x4000 and mbo and dbo:
+                a = start + i
+                return Block(a, ver, sz, a + mbo, mbs, a + dbo, dbs, a + so if ss else 0, ss,
+                             a + lo if ls else 0, ls)
+            i += 4
+    raise SystemExit("PPOM block not found (plugin not loaded?)")
 
 
 def read_requests(c: HarnessClient, b: Block):
