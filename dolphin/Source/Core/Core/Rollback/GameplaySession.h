@@ -3,12 +3,14 @@
 
 // Gameplay-only (Slippi-style) rollback session for Brawl / Project+.
 //
-// Two players boot and use the menus independently. They connect while on the character select
-// (no Dolphin netplay lobby, no shared boot), exchange their selections, and start the same match.
-// The rollback session begins at the first frame of the match simulation, behind a barrier where
-// the host's RNG state, frame counters and scheduler task order are copied to the joiner. During
-// the match GekkoNet exchanges inputs, and rollbacks save and restore only the gameplay region set
-// (Data/Sys/Rollback/<set>.json, see GameplayRollback.h) through RollbackManager's region mode.
+// Two to four players boot and use the menus independently. They connect while on the character
+// select (no Dolphin netplay lobby, no shared boot; every pair of players exchanges packets
+// directly), exchange their selections, and start the same match. The rollback session begins at
+// the first frame of the match simulation, behind a barrier where the host's RNG state, frame
+// counters and scheduler task order are copied to every joiner. During the match GekkoNet exchanges
+// inputs, and rollbacks save and restore only the gameplay region set (Data/Sys/Rollback/<set>.json,
+// see GameplayRollback.h) through RollbackManager's region mode. A player who leaves a 3-4 player
+// match is gone from a frame the others agree on, and the match goes on (docs/nplayer/session.md).
 //
 // A single-instance sync test runs the same machinery with a GekkoNet stress session: every frame
 // the state from N frames back is restored and the frames are simulated again, and both the
@@ -70,13 +72,27 @@ struct SyncTestOptions
 
 struct ConnectOptions
 {
-  bool host = false;
+  bool host = false;  // the decider: sends the sync block and decides each game's setup
   u16 local_port = 0;        // UDP port to bind (0 = any)
-  // Joiner: the host's address (required). Host: the joiner's address when it is known in
-  // advance (matchmaking); the host then sends from the start, and the joiner's first packet
-  // confirms or corrects the address.
+  // Two players (local_slot -1): the joiner needs the host's address. The host may know the
+  // joiner's address in advance (matchmaking); it then sends from the start, and the joiner's
+  // first packet confirms or corrects the address. The host plays P1, the joiner P2.
   std::string remote_host;
   u16 remote_port = 0;
+  // 2-4 players (local_slot 0-3): this player's in-game port, and every other player with its
+  // in-game port. Every pair of players exchanges packets directly (full mesh). A peer's address
+  // may be unknown (empty host): it is learned from that peer's first control message claiming
+  // its port; with a known IP but port 0, only that IP may claim it. Ports may have gaps (P1+P3).
+  int local_slot = -1;
+  struct Peer
+  {
+    int slot = -1;
+    std::string host;
+    u16 port = 0;
+  };
+  std::vector<Peer> peers;
+  // The deciding player's port as the joiners know it (-1: learned from the peers' messages).
+  int host_slot = -1;
   std::string region_set = "gp-v19";
   // The match's first frames are the countdown, during which the game loads RNG-chosen resources
   // (Pokemon, Assist Trophies) on a loader thread into heaps of the region set. Rolling those
@@ -105,15 +121,29 @@ struct ConnectOptions
   // without repeats until it is used up (Slippi's stage pool). A stage pick (Direct's loser) is
   // not checked against it: Slippi does not restrict Direct's stage select.
   std::vector<u16> stages;
+  // The room's Teams switch (docs/nplayer/setup.md): 3-4 players play a team battle with each
+  // player's lock-in team (Online::GameSetup::DecideTeams); with 2 players it has no effect.
+  bool teams = false;
 };
 
 // ---- The lobby: the online character select between matches (Slippi's MATCH_SELECTIONS). ----
 // Each game (the game plugin, through GameBridge) reports its player's lock-in; the peers exchange
 // them in their control messages. Once every player is locked in for the next game, the host
 // decides the match setup (stage: the losing player's pick, else random from `stages`) and sends
-// it; both games then start that match from their own character select. Sized for up to
-// MAX_LOBBY_PLAYERS so that 4-player sessions fit later; today a session has 2 players.
+// it; every game then starts that match from its own character select. A session has 2 to
+// MAX_LOBBY_PLAYERS players, by in-game port (gaps allowed).
 constexpr int MAX_LOBBY_PLAYERS = 4;
+// A lock-in's team (gmPlayerInitData::m_teamNo: 0 red, 1 blue, 2 green; Brawl's three team
+// colours, Online::GameSetup::NUM_TEAMS), or none (free-for-all).
+constexpr u8 NO_TEAM = 0xFF;
+constexpr u8 MAX_TEAM = 2;
+
+// The gone flags (docs/nplayer/session.md, "The gone flag"): `u8 gone[4]` by in-game port at this
+// offset into the game's PPOM SESSION block (game-code/PPOnline/include/ppom.h). In a 3-4 player
+// network match, the loop top of every pass writes 1 for a port whose player has left the match
+// (from the agreed session frame on) and 0 otherwise. SESSION lives in the plugin's .data, inside
+// the region set, so the flags are rolled back with the game.
+constexpr u32 GONE_FLAG_OFFSET = 0x20C;
 constexpr u16 NO_STAGE = 0xFFFF;
 
 // A player's port values (design 5.1): their name tag and its controls, in the game's PPOM
@@ -133,6 +163,7 @@ struct LockIn
   u8 asl = 0;             // P+ alternate-stage buttons of that pick
   u32 game = 0;           // the game (1-based) this lock-in is for
   PortValues port_values{};  // the player's name tag and controls (all zero: the defaults)
+  u8 team = NO_TEAM;      // the player's team colour for a team battle (0-2), NO_TEAM none
 };
 void SetLocalLock(const LockIn& lock);
 
@@ -142,35 +173,47 @@ struct LobbyPlayer
   u8 char_kind = 0xFF;
   u8 costume = 0;
   PortValues port_values{};
+  u8 team = NO_TEAM;  // in a team battle (MatchSetup / Lobby `teams`), else NO_TEAM
 };
 
 struct Lobby
 {
   bool active = false;        // a network session exists (connecting .. running)
-  bool connected = false;     // the peer has been heard and has not left
+  bool connected = false;     // every other player has been heard and none has left
   bool in_match = false;      // barrier .. running
-  bool disconnected = false;  // the session ended because the peer left or went silent
-  int local_port = -1;        // in-game port of this player (0 host, 1 joiner)
-  int num_players = 0;
+  bool disconnected = false;  // the session ended because the other players left or went silent
+  int local_port = -1;        // in-game port of this player (2 players: 0 host, 1 joiner)
+  int num_players = 0;        // players in the session (this one included)
   bool remote_ready = false;  // every remote player is locked in for `game`
   u32 game = 0;               // the next game (1-based)
   bool setup_ready = false;   // the setup of `game` is decided
   u16 stage = NO_STAGE;
   u8 asl = 0;
-  std::array<LobbyPlayer, MAX_LOBBY_PLAYERS> players{};
+  std::array<LobbyPlayer, MAX_LOBBY_PLAYERS> players{};  // by in-game port
   u8 last_winner = 0xFF;      // in-game port of the last game's winner, 0xFE draw, 0xFF none
+  bool teams = false;         // the next game is a team battle (players[i].team)
+  u8 stage_pickers = 0;       // ports (bits) that pick the next stage (GameSetup::Outcome)
+  u8 setup_error = 0;         // GameSetup::SetupError: why the next game is not set up
 };
 Lobby GetLobby();
 
-// A game of a network session that ended with GAME SET, read from the state both peers ended on
-// (Online/Ranked.h reports it). Ports are in-game ports: the host is 0, the joiner 1.
+// A game of a network session that ended with GAME SET, read from the state every peer ended on
+// (Online/Ranked.h reports it). Ports are in-game ports (2 players: the host is 0, the joiner 1).
 struct GameResult
 {
   u32 game = 0;           // 1-based, counting draws
-  u8 winner = 0xFF;       // in-game port, 0xFE draw
-  std::array<s32, 2> stocks{};
-  std::array<float, 2> damage{};
-  std::array<u8, 2> char_kind{};
+  u8 winner = 0xFF;       // in-game port, 0xFE draw; teams: the lowest port of the winning team
+  // Ports (a bit each) that pick the next game's stage: a 1v1's loser (both after a draw); 3-4
+  // players: Online::GameSetup::DecideOutcome (last place, by the elimination order too).
+  u8 pickers = 0;
+  // 3-4 players: each port's place (1 = first), 0 = not playing (DecideOutcome).
+  std::array<u8, MAX_LOBBY_PLAYERS> place{};
+  int num_players = 0;
+  std::array<bool, MAX_LOBBY_PLAYERS> present{};
+  std::array<s32, MAX_LOBBY_PLAYERS> stocks{};
+  std::array<float, MAX_LOBBY_PLAYERS> damage{};
+  std::array<u8, MAX_LOBBY_PLAYERS> char_kind{};
+  std::array<u8, MAX_LOBBY_PLAYERS> team{};
   u16 stage = NO_STAGE;
   u32 frames = 0;  // game frames the match ran
 };
@@ -179,10 +222,13 @@ void SetGameResultCallback(std::function<void(const GameResult&)> callback);
 
 // A small JSON object of another module (Online/GameSetup.h: Ranked's stage strikes) carried in
 // this player's control messages, and the peer's latest one ({} before any). Sizes are capped.
+// With more than two players, "the peer" is the other player with the lowest in-game port.
 void SetLocalExtra(const picojson::object& extra);
 picojson::object GetPeerExtra();
 // The peer's lock-in as last heard (its character choice between games).
 LockIn GetPeerLock();
+// The lock-in of the player on in-game `port` (this player's own too), as last heard.
+std::optional<LockIn> GetPlayerLock(int port);
 // This player's lock-in as the game last wrote it.
 LockIn GetLocalLock();
 

@@ -27,6 +27,7 @@ namespace OnlineMatch {
     // setup from SESSION, the in-match disconnect.
     void install(CoreApi* api);
     void tickMatch();                 // every frame in scMelee
+    void offMatch();                  // every frame outside scMelee
     void onFrameDrawn();              // every drawn frame (MatchHud's hook)
     bool disconnectShown();
     u16 pickedStage();                // the loser's stage pick (0xFFFF none)

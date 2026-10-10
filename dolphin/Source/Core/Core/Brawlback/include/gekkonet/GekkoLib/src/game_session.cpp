@@ -128,6 +128,13 @@ void Gekko::GameSession::SetDisconnectTimeout(u32 timeout)
     _msg.SetDisconnectTimeout(timeout);
 }
 
+void Gekko::GameSession::SetDisconnectedInput(const void* input)
+{
+    if (_disconnected_input && input) {
+        std::memcpy(_disconnected_input.get(), input, _config.input_size);
+    }
+}
+
 void Gekko::GameSession::AddLocalInput(i32 player, void* input)
 {
     u8* inp = (u8*)input;
