@@ -39,6 +39,13 @@
 //! also what the online count counts. A room's game starts with ordinary tickets in mode 3 (Teams)
 //! naming the room code; every member gets one `get-ticket-resp` listing all of them.
 //!
+//! Chat (`crate::chat`, `docs/chat-protocol.md`) rides on the online connections too: a `hello`
+//! with an identity key (`chatKey`) can chat. A room's players are a chat group, kept in step with
+//! the room after every input; a Direct, Unranked or Ranked match makes a group of its players
+//! that are online, which a player leaves with a new ticket, a room, `chat-leave` or by
+//! disconnecting. mm relays boxes it cannot open; reports go to the database
+//! ([`Output::ChatReport`]), as do the identity keys ([`Output::RecordChatKey`]).
+//!
 //! The queues share the failed-connect rule: Slippi's 1v1 client requeues with a new ticket when
 //! its 8 s P2P window fails, so a pair matched again within `requeue_window` is taken to have
 //! failed. Direct holds such a pair back (P2P window + `repair_backoff` × failures) and errors
@@ -52,6 +59,7 @@ use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
+use common::chat::ChatRequest;
 use common::codes::{decode_search_code, ConnectCode};
 use common::db::MmUser;
 use common::net::{ip_key, sanitize_lan_addr, to_v4};
@@ -65,6 +73,7 @@ use common::rooms::{decode_room_search_code, HelloResp, MmStatus, RoomError, Roo
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
+use crate::chat::{chat_error, Candidate, ChatBook, ChatConfig, ChatReportRecord, GroupKind};
 use crate::messages as msg;
 use crate::region::RegionMap;
 use crate::rooms::{MemberInfo, RoomBook, RoomsConfig};
@@ -131,6 +140,8 @@ pub struct EngineConfig {
     pub rooms: RoomsConfig,
     /// `hello`s per account (a game opens its online connection once per start or reconnect).
     pub hello_window: Window,
+    /// Chat: rate limits.
+    pub chat: ChatConfig,
 }
 
 impl Default for EngineConfig {
@@ -156,6 +167,7 @@ impl Default for EngineConfig {
             ranked_band_interval: Duration::from_secs(15),
             rooms: RoomsConfig::default(),
             hello_window: Window::new(10, Duration::from_secs(60)),
+            chat: ChatConfig::default(),
         }
     }
 }
@@ -210,6 +222,13 @@ pub enum Output {
         uid: Uuid,
     },
     RecordMatch(MatchRecord),
+    /// An account's online connection carries this chat identity key (`chat_identity_keys`).
+    RecordChatKey {
+        uid: Uuid,
+        key: [u8; 32],
+    },
+    /// A `chat-report`: check its signatures and store it (`chat_reports`).
+    ChatReport(ChatReportRecord),
 }
 
 #[derive(Debug, Clone)]
@@ -226,6 +245,8 @@ struct Pending {
     /// A room game ticket (mode 3): the room code.
     room: Option<String>,
     client: ClientBuild,
+    /// `hello`: the chat identity key, if it sent a valid one.
+    chat_key: Option<[u8; 32]>,
 }
 
 /// The build a game says it is (`appVersion`, `platform`).
@@ -254,6 +275,21 @@ struct Online {
     code: String,
     /// Checked again on a room's ready: a game left running across a release is refused then.
     client: ClientBuild,
+    /// The chat identity key of the `hello`; without one the connection can't chat.
+    chat_key: Option<[u8; 32]>,
+}
+
+impl Online {
+    /// This connection as a chat member, if it can chat.
+    fn candidate(&self, conn: ConnId) -> Option<Candidate> {
+        Some(Candidate {
+            uid: self.user.uid,
+            conn,
+            display_name: self.user.display_name.clone(),
+            connect_code: self.code.clone(),
+            id_key: self.chat_key?,
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -296,6 +332,7 @@ pub struct Engine {
     ip_limiter: RateLimiter<IpAddr>,
     hello_limiter: RateLimiter<Uuid>,
     rooms: RoomBook,
+    chat: ChatBook,
     next_seq: u64,
     match_counter: u64,
     /// The newest build of each platform (`update_feed_dir`), and when it was read.
@@ -333,6 +370,7 @@ impl Engine {
         let hello_limiter = RateLimiter::new(&[cfg.hello_window]);
         let mut rooms_cfg = cfg.rooms.clone();
         rooms_cfg.rules = cfg.rulesets.for_mode(Mode::Direct);
+        let chat = ChatBook::new(cfg.chat.clone());
         Engine {
             cfg,
             secret,
@@ -345,6 +383,7 @@ impl Engine {
             ip_limiter,
             hello_limiter,
             rooms: RoomBook::new(rooms_cfg),
+            chat,
             next_seq: 1,
             match_counter: 0,
             feed: FeedVersions::default(),
@@ -414,6 +453,10 @@ impl Engine {
         self.rooms.room_count()
     }
 
+    pub fn chat_group_count(&self) -> usize {
+        self.chat.group_count()
+    }
+
     /// The snapshot the launcher sees: the online count and the public rooms.
     pub fn status(&self, wall: DateTime<Utc>) -> MmStatus {
         MmStatus {
@@ -437,6 +480,7 @@ impl Engine {
                         _ => {}
                     }
                     self.unindex(conn);
+                    self.chat.conn_gone(conn, &mut out);
                     self.rooms.conn_gone(now, conn, &mut out);
                     self.fail_room_tickets(&mut out);
                 }
@@ -445,7 +489,25 @@ impl Engine {
             Input::UserFetched { conn, seq, result } => self.on_user(now, wall, conn, seq, result, &mut out),
             Input::Tick => self.on_tick(now, wall, &mut out),
         }
+        self.sync_room_chat(&mut out);
         out
+    }
+
+    /// Keeps the chat group of every room whose players changed in step with it: the players
+    /// whose online connection can chat, in joining order (`room-<CODE>-<n>`).
+    fn sync_room_chat(&mut self, out: &mut Vec<Output>) {
+        for (code, serial) in self.rooms.take_changed() {
+            let wanted: Vec<Candidate> = self
+                .rooms
+                .players(&code, serial)
+                .into_iter()
+                .filter_map(|(conn, _)| match self.conns.get(&conn) {
+                    Some(Conn { state: State::Online(o), .. }) => o.candidate(conn),
+                    _ => None,
+                })
+                .collect();
+            self.chat.sync_room(&format!("room-{code}-{serial}"), &wanted, out);
+        }
     }
 
     fn send(out: &mut Vec<Output>, conn: ConnId, msg: &impl serde::Serialize) {
@@ -471,6 +533,7 @@ impl Engine {
 
     fn finish(&mut self, out: &mut Vec<Output>, conn: ConnId) {
         self.unindex(conn);
+        self.chat.conn_gone(conn, out);
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Done;
         }
@@ -544,8 +607,8 @@ impl Engine {
                 }
                 return self.on_hello(now, conn, *h, out);
             }
-            Ok(ClientMessage::Room(_)) => {
-                // Rooms need an online connection: `hello` first.
+            Ok(ClientMessage::Room(_) | ClientMessage::Chat(_)) => {
+                // Rooms and chat need an online connection: `hello` first.
                 return self.fail_online(out, conn, msg::NOT_LOGGED_IN);
             }
             Ok(ClientMessage::Unknown(kind)) => {
@@ -596,6 +659,10 @@ impl Engine {
                     display_name: o.user.display_name.clone(),
                     connect_code: o.code.clone(),
                 };
+                // Going to a room ends the match chat (the room's own group comes with the room).
+                if matches!(req, RoomRequest::Create { .. } | RoomRequest::Join { .. }) {
+                    self.chat.leave(o.user.uid, Some(GroupKind::Match), true, out);
+                }
                 self.rooms.request(now, conn, &who, req, out);
                 self.fail_room_tickets(out);
             }
@@ -603,6 +670,7 @@ impl Engine {
                 tracing::warn!(conn, "bad room request: {why}");
                 room_error(out, "invalid", msg::INVALID_REQUEST);
             }
+            Ok(ClientMessage::Chat(req)) => self.on_chat(now, conn, &o, req, out),
             Ok(ClientMessage::Hello(_)) => Self::send(out, conn, &hello_ok()),
             Ok(ClientMessage::CreateTicket(_)) => Self::send(out, conn, &CreateTicketResp::error(msg::INVALID_REQUEST)),
             Ok(ClientMessage::Unknown(kind)) => room_error(out, &kind, msg::UNKNOWN_REQUEST),
@@ -611,6 +679,28 @@ impl Engine {
                 room_error(out, "invalid", msg::INVALID_REQUEST);
             }
         }
+    }
+
+    /// A `chat-*` request on an online connection. Refusals are `chat-error`; the connection stays.
+    fn on_chat(
+        &mut self,
+        now: Instant,
+        conn: ConnId,
+        o: &Online,
+        req: Result<ChatRequest, (&'static str, String)>,
+        out: &mut Vec<Output>,
+    ) {
+        let req = match req {
+            Ok(req) => req,
+            Err((op, why)) => {
+                tracing::warn!(conn, "bad chat request: {why}");
+                return chat_error(out, conn, op, msg::CHAT_INVALID);
+            }
+        };
+        if o.chat_key.is_none() {
+            return chat_error(out, conn, req.op(), msg::CHAT_UPDATE);
+        }
+        self.chat.request(now, conn, o.user.uid, req, out);
     }
 
     /// `hello`: the same checks as a ticket (version, uid, play key), then the connection stays
@@ -642,6 +732,8 @@ impl Engine {
             hello: true,
             room: None,
             client,
+            // A malformed key is ignored: the connection works, it just can't chat.
+            chat_key: common::chat::parse_identity_key(&h.chat_key),
         };
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Validating(pending);
@@ -722,6 +814,7 @@ impl Engine {
             hello: false,
             room,
             client,
+            chat_key: None,
         };
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Validating(pending);
@@ -758,6 +851,8 @@ impl Engine {
         if !self.secret.verify(user.uid, user.play_key_version, &p.play_key) {
             return self.refuse(out, conn, msg::LOGIN_EXPIRED);
         }
+        // A new search (of any mode) ends the account's match chat; only a verified ticket can.
+        self.chat.leave(user.uid, Some(GroupKind::Match), true, out);
         // Only after the play key: otherwise anyone knowing a uid (opponents see it) could keep
         // that account from searching. A room's game ticket is accepted only from a member of a
         // starting room, so it needs no limit of its own (and must not be held up by one).
@@ -852,9 +947,12 @@ impl Engine {
             self.fail_online(out, old, msg::SIGNED_IN_ELSEWHERE);
         }
         self.fail_room_tickets(out);
-        tracing::info!(conn, %code, "online");
+        tracing::info!(conn, %code, chat = p.chat_key.is_some(), "online");
+        if let Some(key) = p.chat_key {
+            out.push(Output::RecordChatKey { uid: user.uid, key });
+        }
         if let Some(c) = self.conns.get_mut(&conn) {
-            c.state = State::Online(Online { user, code, client: p.client });
+            c.state = State::Online(Online { user, code, client: p.client, chat_key: p.chat_key });
         }
         Self::send(out, conn, &hello_ok());
     }
@@ -1152,6 +1250,17 @@ impl Engine {
             };
             Self::send(out, *conn, &resp);
         }
+        // The match's chat group: the players whose game is online with a chat key.
+        let chatters: Vec<Candidate> = entrants
+            .iter()
+            .filter_map(|(_, _, w)| {
+                self.conns.iter().find_map(|(id, c)| match &c.state {
+                    State::Online(o) if o.user.uid == w.user.uid => o.candidate(*id),
+                    _ => None,
+                })
+            })
+            .collect();
+        self.chat.start_match(&match_id, &chatters, out);
         out.push(Output::RecordMatch(MatchRecord {
             match_id,
             mode,
@@ -2415,5 +2524,381 @@ mod tests {
         let s = state_of(&out, 2);
         assert_eq!((s["host"].as_u64(), s["public"].as_bool()), (Some(2), Some(false)));
         assert!(h.e.status(Utc::now()).rooms.is_empty());
+    }
+
+    // Chat (`crate::chat`, `docs/chat-protocol.md`).
+
+    fn id_key(u: &MmUser) -> [u8; 32] {
+        common::chat::identity_public(&u.uid.as_bytes().repeat(2).try_into().unwrap())
+    }
+
+    impl Harness {
+        /// `hello` with this `chatKey` value (any JSON).
+        fn hello_key(&mut self, conn: ConnId, u: &MmUser, chat_key: Value) -> Vec<Output> {
+            let v = json!({
+                "type": "hello",
+                "user": {"uid": u.uid.to_string(), "playKey": self.secret.derive(u.uid, u.play_key_version)},
+                "appVersion": "3.4.0",
+                "chatKey": chat_key,
+            });
+            self.raw(conn, v.to_string().as_bytes())
+        }
+        /// An online game that can chat (its identity key derived from the uid).
+        fn chatter(&mut self, conn: ConnId, u: &MmUser) -> Vec<Output> {
+            self.add(u);
+            self.connect(conn, conn as u16);
+            let out = self.hello_key(conn, u, json!(hex::encode(id_key(u))));
+            assert_eq!(sent(&out, conn), vec![json!({"type": "hello-resp"})]);
+            out
+        }
+        /// `chat-key` with a made-up group key.
+        fn chat_key(&mut self, conn: ConnId, group: &str) -> Vec<Output> {
+            let v = json!({"type": "chat-key", "group": group, "kx": hex::encode([conn as u8; 32]), "sig": "ab".repeat(64)});
+            self.raw(conn, v.to_string().as_bytes())
+        }
+        /// `chat-send` with a box for each of `to`.
+        fn chat_send(&mut self, conn: ConnId, group: &str, to: &[&MmUser]) -> Vec<Output> {
+            let boxes: serde_json::Map<String, Value> = to
+                .iter()
+                .map(|u| (u.uid.to_string(), json!(hex::encode([conn as u8; common::chat::MIN_BOX_BYTES]))))
+                .collect();
+            let v = json!({"type": "chat-send", "group": group, "boxes": boxes});
+            self.raw(conn, v.to_string().as_bytes())
+        }
+    }
+
+    /// The last `chat-group` sent to `conn`.
+    fn chat_group(out: &[Output], conn: ConnId) -> Option<Value> {
+        sent(out, conn).into_iter().rev().find(|m| m["type"] == "chat-group")
+    }
+
+    fn chat_members(g: &Value) -> Vec<String> {
+        g["members"].as_array().unwrap().iter().map(|m| m["uid"].as_str().unwrap().to_string()).collect()
+    }
+
+    fn uid_list(us: &[&MmUser]) -> Vec<String> {
+        us.iter().map(|u| u.uid.to_string()).collect()
+    }
+
+    fn chat_errors(out: &[Output], conn: ConnId) -> Vec<(String, String)> {
+        sent(out, conn)
+            .into_iter()
+            .filter(|m| m["type"] == "chat-error")
+            .map(|m| (m["op"].as_str().unwrap().to_string(), m["error"].as_str().unwrap().to_string()))
+            .collect()
+    }
+
+    fn chat_msgs(out: &[Output], conn: ConnId) -> Vec<Value> {
+        sent(out, conn).into_iter().filter(|m| m["type"] == "chat-msg").collect()
+    }
+
+    fn null_group() -> Value {
+        json!({"type": "chat-group", "group": null})
+    }
+
+    #[test]
+    fn hello_chat_key_is_recorded_and_bad_keys_only_stop_chat() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b, c) = (user("AA#1", "a"), user("BB#1", "b"), user("CC#1", "c"));
+        let out = h.chatter(1, &a);
+        assert!(out.contains(&Output::RecordChatKey { uid: a.uid, key: id_key(&a) }));
+        // Malformed keys (not hex, not 32 bytes, not a point, a weak point, not a string) are
+        // ignored: the connection is online, it just can't chat.
+        let mut weak = [0u8; 32];
+        weak[0] = 1;
+        for (i, bad) in
+            [json!("zz".repeat(32)), json!("ab"), json!(hex::encode(weak)), json!(5), json!(null), json!(["x"])]
+                .into_iter()
+                .enumerate()
+        {
+            let conn = 10 + i as u64;
+            h.add(&b);
+            h.connect(conn, conn as u16);
+            let out = h.hello_key(conn, &b, bad.clone());
+            assert_eq!(sent(&out, conn), vec![json!({"type": "hello-resp"})], "{bad}");
+            assert!(!out.iter().any(|o| matches!(o, Output::RecordChatKey { .. })), "{bad}");
+            let out = h.chat_key(conn, "room-KFQB-1");
+            assert_eq!(chat_errors(&out, conn), [("chat-key".to_string(), msg::CHAT_UPDATE.to_string())]);
+            assert!(!disconnected(&out, conn));
+        }
+        // No key at all (an older build): the same.
+        h.add(&c);
+        h.connect(3, 3);
+        h.hello(3, &c, "3.4.0");
+        let out = h.chat_send(3, "room-KFQB-1", &[&a]);
+        assert_eq!(chat_errors(&out, 3), [("chat-send".to_string(), msg::CHAT_UPDATE.to_string())]);
+        // Malformed chat requests: chat-error, the connection stays.
+        let out = h.raw(1, br#"{"type":"chat-send","group":"room-KFQB-1","boxes":{"x":"00"}}"#);
+        assert_eq!(chat_errors(&out, 1), [("chat-send".to_string(), msg::CHAT_INVALID.to_string())]);
+        let out = h.raw(1, br#"{"type":"chat-bogus"}"#);
+        assert_eq!(chat_errors(&out, 1), [("invalid".to_string(), msg::CHAT_INVALID.to_string())]);
+        assert!(!disconnected(&out, 1));
+        // Chat before `hello`: like a room request, refused and closed.
+        h.connect(4, 4);
+        let out = h.raw(4, br#"{"type":"chat-leave","group":"room-KFQB-1"}"#);
+        assert_eq!(sent(&out, 4), vec![json!({"type": "error", "error": msg::NOT_LOGGED_IN})]);
+        assert!(disconnected(&out, 4));
+        // A ticket connection is no online connection either.
+        h.connect(5, 5);
+        h.ticket(5, &c, "AA#1");
+        let out = h.raw(5, br#"{"type":"chat-leave","group":"room-KFQB-1"}"#);
+        assert_eq!(sent(&out, 5)[0]["error"], msg::NOT_LOGGED_IN);
+    }
+
+    #[test]
+    fn room_chat_follows_joins_kicks_leaves_and_disconnects() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b, c, d) = (user("AA#1", "a"), user("BB#1", "b"), user("CC#1", "c"), user("DD#1", "d"));
+        for (conn, u) in [(1, &a), (2, &b), (3, &c)] {
+            h.chatter(conn, u);
+        }
+        // d's game is too old to chat.
+        h.add(&d);
+        h.connect(4, 4);
+        h.hello(4, &d, "3.4.0");
+
+        let out = h.room(1, json!({"type": "room-create"}));
+        let code = state_of(&out, 1)["code"].as_str().unwrap().to_string();
+        let id = format!("room-{code}-1");
+        let g = chat_group(&out, 1).unwrap();
+        assert_eq!((g["group"].as_str(), g["kind"].as_str()), (Some(id.as_str()), Some("room")));
+        assert_eq!(g["you"], a.uid.to_string());
+        assert_eq!(g["members"][0]["displayName"], "a");
+        assert_eq!(g["members"][0]["connectCode"], "AA#1");
+        assert_eq!(g["members"][0]["idKey"], hex::encode(id_key(&a)));
+
+        let out = h.room(2, json!({"type": "room-join", "code": code}));
+        for conn in [1, 2] {
+            assert_eq!(chat_members(&chat_group(&out, conn).unwrap()), uid_list(&[&a, &b]));
+        }
+        h.room(1, json!({"type": "room-slot", "slot": 3, "open": true}));
+        h.room(1, json!({"type": "room-slot", "slot": 4, "open": true}));
+        h.room(3, json!({"type": "room-join", "code": code}));
+        let out = h.room(4, json!({"type": "room-join", "code": code}));
+        assert!(chat_group(&out, 4).is_none(), "d can't chat: not a member");
+        assert!(out.iter().all(|o| !matches!(o, Output::Send { json, .. } if json.contains("chat-group"))));
+        assert_eq!(h.e.chat.members(&id), [a.uid, b.uid, c.uid]);
+
+        // Keys: every member gets the group again with the new key.
+        let out = h.chat_key(1, &id);
+        for conn in [1, 2, 3] {
+            let g = chat_group(&out, conn).unwrap();
+            assert_eq!(g["members"][0]["kx"], hex::encode([1u8; 32]));
+            assert_eq!(g["members"][0]["kxSig"], "ab".repeat(64));
+            assert!(g["members"][1]["kx"].is_null());
+        }
+        h.chat_key(2, &id);
+        h.chat_key(3, &id);
+        // A message: one box each, forwarded to its recipient only.
+        let out = h.chat_send(1, &id, &[&b, &c]);
+        for conn in [2, 3] {
+            let m = chat_msgs(&out, conn);
+            assert_eq!(m.len(), 1);
+            assert_eq!(m[0]["from"], a.uid.to_string());
+            assert_eq!(m[0]["group"], id.as_str());
+        }
+        assert!(sent(&out, 1).is_empty() && sent(&out, 4).is_empty());
+        let out = h.chat_send(1, &id, &[&d]);
+        assert_eq!(chat_errors(&out, 1), [("chat-send".to_string(), msg::CHAT_NOT_A_MEMBER.to_string())]);
+
+        // The host closes c's slot: c is out of the chat at once and gets nothing more.
+        let out = h.room(1, json!({"type": "room-slot", "slot": 3, "open": false}));
+        assert_eq!(chat_group(&out, 3).unwrap(), null_group());
+        assert_eq!(chat_members(&chat_group(&out, 2).unwrap()), uid_list(&[&a, &b]));
+        let out = h.chat_send(1, &id, &[&b, &c]);
+        assert_eq!(chat_errors(&out, 1), [("chat-send".to_string(), msg::CHAT_NOT_A_MEMBER.to_string())]);
+        assert!(chat_msgs(&out, 2).is_empty() && chat_msgs(&out, 3).is_empty());
+        let out = h.chat_key(3, &id);
+        assert_eq!(chat_errors(&out, 3), [("chat-key".to_string(), msg::CHAT_NOT_IN_GROUP.to_string())]);
+
+        // b leaves: told; a's group shrinks. A room's group ignores chat-leave.
+        assert!(h.raw(1, json!({"type": "chat-leave", "group": id}).to_string().as_bytes()).is_empty());
+        let out = h.room(2, json!({"type": "room-leave"}));
+        assert_eq!(chat_group(&out, 2).unwrap(), null_group());
+        assert_eq!(chat_members(&chat_group(&out, 1).unwrap()), uid_list(&[&a]));
+        // b comes back: a new member without a key, at the end.
+        let out = h.room(2, json!({"type": "room-join", "code": code}));
+        let g = chat_group(&out, 1).unwrap();
+        assert_eq!(chat_members(&g), uid_list(&[&a, &b]));
+        assert!(g["members"][1]["kx"].is_null());
+        // a's game closes: b is alone in the chat; then b's: the room keeps d, the chat is gone.
+        let out = h.input(Input::Disconnected { conn: 1 });
+        assert!(chat_group(&out, 1).is_none());
+        assert_eq!(chat_members(&chat_group(&out, 2).unwrap()), uid_list(&[&b]));
+        h.input(Input::Disconnected { conn: 2 });
+        assert_eq!(h.e.chat_group_count(), 0);
+        assert_eq!(h.e.room_count(), 1);
+        // A new room is another group even with a code used before.
+        h.input(Input::Disconnected { conn: 4 });
+        let out = h.room(3, json!({"type": "room-create"}));
+        let code2 = state_of(&out, 3)["code"].as_str().unwrap().to_string();
+        assert_eq!(chat_group(&out, 3).unwrap()["group"], format!("room-{code2}-2"));
+    }
+
+    #[test]
+    fn a_second_game_replaces_the_first_in_the_chat() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b) = (user("AA#1", "a"), user("BB#1", "b"));
+        h.chatter(1, &a);
+        h.chatter(2, &b);
+        let out = h.room(1, json!({"type": "room-create"}));
+        let code = state_of(&out, 1)["code"].as_str().unwrap().to_string();
+        h.room(2, json!({"type": "room-join", "code": code}));
+        // a's second game: the first leaves the room and the chat; a is no member any more.
+        h.connect(5, 5);
+        let out = h.hello_key(5, &a, json!(hex::encode(id_key(&a))));
+        assert!(disconnected(&out, 1));
+        assert_eq!(chat_members(&chat_group(&out, 2).unwrap()), uid_list(&[&b]));
+        assert!(chat_group(&out, 5).is_none());
+        assert_eq!(h.e.chat.group_of(a.uid), None);
+    }
+
+    #[test]
+    fn matches_make_a_chat_group_and_a_new_search_ends_it() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b, c) = (user("AA#1", "a"), user("BB#1", "b"), user("CC#1", "c"));
+        h.chatter(1, &a);
+        h.chatter(2, &b);
+        h.add(&c);
+        // The tickets come from other connections (the games' P2P ports).
+        h.connect(11, 11);
+        h.connect(12, 12);
+        h.ticket(11, &a, "BB#1");
+        let out = h.ticket(12, &b, "AA#1");
+        let match_id = sent(&out, 12).into_iter().find(|m| m["type"] == "get-ticket-resp").unwrap()["matchId"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        for (conn, me) in [(1, &a), (2, &b)] {
+            let g = chat_group(&out, conn).unwrap();
+            assert_eq!((g["group"].as_str(), g["kind"].as_str()), (Some(match_id.as_str()), Some("match")));
+            assert_eq!(g["you"], me.uid.to_string());
+            assert_eq!(chat_members(&g).len(), 2);
+        }
+        h.chat_key(2, &match_id);
+        let out = h.chat_send(1, &match_id, &[&b]);
+        assert_eq!(chat_msgs(&out, 2).len(), 1);
+        // a searches again (Slippi's requeue, or a new search): a's match chat ends; b stays alone.
+        h.now += Duration::from_secs(3);
+        h.connect(13, 13);
+        let out = h.ticket(13, &a, "CC#1");
+        assert_eq!(chat_group(&out, 1).unwrap(), null_group());
+        assert_eq!(chat_members(&chat_group(&out, 2).unwrap()), uid_list(&[&b]));
+        // b sends chat-leave (Dolphin's session ended): the group is gone.
+        let out = h.raw(2, json!({"type": "chat-leave", "group": match_id}).to_string().as_bytes());
+        assert_eq!(chat_group(&out, 2).unwrap(), null_group());
+        assert_eq!(h.e.chat_group_count(), 0);
+
+        // Only the players with an online connection that can chat are members.
+        h.connect(14, 14);
+        let out = h.ticket(14, &c, "AA#1");
+        let g = chat_group(&out, 1).unwrap();
+        assert_eq!(g["kind"], "match");
+        assert_eq!(chat_members(&g), uid_list(&[&a]));
+        // Going to a room ends it too.
+        let out = h.room(1, json!({"type": "room-create"}));
+        let g = chat_group(&out, 1).unwrap();
+        assert_eq!(g["kind"], "room");
+        assert_eq!(sent(&out, 1).iter().filter(|m| **m == null_group()).count(), 1);
+        assert_eq!(h.e.chat_group_count(), 1);
+    }
+
+    #[test]
+    fn unranked_matches_chat_and_room_games_make_no_group() {
+        let mut h = Harness::new(EngineConfig { rulesets: Rulesets::load(None).unwrap(), ..Default::default() });
+        let (a, b) = (user("AA#1", "a"), user("BB#1", "b"));
+        h.chatter(1, &a);
+        h.chatter(2, &b);
+        h.connect(11, 11);
+        h.connect(12, 12);
+        h.unranked(11, &a);
+        let out = h.unranked(12, &b);
+        let g = chat_group(&out, 1).unwrap();
+        assert!(g["group"].as_str().unwrap().starts_with("mode.unranked-"));
+        assert_eq!(chat_members(&g).len(), 2);
+
+        // A room's game: the room's group stays, no match group.
+        let out = h.room(1, json!({"type": "room-create"}));
+        let code = state_of(&out, 1)["code"].as_str().unwrap().to_string();
+        let out = h.room(2, json!({"type": "room-join", "code": code}));
+        let room_id = format!("room-{code}-1");
+        assert_eq!(chat_group(&out, 2).unwrap()["group"], room_id.as_str());
+        h.room(1, json!({"type": "room-ready", "ready": true}));
+        h.room(2, json!({"type": "room-ready", "ready": true}));
+        h.now += Duration::from_secs(3);
+        h.connect(21, 21);
+        h.connect(22, 22);
+        let mut out = h.raw(21, h.ticket_json(&a, &code, 3).to_string().as_bytes());
+        out.extend(h.raw(22, h.ticket_json(&b, &code, 3).to_string().as_bytes()));
+        assert!(sent(&out, 21).iter().any(|m| m["type"] == "get-ticket-resp" && m["matchId"].is_string()));
+        assert!(chat_group(&out, 1).is_none() && chat_group(&out, 2).is_none(), "nothing changed in the chat");
+        assert_eq!(h.e.chat_group_count(), 1);
+        assert_eq!(h.e.chat.group_of(a.uid), Some(room_id.as_str()));
+        // The ticket connections closing does not touch it either.
+        h.input(Input::Disconnected { conn: 21 });
+        assert_eq!(h.e.chat.members(&room_id), [a.uid, b.uid]);
+    }
+
+    #[test]
+    fn chat_refusals_rate_limit_and_reports() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b) = (user("AA#1", "a"), user("BB#1", "b"));
+        h.chatter(1, &a);
+        h.chatter(2, &b);
+        let out = h.room(1, json!({"type": "room-create"}));
+        let code = state_of(&out, 1)["code"].as_str().unwrap().to_string();
+        h.room(2, json!({"type": "room-join", "code": code}));
+        let id = format!("room-{code}-1");
+        let refused = |out: &[Output], why: &str| {
+            assert_eq!(chat_errors(out, 1), [("chat-send".to_string(), why.to_string())]);
+            assert!(chat_msgs(out, 2).is_empty());
+        };
+        // b has no key yet; to oneself; another group; a box that is too long or no hex.
+        refused(&h.chat_send(1, &id, &[&b]), msg::CHAT_NO_KEY);
+        h.chat_key(2, &id);
+        refused(&h.chat_send(1, &id, &[&a]), msg::CHAT_NOT_A_MEMBER);
+        refused(&h.chat_send(1, "room-ZZZZ-1", &[&b]), msg::CHAT_NOT_IN_GROUP);
+        let long = json!({"type": "chat-send", "group": id, "boxes": {b.uid.to_string(): "00".repeat(513)}});
+        refused(&h.raw(1, long.to_string().as_bytes()), msg::CHAT_INVALID);
+        let not_hex = json!({"type": "chat-send", "group": id, "boxes": {b.uid.to_string(): "zz".repeat(200)}});
+        refused(&h.raw(1, not_hex.to_string().as_bytes()), msg::CHAT_INVALID);
+        let none = json!({"type": "chat-send", "group": id, "boxes": {}});
+        refused(&h.raw(1, none.to_string().as_bytes()), msg::CHAT_INVALID);
+        // 5 in 5 s, per account.
+        for _ in 0..5 {
+            assert_eq!(chat_msgs(&h.chat_send(1, &id, &[&b]), 2).len(), 1);
+        }
+        refused(&h.chat_send(1, &id, &[&b]), msg::CHAT_TOO_FAST);
+        h.now += Duration::from_secs(5);
+        assert_eq!(chat_msgs(&h.chat_send(1, &id, &[&b]), 2).len(), 1);
+
+        // A report: answered, handed to the database task.
+        let sig = "cd".repeat(64);
+        let report = json!({"type": "chat-report", "group": id, "from": b.uid.to_string(), "reason": "spam",
+                            "messages": [{"seq": 1, "text": "hi", "sig": sig}]});
+        let out = h.raw(1, report.to_string().as_bytes());
+        assert_eq!(sent(&out, 1), vec![json!({"type": "chat-reported", "from": b.uid.to_string()})]);
+        let rec = out
+            .iter()
+            .find_map(|o| match o {
+                Output::ChatReport(r) => Some(r.clone()),
+                _ => None,
+            })
+            .unwrap();
+        assert_eq!(
+            (rec.reporter, rec.reported, rec.group.as_str(), rec.reason.as_str()),
+            (a.uid, b.uid, id.as_str(), "spam")
+        );
+        assert_eq!(rec.messages[0].text, "hi");
+        let mut myself = report.clone();
+        myself["from"] = json!(a.uid.to_string());
+        let out = h.raw(1, myself.to_string().as_bytes());
+        assert_eq!(chat_errors(&out, 1), [("chat-report".to_string(), msg::CHAT_INVALID.to_string())]);
+        for _ in 0..4 {
+            h.raw(1, report.to_string().as_bytes());
+        }
+        let out = h.raw(1, report.to_string().as_bytes());
+        assert_eq!(chat_errors(&out, 1), [("chat-report".to_string(), msg::CHAT_REPORTS_TOO_OFTEN.to_string())]);
+        assert!(!out.iter().any(|o| matches!(o, Output::ChatReport(_))));
     }
 }

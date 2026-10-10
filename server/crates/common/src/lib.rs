@@ -6,6 +6,7 @@
 //! open-source reimplementation of the Slippi matchmaking server. See the
 //! module docs for what was taken.
 
+pub mod chat;
 pub mod codes;
 pub mod db;
 pub mod net;

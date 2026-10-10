@@ -224,6 +224,10 @@ pub enum ClientMessage {
     Hello(Box<crate::rooms::Hello>),
     /// A `room-*` request, or why it could not be read.
     Room(Result<crate::rooms::RoomRequest, String>),
+    /// A `chat-*` request (`docs/chat-protocol.md`), or why it could not be read: the `op` to
+    /// answer in `chat-error` (the message type, `invalid` for an unknown `chat-*` type) and the
+    /// reason.
+    Chat(Result<crate::chat::ChatRequest, (&'static str, String)>),
     /// Valid JSON object with a `type` we do not handle.
     Unknown(String),
 }
@@ -253,6 +257,9 @@ pub fn parse_client_message(data: &[u8]) -> Result<ClientMessage, ParseError> {
             .map(|h| ClientMessage::Hello(Box::new(h)))
             .map_err(|e| ParseError::Malformed(crate::rooms::HELLO, e.to_string())),
         k if k.starts_with("room-") => Ok(ClientMessage::Room(crate::rooms::RoomRequest::parse(k, &value))),
+        k if k.starts_with("chat-") => {
+            Ok(ClientMessage::Chat(crate::chat::ChatRequest::parse(k, &value).map_err(|e| (crate::chat::op_of(k), e))))
+        }
         _ => Ok(ClientMessage::Unknown(kind)),
     }
 }
@@ -342,6 +349,16 @@ mod tests {
             assert!(parse_client_message(c).is_err(), "{:?}", String::from_utf8_lossy(c));
         }
         assert!(matches!(parse_client_message(br#"{"type":"get-ticket"}"#), Ok(ClientMessage::Unknown(_))));
+    }
+
+    #[test]
+    fn chat_requests_are_routed() {
+        let ok = br#"{"type":"chat-leave","group":"room-KFQB-1"}"#;
+        assert!(matches!(parse_client_message(ok), Ok(ClientMessage::Chat(Ok(_)))));
+        let bad = br#"{"type":"chat-leave","group":"no spaces"}"#;
+        assert!(matches!(parse_client_message(bad), Ok(ClientMessage::Chat(Err(("chat-leave", _))))));
+        let unknown = br#"{"type":"chat-bogus"}"#;
+        assert!(matches!(parse_client_message(unknown), Ok(ClientMessage::Chat(Err(("invalid", _))))));
     }
 
     #[test]

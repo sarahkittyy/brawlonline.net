@@ -79,6 +79,22 @@ pub const PLAYER_LEFT: &str = "A player left the room.";
 /// The same account opened a newer online connection (another game).
 pub const SIGNED_IN_ELSEWHERE: &str = "Signed in from another game.";
 
+/// Chat (`docs/chat-protocol.md`): a `chat-*` request from a connection whose `hello` had no
+/// (valid) identity key.
+pub const CHAT_UPDATE: &str = "Update the game to chat.";
+/// Chat: the request names a group the sender is not in.
+pub const CHAT_NOT_IN_GROUP: &str = "You are not in this chat.";
+/// Chat: a box addressed to the sender or to someone who is not in the group.
+pub const CHAT_NOT_A_MEMBER: &str = "That player isn't in this chat.";
+/// Chat: a box addressed to a member that has not sent its group key yet.
+pub const CHAT_NO_KEY: &str = "That player can't read chat yet.";
+/// Chat: a request that does not parse (bad hex, lengths, uids, a report about oneself).
+pub const CHAT_INVALID: &str = "Invalid chat message.";
+/// Chat: more than 5 messages in 5 s or 30 in a minute.
+pub const CHAT_TOO_FAST: &str = "You're sending messages too fast.";
+/// Chat: more than 5 reports an hour.
+pub const CHAT_REPORTS_TOO_OFTEN: &str = "Too many reports. Try later.";
+
 /// Room status line: only the host is in the room. The code is already in the top window, so the
 /// line stays short enough for the status line's large one-line text next to the room's buttons.
 pub const ROOM_WAITING: &str = "Waiting for players";
@@ -203,6 +219,13 @@ mod tests {
             NO_ROOMS_LEFT.to_string(),
             PLAYER_LEFT.to_string(),
             SIGNED_IN_ELSEWHERE.to_string(),
+            CHAT_UPDATE.to_string(),
+            CHAT_NOT_IN_GROUP.to_string(),
+            CHAT_NOT_A_MEMBER.to_string(),
+            CHAT_NO_KEY.to_string(),
+            CHAT_INVALID.to_string(),
+            CHAT_TOO_FAST.to_string(),
+            CHAT_REPORTS_TOO_OFTEN.to_string(),
             ROOM_WAITING.to_string(),
             waiting_for_players(3, 4),
             waiting_on(&["WWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWW"]),

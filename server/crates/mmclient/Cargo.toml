@@ -11,6 +11,7 @@ publish.workspace = true
 common.workspace = true
 anyhow.workspace = true
 clap.workspace = true
+hex.workspace = true
 rand.workspace = true
 rusty_enet.workspace = true
 serde.workspace = true
