@@ -340,17 +340,21 @@ namespace OnlineMatch {
         bool test = (dbg.cfg & PPOM::CFG_TEST_DISCONNECT) != 0;
         if (test && s_discFrames >= DISC_END_FRAMES) s_discFrames = -1;   // a new test
         if (s_discFrames >= 0) return;   // counted in onFrameDrawn
+        const PPOM::Local& lo = PPOM::g_block.local;
         if (!test) {
-            if (!g_onlineCss || !g_onlineMatchGame || !PPOM::g_block.local.disconnected) return;
+            if (!g_onlineCss || !g_onlineMatchGame || !(lo.disconnected || lo.desynced)) return;
         }
         dbg.cfg &= ~(u32)PPOM::CFG_TEST_DISCONNECT;
         // Slippi (design 5.6): the error sound, DISCONNECTED in red at the top, the game ends as
         // an LRAS-type end (no "GAME!") after a 90-frame end screen, then the CSS (state 10,
-        // afterMatch) without a results screen.
+        // afterMatch) without a results screen. A desync (Dolphin ended the session because the
+        // machines' game states differ) ends the same way with DESYNC DETECTED, as Slippi's hard
+        // desync does; the connection stays, so the CSS is ready for the next game.
+        bool desync = !test && !lo.disconnected;
         s_discFrames = 0;
         playSE(3);
-        MatchHud::show(true);
-        dbg.scratch[10] |= 0x10000;
+        MatchHud::show(true, desync);
+        dbg.scratch[10] |= desync ? 0x100000 : 0x10000;
     }
 
     // Every drawn frame (MatchHud's frame hook in gfApplication's loop): the 90-frame end screen,

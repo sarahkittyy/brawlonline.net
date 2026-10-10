@@ -1,5 +1,7 @@
 // "DISCONNECTED" in the match HUD (Slippi StartEngineLoop.asm:33-39: red FF0000FF, centred near
 // the top, until the scene ends). docs/game-code.md "Online matches", the in-match disconnect.
+// "DESYNC DETECTED" the same way when the session ended the match on a desync (Slippi
+// StartEngineLoop.asm:42-48).
 // And, in every online match, each player's account name under their damage, as Slippi shows the
 // display name under the percent (Brawl's HUD has no name there; its name tags float over the
 // fighters). The names come from SESSION, the same on both machines; drawing them changes nothing
@@ -34,7 +36,7 @@ namespace MatchHud {
     static u8 s_cw[0x80] __attribute__((aligned(8)));
     static bool s_constructed = false;
     static bool s_on = false;
-    static const char* s_text = "DISCONNECTED";
+    static bool s_desync = false;
 
     typedef void (*CwCtorFn)(void* cw);
     typedef void (*CwSetFontFn)(void* cw, int kind);
@@ -75,7 +77,7 @@ namespace MatchHud {
     static void setF32(u32 off, float v) { *(float*)(s_cw + off) = v; }
     static float getF32(u32 off) { return *(float*)(s_cw + off); }
 
-    void show(bool on) { s_on = on; }
+    void show(bool on, bool desync) { s_on = on; s_desync = desync; }
     bool shown() { return s_on; }
 
     // Width of `text` as ms::CharWriter::Print advances it (proportional mode):
@@ -171,14 +173,15 @@ namespace MatchHud {
         if (names) drawNames();
         if (!s_on) return;
         // Red (Slippi FF0000FF), opaque, with a thin black edge so it reads on any stage.
+        const char* s = s_desync ? "DESYNC DETECTED" : "DISCONNECTED";
         u16 text[16];
         int n = 0;
-        for (; s_text[n] && n < 15; n++) text[n] = (u8)s_text[n];
+        for (; s[n] && n < 15; n++) text[n] = (u8)s[n];
         text[n] = 0;
         printCentred(text, SCREEN_W * 0.5f, TOP, SCALE, 0xFF0000FF);
-        // Tell Dolphin the game shows it (LOCAL, not part of the rolled-back state): its red OSD
-        // message is only the fallback for a game that cannot.
-        PPOM::g_block.local.hudDisconnected = 1;
+        // Tell Dolphin the game shows DISCONNECTED (LOCAL, not part of the rolled-back state):
+        // its red OSD message is only the fallback for a game that cannot.
+        if (!s_desync) PPOM::g_block.local.hudDisconnected = 1;
     }
 
     // Inline hook at 0x8001792C (gfApplication frame loop, `addi r3, r30, 0x118`).

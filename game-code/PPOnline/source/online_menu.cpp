@@ -173,14 +173,14 @@ namespace OnlineMenu {
     // P+'s Code Menu opens with L + R + D-pad Down on the CSS, the stage select and in a match.
     // It holds settings that change the match (Special Modes, per-player codes incl. a character
     // switch to Giga Bowser / Wario-Man, Debug Mode...), none of which is the player's choice
-    // online. Its control code (P+ "Control Code Menu", a hook at 0x80029574 inside the pad
-    // update, before our tick) reads the pads itself and opens the menu in the same pass: state
-    // word 0x804E0034 = 4, the menus' freeze flag 0x805B8A08 = 1 (its old value kept at
-    // 0x804E006C), 0x805B6DF8 kept at 0x804E0074. Anywhere in the online flow (CSS, stage select,
-    // match), a menu that has just opened is closed again right after the pad update, before
-    // anything is drawn, the way its B closes it (found live: the freeze flag and 0x805B6DF8 put
-    // back, 0x804E0074 cleared, state 0). Only its open sound is heard. (A Code Menu opened
-    // offline keeps its settings; docs/game-code.md §6.)
+    // online. Its control code (P+ "Control Code Menu", a hook at 0x80029574, the end of
+    // gfPadSystem::updateLow on the pad thread) reads the pads itself and opens the menu in the
+    // same pass: state word 0x804E0034 = 4, the menus' freeze flag 0x805B8A08 = 1 (its old value
+    // kept at 0x804E006C), 0x805B6DF8 kept at 0x804E0074. Online its activation is OFF
+    // (codeMenuOff), so it does not open. Should one open anyway, anywhere in the online flow
+    // (CSS, stage select, match), it is closed again on the main loop's next tick, the way its B
+    // closes it (found live: the freeze flag and 0x805B6DF8 put back, 0x804E0074 cleared,
+    // state 0). (A Code Menu opened offline keeps its settings; docs/game-code.md §6.)
     static void blockCodeMenu()
     {
         volatile u32* state = (volatile u32*)0x804E0034;
@@ -543,6 +543,27 @@ namespace OnlineMenu {
         return n;
     }
 
+    // P+'s "Code Menu Activation" line (0 Default, 1 PM 3.6: not in a match, 2 OFF) is the only
+    // thing that stops the Code Menu from opening. Its control code runs at the end of
+    // gfPadSystem::updateLow (0x80029574), on Brawl's pad thread, and reads this machine's own
+    // controller: when it opens it writes the menus' freeze flag (0x805B8A08), its state and
+    // the held buttons at a time that is not tied to the game frame. blockCodeMenu closes it on
+    // the next tick of the main loop, but a game frame or a savestate of the rollback session
+    // that falls in between sees it on this machine only: spamming L + R + D-pad Down desynced
+    // online matches under rollback (test_code_menu_combo_spam_keeps_the_match_in_sync). With
+    // the line OFF its control code never opens it (Net-CodeMenu.asm, loc_0x145). Online the
+    // line is OFF; the player's own value comes back with the other lines (restoreRules).
+    static void codeMenuOff()
+    {
+        static const char ACTIVATION[] = "Code Menu Activation";
+        for (u32 p = CODE_MENU; p + 0x20 <= CODE_MENU + CODE_MENU_SIZE; p += 4) {
+            if (!codeMenuLine(p) || ((u8*)p)[2] != 0) continue;
+            if (strncmp((const char*)p + ((u8*)p)[6], ACTIVATION, sizeof(ACTIVATION) - 1) != 0) continue;
+            *(u32*)(p + 8) = 2;
+            return;
+        }
+    }
+
     // Every frame until the Code Menu is loaded (at boot, before any match): its defaults.
     static void readCodeMenuDefaults()
     {
@@ -581,7 +602,7 @@ namespace OnlineMenu {
     // bytes P+'s code writes (P+'s competitive defaults above), pause only in Direct, item
     // frequency 0 with P+'s default item switch, hazards on (also for Direct's loser's pick: its
     // hazard toggle is not part of the setup the other machine gets), every Code Menu line at
-    // its default. Written when the Wi-Fi
+    // its default but its activation, which is OFF (codeMenuOff). Written when the Wi-Fi
     // sequence starts (in place of Brawl's Wi-Fi rules) and again by every online match setup,
     // right before sqVsMelee's setup reads them (OnlineMatch::setupMatch), so a setting changed
     // in between (or left over from offline play) never reaches an online match.
@@ -606,6 +627,7 @@ namespace OnlineMenu {
         u8* st = stageSelData();
         if (st) st[HAZARD] = 0;                            // hazards on
         int lines = codeMenuLines(1);                      // every Code Menu line at its default
+        codeMenuOff();                                     // except its activation: OFF
         PPOM::g_block.debug.scratch[3] = ((u32)lines << 16) | ((PPOM::g_block.debug.scratch[3] + 1) & 0xFFFF);
     }
 
@@ -1073,6 +1095,7 @@ namespace OnlineMenu {
     void enter(int mode)
     {
         saveRules();
+        codeMenuOff();
         s.mode = mode;
         s.phase = PH_IDLE;
         s.rankText[0] = 0;
@@ -1382,9 +1405,8 @@ namespace OnlineMenu {
         // a disconnect, which Dolphin reports after the rollback session has ended).
         if (strcmp(scene, "scMelee") == 0) {
             s.stepFloor = s.stepSeq;
-            // The Code Menu opens from this machine's own controller, not the session's inputs:
-            // only the player who pressed it sees it open, and it is closed in the same frame,
-            // before the frame's game code runs, so the match state never sees it.
+            // The Code Menu's activation is OFF online (codeMenuOff), so it does not open; this
+            // closes one that opened anyway (a menu file without the line).
             if (g_onlineCss && s.mode >= 0) blockCodeMenu();
             OnlineMatch::tickMatch();
             return;

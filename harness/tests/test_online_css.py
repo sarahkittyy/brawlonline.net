@@ -32,8 +32,8 @@ from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
 
 from test_online import _wait
-from test_online_game import (ROOT, Game, _boot, _connected_direct, backend,  # noqa: F401
-                              online_set, ppom)
+from test_online_game import (ROOT, Game, _boot, _connected_direct, _p2p_through_netsim,  # noqa: F401
+                              backend, online_set, ppom)
 from ppharness import brawl as B
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
@@ -190,7 +190,8 @@ def test_online_css_settings_are_locked(backend: OnlineBackend,
                                         gpu_backend: str) -> None:
     """On the online CSS the ITEM and STAGE buttons are hidden and A where they are opens
     nothing (the item switch, the random stage and hazard switches stay as they are); L+R+Down
-    does not open P+'s Code Menu. Checked on the Direct and the Unranked CSS."""
+    does not open P+'s Code Menu (its activation is OFF online). Checked on the Direct and the
+    Unranked CSS."""
     u = backend.create_user("nils", "NILS")
     g = _boot(dolphin, "game-l", backend, u, gpu_backend, "css-locked", "record")
     _shots("css-locked", g)
@@ -219,7 +220,9 @@ def test_online_css_settings_are_locked(backend: OnlineBackend,
         g.c.pad_script(0, CODE_MENU_COMBO)
         g.steps("wait 40")
         assert _u(g.c, CODE_MENU_STATE) != 4, "P+'s Code Menu opened on the online CSS"
-        assert _scratch(g, SCR_CSS) >> 24 > refused, "the combination did not reach the menu"
+        # Its activation is OFF online: it never opened, so the plugin's fallback closed nothing.
+        assert _u(g.c, _code_menu_value(g, CODE_MENU_ACTIVATION)) == CODE_MENU_OFF
+        assert _scratch(g, SCR_CSS) >> 24 == refused, "the Code Menu opened and was closed"
         g.shot(f"{mode}-04-code-menu-combo")
         # The CSS is not left frozen (the Code Menu stops the menus while it is open).
         x0 = struct.unpack(">f", g.c.read_mem(_hand(g) + HAND_X, 4))[0]
@@ -304,9 +307,11 @@ def test_stale_settings_do_not_reach_the_match(backend: OnlineBackend,
         g.c.write_mem(st + 0x25, b"\x01")
         rule = m.chain(B.GAME_GLOBAL_PTR, B.GG_SET_RULE)
         g.c.write_mem(rule + 4, b"\x01")
-        # P+'s Code Menu: Big Head Mode on, hitstun x0.5, P1 infinite shield.
+        # P+'s Code Menu: Big Head Mode on, hitstun x0.5, P1 infinite shield, and its
+        # activation "PM 3.6" (not in a match).
         for name, value in CODE_MENU_STALE.items():
             g.c.write_mem(_code_menu_value(g, name), value)
+        g.c.write_mem(_code_menu_value(g, CODE_MENU_ACTIVATION), struct.pack(">I", 1))
         stale.update(record=g.c.read_mem(RECORD_MENU, 0x10), hazard=1, stocks=1,
                      code_menu={k: v for k, (v, _d) in _code_menu_values(g).items()})
 
@@ -342,6 +347,9 @@ def test_stale_settings_do_not_reach_the_match(backend: OnlineBackend,
         k = next(k for k in fa["code_menu"] if k.startswith(name))
         assert fa["code_menu"][k] == 0 or name == "Hitstun Multiplier", (k, fa["code_menu"][k])
         assert struct.pack(">I", fa["code_menu"][k]) != CODE_MENU_STALE[name], k
+    # Its activation is OFF online, whatever A had (codeMenuOff).
+    k = next(k for k in fa["code_menu"] if k.startswith(CODE_MENU_ACTIVATION))
+    assert fa["code_menu"][k] == CODE_MENU_OFF, (k, fa["code_menu"][k])
     assert cks["compared"] > 100 and cks["mismatches"] == 0, cks
     # A's own settings are back once it leaves for the menus: B goes, A's match ends (the
     # disconnect flow), A holds B on its CSS.
@@ -357,6 +365,7 @@ def test_stale_settings_do_not_reach_the_match(backend: OnlineBackend,
 
 
 CODE_MENU_BASE, CODE_MENU_SIZE = 0x804E0000, 0x2520
+CODE_MENU_ACTIVATION, CODE_MENU_OFF = "Code Menu Activation", 2   # Default, PM 3.6, OFF
 CODE_MENU_STALE = {"Big Head Mode": struct.pack(">I", 1),
                    "Hitstun Multiplier": struct.pack(">f", 0.5),
                    "Infinite Shield": struct.pack(">I", 1)}
@@ -465,10 +474,10 @@ def test_no_code_menu_and_no_hold_shield_forms_in_online_match(
     """A Direct match where both panels were on P+'s hold-shield slots (A Giga Bowser, B
     Wario-Man) is played as Bowser vs Wario. In the match, L + R + D-pad Down on either side
     (playing, and paused) does not open P+'s Code Menu. It reads the player's own controller, so
-    it only ever opens on that player's machine (the plugin before this change showed it there,
-    mid-match); it is closed again in the frame it opens, the other machine never sees it, the
-    match keeps running, Debug Mode and its displays stay off and the confirmed frames of both
-    machines agree."""
+    it only ever opened on that player's machine (the plugin before 19cf97db showed it there,
+    mid-match); its activation is OFF online, so it does not open at all (the plugin's fallback
+    close is never needed), the match keeps running, Debug Mode and its displays stay off and
+    the confirmed frames of both machines agree."""
     def on_slot(slot: int, name: str) -> Callable[[Game], None]:
         def fn(g: Game) -> None:
             B.css_pick_character(g.c, 0, B.CSS_ID[name])
@@ -505,9 +514,9 @@ def test_no_code_menu_and_no_hold_shield_forms_in_online_match(
             for g in (a, b):
                 assert _u(g.c, CODE_MENU_STATE) != 4, f"{what}: the Code Menu is open on {g.name}"
                 assert not _banned(g, DEBUG_STATE), (what, g.name, _banned(g, DEBUG_STATE))
-            # The pressing player's machine closed the menu it opened; the other saw nothing.
+            # It never opened: the fallback close did nothing on either machine.
             now = {g.name: (_scratch(g, SCR_CSS) >> 24) - r for g, r in zip((a, b), refused)}
-            assert now[who.name] > 0 and sum(now.values()) == now[who.name], (what, now)
+            assert sum(now.values()) == 0, (what, now)
             who.shot(f"02-{what}-code-menu-combo")
             if paused:
                 who.steps("tap START 8", "wait 40")
@@ -516,6 +525,56 @@ def test_no_code_menu_and_no_hold_shield_forms_in_online_match(
     a.steps("wait 300")
     cks = _confirm_checksums(a, b)
     assert cks["compared"] > 100 and cks["mismatches"] == 0, cks
+
+
+# B turns every 7 frames for the whole check: each turn is an input A's machine mispredicts, so
+# under latency both machines roll back and resimulate frames while A holds the combo.
+WALK = [{"main": (40, 128), "hold": 7}, {"main": (216, 128), "hold": 7}]
+# A taps the combo, then holds it (it opens again in every frame it is held and closed).
+COMBO_SPAM = (CODE_MENU_COMBO + [{"hold": 10}]) * 20 + [
+    {"buttons": ["L", "R", "DDOWN"], "l": 255, "r": 255, "hold": 120}, {"hold": 10}]
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("preset", ["lan", "bad_wifi"])
+def test_code_menu_combo_spam_keeps_the_match_in_sync(
+        backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str,
+        preset: str) -> None:
+    """A spams and holds L + R + D-pad Down in a Direct match while B moves (a player spamming
+    it desynced a real match). P+'s Code Menu control code runs at the end of
+    gfPadSystem::updateLow, on Brawl's pad thread, and reads A's own controller: its open (the
+    menus' freeze flag, its state and buttons) lands on A's machine only, at a time not tied to
+    the game frame or to the session's savestates. Online, the Code Menu Activation line is OFF,
+    so it never opens. `bad_wifi`: the P2P traffic goes through netsim (_p2p_through_netsim), so
+    both machines roll back while A holds the combo. The confirmed frames must agree."""
+    sims, inis = _p2p_through_netsim(preset) if preset != "lan" else ([], (None, None))
+    try:
+        a, b, _ua, _ub = _connected_direct(backend, dolphin, gpu_backend, f"code-menu-spam-{preset}",
+                                           ("ines", "otto"), stocks=4, dolphin_ini=inis)
+        online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)),
+                        240, "the match to run on both")
+        a.steps("wait 60")
+        refused = _scratch(a, SCR_CSS) >> 24
+        b.c.pad_script(0, WALK * 70)
+        a.c.pad_script(0, COMBO_SPAM)
+        a.steps("wait 760")
+        for g in (a, b):
+            assert _u(g.c, CODE_MENU_STATE) != 4, f"the Code Menu is open on {g.name}"
+            assert not _banned(g, DEBUG_STATE), (g.name, _banned(g, DEBUG_STATE))
+        a.steps("wait 300")
+        st = [online_set.gstatus(g.c) for g in (a, b)]
+        cks = _confirm_checksums(a, b)
+        print(preset, cks, "desyncs", [s.get("desyncs_detected") for s in st],
+              "rollbacks", [s.get("rollbacks") for s in st],
+              "opens closed on A", (_scratch(a, SCR_CSS) >> 24) - refused)
+        assert all(s["phase"] == "running" for s in st), [s["phase"] for s in st]
+        assert cks["compared"] > 600 and cks["mismatches"] == 0, cks
+        assert all(not s.get("desyncs_detected") for s in st), [s.get("desyncs_detected") for s in st]
+        if preset != "lan":
+            assert all(s["rollbacks"] > 0 for s in st), [s["rollbacks"] for s in st]
+    finally:
+        for sim in sims:
+            sim.stop()
 
 
 @pytest.mark.slow
