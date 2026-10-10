@@ -266,9 +266,9 @@ void LockIcon(float scale)
   const float cx = p.x + 0.5f * w;
   const float r = 0.3f * w;
   const float thick = std::max(1.5f * scale, 0.1f * h);
-  // The shackle: two legs and the arc over them.
+  // The shackle: one path, left leg, round top, right leg (the arc starts where the left leg
+  // ends; adding that point twice drew a nub at the join).
   draw->PathLineTo({cx - r, body_top});
-  draw->PathLineTo({cx - r, p.y + 0.3f * h});
   draw->PathArcTo({cx, p.y + 0.3f * h}, r, 3.14159265f, 2.0f * 3.14159265f);
   draw->PathLineTo({cx + r, body_top});
   draw->PathStroke(col, ImDrawFlags_None, thick);
