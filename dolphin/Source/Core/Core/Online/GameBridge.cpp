@@ -975,9 +975,12 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     if (ms.match && ms.handoff == "started")
     {
       // In-game ports: a 1v1's decider (host) is P1, as in the gameplay session; with more
-      // players each sits on its server port (GameplayOnlineBackend).
+      // players, and in every room game (ports = slots, the room host deciding from any slot),
+      // each sits on its server port (GameplayOnlineBackend). A room's 2-player game once took
+      // the decider-first order: after the host left and came back to slot 1, the new host's
+      // name was under P1 and theirs under P2 (staging, 2026-10-10).
       std::vector<const PlayerInfo*> order;
-      if (ms.match->players.size() > 2)
+      if (ms.match->players.size() > 2 || room.game_active)
       {
         order.assign(SESSION_PLAYERS, nullptr);
         for (const auto& p : ms.match->players)
