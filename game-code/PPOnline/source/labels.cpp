@@ -300,9 +300,9 @@ namespace Labels {
                                 u32 k = 3;
                                 if (x < w && y < h) {
                                     int m = mask[y * w + x], o = rimMask[y * w + x];
-                                    if (m >= 0xA0) k = 1;
+                                    if (m >= 0xA0) k = 0;
                                     else if (m >= 0x50) k = 2;
-                                    else if (o >= 0x40 || m >= 0x20) k = 0;
+                                    else if (o >= 0x40 || m >= 0x20) k = 1;
                                 }
                                 idx = (idx << 2) | k;
                             }
@@ -327,6 +327,115 @@ namespace Labels {
             DCFlushRange(data, (u32)(bpr * ((h + bh - 1) / bh) * 32));
         }
         free(mask);
+        return true;
+    }
+
+    int rebindTexture(u8* mdl0, const char* name, u8* tex0)
+    {
+        if (!isPtr((u32)mdl0) || *(u32*)mdl0 != 0x4D444C30 /* MDL0 */) return 0;
+        s32 off = *(s32*)(mdl0 + 0x10 + 9 * 4);
+        if (off <= 0) return 0;
+        u8* dic = mdl0 + off;
+        u32 count = *(u32*)(dic + 4);
+        int n = 0;
+        for (u32 i = 1; i <= count && i < 256; i++) {
+            u8* e = dic + 8 + 16 * i;
+            if (strcmp((const char*)(dic + *(s32*)(e + 8)), name) != 0) continue;
+            u8* link = dic + *(s32*)(e + 12);
+            u32 pairs = *(u32*)link;   // {material, texture info} offsets from the link
+            for (u32 k = 0; k < pairs && k < 16; k++) {
+                u8* info = link + *(s32*)(link + 8 + 8 * k);
+                *(u8**)(info + 8) = tex0;
+                n++;
+            }
+        }
+        return n;
+    }
+
+    // An I4 texel (0-15) of a w-wide image: 8x8 blocks, two texels a byte, high nibble first.
+    static int i4Get(const u8* data, int w, int x, int y)
+    {
+        int bpr = (w + 7) / 8;
+        u8 b = data[((y >> 3) * bpr + (x >> 3)) * 32 + (y & 7) * 4 + ((x & 7) >> 1)];
+        return (x & 1) ? (b & 15) : (b >> 4);
+    }
+
+    static void i4Set(u8* data, int w, int x, int y, int v)
+    {
+        int bpr = (w + 7) / 8;
+        u8* b = &data[((y >> 3) * bpr + (x >> 3)) * 32 + (y & 7) * 4 + ((x & 7) >> 1)];
+        *b = (x & 1) ? (u8)((*b & 0xF0) | v) : (u8)((*b & 0x0F) | (v << 4));
+    }
+
+    bool mirroredIcon(u8* dst, const u8* src)
+    {
+        if (*(u32*)dst != 0x54455830 || *(u32*)src != 0x54455830) return false;
+        if (*(u32*)(dst + 0x20) != 0 || *(u32*)(src + 0x20) != 0) return false;   // I4 only
+        int dw = *(u16*)(dst + 0x1C), dh = *(u16*)(dst + 0x1E);
+        int sw = *(u16*)(src + 0x1C), sh = *(u16*)(src + 0x1E);
+        u8* dd = dst + *(u32*)(dst + 0x10);
+        const u8* sd = src + *(u32*)(src + 0x10);
+        int fw = sw * 2;   // the whole icon: the half and its mirror image
+        // Tilted 30 degrees (mouth to the upper left), as the spectator button draws it, and
+        // fitted into the texture: the tilted icon's bounding box, scaled, centred.
+        const float C = 0.8660254f, S = 0.5f;
+        // The drawn texels' extent once tilted (the half-icon has empty margins).
+        float scx = fw * 0.5f, scy = sh * 0.5f;
+        float minx = 1e9f, maxx = -1e9f, miny = 1e9f, maxy = -1e9f;
+        for (int v = 0; v < sh; v++) {
+            for (int u = 0; u < fw; u++) {
+                if (i4Get(sd, sw, u < sw ? u : fw - 1 - u, v) < 4) continue;
+                float ox = u + 0.5f - scx, oy = v + 0.5f - scy;
+                float rx = ox * C + oy * S, ry = -ox * S + oy * C;   // forward of the mapping below
+                if (rx < minx) minx = rx;
+                if (rx > maxx) maxx = rx;
+                if (ry < miny) miny = ry;
+                if (ry > maxy) maxy = ry;
+            }
+        }
+        if (maxx <= minx || maxy <= miny) return false;
+        float scale = (dw - 4) / (maxx - minx);
+        if ((dh - 4) / (maxy - miny) < scale) scale = (dh - 4) / (maxy - miny);
+        // centre the extent: the texture centre maps to the extent's centre
+        float cx = dw * 0.5f - (minx + maxx) * 0.5f * scale, cy = dh * 0.5f - (miny + maxy) * 0.5f * scale;
+        u32 bytes = (u32)(((dw + 7) / 8) * ((dh + 7) / 8) * 32);
+        memset(dd, 0, bytes);
+        for (int y = 0; y < dh; y++) {
+            for (int x = 0; x < dw; x++) {
+                int sum = 0;
+                for (int sub = 0; sub < 4; sub++) {   // 2x2 samples a texel
+                    float px = (x + 0.25f + 0.5f * (sub & 1) - cx) / scale;
+                    float py = (y + 0.25f + 0.5f * (sub >> 1) - cy) / scale;
+                    // rotate back (the icon is turned counterclockwise on screen, y down)
+                    float u = px * C - py * S + scx, v = px * S + py * C + scy;
+                    int iu = (int)u, iv = (int)v;
+                    if (u < 0 || v < 0 || iu >= fw || iv >= sh) continue;
+                    int su = iu < sw ? iu : fw - 1 - iu;
+                    sum += i4Get(sd, sw, su, iv);
+                }
+                i4Set(dd, dw, x, y, (sum + 2) / 4);
+            }
+        }
+        // One texel bolder (the icon is drawn small in the circle, as the spiral): a 3x3 max,
+        // from a copy of the rows above and the current one.
+        u8 rows[3][128];
+        for (int y = 0; y < dh && dw <= 128; y++) {
+            for (int x = 0; x < dw; x++) {
+                rows[0][x] = y > 0 ? rows[1][x] : 0;
+                rows[1][x] = (u8)i4Get(dd, dw, x, y);
+            }
+            for (int x = 0; x < dw; x++) rows[2][x] = y + 1 < dh ? (u8)i4Get(dd, dw, x, y + 1) : 0;
+            for (int x = 0; x < dw; x++) {
+                int m = 0;
+                for (int r = 0; r < 3; r++) {
+                    for (int k = x - 1; k <= x + 1; k++) {
+                        if (k >= 0 && k < dw && rows[r][k] > m) m = rows[r][k];
+                    }
+                }
+                i4Set(dd, dw, x, y, m);
+            }
+        }
+        DCFlushRange(dd, bytes);
         return true;
     }
 

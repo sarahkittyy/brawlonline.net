@@ -5,6 +5,10 @@
 // same on NTSC-U Rev 1 and Rev 2 and are not touched by P+ v3.2's codeset
 // (tools/gamecode/pplus_hooks.py). They patch the network thread's DWC login sequence so the
 // game believes it is logged in and has a friend code, without any network traffic.
+#include <OS/OSCache.h>
+#include <gf/gf_heap_manager.h>
+#include <memory.h>
+#include <string.h>
 #include <sy_core.h>
 #include "labels.h"
 #include "netmenu.h"
@@ -114,13 +118,251 @@ namespace NetMenu {
         s16 box[4];         // where the game's own letters sit in it
     };
     static const FriendsButton BUTTONS[3] = {
-        {0x33C, "MenMainWifi21", "CREATE ROOM", {10, 2, 118, 22}},
+        {0x33C, "MenMainWifi22", "CREATE\nROOM", {13, 6, 135, 81}},   // Direct's pill (below)
         {0x340, "MenMainWifi22", "DIRECT\n1V1", {13, 6, 135, 81}},
         {0x344, "MenMainWifi23", "JOIN\nROOM", {21, 4, 139, 76}},
     };
     static int s_returnButton = -1;   // the button to highlight when the page opens again
 
     static bool menuPtr(u32 p) { return p >= 0x80000000 && p < 0x94000000; }
+
+    // ------------------------------------------------------------------------------------------
+    // Create Room in Direct 1v1's pill (the same shape, size, icon circle and two-line label as
+    // the other two). Each of the page's buttons is its own small archive file, a brres with one
+    // model and its animations (MenMainIcon0321_TopN: the spectator button, a smaller white
+    // card; 0322: BASIC VERSUS's pill; 0323: TEAM BATTLE's), laid out one after the other in the
+    // menu's archive and made into MuObjects when the menu is built (MuObject::create(&file,
+    // model index, ...), 0x800B2404). When 0321 is made, the plugin makes it from
+    // a copy of 0322's file instead (in the Network heap, kept for the next menus). The copy
+    // keeps its textures bound to the menu's (texture infos +8; the materials' GXTexObj image
+    // words, physical address >> 5), except three, which it gets of its own:
+    //   MenMainWifi22 (the label)   a copy, labelled CREATE / ROOM (drawButtonLabels);
+    //   MenMainWifi25 (the spiral)  the spectator button's megaphone (MenMainWifi26, an I4
+    //                               half drawn twice) mirrored into one icon for the circle;
+    //   MenMainWifi25_02 (marks)    blank: the spiral's eight marks have no place round it.
+    // The layout animations are 0322's (the pill at BASIC VERSUS's place): the page's enter
+    // moves it left with MuObject::setPos (0x800B6838, as the enter itself moves the others for
+    // the two-button layout). The menu's highlight, cursor and decision code use the button by
+    // its slot (menu+0x33C) and its own animations, so nothing else changes.
+    typedef void* (*MuCreateFn)(u8** file, int index, int prio, int arg, int heap);
+    static MuCreateFn s_origMuCreate = NULL;
+    static u8* s_pillFile = NULL;      // the copy of 0322's brres
+    static u32 s_pillCap = 0;
+    static u8* s_pillLabel = NULL;     // our TEX0s (header + image), 32-byte aligned
+    static u8* s_pillIcon = NULL;
+    static u8* s_pillBlank = NULL;
+    static bool s_pillMade = false;    // the current menu's button 0 is the pill
+    static u32 s_pillFrom[3], s_pillTo[3];   // the three images: the original's, ours (phys >> 5)
+    static const float PILL_SHIFT_X = -28.0f;   // from BASIC VERSUS's place (found live)
+
+    static u8* alignedAlloc(u32 size)
+    {
+        u8* p = (u8*)gfHeapManager::alloc(Heaps::Network, size + 32);
+        return p ? (u8*)(((u32)p + 31) & ~31u) : NULL;
+    }
+
+    // A TEX0 of our own: `src`'s header and image copied (its name offset is left as it was).
+    static u8* copyTex(u8** slot, const u8* src)
+    {
+        u32 data = *(u32*)(src + 0x10);
+        int w = *(u16*)(src + 0x1C), h = *(u16*)(src + 0x1E);
+        u32 fmt = *(u32*)(src + 0x20);
+        int bw = fmt == 5 ? 4 : 8, bh = fmt == 5 ? 4 : 8, bpp = fmt == 5 ? 16 : 4;
+        u32 bytes = (u32)(((w + bw - 1) / bw) * ((h + bh - 1) / bh) * bw * bh * bpp / 8);
+        if (data != 0x40 || bytes > 0x10000) return NULL;
+        // Exactly its size, once (the same texture every time): the Network heap must keep
+        // room for the HOME menu's archive, which the game loads there after a match
+        // (docs/game-code.md §2, "Heap budget").
+        if (!*slot) *slot = alignedAlloc(0x40 + bytes);
+        if (!*slot) return NULL;
+        memcpy(*slot, src, 0x40 + bytes);
+        DCFlushRange(*slot, 0x40 + bytes);
+        return *slot;
+    }
+
+    // The copy's references to `oldTex`'s image point at `newTex`'s: the materials' GXTexObj
+    // image words (physical address >> 5) and the texture image registers the bind wrote into
+    // the materials' display lists (BP 0x61, register 0x94-0x97 / 0xB4-0xB7, 24-bit address >> 5).
+    static void retargetImage(u8* file, u32 size, const u8* oldTex, const u8* newTex)
+    {
+        u32 from = ((u32)(oldTex + 0x40) & 0x1FFFFFFF) >> 5;
+        u32 to = ((u32)(newTex + 0x40) & 0x1FFFFFFF) >> 5;
+        for (u32 off = 0; off + 4 <= size; off += 4) {
+            if (*(u32*)(file + off) == from) *(u32*)(file + off) = to;
+        }
+        for (u32 off = 0; off + 5 <= size; off++) {
+            u8* b = file + off;
+            if (b[0] != 0x61) continue;
+            u8 r = b[1];
+            if (!((r >= 0x94 && r <= 0x97) || (r >= 0xB4 && r <= 0xB7))) continue;
+            u32 v = ((u32)b[2] << 16) | ((u32)b[3] << 8) | b[4];
+            if (v != (from & 0xFFFFFF)) continue;
+            b[2] = (u8)(to >> 16);
+            b[3] = (u8)(to >> 8);
+            b[4] = (u8)to;
+        }
+    }
+
+    // The file's model (each of these files has one; MDL0 sub-files are 32-byte aligned).
+    static u8* findModel(u8* bres)
+    {
+        u32 size = *(u32*)(bres + 8);
+        for (u32 off = 0x20; off + 0x40 <= size && off < 0x2000; off += 0x20) {
+            if (*(u32*)(bres + off) == 0x4D444C30 /* MDL0 */) return bres + off;
+        }
+        return NULL;
+    }
+
+    static const char* modelName(u8* bres)
+    {
+        u8* mdl = findModel(bres);
+        if (!mdl || *(u32*)(mdl + 8) != 9) return NULL;   // MDL0 version 9: name offset at +0x3C
+        s32 no = *(s32*)(mdl + 0x3C);
+        return no > 0 && (u32)no < *(u32*)(mdl + 4) + 0x10000 ? (const char*)(mdl + no) : NULL;
+    }
+
+    // A TEX0 by name in the archive a bound TEX0 came from (TEX0 +0xC: its brres, relative).
+    static u8* textureNamed(u8* boundTex, const char* name)
+    {
+        if (!menuPtr((u32)boundTex) || *(u32*)boundTex != 0x54455830) return NULL;
+        u8* bres = boundTex + *(s32*)(boundTex + 0xC);
+        if (!menuPtr((u32)bres) || *(u32*)bres != 0x62726573) return NULL;
+        u8* root = bres + *(u16*)(bres + 0xC);
+        u8* groups = root + 8;   // root's ResDic: one group per resource kind
+        u32 ng = *(u32*)(groups + 4);
+        for (u32 g = 1; g <= ng && g < 32; g++) {
+            u8* e = groups + 8 + 16 * g;
+            if (strcmp((const char*)(groups + *(s32*)(e + 8)), "Textures(NW4R)") != 0) continue;
+            u8* dic = groups + *(s32*)(e + 12);
+            u32 n = *(u32*)(dic + 4);
+            for (u32 i = 1; i <= n && i < 512; i++) {
+                u8* t = dic + 8 + 16 * i;
+                if (strcmp((const char*)(dic + *(s32*)(t + 8)), name) == 0) return dic + *(s32*)(t + 12);
+            }
+        }
+        return NULL;
+    }
+
+    // A copy of BASIC VERSUS's file, made when the menu makes the spectator button's object.
+    static u8* copyPill(u8* file0321)
+    {
+        // 0322's file follows 0321's (an archive entry header of 0x20 bytes between them).
+        u32 size0321 = *(u32*)(file0321 + 8);
+        if (size0321 < 0x100 || size0321 > 0x40000) return NULL;
+        u8* f = file0321 + size0321;
+        u8* file0322 = NULL;
+        for (int i = 0; i <= 0x80; i += 4) {
+            if (*(u32*)(f + i) == 0x62726573 /* bres */) { file0322 = f + i; break; }
+        }
+        if (!file0322) return NULL;
+        u32 size = *(u32*)(file0322 + 8);
+        if (size < 0x100 || size > 0x20000) return NULL;
+        const char* name = modelName(file0322);
+        if (!name || strcmp(name, "MenMainIcon0322_TopN") != 0) return NULL;
+        if (!s_pillFile || s_pillCap < size) {
+            s_pillFile = alignedAlloc(size);
+            s_pillCap = s_pillFile ? size : 0;
+        }
+        if (!s_pillFile) return NULL;
+        memcpy(s_pillFile, file0322, size);
+        DCFlushRange(s_pillFile, size);
+        return s_pillFile;
+    }
+
+    // The button's ScnMdl keeps its own copies of the materials' GXTexObjs (with their GX
+    // register ids, e.g. 0x94 << 24 | image >> 5, found at ScnMdl+0x15CC for these models):
+    // those are what it loads, so they get our images too. Only the three images are matched.
+    // They are filled from the model after the page opens, so this runs every frame of the
+    // page (anybodyUpdate).
+    static void pillScnMdl(u8* obj)
+    {
+        u8* scn = menuPtr((u32)obj) ? *(u8**)(obj + 0xC) : NULL;
+        if (!menuPtr((u32)scn)) return;
+        for (u32 off = 0; off < 0x2000; off += 4) {
+            u32 w = *(u32*)(scn + off);
+            u32 r = w >> 24;
+            if (!((r >= 0x94 && r <= 0x97) || (r >= 0xB4 && r <= 0xB7))) continue;
+            for (int k = 0; k < 3; k++) {
+                if (s_pillFrom[k] && (w & 0xFFFFFF) == s_pillFrom[k]) {
+                    *(u32*)(scn + off) = (w & 0xFF000000u) | s_pillTo[k];
+                    break;
+                }
+            }
+        }
+    }
+
+    // The copy's own textures, once the game has bound its model (to the menu's textures, as
+    // the original). Done again each time the page opens (cheap; nothing if already done).
+    static void pillTextures(u8* obj)
+    {
+        if (!s_pillMade || !s_pillFile) return;
+        u8* cmdl = findModel(s_pillFile);
+        if (!cmdl) return;
+        u8* label = Labels::boundTexture(cmdl, "MenMainWifi22");
+        u8* spiral = Labels::boundTexture(cmdl, "MenMainWifi25");
+        u8* marks = Labels::boundTexture(cmdl, "MenMainWifi25_02");
+        if (!label || !spiral || !marks) return;   // not bound yet
+        if (label == s_pillLabel && spiral == s_pillIcon && marks == s_pillBlank) {   // done
+            pillScnMdl(obj);
+            return;
+        }
+        u8* megaphone = textureNamed(label, "MenMainWifi26");
+        if (!megaphone) return;
+        if (!copyTex(&s_pillLabel, label) || !copyTex(&s_pillIcon, spiral) || !copyTex(&s_pillBlank, marks)) return;
+        Labels::mirroredIcon(s_pillIcon, megaphone);
+        u32 blankBytes = 16 * 16 / 2;
+        memset(s_pillBlank + 0x40, 0, blankBytes);
+        DCFlushRange(s_pillBlank, 0x40 + blankBytes);
+        u32 size = *(u32*)(s_pillFile + 8);
+        Labels::rebindTexture(cmdl, "MenMainWifi22", s_pillLabel);
+        Labels::rebindTexture(cmdl, "MenMainWifi25", s_pillIcon);
+        Labels::rebindTexture(cmdl, "MenMainWifi25_02", s_pillBlank);
+        retargetImage(s_pillFile, size, label, s_pillLabel);
+        retargetImage(s_pillFile, size, spiral, s_pillIcon);
+        retargetImage(s_pillFile, size, marks, s_pillBlank);
+        DCFlushRange(s_pillFile, size);
+        const u8* from[3] = {label, spiral, marks};
+        const u8* to[3] = {s_pillLabel, s_pillIcon, s_pillBlank};
+        for (int k = 0; k < 3; k++) {
+            s_pillFrom[k] = ((u32)(from[k] + 0x40) & 0x1FFFFFFF) >> 5;
+            s_pillTo[k] = ((u32)(to[k] + 0x40) & 0x1FFFFFFF) >> 5;
+        }
+        pillScnMdl(obj);
+    }
+
+    static void* hkMuCreate(u8** file, int index, int prio, int arg, int heap)
+    {
+        if ((PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS) && file && menuPtr((u32)*file) &&
+            *(u32*)*file == 0x62726573 /* bres */) {
+            const char* name = modelName(*file);
+            if (name && strcmp(name, "MenMainIcon0321_TopN") == 0) {
+                s_pillMade = false;
+                u8* pill = copyPill(*file);
+                if (pill) {
+                    static u8* s_pillPtr;
+                    s_pillPtr = pill;
+                    void* obj = s_origMuCreate(&s_pillPtr, index, prio, arg, heap);
+                    if (obj) {
+                        s_pillMade = true;
+                        pillTextures((u8*)obj);
+                        return obj;
+                    }
+                }
+            }
+        }
+        return s_origMuCreate(file, index, prio, arg, heap);
+    }
+
+    static void placePill(u8* proc)
+    {
+        if (!s_pillMade) return;
+        u8* menu = *(u8**)(proc + 0x64C);
+        u8* obj = menuPtr((u32)menu) ? *(u8**)(menu + 0x33C) : NULL;
+        if (!menuPtr((u32)obj) || *(u8**)(obj + 4) != s_pillFile) return;
+        float pos[3] = {PILL_SHIFT_X, *(float*)(obj + 0x40), *(float*)(obj + 0x44)};
+        typedef void (*SetPosFn)(u8*, float*);
+        ((SetPosFn)0x800B6838)(obj, pos);
+    }
 
     static void drawButtonLabels(u8* proc)
     {
@@ -152,16 +394,19 @@ namespace NetMenu {
     }
 
     // Highlight button `b` the way the page's own cursor code does (text+0x2E8A0): the cursor
-    // (this+0x42), muProcMenu's highlight (sora_menu_rule text+0x1D48) and the description line
-    // (the panel this+0x658, vtable at +0x3C, slot 0x64: line 0x32 + cursor).
+    // (this+0x42) moves, then muProcMenu's highlight (sora_menu_rule text+0x1D48) is called with
+    // the button it moved FROM (it plays that one's leave animation, then highlights the
+    // cursor's), and the description line (the panel this+0x658, vtable at +0x3C, slot 0x64:
+    // line 0x32 + cursor). (Called with the new button, the old one stayed highlighted.)
     static void highlightButton(u8* proc, int b)
     {
         u32 rule = relText(18);
         u8* panel = *(u8**)(proc + 0x658);
         if (!rule || !menuPtr((u32)panel)) return;
+        int old = *(u16*)(proc + 0x42);
         *(u16*)(proc + 0x42) = (u16)b;
         typedef void (*HighlightFn)(u8*, int, int);
-        ((HighlightFn)(rule + 0x1D48))(proc, b, 1);
+        ((HighlightFn)(rule + 0x1D48))(proc, old, 1);
         typedef void (*DescFn)(u8*, int, int, int);
         ((DescFn)(*(u32*)(*(u32*)(panel + 0x3C) + 0x64)))(panel, 0x32 + b, 1, 0);
     }
@@ -175,6 +420,9 @@ namespace NetMenu {
         g_friendsPage = proc;
         int r = s_origAnybodyEnter(proc, a, b);
         if (PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS) {
+            u8* menu = *(u8**)((u8*)proc + 0x64C);
+            if (menuPtr((u32)menu)) pillTextures(*(u8**)(menu + 0x33C));
+            placePill((u8*)proc);
             drawButtonLabels((u8*)proc);
             // Back from a room's CSS: its button (the game puts the cursor on BASIC VERSUS, the
             // decision every button of ours leaves with).
@@ -237,7 +485,12 @@ namespace NetMenu {
     static int anybodyUpdate(u8* page)
     {
         OnlineMenu::menuPageRunning(page);
-        return s_origAnybodyUpdate(page);
+        int r = s_origAnybodyUpdate(page);
+        // The pill's ScnMdl fills its texture copies from the model after the page has opened:
+        // keep them on our images (only the three original images are matched; cheap).
+        u8* menu = *(u8**)(page + 0x64C);
+        if (s_pillMade && menuPtr((u32)menu)) pillScnMdl(*(u8**)(menu + 0x33C));
+        return r;
     }
 
     // Brawl's "Connect to Nintendo WFC?" window (WifiCnctWnd task, sora_menu_main text+0x385C0),
@@ -512,6 +765,7 @@ namespace NetMenu {
 
     void install(CoreApi* api)
     {
+        api->syReplaceFunc(0x800B2404, reinterpret_cast<void*>(hkMuCreate), (void**)&s_origMuCreate);
         api->sySimpleHook(0x8014B5F8, reinterpret_cast<void*>(setToLoggedIn));
         api->sySimpleHook(0x8014B5FC, reinterpret_cast<void*>(setToLoggedIn2));
         api->sySimpleHook(0x80033b48, reinterpret_cast<void*>(disableMiiRender));
