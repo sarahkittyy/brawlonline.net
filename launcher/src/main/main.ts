@@ -65,6 +65,10 @@ if (testMode.userDataDir) {
   mkdirSync(userDataDir, { recursive: true });
   app.setPath("userData", userDataDir);
   app.setPath("sessionData", userDataDir);
+  // The logs too: on macOS they would go to ~/Library/Logs/<product>, shared with the real install.
+  const logsDir = path.join(userDataDir, "logs");
+  app.setAppLogsPath(logsDir);
+  log.transports.file.resolvePathFn = (vars) => path.join(logsDir, vars.fileName ?? "main.log");
 }
 
 // The userData folder is named after the product. A profile left from an earlier name is renamed
