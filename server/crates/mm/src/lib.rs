@@ -22,6 +22,7 @@ pub mod region;
 pub mod rooms;
 pub mod ruleset;
 pub mod server;
+pub mod versions;
 
 pub use config::Config;
 pub use server::{start, MmHandle};

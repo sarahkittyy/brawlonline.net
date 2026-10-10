@@ -22,10 +22,10 @@ All messages are JSON in reliable ENet packets on channel 0, like tickets (`serv
 ### `hello` (client → server)
 
 ```json
-{"type": "hello", "user": {"uid": "…", "playKey": "…"}, "appVersion": "0.1.0"}
+{"type": "hello", "user": {"uid": "…", "playKey": "…"}, "appVersion": "0.1.0", "platform": "win"}
 ```
 
-The same checks as a ticket, in the same order: `appVersion` against `MM_MIN_APP_VERSION`, the uid and play key, the ban, a connect code. Then mm answers and keeps the connection:
+The same checks as a ticket, in the same order: the build (below), the uid and play key, the ban, a connect code. Then mm answers and keeps the connection:
 
 ```json
 {"type": "hello-resp"}
@@ -34,8 +34,10 @@ The same checks as a ticket, in the same order: `appVersion` against `MM_MIN_APP
 or refuses and disconnects:
 
 ```json
-{"type": "hello-resp", "error": "Update to 0.2.1 to play online.", "latestVersion": "0.2.1"}
+{"type": "hello-resp", "error": "Close Dolphin and update to 0.2.1", "latestVersion": "0.2.1"}
 ```
+
+- **The build.** `appVersion` (CI stamps the release version into Dolphin) and `platform` (`win`, `mac`, `linux`) are checked against the newest build of that platform in the launcher's update feed (`MM_UPDATE_FEED_DIR`: `latest.yml`, `latest-mac.yml`, `latest-linux.yml`, read again every 10 s), and against `MM_MIN_APP_VERSION` if set. Each platform has its own: the macOS build goes live later (Apple's notarization), and its players keep playing on the previous one meanwhile. A build that sends no `platform` (older than the field) is held to the oldest feed. Tickets (`create-ticket` also carries `platform`) are checked the same way, and so is a room's `room-ready` with `ready: true`, which a game left running across a release is refused: `room-error {op: "room-ready", error: "Close Dolphin and update to 0.2.1"}`. The game shows the text in red on the CSS; Dolphin keeps its build until it is closed, and the launcher updates then.
 
 - **One per account.** A second `hello` from the same account (another game) closes the older connection with `{"type": "error", "error": "Signed in from another game."}`; the older one leaves its room.
 - **Heartbeat.** ENet's own keepalive: mm drops a peer it has not heard from for 10 s (`set_timeout(32, 5000, 10000)`, as for tickets). The game must keep servicing this host (also during matches; it is a separate ENet host from the P2P one). Nothing else is sent while idle.

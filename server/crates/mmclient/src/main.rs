@@ -356,6 +356,7 @@ fn run() -> anyhow::Result<i32> {
                     EncodingArg::Ascii => CodeEncoding::Ascii,
                 },
                 app_version,
+                platform: String::new(),
                 local_port: port,
                 lan_ip,
                 match_timeout: (timeout_secs > 0).then(|| Duration::from_secs(timeout_secs)),

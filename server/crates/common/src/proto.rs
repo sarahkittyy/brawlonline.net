@@ -89,6 +89,10 @@ pub struct CreateTicket {
     pub search: Search,
     #[serde(default)]
     pub app_version: String,
+    /// The platform the build is published for (`win`, `mac`, `linux`): its update feed names
+    /// the version it must have. Empty from builds older than the field.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub platform: String,
     #[serde(default)]
     pub ip_address_lan: String,
 }

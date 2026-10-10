@@ -39,7 +39,7 @@ The launcher's electron-updater feed is the generic provider at https://brawlonl
 
 Cloudflare caches `.exe` (not `.yml` or `.AppImage`) for up to a few hours, so `/downloads/BrawlOnline-Setup.exe` may serve the previous version for a while after a release. That is harmless: the installed launcher updates itself on its first start. The versioned files the feed names are never cached stale (new names each version).
 
-Versions: `0.1.<run number of client.yml>`. `LATEST_VERSION` in `/etc/ppserver/accounts.env` (written into `user.json`; a Dolphin older than it shows Slippi's "update required") and `MM_MIN_APP_VERSION` in `mm.env` are not touched by CI; raise them by hand when an old client must be refused.
+Versions: `0.1.<run number of client.yml>`. mm follows the releases by itself: `MM_UPDATE_FEED_DIR` in `mm.env` (the feed folder `pp-release client` publishes to) holds every game to its platform's newest published build, so a game older than that cannot search or ready in a room ("Close Dolphin and update to 0.1.43" in red on the CSS; `docs/rooms-protocol.md`, `hello`). `LATEST_VERSION` in `/etc/ppserver/accounts.env` (written into `user.json`; a Dolphin older than it shows Slippi's "update required") and `MM_MIN_APP_VERSION` in `mm.env` are not touched by CI.
 
 ## Runners
 

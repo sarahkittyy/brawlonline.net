@@ -77,6 +77,8 @@ pub struct SearchOptions {
     pub target: String,
     pub encoding: CodeEncoding,
     pub app_version: String,
+    /// `platform` (`win`, `mac`, `linux`; empty like builds older than the field).
+    pub platform: String,
     /// Forced local port ("Force Netplay Port"); random 41000-50999 otherwise.
     pub local_port: Option<u16>,
     /// Forced LAN IP ("Force LAN IP").
@@ -100,6 +102,7 @@ impl SearchOptions {
             target: target.into(),
             encoding: CodeEncoding::Fullwidth,
             app_version: "0.1.0".into(),
+            platform: String::new(),
             local_port: None,
             lan_ip: None,
             match_timeout: Some(Duration::from_secs(30)),
@@ -394,6 +397,7 @@ fn search_once(opts: &SearchOptions) -> anyhow::Result<SearchResult> {
         },
         search: Search { mode: opts.mode, connect_code: code_bytes, game: None },
         app_version: opts.app_version.clone(),
+        platform: opts.platform.clone(),
         ip_address_lan: lan_address,
     };
     send_raw(&mut host, mm, serde_json::to_vec(&ticket)?.as_slice());
@@ -504,6 +508,7 @@ pub fn search_and_linger(
         },
         search: Search { mode: 2, connect_code: encode_search_code_fullwidth(target), game: None },
         app_version: opts.app_version.clone(),
+        platform: opts.platform.clone(),
         ip_address_lan: format!("127.0.0.1:{local_port}"),
     };
     send_raw(&mut host, mm, serde_json::to_vec(&ticket)?.as_slice());

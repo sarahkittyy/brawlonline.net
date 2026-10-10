@@ -306,6 +306,59 @@ async fn a_room_plays_with_every_member_and_takes_a_joiner_during_the_game() {
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn each_platform_needs_its_newest_build_from_the_update_feed() {
+    let feed = std::env::temp_dir().join(format!(
+        "e2e-update-feed-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_nanos()
+    ));
+    std::fs::create_dir_all(&feed).unwrap();
+    // pp-release's folder: Windows has 0.2.0, the macOS build of it still waits for Apple.
+    std::fs::write(feed.join("latest.yml"), "version: 0.2.0\npath: Brawl-Online-Setup-0.2.0.exe\n").unwrap();
+    std::fs::write(feed.join("latest-mac.yml"), "version: 0.1.0\n").unwrap();
+    let stack = Stack::start(StackOptions {
+        engine: EngineConfig { update_feed_dir: Some(feed.clone()), ..Default::default() },
+        ..Default::default()
+    })
+    .await
+    .unwrap();
+    let (_, alice) = stack.create_player("alice@example.test", "alice", "alic").await;
+    let (_, bob) = stack.create_player("bob@example.test", "bob", "bobb").await;
+    // mm reads the feed on its first tick.
+    tokio::time::sleep(Duration::from_millis(300)).await;
+    let (_, hello) = OnlineClient::connect_on(stack.mm_addr, &creds(&alice), "0.1.0", "win").unwrap();
+    assert_eq!(hello, json!({"type": "hello-resp", "error": msg::update_to("0.2.0"), "latestVersion": "0.2.0"}));
+    let (mut a, hello) = OnlineClient::connect_on(stack.mm_addr, &creds(&alice), "0.2.0", "win").unwrap();
+    assert_eq!(hello, json!({"type": "hello-resp"}));
+    let (mut b, hello) = OnlineClient::connect_on(stack.mm_addr, &creds(&bob), "0.1.0", "mac").unwrap();
+    assert_eq!(hello, json!({"type": "hello-resp"}));
+    let code = create(&mut a);
+    join(&mut b, &code);
+    room_state_where(&mut a, |s| s["slots"][1]["player"].is_object());
+
+    // The macOS build is published while bob's game runs 0.1.0: his START is refused.
+    std::fs::write(feed.join("latest-mac.yml"), "version: 0.2.0\n").unwrap();
+    // mm reads the feed again within 10 s; both games keep their connections serviced meanwhile.
+    let until = Instant::now() + Duration::from_millis(10_500);
+    while Instant::now() < until {
+        a.pump();
+        b.pump();
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    b.send(&RoomRequest::Ready { ready: true, character: Some(7), costume: Some(0) });
+    let e = room_error(&mut b);
+    assert_eq!(e, json!({"type": "room-error", "op": "room-ready", "error": msg::update_to("0.2.0")}));
+    a.send(&RoomRequest::Ready { ready: true, character: Some(7), costume: Some(0) });
+    let s = room_state_where(&mut a, |s| s["slots"][0]["player"]["ready"] == true);
+    assert_eq!(s["slots"][1]["player"]["ready"], false, "{s}");
+    for x in [a, b] {
+        x.close();
+    }
+    stack.shutdown().await;
+    let _ = std::fs::remove_dir_all(&feed);
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn hello_needs_a_current_game_and_a_valid_login() {
     let stack = Stack::start(StackOptions {
         engine: EngineConfig {

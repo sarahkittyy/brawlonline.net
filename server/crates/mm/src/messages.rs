@@ -139,9 +139,10 @@ pub fn not_available(mode: &str) -> String {
     format!("{mode} isn't available yet.")
 }
 
-/// The game is older than the minimum version.
+/// The game is older than the newest build (or the minimum version). A running Dolphin keeps its
+/// build until it is closed, and the launcher updates only then.
 pub fn update_to(latest: &str) -> String {
-    format!("Update to {latest} to play online.")
+    format!("Close Dolphin and update to {latest}")
 }
 
 /// A Direct ticket whose opponent did not search within its time.

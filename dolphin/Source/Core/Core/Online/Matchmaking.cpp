@@ -621,6 +621,7 @@ void Matchmaking::StartMatchmaking()
   request["user"] = picojson::value(std::move(user));
   request["search"] = picojson::value(std::move(search));
   request["appVersion"] = picojson::value(APP_VERSION);
+  request["platform"] = picojson::value(APP_PLATFORM);
   request["ipAddressLan"] = picojson::value(lan_addr);
   SendMmMessage(picojson::value(std::move(request)));
   m_ticket_count++;

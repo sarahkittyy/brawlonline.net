@@ -30,6 +30,16 @@ namespace Online
 // user.json's latestVersion. The launcher's PlusOnline 0.1.0 writes latestVersion 0.1.0.
 constexpr char APP_VERSION[] = "0.1.0";
 
+// The platform this build is published for, sent as `platform` with APP_VERSION: the mm server
+// holds each platform to its own update feed's newest build (the macOS one goes live later).
+#if defined(_WIN32)
+constexpr char APP_PLATFORM[] = "win";
+#elif defined(__APPLE__)
+constexpr char APP_PLATFORM[] = "mac";
+#else
+constexpr char APP_PLATFORM[] = "linux";
+#endif
+
 // Compares two "major.minor.patch[-pre]" versions like Slippi's semver check: -1, 0 or 1.
 // Missing or non-numeric parts count as 0; a pre-release sorts before the release.
 int CompareVersions(const std::string& a, const std::string& b);

@@ -35,6 +35,12 @@ pub struct Config {
     #[arg(long, env = "LATEST_VERSION")]
     pub latest_version: Option<String>,
 
+    /// The launcher's update feed folder (electron-builder's latest.yml, latest-mac.yml,
+    /// latest-linux.yml): a game older than its platform's newest build may not play online.
+    /// Production: /var/www/brawlonline/updates/launcher.
+    #[arg(long, env = "MM_UPDATE_FEED_DIR")]
+    pub update_feed_dir: Option<std::path::PathBuf>,
+
     /// Rulesets JSON (stage lists per mode). Defaults to the built-in config/rulesets.json.
     #[arg(long, env = "MM_RULESETS_FILE")]
     pub rulesets_file: Option<String>,
@@ -102,6 +108,7 @@ impl Config {
             ticket_interval: Duration::from_secs(self.ticket_interval_secs),
             min_app_version: self.min_app_version.clone().filter(|s| !s.is_empty()),
             latest_version: self.latest_version.clone().filter(|s| !s.is_empty()),
+            update_feed_dir: self.update_feed_dir.clone().filter(|p| !p.as_os_str().is_empty()),
             rulesets: Rulesets::load(self.rulesets_file.as_deref())?,
             regions: RegionMap::load(self.regions_file.as_deref())?,
             region_widen: Duration::from_secs(self.region_widen_secs),
@@ -125,6 +132,7 @@ impl Config {
             ticket_ttl_secs: 600,
             min_app_version: None,
             latest_version: None,
+            update_feed_dir: None,
             rulesets_file: None,
             regions_file: None,
             region_widen_secs: 30,
