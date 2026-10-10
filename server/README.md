@@ -5,10 +5,10 @@ Accounts, connect codes, and Direct and Unranked matchmaking for Brawl Online, t
 | Crate | What it is |
 |---|---|
 | `crates/accounts` | HTTP service (axum + sqlx): open sign-up with email verification, login, sessions, password reset, connect codes, play keys, the data for `user.json`, Slippi's users-rest endpoint. |
-| `crates/mm` | Matchmaking server: ENet over UDP 43113, speaking Slippi's `create-ticket` / `get-ticket-resp` JSON protocol. Direct, Unranked and Ranked (rating band); per-mode stage lists. Rooms and the online count (`docs/rooms-protocol.md`), with a loopback status listener for accounts. |
-| `crates/admin` | Admin CLI: users, password resets, bans, account deletion. |
+| `crates/mm` | Matchmaking server: ENet over UDP 43113, speaking Slippi's `create-ticket` / `get-ticket-resp` JSON protocol. Direct, Unranked and Ranked (rating band); per-mode stage lists. Rooms and the online count (`docs/rooms-protocol.md`), with a loopback status listener for accounts. End-to-end encrypted chat relay for rooms and matches (`docs/chat-protocol.md`). |
+| `crates/admin` | Admin CLI: users, password resets, bans, account deletion, chat reports. |
 | `crates/mmclient` | Ticket client library and CLI that behaves like Slippi's `SlippiMatchmaking.cpp`, plus a room client (`online`, `room`). For tests, ppharness and game-integration work. |
-| `crates/common` | Shared code: connect-code and display-name rules, the mm message types, play keys, rate limiter, migrations. |
+| `crates/common` | Shared code: connect-code and display-name rules, the mm message types, play keys, rate limiter, migrations, the chat types, crypto and text cleaner (`chat.rs`). |
 | `crates/e2e` | End-to-end tests (Postgres + both services + fake game clients). |
 | `crates/fakesmtp` | A tiny in-process SMTP server for tests (records what it receives, counts connections). |
 | `migrations/` | Postgres schema (applied by `accounts` on start, or `admin migrate`). |
@@ -141,6 +141,9 @@ Rules:
   | mm `hello` (online connection) | account | 10 per minute |
   | Rooms created / join attempts | account | 5 per minute and 30 per hour / 10 per minute and 60 per hour |
   | Room requests | online connection | 40 per 10 s |
+  | Chat messages (`chat-send`) | account | 5 per 5 s and 30 per minute |
+  | Chat group keys and leaves (`chat-key`, `chat-leave`) | account | 10 per 10 s |
+  | Chat reports | account | 5 per hour |
 
   Worst case for one IP: 10 verification emails a day. For one inbox: 1 + 5 verification emails (one account per address) and 5 reset emails a day. The two global shares add up to `MAIL_DAILY_LIMIT`, so accounts never sends more than that per UTC day. Set it below the provider's quota, with room for `admin user reset-password --send-email` (a separate process with its own count).
 - **Email**: an SMTP provider (`MAILER=smtp`), Brevo's HTTP API (`MAILER=brevo`) or Resend's (`MAILER=resend`) in production, with a daily cap per process (`MAIL_DAILY_LIMIT`, default 90, split as above). A `Mailer` trait has SMTP, Brevo, Resend, stdout, file and in-memory implementations, and `mail::from_config` is the one place that picks one: `accounts` and the admin CLI's `reset-password --send-email` build their mailer from the same settings. Tests only use the in-memory and file mailers, plus the SMTP client against a local fake server (`crates/fakesmtp`) and the Brevo and Resend clients against local fake HTTP servers.
@@ -227,6 +230,14 @@ Byte-compatible with Slippi's client: ENet on UDP 43113, reliable JSON packets o
 - The room starts once every open slot is taken and everyone is ready: each member sends an ordinary ticket in mode 3 with the room code from its P2P port, and gets one `get-ticket-resp` listing every member (ports = slots, `isHost` = the room's host, Direct's stages). Rooms are never ranked and not recorded.
 - mm publishes the count and the public rooms on `MM_STATUS_LISTEN` (default `127.0.0.1:43181`, `GET /status`, loopback only); accounts serves them as `GET /v1/rooms` from `MM_STATUS_URL` (default `http://127.0.0.1:43181/status`). The defaults match when both run on one machine, so production needs no new setting or proxy rule. `MM_ROOM_START_TIMEOUT_SECS` (15) is how long a start waits for every ticket.
 
+## Chat
+
+End-to-end encrypted free-text chat between the players of a room or of a Direct, Unranked or Ranked match, relayed by mm over the online connection (`docs/chat-protocol.md`, decisions in `docs/design/chat.md`). Types, crypto (Ed25519 identity keys, X25519 group keys, BLAKE2b, XChaCha20-Poly1305) and the text cleaner are in `crates/common/src/chat.rs`, the groups in `crates/mm/src/chat.rs`. mm never sees text: it checks groups, lengths and rate limits and forwards boxes.
+
+- `hello.chatKey` registers the install's identity key; mm records each one in `chat_identity_keys` (migration `0006_chat.sql`, the 20 most recent per account).
+- `chat-report` is stored in `chat_reports` with each message's signature checked against the reported account's identity keys (`verified` of `total`). `admin chat-reports` lists the unhandled ones; `admin chat-report-done <id>` marks one handled.
+- `pp_mm` gets only what mm's chat queries need (upsert, read and prune identity keys; insert reports), granted in the migration like `0005_mm_grants.sql`.
+
 ## Ranked
 
 Rules in `crates/common/src/ranked.rs` (unit-tested), storage and endpoints in `crates/accounts/src/ranked.rs`, the leaderboard and match history in `crates/accounts/src/leaderboard.rs` and `history.rs`, schema in `migrations/0003_ranked.sql` and `0004_leaderboard_history.sql`.
@@ -270,6 +281,8 @@ admin user verify-email IDENT
 admin user rotate-play-key IDENT
 admin user set-code IDENT CODE
 admin user delete IDENT --yes                  # with its sessions and email tokens; the connect code is free again at once
+admin chat-reports [--limit N]                 # unhandled chat reports, newest first: who, group, reason, verified/total, the texts
+admin chat-report-done ID                      # mark a chat report handled
 ```
 
 Every change is written to `audit_log`. `reset-password --send-email` reads the same mail settings as accounts (`MAILER`, `MAIL_*`, `SMTP_*`, `BREVO_*`, `RESEND_*`; `admin user reset-password --help` lists them), so with `MAILER=file` the email is appended to `MAIL_FILE` and nothing goes over the network. A bad mail setting fails before the token is issued; the audit row records `emailed` and the mailer.
@@ -281,12 +294,13 @@ mmclient search [--server HOST[:PORT]] (--user-json FILE | --uid U --play-key K)
                 [--mode direct|unranked|ranked|teams|party | --mode-number N] [--encoding fullwidth|ascii]
                 [--port P] [--lan-ip IP] [--timeout-secs S] [--punch [--requeue N]] [--app-version V]
 mmclient raw [--server HOST[:PORT]] --data 'JSON' [--wait-secs S]
-mmclient online [--server HOST[:PORT]] (--user-json FILE | --uid U --play-key K) [--hold-secs S]
+mmclient online [--server HOST[:PORT]] (--user-json FILE | --uid U --play-key K) [--hold-secs S] [CHAT]
 mmclient room [--server HOST[:PORT]] (--user-json FILE | --uid U --play-key K) (--create [--private] [--open 3,4] [--close N] [--teams] | --join CODE)
-              [--team N] [--ready [--character N --costume N]] [--play [--back-after-secs S | --quit-after-match]] [--hold-secs S]
+              [--team N] [--ready [--character N --costume N]] [--play [--back-after-secs S | --quit-after-match]] [--hold-secs S] [CHAT]
+CHAT: --chat [--chat-key-file FILE] [--say TEXT]... [--stdin]
 ```
 
-`online` and `room` keep an online connection open like a running game and print every message from mm as one JSON line; `--play` sends the room's game ticket when the room starts (`docs/rooms-protocol.md`, section 6).
+`online` and `room` keep an online connection open like a running game and print every message from mm as one JSON line; `--play` sends the room's game ticket when the room starts (`docs/rooms-protocol.md`, section 6). With `--chat` the game is a chat member (`docs/chat-protocol.md`; `mmclient::chat`): an identity key in `hello` (from `--chat-key-file`, 64 hex digits, made if missing; a fresh one per run otherwise), a signed group key for every group mm puts it in, and one JSON line per chat event: `mmclient-chat-group` (members and whether each can read), `mmclient-chat-msg` (`from`, `displayName`, `seq`, the decrypted, verified and cleaned `text`), `mmclient-chat-drop` (`reason`), `mmclient-chat-sent`, `mmclient-chat-error`. `--say` sends a message once someone can read it (one a second); `--stdin` reads lines: a message, `/report UID [reason]` or `/leave`. A match group needs the ticket from another process (`mmclient search`) while `online --chat` holds the connection.
 
 `search` prints one JSON object (`status`, `error`, `localPort`, `lanAddress`, `createResponse`, `ticketResponse`, `remoteAddresses`, `p2p`) and exits 0 matched, 2 create-ticket error, 3 get-ticket error, 4 client timeout, 5 P2P failed, 1 other. `--port` and `--lan-ip` mirror Slippi's "Force Netplay Port" and "Force LAN IP". `MM_SERVER` sets the default server.
 
@@ -307,6 +321,8 @@ Without Docker, start the portable Postgres (above) and point the tests at it, e
 - `crates/e2e/tests/ranked.rs`: two players meet in the Ranked queue (each player's rank in the response), both report two games, the set is rated once (±100 for two first-timers), the rating comes back from `/user/{uid}`, the result endpoint and the next ranked ticket; leaving before and after a game, both leaving, disagreeing reports, forged play keys, strangers, bad winners and game indexes, an Unranked match's report accepted unrated; a lone report settled by the background sweep after the grace period.
 - `crates/e2e/tests/leaderboard_history.rs`: the leaderboard in pages of 7 and 5 (positions 1..N across pages, ties by uid, players without a rated set left out), the cursor while one player jumps to the top and another drops (page 2 continues after page 1's last row with the new positions; the same cursor gives the same page), bad cursors, `/user/{uid}` positions; the rate limits (30 leaderboard pages a minute per IP and per IPv6 /64, `Retry-After`; 60 history pages a minute per account); Unranked and Direct reports (agreeing, lone, drawn, disagreeing, game 15, the same checks as Ranked, never rated, untouched by the sweep); the match history of Ranked (complete, abandoned with no game, in progress then orphaned), Unranked and Direct matches with every field, the filters, pages of 2 with a newer match added between pages, matches left out (no reports, orphaned without reports, other players'), auth and bad parameters.
 - `crates/e2e/tests/rooms.rs`: create (code format), join by code in lower case, full, not found, host-only slots, closing an occupied slot (removed, cannot rejoin), host hand-over when the host's game closes, the room closing with its last player; the public list over HTTP (401 logged out, the row fields, private rooms left out and joinable by code, made public, modes 1v1/FFA/Teams), the online count rising and falling with the games, 503 when mm is gone; a 3-player Teams room (one colour refused, 2v1 starts) whose three tickets get one response each with ports 1-3 and the host deciding, the room in game in the list, a player whose game closes mid-match (slot open, room joinable) and a joiner who waits, then back to waiting; `hello` with an old version or a forged play key, bad room requests answered without a disconnect.
+- Unit tests (chat): `common::chat` (the test vectors, seal/open and every kind of tampering, small-order keys, signatures bound to every field, plaintext and request parsing, every rule of the text cleaner), `mm::chat` (room and match groups, keys, routing, every refusal, rate limits, report rows with forged and altered messages), the engine paths (`hello` with good and bad keys, room groups through joins, kicks, leaves and disconnects, a second game, match groups for Direct and Unranked but not a room's game, a new search ending a match group, refusals, reports), `mmclient::chat` (round trip, replays, keys that do not verify).
+- `crates/e2e/tests/chat.rs`: three games in a room exchange encrypted messages, a kicked player gets nothing more (and mm refuses a box for her); a Direct match's chat group until one player searches again and the other sends `chat-leave`; a report with one genuine and one made-up message is stored as 1 of 2 verified; the send rate limit; a game without a key. `mm_grants.rs` runs the chat queries as `pp_mm`; `crates/admin/tests/chat_reports.rs` runs `admin chat-reports` and `chat-report-done`.
 - `crates/e2e/tests/unranked.rs`:
   - two strangers meet: response fields, the ruleset's 15 stages, a real P2P connection, and the `mm_matches` row with mode, stages and region;
   - first come, first served, and the third ticket ends with the expiry error;

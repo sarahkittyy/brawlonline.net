@@ -15,6 +15,7 @@
 //! anyway to record matches (`mm_matches`) and, later, ratings. Both services
 //! share the `common` crate for the key derivation.
 
+pub mod chat;
 pub mod config;
 pub mod engine;
 pub mod messages;

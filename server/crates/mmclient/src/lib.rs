@@ -15,7 +15,7 @@
 //!
 //! Used by the end-to-end tests, and by ppharness / game-integration work via
 //! the `mmclient` binary. [`room`] is the room client (the online connection a running game keeps,
-//! and the room's game ticket).
+//! and the room's game ticket); [`chat`] is a chat member on that connection.
 
 use std::net::{Ipv4Addr, SocketAddr, SocketAddrV4, ToSocketAddrs};
 use std::time::{Duration, Instant};
@@ -30,6 +30,7 @@ use rand::Rng;
 use rusty_enet::{Event, Host, HostSettings, Packet, PeerID};
 use serde::{Deserialize, Serialize};
 
+pub mod chat;
 pub mod room;
 
 /// How the target code is put into `search.connectCode`.

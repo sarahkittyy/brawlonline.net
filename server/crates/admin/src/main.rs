@@ -29,6 +29,14 @@ enum Cmd {
     /// Accounts. IDENT is a uid, an email or a connect code.
     #[command(subcommand)]
     User(UserCmd),
+    /// Chat reports nobody has handled yet, newest first: who reported whom in which group, the
+    /// reason, and each message (cleaned) with whether its signature checked out.
+    ChatReports {
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+    },
+    /// Mark a chat report handled (it leaves `chat-reports`).
+    ChatReportDone { id: i64 },
 }
 
 #[derive(Subcommand)]
@@ -91,6 +99,27 @@ async fn find(pool: &PgPool, ident: &str) -> anyhow::Result<UserRow> {
     admin::find(pool, ident).await
 }
 
+fn who(uid: Option<uuid::Uuid>, code: &Option<String>, name: &Option<String>) -> String {
+    match uid {
+        Some(uid) => format!("{} ({}) {uid}", code.as_deref().unwrap_or("-"), name.as_deref().unwrap_or("")),
+        None => "(deleted account)".into(),
+    }
+}
+
+fn print_chat_report(r: &admin::ChatReportRow) {
+    println!("#{}  {}  {}", r.id, r.created_at.format("%Y-%m-%d %H:%M UTC"), r.group_id);
+    println!("  reporter: {}", who(r.reporter, &r.reporter_code, &r.reporter_name));
+    println!("  reported: {}", who(r.reported, &r.reported_code, &r.reported_name));
+    if !r.reason.is_empty() {
+        println!("  reason:   {}", r.reason);
+    }
+    println!("  messages: {} of {} verified", r.verified, r.total);
+    for m in r.messages.as_array().into_iter().flatten() {
+        let mark = if m["verified"] == true { "verified  " } else { "NOT SIGNED" };
+        println!("    [{mark}] #{:<4} {}", m["seq"], m["text"].as_str().unwrap_or(""));
+    }
+}
+
 fn print_user(u: &UserRow) {
     println!("uid:            {}", u.uid);
     println!("email:          {} ({})", u.email, if u.email_verified() { "verified" } else { "not verified" });
@@ -134,6 +163,19 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Migrate => {
             common::db::MIGRATOR.run(&pool).await?;
             println!("migrations applied");
+        }
+        Cmd::ChatReports { limit } => {
+            let reports = admin::unhandled_chat_reports(&pool, limit.clamp(1, 1000)).await?;
+            if reports.is_empty() {
+                println!("no unhandled chat reports");
+            }
+            for r in &reports {
+                print_chat_report(r);
+            }
+        }
+        Cmd::ChatReportDone { id } => {
+            anyhow::ensure!(admin::chat_report_done(&pool, &actor, id).await?, "no unhandled chat report #{id}");
+            println!("chat report #{id} handled");
         }
         Cmd::User(UserCmd::List) => {
             println!("{:<36} {:<10} {:<16} {:<30} {:<5} banned", "uid", "code", "name", "email", "ver.");

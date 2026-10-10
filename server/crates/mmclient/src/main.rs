@@ -8,11 +8,15 @@
 //! mmclient online --user-json a.json --hold-secs 60
 //! mmclient room --user-json a.json --create --open 3,4 --teams --ready --play --hold-secs 600
 //! mmclient room --user-json b.json --join KFQB --team 1 --ready --play --back-after-secs 5
+//! mmclient room --user-json c.json --join KFQB --chat --say "hello" --stdin
 //! ```
 //!
 //! `online` and `room` keep an online connection open like a running game and print every
 //! message from mm as one JSON line (plus `{"type":"mmclient-ticket",...}` with the result of a
-//! room game ticket). `room` exits 0 when its time is up or it leaves the room, 2 if `hello` is
+//! room game ticket). With `--chat` they are chat members (`docs/chat-protocol.md`): an identity
+//! key in `hello`, a group key for each group mm puts them in, and the chat events as JSON lines
+//! (`mmclient-chat-group`, `-msg` with the decrypted and cleaned text, `-drop` with the reason a
+//! message was dropped, `-sent`, `-error`); `--say` and `--stdin` send messages. `room` exits 0 when its time is up or it leaves the room, 2 if `hello` is
 //! refused, 3 if the create or join is refused, 1 on other errors.
 
 use std::net::Ipv4Addr;
@@ -23,6 +27,7 @@ use std::time::Instant;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
 use common::rooms::RoomRequest;
+use mmclient::chat::{ChatSession, Identity};
 use mmclient::room::{OnlineClient, Received};
 use mmclient::{CodeEncoding, Credentials, SearchOptions, UserJsonFile};
 use serde_json::{json, Value};
@@ -90,6 +95,8 @@ enum Cmd {
     Online {
         #[command(flatten)]
         who: Who,
+        #[command(flatten)]
+        chat: ChatArgs,
         /// Stay this long, then disconnect.
         #[arg(long, default_value_t = 60)]
         hold_secs: u64,
@@ -130,10 +137,126 @@ impl Who {
     }
 }
 
+/// Chat on the online connection.
+#[derive(Args, Clone)]
+struct ChatArgs {
+    /// Chat: send an identity key in `hello`, take part in the groups mm makes (rooms, matches)
+    /// and print every chat event as a JSON line.
+    #[arg(long)]
+    chat: bool,
+    /// The identity seed (64 hex digits, as Dolphin's `chat-identity.key`), made if missing. A new
+    /// identity for each run without it.
+    #[arg(long, requires = "chat")]
+    chat_key_file: Option<std::path::PathBuf>,
+    /// Send this message once someone in the group can read it (repeatable; one a second).
+    #[arg(long, requires = "chat")]
+    say: Vec<String>,
+    /// Read lines from stdin: a message to send, `/report UID [reason]` (the messages received from
+    /// UID in this group) or `/leave` (`chat-leave`).
+    #[arg(long, requires = "chat")]
+    stdin: bool,
+}
+
+/// A chat member next to the room or online loop.
+struct ChatDriver {
+    session: ChatSession,
+    says: std::collections::VecDeque<String>,
+    lines: Option<std::sync::mpsc::Receiver<String>>,
+    next_send: Instant,
+}
+
+impl ChatDriver {
+    fn new(a: &ChatArgs) -> anyhow::Result<Option<Self>> {
+        if !a.chat {
+            return Ok(None);
+        }
+        let id = match &a.chat_key_file {
+            Some(path) => Identity::load_or_create(path)?,
+            None => Identity::generate(),
+        };
+        let lines = a.stdin.then(|| {
+            let (tx, rx) = std::sync::mpsc::channel();
+            std::thread::spawn(move || {
+                use std::io::BufRead;
+                for line in std::io::stdin().lock().lines() {
+                    let Ok(line) = line else { break };
+                    if tx.send(line).is_err() {
+                        break;
+                    }
+                }
+            });
+            rx
+        });
+        Ok(Some(ChatDriver {
+            session: ChatSession::new(id),
+            says: a.say.iter().cloned().collect(),
+            lines,
+            next_send: Instant::now(),
+        }))
+    }
+
+    fn on_message(&mut self, client: &mut OnlineClient, m: &Value) {
+        let (events, requests) = self.session.on_message(m);
+        for e in &events {
+            print_line(e);
+        }
+        for r in &requests {
+            client.send_json(r);
+        }
+    }
+
+    /// Commands from stdin, and the next message once someone can read it.
+    fn poll(&mut self, client: &mut OnlineClient) {
+        while let Some(line) = self.lines.as_ref().and_then(|l| l.try_recv().ok()) {
+            let line = line.trim().to_string();
+            if let Some(rest) = line.strip_prefix("/report ") {
+                let (uid, reason) = rest.trim().split_once(' ').unwrap_or((rest.trim(), ""));
+                match self.session.report(uid, reason) {
+                    Some(req) => {
+                        client.send_json(&req);
+                        print_line(
+                            &json!({"type": "mmclient-chat-report", "from": uid, "messages": req["messages"].as_array().map(|m| m.len())}),
+                        );
+                    }
+                    None => print_line(&json!({"type": "mmclient-chat-error", "error": "not in a chat group"})),
+                }
+            } else if line == "/leave" {
+                if let Some(req) = self.session.leave() {
+                    client.send_json(&req);
+                }
+            } else if !line.is_empty() {
+                self.says.push_back(line);
+            }
+        }
+        if self.says.is_empty() || Instant::now() < self.next_send || self.session.readers().is_empty() {
+            return;
+        }
+        let text = self.says.pop_front().expect("checked");
+        match self.session.compose(&text) {
+            Ok((req, event)) => {
+                client.send_json(&req);
+                print_line(&event);
+                // mm takes 5 messages in 5 s.
+                self.next_send = Instant::now() + Duration::from_millis(1100);
+            }
+            Err(e) => print_line(&json!({"type": "mmclient-chat-error", "error": e, "text": text})),
+        }
+    }
+}
+
+/// Connects (with the chat key when chatting) and sends `hello`.
+fn connect_online(who: &Who, chat: Option<&ChatDriver>) -> anyhow::Result<(OnlineClient, Value)> {
+    let server = mmclient::resolve(&who.server)?;
+    let key = chat.map(|c| c.session.identity().public_hex()).unwrap_or_default();
+    OnlineClient::connect_with_chat(server, &who.creds()?, &who.app_version, "", &key)
+}
+
 #[derive(Args)]
 struct RoomArgs {
     #[command(flatten)]
     who: Who,
+    #[command(flatten)]
+    chat: ChatArgs,
     /// Create a room (as its host).
     #[arg(long, conflicts_with = "join")]
     create: bool,
@@ -196,22 +319,30 @@ fn print_line(v: &Value) {
     let _ = out.flush();
 }
 
-fn run_online(who: Who, hold_secs: u64) -> anyhow::Result<i32> {
-    let server = mmclient::resolve(&who.server)?;
-    let (mut client, hello) = OnlineClient::connect(server, &who.creds()?, &who.app_version)?;
+fn run_online(who: Who, chat: ChatArgs, hold_secs: u64) -> anyhow::Result<i32> {
+    let mut chat = ChatDriver::new(&chat)?;
+    let (mut client, hello) = connect_online(&who, chat.as_ref())?;
     print_line(&hello);
     if hello.get("error").is_some() {
         return Ok(2);
     }
     let deadline = Instant::now() + Duration::from_secs(hold_secs);
     while Instant::now() < deadline {
-        match client.recv(Duration::from_millis(200)) {
-            Received::Message(m) => print_line(&m),
+        match client.recv(Duration::from_millis(100)) {
+            Received::Message(m) => {
+                print_line(&m);
+                if let Some(c) = chat.as_mut() {
+                    c.on_message(&mut client, &m);
+                }
+            }
             Received::Disconnected => {
                 print_line(&json!({"type": "mmclient-disconnected"}));
                 return Ok(1);
             }
             Received::Timeout => {}
+        }
+        if let Some(c) = chat.as_mut() {
+            c.poll(&mut client);
         }
     }
     client.close();
@@ -222,7 +353,8 @@ fn run_room(a: RoomArgs) -> anyhow::Result<i32> {
     anyhow::ensure!(a.create || a.join.is_some(), "give --create or --join CODE");
     let server = mmclient::resolve(&a.who.server)?;
     let creds = a.who.creds()?;
-    let (mut client, hello) = OnlineClient::connect(server, &creds, &a.who.app_version)?;
+    let mut chat = ChatDriver::new(&a.chat)?;
+    let (mut client, hello) = connect_online(&a.who, chat.as_ref())?;
     print_line(&hello);
     if hello.get("error").is_some() {
         return Ok(2);
@@ -262,6 +394,9 @@ fn run_room(a: RoomArgs) -> anyhow::Result<i32> {
         match client.recv(Duration::from_millis(100)) {
             Received::Message(m) => {
                 print_line(&m);
+                if let Some(c) = chat.as_mut() {
+                    c.on_message(&mut client, &m);
+                }
                 if m["type"] == "room-left" {
                     client.close();
                     return Ok(0);
@@ -288,6 +423,9 @@ fn run_room(a: RoomArgs) -> anyhow::Result<i32> {
             if matched {
                 back_at = a.back_after_secs.map(|s| Instant::now() + Duration::from_secs(s));
             }
+        }
+        if let Some(c) = chat.as_mut() {
+            c.poll(&mut client);
         }
         if back_at.is_some_and(|t| Instant::now() >= t) {
             back_at = None;
@@ -368,7 +506,7 @@ fn run() -> anyhow::Result<i32> {
             println!("{}", serde_json::to_string(&result)?);
             Ok(result.status.exit_code())
         }
-        Cmd::Online { who, hold_secs } => run_online(who, hold_secs),
+        Cmd::Online { who, chat, hold_secs } => run_online(who, chat, hold_secs),
         Cmd::Room(a) => run_room(*a),
         Cmd::Raw { server, data, wait_secs } => {
             let (replies, disconnected) = mmclient::send_raw_packet(

@@ -1,5 +1,5 @@
-//! Database access shared between services: the embedded migrations and the
-//! read the mm server does to validate a ticket.
+//! Database access shared between services: the embedded migrations, the read the mm server
+//! does to validate a ticket, and what mm writes (matches, chat identity keys, chat reports).
 
 use chrono::{DateTime, Utc};
 use uuid::Uuid;
@@ -63,6 +63,75 @@ pub async fn insert_match(
     .bind(is_host)
     .bind(stages)
     .bind(region)
+    .execute(pool)
+    .await
+    .map(|_| ())
+}
+
+/// Identity keys kept per account: older ones are deleted when a new one is recorded.
+pub const CHAT_KEYS_KEPT: i64 = 20;
+
+/// Records that `uid` used the chat identity key `key` (`hello.chatKey`): a new key is added, a
+/// known one gets a new `last_seen`, and only the [`CHAT_KEYS_KEPT`] most recent stay.
+pub async fn record_chat_key(pool: &sqlx::PgPool, uid: Uuid, key: &[u8; 32]) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO chat_identity_keys (uid, public_key) VALUES ($1, $2)
+         ON CONFLICT (uid, public_key) DO UPDATE SET last_seen = now()",
+    )
+    .bind(uid)
+    .bind(&key[..])
+    .execute(pool)
+    .await?;
+    sqlx::query(
+        "DELETE FROM chat_identity_keys WHERE uid = $1 AND public_key NOT IN (
+             SELECT public_key FROM chat_identity_keys WHERE uid = $1
+              ORDER BY last_seen DESC, first_seen DESC LIMIT $2)",
+    )
+    .bind(uid)
+    .bind(CHAT_KEYS_KEPT)
+    .execute(pool)
+    .await
+    .map(|_| ())
+}
+
+/// The chat identity keys recorded for `uid`, most recent first.
+pub async fn fetch_chat_keys(pool: &sqlx::PgPool, uid: Uuid) -> sqlx::Result<Vec<[u8; 32]>> {
+    let rows: Vec<Vec<u8>> =
+        sqlx::query_scalar("SELECT public_key FROM chat_identity_keys WHERE uid = $1 ORDER BY last_seen DESC")
+            .bind(uid)
+            .fetch_all(pool)
+            .await?;
+    Ok(rows.into_iter().filter_map(|k| k.try_into().ok()).collect())
+}
+
+/// A `chat-report` as mm stores it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct NewChatReport {
+    pub reporter: Uuid,
+    pub reported: Uuid,
+    pub group_id: String,
+    /// Cleaned (`chat::clean_text`).
+    pub reason: String,
+    /// `[{seq, text, raw, sig, verified}]` (`migrations/0006_chat.sql`).
+    pub messages: serde_json::Value,
+    pub verified: i32,
+    pub total: i32,
+}
+
+/// Stores a report. A reporter or reported uid that is no account (any more) is stored as NULL
+/// (the uid of a report comes from a peer).
+pub async fn insert_chat_report(pool: &sqlx::PgPool, r: &NewChatReport) -> sqlx::Result<()> {
+    sqlx::query(
+        "INSERT INTO chat_reports (reporter, reported, group_id, reason, messages, verified, total)
+         VALUES ((SELECT uid FROM users WHERE uid = $1), (SELECT uid FROM users WHERE uid = $2), $3, $4, $5, $6, $7)",
+    )
+    .bind(r.reporter)
+    .bind(r.reported)
+    .bind(&r.group_id)
+    .bind(&r.reason)
+    .bind(&r.messages)
+    .bind(r.verified)
+    .bind(r.total)
     .execute(pool)
     .await
     .map(|_| ())

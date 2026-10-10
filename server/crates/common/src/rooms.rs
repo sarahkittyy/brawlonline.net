@@ -88,6 +88,18 @@ pub struct Hello {
     /// As a ticket's `platform`.
     #[serde(default, skip_serializing_if = "String::is_empty")]
     pub platform: String,
+    /// The install's chat identity key (64 hex digits, Ed25519; `docs/chat-protocol.md` §1). Empty
+    /// from builds older than chat: such a connection can't chat. Anything but a string reads as
+    /// empty (a malformed key is ignored, never a reason to refuse the `hello`).
+    #[serde(default, skip_serializing_if = "String::is_empty", deserialize_with = "string_or_empty")]
+    pub chat_key: String,
+}
+
+fn string_or_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::Error> {
+    Ok(match serde_json::Value::deserialize(d)? {
+        serde_json::Value::String(s) => s,
+        _ => String::new(),
+    })
 }
 
 /// A `room-*` request, client → server, on an online connection.
@@ -432,6 +444,26 @@ mod tests {
         for (kind, v) in bad {
             assert!(RoomRequest::parse(kind, &v).is_err(), "{kind} {v}");
         }
+    }
+
+    #[test]
+    fn hello_chat_key_is_optional_and_lenient() {
+        let parse = |v: serde_json::Value| serde_json::from_value::<Hello>(v).unwrap().chat_key;
+        let base = json!({"type": "hello", "user": {"uid": "u", "playKey": "k"}, "appVersion": "0.1.0"});
+        assert_eq!(parse(base.clone()), "");
+        for (key, want) in [(json!("ab"), "ab"), (json!(5), ""), (json!(null), ""), (json!({"x": 1}), "")] {
+            let mut v = base.clone();
+            v["chatKey"] = key;
+            assert_eq!(parse(v), want);
+        }
+        let hello = Hello {
+            kind: HELLO.into(),
+            user: HelloUser { uid: "u".into(), play_key: "k".into() },
+            app_version: "0.1.0".into(),
+            platform: String::new(),
+            chat_key: String::new(),
+        };
+        assert!(serde_json::to_value(&hello).unwrap().get("chatKey").is_none());
     }
 
     #[test]

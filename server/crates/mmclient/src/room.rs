@@ -45,6 +45,18 @@ impl OnlineClient {
         app_version: &str,
         platform: &str,
     ) -> anyhow::Result<(Self, Value)> {
+        Self::connect_with_chat(server, creds, app_version, platform, "")
+    }
+
+    /// [`Self::connect_on`] with `hello.chatKey` (`chat_key` hex, empty for none): a game that
+    /// can chat (`docs/chat-protocol.md`; [`crate::chat`]).
+    pub fn connect_with_chat(
+        server: SocketAddr,
+        creds: &Credentials,
+        app_version: &str,
+        platform: &str,
+        chat_key: &str,
+    ) -> anyhow::Result<(Self, Value)> {
         let sock = EnetSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))?;
         let local_port = sock.local_addr()?.port();
         let mut host =
@@ -68,6 +80,7 @@ impl OnlineClient {
             user: HelloUser { uid: creds.uid.clone(), play_key: creds.play_key.clone() },
             app_version: app_version.into(),
             platform: platform.into(),
+            chat_key: chat_key.into(),
         };
         client.send_json(&serde_json::to_value(&hello)?);
         let resp = client.wait_for(Duration::from_secs(5), |m| m["type"] == "hello-resp")?;

@@ -15,7 +15,9 @@
 //! [`RoomBook`] sends the room messages to members itself (`Output::Send`). Answers to tickets go
 //! through the engine, which owns ticket connections: [`RoomBook::ticket`] returns them, and
 //! tickets that have to fail (a start that timed out, a member who left) wait in
-//! [`RoomBook::take_failed_tickets`].
+//! [`RoomBook::take_failed_tickets`]. Rooms whose players changed wait in
+//! [`RoomBook::take_changed`], so the engine can keep each room's chat group in step
+//! ([`crate::chat`]).
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::SocketAddrV4;
@@ -117,6 +119,9 @@ struct Room {
     /// Accounts the host removed: they cannot join this room again.
     kicked: HashSet<Uuid>,
     created: Instant,
+    /// Rooms created before this one since mm started, plus one: the `n` of its chat group
+    /// `room-<CODE>-<n>`, so a code used again later is another group.
+    serial: u64,
 }
 
 impl Room {
@@ -255,8 +260,11 @@ pub struct RoomBook {
     /// Room game ticket connection → the code of its room.
     ticket_of: HashMap<ConnId, String>,
     failed_tickets: Vec<(ConnId, String)>,
+    /// Rooms whose players changed (code, serial), for [`Self::take_changed`].
+    changed: Vec<(String, u64)>,
     join_seq: u64,
     match_counter: u64,
+    room_counter: u64,
     create_limiter: RateLimiter<Uuid>,
     join_limiter: RateLimiter<Uuid>,
     request_limiter: RateLimiter<ConnId>,
@@ -282,8 +290,10 @@ impl RoomBook {
             member_of: HashMap::new(),
             ticket_of: HashMap::new(),
             failed_tickets: Vec::new(),
+            changed: Vec::new(),
             join_seq: 0,
             match_counter: 0,
+            room_counter: 0,
         }
     }
 
@@ -299,6 +309,24 @@ impl RoomBook {
     /// Tickets that have to be answered with an error (and closed) by the engine.
     pub fn take_failed_tickets(&mut self) -> Vec<(ConnId, String)> {
         std::mem::take(&mut self.failed_tickets)
+    }
+
+    /// The rooms whose players changed since the last call, as (code, serial), each once, in the
+    /// order they changed. A room that closed is in it too (and is gone from [`Self::players`]).
+    pub fn take_changed(&mut self) -> Vec<(String, u64)> {
+        let mut changed = std::mem::take(&mut self.changed);
+        let mut seen = HashSet::new();
+        changed.retain(|c| seen.insert(c.clone()));
+        changed
+    }
+
+    /// The online connections and accounts of a room's players in joining order, if the room
+    /// with this code is still the one with this serial.
+    pub fn players(&self, code: &str, serial: u64) -> Vec<(ConnId, Uuid)> {
+        let Some(room) = self.rooms.get(code).filter(|r| r.serial == serial) else { return Vec::new() };
+        let mut players: Vec<&Member> = room.members().map(|(_, m)| m).collect();
+        players.sort_by_key(|m| m.joined);
+        players.into_iter().map(|m| (m.conn, m.info.uid)).collect()
     }
 
     /// Public rooms for the launcher: joinable first, then waiting before in game, then fuller,
@@ -373,6 +401,7 @@ impl RoomBook {
             self.leave(now, &old, conn, None, true, out);
         }
         self.join_seq += 1;
+        self.room_counter += 1;
         let mut slots: [Option<Member>; ROOM_SLOTS] = Default::default();
         slots[0] = Some(Member {
             conn,
@@ -397,8 +426,10 @@ impl RoomBook {
                 phase: Phase::Waiting,
                 kicked: HashSet::new(),
                 created: now,
+                serial: self.room_counter,
             },
         );
+        self.changed.push((code.clone(), self.room_counter));
         self.member_of.insert(conn, code.clone());
         self.broadcast(&code, out);
         Ok(())
@@ -444,6 +475,7 @@ impl RoomBook {
             in_game: false,
         });
         tracing::info!(%code, player = %who.connect_code, slot = slot + 1, "joined room");
+        self.changed.push((code.clone(), room.serial));
         self.member_of.insert(conn, code.clone());
         self.broadcast(&code, out);
         Ok(())
@@ -471,6 +503,7 @@ impl RoomBook {
         let Some(room) = self.rooms.get_mut(code) else { return };
         let Some(slot) = room.slot_of(conn) else { return };
         let gone = room.slots[slot].take();
+        self.changed.push((code.to_string(), room.serial));
         tracing::info!(
             %code,
             player = gone.as_ref().map(|m| m.info.connect_code.as_str()).unwrap_or(""),
@@ -859,6 +892,35 @@ mod tests {
 
     fn join(t: &mut T, conn: ConnId, code: &str) -> Vec<Output> {
         t.req(conn, RoomRequest::Join { code: code.into() })
+    }
+
+    /// What the engine keeps chat groups in step with: the rooms whose players changed, and their
+    /// players in joining order; a code used again is another room (another serial).
+    #[test]
+    fn player_changes_are_recorded() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        assert_eq!(t.book.take_changed(), vec![(code.clone(), 1)]);
+        assert!(t.book.take_changed().is_empty());
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
+        t.req(1, RoomRequest::Ready { ready: true, character: None, costume: None });
+        assert!(t.book.take_changed().is_empty(), "no player changed");
+        join(&mut t, 3, &code);
+        join(&mut t, 2, &code);
+        assert_eq!(t.book.take_changed(), vec![(code.clone(), 1)]);
+        assert_eq!(t.book.players(&code, 1), vec![(1, info(1).uid), (3, info(3).uid), (2, info(2).uid)]);
+        assert!(t.book.players(&code, 2).is_empty());
+        // A kick (3 is in slot 2), a dropped connection.
+        t.req(1, RoomRequest::Slot { slot: 2, open: false });
+        assert_eq!(t.book.take_changed(), vec![(code.clone(), 1)]);
+        assert_eq!(t.book.players(&code, 1), vec![(1, info(1).uid), (2, info(2).uid)]);
+        t.book.conn_gone(t.now, 2, &mut vec![]);
+        assert_eq!(t.book.take_changed(), vec![(code.clone(), 1)]);
+        // The last one leaves for a new room: the old one is gone, the new one has serial 2.
+        let other = create(&mut t, 1);
+        assert_eq!(t.book.take_changed(), vec![(code.clone(), 1), (other.clone(), 2)]);
+        assert!(t.book.players(&code, 1).is_empty());
+        assert_eq!(t.book.players(&other, 2), vec![(1, info(1).uid)]);
     }
 
     #[test]

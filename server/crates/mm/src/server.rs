@@ -5,6 +5,10 @@
 //! bounded channel and come back as [`Input::UserFetched`], so a slow database
 //! never blocks the loop; a full queue refuses the ticket instead of growing.
 //!
+//! Chat identity keys and chat reports go to the database the same way as match records: a task
+//! per write on the runtime, never waited for. A report's signatures are checked there (against
+//! the reported account's identity keys), off the loop.
+//!
 //! The loop also publishes the engine's status (the online count and the public rooms) twice a
 //! second for a small HTTP listener on a local address (`MM_STATUS_LISTEN`, `GET /status`), which
 //! accounts reads to serve the launcher's `GET /v1/rooms`.
@@ -29,6 +33,7 @@ use tokio::sync::mpsc::error::TrySendError;
 use tokio::sync::{mpsc as tk_mpsc, Semaphore};
 use uuid::Uuid;
 
+use crate::chat::{report_row, ChatReportRecord};
 use crate::engine::{ConnId, Engine, EngineConfig, FetchResult, Input, MatchRecord, Output};
 
 const TICK: Duration = Duration::from_millis(100);
@@ -235,6 +240,34 @@ async fn record_match(pool: PgPool, m: MatchRecord) {
     }
 }
 
+/// Records a chat identity key (best effort, like a match).
+async fn record_chat_key(pool: PgPool, uid: Uuid, key: [u8; 32]) {
+    if let Err(e) = db::record_chat_key(&pool, uid, &key).await {
+        tracing::error!(%uid, "recording chat key failed: {e}");
+    }
+}
+
+/// Stores a chat report: each message's signature is checked against the reported account's
+/// identity keys (on a blocking thread: up to 20 messages × 20 keys), the texts are cleaned.
+async fn store_chat_report(pool: PgPool, r: ChatReportRecord) {
+    let keys = match db::fetch_chat_keys(&pool, r.reported).await {
+        Ok(k) => k,
+        Err(e) => {
+            // Stored anyway, with nothing verified: the report is not lost.
+            tracing::error!(reported = %r.reported, "reading chat keys failed: {e}");
+            Vec::new()
+        }
+    };
+    let row = match tokio::task::spawn_blocking(move || report_row(&r, &keys)).await {
+        Ok(row) => row,
+        Err(e) => return tracing::error!("checking a chat report failed: {e}"),
+    };
+    tracing::info!(reported = %row.reported, verified = row.verified, total = row.total, "chat report stored");
+    if let Err(e) = db::insert_chat_report(&pool, &row).await {
+        tracing::error!(reported = %row.reported, "storing chat report failed: {e}");
+    }
+}
+
 /// The event loop's way to the database.
 struct Db {
     fetches: tk_mpsc::Sender<FetchJob>,
@@ -288,6 +321,12 @@ impl Loop {
             }
             Output::RecordMatch(m) => {
                 self.db.rt.spawn(record_match(self.db.pool.clone(), m));
+            }
+            Output::RecordChatKey { uid, key } => {
+                self.db.rt.spawn(record_chat_key(self.db.pool.clone(), uid, key));
+            }
+            Output::ChatReport(r) => {
+                self.db.rt.spawn(store_chat_report(self.db.pool.clone(), r));
             }
         }
     }
