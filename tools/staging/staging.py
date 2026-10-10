@@ -530,7 +530,12 @@ def win_build(args: argparse.Namespace) -> None:
     prepare_worktree(sha)
     say(f"building {sha[:10]} ({git('log', '-1', '--format=%s', sha)[:70]})")
 
-    # 1. The staging server, from the same commit.
+    # 1. The staging server, from the same commit. Windows locks a running .exe, so a running
+    # staging server is stopped for the build and started again on the new binaries at the end.
+    server_was_up = any(pid_alive(pid) for pid in load_pids().values())
+    if server_was_up:
+        say("stopping the staging server for the build (it restarts on the new binaries)")
+        server_down()
     run(["cargo", "build", "--workspace"], cwd=SRC / "server", log=log,
         env=dict(os.environ, CARGO_TARGET_DIR=str(CARGO_TARGET)))
 
@@ -569,7 +574,10 @@ def win_build(args: argparse.Namespace) -> None:
     (app / "resources" / "staging-env.json").write_text(staging_env_json(cfg, str(win_profile("a"))))
     (WIN / "build.json").write_text(json.dumps({"sha": sha, "ref": args.ref, "built": time.ctime()}) + "\n")
     say(f"Windows client ready: {app / 'Brawl Online.exe'} ({sha[:10]})")
-    say("restart the server to use this commit's server binaries: `server restart`")
+    if server_was_up:
+        server_up(args)
+    else:
+        say("the staging server runs this commit's binaries from the next `server up`")
 
 
 def stage_windows_dolphin(binaries: Path, out: Path, dsrc: Path, sha: str, log: Path) -> None:
