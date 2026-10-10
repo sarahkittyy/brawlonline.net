@@ -92,12 +92,14 @@ def _shots(test: str, g: Game) -> None:
 
 def _server_messages() -> dict[str, str]:
     """Every error text of server/crates/mm/src/messages.rs, the format functions filled with
-    the widest values they get (a connect code of four W's)."""
+    the widest values they get (a connect code of four W's, a room code of four W's)."""
     src = MESSAGES_RS.read_text(encoding="utf-8")
     out = {m.group(1).lower(): m.group(2) for m in re.finditer(r'pub const (\w+): &str = "([^"]*)";', src)}
     fills = {"mode": "Ranked", "latest": "10.10.10", "code": "WWWW#999"}
     for m in re.finditer(r'pub fn (\w+)\((\w+): &str\) -> String \{\s*format!\("([^"]*)"\)', src):
-        out[m.group(1)] = m.group(3).replace("{" + m.group(2) + "}", fills[m.group(2)])
+        # A room's code is four letters (common::rooms::ROOM_CODE_LEN), not a connect code.
+        fill = "WWWW" if m.group(1).startswith("room_") else fills[m.group(2)]
+        out[m.group(1)] = m.group(3).replace("{" + m.group(2) + "}", fill)
     for mode in ("Teams", "Party"):
         out[f"not_available_{mode.lower()}"] = out["not_available"].replace("Ranked", mode)
     return out
