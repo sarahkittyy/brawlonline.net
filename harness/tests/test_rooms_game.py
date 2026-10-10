@@ -12,6 +12,7 @@ Run with a Dolphin built from rooms-dolphin (PPHARNESS_DOLPHIN_DIR) and this plu
 from __future__ import annotations
 
 import concurrent.futures
+import contextlib
 import sys
 import time
 from pathlib import Path
@@ -205,3 +206,153 @@ def test_room_two_players_through_the_game(backend: OnlineBackend, dolphin: Call
     a.steps("hold B 120", "until muMenuMain 600", "wait 90")
     a.shot("08-back-on-with-friends")
     _wait(lambda: not room_view(a)["flags"] & ppom.RF_IN, 20, "A out of the room")
+
+
+# The CSS hand (test_rooms_ui.py): muSelCharHand +0x90 x, +0x94 y; the panels' centres.
+HAND_X, HAND_Y = 0x90, 0x94
+PANEL_X = [-22.0, -7.0, 8.0, 23.0]
+
+
+def _u32(g: Game, a: int) -> int:
+    return int.from_bytes(g.c.read_mem(a, 4), "big")
+
+
+def hand(g: Game) -> tuple[float, float]:
+    import struct
+    task = _u32(g, _u32(g, _u32(g, 0x805A0060) + 4) + 0x400)
+    h = _u32(g, _u32(g, task + 0x44) + 0x1A8)
+    return struct.unpack(">ff", g.c.read_mem(h + HAND_X, 8))
+
+
+def hand_to(g: Game, x: float, y: float, tol: float = 1.2) -> None:
+    """Closed loop: the stick toward (x, y) until the hand is there."""
+    from ppharness.client import PadInput
+    for _ in range(80):
+        hx, hy = hand(g)
+        dx, dy = x - hx, y - hy
+        if abs(dx) <= tol and abs(dy) <= tol:
+            return
+
+        def axis(d: float) -> int:
+            if abs(d) <= tol:
+                return 128
+            v = max(45, min(127, int(abs(d) * 15)))
+            return 128 + (v if d > 0 else -v)
+        g.c.pad_script(0, [PadInput(main=(axis(dx), axis(dy)), hold=3), PadInput(hold=2)])
+        g.steps("wait 5")
+    raise AssertionError(f"{g.name}: the hand did not reach {(x, y)}: {hand(g)}")
+
+
+def status_line(g: Game) -> str:
+    return g.c.call("rooms_status")["text"]
+
+
+def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                  gpu_backend: str) -> None:
+    """Three games: the host opens slot 3 with the hand and A, R turns Teams on, two players join
+    by code; everyone on red (X / Y) is refused ("Pick different teams", no start although all
+    are ready); one player to blue and the room starts a 2-against-1 team battle under the
+    gameplay session on all three; blue walks off, and everyone is back on the room's CSS."""
+    test = "three-players"
+    users = [backend.create_user(n, n[:4].upper()) for n in ("rkira", "rlars", "rmona")]
+    a, b, c = gs = [_boot(dolphin, f"room3-{x}", backend, u, gpu_backend, test, "gameplay", artifacts=ART)
+                    for x, u in zip("abc", users)]
+    _all(*[g.to_main_menu for g in gs])
+    _all(*[g.to_online_page for g in gs])
+
+    code = create_room(a)
+    pick(a)
+    # Slot 3 (port 2): the hand over the third panel, A. R: Teams on.
+    hand_to(a, PANEL_X[2], -10.0)
+    a.steps("tap A 8", "wait 30")
+    until_view(a, lambda v: v["slots"][2]["bits"] & ppom.SLOT_OPEN, "slot 3 open")
+    a.steps("tap R 8", "wait 30")
+    until_view(a, lambda v: v["flags"] & ppom.RF_TEAMS, "Teams on")
+    hand_to(a, -23.0, 10.5)   # back on Fox
+    a.steps("wait 30")
+    a.shot("03-slot-3-open-teams-on")
+
+    _all(lambda: to_join_room(b), lambda: to_join_room(c))
+    pick(b, right=2)
+    pick(c, right=4)
+    for g in gs:
+        B.write_rules(g.c, stocks=1, minutes=1, items_off=True)
+        ppom.allow_test_rules(g.c)
+    type_room_code(b, code)
+    until_view(b, lambda v: v["flags"] & ppom.RF_IN, "B in the room")
+    type_room_code(c, code)
+    vc = until_view(c, lambda v: v["flags"] & ppom.RF_IN, "C in the room")
+    assert vc["local_port"] == 2 and vc["mode"] == 2, vc
+    v = until_view(a, lambda v: [s["team"] for s in v["slots"][:3]] == [0, 1, 2] and
+                   all(s["bits"] & ppom.SLOT_TAKEN for s in v["slots"][:3]), "three players, red blue green")
+    for g in gs:
+        assert not lock_of(g)["ready"], (g.name, lock_of(g))
+        g.steps("wait 40")
+        g.shot("04-three-in-the-room")
+
+    # Everyone on red: B Y (blue -> red), C X (green -> red).
+    b.steps("tap Y 8", "wait 20")
+    c.steps("tap X 8", "wait 20")
+    until_view(a, lambda v: [s["team"] for s in v["slots"][:3]] == [0, 0, 0], "everyone red")
+    _wait(lambda: all(status_line(g) == "Pick different teams" for g in gs), 20, "Pick different teams")
+    game = room_view(a)["game"]
+    for g in gs:
+        g.steps("tap START 8", "wait 10")
+    until_view(a, lambda v: all(s["bits"] & ppom.SLOT_READY for s in v["slots"][:3]), "all ready")
+    for g in gs:
+        g.steps("wait 40")
+        g.shot("05-all-red-refused")
+    time.sleep(3)
+    v = room_view(a)
+    assert v["status"] == 0 and status_line(a) == "Pick different teams", (v, status_line(a))
+
+    # C: B takes the lock back, X to blue (red -> blue), START: 2 against 1, the room starts.
+    c.steps("tap B 8", "wait 20")
+    until_view(a, lambda v: not v["slots"][2]["bits"] & ppom.SLOT_READY, "C not ready")
+    c.steps("tap X 8", "wait 20")
+    until_view(a, lambda v: v["slots"][2]["team"] == 1, "C blue")
+    c.steps("wait 20")
+    c.shot("06-blue")
+    c.steps("tap START 8", "wait 10")
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] in ("running", "error", "ended") for g in gs),
+                    240, "the room's game running on all three")
+    st = [online_set.gstatus(g.c) for g in gs]
+    assert all(s["phase"] == "running" for s in st), [(s["phase"], s.get("error")) for s in st]
+    assert [s["local_slot"] for s in st] == [0, 1, 2], st
+    for g in gs:
+        se = ppom.read_session(g.c, ppom.find_block(g.c))
+        assert se["teams"] == 1 and se["game"] == game, se
+        assert [pl["team"] for pl in se["players"][:3]] == [0, 0, 1], se
+    setups = [B.read_match_setup(g.c.read_mem) for g in gs]
+    assert setups[0] == setups[1] == setups[2], setups
+    time.sleep(8)
+    for g in gs:
+        g.shot("07-team-battle")
+
+    # Blue (C, port 2) walks off the stage; red wins on stocks. Then everyone is back on the
+    # room's CSS.
+    from ppharness import flows as F
+    with contextlib.suppress(Exception):
+        F.fight([F.Seat(c.c, 2, 0, "C")], 60 * 60, mode="selfdestruct", seed="3p",
+                stop=lambda: online_set.gstatus(c.c)["phase"] != "running")
+    try:
+        online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] != "running" for g in gs), 240,
+                        "the game to end")
+    except TimeoutError:
+        for g in gs:
+            g.shot("07-timeout")
+        raise AssertionError(f"the game did not end: {[online_set.gstatus(g.c) for g in gs]}")
+    st = [online_set.gstatus(g.c) for g in gs]
+    limit = min(s["current_frame"] for s in st) - online_set.CONFIRM_MARGIN
+    cks = [{r[0]: r[1] for r in g.c.call("gprb_checksums", since=0)["rows"] if r[0] <= limit} for g in gs]
+    common = sorted(set(cks[0]) & set(cks[1]) & set(cks[2]))
+    bad = [f for f in common if not cks[0][f] == cks[1][f] == cks[2][f]]
+    print(f"3 players: frames {[s['current_frame'] for s in st]}, end {[s['end_reason'] for s in st]}, "
+          f"rollbacks {[s['rollbacks'] for s in st]}, checksums compared {len(common)}, mismatches {len(bad)}")
+    assert common and not bad, (len(common), bad[:5])
+    _wait(lambda: all(g.scene() == CSS for g in gs), 180, "all back on the room's CSS")
+    for g in gs:
+        until_view(g, lambda v: v["flags"] & ppom.RF_IN and v["status"] == 0 and v["game"] == game + 1,
+                   "the room waiting for its next game", timeout=60)
+        g.steps("wait 60")
+        g.shot("08-back-in-the-room")
