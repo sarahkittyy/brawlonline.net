@@ -87,6 +87,7 @@ namespace OnlineMatch {
     static u8 s_quitKind = 0;     // the pause screen's result: 3 or 4
     static u16 s_quitFrames = 0;
     static u32 s_seen = 0;          // ports seen with stocks in this match (tickPlayers)
+    static bool s_inMatch = false;  // a match ran since the last frame outside scMelee (offMatch)
 
     // Each port's controls for this match (SESSION's port values, kept at the setup: SESSION is
     // the same on both machines, so are these). Applied by the ipPadConfig hook below.
@@ -458,7 +459,23 @@ namespace OnlineMatch {
         }
     }
 
-    void offMatch() { s_seen = 0; }
+    // P+'s "Allow Pausing When Set to Off" (NETPLAY.txt, a hook at 0x800505C8) writes 2 to
+    // 0x80584084 in a match whose pause is off (Unranked, Ranked, Teams), and its "Hold Start to
+    // Pause" (0x801E6D24) then takes START out of the pad reads until it has been held 50 frames,
+    // in every scene while the word is 2. Only its "Match Win/Loss Clears Pause Address" hooks
+    // put it back to 0, so a match that ends without a winner (the pause screen's L+R+A+START
+    // after a held START, the DISCONNECTED and DESYNC DETECTED ends) left START dead in the menus:
+    // START on the Direct CSS no longer opened the keypad. Cleared here once the match is left.
+    static const u32 PPLUS_PAUSE_OFF = 0x80584084;
+
+    void offMatch()
+    {
+        s_seen = 0;
+        if (s_inMatch) {
+            *(volatile u32*)PPLUS_PAUSE_OFF = 0;
+            s_inMatch = false;
+        }
+    }
 
     // In a match (scMelee), every frame, also in resimulated frames: nothing here may depend on
     // anything that differs between the machines while the match runs under rollback. LOCAL's
@@ -468,6 +485,7 @@ namespace OnlineMatch {
     void tickMatch()
     {
         PPOM::Debug& dbg = PPOM::g_block.debug;
+        s_inMatch = true;
         if ((g_onlineCss && g_onlineMatchGame) || (dbg.cfg & PPOM::CFG_TEST_GONE)) tickPlayers();
         bool test = (dbg.cfg & PPOM::CFG_TEST_DISCONNECT) != 0;
         if (test && s_discFrames >= DISC_END_FRAMES) s_discFrames = -1;   // a new test
