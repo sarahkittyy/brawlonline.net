@@ -639,3 +639,72 @@ The plugin first did not load with this code: see "Heap budget" in §2.
 **Noted, not changed:**
 - The netplay fallback (`[Online] SessionBackend = netplay`) boots P+ again under Dolphin netplay with the plugin, so its players now land on the ONLINE page instead of P+'s Versus CSS (`direct-netplay/*/06-netplay-boot.png`). The default gameplay session never reboots.
 - A Smashville desync from session frame 0 came back once in `test_direct_loser_picks_off_the_server_list` (game 1 on Smashville, equal setup keys, the barrier passed, the first RNG word different from frame 1; logs in `run/scratch/bootflow-smashville-desync/`): `docs/gameplay-rollback-status.md` open issue 7, which the session's match-start changes did not remove. The boot and the save do not reach the match setup; the rerun passed. Resolved in Phase 12 of that file (a second song pick on one machine).
+
+---
+
+## 14. Rooms (game side)
+
+The game's half of rooms (`docs/design/rooms.md`, interface `docs/rooms-game-interface.md`, PPOM v5): WITH FRIENDS with three buttons, a room's character select with four panels, the keypad's room-code mode, the host's controls, the launcher's jump. Dolphin's half (mm's rooms, the room's games under the gameplay session) is branch `rooms-dolphin`, merged into `rooms-game`. Code: `netmenu.cpp`, `anyone_menu.cpp` (the page), `online_menu.cpp` (the room block: `tickRoom`, `roomPanels`, `updateRoomStatus`, `roomMatch`, `launcherJoin`), `room_css.cpp` (the panels), `labels.cpp` (text drawn with the game's font), `code_entry.cpp` (room codes). Everything that comes from Dolphin (SESSION's room fields and names, the status text) is range-checked before it reaches a game function: slots and teams by their bit masks and `TEAM_COUNT`, characters through `resolveCss` (an unknown kind shows no character), names as at most 16 printable characters.
+
+### The third WITH FRIENDS button
+
+Brawl's WITH FRIENDS page is `muProcWifiAnybody` (`sora_menu_main`, enter at text+`0x2E4F8`). It is built for three buttons: the spectator button (decision `0x1D`) is pushed only when `wc24Available(0x10)` (`0x8014FEDC`, called from text+`0x2E534`) answers 1, and with it the page lays the other two out for three. `anyone_menu.cpp`'s `hkFlag` answers 1 for mask `0x10` when the caller is inside that enter (text+`0x2E4F8`..`0x2E790`). The three buttons and their decisions: `0x1D` Create Room (left), `0x1E` Direct 1v1 (the old BASIC VERSUS, middle, highlighted on entry), `0x1F` Join Room (the old TEAM BATTLE slot, bottom). The A handlers (text+`0x2E934`, `0x2EB70`, inline hooks `anybodyDecision`) note the choice and rewrite the decision passed on to `0x1E` (the stub's saved r4), so all three open the same Wi-Fi character select (`sqNetAnyOkiraku`); TEAM BATTLE's `sqNetAnyTeamMelee` is no longer used. The descriptions under the buttons (the panel `this+0x658`, vtable slot `0x64`, lines `0x32 + cursor`) are reprinted: "Make a room for 2 to 4 players.", "Play a specific person.", "Join a room with its code." Coming back from a room's CSS highlights that room's button again (`highlightButton`: cursor `this+0x42`, `sora_menu_rule` text+`0x1D48`, the description line).
+
+### Labels in the game's own font (`labels.cpp`)
+
+No art is made: labels are drawn into the game's own textures with the game's own font. The font is the bold 32-pixel RFNT used by the CSS name plates ("RFNU" once loaded), found by scanning the MeleeFont heap (`g_HeapInfos[0x30]`): I4 glyph sheets, 32x32 cells laid out `col * (cellW + 1)`. A label is one or two lines, as large as its box allows, squeezed sideways down to 0.6 before it is made smaller; each glyph is sampled bilinearly into a coverage mask, and the mask grown by a round brush is the rim. It is written in the texture's own format and tiling, padding blocks included (a size that is no multiple of the block, e.g. 88x20):
+
+- RGB5A3 (4x4 blocks): the WITH FRIENDS buttons `MenMainWifi21/22/23` ("CREATE ROOM", "DIRECT 1V1", "JOIN ROOM"), black letters on a white rim, as Brawl's labels;
+- I4 (8x8): the CSS state "Seeking" `MenSelchrWifi03` (88x20) becomes "Searching";
+- CMPR (8x8 blocks of four 4x4 sub-blocks): the state "Selecting Character..." `WifiInfWait05_0` (120x40) becomes "Choosing...", in CMPR's 3-colour mode (`c0` black, `c1` white, `c0 <= c1`: black, white, grey, transparent).
+
+Textures are found by name through the MDL0's texture links (section 9, the link's texture info, its bound TEX0: `boundTexture`). The other state textures of `MenSelchrState0000` are CMPR too: `WifiInfWait05_1` "Selecting Stage..." (104x40), `05_2` "Practice Stage..." (96x40), `07_0` "Brawling..." (112x24). DEBUG `scratch[6] >> 16` counts the WITH FRIENDS labels drawn (3).
+
+### The 4-panel room CSS (`room_css.cpp`)
+
+Brawl's Wi-Fi CSS builds four player areas (`muSelCharPlayerArea`, `0x448` bytes, `muSelCharTask+0x44 + 4*i`). In Wi-Fi mode areas 1-3 are network panels filled only from WFC member data, and their models are never placed. But every area whose player record (`gmSelCharData+0xB8 + 0x5C*i`, `+0x01`) says human when the CSS is built becomes a full local panel (sel_char text+`0x2DC0`). So `prepareRecords` marks records 1-3 human just before a room's CSS is built (`pponline_afterWifiRules`): four full panels, and only area 0 has a controller (`area+0x1DC = -1` for the others: no hand, no coin). Then `area+0 = 2` for areas 1-3: 0 is a local area (text+`0x6C84` moves its character with the coin, text+`0x12210` runs it), 1 remote (text+`0x12210` runs Brawl's network panel); with 2 neither runs, and the plugin draws the panel with the area's own functions:
+
+| Function / field | Use |
+|---|---|
+| `0x80696F60` setChar(area, css) | the character (`0x28` none) |
+| `0x8069742C` setCharPic(area, css, kind, costume, isTeam, team, teamSet) | the portrait and costume |
+| `0x8069A4DC` decide(area) | the "picked" look |
+| `0x80698A1C` showTeam(area) | the team colour from `area+0x1C0` when `task+0x5C8` is set (Brawl's team battle look, flags on the panels) |
+| `0x806977FC` showStars(area, count, kind) | Brawl's win stars above the plate: one star is the host's mark (rooms.md #8, a reused Brawl icon) |
+| `area+0x40C` MuMsg window 0 | the name plate |
+| `area+0x41C` state object | 0 none, 1 "Seeking..", 2 "Selecting Character...", 3 "Selecting Stage...", 4 "Practice Stage...", 5 "Bye", 6 "Brawling..."; set with `0x800FD96C(obj, state)`, animated by `0x800FD8E0(obj)` every frame |
+
+Panels: a closed slot hides the area (its scene objects' visibility saved and restored through `GetScnObjOption`, vtable `+0x24`, option `0x10001`); open and empty shows "Searching"; a player choosing shows "Choosing..." with their name; ready shows their character and costume (picked look); in the room's game, "Brawling...". The local player is always the first panel, the others follow in port order (`s_panelPort`). Sounds: the game's join sound (`0x2051`) when someone arrives, `SE_BACK` when someone leaves, the error buzzer (3) with a red error line, 1 on the host's toggles.
+
+The CSS hand (`muSelCharHand`, `area+0x1A8`): `+0x90` x, `+0x94` y in the CSS's units; panel centres x = -22, -7, 8, 23 (step 15, half-width 7), panels between y -1.5 and -20 (`panelUnderHand`).
+
+### Controls and lines (rooms.md #3, #7-#17)
+
+- Top window: the room's code and Public / Private ("KFQB Public"). Status window: Dolphin's room line ("Room KFQB: waiting for players", "Waiting for players (2/3)", "Waiting on: ...", "Pick different teams", "Starting the game", errors in red); the loser's "Press START to select stage" only when every open slot has a player; "Ready" while locked in; "Press START to enter code" when not in a room.
+- START locks in for the room's next game (`Session.game`, kept while the room starts); B takes it back. After a room code START is ignored for 45 frames: the pad system reported the keypad's START again a few frames after the keypad closed, with START already up, and the joiner locked in on arriving (seen in `test_rooms_game.py`, fixed in `54036a8f`).
+- Host, between games only: A with the hand over another panel opens / closes that slot; R Teams on / off; L public / private.
+- Teams on (3+ open slots): X / Y the next / previous team colour, while not locked in.
+- Hold Z (48 frames): leave the room, stay on the CSS (START enters a code). Hold B: leave the room and the CSS, back to WITH FRIENDS on the room's button.
+- `LOCAL.screen` is written every frame (menus, online CSS, room, busy, match, offline, other); `ROOM_LEAVE` is sent when a room's CSS is left.
+
+### The keypad's room-code mode
+
+`CodeEntry::open(port, true)`: the same keypad as Direct's (§7), with only the keys 2-9 accepted, each cycling its room letters (`ROOM_KEYS`: BC, DF, GH, JKL, MN, PQRS, TV, WXZ, the 20 letters of `BCDFGHJKLMNPQRSTVWXZ`), no '#', no suggestions, one page, placeholder "KFQB". Any other key is refused with the error sound (`scratch[15] >> 16` counts refusals); OK only with 4 letters. The keys' printed letters are still Brawl's (e.g. "ABC" on 2).
+
+### The launcher's jump
+
+Dolphin joins the room the launcher asked for (`join-room.json`) and bumps `LOCAL.roomJoin`. The plugin, on a menu page it can leave from (ONLINE, WITH FRIENDS, WITH ANYONE report themselves running), takes the page's own exit (`sora_menu_rule` text+`0x1AE0` with decision `0x1E`) into a room's CSS (Join Room entry); on an idle online CSS it rebuilds the CSS as a room's. A bump seen at boot is old and ignored.
+
+### Tests (2026-10-10)
+
+- `harness/tests/test_rooms_ui.py` (one instance, `tools/gamecode/roomsim.py` plays Dolphin's side): the three labelled buttons, Create Room, a second player choosing and ready, lock-in and unlock, opening slot 3 with the hand, Teams, X / Y team colour, private, a player leaving, hold Z, the keypad's room mode (the '#' key refused), joining by code (no lock-in on arrival), "Room not found.", hold B back to WITH FRIENDS on Create Room. Passed. Screenshots `run/artifacts/game-code/rooms/ui/`.
+- `harness/tests/test_rooms_game.py` (Dolphin built from `rooms-dolphin` 2c0eb592, local accounts and mm): two players create, join by code, ready, play a game under the gameplay session (no checksum mismatch), are back in the room with the next game and the loser's line, then hold Z and hold B; three players with Teams (everyone red refused although all ready, then 2 against 1 started and played to game set on all three, 620 confirmed checksums equal); the launcher's jump from the ONLINE page and from an idle Direct CSS. All passed. Screenshots `run/artifacts/game-code/rooms/{two-players,three-players,launcher-jump}/`.
+- With this plugin and that Dolphin: `test_online_menus_match_the_modes` (updated for the three buttons), `test_direct_from_the_game_menus`, `test_code_keypad_hash_key_and_placeholder`, `test_online_css_settings_are_locked`, `test_direct_set_under_the_gameplay_session` passed.
+
+### Limits
+
+- The local player's own plate is Brawl's (their name tag or "PLAYER 1"), not their account name.
+- The state boxes ("P2 Choosing...") keep the colour of their panel index, not the team colour.
+- A ready player's panel shows their character; there is no "Ready" text on it.
+- The flag on the local panel is not clickable for the team; X / Y are.
+- A 4-player room was not tested end to end.
