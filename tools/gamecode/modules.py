@@ -13,7 +13,7 @@ from ppharness.client import HarnessClient  # noqa: E402
 
 NAMES = {1: "sora_scene", 2: "sora_menu_main", 3: "sora_menu_sel_char", 4: "sora_menu_sel_stage",
          27: "sora_melee", 18: "sora_minigame?", 11: "sora_menu_title?", 16: "sora_menu_?",
-         224: "sy_core"}
+         224: "sy_core", 20560: "PPOnline (plugin)", 20561: "PPOnline (loader)"}
 
 
 def modules(c: HarnessClient):
@@ -25,7 +25,7 @@ def modules(c: HarnessClient):
         seen.add(p)
         h = c.read_mem(p, 0x40)
         mid, nxt, prv, nsec, secoff = struct.unpack_from(">5I", h, 0)
-        secs = c.read_mem(secoff, 8 * nsec) if nsec < 32 else b""
+        secs = c.read_mem(secoff, 8 * nsec) if nsec <= 64 else b""
         text = None
         for i in range(nsec):
             off, size = struct.unpack_from(">II", secs, 8 * i)
