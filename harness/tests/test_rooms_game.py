@@ -356,3 +356,64 @@ def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[...,
                    "the room waiting for its next game", timeout=60)
         g.steps("wait 60")
         g.shot("08-back-in-the-room")
+
+
+def write_join(g: Game, code: str) -> str:
+    """The launcher's jump-to-room request (Dolphin's Online/join-room.json, as test_rooms.py)."""
+    import json
+    import os
+    import uuid
+    from datetime import datetime, timezone
+    rid = str(uuid.uuid4())
+    created = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    d = Path(g.inst.user_dir) / "Online"
+    tmp = d / "join-room.json.tmp"
+    tmp.write_text(json.dumps({"version": 1, "id": rid, "code": code, "createdAt": created}))
+    os.replace(tmp, d / "join-room.json")
+    return rid
+
+
+def test_room_launcher_jump(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                            gpu_backend: str) -> None:
+    """The launcher's join (Dolphin bumps LOCAL.roomJoin once it has joined): from the ONLINE menu
+    page the game goes to the room's CSS by itself; from an idle Direct CSS the CSS is built again
+    as the room's."""
+    test = "launcher-jump"
+    ua = backend.create_user("rlhost", "RLHS")
+    ub = backend.create_user("rljump", "RLJM")
+    a = _boot(dolphin, "room-la", backend, ua, gpu_backend, test, "gameplay", artifacts=ART)
+    b = _boot(dolphin, "room-lb", backend, ub, gpu_backend, test, "gameplay", artifacts=ART)
+    _all(a.to_main_menu, b.to_main_menu)
+    _all(a.to_online_page, b.to_online_page)
+    code = create_room(a)
+    pick(a)
+
+    # B idles on the ONLINE page: the join takes it to the room's CSS.
+    b.steps("wait 30")
+    assert room_view(b)["screen"] == ppom.SCREENS["menus"], room_view(b)
+    write_join(b, code)
+    _wait(lambda: b.scene() == CSS, 60, "B on the room's CSS")
+    vb = until_view(b, lambda v: v["flags"] & ppom.RF_IN and v["screen"] == ppom.SCREENS["room"], "B in the room")
+    assert vb["code"] == code and vb["local_port"] == 1, vb
+    until_view(a, lambda v: v["slots"][1]["bits"] & ppom.SLOT_TAKEN, "A sees B")
+    b.steps("wait 60")
+    b.shot("01-jumped-from-the-online-page")
+
+    # B leaves (hold B: back to WITH FRIENDS on Join Room), goes up to Direct 1v1 and its CSS.
+    b.steps("hold B 120", "until muMenuMain 600", "wait 90")
+    until_view(a, lambda v: v["slots"][1]["bits"] == ppom.SLOT_OPEN, "A sees B gone")
+    b.steps("tap DUP 8", "wait 20")
+    b.shot("02-with-friends-direct")
+    b.steps("tap A", "wait 400", f"until {CSS} 600", "wait 60")
+    assert room_view(b)["screen"] == ppom.SCREENS["online-css"], room_view(b)
+    pick(b, right=2)
+    b.shot("03-direct-css")
+    write_join(b, code)
+    vb = until_view(b, lambda v: v["flags"] & ppom.RF_IN and v["screen"] == ppom.SCREENS["room"],
+                    "B in the room from the Direct CSS", timeout=60)
+    _wait(lambda: b.scene() == CSS, 60, "B on the room's CSS")
+    b.steps("wait 90")
+    b.shot("04-jumped-from-the-direct-css")
+    a.steps("wait 10")
+    a.shot("04-b-jumped-in")
+    assert room_view(a)["slots"][1]["bits"] & ppom.SLOT_TAKEN
