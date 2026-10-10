@@ -38,6 +38,11 @@ export function installAppListeners(services: Services) {
 
   window.electron.common.onAppUpdateDownloadProgress((progress) => {
     useAppStore.getState().setUpdateDownloadProgress(progress);
+    useAppStore.getState().setUpdateDownloadFailed(false);
+  });
+
+  window.electron.common.onAppUpdateFailed(() => {
+    useAppStore.getState().setUpdateDownloadFailed(true);
   });
 
   window.electron.common.onAppUpdateFound((version) => {

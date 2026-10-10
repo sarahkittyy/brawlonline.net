@@ -16,6 +16,7 @@ export function installModules(flags: ConfigFlags) {
   const settingsManager = new SettingsManager();
   const appUpdater = new AppUpdater(settingsManager);
   const dolphinManager = new DolphinManager(settingsManager);
+  dolphinManager.setLaunchGate(() => appUpdater.assertUpToDate());
   setupDolphinIpc({ dolphinManager });
   setupAccountsIpc();
   setupReplaysIpc();

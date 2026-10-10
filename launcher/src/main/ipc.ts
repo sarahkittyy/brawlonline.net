@@ -13,6 +13,13 @@ export const ipc_downloadLogs = makeEndpoint.main("downloadLogs", <EmptyPayload>
 
 export const ipc_checkForUpdate = makeEndpoint.main("checkForUpdate", <EmptyPayload>_, <{ updateAvailable: boolean }>_);
 
+/** The newer launcher version that is out (checked again if the last check is old), or null. No Dolphin starts while there is one. */
+export const ipc_requiredLauncherUpdate = makeEndpoint.main(
+  "requiredLauncherUpdate",
+  <EmptyPayload>_,
+  <{ version: string | null }>_,
+);
+
 export const ipc_installUpdate = makeEndpoint.main(
   "installUpdate",
   <EmptyPayload>_,
@@ -55,3 +62,6 @@ export const ipc_isoVerificationProgressEvent = makeEndpoint.renderer(
 );
 
 export const ipc_launcherUpdateReadyEvent = makeEndpoint.renderer("launcherupdate_ready", <EmptyPayload>_);
+
+/** Downloading the update failed (the next check tries again); the bar offers the website's download meanwhile. */
+export const ipc_launcherUpdateFailedEvent = makeEndpoint.renderer("launcherupdate_failed", <EmptyPayload>_);

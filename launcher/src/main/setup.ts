@@ -25,6 +25,7 @@ import {
   ipc_launcherUpdateFoundEvent,
   ipc_launcherUpdateReadyEvent,
   ipc_openInNewBrowserWindow,
+  ipc_requiredLauncherUpdate,
   ipc_runNetworkDiagnostics,
   ipc_showOpenDialog,
 } from "./ipc";
@@ -139,12 +140,11 @@ export default function setupMainIpc({
   });
 
   ipc_checkForUpdate.main!.handle(async () => {
-    // In "download" mode (macOS, see AppUpdater) nothing is downloaded, so there is nothing to notify about.
-    const result =
-      appUpdater.mode === "download"
-        ? await autoUpdater.checkForUpdates()
-        : await autoUpdater.checkForUpdatesAndNotify();
-    return { updateAvailable: result != null };
+    return await appUpdater.checkForUpdates(true);
+  });
+
+  ipc_requiredLauncherUpdate.main!.handle(async () => {
+    return { version: (await appUpdater.requiredUpdate()) ?? null };
   });
 
   ipc_clearTempFolder.main!.handle(async () => {

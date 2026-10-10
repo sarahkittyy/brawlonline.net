@@ -1,4 +1,4 @@
-import { MAC_DOWNLOAD_URL } from "@common/product";
+import { defaultServiceUrls, MAC_DOWNLOAD_URL } from "@common/product";
 import { fireEvent, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -30,7 +30,12 @@ describe("PersistentNotification", () => {
   beforeEach(() => {
     openExternal.mockClear();
     installAppUpdate.mockClear();
-    useAppStore.setState({ updateVersion: "", updateReady: false, updateDownloadProgress: 0 });
+    useAppStore.setState({
+      updateVersion: "",
+      updateReady: false,
+      updateDownloadProgress: 0,
+      updateDownloadFailed: false,
+    });
   });
 
   it("offers the download once an update is found, on macOS while it cannot update itself", () => {
@@ -52,15 +57,30 @@ describe("PersistentNotification", () => {
 
   it("keeps Slippi's install-and-restart bar elsewhere", () => {
     stubElectron("install");
+    const { container: none } = render(<PersistentNotification />);
+    expect(none.textContent).toBe("");
+
+    // Found: shown at once (no Dolphin starts until it is installed), before any download progress.
     useAppStore.setState({ updateVersion: "0.1.30" });
-    // Found but not downloaded yet: nothing to show.
     const { container } = render(<PersistentNotification />);
-    expect(container.textContent).toBe("");
+    expect(container.textContent).toMatch(/^Downloading version/);
 
     useAppStore.setState({ updateReady: true });
     const { container: ready } = render(<PersistentNotification />);
     expect(ready.textContent).toContain("is now available!");
     expect(ready.querySelector("button")!.textContent).toBe("Install update");
     expect(ready.textContent).not.toContain("Download");
+  });
+
+  it("offers the website's download when downloading the update failed", () => {
+    stubElectron("install");
+    useAppStore.setState({ updateVersion: "0.1.30", updateDownloadFailed: true });
+    const { container } = render(<PersistentNotification />);
+    expect(container.textContent).toContain("is now available!");
+    expect(container.querySelector("button")!.textContent).toBe("Download manually");
+
+    fireEvent.click(container.querySelector("button")!);
+    expect(openExternal).toHaveBeenCalledWith(defaultServiceUrls.launcherUpdates);
+    expect(installAppUpdate).not.toHaveBeenCalled();
   });
 });

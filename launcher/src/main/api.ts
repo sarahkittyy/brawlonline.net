@@ -8,9 +8,11 @@ import {
   ipc_installUpdate,
   ipc_isoVerificationProgressEvent,
   ipc_launcherUpdateDownloadingEvent,
+  ipc_launcherUpdateFailedEvent,
   ipc_launcherUpdateFoundEvent,
   ipc_launcherUpdateReadyEvent,
   ipc_openInNewBrowserWindow,
+  ipc_requiredLauncherUpdate,
   ipc_runNetworkDiagnostics,
   ipc_showOpenDialog,
 } from "./ipc";
@@ -31,6 +33,11 @@ export default {
   async checkForAppUpdates(): Promise<{ updateAvailable: boolean }> {
     const { result } = await ipc_checkForUpdate.renderer!.trigger({});
     return result;
+  },
+  /** The newer launcher version that is out, or null; Dolphin does not start while there is one. */
+  async requiredAppUpdate(): Promise<string | null> {
+    const { result } = await ipc_requiredLauncherUpdate.renderer!.trigger({});
+    return result.version;
   },
   async installAppUpdate(): Promise<{ success: boolean; error?: string }> {
     const { result } = await ipc_installUpdate.renderer!.trigger({});
@@ -72,6 +79,12 @@ export default {
   },
   onAppUpdateReady(handle: () => void) {
     const { destroy } = ipc_launcherUpdateReadyEvent.renderer!.handle(async () => {
+      handle();
+    });
+    return destroy;
+  },
+  onAppUpdateFailed(handle: () => void) {
+    const { destroy } = ipc_launcherUpdateFailedEvent.renderer!.handle(async () => {
       handle();
     });
     return destroy;

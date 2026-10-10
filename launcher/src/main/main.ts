@@ -366,6 +366,8 @@ const main = async () => {
 
   await appUpdater.verifyPendingUpdate();
   await createWindow();
+  // The renderer checks once as it starts (initialize_app); a launcher left open keeps checking.
+  appUpdater.startPeriodicChecks();
 
   // Handle a replay file if provided. Started as `electron <app folder>` (process.defaultApp),
   // argv[1] is the app folder, not a file to open.
