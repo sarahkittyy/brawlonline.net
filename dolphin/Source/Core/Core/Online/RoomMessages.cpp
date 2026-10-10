@@ -403,7 +403,7 @@ Message Parse(const std::string& packet)
 }
 
 std::string HelloJson(const std::string& uid, const std::string& play_key,
-                      const std::string& app_version)
+                      const std::string& app_version, const std::string& platform)
 {
   picojson::object user;
   user["uid"] = picojson::value(uid);
@@ -412,6 +412,7 @@ std::string HelloJson(const std::string& uid, const std::string& play_key,
   o["type"] = picojson::value("hello");
   o["user"] = picojson::value(user);
   o["appVersion"] = picojson::value(app_version);
+  o["platform"] = picojson::value(platform);
   return picojson::value(o).serialize();
 }
 

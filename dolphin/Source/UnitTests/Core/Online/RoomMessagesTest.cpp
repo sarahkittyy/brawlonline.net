@@ -223,6 +223,6 @@ TEST(RoomMessages, Requests)
   r = {};
   r.op = Op::Poll;
   EXPECT_EQ(RequestJson(r), std::nullopt);
-  EXPECT_EQ(HelloJson("u", "k", "0.1.0"),
-            R"({"appVersion":"0.1.0","type":"hello","user":{"playKey":"k","uid":"u"}})");
+  EXPECT_EQ(HelloJson("u", "k", "0.1.0", "mac"),
+            R"({"appVersion":"0.1.0","platform":"mac","type":"hello","user":{"playKey":"k","uid":"u"}})");
 }

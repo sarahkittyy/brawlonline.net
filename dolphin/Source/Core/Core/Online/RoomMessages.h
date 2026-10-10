@@ -119,7 +119,7 @@ std::optional<View> ParseView(const picojson::object& o, std::string* why);
 
 // Requests (client -> server).
 std::string HelloJson(const std::string& uid, const std::string& play_key,
-                      const std::string& app_version);
+                      const std::string& app_version, const std::string& platform);
 enum class Op : u8
 {
   Poll = 0,

@@ -48,6 +48,7 @@
 
 use std::collections::HashMap;
 use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
 use chrono::{DateTime, Utc};
@@ -60,7 +61,7 @@ use common::proto::{
     Rank, GET_TICKET_RESP,
 };
 use common::ratelimit::{RateLimiter, Window};
-use common::rooms::{decode_room_search_code, HelloResp, MmStatus, RoomError};
+use common::rooms::{decode_room_search_code, HelloResp, MmStatus, RoomError, RoomRequest};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -68,6 +69,10 @@ use crate::messages as msg;
 use crate::region::RegionMap;
 use crate::rooms::{MemberInfo, RoomBook, RoomsConfig};
 use crate::ruleset::Rulesets;
+use crate::versions::FeedVersions;
+
+/// How often the update feed (`update_feed_dir`) is read again.
+const FEED_REFRESH: Duration = Duration::from_secs(10);
 
 pub type ConnId = u64;
 
@@ -107,6 +112,10 @@ pub struct EngineConfig {
     pub min_app_version: Option<String>,
     /// Sent with version errors so the client can show the update option.
     pub latest_version: Option<String>,
+    /// The launcher's update feed folder (`versions`): a game older than its platform's newest
+    /// published build is refused (`hello`, tickets, a room's ready), read again every
+    /// [`FEED_REFRESH`].
+    pub update_feed_dir: Option<PathBuf>,
     pub rulesets: Rulesets,
     /// Region of a ticket's source address (Unranked buckets).
     pub regions: RegionMap,
@@ -138,6 +147,7 @@ impl Default for EngineConfig {
             max_connect_failures: 3,
             min_app_version: None,
             latest_version: None,
+            update_feed_dir: None,
             rulesets: Rulesets::default(),
             regions: RegionMap::default(),
             region_widen: Duration::from_secs(30),
@@ -215,6 +225,14 @@ struct Pending {
     hello: bool,
     /// A room game ticket (mode 3): the room code.
     room: Option<String>,
+    client: ClientBuild,
+}
+
+/// The build a game says it is (`appVersion`, `platform`).
+#[derive(Debug, Clone, Default)]
+struct ClientBuild {
+    app_version: String,
+    platform: String,
 }
 
 #[derive(Debug, Clone)]
@@ -234,6 +252,8 @@ struct Waiting {
 struct Online {
     user: MmUser,
     code: String,
+    /// Checked again on a room's ready: a game left running across a release is refused then.
+    client: ClientBuild,
 }
 
 #[derive(Debug, Clone)]
@@ -278,6 +298,9 @@ pub struct Engine {
     rooms: RoomBook,
     next_seq: u64,
     match_counter: u64,
+    /// The newest build of each platform (`update_feed_dir`), and when it was read.
+    feed: FeedVersions,
+    feed_read: Option<Instant>,
 }
 
 fn hello_ok() -> HelloResp {
@@ -324,7 +347,44 @@ impl Engine {
             rooms: RoomBook::new(rooms_cfg),
             next_seq: 1,
             match_counter: 0,
+            feed: FeedVersions::default(),
+            feed_read: None,
         }
+    }
+
+    /// Replaces the newest build of each platform (what reading `update_feed_dir` gives).
+    pub fn set_feed_versions(&mut self, feed: FeedVersions) {
+        if feed != self.feed {
+            tracing::info!(%feed, "newest client builds");
+        }
+        self.feed = feed;
+    }
+
+    fn refresh_feed(&mut self, now: Instant) {
+        let Some(dir) = self.cfg.update_feed_dir.clone() else { return };
+        if self.feed_read.is_some_and(|t| now.duration_since(t) < FEED_REFRESH) {
+            return;
+        }
+        self.feed_read = Some(now);
+        let feed = FeedVersions::read(&dir);
+        if feed.is_empty() && !self.feed.is_empty() {
+            // pp-release replaces a feed file by renaming, so it is never missing; an empty read
+            // is a mistake (permissions, a moved folder): keep what was known.
+            tracing::warn!(dir = %dir.display(), "no update feed found; keeping the last versions");
+            return;
+        }
+        self.set_feed_versions(feed);
+    }
+
+    /// The version to update to when `client` is older than what it must have: its platform's
+    /// newest published build (`update_feed_dir`), or `min_app_version`.
+    fn outdated(&self, client: &ClientBuild) -> Option<String> {
+        let have = parse_version(&client.app_version);
+        if let Some(f) = self.feed.required(&client.platform).filter(|f| have < parse_version(f)) {
+            return Some(f.to_string());
+        }
+        let min = self.cfg.min_app_version.as_deref().filter(|m| have < parse_version(m))?;
+        Some(self.cfg.latest_version.clone().unwrap_or_else(|| min.to_string()))
     }
 
     pub fn connection_count(&self) -> usize {
@@ -523,6 +583,14 @@ impl Engine {
         };
         match parsed {
             Ok(ClientMessage::Room(Ok(req))) => {
+                // Starting a game on a build older than the newest one: refused (red on the CSS),
+                // so the player closes Dolphin and updates.
+                if matches!(req, RoomRequest::Ready { ready: true, .. }) {
+                    if let Some(latest) = self.outdated(&o.client) {
+                        tracing::info!(conn, version = %o.client.app_version, %latest, "ready refused: out of date");
+                        return room_error(out, common::rooms::ROOM_READY, &msg::update_to(&latest));
+                    }
+                }
                 let who = MemberInfo {
                     uid: o.user.uid,
                     display_name: o.user.display_name.clone(),
@@ -548,11 +616,9 @@ impl Engine {
     /// `hello`: the same checks as a ticket (version, uid, play key), then the connection stays
     /// open as an online connection.
     fn on_hello(&mut self, now: Instant, conn: ConnId, h: common::rooms::Hello, out: &mut Vec<Output>) {
-        if let Some(min) = self.cfg.min_app_version.clone() {
-            if parse_version(&h.app_version) < parse_version(&min) {
-                let latest = self.cfg.latest_version.clone().unwrap_or(min);
-                return self.refuse_hello(out, conn, &msg::update_to(&latest), Some(latest.clone()));
-            }
+        let client = ClientBuild { app_version: h.app_version, platform: h.platform };
+        if let Some(latest) = self.outdated(&client) {
+            return self.refuse_hello(out, conn, &msg::update_to(&latest), Some(latest.clone()));
         }
         let Ok(uid) = Uuid::parse_str(h.user.uid.trim()) else {
             return self.refuse_hello(out, conn, msg::NOT_LOGGED_IN, None);
@@ -575,6 +641,7 @@ impl Engine {
             lan: String::new(),
             hello: true,
             room: None,
+            client,
         };
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Validating(pending);
@@ -609,11 +676,9 @@ impl Engine {
         if let Some(name) = unsupported {
             return self.refuse(out, conn, msg::not_available(name));
         }
-        if let Some(min) = &self.cfg.min_app_version {
-            if parse_version(&t.app_version) < parse_version(min) {
-                let latest = self.cfg.latest_version.clone().unwrap_or_else(|| min.clone());
-                return self.refuse(out, conn, msg::update_to(&latest));
-            }
+        let client = ClientBuild { app_version: t.app_version, platform: t.platform };
+        if let Some(latest) = self.outdated(&client) {
+            return self.refuse(out, conn, msg::update_to(&latest));
         }
         let Ok(uid) = Uuid::parse_str(t.user.uid.trim()) else {
             return self.refuse(out, conn, msg::NOT_LOGGED_IN);
@@ -656,6 +721,7 @@ impl Engine {
             lan: sanitize_lan_addr(&t.ip_address_lan),
             hello: false,
             room,
+            client,
         };
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Validating(pending);
@@ -788,7 +854,7 @@ impl Engine {
         self.fail_room_tickets(out);
         tracing::info!(conn, %code, "online");
         if let Some(c) = self.conns.get_mut(&conn) {
-            c.state = State::Online(Online { user, code });
+            c.state = State::Online(Online { user, code, client: p.client });
         }
         Self::send(out, conn, &hello_ok());
     }
@@ -839,6 +905,7 @@ impl Engine {
     }
 
     fn on_tick(&mut self, now: Instant, wall: DateTime<Utc>, out: &mut Vec<Output>) {
+        self.refresh_feed(now);
         let mut expired = Vec::new();
         let mut auth_late = Vec::new();
         let mut idle = Vec::new();
@@ -2146,6 +2213,110 @@ mod tests {
         let out = h.raw(3, b"{");
         assert_eq!(sent(&out, 3)[0]["type"], "room-error");
         assert!(!disconnected(&out, 3));
+    }
+
+    fn hello_on(h: &mut Harness, conn: ConnId, u: &MmUser, version: &str, platform: &str) -> Vec<Output> {
+        let v = json!({
+            "type": "hello",
+            "user": {"uid": u.uid.to_string(), "playKey": h.secret.derive(u.uid, u.play_key_version)},
+            "appVersion": version,
+            "platform": platform,
+        });
+        h.raw(conn, v.to_string().as_bytes())
+    }
+
+    #[test]
+    fn each_platform_must_have_its_newest_build() {
+        let mut h = Harness::new(EngineConfig::default());
+        // The macOS build of 3.6.0 still waits for Apple.
+        h.e.set_feed_versions(FeedVersions::from_pairs(&[("win", "3.6.0"), ("mac", "3.5.0"), ("linux", "3.6.0")]));
+        let (a, b, c) = (user("AA#1", "a"), user("BB#1", "b"), user("CC#1", "c"));
+        for u in [&a, &b, &c] {
+            h.add(u);
+        }
+        h.connect(1, 1);
+        let out = hello_on(&mut h, 1, &a, "3.5.0", "win");
+        assert_eq!(
+            sent(&out, 1),
+            vec![json!({"type": "hello-resp", "error": msg::update_to("3.6.0"), "latestVersion": "3.6.0"})]
+        );
+        assert!(disconnected(&out, 1));
+        h.connect(2, 2);
+        let out = hello_on(&mut h, 2, &b, "3.5.0", "mac");
+        assert_eq!(sent(&out, 2), vec![json!({"type": "hello-resp"})]);
+        // A build older than the platform field is held to the oldest feed.
+        h.connect(3, 3);
+        let out = h.hello(3, &c, "3.5.0");
+        assert_eq!(sent(&out, 3), vec![json!({"type": "hello-resp"})]);
+
+        // Tickets (Direct, Unranked, a room's game) the same way.
+        h.connect(4, 4);
+        let mut v = h.ticket_json(&a, "BB#1", 2);
+        v["appVersion"] = json!("3.5.0");
+        v["platform"] = json!("win");
+        let out = h.raw(4, v.to_string().as_bytes());
+        assert_eq!(sent(&out, 4), vec![json!({"type": "create-ticket-resp", "error": msg::update_to("3.6.0")})]);
+        h.connect(5, 5);
+        v["appVersion"] = json!("3.6.0");
+        let out = h.raw(5, v.to_string().as_bytes());
+        assert_eq!(sent(&out, 5), vec![json!({"type": "create-ticket-resp"})]);
+    }
+
+    #[test]
+    fn a_game_left_running_across_a_release_cannot_ready() {
+        let mut h = Harness::new(EngineConfig::default());
+        h.e.set_feed_versions(FeedVersions::from_pairs(&[("win", "3.5.0"), ("mac", "3.5.0")]));
+        let (a, b) = (user("AA#1", "a"), user("BB#1", "b"));
+        h.add(&a);
+        h.add(&b);
+        for (conn, u) in [(1, &a), (2, &b)] {
+            h.connect(conn, conn as u16);
+            assert_eq!(sent(&hello_on(&mut h, conn, u, "3.5.0", "win"), conn), vec![json!({"type": "hello-resp"})]);
+        }
+        let out = h.room(1, json!({"type": "room-create"}));
+        let code = state_of(&out, 1)["code"].as_str().unwrap().to_string();
+        h.room(2, json!({"type": "room-join", "code": code}));
+        // 3.6.0 is published for Windows while both games run 3.5.0.
+        h.e.set_feed_versions(FeedVersions::from_pairs(&[("win", "3.6.0"), ("mac", "3.5.0")]));
+        let out = h.room(1, json!({"type": "room-ready", "ready": true, "character": 3}));
+        assert_eq!(
+            sent(&out, 1),
+            vec![json!({"type": "room-error", "op": "room-ready", "error": msg::update_to("3.6.0")})]
+        );
+        assert!(sent(&out, 2).is_empty(), "the room did not see a ready");
+        assert!(!disconnected(&out, 1));
+        // Taking the ready back and leaving still work.
+        let out = h.room(1, json!({"type": "room-ready", "ready": false}));
+        assert!(sent(&out, 1).iter().all(|m| m["type"] != "room-error"));
+        let out = h.room(2, json!({"type": "room-leave"}));
+        assert!(sent(&out, 2).iter().all(|m| m["type"] != "room-error"));
+    }
+
+    #[test]
+    fn the_update_feed_is_read_again_while_mm_runs() {
+        let dir = std::env::temp_dir().join(format!("mm-engine-feed-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("latest.yml"), "version: 3.6.0\n").unwrap();
+        let mut h = Harness::new(EngineConfig { update_feed_dir: Some(dir.clone()), ..Default::default() });
+        let a = user("AA#1", "a");
+        h.add(&a);
+        h.advance(Duration::from_millis(100));
+        h.connect(1, 1);
+        assert_eq!(sent(&hello_on(&mut h, 1, &a, "3.5.0", "win"), 1)[0]["error"], msg::update_to("3.6.0"));
+        // Rolled back to 3.5.0: let in after the next read, not before.
+        std::fs::write(dir.join("latest.yml"), "version: 3.5.0\n").unwrap();
+        h.advance(Duration::from_secs(1));
+        h.connect(2, 2);
+        assert_eq!(sent(&hello_on(&mut h, 2, &a, "3.5.0", "win"), 2)[0]["error"], msg::update_to("3.6.0"));
+        h.advance(FEED_REFRESH);
+        h.connect(3, 3);
+        assert_eq!(sent(&hello_on(&mut h, 3, &a, "3.5.0", "win"), 3), vec![json!({"type": "hello-resp"})]);
+        // A feed folder that reads empty keeps the last versions.
+        std::fs::remove_dir_all(&dir).unwrap();
+        h.advance(FEED_REFRESH);
+        h.e.cfg.min_app_version = None;
+        h.connect(4, 4);
+        assert_eq!(sent(&hello_on(&mut h, 4, &a, "3.4.0", "win"), 4)[0]["error"], msg::update_to("3.5.0"));
     }
 
     #[test]

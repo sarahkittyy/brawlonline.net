@@ -982,7 +982,7 @@ void Thread()
         std::lock_guard lk(s_mutex);
         if (ev.type == ENET_EVENT_TYPE_CONNECT)
         {
-          Send(peer, HelloJson(info.uid, info.play_key, APP_VERSION));
+          Send(peer, HelloJson(info.uid, info.play_key, APP_VERSION, APP_PLATFORM));
           s.conn = Conn::Hello;
           ++s.hellos;
           conn_started = now;

@@ -85,6 +85,9 @@ pub struct Hello {
     pub user: HelloUser,
     #[serde(default)]
     pub app_version: String,
+    /// As a ticket's `platform`.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub platform: String,
 }
 
 /// A `room-*` request, client → server, on an online connection.

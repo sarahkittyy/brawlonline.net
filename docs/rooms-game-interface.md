@@ -139,7 +139,7 @@ Dolphin also counts as busy whatever it knows itself (a search, a session, a roo
 
 **Launcher click.** Dolphin reads `join-room.json`. Busy (`screen` 4-7, or a search/session/room start): refused, nothing changes in the game. Idle: Dolphin sends the join itself (leaving any old room), bumps `Local.roomJoin`, and the game goes to the room CSS from wherever it is (menus or an idle online CSS; already on the room CSS: stay). While the game boots (until `screen` first reads 1-3 after a boot), a request, also one already there when Dolphin starts, is answered `accepted` at once and kept (at most 3 minutes from its `createdAt`), and nothing the game reports meanwhile counts as busy; then Dolphin joins and bumps `roomJoin`. The game should remember the last `roomJoin` it acted on (start from the value it finds at boot: Dolphin only bumps it later).
 
-**Not logged in / no server.** The line says so in red ("Log in in the launcher.", "Can't reach the server.", or mm's own `hello` refusal such as "Update to 0.2.1 to play online."); Dolphin keeps retrying the online connection with backoff and sends a pending create/join once it is up.
+**Not logged in / no server.** The line says so in red ("Log in in the launcher.", "Can't reach the server.", or mm's own `hello` refusal such as "Close Dolphin and update to 0.2.1"); Dolphin keeps retrying the online connection with backoff and sends a pending create/join once it is up.
 
 ---
 

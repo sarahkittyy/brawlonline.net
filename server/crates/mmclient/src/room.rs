@@ -35,6 +35,16 @@ impl OnlineClient {
     /// Connects and sends `hello`. Returns the client and the `hello-resp` (which may carry an
     /// `error`, after which mm disconnects).
     pub fn connect(server: SocketAddr, creds: &Credentials, app_version: &str) -> anyhow::Result<(Self, Value)> {
+        Self::connect_on(server, creds, app_version, "")
+    }
+
+    /// [`Self::connect`] as a build for `platform` (`win`, `mac`, `linux`).
+    pub fn connect_on(
+        server: SocketAddr,
+        creds: &Credentials,
+        app_version: &str,
+        platform: &str,
+    ) -> anyhow::Result<(Self, Value)> {
         let sock = EnetSocket::bind(SocketAddr::from((Ipv4Addr::UNSPECIFIED, 0)))?;
         let local_port = sock.local_addr()?.port();
         let mut host =
@@ -57,6 +67,7 @@ impl OnlineClient {
             kind: HELLO.into(),
             user: HelloUser { uid: creds.uid.clone(), play_key: creds.play_key.clone() },
             app_version: app_version.into(),
+            platform: platform.into(),
         };
         client.send_json(&serde_json::to_value(&hello)?);
         let resp = client.wait_for(Duration::from_secs(5), |m| m["type"] == "hello-resp")?;
