@@ -760,3 +760,116 @@ def test_room_four_players(backend: OnlineBackend, dolphin: Callable[..., Dolphi
                    "the room waiting for its next game", timeout=60)
         g.steps("wait 60")
         g.shot("06-back-in-the-room")
+
+
+def test_room_three_players_second_game_on_the_losers_pick(backend: OnlineBackend,
+                                                           dolphin: Callable[..., DolphinInstance],
+                                                           gpu_backend: str) -> None:
+    """Prod, 2026-10-10: a three-player free-for-all room, game 1 played (P1 first, P2 second,
+    P3 last), and the room's game 2 never started: all three ready, the server matched them, the
+    host's session waited for P3's stage pick, and P3 never saw the stage select. Here the same
+    order: P3 then P2 walk off in game 1; in game 2 P2 readies, then P1, then the loser P3, whose
+    START must open the stage select; the pick is played."""
+    test = "three-players-second-game"
+    import secrets
+    users = [backend.create_user(n, f"R2{'ABC'[k]}P", email=f"room2g{k}-{secrets.token_hex(4)}@example.test")
+             for k, n in enumerate(["r2ga", "r2gb", "r2gc"])]
+    a, b, c = gs = [_boot(dolphin, f"room2g-{x}", backend, u, gpu_backend, test, "gameplay", artifacts=ART)
+                    for x, u in zip("abc", users)]
+    _all(*[g.to_main_menu for g in gs])
+    _all(*[g.to_online_page for g in gs])
+
+    code = create_room(a)
+    pick(a)
+    hand_to(a, PANEL_X[2], -10.0)
+    a.steps("tap A 8", "wait 30")
+    until_view(a, lambda v: v["slots"][2]["bits"] & ppom.SLOT_OPEN, "slot 3 open")
+    hand_to(a, -23.0, 10.5)
+    _all(lambda: to_join_room(b), lambda: to_join_room(c))
+    pick(b, right=2)
+    pick(c, right=4)
+    for g in gs:
+        B.write_rules(g.c, stocks=1, minutes=2, items_off=True)
+        ppom.allow_test_rules(g.c)
+    for k, g in ((1, b), (2, c)):
+        type_room_code(g, code)
+        vk = until_view(g, lambda v: v["flags"] & ppom.RF_IN, f"player {k + 1} in the room")
+        assert vk["local_port"] == k, vk
+    until_view(a, lambda v: all(v["slots"][p]["bits"] & ppom.SLOT_TAKEN for p in range(3)), "all players")
+    for g in gs:
+        g.steps("wait 60")
+
+    def running(game: int) -> list[dict[str, Any]]:
+        online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] in ("running", "error", "ended") for g in gs),
+                        240, f"room game {game} running on all")
+        st = [online_set.gstatus(g.c) for g in gs]
+        assert all(s["phase"] == "running" for s in st), [(s["phase"], s.get("error")) for s in st]
+        return st
+
+    def walk_off(g: Game, port: int) -> None:
+        from ppharness import flows as F
+        with contextlib.suppress(Exception):
+            F.fight([F.Seat(g.c, port, 0, g.name)], 60 * 40, mode="selfdestruct", seed=f"2g{port}",
+                    stop=lambda: online_set.gstatus(g.c)["phase"] != "running")
+
+    def lobby_dump() -> str:
+        out = []
+        for g in gs:
+            s = online_set.gstatus(g.c)
+            out.append(f"{g.name}: phase {s.get('phase')} lobby {s.get('lobby')} "
+                       f"peers {[{k: p.get(k) for k in ('slot', 'name', 'seen', 'left', 'confirmed', 'last_heard_ms', 'lock')} for p in s.get('peers', [])]} "
+                       f"local {online_set.local(g.c)} lock {lock_of(g)} scene {g.scene()}")
+        return "\n".join(out)
+
+    game = room_view(a)["game"]
+    for g in gs:
+        g.steps("tap START 8", "wait 10")
+    running(game)
+    time.sleep(6)
+    # P3 walks off, then P2: P1 wins, P3 is last (the next game's stage picker).
+    import threading
+    th = [threading.Thread(target=walk_off, args=(c, 2))]
+    th[0].start()
+    time.sleep(20)
+    th.append(threading.Thread(target=walk_off, args=(b, 1)))
+    th[1].start()
+    for t in th:
+        t.join(300)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] != "running" for g in gs), 240, "game 1 to end")
+    _wait(lambda: all(g.scene() == CSS for g in gs), 180, "all back on the room's CSS")
+    for g in gs:
+        until_view(g, lambda v: v["flags"] & ppom.RF_IN and v["status"] == 0 and v["game"] == game + 1,
+                   "the room waiting for its next game", timeout=60)
+    v = room_view(a)
+    pickers = [i for i, s in enumerate(v["slots"]) if s["picks_stage"]]
+    print("pickers after game 1", pickers, [room_view(g)["slots"][2]["picks_stage"] for g in gs])
+    assert pickers == [2], v
+    for g in gs:
+        g.steps("wait 60")
+        g.shot("06-back-in-the-room")
+
+    # Game 2 in prod's order: P2, then P1, then the loser.
+    b.steps("tap START 8", "wait 30")
+    _wait(lambda: lock_of(b)["ready"], 30, "P2 locked in")
+    a.steps("tap START 8", "wait 30")
+    _wait(lambda: lock_of(a)["ready"], 30, "P1 locked in")
+    c.steps("tap START 8", "wait 10")
+    try:
+        _wait(lambda: c.scene() == "scSelStage", 60, "the loser on the stage select")
+    except AssertionError:
+        for g in gs:
+            g.shot("07-no-stage-select")
+        raise AssertionError("the loser never reached the stage select\n" + lobby_dump())
+    c.steps("wait 40")
+    c.shot("07-stage-select")
+    stage = online_set.STAGE_PICK
+    B.sss_pick_stage(c.c, B.STAGE_KIND[stage], 0)
+    try:
+        st = running(game + 1)
+    except AssertionError as e:
+        raise AssertionError(f"{e}\n{lobby_dump()}")
+    setups = [B.read_match_setup(g.c.read_mem) for g in gs]
+    assert all(x == setups[0] for x in setups), setups
+    assert setups[0].stage_kind == B.STAGE_KIND[stage], setups[0]
+    for g in gs:
+        g.shot("08-game-2")
