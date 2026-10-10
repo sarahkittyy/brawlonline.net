@@ -101,6 +101,7 @@ class Game:
         self.out = out
         self.c: HarnessClient = inst.client
         self.name = user.display_name
+        self.pad = 0   # the controller port the steps press on
 
     # -- mailbox in game memory
     def bridge(self) -> dict[str, Any]:
@@ -159,6 +160,15 @@ class Game:
     def recent_codes(self, **kw: Any) -> dict[str, Any]:
         return self.c.call("online_recent_codes", mode="direct", **kw)
 
+    def lock_in(self) -> dict[str, int]:
+        """LOCAL's lock-in as the game wrote it (ppom.h Local: lockIn at +0x28, lockPad at +0x35,
+        the controller port whose START locked in)."""
+        block = int(self.bridge()["block"])
+        local = block + struct.unpack(">H", self.c.read_mem(block + 0x10, 2))[0]
+        raw = self.c.read_mem(local + 0x28, 0x10)
+        seq, ready = struct.unpack_from(">IB", raw, 0)
+        return {"seq": seq, "ready": ready, "char_kind": raw[6], "pad": raw[0x0D]}
+
     def debug_scratch(self) -> list[int]:
         st = self.bridge()
         block = int(st["block"])
@@ -167,7 +177,7 @@ class Game:
 
     # -- driving
     def steps(self, *steps: str) -> None:
-        drive.run(self.c, list(steps), out=str(self.out))
+        drive.run(self.c, list(steps), port=self.pad, out=str(self.out))
 
     def shot(self, name: str) -> Path:
         p = self.out / f"{name}.png"
@@ -367,14 +377,16 @@ def test_keypad_steps_cover_every_code_shape() -> None:
 def _boot(dolphin: Callable[..., DolphinInstance], name: str, be: OnlineBackend, user: OnlineUser,
           video: str, test: str, session_backend: str, artifacts: Path = ARTIFACTS,
           gcpad_ini: dict[str, dict[str, Any]] | None = None,
-          dolphin_ini: dict[str, dict[str, Any]] | None = None) -> Game:
+          dolphin_ini: dict[str, dict[str, Any]] | None = None,
+          standard_controllers: tuple[int, ...] = (0, 1)) -> Game:
     if not PLUGIN.exists():
         pytest.skip(f"{PLUGIN} not built (game-code/build.sh)")
     ini: dict[str, dict[str, Any]] = {"Online": {
         "UseDevServer": True, "MatchmakingPort": be.mm_port, "DevAccountsUrl": be.accounts_url}}
     for section, values in (dolphin_ini or {}).items():
         ini.setdefault(section, {}).update(values)
-    cfg = InstanceConfig(cpu_thread=True, video_backend=video, dolphin_ini=ini, gcpad_ini=gcpad_ini or {})
+    cfg = InstanceConfig(cpu_thread=True, video_backend=video, dolphin_ini=ini, gcpad_ini=gcpad_ini or {},
+                         standard_controllers=standard_controllers)
     inst = dolphin(name, config=cfg, client_timeout=60.0)
     d = inst.create()
     patch_sd.patch_image(d / "Wii" / "sd.raw",
@@ -605,6 +617,29 @@ def test_recent_codes_on_the_keypad(backend: OnlineBackend,
     g.c.mm_cancel()
 
 
+def test_lock_in_from_port_4(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                             gpu_backend: str) -> None:
+    """A player whose controller is in port 4 (the only one plugged in) goes through the menus
+    and the online CSS with it, and START locks in from it: the lock-in names port 4
+    (LOCAL.lockPad), the controller the match then plays this player from (Gprb::Session
+    CaptureLocalInputs). Screenshots: run/artifacts/game-code/port-4/."""
+    u = backend.create_user("pia", "PIA")
+    g = _boot(dolphin, "game-l", backend, u, gpu_backend, "port-4", "record",
+              standard_controllers=(3,))
+    g.pad = 3
+    g.to_main_menu()
+    g.to_online_page()
+    g.to_css("unranked")
+    css = g.css()
+    assert css["hand_coin"] == 0, css   # the coin is placed: port 4 drives the CSS hand
+    n = g.finds()
+    g.press_until("START", lambda: g.finds() > n, "FIND_OPPONENT")
+    _wait(lambda: g.lock_in()["ready"], 5, "the lock-in")
+    assert g.lock_in()["pad"] == 3, g.lock_in()
+    g.shot("04-locked-in-from-port-4")
+    g.c.mm_cancel()
+
+
 def test_character_locked_while_searching(backend: OnlineBackend,
                                           dolphin: Callable[..., DolphinInstance],
                                           gpu_backend: str) -> None:
@@ -623,6 +658,7 @@ def test_character_locked_while_searching(backend: OnlineBackend,
     g.press_until("START", lambda: g.finds() > n, "FIND_OPPONENT")
     _searching(g, "ABCD#999")
     _wait(g.locked, 5, "the CSS lock")
+    assert g.lock_in()["pad"] == 0, g.lock_in()   # START came from port 1
     g.shot("01-searching-locked")
 
     # The hand is over the placed coin: A would pick it up, X/Y would change the costume.

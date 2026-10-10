@@ -279,6 +279,8 @@ struct State
   std::array<int, 4> handle_port{-1, -1, -1, -1};  // gekko handle -> in-game port
   std::vector<int> local_handles;
   int remote_handle = -1;
+  // The local controller port the local player uses this game (fixed in CreateGekko).
+  int local_pad = 0;
 
   // Per-frame CPU-thread state.
   PendingOps ops;
@@ -1542,8 +1544,11 @@ bool CreateGekko(bool stress, int num_players)
                                        AutoInputDelay(s.peer.rtt_ms);
     gekko_set_local_delay(s.gekko, s.local_handles[0], static_cast<unsigned char>(s.input_delay));
     gekko_set_disconnect_timeout(s.gekko, Online::PeerSilenceTimeoutMs(s.input_delay));
-    INFO_LOG_FMT(BRAWLBACK, "gprb: input delay {} ({}, round trip {:.0f} ms)", s.input_delay,
-                 s.net_opts.delay ? "set" : "auto", s.peer.rtt_ms);
+    // The controller that pressed START to lock in plays this game (Slippi-style: any port).
+    s.local_pad = s.local_lock.local_pad < 4 ? s.local_lock.local_pad :
+                                               std::clamp(s.net_opts.local_pad, 0, 3);
+    INFO_LOG_FMT(BRAWLBACK, "gprb: input delay {} ({}, round trip {:.0f} ms), controller port {}",
+                 s.input_delay, s.net_opts.delay ? "set" : "auto", s.peer.rtt_ms, s.local_pad + 1);
   }
   return true;
 }
@@ -2379,8 +2384,8 @@ void CaptureLocalInputs()
   {
     // The local player's controller (local port `local_pad`) plays the in-game port of this peer.
     const int port = s.net_opts.host ? 0 : 1;
-    std::memcpy(s.local_inputs.data() + port * INPUT_SIZE,
-                latest.data() + std::clamp(s.net_opts.local_pad, 0, 3) * INPUT_SIZE, INPUT_SIZE);
+    std::memcpy(s.local_inputs.data() + port * INPUT_SIZE, latest.data() + s.local_pad * INPUT_SIZE,
+                INPUT_SIZE);
   }
 }
 
