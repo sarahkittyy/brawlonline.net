@@ -77,7 +77,9 @@ DEFAULTS = {
 }
 # Inside double quotes on the Mac ("~" would not expand there).
 MAC_HOME = "$HOME/brawl-staging"
-MAC_APP = f"{MAC_HOME}/app/Brawl Online.app"
+# Its own name and bundle ID, so macOS never takes it for (or launches it as) the real app.
+MAC_APP = f"{MAC_HOME}/app/Brawl Online Staging.app"
+MAC_BUNDLE_ID = "net.brawlonline.launcher.staging"
 # pgrep/pkill pattern for the staging app and the Dolphin a staging profile installed. The
 # bracket keeps it from matching the command line of the shell that runs it (or a build).
 MAC_PROC = "brawl-stagin[g]/(app|profiles)/"
@@ -428,6 +430,14 @@ def client_env(cfg: dict, profile: Path) -> dict[str, str]:
     }
 
 
+def staging_env_json(cfg: dict, profile: str) -> str:
+    """resources/staging-env.json: the launcher applies it at start-up (launcher main.ts), so the
+    staging app keeps its profile and servers even when started from the Dock, Finder or the .exe."""
+    env = client_env(cfg, Path("PROFILE"))
+    env["PPO_USER_DATA_DIR"] = profile
+    return json.dumps(env, indent=2)
+
+
 def resolve_ref(ref: str) -> str:
     try:
         return git("rev-parse", "--verify", f"{ref}^{{commit}}")
@@ -555,10 +565,10 @@ def win_build(args: argparse.Namespace) -> None:
     app = WIN / "app"
     shutil.rmtree(app, ignore_errors=True)
     shutil.copytree(unpacked, app)
+    (app / "resources" / "staging-env.json").write_text(staging_env_json(cfg, str(win_profile("a"))))
     (WIN / "build.json").write_text(json.dumps({"sha": sha, "ref": args.ref, "built": time.ctime()}) + "\n")
     say(f"Windows client ready: {app / 'Brawl Online.exe'} ({sha[:10]})")
     say("restart the server to use this commit's server binaries: `server restart`")
-    _ = cfg
 
 
 def stage_windows_dolphin(binaries: Path, out: Path, dsrc: Path, sha: str, log: Path) -> None:
@@ -652,6 +662,22 @@ MAC_PRELUDE = ('export PATH="$HOME/brawl-staging/bin:/opt/homebrew/bin:/usr/loca
 
 # CI's macOS script builds through ccache. Without it installed, a pass-through stand-in: compiler
 # calls run as they are (ninja still rebuilds only what changed) and its statistics calls do nothing.
+# Dolphin's macOS build must not see Homebrew: with its Qt (6.11) found first through an rpath to
+# /opt/homebrew/lib, the bundled Qt 6.8.3 plugins were refused ("mismatching Qt versions") and
+# Dolphin aborted at start. CI's runners have no Homebrew Qt or libraries; this makes the Mac's
+# build the same. A cmake stand-in for that step adds the ignore lists to the configure call.
+CMAKE_SHIM = """#!/bin/sh
+# Staging (tools/staging/staging.py): Dolphin's configure ignores Homebrew's prefix, as on CI.
+real="$HOME/brawl-dev/venv/bin/cmake"
+[ -x "$real" ] || real=/usr/local/bin/cmake
+for a in "$@"; do
+  if [ "$a" = "-S" ]; then
+    exec "$real" "$@" -DCMAKE_IGNORE_PREFIX_PATH=/opt/homebrew -DCMAKE_SYSTEM_IGNORE_PREFIX_PATH=/opt/homebrew
+  fi
+done
+exec "$real" "$@"
+"""
+
 CCACHE_SHIM = """#!/bin/sh
 # Pass-through stand-in for ccache (tools/staging/staging.py `mac setup`): no cache.
 case "$1" in -*) exit 0 ;; esac
@@ -718,7 +744,15 @@ cd src
 git fetch -q origin staging
 git checkout -q --detach {sha}
 export QT_DIR={cfg['mac_qt']} CI_CACHE={h}/cache JOBS=$(sysctl -n hw.ncpu)
-nice -n 10 .github/scripts/build-dolphin-macos.sh 0.1.0-staging.{sha[:10]} launcher/release/dolphin arm64
+mkdir -p {h}/dolphin-bin
+printf '%s' {shlex.quote(CMAKE_SHIM)} > {h}/dolphin-bin/cmake && chmod +x {h}/dolphin-bin/cmake
+B={h}/cache/dolphin-build-macos-arm64
+if grep -q /opt/homebrew "$B/CMakeCache.txt" 2>/dev/null; then rm -rf "$B"; fi
+env -u HOMEBREW_PREFIX -u HOMEBREW_CELLAR -u HOMEBREW_REPOSITORY -u PKG_CONFIG_PATH   PATH="{h}/dolphin-bin:{h}/bin:$HOME/brawl-dev/venv/bin:$(dirname "$(command -v node)"):/usr/bin:/bin:/usr/sbin:/sbin"   nice -n 10 .github/scripts/build-dolphin-macos.sh 0.1.0-staging.{sha[:10]} launcher/release/dolphin arm64
+D=launcher/release/dolphin/Dolphin.app/Contents/MacOS/Dolphin
+if otool -l "$D" | grep -q /opt/homebrew || otool -L "$D" | grep -q /opt/homebrew; then
+  echo "the staging Dolphin still refers to Homebrew (/opt/homebrew): not shipping it" >&2; exit 1
+fi
 cd launcher
 lock=$(shasum -a 256 package-lock.json | cut -d' ' -f1)
 if [ "$(cat node_modules/.staging-lock 2>/dev/null)" != "$lock" ]; then
@@ -729,8 +763,19 @@ npm run build
 unset MAC_SIGN_IDENTITY
 nice -n 10 ../.github/scripts/package-launcher-macos.sh {h}/out arm64
 pkill -f '{MAC_PROC}' || true
-rm -rf "{MAC_APP}"; mkdir -p {h}/app
+LSREG=/System/Library/Frameworks/CoreServices.framework/Frameworks/LaunchServices.framework/Support/lsregister
+for old in "{h}/app/Brawl Online.app" "{MAC_APP}"; do
+  if [ -d "$old" ]; then "$LSREG" -u "$old" 2>/dev/null || true; rm -rf "$old"; fi
+done
+mkdir -p {h}/app
 ditto "release/build/mac-arm64/Brawl Online.app" "{MAC_APP}"
+# Its own identity, and its staging settings inside it (applied however it is started).
+P="{MAC_APP}/Contents/Info.plist"
+/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier {MAC_BUNDLE_ID}" -c "Set :CFBundleName Brawl Online Staging" "$P"
+/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Brawl Online Staging" "$P" 2>/dev/null   || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Brawl Online Staging" "$P"
+printf '%s' {shlex.quote(staging_env_json(cfg, "__HOME__/brawl-staging/profiles/a"))}   | sed "s|__HOME__|$HOME|g" > "{MAC_APP}/Contents/Resources/staging-env.json"
+codesign --force --deep --sign - "{MAC_APP}"
+"$LSREG" -f "{MAC_APP}"
 echo '{{"sha": "{sha}"}}' > {h}/app/build.json
 """
     mac(cfg, script, log=log)
