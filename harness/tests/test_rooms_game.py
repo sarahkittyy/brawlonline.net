@@ -24,7 +24,7 @@ from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
 
 from test_online import _wait
-from test_online_game import ROOT, Game, _boot, backend  # noqa: F401  (the backend fixture)
+from test_online_game import ROOT, WIFI_INTERFACE_TASK, Game, _boot, backend  # noqa: F401  (the backend fixture)
 
 sys.path.insert(0, str(ROOT / "harness" / "tools"))
 sys.path.insert(0, str(ROOT / "tools" / "gamecode"))
@@ -623,13 +623,19 @@ def test_room_launcher_join_while_the_game_starts(backend: OnlineBackend,
         # Accepted at once (within the launcher's 5 s), although the game is still booting.
         lr = _wait(answer, 5, "the answer to the request")
         assert lr["result"] == "accepted", lr
-        # Straight into the room's CSS.
+        # Straight into the room's CSS (the answer can come before the emulation runs, and
+        # read_mem fails until it does).
+        g.c.wait_state("running", timeout=120)
         _wait(lambda: g.scene() == CSS, 120, "the room's CSS")
         v = until_view(g, lambda v: v["flags"] & ppom.RF_IN and v["screen"] == ppom.SCREENS["room"],
                        "in the room", timeout=60)
         assert v["code"] == code and v["local_port"] == 1 and v["join"] >= 1, v
         st = g.c.call("rooms_status")
         assert st["reached_menus"] and not st["screen_harness"], st
+        # The boot's ONLINE page opens no connect window, so the online pages make the Wi-Fi
+        # CSS's muWifiInterfaceTask (netmenu.cpp ensureWifiTask); without it the first CSS after
+        # the boot was built white, with no panels (prod, 2026-10-10).
+        assert _u32(g, WIFI_INTERFACE_TASK) != 0
         owner.until(lambda m: m.get("type") == "room-state" and m["slots"][1]["player"] and
                     m["slots"][1]["player"]["displayName"] == "rlbjoin", "the joiner seen by the host")
         g.steps("wait 60")

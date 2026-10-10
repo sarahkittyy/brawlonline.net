@@ -79,6 +79,7 @@ namespace MatchHud {
 namespace NetMenu {
     void onlineMenuEntered(int mode);
     void setReturnButton(int b);         // WITH FRIENDS' button to highlight when it opens again
+    void ensureWifiTask();               // muWifiInterfaceTask, which the Wi-Fi CSS needs
 }
 
 namespace CodeEntry {

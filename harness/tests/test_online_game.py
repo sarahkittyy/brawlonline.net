@@ -64,6 +64,7 @@ CMD_FETCH_CODE_SUGGESTION = 0xBE
 # DEBUG scratch words the plugin keeps for tests (tools/gamecode/ppom.py read_debug)
 SCR_SUGGEST_REQUESTS, SCR_CSS_LOCK, SCR_SUGGESTION = 0, 1, 2
 SCR_BOOT = 14   # the boot redirect (boot_menu.cpp): 1 redirected, 2/4 title skipped, 8 ONLINE page
+WIFI_INTERFACE_TASK = 0x805A02A4   # g_muWifiInterfaceTask: the Wi-Fi CSS needs it
 
 # The CSS's player area (BrawlHeaders mu_selchar_player_area.h / mu_selchar_hand.h)
 AREA_HAND, AREA_CHAR, AREA_COSTUME = 0x1A8, 0x1B8, 0x1BC
@@ -1187,6 +1188,22 @@ def test_each_player_keeps_their_tag_controls(backend: OnlineBackend,
     assert ck["mismatches"] == 0 and ck["compared"] > 300, ck
     for g in (a, b):
         g.c.mm_cancel()
+
+
+def test_first_css_after_the_boot(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                  gpu_backend: str) -> None:
+    """The boot's ONLINE page -> WITH FRIENDS -> Direct 1v1, without going back through the main
+    menu's PLAY ONLINE (whose connect window the other tests pass through): the online pages make
+    muWifiInterfaceTask themselves (netmenu.cpp ensureWifiTask), so the first Wi-Fi CSS after the
+    boot is built on it. Without it that CSS was white, with no panels or background (prod,
+    2026-10-10). Screenshots: run/artifacts/game-code/first-css/game-f/."""
+    u = backend.create_user("fern", "FERN")
+    g = _boot(dolphin, "game-f", backend, u, gpu_backend, "first-css", "record", GAME_CODE_ARTIFACTS)
+    g.to_main_menu()
+    assert g.c.read_u32(WIFI_INTERFACE_TASK) != 0   # made on the boot's ONLINE page
+    g.steps("tap A", "wait 90", "tap A", "wait 400", "until scSelctCharacter 600", "wait 60")
+    assert g.c.read_u32(WIFI_INTERFACE_TASK) != 0
+    g.shot("01-direct-css")
 
 
 def test_online_menus_match_the_modes(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],

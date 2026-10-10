@@ -1953,6 +1953,7 @@ namespace OnlineMenu {
     {
         s_jumpFrame = PPOM::g_block.debug.frames;
         s_jumpPage = page;
+        NetMenu::ensureWifiTask();   // the boot to the ONLINE page opens no connect window
     }
 
     // The launcher's join (LOCAL.roomJoin bumped: Dolphin has already sent the join): go to the
