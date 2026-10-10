@@ -104,7 +104,8 @@ struct ConnectOptions
   // This player's input delay in frames (0-MAX_INPUT_DELAY). Unset: automatic, per game
   // (AutoInputDelay).
   std::optional<int> delay;
-  int local_pad = 0;         // local controller port the local player uses
+  int local_pad = 0;         // local controller port the local player uses, when the game's
+                             // lock-in names none (LockIn::local_pad)
   bool sync_task_order = true;
   bool hash_regions = false;  // per-frame region hashes (diagnostics; costs a few ms per frame)
   // Sound effects started again while a rolled-back frame is resimulated play on top of the ones
@@ -151,6 +152,9 @@ struct LockIn
   u8 asl = 0;             // P+ alternate-stage buttons of that pick
   u32 game = 0;           // the game (1-based) this lock-in is for
   PortValues port_values{};  // the player's name tag and controls (all zero: the defaults)
+  // The controller port (0-3) whose START locked in; the match plays the local player from it.
+  // Local only (not sent to the peer). Anything else: none (ConnectOptions::local_pad).
+  u8 local_pad = 0xFF;
 };
 void SetLocalLock(const LockIn& lock);
 

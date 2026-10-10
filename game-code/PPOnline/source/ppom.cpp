@@ -22,6 +22,7 @@ namespace PPOM {
     static_assert(sizeof(LockIn) == 0x0C, "lock-in");
     static_assert(sizeof(PortValues) == 0x3C, "port values");
     static_assert(sizeof(Local) == 0x80, "local");
+    static_assert(__builtin_offsetof(Local, lockPad) == 0x35, "lock pad");
     static_assert(sizeof(SessionPlayer) == 0x80, "session player");
     static_assert(sizeof(Session) == 0x210, "session");
     static_assert(__builtin_offsetof(Block, local) == __builtin_offsetof(Block, mailbox) + sizeof(Mailbox), "local after mailbox");
@@ -87,15 +88,17 @@ namespace PPOM {
     }
 
     void writeLockIn(bool ready, u8 cssChar, u8 charKind, u8 costume, u16 stagePick, u8 asl, u8 game,
-                     const PortValues* pv)
+                     const PortValues* pv, u8 pad)
     {
         LockIn& l = g_block.local.lockIn;
         PortValues& own = g_block.local.own;
         if (l.seq && l.ready == (ready ? 1 : 0) && l.cssChar == cssChar && l.charKind == charKind &&
             l.costume == costume && l.stagePick == stagePick && l.asl == asl && l.game == game &&
-            samePv(own, pv)) {
+            samePv(own, pv) && g_block.local.lockPad == pad) {
             return;
         }
+        g_block.local.lockPad = pad;
+        flushRange(&g_block.local.lockPad, 1);
         if (pv) memcpy(&own, (void*)pv, sizeof(own));
         else memset(&own, 0, sizeof(own));
         flushRange(&own, sizeof(own));

@@ -58,6 +58,8 @@ constexpr u32 L_SEQ = 0x00, L_STATE = 0x04, L_LOCAL_PORT = 0x05, L_REMOTE_READY 
 // The player's port values (name tag and controls, ppom.h PortValues), game-written with the
 // lock-in.
 constexpr u32 L_OWN = 0x40;
+// Game: the controller port (0-3) whose START locked in, written with the lock-in.
+constexpr u32 L_LOCK_PAD = 0x35;
 // Game: 1 once it draws DISCONNECTED in the match HUD.
 constexpr u32 L_HUD_DISCONNECTED = 0x7C;
 // How long the game gets to show DISCONNECTED (it does so on the frame it sees `disconnected`).
@@ -756,6 +758,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     l.game = R8(guard, lock + LK_GAME);
     for (u32 i = 0; i < l.port_values.size(); ++i)
       l.port_values[i] = R8(guard, loc.local + L_OWN + i);
+    l.local_pad = R8(guard, loc.local + L_LOCK_PAD);
     Gprb::Session::SetLocalLock(l);
     if (lock_seq != s_lock_seq)
     {
@@ -768,6 +771,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
       s_lock_seen["costume"] = picojson::value(static_cast<double>(l.costume));
       s_lock_seen["stage_pick"] = picojson::value(static_cast<double>(l.stage_pick));
       s_lock_seen["game"] = picojson::value(static_cast<double>(l.game));
+      s_lock_seen["pad"] = picojson::value(static_cast<double>(l.local_pad));
       s_lock_seen["tag"] = picojson::value((l.port_values[0] & 1) != 0);
     }
   }

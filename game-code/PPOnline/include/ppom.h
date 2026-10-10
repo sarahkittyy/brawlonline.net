@@ -223,7 +223,11 @@ namespace PPOM {
         u8 disconnected;  // the opponent left or went silent (Slippi ONLINE_INPUTS result 3)
         u16 peerName[NAME_LEN];
         LockIn lockIn;    // written by the game
-        u32 _reserved[3];
+        u8 _reservedTeam;  // the lobby branches' lockTeam
+        u8 lockPad;       // game: the controller port (0-3) whose START locked in, with the
+                          // lock-in (its seq covers it); the match reads that controller
+        u8 _reserved1[2];
+        u32 _reserved[2];
         PortValues own;   // written by the game with the lock-in (its seq covers both)
         u8 hudDisconnected;  // game: 1 once it draws DISCONNECTED in the match (Dolphin's OSD
                              // stands in only when the game does not); 0 at each match setup
@@ -309,7 +313,7 @@ namespace PPOM {
 
     // The lock-in (LOCAL): write it and bump its sequence.
     void writeLockIn(bool ready, u8 cssChar, u8 charKind, u8 costume, u16 stagePick, u8 asl, u8 game,
-                     const PortValues* pv);
+                     const PortValues* pv, u8 pad);
 
     extern Block g_block;
 

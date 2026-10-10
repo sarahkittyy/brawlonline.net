@@ -88,6 +88,9 @@ namespace OnlineMenu {
         int lastCostume;
         // The name tag on the player's panel when the CSS was left (save tag index, -1 none).
         int lastTag;
+        // The controller port (0-3) that last pressed START on the CSS: the lock-in carries it,
+        // and the match plays the local player from that controller.
+        u8 startPad;
     };
     static State s;
 
@@ -126,6 +129,17 @@ namespace OnlineMenu {
             b |= *(volatile u32*)(ps + 0x244 + 0x40 * p + field);
         }
         return b;
+    }
+
+    // The lowest port whose pressed field (0xC) has `mask` this frame, -1 none.
+    static int pressedPort(u32 mask)
+    {
+        u8* ps = padSystem();
+        if (!ps) return -1;
+        for (int p = 0; p < 4; p++) {
+            if (*(volatile u32*)(ps + 0x244 + 0x40 * p + 0xC) & mask) return p;
+        }
+        return -1;
     }
 
     // On the online CSS, START belongs to us (Slippi: lock in / search / enter code, and
@@ -323,7 +337,8 @@ namespace OnlineMenu {
         int tag = picked >= 0 ? selectedTag() : s.lastTag;
         PPOM::PortValues pv;
         portValuesOf(tag, &pv);
-        PPOM::writeLockIn(true, (u8)css, charKindOf(css), (u8)costume, stagePick, asl, (u8)game, &pv);
+        PPOM::writeLockIn(true, (u8)css, charKindOf(css), (u8)costume, stagePick, asl, (u8)game, &pv,
+                          s.startPad);
         s.lockedGame = game;
         s.lastCss = picked >= 0 ? picked : s.lastCss;
         s.lastCostume = costume;
@@ -331,7 +346,7 @@ namespace OnlineMenu {
     }
     static void unlock()
     {
-        PPOM::writeLockIn(false, 0xFF, 0xFF, 0, 0xFFFF, 0, 0, NULL);
+        PPOM::writeLockIn(false, 0xFF, 0xFF, 0, 0xFFFF, 0, 0, NULL, s.startPad);
         s.lockedGame = 0;
         OnlineMatch::clearPickedStage();
     }
@@ -1065,6 +1080,7 @@ namespace OnlineMenu {
         s.cssMsg = NULL;
         s.zHeld = 0;
         s.code[0] = 0;
+        s.startPad = 0;
         s.lastButtons = 0xFFFFFFFF;   // ignore buttons held from the menu
         s.searchSeq = 0;
         s.pollPending = false;
@@ -1436,6 +1452,10 @@ namespace OnlineMenu {
             // ignore buttons still held from the menu until they are released
             pressed = 0;
             if (!b) s.lastButtons = 0;
+        }
+        if (pressed & BTN_START) {
+            int p = pressedPort(BTN_START);
+            if (p >= 0) s.startPad = (u8)p;
         }
         maskStart();
         if (CodeEntry::active()) {
