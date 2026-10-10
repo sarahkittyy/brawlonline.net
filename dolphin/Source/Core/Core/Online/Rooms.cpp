@@ -155,6 +155,7 @@ struct State
   u32 lock_game = 0;
   u8 lock_char = 0xFF, lock_costume = 0;
   bool harness_lock = false;
+  bool harness_screen = false;  // tests: the harness's screen, not the game's
   Clock::time_point next_ready{};
 
   // The launcher.
@@ -1162,9 +1163,24 @@ void Submit(const Request& request)
   }
 }
 
+namespace
+{
+void SetScreenLocked(u8 screen);
+}
+
 void SetScreen(u8 screen)
 {
   std::lock_guard lk(s_mutex);
+  if (s.harness_screen)
+    return;
+  SetScreenLocked(screen);
+}
+
+namespace
+{
+// under s_mutex
+void SetScreenLocked(u8 screen)
+{
   const u8 v = screen <= static_cast<u8>(Screen::Other) ? screen : static_cast<u8>(Screen::Other);
   if (v != s.screen)
   {
@@ -1172,6 +1188,7 @@ void SetScreen(u8 screen)
     RestartAway();
   }
 }
+}  // namespace
 
 void SetLocalLock(bool ready, u32 game, u8 char_kind, u8 costume)
 {
@@ -1241,6 +1258,7 @@ picojson::object Status()
   lock["char_kind"] = picojson::value(static_cast<double>(s.lock_char));
   lock["costume"] = picojson::value(static_cast<double>(s.lock_costume));
   lock["harness"] = picojson::value(s.harness_lock);
+  o["screen_harness"] = picojson::value(s.harness_screen);
   o["lock"] = picojson::value(lock);
   picojson::object rg;
   rg["active"] = picojson::value(s.rg.active);
@@ -1386,13 +1404,22 @@ std::optional<std::string> HarnessRequest(const picojson::object& args)
   }
   else if (op == "screen")
   {
-    SetScreen(static_cast<u8>(num("screen", 0)));
+    // Stands in for the game's LOCAL.screen until `release_screen`.
+    std::lock_guard lk(s_mutex);
+    s.harness_screen = true;
+    SetScreenLocked(static_cast<u8>(num("screen", 0)));
+    return std::nullopt;
+  }
+  else if (op == "release_screen")
+  {
+    std::lock_guard lk(s_mutex);
+    s.harness_screen = false;
     return std::nullopt;
   }
   else
   {
-    return "op must be create, join, leave, slot, teams, public, team, ready, release_lock or "
-           "screen";
+    return "op must be create, join, leave, slot, teams, public, team, ready, release_lock, "
+           "screen or release_screen";
   }
   Submit(r);
   return std::nullopt;

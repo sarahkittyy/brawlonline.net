@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <bit>
 #include <chrono>
 #include <cstdlib>
 #include <cstring>
@@ -185,20 +186,54 @@ FighterFields ReadFighterFields(const Guest& g)
   // The entries are not indexed by port: a match has 9, the used ones first in port order, with
   // none for an empty port (P1 + P3 + P4: entries 0, 1, 2), so each entry's player number (+0x58)
   // says whose it is (docs/nplayer/setup.md).
+  //
+  // Entries a match does not use keep what an earlier match left in them: after a 4-player match,
+  // a 2-player match's entries 2 and 3 still carry player numbers 2 and 3 and stale owner and
+  // fighter pointers, on that machine only (another machine that never played 4 players has none
+  // there). Read as the match's fighters, they made the confirmed checksum differ from session
+  // frame 0 between a machine that had played offline 4-player Versus and one that had not
+  // (staging, 2026-10-10: "desync at frame 0"). So only the match's own entries count: the first
+  // n, n = the players in the match's setup (gmGlobalModeMelee, state human or CPU), each for a
+  // port the setup has, the first entry for a port winning, and never a freed one (entry id -1:
+  // the 2-player match's entries 2 and 3 above; docs/gameplay-rollback-status.md, Phase 15).
   FighterFields out{};
   for (auto& f : out)
     f[0] = 0xff;
   const auto entries = g.Ptr32(0x80624780u);
   if (!entries)
     return out;
-  const u32 count = std::min<u32>(g.U32(0x80624784u).value_or(0), 9);
+  u32 ports = 0;
+  if (const auto gg = g.Ptr32(Addr::GAME_GLOBAL_PTR))
+  {
+    if (const auto mm = g.Ptr32(*gg + Addr::GG_MODE_MELEE))
+    {
+      if (const u8* p = g.Ptr(*mm, Addr::MODE_MELEE_SIZE))
+      {
+        for (u32 port = 0; port < 4; ++port)
+        {
+          const u8 state = p[0x98 + port * 0x5C + 0x01];  // gmPlayerInitData: 0 human, 1 CPU, 3 none
+          if (state == 0 || state == 1)
+            ports |= 1u << port;
+        }
+      }
+    }
+  }
+  const u32 players = static_cast<u32>(std::popcount(ports));
+  const u32 count = std::min<u32>({g.U32(0x80624784u).value_or(0), 9u, players});
+  u32 seen = 0;
   for (u32 k = 0; k < count; ++k)
   {
     const u32 entry = *entries + k * 0x244u;
+    // ftEntry::m_entryId (+0x04) is -1 once an entry is freed; its player number stays.
+    const auto entry_id = g.U32(entry + 0x04);
     const auto player = g.U32(entry + 0x58);
-    if (!player || *player >= 4)
+    if (!entry_id || *entry_id == 0xFFFFFFFFu || !player || *player >= 4 ||
+        !(ports & (1u << *player)) || (seen & (1u << *player)))
+    {
       continue;
+    }
     const u32 port = *player;
+    seen |= 1u << port;
     auto& f = out[port];
     const u8* inst = g.Ptr(entry + 0x0a, 1);
     f[0] = inst ? *inst : 0xff;

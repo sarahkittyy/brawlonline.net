@@ -1074,7 +1074,17 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     session[S_STAGE] = static_cast<u8>(lobby.stage >> 8);
     session[S_STAGE + 1] = static_cast<u8>(lobby.stage);
     session[S_ASL] = lobby.asl;
-    session[S_NUM_PLAYERS] = static_cast<u8>(lobby.num_players);
+    // ppom.h: the highest present port + 1, not the number of players. With a gap (a room's P1
+    // and P3) the count (2) made the game build its match from P1 and P2 only: one fighter, and
+    // the barrier ended the session ("fewer than two players"). Before the setup is decided no
+    // player is present: the count, as before.
+    int highest = 0;
+    for (int i = 0; i < SESSION_PLAYERS; ++i)
+    {
+      if (lobby.players[i].present)
+        highest = i + 1;
+    }
+    session[S_NUM_PLAYERS] = static_cast<u8>(highest ? highest : lobby.num_players);
     session[S_TEAMS] = lobby.teams ? 1 : 0;
     session[S_SETUP_ERROR] = lobby.setup_error;
     for (int i = 0; i < SESSION_PLAYERS; ++i)

@@ -208,6 +208,72 @@ def test_room_two_players_through_the_game(backend: OnlineBackend, dolphin: Call
     _wait(lambda: not room_view(a)["flags"] & ppom.RF_IN, 20, "A out of the room")
 
 
+def test_room_two_players_with_a_gap(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                     gpu_backend: str) -> None:
+    """Staging, 2026-10-10: the host closed slot 2 and opened slot 3, a player joined (slot 3),
+    and the room's game ended at once on both ("the match's players differ from the session's:
+    fewer than two players"): GameBridge wrote SESSION `numPlayers` as the number of players (2)
+    where the game reads the highest port + 1 (3), so the game built its match from P1 and P2
+    only. Here: slot 3 joined through the game's screens, both ready, the match runs under the
+    gameplay session with P1 and P3 and both reach game set with the same checksums."""
+    test = "two-players-gap"
+    ua = backend.create_user("rgaph", "RGPH")
+    ub = backend.create_user("rgapj", "RGPJ")
+    a = _boot(dolphin, "room-gap-a", backend, ua, gpu_backend, test, "gameplay", artifacts=ART)
+    b = _boot(dolphin, "room-gap-b", backend, ub, gpu_backend, test, "gameplay", artifacts=ART)
+    _all(a.to_main_menu, b.to_main_menu)
+    _all(a.to_online_page, b.to_online_page)
+    code = create_room(a)
+    # The host's slot controls (as the hand's A on a panel sends them): slot 3 open, then slot 2
+    # closed (at least 2 slots stay open).
+    a.c.call("rooms_request", op="slot", slot=3, open=True)
+    until_view(a, lambda v: v["slots"][2]["bits"] == ppom.SLOT_OPEN, "slot 3 open")
+    a.c.call("rooms_request", op="slot", slot=2, open=False)
+    until_view(a, lambda v: v["slots"][1]["bits"] == 0 and v["slots"][2]["bits"] == ppom.SLOT_OPEN,
+               "slot 2 closed, slot 3 open")
+    to_join_room(b)
+    pick(a)
+    pick(b, right=2)
+    for g in (a, b):
+        B.write_rules(g.c, stocks=1, minutes=1, items_off=True)
+        ppom.allow_test_rules(g.c)
+    type_room_code(b, code)
+    vb = until_view(b, lambda v: v["flags"] & ppom.RF_IN, "B in the room")
+    assert vb["local_port"] == 2 and vb["host"] == 0, vb
+    until_view(a, lambda v: v["slots"][2]["bits"] & ppom.SLOT_TAKEN, "A sees B in slot 3")
+    _all(lambda: a.steps("wait 60"), lambda: b.steps("wait 60"))
+    a.shot("03-b-in-slot-3")
+    b.shot("03-in-slot-3")
+    game = room_view(a)["game"]
+    a.steps("tap START 8", "wait 40")
+    until_view(b, lambda v: v["slots"][0]["bits"] & ppom.SLOT_READY, "B sees A ready")
+    b.steps("tap START 8", "wait 10")
+    _wait(lambda: all(online_set.gstatus(g.c)["phase"] in ("running", "error", "ended") for g in (a, b)), 240,
+          "both sessions running")
+    st = [online_set.gstatus(g.c) for g in (a, b)]
+    assert all(s["phase"] == "running" for s in st), [(s["phase"], s.get("error")) for s in st]
+    assert [s["match_ports"] for s in st] == [0b101, 0b101], st
+    for g in (a, b):
+        assert ppom.read_session(g.c, ppom.find_block(g.c))["num_players"] == 3
+        g.shot("04-match")
+    # B (P3) walks off the stage (1 stock): game set.
+    from ppharness import flows as F
+    with contextlib.suppress(Exception):
+        F.fight([F.Seat(b.c, 2, 0, "J")], 60 * 60 * 2, mode="selfdestruct",
+                stop=lambda: online_set.gstatus(b.c)["phase"] != "running")
+    _wait(lambda: all(online_set.gstatus(g.c)["phase"] != "running" for g in (a, b)), 240, "the game to end")
+    st = [online_set.gstatus(g.c) for g in (a, b)]
+    assert [s["end_reason"] for s in st] == ["game set", "game set"], st
+    limit = min(s["current_frame"] for s in st) - 16
+    cks = [{r[0]: r[1] for r in g.c.call("gprb_checksums", since=0)["rows"] if r[0] <= limit} for g in (a, b)]
+    common = set(cks[0]) & set(cks[1])
+    assert len(common) > 30 and all(cks[0][f] == cks[1][f] for f in common), len(common)
+    _wait(lambda: a.scene() == CSS and b.scene() == CSS, 180, "both back on the room's CSS")
+    for g in (a, b):
+        until_view(g, lambda v: v["flags"] & ppom.RF_IN and v["status"] == 0 and v["game"] == game + 1,
+                   "the room waiting for its next game", timeout=60)
+
+
 # The CSS hand (test_rooms_ui.py): muSelCharHand +0x90 x, +0x94 y; the panels' centres.
 HAND_X, HAND_Y = 0x90, 0x94
 PANEL_X = [-22.0, -7.0, 8.0, 23.0]
