@@ -336,11 +336,11 @@ namespace OnlineMatch {
         int code = mgr ? *(int*)(mgr + 0x284) : 0;
         PPOM::g_block.debug.scratch[10] = (PPOM::g_block.debug.scratch[10] & ~0xFF) | 4 | (code << 8);
         // Ranked: the steps decide the stage (GameSetup); the stage select's own pick is not kept.
-        if ((code == 1 || code == 3) && OnlineMenu::currentMode() != PPOM::MODE_RANKED) {
+        if (OnlineMenu::currentMode() != PPOM::MODE_RANKED) {
             // The stage select keeps its choice where sqVsMelee's setup reads it (GameGlobal+0x14,
-            // +0x22); P+ keeps the alternate-stage buttons at 0x800B9EA2.
+            // +0x22); P+ keeps the alternate-stage buttons at 0x800B9EA2. Left with B: no pick.
             u8* st = gg(0x14);
-            s_pickedStage = st ? *(u16*)(st + 0x22) : 0xFFFF;
+            s_pickedStage = (code == 1 || code == 3) && st ? *(u16*)(st + 0x22) : OnlineMatch::PICK_CANCELLED;
             s_pickedAsl = (u8)*(u16*)ASL_BUTTONS;
         }
         backToCss(seq);

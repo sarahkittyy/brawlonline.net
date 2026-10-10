@@ -43,6 +43,8 @@ CONFIRM_MARGIN = 16      # frames behind the slower peer that can no longer roll
 START_FRAME = 240        # the session's start barrier (gameplay rollback begins after GO)
 CSS = "scSelctCharacter"
 STAGE_PICK = "final_destination"   # what the Direct loser picks on the stage select
+# The loser's pick by game: a new one each game (a pick is for its own game only).
+STAGE_PICKS = {2: STAGE_PICK, 3: "battlefield"}
 
 
 def wait(pred: Callable[[], Any], timeout: float, what: str, every: float = 0.25) -> Any:
@@ -265,37 +267,61 @@ def back_on_css(players: Sequence[Any], game: int,
 def lock_in_next(players: Sequence[Any], game: int, mode: str = "direct",
                  log: Callable[[str], None] = print,
                  panels: Optional[Dict[str, Dict[str, int]]] = None) -> Dict[str, Any]:
-    """START on both CSSs. Direct: the loser of the last game picks the stage (a draw: both
-    pick) and comes back to the CSS locked in, the character still selected; then the winner
-    locks in with START."""
+    """START on both CSSs. Every player locks in with the character first, and until their own
+    START the character can change (the CSS is not locked). Direct: then the loser of the last
+    game (SESSION picks_stage; a draw: the lower port) goes to P+'s stage select by itself, picks
+    STAGE_PICKS[game] and comes back to the CSS locked in with it (the match then starts at once).
+    The winner locks in first here, so the loser's lock-in is what opens the stage select. In game
+    2 the loser first leaves the stage select with B: back on the CSS unlocked, the character still
+    selected, and START again opens the stage select again."""
     info: Dict[str, Any] = {}
     se = session(players[0].c)
-    winner = se["last_winner"]
-    order = sorted(players, key=lambda p: local(p.c)["local_port"] == winner)
-    for p in order:   # the loser first: it waits on the CSS for the winner
+    # (Between games SESSION's `present` is 0: Dolphin fills the players in with the setup.)
+    picker = next((i for i, pl in enumerate(se["players"]) if pl.get("picks_stage")), None)         if mode == "direct" else None
+    # Nobody is locked in before their own START (a stage pick from an earlier game used to lock
+    # its player in again at once, with that stage), and every character can still change.
+    for p in players:
         lo = local(p.c)
-        picks = mode == "direct" and winner != 0xFF and lo["local_port"] != winner
+        assert not (lo["lock"]["ready"] and lo["lock"]["game"] == game), (p.name, "locked in before START", lo["lock"])
+        assert ppom.read_debug(p.c, block(p.c))["scratch"][1] & 1 == 0, (p.name, "the CSS is locked before START")
+    order = sorted(players, key=lambda p: local(p.c)["local_port"] == picker)
+    for p in order:   # the stage picker last: its stage select opens once everyone is locked in
+        lo = local(p.c)
+        picks = picker is not None and lo["local_port"] == picker
         n = lo["lock"]["seq"]
         p.steps("tap START 8", "wait 30")
         if picks:
             wait(lambda: scene(p.c) == "scSelStage", 60, f"{p.name}: the stage select (loser picks)")
             p.steps("wait 40")
+            if game == 2:
+                p.steps("tap B 8")
+                wait(lambda: scene(p.c) == CSS, 60, f"{p.name}: back from the stage select with B")
+                p.steps("wait 30")
+                lo = local(p.c)
+                assert not lo["lock"]["ready"], (p.name, "still locked in after B on the stage select", lo["lock"])
+                assert ppom.read_debug(p.c, block(p.c))["scratch"][1] & 1 == 0, (p.name, "CSS locked after B")
+                if panels and p.name in panels:
+                    info["after_sss"] = check_css_remembers(p, panels[p.name], "after B on the stage select")
+                p.shot(f"g{game}-back-from-stage-select")
+                p.steps("tap START 8", "wait 30")
+                wait(lambda: scene(p.c) == "scSelStage", 60, f"{p.name}: the stage select again")
+                p.steps("wait 40")
             p.shot(f"g{game}-loser-stage-select")
+            for q in players:   # the others wait for the pick: nothing is set up before it
+                assert not (session(q.c)["state"] == 2 and session(q.c)["game"] == game), (q.name, "set up before the pick")
             # Slippi parity: Direct's loser may pick any stage, nothing is struck.
             assert p.c.read_mem(STRIKE_TABLE, 30) == bytes(30), (p.name, "stages struck on the SSS")
-            B.sss_pick_stage(p.c, B.STAGE_KIND[STAGE_PICK], 0)
+            stage = STAGE_PICKS.get(game, STAGE_PICK)
+            B.sss_pick_stage(p.c, B.STAGE_KIND[stage], 0)
             wait(lambda: scene(p.c) in (CSS, "scMemoryChange", "scMelee"), 60, f"{p.name}: back from the stage select")
             info["picked_by"] = p.name
-            if panels and p.name in panels and all(scene(q.c) == CSS for q in players):
-                wait(lambda: scene(p.c) == CSS, 30, f"{p.name}: on the CSS")
-                p.steps("wait 30")
-                info["after_sss"] = check_css_remembers(p, panels[p.name], "after the stage select")
-                p.shot(f"g{game}-back-from-stage-select")
-            log(f"game {game}: {p.name} lost the last game and picked {STAGE_PICK}")
-        wait(lambda: local(p.c)["lock"]["seq"] > n and local(p.c)["lock"]["ready"]
-             and local(p.c)["lock"]["game"] == game, 30, f"{p.name}: locked in for game {game}")
-        if scene(p.c) == CSS:
-            p.shot(f"g{game}-locked-in")
+            info["picked"] = stage
+            log(f"game {game}: {p.name} lost the last game and picked {stage}")
+        else:
+            wait(lambda: local(p.c)["lock"]["seq"] > n and local(p.c)["lock"]["ready"]
+                 and local(p.c)["lock"]["game"] == game, 30, f"{p.name}: locked in for game {game}")
+            if scene(p.c) == CSS:
+                p.shot(f"g{game}-locked-in")
     return info
 
 
@@ -321,7 +347,8 @@ def play_set(players: Sequence[Any], games: int = 2, mode: str = "direct",
         assert all(e == "game set" for e in g["end"]), g
         g["after"] = back_on_css(players, game, panels)
         if game > 1 and mode == "direct" and rep["lock_ins"][-1].get("picked_by"):
-            assert g["stage"] == B.STAGE_KIND[STAGE_PICK], ("the loser's pick was not played", g)
+            want = B.STAGE_KIND[rep["lock_ins"][-1]["picked"]]
+            assert g["stage"] == want, ("the loser's pick was not played", g)
     for p in players:
         m = boot_marks(p.c)
         check_no_reboot(marks[p.name], m, p.name)

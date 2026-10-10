@@ -741,11 +741,6 @@ int StagePickPort(u8 pickers, const std::array<u16, MAX_PORTS>& picks)
     if ((pickers & (1u << i)) && picks[i] != NONE)
       return i;
   }
-  for (int i = 0; i < MAX_PORTS; ++i)
-  {
-    if (picks[i] != NONE)
-      return i;
-  }
   return -1;
 }
 }  // namespace Online::GameSetup

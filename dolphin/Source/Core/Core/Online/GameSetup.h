@@ -151,7 +151,7 @@ struct Outcome
 Outcome DecideOutcome(bool teams, const std::array<PortEnd, MAX_PORTS>& ports);
 
 // The port whose stage pick the next game is played on: the first picker (in port order) that
-// picked a stage, else the first port that did; -1: none (a random stage). `picks` holds each
-// port's pick, 0xFFFF none.
+// picked a stage; -1: none (a random stage). Only a picker's pick counts: anyone else's (a pick
+// left over from an earlier game) is not played. `picks` holds each port's pick, 0xFFFF none.
 int StagePickPort(u8 pickers, const std::array<u16, MAX_PORTS>& picks);
 }  // namespace Online::GameSetup

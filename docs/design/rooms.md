@@ -21,7 +21,7 @@ _2026-10-09. The user's decisions from a question round, plus the defaults chose
 | 11 | Teams or FFA | **Host toggles Teams on/off** for the room. With Teams on, **each player picks their own color** on their own panel (Slippi Teams). |
 | 12 | Splits | **Any split except everyone on one color** (2v2, 2v1, 3v1 allowed, as Brawl's Versus). All on one color: status "Pick different teams", no start. With 2 players the Teams switch has no effect: 1v1 (**default**). |
 | 13 | Start | **Automatic once every open slot is filled and every player is ready.** START = lock in (ready); unlocking takes the ready back. As Direct. |
-| 14 | Stage | Game 1 random from the legal list (Slippi). Then the **loser picks**: 1v1 the loser; Teams the losing team's lower slot; FFA last place (a tie: the lower slot, **default**). A draw: both pick, as Direct (**default**). |
+| 14 | Stage | Game 1 random from the legal list (Slippi). Then the **loser picks**: 1v1 the loser; Teams the losing team's lower slot; FFA last place (a tie: the lower slot, **default**). A draw: the lower slot picks (2026-10-09: everyone locks in first, then one player picks). |
 | 15 | Other players' panels | **Username, "Ready" / "Choosing...", and their character and costume once they are ready** (carried by the lock-in that already exists). No live cursor or hover sync. |
 | 16 | Sounds | **Join: an existing Brawl menu sound. Leave: the back sound** used today when an opponent leaves. |
 

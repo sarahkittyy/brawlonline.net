@@ -81,6 +81,9 @@ namespace OnlineMenu {
         // Connected (the gameplay session's lobby, SESSION/LOCAL): the game this player is
         // locked in for (0 = not locked in; game 1 is locked in by the search itself).
         int lockedGame;
+        // The stage of that lock-in: 0xFFFF none, PPOM::STAGE_PENDING the loser's (the stage
+        // select comes once every player is locked in), else the stage picked there.
+        u16 lockStage;
         // The last character and costume locked in. Brawl's Wi-Fi CSS comes back from a match or
         // the stage select with the coin in the hand (it restores no selection in Wi-Fi mode);
         // while connected, START locks in with these unless another character is picked.
@@ -340,6 +343,7 @@ namespace OnlineMenu {
         PPOM::writeLockIn(true, (u8)css, charKindOf(css), (u8)costume, stagePick, asl, (u8)game, &pv,
                           s.startPad);
         s.lockedGame = game;
+        s.lockStage = stagePick;
         s.lastCss = picked >= 0 ? picked : s.lastCss;
         s.lastCostume = costume;
         s.lastTag = tag;
@@ -348,6 +352,7 @@ namespace OnlineMenu {
     {
         PPOM::writeLockIn(false, 0xFF, 0xFF, 0, 0xFFFF, 0, 0, NULL, s.startPad);
         s.lockedGame = 0;
+        s.lockStage = 0xFFFF;
         OnlineMatch::clearPickedStage();
     }
 
@@ -405,13 +410,24 @@ namespace OnlineMenu {
     // Direct (and the code-based rooms): the loser of the last game picks the stage, Slippi's
     // HandleInputsOnCSS ISWINNER_LOST. Dolphin decides who (SESSION picksStage): 1v1 the loser
     // (a draw: both), teams the losing team's lower port, a free-for-all the last place (a tie:
-    // the lower port); docs/nplayer/setup.md.
-    static bool picksStage()
+    // the lower port); docs/nplayer/setup.md. One player picks: of several (a 1v1 draw), the
+    // lower port, since the stage select comes after every player has locked in. (Between games
+    // SESSION's `present` is 0: Dolphin fills the players in with the next game's setup.)
+    static int stagePicker()
     {
         const PPOM::Session& se = PPOM::g_block.session;
-        u8 me = PPOM::g_block.local.localPort;
-        return (s.mode == PPOM::MODE_DIRECT || s.mode == PPOM::MODE_TEAMS) &&
-               se.state != PPOM::SS_NONE && me < 4 && se.players[me].picksStage;
+        if ((s.mode != PPOM::MODE_DIRECT && s.mode != PPOM::MODE_TEAMS) || se.state == PPOM::SS_NONE)
+            return -1;
+        for (int i = 0; i < PPOM::SESSION_PLAYERS; i++) {
+            if (se.players[i].picksStage) return i;
+        }
+        return -1;
+    }
+
+    static bool picksStage()
+    {
+        int p = stagePicker();
+        return p >= 0 && p == PPOM::g_block.local.localPort;
     }
 
     static bool lockedForNext()
@@ -687,8 +703,11 @@ namespace OnlineMenu {
             }
             // Slippi's lines when connected (LoadCSSText.asm): "Press START to lock in" /
             // "select stage", "Locked in" + "Waiting on opponent", and "Playing: <name>".
+            // "Playing" once the match is set up: Direct's loser locks in first and then picks
+            // the stage, so the others wait on the opponent until that pick.
             if (lockedForNext()) {
-                if (PPOM::g_block.local.remoteReady || PPOM::g_block.session.state == PPOM::SS_MATCH_READY) {
+                const PPOM::Session& se = PPOM::g_block.session;
+                if (se.state == PPOM::SS_MATCH_READY && se.game == s.lockedGame) {
                     sprintf(buf, "Playing: %s", s.peerName);
                     setStatus(buf, false);
                 } else {
@@ -696,8 +715,6 @@ namespace OnlineMenu {
                 }
             } else if (lockChar() < 0) {
                 setStatus("Select your character", false);
-            } else if (picksStage() && OnlineMatch::pickedStage() == 0xFFFF) {
-                setStatus("Press START to select stage", false);
             } else {
                 setStatus("Press START to lock in", false);
             }
@@ -1253,12 +1270,25 @@ namespace OnlineMenu {
                 g_onlineMatchGame = (u8)game;
                 PPOM::g_block.debug.scratch[10] = 0x100 * game;   // tests: the match started
                 leaveCss(1);
+                return;
             }
-            return;
-        }
-        if (OnlineMatch::pickedStage() != 0xFFFF && lockChar() >= 0) {
-            // Back from the stage select: locked in with the stage (ExitSSSUponStageSelect).
-            lockIn(game, OnlineMatch::pickedStage(), OnlineMatch::pickedAsl());
+            if (s.lockStage != PPOM::STAGE_PENDING) return;
+            // Direct's loser, locked in with the character: the stage select once every other
+            // player is locked in too, and the setup waits for the pick (Dolphin STAGE_PENDING).
+            const u16 pick = OnlineMatch::pickedStage();
+            if (pick == OnlineMatch::PICK_CANCELLED) {
+                // Left the stage select without a pick (B): unlocked, so the character can change
+                // again, and START locks in again.
+                unlock();
+            } else if (pick != 0xFFFF) {
+                // Back from the stage select: locked in with the stage (ExitSSSUponStageSelect).
+                // The pick is for this game only.
+                lockIn(game, pick, OnlineMatch::pickedAsl());
+                OnlineMatch::clearPickedStage();
+            } else if (PPOM::g_block.local.remoteReady) {
+                g_onlinePickStage = 1;
+                leaveCss(1);
+            }
             return;
         }
         if (ranked && s.step.active && s.step.mayLock && s.step.timeUp && lockChar() >= 0) {
@@ -1269,12 +1299,7 @@ namespace OnlineMenu {
         }
         if (!(pressed & BTN_START) || lockChar() < 0) return;
         if (ranked && !(s.step.active && s.step.mayLock)) return;
-        if (picksStage()) {
-            g_onlinePickStage = 1;
-            leaveCss(1);
-        } else {
-            lockIn(game, 0xFFFF, 0);
-        }
+        lockIn(game, picksStage() ? PPOM::STAGE_PENDING : 0xFFFF, 0);
     }
 
     // Ranked: the rating, rounded ("1523"), and after a set its change ("1523 (+14)").

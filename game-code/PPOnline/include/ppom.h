@@ -203,6 +203,11 @@ namespace PPOM {
 
     // ---- LOCAL ----
 
+    // LockIn.stagePick of the player who picks the next stage (Direct's loser): locked in with
+    // the character, the stage select comes once every player is locked in, and the setup waits
+    // for its pick (Dolphin's GameplaySession STAGE_PENDING).
+    const u16 STAGE_PENDING = 0xFFFE;
+
     // The player's lock-in on the online CSS (game -> Dolphin). Slippi's
     // MSRB_IS_LOCAL_PLAYER_READY plus its SET_MATCH_SELECTIONS payload.
     struct LockIn {
@@ -211,7 +216,8 @@ namespace PPOM {
         u8 cssChar;       // CSS id (diagnostics)
         u8 charKind;      // gmCharacterKind (random resolved)
         u8 costume;       // colour number
-        u16 stagePick;    // stage kind picked on the stage select (Direct loser), 0xFFFF none
+        u16 stagePick;    // stage kind picked on the stage select (Direct loser), 0xFFFF none,
+                          // STAGE_PENDING: the loser locked in, its stage select still to come
         u8 asl;           // P+ alternate-stage buttons held for that pick
         u8 game;          // game number (1-based) this lock-in is for
     };                    // 0x0C
