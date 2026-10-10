@@ -18,13 +18,17 @@
 //   0x8069742C setCharPic(area, css, kind, costume, isTeam, team, teamSet)
 //   0x8069A4DC decide(area)                  the portrait's "picked" look (coin put down)
 //   0x80698A1C showTeam(area)                team colour from area+0x1C0 when task+0x5C8 is set
+//   0x806977FC showStars(area, count, kind)  Brawl's win stars above the name plate (kind 1,
+//                                            1-5 stars, more as a star and "x N"): the host's mark,
+//                                            one star (rooms.md #8: a reused Brawl icon)
 //   area+0x40C MuMsg, window 0              the name plate ("PLAYER 2" -> the player's name)
 //   area+0x41C panel state object (DOL 0x800FD630..): states 0 none, 1 "Seeking..",
 //            2 "Selecting Character...", 3 "Selecting Stage...", 4 "Practice Stage...",
 //            5 "Bye" (then 1), 6 "Brawling..."; set with 0x800FD96C(obj, state), animated by
 //            0x800FD8E0(obj) every frame (which text+0x12210 no longer does for these areas).
 // The "Seeking" texture (MenSelchrWifi03, in the state model MenSelchrState0000) is drawn again
-// as "Searching" with the game's font; the model's own dots follow it.
+// as "Searching" with the game's font (the model's own dots follow it), and "Selecting
+// Character..." (WifiInfWait05_0, CMPR) as "Choosing...".
 #include <mu/mu_msg.h>
 #include <string.h>
 #include "labels.h"
@@ -41,6 +45,8 @@ namespace RoomCss {
     typedef void (*StateSetFn)(u8* obj, int state);
     typedef void (*StateUpdateFn)(u8* obj);
     typedef void (*SetVisFn)(void* scnMdl, bool vis);
+    typedef void (*StarsFn)(u8* area, int count, int kind);
+    static const StarsFn SHOW_STARS = (StarsFn)0x806977FC;
     static const SetCharFn SET_CHAR = (SetCharFn)0x80696F60;
     static const SetCharPicFn SET_CHAR_PIC = (SetCharPicFn)0x8069742C;
     static const AreaFn DECIDE = (AreaFn)0x8069A4DC;
@@ -54,10 +60,11 @@ namespace RoomCss {
 
     struct Shown {
         u8 kind;          // PanelView kind shown (0xFF: not set up yet)
-        u8 css, costume, team;
+        u8 css, costume, team, host;
         char name[NAME_CHARS + 1];
     };
     static Shown s_shown[4];
+    static int s_meHostShown = -1;
     static u8* s_task = NULL;      // the CSS these panels belong to
     static bool s_teams = false;
     static bool s_seekingLabelled = false;
@@ -99,6 +106,7 @@ namespace RoomCss {
         s_task = NULL;
         s_seekingLabelled = false;
         s_myTeamShown = -1;
+        s_meHostShown = -1;
         for (int i = 0; i < 4; i++) {
             s_shown[i].kind = 0xFF;
             s_hidden[i] = false;
@@ -177,8 +185,13 @@ namespace RoomCss {
         u8* so = stateObj(a);
         u8* obj = so ? *(u8**)(so + 0xC) : NULL;
         if (!isPtr((u32)obj)) return;
-        u8* tex = Labels::boundTexture(*(u8**)(obj + 8), "MenSelchrWifi03");
-        if (tex && Labels::render(tex, "Searching", 1, 1, 87, 19, 0)) s_seekingLabelled = true;
+        u8* mdl = *(u8**)(obj + 8);
+        u8* tex = Labels::boundTexture(mdl, "MenSelchrWifi03");
+        if (!tex || !Labels::render(tex, "Searching", 1, 1, 87, 19, 0)) return;
+        // "Selecting Character..." (two lines, its own dots) -> "Choosing..." (rooms.md #3).
+        tex = Labels::boundTexture(mdl, "WifiInfWait05_0");
+        if (tex) Labels::render(tex, "Choosing...", 2, 8, 118, 34, 1);
+        s_seekingLabelled = true;
     }
 
     static int stateOf(u8 kind)
@@ -201,7 +214,7 @@ namespace RoomCss {
         }
         u8* so = stateObj(a);
         bool changed = sh.kind != v.kind || sh.css != v.css || sh.costume != v.costume ||
-                       sh.team != v.team || strcmp(sh.name, v.name) != 0;
+                       sh.team != v.team || sh.host != v.host || strcmp(sh.name, v.name) != 0;
         if (changed) {
             int st = stateOf(v.kind);
             if (so && (sh.kind == 0xFF || stateOf(sh.kind) != st)) STATE_SET(so, st);
@@ -217,6 +230,8 @@ namespace RoomCss {
             }
             if (sh.team != v.team || sh.kind == 0xFF) SHOW_TEAM(a);
             plate(a, v.kind == PV_CLOSED || v.kind == PV_SEARCHING ? "" : v.name);
+            SHOW_STARS(a, v.host && v.kind != PV_CLOSED && v.kind != PV_SEARCHING ? 1 : 0, 1);
+            sh.host = v.host;
             sh.kind = v.kind;
             sh.css = v.css;
             sh.costume = v.costume;
@@ -229,7 +244,7 @@ namespace RoomCss {
         else showArea(i, a);
     }
 
-    void tick(const PanelView views[3], bool teams, int myTeam)
+    void tick(const PanelView views[3], bool teams, int myTeam, bool meHost)
     {
         u8* task = cssTask();
         if (!task) return;
@@ -256,6 +271,10 @@ namespace RoomCss {
             *(u32*)(a0 + 0x1C0) = (u32)myTeam;
             SHOW_TEAM(a0);
             s_myTeamShown = myTeam;
+        }
+        if (a0 && (int)meHost != s_meHostShown) {
+            SHOW_STARS(a0, meHost ? 1 : 0, 1);
+            s_meHostShown = meHost ? 1 : 0;
         }
         for (int i = 0; i < 3; i++) apply(task, i + 1, views[i], teams);
     }
