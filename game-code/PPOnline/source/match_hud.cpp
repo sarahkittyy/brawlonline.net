@@ -133,10 +133,37 @@ namespace MatchHud {
     // live from the damage digits, the name centred under the panel as before). Without a HUD
     // object (never seen) the panels are taken as packed and evenly spread, 154 apart.
     // The names are as small as Melee's; a name wider than its panel is made narrower to fit.
+    // The panel's place moves when its player is KO'd: the panel flies off (x drifts, about 15
+    // frames) and snaps back at the respawn (staging feedback 2026-10-10: the name slid with it).
+    // So each port's place is read once per match, the first frame it is the same as the frame
+    // before (a panel at rest; it is from the match's start until a KO), and kept for the match.
     static const float PANEL_GAP = 154.0f;
     static const float HUD_UNIT = 7.688f, HUD_CENTRE = 279.7f;
+    static float s_restX[4], s_lastX[4];
+    static u8 s_seen = 0, s_rest = 0;   // bit per port: s_lastX read, s_restX kept
 
+    static void forgetPanels() { s_seen = 0; s_rest = 0; }
+
+    static bool livePanelX(int port, float* out);
     static bool panelX(int port, float* out)
+    {
+        if (port < 0 || port > 3) return false;
+        u8 bit = (u8)(1 << port);
+        if (s_rest & bit) {
+            *out = s_restX[port];
+            return true;
+        }
+        if (!livePanelX(port, out)) return false;
+        if ((s_seen & bit) && s_lastX[port] == *out) {
+            s_restX[port] = *out;
+            s_rest |= bit;
+        }
+        s_lastX[port] = *out;
+        s_seen |= bit;
+        return true;
+    }
+
+    static bool livePanelX(int port, float* out)
     {
         u32 mgr = *(u32*)0x805A02D0;   // g_IfMngr
         if (mgr < 0x80000000 || mgr >= 0x81800000 || port < 0 || port > 3) return false;
@@ -194,9 +221,13 @@ namespace MatchHud {
     static void draw()
     {
         bool names = g_onlineMatchGame != 0;
-        if (!s_on && !names) return;
+        if (!s_on && !names) {
+            forgetPanels();
+            return;
+        }
         if (!Online::inScene("scMelee")) {
             s_on = false;   // the text lives as long as the match scene
+            forgetPanels();
             return;
         }
         if (!s_constructed) {
