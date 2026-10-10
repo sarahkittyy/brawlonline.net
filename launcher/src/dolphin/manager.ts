@@ -378,6 +378,11 @@ export class DolphinManager {
     });
   }
 
+  /** The version `--version` printed for this Dolphin, once it has (undefined before). */
+  cachedDolphinVersion(dolphinType: DolphinLaunchType): string | undefined {
+    return this._cachedVersion(dolphinType);
+  }
+
   private _cachedVersion(dolphinType: DolphinLaunchType): string | undefined {
     return this.versionCache.get(this.getDolphinExecutablePath(dolphinType));
   }

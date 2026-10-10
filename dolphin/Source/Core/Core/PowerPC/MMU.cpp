@@ -1224,19 +1224,26 @@ void MMU::GenerateDSIException(u32 effective_address, bool write)
   // DSI exceptions are only supported in MMU mode.
   if (!m_system.IsMMUMode())
   {
-    if (write)
+    // Each place is reported once (and at most 256 places).
+    constexpr size_t max_reported = 256;
+    const u64 key = (u64{m_ppc_state.pc} << 1) | u64{write};
+    if (m_reported_invalid_accesses.size() < max_reported &&
+        m_reported_invalid_accesses.insert(key).second)
     {
-      PanicAlertFmtT(
-          "Invalid write to {0:#010x}, PC = {1:#010x}.\n\nThe game probably would have crashed on "
-          "real hardware. Enable MMU in advanced settings to accurately emulate game crashes.",
-          effective_address, m_ppc_state.pc);
-    }
-    else
-    {
-      PanicAlertFmtT(
-          "Invalid read from {0:#010x}, PC = {1:#010x}.\n\nThe game probably would have crashed on "
-          "real hardware. Enable MMU in advanced settings to accurately emulate game crashes.",
-          effective_address, m_ppc_state.pc);
+      if (write)
+      {
+        PanicAlertFmtT(
+            "Invalid write to {0:#010x}, PC = {1:#010x}.\n\nThe game probably would have crashed "
+            "on real hardware. Enable MMU in advanced settings to accurately emulate game crashes.",
+            effective_address, m_ppc_state.pc);
+      }
+      else
+      {
+        PanicAlertFmtT(
+            "Invalid read from {0:#010x}, PC = {1:#010x}.\n\nThe game probably would have crashed "
+            "on real hardware. Enable MMU in advanced settings to accurately emulate game crashes.",
+            effective_address, m_ppc_state.pc);
+      }
     }
     if (m_system.IsPauseOnPanicMode())
     {

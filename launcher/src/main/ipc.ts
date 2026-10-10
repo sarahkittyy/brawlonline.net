@@ -8,7 +8,8 @@ export const ipc_checkValidIso = makeEndpoint.main(
   <{ path: string; valid: IsoValidity }>_,
 );
 
-export const ipc_copyLogsToClipboard = makeEndpoint.main("copyLogsToClipboard", <EmptyPayload>_, <SuccessPayload>_);
+/** Asks where to save, then zips the launcher's and Dolphin's logs there (null if the player cancelled). */
+export const ipc_downloadLogs = makeEndpoint.main("downloadLogs", <EmptyPayload>_, <{ path: string | null }>_);
 
 export const ipc_checkForUpdate = makeEndpoint.main("checkForUpdate", <EmptyPayload>_, <{ updateAvailable: boolean }>_);
 

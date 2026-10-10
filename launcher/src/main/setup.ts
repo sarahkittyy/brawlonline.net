@@ -1,14 +1,14 @@
-import { exists } from "@common/exists";
 import { IsoValidity } from "@common/types";
 import type { DolphinManager } from "@dolphin/manager";
 import { DolphinLaunchType } from "@dolphin/types";
 import type { SettingsManager } from "@settings/settings_manager";
-import { app, clipboard, dialog, ipcMain, nativeImage } from "electron";
+import { format } from "date-fns";
+import { app, dialog, ipcMain, nativeImage, shell } from "electron";
 import electronLog from "electron-log";
 import type { ProgressInfo, UpdateInfo } from "electron-updater";
 import { autoUpdater } from "electron-updater";
+import os from "os";
 import path from "path";
-import { fileExists } from "utils/file_exists";
 
 import type { AppUpdater } from "./app_updater";
 import { getAppBootstrap } from "./bootstrap";
@@ -19,7 +19,7 @@ import {
   ipc_checkForUpdate,
   ipc_checkValidIso,
   ipc_clearTempFolder,
-  ipc_copyLogsToClipboard,
+  ipc_downloadLogs,
   ipc_installUpdate,
   ipc_launcherUpdateDownloadingEvent,
   ipc_launcherUpdateFoundEvent,
@@ -28,13 +28,13 @@ import {
   ipc_runNetworkDiagnostics,
   ipc_showOpenDialog,
 } from "./ipc";
+import type { ArchiveFile } from "./logs_archive";
+import { dolphinUserFiles, folderFiles, writeLogsArchive } from "./logs_archive";
 import { getNetworkDiagnostics } from "./network_diagnostics";
-import { clearTempFolder, readLastLines } from "./util";
+import { clearTempFolder } from "./util";
 
 const log = electronLog.scope("main/listeners");
 const isMac = process.platform === "darwin";
-
-const LINES_TO_READ = 200;
 
 const TRANSPARENT_PIXEL_PNG =
   "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==";
@@ -75,35 +75,36 @@ export default function setupMainIpc({
     return { path: isoPath, valid: await checkIso(isoPath) };
   });
 
-  ipc_copyLogsToClipboard.main!.handle(async () => {
-    // The app name is set before logging starts (main.ts), so dev and packaged builds agree.
-    const logsFolder = isMac ? app.getPath("logs") : path.resolve(app.getPath("userData"), "logs");
-
-    const mainLogPath = path.join(logsFolder, "main.log");
-    const rendererLogPath = path.join(logsFolder, "renderer.log");
-
-    const netplayDolphin = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
-    let netplayUserPath = null;
-    try {
-      netplayUserPath = path.join(netplayDolphin.userFolder, "Logs", "dolphin.log");
-    } catch (e: any) {
-      log.error("Failed to get the userFolder: ", e);
+  ipc_downloadLogs.main!.handle(async () => {
+    const stamp = format(new Date(), "yyyy-MM-dd-HHmm");
+    const { canceled, filePath } = await dialog.showSaveDialog({
+      defaultPath: path.join(app.getPath("downloads"), `brawl-online-logs-${stamp}.zip`),
+      filters: [{ name: "Zip", extensions: ["zip"] }],
+    });
+    if (canceled || !filePath) {
+      return { path: null };
     }
 
-    // Fetch log contents in parallel
-    const [mainLogs, rendererLogs, netplayLogs] = await Promise.all(
-      [mainLogPath, rendererLogPath, netplayUserPath].map(async (logPath): Promise<string> => {
-        if (exists(logPath) && (await fileExists(logPath))) {
-          return await readLastLines(logPath, LINES_TO_READ);
-        }
-        return "";
-      }),
-    );
+    // The app name is set before logging starts (main.ts), so dev and packaged builds agree.
+    const logsFolder = isMac ? app.getPath("logs") : path.resolve(app.getPath("userData"), "logs");
+    const files: ArchiveFile[] = [
+      { name: "system.txt", source: { text: await systemInfo(dolphinManager, settingsManager, flags) } },
+      ...(await folderFiles(logsFolder, "launcher")),
+    ];
+    for (const [launchType, zipFolder] of [
+      [DolphinLaunchType.NETPLAY, "netplay-dolphin"],
+      [DolphinLaunchType.PLAYBACK, "playback-dolphin"],
+    ] as const) {
+      try {
+        files.push(...(await dolphinUserFiles(dolphinManager.getInstallation(launchType).userFolder, zipFolder)));
+      } catch (err) {
+        log.error(`Could not find the ${launchType} Dolphin's User folder: `, err);
+      }
+    }
 
-    clipboard.writeText(
-      `MAIN START\n---------------\n${mainLogs}\n\nRENDERER START\n---------------\n${rendererLogs}\n\nNETPLAY DOLPHIN START\n---------------\n${netplayLogs}`,
-    );
-    return { success: true };
+    await writeLogsArchive(filePath, files);
+    shell.showItemInFolder(filePath);
+    return { path: filePath };
   });
 
   // check for updates
@@ -169,4 +170,34 @@ export default function setupMainIpc({
     await browserWindowManager.openInNewBrowserWindow(url);
     return { success: true };
   });
+}
+
+/** system.txt in the logs zip: versions, machine and the settings that change how Dolphin starts. */
+async function systemInfo(
+  dolphinManager: DolphinManager,
+  settingsManager: SettingsManager,
+  flags: ConfigFlags,
+): Promise<string> {
+  const { settings } = settingsManager.get();
+  const cpus = os.cpus();
+  const gpu = (await app.getGPUInfo("basic").catch(() => null)) as { gpuDevice?: unknown } | null;
+  const dolphin = (launchType: DolphinLaunchType) =>
+    `${dolphinManager.getDolphinExecutablePath(launchType)} (${
+      dolphinManager.cachedDolphinVersion(launchType) ?? "version unknown"
+    })`;
+  const lines: [string, unknown][] = [
+    ["Created", new Date().toString()],
+    ["Launcher", `${app.getVersion()}${app.isPackaged ? "" : " (development)"}`],
+    ["Electron", process.versions.electron],
+    ["OS", getAppBootstrap(flags).operatingSystem],
+    ["Arch", process.arch],
+    ["CPU", `${cpus[0]?.model ?? "unknown"} (${cpus.length} threads)`],
+    ["Memory", `${Math.round(os.totalmem() / 2 ** 30)} GiB`],
+    ["GPU", JSON.stringify(gpu?.gpuDevice ?? null)],
+    ["Netplay Dolphin", dolphin(DolphinLaunchType.NETPLAY)],
+    ["Playback Dolphin", dolphin(DolphinLaunchType.PLAYBACK)],
+    ["Disc image set", settings.isoPath ? "yes" : "no"],
+    ["Launch game on Play", settings.launchGameOnPlay],
+  ];
+  return lines.map(([label, value]) => `${label}: ${String(value)}\n`).join("");
 }

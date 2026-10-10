@@ -2,7 +2,7 @@ import { INACTIVE_TEST_MODE, readTestMode } from "@common/test_mode";
 import path from "path";
 import { describe, expect, it } from "vitest";
 
-import { buildNetplayDolphinArgs } from "./netplay_args";
+import { buildNetplayDolphinArgs, LOGGING_CONFIG_ARGS } from "./netplay_args";
 
 const sd = path.resolve("/data/netplay/pponline-sd/sd.raw");
 const dol = path.resolve("/data/netplay/User/Launcher/Project+ Netplay Launcher.dol");
@@ -13,6 +13,7 @@ describe("buildNetplayDolphinArgs", () => {
     expect(buildNetplayDolphinArgs({ userArgs, sdCardImage: sd, bootFile: dol, testMode: INACTIVE_TEST_MODE })).toEqual(
       [
         ...userArgs,
+        ...LOGGING_CONFIG_ARGS,
         "-C",
         `Dolphin.General.WiiSDCardPath=${sd}`,
         "-C",
@@ -28,7 +29,18 @@ describe("buildNetplayDolphinArgs", () => {
   it("leaves the SD card and boot target out when there are none", () => {
     expect(
       buildNetplayDolphinArgs({ userArgs, sdCardImage: null, bootFile: null, testMode: INACTIVE_TEST_MODE }),
-    ).toEqual(userArgs);
+    ).toEqual([...userArgs, ...LOGGING_CONFIG_ARGS]);
+  });
+
+  it("turns on Dolphin's log file for the online code", () => {
+    const args = buildNetplayDolphinArgs({ userArgs, sdCardImage: null, bootFile: null, testMode: INACTIVE_TEST_MODE });
+    for (const setting of [
+      "Logger.Options.WriteToFile=True",
+      "Logger.Logs.Brawlback=True",
+      "Logger.Logs.MASTER=True",
+    ]) {
+      expect(args[args.indexOf(setting) - 1]).toBe("-C");
+    }
   });
 
   it("makes the SD path absolute and refuses paths Dolphin would cut at '='", () => {

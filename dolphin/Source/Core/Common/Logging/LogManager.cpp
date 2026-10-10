@@ -7,6 +7,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <memory>
 #include <mutex>
@@ -32,12 +33,20 @@ const Config::Info<bool> LOGGER_WRITE_TO_WINDOW{
 const Config::Info<LogLevel> LOGGER_VERBOSITY{{Config::System::Logger, "Options", "Verbosity"},
                                               LogLevel::LNOTICE};
 
+// The log starts fresh each run; the previous run's log is kept next to it (dolphin.prev.log). A
+// run that writes more than MAX_LOG_FILE_SIZE moves its own log there and starts again, so the
+// two files never take more than twice that.
+constexpr u64 MAX_LOG_FILE_SIZE = 50 * 1024 * 1024;
+
 class FileLogListener : public LogListener
 {
 public:
   FileLogListener(const std::string& filename)
+      : m_filename(filename), m_prev_filename(PrevFilename(filename))
   {
-    File::OpenFStream(m_logfile, filename, std::ios::app);
+    if (File::GetSize(m_filename) > 0)
+      MoveToPrev();
+    Open();
     SetEnable(true);
   }
 
@@ -48,6 +57,13 @@ public:
 
     std::lock_guard<std::mutex> lk(m_log_lock);
     m_logfile << msg << std::flush;
+    m_size += std::strlen(msg);
+    if (m_size >= MAX_LOG_FILE_SIZE)
+    {
+      m_logfile.close();
+      MoveToPrev();
+      Open();
+    }
   }
 
   bool IsValid() const { return m_logfile.good(); }
@@ -55,8 +71,32 @@ public:
   void SetEnable(bool enable) { m_enable = enable; }
 
 private:
+  static std::string PrevFilename(const std::string& filename)
+  {
+    const auto dot = filename.rfind('.');
+    return dot == std::string::npos ? filename + ".prev" :
+                                      filename.substr(0, dot) + ".prev" + filename.substr(dot);
+  }
+
+  // Not File::Rename: that logs its failures, and this runs with m_log_lock held.
+  void MoveToPrev()
+  {
+    std::error_code error;
+    std::filesystem::rename(StringToPath(m_filename), StringToPath(m_prev_filename), error);
+  }
+
+  // Truncates when the old log could not be moved away, so the size limit holds.
+  void Open()
+  {
+    File::OpenFStream(m_logfile, m_filename, std::ios::out | std::ios::trunc);
+    m_size = 0;
+  }
+
+  const std::string m_filename;
+  const std::string m_prev_filename;
   std::mutex m_log_lock;
   std::ofstream m_logfile;
+  u64 m_size = 0;
   bool m_enable;
 };
 

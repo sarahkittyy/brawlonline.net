@@ -1,7 +1,8 @@
 import { css } from "@emotion/react";
-import FileCopyIcon from "@mui/icons-material/FileCopy";
+import DownloadIcon from "@mui/icons-material/Download";
 import LiveHelpIcon from "@mui/icons-material/LiveHelp";
 import log from "electron-log";
+import { useState } from "react";
 
 import { Button } from "@/components/form/button";
 import { useToasts } from "@/lib/hooks/use_toasts";
@@ -13,17 +14,22 @@ import styles from "./support_box.module.css";
 export const SupportBox = () => {
   const { showError, showSuccess } = useToasts();
 
-  const onCopy = () => {
-    // Set the clipboard text
+  const [saving, setSaving] = useState(false);
+
+  const onDownload = () => {
+    setSaving(true);
     window.electron.common
-      .copyLogsToClipboard()
-      .then(() => {
-        showSuccess(Messages.successfullyCopied());
+      .downloadLogs()
+      .then((zipPath) => {
+        if (zipPath) {
+          showSuccess(Messages.logsSaved(zipPath));
+        }
       })
-      .catch((err) => {
+      .catch((err: unknown) => {
         log.error(err);
         showError(err);
-      });
+      })
+      .finally(() => setSaving(false));
   };
 
   return (
@@ -44,8 +50,8 @@ export const SupportBox = () => {
         `}
       >
         <div>
-          <Button startIcon={<FileCopyIcon />} onClick={onCopy}>
-            {Messages.copyLogs()}
+          <Button startIcon={<DownloadIcon />} onClick={onDownload} disabled={saving}>
+            {saving ? Messages.savingLogs() : Messages.downloadLogs()}
           </Button>
         </div>
         <div>
