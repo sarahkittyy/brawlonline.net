@@ -176,6 +176,7 @@ def consume(c: HarnessClient, b: Block, upto: int) -> None:
     c.write_mem(b.mailbox + MB_REQ_READ, struct.pack(">I", upto))
 
 
+DEBUG_LOG = 16   # ppom.h DEBUG_LOG: entries in the Debug print ring
 DEBUG_FIELDS = ("frames", "printCount", "overrides", "lastError", "cfg", "menuState")
 
 CFG_TEST_RULES = 1 << 6   # ppom.h Cfg: the online ruleset keeps the set rule's stocks and times
@@ -207,7 +208,7 @@ def read_debug(c: HarnessClient, b: Block) -> dict:
     # [5] hand mode (8 = keypad); [6], [8], [9] menu hooks (netmenu.cpp); [7] the ONLINE page lock:
     # GET_ONLINE_STATUS state + 1 (0 = no answer yet) | A presses refused << 8
     log = []
-    for k in range(32):
+    for k in range(DEBUG_LOG):
         lr, msg, win, line, data = struct.unpack_from(">IIHhI", d, 0x18 + 4 * nscratch + 16 * k)
         log.append((lr, msg, win, line, data))
     vals["log"] = log
@@ -269,7 +270,7 @@ def read_session(c: HarnessClient, b: Block) -> dict:
 S_GONE, S_TEAMS, S_SETUP_ERROR, S_OUT_COUNT = 0x20C, 0x210, 0x211, 0x212
 SP_TEAM, SP_PICKS_STAGE, SP_OUT = 0x03, 0x36, 0x37
 CFG_TEST_GONE = 1 << 7   # ppom.h Cfg: Debug.testGone* set gone flags; removal in local matches too
-DEBUG_TEST_GONE = 0x18 + 4 * 16 + 16 * 32   # Debug.testGoneFrame, then testGonePorts
+DEBUG_TEST_GONE = 0x18 + 4 * 16 + 16 * DEBUG_LOG   # Debug.testGoneFrame, then testGonePorts
 
 
 def write_session(c: HarnessClient, b: Block, *, game: int, stage: int, players: list,
@@ -354,8 +355,8 @@ def main() -> int:
     elif a.cmd == "log":
         d = read_debug(c, b)
         n = d["printCount"]
-        for k in range(min(n, 32)):
-            lr, msg, win, line, data = d["log"][(n - 1 - k) % 32]
+        for k in range(min(n, DEBUG_LOG)):
+            lr, msg, win, line, data = d["log"][(n - 1 - k) % DEBUG_LOG]
             if line == -2:
                 print(f"#{n - k}: printf  caller={lr:#010x} msg={msg:#010x} win={win}")
             elif line == -3:
