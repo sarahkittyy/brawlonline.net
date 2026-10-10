@@ -169,6 +169,38 @@ public:
   // CPU thread only.
   void SetRollbackResimulating(bool resimulating);
   bool IsRollbackResimulating() const { return m_rollback_resimulating; }
+  // Gameplay-only rollback leaves the sound system out of the snapshot, so a sound keeps playing
+  // through a rollback. With this mode set (for the whole session), the audio clock waits for the
+  // resimulated passes: the session adds the fields each one takes to a pause that the audio DMA
+  // waits out (no DMA, so no AI interrupt, no AX frame, no voice moves, no wake-up of the game's
+  // sound thread: envelopes, fades and sequences wait too). A rollback then pauses every sound and the
+  // music for the re-run instead of cutting the re-run's span out of them, and a sound that only
+  // the corrected input starts is heard from its start, late, as on Slippi, where the console's
+  // audio only ever advances with the presented frames. The pause is counted in fields, not taken
+  // while the passes run: a rollback's passes do not begin and end on field boundaries (the
+  // presented pass is longer, the resimulated ones shorter), and the audio has to advance by
+  // exactly the fields that were presented. Without the mode, resimulated passes run the audio and their samples are
+  // dropped (right for a full-memory rollback, which rolls the sound system back too).
+  void SetRollbackAudioWaits(bool wait)
+  {
+    m_rollback_audio_waits = wait;
+    if (!wait)
+      m_rollback_audio_pause = 0;
+  }
+  bool RollbackAudioWaits() const { return m_rollback_audio_waits; }
+  void AddRollbackAudioPause(s64 ticks)
+  {
+    if (m_rollback_audio_waits)
+      m_rollback_audio_pause += ticks;
+  }
+  // The audio DMA's event for the next `ticks`: true when it waits instead.
+  bool TakeRollbackAudioPause(s64 ticks)
+  {
+    if (m_rollback_audio_pause <= 0)
+      return false;
+    m_rollback_audio_pause -= ticks;
+    return true;
+  }
   void SetRollbackSpeedAdjustment(double factor);
   // Re-anchor the throttle at the current time, e.g. after the CPU thread waited on the host for
   // the peer, so the emulator does not race to make up for that wait.
@@ -242,6 +274,8 @@ private:
   bool m_correct_time_drift = false;
   double m_emulation_speed = 1.0;
   bool m_rollback_resimulating = false;
+  bool m_rollback_audio_waits = false;
+  s64 m_rollback_audio_pause = 0;
   double m_rollback_speed_factor = 1.0;
   bool m_rollback_burst_pending = false;
   TimePoint m_rollback_burst_due{};

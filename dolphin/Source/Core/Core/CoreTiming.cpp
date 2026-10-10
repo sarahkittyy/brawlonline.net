@@ -99,6 +99,8 @@ void CoreTimingManager::Init()
   // Reset data used by the throttling system
   ResetThrottle(0);
   m_rollback_resimulating = false;
+  m_rollback_audio_waits = false;
+  m_rollback_audio_pause = 0;
   m_rollback_speed_factor = 1.0;
   m_rollback_burst_pending = false;
   m_max_behind_schedule = {};

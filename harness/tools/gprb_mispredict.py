@@ -170,6 +170,10 @@ def _one_run(args, inp: Dict[str, Any], mode: str, run: int) -> Dict[str, Any]:
     extra = [f"Dolphin.Core.EmulationSpeed={args.speed}"]
     if args.interpreter:
         extra.append("Dolphin.Core.CPUCore=0")
+    if args.dump_audio:
+        # What a player hears (the DSP dump is taken after resimulated samples are dropped), with
+        # its silences, for gprb_audio.py.
+        extra += ["Dolphin.DSP.DumpAudio=True", "Dolphin.DSP.DumpAudioSilent=True"]
     orig = with_args(extra)
     t0 = time.monotonic()
     try:
@@ -272,7 +276,7 @@ def _one_run(args, inp: Dict[str, Any], mode: str, run: int) -> Dict[str, Any]:
                                                         "partial_granule_skips", "sound_allocs",
                                                         "resim_sound_allocs", "suppressed_sound_allocs",
                                                         "sound_reattached", "sound_reattach_gone", "sound_stopped",
-                                                        "sound_stop_gone", "sound_gone_why", "sound_moved",
+                                                        "sound_stop_gone", "sound_gone_why", "sound_moved", "sound_stops_ignored",
                                                         "desyncs_detected", "desync_log", "region_bytes",
                                                         "region_ranges", "save_count", "save_us_total",
                                                         "save_us_max", "load_count", "load_us_total",
@@ -285,6 +289,14 @@ def _one_run(args, inp: Dict[str, Any], mode: str, run: int) -> Dict[str, Any]:
                 if os.environ.get("PPR_GPRB_CENSUS"):
                     rep["census"] = c.call("gprb_census")["ranges"]
                 rep["exit"] = inst.process.poll() if inst.process else None
+                if args.dump_audio:
+                    # Dolphin holds the dump open (no sharing) until it shuts down.
+                    inst.stop()
+                    d = Path(args.dump_audio)
+                    d.mkdir(parents=True, exist_ok=True)
+                    for wav in (inst.user_dir / "Dump/Audio").glob("*_dspdump.wav"):
+                        shutil.copy(wav, d / f"{mode.split('=')[0]}-{run}.wav")
+                        rep["audio_dump"] = str(d / f"{mode.split('=')[0]}-{run}.wav")
                 if args.log_dir:
                     d = Path(args.log_dir)
                     d.mkdir(parents=True, exist_ok=True)
@@ -352,7 +364,8 @@ def cmd_run(args) -> int:
             print(f"    sound: {rep.get('sound_samples')} allocs {st2.get('sound_allocs')} resim "
                   f"{st2.get('resim_sound_allocs')} suppressed {st2.get('suppressed_sound_allocs')} reattached "
                   f"{st2.get('sound_reattached')} (gone {st2.get('sound_reattach_gone')}) stopped "
-                  f"{st2.get('sound_stopped')} (gone {st2.get('sound_stop_gone')})", flush=True)
+                  f"{st2.get('sound_stopped')} (gone {st2.get('sound_stop_gone')}) stops ignored "
+                  f"{st2.get('sound_stops_ignored')}", flush=True)
         rep.pop("trace", None)
         results.append(rep)
         if args.json:
@@ -406,6 +419,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--sound-sample", action="store_true",
                    help="sample gprb_sound_state (active sounds, orphans, repeated ids) every 0.5 s")
     p.add_argument("--save-traces", default=None, help="write every run's trace to this directory")
+    p.add_argument("--dump-audio", default=None,
+                   help="dump the audio a player hears; each run's dump is copied here as <mode>-<run>.wav")
     p.add_argument("--timeout", type=float, default=1800)
     p.add_argument("--ref-json", default=None, help="compare with this saved reference trace")
     p.add_argument("--save-ref", default=None, help="save the first run's trace here")

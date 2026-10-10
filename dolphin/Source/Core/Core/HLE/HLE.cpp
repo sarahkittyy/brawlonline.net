@@ -28,7 +28,7 @@ namespace HLE
 static std::map<u32, u32> s_hooked_addresses;
 
 // clang-format off
-constexpr std::array<Hook, 46> os_patches{{
+constexpr std::array<Hook, 47> os_patches{{
     // Placeholder, os_patches[0] is the "non-existent function" index
     {"FAKE_TO_SKIP_0",               HLE_Misc::UnimplementedFunction,       HookType::Replace, HookFlag::Generic},
 
@@ -83,6 +83,7 @@ constexpr std::array<Hook, 46> os_patches{{
     {"BrawlbackGXDrawDoneSleepHook", HLE_Misc::BrawlbackGXDrawDoneSleepHook, HookType::Replace, HookFlag::Fixed},
     {"BrawlbackFrameBufferSyncWaitHook", HLE_Misc::BrawlbackFrameBufferSyncWaitHook, HookType::Replace, HookFlag::Fixed},
     {"GprbSoundAttachHook", HLE_Misc::GprbSoundAttachHook, HookType::Start, HookFlag::Fixed},
+    {"GprbSoundStopHook", HLE_Misc::GprbSoundStopHook, HookType::Replace, HookFlag::Fixed},
     {"GprbStageCreateHook", HLE_Misc::GprbStageCreateHook, HookType::Start, HookFlag::Fixed}
   }};
 // clang-format on
@@ -164,6 +165,7 @@ void PatchFixedFunctions(Core::System& system)
   Patch(system, 0x801c9aac, "BrawlbackSkipResimSeqSoundAllocHook"); // `bl detail_AllocSeqSound` in SoundArchivePlayer::detail_SetupSound
   Patch(system, 0x801c9b54, "BrawlbackSkipResimStrmSoundAllocHook"); // `bl detail_AllocStrmSound` in SoundArchivePlayer::detail_SetupSound
   Patch(system, 0x801c9c70, "GprbSoundAttachHook"); // detail_SetupSound success path: handle r28 gets sound r24
+  Patch(system, 0x801bc684, "GprbSoundStopHook"); // nw4r::snd::detail::BasicSound::Stop(int fade_frames), every sound type
   Patch(system, 0x809435f0, "GprbStageCreateHook"); // __ct__7stMelee (sora_melee .text+0x238BDC): match start before the stage is built
   Patch(system, 0x8003fb4c, "BrawlbackSyncCharSelectRandomSeedHook"); // srandi__mt_prng_o_ - intercept all global mtRand PRNG seed initialization
   Patch(system, 0x803f8c5c, "BrawlbackSyncCharSelectRandomSeedHook"); // srand__rand_o_ - intercept all global C rand PRNG seed initialization

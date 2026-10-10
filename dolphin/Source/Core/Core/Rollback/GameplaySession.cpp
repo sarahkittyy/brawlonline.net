@@ -40,6 +40,7 @@
 #include "Core/CoreTiming.h"
 #include "Core/HW/CPU.h"
 #include "Core/HW/Memmap.h"
+#include "Core/HW/VideoInterface.h"
 #include "Core/Online/GameBridge.h"
 #include "Core/Online/GameSetup.h"
 #include "Core/PowerPC/MMU.h"
@@ -421,6 +422,9 @@ struct State
   s64 snd_frame = -1;                   // the frame this pass simulates
   s64 snd_max_frame = -1;               // the newest frame simulated so far
   bool snd_first_run = true;
+  // The pass that runs now, for the audio clock's pause (CoreTimingManager::SetRollbackAudioWaits).
+  s64 audio_pass_start = 0;
+  bool audio_pass_resim = false;
   std::map<u32, u64> snd_gen;  // sound object -> allocation count
   u32 snd_reattach = 0;        // the sound the current detail_SetupSound re-attaches
   u64 snd_reattach_gen = 0;
@@ -429,6 +433,7 @@ struct State
   u64 sound_reattached = 0, sound_reattach_gone = 0, sound_stopped = 0, sound_stop_gone = 0;
   std::array<u64, 3> snd_gone_why{};  // diagnostics: reallocated, other id, not allocated
   u64 sound_moved = 0;               // re-attached from another handle (playSE table slots)
+  u64 sound_stops_ignored = 0;       // stops of sounds the resimulated timeline has not started
   // A guest call (BasicSound::Stop) made from the loop top: the registers to restore when it
   // returns there.
   bool gcall_active = false;
@@ -486,6 +491,7 @@ namespace
 // Sound bookkeeping (defined with OnSoundAlloc below).
 bool RunSoundStops(const Core::CPUThreadGuard& guard);
 void CommitSoundPass();
+bool PauseResimAudio();
 // File loads in a match (defined with RunSoundStops below).
 bool RunIoWait(const Core::CPUThreadGuard& guard);
 bool RunForceFinal(const Core::CPUThreadGuard& guard);
@@ -2068,12 +2074,14 @@ void ResetRunStats()
   s.snd_pass_open = false;
   s.snd_frame = s.snd_max_frame = -1;
   s.snd_first_run = true;
+  s.audio_pass_resim = false;
   s.snd_gen.clear();
   s.snd_reattach = 0;
   s.snd_to_stop.clear();
   s.sound_reattached = s.sound_reattach_gone = s.sound_stopped = s.sound_stop_gone = 0;
   s.snd_gone_why.fill(0);
   s.sound_moved = 0;
+  s.sound_stops_ignored = 0;
   s.io_wait_active = false;
   s.io_wait_n = 0;
   s.io_waits = s.io_wait_retraces = s.io_wait_timeouts = 0;
@@ -2167,6 +2175,7 @@ void EndRunning(Core::System& system, const std::string& reason)
   auto& ct = system.GetCoreTiming();
   ct.ResetThrottleToNow();  // drops a rollback burst still pending
   ct.SetRollbackResimulating(false);
+  ct.SetRollbackAudioWaits(false);
   ct.SetRollbackSpeedAdjustment(1.0);
   system.GetFifo().SetRollbackSessionDeterminism(false);
   s.resim_pass = false;
@@ -3449,6 +3458,27 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     s.snd_pass_open = true;
   }
   ct.SetRollbackResimulating(s.resim_pass);
+  ct.SetRollbackAudioWaits(PauseResimAudio());
+  {
+    // The audio clock waits as long as the resimulated frames took when they were presented: a
+    // field per pass when it starts (so the pause lines up with the passes), corrected once the
+    // pass's length is known if it was not a field long (a lag frame is nearly two, the frames
+    // that catch up after it shorter). Smaller differences are not frame lengths: the first pass
+    // after a load is about 0.5% short and the presented pass after it as much longer, which a
+    // pause by measured lengths would turn into a drift of the audio against the picture.
+    const s64 now = static_cast<s64>(ct.GetTicks());
+    const s64 field = static_cast<s64>(system.GetVideoInterface().GetTicksPerField());
+    if (s.audio_pass_resim)
+    {
+      const s64 length = now - s.audio_pass_start;
+      if (std::abs(length - field) > field / 10)
+        ct.AddRollbackAudioPause(length - field);
+    }
+    if (s.resim_pass)
+      ct.AddRollbackAudioPause(field);
+    s.audio_pass_start = now;
+    s.audio_pass_resim = s.resim_pass;
+  }
   ct.SetRollbackSpeedAdjustment(s.speed_factor);
   if (!s.resim_pass)
   {
@@ -3875,6 +3905,7 @@ picojson::value Status()
   o["sound_stopped"] = picojson::value(static_cast<double>(s.sound_stopped));
   o["sound_stop_gone"] = picojson::value(static_cast<double>(s.sound_stop_gone));
   o["sound_moved"] = picojson::value(static_cast<double>(s.sound_moved));
+  o["sound_stops_ignored"] = picojson::value(static_cast<double>(s.sound_stops_ignored));
   o["io_waits"] = picojson::value(static_cast<double>(s.io_waits));
   o["io_wait_retraces"] = picojson::value(static_cast<double>(s.io_wait_retraces));
   o["io_wait_timeouts"] = picojson::value(static_cast<double>(s.io_wait_timeouts));
@@ -4648,6 +4679,9 @@ constexpr u32 SND_TEMP_HANDLE = 0x0C;
 constexpr u32 SND_ID = 0x78;
 constexpr u32 SND_PRIORITY_LINK = 0xB8;
 constexpr u32 SND_VT_STOP = 0x18;
+// A mispredicted run's sound fades out over this many sound frames (game frames) when it is
+// stopped: Stop(0) cut it off mid-waveform, which clicks.
+constexpr u32 SND_STOP_FADE_FRAMES = 3;
 constexpr std::array<u32, 3> SND_MANAGERS{0x38, 0x60, 0x88};
 
 u32 ReadGuest(const Core::CPUThreadGuard& guard, u32 addr)
@@ -4695,6 +4729,19 @@ bool SoundEntryAlive(const Core::CPUThreadGuard& guard, const State::SndEntry& e
     return false;
   }
   return true;
+}
+
+// The sound system is outside the set, so it is not rolled back: a resimulated pass pauses it
+// (CoreTimingManager::SetRollbackAudioWaits). PPR_GPRB_RESIM_AUDIO=advance lets it run through the
+// pass as before (its samples are dropped, so every rollback cut the re-run's span out of every
+// playing sound and the music).
+bool PauseResimAudio()
+{
+  static const bool advance = [] {
+    const char* env = std::getenv("PPR_GPRB_RESIM_AUDIO");
+    return env && std::strcmp(env, "advance") == 0;
+  }();
+  return !advance;
 }
 
 bool DedupeSounds()
@@ -4897,9 +4944,10 @@ bool RunForceFinal(const Core::CPUThreadGuard& guard)
   return false;
 }
 
-// Loop top: stop the queued sounds of mispredicted runs, one guest call of BasicSound::Stop(0)
-// each. The call returns to the loop top, where this runs again, restores the registers and goes
-// on. Returns true while a call is being made (the hook must not do anything else).
+// Loop top: stop the queued sounds of mispredicted runs, one guest call of
+// BasicSound::Stop(SND_STOP_FADE_FRAMES) each. The call returns to the loop top, where this runs
+// again, restores the registers and goes on. Returns true while a call is being made (the hook
+// must not do anything else).
 bool RunSoundStops(const Core::CPUThreadGuard& guard)
 {
   auto& ppc = guard.GetSystem().GetPPCState();
@@ -4930,7 +4978,7 @@ bool RunSoundStops(const Core::CPUThreadGuard& guard)
       continue;
     SaveGuestRegs(ppc, &s.gcall_saved);
     ppc.gpr[3] = e.sound;
-    ppc.gpr[4] = 0;  // fade frames: stop now
+    ppc.gpr[4] = SND_STOP_FADE_FRAMES;
     ppc.spr[SPR_LR] = LOOP_TOP;
     ppc.npc = stop;
     s.gcall_active = true;
@@ -5053,6 +5101,29 @@ void OnSoundAttached(const Core::CPUThreadGuard&, u32 handle, u32 sound, u32 sou
     gen = ++s.snd_gen[sound];  // a new allocation of this pool object
   }
   s.snd_new.push_back({sound_id, sound, handle, gen});
+}
+
+bool OnSoundStop(const Core::CPUThreadGuard&, u32 sound)
+{
+  // Not for the bookkeeping's own stops (RunSoundStops, between passes).
+  if (s.phase != Phase::Running || !s.snd_pass_open || s.snd_first_run || s.gcall_active ||
+      !DedupeSounds())
+  {
+    return false;
+  }
+  const auto it = s.snd_gen.find(sound);
+  if (it == s.snd_gen.end())
+    return false;
+  const auto same = [&](const State::SndEntry& e) { return e.sound == sound && e.gen == it->second; };
+  bool ahead = std::any_of(s.snd_remaining.begin(), s.snd_remaining.end(), same);
+  for (size_t slot = 0; !ahead && slot < s.snd_played.size(); ++slot)
+  {
+    if (s.snd_tag[slot] > s.snd_frame && s.snd_tag[slot] <= s.snd_max_frame)
+      ahead = std::any_of(s.snd_played[slot].begin(), s.snd_played[slot].end(), same);
+  }
+  if (ahead)
+    ++s.sound_stops_ignored;
+  return ahead;
 }
 
 void ConfigureSamples(u32 every, std::vector<std::pair<u32, u32>> watch)

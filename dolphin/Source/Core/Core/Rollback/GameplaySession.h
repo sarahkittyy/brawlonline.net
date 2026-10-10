@@ -319,6 +319,13 @@ struct SoundAllocDecision
 SoundAllocDecision OnSoundAlloc(const Core::CPUThreadGuard& guard, u32 sound_id, u32 handle);
 // detail_SetupSound attaches `sound` (id `sound_id`) to the game's `handle` (the success path).
 void OnSoundAttached(const Core::CPUThreadGuard& guard, u32 handle, u32 sound, u32 sound_id);
+// BasicSound::Stop of `sound`: true when the call must not stop it. In a resimulated pass, a sound
+// that an earlier run of this frame started (and this pass has not started yet) or that a later
+// frame started does not exist yet in the timeline being run again; Brawl's own sound layer
+// (sndSystem's slot table, outside the set) still holds it, and the pass's "stop the sounds of
+// this owner" would cut it off. If the corrected run does not start it again, it is stopped at
+// the end of its frame like any mispredicted sound.
+bool OnSoundStop(const Core::CPUThreadGuard& guard, u32 sound);
 // The sound archive player's allocated sounds (verification of the sound bookkeeping): per sound
 // its id and general handle, and whether a handle points back at it ("owned"); totals of active
 // sounds, orphans (no handle owns them: nothing can stop them) and repeated ids.
