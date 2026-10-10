@@ -170,7 +170,7 @@ impl Room {
             Phase::Waiting => {
                 let (players, open) = (self.player_count(), self.open_count());
                 if players == 1 {
-                    msg::room_waiting(&self.code)
+                    msg::ROOM_WAITING.to_string()
                 } else if players < open {
                     msg::waiting_for_players(players, open)
                 } else if self.one_colour() {
@@ -875,7 +875,7 @@ mod tests {
         assert_eq!(s["public"], true);
         let open: Vec<bool> = s["slots"].as_array().unwrap().iter().map(|x| x["open"].as_bool().unwrap()).collect();
         assert_eq!(open, [true, true, false, false]);
-        assert_eq!(s["statusText"], format!("Room {code}: waiting for players"));
+        assert_eq!(s["statusText"], msg::ROOM_WAITING);
         assert_eq!(t.book.room_count(), 1);
     }
 

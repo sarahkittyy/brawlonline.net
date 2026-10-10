@@ -58,7 +58,7 @@ Defaults: "online" counts players whose game is running and logged in (Dolphin k
 
 | Situation | Text |
 |---|---|
-| Room created, waiting | "Room KFQB: waiting for players" (the code is also in the top window) |
+| Room created, waiting | "Waiting for players" (the code is in the top window; 2026-10-10: the line was shortened so its text stays large next to the room's buttons) |
 | Open slots still empty | "Waiting for players (2/4)" |
 | Everyone present, some not ready | "Waiting on: BO, CY" |
 | Teams all one color | "Pick different teams" |

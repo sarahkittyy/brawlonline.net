@@ -86,7 +86,7 @@ class RoomSim:
         players = [m for m in r.members if m]
         n_open = sum(1 for o in r.open if o)
         if len(players) == 1:
-            return f"Room {r.code}: waiting for players"
+            return "Waiting for players"
         empty = sum(1 for i in range(4) if r.open[i] and not r.members[i])
         if empty:
             return f"Waiting for players ({len(players)}/{n_open})"

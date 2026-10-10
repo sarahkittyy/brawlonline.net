@@ -79,10 +79,9 @@ pub const PLAYER_LEFT: &str = "A player left the room.";
 /// The same account opened a newer online connection (another game).
 pub const SIGNED_IN_ELSEWHERE: &str = "Signed in from another game.";
 
-/// Room status line: only the host is in the room.
-pub fn room_waiting(code: &str) -> String {
-    format!("Room {code}: waiting for players")
-}
+/// Room status line: only the host is in the room. The code is already in the top window, so the
+/// line stays short enough for the status line's large one-line text next to the room's buttons.
+pub const ROOM_WAITING: &str = "Waiting for players";
 
 /// Room status line: open slots are still empty.
 pub fn waiting_for_players(players: usize, open: usize) -> String {
@@ -203,7 +202,7 @@ mod tests {
             NO_ROOMS_LEFT.to_string(),
             PLAYER_LEFT.to_string(),
             SIGNED_IN_ELSEWHERE.to_string(),
-            room_waiting("WWWW"),
+            ROOM_WAITING.to_string(),
             waiting_for_players(3, 4),
             waiting_on(&["WWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWW"]),
             PICK_TEAMS.to_string(),
