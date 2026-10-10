@@ -244,8 +244,42 @@ void DrawLine(const Line& line, float scale)
   ImGui::PopID();
 }
 
+// A padlock drawn from shapes (no icon font), the height of a text line, at the cursor; hovering
+// it says what it means.
+void LockIcon(float scale)
+{
+  const float h = ImGui::GetTextLineHeight();
+  const float w = 0.75f * h;
+  const ImVec2 item = ImGui::GetCursorScreenPos();
+  ImGui::InvisibleButton("##lock", ImVec2(w, h));
+  if (ImGui::IsItemHovered())
+  {
+    ImGui::BeginTooltip();
+    ImGui::TextUnformatted("Chat is E2E encrypted.");
+    ImGui::EndTooltip();
+  }
+  // On the menu bar's text line, as the names.
+  const ImVec2 p{item.x, item.y + ImGui::GetStyle().FramePadding.y};
+  const ImU32 col = ImGui::GetColorU32(SYSTEM_COLOR);
+  ImDrawList* draw = ImGui::GetWindowDrawList();
+  const float body_top = p.y + 0.45f * h;
+  const float cx = p.x + 0.5f * w;
+  const float r = 0.3f * w;
+  const float thick = std::max(1.5f * scale, 0.1f * h);
+  // The shackle: two legs and the arc over them.
+  draw->PathLineTo({cx - r, body_top});
+  draw->PathLineTo({cx - r, p.y + 0.3f * h});
+  draw->PathArcTo({cx, p.y + 0.3f * h}, r, 3.14159265f, 2.0f * 3.14159265f);
+  draw->PathLineTo({cx + r, body_top});
+  draw->PathStroke(col, ImDrawFlags_None, thick);
+  // The body and its keyhole.
+  draw->AddRectFilled({p.x, body_top}, {p.x + w, p.y + h}, col, 0.12f * h);
+  draw->AddCircleFilled({cx, body_top + 0.27f * h}, 0.09f * h,
+                        ImGui::GetColorU32(ImGuiCol_MenuBarBg));
+}
+
 // In the menu bar after Options: the other players' names (click: their menu), then the room's
-// code (or the opponent's connect code) at the right.
+// code (or the opponent's connect code) at the right with the padlock after it.
 void DrawMenuBarPlayers(float scale)
 {
   const auto& v = *s.view;
@@ -272,17 +306,23 @@ void DrawMenuBarPlayers(float scale)
     ImGui::TextUnformatted("Nobody else here yet");
     ImGui::PopStyleColor();
   }
-  if (!v.code.empty())
+  const float gap = 6.0f * scale;
+  const float lock_w = 0.75f * ImGui::GetTextLineHeight();
+  const float code_w =
+      v.code.empty() ? 0.0f : ImGui::CalcTextSize(v.code.data(), v.code.data() + v.code.size()).x;
+  const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+  const float start = right - lock_w - (v.code.empty() ? 0.0f : code_w + gap);
+  if (start > ImGui::GetCursorPosX() + 8.0f * scale)
   {
-    const float w = ImGui::CalcTextSize(v.code.data(), v.code.data() + v.code.size()).x;
-    const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
-    if (right - w > ImGui::GetCursorPosX() + 8.0f * scale)
+    ImGui::SetCursorPosX(start);
+    if (!v.code.empty())
     {
-      ImGui::SetCursorPosX(right - w);
       ImGui::PushStyleColor(ImGuiCol_Text, SYSTEM_COLOR);
       ImGui::TextUnformatted(v.code.data(), v.code.data() + v.code.size());
       ImGui::PopStyleColor();
+      ImGui::SameLine(0.0f, gap);
     }
+    LockIcon(scale);
   }
 }
 
