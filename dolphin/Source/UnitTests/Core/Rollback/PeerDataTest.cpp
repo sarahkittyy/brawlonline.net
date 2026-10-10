@@ -212,3 +212,41 @@ TEST(PeerData, PortValuesAndNames)
   s += "\xC3\xA9";
   EXPECT_EQ(TruncateName(s), std::string(MAX_NAME_LEN - 1, 'a'));
 }
+
+TEST(PeerData, TeamsAndPorts)
+{
+  for (u32 t : {0u, 1u, 2u, 0xFFu})
+    EXPECT_TRUE(ValidTeam(t)) << t;
+  for (u32 t : {3u, 4u, 0x80u, 0xFEu, 0x100u})
+    EXPECT_FALSE(ValidTeam(t)) << t;
+  for (u64 p : {0ull, 1ull, 2ull, 3ull})
+    EXPECT_TRUE(ValidPort(p));
+  for (u64 p : {4ull, 0xFFull, ~0ull})
+    EXPECT_FALSE(ValidPort(p));
+}
+
+TEST(PeerData, GoneMarker)
+{
+  // GekkoNet's input for a player who left: the marker, which reads as a neutral controller.
+  std::array<u8, PAD_SIZE> gone;
+  gone.fill(0xAA);
+  SetGoneMarker(gone.data());
+  std::array<u8, PAD_SIZE> pad = gone;
+  SanitizePad(pad.data());  // every input is sanitised first: the marker survives it
+  ASSERT_TRUE(TakeGoneMarker(pad.data()));
+  for (u8 b : pad)
+    EXPECT_EQ(b, 0);
+  EXPECT_FALSE(TakeGoneMarker(pad.data()));
+
+  // Real input: the marker bytes are cleared before it is sent, so it is never taken for gone.
+  std::array<u8, PAD_SIZE> real{};
+  real[0] = 0x12;
+  std::memcpy(real.data() + GONE_MARK_OFFSET, GONE_MARK.data(), GONE_MARK.size());
+  ClearGoneMarkerBytes(real.data());
+  EXPECT_FALSE(TakeGoneMarker(real.data()));
+  EXPECT_EQ(real[0], 0x12);
+  // Two of the three bytes are not the marker either.
+  real[GONE_MARK_OFFSET] = GONE_MARK[0];
+  real[GONE_MARK_OFFSET + 1] = GONE_MARK[1];
+  EXPECT_FALSE(TakeGoneMarker(real.data()));
+}

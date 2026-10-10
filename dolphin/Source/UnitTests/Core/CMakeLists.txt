@@ -60,6 +60,9 @@ target_include_directories(OnlineSecurityTest PRIVATE
   ${CMAKE_SOURCE_DIR}/Source/Core/Core/Brawlback/include/gekkonet/GekkoLib/thirdparty
 )
 target_compile_definitions(OnlineSecurityTest PRIVATE GEKKONET_STATIC GEKKONET_NO_ASIO)
+
+# 3-4 player matches: teams and who picks the next stage (Core/Online/GameSetup).
+add_dolphin_test(NPlayerSetupTest Online/NPlayerSetupTest.cpp)
 if(MSVC)
   # zpp_bits (GekkoNet's serializer) trips /W4 warnings; GekkoNet's own sources do the same.
   set_source_files_properties(Rollback/GekkoNetFuzzTest.cpp

@@ -561,4 +561,191 @@ picojson::object Status()
   o["view"] = picojson::value(view);
   return o;
 }
+
+// ---- 3-4 player matches ----
+
+const char* SetupErrorText(SetupError error)
+{
+  switch (error)
+  {
+  case SetupError::SameTeam:
+    return "Pick different teams";
+  case SetupError::NoTeam:
+    return "Pick a team";
+  case SetupError::TooFewPlayers:
+    return "Waiting for players";
+  case SetupError::None:
+  default:
+    return "";
+  }
+}
+
+TeamSetup DecideTeams(bool teams_on, const std::array<Seat, MAX_PORTS>& seats)
+{
+  TeamSetup t;
+  int present = 0;
+  for (const Seat& s : seats)
+    present += s.present ? 1 : 0;
+  if (present < 2)
+  {
+    t.error = SetupError::TooFewPlayers;
+    return t;
+  }
+  // Two players: a 1v1 whatever the switch says.
+  if (!teams_on || present == 2)
+    return t;
+  u8 first = NO_TEAM;
+  bool two_colours = false;
+  for (int i = 0; i < MAX_PORTS; ++i)
+  {
+    if (!seats[i].present)
+      continue;
+    const u8 team = seats[i].team;
+    if (team >= NUM_TEAMS)
+    {
+      t.error = SetupError::NoTeam;
+      return t;
+    }
+    if (first == NO_TEAM)
+      first = team;
+    else if (team != first)
+      two_colours = true;
+    t.team[i] = team;
+  }
+  if (!two_colours)
+  {
+    t.error = SetupError::SameTeam;
+    t.team.fill(NO_TEAM);
+    return t;
+  }
+  t.teams = true;
+  return t;
+}
+
+Outcome DecideOutcome(bool teams, const std::array<PortEnd, MAX_PORTS>& ports)
+{
+  // The sides: one per player, or one per team colour.
+  struct Side
+  {
+    u8 ports = 0;  // bits
+    bool in = false;
+    s64 stocks = 0;
+    double damage = 0;
+    u8 last_out = 0;  // the latest elimination of its players
+  };
+  std::array<Side, MAX_PORTS> sides{};
+  std::array<int, MAX_PORTS> side_of{-1, -1, -1, -1};
+  int n = 0;
+  for (int i = 0; i < MAX_PORTS; ++i)
+  {
+    const PortEnd& p = ports[i];
+    if (!p.present)
+      continue;
+    int s = -1;
+    if (teams && p.team < NUM_TEAMS)
+    {
+      for (int j = 0; j < i; ++j)
+      {
+        if (ports[j].present && side_of[j] >= 0 && ports[j].team == p.team)
+          s = side_of[j];
+      }
+    }
+    if (s < 0)
+      s = n++;
+    side_of[i] = s;
+    Side& side = sides[s];
+    side.ports |= static_cast<u8>(1u << i);
+    if (p.out == 0)
+    {
+      side.in = true;
+      side.stocks += std::max<s32>(p.stocks, 0);
+      // A damage the game cannot show (NaN, huge) ranks last.
+      side.damage += (p.damage >= 0 && p.damage < 100000.0f) ? p.damage : 100000.0;
+    }
+    side.last_out = std::max(side.last_out, p.out);
+  }
+  Outcome o;
+  if (n == 0)
+    return o;
+  // -1: a ranks before b, 1: after, 0: tied.
+  const auto compare = [](const Side& a, const Side& b) {
+    if (a.in != b.in)
+      return a.in ? -1 : 1;
+    if (a.in)
+    {
+      if (a.stocks != b.stocks)
+        return a.stocks > b.stocks ? -1 : 1;
+      if (a.damage != b.damage)
+        return a.damage < b.damage ? -1 : 1;
+      return 0;
+    }
+    if (a.last_out != b.last_out)
+      return a.last_out > b.last_out ? -1 : 1;
+    return 0;
+  };
+  std::array<u8, MAX_PORTS> side_place{};
+  u8 worst = 0;
+  for (int s = 0; s < n; ++s)
+  {
+    int better = 0;
+    for (int t = 0; t < n; ++t)
+      better += compare(sides[t], sides[s]) < 0 ? 1 : 0;
+    side_place[s] = static_cast<u8>(better + 1);
+    worst = std::max(worst, side_place[s]);
+  }
+  int first_sides = 0;
+  int first_side = -1;
+  for (int s = 0; s < n; ++s)
+  {
+    if (side_place[s] == 1)
+    {
+      ++first_sides;
+      first_side = s;
+    }
+  }
+  const auto lowest_port = [](u8 bits) {
+    for (int i = 0; i < MAX_PORTS; ++i)
+    {
+      if (bits & (1u << i))
+        return i;
+    }
+    return 0;
+  };
+  o.winner = first_sides == 1 ? static_cast<u8>(lowest_port(sides[first_side].ports)) : 0xFE;
+  for (int i = 0; i < MAX_PORTS; ++i)
+    o.place[i] = side_of[i] >= 0 ? side_place[side_of[i]] : 0;
+  if (worst == 1)
+  {
+    // Everyone tied: each side's lowest port picks (a 1v1 draw: both, as Direct).
+    for (int s = 0; s < n; ++s)
+      o.pickers |= static_cast<u8>(1u << lowest_port(sides[s].ports));
+  }
+  else
+  {
+    u8 losers = 0;
+    for (int s = 0; s < n; ++s)
+    {
+      if (side_place[s] == worst)
+        losers |= sides[s].ports;
+    }
+    o.pickers = static_cast<u8>(1u << lowest_port(losers));
+  }
+  return o;
+}
+
+int StagePickPort(u8 pickers, const std::array<u16, MAX_PORTS>& picks)
+{
+  constexpr u16 NONE = 0xFFFF;
+  for (int i = 0; i < MAX_PORTS; ++i)
+  {
+    if ((pickers & (1u << i)) && picks[i] != NONE)
+      return i;
+  }
+  for (int i = 0; i < MAX_PORTS; ++i)
+  {
+    if (picks[i] != NONE)
+      return i;
+  }
+  return -1;
+}
 }  // namespace Online::GameSetup

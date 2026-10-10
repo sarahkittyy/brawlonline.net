@@ -23,7 +23,10 @@ namespace PPOM {
     static_assert(sizeof(PortValues) == 0x3C, "port values");
     static_assert(sizeof(Local) == 0x80, "local");
     static_assert(sizeof(SessionPlayer) == 0x80, "session player");
-    static_assert(sizeof(Session) == 0x210, "session");
+    static_assert(sizeof(Session) == 0x220, "session");
+    static_assert(__builtin_offsetof(Session, gone) == 0x20C, "session gone flags");
+    static_assert(__builtin_offsetof(SessionPlayer, picksStage) == 0x36, "session player stage pick");
+    static_assert(__builtin_offsetof(Local, lockTeam) == 0x34, "lock-in team");
     static_assert(__builtin_offsetof(Block, local) == __builtin_offsetof(Block, mailbox) + sizeof(Mailbox), "local after mailbox");
 
     static u32 s_lastSeq = 0;
