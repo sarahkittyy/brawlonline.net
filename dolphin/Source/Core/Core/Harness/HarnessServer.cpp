@@ -54,6 +54,7 @@
 #include "Core/Harness/Harness.h"
 #include "Core/Harness/HarnessInternal.h"
 #include "Core/NetPlayClient.h"
+#include "Core/Online/Chat.h"
 #include "Core/Online/GameBridge.h"
 #include "Core/Online/Matchmaking.h"
 #include "Core/Online/OnlineClient.h"
@@ -1522,6 +1523,40 @@ Result CmdRoomsRequest(const Args& args)
   return Online::Rooms::Status();
 }
 
+// Chat (docs/chat-protocol.md): the group, members, lines and drop counters; and what the chat
+// window would do (send, hide a player, report, leave a match's group).
+Result CmdChatStatus(const Args&)
+{
+  return Online::Chat::Status();
+}
+
+Result ChatRequest(const char* command, const Args& args)
+{
+  if (const auto error = Online::Chat::HarnessRequest(command, args))
+    Fail(*error);
+  return Online::Chat::Status();
+}
+
+Result CmdChatSend(const Args& args)
+{
+  return ChatRequest("chat_send", args);
+}
+
+Result CmdChatHide(const Args& args)
+{
+  return ChatRequest("chat_hide", args);
+}
+
+Result CmdChatReport(const Args& args)
+{
+  return ChatRequest("chat_report", args);
+}
+
+Result CmdChatLeave(const Args& args)
+{
+  return ChatRequest("chat_leave", args);
+}
+
 Result CmdGameBridgeConfig(const Args& args)
 {
   if (Find(args, "enabled"))
@@ -1647,6 +1682,11 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"game_bridge_config", CmdGameBridgeConfig},
       {"rooms_status", CmdRoomsStatus},
       {"rooms_request", CmdRoomsRequest},
+      {"chat_status", CmdChatStatus},
+      {"chat_send", CmdChatSend},
+      {"chat_hide", CmdChatHide},
+      {"chat_report", CmdChatReport},
+      {"chat_leave", CmdChatLeave},
       {"online_recent_codes", CmdOnlineRecentCodes},
       {"rollback_pad_history", CmdRollbackPadHistory},
       {"rollback_chunk_hashes", CmdRollbackChunkHashes},

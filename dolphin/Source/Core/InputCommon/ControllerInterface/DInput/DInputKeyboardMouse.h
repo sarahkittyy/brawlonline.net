@@ -102,6 +102,7 @@ public:
   std::string GetName() const override;
   std::string GetSource() const override;
   int GetSortPriority() const override;
+  bool IsKeyboardAndMouse() const override { return true; }
   bool IsVirtualDevice() const override;
 
 private:

@@ -118,8 +118,10 @@ Message Parse(const std::string& packet);
 std::optional<View> ParseView(const picojson::object& o, std::string* why);
 
 // Requests (client -> server).
+// `chat_key`: the chat identity's public key (docs/chat-protocol.md §1), left out when empty.
 std::string HelloJson(const std::string& uid, const std::string& play_key,
-                      const std::string& app_version, const std::string& platform);
+                      const std::string& app_version, const std::string& platform,
+                      const std::string& chat_key = {});
 enum class Op : u8
 {
   Poll = 0,

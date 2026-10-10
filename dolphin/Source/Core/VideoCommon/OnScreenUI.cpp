@@ -26,6 +26,7 @@
 #include "VideoCommon/NetPlayChatUI.h"
 #include "VideoCommon/NetPlayGolfUI.h"
 #include "VideoCommon/OnScreenDisplay.h"
+#include "VideoCommon/OnlineChatUI.h"
 #include "VideoCommon/PerformanceMetrics.h"
 #include "VideoCommon/Present.h"
 #include "VideoCommon/Statistics.h"
@@ -96,6 +97,27 @@ bool OnScreenUI::Initialize(u32 width, u32 height, float scale)
     io.Fonts->Clear();
     io.Fonts->AddFontFromFileTTF(file.c_str());
   }
+  else
+  {
+    // The first font is the default: keep ImGui's own ahead of the chat font.
+    io.Fonts->AddFontDefault();
+  }
+
+  // The online chat's font: Noto Sans with Noto Sans JP merged in for kana and kanji. Glyphs are
+  // rasterized when first drawn, and only these fonts' glyphs exist (others draw as the fallback).
+  const std::string resources = File::GetSysDirectory() + DIR_SEP + RESOURCES_DIR + DIR_SEP;
+  ImFont* chat_font = nullptr;
+  if (File::Exists(resources + "NotoSans-Regular.ttf"))
+  {
+    chat_font = io.Fonts->AddFontFromFileTTF((resources + "NotoSans-Regular.ttf").c_str());
+    if (chat_font && File::Exists(resources + "NotoSansJP-Regular.ttf"))
+    {
+      ImFontConfig merge;
+      merge.MergeMode = true;
+      io.Fonts->AddFontFromFileTTF((resources + "NotoSansJP-Regular.ttf").c_str(), 0.0f, &merge);
+    }
+  }
+  OnlineChatUI::SetFont(chat_font);
 
   // Setup new font management behavior
   io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures | ImGuiBackendFlags_RendererHasVtxOffset;
@@ -322,6 +344,8 @@ void OnScreenUI::DrawDebugText()
 
   if (Config::Get(Config::NETPLAY_GOLF_MODE_OVERLAY) && g_netplay_golf_ui)
     g_netplay_golf_ui->Display();
+
+  OnlineChatUI::Display(m_backbuffer_scale);
 
   if (g_ActiveConfig.bOverlayProjStats)
     g_stats.DisplayProj();

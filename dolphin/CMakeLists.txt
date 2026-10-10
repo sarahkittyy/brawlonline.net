@@ -753,6 +753,8 @@ add_subdirectory(Externals/expr)
 
 add_subdirectory(Externals/FatFs)
 
+add_subdirectory(Externals/monocypher)
+
 if (USE_RETRO_ACHIEVEMENTS)
   add_subdirectory(Externals/rcheevos)
 endif()

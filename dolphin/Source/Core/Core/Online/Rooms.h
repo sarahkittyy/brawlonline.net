@@ -77,6 +77,8 @@ struct Snapshot
   bool game_active = false;   // a room game runs (room-start .. room-back)
 };
 Snapshot GetSnapshot();
+// The screen the game reports (LOCAL.screen, Screen), for the chat window: Match while a match runs.
+Screen GetScreen();
 
 // Harness (`rooms_status`, `rooms_request`).
 picojson::object Status();

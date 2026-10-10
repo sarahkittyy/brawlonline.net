@@ -145,6 +145,7 @@
 #include "UICommon/UICommon.h"
 
 #include "VideoCommon/NetPlayChatUI.h"
+#include "VideoCommon/OnlineChatUI.h"
 
 #ifdef HAVE_XRANDR
 #include "UICommon/X11Utils.h"
@@ -2106,6 +2107,8 @@ void MainWindow::OnActivateChat()
 {
   if (g_netplay_chat_ui)
     g_netplay_chat_ui->Activate();
+  else
+    VideoCommon::OnlineChatUI::Activate();
 }
 
 void MainWindow::OnCollapseChat()

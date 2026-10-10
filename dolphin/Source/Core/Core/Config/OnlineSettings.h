@@ -42,6 +42,11 @@ extern const Info<std::string> ONLINE_SESSION_BACKEND;
 // inputs, as Slippi's delay frames do.
 extern const Info<int> ONLINE_INPUT_DELAY;
 
+// The chat window (docs/chat-protocol.md §6): shown while a match runs, and where it was put
+// ("x y w h collapsed", the first four as fractions of the window; empty: the default place).
+extern const Info<bool> ONLINE_CHAT_IN_MATCHES;
+extern const Info<std::string> ONLINE_CHAT_WINDOW;
+
 // The matchmaking host and port in effect (the dev override applied).
 std::string GetMatchmakingHost();
 int GetMatchmakingPort();

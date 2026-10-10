@@ -4,6 +4,7 @@
 #include "InputCommon/ControllerInterface/CoreDevice.h"
 
 #include <algorithm>
+#include <atomic>
 #include <cmath>
 #include <memory>
 #include <sstream>
@@ -17,6 +18,21 @@
 
 namespace ciface::Core
 {
+namespace
+{
+std::atomic<bool> s_keyboard_mouse_blocked{false};
+}
+
+void SetKeyboardMouseBlocked(bool blocked)
+{
+  s_keyboard_mouse_blocked.store(blocked, std::memory_order_relaxed);
+}
+
+bool IsKeyboardMouseBlocked()
+{
+  return s_keyboard_mouse_blocked.load(std::memory_order_relaxed);
+}
+
 // Compared to an input's current state (ideally 1.0) minus abs(initial_state) (ideally 0.0).
 // Note: Detect() logic assumes this is greater than 0.5.
 constexpr ControlState INPUT_DETECT_THRESHOLD = 0.55;

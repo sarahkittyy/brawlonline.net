@@ -18,6 +18,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/Core.h"
 #include "Core/NetPlayClient.h"
+#include "Core/Online/Chat.h"
 #include "Core/Online/GameSetup.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/Ranked.h"
@@ -760,6 +761,9 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox)
       break;
     }
     case CMD_CLEANUP_CONNECTION:
+      // The game left the online CSS (or cancelled): the match's chat ends too. Not on the other
+      // Cleanups: after a ranked set, the players can still say gg (docs/chat-protocol.md §2).
+      Chat::LeaveMatchGroup();
       Client::Cleanup();
       break;
     case CMD_FETCH_CODE_SUGGESTION:
