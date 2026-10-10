@@ -10,11 +10,13 @@ Branch `nplayer-determinism` (worktree `.claude/worktrees/nplayer-determinism`).
 
 | | 2 players | 3 players | 4 players |
 |---|---|---|---|
-| Sweep sync tests (distance 7, 2-minute matches) against their no-rollback ground truth, gp-v20 | (the 2-player sweep: status doc) | **5 / 5** (4 free-for-all, 1 team battle 2 vs 1) | **24 / 24** (free-for-all, team battles, all items, forced Final Smashes, 4-player mirrors) |
-| Sync test with recorded input against ground truth, gp-v19 | identical | identical (14,910 frames) | **drift** from game frame 535 (free-for-all) |
-| the same, gp-v20 | identical (3 fixtures, 14,907-14,916 frames) | identical | identical through game set (6,546 and 6,706 frames) |
-| Misprediction test (every frame's first run with another frame's input), single core, gp-v20 | - | identical (14,910 frames) | identical through game set |
-| Misprediction test, dual core, distance 4, gp-v20 | identical (2 fixtures, 14,909-14,916 frames) | identical (14,910 frames) | identical through game set (free-for-all and team battle) |
+| Sweep sync tests (distance 7, 2-minute matches, single core) with their no-rollback ground truth, **gp-v19** | (143 / 143 in the status doc) | not run to the end (runs killed, see below) | **0 / 6** free-for-all: every one mismatched within 1-5 s (session frames 41-301) and drifted from the ground truth |
+| the same, **gp-v21** | **24 / 24** (10 mirrors, 7 forced Final Smashes, 6 all-items runs, Zelda vs Ice Climbers) | **5 / 5** (4 free-for-all, 1 team battle 2 vs 1) | **25 / 25** (free-for-all, team battles, all items, forced Final Smashes, 4-player mirrors) |
+| Sync test with recorded input, distance 2, gp-v19 | (identical in the status doc) | not run | **drift** from game frame 535 |
+| Sync test with recorded input, distance 7, gp-v19 and gp-v20 | **drift** from game frame 1637 (Zelda vs Ice Climbers; gp-v20 also in dual core) | gp-v20: identical (3,600 frames) | gp-v20: identical (3,600 frames) |
+| Misprediction test (every frame's first run gets the input of 7 frames earlier, every port), dual core, distance 7, **gp-v21** | identical (Mario/Marth 7,805 frames; Zelda/Ice Climbers 3,755) | identical (7,818 frames) | identical through game set (3 fixtures: 6,546, 6,706 and 13,712 frames; free-for-all and both team battles) |
+
+With gp-v21 nothing differed from the ground truth: 79 sync and misprediction runs, about 500,000 played frames and 2.7 million resimulated frames with 2, 3 and 4 fighters.
 
 The holes:
 - **P+'s per-port records above the heaps** were in the set for P1 and P2 only (gp-v20). 4-player matches drifted within seconds.
@@ -112,9 +114,9 @@ python harness/tools/gprb_sweep.py run --out run/qa/nplayer/sweep1 --groups np -
 - An all-threads interpreter trace of the 10 frames around the long-lived allocations (game frames 384-393): every store into Tmp comes from the main thread (121,467 stores; the pad thread 0x805BA108, three other threads and the idle loop store nothing there).
 - In network sessions the hole needs a rollback across one of the rare long-lived Tmp allocations; each one leaks a block on the peer that rolled back, so the peers' heaps differ and a later allocation can fail on one peer only. It is a 2-player hole as much as a 3-4 player one.
 
-## Results on gp-v20
+## Results
 
-### Sync and misprediction tests with recorded input
+### gp-v20: sync and misprediction tests with recorded input
 
 Against each fixture's ground truth (`--no-rollback`, single core), raw `run/qa/nplayer/r2`, `dc1`, `reg2p`:
 
@@ -135,7 +137,7 @@ Against each fixture's ground truth (`--no-rollback`, single core), raw `run/qa/
 
 "Misprediction": every frame's first run gives every port the recorded input of 7 frames earlier, the resimulations the true input (`mispredict_ports` = all ports, `mispredict_offset` -7).
 
-### The sweep's 3-4 player groups
+### gp-v20: the sweep's 3-4 player groups
 
 `gprb_sweep.py run --groups np` (raw `run/qa/nplayer/sweep1`), gp-v20, this branch's build, single core, `distance` 7 (6 frames resimulated every frame), 2-minute matches, every run's trace compared with its pass log replayed without rollback. **29 of 29 passed**: every sync test 0 mismatches and identical to its ground truth for all 7,208 compared frames (every match ran to the time limit, game set at session frame 7,193). 208,597 frames, 1.25 million resimulated frames.
 
@@ -150,6 +152,42 @@ Against each fixture's ground truth (`--no-rollback`, single core), raw `run/qa/
 | `np-mirror` 4 of one character | 8 | 8 / 8 |
 
 Forms seen: Zelda and Sheik transforming (in free-for-all, team battle and the Zelda mirror), Wario-Man (forced Final Smash), Popo and Nana. The full matrix: `gprb_sweep.py report --out run/qa/nplayer/sweep1`.
+
+These runs did not reach the Tmp hole: it needs a long-lived Tmp allocation crossed by enough deep rollbacks, which the cost series' Zelda vs Ice Climbers match hit at its 1,397th frame and these 2-minute matches did not.
+
+### gp-v19: the same groups, as a control
+
+`gprb_sweep.py run --groups np-f4,np-t4,np-f3 --region-set gp-v19 --jobs 1` (raw `run/qa/nplayer/sweep-v19`, build `run/bin/npd-b828ca20`). All 6 free-for-all 4-player runs: **desync**, the sync test's first mismatch at session frames 41-301 (fighters' checksum) and the trace different from the ground truth from game frames 281-541. The team and 3-player runs were killed before they finished (the coordinator stopped every instance of this work so the user could use their GameCube adapter, below) and were not run again.
+
+### gp-v21: the sweep
+
+`gprb_sweep.py run --out run/qa/nplayer/sweep2 --region-set gp-v21` (build `run/bin/npd-b828ca20` with gp-v21's file; the 3-4 player runs again on `run/bin/npd-d2a443a6`, the build with gp-v21 as its default, after the interruption): the 3-4 player groups, the 2-player cost-series match, and 2-player regression groups of the status doc's sweep. **54 of 54 passed**, 385,201 frames, every sync test 0 mismatches.
+
+| Group | Runs | Result |
+|---|---|---|
+| `np-f4`, `np-f3`, `np-t4`, `np-t3` | 15 | 15 / 15 |
+| `np-f2` (Zelda vs Ice Climbers, the Tmp hole's match) | 1 | 1 / 1 |
+| `np-items`, `np-ffs`, `np-mirror` | 15 | 15 / 15 |
+| 2 players: mirrors (Peach, Wario, Yoshi, Donkey Kong, Zelda, Sheik, Meta Knight, Game & Watch, Ice Climbers, Olimar) | 10 | 10 / 10 |
+| 2 players: all items (`items`) | 6 | 6 / 6 |
+| 2 players: forced Final Smashes (`ffs`) | 7 | 7 / 7 |
+
+The ground-truth comparison covered every frame to game set in 44 of the 54. In the other 10 (the 2-player `ffs` runs but `ff-captain_falcon-ganondorf`, `i-mario-marth`, two `np-ffs` and one `np-items` run) the sync run's frame trace held only its first 1-200 frames or none; their sync tests had 0 mismatches and their ground-truth replays reached game set on the same session frame. The status doc saw the same for two `ffs` runs on gp-v19 ("an existing limit of the trace for these forced runs"); it is not specific to 3-4 players.
+
+### gp-v21: misprediction tests at distance 7, dual core
+
+Every frame's first run with the input of 7 frames earlier on every port, then 6 resimulations with the true input, against the fixture's ground truth (raw `run/qa/nplayer/dc2`):
+
+| Fixture | Frames | Result |
+|---|---|---|
+| `f4-bf-zelda-ics-olimar-peach` | 6,546 | identical through game set |
+| `t4-bf-ics-olimar-vs-zelda-sheik` | 6,706 | identical through game set |
+| `t4-sv-rob-wario-vs-bowser-peach` | 13,712 | identical through game set |
+| `f3-fd-peach-gw-snake` | 7,826 | identical (7,818 compared) |
+| `fd-mario-marth` (2 players) | 7,813 | identical (7,805 compared) |
+| `f2-bf-zelda-ics` (2 players; `run/qa/nplayer/tmp1`) | 3,829 | identical (3,755 compared, past the hole's frame) |
+
+The gp-v21 cost series (`cost2`, 17 runs of 3,600 frames at distance 2 and 7, single and dual core) is identical to its ground truth too.
 
 ## Cost per frame
 
@@ -195,6 +233,7 @@ All in `harness/tools/` (commit `b828ca20` and later):
 - `gprb_sweep.py`: runs with `chars` and `teams`; groups `np-*`; the forced Final Smash mask covers every port; the report has a 3-4 player table.
 - `gprb_replay_stress.py`: `--players` (default from `<state>.json`).
 - `gprb_memdiff.py diff --only-inset`.
+- `ppharness/instance.py` (and the harness probe, and `e2e_launcher.py --direct-dolphin`): every instance's Dolphin.ini has `[SDL_Hints] SDL_JOYSTICK_HIDAPI_GAMECUBE = 0` (commit `c0d6def4`). Dolphin sets that hint to 1 when no port is a Wii U adapter (`SDL.cpp`), so the headless test instances let SDL's HIDAPI driver open the user's GameCube adapter and the user's own Dolphin got "access denied". The `[SDL_Hints]` section is applied after Dolphin's default; a `-C` override is not (the hints are read from the base config layer). An instance with the hint lists only `DInput/0/Keyboard Mouse` as an input device. Instances the launcher starts (`e2e_launcher.py` without `--direct-dolphin`) build their user folder in the launcher and do not get it.
 - Dolphin: `RollbackManager` counts the granules each save copies and each load restores (`gprb_status` `save_granules_total/max`, `load_granules_total/max`). `GameplaySession.cpp`: only those four status fields.
 
 The C++ side needed nothing else for 3-4 players in a single instance: the sync test already took a port mask (`ports`), the frame trace and the checksum already covered all four ports (24 fighter words), and the pass log keeps all four pad slots.
@@ -203,4 +242,20 @@ Not generalised: `gprb_ab.py` (the Phase 1 two-instance A/B tool), `gprb_resimtr
 
 ## Open issues
 
-(in progress)
+1. **Tmp in network sessions.** gp-v21 closes the Tmp leak; sessions on gp-v19 or gp-v20 (every client before this branch) can still fail a Tmp allocation on one peer after enough rollbacks across a long-lived Tmp allocation. No such session failure was observed; the 2-player network sessions of the status doc ran on gp-v19 and passed, with far fewer and shallower rollbacks than a distance-7 sync test.
+2. **State outside the set that only rare events touch** is still found one case at a time (status doc, open issue 2). The 4-player census lists granules written outside the set only in 3-4 player matches (sound and AX buffers, dead stack, GX display lists, nw4r render statics); none changed a test, none was added.
+3. **The task-id counter** (`gUnk8059c66c`) stays out of the set. A distance-7 sync test hands out ids 7 times as fast as play without rollback; restoring the counter did not change the Tmp drift, and nothing else was traced to it.
+4. **Frame traces of some item and forced Final Smash sweep runs are cut short** (gp-v21 sweep above), so their ground-truth comparison covers only the start; a harness limit, also on 2 players.
+5. **The 4-player rollback cost** fits 1-2 frames of rollback into a frame in dual core (cost section). The suggestions there (no render in resimulated passes, more input delay with 4 players) are not implemented.
+6. **Not covered here:** multi-instance 3-4 player network sessions, drops and the gone flag (`docs/nplayer/session.md`, which reports its sessions clean on gp-v20); game-side removal of a dropped player's fighter (`docs/nplayer/setup.md`). Fighters eliminated by losing their last stock are covered: three of four went out in the `f4-bf` fixture's match under rollback.
+7. The gp-v19 control sweep's team-battle and 3-player runs were interrupted (the adapter issue) and not repeated, and no 3-player fixture ran on gp-v19, so whether the P3 record alone drifts a 3-player match on gp-v19 is not measured (the cause says it should: P3's record was outside the set).
+
+## Commits (branch `nplayer-determinism`)
+
+| SHA | What |
+|---|---|
+| `b828ca20` | harness for 2-4 players (scenarios, fixtures, port masks, team battles, sweep groups); gp-v20; save/load granule counts |
+| `d2a443a6` | gp-v21 (the Tmp heap) as the default everywhere; first draft of this document (frozen build `run/bin/npd-d2a443a6`) |
+| `0d0dd108` | the cost series |
+| `c0d6def4` | test Dolphins never open the user's GameCube adapter |
+| (this commit) | results on gp-v21, the gp-v19 control |
