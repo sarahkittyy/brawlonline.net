@@ -18,10 +18,12 @@
 #   - Publishing: always sarahvps2 (pp-release client). Builds from other machines arrive as
 #     Actions artifacts (1-day retention, deleted after publishing).
 #   - macOS: Namespace runner profile namespace-profile-brawlonline-mac (Apple silicon), $CI_CACHE
-#     (Qt, build tree, ccache) on its cache volume. Developer ID signed and notarized (repository
-#     secrets, see the macos job). It publishes on its own (publish-mac): Apple's notary service
-#     can take minutes or hours, so Linux and Windows never wait for it, and a failed or skipped
-#     macOS build never holds them back.
+#     (Qt, build tree, ccache) on its cache volume. Developer ID signed (repository secrets, see
+#     the macos job). Its DMG is submitted to Apple's notary service without waiting, and the job
+#     uploads the build (launcher-mac) and the submission (mac-notary), kept 90 days.
+#     client-mac-publish.yml publishes it once Apple accepts it, however long that takes, and never
+#     an older version over a newer one. Linux and Windows never wait for it, and a failed or
+#     skipped macOS build never holds them back.
 #
 # Concurrency is per job (group client-<job>, never cancelled while running): a newer push's
 # Linux and Windows builds start as soon as the previous ones finish, even while that run's macOS
@@ -384,7 +386,10 @@ jobs:
           } >>"$GITHUB_ENV"
       - name: Dolphin
         run: client/.github/scripts/build-dolphin-macos.sh "$VERSION" "$GITHUB_WORKSPACE/client/launcher/release/dolphin" arm64
-      - name: Package (app, DMG, zip)
+      - name: Package (app, DMG, zip) and submit the DMG to Apple
+        env:
+          # Don't wait for Apple: client-mac-publish.yml publishes the build once it is accepted.
+          MAC_NOTARY_SUBMIT: ${{ runner.temp }}/notary/notary.json
         run: client/.github/scripts/package-launcher-macos.sh "$RUNNER_TEMP/out-mac" arm64
       - name: Check the package
         working-directory: client/launcher/release/build
@@ -394,16 +399,25 @@ jobs:
         run: |
           security delete-keychain "$RUNNER_TEMP/signing.keychain-db" 2>/dev/null || true
           rm -f "$RUNNER_TEMP/notary-key.p8" "$RUNNER_TEMP/signing.p12"
+      # Both wait for Apple's answer (client-mac-publish.yml deletes them once the build is
+      # published or dropped). launcher-mac is exactly what pp-release publishes.
       - uses: actions/upload-artifact@v7
         with:
           name: launcher-mac
           path: ${{ runner.temp }}/out-mac/
-          retention-days: 1
+          retention-days: 90
           compression-level: 0
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: mac-notary
+          path: ${{ runner.temp }}/notary/notary.json
+          retention-days: 90
           if-no-files-found: error
 
   publish:
-    # Linux and Windows. The macOS build publishes on its own (publish-mac).
+    # Linux and Windows. The macOS build is published by client-mac-publish.yml once Apple
+    # accepts it.
     needs: [linux, windows]
     if: ${{ !cancelled() && needs.linux.result == 'success' && needs.windows.result == 'success' }}
     concurrency:
@@ -454,54 +468,3 @@ jobs:
             curl -fsS -X DELETE -H "Authorization: Bearer $GH_TOKEN" "$api/artifacts/$id" && echo "deleted artifact $id"
           done
           rm -rf "$RUNNER_TEMP/client"
-
-  publish-mac:
-    # The macOS build, whenever Apple's notary service is done with it (see publish).
-    needs: macos
-    if: ${{ !cancelled() && needs.macos.result == 'success' }}
-    concurrency:
-      group: client-publish-mac
-      cancel-in-progress: false
-    runs-on: [self-hosted, linux, x64, sarahvps2, brawlonline]
-    timeout-minutes: 30
-    permissions:
-      contents: read
-      actions: write # delete this run's artifacts after publishing
-    steps:
-      - uses: actions/download-artifact@v7
-        with:
-          name: launcher-mac
-          path: ${{ runner.temp }}/client-mac
-      - name: Publish
-        run: |
-          ls -l "$RUNNER_TEMP/client-mac"
-          sudo -n /usr/local/sbin/pp-release client "$RUNNER_TEMP/client-mac"
-      - name: Check
-        env:
-          FEEDS: latest-mac.yml
-          DOWNLOADS: BrawlOnline.dmg
-        run: |
-          base=https://brawlonline.net
-          for f in $FEEDS; do
-            got=$(curl -fsS --max-time 20 "$base/updates/launcher/$f?nocache=$GITHUB_RUN_ID" | sed -n 's/^version: //p')
-            echo "$f: $got"
-            [ "$got" = "$VERSION" ] || { echo "$f does not name $VERSION" >&2; exit 1; }
-          done
-          for f in $DOWNLOADS; do
-            curl -fsS --max-time 20 -o /dev/null -r 0-0 -w "$f: %{http_code}\n" "$base/downloads/$f?v=$VERSION"
-          done
-      - name: Delete the published artifacts
-        if: always()
-        env:
-          GH_TOKEN: ${{ github.token }}
-          # plugin too: the macos job is the last to use it (publish can't delete it, a macos job
-          # waiting for its turn may not have downloaded it yet).
-          NAMES: launcher-mac plugin
-        run: |
-          api="$GITHUB_API_URL/repos/$GITHUB_REPOSITORY/actions"
-          ids=$(curl -fsS -H "Authorization: Bearer $GH_TOKEN" "$api/runs/$GITHUB_RUN_ID/artifacts?per_page=100" |
-            python3 -c 'import json,os,sys; names=os.environ["NAMES"].split(); print(" ".join(str(a["id"]) for a in json.load(sys.stdin)["artifacts"] if a["name"] in names))')
-          for id in $ids; do
-            curl -fsS -X DELETE -H "Authorization: Bearer $GH_TOKEN" "$api/artifacts/$id" && echo "deleted artifact $id"
-          done
-          rm -rf "$RUNNER_TEMP/client-mac"
