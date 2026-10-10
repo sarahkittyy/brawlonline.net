@@ -3826,6 +3826,10 @@ picojson::value Status()
   o["load_us_max"] = picojson::value(static_cast<double>(t.load_us_max));
   o["load_evict_waits"] = picojson::value(static_cast<double>(t.load_evict_waits));
   o["load_evict_wait_us_max"] = picojson::value(static_cast<double>(t.load_evict_wait_us_max));
+  o["save_granules_total"] = picojson::value(static_cast<double>(t.save_granules_total));
+  o["save_granules_max"] = picojson::value(static_cast<double>(t.save_granules_max));
+  o["load_granules_total"] = picojson::value(static_cast<double>(t.load_granules_total));
+  o["load_granules_max"] = picojson::value(static_cast<double>(t.load_granules_max));
   if (s.mode == Mode::Network)
   {
     // Every other player ("peers", by port), and the first of them as "peer" (a 1v1's peer).

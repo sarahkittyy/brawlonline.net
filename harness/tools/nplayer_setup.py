@@ -462,7 +462,7 @@ def main() -> int:
     ap.add_argument("--synctest", action="store_true")
     ap.add_argument("--distance", type=int, default=2)
     ap.add_argument("--start-frame", type=int, default=240)
-    ap.add_argument("--region-set", default="gp-v19")
+    ap.add_argument("--region-set", default="gp-v21")
     ap.add_argument("--cpu", default="dc", choices=("sc", "dc"))
     ap.add_argument("--video", default=None,
                     help="video backend (default: D3D11 for screenshots, Null with --synctest: the EFB "

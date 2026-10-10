@@ -44,7 +44,7 @@ namespace Gprb::Session
 struct SyncTestOptions
 {
   int distance = 2;                 // frames rolled back on every frame (1..MAX_ROLLBACK_FRAMES)
-  std::string region_set = "gp-v19";  // Sys/Rollback/<name>.json or a path
+  std::string region_set = "gp-v21";  // Sys/Rollback/<name>.json or a path
   bool hash_regions = true;          // also compare a hash of the whole region set per frame
   u32 start_frame = 240;             // game frame the rollback starts at (after GO, see Connect)
   u32 ports = 3;                     // local controller ports that play (bit per port)
@@ -93,7 +93,7 @@ struct ConnectOptions
   std::vector<Peer> peers;
   // The deciding player's port as the joiners know it (-1: learned from the peers' messages).
   int host_slot = -1;
-  std::string region_set = "gp-v19";
+  std::string region_set = "gp-v21";
   // The match's first frames are the countdown, during which the game loads RNG-chosen resources
   // (Pokemon, Assist Trophies) on a loader thread into heaps of the region set. Rolling those
   // heaps back under an in-flight load corrupts it, and nobody can act before GO anyway. So from

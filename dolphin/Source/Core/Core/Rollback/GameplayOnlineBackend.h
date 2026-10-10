@@ -17,7 +17,7 @@ namespace Gprb
 struct OnlineBackendOptions
 {
   int delay = 2;                     // GekkoNet input delay
-  std::string region_set = "gp-v19";  // Data/Sys/Rollback/<name>.json
+  std::string region_set = "gp-v21";  // Data/Sys/Rollback/<name>.json
   bool dedupe_resim_sounds = true;
 };
 
