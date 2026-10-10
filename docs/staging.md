@@ -26,7 +26,7 @@ python tools/staging/staging.py down                 # stop clients and server; 
 | Windows build | worktree `run/staging/src` (own Dolphin build), packaged to `run/staging/win/app` | rebuilt by `win build` |
 | Server binaries | `run/staging/cargo-target`, built from the same commit by `win build` | same |
 | Windows profiles | `run/staging/win/profiles/<name>` | `win reset` / `run --fresh` delete one |
-| Mac build | `~/brawl-staging/src`, app in `~/brawl-staging/app/Brawl Online.app` | rebuilt by `mac build` |
+| Mac build | `~/brawl-staging/src`, app in `~/brawl-staging/app/Brawl Online Staging.app` | rebuilt by `mac build` |
 | Mac profiles | `~/brawl-staging/profiles/<name>` | `mac reset` / `run --fresh` |
 
 Ports and addresses are in `run/staging/config.json` (written on first use, with the database
@@ -44,6 +44,11 @@ The packaged launcher runs in its test mode (`PPO_TEST_MODE=1`) with:
 - `PPO_DOLPHIN_EXTRA_ARGS`: `-C Dolphin.Online.MatchmakingHost/MatchmakingPort/AccountsUrl=...`,
   so Dolphin's matchmaking and user lookups go to staging too.
 
+The same settings are also baked into each staging app as `resources/staging-env.json`, which the
+launcher applies at start-up. So a staging app started any other way (the Dock, Finder, a
+double-click on the `.exe`) still uses the staging profile `a` and the staging servers, never the
+real install. Releases never contain that file.
+
 A second account on the same machine: `win run --profile b` (or `mac run --profile b`).
 
 ## Builds
@@ -59,7 +64,9 @@ A second account on the same machine: `win run --profile b` (or `mac run --profi
 - **Mac** (`mac build`): pushes the commit to `~/brawl-staging/repo.git` over SSH, copies the
   plugin built here, and runs CI's `build-dolphin-macos.sh` and `package-launcher-macos.sh` on the
   Mac without a signing identity (ad-hoc signed, not notarized). Qt comes from
-  `~/brawl-dev/qt/6.8.3/macos`, and Node 24 from your nvm. `mac setup` checks these and writes a
+  `~/brawl-dev/qt/6.8.3/macos`, and Node 24 from your nvm. Dolphin is built with Homebrew hidden, as
+  on CI: Homebrew's Qt 6.11 had leaked in through an rpath and made Dolphin abort at start, and a
+  build that still refers to `/opt/homebrew` is refused. `mac setup` checks these and writes a
   pass-through `ccache` into `~/brawl-staging/bin` (nothing is installed).
 - The Dolphin bundle's version is `0.1.0-staging.<commit>`, so a new build replaces the Dolphin an
   existing profile installed.
