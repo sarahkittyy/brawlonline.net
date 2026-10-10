@@ -378,7 +378,8 @@ def _boot(dolphin: Callable[..., DolphinInstance], name: str, be: OnlineBackend,
           video: str, test: str, session_backend: str, artifacts: Path = ARTIFACTS,
           gcpad_ini: dict[str, dict[str, Any]] | None = None,
           dolphin_ini: dict[str, dict[str, Any]] | None = None,
-          standard_controllers: tuple[int, ...] = (0, 1)) -> Game:
+          standard_controllers: tuple[int, ...] = (0, 1),
+          before_launch: Callable[[Path], Any] | None = None) -> Game:
     if not PLUGIN.exists():
         pytest.skip(f"{PLUGIN} not built (game-code/build.sh)")
     ini: dict[str, dict[str, Any]] = {"Online": {
@@ -392,6 +393,8 @@ def _boot(dolphin: Callable[..., DolphinInstance], name: str, be: OnlineBackend,
     patch_sd.patch_image(d / "Wii" / "sd.raw",
                          [(PLUGIN.read_bytes(), patch_sd.plugin_sd_path(PLUGIN))])
     user.write_user_json(d)
+    if before_launch:
+        before_launch(d)   # e.g. the launcher's join-room.json, written before Play starts Dolphin
     inst.launch()
     inst.connect()
     out = artifacts / test / name

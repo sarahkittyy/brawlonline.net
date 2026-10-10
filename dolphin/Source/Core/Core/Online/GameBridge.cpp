@@ -1187,6 +1187,7 @@ void Reset()
   Client::GetUser();
   // The online connection (hello) and the launcher hand-off (docs/rooms-protocol.md §5).
   Rooms::Start();
+  Rooms::OnBoot();
   {
     std::lock_guard lk(s_mutex);
     s_located.reset();

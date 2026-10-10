@@ -485,6 +485,67 @@ def test_room_launcher_jump(backend: OnlineBackend, dolphin: Callable[..., Dolph
     assert room_view(a)["slots"][1]["bits"] & ppom.SLOT_TAKEN
 
 
+@pytest.mark.parametrize("when", ["before-start", "during-boot"])
+def test_room_launcher_join_while_the_game_starts(backend: OnlineBackend,
+                                                  dolphin: Callable[..., DolphinInstance],
+                                                  gpu_backend: str, tmp_path: Path, when: str) -> None:
+    """A room clicked in the launcher with the game closed (Play writes join-room.json, then
+    starts Dolphin) or while it is still booting: the real plugin boots (nothing stands in for its
+    LOCAL.screen), Dolphin answers the request `accepted` at once and holds it until the game first
+    shows its menus, then joins; the game lands on the room's CSS without a second click (staging,
+    2026-10-10: the boot's scenes were answered "Finish your current game first.")."""
+    import json
+    from test_rooms import MmClient
+    test = f"launcher-join-{when}"
+    uh = backend.create_user("rlbhost", "RLBH")
+    uj = backend.create_user("rlbjoin", "RLBJ")
+    owner = MmClient(backend, uh, tmp_path, "room", "--create", "--hold-secs", "400")
+    try:
+        code = owner.code()
+        rid: list[str] = []
+
+        def put(user_dir: Path) -> None:
+            import uuid
+            from datetime import datetime, timezone
+            rid.append(str(uuid.uuid4()))
+            created = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+            (Path(user_dir) / "Online" / "join-room.json").write_text(
+                json.dumps({"version": 1, "id": rid[0], "code": code, "createdAt": created}))
+
+        g = _boot(dolphin, f"room-lj-{when}", backend, uj, gpu_backend, test, "gameplay", artifacts=ART,
+                  before_launch=put if when == "before-start" else None)
+        if when == "during-boot":
+            st = g.c.call("rooms_status")
+            assert not st["reached_menus"], st    # still booting
+            put(g.inst.user_dir)
+
+        def answer() -> dict | None:
+            try:
+                lr = json.loads((Path(g.inst.user_dir) / "Online" / "game-status.json").read_text())["lastRequest"]
+            except (OSError, ValueError, KeyError):
+                return None
+            return lr if lr and lr.get("id") == rid[0] else None
+
+        # Accepted at once (within the launcher's 5 s), although the game is still booting.
+        lr = _wait(answer, 5, "the answer to the request")
+        assert lr["result"] == "accepted", lr
+        # Straight into the room's CSS.
+        _wait(lambda: g.scene() == CSS, 120, "the room's CSS")
+        v = until_view(g, lambda v: v["flags"] & ppom.RF_IN and v["screen"] == ppom.SCREENS["room"],
+                       "in the room", timeout=60)
+        assert v["code"] == code and v["local_port"] == 1 and v["join"] >= 1, v
+        st = g.c.call("rooms_status")
+        assert st["reached_menus"] and not st["screen_harness"], st
+        owner.until(lambda m: m.get("type") == "room-state" and m["slots"][1]["player"] and
+                    m["slots"][1]["player"]["displayName"] == "rlbjoin", "the joiner seen by the host")
+        g.steps("wait 60")
+        g.shot("01-in-the-room-after-the-boot")
+        log = (Path(g.inst.user_dir) / "Logs" / "dolphin.log").read_text(errors="replace")
+        assert "refused" not in log, [l for l in log.splitlines() if "refused" in l]
+    finally:
+        owner.stop()
+
+
 SLOT_POS = 16.0 / 0.99   # a panel's model offset per slot (room_css.cpp SLOT_POS)
 
 
