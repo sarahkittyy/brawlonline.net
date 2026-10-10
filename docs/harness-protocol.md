@@ -157,6 +157,7 @@ During a rollback the resimulated frames are run and rendered in full but not pr
 | `PPR_ROLLBACK_CHUNK_HASHES=1` or `=<bytes>` | record `rollback_chunk_hashes` (64 KiB chunks, or the given size, at least 64) |
 | `PPR_ROLLBACK_SYNC_VIDEO=1` | dual core: drain the GPU thread for every snapshot and serialize the whole video state there, as before `5defc02845` (A/B runs) |
 | `PPR_LOG_GPU_RAM_WRITES=<file>` | append one line per guest-RAM write by the video thread (Brawl match frame, kind, address, size) |
+| `PPR_PRESENT_LOG=<file>` | one line per present with its timeline: the XFB copy, its due time, the last throttle, the loop top, the CPU's waits for the GPU thread, rollback bursts, the swap, the hold target and the present (`{pid}` in the path becomes the process ID); deterministic dual core |
 | `PPR_ROLLBACK_PRESENT_RESIM=1` | present resimulated frames again (the behaviour before `2025577415`), for before/after measurements |
 | `PPR_HARNESS_PORT`, `PPR_HARNESS_AUDIO=1`, `PPR_HARNESS_POLL_SOURCE=si` | see above and "Deviations" |
 

@@ -169,6 +169,24 @@ public:
   // CPU thread only.
   void SetRollbackResimulating(bool resimulating);
   bool IsRollbackResimulating() const { return m_rollback_resimulating; }
+
+  // Rush Frame Presentation in a gameplay rollback session. Rush lets the CPU sleep only at the
+  // first throttle (an SI poll) after each frame is presented, and the GPU thread used to re-arm it
+  // when it presented. In a session the GPU thread is deterministic: it gets the FIFO only when the
+  // CPU thread reads it, so the present raced the CPU, and the first poll after it was sometimes
+  // the one just after the XFB copy (before the session's loop top, which reads the local pad: the
+  // frame then ran and was shown ~2 ms after its input was read) and sometimes one after the next
+  // frame was rendered (that frame waited ~10 ms before its copy, its input already read). The two
+  // alternated every few frames: presents 2-4 ms early or late several times a second (visible
+  // stutter, only online) and the input's age jumping by ~12 ms. In a session the CPU thread re-arms
+  // the throttle itself when it sends a presented XFB copy (OnPresentedXFBCopy), so the sleep is
+  // always at the first poll after the copy: VI-locked, like the copies, and before the loop top.
+  // The presenter then holds a frame that came late (a rollback's re-run runs between its input
+  // and its copy) to keep the presents a field apart (PresentStats::PresentHoldUntil).
+  // CPU thread. The session turns it on for its running phase.
+  void SetPresentPacing(bool on) { m_pace_on.store(on, std::memory_order_relaxed); }
+  bool PresentPacingActive() const;
+  void OnPresentedXFBCopy();
   // Gameplay-only rollback leaves the sound system out of the snapshot, so a sound keeps playing
   // through a rollback. With this mode set (for the whole session), the audio clock waits for the
   // resimulated passes: the session adds the fields each one takes to a pause that the audio DMA
@@ -263,6 +281,9 @@ private:
   float m_config_oc_inv_factor = 1.0f;
   bool m_config_sync_on_skip_idle = false;
   bool m_config_rush_frame_presentation = false;
+  bool m_config_present_pacing = false;
+
+  std::atomic<bool> m_pace_on{false};  // SetPresentPacing
 
   s64 m_throttle_reference_cycle = 0;
   TimePoint m_throttle_reference_time = Clock::now();
