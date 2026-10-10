@@ -585,6 +585,14 @@ def start_direct_dolphin(p: Player, be: OnlineBackend, run_dir: Path, dolphin: P
         shutil.copytree(tpl, user_dir, ignore=shutil.ignore_patterns(
             "Load", "Logs", "Cache", "Dump", "ScreenShots", "StateSaves", "Shaders", "sd.raw"))
         (user_dir / "Wii").mkdir(parents=True, exist_ok=True)
+    # As ppharness.instance does: SDL must not open the user's GameCube adapter.
+    from ppharness.inifile import IniFile
+    from ppharness.instance import SDL_HINT_GC_ADAPTER
+    ini_path = user_dir / "Config" / "Dolphin.ini"
+    ini_path.parent.mkdir(parents=True, exist_ok=True)
+    ini = IniFile.load(ini_path)
+    ini.update({"SDL_Hints": {SDL_HINT_GC_ADAPTER: "0"}})
+    ini.save(ini_path)
     sd = run_dir / p.name / "sd" / "sd.raw"
     sd.parent.mkdir(parents=True, exist_ok=True)
     _platform.fast_copy_file(paths.template_user_dir() / "Wii" / "sd.raw", sd)

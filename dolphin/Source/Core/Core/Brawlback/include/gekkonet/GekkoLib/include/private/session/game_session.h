@@ -31,6 +31,8 @@ namespace Gekko {
 
         void SetDisconnectTimeout(u32 timeout) override;
 
+        void SetDisconnectedInput(const void* input) override;
+
         void AddLocalInput(i32 player, void* input) override;
 
         GekkoGameEvent** UpdateSession(i32* count) override;

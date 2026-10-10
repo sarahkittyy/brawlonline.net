@@ -206,6 +206,10 @@ GEKKONET_API bool gekko_disconnect_actor(GekkoSession* session, int actor);
 // a timeout of 0 disables automatic disconnecting. defaults to 5000ms.
 GEKKONET_API void gekko_set_disconnect_timeout(GekkoSession* session, unsigned int timeout);
 
+// the input a disconnected player gets after the frame the remaining peers agreed on (zeroes by
+// default). input_size bytes; call after gekko_start.
+GEKKONET_API void gekko_set_disconnected_input(GekkoSession* session, const void* input);
+
 // holds a local players input back by the given amount of frames before the
 // session uses it, trading input lag for less mispredictions.
 GEKKONET_API void gekko_set_local_delay(GekkoSession* session, int player, unsigned char delay);

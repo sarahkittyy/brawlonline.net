@@ -35,11 +35,19 @@ public:
     }
     if (match.connected.empty() && match.remotes.empty())
       return std::string("the match has no remote player");
-    if (match.players.size() != 2)
-      return fmt::format("the gameplay session supports 1 on 1 only ({} players)",
-                         match.players.size());
+    if (match.players.size() < 2 ||
+        match.players.size() > static_cast<size_t>(Session::MAX_LOBBY_PLAYERS))
+    {
+      return fmt::format("the gameplay session supports 2-{} players ({} players)",
+                         Session::MAX_LOBBY_PLAYERS, match.players.size());
+    }
     // The address the P2P connection came up with is the one the peer's NAT maps.
-    const Online::Endpoint& peer = match.connected.empty() ? match.remotes[0] : match.connected[0];
+    const auto endpoint = [&](size_t i) -> const Online::Endpoint* {
+      if (i < match.connected.size())
+        return &match.connected[i];
+      return i < match.remotes.size() ? &match.remotes[i] : nullptr;
+    };
+    const Online::Endpoint& peer = *endpoint(0);
 
     Session::ConnectOptions o;
     o.host = match.is_host;
@@ -48,6 +56,30 @@ public:
     // mapping toward the guest open, as Slippi connects from both sides).
     o.remote_host = peer.ip;
     o.remote_port = peer.port;
+    if (match.players.size() > 2)
+    {
+      // 3-4 players: everyone on their server port (1-4), every pair connected directly (the
+      // remotes and connected lists follow `players` without the local one).
+      size_t remote = 0;
+      u32 ports = 0;
+      for (const auto& p : match.players)
+      {
+        if (p.port < 1 || p.port > Session::MAX_LOBBY_PLAYERS || (ports & (1u << (p.port - 1))))
+          return fmt::format("bad player port {} in the match", p.port);
+        ports |= 1u << (p.port - 1);
+        if (p.is_local)
+        {
+          o.local_slot = p.port - 1;
+          continue;
+        }
+        const Online::Endpoint* e = endpoint(remote++);
+        if (!e)
+          return std::string("a remote player has no address");
+        o.peers.push_back({p.port - 1, e->ip, e->port});
+      }
+      if (o.local_slot < 0)
+        return std::string("the match has no local player");
+    }
     o.region_set = options.region_set;
     // The harness's option, else the player's setting (0: automatic).
     o.delay = options.delay;

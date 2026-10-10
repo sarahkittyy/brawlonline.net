@@ -32,7 +32,10 @@
 namespace PPOM {
 
     const u32 MAGIC = 0x50504F4D; // "PPOM"
-    const u16 VERSION = 3;
+    // 4: 3-4 player matches (docs/nplayer/setup.md): each player's team, the stage pickers, the
+    // elimination order, the per-port "gone" flags and the teams switch in SESSION (0x220), the
+    // lock-in's team in LOCAL.
+    const u16 VERSION = 4;
 
     // Slippi command bytes (EXI_DeviceSlippi.h), kept for familiarity (design 5.3).
     enum Cmd {
@@ -223,7 +226,8 @@ namespace PPOM {
         u8 disconnected;  // the opponent left or went silent (Slippi ONLINE_INPUTS result 3)
         u16 peerName[NAME_LEN];
         LockIn lockIn;    // written by the game
-        u8 _reservedTeam;  // the lobby branches' lockTeam
+        u8 lockTeam;      // written by the game with the lock-in: the player's team colour
+                          // (TEAM_RED..TEAM_GREEN) for a team battle, TEAM_NONE none
         u8 lockPad;       // game: the controller port (0-3) whose START locked in, with the
                           // lock-in (its seq covers it); the match reads that controller
         u8 _reserved1[2];
@@ -238,21 +242,36 @@ namespace PPOM {
 
     // ---- SESSION ----
 
-    const int SESSION_PLAYERS = 4;   // a 1v1 session uses two; four for code-based Teams later
+    const int SESSION_PLAYERS = 4;   // by in-game port; 2 to 4 present, gaps allowed (P1, P3)
+
+    // Team colours (Brawl's team battle: gmPlayerInitData+0x0B; Slippi's order).
+    enum Team { TEAM_RED = 0, TEAM_BLUE = 1, TEAM_GREEN = 2, TEAM_COUNT = 3, TEAM_NONE = 0xFF };
 
     struct SessionPlayer {
         u8 present;
         u8 charKind;      // gmCharacterKind
         u8 costume;       // colour number
-        u8 _pad;
+        u8 team;          // Team in a team battle (Session.teams), TEAM_NONE in a free-for-all
         u16 name[NAME_LEN];
         u16 code[CODE_LEN];
-        u8 _pad2[0x0A];
+        u8 picksStage;    // Dolphin: 1 = this player picks the next game's stage on the stage
+                          // select (the last game's loser; both after a 1v1 draw)
+        u8 out;           // game, every frame of a match: the order in which this port was
+                          // eliminated (1 = first out; ports out on the same frame share it),
+                          // 0 = still in. Dolphin reads it at the game's end for the placings.
+        u8 _pad2[0x08];
         PortValues pv;    // the player's name tag and controls (from their lock-in)
         u32 _pad3;
     };                    // 0x80
 
     enum SessionState { SS_NONE = 0, SS_LOBBY = 1, SS_MATCH_READY = 2 };
+
+    // Why the next game cannot be set up (Session.setupError; the CSS shows the text).
+    enum SetupError {
+        SE_NONE = 0,
+        SE_SAME_TEAM = 1,   // "Pick different teams": a team battle with everyone on one colour
+        SE_NO_TEAM = 2,     // "Pick a team": a team battle and a player without a colour
+    };
 
     struct Session {
         u32 seq;          // Dolphin: bumped after each update
@@ -262,10 +281,19 @@ namespace PPOM {
         u8 lastWinner;    // in-game port of the last game's winner; 0xFE draw, 0xFF none
         u16 stageKind;    // stage of the next game (srStageKind)
         u8 asl;           // P+ alternate-stage buttons for it
-        u8 numPlayers;
+        u8 numPlayers;    // the highest present port + 1 (ports below it may be empty)
         SessionPlayer players[SESSION_PLAYERS];   // by in-game port (P1 = the host/decider)
-        u32 _reserved;
-    };                    // 0x210
+        // A player who dropped out of a running match: Dolphin's session writes gone[port] = 1
+        // at the start of every frame from the agreed frame on (also in resimulated frames,
+        // like an input; never cleared during the match). This block is part of the rolled-back
+        // state, so a rollback to before that frame takes the flag back with it. At the start
+        // of each frame the game removes that port's fighter (OnlineMatch::tickMatch).
+        u8 gone[SESSION_PLAYERS];
+        u8 teams;         // 1: the next game is a team battle (each player's `team`)
+        u8 setupError;    // SetupError: the setup of the next game is refused
+        u8 outCount;      // game, during a match: the highest `out` given so far
+        u8 _reserved[0x0D];
+    };                    // 0x220
 
     const int DEBUG_LOG = 32;
     struct PrintLog {
@@ -285,6 +313,13 @@ namespace PPOM {
         u32 menuState;    // plugin's online-menu state machine (OnlineMenu::State)
         u32 scratch[16];
         PrintLog log[DEBUG_LOG];
+        // Tests (CFG_TEST_GONE): from game frame testGoneFrame on (g_GameFrame's frame counter,
+        // rolled back with the match), the ports in the bit mask testGonePorts & 0xF are set gone,
+        // as Dolphin's session does for a dropped player, and (testGonePorts >> 16) frames later
+        // the ports in (testGonePorts >> 8) & 0xF. Written before the match only (this block is
+        // rolled back with it).
+        u32 testGoneFrame;
+        u32 testGonePorts;
     };
 
     enum Cfg {
@@ -296,6 +331,9 @@ namespace PPOM {
         CFG_TEST_DISCONNECT = 1 << 5, // tests: act as if disconnected in the next scMelee frame (cleared when seen)
         CFG_TEST_RULES = 1 << 6,  // tests: the online ruleset keeps the set rule's stocks and times
                                   // (short games; both machines must have written the same)
+        CFG_TEST_GONE = 1 << 7,   // tests: Debug.testGone* set SESSION's gone flags, and the
+                                  // in-match removal and elimination order also run in a local
+                                  // Versus match (a sync test)
     };
 
     struct Block {

@@ -1,6 +1,6 @@
 # Gameplay-only rollback: status
 
-Branch `gameplay-rollback` in the worktree `dolphin-gprb/` (off `rollback-fixes`, merged with `rollback-fixes` at `a1f9ec2685`, at `d36794a6e1` (the online client), at `ad474c0358` (GameBridge, recent codes, Qt session backend), and in Phase 8 with `c27636d256`, `4944245954` and `50e800b9d6`). Not pushed. Head: `7788a27738`. **Default region set: gp-v19** (Phase 8). **Merged into `rollback-fixes`** (`df44299556`, 2026-10-07), where the gameplay session is now the default online backend and starts matches from the game's own online CSS (Phase 7). Phase 9 (open issue 9, a race in the snapshot code) is on `rollback-fixes` at `001dd0b2df`.
+Branch `gameplay-rollback` in the worktree `dolphin-gprb/` (off `rollback-fixes`, merged with `rollback-fixes` at `a1f9ec2685`, at `d36794a6e1` (the online client), at `ad474c0358` (GameBridge, recent codes, Qt session backend), and in Phase 8 with `c27636d256`, `4944245954` and `50e800b9d6`). Not pushed. Head: `7788a27738`. **Default region set: gp-v19** (Phase 8); **gp-v21 since branch `nplayer-determinism`** (P+'s per-port records for all four ports, and the Tmp heap: `docs/nplayer/determinism.md`). **Merged into `rollback-fixes`** (`df44299556`, 2026-10-07), where the gameplay session is now the default online backend and starts matches from the game's own online CSS (Phase 7). Phase 9 (open issue 9, a race in the snapshot code) is on `rollback-fixes` at `001dd0b2df`.
 
 **The session model** (user decision):
 - Each player boots and uses the menus alone.

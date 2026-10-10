@@ -85,6 +85,10 @@ public:
     // waited for it (part of load_us). Without that wait the load read the base snapshot while the
     // job was writing it.
     u64 load_evict_waits = 0, load_evict_wait_us_max = 0;
+    // 64-byte granules a save copied (written since the previous save; in region mode only the
+    // set's) and a load restored (written since the target frame).
+    u64 save_granules_total = 0, save_granules_max = 0;
+    u64 load_granules_total = 0, load_granules_max = 0;
   };
   TimingStats GetTimingStats() const;
 
@@ -134,6 +138,8 @@ public:
   std::atomic<u64> m_stat_load_count{0}, m_stat_load_us_total{0}, m_stat_load_us_max{0};
   std::atomic<u64> m_stat_sync_count{0}, m_stat_sync_us_total{0}, m_stat_sync_us_max{0};
   std::atomic<u64> m_stat_evict_waits{0}, m_stat_evict_wait_us_max{0};
+  std::atomic<u64> m_stat_save_gran_total{0}, m_stat_save_gran_max{0};
+  std::atomic<u64> m_stat_load_gran_total{0}, m_stat_load_gran_max{0};
   mutable std::mutex m_sample_mutex;
   std::vector<SaveSample> m_save_samples;  // ring, SAVE_SAMPLE_RING entries once used
   u64 m_save_sample_next = 0;
