@@ -295,7 +295,9 @@ namespace PPOM {
         u8 _reserved[0x0D];
     };                    // 0x220
 
-    const int DEBUG_LOG = 32;
+    // The last MuMsg::printIndex calls (a ring). 16, not 32: the plugin's Syringe heap block has
+    // no room for more (docs/game-code.md, heap budget).
+    const int DEBUG_LOG = 16;
     struct PrintLog {
         u32 lr;           // caller of MuMsg::printIndex
         u32 msg;          // MuMsg*

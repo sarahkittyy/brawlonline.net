@@ -502,7 +502,7 @@ namespace OnlineMenu {
     // dump; docs/game-code.md §6); their values are saved on the way in and put back when the
     // menus load, as the set rule.
     static const u32 CODE_MENU = 0x804E0000, CODE_MENU_SIZE = 0x2520;
-    static const int CODE_MENU_LINES = 112;
+    static const int CODE_MENU_LINES = 96;   // P+ v3.2 has 85; the Syringe heap has no room for more
     static u32 s_codeMenuSaved[CODE_MENU_LINES];
     static int s_codeMenuSavedCount = -1;
     // The defaults as the menu file has them, read once at boot: a line's +0x10 is not always
