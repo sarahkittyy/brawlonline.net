@@ -104,7 +104,9 @@ class Player:
         return self.room("poll")
 
     def screen(self, name: str) -> None:
-        self.c.write_mem(self.b.local + ppom.L_SCREEN, bytes([ppom.SCREENS[name]]))
+        """LOCAL.screen as the room CSS reports it. The plugin writes its own screen every frame
+        (here: P+'s Versus CSS, offline), so the harness's value stands in for it in Dolphin."""
+        self.c.call("rooms_request", op="screen", screen=ppom.SCREENS[name])
 
     def lock(self, ready: bool, kind: int = 0xFF, costume: int = 0, game: int | None = None,
              stage: int = 0xFFFF) -> None:
@@ -151,7 +153,8 @@ class Player:
 
 
 def _boot(dolphin: Callable[..., DolphinInstance], name: str, be: OnlineBackend, user: OnlineUser,
-          before_launch: Callable[[Path], None] | None = None) -> Player:
+          before_launch: Callable[[Path], None] | None = None,
+          after_connect: Callable[[Any], None] | None = None) -> Player:
     if not PLUGIN.exists():
         pytest.skip(f"{PLUGIN} not built (game-code/build.sh)")
     ini = {"Online": {"UseDevServer": True, "MatchmakingPort": be.mm_port,
@@ -167,6 +170,8 @@ def _boot(dolphin: Callable[..., DolphinInstance], name: str, be: OnlineBackend,
         before_launch(d)
     inst.launch()
     inst.connect()
+    if after_connect:
+        after_connect(inst.client)
     p = Player(inst, user)
     p.c.online_session_backend("gameplay")
     _logged_in(inst, user)
@@ -502,9 +507,11 @@ def test_room_game_two_players(backend: OnlineBackend, dolphin: Callable[..., Do
     # The host leaves during the start: both room games end; ivan becomes host.
     a.room("leave")
     _wait(lambda: not b.rooms()["room_game"]["active"], 30, "ivan's room game to end")
+    # (mm says "waiting" once ivan's room-back is in, which can come after the host change.)
     v = b.until_view(lambda v: v["host"] == 1 and v["slots"][1]["bits"] & ppom.SLOT_HOST and
-                     not v["slots"][0]["bits"] & ppom.SLOT_TAKEN, "ivan host, alone")
-    assert v["game"] == 3 and v["status"] == 0, v
+                     not v["slots"][0]["bits"] & ppom.SLOT_TAKEN and v["status"] == 0,
+                     "ivan host, alone, waiting")
+    assert v["game"] == 3, v
     assert b.rooms()["connection"] == "online" and not a.rooms()["room_game"]["active"]
 
 
@@ -571,7 +578,10 @@ def test_launcher_join_waiting_at_start_up(backend: OnlineBackend,
             (user_dir / "Online" / "join-room.json").write_text(
                 json.dumps({"version": 1, "id": rid, "code": code, "createdAt": created}))
 
-        p = _boot(dolphin, "rooms-boot", backend, uo, before_launch=put_request)
+        # The game has not said where it is yet (a game at its boot): the harness holds the
+        # screen at "unknown" for the plugin, which reports its menus as soon as it is there.
+        p = _boot(dolphin, "rooms-boot", backend, uo, before_launch=put_request,
+                  after_connect=lambda c: c.call("rooms_request", op="screen", screen=0))
         _wait(lambda: p.rooms()["launch_pending"] == code, 30, "the request taken and kept")
         assert not (p.online_dir() / "join-room.json").exists()
         _to_versus_css(p)
