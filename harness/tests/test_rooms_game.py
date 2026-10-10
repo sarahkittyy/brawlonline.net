@@ -37,9 +37,9 @@ pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 ART = ROOT / "run" / "artifacts" / "game-code" / "rooms"
 CSS = "scSelctCharacter"
 
-# The keypad's letter keys in room-code mode (code_entry.cpp ROOM_KEYS), by (row, column).
-ROOM_KEYS = {(1, 1): "BC", (1, 2): "DF", (2, 0): "GH", (2, 1): "JKL", (2, 2): "MN", (3, 0): "PQRS",
-             (3, 1): "TV", (3, 2): "WXZ"}
+# The keypad's letter keys (every letter they show is taken in room-code mode), by (row, column).
+ROOM_KEYS = {(1, 1): "ABC", (1, 2): "DEF", (2, 0): "GHI", (2, 1): "JKL", (2, 2): "MNO", (3, 0): "PQRS",
+             (3, 1): "TUV", (3, 2): "WXYZ"}
 
 
 def _all(*fns: Callable[[], Any]) -> list[Any]:
@@ -417,3 +417,104 @@ def test_room_launcher_jump(backend: OnlineBackend, dolphin: Callable[..., Dolph
     a.steps("wait 10")
     a.shot("04-b-jumped-in")
     assert room_view(a)["slots"][1]["bits"] & ppom.SLOT_TAKEN
+
+
+SLOT_POS = 16.0 / 0.99   # a panel's model offset per slot (room_css.cpp SLOT_POS)
+
+
+def panel_offset(g: Game, area: int) -> float:
+    import struct
+    task = _u32(g, _u32(g, _u32(g, 0x805A0060) + 4) + 0x400)
+    a = _u32(g, task + 0x44 + 4 * area)
+    return struct.unpack(">f", g.c.read_mem(_u32(g, a + 0xB0) + 0x3C, 4))[0]
+
+
+def test_room_four_players(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                           gpu_backend: str) -> None:
+    """Four games: the host opens slots 3 and 4 with the hand, three players join by code, each
+    sees its own panel at its slot (panels in slot order on every screen), everyone readies, the
+    room starts a 4-player free-for-all under the gameplay session (P1 and P3 picked the same
+    character and costume: P3 plays the next costume, as P+'s Versus), three walk off, and all
+    four are back on the room's CSS for the next game."""
+    test = "four-players"
+    users = [backend.create_user(n, n[:4].upper()) for n in ("rfa", "rfb", "rfc", "rfd")]
+    gs = [_boot(dolphin, f"room4-{x}", backend, u, gpu_backend, test, "gameplay", artifacts=ART)
+          for x, u in zip("abcd", users)]
+    a = gs[0]
+    _all(*[g.to_main_menu for g in gs])
+    _all(*[g.to_online_page for g in gs])
+
+    code = create_room(a)
+    pick(a)
+    for slot in (2, 3):
+        hand_to(a, PANEL_X[slot], -10.0)
+        a.steps("tap A 8", "wait 30")
+        until_view(a, lambda v, s=slot: v["slots"][s]["bits"] & ppom.SLOT_OPEN, f"slot {slot + 1} open")
+    v = room_view(a)
+    assert not v["flags"] & ppom.RF_TEAMS, v   # a room starts as FFA
+    hand_to(a, -23.0, 10.5)
+    a.shot("03-four-slots-open")
+
+    _all(*[lambda g=g: to_join_room(g) for g in gs[1:]])
+    # P3 takes the host's character in the same (first) costume: P+'s Versus never shows two
+    # alike, so the match gives P3 the next free costume (online_match.cpp distinctCostumes).
+    for k, g in enumerate(gs[1:], 1):
+        pick(g, right=0 if k == 2 else 2 * k)
+    for g in gs:
+        B.write_rules(g.c, stocks=1, minutes=2, items_off=True)
+        ppom.allow_test_rules(g.c)
+    for k, g in enumerate(gs[1:], 1):
+        type_room_code(g, code)
+        vk = until_view(g, lambda v: v["flags"] & ppom.RF_IN, f"player {k + 1} in the room")
+        assert vk["local_port"] == k, vk
+    until_view(a, lambda v: all(s["bits"] & ppom.SLOT_TAKEN for s in v["slots"]), "four players")
+    for k, g in enumerate(gs):
+        g.steps("wait 60")
+        # each sees its own panel at its slot
+        assert abs(panel_offset(g, 0) - k * SLOT_POS) < 0.1, (g.name, panel_offset(g, 0))
+        g.shot("04-four-in-the-room")
+
+    game = room_view(a)["game"]
+    for g in gs:
+        g.steps("tap START 8", "wait 10")
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] in ("running", "error", "ended") for g in gs),
+                    240, "the room's game running on all four")
+    st = [online_set.gstatus(g.c) for g in gs]
+    assert all(s["phase"] == "running" for s in st), [(s["phase"], s.get("error")) for s in st]
+    assert [s["local_slot"] for s in st] == [0, 1, 2, 3], st
+    setups = [B.read_match_setup(g.c.read_mem) for g in gs]
+    assert all(x == setups[0] for x in setups), setups
+    pl = setups[0].players
+    assert pl[0].character == pl[2].character and pl[0].color != pl[2].color, setups[0]
+    assert all(sh["init"][:4] == [0, 0, 0, 0] for sh in [B.read_shades(g.c.read_mem) for g in gs])
+    time.sleep(8)
+    for g in gs:
+        g.shot("05-four-player-match")
+
+    # Players 2-4 walk off the stage; player 1 wins.
+    from ppharness import flows as F
+    import threading
+    def off(g: Game, port: int) -> None:
+        with contextlib.suppress(Exception):
+            F.fight([F.Seat(g.c, port, 0, g.name)], 60 * 60, mode="selfdestruct", seed=f"4p{port}",
+                    stop=lambda: online_set.gstatus(g.c)["phase"] != "running")
+    th = [threading.Thread(target=off, args=(g, k)) for k, g in enumerate(gs) if k > 0]
+    for t in th:
+        t.start()
+    for t in th:
+        t.join(300)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] != "running" for g in gs), 240, "the game to end")
+    st = [online_set.gstatus(g.c) for g in gs]
+    limit = min(s["current_frame"] for s in st) - online_set.CONFIRM_MARGIN
+    cks = [{r[0]: r[1] for r in g.c.call("gprb_checksums", since=0)["rows"] if r[0] <= limit} for g in gs]
+    common = sorted(set(cks[0]).intersection(*cks[1:]))
+    bad = [f for f in common if len({ck[f] for ck in cks}) != 1]
+    print(f"4 players: frames {[s['current_frame'] for s in st]}, end {[s['end_reason'] for s in st]}, "
+          f"rollbacks {[s['rollbacks'] for s in st]}, checksums compared {len(common)}, mismatches {len(bad)}")
+    assert common and not bad, (len(common), bad[:5])
+    _wait(lambda: all(g.scene() == CSS for g in gs), 180, "all back on the room's CSS")
+    for g in gs:
+        until_view(g, lambda v: v["flags"] & ppom.RF_IN and v["status"] == 0 and v["game"] == game + 1,
+                   "the room waiting for its next game", timeout=60)
+        g.steps("wait 60")
+        g.shot("06-back-in-the-room")

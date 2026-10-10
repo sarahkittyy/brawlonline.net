@@ -39,12 +39,14 @@
 // Recent codes (Slippi TextEntryScreen/AutoComplete.s and friends, 0xBE FETCH_CODE_SUGGESTION):
 // see the "Recent codes" block below.
 //
-// Room-code mode (Join Room, docs/design/rooms.md #4, #5): a room code is 4 letters of
-// BCDFGHJKLMNPQRSTVWXZ (no vowels, no Y). Only the letters page; each letter key cycles through
-// its allowed letters only (ABC -> B C, DEF -> D F, GHI -> G H, JKL, MNO -> M N, PQRS, TUV -> T V,
-// WXYZ -> W X Z); the '#'/symbol keys (their labels hidden), a fifth letter and OK before four
-// letters are refused with the error sound; no recent codes (room codes are throwaway, rooms.md
-// §2); the placeholder is "KFQB".
+// Room-code mode (Join Room, docs/design/rooms.md #4, #5): a room code is 4 characters. The
+// server's codes are letters of BCDFGHJKLMNPQRSTVWXZ only, but the keypad takes every letter and
+// digit it shows (both pages, the keys as printed: players found keys that show letters and then
+// refuse them confusing, staging feedback 2026-10-10); a code no room has comes back "Room not
+// found." from Dolphin (Rooms.cpp, NormalizeRoomCode). The symbol keys (the '#' and the
+// punctuation keys; their labels hidden), a fifth character and OK before four are refused with
+// the error sound; no recent codes (room codes are throwaway, rooms.md §2); the placeholder is
+// "KFQB".
 //
 // The keypad's state (MuSelctChrNameEntry, 0x94 bytes, as far as we use it):
 //   +0x00 active  +0x04 text buffer (UTF-8)  +0x08 max characters
@@ -112,20 +114,6 @@ namespace CodeEntry {
         NULL,                                             // !?&%$  (disabled, unchanged)
         NULL,                                             // .,/~   (disabled, unchanged)
     };
-    // Room codes: the letters of BCDFGHJKLMNPQRSTVWXZ on their keys (server/crates/common rooms.rs).
-    static const char* const ROOM_KEYS[11] = {
-        NULL,                                             // the symbols key: refused
-        "\xEF\xBC\xA2\xEF\xBC\xA3",                         // ＢＣ
-        "\xEF\xBC\xA4\xEF\xBC\xA6",                         // ＤＦ
-        "\xEF\xBC\xA7\xEF\xBC\xA8",                         // ＧＨ
-        "\xEF\xBC\xAA\xEF\xBC\xAB\xEF\xBC\xAC",          // ＪＫＬ
-        "\xEF\xBC\xAD\xEF\xBC\xAE",                         // ＭＮ
-        "\xEF\xBC\xB0\xEF\xBC\xB1\xEF\xBC\xB2\xEF\xBC\xB3",  // ＰＱＲＳ
-        "\xEF\xBC\xB4\xEF\xBC\xB6",                         // ＴＶ
-        "\xEF\xBC\xB7\xEF\xBC\xB8\xEF\xBC\xBA",          // ＷＸＺ
-        NULL,
-        NULL,
-    };
     const int ROOM_CODE_CHARS = 4;
 
     // helper+0x40 is the highlighted key: 0 delete, 1-11 character keys, 0xC page, 0xD OK.
@@ -161,9 +149,12 @@ namespace CodeEntry {
     {
         if (key == KEY_ERASE) return true;
         if (s_room) {
-            if (key == KEY_OK) return c.letters == ROOM_CODE_CHARS && !c.hash;
-            if (page != PAGE_ALPHA || key < 2 || key > 9) return false;
-            return cycles || c.letters < ROOM_CODE_CHARS;
+            if (key == KEY_OK) return c.len == ROOM_CODE_CHARS && !c.hash;
+            if (key == KEY_PAGE) return true;
+            if (page == PAGE_ALPHA && (key < 2 || key > 9)) return false;   // '#', !?&%$, .,/~
+            if (page == PAGE_DIGITS && (key < 1 || key > 11 || key == 10)) return false;   // -+x=
+            if (page != PAGE_ALPHA && page != PAGE_DIGITS) return false;
+            return cycles || c.len < ROOM_CODE_CHARS;
         }
         if (key == KEY_OK) return c.len > 0;
         if (key == KEY_PAGE || key < 1 || key > 11) return false;
@@ -200,7 +191,7 @@ namespace CodeEntry {
 
     static void patchKeys(u8* helper)
     {
-        const char* const* keys = s_room ? ROOM_KEYS : ALPHA_KEYS;
+        const char* const* keys = ALPHA_KEYS;
         for (int i = 0; i < 11; i++) {
             s_savedKeys[i] = KEYS[PAGE_ALPHA * 11 + i];
             if (keys[i]) KEYS[PAGE_ALPHA * 11 + i].chars = keys[i];
@@ -209,7 +200,7 @@ namespace CodeEntry {
         u32* pages = (u32*)(helper + 0x24);
         pages[0] = PAGE_ALPHA;
         pages[1] = PAGE_DIGITS;
-        *(u32*)(helper + 0x38) = s_room ? 1 : 2;    // page count (room codes: letters only)
+        *(u32*)(helper + 0x38) = 2;    // page count
         *(u32*)(helper + 0x3C) = 0;    // current page index
     }
 
@@ -522,7 +513,7 @@ namespace CodeEntry {
         u32* flags;
         u32 old;
     };
-    static VisSave s_vis[8];
+    static VisSave s_vis[20];
     static int s_visCount = 0;
 
     static bool nameIs(const char* s, const char* want)
@@ -587,56 +578,75 @@ namespace CodeEntry {
     typedef void (*MsgSetFaceFn)(MuMsg*, u32 window, u32 face);
     typedef void (*MsgDeleteFn)(MuMsg*, int);   // MuMsg's destructor (0x800B8A0C), 1 = free it
     typedef void (*MessageAttachFn)(void* message, u32 idx, void* scnMdl, const char* node, u8, int, float);
-    static MuMsg* s_hashMsg = NULL;
-    static u8* s_hashMdl = NULL;
-    static u32 s_hashOldCallback = 0;
-    static u32 s_hashCallback = 0;
+    // Our labels (the '#' key's): each a MuMsg of one window on its key's label bone. attachMsgBuf chains each message into the page
+    // model's draw callback (+0xD4): the callback from before the first is put back when they
+    // go.
+    static const int MAX_LABELS = 9;
+    static MuMsg* s_lblMsg[MAX_LABELS];
+    static int s_lblCount = 0;
+    static u8* s_lblMdl = NULL;
+    static u32 s_lblOldCallback = 0;
+    static u32 s_lblCallback = 0;
     static const char* const HASH_LABEL = "\xEF\xBC\x83";   // ＃
 
     void forgetLabels()
     {
-        s_hashMsg = NULL;   // the CSS (and its heap) is gone
-        s_hashMdl = NULL;
+        s_lblCount = 0;   // the CSS (and its heap) is gone
+        s_lblMdl = NULL;
     }
 
-    static void hideHashLabel()
+    static void hideOurLabels()
     {
-        if (!s_hashMsg) return;
-        if (s_hashMdl && *(u32*)(s_hashMdl + 0xD4) == s_hashCallback) *(u32*)(s_hashMdl + 0xD4) = s_hashOldCallback;
-        ((MsgDeleteFn)0x800B8A0C)(s_hashMsg, 1);
-        s_hashMsg = NULL;
-        s_hashMdl = NULL;
+        if (!s_lblCount) return;
+        if (s_lblMdl && *(u32*)(s_lblMdl + 0xD4) == s_lblCallback) *(u32*)(s_lblMdl + 0xD4) = s_lblOldCallback;
+        for (int i = 0; i < s_lblCount; i++) ((MsgDeleteFn)0x800B8A0C)(s_lblMsg[i], 1);
+        s_lblCount = 0;
+        s_lblMdl = NULL;
+    }
+
+    // A label on `bone` of the page model `mdl`, `text` in the game's font, `scale` the size
+    // (1.3: the size of Brawl's own printed one-character labels).
+    static void addLabel(u8* mdl, const char* bone, const char* text, float scale, float halfWidth)
+    {
+        if (s_lblCount >= MAX_LABELS) return;
+        if (s_lblCount == 0) {
+            s_lblMdl = mdl;
+            s_lblOldCallback = *(u32*)(mdl + 0xD4);
+        }
+        MuMsg* m = ((MsgCreateFn)0x800B8930)(3, 0x2A, 0x2B);
+        if (!m) return;
+        ((MsgAllocFn)0x800B8B08)(m, 0x40, 1);
+        ((MessageAttachFn)0x8006B518)(m->m_message, 0, mdl, bone, 0, 3, *(float*)0x806A0D64);
+        s_lblCallback = *(u32*)(mdl + 0xD4);
+        u8* ws = *(u8**)((u8*)m + 0xC);
+        ((MsgInitWsFn)0x800B8BE0)(m, ws);
+        float* rect = (float*)(ws + 4);   // the character select's one-character windows
+        rect[0] = -4.0f - halfWidth;      // (-16..16, 4 to the left: centred on the key)
+        rect[1] = 12.8f;
+        rect[2] = -4.0f + halfWidth;
+        rect[3] = -16.0f;
+        float* sc = (float*)(ws + 0x30);
+        sc[0] = sc[1] = scale;
+        ((MsgSetFaceFn)0x800B9488)(m, 0, 1);   // the face the CSS gives its windows
+        m->setAlignMode(0, MuMsg::Align_Center);
+        m->setFontColor(0, 0x30, 0x30, 0x30, 0xFF);   // as the keys' printed labels
+        m->printf(0, "%s", text);
+        s_lblMsg[s_lblCount++] = m;
+    }
+
+    static u8* alphaModel(u8* helper)
+    {
+        u8* alpha = *(u8**)(helper + 0x48 + 4 * PAGE_ALPHA);
+        u8* mdl = alpha ? *(u8**)(alpha + 0x10) : NULL;
+        return isPtr((u32)mdl) ? mdl : NULL;
     }
 
     static void showHashLabel(u8* helper)
     {
-        u8* alpha = *(u8**)(helper + 0x48 + 4 * PAGE_ALPHA);
-        u8* mdl = alpha ? *(u8**)(alpha + 0x10) : NULL;
-        if (!isPtr((u32)mdl)) return;
-        hideHashLabel();
-        {
-            MuMsg* m = ((MsgCreateFn)0x800B8930)(3, 0x2A, 0x2B);
-            if (!m) return;
-            ((MsgAllocFn)0x800B8B08)(m, 0x40, 1);
-            s_hashOldCallback = *(u32*)(mdl + 0xD4);
-            ((MessageAttachFn)0x8006B518)(m->m_message, 0, mdl, "pPlane65", 0, 3, *(float*)0x806A0D64);
-            s_hashCallback = *(u32*)(mdl + 0xD4);
-            u8* ws = *(u8**)((u8*)m + 0xC);
-            ((MsgInitWsFn)0x800B8BE0)(m, ws);
-            float* rect = (float*)(ws + 4);   // the character select's one-character windows
-            rect[0] = -20.0f;                 // (-16..16, 4 to the left: centred on the key)
-            rect[1] = 12.8f;
-            rect[2] = 12.0f;
-            rect[3] = -16.0f;
-            float* scale = (float*)(ws + 0x30);    // the size of the keys' printed labels
-            scale[0] = scale[1] = 1.3f;
-            ((MsgSetFaceFn)0x800B9488)(m, 0, 1);   // the face the CSS gives its windows
-            m->setAlignMode(0, MuMsg::Align_Center);
-            m->setFontColor(0, 0x30, 0x30, 0x30, 0xFF);   // as the keys' printed labels
-            s_hashMsg = m;
-            s_hashMdl = mdl;
-        }
-        s_hashMsg->printf(0, "%s", HASH_LABEL);
+        u8* mdl = alphaModel(helper);
+        if (!mdl) return;
+        hideOurLabels();
+        addLabel(mdl, "pPlane65", HASH_LABEL, 1.3f, 16.0f);
     }
 
     static void patchLabels(u8* helper)
@@ -649,9 +659,9 @@ namespace CodeEntry {
         hideLabel(alpha, "pPlane73");   // .,/~
         hideLabel(digits, "pPlane72");  // -+x=
         if (s_room) {
-            // Room codes: the page key's arrows and the Random tab as below; no '#'.
+            // Room codes: no '#' (its key stays blank); the page key works (letters, digits),
+            // so its arrows stay; the Random tab goes as below.
             u8* b = *(u8**)(helper + 0x44);
-            hideLabel(b, "kirikae");
             hideLabel(b, "randam");
             hideLabel(b, "zz_Gc");
             return;
@@ -705,7 +715,7 @@ namespace CodeEntry {
         if (s_helper && area && area + 0x370 == s_helper) {
             // The CSS is still there: its resources and our '#' window too.
             restoreLabels();
-            hideHashLabel();
+            hideOurLabels();
         } else {
             s_visCount = 0;
             forgetLabels();
