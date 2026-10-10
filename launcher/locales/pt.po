@@ -7,13 +7,13 @@ msgstr ""
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 "x-generator: i18next-auto-keys CLI\n"
 "Language: pt-BR\n"
-"PO-Revision-Date: 2026-10-10T00:34:36.655Z\n"
+"PO-Revision-Date: 2026-10-10T05:07:00.190Z\n"
 
 #: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:4:19
 msgid "#"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:9:23
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:12:23
 msgid "1v1"
 msgstr ""
 
@@ -296,6 +296,10 @@ msgstr ""
 msgid "Create an account"
 msgstr "Criar uma conta"
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:9:23
+msgid "Create one in game:"
+msgstr ""
+
 #: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:5:27
 msgid "Crunching numbers..."
 msgstr "Processando..."
@@ -463,7 +467,7 @@ msgstr "Endereço IP Externo"
 msgid "Extracting Project+"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:10:18
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:13:18
 msgid "FFA"
 msgstr ""
 
@@ -520,7 +524,7 @@ msgstr "Falha ao remover conta"
 msgid "Failed to switch account"
 msgstr "Falha ao trocar conta"
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:20:26
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:23:26
 msgid "Finish your current game first."
 msgstr ""
 
@@ -536,7 +540,7 @@ msgid ""
 "and 4 above, at the start of each game."
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:14:15
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:17:15
 msgid "Full"
 msgstr ""
 
@@ -613,7 +617,7 @@ msgstr ""
 "Se a falha persistir, você pode testar isso no aplicativo de terminal do "
 "seu computador. Veja abaixo:"
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:13:23
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:16:23
 msgid "In game"
 msgstr ""
 
@@ -662,15 +666,15 @@ msgstr "Endereço IP inválido"
 msgid "Invalid code"
 msgstr "Código inválido"
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:15:15
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:18:15
 msgid "Join"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:17:22
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:20:22
 msgid "Join this room"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:18:28
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:21:28
 msgid "Join this room. You'll wait in it until the game ends."
 msgstr ""
 
@@ -850,9 +854,7 @@ msgid "No network connection"
 msgstr "Sem conexão de rede"
 
 #: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:8:18
-msgid ""
-"No public rooms right now. Create one in game: Online > With Friends > "
-"Create Room."
+msgid "No public rooms right now."
 msgstr ""
 
 #: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:5:26
@@ -894,6 +896,11 @@ msgstr ""
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:5:18
 msgid "Offline"
 msgstr "Offline"
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:11:27
+#. The in-game menu path, kept on one line.
+msgid "Online > With Friends > Create Room"
+msgstr ""
 
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:7:35
 msgid "Online activation required"
@@ -1205,7 +1212,7 @@ msgstr "Algumas funcionalidades do Launcher e do Dolphin estarão indisponíveis
 msgid "Something went wrong."
 msgstr "Algo deu errado."
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:22:26
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:25:26
 msgid "Starting the game. It will open the room."
 msgstr ""
 
@@ -1226,7 +1233,7 @@ msgstr "NAT Simétrico"
 msgid "Target Test"
 msgstr "Target Test"
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:11:20
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:14:20
 msgid "Teams"
 msgstr ""
 
@@ -1275,7 +1282,7 @@ msgstr ""
 "Este é o resultado ideal. Também conhecido como NAT 'fácil', 'cone "
 "completo' ou 'aberto'."
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:19:22
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:22:22
 msgid "This room is full."
 msgstr ""
 
@@ -1426,7 +1433,7 @@ msgstr ""
 msgid "W-L"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:12:24
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:15:24
 msgid "Waiting"
 msgstr ""
 
@@ -1481,11 +1488,11 @@ msgstr ""
 "Seu código de conexão é usado para jogadores se conectarem diretamente com "
 "você."
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:23:22
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:26:22
 msgid "Your game can't join a room right now."
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:21:24
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:24:24
 msgid "Your game is going to the room."
 msgstr ""
 
