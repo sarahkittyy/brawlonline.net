@@ -34,7 +34,7 @@ export interface SettingsSchema {
   autoUpdateLauncher: boolean;
 
   // Online: the input delay of the player's own inputs, 0 = automatic (from the ping, per game),
-  // else 2-4 frames. Synced to Dolphin.ini `[Online] InputDelay`.
+  // else 1-4 frames. Synced to Dolphin.ini `[Online] InputDelay`.
   inputDelay: number;
 
   // Dolphin settings: the executable of our Dolphin build (null = default, see dolphin/install/paths.ts)
