@@ -3,6 +3,7 @@
 
 #include "Core/PowerPC/Jit64Common/EmuCodeBlock.h"
 
+#include <array>
 #include <functional>
 
 #include "Common/Assert.h"
@@ -149,49 +150,70 @@ static void FailedDirtyBitmapBoundsCheck()
 }
 #endif
 
-void EmuCodeBlock::EmitJITDirtyBitmapUpdate(X64Reg reg_addr, s32 offset)
+void EmuCodeBlock::EmitJITDirtyBitmapUpdate(X64Reg reg_addr, s32 offset, u32 size,
+                                            BitSet32 registers_in_use)
 {
-  // dirty_bitmap[((effective_addr + offset) & 0x1FFFFFFF) >> ROLLBACK_PAGE_SHIFT] = 1
+  // dirty_bitmap[((effective_addr + offset) & 0x1FFFFFFF) >> ROLLBACK_PAGE_SHIFT] = 1, for the
+  // store's first and last byte (a store can straddle two granules).
+  //
+  // Two temporaries hold the bitmap base and the granule index. As in CheckIfSafeAddress, a
+  // scratch register the caller does not list in registers_in_use is free (the slow path's call
+  // clobbers it anyway), so a typical store marks without any stack traffic; only registers the
+  // caller still needs are saved around the update.
+  registers_in_use[reg_addr] = true;
+  constexpr std::array<X64Reg, 3> candidates{RSCRATCH, RSCRATCH2, RSCRATCH_EXTRA};
+  std::array<X64Reg, 2> temps{};
+  std::size_t temp_count = 0;
+  for (const bool in_use : {false, true})
+  {
+    for (const X64Reg reg : candidates)
+    {
+      if (temp_count < temps.size() && reg != reg_addr && registers_in_use[reg] == in_use)
+        temps[temp_count++] = reg;
+    }
+  }
+  const X64Reg base = temps[0];
+  const X64Reg index = temps[1];
+  for (const X64Reg reg : temps)
+  {
+    if (registers_in_use[reg])
+      PUSH(reg);
+  }
 
-  PUSH(RSCRATCH);   // RAX
-  PUSH(RSCRATCH2);  // RDX
-
-  if (reg_addr != RSCRATCH)
-    MOV(32, R(RSCRATCH), R(reg_addr));
-  if (offset != 0)
-    ADD(32, R(RSCRATCH), Imm32(static_cast<u32>(offset)));
-
-  AND(32, R(RSCRATCH), Imm32(ROLLBACK_PHYSICAL_ADDRESS_MASK));
-  SHR(32, R(RSCRATCH), Imm8(::ROLLBACK_PAGE_SHIFT));
-
+  MOV(64, R(base), Imm64(reinterpret_cast<u64>(Rollback::JITDirtyBitmap::Get().entries)));
+  const auto mark = [&](s32 byte_offset) {
+    if (byte_offset != 0)
+      LEA(32, index, MDisp(reg_addr, byte_offset));
+    else
+      MOV(32, R(index), R(reg_addr));
+    AND(32, R(index), Imm32(ROLLBACK_PHYSICAL_ADDRESS_MASK));
+    SHR(32, R(index), Imm8(::ROLLBACK_PAGE_SHIFT));
 #if ROLLBACK_VALIDATE
-  CMP(32, R(RSCRATCH), Imm32(static_cast<u32>(Rollback::JITDirtyBitmap::ENTRY_COUNT)));
-  FixupBranch bounds_ok = J_CC(CC_B, Jump::Near);
-
-  ABI_PushRegistersAndAdjustStack({}, 0);
-  ABI_CallFunction(FailedDirtyBitmapBoundsCheck);
-  ABI_PopRegistersAndAdjustStack({}, 0);
-  FixupBranch skip = J(Jump::Near);
-
-  SetJumpTarget(bounds_ok);
+    CMP(32, R(index), Imm32(static_cast<u32>(Rollback::JITDirtyBitmap::ENTRY_COUNT)));
+    FixupBranch bounds_ok = J_CC(CC_B, Jump::Near);
+    ABI_PushRegistersAndAdjustStack({}, 0);
+    ABI_CallFunction(FailedDirtyBitmapBoundsCheck);
+    ABI_PopRegistersAndAdjustStack({}, 0);
+    SetJumpTarget(bounds_ok);
 #endif
-  MOV(64, R(RSCRATCH2), Imm64(reinterpret_cast<u64>(Rollback::JITDirtyBitmap::Get().entries)));
-  // the actual bitmap update store
-  MOV(8, MComplex(RSCRATCH2, RSCRATCH, SCALE_1, 0), Imm8(1));
+    MOV(8, MComplex(base, index, SCALE_1, 0), Imm8(1));
+  };
+  mark(offset);
+  if (size > 1)
+    mark(offset + static_cast<s32>(size) - 1);
 
-#if ROLLBACK_VALIDATE
-  SetJumpTarget(skip);
-#endif
-
-  POP(RSCRATCH2);
-  POP(RSCRATCH);
+  for (auto reg = temps.rbegin(); reg != temps.rend(); ++reg)
+  {
+    if (registers_in_use[*reg])
+      POP(*reg);
+  }
 }
 void EmuCodeBlock::UnsafeWriteRegToReg(OpArg reg_value, X64Reg reg_addr, int accessSize, s32 offset,
-                                       bool swap, MovInfo* info)
+                                       bool swap, MovInfo* info, BitSet32 registers_in_use)
 {
-  EmitJITDirtyBitmapUpdate(reg_addr, offset);
-  if (accessSize > 8)
-    EmitJITDirtyBitmapUpdate(reg_addr, offset + (accessSize >> 3) - 1);
+  if (reg_value.IsSimpleReg())
+    registers_in_use[reg_value.GetSimpleReg()] = true;
+  EmitJITDirtyBitmapUpdate(reg_addr, offset, static_cast<u32>(accessSize >> 3), registers_in_use);
 
   if (info)
   {
@@ -217,9 +239,10 @@ void EmuCodeBlock::UnsafeWriteRegToReg(OpArg reg_value, X64Reg reg_addr, int acc
 }
 
 void EmuCodeBlock::UnsafeWriteRegToReg(Gen::X64Reg reg_value, Gen::X64Reg reg_addr, int accessSize,
-                                       s32 offset, bool swap, Gen::MovInfo* info)
+                                       s32 offset, bool swap, Gen::MovInfo* info,
+                                       BitSet32 registers_in_use)
 {
-  UnsafeWriteRegToReg(R(reg_value), reg_addr, accessSize, offset, swap, info);
+  UnsafeWriteRegToReg(R(reg_value), reg_addr, accessSize, offset, swap, info, registers_in_use);
 }
 
 bool EmuCodeBlock::UnsafeLoadToReg(X64Reg reg_value, OpArg opAddress, int accessSize, s32 offset,
@@ -561,7 +584,7 @@ void EmuCodeBlock::SafeWriteRegToReg(OpArg reg_value, X64Reg reg_addr, int acces
   {
     u8* backpatchStart = GetWritableCodePtr();
     MovInfo mov;
-    UnsafeWriteRegToReg(reg_value, reg_addr, accessSize, offset, swap, &mov);
+    UnsafeWriteRegToReg(reg_value, reg_addr, accessSize, offset, swap, &mov, registersInUse);
     TrampolineInfo& info = m_back_patch_info[mov.address];
     info.pc = js.compilerPC;
     info.nonAtomicSwapStoreSrc = mov.nonAtomicSwapStore ? mov.nonAtomicSwapStoreSrc : INVALID_REG;
@@ -607,7 +630,7 @@ void EmuCodeBlock::SafeWriteRegToReg(OpArg reg_value, X64Reg reg_addr, int acces
   if (fast_check_address)
   {
     FixupBranch slow = CheckIfSafeAddress(reg_value, reg_addr, registersInUse);
-    UnsafeWriteRegToReg(reg_value, reg_addr, accessSize, 0, swap);
+    UnsafeWriteRegToReg(reg_value, reg_addr, accessSize, 0, swap, nullptr, registersInUse);
     if (m_far_code.Enabled())
       SwitchToFarCode();
     else
@@ -738,23 +761,24 @@ bool EmuCodeBlock::WriteToConstAddress(int accessSize, OpArg arg, u32 address,
   }
 }
 
-void EmuCodeBlock::EmitJITDirtyBitmapUpdateConst(u32 address, int accessSize)
+void EmuCodeBlock::EmitJITDirtyBitmapUpdateConst(u32 address, int accessSize, const OpArg& value)
 {
   // Constant-address variant of EmitJITDirtyBitmapUpdate: the granule is known at compile time.
+  // RSCRATCH2 is free unless it holds the value being stored.
   const u32 first = (address & ROLLBACK_PHYSICAL_ADDRESS_MASK) >> ::ROLLBACK_PAGE_SHIFT;
   const u32 last =
       ((address + (accessSize >> 3) - 1) & ROLLBACK_PHYSICAL_ADDRESS_MASK) >> ::ROLLBACK_PAGE_SHIFT;
   u8* const entries = Rollback::JITDirtyBitmap::Get().entries;
 
-  PUSH(RSCRATCH2);
-  MOV(64, R(RSCRATCH2), Imm64(reinterpret_cast<u64>(entries + first)));
-  MOV(8, MatR(RSCRATCH2), Imm8(1));
+  const bool save = value.IsSimpleReg(RSCRATCH2);
+  if (save)
+    PUSH(RSCRATCH2);
+  MOV(64, R(RSCRATCH2), Imm64(reinterpret_cast<u64>(entries)));
+  MOV(8, MDisp(RSCRATCH2, static_cast<s32>(first)), Imm8(1));
   if (last != first)
-  {
-    MOV(64, R(RSCRATCH2), Imm64(reinterpret_cast<u64>(entries + last)));
-    MOV(8, MatR(RSCRATCH2), Imm8(1));
-  }
-  POP(RSCRATCH2);
+    MOV(8, MDisp(RSCRATCH2, static_cast<s32>(last)), Imm8(1));
+  if (save)
+    POP(RSCRATCH2);
 }
 
 void EmuCodeBlock::WriteToConstRamAddress(int accessSize, OpArg arg, u32 address, bool swap)
@@ -763,7 +787,7 @@ void EmuCodeBlock::WriteToConstRamAddress(int accessSize, OpArg arg, u32 address
   // this path rather than UnsafeWriteRegToReg, so they need their own rollback dirty marking;
   // without it, writes to the game's .bss/.sbss globals were missing from snapshots and survived
   // loads.
-  EmitJITDirtyBitmapUpdateConst(address, accessSize);
+  EmitJITDirtyBitmapUpdateConst(address, accessSize, arg);
 
   X64Reg reg;
   if (arg.IsImm())
