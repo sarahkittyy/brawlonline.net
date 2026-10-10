@@ -865,6 +865,70 @@ def test_pause_quit_in_a_direct_match(backend: OnlineBackend, dolphin: Callable[
             sim.stop()
 
 
+@pytest.mark.slow
+@pytest.mark.parametrize("preset", ["lan", "bad_wifi"])
+def test_desync_ends_the_game_on_both(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                      gpu_backend: str, preset: str) -> None:
+    """The two machines' game states come apart in the middle of a game (here: A's P1 damage
+    changed on A only). Before, the session only logged the desync and played on: the machines
+    showed different games, and when one reached game set the other waited for inputs that
+    never came until it dropped the peer (a real match was stuck that way). Now, as Slippi's
+    hard desync: the first desync GekkoNet reports ends the game on both machines (the finder
+    also tells the peer), each plays the error sound and shows DESYNC DETECTED, the game ends
+    without "GAME!" and with no winner, and both go back to the CSS, still connected, at the
+    next game. Screenshots: run/artifacts/game-bridge/gameplay-desync-<preset>/."""
+    sims, inis = _p2p_through_netsim(preset) if preset != "lan" else ([], (None, None))
+    try:
+        _desync(backend, dolphin, gpu_backend, preset, inis)
+    finally:
+        for sim in sims:
+            sim.stop()
+
+
+def _p1_damage_addr(g: Game) -> int:
+    m = B.Mem(g.c.read_mem)
+    entries = m.ptr(B.FT_ENTRY_MANAGER)
+    return m.chain(entries + B.FTE_OWNER, B.OWNER_DATA) + B.OWNER_DAMAGE
+
+
+def _desync(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str,
+            preset: str, inis: tuple[Any, Any]) -> None:
+    a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, f"gameplay-desync-{preset}",
+                                     ("rosa", "sven"), stocks=4, dolphin_ini=inis)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)), 240,
+                    "the match to run on both")
+    walk = [PadInput(main=(40, 128), hold=7), PadInput(main=(216, 128), hold=7)]
+    b.c.pad_script(0, walk * 80)
+    a.steps("wait 240")
+    assert all(not online_set.gstatus(g.c)["desyncs_detected"] for g in (a, b))
+    # A's P1 takes 77% on A only (a few times: a rollback may load a state from before a write).
+    for _ in range(6):
+        a.c.write_mem(_p1_damage_addr(a), struct.pack(">f", 77.0))
+        a.steps("wait 5")
+    online_set.wait(lambda: all(g.debug_scratch()[10] & 0x100000 for g in (a, b)), 30,
+                    "DESYNC DETECTED on both")
+    for g in (a, b):
+        g.shot("01-desync-detected")
+        assert online_set.local(g.c)["desynced"] == 1, (g.name, online_set.local(g.c))
+    online_set.wait(lambda: all(online_set.scene(g.c) == online_set.CSS for g in (a, b)), 45,
+                    "both back on the CSS")
+    a.steps("wait 60")
+    for g in (a, b):
+        g.shot("02-back-on-css")
+    ends = [online_set.gstatus(g.c) for g in (a, b)]
+    print("end", [(s["end_reason"], s["desyncs_detected"], s["current_frame"]) for s in ends])
+    assert [s["end_reason"] for s in ends] == ["desync", "desync"], ends
+    for g in (a, b):
+        # No "GAME!": the plugin ended the match itself (0x20000), after DESYNC DETECTED.
+        assert g.debug_scratch()[10] & 0x120000 == 0x120000, hex(g.debug_scratch()[10])
+        st = online_set.gstatus(g.c)
+        assert st["phase"] == "connected" and not st["disconnected"], (g.name, st["phase"], st.get("error"))
+        lo, se = online_set.local(g.c), online_set.session(g.c)
+        assert lo["state"] == 2 and not lo["disconnected"] and not lo["desynced"], (g.name, lo)
+        assert se["game"] == 2 and se["last_winner"] == 0xFF, (g.name, se)
+        assert g.bridge().get("osd_disconnects", 0) == 0, g.bridge()
+
+
 def _pause_quit(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str,
                 preset: str, inis: tuple[Any, Any]) -> None:
     a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, f"gameplay-lras-{preset}",

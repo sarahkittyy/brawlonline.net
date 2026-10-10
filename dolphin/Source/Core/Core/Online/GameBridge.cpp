@@ -60,6 +60,8 @@ constexpr u32 L_SEQ = 0x00, L_STATE = 0x04, L_LOCAL_PORT = 0x05, L_REMOTE_READY 
 constexpr u32 L_OWN = 0x40;
 // Game: 1 once it draws DISCONNECTED in the match HUD.
 constexpr u32 L_HUD_DISCONNECTED = 0x7C;
+// Dolphin: 1 once the session ended the match on a desync (the game shows DESYNC DETECTED).
+constexpr u32 L_DESYNCED = 0x7D;
 // How long the game gets to show DISCONNECTED (it does so on the frame it sees `disconnected`).
 constexpr int HUD_WAIT_FRAMES = 30;
 // LockIn (game-written): seq u32, ready, cssChar, charKind, costume, stagePick u16, asl, game
@@ -837,6 +839,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   // Keep the game's lock-in as it is.
   for (u32 i = L_LOCK; i < LOCAL_SIZE; ++i)
     local[i] = R8(guard, loc.local + i);
+  local[L_DESYNCED] = lobby.desynced ? 1 : 0;
   WriteBlock(guard, loc.local, local, &s_local_written, &s_local_seq);
 
   // SESSION: never while a match runs, so it is the same on both machines for the whole match.
