@@ -98,17 +98,20 @@ DOL_SECTIONS: Tuple[Tuple[str, int, int], ...] = (
 def make_instance(name: str, *, cpu_thread: bool = False, rtc: Optional[int] = FIXED_RTC, video: str = "Null",
                   gpu_determinism: Optional[str] = None, keep: bool = False,
                   dolphin_ini: Optional[Dict[str, Dict[str, Any]]] = None,
-                  controllers: Sequence[int] = (0, 1)) -> DolphinInstance:
+                  controllers: Sequence[int] = (0, 1), config: Sequence[str] = (),
+                  platform: str = "headless") -> DolphinInstance:
     """``controllers``: the ports with a standard controller (the others have none). 3- and
-    4-player matches need (0, 1, 2) / (0, 1, 2, 3)."""
-    args = []
+    4-player matches need (0, 1, 2) / (0, 1, 2, 3). ``config``: extra ``System.Section.Key=Value``
+    overrides (Dolphin's ``-C``). ``platform``: Dolphin's ``-p`` (headless renders but never
+    presents; win32/x11 show a window and present for real)."""
+    args = list(config)
     if rtc is not None:
         args += ["Dolphin.Core.EnableCustomRTC=True", f"Dolphin.Core.CustomRTCValue={rtc:#x}"]
     cfg_kw: Dict[str, Any] = {"dolphin_ini": dolphin_ini} if dolphin_ini else {}
     cfg_kw["standard_controllers"] = tuple(controllers)
     inst = DolphinInstance(name, config=InstanceConfig(cpu_thread=cpu_thread, video_backend=video, config_args=args,
                                                        **cfg_kw),
-                           keep=keep, connect_timeout=120)
+                           keep=keep, connect_timeout=120, platform=platform)
     inst.create()
     for fname in (LAUNCHER_INI, "RSBE01.ini"):
         p = inst.user_dir / "GameSettings" / fname

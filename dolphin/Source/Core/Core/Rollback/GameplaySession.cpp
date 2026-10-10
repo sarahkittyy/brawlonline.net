@@ -2178,6 +2178,7 @@ void EndRunning(Core::System& system, const std::string& reason)
   ct.SetRollbackAudioWaits(false);
   ct.SetRollbackSpeedAdjustment(1.0);
   system.GetFifo().SetRollbackSessionDeterminism(false);
+  system.GetCoreTiming().SetPresentPacing(false);
   s.resim_pass = false;
   s.end_reason = reason;
   if (s.mode == Mode::Network)
@@ -2581,6 +2582,11 @@ std::string NetStatsLine(const State::NetStats& w)
     const double sd = std::sqrt(std::max(0.0, c.interval_ms_sq / c.presents - mean * mean));
     line += fmt::format(", presents {} (interval sd {:.2f} ms, max {:.1f} ms), screen hitches {:.1f}",
                         c.presents, sd, c.interval_ms_max, c.hitches);
+    if (c.holds)
+    {
+      line += fmt::format(", held {} (avg {:.2f} ms, max {:.1f} ms)", c.holds,
+                          c.hold_ms_sum / c.holds, c.hold_ms_max);
+    }
   }
   if (w.pad_age_n)
   {
@@ -2615,6 +2621,9 @@ void NetStatsFold(State::NetStats& t, const State::NetStats& w)
   t.pad_age_n += w.pad_age_n;
   t.cadence.presents += w.cadence.presents;
   t.cadence.hitches += w.cadence.hitches;
+  t.cadence.holds += w.cadence.holds;
+  t.cadence.hold_ms_sum += w.cadence.hold_ms_sum;
+  t.cadence.hold_ms_max = std::max(t.cadence.hold_ms_max, w.cadence.hold_ms_max);
   t.cadence.interval_ms_sum += w.cadence.interval_ms_sum;
   t.cadence.interval_ms_sq += w.cadence.interval_ms_sq;
   t.cadence.interval_ms_max = std::max(t.cadence.interval_ms_max, w.cadence.interval_ms_max);
@@ -3247,6 +3256,7 @@ void StartRunning(Core::System& system)
   // Before the first frame (and its base snapshot): GPUDeterminismMode "auto" turns the
   // deterministic GPU thread on for the session; the menus run without it.
   system.GetFifo().SetRollbackSessionDeterminism(true);
+  system.GetCoreTiming().SetPresentPacing(true);
   ResetRunStats();
   PassLogOpen(system);
   if (s.mode == Mode::SyncTest && !s.st_opts.replay_path.empty())

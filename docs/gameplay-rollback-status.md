@@ -899,6 +899,36 @@ Network sessions (`gprb_session.py`, two independently booted instances, dual co
 
 **Test.** `harness/tests/test_online_mirror.py::test_direct_after_an_offline_four_player_match`: A plays offline 4-player Versus, then a Direct game with B. Before the fix: both end at once with `desync` (`desync at frame 0`, as in staging); with it: game set on both, 652 confirmed frames, 0 mismatches. (Rollback's whole-machine `CalculateDesyncChecksums` still hashes entries 0-3 by index: the netplay fallback boots both machines together, so their tables are the same.)
 
+## Phase 16: stutter online, not offline (prod, 2026-10-10)
+
+**Symptom.** A prod set with halfjaw (52-100 ms RTT): "stuttery, microstutters all the time, choppy", visible, only online; local Versus is smooth. The netcode was fine (16% of frames rolled back at depth 1, 0 desyncs, 1-4 late frames per 600), but the presents were not: interval sd ~7 ms and 1,368 screen hitches in 5,655 frames (24%).
+
+**Cause.** This fork presents with Immediate XFB and Rush Frame Presentation: a frame is shown when the GPU thread runs its XFB copy, and the CPU sleeps once per frame, at the first throttle (an SI poll) after the GPU thread presented. In a session the GPU thread is deterministic: it gets the FIFO only when the CPU thread reads it, so the present raced the racing CPU, and the first poll after it changed from frame to frame. `PPR_PRESENT_LOG` traces (two windowed instances, `--platform win32`; headless instances never present) showed two modes alternating every 4-7 frames:
+
+- the sleep at a poll just after the XFB copy, before the session's loop top (which reads the local pad): the next frame then ran from its input to its copy in ~2 ms;
+- the sleep at a poll after the next frame was rendered: that frame waited ~10 ms before its copy, its input already read.
+
+Brawl's copies are exactly one VI field apart in emulated time (16.683 ms, sd 0.17), so the presents took the poll's drift: the CPU's lead over the copy's due time went 11, 12, 13, 14 ms and snapped back, one frame in ~6 shown 2-4 ms late, and the local input's age at the present jumped between ~2 and ~15 ms. Rollback re-runs (~4 ms a frame) added more. Offline the GPU thread is not deterministic and sees the copy as soon as the CPU writes it.
+
+Not the fix: Dolphin's Smooth Early Presentation (an earlier headless A/B was a no-op, the presenter returns before its sleep when headless); throttling at the loop top to its own due time (the loop top's emulated position against the copy varies with the frame's work: 36% hitches); a wake-up anchored to the previous copy plus a field minus an adaptive lead (better on one peer, frames bunched on the other).
+
+**Fix** (`[Core] RollbackPresentPacing`, default on, active while a session runs with Immediate XFB and Rush in single core or deterministic dual core):
+
+- `CoreTimingManager::OnPresentedXFBCopy`: the CPU thread re-arms Rush's throttle when it sends a presented XFB copy (the FIFO preprocessor in deterministic dual core, the copy itself in single core) instead of the GPU thread at its present. The sleep is then always at the first poll after the copy: VI-locked, before the loop top, and every frame runs from its input to its present in one go.
+- `PresentStats::PresentHoldUntil`: the presenter holds each paced frame until its copy's due time (throttle clock, taken with the copy decision) plus the 95th percentile of the last 120 frames' arrivals after theirs, at most 8 ms. A frame that rolled back comes ~4 ms late; the hold keeps the presents a field apart and shows only the rare slower frame late. A rolling window rather than a quantile tracker: after a stall the tracker stayed high for ~30 s.
+- The `gprb net:` line reports the holds: `held N (avg X ms, max Y ms)`.
+
+**Results.** `gprb_session.py --cpu dc --video D3D11 --platform win32 --minutes 2`, Fox/Falco Battlefield, off (`--config Dolphin.Core.RollbackPresentPacing=False`) and on back to back, both peers, match frames only (raw: `run/scratch/pacing/ab-*`):
+
+| Link | Presents > 2 ms off a field | Screen hitches | Local input to present (median, p90) | Rollbacks |
+|---|---|---|---|---|
+| typical (40 +- 8 ms), off | 17.3%, 17.7% | 7.8%, 8.2% | 15.0, 18.2 ms | 94, 97 |
+| typical, on | 2.1%, 2.5% | 1.4%, 1.1% | 3.9, 5.7 ms | 24, 19 |
+| cross_country (80 +- 5 ms), off | 29.3%, 29.3% | 13.4%, 13.3% | 14.8, 18.7 ms | 385, 368 |
+| cross_country, on (shorter match) | 3.3%, 2.8% | 1.7%, 1.7% | 6.1, 8.1 / 5.7, 6.8 ms | 243, 248 |
+
+The holds averaged 2.0 ms (typical) and 3.5-4.0 ms (cross_country). 0 mismatches in every run; a single-core session ran clean (present sd 1.8 ms); `test_online_unranked.py` 4 of 4 on the final build. "Late frames" now count more (the rollback re-run comes after the frame's one sleep); they no longer delay the presents beyond the hold.
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).
