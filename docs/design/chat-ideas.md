@@ -1,4 +1,6 @@
-# Chat: ideas (draft, nothing built)
+# Chat: ideas (draft, superseded)
+
+_Superseded 2026-10-10 by `docs/design/chat.md` (the decisions) and `docs/chat-protocol.md` (what was built): option B, with mm relaying end-to-end encrypted messages instead of a peer-to-peer channel._
 
 _2026-10-08. For the user to pick from before anything is implemented._
 
