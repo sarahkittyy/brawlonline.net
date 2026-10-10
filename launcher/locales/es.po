@@ -7,7 +7,7 @@ msgstr ""
 "Plural-Forms: nplurals=2; plural=(n != 1);\n"
 "x-generator: i18next-auto-keys CLI\n"
 "Language: es\n"
-"PO-Revision-Date: 2026-10-10T05:07:00.196Z\n"
+"PO-Revision-Date: 2026-10-10T07:52:49.788Z\n"
 
 #: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:4:19
 msgid "#"
@@ -100,7 +100,7 @@ msgstr "¿Estás seguro de que quieres cerrar sesión?"
 msgid "Are you sure?"
 msgstr "¿Estás seguro?"
 
-#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:14:25
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:12:25
 msgid "Auto"
 msgstr ""
 
@@ -530,14 +530,6 @@ msgstr ""
 msgid "Forgot your password?"
 msgstr "¿Olvidaste tu contraseña?"
 
-#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:13:5
-msgid ""
-"Frames between pressing a button and the game using it, for your own "
-"inputs. More delay means fewer rollbacks on a laggy connection, but less "
-"responsive controls. Auto picks 2 frames under 70 ms ping, 3 under 150 ms "
-"and 4 above, at the start of each game."
-msgstr ""
-
 #: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:17:15
 msgid "Full"
 msgstr ""
@@ -644,7 +636,7 @@ msgstr ""
 msgid "Installing... This may take a few minutes."
 msgstr ""
 
-#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:18:18
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:16:18
 msgid "Invalid"
 msgstr "Inválido"
 
@@ -1327,7 +1319,7 @@ msgstr "Ups. No pudimos abrir ese archivo. Probablemente esté corrupto."
 
 #: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:3:18
 #: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:11:18
-#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:17:18
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:15:18
 msgid "Unknown"
 msgstr "Desconocido"
 
@@ -1344,7 +1336,7 @@ msgstr "Escenario desconocido"
 msgid "Unranked"
 msgstr ""
 
-#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:19:22
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:17:22
 msgid "Unvalidated"
 msgstr "Sin validar"
 
@@ -1362,7 +1354,7 @@ msgstr ""
 msgid "User is not logged in"
 msgstr "El usuario no ha iniciado sesión"
 
-#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:16:16
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:14:16
 msgid "Valid"
 msgstr "Válido"
 
@@ -1544,7 +1536,7 @@ msgstr "{0, plural, one {# archivo oculto} other {# archivos ocultos}}."
 msgid "{0} Executable"
 msgstr ""
 
-#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:15:41
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:13:41
 #. {0} frames: number
 msgid "{0} frames"
 msgstr ""

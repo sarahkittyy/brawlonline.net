@@ -6,6 +6,12 @@
       "runtimeExecutable": "python",
       "runtimeArgs": ["-m", "http.server", "8765", "--directory", "website"],
       "port": 8765
+    },
+    {
+      "name": "launcher-storybook",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "launcher", "run", "storybook", "--", "--no-open", "--ci"],
+      "port": 6006
     }
   ]
 }

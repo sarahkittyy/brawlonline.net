@@ -10,17 +10,19 @@ import { PlayIcon } from "./play_icon";
 
 type MainButtonProps = React.ComponentProps<typeof ButtonBase> & {
   fillPercent?: number;
+  /** Fade the button while it is disabled (not while a set-up step shows its progress). */
+  dimWhenDisabled?: boolean;
 };
 
 const MainButton = React.memo((props: MainButtonProps) => {
-  const { children, fillPercent, ...rest } = props;
+  const { children, fillPercent, dimWhenDisabled = true, ...rest } = props;
   return (
     <ButtonBase
       {...rest}
       css={css`
         transition: opacity 0.2s ease-in-out;
         &:disabled {
-          opacity: 0.5;
+          opacity: ${dimWhenDisabled ? 0.5 : 1};
         }
         &:hover {
           /* The game theme highlights the frame instead of fading the button. */
@@ -37,7 +39,7 @@ const MainButton = React.memo((props: MainButtonProps) => {
   );
 });
 
-type PlayButtonProps = Omit<MainButtonProps, "children" | "fillPercent">;
+type PlayButtonProps = Omit<MainButtonProps, "children" | "fillPercent" | "dimWhenDisabled">;
 
 export const PlayButton = React.memo((props: PlayButtonProps) => {
   return <MainButton {...props}>{Messages.play()}</MainButton>;
@@ -63,7 +65,7 @@ export function setupPhaseLabel(phase: DolphinSetupPhase | undefined): string {
   }
 }
 
-type UpdatingButtonProps = Omit<MainButtonProps, "children"> & {
+type UpdatingButtonProps = Omit<MainButtonProps, "children" | "dimWhenDisabled"> & {
   /** The step that is running. Without one the button says "Updating", as Slippi's does. */
   phase?: DolphinSetupPhase;
 };
@@ -82,16 +84,20 @@ export const UpdatingButton = React.memo(({ phase, ...props }: UpdatingButtonPro
       </MainButton>
     );
   }
-  // A named step: its name, and how far along it is under it.
+  // A named step: its name, and how far along it is under it. Not faded (the fill shows the
+  // progress), and white with a dark outline, so it reads on the plain frame too (before P+'s
+  // files give the theme its colours).
   const percent = Math.floor(Math.min(1, Math.max(0, props.fillPercent ?? 0)) * 100);
   return (
-    <MainButton disabled={true} {...props}>
+    <MainButton disabled={true} dimWhenDisabled={false} {...props}>
       <span
         css={css`
           display: flex;
           flex-direction: column;
           align-items: center;
           line-height: 1.15;
+          color: #fff;
+          text-shadow: 0 0 2px #000, 0 1px 2px #000, 1px 0 1px #000, -1px 0 1px #000;
         `}
       >
         <span
