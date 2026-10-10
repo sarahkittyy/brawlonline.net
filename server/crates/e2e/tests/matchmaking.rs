@@ -176,13 +176,14 @@ async fn ticket_expiry_wrong_code_bad_key_and_unsupported_modes() {
     let r = search(SearchOptions::direct(stack.mm_addr, ghost, &bob.connect_code)).await;
     assert_eq!(r.error.as_deref(), Some(mm::messages::ACCOUNT_NOT_FOUND));
 
-    // Modes not built yet are refused clearly (Ranked works since the ranked queue).
-    for (mode, name) in [(3u8, "Teams"), (4, "Party")] {
+    // Party is not built and is refused clearly. Mode 3 (Teams) is a room's game ticket: without
+    // a live room it is refused too (rooms: tests/rooms.rs).
+    for (mode, error) in [(3u8, mm::messages::ROOM_NOT_FOUND.to_string()), (4, mm::messages::not_available("Party"))] {
         let mut o = SearchOptions::direct(stack.mm_addr, creds(&carol), "");
         o.mode = mode;
         let r = search(o).await;
         assert_eq!(r.status, Status::CreateError);
-        assert_eq!(r.error, Some(mm::messages::not_available(name)));
+        assert_eq!(r.error, Some(error));
     }
 
     // A banned account cannot queue: the ban rotates the play key, so the

@@ -18,6 +18,7 @@ import {
   ipc_accountsRename,
   ipc_accountsRequestPasswordReset,
   ipc_accountsResendVerification,
+  ipc_accountsRooms,
   ipc_accountsServiceUrls,
   ipc_accountsSignUp,
 } from "./ipc";
@@ -46,6 +47,7 @@ export default function setupAccountsIpc() {
   ipc_accountsMatchHistory.main!.handle(
     async ({ uid, mode, limit, before }) => await manager.matchHistory(uid, { mode, limit, before }),
   );
+  ipc_accountsRooms.main!.handle(async ({ uid }) => await manager.rooms(uid));
   ipc_accountsServiceUrls.main!.handle(async () => urls);
 
   return { accountsManager: manager, serviceUrls: urls };

@@ -46,6 +46,10 @@ pub const LEADERBOARD_IP_WINDOWS: [Window; 2] = [Window::new(30, MINUTE), Window
 /// Match history pages per account: 60 per minute.
 pub const HISTORY_WINDOWS: [Window; 1] = [Window::new(60, MINUTE)];
 
+/// The launcher's room list (`GET /v1/rooms`) per account: 60 per minute. The launcher polls it
+/// every 4 s while Home is open (15 a minute), so this leaves room for a second launcher.
+pub const ROOMS_WINDOWS: [Window; 1] = [Window::new(60, MINUTE)];
+
 #[derive(Debug)]
 pub struct RateLimiter<K> {
     windows: Vec<Window>,

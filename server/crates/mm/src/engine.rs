@@ -34,6 +34,11 @@
 //!   every `ranked_band_interval` the longer-waiting of the two has waited (design 2.3: ±150,
 //!   +50 every 15 s). The ratings are the accounts' Elo ([`common::ranked`]).
 //!
+//! Rooms (`crate::rooms`, `docs/rooms-protocol.md`) live on **online connections**: a game that
+//! is running and logged in keeps one connection open (`hello`, then `room-*` requests), which is
+//! also what the online count counts. A room's game starts with ordinary tickets in mode 3 (Teams)
+//! naming the room code; every member gets one `get-ticket-resp` listing all of them.
+//!
 //! The queues share the failed-connect rule: Slippi's 1v1 client requeues with a new ticket when
 //! its 8 s P2P window fails, so a pair matched again within `requeue_window` is taken to have
 //! failed. Direct holds such a pair back (P2P window + `repair_backoff` × failures) and errors
@@ -51,15 +56,17 @@ use common::db::MmUser;
 use common::net::{ip_key, sanitize_lan_addr, to_v4};
 use common::playkey::PlayKeySecret;
 use common::proto::{
-    parse_client_message, ClientMessage, CreateTicket, CreateTicketResp, GetTicketResp, Mode, Player, Rank,
-    GET_TICKET_RESP,
+    clamp_error, parse_client_message, ClientMessage, CreateTicket, CreateTicketResp, GetTicketResp, Mode, Player,
+    Rank, GET_TICKET_RESP,
 };
 use common::ratelimit::{RateLimiter, Window};
+use common::rooms::{decode_room_search_code, HelloResp, MmStatus, RoomError};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::messages as msg;
 use crate::region::RegionMap;
+use crate::rooms::{MemberInfo, RoomBook, RoomsConfig};
 use crate::ruleset::Rulesets;
 
 pub type ConnId = u64;
@@ -111,6 +118,10 @@ pub struct EngineConfig {
     pub ranked_band_step: f64,
     /// ... for every this long the longer-waiting player has waited.
     pub ranked_band_interval: Duration,
+    /// Rooms: timeouts and limits. Their stages and items are Direct's ruleset.
+    pub rooms: RoomsConfig,
+    /// `hello`s per account (a game opens its online connection once per start or reconnect).
+    pub hello_window: Window,
 }
 
 impl Default for EngineConfig {
@@ -133,6 +144,8 @@ impl Default for EngineConfig {
             ranked_band: 150.0,
             ranked_band_step: 50.0,
             ranked_band_interval: Duration::from_secs(15),
+            rooms: RoomsConfig::default(),
+            hello_window: Window::new(10, Duration::from_secs(60)),
         }
     }
 }
@@ -198,6 +211,10 @@ struct Pending {
     /// Direct: the code typed in-game. Unranked: none (Slippi sends `[]`).
     target: Option<ConnectCode>,
     lan: String,
+    /// A `hello` (opens an online connection) rather than a ticket.
+    hello: bool,
+    /// A room game ticket (mode 3): the room code.
+    room: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -212,11 +229,19 @@ struct Waiting {
     region: String,
 }
 
+/// An online connection: a running, logged-in game (rooms, the online count).
+#[derive(Debug, Clone)]
+struct Online {
+    user: MmUser,
+    code: String,
+}
+
 #[derive(Debug, Clone)]
 enum State {
     Idle,
     Validating(Pending),
     Waiting(Waiting),
+    Online(Online),
     Done,
 }
 
@@ -249,8 +274,14 @@ pub struct Engine {
     history: HashMap<(Uuid, Uuid), PairHistory>,
     ticket_limiter: RateLimiter<Uuid>,
     ip_limiter: RateLimiter<IpAddr>,
+    hello_limiter: RateLimiter<Uuid>,
+    rooms: RoomBook,
     next_seq: u64,
     match_counter: u64,
+}
+
+fn hello_ok() -> HelloResp {
+    HelloResp { kind: common::rooms::HELLO_RESP.into(), error: None, latest_version: None }
 }
 
 fn pair_key(a: Uuid, b: Uuid) -> (Uuid, Uuid) {
@@ -276,6 +307,9 @@ impl Engine {
     pub fn new(cfg: EngineConfig, secret: PlayKeySecret) -> Self {
         let ticket_limiter = RateLimiter::new(&[Window::new(1, cfg.ticket_interval)]);
         let ip_limiter = RateLimiter::new(&[cfg.ip_ticket_window]);
+        let hello_limiter = RateLimiter::new(&[cfg.hello_window]);
+        let mut rooms_cfg = cfg.rooms.clone();
+        rooms_cfg.rules = cfg.rulesets.for_mode(Mode::Direct);
         Engine {
             cfg,
             secret,
@@ -286,6 +320,8 @@ impl Engine {
             history: HashMap::new(),
             ticket_limiter,
             ip_limiter,
+            hello_limiter,
+            rooms: RoomBook::new(rooms_cfg),
             next_seq: 1,
             match_counter: 0,
         }
@@ -299,16 +335,50 @@ impl Engine {
         self.conns.values().filter(|c| matches!(c.state, State::Waiting(_))).count()
     }
 
+    /// Players whose game is running and logged in: accounts with an online connection.
+    pub fn online_count(&self) -> usize {
+        let mut uids: Vec<Uuid> = self
+            .conns
+            .values()
+            .filter_map(|c| match &c.state {
+                State::Online(o) => Some(o.user.uid),
+                _ => None,
+            })
+            .collect();
+        uids.sort_unstable();
+        uids.dedup();
+        uids.len()
+    }
+
+    pub fn room_count(&self) -> usize {
+        self.rooms.room_count()
+    }
+
+    /// The snapshot the launcher sees: the online count and the public rooms.
+    pub fn status(&self, wall: DateTime<Utc>) -> MmStatus {
+        MmStatus {
+            online: self.online_count(),
+            rooms: self.rooms.public_rooms(200),
+            updated_at: wall.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        }
+    }
+
     pub fn handle(&mut self, now: Instant, wall: DateTime<Utc>, input: Input) -> Vec<Output> {
         let mut out = Vec::new();
         match input {
             Input::Connected { conn, addr } => self.on_connect(now, conn, addr, &mut out),
             Input::Disconnected { conn } => {
                 if let Some(c) = self.conns.remove(&conn) {
-                    if let State::Waiting(w) = &c.state {
-                        tracing::info!(code = %w.code, target = %w.target, "ticket cancelled by client disconnect");
+                    match &c.state {
+                        State::Waiting(w) => {
+                            tracing::info!(code = %w.code, target = %w.target, "ticket cancelled by client disconnect")
+                        }
+                        State::Online(o) => tracing::info!(code = %o.code, "online connection closed"),
+                        _ => {}
                     }
                     self.unindex(conn);
+                    self.rooms.conn_gone(now, conn, &mut out);
+                    self.fail_room_tickets(&mut out);
                 }
             }
             Input::Packet { conn, data } => self.on_packet(now, conn, &data, &mut out),
@@ -345,6 +415,25 @@ impl Engine {
             c.state = State::Done;
         }
         out.push(Output::Disconnect { conn });
+        self.rooms.conn_gone(Instant::now(), conn, out);
+    }
+
+    /// Answers the room game tickets the room book gave up on (a start that timed out, a member
+    /// who left during the start).
+    fn fail_room_tickets(&mut self, out: &mut Vec<Output>) {
+        for (conn, why) in self.rooms.take_failed_tickets() {
+            if matches!(self.conns.get(&conn), Some(Conn { state: State::Waiting(_), .. })) {
+                self.fail_ticket(out, conn, why, None);
+            }
+        }
+    }
+
+    /// A fatal error on an online connection (or a room message before `hello`): `error`, then
+    /// the connection is closed.
+    fn fail_online(&mut self, out: &mut Vec<Output>, conn: ConnId, msg: &str) {
+        tracing::info!(conn, "online connection ended: {msg}");
+        Self::send(out, conn, &serde_json::json!({"type": common::rooms::ERROR, "error": clamp_error(msg.into())}));
+        self.finish(out, conn);
     }
 
     fn unindex(&mut self, conn: ConnId) {
@@ -368,19 +457,37 @@ impl Engine {
 
     fn on_packet(&mut self, now: Instant, conn: ConnId, data: &[u8], out: &mut Vec<Output>) {
         let Some(c) = self.conns.get(&conn) else { return };
-        match c.state {
+        let online = match &c.state {
             State::Done => return,
             // One account lookup in flight per connection: the game never sends a second
             // ticket before the answer to its first.
             State::Validating(_) => return self.refuse(out, conn, msg::INVALID_REQUEST),
-            State::Idle | State::Waiting(_) => {}
-        }
+            State::Online(o) => Some(o.clone()),
+            State::Idle | State::Waiting(_) => None,
+        };
         if data.len() > MAX_PACKET {
+            if online.is_some() {
+                return self.fail_online(out, conn, msg::INVALID_REQUEST);
+            }
             self.refuse(out, conn, msg::INVALID_REQUEST);
             return;
         }
-        let ticket = match parse_client_message(data) {
+        let parsed = parse_client_message(data);
+        if let Some(o) = online {
+            return self.on_online_packet(now, conn, o, parsed, out);
+        }
+        let ticket = match parsed {
             Ok(ClientMessage::CreateTicket(t)) => t,
+            Ok(ClientMessage::Hello(h)) => {
+                if matches!(self.conns.get(&conn), Some(Conn { state: State::Waiting(_), .. })) {
+                    return self.refuse(out, conn, msg::INVALID_REQUEST);
+                }
+                return self.on_hello(now, conn, *h, out);
+            }
+            Ok(ClientMessage::Room(_)) => {
+                // Rooms need an online connection: `hello` first.
+                return self.fail_online(out, conn, msg::NOT_LOGGED_IN);
+            }
             Ok(ClientMessage::Unknown(kind)) => {
                 tracing::warn!(conn, %kind, "unknown message type");
                 self.refuse(out, conn, msg::UNKNOWN_REQUEST);
@@ -397,13 +504,106 @@ impl Engine {
         self.on_create_ticket(now, conn, *ticket, out);
     }
 
+    /// A packet on an online connection: `hello` and room requests only. Mistakes are answered
+    /// (`room-error`) and the connection stays.
+    fn on_online_packet(
+        &mut self,
+        now: Instant,
+        conn: ConnId,
+        o: Online,
+        parsed: Result<ClientMessage, common::proto::ParseError>,
+        out: &mut Vec<Output>,
+    ) {
+        let room_error = |out: &mut Vec<Output>, op: &str, error: &str| {
+            Self::send(
+                out,
+                conn,
+                &RoomError { kind: common::rooms::ROOM_ERROR.into(), op: op.into(), error: error.into() },
+            )
+        };
+        match parsed {
+            Ok(ClientMessage::Room(Ok(req))) => {
+                let who = MemberInfo {
+                    uid: o.user.uid,
+                    display_name: o.user.display_name.clone(),
+                    connect_code: o.code.clone(),
+                };
+                self.rooms.request(now, conn, &who, req, out);
+                self.fail_room_tickets(out);
+            }
+            Ok(ClientMessage::Room(Err(why))) => {
+                tracing::warn!(conn, "bad room request: {why}");
+                room_error(out, "invalid", msg::INVALID_REQUEST);
+            }
+            Ok(ClientMessage::Hello(_)) => Self::send(out, conn, &hello_ok()),
+            Ok(ClientMessage::CreateTicket(_)) => Self::send(out, conn, &CreateTicketResp::error(msg::INVALID_REQUEST)),
+            Ok(ClientMessage::Unknown(kind)) => room_error(out, &kind, msg::UNKNOWN_REQUEST),
+            Err(e) => {
+                tracing::warn!(conn, "malformed packet on an online connection: {e}");
+                room_error(out, "invalid", msg::INVALID_REQUEST);
+            }
+        }
+    }
+
+    /// `hello`: the same checks as a ticket (version, uid, play key), then the connection stays
+    /// open as an online connection.
+    fn on_hello(&mut self, now: Instant, conn: ConnId, h: common::rooms::Hello, out: &mut Vec<Output>) {
+        if let Some(min) = self.cfg.min_app_version.clone() {
+            if parse_version(&h.app_version) < parse_version(&min) {
+                let latest = self.cfg.latest_version.clone().unwrap_or(min);
+                return self.refuse_hello(out, conn, &msg::update_to(&latest), Some(latest.clone()));
+            }
+        }
+        let Ok(uid) = Uuid::parse_str(h.user.uid.trim()) else {
+            return self.refuse_hello(out, conn, msg::NOT_LOGGED_IN, None);
+        };
+        if h.user.play_key.is_empty() || h.user.play_key.len() > 128 {
+            return self.refuse_hello(out, conn, msg::NOT_LOGGED_IN, None);
+        }
+        let Some(addr) = self.conns.get(&conn).map(|c| c.addr) else { return };
+        if self.ip_limiter.check(&ip_key(addr.ip()), now).is_err() {
+            return self.refuse_hello(out, conn, msg::TOO_MANY_SEARCHES, None);
+        }
+        let seq = self.next_seq;
+        self.next_seq += 1;
+        let pending = Pending {
+            seq,
+            since: now,
+            play_key: h.user.play_key,
+            mode: Mode::Direct,
+            target: None,
+            lan: String::new(),
+            hello: true,
+            room: None,
+        };
+        if let Some(c) = self.conns.get_mut(&conn) {
+            c.state = State::Validating(pending);
+        }
+        out.push(Output::FetchUser { conn, seq, uid });
+    }
+
+    /// Refuses a `hello`: `hello-resp {error}`, then the connection is closed.
+    fn refuse_hello(&mut self, out: &mut Vec<Output>, conn: ConnId, msg: &str, latest: Option<String>) {
+        tracing::info!(conn, "hello refused: {msg}");
+        Self::send(
+            out,
+            conn,
+            &HelloResp {
+                kind: common::rooms::HELLO_RESP.into(),
+                error: Some(clamp_error(msg.into())),
+                latest_version: latest,
+            },
+        );
+        self.finish(out, conn);
+    }
+
     fn on_create_ticket(&mut self, now: Instant, conn: ConnId, t: CreateTicket, out: &mut Vec<Output>) {
         let Some(mode) = Mode::from_u8(t.search.mode) else {
             return self.refuse(out, conn, msg::UNKNOWN_MODE);
         };
         let unsupported = match mode {
-            Mode::Direct | Mode::Unranked | Mode::Ranked => None,
-            Mode::Teams => Some("Teams"),
+            // Mode 3 is a room's game ticket (the room code in `search.connectCode`).
+            Mode::Direct | Mode::Unranked | Mode::Ranked | Mode::Teams => None,
             Mode::Party => Some("Party"),
         };
         if let Some(name) = unsupported {
@@ -429,6 +629,13 @@ impl Engine {
             },
             _ => None,
         };
+        let room = match mode {
+            Mode::Teams => match decode_room_search_code(&t.search.connect_code) {
+                Some(code) => Some(code),
+                None => return self.refuse(out, conn, msg::ROOM_NOT_FOUND),
+            },
+            _ => None,
+        };
         let Some(addr) = self.conns.get(&conn).map(|c| c.addr) else { return };
         // The game cannot use an IPv6 peer address (it splits `ipAddress` on ':'), and an empty
         // one crashes older clients, so such tickets are refused before they can be matched.
@@ -447,6 +654,8 @@ impl Engine {
             mode,
             target,
             lan: sanitize_lan_addr(&t.ip_address_lan),
+            hello: false,
+            room,
         };
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Validating(pending);
@@ -477,12 +686,16 @@ impl Engine {
                 return self.refuse(out, conn, msg::UNAVAILABLE);
             }
         };
+        if p.hello {
+            return self.on_hello_user(now, wall, conn, p, user, out);
+        }
         if !self.secret.verify(user.uid, user.play_key_version, &p.play_key) {
             return self.refuse(out, conn, msg::LOGIN_EXPIRED);
         }
         // Only after the play key: otherwise anyone knowing a uid (opponents see it) could keep
-        // that account from searching.
-        if self.ticket_limiter.check(&user.uid, now).is_err() {
+        // that account from searching. A room's game ticket is accepted only from a member of a
+        // starting room, so it needs no limit of its own (and must not be held up by one).
+        if p.room.is_none() && self.ticket_limiter.check(&user.uid, now).is_err() {
             return self.refuse(out, conn, msg::SEARCHING_TOO_OFTEN);
         }
         if user.is_banned(wall) {
@@ -504,6 +717,9 @@ impl Engine {
             .collect();
         for old in older {
             self.fail_ticket(out, old, msg::REPLACED, None);
+        }
+        if let Some(room) = p.room.clone() {
+            return self.on_room_ticket(now, conn, p, user, code, room, out);
         }
         Self::send(out, conn, &CreateTicketResp::ok());
         let Some(c) = self.conns.get_mut(&conn) else { return };
@@ -536,6 +752,92 @@ impl Engine {
         }
     }
 
+    /// The account behind a `hello` is known: verify it and open the online connection.
+    fn on_hello_user(
+        &mut self,
+        now: Instant,
+        wall: DateTime<Utc>,
+        conn: ConnId,
+        p: Pending,
+        user: MmUser,
+        out: &mut Vec<Output>,
+    ) {
+        if !self.secret.verify(user.uid, user.play_key_version, &p.play_key) {
+            return self.refuse_hello(out, conn, msg::LOGIN_EXPIRED, None);
+        }
+        if self.hello_limiter.check(&user.uid, now).is_err() {
+            return self.refuse_hello(out, conn, msg::TOO_MANY_REQUESTS, None);
+        }
+        if user.is_banned(wall) {
+            return self.refuse_hello(out, conn, msg::BANNED, None);
+        }
+        let Some(code) = user.connect_code.clone() else {
+            return self.refuse_hello(out, conn, msg::NO_CONNECT_CODE, None);
+        };
+        // One online connection per account: a newer game replaces the older one (which leaves
+        // its room).
+        let older: Vec<ConnId> = self
+            .conns
+            .iter()
+            .filter(|(id, c)| **id != conn && matches!(&c.state, State::Online(o) if o.user.uid == user.uid))
+            .map(|(id, _)| *id)
+            .collect();
+        for old in older {
+            self.fail_online(out, old, msg::SIGNED_IN_ELSEWHERE);
+        }
+        self.fail_room_tickets(out);
+        tracing::info!(conn, %code, "online");
+        if let Some(c) = self.conns.get_mut(&conn) {
+            c.state = State::Online(Online { user, code });
+        }
+        Self::send(out, conn, &hello_ok());
+    }
+
+    /// A room's game ticket from a verified account.
+    #[allow(clippy::too_many_arguments)]
+    fn on_room_ticket(
+        &mut self,
+        now: Instant,
+        conn: ConnId,
+        p: Pending,
+        user: MmUser,
+        code: String,
+        room: String,
+        out: &mut Vec<Output>,
+    ) {
+        let Some(addr) = self.conns.get(&conn).and_then(|c| to_v4(c.addr)) else { return };
+        let outcome = match self.rooms.ticket(conn, addr, p.lan.clone(), user.uid, &room) {
+            Ok(o) => o,
+            Err(e) => return self.refuse(out, conn, e),
+        };
+        Self::send(out, conn, &CreateTicketResp::ok());
+        let region = self.cfg.regions.region_of(SocketAddr::V4(addr));
+        if let Some(c) = self.conns.get_mut(&conn) {
+            c.state = State::Waiting(Waiting {
+                since: now,
+                user,
+                code,
+                mode: Mode::Teams,
+                target: room.clone(),
+                lan: p.lan,
+                region,
+            });
+        }
+        if let Some(old) = outcome.replaced {
+            self.fail_ticket(out, old, msg::REPLACED, None);
+        }
+        if outcome.matched.is_empty() {
+            return;
+        }
+        for (c, resp) in &outcome.matched {
+            Self::send(out, *c, resp);
+        }
+        for (c, _) in &outcome.matched {
+            self.finish(out, *c);
+        }
+        self.rooms.announce(&room, out);
+    }
+
     fn on_tick(&mut self, now: Instant, wall: DateTime<Utc>, out: &mut Vec<Output>) {
         let mut expired = Vec::new();
         let mut auth_late = Vec::new();
@@ -548,6 +850,7 @@ impl Engine {
                     expired.push((*id, w.mode, w.target.clone()))
                 }
                 State::Waiting(w) if w.mode == Mode::Direct => waiting.push(*id),
+                // Room game tickets end with their room's start (`RoomBook::tick`).
                 State::Validating(p) if now.saturating_duration_since(p.since) >= self.cfg.auth_timeout => {
                     auth_late.push(*id)
                 }
@@ -574,6 +877,8 @@ impl Engine {
         self.pair_queue(Mode::Ranked, now, wall, out);
         let window = self.cfg.requeue_window;
         self.history.retain(|_, h| now.saturating_duration_since(h.last_match) < window);
+        self.rooms.tick(now, out);
+        self.fail_room_tickets(out);
     }
 
     fn try_pair(&mut self, now: Instant, wall: DateTime<Utc>, conn: ConnId, out: &mut Vec<Output>) {
@@ -1039,18 +1344,26 @@ mod tests {
     }
 
     #[test]
-    fn other_modes_are_not_supported_yet() {
+    fn party_is_not_supported_and_teams_needs_a_room() {
         let mut h = Harness::new(EngineConfig::default());
         let a = user("AA#1", "a");
         h.add(&a);
-        for (i, (mode, name)) in [(3u8, "Teams"), (4, "Party")].into_iter().enumerate() {
+        // Mode 3 is a room's game ticket now: without a live room it is refused.
+        for (i, (mode, code, err)) in [
+            (3u8, "", msg::ROOM_NOT_FOUND.to_string()),
+            (3, "KFQB", msg::ROOM_NOT_FOUND.to_string()),
+            (4, "", msg::not_available("Party")),
+        ]
+        .into_iter()
+        .enumerate()
+        {
             let conn = 10 + i as u64;
             h.connect(conn, conn as u16);
-            let v = h.ticket_json(&a, "", mode);
+            let v = h.ticket_json(&a, code, mode);
             let out = h.raw(conn, v.to_string().as_bytes());
             let msgs = sent(&out, conn);
             assert_eq!(msgs[0]["type"], "create-ticket-resp");
-            assert_eq!(msgs[0]["error"], msg::not_available(name));
+            assert_eq!(msgs[0]["error"], err);
             assert!(disconnected(&out, conn));
         }
         h.connect(20, 20);
@@ -1780,5 +2093,152 @@ mod tests {
         // 1700 and 1520 (180 apart, 1700 waited 15 s: ±200) take each other.
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[1].uid, u[3].uid));
+    }
+
+    impl Harness {
+        fn hello(&mut self, conn: ConnId, u: &MmUser, version: &str) -> Vec<Output> {
+            let v = json!({
+                "type": "hello",
+                "user": {"uid": u.uid.to_string(), "playKey": self.secret.derive(u.uid, u.play_key_version)},
+                "appVersion": version,
+            });
+            self.raw(conn, v.to_string().as_bytes())
+        }
+        fn room(&mut self, conn: ConnId, v: Value) -> Vec<Output> {
+            self.raw(conn, v.to_string().as_bytes())
+        }
+    }
+
+    fn state_of(out: &[Output], conn: ConnId) -> Value {
+        sent(out, conn).into_iter().rev().find(|m| m["type"] == "room-state").expect("room-state")
+    }
+
+    #[test]
+    fn hello_opens_an_online_connection() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b) = (user("AA#1", "a"), user("BB#1", "b"));
+        h.add(&a);
+        h.add(&b);
+        h.connect(1, 1);
+        h.connect(2, 2);
+        let out = h.hello(1, &a, "3.4.0");
+        assert_eq!(sent(&out, 1), vec![json!({"type": "hello-resp"})]);
+        assert!(!disconnected(&out, 1));
+        h.hello(2, &b, "3.4.0");
+        assert_eq!(h.e.online_count(), 2);
+        // Online connections never hit the idle timeout (ENet's own keepalive times them out).
+        assert!(!disconnected(&h.advance(Duration::from_secs(60)), 1));
+        // A second game with the same account replaces the first.
+        h.connect(3, 3);
+        let out = h.hello(3, &a, "3.4.0");
+        assert_eq!(sent(&out, 1)[0], json!({"type": "error", "error": msg::SIGNED_IN_ELSEWHERE}));
+        assert!(disconnected(&out, 1));
+        assert_eq!(h.e.online_count(), 2);
+        h.input(Input::Disconnected { conn: 2 });
+        assert_eq!(h.e.online_count(), 1);
+        assert_eq!(h.e.status(Utc::now()).online, 1);
+        // A ticket on an online connection is refused; the connection stays.
+        let v = h.ticket_json(&a, "BB#1", 2);
+        let out = h.raw(3, v.to_string().as_bytes());
+        assert_eq!(sent(&out, 3)[0]["error"], msg::INVALID_REQUEST);
+        assert!(!disconnected(&out, 3));
+        // Garbage gets a room-error, not a disconnect.
+        let out = h.raw(3, b"{");
+        assert_eq!(sent(&out, 3)[0]["type"], "room-error");
+        assert!(!disconnected(&out, 3));
+    }
+
+    #[test]
+    fn hello_is_checked_like_a_ticket() {
+        let mut h = Harness::new(EngineConfig {
+            min_app_version: Some("3.5.0".into()),
+            latest_version: Some("3.5.2".into()),
+            ..Default::default()
+        });
+        let a = user("AA#1", "a");
+        h.add(&a);
+        h.connect(1, 1);
+        let out = h.hello(1, &a, "3.4.0");
+        assert_eq!(
+            sent(&out, 1),
+            vec![json!({"type": "hello-resp", "error": msg::update_to("3.5.2"), "latestVersion": "3.5.2"})]
+        );
+        assert!(disconnected(&out, 1));
+        h.connect(2, 2);
+        let mut rotated = a.clone();
+        rotated.play_key_version = 2;
+        h.add(&rotated);
+        let out = h.hello(2, &a, "3.5.0");
+        assert_eq!(sent(&out, 2)[0]["error"], msg::LOGIN_EXPIRED);
+        assert_eq!(h.e.online_count(), 0);
+        // Room requests need `hello` first.
+        h.connect(3, 3);
+        let out = h.room(3, json!({"type": "room-create"}));
+        assert_eq!(sent(&out, 3)[0], json!({"type": "error", "error": msg::NOT_LOGGED_IN}));
+        assert!(disconnected(&out, 3));
+    }
+
+    #[test]
+    fn a_room_game_starts_with_tickets() {
+        // Rooms play with Direct's ruleset.
+        let mut h = Harness::new(EngineConfig { rulesets: Rulesets::load(None).unwrap(), ..Default::default() });
+        let (a, b, c) = (user("AA#1", "alice"), user("BB#1", "bob"), user("CC#1", "carol"));
+        for u in [&a, &b, &c] {
+            h.add(u);
+        }
+        for (conn, u) in [(1, &a), (2, &b), (3, &c)] {
+            h.connect(conn, conn as u16);
+            h.hello(conn, u, "3.4.0");
+        }
+        let out = h.room(1, json!({"type": "room-create"}));
+        let code = state_of(&out, 1)["code"].as_str().unwrap().to_string();
+        let out = h.room(2, json!({"type": "room-join", "code": code.to_lowercase()}));
+        assert_eq!(state_of(&out, 1)["slots"][1]["player"]["connectCode"], "BB#1");
+        let status = h.e.status(Utc::now());
+        assert_eq!(status.rooms.len(), 1);
+        assert_eq!(status.rooms[0].names, vec!["alice", "bob"]);
+        h.room(1, json!({"type": "room-ready", "ready": true}));
+        let out = h.room(2, json!({"type": "room-ready", "ready": true, "character": 3, "costume": 1}));
+        for conn in [1, 2] {
+            assert!(sent(&out, conn).iter().any(|m| m["type"] == "room-start" && m["code"] == code.as_str()));
+        }
+        // carol is not a member; her ticket for the room is refused.
+        h.connect(13, 13);
+        let v = h.ticket_json(&c, &code, 3);
+        assert_eq!(sent(&h.raw(13, v.to_string().as_bytes()), 13)[0]["error"], msg::NOT_A_MEMBER);
+        // The members' tickets, from their P2P ports (the code full width, as the keypad sends it).
+        h.connect(11, 41011);
+        h.connect(12, 41012);
+        let v = h.ticket_json(&a, &code, 3);
+        let out = h.raw(11, v.to_string().as_bytes());
+        assert_eq!(sent(&out, 11), vec![json!({"type": "create-ticket-resp"})]);
+        let v = h.ticket_json(&b, &code, 3);
+        let out = h.raw(12, v.to_string().as_bytes());
+        for (conn, port) in [(11, 1), (12, 2)] {
+            let resp = sent(&out, conn).into_iter().find(|m| m["type"] == "get-ticket-resp").unwrap();
+            assert!(resp["matchId"].as_str().unwrap().starts_with(&format!("mode.room-{code}-")));
+            assert_eq!(resp["isHost"], conn == 11);
+            let players = resp["players"].as_array().unwrap();
+            assert_eq!(players.len(), 2);
+            let local = players.iter().find(|p| p["isLocalPlayer"] == true).unwrap();
+            assert_eq!(local["port"], port);
+            assert_eq!(players[1]["ipAddress"], "203.0.113.12:41012");
+            assert_eq!(resp["stages"].as_array().unwrap().len(), 15);
+            assert!(disconnected(&out, conn));
+        }
+        assert_eq!(state_of(&out, 1)["status"], "in-game");
+        assert_eq!(h.e.status(Utc::now()).rooms[0].status, common::rooms::RoomStatus::InGame);
+        // The ticket connections closing does not touch the room.
+        h.input(Input::Disconnected { conn: 11 });
+        h.input(Input::Disconnected { conn: 12 });
+        h.room(1, json!({"type": "room-back"}));
+        let out = h.room(2, json!({"type": "room-back"}));
+        assert_eq!(state_of(&out, 2)["status"], "waiting");
+        // The host's game closes: bob is the host, and the room stays.
+        let mut out = h.input(Input::Disconnected { conn: 1 });
+        out.extend(h.room(2, json!({"type": "room-public", "public": false})));
+        let s = state_of(&out, 2);
+        assert_eq!((s["host"].as_u64(), s["public"].as_bool()), (Some(2), Some(false)));
+        assert!(h.e.status(Utc::now()).rooms.is_empty());
     }
 }

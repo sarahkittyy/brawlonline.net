@@ -112,6 +112,36 @@ export type MatchHistoryPage = {
   next: string | null;
 };
 
+/** How a room plays: two open slots are 1v1 whatever the Teams switch says. */
+export type RoomMode = "1v1" | "ffa" | "teams";
+
+/** One public room (`GET /v1/rooms`). */
+export type PublicRoom = {
+  /** 4 letters, no vowels (e.g. `KFQB`). */
+  code: string;
+  /** The host's display name. */
+  host: string;
+  /** Players in the room. */
+  players: number;
+  /** Open slots: the most players the room takes (2-4). */
+  openSlots: number;
+  mode: RoomMode;
+  /** `in-game` while a game is being played. */
+  status: "waiting" | "in-game";
+  /** Every player's display name, by slot. */
+  names: string[];
+  /** An open slot is empty (also during a game: the joiner waits for it to end). */
+  joinable: boolean;
+};
+
+/** `GET /v1/rooms`: players online (games running and logged in) and the public rooms. */
+export type RoomList = {
+  online: number;
+  /** Joinable first, then waiting before in game, then fuller first. */
+  rooms: PublicRoom[];
+  updatedAt: string;
+};
+
 export type SignUpRequest = {
   email: string;
   password: string;
@@ -150,6 +180,8 @@ export interface AccountsApi {
     uid: string,
     query: { mode: MatchHistoryFilter; limit?: number; before?: string },
   ): Promise<MatchHistoryPage>;
+  /** Players online and the public rooms. */
+  rooms(uid: string): Promise<RoomList>;
   /** The resolved service URLs (for display and links). */
   getServiceUrls(): Promise<ServiceUrls>;
 }

@@ -5,6 +5,7 @@ import type {
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
+  RoomList,
   SignUpRequest,
   UserJson,
 } from "./types";
@@ -93,6 +94,10 @@ export class AccountsHttpClient {
     query: { mode: MatchHistoryFilter; limit?: number; before?: string },
   ): Promise<MatchHistoryPage> {
     return this._request("GET", `/v1/me/matches${queryString(query)}`, { token });
+  }
+
+  rooms(token: string): Promise<RoomList> {
+    return this._request("GET", "/v1/rooms", { token });
   }
 
   private async _request<T>(

@@ -1,4 +1,5 @@
 import { Preconditions } from "@common/preconditions";
+import { DOLPHIN_ONLINE_DIR } from "@common/product";
 import { readTestMode } from "@common/test_mode";
 import type { SettingsManager } from "@settings/settings_manager";
 import { app } from "electron";
@@ -33,6 +34,7 @@ import {
 import { installPluginOnSdCard, loadPlugin } from "./install/sd_card";
 import { DolphinInstance, MacOsRosettaRequiredError, PlaybackDolphinInstance } from "./instance";
 import { buildNetplayDolphinArgs } from "./netplay_args";
+import { clearRoomRequest } from "./room_handoff";
 import { createProgressThrottle, runWithProgress } from "./setup_progress";
 import type { DolphinEvent, DolphinSetupPhase, ReplayCommunication } from "./types";
 import { DolphinErrorType, DolphinEventType, DolphinLaunchType } from "./types";
@@ -68,6 +70,16 @@ export class DolphinManager {
   events = Observable.from(this.eventSubject);
 
   constructor(private settingsManager: SettingsManager) {}
+
+  /** True while the netplay Dolphin the launcher started (Play, or Configure) is running. */
+  isNetplayRunning(): boolean {
+    return this.netplayDolphinInstance != null;
+  }
+
+  /** The netplay User folder's online folder (`user.json`, the room hand-off files). */
+  netplayOnlineDir(): string {
+    return path.join(this.getInstallation(DolphinLaunchType.NETPLAY).userFolder, DOLPHIN_ONLINE_DIR);
+  }
 
   private _pathEnv(): DolphinPathEnv {
     return {
@@ -243,6 +255,8 @@ export class DolphinManager {
       });
 
       this.netplayDolphinInstance = null;
+      // A room request the game never picked up must not act on the next start.
+      void clearRoomRequest(this.netplayOnlineDir()).catch(() => undefined);
       log.warn(`Dolphin exit code: ${exitCode?.toString(16)}`);
       log.warn(`Dolphin exit signal: ${signal}`);
     });

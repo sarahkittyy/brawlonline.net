@@ -1,0 +1,190 @@
+.block {
+  /* Room status colours, muted to sit on the launcher's dark surfaces. */
+  --room-waiting: #74c27a;
+  --room-in-game: #d9a441;
+
+  grid-column: span 2;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.online {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.onlineDot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background-color: var(--room-waiting);
+  box-shadow: 0 0 6px var(--room-waiting);
+}
+
+.centered {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 100%;
+  min-height: 160px;
+  padding: 24px;
+  box-sizing: border-box;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.centered p {
+  margin: 0;
+  max-width: 420px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-self: start;
+}
+
+.row {
+  all: unset;
+  box-sizing: border-box;
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 64px 64px 96px 56px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.15s ease-in-out;
+}
+
+.row:hover,
+.row.hover {
+  background-color: rgb(255 255 255 / 5%);
+}
+
+.row:active,
+.row.pressed {
+  background-color: rgb(255 255 255 / 9%);
+}
+
+.row:focus-visible {
+  outline: 2px solid var(--accent-primary-dark);
+  outline-offset: -2px;
+}
+
+.row.disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.row.disabled:hover,
+.row.disabled:active {
+  background-color: transparent;
+}
+
+.main {
+  min-width: 0;
+}
+
+.host {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.names {
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mode {
+  justify-self: start;
+  padding: 2px 8px;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.players {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.statusDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+}
+
+.waiting .statusDot {
+  background-color: var(--room-waiting);
+}
+
+.inGame .statusDot {
+  background-color: var(--room-in-game);
+}
+
+.action {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  transition: color 0.15s ease-in-out;
+}
+
+.row:hover .action,
+.row.hover .action,
+.row.pressed .action {
+  color: var(--text-primary);
+}
+
+@media (width <= 1000px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr) 56px 52px 84px 48px;
+    gap: 8px;
+  }
+}

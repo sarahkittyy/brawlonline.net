@@ -142,6 +142,16 @@ pub struct Stack {
 impl Stack {
     pub async fn start(opts: StackOptions) -> anyhow::Result<Stack> {
         let (pool, db_name) = fresh_db().await?;
+        let secret = common::playkey::PlayKeySecret::parse(TEST_SECRET)?;
+        let mm = mm::start(
+            "127.0.0.1:0".parse()?,
+            Some("127.0.0.1:0".parse()?),
+            64,
+            opts.engine,
+            secret,
+            pool.clone(),
+            tokio::runtime::Handle::current(),
+        )?;
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
         let mut cfg = accounts::Config::for_tests("unused");
@@ -149,6 +159,9 @@ impl Stack {
         cfg.public_base_url = format!("http://{addr}");
         cfg.disable_rate_limits = !opts.rate_limits;
         cfg.trust_proxy_headers = opts.trust_proxy_headers;
+        if let Some(status) = mm.status_addr {
+            cfg.mm_status_url = format!("http://{status}/status");
+        }
         if let Some(n) = opts.mail_daily_limit {
             cfg.mail.mail_daily_limit = n;
         }
@@ -165,15 +178,6 @@ impl Stack {
                 eprintln!("accounts stopped: {e:#}");
             }
         });
-        let secret = common::playkey::PlayKeySecret::parse(TEST_SECRET)?;
-        let mm = mm::start(
-            "127.0.0.1:0".parse()?,
-            64,
-            opts.engine,
-            secret,
-            pool.clone(),
-            tokio::runtime::Handle::current(),
-        )?;
         Ok(Stack {
             base: format!("http://{addr}"),
             mm_addr: mm.addr,
