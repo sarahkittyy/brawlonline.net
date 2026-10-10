@@ -35,9 +35,10 @@ namespace OnlineMatch {
 }
 
 namespace MatchHud {
-    // "DISCONNECTED" in the match HUD (match_hud.cpp): drawn while on and the scene is scMelee.
+    // "DISCONNECTED" or "DESYNC DETECTED" in the match HUD (match_hud.cpp): drawn while on and
+    // the scene is scMelee.
     void install(CoreApi* api);
-    void show(bool on);
+    void show(bool on, bool desync);
     bool shown();
 }
 

@@ -236,7 +236,7 @@ def read_local(c: HarnessClient, b: Block) -> dict:
             "lock": {"seq": lseq, "ready": ready, "css": css, "char_kind": kind, "costume": costume,
                      "stage_pick": stage, "asl": asl, "game": game},
             **({"own": port_values(d[0x40:0x40 + PORT_VALUES_SIZE]),
-                "hud_disconnected": d[0x7C]} if len(d) >= 0x80 else {})}
+                "hud_disconnected": d[0x7C], "desynced": d[0x7D]} if len(d) >= 0x80 else {})}
 
 
 def read_session(c: HarnessClient, b: Block) -> dict:

@@ -231,7 +231,9 @@ namespace PPOM {
         PortValues own;   // written by the game with the lock-in (its seq covers both)
         u8 hudDisconnected;  // game: 1 once it draws DISCONNECTED in the match (Dolphin's OSD
                              // stands in only when the game does not); 0 at each match setup
-        u8 _reserved2[3];
+        u8 desynced;      // Dolphin: the session ended the match because the two machines'
+                          // game states differ, until the match scene is left
+        u8 _reserved2[2];
     };                    // 0x80
 
     // ---- SESSION ----
