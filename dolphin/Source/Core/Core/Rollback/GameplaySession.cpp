@@ -1140,7 +1140,8 @@ LockIn LockFromJson(const picojson::object& o)
     l.char_kind = 0xFF;
     l.costume = 0;
   }
-  if (l.stage_pick != NO_STAGE && !PeerData::ValidStageKind(l.stage_pick))
+  if (l.stage_pick != NO_STAGE && l.stage_pick != STAGE_PENDING &&
+      !PeerData::ValidStageKind(l.stage_pick))
   {
     WARN_LOG_FMT(BRAWLBACK, "gprb lobby: peer stage pick {:#x} refused", l.stage_pick);
     l.stage_pick = NO_STAGE;
@@ -1294,7 +1295,7 @@ StageDecision DecideStage(u32 game)
 }
 
 // Host, under s.mutex: once every player is locked in for the next game, decide its setup. The
-// stage: the pick of the player who lost the last game, else any pick, else random from the
+// stage: the pick of the player who lost the last game (waited for), else random from the
 // match's stage list (DrawRandomStage). Slippi: Unranked random (every game), Direct random for
 // game 1 and then the loser's pick. A pick is taken as it is: Slippi does not restrict Direct's
 // stage select, so the server's list only feeds the random stages.
@@ -1349,6 +1350,23 @@ void MaybeDecideSetup()
   const StageDecision decided = DecideStage(game);
   if (decided.applies && decided.wait)
     return;
+  // The stage pick: the last game's loser's (s.last_pickers: a 1v1's loser, both after a draw;
+  // the game sends the lower port's), no one else's. A picker locks in with the character first
+  // (STAGE_PENDING) and goes to the stage select once everyone is locked in: wait for that pick.
+  std::array<u16, Online::GameSetup::MAX_PORTS> picks{NO_STAGE, NO_STAGE, NO_STAGE, NO_STAGE};
+  bool pick_pending = false;
+  for (size_t i = 0; i < locks.size(); ++i)
+  {
+    if (!locks[i])
+      continue;
+    if (locks[i]->stage_pick == STAGE_PENDING)
+      pick_pending = pick_pending || ((s.last_pickers >> i) & 1);
+    else
+      picks[i] = locks[i]->stage_pick;
+  }
+  const int pick_port = Online::GameSetup::StagePickPort(s.last_pickers, picks);
+  if (!decided.applies && pick_pending && pick_port < 0)
+    return;
   MatchSetup st;
   st.game = game;
   st.num_players = count;
@@ -1358,15 +1376,6 @@ void MaybeDecideSetup()
     if (const LockIn* l = locks[port])
       st.players[port] = {true, l->char_kind, l->costume, l->port_values, teams.team[port]};
   }
-  // The stage pick: the last game's loser's (s.last_pickers: a 1v1's loser, both after a draw),
-  // else any player's, in port order.
-  std::array<u16, Online::GameSetup::MAX_PORTS> picks{NO_STAGE, NO_STAGE, NO_STAGE, NO_STAGE};
-  for (size_t i = 0; i < locks.size(); ++i)
-  {
-    if (locks[i])
-      picks[i] = locks[i]->stage_pick;
-  }
-  const int pick_port = Online::GameSetup::StagePickPort(s.last_pickers, picks);
   const LockIn* pick = pick_port >= 0 ? locks[pick_port] : nullptr;
   if (decided.applies)
   {

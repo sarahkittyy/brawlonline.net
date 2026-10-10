@@ -164,6 +164,10 @@ constexpr u8 MAX_TEAM = 2;
 // the region set, so the flags are rolled back with the game.
 constexpr u32 GONE_FLAG_OFFSET = 0x20C;
 constexpr u16 NO_STAGE = 0xFFFF;
+// LockIn::stage_pick of the player who picks the next stage (Direct's loser): locked in with the
+// character, and the stage select still to come; the setup waits for the pick (MaybeDecideSetup).
+// The game's PPOM::STAGE_PENDING.
+constexpr u16 STAGE_PENDING = 0xFFFE;
 
 // A player's port values (design 5.1): their name tag and its controls, in the game's PPOM
 // PortValues layout (game-code/PPOnline/include/ppom.h, 0x3C bytes). Opaque to the session: it
@@ -178,7 +182,8 @@ struct LockIn
   u8 css = 0xFF;          // CSS id (diagnostics)
   u8 char_kind = 0xFF;    // gmCharacterKind (random already resolved)
   u8 costume = 0;         // colour number
-  u16 stage_pick = NO_STAGE;  // a stage picked on the stage select (Direct: the loser's pick)
+  u16 stage_pick = NO_STAGE;  // a stage picked on the stage select (Direct: the loser's pick),
+                              // or STAGE_PENDING
   u8 asl = 0;             // P+ alternate-stage buttons of that pick
   u32 game = 0;           // the game (1-based) this lock-in is for
   PortValues port_values{};  // the player's name tag and controls (all zero: the defaults)

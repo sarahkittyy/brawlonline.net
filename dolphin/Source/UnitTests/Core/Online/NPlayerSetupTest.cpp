@@ -190,10 +190,10 @@ TEST(NPlayerSetup, HostileEndStateStaysInRange)
 TEST(NPlayerSetup, StagePick)
 {
   constexpr u16 X = 0xFFFF;
-  // The picker's pick first; else any pick in port order; else random.
+  // The first picker's pick; anyone else's is not played (random).
   EXPECT_EQ(StagePickPort(0b0010, {0x21, 0x01, X, X}), 1);
-  EXPECT_EQ(StagePickPort(0b0010, {0x21, X, 0x02, X}), 0);
+  EXPECT_EQ(StagePickPort(0b0010, {0x21, X, 0x02, X}), -1);
   EXPECT_EQ(StagePickPort(0b0011, {X, 0x02, X, X}), 1);
   EXPECT_EQ(StagePickPort(0b1000, {X, X, X, X}), -1);
-  EXPECT_EQ(StagePickPort(0, {X, X, X, 0x2E}), 3);
+  EXPECT_EQ(StagePickPort(0, {X, X, X, 0x2E}), -1);
 }

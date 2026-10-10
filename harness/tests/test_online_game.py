@@ -774,8 +774,10 @@ def test_direct_set_under_the_gameplay_session(backend: OnlineBackend,
     their search) on a random stage from P+'s legal list; both games build the same match from
     SESSION and start it in step at the first simulation frame (RNG, frame counters and setup
     synced); the confirmed frames of both peers agree and both reach game set on the same frame;
-    both go straight back to the online CSS, still connected. Game 2: the loser picks the stage
-    on P+'s stage select, the winner locks in with START, and that stage is played.
+    both go straight back to the online CSS, still connected. Games 2 and 3: both lock in with
+    START (nobody is locked in before, so both characters can change), then the loser picks the
+    stage on P+'s stage select and that stage is played; game 3's pick is a new one (an earlier
+    pick used to lock its player in again at once and be played again).
     Screenshots: run/artifacts/game-bridge/gameplay-set/."""
     a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, "gameplay-set", ("iris", "jack"))
     for g, other in ((a, ub), (b, ua)):
@@ -788,14 +790,14 @@ def test_direct_set_under_the_gameplay_session(backend: OnlineBackend,
         assert lo["lock"]["ready"] and lo["lock"]["game"] == 1, lo
         # Both games keep running their own scenes: no netplay session, no boot.
         assert not g.c.netplay_status().game_running
-    rep = online_set.play_set([a, b], games=2, mode="direct",
+    rep = online_set.play_set([a, b], games=3, mode="direct",
                               panels={g.name: g.panel for g in (a, b)})
     # The CSS remembered each player's character (coin placed, same costume) after each game and
-    # after the loser's stage select.
+    # after B on the loser's stage select.
     assert rep["lock_ins"][0].get("after_sss"), rep["lock_ins"]
     stages = [g["stage"] for g in rep["games"]]
     assert stages[0] in LEGAL_STAGES, stages
-    assert stages[1] == B.STAGE_KIND[online_set.STAGE_PICK], stages
+    assert stages[1:] == [B.STAGE_KIND[online_set.STAGE_PICKS[n]] for n in (2, 3)], stages
     for g in (a, b):
         assert g.bridge()["lost"] == 0
         # No reboot: the GameBridge found the plugin's block once and never lost it.
