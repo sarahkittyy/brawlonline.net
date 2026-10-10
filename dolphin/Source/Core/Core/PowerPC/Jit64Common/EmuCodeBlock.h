@@ -58,13 +58,18 @@ public:
   Gen::FixupBranch CheckIfSafeAddress(const Gen::OpArg& reg_value, Gen::X64Reg reg_addr,
                                       BitSet32 registers_in_use);
 
-  void EmitJITDirtyBitmapUpdate(Gen::X64Reg reg_addr, s32 offset);
-  void EmitJITDirtyBitmapUpdateConst(u32 address, int accessSize);
+  // Marks the rollback granules of a `size`-byte store at reg_addr + offset. Scratch registers
+  // outside registers_in_use may be clobbered; the default treats all of them as in use.
+  void EmitJITDirtyBitmapUpdate(Gen::X64Reg reg_addr, s32 offset, u32 size,
+                                BitSet32 registers_in_use = BitSet32::AllTrue(32));
+  void EmitJITDirtyBitmapUpdateConst(u32 address, int accessSize, const Gen::OpArg& value);
   // these return the address of the MOV, for backpatching
   void UnsafeWriteRegToReg(Gen::OpArg reg_value, Gen::X64Reg reg_addr, int accessSize,
-                           s32 offset = 0, bool swap = true, Gen::MovInfo* info = nullptr);
+                           s32 offset = 0, bool swap = true, Gen::MovInfo* info = nullptr,
+                           BitSet32 registers_in_use = BitSet32::AllTrue(32));
   void UnsafeWriteRegToReg(Gen::X64Reg reg_value, Gen::X64Reg reg_addr, int accessSize,
-                           s32 offset = 0, bool swap = true, Gen::MovInfo* info = nullptr);
+                           s32 offset = 0, bool swap = true, Gen::MovInfo* info = nullptr,
+                           BitSet32 registers_in_use = BitSet32::AllTrue(32));
 
   bool UnsafeLoadToReg(Gen::X64Reg reg_value, Gen::OpArg opAddress, int accessSize, s32 offset,
                        bool signExtend, Gen::MovInfo* info = nullptr);

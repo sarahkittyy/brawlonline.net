@@ -462,8 +462,7 @@ void Jit64::dcbz(UGeckoInstruction inst)
 
     // Fast path: compute full address, then zero out 32 bytes of memory.
     // A 32-byte cache line can cross a 64-byte rollback granule boundary.
-    EmitJITDirtyBitmapUpdate(RSCRATCH, 0);
-    EmitJITDirtyBitmapUpdate(RSCRATCH, 31);
+    EmitJITDirtyBitmapUpdate(RSCRATCH, 0, 32);
     if (cpu_info.bAVX)
     {
       VXORPS(XMM0, XMM0, R(XMM0));
