@@ -24,6 +24,7 @@ static std::atomic<u32> s_callback_guards = 0;
 static std::atomic<u64> s_config_version = 0;
 
 static std::shared_mutex s_layers_rw_lock;
+static std::mutex s_save_mutex;
 static std::recursive_mutex s_callbacks_lock;
 
 using ReadLock = std::shared_lock<std::shared_mutex>;
@@ -126,6 +127,9 @@ void Load()
 void Save()
 {
   {
+    // The shared layers lock lets concurrent callers through, and they would write the same files
+    // at once.
+    std::lock_guard save_lock(s_save_mutex);
     ReadLock lock(s_layers_rw_lock);
 
     for (auto& layer : s_layers)
