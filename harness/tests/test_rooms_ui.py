@@ -183,6 +183,15 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     g.wait(40)
     assert sim.room.teams
     g.shot("08-teams-on")
+    # X: our team colour to the next one (red -> blue), Y back.
+    team0 = sim.room.members[0].team
+    g.tap("X")
+    g.wait(30)
+    assert sim.room.members[0].team == (team0 + 1) % 3, sim.room.members[0]
+    g.shot("08b-team-changed")
+    g.tap("Y")
+    g.wait(30)
+    assert sim.room.members[0].team == team0
     # L: private.
     g.tap("L")
     g.wait(30)
@@ -226,6 +235,7 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     assert sim.room is not None and sim.me() == 0
     g.wait(30)
     assert not keypad_open(g), "the keypad came back after the join"
+    assert ppom.read_local(c, sim.b)["lock"]["ready"] == 0, "the keypad's START locked in"
     g.shot("14-joined-bob-host")
 
     # A wrong code: "Room not found." in red.

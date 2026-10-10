@@ -11,7 +11,9 @@
 //   RGB5A3 (the WITH FRIENDS buttons' labels MenMainWifi21/22/23): black letters, a white rim,
 //          transparent elsewhere, as the game's labels are drawn;
 //   I4     (the character select's "Seeking" MenSelchrWifi03): white letters (intensity is
-//          colour and alpha there).
+//          colour and alpha there);
+//   CMPR   (the panel states' "Selecting Character..." WifiInfWait05_0): white letters, a dark
+//          rim, transparent elsewhere, in CMPR's 3-colour mode (black, white, grey, clear).
 // Nothing is allocated for long: two masks from the Network heap, freed at once.
 #include <OS/OSCache.h>
 #include <gf/gf_heap_manager.h>
@@ -248,9 +250,9 @@ namespace Labels {
         u32 fmt = *(u32*)(tex0 + 0x20);
         u8* data = tex0 + *(u32*)(tex0 + 0x10);
         if (w <= 0 || h <= 0 || w > 512 || h > 256) return false;
-        if (fmt != 5 && fmt != 0) return false;
-        // Textures are stored in whole blocks (RGB5A3 4x4, I4 8x8): a size that is no multiple
-        // of the block (the 88x20 "Seeking") has padding blocks at the right and the bottom.
+        if (fmt != 5 && fmt != 0 && fmt != 14) return false;
+        // Textures are stored in whole blocks (RGB5A3 4x4, I4 and CMPR 8x8): a size that is no
+        // multiple of the block (the 88x20 "Seeking") has padding blocks at the right and the bottom.
         const int bw = fmt == 5 ? 4 : 8, bh = fmt == 5 ? 4 : 8;
         const int bpr = (w + bw - 1) / bw;   // blocks per row
         u32 n = (u32)(w * h);
@@ -282,6 +284,37 @@ namespace Labels {
                 }
             }
             DCFlushRange(data, (u32)(bpr * ((h + bh - 1) / bh) * 32));
+        } else if (fmt == 14) {
+            // CMPR, 8x8 blocks of four 4x4 sub-blocks {u16 c0, u16 c1, u32 2-bit indices}. With
+            // c0 = black <= c1 = white the palette is black, white, grey, transparent.
+            grow(mask, rimMask, w, h, rim);
+            const int bpc = (h + bh - 1) / bh;
+            for (int by = 0; by < bpc; by++) {
+                for (int bx = 0; bx < bpr; bx++) {
+                    u8* blk = data + (by * bpr + bx) * 32;
+                    for (int sb = 0; sb < 4; sb++) {
+                        u32 idx = 0;
+                        for (int yy = 0; yy < 4; yy++) {
+                            for (int xx = 0; xx < 4; xx++) {
+                                int x = bx * 8 + (sb & 1) * 4 + xx, y = by * 8 + (sb >> 1) * 4 + yy;
+                                u32 k = 3;
+                                if (x < w && y < h) {
+                                    int m = mask[y * w + x], o = rimMask[y * w + x];
+                                    if (m >= 0xA0) k = 1;
+                                    else if (m >= 0x50) k = 2;
+                                    else if (o >= 0x40 || m >= 0x20) k = 0;
+                                }
+                                idx = (idx << 2) | k;
+                            }
+                        }
+                        u8* e = blk + sb * 8;
+                        *(u16*)e = 0x0000;
+                        *(u16*)(e + 2) = 0xFFFF;
+                        *(u32*)(e + 4) = idx;
+                    }
+                }
+            }
+            DCFlushRange(data, (u32)(bpr * bpc * 32));
         } else {
             // I4, 8x8 blocks, two texels a byte.
             for (int y = 0; y < h; y++) {

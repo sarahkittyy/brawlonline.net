@@ -61,6 +61,7 @@ namespace OnlineMenu {
         bool statusRed;
         bool statusDirty;
         u32 lastButtons;
+        u32 startGuard;         // frames START presses are dropped after the keypad (see codeEntered)
         int zHeld;
         u32 searchSeq;          // seq of the current FIND_OPPONENT (0 = no search)
         bool pollPending;       // a GET_MATCH_STATE (or the FIND_OPPONENT) awaits its answer
@@ -114,6 +115,7 @@ namespace OnlineMenu {
     static const u32 BTN_Z = 0x0010;
     static const u32 BTN_B = 0x0200;
     static const int DISCONNECT_HOLD_DELAY = 0x30;   // Slippi HandleInputsOnCSS.asm:14 (48 frames)
+    static const u32 START_GUARD_FRAMES = 45;        // START ignored after a room code (codeEntered)
     static const int SE_BACK = 2, SE_ERROR = 3;      // Brawl menu sounds (cancel, buzzer)
     static const int LOCAL_PORT = 0;                 // the online CSS has one local player area
 
@@ -1267,8 +1269,12 @@ namespace OnlineMenu {
             s.roomError = false;
             s.roomText[0] = 0;
             // The keypad's START is still down: no press counts until every button is up (or it
-            // opens the keypad again before Dolphin's answer is in).
+            // opens the keypad again before Dolphin's answer is in). The pad system can also
+            // report the keypad's START press again a few frames after the keypad closed, with
+            // START already up (seen in harness/tests/test_rooms_game.py: the joiner locked in
+            // on arriving), so START presses are dropped for a short while as well.
             s.lastButtons = 0xFFFFFFFF;
+            s.startGuard = START_GUARD_FRAMES;
             return;
         }
         strncpy(s.code, code, PPOM::CODE_LEN);
@@ -1523,7 +1529,7 @@ namespace OnlineMenu {
     //   R           host, between games: Teams on / off
     //   A           host, between games, with the hand over another player's panel: open / close
     //               that slot (closing an occupied one removes the player)
-    //   the flag    Teams on: the player's own team colour (Brawl's team flag on their panel)
+    //   X / Y       Teams on, between games: the player's own team colour, next / previous
     // The others' panels (room_css.cpp) and the line come from Dolphin: SESSION's room view and
     // ROOM_POLL's answer, asked one at a time as the match state is.
 
@@ -1560,6 +1566,17 @@ namespace OnlineMenu {
         // Ready, or the room is starting (the lock-in must not change then), or a game is armed.
         return roomLockedForNext() || g_onlineMatchGame != 0 ||
                (roomIn() && PPOM::g_block.session.roomStatus == 1);
+    }
+
+    // Every open slot has a player (the room can start once all are ready, rooms.md #7).
+    static bool roomFull()
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        for (int i = 0; i < PPOM::SESSION_PLAYERS; i++) {
+            u8 b = se.players[i].roomSlot;
+            if ((b & PPOM::SLOT_OPEN) && !(b & PPOM::SLOT_TAKEN)) return false;
+        }
+        return true;
     }
 
     // This player picks the next room game's stage (the last game's loser; of several pickers,
@@ -1630,6 +1647,7 @@ namespace OnlineMenu {
             } else {
                 taken |= (u8)(1 << i);
                 u16Name(p.name, pl.name);
+                p.host = (bits & PPOM::SLOT_HOST) || se.roomHost == i;
                 int css = (bits & PPOM::SLOT_READY) && pl.roomChar != 0xFF ? cssOfKind(pl.roomChar) : -1;
                 if (bits & PPOM::SLOT_IN_GAME) {
                     p.kind = RoomCss::PV_IN_GAME;
@@ -1687,7 +1705,7 @@ namespace OnlineMenu {
     {
         const PPOM::Session& se = PPOM::g_block.session;
         if (roomIn() && se.roomStatus == 0 && roomPicksStage() && !roomLockedForNext() && lockChar() >= 0 &&
-            !s.roomError) {
+            !s.roomError && roomFull()) {
             setStatus("Press START to select stage", false);   // Direct's (rooms.md §3)
             return;
         }
@@ -1797,6 +1815,19 @@ namespace OnlineMenu {
                     playSE(1);
                 }
             }
+            // Teams on: X / Y pick the next / previous team colour (in a team battle the costume
+            // follows the team anyway, so the costume buttons are free; their press is used up).
+            const u32 BTN_X = 0x400, BTN_Y = 0x800;
+            bool teamsOn = (se.roomFlags & PPOM::RF_TEAMS) && se.roomMode == 2;
+            if (teamsOn && (pressed & (BTN_X | BTN_Y)) && me >= 0) {
+                maskPressed(BTN_X | BTN_Y);
+                int cur = se.players[me].roomTeam < PPOM::TEAM_COUNT ? se.players[me].roomTeam : 0;
+                if (waiting && !roomLockedForNext()) {
+                    int next = (cur + ((pressed & BTN_X) ? 1 : PPOM::TEAM_COUNT - 1)) % PPOM::TEAM_COUNT;
+                    postRoom(PPOM::ROOM_TEAM, (u8)next, 0, NULL);
+                    playSE(1);
+                }
+            }
             int team = RoomCss::myTeamClicked();
             if (team >= 0 && waiting) postRoom(PPOM::ROOM_TEAM, (u8)team, 0, NULL);
             roomMatch();
@@ -1805,7 +1836,7 @@ namespace OnlineMenu {
         int myTeam = -1;
         roomPanels(views, &myTeam);
         bool teams = in && (se.roomFlags & PPOM::RF_TEAMS) && se.roomMode == 2;
-        RoomCss::tick(views, teams, myTeam);
+        RoomCss::tick(views, teams, myTeam, host);
     }
 
     // LOCAL.screen (rooms-game-interface.md §2): where the game is, for the launcher's joins.
@@ -1966,6 +1997,10 @@ namespace OnlineMenu {
             // ignore buttons still held from the menu until they are released
             pressed = 0;
             if (!b) s.lastButtons = 0;
+        }
+        if (s.startGuard) {
+            s.startGuard--;
+            pressed &= ~BTN_START;
         }
         if (pressed & BTN_START) {
             int p = pressedPort(BTN_START);
