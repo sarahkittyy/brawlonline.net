@@ -14,6 +14,13 @@
 # (stapling would change the file after latest-mac.yml recorded its sha512). Notarization uses an
 # App Store Connect API key: APPLE_API_KEY_PATH (the .p8), APPLE_API_KEY_ID, APPLE_API_ISSUER.
 #
+# MAC_NOTARY_SUBMIT=<file> (CI): don't wait for Apple. The app is not notarized on its own or
+# stapled; the signed DMG is submitted to the notary service once and the call returns at once,
+# writing {"id", "version", "file"} to <file>. Notarizing the DMG covers the app inside it (the same
+# code signature is in the zip), and Gatekeeper checks an unstapled ticket online on first launch.
+# .github/workflows/client-mac-publish.yml publishes the build once Apple accepts it, however long
+# that takes.
+#
 # Without MAC_SIGN_IDENTITY (local test builds) the app is ad-hoc signed: Apple silicon runs it,
 # Gatekeeper asks the user to allow it once, and it can't update itself (Squirrel.Mac requires the
 # new version's signature to match the running one's). CI never publishes such a build.
@@ -53,6 +60,7 @@ EOF
 fi
 
 identity="${MAC_SIGN_IDENTITY:--}"
+submit_to="${MAC_NOTARY_SUBMIT:-}"
 ents=assets/entitlements.mac.plist
 notary() {
   xcrun notarytool "$@" --key "$APPLE_API_KEY_PATH" --key-id "$APPLE_API_KEY_ID" --issuer "$APPLE_API_ISSUER"
@@ -142,13 +150,17 @@ JS
   codesign --verify --deep --strict "$app"
   codesign -dvv "$app" 2>&1 | grep -E '^(Authority|TeamIdentifier|Timestamp)' || true
 
-  tmp="$(mktemp -d)"
-  ditto -c -k --keepParent "$app" "$tmp/app.zip"
-  notarize "$tmp/app.zip"
-  rm -rf "$tmp"
-  xcrun stapler staple "$app"
-  xcrun stapler validate "$app"
-  spctl --assess --type execute -vv "$app"
+  if [ -z "$submit_to" ]; then
+    tmp="$(mktemp -d)"
+    ditto -c -k --keepParent "$app" "$tmp/app.zip"
+    notarize "$tmp/app.zip"
+    rm -rf "$tmp"
+    xcrun stapler staple "$app"
+    xcrun stapler validate "$app"
+    spctl --assess --type execute -vv "$app"
+  else
+    echo "notarization: the DMG is submitted after packaging, without waiting (MAC_NOTARY_SUBMIT)"
+  fi
   # electron-builder signs the DMG (same identity, found by hash or name) before latest-mac.yml
   # records it; the app inside is already signed and is not touched again.
   sign_dmg=(-c.mac.identity="$identity" -c.dmg.sign=true)
@@ -158,14 +170,29 @@ fi
 npx electron-builder build --mac dmg zip "--$arch" --publish never --prepackaged "$app" \
   "${sign_dmg[@]}" -c.mac.hardenedRuntime=false -c.mac.notarize=false
 if [ "$identity" != "-" ]; then
-  for dmg in release/build/*.dmg; do
+  dmgs=(release/build/*.dmg)
+  for dmg in "${dmgs[@]}"; do
     codesign --verify --strict "$dmg"
     case "$(codesign -dvv "$dmg" 2>&1)" in
       *"Timestamp="*) ;;
       *) echo "$dmg has no secure timestamp" >&2; exit 1 ;;
     esac
-    notarize "$dmg"
+    if [ -z "$submit_to" ]; then notarize "$dmg"; fi
   done
+  if [ -n "$submit_to" ]; then
+    [ "${#dmgs[@]}" -eq 1 ] || { echo "MAC_NOTARY_SUBMIT expects one DMG, found ${#dmgs[@]}" >&2; exit 1; }
+    dmg="${dmgs[0]}"
+    echo "notarization: uploading $(basename "$dmg") ($(du -h "$dmg" | cut -f1)), not waiting for Apple"
+    result="$(notary submit "$dmg" --output-format json)" || { echo "$result" >&2; echo "notarytool submit failed" >&2; exit 1; }
+    id="$(json_field "$result" id)"
+    [ -n "$id" ] || { echo "$result" >&2; echo "notarytool submit gave no submission ID" >&2; exit 1; }
+    version="$(node -p 'require("./release/app/package.json").version')"
+    mkdir -p "$(dirname "$submit_to")"
+    ID="$id" V="$version" F="$(basename "$dmg")" node -e '
+      const { ID, V, F } = process.env;
+      console.log(JSON.stringify({ id: ID, version: V, file: F }));' >"$submit_to"
+    echo "notarization: submitted $(basename "$dmg") as $id (version $version); written to $submit_to"
+  fi
 fi
 mkdir -p "$out"
 mv release/build/latest-mac.yml release/build/*.dmg release/build/*.zip "$out/"

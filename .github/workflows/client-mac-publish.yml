@@ -1,0 +1,51 @@
+# macOS client: publishes the client workflow's macOS builds once Apple's notary service accepts
+# them (.github/scripts/mac_publish.py).
+#
+# The client workflow's macos job submits its DMG to Apple without waiting and uploads the build
+# (launcher-mac) and the submission (mac-notary). Apple can answer in minutes or hours, so this asks
+# again every 10 minutes (and right after each client run) until it does, with no time limit (the
+# artifacts are kept 90 days). An accepted build is published with pp-release only if it is newer
+# than the latest-mac.yml on the site; older builds, accepted late, are dropped instead, so several
+# client runs waiting for Apple at once can never put an older version back. Runs never overlap
+# (concurrency group), so checking the published version and publishing can't interleave.
+#
+# Runs on sarahvps2 (self-hosted, where pp-release lives): a run that finds nothing to do takes a
+# few seconds. Repository variable DISABLE_MACOS="true" turns it off, as for the macos job.
+name: client-mac-publish
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_run:
+    workflows: [client]
+    types: [completed]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write # read the client runs' artifacts and delete them once published or dropped
+
+concurrency:
+  group: client-publish-mac
+  cancel-in-progress: false
+
+jobs:
+  publish-mac:
+    if: ${{ vars.DISABLE_MACOS != 'true' }}
+    runs-on: [self-hosted, linux, x64, sarahvps2, brawlonline]
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+          sparse-checkout: .github/scripts
+      - name: Publish what Apple has accepted
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APPLE_API_KEY_P8: ${{ secrets.APPLE_API_KEY_P8 }}
+          APPLE_API_KEY_ID: ${{ secrets.APPLE_API_KEY_ID }}
+          APPLE_API_ISSUER: ${{ secrets.APPLE_API_ISSUER }}
+        run: python3 .github/scripts/mac_publish.py --work "$RUNNER_TEMP/mac-publish"
+      - name: Clean up
+        if: always()
+        run: rm -rf "$RUNNER_TEMP/mac-publish"
