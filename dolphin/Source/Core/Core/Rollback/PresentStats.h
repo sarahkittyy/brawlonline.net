@@ -46,6 +46,15 @@ void OnDisplayedFrameStart(bool after_resimulation);
 // Video thread: the presenter showed a frame (`duplicate`: the same XFB as the previous one).
 void OnPresent(bool duplicate);
 
+// Present hold, with CoreTiming's present pacing (deterministic dual core). The pacing makes every
+// frame run from its input to its XFB copy in one go, one field after the previous one, but a
+// frame that rolls back runs the re-run in between (~4 ms a frame), and its present comes that much
+// late. So the presenter holds each paced frame until its copy's due time on the throttle's clock
+// plus the 95th percentile of the recent frames' arrivals after theirs: the presents stay one field
+// apart and only the rare slower frame is shown late, at the cost of a few milliseconds.
+// Video thread, before the present: the time to present at, or `now` when not held.
+TimePoint PresentHoldUntil(TimePoint now);
+
 // Present cadence as a 59.94 Hz screen without VSync would show it: a hitch is a present that does
 // not land in the refresh right after the previous present's (a repeated or a skipped frame),
 // averaged over four refresh phases. Taken (and reset) by the online session's telemetry.
@@ -55,6 +64,8 @@ struct Cadence
   double hitches = 0;
   double interval_ms_max = 0;
   double interval_ms_sum = 0, interval_ms_sq = 0;
+  u64 holds = 0;  // presents PresentHoldUntil held
+  double hold_ms_sum = 0, hold_ms_max = 0;
 };
 Cadence TakeCadence();
 
@@ -108,4 +119,15 @@ struct GpuRamWriteStats
   u64 readback_us_max = 0;
 };
 GpuRamWriteStats GetGpuRamWrites();
+
+// PPR_PRESENT_LOG=<file>: one line per present with its timeline, for the present cadence
+// (deterministic dual core): when the CPU thread preprocessed the frame's XFB copy, how long it
+// waited for the GPU thread and how many rollback bursts it ran since the previous copy, when the
+// GPU thread started the swap, the presenter's target time and when the present returned.
+bool PresentTraceEnabled();
+void TraceCpuWaitForGpu(double ms);            // CPU thread
+void TraceRollbackBurstEnd(double behind_ms);  // CPU thread: the presented frame resumed this late
+void TraceThrottle(TimePoint target, TimePoint woke);  // CPU thread: a throttle that slept
+void TraceSwapStart();                         // GPU thread
+void TracePresentTarget(TimePoint intended, TimePoint target);  // GPU thread, before the sleep
 }  // namespace Rollback::PresentStats

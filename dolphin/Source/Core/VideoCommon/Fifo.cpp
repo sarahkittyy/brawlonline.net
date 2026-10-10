@@ -20,6 +20,7 @@
 #include "Core/HW/GPFifo.h"
 #include "Core/HW/Memmap.h"
 #include "Core/Host.h"
+#include "Core/Rollback/PresentStats.h"
 #include "Core/System.h"
 
 #include "VideoCommon/AsyncRequests.h"
@@ -269,7 +270,17 @@ void FifoManager::SyncGPU(SyncGPUReason reason, bool may_move_read_ptr)
 {
   if (m_use_deterministic_gpu_thread)
   {
-    m_gpu_mainloop.Wait();
+    if (Rollback::PresentStats::PresentTraceEnabled())
+    {
+      const auto t0 = Clock::now();
+      m_gpu_mainloop.Wait();
+      Rollback::PresentStats::TraceCpuWaitForGpu(
+          std::chrono::duration<double, std::milli>(Clock::now() - t0).count());
+    }
+    else
+    {
+      m_gpu_mainloop.Wait();
+    }
     if (!m_gpu_mainloop.IsRunning())
       return;
 

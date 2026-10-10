@@ -24,6 +24,7 @@
 #include "Core/Core.h"
 #include "Core/HW/SystemTimers.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/PresentStats.h"
 #include "Core/System.h"
 
 #include "VideoCommon/Fifo.h"
@@ -125,7 +126,9 @@ void CoreTimingManager::Init()
 
   m_throttled_after_presentation = false;
   m_frame_hook = m_system.GetVideoEvents().after_present_event.Register([this](const PresentInfo&) {
-    m_throttled_after_presentation.store(false, std::memory_order_relaxed);
+    // In a rollback session the CPU thread re-arms it at the XFB copy (OnPresentedXFBCopy).
+    if (!PresentPacingActive())
+      m_throttled_after_presentation.store(false, std::memory_order_relaxed);
   });
 }
 
@@ -150,6 +153,7 @@ void CoreTimingManager::RefreshConfig()
   m_config_oc_inv_factor = 1.0f / m_config_oc_factor;
   m_config_sync_on_skip_idle = Config::Get(Config::MAIN_SYNC_ON_SKIP_IDLE);
   m_config_rush_frame_presentation = Config::Get(Config::MAIN_RUSH_FRAME_PRESENTATION);
+  m_config_present_pacing = Config::Get(Config::MAIN_ROLLBACK_PRESENT_PACING);
 
   // We don't want to skip so much throttling that the audio buffer overfills.
   m_max_throttle_skip_time =
@@ -417,6 +421,11 @@ void CoreTimingManager::SetRollbackResimulating(bool resimulating)
     // frame (bounded by MaxFallback).
     m_rollback_burst_pending = false;
     m_rollback_resimulating = false;
+    if (Rollback::PresentStats::PresentTraceEnabled())
+    {
+      Rollback::PresentStats::TraceRollbackBurstEnd(
+          std::chrono::duration<double, std::milli>(Clock::now() - m_rollback_burst_due).count());
+    }
     m_throttle_reference_cycle = GetTicks();
     m_throttle_reference_time = m_rollback_burst_due;
     return;
@@ -562,6 +571,23 @@ void CoreTimingManager::Throttle(const s64 target_cycle)
   UpdateVISkip(time, target_time);
 
   SleepUntil(target_time);
+  if (Rollback::PresentStats::PresentTraceEnabled())
+    Rollback::PresentStats::TraceThrottle(target_time, Clock::now());
+}
+
+bool CoreTimingManager::PresentPacingActive() const
+{
+  // The CPU thread must see the XFB copies: single core, or the deterministic GPU thread's
+  // preprocessing.
+  return m_pace_on.load(std::memory_order_relaxed) && m_config_present_pacing &&
+         m_config_rush_frame_presentation && g_ActiveConfig.bImmediateXFB &&
+         (!m_system.IsDualCoreMode() || m_system.GetFifo().UseDeterministicGPUThread());
+}
+
+void CoreTimingManager::OnPresentedXFBCopy()
+{
+  if (PresentPacingActive())
+    m_throttled_after_presentation.store(false, std::memory_order_relaxed);
 }
 
 void CoreTimingManager::UpdateSpeedLimit(s64 cycle, double new_speed)

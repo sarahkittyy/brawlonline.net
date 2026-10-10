@@ -182,6 +182,7 @@ bool Presenter::FetchXFB(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_heigh
 void Presenter::ViSwap(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height, u64 ticks,
                        TimePoint presentation_time)
 {
+  Rollback::PresentStats::TraceSwapStart();
   bool is_duplicate = FetchXFB(xfb_addr, fb_width, fb_stride, fb_height, ticks);
 
   PresentInfo present_info{
@@ -244,6 +245,7 @@ void Presenter::ImmediateSwap(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_
     return;
   }
 
+  Rollback::PresentStats::TraceSwapStart();
   const u64 ticks = m_next_swap_estimated_ticks;
 
   FetchXFB(xfb_addr, fb_width, fb_stride, fb_height, ticks);
@@ -987,7 +989,10 @@ void Presenter::Present(PresentInfo* present_info)
 
     if (present_info != nullptr)
     {
-      const auto present_time = GetUpdatedPresentationTime(present_info->intended_present_time);
+      const auto present_time =
+          std::max(GetUpdatedPresentationTime(present_info->intended_present_time),
+                   Rollback::PresentStats::PresentHoldUntil(Clock::now()));
+      Rollback::PresentStats::TracePresentTarget(present_info->intended_present_time, present_time);
 
       Core::System::GetInstance().GetCoreTiming().SleepUntil(present_time);
 
