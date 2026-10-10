@@ -34,7 +34,7 @@ SYRINGE_HEAP = (0x817BA5A0, 0x10000)   # P+ v3.2 Syringe.asm: heap 60 start, siz
 
 CMD = {0xB3: "GET_MATCH_STATE", 0xB4: "FIND_OPPONENT", 0xB6: "OPEN_LOGIN", 0xB8: "UPDATE",
        0xB9: "GET_ONLINE_STATUS", 0xBA: "CLEANUP_CONNECTION", 0xBE: "FETCH_CODE_SUGGESTION",
-       0xE3: "GET_RANK"}
+       0xE3: "GET_RANK", 0xD0: "ROOM"}
 MODES = {0: "ranked", 1: "unranked", 2: "direct", 3: "teams"}
 
 SCROLL = {0: "none", 1: "older", 2: "newer", 3: "reset"}   # Slippi AutoComplete.s
@@ -88,7 +88,7 @@ def find_block(c: HarnessClient) -> Block:
         if i < 0:
             raise SystemExit("PPOM block not found in the Syringe heap (plugin not loaded?)")
         ver, sz, mbo, mbs, so, ss, lo, ls, dbo, dbs = struct.unpack_from(">HHHHHHHHHH", mem, i + 4)
-        if ver in (1, 2, 3, 4) and 0x100 < sz < 0x4000 and mbo and dbo:
+        if ver in (1, 2, 3, 4, 5) and 0x100 < sz < 0x4000 and mbo and dbo:
             a = start + i
             return Block(a, ver, sz, a + mbo, mbs, a + dbo, dbs, a + so if ss else 0, ss,
                          a + lo if ls else 0, ls)
@@ -299,6 +299,50 @@ def write_session(c: HarnessClient, b: Block, *, game: int, stage: int, players:
         d[S_TEAMS] = 1 if teams else 0
     c.write_mem(b.session + 4, bytes(d[4:]))
     c.write_mem(b.session, struct.pack(">I", seq + 1))
+
+
+# ---- v5: rooms (docs/rooms-game-interface.md) ----
+CMD_ROOM = 0xD0
+ROOM_OPS = {"poll": 0, "create": 1, "join": 2, "leave": 3, "slot": 4, "teams": 5, "public": 6,
+            "team": 7}
+L_SCREEN, L_ROOM_JOIN, L_ROOM = 0x36, 0x37, 0x38
+SCREENS = {"unknown": 0, "menus": 1, "online-css": 2, "room": 3, "online-busy": 4, "match": 5,
+           "offline": 6, "other": 7}
+S_ROOM_FLAGS, S_ROOM_CODE, S_ROOM_HOST, S_ROOM_STATUS, S_ROOM_MODE = 0x213, 0x214, 0x218, 0x219, 0x21A
+SP_ROOM_SLOT, SP_ROOM_TEAM, SP_ROOM_CHAR, SP_ROOM_COSTUME = 0x38, 0x39, 0x3A, 0x3B
+SLOT_OPEN, SLOT_TAKEN, SLOT_READY, SLOT_HOST, SLOT_IN_GAME = 1, 2, 4, 8, 0x10
+RF_IN, RF_PUBLIC, RF_TEAMS = 1, 2, 4
+
+
+def room_request(op: str, arg: int = 0, arg2: int = 0, code: str = "") -> bytes:
+    """A CMD_ROOM request payload (RoomRequest, 0x18 bytes)."""
+    return bytes([ROOM_OPS[op], arg, arg2, 0]) + u16s(code, CODE_LEN) + bytes(2)
+
+
+def decode_room_status(payload: bytes) -> dict:
+    """A CMD_ROOM response payload (RoomStatus)."""
+    phase, error, port = payload[0], payload[1], payload[2]
+    serial = struct.unpack_from(">I", payload, 4)[0]
+    return {"phase": phase, "error": error, "local_port": port, "serial": serial,
+            "text": from_u16s(payload[8:8 + 128])}
+
+
+def read_room(c: HarnessClient, b: Block) -> dict:
+    """The room view (v5): SESSION's room bytes and LOCAL's room phase, screen and join counter."""
+    se = c.read_mem(b.session, b.session_size)
+    lo = c.read_mem(b.local, b.local_size)
+    slots = []
+    for i in range(4):
+        o = 0x0C + 0x80 * i
+        slots.append({"bits": se[o + SP_ROOM_SLOT], "team": se[o + SP_ROOM_TEAM],
+                      "char": se[o + SP_ROOM_CHAR], "costume": se[o + SP_ROOM_COSTUME],
+                      "name": from_u16s(se[o + 4:o + 4 + 2 * NAME_LEN]),
+                      "picks_stage": se[o + SP_PICKS_STAGE]})
+    return {"flags": se[S_ROOM_FLAGS], "code": se[S_ROOM_CODE:S_ROOM_CODE + 4].decode("ascii", "replace"),
+            "host": se[S_ROOM_HOST], "status": se[S_ROOM_STATUS], "mode": se[S_ROOM_MODE],
+            "game": se[6], "session_state": se[4], "session_seq": struct.unpack_from(">I", se, 0)[0],
+            "slots": slots, "phase": lo[L_ROOM], "join": lo[L_ROOM_JOIN], "screen": lo[L_SCREEN],
+            "local_port": lo[5], "local_state": lo[4]}
 
 
 def set_test_gone(c: HarnessClient, b: Block, frame: int, ports: int, later_ports: int = 0,
