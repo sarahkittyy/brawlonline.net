@@ -63,6 +63,8 @@ target_compile_definitions(OnlineSecurityTest PRIVATE GEKKONET_STATIC GEKKONET_N
 
 # 3-4 player matches: teams and who picks the next stage (Core/Online/GameSetup).
 add_dolphin_test(NPlayerSetupTest Online/NPlayerSetupTest.cpp)
+# Rooms: the mm server's room messages, validated before they reach the game (Core/Online/RoomMessages).
+add_dolphin_test(RoomMessagesTest Online/RoomMessagesTest.cpp)
 if(MSVC)
   # zpp_bits (GekkoNet's serializer) trips /W4 warnings; GekkoNet's own sources do the same.
   set_source_files_properties(Rollback/GekkoNetFuzzTest.cpp

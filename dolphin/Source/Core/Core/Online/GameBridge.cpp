@@ -22,6 +22,7 @@
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/Ranked.h"
 #include "Core/Online/RecentCodes.h"
+#include "Core/Online/Rooms.h"
 #include "Core/Online/User.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/Rollback/GameplaySession.h"
@@ -36,7 +37,10 @@ namespace
 constexpr u32 MAGIC = 0x50504F4D;  // "PPOM"
 // 4: 3-4 player matches (docs/nplayer/setup.md): SESSION 0x220 with each player's team, the
 // stage pickers, the elimination order, the gone flags and the teams switch; LOCAL's lock team.
-constexpr u16 VERSION = 4;
+// 5: rooms (docs/rooms-game-interface.md): CMD_ROOM, LOCAL screen/roomJoin/room and the room view
+// in SESSION's spare bytes; no size or offset of v4 changed, so a v4 plugin still works (no rooms).
+constexpr u16 VERSION = 5;
+constexpr u16 MIN_VERSION = 4;
 constexpr u32 HEADER_SIZE = 0x24;
 
 // Header fields (u16 unless noted)
@@ -81,6 +85,17 @@ constexpr u32 S_SEQ = 0x00, S_STATE = 0x04, S_MODE = 0x05, S_GAME = 0x06, S_LAST
               S_TEAMS = 0x210, S_SETUP_ERROR = 0x211;
 constexpr u32 SP_SIZE = 0x80, SP_PRESENT = 0, SP_KIND = 1, SP_COSTUME = 2, SP_TEAM = 3,
               SP_NAME = 4, SP_CODE = 0x24, SP_PICKS_STAGE = 0x36, SP_PORT_VALUES = 0x40;
+// v5, rooms (docs/rooms-game-interface.md). LOCAL: the game's screen, the launcher-join counter,
+// the room phase. SESSION: the room's flags, code, host, status and mode; per player its slot bits,
+// colour, and the character and costume of its lock-in while ready.
+constexpr u32 L_SCREEN = 0x36, L_ROOM_JOIN = 0x37, L_ROOM = 0x38;
+constexpr u32 S_ROOM_FLAGS = 0x213, S_ROOM_CODE = 0x214, S_ROOM_HOST = 0x218, S_ROOM_STATUS = 0x219,
+              S_ROOM_MODE = 0x21A;
+constexpr u32 SP_ROOM_SLOT = 0x38, SP_ROOM_TEAM = 0x39, SP_ROOM_CHAR = 0x3A, SP_ROOM_COSTUME = 0x3B;
+constexpr u8 SLOT_OPEN = 1, SLOT_TAKEN = 2, SLOT_READY = 4, SLOT_HOST = 8, SLOT_IN_GAME = 0x10;
+constexpr u8 RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4;
+static_assert(L_ROOM < L_OWN && S_ROOM_MODE < SESSION_SIZE && SP_ROOM_COSTUME < SP_PORT_VALUES &&
+              SESSION_PLAYER_OUT < SP_ROOM_SLOT && S_ROOM_FLAGS == S_SETUP_ERROR + 2);
 static_assert(SESSION_GONE + 4 <= S_TEAMS && SESSION_PLAYER_OUT == SP_PICKS_STAGE + 1);
 constexpr int SESSION_PLAYERS = 4;
 
@@ -92,6 +107,10 @@ constexpr u8 CMD_FETCH_CODE_SUGGESTION = 0xBE;
 constexpr u8 CMD_GET_RANK = 0xE3;
 constexpr u8 CMD_GP_COMPLETE_STEP = 0xC0;
 constexpr u8 CMD_GP_FETCH_STEP = 0xC1;
+constexpr u8 CMD_ROOM = 0xD0;
+// RoomRequest payload: op, arg, arg2, pad, code u16[9]. RoomStatus: phase, error, localPort, pad,
+// serial u32, text u16[64].
+constexpr u32 RR_CODE = 4, RS_SERIAL = 4, RS_TEXT = 8, RS_TEXT_LEN = 64;
 
 constexpr u8 STATUS_OK = 0;
 constexpr u8 STATUS_UNSUPPORTED = 0xFF;
@@ -130,6 +149,7 @@ struct Located
   u32 local = 0;
   u32 session = 0;
   u32 module = 0;
+  u16 version = 0;
 };
 
 std::mutex s_mutex;
@@ -154,6 +174,8 @@ u32 s_local_seq = 0;
 u32 s_lock_seq = 0;
 picojson::object s_lock_seen;
 bool s_was_disconnected = false;
+// Rooms: this player's colour in the room (kept for a room game whose connection to mm dropped).
+u8 s_room_team = 0xFF;
 bool s_was_in_match = false;
 // Frames left for the game to show DISCONNECTED itself before the OSD stands in (-1: none).
 int s_hud_wait = -1;
@@ -262,7 +284,8 @@ std::optional<Located> Locate(const Core::CPUThreadGuard& guard)
         }
         for (u32 a = offset; a + HEADER_SIZE <= offset + size; a += 4)
         {
-          if (R32(guard, a) != MAGIC || R16(guard, a + H_VERSION) != VERSION)
+          const u16 version = R16(guard, a + H_VERSION);
+          if (R32(guard, a) != MAGIC || version < MIN_VERSION || version > VERSION)
             continue;
           const u32 block_size = R16(guard, a + H_SIZE);
           const u32 mb_off = R16(guard, a + H_MAILBOX_OFF);
@@ -279,7 +302,7 @@ std::optional<Located> Locate(const Core::CPUThreadGuard& guard)
           {
             continue;
           }
-          return Located{a, a + mb_off, a + lo_off, a + se_off, module};
+          return Located{a, a + mb_off, a + lo_off, a + se_off, module, version};
         }
       }
       return std::nullopt;
@@ -523,6 +546,80 @@ Response CodeSuggestion(const Core::CPUThreadGuard& guard, u32 payload, std::str
   return r;
 }
 
+// Rooms (docs/rooms-game-interface.md): one op of the room CSS, answered with the status line.
+Response RoomResponse(const Core::CPUThreadGuard& guard, u32 payload, std::string* request)
+{
+  const u8 op = R8(guard, payload);
+  const u8 arg = R8(guard, payload + 1);
+  const u8 arg2 = R8(guard, payload + 2);
+  std::u16string typed;
+  for (int i = 0; i < CODE_LEN; ++i)
+  {
+    const u16 c = R16(guard, payload + RR_CODE + 2 * i);
+    if (c == 0)
+      break;
+    typed.push_back(static_cast<char16_t>(c));
+  }
+  Rooms::Request r;
+  bool ok = true;
+  switch (op)
+  {
+  case 0:
+    r.op = Rooms::Op::Poll;
+    break;
+  case 1:
+    r.op = Rooms::Op::Create;
+    r.flag = arg != 0;
+    break;
+  case 2:
+    r.op = Rooms::Op::Join;
+    // Not a room code: Rooms answers "Room not found." (what mm would say) without asking it.
+    r.code = Rooms::NormalizeRoomCode(typed).value_or(typed.empty() ? "" : "?");
+    break;
+  case 3:
+    r.op = Rooms::Op::Leave;
+    break;
+  case 4:
+    r.op = Rooms::Op::Slot;
+    r.slot = arg + 1;
+    r.flag = arg2 != 0;
+    ok = arg < SESSION_PLAYERS;
+    break;
+  case 5:
+    r.op = Rooms::Op::Teams;
+    r.flag = arg != 0;
+    break;
+  case 6:
+    r.op = Rooms::Op::Public;
+    r.flag = arg != 0;
+    break;
+  case 7:
+    r.op = Rooms::Op::Team;
+    r.team = arg;
+    ok = arg < Rooms::NUM_TEAMS;
+    break;
+  default:
+    ok = false;
+    break;
+  }
+  if (ok)
+    Rooms::Submit(r);
+  *request = fmt::format("ROOM {} {} {}{}{}", ok ? Rooms::OpName(r.op) : "invalid", arg, arg2,
+                         r.code.empty() ? "" : " " + r.code, ok ? "" : " (refused)");
+  const Rooms::Snapshot snap = Rooms::GetSnapshot();
+  Response resp;
+  resp.cmd = CMD_ROOM;
+  resp.status = ok ? STATUS_OK : STATUS_UNSUPPORTED;
+  resp.payload[0] = static_cast<u8>(snap.phase);
+  resp.payload[1] = snap.error ? 1 : 0;
+  resp.payload[2] = snap.view ? static_cast<u8>(snap.view->you - 1) : 0xFF;
+  PutU32(resp.payload, RS_SERIAL, snap.serial);
+  WriteU16Text(resp.payload, RS_TEXT, snap.text, RS_TEXT_LEN);
+  resp.summary = fmt::format("ROOM phase={} serial={} {}'{}'", static_cast<u8>(snap.phase),
+                             snap.serial, snap.error ? "error " : "", snap.text);
+  return resp;
+}
+
 const char* CmdName(u8 cmd)
 {
   switch (cmd)
@@ -547,6 +644,8 @@ const char* CmdName(u8 cmd)
     return "GP_COMPLETE_STEP";
   case CMD_GP_FETCH_STEP:
     return "GP_FETCH_STEP";
+  case CMD_ROOM:
+    return "ROOM";
   default:
     return "?";
   }
@@ -681,6 +780,9 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox)
         Client::Cleanup();
       }
       break;
+    case CMD_ROOM:
+      response = RoomResponse(guard, payload, &request);
+      break;
     case CMD_GP_COMPLETE_STEP:
     {
       const u8 kind = R8(guard, payload);
@@ -702,7 +804,8 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox)
     }
     // Polls (the match state and the ranked step every frame, the rank every second) stay out
     // of the log unless their answer changes.
-    const bool poll = cmd == CMD_GET_MATCH_STATE || cmd == CMD_GP_FETCH_STEP || cmd == CMD_GET_RANK;
+    const bool poll = cmd == CMD_GET_MATCH_STATE || cmd == CMD_GP_FETCH_STEP || cmd == CMD_GET_RANK ||
+                      (cmd == CMD_ROOM && R8(guard, payload) == 0);
     if (!poll)
     {
       NOTICE_LOG_FMT(NETPLAY, "GameBridge: request {} {}{}", seq, request,
@@ -748,10 +851,78 @@ void WriteBlock(const Core::CPUThreadGuard& guard, u32 addr, std::vector<u8> byt
   W32(guard, ++*seq, addr);
 }
 
+// The room into SESSION (v5, docs/rooms-game-interface.md): its flags, code, host, status and
+// mode, and per slot (= in-game port) the slot bits, the member's name, code and colour, and the
+// character of a ready member. The values were validated by Rooms (RoomMessages.cpp). Without a
+// room game's session, `game` is the room's next game number and the stage pickers are the last
+// room game's; with one, its game 1 is the room's game.
+void PutRoom(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::Session::Lobby& lobby)
+{
+  const Rooms::View& v = *room.view;
+  session[S_MODE] = MODE_TEAMS;
+  const u32 game = lobby.active && room.game_active ? room.game + (lobby.game - 1) : room.game;
+  session[S_GAME] = static_cast<u8>(game);
+  for (int i = 0; i < SESSION_PLAYERS; ++i)
+  {
+    const u32 p = S_PLAYERS + i * SP_SIZE;
+    if (!lobby.active)
+      session[p + SP_PICKS_STAGE] = (room.pickers >> i) & 1;
+    const Rooms::Slot& sl = v.slots[i];
+    u8 bits = 0;
+    if (sl.open)
+      bits |= SLOT_OPEN;
+    if (sl.host || v.host == i + 1)
+      bits |= SLOT_HOST;
+    session[p + SP_ROOM_TEAM] = GameSetup::NO_TEAM;
+    session[p + SP_ROOM_CHAR] = 0xFF;
+    session[p + SP_ROOM_COSTUME] = 0;
+    if (sl.player)
+    {
+      const Rooms::Player& pl = *sl.player;
+      bits |= SLOT_TAKEN;
+      if (pl.ready)
+        bits |= SLOT_READY;
+      if (pl.in_game)
+        bits |= SLOT_IN_GAME;
+      session[p + SP_ROOM_TEAM] = pl.team < Rooms::NUM_TEAMS ? pl.team : GameSetup::NO_TEAM;
+      if (pl.ready && pl.character)
+      {
+        session[p + SP_ROOM_CHAR] = *pl.character;
+        session[p + SP_ROOM_COSTUME] = pl.costume.value_or(0);
+      }
+      // A session's names (the match's players) stay; the room fills in the rest.
+      if (session[p + SP_NAME] == 0 && session[p + SP_NAME + 1] == 0)
+      {
+        WriteU16Text(session, p + SP_NAME, pl.name, NAME_LEN);
+        WriteU16Text(session, p + SP_CODE, pl.code, CODE_LEN);
+      }
+    }
+    session[p + SP_ROOM_SLOT] = bits;
+  }
+  session[S_ROOM_FLAGS] = RF_IN | (v.is_public ? RF_PUBLIC : 0) | (v.teams ? RF_TEAMS : 0);
+  for (size_t k = 0; k < 4; ++k)
+    session[S_ROOM_CODE + k] = k < v.code.size() ? static_cast<u8>(v.code[k]) : 0;
+  session[S_ROOM_HOST] = static_cast<u8>(v.host - 1);
+  session[S_ROOM_STATUS] = static_cast<u8>(v.status);
+  session[S_ROOM_MODE] = static_cast<u8>(v.mode);
+}
+
 // The SESSION and LOCAL blocks (design 5.2): the game's lock-in to the gameplay session, the
 // session's lobby and match setup back to the game.
 void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
 {
+  // Rooms (v5): the game's screen in, the room out (LOCAL and SESSION's spare bytes).
+  const bool v5 = loc.version >= 5;
+  const Rooms::Snapshot room = Rooms::GetSnapshot();
+  const bool in_room = room.phase == Rooms::Phase::In && room.view.has_value();
+  const Rooms::Player* me = nullptr;
+  if (in_room && room.view->slots[room.view->you - 1].player)
+    me = &*room.view->slots[room.view->you - 1].player;
+  if (me)
+    s_room_team = me->team;
+  if (v5)
+    Rooms::SetScreen(R8(guard, loc.local + L_SCREEN));
+
   // The lock-in the game wrote (only the character select writes it).
   const u32 lock = loc.local + L_LOCK;
   const u32 lock_seq = R32(guard, lock + LK_SEQ);
@@ -769,6 +940,14 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     for (u32 i = 0; i < l.port_values.size(); ++i)
       l.port_values[i] = R8(guard, loc.local + L_OWN + i);
     l.local_pad = R8(guard, loc.local + L_LOCK_PAD);
+    Rooms::SetLocalLock(l.ready, l.game, l.char_kind, l.costume);
+    if (room.game_active)
+    {
+      // A room's game is a session of its own: the room's game N (SESSION `game`) is the
+      // session's game 1, and the player's colour is the room's.
+      l.game = l.game == (room.game & 0xFF) ? 1 : 0;
+      l.team = s_room_team;
+    }
     Gprb::Session::SetLocalLock(l);
     if (lock_seq != s_lock_seq)
     {
@@ -860,7 +1039,9 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   // LOCAL: always (it is not part of the rolled-back state).
   std::vector<u8> local(LOCAL_SIZE, 0);
   local[L_STATE] = !lobby.active ? 0 : lobby.in_match ? 3 : lobby.connected ? 2 : 1;
-  local[L_LOCAL_PORT] = lobby.active ? static_cast<u8>(lobby.local_port) : 0xFF;
+  local[L_LOCAL_PORT] = lobby.active ? static_cast<u8>(lobby.local_port) :
+                        in_room      ? static_cast<u8>(room.view->you - 1) :
+                                       0xFF;
   local[L_REMOTE_READY] = lobby.remote_ready ? 1 : 0;
   local[L_DISCONNECTED] = lobby.disconnected ? 1 : 0;
   PutU16Text(local, L_PEER_NAME, peer_name, NAME_LEN);
@@ -868,6 +1049,11 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   for (u32 i = L_LOCK; i < LOCAL_SIZE; ++i)
     local[i] = R8(guard, loc.local + i);
   local[L_DESYNCED] = lobby.desynced ? 1 : 0;
+  if (v5)
+  {
+    local[L_ROOM_JOIN] = room.join_seq;
+    local[L_ROOM] = static_cast<u8>(room.phase);
+  }
   WriteBlock(guard, loc.local, local, &s_local_written, &s_local_seq);
 
   // SESSION: never while a match runs, so it is the same on every machine for the whole match.
@@ -913,6 +1099,8 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     for (int i = 0; i < SESSION_PLAYERS; ++i)
       session[S_PLAYERS + i * SP_SIZE + SP_TEAM] = GameSetup::NO_TEAM;
   }
+  if (v5 && in_room)
+    PutRoom(session, room, lobby);
   WriteBlock(guard, loc.session, session, &s_session_written, &s_session_seq);
 }
 }  // namespace
@@ -987,6 +1175,8 @@ void Reset()
   // Start watching for user.json at boot, as Slippi does when its EXI device is created: the
   // main menu's first GET_ONLINE_STATUS must already see the login (it comes ~10 s later).
   Client::GetUser();
+  // The online connection (hello) and the launcher hand-off (docs/rooms-protocol.md §5).
+  Rooms::Start();
   {
     std::lock_guard lk(s_mutex);
     s_located.reset();

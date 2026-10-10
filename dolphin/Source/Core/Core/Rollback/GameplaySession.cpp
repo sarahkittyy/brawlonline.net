@@ -3657,7 +3657,7 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.setup = {};
   s.input_delay = DEFAULT_INPUT_DELAY;
   s.last_winner = 0xFF;
-  s.last_pickers = 0;
+  s.last_pickers = options.initial_pickers & 0x0F;
   s.setup_error = 0;
   s.last_stage = NO_STAGE;
   s.stage_pool.clear();
@@ -3798,6 +3798,7 @@ Lobby GetLobby()
   l.last_winner = s.last_winner;
   l.stage_pickers = s.last_pickers;
   l.setup_error = s.setup_error;
+  l.after_match = s.await_scene_exit;
   return l;
 }
 
