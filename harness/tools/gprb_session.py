@@ -49,6 +49,11 @@ def sound_opts(args) -> Dict[str, bool]:
             "dedupe_resim_sounds": args.resim_sounds == "dedupe"}
 
 
+def delay_opts(args) -> Dict[str, int]:
+    """``--delay auto`` sends none: each instance picks it from the round trip (AutoInputDelay)."""
+    return {} if args.delay is None else {"delay": args.delay}
+
+
 def free_udp_port() -> int:
     with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
         s.bind(("127.0.0.1", 0))
@@ -356,11 +361,11 @@ def run_session(preset: str, cpu: str, args: argparse.Namespace, run: int) -> Di
                 for c in (ca, cb):
                     c.call("gprb_samples", every=args.sample_every, watch=watch)
             host_port = free_udp_port()
-            ca.call("gprb_connect", role="host", port=host_port, region_set=args.region_set, delay=args.delay,
+            ca.call("gprb_connect", role="host", port=host_port, region_set=args.region_set, **delay_opts(args),
                     name="A", hash_regions=False, start_frame=args.start_frame, **sound_opts(args))
             sim = NetSim(("127.0.0.1", host_port), ("127.0.0.1", 0), preset, seed=f"gprb-{run}").start()
             cb.call("gprb_connect", role="join", host="127.0.0.1", remote_port=sim.listen_port,
-                    region_set=args.region_set, delay=args.delay, name="B", hash_regions=False,
+                    region_set=args.region_set, **delay_opts(args), name="B", hash_regions=False,
                     start_frame=args.start_frame, **sound_opts(args))
             wait(lambda: ca.call("gprb_status")["phase"] == "connected" and cb.call("gprb_status")["phase"] == "connected",
                  30, "the peers to connect")
@@ -665,7 +670,7 @@ def run_session_n(preset: str, cpu: str, args: argparse.Namespace, run: int) -> 
                 peers = [{"slot": q, "host": "127.0.0.1", "port": proxy[q].listen_port} if q < p else
                          {"slot": q, "host": "", "port": 0} for q in ports if q != p]
                 clients[k].call("gprb_connect", role="host" if p == host else "join", port=udp[k], slot=p,
-                                peers=peers, host_slot=host, local_pad=p, region_set=args.region_set, delay=args.delay,
+                                peers=peers, host_slot=host, local_pad=p, region_set=args.region_set, **delay_opts(args),
                                 name=f"P{p + 1}", hash_regions=False, start_frame=args.start_frame,
                                 **sound_opts(args))
             deadline = time.monotonic() + 60
@@ -703,7 +708,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--p1", default="fox")
     ap.add_argument("--p2", default="falco")
     ap.add_argument("--stage", default="battlefield")
-    ap.add_argument("--delay", type=int, default=2)
+    ap.add_argument("--delay", type=lambda v: None if v == "auto" else int(v), default=2,
+                    help="input delay in frames, or auto (from the round trip, as players get it)")
     ap.add_argument("--region-set", default="gp-v21")
     ap.add_argument("--start-frame", type=int, default=240)
     ap.add_argument("--frames", type=int, default=30000)

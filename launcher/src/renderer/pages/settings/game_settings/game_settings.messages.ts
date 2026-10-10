@@ -10,7 +10,7 @@ export const GameSettingsMessages = {
   launchDolphin: () => "Launch Dolphin",
   inputDelay: () => "Input Delay",
   inputDelayAuto: () => "Auto",
-  inputDelayFrames: (frames: number) => "{0} frames",
+  inputDelayFrames: (frames: number) => (frames === 1 ? "1 frame" : `${frames} frames`),
   valid: () => "Valid",
   unknown: () => "Unknown",
   invalid: () => "Invalid",
