@@ -266,14 +266,12 @@ export class LocalDolphinInstallation implements DolphinInstallation {
   }
 
   async addGamePath(gameDir: string): Promise<void> {
-    const iniFile = await IniFile.init(this._dolphinIniPath());
-    await addGamePath(iniFile, gameDir);
+    await IniFile.modify(this._dolphinIniPath(), (iniFile) => addGamePath(iniFile, gameDir));
   }
 
   /** Sets `[Core] DefaultISO`, which P+'s launcher DOL boots after applying its codes. */
   async setDefaultIso(isoPath: string): Promise<void> {
-    const iniFile = await IniFile.init(this._dolphinIniPath());
-    await setDefaultIso(iniFile, isoPath);
+    await IniFile.modify(this._dolphinIniPath(), (iniFile) => setDefaultIso(iniFile, isoPath));
   }
 
   /** The NAND Dolphin uses with this User folder (`[General] NANDRootPath`, else `<User>/Wii`). */
@@ -289,8 +287,7 @@ export class LocalDolphinInstallation implements DolphinInstallation {
   }
 
   async updateSettings(options: Partial<SyncedDolphinSettings>): Promise<void> {
-    const iniFile = await IniFile.init(this._dolphinIniPath());
-    await setOnlineSettings(iniFile, options);
+    await IniFile.modify(this._dolphinIniPath(), (iniFile) => setOnlineSettings(iniFile, options));
   }
 
   async getDolphinVersion(): Promise<string | undefined> {

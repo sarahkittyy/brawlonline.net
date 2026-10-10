@@ -104,3 +104,107 @@ describe("LocalDolphinInstallation.ensureUserFolder (development template)", () 
     expect(await fs.promises.readFile(path.join(template, "Wii", "sd.raw"))).toEqual(files["Wii/sd.raw"]);
   });
 });
+
+describe("LocalDolphinInstallation Dolphin.ini", () => {
+  let dir: string;
+  let inst: LocalDolphinInstallation;
+  let iniPath: string;
+
+  beforeEach(async () => {
+    dir = path.join(root, `ini-${n++}`);
+    inst = new LocalDolphinInstallation(
+      DolphinLaunchType.NETPLAY,
+      path.join(dir, "Dolphin.exe"),
+      path.join(dir, "data"),
+    );
+    iniPath = path.join(inst.userFolder, "Config", "Dolphin.ini");
+    await fs.promises.mkdir(path.dirname(iniPath), { recursive: true });
+  });
+
+  const readIni = () => fs.promises.readFile(iniPath, "utf8");
+
+  for (const [eol, name] of [
+    ["\n", "LF"],
+    ["\r\n", "CRLF"],
+  ] as const) {
+    it(`Play repairs a Dolphin.ini that overlapping saves garbled (${name})`, async () => {
+      // A user's netplay Dolphin.ini (IDs and paths replaced). Dolphin and the launcher have
+      // saved it many times since, keeping the garbled lines as keys and adding back the keys
+      // the lines swallowed, so [Analytics] and [SDL_Hints] show up twice.
+      await fs.promises.writeFile(
+        iniPath,
+        [
+          "[Core]",
+          "DefaultISO = E:\\Roms\\Wii\\SSBB_NTSC2.iso",
+          "[Online]",
+          "ReplayDir = C:\\Users\\player\\Documents\\Brawl Online",
+          "SSaveReplays = TrueRReplayMonthlyFolders = True[[Analytics]ID = 11111111111111111111111111111111",
+          "SaveReplays = True",
+          "ReplayMonthlyFolders = True",
+          "[General]",
+          "WirelessMac = 00:17:ab:00:00:01",
+          "ISOPaths = 1",
+          "ISOPath0 = E:\\Roms\\Wii",
+          "[NetPlay]",
+          "TTraversalChoice = traversal[[SDL_Hints]SSDL_JOYSTICK_DIRECTINPUT = 1",
+          "SDL_JOYSTICK_WGI = 0",
+          "TraversalChoice = traversal",
+          "[DSP]",
+          "DSPThread = True",
+          "[Analytics]",
+          "ID = 22222222222222222222222222222222",
+          "[SDL_Hints]",
+          "SDL_JOYSTICK_DIRECTINPUT = 1",
+          "SDL_JOYSTICK_WGI = 0",
+          "",
+        ].join(eol),
+      );
+
+      await inst.updateSettings({
+        replayPath: "C:\\Users\\player\\Documents\\Brawl Online",
+        enableNetplayReplays: false,
+        enableMonthlySubfolders: true,
+      });
+
+      // The garbled keys are gone; keys saved whole after the garbling win over the ones
+      // recovered from it (the second analytics ID).
+      expect(await readIni()).toBe(
+        [
+          "[Core]",
+          "DefaultISO = E:\\Roms\\Wii\\SSBB_NTSC2.iso",
+          "[Online]",
+          "ReplayDir = C:\\Users\\player\\Documents\\Brawl Online",
+          "SaveReplays = False",
+          "ReplayMonthlyFolders = True",
+          "[General]",
+          "WirelessMac = 00:17:ab:00:00:01",
+          "ISOPaths = 1",
+          "ISOPath0 = E:\\Roms\\Wii",
+          "[NetPlay]",
+          "SDL_JOYSTICK_WGI = 0",
+          "TraversalChoice = traversal",
+          "[DSP]",
+          "DSPThread = True",
+          "[Analytics]",
+          "ID = 22222222222222222222222222222222",
+          "[SDL_Hints]",
+          "SDL_JOYSTICK_DIRECTINPUT = 1",
+          "SDL_JOYSTICK_WGI = 0",
+          "",
+        ].join("\n"),
+      );
+    });
+  }
+
+  it("keeps both changes when the ISO setting saves the game path and default ISO at once", async () => {
+    await fs.promises.writeFile(iniPath, "[Core]\r\nDefaultISO = E:\\Roms\\Wii\\SSBB_NTSC.iso\r\n");
+    for (let round = 0; round < 20; round++) {
+      const iso = path.join(dir, `Roms${round}`, `SSBB_NTSC${round % 2 ? "2" : ""}.iso`);
+      // What the isoPath subscription in settings/setup.ts runs.
+      await Promise.all([inst.addGamePath(path.dirname(iso)), inst.setDefaultIso(iso)]);
+      expect(await readIni()).toBe(
+        `[Core]\nDefaultISO = ${iso}\n[General]\nISOPaths = 1\nISOPath0 = ${path.dirname(iso)}\n`,
+      );
+    }
+  });
+});
