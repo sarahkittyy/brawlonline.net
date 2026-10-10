@@ -99,14 +99,19 @@ namespace MatchHud {
     }
 
     // `text` (UTF-16, NUL-ended) in `color` with a black edge, centred on x, its top at y.
+    static void printCentredXY(const u16* text, float x, float y, float scaleX, float scaleY, u32 color);
     static void printCentred(const u16* text, float x, float y, float scale, u32 color)
+    {
+        printCentredXY(text, x, y, scale, scale, color);
+    }
+    static void printCentredXY(const u16* text, float x, float y, float scaleX, float scaleY, u32 color)
     {
         setU32(0x08, color); setU32(0x0C, color); setU32(0x10, color); setU32(0x14, color);
         setU32(0x18, color);
         s_cw[0x42] = 0xFF;          // alpha
         s_cw[0x43] = 0;             // proportional
-        setF32(0x24, scale);        // scale x
-        setF32(0x28, scale);        // scale y
+        setF32(0x24, scaleX);       // scale x
+        setF32(0x28, scaleY);       // scale y
         setF32(0x50, 1.0f);
         setF32(0x5C, 1.0f);         // edge width
         setU32(0x60, 0x000000FF);   // edge colour
@@ -119,9 +124,36 @@ namespace MatchHud {
         for (const u16* p = text; *p; p++) s_cwPrint(s_cw, *p);
     }
 
-    // Brawl's damage panels are spread evenly about the centre of the 640-wide HUD, in port
-    // order (two players: centres 243 and 397); the names go under them, as small as Melee's.
+    // Each name goes under its player's damage panel, read from the HUD itself (staging feedback
+    // 2026-10-10: the names were placed by port, as if the ports between were there; Brawl packs
+    // the panels of the players present, and their spacing depends on how many there are: 18
+    // HUD units apart for three, found live). g_IfMngr (0x805A02D0) +0x4C: IfPlayer per port;
+    // its +0x30 is the panel's MuObject, whose ScnMdl's top node (world matrix +0xEC, x at +0xC)
+    // is the panel's place in HUD units. Mapped to the 640-wide space: x * 7.688 + 279.7 (fitted
+    // live from the damage digits, the name centred under the panel as before). Without a HUD
+    // object (never seen) the panels are taken as packed and evenly spread, 154 apart.
+    // The names are as small as Melee's; a name wider than its panel is made narrower to fit.
     static const float PANEL_GAP = 154.0f;
+    static const float HUD_UNIT = 7.688f, HUD_CENTRE = 279.7f;
+
+    static bool panelX(int port, float* out)
+    {
+        u32 mgr = *(u32*)0x805A02D0;   // g_IfMngr
+        if (mgr < 0x80000000 || mgr >= 0x81800000 || port < 0 || port > 3) return false;
+        u32 ifp = *(u32*)(mgr + 0x4C + 4 * port);
+        if (ifp < 0x80000000 || ifp >= 0x81800000) return false;
+        u32 obj = *(u32*)(ifp + 0x30);
+        if (obj < 0x80000000 || obj >= 0x81800000) return false;
+        u32 scn = *(u32*)(obj + 0xC);
+        if (scn < 0x80000000 || scn >= 0x81800000 || *(u32*)scn != 0x804663C8) return false;
+        u32 mtx = *(u32*)(scn + 0xEC);
+        if (mtx < 0x80000000 || mtx >= 0x81800000) return false;
+        float sx = *(float*)mtx, x = *(float*)(mtx + 0xC);
+        if (!(sx > 0.05f && sx < 5.0f) || !(x > -80.0f && x < 80.0f)) return false;
+        *out = HUD_CENTRE + x * HUD_UNIT;
+        return true;
+    }
+    static const float NAME_MAX_W = 130.0f;   // four panels are about 147 apart: a gap between names
     static const float NAME_TOP = 449.0f;
     static const float NAME_SCALE = 0.55f;
 
@@ -130,9 +162,15 @@ namespace MatchHud {
         const PPOM::Session& se = PPOM::g_block.session;
         int n = se.numPlayers;
         if (n < 1 || n > 4) return;
+        int count = 0;
+        for (int i = 0; i < n; i++) {
+            if (se.players[i].present) count++;
+        }
+        int k = -1;   // the player's panel: its place among the players present
         for (int i = 0; i < n; i++) {
             const PPOM::SessionPlayer& pl = se.players[i];
             if (!pl.present) continue;
+            k++;
             u16 name[PPOM::NAME_LEN + 1];
             int len = 0;
             for (; len < PPOM::NAME_LEN && pl.name[len]; len++) {
@@ -141,8 +179,15 @@ namespace MatchHud {
             }
             name[len] = 0;
             if (!len) continue;
-            float x = SCREEN_W * 0.5f + ((float)i - (float)(n - 1) * 0.5f) * PANEL_GAP;
-            printCentred(name, x, NAME_TOP, NAME_SCALE, 0xFFFFFFFF);
+            float x;
+            if (!panelX(i, &x)) x = SCREEN_W * 0.5f + ((float)k - (float)(count - 1) * 0.5f) * PANEL_GAP;
+            // the width at NAME_SCALE (textWidth reads the CharWriter's scale: set it first)
+            setF32(0x24, NAME_SCALE);
+            float w = textWidth(name);
+            float scale = NAME_SCALE;
+            if (w > NAME_MAX_W) scale = NAME_SCALE * NAME_MAX_W / w;
+            // same height for a narrower name: only x shrinks, y keeps NAME_SCALE
+            printCentredXY(name, x, NAME_TOP, scale, NAME_SCALE, 0xFFFFFFFF);
         }
     }
 

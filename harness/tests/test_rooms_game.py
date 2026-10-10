@@ -556,16 +556,28 @@ def panel_offset(g: Game, area: int) -> float:
     return struct.unpack(">f", g.c.read_mem(_u32(g, a + 0xB0) + 0x3C, 4))[0]
 
 
+# The longest names the accounts server takes (15 characters, common/codes.rs): wide letters and
+# kana, for the names under the damage (match_hud.cpp: each fits its panel).
+LONG_NAMES = ["WWWWWWWWWWWWWWW", "\u30d6\u30ed\u30a6\u30eb\u30aa\u30f3\u30e9\u30a4\u30f3\u306e\u30c6\u30b9\u30c8\u3067\u3059",
+              "MMMMMMMMMMMMMMM", "\u3042\u3044\u3046\u3048\u304a\u304b\u304d\u304f\u3051\u3053\u3055\u3057\u3059\u305b\u305d"]
+
+
+@pytest.mark.parametrize("ports", [(0, 1, 2, 3), (0, 1, 3)], ids=["four-long-names", "three-with-a-gap"])
 def test_room_four_players(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
-                           gpu_backend: str) -> None:
-    """Four games: the host opens slots 3 and 4 with the hand, three players join by code, each
-    sees its own panel at its slot (panels in slot order on every screen), everyone readies, the
-    room starts a 4-player free-for-all under the gameplay session (P1 and P3 picked the same
-    character and costume: P3 plays the next costume, as P+'s Versus), three walk off, and all
-    four are back on the room's CSS for the next game."""
-    test = "four-players"
-    users = [backend.create_user(n, n[:4].upper()) for n in ("rfa", "rfb", "rfc", "rfd")]
-    gs = [_boot(dolphin, f"room4-{x}", backend, u, gpu_backend, test, "gameplay", artifacts=ART)
+                           gpu_backend: str, ports: tuple) -> None:
+    """Four games (or three on P1, P2 and P4): the host opens the other slots with the hand,
+    the players join by code, each sees its own panel at its slot (panels in slot order on every
+    screen), everyone readies, the room starts a free-for-all under the gameplay session (four:
+    P1 and P3 picked the same character and costume, P3 plays the next costume, as P+'s Versus;
+    the longest names, wide letters and kana, each fitted under its damage panel), all but P1
+    walk off, and all are back on the room's CSS for the next game."""
+    four = len(ports) == 4
+    test = "four-players" if four else "three-players-gap"
+    import secrets
+    names = LONG_NAMES if four else ["rga", "rgb", "rgd"]
+    users = [backend.create_user(n, f"RF{'ABCD'[k]}{'L' if four else 'G'}", email=f"room{k}-{secrets.token_hex(4)}@example.test")
+             for k, n in enumerate(names)]
+    gs = [_boot(dolphin, f"room{len(ports)}-{x}", backend, u, gpu_backend, test, "gameplay", artifacts=ART)
           for x, u in zip("abcd", users)]
     a = gs[0]
     _all(*[g.to_main_menu for g in gs])
@@ -573,50 +585,53 @@ def test_room_four_players(backend: OnlineBackend, dolphin: Callable[..., Dolphi
 
     code = create_room(a)
     pick(a)
-    for slot in (2, 3):
+    for slot in ports[2:]:
         hand_to(a, PANEL_X[slot], -10.0)
         a.steps("tap A 8", "wait 30")
         until_view(a, lambda v, s=slot: v["slots"][s]["bits"] & ppom.SLOT_OPEN, f"slot {slot + 1} open")
     v = room_view(a)
     assert not v["flags"] & ppom.RF_TEAMS, v   # a room starts as FFA
     hand_to(a, -23.0, 10.5)
-    a.shot("03-four-slots-open")
+    if not four:   # slot 2 (P2) stays open, slot 3 closed by default; P4 opened above
+        assert not room_view(a)["slots"][2]["bits"] & ppom.SLOT_OPEN
+    a.shot("03-slots-open")
 
     _all(*[lambda g=g: to_join_room(g) for g in gs[1:]])
     # P3 takes the host's character in the same (first) costume: P+'s Versus never shows two
     # alike, so the match gives P3 the next free costume (online_match.cpp distinctCostumes).
     for k, g in enumerate(gs[1:], 1):
-        pick(g, right=0 if k == 2 else 2 * k)
+        pick(g, right=0 if (four and k == 2) else 2 * k)
     for g in gs:
         B.write_rules(g.c, stocks=1, minutes=2, items_off=True)
         ppom.allow_test_rules(g.c)
     for k, g in enumerate(gs[1:], 1):
         type_room_code(g, code)
         vk = until_view(g, lambda v: v["flags"] & ppom.RF_IN, f"player {k + 1} in the room")
-        assert vk["local_port"] == k, vk
-    until_view(a, lambda v: all(s["bits"] & ppom.SLOT_TAKEN for s in v["slots"]), "four players")
+        assert vk["local_port"] == ports[k], vk
+    until_view(a, lambda v: all(v["slots"][p]["bits"] & ppom.SLOT_TAKEN for p in ports), "all players")
     for k, g in enumerate(gs):
         g.steps("wait 60")
         # each sees its own panel at its slot
-        assert abs(panel_offset(g, 0) - k * SLOT_POS) < 0.1, (g.name, panel_offset(g, 0))
-        g.shot("04-four-in-the-room")
+        assert abs(panel_offset(g, 0) - ports[k] * SLOT_POS) < 0.1, (g.name, panel_offset(g, 0))
+        g.shot("04-all-in-the-room")
 
     game = room_view(a)["game"]
     for g in gs:
         g.steps("tap START 8", "wait 10")
     online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] in ("running", "error", "ended") for g in gs),
-                    240, "the room's game running on all four")
+                    240, "the room's game running on all")
     st = [online_set.gstatus(g.c) for g in gs]
     assert all(s["phase"] == "running" for s in st), [(s["phase"], s.get("error")) for s in st]
-    assert [s["local_slot"] for s in st] == [0, 1, 2, 3], st
+    assert [s["local_slot"] for s in st] == list(ports), st
     setups = [B.read_match_setup(g.c.read_mem) for g in gs]
     assert all(x == setups[0] for x in setups), setups
-    pl = setups[0].players
-    assert pl[0].character == pl[2].character and pl[0].color != pl[2].color, setups[0]
+    if four:
+        pl = setups[0].players
+        assert pl[0].character == pl[2].character and pl[0].color != pl[2].color, setups[0]
     assert all(sh["init"][:4] == [0, 0, 0, 0] for sh in [B.read_shades(g.c.read_mem) for g in gs])
     time.sleep(8)
     for g in gs:
-        g.shot("05-four-player-match")
+        g.shot("05-match")
 
     # Players 2-4 walk off the stage; player 1 wins.
     from ppharness import flows as F
@@ -625,7 +640,7 @@ def test_room_four_players(backend: OnlineBackend, dolphin: Callable[..., Dolphi
         with contextlib.suppress(Exception):
             F.fight([F.Seat(g.c, port, 0, g.name)], 60 * 60, mode="selfdestruct", seed=f"4p{port}",
                     stop=lambda: online_set.gstatus(g.c)["phase"] != "running")
-    th = [threading.Thread(target=off, args=(g, k)) for k, g in enumerate(gs) if k > 0]
+    th = [threading.Thread(target=off, args=(g, ports[k])) for k, g in enumerate(gs) if k > 0]
     for t in th:
         t.start()
     for t in th:
@@ -636,7 +651,7 @@ def test_room_four_players(backend: OnlineBackend, dolphin: Callable[..., Dolphi
     cks = [{r[0]: r[1] for r in g.c.call("gprb_checksums", since=0)["rows"] if r[0] <= limit} for g in gs]
     common = sorted(set(cks[0]).intersection(*cks[1:]))
     bad = [f for f in common if len({ck[f] for ck in cks}) != 1]
-    print(f"4 players: frames {[s['current_frame'] for s in st]}, end {[s['end_reason'] for s in st]}, "
+    print(f"{len(ports)} players: frames {[s['current_frame'] for s in st]}, end {[s['end_reason'] for s in st]}, "
           f"rollbacks {[s['rollbacks'] for s in st]}, checksums compared {len(common)}, mismatches {len(bad)}")
     assert common and not bad, (len(common), bad[:5])
     _wait(lambda: all(g.scene() == CSS for g in gs), 180, "all back on the room's CSS")
