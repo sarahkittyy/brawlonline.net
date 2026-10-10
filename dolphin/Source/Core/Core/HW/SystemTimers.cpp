@@ -84,10 +84,12 @@ static int GetAudioDMACallbackPeriod(u32 cpu_core_clock, u32 aid_sample_rate_div
 
 void SystemTimersManager::AudioDMACallback(Core::System& system, u64 userdata, s64 cycles_late)
 {
-  system.GetDSP().UpdateAudioDMA();  // Push audio to speakers.
   auto& system_timers = system.GetSystemTimers();
   const int callback_period = GetAudioDMACallbackPeriod(
       system_timers.m_cpu_core_clock, system.GetAudioInterface().GetAIDSampleRateDivisor());
+  // Rollback: the audio clock waits for resimulated passes (CoreTimingManager::SetRollbackAudioWaits).
+  if (!system.GetCoreTiming().TakeRollbackAudioPause(callback_period))
+    system.GetDSP().UpdateAudioDMA();  // Push audio to speakers.
   system.GetCoreTiming().ScheduleEvent(callback_period - cycles_late,
                                        system_timers.m_event_type_audio_dma);
 }

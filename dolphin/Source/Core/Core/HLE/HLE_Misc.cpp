@@ -750,6 +750,9 @@ static constexpr u32 BRAWL_ALLOC_STRM_SOUND_ADDR = 0x801cb4f4;
 // detail_SetupSound's success path: `mr r3,r28; mr r4,r24; bl SoundHandle::detail_AttachSound;
 // li r3,0` (all three sound types join here).
 static constexpr u32 BRAWL_SETUP_SOUND_ATTACH_ADDR = 0x801c9c70;
+// nw4r::snd::detail::BasicSound::Stop(int fade_frames) (vtable +0x18 of every sound type); its first
+// instruction is `stwu r1, -48(r1)`.
+static constexpr u32 BRAWL_BASIC_SOUND_STOP_ADDR = 0x801bc684;
 
 // Start hook at BRAWL_SETUP_SOUND_ATTACH_ADDR: the game's handle (r28) gets the sound (r24) with
 // sound id r29. The gameplay session's sound bookkeeping records it.
@@ -762,6 +765,22 @@ void GprbSoundAttachHook(const Core::CPUThreadGuard& guard)
 {
   const auto& ppc = guard.GetSystem().GetPPCState();
   Gprb::Session::OnSoundAttached(guard, ppc.gpr[28], ppc.gpr[24], ppc.gpr[29]);
+}
+
+// Replace hook at BasicSound::Stop: the sound r3 is not stopped when the gameplay session says it
+// has not started yet in the timeline a resimulated pass runs (Gprb::Session::OnSoundStop).
+void GprbSoundStopHook(const Core::CPUThreadGuard& guard)
+{
+  auto& ppc = guard.GetSystem().GetPPCState();
+  if (Gprb::Session::OnSoundStop(guard, ppc.gpr[3]))
+  {
+    ppc.npc = LR(ppc);
+    return;
+  }
+  // Run the replaced instruction, stwu r1, -48(r1), and go on with the function.
+  PowerPC::MMU::HostWrite<u32>(guard, ppc.gpr[1], ppc.gpr[1] - 48);
+  ppc.gpr[1] -= 48;
+  ppc.npc = BRAWL_BASIC_SOUND_STOP_ADDR + 4;
 }
 
 void BrawlbackSkipResimSoundAlloc(const Core::CPUThreadGuard& guard, u32 call_addr,

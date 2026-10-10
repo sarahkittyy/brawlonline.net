@@ -318,7 +318,7 @@ The fighter checksums matched on all compared frames. These ranges are candidate
 
 ## Audio during resimulation (`15de378723`)
 
-Samples produced while resimulating are dropped in `AudioCommon::SendAIBuffer`; those frames were already heard when they first ran. Measured with the DSP audio dump (typical preset, both peers moving on the CSS, about 2,330 presented frames):
+Samples produced while resimulating are dropped in `AudioCommon::SendAIBuffer`; those frames were already heard when they first ran. (Gameplay sessions no longer resimulate audio at all: the audio clock waits for resimulated passes, `docs/gameplay-rollback-status.md` Phase 14. The drop remains for the full-memory rollback.) Measured with the DSP audio dump (typical preset, both peers moving on the CSS, about 2,330 presented frames):
 
 | | Samples per presented frame |
 |---|---|

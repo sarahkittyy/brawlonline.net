@@ -842,6 +842,53 @@ Machine state outside the region set at the switch (a pending CP interrupt, a pa
 
 **Verification** (a clean worktree with only this change, `--gpu unset` = the install's default, 2-minute rule): `typical` dual core, 2 matches in a row (the mode off between them, on again): game set both, 0 mismatches; `bad_wifi` dual core, 2 matches (343/339 and 735/754 rollbacks): game set both, 0 mismatches; `typical` single core (the switch does nothing): game set, 0 mismatches. Both peers logged `deterministic GPU thread true` at every dual-core session start.
 
+## Phase 14: sound through rollbacks
+
+**Symptom.** At high ping, sound effects cut out during rollbacks and sound odd.
+
+**Causes.**
+1. **The sound system ran through resimulated passes.** Brawl's sound system is outside the region set (Phase 5), so it plays on through a rollback. Every resimulated frame still moved every voice and the music forward and woke the game's sound thread (envelopes, fades), and `AudioCommon::SendAIBuffer` dropped those samples (`15de378723`). So every rollback of N frames cut N × 16.7 ms out of every playing sound, and a sound that only the corrected input starts lost its first frames.
+2. **Resimulated stops killed sounds that had not started yet.** `sndSystem` keeps its own 32-slot table of playing sounds (`sndSystem+0x2D4`, 0x20 bytes each, outside the set). A resimulated pass that calls "stop every SE of this owner" (`0x800765B0`) or `playSE`'s same-id restart stops the sounds that the first runs of this frame and later frames started. In the timeline being re-run, those sounds do not exist yet. The dedupe (Phase 6) then finds them gone and does not start them again. Seen in a trace: a 170 ms sound cut after 12 ms, started again from its beginning a rollback later, then cut again. In a rollback-every-frame test this happened to 51 of 1,284 resimulated sound starts.
+3. **Mispredicted sounds were stopped with `Stop(0)`**, mid-waveform (a click).
+
+**Fix (gameplay sessions only).**
+- **The audio clock waits for resimulated passes** (`CoreTimingManager::SetRollbackAudioWaits`, set by the session). `SystemTimers::AudioDMACallback` waits out a pause instead of running the audio DMA. With no DMA there is no AI interrupt, no AX frame (no mix, no voice moves) and no wake-up of the sound thread, so voices, envelopes, fades and sequences all wait. The audio advances only with the presented frames, as the console's does on Slippi, where rollback re-runs the game's frame inside one emulated frame. A rollback pauses every sound instead of cutting a piece out of it, and a sound that only the corrected input starts is heard from its beginning, at most the rollback's depth late. `SendAIBuffer` no longer drops samples during resimulation in this mode: whatever plays then belongs to the presented timeline. The full-memory rollback (`RollbackManager` without region mode) rolls the sound system back and keeps the old drop.
+- **How long the pause is.** Each resimulated pass adds one field when it starts, so the pause lines up with the passes. When the pass ends, its measured length replaces that field only if it differs from a field by more than 10%: lag frames run about 1.9 fields, and the frames that catch up after them 0.29 or 0.82. Smaller differences are not frame lengths. The first pass after a load is about 0.5% short, and the presented pass after it is that much longer (per position in an update: 0.9948, 1.0000, 1.0000, 1.0051 fields). Each rule was checked against the ideal (an update's length minus the ground-truth length of the frame it presents, from a `--no-rollback` trace), as cumulative error in fields over a minute of rollback-every-frame updates:
+
+| Pause per resimulated pass | Mario/Marth FD (733 updates) | 4 players BF (2,232 updates) |
+|---|---|---|
+| while the pass runs (its measured length) | -3.76 (drift: sounds 26 AX frames late after 20 s) | -14.7 |
+| one field | 0.002 | -6.0 (steps at lag frames) |
+| measured length rounded to fields | 0.002 | +6.0 |
+| one field, measured length if more than 10% off (**used**) | 0.002 | -0.16 (never more than 0.22 off) |
+| field boundaries that fall in resimulated passes | no drift, but the pause no longer lines up with the passes (waveform match 0.68) | |
+
+- **Resimulated stops of sounds that have not started yet are ignored.** `GprbSoundStopHook` replaces `nw4r::snd::detail::BasicSound::Stop` (`0x801BC684`, shared by every sound type) and asks `Gprb::Session::OnSoundStop`. In a resimulated pass, a sound that an earlier run of this frame started and this pass has not started yet (`snd_remaining`), or that a later frame started, keeps playing. If the corrected run does not start it, it is stopped at the end of its frame like any other mispredicted sound. New status counter: `sound_stops_ignored`.
+- **Mispredicted sounds fade out over 3 frames** (`SND_STOP_FADE_FRAMES`) instead of `Stop(0)`.
+- `PPR_GPRB_RESIM_AUDIO=advance` keeps the old behaviour, for A/B runs.
+
+A first version froze only the AX voices (DSP HLE) during resimulation. That left two problems. The game's sound thread kept running (envelopes and fades went ahead of the waveforms). The guest plays each mix one AX frame later, so the first AX frame after a re-run was silence and the last one before it was dropped. Replaced by the paused audio clock.
+
+**Verification.** `gprb_mispredict.py --dump-audio DIR` copies the DSP dump (what a player hears) of each run. `harness/tools/gprb_audio.py` compares a rollback run with the `--no-rollback` ground truth of the same recording. It reports the waveform match per half second (strict: a sound 3 ms early drops it), the drift, and band levels (32 bands, 32 ms windows, ±32 ms tolerance): the median difference in dB and the share of loud moments more than 6 dB quieter (cut off) or louder (doubled). The harness plays no music (`SDStreamOpen Failed: …/X02.brstm`: the BRSTMs are not on its SD image), so these are sound effects only. Every run below is a misprediction test, `distance` 4: every frame is rolled back and 3 frames are re-run, far more than a session. Gameplay traces were identical to the ground truth in every run, old and new.
+
+| Fixture (3,600 frames, dual core) | Input | Old: cut off / doubled / median diff | New: cut off / doubled / median diff | New waveform match |
+|---|---|---|---|---|
+| Mario/Marth FD | no misprediction | 22% / 2.2% / 5.5 dB | **0.03% / 0% / 0.0 dB** | 1.00 (sample-exact) |
+| Mario/Marth FD | both ports mispredicted every frame | 21% / 2.4% / 5.5 dB | 0.19% / 0.40% / 0.23 dB | 0.96 |
+| 4 players BF (Zelda, ICs, Olimar, Peach) | no misprediction | | 0.19% / 0.03% / 1.3 dB | 0.77 (3 ms offset) |
+| 4 players BF | all ports mispredicted every frame | 58% / 0.6% / 9.8 dB | 0.19% / 0.38% / 1.5 dB | 0.76 |
+| Ice Climbers/Charizard FD, items (`ics-cd`) | both ports mispredicted every frame | | 0.08% / 0.05% / 0.03 dB | 0.97 |
+| Peach (`peach-cd`) | both ports mispredicted every frame | | 0.08% / 0.16% / 0.0 dB | 0.99 |
+| 2v2 Smashville (R.O.B./Wario vs Bowser/Peach) | no misprediction | | 0.03% / 0.03% / 0.01 dB | 1.00 |
+| 2v2 Smashville | all ports mispredicted every frame | | 1.4% / 0.38% / 0.71 dB | 0.83 |
+| Mario/Marth FD, **single core** | both ports mispredicted every frame | | 0.19% / 0.27% / 0.23 dB | 0.96 |
+
+The 4-player match drifts by at most 3 ms over the minute (against -99 ms with a field per pass, and +200 ms with rounded lengths). Its waveform match stays below 1 because of that offset, which nobody hears. With misprediction, the remaining differences are the expected ones: a sound only the corrected input starts plays up to 3 frames late, and a sound only the mispredicted run started is heard for a frame, then fades.
+
+Network sessions (`gprb_session.py`, two independently booted instances, dual core, 2-minute rule, Fox/Falco Battlefield): `typical` game set on both, 2,132 confirmed checksums, 0 mismatches; `bad_wifi` (435 rollbacks, up to 6 frames deep, 317 waits for the peer) game set on both, 4,398 checksums, 0 mismatches; both peers' traces identical. Raw: `run/qa/sfx/`.
+
+**Not measured here:** music (absent in the harness), and listening. The numbers say the cut-outs are gone, but ears on an unmuted session should confirm it.
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).
@@ -873,6 +920,7 @@ Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v
 | `gprb_status` (Phase 9 fields) | `load_evict_waits` (loads that found the base snapshot's eviction job unfinished and waited for it), `load_evict_wait_us_max` |
 | `gpu_state` | CP FIFO, PI FIFO, PE control, interrupt cause/mask, deterministic-GPU flag |
 | `gprb_sound_state` | the sound archive player's allocated sounds (id, handle, owned/orphaned, duplicate ids) |
+| `gprb_status` (Phase 14 field) | `sound_stops_ignored` (resimulated stops of sounds the re-run timeline had not started yet) |
 
 Diagnostics through environment variables:
 - `PPR_GPRB_DIFF_FRAME=N`: byte diff of the region set, first run against resimulation.
@@ -886,6 +934,7 @@ Diagnostics through environment variables:
 - `PPR_GPRB_FORCE_FINAL=<port mask>`: those ports get their Final Smash at the last countdown frame (Phase 8; the sweep's `ffs` group).
 - `PPR_GPRB_EVICT_DELAY_US=N`: every eviction job (the oldest slot merged into the base snapshot) sleeps N µs first, as on a starved machine (Phase 9).
 - `PPR_GPRB_EVICT_NO_WAIT=1`: loads do not wait for the eviction job (the behaviour before Phase 9, to reproduce the race).
+- `PPR_GPRB_RESIM_AUDIO=advance`: the sound system runs through resimulated passes and their samples are dropped (the behaviour before Phase 14, for A/B runs).
 
 ## Commits (`dolphin-gprb`, branch `gameplay-rollback`)
 

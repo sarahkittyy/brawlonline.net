@@ -206,8 +206,10 @@ void SendAIBuffer(Core::System& system, const short* samples, unsigned int num_s
     StopAudioDump(system);
 
   // Rollback netplay: resimulated frames were already heard when they first ran. Their audio
-  // would play the same span again, at unthrottled speed, so drop it.
-  if (system.GetCoreTiming().IsRollbackResimulating())
+  // would play the same span again, at unthrottled speed, so drop it. Not when the audio clock
+  // waits for them (gameplay sessions): what plays during a pass then is the presented timeline's.
+  const auto& core_timing = system.GetCoreTiming();
+  if (core_timing.IsRollbackResimulating() && !core_timing.RollbackAudioWaits())
     return;
 
   Mixer* mixer = sound_stream->GetMixer();
