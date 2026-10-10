@@ -304,12 +304,16 @@ namespace OnlineMenu {
     }
 
     // The character to lock in: the one on the coin, else (connected, back from a match or
-    // the stage select) the last one locked in.
+    // the stage select) the last one locked in. A room is never PH_CONNECTED: there it is the
+    // room's lock-in the loser's stage pick completes (staging, 2026-10-10: back from the stage
+    // select the CSS has no coin placed yet, the lock-in with the pick found no character, the
+    // pick was dropped and the stage select opened again, over and over).
+    static bool roomLockedForNext();
     static int lockChar()
     {
         int c = selectedChar();
         if (c >= 0) return plainCss(c);
-        return s.phase == PH_CONNECTED ? plainCss(s.lastCss) : -1;
+        return s.phase == PH_CONNECTED || (roomCss() && roomLockedForNext()) ? plainCss(s.lastCss) : -1;
     }
 
     // ----------------------------------------------------------------------------------------
@@ -1754,6 +1758,9 @@ namespace OnlineMenu {
         } else if (pick != 0xFFFF) {
             lockIn(game, pick, OnlineMatch::pickedAsl());
             OnlineMatch::clearPickedStage();
+            // Not locked in with the pick (no character): unlocked, START again, rather than the
+            // stage select again at once.
+            if (s.lockStage == PPOM::STAGE_PENDING) unlock();
         } else if (PPOM::g_block.local.remoteReady) {
             g_onlinePickStage = 1;
             leaveCss(1);
@@ -2059,8 +2066,13 @@ namespace OnlineMenu {
             // the steps are done: START (P+'s random pick) and B (back to the CSS) are taken out
             // too. Taking them out of buttonProc's buttons (stage_legal.cpp) is not enough: the
             // stage select reads them elsewhere as well, and left for the CSS mid-strike.
+            // A room's loser is on it after every player readied: the room has started and can
+            // no longer be unreadied (mm: "The game is starting."), so B is taken out there too
+            // (it went back to the CSS unlocked, where START waits for a room that never waits
+            // again); START, P+'s random pick, is a pick.
             u32 mask = BTN_Z;
             if (s.mode == PPOM::MODE_RANKED && g_onlinePickStage) mask |= BTN_START | BTN_B;
+            if (roomCss() && g_onlinePickStage) mask |= BTN_B;
             maskButtons(mask);
             blockCodeMenu();
         }

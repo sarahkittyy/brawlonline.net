@@ -195,6 +195,47 @@ def test_room_two_players_through_the_game(backend: OnlineBackend, dolphin: Call
     pickers = [i for i, s in enumerate(v["slots"]) if s["picks_stage"]]
     assert len(pickers) == 1, v
 
+    # The room's second game (staging, 2026-10-10: the loser picked a stage and was sent back to
+    # the stage select over and over): the winner locks in, the loser's START opens the stage
+    # select (in game 2 first left with B: unlocked, START opens it again), the pick brings them
+    # back locked in with it, and that stage is played.
+    loser = a if pickers[0] == 0 else b
+    winner = b if loser is a else a
+    winner.steps("tap START 8", "wait 30")
+    _wait(lambda: lock_of(winner)["ready"] and lock_of(winner)["game"] == game + 1, 30, "the winner locked in")
+    loser.steps("tap START 8", "wait 30")
+    _wait(lambda: loser.scene() == "scSelStage", 60, "the loser on the stage select")
+    loser.steps("wait 40")
+    loser.shot("06a-stage-select")
+    # The room has started (everyone ready): it can no longer be unreadied, so B does not leave
+    # the stage select (it once left it unlocked, and the room never took START again).
+    loser.steps("tap B 8", "wait 60")
+    assert loser.scene() == "scSelStage", ("B left the room's stage select", loser.scene())
+    stage = online_set.STAGE_PICK
+    B.sss_pick_stage(loser.c, B.STAGE_KIND[stage], 0)
+    # Back on the CSS locked in with the pick, and the match starts: not the stage select again.
+    seen = []
+
+    def started() -> bool:
+        seen.append(loser.scene())
+        return online_set.gstatus(loser.c)["phase"] in ("running", "error", "ended")
+    try:
+        _wait(started, 90, "game 2 to start after the pick")
+    except AssertionError:
+        raise AssertionError(f"no game 2 after the pick; the loser's scenes: {sorted(set(seen))}, "
+                             f"lock {lock_of(loser)}, scratch {loser.debug_scratch()}")
+    after = seen[seen.index(CSS):] if CSS in seen else []
+    assert "scSelStage" not in after, ("the stage select opened again after the pick", seen)
+    rep = online_set.play_game([a, b], game + 1)
+    assert rep["checksums"]["mismatches"] == 0, rep
+    assert rep["stage"] == B.STAGE_KIND[stage], ("the loser's pick was not played", rep)
+    _wait(lambda: a.scene() == CSS and b.scene() == CSS, 180, "both back on the room's CSS after game 2")
+    for g in (a, b):
+        until_view(g, lambda v: v["flags"] & ppom.RF_IN and v["status"] == 0 and v["game"] == game + 2,
+                   "the room waiting for its third game", timeout=60)
+        g.steps("wait 60")
+        g.shot("06b-back-after-game-2")
+
     # B holds Z: leaves the room and stays on the CSS; A sees the slot empty again.
     b.steps("hold Z 70", "wait 30")
     until_view(b, lambda v: not v["flags"] & ppom.RF_IN, "B out of the room")
