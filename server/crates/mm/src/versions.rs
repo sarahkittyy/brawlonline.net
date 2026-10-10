@@ -44,14 +44,22 @@ impl FeedVersions {
         self.by_platform.is_empty()
     }
 
-    /// The version a build for `platform` must have: its own feed's. For a build that names no
-    /// platform (older than the field), an unknown one or one without a feed: the oldest any feed
-    /// names, so no platform's current build is ever refused.
-    pub fn required(&self, platform: &str) -> Option<&str> {
+    /// The version a build of `version` for `platform` must have: its own feed's. A build that
+    /// names no platform (older than the field), an unknown one or one without a feed can only be
+    /// from a platform whose feed has reached its version (builds are published only through the
+    /// feeds): the oldest of those feeds. So a Windows 0.1.41 is refused while the macOS feed is
+    /// still at 0.1.28, and a macOS 0.1.28 is not. A build newer than every feed (a development
+    /// build) has nothing to meet.
+    pub fn required(&self, platform: &str, version: &str) -> Option<&str> {
         if let Some(v) = self.by_platform.get(platform) {
             return Some(v);
         }
-        self.by_platform.values().min_by_key(|v| parse_version(v)).map(String::as_str)
+        let have = parse_version(version);
+        self.by_platform
+            .values()
+            .filter(|v| parse_version(v) >= have)
+            .min_by_key(|v| parse_version(v))
+            .map(String::as_str)
     }
 }
 
@@ -95,16 +103,24 @@ mod tests {
     #[test]
     fn each_platform_has_its_own_feed_and_others_the_oldest() {
         let v = FeedVersions::from_pairs(&[("win", "0.1.43"), ("mac", "0.1.42"), ("linux", "0.1.43")]);
-        assert_eq!(v.required("win"), Some("0.1.43"));
-        assert_eq!(v.required("mac"), Some("0.1.42"));
-        assert_eq!(v.required("linux"), Some("0.1.43"));
-        // A build older than the platform field, or a platform without a feed.
-        assert_eq!(v.required(""), Some("0.1.42"));
-        assert_eq!(v.required("bsd"), Some("0.1.42"));
-        assert_eq!(FeedVersions::default().required("win"), None);
+        assert_eq!(v.required("win", "0.1.40"), Some("0.1.43"));
+        assert_eq!(v.required("mac", "0.1.40"), Some("0.1.42"));
+        assert_eq!(v.required("linux", "0.1.40"), Some("0.1.43"));
+        // A build older than the platform field, or a platform without a feed: held to the oldest
+        // feed it can be from.
+        assert_eq!(v.required("", "0.1.42"), Some("0.1.42"));
+        assert_eq!(v.required("bsd", "0.1.40"), Some("0.1.42"));
+        assert_eq!(FeedVersions::default().required("win", "0.1.40"), None);
+        // The macOS build of 0.1.40-0.1.42 waits for Apple: a 0.1.41 that names no platform is not
+        // a macOS build, a 0.1.28 may be one.
+        let v = FeedVersions::from_pairs(&[("win", "0.1.42"), ("mac", "0.1.28"), ("linux", "0.1.42")]);
+        assert_eq!(v.required("", "0.1.41"), Some("0.1.42"));
+        assert_eq!(v.required("", "0.1.28"), Some("0.1.28"));
+        assert_eq!(v.required("", "0.1.20"), Some("0.1.28"));
+        assert_eq!(v.required("", "0.2.0"), None, "newer than every feed");
         // Versions compare as numbers, not text.
         let v = FeedVersions::from_pairs(&[("win", "0.1.100"), ("mac", "0.1.99")]);
-        assert_eq!(v.required("linux"), Some("0.1.99"));
+        assert_eq!(v.required("linux", "0.1.50"), Some("0.1.99"));
     }
 
     #[test]
