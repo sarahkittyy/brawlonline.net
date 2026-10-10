@@ -44,6 +44,97 @@ pub const NO_REQUEST: &str = "No search received. Try again.";
 /// An Unranked ticket that found nobody within its time.
 pub const NO_OPPONENT: &str = "No opponent found. Try again.";
 
+/// Rooms (`docs/rooms-protocol.md`): a code that is no live room, or not a room code at all.
+pub const ROOM_NOT_FOUND: &str = "Room not found.";
+/// Rooms: every open slot is taken.
+pub const ROOM_FULL: &str = "This room is full.";
+/// Rooms: the host closed this player's slot (and the room refuses them from then on).
+pub const REMOVED: &str = "Removed from the room.";
+/// Rooms: a host-only request from someone else.
+pub const HOST_ONLY: &str = "Only the host can do that.";
+/// Rooms: slots and the Teams switch change between games only.
+pub const BETWEEN_GAMES: &str = "Wait for the game to end.";
+/// Rooms: the host tried to close their own slot.
+pub const OWN_SLOT: &str = "You can't close your own slot.";
+/// Rooms: closing this slot would leave fewer than two open.
+pub const MIN_OPEN_SLOTS: &str = "At least 2 slots stay open.";
+/// Rooms: a room request from a player who is in no room.
+pub const NOT_IN_ROOM: &str = "You are not in a room.";
+/// Rooms: a room game ticket from a player who is not in that room.
+pub const NOT_A_MEMBER: &str = "You are not in this room.";
+/// Rooms: a room game ticket for a room that is not starting a game.
+pub const ROOM_NOT_STARTING: &str = "The room is not starting a game.";
+/// Rooms: the game is starting, so the request has to wait.
+pub const ROOM_STARTING: &str = "The game is starting.";
+/// Rooms: the account created rooms too fast.
+pub const ROOMS_TOO_OFTEN: &str = "Too many rooms. Wait a moment.";
+/// Rooms: the account tried codes too fast.
+pub const JOINS_TOO_OFTEN: &str = "Too many tries. Wait a moment.";
+/// Rooms: one connection sent room requests too fast.
+pub const TOO_MANY_REQUESTS: &str = "Too many requests. Wait a moment.";
+/// Rooms: the server holds as many rooms as it allows.
+pub const NO_ROOMS_LEFT: &str = "No rooms free. Try later.";
+/// Rooms: a member left while the room's game was starting.
+pub const PLAYER_LEFT: &str = "A player left the room.";
+/// The same account opened a newer online connection (another game).
+pub const SIGNED_IN_ELSEWHERE: &str = "Signed in from another game.";
+
+/// Room status line: only the host is in the room.
+pub fn room_waiting(code: &str) -> String {
+    format!("Room {code}: waiting for players")
+}
+
+/// Room status line: open slots are still empty.
+pub fn waiting_for_players(players: usize, open: usize) -> String {
+    format!("Waiting for players ({players}/{open})")
+}
+
+/// Room status line: everyone is there, these players are not ready. When the names do not fit
+/// the line, as many as fit and "+N" for the rest (display names can be 15 wide characters).
+pub fn waiting_on(names: &[&str]) -> String {
+    let fits = |s: &str| s.chars().count() <= 36 && rough_width(s) <= 640;
+    for shown in (1..=names.len()).rev() {
+        let mut s = format!("Waiting on: {}", names[..shown].join(", "));
+        if shown < names.len() {
+            s += &format!(" +{}", names.len() - shown);
+        }
+        if fits(&s) {
+            return s;
+        }
+    }
+    // Not even one name fits: cut it.
+    let rest = if names.len() > 1 { format!(" +{}", names.len() - 1) } else { String::new() };
+    let mut cut = String::from("Waiting on: ");
+    for c in names.first().copied().unwrap_or("").chars() {
+        if !fits(&format!("{cut}{c}...{rest}")) {
+            break;
+        }
+        cut.push(c);
+    }
+    format!("{cut}...{rest}")
+}
+
+/// A rough upper bound of the game's text widths (font units at the normal size): every letter
+/// counted as wide as the widest the messages use, so a message within 640 fits the line.
+pub(crate) fn rough_width(s: &str) -> usize {
+    s.chars()
+        .map(|c| match c {
+            'W' | 'M' | 'm' | 'w' => 32,
+            'i' | 'l' | 'I' | '.' | ',' | '\'' | ' ' | '!' | ':' => 10,
+            _ => 19,
+        })
+        .sum()
+}
+
+/// Room status line: Teams on, everyone on one colour.
+pub const PICK_TEAMS: &str = "Pick different teams";
+/// Room status line: the room plays; this player joined during the game or came back early.
+pub const WAITING_FOR_GAME: &str = "Waiting for the game to end";
+/// Room status line: this player is in the room's game.
+pub const IN_GAME: &str = "In game";
+/// Room status line: the members' tickets are coming in.
+pub const STARTING_GAME: &str = "Starting the game";
+
 /// A mode that is not built yet (Ranked, Teams, Party).
 pub fn not_available(mode: &str) -> String {
     format!("{mode} isn't available yet.")
@@ -67,18 +158,6 @@ pub fn cannot_connect(code: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    /// A rough upper bound of the game's widths (font units at the normal size): every letter
-    /// counted as wide as the widest the messages use, so a message that passes here fits.
-    fn rough_width(s: &str) -> usize {
-        s.chars()
-            .map(|c| match c {
-                'W' | 'M' | 'm' | 'w' => 32,
-                'i' | 'l' | 'I' | '.' | ',' | '\'' | ' ' | '!' | ':' => 10,
-                _ => 19,
-            })
-            .sum()
-    }
 
     #[test]
     fn every_message_fits_the_status_line() {
@@ -107,6 +186,33 @@ mod tests {
             update_to("10.10.10"),
             did_not_connect("WWWW#999"),
             cannot_connect("WWWW#999"),
+            ROOM_NOT_FOUND.to_string(),
+            ROOM_FULL.to_string(),
+            REMOVED.to_string(),
+            HOST_ONLY.to_string(),
+            BETWEEN_GAMES.to_string(),
+            OWN_SLOT.to_string(),
+            MIN_OPEN_SLOTS.to_string(),
+            NOT_IN_ROOM.to_string(),
+            NOT_A_MEMBER.to_string(),
+            ROOM_NOT_STARTING.to_string(),
+            ROOM_STARTING.to_string(),
+            ROOMS_TOO_OFTEN.to_string(),
+            JOINS_TOO_OFTEN.to_string(),
+            TOO_MANY_REQUESTS.to_string(),
+            NO_ROOMS_LEFT.to_string(),
+            PLAYER_LEFT.to_string(),
+            SIGNED_IN_ELSEWHERE.to_string(),
+            room_waiting("WWWW"),
+            waiting_for_players(3, 4),
+            waiting_on(&["WWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWW"]),
+            PICK_TEAMS.to_string(),
+            WAITING_FOR_GAME.to_string(),
+            IN_GAME.to_string(),
+            STARTING_GAME.to_string(),
+            waiting_on(&["WW", "BO"]),
+            waiting_on(&["WWWWWWWWWWWWWWW"]),
+            waiting_on(&["player1", "player2", "player4"]),
         ];
         for m in all {
             assert!(m.chars().count() <= 36, "{m:?} is {} characters", m.chars().count());

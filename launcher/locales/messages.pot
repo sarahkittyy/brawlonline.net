@@ -12,6 +12,10 @@ msgstr ""
 msgid "#"
 msgstr ""
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:9:23
+msgid "1v1"
+msgstr ""
+
 #: src/renderer/components/activate_online_form/activate_online_form.messages.ts:3:30
 msgid "2-4 uppercase English characters"
 msgstr ""
@@ -137,6 +141,10 @@ msgstr ""
 
 #: src/renderer/components/verify_email_form/verify_email_form.messages.ts:4:24
 msgid "Can't find the email? Check your spam folder. Still missing? "
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:6:22
+msgid "Can't reach the server right now."
 msgstr ""
 
 #: src/renderer/app/header/header.messages.ts:17:17
@@ -450,6 +458,10 @@ msgstr ""
 msgid "Extracting Project+"
 msgstr ""
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:10:18
+msgid "FFA"
+msgstr ""
+
 #: src/renderer/initialize_app.messages.ts:2:60
 #. {0} productName: string
 msgid "Failed to communicate with {0} servers."
@@ -501,6 +513,10 @@ msgstr ""
 msgid "Failed to switch account"
 msgstr ""
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:20:26
+msgid "Finish your current game first."
+msgstr ""
+
 #: src/renderer/components/login_form/login_form.messages.ts:12:25
 msgid "Forgot your password?"
 msgstr ""
@@ -511,6 +527,10 @@ msgid ""
 "inputs. More delay means fewer rollbacks on a laggy connection, but less "
 "responsive controls. Auto picks 2 frames under 70 ms ping, 3 under 150 ms "
 "and 4 above, at the start of each game."
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:14:15
+msgid "Full"
 msgstr ""
 
 #: src/renderer/pages/settings/create.messages.ts:3:15
@@ -582,6 +602,10 @@ msgid ""
 "See below:"
 msgstr ""
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:13:23
+msgid "In game"
+msgstr ""
+
 #: src/renderer/lib/ranked_format.messages.ts:6:21
 msgid "In progress"
 msgstr ""
@@ -627,6 +651,18 @@ msgstr ""
 msgid "Invalid code"
 msgstr ""
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:15:15
+msgid "Join"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:17:22
+msgid "Join this room"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:18:28
+msgid "Join this room. You'll wait in it until the game ends."
+msgstr ""
+
 #: src/renderer/components/loading_screen/loading_screen.messages.ts:2:19
 #: src/renderer/pages/loading/loading_page.messages.ts:2:19
 msgid "Just a sec..."
@@ -670,7 +706,12 @@ msgstr ""
 #: src/renderer/app/header/header.messages.ts:2:16
 #: src/renderer/components/login_form/login_form.messages.ts:3:16
 #: src/renderer/components/login_notice/login_notice.messages.ts:3:16
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:5:16
 msgid "Log in"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:4:20
+msgid "Log in to see who's online and join public rooms."
 msgstr ""
 
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:4:17
@@ -793,6 +834,12 @@ msgstr ""
 
 #: src/renderer/app/header/header.messages.ts:14:30
 msgid "No network connection"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:8:18
+msgid ""
+"No public rooms right now. Create one in game: Online > With Friends > "
+"Create Room."
 msgstr ""
 
 #: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:5:26
@@ -962,6 +1009,10 @@ msgid ""
 "Brawl ISO (revision 1 or 2)."
 msgstr ""
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:2:22
+msgid "Public rooms"
+msgstr ""
+
 #: src/renderer/lib/ranked_format.messages.ts:2:17
 #: src/renderer/pages/profile/profile_page.messages.ts:8:17
 msgid "Ranked"
@@ -1023,6 +1074,7 @@ msgid "Reset {0}"
 msgstr ""
 
 #: src/renderer/components/paged_list_status/paged_list_status.messages.ts:4:16
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:7:16
 msgid "Retry"
 msgstr ""
 
@@ -1138,6 +1190,10 @@ msgstr ""
 msgid "Something went wrong."
 msgstr ""
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:22:26
+msgid "Starting the game. It will open the room."
+msgstr ""
+
 #: src/renderer/pages/settings/advanced_app_settings/advanced_app_settings.messages.ts:8:28
 msgid "Successfully cleared temporary files."
 msgstr ""
@@ -1153,6 +1209,10 @@ msgstr ""
 
 #: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:4:21
 msgid "Target Test"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:11:20
+msgid "Teams"
 msgstr ""
 
 #: src/renderer/components/multi_path_input/multi_path_input.messages.ts:6:38
@@ -1196,6 +1256,10 @@ msgstr ""
 msgid ""
 "This is the optimal result. Also known as 'easy', 'full cone', or 'open' "
 "NAT."
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:19:22
+msgid "This room is full."
 msgstr ""
 
 #: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:16:70
@@ -1340,6 +1404,10 @@ msgstr ""
 msgid "W-L"
 msgstr ""
 
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:12:24
+msgid "Waiting"
+msgstr ""
+
 #: src/renderer/app/header/header.messages.ts:15:36
 msgid "Would you like to play offline?"
 msgstr ""
@@ -1383,6 +1451,14 @@ msgstr ""
 
 #: src/renderer/components/activate_online_form/activate_online_form.messages.ts:2:37
 msgid "Your connect code is used for players to connect with you directly."
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:23:22
+msgid "Your game can't join a room right now."
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:21:24
+msgid "Your game is going to the room."
 msgstr ""
 
 #: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:6:28

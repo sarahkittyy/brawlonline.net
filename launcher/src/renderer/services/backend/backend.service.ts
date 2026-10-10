@@ -4,6 +4,7 @@ import type {
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
+  RoomList,
 } from "@accounts/types";
 import { Preconditions } from "@common/preconditions";
 import type { DolphinService, PlayKey } from "@dolphin/types";
@@ -25,6 +26,7 @@ import type { BackendService, RankedProfile, UserData } from "./types";
  * | userInitNetplay                | POST /v1/me/netplay               |
  * | (none: slippi.gg's site)       | GET /v1/ranked/leaderboard        |
  * | (none: slippi.gg's site)       | GET /v1/me/matches                |
+ * | (none: ours)                   | GET /v1/rooms                     |
  * | getLatestDolphin.version       | `latestVersion` in /v1/me         |
  */
 
@@ -111,6 +113,10 @@ class AccountsBackendClient implements BackendService {
   async fetchMatchHistory(mode: MatchHistoryFilter, before?: string): Promise<MatchHistoryPage> {
     const uid = this._activeUid();
     return await this._api.matchHistory(uid, { mode, limit: MATCH_HISTORY_PAGE_SIZE, before });
+  }
+
+  async fetchRooms(): Promise<RoomList> {
+    return await this._api.rooms(this._activeUid());
   }
 
   async assertPlayKey(playKey: PlayKey) {

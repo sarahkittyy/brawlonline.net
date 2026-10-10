@@ -174,6 +174,56 @@ describe("accounts", () => {
     expect(none.ok === false && none.error.code).toBe("no_session");
   });
 
+  it("fetches the room list with the session, and passes on the server's 503", async () => {
+    let down = false;
+    const list = {
+      online: 3,
+      updatedAt: "2026-10-09T12:00:00.000Z",
+      rooms: [
+        {
+          code: "KFQB",
+          host: "alice",
+          players: 1,
+          openSlots: 2,
+          mode: "1v1",
+          status: "waiting",
+          names: ["alice"],
+          joinable: true,
+        },
+      ],
+    };
+    const { impl, calls } = fakeFetch({
+      "GET /v1/rooms": (c) =>
+        c.headers.authorization !== "Bearer tok-1"
+          ? unauthorized
+          : down
+          ? {
+              status: 503,
+              body: {
+                error: { code: "mm_unavailable", message: "The matchmaking server is not answering. Try again later." },
+              },
+            }
+          : { status: 200, body: list },
+    });
+    const store = new SessionStore(path.join(dir, "s.json"), null);
+    await store.set(UID, "tok-1");
+    const manager = new AccountsManager(new AccountsHttpClient("http://api", "test", impl), store);
+
+    expect(await manager.rooms(UID)).toEqual({ ok: true, value: list });
+    expect(calls[0].url).toBe("http://api/v1/rooms");
+    down = true;
+    const res = await manager.rooms(UID);
+    expect(res.ok === false && res.error).toEqual({
+      code: "mm_unavailable",
+      message: "The matchmaking server is not answering. Try again later.",
+      status: 503,
+    });
+    // Without a session nothing is sent.
+    const none = await manager.rooms("someone-else");
+    expect(none.ok === false && none.error.code).toBe("no_session");
+    expect(calls.length).toBe(2);
+  });
+
   it("reports an unreachable server as a network error", async () => {
     const failing = (async () => {
       throw new TypeError("fetch failed");

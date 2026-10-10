@@ -11,6 +11,7 @@ import {
   ipc_accountsRename,
   ipc_accountsRequestPasswordReset,
   ipc_accountsResendVerification,
+  ipc_accountsRooms,
   ipc_accountsServiceUrls,
   ipc_accountsSignUp,
 } from "./ipc";
@@ -61,6 +62,9 @@ const accountsApi: AccountsApi = {
   },
   async matchHistory(uid, query) {
     return unwrap(await ipc_accountsMatchHistory.renderer!.trigger({ uid, ...query }));
+  },
+  async rooms(uid) {
+    return unwrap(await ipc_accountsRooms.renderer!.trigger({ uid }));
   },
   async getServiceUrls() {
     const { result } = await ipc_accountsServiceUrls.renderer!.trigger({});

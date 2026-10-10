@@ -8,6 +8,7 @@ import type {
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
+  RoomList,
   SignUpRequest,
 } from "./types";
 
@@ -68,6 +69,8 @@ export const ipc_accountsMatchHistory = makeEndpoint.main(
   <{ uid: string; mode: MatchHistoryFilter; limit?: number; before?: string }>_,
   <R<MatchHistoryPage>>_,
 );
+
+export const ipc_accountsRooms = makeEndpoint.main("accounts_rooms", <{ uid: string }>_, <R<RoomList>>_);
 
 export const ipc_accountsServiceUrls = makeEndpoint.main(
   "accounts_serviceUrls",

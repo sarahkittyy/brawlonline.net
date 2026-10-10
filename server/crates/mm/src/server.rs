@@ -4,12 +4,16 @@
 //! loop, all queue state in memory). Account lookups go to a tokio task over a
 //! bounded channel and come back as [`Input::UserFetched`], so a slow database
 //! never blocks the loop; a full queue refuses the ticket instead of growing.
+//!
+//! The loop also publishes the engine's status (the online count and the public rooms) twice a
+//! second for a small HTTP listener on a local address (`MM_STATUS_LISTEN`, `GET /status`), which
+//! accounts reads to serve the launcher's `GET /v1/rooms`.
 
 use std::collections::HashMap;
 use std::future::Future;
 use std::net::SocketAddr;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{mpsc as std_mpsc, Arc};
+use std::sync::{mpsc as std_mpsc, Arc, RwLock};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
 
@@ -18,6 +22,7 @@ use common::db;
 use common::net::EnetSocket;
 use common::playkey::PlayKeySecret;
 use common::proto::{MM_CHANNEL, MM_CHANNEL_COUNT};
+use common::rooms::MmStatus;
 use rusty_enet::{EventNoRef, Host, HostSettings, Packet, PeerID};
 use sqlx::PgPool;
 use tokio::sync::mpsc::error::TrySendError;
@@ -41,6 +46,11 @@ const FETCH_QUEUE: usize = 256;
 /// Account lookups running at once. The pool has 5 connections; the rest wait for one (up to the
 /// lookup timeout), and further lookups wait in [`FETCH_QUEUE`].
 const MAX_FETCHES_IN_FLIGHT: usize = 16;
+/// How often the status snapshot for the launcher is refreshed.
+const STATUS_INTERVAL: Duration = Duration::from_millis(500);
+
+/// The latest status snapshot, shared with the status listener.
+pub type SharedStatus = Arc<RwLock<MmStatus>>;
 
 struct FetchJob {
     conn: ConnId,
@@ -53,8 +63,11 @@ type Fetched = (ConnId, u64, FetchResult);
 /// A running mm server. Dropping it stops the loop.
 pub struct MmHandle {
     pub addr: SocketAddr,
+    /// Where the status listener answers `GET /status` (None when it is off).
+    pub status_addr: Option<SocketAddr>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+    status_task: Option<tokio::task::JoinHandle<()>>,
 }
 
 impl MmHandle {
@@ -68,6 +81,9 @@ impl MmHandle {
     }
 
     fn shutdown(&mut self) {
+        if let Some(t) = self.status_task.take() {
+            t.abort();
+        }
         self.stop.store(true, Ordering::SeqCst);
         if let Some(t) = self.thread.take() {
             let _ = t.join();
@@ -88,10 +104,12 @@ impl Drop for MmHandle {
     }
 }
 
-/// Binds `listen` and starts the loop on its own thread. The database worker
-/// runs on `rt`.
+/// Binds `listen` and starts the loop on its own thread. The database worker and the status
+/// listener (on `status_listen`, if given) run on `rt`.
+#[allow(clippy::too_many_arguments)]
 pub fn start(
     listen: SocketAddr,
+    status_listen: Option<SocketAddr>,
     max_peers: usize,
     engine_cfg: EngineConfig,
     secret: PlayKeySecret,
@@ -116,15 +134,49 @@ pub fn start(
         MAX_FETCHES_IN_FLIGHT,
     ));
 
+    let status: SharedStatus = Arc::new(RwLock::new(MmStatus::default()));
+    let (status_addr, status_task) = match status_listen {
+        Some(l) => {
+            let listener = std::net::TcpListener::bind(l)?;
+            listener.set_nonblocking(true)?;
+            let status_addr = listener.local_addr()?;
+            let _guard = rt.enter();
+            let listener = tokio::net::TcpListener::from_std(listener)?;
+            let task = rt.spawn(serve_status(listener, status.clone()));
+            tracing::info!("mm status on http://{status_addr}/status");
+            (Some(status_addr), Some(task))
+        }
+        None => (None, None),
+    };
+
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = stop.clone();
     let engine = Engine::new(engine_cfg, secret);
     let db = Db { fetches: job_tx, fetched: done_tx, pool, rt };
     let thread = std::thread::Builder::new()
         .name("mm-enet".into())
-        .spawn(move || event_loop(host, engine, db, done_rx, stop2))?;
+        .spawn(move || event_loop(host, engine, db, done_rx, stop2, status))?;
     tracing::info!("mm listening on udp://{addr}");
-    Ok(MmHandle { addr, stop, thread: Some(thread) })
+    Ok(MmHandle { addr, status_addr, stop, thread: Some(thread), status_task })
+}
+
+/// `GET /status`: the latest snapshot as JSON ([`MmStatus`]). Local only: accounts reads it and
+/// serves it to launchers.
+async fn serve_status(listener: tokio::net::TcpListener, status: SharedStatus) {
+    use axum::routing::get;
+    let app = axum::Router::new().route(
+        "/status",
+        get(move || {
+            let status = status.clone();
+            async move {
+                let snapshot = status.read().map(|s| s.clone()).unwrap_or_default();
+                axum::Json(snapshot)
+            }
+        }),
+    );
+    if let Err(e) = axum::serve(listener, app).await {
+        tracing::error!("status listener stopped: {e}");
+    }
 }
 
 /// Runs account lookups from `jobs`, at most `max_in_flight` at once. While all slots are busy it
@@ -300,6 +352,7 @@ fn event_loop(
     db: Db,
     done: std_mpsc::Receiver<Fetched>,
     stop: Arc<AtomicBool>,
+    status: SharedStatus,
 ) {
     let mut lp = Loop {
         host,
@@ -312,6 +365,7 @@ fn event_loop(
     };
     let mut last_tick = Instant::now();
     let mut last_stats = Instant::now();
+    let mut last_status: Option<Instant> = None;
     while !stop.load(Ordering::Relaxed) {
         let mut busy = false;
         // Bounded so one flood cannot starve timers.
@@ -340,9 +394,22 @@ fn event_loop(
             last_tick = Instant::now();
             lp.feed(Input::Tick);
         }
+        if last_status.is_none_or(|t| t.elapsed() >= STATUS_INTERVAL) {
+            last_status = Some(Instant::now());
+            let snapshot = lp.engine.status(Utc::now());
+            if let Ok(mut s) = status.write() {
+                *s = snapshot;
+            }
+        }
         if last_stats.elapsed() >= Duration::from_secs(60) {
             last_stats = Instant::now();
-            tracing::info!(connections = lp.engine.connection_count(), waiting = lp.engine.waiting_count(), "mm stats");
+            tracing::info!(
+                connections = lp.engine.connection_count(),
+                waiting = lp.engine.waiting_count(),
+                online = lp.engine.online_count(),
+                rooms = lp.engine.room_count(),
+                "mm stats"
+            );
         }
         lp.host.flush();
         if !busy {
