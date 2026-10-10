@@ -10,6 +10,7 @@
 #include <fmt/format.h>
 
 #include "Common/Logging/Log.h"
+#include "Core/Config/OnlineSettings.h"
 #include "Core/Rollback/GameplaySession.h"
 
 namespace Gprb
@@ -48,7 +49,13 @@ public:
     o.remote_host = peer.ip;
     o.remote_port = peer.port;
     o.region_set = options.region_set;
+    // The harness's option, else the player's setting (0: automatic).
     o.delay = options.delay;
+    if (const int delay = Config::Get(Config::ONLINE_INPUT_DELAY);
+        !o.delay && delay > 0 && delay <= Session::MAX_INPUT_DELAY)
+    {
+      o.delay = delay;
+    }
     o.dedupe_resim_sounds = options.dedupe_resim_sounds;
     // The match's stages: the server's list for this mode (get-ticket-resp `stages`), else P+'s
     // legal list (the session's DefaultStages(), as Slippi falls back to its default list).

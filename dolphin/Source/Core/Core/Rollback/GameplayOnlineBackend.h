@@ -8,6 +8,7 @@
 #pragma once
 
 #include <memory>
+#include <optional>
 #include <string>
 
 #include "Core/Online/OnlineSession.h"
@@ -16,7 +17,7 @@ namespace Gprb
 {
 struct OnlineBackendOptions
 {
-  int delay = 2;                     // GekkoNet input delay
+  std::optional<int> delay;          // input delay; unset: picked per game (AutoInputDelay)
   std::string region_set = "gp-v19";  // Data/Sys/Rollback/<name>.json
   bool dedupe_resim_sounds = true;
 };

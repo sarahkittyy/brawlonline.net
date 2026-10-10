@@ -559,6 +559,7 @@ export class DolphinManager {
       replayPath: this.settingsManager.getRootSlpPath(),
       enableNetplayReplays: this.settingsManager.getEnableNetplayReplays(),
       enableMonthlySubfolders: this.settingsManager.getEnableMonthlySubfolders(),
+      inputDelay: this.settingsManager.getInputDelay(),
     });
   }
 
@@ -580,6 +581,9 @@ export class DolphinManager {
       this.settingsManager.getEnableMonthlySubfolders(),
       newSettings.enableMonthlySubfolders,
       (val) => this.settingsManager.updateSetting("useMonthlySubfolders", val),
+    );
+    await this._updateLauncherSetting(this.settingsManager.getInputDelay(), newSettings.inputDelay, (val) =>
+      this.settingsManager.updateSetting("inputDelay", val),
     );
   }
 

@@ -1,3 +1,4 @@
+import { INPUT_DELAY_AUTO, INPUT_DELAY_CHOICES } from "@common/input_delay";
 import { GAME_NAME } from "@common/product";
 import { IsoValidity } from "@common/types";
 import { css } from "@emotion/react";
@@ -9,12 +10,13 @@ import CircularProgress from "@mui/material/CircularProgress";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import Radio from "@mui/material/Radio";
 import RadioGroup from "@mui/material/RadioGroup";
+import Tooltip from "@mui/material/Tooltip";
 import React from "react";
 
 import { PathInput } from "@/components/path_input/path_input";
 import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { useIsoVerification, useIsoVerificationFraction } from "@/lib/hooks/use_iso_verification";
-import { useIsoPath, useLaunchGameOnPlay } from "@/lib/hooks/use_settings";
+import { useInputDelay, useIsoPath, useLaunchGameOnPlay } from "@/lib/hooks/use_settings";
 
 import { SettingItem } from "../setting_item_section";
 import { GameSettingsMessages as Messages } from "./game_settings.messages";
@@ -56,6 +58,7 @@ export const GameSettings = React.memo(() => {
   const [isoPath, setIsoPath] = useIsoPath();
   const verifyFraction = useIsoVerificationFraction(verifying ? isoPath : null);
   const [launchMeleeOnPlay, setLaunchMelee] = useLaunchGameOnPlay();
+  const [inputDelay, setInputDelay] = useInputDelay();
   const netplayDolphinOpen = useDolphinStore((store) => store.netplayOpened);
   const playbackDolphinOpen = useDolphinStore((store) => store.playbackOpened);
 
@@ -110,6 +113,27 @@ export const GameSettings = React.memo(() => {
           <FormControlLabel value={true} label={Messages.launchMelee(GAME_NAME)} control={<Radio />} />
           <FormControlLabel value={false} label={Messages.launchDolphin()} control={<Radio />} />
         </RadioGroup>
+      </SettingItem>
+      <SettingItem name={Messages.inputDelay()} description={Messages.inputDelayDescription()}>
+        <Tooltip title={netplayDolphinOpen ? Messages.closeDolphinToChange() : ""} placement="bottom-start">
+          <RadioGroup row={true} value={inputDelay} onChange={(_event, value) => setInputDelay(Number(value))}>
+            <FormControlLabel
+              value={INPUT_DELAY_AUTO}
+              label={Messages.inputDelayAuto()}
+              control={<Radio />}
+              disabled={netplayDolphinOpen}
+            />
+            {INPUT_DELAY_CHOICES.map((frames) => (
+              <FormControlLabel
+                key={frames}
+                value={frames}
+                label={Messages.inputDelayFrames(frames)}
+                control={<Radio />}
+                disabled={netplayDolphinOpen}
+              />
+            ))}
+          </RadioGroup>
+        </Tooltip>
       </SettingItem>
     </div>
   );

@@ -10,7 +10,7 @@
 namespace Config
 {
 // [Online] in Dolphin.ini. The launcher syncs its own keys into the same section (ReplayDir,
-// SaveReplays, ReplayMonthlyFolders; see launcher/src/common/product.ts). The key names of the
+// SaveReplays, ReplayMonthlyFolders, InputDelay; see launcher/src/common/product.ts). The key names of the
 // port and LAN settings are Slippi's ([Slippi] ForceNetplayPort etc.).
 
 // Matchmaking server. Slippi hard-codes mm.slippi.gg:43113 (mm2.slippi.gg for dev builds); ours
@@ -36,6 +36,11 @@ extern const Info<std::string> ONLINE_LAN_IP;
 // gameplay-only, Slippi-style session, the default), "netplay" (whole-machine rollback netplay
 // after a synchronized reboot, the fallback) or "none" (keep the P2P link; nothing starts).
 extern const Info<std::string> ONLINE_SESSION_BACKEND;
+
+// This player's input delay in online matches (the launcher's setting): 0 picks it per game from
+// the round trip (Gprb::Session::AutoInputDelay), 1-9 sets it. Each player's applies to their own
+// inputs, as Slippi's delay frames do.
+extern const Info<int> ONLINE_INPUT_DELAY;
 
 // The matchmaking host and port in effect (the dev override applied).
 std::string GetMatchmakingHost();

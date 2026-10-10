@@ -39,6 +39,22 @@ class CPUThreadGuard;
 
 namespace Gprb::Session
 {
+// Input delay in frames. Each player picks the delay of their own inputs, as on Slippi (in every
+// mode, ranked too): a set value, or automatic, from the round trip to the peer when the game's
+// GekkoNet session starts: 2 frames below 70 ms, 3 below 150 ms, else 4. The other player's
+// inputs then mostly arrive before they are needed, so rollbacks stay short, without adding delay
+// on good connections. A round trip not measured yet: the default.
+constexpr int DEFAULT_INPUT_DELAY = 2;
+constexpr int MAX_INPUT_DELAY = 9;
+constexpr int AutoInputDelay(double rtt_ms)
+{
+  if (rtt_ms < 0)
+    return DEFAULT_INPUT_DELAY;
+  return rtt_ms < 70 ? 2 : rtt_ms < 150 ? 3 : 4;
+}
+static_assert(AutoInputDelay(-1) == 2 && AutoInputDelay(69.9) == 2 && AutoInputDelay(70) == 3 &&
+              AutoInputDelay(149.9) == 3 && AutoInputDelay(150) == 4 && AutoInputDelay(400) == 4);
+
 struct SyncTestOptions
 {
   int distance = 2;                 // frames rolled back on every frame (1..MAX_ROLLBACK_FRAMES)
@@ -85,7 +101,9 @@ struct ConnectOptions
   // copied) to `start_frame`, both peers run with neutral input and no rollback; GekkoNet starts
   // at `start_frame` behind a second barrier.
   u32 start_frame = 240;
-  int delay = 2;             // input delay in frames
+  // This player's input delay in frames (0-MAX_INPUT_DELAY). Unset: automatic, per game
+  // (AutoInputDelay).
+  std::optional<int> delay;
   int local_pad = 0;         // local controller port the local player uses
   bool sync_task_order = true;
   bool hash_regions = false;  // per-frame region hashes (diagnostics; costs a few ms per frame)

@@ -1282,7 +1282,8 @@ Result CmdGprbConnect(const Args& args)
   o.remote_port = static_cast<u16>(GetU64(args, "remote_port", 0));
   o.region_set = GetString(args, "region_set", std::string("gp-v19"));
   o.start_frame = static_cast<u32>(GetU64(args, "start_frame", 240));
-  o.delay = static_cast<int>(GetU64(args, "delay", 2));
+  if (Find(args, "delay"))
+    o.delay = static_cast<int>(GetU64(args, "delay"));
   o.local_pad = static_cast<int>(GetU64(args, "local_pad", 0));
   o.sync_task_order = GetBool(args, "sync_task_order", true);
   o.hash_regions = GetBool(args, "hash_regions", false);

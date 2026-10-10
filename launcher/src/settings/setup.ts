@@ -72,6 +72,11 @@ function setupSettingsSubscriptions(settingsManager: SettingsManager, dolphinMan
     await installation.updateSettings({ enableMonthlySubfolders });
   });
 
+  settingsManager.onSettingChange("inputDelay", async (inputDelay) => {
+    const installation = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
+    await installation.updateSettings({ inputDelay });
+  });
+
   // A different Dolphin build: re-check it like Slippi re-checks after an install
   settingsManager.onSettingChange("netplayDolphinPath", async () => {
     await dolphinManager.installDolphin(DolphinLaunchType.NETPLAY);
