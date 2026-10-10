@@ -143,6 +143,9 @@ struct ConnectOptions
   // The room's Teams switch (docs/nplayer/setup.md): 3-4 players play a team battle with each
   // player's lock-in team (Online::GameSetup::DecideTeams); with 2 players it has no effect.
   bool teams = false;
+  // Ports (bits) that pick the first game's stage: a room's game is a session of its own, and the
+  // last room game's loser picks (docs/rooms-game-interface.md); every member carries the same.
+  u8 initial_pickers = 0;
 };
 
 // ---- The lobby: the online character select between matches (Slippi's MATCH_SELECTIONS). ----
@@ -222,6 +225,7 @@ struct Lobby
   bool teams = false;         // the next game is a team battle (players[i].team)
   u8 stage_pickers = 0;       // ports (bits) that pick the next stage (GameSetup::Outcome)
   u8 setup_error = 0;         // GameSetup::SetupError: why the next game is not set up
+  bool after_match = false;   // a match ended and the game has not left its scene yet
 };
 Lobby GetLobby();
 

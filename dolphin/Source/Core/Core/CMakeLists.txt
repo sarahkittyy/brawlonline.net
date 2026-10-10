@@ -593,6 +593,10 @@ add_library(core
   Online/Ranked.h
   Online/RecentCodes.cpp
   Online/RecentCodes.h
+  Online/RoomMessages.cpp
+  Online/RoomMessages.h
+  Online/Rooms.cpp
+  Online/Rooms.h
   Online/Timeouts.h
   Online/User.cpp
   Online/User.h
