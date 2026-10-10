@@ -77,9 +77,10 @@ DEFAULTS = {
 }
 # Inside double quotes on the Mac ("~" would not expand there).
 MAC_HOME = "$HOME/brawl-staging"
-# Its own name and bundle ID, so macOS never takes it for (or launches it as) the real app.
+# Its own folder name. The bundle ID stays the real one: Electron's helper apps carry IDs derived
+# from it, and a changed main ID made Electron stop at start-up (EXC_BREAKPOINT in ElectronMain).
+# What keeps a Dock or Finder start on staging is the staging-env.json inside the app.
 MAC_APP = f"{MAC_HOME}/app/Brawl Online Staging.app"
-MAC_BUNDLE_ID = "net.brawlonline.launcher.staging"
 # pgrep/pkill pattern for the staging app and the Dolphin a staging profile installed. The
 # bracket keeps it from matching the command line of the shell that runs it (or a build).
 MAC_PROC = "brawl-stagin[g]/(app|profiles)/"
@@ -769,10 +770,7 @@ for old in "{h}/app/Brawl Online.app" "{MAC_APP}"; do
 done
 mkdir -p {h}/app
 ditto "release/build/mac-arm64/Brawl Online.app" "{MAC_APP}"
-# Its own identity, and its staging settings inside it (applied however it is started).
-P="{MAC_APP}/Contents/Info.plist"
-/usr/libexec/PlistBuddy -c "Set :CFBundleIdentifier {MAC_BUNDLE_ID}" -c "Set :CFBundleName Brawl Online Staging" "$P"
-/usr/libexec/PlistBuddy -c "Set :CFBundleDisplayName Brawl Online Staging" "$P" 2>/dev/null   || /usr/libexec/PlistBuddy -c "Add :CFBundleDisplayName string Brawl Online Staging" "$P"
+# Its staging settings inside it (applied however it is started), then re-signed ad hoc.
 printf '%s' {shlex.quote(staging_env_json(cfg, "__HOME__/brawl-staging/profiles/a"))}   | sed "s|__HOME__|$HOME|g" > "{MAC_APP}/Contents/Resources/staging-env.json"
 codesign --force --deep --sign - "{MAC_APP}"
 "$LSREG" -f "{MAC_APP}"
