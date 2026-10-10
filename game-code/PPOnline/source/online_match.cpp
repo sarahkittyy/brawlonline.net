@@ -161,6 +161,60 @@ namespace OnlineMatch {
         return first < 0 ? costume : (u8)first;
     }
 
+    // The character's costume list (as teamCostume): its length and each costume's colour.
+    static int costumeList(u8 charKind, u8* colours)
+    {
+        typedef int (*ToSelchFn)(int);
+        int slot = ((ToSelchFn)0x800AF708)(charKind);
+        u32 list = *(u32*)(0x80585B08 + ((u32)slot & 0xFF) * 0x10);
+        if (!isPtr(list)) return 0;
+        int n = 0;
+        for (; n < 0x20; n++) {
+            u8 c = *(u8*)(list + 2 * n);
+            if (c == 0x0C) break;
+            colours[n] = c;
+        }
+        return n;
+    }
+
+    // Two players with the same character and costume in a free-for-all (staging feedback
+    // 2026-10-10): P+'s Versus never shows that. Its CSS does not let a costume another player
+    // has be picked: X skips it, and a player taking a character whose costume is taken gets the
+    // next free one (found live: three Game & Watch on P1-P3 came out 0, 1, 2; cycling skipped
+    // the others'). So the later player (in port order) gets the next costume in the
+    // character's list that no other player of that character has, of the same colour if the
+    // list has one (P+'s variants: a second green), else the next free one. Deterministic: the
+    // same SESSION gives the same costumes on every machine. Only if the list has none left
+    // (fewer costumes than players) is the shading below the fallback.
+    static void distinctCostumes(const PPOM::Session& se, u8* costume)
+    {
+        for (int i = 0; i < se.numPlayers && i < 4; i++) {
+            if (!se.players[i].present) continue;
+            u8 kind = se.players[i].charKind;
+            bool clash = false;
+            for (int j = 0; j < i; j++) {
+                if (se.players[j].present && se.players[j].charKind == kind && costume[j] == costume[i]) clash = true;
+            }
+            if (!clash) continue;
+            u8 colours[0x20];
+            int n = costumeList(kind, colours);
+            if (n <= 1 || costume[i] >= n) continue;
+            int pick = -1;
+            for (int pass = 0; pass < 2 && pick < 0; pass++) {
+                for (int d = 1; d < n && pick < 0; d++) {
+                    int c = (costume[i] + d) % n;
+                    if (pass == 0 && colours[c] != colours[costume[i]]) continue;
+                    bool used = false;
+                    for (int j = 0; j < se.numPlayers && j < 4; j++) {
+                        if (j != i && se.players[j].present && se.players[j].charKind == kind && costume[j] == c) used = true;
+                    }
+                    if (!used) pick = c;
+                }
+            }
+            if (pick >= 0) costume[i] = (u8)pick;
+        }
+    }
+
     u16 pickedStage() { return s_pickedStage; }
     u8 pickedAsl() { return s_pickedAsl; }
     void clearPickedStage() { s_pickedStage = 0xFFFF; s_pickedAsl = 0; }
@@ -232,6 +286,12 @@ namespace OnlineMatch {
                 p[0x01] = 3;                         // none
             }
         }
+        if (!teams) {
+            distinctCostumes(se, costume);
+            for (int i = 0; i < se.numPlayers && i < 4; i++) {
+                if (se.players[i].present) sel[SEL_PLAYERS + i * PLAYER_SIZE + 0x05] = costume[i];
+            }
+        }
         sel[SEL_TEAMS] = teams ? 1 : 0;
         se.outCount = 0;
         s_seen = 0;
@@ -247,7 +307,8 @@ namespace OnlineMatch {
         for (int i = 0; i < se.numPlayers && i < 4; i++) {
             if (se.players[i].present) mm[MM_PLAYERS + i * PLAYER_SIZE + 0x07] = (u8)(i + 1);
         }
-        // Colour clash (Slippi's prepareOnlineMatchState: the players are counted in port order
+        // Colour clash, the fallback when distinctCostumes found no free costume (Slippi's
+        // prepareOnlineMatchState: the players are counted in port order
         // and each one with the same character and colour as an earlier one gets the next shade).
         // Brawl has the shades for team battles (two of a character on one team): gmPlayerInitData
         // +0x0A is the shade, and the fighter's colour blend module draws it (sub colour, alpha

@@ -38,6 +38,10 @@ ART = ROOT / "run" / "artifacts" / "game-code" / "rooms" / "ui"
 # units (game-code.md "Rooms"); the character grid and the panels in those units.
 HAND_X, HAND_Y = 0x90, 0x94
 FOX = (-23.0, 10.5)                 # Fox's portrait in the grid
+MODE_BUTTON = (-30.5, 13.5)         # "FFA" / "Teams" under LEAVE (online_menu.cpp roomButtons)
+PUBLIC_BUTTON = (-15.3, 17.2)       # "Public" / "Private" after the room's code
+MY_FLAG = (-26.0, -4.5)             # our own panel's team flag (room_css.cpp handOverMyFlag)
+SLOT_POS = 16.0 / 0.99              # a panel's model offset per slot (room_css.cpp SLOT_POS)
 PANEL_X = [-22.0, -7.0, 8.0, 23.0]  # the four panels' centres, y about -10
 GMKIND_MARIO, GMKIND_FOX = 0x00, 0x07
 
@@ -99,6 +103,18 @@ class Game:
         h = self.u32(self.u32(task + 0x44) + 0x1A8)
         x, y = struct.unpack(">ff", self.c.read_mem(h + HAND_X, 8))
         return x, y
+
+    def area(self, i: int) -> int:
+        task = self.u32(self.u32(self.u32(0x805A0060) + 4) + 0x400)
+        return self.u32(task + 0x44 + 4 * i)
+
+    def panel_state(self, i: int) -> int:
+        """The state shown in area i's box (its state object, area+0x41C, +8)."""
+        return self.u32(self.u32(self.area(i) + 0x41C) + 8)
+
+    def panel_offset(self, i: int) -> float:
+        """Area i's panel model (+0xB0) offset, MuObject +0x3C."""
+        return struct.unpack(">f", self.c.read_mem(self.u32(self.area(i) + 0xB0) + 0x3C, 4))[0]
 
     def hand_to(self, x: float, y: float, tol: float = 1.2) -> None:
         """Closed loop: the stick toward (x, y) until the hand is there."""
@@ -166,6 +182,7 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     g.wait(30)
     lock = ppom.read_local(c, sim.b)["lock"]
     assert lock["ready"] == 1 and lock["game"] == sim.room.game and lock["char_kind"] == GMKIND_FOX, lock
+    assert g.panel_state(0) == 4, "no Ready on our own panel"   # room_css.cpp ST_READY
     g.shot("06-both-ready")
     # B takes it back.
     g.tap("B")
@@ -178,11 +195,24 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     g.wait(30)
     assert sim.room.open[2], sim.room.open
     g.shot("07-slot-3-opened")
-    # R: Teams on (three open slots: a team battle); the panels in team colours.
-    g.tap("R")
+    # The FFA button under LEAVE (A on it, as R): Teams on (three open slots: a team battle);
+    # the panels in team colours. A room starts as FFA.
+    assert not sim.room.teams
+    g.hand_to(*MODE_BUTTON, tol=0.5)
+    g.tap("A")
     g.wait(40)
     assert sim.room.teams
     g.shot("08-teams-on")
+    # A on our own flag: the next team colour (Brawl's way).
+    team0 = sim.room.members[0].team
+    g.hand_to(*MY_FLAG, tol=0.5)
+    g.tap("A")
+    g.wait(30)
+    assert sim.room.members[0].team == (team0 + 1) % 3, sim.room.members[0]
+    g.shot("08a-flag-clicked")
+    g.tap("Y")
+    g.wait(30)
+    assert sim.room.members[0].team == team0
     # X: our team colour to the next one (red -> blue), Y back.
     team0 = sim.room.members[0].team
     g.tap("X")
@@ -192,12 +222,14 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     g.tap("Y")
     g.wait(30)
     assert sim.room.members[0].team == team0
-    # L: private.
-    g.tap("L")
+    # The Public button (A on it, as L): private.
+    g.hand_to(*PUBLIC_BUTTON, tol=0.5)
+    g.tap("A")
     g.wait(30)
     assert not sim.room.public
     g.shot("09-private")
-    # A on the third panel again closes it; R Teams off.
+    # A on the third panel again closes it ("Closed" on it); R Teams off.
+    g.hand_to(PANEL_X[2], -10.0)
     g.tap("A")
     g.wait(30)
     assert not sim.room.open[2]
@@ -215,8 +247,10 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     assert sim.room_ops("leave"), "no ROOM_LEAVE"
     assert sim.room is None
     g.shot("11-left-the-room")
-    sim.joinable["KFQB"] = roomsim.Room(code="KFQB", host=1,
-                                        members=[None, roomsim.Member("bob", team=1), None, None])
+    # A room with two players: we join in its third slot (P3), and our panel is the third.
+    sim.joinable["KFQB"] = roomsim.Room(code="KFQB", host=1, open=[True, True, True, False],
+                                        members=[roomsim.Member("carol", team=0),
+                                                 roomsim.Member("bob", team=1), None, None])
     g.tap("START")
     g.wait(40)
     g.shot("12-keypad-room-code")
@@ -232,8 +266,10 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     g.wait(60)
     joins = sim.room_ops("join")
     assert joins and ppom.from_u16s(joins[-1][4:4 + 2 * ppom.CODE_LEN]) == "KFQB", (typed, joins)
-    assert sim.room is not None and sim.me() == 0
+    assert sim.room is not None and sim.me() == 2
     g.wait(30)
+    # Panels in slot order: our own panel (area 0) drawn two slots right, carol's (area 2) at P1.
+    assert abs(g.panel_offset(0) - 2 * SLOT_POS) < 0.1 and abs(g.panel_offset(2) + 2 * SLOT_POS) < 0.1,         (g.panel_offset(0), g.panel_offset(2))
     assert not keypad_open(g), "the keypad came back after the join"
     assert ppom.read_local(c, sim.b)["lock"]["ready"] == 0, "the keypad's START locked in"
     g.shot("14-joined-bob-host")
@@ -259,10 +295,10 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     assert sim.screen() == ppom.SCREENS["menus"]
 
 
-# The keypad's letter keys by (row, column), as test_online_game.ALPHA_KEYS, with the letters the
-# room-code mode leaves on them (code_entry.cpp ROOM_KEYS); (1, 0) is the symbols key.
-ROOM_KEYS = {(1, 1): "BC", (1, 2): "DF", (2, 0): "GH", (2, 1): "JKL", (2, 2): "MN", (3, 0): "PQRS",
-             (3, 1): "TV", (3, 2): "WXZ"}
+# The keypad's letter keys by (row, column), as test_online_game.ALPHA_KEYS (room-code mode takes
+# every letter they show); (1, 0) is the symbols key.
+ROOM_KEYS = {(1, 1): "ABC", (1, 2): "DEF", (2, 0): "GHI", (2, 1): "JKL", (2, 2): "MNO", (3, 0): "PQRS",
+             (3, 1): "TUV", (3, 2): "WXYZ"}
 
 
 def keypad_anchor(g: Game) -> tuple[int, int]:
