@@ -79,7 +79,28 @@ def from_u16s(b: bytes) -> str:
     return "".join(out)
 
 
+def _parse_block(c: HarnessClient, a: int):
+    hdr = c.read_mem(a, 0x24)
+    if hdr[:4] != MAGIC:
+        return None
+    ver, sz, mbo, mbs, so, ss, lo, ls, dbo, dbs = struct.unpack_from(">HHHHHHHHHH", hdr, 4)
+    if ver in (1, 2, 3, 4, 5) and 0x100 < sz < 0x4000 and mbo and dbo:
+        return Block(a, ver, sz, a + mbo, mbs, a + dbo, dbs, a + so if ss else 0, ss,
+                     a + lo if ls else 0, ls)
+    return None
+
+
 def find_block(c: HarnessClient) -> Block:
+    # Where Dolphin's GameBridge found it (the plugin may live outside the Syringe heap, e.g. a
+    # loader REL linking it into MEM2), else a scan of the Syringe heap.
+    try:
+        st = c.call("game_bridge_status")
+        if st.get("found"):
+            b = _parse_block(c, int(st["block"]))
+            if b:
+                return b
+    except Exception:  # noqa: BLE001 - an older Dolphin, or GameBridge not there yet
+        pass
     start, size = SYRINGE_HEAP
     mem = c.read_mem(start, size)
     i = 0
@@ -170,6 +191,25 @@ def write_response(c: HarnessClient, b: Block, seq: int, cmd: int, payload: byte
     c.write_mem(b.mailbox + MB_RESP, body)
     rc = struct.unpack(">I", c.read_mem(b.mailbox + MB_RESP_COUNT, 4))[0]
     c.write_mem(b.mailbox + MB_RESP_COUNT, struct.pack(">I", rc + 1))   # publish last
+
+
+def post(c: HarnessClient, b: Block, cmd: int, payload: bytes = b"") -> int:
+    """Tests: post a request as the game does (ppom.cpp post): the slot first, its seq word, then
+    reqWrite. Only while the plugin itself posts nothing (its own counter would reuse the seq)."""
+    wr = struct.unpack(">I", c.read_mem(b.mailbox + MB_REQ_WRITE, 4))[0]
+    seq = wr + 1
+    slot = b.mailbox + MB_REQ + ((seq - 1) % REQ_SLOTS) * REQ_SIZE
+    c.write_mem(slot + 4, bytes([cmd, 0, 0, 0]) + payload[:REQ_PAYLOAD].ljust(REQ_PAYLOAD, b"\0"))
+    c.write_mem(slot, struct.pack(">I", seq))
+    c.write_mem(b.mailbox + MB_REQ_WRITE, struct.pack(">I", seq))
+    return seq
+
+
+def read_response(c: HarnessClient, b: Block) -> dict:
+    """The response in the mailbox now: {seq, cmd, status, payload}."""
+    raw = c.read_mem(b.mailbox + MB_RESP, 8 + RESP_PAYLOAD)
+    seq, cmd, status = struct.unpack_from(">IBB", raw, 0)
+    return {"seq": seq, "cmd": cmd, "status": status, "payload": raw[8:]}
 
 
 def consume(c: HarnessClient, b: Block, upto: int) -> None:

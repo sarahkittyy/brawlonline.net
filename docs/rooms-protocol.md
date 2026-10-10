@@ -1,6 +1,6 @@
 # Rooms: protocol, launcher endpoints and the launcher-game hand-off
 
-_2026-10-09. What is built: the server side (`server/crates/mm/src/rooms.rs`, `server/crates/common/src/rooms.rs`, `GET /v1/rooms` in accounts), `mmclient room` / `mmclient online`, and the launcher's list on Home > Overview with its side of the hand-off. Not built: everything in Dolphin and the game (section 7). The decisions behind it are in `docs/design/rooms.md`._
+_2026-10-09. What is built: the server side (`server/crates/mm/src/rooms.rs`, `server/crates/common/src/rooms.rs`, `GET /v1/rooms` in accounts), `mmclient room` / `mmclient online`, and the launcher's list on Home > Overview with its side of the hand-off. Dolphin's side is built on branch `rooms-dolphin` (`Online/Rooms.cpp`, `RoomMessages.cpp`, GameBridge; the game interface is `docs/rooms-game-interface.md`); the game's room CSS is not built yet. The decisions behind it are in `docs/design/rooms.md`._
 
 ## 1. Pieces
 
