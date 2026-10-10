@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from typing import Any, Callable, Iterator
 
 import pytest
@@ -193,6 +194,55 @@ def test_direct_loser_picks_off_the_server_list(direct_backend: OnlineBackend,
     for g in (a, b):
         assert g.bridge()["lost"] == 0
         g.c.mm_cancel()
+
+
+# P+'s "Allow Pausing When Set to Off" writes 2 here in a match whose pause is off; its "Hold Start
+# to Pause" then takes START out of the pad reads, in any scene, until it is held 50 frames.
+PPLUS_PAUSE_OFF = 0x80584084
+
+
+@pytest.mark.slow
+def test_pause_quit_in_unranked_leaves_start_working(backend: OnlineBackend,
+                                                     dolphin: Callable[..., DolphinInstance],
+                                                     gpu_backend: str) -> None:
+    """Unranked has pause off, but P+ pauses on a START held for 50 frames; from there the pause
+    screen's L+R+A+START quits. That end has no winner, and only P+'s win/loss hooks clear its
+    pause-off word, so START stayed filtered after the match: on the Direct CSS it no longer
+    opened the keypad (a user's report, 2026-10-09). The plugin clears the word when the match is
+    left (online_match.cpp offMatch)."""
+    test = "unranked-pause-quit"
+    ua, ub = backend.create_user("lena", "LENA"), backend.create_user("moss", "MOSS")
+    a = _boot(dolphin, "unr-qa", backend, ua, gpu_backend, test, "gameplay")
+    b = _boot(dolphin, "unr-qb", backend, ub, gpu_backend, test, "gameplay")
+    _both(a.to_main_menu, b.to_main_menu)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("unranked"), lambda: b.to_css("unranked"))
+    for g in (a, b):
+        B.write_rules(g.c, stocks=4, minutes=8, items_off=True)
+        ppom.allow_test_rules(g.c)
+    _search_unranked(a)
+    time.sleep(2.2)  # the server takes one ticket per account per 2 s
+    _search_unranked(b)
+    _peer_shown(a, ub)
+    _peer_shown(b, ua)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)), 240,
+                    "the match to run on both")
+    a.steps("wait 240", "hold START 90", "wait 30")
+    a.shot("01-paused")
+    assert a.c.read_u32(PPLUS_PAUSE_OFF) == 2
+    a.steps("hold L+R+A+START 20")
+    online_set.wait(lambda: all(online_set.scene(g.c) == online_set.CSS for g in (a, b)), 60,
+                    "both back on the CSS")
+    for g in (a, b):
+        # The plugin held the quit (0x40000) and then ended the match (0x80000).
+        assert g.debug_scratch()[10] & 0xC0000 == 0xC0000, hex(g.debug_scratch()[10])
+        assert online_set.gstatus(g.c)["end_reason"] == "quit"
+        assert g.c.read_u32(PPLUS_PAUSE_OFF) == 0, g.name
+    # As the user did: back to the menus, then Direct, where START opens the keypad.
+    a.steps("wait 60", "hold B 120", "until muMenuMain 900", "wait 90", "tap DLEFT 4", "wait 30")
+    a.to_css("direct")
+    a.open_keypad()
+    a.shot("02-direct-keypad")
 
 
 def test_unranked_search_ends_with_the_server_error(backend: OnlineBackend,
