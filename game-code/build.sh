@@ -5,7 +5,8 @@
 # followed by the plugin (PPOnline/PPOnlineMain.rel, REL id 20560), which the loader links into
 # the Network heap (docs/game-code.md section 2, "Heap budget").
 #   ./build.sh            PPOnline only
-#   ./build.sh all        also the upstream Brawlback-Online.rel + sy_core.rel (clean build)
+#   ./build.sh all        a clean build of everything, also the upstream Brawlback-Online.rel +
+#                         sy_core.rel
 set -e
 cd "$(dirname "$0")"
 TC="$(cd .. && pwd)/toolchains"
@@ -19,6 +20,10 @@ if [ "$1" = "all" ]; then
   mkdir -p sd-card/vBrawl/pf/plugins sd-card/vBrawl/pf/module
   make LLVMDIR="$LLVMDIR" ELF2REL="$E2R" clean >/dev/null
   make LLVMDIR="$LLVMDIR" ELF2REL="$E2R"
+fi
+if [ "$1" = "all" ]; then
+  $MK -s -C PPOnline clean
+  $MK -s -C PPOnlineLoader clean
 fi
 $MK -C PPOnline
 $MK -C PPOnlineLoader
