@@ -1,4 +1,4 @@
-# PPOnline: Slippi-style online menus for P+ (Syriinge 0.6 plugin). Based on Brawlback-Online/Makefile;
+# PPOnlineLoader: loads the PPOnline plugin into the Network heap (source/loader.cpp). Same rules as PPOnline/Makefile.
 # the dependency rule is fixed so incremental builds work (upstream writes the linked object into the .d file).
 include $(TOPDIR)/lib/base_rules
 
@@ -14,8 +14,8 @@ include $(TOPDIR)/lib/base_rules
 # SOURCES is a list of directories containing source code
 # INCLUDES is a list of directories containing extra header files
 #---------------------------------------------------------------------------------
-TARGET		:=	PPOnlineMain
-RELID		:=  20560
+TARGET		:=	PPOnlineLoader
+RELID		:=  20561
 BUILD		:=	build
 SOURCES		:=	source $(wildcard source/*) ../lib/BrawlHeaders/PowerPC_EABI_Support/Runtime/Src/
 INCLUDES	:=	include
@@ -31,7 +31,7 @@ CCFLAGS		:= -target powerpc-gekko-ibm-kuribo-eabi -fuse-ld=lld \
 			   -nostdlib -nodefaultlibs -fno-addrsig -fno-exceptions \
 			   -fno-c++-static-destructors -fno-use-cxa-atexit \
 			   -r -flto -ffast-math -fpermissive -fno-unwind-tables -finline-functions -fdeclspec \
-			   -u _prolog -u _epilog -u _unresolved -mlongcall
+			   -u _prolog -u _epilog -u _unresolved -fno-rtti -Oz
 CXXFLAGS	:= $(CCFLAGS)
 LDFLAGS		:= -T $(TOPDIR)/test.ld --unresolved-symbols=ignore-all -e _prolog -r
 

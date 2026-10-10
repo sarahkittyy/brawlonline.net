@@ -41,7 +41,7 @@ def make_instance(name: str, plugins: list[str] = (), adds: list[str] = (), boot
     files: list[tuple[bytes, str]] = []
     for p in plugins:
         pp = Path(p)
-        files.append((pp.read_bytes(), f"{patch_sd.PLUGIN_DIR}/{pp.name}"))
+        files.append((pp.read_bytes(), patch_sd.plugin_sd_path(pp)))
     for a in adds:
         local, _, sd_path = a.partition("=")
         files.append((Path(local).read_bytes(), sd_path))

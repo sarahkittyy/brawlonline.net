@@ -56,7 +56,11 @@ public:
     // mapping toward the guest open, as Slippi connects from both sides).
     o.remote_host = peer.ip;
     o.remote_port = peer.port;
-    if (match.players.size() > 2)
+    // A room's game: every player on their slot also with 2 players (slots are ports, gaps
+    // allowed) and the room's host decides (docs/rooms-protocol.md §3), not whoever claims it.
+    const bool room = match.room_host_port >= 1 &&
+                      match.room_host_port <= Session::MAX_LOBBY_PLAYERS;
+    if (match.players.size() > 2 || room)
     {
       // 3-4 players: everyone on their server port (1-4), every pair connected directly (the
       // remotes and connected lists follow `players` without the local one).
@@ -79,6 +83,21 @@ public:
       }
       if (o.local_slot < 0)
         return std::string("the match has no local player");
+      if (room)
+      {
+        if (!(ports & (1u << (match.room_host_port - 1))))
+          return fmt::format("the room's host P{} is not in the match", match.room_host_port);
+        o.host_slot = match.room_host_port - 1;
+        o.host = o.local_slot == o.host_slot;
+        if (o.host != match.is_host)
+        {
+          WARN_LOG_FMT(BRAWLBACK, "gprb: the server's isHost ({}) is not the room's host P{}; "
+                                  "the room's host decides",
+                       match.is_host, match.room_host_port);
+        }
+        o.teams = match.room_teams;
+        o.initial_pickers = match.room_pickers & ports;
+      }
     }
     o.region_set = options.region_set;
     // The harness's option, else the player's setting (0: automatic).

@@ -7,6 +7,13 @@
     python tools/gamecode/reltool.py dol main.dol ADDR [COUNT]                # disassemble the DOL
     python tools/gamecode/reltool.py find FILE.rel HEXWORDS                   # find byte pattern in .text
     python tools/gamecode/reltool.py diff A.rel B.rel                          # per-section size/equality
+    python tools/gamecode/reltool.py pack LOADER.rel PLUGIN.rel OUT.rel         # PPOnline.rel (below)
+
+PPOnline.rel is packed: the loader REL (PPOnlineLoader, the Syriinge plugin sy_core loads into the
+Syringe heap) with the plugin REL (PPOnlineMain, id 20560) appended and a 16-byte trailer
+{"PPOL", offset, size, version 1}; the loader links the plugin into the Network heap
+(game-code/PPOnlineLoader/source/loader.cpp). `info` and `check` look at both; `--part main`
+picks the plugin for the other commands.
 
 Relocations against module 0 (the DOL) are shown symbolically when a symbol map is given
 with --map (BrawlHeaders RSBE01.lst format "addr:name"), and relocated branch targets in the
@@ -46,9 +53,31 @@ class Reloc:
     addend: int
 
 
+TRAILER = 0x50504F4C   # "PPOL"
+
+
+def split_packed(b: bytes) -> tuple[bytes, bytes | None]:
+    """(loader, plugin) of a packed PPOnline.rel; (b, None) for a plain REL."""
+    if len(b) >= 16:
+        magic, off, size, ver = struct.unpack_from(">4I", b, len(b) - 16)
+        if magic == TRAILER and ver == 1 and off % 32 == 0 and off + size <= len(b) - 16:
+            return b[:off], b[off:off + size]
+    return b, None
+
+
+def pack(loader: bytes, plugin: bytes) -> bytes:
+    pad = (-len(loader)) % 32
+    off = len(loader) + pad
+    return loader + b"\0" * pad + plugin + struct.pack(">4I", TRAILER, off, len(plugin), 1)
+
+
 class Rel:
-    def __init__(self, path: str | Path):
-        self.raw = b = Path(path).read_bytes()
+    def __init__(self, path: str | Path | bytes, part: str = "loader"):
+        b = path if isinstance(path, bytes) else Path(path).read_bytes()
+        loader, plugin = split_packed(b)
+        if part == "main" and plugin is None:
+            raise SystemExit("not a packed PPOnline.rel")
+        self.raw = b = plugin if part == "main" else loader
         (self.id, _n, _p, self.nsec, self.sec_off, self.name_off, self.name_size, self.version,
          self.bss_size, self.rel_off, self.imp_off, self.imp_size) = struct.unpack_from(">12I", b, 0)
         self.prolog_sec, self.epilog_sec, self.unres_sec, self.bss_sec = b[0x30], b[0x31], b[0x32], b[0x33]
@@ -118,7 +147,14 @@ def disasm(code: bytes, base: int, annotate: dict[int, str] | None = None) -> No
 
 
 def cmd_info(a) -> None:
-    r = Rel(a.file)
+    _, plugin = split_packed(Path(a.file).read_bytes())
+    for part in (["loader", "main"] if plugin is not None and a.part == "loader" else [a.part]):
+        if plugin is not None:
+            print(f"[{part}]")
+        info_one(Rel(a.file, part))
+
+
+def info_one(r: "Rel") -> None:
     print(f"id={r.id} version={r.version} nsec={r.nsec} bss={r.bss_size:#x}")
     print(f"prolog sec{r.prolog_sec}+{r.prolog:#x} epilog sec{r.epilog_sec}+{r.epilog:#x} "
           f"unresolved sec{r.unres_sec}+{r.unresolved:#x}")
@@ -144,7 +180,7 @@ def reloc_notes(r: Rel, sec: int, symmap: dict[int, str]) -> dict[int, str]:
 
 
 def cmd_dis(a) -> None:
-    r = Rel(a.file)
+    r = Rel(a.file, a.part)
     s = r.sections[a.section]
     off = int(a.offset, 16)
     n = a.count * 4
@@ -153,7 +189,7 @@ def cmd_dis(a) -> None:
 
 
 def cmd_relocs(a) -> None:
-    r = Rel(a.file)
+    r = Rel(a.file, a.part)
     symmap = load_map(a.map)
     for x in r.relocs:
         if a.to is not None and x.module != a.to:
@@ -183,7 +219,7 @@ def cmd_dol(a) -> None:
 
 
 def cmd_find(a) -> None:
-    r = Rel(a.file)
+    r = Rel(a.file, a.part)
     pat = bytes.fromhex(a.hex)
     for s in r.sections:
         i = s.data.find(pat)
@@ -206,18 +242,40 @@ def unresolved_calls(r: Rel) -> list[int]:
     return out
 
 
+def far_branches(r: Rel) -> list[Reloc]:
+    """Relative branches (REL24/REL14) to another module: out of range for a module linked into
+    MEM2 (the packed plugin runs from the Network heap; it is built with -mlongcall)."""
+    return [x for x in r.relocs if x.type in (10, 11) and x.module != r.id]
+
+
 def cmd_check(a) -> None:
-    r = Rel(a.file)
-    bad = unresolved_calls(r)
-    for i in bad:
-        print(f"unresolved branch at text+{i:#x}")
-    if bad:
-        raise SystemExit(f"{len(bad)} unresolved branch(es): add the symbols to EXTRA.lst or implement them")
-    print("ok: no unresolved branches")
+    _, plugin = split_packed(Path(a.file).read_bytes())
+    parts = ["loader", "main"] if plugin is not None else ["loader"]
+    for part in parts:
+        r = Rel(a.file, part)
+        name = f"{part} (id {r.id})" if plugin is not None else f"id {r.id}"
+        bad = unresolved_calls(r)
+        for i in bad:
+            print(f"{name}: unresolved branch at text+{i:#x}")
+        if bad:
+            raise SystemExit(f"{len(bad)} unresolved branch(es): add the symbols to EXTRA.lst or implement them")
+        if part == "main":
+            far = far_branches(r)
+            for x in far[:20]:
+                print(f"{name}: relative branch to module {x.module} at sec{x.section}+{x.offset:#x}")
+            if far:
+                raise SystemExit(f"{len(far)} relative branch(es) out of the plugin: build it with -mlongcall")
+        print(f"ok: {name}: no unresolved branches" + (", no far relative branches" if part == "main" else ""))
+
+
+def cmd_pack(a) -> None:
+    out = pack(Path(a.loader).read_bytes(), Path(a.plugin).read_bytes())
+    Path(a.out).write_bytes(out)
+    print(f"{a.out}: {len(out)} bytes (loader {Path(a.loader).stat().st_size}, plugin {Path(a.plugin).stat().st_size})")
 
 
 def cmd_diff(a) -> None:
-    x, y = Rel(a.a), Rel(a.b)
+    x, y = Rel(a.a, a.part), Rel(a.b, a.part)
     for sa, sb in zip(x.sections, y.sections):
         if sa.size or sb.size:
             print(f"sec{sa.idx}: {sa.size:#x} vs {sb.size:#x} {'same' if sa.data == sb.data else 'DIFF'}")
@@ -226,6 +284,8 @@ def cmd_diff(a) -> None:
 def main() -> int:
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--map", help="symbol map (RSBE01.lst format)")
+    ap.add_argument("--part", choices=["loader", "main"], default="loader",
+                    help="of a packed PPOnline.rel: the loader (default) or the plugin")
     sub = ap.add_subparsers(dest="cmd", required=True)
     p = sub.add_parser("info"); p.add_argument("file"); p.set_defaults(func=cmd_info)
     p = sub.add_parser("dis"); p.add_argument("file"); p.add_argument("section", type=int)
@@ -236,6 +296,8 @@ def main() -> int:
     p = sub.add_parser("find"); p.add_argument("file"); p.add_argument("hex"); p.set_defaults(func=cmd_find)
     p = sub.add_parser("check"); p.add_argument("file"); p.set_defaults(func=cmd_check)
     p = sub.add_parser("diff"); p.add_argument("a"); p.add_argument("b"); p.set_defaults(func=cmd_diff)
+    p = sub.add_parser("pack"); p.add_argument("loader"); p.add_argument("plugin"); p.add_argument("out")
+    p.set_defaults(func=cmd_pack)
     a = ap.parse_args()
     a.func(a)
     return 0

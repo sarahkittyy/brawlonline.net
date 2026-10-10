@@ -6,6 +6,7 @@
 // (tools/gamecode/pplus_hooks.py). They patch the network thread's DWC login sequence so the
 // game believes it is logged in and has a friend code, without any network traffic.
 #include <sy_core.h>
+#include "labels.h"
 #include "netmenu.h"
 #include "online_menu.h"
 #include "ppom.h"
@@ -95,13 +96,92 @@ namespace NetMenu {
     typedef int (*ProcFn)(void*, void*, void*);  // (this, menu, resources)
     static ProcFn s_origAnybodyEnter = NULL;
 
+    void* g_friendsPage = NULL;   // the WITH FRIENDS page (muProcWifiAnybody) last entered
+
+    // WITH FRIENDS' three buttons (docs/design/rooms.md #2). The page is Brawl's WITH ANYONE
+    // page, whose first button (decision 0x1D, SPECTATOR) the game shows only when 0x10 is
+    // available (anyone_menu.cpp hkFlag answers it); with it the page lays the three out itself:
+    // the first small at the top left, BASIC VERSUS large at the right, TEAM BATTLE at the bottom.
+    //   cursor 0, decision 0x1D: Create Room   (label texture MenMainWifi21, 128x24)
+    //   cursor 1, decision 0x1E: Direct 1v1    (MenMainWifi22, 144x88; today's Direct, unchanged)
+    //   cursor 2, decision 0x1F: Join Room     (MenMainWifi23, 160x80; was TEAM BATTLE = Teams)
+    // Their labels are drawn into those textures with the game's own font each time the page
+    // opens (labels.cpp): the page's archive is loaded again with the menus.
+    struct FriendsButton {
+        u32 obj;            // the menu's MuObject (menu+0x33C + 4 * cursor)
+        const char* tex;    // the label's texture
+        const char* text;
+        s16 box[4];         // where the game's own letters sit in it
+    };
+    static const FriendsButton BUTTONS[3] = {
+        {0x33C, "MenMainWifi21", "CREATE ROOM", {10, 2, 118, 22}},
+        {0x340, "MenMainWifi22", "DIRECT\n1V1", {13, 6, 135, 81}},
+        {0x344, "MenMainWifi23", "JOIN\nROOM", {21, 4, 139, 76}},
+    };
+    static int s_returnButton = -1;   // the button to highlight when the page opens again
+
+    static bool menuPtr(u32 p) { return p >= 0x80000000 && p < 0x94000000; }
+
+    static void drawButtonLabels(u8* proc)
+    {
+        u8* menu = *(u8**)(proc + 0x64C);
+        if (!menuPtr((u32)menu)) return;
+        int drawn = 0;
+        for (int i = 0; i < 3; i++) {
+            u8* obj = *(u8**)(menu + BUTTONS[i].obj);
+            if (!menuPtr((u32)obj)) continue;
+            u8* tex = Labels::boundTexture(*(u8**)(obj + 8), BUTTONS[i].tex);
+            const s16* b = BUTTONS[i].box;
+            if (tex && Labels::render(tex, BUTTONS[i].text, b[0], b[1], b[2], b[3], 2)) drawn++;
+        }
+        PPOM::g_block.debug.scratch[6] = (PPOM::g_block.debug.scratch[6] & 0xFFFF) | ((u32)drawn << 16);
+    }
+
+    // .text of a loaded REL (anyone_menu.cpp has the same walk).
+    static u32 relText(u32 id)
+    {
+        u32 m = *(u32*)0x800030C8;
+        for (int n = 0; menuPtr(m) && n < 64; n++) {
+            if (*(u32*)m == id) {
+                u32 sec = *(u32*)(m + 0x10);
+                return menuPtr(sec) ? (*(u32*)(sec + 8) & ~1u) : 0;
+            }
+            m = *(u32*)(m + 4);
+        }
+        return 0;
+    }
+
+    // Highlight button `b` the way the page's own cursor code does (text+0x2E8A0): the cursor
+    // (this+0x42), muProcMenu's highlight (sora_menu_rule text+0x1D48) and the description line
+    // (the panel this+0x658, vtable at +0x3C, slot 0x64: line 0x32 + cursor).
+    static void highlightButton(u8* proc, int b)
+    {
+        u32 rule = relText(18);
+        u8* panel = *(u8**)(proc + 0x658);
+        if (!rule || !menuPtr((u32)panel)) return;
+        *(u16*)(proc + 0x42) = (u16)b;
+        typedef void (*HighlightFn)(u8*, int, int);
+        ((HighlightFn)(rule + 0x1D48))(proc, b, 1);
+        typedef void (*DescFn)(u8*, int, int, int);
+        ((DescFn)(*(u32*)(*(u32*)(panel + 0x3C) + 0x64)))(panel, 0x32 + b, 1, 0);
+    }
+
     static int anybodyEnter(void* proc, void* a, void* b)
     {
         if (PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS) {
             s_friendsPicked = false;
             g_onlineFriendsCursor = 1;
         }
-        return s_origAnybodyEnter(proc, a, b);
+        g_friendsPage = proc;
+        int r = s_origAnybodyEnter(proc, a, b);
+        if (PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS) {
+            drawButtonLabels((u8*)proc);
+            // Back from a room's CSS: its button (the game puts the cursor on BASIC VERSUS, the
+            // decision every button of ours leaves with).
+            if (s_returnButton >= 0 && s_returnButton != *(u16*)((u8*)proc + 0x42)) highlightButton((u8*)proc, s_returnButton);
+            s_returnButton = -1;
+        }
+        return r;
     }
 
     // The page's title: text+0x2E760 `li r4,0x12` (WITH ANYONE), passed with the description to
@@ -125,13 +205,39 @@ namespace NetMenu {
     // a third cursor slot this page does not show). The game then leaves muMenuMain with it
     // (sora_menu_rule text+0x1AE0) and sqMenuMain starts sqNetAnyOkiraku or
     // sqNetAnyTeamMelee. We only note which mode was picked: Direct or Teams.
-    void anybodyDecision(u32 r3, u32 decision)
+    // Ours: 0x1E Direct; 0x1D Create Room and 0x1F Join Room open the same Wi-Fi character
+    // select (sqNetAnyOkiraku) as a room's CSS: the decision passed on (the stub's saved r4,
+    // stmw r3,0xC(r1): +0x10) becomes 0x1E. (TEAM BATTLE's sqNetAnyTeamMelee is no longer used.)
+    __attribute__((noinline)) void anybodyDecision(u32 r3, u32 decision)
     {
+        volatile u32 keepFrame[2];
+        keepFrame[0] = 0;
         (void)r3;
         PPOM::g_block.debug.scratch[8] = decision;
-        if (!(PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS)) return;
-        if (decision == 0x1E) onlineMenuEntered(PPOM::MODE_DIRECT);
-        else if (decision == 0x1F) onlineMenuEntered(PPOM::MODE_TEAMS);
+        if (PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS) {
+            u32 stubFrame = *(u32*)__builtin_frame_address(0);
+            if (decision == 0x1E) {
+                onlineMenuEntered(PPOM::MODE_DIRECT);
+                s_returnButton = 1;
+            } else if (decision == 0x1D || decision == 0x1F) {
+                OnlineMenu::enterRoom(decision == 0x1D ? OnlineMenu::ROOM_ENTRY_CREATE : OnlineMenu::ROOM_ENTRY_JOIN);
+                s_returnButton = decision == 0x1D ? 0 : 2;
+                *(u32*)(stubFrame + 0x10) = 0x1E;
+            }
+        }
+        (void)keepFrame[0];
+    }
+
+    void setReturnButton(int b) { s_returnButton = b; }
+
+    // muProcWifiAnybody's update (vtable slot 5, sora_menu_main text+0x2E794): the WITH FRIENDS
+    // page is one the launcher's join can leave from (OnlineMenu::launcherJoin).
+    typedef int (*PageUpdateFn)(u8*);
+    static PageUpdateFn s_origAnybodyUpdate = NULL;
+    static int anybodyUpdate(u8* page)
+    {
+        OnlineMenu::menuPageRunning(page);
+        return s_origAnybodyUpdate(page);
     }
 
     // Brawl's "Connect to Nintendo WFC?" window (WifiCnctWnd task, sora_menu_main text+0x385C0),
@@ -257,7 +363,10 @@ namespace NetMenu {
     // registers, so calling C here is safe; the function saved LR in its prologue.
     extern "C" void pponline_afterWifiRules()
     {
-        if (g_onlineCss) OnlineMenu::applyRules();
+        if (g_onlineCss) {
+            OnlineMenu::applyRules();
+            OnlineMenu::prepareCss();   // a room's CSS: four full panels (room_css.cpp)
+        }
     }
     __attribute__((naked)) void afterWifiRulesAny()
     {
@@ -343,6 +452,11 @@ namespace NetMenu {
     {
         volatile u32 keepFrame[2];
         keepFrame[0] = 0;
+        {
+            u32 sf = *(u32*)__builtin_frame_address(0);
+            u8* pg = *(u8**)(sf + 0x74);
+            if ((u32)pg >= 0x80000000 && (u32)pg < 0x81800000) OnlineMenu::menuPageRunning(pg);
+        }
         if ((PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS) && OnlineMenu::modesLocked()) {
             u32 stubFrame = *(u32*)__builtin_frame_address(0);
             u32* input = (u32*)(stubFrame + 0x78);
@@ -409,6 +523,7 @@ namespace NetMenu {
         api->syInlineHookRel(0x0002E934, reinterpret_cast<void*>(anybodyDecision), 2);
         api->syInlineHookRel(0x0002EB70, reinterpret_cast<void*>(anybodyDecision), 2);
         api->syInlineHookRel(0x0002E760, reinterpret_cast<void*>(friendsTitle), 2);
+        api->syReplaceFuncRel(0x0002E794, reinterpret_cast<void*>(anybodyUpdate), (void**)&s_origAnybodyUpdate, 2);
         // the four `stw r3,0x66C(r29)` after WifiCnctWnd's create (text+0x38530)
         api->syInlineHookRel(0x00015288, reinterpret_cast<void*>(skipConnectWindow), 2);
         api->syInlineHookRel(0x00015460, reinterpret_cast<void*>(skipConnectWindow), 2);

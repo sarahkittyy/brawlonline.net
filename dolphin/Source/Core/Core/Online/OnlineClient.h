@@ -37,6 +37,10 @@ struct SearchOptions
   bool hand_off = true;
   // This player's lock-in, passed to the backend.
   picojson::object selections;
+  // A room's game (Online/Rooms.h): copied into the Match handed to the backend.
+  int room_host_port = 0;
+  bool room_teams = false;
+  u8 room_pickers = 0;
 };
 
 // Slippi's FIND_OPPONENT: starts a search. Fails only while a search is already running.

@@ -15,6 +15,7 @@
 #include "Core/Config/OnlineSettings.h"
 #include "Core/Online/OnlineSession.h"
 #include "Core/Online/Ranked.h"
+#include "Core/Online/Rooms.h"
 #include "Core/Online/User.h"
 
 namespace Online::Client
@@ -58,9 +59,13 @@ User& GetUserLocked()
 
 // Runs on the matchmaking thread. Leaving `link` open makes the matchmaking keep it (until
 // Cleanup()).
-void OnConnected(u64 generation, const Match& match, P2PLink& link, bool hand_off,
-                 const picojson::object& selections)
+void OnConnected(u64 generation, const Match& found, P2PLink& link, bool hand_off,
+                 const picojson::object& selections, const SearchOptions& room)
 {
+  Match match = found;
+  match.room_host_port = room.room_host_port;
+  match.room_teams = room.room_teams;
+  match.room_pickers = room.room_pickers;
   std::lock_guard gate(s_session_gate);
   if (generation != s_generation)
     return;  // cancelled meanwhile; the link closes with its matchmaking
@@ -132,9 +137,13 @@ std::optional<std::string> FindMatch(const SearchOptions& options)
     auto old = std::move(s_matchmaking);
     s_cleanup_threads.emplace_back([old = std::move(old)]() mutable { old.reset(); });
   }
+  SearchOptions room;
+  room.room_host_port = options.room_host_port;
+  room.room_teams = options.room_teams;
+  room.room_pickers = options.room_pickers;
   s_matchmaking = std::make_unique<Matchmaking>(
-      &user, [generation, hand_off, selections](const Match& match, P2PLink& link) {
-        OnConnected(generation, match, link, hand_off, selections);
+      &user, [generation, hand_off, selections, room](const Match& match, P2PLink& link) {
+        OnConnected(generation, match, link, hand_off, selections, room);
       });
   SetHandoff("");
   s_last_search = options;
@@ -170,6 +179,8 @@ void Cleanup()
 
 void Shutdown()
 {
+  // The online connection first: its thread reads the user.
+  Rooms::Shutdown();
   Ranked::Shutdown();
   std::unique_ptr<Matchmaking> mm;
   std::unique_ptr<User> user;

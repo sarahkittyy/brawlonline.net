@@ -56,6 +56,8 @@ namespace AnyoneMenu {
     static const u32 OPTWIFI_ENTER = 0x2EFA4;       // muProcOptWifi vtable slot 3
     static const u32 OPTWIFI_ENTER_END = 0x2F3B8;   // = its update (slot 5)
     static const u32 PAGE_ANYONE = 0x1C;            // muProcOptWifi's page id
+    static const u32 ANYBODY_ENTER = 0x2E4F8;       // muProcWifiAnybody vtable slot 3
+    static const u32 ANYBODY_ENTER_END = 0x2E790;
 
     // ------------------------------------------------------------------------------------
     // 0x8014FEDC `bool wc24Available(u32 mask)` (flags of the WiiConnect24 status block):
@@ -69,6 +71,14 @@ namespace AnyoneMenu {
             u32 lr = (u32)__builtin_return_address(0);
             u32 t = moduleText(MOD_MENU_MAIN);
             if (t && lr >= t + OPTWIFI_ENTER && lr < t + OPTWIFI_ENTER_END) return 1;
+        }
+        // WITH FRIENDS' page (muProcWifiAnybody) has three buttons: its enter shows the first
+        // (decision 0x1D, Brawl's spectator button) only when 0x10 is available (text+0x2E534),
+        // and lays the other two out for three then. Ours: Direct 1v1, Create Room, Join Room.
+        if (mask == 0x10 && (PPOM::g_block.debug.cfg & PPOM::CFG_WIFI_HOOKS)) {
+            u32 lr = (u32)__builtin_return_address(0);
+            u32 t = moduleText(MOD_MENU_MAIN);
+            if (t && lr >= t + ANYBODY_ENTER && lr < t + ANYBODY_ENTER_END) return 1;
         }
         return s_origFlag(mask);
     }
@@ -143,6 +153,7 @@ namespace AnyoneMenu {
 
     static int hkUpdate(u8* page)
     {
+        if (g_anyonePage) OnlineMenu::menuPageRunning(page);
         if (g_anyonePage && s_decided) return 0;   // leaving for the CSS
         return s_origUpdate(page);
     }

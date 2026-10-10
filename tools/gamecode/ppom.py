@@ -34,7 +34,7 @@ SYRINGE_HEAP = (0x817BA5A0, 0x10000)   # P+ v3.2 Syringe.asm: heap 60 start, siz
 
 CMD = {0xB3: "GET_MATCH_STATE", 0xB4: "FIND_OPPONENT", 0xB6: "OPEN_LOGIN", 0xB8: "UPDATE",
        0xB9: "GET_ONLINE_STATUS", 0xBA: "CLEANUP_CONNECTION", 0xBE: "FETCH_CODE_SUGGESTION",
-       0xE3: "GET_RANK"}
+       0xE3: "GET_RANK", 0xD0: "ROOM"}
 MODES = {0: "ranked", 1: "unranked", 2: "direct", 3: "teams"}
 
 SCROLL = {0: "none", 1: "older", 2: "newer", 3: "reset"}   # Slippi AutoComplete.s
@@ -79,20 +79,69 @@ def from_u16s(b: bytes) -> str:
     return "".join(out)
 
 
+PPOM_MODULE_ID = 20560          # the plugin's REL id (game-code/PPOnline/Makefile RELID)
+OS_MODULE_LIST = 0x800030C8
+
+
+def _is_mem(a: int, n: int = 4) -> bool:
+    return (0x80000000 <= a and a + n <= 0x81800000) or (0x90000000 <= a and a + n <= 0x94000000)
+
+
+def _module_data_ranges(c: HarnessClient) -> list[tuple[int, int]]:
+    """The data sections of the plugin's module (REL id 20560) from the OS module list, as
+    Dolphin's GameBridge finds the block. The plugin is linked into the Network heap by its
+    loader since 2026-10-10 (docs/game-code.md section 2); older builds sit in the Syringe heap."""
+    out = []
+    m = c.read_u32(OS_MODULE_LIST)
+    for _ in range(64):
+        if not m or not _is_mem(m, 0x40):
+            break
+        mid, nxt, _prv, nsec, secoff = struct.unpack_from(">5I", c.read_mem(m, 0x14), 0)
+        if mid == PPOM_MODULE_ID and 0 < nsec <= 64 and _is_mem(secoff, 8 * nsec):
+            secs = c.read_mem(secoff, 8 * nsec)
+            for i in range(nsec):
+                off, size = struct.unpack_from(">II", secs, 8 * i)
+                if off and not off & 1 and 0x100 < size < 0x40000 and _is_mem(off, size):
+                    out.append((off, size))
+            break
+        m = nxt
+    return out
+
+
+def _parse_block(c: HarnessClient, a: int):
+    hdr = c.read_mem(a, 0x24)
+    if hdr[:4] != MAGIC:
+        return None
+    ver, sz, mbo, mbs, so, ss, lo, ls, dbo, dbs = struct.unpack_from(">HHHHHHHHHH", hdr, 4)
+    if ver in (1, 2, 3, 4, 5) and 0x100 < sz < 0x4000 and mbo and dbo:
+        return Block(a, ver, sz, a + mbo, mbs, a + dbo, dbs, a + so if ss else 0, ss,
+                     a + lo if ls else 0, ls)
+    return None
+
+
 def find_block(c: HarnessClient) -> Block:
-    start, size = SYRINGE_HEAP
-    mem = c.read_mem(start, size)
-    i = 0
-    while True:
-        i = mem.find(MAGIC, i)
-        if i < 0:
-            raise SystemExit("PPOM block not found in the Syringe heap (plugin not loaded?)")
-        ver, sz, mbo, mbs, so, ss, lo, ls, dbo, dbs = struct.unpack_from(">HHHHHHHHHH", mem, i + 4)
-        if ver in (1, 2, 3, 4) and 0x100 < sz < 0x4000 and mbo and dbo:
-            a = start + i
-            return Block(a, ver, sz, a + mbo, mbs, a + dbo, dbs, a + so if ss else 0, ss,
-                         a + lo if ls else 0, ls)
-        i += 4
+    """Where Dolphin's GameBridge found the block, else the plugin module's data sections (the
+    loader links the plugin into the Network heap since 2026-10-10), else the Syringe heap."""
+    try:
+        st = c.call("game_bridge_status")
+        if st.get("found"):
+            b = _parse_block(c, int(st["block"]))
+            if b:
+                return b
+    except Exception:  # noqa: BLE001 - an older Dolphin, or GameBridge not there yet
+        pass
+    for start, size in _module_data_ranges(c) + [SYRINGE_HEAP]:
+        mem = c.read_mem(start, size)
+        i = 0
+        while True:
+            i = mem.find(MAGIC, i)
+            if i < 0:
+                break
+            b = _parse_block(c, start + i) if i % 4 == 0 else None
+            if b:
+                return b
+            i += 4
+    raise SystemExit("PPOM block not found (plugin not loaded?)")
 
 
 def read_requests(c: HarnessClient, b: Block):
@@ -170,6 +219,25 @@ def write_response(c: HarnessClient, b: Block, seq: int, cmd: int, payload: byte
     c.write_mem(b.mailbox + MB_RESP, body)
     rc = struct.unpack(">I", c.read_mem(b.mailbox + MB_RESP_COUNT, 4))[0]
     c.write_mem(b.mailbox + MB_RESP_COUNT, struct.pack(">I", rc + 1))   # publish last
+
+
+def post(c: HarnessClient, b: Block, cmd: int, payload: bytes = b"") -> int:
+    """Tests: post a request as the game does (ppom.cpp post): the slot first, its seq word, then
+    reqWrite. Only while the plugin itself posts nothing (its own counter would reuse the seq)."""
+    wr = struct.unpack(">I", c.read_mem(b.mailbox + MB_REQ_WRITE, 4))[0]
+    seq = wr + 1
+    slot = b.mailbox + MB_REQ + ((seq - 1) % REQ_SLOTS) * REQ_SIZE
+    c.write_mem(slot + 4, bytes([cmd, 0, 0, 0]) + payload[:REQ_PAYLOAD].ljust(REQ_PAYLOAD, b"\0"))
+    c.write_mem(slot, struct.pack(">I", seq))
+    c.write_mem(b.mailbox + MB_REQ_WRITE, struct.pack(">I", seq))
+    return seq
+
+
+def read_response(c: HarnessClient, b: Block) -> dict:
+    """The response in the mailbox now: {seq, cmd, status, payload}."""
+    raw = c.read_mem(b.mailbox + MB_RESP, 8 + RESP_PAYLOAD)
+    seq, cmd, status = struct.unpack_from(">IBB", raw, 0)
+    return {"seq": seq, "cmd": cmd, "status": status, "payload": raw[8:]}
 
 
 def consume(c: HarnessClient, b: Block, upto: int) -> None:
@@ -299,6 +367,50 @@ def write_session(c: HarnessClient, b: Block, *, game: int, stage: int, players:
         d[S_TEAMS] = 1 if teams else 0
     c.write_mem(b.session + 4, bytes(d[4:]))
     c.write_mem(b.session, struct.pack(">I", seq + 1))
+
+
+# ---- v5: rooms (docs/rooms-game-interface.md) ----
+CMD_ROOM = 0xD0
+ROOM_OPS = {"poll": 0, "create": 1, "join": 2, "leave": 3, "slot": 4, "teams": 5, "public": 6,
+            "team": 7}
+L_SCREEN, L_ROOM_JOIN, L_ROOM = 0x36, 0x37, 0x38
+SCREENS = {"unknown": 0, "menus": 1, "online-css": 2, "room": 3, "online-busy": 4, "match": 5,
+           "offline": 6, "other": 7}
+S_ROOM_FLAGS, S_ROOM_CODE, S_ROOM_HOST, S_ROOM_STATUS, S_ROOM_MODE = 0x213, 0x214, 0x218, 0x219, 0x21A
+SP_ROOM_SLOT, SP_ROOM_TEAM, SP_ROOM_CHAR, SP_ROOM_COSTUME = 0x38, 0x39, 0x3A, 0x3B
+SLOT_OPEN, SLOT_TAKEN, SLOT_READY, SLOT_HOST, SLOT_IN_GAME = 1, 2, 4, 8, 0x10
+RF_IN, RF_PUBLIC, RF_TEAMS = 1, 2, 4
+
+
+def room_request(op: str, arg: int = 0, arg2: int = 0, code: str = "") -> bytes:
+    """A CMD_ROOM request payload (RoomRequest, 0x18 bytes)."""
+    return bytes([ROOM_OPS[op], arg, arg2, 0]) + u16s(code, CODE_LEN) + bytes(2)
+
+
+def decode_room_status(payload: bytes) -> dict:
+    """A CMD_ROOM response payload (RoomStatus)."""
+    phase, error, port = payload[0], payload[1], payload[2]
+    serial = struct.unpack_from(">I", payload, 4)[0]
+    return {"phase": phase, "error": error, "local_port": port, "serial": serial,
+            "text": from_u16s(payload[8:8 + 128])}
+
+
+def read_room(c: HarnessClient, b: Block) -> dict:
+    """The room view (v5): SESSION's room bytes and LOCAL's room phase, screen and join counter."""
+    se = c.read_mem(b.session, b.session_size)
+    lo = c.read_mem(b.local, b.local_size)
+    slots = []
+    for i in range(4):
+        o = 0x0C + 0x80 * i
+        slots.append({"bits": se[o + SP_ROOM_SLOT], "team": se[o + SP_ROOM_TEAM],
+                      "char": se[o + SP_ROOM_CHAR], "costume": se[o + SP_ROOM_COSTUME],
+                      "name": from_u16s(se[o + 4:o + 4 + 2 * NAME_LEN]),
+                      "picks_stage": se[o + SP_PICKS_STAGE]})
+    return {"flags": se[S_ROOM_FLAGS], "code": se[S_ROOM_CODE:S_ROOM_CODE + 4].decode("ascii", "replace"),
+            "host": se[S_ROOM_HOST], "status": se[S_ROOM_STATUS], "mode": se[S_ROOM_MODE],
+            "game": se[6], "session_state": se[4], "session_seq": struct.unpack_from(">I", se, 0)[0],
+            "slots": slots, "phase": lo[L_ROOM], "join": lo[L_ROOM_JOIN], "screen": lo[L_SCREEN],
+            "local_port": lo[5], "local_state": lo[4]}
 
 
 def set_test_gone(c: HarnessClient, b: Block, frame: int, ports: int, later_ports: int = 0,

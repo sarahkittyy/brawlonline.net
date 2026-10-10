@@ -11,3 +11,4 @@ build/
 .vscode/
 sd-card/vBrawl/pf
 PPOnline/*.elf
+PPOnlineLoader/*.elf
