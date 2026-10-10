@@ -49,6 +49,9 @@ enum class Screen : u8
 
 // Starts the thread (idempotent). GameBridge::Reset calls it at every boot.
 void Start();
+// A new boot (GameBridge::Reset): the game has not shown its menus yet, so a launcher request
+// is held (accepted) until it does instead of being refused by the boot's scenes.
+void OnBoot();
 // Leaves politely, closes the connection, stops the thread, removes game-status.json.
 void Shutdown();
 

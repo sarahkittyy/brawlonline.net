@@ -110,6 +110,8 @@ struct Launch
 {
   std::string id;
   std::string code;
+  s64 created_ms = 0;     // its createdAt
+  bool answered = false;  // "accepted" already (held during the game's boot)
 };
 
 struct State
@@ -150,6 +152,9 @@ struct State
 
   // The game.
   u8 screen = 0;
+  // The game has reported a menu screen (menus, an idle online CSS, the room CSS) since it booted.
+  // Before that (the boot, the title, the boot redirect) nothing it reports means "busy".
+  bool reached_menus = false;
   std::optional<Clock::time_point> away_since;
   bool lock_ready = false;
   u32 lock_game = 0;
@@ -565,7 +570,7 @@ void PollJoinRequest()
     Log(fmt::format("join-room.json for {} is {} s old: ignored", *room, age / 1000));
     return;
   }
-  s.launch = Launch{CleanText(id->get<std::string>(), 100), *room};
+  s.launch = Launch{CleanText(id->get<std::string>(), 100), *room, *at};
   Log(fmt::format("launcher asks to join {} (request {})", *room, s.launch->id));
 }
 
@@ -603,6 +608,24 @@ void DecideLaunch(const DolphinBusy& busy, bool logged_in, Clock::time_point now
   const Launch l = *s.launch;
   const Screen screen = static_cast<Screen>(s.screen);
   const bool dolphin_busy = busy.searching || busy.session || busy.in_match || s.rg.active;
+  // The game is still booting (docs/rooms-protocol.md §5 step 2, a click that launched the game,
+  // or one during its boot): the request is accepted at once and kept until the game first shows
+  // its menus, at most REQUEST_MAX_AGE_MS from its createdAt. What the game reports before that
+  // (the boot's scenes) is not "busy".
+  if (!s.reached_menus && !dolphin_busy)
+  {
+    if (UnixMs() - l.created_ms > REQUEST_MAX_AGE_MS)
+    {
+      s.launch.reset();
+      AnswerLaunch(l.id, "failed", "The game did not reach its menus in time.");
+    }
+    else if (!l.answered)
+    {
+      s.launch->answered = true;
+      AnswerLaunch(l.id, "accepted", "");
+    }
+    return;
+  }
   if (dolphin_busy || BusyScreen(s.screen))
   {
     s.launch.reset();
@@ -610,11 +633,12 @@ void DecideLaunch(const DolphinBusy& busy, bool logged_in, Clock::time_point now
                  screen == Screen::Other && !dolphin_busy ? TEXT_NOT_MENUS : TEXT_BUSY);
     return;
   }
-  // At start-up: kept until the game reaches its menus (and the user is read).
+  // Kept until the user is read (user.json at start-up).
   if (screen == Screen::Unknown || !logged_in)
     return;
   s.launch.reset();
-  AnswerLaunch(l.id, "accepted", "");
+  if (!l.answered)
+    AnswerLaunch(l.id, "accepted", "");
   Request r;
   r.op = Op::Join;
   r.code = l.code;
@@ -662,7 +686,10 @@ void WriteGameStatus(const DolphinBusy& busy, Clock::time_point now, bool force)
     default:
       break;
     }
-    bool is_busy = screen == Screen::Unknown || BusyScreen(s.screen);
+    // Booting (no menu seen yet): idle for the launcher, whose click is then held (DecideLaunch).
+    bool is_busy = s.reached_menus && (screen == Screen::Unknown || BusyScreen(s.screen));
+    if (!s.reached_menus)
+      name = "other";
     if (busy.in_match)
       name = "match", is_busy = true;
     else if (busy.searching || s.rg.active)
@@ -1094,6 +1121,14 @@ void Start()
   s_thread = std::thread(Thread);
 }
 
+void OnBoot()
+{
+  std::lock_guard lk(s_mutex);
+  s.reached_menus = false;
+  s.screen = static_cast<u8>(Screen::Unknown);
+  s.away_since.reset();
+}
+
 void Shutdown()
 {
   {
@@ -1182,6 +1217,11 @@ namespace
 void SetScreenLocked(u8 screen)
 {
   const u8 v = screen <= static_cast<u8>(Screen::Other) ? screen : static_cast<u8>(Screen::Other);
+  if (v == static_cast<u8>(Screen::Menus) || v == static_cast<u8>(Screen::OnlineCss) ||
+      v == static_cast<u8>(Screen::Room))
+  {
+    s.reached_menus = true;
+  }
   if (v != s.screen)
   {
     s.screen = v;
@@ -1252,6 +1292,7 @@ picojson::object Status()
   o["pickers"] = picojson::value(static_cast<double>(s.pickers));
   o["join_seq"] = picojson::value(static_cast<double>(s.join_seq));
   o["screen"] = picojson::value(static_cast<double>(s.screen));
+  o["reached_menus"] = picojson::value(s.reached_menus);
   picojson::object lock;
   lock["ready"] = picojson::value(s.lock_ready);
   lock["game"] = picojson::value(static_cast<double>(s.lock_game));

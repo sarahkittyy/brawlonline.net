@@ -565,8 +565,9 @@ def test_launcher_join_waiting_at_start_up(backend: OnlineBackend,
                                            dolphin: Callable[..., DolphinInstance],
                                            tmp_path: Path) -> None:
     """The launcher wrote join-room.json before Dolphin started (a room clicked with the game
-    closed): Dolphin takes the request at once but keeps it until the game says it is on its menus,
-    then answers `accepted`, joins and bumps LOCAL roomJoin for the game to go to the room CSS."""
+    closed): Dolphin takes the request at once, answers `accepted` and keeps it until the game says
+    it is on its menus (the boot is not "busy"), then joins and bumps LOCAL roomJoin for the game to
+    go to the room CSS."""
     uh, uo = backend.create_user("host", "HOST"), backend.create_user("olga", "OLGA")
     owner = MmClient(backend, uh, tmp_path, "room", "--create", "--hold-secs", "300")
     try:
@@ -586,12 +587,15 @@ def test_launcher_join_waiting_at_start_up(backend: OnlineBackend,
         assert not (p.online_dir() / "join-room.json").exists()
         _to_versus_css(p)
         _online(p)
-        # Still kept: the game has not reported a screen (busy for the launcher meanwhile).
+        # Still kept: the game has not shown its menus; accepted already, idle for the launcher.
         assert p.rooms()["launch_pending"] == code and p.view()["flags"] == 0
-        assert p.game_status()["state"] == "busy" and p.game_status()["lastRequest"] is None
+        assert _answer(p, rid) == {"id": rid, "result": "accepted"}
+        assert p.game_status()["state"] == "idle"
+        p.screen("offline")   # the boot's scenes: not a reason to refuse
+        time.sleep(1.5)
+        assert p.rooms()["launch_pending"] == code and p.view()["flags"] == 0
         join = p.view()["join"]
         p.screen("menus")
-        assert _answer(p, rid) == {"id": rid, "result": "accepted"}
         v = p.until_view(lambda v: v["flags"] & ppom.RF_IN and v["code"] == code, "in the room")
         assert v["join"] == (join + 1) & 0xFF and v["local_port"] == 1 and v["slots"][0]["name"] == "host"
         owner.until(lambda m: m.get("type") == "room-state" and m["slots"][1]["player"] and
