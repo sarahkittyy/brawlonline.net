@@ -28,6 +28,17 @@ namespace PPOM {
     static_assert(__builtin_offsetof(Session, gone) == 0x20C, "session gone flags");
     static_assert(__builtin_offsetof(SessionPlayer, picksStage) == 0x36, "session player stage pick");
     static_assert(__builtin_offsetof(Local, lockTeam) == 0x34, "lock-in team");
+    // v5: rooms (docs/rooms-game-interface.md), all in v4's spare bytes.
+    static_assert(__builtin_offsetof(Local, screen) == 0x36 && __builtin_offsetof(Local, roomJoin) == 0x37 &&
+                  __builtin_offsetof(Local, room) == 0x38 && __builtin_offsetof(Local, own) == 0x40, "local rooms");
+    static_assert(__builtin_offsetof(SessionPlayer, roomSlot) == 0x38 && __builtin_offsetof(SessionPlayer, roomTeam) == 0x39 &&
+                  __builtin_offsetof(SessionPlayer, roomChar) == 0x3A && __builtin_offsetof(SessionPlayer, roomCostume) == 0x3B &&
+                  __builtin_offsetof(SessionPlayer, pv) == 0x40, "session player rooms");
+    static_assert(__builtin_offsetof(Session, roomFlags) == 0x213 && __builtin_offsetof(Session, roomCode) == 0x214 &&
+                  __builtin_offsetof(Session, roomHost) == 0x218 && __builtin_offsetof(Session, roomStatus) == 0x219 &&
+                  __builtin_offsetof(Session, roomMode) == 0x21A, "session rooms");
+    static_assert(sizeof(RoomRequest) == 0x18 && sizeof(RoomRequest) <= REQ_PAYLOAD, "room request");
+    static_assert(sizeof(RoomStatus) == 0x88 && sizeof(RoomStatus) <= RESP_PAYLOAD, "room status");
     static_assert(__builtin_offsetof(Block, local) == __builtin_offsetof(Block, mailbox) + sizeof(Mailbox), "local after mailbox");
 
     static u32 s_lastSeq = 0;

@@ -624,7 +624,7 @@ def run_session_n(preset: str, cpu: str, args: argparse.Namespace, run: int) -> 
             import patch_sd
             plugin = Path(args.plugin)
             patch_sd.patch_image(inst.user_dir / "Wii" / "sd.raw",
-                                 [(plugin.read_bytes(), f"{patch_sd.PLUGIN_DIR}/{plugin.name}")])
+                                 [(plugin.read_bytes(), patch_sd.plugin_sd_path(plugin))])
         return inst
     G.make_instance = mk
     try:

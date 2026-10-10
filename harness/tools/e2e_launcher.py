@@ -596,7 +596,7 @@ def start_direct_dolphin(p: Player, be: OnlineBackend, run_dir: Path, dolphin: P
     sd = run_dir / p.name / "sd" / "sd.raw"
     sd.parent.mkdir(parents=True, exist_ok=True)
     _platform.fast_copy_file(paths.template_user_dir() / "Wii" / "sd.raw", sd)
-    patch_sd.patch_image(sd, [(PLUGIN.read_bytes(), f"{patch_sd.PLUGIN_DIR}/{PLUGIN.name}")])
+    patch_sd.patch_image(sd, [(PLUGIN.read_bytes(), patch_sd.plugin_sd_path(PLUGIN))])
     p.user.write_user_json(user_dir)
     cmd = [str(dolphin), "-u", str(user_dir), "-C", f"Dolphin.General.WiiSDCardPath={sd}",
            "-e", str(user_dir / "Launcher" / NETPLAY_DOL), "--harness-port", str(p.harness_port),

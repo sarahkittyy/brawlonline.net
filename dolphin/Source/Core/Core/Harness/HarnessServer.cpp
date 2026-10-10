@@ -59,6 +59,7 @@
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/OnlineSession.h"
 #include "Core/Online/RecentCodes.h"
+#include "Core/Online/Rooms.h"
 #include "Core/Online/User.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
@@ -1506,6 +1507,21 @@ Result CmdGameBridgeStatus(const Args&)
   return Online::GameBridge::Status();
 }
 
+// Rooms (docs/rooms-game-interface.md): the online connection, the room, the launcher hand-off.
+Result CmdRoomsStatus(const Args&)
+{
+  return Online::Rooms::Status();
+}
+
+// Tests without the game plugin: an op as the room CSS would send it (op: create, join, leave,
+// slot, teams, public, team), or `ready` / `release_lock` / `screen` standing in for the game.
+Result CmdRoomsRequest(const Args& args)
+{
+  if (const auto error = Online::Rooms::HarnessRequest(args))
+    Fail(*error);
+  return Online::Rooms::Status();
+}
+
 Result CmdGameBridgeConfig(const Args& args)
 {
   if (Find(args, "enabled"))
@@ -1620,6 +1636,8 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"online_session_backend", CmdOnlineSessionBackend},
       {"game_bridge_status", CmdGameBridgeStatus},
       {"game_bridge_config", CmdGameBridgeConfig},
+      {"rooms_status", CmdRoomsStatus},
+      {"rooms_request", CmdRoomsRequest},
       {"online_recent_codes", CmdOnlineRecentCodes},
       {"rollback_pad_history", CmdRollbackPadHistory},
       {"rollback_chunk_hashes", CmdRollbackChunkHashes},

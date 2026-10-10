@@ -35,7 +35,9 @@ namespace PPOM {
     // 4: 3-4 player matches (docs/nplayer/setup.md): each player's team, the stage pickers, the
     // elimination order, the per-port "gone" flags and the teams switch in SESSION (0x220), the
     // lock-in's team in LOCAL.
-    const u16 VERSION = 4;
+    // 5: rooms (docs/rooms-game-interface.md): CMD_ROOM, LOCAL screen/roomJoin/room, the room view
+    // in SESSION's spare bytes. No size or offset of v4 changed.
+    const u16 VERSION = 5;
 
     // Slippi command bytes (EXI_DeviceSlippi.h), kept for familiarity (design 5.3).
     enum Cmd {
@@ -50,6 +52,7 @@ namespace PPOM {
         CMD_GET_RANK = 0xE3,
         CMD_GP_COMPLETE_STEP = 0xC0,
         CMD_GP_FETCH_STEP = 0xC1,
+        CMD_ROOM = 0xD0,          // rooms: RoomRequest, answered with RoomStatus
     };
 
     // Online modes, Slippi order (Online.s: Ranked, Unranked, Direct, Teams).
@@ -153,6 +156,59 @@ namespace PPOM {
         u16 code[CODE_LEN];
     };
 
+    // ---- Rooms (docs/rooms-game-interface.md) ----
+
+    enum RoomOp {
+        ROOM_POLL = 0,      // nothing; answers the status line
+        ROOM_CREATE = 1,    // arg: 1 public, 0 private
+        ROOM_JOIN = 2,      // code: the room code as typed
+        ROOM_LEAVE = 3,
+        ROOM_SLOT = 4,      // host: arg = in-game port 0-3, arg2 = 1 open / 0 close (an occupied one: kick)
+        ROOM_TEAMS = 5,     // host: arg = 1 Teams on / 0 off
+        ROOM_PUBLIC = 6,    // host: arg = 1 public / 0 private
+        ROOM_TEAM = 7,      // arg = this player's colour (TEAM_RED..TEAM_GREEN)
+    };
+
+    // CMD_ROOM request payload.
+    struct RoomRequest {
+        u8 op;            // RoomOp
+        u8 arg;
+        u8 arg2;
+        u8 _pad;
+        u16 code[CODE_LEN];   // ROOM_JOIN: ASCII or full-width UTF-16, NUL-terminated
+        u16 _pad2;
+    };                    // 0x18
+
+    enum RoomPhase { RP_NONE = 0, RP_JOINING = 1, RP_IN = 2 };
+
+    // CMD_ROOM response payload (cmd CMD_ROOM, status 0), for every op.
+    struct RoomStatus {
+        u8 phase;         // RoomPhase
+        u8 error;         // 1: `text` is an error (red)
+        u8 localPort;     // as Local.localPort
+        u8 _pad;
+        u32 serial;       // changes whenever text, error or the room changes
+        u16 text[64];     // the status line, NUL-terminated ("" = the game's own)
+    };                    // 0x88
+
+    // Local.screen (game -> Dolphin): where the game is; busy (4-7) refuses a launcher join.
+    enum Screen {
+        SCREEN_UNKNOWN = 0,
+        SCREEN_MENUS = 1,         // menus the room CSS can be reached from
+        SCREEN_ONLINE_CSS = 2,    // an online CSS, not searching
+        SCREEN_ROOM = 3,          // the room CSS
+        SCREEN_ONLINE_BUSY = 4,   // an online CSS searching, connecting or connected (a set)
+        SCREEN_MATCH = 5,         // any match
+        SCREEN_OFFLINE = 6,       // single-player, offline Versus
+        SCREEN_OTHER = 7,
+    };
+
+    // SessionPlayer.roomSlot bits and Session.roomFlags.
+    enum RoomSlotBits { SLOT_OPEN = 1, SLOT_TAKEN = 2, SLOT_READY = 4, SLOT_HOST = 8, SLOT_IN_GAME = 0x10 };
+    enum RoomFlags { RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4 };
+    enum RoomStatusKind { RS_WAITING = 0, RS_STARTING = 1, RS_IN_GAME = 2 };
+    enum RoomMode { RM_1V1 = 0, RM_FFA = 1, RM_TEAMS = 2 };
+
     const int REQ_SLOTS = 4;
     const int REQ_PAYLOAD = 0x78;
     const int RESP_PAYLOAD = 0x1F8;
@@ -236,8 +292,11 @@ namespace PPOM {
                           // (TEAM_RED..TEAM_GREEN) for a team battle, TEAM_NONE none
         u8 lockPad;       // game: the controller port (0-3) whose START locked in, with the
                           // lock-in (its seq covers it); the match reads that controller
-        u8 _reserved1[2];
-        u32 _reserved[2];
+        u8 screen;        // game: Screen, every frame (rooms: launcher joins, game-status.json)
+        u8 roomJoin;      // Dolphin: bumped when it accepted a launcher join and sent it: go to
+                          // the room CSS
+        u8 room;          // Dolphin: RoomPhase
+        u8 _reserved1[7];
         PortValues own;   // written by the game with the lock-in (its seq covers both)
         u8 hudDisconnected;  // game: 1 once it draws DISCONNECTED in the match (Dolphin's OSD
                              // stands in only when the game does not); 0 at each match setup
@@ -265,7 +324,12 @@ namespace PPOM {
         u8 out;           // game, every frame of a match: the order in which this port was
                           // eliminated (1 = first out; ports out on the same frame share it),
                           // 0 = still in. Dolphin reads it at the game's end for the placings.
-        u8 _pad2[0x08];
+        // Rooms (Dolphin, while in a room and no match runs): the room's view of this slot.
+        u8 roomSlot;      // RoomSlotBits
+        u8 roomTeam;      // the player's colour (TEAM_*), TEAM_NONE empty
+        u8 roomChar;      // gmCharacterKind of the player's lock-in while SLOT_READY, else 0xFF
+        u8 roomCostume;
+        u8 _pad2[4];
         PortValues pv;    // the player's name tag and controls (from their lock-in)
         u32 _pad3;
     };                    // 0x80
@@ -298,7 +362,15 @@ namespace PPOM {
         u8 teams;         // 1: the next game is a team battle (each player's `team`)
         u8 setupError;    // SetupError: the setup of the next game is refused
         u8 outCount;      // game, during a match: the highest `out` given so far
-        u8 _reserved[0x0D];
+        // Rooms (Dolphin, while in a room and no match runs; docs/rooms-game-interface.md).
+        // `game` is then the room's next game number (lock in with it), also with state SS_NONE,
+        // and players[i].name/code are the room members'.
+        u8 roomFlags;     // RoomFlags
+        char roomCode[4]; // ASCII, no NUL
+        u8 roomHost;      // the host's in-game port, 0xFF none
+        u8 roomStatus;    // RoomStatusKind
+        u8 roomMode;      // RoomMode
+        u8 _reserved[5];
     };                    // 0x220
 
     // The last MuMsg::printIndex calls (a ring). 16, not 32: the plugin's Syringe heap block has

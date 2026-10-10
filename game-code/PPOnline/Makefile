@@ -14,7 +14,7 @@ include $(TOPDIR)/lib/base_rules
 # SOURCES is a list of directories containing source code
 # INCLUDES is a list of directories containing extra header files
 #---------------------------------------------------------------------------------
-TARGET		:=	PPOnline
+TARGET		:=	PPOnlineMain
 RELID		:=  20560
 BUILD		:=	build
 SOURCES		:=	source $(wildcard source/*) ../lib/BrawlHeaders/PowerPC_EABI_Support/Runtime/Src/
@@ -31,7 +31,7 @@ CCFLAGS		:= -target powerpc-gekko-ibm-kuribo-eabi -fuse-ld=lld \
 			   -nostdlib -nodefaultlibs -fno-addrsig -fno-exceptions \
 			   -fno-c++-static-destructors -fno-use-cxa-atexit \
 			   -r -flto -ffast-math -fpermissive -fno-unwind-tables -finline-functions -fdeclspec \
-			   -u _prolog -u _epilog -u _unresolved
+			   -u _prolog -u _epilog -u _unresolved -mlongcall
 CXXFLAGS	:= $(CCFLAGS)
 LDFLAGS		:= -T $(TOPDIR)/test.ld --unresolved-symbols=ignore-all -e _prolog -r
 

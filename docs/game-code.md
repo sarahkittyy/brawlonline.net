@@ -57,7 +57,7 @@ Upstream quirk: incremental builds fail with `*.d: missing separator`. Its rule 
 **Building our plugin:**
 
 ```sh
-cd game-code && ./build.sh          # -> PPOnline/PPOnline.rel (18.5 KB), then reltool check
+cd game-code && ./build.sh          # -> PPOnline/PPOnline.rel (loader + plugin, about 64 KB), then reltool check
 ```
 
 `build.sh` fails the build if any `bl` calls itself without a relocation. This happens when a function is in neither the DOL symbol maps nor our code: we link with `--unresolved-symbols=ignore-all`, so the linker leaves a `bl .`, and the game hangs the first time the call runs. It bit us once: Brawl's DOL has no `memcmp`. The check is `python tools/gamecode/reltool.py check X.rel`.
@@ -88,14 +88,19 @@ The chain, found on the SD card (`run/template-user/Wii/sd.raw`):
 - Our module id is 20560, which is unique. AsyncRSP and Physics share 202, and lavaInjectLoader uses 8192.
 - Dolphin's log confirms the load: `[Syringe] Loaded plugin (PPOnline, v0.1.0)`.
 
-**Heap budget.** The plugin lives in P+'s Syringe heap (heap 60, `0x10000` bytes at `0x817BA5A0`), with `sy_core.rel` and P+'s four plugins. `gfModule::create` needs the REL's sections plus its `.bss` in one block of that heap (the relocations are not kept); the hooks' trampolines are allocated elsewhere. Measured on 2026-10-08 by growing the REL header's `.bss` size (offset `0x20`) of a built plugin by K bytes and booting it (`Loaded plugin (PPOnline` or the error below in Dolphin's log):
-- the plugin before the boot redirect (`.text 0x9984`) loaded with up to `0x100` more bytes and failed with `0x180`;
-- with the boot redirect (`boot_menu.cpp`) it needed about `0x3E8` more and **did not load at all**: Dolphin's log shows `gfModule::create Error : Can't Alloc Heap Buffer`, nothing of the plugin runs, and the game boots as plain P+;
-- the fix: `boot_menu.cpp`, `ppom.cpp` and `match_hud.cpp` are built with `-Os` (`PPOnline/Makefile`; the rest of the plugin is built without optimisation). The plugin now needs `0x98` bytes less than before the redirect and loads with up to `0x180` more bytes (fails at `0x200`).
+**Heap budget: the plugin runs from the Network heap (2026-10-10).** P+ loads every plugin into its Syringe heap (heap 60, `0x10000` bytes at `0x817BA5A0`), shared with `sy_core.rel` and P+'s four plugins, and `gfModule::create` needs the REL's sections plus its `.bss` in one block of it. By 2026-10-09 the plugin had about `0xF4` bytes left there (every file `-Oz`, the Debug ring and Code Menu tables cut down; history below), and rooms need several KB. So `PPOnline.rel` is now two RELs in one file (`game-code/build.sh`, `reltool.py pack`):
 
-So about 400 bytes of section + `.bss` growth are left. (Measured again on 2026-10-09 with the Netplay Launcher, after the Code Menu activation and DESYNC DETECTED changes, sections + `.bss` `0xAC41`: loads with up to `0x400` more bytes, fails at `0x800`.) After the 3-4 player, port 1-4 and DESYNC DETECTED merges (2026-10-09) it did not load: `Can't Alloc Heap Buffer 0000b3b4 0000b328` (sections + `.bss` `0xB1C5`); the Debug print ring went to 16 entries and the Code Menu tables to 96 lines, `0xB045`, and it loads again. About `0xF4` left against that `0xB328`, less with a launcher that leaves `0xB2E0`. Anything bigger must make room first, e.g. more files built with `-Os` (files whose inline hooks read the Syriinge stub's frame through `__builtin_frame_address` need their `volatile` local, as `boot_menu.cpp` and `netmenu.cpp` have; `boot_menu.cpp`'s two such hooks run correctly at `-Os`). Check the Dolphin log for `Loaded plugin (PPOnline` after any change.
+    [PPOnlineLoader REL, id 20561][pad to 32][PPOnlineMain REL, id 20560][trailer: "PPOL", offset, size, 1]
 
-Later every file was `-Os`, and the `ranked` merge (2026-10-08, main `890ecee5`) did not load again: `.text 0x95D0`, `Can't Alloc Heap Buffer 0000b44c` against `0xb2e0` free, the game booting as plain P+ (it never reached the first menu in the tests). Summing the REL header's section sizes and `.bss` gives about `0x2D3` less than `gfModule::create` asks for, so that sum is no check; the log is. Now every file is built with `-Oz`: `.text 0x8998` (3,128 bytes less), and the online tests pass with it (§11).
+- **The loader** (`game-code/PPOnlineLoader/source/loader.cpp`) is what sy_core loads into the Syringe heap: `.text 0x590`, `.bss 0x824`. `gfModule::create` allocates `fixSize + .bss + 0xCC` (disassembled at `0x800264D8`), so the appended plugin costs the Syringe heap nothing. Its `_prolog` reads `plugins/PPOnline.rel` again (the path sy_core reads it by; P+'s file patch serves `/Project+/pf/plugins/`), checks the trailer and links the plugin with `gfModule::create` into **Brawl's Network heap** (heap 6, `0x143800` bytes of MEM2 at `0x90E77500`), then calls its `_prolog`. Dolphin's log: `[PPOnline] plugin PPOnline linked at 90faec60 (Network heap), 62 hook thunks`, then sy_core's `Loaded plugin (PPOnline, v0.2.0)`.
+- **Why the Network heap.** It exists from boot, is never rebuilt, and nothing uses it: it was measured completely free (one free block of `0x143760`) on the ONLINE page, the WITH FRIENDS page and the online CSS (the WFC login it was made for never runs: netmenu.cpp fakes it). It is not part of the rollback region set (gp-v21: "Not in the set on purpose: ... Network"); the plugin's `.data` and `.bss` still are, through `rel_data`, wherever the module sits, so nothing changes for rollback. Other heaps were rejected: Thread (`0x7B60` free, thread stacks), the Overlay heaps and Tmp (rebuilt per scene or in the region set), MenuInstance (freed with the menus).
+- **MEM2 is out of branch range.** The plugin is more than 32 MB from the game's code, so it is built with `-mlongcall` (`PPOnline/Makefile`): every call is `lis/addi/mtctr/bctrl`. The compiler's own `memcpy`/`memset` calls ignore `-mlongcall`, so the plugin has its own (`source/far_mem.cpp`, in assembly). `reltool.py check` fails the build on any REL24/REL14 relocation from the plugin to another module.
+- **Hooks through MEM1 thunks.** Syriinge's hook stubs reach the replacement with a relative branch, so the plugin gets the loader's `CoreApi` (same vtable layout as sy_core's): each hook's replacement becomes a 16-byte thunk in the loader's `.bss` (`lis r12,hi; ori r12,r12,lo; mtctr r12; bctr`, 128 of them) passed on to sy_core. The thunk clobbers only r12 and CTR, which are volatile at every hook site the plugin uses: replace hooks start at a function entry, inline hooks are called by the stub, and every naked simple hook writes r12 and CTR itself before it reads them. `__builtin_return_address` and the inline hooks' `__builtin_frame_address` tricks see the same frames as before (a thunk makes none).
+- **Measured room** (live, heap free lists walked as `gfMemoryPool::getMaxFreeBlockSize` at `0x8002606C` does): the Syringe heap has `0xA1A0` bytes free after boot (was about `0xF4`); the Network heap has `0x137680` free with the plugin in it (it takes `0xC180` with its `.bss`). The plugin's `.text` grew from `0x9568` to `0xA394` with `-mlongcall`.
+- **Tools.** `ppom.py find_block` and `modules.py` walk the OS module list (the block is in module 20560's `.data`, as Dolphin's GameBridge finds it); the harness installs a packed plugin as `PPOnline.rel` whatever its local name (`patch_sd.plugin_sd_path`), since the loader reads itself by that name. `reltool.py info|check` show both modules of a packed file; `--part main` picks the plugin for `dis`/`relocs`.
+- **Verified** (2026-10-10, Dolphin = main's `DolphinNoGUI` of 2026-10-09 23:09, plugin built with PPOM version 4 for it): `test_online_menus_match_the_modes`, `test_direct_from_the_game_menus`, `test_code_keypad_hash_key_and_placeholder`, `test_online_css_settings_are_locked`, `test_direct_set_under_the_gameplay_session` (three-game Direct set, matches under rollback): 5 passed.
+
+History of the Syringe heap budget (before 2026-10-10): the plugin before the boot redirect loaded with up to `0x100` more bytes of `.bss`; with the boot redirect it did not load at all (`gfModule::create Error : Can't Alloc Heap Buffer`, the game boots as plain P+) until three files were built with `-Os`; the `ranked` merge failed again (`Can't Alloc Heap Buffer 0000b44c` against `0xb2e0` free) and every file went to `-Oz`; the 3-4 player merges failed again (`0000b3b4` against `0000b328`) until the Debug print ring went to 16 entries and the Code Menu tables to 96 lines. Summing the REL header's section sizes and `.bss` gives about `0x2D3` less than `gfModule::create` asks for, so that sum was no check; Dolphin's log was.
 
 **Hook conflicts.** `python tools/gamecode/pplus_hooks.py ADDR...` parses every `HOOK/op/CODE @` and raw gecko line of the four codesets, following `.include`s (3,176 patch sites). It reports any patch within 0x10 bytes of the given addresses. Every DOL address we hook is clear. The closest is P+'s `CODE @ $800B91C8` inside `MuMsg::printIndex`; we only replace that function's entry, at `0x800B91B8`.
 
@@ -185,7 +190,7 @@ Notes:
 - **Never patch an instruction that carries a relocation against a module loaded later.** The `bl MuSelctChrNameEntry::update` at `sel_char+0x18F34` is relocated against module 16. The loader applied that relocation after Syriinge's patch and kept the opcode bits, which turned the patch into `b update` (no link) and hung the game. The hook now sits on the `addi` before it.
 - `sora_menu_main` is loaded into MenuInstance at `0x81164C00` while in the menus.
 - **Gen 1 bug, not ported.** `turnOffSSSTimer` is installed on `sel_char+0x35A4`, which is a `blr`, but jumps into `sel_stage+0x35A8`. It was meant for `sel_stage+0x35A4`.
-- **Online CSS files are built for size** (`Makefile`: `code_entry.o online_menu.o online_match.o stage_legal.o: CXXFLAGS += -Os`): the plugin is loaded into the Syringe heap, which has `0xB2E0` bytes free for it. On 2026-10-08 (online CSS settings, own code, '#' key) it needs `0xA984` at load: about `0x95C` left (measured by growing `.bss` until `gfModule::create` says "Can't Alloc Heap Buffer": `+0x800` loads, `+0xA00` does not). Before `-Os` the CSS work did not load at all. Since Ranked's game setup (2026-10-08) every file is `-Os` (`anyone_menu`, `online`, `rel`, `netmenu` too: 0x998 bytes less); the plugin then needs about `0xACE9` (sections + `.bss`, the sum of the REL header's section sizes and `.bss`), about `0x5F0` left. The menus (netmenu's inline hooks read the stub frame through a `volatile` local and keep working) are covered by `test_online_ranked.py` and `test_online_unranked.py`.
+- **Online CSS files are built for size** (history; since 2026-10-10 the plugin runs from the Network heap, §2): the plugin was loaded into the Syringe heap, which has `0xB2E0` bytes free for it. On 2026-10-08 (online CSS settings, own code, '#' key) it needs `0xA984` at load: about `0x95C` left (measured by growing `.bss` until `gfModule::create` says "Can't Alloc Heap Buffer": `+0x800` loads, `+0xA00` does not). Before `-Os` the CSS work did not load at all. Since Ranked's game setup (2026-10-08) every file is `-Os` (`anyone_menu`, `online`, `rel`, `netmenu` too: 0x998 bytes less); the plugin then needs about `0xACE9` (sections + `.bss`, the sum of the REL header's section sizes and `.bss`), about `0x5F0` left. The menus (netmenu's inline hooks read the stub frame through a `volatile` local and keep working) are covered by `test_online_ranked.py` and `test_online_unranked.py`.
 
 ### PPOM block (design §5.2)
 
@@ -634,3 +639,72 @@ The plugin first did not load with this code: see "Heap budget" in §2.
 **Noted, not changed:**
 - The netplay fallback (`[Online] SessionBackend = netplay`) boots P+ again under Dolphin netplay with the plugin, so its players now land on the ONLINE page instead of P+'s Versus CSS (`direct-netplay/*/06-netplay-boot.png`). The default gameplay session never reboots.
 - A Smashville desync from session frame 0 came back once in `test_direct_loser_picks_off_the_server_list` (game 1 on Smashville, equal setup keys, the barrier passed, the first RNG word different from frame 1; logs in `run/scratch/bootflow-smashville-desync/`): `docs/gameplay-rollback-status.md` open issue 7, which the session's match-start changes did not remove. The boot and the save do not reach the match setup; the rerun passed. Resolved in Phase 12 of that file (a second song pick on one machine).
+
+---
+
+## 14. Rooms (game side)
+
+The game's half of rooms (`docs/design/rooms.md`, interface `docs/rooms-game-interface.md`, PPOM v5): WITH FRIENDS with three buttons, a room's character select with four panels, the keypad's room-code mode, the host's controls, the launcher's jump. Dolphin's half (mm's rooms, the room's games under the gameplay session) is branch `rooms-dolphin`, merged into `rooms-game`. Code: `netmenu.cpp`, `anyone_menu.cpp` (the page), `online_menu.cpp` (the room block: `tickRoom`, `roomPanels`, `updateRoomStatus`, `roomMatch`, `launcherJoin`), `room_css.cpp` (the panels), `labels.cpp` (text drawn with the game's font), `code_entry.cpp` (room codes). Everything that comes from Dolphin (SESSION's room fields and names, the status text) is range-checked before it reaches a game function: slots by their bit masks, teams below `TEAM_COUNT`, characters through `cssOfKind` (a kind with no CSS id shows no character), costumes below `0x20`, names cut to 15 printable ASCII characters (others become `?`).
+
+### The third WITH FRIENDS button
+
+Brawl's WITH FRIENDS page is `muProcWifiAnybody` (`sora_menu_main`, enter at text+`0x2E4F8`). It is built for three buttons: the spectator button (decision `0x1D`) is pushed only when `wc24Available(0x10)` (`0x8014FEDC`, called from text+`0x2E534`) answers 1, and with it the page lays the other two out for three. `anyone_menu.cpp`'s `hkFlag` answers 1 for mask `0x10` when the caller is inside that enter (text+`0x2E4F8`..`0x2E790`). The three buttons and their decisions: `0x1D` Create Room (left), `0x1E` Direct 1v1 (the old BASIC VERSUS, middle, highlighted on entry), `0x1F` Join Room (the old TEAM BATTLE slot, bottom). The A handlers (text+`0x2E934`, `0x2EB70`, inline hooks `anybodyDecision`) note the choice and rewrite the decision passed on to `0x1E` (the stub's saved r4), so all three open the same Wi-Fi character select (`sqNetAnyOkiraku`); TEAM BATTLE's `sqNetAnyTeamMelee` is no longer used. The descriptions under the buttons (the panel `this+0x658`, vtable slot `0x64`, lines `0x32 + cursor`) are reprinted: "Make a room for 2 to 4 players.", "Play a specific person.", "Join a room with its code." Coming back from a room's CSS highlights that room's button again (`highlightButton`: cursor `this+0x42`, `sora_menu_rule` text+`0x1D48`, the description line).
+
+### Labels in the game's own font (`labels.cpp`)
+
+No art is made: labels are drawn into the game's own textures with the game's own font. The font is the bold 32-pixel RFNT used by the CSS name plates ("RFNU" once loaded), found by scanning the MeleeFont heap (`g_HeapInfos[0x30]`): I4 glyph sheets, 32x32 cells laid out `col * (cellW + 1)`. A label is one or two lines, as large as its box allows, squeezed sideways down to 0.6 before it is made smaller; each glyph is sampled bilinearly into a coverage mask, and the mask grown by a round brush is the rim. It is written in the texture's own format and tiling, padding blocks included (a size that is no multiple of the block, e.g. 88x20):
+
+- RGB5A3 (4x4 blocks): the WITH FRIENDS buttons `MenMainWifi21/22/23` ("CREATE ROOM", "DIRECT 1V1", "JOIN ROOM"), black letters on a white rim, as Brawl's labels;
+- I4 (8x8): the CSS state "Seeking" `MenSelchrWifi03` (88x20) becomes "Searching";
+- CMPR (8x8 blocks of four 4x4 sub-blocks): the state "Selecting Character..." `WifiInfWait05_0` (120x40) becomes "Choosing...", in CMPR's 3-colour mode (`c0` black, `c1` white, `c0 <= c1`: black, white, grey, transparent).
+
+Textures are found by name through the MDL0's texture links (section 9, the link's texture info, its bound TEX0: `boundTexture`). The other state textures of `MenSelchrState0000` are CMPR too: `WifiInfWait05_1` "Selecting Stage..." (104x40), `05_2` "Practice Stage..." (96x40), `07_0` "Brawling..." (112x24). DEBUG `scratch[6] >> 16` counts the WITH FRIENDS labels drawn (3).
+
+### The 4-panel room CSS (`room_css.cpp`)
+
+Brawl's Wi-Fi CSS builds four player areas (`muSelCharPlayerArea`, `0x448` bytes, `muSelCharTask+0x44 + 4*i`). In Wi-Fi mode areas 1-3 are network panels filled only from WFC member data, and their models are never placed. But every area whose player record (`gmSelCharData+0xB8 + 0x5C*i`, `+0x01`) says human when the CSS is built becomes a full local panel (sel_char text+`0x2DC0`). So `prepareRecords` marks records 1-3 human just before a room's CSS is built (`pponline_afterWifiRules`): four full panels, and only area 0 has a controller (`area+0x1DC = -1` for the others: no hand, no coin). Then `area+0 = 2` for areas 1-3: 0 is a local area (text+`0x6C84` moves its character with the coin, text+`0x12210` runs it), 1 remote (text+`0x12210` runs Brawl's network panel); with 2 neither runs, and the plugin draws the panel with the area's own functions:
+
+| Function / field | Use |
+|---|---|
+| `0x80696F60` setChar(area, css) | the character (`0x28` none) |
+| `0x8069742C` setCharPic(area, css, kind, costume, isTeam, team, teamSet) | the portrait and costume |
+| `0x8069A4DC` decide(area) | the "picked" look |
+| `0x80698A1C` showTeam(area) | the team colour from `area+0x1C0` when `task+0x5C8` is set (Brawl's team battle look, flags on the panels) |
+| `0x806977FC` showStars(area, count, kind) | Brawl's win stars above the plate: one star is the host's mark (rooms.md #8, a reused Brawl icon) |
+| `area+0x40C` MuMsg window 0 | the name plate |
+| `area+0x41C` state object | 0 none, 1 "Seeking..", 2 "Selecting Character...", 3 "Selecting Stage...", 4 "Practice Stage...", 5 "Bye", 6 "Brawling..."; set with `0x800FD96C(obj, state)`, animated by `0x800FD8E0(obj)` every frame |
+
+Panels: a closed slot hides the area (its scene objects' visibility saved and restored through `GetScnObjOption`, vtable `+0x24`, option `0x10001`); open and empty shows "Searching"; a player choosing shows "Choosing..." with their name; ready shows their character and costume (picked look); in the room's game, "Brawling...". The local player is always the first panel, the others follow in port order (`s_panelPort`). Sounds: the game's join sound (`0x2051`) when someone arrives, `SE_BACK` when someone leaves, the error buzzer (3) with a red error line, 1 on the host's toggles.
+
+The CSS hand (`muSelCharHand`, `area+0x1A8`): `+0x90` x, `+0x94` y in the CSS's units; panel centres x = -22, -7, 8, 23 (step 15, half-width 7), panels between y -1.5 and -20 (`panelUnderHand`).
+
+### Controls and lines (rooms.md #3, #7-#17)
+
+- Top window: the room's code and Public / Private ("KFQB Public"). Status window: Dolphin's room line ("Room KFQB: waiting for players", "Waiting for players (2/3)", "Waiting on: ...", "Pick different teams", "Starting the game", errors in red); the loser's "Press START to select stage" only when every open slot has a player; "Ready" while locked in; "Press START to enter code" when not in a room.
+- START locks in for the room's next game (`Session.game`, kept while the room starts); B takes it back. After a room code START is ignored for 45 frames: the pad system reported the keypad's START again a few frames after the keypad closed, with START already up, and the joiner locked in on arriving (seen in `test_rooms_game.py`, fixed in `54036a8f`).
+- Host, between games only: A with the hand over another panel opens / closes that slot; R Teams on / off; L public / private.
+- Teams on (3+ open slots): X / Y the next / previous team colour, while not locked in.
+- Hold Z (48 frames): leave the room, stay on the CSS (START enters a code). Hold B: leave the room and the CSS, back to WITH FRIENDS on the room's button.
+- `LOCAL.screen` is written every frame (menus, online CSS, room, busy, match, offline, other); `ROOM_LEAVE` is sent when a room's CSS is left.
+
+### The keypad's room-code mode
+
+`CodeEntry::open(port, true)`: the same keypad as Direct's (§7), with only the keys 2-9 accepted, each cycling its room letters (`ROOM_KEYS`: BC, DF, GH, JKL, MN, PQRS, TV, WXZ, the 20 letters of `BCDFGHJKLMNPQRSTVWXZ`), no '#', no suggestions, one page, placeholder "KFQB". Any other key is refused with the error sound (`scratch[15] >> 16` counts refusals); OK only with 4 letters. The keys' printed letters are still Brawl's (e.g. "ABC" on 2).
+
+### The launcher's jump
+
+Dolphin joins the room the launcher asked for (`join-room.json`) and bumps `LOCAL.roomJoin`. The plugin, on a menu page it can leave from (ONLINE, WITH FRIENDS, WITH ANYONE report themselves running), takes the page's own exit (`sora_menu_rule` text+`0x1AE0` with decision `0x1E`) into a room's CSS (Join Room entry); on an idle online CSS it rebuilds the CSS as a room's. A bump seen at boot is old and ignored.
+
+### Tests (2026-10-10)
+
+- `harness/tests/test_rooms_ui.py` (one instance, `tools/gamecode/roomsim.py` plays Dolphin's side): the three labelled buttons, Create Room, a second player choosing and ready, lock-in and unlock, opening slot 3 with the hand, Teams, X / Y team colour, private, a player leaving, hold Z, the keypad's room mode (the '#' key refused), joining by code (no lock-in on arrival), "Room not found.", hold B back to WITH FRIENDS on Create Room. Passed. Screenshots `run/artifacts/game-code/rooms/ui/`.
+- `harness/tests/test_rooms_game.py` (Dolphin built from `rooms-dolphin` 2c0eb592, local accounts and mm): two players create, join by code, ready, play a game under the gameplay session (no checksum mismatch), are back in the room with the next game and the loser's line, then hold Z and hold B; three players with Teams (everyone red refused although all ready, then 2 against 1 started and played to game set on all three, 620 confirmed checksums equal); the launcher's jump from the ONLINE page and from an idle Direct CSS. All passed. Screenshots `run/artifacts/game-code/rooms/{two-players,three-players,launcher-jump}/`.
+- With this plugin and that Dolphin: `test_online_menus_match_the_modes` (updated for the three buttons), `test_direct_from_the_game_menus`, `test_code_keypad_hash_key_and_placeholder`, `test_online_css_settings_are_locked`, `test_direct_set_under_the_gameplay_session` passed.
+
+### Limits
+
+- The local player's own plate is Brawl's (their name tag or "PLAYER 1"), not their account name.
+- The state boxes ("P2 Choosing...") keep the colour of their panel index, not the team colour.
+- A ready player's panel shows their character; there is no "Ready" text on it.
+- The flag on the local panel is not clickable for the team; X / Y are.
+- A 4-player room was not tested end to end.

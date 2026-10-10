@@ -20,6 +20,33 @@ namespace OnlineMenu {
     // its line.
     const PPOM::GameStep* rankedStep();
     const char* rankedText();
+
+    // Rooms (docs/design/rooms.md, docs/rooms-game-interface.md). A room's CSS is the Wi-Fi CSS
+    // in MODE_TEAMS (Slippi's mode 3, which the room's game ticket uses) with a room entry.
+    enum RoomEntry { ROOM_ENTRY_NONE = 0, ROOM_ENTRY_CREATE = 1, ROOM_ENTRY_JOIN = 2 };
+    void enterRoom(int entry);           // WITH FRIENDS > Create Room / Join Room
+    bool roomCss();                      // the online CSS is a room's
+    void prepareCss();                   // the CSS is about to be built (sqNetAnyOkiraku)
+    void menuPageRunning(u8* page);      // a menu page the launcher's join can leave from ran
+}
+
+namespace RoomCss {
+    // The other players' panels on a room's CSS (room_css.cpp).
+    enum PanelKind { PV_CLOSED = 0, PV_SEARCHING = 1, PV_CHOOSING = 2, PV_READY = 3, PV_IN_GAME = 4 };
+    const int NAME_CHARS = 15;
+    struct PanelView {
+        u8 kind;          // PanelKind
+        u8 css;           // CSS id of the character (PV_READY), else 0x28
+        u8 costume;
+        u8 team;          // PPOM::Team
+        u8 host;          // 1: the room's host (Brawl's win star next to the name plate)
+        char name[NAME_CHARS + 1];
+    };
+    void prepareRecords();               // before the CSS is built: four full panels
+    void reset();                        // the CSS is gone
+    void tick(const PanelView views[3], bool teams, int myTeam, bool meHost);
+    int myTeamClicked();                 // the local player's flag changed: the team, else -1
+    int panelUnderHand();                // 1-3: the local hand is over that panel, else -1
 }
 
 namespace OnlineMatch {
@@ -46,12 +73,13 @@ namespace MatchHud {
 
 namespace NetMenu {
     void onlineMenuEntered(int mode);
+    void setReturnButton(int b);         // WITH FRIENDS' button to highlight when it opens again
 }
 
 namespace CodeEntry {
     // Open the connect-code entry (Direct, Teams). See code_entry.cpp.
     void install(CoreApi* api);
-    void open(int port);
+    void open(int port, bool room);   // room: Join Room's room-code mode
     void tick(bool startPressed);
     bool active();
     void onSuggestion(const PPOM::Response& r);   // a FETCH_CODE_SUGGESTION answer
