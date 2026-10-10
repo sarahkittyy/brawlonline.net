@@ -247,6 +247,8 @@ struct State
   bool at_start = false;
   bool go = false;
   u64 setup_hash = 0;
+  // This player's input delay for the current game, fixed when its GekkoNet session is created.
+  int input_delay = DEFAULT_INPUT_DELAY;
   SyncBlock sync;  // host: the values the joiner copies
   std::vector<std::vector<std::string>> task_order;
   bool did_frame0 = false;
@@ -1412,7 +1414,7 @@ void NetThread()
       // Outside a match GekkoNet is not running: a peer silent for Slippi's 7.2 s is gone. In a
       // match GekkoNet's disconnect timeout (the same value) reports it.
       std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-      const auto silence = std::chrono::milliseconds(Online::PeerSilenceTimeoutMs(s.net_opts.delay));
+      const auto silence = std::chrono::milliseconds(Online::PeerSilenceTimeoutMs(s.input_delay));
       if (s.peer.seen && !s.peer_left && !s.gekko && now - s.peer.last_heard > silence)
       {
         s.peer_left = true;
@@ -1534,9 +1536,14 @@ bool CreateGekko(bool stress, int num_players)
       s.handle_port[r] = 0;
       s.handle_port[l] = 1;
     }
-    gekko_set_local_delay(s.gekko, s.local_handles[0],
-                          static_cast<unsigned char>(std::clamp(s.net_opts.delay, 0, 9)));
-    gekko_set_disconnect_timeout(s.gekko, Online::PeerSilenceTimeoutMs(s.net_opts.delay));
+    // Each player picks the delay of their own inputs (Slippi): the set value, else from the
+    // round trip measured now. It stays for the whole game.
+    s.input_delay = s.net_opts.delay ? std::clamp(*s.net_opts.delay, 0, MAX_INPUT_DELAY) :
+                                       AutoInputDelay(s.peer.rtt_ms);
+    gekko_set_local_delay(s.gekko, s.local_handles[0], static_cast<unsigned char>(s.input_delay));
+    gekko_set_disconnect_timeout(s.gekko, Online::PeerSilenceTimeoutMs(s.input_delay));
+    INFO_LOG_FMT(BRAWLBACK, "gprb: input delay {} ({}, round trip {:.0f} ms)", s.input_delay,
+                 s.net_opts.delay ? "set" : "auto", s.peer.rtt_ms);
   }
   return true;
 }
@@ -2945,6 +2952,7 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.did_frame0 = false;
   s.match_index = 0;
   s.setup = {};
+  s.input_delay = DEFAULT_INPUT_DELAY;
   s.last_winner = 0xFF;
   s.last_stage = NO_STAGE;
   s.stage_pool.clear();
@@ -3231,6 +3239,7 @@ picojson::value Status()
     o["foreign_packets"] = picojson::value(static_cast<double>(s.foreign_packets));
     o["selections"] = picojson::value(s.local_selections);
     o["setup_hash"] = picojson::value(fmt::format("{:016x}", s.setup_hash));
+    o["input_delay"] = picojson::value(static_cast<double>(s.input_delay));
     picojson::object lobby;
     lobby["game"] = picojson::value(static_cast<double>(NextGame()));
     lobby["lock"] = LockJson(s.local_lock);

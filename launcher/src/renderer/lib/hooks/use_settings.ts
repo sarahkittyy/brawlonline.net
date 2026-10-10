@@ -78,6 +78,8 @@ export const useEnableMonthlySubfolders = () => useSetting("useMonthlySubfolders
 
 export const useExtraSlpPaths = () => useSetting("extraSlpPaths");
 
+export const useInputDelay = () => useSetting("inputDelay");
+
 export const useLaunchGameOnPlay = () => useSetting("launchGameOnPlay");
 
 export const useAutoUpdateLauncher = () => useSetting("autoUpdateLauncher");

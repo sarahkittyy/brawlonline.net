@@ -229,7 +229,7 @@ See [Open issues](#open-issues) at the end: Peach crashes (an article outside th
    - The joiner relinks its gfTaskScheduler lists into the host's order: task order follows menu history.
 6. The countdown runs without rollback and with neutral input.
 7. **Start barrier at `start_frame` (240, after GO):**
-   - Both create the GekkoNet game session (delay 2, prediction window 7) and complete its handshake.
+   - Both create the GekkoNet game session (each with its own input delay, see below; prediction window 7) and complete its handshake.
    - The host sends "go" and starts RTT/2 later; the joiner starts on "go".
 8. The match runs under rollback with gp-v9 region snapshots (gp-v8 until `fe35002ead`). Each instance plays only its local port.
 9. The session ends `MAX_ROLLBACK_FRAMES + 12` frames after game set, on the same frame on both. The connection stays up for the next match.
@@ -325,6 +325,7 @@ So it takes **dual core plus rollbacks with corrected input**. The sync test can
 `rollback-fixes` (`d36794a6e1`, the online client) is merged into `gameplay-rollback` (`ecbd88b92e`). `Gprb::GameplayOnlineBackend` (`Core/Rollback/GameplayOnlineBackend.cpp`) implements `Online::SessionBackend` as `docs/backend-design.md` 5.5 describes:
 - `link.Release()`, then `Gprb::Session::Connect` on the punched port. The host is the decider; the peer is the address the P2P connection came up with (`connected[0]`). Then `SetSelections(selections)`.
 - The harness picks it per search: `mm_search_direct … backend="gameplay"`, with optional `delay`, `region_set` and `dedupe_resim_sounds` (on by default).
+- **Input delay:** each player sets the delay of their own inputs, as Slippi's delay frames (all modes, ranked too): the launcher's Input Delay setting, Dolphin.ini `[Online] InputDelay` (0 automatic, the default; 1-9 frames; the launcher offers Auto, 2, 3, 4). Automatic picks it when the game's GekkoNet session starts, from the control channel's round trip (pings every 200 ms, smoothed): 2 frames below 70 ms, 3 below 150 ms, else 4 (`Gprb::Session::AutoInputDelay`). It stays for the game. The harness `delay` option overrides the setting. `gprb_status` reports it as `input_delay`; dolphin.log has `gprb: input delay N (auto|set, round trip M ms)`. A modified client can always run its own inputs at less delay; nothing checks the other player's.
 
 The three requirements:
 1. **The host also sends first:** with matchmaking the host knows the guest's address and sends control packets to it from the start. The guest's first packet confirms or corrects the address.

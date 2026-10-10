@@ -1,3 +1,4 @@
+import { INPUT_DELAY_AUTO } from "@common/input_delay";
 import { LEGACY_PRODUCT_NAMES, PRODUCT_NAME } from "@common/product";
 import { app } from "electron";
 import log from "electron-log";
@@ -40,6 +41,7 @@ export const defaultAppSettings: AppSettings = {
     useMonthlySubfolders: true,
     extraSlpPaths: [],
     launchGameOnPlay: true,
+    inputDelay: INPUT_DELAY_AUTO,
     autoUpdateLauncher: true,
     netplayDolphinPath: null,
     playbackDolphinPath: null,

@@ -124,6 +124,10 @@ export class SettingsManager extends EventEmitter {
     return this.get().settings.useMonthlySubfolders;
   }
 
+  getInputDelay(): number {
+    return this.get().settings.inputDelay;
+  }
+
   getDolphinPath(type: DolphinLaunchType): string | null {
     const settings = this.get().settings;
     switch (type) {
