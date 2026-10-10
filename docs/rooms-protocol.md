@@ -84,7 +84,7 @@ A request that is refused changes nothing and is answered with `room-error`. Mal
 
 | Situation | `statusText` |
 |---|---|
-| Only the receiver is in the room | `Room KFQB: waiting for players` |
+| Only the receiver is in the room | `Waiting for players` |
 | Open slots are still empty | `Waiting for players (2/4)` |
 | Everyone is there, some are not ready | `Waiting on: bob, carol` (names that do not fit become `+N`) |
 | Teams, three or more players, all one colour | `Pick different teams` |

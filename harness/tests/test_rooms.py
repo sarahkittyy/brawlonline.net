@@ -307,7 +307,7 @@ def test_room_requests_errors_and_the_launcher(backend: OnlineBackend,
         assert s0["bits"] == ppom.SLOT_OPEN | ppom.SLOT_TAKEN | ppom.SLOT_HOST and s0["name"] == "anna"
         assert s1["bits"] == ppom.SLOT_OPEN and s2["bits"] == 0 and s3["bits"] == 0
         assert s0["team"] == 0 and s0["char"] == 0xFF
-        a.until_text(f"Room {code}: waiting for players", error=False)
+        a.until_text("Waiting for players", error=False)
         _wait(lambda: a.game_status()["room"] == code, 10, "game-status's room")
 
         # Join (mmclient as bert): the panel fills.
