@@ -2853,9 +2853,14 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
   if (load_before >= 0 && num_adv > 0)
   {
     // The load names the frame whose end state to restore; our newest slot holds the end of the
-    // frame before this update's normal advance (see NetPlayClient::HandleGekkoFrame).
-    const int normal_frame = s.ops.adv_frame[num_adv - 1];
-    const int frames_back = (normal_frame - 1) - load_frame;
+    // last frame run (s.current_frame, the previous update's last advance). Not the frame before
+    // this update's last advance: while GekkoNet cannot advance (a player's input is missing), a
+    // rollback brings only the resimulated frames, up to the last frame run, and no new frame
+    // (3-4 players: one peer's input corrects a prediction while another's is still missing).
+    // Counted from the last advance, that load went one frame short and the game ran a frame
+    // ahead of the session from then on (2026-10-10, a 3-player room: "desync at frame 1572",
+    // the peer's checksum of frame 1573 was ours of 1572).
+    const int frames_back = static_cast<int>(s.current_frame - load_frame);
     auto& rbm = Rollback::RollbackManager::Get();
     if (frames_back >= 1 && frames_back <= MAX_ROLLBACK_FRAMES && rbm.m_ring_count >= 2 &&
         frames_back < rbm.m_ring_count)
