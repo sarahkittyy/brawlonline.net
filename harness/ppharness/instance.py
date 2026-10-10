@@ -89,10 +89,6 @@ class InstanceConfig:
         v: dict[str, dict[str, Any]] = {"Core": {}, "DSP": {}, "Input": {}}
         v["DSP"]["Muted"] = not self.audio
         v["Input"]["BackgroundInput"] = False
-        # With no port on the Wii U adapter, Dolphin turns on SDL's HIDAPI GameCube driver
-        # (SDL.cpp), which opens the user's adapter and leaves their own Dolphin with
-        # "access denied". [SDL_Hints] is applied after that, so this keeps it off.
-        v["SDL_Hints"] = {"SDL_JOYSTICK_HIDAPI_GAMECUBE": 0}
         if self.cpu_thread is not None:
             v["Core"]["CPUThread"] = bool(self.cpu_thread)
         if self.video_backend:
