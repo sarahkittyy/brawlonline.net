@@ -108,6 +108,9 @@ class OnlineBackend:
         self.play_key_secret = secrets.token_hex(32)
         self.accounts_port = 0
         self.mm_port = 0
+        # mm's status listener (the room list accounts serves): its default port is fixed, so two
+        # backends at once (parallel test sessions) would collide.
+        self.mm_status_port = 0
         self._pg_data: Path | None = None
         self._pg_port = 0
         self._compose_started = False
@@ -278,9 +281,11 @@ class OnlineBackend:
 
     def _start_services(self) -> None:
         self.accounts_port = find_free_port()
+        self.mm_status_port = find_free_port()
         env = self._env()
         env.update({
             "ACCOUNTS_LISTEN": f"127.0.0.1:{self.accounts_port}",
+            "MM_STATUS_URL": f"http://127.0.0.1:{self.mm_status_port}/status",
             "PUBLIC_BASE_URL": f"http://127.0.0.1:{self.accounts_port}",
             "REQUIRE_EMAIL_VERIFICATION": "true",
             "MAILER": "file",
@@ -312,6 +317,7 @@ class OnlineBackend:
         self.mm_port = find_free_port(kind=socket.SOCK_DGRAM)
         env = self._env()
         env["MM_LISTEN"] = f"127.0.0.1:{self.mm_port}"
+        env["MM_STATUS_LISTEN"] = f"127.0.0.1:{self.mm_status_port}"
         if self.min_app_version:
             env["MM_MIN_APP_VERSION"] = self.min_app_version
         if self.ticket_ttl_secs is not None:
