@@ -9,8 +9,10 @@
 
 #include <fmt/format.h>
 
+#include "Common/HookableEvent.h"
 #include "Common/Logging/Log.h"
 #include "Core/Config/OnlineSettings.h"
+#include "Core/Core.h"
 #include "Core/Rollback/GameplaySession.h"
 
 namespace Gprb
@@ -19,6 +21,13 @@ namespace
 {
 std::mutex s_options_mutex;
 OnlineBackendOptions s_options;
+
+// Closing the game window stops emulation (MainWindow::ForceStop), but the leave used to go out
+// only when the process exited (Online::Client::Shutdown() from ~MainWindow), seconds later; the
+// other players stalled on the missing input meanwhile, up to the 7.2 s silence timeout. The game
+// is gone once emulation stops, so the session is left then. Core::Stop notifies Stopping before
+// it stops the CPU: the leave goes out while the match loop still runs.
+Common::EventHook s_stop_hook;
 
 class GameplayOnlineBackend final : public Online::SessionBackend
 {
@@ -178,5 +187,14 @@ std::unique_ptr<Online::SessionBackend> MakeOnlineBackend()
 void RegisterOnlineBackend()
 {
   Online::Session::RegisterFactory("gameplay", MakeOnlineBackend);
+  if (!s_stop_hook)
+  {
+    s_stop_hook = Core::AddOnStateChangedCallback([](Core::State state) {
+      if (state != Core::State::Stopping || !Session::GetLobby().active)
+        return;
+      NOTICE_LOG_FMT(BRAWLBACK, "gprb: emulation is stopping; leaving the session");
+      Session::Stop();
+    });
+  }
 }
 }  // namespace Gprb

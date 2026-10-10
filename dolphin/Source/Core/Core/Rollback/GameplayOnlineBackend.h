@@ -26,6 +26,7 @@ void SetOnlineBackendOptions(const OnlineBackendOptions& options);
 std::unique_ptr<Online::SessionBackend> MakeOnlineBackend();
 // Online::Session::RegisterFactory("gameplay", MakeOnlineBackend). The frontends (DolphinQt and
 // DolphinNoGUI) call it at start-up, before Online::Session::SelectConfigured(); "gameplay" is the
-// default [Online] SessionBackend.
+// default [Online] SessionBackend. It also makes emulation stopping (the game window closed)
+// leave a network session at once.
 void RegisterOnlineBackend();
 }  // namespace Gprb

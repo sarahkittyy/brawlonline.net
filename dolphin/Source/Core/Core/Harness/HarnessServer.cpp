@@ -1595,6 +1595,15 @@ Result CmdLogMark(const Args& args)
   return {};
 }
 
+// Stops emulation as closing the game window does (MainWindow::ForceStop), on the host thread;
+// the process stays. Returns at once: wait for `status` to show it stopped.
+Result CmdEmuStop(const Args&)
+{
+  RequireRunning();
+  Core::QueueHostJob([](Core::System& system) { Core::Stop(system); }, true);
+  return {};
+}
+
 Result CmdQuit(const Args&)
 {
   s_quit_requested = true;
@@ -1660,6 +1669,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"gprb_sound_state", CmdGprbSoundState},
       {"rollback_timings", CmdRollbackTimings},
       {"log_mark", CmdLogMark},
+      {"emu_stop", CmdEmuStop},
       {"quit", CmdQuit},
   };
   return handlers;
