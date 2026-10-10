@@ -39,6 +39,13 @@
 // Recent codes (Slippi TextEntryScreen/AutoComplete.s and friends, 0xBE FETCH_CODE_SUGGESTION):
 // see the "Recent codes" block below.
 //
+// Room-code mode (Join Room, docs/design/rooms.md #4, #5): a room code is 4 letters of
+// BCDFGHJKLMNPQRSTVWXZ (no vowels, no Y). Only the letters page; each letter key cycles through
+// its allowed letters only (ABC -> B C, DEF -> D F, GHI -> G H, JKL, MNO -> M N, PQRS, TUV -> T V,
+// WXYZ -> W X Z); the '#'/symbol keys (their labels hidden), a fifth letter and OK before four
+// letters are refused with the error sound; no recent codes (room codes are throwaway, rooms.md
+// §2); the placeholder is "KFQB".
+//
 // The keypad's state (MuSelctChrNameEntry, 0x94 bytes, as far as we use it):
 //   +0x00 active  +0x04 text buffer (UTF-8)  +0x08 max characters
 //   +0x24 page list, +0x38 page count, +0x3C current page
@@ -72,6 +79,7 @@ namespace CodeEntry {
     static char s_buf[64];              // the keypad's text (UTF-8 full-width, 8 x 3 bytes + NUL)
     static char s_out[64];              // what the game would copy to the name tag
     static bool s_active = false;
+    static bool s_room = false;         // room-code mode (Join Room)
     static bool s_confirmed = false;
     static bool s_startPressed = false;   // START went down this frame (the game no longer sees it)
     static int s_port = 0;
@@ -104,6 +112,21 @@ namespace CodeEntry {
         NULL,                                             // !?&%$  (disabled, unchanged)
         NULL,                                             // .,/~   (disabled, unchanged)
     };
+    // Room codes: the letters of BCDFGHJKLMNPQRSTVWXZ on their keys (server/crates/common rooms.rs).
+    static const char* const ROOM_KEYS[11] = {
+        NULL,                                             // the symbols key: refused
+        "\xEF\xBC\xA2\xEF\xBC\xA3",                         // ＢＣ
+        "\xEF\xBC\xA4\xEF\xBC\xA6",                         // ＤＦ
+        "\xEF\xBC\xA7\xEF\xBC\xA8",                         // ＧＨ
+        "\xEF\xBC\xAA\xEF\xBC\xAB\xEF\xBC\xAC",          // ＪＫＬ
+        "\xEF\xBC\xAD\xEF\xBC\xAE",                         // ＭＮ
+        "\xEF\xBC\xB0\xEF\xBC\xB1\xEF\xBC\xB2\xEF\xBC\xB3",  // ＰＱＲＳ
+        "\xEF\xBC\xB4\xEF\xBC\xB6",                         // ＴＶ
+        "\xEF\xBC\xB7\xEF\xBC\xB8\xEF\xBC\xBA",          // ＷＸＺ
+        NULL,
+        NULL,
+    };
+    const int ROOM_CODE_CHARS = 4;
 
     // helper+0x40 is the highlighted key: 0 delete, 1-11 character keys, 0xC page, 0xD OK.
     // Page index (+0x3C) 0 = letters, 1 = digits (our page list).
@@ -137,6 +160,11 @@ namespace CodeEntry {
     static bool keyAllowed(int page, int key, const CodeShape& c, bool cycles)
     {
         if (key == KEY_ERASE) return true;
+        if (s_room) {
+            if (key == KEY_OK) return c.letters == ROOM_CODE_CHARS && !c.hash;
+            if (page != PAGE_ALPHA || key < 2 || key > 9) return false;
+            return cycles || c.letters < ROOM_CODE_CHARS;
+        }
         if (key == KEY_OK) return c.len > 0;
         if (key == KEY_PAGE || key < 1 || key > 11) return false;
         if (page == PAGE_ALPHA) {
@@ -172,15 +200,16 @@ namespace CodeEntry {
 
     static void patchKeys(u8* helper)
     {
+        const char* const* keys = s_room ? ROOM_KEYS : ALPHA_KEYS;
         for (int i = 0; i < 11; i++) {
             s_savedKeys[i] = KEYS[PAGE_ALPHA * 11 + i];
-            if (ALPHA_KEYS[i]) KEYS[PAGE_ALPHA * 11 + i].chars = ALPHA_KEYS[i];
+            if (keys[i]) KEYS[PAGE_ALPHA * 11 + i].chars = keys[i];
         }
         memcpy(s_savedPages, helper + 0x24, sizeof(s_savedPages));
         u32* pages = (u32*)(helper + 0x24);
         pages[0] = PAGE_ALPHA;
         pages[1] = PAGE_DIGITS;
-        *(u32*)(helper + 0x38) = 2;    // page count
+        *(u32*)(helper + 0x38) = s_room ? 1 : 2;    // page count (room codes: letters only)
         *(u32*)(helper + 0x3C) = 0;    // current page index
     }
 
@@ -243,6 +272,7 @@ namespace CodeEntry {
     static const ObjFrameFn s_setFrame = (ObjFrameFn)0x800B7798;               // MuObject frame (selector, underline)
     static const u8 SUGGESTION_GREY[4] = {0x8E, 0x91, 0x96, 0xFF};
     static const char* const PLACEHOLDER = "PLYR#123";   // the empty field's placeholder
+    static const char* const ROOM_PLACEHOLDER = "KFQB";   // room-code mode's
     // The placeholder: the suggestion's grey at half opacity (a hint, not something Z takes).
     static const u8 PLACEHOLDER_GREY[4] = {0x8E, 0x91, 0x96, 0x80};
 
@@ -307,6 +337,7 @@ namespace CodeEntry {
 
     static void sugRequest(u8 scroll)
     {
+        if (s_room) return;   // no recent room codes
         if (!s_sugSeq) {
             sugSend(scroll);
             return;
@@ -360,7 +391,7 @@ namespace CodeEntry {
     {
         const char* tail = suggestionTail();
         // The empty field without a suggestion shows the placeholder, in the same grey.
-        if (!s_buf[0] && !*tail) tail = PLACEHOLDER;
+        if (!s_buf[0] && !*tail) tail = s_room ? ROOM_PLACEHOLDER : PLACEHOLDER;
         char want[64];
         int n = 0;
         for (const char* p = s_buf; *p && n < 40; p++) want[n++] = *p;
@@ -378,7 +409,7 @@ namespace CodeEntry {
         if (*tail) {
             char fw[40];
             toFullWidth(tail, fw);
-            const u8* grey = tail == PLACEHOLDER ? PLACEHOLDER_GREY : SUGGESTION_GREY;
+            const u8* grey = (tail == PLACEHOLDER || tail == ROOM_PLACEHOLDER) ? PLACEHOLDER_GREY : SUGGESTION_GREY;
             s_msgColorTop(m, grey);
             s_msgColorBottom(m, grey);
             s_msgPrintf(m, "%s", fw);
@@ -617,6 +648,14 @@ namespace CodeEntry {
         hideLabel(alpha, "pPlane72");   // !?&%$
         hideLabel(alpha, "pPlane73");   // .,/~
         hideLabel(digits, "pPlane72");  // -+x=
+        if (s_room) {
+            // Room codes: the page key's arrows and the Random tab as below; no '#'.
+            u8* b = *(u8**)(helper + 0x44);
+            hideLabel(b, "kirikae");
+            hideLabel(b, "randam");
+            hideLabel(b, "zz_Gc");
+            return;
+        }
         // The keypad base (MenSelchrWbase): the page key's arrows (the pages follow the '#') and
         // the "Z RANDOM" tab (Random is off; Z takes a recent code here).
         u8* base = *(u8**)(helper + 0x44);
@@ -626,8 +665,9 @@ namespace CodeEntry {
         showHashLabel(helper);
     }
 
-    void open(int port)
+    void open(int port, bool room)
     {
+        s_room = room;
         s_port = port;
         u8* area = cssArea(s_port);
         if (!area) return;
@@ -638,7 +678,7 @@ namespace CodeEntry {
         patchKeys(helper);
         patchLabels(helper);
         s_lastKey = -1;
-        ((KeypadOpenFn)(NAME_TEXT + 0x5A8))(helper, NULL, s_buf, CODE_CHARS);
+        ((KeypadOpenFn)(NAME_TEXT + 0x5A8))(helper, NULL, s_buf, s_room ? ROOM_CODE_CHARS : CODE_CHARS);
         // The text field is sized for Brawl's 5-character names: let the font narrow to fit 8.
         MuMsg* msg = *(MuMsg**)(helper + 0x64);
         if (msg) msg->setFontWidthModeAuto(*(u32*)(helper + 0x70));
@@ -798,7 +838,7 @@ namespace CodeEntry {
             }
             // The page follows the text: digits once there is a '#' (typed, or a recent code
             // taken with Z), letters when there is none (the '#' erased, the field cleared).
-            setPage(helper, shapeOf(s_buf).hash ? 1 : 0);
+            if (!s_room) setPage(helper, shapeOf(s_buf).hash ? 1 : 0);
             u32& sc = PPOM::g_block.debug.scratch[15];
             sc = (sc & ~0xFF00u) | ((u32)(pageIndex(helper) & 0xFF) << 8);   // tests: the page
             drawField(helper);
