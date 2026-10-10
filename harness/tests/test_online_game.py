@@ -1188,9 +1188,9 @@ def test_each_player_keeps_their_tag_controls(backend: OnlineBackend,
 
 def test_online_menus_match_the_modes(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                       gpu_backend: str) -> None:
-    """The ONLINE page follows the mode set (Direct, Unranked, Ranked, Teams): WITH FRIENDS opens
-    the code-based modes on Brawl's two-button page, retitled WITH FRIENDS (BASIC VERSUS =
-    Direct, TEAM BATTLE = Teams); WITH ANYONE opens the matchmaking modes on Brawl's Wi-Fi
+    """The ONLINE page follows the mode set (Direct, Unranked, Ranked, rooms): WITH FRIENDS opens
+    Brawl's page with three buttons, retitled WITH FRIENDS (Create Room, Direct 1v1, Join Room;
+    docs/design/rooms.md); WITH ANYONE opens the matchmaking modes on Brawl's Wi-Fi
     OPTIONS page, whose two buttons are labelled with the game's font: "Unranked" and "Ranked".
     Each entry reaches the online CSS in its mode (the plugin's menuState = mode + 1, and the
     search's FIND_OPPONENT mode byte), and leaving the CSS goes back to the page the mode was
@@ -1209,19 +1209,19 @@ def test_online_menus_match_the_modes(backend: OnlineBackend, dolphin: Callable[
         g.steps("hold B 90", "until muMenuMain 600", "wait 90")
         g.shot(shot)
 
-    # WITH FRIENDS -> its page: BASIC VERSUS (Direct) highlighted.
+    # WITH FRIENDS -> its page: Direct 1v1 highlighted.
     g.steps("tap A", "wait 90")
-    g.shot("10-with-friends-basic-versus")
+    g.shot("10-with-friends-direct")
     g.steps("tap DDOWN 4", "wait 30")
-    g.shot("11-with-friends-team-battle")
+    g.shot("11-with-friends-join-room")
     g.steps("tap DUP 4", "wait 30", "tap A", "wait 400")
     assert mode_on_css() == 2                     # Direct
     g.shot("12-direct-css")
-    leave_css("13-back-on-with-friends")          # BASIC VERSUS highlighted again
+    leave_css("13-back-on-with-friends")          # Direct 1v1 highlighted again
     g.steps("tap DDOWN 4", "wait 30", "tap A", "wait 400")
-    assert mode_on_css() == 3                     # Teams
-    g.shot("14-teams-css")
-    leave_css("15-back-on-with-friends-team")     # TEAM BATTLE highlighted
+    assert mode_on_css() == 0x11                  # a room's CSS, Join Room (menuState 0x10 | 2)
+    g.shot("14-join-room-css")
+    leave_css("15-back-on-with-friends-join")     # Join Room highlighted
     g.steps("tap B", "wait 90")
     g.shot("16-online-page-with-friends")         # back on the ONLINE page, WITH FRIENDS
     # WITH ANYONE -> Unranked / Ranked, labelled with the game's font.
