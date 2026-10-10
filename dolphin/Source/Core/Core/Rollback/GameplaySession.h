@@ -150,6 +150,7 @@ struct Lobby
   bool connected = false;     // the peer has been heard and has not left
   bool in_match = false;      // barrier .. running
   bool disconnected = false;  // the session ended because the peer left or went silent
+  bool desynced = false;      // the last match ended on a desync, until its scene is left
   int local_port = -1;        // in-game port of this player (0 host, 1 joiner)
   int num_players = 0;
   bool remote_ready = false;  // every remote player is locked in for `game`

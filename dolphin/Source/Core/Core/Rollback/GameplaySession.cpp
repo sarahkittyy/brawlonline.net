@@ -224,6 +224,12 @@ struct State
   bool peer_left = false;
   std::string peer_left_reason;
   bool disconnected = false;  // reported to the game (Slippi's ONLINE_INPUTS result 3)
+  // The two machines' game states differ (GekkoNet's checksums, or the peer's "desync"): the
+  // CPU thread ends the match at its next loop top, as Slippi ends a game on a hard desync.
+  bool desync_end = false;
+  // The last match ended on a desync: reported to the game (LOCAL `desynced`, DESYNC DETECTED
+  // and the end without "GAME!") until it has left the match scene.
+  bool desynced = false;
   std::thread net_thread;
   std::atomic<bool> net_run{false};
   std::mutex gekko_rx_mutex;
@@ -754,6 +760,21 @@ void SendRaw(const std::vector<u8>& data)
   (void)s.socket->send(data.data(), data.size(), *s.peer_ip, s.peer_port);
 }
 
+// Tells the peer that this machine found the game states differ, so it ends the match too even
+// if its own check has not (yet) seen it. UDP: sent a few times; `m` keeps a late copy from
+// ending the next match.
+void SendDesync()
+{
+  if (!s.socket || !s.peer_ip)
+    return;
+  const std::string text = fmt::format(R"({{"t":"desync","v":1,"m":{}}})", s.match_index);
+  std::vector<u8> pkt(text.size() + 1);
+  pkt[0] = 'C';
+  std::memcpy(pkt.data() + 1, text.data(), text.size());
+  for (int i = 0; i < 3; ++i)
+    SendRaw(pkt);
+}
+
 void GekkoSend(GekkoNetAddress*, const char* data, int length)
 {
   std::vector<u8> pkt(static_cast<size_t>(length) + 1);
@@ -1209,6 +1230,18 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
       s.peer_left = true;
       s.peer_left_reason = "peer left";
       INFO_LOG_FMT(BRAWLBACK, "gprb: the peer left the session");
+    }
+    return;
+  }
+  if (const auto t = o.find("t"); t != o.end() && t->second.is<std::string>() &&
+                                  t->second.get<std::string>() == "desync")
+  {
+    const auto m = o.find("m");
+    if (s.phase == Phase::Running && !s.desync_end && m != o.end() && m->second.is<double>() &&
+        m->second.get<double>() == static_cast<double>(s.match_index))
+    {
+      s.desync_end = true;
+      WARN_LOG_FMT(BRAWLBACK, "gprb: the peer found the game states differ: the game ends");
     }
     return;
   }
@@ -2199,6 +2232,16 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
       WARN_LOG_FMT(BRAWLBACK, "gprb: desync at frame {} (local {:08x}, remote {:08x})",
                    sev[i]->data.desynced.frame, sev[i]->data.desynced.local_checksum,
                    sev[i]->data.desynced.remote_checksum);
+      if (s.mode == Mode::Network && !s.desync_end)
+      {
+        // A desync does not heal: the machines play different games from here on, and one
+        // of them may reach game set while the other plays on and waits for inputs that never
+        // come. End the game on both (the peer detects it too; the message makes sure).
+        s.desync_end = true;
+        WARN_LOG_FMT(BRAWLBACK, "gprb: the game states differ from frame {}: the game ends",
+                     sev[i]->data.desynced.frame);
+        SendDesync();
+      }
       break;
     default:
       break;
@@ -2956,6 +2999,8 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.peer_left = false;
   s.peer_left_reason.clear();
   s.disconnected = false;
+  s.desync_end = false;
+  s.desynced = false;
   s.socket = std::make_unique<sf::UdpSocket>();
   s.socket->setBlocking(false);
   if (s.socket->bind(options.local_port) != sf::Socket::Status::Done)
@@ -3068,6 +3113,7 @@ Lobby GetLobby()
   l.connected = l.active && s.peer.seen && !s.peer_left;
   l.in_match = InMatchPhase();
   l.disconnected = s.disconnected;
+  l.desynced = s.desynced;
   l.local_port = s.mode == Mode::Network ? (s.net_opts.host ? 0 : 1) : -1;
   l.num_players = s.mode == Mode::Network ? 2 : 0;
   l.game = NextGame();
@@ -3151,6 +3197,7 @@ picojson::value Status()
   o["phase"] = picojson::value(PhaseName(s.phase));
   o["error"] = picojson::value(s.error);
   o["disconnected"] = picojson::value(s.disconnected);
+  o["desynced"] = picojson::value(s.desynced);
   o["peer_left"] = picojson::value(s.peer_left);
   o["role"] = picojson::value(s.mode == Mode::Network ? (s.net_opts.host ? "host" : "joiner") : "");
   o["match_index"] = picojson::value(static_cast<double>(s.match_index));
@@ -3398,6 +3445,17 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     return true;
   }
 
+  // A desync ends the game with no winner (no game result), still connected: the game shows
+  // DESYNC DETECTED and goes back to the character select for the next game.
+  if (s.mode == Mode::Network && s.desync_end && s.phase == Phase::Running)
+  {
+    EndRunning(system, "desync");
+    s.desync_end = false;
+    s.desynced = true;
+    SetLoopDefault(ppc);
+    return true;
+  }
+
   if (s.phase == Phase::Running)
   {
     if (RunIoWait(guard))
@@ -3584,6 +3642,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     {
       s.did_frame0 = false;
       s.await_scene_exit = false;
+      s.desynced = false;
       return false;
     }
     if (s.await_scene_exit)
