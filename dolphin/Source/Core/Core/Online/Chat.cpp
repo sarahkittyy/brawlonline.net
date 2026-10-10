@@ -681,6 +681,24 @@ std::string NameOf(std::string_view uid)
   return m ? m->name : std::string("that player");
 }
 
+// The room's code (room-<CODE>-<n>), or the opponent's connect code.
+std::string Code()
+{
+  if (s.kind == GroupKind::Room)
+  {
+    const std::string_view g = s.group;
+    const size_t a = g.find('-');
+    const size_t b = a == std::string_view::npos ? a : g.find('-', a + 1);
+    return b == std::string_view::npos ? std::string() : std::string(g.substr(a + 1, b - a - 1));
+  }
+  for (const MemberState& m : s.members)
+  {
+    if (m.uid != s.you)
+      return m.code;
+  }
+  return {};
+}
+
 std::string Title()
 {
   if (s.kind == GroupKind::Room)
@@ -847,6 +865,7 @@ std::optional<View> GetView(u64 known_serial)
   v.serial = s.serial;
   v.active = s.kind == GroupKind::Room || (s.kind == GroupKind::Match && s.match_connected);
   v.room = s.kind == GroupKind::Room;
+  v.code = Code();
   v.title = Title();
   v.last_message_ms = s.last_message_ms;
   for (size_t i = 0; i < s.members.size(); ++i)

@@ -175,12 +175,14 @@ ImU32 ColorOf(int color)
 
 // A name drawn as text that can be clicked (an InvisibleButton under it: the name is never a
 // widget label). Clicking another player's name opens their menu.
-void NameButton(std::string_view text, ImU32 color, const std::string& uid, bool clickable)
+void NameButton(std::string_view text, ImU32 color, const std::string& uid, bool clickable,
+                float y_offset = 0.0f)
 {
   const ImVec2 size = ImGui::CalcTextSize(text.data(), text.data() + text.size());
-  const ImVec2 pos = ImGui::GetCursorScreenPos();
+  ImVec2 pos = ImGui::GetCursorScreenPos();
   const bool clicked = ImGui::InvisibleButton("##name", ImVec2(std::max(size.x, 1.0f), size.y));
   const bool hovered = clickable && ImGui::IsItemHovered();
+  pos.y += y_offset;
   ImDrawList* draw = ImGui::GetWindowDrawList();
   // Through GetColorU32: the window's alpha (faded in a match) applies to drawn text too.
   const ImU32 col = ImGui::GetColorU32(color);
@@ -242,32 +244,22 @@ void DrawLine(const Line& line, float scale)
   ImGui::PopID();
 }
 
-void DrawHeader(float scale)
+// In the menu bar after Options: the other players' names (click: their menu), then the room's
+// code (or the opponent's connect code) at the right.
+void DrawMenuBarPlayers(float scale)
 {
   const auto& v = *s.view;
-  bool first = true;
-  if (v.room)
-  {
-    ImGui::PushStyleColor(ImGuiCol_Text, SYSTEM_COLOR);
-    ImGui::TextUnformatted(v.title.data(), v.title.data() + v.title.size());
-    ImGui::PopStyleColor();
-    first = false;
-  }
   bool anyone = false;
   for (const Online::Chat::Member& m : v.members)
   {
     if (m.is_me)
       continue;
     anyone = true;
-    if (!first)
-      ImGui::SameLine(0.0f, 10.0f * scale);
-    first = false;
     ImGui::PushID(m.uid.c_str());
-    std::string label = m.code.empty() ? m.name : fmt::format("{} ({})", m.name, m.code);
-    NameButton(label, ColorOf(m.color), m.uid, true);
+    // On the menu bar's text line (Options' label sits FramePadding.y below the item's top).
+    NameButton(m.name, ColorOf(m.color), m.uid, true, ImGui::GetStyle().FramePadding.y);
     if (m.hidden || !m.has_key)
     {
-      ImGui::SameLine(0.0f, 4.0f * scale);
       ImGui::PushStyleColor(ImGuiCol_Text, SYSTEM_COLOR);
       ImGui::TextUnformatted(m.hidden ? "(hidden)" : "(connecting)");
       ImGui::PopStyleColor();
@@ -276,11 +268,21 @@ void DrawHeader(float scale)
   }
   if (!anyone)
   {
-    if (!first)
-      ImGui::SameLine(0.0f, 10.0f * scale);
     ImGui::PushStyleColor(ImGuiCol_Text, SYSTEM_COLOR);
     ImGui::TextUnformatted("Nobody else here yet");
     ImGui::PopStyleColor();
+  }
+  if (!v.code.empty())
+  {
+    const float w = ImGui::CalcTextSize(v.code.data(), v.code.data() + v.code.size()).x;
+    const float right = ImGui::GetCursorPosX() + ImGui::GetContentRegionAvail().x;
+    if (right - w > ImGui::GetCursorPosX() + 8.0f * scale)
+    {
+      ImGui::SetCursorPosX(right - w);
+      ImGui::PushStyleColor(ImGuiCol_Text, SYSTEM_COLOR);
+      ImGui::TextUnformatted(v.code.data(), v.code.data() + v.code.size());
+      ImGui::PopStyleColor();
+    }
   }
 }
 
@@ -466,18 +468,16 @@ void Display(float scale)
       if (ImGui::BeginMenu("Options"))
       {
         bool in_matches = Config::Get(Config::ONLINE_CHAT_IN_MATCHES);
-        if (ImGui::MenuItem("Show during matches", nullptr, &in_matches))
+        if (ImGui::Checkbox("Show during matches", &in_matches))
         {
           Config::SetBaseOrCurrent(Config::ONLINE_CHAT_IN_MATCHES, in_matches);
           Config::Save();
         }
         ImGui::EndMenu();
       }
+      DrawMenuBarPlayers(scale);
       ImGui::EndMenuBar();
     }
-
-    DrawHeader(scale);
-    ImGui::Separator();
 
     const bool notice = now < s.notice_until;
     const float input_h = ImGui::GetFrameHeightWithSpacing() +

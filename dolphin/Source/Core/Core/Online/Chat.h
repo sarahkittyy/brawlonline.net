@@ -85,6 +85,7 @@ struct View
   // In a room's group, or a match's group whose session is connected.
   bool active = false;
   bool room = false;  // a room's group (else a match's)
+  std::string code;   // the room's code, or the opponent's connect code
   std::string title;  // "Room KFQB" / the other player's name and code
   std::vector<Member> members;
   std::vector<Line> lines;  // oldest first, at most MAX_LINES
