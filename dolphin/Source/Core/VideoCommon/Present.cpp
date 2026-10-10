@@ -1070,6 +1070,12 @@ void Presenter::SetMousePress(u32 button_mask)
     m_onscreen_ui->SetMousePress(button_mask);
 }
 
+void Presenter::SetMouseWheel(float x, float y)
+{
+  if (m_onscreen_ui)
+    m_onscreen_ui->SetMouseWheel(x, y);
+}
+
 void Presenter::DoState(PointerWrap& p)
 {
   p.Do(m_frame_count);

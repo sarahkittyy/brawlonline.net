@@ -15,6 +15,7 @@
 #include <QPalette>
 #include <QScreen>
 #include <QTimer>
+#include <QWheelEvent>
 #include <QWindow>
 
 #include "Core/Config/MainSettings.h"
@@ -563,6 +564,14 @@ void RenderWidget::PassEventToPresenter(const QEvent* event)
   {
     const u32 button_mask = static_cast<u32>(static_cast<const QMouseEvent*>(event)->buttons());
     g_presenter->SetMousePress(button_mask);
+  }
+  break;
+
+  case QEvent::Wheel:
+  {
+    // In notches (120 per notch), as ImGui wants them: scrolls the online chat window.
+    const QPoint delta = static_cast<const QWheelEvent*>(event)->angleDelta();
+    g_presenter->SetMouseWheel(delta.x() / 120.0f, delta.y() / 120.0f);
   }
   break;
 
