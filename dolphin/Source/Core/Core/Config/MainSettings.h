@@ -68,6 +68,9 @@ extern const Info<int> MAIN_TIMING_VARIANCE;
 extern const Info<bool> MAIN_CORRECT_TIME_DRIFT;
 extern const Info<bool> MAIN_RUSH_FRAME_PRESENTATION;
 extern const Info<bool> MAIN_SMOOTH_EARLY_PRESENTATION;
+// Rollback sessions: Rush Frame Presentation's sleep at the first poll after each XFB copy, and the
+// present hold (CoreTiming::OnPresentedXFBCopy, PresentStats::PresentHoldUntil).
+extern const Info<bool> MAIN_ROLLBACK_PRESENT_PACING;
 extern const Info<bool> MAIN_CPU_THREAD;
 extern const Info<bool> MAIN_LOAD_GAME_INTO_MEMORY;
 extern const Info<bool> MAIN_SYNC_ON_SKIP_IDLE;

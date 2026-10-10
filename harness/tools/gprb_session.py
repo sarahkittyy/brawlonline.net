@@ -328,6 +328,10 @@ def run_session(preset: str, cpu: str, args: argparse.Namespace, run: int) -> Di
     orig = G.make_instance
 
     def mk(name, **kw):
+        if args.config:
+            kw["config"] = args.config
+        if args.platform:
+            kw["platform"] = args.platform
         if "join" in name and rtc_b:
             kw["rtc"] = rtc_b
         if "host" in name and args.rtc_a:
@@ -712,6 +716,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--matches", type=int, default=1, help="consecutive matches on one connection")
     ap.add_argument("--next-matches", default="mario:marth:final_destination,falco:fox:smashville",
                     help="P1:P2:stage of the matches after the first")
+    ap.add_argument("--config", action="append", default=[],
+                    help="extra Dolphin -C override for both instances, e.g. Dolphin.Core.SmoothEarlyPresentation=True")
+    ap.add_argument("--platform", default="",
+                    help="Dolphin -p for both instances (default headless, which never presents: win32 for real presents)")
     ap.add_argument("--json", default=None)
     ap.add_argument("--log-dir", default=None, help="copy each instance's dolphin.log and stderr here")
     ap.add_argument("--name-prefix", default="gprb", help="instance name prefix (ppharness clean --prefix)")

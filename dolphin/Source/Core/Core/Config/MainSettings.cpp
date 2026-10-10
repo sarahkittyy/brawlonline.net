@@ -56,6 +56,8 @@ const Info<bool> MAIN_RUSH_FRAME_PRESENTATION{{System::Main, "Core", "RushFrameP
                                               true};
 const Info<bool> MAIN_SMOOTH_EARLY_PRESENTATION{{System::Main, "Core", "SmoothEarlyPresentation"},
                                                 false};
+const Info<bool> MAIN_ROLLBACK_PRESENT_PACING{{System::Main, "Core", "RollbackPresentPacing"},
+                                              true};
 #if defined(ANDROID)
 // Currently enabled by default on Android because the performance boost is really needed.
 constexpr bool DEFAULT_CPU_THREAD = true;

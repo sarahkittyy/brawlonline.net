@@ -11,6 +11,13 @@
 #include <cstring>
 #include <deque>
 #include <mutex>
+#include <string>
+#include <utility>
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
 
 #include "Common/Swap.h"
 #include "Core/HW/Memmap.h"
@@ -39,9 +46,40 @@ bool s_seen_displayed_frame = false;  // CPU thread
 
 // Deterministic dual core: decisions made by the FIFO preprocessor on the CPU thread, taken by the
 // GPU thread in the same command order.
+struct CopyDecision
+{
+  bool present;
+  bool paced;     // CoreTiming's present pacing was on
+  TimePoint due;  // paced: the copy's due time on the throttle's clock
+};
 std::mutex s_copy_decisions_mutex;
-std::deque<bool> s_copy_decisions;
+std::deque<CopyDecision> s_copy_decisions;
+// Video thread: the presented copy's decision, for PresentHoldUntil.
+CopyDecision s_gpu_copy{};
+bool s_gpu_copy_pending = false;
+double s_last_hold_ms = 0;  // video thread: the hold of the frame being presented
 std::atomic<u64> s_copy_decision_misses{0};
+
+// PPR_PRESENT_LOG
+struct CpuStamp
+{
+  TimePoint copy;
+  TimePoint due;  // the throttle's host time for the copy's emulated ticks
+  TimePoint throttle_target, throttle_woke;  // the last throttle that slept before the copy
+  int throttles = 0;                         // throttles that slept since the previous copy
+  TimePoint loop_top;                        // the last displayed frame's start before the copy
+  double gpu_wait_ms = 0;
+  int bursts = 0;
+  double burst_behind_ms = 0;
+};
+std::mutex s_trace_mutex;
+std::deque<CpuStamp> s_cpu_stamps;  // XFB copies preprocessed, not yet executed by the GPU thread
+CpuStamp s_cpu_pending;             // CPU thread: since the previous presented XFB copy
+CpuStamp s_gpu_stamp;               // GPU thread: the copy being presented
+bool s_gpu_have_stamp = false;
+TimePoint s_swap_start, s_intended, s_target, s_before_sleep, s_last_done, s_trace_origin;
+bool s_have_target = false, s_have_origin = false;
+u64 s_trace_index = 0;
 
 bool PresentResimulated()
 {
@@ -88,23 +126,73 @@ bool OnXFBField(bool resimulating)
 void OnEFBCopyPreprocess(bool to_xfb)
 {
   const bool present = !to_xfb || DecideXFBCopy();
+  if (to_xfb && present)
+    Core::System::GetInstance().GetCoreTiming().OnPresentedXFBCopy();
+  if (to_xfb && present && PresentTraceEnabled())
+  {
+    s_cpu_pending.copy = Clock::now();
+    const CpuStamp last = s_cpu_pending;
+    auto& core_timing = Core::System::GetInstance().GetCoreTiming();
+    s_cpu_pending.due = core_timing.GetTargetHostTime(core_timing.GetTicks());
+    std::lock_guard lk(s_trace_mutex);
+    s_cpu_stamps.push_back(std::exchange(s_cpu_pending, {}));
+    // A copy without a throttle in between keeps the previous one's.
+    s_cpu_pending.throttle_target = last.throttle_target;
+    s_cpu_pending.throttle_woke = last.throttle_woke;
+    s_cpu_pending.loop_top = last.loop_top;
+  }
+  CopyDecision decision{present, false, {}};
+  if (to_xfb && present)
+  {
+    auto& core_timing = Core::System::GetInstance().GetCoreTiming();
+    if (core_timing.PresentPacingActive())
+    {
+      decision.paced = true;
+      decision.due = core_timing.GetTargetHostTime(core_timing.GetTicks());
+    }
+  }
   std::lock_guard lk(s_copy_decisions_mutex);
-  s_copy_decisions.push_back(present);
+  s_copy_decisions.push_back(decision);
 }
 
 bool OnEFBCopy(bool to_xfb, bool preprocessed)
 {
   if (!preprocessed)
-    return !to_xfb || DecideXFBCopy();
-
-  std::lock_guard lk(s_copy_decisions_mutex);
-  if (s_copy_decisions.empty())
   {
-    s_copy_decision_misses.fetch_add(1, std::memory_order_relaxed);
-    return true;
+    const bool present = !to_xfb || DecideXFBCopy();
+    // Single core: the copy runs on the CPU thread.
+    if (to_xfb && present && !Core::System::GetInstance().IsDualCoreMode())
+      Core::System::GetInstance().GetCoreTiming().OnPresentedXFBCopy();
+    return present;
   }
-  const bool present = s_copy_decisions.front();
-  s_copy_decisions.pop_front();
+
+  bool present = true;
+  {
+    std::lock_guard lk(s_copy_decisions_mutex);
+    if (s_copy_decisions.empty())
+    {
+      s_copy_decision_misses.fetch_add(1, std::memory_order_relaxed);
+      return true;
+    }
+    const CopyDecision decision = s_copy_decisions.front();
+    s_copy_decisions.pop_front();
+    present = decision.present;
+    if (to_xfb && present)
+    {
+      s_gpu_copy = decision;
+      s_gpu_copy_pending = true;
+    }
+  }
+  if (to_xfb && present && PresentTraceEnabled())
+  {
+    std::lock_guard lk(s_trace_mutex);
+    if (!s_cpu_stamps.empty())
+    {
+      s_gpu_stamp = s_cpu_stamps.front();
+      s_cpu_stamps.pop_front();
+      s_gpu_have_stamp = true;
+    }
+  }
   return present;
 }
 
@@ -121,6 +209,8 @@ void OnDisplayedFrameStart(bool after_resimulation)
       s_outputs_per_frame_after_resim[bucket].fetch_add(1, std::memory_order_relaxed);
   }
   s_seen_displayed_frame = true;
+  if (PresentTraceEnabled())
+    s_cpu_pending.loop_top = Clock::now();
   s_displayed_frames.fetch_add(1, std::memory_order_relaxed);
   if (after_resimulation)
     s_displayed_frames_after_resim.fetch_add(1, std::memory_order_relaxed);
@@ -159,6 +249,13 @@ void RecordPresentCadence()
       ++s_cadence_hitches;
     s_last_bucket[p] = bucket;
   }
+  if (s_last_hold_ms > 0)
+  {
+    ++s_cadence.holds;
+    s_cadence.hold_ms_sum += s_last_hold_ms;
+    s_cadence.hold_ms_max = std::max(s_cadence.hold_ms_max, s_last_hold_ms);
+    s_last_hold_ms = 0;
+  }
   if (judged)
   {
     s_cadence.interval_ms_sum += ms;
@@ -168,7 +265,138 @@ void RecordPresentCadence()
   }
   s_last_present = now;
 }
+
+
+std::FILE* PresentTraceFile()
+{
+  static std::FILE* const file = [] {
+    // "{pid}" in the path becomes the process ID (two instances on one machine).
+    const char* env = std::getenv("PPR_PRESENT_LOG");
+    std::string path = env ? env : "";
+    if (const size_t at = path.find("{pid}"); at != std::string::npos)
+      #ifdef _WIN32
+      path.replace(at, 5, std::to_string(_getpid()));
+#else
+      path.replace(at, 5, std::to_string(getpid()));
+#endif
+    std::FILE* f = !path.empty() ? std::fopen(path.c_str(), "w") : nullptr;
+    if (f)
+    {
+      std::fprintf(f, "index copy_ms due_ms throttle_target_ms throttle_woke_ms throttles loop_top_ms gpu_wait_ms bursts burst_behind_ms swap_ms ready_ms "
+                      "intended_ms target_ms done_ms interval_ms\n");
+    }
+    return f;
+  }();
+  return file;
+}
+
+double Ms(TimePoint a, TimePoint b)
+{
+  return std::chrono::duration<double, std::milli>(a - b).count();
+}
+
+void TracePresent()
+{
+  std::FILE* f = PresentTraceFile();
+  if (!s_gpu_have_stamp)
+    return;
+  const TimePoint done = Clock::now();
+  const CpuStamp& c = s_gpu_stamp;
+  if (!s_have_origin)
+  {
+    s_have_origin = true;
+    s_trace_origin = c.copy;
+  }
+  const double interval = s_trace_index ? Ms(done, s_last_done) : 0.0;
+  std::fprintf(f, "%llu %.3f %.3f %.3f %.3f %d %.3f %.3f %d %.3f %.3f %.3f %.3f %.3f %.3f %.3f\n",
+               static_cast<unsigned long long>(s_trace_index), Ms(c.copy, s_trace_origin),
+               Ms(c.due, c.copy), Ms(c.throttle_target, c.copy), Ms(c.throttle_woke, c.copy),
+               c.throttles, Ms(c.loop_top, c.copy), c.gpu_wait_ms, c.bursts, c.burst_behind_ms, Ms(s_swap_start, c.copy),
+               s_have_target ? Ms(s_before_sleep, c.copy) : -1.0,
+               s_have_target ? Ms(s_intended, c.copy) : -1.0,
+               s_have_target ? Ms(s_target, c.copy) : -1.0, Ms(done, c.copy), interval);
+  if (++s_trace_index % 600 == 0)
+    std::fflush(f);
+  s_last_done = done;
+  s_gpu_have_stamp = false;
+  s_have_target = false;
+}
 }  // namespace
+
+namespace
+{
+// PresentHoldUntil: the offset is the 95th percentile of the last HOLD_WINDOW frames' arrivals
+// (a stall leaves it within about two seconds), and a hold never exceeds HOLD_MAX.
+constexpr double HOLD_QUANTILE = 0.95;
+constexpr size_t HOLD_WINDOW = 120;
+constexpr size_t HOLD_MIN_SAMPLES = 20;
+constexpr auto HOLD_MAX = std::chrono::milliseconds{8};
+std::array<double, HOLD_WINDOW> s_hold_arrivals{};  // ms after the due time, a ring
+size_t s_hold_count = 0;
+}  // namespace
+
+TimePoint PresentHoldUntil(TimePoint now)
+{
+  if (!std::exchange(s_gpu_copy_pending, false) || !s_gpu_copy.paced)
+  {
+    s_hold_count = 0;
+    return now;
+  }
+  const double arrival_ms = std::chrono::duration<double, std::milli>(now - s_gpu_copy.due).count();
+  TimePoint until = now;
+  const size_t n = std::min(s_hold_count, HOLD_WINDOW);
+  if (n >= HOLD_MIN_SAMPLES)
+  {
+    std::array<double, HOLD_WINDOW> sorted = s_hold_arrivals;
+    const auto nth = sorted.begin() + static_cast<ptrdiff_t>(HOLD_QUANTILE * (n - 1));
+    std::nth_element(sorted.begin(), nth, sorted.begin() + n);
+    const TimePoint target = s_gpu_copy.due + std::chrono::duration_cast<Clock::duration>(
+                                                  std::chrono::duration<double, std::milli>(*nth));
+    until = std::clamp(target, now, now + HOLD_MAX);
+  }
+  s_hold_arrivals[s_hold_count++ % HOLD_WINDOW] = arrival_ms;
+  s_last_hold_ms = std::chrono::duration<double, std::milli>(until - now).count();
+  return until;
+}
+
+bool PresentTraceEnabled()
+{
+  return PresentTraceFile() != nullptr;
+}
+
+void TraceCpuWaitForGpu(double ms)
+{
+  s_cpu_pending.gpu_wait_ms += ms;
+}
+
+void TraceRollbackBurstEnd(double behind_ms)
+{
+  ++s_cpu_pending.bursts;
+  s_cpu_pending.burst_behind_ms = std::max(s_cpu_pending.burst_behind_ms, behind_ms);
+}
+
+void TraceThrottle(TimePoint target, TimePoint woke)
+{
+  s_cpu_pending.throttle_target = target;
+  s_cpu_pending.throttle_woke = woke;
+  ++s_cpu_pending.throttles;
+}
+
+void TraceSwapStart()
+{
+  if (PresentTraceEnabled())
+    s_swap_start = Clock::now();
+}
+
+void TracePresentTarget(TimePoint intended, TimePoint target)
+{
+  if (!PresentTraceEnabled())
+    return;
+  s_intended = intended;
+  s_target = target;
+  s_before_sleep = Clock::now();
+  s_have_target = true;
+}
 
 void OnPresent(bool duplicate)
 {
@@ -177,6 +405,8 @@ void OnPresent(bool duplicate)
     s_duplicate_presents.fetch_add(1, std::memory_order_relaxed);
   else
     RecordPresentCadence();
+  if (!duplicate && PresentTraceEnabled())
+    TracePresent();
 }
 
 Cadence TakeCadence()
