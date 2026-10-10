@@ -249,6 +249,59 @@ def test_room_two_players_through_the_game(backend: OnlineBackend, dolphin: Call
     _wait(lambda: not room_view(a)["flags"] & ppom.RF_IN, 20, "A out of the room")
 
 
+def test_room_names_follow_the_slots_after_the_host_left(backend: OnlineBackend,
+                                                         dolphin: Callable[..., DolphinInstance],
+                                                         gpu_backend: str) -> None:
+    """Staging, 2026-10-10: the host left their own room, the other player became host, the old
+    host joined again (slot 1), and in the next game each had the other's name under their
+    damage. A room's game is played on ports = slots with the room host as the decider, and
+    GameBridge put a 2-player match's names decider first (Direct's order, where the decider is
+    P1). Here: SESSION's name for each port is that slot's player, on both machines, in the
+    match."""
+    test = "names-after-host-left"
+    ua = backend.create_user("rnamea", "RNMA")
+    ub = backend.create_user("rnameb", "RNMB")
+    a = _boot(dolphin, "room-names-a", backend, ua, gpu_backend, test, "gameplay", artifacts=ART)
+    b = _boot(dolphin, "room-names-b", backend, ub, gpu_backend, test, "gameplay", artifacts=ART)
+    _all(a.to_main_menu, b.to_main_menu)
+    _all(a.to_online_page, b.to_online_page)
+    code = create_room(a)
+    to_join_room(b)
+    pick(a)
+    pick(b, right=2)
+    for g in (a, b):
+        B.write_rules(g.c, stocks=1, minutes=2, items_off=True)
+        ppom.allow_test_rules(g.c)
+    type_room_code(b, code)
+    until_view(b, lambda v: v["flags"] & ppom.RF_IN and v["local_port"] == 1, "B in slot 2")
+
+    # A (the host) holds Z: out of the room, on the CSS; B is the host now.
+    a.steps("hold Z 70", "wait 30")
+    until_view(a, lambda v: not v["flags"] & ppom.RF_IN, "A out of the room")
+    until_view(b, lambda v: v["host"] == 1 and not v["slots"][0]["bits"] & ppom.SLOT_TAKEN, "B the host")
+    # A joins again by the code: slot 1, B still the host.
+    type_room_code(a, code)
+    va = until_view(a, lambda v: v["flags"] & ppom.RF_IN, "A in the room again")
+    assert va["local_port"] == 0 and va["host"] == 1, va
+    _all(lambda: a.steps("wait 60"), lambda: b.steps("wait 60"))
+    a.shot("03-back-in-slot-1")
+
+    game = room_view(a)["game"]
+    a.steps("tap START 8", "wait 40")
+    until_view(b, lambda v: v["slots"][0]["bits"] & ppom.SLOT_READY, "B sees A ready")
+    b.steps("tap START 8", "wait 10")
+    _wait(lambda: all(online_set.gstatus(g.c)["phase"] in ("running", "error", "ended") for g in (a, b)), 240,
+          "both sessions running")
+    st = [online_set.gstatus(g.c) for g in (a, b)]
+    assert [s["local_slot"] for s in st] == [0, 1], st
+    want = [ua.display_name, ub.display_name]
+    for g in (a, b):
+        names = [p["name"] for p in ppom.read_session(g.c, ppom.find_block(g.c))["players"][:2]]
+        assert names == want, (g.name, "names by port", names, want)
+    rep = online_set.play_game([a, b], game)
+    assert rep["checksums"]["mismatches"] == 0, rep
+
+
 def test_room_two_players_with_a_gap(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                      gpu_backend: str) -> None:
     """Staging, 2026-10-10: the host closed slot 2 and opened slot 3, a player joined (slot 3),

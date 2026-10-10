@@ -48,7 +48,7 @@ Room fields are written whenever this player is in a room and no match runs; dur
 | 0x219 | `_reserved[6]` | **`roomStatus`** | 0 waiting, 1 starting (everyone ready; tickets and P2P connect), 2 in game (until every player of the game is back). |
 | 0x21A | `_reserved[7]` | **`roomMode`** | 0 1v1 (two open slots), 1 free-for-all, 2 teams (server's `mode`). |
 | 0x21B-0x21F | | `_reserved[5]` | free |
-| player i +0x04 `name` | name in a session | also every **taken slot's** member name in a room | UTF-16, 15 units max + NUL. |
+| player i +0x04 `name` | name in a session | also every **taken slot's** member name in a room | UTF-16, 15 units max + NUL. In a room's game, port i's is slot i's player (the ticket's ports), also with 2 players: Direct's decider-first order put the new host's name under P1 after the host left and came back to slot 1 (staging, 2026-10-10; `test_room_names_follow_the_slots_after_the_host_left`). |
 | player i +0x24 `code` | code in a session | also every taken slot's connect code | |
 | player i +0x36 `picksStage` | the session's pickers | in a room between games: this port picks the next room game's stage (the last room game's loser, carried by Dolphin) | as Direct |
 | player i +0x38 | `_pad2[0]` | **`roomSlot`** | bits: `SLOT_OPEN` 0x01, `SLOT_TAKEN` 0x02 (a player is in it), `SLOT_READY` 0x04, `SLOT_HOST` 0x08, `SLOT_IN_GAME` 0x10 (still in the last game). Closed = not `SLOT_OPEN`; "Searching..." = `SLOT_OPEN` without `SLOT_TAKEN`. |
