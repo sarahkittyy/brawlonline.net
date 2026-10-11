@@ -294,6 +294,8 @@ namespace OnlineMatch {
         }
         sel[SEL_TEAMS] = teams ? 1 : 0;
         se.outCount = 0;
+        se.quitPorts = 0;
+        se.quitStays = 0;
         s_seen = 0;
         *(u16*)ASL_BUTTONS = se.asl;
         keepPortValues(se);
@@ -502,8 +504,9 @@ namespace OnlineMatch {
             if (*stocks > 0) {
                 s_seen |= 1u << p;
                 u32 fighter = *(u32*)(e + 0x34 + 8 * (e[0x0A] & 3));   // the active instance
-                if ((se.gone[p] || ((test >> p) & 1)) && isPtr(fighter)) {
-                    se.gone[p] = 1;
+                bool quit = (se.quitPorts >> p) & 1;   // the pause screen's quit (pponline_pauseResult)
+                if ((se.gone[p] || quit || ((test >> p) & 1)) && isPtr(fighter)) {
+                    if ((test >> p) & 1) se.gone[p] = 1;
                     *stocks = 1;
                     ((SetDeadFn)SET_DEAD)(mgr, *(int*)(e + 0x04), 5, -1);
                     ((SetOutFn)SET_OUT)(fighter);
@@ -518,6 +521,31 @@ namespace OnlineMatch {
                 se.outCount = next;
             }
         }
+    }
+
+    // How many players (free-for-all) or teams (team battle) are still in the match once the
+    // ports in `leaving` are out: fighters with stocks whose port has not dropped or quit. From
+    // the rolled-back state only.
+    static int sidesLeftWithout(u32 leaving)
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        u32 entries = *(u32*)FT_ENTRIES;
+        u32 n = *(u32*)(FT_ENTRIES + 4);
+        if (!isPtr(entries) || n > 9) return 0;
+        u32 sides = 0;
+        for (u32 k = 0; k < n; k++) {
+            u8* e = (u8*)(entries + k * 0x244);
+            u32 p = *(u32*)(e + 0x58);
+            u32 owner = *(u32*)(e + 0x28);
+            u32 data = isPtr(owner) ? *(u32*)owner : 0;
+            if (p > 3 || !isPtr(data) || *(s32*)(data + 0x34) <= 0) continue;
+            if (se.gone[p] || (((se.quitPorts | leaving) >> p) & 1)) continue;
+            u8 team = se.players[p].team;
+            sides |= se.teams && team < PPOM::TEAM_COUNT ? 0x10u << team : 1u << p;
+        }
+        int count = 0;
+        for (; sides; sides &= sides - 1) count++;
+        return count;
     }
 
     // P+'s "Allow Pausing When Set to Off" (NETPLAY.txt, a hook at 0x800505C8) writes 2 to
@@ -548,6 +576,17 @@ namespace OnlineMatch {
         PPOM::Debug& dbg = PPOM::g_block.debug;
         s_inMatch = true;
         if ((g_onlineCss && g_onlineMatchGame) || (dbg.cfg & PPOM::CFG_TEST_GONE)) tickPlayers();
+        // This player quit a 3-4 player match (pponline_pauseResult) and Dolphin has ended the
+        // session for this machine (LOCAL, set only after the session ended): the match ends here
+        // as the quit's own end does (no "GAME!", no contest), then the CSS. The others play on.
+        if (g_onlineCss && g_onlineMatchGame && PPOM::g_block.local.quitLeft) {
+            u8* oi = operatorInfo();
+            if (oi && !(oi[0x11B] & 0x40)) {
+                oi[0x11B] |= 0x70;   // quit (0x30, as L+R+A+START) and stop now (0x40)
+                dbg.scratch[10] |= 0x200000;
+            }
+            return;
+        }
         bool test = (dbg.cfg & PPOM::CFG_TEST_DISCONNECT) != 0;
         if (test && s_discFrames >= DISC_END_FRAMES) s_discFrames = -1;   // a new test
         if (s_discFrames >= 0) return;   // counted in onFrameDrawn
@@ -597,23 +636,69 @@ namespace OnlineMatch {
     // plays, while the game stays paused and every other pause result is ignored. The operator's
     // own end runs once LOCAL says the session is over, or after QUIT_MAX_FRAMES with an older
     // Dolphin. The pending quit lives in the plugin's .bss, which the session rolls back.
+    //
+    // A match of 3-4 players: the quit takes only the player who paused out (the others play on).
+    // The operator's +0x124 is that player's port (set when START paused the game, text+0x257124:
+    // fn_80110310 finds the controller that pressed START and the player it belongs to; -1 none),
+    // and the pause screen reads only that controller. The quit sets the port's bit in SESSION's
+    // quitPorts and resumes the game on the same frame; the next frame's tickPlayers takes the
+    // fighter out as a dropped player's. Everything is the rolled-back state, driven by the
+    // quitter's own input, so every machine does it on the same frame. Only one player holds the
+    // pause, so two players can never quit on the same frame; quits after one another are each
+    // their own. Dolphin ends the quitter's session once the frame is final and tells the others
+    // it left (GameplaySession.cpp, the local quit); the game then ends its match (tickMatch,
+    // LOCAL.quitLeft). A quit that leaves one player or team in ends the game by Brawl's own game
+    // set: the quitter is in quitStays too and stays in the session until the game set ends it.
+    // A paused game whose pauser has left the match (dropped or quit) resumes at once: nobody
+    // else could unpause it (Slippi's PreventPauseStranding).
     static const u16 QUIT_MAX_FRAMES = 600;
     static const int PAUSE_END_QUIT = 0x100;   // asm: the quit's flags and end, without its sound
+    static const int PAUSE_RESUME = 2;
+    static const u32 OP_PAUSER = 0x124;
 
     typedef void (*PlaySEArgsFn)(void*, int, int, int, int, int);
+
+    static void playQuitSound(int result)
+    {
+        void* snd = *(void**)0x805A01D0;   // g_sndSystem, as the game's own call
+        if (snd) ((PlaySEArgsFn)0x800742b0)(snd, result == 3 ? 0x2052 : 0x13, 0x10000, 0, 0, -1);
+    }
+
+    // The players of this match (SESSION, the same on every machine for the whole match).
+    static int matchPlayers()
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        int n = 0;
+        for (int p = 0; p < PPOM::SESSION_PLAYERS; p++) n += se.players[p].present ? 1 : 0;
+        return n;
+    }
 
     extern "C" int pponline_pauseResult(int result, u8* op)
     {
         if (!g_onlineCss || !g_onlineMatchGame) return result;
         PPOM::Debug& dbg = PPOM::g_block.debug;
+        s32 pauser = *(s32*)(op + OP_PAUSER);
+        if (s_quitOp != op && matchPlayers() >= 3 && pauser >= 0 && pauser < 4) {
+            PPOM::Session& se = PPOM::g_block.session;
+            u8 bit = (u8)(1u << pauser);
+            if (se.gone[pauser] || (se.quitPorts & bit)) {
+                dbg.scratch[10] |= 0x800000;
+                return PAUSE_RESUME;
+            }
+            if (result != 3 && result != 4) return result;
+            if (sidesLeftWithout(bit) <= 1) se.quitStays |= bit;
+            se.quitPorts |= bit;
+            playQuitSound(result);
+            dbg.scratch[10] |= 0x400000;
+            return PAUSE_RESUME;
+        }
         if (s_quitOp != op) {
             if (result != 3 && result != 4) return result;
             s_quitOp = op;
             s_quitKind = (u8)result;
             s_quitFrames = 0;
             op[0x11B] |= result == 3 ? 0x30 : 0x20;
-            void* snd = *(void**)0x805A01D0;   // g_sndSystem, as the game's own call
-            if (snd) ((PlaySEArgsFn)0x800742b0)(snd, result == 3 ? 0x2052 : 0x13, 0x10000, 0, 0, -1);
+            playQuitSound(result);
             dbg.scratch[10] |= 0x40000;
             return 0;   // stay paused
         }

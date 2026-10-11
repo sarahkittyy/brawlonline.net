@@ -397,7 +397,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--cpu", default="dc", choices=("sc", "dc"))
     p.add_argument("--modes", default="ref,mp")
     p.add_argument("--distance", type=int, default=2)
-    p.add_argument("--region-set", default="gp-v21")
+    p.add_argument("--region-set", default="gp-v22")
     p.add_argument("--start-frame", type=int, default=240)
     p.add_argument("--mispredict-ports", type=int, default=None,
                    help="port mask whose first runs get another frame's input (default: every port of the fixture)")

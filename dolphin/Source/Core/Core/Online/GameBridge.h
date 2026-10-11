@@ -52,6 +52,11 @@ constexpr u32 SESSION_GONE = 0x20C;
 constexpr u32 SESSION_PLAYERS_OFF = 0x0C;
 constexpr u32 SESSION_PLAYER_SIZE = 0x80;
 constexpr u32 SESSION_PLAYER_OUT = 0x37;
+// - SESSION_QUIT_PORTS: u8, bit p = port p left the match with the pause screen's quit
+//   (L+R+A+START), game-written in the frame of the quit; SESSION_QUIT_STAYS: the quits that left
+//   one player or team in (the game set ends the session for everyone, the quitter included).
+constexpr u32 SESSION_QUIT_PORTS = 0x21B;
+constexpr u32 SESSION_QUIT_STAYS = 0x21C;
 // SESSION's address in game memory, 0 before the plugin's block is found.
 u32 SessionAddress();
 
