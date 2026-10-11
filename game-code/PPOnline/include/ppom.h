@@ -410,7 +410,9 @@ namespace PPOM {
         u8 score[2];      // wins by side (side 0: the lower slot)
         u8 sides[2];      // each side's in-game port
         u8 setFlags;      // SetFlags
-        u8 _reserved[13];
+        u8 sideSlots[2];  // each side's room slots (bit s = slot s), 0 without a set
+        u8 winner;        // the winning side (0 / 1) once the set is finished, else 0xFF
+        u8 _reserved[10];
     };                    // 0x40
 
     struct RoomRulesRequest {

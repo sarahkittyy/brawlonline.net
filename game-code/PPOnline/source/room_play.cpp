@@ -16,9 +16,11 @@
 //     (code_entry.cpp). The ruleset is locked during a set (rules.md §2).
 //   - SET: the STOCK CONTROL row (MenMainIcon0124 at +0x50, line 2; handicap is left out,
 //     decision 19): label MenMainRule00font.04, value strip MenMainRule03Sel02 (I4 480x40). It
-//     shows the set ("No set", "Best of 3", "Bo3 1-0"); while the set is paused the host picks
-//     Resume (only when the player is back: can-resume) or Restart with left / right, and A sends
-//     ROOM_SET and closes the menu.
+//     shows the set ("No set", "Best of 3", "Bo3 1-0", "Paused 1-0"). A set paused because a player
+//     left waits for them (rules.md §1.1 A: it resumes by itself when they are back in their held
+//     slot), with nothing to pick. Only a set paused because the machines' results differed, with
+//     everyone there (SET_CAN_RESUME), gives the host a choice with left / right: Replay game
+//     (ROOM_SET 1) or End set (ROOM_SET 0); A sends it and closes the menu.
 // The page's own left / right / A on those two lines are taken here (room_rules.cpp's input
 // filter calls rulesInput), so P+'s values never change.
 // Value texts change: each row's value has two copies, the next text is drawn into the one not
@@ -236,11 +238,10 @@ namespace RoomPlay {
         int listWait;        // frames until the list is asked for again (while it loads)
         bool asked;          // asked since the menu opened
         int browse;          // RULESET: -1 the room's own, else 0 P+ default, 1..n the list, n+1 code
-        int setChoice;       // SET: 0 resume, 1 restart
+        int setChoice;       // SET: 0 replay the game, 1 end the set
         bool keypad;         // "Enter code": open the keypad once the menu has closed
         bool wasOpen;
         bool host;
-        bool couldResume;    // can-resume last frame (the player came back: Resume is offered first)
     } s;
 
     static const PPOM::RoomPlay& play() { return PPOM::g_block.session.play; }
@@ -296,7 +297,8 @@ namespace RoomPlay {
     }
 
     static bool setPaused() { return play().setOn && (play().setFlags & PPOM::SET_PAUSED); }
-    static bool canResume() { return (play().setFlags & PPOM::SET_CAN_RESUME) != 0; }
+    // Paused because the results differed, everyone there: the host replays the game or ends the set.
+    static bool hostChoice() { return setPaused() && (play().setFlags & PPOM::SET_CAN_RESUME) != 0; }
 
     static void post(u8 op, u8 arg, const char* code)
     {
@@ -353,17 +355,16 @@ namespace RoomPlay {
             return keep;
         }
         if (line == 2) {
-            if (!setPaused() || !(bits & (IN_SIDE | IN_A))) return keep;
+            if (!(bits & (IN_SIDE | IN_A))) return keep;
+            if (!hostChoice()) {
+                if (setPaused()) playSE(SE_ERROR);   // waiting for a player: nothing to pick
+                return keep;
+            }
             if (bits & IN_SIDE) {
-                if (canResume()) {
-                    s.setChoice ^= 1;
-                    playSE(SE_CURSOR);
-                } else {
-                    playSE(SE_ERROR);   // nobody to resume with yet: Restart only
-                }
+                s.setChoice ^= 1;
+                playSE(SE_CURSOR);
             } else {
-                bool resume = s.setChoice == 0 && canResume();
-                post(PPOM::ROOM_SET, resume ? 1 : 0, NULL);
+                post(PPOM::ROOM_SET, s.setChoice == 0 ? 1 : 0, NULL);   // 1 replay, 0 end the set
                 playSE(SE_DECIDE);
                 closeMenu();
             }
@@ -381,13 +382,8 @@ namespace RoomPlay {
         } else if (!p.setOn) {
             sprintf(out, "Best of %d", p.bestOf);
         } else if (p.setFlags & PPOM::SET_PAUSED) {
-            if (host) {
-                bool resume = s.setChoice == 0 && canResume();
-                if (resume) sprintf(out, "Resume %d-%d", p.score[0], p.score[1]);
-                else strcpy(out, "Restart");
-            } else {
-                sprintf(out, "Paused %d-%d", p.score[0], p.score[1]);
-            }
+            if (host && hostChoice()) strcpy(out, s.setChoice == 0 ? "Replay game" : "End set");
+            else sprintf(out, "Paused %d-%d", p.score[0], p.score[1]);
         } else if (p.setFlags & PPOM::SET_FINISHED) {
             sprintf(out, "Bo%d %d-%d final", p.bestOf, p.score[0], p.score[1]);
         } else {
@@ -409,7 +405,7 @@ namespace RoomPlay {
         if (!s.wasOpen) {
             s.wasOpen = true;
             s.browse = -1;
-            s.setChoice = canResume() ? 0 : 1;
+            s.setChoice = 0;
         }
         // The list: asked for when the host opens the menu, and again while Dolphin loads it.
         if (host && (!s.asked || (s.listWait > 0 && --s.listWait == 0))) {
@@ -419,9 +415,7 @@ namespace RoomPlay {
         }
         u8* page = *(u8**)(rt + RULES_PAGE1);
         if (isPtr((u32)page) && *(u16*)(page + 0x42) != 4) s.browse = -1;   // the cursor left it
-        if (!setPaused() || (canResume() && !s.couldResume)) s.setChoice = canResume() ? 0 : 1;
-        else if (!canResume()) s.setChoice = 1;
-        s.couldResume = canResume();
+        if (!hostChoice()) s.setChoice = 0;   // Replay game first, each time the choice appears
         g_roomPlay.browse = s.browse < 0 ? 0xFF : (u8)s.browse;
         g_roomPlay.setChoice = (u8)s.setChoice;
         char text[40];
@@ -483,7 +477,7 @@ namespace RoomPlay {
         if (!s.wasOpen || !rulesTask()) return NULL;   // the rules menu, opened in a room
         // P+'s descriptions for the values these rows keep: stock control OFF, stage choice CHOOSE
         if (Online::msbinLineContains(msbin, (int)line, "same stock count")) {
-            return s.host ? "The room's set. Paused: left/right and A to resume or restart."
+            return s.host ? "The set. Results differed: left/right and A, replay or end it."
                           : "The room's set and its score.";
         }
         if (Online::msbinLineContains(msbin, (int)line, "complete freedom")) {

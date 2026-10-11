@@ -513,6 +513,14 @@ class RoomPlayView:
         return self.g.c.read_mem(self.line_addr, 128).split(b"\0")[0].decode("ascii", "replace")
 
 
+def panel_stars(g: Game) -> list[int]:
+    """The stars each panel shows, in slot order with the local player in slot 0 (room_css.cpp:
+    s_myStarsShown for the local panel, s_shown[area].stars, Shown +4, 22 bytes each)."""
+    me = struct.unpack(">i", g.c.read_mem(ppom_sym(g, "s_myStarsShown__7RoomCss"), 4))[0]
+    shown = g.c.read_mem(ppom_sym(g, "s_shown__7RoomCss"), 22 * 4)
+    return [me] + [shown[22 * i + 4] for i in range(1, 4)]
+
+
 def open_rules_line(g: Game, line: int) -> None:
     """The RULES button, then the cursor down to `line` of the RULES page."""
     rb = RulesButton(g)
@@ -620,35 +628,54 @@ def test_room_ruleset_and_set(play_game: Game) -> None:
     assert v.read()["browse"] == 0xFF and v.read()["posts"] == posts and menu_open(g)
     close_rules(g)
 
-    # Paused, nobody back: Restart only; back: Resume first; A sends ROOM_SET resume.
+    # The score on the panels: Brawl's win stars, one a game won (no host star during a set).
+    r.score = [0, 2]
+    g.wait(30)
+    assert panel_stars(g)[:2] == [0, 2], panel_stars(g)
+    r.score = [1, 0]
+    g.wait(30)
+    assert panel_stars(g)[:2] == [1, 0], panel_stars(g)
+
+    # Paused because a player left (rules.md §1.1 A): the set waits for them, nothing to pick.
     r.set_flags = 1
     g.wait(30)
     assert v.line().endswith("(paused)"), v.line()
+    posts = v.read()["posts"]
     open_rules_line(g, 2)
-    assert v.read()["set"] == "Restart"
+    assert v.read()["set"] == "Paused 1-0"
     g.tap("DRIGHT", 4)
-    g.wait(10)
-    assert v.read()["set"] == "Restart"
-    g.shot("09-paused-restart")
+    g.tap("A", 4)
+    g.wait(20)
+    assert v.read()["set"] == "Paused 1-0" and v.read()["posts"] == posts and menu_open(g)
+    g.shot("09-paused-waiting")
+    # The results differed, everyone there: Replay game first, End set; A sends ROOM_SET.
     r.set_flags = 3
     g.wait(20)
-    assert v.read()["set"] == "Resume 1-0", v.read()
-    g.shot("10-paused-resume")
+    assert v.read()["set"] == "Replay game", v.read()
+    g.tap("DRIGHT", 4)
+    g.wait(10)
+    assert v.read()["set"] == "End set"
+    g.tap("DLEFT", 4)
+    g.wait(10)
+    assert v.read()["set"] == "Replay game"
+    g.shot("10-results-differed")
     g.tap("A", 4)
     g.wait(40)
     st = v.read()
     assert not menu_open(g) and (st["op"], st["arg"]) == (9, 1) and r.set_flags == 0, st
-    # Restart: paused again, right to Restart, A.
+    # End set: differed again, right to End set, A.
     r.set_flags = 3
     g.wait(20)
     open_rules_line(g, 2)
     g.tap("DRIGHT", 4)
     g.wait(10)
-    assert v.read()["set"] == "Restart"
+    assert v.read()["set"] == "End set"
     g.tap("A", 4)
     g.wait(40)
     st = v.read()
     assert (st["op"], st["arg"]) == (9, 0) and not r.set_on and r.score == [0, 0], st
+    g.wait(20)
+    assert panel_stars(g)[:2] == [1, 0], panel_stars(g)   # no set: the host's star again
 
     # Not the host: both lines read-only.
     r.set_on, r.score, r.set_flags = True, [0, 1], 3
@@ -670,6 +697,18 @@ def test_room_ruleset_and_set(play_game: Game) -> None:
     assert st["posts"] == posts and st["browse"] == 0xFF and menu_open(g), st
     g.shot("11-viewer")
     close_rules(g)
+
+    # A 2v2 set: every member of a side shows its wins (sideSlots: slots 1+3 against 2+4).
+    r.host = 0
+    r.open = [True, True, True, True]
+    sim.add_player(2, "bob")
+    sim.add_player(3, "carol")
+    r.teams = True
+    r.set_on, r.set_flags, r.score, r.side_slots = True, 0, [2, 1], [0b0101, 0b1010]
+    g.wait(60)
+    assert panel_stars(g) == [2, 1, 2, 1], panel_stars(g)
+    assert v.line() == "Ruleset: Typed Code   Bo3: Sarah 2 - 1 alice", v.line()
+    g.shot("12-2v2-stars")
 
 
 # The keypad's letter keys by (row, column), as test_online_game.ALPHA_KEYS (room-code mode takes

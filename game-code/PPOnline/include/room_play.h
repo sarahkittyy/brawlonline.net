@@ -8,8 +8,8 @@ namespace RoomPlay {
     // page show them (room_play.cpp). RULESET (the STAGE CHOICE row, read-only in rooms) shows the
     // room's ruleset; the host browses the recent and own published rulesets with left / right
     // and picks one with A ("Enter code" opens the keypad's 6-letter mode). SET (the STOCK
-    // CONTROL row, left out: decision 19) shows the set; while it is paused the host picks Resume
-    // or Restart there.
+    // CONTROL row, left out: decision 19) shows the set; when it is paused because the results
+    // differed the host picks Replay game or End set there.
 
     // Every frame on the room CSS (also while the rules menu is open).
     void tick(bool inRoom, bool host);

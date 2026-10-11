@@ -19,8 +19,13 @@
 //   0x8069A4DC decide(area)                  the portrait's "picked" look (coin put down)
 //   0x80698A1C showTeam(area)                team colour from area+0x1C0 when task+0x5C8 is set
 //   0x806977FC showStars(area, count, kind)  Brawl's win stars above the name plate (kind 1,
-//                                            1-5 stars, more as a star and "x N"): the host's mark,
-//                                            one star (rooms.md #8: a reused Brawl icon)
+//                                            1-5 stars, more as a star and "x N"): during a set the
+//                                            side's set wins, else the host's mark, one star
+//                                            (rooms.md #8: a reused Brawl icon). One star display
+//                                            per panel: each call takes the area's star models
+//                                            out of the group (area+0xAC) and puts back those it
+//                                            shows (one star model, visibility frame = count, or
+//                                            a star and up to 3 digit models); 0 shows none.
 //   area+0x40C MuMsg, window 0              the name plate ("PLAYER 2" -> the player's name)
 //   area+0x41C panel state object (DOL 0x800FD630..): states 0 none, 1 "Seeking..",
 //            2 "Selecting Character...", 3 "Selecting Stage...", 4 "Practice Stage...",
@@ -76,11 +81,11 @@ namespace RoomCss {
 
     struct Shown {
         u8 kind;          // PanelView kind shown (0xFF: not set up yet)
-        u8 css, costume, team, host, inRoom;
+        u8 css, costume, team, stars, inRoom;
         char name[NAME_CHARS + 1];
     };
     static Shown s_shown[4];
-    static int s_meHostShown = -1;
+    static int s_myStarsShown = -1;
     static u8* s_task = NULL;      // the CSS these panels belong to
     static bool s_teams = false;
     static bool s_seekingLabelled = false;
@@ -170,7 +175,7 @@ namespace RoomCss {
         s_myTeamShown = -1;
         s_myTeamPicked = -1;
         s_myTeamPickedFrames = 0;
-        s_meHostShown = -1;
+        s_myStarsShown = -1;
         s_myPlate[0] = 0;
         s_myTagShown = -2;
         s_myHandMode = -1;
@@ -513,7 +518,7 @@ namespace RoomCss {
         }
         u8* so = stateObj(a);
         bool changed = sh.kind != v.kind || sh.inRoom != (u8)s_inRoom || sh.css != v.css || sh.costume != v.costume ||
-                       sh.team != v.team || sh.host != v.host || strcmp(sh.name, v.name) != 0;
+                       sh.team != v.team || sh.stars != v.stars || strcmp(sh.name, v.name) != 0;
         if (changed) {
             int st = (v.kind == PV_CLOSED && !s_inRoom) ? ST_NONE : stateOf(v.kind);
             if (so && (sh.kind == 0xFF || *(int*)(so + 8) != st)) STATE_SET(so, st);   // (so+8: the state shown)
@@ -539,8 +544,8 @@ namespace RoomCss {
                 if (isPtr((u32)scn)) scn[0xD0] = scn[0xD1] = STATE_PRIORITY_FRONT;
             }
             plate(a, v.kind == PV_CLOSED || v.kind == PV_SEARCHING ? "" : v.name);
-            SHOW_STARS(a, v.host && v.kind != PV_CLOSED && v.kind != PV_SEARCHING ? 1 : 0, 1);
-            sh.host = v.host;
+            SHOW_STARS(a, v.kind != PV_CLOSED && v.kind != PV_SEARCHING ? v.stars : 0, 1);
+            sh.stars = v.stars;
             sh.inRoom = (u8)s_inRoom;
             sh.kind = v.kind;
             sh.css = v.css;
@@ -705,7 +710,7 @@ namespace RoomCss {
         STATE_UPDATE(so);
     }
 
-    void tick(const PanelView views[3], bool teams, int myTeam, bool meHost, const char* myName, bool meReady)
+    void tick(const PanelView views[3], bool teams, int myTeam, int myStars, const char* myName, bool meReady)
     {
         u8* task = cssTask();
         if (!task) return;
@@ -742,9 +747,9 @@ namespace RoomCss {
             showTeamAt(a0, 0);
             s_myTeamShown = myTeam;
         }
-        if (a0 && (int)meHost != s_meHostShown) {
-            SHOW_STARS(a0, meHost ? 1 : 0, 1);
-            s_meHostShown = meHost ? 1 : 0;
+        if (a0 && myStars != s_myStarsShown) {
+            SHOW_STARS(a0, myStars, 1);
+            s_myStarsShown = myStars;
         }
         if (a0) myPlate(a0, myName);
         if (a0) myReady(a0, meReady, teams, myTeam);

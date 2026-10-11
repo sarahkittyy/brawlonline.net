@@ -40,13 +40,14 @@ namespace RoomCss {
         u8 css;           // CSS id of the character (PV_READY), else 0x28
         u8 costume;
         u8 team;          // PPOM::Team
-        u8 host;          // 1: the room's host (Brawl's win star next to the name plate)
+        u8 stars;         // Brawl's win stars by the name plate: the side's set wins during a set,
+                          // else 1 for the room's host (rooms.md #8)
         char name[NAME_CHARS + 1];
     };
     void prepareRecords();               // before the CSS is built: four full panels
     void releaseRecords();               // a room's CSS built again as another: records as before
     void reset();                        // the CSS is gone
-    void tick(const PanelView views[3], bool teams, int myTeam, bool meHost, const char* myName, bool meReady);
+    void tick(const PanelView views[3], bool teams, int myTeam, int myStars, const char* myName, bool meReady);
     int myTeamClicked();                 // the local player's flag changed: the team, else -1
     int panelUnderHand();                // 1-3: the local hand is over that panel, else -1
     bool handOverMyFlag();               // the local hand is over the local panel's team flag

@@ -63,7 +63,9 @@ class Room:
     set_game: int = 1
     score: list = field(default_factory=lambda: [0, 0])
     sides: list = field(default_factory=lambda: [0, 1])
-    set_flags: int = 0        # 1 paused, 2 can resume, 4 finished
+    set_flags: int = 0        # 1 paused, 2 can resume (results differed, everyone there), 4 finished
+    side_slots: list = field(default_factory=lambda: [0, 0])   # each side's slots, a bit per slot
+    winner: int = 0xFF
 
 
 class RoomSim:
@@ -206,13 +208,13 @@ class RoomSim:
                 self.set_error("Only the host can do that.")
         elif op == 7 and r and arg < 3:
             r.members[self.me()].team = arg
-        elif op == 9 and r:   # ROOM_SET (v6): 1 resume / 0 restart the paused set
+        elif op == 9 and r:   # ROOM_SET (v6), results differed: 1 replay the game / 0 end the set
             if not host:
                 self.set_error("Only the host can do that.")
             elif arg == 1 and r.set_flags & 2:
                 r.set_flags = 0
             elif arg == 0:
-                r.set_on, r.set_game, r.score, r.set_flags = False, 1, [0, 0], 0
+                r.set_on, r.set_game, r.score, r.set_flags, r.side_slots = False, 1, [0, 0], 0, [0, 0]
         elif op == 10 and r:   # ROOM_RULESET (v6): a ruleset code, "" = P+ default
             if not host:
                 self.set_error("Only the host can do that.")
@@ -224,7 +226,7 @@ class RoomSim:
             else:
                 self.set_error("Ruleset not found.")
             if host and (not code or code in self.ruleset_db):
-                r.set_on, r.set_game, r.score, r.set_flags = False, 1, [0, 0], 0
+                r.set_on, r.set_game, r.score, r.set_flags, r.side_slots = False, 1, [0, 0], 0, [0, 0]
                 for m in r.members:
                     if m:
                         m.ready = False
@@ -275,8 +277,9 @@ class RoomSim:
                 pl[0:4] = bytes([1, r.best_of, r.stage_choice, 1 if r.custom else 0])
                 pl[4:0xC] = r.ruleset_code.encode("ascii")[:6].ljust(8, b"\0")
                 pl[0xC:0x2C] = r.ruleset_name.encode("ascii")[:31].ljust(32, b"\0")
-                pl[0x2C:0x33] = bytes([1 if r.set_on else 0, r.set_game, r.score[0], r.score[1],
-                                       r.sides[0], r.sides[1], r.set_flags])
+                pl[0x2C:0x36] = bytes([1 if r.set_on else 0, r.set_game, r.score[0], r.score[1],
+                                       r.sides[0], r.sides[1], r.set_flags,
+                                       r.side_slots[0], r.side_slots[1], r.winner])
             se[ppom.S_PLAY:ppom.S_PLAY + 0x40] = pl
         if len(se) >= ppom.S_RULES + ppom.RULES_SIZE:   # v6: the room's rules on the room CSS
             se[ppom.S_RULES:ppom.S_RULES + ppom.RULES_SIZE] = r.rules if (r and self.phase == 2) else bytes(ppom.RULES_SIZE)

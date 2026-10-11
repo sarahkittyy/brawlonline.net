@@ -1783,6 +1783,21 @@ namespace OnlineMenu {
     // The other three areas' panels (areas 1-3): each shows the room slot it stands at
     // (RoomCss::portOfArea: panels are in slot order on every screen, the local player's own
     // panel, area 0, at the local slot).
+    // A panel's stars (RoomCss::PanelView): while the room has a set (on, paused or finished)
+    // the wins of the slot's side (RoomPlay sideSlots, a bit per slot; without them, a 1v1's
+    // sides are the in-game ports, which are the slots), so the score is on the panels; the host
+    // is then shown by "Host: <name>" alone. Otherwise the host's one star (rooms.md #8).
+    static int roomStars(int slot, bool host)
+    {
+        const PPOM::RoomPlay& p = PPOM::g_block.session.play;
+        if (!p.valid || !p.setOn) return host ? 1 : 0;
+        for (int side = 0; side < 2; side++) {
+            bool on = (p.sideSlots[0] | p.sideSlots[1]) ? (p.sideSlots[side] >> slot) & 1 : p.sides[side] == slot;
+            if (on) return p.score[side] < 100 ? p.score[side] : 99;
+        }
+        return 0;
+    }
+
     static void roomPanels(RoomCss::PanelView v[3], int* myTeam)
     {
         const PPOM::Session& se = PPOM::g_block.session;
@@ -1808,7 +1823,7 @@ namespace OnlineMenu {
             } else {
                 taken |= (u8)(1 << i);
                 u16Name(p.name, pl.name);
-                p.host = (bits & PPOM::SLOT_HOST) || se.roomHost == i;
+                p.stars = (u8)roomStars(i, (bits & PPOM::SLOT_HOST) || se.roomHost == i);
                 int css = (bits & PPOM::SLOT_READY) && pl.roomChar != 0xFF ? cssOfKind(pl.roomChar) : -1;
                 if (bits & PPOM::SLOT_IN_GAME) {
                     p.kind = RoomCss::PV_IN_GAME;
@@ -2187,7 +2202,7 @@ namespace OnlineMenu {
             if (in && me >= 0) u16Name(myName, se.players[me].name);
             else strcpy(myName, s.ownName);
         }
-        RoomCss::tick(views, teams, myTeam, host, myName, roomLockedForNext());
+        RoomCss::tick(views, teams, myTeam, in && me >= 0 ? roomStars(me, host) : 0, myName, roomLockedForNext());
         roomButtons(in, host);
     }
 

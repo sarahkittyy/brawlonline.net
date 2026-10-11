@@ -354,7 +354,8 @@ def read_play(p: bytes) -> dict | None:
            "name": text(p[0xC:0x2C])}
     if p[0x2C]:
         out["set"] = {"game": p[0x2D], "score": [p[0x2E], p[0x2F]], "sides": [p[0x30], p[0x31]],
-                      "paused": bool(p[0x32] & 1), "can_resume": bool(p[0x32] & 2), "finished": bool(p[0x32] & 4)}
+                      "paused": bool(p[0x32] & 1), "can_resume": bool(p[0x32] & 2), "finished": bool(p[0x32] & 4),
+                      "side_slots": [p[0x33], p[0x34]], "winner": None if p[0x35] == 0xFF else p[0x35]}
     return out
 STYLES = {0: "time", 1: "stock", 2: "coin"}
 
