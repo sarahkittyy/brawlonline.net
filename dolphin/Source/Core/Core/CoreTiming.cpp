@@ -580,6 +580,8 @@ void CoreTimingManager::Throttle(const s64 target_cycle)
 
   UpdateVISkip(time, target_time);
 
+  if (target_time > time)
+    m_throttle_sleep += target_time - time;
   SleepUntil(target_time);
   if (Rollback::PresentStats::PresentTraceEnabled())
     Rollback::PresentStats::TraceThrottle(target_time, Clock::now());

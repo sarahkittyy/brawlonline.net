@@ -51,6 +51,7 @@ struct CopyDecision
   bool present;
   bool paced;     // CoreTiming's present pacing was on
   TimePoint due;  // paced: the copy's due time on the throttle's clock
+  DT slack{};     // paced: the throttle's sleep since the previous presented copy
 };
 std::mutex s_copy_decisions_mutex;
 std::deque<CopyDecision> s_copy_decisions;
@@ -145,10 +146,12 @@ void OnEFBCopyPreprocess(bool to_xfb)
   if (to_xfb && present)
   {
     auto& core_timing = Core::System::GetInstance().GetCoreTiming();
+    const DT slack = core_timing.TakeThrottleSleep();
     if (core_timing.PresentPacingActive())
     {
       decision.paced = true;
       decision.due = core_timing.GetTargetHostTime(core_timing.GetTicks());
+      decision.slack = slack;
     }
   }
   std::lock_guard lk(s_copy_decisions_mutex);
@@ -326,7 +329,12 @@ void TracePresent()
 namespace
 {
 // PresentHoldUntil: the offset is the 95th percentile of the last HOLD_WINDOW frames' arrivals
-// (a stall leaves it within about two seconds), and a hold never exceeds HOLD_MAX.
+// (a stall leaves it within about two seconds), and a hold never exceeds HOLD_MAX or the CPU's
+// slack, the throttle's sleep before the copy. In deterministic dual core the CPU thread waits for
+// the GPU thread's work, so a hold longer than the CPU would sleep anyway stalls the emulation. A PC
+// behind its schedule never sleeps there: holding each of its frames ~7.6 ms kept one at ~58 FPS and
+// 3-4 frames behind the peer for a whole game, and 59.9 FPS in sync without the hold (prod,
+// 2026-10-11). Such a frame is not held.
 constexpr double HOLD_QUANTILE = 0.95;
 constexpr size_t HOLD_WINDOW = 120;
 constexpr size_t HOLD_MIN_SAMPLES = 20;
@@ -352,7 +360,7 @@ TimePoint PresentHoldUntil(TimePoint now)
     std::nth_element(sorted.begin(), nth, sorted.begin() + n);
     const TimePoint target = s_gpu_copy.due + std::chrono::duration_cast<Clock::duration>(
                                                   std::chrono::duration<double, std::milli>(*nth));
-    until = std::clamp(target, now, now + HOLD_MAX);
+    until = std::clamp(target, now, now + std::min<DT>(HOLD_MAX, s_gpu_copy.slack));
   }
   s_hold_arrivals[s_hold_count++ % HOLD_WINDOW] = arrival_ms;
   s_last_hold_ms = std::chrono::duration<double, std::milli>(until - now).count();

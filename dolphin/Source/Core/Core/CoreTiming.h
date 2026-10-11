@@ -236,6 +236,9 @@ public:
   // How far behind its schedule the throttle found the emulation at worst since the last call
   // (zero: never behind). Only throttled time counts, not re-runs.
   DT TakeMaxBehindSchedule();
+  // CPU thread: how long the throttle slept since the last call, the CPU's slack. The present hold
+  // uses no more than that (PresentStats::PresentHoldUntil).
+  DT TakeThrottleSleep() { return std::exchange(m_throttle_sleep, DT{}); }
 
   // May be used from CPU or GPU thread.
   void SleepUntil(TimePoint time_point);
@@ -305,6 +308,7 @@ private:
   bool m_rollback_burst_pending = false;
   TimePoint m_rollback_burst_due{};
   DT m_max_behind_schedule{};
+  DT m_throttle_sleep{};
 
   bool IsSpeedUnlimited() const;
   void UpdateSpeedLimit(s64 cycle, double new_speed);

@@ -967,6 +967,29 @@ It does not make a peer that cannot keep full speed any faster (the prod set wou
 
 With the joiner at 97% and only the speed nudge, the joiner (at most 1% faster) falls behind until the host waits at the prediction window; with catch-up frames the gap holds at ~1.5 frames, just under the catch-up threshold.
 
+## Phase 19: the present hold slowed a PC with no slack (prod, 2026-10-11)
+
+**Symptom.** sarahkitty (host) against L1M3DUDE (i5-10300H laptop, 8 GB, GTX 1650 Ti, 0.1.51), 100-130 ms round trip, input delay 2 (auto): laggy, frame drops. Both peers' logs.
+
+**Reading.** The joiner ran at 58.2 frames a second and every one of its frames was behind schedule (11,639 of 11,642, ~125-158 ms: Dolphin's MaxFallback), also in windows with no rollback at all. Its 972 catch-up frames did nothing (a catch-up frame skips a wait the PC never had), so it stayed 3.4 frames behind for the whole game. The host paid: rollbacks 5.35 deep on average, 481 waits at the 7-frame window (3.1 s), 1,547 screen hitches. On the joiner the present hold (Phase 17) held 94% of the frames, ~7.6 ms each, close to HOLD_MAX: behind schedule, the arrivals after the due time spread widely, so the 95th percentile sat ~8 ms above the frame at hand.
+
+**Cause.** The hold sleeps on the GPU thread before the present. In deterministic dual core the CPU thread waits for the GPU thread to finish its work (`FifoManager::SyncGPU`), so a hold the CPU does not cover with its own throttle sleep stalls the emulation. A PC with slack hides it in that sleep; a PC without slack loses it on every frame.
+
+**Test** (the joiner's `[Core] RollbackPresentPacing = False`, same matchup and link):
+
+| | Pacing on (game 1) | Pacing off (game 3) |
+|---|---|---|
+| Joiner frames a second | 58.2 | 59.9 |
+| Joiner late frames (not after a rollback) | 11,394 of 11,396 | 2,063 of 7,215 |
+| Frames ahead (host) | 3.79 | 0.17 |
+| Host rollback depth / waits | 5.35 / 481 | 1.97 / 5 |
+| Host screen hitches | 1,547 (13%) | 179 (1.4%) |
+| Joiner screen hitches | 1,587 (14%) | 2,732 (21%) |
+
+The player: "SUPER playable". Without the hold the joiner's own presents are uneven again (Phase 17's stutter), which the fix keeps for PCs with slack.
+
+**Fix.** A hold never exceeds the CPU's slack: the throttle's sleep between the previous presented XFB copy and this one (`CoreTimingManager::TakeThrottleSleep`, taken with the copy decision, `CopyDecision::slack`). A PC behind its schedule never sleeps there and is not held; a PC with slack holds as before. Not yet measured in a session with a CPU-limited peer.
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).
