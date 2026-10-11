@@ -59,7 +59,8 @@ pub async fn rooms(State(state): State<AppState>, headers: HeaderMap) -> ApiResu
             .with_message(format!("Too many requests. Try again in {} s.", wait.as_secs().max(1)))
     })?;
     match state.mm_status.get().await {
-        Ok(s) => Ok(Json(s)),
+        // Where each player is stays between mm and accounts (it names private rooms).
+        Ok(s) => Ok(Json(MmStatus { members: Vec::new(), ..s })),
         Err(e) => {
             tracing::warn!("mm status unavailable: {e}");
             Err(ApiError::new(

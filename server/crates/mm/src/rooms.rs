@@ -27,8 +27,8 @@ use chrono::Utc;
 use common::proto::{GetTicketResp, Player, GET_TICKET_RESP};
 use common::ratelimit::{RateLimiter, Window};
 use common::rooms::{
-    self, PublicRoom, RoomError, RoomLeft, RoomMode, RoomPlayer, RoomRequest, RoomSlot, RoomStart, RoomState,
-    RoomStatus, ROOM_SLOTS, TEAM_COUNT,
+    self, PublicRoom, RoomError, RoomLeft, RoomMember, RoomMode, RoomPlayer, RoomRequest, RoomSlot, RoomStart,
+    RoomState, RoomStatus, ROOM_SLOTS, TEAM_COUNT,
 };
 use uuid::Uuid;
 
@@ -341,6 +341,30 @@ impl RoomBook {
                 .then(a.code.cmp(&b.code))
         });
         list.into_iter().take(limit).map(|(_, p)| p).collect()
+    }
+
+    /// Every room player's room ([`MmStatus::members`](common::rooms::MmStatus::members)), at most
+    /// `limit` players.
+    pub fn member_rooms(&self, limit: usize) -> Vec<RoomMember> {
+        let mut list = Vec::new();
+        for room in self.rooms.values() {
+            let entry = room.public_entry();
+            for (_, m) in room.members() {
+                if list.len() >= limit {
+                    return list;
+                }
+                list.push(RoomMember {
+                    uid: m.info.uid.to_string(),
+                    code: entry.code.clone(),
+                    players: entry.players,
+                    open_slots: entry.open_slots,
+                    mode: entry.mode,
+                    status: entry.status,
+                    joinable: entry.joinable,
+                });
+            }
+        }
+        list
     }
 
     fn broadcast(&self, code: &str, out: &mut Vec<Output>) {

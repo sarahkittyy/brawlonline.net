@@ -463,6 +463,7 @@ impl Engine {
             online: self.online_count(),
             rooms: self.rooms.public_rooms(200),
             updated_at: wall.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            members: self.rooms.member_rooms(4000),
         }
     }
 

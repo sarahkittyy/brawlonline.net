@@ -17,6 +17,7 @@ base64.workspace = true
 chrono.workspace = true
 clap.workspace = true
 dotenvy = "0.15"
+futures-core = "0.3"
 lettre.workspace = true
 rand.workspace = true
 reqwest.workspace = true

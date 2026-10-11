@@ -13,6 +13,7 @@ pub mod pages;
 pub mod password;
 pub mod ranked;
 pub mod rooms;
+pub mod social;
 pub mod store;
 
 use std::net::{IpAddr, SocketAddr};
@@ -43,6 +44,8 @@ pub struct AppState {
     pub dummy_hash: String,
     /// mm's status (online count, public rooms) for `GET /v1/rooms`.
     pub mm_status: Arc<rooms::MmStatusSource>,
+    /// The launchers online: presence, DMs and invites (`GET /v1/social/stream`).
+    pub social: Arc<social::SocialHub>,
 }
 
 impl AppState {
@@ -57,6 +60,7 @@ impl AppState {
             hash_params,
             dummy_hash: password::dummy_hash(hash_params),
             mm_status: Arc::new(rooms::MmStatusSource::new(&cfg.mm_status_url)),
+            social: Arc::new(social::SocialHub::new(!cfg.disable_rate_limits)),
             cfg: Arc::new(cfg),
         })
     }
@@ -132,6 +136,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/ranked/result", get(ranked::result))
         .route("/v1/ranked/leaderboard", get(leaderboard::leaderboard))
         .route("/v1/rooms", get(rooms::rooms))
+        .route("/v1/social/stream", get(social::stream))
+        .route("/v1/social/dm", post(social::dm))
+        .route("/v1/social/invite", post(social::invite))
+        .route("/v1/social/invite/answer", post(social::answer))
         .route("/verify-email", get(pages::verify_email_page))
         .route("/reset-password", get(pages::reset_password_page).post(pages::reset_password_submit))
         .route("/healthz", get(api::healthz))
@@ -151,10 +159,12 @@ pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> anyhow
         state.cfg.ranked_timing(),
         std::time::Duration::from_secs(state.cfg.ranked_sweep_secs),
     );
+    let room_watcher = social::room_watcher(state.clone());
     let app = router(state).into_make_service_with_connect_info::<SocketAddr>();
     tokio::select! {
         r = axum::serve(listener, app) => r?,
         () = sweeper => {}
+        () = room_watcher => {}
     }
     Ok(())
 }

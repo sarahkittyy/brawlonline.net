@@ -16,6 +16,7 @@ dependencies = [
  "common",
  "dotenvy",
  "fakesmtp",
+ "futures-core",
  "lettre",
  "rand 0.8.8",
  "reqwest",

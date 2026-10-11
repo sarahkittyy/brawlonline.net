@@ -375,6 +375,27 @@ pub struct MmStatus {
     pub rooms: Vec<PublicRoom>,
     /// RFC 3339 time of the snapshot.
     pub updated_at: String,
+    /// Every room player's room, public and private rooms alike. Internal: accounts reads it to
+    /// check and address launcher invites (`docs/social-protocol.md`) and never serves it to
+    /// launchers (`GET /v1/rooms` sends only the fields above).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub members: Vec<RoomMember>,
+}
+
+/// One room player's room, for [`MmStatus::members`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomMember {
+    /// The player's account (hyphenated lowercase UUID).
+    pub uid: String,
+    pub code: String,
+    pub players: usize,
+    pub open_slots: usize,
+    pub mode: RoomMode,
+    /// `starting` is listed as `in-game`, as in [`PublicRoom`].
+    pub status: RoomStatus,
+    /// An open slot is empty.
+    pub joinable: bool,
 }
 
 #[cfg(test)]
