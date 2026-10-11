@@ -43,6 +43,9 @@ export interface SettingsSchema {
 
   // Appearance settings
   enableRankDisplay: boolean;
+
+  // Sounds for chat messages and invites (the bell next to the settings gear).
+  notificationSounds: boolean;
 }
 
 /**

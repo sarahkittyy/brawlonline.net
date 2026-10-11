@@ -46,5 +46,6 @@ export const defaultAppSettings: AppSettings = {
     netplayDolphinPath: null,
     playbackDolphinPath: null,
     enableRankDisplay: true,
+    notificationSounds: true,
   },
 };

@@ -12,6 +12,11 @@
  *   idle online character select, a room) or `busy` (a match, a search, a single-player mode);
  *   `lastRequest` answers the last `join-room.json` by its `id`.
  *
+ * A Direct request (a launcher invite to a Direct 1v1, docs/social-protocol.md §5) is the same
+ * file with `{version, id, kind: "direct", connectCode, createdAt}`: the game goes to Direct's
+ * character select and, on lock-in, searches that code. Every function here that takes a room code
+ * also takes a connect code (`ABCD#123`) for that.
+ *
  * Dolphin builds without this (everything before the rooms phase) write no status. Then the
  * launcher still writes the request, and when nothing answers it within a few seconds it takes
  * the request back and tells the player the code to type in game.
@@ -29,7 +34,9 @@ export const STATUS_FRESH_MS = 15_000;
 export const ACK_TIMEOUT_MS = 5_000;
 const ACK_POLL_MS = 200;
 
-export type RoomRequest = { version: 1; id: string; code: string; createdAt: string };
+export type RoomRequest =
+  | { version: 1; id: string; code: string; createdAt: string }
+  | { version: 1; id: string; kind: "direct"; connectCode: string; createdAt: string };
 
 export type GameStatus = {
   version: number;
@@ -74,14 +81,31 @@ export function statusPath(onlineDir: string): string {
   return path.join(onlineDir, GAME_STATUS_FILE);
 }
 
-/** Writes `join-room.json` atomically (a reader never sees half a file). */
+/** Connect codes: a 2-4 letter prefix, `#`, a number; 8 characters at most. */
+export function isConnectCode(code: string): boolean {
+  return code.length <= 8 && /^[A-Z]{2,4}#[1-9][0-9]{0,3}$/.test(code);
+}
+
+/** A room code or, for Direct, a connect code. */
+export function isHandOffCode(code: string): boolean {
+  return isRoomCode(code) || isConnectCode(code);
+}
+
+/**
+ * Writes `join-room.json` atomically (a reader never sees half a file): a room request for a room
+ * code, a Direct request for a connect code.
+ */
 export async function writeRoomRequest(onlineDir: string, code: string, now = new Date()): Promise<RoomRequest> {
-  if (!isRoomCode(code)) {
-    throw new Error(`Not a room code: ${code}`);
+  if (!isHandOffCode(code)) {
+    throw new Error(`Not a room or connect code: ${code}`);
   }
-  const req: RoomRequest = { version: 1, id: randomUUID(), code, createdAt: now.toISOString() };
+  const id = randomUUID();
+  const createdAt = now.toISOString();
+  const req: RoomRequest = isRoomCode(code)
+    ? { version: 1, id, code, createdAt }
+    : { version: 1, id, kind: "direct", connectCode: code, createdAt };
   const file = requestPath(onlineDir);
-  const tmp = `${file}.${req.id}.tmp`;
+  const tmp = `${file}.${id}.tmp`;
   await writeFile(tmp, JSON.stringify(req, null, 2));
   await rename(tmp, file);
   return req;
@@ -130,7 +154,7 @@ export type HandOffOptions = {
 };
 
 /**
- * Hands `code` to a running game: refuses at once when its status says busy, else writes the
+ * Hands `code` (a room code, or a connect code for Direct) to a running game: refuses at once when its status says busy, else writes the
  * request and waits for the game's answer. Without an answer the request is taken back, so a later
  * game start does not act on it.
  */

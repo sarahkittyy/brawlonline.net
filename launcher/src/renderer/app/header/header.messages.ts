@@ -8,6 +8,7 @@ export const HeaderMessages = {
   isoWillNotWork: (productName: string) =>
     "Provided ISO will not work with {0}. Please provide an unmodified NTSC-U Brawl ISO (revision 1 or 2).",
   settings: () => "Settings",
+  toggleNotificationSounds: () => "Toggle Notification Sounds",
   chooseAConnectCode: () => "Choose a connect code",
   youAreNotLoggedIn: () => "You are not logged in",
   onlyLoggedInUsersCanPlayOnline: () => "Only logged in users can play online.",

@@ -15,7 +15,8 @@
       "@remote/*": ["remote/*"],
       "@accounts/*": ["accounts/*"],
       "@brawl_assets/*": ["brawl_assets/*"],
-      "@game_assets/*": ["game_assets/*"]
+      "@game_assets/*": ["game_assets/*"],
+      "@social/*": ["social/*"]
     },
     "baseUrl": "./src",
     "outDir": "release/app/dist",

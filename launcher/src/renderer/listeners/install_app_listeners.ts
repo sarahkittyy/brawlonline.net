@@ -9,6 +9,7 @@ import { useAppStore } from "../lib/hooks/use_app_store";
 import type { Services } from "../services/types";
 import { installDolphinListeners } from "./install_dolphin_listeners";
 import { installSettingsChangeListeners } from "./install_settings_change_listeners";
+import { installSocialListeners } from "./install_social_listeners";
 
 export function installAppListeners(services: Services) {
   const { authService, notificationService, backendService, dolphinService, replayService } = services;
@@ -60,6 +61,7 @@ export function installAppListeners(services: Services) {
   installDolphinListeners({ dolphinService, notificationService });
   installReplayListeners({ replayService, authService });
   installSettingsChangeListeners({ replayService, authService });
+  installSocialListeners();
 }
 
 export function installReplayListeners({

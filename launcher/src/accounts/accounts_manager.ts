@@ -96,6 +96,11 @@ export class AccountsManager {
     return this._withSession(uid, (token) => this.client.rooms(token));
   }
 
+  /** The account's session token (for the social stream, which is not a JSON call). */
+  sessionToken(uid: string): Promise<string | undefined> {
+    return this.sessions.get(uid);
+  }
+
   private _withSession<T>(uid: string, fn: (token: string) => Promise<T>): Promise<AccountsResult<T>> {
     return wrap(async () => {
       const token = await this.sessions.get(uid);

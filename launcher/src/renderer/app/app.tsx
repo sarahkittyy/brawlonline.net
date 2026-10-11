@@ -8,6 +8,7 @@ import { AuthGuard } from "@/components/auth_guard";
 import { LoginNotice } from "@/components/login_notice/login_notice";
 import { PersistentNotification } from "@/components/persistent_notification/persistent_notification";
 import { RosettaInstallDialog } from "@/components/rosetta_install_dialog/rosetta_install_dialog";
+import { SocialRoot } from "@/components/social/social_root";
 import type { AuthUser } from "@/services/auth/types";
 
 type PrivateMenuItem = MenuItem & {
@@ -51,6 +52,7 @@ export const App = React.memo(({ menuItems }: { menuItems: readonly MainMenuItem
           {defaultRoute && <Route path="*" element={<Navigate replace={true} to={`${defaultRoute.subpath}`} />} />}
         </Routes>
       </div>
+      <SocialRoot />
       <LoginDialog />
       <PersistentNotification />
       <RosettaInstallDialog />

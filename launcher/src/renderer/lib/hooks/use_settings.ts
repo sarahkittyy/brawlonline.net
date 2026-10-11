@@ -86,5 +86,7 @@ export const useAutoUpdateLauncher = () => useSetting("autoUpdateLauncher");
 
 export const useEnableRankDisplay = () => useSetting("enableRankDisplay");
 
+export const useNotificationSounds = () => useSetting("notificationSounds");
+
 export const useDolphinPath = (dolphinType: DolphinLaunchType) =>
   useSetting(dolphinType === DolphinLaunchType.NETPLAY ? "netplayDolphinPath" : "playbackDolphinPath");

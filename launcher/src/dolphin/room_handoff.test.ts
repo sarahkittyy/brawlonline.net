@@ -7,6 +7,7 @@ import type { GameStatus, RoomRequest } from "./room_handoff";
 import {
   clearRoomRequest,
   handOffRoom,
+  isConnectCode,
   isRoomCode,
   readGameStatus,
   requestPath,
@@ -43,6 +44,26 @@ describe("room hand-off", () => {
     for (const bad of ["kfqb", "KFQ", "KAQB", "KYQB", "KFQBB", ""]) {
       expect(isRoomCode(bad)).toBe(false);
     }
+  });
+
+  it("knows connect codes", () => {
+    for (const ok of ["SARA#1", "AB#9999", "ABCD#123"]) {
+      expect(isConnectCode(ok)).toBe(true);
+    }
+    for (const bad of ["sara#1", "A#1", "ABCDE#1", "ABCD#1234", "AB#0", "AB#", "AB1", "AB#12a", "KFQB"]) {
+      expect(isConnectCode(bad)).toBe(false);
+    }
+  });
+
+  it("writes a Direct request for a connect code", async () => {
+    const req = await writeRoomRequest(dir, "SARA#12", new Date("2026-10-10T12:00:00Z"));
+    expect(await readRequest()).toEqual({
+      version: 1,
+      id: req.id,
+      kind: "direct",
+      connectCode: "SARA#12",
+      createdAt: "2026-10-10T12:00:00.000Z",
+    });
   });
 
   it("writes and clears the request", async () => {

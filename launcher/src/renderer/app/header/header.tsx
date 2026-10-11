@@ -1,6 +1,8 @@
 import { PRODUCT_NAME } from "@common/product";
 import { css } from "@emotion/react";
 import styled from "@emotion/styled";
+import NotificationsOffOutlinedIcon from "@mui/icons-material/NotificationsOffOutlined";
+import NotificationsOutlinedIcon from "@mui/icons-material/NotificationsOutlined";
 import SettingsOutlinedIcon from "@mui/icons-material/SettingsOutlined";
 import Box from "@mui/material/Box";
 import Button from "@mui/material/Button";
@@ -16,6 +18,7 @@ import { usePlay, usePlayDialogs } from "@/lib/dolphin/use_play";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useAppUpdate } from "@/lib/hooks/use_app_update";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
+import { useNotificationSounds } from "@/lib/hooks/use_settings";
 import { useSettingsModal } from "@/lib/hooks/use_settings_modal";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { useServices } from "@/services";
@@ -80,6 +83,7 @@ export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
             {Messages.logIn()}
           </Button>
         )}
+        <SoundsToggle />
         <Tooltip title={Messages.settings()}>
           <IconButton
             onClick={() => open()}
@@ -104,6 +108,26 @@ export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
         onSubmit={() => onPlay()}
       />
     </OuterBox>
+  );
+};
+
+/** The bell: chat message and invite sounds on or off. */
+const SoundsToggle = () => {
+  const [on, setOn] = useNotificationSounds();
+  return (
+    <Tooltip title={Messages.toggleNotificationSounds()}>
+      <IconButton
+        onClick={() => void setOn(!on)}
+        aria-pressed={on}
+        aria-label={Messages.toggleNotificationSounds()}
+        css={css`
+          opacity: 0.5;
+        `}
+        size="large"
+      >
+        {on ? <NotificationsOutlinedIcon /> : <NotificationsOffOutlinedIcon />}
+      </IconButton>
+    </Tooltip>
   );
 };
 

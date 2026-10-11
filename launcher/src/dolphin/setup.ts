@@ -28,7 +28,7 @@ import {
 } from "./ipc";
 import type { DolphinManager } from "./manager";
 import { deletePlayKeyFile, writePlayKeyFile } from "./playkey";
-import { clearRoomRequest, handOffRoom, isRoomCode, writeRoomRequest } from "./room_handoff";
+import { clearRoomRequest, handOffRoom, isHandOffCode, writeRoomRequest } from "./room_handoff";
 import { installRosettaElevated } from "./rosetta/install_rosetta";
 import { DolphinLaunchType } from "./types";
 import { fetchGeckoCodes, saveGeckoCodes } from "./util";
@@ -121,8 +121,8 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
   });
 
   ipc_joinRoomInGame.main!.handle(async ({ code }) => {
-    if (!isRoomCode(code)) {
-      throw new Error(`Not a room code: ${code}`);
+    if (!isHandOffCode(code)) {
+      throw new Error(`Not a room or connect code: ${code}`);
     }
     if (!dolphinManager.isNetplayRunning()) {
       return { outcome: "not-running" };

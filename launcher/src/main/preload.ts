@@ -3,6 +3,7 @@ import dolphinApi from "@dolphin/api";
 import gameAssetsApi from "@game_assets/api";
 import replaysApi from "@replays/api";
 import settingsApi from "@settings/api";
+import socialApi from "@social/api";
 import { contextBridge, ipcRenderer, shell, webUtils } from "electron";
 import { pathExists } from "fs-extra";
 import path from "path";
@@ -21,6 +22,7 @@ const api = {
   gameAssets: gameAssetsApi,
   dolphin: dolphinApi,
   replays: replaysApi,
+  social: socialApi,
   utils: {
     isSubdirectory,
     pathExists: (folder: string) => pathExists(folder),

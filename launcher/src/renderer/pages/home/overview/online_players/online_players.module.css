@@ -1,0 +1,61 @@
+.block {
+  min-height: 0;
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+
+.count {
+  color: var(--text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.notice {
+  margin: 0;
+  padding: 16px 20px;
+  color: var(--text-dim);
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  align-self: start;
+}
+
+/* Hover and press as a public room's row (public_rooms.module.css). */
+.row {
+  box-sizing: border-box;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 6px 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.15s ease-in-out;
+  outline: none;
+}
+
+.row:hover {
+  background-color: rgb(255 255 255 / 5%);
+}
+
+.row:active {
+  background-color: rgb(255 255 255 / 9%);
+}
+
+.row:focus-visible {
+  outline: 2px solid var(--accent-primary-dark);
+  outline-offset: -2px;
+}
+
+.ignored {
+  opacity: 0.45;
+}
