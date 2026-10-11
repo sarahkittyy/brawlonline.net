@@ -29,6 +29,7 @@ import { fileExists } from "utils/file_exists";
 import { getConfigFlags } from "./flags/flags";
 import { installModules } from "./install_modules";
 import { legacyUserDataNames, migrateLegacyUserData } from "./legacy_user_data";
+import { chooseGtkInputMethod } from "./linux_input_method";
 import { MenuBuilder } from "./menu";
 import { clearTempFolder, getWindowIcon, resolveHtmlPath } from "./util";
 
@@ -53,6 +54,17 @@ if (!app.isPackaged) {
 // the installer's shortcut carries APP_ID. Electron's default id shows as "electron.app.Electron".
 if (process.platform === "win32") {
   app.setAppUserModelId(APP_ID);
+}
+
+// SteamOS and Gaming Mode: GTK's simple input method, as the session's doubles every key typed
+// (see linux_input_method.ts). Before any window, so Chromium's GTK input context sees it.
+const gtkInputMethod = chooseGtkInputMethod(
+  process.platform,
+  process.env,
+  process.platform === "linux" && existsSync("/etc/os-release") ? readFileSync("/etc/os-release", "utf8") : null,
+);
+if (gtkInputMethod.kind === "set") {
+  process.env.GTK_IM_MODULE = gtkInputMethod.module;
 }
 
 // A staging build (tools/staging) carries its environment in <resources>/staging-env.json, so it
@@ -127,6 +139,9 @@ if (isDevelopment) {
 const remoteDebuggingPort = testMode.remoteDebuggingPort ?? (isDevelopment ? 9222 : null);
 if (remoteDebuggingPort !== null) {
   app.commandLine.appendSwitch("remote-debugging-port", String(remoteDebuggingPort));
+}
+if (gtkInputMethod.kind === "set") {
+  log.info(`GTK_IM_MODULE=${gtkInputMethod.module} (was ${gtkInputMethod.previous ?? "unset"})`);
 }
 if (legacyUserData?.kind === "moved") {
   log.info(`Moved the userData folder from ${legacyUserData.from} to ${legacyUserData.to}`);
