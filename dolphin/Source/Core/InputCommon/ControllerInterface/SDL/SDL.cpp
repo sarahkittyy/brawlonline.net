@@ -161,6 +161,16 @@ InputBackend::InputBackend(ControllerInterface* controller_interface)
   if (Config::Get(Config::MAIN_SDL_HINT_JOYSTICK_HIDAPI_VERTICAL_JOY_CONS) == "")
     Config::SetBase(Config::MAIN_SDL_HINT_JOYSTICK_HIDAPI_VERTICAL_JOY_CONS, "0");
 
+#ifdef _WIN32
+  // No libusb in SDL's HIDAPI, as in P+ 3.2's release (built without it): at SDL_Init it lists
+  // every USB device, asking each one's hub with blocking requests that have no timeout, and a
+  // device that never answers (an old Switch Pro Controller, staging 2026-10-11) holds SDL_Init,
+  // and the UI waiting on it below, forever. Devices are found through Windows' HID instead; only
+  // the ones SDL drives through libusb are lost (Switch 2 controllers, its GC adapter support).
+  if (Config::Get(Config::MAIN_SDL_HINT_HIDAPI_LIBUSB) == "")
+    Config::SetBase(Config::MAIN_SDL_HINT_HIDAPI_LIBUSB, "0");
+#endif
+
   // Disable SDL's GC Adapter handling when we want to handle it ourselves.
   bool is_gc_adapter_configured = false;
   for (int i = 0; i != SerialInterface::MAX_SI_CHANNELS; ++i)

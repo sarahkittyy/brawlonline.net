@@ -567,6 +567,8 @@ const Info<std::string> MAIN_SDL_HINT_JOYSTICK_HIDAPI_COMBINE_JOY_CONS{
     {System::Main, "SDL_Hints", "SDL_JOYSTICK_HIDAPI_COMBINE_JOY_CONS"}, ""};
 const Info<std::string> MAIN_SDL_HINT_JOYSTICK_HIDAPI_VERTICAL_JOY_CONS{
     {System::Main, "SDL_Hints", "SDL_JOYSTICK_HIDAPI_VERTICAL_JOY_CONS"}, ""};
+const Info<std::string> MAIN_SDL_HINT_HIDAPI_LIBUSB{{System::Main, "SDL_Hints", "SDL_HIDAPI_LIBUSB"},
+                                                    ""};
 
 // Main.Debug
 
