@@ -12,6 +12,7 @@ other too.
 
 from __future__ import annotations
 
+import os
 import sys
 import time
 from pathlib import Path
@@ -74,8 +75,9 @@ def boot_two(dolphin: Callable[..., DolphinInstance], be: OnlineBackend, names: 
 
 def test_chat_in_a_room(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                         tmp_path: Path) -> None:
-    """A room: both directions, hostile text cleaned, hide, report (checked by the server), the
-    local rate limit, a member leaving, and the group gone after leaving the room."""
+    """A room: both directions, hostile text cleaned, ignore (also changed by the launcher in the
+    shared file), report (checked by the server), the local rate limit, a member leaving, and the
+    group gone after leaving the room."""
     a, b, ua, ub = boot_two(dolphin, backend, ("ines", "otto"))
     for p in (a, b):
         hold_screen(p, "room")
@@ -128,10 +130,20 @@ def test_chat_in_a_room(backend: OnlineBackend, dolphin: Callable[..., DolphinIn
         rust.stop()
     until_chat(a, lambda s: "rust left" in texts(s, "system"), "the Rust member leaving")
 
-    # Hide: kept in chat-hidden.json; still received (the window covers it).
+    # Ignore: kept in chat-hidden.json; still received (the window covers it).
     a.c.call("chat_hide", uid=ub.uid, hidden=True)
     assert next(m for m in chat(a)["members"] if m["uid"] == ub.uid)["hidden"]
-    assert ub.uid in (a.online_dir() / "chat-hidden.json").read_text()
+    hidden_file = a.online_dir() / "chat-hidden.json"
+    assert ub.uid in hidden_file.read_text()
+    # The launcher shares the file (a temporary file renamed over it): Dolphin reads its change
+    # within about a second, and its own next write keeps it.
+    tmp = hidden_file.with_name("chat-hidden.json.launcher.tmp")
+    tmp.write_text('{"hidden": []}')
+    os.replace(tmp, hidden_file)
+    until_chat(a, lambda s: not next(m for m in s["members"] if m["uid"] == ub.uid)["hidden"],
+               "the launcher's unignore", timeout=5)
+    a.c.call("chat_hide", uid=ub.uid, hidden=True)
+    assert ub.uid in hidden_file.read_text()
     b.c.call("chat_send", text="still here")
     until_chat(a, lambda s: "still here" in texts(s, "message"), "a hidden player's message")
 

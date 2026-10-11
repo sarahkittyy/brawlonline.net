@@ -4,6 +4,7 @@
 #include "DolphinQt/RenderWidget.h"
 
 #include <QApplication>
+#include <QClipboard>
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QFileInfo>
@@ -18,6 +19,9 @@
 #include <QWheelEvent>
 #include <QWindow>
 
+#include <mutex>
+#include <string>
+
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
 #include "Core/State.h"
@@ -25,17 +29,61 @@
 
 #include "DolphinQt/Host.h"
 #include "DolphinQt/QtUtils/ModalMessageBox.h"
+#include "DolphinQt/QtUtils/QueueOnObject.h"
 #include "DolphinQt/Resources.h"
 #include "DolphinQt/Settings.h"
 
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
 
+#include "VideoCommon/OnScreenUIKeyMap.h"
+#include "VideoCommon/OnlineChatUI.h"
 #include "VideoCommon/Present.h"
 
 #ifdef _WIN32
 #include <windows.h>
 #include <dwmapi.h>
 #endif
+
+namespace
+{
+// The system clipboard for the online chat's box (OnlineChatUI::SetClipboard). Qt's clipboard
+// belongs to the GUI thread and ImGui draws on the video thread, so the video thread reads a copy
+// kept here (updated when the clipboard changes) and a copy is set back through the GUI thread.
+// Only the start of a long text is kept: the box takes 300 bytes.
+constexpr qsizetype MAX_CLIPBOARD_CHARS = 1024;
+std::mutex s_clipboard_mutex;
+std::string s_clipboard_text;
+
+void ReadClipboard()
+{
+  std::string text = QGuiApplication::clipboard()->text().left(MAX_CLIPBOARD_CHARS).toStdString();
+  std::lock_guard lk(s_clipboard_mutex);
+  s_clipboard_text = std::move(text);
+}
+
+// The modifier keys as ImGui's backends report them: the physical keys. Qt names Command
+// ControlModifier and Control MetaModifier on macOS.
+u32 KeyModifiers(Qt::KeyboardModifiers modifiers)
+{
+  u32 out = 0;
+#ifdef __APPLE__
+  if (modifiers & Qt::ControlModifier)
+    out |= DolphinKeyModifier_Super;
+  if (modifiers & Qt::MetaModifier)
+    out |= DolphinKeyModifier_Ctrl;
+#else
+  if (modifiers & Qt::ControlModifier)
+    out |= DolphinKeyModifier_Ctrl;
+  if (modifiers & Qt::MetaModifier)
+    out |= DolphinKeyModifier_Super;
+#endif
+  if (modifiers & Qt::ShiftModifier)
+    out |= DolphinKeyModifier_Shift;
+  if (modifiers & Qt::AltModifier)
+    out |= DolphinKeyModifier_Alt;
+  return out;
+}
+}  // namespace
 
 RenderWidget::RenderWidget(QWidget* parent) : QWidget(parent)
 {
@@ -93,6 +141,24 @@ RenderWidget::RenderWidget(QWidget* parent) : QWidget(parent)
   // We need a native window to render into.
   setAttribute(Qt::WA_NativeWindow);
   setAttribute(Qt::WA_PaintOnScreen);
+
+  ReadClipboard();
+  connect(QGuiApplication::clipboard(), &QClipboard::dataChanged, this, [] { ReadClipboard(); });
+  VideoCommon::OnlineChatUI::SetClipboard({
+      [] {
+        std::lock_guard lk(s_clipboard_mutex);
+        return s_clipboard_text;
+      },
+      [](const std::string& text) {
+        {
+          std::lock_guard lk(s_clipboard_mutex);
+          s_clipboard_text = text;
+        }
+        QueueOnObject(QApplication::instance(), [text] {
+          QGuiApplication::clipboard()->setText(QString::fromStdString(text));
+        });
+      },
+  });
 }
 
 QPaintEngine* RenderWidget::paintEngine() const
@@ -529,11 +595,20 @@ void RenderWidget::PassEventToPresenter(const QEvent* event)
     const QKeyEvent* key_event = static_cast<const QKeyEvent*>(event);
     const bool is_down = event->type() == QEvent::KeyPress;
     const u32 key = static_cast<u32>(key_event->key() & 0x1FF);
+    // With the key: Ctrl+Backspace, Ctrl+V or Shift+arrows reach ImGui with their modifiers.
+    const u32 modifiers = KeyModifiers(key_event->modifiers());
 
     const char* chars = nullptr;
     QByteArray utf8;
 
-    if (is_down)
+    // No text with the Control key held on macOS (Ctrl+W there may come with a "w"); elsewhere
+    // ImGui drops text typed with Ctrl itself (keeping Alt Gr's, which is Ctrl+Alt).
+#ifdef __APPLE__
+    const bool text_allowed = (modifiers & DolphinKeyModifier_Ctrl) == 0;
+#else
+    const bool text_allowed = true;
+#endif
+    if (is_down && text_allowed)
     {
       utf8 = key_event->text().toUtf8();
 
@@ -542,7 +617,7 @@ void RenderWidget::PassEventToPresenter(const QEvent* event)
     }
 
     // Pass the key onto Presenter (for the imgui UI)
-    g_presenter->SetKey(key, is_down, chars);
+    g_presenter->SetKey(key, is_down, chars, modifiers);
   }
   break;
 
@@ -567,6 +642,12 @@ void RenderWidget::PassEventToPresenter(const QEvent* event)
   }
   break;
 
+  case QEvent::FocusOut:
+  case QEvent::WindowDeactivate:
+    // A modifier let go elsewhere would stay held for ImGui.
+    g_presenter->SetKeyModifiers(0);
+    break;
+
   case QEvent::Wheel:
   {
     // In notches (120 per notch), as ImGui wants them: scrolls the online chat window.
@@ -588,7 +669,7 @@ void RenderWidget::SetPresenterKeyMap()
       Qt::Key_Delete, Qt::Key_Backspace, Qt::Key_Space, Qt::Key_Return, Qt::Key_Escape,
       Qt::Key_Enter,  // Keypad enter
       Qt::Key_A,      Qt::Key_C,         Qt::Key_V,     Qt::Key_X,      Qt::Key_Y,
-      Qt::Key_Z,
+      Qt::Key_Z,      Qt::Key_W,
   };
 
   g_presenter->SetKeyMap(key_map);

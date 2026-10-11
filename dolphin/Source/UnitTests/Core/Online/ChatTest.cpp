@@ -4,6 +4,7 @@
 // Online::Chat against hostile server messages and hostile members: everything mm could pass on
 // from another player (docs/chat-protocol.md), from well-formed to garbage.
 
+#include <cctype>
 #include <optional>
 #include <random>
 #include <string>
@@ -433,6 +434,125 @@ TEST_F(ChatTest, HiddenPlayersAreKept)
                           std::string(3000, '[') + "1e999");
   Chat::ResetForTesting(ME);
   EXPECT_FALSE(Chat::IsHidden(BOB));
+}
+
+// The launcher reads and writes the same chat-hidden.json (ignore user / unignore user there
+// ignores and unignores here too): a temporary file renamed over it, in the same format.
+TEST_F(ChatTest, IgnoreListIsSharedWithTheLauncher)
+{
+  constexpr char DAVE[] = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  const std::string path = File::GetUserPath(D_ONLINE_IDX) + "chat-hidden.json";
+  const auto launcher_writes = [&](const std::string& json) {
+    ASSERT_TRUE(File::WriteStringToFile(path + ".launcher.tmp", json));
+    ASSERT_TRUE(File::Rename(path + ".launcher.tmp", path));
+  };
+  const auto list = [&](const std::vector<std::string>& uids) {
+    picojson::array a;
+    for (const std::string& uid : uids)
+      a.emplace_back(uid);
+    picojson::object o;
+    o["hidden"] = picojson::value(a);
+    return Json(o);
+  };
+  const auto on_disk = [&] {
+    std::string text;
+    File::ReadFileToString(path, text);
+    return text;
+  };
+
+  // In a room with Bob and Carol: the window sees the list change.
+  Peer bob(BOB, 2), carol(CAROL, 3);
+  Join({&bob, &carol});
+  const auto first = Chat::GetView(0);
+  ASSERT_TRUE(first);
+  EXPECT_NE(first->group_number, 0u);
+  Chat::SetHidden(BOB, true);
+  EXPECT_TRUE(Chat::IsHidden(BOB));
+
+  // The launcher ignores Carol too (the file grows: a new size, whatever the clock's resolution).
+  launcher_writes(list({BOB, CAROL}));
+  Chat::CheckIgnoreFile();
+  EXPECT_TRUE(Chat::IsHidden(BOB));
+  EXPECT_TRUE(Chat::IsHidden(CAROL));
+  const auto view = Chat::GetView(first->serial);
+  ASSERT_TRUE(view);
+  EXPECT_EQ(view->group_number, first->group_number);
+  for (const Chat::Member& m : view->members)
+    EXPECT_EQ(m.hidden, !m.is_me) << m.uid;
+  // Nothing changed on disk: nothing to copy.
+  Chat::CheckIgnoreFile();
+  EXPECT_FALSE(Chat::GetView(view->serial));
+
+  // The launcher unignores Bob, and before Dolphin's next look the player ignores Dave here:
+  // Dolphin reads the file before it writes, so Bob stays unignored.
+  launcher_writes(list({CAROL}));
+  Chat::SetHidden(DAVE, true);
+  EXPECT_FALSE(Chat::IsHidden(BOB));
+  EXPECT_TRUE(Chat::IsHidden(CAROL));
+  EXPECT_TRUE(Chat::IsHidden(DAVE));
+  EXPECT_EQ(on_disk().find(BOB), std::string::npos);
+  EXPECT_NE(on_disk().find(CAROL), std::string::npos);
+  EXPECT_NE(on_disk().find(DAVE), std::string::npos);
+  // Same for unignoring: the launcher's change survives Dolphin's write.
+  launcher_writes(list({CAROL, DAVE, BOB}));
+  Chat::SetHidden(DAVE, false);
+  EXPECT_TRUE(Chat::IsHidden(BOB));
+  EXPECT_TRUE(Chat::IsHidden(CAROL));
+  EXPECT_FALSE(Chat::IsHidden(DAVE));
+
+  // A damaged file (a writer caught halfway) keeps the list as it was.
+  launcher_writes("{\"hidden\": [\"cccc");
+  Chat::CheckIgnoreFile();
+  EXPECT_TRUE(Chat::IsHidden(BOB));
+  EXPECT_TRUE(Chat::IsHidden(CAROL));
+  // No file: nobody is ignored.
+  ASSERT_TRUE(File::Delete(path));
+  Chat::CheckIgnoreFile();
+  EXPECT_FALSE(Chat::IsHidden(BOB));
+  EXPECT_FALSE(Chat::IsHidden(CAROL));
+
+  // The format stays {"hidden": [uids]}, and no temporary file is left behind.
+  Chat::SetHidden(BOB, true);
+  picojson::value v;
+  ASSERT_TRUE(picojson::parse(v, on_disk()).empty());
+  ASSERT_TRUE(v.is<picojson::object>());
+  auto& hidden = v.get<picojson::object>()["hidden"];
+  ASSERT_TRUE(hidden.is<picojson::array>());
+  ASSERT_EQ(hidden.get<picojson::array>().size(), 1u);
+  EXPECT_EQ(hidden.get<picojson::array>()[0].get<std::string>(), BOB);
+  EXPECT_FALSE(File::Exists(path + ".dolphin.tmp"));
+}
+
+// The launcher reads chat-identity.key too, and makes it if it is missing.
+TEST_F(ChatTest, IdentityKeyIsSharedWithTheLauncher)
+{
+  const std::string path = File::GetUserPath(D_ONLINE_IDX) + "chat-identity.key";
+  std::string text;
+
+  // Made by the launcher before Dolphin looked (upper case, no newline): read, never replaced.
+  const CC::Key32 seed = Fill(0x42);
+  std::string hex = CC::ToHex(seed);
+  for (char& c : hex)
+    c = static_cast<char>(std::toupper(static_cast<unsigned char>(c)));
+  ASSERT_TRUE(File::Delete(path));
+  ASSERT_TRUE(File::WriteStringToFile(path, hex));
+  Chat::ResetForTesting(ME);
+  EXPECT_EQ(Chat::IdentityPublicKeyHex(), CC::ToHex(CC::Identity(seed).PublicKey()));
+  ASSERT_TRUE(File::ReadFileToString(path, text));
+  EXPECT_EQ(text, hex);
+
+  // Missing: made, 64 lowercase hex digits and a newline, and kept from then on.
+  ASSERT_TRUE(File::Delete(path));
+  Chat::ResetForTesting(ME);
+  const std::string made = Chat::IdentityPublicKeyHex();
+  EXPECT_EQ(made.size(), 64u);
+  ASSERT_TRUE(File::ReadFileToString(path, text));
+  ASSERT_EQ(text.size(), 65u);
+  EXPECT_EQ(text.back(), '\n');
+  EXPECT_TRUE(CC::FromHexFixed<32>(text.substr(0, 64)));
+  EXPECT_FALSE(File::Exists(path + ".dolphin.tmp"));
+  Chat::ResetForTesting(ME);
+  EXPECT_EQ(Chat::IdentityPublicKeyHex(), made);
 }
 
 TEST_F(ChatTest, FuzzServerMessages)

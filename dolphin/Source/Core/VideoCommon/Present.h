@@ -99,7 +99,9 @@ public:
 
   void SetKeyMap(const DolphinKeyMap& key_map);
 
-  void SetKey(u32 key, bool is_down, const char* chars);
+  // `modifiers`: DolphinKeyModifier bits (VideoCommon/OnScreenUIKeyMap.h).
+  void SetKey(u32 key, bool is_down, const char* chars, u32 modifiers);
+  void SetKeyModifiers(u32 modifiers);
   void SetMousePos(float x, float y);
   void SetMousePress(u32 button_mask);
   void SetMouseWheel(float x, float y);

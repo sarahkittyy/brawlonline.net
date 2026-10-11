@@ -4,22 +4,29 @@
 #include "Core/Online/Chat.h"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
 #include <deque>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <set>
 #include <string_view>
 #include <utility>
 
-#ifndef _WIN32
+#ifdef _WIN32
+#include <Windows.h>
+#else
+#include <fcntl.h>
 #include <sys/stat.h>
+#include <unistd.h>
 #endif
 
 #include <fmt/format.h>
 
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
+#include "Common/StringUtil.h"
 #include "Common/Timer.h"
 #include "Core/Online/ChatCrypto.h"
 #include "Core/Online/ChatText.h"
@@ -50,6 +57,8 @@ constexpr auto SEND_BURST_WINDOW = std::chrono::seconds(5);
 constexpr size_t SEND_PER_MINUTE = 30;
 constexpr auto KEY_RESEND = std::chrono::seconds(3);
 constexpr auto MATCH_STATE_EVERY = std::chrono::milliseconds(250);
+// How often the Rooms thread looks whether the launcher changed chat-hidden.json.
+constexpr auto IGNORE_FILE_EVERY = std::chrono::seconds(1);
 constexpr size_t MAX_PAST_KEYS = 8;
 // What a report's messages may take, leaving room in MAX_PACKET for the rest of it.
 constexpr size_t MAX_REPORT_MESSAGES_BYTES = MAX_PACKET - 1024;
@@ -77,6 +86,15 @@ struct MemberState
   Clock::time_point refilled{};
 };
 
+// What says a file changed: written (renamed over) by another program, it has a new time or size.
+struct FileStamp
+{
+  bool exists = false;
+  std::filesystem::file_time_type mtime{};
+  std::uintmax_t size = 0;
+  bool operator==(const FileStamp&) const = default;
+};
+
 struct StoredLine
 {
   Line line;
@@ -91,7 +109,6 @@ struct State
   // The identity.
   std::unique_ptr<CC::Identity> identity;
   std::string identity_hex;
-  bool identity_tried = false;
   std::string identity_error;
 
   // The group.
@@ -120,6 +137,8 @@ struct State
 
   bool hidden_loaded = false;
   std::set<std::string> hidden;
+  FileStamp hidden_stamp;  // chat-hidden.json when it was last read or written
+  Clock::time_point hidden_checked{};
 
   u64 received = 0, accepted = 0, sent = 0, groups = 0, reports = 0;
   u64 drop_json = 0, drop_member = 0, drop_box = 0, drop_plaintext = 0, drop_replay = 0,
@@ -201,15 +220,78 @@ std::string OnlineDir()
   return File::GetUserPath(D_ONLINE_IDX);
 }
 
+// Dolphin's temporary files are named <file>.dolphin.tmp, so another program writing the same
+// file (the launcher) can't collide with them.
 bool WriteFileAtomically(const std::string& path, std::string_view contents)
 {
-  const std::string tmp = path + ".tmp";
+  const std::string tmp = path + ".dolphin.tmp";
   if (!File::CreateFullPath(path) || !File::WriteStringToFile(tmp, contents))
     return false;
 #ifndef _WIN32
   chmod(tmp.c_str(), 0600);
 #endif
   return File::Rename(tmp, path);
+}
+
+enum class Created
+{
+  Yes,
+  Exists,  // someone else made it first: not replaced
+  Failed,
+};
+
+// Writes a new file without ever replacing one that exists: a temporary file, then moved (Windows:
+// MoveFileEx without MOVEFILE_REPLACE_EXISTING) or hard-linked (POSIX) to `path`, both of which
+// fail if `path` exists, so a reader never sees it half written.
+Created CreateFileExclusively(const std::string& path, std::string_view contents)
+{
+  const std::string tmp = path + ".dolphin.tmp";
+  if (!File::CreateFullPath(path) || !File::WriteStringToFile(tmp, contents))
+    return Created::Failed;
+#ifdef _WIN32
+  const bool moved = MoveFileExW(UTF8ToWString(tmp).c_str(), UTF8ToWString(path).c_str(),
+                                 MOVEFILE_WRITE_THROUGH) != 0;
+  const DWORD error = moved ? 0 : GetLastError();
+  if (moved)
+    return Created::Yes;
+  File::Delete(tmp, File::IfAbsentBehavior::NoConsoleWarning);
+  return error == ERROR_ALREADY_EXISTS || error == ERROR_FILE_EXISTS ? Created::Exists :
+                                                                       Created::Failed;
+#else
+  chmod(tmp.c_str(), 0600);
+  const bool linked = link(tmp.c_str(), path.c_str()) == 0;
+  const int error = linked ? 0 : errno;
+  unlink(tmp.c_str());
+  if (linked)
+    return Created::Yes;
+  if (error == EEXIST)
+    return Created::Exists;
+  // A file system without hard links: an exclusive create instead.
+  const int fd = open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL, 0600);
+  if (fd < 0)
+    return errno == EEXIST ? Created::Exists : Created::Failed;
+  const bool written =
+      write(fd, contents.data(), contents.size()) == static_cast<ssize_t>(contents.size());
+  close(fd);
+  return written ? Created::Yes : Created::Failed;
+#endif
+}
+
+FileStamp StampOf(const std::string& path)
+{
+  std::error_code error;
+  const std::filesystem::path p = StringToPath(path);
+  FileStamp stamp;
+  const auto mtime = std::filesystem::last_write_time(p, error);
+  if (error)
+    return stamp;
+  const auto size = std::filesystem::file_size(p, error);
+  if (error)
+    return stamp;
+  stamp.exists = true;
+  stamp.mtime = mtime;
+  stamp.size = size;
+  return stamp;
 }
 
 void Touch()
@@ -284,31 +366,71 @@ void LeaveLocked(const char* why)
   Touch();
 }
 
-void LoadHiddenLocked()
+std::string HiddenPath()
 {
-  if (s.hidden_loaded)
-    return;
-  s.hidden_loaded = true;
-  const std::string path = OnlineDir() + "chat-hidden.json";
+  return OnlineDir() + "chat-hidden.json";
+}
+
+// The ignore list in chat-hidden.json: empty if there is no file, nullopt if it can't be read or
+// is not {"hidden": [...]} (entries that are not uids are skipped, at most MAX_HIDDEN are kept).
+std::optional<std::set<std::string>> ReadHiddenFile(const std::string& path)
+{
+  std::set<std::string> out;
+  if (!File::Exists(path))
+    return out;
   std::string text;
-  if (!File::Exists(path) || !File::ReadFileToString(path, text) || text.size() > MAX_HIDDEN_FILE ||
-      !Gprb::PeerData::JsonSafeToParse(text))
+  if (File::GetSize(path) > MAX_HIDDEN_FILE || !File::ReadFileToString(path, text) ||
+      text.size() > MAX_HIDDEN_FILE || !Gprb::PeerData::JsonSafeToParse(text))
   {
-    return;
+    return std::nullopt;
   }
   picojson::value root;
   if (!picojson::parse(root, text).empty() || !root.is<picojson::object>())
-    return;
+    return std::nullopt;
   const picojson::value* list = Get(root.get<picojson::object>(), "hidden");
   if (!list || !list->is<picojson::array>())
-    return;
+    return std::nullopt;
   for (const picojson::value& v : list->get<picojson::array>())
   {
-    if (s.hidden.size() >= MAX_HIDDEN)
+    if (out.size() >= MAX_HIDDEN)
       break;
     if (v.is<std::string>() && IsUid(v.get<std::string>()))
-      s.hidden.insert(v.get<std::string>());
+      out.insert(v.get<std::string>());
   }
+  return out;
+}
+
+// Reads chat-hidden.json the first time, and again when `always` or when its time or size changed
+// (the launcher shares it). A file that can't be read keeps the list as it is, and is tried again
+// at the next check.
+void RefreshHiddenLocked(bool always)
+{
+  const std::string path = HiddenPath();
+  const FileStamp stamp = StampOf(path);
+  if (s.hidden_loaded && !always && stamp == s.hidden_stamp)
+    return;
+  const bool first = !s.hidden_loaded;
+  s.hidden_loaded = true;
+  auto list = ReadHiddenFile(path);
+  if (!list)
+  {
+    if (stamp != s.hidden_stamp)
+      Log("cannot read chat-hidden.json");
+    return;
+  }
+  s.hidden_stamp = stamp;
+  if (*list == s.hidden)
+    return;
+  s.hidden = std::move(*list);
+  if (!first)
+    Log(fmt::format("chat-hidden.json changed: {} ignored", s.hidden.size()));
+  Touch();
+}
+
+void LoadHiddenLocked()
+{
+  if (!s.hidden_loaded)
+    RefreshHiddenLocked(false);
 }
 
 void SaveHiddenLocked()
@@ -318,49 +440,66 @@ void SaveHiddenLocked()
     list.emplace_back(uid);
   picojson::object o;
   o["hidden"] = picojson::value(list);
-  if (!WriteFileAtomically(OnlineDir() + "chat-hidden.json", picojson::value(o).serialize(true)))
+  if (!WriteFileAtomically(HiddenPath(), picojson::value(o).serialize(true)))
     Log("cannot write chat-hidden.json");
+  s.hidden_stamp = StampOf(HiddenPath());
+}
+
+// The seed in chat-identity.key: 64 hex digits (either case), trailing CR, LF and spaces allowed.
+// nullopt if the file can't be read or holds anything else.
+std::optional<CC::Key32> ReadIdentityFile(const std::string& path)
+{
+  std::string text;
+  std::optional<CC::Key32> seed;
+  if (File::GetSize(path) <= 256 && File::ReadFileToString(path, text) && text.size() <= 256)
+  {
+    while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' '))
+      text.pop_back();
+    seed = CC::FromHexFixed<32>(text);
+  }
+  CC::Wipe(text.data(), text.size());
+  return seed;
 }
 
 void LoadIdentityLocked()
 {
-  if (s.identity_tried)
+  // Until it works: a key that couldn't be read or written is tried again at the next hello.
+  if (s.identity)
     return;
-  s.identity_tried = true;
   const std::string path = OnlineDir() + "chat-identity.key";
   std::optional<CC::Key32> seed;
-  if (File::Exists(path))
+  // Twice at most: if the launcher makes the file between our look and our create, read its key.
+  for (int attempt = 0; attempt < 2 && !seed; ++attempt)
   {
-    std::string text;
-    if (File::ReadFileToString(path, text) && text.size() <= 256)
+    if (File::Exists(path))
     {
-      while (!text.empty() && (text.back() == '\n' || text.back() == '\r' || text.back() == ' '))
-        text.pop_back();
-      seed = CC::FromHexFixed<32>(text);
-    }
-    CC::Wipe(text.data(), text.size());
-    if (!seed)
-    {
+      seed = ReadIdentityFile(path);
+      if (seed)
+        break;
       // Not ours to delete: keep it aside and make a new key (the server keeps the old public
       // key, so reports about what was said with it still verify).
       File::Rename(path, path + ".bad");
       Log("chat-identity.key is unreadable: kept as .bad, made a new key");
     }
+    CC::Key32 fresh = CC::RandomKey32();
+    std::string hex = CC::ToHex(fresh) + "\n";
+    const Created created = CreateFileExclusively(path, hex);
+    CC::Wipe(hex.data(), hex.size());
+    if (created == Created::Yes)
+      seed = fresh;
+    CC::Wipe(fresh.data(), fresh.size());
+    if (created == Created::Failed)
+      break;
+    if (created == Created::Exists)
+      Log("chat-identity.key appeared meanwhile: reading it");
   }
   if (!seed)
   {
-    seed = CC::RandomKey32();
-    std::string hex = CC::ToHex(*seed) + "\n";
-    const bool ok = WriteFileAtomically(path, hex);
-    CC::Wipe(hex.data(), hex.size());
-    if (!ok)
-    {
-      s.identity_error = "cannot write chat-identity.key";
-      Log(s.identity_error);
-      CC::Wipe(seed->data(), seed->size());
-      return;
-    }
+    s.identity_error = "cannot write chat-identity.key";
+    Log(s.identity_error);
+    return;
   }
+  s.identity_error.clear();
   s.identity = std::make_unique<CC::Identity>(*seed);
   CC::Wipe(seed->data(), seed->size());
   s.identity_hex = CC::ToHex(s.identity->PublicKey());
@@ -505,6 +644,9 @@ void OnGroup(const picojson::object& o, Clock::time_point now)
   const bool fresh = s.kind == GroupKind::None || *group != s.group;
   if (fresh)
   {
+    // The launcher may have changed the ignore list since the last look: the window starts a
+    // group whose other members are all ignored collapsed.
+    RefreshHiddenLocked(false);
     LeaveLocked("new group");
     s.kind = kind;
     s.group = *group;
@@ -829,6 +971,11 @@ std::vector<std::string> TakeOutbox()
       Touch();
     }
   }
+  if (const auto now = Clock::now(); now - s.hidden_checked >= IGNORE_FILE_EVERY)
+  {
+    s.hidden_checked = now;
+    RefreshHiddenLocked(false);
+  }
   ProcessPendingLocked();
   std::vector<std::string> out(std::make_move_iterator(s.outbox.begin()),
                                std::make_move_iterator(s.outbox.end()));
@@ -868,6 +1015,7 @@ std::optional<View> GetView(u64 known_serial)
   v.code = Code();
   v.title = Title();
   v.last_message_ms = s.last_message_ms;
+  v.group_number = s.kind == GroupKind::None ? 0 : s.groups;
   for (size_t i = 0; i < s.members.size(); ++i)
   {
     const MemberState& m = s.members[i];
@@ -926,7 +1074,8 @@ void SetHidden(const std::string& uid, bool hidden)
   if (!IsUid(uid))
     return;
   std::lock_guard lk(s_mutex);
-  LoadHiddenLocked();
+  // The launcher's changes first, so this write doesn't undo them.
+  RefreshHiddenLocked(true);
   if (hidden == s.hidden.contains(uid))
     return;
   if (hidden)
@@ -948,6 +1097,12 @@ bool IsHidden(const std::string& uid)
   std::lock_guard lk(s_mutex);
   LoadHiddenLocked();
   return s.hidden.contains(uid);
+}
+
+void CheckIgnoreFile()
+{
+  std::lock_guard lk(s_mutex);
+  RefreshHiddenLocked(false);
 }
 
 bool Report(const std::string& uid, const std::string& reason)

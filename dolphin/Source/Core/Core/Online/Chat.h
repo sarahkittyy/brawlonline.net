@@ -35,13 +35,16 @@ constexpr double RECEIVE_PER_SECOND = 1.5;
 
 // ---- The online connection (Rooms thread) ----
 
-// The identity public key for `hello` (64 hex digits), made and stored on first use in
-// <User>/Online/chat-identity.key. Empty if the key can't be read or written (no chat then).
+// The identity public key for `hello` (64 hex digits), read from <User>/Online/chat-identity.key
+// (the launcher reads it too). Made on first use if the file is missing, created so that it never
+// replaces a key file another program made meanwhile (that one is read instead). Empty if the key
+// can't be read or written (no chat then; tried again on the next call).
 std::string IdentityPublicKeyHex();
 // A message from mm. Returns false if it is not a chat message (the caller handles it).
 bool OnServerMessage(const std::string& packet);
 // JSON messages to send now (group keys, encrypted messages, leaves, reports). Called every
-// tick; it also notices when a match's session has connected (the group is shown from then).
+// tick; it also notices when a match's session has connected (the group is shown from then), and
+// re-reads the ignore list if the launcher changed it (CheckIgnoreFile, at most once a second).
 std::vector<std::string> TakeOutbox();
 // The connection dropped or was closed: the group is gone (mm sends it again after a reconnect).
 void OnConnectionLost();
@@ -60,7 +63,7 @@ struct Member
   std::string code;  // cleaned
   bool is_me = false;
   bool has_key = false;  // can read what is sent (its group key checked out)
-  bool hidden = false;
+  bool hidden = false;   // ignored: their lines are covered
   int color = 0;  // 0-3, by joining order
 };
 
@@ -89,6 +92,7 @@ struct View
   std::string title;  // "Room KFQB" / the other player's name and code
   std::vector<Member> members;
   std::vector<Line> lines;  // oldest first, at most MAX_LINES
+  u64 group_number = 0;     // which group this is: a new number for each group joined (0: none)
   u64 serial = 0;           // changes whenever anything above changes
   u64 last_message_ms = 0;  // Common::Timer::NowMs() of the newest Message or Own line
 };
@@ -105,8 +109,15 @@ enum class SendResult
 };
 SendResult Send(const std::string& text);
 
+// The ignore list ("Ignore user" / "Unignore user"): <User>/Online/chat-hidden.json,
+// {"hidden": ["<uid>", ...]}, shared with the launcher. SetHidden re-reads the file first, so a
+// change the launcher made is kept, then writes it atomically (a temporary file renamed over it).
 void SetHidden(const std::string& uid, bool hidden);
 bool IsHidden(const std::string& uid);
+// Re-reads chat-hidden.json if its modification time or size changed since it was last read or
+// written (a missing file is an empty list; a damaged one keeps the list as it was). Not for the
+// CPU or GPU thread: TakeOutbox calls it on the Rooms thread at most once a second.
+void CheckIgnoreFile();
 // Reports this member's recent messages (at most MAX_REPORTED_MESSAGES) to mm.
 bool Report(const std::string& uid, const std::string& reason);
 

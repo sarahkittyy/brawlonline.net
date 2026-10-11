@@ -63,6 +63,8 @@ bool OnScreenUI::Initialize(u32 width, u32 height, float scale)
 
   // Don't create an ini file. TODO: Do we want this in the future?
   ImGui::GetIO().IniFilename = nullptr;
+  // The system clipboard for text boxes, where the host gives one (DolphinQt: Qt's).
+  OnlineChatUI::InstallClipboard();
   SetScale(scale);
 
   PortableVertexDeclaration vdecl = {};
@@ -594,7 +596,7 @@ void OnScreenUI::SetKeyMap(const DolphinKeyMap& key_map)
       ImGuiKey_End,       ImGuiKey_Insert,    ImGuiKey_Delete,     ImGuiKey_Backspace,
       ImGuiKey_Space,     ImGuiKey_Enter,     ImGuiKey_Escape,     ImGuiKey_KeypadEnter,
       ImGuiKey_A,         ImGuiKey_C,         ImGuiKey_V,          ImGuiKey_X,
-      ImGuiKey_Y,         ImGuiKey_Z,
+      ImGuiKey_Y,         ImGuiKey_Z,         ImGuiKey_W,
   };
 
   auto lock = GetImGuiLock();
@@ -603,7 +605,7 @@ void OnScreenUI::SetKeyMap(const DolphinKeyMap& key_map)
     return;
 
   m_dolphin_to_imgui_map.clear();
-  for (int dolphin_key = 0; dolphin_key <= static_cast<int>(DolphinKey::Z); dolphin_key++)
+  for (int dolphin_key = 0; dolphin_key <= static_cast<int>(DolphinKey::W); dolphin_key++)
   {
     const int imgui_key = dolphin_to_imgui_map[DolphinKey(dolphin_key)];
     if (imgui_key >= 0)
@@ -614,14 +616,34 @@ void OnScreenUI::SetKeyMap(const DolphinKeyMap& key_map)
   }
 }
 
-void OnScreenUI::SetKey(u32 key, bool is_down, const char* chars)
+void OnScreenUI::SetKey(u32 key, bool is_down, const char* chars, u32 modifiers)
 {
   auto lock = GetImGuiLock();
+  SetModifiersUnlocked(modifiers);
   if (auto iter = m_dolphin_to_imgui_map.find(key); iter != m_dolphin_to_imgui_map.end())
     ImGui::GetIO().AddKeyEvent((ImGuiKey)iter->second, is_down);
 
   if (chars)
     ImGui::GetIO().AddInputCharactersUTF8(chars);
+}
+
+void OnScreenUI::SetModifiers(u32 modifiers)
+{
+  auto lock = GetImGuiLock();
+  SetModifiersUnlocked(modifiers);
+}
+
+void OnScreenUI::SetModifiersUnlocked(u32 modifiers)
+{
+  // Before the key itself, so Ctrl+Backspace, Ctrl+V or Shift+Left arrive with their modifiers.
+  // ImGui only queues a change, so passing the same state again costs nothing.
+  if (!ImGui::GetCurrentContext())
+    return;
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddKeyEvent(ImGuiMod_Ctrl, (modifiers & DolphinKeyModifier_Ctrl) != 0);
+  io.AddKeyEvent(ImGuiMod_Shift, (modifiers & DolphinKeyModifier_Shift) != 0);
+  io.AddKeyEvent(ImGuiMod_Alt, (modifiers & DolphinKeyModifier_Alt) != 0);
+  io.AddKeyEvent(ImGuiMod_Super, (modifiers & DolphinKeyModifier_Super) != 0);
 }
 
 void OnScreenUI::SetMousePos(float x, float y)

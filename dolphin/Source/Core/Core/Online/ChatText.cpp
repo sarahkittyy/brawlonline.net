@@ -188,6 +188,33 @@ std::string_view Truncate(std::string_view utf8, size_t max_code_points, size_t 
   return utf8.substr(0, end);
 }
 
+size_t WordRuboutStart(std::string_view text, size_t cursor)
+{
+  // U+3000 in UTF-8.
+  constexpr std::string_view IDEOGRAPHIC_SPACE = "\xE3\x80\x80";
+  size_t i = std::min(cursor, text.size());
+  // Onto a code point boundary.
+  while (i > 0 && i < text.size() && (static_cast<unsigned char>(text[i]) & 0xC0) == 0x80)
+    --i;
+  // The length of the space that ends at `end`, or 0.
+  const auto space_before = [&](size_t end) -> size_t {
+    if (end >= 1 && text[end - 1] == ' ')
+      return 1;
+    if (end >= 3 && text.substr(end - 3, 3) == IDEOGRAPHIC_SPACE)
+      return 3;
+    return 0;
+  };
+  while (const size_t n = space_before(i))
+    i -= n;
+  while (i > 0 && space_before(i) == 0)
+  {
+    --i;
+    while (i > 0 && (static_cast<unsigned char>(text[i]) & 0xC0) == 0x80)
+      --i;
+  }
+  return i;
+}
+
 std::optional<std::string> Clean(std::string_view text, size_t max_code_points, size_t max_bytes)
 {
   std::string out;

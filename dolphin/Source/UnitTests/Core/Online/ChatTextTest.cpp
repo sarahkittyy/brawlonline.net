@@ -1,6 +1,8 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
+#include <algorithm>
+#include <iterator>
 #include <random>
 #include <string>
 #include <vector>
@@ -193,6 +195,48 @@ TEST(ChatText, Truncate)
   EXPECT_EQ(Truncate(U8(U"aねb"), 10, 3), "a");
   EXPECT_EQ(Truncate("", 10, 10), "");
   EXPECT_EQ(CountCodePoints(U8(U"aね\U0001F600")), 3u);
+}
+
+TEST(ChatText, WordRubout)
+{
+  // Ctrl+W: the spaces before the cursor, then the word before them.
+  EXPECT_EQ(WordRuboutStart("hello world", 11), 6u);
+  EXPECT_EQ(WordRuboutStart("hello world  ", 13), 6u);
+  EXPECT_EQ(WordRuboutStart("hello world", 8), 6u);  // inside a word: back to its start
+  EXPECT_EQ(WordRuboutStart("hello world", 6), 0u);  // right after a space: the word before it
+  EXPECT_EQ(WordRuboutStart("hello", 5), 0u);
+  EXPECT_EQ(WordRuboutStart("   ", 3), 0u);
+  EXPECT_EQ(WordRuboutStart("", 0), 0u);
+  EXPECT_EQ(WordRuboutStart("ab", 0), 0u);
+  // Punctuation is part of the word, as in a terminal.
+  EXPECT_EQ(WordRuboutStart("gg, wp!", 7), 4u);
+  EXPECT_EQ(WordRuboutStart("gg, wp!", 4), 0u);
+  // Past the end: clamped.
+  EXPECT_EQ(WordRuboutStart("a b", 99), 2u);
+  // UTF-8: never inside a code point; the ideographic space separates words too.
+  const std::string jp = U8(U"ねこ　いぬ");
+  EXPECT_EQ(WordRuboutStart(jp, jp.size()), U8(U"ねこ　").size());
+  EXPECT_EQ(WordRuboutStart(jp, U8(U"ねこ　").size()), 0u);
+  EXPECT_EQ(WordRuboutStart(jp, 4), 0u);  // a cursor inside こ is moved onto its start first
+  const std::string mixed = U8(U"a ね");
+  EXPECT_EQ(WordRuboutStart(mixed, mixed.size()), 2u);
+
+  std::mt19937 rng(7);
+  for (int i = 0; i < 20000; ++i)
+  {
+    std::string text;
+    const int n = static_cast<int>(rng() % 12);
+    for (int j = 0; j < n; ++j)
+    {
+      const char32_t pick[] = {U'a', U' ', U'ね', U'　', U'\U0001F600', U'.'};
+      text += U8(std::u32string(1, pick[rng() % std::size(pick)]));
+    }
+    const size_t cursor = rng() % (text.size() + 2);
+    const size_t start = WordRuboutStart(text, cursor);
+    ASSERT_LE(start, std::min(cursor, text.size()));
+    // On a code point boundary.
+    ASSERT_TRUE(start == text.size() || (static_cast<unsigned char>(text[start]) & 0xC0) != 0x80);
+  }
 }
 
 TEST(ChatText, FuzzInvariants)

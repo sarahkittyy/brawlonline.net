@@ -56,7 +56,9 @@ public:
 
   // Receive keyboard and mouse from QT
   void SetKeyMap(const DolphinKeyMap& key_map);
-  void SetKey(u32 key, bool is_down, const char* chars);
+  // `modifiers`: the DolphinKeyModifier bits held with this key.
+  void SetKey(u32 key, bool is_down, const char* chars, u32 modifiers);
+  void SetModifiers(u32 modifiers);
   void SetMousePos(float x, float y);
   void SetMousePress(u32 button_mask);
   void SetMouseWheel(float x, float y);
@@ -65,6 +67,7 @@ private:
   void DrawDebugText();
   void DrawChallengesAndLeaderboards();
   void UpdateImguiTexture(ImTextureData* tex);
+  void SetModifiersUnlocked(u32 modifiers);
 
   // ImGui resources.
   std::unique_ptr<NativeVertexFormat> m_imgui_vertex_format;

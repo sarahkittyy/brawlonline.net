@@ -1052,10 +1052,16 @@ void Presenter::SetKeyMap(const DolphinKeyMap& key_map)
     m_onscreen_ui->SetKeyMap(key_map);
 }
 
-void Presenter::SetKey(u32 key, bool is_down, const char* chars)
+void Presenter::SetKey(u32 key, bool is_down, const char* chars, u32 modifiers)
 {
   if (m_onscreen_ui)
-    m_onscreen_ui->SetKey(key, is_down, chars);
+    m_onscreen_ui->SetKey(key, is_down, chars, modifiers);
+}
+
+void Presenter::SetKeyModifiers(u32 modifiers)
+{
+  if (m_onscreen_ui)
+    m_onscreen_ui->SetModifiers(modifiers);
 }
 
 void Presenter::SetMousePos(float x, float y)

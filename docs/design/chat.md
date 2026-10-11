@@ -13,9 +13,9 @@ _2026-10-10. The user's decisions from two question rounds; the wire format is `
 | 5 | Signatures | **Each install has an Ed25519 identity key** (registered with the server through `hello`). Every message and every group key is signed inside the encryption, so a report carries proof the server can check, and reports can't be made up. The server still can't read chat. |
 | 6 | Library | **Monocypher** 4 (one C file, audited, public domain/BSD) with its optional Ed25519 file, in Dolphin's Externals. The server and `mmclient` use the RustCrypto crates for the same primitives. |
 | 7 | During a match | **Shown by default; players can type mid-match.** A saved option, "Show during matches", hides the window for every match without clicking each time; messages that arrive meanwhile are there when the match ends. |
-| 8 | Placement | **In the side bar** when the game is 4:3 in a wider window, **else the top-left** of the game. The window is **draggable, resizable and collapsible**, and remembers where it was put. |
-| 9 | Typing | The rebindable hotkey **"Activate NetPlay Chat" (default T)** opens the box. While it has focus, **only keyboard and mouse input is blocked** from the game; GameCube adapters and controllers keep playing. |
-| 10 | Hide | **Click a name: Hide messages / Show messages / Report.** A hidden player's lines become a dark box the size of the text (Discord's spoiler); clicking one box reveals that message only. Kept by account (not by name), across matches and rooms. |
+| 8 | Placement | **In the side bar** when the game is 4:3 in a wider window, **else the top-left** of the game. The window is **draggable, resizable and collapsible**, and remembers where it was put. Text about standard ImGui's size (13 px at 720 lines, growing gently with the window and the screen's DPI scale); the default window a few lines of a few words, covering little of the game. |
+| 9 | Typing | The rebindable hotkey **"Activate NetPlay Chat" (default T)** opens the box. While it has focus, **only keyboard and mouse input is blocked** from the game; GameCube adapters and controllers keep playing. **The box keeps focus after a message is sent**, so several can go in a row; Enter on an empty box, Esc, or a click outside the window gives the game its keyboard back. Right click on the box: Cut / Copy / Paste / Select all; Ctrl+Backspace and Ctrl+W delete the word before the cursor (user request 2026-10-10). |
+| 10 | Ignore | **Click (left or right) a name: Ignore user / Unignore user / Report.** An ignored player's lines become a dark box the size of the text (Discord's spoiler); clicking one box reveals that message only. Kept by account (not by name), across matches and rooms, **shared with the launcher** (ignoring in one ignores in the other). When everyone else in the chat is ignored (the opponent of a 1v1, every other player of a room) the window collapses, and a group that starts that way starts collapsed; unignoring leaves it to the player to open it again (user request 2026-10-10). |
 | 11 | Font | **Noto Sans + Noto Sans JP** (SIL OFL), shipped in `Sys/Resources`, so kana and kanji in names and messages render on every platform. |
 
 ## 2. Threat model
@@ -23,7 +23,7 @@ _2026-10-10. The user's decisions from two question rounds; the wire format is `
 | Who | Can | Can't |
 |---|---|---|
 | Someone on the network path | See that chat happens, its size and timing | Read it, change it, inject messages (all are authenticated) |
-| Another player | Send text (cleaned, size- and rate-limited), be hidden or reported | Crash or corrupt the game (every byte is checked), spoof another player's name (names come from mm), replay old messages, fake a report about someone else |
+| Another player | Send text (cleaned, size- and rate-limited), be ignored or reported | Crash or corrupt the game (every byte is checked), spoof another player's name (names come from mm), replay old messages, fake a report about someone else |
 | A compromised mm | Hand out its own keys and read what is sent afterwards, drop or delay messages | Read past chat, forge a message that verifies against an existing identity key |
 
 The play key travels in `hello` unencrypted, like Slippi's tickets; that is out of this design's scope (noted for later).
@@ -45,7 +45,7 @@ Drawing uses `ImGui::TextUnformatted` only (never a printf-style call with peer 
 
 - **Rooms:** one group per room, for as long as the player is in it. Joins and leaves show as grey lines.
 - **Matches:** one group per match, from the moment mm pairs the players. Dolphin shows it once the peer-to-peer session is up (a failed connect requeues and the next ticket ends the group). It ends when either player searches again, joins a room, leaves the online CSS, or quits.
-- A new group starts with an empty history. Nothing is stored on disk except the hidden list and the identity key.
+- A new group starts with an empty history. Nothing is stored on disk except the ignore list and the identity key.
 
 ## 5. Not in scope
 

@@ -6,7 +6,9 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <cmath>
 #include <cstdio>
+#include <mutex>
 #include <optional>
 #include <set>
 #include <string>
@@ -35,8 +37,14 @@ using Online::Chat::Line;
 constexpr float FADED_ALPHA = 0.35f;
 constexpr u64 FADE_AFTER_MS = 8000;
 constexpr u64 NOTICE_MS = 3000;
-// The saved geometry's unit: fractions of the window in 1/10000.
+// The saved geometry: "2 x y w h collapsed", fractions of the window in 1/10000. The leading 2 is
+// the format's version: layouts saved before it (five numbers, from when the text and the default
+// window were about twice as big) are dropped for the new default.
+constexpr int GEOMETRY_VERSION = 2;
 constexpr int GEOMETRY_UNIT = 10000;
+// Frames the box may take to get the keyboard back after a message is sent (SetKeyboardFocusHere
+// activates it a frame or two later); the game's keyboard stays blocked meanwhile.
+constexpr int REFOCUS_FRAMES = 4;
 
 // Port colours (P1 red, P2 blue, P3 yellow, P4 green), by joining order.
 constexpr std::array<ImU32, 4> NAME_COLORS = {
@@ -48,14 +56,31 @@ constexpr std::array<ImU32, 4> NAME_COLORS = {
 constexpr ImU32 SYSTEM_COLOR = IM_COL32(170, 170, 180, 255);
 constexpr ImU32 SPOILER_COLOR = IM_COL32(58, 60, 68, 255);
 constexpr ImU32 SPOILER_HOVER_COLOR = IM_COL32(78, 80, 90, 255);
-// The chat's text height: a share of the window's height, so it reads the same at any size.
-constexpr float FONT_SHARE = 1.0f / 54.0f;
-constexpr float MIN_FONT_PX = 14.0f;
-constexpr float MAX_FONT_PX = 44.0f;
+// The chat's text height, in logical pixels (times the backbuffer scale, the screen's DPI scale):
+// about standard ImGui's 13 px in a 720-line window, growing with the cube root-ish of the
+// window's height (14.7 at 1080, 16 at 1440, 18 at 2160), so a big window doesn't get big text.
+constexpr float FONT_BASE_PX = 13.0f;
+constexpr float FONT_BASE_HEIGHT = 720.0f;
+constexpr float FONT_GROWTH = 0.3f;
+constexpr float MIN_FONT_PX = 12.0f;
+constexpr float MAX_FONT_PX = 18.0f;
+
+#ifdef __APPLE__
+constexpr const char* SHORTCUT_PREFIX = "Cmd+";
+#else
+constexpr const char* SHORTCUT_PREFIX = "Ctrl+";
+#endif
 
 std::atomic<bool> s_activate{false};
 std::atomic<bool> s_typing{false};
 ImFont* s_font = nullptr;
+
+// The clipboard (SetClipboard), and ImGui's own functions for when there is none.
+std::mutex s_clipboard_mutex;
+Clipboard s_clipboard;
+const char* (*s_default_get_clipboard)(ImGuiContext*) = nullptr;
+void (*s_default_set_clipboard)(ImGuiContext*, const char*) = nullptr;
+std::string s_clipboard_text;  // what the last get returned (under the ImGui lock)
 
 struct Geometry
 {
@@ -64,24 +89,52 @@ struct Geometry
   bool collapsed = false;
 };
 
+// What the box's callback does once the box has focus again (its menu, or after a message).
+enum class Edit : u8
+{
+  None,
+  Cut,        // delete the selection (already copied)
+  Paste,      // the clipboard over the selection
+  SelectAll,  // select everything
+  Restore,    // the selection as it was (Copy)
+  End,        // the cursor at the end, nothing selected (after Enter)
+};
+
 struct UiState
 {
   std::optional<Online::Chat::View> view;
   u64 serial = 0;
-  std::set<u64> revealed;  // ids of hidden players' lines clicked open
+  std::set<u64> revealed;  // ids of ignored players' lines clicked open
   std::array<char, Online::ChatText::MAX_MESSAGE_BYTES + 1> input{};
   bool focus_input = false;
+  int refocus_frames = 0;
   bool was_typing = false;
   bool hovered = false;
   bool at_bottom = true;
   bool scroll_to_bottom = false;
   u64 newest_line = 0;
 
+  // The box: Ctrl+W this frame, the menu's edit waiting for focus, the selection when it last had
+  // focus (bytes), and whether it had focus when its menu was opened.
+  bool delete_word = false;
+  Edit edit = Edit::None;
+  int sel_start = 0;
+  int sel_end = 0;
+  bool menu_was_typing = false;
+
   // Geometry: placed for this window size; what was applied; the player moving it.
   bool placed = false;
   ImVec2 display{};
   Geometry applied;
   bool interacting = false;
+
+  // Collapsed because every other member is ignored: the group it was decided for, and whether the
+  // window is collapsed by that (not by the player) so the next group can open it again.
+  u64 group_number = 0;
+  bool all_ignored = false;
+  bool collapse = false;
+  bool expand = false;
+  bool auto_collapsed = false;
 
   // The name menu.
   bool open_menu = false;
@@ -99,12 +152,24 @@ void SetNotice(std::string text)
   s.notice_until = Common::Timer::NowMs() + NOTICE_MS;
 }
 
+float FontPx(float display_h, float scale)
+{
+  const float dpi = scale > 0.0f ? scale : 1.0f;
+  const float logical_h = std::max(display_h / dpi, 1.0f);
+  return dpi * std::clamp(FONT_BASE_PX * std::pow(logical_h / FONT_BASE_HEIGHT, FONT_GROWTH),
+                          MIN_FONT_PX, MAX_FONT_PX);
+}
+
 std::optional<Geometry> LoadGeometry(ImVec2 display)
 {
   const std::string text = Config::Get(Config::ONLINE_CHAT_WINDOW);
-  int x, y, w, h, c;
-  if (text.size() > 64 || std::sscanf(text.c_str(), "%d %d %d %d %d", &x, &y, &w, &h, &c) != 5)
+  int version, x, y, w, h, c;
+  if (text.size() > 64 ||
+      std::sscanf(text.c_str(), "%d %d %d %d %d %d", &version, &x, &y, &w, &h, &c) != 6 ||
+      version != GEOMETRY_VERSION)
+  {
     return std::nullopt;
+  }
   const auto in_range = [](int v) { return v >= 0 && v <= GEOMETRY_UNIT; };
   if (!in_range(x) || !in_range(y) || !in_range(w) || !in_range(h) || w < GEOMETRY_UNIT / 50 ||
       h < GEOMETRY_UNIT / 50)
@@ -123,13 +188,14 @@ void SaveGeometry(const Geometry& g, ImVec2 display)
     return std::clamp(static_cast<int>(v / total * GEOMETRY_UNIT + 0.5f), 0, GEOMETRY_UNIT);
   };
   Config::SetBaseOrCurrent(Config::ONLINE_CHAT_WINDOW,
-                           fmt::format("{} {} {} {} {}", u(g.pos.x, display.x),
+                           fmt::format("{} {} {} {} {} {}", GEOMETRY_VERSION, u(g.pos.x, display.x),
                                        u(g.pos.y, display.y), u(g.size.x, display.x),
                                        u(g.size.y, display.y), g.collapsed ? 1 : 0));
   Config::Save();
 }
 
-// In the side bar when the game is 4:3 in a wider window, else the game's top-left corner.
+// In the side bar when the game is 4:3 in a wider window, else the game's top-left corner. A few
+// lines of a few words: it covers little of the game (the player can make it bigger).
 Geometry DefaultGeometry(ImVec2 display, float scale, float font_px)
 {
   MathUtil::Rectangle<int> r = g_presenter ? g_presenter->GetTargetRectangle() :
@@ -143,12 +209,13 @@ Geometry DefaultGeometry(ImVec2 display, float scale, float font_px)
   if (bar >= 170.0f * scale)
   {
     g.pos = {8.0f * scale, r.top + 8.0f * scale};
-    g.size = {bar - 16.0f * scale, std::max(160.0f * scale, game_h * 0.5f)};
+    g.size = {std::min(bar - 16.0f * scale, 24.0f * font_px),
+              std::min(16.0f * font_px, game_h * 0.45f)};
   }
   else
   {
     g.pos = {r.left + 12.0f * scale, r.top + 12.0f * scale};
-    g.size = {std::min(24.0f * font_px, game_w * 0.4f), std::min(12.0f * font_px, game_h * 0.4f)};
+    g.size = {std::min(22.0f * font_px, game_w * 0.32f), std::min(12.0f * font_px, game_h * 0.35f)};
   }
   return g;
 }
@@ -168,19 +235,43 @@ const Online::Chat::Member* FindMember(std::string_view uid)
   return it == s.view->members.end() ? nullptr : &*it;
 }
 
+// Everyone else in the group is ignored (the opponent of a 1v1, every other player of a room).
+bool AllOthersIgnored(const Online::Chat::View& v)
+{
+  bool anyone = false;
+  for (const Online::Chat::Member& m : v.members)
+  {
+    if (m.is_me)
+      continue;
+    if (!m.hidden)
+      return false;
+    anyone = true;
+  }
+  return anyone;
+}
+
 ImU32 ColorOf(int color)
 {
   return NAME_COLORS[static_cast<size_t>(color) % NAME_COLORS.size()];
 }
 
-// A name drawn as text that can be clicked (an InvisibleButton under it: the name is never a
-// widget label). Clicking another player's name opens their menu.
+// The Control key itself (ImGui swaps Control and Command on macOS, so there it reads as Super).
+bool ControlKeyDown()
+{
+  const ImGuiIO& io = ImGui::GetIO();
+  return io.ConfigMacOSXBehaviors ? io.KeySuper : io.KeyCtrl;
+}
+
+// A name drawn as text that can be clicked, left or right (an InvisibleButton under it: the name
+// is never a widget label). Clicking another player's name opens their menu.
 void NameButton(std::string_view text, ImU32 color, const std::string& uid, bool clickable,
                 float y_offset = 0.0f)
 {
   const ImVec2 size = ImGui::CalcTextSize(text.data(), text.data() + text.size());
   ImVec2 pos = ImGui::GetCursorScreenPos();
-  const bool clicked = ImGui::InvisibleButton("##name", ImVec2(std::max(size.x, 1.0f), size.y));
+  const bool clicked =
+      ImGui::InvisibleButton("##name", ImVec2(std::max(size.x, 1.0f), size.y),
+                             ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
   const bool hovered = clickable && ImGui::IsItemHovered();
   pos.y += y_offset;
   ImDrawList* draw = ImGui::GetWindowDrawList();
@@ -220,9 +311,9 @@ void DrawLine(const Line& line, float scale)
 
   // A sender who has left the group is no member any more: ask Chat (rare).
   const Online::Chat::Member* m = FindMember(line.uid);
-  const bool hidden = !own && (m ? m->hidden : Online::Chat::IsHidden(line.uid)) &&
-                      !s.revealed.contains(line.id);
-  if (hidden)
+  const bool ignored = !own && (m ? m->hidden : Online::Chat::IsHidden(line.uid)) &&
+                       !s.revealed.contains(line.id);
+  if (ignored)
   {
     // The spoiler: a box the size the text would take; a click shows this message only.
     const float avail = std::max(ImGui::GetContentRegionAvail().x, 1.0f);
@@ -295,7 +386,7 @@ void DrawMenuBarPlayers(float scale)
     if (m.hidden || !m.has_key)
     {
       ImGui::PushStyleColor(ImGuiCol_Text, SYSTEM_COLOR);
-      ImGui::TextUnformatted(m.hidden ? "(hidden)" : "(connecting)");
+      ImGui::TextUnformatted(m.hidden ? "(ignored)" : "(connecting)");
       ImGui::PopStyleColor();
     }
     ImGui::PopID();
@@ -336,7 +427,7 @@ void DrawMemberMenu()
   if (!ImGui::BeginPopup("##member"))
     return;
   const Online::Chat::Member* m = FindMember(s.menu_uid);
-  if (!m)
+  if (!m || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
   {
     ImGui::CloseCurrentPopup();
     ImGui::EndPopup();
@@ -349,9 +440,9 @@ void DrawMemberMenu()
   ImGui::Separator();
   if (!s.confirm_report)
   {
-    if (ImGui::MenuItem(m->hidden ? "Show messages" : "Hide messages"))
+    if (ImGui::MenuItem(m->hidden ? "Unignore user" : "Ignore user"))
     {
-      // Hiding starts from all of their messages covered again.
+      // Ignoring starts from all of their messages covered again.
       if (!m->hidden)
         s.revealed.clear();
       Online::Chat::SetHidden(m->uid, !m->hidden);
@@ -376,18 +467,173 @@ void DrawMemberMenu()
   ImGui::EndPopup();
 }
 
-int LimitInput(ImGuiInputTextCallbackData* data)
+// Clipboard text as the box takes it: line breaks and tabs become spaces, other controls and
+// invalid UTF-8 are dropped, and at most `max_code_points` code points and `max_bytes` bytes.
+std::string ForTheBox(std::string_view clip, size_t max_code_points, size_t max_bytes)
 {
-  // At most 100 code points (the cleaner's limit), cut on a code point boundary.
-  const std::string_view text(data->Buf, static_cast<size_t>(data->BufTextLen));
-  const std::string_view kept =
-      Online::ChatText::Truncate(text, Online::ChatText::MAX_MESSAGE_CODE_POINTS,
-                                 Online::ChatText::MAX_MESSAGE_BYTES);
-  if (kept.size() < text.size())
+  std::string out;
+  size_t code_points = 0;
+  size_t pos = 0;
+  while (pos < clip.size() && code_points < max_code_points)
   {
-    data->DeleteChars(static_cast<int>(kept.size()), static_cast<int>(text.size() - kept.size()));
+    const size_t start = pos;
+    const auto c = Online::ChatText::DecodeUtf8(clip, &pos);
+    if (!c)
+    {
+      ++pos;
+      continue;
+    }
+    std::string_view bytes = clip.substr(start, pos - start);
+    if (*c == '\n' || *c == '\r' || *c == '\t')
+      bytes = " ";
+    else if (*c < 0x20 || *c == 0x7F)
+      continue;
+    if (out.size() + bytes.size() > max_bytes)
+      break;
+    out.append(bytes);
+    ++code_points;
   }
+  return out;
+}
+
+// The box's callback, every frame it has focus: the menu's edit, Ctrl+W, the length limit, and
+// the selection kept for the menu.
+int BoxCallback(ImGuiInputTextCallbackData* data)
+{
+  namespace CT = Online::ChatText;
+  const auto text = [data] {
+    return std::string_view(data->Buf, static_cast<size_t>(data->BufTextLen));
+  };
+  if (s.edit != Edit::None)
+  {
+    const int a = std::clamp(std::min(s.sel_start, s.sel_end), 0, data->BufTextLen);
+    const int b = std::clamp(std::max(s.sel_start, s.sel_end), 0, data->BufTextLen);
+    switch (s.edit)
+    {
+    case Edit::Cut:
+      data->DeleteChars(a, b - a);
+      break;
+    case Edit::Paste:
+    {
+      const char* clip = ImGui::GetClipboardText();
+      data->DeleteChars(a, b - a);
+      data->CursorPos = a;
+      const size_t used_bytes = text().size();
+      const size_t used_code_points = CT::CountCodePoints(text());
+      const std::string paste =
+          ForTheBox(clip ? clip : "",
+                    CT::MAX_MESSAGE_CODE_POINTS - std::min(used_code_points,
+                                                           CT::MAX_MESSAGE_CODE_POINTS),
+                    CT::MAX_MESSAGE_BYTES - std::min(used_bytes, CT::MAX_MESSAGE_BYTES));
+      data->InsertChars(a, paste.data(), paste.data() + paste.size());
+      break;
+    }
+    case Edit::SelectAll:
+      data->SelectAll();
+      data->CursorPos = data->BufTextLen;
+      break;
+    case Edit::Restore:
+      data->SelectionStart = a;
+      data->SelectionEnd = b;
+      data->CursorPos = b;
+      break;
+    case Edit::End:
+      data->CursorPos = data->BufTextLen;
+      data->SelectionStart = data->SelectionEnd = data->CursorPos;
+      break;
+    case Edit::None:
+      break;
+    }
+    s.edit = Edit::None;
+  }
+  if (s.delete_word)
+  {
+    // Ctrl+W, as in a terminal: the selection if there is one, else back to the word's start.
+    s.delete_word = false;
+    if (data->HasSelection())
+    {
+      const int a = std::min(data->SelectionStart, data->SelectionEnd);
+      data->DeleteChars(a, std::abs(data->SelectionEnd - data->SelectionStart));
+    }
+    else
+    {
+      const int cursor = std::clamp(data->CursorPos, 0, data->BufTextLen);
+      const int start =
+          static_cast<int>(CT::WordRuboutStart(text(), static_cast<size_t>(cursor)));
+      data->DeleteChars(start, cursor - start);
+    }
+  }
+  // At most 100 code points (the cleaner's limit), cut on a code point boundary.
+  const std::string_view kept =
+      CT::Truncate(text(), CT::MAX_MESSAGE_CODE_POINTS, CT::MAX_MESSAGE_BYTES);
+  if (kept.size() < text().size())
+  {
+    data->DeleteChars(static_cast<int>(kept.size()),
+                      static_cast<int>(text().size() - kept.size()));
+  }
+  s.sel_start = data->SelectionStart;
+  s.sel_end = data->SelectionEnd;
   return 0;
+}
+
+// The box's right-click menu. Returns whether it is open. Must follow the box (the last item).
+bool DrawBoxMenu()
+{
+  if (ImGui::IsItemClicked(ImGuiMouseButton_Right))
+    s.menu_was_typing = s.was_typing;
+  if (!ImGui::BeginPopupContextItem("##boxmenu"))
+    return false;
+  const std::string_view text(s.input.data());
+  const int len = static_cast<int>(text.size());
+  const int a = std::clamp(std::min(s.sel_start, s.sel_end), 0, len);
+  const int b = std::clamp(std::max(s.sel_start, s.sel_end), 0, len);
+  // The selection only counts if the box had focus (it isn't drawn otherwise).
+  const bool selection = s.menu_was_typing && a < b;
+  const std::string selected(text.substr(static_cast<size_t>(a), static_cast<size_t>(b - a)));
+  const char* clip = ImGui::GetClipboardText();
+  const bool can_paste = clip && clip[0] != '\0' && len < Online::ChatText::MAX_MESSAGE_BYTES;
+  const auto item = [](const char* label, char key, bool enabled) {
+    return ImGui::MenuItem(label, fmt::format("{}{}", SHORTCUT_PREFIX, key).c_str(), false,
+                           enabled);
+  };
+  Edit edit = Edit::None;
+  bool chosen = false;
+  if (item("Cut", 'X', selection))
+  {
+    ImGui::SetClipboardText(selected.c_str());
+    edit = Edit::Cut;
+    chosen = true;
+  }
+  if (item("Copy", 'C', selection))
+  {
+    ImGui::SetClipboardText(selected.c_str());
+    edit = Edit::Restore;
+    chosen = true;
+  }
+  if (item("Paste", 'V', can_paste))
+  {
+    if (!s.menu_was_typing)
+      s.sel_start = s.sel_end = len;  // at the end, where the cursor shows when the box opens
+    edit = Edit::Paste;
+    chosen = true;
+  }
+  ImGui::Separator();
+  if (item("Select all", 'A', len > 0))
+  {
+    edit = Edit::SelectAll;
+    chosen = true;
+  }
+  if (chosen)
+  {
+    // Done by the box's callback once it has focus again (the menu took it).
+    s.edit = edit;
+    s.focus_input = true;
+    s.refocus_frames = REFOCUS_FRAMES;
+  }
+  if (ImGui::IsKeyPressed(ImGuiKey_Escape, false))
+    ImGui::CloseCurrentPopup();
+  ImGui::EndPopup();
+  return true;
 }
 
 void Submit()
@@ -414,10 +660,71 @@ void Submit()
 void StopTyping()
 {
   s.was_typing = false;
+  s.refocus_frames = 0;
+  s.edit = Edit::None;
   s_typing = false;
   ciface::Core::SetKeyboardMouseBlocked(false);
 }
+
+// A new view: what changed for the ignored-players collapse.
+void OnNewView()
+{
+  const bool ignored = AllOthersIgnored(*s.view);
+  if (s.view->group_number != s.group_number)
+  {
+    // A new group: collapsed if everyone else in it is ignored, else open again if it was only
+    // collapsed for the last group's ignored players.
+    s.group_number = s.view->group_number;
+    s.collapse = ignored;
+    s.expand = !ignored && s.auto_collapsed;
+  }
+  else if (ignored && !s.all_ignored)
+  {
+    // The player (here or in the launcher) ignored the last one they were hearing from.
+    s.collapse = true;
+    s.expand = false;
+  }
+  s.all_ignored = ignored;
+}
 }  // namespace
+
+void SetClipboard(Clipboard clipboard)
+{
+  std::lock_guard lk(s_clipboard_mutex);
+  s_clipboard = std::move(clipboard);
+}
+
+void InstallClipboard()
+{
+  ImGuiPlatformIO& pio = ImGui::GetPlatformIO();
+  if (pio.Platform_GetClipboardTextFn != nullptr && s_default_get_clipboard == nullptr)
+  {
+    s_default_get_clipboard = pio.Platform_GetClipboardTextFn;
+    s_default_set_clipboard = pio.Platform_SetClipboardTextFn;
+  }
+  pio.Platform_GetClipboardTextFn = [](ImGuiContext* ctx) -> const char* {
+    std::function<std::string()> get;
+    {
+      std::lock_guard lk(s_clipboard_mutex);
+      get = s_clipboard.get;
+    }
+    if (!get)
+      return s_default_get_clipboard ? s_default_get_clipboard(ctx) : nullptr;
+    s_clipboard_text = get();
+    return s_clipboard_text.c_str();
+  };
+  pio.Platform_SetClipboardTextFn = [](ImGuiContext* ctx, const char* text) {
+    std::function<void(const std::string&)> set;
+    {
+      std::lock_guard lk(s_clipboard_mutex);
+      set = s_clipboard.set;
+    }
+    if (set)
+      set(text ? text : "");
+    else if (s_default_set_clipboard)
+      s_default_set_clipboard(ctx, text);
+  };
+}
 
 void SetFont(ImFont* font)
 {
@@ -450,6 +757,7 @@ void Display(float scale)
       if (s.at_bottom)
         s.scroll_to_bottom = true;
     }
+    OnNewView();
   }
   const bool in_match = Online::Rooms::GetScreen() == Online::Rooms::Screen::Match;
   const bool shown = s.view && s.view->active &&
@@ -463,7 +771,7 @@ void Display(float scale)
 
   const ImGuiIO& io = ImGui::GetIO();
   const u64 now = Common::Timer::NowMs();
-  const float font_px = std::clamp(io.DisplaySize.y * FONT_SHARE, MIN_FONT_PX, MAX_FONT_PX);
+  const float font_px = FontPx(io.DisplaySize.y, scale);
 
   // Where: the saved place (fractions of the window), else the default; again when the window
   // changes size.
@@ -474,8 +782,21 @@ void Display(float scale)
         LoadGeometry(io.DisplaySize).value_or(DefaultGeometry(io.DisplaySize, scale, font_px));
     ImGui::SetNextWindowPos(s.applied.pos, ImGuiCond_Always);
     ImGui::SetNextWindowSize(s.applied.size, ImGuiCond_Always);
-    ImGui::SetNextWindowCollapsed(s.applied.collapsed, ImGuiCond_Always);
+    ImGui::SetNextWindowCollapsed(s.applied.collapsed || s.auto_collapsed, ImGuiCond_Always);
     s.placed = true;
+  }
+  if (s.collapse)
+  {
+    // Not saved: the next group opens as the player left it.
+    ImGui::SetNextWindowCollapsed(true, ImGuiCond_Always);
+    s.auto_collapsed = true;
+    s.collapse = false;
+  }
+  else if (s.expand)
+  {
+    ImGui::SetNextWindowCollapsed(s.applied.collapsed, ImGuiCond_Always);
+    s.auto_collapsed = false;
+    s.expand = false;
   }
   if (s_activate.exchange(false))
   {
@@ -483,6 +804,7 @@ void Display(float scale)
     // The hotkey's own key press must not land in the box.
     ImGui::GetIO().ClearInputKeys();
     s.focus_input = true;
+    s.refocus_frames = REFOCUS_FRAMES;
   }
   ImGui::SetNextWindowSizeConstraints(ImVec2(8.0f * font_px, 5.0f * font_px), io.DisplaySize);
 
@@ -503,6 +825,9 @@ void Display(float scale)
   const bool open = ImGui::Begin("Chat###OnlineChat", nullptr, flags);
   if (open)
   {
+    // Opened by the player (or the hotkey): it is theirs again.
+    s.auto_collapsed = false;
+
     if (ImGui::BeginMenuBar())
     {
       if (ImGui::BeginMenu("Options"))
@@ -549,23 +874,51 @@ void Display(float scale)
       ImGui::SetKeyboardFocusHere();
       s.focus_input = false;
     }
+    // Ctrl+W (the Control key on every platform, not Alt Gr): the callback deletes the word.
+    s.delete_word =
+        ControlKeyDown() && !io.KeyAlt && ImGui::IsKeyPressed(ImGuiKey_W, true);
     const bool enter = ImGui::InputTextWithHint(
         "##input", "Message", s.input.data(), s.input.size(),
-        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackEdit, LimitInput);
-    typing = ImGui::IsItemActive();
+        ImGuiInputTextFlags_EnterReturnsTrue | ImGuiInputTextFlags_CallbackEdit |
+            ImGuiInputTextFlags_CallbackAlways,
+        BoxCallback);
+    s.delete_word = false;
+    const bool active = ImGui::IsItemActive();
+    if (active)
+      s.refocus_frames = 0;
+    else if (s.refocus_frames > 0 && --s.refocus_frames == 0)
+      s.edit = Edit::None;  // it didn't get focus back (clicked away): forget the edit
+    typing = active || s.refocus_frames > 0;
+    if (DrawBoxMenu() && s.menu_was_typing)
+      typing = true;  // the menu took the focus from the box: still typing
     if (enter)
     {
-      Submit();
-      // Back to the game: the box lets go of the keyboard.
-      ImGui::SetWindowFocus(nullptr);
-      typing = false;
+      if (!Online::ChatText::Clean(s.input.data()))
+      {
+        // Enter on an empty box: back to the game, the box lets go of the keyboard.
+        s.input.fill(0);
+        ImGui::SetWindowFocus(nullptr);
+        s.refocus_frames = 0;
+        s.edit = Edit::None;
+        typing = false;
+      }
+      else
+      {
+        // Sent (or kept, with a notice saying why): the box keeps the keyboard for the next one.
+        Submit();
+        s.focus_input = true;
+        s.refocus_frames = REFOCUS_FRAMES;
+        s.edit = Edit::End;
+        typing = true;
+      }
     }
     DrawMemberMenu();
   }
 
-  // The player moving, resizing or collapsing the window: saved once the mouse is let go.
+  // The player moving, resizing or collapsing the window: saved once the mouse is let go. A
+  // collapse for ignored players is not the player's: the saved state stays as they left it.
   const Geometry now_geometry{ImGui::GetWindowPos(), ImGui::GetWindowSize(),
-                              ImGui::IsWindowCollapsed()};
+                              s.auto_collapsed ? s.applied.collapsed : ImGui::IsWindowCollapsed()};
   s.hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows);
   if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && (s.hovered || s.interacting))
   {
@@ -585,6 +938,8 @@ void Display(float scale)
   if (faded)
     ImGui::PopStyleVar();
 
+  if (!typing)
+    s.refocus_frames = 0;
   // The keyboard stays the box's until Enter or Esc is let go, so the key that ended typing
   // doesn't reach the game (Enter is START in the default keyboard mapping).
   const bool guard = s.was_typing && !typing &&

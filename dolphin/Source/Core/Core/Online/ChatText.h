@@ -39,4 +39,10 @@ size_t CountCodePoints(std::string_view utf8);
 // The longest prefix of valid UTF-8 `utf8` that has at most `max_code_points` code points and
 // `max_bytes` bytes (cut on a code point boundary).
 std::string_view Truncate(std::string_view utf8, size_t max_code_points, size_t max_bytes);
+
+// Where Ctrl+W (a terminal's word rubout) deletes back to from byte `cursor` of UTF-8 `text`: the
+// spaces before the cursor, then the word before them, up to the space before that word (or the
+// start). Spaces are U+0020 and U+3000 (the ideographic space). Always a code point boundary at
+// or before `cursor` (clamped to the text).
+size_t WordRuboutStart(std::string_view text, size_t cursor);
 }  // namespace Online::ChatText

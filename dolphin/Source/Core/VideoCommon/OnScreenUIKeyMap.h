@@ -32,6 +32,17 @@ enum class DolphinKey
   X,  // for text edit CTRL+X: cut
   Y,  // for text edit CTRL+Y: redo
   Z,  // for text edit CTRL+Z: undo
+  W,  // for the online chat's CTRL+W: delete the word before the cursor
 };
 
-using DolphinKeyMap = Common::EnumMap<int, DolphinKey::Z>;
+using DolphinKeyMap = Common::EnumMap<int, DolphinKey::W>;
+
+// The modifier keys held, as the physical keys (on macOS, Ctrl is the Control key and Super is
+// Command; ImGui swaps them itself for its shortcuts).
+enum DolphinKeyModifier : unsigned
+{
+  DolphinKeyModifier_Ctrl = 1u << 0,
+  DolphinKeyModifier_Shift = 1u << 1,
+  DolphinKeyModifier_Alt = 1u << 2,
+  DolphinKeyModifier_Super = 1u << 3,
+};
