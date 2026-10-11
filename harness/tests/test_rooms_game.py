@@ -1135,3 +1135,156 @@ def test_room_three_players_second_game_on_the_losers_pick(backend: OnlineBacken
     assert setups[0].stage_kind == B.STAGE_KIND[stage], setups[0]
     for g in gs:
         g.shot("08-game-2")
+
+
+@pytest.mark.parametrize("quits", [(1,), (1, 2)], ids=["one-quits", "the-last-quit-ends-it"])
+def test_room_player_quits_with_lras(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                     gpu_backend: str, quits: tuple) -> None:
+    """A free-for-all of three: P2 pauses (a held START: rooms have pause off, P+ pauses on a held
+    START) and quits with L+R+A+START while P1 and P3 move. Only P2 leaves the match: the game
+    resumes for P1 and P3 at once with P2's fighter out, P2's Dolphin leaves the session once the
+    quit's frame is final and its game goes back to the room's CSS ("Waiting for the game to
+    end"), and P1 and P3 play on without it (the same game on both, no mismatch). The game ends
+    when P1 walks off: P3 wins, P2 is in the history as a player who left.
+    the-last-quit-ends-it: then P3 quits too, which leaves only P1: P1 wins by Brawl's own game set
+    and P3 stays in the session until it (its quit ended the game: quitStays), as P1 does."""
+    test = "lras-" + ("one" if len(quits) == 1 else "two")
+    import secrets
+    import threading
+    from ppharness import flows as F
+    from ppharness.client import PadInput
+    users = [backend.create_user(n, f"RL{'ABC'[k]}{'OT'[len(quits) - 1]}", email=f"roomlras{k}-{secrets.token_hex(4)}@example.test")
+             for k, n in enumerate(["rla", "rlb", "rlc"])]
+    gs = [_boot(dolphin, f"roomlras{len(quits)}-{x}", backend, u, gpu_backend, test, "gameplay", artifacts=ART)
+          for x, u in zip("abc", users)]
+    a = gs[0]
+    _all(*[g.to_main_menu for g in gs])
+    _all(*[g.to_online_page for g in gs])
+    code = create_room(a)
+    pick(a)
+    hand_to(a, PANEL_X[2], -10.0)
+    a.steps("tap A 8", "wait 30")
+    until_view(a, lambda v: v["slots"][2]["bits"] & ppom.SLOT_OPEN, "slot 3 open")
+    hand_to(a, -23.0, 10.5)
+    _all(*[lambda g=g: to_join_room(g) for g in gs[1:]])
+    for k, g in enumerate(gs[1:], 1):
+        pick(g, right=2 * k)
+    for g in gs:
+        B.write_rules(g.c, stocks=2, minutes=4, items_off=True)
+        ppom.allow_test_rules(g.c)
+    for k, g in enumerate(gs[1:], 1):
+        type_room_code(g, code)
+        until_view(g, lambda v: v["flags"] & ppom.RF_IN, f"player {k + 1} in the room")
+    until_view(a, lambda v: all(v["slots"][p]["bits"] & ppom.SLOT_TAKEN for p in range(3)), "all players")
+    for g in gs:
+        g.steps("wait 60")
+    game = room_view(a)["game"]
+    for g in gs:
+        g.steps("tap START 8", "wait 10")
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] in ("running", "error", "ended") for g in gs),
+                    240, "the room's game running on all")
+    st = [online_set.gstatus(g.c) for g in gs]
+    assert all(s["phase"] == "running" for s in st), [(s["phase"], s.get("error")) for s in st]
+    time.sleep(4)
+
+    def trail_of(players: list[Game]) -> list[tuple]:
+        row = []
+        for g in players:
+            try:
+                s = online_set.gstatus(g.c)
+                row.append((g.name, online_set.scene(g.c), s["phase"], s.get("end_reason"),
+                            s.get("current_frame"), s.get("local_quit_frame")))
+            except Exception as e:  # noqa: BLE001
+                row.append((g.name, "error", repr(e)))
+        return row
+
+    def stocks(g: Game) -> dict[int, int]:
+        return {p.port: p.stocks for p in B.read_players(g.c.read_mem, max_entries=3)}
+
+    walk = [PadInput(main=(40, 128), hold=7), PadInput(main=(216, 128), hold=7)]
+    left: list[Game] = []
+    for port in quits:
+        q = gs[port]
+        stay = [g for g in gs if g is not q and g not in left]
+        for g in stay:
+            g.c.pad_script(0, walk * 60)
+        q.steps("hold START 90", "wait 20")
+        q.shot(f"0{port}-paused")
+        assert online_set.gstatus(q.c)["phase"] == "running"
+        q.steps("hold L+R+A+START 20")
+        if len(stay) > 1:
+            # Only the quitter leaves: its game goes back to the room, the others play on.
+            t0 = time.monotonic()
+            while time.monotonic() - t0 < 30 and online_set.scene(q.c) != CSS:
+                time.sleep(0.25)
+            print(f"P{port + 1} quit:", trail_of(gs), [hex(g.debug_scratch()[10]) for g in gs])
+            assert online_set.scene(q.c) == CSS, trail_of(gs)
+            sq = online_set.gstatus(q.c)
+            assert sq["end_reason"] == "quit left", sq["end_reason"]
+            assert q.debug_scratch()[10] & 0x600000 == 0x600000, hex(q.debug_scratch()[10])
+            frames = [online_set.gstatus(g.c)["current_frame"] for g in stay]
+            time.sleep(4)
+            st = [online_set.gstatus(g.c) for g in stay]
+            assert all(s["phase"] == "running" for s in st), [(s["phase"], s.get("end_reason")) for s in st]
+            assert all(s["current_frame"] > f + 120 for s, f in zip(st, frames)), (frames, st)
+            for g, s in zip(stay, st):
+                peer = next(p for p in s["peers"] if p["slot"] == port)
+                assert peer["left"], (g.name, peer)
+                assert online_set.session(g.c)["quit_ports"] & (1 << port), g.name
+                assert stocks(g).get(port) == 0, (g.name, stocks(g))
+                assert g.debug_scratch()[10] & 0x400000, hex(g.debug_scratch()[10])
+                g.shot(f"0{port}-playing-on-without-P{port + 1}")
+            # The quitter waits on the room's CSS for the others' game.
+            v = q.c.call("rooms_status")["view"]
+            in_game = [(sl["player"] or {}).get("in_game") for sl in v["slots"][:3]]
+            print("quitter's room:", v["status"], repr(v["status_text"]), in_game)
+            assert v["status_text"] == "Waiting for the game to end", v
+            assert in_game == [g not in left and g is not q for g in gs], v
+            q.shot(f"0{port}-quitter-back-in-the-room")
+        else:
+            # The last quit leaves one player in: Brawl's game set ends the game for everyone.
+            online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] != "running" for g in stay + [q]), 60,
+                            "the game set after the last quit")
+            ends = [online_set.gstatus(g.c) for g in stay + [q]]
+            print("last quit:", [(s["end_reason"], s["current_frame"]) for s in ends])
+            assert [s["end_reason"] for s in ends] == ["game set", "game set"], ends
+        left.append(q)
+
+    stay = [g for g in gs if g not in left]
+    if len(stay) == 2:
+        # P1 walks off: P3 wins.
+        th = threading.Thread(target=lambda: F.fight([F.Seat(a.c, 0, 0, a.name)], 60 * 60, mode="selfdestruct",
+                                                     seed="lras", stop=lambda: online_set.gstatus(a.c)["phase"] != "running"))
+        th.start()
+        th.join(300)
+        online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] != "running" for g in stay), 240, "the game to end")
+    # The players still in the session at the end (the last quitter's too) compare their game.
+    ended = stay + ([gs[quits[-1]]] if len(quits) == 2 else [])
+    ends = [online_set.gstatus(g.c) for g in ended]
+    assert all(s["end_reason"] == "game set" for s in ends), [s["end_reason"] for s in ends]
+    limit = min(s["current_frame"] for s in ends) - online_set.CONFIRM_MARGIN
+    cks = [{r[0]: r[1] for r in g.c.call("gprb_checksums", since=0)["rows"] if r[0] <= limit} for g in ended]
+    common = sorted(set(cks[0]).intersection(*cks[1:]))
+    bad = [f for f in common if len({ck[f] for ck in cks}) != 1]
+    print(f"ended together: {[g.name for g in ended]}, frames {[s['current_frame'] for s in ends]}, "
+          f"rollbacks {[s['rollbacks'] for s in ends]}, checksums compared {len(common)}, mismatches {len(bad)}")
+    assert common and not bad, (len(common), bad[:5])
+    _wait(lambda: all(g.scene() == CSS for g in gs), 180, "all back on the room's CSS")
+    for g in gs:
+        until_view(g, lambda v: v["flags"] & ppom.RF_IN and v["status"] == 0 and v["game"] == game + 1,
+                   "the room waiting for its next game", timeout=60)
+        g.steps("wait 60")
+        g.shot("09-back-in-the-room")
+    # The history: the winner first; every player who quit has left the game (not placed). Only
+    # the players who saw the game end report it.
+    winner = 0 if len(quits) == 2 else 2
+    _wait(lambda: all((lambda r: r["reports_sent"] == 1 and r["pending_jobs"] == 0)(g.c.online_status()["ranked"])
+                      for g in ended), 60, "the reports sent")
+    m = backend._http("GET", "/v1/me/matches?mode=rooms", token=users[0].session_token)["matches"][0]
+    print("history:", [(p["port"], p.get("place"), p.get("left")) for p in m["players"]])
+    by_port = {p["port"] - 1: p for p in m["players"]}
+    assert by_port[winner]["place"] == 1, m
+    for port in quits:
+        assert by_port[port]["place"] is None, m
+    if len(quits) == 1:
+        assert by_port[0]["place"] == 2, m

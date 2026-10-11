@@ -40,6 +40,10 @@ namespace PPOM {
     static_assert(__builtin_offsetof(Session, roomFlags) == 0x213 && __builtin_offsetof(Session, roomCode) == 0x214 &&
                   __builtin_offsetof(Session, roomHost) == 0x218 && __builtin_offsetof(Session, roomStatus) == 0x219 &&
                   __builtin_offsetof(Session, roomMode) == 0x21A, "session rooms");
+    // The pause screen's quit in a 3-4 player match (Dolphin: GameBridge.h SESSION_QUIT*,
+    // GameBridge.cpp L_QUIT_LEFT).
+    static_assert(__builtin_offsetof(Session, quitPorts) == 0x21B && __builtin_offsetof(Session, quitStays) == 0x21C &&
+                  __builtin_offsetof(Local, quitLeft) == 0x7F, "pause-screen quit");
     static_assert(sizeof(RoomRequest) == 0x18 && sizeof(RoomRequest) <= REQ_PAYLOAD, "room request");
     static_assert(sizeof(RoomStatus) == 0x88 && sizeof(RoomStatus) <= RESP_PAYLOAD, "room status");
     static_assert(__builtin_offsetof(Block, local) == __builtin_offsetof(Block, mailbox) + sizeof(Mailbox), "local after mailbox");

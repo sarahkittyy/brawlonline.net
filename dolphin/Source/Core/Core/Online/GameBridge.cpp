@@ -98,12 +98,16 @@ constexpr u32 DIRECT_PREFIX_LEN = 4;
 // The launcher's create (still v5, a reserved byte): bumped when Dolphin accepted one and sent
 // room-create; the game goes to the room CSS as WITH FRIENDS > Create Room, without a create.
 constexpr u32 L_ROOM_CREATE = 0x7E;
+// This player left a 3-4 player match with the pause screen's quit and its session ended (the
+// last reserved byte): the game ends its match without DISCONNECTED.
+constexpr u32 L_QUIT_LEFT = 0x7F;
 constexpr u32 S_ROOM_FLAGS = 0x213, S_ROOM_CODE = 0x214, S_ROOM_HOST = 0x218, S_ROOM_STATUS = 0x219,
               S_ROOM_MODE = 0x21A;
 constexpr u32 SP_ROOM_SLOT = 0x38, SP_ROOM_TEAM = 0x39, SP_ROOM_CHAR = 0x3A, SP_ROOM_COSTUME = 0x3B;
 constexpr u8 SLOT_OPEN = 1, SLOT_TAKEN = 2, SLOT_READY = 4, SLOT_HOST = 8, SLOT_IN_GAME = 0x10;
 constexpr u8 RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4;
-static_assert(L_ROOM_CREATE == L_DESYNCED + 1 && L_ROOM_CREATE < LOCAL_SIZE);
+static_assert(L_ROOM_CREATE == L_DESYNCED + 1 && L_QUIT_LEFT == L_ROOM_CREATE + 1 &&
+              L_QUIT_LEFT < LOCAL_SIZE);
 static_assert(L_ROOM < L_DIRECT_JOIN && L_DIRECT_NUMBER + 2 == L_OWN &&
               L_DIRECT_PREFIX + DIRECT_PREFIX_LEN == L_DIRECT_NUMBER);
 static_assert(L_ROOM < L_OWN && S_ROOM_MODE < SESSION_SIZE && SP_ROOM_COSTUME < SP_PORT_VALUES &&
@@ -1088,6 +1092,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   for (u32 i = L_LOCK; i < LOCAL_SIZE; ++i)
     local[i] = R8(guard, loc.local + i);
   local[L_DESYNCED] = lobby.desynced ? 1 : 0;
+  local[L_QUIT_LEFT] = lobby.quit_left ? 1 : 0;
   if (v5)
   {
     local[L_ROOM_JOIN] = room.join_seq;

@@ -306,7 +306,8 @@ def read_local(c: HarnessClient, b: Block) -> dict:
                      "stage_pick": stage, "asl": asl, "game": game,
                      **({"team": d[0x34]} if b.version >= 4 else {})},
             **({"own": port_values(d[0x40:0x40 + PORT_VALUES_SIZE]),
-                "hud_disconnected": d[0x7C], "desynced": d[0x7D]} if len(d) >= 0x80 else {})}
+                "hud_disconnected": d[0x7C], "desynced": d[0x7D], "quit_left": d[0x7F]}
+               if len(d) >= 0x80 else {})}
 
 
 def read_session(c: HarnessClient, b: Block) -> dict:
@@ -330,12 +331,15 @@ def read_session(c: HarnessClient, b: Block) -> dict:
           "stage": stage, "asl": asl, "num_players": n, "players": players[:max(n, 0)]}
     if len(d) >= 0x220:
         se.update(gone=list(d[0x20C:0x210]), teams=d[0x210], setup_error=d[0x211],
-                  out_count=d[0x212])
+                  out_count=d[0x212], quit_ports=d[S_QUIT_PORTS], quit_stays=d[S_QUIT_STAYS])
     return se
 
 
 # ---- v4: 3-4 player matches (docs/nplayer/setup.md) ----
 S_GONE, S_TEAMS, S_SETUP_ERROR, S_OUT_COUNT = 0x20C, 0x210, 0x211, 0x212
+# The pause screen's quit in a 3-4 player match (game-written, bit per port): who quit, and the
+# quits that left one player or team in (that player stays until the game set).
+S_QUIT_PORTS, S_QUIT_STAYS = 0x21B, 0x21C
 SP_TEAM, SP_PICKS_STAGE, SP_OUT = 0x03, 0x36, 0x37
 CFG_TEST_GONE = 1 << 7   # ppom.h Cfg: Debug.testGone* set gone flags; removal in local matches too
 DEBUG_TEST_GONE = 0x18 + 4 * 16 + 16 * DEBUG_LOG   # Debug.testGoneFrame, then testGonePorts

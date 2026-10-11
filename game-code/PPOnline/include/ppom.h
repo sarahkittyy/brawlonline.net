@@ -312,7 +312,10 @@ namespace PPOM {
         u8 roomCreate;    // Dolphin: bumped when it accepted a launcher create (still v5, was
                           // reserved) and sent room-create itself (after leaving any room): go to
                           // the room CSS as WITH FRIENDS > Create Room, without a ROOM_CREATE
-        u8 _reserved2[1];
+        u8 quitLeft;      // Dolphin: 1 = this player left a 3-4 player match with the pause
+                          // screen's quit (Session.quitPorts) and the session ended for this
+                          // machine only; the game ends its match (no DISCONNECTED). Until the
+                          // next match starts
     };                    // 0x80
 
     // ---- SESSION ----
@@ -380,7 +383,15 @@ namespace PPOM {
         u8 roomHost;      // the host's in-game port, 0xFF none
         u8 roomStatus;    // RoomStatusKind
         u8 roomMode;      // RoomMode
-        u8 _reserved[5];
+        // A 3-4 player match (game, every frame; rolled back with the match, cleared at its
+        // setup): the pause screen's quit (L+R+A+START) takes only the player who paused out of
+        // the match. Bit p: port p quit. Its fighter leaves as a dropped player's does, and its
+        // Dolphin leaves the session once the quit's frame is final (LOCAL.quitLeft). A quit that
+        // leaves one player or team in ends the game by itself (Brawl's game set); that player
+        // stays in the session until it ends: bit p of quitStays too.
+        u8 quitPorts;     // 0x21B
+        u8 quitStays;     // 0x21C
+        u8 _reserved[3];
     };                    // 0x220
 
     // The last MuMsg::printIndex calls (a ring). 16, not 32: the plugin's Syringe heap block has

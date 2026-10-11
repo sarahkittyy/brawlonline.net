@@ -947,6 +947,11 @@ void SuperviseGame(Clock::time_point now)
     g.match_ended = now;
   if (g.saw_match && !lobby.in_match && lobby.active && !g.pickers)
     g.pickers = lobby.stage_pickers;
+  // This player quit the match (the pause screen's quit, 3-4 players) and left before the game
+  // ended: it is not placed, so it never picks the next stage, and the others' result (which this
+  // machine does not see) decides who does.
+  if (lobby.quit_left && !g.pickers)
+    g.pickers = 0;
   const bool scene_left =
       screen == static_cast<u8>(Screen::Unknown) ?
           (g.match_ended && now - *g.match_ended > MATCH_SCENE_GRACE) :

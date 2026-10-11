@@ -284,6 +284,13 @@ struct State
   bool gone_enabled = false;
   u32 gone_addr = 0;
   std::array<u8, MAX_LOBBY_PLAYERS> gone_written{};
+  // The pause screen's quit in a 3-4 player match (the game's SESSION quitPorts/quitStays, rolled
+  // back with the match; 0: the PPOM block was not found). local_quit_frame: the first session
+  // frame whose state shows this player's quit (-1: none); quit_left: the session ended because
+  // of it (LOCAL.quitLeft), until the next match or session.
+  u32 quit_addr = 0;
+  s64 local_quit_frame = -1;
+  bool quit_left = false;
   // Host: the stages not drawn yet (Slippi's stage_pool, refilled from the match's list when empty).
   std::vector<u16> stage_pool;
 
@@ -942,6 +949,20 @@ void SendToAll(const std::vector<u8>& data)
     if (!p.left)
       SendRaw(slot, data);
   });
+}
+
+// Leaving tells the peers at once (Slippi's graceful ENet disconnect), so they do not wait for
+// the 7.2 s silence timeout. UDP: sent a few times. Under s.mutex.
+void SendLeave()
+{
+  if (s.mode != Mode::Network || !s.socket)
+    return;
+  const std::string text = fmt::format(R"({{"t":"leave","v":1,"slot":{}}})", s.local_slot);
+  std::vector<u8> pkt(text.size() + 1);
+  pkt[0] = 'C';
+  std::memcpy(pkt.data() + 1, text.data(), text.size());
+  for (int i = 0; i < 3; ++i)
+    SendToAll(pkt);
 }
 
 // GekkoNet addresses are the peers' in-game ports: "p0" .. "p3".
@@ -2083,6 +2104,7 @@ void ResetRunStats()
   s.end_reason.clear();
   s.game_set_frame = -1;
   s.game_set_quit = false;
+  s.local_quit_frame = -1;
   s.sound_allocs = s.resim_sound_allocs = s.suppressed_sound_allocs = 0;
   for (auto& v : s.snd_played)
     v.clear();
@@ -2124,15 +2146,27 @@ void ReportGameResult(const GameResult& r)
     cb(r);
 }
 
+// A byte of the game's pause-screen quit state in SESSION (SESSION_QUIT_PORTS or
+// SESSION_QUIT_STAYS; 3-4 player matches only, else 0).
+u8 ReadQuitByte(const Guest& g, u32 session_off)
+{
+  if (!s.quit_addr)
+    return 0;
+  const u8* p = g.Ptr(s.quit_addr - Online::GameBridge::SESSION_QUIT_PORTS + session_off, 1);
+  return p ? *p : 0;
+}
+
 // The result of a game that ended with game set, from the state every peer ended on: per port of
 // the match its stocks and damage (ReadFighterFields, by player number), its team and its place in
 // the game's elimination order (SESSION `out`, rolled back with the match), the winner and who
 // picks the next stage. A 1v1 keeps its rule: more stocks, then less damage (P+'s time-out rule),
 // the loser picks (both after a draw). 3-4 players: Online::GameSetup::DecideOutcome. A player who
-// left the match (its gone flag, the same on every peer) is not placed.
+// left the match (its gone flag, or its pause-screen quit: both the same on every peer) is not
+// placed.
 GameResult ReadGameResult(Core::System& system)
 {
   const Guest g = GuestOf(system);
+  const u8 quit = ReadQuitByte(g, Online::GameBridge::SESSION_QUIT_PORTS);
   GameResult r;
   r.game = NextGame();
   r.stage = s.setup.stage;
@@ -2144,8 +2178,11 @@ GameResult ReadGameResult(Core::System& system)
   bool team_battle = false;
   for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
   {
-    if (!(s.match_ports & (1u << port)) || (s.gone_enabled && s.gone_written[port]))
+    if (!(s.match_ports & (1u << port)) || (s.gone_enabled && s.gone_written[port]) ||
+        ((quit >> port) & 1))
+    {
       continue;
+    }
     r.present[port] = true;
     r.stocks[port] = static_cast<s32>(f[port][2]);
     std::memcpy(&r.damage[port], &f[port][1], 4);
@@ -2260,6 +2297,7 @@ void EndRunning(Core::System& system, const std::string& reason)
   s.match_ports = 0;
   s.gone_enabled = false;
   s.gone_addr = 0;
+  s.quit_addr = 0;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3542,6 +3580,39 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
       SetLoopDefault(ppc);
       return true;
     }
+    // This player quit a 3-4 player match with the pause screen's quit (the game took its fighter
+    // out; docs/game-code.md). Once that frame is final (as a game set's), this machine alone
+    // leaves the session: the others hear the leave and play on without it, as after any player
+    // who leaves, and the game ends its match (LOCAL.quitLeft). A quit that left one player or
+    // team in (quitStays), or a game set by then, ends the session for everyone instead.
+    if (s.quit_addr && s.mode == Mode::Network && s.local_slot >= 0 &&
+        s.local_slot < MAX_LOBBY_PLAYERS)
+    {
+      const u8 mine = static_cast<u8>(1u << s.local_slot);
+      const u8 leaving = ReadQuitByte(g, Online::GameBridge::SESSION_QUIT_PORTS) &
+                         ~ReadQuitByte(g, Online::GameBridge::SESSION_QUIT_STAYS);
+      if (leaving & mine)
+      {
+        if (s.local_quit_frame < 0 || prev_frame < s.local_quit_frame)
+          s.local_quit_frame = prev_frame;
+      }
+      else if (s.local_quit_frame >= 0 && prev_frame <= s.local_quit_frame)
+      {
+        s.local_quit_frame = -1;  // a rollback undid the quit
+      }
+      if (s.local_quit_frame >= 0 && s.game_set_frame < 0 && !s.resim_pass &&
+          static_cast<s64>(s.ops.adv_frame[i]) >= s.local_quit_frame + END_AFTER_GAME_SET)
+      {
+        INFO_LOG_FMT(BRAWLBACK, "gprb: P{} quit the match at session frame {}: leaving the session",
+                     s.local_slot + 1, s.local_quit_frame);
+        SendLeave();
+        EndRunning(system, "quit left");
+        s.phase = Phase::Ended;
+        s.quit_left = true;
+        SetLoopDefault(ppc);
+        return true;
+      }
+    }
   }
   {
     // Sound bookkeeping: is this the first run of this frame?
@@ -3774,6 +3845,7 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.disconnected = false;
   s.desync_end = false;
   s.desynced = false;
+  s.quit_left = false;
   s.socket = std::make_unique<sf::UdpSocket>();
   s.socket->setBlocking(false);
   if (s.socket->bind(options.local_port) != sf::Socket::Status::Done)
@@ -3889,6 +3961,7 @@ Lobby GetLobby()
   l.in_match = InMatchPhase();
   l.disconnected = s.disconnected;
   l.desynced = s.desynced;
+  l.quit_left = s.quit_left;
   l.local_port = s.mode == Mode::Network ? s.local_slot : -1;
   l.num_players = s.mode == Mode::Network ? ActivePlayers() : 0;
   l.game = NextGame();
@@ -3929,17 +4002,8 @@ void Stop()
 {
   {
     std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-    // Leaving tells the peer at once (Slippi's graceful ENet disconnect), so it does not wait for
-    // the 7.2 s silence timeout. UDP: send it a few times.
-    if (s.mode == Mode::Network && s.socket)
-    {
-      const std::string text = fmt::format(R"({{"t":"leave","v":1,"slot":{}}})", s.local_slot);
-      std::vector<u8> pkt(text.size() + 1);
-      pkt[0] = 'C';
-      std::memcpy(pkt.data() + 1, text.data(), text.size());
-      for (int i = 0; i < 3; ++i)
-        SendToAll(pkt);
-    }
+    SendLeave();
+    s.quit_left = false;
     if (InMatchPhase())
     {
       // Ends on the CPU thread at the next loop top.
@@ -4004,6 +4068,8 @@ picojson::value Status()
   o["end_reason"] = picojson::value(s.end_reason);
   o["end_game_frame"] = picojson::value(static_cast<double>(s.end_game_frame));
   o["game_set_frame"] = picojson::value(static_cast<double>(s.game_set_frame));
+  o["local_quit_frame"] = picojson::value(static_cast<double>(s.local_quit_frame));
+  o["quit_left"] = picojson::value(s.quit_left);
   o["sound_allocs"] = picojson::value(static_cast<double>(s.sound_allocs));
   o["resim_sound_allocs"] = picojson::value(static_cast<double>(s.resim_sound_allocs));
   o["suppressed_sound_allocs"] = picojson::value(static_cast<double>(s.suppressed_sound_allocs));
@@ -4571,11 +4637,16 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     // game reads the gone flags in its PPOM SESSION block.
     s.gone_enabled = std::popcount(s.match_ports) >= 3;
     s.gone_addr = 0;
+    s.quit_addr = 0;
+    s.quit_left = false;
     s.gone_written.fill(0);
     if (s.gone_enabled)
     {
       if (const u32 session = Online::GameBridge::SessionAddress())
+      {
         s.gone_addr = session + GONE_FLAG_OFFSET;
+        s.quit_addr = session + Online::GameBridge::SESSION_QUIT_PORTS;
+      }
       else
         WARN_LOG_FMT(BRAWLBACK, "gprb: the game's PPOM block was not found: no gone flags");
     }
