@@ -66,15 +66,17 @@ namespace RoomCss {
     enum PanelState { ST_NONE = 0, ST_SEEKING = 1, ST_SELECTING = 2, ST_CLOSED = 3, ST_READY = 4, ST_BRAWLING = 6 };
     // Team battle: the state models in the team's colour (red, blue, green).
     static const int TEAM_STATE_COLOR[PPOM::TEAM_COUNT] = {0, 1, 3};
-    // The state model's draw priority (its ScnObj +0xD0 opaque, +0xD1 translucent): 0x0E puts it
-    // behind the panel's character picture; a ready player's "Ready" box is drawn in front of it
-    // (the picture shows through the box's translucent card, as Brawl's stage-select states).
+    // The state model's draw priority (its ScnObj +0xD0 opaque, +0xD1 translucent): the game's
+    // 0x0E puts it behind the panel's character picture; a ready player's "Ready" box is drawn in
+    // front of it (the picture shows through the box's translucent card, as Brawl's stage-select
+    // states). Every state is drawn there: at 0x0E the box and a team battle's flag (top left of
+    // the panel, over the box's "P<n>") took turns in front of each other, frame to frame, as the
+    // flag moved (staging feedback 2026-10-11); "Ready" was always in front of it.
     static const u8 STATE_PRIORITY_FRONT = 0x17;
 
     struct Shown {
         u8 kind;          // PanelView kind shown (0xFF: not set up yet)
         u8 css, costume, team, host, inRoom;
-        u8 prio;          // the state model's own draw priority (0: not read yet)
         char name[NAME_CHARS + 1];
     };
     static Shown s_shown[4];
@@ -101,7 +103,6 @@ namespace RoomCss {
     static int s_localSlot = 0;       // the slot the local player's panel (area 0) is shown at
     static bool s_inRoom = false;
     static int s_colorShown[4] = {-1, -1, -1, -1};   // the slot colour each area was given
-    static u8 s_mePrio = 0;
 
     static u8* cssTask()
     {
@@ -175,7 +176,6 @@ namespace RoomCss {
         s_myHandMode = -1;
         s_myPlateDelay = 0;
         s_meReadyShown = -1;
-        s_mePrio = 0;
         s_localSlot = 0;
         for (int i = 0; i < 4; i++) s_colorShown[i] = -1;
         for (int i = 0; i < 4; i++) {
@@ -533,14 +533,10 @@ namespace RoomCss {
                 // which sets the panel's.
                 int color = teams && v.team < PPOM::TEAM_COUNT ? TEAM_STATE_COLOR[v.team] : so[4] & 3;
                 STATE_COLOR(so, color);
-                // Ready: the box in front of the character picture.
+                // The box in front of the character picture and the team flag.
                 u8* mo = *(u8**)(so + 0xC);
                 u8* scn = isPtr((u32)mo) ? *(u8**)(mo + 0xC) : NULL;
-                if (isPtr((u32)scn)) {
-                    if (!sh.prio) sh.prio = scn[0xD0];
-                    u8 pr = v.kind == PV_READY ? STATE_PRIORITY_FRONT : sh.prio;
-                    scn[0xD0] = scn[0xD1] = pr;
-                }
+                if (isPtr((u32)scn)) scn[0xD0] = scn[0xD1] = STATE_PRIORITY_FRONT;
             }
             plate(a, v.kind == PV_CLOSED || v.kind == PV_SEARCHING ? "" : v.name);
             SHOW_STARS(a, v.host && v.kind != PV_CLOSED && v.kind != PV_SEARCHING ? 1 : 0, 1);
@@ -703,10 +699,7 @@ namespace RoomCss {
             STATE_COLOR(so, teams && myTeam >= 0 && myTeam < PPOM::TEAM_COUNT ? TEAM_STATE_COLOR[myTeam] : so[4] & 3);
             u8* mo = *(u8**)(so + 0xC);
             u8* scn = isPtr((u32)mo) ? *(u8**)(mo + 0xC) : NULL;
-            if (isPtr((u32)scn)) {
-                if (!s_mePrio) s_mePrio = scn[0xD0];
-                scn[0xD0] = scn[0xD1] = ready ? STATE_PRIORITY_FRONT : s_mePrio;
-            }
+            if (isPtr((u32)scn)) scn[0xD0] = scn[0xD1] = STATE_PRIORITY_FRONT;
             s_meReadyShown = key;
         }
         STATE_UPDATE(so);
