@@ -5,7 +5,13 @@ import type {
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
+  MyRulesets,
+  PublishRulesetRequest,
+  RecentRuleset,
   RoomList,
+  RulesetDraft,
+  RulesetDraftRequest,
+  RulesetView,
   SignUpRequest,
   UserJson,
 } from "./types";
@@ -100,8 +106,54 @@ export class AccountsHttpClient {
     return this._request("GET", "/v1/rooms", { token });
   }
 
+  ruleset(code: string): Promise<RulesetView> {
+    return this._request("GET", `/v1/rulesets/${encodeURIComponent(code)}`, {});
+  }
+
+  myRulesets(token: string): Promise<MyRulesets> {
+    return this._request("GET", "/v1/me/rulesets", { token });
+  }
+
+  async recentRulesets(token: string): Promise<RecentRuleset[]> {
+    const res = await this._request<{ rulesets: RecentRuleset[] }>("GET", "/v1/me/rulesets/recent", { token });
+    return res.rulesets;
+  }
+
+  publishRuleset(token: string, req: PublishRulesetRequest): Promise<RulesetView> {
+    return this._request("POST", "/v1/rulesets", { token, body: req });
+  }
+
+  async setRulesetHidden(token: string, code: string, hidden: boolean): Promise<void> {
+    await this._request("PUT", `/v1/me/rulesets/${encodeURIComponent(code)}/hidden`, { token, body: { hidden } });
+  }
+
+  createRulesetDraft(token: string, req: RulesetDraftRequest): Promise<RulesetDraft> {
+    return this._request("POST", "/v1/me/ruleset-drafts", { token, body: req });
+  }
+
+  updateRulesetDraft(token: string, id: string, req: RulesetDraftRequest): Promise<RulesetDraft> {
+    return this._request("PUT", `/v1/me/ruleset-drafts/${encodeURIComponent(id)}`, { token, body: req });
+  }
+
+  async deleteRulesetDraft(token: string, id: string): Promise<void> {
+    await this._request("DELETE", `/v1/me/ruleset-drafts/${encodeURIComponent(id)}`, { token });
+  }
+
+  async rememberedRuleset(token: string): Promise<RulesetView | null> {
+    const res = await this._request<{ ruleset: RulesetView | null }>("GET", "/v1/me/ruleset", { token });
+    return res.ruleset;
+  }
+
+  async setRememberedRuleset(token: string, code: string | null): Promise<RulesetView | null> {
+    const res = await this._request<{ ruleset: RulesetView | null }>("PUT", "/v1/me/ruleset", {
+      token,
+      body: { code },
+    });
+    return res.ruleset;
+  }
+
   private async _request<T>(
-    method: "GET" | "POST",
+    method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
     opts: { token?: string; body?: unknown },
   ): Promise<T> {

@@ -7,6 +7,8 @@ import { AccountsManager } from "./accounts_manager";
 import { AccountsHttpClient } from "./client";
 import { resolveServiceUrls } from "./config";
 import {
+  ipc_accountsCreateRulesetDraft,
+  ipc_accountsDeleteRulesetDraft,
   ipc_accountsHasSession,
   ipc_accountsInitNetplay,
   ipc_accountsLeaderboard,
@@ -14,13 +16,21 @@ import {
   ipc_accountsLogout,
   ipc_accountsMatchHistory,
   ipc_accountsMe,
+  ipc_accountsMyRulesets,
   ipc_accountsPublicUser,
+  ipc_accountsPublishRuleset,
+  ipc_accountsRecentRulesets,
+  ipc_accountsRememberedRuleset,
   ipc_accountsRename,
   ipc_accountsRequestPasswordReset,
   ipc_accountsResendVerification,
   ipc_accountsRooms,
+  ipc_accountsRuleset,
   ipc_accountsServiceUrls,
+  ipc_accountsSetRememberedRuleset,
+  ipc_accountsSetRulesetHidden,
   ipc_accountsSignUp,
+  ipc_accountsUpdateRulesetDraft,
 } from "./ipc";
 import { SessionStore } from "./session_store";
 
@@ -48,6 +58,20 @@ export default function setupAccountsIpc() {
     async ({ uid, mode, limit, before }) => await manager.matchHistory(uid, { mode, limit, before }),
   );
   ipc_accountsRooms.main!.handle(async ({ uid }) => await manager.rooms(uid));
+  ipc_accountsRuleset.main!.handle(async ({ code }) => await manager.ruleset(code));
+  ipc_accountsMyRulesets.main!.handle(async ({ uid }) => await manager.myRulesets(uid));
+  ipc_accountsRecentRulesets.main!.handle(async ({ uid }) => await manager.recentRulesets(uid));
+  ipc_accountsPublishRuleset.main!.handle(async ({ uid, req }) => await manager.publishRuleset(uid, req));
+  ipc_accountsSetRulesetHidden.main!.handle(
+    async ({ uid, code, hidden }) => await manager.setRulesetHidden(uid, code, hidden),
+  );
+  ipc_accountsCreateRulesetDraft.main!.handle(async ({ uid, req }) => await manager.createRulesetDraft(uid, req));
+  ipc_accountsUpdateRulesetDraft.main!.handle(
+    async ({ uid, id, req }) => await manager.updateRulesetDraft(uid, id, req),
+  );
+  ipc_accountsDeleteRulesetDraft.main!.handle(async ({ uid, id }) => await manager.deleteRulesetDraft(uid, id));
+  ipc_accountsRememberedRuleset.main!.handle(async ({ uid }) => await manager.rememberedRuleset(uid));
+  ipc_accountsSetRememberedRuleset.main!.handle(async ({ uid, code }) => await manager.setRememberedRuleset(uid, code));
   ipc_accountsServiceUrls.main!.handle(async () => urls);
 
   return { accountsManager: manager, serviceUrls: urls };

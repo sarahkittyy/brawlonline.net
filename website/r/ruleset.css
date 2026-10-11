@@ -1,0 +1,235 @@
+/* brawlonline.net/r/<code>: one published ruleset. Same palette and wordmark font as the landing page. */
+
+@font-face {
+  font-family: "Barlow Condensed";
+  font-style: italic;
+  font-weight: 900;
+  font-display: block;
+  src: url("/assets/fonts/barlow-condensed-900-italic.woff2") format("woff2");
+}
+
+:root {
+  --bg: #08080b;
+  --fg: #f1f1f4;
+  --dim: rgba(241, 241, 244, 0.55);
+  --line: rgba(241, 241, 244, 0.12);
+  --card: rgba(255, 255, 255, 0.04);
+  --pm-rim: #03190a;
+  --pm-edge: #b9f59a;
+  --pm-hi: #74de55;
+  --pm-mid: #2c9d34;
+  --pm-lo: #0f5f20;
+  color-scheme: dark;
+}
+
+*,
+*::before,
+*::after {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--fg);
+  font: 400 15px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: var(--pm-hi);
+}
+
+header {
+  padding: 20px 16px 0;
+  max-width: 860px;
+  margin: 0 auto;
+}
+
+.home {
+  font-family: "Barlow Condensed", system-ui, sans-serif;
+  font-style: italic;
+  font-weight: 900;
+  font-size: 26px;
+  letter-spacing: 0.01em;
+  text-transform: uppercase;
+  color: var(--fg);
+  text-decoration: none;
+}
+
+.home .w2 {
+  color: var(--pm-hi);
+}
+
+main {
+  max-width: 860px;
+  margin: 0 auto;
+  padding: 16px 16px 48px;
+}
+
+.card {
+  background: var(--card);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 22px 24px;
+  margin-bottom: 16px;
+}
+
+.status {
+  margin: 0;
+  color: var(--dim);
+}
+
+.status.error {
+  color: #f28b82;
+}
+
+.head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.name {
+  margin: 0;
+  font-size: 28px;
+  line-height: 1.15;
+  overflow-wrap: anywhere;
+}
+
+.meta {
+  margin: 4px 0 0;
+  color: var(--dim);
+}
+
+.by {
+  color: var(--fg);
+}
+
+.code {
+  flex-shrink: 0;
+  font: 600 18px/1 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  letter-spacing: 0.14em;
+  color: var(--fg);
+  background: rgba(255, 255, 255, 0.07);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px 12px;
+  cursor: pointer;
+}
+
+.code:hover {
+  border-color: rgba(241, 241, 244, 0.3);
+}
+
+.code.copied {
+  border-color: var(--pm-hi);
+}
+
+.newer {
+  margin: 14px 0 0;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background: rgba(116, 222, 85, 0.1);
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px 32px;
+  margin-top: 18px;
+}
+
+.group h2 {
+  margin: 10px 0 8px;
+  font-size: 12px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--dim);
+}
+
+dl {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 16px;
+  margin: 0;
+}
+
+dt {
+  color: var(--dim);
+}
+
+dd {
+  margin: 0;
+}
+
+.stages {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.stages li {
+  padding: 3px 9px;
+  border-radius: 999px;
+  border: 1px solid var(--line);
+  font-size: 14px;
+}
+
+.stages .none {
+  color: var(--dim);
+}
+
+.actions {
+  text-align: center;
+}
+
+/* The green menu-button look of the landing page's download button, drawn in CSS (no game textures). */
+.create {
+  display: inline-block;
+  padding: 12px 26px;
+  border-radius: 10px;
+  border: 2px solid var(--pm-rim);
+  box-shadow: inset 0 0 0 1px var(--pm-edge), 0 0 0 1px rgba(185, 245, 154, 0.25);
+  background: linear-gradient(180deg, var(--pm-hi), var(--pm-mid) 55%, var(--pm-lo));
+  color: #fff;
+  font-family: "Barlow Condensed", system-ui, sans-serif;
+  font-style: italic;
+  font-weight: 900;
+  font-size: 22px;
+  text-transform: uppercase;
+  text-decoration: none;
+  text-shadow: 0 1px 0 var(--pm-rim), 0 0 3px var(--pm-rim);
+}
+
+.create:hover {
+  filter: brightness(1.08);
+}
+
+.hint {
+  margin: 12px 0 0;
+  color: var(--dim);
+  font-size: 14px;
+}
+
+#no-launcher.show {
+  color: var(--fg);
+  font-weight: 600;
+}
+
+@media (max-width: 640px) {
+  .grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .head {
+    flex-direction: column;
+  }
+  .card {
+    padding: 18px 16px;
+  }
+}

@@ -1,17 +1,15 @@
-import { CREATE_ROOM } from "@dolphin/hand_off_target";
 import { useQuery } from "@tanstack/react-query";
-import React, { useState } from "react";
+import React from "react";
 
-import { SocialMessages } from "@/components/social/social.messages";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
-import { useToasts } from "@/lib/hooks/use_toasts";
-import { useHandOff } from "@/lib/social/use_hand_off";
-import { useSocial } from "@/lib/social/use_social";
+import { useRememberedRuleset } from "@/lib/rulesets/use_remembered_ruleset";
+import { useCreateRoom } from "@/lib/social/use_create_room";
 import { useServices } from "@/services";
 
 import type { PublicRoomsState } from "./public_rooms_view";
 import { PublicRoomsView } from "./public_rooms_view";
+import { RulesetBox } from "./ruleset_box";
 import { useJoinRoom } from "./use_join_room";
 
 /** How often the list is fetched while Home is shown (the server answers from a 1 s snapshot). */
@@ -25,24 +23,10 @@ export const PublicRooms = React.memo(function PublicRooms() {
   const uid = useAccount((s) => s.user?.uid);
   const openLogin = useLoginModal((s) => s.openModal);
   const { join, joiningCode } = useJoinRoom();
-  const handOff = useHandOff();
-  const { showWarning } = useToasts();
-  const [creating, setCreating] = useState(false);
-  const create = () => {
-    setCreating(true);
-    // Invites sent before the room shows up wait for it (SocialRoot sends them).
-    useSocial.getState().startPendingRoom();
-    void handOff(CREATE_ROOM)
-      .then((taken) => {
-        if (!taken) {
-          const waiting = useSocial.getState().endPendingRoom();
-          if (waiting.length > 0) {
-            showWarning(SocialMessages.roomDidNotOpen(waiting.map((p) => p.displayName).join(", ")));
-          }
-        }
-      })
-      .finally(() => setCreating(false));
-  };
+  const { create: createRoom, creating } = useCreateRoom();
+  const { ruleset } = useRememberedRuleset();
+  // The room starts with the ruleset in the box (docs/rulesets-protocol.md §4).
+  const create = () => void createRoom(ruleset?.code);
 
   const query = useQuery({
     queryKey: ["publicRooms", uid],
@@ -75,6 +59,7 @@ export const PublicRooms = React.memo(function PublicRooms() {
       onLogIn={openLogin}
       onCreate={create}
       creating={creating}
+      rulesetBox={<RulesetBox />}
     />
   );
 });

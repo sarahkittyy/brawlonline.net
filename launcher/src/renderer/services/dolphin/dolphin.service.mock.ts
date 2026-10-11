@@ -91,12 +91,12 @@ class MockDolphinClient implements DolphinService {
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
-  async joinRoomInGame(_code: string): Promise<RoomHandOffResult> {
+  async joinRoomInGame(_code: string, _ruleset?: string): Promise<RoomHandOffResult> {
     return { outcome: "not-running" };
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
-  async prepareRoomLaunch(_code: string): Promise<{ id: string }> {
+  async prepareRoomLaunch(_code: string, _ruleset?: string): Promise<{ id: string }> {
     return { id: "mock-request" };
   }
 

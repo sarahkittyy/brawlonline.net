@@ -10,6 +10,7 @@ import {
   handOffRoom,
   isConnectCode,
   isRoomCode,
+  isRulesetCode,
   readGameStatus,
   requestPath,
   STATUS_FRESH_MS,
@@ -75,6 +76,36 @@ describe("room hand-off", () => {
       kind: "create",
       createdAt: "2026-10-10T12:00:00.000Z",
     });
+  });
+
+  it("writes a create request with a ruleset", async () => {
+    const req = await writeRoomRequest(dir, CREATE_ROOM, new Date("2026-10-10T12:00:00Z"), "KFQBTR");
+    expect(await readRequest()).toEqual({
+      version: 1,
+      id: req.id,
+      kind: "create",
+      ruleset: "KFQBTR",
+      createdAt: "2026-10-10T12:00:00.000Z",
+    });
+    // Only a create takes one, and only a ruleset code.
+    await expect(writeRoomRequest(dir, "KFQB", new Date(), "KFQBTR")).rejects.toThrow();
+    await expect(writeRoomRequest(dir, CREATE_ROOM, new Date(), "kfqbtr")).rejects.toThrow();
+    await expect(writeRoomRequest(dir, CREATE_ROOM, new Date(), "KFQB")).rejects.toThrow();
+    await expect(writeRoomRequest(dir, CREATE_ROOM, new Date(), "AEIOUY")).rejects.toThrow();
+    expect(isRulesetCode("BCDFGH")).toBe(true);
+    expect(isRulesetCode("BCDFG")).toBe(false);
+  });
+
+  it("hands a create with its ruleset to a running game", async () => {
+    await writeStatus({});
+    const pending = handOffRoom(dir, CREATE_ROOM, { ...fast, watchAfterAcceptMs: 50, ruleset: "MNPQRS" });
+    let req: RoomRequest | null = null;
+    while (!(req = await readRequest())) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    expect(req).toMatchObject({ kind: "create", ruleset: "MNPQRS" });
+    await writeStatus({ lastRequest: { id: req.id, result: "accepted" } });
+    expect(await pending).toEqual({ outcome: "accepted" });
   });
 
   it("a create answered accepted and then failed reports the failure", async () => {

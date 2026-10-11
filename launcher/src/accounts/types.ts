@@ -10,6 +10,9 @@
  */
 
 import type { ServiceUrls } from "@common/product";
+import type { Ruleset } from "@common/rulesets";
+
+export type { Ruleset } from "@common/rulesets";
 
 /** Exactly what Slippi's launcher writes to `user.json` (`src/dolphin/playkey.ts`). */
 export type UserJson = {
@@ -150,6 +153,45 @@ export type RoomList = {
   updatedAt: string;
 };
 
+/** A published ruleset (docs/rulesets-protocol.md §3). */
+export type RulesetView = {
+  code: string;
+  /** With `version` and `by` (the publisher) filled. */
+  ruleset: Ruleset;
+  hash: string;
+  createdAt: string;
+  /** The newest later version that is not hidden. */
+  newer: { code: string; version: number } | null;
+  /** `https://brawlonline.net/r/<code>`: the page to share. */
+  link: string;
+  /** Only in the account's own lists. */
+  hidden?: boolean;
+};
+
+/** An unpublished ruleset of the account's. */
+export type RulesetDraft = {
+  id: string;
+  /** The published version it edits. */
+  basedOn: string | null;
+  ruleset: Ruleset;
+  /** Why it can't be published yet, or null. */
+  problem: string | null;
+  createdAt: string;
+  updatedAt: string;
+};
+
+/** `GET /v1/me/rulesets`. */
+export type MyRulesets = { drafts: RulesetDraft[]; published: RulesetView[] };
+
+/** `GET /v1/me/rulesets/recent`: newest first. */
+export type RecentRuleset = RulesetView & { usedAt: string };
+
+/** `POST /v1/rulesets`: a draft, or a ruleset (and the published version it edits). */
+export type PublishRulesetRequest = { draftId: string } | { ruleset: Ruleset; basedOn?: string | null };
+
+/** `POST`/`PUT /v1/me/ruleset-drafts`. */
+export type RulesetDraftRequest = { ruleset: Ruleset; basedOn?: string | null };
+
 export type SignUpRequest = {
   email: string;
   password: string;
@@ -190,6 +232,18 @@ export interface AccountsApi {
   ): Promise<MatchHistoryPage>;
   /** Players online and the public rooms. */
   rooms(uid: string): Promise<RoomList>;
+  /** A published ruleset by code (public). */
+  ruleset(code: string): Promise<RulesetView>;
+  myRulesets(uid: string): Promise<MyRulesets>;
+  recentRulesets(uid: string): Promise<RecentRuleset[]>;
+  publishRuleset(uid: string, req: PublishRulesetRequest): Promise<RulesetView>;
+  setRulesetHidden(uid: string, code: string, hidden: boolean): Promise<void>;
+  createRulesetDraft(uid: string, req: RulesetDraftRequest): Promise<RulesetDraft>;
+  updateRulesetDraft(uid: string, id: string, req: RulesetDraftRequest): Promise<RulesetDraft>;
+  deleteRulesetDraft(uid: string, id: string): Promise<void>;
+  /** The remembered ruleset (null: P+ default). */
+  rememberedRuleset(uid: string): Promise<RulesetView | null>;
+  setRememberedRuleset(uid: string, code: string | null): Promise<RulesetView | null>;
   /** The resolved service URLs (for display and links). */
   getServiceUrls(): Promise<ServiceUrls>;
 }
