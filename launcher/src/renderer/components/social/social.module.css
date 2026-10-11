@@ -16,8 +16,7 @@
   position: relative;
   flex-shrink: 0;
   height: var(--dock-height);
-  background-color: var(--surface-footer);
-  border-top: 1px solid rgb(159 116 192 / 10%);
+  background-color: transparent; /* the page's own background shows through */
   z-index: 1100; /* chat windows over the page and the version label, under MUI's dialogs (1300) */
 }
 
