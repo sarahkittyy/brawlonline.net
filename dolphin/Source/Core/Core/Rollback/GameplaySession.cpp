@@ -77,6 +77,8 @@ constexpr s64 PING_DISPLAY_INTERVAL = 60;  // frames (Slippi's SLIPPI_PING_DISPL
 // rollback crosses the teardown.
 constexpr s64 END_AFTER_GAME_SET = MAX_ROLLBACK_FRAMES + 12;
 constexpr u32 REGION_CHUNK = 4096;
+// While a barrier waits, what each player still lacks is logged this often.
+constexpr auto WAIT_LOG_INTERVAL = std::chrono::seconds(5);
 
 enum class Mode
 {
@@ -198,6 +200,7 @@ struct PeerView
   s64 init_match = -1;
   Clock::time_point last_heard{};
   double rtt_ms = -1;
+  bool oversize_logged = false;  // a control message over MAX_CONTROL_SIZE came from it
 };
 
 struct FrameRecord
@@ -250,6 +253,12 @@ struct State
   // The session ends (fewer than two players left): handled on the CPU thread for a match.
   bool peer_left = false;
   std::string peer_left_reason;
+  // This player told the others it left: Stop, or the session gave up (Phase::Error), so they
+  // do not wait for it at a barrier until their own timeout.
+  bool leave_sent = false;
+  // "Still waiting" lines logged at the current barrier (every WAIT_LOG_INTERVAL).
+  int wait_logs = 0;
+  bool state_size_logged = false;  // our state message was over MAX_CONTROL_SIZE (logged once)
   bool disconnected = false;  // reported to the game (Slippi's ONLINE_INPUTS result 3)
   // The two machines' game states differ (GekkoNet's checksums, or the peer's "desync"): the
   // CPU thread ends the match at its next loop top, as Slippi ends a game on a hard desync.
@@ -944,6 +953,29 @@ void SendToAll(const std::vector<u8>& data)
   });
 }
 
+// Tells the other players that this one has left the session (under s.mutex), with why when the
+// session gave up (they log it). Slippi's graceful ENet disconnect: the others go on without it
+// (3-4 players) or end the session at once, instead of waiting at a barrier for their timeout or
+// for the 7.2 s silence. UDP: sent a few times.
+void SendLeave(std::string_view why)
+{
+  if (s.mode != Mode::Network || !s.socket)
+    return;
+  picojson::object o;
+  o["t"] = picojson::value("leave");
+  o["v"] = picojson::value(1.0);
+  o["slot"] = picojson::value(static_cast<double>(s.local_slot));
+  if (!why.empty())
+    o["why"] = picojson::value(PeerData::LeaveReason(why));
+  const std::string text = picojson::value(o).serialize();
+  std::vector<u8> pkt(text.size() + 1);
+  pkt[0] = 'C';
+  std::memcpy(pkt.data() + 1, text.data(), text.size());
+  for (int i = 0; i < 3; ++i)
+    SendToAll(pkt);
+  s.leave_sent = true;
+}
+
 // GekkoNet addresses are the peers' in-game ports: "p0" .. "p3".
 std::array<char[2], MAX_LOBBY_PLAYERS> s_gekko_addr{{{'p', '0'}, {'p', '1'}, {'p', '2'}, {'p', '3'}}};
 
@@ -1477,6 +1509,17 @@ void SendState()
     }
   }
   const std::string text = picojson::value(o).serialize();
+  if (text.size() > PeerData::MAX_CONTROL_SIZE && !s.state_size_logged)
+  {
+    // The others refuse a control message this large (PeerData::ParseControl).
+    s.state_size_logged = true;
+    const auto tasks = o.find("tasks");
+    ERROR_LOG_FMT(BRAWLBACK,
+                  "gprb: our state message is {} bytes, over the {} the other players accept "
+                  "(task order {} bytes)",
+                  text.size(), PeerData::MAX_CONTROL_SIZE,
+                  tasks != o.end() ? tasks->second.serialize().size() : 0);
+  }
   std::vector<u8> pkt(text.size() + 1);
   pkt[0] = 'C';
   std::memcpy(pkt.data() + 1, text.data(), text.size());
@@ -1556,7 +1599,11 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
   if (const auto t = o.find("t"); t != o.end() && t->second.is<std::string>() &&
                                   t->second.get<std::string>() == "leave")
   {
-    OnPeerLeft(slot, "peer left");
+    // "why": its session gave up (older builds send no reason).
+    const auto why = o.find("why");
+    OnPeerLeft(slot, why != o.end() && why->second.is<std::string>() ?
+                         "peer gave up: " + PeerData::LeaveReason(why->second.get<std::string>()) :
+                         std::string("peer left"));
     return;
   }
   if (const auto t = o.find("t"); t != o.end() && t->second.is<std::string>() &&
@@ -1594,12 +1641,20 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
   const bool from_host = slot == HostSlot() && !IsHost();
   if (const auto* x = get("sel"); x && x->is<picojson::object>())
     p.selections = x->get<picojson::object>();
+  // The barriers' steps, logged as each player reaches them (once per match each).
+  const bool was_at_s = p.at_s, was_applied = p.applied, was_at_start = p.at_start;
   if (const auto* x = get("at_s"); x && x->is<bool>())
     p.at_s = x->get<bool>();
   if (const auto* x = get("applied"); x && x->is<bool>())
     p.applied = x->get<bool>();
   if (const auto* x = get("at_start"); x && x->is<bool>())
     p.at_start = x->get<bool>();
+  if (p.at_s && !was_at_s)
+    INFO_LOG_FMT(BRAWLBACK, "gprb: P{} is at the barrier", slot + 1);
+  if (p.applied && !was_applied && slot != HostSlot())
+    INFO_LOG_FMT(BRAWLBACK, "gprb: P{} applied the host's sync block", slot + 1);
+  if (p.at_start && !was_at_start)
+    INFO_LOG_FMT(BRAWLBACK, "gprb: P{} is at the start barrier", slot + 1);
   if (const auto* x = get("go"); x && x->is<bool>())
     p.go = x->get<bool>();
   if (const auto n = PeerData::JsonUInt(get("match"), 0xFFFFFFFF))
@@ -1774,6 +1829,16 @@ void NetThread()
                                            received - 1),
                           *from, from_port);
           }
+          else if (known)
+          {
+            std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+            if (!s.peers[slot].oversize_logged)
+            {
+              s.peers[slot].oversize_logged = true;
+              ERROR_LOG_FMT(BRAWLBACK, "gprb: refused a {} byte control message from P{} (limit {})",
+                            received - 1, slot + 1, PeerData::MAX_CONTROL_SIZE);
+            }
+          }
         }
         else if (buf[0] == 'P' && received == 9 && known)
         {
@@ -1824,6 +1889,14 @@ void NetThread()
     {
       last_state = now;
       SendState();
+      // The session gave up (a barrier's check or timeout, a failed start): the others are told
+      // at once, so they do not wait for this player until their own timeout.
+      std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+      if (s.mode == Mode::Network && s.phase == Phase::Error && !s.leave_sent)
+      {
+        WARN_LOG_FMT(BRAWLBACK, "gprb: leaving the session ({})", s.error);
+        SendLeave(s.error);
+      }
     }
     if (now - last_ping >= std::chrono::milliseconds(200))
     {
@@ -3771,6 +3844,9 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.foreign_packets = 0;
   s.peer_left = false;
   s.peer_left_reason.clear();
+  s.leave_sent = false;
+  s.wait_logs = 0;
+  s.state_size_logged = false;
   s.disconnected = false;
   s.desync_end = false;
   s.desynced = false;
@@ -3929,17 +4005,8 @@ void Stop()
 {
   {
     std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-    // Leaving tells the peer at once (Slippi's graceful ENet disconnect), so it does not wait for
-    // the 7.2 s silence timeout. UDP: send it a few times.
-    if (s.mode == Mode::Network && s.socket)
-    {
-      const std::string text = fmt::format(R"({{"t":"leave","v":1,"slot":{}}})", s.local_slot);
-      std::vector<u8> pkt(text.size() + 1);
-      pkt[0] = 'C';
-      std::memcpy(pkt.data() + 1, text.data(), text.size());
-      for (int i = 0; i < 3; ++i)
-        SendToAll(pkt);
-    }
+    // Leaving tells the peer at once, so it does not wait for the 7.2 s silence timeout.
+    SendLeave("");
     if (InMatchPhase())
     {
       // Ends on the CPU thread at the next loop top.
@@ -4156,6 +4223,51 @@ enum class MatchStart
   Error,
 };
 
+// What every other player has told us, for the logs while a barrier waits (under s.mutex).
+std::string WaitText()
+{
+  std::string out;
+  const auto now = Clock::now();
+  const int host = HostSlot();
+  ForEachPeer([&](int slot, const PeerView& p) {
+    if (!out.empty())
+      out += "; ";
+    out += fmt::format("P{} ({}{})", slot + 1, p.name, slot == host ? ", host" : "");
+    if (p.left)
+    {
+      out += fmt::format(" left: {}", p.left_reason);
+      return;
+    }
+    if (!p.seen)
+    {
+      out += " never heard";
+      return;
+    }
+    out += fmt::format(" heard {:.0f} ms ago, at_s {}, applied {}, at_start {}, go {}, setup {:016x}",
+                       std::chrono::duration<double, std::milli>(now - p.last_heard).count(),
+                       p.at_s, p.applied, p.at_start, p.go, p.setup_hash);
+    if (slot == host)
+    {
+      out += fmt::format(", init for match {}, sync {}, ports {:#x}, task order {}", p.init_match,
+                         p.sync.valid, p.match_ports, p.task_order_valid);
+    }
+  });
+  return out;
+}
+
+// Every WAIT_LOG_INTERVAL of a barrier's wait: what it still waits for (under s.mutex).
+void LogWait(std::string_view where, Clock::time_point since)
+{
+  const auto waited = Clock::now() - since;
+  if (waited < WAIT_LOG_INTERVAL * (s.wait_logs + 1))
+    return;
+  ++s.wait_logs;
+  WARN_LOG_FMT(BRAWLBACK, "gprb: {:.0f} s {} (P{}{}, match {}); {}",
+               std::chrono::duration<double>(waited).count(), where, s.local_slot + 1,
+               IsHost() ? ", host" : fmt::format(", applied {}", s.applied), s.match_index,
+               WaitText());
+}
+
 // The start of a match on this connection, before the match scene loads anything: the joiner
 // takes the host's gmGlobalModeMelee init block (stage, rules, the clock-derived stage variant),
 // both seed the three RNGs from the session seed and the match index, and the object serial
@@ -4173,9 +4285,11 @@ MatchStart ApplyMatchStart(Core::System& system, std::string_view when)
   if (!IsHost())
   {
     const auto since = Clock::now();
+    s.wait_logs = 0;
     // (The host may leave meanwhile: the next host is then this player or another peer.)
     while (!IsHost() && !host_block_ready())
     {
+      LogWait("waiting for the host's match setup", since);
       if (Clock::now() - since > std::chrono::seconds(60))
       {
         s.error = "the host's match setup never arrived";
@@ -4384,6 +4498,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       }
       s.at_start = true;
       s.barrier_since = Clock::now();
+      s.wait_logs = 0;
       s.phase = Phase::StartBarrier;
       SendState();  // the peer's barrier waits for at_start: not until the next 50 ms tick
       INFO_LOG_FMT(BRAWLBACK, "gprb: at the start barrier (game frame {}, GekkoNet synced {})",
@@ -4468,6 +4583,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
         Spin(ppc);
         return true;
       }
+      LogWait("at the start barrier", s.barrier_since);
       s.mutex.unlock();
       std::this_thread::sleep_for(std::chrono::microseconds(500));
       s.mutex.lock();
@@ -4585,6 +4701,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     s.applied = IsHost();
     s.barrier_host = HostSlot();
     s.barrier_since = Clock::now();
+    s.wait_logs = 0;
     s.phase = Phase::Barrier;
     SendState();
     INFO_LOG_FMT(BRAWLBACK, "gprb: at the barrier (P{} of ports {:#x}, setup {:016x}: {})",
@@ -4616,6 +4733,13 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     PeerView* hp = HostPeer();
     if (differs.empty() && HostSlot() != s.barrier_host)
       differs = "the host left before the match started";
+    // Tests (PPR_GPRB_TEST_GIVE_UP=<port 1-4>): that player's barrier gives up as a failed check
+    // would, so the others' reaction can be seen.
+    if (const char* give_up = std::getenv("PPR_GPRB_TEST_GIVE_UP");
+        differs.empty() && give_up && std::atoi(give_up) == s.local_slot + 1)
+    {
+      differs = "PPR_GPRB_TEST_GIVE_UP";
+    }
     if (differs.empty() && hp && !s.applied && hp->at_s && hp->sync.valid &&
         hp->match_ports != s.match_ports)
     {
@@ -4649,6 +4773,8 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     // host when it hears so from all, a joiner RTT/2 after it told the host, so the countdowns
     // (which run without rollback) start about together and the peers reach the start barrier
     // together.
+    if (s.peer_left)
+      return OnLoopTop(guard);  // ends the session (everyone else left)
     const bool proceed =
         IsHost() ? all_applied : (s.applied && s.countdown_at && Clock::now() >= *s.countdown_at);
     if (proceed)
@@ -4666,8 +4792,6 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       SetLoopDefault(ppc);
       return true;
     }
-    if (s.peer_left)
-      return OnLoopTop(guard);  // ends the session (peer gone)
     if (Clock::now() - s.barrier_since > std::chrono::seconds(60))
     {
       s.error = "barrier timed out";
@@ -4681,6 +4805,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       Spin(ppc);
       return true;
     }
+    LogWait("at the barrier", s.barrier_since);
     // GekkoNet's handshake runs in its network poll above. Never call gekko_update_session here:
     // the update that first sees the peer synced returns frame 0's save and advance events.
     s.mutex.unlock();

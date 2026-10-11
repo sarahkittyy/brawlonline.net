@@ -121,4 +121,9 @@ void SanitizePortValues(std::array<u8, N>& pv)
 }
 
 std::string TruncateName(const std::string& name);
+
+// Why a peer's session gave up (its "leave" message's "why"), for our logs and status: printable
+// ASCII only (anything else becomes '?'), at most MAX_LEAVE_REASON_LEN characters.
+constexpr size_t MAX_LEAVE_REASON_LEN = 160;
+std::string LeaveReason(std::string_view why);
 }  // namespace Gprb::PeerData

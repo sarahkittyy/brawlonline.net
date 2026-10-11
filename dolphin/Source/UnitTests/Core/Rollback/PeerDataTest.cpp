@@ -213,6 +213,15 @@ TEST(PeerData, PortValuesAndNames)
   EXPECT_EQ(TruncateName(s), std::string(MAX_NAME_LEN - 1, 'a'));
 }
 
+TEST(PeerData, LeaveReasons)
+{
+  // A peer's "why" goes into our logs and status: printable ASCII, bounded.
+  EXPECT_EQ(LeaveReason("barrier timed out"), "barrier timed out");
+  EXPECT_EQ(LeaveReason(""), "");
+  EXPECT_EQ(LeaveReason("a\nb\x1b[31m\xc3\xa9"), "a?b?[31m??");
+  EXPECT_EQ(LeaveReason(std::string(1000, 'x')).size(), MAX_LEAVE_REASON_LEN);
+}
+
 TEST(PeerData, TeamsAndPorts)
 {
   for (u32 t : {0u, 1u, 2u, 0xFFu})

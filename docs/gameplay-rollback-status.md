@@ -227,6 +227,7 @@ See [Open issues](#open-issues) at the end: Peach crashes (an article outside th
    - Both compare a hash of the match setup (rules block; per player the character, state, stocks and costume).
    - The joiner copies the host's sync block (`g_GameFrame`, the gfApplication counter, the RNGs, the serial counter).
    - The joiner relinks its gfTaskScheduler lists into the host's order: task order follows menu history.
+   - While either barrier waits, every 5 s the log says what each other player has reported (`gprb: 5 s at the barrier ...`: heard how long ago, at_s, applied, at_start, go, setup hash, and the host's init block, sync block, ports and task order); each player's step is logged as it arrives (`P2 is at the barrier`, `P2 applied the host's sync block`, `P2 is at the start barrier`). A session that gives up (a failed check, a timeout) tells the others with a `leave` carrying why, and a state message over the 16 KiB the others accept is logged on both sides.
 6. The countdown runs without rollback and with neutral input.
 7. **Start barrier at `start_frame` (240, after GO):**
    - Both create the GekkoNet game session (each with its own input delay, see below; prediction window 7) and complete its handshake.

@@ -1024,6 +1024,60 @@ def test_room_four_players(backend: OnlineBackend, dolphin: Callable[..., Dolphi
     assert [p["wins"] for p in m["players"]] == [1] + [0] * (len(ports) - 1) and all(p["team"] is None for p in m["players"])
 
 
+@pytest.mark.parametrize("ports", [(0, 1, 2), (0, 1, 2, 3)], ids=["three", "four"])
+def test_room_player_quits_while_the_match_loads(backend: OnlineBackend,
+                                                 dolphin: Callable[..., DolphinInstance],
+                                                 gpu_backend: str, ports: tuple) -> None:
+    """A room's game of 3-4 starts and the last player closes their Dolphin while the match
+    loads (the setup decided, before the barrier): the others start the match without them."""
+    test = f"quit-while-loading-{len(ports)}"
+    import secrets
+    users = [backend.create_user(f"rq{'abcd'[k]}", f"RQ{'ABCD'[k]}{'TF'[len(ports) - 3]}",
+                                 email=f"roomq{k}-{secrets.token_hex(4)}@example.test")
+             for k in range(len(ports))]
+    gs = [_boot(dolphin, f"roomq{len(ports)}-{x}", backend, u, gpu_backend, test, "gameplay", artifacts=ART)
+          for x, u in zip("abcd", users)]
+    a, q = gs[0], gs[-1]
+    _all(*[g.to_main_menu for g in gs])
+    _all(*[g.to_online_page for g in gs])
+    code = create_room(a)
+    pick(a)
+    for slot in ports[2:]:
+        hand_to(a, PANEL_X[slot], -10.0)
+        a.steps("tap A 8", "wait 30")
+        until_view(a, lambda v, s=slot: v["slots"][s]["bits"] & ppom.SLOT_OPEN, f"slot {slot + 1} open")
+    hand_to(a, -23.0, 10.5)
+    _all(*[lambda g=g: to_join_room(g) for g in gs[1:]])
+    for k, g in enumerate(gs[1:], 1):
+        pick(g, right=2 * k)
+    for g in gs:
+        B.write_rules(g.c, stocks=1, minutes=2, items_off=True)
+        ppom.allow_test_rules(g.c)
+    for k, g in enumerate(gs[1:], 1):
+        type_room_code(g, code)
+        until_view(g, lambda v: v["flags"] & ppom.RF_IN, f"player {k + 1} in the room")
+    until_view(a, lambda v: all(v["slots"][p]["bits"] & ppom.SLOT_TAKEN for p in ports), "all players")
+    for g in gs:
+        g.steps("wait 60")
+        g.steps("tap START 8", "wait 10")
+    # The quitter's game leaves the CSS for the match's loading, then its Dolphin is closed.
+    _wait(lambda: q.scene() != CSS, 240, "the quitter's match loading")
+    time.sleep(1.0)
+    q.inst.stop()
+    rest = gs[:-1]
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] in ("running", "error", "ended") for g in rest),
+                    150, "the others' match running (or ended)")
+    st = [online_set.gstatus(g.c) for g in rest]
+    print("after the quit:", [(s["phase"], s.get("error"), s.get("match_ports")) for s in st])
+    assert all(s["phase"] == "running" for s in st), [(s["phase"], s.get("error")) for s in st]
+    time.sleep(5)
+    for g in rest:
+        g.shot("05-match-without-the-quitter")
+    st = [online_set.gstatus(g.c) for g in rest]
+    assert all(s["phase"] == "running" for s in st), [(s["phase"], s.get("error")) for s in st]
+    assert len({s["current_frame"] > 120 for s in st}) == 1 and st[0]["current_frame"] > 120, st
+
+
 def test_room_three_players_second_game_on_the_losers_pick(backend: OnlineBackend,
                                                            dolphin: Callable[..., DolphinInstance],
                                                            gpu_backend: str) -> None:

@@ -268,4 +268,15 @@ std::string TruncateName(const std::string& name)
     --n;
   return name.substr(0, n);
 }
+
+std::string LeaveReason(std::string_view why)
+{
+  std::string out(why.substr(0, MAX_LEAVE_REASON_LEN));
+  for (char& c : out)
+  {
+    if (c < 0x20 || c > 0x7E)
+      c = '?';
+  }
+  return out;
+}
 }  // namespace Gprb::PeerData
