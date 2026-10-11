@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { arrivedRoom, inviteBlocked, waitsForRoom } from "@/lib/social/use_social";
+import { arrivedRoom, frontTab, inviteBlocked, useSocial, waitsForRoom } from "@/lib/social/use_social";
 import { volumeOf } from "@/lib/social/volume";
 
 import { deleteWordBefore } from "./chat_dock";
@@ -48,5 +48,33 @@ describe("chat box", () => {
     expect(waitsForRoom(fromRoom, room("BCDF"))).toBe(true);
     expect(waitsForRoom(fromRoom, null)).toBe(true);
     expect(arrivedRoom(fromRoom, room("KFQB"))?.code).toBe("KFQB");
+  });
+
+  it("the window opened or clicked last is drawn over the others", () => {
+    const social = useSocial.getState();
+    const front = () => frontTab(useSocial.getState().tabs);
+    const open = (uid: string) => useSocial.getState().tabs.find((t) => t.uid === uid)?.open;
+    useSocial.setState({ tabs: [] });
+    social.openTab("a", true);
+    social.openTab("b", true);
+    expect(front()).toBe("b");
+    // A message opens a tab without its window: nothing moves.
+    social.openTab("c", false);
+    expect(front()).toBe("b");
+    // A covered window's tab brings it up instead of minimizing it; the front one's minimizes.
+    social.clickTab("a");
+    expect([front(), open("a")]).toEqual(["a", true]);
+    social.clickTab("a");
+    expect([front(), open("a")]).toEqual(["b", false]);
+    // Clicking inside a window, or Message on an already-open chat, raises it.
+    social.clickTab("c");
+    expect(front()).toBe("c");
+    social.raiseTab("b");
+    expect(front()).toBe("b");
+    social.openTab("c", true);
+    expect(front()).toBe("c");
+    social.closeTab("c");
+    expect(front()).toBe("b");
+    useSocial.setState({ tabs: [] });
   });
 });

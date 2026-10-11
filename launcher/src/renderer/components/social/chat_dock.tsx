@@ -7,7 +7,7 @@ import { clsx } from "clsx";
 import React, { useEffect, useLayoutEffect, useRef, useState } from "react";
 
 import { useToasts } from "@/lib/hooks/use_toasts";
-import { findPlayer, useSocial } from "@/lib/social/use_social";
+import { findPlayer, frontTab, useSocial } from "@/lib/social/use_social";
 
 import { InviteButton, PlayerName } from "./invite_button";
 import type { PlayerMenuTarget } from "./player_menu";
@@ -22,7 +22,9 @@ const MAX_INPUT = 100;
 
 /**
  * The bar along the bottom of the window: one tab per conversation, from the left, shrinking to
- * fit. A tab's header opens and closes its chat window, which draws over the page above it.
+ * fit. A tab's header opens and closes its chat window, which draws over the page above it. Where
+ * windows overlap, the last one opened, clicked or whose tab was hovered is on top, so running the
+ * mouse along the tabs shows each chat in turn.
  */
 export const ChatDock = React.memo(function ChatDock() {
   const tabs = useSocial((s) => s.tabs);
@@ -31,6 +33,7 @@ export const ChatDock = React.memo(function ChatDock() {
   const slotRefs = useRef(new Map<string, HTMLDivElement>());
   const [lefts, setLefts] = useState<Record<string, number>>({});
   const [menu, setMenu] = useState<PlayerMenuTarget | null>(null);
+  const front = frontTab(tabs);
 
   // A window starts at its tab's left edge, kept inside the launcher's window.
   useLayoutEffect(() => {
@@ -62,6 +65,8 @@ export const ChatDock = React.memo(function ChatDock() {
             online={state.online.some((p) => p.uid === tab.uid)}
             ignored={state.ignored.includes(tab.uid)}
             left={lefts[tab.uid] ?? EDGE}
+            z={tab.z}
+            front={tab.uid === front}
           />
         );
       })}
@@ -105,8 +110,11 @@ const TabHeader = React.forwardRef<
     onMenu: (t: PlayerMenuTarget) => void;
   }
 >(function TabHeader({ player, open, online, unread, onMenu }, ref) {
-  const toggleTab = useSocial((s) => s.toggleTab);
+  const clickTab = useSocial((s) => s.clickTab);
+  const raiseTab = useSocial((s) => s.raiseTab);
   const closeTab = useSocial((s) => s.closeTab);
+  // Hovering brought the window up, so the click that usually follows doesn't minimize it.
+  const raisedByHover = useRef(false);
   return (
     <div
       ref={ref}
@@ -114,11 +122,27 @@ const TabHeader = React.forwardRef<
       tabIndex={0}
       className={clsx(styles.tab, open && styles.open, unread && !open && styles.unread)}
       data-testid={`chat-tab-${player.uid}`}
-      onClick={() => toggleTab(player.uid)}
+      onMouseEnter={() => {
+        if (open && frontTab(useSocial.getState().tabs) !== player.uid) {
+          raiseTab(player.uid);
+          raisedByHover.current = true;
+        }
+      }}
+      onMouseLeave={() => {
+        raisedByHover.current = false;
+      }}
+      onClick={() => {
+        if (raisedByHover.current) {
+          raisedByHover.current = false;
+          focusChatInput(player.uid);
+        } else {
+          clickTab(player.uid);
+        }
+      }}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          toggleTab(player.uid);
+          clickTab(player.uid);
         }
       }}
       onContextMenu={(e) => {
@@ -146,6 +170,27 @@ const TabHeader = React.forwardRef<
   );
 });
 
+/** Puts the keyboard in a player's message box, if the chat window is open. */
+function focusChatInput(uid: string) {
+  document.querySelector<HTMLInputElement>(`[data-testid="chat-window-${uid}"] input`)?.focus();
+}
+
+/**
+ * Whether a window coming to the front should take the keyboard: not from a text field on the page
+ * (typing there carries on), but from another chat's message box, so typing follows the window in
+ * front.
+ */
+function takesTyping(): boolean {
+  const el = document.activeElement;
+  if (!(el instanceof HTMLElement)) {
+    return true;
+  }
+  if (el.classList.contains(styles.input)) {
+    return true;
+  }
+  return !(el instanceof HTMLInputElement || el instanceof HTMLTextAreaElement || el.isContentEditable);
+}
+
 /** Deletes the word before the caret (Ctrl+W, as in a terminal). */
 export function deleteWordBefore(text: string, caret: number): { text: string; caret: number } {
   let i = caret;
@@ -164,12 +209,16 @@ const ChatWindow = ({
   online,
   ignored,
   left,
+  z,
+  front,
 }: {
   player: SocialPlayer;
   conversation?: Conversation;
   online: boolean;
   ignored: boolean;
   left: number;
+  z: number;
+  front: boolean;
 }) => {
   const { showError } = useToasts();
   const [draft, setDraft] = useState("");
@@ -180,9 +229,15 @@ const ChatWindow = ({
   const lines = conversation?.lines ?? [];
   const unread = conversation?.unread ?? 0;
 
+  // Typing goes to the window in front (see takesTyping); a click inside the window leaves the
+  // focus where the click put it (e.g. selecting text).
+  const raisedByPointer = useRef(false);
   useEffect(() => {
-    inputRef.current?.focus();
-  }, []);
+    if (front && !raisedByPointer.current && takesTyping()) {
+      inputRef.current?.focus();
+    }
+    raisedByPointer.current = false;
+  }, [front]);
 
   // Newest at the bottom, scrolled to.
   useLayoutEffect(() => {
@@ -225,7 +280,17 @@ const ChatWindow = ({
   };
 
   return (
-    <div className={styles.window} style={{ left }} data-testid={`chat-window-${player.uid}`}>
+    <div
+      className={styles.window}
+      style={{ left, zIndex: z }}
+      data-testid={`chat-window-${player.uid}`}
+      onMouseDownCapture={() => {
+        if (!front) {
+          raisedByPointer.current = true;
+          useSocial.getState().raiseTab(player.uid);
+        }
+      }}
+    >
       <div className={styles.windowTitle}>
         <Tooltip title={Messages.e2e()} placement="top" disableInteractive={true}>
           <span className={styles.lock}>

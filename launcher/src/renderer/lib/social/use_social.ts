@@ -2,8 +2,31 @@ import type { SocialPlayer, SocialRoom, SocialState } from "@social/types";
 import { create } from "zustand";
 import { combine } from "zustand/middleware";
 
-/** A chat tab in the bar along the bottom of the window. */
-export type ChatTab = { uid: string; open: boolean };
+/**
+ * A chat tab in the bar along the bottom of the window. `z` orders the open windows where they
+ * overlap: the one raised last (opened or clicked) is drawn over the others.
+ */
+export type ChatTab = { uid: string; open: boolean; z: number };
+
+/** The open window drawn over the others, if any. */
+export function frontTab(tabs: ChatTab[]): string | null {
+  let front: ChatTab | null = null;
+  for (const t of tabs) {
+    if (t.open && (!front || t.z > front.z)) {
+      front = t;
+    }
+  }
+  return front?.uid ?? null;
+}
+
+const topZ = (tabs: ChatTab[]) => tabs.reduce((z, t) => Math.max(z, t.z), 0) + 1;
+
+/** Opens (on top) or minimizes a tab's window. */
+const toggled = (tabs: ChatTab[], uid: string) =>
+  tabs.map((t) => (t.uid === uid ? { ...t, open: !t.open, z: t.open ? t.z : topZ(tabs) } : t));
+
+const raised = (tabs: ChatTab[], uid: string) =>
+  frontTab(tabs) === uid ? tabs : tabs.map((t) => (t.uid === uid ? { ...t, z: topZ(tabs) } : t));
 
 /**
  * Home's "Create room" was clicked and the room isn't there yet: invites sent meanwhile wait for it
@@ -50,14 +73,22 @@ export const useSocial = create(
       const tabs = get().tabs;
       const existing = tabs.find((t) => t.uid === uid);
       if (existing) {
-        if (expand && !existing.open) {
-          set({ tabs: tabs.map((t) => (t.uid === uid ? { ...t, open: true } : t)) });
+        if (expand && (!existing.open || frontTab(tabs) !== uid)) {
+          set({ tabs: tabs.map((t) => (t.uid === uid ? { ...t, open: true, z: topZ(tabs) } : t)) });
         }
         return;
       }
-      set({ tabs: [...tabs, { uid, open: expand }] });
+      set({ tabs: [...tabs, { uid, open: expand, z: topZ(tabs) }] });
     },
-    toggleTab: (uid: string) => set({ tabs: get().tabs.map((t) => (t.uid === uid ? { ...t, open: !t.open } : t)) }),
+    toggleTab: (uid: string) => set({ tabs: toggled(get().tabs, uid) }),
+    /** Draws an open window over the others. */
+    raiseTab: (uid: string) => set({ tabs: raised(get().tabs, uid) }),
+    /** A tab's header: brings its window to the front if another covers it, else opens or minimizes it. */
+    clickTab: (uid: string) => {
+      const tabs = get().tabs;
+      const covered = tabs.some((t) => t.uid === uid && t.open) && frontTab(tabs) !== uid;
+      set({ tabs: covered ? raised(tabs, uid) : toggled(tabs, uid) });
+    },
     closeTab: (uid: string) => set({ tabs: get().tabs.filter((t) => t.uid !== uid) }),
   })),
 );
