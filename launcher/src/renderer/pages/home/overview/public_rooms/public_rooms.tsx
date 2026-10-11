@@ -4,6 +4,7 @@ import React, { useState } from "react";
 
 import { SocialMessages } from "@/components/social/social.messages";
 import { useAccount } from "@/lib/hooks/use_account";
+import { useLocalStorage } from "@/lib/hooks/use_local_storage";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { useHandOff } from "@/lib/social/use_hand_off";
@@ -18,6 +19,8 @@ import { useJoinRoom } from "./use_join_room";
 export const ROOMS_POLL_MS = 4000;
 /** How long a list stays shown while polls fail. */
 const STALE_AFTER_MS = 15_000;
+/** Set once the player clicks "Create room"; until then the button glows. */
+const CREATED_ROOM_STORAGE_KEY = "HAS_CREATED_ROOM";
 
 /** Players online and the public rooms, polled every few seconds while Home > Overview is open. */
 export const PublicRooms = React.memo(function PublicRooms() {
@@ -28,8 +31,10 @@ export const PublicRooms = React.memo(function PublicRooms() {
   const handOff = useHandOff();
   const { showWarning } = useToasts();
   const [creating, setCreating] = useState(false);
+  const [hasCreatedRoom, setHasCreatedRoom] = useLocalStorage(CREATED_ROOM_STORAGE_KEY, false);
   const create = () => {
     setCreating(true);
+    setHasCreatedRoom(true);
     // Invites sent before the room shows up wait for it (SocialRoot sends them).
     useSocial.getState().startPendingRoom();
     void handOff(CREATE_ROOM)
@@ -75,6 +80,7 @@ export const PublicRooms = React.memo(function PublicRooms() {
       onLogIn={openLogin}
       onCreate={create}
       creating={creating}
+      highlightCreate={!hasCreatedRoom}
     />
   );
 });

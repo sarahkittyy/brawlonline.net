@@ -82,6 +82,17 @@ describe("PublicRoomsView", () => {
     expect(
       view({ kind: "ready", online: 1, rooms: [] }).getAllByText(Messages.createInGamePath()).length,
     ).toBeGreaterThan(0);
+    expect(
+      render(
+        <PublicRoomsView
+          state={{ kind: "ready", online: 1, rooms: [] }}
+          onJoin={vi.fn()}
+          onRetry={vi.fn()}
+          onLogIn={vi.fn()}
+          onCreate={vi.fn()}
+        />,
+      ).getByText(Messages.createAbove()),
+    ).toBeTruthy();
     expect(view({ kind: "ready", online: 1, rooms: [] }).getAllByText("1 player online").length).toBeGreaterThan(0);
     expect(view({ kind: "logged-out" }).getByText(Messages.logIn())).toBeTruthy();
     expect(view({ kind: "unreachable" }).getByText(Messages.retry())).toBeTruthy();

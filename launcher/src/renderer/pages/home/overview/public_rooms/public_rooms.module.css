@@ -53,6 +53,31 @@
   white-space: nowrap;
 }
 
+/* "Create room" before the player's first room: a yellow glow that pulses. */
+.createHighlight {
+  --create-glow: 255 214 64;
+
+  animation: createGlow 1.8s ease-in-out infinite;
+}
+
+@keyframes createGlow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 1px rgb(var(--create-glow) / 55%), 0 0 4px 1px rgb(var(--create-glow) / 25%);
+  }
+
+  50% {
+    box-shadow: 0 0 0 2px rgb(var(--create-glow) / 90%), 0 0 14px 4px rgb(var(--create-glow) / 55%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .createHighlight {
+    animation: none;
+    box-shadow: 0 0 0 2px rgb(var(--create-glow) / 90%), 0 0 10px 2px rgb(var(--create-glow) / 45%);
+  }
+}
+
 .list {
   list-style: none;
   margin: 0;

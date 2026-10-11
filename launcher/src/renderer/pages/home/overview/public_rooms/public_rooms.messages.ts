@@ -8,6 +8,7 @@ export const PublicRoomsMessages = {
   unreachable: () => "Can't reach the server right now.",
   retry: () => "Retry",
   noRooms: () => "No public rooms right now.",
+  createAbove: () => "Create one above! It will show up here.",
   createInGame: () => "Create one in game:",
   // The in-game menu path, kept on one line.
   createInGamePath: () => "Online > With Friends > Create Room",

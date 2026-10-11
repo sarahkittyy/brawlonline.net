@@ -97,7 +97,12 @@ export const SeveralRooms = () => <Frame state={{ kind: "ready", online: 128, ro
 
 export const OneRoom = () => <Frame state={{ kind: "ready", online: 1, rooms: mockRooms.slice(0, 1) }} />;
 
-export const Empty = () => <Frame state={{ kind: "ready", online: 12, rooms: [] }} />;
+export const Empty = () => <Frame state={{ kind: "ready", online: 12, rooms: [] }} onCreate={noop} />;
+
+/** A player who has never created a room: "Create room" glows. */
+export const FirstRoom = () => (
+  <Frame state={{ kind: "ready", online: 12, rooms: [] }} onCreate={noop} highlightCreate={true} />
+);
 
 export const Loading = () => <Frame state={{ kind: "loading" }} />;
 

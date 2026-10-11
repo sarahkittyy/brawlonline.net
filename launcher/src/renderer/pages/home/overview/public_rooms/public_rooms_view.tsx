@@ -34,6 +34,8 @@ export type PublicRoomsViewProps = {
   onCreate?: () => void;
   /** A create is being handed to the game. */
   creating?: boolean;
+  /** The player has never created a room from here: "Create room" glows until they do. */
+  highlightCreate?: boolean;
   /** Stories and screenshots: show this row as hovered or pressed. */
   forceRowState?: { code: string; state: "hover" | "pressed" };
 };
@@ -51,6 +53,7 @@ export const PublicRoomsView = ({
   onLogIn,
   onCreate,
   creating = false,
+  highlightCreate = false,
   forceRowState,
 }: PublicRoomsViewProps) => {
   const online =
@@ -78,6 +81,7 @@ export const PublicRoomsView = ({
                   disabled={creating || joiningCode != null}
                   startIcon={creating ? <CircularProgress color="inherit" size={14} /> : <AddRoundedIcon />}
                   onClick={onCreate}
+                  className={clsx(highlightCreate && !creating && styles.createHighlight)}
                   data-testid="create-room"
                   sx={{ textTransform: "none", fontWeight: 600, borderRadius: "8px", px: 1.5 }}
                 >
@@ -128,9 +132,13 @@ export const PublicRoomsView = ({
               <MeetingRoomOutlinedIcon style={{ fontSize: 48 }} />
               <div>
                 <p>{Messages.noRooms()}</p>
-                <p>
-                  {Messages.createInGame()} <span className={styles.menuPath}>{Messages.createInGamePath()}</span>
-                </p>
+                {onCreate ? (
+                  <p>{Messages.createAbove()}</p>
+                ) : (
+                  <p>
+                    {Messages.createInGame()} <span className={styles.menuPath}>{Messages.createInGamePath()}</span>
+                  </p>
+                )}
               </div>
             </div>
           );
