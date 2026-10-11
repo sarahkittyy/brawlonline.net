@@ -35,6 +35,7 @@ use uuid::Uuid;
 use crate::engine::{ConnId, Output};
 use crate::messages as msg;
 use crate::ruleset::ModeRules;
+use common::rules::MatchRules;
 
 #[derive(Debug, Clone)]
 pub struct RoomsConfig {
@@ -120,6 +121,9 @@ struct Room {
     /// Rooms created before this one since mm started, plus one: the `n` of its chat group
     /// `room-<CODE>-<n>`, so a code used again later is another group.
     serial: u64,
+    /// The room's match rules: Direct's when it is created, then the host's (`room-rules`,
+    /// `docs/design/room-rules.md`). Every game of the room is played with them.
+    rules: MatchRules,
 }
 
 impl Room {
@@ -223,6 +227,7 @@ impl Room {
                 })
                 .collect(),
             status_text: self.status_text(me),
+            rules: self.rules.clone(),
         })
     }
 
@@ -462,6 +467,7 @@ impl RoomBook {
                 phase: Phase::Waiting,
                 created: now,
                 serial: self.room_counter,
+                rules: self.cfg.rules.rules.clone(),
             },
         );
         self.changed.push((code.clone(), self.room_counter));
@@ -669,6 +675,21 @@ impl RoomBook {
                 }
                 self.maybe_game_over(&code);
             }
+            RoomRequest::Rules { rules } => {
+                if !is_host {
+                    return Err(msg::HOST_ONLY);
+                }
+                if !waiting {
+                    return Err(msg::BETWEEN_GAMES);
+                }
+                if room.rules != rules {
+                    room.rules = rules;
+                    // Nobody starts a game under rules they did not see (room-rules.md #5).
+                    for m in room.slots.iter_mut().flatten() {
+                        m.ready = false;
+                    }
+                }
+            }
             RoomRequest::Create { .. } | RoomRequest::Join { .. } | RoomRequest::Leave => {
                 unreachable!("handled in request()")
             }
@@ -799,7 +820,7 @@ impl RoomBook {
                     players: Some(ps),
                     stages: Some(self.cfg.rules.stages.clone()),
                     items: Some(self.cfg.rules.items),
-                    rules: Some(self.cfg.rules.rules.clone()),
+                    rules: Some(room.rules.clone()),
                     ..Default::default()
                 },
             ));
@@ -1106,6 +1127,43 @@ mod tests {
         t.req(2, RoomRequest::Slot { slot: 3, open: true });
         let list = t.book.public_rooms(100);
         assert_eq!(list.iter().map(|r| r.code.clone()).collect::<Vec<_>>(), vec![b, a]);
+    }
+
+    #[test]
+    fn host_sets_the_rules_everyone_sees_them_and_the_game_plays_them() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        let out = join(&mut t, 2, &code);
+        // A new room plays Direct's rules (RoomsConfig::default: P+'s set).
+        assert_eq!(last_state(&out, 2)["rules"], serde_json::to_value(MatchRules::default()).unwrap());
+        t.req(2, RoomRequest::Ready { ready: true, character: Some(3), costume: Some(0) });
+        let rules = MatchRules { stocks: 3, auto_l_cancel: true, item_frequency: 1, ..Default::default() };
+        // Only the host.
+        let out = t.req(2, RoomRequest::Rules { rules: rules.clone() });
+        assert_eq!(msgs(&out, 2)[0]["error"], msg::HOST_ONLY);
+        // The host's change reaches everyone and takes back every ready (room-rules.md #5).
+        let out = t.req(1, RoomRequest::Rules { rules: rules.clone() });
+        for c in [1, 2] {
+            let s = last_state(&out, c);
+            assert_eq!(s["rules"], serde_json::to_value(&rules).unwrap());
+            assert_eq!(s["slots"][1]["player"]["ready"], false);
+        }
+        // The same rules again change nothing (no ready is taken back).
+        t.req(2, RoomRequest::Ready { ready: true, character: Some(3), costume: Some(0) });
+        let out = t.req(1, RoomRequest::Rules { rules: rules.clone() });
+        assert_eq!(last_state(&out, 2)["slots"][1]["player"]["ready"], true);
+        // The game is played with them; no change while it starts.
+        let out = ready_all(&mut t, &[1]);
+        assert!(msgs(&out, 1).iter().any(|m| m["type"] == "room-start"));
+        let out = t.req(1, RoomRequest::Rules { rules: MatchRules::default() });
+        assert_eq!(msgs(&out, 1)[0]["error"], msg::BETWEEN_GAMES);
+        let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
+        t.book.ticket(101, addr(1), String::new(), info(1).uid, &code).unwrap();
+        let done = t.book.ticket(102, addr(2), String::new(), info(2).uid, &code).unwrap();
+        assert_eq!(done.matched.len(), 2);
+        for (_, resp) in &done.matched {
+            assert_eq!(resp.rules.as_ref(), Some(&rules));
+        }
     }
 
     fn ready_all(t: &mut T, conns: &[ConnId]) -> Vec<Output> {

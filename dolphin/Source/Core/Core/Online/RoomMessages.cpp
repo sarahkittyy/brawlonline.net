@@ -306,6 +306,10 @@ std::optional<View> ParseView(const picojson::object& o, std::string* why)
   v.you = static_cast<int>(*you);
   v.host = static_cast<int>(*host);
   v.status_text = *text;
+  // The room's rules: not fatal for the room when unusable (its games refuse them at the start).
+  const ParsedRules rules = ParseRules(o);
+  v.rules = rules.rules;
+  v.rules_error = rules.error;
 
   const picojson::value* slots = Find(o, "slots");
   if (!slots || !slots->is<picojson::array>() ||
@@ -508,6 +512,12 @@ std::optional<std::string> RequestJson(const Request& r)
   case Op::Back:
     o["type"] = picojson::value("room-back");
     break;
+  case Op::Rules:
+    if (!r.rules)
+      return std::nullopt;
+    o["type"] = picojson::value("room-rules");
+    o["rules"] = picojson::value(ToJson(*r.rules));
+    break;
   case Op::Poll:
   default:
     return std::nullopt;
@@ -539,6 +549,8 @@ const char* OpName(Op op)
     return "ready";
   case Op::Back:
     return "back";
+  case Op::Rules:
+    return "rules";
   }
   return "?";
 }

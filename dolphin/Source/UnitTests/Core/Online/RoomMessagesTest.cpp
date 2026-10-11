@@ -121,6 +121,30 @@ TEST(RoomMessages, ParsesTheProtocolsRoomState)
   EXPECT_EQ(v.slots[1].player->character, std::nullopt);
   EXPECT_FALSE(v.slots[2].open);
   EXPECT_FALSE(v.slots[2].player);
+  // No rules (an older server): none, and no error.
+  EXPECT_FALSE(v.rules);
+  EXPECT_TRUE(v.rules_error.empty());
+}
+
+TEST(RoomMessages, RoomRules)
+{
+  // The room's rules come with room-state (docs/design/room-rules.md); checked as a ticket's.
+  const std::string with = Replace(STATE, R"("statusText")",
+                                   R"("rules": {"stocks": 3, "autoLCancel": true, "pause": "hold"}, "statusText")");
+  const Message m = Parse(with);
+  ASSERT_EQ(m.kind, Message::Kind::RoomState) << m.why;
+  ASSERT_TRUE(m.view->rules);
+  EXPECT_EQ(m.view->rules->stocks, 3);
+  EXPECT_TRUE(m.view->rules->auto_l_cancel);
+  EXPECT_FALSE(m.view->rules->pause_normal);
+  // Unusable rules do not cost the room: no rules, and the text to show.
+  for (const char* bad : {R"({"stocks": 0})", R"({"newRule": true})", R"("stock")"})
+  {
+    const Message b = Parse(Replace(STATE, R"("statusText")", std::string(R"("rules": )") + bad + R"(, "statusText")"));
+    ASSERT_EQ(b.kind, Message::Kind::RoomState) << bad;
+    EXPECT_FALSE(b.view->rules) << bad;
+    EXPECT_FALSE(b.view->rules_error.empty()) << bad;
+  }
 }
 
 TEST(RoomMessages, RefusesBadRoomStates)
@@ -246,6 +270,17 @@ TEST(RoomMessages, Requests)
   EXPECT_EQ(RequestJson(r), R"({"character":12,"costume":2,"ready":true,"type":"room-ready"})");
   r.flag = false;
   EXPECT_EQ(RequestJson(r), R"({"ready":false,"type":"room-ready"})");
+  r = {};
+  r.op = Op::Rules;
+  EXPECT_EQ(RequestJson(r), std::nullopt);
+  Online::MatchRules rules;
+  rules.stocks = 3;
+  rules.auto_l_cancel = true;
+  r.rules = rules;
+  EXPECT_EQ(RequestJson(r),
+            R"({"rules":{"autoLCancel":true,"damageRatio":1,"hazards":true,"inputAssist":false,)"
+            R"("itemFrequency":0,"itemSwitch":[0,6,0,0,0,0,0,0],"pause":"normal","stocks":3,)"
+            R"("style":"stock","teamAttack":true,"timeMinutes":8},"type":"room-rules"})");
   r = {};
   r.op = Op::Poll;
   EXPECT_EQ(RequestJson(r), std::nullopt);

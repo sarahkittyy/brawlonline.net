@@ -15,6 +15,7 @@
 #include <picojson.h>
 
 #include "Common/CommonTypes.h"
+#include "Core/Online/MatchRules.h"
 
 namespace Online::Rooms
 {
@@ -90,6 +91,10 @@ struct View
   int host = 0;  // 1-4
   std::array<Slot, ROOM_SLOTS> slots{};  // by slot - 1 (= in-game port)
   std::string status_text;
+  // The room's match rules (docs/design/room-rules.md), checked as the ticket's are; nullopt when
+  // the server sent none or ones this client cannot use (`rules_error`: the text to show).
+  std::optional<MatchRules> rules;
+  std::string rules_error;
 };
 
 // One message from mm on the online connection.
@@ -140,6 +145,7 @@ enum class Op : u8
   Teams = 5,
   Public = 6,
   Team = 7,
+  Rules = 8,  // the host's rules (ppom.h RoomRulesRequest)
   // Dolphin's own (not game ops)
   Ready = 100,
   Back = 101,
@@ -152,6 +158,7 @@ struct Request
   u8 team = 0;         // Team
   std::string code;    // Join (normalised)
   std::optional<u8> character, costume;  // Ready
+  std::optional<MatchRules> rules;        // Rules
 };
 // The JSON for `r`, or nullopt for Poll and anything out of range.
 std::optional<std::string> RequestJson(const Request& r);

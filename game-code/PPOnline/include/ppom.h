@@ -173,6 +173,7 @@ namespace PPOM {
         ROOM_TEAMS = 5,     // host: arg = 1 Teams on / 0 off
         ROOM_PUBLIC = 6,    // host: arg = 1 public / 0 private
         ROOM_TEAM = 7,      // arg = this player's colour (TEAM_RED..TEAM_GREEN)
+        ROOM_RULES = 8,     // v6, host: RoomRulesRequest (the room's rules as the host edited them)
     };
 
     // CMD_ROOM request payload.
@@ -374,6 +375,14 @@ namespace PPOM {
         u8 _reserved[13];
     };                    // 0x20
 
+    // CMD_ROOM payload for ROOM_RULES (v6): the room's rules as the host left P+'s rules menu,
+    // in SESSION's layout (`valid` 1). Dolphin checks every value and sends room-rules.
+    struct RoomRulesRequest {
+        u8 op;            // ROOM_RULES
+        u8 _pad[3];
+        Rules rules;
+    };                    // 0x24
+
     // Why the next game cannot be set up (Session.setupError; the CSS shows the text).
     enum SetupError {
         SE_NONE = 0,
@@ -458,6 +467,8 @@ namespace PPOM {
         CFG_TEST_DISCONNECT = 1 << 5, // tests: act as if disconnected in the next scMelee frame (cleared when seen)
         CFG_TEST_RULES = 1 << 6,  // tests: the online ruleset keeps the set rule's stocks and times
                                   // (short games; both machines must have written the same)
+        CFG_TEST_OPEN_RULES = 1 << 8,  // tests: open the room's rules menu on the room CSS, as
+                                       // the RULES button does (cleared when seen)
         CFG_TEST_GONE = 1 << 7,   // tests: Debug.testGone* set SESSION's gone flags, and the
                                   // in-match removal and elimination order also run in a local
                                   // Versus match (a sync test)

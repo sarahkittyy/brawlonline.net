@@ -119,7 +119,7 @@ Details, addresses and screenshots: `game-code.md` §14, "Room rules RE". Nothin
 ## 8. Order of work
 
 1. The rules record in SESSION, `applyRules` from it, its hash in the setup key. **Done 2026-10-11:** `get-ticket-resp.rules` (`common::rules::MatchRules`, per mode in `rulesets.json`), Dolphin `Online/MatchRules`, PPOM v6 SESSION `Rules`, `applyRules` (the set rule as the rules menu keeps it: style, stocks, damage, time limit at +8 for every style, team attack, pause normal / hold, auto L-cancel +0xB, input assist +0xC; items; hazards), and the setup key compares the applied set rule, hazard bit, item switch and Code Menu values (rather than a hash of the record). Not yet: `target`, handicap (decision 19).
-2. Host-edited room rules: server room state, the RULES button and screens, the status line.
+2. Host-edited room rules: server room state, the RULES button and screens, the status line. **Done 2026-10-11 but the button:** `room-rules` (host, between games; takes back every ready), `room-state.rules`, room games' tickets carry the room's rules, Dolphin's `ROOM_RULES` op, P+'s rules menu over the room CSS with per-line input rules (viewers read-only; non-room-rule lines read-only for the host), write-back on close, "Host changed the rules" (`game-code.md` §14). The RULES button is a separate task (opened by a test flag until then). Hazards and the stage list stay the room default (the stage switch is read-only).
 3. Rulesets: accounts storage, codes, the launcher page and box, the remembered ruleset, the in-game Ruleset line, the URL scheme and `/r/<code>`.
 4. Sets: GameSetup driven by the ruleset, 1v1 then 2v2; the paused set.
 5. The ruleset code, hash and set score in results and replays.

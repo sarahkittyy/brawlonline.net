@@ -60,6 +60,7 @@ or refuses and disconnects:
 | `{"type": "room-ready", "ready": true, "character": 12, "costume": 0}` | member | not during the start, not while still in the last game | START on the CSS (lock-in) or taking it back. `character` and `costume` are optional numbers 0-255 the server only passes on; they are shown to the others while ready. |
 | `{"type": "room-team", "team": 1}` | member | not during the start, not while still in the last game | 0 red, 1 blue, 2 green. New members get red, blue, green, red by slot. |
 | `{"type": "room-back"}` | member | after a game | This player is back on the room's CSS. |
+| `{"type": "room-rules", "rules": {...}}` | host | between games | The room's match rules (`common::rules::MatchRules`, `docs/design/room-rules.md` §3; missing fields are P+'s defaults, unknown ones and bad values are refused). A change takes back everyone's ready; the same rules again change nothing. A new room has Direct's rules. |
 
 A request that is refused changes nothing and is answered with `room-error`. Malformed requests (wrong types, slot 0 or 5, team 3, unknown `room-*` types) get `room-error {"op": "invalid", "error": "Invalid matchmaking request"}`; the connection stays.
 
@@ -77,7 +78,10 @@ A request that is refused changes nothing and is answered with `room-error`. Mal
     {"slot": 3, "open": false, "host": false, "player": null},
     {"slot": 4, "open": false, "host": false, "player": null}
   ],
-  "statusText": "Waiting on: bob"
+  "statusText": "Waiting on: bob",
+  "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "damageRatio": 1.0, "teamAttack": true,
+            "pause": "normal", "itemFrequency": 0, "itemSwitch": [0, 6, 0, 0, 0, 0, 0, 0],
+            "hazards": true, "autoLCancel": false, "inputAssist": false}
 }
 ```
 

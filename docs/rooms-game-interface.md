@@ -81,6 +81,8 @@ enum RoomOp {
     ROOM_TEAMS = 5,    // host: arg = 1 Teams on, 0 off
     ROOM_PUBLIC = 6,   // host: arg = 1 public, 0 private
     ROOM_TEAM = 7,     // arg = this player's colour 0 red, 1 blue, 2 green
+    ROOM_RULES = 8,    // v6, host: RoomRulesRequest {op, pad[3], Rules} (SESSION's layout);
+                       // Dolphin checks every value (FromSessionBytes) and sends room-rules
 };
 
 struct RoomRequest {   // CMD_ROOM request payload
@@ -136,6 +138,8 @@ Dolphin also counts as busy whatever it knows itself (a search, a session, a roo
 **Kicked / host gone.** "Removed from the room.": `room` 0, `roomFlags` 0, red line. Host hand-over: `roomHost` and `SLOT_HOST` move.
 
 **Slots, Teams, public.** Host only, between games (`roomStatus == 0`; public at any time). The server's answer shows in SESSION. The game may hide controls the player can't use; Dolphin and mm refuse them anyway.
+
+**Room rules (v6, `docs/design/room-rules.md`).** On the room CSS SESSION `Rules` (+0x220) holds the room's rules from `room-state` (in a room game, the game's ticket's). The game opens P+'s rules menu over the CSS with them (`room_rules.cpp`); the host's edits come back as `ROOM_RULES` when the menu closes. A change of SESSION's rules takes back the game's lock-in (the server took back everyone's ready).
 
 **Team colour.** `ROOM_TEAM`; shown in `roomTeam` once mm confirms. Dolphin passes the room's colour to the session with the lock-in, so the game does not need to write `lockTeam` (harmless if it does). "Pick different teams" comes as the status line.
 

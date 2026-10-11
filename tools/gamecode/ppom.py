@@ -248,6 +248,7 @@ DEBUG_LOG = 16   # ppom.h DEBUG_LOG: entries in the Debug print ring
 DEBUG_FIELDS = ("frames", "printCount", "overrides", "lastError", "cfg", "menuState")
 
 CFG_TEST_RULES = 1 << 6   # ppom.h Cfg: the online ruleset keeps the set rule's stocks and times
+CFG_TEST_OPEN_RULES = 1 << 8   # ppom.h Cfg: open the room's rules menu, as the RULES button does
 
 
 def set_cfg_bits(c: HarnessClient, bits: int, on: bool = True) -> int:

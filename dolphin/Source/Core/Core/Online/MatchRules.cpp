@@ -185,6 +185,36 @@ std::array<u8, RULES_SIZE> SessionBytes(const std::optional<MatchRules>& rules)
   return b;
 }
 
+std::optional<MatchRules> FromSessionBytes(const std::array<u8, RULES_SIZE>& b)
+{
+  if (b[RU_VALID] != 1 || b[RU_STYLE] > MatchRules::STYLE_COIN || b[RU_STOCKS] < 1 ||
+      b[RU_STOCKS] > 99 || b[RU_TIME] > 99 ||
+      (b[RU_STYLE] != MatchRules::STYLE_STOCK && b[RU_TIME] < 1) || b[RU_DAMAGE] < 5 ||
+      b[RU_DAMAGE] > 20 || b[RU_ITEM_FREQUENCY] > 3)
+  {
+    return std::nullopt;
+  }
+  for (u32 f : {RU_TEAM_ATTACK, RU_PAUSE, RU_HAZARDS, RU_AUTO_L_CANCEL, RU_INPUT_ASSIST})
+  {
+    if (b[f] > 1)
+      return std::nullopt;
+  }
+  MatchRules r;
+  r.style = b[RU_STYLE];
+  r.stocks = b[RU_STOCKS];
+  r.time_minutes = b[RU_TIME];
+  r.damage_ratio = b[RU_DAMAGE];
+  r.team_attack = b[RU_TEAM_ATTACK] != 0;
+  r.pause_normal = b[RU_PAUSE] != 0;
+  r.item_frequency = b[RU_ITEM_FREQUENCY];
+  for (size_t i = 0; i < r.item_switch.size(); ++i)
+    r.item_switch[i] = b[RU_ITEM_SWITCH + i];
+  r.hazards = b[RU_HAZARDS] != 0;
+  r.auto_l_cancel = b[RU_AUTO_L_CANCEL] != 0;
+  r.input_assist = b[RU_INPUT_ASSIST] != 0;
+  return r;
+}
+
 picojson::object ToJson(const MatchRules& r)
 {
   static constexpr const char* STYLES[] = {"time", "stock", "coin"};

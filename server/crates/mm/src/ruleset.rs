@@ -28,7 +28,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use common::rules::{MatchRules, Pause};
+use common::rules::MatchRules;
 use serde::{Deserialize, Serialize};
 
 /// `srStageKind` values fit in a byte; a larger id in the file is a typo.
@@ -104,6 +104,7 @@ impl Rulesets {
 mod tests {
     use super::*;
     use common::proto::Mode;
+    use common::rules::Pause;
 
     /// P+ v3.2's legal stages as srStageKind (docs/game-code.md section 11; Dolphin's
     /// `Gprb::Session::DefaultStages()` has the same list).

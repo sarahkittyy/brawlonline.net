@@ -32,6 +32,7 @@ pub const ROOM_PUBLIC: &str = "room-public";
 pub const ROOM_READY: &str = "room-ready";
 pub const ROOM_TEAM: &str = "room-team";
 pub const ROOM_BACK: &str = "room-back";
+pub const ROOM_RULES: &str = "room-rules";
 pub const ROOM_STATE: &str = "room-state";
 pub const ROOM_ERROR: &str = "room-error";
 pub const ROOM_LEFT: &str = "room-left";
@@ -123,6 +124,9 @@ pub enum RoomRequest {
     Team { team: u8 },
     /// `room-back {}`: this player is back on the room's CSS after a game.
     Back,
+    /// `room-rules {rules}` (host only, between games): the room's match rules
+    /// (`docs/design/room-rules.md`), checked by `MatchRules::validate`.
+    Rules { rules: crate::rules::MatchRules },
 }
 
 impl RoomRequest {
@@ -138,6 +142,7 @@ impl RoomRequest {
             RoomRequest::Ready { .. } => ROOM_READY,
             RoomRequest::Team { .. } => ROOM_TEAM,
             RoomRequest::Back => ROOM_BACK,
+            RoomRequest::Rules { .. } => ROOM_RULES,
         }
     }
 
@@ -162,6 +167,7 @@ impl RoomRequest {
                 v
             }
             RoomRequest::Team { team } => json!({ "team": team }),
+            RoomRequest::Rules { rules } => json!({ "rules": rules }),
         };
         v["type"] = json!(self.op());
         v
@@ -214,6 +220,13 @@ impl RoomRequest {
                 team: small("team", (TEAM_COUNT - 1) as u64)?.ok_or_else(|| format!("{kind}: `team` is missing"))?,
             },
             ROOM_BACK => RoomRequest::Back,
+            ROOM_RULES => {
+                let raw = v.get("rules").ok_or_else(|| format!("{kind}: `rules` is missing"))?;
+                let rules: crate::rules::MatchRules =
+                    serde_json::from_value(raw.clone()).map_err(|e| format!("{kind}: {e}"))?;
+                rules.validate().map_err(|e| format!("{kind}: {e}"))?;
+                RoomRequest::Rules { rules }
+            }
             other => return Err(format!("unknown room message {other:?}")),
         })
     }
@@ -298,6 +311,9 @@ pub struct RoomState {
     pub slots: Vec<RoomSlot>,
     /// The status line for the receiving member (`docs/design/rooms.md` §3).
     pub status_text: String,
+    /// The room's match rules (`docs/design/room-rules.md`): the host's, sent with every game.
+    #[serde(default)]
+    pub rules: crate::rules::MatchRules,
 }
 
 /// `room-error`, server → one member: a request was refused; nothing changed.
@@ -436,6 +452,15 @@ mod tests {
             RoomRequest::Ready { ready: false, character: None, costume: None },
             RoomRequest::Team { team: 2 },
             RoomRequest::Back,
+            RoomRequest::Rules { rules: crate::rules::MatchRules::default() },
+            RoomRequest::Rules {
+                rules: crate::rules::MatchRules {
+                    stocks: 3,
+                    auto_l_cancel: true,
+                    pause: crate::rules::Pause::Hold,
+                    ..Default::default()
+                },
+            },
         ];
         for c in cases {
             let v = c.to_json();
@@ -452,6 +477,10 @@ mod tests {
             (ROOM_SLOT, json!({"slot": 2})),
             (ROOM_SLOT, json!({"slot": "2", "open": true})),
             (ROOM_TEAMS, json!({"on": "yes"})),
+            (ROOM_RULES, json!({})),
+            (ROOM_RULES, json!({"rules": {"stocks": 0}})),
+            (ROOM_RULES, json!({"rules": {"stonks": 4}})),
+            (ROOM_RULES, json!({"rules": "stock"})),
             (ROOM_PUBLIC, json!({})),
             (ROOM_READY, json!({"ready": true, "character": 256})),
             (ROOM_READY, json!({"ready": true, "costume": -1})),

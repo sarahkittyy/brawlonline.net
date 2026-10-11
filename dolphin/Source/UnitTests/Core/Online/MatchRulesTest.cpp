@@ -140,6 +140,22 @@ TEST(MatchRules, SessionBytes)
   const auto b = SessionBytes(p.rules);
   const std::array<u8, RULES_SIZE> want{1, 0, 3, 6, 13, 0, 0, 2, 1, 2, 3, 4, 5, 6, 7, 255, 0, 1, 1};
   EXPECT_EQ(b, want);
+  // And back: the game's edited rules (ROOM_RULES) come in through the same layout.
+  EXPECT_EQ(FromSessionBytes(b), p.rules);
+  EXPECT_EQ(FromSessionBytes(SessionBytes(MatchRules{})), MatchRules{});
+  for (const auto& [at, value] : std::initializer_list<std::pair<u32, u8>>{
+           {RU_VALID, 0}, {RU_STYLE, 3}, {RU_STOCKS, 0}, {RU_STOCKS, 100}, {RU_TIME, 100},
+           {RU_DAMAGE, 4}, {RU_DAMAGE, 21}, {RU_ITEM_FREQUENCY, 4}, {RU_PAUSE, 2},
+           {RU_AUTO_L_CANCEL, 7}, {RU_INPUT_ASSIST, 2}})
+  {
+    auto bad = SessionBytes(MatchRules{});
+    bad[at] = value;
+    EXPECT_FALSE(FromSessionBytes(bad)) << at << " " << int(value);
+  }
+  auto time0 = SessionBytes(MatchRules{});
+  time0[RU_STYLE] = MatchRules::STYLE_TIME;
+  time0[RU_TIME] = 0;
+  EXPECT_FALSE(FromSessionBytes(time0));   // a time match needs a time limit
   const auto d = SessionBytes(MatchRules{});
   const std::array<u8, RULES_SIZE> want_d{1, 1, 4, 8, 10, 1, 1, 0, 0, 6, 0, 0, 0, 0, 0, 0, 1, 0};
   EXPECT_EQ(d, want_d);

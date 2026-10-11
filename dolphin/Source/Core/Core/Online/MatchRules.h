@@ -67,6 +67,9 @@ constexpr u32 RU_VALID = 0x00, RU_STYLE = 0x01, RU_STOCKS = 0x02, RU_TIME = 0x03
               RU_ITEM_SWITCH = 0x08, RU_HAZARDS = 0x10, RU_AUTO_L_CANCEL = 0x11,
               RU_INPUT_ASSIST = 0x12;
 std::array<u8, RULES_SIZE> SessionBytes(const std::optional<MatchRules>& rules);
+// The other way (the game's edited rules, ROOM_RULES): nullopt unless `valid` is 1 and every
+// value is in range, as ParseRules checks the server's.
+std::optional<MatchRules> FromSessionBytes(const std::array<u8, RULES_SIZE>& b);
 
 // For logs, the harness and the client status (the server's field names).
 picojson::object ToJson(const MatchRules& rules);

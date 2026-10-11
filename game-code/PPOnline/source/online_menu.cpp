@@ -16,6 +16,7 @@
 #include "online_menu.h"
 #include "ppom.h"
 #include "netmenu.h"
+#include "room_rules.h"
 
 extern "C" {
     extern u8 g_onlineCss;
@@ -1269,6 +1270,7 @@ namespace OnlineMenu {
     {
         CodeEntry::install(api);
         OnlineMatch::install(api);
+        RoomRules::install(api);
         api->sySimpleHookRel(0x726C, reinterpret_cast<void*>(cssBPressed), 10 /* sora_menu_sel_char */);
         api->sySimpleHookRel(0x7280, reinterpret_cast<void*>(cssCostume), 10);
         api->sySimpleHookRel(0x75B4, reinterpret_cast<void*>(cssCoinAPress), 10);
@@ -1824,6 +1826,12 @@ namespace OnlineMenu {
     static void updateRoomStatus()
     {
         const PPOM::Session& se = PPOM::g_block.session;
+        bool rulesRed = false;
+        const char* rulesText = s.roomError ? NULL : RoomRules::statusText(&rulesRed);
+        if (rulesText && roomIn()) {
+            setStatus(rulesText, rulesRed);
+            return;
+        }
         if (roomIn() && se.roomStatus == 0 && roomPicksStage() && !roomLockedForNext() && lockChar() >= 0 &&
             !s.roomError && roomFull()) {
             setStatus("Press START to select stage", false);   // Direct's (rooms.md §3)
@@ -1957,6 +1965,16 @@ namespace OnlineMenu {
         bool host = in && me >= 0 && se.roomHost == me;
         bool waiting = in && se.roomStatus == 0;
         const u32 BTN_A = 0x100, BTN_L = 0x40, BTN_R = 0x20;
+        // P+'s rules menu over the CSS (room_rules.cpp): while it is open its pages take the
+        // buttons; the room's own (L/R, START, B, Z, the header buttons, the panels) wait.
+        bool rulesOpen = RoomRules::tick(in, host, waiting);
+        if (RoomRules::changedNow() && waiting && roomLockedForNext()) unlock();   // rules.md #5
+        if (rulesOpen) {
+            s_headerPress = 0;
+            s.roomZHeld = 0;
+            s.roomKickPort = -1;
+            return;
+        }
         if (!in) {
             // Not in a room (Join Room, or after leaving one): START enters a room code.
             if ((pressed & BTN_START) && selectedChar() >= 0 && s.roomPhase != PPOM::RP_JOINING) {
@@ -2335,6 +2353,7 @@ namespace OnlineMenu {
             // second game (found with test_direct_set_under_the_gameplay_session).
             if (strcmp(scene, "scSelctCharacter") != 0) {
                 RoomCss::reset();
+                RoomRules::reset();
                 s.cssMsg = NULL;
                 s.haveWindow = false;
                 s.ownShown = false;

@@ -140,6 +140,8 @@ constexpr u8 CMD_ROOM = 0xD0;
 // RoomRequest payload: op, arg, arg2, pad, code u16[9]. RoomStatus: phase, error, localPort, pad,
 // serial u32, text u16[64].
 constexpr u32 RR_CODE = 4, RS_SERIAL = 4, RS_TEXT = 8, RS_TEXT_LEN = 64;
+// v6: RoomRulesRequest (op 8): op, pad[3], Rules.
+constexpr u32 RR_RULES = 4;
 
 constexpr u8 STATUS_OK = 0;
 constexpr u8 STATUS_UNSUPPORTED = 0xFF;
@@ -678,6 +680,17 @@ Response RoomResponse(const Core::CPUThreadGuard& guard, u32 payload, std::strin
     r.team = arg;
     ok = arg < Rooms::NUM_TEAMS;
     break;
+  case 8:
+  {
+    // ppom.h RoomRulesRequest: op, pad[3], Rules (the host's edits, SESSION's layout).
+    r.op = Rooms::Op::Rules;
+    std::array<u8, RULES_SIZE> b{};
+    for (u32 i = 0; i < RULES_SIZE; ++i)
+      b[i] = R8(guard, payload + RR_RULES + i);
+    r.rules = FromSessionBytes(b);
+    ok = r.rules.has_value();
+    break;
+  }
   default:
     ok = false;
     break;
@@ -1089,7 +1102,9 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   const Gprb::Session::Lobby lobby = Gprb::Session::GetLobby();
   std::vector<std::string> names(SESSION_PLAYERS), codes(SESSION_PLAYERS);
   std::string peer_name;
-  std::optional<MatchRules> rules;
+  // SESSION's rules: the running session's (its ticket's), else on the room CSS the room's
+  // (what the RULES screens show and the next game will play).
+  std::optional<MatchRules> rules = in_room ? room.view->rules : std::nullopt;
   if (lobby.active)
   {
     const Client::MatchState ms = Client::GetMatchState();
