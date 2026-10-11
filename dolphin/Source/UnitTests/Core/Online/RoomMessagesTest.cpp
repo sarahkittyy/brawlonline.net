@@ -323,3 +323,20 @@ TEST(RoomMessages, RulesetCodesAndRequests)
   r.flag = true;
   EXPECT_EQ(RequestJson(r), R"({"action":"resume","type":"room-set"})");
 }
+
+TEST(RoomMessages, RulesetList)
+{
+  const Message m = Parse(R"({"type": "ruleset-list", "rulesets": [
+    {"code": "BCDFGH", "name": "NorCal Weekly", "version": 3, "by": "sarah", "bestOf": 3, "players": "1v1"},
+    {"code": "nope", "name": "bad code"},
+    {"code": "kfqbtr", "name": "Bo1 pools", "version": 1, "by": "bo", "bestOf": 0, "players": "1v1"}]})");
+  ASSERT_EQ(m.kind, Message::Kind::RulesetList);
+  ASSERT_EQ(m.rulesets.size(), 2u);
+  EXPECT_EQ(m.rulesets[0].code, "BCDFGH");
+  EXPECT_EQ(m.rulesets[0].name, "NorCal Weekly");
+  EXPECT_EQ(m.rulesets[0].best_of, 3);
+  EXPECT_EQ(m.rulesets[1].code, "KFQBTR");
+  Request r;
+  r.op = Op::RulesetList;
+  EXPECT_EQ(RequestJson(r), R"({"type":"room-rulesets"})");
+}

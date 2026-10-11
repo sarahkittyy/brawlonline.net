@@ -142,6 +142,8 @@ Dolphin also counts as busy whatever it knows itself (a search, a session, a roo
 
 **Slots, Teams, public.** Host only, between games (`roomStatus == 0`; public at any time). The server's answer shows in SESSION. The game may hide controls the player can't use; Dolphin and mm refuse them anyway.
 
+**What the room plays (v6).** SESSION `RoomPlay` (+0x240): the room's ruleset (`bestOf`, `stageChoice`, `custom`, `code`, `name`) and its set (`setOn`, `setGame`, `score` by side, `sides` as in-game ports, `setFlags` 1 paused / 2 can resume / 4 finished), from `room-state` while in a room. `CMD_RULESETS` (0xD1): the Ruleset line's list (ppom.h `RulesetList`: state, count, serial, 15 × {code, name}); Dolphin asks mm (`room-rulesets`) again when its list is older than 5 s and answers with what it has.
+
 **Rulesets and sets (v6).** The game's own Create Room (`ROOM_CREATE`) asks mm for the account's remembered ruleset (`room-create.remembered`); the launcher's create (`join-room.json` kind `create`) may carry `"ruleset": "<code>"`, which Dolphin passes on as `room-create.ruleset` (an invalid code: the request is ignored). A room playing a set runs its games in one session, GameSetup's steps on the room CSS (`docs/game-code.md` §14, Room sets); Dolphin reports each game as `room-result`.
 
 **Room rules (v6, `docs/design/room-rules.md`).** On the room CSS SESSION `Rules` (+0x220) holds the room's rules from `room-state` (in a room game, the game's ticket's). The game opens P+'s rules menu over the CSS with them (`room_rules.cpp`); the host's edits come back as `ROOM_RULES` when the menu closes. A change of SESSION's rules takes back the game's lock-in (the server took back everyone's ready).

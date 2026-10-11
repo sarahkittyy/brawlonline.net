@@ -191,6 +191,11 @@ struct State
   // outbox would send it after, and leave the new room).
   bool leave_before_pending = false;
   std::string create_left;  // the room a launcher create left: its late pushes are not the answer
+  // The Ruleset line's list (room-rulesets): what mm last sent, and when it was asked for.
+  ListState list_state = ListState::None;
+  u32 list_serial = 0;
+  std::vector<RulesetEntry> list;
+  std::optional<Clock::time_point> list_asked;
   picojson::value last_request;  // null or {id, result, message}
   std::string status_written;
   Clock::time_point status_at{};
@@ -433,8 +438,20 @@ void Handle(const Message& m, Actions* a, Clock::time_point now)
     ++s.serial;
     return;
   }
+  case Message::Kind::RulesetList:
+    s.list = m.rulesets;
+    s.list_state = ListState::Ready;
+    ++s.list_serial;
+    Log(fmt::format("ruleset list: {} rulesets", s.list.size()));
+    return;
   case Message::Kind::RoomError:
     Log(fmt::format("room-error {}: {}", m.op, m.error));
+    if (m.op == "room-rulesets")
+    {
+      s.list_state = ListState::Failed;
+      ++s.list_serial;
+      return;
+    }
     if (m.op == "room-create" || m.op == "room-join")
     {
       if (s.pending)
@@ -1374,6 +1391,27 @@ void ReportSetGame(u32 set_game, u8 winner_side, u16 stage)
     return;
   s.outbox.push_back(r);
   Log(fmt::format("set game {}: side {} on {:#x}", set_game, winner_side, stage));
+}
+
+RulesetListSnapshot RulesetList()
+{
+  std::lock_guard lk(s_mutex);
+  const auto now = Clock::now();
+  // Asked again after 5 s (the player may have published or used one meanwhile); one at a time.
+  if (s.view && s.conn == Conn::Online && (!s.list_asked || now - *s.list_asked > 5s))
+  {
+    Request r;
+    r.op = Op::RulesetList;
+    s.outbox.push_back(r);
+    s.list_asked = now;
+    if (s.list_state != ListState::Ready)
+      s.list_state = ListState::Loading;
+  }
+  RulesetListSnapshot snap;
+  snap.state = s.list_state;
+  snap.serial = s.list_serial;
+  snap.rulesets = s.list;
+  return snap;
 }
 
 void Submit(const Request& request)

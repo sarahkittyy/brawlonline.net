@@ -44,8 +44,9 @@ constexpr u32 MAGIC = 0x50504F4D;  // "PPOM"
 // stage pickers, the elimination order, the gone flags and the teams switch; LOCAL's lock team.
 // 5: rooms (docs/rooms-game-interface.md): CMD_ROOM, LOCAL screen/roomJoin/room and the room view
 // in SESSION's spare bytes; no size or offset of v4 changed, so a v4 plugin still works (no rooms).
-// 6: the match's rules (docs/design/room-rules.md §3): SESSION grows to 0x240 with ppom.h Rules at
-// +0x220 (MatchRules.h); a v4 or v5 plugin still works (its built-in rules).
+// 6: the match's rules (docs/design/room-rules.md §3): SESSION grows to 0x280 with ppom.h Rules at
+// +0x220 (MatchRules.h) and RoomPlay (the room's ruleset and set) at +0x240; a v4 or v5 plugin
+// still works (its built-in rules).
 constexpr u16 VERSION = 6;
 constexpr u16 MIN_VERSION = 4;
 constexpr u32 HEADER_SIZE = 0x24;
@@ -87,9 +88,14 @@ constexpr u32 L_LOCK_TEAM = 0x34;
 // SESSION (the same on every machine of a session; written only outside a match, except the
 // gone flags and the elimination order, which are rolled-back match state).
 constexpr u32 SESSION_SIZE_V5 = 0x220;
-constexpr u32 SESSION_SIZE = 0x240;
+constexpr u32 SESSION_SIZE = 0x280;
 constexpr u32 S_RULES = 0x220;  // v6: ppom.h Rules
-static_assert(S_RULES == SESSION_SIZE_V5 && S_RULES + RULES_SIZE == SESSION_SIZE);
+// v6: ppom.h RoomPlay: valid, bestOf, stageChoice, custom, code[8], name[32], setOn, setGame,
+// score[2], sides[2], setFlags.
+constexpr u32 S_PLAY = 0x240, RP_VALID = 0, RP_BEST_OF = 1, RP_CHOICE = 2, RP_CUSTOM = 3, RP_CODE = 4,
+              RP_NAME = 0x0C, RP_NAME_LEN = 32, RP_SET_ON = 0x2C, RP_SET_GAME = 0x2D, RP_SCORE = 0x2E,
+              RP_SIDES = 0x30, RP_SET_FLAGS = 0x32;
+static_assert(S_RULES == SESSION_SIZE_V5 && S_RULES + RULES_SIZE == S_PLAY && S_PLAY + 0x40 == SESSION_SIZE);
 constexpr u32 SessionSize(u16 version)
 {
   return version >= 6 ? SESSION_SIZE : SESSION_SIZE_V5;
@@ -137,6 +143,10 @@ constexpr u8 CMD_GET_RANK = 0xE3;
 constexpr u8 CMD_GP_COMPLETE_STEP = 0xC0;
 constexpr u8 CMD_GP_FETCH_STEP = 0xC1;
 constexpr u8 CMD_ROOM = 0xD0;
+// v6: the Ruleset line's list (ppom.h RulesetList): state, count, serial u16, then per ruleset its
+// code (8, NUL padded) and name (24, NUL ended).
+constexpr u8 CMD_RULESETS = 0xD1;
+constexpr u32 RL_ENTRIES = 4, RL_ENTRY = 32, RL_CODE = 0, RL_NAME = 8, RL_NAME_LEN = 24;
 // RoomRequest payload: op, arg, arg2, pad, code u16[9]. RoomStatus: phase, error, localPort, pad,
 // serial u32, text u16[64].
 constexpr u32 RR_CODE = 4, RS_SERIAL = 4, RS_TEXT = 8, RS_TEXT_LEN = 64;
@@ -896,6 +906,35 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox)
     case CMD_ROOM:
       response = RoomResponse(guard, payload, &request);
       break;
+    case CMD_RULESETS:
+    {
+      const Rooms::RulesetListSnapshot list = Rooms::RulesetList();
+      Response r;
+      r.cmd = CMD_RULESETS;
+      r.status = STATUS_OK;
+      const size_t n = std::min<size_t>(list.rulesets.size(),
+                                        (RESP_PAYLOAD - RL_ENTRIES) / RL_ENTRY);
+      r.payload[0] = static_cast<u8>(list.state);
+      r.payload[1] = static_cast<u8>(n);
+      r.payload[2] = static_cast<u8>(list.serial >> 8);
+      r.payload[3] = static_cast<u8>(list.serial);
+      for (size_t i = 0; i < n; ++i)
+      {
+        const auto& e = list.rulesets[i];
+        const u32 at = RL_ENTRIES + static_cast<u32>(i) * RL_ENTRY;
+        for (size_t k = 0; k < e.code.size() && k < 6; ++k)
+          r.payload[at + RL_CODE + k] = static_cast<u8>(e.code[k]);
+        for (size_t k = 0; k + 1 < RL_NAME_LEN && k < e.name.size(); ++k)
+        {
+          const u8 c = static_cast<u8>(e.name[k]);
+          r.payload[at + RL_NAME + k] = c >= 0x20 && c < 0x7F ? c : '?';
+        }
+      }
+      r.summary = fmt::format("RULESETS state={} n={}", static_cast<int>(list.state), n);
+      request = "RULESETS";
+      response = r;
+      break;
+    }
     case CMD_GP_COMPLETE_STEP:
     {
       const u8 kind = R8(guard, payload);
@@ -1273,6 +1312,33 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   }
   if (v5 && in_room)
     PutRoom(session, room, lobby);
+  if (loc.version >= 6 && in_room)
+  {
+    // What the room plays and its set (RoomPlay), for the room CSS.
+    const Rooms::View& v = *room.view;
+    const u32 p = S_PLAY;
+    session[p + RP_VALID] = 1;
+    session[p + RP_BEST_OF] = v.ruleset.best_of;
+    session[p + RP_CHOICE] = v.ruleset.stage_choice == "strike" ? 1 : v.ruleset.stage_choice == "random" ? 2 : 0;
+    session[p + RP_CUSTOM] = v.ruleset.code.empty() && v.ruleset.name != "P+ default" ? 1 : 0;
+    for (size_t i = 0; i < 6 && i < v.ruleset.code.size(); ++i)
+      session[p + RP_CODE + i] = static_cast<u8>(v.ruleset.code[i]);
+    for (size_t i = 0; i + 1 < RP_NAME_LEN && i < v.ruleset.name.size(); ++i)
+    {
+      const u8 c = static_cast<u8>(v.ruleset.name[i]);
+      session[p + RP_NAME + i] = c >= 0x20 && c < 0x7F ? c : '?';
+    }
+    if (const auto& st = v.set)
+    {
+      session[p + RP_SET_ON] = 1;
+      session[p + RP_SET_GAME] = static_cast<u8>(std::min<u32>(st->game, 0xFF));
+      session[p + RP_SCORE] = st->score[0];
+      session[p + RP_SCORE + 1] = st->score[1];
+      session[p + RP_SIDES] = static_cast<u8>(st->sides[0] - 1);
+      session[p + RP_SIDES + 1] = static_cast<u8>(st->sides[1] - 1);
+      session[p + RP_SET_FLAGS] = (st->paused ? 1 : 0) | (st->can_resume ? 2 : 0) | (st->finished ? 4 : 0);
+    }
+  }
   // v6: the session's rules, the same on every machine (each got them from the server with its
   // ticket; the gameplay session compares what the game applied before every match).
   if (loc.version >= 6)

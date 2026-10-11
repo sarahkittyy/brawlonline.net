@@ -19,6 +19,7 @@
 
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <picojson.h>
 
@@ -64,6 +65,22 @@ void Submit(const Request& request);
 void SetSetSession(bool set);
 // A game of the room's set ended: sent to the server as room-result.
 void ReportSetGame(u32 set_game, u8 winner_side, u16 stage);
+// The player's rulesets for the game's Ruleset line (room-rulesets / ruleset-list): asks mm again
+// when the list is older than a few seconds, and returns what it has.
+enum class ListState : u8
+{
+  None = 0,
+  Loading = 1,
+  Ready = 2,
+  Failed = 3,
+};
+struct RulesetListSnapshot
+{
+  ListState state = ListState::None;
+  u32 serial = 0;
+  std::vector<RulesetEntry> rulesets;
+};
+RulesetListSnapshot RulesetList();
 // LOCAL.screen, every frame.
 void SetScreen(u8 screen);
 // The game's lock-in, every frame: ready for `game` with the character and costume.

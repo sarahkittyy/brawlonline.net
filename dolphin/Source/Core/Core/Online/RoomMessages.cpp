@@ -503,6 +503,31 @@ Message Parse(const std::string& packet)
     m.kind = Message::Kind::Error;
     m.error = Str(o, "error", MAX_TEXT_BYTES).value_or("");
   }
+  else if (m.type == "ruleset-list")
+  {
+    // Shown only: an entry without a ruleset code is left out.
+    m.kind = Message::Kind::RulesetList;
+    const picojson::value* list = Find(o, "rulesets");
+    if (list && list->is<picojson::array>())
+    {
+      for (const picojson::value& e : list->get<picojson::array>())
+      {
+        if (m.rulesets.size() >= RULESET_LIST_MAX || !e.is<picojson::object>())
+          break;
+        const auto& eo = e.get<picojson::object>();
+        const auto code = NormalizeRulesetCode(Str(eo, "code", 16).value_or(""));
+        if (!code)
+          continue;
+        RulesetEntry r;
+        r.code = *code;
+        r.name = Str(eo, "name", MAX_NAME_BYTES).value_or("");
+        r.version = static_cast<u32>(Int(eo, "version", 0, 100000).value_or(0));
+        r.by = Str(eo, "by", MAX_NAME_BYTES).value_or("");
+        r.best_of = static_cast<u8>(Int(eo, "bestOf", 0, 7).value_or(0));
+        m.rulesets.push_back(std::move(r));
+      }
+    }
+  }
   else if (m.type == "create-ticket-resp")
   {
     m.kind = Message::Kind::CreateTicketResp;
@@ -547,6 +572,9 @@ std::optional<std::string> RequestJson(const Request& r)
     {
       o["remembered"] = picojson::value(true);
     }
+    break;
+  case Op::RulesetList:
+    o["type"] = picojson::value("room-rulesets");
     break;
   case Op::Ruleset:
   {
@@ -661,6 +689,8 @@ const char* OpName(Op op)
     return "result";
   case Op::Ruleset:
     return "ruleset";
+  case Op::RulesetList:
+    return "rulesets";
   case Op::SetAction:
     return "set";
   }

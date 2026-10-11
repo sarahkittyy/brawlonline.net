@@ -11,6 +11,7 @@
 #include <array>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <picojson.h>
 
@@ -131,6 +132,17 @@ struct View
   std::optional<SetView> set;
 };
 
+// One ruleset of `ruleset-list` (the game's Ruleset line).
+struct RulesetEntry
+{
+  std::string code;  // 6 letters
+  std::string name;
+  u32 version = 0;
+  std::string by;
+  u8 best_of = 0;
+};
+constexpr size_t RULESET_LIST_MAX = 15;
+
 // One message from mm on the online connection.
 struct Message
 {
@@ -145,6 +157,7 @@ struct Message
     RoomStart,
     Error,       // fatal: the server disconnects
     CreateTicketResp,  // a ticket answer on the online connection (refused; ignored)
+    RulesetList,       // the player's rulesets to offer (room-rulesets)
   };
   Kind kind = Kind::Unknown;
   std::string type;
@@ -157,6 +170,7 @@ struct Message
   std::string match_id;    // RoomStart
   int timeout_secs = 15;   // RoomStart
   std::optional<View> view;  // RoomState
+  std::vector<RulesetEntry> rulesets;  // RulesetList
 };
 
 // Parses one JSON packet (the raw bytes as received). Never throws.
@@ -182,6 +196,7 @@ enum class Op : u8
   Rules = 8,  // the host's rules (ppom.h RoomRulesRequest)
   SetAction = 9,  // the host resumes (flag) or restarts the room's set
   Ruleset = 10,   // the host plays a published ruleset (`ruleset`) or P+'s default (empty)
+  RulesetList = 11,  // the player's rulesets to offer (room-rulesets)
   // Dolphin's own (not game ops)
   Ready = 100,
   Back = 101,

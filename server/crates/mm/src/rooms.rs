@@ -315,6 +315,7 @@ impl Room {
             status: if matches!(self.phase, Phase::Waiting) { RoomStatus::Waiting } else { RoomStatus::InGame },
             names: self.members().map(|(_, m)| m.info.display_name.clone()).collect(),
             joinable: self.free_slot().is_some(),
+            ruleset: self.ruleset_view(),
         }
     }
 }
@@ -493,6 +494,10 @@ impl RoomBook {
                 })
             }
             RoomRequest::Ruleset { code } => self.ruleset_request(conn, who, code, out),
+            RoomRequest::RulesetList => {
+                out.push(Output::FetchRulesetList { conn, uid: who.uid });
+                Ok(())
+            }
             RoomRequest::Join { code } => self.join(now, conn, who, &code, out),
             RoomRequest::Leave => match self.member_of.get(&conn).cloned() {
                 Some(code) => {
@@ -855,7 +860,8 @@ impl RoomBook {
             RoomRequest::Create { .. }
             | RoomRequest::Join { .. }
             | RoomRequest::Leave
-            | RoomRequest::Ruleset { .. } => {
+            | RoomRequest::Ruleset { .. }
+            | RoomRequest::RulesetList => {
                 unreachable!("handled in request()")
             }
         }

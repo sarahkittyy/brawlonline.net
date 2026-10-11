@@ -214,6 +214,11 @@ pub enum Input {
     },
     /// The answer to [`Output::FetchRuleset`].
     RulesetFetched(RulesetFetch, Result<Option<(String, common::rules::Ruleset)>, String>),
+    /// The answer to [`Output::FetchRulesetList`].
+    RulesetListFetched {
+        conn: ConnId,
+        result: Result<Vec<common::rooms::RulesetEntry>, String>,
+    },
     Tick,
 }
 
@@ -255,6 +260,12 @@ pub enum Output {
     /// Look a ruleset up (a code, or the account's remembered one) for a room; comes back as
     /// [`Input::RulesetFetched`].
     FetchRuleset(RulesetFetch),
+    /// A player's rulesets to offer (recent, then their own published); comes back as
+    /// [`Input::RulesetListFetched`].
+    FetchRulesetList {
+        conn: ConnId,
+        uid: Uuid,
+    },
     /// An account's online connection carries this chat identity key (`chat_identity_keys`).
     RecordChatKey {
         uid: Uuid,
@@ -522,6 +533,25 @@ impl Engine {
             Input::Packet { conn, data } => self.on_packet(now, conn, &data, &mut out),
             Input::UserFetched { conn, seq, result } => self.on_user(now, wall, conn, seq, result, &mut out),
             Input::RulesetFetched(f, result) => self.rooms.ruleset_fetched(f, result, &mut out),
+            Input::RulesetListFetched { conn, result } => match result {
+                Ok(rulesets) => Self::send(
+                    &mut out,
+                    conn,
+                    &common::rooms::RulesetList { kind: common::rooms::RULESET_LIST.into(), rulesets },
+                ),
+                Err(e) => {
+                    tracing::warn!(conn, "ruleset list failed: {e}");
+                    Self::send(
+                        &mut out,
+                        conn,
+                        &RoomError {
+                            kind: common::rooms::ROOM_ERROR.into(),
+                            op: common::rooms::ROOM_RULESETS.into(),
+                            error: msg::RULESETS_UNAVAILABLE.into(),
+                        },
+                    );
+                }
+            },
             Input::Tick => self.on_tick(now, wall, &mut out),
         }
         self.sync_room_chat(&mut out);

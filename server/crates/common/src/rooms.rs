@@ -36,6 +36,8 @@ pub const ROOM_RULES: &str = "room-rules";
 pub const ROOM_RESULT: &str = "room-result";
 pub const ROOM_SET: &str = "room-set";
 pub const ROOM_RULESET: &str = "room-ruleset";
+pub const ROOM_RULESETS: &str = "room-rulesets";
+pub const RULESET_LIST: &str = "ruleset-list";
 /// `room-result.winnerSide` of a draw.
 pub const SIDE_DRAW: u8 = 0xFE;
 pub const ROOM_STATE: &str = "room-state";
@@ -144,6 +146,9 @@ pub enum RoomRequest {
     /// `room-ruleset {code}` (host, between games, no set on): play a published ruleset (a code),
     /// or P+'s default (`code` null). The code also becomes the host's remembered ruleset.
     Ruleset { code: Option<String> },
+    /// `room-rulesets {}`: the rulesets to offer this player in the game's Ruleset line (their
+    /// recent ones, then their own published ones), answered with `ruleset-list`.
+    RulesetList,
 }
 
 impl RoomRequest {
@@ -163,6 +168,7 @@ impl RoomRequest {
             RoomRequest::Result { .. } => ROOM_RESULT,
             RoomRequest::Set { .. } => ROOM_SET,
             RoomRequest::Ruleset { .. } => ROOM_RULESET,
+            RoomRequest::RulesetList => ROOM_RULESETS,
         }
     }
 
@@ -181,7 +187,7 @@ impl RoomRequest {
                 v
             }
             RoomRequest::Join { code } => json!({ "code": code }),
-            RoomRequest::Leave | RoomRequest::Back => json!({}),
+            RoomRequest::Leave | RoomRequest::Back | RoomRequest::RulesetList => json!({}),
             RoomRequest::Slot { slot, open } => json!({ "slot": slot, "open": open }),
             RoomRequest::Teams { on } => json!({ "on": on }),
             RoomRequest::Public { public } => json!({ "public": public }),
@@ -289,6 +295,7 @@ impl RoomRequest {
                     .ok_or_else(|| format!("{kind}: `stage` must be a stage id"))? as u16;
                 RoomRequest::Result { game, winner_side, stage }
             }
+            ROOM_RULESETS => RoomRequest::RulesetList,
             ROOM_RULESET => RoomRequest::Ruleset {
                 code: match v.get("code") {
                     None | Some(serde_json::Value::Null) => None,
@@ -437,6 +444,31 @@ pub struct RoomSet {
     pub finished: bool,
 }
 
+/// One ruleset in `ruleset-list`.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RulesetEntry {
+    pub code: String,
+    pub name: String,
+    pub version: u32,
+    pub by: String,
+    pub best_of: u8,
+    pub players: crate::rules::Players,
+}
+
+/// `ruleset-list`, server → the player who asked (`room-rulesets`): their recent rulesets, newest
+/// first, then their own published ones, at most [`RULESET_LIST_MAX`].
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RulesetList {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub rulesets: Vec<RulesetEntry>,
+}
+
+/// The game shows at most this many (the mailbox's payload).
+pub const RULESET_LIST_MAX: usize = 15;
+
 /// `room-error`, server → one member: a request was refused; nothing changed.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -499,6 +531,9 @@ pub struct PublicRoom {
     pub names: Vec<String>,
     /// An open slot is empty, so the room can be joined (also during a game).
     pub joinable: bool,
+    /// What the room plays (its ruleset's code, name and set), for the room list.
+    #[serde(default)]
+    pub ruleset: RoomRuleset,
 }
 
 /// What mm publishes for the launcher (`GET /status` on mm's local status listener, served to
@@ -569,6 +604,7 @@ mod tests {
             RoomRequest::Ruleset { code: None },
             RoomRequest::Set { resume: true },
             RoomRequest::Result { game: 2, winner_side: 1, stage: 0x21 },
+            RoomRequest::RulesetList,
             RoomRequest::Join { code: "KFQB".into() },
             RoomRequest::Leave,
             RoomRequest::Slot { slot: 3, open: true },

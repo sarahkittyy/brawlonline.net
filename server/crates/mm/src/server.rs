@@ -67,6 +67,7 @@ type Fetched = (ConnId, u64, FetchResult);
 /// A room's ruleset lookup and its answer (code and ruleset; `None`: no such ruleset, or none
 /// remembered).
 type RulesetFetched = (crate::engine::RulesetFetch, Result<Option<(String, common::rules::Ruleset)>, String>);
+type RulesetListFetched = (ConnId, Result<Vec<common::rooms::RulesetEntry>, String>);
 
 /// A running mm server. Dropping it stops the loop.
 pub struct MmHandle {
@@ -135,6 +136,7 @@ pub fn start(
     let (job_tx, job_rx) = tk_mpsc::channel::<FetchJob>(FETCH_QUEUE);
     let (done_tx, done_rx) = std_mpsc::channel::<Fetched>();
     let (rulesets_tx, rulesets_rx) = std_mpsc::channel::<RulesetFetched>();
+    let (lists_tx, lists_rx) = std_mpsc::channel::<RulesetListFetched>();
     let fetch_pool = pool.clone();
     rt.spawn(fetch_worker(
         move |uid| fetch_user(fetch_pool.clone(), uid),
@@ -161,10 +163,10 @@ pub fn start(
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = stop.clone();
     let engine = Engine::new(engine_cfg, secret);
-    let db = Db { fetches: job_tx, fetched: done_tx, rulesets: rulesets_tx, pool, rt };
+    let db = Db { fetches: job_tx, fetched: done_tx, rulesets: rulesets_tx, ruleset_lists: lists_tx, pool, rt };
     let thread = std::thread::Builder::new()
         .name("mm-enet".into())
-        .spawn(move || event_loop(host, engine, db, done_rx, rulesets_rx, stop2, status))?;
+        .spawn(move || event_loop(host, engine, db, done_rx, rulesets_rx, lists_rx, stop2, status))?;
     tracing::info!("mm listening on udp://{addr}");
     Ok(MmHandle { addr, status_addr, stop, thread: Some(thread), status_task })
 }
@@ -263,6 +265,36 @@ async fn fetch_room_ruleset(
     }
 }
 
+/// A player's rulesets for the game's Ruleset line: the recent ones (newest first), then their own
+/// published ones that are not hidden, each once, at most `RULESET_LIST_MAX`.
+async fn fetch_ruleset_list(pool: &PgPool, uid: Uuid) -> Result<Vec<common::rooms::RulesetEntry>, String> {
+    let work = async {
+        let mut out: Vec<common::rooms::RulesetEntry> = Vec::new();
+        let recent = db::recent_rulesets(pool, uid).await?;
+        let own = db::fetch_rulesets_where(pool, "WHERE r.owner = $1 AND NOT r.hidden ORDER BY r.created_at DESC", uid)
+            .await?;
+        for p in recent.into_iter().map(|(p, _)| p).chain(own) {
+            if out.len() >= common::rooms::RULESET_LIST_MAX || out.iter().any(|e| e.code == p.code) {
+                continue;
+            }
+            out.push(common::rooms::RulesetEntry {
+                code: p.code,
+                name: p.ruleset.name.clone(),
+                version: p.ruleset.version,
+                by: p.ruleset.by.clone(),
+                best_of: p.ruleset.best_of,
+                players: p.ruleset.players,
+            });
+        }
+        Ok::<_, sqlx::Error>(out)
+    };
+    match tokio::time::timeout(Duration::from_secs(3), work).await {
+        Ok(Ok(r)) => Ok(r),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Err("ruleset list timed out".into()),
+    }
+}
+
 /// Match records are not queued with the lookups: they need two verified, rate-limited accounts,
 /// and must not be lost when the lookup queue is full.
 async fn record_match(pool: PgPool, m: MatchRecord) {
@@ -318,6 +350,8 @@ struct Db {
     fetched: std_mpsc::Sender<Fetched>,
     /// Where a room's ruleset lookups come back.
     rulesets: std_mpsc::Sender<RulesetFetched>,
+    /// Where ruleset lists come back.
+    ruleset_lists: std_mpsc::Sender<RulesetListFetched>,
     pool: PgPool,
     rt: tokio::runtime::Handle,
 }
@@ -372,6 +406,13 @@ impl Loop {
             }
             Output::ChatReport(r) => {
                 self.db.rt.spawn(store_chat_report(self.db.pool.clone(), r));
+            }
+            Output::FetchRulesetList { conn, uid } => {
+                let (pool, done) = (self.db.pool.clone(), self.db.ruleset_lists.clone());
+                self.db.rt.spawn(async move {
+                    let result = fetch_ruleset_list(&pool, uid).await;
+                    let _ = done.send((conn, result));
+                });
             }
             Output::FetchRuleset(f) => {
                 let (pool, done) = (self.db.pool.clone(), self.db.rulesets.clone());
@@ -443,6 +484,7 @@ fn event_loop(
     db: Db,
     done: std_mpsc::Receiver<Fetched>,
     rulesets: std_mpsc::Receiver<RulesetFetched>,
+    ruleset_lists: std_mpsc::Receiver<RulesetListFetched>,
     stop: Arc<AtomicBool>,
     status: SharedStatus,
 ) {
@@ -482,6 +524,10 @@ fn event_loop(
         while let Ok((f, result)) = rulesets.try_recv() {
             busy = true;
             lp.feed(Input::RulesetFetched(f, result));
+        }
+        while let Ok((conn, result)) = ruleset_lists.try_recv() {
+            busy = true;
+            lp.feed(Input::RulesetListFetched { conn, result });
         }
         if lp.run_pending_disconnects(Instant::now()) {
             busy = true;

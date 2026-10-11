@@ -335,11 +335,27 @@ def read_session(c: HarnessClient, b: Block) -> dict:
                   out_count=d[0x212], quit_ports=d[S_QUIT_PORTS], quit_stays=d[S_QUIT_STAYS])
     if len(d) >= S_RULES + RULES_SIZE:   # v6: the match's rules
         se["rules"] = read_rules(d[S_RULES:S_RULES + RULES_SIZE])
+    if len(d) >= S_PLAY + 0x40:          # v6: the room's ruleset and set
+        se["play"] = read_play(d[S_PLAY:S_PLAY + 0x40])
     return se
 
 
 # ---- v6: the match's rules (ppom.h Rules, docs/design/room-rules.md section 3) ----
 S_RULES, RULES_SIZE = 0x220, 0x20
+S_PLAY = 0x240
+
+
+def read_play(p: bytes) -> dict | None:
+    """SESSION's RoomPlay (ppom.h): what the room plays and its set; None outside a room."""
+    if not p[0]:
+        return None
+    text = lambda b: b.split(b"\0")[0].decode("ascii", "replace")  # noqa: E731
+    out = {"best_of": p[1], "stage_choice": p[2], "custom": bool(p[3]), "code": text(p[4:0xC]),
+           "name": text(p[0xC:0x2C])}
+    if p[0x2C]:
+        out["set"] = {"game": p[0x2D], "score": [p[0x2E], p[0x2F]], "sides": [p[0x30], p[0x31]],
+                      "paused": bool(p[0x32] & 1), "can_resume": bool(p[0x32] & 2), "finished": bool(p[0x32] & 4)}
+    return out
 STYLES = {0: "time", 1: "stock", 2: "coin"}
 
 
@@ -394,8 +410,9 @@ def write_session(c: HarnessClient, b: Block, *, game: int, stage: int, players:
 
 # ---- v5: rooms (docs/rooms-game-interface.md) ----
 CMD_ROOM = 0xD0
+CMD_RULESETS = 0xD1   # v6: the Ruleset line's list (RulesetList)
 ROOM_OPS = {"poll": 0, "create": 1, "join": 2, "leave": 3, "slot": 4, "teams": 5, "public": 6,
-            "team": 7, "rules": 8}
+            "team": 7, "rules": 8, "set": 9, "ruleset": 10}
 L_SCREEN, L_ROOM_JOIN, L_ROOM = 0x36, 0x37, 0x38
 # The launcher's Direct invite (still v5): counter, the code's letters (4, NUL-padded), its number.
 L_DIRECT_JOIN, L_DIRECT_PREFIX, L_DIRECT_NUMBER = 0x39, 0x3A, 0x3E

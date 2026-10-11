@@ -55,6 +55,7 @@ or refuses and disconnects:
 | `{"type": "room-ruleset", "code": "BCDFGH"}` | host | between games, no set on | The room plays that published ruleset (`code: null`: P+'s default); it also becomes the host's remembered ruleset. Takes back every ready; ends a finished set's score. |
 | `{"type": "room-result", "game": 2, "winnerSide": 0, "stage": 33}` | a set's player | in its session | A game of the room's set as this player's game saw it end (`winnerSide` 0 / 1, 254 a draw; side 0 is the lower slot). It counts once both players reported the same; different reports pause the set. Sent by Dolphin. |
 | `{"type": "room-set", "action": "resume"}` | host | between games | A paused set: `resume` (once its players are back in their slots) or `restart` (no set until the next start). |
+| `{"type": "room-rulesets"}` | anyone | any time | The rulesets to offer in the game's Ruleset line: answered with `{"type": "ruleset-list", "rulesets": [{"code", "name", "version", "by", "bestOf", "players"}]}`, the player's recent rulesets (newest first), then their own published ones that are not hidden, each once, at most 15 (`room-error` `Rulesets unavailable. Try later.` when the database fails). |
 | `{"type": "room-join", "code": "KFQB"}` | anyone | any time | Takes the lowest open, empty slot. The code is matched case- and width-insensitively (`kfqb`, `ＫＦＱＢ`). Leaves the sender's old room first. Joining the room one is in answers its state. |
 | `{"type": "room-leave"}` | member | any time | Leaves (answered with `room-left`). |
 | `{"type": "room-slot", "slot": 3, "open": true}` | host | between games | Opens or closes slot 1-4. Closing an occupied slot removes its player ("Removed from the room."), who may join again once a slot is open. |
@@ -187,6 +188,7 @@ Session auth (`Authorization: Bearer <sessionToken>`; 401 without it, since the 
 ```
 
 - `online`: **players whose game is running and logged in**: distinct accounts with an online connection (`hello`). Launchers left open without the game do not count; neither do games that are not logged in.
+- Each room also has `ruleset` (`room-state`'s: `code`, `name`, `version`, `by`, `basedOn`, `players`, `bestOf`, `stageChoice`), so the list can show what it plays.
 - `rooms`: public rooms only, at most 200: joinable first, then waiting before in game, then fuller, then older. `players` / `openSlots` is what the launcher shows as "players n/N" (N is the number of open slots, the most the room takes). `status` is `waiting` or `in-game` (a starting room is listed as in game). `joinable`: an open slot is empty (also during a game).
 - 503 `{"error": {"code": "mm_unavailable", "message": "The matchmaking server is not answering. Try again later."}}` when mm does not answer within 2 s.
 
