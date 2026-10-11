@@ -157,7 +157,7 @@ async fn presence_dms_and_invites() {
 
     // In a room, the invite is to the room (it needs an open slot).
     let (mut game, _) = OnlineClient::connect(stack.mm_addr, &creds(&alice), "0.1.0").expect("connect");
-    game.send(&RoomRequest::Create { public: false });
+    game.send(&RoomRequest::Create { public: false, ruleset: None, remembered: false });
     let state = game.wait_for(WAIT, |m| m["type"] == "room-state").expect("room-state");
     let code = state["code"].as_str().unwrap().to_string();
     let room = a.next_of("room").await;

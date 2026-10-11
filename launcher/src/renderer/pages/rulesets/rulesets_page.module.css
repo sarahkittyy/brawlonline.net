@@ -1,0 +1,281 @@
+.page {
+  display: flex;
+  gap: 20px;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  height: 100%;
+  padding: 20px 20px 0;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.listColumn {
+  display: flex;
+  flex-direction: column;
+  flex: 1 1 0;
+  min-width: 320px;
+  min-height: 0;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.headerActions {
+  display: flex;
+  gap: 8px;
+}
+
+.intro {
+  margin: 8px 0 12px;
+  max-width: 70ch;
+}
+
+.lists {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-bottom: 20px;
+}
+
+.listTitleRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.listTitle {
+  margin: 14px 0 6px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 12px;
+}
+
+.empty {
+  padding: 4px 0 8px;
+}
+
+.item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 8px;
+  border-radius: 8px;
+  background-color: rgb(255 255 255 / 4%);
+  margin-bottom: 6px;
+}
+
+.selected {
+  outline: 1px solid rgb(255 255 255 / 35%);
+}
+
+.hiddenItem {
+  opacity: 0.55;
+}
+
+.itemMain {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  padding: 2px 0;
+  cursor: default;
+}
+
+button.itemMain {
+  cursor: pointer;
+}
+
+.itemName {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.itemVersion {
+  font-weight: 400;
+  color: var(--text-secondary);
+}
+
+.itemMeta {
+  display: flex;
+  gap: 10px;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.itemActions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  flex-shrink: 0;
+}
+
+.code {
+  font-family: monospace;
+  letter-spacing: 0.08em;
+}
+
+.warn {
+  color: #e8b45a;
+}
+
+.inUse {
+  color: #74c27a;
+}
+
+.editorColumn {
+  display: flex;
+  flex-direction: column;
+  flex: 1.2 1 0;
+  min-width: 380px;
+  min-height: 0;
+  border-left: 1px solid rgb(255 255 255 / 10%);
+  padding-left: 20px;
+}
+
+.editorHeader {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.unsaved {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.editorScroll {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 12px 8px 12px 0;
+}
+
+.editorFooter {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0 14px;
+  border-top: 1px solid rgb(255 255 255 / 10%);
+}
+
+.problem {
+  flex: 1;
+  min-width: 0;
+  font-size: 13px;
+  color: #f28b82;
+}
+
+.ok {
+  color: #74c27a;
+}
+
+.footerButtons {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.editorFields {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.sectionTitle {
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 12px;
+}
+
+.row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 36px;
+}
+
+.rowLabel {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+
+.rowHelp {
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.rowControl {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.stageList {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.stageRow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.centered {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  flex: 1;
+  min-height: 160px;
+  padding: 24px;
+}
+
+.copyLine {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+}
+
+.copyLabel {
+  width: 40px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.copyValue {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}

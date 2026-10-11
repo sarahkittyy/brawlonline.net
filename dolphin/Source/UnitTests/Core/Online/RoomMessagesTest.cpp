@@ -121,6 +121,30 @@ TEST(RoomMessages, ParsesTheProtocolsRoomState)
   EXPECT_EQ(v.slots[1].player->character, std::nullopt);
   EXPECT_FALSE(v.slots[2].open);
   EXPECT_FALSE(v.slots[2].player);
+  // No rules (an older server): none, and no error.
+  EXPECT_FALSE(v.rules);
+  EXPECT_TRUE(v.rules_error.empty());
+}
+
+TEST(RoomMessages, RoomRules)
+{
+  // The room's rules come with room-state (docs/design/room-rules.md); checked as a ticket's.
+  const std::string with = Replace(STATE, R"("statusText")",
+                                   R"("rules": {"stocks": 3, "autoLCancel": true, "pause": "hold"}, "statusText")");
+  const Message m = Parse(with);
+  ASSERT_EQ(m.kind, Message::Kind::RoomState) << m.why;
+  ASSERT_TRUE(m.view->rules);
+  EXPECT_EQ(m.view->rules->stocks, 3);
+  EXPECT_TRUE(m.view->rules->auto_l_cancel);
+  EXPECT_FALSE(m.view->rules->pause_normal);
+  // Unusable rules do not cost the room: no rules, and the text to show.
+  for (const char* bad : {R"({"stocks": 0})", R"({"newRule": true})", R"("stock")"})
+  {
+    const Message b = Parse(Replace(STATE, R"("statusText")", std::string(R"("rules": )") + bad + R"(, "statusText")"));
+    ASSERT_EQ(b.kind, Message::Kind::RoomState) << bad;
+    EXPECT_FALSE(b.view->rules) << bad;
+    EXPECT_FALSE(b.view->rules_error.empty()) << bad;
+  }
 }
 
 TEST(RoomMessages, RefusesBadRoomStates)
@@ -247,10 +271,72 @@ TEST(RoomMessages, Requests)
   r.flag = false;
   EXPECT_EQ(RequestJson(r), R"({"ready":false,"type":"room-ready"})");
   r = {};
+  r.op = Op::Rules;
+  EXPECT_EQ(RequestJson(r), std::nullopt);
+  Online::MatchRules rules;
+  rules.stocks = 3;
+  rules.auto_l_cancel = true;
+  r.rules = rules;
+  EXPECT_EQ(RequestJson(r),
+            R"({"rules":{"autoLCancel":true,"damageRatio":1,"hazards":true,"inputAssist":false,)"
+            R"("itemFrequency":0,"itemSwitch":[0,6,0,0,0,0,0,0],"pause":"normal","stocks":3,)"
+            R"("style":"stock","teamAttack":true,"timeMinutes":8},"type":"room-rules"})");
+  r = {};
   r.op = Op::Poll;
   EXPECT_EQ(RequestJson(r), std::nullopt);
   EXPECT_EQ(HelloJson("u", "k", "0.1.0", "mac"),
             R"({"appVersion":"0.1.0","platform":"mac","type":"hello","user":{"playKey":"k","uid":"u"}})");
   EXPECT_EQ(HelloJson("u", "k", "0.1.0", "win", "ab12"),
             R"({"appVersion":"0.1.0","chatKey":"ab12","platform":"win","type":"hello","user":{"playKey":"k","uid":"u"}})");
+}
+
+TEST(RoomMessages, RulesetCodesAndRequests)
+{
+  EXPECT_EQ(NormalizeRulesetCode(std::string("bcdfgh")), "BCDFGH");
+  EXPECT_EQ(NormalizeRulesetCode(std::u16string(u"ＢCDFGH")), "BCDFGH");  // full width B
+  for (const char* bad : {"BCDFG", "BCDFGHJ", "BCDFGA", "KFQB", "", "BCD FG"})
+    EXPECT_EQ(NormalizeRulesetCode(std::string(bad)), std::nullopt) << bad;
+  Request r;
+  r.op = Op::Create;
+  r.flag = true;
+  r.remembered = true;
+  EXPECT_EQ(RequestJson(r), R"({"public":true,"remembered":true,"type":"room-create"})");
+  r.ruleset = "bcdfgh";
+  EXPECT_EQ(RequestJson(r), R"({"public":true,"ruleset":"BCDFGH","type":"room-create"})");
+  r.ruleset = "KFQB";
+  EXPECT_EQ(RequestJson(r), std::nullopt);
+  r = {};
+  r.op = Op::Ruleset;
+  EXPECT_EQ(RequestJson(r), R"({"code":null,"type":"room-ruleset"})");
+  r.ruleset = "BCDFGH";
+  EXPECT_EQ(RequestJson(r), R"({"code":"BCDFGH","type":"room-ruleset"})");
+  r = {};
+  r.op = Op::Result;
+  r.game = 2;
+  r.winner_side = 1;
+  r.stage = 0x21;
+  EXPECT_EQ(RequestJson(r), R"({"game":2,"stage":33,"type":"room-result","winnerSide":1})");
+  r.winner_side = 2;
+  EXPECT_EQ(RequestJson(r), std::nullopt);
+  r = {};
+  r.op = Op::SetAction;
+  r.flag = true;
+  EXPECT_EQ(RequestJson(r), R"({"action":"resume","type":"room-set"})");
+}
+
+TEST(RoomMessages, RulesetList)
+{
+  const Message m = Parse(R"({"type": "ruleset-list", "rulesets": [
+    {"code": "BCDFGH", "name": "NorCal Weekly", "version": 3, "by": "sarah", "bestOf": 3, "players": "1v1"},
+    {"code": "nope", "name": "bad code"},
+    {"code": "kfqbtr", "name": "Bo1 pools", "version": 1, "by": "bo", "bestOf": 0, "players": "1v1"}]})");
+  ASSERT_EQ(m.kind, Message::Kind::RulesetList);
+  ASSERT_EQ(m.rulesets.size(), 2u);
+  EXPECT_EQ(m.rulesets[0].code, "BCDFGH");
+  EXPECT_EQ(m.rulesets[0].name, "NorCal Weekly");
+  EXPECT_EQ(m.rulesets[0].best_of, 3);
+  EXPECT_EQ(m.rulesets[1].code, "KFQBTR");
+  Request r;
+  r.op = Op::RulesetList;
+  EXPECT_EQ(RequestJson(r), R"({"type":"room-rulesets"})");
 }

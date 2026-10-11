@@ -9,6 +9,8 @@
  * When running `npm run build` or `npm run build:main`, this file is compiled to
  * `./src/main.js` using webpack. This gives us some performance wins.
  */
+import type { BrawlLink } from "@common/brawl_link";
+import { findBrawlLink, isBrawlLink, parseBrawlLink } from "@common/brawl_link";
 import { delay } from "@common/delay";
 import { Preconditions } from "@common/preconditions";
 import { APP_ID, LEGACY_PRODUCT_NAMES, PRODUCT_NAME } from "@common/product";
@@ -28,9 +30,11 @@ import { fileExists } from "utils/file_exists";
 
 import { getConfigFlags } from "./flags/flags";
 import { installModules } from "./install_modules";
+import { ipc_brawlLinkEvent, ipc_takeBrawlLinks } from "./ipc";
 import { legacyUserDataNames, migrateLegacyUserData } from "./legacy_user_data";
 import { chooseGtkInputMethod } from "./linux_input_method";
 import { MenuBuilder } from "./menu";
+import { registerUrlScheme } from "./url_scheme";
 import { clearTempFolder, getWindowIcon, resolveHtmlPath } from "./util";
 
 // Neutral until the renderer applies the theme (see renderer/styles/theme.ts).
@@ -325,8 +329,45 @@ const handleOpenFile = (aUrl: string) => {
   });
 };
 
-app.on("open-url", (_, aUrl) => {
+/**
+ * `brawlonline://` links (src/common/brawl_link.ts) wait here until the renderer takes them
+ * (`takeBrawlLinks`): it asks once its main page is up, and again whenever one arrives.
+ */
+const pendingBrawlLinks: BrawlLink[] = [];
+
+ipc_takeBrawlLinks.main!.handle(async () => {
+  return { links: pendingBrawlLinks.splice(0) };
+});
+
+const handleBrawlLink = (aUrl: string) => {
+  const link = parseBrawlLink(aUrl);
+  if (!link) {
+    log.warn(`Ignoring link ${aUrl}`);
+    return;
+  }
+  log.info(`Link: ${aUrl}`);
+  pendingBrawlLinks.push(link);
+  if (mainWindow) {
+    if (mainWindow.isMinimized()) {
+      mainWindow.restore();
+    }
+    mainWindow.focus();
+  } else if (app.isReady() && lockObtained) {
+    // macOS with every window closed: the new window takes the link once it loads.
+    void createWindow();
+  }
+  if (didFinishLoad) {
+    void ipc_brawlLinkEvent.main!.trigger({}).catch(log.error);
+  }
+};
+
+app.on("open-url", (event, aUrl) => {
   log.info(`Received open-url event: ${aUrl}`);
+  if (isBrawlLink(aUrl)) {
+    event.preventDefault();
+    handleBrawlLink(aUrl);
+    return;
+  }
   handleOpenFile(aUrl);
 });
 
@@ -338,6 +379,12 @@ app.on("open-file", (_, aUrl) => {
 app.on("second-instance", (_, argv) => {
   log.info("Second instance detected...");
   log.info(argv);
+
+  const link = findBrawlLink(argv);
+  if (link) {
+    handleBrawlLink(link);
+    return;
+  }
 
   const lastItem = last(argv);
   if (argv.length === 1 || !lastItem) {
@@ -380,14 +427,18 @@ const main = async () => {
   }
 
   await appUpdater.verifyPendingUpdate();
+  void registerUrlScheme({ packaged: app.isPackaged, testMode: testMode.active });
   await createWindow();
   // The renderer checks once as it starts (initialize_app); a launcher left open keeps checking.
   appUpdater.startPeriodicChecks();
 
   // Handle a replay file if provided. Started as `electron <app folder>` (process.defaultApp),
   // argv[1] is the app folder, not a file to open.
+  const startLink = findBrawlLink(process.argv);
   const argURI = get(process.argv, process.defaultApp ? 2 : 1);
-  if (argURI) {
+  if (startLink) {
+    handleBrawlLink(startLink);
+  } else if (argURI) {
     handleOpenFile(argURI);
   }
 };

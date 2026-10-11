@@ -20,6 +20,14 @@
     "name": "rep",
     "description": "Brawl Online replay"
   },
+  "protocols": [
+    {
+      "name": "Brawl Online link",
+      "schemes": [
+        "brawlonline"
+      ]
+    }
+  ],
   "artifactName": "Brawl-Online-${version}-${arch}-${os}.${ext}",
   "mac": {
     "target": [

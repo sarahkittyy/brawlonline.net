@@ -4,7 +4,13 @@ import type {
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
+  MyRulesets,
+  PublishRulesetRequest,
+  RecentRuleset,
   RoomList,
+  RulesetDraft,
+  RulesetDraftRequest,
+  RulesetView,
 } from "@accounts/types";
 import { Preconditions } from "@common/preconditions";
 import type { DolphinService, PlayKey } from "@dolphin/types";
@@ -27,6 +33,7 @@ import type { BackendService, RankedProfile, UserData } from "./types";
  * | (none: slippi.gg's site)       | GET /v1/ranked/leaderboard        |
  * | (none: slippi.gg's site)       | GET /v1/me/matches                |
  * | (none: ours)                   | GET /v1/rooms                     |
+ * | (none: ours)                   | /v1/rulesets, /v1/me/ruleset*     |
  * | getLatestDolphin.version       | `latestVersion` in /v1/me         |
  */
 
@@ -117,6 +124,43 @@ class AccountsBackendClient implements BackendService {
 
   async fetchRooms(): Promise<RoomList> {
     return await this._api.rooms(this._activeUid());
+  }
+
+  async fetchRuleset(code: string): Promise<RulesetView> {
+    return await this._api.ruleset(code);
+  }
+
+  async fetchMyRulesets(): Promise<MyRulesets> {
+    return await this._api.myRulesets(this._activeUid());
+  }
+
+  async fetchRecentRulesets(): Promise<RecentRuleset[]> {
+    return await this._api.recentRulesets(this._activeUid());
+  }
+
+  async publishRuleset(req: PublishRulesetRequest): Promise<RulesetView> {
+    return await this._api.publishRuleset(this._activeUid(), req);
+  }
+
+  async setRulesetHidden(code: string, hidden: boolean): Promise<void> {
+    await this._api.setRulesetHidden(this._activeUid(), code, hidden);
+  }
+
+  async saveRulesetDraft(req: RulesetDraftRequest, id?: string): Promise<RulesetDraft> {
+    const uid = this._activeUid();
+    return id ? await this._api.updateRulesetDraft(uid, id, req) : await this._api.createRulesetDraft(uid, req);
+  }
+
+  async deleteRulesetDraft(id: string): Promise<void> {
+    await this._api.deleteRulesetDraft(this._activeUid(), id);
+  }
+
+  async fetchRememberedRuleset(): Promise<RulesetView | null> {
+    return await this._api.rememberedRuleset(this._activeUid());
+  }
+
+  async setRememberedRuleset(code: string | null): Promise<RulesetView | null> {
+    return await this._api.setRememberedRuleset(this._activeUid(), code);
   }
 
   async assertPlayKey(playKey: PlayKey) {

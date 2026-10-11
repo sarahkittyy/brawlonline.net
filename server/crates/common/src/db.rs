@@ -155,3 +155,163 @@ pub async fn insert_chat_report(pool: &sqlx::PgPool, r: &NewChatReport) -> sqlx:
     .await
     .map(|_| ())
 }
+
+// ---------------------------------------------------------------- rulesets
+
+/// Rulesets kept on an account's recent list (`ruleset_recent`, `migrations/0008_rulesets.sql`).
+pub const RECENT_RULESETS_KEPT: i64 = 10;
+
+/// A published ruleset (`rulesets`): the ruleset with `version` and `by` filled (`by` is the
+/// publisher's current display name, or the name they had when publishing once the account is
+/// gone).
+#[derive(Debug, Clone, PartialEq)]
+pub struct PublishedRuleset {
+    pub code: String,
+    pub owner: Option<Uuid>,
+    pub lineage: Uuid,
+    pub ruleset: crate::rules::Ruleset,
+    pub hash: String,
+    pub hidden: bool,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(sqlx::FromRow)]
+struct RulesetRow {
+    code: String,
+    owner: Option<Uuid>,
+    lineage: Uuid,
+    version: i32,
+    by: String,
+    json: String,
+    hash: String,
+    hidden: bool,
+    created_at: DateTime<Utc>,
+}
+
+impl RulesetRow {
+    fn into_published(self) -> sqlx::Result<PublishedRuleset> {
+        let mut ruleset: crate::rules::Ruleset =
+            serde_json::from_str(&self.json).map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+        ruleset.version = self.version as u32;
+        ruleset.by = self.by;
+        Ok(PublishedRuleset {
+            code: self.code,
+            owner: self.owner,
+            lineage: self.lineage,
+            ruleset,
+            hash: self.hash,
+            hidden: self.hidden,
+            created_at: self.created_at,
+        })
+    }
+}
+
+/// The columns of [`RulesetRow`], for `FROM rulesets r LEFT JOIN users u ON u.uid = r.owner`.
+pub const RULESET_COLS: &str = "r.code, r.owner, r.lineage, r.version, \
+     COALESCE(u.display_name, r.publisher_name) AS by, r.json, r.hash, r.hidden, r.created_at";
+
+/// A published ruleset by its code (already normalized: [`crate::rules::parse_ruleset_code`]).
+pub async fn fetch_ruleset(pool: &sqlx::PgPool, code: &str) -> sqlx::Result<Option<PublishedRuleset>> {
+    let row: Option<RulesetRow> = sqlx::query_as(&format!(
+        "SELECT {RULESET_COLS} FROM rulesets r LEFT JOIN users u ON u.uid = r.owner WHERE r.code = $1"
+    ))
+    .bind(code)
+    .fetch_optional(pool)
+    .await?;
+    row.map(RulesetRow::into_published).transpose()
+}
+
+/// Rows of a `SELECT {RULESET_COLS} FROM rulesets r LEFT JOIN users u ...` query.
+pub async fn fetch_rulesets_where(pool: &sqlx::PgPool, tail: &str, uid: Uuid) -> sqlx::Result<Vec<PublishedRuleset>> {
+    let rows: Vec<RulesetRow> =
+        sqlx::query_as(&format!("SELECT {RULESET_COLS} FROM rulesets r LEFT JOIN users u ON u.uid = r.owner {tail}"))
+            .bind(uid)
+            .fetch_all(pool)
+            .await?;
+    rows.into_iter().map(RulesetRow::into_published).collect()
+}
+
+/// The newest version of `lineage` after `version` that is not hidden: (code, version).
+pub async fn newer_ruleset_version(
+    pool: &sqlx::PgPool,
+    lineage: Uuid,
+    version: u32,
+) -> sqlx::Result<Option<(String, i32)>> {
+    sqlx::query_as(
+        "SELECT code, version FROM rulesets WHERE lineage = $1 AND version > $2 AND NOT hidden
+          ORDER BY version DESC LIMIT 1",
+    )
+    .bind(lineage)
+    .bind(version as i32)
+    .fetch_optional(pool)
+    .await
+}
+
+/// The account's remembered ruleset (decision 11), `None` for P+ default.
+pub async fn remembered_ruleset(pool: &sqlx::PgPool, uid: Uuid) -> sqlx::Result<Option<PublishedRuleset>> {
+    let code: Option<String> = sqlx::query_scalar("SELECT code FROM remembered_rulesets WHERE uid = $1")
+        .bind(uid)
+        .fetch_optional(pool)
+        .await?;
+    match code {
+        Some(code) => fetch_ruleset(pool, &code).await,
+        None => Ok(None),
+    }
+}
+
+/// Sets the remembered ruleset (`None`: P+ default). A code also goes to the top of the recent
+/// list, which keeps the newest [`RECENT_RULESETS_KEPT`]. The code must exist (foreign key).
+pub async fn set_remembered_ruleset(pool: &sqlx::PgPool, uid: Uuid, code: Option<&str>) -> sqlx::Result<()> {
+    let mut tx = pool.begin().await?;
+    match code {
+        None => {
+            sqlx::query("DELETE FROM remembered_rulesets WHERE uid = $1").bind(uid).execute(&mut *tx).await?;
+        }
+        Some(code) => {
+            sqlx::query(
+                "INSERT INTO remembered_rulesets (uid, code) VALUES ($1, $2)
+                 ON CONFLICT (uid) DO UPDATE SET code = EXCLUDED.code, updated_at = now()",
+            )
+            .bind(uid)
+            .bind(code)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "INSERT INTO ruleset_recent (uid, code) VALUES ($1, $2)
+                 ON CONFLICT (uid, code) DO UPDATE SET used_at = clock_timestamp()",
+            )
+            .bind(uid)
+            .bind(code)
+            .execute(&mut *tx)
+            .await?;
+            sqlx::query(
+                "DELETE FROM ruleset_recent WHERE uid = $1 AND code NOT IN (
+                     SELECT code FROM ruleset_recent WHERE uid = $1 ORDER BY used_at DESC LIMIT $2)",
+            )
+            .bind(uid)
+            .bind(RECENT_RULESETS_KEPT)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
+    tx.commit().await
+}
+
+/// The account's recently used rulesets, newest first, with when each was last used.
+pub async fn recent_rulesets(pool: &sqlx::PgPool, uid: Uuid) -> sqlx::Result<Vec<(PublishedRuleset, DateTime<Utc>)>> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        #[sqlx(flatten)]
+        r: RulesetRow,
+        used_at: DateTime<Utc>,
+    }
+    let rows: Vec<Row> = sqlx::query_as(&format!(
+        "SELECT {RULESET_COLS}, x.used_at FROM ruleset_recent x
+           JOIN rulesets r ON r.code = x.code LEFT JOIN users u ON u.uid = r.owner
+          WHERE x.uid = $1 ORDER BY x.used_at DESC"
+    ))
+    .bind(uid)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter().map(|row| Ok((row.r.into_published()?, row.used_at))).collect()
+}

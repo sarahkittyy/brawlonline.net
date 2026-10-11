@@ -26,6 +26,7 @@ namespace OnlineMenu {
     enum RoomEntry { ROOM_ENTRY_NONE = 0, ROOM_ENTRY_CREATE = 1, ROOM_ENTRY_JOIN = 2 };
     void enterRoom(int entry);           // WITH FRIENDS > Create Room / Join Room
     bool roomCss();                      // the online CSS is a room's
+    bool stepsDecideStage();             // Ranked or a room's set: GameSetup's steps pick the stage
     void prepareCss();                   // the CSS is about to be built (sqNetAnyOkiraku)
     void menuPageRunning(u8* page);      // a menu page the launcher's join can leave from ran
 }

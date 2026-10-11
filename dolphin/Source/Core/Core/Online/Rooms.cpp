@@ -21,6 +21,7 @@
 #include "Common/Thread.h"
 #include "Core/Config/OnlineSettings.h"
 #include "Core/Online/Chat.h"
+#include "Core/Online/GameSetup.h"
 #include "Core/Online/Matchmaking.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/User.h"
@@ -105,6 +106,8 @@ struct RoomGame
   // this session before this game leaves the match scene).
   std::optional<u8> pickers;
   bool abort = false;  // the player left the room: end the room's game (no room-back)
+  bool set = false;    // the session plays a set: it goes on after a game until the set is won
+  u32 games = 0;       // the matches it played
 };
 
 enum class LaunchKind
@@ -124,6 +127,7 @@ struct Launch
   std::string id;
   LaunchKind kind = LaunchKind::Room;
   std::string code;       // the room code (Room), the connect code (Direct, canonical), "" (Create)
+  std::string ruleset;    // Create: the launcher box's ruleset code (normalised), "" none
   s64 created_ms = 0;     // its createdAt
   bool answered = false;  // "accepted" already (held during the game's boot)
 };
@@ -187,6 +191,11 @@ struct State
   // outbox would send it after, and leave the new room).
   bool leave_before_pending = false;
   std::string create_left;  // the room a launcher create left: its late pushes are not the answer
+  // The Ruleset line's list (room-rulesets): what mm last sent, and when it was asked for.
+  ListState list_state = ListState::None;
+  u32 list_serial = 0;
+  std::vector<RulesetEntry> list;
+  std::optional<Clock::time_point> list_asked;
   picojson::value last_request;  // null or {id, result, message}
   std::string status_written;
   Clock::time_point status_at{};
@@ -429,8 +438,20 @@ void Handle(const Message& m, Actions* a, Clock::time_point now)
     ++s.serial;
     return;
   }
+  case Message::Kind::RulesetList:
+    s.list = m.rulesets;
+    s.list_state = ListState::Ready;
+    ++s.list_serial;
+    Log(fmt::format("ruleset list: {} rulesets", s.list.size()));
+    return;
   case Message::Kind::RoomError:
     Log(fmt::format("room-error {}: {}", m.op, m.error));
+    if (m.op == "room-rulesets")
+    {
+      s.list_state = ListState::Failed;
+      ++s.list_serial;
+      return;
+    }
     if (m.op == "room-create" || m.op == "room-join")
     {
       if (s.pending)
@@ -479,7 +500,7 @@ void Handle(const Message& m, Actions* a, Clock::time_point now)
     ++s.games_started;
     a->start_game = true;
     a->start = s.rg;
-    a->pickers = s.pickers;
+    a->pickers = s.view && !s.view->ruleset.LoserPicks() ? 0 : s.pickers;
     ++s.serial;
     return;
   case Message::Kind::Error:
@@ -601,9 +622,22 @@ void PollJoinRequest()
   else if (kind && kind->get<std::string>() == "create")
     launch_kind = LaunchKind::Create;
   std::optional<std::string> target;
+  std::string ruleset;
   if (launch_kind == LaunchKind::Create)
   {
     target = std::string();
+    // The launcher's ruleset box (docs/rooms-game-interface.md): the room plays it.
+    if (const picojson::value* rs = get("ruleset"); rs && !rs->is<picojson::null>())
+    {
+      const auto code = rs->is<std::string>() ? NormalizeRulesetCode(rs->get<std::string>()) :
+                                                std::nullopt;
+      if (!code)
+      {
+        Log("join-room.json: a create with a ruleset that is not a ruleset code: ignored");
+        return;
+      }
+      ruleset = *code;
+    }
   }
   else if (launch_kind == LaunchKind::Direct)
   {
@@ -639,7 +673,7 @@ void PollJoinRequest()
                     *target, age / 1000));
     return;
   }
-  s.launch = Launch{CleanText(id->get<std::string>(), 100), launch_kind, *target, *at};
+  s.launch = Launch{CleanText(id->get<std::string>(), 100), launch_kind, *target, ruleset, *at};
   const char* what = launch_kind == LaunchKind::Direct ? "play Direct with " :
                      launch_kind == LaunchKind::Create ? "create a room" :
                                                          "join ";
@@ -753,6 +787,7 @@ void DecideLaunch(const DolphinBusy& busy, bool logged_in, const std::string& ow
     Request r;
     r.op = Op::Create;
     r.flag = true;
+    r.ruleset = l.ruleset;
     s.error.clear();
     s.rejoin.clear();
     s.leave_before_pending = s.view.has_value() && s.conn == Conn::Online;
@@ -882,12 +917,17 @@ void EndGame(bool played, const std::string& error, std::optional<u8> pickers, b
   std::lock_guard lk(s_mutex);
   if (!s.rg.active)
     return;
+  // A set's session played several games: the room's game numbers go on after all of them.
+  const u32 games = std::max<u32>(1, s.rg.games);
   s.rg = RoomGame{};
-  ++s.game;
+  s.game += games;
   if ((s.game & 0xFF) == 0)  // the game's lock-in carries the number in a byte; 0 is none
     ++s.game;
   if (pickers)
     s.pickers = *pickers & 0x0F;
+  // A ruleset that strikes, draws or plays a set leaves no stage to the last game's loser.
+  if (s.view && !s.view->ruleset.LoserPicks())
+    s.pickers = 0;
   if (played)
     ++s.games_done;
   else
@@ -966,8 +1006,28 @@ void SuperviseGame(Clock::time_point now)
       s.rg.pickers = g.pickers;
     }
   }
+  if (match_over && scene_left && g.set && !GameSetup::SetDone() && lobby.active)
+  {
+    // A set's game is over and the set is not: the session goes on to the next game (its steps,
+    // then the match), watched like the first.
+    std::lock_guard lk(s_mutex);
+    if (s.rg.active && s.rg.match_id == g.match_id)
+    {
+      ++s.rg.games;
+      s.rg.saw_match = false;
+      s.rg.match_ended.reset();
+      s.rg.pickers.reset();
+      Log(fmt::format("set game over; the set goes on ({} played)", s.rg.games));
+    }
+    return;
+  }
   if (match_over && scene_left)
   {
+    {
+      std::lock_guard lk(s_mutex);
+      if (s.rg.active)
+        ++s.rg.games;
+    }
     EndGame(true, "", g.pickers, true);
     return;
   }
@@ -1312,6 +1372,48 @@ void Shutdown()
   File::Delete(OnlineDir() + "game-status.json", File::IfAbsentBehavior::NoConsoleWarning);
 }
 
+void SetSetSession(bool set)
+{
+  std::lock_guard lk(s_mutex);
+  if (s.rg.active)
+    s.rg.set = set;
+}
+
+void ReportSetGame(u32 set_game, u8 winner_side, u16 stage)
+{
+  Request r;
+  r.op = Op::Result;
+  r.game = set_game;
+  r.winner_side = winner_side;
+  r.stage = stage;
+  std::lock_guard lk(s_mutex);
+  if (!s.view || !RequestJson(r))
+    return;
+  s.outbox.push_back(r);
+  Log(fmt::format("set game {}: side {} on {:#x}", set_game, winner_side, stage));
+}
+
+RulesetListSnapshot RulesetList()
+{
+  std::lock_guard lk(s_mutex);
+  const auto now = Clock::now();
+  // Asked again after 5 s (the player may have published or used one meanwhile); one at a time.
+  if (s.view && s.conn == Conn::Online && (!s.list_asked || now - *s.list_asked > 5s))
+  {
+    Request r;
+    r.op = Op::RulesetList;
+    s.outbox.push_back(r);
+    s.list_asked = now;
+    if (s.list_state != ListState::Ready)
+      s.list_state = ListState::Loading;
+  }
+  RulesetListSnapshot snap;
+  snap.state = s.list_state;
+  snap.serial = s.list_serial;
+  snap.rulesets = s.list;
+  return snap;
+}
+
 void Submit(const Request& request)
 {
   if (request.op == Op::Poll)
@@ -1420,7 +1522,7 @@ Snapshot GetSnapshot()
   snap.phase = s.phase;
   snap.view = s.view;
   snap.game = s.game;
-  snap.pickers = s.pickers;
+  snap.pickers = s.view && !s.view->ruleset.LoserPicks() ? 0 : s.pickers;
   snap.join_seq = s.join_seq;
   snap.direct_seq = s.direct_seq;
   snap.direct_code = s.direct_code;
@@ -1471,6 +1573,29 @@ picojson::object Status()
   o["serial"] = picojson::value(static_cast<double>(s.serial));
   o["game"] = picojson::value(static_cast<double>(s.game));
   o["pickers"] = picojson::value(static_cast<double>(s.pickers));
+  if (s.view)
+  {
+    picojson::object rs;
+    rs["code"] = picojson::value(s.view->ruleset.code);
+    rs["name"] = picojson::value(s.view->ruleset.name);
+    rs["version"] = picojson::value(static_cast<double>(s.view->ruleset.version));
+    rs["based_on"] = picojson::value(s.view->ruleset.based_on);
+    rs["best_of"] = picojson::value(static_cast<double>(s.view->ruleset.best_of));
+    o["ruleset"] = picojson::value(rs);
+    if (const auto& st = s.view->set)
+    {
+      picojson::object so;
+      so["best_of"] = picojson::value(static_cast<double>(st->best_of));
+      so["game"] = picojson::value(static_cast<double>(st->game));
+      so["score"] = picojson::value(picojson::array{picojson::value(static_cast<double>(st->score[0])),
+                                                    picojson::value(static_cast<double>(st->score[1]))});
+      so["paused"] = picojson::value(st->paused);
+      so["can_resume"] = picojson::value(st->can_resume);
+      so["finished"] = picojson::value(st->finished);
+      so["waiting_for"] = picojson::value(st->waiting_for);
+      o["set"] = picojson::value(so);
+    }
+  }
   o["join_seq"] = picojson::value(static_cast<double>(s.join_seq));
   o["screen"] = picojson::value(static_cast<double>(s.screen));
   o["reached_menus"] = picojson::value(s.reached_menus);

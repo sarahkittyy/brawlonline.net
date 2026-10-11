@@ -16,8 +16,9 @@
  * file with `{version, id, kind: "direct", connectCode, createdAt}`: the game goes to Direct's
  * character select and, on lock-in, searches that code. Every function here that takes a room code
  * also takes a connect code (`ABCD#123`) for that, and `CREATE_ROOM` for a create request
- * (`{version, id, kind: "create", createdAt}`: the game creates a room as WITH FRIENDS > Create Room
- * does, from Home's "Create room" button).
+ * (`{version, id, kind: "create", ruleset?, createdAt}`: the game creates a room as WITH FRIENDS >
+ * Create Room does, from Home's "Create room" button or a `brawlonline://room/create` link;
+ * `ruleset` is the code in Home's ruleset box, absent for P+ default; docs/rulesets-protocol.md §4).
  *
  * Dolphin builds without this (everything before the rooms phase) write no status. Then the
  * launcher still writes the request, and when nothing answers it within a few seconds it takes
@@ -48,7 +49,7 @@ export const FAILED_WATCH_MS = 3_000;
 export type RoomRequest =
   | { version: 1; id: string; code: string; createdAt: string }
   | { version: 1; id: string; kind: "direct"; connectCode: string; createdAt: string }
-  | { version: 1; id: string; kind: "create"; createdAt: string };
+  | { version: 1; id: string; kind: "create"; ruleset?: string; createdAt: string };
 
 export type GameStatus = {
   version: number;
@@ -98,6 +99,11 @@ export function isConnectCode(code: string): boolean {
   return code.length <= 8 && /^[A-Z]{2,4}#[1-9][0-9]{0,3}$/.test(code);
 }
 
+/** Ruleset codes: 6 letters of the room codes' alphabet (docs/rulesets-protocol.md). */
+export function isRulesetCode(code: string): boolean {
+  return /^[BCDFGHJKLMNPQRSTVWXZ]{6}$/.test(code);
+}
+
 /** A room code, a connect code (Direct) or `CREATE_ROOM`. */
 export function isHandOffCode(code: string): boolean {
   return isRoomCode(code) || isConnectCode(code) || code === CREATE_ROOM;
@@ -105,17 +111,28 @@ export function isHandOffCode(code: string): boolean {
 
 /**
  * Writes `join-room.json` atomically (a reader never sees half a file): a room request for a room
- * code, a Direct request for a connect code.
+ * code, a Direct request for a connect code, a create request (with the ruleset code, if any) for
+ * `CREATE_ROOM`.
  */
-export async function writeRoomRequest(onlineDir: string, code: string, now = new Date()): Promise<RoomRequest> {
+export async function writeRoomRequest(
+  onlineDir: string,
+  code: string,
+  now = new Date(),
+  ruleset?: string,
+): Promise<RoomRequest> {
   if (!isHandOffCode(code)) {
     throw new Error(`Not a room or connect code: ${code}`);
+  }
+  if (ruleset !== undefined && (code !== CREATE_ROOM || !isRulesetCode(ruleset))) {
+    throw new Error(`Not a ruleset code for a create request: ${ruleset}`);
   }
   const id = randomUUID();
   const createdAt = now.toISOString();
   const req: RoomRequest =
     code === CREATE_ROOM
-      ? { version: 1, id, kind: "create", createdAt }
+      ? ruleset !== undefined
+        ? { version: 1, id, kind: "create", ruleset, createdAt }
+        : { version: 1, id, kind: "create", createdAt }
       : isRoomCode(code)
       ? { version: 1, id, code, createdAt }
       : { version: 1, id, kind: "direct", connectCode: code, createdAt };
@@ -162,6 +179,8 @@ export async function readGameStatus(onlineDir: string, now = Date.now()): Promi
 }
 
 export type HandOffOptions = {
+  /** A create request's ruleset code (absent: P+ default). */
+  ruleset?: string;
   ackTimeoutMs?: number;
   /** How long to keep watching after `accepted` (default: a create's FAILED_WATCH_MS, else 0). */
   watchAfterAcceptMs?: number;
@@ -186,7 +205,7 @@ export async function handOffRoom(
   if (before.kind === "fresh" && before.status.state === "busy") {
     return { outcome: "busy" };
   }
-  const req = await writeRoomRequest(onlineDir, code, new Date(now()));
+  const req = await writeRoomRequest(onlineDir, code, new Date(now()), opts.ruleset);
   const deadline = now() + (opts.ackTimeoutMs ?? ACK_TIMEOUT_MS);
   while (now() < deadline) {
     await sleep(opts.pollMs ?? ACK_POLL_MS);

@@ -30,6 +30,8 @@ $MK -C PPOnlineLoader
 PY="${PYTHON:-$(command -v python || command -v python3)}"   # Debian/Ubuntu only have python3
 "$PY" ../tools/gamecode/reltool.py pack PPOnlineLoader/PPOnlineLoader.rel PPOnline/PPOnlineMain.rel PPOnline/PPOnline.rel
 ls -l PPOnline/PPOnline.rel
-# Fail on calls to symbols that are neither defined nor in the symbol maps (they would hang), and
-# on relative branches out of the plugin (it runs from MEM2, out of their range).
-"$PY" ../tools/gamecode/reltool.py check PPOnline/PPOnline.rel
+# Fail on references to symbols that are neither defined nor in the symbol maps (elf2rel only
+# warns and leaves them 0: a call goes to address 0, or loops), and on relative branches out of
+# the plugin (it runs from MEM2, out of their range). The ELFs name the symbol and its user.
+"$PY" ../tools/gamecode/reltool.py check PPOnline/PPOnline.rel \
+  --elf loader=PPOnlineLoader/PPOnlineLoader.elf --elf main=PPOnline/PPOnlineMain.elf

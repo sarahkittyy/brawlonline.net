@@ -58,10 +58,18 @@ export const ipc_viewSlpReplay = makeEndpoint.main("viewSlpReplay", <{ files: Re
 export const ipc_launchNetplayDolphin = makeEndpoint.main("launchNetplayDolphin", <EmptyPayload>_, <SuccessPayload>_);
 
 /** A room in the list was clicked while the game may be running (docs/rooms-protocol.md). */
-export const ipc_joinRoomInGame = makeEndpoint.main("joinRoomInGame", <{ code: string }>_, <RoomHandOffResult>_);
+export const ipc_joinRoomInGame = makeEndpoint.main(
+  "joinRoomInGame",
+  <{ code: string; ruleset?: string }>_,
+  <RoomHandOffResult>_,
+);
 
 /** Writes the room request a game that is about to start reads once it reaches the menus. */
-export const ipc_prepareRoomLaunch = makeEndpoint.main("prepareRoomLaunch", <{ code: string }>_, <{ id: string }>_);
+export const ipc_prepareRoomLaunch = makeEndpoint.main(
+  "prepareRoomLaunch",
+  <{ code: string; ruleset?: string }>_,
+  <{ id: string }>_,
+);
 
 /** Takes a prepared room request back (Play did not start the game). */
 export const ipc_cancelRoomLaunch = makeEndpoint.main("cancelRoomLaunch", <{ id: string }>_, <SuccessPayload>_);

@@ -37,7 +37,9 @@ namespace PPOM {
     // lock-in's team in LOCAL.
     // 5: rooms (docs/rooms-game-interface.md): CMD_ROOM, LOCAL screen/roomJoin/room, the room view
     // in SESSION's spare bytes. No size or offset of v4 changed.
-    const u16 VERSION = 5;
+    // 6: the match's rules (docs/design/room-rules.md section 3): SESSION grows to 0x280 with Rules
+    // at +0x220 and the room's ruleset and set (RoomPlay) at +0x240. No other size or offset changed.
+    const u16 VERSION = 6;
 
     // Slippi command bytes (EXI_DeviceSlippi.h), kept for familiarity (design 5.3).
     enum Cmd {
@@ -53,6 +55,7 @@ namespace PPOM {
         CMD_GP_COMPLETE_STEP = 0xC0,
         CMD_GP_FETCH_STEP = 0xC1,
         CMD_ROOM = 0xD0,          // rooms: RoomRequest, answered with RoomStatus
+        CMD_RULESETS = 0xD1,      // v6: the Ruleset line's list, answered with RulesetList
     };
 
     // Online modes, Slippi order (Online.s: Ranked, Unranked, Direct, Teams).
@@ -171,6 +174,9 @@ namespace PPOM {
         ROOM_TEAMS = 5,     // host: arg = 1 Teams on / 0 off
         ROOM_PUBLIC = 6,    // host: arg = 1 public / 0 private
         ROOM_TEAM = 7,      // arg = this player's colour (TEAM_RED..TEAM_GREEN)
+        ROOM_RULES = 8,     // v6, host: RoomRulesRequest (the room's rules as the host edited them)
+        ROOM_SET = 9,       // v6, host: arg = 1 resume / 0 restart the room's paused set
+        ROOM_RULESET = 10,  // v6, host: code = a ruleset code (6 letters), empty: P+'s default
     };
 
     // CMD_ROOM request payload.
@@ -352,6 +358,67 @@ namespace PPOM {
 
     enum SessionState { SS_NONE = 0, SS_LOBBY = 1, SS_MATCH_READY = 2 };
 
+    // The match's rules (Dolphin, with the rest of SESSION: the server's get-ticket-resp `rules`,
+    // checked by Dolphin's Online/MatchRules). OnlineMenu::applyRules puts them into the match;
+    // without them (valid 0: an older server) it plays P+'s competitive set.
+    enum RuleStyle { STYLE_TIME = 0, STYLE_STOCK = 1, STYLE_COIN = 2 };   // gmSetRule::m_rule
+    struct Rules {
+        u8 valid;         // 1: the session's rules
+        u8 style;         // RuleStyle
+        u8 stocks;        // 1-99
+        u8 timeMinutes;   // MORE RULES' time limit, every style (stock: 0 none)
+        u8 damageRatio;   // times 10 (5-20)
+        u8 teamAttack;
+        u8 pause;         // 1 NORMAL, 0 HOLD (P+: START held 50 frames)
+        u8 itemFrequency; // 0 none .. 3 high
+        u8 itemSwitch[8]; // the ITEM SWITCH screen's switches (the menu record's +0x818)
+        u8 hazards;       // 1 on
+        u8 autoLCancel;   // MORE RULES' AUTO L-CANCEL (set rule +0xB)
+        u8 inputAssist;   // MORE RULES' INPUT ASSIST (set rule +0xC, P+'s 3-frame buffer)
+        u8 _reserved[13];
+    };                    // 0x20
+
+    // CMD_RULESETS response payload (v6): the player's recent and own published rulesets, for the
+    // room's Ruleset line (Dolphin asks mm again when its list is older than 5 s).
+    enum ListState { LIST_NONE = 0, LIST_LOADING = 1, LIST_READY = 2, LIST_FAILED = 3 };
+    struct RulesetListEntry {
+        char code[8];     // 6 letters, NUL padded
+        char name[24];    // printable ASCII, NUL ended
+    };
+    struct RulesetList {
+        u8 state;         // ListState
+        u8 count;
+        u16 serial;       // changes with every new list
+        RulesetListEntry entries[15];
+    };                    // 0x1E4
+
+    // CMD_ROOM payload for ROOM_RULES (v6): the room's rules as the host left P+'s rules menu,
+    // in SESSION's layout (`valid` 1). Dolphin checks every value and sends room-rules.
+    // On the room CSS (Dolphin, from room-state; docs/design/room-rules.md): what the room plays and
+    // its set, for the room CSS to show (the ruleset's name, the score) and the host's set controls.
+    enum StageChoice { CHOICE_LOSER_PICKS = 0, CHOICE_STRIKE = 1, CHOICE_RANDOM = 2 };
+    enum SetFlags { SET_PAUSED = 1, SET_CAN_RESUME = 2, SET_FINISHED = 4 };
+    struct RoomPlay {
+        u8 valid;         // 1: in a room
+        u8 bestOf;        // the ruleset's: 0 no set, 3 / 5 / 7
+        u8 stageChoice;   // StageChoice (no set)
+        u8 custom;        // 1: custom rules (edited by the host)
+        char code[8];     // the published ruleset's code (6 letters), NUL padded; "" none
+        char name[32];    // its name ("P+ default", "Custom", ...), printable ASCII, NUL ended
+        u8 setOn;         // 1: the room has a set (on, paused or finished)
+        u8 setGame;       // the set's game being played or next
+        u8 score[2];      // wins by side (side 0: the lower slot)
+        u8 sides[2];      // each side's in-game port
+        u8 setFlags;      // SetFlags
+        u8 _reserved[13];
+    };                    // 0x40
+
+    struct RoomRulesRequest {
+        u8 op;            // ROOM_RULES
+        u8 _pad[3];
+        Rules rules;
+    };                    // 0x24
+
     // Why the next game cannot be set up (Session.setupError; the CSS shows the text).
     enum SetupError {
         SE_NONE = 0,
@@ -395,7 +462,9 @@ namespace PPOM {
         u8 quitPorts;     // 0x21B
         u8 quitStays;     // 0x21C
         u8 _reserved[3];
-    };                    // 0x220
+        Rules rules;      // 0x220 (v6)
+        RoomPlay play;    // 0x240 (v6)
+    };                    // 0x280
 
     // The last MuMsg::printIndex calls (a ring). 16, not 32: the plugin's Syringe heap block has
     // no room for more (docs/game-code.md, heap budget).
@@ -435,6 +504,8 @@ namespace PPOM {
         CFG_TEST_DISCONNECT = 1 << 5, // tests: act as if disconnected in the next scMelee frame (cleared when seen)
         CFG_TEST_RULES = 1 << 6,  // tests: the online ruleset keeps the set rule's stocks and times
                                   // (short games; both machines must have written the same)
+        CFG_TEST_OPEN_RULES = 1 << 8,  // tests: open the room's rules menu on the room CSS, as
+                                       // the RULES button does (cleared when seen)
         CFG_TEST_GONE = 1 << 7,   // tests: Debug.testGone* set SESSION's gone flags, and the
                                   // in-match removal and elimination order also run in a local
                                   // Versus match (a sync test)

@@ -36,6 +36,9 @@ class Member:
     local: bool = False
 
 
+DIRECT_RULES = bytes([1, 1, 4, 8, 10, 1, 1, 0, 0, 6, 0, 0, 0, 0, 0, 0, 1, 0, 0]).ljust(ppom.RULES_SIZE, b"\0")
+
+
 @dataclass
 class Room:
     code: str = "KFQB"
@@ -46,6 +49,9 @@ class Room:
     open: list = field(default_factory=lambda: [True, True, False, False])
     members: list = field(default_factory=lambda: [None, None, None, None])
     game: int = 1
+    # SESSION Rules (ppom.h Rules, v6): Direct's ruleset (server config/rulesets.json, P+'s
+    # competitive defaults), as a room starts with; the host's ROOM_RULES replaces it.
+    rules: bytes = DIRECT_RULES
 
 
 class RoomSim:
@@ -183,6 +189,14 @@ class RoomSim:
                 self.set_error("Only the host can do that.")
         elif op == 7 and r and arg < 3:
             r.members[self.me()].team = arg
+        elif op == 8 and r:   # ROOM_RULES (v6): the payload's Rules from +4; every ready taken back
+            if host:
+                r.rules = bytes(p[4:4 + ppom.RULES_SIZE])
+                for m in r.members:
+                    if m:
+                        m.ready = False
+            else:
+                self.set_error("Only the host can do that.")
         self.respond_room(seq)
 
     def respond_room(self, seq: int) -> None:
@@ -216,6 +230,8 @@ class RoomSim:
         se[ppom.S_ROOM_STATUS] = r.status if r else 0
         se[ppom.S_ROOM_MODE] = self.mode() if r else 0
         se[6] = r.game if r else se[6]
+        if len(se) >= ppom.S_RULES + ppom.RULES_SIZE:   # v6: the room's rules on the room CSS
+            se[ppom.S_RULES:ppom.S_RULES + ppom.RULES_SIZE] = r.rules if (r and self.phase == 2) else bytes(ppom.RULES_SIZE)
         for i in range(4):
             o = 0x0C + 0x80 * i
             m = r.members[i] if r else None

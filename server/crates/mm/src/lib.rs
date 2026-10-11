@@ -20,6 +20,7 @@ pub mod config;
 pub mod engine;
 pub mod messages;
 pub mod region;
+pub mod room_set;
 pub mod rooms;
 pub mod ruleset;
 pub mod server;

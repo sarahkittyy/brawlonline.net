@@ -1,9 +1,11 @@
 //! Per-mode rules the server hands to clients.
 //!
 //! `stages` travels in the mm protocol as `get-ticket-resp.stages`, exactly where Slippi's server
-//! puts it (`SlippiMatchmaking.cpp:625-641`), and `items` as `items`. The rest (stocks, timer) is
-//! kept here so Ranked (a later phase) reads the same file. The user chose the P+ competitive
-//! ruleset: 4 stocks, 8 minutes, items off, P+'s legal stages.
+//! puts it (`SlippiMatchmaking.cpp:625-641`), `items` as `items`, and `rules` (the match rules
+//! every client applies: style, stocks, time, items, hazards, auto L-cancel...,
+//! `common::rules::MatchRules`) as `rules`. The user chose the P+ competitive ruleset: 4 stocks,
+//! 8 minutes, items off, P+'s legal stages; P+'s normal pause only in Direct (and rooms, which play
+//! Direct's rules), elsewhere P+'s hold-START pause, as the game always did.
 //!
 //! **Stage ids** are Brawl's `srStageKind` values, the ids the game's own match setup and P+'s
 //! stage file loader key on (`docs/game-code.md` section 11, "Stages"). The legal list in
@@ -26,6 +28,7 @@
 
 use std::collections::{HashMap, HashSet};
 
+use common::rules::MatchRules;
 use serde::{Deserialize, Serialize};
 
 /// `srStageKind` values fit in a byte; a larger id in the file is a typo.
@@ -40,13 +43,12 @@ pub struct ModeRules {
     /// counterpick list for the games after.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub starters: Vec<u16>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub stocks: Option<u8>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub time_minutes: Option<u8>,
-    /// Item bitfield sent as `items` (0 = items off).
+    /// Item bitfield sent as `items` (Slippi's field; 0 = items off).
     #[serde(default)]
     pub items: u32,
+    /// The match rules, sent as `rules`. Missing fields are P+'s competitive defaults.
+    #[serde(default)]
+    pub rules: MatchRules,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
@@ -81,6 +83,7 @@ impl Rulesets {
                 rules.starters.is_empty() || rules.starters.len() == 5,
                 "{name}: Ranked strikes 1-2-1, so it needs 5 starters"
             );
+            rules.rules.validate().map_err(|e| anyhow::anyhow!("{name}: {e}"))?;
         }
         Ok(r)
     }
@@ -101,6 +104,7 @@ impl Rulesets {
 mod tests {
     use super::*;
     use common::proto::Mode;
+    use common::rules::Pause;
 
     /// P+ v3.2's legal stages as srStageKind (docs/game-code.md section 11; Dolphin's
     /// `Gprb::Session::DefaultStages()` has the same list).
@@ -113,7 +117,10 @@ mod tests {
         for mode in [Mode::Direct, Mode::Unranked, Mode::Ranked] {
             let m = r.for_mode(mode);
             assert_eq!(m.stages, PPLUS_LEGAL, "{mode:?}");
-            assert_eq!((m.stocks, m.time_minutes, m.items), (Some(4), Some(8), 0), "{mode:?}");
+            assert_eq!(m.items, 0, "{mode:?}");
+            // P+'s competitive set; normal pause only in Direct, else hold START.
+            let pause = if mode == Mode::Direct { Pause::Normal } else { Pause::Hold };
+            assert_eq!(m.rules, MatchRules { pause, ..Default::default() }, "{mode:?}");
         }
         assert_eq!(r.for_mode(Mode::Party), ModeRules::default());
         assert_eq!(r.for_mode(Mode::Teams), ModeRules::default());
@@ -126,6 +133,8 @@ mod tests {
             r#"{"unranked": {"stages": [256]}}"#,
             r#"{"unrnaked": {"stages": [1]}}"#,
             r#"{"unranked": {"stages": "1,2"}}"#,
+            r#"{"unranked": {"rules": {"stocks": 0}}}"#,
+            r#"{"unranked": {"rules": {"stonks": 4}}}"#,
         ] {
             assert!(Rulesets::parse(bad).is_err(), "{bad}");
         }

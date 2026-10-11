@@ -16,6 +16,8 @@
 #include "online_menu.h"
 #include "ppom.h"
 #include "netmenu.h"
+#include "room_rules.h"
+#include "rules_button.h"
 
 extern "C" {
     extern u8 g_onlineCss;
@@ -81,6 +83,7 @@ namespace OnlineMenu {
         float windowY1, windowY2, windowLineSpace;
         // the player's own settings, put back when the online flow ends (saveRules)
         bool haveSavedRules;
+        bool roomStepSss;   // a room's set: on the stage select for GameSetup's steps
         u8 savedRule[0x88];
         u8 savedItemFrequency;
         u8 savedItemSwitch[8];
@@ -717,14 +720,21 @@ namespace OnlineMenu {
         s.haveSavedRules = false;
     }
 
-    // The online ruleset, the same on every machine whatever was set offline: the set rule's 16
-    // bytes P+'s code writes (P+'s competitive defaults above), pause only in Direct, item
-    // frequency 0 with P+'s default item switch, hazards on (also for Direct's loser's pick: its
-    // hazard toggle is not part of the setup the other machine gets), every Code Menu line at
-    // its default but its activation, which is OFF (codeMenuOff). Written when the Wi-Fi
-    // sequence starts (in place of Brawl's Wi-Fi rules) and again by every online match setup,
-    // right before sqVsMelee's setup reads them (OnlineMatch::setupMatch), so a setting changed
-    // in between (or left over from offline play) never reaches an online match.
+    // The online ruleset, the same on every machine whatever was set offline. With the session's
+    // rules (SESSION Rules, from the server through Dolphin; docs/design/room-rules.md section 3),
+    // the set rule as P+'s rules menu keeps it (docs/game-code.md section 14, Room rules RE):
+    // style (+2, low 3 bits), stocks (+4), damage ratio (+6), the time limit (+8, every style; the
+    // time / coin target +3 stays infinite), team attack (+9), pause (+0xA, 1 normal / 0 hold),
+    // auto L-cancel (+0xB) and input assist (+0xC); the item frequency and switches in the menu
+    // record, and the hazard switch. Without them (an older server), P+'s competitive set: the set rule's 16 bytes P+'s code writes, pause
+    // only in Direct, item frequency 0 with P+'s default item switch, hazards on. Either way hazards
+    // also hold for Direct's loser's pick (its hazard toggle is not part of the setup the other
+    // machine gets), and every other Code Menu line is at its default but its activation, which is
+    // OFF (codeMenuOff). Written when the Wi-Fi sequence starts (in place of Brawl's Wi-Fi rules) and
+    // again by every online match setup, right before sqVsMelee's setup reads them
+    // (OnlineMatch::setupMatch), so a setting changed in between (or left over from offline play)
+    // never reaches an online match. Dolphin compares the result on every machine before the match
+    // (GameplaySession SetupKey).
     void applyRules()
     {
         static const u8 PPLUS_RULE[16] = {0x00, 0x00, 0x01, 0x00, 0x04, 0x00, 0x0A, 0x00,
@@ -733,18 +743,33 @@ namespace OnlineMenu {
         u8* m = menuRecord();
         if (!r || !m) return;
         u8 time = r[3], stocks = r[4], stockTime = r[8];
+        const PPOM::Rules& ru = PPOM::g_block.session.rules;
         // (only the 16 bytes P+ writes: the set rule's size is not known, what follows may be other data)
         memcpy(r, PPLUS_RULE, sizeof(PPLUS_RULE));
+        u8* st = stageSelData();
+        if (ru.valid) {
+            r[2] = (u8)((r[2] & ~7) | (ru.style & 7));     // m_rule
+            r[4] = ru.stocks;
+            r[6] = ru.damageRatio;
+            r[8] = ru.timeMinutes;                         // time limit, every style (P+)
+            r[9] = ru.teamAttack ? 1 : 0;
+            r[0xA] = ru.pause ? 1 : 0;                     // 1 normal, 0 hold START
+            r[0xB] = ru.autoLCancel ? 1 : 0;
+            r[0xC] = ru.inputAssist ? 1 : 0;
+            m[0] = ru.itemFrequency;
+            memcpy(m + ITEM_SWITCH, ru.itemSwitch, sizeof(ru.itemSwitch));
+            if (st) st[HAZARD] = ru.hazards ? 0 : 1;
+        } else {
+            r[0xA] = (s.mode == PPOM::MODE_DIRECT) ? 1 : 0;   // m_allowPause
+            m[0] = 0;                                          // item frequency: none
+            memcpy(m + ITEM_SWITCH, PPLUS_ITEM_SWITCH, sizeof(PPLUS_ITEM_SWITCH));
+            if (st) st[HAZARD] = 0;                            // hazards on
+        }
         if (PPOM::g_block.debug.cfg & PPOM::CFG_TEST_RULES) {
             r[3] = time;            // tests: shorter games (harness ppom.test_rules)
             r[4] = stocks;
             r[8] = stockTime;
         }
-        r[0xA] = (s.mode == PPOM::MODE_DIRECT) ? 1 : 0;   // m_allowPause
-        m[0] = 0;                                          // item frequency: none
-        memcpy(m + ITEM_SWITCH, PPLUS_ITEM_SWITCH, sizeof(PPLUS_ITEM_SWITCH));
-        u8* st = stageSelData();
-        if (st) st[HAZARD] = 0;                            // hazards on
         int lines = codeMenuLines(1);                      // every Code Menu line at its default
         codeMenuOff();                                     // except its activation: OFF
         PPOM::g_block.debug.scratch[3] = ((u32)lines << 16) | ((PPOM::g_block.debug.scratch[3] + 1) & 0xFFFF);
@@ -869,8 +894,12 @@ namespace OnlineMenu {
     };
 
     static const float STATUS_X1 = -318.0f;     // the rule window's own: -208 .. 144
-    static const float ROOM_STATUS_X2 = 222.0f;   // in a room: up to the ITEM / STAGE buttons
-    static const int ROOM_STATUS_FIT = 530;
+    // In a room: up to the RULES button (rules_button.cpp, left of the ITEM / STAGE buttons; it was
+    // 222 / 530 before RULES). The fit decides where a line ends (the window does not cut it): a
+    // font unit is about 1.5 px at 2000 wide ("Waiting for players" 318 units), and the room's
+    // line has about 570 px from its start to RULES.
+    static const float ROOM_STATUS_X2 = 158.0f;
+    static const int ROOM_STATUS_FIT = 378;
     static const float STATUS_X2 = 330.0f;
     static const float WRAP_SCALE = 0.7f;
     static const float WRAP_LINE_SPACE = 22.0f; // two lines at 0.7 inside the bar
@@ -1247,11 +1276,13 @@ namespace OnlineMenu {
     {
         CodeEntry::install(api);
         OnlineMatch::install(api);
+        RoomRules::install(api);
         api->sySimpleHookRel(0x726C, reinterpret_cast<void*>(cssBPressed), 10 /* sora_menu_sel_char */);
         api->sySimpleHookRel(0x7280, reinterpret_cast<void*>(cssCostume), 10);
         api->sySimpleHookRel(0x75B4, reinterpret_cast<void*>(cssCoinAPress), 10);
         api->sySimpleHookRel(0x7CCC, reinterpret_cast<void*>(cssSwitchButtons), 10);
         api->sySimpleHookRel(0xDDB0, reinterpret_cast<void*>(cssReadyBanner), 10);
+        RulesButton::install(api);
     }
 
     void enter(int mode)
@@ -1507,11 +1538,20 @@ namespace OnlineMenu {
         }
     }
 
-    // Ranked, connected: Slippi's GP_FETCH_STEP every frame (one at a time), on the CSS and the
-    // stage select, so turns and strikes show at once.
+    // GameSetup's steps run (Dolphin answers GP_FETCH_STEP with an active step): Ranked connected,
+    // or a room's game session (a room's set, docs/design/room-rules.md section 5; a room game
+    // without a set answers an inactive step).
+    static bool stepSession()
+    {
+        if (s.mode == PPOM::MODE_RANKED) return s.phase == PH_CONNECTED;
+        return roomCss() && PPOM::g_block.local.state >= PPOM::LS_CONNECTED;
+    }
+
+    // Ranked, connected (or a room's set): Slippi's GP_FETCH_STEP every frame (one at a time), on
+    // the CSS and the stage select, so turns and strikes show at once.
     static void pollStep()
     {
-        if (s.mode != PPOM::MODE_RANKED || s.phase != PH_CONNECTED) {
+        if (!stepSession()) {
             s.step.active = 0;
             s.stepPending = false;
             return;
@@ -1522,12 +1562,15 @@ namespace OnlineMenu {
         s.stepFrames = 0;
     }
 
-    // Ranked: the last step (active or not: an inactive step means the stage is decided, or the
-    // connection is gone, so a ranked stage select leaves). NULL in every other mode.
+    // Ranked (or a room's set on the stage select for its steps): the last step (active or not:
+    // an inactive step means the stage is decided, or the connection is gone, so the stage select
+    // leaves). NULL in every other case (a room's loser's pick is the stage select's own).
     const PPOM::GameStep* rankedStep()
     {
-        return s.mode == PPOM::MODE_RANKED ? &s.step : NULL;
+        return s.mode == PPOM::MODE_RANKED || (roomCss() && s.roomStepSss) ? &s.step : NULL;
     }
+
+    bool stepsDecideStage() { return s.mode == PPOM::MODE_RANKED || (roomCss() && s.roomStepSss); }
 
     const char* rankedText() { return s.stepText; }
 
@@ -1565,7 +1608,7 @@ namespace OnlineMenu {
             s.stepPending = false;
             s.stepAnswered = r->seq;
             // Not connected (any more): no step, whatever the answer was.
-            if (s.phase != PH_CONNECTED) s.step.active = 0;
+            if (!stepSession()) s.step.active = 0;
             return;
         }
         if (r->cmd == PPOM::CMD_GET_ONLINE_STATUS) {
@@ -1759,6 +1802,11 @@ namespace OnlineMenu {
                     p.kind = RoomCss::PV_READY;
                     p.css = (u8)css;
                     p.costume = pl.roomCostume < 0x20 ? pl.roomCostume : 0;
+                } else if (bits & PPOM::SLOT_READY) {
+                    // Ready without a character shown: game 1 of a set is a blind pick (the
+                    // server keeps the character from the others, room-rules.md §2).
+                    p.kind = RoomCss::PV_READY;
+                    p.css = 0x28;
                 } else {
                     p.kind = RoomCss::PV_CHOOSING;
                 }
@@ -1802,6 +1850,16 @@ namespace OnlineMenu {
     static void updateRoomStatus()
     {
         const PPOM::Session& se = PPOM::g_block.session;
+        if (stepSession() && s.step.active && s.stepText[0] && !roomLockedForNext() && !s.roomError) {
+            setStatus(s.stepText, false);   // the set's step: whose turn, the seconds left
+            return;
+        }
+        bool rulesRed = false;
+        const char* rulesText = s.roomError ? NULL : RoomRules::statusText(&rulesRed);
+        if (rulesText && roomIn()) {
+            setStatus(rulesText, rulesRed);
+            return;
+        }
         if (roomIn() && se.roomStatus == 0 && roomPicksStage() && !roomLockedForNext() && lockChar() >= 0 &&
             !s.roomError && roomFull()) {
             setStatus("Press START to select stage", false);   // Direct's (rooms.md §3)
@@ -1935,6 +1993,34 @@ namespace OnlineMenu {
         bool host = in && me >= 0 && se.roomHost == me;
         bool waiting = in && se.roomStatus == 0;
         const u32 BTN_A = 0x100, BTN_L = 0x40, BTN_R = 0x20;
+        // P+'s rules menu over the CSS (room_rules.cpp): while it is open its pages take the
+        // buttons; the room's own (L/R, START, B, Z, the header buttons, the panels) wait.
+        bool rulesOpen = RoomRules::tick(in, host, waiting);
+        // RULES next to PUBLIC / FFA (rules_button.cpp); greyed while the menu would not open
+        // (a game starting, no room rules), and passed over by the hand under the open menu.
+        RulesButton::tick(in, waiting && se.rules.valid);
+        if (RoomRules::changedNow() && waiting && roomLockedForNext()) unlock();   // rules.md #5
+        if (rulesOpen) {
+            s_headerPress = 0;
+            s.roomZHeld = 0;
+            s.roomKickPort = -1;
+            return;
+        }
+        // Back on the CSS: no stage select for the steps any more.
+        s.roomStepSss = false;
+        // A room's set (Dolphin's GameSetup, as Ranked): the stage steps on the stage select, the
+        // characters on the CSS when the step allows (the winner first), START only then.
+        bool setStep = stepSession() && s.step.active;
+        if (setStep && stepFresh() && !g_onlineMatchGame) {
+            if (s.step.toSss) {
+                s.roomStepSss = true;
+                g_onlinePickStage = 1;
+                leaveCss(1);
+                return;
+            }
+            if (!roomLockedForNext() && s.step.mayLock && s.step.timeUp && lockChar() >= 0)
+                lockIn(roomGame(), 0xFFFF, 0);
+        }
         if (!in) {
             // Not in a room (Join Room, or after leaving one): START enters a room code.
             if ((pressed & BTN_START) && selectedChar() >= 0 && s.roomPhase != PPOM::RP_JOINING) {
@@ -1944,7 +2030,9 @@ namespace OnlineMenu {
             s.roomKickPort = -1;
         } else {
             if (pressed & BTN_START) {
-                if (!roomLockedForNext() && waiting && lockChar() >= 0) {
+                if (setStep) {
+                    if (!roomLockedForNext() && s.step.mayLock && lockChar() >= 0) lockIn(roomGame(), 0xFFFF, 0);
+                } else if (!roomLockedForNext() && waiting && lockChar() >= 0) {
                     lockIn(roomGame(), roomPicksStage() ? PPOM::STAGE_PENDING : 0xFFFF, 0);
                 }
             }
@@ -1974,6 +2062,7 @@ namespace OnlineMenu {
                 else if (host && hdr == 0x19) pressed |= BTN_L;         // as L
                 else playSE(SE_ERROR);
             }
+            if (RulesButton::pressed()) RoomRules::open();   // host edits, others view
             if ((pressed & BTN_L) && host) {
                 postRoom(PPOM::ROOM_PUBLIC, (se.roomFlags & PPOM::RF_PUBLIC) ? 0 : 1, 0, NULL);
                 playSE(1);
@@ -2278,6 +2367,8 @@ namespace OnlineMenu {
                 if (s.roomEntry == ROOM_ENTRY_CREATE && !s.roomError) return false;
                 return selectedChar() >= 0 && s.roomPhase != PPOM::RP_JOINING;
             }
+            if (stepSession() && s.step.active)
+                return s.step.mayLock && !roomLockedForNext() && lockChar() >= 0;
             return se.roomStatus == 0 && !roomLocked() && lockChar() >= 0;
         }
         if (s.phase == PH_IDLE) return selectedChar() >= 0;
@@ -2313,6 +2404,7 @@ namespace OnlineMenu {
             // second game (found with test_direct_set_under_the_gameplay_session).
             if (strcmp(scene, "scSelctCharacter") != 0) {
                 RoomCss::reset();
+                RoomRules::reset();
                 s.cssMsg = NULL;
                 s.haveWindow = false;
                 s.ownShown = false;
@@ -2362,7 +2454,7 @@ namespace OnlineMenu {
             // taken out, so it never has Z.
             OnlineMatch::noteSssButtons(padButtons(0x0), padButtons(0xC));
             u32 mask = BTN_Z;
-            if (s.mode == PPOM::MODE_RANKED && g_onlinePickStage) mask |= BTN_START | BTN_B;
+            if ((s.mode == PPOM::MODE_RANKED || s.roomStepSss) && g_onlinePickStage) mask |= BTN_START | BTN_B;
             if (roomCss() && g_onlinePickStage) mask |= BTN_B;
             maskButtons(mask);
             blockCodeMenu();

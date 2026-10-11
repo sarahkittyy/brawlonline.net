@@ -1,0 +1,44 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; connect-src 'self'; base-uri 'none'; form-action 'none'">
+<meta name="referrer" content="no-referrer">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#08080b">
+<title>Ruleset · Brawl Online</title>
+<meta name="description" content="A Brawl Online ruleset: open it in the launcher to create a room with these rules.">
+<link rel="icon" href="/favicon.ico" sizes="16x16 32x32 48x48">
+<link rel="icon" href="/assets/icon-512.png" type="image/png" sizes="512x512">
+<link rel="preload" href="/assets/fonts/barlow-condensed-900-italic.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/r/ruleset.css">
+<script src="/r/ruleset.js" defer></script>
+<!--
+  A published ruleset: brawlonline.net/r/<code> (docs/rulesets-protocol.md §4). nginx serves this
+  file for every /r/<code>; the script reads the code from the address and the ruleset from the
+  accounts API (GET /v1/rulesets/<code>). Credits as on the landing page (LICENSES.txt).
+-->
+</head>
+<body>
+
+<header>
+  <a class="home" href="/" aria-label="Brawl Online home"><span class="w1">Brawl</span> <span class="w2">Online</span></a>
+</header>
+
+<main>
+  <!-- Filled by ruleset.js. Without JavaScript only this shows. -->
+  <section class="card" id="card" aria-live="polite">
+    <p class="status" id="status">Loading the ruleset...</p>
+    <noscript><p class="status">This page needs JavaScript to show the ruleset.</p></noscript>
+  </section>
+
+  <section class="card actions" id="actions" hidden>
+    <a class="create" id="create" href="#">Create room with this ruleset</a>
+    <p class="hint">Opens the Brawl Online launcher, which makes this your room ruleset and creates a room in your game.</p>
+    <p class="hint" id="no-launcher">Don't have the launcher? <a href="/">Download Brawl Online</a>.</p>
+  </section>
+</main>
+
+</body>
+</html>

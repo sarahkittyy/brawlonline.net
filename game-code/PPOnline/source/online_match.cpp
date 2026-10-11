@@ -409,8 +409,9 @@ namespace OnlineMatch {
         u8* mgr = sceneManager();
         int code = mgr ? *(int*)(mgr + 0x284) : 0;
         PPOM::g_block.debug.scratch[10] = (PPOM::g_block.debug.scratch[10] & ~0xFF) | 4 | (code << 8);
-        // Ranked: the steps decide the stage (GameSetup); the stage select's own pick is not kept.
-        if (OnlineMenu::currentMode() != PPOM::MODE_RANKED) {
+        // Ranked (and a room's set): the steps decide the stage (GameSetup); the stage select's own
+        // pick is not kept.
+        if (!OnlineMenu::stepsDecideStage()) {
             // The stage select keeps its choice where sqVsMelee's setup reads it (GameGlobal+0x14,
             // +0x22); the alternate-stage buttons are the ones held on the pick. Left with B: no
             // pick.

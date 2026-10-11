@@ -76,6 +76,34 @@ pub const TOO_MANY_REQUESTS: &str = "Too many requests. Wait a moment.";
 pub const NO_ROOMS_LEFT: &str = "No rooms free. Try later.";
 /// Rooms: a member left while the room's game was starting.
 pub const PLAYER_LEFT: &str = "A player left the room.";
+/// Slots, Teams or rules while a set is on.
+pub const SET_ON: &str = "Finish or restart the set first.";
+/// `room-set resume` before everyone of the set is back.
+pub const SET_NOT_RESUMABLE: &str = "The set can't go on yet.";
+/// `room-result` without a set game to report.
+pub const NO_SET_GAME: &str = "No set game to report.";
+/// The status line while a set waits for a player who left (a name too wide for the line:
+/// "a player").
+pub fn set_paused(name: &str) -> String {
+    let full = format!("Set paused: {name} left");
+    if full.chars().count() <= 36 && rough_width(&full) <= 640 {
+        full
+    } else {
+        "Set paused: a player left".into()
+    }
+}
+/// The status line when the set's players disagree about a game.
+pub const SET_RESULTS_DIFFER: &str = "Set paused: results differ";
+/// The status line once everyone is back: the host resumes or restarts.
+pub const SET_HOST_DECIDES: &str = "Host: resume or restart the set";
+/// The room's ruleset is for another number of players than its slots and teams.
+pub const RULESET_1V1: &str = "This ruleset is for 1v1.";
+pub const RULESET_2V2: &str = "This ruleset needs 2 teams of 2.";
+pub const RULESET_FFA: &str = "This ruleset is for 3-4 players.";
+/// `room-ruleset` / a create with a code: no published ruleset has it.
+pub const RULESET_NOT_FOUND: &str = "Ruleset not found.";
+/// The ruleset lookup failed (the database).
+pub const RULESETS_UNAVAILABLE: &str = "Rulesets unavailable. Try later.";
 /// The same account opened a newer online connection (another game).
 pub const SIGNED_IN_ELSEWHERE: &str = "Signed in from another game.";
 
@@ -218,6 +246,18 @@ mod tests {
             TOO_MANY_REQUESTS.to_string(),
             NO_ROOMS_LEFT.to_string(),
             PLAYER_LEFT.to_string(),
+            SET_ON.to_string(),
+            SET_NOT_RESUMABLE.to_string(),
+            NO_SET_GAME.to_string(),
+            set_paused(&"W".repeat(15)),
+            set_paused("player1"),
+            SET_RESULTS_DIFFER.to_string(),
+            SET_HOST_DECIDES.to_string(),
+            RULESET_1V1.to_string(),
+            RULESET_2V2.to_string(),
+            RULESET_FFA.to_string(),
+            RULESET_NOT_FOUND.to_string(),
+            RULESETS_UNAVAILABLE.to_string(),
             SIGNED_IN_ELSEWHERE.to_string(),
             CHAT_UPDATE.to_string(),
             CHAT_NOT_IN_GROUP.to_string(),

@@ -113,7 +113,7 @@ def _parse_block(c: HarnessClient, a: int):
     if hdr[:4] != MAGIC:
         return None
     ver, sz, mbo, mbs, so, ss, lo, ls, dbo, dbs = struct.unpack_from(">HHHHHHHHHH", hdr, 4)
-    if ver in (1, 2, 3, 4, 5) and 0x100 < sz < 0x4000 and mbo and dbo:
+    if ver in (1, 2, 3, 4, 5, 6) and 0x100 < sz < 0x4000 and mbo and dbo:
         return Block(a, ver, sz, a + mbo, mbs, a + dbo, dbs, a + so if ss else 0, ss,
                      a + lo if ls else 0, ls)
     return None
@@ -248,6 +248,7 @@ DEBUG_LOG = 16   # ppom.h DEBUG_LOG: entries in the Debug print ring
 DEBUG_FIELDS = ("frames", "printCount", "overrides", "lastError", "cfg", "menuState")
 
 CFG_TEST_RULES = 1 << 6   # ppom.h Cfg: the online ruleset keeps the set rule's stocks and times
+CFG_TEST_OPEN_RULES = 1 << 8   # ppom.h Cfg: open the room's rules menu, as the RULES button does
 
 
 def set_cfg_bits(c: HarnessClient, bits: int, on: bool = True) -> int:
@@ -332,7 +333,41 @@ def read_session(c: HarnessClient, b: Block) -> dict:
     if len(d) >= 0x220:
         se.update(gone=list(d[0x20C:0x210]), teams=d[0x210], setup_error=d[0x211],
                   out_count=d[0x212], quit_ports=d[S_QUIT_PORTS], quit_stays=d[S_QUIT_STAYS])
+    if len(d) >= S_RULES + RULES_SIZE:   # v6: the match's rules
+        se["rules"] = read_rules(d[S_RULES:S_RULES + RULES_SIZE])
+    if len(d) >= S_PLAY + 0x40:          # v6: the room's ruleset and set
+        se["play"] = read_play(d[S_PLAY:S_PLAY + 0x40])
     return se
+
+
+# ---- v6: the match's rules (ppom.h Rules, docs/design/room-rules.md section 3) ----
+S_RULES, RULES_SIZE = 0x220, 0x20
+S_PLAY = 0x240
+
+
+def read_play(p: bytes) -> dict | None:
+    """SESSION's RoomPlay (ppom.h): what the room plays and its set; None outside a room."""
+    if not p[0]:
+        return None
+    text = lambda b: b.split(b"\0")[0].decode("ascii", "replace")  # noqa: E731
+    out = {"best_of": p[1], "stage_choice": p[2], "custom": bool(p[3]), "code": text(p[4:0xC]),
+           "name": text(p[0xC:0x2C])}
+    if p[0x2C]:
+        out["set"] = {"game": p[0x2D], "score": [p[0x2E], p[0x2F]], "sides": [p[0x30], p[0x31]],
+                      "paused": bool(p[0x32] & 1), "can_resume": bool(p[0x32] & 2), "finished": bool(p[0x32] & 4)}
+    return out
+STYLES = {0: "time", 1: "stock", 2: "coin"}
+
+
+def read_rules(r: bytes) -> dict | None:
+    """SESSION's Rules in the server's field names (server/crates/common/src/rules.rs), or None
+    when Dolphin wrote none (`valid` 0: the game plays its built-in set)."""
+    if not r[0]:
+        return None
+    return {"style": STYLES.get(r[1], r[1]), "stocks": r[2], "timeMinutes": r[3],
+            "damageRatio": r[4] / 10, "teamAttack": bool(r[5]), "pause": "normal" if r[6] else "hold",
+            "itemFrequency": r[7], "itemSwitch": list(r[8:0x10]), "hazards": bool(r[0x10]),
+            "autoLCancel": bool(r[0x11]), "inputAssist": bool(r[0x12])}
 
 
 # ---- v4: 3-4 player matches (docs/nplayer/setup.md) ----
@@ -375,8 +410,9 @@ def write_session(c: HarnessClient, b: Block, *, game: int, stage: int, players:
 
 # ---- v5: rooms (docs/rooms-game-interface.md) ----
 CMD_ROOM = 0xD0
+CMD_RULESETS = 0xD1   # v6: the Ruleset line's list (RulesetList)
 ROOM_OPS = {"poll": 0, "create": 1, "join": 2, "leave": 3, "slot": 4, "teams": 5, "public": 6,
-            "team": 7}
+            "team": 7, "rules": 8, "set": 9, "ruleset": 10}
 L_SCREEN, L_ROOM_JOIN, L_ROOM = 0x36, 0x37, 0x38
 # The launcher's Direct invite (still v5): counter, the code's letters (4, NUL-padded), its number.
 L_DIRECT_JOIN, L_DIRECT_PREFIX, L_DIRECT_NUMBER = 0x39, 0x3A, 0x3E

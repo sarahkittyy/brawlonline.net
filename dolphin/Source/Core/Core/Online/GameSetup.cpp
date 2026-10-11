@@ -19,11 +19,9 @@ namespace
 {
 using Clock = std::chrono::steady_clock;
 constexpr u16 NO_STAGE = 0xFFFF;
-constexpr u8 NO_PORT = 0xFF;
-// A player's actions for one game: a best of three needs at most three; bound what a peer sends.
-constexpr size_t MAX_ACTIONS = 8;
-// Best of three.
-constexpr int WINS_NEEDED = 2;
+// A player's actions for one game (at most a striking pattern's: 8 steps of up to 8, or the bans
+// and the pick); bound what a peer sends.
+constexpr size_t MAX_ACTIONS = 64;
 // Slippi's GameSetup.h: a step's own time is over GRACE_SECONDS after its timer shows 0, and the
 // opponent's WAIT_TIMEOUT_SECONDS after that. Its character steps have 45 s.
 constexpr int GRACE_SECONDS = 3;
@@ -33,24 +31,16 @@ constexpr int CHAR_SECONDS = 45;
 constexpr int TIMER_WINNER_CHAR = 100;
 constexpr int TIMER_LOSER_CHAR = 101;
 
-struct Step
-{
-  int player;
-  StepType type;
-  int count;
-  int seconds;
-};
-
 // Lock order: never call into Gprb::Session while holding s_mutex (the session calls the stage
 // decider with its own lock held).
 std::mutex s_mutex;
 bool s_active = false;
 int s_local = 0;
-std::vector<u16> s_starters;
-std::vector<u16> s_counterpicks;
-std::array<int, 2> s_wins{};
-u8 s_last_winner = NO_PORT;
-std::array<u16, 2> s_last_win_stage{NO_STAGE, NO_STAGE};
+Format s_format;
+SetState s_set;
+// A room's set: the set's game of the session's game 1, and each side's in-game port.
+u32 s_first_game = 1;
+std::array<u8, 2> s_side_ports{0, 1};
 u32 s_act_game = 0;
 std::vector<u8> s_actions;  // this player's actions for s_act_game, in order
 u32 s_timer_game = 0;
@@ -137,72 +127,14 @@ std::vector<u8> ActionsFrom(const picojson::object& extra, u32 game)
   return out;
 }
 
-struct Eval
+// Under s_mutex. The steps of the session's `game` with both players' actions applied
+// (SetFormat.cpp): the set's game number decides striking and the first striker.
+Steps Evaluate(u32 game, const std::vector<u8>& mine, const std::vector<u8>& theirs)
 {
-  bool striking = true;
-  std::vector<Step> steps;
-  int step_idx = -1;  // the step waiting for selections; -1: the stage is decided
-  int left = 0;
-  std::vector<u8> remaining;
-  u16 stage = NO_STAGE;
-};
-
-// Under s_mutex. The steps of `game` with both players' actions applied.
-Eval Evaluate(u32 game, const std::vector<u8>& mine, const std::vector<u8>& theirs)
-{
-  Eval e;
-  e.striking = game <= 1 || s_last_winner > 1;
-  const std::vector<u16>& pool = e.striking ? s_starters : s_counterpicks;
-  int loser = 0;
-  if (!e.striking)
-  {
-    const int winner = s_last_winner;
-    loser = 1 - winner;
-    e.steps = {{winner, StepType::Strike, 2, 30}, {loser, StepType::Pick, 1, 30}};
-  }
-  else
-  {
-    e.steps = {{0, StepType::Strike, 1, 30}, {1, StepType::Strike, 2, 30}, {0, StepType::Strike, 1, 10}};
-  }
-  for (const u16 k : pool)
-  {
-    if (k == 0 || k > 0xFF)
-      continue;
-    // Dave's stupid rule: the loser cannot pick the stage they last won on.
-    if (!e.striking && s_wins[loser] > 0 && k == s_last_win_stage[loser])
-      continue;
-    e.remaining.push_back(static_cast<u8>(k));
-  }
   std::array<const std::vector<u8>*, 2> lists{};
   lists[s_local] = &mine;
   lists[1 - s_local] = &theirs;
-  std::array<size_t, 2> idx{};
-  for (size_t i = 0; i < e.steps.size(); ++i)
-  {
-    const Step& st = e.steps[i];
-    int need = st.count;
-    while (need > 0 && idx[st.player] < lists[st.player]->size())
-    {
-      const u8 k = (*lists[st.player])[idx[st.player]++];
-      const auto it = std::find(e.remaining.begin(), e.remaining.end(), k);
-      if (it == e.remaining.end())
-        continue;  // not selectable (a peer's bad action): ignored
-      if (st.type == StepType::Pick)
-        e.stage = k;
-      else
-        e.remaining.erase(it);
-      --need;
-    }
-    if (need > 0)
-    {
-      e.step_idx = static_cast<int>(i);
-      e.left = need;
-      return e;
-    }
-  }
-  if (e.striking && !e.remaining.empty())
-    e.stage = e.remaining.front();
-  return e;
+  return EvaluateSteps(s_format, s_set, s_first_game - 1 + game, lists);
 }
 
 picojson::object ExtraJson(u32 game, const std::vector<u8>& actions)
@@ -221,7 +153,7 @@ picojson::object ExtraJson(u32 game, const std::vector<u8>& actions)
 // Under s_mutex.
 bool SetOver()
 {
-  return s_wins[0] >= WINS_NEEDED || s_wins[1] >= WINS_NEEDED;
+  return GameSetup::SetOver(s_format, s_set);
 }
 
 // Under s_mutex: whole seconds since timer `step` of `game` started on this machine (it starts
@@ -278,7 +210,7 @@ Gprb::Session::StageDecision Decide(u32 game)
     return d;
   }
   const std::vector<u8> mine = s_act_game == game ? s_actions : std::vector<u8>{};
-  const Eval e = Evaluate(game, mine, ActionsFrom(extra, game));
+  const Steps e = Evaluate(game, mine, ActionsFrom(extra, game));
   if (e.step_idx >= 0 || e.stage == NO_STAGE)
   {
     d.wait = true;
@@ -297,29 +229,78 @@ const std::vector<u16>& DefaultStarters()
 
 void Begin(int local_port, std::vector<u16> starters, std::vector<u16> counterpicks)
 {
+  // Striking 1-2-1 leaves one of exactly five; a game 2+ needs a stage after the two bans and
+  // Dave's rule. Both machines get the same lists from the server, so both fall back alike.
+  if (!starters.empty() && (starters.size() != 5 || Usable(starters) != 5))
+  {
+    WARN_LOG_FMT(NETPLAY, "GameSetup: {} starters from the server; using P+'s five",
+                 starters.size());
+    starters.clear();
+  }
+  if (!counterpicks.empty() && Usable(counterpicks) < 4)
+  {
+    WARN_LOG_FMT(NETPLAY, "GameSetup: {} counterpick stages from the server; using P+'s list",
+                 counterpicks.size());
+    counterpicks.clear();
+  }
+  Begin(local_port, RankedFormat(starters.empty() ? DefaultStarters() : std::move(starters),
+                                 counterpicks.empty() ? Gprb::Session::DefaultStages() :
+                                                        std::move(counterpicks)));
+}
+
+void Begin(int local_side, const SetTicket& ticket)
+{
+  Begin(local_side, ticket.format);
+  std::lock_guard lk(s_mutex);
+  s_set = ticket.state;
+  s_first_game = ticket.first_game;
+  s_side_ports = ticket.side_ports;
+  NOTICE_LOG_FMT(NETPLAY, "GameSetup: from the set's game {} ({}-{}), sides on ports {} and {}",
+                 s_first_game, s_set.wins[0], s_set.wins[1], s_side_ports[0] + 1, s_side_ports[1] + 1);
+}
+
+u32 SetGameOf(u32 session_game)
+{
+  std::lock_guard lk(s_mutex);
+  return s_first_game - 1 + session_game;
+}
+
+std::optional<u8> SideOfPort(u8 port)
+{
+  std::lock_guard lk(s_mutex);
+  if (port == 0xFE)
+    return port;
+  for (u8 side = 0; side < 2; ++side)
+  {
+    if (s_side_ports[side] == port)
+      return side;
+  }
+  return std::nullopt;
+}
+
+bool SetDone()
+{
+  std::lock_guard lk(s_mutex);
+  return !s_active || SetOver();
+}
+
+void Begin(int local_port, Format format)
+{
+  if (const auto why = CheckFormat(format))
+  {
+    WARN_LOG_FMT(NETPLAY, "GameSetup: the set's format cannot be played ({}); Ranked's instead",
+                 *why);
+    format = RankedFormat(DefaultStarters(), Gprb::Session::DefaultStages());
+  }
+  const int best_of = format.best_of;
   {
     std::lock_guard lk(s_mutex);
     s_active = true;
     s_local = local_port == 1 ? 1 : 0;
-    // Striking 1-2-1 leaves one of exactly five; a game 2+ needs a stage after the two bans and
-    // Dave's rule. Both machines get the same lists from the server, so both fall back alike.
-    if (!starters.empty() && (starters.size() != 5 || Usable(starters) != 5))
-    {
-      WARN_LOG_FMT(NETPLAY, "GameSetup: {} starters from the server; using P+'s five",
-                   starters.size());
-      starters.clear();
-    }
-    if (!counterpicks.empty() && Usable(counterpicks) < 4)
-    {
-      WARN_LOG_FMT(NETPLAY, "GameSetup: {} counterpick stages from the server; using P+'s list",
-                   counterpicks.size());
-      counterpicks.clear();
-    }
-    s_starters = starters.empty() ? DefaultStarters() : std::move(starters);
-    s_counterpicks = counterpicks.empty() ? Gprb::Session::DefaultStages() : std::move(counterpicks);
-    s_wins = {};
-    s_last_winner = NO_PORT;
-    s_last_win_stage = {NO_STAGE, NO_STAGE};
+    s_format = std::move(format);
+    s_set = SetState{};
+    s_first_game = 1;
+    s_side_ports = {0, 1};
     s_act_game = 0;
     s_actions.clear();
     s_timer_step = -1;
@@ -328,7 +309,7 @@ void Begin(int local_port, std::vector<u16> starters, std::vector<u16> counterpi
   }
   Gprb::Session::SetLocalExtra({});
   Gprb::Session::SetStageDecider(Decide);
-  NOTICE_LOG_FMT(NETPLAY, "GameSetup: ranked set, player {}", local_port + 1);
+  NOTICE_LOG_FMT(NETPLAY, "GameSetup: set (best of {}), player {}", best_of, local_port + 1);
 }
 
 void End()
@@ -354,11 +335,14 @@ void OnGameResult(u8 winner, u16 stage)
   std::lock_guard lk(s_mutex);
   if (!s_active)
     return;
-  s_last_winner = winner;
+  // The winner's side (Ranked: ports 0 and 1 are the sides).
+  if (winner != 0xFE)
+    winner = winner == s_side_ports[0] ? 0 : winner == s_side_ports[1] ? 1 : 0xFF;
+  s_set.last_winner = winner;
   if (winner < 2)
   {
-    ++s_wins[winner];
-    s_last_win_stage[winner] = stage;
+    ++s_set.wins[winner];
+    s_set.last_win_stage[winner] = stage;
   }
 }
 
@@ -377,7 +361,7 @@ bool Act(u8 kind)
       s_act_game = game;
       s_actions.clear();
     }
-    const Eval e = Evaluate(game, s_actions, ActionsFrom(extra, game));
+    const Steps e = Evaluate(game, s_actions, ActionsFrom(extra, game));
     if (e.step_idx < 0 || e.steps[e.step_idx].player != s_local ||
         std::find(e.remaining.begin(), e.remaining.end(), kind) == e.remaining.end() ||
         s_actions.size() >= MAX_ACTIONS)
@@ -427,10 +411,10 @@ View Current()
       s_last_view = v;
       return v;
     }
-    Eval e = Evaluate(game, s_actions, ActionsFrom(extra, game));
+    Steps e = Evaluate(game, s_actions, ActionsFrom(extra, game));
     if (e.step_idx >= 0)
     {
-      const Step& st = e.steps[e.step_idx];
+      const StepInfo& st = e.steps[e.step_idx];
       const bool mine = st.player == s_local;
       if (mine && Elapsed(game, e.step_idx) >= st.seconds + GRACE_SECONDS &&
           !e.remaining.empty() && s_actions.size() < MAX_ACTIONS)
@@ -449,7 +433,7 @@ View Current()
     v.selectable = e.remaining;
     if (e.step_idx >= 0)
     {
-      const Step& st = e.steps[e.step_idx];
+      const StepInfo& st = e.steps[e.step_idx];
       const bool mine = st.player == s_local;
       v.type = st.type;
       v.my_turn = mine;
@@ -484,7 +468,7 @@ View Current()
       {
         // Slippi: the winner chooses a character first, then the loser, seeing it; 45 s each,
         // then the character on the CSS is taken.
-        const bool winner = s_last_winner == s_local;
+        const bool winner = s_set.last_winner == s_local;
         const bool local_locked = local_lock.ready && local_lock.game == game;
         const bool winner_locked = winner ? local_locked : lobby.remote_ready;
         const bool loser_locked = winner ? lobby.remote_ready : local_locked;
@@ -528,9 +512,10 @@ picojson::object Status()
   picojson::object o;
   o["active"] = picojson::value(s_active);
   o["local_port"] = picojson::value(static_cast<double>(s_local));
-  o["last_winner"] = picojson::value(static_cast<double>(s_last_winner));
-  o["wins"] = picojson::value(picojson::array{picojson::value(static_cast<double>(s_wins[0])),
-                                              picojson::value(static_cast<double>(s_wins[1]))});
+  o["last_winner"] = picojson::value(static_cast<double>(s_set.last_winner));
+  o["wins"] = picojson::value(picojson::array{picojson::value(static_cast<double>(s_set.wins[0])),
+                                              picojson::value(static_cast<double>(s_set.wins[1]))});
+  o["best_of"] = picojson::value(static_cast<double>(s_format.best_of));
   o["game"] = picojson::value(static_cast<double>(s_act_game));
   picojson::array a;
   for (const u8 k : s_actions)
@@ -539,7 +524,7 @@ picojson::object Status()
   o["auto_actions"] = picojson::value(static_cast<double>(s_auto_actions));
   o["opponent_stalled"] = picojson::value(s_opponent_stalled);
   picojson::array st;
-  for (const u16 k : s_starters)
+  for (const u16 k : s_format.starters)
     st.emplace_back(static_cast<double>(k));
   o["starters"] = picojson::value(st);
   picojson::object view;

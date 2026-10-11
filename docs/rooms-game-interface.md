@@ -81,6 +81,11 @@ enum RoomOp {
     ROOM_TEAMS = 5,    // host: arg = 1 Teams on, 0 off
     ROOM_PUBLIC = 6,   // host: arg = 1 public, 0 private
     ROOM_TEAM = 7,     // arg = this player's colour 0 red, 1 blue, 2 green
+    ROOM_RULES = 8,    // v6, host: RoomRulesRequest {op, pad[3], Rules} (SESSION's layout);
+                       // Dolphin checks every value (FromSessionBytes) and sends room-rules
+    ROOM_SET = 9,      // v6, host: arg = 1 resume / 0 restart the room's paused set (room-set)
+    ROOM_RULESET = 10, // v6, host: code = a ruleset code (6 letters) or empty for P+'s default
+                       // (room-ruleset)
 };
 
 struct RoomRequest {   // CMD_ROOM request payload
@@ -137,6 +142,12 @@ Dolphin also counts as busy whatever it knows itself (a search, a session, a roo
 
 **Slots, Teams, public.** Host only, between games (`roomStatus == 0`; public at any time). The server's answer shows in SESSION. The game may hide controls the player can't use; Dolphin and mm refuse them anyway.
 
+**What the room plays (v6).** SESSION `RoomPlay` (+0x240): the room's ruleset (`bestOf`, `stageChoice`, `custom`, `code`, `name`) and its set (`setOn`, `setGame`, `score` by side, `sides` as in-game ports, `setFlags` 1 paused / 2 can resume / 4 finished), from `room-state` while in a room. `CMD_RULESETS` (0xD1): the Ruleset line's list (ppom.h `RulesetList`: state, count, serial, 15 × {code, name}); Dolphin asks mm (`room-rulesets`) again when its list is older than 5 s and answers with what it has.
+
+**Rulesets and sets (v6).** The game's own Create Room (`ROOM_CREATE`) asks mm for the account's remembered ruleset (`room-create.remembered`); the launcher's create (`join-room.json` kind `create`) may carry `"ruleset": "<code>"`, which Dolphin passes on as `room-create.ruleset` (an invalid code: the request is ignored). A room playing a set runs its games in one session, GameSetup's steps on the room CSS (`docs/game-code.md` §14, Room sets); Dolphin reports each game as `room-result`.
+
+**Room rules (v6, `docs/design/room-rules.md`).** On the room CSS SESSION `Rules` (+0x220) holds the room's rules from `room-state` (in a room game, the game's ticket's). The game opens P+'s rules menu over the CSS with them (`room_rules.cpp`); the host's edits come back as `ROOM_RULES` when the menu closes. A change of SESSION's rules takes back the game's lock-in (the server took back everyone's ready).
+
 **Team colour.** `ROOM_TEAM`; shown in `roomTeam` once mm confirms. Dolphin passes the room's colour to the session with the lock-in, so the game does not need to write `lockTeam` (harmless if it does). "Pick different teams" comes as the status line.
 
 **Ready.** START on the CSS = `writeLockIn(true, css, kind, costume, stagePick, asl, Session.game, &pv, pad)`, as Direct. `stagePick` is `STAGE_PENDING` when SESSION says this port `picksStage`, else 0xFFFF. Dolphin sends `room-ready {ready, character: charKind, costume}` when the lock-in for `Session.game` changes. Unlocking (a lock-in with `ready` 0) takes it back. During the start (`roomStatus == 1`) the lock-in must not change (as Direct's "character locked while searching"); mm refuses it anyway ("The game is starting.").
@@ -156,6 +167,8 @@ Dolphin also counts as busy whatever it knows itself (a search, a session, a roo
 Then the status line reads "Select character vs SARA#123" / "Press START to play SARA#123", and START (with a character picked) is `FIND_OPPONENT` mode 2 with that code, no keypad. The code is used once: after that search (cancelled with Z/B, failed, or the set over) and after leaving the CSS, START opens the keypad as usual. DEBUG `scratch[9]` bits 24-31 count the invites the game took (tests).
 
 **Launcher create.** A `join-room.json` of kind `create`, same rules (busy: refused; booting: accepted and held). Accepted: Dolphin sends `room-leave` if the player is in a room, then `room-create` (public), and bumps `roomCreate`; a refusal from mm answers the request `failed` and shows red on the line as any create error. The game (`launcherCreate`), remembering the last `roomCreate` it acted on: from a menu page it can jump from, the menus' decision 0x1E and the room CSS entered as Create Room's (`ROOM_ENTRY_CREATE` with its create marked sent; back to WITH FRIENDS on Create Room); from an idle online CSS of another mode, that CSS built again as the room's; on a room's CSS, it stays (the panels follow the new room; a ready from the old room is taken back). With the keypad open it waits for it to close; on a searching or connected online CSS it is dropped. DEBUG `scratch[9]` bits 8-15 count the creates taken (tests).
+
+**The create's ruleset** (room-rules phase 3a, `docs/rulesets-protocol.md` §4). The launcher's create can carry `"ruleset": "<code>"`: `{version: 1, id, kind: "create", ruleset?, createdAt}`, the 6-letter code in Home's ruleset box (from Create room, or from a `brawlonline://room/create?ruleset=<code>` link, which also makes it the account's remembered ruleset first). The launcher writes it uppercase and checks it (`/^[BCDFGHJKLMNPQRSTVWXZ]{6}$/`); absent means P+ default (the box was empty). Dolphin passes it on as `room-create.ruleset`; mm looks the code up (`common::db::fetch_ruleset`) and the room starts with that ruleset's rules and set. Reading it in Dolphin and mm is the room-rules session's part.
 
 **Not logged in / no server.** The line says so in red ("Log in in the launcher.", "Can't reach the server.", or mm's own `hello` refusal such as "Close Dolphin and update to 0.2.1"); Dolphin keeps retrying the online connection with backoff and sends a pending create/join once it is up.
 

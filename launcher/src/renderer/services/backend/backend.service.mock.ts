@@ -1,4 +1,5 @@
 import { Preconditions } from "@common/preconditions";
+import { defaultRuleset, normalizeRuleset, parseRulesetCode, rulesetProblem } from "@common/rulesets";
 import type { PlayKey } from "@dolphin/types";
 
 import type { AuthService } from "../auth/types";
@@ -10,8 +11,14 @@ import type {
   MatchHistoryFilter,
   MatchHistoryItem,
   MatchHistoryPage,
+  MyRulesets,
+  PublishRulesetRequest,
   RankedProfile,
+  RecentRuleset,
   RoomList,
+  RulesetDraft,
+  RulesetDraftRequest,
+  RulesetView,
   UserData,
 } from "./types";
 
@@ -224,8 +231,33 @@ function mockPage<T>(rows: T[], cursor: string | undefined, size: number): { row
   return { rows: rows.slice(start, end), next: end < rows.length ? String(end) : null };
 }
 
+/** A published ruleset of someone else's, so a code works in the mock (`KFQBTR`). */
+function mockWeekly(): RulesetView {
+  return {
+    code: "KFQBTR",
+    ruleset: {
+      ...defaultRuleset(),
+      name: "NorCal Weekly",
+      version: 3,
+      by: "sarah",
+      bestOf: 3,
+      strikes: [1, 2, 1],
+      bans: 2,
+      dsr: true,
+    },
+    hash: "0".repeat(64),
+    createdAt: "2026-10-11T12:00:00.000Z",
+    newer: null,
+    link: "https://brawlonline.net/r/KFQBTR",
+  };
+}
+
 class MockBackendClient implements BackendService {
   private fakeUsers: Map<string, SavedUserData> = new Map();
+  private rulesets: RulesetView[] = [mockWeekly()];
+  private drafts: RulesetDraft[] = [];
+  private recent: string[] = [];
+  private remembered: string | null = null;
 
   constructor(private authService: AuthService) {
     this.addFakeUser(fakeUserId);
@@ -302,6 +334,113 @@ class MockBackendClient implements BackendService {
   @delayAndMaybeError(SHOULD_ERROR)
   async fetchRooms(): Promise<RoomList> {
     return mockRoomList();
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async fetchRuleset(code: string): Promise<RulesetView> {
+    const found = this.rulesets.find((r) => r.code === parseRulesetCode(code));
+    if (!found) {
+      throw new Error("No ruleset has this code");
+    }
+    return this._withNewer(found);
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async fetchMyRulesets(): Promise<MyRulesets> {
+    const published = this.rulesets.filter((r) => r.ruleset.by === "Mock User").map((r) => this._withNewer(r));
+    return { drafts: [...this.drafts], published: published.reverse() };
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async fetchRecentRulesets(): Promise<RecentRuleset[]> {
+    return this.recent.map((code) => ({ ...this._withNewer(this.rulesets.find((r) => r.code === code)!), usedAt: "" }));
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async publishRuleset(req: PublishRulesetRequest): Promise<RulesetView> {
+    const draft = "draftId" in req ? this.drafts.find((d) => d.id === req.draftId) : undefined;
+    const source = "draftId" in req ? draft?.ruleset : req.ruleset;
+    const basedOn = "draftId" in req ? draft?.basedOn : req.basedOn;
+    if (!source) {
+      throw new Error("Not found");
+    }
+    const problem = rulesetProblem(source);
+    if (problem) {
+      throw new Error(problem);
+    }
+    const base = this.rulesets.find((r) => r.code === basedOn && r.ruleset.by === "Mock User");
+    const version = base
+      ? Math.max(...this.rulesets.filter((r) => r.ruleset.name === base.ruleset.name).map((r) => r.ruleset.version)) + 1
+      : 1;
+    const code = Array.from({ length: 6 }, () => "BCDFGHJKLMNPQRSTVWXZ"[Math.floor(Math.random() * 20)]).join("");
+    const view: RulesetView = {
+      code,
+      ruleset: { ...normalizeRuleset(source), version, by: "Mock User" },
+      hash: "0".repeat(64),
+      createdAt: new Date().toISOString(),
+      newer: null,
+      link: `https://brawlonline.net/r/${code}`,
+      hidden: false,
+    };
+    this.rulesets.push(view);
+    this.drafts = this.drafts.filter((d) => d !== draft);
+    return view;
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async setRulesetHidden(code: string, hidden: boolean): Promise<void> {
+    this.rulesets = this.rulesets.map((r) => (r.code === code ? { ...r, hidden } : r));
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async saveRulesetDraft(req: RulesetDraftRequest, id?: string): Promise<RulesetDraft> {
+    const now = new Date().toISOString();
+    const old = this.drafts.find((d) => d.id === id);
+    const draft: RulesetDraft = {
+      id: old?.id ?? `draft-${Date.now()}`,
+      basedOn: req.basedOn ?? null,
+      ruleset: { ...req.ruleset, version: 0, by: "" },
+      problem: rulesetProblem(req.ruleset),
+      createdAt: old?.createdAt ?? now,
+      updatedAt: now,
+    };
+    this.drafts = [draft, ...this.drafts.filter((d) => d.id !== draft.id)];
+    return draft;
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async deleteRulesetDraft(id: string): Promise<void> {
+    this.drafts = this.drafts.filter((d) => d.id !== id);
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async fetchRememberedRuleset(): Promise<RulesetView | null> {
+    return this.remembered ? this.fetchRuleset(this.remembered) : null;
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async setRememberedRuleset(code: string | null): Promise<RulesetView | null> {
+    if (code === null) {
+      this.remembered = null;
+      return null;
+    }
+    const view = await this.fetchRuleset(code);
+    this.remembered = view.code;
+    this.recent = [view.code, ...this.recent.filter((c) => c !== view.code)].slice(0, 10);
+    return view;
+  }
+
+  private _withNewer(r: RulesetView): RulesetView {
+    const newer = this.rulesets
+      .filter(
+        (o) =>
+          o.ruleset.name === r.ruleset.name &&
+          o.ruleset.by === r.ruleset.by &&
+          o.ruleset.version > r.ruleset.version &&
+          !o.hidden,
+      )
+      .sort((a, b) => b.ruleset.version - a.ruleset.version)[0];
+    return { ...r, newer: newer ? { code: newer.code, version: newer.ruleset.version } : null };
   }
 
   @delayAndMaybeError(SHOULD_ERROR)

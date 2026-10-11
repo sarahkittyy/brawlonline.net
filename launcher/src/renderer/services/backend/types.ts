@@ -1,4 +1,15 @@
-import type { LeaderboardPage, MatchHistoryFilter, MatchHistoryPage, RoomList } from "@accounts/types";
+import type {
+  LeaderboardPage,
+  MatchHistoryFilter,
+  MatchHistoryPage,
+  MyRulesets,
+  PublishRulesetRequest,
+  RecentRuleset,
+  RoomList,
+  RulesetDraft,
+  RulesetDraftRequest,
+  RulesetView,
+} from "@accounts/types";
 import type { PlayKey } from "@dolphin/types";
 
 export type {
@@ -8,9 +19,16 @@ export type {
   MatchHistoryItem,
   MatchHistoryPage,
   MatchHistoryPlayer,
+  MyRulesets,
   PublicRoom,
+  PublishRulesetRequest,
+  RecentRuleset,
   RoomList,
   RoomMode,
+  Ruleset,
+  RulesetDraft,
+  RulesetDraftRequest,
+  RulesetView,
 } from "@accounts/types";
 
 /** The ranked rating: an Elo number on Slippi's scale (server/crates/common/src/ranked.rs). No tiers. */
@@ -39,6 +57,20 @@ export interface BackendService {
   fetchMatchHistory(mode: MatchHistoryFilter, before?: string): Promise<MatchHistoryPage>;
   /** Players online and the public rooms (Home > Overview); needs a login. */
   fetchRooms(): Promise<RoomList>;
+  /** A published ruleset by code (anyone's; docs/rulesets-protocol.md). */
+  fetchRuleset(code: string): Promise<RulesetView>;
+  /** The logged-in account's drafts and published rulesets. */
+  fetchMyRulesets(): Promise<MyRulesets>;
+  /** The rulesets the account used lately, newest first. */
+  fetchRecentRulesets(): Promise<RecentRuleset[]>;
+  publishRuleset(req: PublishRulesetRequest): Promise<RulesetView>;
+  setRulesetHidden(code: string, hidden: boolean): Promise<void>;
+  /** Saves a draft: a new one without `id`, else replaces it. */
+  saveRulesetDraft(req: RulesetDraftRequest, id?: string): Promise<RulesetDraft>;
+  deleteRulesetDraft(id: string): Promise<void>;
+  /** The remembered ruleset (Home's ruleset box and in-game Create Room); null: P+ default. */
+  fetchRememberedRuleset(): Promise<RulesetView | null>;
+  setRememberedRuleset(code: string | null): Promise<RulesetView | null>;
   assertPlayKey(playKey: PlayKey): Promise<void>;
   deletePlayKey(): Promise<void>;
   changeDisplayName(name: string): Promise<void>;

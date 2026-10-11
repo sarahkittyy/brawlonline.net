@@ -589,6 +589,8 @@ add_library(core
   Online/GameSetup.h
   Online/Matchmaking.cpp
   Online/Matchmaking.h
+  Online/MatchRules.cpp
+  Online/MatchRules.h
   Online/NetPlaySession.cpp
   Online/NetPlaySession.h
   Online/OnlineClient.cpp
@@ -601,6 +603,8 @@ add_library(core
   Online/RecentCodes.h
   Online/RoomMessages.cpp
   Online/RoomMessages.h
+  Online/SetFormat.cpp
+  Online/SetFormat.h
   Online/Rooms.cpp
   Online/Rooms.h
   Online/Timeouts.h

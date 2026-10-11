@@ -218,3 +218,33 @@
     gap: 8px;
   }
 }
+
+.titleActions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.rulesetBox {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.rulesetName {
+  max-width: 260px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 13px;
+}
+
+.rulesetDefault {
+  color: var(--text-secondary);
+}
+
+.rulesetError {
+  color: #f28b82;
+}

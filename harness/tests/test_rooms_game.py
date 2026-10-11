@@ -803,8 +803,9 @@ def test_direct_invite_before_the_game_starts(backend: OnlineBackend, dolphin: C
     g.shot("01-direct-css-after-the-boot")
 
 
-def write_create(g: Game) -> str:
-    """The launcher's Create room (join-room.json kind "create", docs/rooms-protocol.md §5)."""
+def write_create(g: Game, ruleset: str | None = None) -> str:
+    """The launcher's Create room (join-room.json kind "create", docs/rooms-protocol.md §5), with
+    the launcher's ruleset box (`ruleset`, a code) when given."""
     import json
     import os
     import uuid
@@ -813,7 +814,10 @@ def write_create(g: Game) -> str:
     created = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
     d = Path(g.inst.user_dir) / "Online"
     tmp = d / "join-room.json.tmp"
-    tmp.write_text(json.dumps({"version": 1, "id": rid, "kind": "create", "createdAt": created}))
+    req = {"version": 1, "id": rid, "kind": "create", "createdAt": created}
+    if ruleset:
+        req["ruleset"] = ruleset
+    tmp.write_text(json.dumps(req))
     os.replace(tmp, d / "join-room.json")
     return rid
 

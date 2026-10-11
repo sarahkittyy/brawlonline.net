@@ -8,7 +8,13 @@ import type {
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
+  MyRulesets,
+  PublishRulesetRequest,
+  RecentRuleset,
   RoomList,
+  RulesetDraft,
+  RulesetDraftRequest,
+  RulesetView,
   SignUpRequest,
 } from "./types";
 
@@ -94,6 +100,52 @@ export class AccountsManager {
 
   rooms(uid: string): Promise<AccountsResult<RoomList>> {
     return this._withSession(uid, (token) => this.client.rooms(token));
+  }
+
+  ruleset(code: string): Promise<AccountsResult<RulesetView>> {
+    return wrap(() => this.client.ruleset(code));
+  }
+
+  myRulesets(uid: string): Promise<AccountsResult<MyRulesets>> {
+    return this._withSession(uid, (token) => this.client.myRulesets(token));
+  }
+
+  recentRulesets(uid: string): Promise<AccountsResult<RecentRuleset[]>> {
+    return this._withSession(uid, (token) => this.client.recentRulesets(token));
+  }
+
+  publishRuleset(uid: string, req: PublishRulesetRequest): Promise<AccountsResult<RulesetView>> {
+    return this._withSession(uid, (token) => this.client.publishRuleset(token, req));
+  }
+
+  setRulesetHidden(uid: string, code: string, hidden: boolean): Promise<AccountsResult<null>> {
+    return this._withSession(uid, async (token) => {
+      await this.client.setRulesetHidden(token, code, hidden);
+      return null;
+    });
+  }
+
+  createRulesetDraft(uid: string, req: RulesetDraftRequest): Promise<AccountsResult<RulesetDraft>> {
+    return this._withSession(uid, (token) => this.client.createRulesetDraft(token, req));
+  }
+
+  updateRulesetDraft(uid: string, id: string, req: RulesetDraftRequest): Promise<AccountsResult<RulesetDraft>> {
+    return this._withSession(uid, (token) => this.client.updateRulesetDraft(token, id, req));
+  }
+
+  deleteRulesetDraft(uid: string, id: string): Promise<AccountsResult<null>> {
+    return this._withSession(uid, async (token) => {
+      await this.client.deleteRulesetDraft(token, id);
+      return null;
+    });
+  }
+
+  rememberedRuleset(uid: string): Promise<AccountsResult<RulesetView | null>> {
+    return this._withSession(uid, (token) => this.client.rememberedRuleset(token));
+  }
+
+  setRememberedRuleset(uid: string, code: string | null): Promise<AccountsResult<RulesetView | null>> {
+    return this._withSession(uid, (token) => this.client.setRememberedRuleset(token, code));
   }
 
   /** The account's session token (for the social stream, which is not a JSON call). */

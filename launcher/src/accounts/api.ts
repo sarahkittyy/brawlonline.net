@@ -1,5 +1,7 @@
 /* eslint-disable import/no-default-export */
 import {
+  ipc_accountsCreateRulesetDraft,
+  ipc_accountsDeleteRulesetDraft,
   ipc_accountsHasSession,
   ipc_accountsInitNetplay,
   ipc_accountsLeaderboard,
@@ -7,13 +9,21 @@ import {
   ipc_accountsLogout,
   ipc_accountsMatchHistory,
   ipc_accountsMe,
+  ipc_accountsMyRulesets,
   ipc_accountsPublicUser,
+  ipc_accountsPublishRuleset,
+  ipc_accountsRecentRulesets,
+  ipc_accountsRememberedRuleset,
   ipc_accountsRename,
   ipc_accountsRequestPasswordReset,
   ipc_accountsResendVerification,
   ipc_accountsRooms,
+  ipc_accountsRuleset,
   ipc_accountsServiceUrls,
+  ipc_accountsSetRememberedRuleset,
+  ipc_accountsSetRulesetHidden,
   ipc_accountsSignUp,
+  ipc_accountsUpdateRulesetDraft,
 } from "./ipc";
 import type { AccountsApi, AccountsResult } from "./types";
 import { AccountsError } from "./types";
@@ -65,6 +75,36 @@ const accountsApi: AccountsApi = {
   },
   async rooms(uid) {
     return unwrap(await ipc_accountsRooms.renderer!.trigger({ uid }));
+  },
+  async ruleset(code) {
+    return unwrap(await ipc_accountsRuleset.renderer!.trigger({ code }));
+  },
+  async myRulesets(uid) {
+    return unwrap(await ipc_accountsMyRulesets.renderer!.trigger({ uid }));
+  },
+  async recentRulesets(uid) {
+    return unwrap(await ipc_accountsRecentRulesets.renderer!.trigger({ uid }));
+  },
+  async publishRuleset(uid, req) {
+    return unwrap(await ipc_accountsPublishRuleset.renderer!.trigger({ uid, req }));
+  },
+  async setRulesetHidden(uid, code, hidden) {
+    unwrap(await ipc_accountsSetRulesetHidden.renderer!.trigger({ uid, code, hidden }));
+  },
+  async createRulesetDraft(uid, req) {
+    return unwrap(await ipc_accountsCreateRulesetDraft.renderer!.trigger({ uid, req }));
+  },
+  async updateRulesetDraft(uid, id, req) {
+    return unwrap(await ipc_accountsUpdateRulesetDraft.renderer!.trigger({ uid, id, req }));
+  },
+  async deleteRulesetDraft(uid, id) {
+    unwrap(await ipc_accountsDeleteRulesetDraft.renderer!.trigger({ uid, id }));
+  },
+  async rememberedRuleset(uid) {
+    return unwrap(await ipc_accountsRememberedRuleset.renderer!.trigger({ uid }));
+  },
+  async setRememberedRuleset(uid, code) {
+    return unwrap(await ipc_accountsSetRememberedRuleset.renderer!.trigger({ uid, code }));
   },
   async getServiceUrls() {
     const { result } = await ipc_accountsServiceUrls.renderer!.trigger({});

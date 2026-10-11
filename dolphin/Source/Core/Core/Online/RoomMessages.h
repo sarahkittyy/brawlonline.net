@@ -11,10 +11,12 @@
 #include <array>
 #include <optional>
 #include <string>
+#include <vector>
 
 #include <picojson.h>
 
 #include "Common/CommonTypes.h"
+#include "Core/Online/MatchRules.h"
 
 namespace Online::Rooms
 {
@@ -34,6 +36,11 @@ constexpr size_t MAX_TEXT_BYTES = 200;
 // not 4 letters of the 20 (the server's rule: such a code is "Room not found.").
 std::optional<std::string> NormalizeRoomCode(const std::u16string& typed);
 std::optional<std::string> NormalizeRoomCode(const std::string& ascii);
+// A ruleset's code (docs/design/room-rules.md §2): 6 letters of the same 20, any case, ASCII or
+// full width -> "BCDFGH"; nullopt otherwise (the server's common::rules::parse_ruleset_code).
+constexpr size_t RULESET_CODE_LEN = 6;
+std::optional<std::string> NormalizeRulesetCode(const std::u16string& typed);
+std::optional<std::string> NormalizeRulesetCode(const std::string& ascii);
 
 // A connect code from outside (the launcher's Direct invite, join-room.json): the server's rule
 // (server/crates/common/src/codes.rs parse_connect_code): 2-4 ASCII letters, '#', 1-4 digits with a
@@ -78,6 +85,33 @@ struct Slot
   std::optional<Player> player;
 };
 
+// room-state's `ruleset`: what the room plays (docs/design/room-rules.md).
+struct RulesetView
+{
+  std::string code;      // a published ruleset's code, "" none
+  std::string name;      // "P+ default", "Custom", or the published name
+  u32 version = 0;
+  std::string based_on;  // custom rules made from a published one ("NorCal Weekly v3")
+  u8 best_of = 0;
+  // How the stage is chosen without a set: "loser-picks" (also with a set: its steps decide),
+  // "strike" (struck every game, GameSetup), "random" (a random stage every game).
+  std::string stage_choice = "loser-picks";
+  // Only "loser picks" without a set leaves a stage to a player (the last game's loser).
+  bool LoserPicks() const { return best_of == 0 && stage_choice == "loser-picks"; }
+};
+// room-state's `set`: the room's set (sides: side 0 the lower slot).
+struct SetView
+{
+  u8 best_of = 0;
+  u32 game = 1;
+  std::array<u8, 2> score{};
+  std::array<int, 2> sides{};  // slots 1-4
+  bool paused = false;
+  std::string waiting_for;
+  bool can_resume = false;
+  bool finished = false;
+};
+
 // `room-state`, validated.
 struct View
 {
@@ -90,7 +124,24 @@ struct View
   int host = 0;  // 1-4
   std::array<Slot, ROOM_SLOTS> slots{};  // by slot - 1 (= in-game port)
   std::string status_text;
+  // The room's match rules (docs/design/room-rules.md), checked as the ticket's are; nullopt when
+  // the server sent none or ones this client cannot use (`rules_error`: the text to show).
+  std::optional<MatchRules> rules;
+  std::string rules_error;
+  RulesetView ruleset;
+  std::optional<SetView> set;
 };
+
+// One ruleset of `ruleset-list` (the game's Ruleset line).
+struct RulesetEntry
+{
+  std::string code;  // 6 letters
+  std::string name;
+  u32 version = 0;
+  std::string by;
+  u8 best_of = 0;
+};
+constexpr size_t RULESET_LIST_MAX = 15;
 
 // One message from mm on the online connection.
 struct Message
@@ -106,6 +157,7 @@ struct Message
     RoomStart,
     Error,       // fatal: the server disconnects
     CreateTicketResp,  // a ticket answer on the online connection (refused; ignored)
+    RulesetList,       // the player's rulesets to offer (room-rulesets)
   };
   Kind kind = Kind::Unknown;
   std::string type;
@@ -118,6 +170,7 @@ struct Message
   std::string match_id;    // RoomStart
   int timeout_secs = 15;   // RoomStart
   std::optional<View> view;  // RoomState
+  std::vector<RulesetEntry> rulesets;  // RulesetList
 };
 
 // Parses one JSON packet (the raw bytes as received). Never throws.
@@ -140,9 +193,14 @@ enum class Op : u8
   Teams = 5,
   Public = 6,
   Team = 7,
+  Rules = 8,  // the host's rules (ppom.h RoomRulesRequest)
+  SetAction = 9,  // the host resumes (flag) or restarts the room's set
+  Ruleset = 10,   // the host plays a published ruleset (`ruleset`) or P+'s default (empty)
+  RulesetList = 11,  // the player's rulesets to offer (room-rulesets)
   // Dolphin's own (not game ops)
   Ready = 100,
   Back = 101,
+  Result = 102,  // a game of the room's set (room-result)
 };
 struct Request
 {
@@ -151,7 +209,13 @@ struct Request
   int slot = 0;        // Slot: 1-4
   u8 team = 0;         // Team
   std::string code;    // Join (normalised)
+  std::string ruleset;  // Create (the launcher's box), Ruleset: a ruleset code, "" none
+  bool remembered = false;  // Create: the game's own Create Room (the account's remembered ruleset)
   std::optional<u8> character, costume;  // Ready
+  std::optional<MatchRules> rules;        // Rules
+  u32 game = 0;                           // Result: the set's game
+  u8 winner_side = 0;                     // Result: 0 / 1, 0xFE a draw
+  u16 stage = 0;                          // Result
 };
 // The JSON for `r`, or nullopt for Poll and anything out of range.
 std::optional<std::string> RequestJson(const Request& r);

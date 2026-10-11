@@ -136,7 +136,7 @@ pub struct EngineConfig {
     pub ranked_band_step: f64,
     /// ... for every this long the longer-waiting player has waited.
     pub ranked_band_interval: Duration,
-    /// Rooms: timeouts and limits. Their stages and items are Direct's ruleset.
+    /// Rooms: timeouts and limits. Their stages, items and rules are Direct's ruleset.
     pub rooms: RoomsConfig,
     /// `hello`s per account (a game opens its online connection once per start or reconnect).
     pub hello_window: Window,
@@ -172,6 +172,20 @@ impl Default for EngineConfig {
     }
 }
 
+/// A room's ruleset lookup ([`Output::FetchRuleset`]): who asked, for which room, and what.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RulesetFetch {
+    pub conn: ConnId,
+    pub uid: Uuid,
+    pub room: String,
+    /// The code; `None`: the account's remembered ruleset.
+    pub code: Option<String>,
+    /// The room request it answers (`room-create`, `room-ruleset`), for its errors.
+    pub op: &'static str,
+    /// Make the code the account's remembered ruleset (a host's in-game choice).
+    pub remember: bool,
+}
+
 /// Result of the account lookup the engine asked for.
 #[derive(Debug, Clone)]
 pub enum FetchResult {
@@ -182,10 +196,29 @@ pub enum FetchResult {
 
 #[derive(Debug)]
 pub enum Input {
-    Connected { conn: ConnId, addr: SocketAddr },
-    Packet { conn: ConnId, data: Vec<u8> },
-    Disconnected { conn: ConnId },
-    UserFetched { conn: ConnId, seq: u64, result: FetchResult },
+    Connected {
+        conn: ConnId,
+        addr: SocketAddr,
+    },
+    Packet {
+        conn: ConnId,
+        data: Vec<u8>,
+    },
+    Disconnected {
+        conn: ConnId,
+    },
+    UserFetched {
+        conn: ConnId,
+        seq: u64,
+        result: FetchResult,
+    },
+    /// The answer to [`Output::FetchRuleset`].
+    RulesetFetched(RulesetFetch, Result<Option<(String, common::rules::Ruleset)>, String>),
+    /// The answer to [`Output::FetchRulesetList`].
+    RulesetListFetched {
+        conn: ConnId,
+        result: Result<Vec<common::rooms::RulesetEntry>, String>,
+    },
     Tick,
 }
 
@@ -224,6 +257,15 @@ pub enum Output {
         uid: Uuid,
     },
     RecordMatch(MatchRecord),
+    /// Look a ruleset up (a code, or the account's remembered one) for a room; comes back as
+    /// [`Input::RulesetFetched`].
+    FetchRuleset(RulesetFetch),
+    /// A player's rulesets to offer (recent, then their own published); comes back as
+    /// [`Input::RulesetListFetched`].
+    FetchRulesetList {
+        conn: ConnId,
+        uid: Uuid,
+    },
     /// An account's online connection carries this chat identity key (`chat_identity_keys`).
     RecordChatKey {
         uid: Uuid,
@@ -490,6 +532,26 @@ impl Engine {
             }
             Input::Packet { conn, data } => self.on_packet(now, conn, &data, &mut out),
             Input::UserFetched { conn, seq, result } => self.on_user(now, wall, conn, seq, result, &mut out),
+            Input::RulesetFetched(f, result) => self.rooms.ruleset_fetched(f, result, &mut out),
+            Input::RulesetListFetched { conn, result } => match result {
+                Ok(rulesets) => Self::send(
+                    &mut out,
+                    conn,
+                    &common::rooms::RulesetList { kind: common::rooms::RULESET_LIST.into(), rulesets },
+                ),
+                Err(e) => {
+                    tracing::warn!(conn, "ruleset list failed: {e}");
+                    Self::send(
+                        &mut out,
+                        conn,
+                        &RoomError {
+                            kind: common::rooms::ROOM_ERROR.into(),
+                            op: common::rooms::ROOM_RULESETS.into(),
+                            error: msg::RULESETS_UNAVAILABLE.into(),
+                        },
+                    );
+                }
+            },
             Input::Tick => self.on_tick(now, wall, &mut out),
         }
         self.sync_room_chat(&mut out);
@@ -1271,6 +1333,7 @@ impl Engine {
                 stages: Some(rules.stages.clone()),
                 starters: (mode == Mode::Ranked && !rules.starters.is_empty()).then(|| rules.starters.clone()),
                 items: Some(rules.items),
+                rules: Some(rules.rules.clone()),
                 ..Default::default()
             };
             Self::send(out, *conn, &resp);
@@ -1998,6 +2061,9 @@ mod tests {
             // The ruleset's stage list, as Slippi's server sends it for the mode.
             assert_eq!(g["stages"], json!([1, 2, 3, 4, 5, 6, 9, 12, 13, 28, 31, 33, 35, 45, 46]));
             assert_eq!(g["items"], 0);
+            // The mode's rules: P+'s competitive set, hold-START pause in Unranked.
+            let rules: common::rules::MatchRules = serde_json::from_value(g["rules"].clone()).unwrap();
+            assert_eq!(rules, common::rules::MatchRules { pause: common::rules::Pause::Hold, ..Default::default() });
             for p in g["players"].as_array().unwrap() {
                 assert_eq!(p["chatMessages"].as_array().unwrap().len(), 16);
                 assert!(p["ipAddress"].as_str().unwrap().starts_with("203.0.113."));
@@ -2534,6 +2600,8 @@ mod tests {
             assert_eq!(local["port"], port);
             assert_eq!(players[1]["ipAddress"], "203.0.113.12:41012");
             assert_eq!(resp["stages"].as_array().unwrap().len(), 15);
+            // Direct's rules (normal pause).
+            assert_eq!(resp["rules"], serde_json::to_value(common::rules::MatchRules::default()).unwrap());
             assert!(disconnected(&out, conn));
         }
         // Recorded for the match history, as mode 3 with the room.

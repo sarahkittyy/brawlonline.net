@@ -37,17 +37,10 @@
 #include <picojson.h>
 
 #include "Common/CommonTypes.h"
+#include "Core/Online/SetFormat.h"
 
 namespace Online::GameSetup
 {
-enum class StepType : u8
-{
-  None = 0,
-  Strike = 1,  // remove stages (striking, or the winner's ban)
-  Pick = 2,    // choose the stage (the loser's counterpick)
-  Char = 3,    // the characters (winner, then loser)
-  Done = 4,    // the stage is decided and nothing is left to do for it
-};
 
 // What the game shows and allows right now (GP_FETCH_STEP).
 struct View
@@ -70,6 +63,18 @@ struct View
 // Empty or unusable lists (not five starters, fewer than four counterpicks) fall back to P+'s
 // starters / the legal list.
 void Begin(int local_port, std::vector<u16> starters, std::vector<u16> counterpicks);
+// A set in another format (SetFormat.h: a room's set, a ruleset's). A format that cannot be played
+// (CheckFormat) is logged and Ranked's is used, the same on every machine.
+void Begin(int local_port, Format format);
+// A room's set (SetTicket: its format, the score so far, the set's game the session starts with,
+// and which in-game port each side is). `local_side` is this player's side.
+void Begin(int local_side, const SetTicket& ticket);
+// The set's game a session game is (a room's session starts at the set's game N).
+u32 SetGameOf(u32 session_game);
+// The side an in-game port plays (0xFE stays a draw); nullopt for no side.
+std::optional<u8> SideOfPort(u8 port);
+// The set is won (no more games), or there is no set.
+bool SetDone();
 void End();
 bool IsActive();
 // A game ended: the winner's in-game port (0xFE draw) and the stage it was played on.
