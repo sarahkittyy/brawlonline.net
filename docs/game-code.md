@@ -60,7 +60,7 @@ Upstream quirk: incremental builds fail with `*.d: missing separator`. Its rule 
 cd game-code && ./build.sh          # -> PPOnline/PPOnline.rel (loader + plugin, about 64 KB), then reltool check
 ```
 
-`build.sh` fails the build if any `bl` calls itself without a relocation. This happens when a function is in neither the DOL symbol maps nor our code: we link with `--unresolved-symbols=ignore-all`, so the linker leaves a `bl .`, and the game hangs the first time the call runs. It bit us once: Brawl's DOL has no `memcmp`. The check is `python tools/gamecode/reltool.py check X.rel`.
+`build.sh` fails the build on any use of a function (or variable) that is in neither the DOL symbol maps (`RSBE01.lst`, `EXTRA.lst`) nor our code. We link with `--unresolved-symbols=ignore-all`, and elf2rel only prints `Unresolved external symbol 'x'` and drops the relocation, so the field stays 0: a `-mlongcall` call (`lis r3,0; addi r3,r3,0; mtctr r3; bctrl`) jumps to address 0, a short one is a `bl .` that hangs, and a pointer is NULL. Brawl's DOL has no `memcmp`; it bit us twice. The check is `python tools/gamecode/reltool.py check X.rel --elf [loader=|main=]X.elf`: with the ELF it names each symbol elf2rel dropped and the function using it (`undefined symbol memcmp, used by msbinLineContains__6OnlineFPCviPCc (sec1+0x815e, sec1+0x8162)`); without one it still finds the unrelocated `bl .` and `lis rD,0` + `addi rD,rD,0` in `.text`, by offset. Until 2026-10-11 it only looked for `bl .`, so the room rules' long `memcmp` call passed, and the game crashed (SRR0 0xF8) as the room CSS loaded. Unit test: `harness/tests/test_reltool.py`.
 
 ---
 
