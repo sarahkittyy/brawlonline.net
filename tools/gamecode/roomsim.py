@@ -52,6 +52,18 @@ class Room:
     # SESSION Rules (ppom.h Rules, v6): Direct's ruleset (server config/rulesets.json, P+'s
     # competitive defaults), as a room starts with; the host's ROOM_RULES replaces it.
     rules: bytes = DIRECT_RULES
+    # SESSION RoomPlay (ppom.h, v6): the room's ruleset and its set, as Dolphin writes them from
+    # room-state.
+    ruleset_code: str = ""
+    ruleset_name: str = "P+ default"
+    custom: bool = False
+    best_of: int = 0
+    stage_choice: int = 0
+    set_on: bool = False
+    set_game: int = 1
+    score: list = field(default_factory=lambda: [0, 0])
+    sides: list = field(default_factory=lambda: [0, 1])
+    set_flags: int = 0        # 1 paused, 2 can resume, 4 finished
 
 
 class RoomSim:
@@ -66,6 +78,11 @@ class RoomSim:
         self.requests: list[tuple[int, int, bytes]] = []   # (seq, cmd, payload) seen
         self.room_join_counter = 0
         self.pending: list[tuple[int, int, bytes]] = []    # responses waiting for respSeen
+        # Rulesets (CMD_RULESETS, ROOM_RULESET): the player's list, as Dolphin answers it, and the
+        # codes mm knows: code -> (name, best of).
+        self.rulesets: list[tuple[str, str]] = []
+        self.rulesets_state = 2
+        self.ruleset_db: dict[str, tuple[str, int]] = {}
 
     # ---- the room model -------------------------------------------------------------------
     def me(self) -> int:
@@ -189,6 +206,28 @@ class RoomSim:
                 self.set_error("Only the host can do that.")
         elif op == 7 and r and arg < 3:
             r.members[self.me()].team = arg
+        elif op == 9 and r:   # ROOM_SET (v6): 1 resume / 0 restart the paused set
+            if not host:
+                self.set_error("Only the host can do that.")
+            elif arg == 1 and r.set_flags & 2:
+                r.set_flags = 0
+            elif arg == 0:
+                r.set_on, r.set_game, r.score, r.set_flags = False, 1, [0, 0], 0
+        elif op == 10 and r:   # ROOM_RULESET (v6): a ruleset code, "" = P+ default
+            if not host:
+                self.set_error("Only the host can do that.")
+            elif not code:
+                r.ruleset_code, r.ruleset_name, r.custom, r.best_of = "", "P+ default", False, 0
+            elif code in self.ruleset_db:
+                r.ruleset_code, (r.ruleset_name, r.best_of) = code, self.ruleset_db[code]
+                r.custom = False
+            else:
+                self.set_error("Ruleset not found.")
+            if host and (not code or code in self.ruleset_db):
+                r.set_on, r.set_game, r.score, r.set_flags = False, 1, [0, 0], 0
+                for m in r.members:
+                    if m:
+                        m.ready = False
         elif op == 8 and r:   # ROOM_RULES (v6): the payload's Rules from +4; every ready taken back
             if host:
                 r.rules = bytes(p[4:4 + ppom.RULES_SIZE])
@@ -230,6 +269,15 @@ class RoomSim:
         se[ppom.S_ROOM_STATUS] = r.status if r else 0
         se[ppom.S_ROOM_MODE] = self.mode() if r else 0
         se[6] = r.game if r else se[6]
+        if len(se) >= ppom.S_PLAY + 0x40:   # v6: RoomPlay, the room's ruleset and set
+            pl = bytearray(0x40)
+            if r and self.phase == 2:
+                pl[0:4] = bytes([1, r.best_of, r.stage_choice, 1 if r.custom else 0])
+                pl[4:0xC] = r.ruleset_code.encode("ascii")[:6].ljust(8, b"\0")
+                pl[0xC:0x2C] = r.ruleset_name.encode("ascii")[:31].ljust(32, b"\0")
+                pl[0x2C:0x33] = bytes([1 if r.set_on else 0, r.set_game, r.score[0], r.score[1],
+                                       r.sides[0], r.sides[1], r.set_flags])
+            se[ppom.S_PLAY:ppom.S_PLAY + 0x40] = pl
         if len(se) >= ppom.S_RULES + ppom.RULES_SIZE:   # v6: the room's rules on the room CSS
             se[ppom.S_RULES:ppom.S_RULES + ppom.RULES_SIZE] = r.rules if (r and self.phase == 2) else bytes(ppom.RULES_SIZE)
         for i in range(4):
@@ -278,12 +326,20 @@ class RoomSim:
                     self.handle_room(seq, pl)
                 elif cmd == 0xBA:
                     pass
+                elif cmd == ppom.CMD_RULESETS:   # v6: RulesetList
+                    body = bytearray(4 + 15 * 32)
+                    n = min(15, len(self.rulesets))
+                    struct.pack_into(">BBH", body, 0, self.rulesets_state, n, len(self.rulesets))
+                    for i, (rc, rn) in enumerate(self.rulesets[:n]):
+                        body[4 + 32 * i:4 + 32 * i + 8] = rc.encode("ascii")[:6].ljust(8, b"\0")
+                        body[4 + 32 * i + 8:4 + 32 * i + 32] = rn.encode("ascii")[:23].ljust(24, b"\0")
+                    self.pending.append((seq, cmd, bytes(body)))
                 else:
                     self.pending.append((seq, cmd, b""))
                 ppom.consume(self.c, self.b, seq)
             if self.pending and rc == rs:
                 seq, cmd, body = self.pending.pop(0)
-                status = 0xFF if (cmd not in (0xB9, ppom.CMD_ROOM)) else 0
+                status = 0xFF if (cmd not in (0xB9, ppom.CMD_ROOM, ppom.CMD_RULESETS)) else 0
                 ppom.write_response(self.c, self.b, seq, cmd, body, status)
             self.lock_in()
             view = (self.phase, repr(self.room), self.room_join_counter)

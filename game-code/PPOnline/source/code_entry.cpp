@@ -81,7 +81,8 @@ namespace CodeEntry {
     static char s_buf[64];              // the keypad's text (UTF-8 full-width, 8 x 3 bytes + NUL)
     static char s_out[64];              // what the game would copy to the name tag
     static bool s_active = false;
-    static bool s_room = false;         // room-code mode (Join Room)
+    static bool s_room = false;         // room-code mode (Join Room), or the ruleset mode below
+    static bool s_ruleset = false;      // the ruleset-code mode (the room's Ruleset line: 6 letters)
     static bool s_confirmed = false;
     static bool s_startPressed = false;   // START went down this frame (the game no longer sees it)
     static int s_port = 0;
@@ -115,6 +116,8 @@ namespace CodeEntry {
         NULL,                                             // .,/~   (disabled, unchanged)
     };
     const int ROOM_CODE_CHARS = 4;
+    const int RULESET_CODE_CHARS = 6;   // docs/design/room-rules.md §2: 6 of the room codes' letters
+    static int roomChars() { return s_ruleset ? RULESET_CODE_CHARS : ROOM_CODE_CHARS; }
 
     // helper+0x40 is the highlighted key: 0 delete, 1-11 character keys, 0xC page, 0xD OK.
     // Page index (+0x3C) 0 = letters, 1 = digits (our page list).
@@ -149,12 +152,12 @@ namespace CodeEntry {
     {
         if (key == KEY_ERASE) return true;
         if (s_room) {
-            if (key == KEY_OK) return c.len == ROOM_CODE_CHARS && !c.hash;
+            if (key == KEY_OK) return c.len == roomChars() && !c.hash;
             if (key == KEY_PAGE) return true;
             if (page == PAGE_ALPHA && (key < 2 || key > 9)) return false;   // '#', !?&%$, .,/~
             if (page == PAGE_DIGITS && (key < 1 || key > 11 || key == 10)) return false;   // -+x=
             if (page != PAGE_ALPHA && page != PAGE_DIGITS) return false;
-            return cycles || c.len < ROOM_CODE_CHARS;
+            return cycles || c.len < roomChars();
         }
         if (key == KEY_OK) return c.len > 0;
         if (key == KEY_PAGE || key < 1 || key > 11) return false;
@@ -264,6 +267,7 @@ namespace CodeEntry {
     static const u8 SUGGESTION_GREY[4] = {0x8E, 0x91, 0x96, 0xFF};
     static const char* const PLACEHOLDER = "PLYR#123";   // the empty field's placeholder
     static const char* const ROOM_PLACEHOLDER = "KFQB";   // room-code mode's
+    static const char* const RULESET_PLACEHOLDER = "NQRBTW";   // ruleset mode's
     // The placeholder: the suggestion's grey at half opacity (a hint, not something Z takes).
     static const u8 PLACEHOLDER_GREY[4] = {0x8E, 0x91, 0x96, 0x80};
 
@@ -382,7 +386,7 @@ namespace CodeEntry {
     {
         const char* tail = suggestionTail();
         // The empty field without a suggestion shows the placeholder, in the same grey.
-        if (!s_buf[0] && !*tail) tail = s_room ? ROOM_PLACEHOLDER : PLACEHOLDER;
+        if (!s_buf[0] && !*tail) tail = s_ruleset ? RULESET_PLACEHOLDER : s_room ? ROOM_PLACEHOLDER : PLACEHOLDER;
         char want[64];
         int n = 0;
         for (const char* p = s_buf; *p && n < 40; p++) want[n++] = *p;
@@ -400,7 +404,7 @@ namespace CodeEntry {
         if (*tail) {
             char fw[40];
             toFullWidth(tail, fw);
-            const u8* grey = (tail == PLACEHOLDER || tail == ROOM_PLACEHOLDER) ? PLACEHOLDER_GREY : SUGGESTION_GREY;
+            const u8* grey = (tail == PLACEHOLDER || tail == ROOM_PLACEHOLDER || tail == RULESET_PLACEHOLDER) ? PLACEHOLDER_GREY : SUGGESTION_GREY;
             s_msgColorTop(m, grey);
             s_msgColorBottom(m, grey);
             s_msgPrintf(m, "%s", fw);
@@ -675,9 +679,10 @@ namespace CodeEntry {
         showHashLabel(helper);
     }
 
-    void open(int port, bool room)
+    static void openMode(int port, bool room, bool ruleset)
     {
         s_room = room;
+        s_ruleset = ruleset;
         s_port = port;
         u8* area = cssArea(s_port);
         if (!area) return;
@@ -688,7 +693,7 @@ namespace CodeEntry {
         patchKeys(helper);
         patchLabels(helper);
         s_lastKey = -1;
-        ((KeypadOpenFn)(NAME_TEXT + 0x5A8))(helper, NULL, s_buf, s_room ? ROOM_CODE_CHARS : CODE_CHARS);
+        ((KeypadOpenFn)(NAME_TEXT + 0x5A8))(helper, NULL, s_buf, s_room ? roomChars() : CODE_CHARS);
         // The text field is sized for Brawl's 5-character names: let the font narrow to fit 8.
         MuMsg* msg = *(MuMsg**)(helper + 0x64);
         if (msg) msg->setFontWidthModeAuto(*(u32*)(helper + 0x70));
@@ -708,6 +713,14 @@ namespace CodeEntry {
         s_drawn[1] = 0;
         sugRequest(PPOM::SCROLL_RESET);
     }
+
+    void open(int port, bool room) { openMode(port, room, false); }
+
+    // The room's Ruleset line (room_play.cpp): a ruleset's code, the room-code mode with 6
+    // characters; OnlineMenu::codeEntered sends it as ROOM_RULESET (rulesetMode()).
+    void openRuleset(int port) { openMode(port, true, true); }
+
+    bool rulesetMode() { return s_ruleset; }
 
     static void finish()
     {

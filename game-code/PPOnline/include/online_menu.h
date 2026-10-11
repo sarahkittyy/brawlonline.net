@@ -89,6 +89,8 @@ namespace CodeEntry {
     // Open the connect-code entry (Direct, Teams). See code_entry.cpp.
     void install(CoreApi* api);
     void open(int port, bool room);   // room: Join Room's room-code mode
+    void openRuleset(int port);       // the room's Ruleset line: a 6-letter ruleset code
+    bool rulesetMode();               // the keypad open now (or last) is the ruleset mode
     void tick(bool startPressed);
     bool active();
     void onSuggestion(const PPOM::Response& r);   // a FETCH_CODE_SUGGESTION answer

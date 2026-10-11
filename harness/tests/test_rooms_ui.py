@@ -489,6 +489,189 @@ def test_rules_button_at_4_3(rules_game_4_3: Game) -> None:
     g.shot("4x3-hover")
 
 
+# ---- the room's ruleset and set (room_play.cpp; docs/game-code.md §14 "The Ruleset line and the set")
+PLAY_ART = ROOT / "run" / "artifacts" / "game-code" / "rooms" / "ruleset-set"
+RULESETS = [("NQRBTW", "NorCal Weekly v3"), ("KDFGHJ", "Big House Bo5")]
+RULESET_DB = {"NQRBTW": ("NorCal Weekly v3", 3), "KDFGHJ": ("Big House Bo5", 5), "BCDFGH": ("Typed Code", 3)}
+
+
+class RoomPlayView:
+    """g_roomPlay (room_play.cpp) and the room CSS's ruleset / set line (online_menu.cpp)."""
+
+    def __init__(self, g: Game):
+        self.g = g
+        self.addr = ppom_sym(g, "g_roomPlay")
+        self.line_addr = ppom_sym(g, "s_playPrinted")
+
+    def read(self) -> dict:
+        d = self.g.c.read_mem(self.addr, 0x64)
+        text = lambda b: b.split(b"\0")[0].decode("ascii", "replace")  # noqa: E731
+        return {"posts": struct.unpack_from(">I", d, 0)[0], "op": d[4], "arg": d[5], "browse": d[6],
+                "choice": d[7], "code": text(d[8:16]), "ruleset": text(d[20:60]), "set": text(d[60:100])}
+
+    def line(self) -> str:
+        return self.g.c.read_mem(self.line_addr, 128).split(b"\0")[0].decode("ascii", "replace")
+
+
+def open_rules_line(g: Game, line: int) -> None:
+    """The RULES button, then the cursor down to `line` of the RULES page."""
+    rb = RulesButton(g)
+    g.hand_to(*rb.centre(), tol=0.4)
+    g.tap("A")
+    g.wait(60)
+    assert menu_open(g)
+    for _ in range(line):
+        g.tap("DDOWN", 4)
+        g.wait(8)
+    g.wait(10)
+
+
+def close_rules(g: Game) -> None:
+    g.tap("B")
+    g.wait(40)
+    assert not menu_open(g)
+
+
+@pytest.fixture
+def play_game(dolphin_exe):
+    g = Game("ruleset-set", art=PLAY_ART)
+    yield g
+    g.close()
+
+
+def test_room_ruleset_and_set(play_game: Game) -> None:
+    g = play_game
+    g.c.game_bridge_config(enabled=False)
+    create_room(g)
+    sim = g.sim
+    sim.rulesets = list(RULESETS)
+    sim.ruleset_db = dict(RULESET_DB)
+    sim.add_player(1, "alice")
+    g.wait(40)
+    v = RoomPlayView(g)
+    g.hand_to(20.0, 12.0, tol=0.5)
+    g.wait(10)
+    assert v.line() == "Ruleset: P+ default   Loser picks the stage", v.line()
+    g.shot("01-room-css")
+
+    # RULESET (the STAGE CHOICE row) shows the room's; right: the list (CMD_RULESETS); A picks.
+    open_rules_line(g, 4)
+    st = v.read()
+    assert (st["ruleset"], st["set"], st["browse"]) == ("P+ default", "No set", 0xFF), st
+    assert any(cmd == ppom.CMD_RULESETS for _s, cmd, _p in sim.requests), "no CMD_RULESETS"
+    g.shot("02-ruleset-line")
+    g.tap("DRIGHT", 4)
+    g.wait(15)
+    assert v.read()["ruleset"] == "NorCal Weekly v3"
+    g.shot("03-browse")
+    g.tap("A", 4)
+    g.wait(40)
+    st = v.read()
+    assert not menu_open(g) and (st["op"], st["code"]) == (10, "NQRBTW"), st
+    assert sim.room.ruleset_name == "NorCal Weekly v3" and sim.room.best_of == 3
+    g.hand_to(20.0, 12.0, tol=0.5)
+    g.wait(10)
+    assert v.line() == "Ruleset: NorCal Weekly v3   Best of 3", v.line()
+    g.shot("04-picked")
+
+    # "Enter code" (the last entry, left twice from NorCal's): the keypad's 6-letter mode.
+    open_rules_line(g, 4)
+    g.tap("DLEFT", 4)
+    g.wait(10)
+    g.tap("DLEFT", 4)
+    g.wait(10)
+    assert v.read()["ruleset"] == "Enter code", v.read()
+    g.tap("A", 4)
+    g.wait(60)
+    assert not menu_open(g) and keypad_open(g)
+    g.shot("05-keypad")
+    keypad_type(g, "BCDFGH")
+    g.shot("06-code-typed")
+    g.tap("START")
+    g.wait(60)
+    assert not keypad_open(g)
+    assert ppom.from_u16s(sim.room_ops("ruleset")[-1][4:4 + 2 * ppom.CODE_LEN]) == "BCDFGH"
+    assert sim.room.ruleset_name == "Typed Code"
+    assert ppom.read_local(g.c, sim.b)["lock"]["ready"] == 0, "the keypad's START locked in"
+    # A code mm does not know: the room's error.
+    open_rules_line(g, 4)
+    g.tap("DLEFT", 4)
+    g.wait(10)
+    g.tap("A", 4)
+    g.wait(60)
+    keypad_type(g, "BBBBBB")
+    g.tap("START")
+    g.wait(60)
+    assert sim.error and sim.text == "Ruleset not found." and sim.room.ruleset_name == "Typed Code"
+    g.shot("07-ruleset-not-found")
+    sim.text, sim.error = "", 0
+
+    # A set: the score on the CSS (sides by slot), and the ruleset locked.
+    r = sim.room
+    r.set_on, r.set_game, r.score, r.sides = True, 2, [1, 0], [0, 1]
+    g.wait(30)
+    assert v.line() == "Ruleset: Typed Code   Bo3: Sarah 1 - 0 alice", v.line()
+    g.shot("08-set-score")
+    posts = v.read()["posts"]
+    open_rules_line(g, 4)
+    g.tap("DRIGHT", 4)
+    g.tap("A", 4)
+    g.wait(20)
+    assert v.read()["browse"] == 0xFF and v.read()["posts"] == posts and menu_open(g)
+    close_rules(g)
+
+    # Paused, nobody back: Restart only; back: Resume first; A sends ROOM_SET resume.
+    r.set_flags = 1
+    g.wait(30)
+    assert v.line().endswith("(paused)"), v.line()
+    open_rules_line(g, 2)
+    assert v.read()["set"] == "Restart"
+    g.tap("DRIGHT", 4)
+    g.wait(10)
+    assert v.read()["set"] == "Restart"
+    g.shot("09-paused-restart")
+    r.set_flags = 3
+    g.wait(20)
+    assert v.read()["set"] == "Resume 1-0", v.read()
+    g.shot("10-paused-resume")
+    g.tap("A", 4)
+    g.wait(40)
+    st = v.read()
+    assert not menu_open(g) and (st["op"], st["arg"]) == (9, 1) and r.set_flags == 0, st
+    # Restart: paused again, right to Restart, A.
+    r.set_flags = 3
+    g.wait(20)
+    open_rules_line(g, 2)
+    g.tap("DRIGHT", 4)
+    g.wait(10)
+    assert v.read()["set"] == "Restart"
+    g.tap("A", 4)
+    g.wait(40)
+    st = v.read()
+    assert (st["op"], st["arg"]) == (9, 0) and not r.set_on and r.score == [0, 0], st
+
+    # Not the host: both lines read-only.
+    r.set_on, r.score, r.set_flags = True, [0, 1], 3
+    r.host = 1
+    g.wait(30)
+    posts = v.read()["posts"]
+    open_rules_line(g, 2)
+    assert v.read()["set"] == "Paused 0-1"
+    g.tap("DRIGHT", 4)
+    g.tap("A", 4)
+    g.wait(20)
+    g.tap("DDOWN", 4)
+    g.tap("DDOWN", 4)
+    g.wait(10)
+    g.tap("DRIGHT", 4)
+    g.tap("A", 4)
+    g.wait(20)
+    st = v.read()
+    assert st["posts"] == posts and st["browse"] == 0xFF and menu_open(g), st
+    g.shot("11-viewer")
+    close_rules(g)
+
+
 # The keypad's letter keys by (row, column), as test_online_game.ALPHA_KEYS (room-code mode takes
 # every letter they show); (1, 0) is the symbols key.
 ROOM_KEYS = {(1, 1): "ABC", (1, 2): "DEF", (2, 0): "GHI", (2, 1): "JKL", (2, 2): "MNO", (3, 0): "PQRS",

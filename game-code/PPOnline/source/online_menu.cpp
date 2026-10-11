@@ -16,6 +16,7 @@
 #include "online_menu.h"
 #include "ppom.h"
 #include "netmenu.h"
+#include "room_play.h"
 #include "room_rules.h"
 #include "rules_button.h"
 
@@ -1396,6 +1397,15 @@ namespace OnlineMenu {
 
     void codeEntered(const char* code)
     {
+        if (roomCss() && CodeEntry::rulesetMode()) {
+            // The room's Ruleset line's "Enter code" (room_play.cpp): a 6-letter ruleset code; a
+            // bad one comes back as the room's error ("Ruleset not found.").
+            postRoom(PPOM::ROOM_RULESET, 0, 0, code);
+            s.roomError = false;
+            s.lastButtons = 0xFFFFFFFF;   // as a room code's START, below
+            s.startGuard = START_GUARD_FRAMES;
+            return;
+        }
         if (roomCss()) {
             // Join Room: the code typed on the keypad's room-code mode (4 of the 20 letters).
             postRoom(PPOM::ROOM_JOIN, 0, 0, code);
@@ -1645,6 +1655,10 @@ namespace OnlineMenu {
         }
         if (r->cmd == PPOM::CMD_ROOM) {
             onRoomStatus(*r);
+            return;
+        }
+        if (r->cmd == PPOM::CMD_RULESETS) {
+            RoomPlay::onRulesets(*r);
             return;
         }
         if (r->cmd == PPOM::CMD_GET_MATCH_STATE) {
@@ -1934,6 +1948,12 @@ namespace OnlineMenu {
     static const u32 ROOM_HOST_WINDOW = 2;
     static const float ROOM_HOST_X1 = -905.0f, ROOM_HOST_X2 = -690.0f;
     static const float ROOM_HOST_Y = 95.0f, ROOM_HOST_HALF = 40.0f, ROOM_HOST_SCALE = 0.72f;
+    // The room's ruleset and set (room_play.cpp cssLine), centred on the gap between the character
+    // grid and the panels: window 3 (unused by the CSS), attached as window 2.
+    static const u32 ROOM_PLAY_WINDOW = 3;
+    static const float ROOM_PLAY_X1 = -817.0f, ROOM_PLAY_X2 = 260.0f;
+    static const float ROOM_PLAY_Y = 348.0f, ROOM_PLAY_HALF = 20.0f, ROOM_PLAY_SCALE = 0.6f;
+    static char s_playPrinted[128];
 
     static void roomButtons(bool in, bool host)
     {
@@ -1947,7 +1967,7 @@ namespace OnlineMenu {
             u32 mdl = isPtr(obj) ? *(u32*)(obj + 0x10) : 0;
             u8* message = (u8*)m->m_message;
             u32 bufs = isPtr((u32)message) ? *(u32*)(message + 0x1D8) : 0;
-            if (!isPtr(mdl) || !isPtr(bufs) || *(u32*)((u8*)m + 0x10) <= ROOM_HOST_WINDOW) return;
+            if (!isPtr(mdl) || !isPtr(bufs) || *(u32*)((u8*)m + 0x10) <= ROOM_PLAY_WINDOW) return;
             float size = *(float*)(*(u32*)bufs + 0x28);
             typedef void (*AttachFn)(MuMsg*, u32, u32 scnMdl, u32 node, float size);
             ((AttachFn)0x800B8C90)(m, ROOM_HOST_WINDOW, mdl, 0, size);
@@ -1963,7 +1983,34 @@ namespace OnlineMenu {
             m->setAlignMode(ROOM_HOST_WINDOW, MuMsg::Align_Left);
             m->setFontColor(ROOM_HOST_WINDOW, 0xFF, 0xFF, 0xFF, 0xFF);
             s.roomBtnPrinted[0][0] = 1;   // not printed yet
+            ((AttachFn)0x800B8C90)(m, ROOM_PLAY_WINDOW, mdl, 0, size);
+            WindowSetting* wp = (WindowSetting*)(*(u32*)((u8*)m + 0xC) + 0x48 * ROOM_PLAY_WINDOW);
+            wp->x1 = ROOM_PLAY_X1;
+            wp->x2 = ROOM_PLAY_X2;
+            wp->y1 = mid + ROOM_PLAY_HALF + ROOM_PLAY_Y;
+            wp->y2 = mid - ROOM_PLAY_HALF + ROOM_PLAY_Y;
+            wp->scaleX = wp->scaleY = ROOM_PLAY_SCALE;
+            m->setAlignMode(ROOM_PLAY_WINDOW, MuMsg::Align_Center);
+            m->setFontColor(ROOM_PLAY_WINDOW, 0xFF, 0xFF, 0xFF, 0xFF);
+            s_playPrinted[0] = 1;
             s.roomBtnsShown = true;
+        }
+        // The ruleset and the set: the sides' players by their in-game ports (the room's slots).
+        char play[128];
+        play[0] = 0;
+        if (in) {
+            char side[2][RoomCss::NAME_CHARS + 1];
+            for (int i = 0; i < 2; i++) {
+                u8 port = se.play.sides[i];
+                side[i][0] = 0;
+                if (port < PPOM::SESSION_PLAYERS) u16Name(side[i], se.players[port].name);
+                if (!side[i][0]) strcpy(side[i], i ? "P2" : "P1");
+            }
+            RoomPlay::cssLine(play, sizeof(play), side[0], side[1]);
+        }
+        if (strcmp(play, s_playPrinted) != 0) {
+            m->printf(ROOM_PLAY_WINDOW, "%s", play);
+            strcpy(s_playPrinted, play);
         }
         char text[40];
         text[0] = 0;
@@ -1999,11 +2046,18 @@ namespace OnlineMenu {
         // RULES next to PUBLIC / FFA (rules_button.cpp); greyed while the menu would not open
         // (a game starting, no room rules), and passed over by the hand under the open menu.
         RulesButton::tick(in, waiting && se.rules.valid);
+        // The ruleset and the set on the RULES page's RULESET / SET lines (room_play.cpp).
+        RoomPlay::tick(in, host);
         if (RoomRules::changedNow() && waiting && roomLockedForNext()) unlock();   // rules.md #5
         if (rulesOpen) {
             s_headerPress = 0;
             s.roomZHeld = 0;
             s.roomKickPort = -1;
+            return;
+        }
+        // The RULESET line's "Enter code": the keypad's ruleset mode once the menu has closed.
+        if (RoomPlay::takeKeypadRequest() && in && host && waiting) {
+            CodeEntry::openRuleset(LOCAL_PORT);
             return;
         }
         // Back on the CSS: no stage select for the steps any more.
@@ -2405,6 +2459,7 @@ namespace OnlineMenu {
             if (strcmp(scene, "scSelctCharacter") != 0) {
                 RoomCss::reset();
                 RoomRules::reset();
+                RoomPlay::reset();
                 s.cssMsg = NULL;
                 s.haveWindow = false;
                 s.ownShown = false;
@@ -2597,6 +2652,8 @@ namespace Text {
     {
         const char* css = OnlineMenu::cssLine(msg, window, line, msbin, caller);
         if (css) return css;
+        const char* play = RoomPlay::menuText(msbin, line);   // the RULESET / SET descriptions
+        if (play) return play;
         const char* anyone = AnyoneMenu::line(msg, window, line, msbin);
         if (anyone) return anyone;
         const char* scene = Online::currentSceneName();

@@ -22,6 +22,7 @@
 
 #include "online_menu.h"
 #include "ppom.h"
+#include "room_play.h"
 
 namespace RoomRules {
 
@@ -251,6 +252,8 @@ namespace RoomRules {
         u32 line = *(u16*)(page + 0x42);
         if (page == *(u32*)(rt + RULES_PAGE1)) {
             if (line >= 5) return bits & (IN_MOVE | IN_SIDE | IN_A | IN_B);   // the page buttons
+            // STOCK CONTROL and STAGE CHOICE are the room's SET and RULESET lines (room_play.cpp)
+            if (line == 2 || line == 4) return RoomPlay::rulesInput(line, bits, s.asHost && !s.readOnly);
             if (s.readOnly) return bits & (IN_MOVE | IN_B);
             bool stock = *(u8*)(page + RULES_STYLE) == PPOM::STYLE_STOCK;
             if (line == 2 || line == 4 || (line == 1 && !stock)) return bits & (IN_MOVE | IN_B);

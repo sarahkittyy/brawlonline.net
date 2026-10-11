@@ -261,7 +261,7 @@ namespace Labels {
         int w = *(u16*)(tex0 + 0x1C), h = *(u16*)(tex0 + 0x1E);
         u32 fmt = *(u32*)(tex0 + 0x20);
         u8* data = tex0 + *(u32*)(tex0 + 0x10);
-        if (w <= 0 || h <= 0 || w > 512 || h > 256) return false;
+        if (w <= 0 || h <= 0 || w > 1024 || h > 256) return false;   // (P+'s rules values: 800x40 strips)
         if (fmt != 5 && fmt != 0 && fmt != 14) return false;
         // Textures are stored in whole blocks (RGB5A3 4x4, I4 and CMPR 8x8): a size that is no
         // multiple of the block (the 88x20 "Seeking") has padding blocks at the right and the bottom.
