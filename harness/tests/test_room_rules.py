@@ -109,6 +109,10 @@ def test_host_edits_the_room_rules_everyone_plays_them(backend: OnlineBackend,
     b.steps("tap START 8", "wait 40")
     until_view(a, lambda v: v["slots"][1]["bits"] & ppom.SLOT_READY, "A sees B ready")
 
+    # B is looking at the rules while the host edits them: B's screens go out of date, so B's menu
+    # is closed from outside (muRuleTask+0x288, a byte) once the change arrives.
+    open_rules(b)
+
     # The host edits.
     open_rules(a)
     a.shot("01-host-rules-open")
@@ -136,6 +140,7 @@ def test_host_edits_the_room_rules_everyone_plays_them(backend: OnlineBackend,
             "autoLCancel": True, "inputAssist": False}
     for g in (a, b):
         _wait(lambda g=g: session_rules(g) == want, 20, f"{g.name}: the host's rules", interval=0.3)
+    _wait(lambda: not menu_open(b), 10, "B's out-of-date rules menu closed by the change")
     v = until_view(b, lambda v: not v["slots"][1]["bits"] & ppom.SLOT_READY, "B's ready taken back")
     b.steps("wait 20")
     b.shot("04-rules-changed")                     # "Host changed the rules"

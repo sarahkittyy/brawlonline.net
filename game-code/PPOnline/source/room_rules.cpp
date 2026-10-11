@@ -72,7 +72,7 @@ namespace RoomRules {
     }
 
     static const u32 TASK_RULES = 0x62C, TASK_RULES_OPEN = 0x630;   // muSelCharTask
-    static const u32 RULES_CLOSE = 0x288;                            // muRuleTask: 1 = close
+    static const u32 RULES_CLOSE = 0x288;                            // muRuleTask: u8, 1 = close
     static const u32 RULES_PAGE1 = 0x268, RULES_PAGE2 = 0x26C;       // RULES, MORE RULES
     static const u32 RULES_ITEMS = 0x270;                            // the item switch
     static const u32 OPEN_RULES = 0x80692E9C;                        // sel_char text+0x105D8
@@ -110,7 +110,9 @@ namespace RoomRules {
         // The pages write nothing back when closed this way (game-code.md §14): the room's rules
         // stay as they are.
         u8* rt = rulesTask();
-        if (rt) *(u32*)(rt + RULES_CLOSE) = 1;
+        // A byte: isEnd (module 18 text+0xF78) reads it with `lbz r0,0x288(r3)` (a word write
+        // set +0x28B and left the menu open).
+        if (rt) *(u8*)(rt + RULES_CLOSE) = 1;
     }
 
     static void say(const char* text, bool red)
