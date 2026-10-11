@@ -1,0 +1,308 @@
+// Copyright 2026 Dolphin Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+// The online chat window (VideoCommon/OnlineChatUI.cpp) driven frame by frame through ImGui, with
+// the mouse as the render widget passes it (OnScreenUI::SetMousePos / SetMousePress): a room's chat
+// with another player, whose name is clicked in the menu bar and on a message line.
+
+#include <optional>
+#include <string>
+#include <vector>
+
+#include <gtest/gtest.h>
+#include <imgui.h>
+#include <picojson.h>
+
+#include "Common/CommonPaths.h"
+#include "Common/FileUtil.h"
+#include "Core/Online/Chat.h"
+#include "Core/Online/ChatCrypto.h"
+#include "Core/Online/Rooms.h"
+#include "VideoCommon/OnlineChatUI.h"
+
+namespace CC = Online::ChatCrypto;
+namespace Chat = Online::Chat;
+namespace UI = VideoCommon::OnlineChatUI;
+
+namespace
+{
+constexpr char GROUP[] = "room-KFQB-12";
+constexpr char ME[] = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+constexpr char BOB[] = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+
+CC::Key32 Fill(u8 v)
+{
+  CC::Key32 k;
+  k.fill(v);
+  return k;
+}
+
+std::string Json(const picojson::object& o)
+{
+  return picojson::value(o).serialize();
+}
+
+class OnlineChatUITest : public ::testing::Test
+{
+protected:
+  void SetUp() override
+  {
+    m_dir = File::CreateTempDir();
+    ASSERT_FALSE(m_dir.empty());
+    File::SetUserPath(D_USER_IDX, m_dir + DIR_SEP);
+    Chat::ResetForTesting(ME);
+    m_my_id = Chat::IdentityPublicKeyHex();
+    ASSERT_EQ(m_my_id.size(), 64u);
+
+    ImGui::CreateContext();
+    ImGuiIO& io = ImGui::GetIO();
+    io.IniFilename = nullptr;
+    io.DisplaySize = ImVec2(1280, 720);
+    io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures;
+    io.Fonts->AddFontDefault();
+    UI::SetFont(nullptr);
+    UI::ResetForTesting();
+  }
+  void TearDown() override
+  {
+    ImGui::DestroyContext();
+    Chat::ResetForTesting(ME);
+    File::DeleteDirRecursively(m_dir);
+  }
+
+  picojson::object Member(const std::string& uid, const std::string& name, const std::string& id,
+                          std::optional<CC::Key32> kx, std::optional<CC::Sig64> sig)
+  {
+    picojson::object m;
+    m["uid"] = picojson::value(uid);
+    m["displayName"] = picojson::value(name);
+    m["connectCode"] = picojson::value(name.substr(0, 3) + "#1");
+    m["idKey"] = picojson::value(id);
+    m["kx"] = kx ? picojson::value(CC::ToHex(*kx)) : picojson::value();
+    m["kxSig"] = sig ? picojson::value(CC::ToHex(*sig)) : picojson::value();
+    return m;
+  }
+
+  std::string Group(const picojson::array& members)
+  {
+    picojson::object o;
+    o["type"] = picojson::value("chat-group");
+    o["group"] = picojson::value(GROUP);
+    o["kind"] = picojson::value("room");
+    o["you"] = picojson::value(ME);
+    o["members"] = picojson::value(members);
+    return Json(o);
+  }
+
+  // A room with Bob, who has said something.
+  void JoinWithBob()
+  {
+    const CC::Identity bob_id(Fill(2));
+    const CC::GroupKey bob_kx = CC::GroupKeyFromSecret(Fill(102));
+    const auto bob = Member(BOB, "bob", CC::ToHex(bob_id.PublicKey()), bob_kx.public_key,
+                            bob_id.Sign(CC::KxSigMessage(GROUP, bob_kx.public_key)));
+    ASSERT_TRUE(Chat::OnServerMessage(
+        Group({picojson::value(Member(ME, "me", m_my_id, {}, {})), picojson::value(bob)})));
+    std::optional<CC::Key32> my_kx;
+    for (const std::string& json : Chat::TakeOutbox())
+    {
+      picojson::value v;
+      ASSERT_TRUE(picojson::parse(v, json).empty());
+      auto& o = v.get<picojson::object>();
+      if (o["type"].get<std::string>() == "chat-key")
+        my_kx = CC::FromHexFixed<32>(o["kx"].get<std::string>());
+    }
+    ASSERT_TRUE(my_kx);
+    const std::string text = "hello";
+    const CC::Sig64 sig = bob_id.Sign(CC::MessageSigMessage(GROUP, BOB, 1, text));
+    const auto key = *CC::PairKey(bob_kx, *my_kx, GROUP);
+    picojson::object msg;
+    msg["type"] = picojson::value("chat-msg");
+    msg["group"] = picojson::value(GROUP);
+    msg["from"] = picojson::value(BOB);
+    msg["box"] = picojson::value(CC::ToHex(CC::Seal(key, CC::RandomNonce(),
+                                                    CC::AssociatedData(GROUP, BOB, ME),
+                                                    CC::EncodePlaintext(1, sig, text))));
+    ASSERT_TRUE(Chat::OnServerMessage(Json(msg)));
+  }
+
+  UI::TestFrame Frame()
+  {
+    ImGuiIO& io = ImGui::GetIO();
+    io.DeltaTime = 1.0f / 60.0f;
+    ImGui::NewFrame();
+    UI::Display(1.0f);
+    ImGui::Render();
+    UI::TestFrame f = UI::LastFrameForTesting();
+    m_frames.push_back(f);
+    return f;
+  }
+
+  // The mouse as RenderWidget passes it: moves, then the button mask on press and on release.
+  void Click(float x, float y, int button)
+  {
+    ImGuiIO& io = ImGui::GetIO();
+    io.AddMousePosEvent(x, y);
+    Frame();
+    io.AddMouseButtonEvent(button, true);
+    Frame();
+    io.AddMouseButtonEvent(button, false);
+    Frame();
+  }
+
+  std::string m_dir;
+  std::string m_my_id;
+  std::vector<UI::TestFrame> m_frames;
+};
+}  // namespace
+
+TEST_F(OnlineChatUITest, ClickingANameOpensItsMenu)
+{
+  JoinWithBob();
+  UI::TestFrame f;
+  for (int i = 0; i < 5; ++i)
+    f = Frame();
+  ASSERT_FALSE(f.collapsed);
+  ASSERT_EQ(f.names.size(), 2u);  // the menu bar's and the message line's
+
+  for (int button : {0, 1})
+  {
+    for (size_t n = 0; n < 2; ++n)
+    {
+      const UI::TestFrame::Name name = Frame().names.at(n);
+      SCOPED_TRACE(testing::Message() << "button " << button << " name " << n);
+      Click((name.x0 + name.x1) / 2, (name.y0 + name.y1) / 2, button);
+      bool open = false;
+      for (int i = 0; i < 4; ++i)
+        open = Frame().member_menu_open;
+      EXPECT_TRUE(open);
+      EXPECT_EQ(m_frames.back().menu_uid, BOB);
+      // Away from it: closed again.
+      Click(1200, 700, 0);
+      Frame();
+      EXPECT_FALSE(Frame().member_menu_open);
+    }
+  }
+}
+
+TEST_F(OnlineChatUITest, NamesWorkWithAMenuOpenAndQuickClicks)
+{
+  JoinWithBob();
+  for (int i = 0; i < 5; ++i)
+    Frame();
+  const UI::TestFrame::Name a = m_frames.back().names.at(0);
+  const UI::TestFrame::Name b = m_frames.back().names.at(1);
+  // A press and its release in one frame (a quick click between two frames).
+  ImGuiIO& io = ImGui::GetIO();
+  io.AddMousePosEvent((a.x0 + a.x1) / 2, (a.y0 + a.y1) / 2);
+  Frame();
+  io.AddMouseButtonEvent(0, true);
+  io.AddMouseButtonEvent(0, false);
+  for (int i = 0; i < 4; ++i)
+    Frame();
+  EXPECT_TRUE(m_frames.back().member_menu_open);
+  // With the menu open, a click on the other name (outside the menu) opens the menu again.
+  Click((b.x0 + b.x1) / 2, (b.y0 + b.y1) / 2, 1);
+  for (int i = 0; i < 4; ++i)
+    Frame();
+  EXPECT_TRUE(m_frames.back().member_menu_open);
+}
+
+// The box keeps focus after a message is sent, so the player is often typing when they click a
+// name: the first click must open the menu (ImGui doesn't hover other items while the box is the
+// active item; a right click doesn't even take the focus from it).
+TEST_F(OnlineChatUITest, ClickingANameWhileTypingOpensItsMenu)
+{
+  JoinWithBob();
+  for (int i = 0; i < 5; ++i)
+    Frame();
+  for (int button : {0, 1})
+  {
+    for (size_t n = 0; n < 2; ++n)
+    {
+      SCOPED_TRACE(testing::Message() << "button " << button << " name " << n);
+      UI::Activate();
+      for (int i = 0; i < 6; ++i)
+        Frame();
+      ASSERT_TRUE(m_frames.back().typing);
+      const UI::TestFrame::Name name = m_frames.back().names.at(n);
+      Click((name.x0 + name.x1) / 2, (name.y0 + name.y1) / 2, button);
+      bool open = false;
+      for (int i = 0; i < 4; ++i)
+        open = Frame().member_menu_open;
+      EXPECT_TRUE(open);
+      Click(1200, 700, 0);
+      Frame();
+      EXPECT_FALSE(Frame().member_menu_open);
+    }
+  }
+}
+
+// In a match an idle window fades; the mouse over it brings it back, and it must stay back while a
+// button is held on it (a press on a name used to read as the mouse leaving: the window flashed
+// faded until the button was let go).
+TEST_F(OnlineChatUITest, PressingOnAFadedWindowDoesntFadeIt)
+{
+  JoinWithBob();
+  picojson::object match;
+  match["op"] = picojson::value("screen");
+  match["screen"] = picojson::value(5.0);  // Rooms::Screen::Match
+  ASSERT_FALSE(Online::Rooms::HarnessRequest(match));
+  struct ScreenBack
+  {
+    ~ScreenBack()
+    {
+      picojson::object other;
+      other["op"] = picojson::value("screen");
+      other["screen"] = picojson::value(0.0);
+      Online::Rooms::HarnessRequest(other);
+    }
+  } screen_back;
+
+  ImGui::GetIO().AddMousePosEvent(1200, 700);
+  UI::TestFrame f;
+  for (int i = 0; i < 5; ++i)
+    f = Frame();
+  EXPECT_LT(f.alpha, 0.5f);  // faded: idle (no delay in tests) and the mouse away
+
+  const UI::TestFrame::Name name = f.names.at(0);
+  const float x = (name.x0 + name.x1) / 2, y = (name.y0 + name.y1) / 2;
+  m_frames.clear();
+  ImGui::GetIO().AddMousePosEvent(x, y);
+  Frame();
+  Frame();
+  const size_t hovering = m_frames.size();
+  ImGui::GetIO().AddMouseButtonEvent(0, true);
+  for (int i = 0; i < 4; ++i)
+    Frame();
+  ImGui::GetIO().AddMouseButtonEvent(0, false);
+  for (int i = 0; i < 4; ++i)
+    Frame();
+  for (size_t i = hovering - 1; i < m_frames.size(); ++i)
+    EXPECT_EQ(m_frames[i].alpha, 1.0f) << "frame " << i;
+  EXPECT_TRUE(m_frames.back().member_menu_open);
+}
+
+TEST_F(OnlineChatUITest, ClicksDontMoveOrResizeTheWindow)
+{
+  JoinWithBob();
+  for (int i = 0; i < 5; ++i)
+    Frame();
+  const UI::TestFrame before = m_frames.back();
+  m_frames.clear();
+  // In the window's empty space, on the menu bar, on a name, and outside the window.
+  const UI::TestFrame::Name name = before.names.at(1);
+  Click(before.x + before.w / 2, before.y + before.h / 2, 0);
+  Click(before.x + before.w - 10, before.y + 30, 0);
+  Click((name.x0 + name.x1) / 2, (name.y0 + name.y1) / 2, 0);
+  Click(1200, 700, 0);
+  Click(before.x + before.w / 2, before.y + before.h / 2, 1);
+  for (const UI::TestFrame& f : m_frames)
+  {
+    EXPECT_EQ(f.x, before.x);
+    EXPECT_EQ(f.y, before.y);
+    EXPECT_EQ(f.w, before.w);
+    EXPECT_EQ(f.h, before.h);
+    EXPECT_FALSE(f.collapsed);
+  }
+}

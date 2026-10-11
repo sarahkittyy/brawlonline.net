@@ -69,6 +69,8 @@
 #include "Core/Rollback/GameplaySession.h"
 #include "Core/Rollback/GameplayOnlineBackend.h"
 #include "Core/Rollback/PresentStats.h"
+#include "VideoCommon/OnlineChatUI.h"
+#include "VideoCommon/Present.h"
 #include "Core/Rollback/RollbackManager.h"
 #include "Core/State.h"
 #include "Core/System.h"
@@ -1557,6 +1559,68 @@ Result CmdChatLeave(const Args& args)
   return ChatRequest("chat_leave", args);
 }
 
+// The chat window as ImGui drew it (VideoCommon/OnlineChatUI): `record` (default true) starts or
+// stops recording each frame, `activate` presses the "Activate NetPlay Chat" hotkey; returns the
+// frames recorded since the last call (at most 600).
+Result CmdChatUi(const Args& args)
+{
+  picojson::array frames;
+  for (const auto& f : VideoCommon::OnlineChatUI::TakeRecordedFrames())
+  {
+    picojson::object o;
+    const auto num = [](double v) { return picojson::value(v); };
+    o["frame"] = num(f.frame);
+    o["display"] = picojson::value(picojson::array{num(f.display_w), num(f.display_h)});
+    o["mouse"] = picojson::value(picojson::array{num(f.mouse_x), num(f.mouse_y)});
+    o["mouse_down"] = num(f.mouse_down);
+    o["shown"] = picojson::value(f.shown);
+    o["rect"] = picojson::value(picojson::array{num(f.x), num(f.y), num(f.w), num(f.h)});
+    o["collapsed"] = picojson::value(f.collapsed);
+    o["focused"] = picojson::value(f.focused);
+    o["alpha"] = num(f.alpha);
+    o["typing"] = picojson::value(f.typing);
+    o["member_menu"] = picojson::value(f.member_menu_open ? f.menu_uid : std::string());
+    o["ignore_item"] = picojson::value(picojson::array{num(f.ignore_item[0]), num(f.ignore_item[1]),
+                                                       num(f.ignore_item[2]), num(f.ignore_item[3])});
+    picojson::array names;
+    for (const auto& n : f.names)
+    {
+      picojson::object no;
+      no["uid"] = picojson::value(n.uid);
+      no["rect"] = picojson::value(picojson::array{num(n.x0), num(n.y0), num(n.x1), num(n.y1)});
+      names.emplace_back(std::move(no));
+    }
+    o["names"] = picojson::value(names);
+    frames.emplace_back(std::move(o));
+  }
+  VideoCommon::OnlineChatUI::SetRecording(GetBool(args, "record", true));
+  if (GetBool(args, "activate", false))
+    VideoCommon::OnlineChatUI::Activate();
+  Result r;
+  r["frames"] = picojson::value(frames);
+  return r;
+}
+
+// The mouse over the OSD (ImGui), as the render widget passes it: `x`, `y` in backbuffer pixels
+// and `buttons` (bit 0 left, 1 right, 2 middle; omitted: unchanged).
+Result CmdOsdMouse(const Args& args)
+{
+  RequireRunning();
+  if (!g_presenter)
+    Fail("no presenter");
+  const auto x = args.find("x");
+  const auto y = args.find("y");
+  if (x != args.end() && y != args.end() && x->second.is<double>() && y->second.is<double>())
+  {
+    g_presenter->SetMousePos(static_cast<float>(x->second.get<double>()),
+                             static_cast<float>(y->second.get<double>()));
+  }
+  const auto buttons = args.find("buttons");
+  if (buttons != args.end() && buttons->second.is<double>())
+    g_presenter->SetMousePress(static_cast<u32>(buttons->second.get<double>()));
+  return {};
+}
+
 Result CmdGameBridgeConfig(const Args& args)
 {
   if (Find(args, "enabled"))
@@ -1687,6 +1751,8 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"chat_hide", CmdChatHide},
       {"chat_report", CmdChatReport},
       {"chat_leave", CmdChatLeave},
+      {"chat_ui", CmdChatUi},
+      {"osd_mouse", CmdOsdMouse},
       {"online_recent_codes", CmdOnlineRecentCodes},
       {"rollback_pad_history", CmdRollbackPadHistory},
       {"rollback_chunk_hashes", CmdRollbackChunkHashes},

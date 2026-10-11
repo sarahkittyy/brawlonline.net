@@ -8,6 +8,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdio>
+#include <deque>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -36,6 +37,7 @@ using Online::Chat::Line;
 // In a match, an idle window fades to this after FADE_AFTER_MS without a new message.
 constexpr float FADED_ALPHA = 0.35f;
 constexpr u64 FADE_AFTER_MS = 8000;
+u64 s_fade_after_ms = FADE_AFTER_MS;  // 0 in unit tests
 constexpr u64 NOTICE_MS = 3000;
 // The saved geometry: "2 x y w h collapsed", fractions of the window in 1/10000. The leading 2 is
 // the format's version: layouts saved before it (five numbers, from when the text and the default
@@ -140,11 +142,21 @@ struct UiState
   bool open_menu = false;
   std::string menu_uid;
   bool confirm_report = false;
+  // A name pressed (its item id and the button), opened on release over it.
+  ImGuiID name_press_id = 0;
+  int name_press_button = -1;
 
   std::string notice;
   u64 notice_until = 0;
 };
 UiState s;
+
+// Harness and unit tests: what each frame drew, while recording.
+constexpr size_t MAX_RECORDED_FRAMES = 600;
+std::atomic<bool> s_recording{false};
+TestFrame s_frame;  // the frame being drawn (ImGui lock)
+std::mutex s_frames_mutex;
+std::deque<TestFrame> s_frames;
 
 void SetNotice(std::string text)
 {
@@ -263,16 +275,37 @@ bool ControlKeyDown()
 }
 
 // A name drawn as text that can be clicked, left or right (an InvisibleButton under it: the name
-// is never a widget label). Clicking another player's name opens their menu.
+// is never a widget label). Clicking another player's name opens their menu: on release over the
+// name, whatever else holds ImGui's active item (the box keeps it after a message is sent) or
+// whatever popup is open. The button covers the drawn text (drawn `y_offset` lower on the menu
+// bar).
 void NameButton(std::string_view text, ImU32 color, const std::string& uid, bool clickable,
                 float y_offset = 0.0f)
 {
   const ImVec2 size = ImGui::CalcTextSize(text.data(), text.data() + text.size());
   ImVec2 pos = ImGui::GetCursorScreenPos();
-  const bool clicked =
-      ImGui::InvisibleButton("##name", ImVec2(std::max(size.x, 1.0f), size.y),
-                             ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
-  const bool hovered = clickable && ImGui::IsItemHovered();
+  ImGui::InvisibleButton("##name", ImVec2(std::max(size.x, 1.0f), size.y + y_offset),
+                         ImGuiButtonFlags_MouseButtonLeft | ImGuiButtonFlags_MouseButtonRight);
+  const ImGuiID id = ImGui::GetItemID();
+  // Also over a menu already open: clicking another name opens that player's menu instead of
+  // only closing the open one.
+  const bool hovered =
+      clickable && ImGui::IsItemHovered(ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
+                                        ImGuiHoveredFlags_AllowWhenBlockedByPopup);
+  bool clicked = false;
+  for (const ImGuiMouseButton button : {ImGuiMouseButton_Left, ImGuiMouseButton_Right})
+  {
+    if (hovered && ImGui::IsMouseClicked(button))
+    {
+      s.name_press_id = id;
+      s.name_press_button = button;
+    }
+    if (s.name_press_id == id && s.name_press_button == button && ImGui::IsMouseReleased(button))
+    {
+      s.name_press_id = 0;
+      clicked = hovered;
+    }
+  }
   pos.y += y_offset;
   ImDrawList* draw = ImGui::GetWindowDrawList();
   // Through GetColorU32: the window's alpha (faded in a match) applies to drawn text too.
@@ -280,6 +313,12 @@ void NameButton(std::string_view text, ImU32 color, const std::string& uid, bool
   draw->AddText(pos, col, text.data(), text.data() + text.size());
   if (hovered)
     draw->AddLine({pos.x, pos.y + size.y}, {pos.x + size.x, pos.y + size.y}, col);
+  if (s_recording && clickable)
+  {
+    const ImVec2 a = ImGui::GetItemRectMin();
+    const ImVec2 b = ImGui::GetItemRectMax();
+    s_frame.names.push_back({uid, a.x, a.y, b.x, b.y});
+  }
   if (clicked && clickable)
   {
     s.open_menu = true;
@@ -427,6 +466,11 @@ void DrawMemberMenu()
   if (!ImGui::BeginPopup("##member"))
     return;
   const Online::Chat::Member* m = FindMember(s.menu_uid);
+  if (s_recording)
+  {
+    s_frame.member_menu_open = true;
+    s_frame.menu_uid = s.menu_uid;
+  }
   if (!m || ImGui::IsKeyPressed(ImGuiKey_Escape, false))
   {
     ImGui::CloseCurrentPopup();
@@ -440,7 +484,13 @@ void DrawMemberMenu()
   ImGui::Separator();
   if (!s.confirm_report)
   {
-    if (ImGui::MenuItem(m->hidden ? "Unignore user" : "Ignore user"))
+    const bool toggled = ImGui::MenuItem(m->hidden ? "Unignore user" : "Ignore user");
+    if (s_recording)
+    {
+      s_frame.ignore_item = {ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                             ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y};
+    }
+    if (toggled)
     {
       // Ignoring starts from all of their messages covered again.
       if (!m->hidden)
@@ -741,7 +791,65 @@ bool IsTyping()
   return s_typing;
 }
 
+void ResetForTesting()
+{
+  s = UiState{};
+  s_fade_after_ms = 0;
+  TakeRecordedFrames();
+  SetRecording(true);
+}
+
+TestFrame LastFrameForTesting()
+{
+  std::lock_guard lk(s_frames_mutex);
+  return s_frames.empty() ? TestFrame{} : s_frames.back();
+}
+
+void SetRecording(bool on)
+{
+  s_recording = on;
+}
+
+std::vector<TestFrame> TakeRecordedFrames()
+{
+  std::lock_guard lk(s_frames_mutex);
+  std::vector<TestFrame> out(s_frames.begin(), s_frames.end());
+  s_frames.clear();
+  return out;
+}
+
+namespace
+{
+void DisplayFrame(float scale);
+}
+
 void Display(float scale)
+{
+  if (!s_recording)
+  {
+    DisplayFrame(scale);
+    return;
+  }
+  const ImGuiIO& io = ImGui::GetIO();
+  s_frame = {};
+  s_frame.frame = ImGui::GetFrameCount();
+  s_frame.display_w = io.DisplaySize.x;
+  s_frame.display_h = io.DisplaySize.y;
+  s_frame.mouse_x = io.MousePos.x;
+  s_frame.mouse_y = io.MousePos.y;
+  for (int i = 0; i < 3; ++i)
+    s_frame.mouse_down |= io.MouseDown[i] ? 1 << i : 0;
+  DisplayFrame(scale);
+  s_frame.typing = s.was_typing;
+  std::lock_guard lk(s_frames_mutex);
+  s_frames.push_back(s_frame);
+  while (s_frames.size() > MAX_RECORDED_FRAMES)
+    s_frames.pop_front();
+}
+
+namespace
+{
+void DisplayFrame(float scale)
 {
   if (auto view = Online::Chat::GetView(s.serial))
   {
@@ -808,8 +916,10 @@ void Display(float scale)
   }
   ImGui::SetNextWindowSizeConstraints(ImVec2(8.0f * font_px, 5.0f * font_px), io.DisplaySize);
 
-  const bool faded = in_match && !s.was_typing && !s.hovered &&
-                     now - s.view->last_message_ms > FADE_AFTER_MS &&
+  // Not while the mouse is over the window or the player holds it (a press on a name, the
+  // scrollbar or the resize grip, or a drag that left the window).
+  const bool faded = in_match && !s.was_typing && !s.hovered && !s.interacting &&
+                     now - s.view->last_message_ms >= s_fade_after_ms &&
                      !ImGui::IsPopupOpen("", ImGuiPopupFlags_AnyPopupId);
   if (faded)
     ImGui::PushStyleVar(ImGuiStyleVar_Alpha, FADED_ALPHA);
@@ -917,9 +1027,25 @@ void Display(float scale)
 
   // The player moving, resizing or collapsing the window: saved once the mouse is let go. A
   // collapse for ignored players is not the player's: the saved state stays as they left it.
+  if (s_recording)
+  {
+    s_frame.x = ImGui::GetWindowPos().x;
+    s_frame.y = ImGui::GetWindowPos().y;
+    s_frame.w = ImGui::GetWindowSize().x;
+    s_frame.h = ImGui::GetWindowSize().y;
+    s_frame.collapsed = ImGui::IsWindowCollapsed();
+    s_frame.shown = true;
+    s_frame.focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
+    s_frame.alpha = ImGui::GetStyle().Alpha;
+  }
   const Geometry now_geometry{ImGui::GetWindowPos(), ImGui::GetWindowSize(),
                               s.auto_collapsed ? s.applied.collapsed : ImGui::IsWindowCollapsed()};
-  s.hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows);
+  // Hovered also while one of its items is held: without that, a press on a name (or anywhere that
+  // makes an item active) read as the mouse leaving, and a faded window flashed back to faded
+  // for as long as the button was down.
+  s.hovered = ImGui::IsWindowHovered(ImGuiHoveredFlags_RootAndChildWindows |
+                                     ImGuiHoveredFlags_AllowWhenBlockedByActiveItem |
+                                     ImGuiHoveredFlags_AllowWhenBlockedByPopup);
   if (ImGui::IsMouseDown(ImGuiMouseButton_Left) && (s.hovered || s.interacting))
   {
     s.interacting = true;
@@ -949,4 +1075,5 @@ void Display(float scale)
   s_typing = s.was_typing;
   ciface::Core::SetKeyboardMouseBlocked(s.was_typing);
 }
+}  // namespace
 }  // namespace VideoCommon::OnlineChatUI

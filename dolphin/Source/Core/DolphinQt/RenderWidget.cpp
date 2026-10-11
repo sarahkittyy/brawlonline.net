@@ -635,6 +635,9 @@ void RenderWidget::PassEventToPresenter(const QEvent* event)
   break;
 
   case QEvent::MouseButtonPress:
+  // A second press soon after the first comes as a double click instead of a press: without it
+  // ImGui would miss that press (a quick second click on the chat window did nothing).
+  case QEvent::MouseButtonDblClick:
   case QEvent::MouseButtonRelease:
   {
     const u32 button_mask = static_cast<u32>(static_cast<const QMouseEvent*>(event)->buttons());
