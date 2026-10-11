@@ -283,6 +283,8 @@ add_executable(project-plus-dolphin
   GCMemcardCreateNewDialog.h
   GCMemcardManager.cpp
   GCMemcardManager.h
+  HangWatchdog.cpp
+  HangWatchdog.h
   Host.cpp
   Host.h
   HotkeyScheduler.cpp
