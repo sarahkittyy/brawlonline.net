@@ -17,6 +17,7 @@
 #include "ppom.h"
 #include "netmenu.h"
 #include "room_rules.h"
+#include "rules_button.h"
 
 extern "C" {
     extern u8 g_onlineCss;
@@ -892,8 +893,12 @@ namespace OnlineMenu {
     };
 
     static const float STATUS_X1 = -318.0f;     // the rule window's own: -208 .. 144
-    static const float ROOM_STATUS_X2 = 222.0f;   // in a room: up to the ITEM / STAGE buttons
-    static const int ROOM_STATUS_FIT = 530;
+    // In a room: up to the RULES button (rules_button.cpp, left of the ITEM / STAGE buttons; it was
+    // 222 / 530 before RULES). The fit decides where a line ends (the window does not cut it): a
+    // font unit is about 1.5 px at 2000 wide ("Waiting for players" 318 units), and the room's
+    // line has about 570 px from its start to RULES.
+    static const float ROOM_STATUS_X2 = 158.0f;
+    static const int ROOM_STATUS_FIT = 378;
     static const float STATUS_X2 = 330.0f;
     static const float WRAP_SCALE = 0.7f;
     static const float WRAP_LINE_SPACE = 22.0f; // two lines at 0.7 inside the bar
@@ -1276,6 +1281,7 @@ namespace OnlineMenu {
         api->sySimpleHookRel(0x75B4, reinterpret_cast<void*>(cssCoinAPress), 10);
         api->sySimpleHookRel(0x7CCC, reinterpret_cast<void*>(cssSwitchButtons), 10);
         api->sySimpleHookRel(0xDDB0, reinterpret_cast<void*>(cssReadyBanner), 10);
+        RulesButton::install(api);
     }
 
     void enter(int mode)
@@ -1968,6 +1974,9 @@ namespace OnlineMenu {
         // P+'s rules menu over the CSS (room_rules.cpp): while it is open its pages take the
         // buttons; the room's own (L/R, START, B, Z, the header buttons, the panels) wait.
         bool rulesOpen = RoomRules::tick(in, host, waiting);
+        // RULES next to PUBLIC / FFA (rules_button.cpp); greyed while the menu would not open
+        // (a game starting, no room rules), and passed over by the hand under the open menu.
+        RulesButton::tick(in, waiting && se.rules.valid);
         if (RoomRules::changedNow() && waiting && roomLockedForNext()) unlock();   // rules.md #5
         if (rulesOpen) {
             s_headerPress = 0;
@@ -2014,6 +2023,7 @@ namespace OnlineMenu {
                 else if (host && hdr == 0x19) pressed |= BTN_L;         // as L
                 else playSE(SE_ERROR);
             }
+            if (RulesButton::pressed()) RoomRules::open();   // host edits, others view
             if ((pressed & BTN_L) && host) {
                 postRoom(PPOM::ROOM_PUBLIC, (se.roomFlags & PPOM::RF_PUBLIC) ? 0 : 1, 0, NULL);
                 playSE(1);
