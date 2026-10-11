@@ -229,6 +229,10 @@ public:
   // into the frame's slack (without this, every rollback pushed the frames after it back by the
   // re-run's duration). Ignored while the speed is unlimited.
   void BeginRollbackBurst();
+  // Online time sync, Slippi's frame advance: the timeline moves `amount` earlier, so the throttle
+  // does not wait for that much of the frames after it and a peer that fell behind catches up at
+  // once instead of over seconds of speed-up. Ignored while the speed is unlimited.
+  void AdvanceThrottle(DT amount);
   // How far behind its schedule the throttle found the emulation at worst since the last call
   // (zero: never behind). Only throttled time counts, not re-runs.
   DT TakeMaxBehindSchedule();

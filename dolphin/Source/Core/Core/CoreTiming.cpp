@@ -452,6 +452,16 @@ void CoreTimingManager::BeginRollbackBurst()
   m_rollback_burst_pending = true;
 }
 
+void CoreTimingManager::AdvanceThrottle(DT amount)
+{
+  if (m_throttle_adj_clock_per_sec == 0 || Core::GetIsThrottlerTempDisabled())
+    return;
+  m_throttle_reference_time -= amount;
+  // A rollback burst in progress resumes the timeline at its due time: that moves as well.
+  if (m_rollback_burst_pending)
+    m_rollback_burst_due -= amount;
+}
+
 DT CoreTimingManager::TakeMaxBehindSchedule()
 {
   return std::exchange(m_max_behind_schedule, DT{});

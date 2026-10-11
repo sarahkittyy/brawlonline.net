@@ -344,6 +344,13 @@ struct State
   std::array<u8, 4 * INPUT_SIZE> local_inputs{};
   double speed_factor = 1.0;
   u32 last_timesync_frame = UINT32_MAX;
+  // Slippi's frame advance (UpdateTimeSync): catch-up frames left in this batch, whether a batch
+  // runs, and whether the frame running now / the previous displayed frame was one (its throttle
+  // point is a frame early on purpose, not late).
+  int frames_to_advance = 0;
+  bool advancing = false;
+  s64 last_advance_frame = -1;
+  bool advanced_this_frame = false, prev_frame_advanced = false;
   s64 next_ping_display_frame = PING_DISPLAY_INTERVAL;
   u32 last_game_frame = 0;
 
@@ -371,6 +378,8 @@ struct State
     u64 late = 0, late_after_rollback = 0;
     double late_ms_max = 0;
     u64 stalls = 0;  // updates with no frame to run (waited for the peer)
+    u64 advances = 0;  // catch-up frames (UpdateTimeSync)
+    double wall_ms = 0;  // wall-clock time of the window (its frames per second: the game's speed)
     double stall_ms = 0, stall_ms_max = 0;
     double ahead_sum = 0, ahead_min = 1e9, ahead_max = -1e9;
     double speed_min = 1e9, speed_max = -1e9;
@@ -380,6 +389,7 @@ struct State
   };
   NetStats net_window, net_total;
   s64 net_window_first = -1;
+  Clock::time_point net_window_t0{};
   bool prev_frame_rolled_back = false;
   Clock::time_point burst_t0{};
   bool burst_open = false;
@@ -481,6 +491,7 @@ struct State
 State s;
 
 std::string NetStatsLine(const State::NetStats& w);
+void CloseNetWindowClock();
 void NetStatsFold(State::NetStats& t, const State::NetStats& w);
 }  // namespace
 
@@ -2046,12 +2057,16 @@ void ResetRunStats()
   s.current_frame = -1;
   s.speed_factor = 1.0;
   s.last_timesync_frame = UINT32_MAX;
+  s.frames_to_advance = 0;
+  s.advancing = s.advanced_this_frame = s.prev_frame_advanced = false;
+  s.last_advance_frame = -1;
   s.last_hard_sync_frame = -1;
   s.last_start_log_frame = -1;
   s.next_ping_display_frame = PING_DISPLAY_INTERVAL;
   s.rollbacks = s.max_rollback = s.frames_resimulated = s.stall_polls = s.desyncs = 0;
   s.net_window = s.net_total = {};
   s.net_window_first = -1;
+  s.net_window_t0 = {};
   s.prev_frame_rolled_back = false;
   Core::System::GetInstance().GetCoreTiming().TakeMaxBehindSchedule();
   Rollback::PresentStats::TakeCadence();
@@ -2187,6 +2202,8 @@ void EndRunning(Core::System& system, const std::string& reason)
   if (s.mode == Mode::Network)
   {
     s.net_window.cadence = Rollback::PresentStats::TakeCadence();
+    if (s.net_window.frames)
+      CloseNetWindowClock();
     NetStatsFold(s.net_total, s.net_window);
     s.net_window = {};
     if (s.net_total.frames)
@@ -2563,22 +2580,27 @@ bool WorstLink(GekkoNetworkStats* out)
 }
 
 constexpr u64 NET_STATS_WINDOW = 600;  // displayed frames (10 s)
+constexpr double FRAME_US = 1e6 * 1001.0 / 60000.0;
 constexpr double LATE_MS = 2.0;
 
 std::string NetStatsLine(const State::NetStats& w)
 {
   const double n = static_cast<double>(std::max<u64>(w.frames, 1));
-  std::string line = fmt::format(
-      "{} frames, rollbacks {} ({:.1f}%), resimulated {} (avg depth {:.2f}, max {}), "
+  std::string line = fmt::format("{} frames", w.frames);
+  if (w.wall_ms > 0)
+    line += fmt::format(" in {:.1f} s ({:.1f}/s)", w.wall_ms / 1000, w.frames * 1000.0 / w.wall_ms);
+  line += fmt::format(
+      ", rollbacks {} ({:.1f}%), resimulated {} (avg depth {:.2f}, max {}), "
       "rollback cost avg {:.2f} ms max {:.2f} ms, late frames {} ({} after a rollback, max {:.1f} ms), "
       "waits for the peer {} ({:.0f} ms, max {:.1f} ms), frames ahead avg {:.2f} [{:.2f}, {:.2f}], "
-      "speed [{:.4f}, {:.4f}]",
-      w.frames, w.rollbacks, 100.0 * w.rollbacks / n, w.resim,
+      "speed [{:.4f}, {:.4f}], catch-up frames {}",
+      w.rollbacks, 100.0 * w.rollbacks / n, w.resim,
       w.rollbacks ? static_cast<double>(w.resim) / w.rollbacks : 0.0, w.max_depth,
       w.bursts ? w.burst_ms / w.bursts : 0.0, w.burst_ms_max, w.late, w.late_after_rollback,
       w.late_ms_max, w.stalls,
       w.stall_ms, w.stall_ms_max, w.ahead_sum / n, w.frames ? w.ahead_min : 0.0,
-      w.frames ? w.ahead_max : 0.0, w.frames ? w.speed_min : 1.0, w.frames ? w.speed_max : 1.0);
+      w.frames ? w.ahead_max : 0.0, w.frames ? w.speed_min : 1.0, w.frames ? w.speed_max : 1.0,
+      w.advances);
   if (const auto& c = w.cadence; c.presents)
   {
     const double mean = c.interval_ms_sum / c.presents;
@@ -2599,6 +2621,15 @@ std::string NetStatsLine(const State::NetStats& w)
   return line;
 }
 
+// The window's wall-clock time ends here and the next window's starts.
+void CloseNetWindowClock()
+{
+  const auto now = Clock::now();
+  if (s.net_window_t0 != Clock::time_point{})
+    s.net_window.wall_ms = std::chrono::duration<double, std::milli>(now - s.net_window_t0).count();
+  s.net_window_t0 = now;
+}
+
 void NetStatsFold(State::NetStats& t, const State::NetStats& w)
 {
   t.frames += w.frames;
@@ -2612,6 +2643,8 @@ void NetStatsFold(State::NetStats& t, const State::NetStats& w)
   t.burst_ms_max = std::max(t.burst_ms_max, w.burst_ms_max);
   t.late_ms_max = std::max(t.late_ms_max, w.late_ms_max);
   t.stalls += w.stalls;
+  t.advances += w.advances;
+  t.wall_ms += w.wall_ms;
   t.stall_ms += w.stall_ms;
   t.stall_ms_max = std::max(t.stall_ms_max, w.stall_ms_max);
   t.ahead_sum += w.ahead_sum;
@@ -2640,7 +2673,11 @@ void NetStatsOnDisplayedFrame(Core::System& system)
     return;
   auto& w = s.net_window;
   if (s.net_window_first < 0)
+  {
     s.net_window_first = s.current_frame;
+    if (s.net_window_t0 == Clock::time_point{})
+      s.net_window_t0 = Clock::now();
+  }
   ++w.frames;
   if (s.ops.adv_count > 1)
   {
@@ -2658,9 +2695,13 @@ void NetStatsOnDisplayedFrame(Core::System& system)
   }
   {
     // The throttle points since the previous displayed frame started: that frame's own.
+    // A catch-up frame's throttle point is a frame early on purpose.
+    const bool advanced = std::exchange(s.prev_frame_advanced, s.advanced_this_frame);
+    s.advanced_this_frame = false;
     const double ms = std::chrono::duration<double, std::milli>(
                           system.GetCoreTiming().TakeMaxBehindSchedule())
-                          .count();
+                          .count() -
+                      (advanced ? FRAME_US / 1000 : 0.0);
     if (ms > LATE_MS)
     {
       ++w.late;
@@ -2678,6 +2719,7 @@ void NetStatsOnDisplayedFrame(Core::System& system)
   if (w.frames < NET_STATS_WINDOW)
     return;
   w.cadence = Rollback::PresentStats::TakeCadence();
+  CloseNetWindowClock();
 
   std::string link;
   if (GekkoNetworkStats st{}; WorstLink(&st))
@@ -2912,21 +2954,66 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
   return true;
 }
 
+// Online time sync, as Slippi's (CEXISlippi::shouldAdvanceOnlineFrame). The gap to the peers is
+// GekkoNet's frames ahead, which is Slippi's CalcTimeOffsetUs in frames (positive: ahead). Every
+// TIME_SYNC_INTERVAL frames:
+// - the speed: a peer more than 8 ms ahead runs up to 0.5% slower, a peer behind up to 1% faster,
+//   all of it from 3 frames on (the fast PC is slowed down less, so its performance comes first);
+// - after HARD_SYNC_UNTIL, a peer more than a frame and 10 ms behind runs up to 3 catch-up frames,
+//   one every ADVANCE_EVERY frames. Slippi's game loops twice in such a frame; here the frame
+//   skips its wait (CoreTimingManager::AdvanceThrottle), which comes to the same.
+// After HARD_SYNC_UNTIL the peer that is ahead never waits: Slippi took that out (2023) because a
+// halted frame can drop an input, and a speed nudge on the fast PC does little once it is behind
+// its own schedule (until 0.1.47 it was up to 2% slower and nothing caught up: a peer that fell
+// behind stayed behind, and the other rolled back deeper for the rest of the game).
+constexpr u32 TIME_SYNC_INTERVAL = 30;
+constexpr double SYNC_T1_US = 10000;  // Slippi's t1
+constexpr double MAX_SLOW_DOWN = 0.005, MAX_SPEED_UP = 0.01;
+constexpr double SPEED_WINDOW_FRAMES = 3;
+constexpr int MAX_ADVANCE_FRAMES = 3;
+constexpr u32 ADVANCE_EVERY = 5;
+constexpr s64 HARD_SYNC_UNTIL = 120;
+
 void UpdateTimeSync(Core::System& system)
 {
   if (s.mode != Mode::Network || s.current_frame < 0)
     return;
   const u32 frame = static_cast<u32>(s.current_frame);
-  if (frame % 15 != 0 || frame == s.last_timesync_frame)
+  if (frame % TIME_SYNC_INTERVAL == 0 && frame != s.last_timesync_frame)
+  {
+    s.last_timesync_frame = frame;
+    const double offset_us = s.frames_ahead * FRAME_US;
+    double deviation = 0;
+    if (offset_us > -250 && offset_us < 8000)
+      deviation = 0;
+    else if (offset_us < 0)
+      deviation = std::min(-offset_us / (SPEED_WINDOW_FRAMES * FRAME_US), 1.0) * MAX_SPEED_UP;
+    else
+      deviation = -std::min(offset_us / (SPEED_WINDOW_FRAMES * FRAME_US), 1.0) * MAX_SLOW_DOWN;
+    s.speed_factor = 1.0 + deviation;
+
+    if (offset_us < -(FRAME_US + SYNC_T1_US) && !s.advancing)
+    {
+      s.advancing = true;
+      const int max_frames = s.current_frame > HARD_SYNC_UNTIL ? MAX_ADVANCE_FRAMES : 0;
+      s.frames_to_advance =
+          std::min(static_cast<int>((-offset_us - SYNC_T1_US) / FRAME_US) + 1, max_frames);
+    }
+  }
+  if (s.frames_to_advance > 0)
+  {
+    // (A pass whose wait for the peer timed out comes here again with the same frame.)
+    if (frame % ADVANCE_EVERY != 0 || s.current_frame == s.last_advance_frame)
+      return;
+    s.last_advance_frame = s.current_frame;
+    --s.frames_to_advance;
+    system.GetCoreTiming().AdvanceThrottle(std::chrono::duration_cast<DT>(
+        std::chrono::duration<double, std::micro>(FRAME_US)));
+    s.advanced_this_frame = true;
+    ++s.net_window.advances;
     return;
-  s.last_timesync_frame = frame;
-  const float ahead = s.frames_ahead;
-  double factor = 1.0;
-  if (ahead > 0.25f)
-    factor = 1.0 - std::min(ahead / 2.0f, 1.0f) * 0.02;
-  else if (ahead < -0.25f)
-    factor = 1.0 + std::min(-ahead / 2.0f, 1.0f) * 0.01;
-  s.speed_factor = factor;
+  }
+  s.advancing = false;
 }
 
 // Slippi's ping line (SlippiNetplayClient, ack packets): the last round trip to the opponent in ms,
@@ -3006,14 +3093,13 @@ bool HostWait(Core::System& system, Pred pred, std::chrono::milliseconds max)
 }
 
 // Slippi's start-of-match time sync (CEXISlippi::shouldSkipOnlineFrame): in the first
-// HARD_SYNC_UNTIL session frames, every HARD_SYNC_INTERVAL, a peer that is a frame or more ahead
-// of the other waits on the host for the whole frames it is ahead (at most HARD_SYNC_MAX_FRAMES).
-// The speed nudge alone (UpdateTimeSync, at most -2% / +1%) takes seconds to close a gap of a
-// few frames, and the peer that is ahead rolls back on nearly every frame meanwhile.
-constexpr s64 HARD_SYNC_UNTIL = 120;
+// HARD_SYNC_UNTIL session frames, every HARD_SYNC_INTERVAL, a peer more than 10 ms ahead of the
+// other waits on the host for the frames it is ahead, rounded up (at most HARD_SYNC_MAX_FRAMES).
+// The speed nudge alone (UpdateTimeSync) takes seconds to close a gap of a few frames, and the
+// peer that is ahead rolls back on nearly every frame meanwhile. Later, the peer behind catches up
+// instead (UpdateTimeSync's catch-up frames).
 constexpr s64 HARD_SYNC_INTERVAL = 30;
 constexpr int HARD_SYNC_MAX_FRAMES = 5;
-constexpr double FRAME_US = 1e6 * 1001.0 / 60000.0;
 
 void HardTimeSync(Core::System& system)
 {
@@ -3025,9 +3111,11 @@ void HardTimeSync(Core::System& system)
   }
   s.last_hard_sync_frame = s.current_frame;
   const float ahead = s.frames_ahead;
-  if (ahead < 1.0f)
+  const double offset_us = ahead * FRAME_US;
+  if (offset_us <= SYNC_T1_US)
     return;
-  const int frames = std::min(static_cast<int>(std::lround(ahead)), HARD_SYNC_MAX_FRAMES);
+  const int frames =
+      std::min(static_cast<int>((offset_us - SYNC_T1_US) / FRAME_US) + 1, HARD_SYNC_MAX_FRAMES);
   const auto t0 = Clock::now();
   const auto until = t0 + std::chrono::microseconds(static_cast<s64>(frames * FRAME_US));
   HostWait(

@@ -335,6 +335,8 @@ def run_session(preset: str, cpu: str, args: argparse.Namespace, run: int) -> Di
     def mk(name, **kw):
         if args.config:
             kw["config"] = args.config
+        if "join" in name and args.config_b:
+            kw["config"] = list(args.config) + args.config_b
         if args.platform:
             kw["platform"] = args.platform
         if "join" in name and rtc_b:
@@ -724,6 +726,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="P1:P2:stage of the matches after the first")
     ap.add_argument("--config", action="append", default=[],
                     help="extra Dolphin -C override for both instances, e.g. Dolphin.Core.SmoothEarlyPresentation=True")
+    ap.add_argument("--config-b", action="append", default=[],
+                    help="extra Dolphin -C override for the joiner only, e.g. Dolphin.Core.EmulationSpeed=0.62 "
+                         "(a peer that cannot keep full speed)")
     ap.add_argument("--platform", default="",
                     help="Dolphin -p for both instances (default headless, which never presents: win32 for real presents)")
     ap.add_argument("--json", default=None)

@@ -939,6 +939,33 @@ Not the fix: Dolphin's Smooth Early Presentation (an earlier headless A/B was a 
 
 The holds averaged 2.0 ms (typical) and 3.5-4.0 ms (cross_country). 0 mismatches in every run; a single-core session ran clean (present sd 1.8 ms); `test_online_unranked.py` 4 of 4 on the final build. "Late frames" now count more (the rollback re-run comes after the frame's one sleep); they no longer delay the presents beyond the hold.
 
+## Phase 18: a ranked set in slow motion; time sync as Slippi's (prod, 2026-10-10)
+
+**Symptom.** Two ranked sets, Drsmsh (host, i7-10700KF, 0.1.47) against Knuckles Main, both in the US, 100 ms round trip, input delay auto (1-2 frames): "terrible connection, super laggy". Only the host's `dolphin.log`. All four games ran at 36.8-37.6 frames a second, 62% speed (the recording's timer: 5.06 s of game time in 8 s). Every 600-frame window: 40-64% of frames rolled back, 5.2 deep on average (max 7), each rollback 28 ms; 85% of frames late, up to 140 ms behind the throttle (past MaxFallback, so the time was dropped); the host 4-6 frames ahead the whole game with the speed at its floor (0.98); GekkoNet's ping 130-400 ms against 100 ms before the game; 0 desyncs.
+
+**Reading.** Two equal machines cannot stay 5 frames apart: the one behind rolls back little and would catch up within a second. So the peer did not run faster than ~37 frames a second, and the host spent its spare time on ever deeper rollbacks until it ran no faster either (91 s of re-runs in a 177 s game). The peer's log would say why it was slow; it was not available. Locally at the same latency (netsim `cross_country`, D3D11, both at full speed) a session runs at 60 frames a second, 0.15 frames ahead, depth 2.3, 8.4 ms a rollback; with the joiner capped at 62% (`--config-b Dolphin.Core.EmulationSpeed=0.62`) the host sits at the prediction window (6.96 ahead) and waits instead, since the test macros change their input rarely. The presenter's hold (~7.3 ms) is the same in both, so it is not the cause.
+
+**What time sync did.** After the first 120 frames (`HardTimeSync`, Slippi's start-of-match halts) only a speed nudge: the peer ahead up to 2% slower, the peer behind up to 1% faster. A nudge cannot move a PC that is already behind its own schedule, and nothing else pulled a peer back that had fallen behind. Slippi (`refs/slippi-dolphin`, `CEXISlippi::shouldAdvanceOnlineFrame`) took its mid-game halts out in 2023 ("less halts means less dropped inputs") and has the peer behind catch up instead.
+
+**Change** (`UpdateTimeSync`, `CoreTimingManager::AdvanceThrottle`), Slippi's numbers, the gap being GekkoNet's frames ahead (Slippi's `CalcTimeOffsetUs` in frames), checked every 30 frames:
+
+- speed: none within -250 us .. +8 ms; ahead, up to 0.5% slower (all of it at 3 frames); behind, up to 1% faster (at 3 frames);
+- after frame 120, a peer more than a frame and 10 ms behind runs up to 3 catch-up frames, one every 5 frames. Slippi's game loops twice in such a frame; here the frame skips its wait (the throttle's timeline moves a frame earlier), which comes to the same;
+- the start-of-match halts use Slippi's rule (more than 10 ms ahead: the frames ahead rounded up, at most 5);
+- the `gprb net:` line gives each window's wall time and frames a second (`600 frames in 10.0 s (60.0/s)`) and its `catch-up frames`; a catch-up frame does not count as late.
+
+It does not make a peer that cannot keep full speed any faster (the prod set would still have run at ~37 frames a second): catch-up needs spare time on the peer behind, as in Slippi.
+
+**Results** (`gprb_session.py --cpu dc --delay auto`, Null video, below-normal priority with a game running on the same PC; raw `run/scratch/timesync/`):
+
+| Run | Frames a second | Frames ahead (host) | Catch-up frames | Rollbacks host / joiner | Mismatches |
+|---|---|---|---|---|---|
+| `cross_country`, the joiner frozen for 0.5 s seven times (six in a row) | 60.0 outside the freezes | 0.1-0.4 (+-2.5 right after a freeze) | 0 (the throttle's own catch-up closed each gap) | 375 / 378 | 0 of 6,907 |
+| `typical` (regression) | 59.9-60.0 | 0.07-0.15 | 0 | 305 / 305 (depth max 2) | 0 of 6,282 |
+| `cross_country`, the joiner at 97% speed | 59.7 | 1.57 avg, max 2.5 | 60 on the joiner (about 14 per 10 s) | 283 (depth 2.9) / 45 | 0 of 2,755 |
+
+With the joiner at 97% and only the speed nudge, the joiner (at most 1% faster) falls behind until the host waits at the prediction window; with catch-up frames the gap holds at ~1.5 frames, just under the catch-up threshold.
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).

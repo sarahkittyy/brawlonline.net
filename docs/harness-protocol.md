@@ -118,7 +118,7 @@ Everything in this section was added while fixing Brawlback's rollback (`rollbac
 | `load_count`, `load_us_total`, `load_us_max` | rollback loads and their wall-clock cost |
 | `desyncs_detected`, `last_desync_frame` | GekkoNet checksum mismatches with the peer (or, in a sync test, between a frame and its re-run) |
 | `frames_ahead` | GekkoNet's estimate, already halved: this peer's share of the gap |
-| `time_sync_speed` | emulation speed factor applied by time sync, 0.98-1.01 |
+| `time_sync_speed` | emulation speed factor applied by time sync, 0.995-1.01 |
 | `stall_polls` | GekkoNet polls that gave no frame to advance; the CPU thread waits about 0.25 ms per poll |
 | `synctest`, `synctest_mismatches` | sync test running; re-runs whose MEM1/MEM2 differed from the first run |
 | `netplay_desync_reports` | Dolphin's own netplay desync messages |
