@@ -162,6 +162,13 @@ def _keep_logs(args: argparse.Namespace, insts, rep: Dict[str, Any]):
                 for src, suffix in (("Logs/dolphin.log", "log"), ("harness-stderr.txt", "stderr.txt")):
                     with contextlib.suppress(OSError):
                         shutil.copy(i.user_dir / src, d / f"{i.name}-r{rep.get('run', 0)}.{suffix}")
+                if any("DumpAudio=True" in c for c in args.config):
+                    # Dolphin holds the dump open (no sharing) until it shuts down.
+                    with contextlib.suppress(Exception):
+                        i.stop()
+                    for wav in (i.user_dir / "Dump/Audio").glob("*_dspdump.wav"):
+                        with contextlib.suppress(OSError):
+                            shutil.copy(wav, d / f"{i.name}-r{rep.get('run', 0)}.wav")
 
 
 def second_history(c, chars: Sequence[str], stage: str, notes: List[str]) -> None:
@@ -343,7 +350,15 @@ def run_session(preset: str, cpu: str, args: argparse.Namespace, run: int) -> Di
             kw["rtc"] = rtc_b
         if "host" in name and args.rtc_a:
             kw["rtc"] = args.rtc_a
-        return orig(name, **kw)
+        inst = orig(name, **kw)
+        sd = args.sd_b if "join" in name else args.sd_a
+        if sd:
+            # One peer's SD card differs (e.g. another song file under a tracklist's name, or none).
+            sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "tools" / "sdcard"))
+            import patch_sd
+            adds = [(Path(s.split("=", 1)[0]).read_bytes(), s.split("=", 1)[1]) for s in sd if not s.startswith("-")]
+            patch_sd.patch_image(inst.user_dir / "Wii" / "sd.raw", adds, [s[1:] for s in sd if s.startswith("-")])
+        return inst
     G.make_instance = mk
     if args.pass_log:
         # Every update's passes (PPR_GPRB_PASS_LOG, read by Dolphin at match start), one directory
@@ -729,6 +744,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--config-b", action="append", default=[],
                     help="extra Dolphin -C override for the joiner only, e.g. Dolphin.Core.EmulationSpeed=0.62 "
                          "(a peer that cannot keep full speed)")
+    ap.add_argument("--sd-a", action="append", default=[], metavar="LOCAL=SD_PATH|-SD_PATH",
+                    help="the host's SD card only: add (or with a leading -, remove) a file")
+    ap.add_argument("--sd-b", action="append", default=[], metavar="LOCAL=SD_PATH|-SD_PATH",
+                    help="the joiner's SD card only: add (or with a leading -, remove) a file")
     ap.add_argument("--platform", default="",
                     help="Dolphin -p for both instances (default headless, which never presents: win32 for real presents)")
     ap.add_argument("--json", default=None)

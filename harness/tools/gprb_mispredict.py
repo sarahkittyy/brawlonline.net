@@ -167,7 +167,7 @@ def _one_run(args, inp: Dict[str, Any], mode: str, run: int) -> Dict[str, Any]:
     ports = int(meta["ports"])
     mp_ports = ports if args.mispredict_ports is None else args.mispredict_ports
     rep: Dict[str, Any] = {"mode": mode, "run": run, "cpu": args.cpu, "distance": args.distance, "ports": ports}
-    extra = [f"Dolphin.Core.EmulationSpeed={args.speed}"]
+    extra = [f"Dolphin.Core.EmulationSpeed={args.speed}"] + list(args.config)
     if args.interpreter:
         extra.append("Dolphin.Core.CPUCore=0")
     if args.dump_audio:
@@ -421,6 +421,8 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     p.add_argument("--save-traces", default=None, help="write every run's trace to this directory")
     p.add_argument("--dump-audio", default=None,
                    help="dump the audio a player hears; each run's dump is copied here as <mode>-<run>.wav")
+    p.add_argument("--config", action="append", default=[],
+                   help="extra Dolphin -C override, e.g. Dolphin.Online.Music=False (music off)")
     p.add_argument("--timeout", type=float, default=1800)
     p.add_argument("--ref-json", default=None, help="compare with this saved reference trace")
     p.add_argument("--save-ref", default=None, help="save the first run's trace here")
