@@ -116,8 +116,6 @@ struct Room {
     /// Slot index (0-3) of the host.
     host: usize,
     phase: Phase,
-    /// Accounts the host removed: they cannot join this room again.
-    kicked: HashSet<Uuid>,
     created: Instant,
     /// Rooms created before this one since mm started, plus one: the `n` of its chat group
     /// `room-<CODE>-<n>`, so a code used again later is another group.
@@ -424,7 +422,6 @@ impl RoomBook {
                 slots,
                 host: 0,
                 phase: Phase::Waiting,
-                kicked: HashSet::new(),
                 created: now,
                 serial: self.room_counter,
             },
@@ -452,9 +449,6 @@ impl RoomBook {
             // Already in it: the answer is the state, as for a join.
             self.broadcast(&code, out);
             return Ok(());
-        }
-        if room.kicked.contains(&who.uid) {
-            return Err(msg::REMOVED);
         }
         let slot = room.free_slot().ok_or(msg::ROOM_FULL)?;
         if let Some(old) = self.member_of.get(&conn).cloned() {
@@ -580,8 +574,8 @@ impl RoomBook {
                     }
                     room.open[s] = false;
                     if let Some(m) = &room.slots[s] {
-                        // Closing an occupied slot removes its player (`docs/design/rooms.md` #10).
-                        room.kicked.insert(m.info.uid);
+                        // Closing an occupied slot removes its player, who may join again once a
+                        // slot is open (`docs/design/rooms.md` #10).
                         kick = Some(m.conn);
                     }
                 }
@@ -847,6 +841,7 @@ impl RoomBook {
 mod tests {
     use super::*;
     use serde_json::Value;
+    use std::collections::HashSet;
 
     fn info(n: u8) -> MemberInfo {
         MemberInfo {
@@ -990,7 +985,7 @@ mod tests {
         assert_eq!(s["mode"], "ffa");
         assert_eq!(s["statusText"], "Waiting for players (2/4)");
         join(&mut t, 3, &code);
-        // Closing an occupied slot removes its player, who cannot come back.
+        // Closing an occupied slot removes its player.
         let out = t.req(1, RoomRequest::Slot { slot: 2, open: false });
         let left = msgs(&out, 2);
         assert_eq!(left.last().unwrap()["type"], "room-left");
@@ -999,10 +994,11 @@ mod tests {
         assert!(s["slots"][1]["player"].is_null());
         assert_eq!(s["slots"][1]["open"], false);
         assert_eq!(t.book.room_of(2), None);
+        // Not banned: the slot opened again, the removed player joins again (a misclick undone).
         t.req(1, RoomRequest::Slot { slot: 2, open: true });
-        assert_eq!(msgs(&join(&mut t, 2, &code), 2)[0]["error"], msg::REMOVED);
-        // Someone else takes the slot.
-        assert_eq!(last_state(&join(&mut t, 5, &code), 5)["you"], 2);
+        assert_eq!(last_state(&join(&mut t, 2, &code), 2)["you"], 2);
+        // Someone else takes the last open slot.
+        assert_eq!(last_state(&join(&mut t, 5, &code), 5)["you"], 4);
     }
 
     #[test]

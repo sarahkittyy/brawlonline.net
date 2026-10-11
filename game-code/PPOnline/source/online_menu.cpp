@@ -111,6 +111,8 @@ namespace OnlineMenu {
         bool roomSeen;                      // roomTaken is from this room's view
         bool roomReload;                    // a launcher join on an online CSS: build it again
         int roomZHeld;
+        int roomKickPort;                   // the host holds A on this occupied slot (-1 none)
+        int roomKickHeld;                   // for this many frames
     };
     static State s;
     bool roomCss();
@@ -1209,6 +1211,7 @@ namespace OnlineMenu {
         s.roomSeen = false;
         s.roomReload = false;
         s.roomZHeld = 0;
+        s.roomKickPort = -1;
         // Leaving the CSS goes back to the page the mode was picked on (netmenu.cpp
         // exitToOnlinePage): Direct to the ONLINE page, Unranked/Teams to WITH ANYONE.
         // Direct (BASIC VERSUS) goes back to WITH FRIENDS' page (sqMenuMain entry 0x1C reopens
@@ -1773,9 +1776,9 @@ namespace OnlineMenu {
     // and FFA / Teams are the CSS's own ITEM and STAGE buttons at the right end of the bar,
     // relabelled (RoomCss::headerButtons) and pressed as the game presses them (the hand's
     // buttons 0x19 / 0x1A, cssSwitchButtons -> s_headerPress); L and R do the same. Under
-    // LEAVE: the room's host, "Host: <name>", or for the host "A on a slot to toggle it" (window
-    // 2 of the rule line's MuMsg, attached as the own-code window). Window units are 1.3 screen
-    // pixels (2000 wide) from x = 1265 px (found live).
+    // LEAVE: the room's host, "Host: <name>", or for the host "A: open/close / Hold A: remove"
+    // (window 2 of the rule line's MuMsg, attached as the own-code window). Window units are 1.3
+    // screen pixels (2000 wide) from x = 1265 px (found live).
     static const u32 ROOM_HOST_WINDOW = 2;
     static const float ROOM_HOST_X1 = -905.0f, ROOM_HOST_X2 = -690.0f;
     static const float ROOM_HOST_Y = 95.0f, ROOM_HOST_HALF = 40.0f, ROOM_HOST_SCALE = 0.72f;
@@ -1816,7 +1819,7 @@ namespace OnlineMenu {
             char hostName[RoomCss::NAME_CHARS + 1];
             hostName[0] = 0;
             if (se.roomHost < PPOM::SESSION_PLAYERS) u16Name(hostName, se.players[se.roomHost].name);
-            if (host) strcpy(text, "A on a slot\nto toggle it");
+            if (host) strcpy(text, "A: open/close\nHold A: remove");
             else sprintf(text, "Host:\n%s", hostName);
         }
         if (strcmp(text, s.roomBtnPrinted[0]) == 0) return;
@@ -1844,6 +1847,7 @@ namespace OnlineMenu {
                 CodeEntry::open(LOCAL_PORT, true);
             }
             s.roomZHeld = 0;
+            s.roomKickPort = -1;
         } else {
             if (pressed & BTN_START) {
                 if (!roomLockedForNext() && waiting && lockChar() >= 0) {
@@ -1884,12 +1888,31 @@ namespace OnlineMenu {
                 postRoom(PPOM::ROOM_TEAMS, (se.roomFlags & PPOM::RF_TEAMS) ? 0 : 1, 0, NULL);
                 playSE(1);
             }
-            if ((pressed & BTN_A) && host && waiting) {
-                int port = RoomCss::panelUnderHand();   // panels are in slot order
-                if (port >= 0) {
-                    maskPressed(BTN_A);
-                    bool open = (se.players[port].roomSlot & PPOM::SLOT_OPEN) != 0;
-                    postRoom(PPOM::ROOM_SLOT, (u8)port, open ? 0 : 1, NULL);
+            // A on a slot's panel: an empty slot opens or closes at once. An occupied one closes
+            // (its player removed, free to join again once a slot is open) only while A is held
+            // on it as long as Z to leave (rooms.md #10), so a press meant for something else
+            // there (Brawl's team flag) removes nobody; let go early, the buzzer.
+            int port = host && waiting ? RoomCss::panelUnderHand() : -1;   // panels in slot order
+            if ((pressed & BTN_A) && port >= 0) {
+                maskPressed(BTN_A);
+                u8 bits = se.players[port].roomSlot;
+                if (bits & PPOM::SLOT_TAKEN) {
+                    s.roomKickPort = port;
+                    s.roomKickHeld = 0;
+                } else {
+                    postRoom(PPOM::ROOM_SLOT, (u8)port, (bits & PPOM::SLOT_OPEN) ? 0 : 1, NULL);
+                    playSE(1);
+                }
+            }
+            if (s.roomKickPort >= 0) {
+                if (port != s.roomKickPort || !(se.players[port].roomSlot & PPOM::SLOT_TAKEN)) {
+                    s.roomKickPort = -1;   // the hand moved off, the player left, or a game started
+                } else if (!(held & BTN_A)) {
+                    s.roomKickPort = -1;
+                    playSE(SE_ERROR);
+                } else if (++s.roomKickHeld > DISCONNECT_HOLD_DELAY) {
+                    postRoom(PPOM::ROOM_SLOT, (u8)port, 0, NULL);
+                    s.roomKickPort = -1;
                     playSE(1);
                 }
             }
