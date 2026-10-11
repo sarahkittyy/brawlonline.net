@@ -78,6 +78,19 @@ describe("game theme frames", () => {
     });
   });
 
+  it("draws no frame whose tinted image could not be made, rather than the untinted near-white mask", () => {
+    const failed = { palette: null, images: { panel: "data:panel" } };
+    expect(framesFromManifest(manifest, failed)).toEqual({
+      button: undefined,
+      buttonHover: undefined,
+      panel: frameCss(manifest, "panel", "data:panel"),
+    });
+    const css = buildThemeCss(manifest, failed);
+    expect(css).not.toContain("--theme-button-source");
+    expect(css).not.toContain("--theme-play-hover-opacity");
+    expect(css).toContain('--theme-panel-source: url("data:panel");');
+  });
+
   it("leaves contained buttons alone without game frames", () => {
     const theme = createAppTheme(fallbackPalette, {});
     const contained = theme.components?.MuiButton?.styleOverrides?.contained as Record<string, any>;

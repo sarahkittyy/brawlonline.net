@@ -46,6 +46,13 @@ export const FRAME_SCALE: Record<FrameKey, number> = { button: 0.5, buttonHover:
 
 type RGB = [number, number, number];
 
+/**
+ * Button tint without P+'s gradient (a disc-only extraction, or the gradient failed to load): a neutral grey as
+ * bright as P+'s teal (luminance ~0.49). The button mask's face is near white, and untinted it would leave the
+ * light label unreadable.
+ */
+const NEUTRAL_FRAME_TINT: RGB = [125, 125, 125];
+
 export const useGameAssets = create<{ state: GameAssetsState | null; setState: (s: GameAssetsState) => void }>(
   (set) => ({
     state: null,
@@ -85,11 +92,19 @@ export function frameCss(manifest: GameAssetManifest, key: FrameKey, imageUrl?: 
   };
 }
 
+/** A frame of a prepared theme, or none when its tinted image could not be made (never the untinted mask). */
+function preparedFrameCss(manifest: GameAssetManifest, key: FrameKey, prepared?: PreparedTheme) {
+  if (prepared && !prepared.images[key]) {
+    return undefined;
+  }
+  return frameCss(manifest, key, prepared?.images[key]);
+}
+
 export function framesFromManifest(manifest: GameAssetManifest, prepared?: PreparedTheme): ThemeFrames {
   return {
-    button: frameCss(manifest, "button", prepared?.images.button),
-    buttonHover: frameCss(manifest, "buttonHover", prepared?.images.buttonHover),
-    panel: frameCss(manifest, "panel", prepared?.images.panel),
+    button: preparedFrameCss(manifest, "button", prepared),
+    buttonHover: preparedFrameCss(manifest, "buttonHover", prepared),
+    panel: preparedFrameCss(manifest, "panel", prepared),
   };
 }
 
@@ -126,7 +141,7 @@ export function buildThemeCss(manifest: GameAssetManifest, prepared: PreparedThe
       vars.push(`--theme-background: ${layers.join(", ")};`);
     }
     for (const key of FRAME_KEYS) {
-      const frame = frameCss(manifest, key, prepared.images[key]);
+      const frame = preparedFrameCss(manifest, key, prepared);
       if (frame) {
         vars.push(`--theme-${key}-source: ${frame.source};`);
         vars.push(`--theme-${key}-slice: ${frame.slice};`);
@@ -226,6 +241,9 @@ const toLuminance = (c: RGB, target: number): RGB => {
   return [c[0] * f, c[1] * f, c[2] * f];
 };
 
+/** A modest lift for the highlighted plate: the light label must stay readable on it. */
+const hoverTintOf = (c: RGB): RGB => toLuminance(c, Math.min(0.85, luminance(c) * 1.2));
+
 /** Colours at the top, middle and bottom of the vertical gradient texture. */
 async function sampleGradient(url: string): Promise<{ top: RGB; middle: RGB; bottom: RGB } | null> {
   const loaded = await loadPixels(url);
@@ -243,7 +261,8 @@ async function sampleGradient(url: string): Promise<{ top: RGB; middle: RGB; bot
 /**
  * Palette from P+'s menu background gradient (teal, dark, blue in P+ 3.x): the
  * accent is its top colour, the secondary its bottom colour, the surfaces its
- * dark middle. A disc-only extraction has no gradient and keeps the neutral palette.
+ * dark middle. A disc-only extraction has no gradient and keeps the neutral palette, with the button
+ * frames tinted a neutral grey.
  */
 export async function prepareTheme(manifest: GameAssetManifest): Promise<PreparedTheme> {
   const images: PreparedTheme["images"] = {};
@@ -251,8 +270,8 @@ export async function prepareTheme(manifest: GameAssetManifest): Promise<Prepare
   const gradient = background ? await sampleGradient(assetUrl(background.file)) : null;
 
   let palette: ThemePalette | null = null;
-  let frameTint: RGB = [255, 255, 255];
-  let hoverTint: RGB = [255, 255, 255];
+  let frameTint = NEUTRAL_FRAME_TINT;
+  let hoverTint = hoverTintOf(NEUTRAL_FRAME_TINT);
   let panelTint: RGB = [255, 255, 255];
   let progressTrack: string | undefined;
   if (gradient) {
@@ -266,8 +285,7 @@ export async function prepareTheme(manifest: GameAssetManifest): Promise<Prepare
       backgroundPaper: hex(toLuminance(gradient.middle, luminance(gradient.middle) * 0.7)),
     };
     frameTint = gradient.top;
-    // A modest lift: the light label must stay readable on the highlighted plate.
-    hoverTint = toLuminance(gradient.top, Math.min(0.85, luminance(gradient.top) * 1.2));
+    hoverTint = hoverTintOf(gradient.top);
     panelTint = gradient.bottom;
     const [r, g, b] = gradient.middle.map(clamp);
     progressTrack = `rgba(${r}, ${g}, ${b}, 0.7)`;
@@ -284,7 +302,9 @@ export async function prepareTheme(manifest: GameAssetManifest): Promise<Prepare
   for (const [key, texture, color, alpha] of tinted) {
     const tex = manifest.textures[texture];
     if (tex) {
-      images[key] = (await tint(assetUrl(tex.file), color, alpha)) ?? assetUrl(tex.file);
+      // An untinted frame mask is a near-white plate under light text: better no frame than that.
+      const isFrame = (FRAME_KEYS as readonly string[]).includes(key);
+      images[key] = (await tint(assetUrl(tex.file), color, alpha)) ?? (isFrame ? undefined : assetUrl(tex.file));
     }
   }
   return { palette, images, progressTrack };
