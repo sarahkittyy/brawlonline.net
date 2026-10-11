@@ -47,9 +47,11 @@ GMKIND_MARIO, GMKIND_FOX = 0x00, 0x07
 
 
 class Game:
-    def __init__(self, name: str):
-        ART.mkdir(parents=True, exist_ok=True)
+    def __init__(self, name: str, art: Path = ART, config_args: tuple[str, ...] = ()):
+        self.art = art
+        art.mkdir(parents=True, exist_ok=True)
         self.inst = ppboot.make_instance(name, [str(PLUGIN)], boot="offline")
+        self.inst.config.config_args = list(config_args)   # -C overrides (e.g. a 4:3 Wii)
         self.inst.launch()
         self.c: HarnessClient = self.inst.connect()
         self.c.wait_state("running", timeout=120)
@@ -65,11 +67,11 @@ class Game:
             from ppharness.instance import remove_tree
             log = d / "Logs" / "dolphin.log"
             if log.exists():
-                (ART / f"{self.inst.name}-dolphin.log").write_bytes(log.read_bytes())
+                (self.art / f"{self.inst.name}-dolphin.log").write_bytes(log.read_bytes())
             remove_tree(d, self.inst.linked_dirs)
 
     def steps(self, *s: str) -> None:
-        drive.run(self.c, list(s), out=str(ART))
+        drive.run(self.c, list(s), out=str(self.art))
 
     def scene(self) -> str:
         return drive.scene(self.c).name
@@ -86,7 +88,7 @@ class Game:
         self.sim.service(frames + 10)
 
     def shot(self, name: str) -> None:
-        self.c.screenshot(str(ART / f"{name}.png"))
+        self.c.screenshot(str(self.art / f"{name}.png"))
 
     def u32(self, a: int) -> int:
         return struct.unpack(">I", self.c.read_mem(a, 4))[0]
@@ -307,6 +309,184 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     page = g.u32(ppom_sym(g, "g_friendsPage"))
     assert struct.unpack(">H", c.read_mem(page + 0x42, 2))[0] == 0
     assert sim.screen() == ppom.SCREENS["menus"]
+
+
+# ---- the RULES button (rules_button.cpp; docs/game-code.md §14 "RULES button") ----------------
+RULES_ART = ROOT / "run" / "artifacts" / "game-code" / "rooms" / "rules-button"
+BUTTON_RULES = 0x30            # its hand button number (Brawl's are 2-0x26)
+TASK_RULES_OPEN = 0x630        # muSelCharTask: P+'s rules menu is open
+
+
+class RulesButton:
+    """g_rulesButton (rules_button.cpp): made, presses, hits, its colL/colR rect, its place."""
+
+    def __init__(self, g: Game):
+        self.g = g
+        self.addr = ppom_sym(g, "g_rulesButton")
+
+    def read(self) -> dict:
+        made, presses, hits, l, r, t, b = struct.unpack(">3I4f", self.g.c.read_mem(self.addr, 0x1C))
+        return {"made": made, "presses": presses, "hits": hits, "rect": (l, r, t, b)}
+
+    def centre(self) -> tuple[float, float]:
+        l, r, t, b = self.read()["rect"]
+        return (l + r) / 2, (t + b) / 2
+
+
+def css_task(g: Game) -> int:
+    return g.u32(g.u32(g.u32(0x805A0060) + 4) + 0x400)
+
+
+def hand_button(g: Game) -> int:
+    return g.u32(g.u32(g.area(0) + 0x1A8) + 0xAC)
+
+
+def menu_open(g: Game) -> bool:
+    return g.u32(css_task(g) + TASK_RULES_OPEN) != 0
+
+
+def create_room(g: Game) -> None:
+    g.steps("until muMenuMain 3000", "wait 60")
+    g.sim = sim = roomsim.RoomSim(g.c)
+    g.wait(60)
+    g.tap("A")
+    g.wait(60)
+    g.tap("DLEFT", 4)
+    g.wait(20)
+    g.tap("A")
+    sim.service(400, until=lambda: g.scene() == "scSelctCharacter" and sim.room is not None)
+    g.wait(60)
+
+
+@pytest.fixture
+def rules_game(dolphin_exe):
+    g = Game("rules-button", art=RULES_ART)
+    yield g
+    g.close()
+
+
+def test_rules_button(rules_game: Game) -> None:
+    g = rules_game
+    c = g.c
+    c.game_bridge_config(enabled=False)
+    create_room(g)
+    sim = g.sim
+    rb = RulesButton(g)
+
+    # Made once, left of PUBLIC / FFA, between them in height.
+    st = rb.read()
+    l, r, t, b = st["rect"]
+    assert st["made"] == 1, st
+    assert r < PUBLIC_BUTTON[0] - 2.0 and r - l > 3.0 and MODE_BUTTON[1] < (t + b) / 2 < PUBLIC_BUTTON[1], st
+    g.shot("01-room-css")
+
+    # The hand on it: its button in the hand (+0xAC), the highlight playing, as on PUBLIC.
+    g.hand_to(*rb.centre(), tol=0.4)
+    hits = rb.read()["hits"]
+    g.wait(20)
+    assert hand_button(g) == BUTTON_RULES and rb.read()["hits"] > hits
+    g.shot("02-hover")
+
+    # A: P+'s rules menu over the room CSS (RoomRules::open); PUBLIC / FFA untouched.
+    public, teams = sim.room.public, sim.room.teams
+    g.tap("A")
+    g.wait(40)
+    assert rb.read()["presses"] == 1 and menu_open(g)
+    assert (sim.room.public, sim.room.teams) == (public, teams)
+    assert not sim.room_ops("public") and not sim.room_ops("teams")
+    g.shot("03-rules-menu")
+    # Under the menu the hand passes over it.
+    hits = rb.read()["hits"]
+    g.wait(20)
+    assert rb.read()["hits"] == hits
+    # B closes it; the CSS is ours again.
+    g.tap("B")
+    g.wait(40)
+    assert not menu_open(g)
+    g.wait(10)
+    assert hand_button(g) == BUTTON_RULES
+    g.shot("04-menu-closed")
+
+    # A game starting: greyed, the hand passes over it, A does nothing.
+    g.hand_to(20.0, 12.0, tol=0.5)
+    sim.room.status = 1
+    g.wait(20)
+    g.shot("05-greyed")
+    g.hand_to(*rb.centre(), tol=0.4)
+    g.wait(5)
+    assert hand_button(g) != BUTTON_RULES
+    g.tap("A")
+    g.wait(30)
+    assert rb.read()["presses"] == 1 and not menu_open(g)
+    sim.room.status = 0
+    g.wait(20)
+
+    # The status line ends before it: "Waiting on: Sarah, alice" (397 font units) no longer fits
+    # on one line there and takes two (DEBUG scratch[14] >> 24: online_menu.cpp LAYOUT_TWO).
+    sim.add_player(1, "alice")
+    g.wait(40)
+    g.hand_to(20.0, 12.0, tol=0.5)
+    g.wait(10)
+    assert sim.status_line() == "Waiting on: Sarah, alice" and g.scratch(14) >> 24 == 2, hex(g.scratch(14))
+    g.shot("06-status-line")
+
+    # Not the host: A opens the same menu (read-only, RoomRules), B closes it, nothing is sent.
+    sim.room.host = 1
+    g.wait(30)
+    g.hand_to(*rb.centre(), tol=0.4)
+    g.tap("A")
+    g.wait(40)
+    assert rb.read()["presses"] == 2 and menu_open(g)
+    g.shot("07-viewer-menu")
+    g.tap("B")
+    g.wait(40)
+    assert not menu_open(g) and not sim.room_ops("rules")
+    sim.room.host = 0
+    g.wait(20)
+
+    # Out of the room (hold Z): no RULES; the hand where it was finds nothing.
+    g.hold("Z", 60)
+    g.wait(30)
+    assert sim.room is None
+    g.hand_to(*rb.centre(), tol=0.4)
+    g.wait(10)
+    assert hand_button(g) != BUTTON_RULES
+    g.shot("08-left-the-room")
+
+    # Back to WITH FRIENDS (the CSS's task and our model deleted) and a room again: made again.
+    g.hold("B", 120)
+    sim.service(600, until=lambda: g.scene() == "muMenuMain")
+    g.wait(60)
+    g.tap("A")
+    sim.service(400, until=lambda: g.scene() == "scSelctCharacter" and sim.room is not None)
+    g.wait(60)
+    st = rb.read()
+    assert st["made"] == 2 and abs(st["rect"][0] - l) < 0.05, st
+    g.hand_to(*rb.centre(), tol=0.4)
+    g.wait(10)
+    assert hand_button(g) == BUTTON_RULES
+    g.shot("09-room-again")
+
+
+@pytest.fixture
+def rules_game_4_3(dolphin_exe):
+    g = Game("rules-button-4x3", art=RULES_ART, config_args=("SYSCONF.IPL.AR=0",))
+    yield g
+    g.close()
+
+
+def test_rules_button_at_4_3(rules_game_4_3: Game) -> None:
+    """The bar at 4:3 (the Wii set to 4:3): RULES, PUBLIC and FFA all on screen."""
+    g = rules_game_4_3
+    g.c.game_bridge_config(enabled=False)
+    create_room(g)
+    rb = RulesButton(g)
+    assert rb.read()["made"] == 1
+    g.shot("4x3-room-css")
+    g.hand_to(*rb.centre(), tol=0.4)
+    g.wait(20)
+    assert hand_button(g) == BUTTON_RULES
+    g.shot("4x3-hover")
 
 
 # The keypad's letter keys by (row, column), as test_online_game.ALPHA_KEYS (room-code mode takes
