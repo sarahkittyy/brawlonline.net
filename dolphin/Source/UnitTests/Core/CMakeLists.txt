@@ -67,6 +67,8 @@ add_dolphin_test(NPlayerSetupTest Online/NPlayerSetupTest.cpp)
 add_dolphin_test(RoomMessagesTest Online/RoomMessagesTest.cpp)
 # Match rules: get-ticket-resp's `rules`, checked before they reach the game (Core/Online/MatchRules).
 add_dolphin_test(MatchRulesTest Online/MatchRulesTest.cpp)
+# Sets: the stage steps of a set's format (Core/Online/SetFormat).
+add_dolphin_test(SetFormatTest Online/SetFormatTest.cpp)
 # Chat: the text cleaner, the crypto, and the chat state against hostile messages (Core/Online/Chat*).
 add_dolphin_test(ChatTest
   Online/ChatTextTest.cpp

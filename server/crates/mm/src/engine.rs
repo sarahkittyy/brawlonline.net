@@ -172,6 +172,20 @@ impl Default for EngineConfig {
     }
 }
 
+/// A room's ruleset lookup ([`Output::FetchRuleset`]): who asked, for which room, and what.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RulesetFetch {
+    pub conn: ConnId,
+    pub uid: Uuid,
+    pub room: String,
+    /// The code; `None`: the account's remembered ruleset.
+    pub code: Option<String>,
+    /// The room request it answers (`room-create`, `room-ruleset`), for its errors.
+    pub op: &'static str,
+    /// Make the code the account's remembered ruleset (a host's in-game choice).
+    pub remember: bool,
+}
+
 /// Result of the account lookup the engine asked for.
 #[derive(Debug, Clone)]
 pub enum FetchResult {
@@ -182,10 +196,24 @@ pub enum FetchResult {
 
 #[derive(Debug)]
 pub enum Input {
-    Connected { conn: ConnId, addr: SocketAddr },
-    Packet { conn: ConnId, data: Vec<u8> },
-    Disconnected { conn: ConnId },
-    UserFetched { conn: ConnId, seq: u64, result: FetchResult },
+    Connected {
+        conn: ConnId,
+        addr: SocketAddr,
+    },
+    Packet {
+        conn: ConnId,
+        data: Vec<u8>,
+    },
+    Disconnected {
+        conn: ConnId,
+    },
+    UserFetched {
+        conn: ConnId,
+        seq: u64,
+        result: FetchResult,
+    },
+    /// The answer to [`Output::FetchRuleset`].
+    RulesetFetched(RulesetFetch, Result<Option<(String, common::rules::Ruleset)>, String>),
     Tick,
 }
 
@@ -224,6 +252,9 @@ pub enum Output {
         uid: Uuid,
     },
     RecordMatch(MatchRecord),
+    /// Look a ruleset up (a code, or the account's remembered one) for a room; comes back as
+    /// [`Input::RulesetFetched`].
+    FetchRuleset(RulesetFetch),
     /// An account's online connection carries this chat identity key (`chat_identity_keys`).
     RecordChatKey {
         uid: Uuid,
@@ -490,6 +521,7 @@ impl Engine {
             }
             Input::Packet { conn, data } => self.on_packet(now, conn, &data, &mut out),
             Input::UserFetched { conn, seq, result } => self.on_user(now, wall, conn, seq, result, &mut out),
+            Input::RulesetFetched(f, result) => self.rooms.ruleset_fetched(f, result, &mut out),
             Input::Tick => self.on_tick(now, wall, &mut out),
         }
         self.sync_room_chat(&mut out);

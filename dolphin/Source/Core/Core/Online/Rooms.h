@@ -59,6 +59,11 @@ void Shutdown();
 // ---- From the game (GameBridge, CPU thread) ----
 // A CMD_ROOM op (Create, Join, Leave, Slot, Teams, Public, Team). Poll does nothing.
 void Submit(const Request& request);
+// The room game's session plays a set (several games, docs/design/room-rules.md §5): it ends when
+// GameSetup says the set is won, not after its first game.
+void SetSetSession(bool set);
+// A game of the room's set ended: sent to the server as room-result.
+void ReportSetGame(u32 set_game, u8 winner_side, u16 stage);
 // LOCAL.screen, every frame.
 void SetScreen(u8 screen);
 // The game's lock-in, every frame: ready for `game` with the character and costume.

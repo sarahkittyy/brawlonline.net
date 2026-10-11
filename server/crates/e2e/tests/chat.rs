@@ -157,7 +157,7 @@ async fn a_room_chats_end_to_end_and_a_kicked_player_hears_nothing_more() {
     // mm records each identity key it accepted.
     count_until(&stack, "SELECT count(*) FROM chat_identity_keys", 3).await;
 
-    a.client.send(&RoomRequest::Create { public: true });
+    a.client.send(&RoomRequest::Create { public: true, ruleset: None, remembered: false });
     let code = room_code(&mut a);
     a.client.send(&RoomRequest::Slot { slot: 3, open: true });
     b.client.send(&RoomRequest::Join { code: code.clone() });
@@ -262,7 +262,7 @@ async fn a_report_is_stored_with_the_messages_that_verify() {
     let (_, alice) = stack.create_player("alice@example.test", "alice", "alic").await;
     let (_, bob) = stack.create_player("bob@example.test", "bob", "bo").await;
     let (mut a, mut b) = (Chatter::connect(&stack, &alice), Chatter::connect(&stack, &bob));
-    a.client.send(&RoomRequest::Create { public: false });
+    a.client.send(&RoomRequest::Create { public: false, ruleset: None, remembered: false });
     let code = room_code(&mut a);
     b.client.send(&RoomRequest::Join { code });
     keys_exchanged(&mut [&mut a, &mut b]);
@@ -320,7 +320,7 @@ async fn sending_too_fast_is_refused() {
     let (_, alice) = stack.create_player("alice@example.test", "alice", "alic").await;
     let (_, bob) = stack.create_player("bob@example.test", "bob", "bo").await;
     let (mut a, mut b) = (Chatter::connect(&stack, &alice), Chatter::connect(&stack, &bob));
-    a.client.send(&RoomRequest::Create { public: true });
+    a.client.send(&RoomRequest::Create { public: true, ruleset: None, remembered: false });
     let code = room_code(&mut a);
     b.client.send(&RoomRequest::Join { code });
     keys_exchanged(&mut [&mut a, &mut b]);

@@ -33,6 +33,11 @@ pub const ROOM_READY: &str = "room-ready";
 pub const ROOM_TEAM: &str = "room-team";
 pub const ROOM_BACK: &str = "room-back";
 pub const ROOM_RULES: &str = "room-rules";
+pub const ROOM_RESULT: &str = "room-result";
+pub const ROOM_SET: &str = "room-set";
+pub const ROOM_RULESET: &str = "room-ruleset";
+/// `room-result.winnerSide` of a draw.
+pub const SIDE_DRAW: u8 = 0xFE;
 pub const ROOM_STATE: &str = "room-state";
 pub const ROOM_ERROR: &str = "room-error";
 pub const ROOM_LEFT: &str = "room-left";
@@ -106,8 +111,11 @@ fn string_or_empty<'de, D: serde::Deserializer<'de>>(d: D) -> Result<String, D::
 /// A `room-*` request, client → server, on an online connection.
 #[derive(Debug, Clone, PartialEq)]
 pub enum RoomRequest {
-    /// `room-create {public?}`: public unless `public: false`.
-    Create { public: bool },
+    /// `room-create {public?, ruleset?, remembered?}`: public unless `public: false`. `ruleset`: a
+    /// published ruleset's code to play (the launcher's box); without one, `remembered: true` (the
+    /// game's own Create Room) plays the account's remembered ruleset (`docs/design/room-rules.md`
+    /// decision 11), else P+'s default.
+    Create { public: bool, ruleset: Option<String>, remembered: bool },
     /// `room-join {code}`.
     Join { code: String },
     /// `room-leave {}`.
@@ -127,6 +135,15 @@ pub enum RoomRequest {
     /// `room-rules {rules}` (host only, between games): the room's match rules
     /// (`docs/design/room-rules.md`), checked by `MatchRules::validate`.
     Rules { rules: crate::rules::MatchRules },
+    /// `room-result {game, winnerSide, stage}`: a game of the room's set as this member's game saw
+    /// it end (`winnerSide` 0 / 1, [`SIDE_DRAW`]; `stage` the srStageKind played). The server
+    /// counts it once every player of the set reported the same.
+    Result { game: u32, winner_side: u8, stage: u16 },
+    /// `room-set {action}` (host, between games): `resume` a paused set, or `restart` it.
+    Set { resume: bool },
+    /// `room-ruleset {code}` (host, between games, no set on): play a published ruleset (a code),
+    /// or P+'s default (`code` null). The code also becomes the host's remembered ruleset.
+    Ruleset { code: Option<String> },
 }
 
 impl RoomRequest {
@@ -143,6 +160,9 @@ impl RoomRequest {
             RoomRequest::Team { .. } => ROOM_TEAM,
             RoomRequest::Back => ROOM_BACK,
             RoomRequest::Rules { .. } => ROOM_RULES,
+            RoomRequest::Result { .. } => ROOM_RESULT,
+            RoomRequest::Set { .. } => ROOM_SET,
+            RoomRequest::Ruleset { .. } => ROOM_RULESET,
         }
     }
 
@@ -150,7 +170,16 @@ impl RoomRequest {
     pub fn to_json(&self) -> serde_json::Value {
         use serde_json::json;
         let mut v = match self {
-            RoomRequest::Create { public } => json!({ "public": public }),
+            RoomRequest::Create { public, ruleset, remembered } => {
+                let mut v = json!({ "public": public });
+                if let Some(code) = ruleset {
+                    v["ruleset"] = json!(code);
+                }
+                if *remembered {
+                    v["remembered"] = json!(true);
+                }
+                v
+            }
             RoomRequest::Join { code } => json!({ "code": code }),
             RoomRequest::Leave | RoomRequest::Back => json!({}),
             RoomRequest::Slot { slot, open } => json!({ "slot": slot, "open": open }),
@@ -168,6 +197,11 @@ impl RoomRequest {
             }
             RoomRequest::Team { team } => json!({ "team": team }),
             RoomRequest::Rules { rules } => json!({ "rules": rules }),
+            RoomRequest::Result { game, winner_side, stage } => {
+                json!({ "game": game, "winnerSide": winner_side, "stage": stage })
+            }
+            RoomRequest::Set { resume } => json!({ "action": if *resume { "resume" } else { "restart" } }),
+            RoomRequest::Ruleset { code } => json!({ "code": code }),
         };
         v["type"] = json!(self.op());
         v
@@ -192,6 +226,18 @@ impl RoomRequest {
                 public: match v.get("public") {
                     None | Some(serde_json::Value::Null) => true,
                     Some(_) => flag("public")?,
+                },
+                ruleset: match v.get("ruleset") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(c) => Some(
+                        c.as_str()
+                            .and_then(crate::rules::parse_ruleset_code)
+                            .ok_or_else(|| format!("{kind}: `ruleset` is not a ruleset code"))?,
+                    ),
+                },
+                remembered: match v.get("remembered") {
+                    None | Some(serde_json::Value::Null) => false,
+                    Some(_) => flag("remembered")?,
                 },
             },
             ROOM_JOIN => RoomRequest::Join {
@@ -227,6 +273,39 @@ impl RoomRequest {
                 rules.validate().map_err(|e| format!("{kind}: {e}"))?;
                 RoomRequest::Rules { rules }
             }
+            ROOM_RESULT => {
+                let game = v
+                    .get("game")
+                    .and_then(|g| g.as_u64())
+                    .filter(|g| (1..=99).contains(g))
+                    .ok_or_else(|| format!("{kind}: `game` must be 1 to 99"))? as u32;
+                let winner_side = small("winnerSide", SIDE_DRAW as u64)?
+                    .filter(|s| *s <= 1 || *s == SIDE_DRAW)
+                    .ok_or_else(|| format!("{kind}: `winnerSide` must be 0, 1 or {SIDE_DRAW}"))?;
+                let stage = v
+                    .get("stage")
+                    .and_then(|s| s.as_u64())
+                    .filter(|s| *s <= 0xFF)
+                    .ok_or_else(|| format!("{kind}: `stage` must be a stage id"))? as u16;
+                RoomRequest::Result { game, winner_side, stage }
+            }
+            ROOM_RULESET => RoomRequest::Ruleset {
+                code: match v.get("code") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(c) => Some(
+                        c.as_str()
+                            .and_then(crate::rules::parse_ruleset_code)
+                            .ok_or_else(|| format!("{kind}: `code` is not a ruleset code"))?,
+                    ),
+                },
+            },
+            ROOM_SET => RoomRequest::Set {
+                resume: match v.get("action").and_then(|a| a.as_str()) {
+                    Some("resume") => true,
+                    Some("restart") => false,
+                    _ => return Err(format!("{kind}: `action` must be resume or restart")),
+                },
+            },
             other => return Err(format!("unknown room message {other:?}")),
         })
     }
@@ -314,6 +393,48 @@ pub struct RoomState {
     /// The room's match rules (`docs/design/room-rules.md`): the host's, sent with every game.
     #[serde(default)]
     pub rules: crate::rules::MatchRules,
+    /// The room's ruleset: a published one (its code) or custom.
+    #[serde(default)]
+    pub ruleset: RoomRuleset,
+    /// The room's set, while its ruleset plays one (`docs/design/room-rules.md` §5).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set: Option<RoomSet>,
+}
+
+/// What a room plays, as its members see it (`room-state.ruleset`).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomRuleset {
+    /// The published ruleset's code; `None` for P+'s default or custom rules.
+    pub code: Option<String>,
+    pub name: String,
+    pub version: u32,
+    pub by: String,
+    /// Custom rules made from a published ruleset: "NorCal Weekly v3".
+    pub based_on: Option<String>,
+    pub players: crate::rules::Players,
+    pub best_of: u8,
+    pub stage_choice: crate::rules::StageChoice,
+}
+
+/// A room's set (`room-state.set`): the score by side, side 0 being the lower slot.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomSet {
+    pub best_of: u8,
+    /// The game being played or next (1-based).
+    pub game: u32,
+    pub score: [u8; 2],
+    /// Each side's slot (1-4).
+    pub sides: [u8; 2],
+    /// A player of the set left (or the results differed): the set waits for the host.
+    pub paused: bool,
+    /// The missing player's name while paused.
+    pub waiting_for: Option<String>,
+    /// The host may resume (everyone of the set is here).
+    pub can_resume: bool,
+    /// Someone won it (the score stays until the next set starts).
+    pub finished: bool,
 }
 
 /// `room-error`, server → one member: a request was refused; nothing changed.
@@ -441,8 +562,13 @@ mod tests {
     #[test]
     fn requests_parse_and_round_trip() {
         let cases = [
-            RoomRequest::Create { public: true },
-            RoomRequest::Create { public: false },
+            RoomRequest::Create { public: true, ruleset: None, remembered: false },
+            RoomRequest::Create { public: false, ruleset: Some("BCDFGH".into()), remembered: false },
+            RoomRequest::Create { public: true, ruleset: None, remembered: true },
+            RoomRequest::Ruleset { code: Some("BCDFGH".into()) },
+            RoomRequest::Ruleset { code: None },
+            RoomRequest::Set { resume: true },
+            RoomRequest::Result { game: 2, winner_side: 1, stage: 0x21 },
             RoomRequest::Join { code: "KFQB".into() },
             RoomRequest::Leave,
             RoomRequest::Slot { slot: 3, open: true },
@@ -466,7 +592,10 @@ mod tests {
             let v = c.to_json();
             assert_eq!(RoomRequest::parse(v["type"].as_str().unwrap(), &v).unwrap(), c);
         }
-        assert_eq!(RoomRequest::parse(ROOM_CREATE, &json!({})).unwrap(), RoomRequest::Create { public: true });
+        assert_eq!(
+            RoomRequest::parse(ROOM_CREATE, &json!({})).unwrap(),
+            RoomRequest::Create { public: true, ruleset: None, remembered: false }
+        );
     }
 
     #[test]
@@ -481,6 +610,12 @@ mod tests {
             (ROOM_RULES, json!({"rules": {"stocks": 0}})),
             (ROOM_RULES, json!({"rules": {"stonks": 4}})),
             (ROOM_RULES, json!({"rules": "stock"})),
+            (ROOM_RULESET, json!({"code": "KFQB"})),
+            (ROOM_RULESET, json!({"code": 7})),
+            (ROOM_CREATE, json!({"ruleset": "AEIOUY"})),
+            (ROOM_RESULT, json!({"game": 0, "winnerSide": 0, "stage": 1})),
+            (ROOM_RESULT, json!({"game": 1, "winnerSide": 2, "stage": 1})),
+            (ROOM_SET, json!({"action": "pause"})),
             (ROOM_PUBLIC, json!({})),
             (ROOM_READY, json!({"ready": true, "character": 256})),
             (ROOM_READY, json!({"ready": true, "costume": -1})),

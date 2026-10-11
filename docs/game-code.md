@@ -789,3 +789,12 @@ Built on the RE above (`room_rules.cpp`; design `docs/design/room-rules.md` phas
 - **The DOL has no `memcmp`**: a call to it went to the REL's unresolved stub and jumped to 0 as the room CSS loaded (SRR0 `0xf8`); `reltool.py check` did not catch it. `room_rules.cpp` compares bytes itself.
 - Verified by `harness/tests/test_room_rules.py::test_host_edits_the_room_rules_everyone_plays_them` (two instances, the real server): the host sets 3 stocks, 1-minute time limit, auto L-cancel; stock control does not move for the host; both SESSIONs get the rules and B's ready is taken back; B's menu changes nothing on RULES or MORE RULES; the game is played with them (set rule +4 = 3, +8 = 1, +0xB = 1, `gmGlobalModeMelee+0xE5` ALC bit, 3 stocks each) with 1598 confirmed frames, 0 mismatches. Screenshots `run/artifacts/game-code/rooms/rules/host-edits/`.
 - Not yet: the RULES button itself (decision 4), the item switch's layout (editable for the host, not exercised by the test), hazards and the stage list (the stage switch is read-only).
+
+### Room sets: Ranked's steps on the room CSS (2026-10-11)
+
+A room whose ruleset plays a set (`docs/design/room-rules.md` §5) runs Dolphin's GameSetup in its game session, as Ranked does; the plugin shows its steps on the room CSS and P+'s stage select:
+- `stepSession()`: Ranked connected, or a room CSS with a session (LOCAL `state` connected or more). `GP_FETCH_STEP` is polled then; a room game without a set gets an inactive step.
+- On the room CSS (`tickRoom`): a stage step (`toSss`) sends both players to the stage select (`s.roomStepSss`, `g_onlinePickStage`); there `rankedStep()` gives `stage_legal.cpp` the step (strikes with X, the pick with A; START and B masked), and the steps decide the stage (`stepsDecideStage`, so `afterSelStage` keeps no pick of its own). Back on the CSS the flag clears. The character step: START only when the step allows it (`mayLock`, the winner first), and a step whose time is up locks in the character on the CSS. The status line shows the step's text.
+- A set's later games are played in the same session: the room CSS's lock-in for SESSION's `game` (the room's game N + k) maps to the session's game 1 + k in GameBridge.
+- Game 1 of a set is a blind pick: the server sends no `character` for the others, and a ready panel without one shows "Ready" with no picture (`roomPanels`, `PV_READY` with `0x28`).
+- Verified by `harness/tests/test_room_sets.py::test_room_bo3_set`. Screenshots `run/artifacts/game-code/rooms/sets/bo3/`.

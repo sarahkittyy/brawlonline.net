@@ -837,6 +837,16 @@ void Matchmaking::HandleMatchmaking()
     return;
   }
   match.rules = rules.rules;
+  // A room's set (SetFormat.h): refused like the rules when it cannot be played.
+  const GameSetup::ParsedSet set = GameSetup::ParseSetTicket(get_resp);
+  if (!set.error.empty())
+  {
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Unusable set in get-ticket-resp: {}", set.detail);
+    m_state = State::ErrorEncountered;
+    SetError(ErrorSource::Client, set.error);
+    return;
+  }
+  match.set = set.set;
   if (match.rules)
     INFO_LOG_FMT(NETPLAY, "[Matchmaking] Rules: {}", picojson::value(ToJson(*match.rules)).serialize());
   INFO_LOG_FMT(NETPLAY, "[Matchmaking] Stages from the server: {}", fmt::join(match.stages, ","));

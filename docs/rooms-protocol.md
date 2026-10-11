@@ -51,7 +51,10 @@ or refuses and disconnects:
 
 | Message | Who | When | Effect |
 |---|---|---|---|
-| `{"type": "room-create", "public": true}` | anyone | any time | A new room, the sender in slot 1 as host, slots 1-2 open, 3-4 closed. `public` is optional (default true). Leaves the sender's old room first. |
+| `{"type": "room-create", "public": true, "ruleset": "BCDFGH", "remembered": true}` | anyone | any time | A new room, the sender in slot 1 as host, slots 1-2 open, 3-4 closed. `public` is optional (default true). Leaves the sender's old room first. `ruleset` (the launcher's box, a published ruleset's code) or `remembered: true` (the game's own Create Room: the account's remembered ruleset, `docs/design/room-rules.md` decision 11) is looked up after the room is made; the room plays P+'s default until then, and an unknown code answers `room-error` `Ruleset not found.`. |
+| `{"type": "room-ruleset", "code": "BCDFGH"}` | host | between games, no set on | The room plays that published ruleset (`code: null`: P+'s default); it also becomes the host's remembered ruleset. Takes back every ready; ends a finished set's score. |
+| `{"type": "room-result", "game": 2, "winnerSide": 0, "stage": 33}` | a set's player | in its session | A game of the room's set as this player's game saw it end (`winnerSide` 0 / 1, 254 a draw; side 0 is the lower slot). It counts once both players reported the same; different reports pause the set. Sent by Dolphin. |
+| `{"type": "room-set", "action": "resume"}` | host | between games | A paused set: `resume` (once its players are back in their slots) or `restart` (no set until the next start). |
 | `{"type": "room-join", "code": "KFQB"}` | anyone | any time | Takes the lowest open, empty slot. The code is matched case- and width-insensitively (`kfqb`, `ＫＦＱＢ`). Leaves the sender's old room first. Joining the room one is in answers its state. |
 | `{"type": "room-leave"}` | member | any time | Leaves (answered with `room-left`). |
 | `{"type": "room-slot", "slot": 3, "open": true}` | host | between games | Opens or closes slot 1-4. Closing an occupied slot removes its player ("Removed from the room."), who may join again once a slot is open. |
@@ -100,6 +103,19 @@ A request that is refused changes nothing and is answered with `room-error`. Mal
 | The room plays, the receiver is in the game | `In game` |
 | The room plays, the receiver is not (joined during the game, or came back early) | `Waiting for the game to end` |
 
+`room-state` also carries what the room plays and its set (`docs/design/room-rules.md`):
+
+```json
+  "ruleset": {"code": "BCDFGH", "name": "NorCal Weekly", "version": 3, "by": "sarah", "basedOn": null,
+              "players": "1v1", "bestOf": 3, "stageChoice": "loser-picks"},
+  "set": {"bestOf": 3, "game": 2, "score": [1, 0], "sides": [1, 2], "paused": false, "waitingFor": null,
+          "canResume": false, "finished": false}
+```
+
+- `ruleset.code` null: P+'s default, or custom rules (`name` "Custom", `basedOn` "NorCal Weekly v3" when they were made from a published one: the host's `room-rules` turns a published ruleset into custom rules).
+- A published ruleset's `players` holds the start until the room's slots and Teams match ("This ruleset is for 1v1.", "This ruleset needs 2 teams of 2.", "This ruleset is for 3-4 players.").
+- `set` while the ruleset plays one (`bestOf` 3/5/7, 1v1 and two open slots): made at the first start, kept across the room's games until someone has `bestOf / 2 + 1` wins (`finished`, the score stays until the next start) or the host restarts it. While it is on, slots, Teams, rules and the ruleset wait (`Finish or restart the set first.`). A set player who leaves pauses it ("Set paused: bob left"); their slot is kept for them; once they are back the host resumes ("Host: resume or restart the set"). In game 1 the others' `character` is withheld (a blind pick).
+
 **`room-error`**, to the sender: `{"type": "room-error", "op": "room-join", "error": "This room is full."}`. `op` is the request's type (`room-start` when a start failed, `invalid` for malformed requests).
 
 **`room-left`**, to a member who is no longer in the room: `{"type": "room-left", "code": "KFQB"}` after `room-leave`, or with `"reason": "Removed from the room."` after the host closed their slot. Members whose connection dropped are not told (they are gone).
@@ -143,7 +159,7 @@ The room starts by itself once **every open slot is taken, every player is ready
    ```
 
    `search.connectCode` is the room code as the keypad's Shift-JIS bytes (full width, as Direct sends a connect code) or plain ASCII. mm answers `create-ticket-resp {}`, or an error (`Room not found.`, `You are not in this room.`, `The room is not starting a game.`).
-3. Once every member's ticket is in, mm records the game in `mm_matches` (mode 3; `room_code`, `room_mode` `1v1`/`ffa`/`teams`, and per player `ports` and, in a team battle, `teams`) and each member gets one `get-ticket-resp` in Slippi's shape: `matchId` (`mode.room-<code>-…`), `isHost` true for the room's host (the session's decider), `players` with every member (`port` = slot, `isLocalPlayer`, `ipAddress` as mm saw the ticket, so the NAT mapping of the P2P port, `ipAddressLan`), and Direct's `stages`, `items` and `rules` (the match rules, `server/crates/common/src/rules.rs`; rooms play like Direct: game 1 random from the list, then the loser picks; host-set room rules are `docs/design/room-rules.md`). The ticket connections are closed after 1 s, as after any match. `status` becomes `in-game`, every player's `inGame` is true and `ready` false.
+3. Once every member's ticket is in (a room's set: its one session plays every game of the set, from `set.game`; the ticket's `set` carries the format and the score so far, `common::proto::SetTicket`; the ticket's `rules` and `stages` are the room's ruleset's), mm records the game in `mm_matches` (mode 3; `room_code`, `room_mode` `1v1`/`ffa`/`teams`, and per player `ports` and, in a team battle, `teams`) and each member gets one `get-ticket-resp` in Slippi's shape: `matchId` (`mode.room-<code>-…`), `isHost` true for the room's host (the session's decider), `players` with every member (`port` = slot, `isLocalPlayer`, `ipAddress` as mm saw the ticket, so the NAT mapping of the P2P port, `ipAddressLan`), and Direct's `stages`, `items` and `rules` (the match rules, `server/crates/common/src/rules.rs`; rooms play like Direct: game 1 random from the list, then the loser picks; host-set room rules are `docs/design/room-rules.md`). The ticket connections are closed after 1 s, as after any match. `status` becomes `in-game`, every player's `inGame` is true and `ready` false.
 4. The game does what `Matchmaking.cpp` already does for Teams: disconnect from mm, connect to every remote from the P2P port within 8 s (Slippi's LAN rule per peer), and on failure report "Could not connect to players: …" (no requeue in mode 3). Then the N-player session.
 5. After the game (or after a failed connect), each game sends `room-back` and is on the room's CSS again, characters kept, ready cleared. When nobody is in the game any more, `status` is `waiting`. A game that never says `room-back` is taken to be over after 30 minutes.
 

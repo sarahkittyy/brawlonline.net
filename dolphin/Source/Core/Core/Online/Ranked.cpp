@@ -23,6 +23,7 @@
 #include "Core/Online/GameSetup.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/OnlineSession.h"
+#include "Core/Online/Rooms.h"
 #include "Core/Online/User.h"
 #include "Core/Rollback/GameplaySession.h"
 #include "Core/Rollback/PeerData.h"
@@ -322,7 +323,20 @@ void OnSessionStart(const Match& match)
   // Ranked's stage striking (GameSetup.h). Outside s_mutex: it talks to the session, which calls
   // OnGameResult with its own lock held.
   const bool ranked = match.mode == MODE_RANKED && match.players.size() == 2;
-  if (ranked)
+  int room_local_port = -1;
+  for (const auto& p : match.players)
+  {
+    if (p.is_local)
+      room_local_port = p.port - 1;
+  }
+  if (match.set && match.players.size() == 2)
+  {
+    // A room's set (docs/design/room-rules.md §5): in-game ports are the room's slots.
+    const u8 side = room_local_port == match.set->side_ports[1] ? 1 : 0;
+    GameSetup::Begin(side, *match.set);
+    Rooms::SetSetSession(match.set->format.best_of > 0);
+  }
+  else if (ranked)
   {
     int local_port = 0;
     for (const auto& p : match.players)
@@ -421,6 +435,16 @@ void OnGameResult(const Gprb::Session::GameResult& r)
   ++s_reports_sent;
   Enqueue({fmt::format("game {} of {}", r.game, s_match_id),
            [body] { return Post("game", "/v1/ranked/report-game", body); }});
+  if (s_room && GameSetup::IsActive())
+  {
+    // A room's set: the server keeps the score (room-result); GameSetup the next game's steps.
+    const u32 set_game = GameSetup::SetGameOf(r.game);
+    const auto side = GameSetup::SideOfPort(r.winner);
+    GameSetup::OnGameResult(r.winner, r.stage);
+    if (side)
+      Rooms::ReportSetGame(set_game, *side, r.stage == Gprb::Session::NO_STAGE ? 0 : r.stage);
+    return;
+  }
   if (!s_active)
     return;
 

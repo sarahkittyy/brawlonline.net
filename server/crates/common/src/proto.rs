@@ -169,6 +169,36 @@ pub struct GetTicketResp {
     /// The match's rules (ours; `crate::rules`). A client without them plays P+'s competitive set.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub rules: Option<crate::rules::MatchRules>,
+    /// A room's set: the session plays it game by game (`SetTicket`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub set: Option<SetTicket>,
+}
+
+/// A room's set as its session starts it (ours; Dolphin's `Online/SetFormat.h` `Format` and
+/// `SetState`): the format and the score so far. Sides are the set's two players, side 0 the lower
+/// slot; `sides` gives each side's in-game port (0-3).
+#[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SetTicket {
+    /// 3, 5, 7; 0 with `strikeEveryGame` (no set, every game struck).
+    pub best_of: u8,
+    pub strike_every_game: bool,
+    pub starters: Vec<u16>,
+    /// The stages of games 2+: the starters and the counterpicks.
+    pub counterpicks: Vec<u16>,
+    pub strikes: Vec<u8>,
+    pub bans: u8,
+    pub dsr: bool,
+    /// Bit (game - 1) % 32: the side that strikes first in that game.
+    pub first_striker_bits: u32,
+    pub sides: [u8; 2],
+    /// The set's game the session starts with (1 for a new set).
+    pub game: u32,
+    pub wins: [u8; 2],
+    /// The last game's winning side; 0xFE a draw, 0xFF none yet.
+    pub last_winner: u8,
+    /// Each side's stage of its last win (0xFFFF none).
+    pub last_win_stage: [u16; 2],
 }
 
 impl GetTicketResp {

@@ -137,7 +137,10 @@ void PutUtf8(std::string& out, u32 cp)
 }
 }  // namespace
 
-std::optional<std::string> NormalizeRoomCode(const std::u16string& typed)
+namespace
+{
+// `len` letters of the 20, as NormalizeRoomCode reads a room code.
+std::optional<std::string> NormalizeLetters(const std::u16string& typed, size_t len)
 {
   std::string out;
   for (char16_t c : typed)
@@ -148,13 +151,31 @@ std::optional<std::string> NormalizeRoomCode(const std::u16string& typed)
       c = static_cast<char16_t>(c - 0xFF01 + 0x21);
     if (c >= 'a' && c <= 'z')
       c = static_cast<char16_t>(c - 'a' + 'A');
-    if (c >= 0x80 || !InAlphabet(static_cast<char>(c)) || out.size() >= ROOM_CODE_LEN)
+    if (c >= 0x80 || !InAlphabet(static_cast<char>(c)) || out.size() >= len)
       return std::nullopt;
     out.push_back(static_cast<char>(c));
   }
-  if (out.size() != ROOM_CODE_LEN)
+  if (out.size() != len)
     return std::nullopt;
   return out;
+}
+}  // namespace
+
+std::optional<std::string> NormalizeRulesetCode(const std::u16string& typed)
+{
+  return NormalizeLetters(typed, RULESET_CODE_LEN);
+}
+
+std::optional<std::string> NormalizeRulesetCode(const std::string& ascii)
+{
+  if (ascii.size() > 64)
+    return std::nullopt;
+  return NormalizeLetters(std::u16string(ascii.begin(), ascii.end()), RULESET_CODE_LEN);
+}
+
+std::optional<std::string> NormalizeRoomCode(const std::u16string& typed)
+{
+  return NormalizeLetters(typed, ROOM_CODE_LEN);
 }
 
 std::optional<std::string> NormalizeRoomCode(const std::string& ascii)
@@ -310,6 +331,54 @@ std::optional<View> ParseView(const picojson::object& o, std::string* why)
   const ParsedRules rules = ParseRules(o);
   v.rules = rules.rules;
   v.rules_error = rules.error;
+  // What it plays and its set: shown only, so a part that is not there or not valid is left out.
+  if (const picojson::value* rs = Find(o, "ruleset"); rs && rs->is<picojson::object>())
+  {
+    const auto& ro = rs->get<picojson::object>();
+    if (const auto c = Str(ro, "code", 16); c && NormalizeRulesetCode(*c))
+      v.ruleset.code = *NormalizeRulesetCode(*c);
+    v.ruleset.name = Str(ro, "name", MAX_NAME_BYTES).value_or("");
+    v.ruleset.version = static_cast<u32>(Int(ro, "version", 0, 100000).value_or(0));
+    v.ruleset.based_on = Str(ro, "basedOn", MAX_NAME_BYTES + 16).value_or("");
+    v.ruleset.best_of = static_cast<u8>(Int(ro, "bestOf", 0, 7).value_or(0));
+    const auto choice = Str(ro, "stageChoice", 16).value_or("loser-picks");
+    v.ruleset.stage_choice =
+        choice == "strike" || choice == "random" ? choice : std::string("loser-picks");
+  }
+  if (const picojson::value* sv = Find(o, "set"); sv && sv->is<picojson::object>())
+  {
+    const auto& so = sv->get<picojson::object>();
+    const auto best_of = Int(so, "bestOf", 1, 7);
+    const auto game = Int(so, "game", 1, 99);
+    const picojson::value* score = Find(so, "score");
+    const picojson::value* sides = Find(so, "sides");
+    SetView set;
+    bool ok = best_of && game && score && score->is<picojson::array>() &&
+              score->get<picojson::array>().size() == 2 && sides && sides->is<picojson::array>() &&
+              sides->get<picojson::array>().size() == 2;
+    for (size_t i = 0; ok && i < 2; ++i)
+    {
+      const picojson::value& a = score->get<picojson::array>()[i];
+      const picojson::value& b = sides->get<picojson::array>()[i];
+      ok = a.is<double>() && b.is<double>() && a.get<double>() >= 0 && a.get<double>() <= 4 &&
+           b.get<double>() >= 1 && b.get<double>() <= ROOM_SLOTS;
+      if (ok)
+      {
+        set.score[i] = static_cast<u8>(a.get<double>());
+        set.sides[i] = static_cast<int>(b.get<double>());
+      }
+    }
+    if (ok)
+    {
+      set.best_of = static_cast<u8>(*best_of);
+      set.game = static_cast<u32>(*game);
+      set.paused = Bool(so, "paused").value_or(false);
+      set.can_resume = Bool(so, "canResume").value_or(false);
+      set.finished = Bool(so, "finished").value_or(false);
+      set.waiting_for = Str(so, "waitingFor", MAX_NAME_BYTES).value_or("");
+      v.set = set;
+    }
+  }
 
   const picojson::value* slots = Find(o, "slots");
   if (!slots || !slots->is<picojson::array>() ||
@@ -467,7 +536,32 @@ std::optional<std::string> RequestJson(const Request& r)
   case Op::Create:
     o["type"] = picojson::value("room-create");
     o["public"] = picojson::value(r.flag);
+    if (!r.ruleset.empty())
+    {
+      const auto code = NormalizeRulesetCode(r.ruleset);
+      if (!code)
+        return std::nullopt;
+      o["ruleset"] = picojson::value(*code);
+    }
+    else if (r.remembered)
+    {
+      o["remembered"] = picojson::value(true);
+    }
     break;
+  case Op::Ruleset:
+  {
+    o["type"] = picojson::value("room-ruleset");
+    if (r.ruleset.empty())
+    {
+      o["code"] = picojson::value();
+      break;
+    }
+    const auto code = NormalizeRulesetCode(r.ruleset);
+    if (!code)
+      return std::nullopt;
+    o["code"] = picojson::value(*code);
+    break;
+  }
   case Op::Join:
   {
     const auto code = NormalizeRoomCode(r.code);
@@ -512,6 +606,18 @@ std::optional<std::string> RequestJson(const Request& r)
   case Op::Back:
     o["type"] = picojson::value("room-back");
     break;
+  case Op::Result:
+    if (r.game < 1 || r.game > 99 || (r.winner_side > 1 && r.winner_side != 0xFE) || r.stage > 0xFF)
+      return std::nullopt;
+    o["type"] = picojson::value("room-result");
+    o["game"] = picojson::value(static_cast<double>(r.game));
+    o["winnerSide"] = picojson::value(static_cast<double>(r.winner_side));
+    o["stage"] = picojson::value(static_cast<double>(r.stage));
+    break;
+  case Op::SetAction:
+    o["type"] = picojson::value("room-set");
+    o["action"] = picojson::value(r.flag ? "resume" : "restart");
+    break;
   case Op::Rules:
     if (!r.rules)
       return std::nullopt;
@@ -551,6 +657,12 @@ const char* OpName(Op op)
     return "back";
   case Op::Rules:
     return "rules";
+  case Op::Result:
+    return "result";
+  case Op::Ruleset:
+    return "ruleset";
+  case Op::SetAction:
+    return "set";
   }
   return "?";
 }

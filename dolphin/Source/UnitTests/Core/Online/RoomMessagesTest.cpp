@@ -289,3 +289,37 @@ TEST(RoomMessages, Requests)
   EXPECT_EQ(HelloJson("u", "k", "0.1.0", "win", "ab12"),
             R"({"appVersion":"0.1.0","chatKey":"ab12","platform":"win","type":"hello","user":{"playKey":"k","uid":"u"}})");
 }
+
+TEST(RoomMessages, RulesetCodesAndRequests)
+{
+  EXPECT_EQ(NormalizeRulesetCode(std::string("bcdfgh")), "BCDFGH");
+  EXPECT_EQ(NormalizeRulesetCode(std::u16string(u"ＢCDFGH")), "BCDFGH");  // full width B
+  for (const char* bad : {"BCDFG", "BCDFGHJ", "BCDFGA", "KFQB", "", "BCD FG"})
+    EXPECT_EQ(NormalizeRulesetCode(std::string(bad)), std::nullopt) << bad;
+  Request r;
+  r.op = Op::Create;
+  r.flag = true;
+  r.remembered = true;
+  EXPECT_EQ(RequestJson(r), R"({"public":true,"remembered":true,"type":"room-create"})");
+  r.ruleset = "bcdfgh";
+  EXPECT_EQ(RequestJson(r), R"({"public":true,"ruleset":"BCDFGH","type":"room-create"})");
+  r.ruleset = "KFQB";
+  EXPECT_EQ(RequestJson(r), std::nullopt);
+  r = {};
+  r.op = Op::Ruleset;
+  EXPECT_EQ(RequestJson(r), R"({"code":null,"type":"room-ruleset"})");
+  r.ruleset = "BCDFGH";
+  EXPECT_EQ(RequestJson(r), R"({"code":"BCDFGH","type":"room-ruleset"})");
+  r = {};
+  r.op = Op::Result;
+  r.game = 2;
+  r.winner_side = 1;
+  r.stage = 0x21;
+  EXPECT_EQ(RequestJson(r), R"({"game":2,"stage":33,"type":"room-result","winnerSide":1})");
+  r.winner_side = 2;
+  EXPECT_EQ(RequestJson(r), std::nullopt);
+  r = {};
+  r.op = Op::SetAction;
+  r.flag = true;
+  EXPECT_EQ(RequestJson(r), R"({"action":"resume","type":"room-set"})");
+}

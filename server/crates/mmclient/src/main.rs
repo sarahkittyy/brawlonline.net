@@ -361,7 +361,7 @@ fn run_room(a: RoomArgs) -> anyhow::Result<i32> {
     }
     client.send(&match &a.join {
         Some(code) => RoomRequest::Join { code: code.clone() },
-        None => RoomRequest::Create { public: !a.private },
+        None => RoomRequest::Create { public: !a.private, ruleset: None, remembered: false },
     });
     let first = client.wait_for(Duration::from_secs(10), |m| m["type"] == "room-state" || m["type"] == "room-error")?;
     print_line(&first);

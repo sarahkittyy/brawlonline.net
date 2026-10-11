@@ -82,6 +82,7 @@ namespace OnlineMenu {
         float windowY1, windowY2, windowLineSpace;
         // the player's own settings, put back when the online flow ends (saveRules)
         bool haveSavedRules;
+        bool roomStepSss;   // a room's set: on the stage select for GameSetup's steps
         u8 savedRule[0x88];
         u8 savedItemFrequency;
         u8 savedItemSwitch[8];
@@ -1531,11 +1532,20 @@ namespace OnlineMenu {
         }
     }
 
-    // Ranked, connected: Slippi's GP_FETCH_STEP every frame (one at a time), on the CSS and the
-    // stage select, so turns and strikes show at once.
+    // GameSetup's steps run (Dolphin answers GP_FETCH_STEP with an active step): Ranked connected,
+    // or a room's game session (a room's set, docs/design/room-rules.md section 5; a room game
+    // without a set answers an inactive step).
+    static bool stepSession()
+    {
+        if (s.mode == PPOM::MODE_RANKED) return s.phase == PH_CONNECTED;
+        return roomCss() && PPOM::g_block.local.state >= PPOM::LS_CONNECTED;
+    }
+
+    // Ranked, connected (or a room's set): Slippi's GP_FETCH_STEP every frame (one at a time), on
+    // the CSS and the stage select, so turns and strikes show at once.
     static void pollStep()
     {
-        if (s.mode != PPOM::MODE_RANKED || s.phase != PH_CONNECTED) {
+        if (!stepSession()) {
             s.step.active = 0;
             s.stepPending = false;
             return;
@@ -1546,12 +1556,15 @@ namespace OnlineMenu {
         s.stepFrames = 0;
     }
 
-    // Ranked: the last step (active or not: an inactive step means the stage is decided, or the
-    // connection is gone, so a ranked stage select leaves). NULL in every other mode.
+    // Ranked (or a room's set on the stage select for its steps): the last step (active or not:
+    // an inactive step means the stage is decided, or the connection is gone, so the stage select
+    // leaves). NULL in every other case (a room's loser's pick is the stage select's own).
     const PPOM::GameStep* rankedStep()
     {
-        return s.mode == PPOM::MODE_RANKED ? &s.step : NULL;
+        return s.mode == PPOM::MODE_RANKED || (roomCss() && s.roomStepSss) ? &s.step : NULL;
     }
+
+    bool stepsDecideStage() { return s.mode == PPOM::MODE_RANKED || (roomCss() && s.roomStepSss); }
 
     const char* rankedText() { return s.stepText; }
 
@@ -1589,7 +1602,7 @@ namespace OnlineMenu {
             s.stepPending = false;
             s.stepAnswered = r->seq;
             // Not connected (any more): no step, whatever the answer was.
-            if (s.phase != PH_CONNECTED) s.step.active = 0;
+            if (!stepSession()) s.step.active = 0;
             return;
         }
         if (r->cmd == PPOM::CMD_GET_ONLINE_STATUS) {
@@ -1783,6 +1796,11 @@ namespace OnlineMenu {
                     p.kind = RoomCss::PV_READY;
                     p.css = (u8)css;
                     p.costume = pl.roomCostume < 0x20 ? pl.roomCostume : 0;
+                } else if (bits & PPOM::SLOT_READY) {
+                    // Ready without a character shown: game 1 of a set is a blind pick (the
+                    // server keeps the character from the others, room-rules.md §2).
+                    p.kind = RoomCss::PV_READY;
+                    p.css = 0x28;
                 } else {
                     p.kind = RoomCss::PV_CHOOSING;
                 }
@@ -1826,6 +1844,10 @@ namespace OnlineMenu {
     static void updateRoomStatus()
     {
         const PPOM::Session& se = PPOM::g_block.session;
+        if (stepSession() && s.step.active && s.stepText[0] && !roomLockedForNext() && !s.roomError) {
+            setStatus(s.stepText, false);   // the set's step: whose turn, the seconds left
+            return;
+        }
         bool rulesRed = false;
         const char* rulesText = s.roomError ? NULL : RoomRules::statusText(&rulesRed);
         if (rulesText && roomIn()) {
@@ -1975,6 +1997,21 @@ namespace OnlineMenu {
             s.roomKickPort = -1;
             return;
         }
+        // Back on the CSS: no stage select for the steps any more.
+        s.roomStepSss = false;
+        // A room's set (Dolphin's GameSetup, as Ranked): the stage steps on the stage select, the
+        // characters on the CSS when the step allows (the winner first), START only then.
+        bool setStep = stepSession() && s.step.active;
+        if (setStep && stepFresh() && !g_onlineMatchGame) {
+            if (s.step.toSss) {
+                s.roomStepSss = true;
+                g_onlinePickStage = 1;
+                leaveCss(1);
+                return;
+            }
+            if (!roomLockedForNext() && s.step.mayLock && s.step.timeUp && lockChar() >= 0)
+                lockIn(roomGame(), 0xFFFF, 0);
+        }
         if (!in) {
             // Not in a room (Join Room, or after leaving one): START enters a room code.
             if ((pressed & BTN_START) && selectedChar() >= 0 && s.roomPhase != PPOM::RP_JOINING) {
@@ -1984,7 +2021,9 @@ namespace OnlineMenu {
             s.roomKickPort = -1;
         } else {
             if (pressed & BTN_START) {
-                if (!roomLockedForNext() && waiting && lockChar() >= 0) {
+                if (setStep) {
+                    if (!roomLockedForNext() && s.step.mayLock && lockChar() >= 0) lockIn(roomGame(), 0xFFFF, 0);
+                } else if (!roomLockedForNext() && waiting && lockChar() >= 0) {
                     lockIn(roomGame(), roomPicksStage() ? PPOM::STAGE_PENDING : 0xFFFF, 0);
                 }
             }
@@ -2318,6 +2357,8 @@ namespace OnlineMenu {
                 if (s.roomEntry == ROOM_ENTRY_CREATE && !s.roomError) return false;
                 return selectedChar() >= 0 && s.roomPhase != PPOM::RP_JOINING;
             }
+            if (stepSession() && s.step.active)
+                return s.step.mayLock && !roomLockedForNext() && lockChar() >= 0;
             return se.roomStatus == 0 && !roomLocked() && lockChar() >= 0;
         }
         if (s.phase == PH_IDLE) return selectedChar() >= 0;
@@ -2403,7 +2444,7 @@ namespace OnlineMenu {
             // taken out, so it never has Z.
             OnlineMatch::noteSssButtons(padButtons(0x0), padButtons(0xC));
             u32 mask = BTN_Z;
-            if (s.mode == PPOM::MODE_RANKED && g_onlinePickStage) mask |= BTN_START | BTN_B;
+            if ((s.mode == PPOM::MODE_RANKED || s.roomStepSss) && g_onlinePickStage) mask |= BTN_START | BTN_B;
             if (roomCss() && g_onlinePickStage) mask |= BTN_B;
             maskButtons(mask);
             blockCodeMenu();

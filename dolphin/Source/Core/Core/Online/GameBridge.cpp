@@ -652,6 +652,7 @@ Response RoomResponse(const Core::CPUThreadGuard& guard, u32 payload, std::strin
   case 1:
     r.op = Rooms::Op::Create;
     r.flag = arg != 0;
+    r.remembered = true;  // the game's own Create Room: the account's remembered ruleset (#11)
     break;
   case 2:
     r.op = Rooms::Op::Join;
@@ -680,6 +681,22 @@ Response RoomResponse(const Core::CPUThreadGuard& guard, u32 payload, std::strin
     r.team = arg;
     ok = arg < Rooms::NUM_TEAMS;
     break;
+  case 9:
+    r.op = Rooms::Op::SetAction;
+    r.flag = arg != 0;
+    break;
+  case 10:
+  {
+    // The host's ruleset: a code typed or picked in the game, or none (P+'s default).
+    r.op = Rooms::Op::Ruleset;
+    if (!typed.empty())
+    {
+      const auto code = Rooms::NormalizeRulesetCode(typed);
+      ok = code.has_value();
+      r.ruleset = code.value_or("");
+    }
+    break;
+  }
   case 8:
   {
     // ppom.h RoomRulesRequest: op, pad[3], Rules (the host's edits, SESSION's layout).
@@ -1062,7 +1079,9 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     {
       // A room's game is a session of its own: the room's game N (SESSION `game`) is the
       // session's game 1, and the player's colour is the room's.
-      l.game = l.game == (room.game & 0xFF) ? 1 : 0;
+      // (A set's session plays several games: the room's game N + k is the session's 1 + k.)
+      const u8 k = static_cast<u8>(l.game - (room.game & 0xFF));
+      l.game = l.game != 0 && k < 32 ? k + 1 : 0;
       l.team = s_room_team;
     }
     Gprb::Session::SetLocalLock(l);

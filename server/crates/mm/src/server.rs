@@ -64,6 +64,9 @@ struct FetchJob {
 }
 
 type Fetched = (ConnId, u64, FetchResult);
+/// A room's ruleset lookup and its answer (code and ruleset; `None`: no such ruleset, or none
+/// remembered).
+type RulesetFetched = (crate::engine::RulesetFetch, Result<Option<(String, common::rules::Ruleset)>, String>);
 
 /// A running mm server. Dropping it stops the loop.
 pub struct MmHandle {
@@ -131,6 +134,7 @@ pub fn start(
 
     let (job_tx, job_rx) = tk_mpsc::channel::<FetchJob>(FETCH_QUEUE);
     let (done_tx, done_rx) = std_mpsc::channel::<Fetched>();
+    let (rulesets_tx, rulesets_rx) = std_mpsc::channel::<RulesetFetched>();
     let fetch_pool = pool.clone();
     rt.spawn(fetch_worker(
         move |uid| fetch_user(fetch_pool.clone(), uid),
@@ -157,10 +161,10 @@ pub fn start(
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = stop.clone();
     let engine = Engine::new(engine_cfg, secret);
-    let db = Db { fetches: job_tx, fetched: done_tx, pool, rt };
+    let db = Db { fetches: job_tx, fetched: done_tx, rulesets: rulesets_tx, pool, rt };
     let thread = std::thread::Builder::new()
         .name("mm-enet".into())
-        .spawn(move || event_loop(host, engine, db, done_rx, stop2, status))?;
+        .spawn(move || event_loop(host, engine, db, done_rx, rulesets_rx, stop2, status))?;
     tracing::info!("mm listening on udp://{addr}");
     Ok(MmHandle { addr, status_addr, stop, thread: Some(thread), status_task })
 }
@@ -229,6 +233,36 @@ fn queue_fetch(jobs: &tk_mpsc::Sender<FetchJob>, done: &std_mpsc::Sender<Fetched
     let _ = done.send((job.conn, job.seq, FetchResult::Error(why.into())));
 }
 
+/// A room's ruleset: the code's (made the account's remembered one when `remember`), or with no
+/// code the account's remembered one (`remember`: forget it, P+'s default). Hidden rulesets play
+/// by their code (room-rules.md §2).
+async fn fetch_room_ruleset(
+    pool: &PgPool,
+    f: &crate::engine::RulesetFetch,
+) -> Result<Option<(String, common::rules::Ruleset)>, String> {
+    let work = async {
+        match &f.code {
+            Some(code) => {
+                let found = db::fetch_ruleset(pool, code).await?;
+                if found.is_some() && f.remember {
+                    db::set_remembered_ruleset(pool, f.uid, Some(code)).await?;
+                }
+                Ok::<_, sqlx::Error>(found.map(|p| (p.code, p.ruleset)))
+            }
+            None if f.remember => {
+                db::set_remembered_ruleset(pool, f.uid, None).await?;
+                Ok(None)
+            }
+            None => Ok(db::remembered_ruleset(pool, f.uid).await?.map(|p| (p.code, p.ruleset))),
+        }
+    };
+    match tokio::time::timeout(Duration::from_secs(3), work).await {
+        Ok(Ok(r)) => Ok(r),
+        Ok(Err(e)) => Err(e.to_string()),
+        Err(_) => Err("ruleset lookup timed out".into()),
+    }
+}
+
 /// Match records are not queued with the lookups: they need two verified, rate-limited accounts,
 /// and must not be lost when the lookup queue is full.
 async fn record_match(pool: PgPool, m: MatchRecord) {
@@ -282,6 +316,8 @@ struct Db {
     fetches: tk_mpsc::Sender<FetchJob>,
     /// Where lookup results come back; also used to refuse a lookup when the queue is full.
     fetched: std_mpsc::Sender<Fetched>,
+    /// Where a room's ruleset lookups come back.
+    rulesets: std_mpsc::Sender<RulesetFetched>,
     pool: PgPool,
     rt: tokio::runtime::Handle,
 }
@@ -336,6 +372,13 @@ impl Loop {
             }
             Output::ChatReport(r) => {
                 self.db.rt.spawn(store_chat_report(self.db.pool.clone(), r));
+            }
+            Output::FetchRuleset(f) => {
+                let (pool, done) = (self.db.pool.clone(), self.db.rulesets.clone());
+                self.db.rt.spawn(async move {
+                    let result = fetch_room_ruleset(&pool, &f).await;
+                    let _ = done.send((f, result));
+                });
             }
         }
     }
@@ -399,6 +442,7 @@ fn event_loop(
     engine: Engine,
     db: Db,
     done: std_mpsc::Receiver<Fetched>,
+    rulesets: std_mpsc::Receiver<RulesetFetched>,
     stop: Arc<AtomicBool>,
     status: SharedStatus,
 ) {
@@ -434,6 +478,10 @@ fn event_loop(
         while let Ok((conn, seq, result)) = done.try_recv() {
             busy = true;
             lp.feed(Input::UserFetched { conn, seq, result });
+        }
+        while let Ok((f, result)) = rulesets.try_recv() {
+            busy = true;
+            lp.feed(Input::RulesetFetched(f, result));
         }
         if lp.run_pending_disconnects(Instant::now()) {
             busy = true;

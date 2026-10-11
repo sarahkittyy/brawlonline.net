@@ -35,7 +35,7 @@ fn room_error(c: &mut OnlineClient) -> Value {
 }
 
 fn create(c: &mut OnlineClient) -> String {
-    c.send(&RoomRequest::Create { public: true });
+    c.send(&RoomRequest::Create { public: true, ruleset: None, remembered: false });
     room_state(c)["code"].as_str().unwrap().to_string()
 }
 
@@ -151,7 +151,7 @@ async fn public_list_private_rooms_and_online_count() {
     let mut b = online(&stack, &bob);
     let c = online(&stack, &carol);
     let public = create(&mut a);
-    b.send(&RoomRequest::Create { public: false });
+    b.send(&RoomRequest::Create { public: false, ruleset: None, remembered: false });
     let private = room_state(&mut b)["code"].as_str().unwrap().to_string();
     // The private room shows as private to its members.
     b.send(&RoomRequest::Public { public: false });
