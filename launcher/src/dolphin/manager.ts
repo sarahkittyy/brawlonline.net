@@ -9,6 +9,7 @@ import { Observable, Subject } from "observable-fns";
 import path from "path";
 import { fileExists } from "utils/file_exists";
 
+import { isAbnormalExit, keepCrashLog } from "./crash_log";
 import { ensureBrawlSave } from "./install/brawl_save";
 import { bundledDolphinSource, installBundledDolphin } from "./install/bundled_dolphin";
 import { fetchLatestVersion } from "./install/fetch_latest_version";
@@ -268,6 +269,7 @@ export class DolphinManager {
       void clearRoomRequest(this.netplayOnlineDir()).catch(() => undefined);
       log.warn(`Dolphin exit code: ${exitCode?.toString(16)}`);
       log.warn(`Dolphin exit signal: ${signal}`);
+      await this._keepCrashLog(netplayInstallation, exitCode, signal);
     });
     dolphinInstance.on("error", (err: Error) => {
       log.error(err);
@@ -299,7 +301,7 @@ export class DolphinManager {
     if (launchType === DolphinLaunchType.NETPLAY && !this.netplayDolphinInstance) {
       await this.launchGate();
       const instance = new DolphinInstance(dolphinPath, installation.userArgs());
-      instance.on("close", async (exitCode) => {
+      instance.on("close", async (exitCode: number | null, signal: string | null) => {
         try {
           await this._updateLauncherSettings(launchType);
         } catch (e) {
@@ -311,6 +313,7 @@ export class DolphinManager {
           exitCode,
         });
         this.netplayDolphinInstance = null;
+        await this._keepCrashLog(installation, exitCode, signal);
       });
       instance.on("error", (err: Error) => {
         log.error(err);
@@ -494,6 +497,25 @@ export class DolphinManager {
       });
     }
     return this.projectPlusInstall;
+  }
+
+  /** After a run that ended abnormally, keeps its log out of Dolphin's two-run rotation (crash_log.ts). */
+  private async _keepCrashLog(
+    installation: LocalDolphinInstallation,
+    exitCode: number | null,
+    signal: string | null,
+  ): Promise<void> {
+    if (!isAbnormalExit(exitCode, signal)) {
+      return;
+    }
+    try {
+      const kept = await keepCrashLog(path.join(installation.userFolder, "Logs"));
+      if (kept) {
+        log.warn(`Kept the crashed run's log as ${kept}`);
+      }
+    } catch (e) {
+      log.error("Could not keep the crashed run's log.", e);
+    }
   }
 
   /**
