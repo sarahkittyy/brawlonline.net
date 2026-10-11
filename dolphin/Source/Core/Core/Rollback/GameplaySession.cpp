@@ -1940,22 +1940,25 @@ bool CreateGekko(bool stress, int num_players)
       return false;
     }
     // Each player picks the delay of their own inputs (Slippi): the set value, else from the
-    // round trip measured now, to the furthest player still in the session. It stays for the
-    // whole game.
+    // round trip measured now, to the furthest player still in the session, as GekkoNet will see
+    // it in the game (GameRoundTrip). It stays for the whole game.
     double rtt = -1;
     ForEachPeer([&](int, const PeerView& p) {
       if (!p.left && p.rtt_ms >= 0)
         rtt = std::max(rtt, p.rtt_ms);
     });
     s.input_delay = s.net_opts.delay ? std::clamp(*s.net_opts.delay, 0, MAX_INPUT_DELAY) :
-                                       AutoInputDelay(rtt);
+                                       AutoInputDelay(GameRoundTrip(rtt));
     gekko_set_local_delay(s.gekko, s.local_handles[0], static_cast<unsigned char>(s.input_delay));
     gekko_set_disconnect_timeout(s.gekko, Online::PeerSilenceTimeoutMs(s.input_delay));
     // The controller that pressed START to lock in plays this game (Slippi-style: any port).
     s.local_pad = s.local_lock.local_pad < 4 ? s.local_lock.local_pad :
                                                std::clamp(s.net_opts.local_pad, 0, 3);
-    INFO_LOG_FMT(BRAWLBACK, "gprb: input delay {} ({}, round trip {:.0f} ms), controller port {}",
-                 s.input_delay, s.net_opts.delay ? "set" : "auto", rtt, s.local_pad + 1);
+    INFO_LOG_FMT(BRAWLBACK,
+                 "gprb: input delay {} ({}, round trip {:.0f} ms, in game {:.0f} ms), controller "
+                 "port {}",
+                 s.input_delay, s.net_opts.delay ? "set" : "auto", rtt, GameRoundTrip(rtt),
+                 s.local_pad + 1);
     if (s.gone_enabled)
     {
       // A player who leaves a 3-4 player match gets the gone marker as its input from the frame

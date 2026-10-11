@@ -43,11 +43,22 @@ namespace Gprb::Session
 {
 // Input delay in frames. Each player picks the delay of their own inputs, as on Slippi (in every
 // mode, ranked too): a set value, or automatic, from the round trip to the peer when the game's
-// GekkoNet session starts: 1 frame below 100 ms, 2 below 150 ms, 3 below 200 ms, else 4. Low
-// delay is what players feel; the rollbacks it costs (a re-run frame is ~1.3 ms on a desktop) fit
-// in the frame at these round trips. A round trip not measured yet: the default.
+// GekkoNet session starts: 1 frame below 100 ms, 2 below 150 ms, 3 below 200 ms, else 4, in
+// GekkoNet's ping (what players see in game; GameRoundTrip). Low delay is what players feel; the
+// rollbacks it costs (a re-run frame is ~1.3 ms on a desktop) fit in the frame at these round trips.
+// A round trip not measured yet: the default.
 constexpr int DEFAULT_INPUT_DELAY = 2;
 constexpr int MAX_INPUT_DELAY = 9;
+// The control channel's pings are answered on the network thread as they arrive; in a game,
+// GekkoNet reads packets and answers its pings once per frame, on each side, so its round trip is
+// a frame longer on average, and so is the wait for a remote input (half a frame each way). The
+// delay is picked from the control channel's round trip plus that frame (prod: 90 ms before the
+// game read 103-125 ms in it, 30 ms read 46-67 ms).
+constexpr double GAME_POLL_RTT_MS = 1000.0 * 1001.0 / 60000.0;
+constexpr double GameRoundTrip(double control_rtt_ms)
+{
+  return control_rtt_ms < 0 ? control_rtt_ms : control_rtt_ms + GAME_POLL_RTT_MS;
+}
 constexpr int AutoInputDelay(double rtt_ms)
 {
   if (rtt_ms < 0)
@@ -58,6 +69,9 @@ static_assert(AutoInputDelay(-1) == 2 && AutoInputDelay(0) == 1 && AutoInputDela
               AutoInputDelay(100) == 2 && AutoInputDelay(149.9) == 2 &&
               AutoInputDelay(150) == 3 && AutoInputDelay(199.9) == 3 &&
               AutoInputDelay(200) == 4 && AutoInputDelay(400) == 4);
+static_assert(AutoInputDelay(GameRoundTrip(-1)) == 2 && AutoInputDelay(GameRoundTrip(30)) == 1 &&
+              AutoInputDelay(GameRoundTrip(83)) == 1 && AutoInputDelay(GameRoundTrip(84)) == 2 &&
+              AutoInputDelay(GameRoundTrip(90)) == 2);
 
 struct SyncTestOptions
 {
