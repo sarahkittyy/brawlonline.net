@@ -15,7 +15,10 @@
 
 #include <fmt/format.h>
 
+#include "Common/CommonPaths.h"
+#include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
+#include "Common/StringUtil.h"
 #include "Core/Core.h"
 #include "Core/NetPlayClient.h"
 #include "Core/Online/Chat.h"
@@ -133,8 +136,12 @@ constexpr int CODE_LEN = 9, NAME_LEN = 16, ERROR_LEN = 120;
 constexpr u32 FO_CODE = 4;
 // MatchState response payload
 constexpr u32 MS_PEER_NAME = 4, MS_PEER_CODE = 0x24, MS_ERROR = 0x38;
-// OnlineStatus response payload
-constexpr u32 OS_NAME = 2, OS_CODE = 0x22;
+// OnlineStatus response payload (OS_LAST_TAG: still v5, after v5's fields; a plugin without it
+// ignores it)
+constexpr u32 OS_NAME = 2, OS_CODE = 0x22, OS_LAST_TAG = 0x34;
+// A name tag's characters (ppom.h TAG_CHARS); PortValues: flags, rumble, tag u16[5]
+constexpr int TAG_CHARS = 5;
+constexpr u32 PV_TAG_NAME = 2;
 // CodeSuggestionRequest payload: mode, scroll, inputLen, pad, index u32, input u16[9]
 constexpr u32 CSQ_INDEX = 4, CSQ_INPUT = 8;
 // CodeSuggestion response payload: found, len, pad[2], index u32, code u16[9]
@@ -266,6 +273,47 @@ std::string ReadCode(const Core::CPUThreadGuard& guard, u32 addr)
     code.push_back(c < 0x80 ? static_cast<char>(c) : '?');
   }
   return code;
+}
+
+// The name tag of the player's last lock-in, kept for the next boot in Online/last-tag.json
+// ({"tag": "<name>"}, "" for none). GET_ONLINE_STATUS gives it to the game, which picks that tag
+// on the online CSS until the player picks one there. Tags are the Brawl save's, not the
+// account's, so there is one file for every account.
+std::optional<std::u16string> s_last_tag;  // loaded on first use
+
+std::string LastTagPath()
+{
+  return File::GetUserPath(D_ONLINE_IDX) + "last-tag.json";
+}
+
+const std::u16string& LastTag()
+{
+  if (s_last_tag)
+    return *s_last_tag;
+  s_last_tag.emplace();
+  std::string contents;
+  picojson::value root;
+  if (File::ReadFileToString(LastTagPath(), contents) &&
+      picojson::parse(root, contents).empty() && root.is<picojson::object>())
+  {
+    const auto& o = root.get<picojson::object>();
+    if (const auto it = o.find("tag"); it != o.end() && it->second.is<std::string>())
+      *s_last_tag = UTF8ToUTF16(it->second.get<std::string>()).substr(0, TAG_CHARS);
+  }
+  return *s_last_tag;
+}
+
+void SetLastTag(const std::u16string& tag)
+{
+  if (LastTag() == tag)
+    return;
+  s_last_tag = tag;
+  picojson::object o;
+  o["tag"] = picojson::value(UTF16ToUTF8(tag));
+  const std::string path = LastTagPath();
+  File::CreateFullPath(path);
+  if (!File::WriteStringToFile(path, picojson::value(o).serialize()))
+    ERROR_LOG_FMT(NETPLAY, "Online: unable to write {}", path);
 }
 
 std::optional<Located> Locate(const Core::CPUThreadGuard& guard)
@@ -410,8 +458,14 @@ Response OnlineStatusResponse()
     WriteU16Text(r.payload, OS_NAME, info.display_name, NAME_LEN);
     WriteU16Text(r.payload, OS_CODE, info.connect_code, CODE_LEN);
   }
-  r.summary = fmt::format("GET_ONLINE_STATUS state={} name='{}' code='{}'", u8(state),
-                          info.display_name, info.connect_code);
+  const std::u16string& tag = LastTag();
+  for (size_t k = 0; k < tag.size(); ++k)
+  {
+    r.payload[OS_LAST_TAG + 2 * k] = static_cast<u8>(tag[k] >> 8);
+    r.payload[OS_LAST_TAG + 2 * k + 1] = static_cast<u8>(tag[k]);
+  }
+  r.summary = fmt::format("GET_ONLINE_STATUS state={} name='{}' code='{}' tag='{}'", u8(state),
+                          info.display_name, info.connect_code, UTF16ToUTF8(tag));
   return r;
 }
 
@@ -988,6 +1042,22 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     if (lock_seq != s_lock_seq)
     {
       s_lock_seq = lock_seq;
+      if (l.ready)
+      {
+        std::u16string tag;
+        if (l.port_values[0] & 1)
+        {
+          for (int i = 0; i < TAG_CHARS; ++i)
+          {
+            const u16 c = static_cast<u16>(l.port_values[PV_TAG_NAME + 2 * i] << 8 |
+                                           l.port_values[PV_TAG_NAME + 2 * i + 1]);
+            if (c == 0)
+              break;
+            tag.push_back(static_cast<char16_t>(c));
+          }
+        }
+        SetLastTag(tag);
+      }
       std::lock_guard lk(s_mutex);
       s_lock_seen.clear();
       s_lock_seen["seq"] = picojson::value(static_cast<double>(lock_seq));

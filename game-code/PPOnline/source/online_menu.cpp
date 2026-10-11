@@ -96,8 +96,12 @@ namespace OnlineMenu {
         // while connected, START locks in with these unless another character is picked.
         int lastCss;
         int lastCostume;
-        // The name tag on the player's panel when the CSS was left (save tag index, -1 none).
+        // The name tag on the player's panel (save tag index, -1 none), kept from one online
+        // CSS to the next (every mode, every room) and given to each new one (prepareCss). Until
+        // the player has been on an online CSS this boot it is the tag of the last lock-in of an
+        // earlier boot, which Dolphin keeps (OnlineStatus lastTag, found by its name).
         int lastTag;
+        bool tagChosen;     // lastTag is from this boot's CSS, not Dolphin's
         // The controller port (0-3) that last pressed START on the CSS: the lock-in carries it,
         // and the match plays the local player from that controller.
         u8 startPad;
@@ -348,6 +352,30 @@ namespace OnlineMenu {
         return tagRecord(t) ? t : -1;
     }
 
+    // The save's tag with this name (the first, as the tag list shows them), -1 none.
+    static int findTag(const u16* name)
+    {
+        if (!name[0]) return -1;
+        for (int i = 0; i < TAG_SLOTS; i++) {
+            const u16* t = (const u16*)tagRecord(i);
+            if (!t) continue;
+            int k = 0;
+            while (k < PPOM::TAG_CHARS && t[k] == name[k] && name[k]) k++;
+            if (k == PPOM::TAG_CHARS || (!t[k] && !name[k])) return i;
+        }
+        return -1;
+    }
+
+    // The tag's name as the plate prints it (printable ASCII, as u16Name), "" for none.
+    static void tagName(int tag, char* out)
+    {
+        u16 name[PPOM::TAG_CHARS + 1];
+        const u16* t = (const u16*)tagRecord(tag);
+        for (int i = 0; i < PPOM::TAG_CHARS; i++) name[i] = t ? t[i] : 0;
+        name[PPOM::TAG_CHARS] = 0;
+        u16Name(out, name);
+    }
+
     static void portValuesOf(int tag, PPOM::PortValues* pv)
     {
         memset(pv, 0, sizeof(*pv));
@@ -401,9 +429,21 @@ namespace OnlineMenu {
         s.lastTag = selectedTag();
     }
 
+    // Every online CSS (built from gmSelCharData, see above) starts with the player's tag.
+    static void restoreTag()
+    {
+        u32 gg = *(u32*)0x805A00E0;
+        if (!isPtr(gg)) return;
+        u32 selp = *(u32*)(gg + 0x10);   // gmSelCharData
+        if (!isPtr(selp)) return;
+        u8* rec = (u8*)selp + 0xB8 + LOCAL_PORT * 0x5C;
+        rec[0x18] = tagRecord(s.lastTag) ? (u8)s.lastTag : 0x78;
+    }
+
     void prepareCss()
     {
         if (roomCss()) RoomCss::prepareRecords();
+        if (s.mode >= 0) restoreTag();
     }
 
     void restoreCss()
@@ -420,7 +460,6 @@ namespace OnlineMenu {
         if (s.lastCss != 0x29) rec[0x00] = charKindOf(s.lastCss);
         rec[0x01] = 0;                                   // human
         rec[0x05] = (u8)s.lastCostume;                   // colour
-        rec[0x18] = tagRecord(s.lastTag) ? (u8)s.lastTag : 0x78;
         PPOM::g_block.debug.scratch[12] = 0x10000 | ((u32)s.lastCss << 8) | (u8)s.lastCostume;
     }
 
@@ -1206,7 +1245,6 @@ namespace OnlineMenu {
         unlock();
         s.lastCss = -1;
         s.lastCostume = 0;
-        s.lastTag = -1;
         g_onlineMatchGame = 0;
         g_onlinePickStage = 0;
         g_onlineCss = 1;
@@ -1522,6 +1560,12 @@ namespace OnlineMenu {
             s.ownCode[n] = 0;
             if (st.state == 1) u16Name(s.ownName, st.name);
             else s.ownName[0] = 0;
+            if (!s.tagChosen) {
+                u16 tag[PPOM::TAG_CHARS + 1];
+                memcpy(tag, st.lastTag, sizeof(st.lastTag));
+                tag[PPOM::TAG_CHARS] = 0;
+                s.lastTag = findTag(tag);
+            }
             s.appState = st.state;
             u32& lockDebug = PPOM::g_block.debug.scratch[7];
             lockDebug = (lockDebug & ~0xFFu) | (u8)(st.state + 1);   // tests: the state seen
@@ -1953,10 +1997,15 @@ namespace OnlineMenu {
         int myTeam = -1;
         roomPanels(views, &myTeam);
         bool teams = in && (se.roomFlags & PPOM::RF_TEAMS) && se.roomMode == 2;
-        // The local plate: the name the room has for us, else the account's (Join Room).
+        // The local plate: the name tag picked on it (staging feedback 2026-10-11: with the
+        // account name there the tag was not to be seen), else the name the room has for us,
+        // else the account's (Join Room). The others see the account name.
         char myName[RoomCss::NAME_CHARS + 1];
-        if (in && me >= 0) u16Name(myName, se.players[me].name);
-        else strcpy(myName, s.ownName);
+        tagName(selectedTag(), myName);
+        if (!myName[0]) {
+            if (in && me >= 0) u16Name(myName, se.players[me].name);
+            else strcpy(myName, s.ownName);
+        }
         RoomCss::tick(views, teams, myTeam, host, myName, roomLockedForNext());
         roomButtons(in, host);
     }
@@ -2260,6 +2309,12 @@ namespace OnlineMenu {
         }
 
         hideHeaderArt();
+        // The panel's tag, for the next online CSS (and Dolphin's, with the lock-in). Once the
+        // CSS has printed its rule line its panel has the tag restoreTag gave it.
+        if (s.cssMsg) {
+            s.lastTag = selectedTag();
+            s.tagChosen = true;
+        }
         u32 b = padButtons(0x8);
         u32 pressed = padButtons(0xC);
         if (s.lastButtons == 0xFFFFFFFF) {
@@ -2347,7 +2402,7 @@ namespace OnlineMenu {
     }
 
     struct Init {
-        Init() { s.mode = -1; s.lastScene[0] = 0; s.appState = -1; }
+        Init() { s.mode = -1; s.lastScene[0] = 0; s.appState = -1; s.lastTag = -1; }
     };
     static Init s_init;
 }

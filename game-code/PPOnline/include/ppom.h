@@ -71,6 +71,7 @@ namespace PPOM {
     const int CODE_LEN = 9;   // "ABCD#123" + NUL, UTF-16
     const int NAME_LEN = 16;
     const int ERROR_LEN = 120;
+    const int TAG_CHARS = 5;  // a name tag's characters (the save's tag records, PortValues)
 
     // 0xB4 FIND_OPPONENT request payload.
     struct FindOpponent {
@@ -154,6 +155,9 @@ namespace PPOM {
         u8 _pad;
         u16 name[NAME_LEN];
         u16 code[CODE_LEN];
+        // The name tag of the player's last lock-in (Dolphin keeps it across boots in
+        // Online/last-tag.json), empty for none; still v5 (a Dolphin without it sends zeros).
+        u16 lastTag[TAG_CHARS];
     };
 
     // ---- Rooms (docs/rooms-game-interface.md) ----
@@ -245,7 +249,6 @@ namespace PPOM {
     // A, B, C-stick, Y, X, then flags: tap jump 0x80), Wii Remote 8, with Nunchuk 12, Classic 13).
     // Each player's own values travel with their lock-in; the match applies each port's layout on
     // both machines (online_match.cpp, the ipPadConfig hook), so everyone keeps their own buttons.
-    const int TAG_CHARS = 5;
     const int LAYOUT_SIZE = 0x2D;
     enum PortValueFlags { PV_TAG = 1 };   // the values are a tag's (else: the game's defaults)
 

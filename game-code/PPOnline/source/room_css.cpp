@@ -91,8 +91,8 @@ namespace RoomCss {
     static int s_myTeamPickedFrames = 0;
     static u32 s_shownMask[4];   // per area: models that were visible when it was hidden
     static bool s_hidden[4];
-    // The local plate: the account name, printed again a few frames after Brawl may have printed
-    // its own (the name tag or "PLAYER 1": a tag picked, the tag list closed).
+    // The local plate: the tag or the account name, printed again a few frames after Brawl may have
+    // printed its own (the name tag or "PLAYER 1": a tag picked, the tag list closed).
     static char s_myPlate[NAME_CHARS + 1];
     static int s_myTagShown = -2;
     static int s_myHandMode = -1;
@@ -668,11 +668,11 @@ namespace RoomCss {
     }
     int portOfArea(int a) { return areaSlot(a); }
 
-    // The local panel's plate: the account name (Slippi shows the player's name; others see it
-    // on their panels too). The name tag stays the player's choice: its controls go with the
-    // lock-in from area+0x1C8 (online_menu.cpp portValuesOf), whatever the plate says, and the
-    // tag list (the plate's pencil) still opens and picks. Brawl prints the tag (or "PLAYER 1")
-    // when a tag is picked or the list closes: the name goes back a few frames later.
+    // The local panel's plate: `myName` is the name tag picked on it, else the account name
+    // (Slippi shows the player's name; others see the account name on their panels). The tag's
+    // controls go with the lock-in from area+0x1C8 (online_menu.cpp portValuesOf), and the tag
+    // list (the plate's pencil) opens and picks as offline. Brawl prints the tag (or "PLAYER 1")
+    // when a tag is picked or the list closes: ours goes back a few frames later.
     static void myPlate(u8* a0, const char* myName)
     {
         if (!myName || !myName[0]) return;
