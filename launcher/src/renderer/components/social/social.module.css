@@ -142,7 +142,7 @@
   display: flex;
   align-items: center;
   gap: 6px;
-  padding: 6px 6px 6px 12px;
+  padding: 4px 6px 4px 10px;
   border-bottom: 1px solid rgb(255 255 255 / 6%);
   font-size: 13px;
 }

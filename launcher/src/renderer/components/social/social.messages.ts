@@ -14,6 +14,7 @@ export const SocialMessages = {
   unignoreUser: () => "Unignore user",
   ignored: () => "Ignored",
   closeChat: () => "Close",
+  minimize: () => "Minimize",
   typeMessage: () => "Message",
   offlineNotice: () => "Offline. Messages can't be sent until they're back.",
   ignoredNotice: () => "You're ignoring this player. Their messages are hidden.",

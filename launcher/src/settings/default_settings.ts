@@ -47,5 +47,6 @@ export const defaultAppSettings: AppSettings = {
     playbackDolphinPath: null,
     enableRankDisplay: true,
     notificationSounds: true,
+    notificationVolume: 15,
   },
 };

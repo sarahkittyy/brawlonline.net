@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { inviteBlocked } from "@/lib/social/use_social";
+import { volumeOf } from "@/lib/social/volume";
 
 import { deleteWordBefore } from "./chat_dock";
 
@@ -17,5 +18,14 @@ describe("chat box", () => {
     expect(inviteBlocked(null)).toBeUndefined();
     expect(inviteBlocked({ ...room, joinable: true })).toBeUndefined();
     expect(inviteBlocked({ ...room, joinable: false })).toBe("full");
+  });
+
+  it("notification volume: 0-100 % from the setting, 15 % without one", () => {
+    expect(volumeOf(15)).toBe(0.15);
+    expect(volumeOf(100)).toBe(1);
+    expect(volumeOf(250)).toBe(1);
+    expect(volumeOf(-3)).toBe(0);
+    expect(volumeOf(undefined)).toBe(0.15);
+    expect(volumeOf("loud")).toBe(0.15);
   });
 });

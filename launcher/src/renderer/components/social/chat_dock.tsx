@@ -1,5 +1,6 @@
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
+import RemoveRoundedIcon from "@mui/icons-material/RemoveRounded";
 import Tooltip from "@mui/material/Tooltip";
 import type { Conversation, SocialPlayer } from "@social/types";
 import { clsx } from "clsx";
@@ -226,11 +227,21 @@ const ChatWindow = ({
   return (
     <div className={styles.window} style={{ left }} data-testid={`chat-window-${player.uid}`}>
       <div className={styles.windowTitle}>
-        <PlayerName player={player} />
         <Tooltip title={Messages.e2e()} placement="top" disableInteractive={true}>
           <span className={styles.lock}>
             <LockOutlinedIcon style={{ fontSize: 14 }} />
           </span>
+        </Tooltip>
+        <PlayerName player={player} />
+        <Tooltip title={Messages.minimize()} placement="top" disableInteractive={true}>
+          <button
+            type="button"
+            className={styles.iconButton}
+            aria-label={Messages.minimize()}
+            onClick={() => useSocial.getState().toggleTab(player.uid)}
+          >
+            <RemoveRoundedIcon style={{ fontSize: 16 }} />
+          </button>
         </Tooltip>
       </div>
       <div className={styles.lines} ref={linesRef}>
