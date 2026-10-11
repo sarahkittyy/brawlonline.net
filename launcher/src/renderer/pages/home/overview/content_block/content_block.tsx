@@ -8,10 +8,13 @@ export const ContentBlock = ({
   onClick,
   fill,
   endIcon,
+  titleAction,
   overflowY = "auto",
 }: {
   fill?: boolean;
   title?: string;
+  /** Shown right after the title (a button). */
+  titleAction?: React.ReactNode;
   content: React.ReactNode;
   onClick?: () => void;
   endIcon?: React.ReactNode;
@@ -21,7 +24,10 @@ export const ContentBlock = ({
     <div className={clsx(styles.outer, { [styles.fill]: fill })}>
       {title && (
         <div className={clsx(styles.header, onClick && styles.active)} onClick={onClick}>
-          <h3 className={styles.title}>{title}</h3>
+          <div className={styles.titleRow}>
+            <h3 className={styles.title}>{title}</h3>
+            {titleAction}
+          </div>
           {endIcon}
         </div>
       )}

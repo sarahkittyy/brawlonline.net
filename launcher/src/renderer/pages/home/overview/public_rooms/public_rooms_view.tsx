@@ -1,3 +1,4 @@
+import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import CloudOffOutlinedIcon from "@mui/icons-material/CloudOffOutlined";
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
@@ -29,6 +30,10 @@ export type PublicRoomsViewProps = {
   onJoin: (room: PublicRoom) => void;
   onRetry: () => void;
   onLogIn: () => void;
+  /** Home's "Create room": the game creates a room as WITH FRIENDS > Create Room does. */
+  onCreate?: () => void;
+  /** A create is being handed to the game. */
+  creating?: boolean;
   /** Stories and screenshots: show this row as hovered or pressed. */
   forceRowState?: { code: string; state: "hover" | "pressed" };
 };
@@ -44,6 +49,8 @@ export const PublicRoomsView = ({
   onJoin,
   onRetry,
   onLogIn,
+  onCreate,
+  creating = false,
   forceRowState,
 }: PublicRoomsViewProps) => {
   const online =
@@ -56,7 +63,33 @@ export const PublicRoomsView = ({
 
   return (
     <div className={styles.block}>
-      <ContentBlock fill={true} title={Messages.publicRooms()} endIcon={online} content={renderBody()} />
+      <ContentBlock
+        fill={true}
+        title={Messages.publicRooms()}
+        titleAction={
+          onCreate && state.kind !== "logged-out" ? (
+            <Tooltip title={Messages.createRoomTooltip()} placement="top" enterDelay={400} disableInteractive={true}>
+              <span>
+                <Button
+                  variant="contained"
+                  color="secondary"
+                  size="small"
+                  disableElevation={true}
+                  disabled={creating || joiningCode != null}
+                  startIcon={creating ? <CircularProgress color="inherit" size={14} /> : <AddRoundedIcon />}
+                  onClick={onCreate}
+                  data-testid="create-room"
+                  sx={{ textTransform: "none", fontWeight: 600, borderRadius: "8px", px: 1.5 }}
+                >
+                  {Messages.createRoom()}
+                </Button>
+              </span>
+            </Tooltip>
+          ) : undefined
+        }
+        endIcon={online}
+        content={renderBody()}
+      />
     </div>
   );
 

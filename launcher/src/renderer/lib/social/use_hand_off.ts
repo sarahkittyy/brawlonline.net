@@ -1,3 +1,4 @@
+import { CREATE_ROOM } from "@dolphin/hand_off_target";
 import log from "electron-log";
 import { useCallback } from "react";
 
@@ -7,8 +8,8 @@ import { useToasts } from "@/lib/hooks/use_toasts";
 import { useServices } from "@/services";
 
 /**
- * Sends the game to a room (a room code) or to a Direct 1v1 with a player (their connect code),
- * the way clicking a public room does (docs/rooms-protocol.md §5): a running game gets the code,
+ * Sends the game to a room (a room code), to a Direct 1v1 with a player (their connect code) or
+ * to a new room of its own (`CREATE_ROOM`), the way clicking a public room does (docs/rooms-protocol.md §5): a running game gets the code,
  * else the launcher leaves it for the game and starts it like Play.
  */
 export const useHandOff = () => {
@@ -18,12 +19,29 @@ export const useHandOff = () => {
 
   return useCallback(
     async (code: string) => {
-      const direct = code.includes("#");
+      const kind = code === CREATE_ROOM ? "create" : code.includes("#") ? "direct" : "room";
+      const text = {
+        accepted: {
+          create: Messages.creatingRoom(),
+          direct: Messages.goingToDirect(code),
+          room: Messages.goingToRoom(),
+        },
+        noResponse: {
+          create: Messages.noResponseCreate(),
+          direct: Messages.noResponseDirect(code),
+          room: Messages.noResponseRoom(code),
+        },
+        starting: {
+          create: Messages.startingForCreate(),
+          direct: Messages.startingForDirect(code),
+          room: Messages.startingForRoom(),
+        },
+      };
       try {
         const result = await dolphinService.joinRoomInGame(code);
         switch (result.outcome) {
           case "accepted":
-            showInfo(direct ? Messages.goingToDirect(code) : Messages.goingToRoom());
+            showInfo(text.accepted[kind]);
             break;
           case "busy":
             showWarning(Messages.finishGameFirst());
@@ -32,12 +50,12 @@ export const useHandOff = () => {
             showWarning(result.message || Messages.gameRefused());
             break;
           case "no-response":
-            showWarning(direct ? Messages.noResponseDirect(code) : Messages.noResponseRoom(code));
+            showWarning(text.noResponse[kind]);
             break;
           case "not-running": {
             const { id } = await dolphinService.prepareRoomLaunch(code);
             if (await play()) {
-              showInfo(direct ? Messages.startingForDirect(code) : Messages.startingForRoom());
+              showInfo(text.starting[kind]);
             } else {
               await dolphinService.cancelRoomLaunch(id);
             }

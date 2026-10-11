@@ -34,6 +34,9 @@ export const SocialMessages = {
   replaced: () => "You're signed in on another launcher, so chat moved there.",
   // Hand-off to the game (as a room click, docs/rooms-protocol.md §5).
   goingToRoom: () => "Your game is going to the room.",
+  creatingRoom: () => "Your game is creating a room.",
+  startingForCreate: () => "Starting the game. It will create a room.",
+  noResponseCreate: () => "Your game didn't respond. Create one in game: Online > With Friends > Create Room.",
   goingToDirect: (code: string) => `Your game is going to Direct 1v1 with ${code}.`,
   startingForRoom: () => "Starting the game. It will open the room.",
   startingForDirect: (code: string) => `Starting the game. It will open Direct 1v1 with ${code}.`,

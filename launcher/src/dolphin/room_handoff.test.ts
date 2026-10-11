@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { GameStatus, RoomRequest } from "./room_handoff";
 import {
   clearRoomRequest,
+  CREATE_ROOM,
   handOffRoom,
   isConnectCode,
   isRoomCode,
@@ -62,6 +63,16 @@ describe("room hand-off", () => {
       id: req.id,
       kind: "direct",
       connectCode: "SARA#12",
+      createdAt: "2026-10-10T12:00:00.000Z",
+    });
+  });
+
+  it("writes a create request", async () => {
+    const req = await writeRoomRequest(dir, CREATE_ROOM, new Date("2026-10-10T12:00:00Z"));
+    expect(await readRequest()).toEqual({
+      version: 1,
+      id: req.id,
+      kind: "create",
       createdAt: "2026-10-10T12:00:00.000Z",
     });
   });

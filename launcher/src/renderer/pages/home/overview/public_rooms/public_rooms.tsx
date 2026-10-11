@@ -1,8 +1,10 @@
+import { CREATE_ROOM } from "@dolphin/hand_off_target";
 import { useQuery } from "@tanstack/react-query";
-import React from "react";
+import React, { useState } from "react";
 
 import { useAccount } from "@/lib/hooks/use_account";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
+import { useHandOff } from "@/lib/social/use_hand_off";
 import { useServices } from "@/services";
 
 import type { PublicRoomsState } from "./public_rooms_view";
@@ -20,6 +22,12 @@ export const PublicRooms = React.memo(function PublicRooms() {
   const uid = useAccount((s) => s.user?.uid);
   const openLogin = useLoginModal((s) => s.openModal);
   const { join, joiningCode } = useJoinRoom();
+  const handOff = useHandOff();
+  const [creating, setCreating] = useState(false);
+  const create = () => {
+    setCreating(true);
+    void handOff(CREATE_ROOM).finally(() => setCreating(false));
+  };
 
   const query = useQuery({
     queryKey: ["publicRooms", uid],
@@ -50,6 +58,8 @@ export const PublicRooms = React.memo(function PublicRooms() {
       onJoin={(room) => void join(room)}
       onRetry={() => void query.refetch()}
       onLogIn={openLogin}
+      onCreate={create}
+      creating={creating}
     />
   );
 });

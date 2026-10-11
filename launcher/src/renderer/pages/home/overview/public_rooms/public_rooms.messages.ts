@@ -1,5 +1,7 @@
 export const PublicRoomsMessages = {
   publicRooms: () => "Public rooms",
+  createRoom: () => "Create room",
+  createRoomTooltip: () => "Opens a new room in your game, like Online > With Friends > Create Room.",
   playersOnline: (n: number) => (n === 1 ? "1 player online" : `${n} players online`),
   loggedOut: () => "Log in to see who's online and join public rooms.",
   logIn: () => "Log in",

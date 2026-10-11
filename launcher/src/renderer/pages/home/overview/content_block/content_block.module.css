@@ -23,6 +23,13 @@
   color: var(--accent-primary-bright);
 }
 
+.titleRow {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  min-width: 0;
+}
+
 .content {
   flex: 1;
   display: grid;

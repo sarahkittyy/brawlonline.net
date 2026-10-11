@@ -15,7 +15,9 @@
  * A Direct request (a launcher invite to a Direct 1v1, docs/social-protocol.md §5) is the same
  * file with `{version, id, kind: "direct", connectCode, createdAt}`: the game goes to Direct's
  * character select and, on lock-in, searches that code. Every function here that takes a room code
- * also takes a connect code (`ABCD#123`) for that.
+ * also takes a connect code (`ABCD#123`) for that, and `CREATE_ROOM` for a create request
+ * (`{version, id, kind: "create", createdAt}`: the game creates a room as WITH FRIENDS > Create Room
+ * does, from Home's "Create room" button).
  *
  * Dolphin builds without this (everything before the rooms phase) write no status. Then the
  * launcher still writes the request, and when nothing answers it within a few seconds it takes
@@ -25,6 +27,10 @@
 import { randomUUID } from "crypto";
 import { readFile, rename, unlink, writeFile } from "fs/promises";
 import path from "path";
+
+import { CREATE_ROOM } from "./hand_off_target";
+
+export { CREATE_ROOM };
 
 export const ROOM_REQUEST_FILE = "join-room.json";
 export const GAME_STATUS_FILE = "game-status.json";
@@ -36,7 +42,8 @@ const ACK_POLL_MS = 200;
 
 export type RoomRequest =
   | { version: 1; id: string; code: string; createdAt: string }
-  | { version: 1; id: string; kind: "direct"; connectCode: string; createdAt: string };
+  | { version: 1; id: string; kind: "direct"; connectCode: string; createdAt: string }
+  | { version: 1; id: string; kind: "create"; createdAt: string };
 
 export type GameStatus = {
   version: number;
@@ -86,9 +93,9 @@ export function isConnectCode(code: string): boolean {
   return code.length <= 8 && /^[A-Z]{2,4}#[1-9][0-9]{0,3}$/.test(code);
 }
 
-/** A room code or, for Direct, a connect code. */
+/** A room code, a connect code (Direct) or `CREATE_ROOM`. */
 export function isHandOffCode(code: string): boolean {
-  return isRoomCode(code) || isConnectCode(code);
+  return isRoomCode(code) || isConnectCode(code) || code === CREATE_ROOM;
 }
 
 /**
@@ -101,9 +108,12 @@ export async function writeRoomRequest(onlineDir: string, code: string, now = ne
   }
   const id = randomUUID();
   const createdAt = now.toISOString();
-  const req: RoomRequest = isRoomCode(code)
-    ? { version: 1, id, code, createdAt }
-    : { version: 1, id, kind: "direct", connectCode: code, createdAt };
+  const req: RoomRequest =
+    code === CREATE_ROOM
+      ? { version: 1, id, kind: "create", createdAt }
+      : isRoomCode(code)
+      ? { version: 1, id, code, createdAt }
+      : { version: 1, id, kind: "direct", connectCode: code, createdAt };
   const file = requestPath(onlineDir);
   const tmp = `${file}.${id}.tmp`;
   await writeFile(tmp, JSON.stringify(req, null, 2));
