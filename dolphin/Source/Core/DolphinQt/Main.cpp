@@ -32,6 +32,7 @@
 #include "Core/Harness/Harness.h"
 #include "Core/System.h"
 
+#include "DolphinQt/HangWatchdog.h"
 #include "DolphinQt/Host.h"
 #include "DolphinQt/MainWindow.h"
 #include "DolphinQt/QtUtils/AnalyticsPrompt.h"
@@ -299,6 +300,9 @@ int main(int argc, char* argv[])
       }
     }
 
+    // Before the main window: its constructor runs before the event loop and can hang too.
+    HangWatchdog hang_watchdog;
+
     MainWindow win{Core::System::GetInstance(), std::move(boot),
                    static_cast<const char*>(options.get("movie"))};
 
@@ -354,6 +358,7 @@ int main(int argc, char* argv[])
     // fork. Our update channel plugs in at MainWindow::CheckForUpdatesAuto.
 
     retval = app.exec();
+    hang_watchdog.Stop();
     Harness::Shutdown();
   }
 
@@ -368,6 +373,8 @@ int main(int argc, char* argv[])
 int WINAPI wWinMain(_In_ HINSTANCE, _In_opt_ HINSTANCE, _In_ LPWSTR, _In_ int)
 {
   std::vector<std::string> args = Common::CommandLineToUtf8Argv(GetCommandLineW());
+  if (args.size() > 1 && args[1] == HangWatchdog::DUMP_HELPER_SWITCH)
+    return HangWatchdog::RunDumpHelper(args);
   const int argc = static_cast<int>(args.size());
   std::vector<char*> argv(args.size());
   for (size_t i = 0; i < args.size(); ++i)

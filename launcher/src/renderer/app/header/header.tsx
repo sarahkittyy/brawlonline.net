@@ -1,4 +1,4 @@
-import { PRODUCT_NAME } from "@common/product";
+import { DISCORD_INVITE_URL, PRODUCT_NAME } from "@common/product";
 import { css } from "@emotion/react";
 import styled from "@emotion/styled";
 import NotificationsOffOutlinedIcon from "@mui/icons-material/NotificationsOffOutlined";
@@ -12,6 +12,7 @@ import log from "electron-log";
 import debounce from "lodash/debounce";
 import React, { useMemo } from "react";
 
+import { DiscordIcon } from "@/components/discord_icon";
 import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
 import { DolphinStatus, useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { usePlay, usePlayDialogs } from "@/lib/dolphin/use_play";
@@ -83,6 +84,21 @@ export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
             {Messages.logIn()}
           </Button>
         )}
+        <Tooltip title={Messages.discord()}>
+          <IconButton
+            component="a"
+            href={DISCORD_INVITE_URL}
+            target="_blank"
+            rel="noopener noreferrer"
+            aria-label={Messages.discord()}
+            css={css`
+              opacity: 0.5;
+            `}
+            size="large"
+          >
+            <DiscordIcon />
+          </IconButton>
+        </Tooltip>
         <SoundsToggle />
         <Tooltip title={Messages.settings()}>
           <IconButton

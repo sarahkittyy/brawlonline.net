@@ -8,6 +8,7 @@
     python tools/gamecode/reltool.py find FILE.rel HEXWORDS                   # find byte pattern in .text
     python tools/gamecode/reltool.py diff A.rel B.rel                          # per-section size/equality
     python tools/gamecode/reltool.py pack LOADER.rel PLUGIN.rel OUT.rel         # PPOnline.rel (below)
+    python tools/gamecode/reltool.py check FILE.rel [--elf [PART=]FILE.elf]... # unresolved calls (build.sh)
 
 PPOnline.rel is packed: the loader REL (PPOnlineLoader, the Syriinge plugin sy_core loads into the
 Syringe heap) with the plugin REL (PPOnlineMain, id 20560) appended and a 16-byte trailer
@@ -229,16 +230,109 @@ def cmd_find(a) -> None:
 
 
 def unresolved_calls(r: Rel) -> list[int]:
-    """Offsets of `bl` instructions that call themselves and carry no relocation: the linker
-    left an undefined symbol (we link with --unresolved-symbols=ignore-all), and the call
-    would loop forever at runtime. (A plain `b .` is a deliberate infinite loop; not flagged.)"""
+    """Offsets in .text of calls the linker left unresolved. We link with
+    --unresolved-symbols=ignore-all, and elf2rel only warns "Unresolved external symbol" and drops
+    the relocation when a symbol is neither in the module nor in the symbol maps, which leaves:
+    - `bl .` (0x48000001) with no relocation: a short call, which would loop forever;
+    - `lis rD,0` and then `addi rD,rD,0`, neither relocated: the -mlongcall call
+      (lis/addi/mtctr/bctrl), which would jump to address 0. A real constant would be `li`;
+      `lis rD,0` and then `ori` is one, and is not flagged.
+    (A plain `b .` is a deliberate infinite loop; not flagged.) Pointers to such a symbol are
+    left 0 too, but only the ELF shows them (dropped_refs)."""
     t = r.text()
     relocated = {x.offset for x in r.relocs if x.section == t.idx}
+    words = struct.unpack_from(f">{len(t.data) // 4}I", t.data)
     out = []
-    for i in range(0, len(t.data), 4):
-        w = struct.unpack_from(">I", t.data, i)[0]
+    for n, w in enumerate(words):
+        i = 4 * n
         if w == 0x48000001 and i not in relocated:
             out.append(i)
+        elif w >> 26 == 15 and (w >> 16) & 31 == 0 and w & 0xFFFF == 0 and i + 2 not in relocated:
+            rd = (w >> 21) & 31
+            for k in range(n + 1, min(n + 8, len(words))):
+                v = words[k]
+                if v == (14 << 26 | rd << 21 | rd << 16) and 4 * k + 2 not in relocated:
+                    out.append(i)
+                    break
+                op = v >> 26
+                dest = (v >> 16) & 31 if op in (24, 25) else (v >> 21) & 31
+                if op in (14, 15, 24, 25, 32, 34, 40, 42) and dest == rd:
+                    break   # rD set by something else (li/lis/lwz/lbz/lhz/lha, ori/oris): a constant
+    return out
+
+
+# ELF32 (big-endian, relocatable), as ld.lld -r writes a module for elf2rel: just enough to find
+# the relocations against undefined symbols.
+SHT_SYMTAB, SHT_RELA, SHN_UNDEF, STB_WEAK = 2, 4, 0, 2
+
+
+@dataclass
+class ElfSym:
+    name: str
+    value: int
+    size: int
+    bind: int
+    shndx: int
+
+
+class Elf:
+    def __init__(self, path: str | Path | bytes):
+        b = path if isinstance(path, bytes) else Path(path).read_bytes()
+        if b[:4] != b"\x7fELF" or b[4] != 1 or b[5] != 2:
+            raise SystemExit(f"{path}: not a 32-bit big-endian ELF")
+        shoff, = struct.unpack_from(">I", b, 0x20)
+        shentsize, shnum, shstrndx = struct.unpack_from(">3H", b, 0x2E)
+        hdrs = [struct.unpack_from(">10I", b, shoff + i * shentsize) for i in range(shnum)]
+
+        def cstr(sec: int, off: int) -> str:
+            at = hdrs[sec][4] + off
+            return b[at:b.index(b"\0", at)].decode(errors="replace")
+
+        self.sizes = [h[5] for h in hdrs]
+        self.symbols: list[ElfSym] = []
+        self.relocs: list[tuple[int, int, int, int]] = []   # (section, offset, type, symbol index)
+        for h in hdrs:
+            if h[1] == SHT_SYMTAB:
+                for i in range(h[5] // 16):
+                    nm, val, size, info, _other, shndx = struct.unpack_from(">3IBBH", b, h[4] + 16 * i)
+                    self.symbols.append(ElfSym(cstr(h[6], nm), val, size, info >> 4, shndx))
+        for h in hdrs:
+            if h[1] == SHT_RELA:   # sh_info: the section it patches
+                for i in range(h[5] // 12):
+                    off, info, _addend = struct.unpack_from(">IIi", b, h[4] + 12 * i)
+                    self.relocs.append((h[7], off, info & 0xFF, info >> 8))
+
+    def containing(self, sec: int, off: int) -> str:
+        """The defined symbol around sec+off (the function, in code), else the nearest one before."""
+        best = None
+        for s in self.symbols:
+            if s.shndx != sec or not s.name or s.value > off:
+                continue
+            if off < s.value + s.size:
+                return s.name
+            if best is None or s.value > best.value:
+                best = s
+        return f"{best.name}+{off - best.value:#x}" if best else f"sec{sec}+{off:#x}"
+
+
+def elf_matches(e: Elf, r: Rel) -> bool:
+    """elf2rel keeps the ELF's section indices: the REL's sections have the same sizes."""
+    return all(s.idx < len(e.sizes) and e.sizes[s.idx] == s.size for s in r.sections if s.size)
+
+
+def dropped_refs(e: Elf, r: Rel) -> list[tuple[str, str, int, int]]:
+    """(symbol, user, section, offset) of each relocation in the ELF against an undefined,
+    non-weak symbol that has no relocation at the same place in the REL: elf2rel found the
+    symbol neither in the module nor in the symbol maps and left the field 0 (a -mlongcall call
+    then jumps to address 0, a short one to itself, and a pointer is NULL)."""
+    have = {(x.section, x.offset) for x in r.relocs}
+    out = []
+    for sec, off, typ, si in e.relocs:
+        s = e.symbols[si] if si < len(e.symbols) else None
+        if typ == 0 or s is None or s.shndx != SHN_UNDEF or not s.name or s.bind == STB_WEAK:
+            continue
+        if (sec, off) not in have:
+            out.append((s.name, e.containing(sec, off), sec, off))
     return out
 
 
@@ -251,21 +345,46 @@ def far_branches(r: Rel) -> list[Reloc]:
 def cmd_check(a) -> None:
     _, plugin = split_packed(Path(a.file).read_bytes())
     parts = ["loader", "main"] if plugin is not None else ["loader"]
+    elfs: dict[str, str] = {}
+    for spec in a.elf or []:
+        part, _, path = spec.partition("=") if "=" in spec else (parts[0], "", spec)
+        if part not in parts:
+            raise SystemExit(f"--elf {spec}: {a.file} has no part {part!r}")
+        elfs[part] = path
     for part in parts:
         r = Rel(a.file, part)
         name = f"{part} (id {r.id})" if plugin is not None else f"id {r.id}"
-        bad = unresolved_calls(r)
-        for i in bad:
-            print(f"{name}: unresolved branch at text+{i:#x}")
-        if bad:
-            raise SystemExit(f"{len(bad)} unresolved branch(es): add the symbols to EXTRA.lst or implement them")
+        problems = []
+        # Instructions the ELF has a relocation at: named below if dropped, or a weak symbol's 0.
+        explained: set[tuple[int, int]] = set()
+        if part in elfs:
+            e = Elf(elfs[part])
+            if not elf_matches(e, r):
+                raise SystemExit(f"{elfs[part]} is not the ELF of {name} in {a.file} (section sizes differ)")
+            explained = {(sec, off & ~3) for sec, off, _t, _s in e.relocs}
+            uses: dict[tuple[str, str], list[str]] = {}
+            for sym, user, sec, off in dropped_refs(e, r):
+                uses.setdefault((sym, user), []).append(f"sec{sec}+{off:#x}")
+            for (sym, user), at in uses.items():
+                problems.append(f"{name}: undefined symbol {sym}, used by {user} ({', '.join(at)})")
+        t = r.text()
+        for i in unresolved_calls(r):
+            if (t.idx, i) not in explained:
+                problems.append(f"{name}: unresolved call at sec{t.idx}+{i:#x} (--elf names the symbol)")
+        for p in problems:
+            print(p)
+        if problems:
+            raise SystemExit(f"{len(problems)} unresolved reference(s) to symbols in neither the module nor "
+                             "the symbol maps (a call would go to address 0 or loop): implement them, or add "
+                             "them to EXTRA.lst if the DOL has them")
         if part == "main":
             far = far_branches(r)
             for x in far[:20]:
                 print(f"{name}: relative branch to module {x.module} at sec{x.section}+{x.offset:#x}")
             if far:
                 raise SystemExit(f"{len(far)} relative branch(es) out of the plugin: build it with -mlongcall")
-        print(f"ok: {name}: no unresolved branches" + (", no far relative branches" if part == "main" else ""))
+        print(f"ok: {name}: no unresolved calls" + (" or symbols" if part in elfs else "")
+              + (", no far relative branches" if part == "main" else ""))
 
 
 def cmd_pack(a) -> None:
@@ -294,7 +413,11 @@ def main() -> int:
     p = sub.add_parser("dol"); p.add_argument("file"); p.add_argument("addr")
     p.add_argument("count", type=int, nargs="?", default=32); p.set_defaults(func=cmd_dol)
     p = sub.add_parser("find"); p.add_argument("file"); p.add_argument("hex"); p.set_defaults(func=cmd_find)
-    p = sub.add_parser("check"); p.add_argument("file"); p.set_defaults(func=cmd_check)
+    p = sub.add_parser("check"); p.add_argument("file")
+    p.add_argument("--elf", action="append", metavar="[PART=]FILE.elf",
+                   help="the ELF elf2rel made the REL (or its loader/main part) from: names each undefined "
+                        "symbol and its user, and also finds pointers to it")
+    p.set_defaults(func=cmd_check)
     p = sub.add_parser("diff"); p.add_argument("a"); p.add_argument("b"); p.set_defaults(func=cmd_diff)
     p = sub.add_parser("pack"); p.add_argument("loader"); p.add_argument("plugin"); p.add_argument("out")
     p.set_defaults(func=cmd_pack)
