@@ -230,19 +230,23 @@ def test_online_css_settings_are_locked(backend: OnlineBackend,
         x0 = struct.unpack(">f", g.c.read_mem(_hand(g) + HAND_X, 4))[0]
         g.steps("stick left 20")
         assert struct.unpack(">f", g.c.read_mem(_hand(g) + HAND_X, 4))[0] < x0 - 1
-        # The READY TO FIGHT banner: hidden, and A where it is starts nothing, idle and searching.
-        _a_on_banner(g, f"{mode}-05-A-on-banner-idle")
+        # The READY TO FIGHT banner: shown while START would search or open the keypad, hidden
+        # over the keypad and while searching, and A where it is starts nothing either way.
+        _a_on_banner(g, f"{mode}-05-A-on-banner-idle", shown=True)
         if mode == "direct":
             assert _scratch(g, 12) & 0x80000000, "the own connect code is not shown"
             g.shot("direct-06-own-code")
             g.open_keypad()
+            assert _hidden(g, TASK_READY), "READY TO FIGHT over the keypad"
             g.type_code("ZZZZ#999")
         else:
             n = g.finds()
             g.press_until("START", lambda: g.finds() > n, "FIND_OPPONENT")
         _wait(g.locked, 10, "the search")
-        _a_on_banner(g, f"{mode}-07-A-on-banner-searching")
+        _a_on_banner(g, f"{mode}-07-A-on-banner-searching", shown=False)
         g.press_until("Z", lambda: g.c.mm_status()["state"] == "idle", "Z to cancel")
+        g.steps("wait 10")
+        assert not _hidden(g, TASK_READY), "no READY TO FIGHT after cancelling the search"
 
 
 TASK_READY = 0x3C4          # MenSelchrReady: the READY TO FIGHT banner
@@ -250,11 +254,18 @@ HAND_TARGET = 0x80          # 5 = over the banner
 BANNER_XY = (0.0, -3.0)
 
 
-def _a_on_banner(g: Game, shot: str) -> None:
+def _picks_stage(g: Game) -> bool:
+    """Direct, between games: this player lost the last game and picks the next stage."""
+    port = online_set.local(g.c)["local_port"]
+    return bool(online_set.session(g.c)["players"][port].get("picks_stage"))
+
+
+def _a_on_banner(g: Game, shot: str, shown: bool) -> None:
     """A with the hand where Brawl's READY TO FIGHT banner is (all characters chosen): the
-    banner is hidden, the hand is not over it, and the CSS stays (its own start would leave for
-    Brawl's network stage vote, which hangs the game)."""
-    assert _hidden(g, TASK_READY)
+    banner is shown only while START would ready the player (`shown`), the hand is never over
+    it, and the CSS stays (its own start would leave for Brawl's network stage vote, which hangs
+    the game)."""
+    assert _hidden(g, TASK_READY) != shown, f"READY TO FIGHT {'hidden' if shown else 'shown'}"
     g.c.write_mem(_hand(g) + HAND_X, struct.pack(">ff", *BANNER_XY))
     g.steps("wait 4")
     assert _u(g.c, _hand(g) + HAND_TARGET) != 5
@@ -270,8 +281,9 @@ def _a_on_banner(g: Game, shot: str) -> None:
 def test_ready_banner_between_games(backend: OnlineBackend,
                                     dolphin: Callable[..., DolphinInstance],
                                     gpu_backend: str) -> None:
-    """Connected, between games of a Direct set (both back on the CSS after game 1): A where the
-    READY TO FIGHT banner would be starts nothing on either side; both stay connected."""
+    """Connected, between games of a Direct set (both back on the CSS after game 1): READY TO
+    FIGHT is up on both until START locks in, A on it starts nothing on either side; both stay
+    connected."""
     a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, "banner-between", ("tara", "udo"))
     for g in (a, b):
         _shots("banner-between", g)
@@ -280,8 +292,17 @@ def test_ready_banner_between_games(backend: OnlineBackend,
                     "both back on the CSS")
     for g in (a, b):
         g.steps("wait 60")
-        _a_on_banner(g, f"{g.name}-A-on-banner-between-games")
+        _a_on_banner(g, f"{g.name}-A-on-banner-between-games", shown=True)
         assert g.c.mm_status()["state"] == "connection_success"
+    # START locks in the winner (the loser would go on to the stage select): its banner goes,
+    # the loser's stays.
+    winner = next(g for g in (a, b) if not _picks_stage(g))
+    winner.press_until("START", winner.locked, "the lock-in")
+    winner.steps("wait 10")
+    assert _hidden(winner, TASK_READY), "READY TO FIGHT while locked in"
+    winner.shot(f"{winner.name}-locked-in")
+    loser = b if winner is a else a
+    assert not _hidden(loser, TASK_READY)
 
 
 @pytest.mark.slow

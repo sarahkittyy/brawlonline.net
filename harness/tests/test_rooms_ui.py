@@ -112,6 +112,12 @@ class Game:
         """The state shown in area i's box (its state object, area+0x41C, +8)."""
         return self.u32(self.u32(self.area(i) + 0x41C) + 8)
 
+    def banner_shown(self) -> bool:
+        """Brawl's READY TO FIGHT banner (muSelCharTask+0x3C4, MenSelchrReady) is visible: its
+        ScnMdlSimple's +0xCC flags have 0x60 set while nwSMSetVisibility hides it."""
+        task = self.u32(self.u32(self.u32(0x805A0060) + 4) + 0x400)
+        return not self.u32(self.u32(self.u32(task + 0x3C4) + 0xC) + 0xCC) & 0x60
+
     def panel_offset(self, i: int) -> float:
         """Area i's panel model (+0xB0) offset, MuObject +0x3C."""
         return struct.unpack(">f", self.c.read_mem(self.u32(self.area(i) + 0xB0) + 0x3C, 4))[0]
@@ -164,6 +170,7 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     g.wait(60)
     assert sim.room_ops("create") and sim.room_ops("create")[0][1] == 1
     assert sim.screen() == ppom.SCREENS["room"]
+    assert not g.banner_shown(), "READY TO FIGHT with no character"
     g.shot("03-room-created")
 
     # A second player joins (the join sound), chooses, then readies with blue Mario.
@@ -175,19 +182,24 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     g.shot("05-alice-ready")
 
     # Our character and START: the lock-in for the room's next game.
+    # READY TO FIGHT while START would ready us, gone once it has.
     g.hand_to(*FOX)
     g.tap("A")
     g.wait(20)
+    assert g.banner_shown(), "no READY TO FIGHT with a character, not ready"
+    g.shot("05a-ready-to-fight")
     g.tap("START")
     g.wait(30)
     lock = ppom.read_local(c, sim.b)["lock"]
     assert lock["ready"] == 1 and lock["game"] == sim.room.game and lock["char_kind"] == GMKIND_FOX, lock
     assert g.panel_state(0) == 4, "no Ready on our own panel"   # room_css.cpp ST_READY
+    assert not g.banner_shown(), "READY TO FIGHT while ready"
     g.shot("06-both-ready")
-    # B takes it back.
+    # B takes it back (and READY TO FIGHT is back).
     g.tap("B")
     g.wait(20)
     assert ppom.read_local(c, sim.b)["lock"]["ready"] == 0
+    assert g.banner_shown(), "no READY TO FIGHT after unreadying"
 
     # Host: A with the hand over the third panel opens slot 3 (port 2).
     g.hand_to(PANEL_X[2], -10.0)
@@ -246,6 +258,7 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     g.wait(20)
     assert sim.room_ops("leave"), "no ROOM_LEAVE"
     assert sim.room is None
+    assert g.banner_shown(), "no READY TO FIGHT out of a room (START enters a code)"
     g.shot("11-left-the-room")
     # A room with two players: we join in its third slot (P3), and our panel is the third.
     sim.joinable["KFQB"] = roomsim.Room(code="KFQB", host=1, open=[True, True, True, False],
@@ -253,6 +266,7 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
                                                  roomsim.Member("bob", team=1), None, None])
     g.tap("START")
     g.wait(40)
+    assert not g.banner_shown(), "READY TO FIGHT over the keypad"
     g.shot("12-keypad-room-code")
     # The symbols key ('#') is refused with the error sound (scratch[15] >> 16 counts refusals).
     refused0 = (g.scratch(15) >> 16) & 0xFF

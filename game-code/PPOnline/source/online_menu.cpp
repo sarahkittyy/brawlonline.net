@@ -517,7 +517,10 @@ namespace OnlineMenu {
     // ITEM and STAGE buttons at the right end of the bar (MenSelchrState0005 / 0006, found live
     // by hiding the CSS's models one at a time): they open P+'s item and stage switches, which
     // are locked online (cssSwitchButtons below), and the status line takes their place.
+    // The READY TO FIGHT banner (MenSelchrReady) shows while START would ready the player
+    // (startReadies) and is hidden otherwise; it stays inert either way (cssReadyBanner).
     static bool roomIn();
+    static bool startReadies();
     static void hideHeaderArt()
     {
         static const u32 OBJS[] = {0x418 /* TitleW */, 0x158 /* Rnum1 */, 0x15C /* Rnum2 */,
@@ -533,7 +536,8 @@ namespace OnlineMenu {
             if (!isPtr(obj)) continue;
             u32 mdl = *(u32*)(obj + 0xC);   // MuObject::m_scnMdl
             if (!isPtr(mdl)) continue;
-            ((SetVisFn)0x80043D20)((void*)mdl, false);   // nwSMSetVisibility
+            bool vis = OBJS[i] == 0x3C4 && startReadies();
+            ((SetVisFn)0x80043D20)((void*)mdl, vis);   // nwSMSetVisibility
         }
     }
 
@@ -1181,7 +1185,8 @@ namespace OnlineMenu {
     // hand target 5: A there (as START anywhere) starts the CSS's own countdown (state 1),
     // setToGlobal and the scene's exit, and sqNetAnyOkiraku then opens Brawl's network stage
     // vote, which hangs the game (the user's crash, 2026-10-08). Online START is ours (maskStart)
-    // and the match starts from SESSION; the banner is hidden (hideHeaderArt) and never hit:
+    // and the match starts from SESSION; the banner shows only while START would ready the
+    // player (hideHeaderArt, startReadies) and is never hit:
     // the hand's hit test, sel_char+0xDDB0 `cmpwi r0,1` (the banner shown?), goes to its "not
     // over the banner" branch (+0xDE3C). OnlineMatch::onSelStage turns any other way out of the
     // CSS back to the CSS.
@@ -2223,6 +2228,29 @@ namespace OnlineMenu {
             if (room) RoomCss::releaseRecords();
             leaveCss(1);   // OnlineMatch: no match armed -> back to the CSS (restoreCss)
         }
+    }
+
+    // START would ready the player: a character is selected, nothing is locked in and START
+    // searches, opens the code keypad or locks in (the lines "Press START to ..."). Brawl's
+    // READY TO FIGHT banner shows only then (hideHeaderArt), as Slippi's online CSS shows it
+    // until START locks in.
+    static bool startReadies()
+    {
+        if (CodeEntry::active()) return false;
+        if (roomCss()) {
+            const PPOM::Session& se = PPOM::g_block.session;
+            if (!roomIn()) {
+                // Join Room, or after leaving one: START enters a room code ("Creating room":
+                // the room is on its way, START is not the next step).
+                if (s.roomEntry == ROOM_ENTRY_CREATE && !s.roomError) return false;
+                return selectedChar() >= 0 && s.roomPhase != PPOM::RP_JOINING;
+            }
+            return se.roomStatus == 0 && !roomLocked() && lockChar() >= 0;
+        }
+        if (s.phase == PH_IDLE) return selectedChar() >= 0;
+        if (s.phase != PH_CONNECTED || !sessionGame() || lockedIn() || lockChar() < 0) return false;
+        // Ranked: only in the steps that take a lock-in (not the strikes on the stage select).
+        return s.mode != PPOM::MODE_RANKED || (s.step.active && s.step.mayLock && !s.step.toSss);
     }
 
     void tick()
