@@ -67,6 +67,7 @@ namespace OnlineMatch {
     const u16 PICK_CANCELLED = 0xFFFD; // the stage select was left without a pick (B)
     u8 pickedAsl();
     void clearPickedStage();
+    void noteSssButtons(u32 held, u32 pressed);   // each frame of the online stage select
 }
 
 namespace MatchHud {

@@ -45,6 +45,12 @@ CSS = "scSelctCharacter"
 STAGE_PICK = "final_destination"   # what the Direct loser picks on the stage select
 # The loser's pick by game: a new one each game (a pick is for its own game only).
 STAGE_PICKS = {2: STAGE_PICK, 3: "battlefield"}
+# Buttons the loser holds on the pick (P+'s alternate stages: Final Destination has a Z
+# alternate, Battlefield an L one), and the alternate-stage value they make (P+'s ASL buttons).
+STAGE_PICK_HELD = {2: ["Z"], 3: ["L"]}
+ASL_VALUE = {"L": 0x40, "R": 0x20, "Z": 0x10}
+# P+ (StageFiles.asm) keeps the button of the stage-file entry it loaded here (u16).
+ASL_LOADED = 0x8053EFBA
 
 
 def wait(pred: Callable[[], Any], timeout: float, what: str, every: float = 0.25) -> Any:
@@ -174,6 +180,9 @@ def play_game(players: Sequence[Any], game: int, timeout: float = 900,
                            "setup": str(setups[0]), "stage": setups[0].stage_kind if setups[0] else None,
                            "match_index": [s["match_index"] for s in st],
                            "setup_hash": [s.get("setup_hash") for s in st]}
+    # The alternate stage: SESSION's ASL buttons and the stage-file entry P+ loaded, on both.
+    rep["asl"] = [session(p.c)["asl"] for p in (host, join)]
+    rep["asl_loaded"] = [int.from_bytes(p.c.read_mem(ASL_LOADED, 2), "big") for p in (host, join)]
     assert setups[0] == setups[1], ("the two games set up different matches", setups)
     assert rep["setup_hash"][0] == rep["setup_hash"][1], rep
     assert len({s["match_index"] for s in st}) == 1, rep
@@ -312,10 +321,12 @@ def lock_in_next(players: Sequence[Any], game: int, mode: str = "direct",
             # Slippi parity: Direct's loser may pick any stage, nothing is struck.
             assert p.c.read_mem(STRIKE_TABLE, 30) == bytes(30), (p.name, "stages struck on the SSS")
             stage = STAGE_PICKS.get(game, STAGE_PICK)
-            B.sss_pick_stage(p.c, B.STAGE_KIND[stage], 0)
+            held = STAGE_PICK_HELD.get(game, [])
+            B.sss_pick_stage(p.c, B.STAGE_KIND[stage], 0, held=held)
             wait(lambda: scene(p.c) in (CSS, "scMemoryChange", "scMelee"), 60, f"{p.name}: back from the stage select")
             info["picked_by"] = p.name
             info["picked"] = stage
+            info["asl"] = sum(ASL_VALUE[b] for b in held)
             log(f"game {game}: {p.name} lost the last game and picked {stage}")
         else:
             wait(lambda: local(p.c)["lock"]["seq"] > n and local(p.c)["lock"]["ready"]
@@ -349,6 +360,9 @@ def play_set(players: Sequence[Any], games: int = 2, mode: str = "direct",
         if game > 1 and mode == "direct" and rep["lock_ins"][-1].get("picked_by"):
             want = B.STAGE_KIND[rep["lock_ins"][-1]["picked"]]
             assert g["stage"] == want, ("the loser's pick was not played", g)
+            asl = rep["lock_ins"][-1]["asl"]
+            assert g["asl"] == [asl, asl] and g["asl_loaded"] == [asl, asl], (
+                "the loser's alternate stage was not played", g["asl"], g["asl_loaded"], asl)
     for p in players:
         m = boot_marks(p.c)
         check_no_reboot(marks[p.name], m, p.name)

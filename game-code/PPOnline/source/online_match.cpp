@@ -81,6 +81,13 @@ namespace OnlineMatch {
     static const u32 SEL_TEAMS = 0x33;
     static u16 s_pickedStage = 0xFFFF;
     static u8 s_pickedAsl = 0;
+    // The buttons held at the last A/START press on the online stage select (noteSssButtons). P+'s
+    // ASL Helper (LegacyTE/ASLHelper.asm, a hook at 0x800B99FC) writes the held buttons to
+    // ASL_BUTTONS only in sqVsMelee, sqSpMelee, sqTraining and a few other sequences, not in
+    // sqNetAnyOkiraku, so online the address kept 0 (the stage load clears it) and every pick
+    // was the base stage. Its low byte is what P+ v3.2's stage files select by: L 0x40,
+    // R 0x20, Z 0x10 (the D-pad below them).
+    static u8 s_sssAsl = 0;
     static int s_discFrames = -1;   // frames since the opponent was lost in a match
     // A pause-screen quit waiting for the rollback session to end (pponline_pauseResult).
     static u8* s_quitOp = NULL;   // the operator a quit is pending on
@@ -218,6 +225,10 @@ namespace OnlineMatch {
     u16 pickedStage() { return s_pickedStage; }
     u8 pickedAsl() { return s_pickedAsl; }
     void clearPickedStage() { s_pickedStage = 0xFFFF; s_pickedAsl = 0; }
+    void noteSssButtons(u32 held, u32 pressed)
+    {
+        if (g_onlineCss && g_onlinePickStage && (pressed & (0x100u | 0x1000u))) s_sssAsl = (u8)held;
+    }
 
     // Fill gmSelCharData from SESSION and run the Versus setup.
     static bool setupMatch(u8* seq)
@@ -401,11 +412,14 @@ namespace OnlineMatch {
         // Ranked: the steps decide the stage (GameSetup); the stage select's own pick is not kept.
         if (OnlineMenu::currentMode() != PPOM::MODE_RANKED) {
             // The stage select keeps its choice where sqVsMelee's setup reads it (GameGlobal+0x14,
-            // +0x22); P+ keeps the alternate-stage buttons at 0x800B9EA2. Left with B: no pick.
+            // +0x22); the alternate-stage buttons are the ones held on the pick. Left with B: no
+            // pick.
             u8* st = gg(0x14);
-            s_pickedStage = (code == 1 || code == 3) && st ? *(u16*)(st + 0x22) : OnlineMatch::PICK_CANCELLED;
-            s_pickedAsl = (u8)*(u16*)ASL_BUTTONS;
+            bool picked = (code == 1 || code == 3) && st;
+            s_pickedStage = picked ? *(u16*)(st + 0x22) : OnlineMatch::PICK_CANCELLED;
+            s_pickedAsl = picked ? s_sssAsl : 0;
         }
+        s_sssAsl = 0;
         backToCss(seq);
         return 1;
     }

@@ -781,7 +781,9 @@ def test_direct_set_under_the_gameplay_session(backend: OnlineBackend,
     both go straight back to the online CSS, still connected. Games 2 and 3: both lock in with
     START (nobody is locked in before, so both characters can change), then the loser picks the
     stage on P+'s stage select and that stage is played; game 3's pick is a new one (an earlier
-    pick used to lock its player in again at once and be played again).
+    pick used to lock its player in again at once and be played again). Game 2's pick is made
+    holding Z and game 3's holding L: both play that alternate (Final Destination's Z,
+    Battlefield's L; SESSION's asl and the stage file P+ loaded).
     Screenshots: run/artifacts/game-bridge/gameplay-set/."""
     a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, "gameplay-set", ("iris", "jack"))
     for g, other in ((a, ub), (b, ua)):

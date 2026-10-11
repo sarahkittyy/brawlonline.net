@@ -2356,6 +2356,11 @@ namespace OnlineMenu {
             // no longer be unreadied (mm: "The game is starting."), so B is taken out there too
             // (it went back to the CSS unlocked, where START waits for a room that never waits
             // again); START, P+'s random pick, is a pick.
+            // The alternate stage: the buttons down on A/START (P+'s ASL Helper does not record
+            // them in this sequence), Z included, before Z is taken out. The current buttons
+            // (+0x0): the held field (+0x8) is built from the last frame's, from which Z was
+            // taken out, so it never has Z.
+            OnlineMatch::noteSssButtons(padButtons(0x0), padButtons(0xC));
             u32 mask = BTN_Z;
             if (s.mode == PPOM::MODE_RANKED && g_onlinePickStage) mask |= BTN_START | BTN_B;
             if (roomCss() && g_onlinePickStage) mask |= BTN_B;
