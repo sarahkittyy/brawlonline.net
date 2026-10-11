@@ -77,6 +77,19 @@ describe("room hand-off", () => {
     });
   });
 
+  it("a create answered accepted and then failed reports the failure", async () => {
+    await writeStatus({});
+    const pending = handOffRoom(dir, CREATE_ROOM, { ...fast, watchAfterAcceptMs: 400 });
+    let req: RoomRequest | null = null;
+    while (!(req = await readRequest())) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await writeStatus({ lastRequest: { id: req.id, result: "accepted" } });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    await writeStatus({ lastRequest: { id: req.id, result: "failed", message: "Too many rooms. Wait a moment." } });
+    expect(await pending).toEqual({ outcome: "refused", message: "Too many rooms. Wait a moment." });
+  });
+
   it("writes and clears the request", async () => {
     const req = await writeRoomRequest(dir, "KFQB", new Date("2026-10-09T12:00:00Z"));
     expect(await readRequest()).toEqual({

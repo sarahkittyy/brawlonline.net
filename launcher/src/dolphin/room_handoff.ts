@@ -39,6 +39,11 @@ export const STATUS_FRESH_MS = 15_000;
 /** How long a running game has to answer a request. */
 export const ACK_TIMEOUT_MS = 5_000;
 const ACK_POLL_MS = 200;
+/**
+ * A create is answered `accepted` at once and `failed` (same id) when mm refuses it, within about a
+ * second ("Too many rooms. Wait a moment."). Slower failures (no server for 20 s) show in game.
+ */
+export const FAILED_WATCH_MS = 3_000;
 
 export type RoomRequest =
   | { version: 1; id: string; code: string; createdAt: string }
@@ -158,6 +163,8 @@ export async function readGameStatus(onlineDir: string, now = Date.now()): Promi
 
 export type HandOffOptions = {
   ackTimeoutMs?: number;
+  /** How long to keep watching after `accepted` (default: a create's FAILED_WATCH_MS, else 0). */
+  watchAfterAcceptMs?: number;
   pollMs?: number;
   sleep?: (ms: number) => Promise<void>;
   now?: () => number;
@@ -188,7 +195,7 @@ export async function handOffRoom(
     if (answer?.id === req.id) {
       switch (answer.result) {
         case "accepted":
-          return { outcome: "accepted" };
+          return await watchAfterAccept(onlineDir, req.id, opts, code === CREATE_ROOM ? FAILED_WATCH_MS : 0);
         case "refused":
           return s.kind === "fresh" && s.status.state === "busy"
             ? { outcome: "busy" }
@@ -200,4 +207,25 @@ export async function handOffRoom(
   }
   await clearRoomRequest(onlineDir, req.id);
   return { outcome: "no-response" };
+}
+
+/** Keeps reading the status for `watchMs` after `accepted`: a `failed` for the same request wins. */
+async function watchAfterAccept(
+  onlineDir: string,
+  id: string,
+  opts: HandOffOptions,
+  defaultMs: number,
+): Promise<RoomHandOffResult> {
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  const now = opts.now ?? Date.now;
+  const until = now() + (opts.watchAfterAcceptMs ?? defaultMs);
+  while (now() < until) {
+    await sleep(opts.pollMs ?? ACK_POLL_MS);
+    const s = await readGameStatus(onlineDir, now());
+    const answer = s.kind === "missing" ? null : s.status.lastRequest;
+    if (answer?.id === id && answer.result !== "accepted") {
+      return { outcome: "refused", message: answer.message };
+    }
+  }
+  return { outcome: "accepted" };
 }
