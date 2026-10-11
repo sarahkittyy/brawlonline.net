@@ -1,4 +1,4 @@
-import PersonAddAlt1OutlinedIcon from "@mui/icons-material/PersonAddAlt1Outlined";
+import MailOutlinedIcon from "@mui/icons-material/MailOutlined";
 import Tooltip from "@mui/material/Tooltip";
 import type { SocialPlayer } from "@social/types";
 import { clsx } from "clsx";
@@ -10,7 +10,7 @@ import { SocialMessages as Messages } from "./social.messages";
 import styles from "./social.module.css";
 
 /**
- * The small "+ person" button: invites the player to the room the player is in (it needs an open
+ * The small envelope button: invites the player to the room the player is in (it needs an open
  * slot), or to a Direct 1v1 when not in a room.
  */
 export const InviteButton = ({ player, className }: { player: SocialPlayer; className?: string }) => {
@@ -37,7 +37,7 @@ export const InviteButton = ({ player, className }: { player: SocialPlayer; clas
           }}
           onContextMenu={(e) => e.stopPropagation()}
         >
-          <PersonAddAlt1OutlinedIcon style={{ fontSize: 16 }} />
+          <MailOutlinedIcon style={{ fontSize: 16 }} />
         </button>
       </span>
     </Tooltip>

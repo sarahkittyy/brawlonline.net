@@ -13,7 +13,7 @@ import styles from "./online_players.module.css";
 
 /**
  * Everyone online in the launcher (docs/social-protocol.md), under the rating: a name opens a chat
- * tab, the "+ person" invites, a right click opens the player's menu.
+ * tab, the envelope invites, a right click opens the player's menu.
  */
 export const OnlinePlayers = React.memo(function OnlinePlayers() {
   const user = useAccount((s) => s.user);
