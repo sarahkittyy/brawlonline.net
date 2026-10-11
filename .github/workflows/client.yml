@@ -215,13 +215,30 @@ jobs:
         run: git config --global core.longpaths true
       - uses: actions/checkout@v6
         with:
-          submodules: recursive
           persist-credentials: false
+      - name: Submodules
+        shell: bash
+        run: |
+          # Dolphin's only, in parallel and not recursively (a recursive update runs one submodule
+          # at a time). Not game-code's (the plugin is built on Linux), gtest (ENABLE_TESTS=OFF),
+          # libadrenotools (Android) or cubeb's googletest; cubeb needs its sanitizers-cmake.
+          paths=$(git config -f .gitmodules --get-regexp '^submodule\..*\.path$' | awk '{ print $2 }' |
+            grep '^dolphin/' | grep -vE '^dolphin/Externals/(gtest|libadrenotools)$')
+          git -c protocol.version=2 submodule update --init --depth 1 --jobs 8 -- $paths
+          git -C dolphin/Externals/cubeb/cubeb -c protocol.version=2 submodule update --init --depth 1 -- cmake/sanitizers-cmake
       - uses: actions/setup-node@v6
         with:
           node-version: ${{ env.NODE_VERSION }}
-          cache: npm
-          cache-dependency-path: launcher/package-lock.json
+      # node_modules itself (npm ci, its postinstall and Electron's download), exact key only: on a
+      # hit the Launcher dependencies step is skipped. Before Stamp version, which edits
+      # release/app/package-lock.json.
+      - uses: actions/cache@v5
+        id: node-modules
+        with:
+          path: |
+            launcher/node_modules
+            launcher/release/app/node_modules
+          key: win-node-modules-node${{ env.NODE_VERSION }}-${{ hashFiles('launcher/package-lock.json', 'launcher/release/app/package-lock.json') }}
       - name: ccache
         shell: pwsh
         run: |
@@ -245,7 +262,22 @@ jobs:
       - name: Stamp version ${{ env.VERSION }}
         shell: bash
         run: .github/scripts/stamp-version.sh "$VERSION"
+      # Dolphin's configure results (CMakeCache.txt and the compiler checks): configure takes ~5 s
+      # with them instead of ~75 s. Exact key only (the runner image, the configure flags, every
+      # CMake file), so a changed option default is never hidden behind a cached value.
+      - name: Configure cache key
+        id: cmake-key
+        shell: bash
+        run: echo "image=$ImageOS-$ImageVersion" >> "$GITHUB_OUTPUT"
+      - uses: actions/cache/restore@v5
+        id: cmake-cache
+        with:
+          path: |
+            dolphin/build/release/x64/CMakeCache.txt
+            dolphin/build/release/x64/CMakeFiles/[0-9]*
+          key: win-cmake-${{ steps.cmake-key.outputs.image }}-${{ hashFiles('.github/scripts/build-dolphin-windows.ps1', 'dolphin/CMakePresets.json', 'dolphin/**/CMakeLists.txt', 'dolphin/**/*.cmake') }}
       - name: Dolphin
+        id: dolphin
         shell: pwsh
         run: .github/scripts/build-dolphin-windows.ps1 -Version $env:VERSION -Out launcher/release/dolphin
       # Saved right after the build, also when a later step fails (actions/cache saves on success only).
@@ -254,11 +286,19 @@ jobs:
         with:
           path: .ccache
           key: win-ccache-${{ github.run_id }}
+      - uses: actions/cache/save@v5
+        if: ${{ steps.dolphin.outcome == 'success' && steps.cmake-cache.outputs.cache-hit != 'true' }}
+        with:
+          path: |
+            dolphin/build/release/x64/CMakeCache.txt
+            dolphin/build/release/x64/CMakeFiles/[0-9]*
+          key: ${{ steps.cmake-cache.outputs.cache-primary-key }}
       - uses: actions/download-artifact@v7
         with:
           name: plugin
           path: ${{ runner.temp }}/plugin
       - name: Launcher dependencies
+        if: steps.node-modules.outputs.cache-hit != 'true'
         working-directory: launcher
         run: |
           npm ci --no-audit --no-fund
