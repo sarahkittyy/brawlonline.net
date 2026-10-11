@@ -826,6 +826,19 @@ void Matchmaking::HandleMatchmaking()
     }
   }
   match.items = static_cast<u32>(GetInt(get_resp, "items", 0, 0xFFFFFFFF).value_or(0));
+  // The match's rules (MatchRules.h). Rules that are there but unusable refuse the match: playing
+  // under other rules than the server set up is worse than not playing.
+  const ParsedRules rules = ParseRules(get_resp);
+  if (!rules.error.empty())
+  {
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Unusable rules in get-ticket-resp: {}", rules.detail);
+    m_state = State::ErrorEncountered;
+    SetError(ErrorSource::Client, rules.error);
+    return;
+  }
+  match.rules = rules.rules;
+  if (match.rules)
+    INFO_LOG_FMT(NETPLAY, "[Matchmaking] Rules: {}", picojson::value(ToJson(*match.rules)).serialize());
   INFO_LOG_FMT(NETPLAY, "[Matchmaking] Stages from the server: {}", fmt::join(match.stages, ","));
 
   for (const auto& ip : remote_ips)

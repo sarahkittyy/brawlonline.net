@@ -717,14 +717,21 @@ namespace OnlineMenu {
         s.haveSavedRules = false;
     }
 
-    // The online ruleset, the same on every machine whatever was set offline: the set rule's 16
-    // bytes P+'s code writes (P+'s competitive defaults above), pause only in Direct, item
-    // frequency 0 with P+'s default item switch, hazards on (also for Direct's loser's pick: its
-    // hazard toggle is not part of the setup the other machine gets), every Code Menu line at
-    // its default but its activation, which is OFF (codeMenuOff). Written when the Wi-Fi
-    // sequence starts (in place of Brawl's Wi-Fi rules) and again by every online match setup,
-    // right before sqVsMelee's setup reads them (OnlineMatch::setupMatch), so a setting changed
-    // in between (or left over from offline play) never reaches an online match.
+    // The online ruleset, the same on every machine whatever was set offline. With the session's
+    // rules (SESSION Rules, from the server through Dolphin; docs/design/room-rules.md section 3),
+    // the set rule as P+'s rules menu keeps it (docs/game-code.md section 14, Room rules RE):
+    // style (+2, low 3 bits), stocks (+4), damage ratio (+6), the time limit (+8, every style; the
+    // time / coin target +3 stays infinite), team attack (+9), pause (+0xA, 1 normal / 0 hold),
+    // auto L-cancel (+0xB) and input assist (+0xC); the item frequency and switches in the menu
+    // record, and the hazard switch. Without them (an older server), P+'s competitive set: the set rule's 16 bytes P+'s code writes, pause
+    // only in Direct, item frequency 0 with P+'s default item switch, hazards on. Either way hazards
+    // also hold for Direct's loser's pick (its hazard toggle is not part of the setup the other
+    // machine gets), and every other Code Menu line is at its default but its activation, which is
+    // OFF (codeMenuOff). Written when the Wi-Fi sequence starts (in place of Brawl's Wi-Fi rules) and
+    // again by every online match setup, right before sqVsMelee's setup reads them
+    // (OnlineMatch::setupMatch), so a setting changed in between (or left over from offline play)
+    // never reaches an online match. Dolphin compares the result on every machine before the match
+    // (GameplaySession SetupKey).
     void applyRules()
     {
         static const u8 PPLUS_RULE[16] = {0x00, 0x00, 0x01, 0x00, 0x04, 0x00, 0x0A, 0x00,
@@ -733,18 +740,33 @@ namespace OnlineMenu {
         u8* m = menuRecord();
         if (!r || !m) return;
         u8 time = r[3], stocks = r[4], stockTime = r[8];
+        const PPOM::Rules& ru = PPOM::g_block.session.rules;
         // (only the 16 bytes P+ writes: the set rule's size is not known, what follows may be other data)
         memcpy(r, PPLUS_RULE, sizeof(PPLUS_RULE));
+        u8* st = stageSelData();
+        if (ru.valid) {
+            r[2] = (u8)((r[2] & ~7) | (ru.style & 7));     // m_rule
+            r[4] = ru.stocks;
+            r[6] = ru.damageRatio;
+            r[8] = ru.timeMinutes;                         // time limit, every style (P+)
+            r[9] = ru.teamAttack ? 1 : 0;
+            r[0xA] = ru.pause ? 1 : 0;                     // 1 normal, 0 hold START
+            r[0xB] = ru.autoLCancel ? 1 : 0;
+            r[0xC] = ru.inputAssist ? 1 : 0;
+            m[0] = ru.itemFrequency;
+            memcpy(m + ITEM_SWITCH, ru.itemSwitch, sizeof(ru.itemSwitch));
+            if (st) st[HAZARD] = ru.hazards ? 0 : 1;
+        } else {
+            r[0xA] = (s.mode == PPOM::MODE_DIRECT) ? 1 : 0;   // m_allowPause
+            m[0] = 0;                                          // item frequency: none
+            memcpy(m + ITEM_SWITCH, PPLUS_ITEM_SWITCH, sizeof(PPLUS_ITEM_SWITCH));
+            if (st) st[HAZARD] = 0;                            // hazards on
+        }
         if (PPOM::g_block.debug.cfg & PPOM::CFG_TEST_RULES) {
             r[3] = time;            // tests: shorter games (harness ppom.test_rules)
             r[4] = stocks;
             r[8] = stockTime;
         }
-        r[0xA] = (s.mode == PPOM::MODE_DIRECT) ? 1 : 0;   // m_allowPause
-        m[0] = 0;                                          // item frequency: none
-        memcpy(m + ITEM_SWITCH, PPLUS_ITEM_SWITCH, sizeof(PPLUS_ITEM_SWITCH));
-        u8* st = stageSelData();
-        if (st) st[HAZARD] = 0;                            // hazards on
         int lines = codeMenuLines(1);                      // every Code Menu line at its default
         codeMenuOff();                                     // except its activation: OFF
         PPOM::g_block.debug.scratch[3] = ((u32)lines << 16) | ((PPOM::g_block.debug.scratch[3] + 1) & 0xFFFF);

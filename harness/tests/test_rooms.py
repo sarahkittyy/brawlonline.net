@@ -81,7 +81,7 @@ class Player:
         if self._b is None:
             _wait(lambda: self.c.call("game_bridge_status")["found"], 60, "the PPOM block")
             self._b = ppom.find_block(self.c)
-            assert self._b.version == 5, self._b
+            assert self._b.version >= 5, self._b   # rooms (v5) and later
         return self._b
 
     # -- the game's side

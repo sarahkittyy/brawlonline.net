@@ -799,6 +799,7 @@ impl RoomBook {
                     players: Some(ps),
                     stages: Some(self.cfg.rules.stages.clone()),
                     items: Some(self.cfg.rules.items),
+                    rules: Some(self.cfg.rules.rules.clone()),
                     ..Default::default()
                 },
             ));

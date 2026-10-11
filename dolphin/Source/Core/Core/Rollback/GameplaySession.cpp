@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <bit>
+#include <cctype>
 #include <chrono>
 #include <cmath>
 #include <cstdlib>
@@ -16,6 +17,7 @@
 #include <memory>
 #include <mutex>
 #include <random>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -540,6 +542,58 @@ void WriteU32(Core::System& system, u32 addr, u32 value)
 constexpr u32 PAD_CONFIG = 0x805B7480;  // g_PadConfig (ipPadConfig, 0x1AC bytes)
 constexpr u32 PAD_CONFIG_KEY_SIZE = 0xB9;
 
+// The match's rules as the game applied them (OnlineMenu::applyRules, from SESSION's Rules):
+// Brawl's set rule (GameGlobal+0x1C, the 16 bytes the plugin writes), and the rest of the match
+// setup the rules reach: P+'s hazard switch (gmMeleeInitData+0x21 bit 0x20, gmGlobalModeMelee
+// +0x29) and the item switch (gmMeleeInitData::m_itSwitch, +0x30..+0x40).
+constexpr u32 GG_SET_RULE = 0x1C;
+constexpr u32 SET_RULE_KEY_SIZE = 0x10;
+constexpr u32 MM_HAZARD = 0x29, MM_HAZARD_OFF = 0x20;
+constexpr u32 MM_ITEM_SWITCH = 0x30, ITEM_SWITCH_SIZE = 0x10;
+
+// P+'s Code Menu (pf/menu3/dnet.cmnu, loaded to 0x804E0000): its gameplay settings (auto
+// L-cancelling, the hitstun and shield modifiers, Special Modes...) are read straight from its
+// lines by P+'s codes, so every machine must have the same. Online the plugin writes every value
+// line (its defaults, the session's auto L-cancel; online_menu.cpp codeMenuLines). The lines are
+// found by the same layout the plugin uses (fudgepop's: +0 size u16, +2 type, +6 text offset,
+// +8 value, a selection's options pointer at +0x18). The per-player Character Select lines are
+// left out: P+ keeps the fighter being played in them.
+constexpr u32 CODE_MENU = 0x804E0000, CODE_MENU_SIZE = 0x2520;
+
+void AppendCodeMenuValues(const Guest& g, std::vector<u8>& key)
+{
+  const u8* m = g.Ptr(CODE_MENU, CODE_MENU_SIZE);
+  if (!m)
+    return;
+  for (u32 o = 0; o + 0x20 <= CODE_MENU_SIZE; o += 4)
+  {
+    const u8* l = m + o;
+    const u32 size = u32(l[0]) << 8 | l[1];
+    const u32 type = l[2], text = l[6];
+    if ((size & 3) || size < 0x20 || size > 0x400 || o + size > CODE_MENU_SIZE)
+      continue;
+    if (type > 2 || text < 0x1C || text >= size)
+      continue;
+    const u32 options = u32(l[0x18]) << 24 | u32(l[0x19]) << 16 | u32(l[0x1A]) << 8 | l[0x1B];
+    if (type == 0 ? (options < CODE_MENU || options >= CODE_MENU + CODE_MENU_SIZE) : text != 0x20)
+      continue;
+    const std::string_view t(reinterpret_cast<const char*>(l) + text, size - text);
+    if (!std::isalpha(static_cast<unsigned char>(t[0])))
+      continue;
+    const size_t percent = t.find('%');
+    if (percent == std::string_view::npos ||
+        std::any_of(t.begin(), t.begin() + percent, [](char c) {
+          return static_cast<unsigned char>(c) < 0x20 || static_cast<unsigned char>(c) >= 0x7F;
+        }))
+    {
+      continue;
+    }
+    if (t.substr(0, percent).find("Character Select") != std::string_view::npos)
+      continue;
+    key.insert(key.end(), l + 8, l + 12);
+  }
+}
+
 // gmGlobalModeMelee fields both peers must agree on: rules/stage block and per player the
 // character, state, stocks and costume.
 std::vector<u8> SetupKey(const Guest& g)
@@ -575,6 +629,16 @@ std::vector<u8> SetupKey(const Guest& g)
     key.insert(key.end(), cfg, cfg + 0x30);
     key.insert(key.end(), cfg + 0xB5, cfg + 0xB9);
   }
+  // The rules as applied (docs/design/room-rules.md §1 #5): a machine that applied other rules
+  // (an older plugin, a rule it could not write) refuses the match instead of playing it.
+  if (const auto rule = g.Ptr32(*gg + GG_SET_RULE))
+  {
+    if (const u8* r = g.Ptr(*rule, SET_RULE_KEY_SIZE))
+      key.insert(key.end(), r, r + SET_RULE_KEY_SIZE);
+  }
+  key.push_back(p[MM_HAZARD] & MM_HAZARD_OFF);
+  key.insert(key.end(), p + MM_ITEM_SWITCH, p + MM_ITEM_SWITCH + ITEM_SWITCH_SIZE);
+  AppendCodeMenuValues(g, key);
   return key;
 }
 

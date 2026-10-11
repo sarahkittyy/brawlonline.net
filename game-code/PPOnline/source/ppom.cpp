@@ -24,7 +24,9 @@ namespace PPOM {
     static_assert(sizeof(Local) == 0x80, "local");
     static_assert(__builtin_offsetof(Local, lockPad) == 0x35, "lock pad");
     static_assert(sizeof(SessionPlayer) == 0x80, "session player");
-    static_assert(sizeof(Session) == 0x220, "session");
+    static_assert(sizeof(Session) == 0x240, "session");
+    static_assert(sizeof(Rules) == 0x20 && __builtin_offsetof(Session, rules) == 0x220, "session rules");
+    static_assert(__builtin_offsetof(Rules, hazards) == 0x10, "rules hazards");
     static_assert(__builtin_offsetof(Session, gone) == 0x20C, "session gone flags");
     static_assert(__builtin_offsetof(SessionPlayer, picksStage) == 0x36, "session player stage pick");
     static_assert(__builtin_offsetof(Local, lockTeam) == 0x34, "lock-in team");

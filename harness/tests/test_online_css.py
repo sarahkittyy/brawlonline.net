@@ -21,17 +21,18 @@ built plugin and the server binaries plus Postgres, as test_online_game.py.
 
 from __future__ import annotations
 
+import json
 import re
 import struct
 import time
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 import pytest
 
 from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
 
-from test_online import _wait
+from test_online import _make_backend, _wait
 from test_online_game import (ROOT, Game, _boot, _connected_direct, _p2p_through_netsim,  # noqa: F401
                               backend, online_set, ppom)
 from ppharness import brawl as B
@@ -384,6 +385,99 @@ def test_stale_settings_do_not_reach_the_match(backend: OnlineBackend,
     assert a.c.read_mem(m.chain(B.GAME_GLOBAL_PTR, B.GG_SEL_STAGE_DATA) + 0x25, 1)[0] == stale["hazard"]
     assert a.c.read_mem(m.chain(B.GAME_GLOBAL_PTR, B.GG_SET_RULE) + 4, 1)[0] == stale["stocks"]
     assert {k: v for k, (v, _d) in _code_menu_values(a).items()} == stale["code_menu"]
+    a.shot("02-menus-own-settings-back")
+
+
+# Rules the server sends that differ from P+'s competitive set in every field
+# (server/crates/common/src/rules.rs; docs/design/room-rules.md section 3).
+SERVER_RULES = {"style": "stock", "stocks": 3, "timeMinutes": 5, "damageRatio": 1.5,
+                "teamAttack": False, "pause": "hold", "itemFrequency": 1,
+                "itemSwitch": [0, 6, 0, 0, 0, 0, 0, 0], "hazards": False, "autoLCancel": True,
+                "inputAssist": True}
+# P+'s Code Menu also has per-player auto L-cancel lines (0 OFF / 1 ON / 2 Modified); the rules
+# menu's AUTO L-CANCEL is the set rule's +0xB, and the Code Menu lines stay at their defaults.
+CODE_MENU_ALC = "Automatic L-Cancelling"
+
+
+@pytest.fixture(scope="module")
+def rules_backend(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OnlineBackend]:
+    """The server with Direct's rules set to SERVER_RULES."""
+    rulesets = json.loads((ROOT / "server" / "config" / "rulesets.json").read_text(encoding="utf-8"))
+    rulesets["direct"]["rules"] = SERVER_RULES
+    path = tmp_path_factory.mktemp("rulesets") / "rulesets.json"
+    path.write_text(json.dumps(rulesets), encoding="utf-8")
+    be = _make_backend(rulesets_file=path)
+    try:
+        yield be
+    finally:
+        be.stop()
+
+
+@pytest.mark.slow
+def test_server_rules_reach_the_match(rules_backend: OnlineBackend,
+                                      dolphin: Callable[..., DolphinInstance],
+                                      gpu_backend: str) -> None:
+    """The match's rules come from the server (get-ticket-resp `rules`, PPOM v6 SESSION Rules):
+    Direct's rules here differ from P+'s set in every field (3 stocks, a 5-minute stock time
+    limit, damage 1.5, no team attack, hold-START pause, items low, hazards off, auto L-cancel and
+    input assist on). Dolphin takes them from its ticket into SESSION on both machines, the match
+    setup puts them into Brawl's set rule (where P+'s rules menu keeps them, docs/game-code.md
+    section 14), the items and the hazard switch, P+ copies auto L-cancel and input assist into the
+    match (gmGlobalModeMelee+0xE5 bits 0 and 1), the setup key (which now covers all of that) agrees
+    and the match runs with agreeing confirmed frames. A's own settings come back in its menus."""
+    own_rule: dict[str, bytes] = {}
+
+    def remember(g: Game) -> None:
+        m = B.Mem(g.c.read_mem)
+        own_rule["rule"] = g.c.read_mem(m.chain(B.GAME_GLOBAL_PTR, B.GG_SET_RULE), 0x10)
+
+    a, b, ua, ub = _connected_direct(rules_backend, dolphin, gpu_backend, "server-rules", ("quin", "rosa"),
+                                     test_rules=False, before_online=(remember, None))
+    for g in (a, b):
+        _shots("server-rules", g)
+        assert g.c.mm_status()["match"]["rules"] == SERVER_RULES, g.c.mm_status()["match"]
+    online_set.wait(lambda: all(online_set.scene(g.c) == "scMelee" for g in (a, b)), 120,
+                    "both in the match")
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)), 240,
+                    "the match to run on both")
+    a.steps("wait 600")
+    facts: dict[str, Any] = {}
+    for g in (a, b):
+        m = B.Mem(g.c.read_mem)
+        mm = m.chain(B.GAME_GLOBAL_PTR, B.GG_MODE_MELEE)
+        raw = g.c.read_mem(mm, 0x98 + 2 * 0x5C)
+        alc_assist = g.c.read_mem(mm + 0xE5, 1)[0] & 3
+        rule = g.c.read_mem(m.chain(B.GAME_GLOBAL_PTR, B.GG_SET_RULE), 0x10)
+        values = _code_menu_values(g)
+        facts[g.name] = {
+            "session_rules": ppom.read_session(g.c, ppom.find_block(g.c))["rules"],
+            "style": rule[2] & 7, "target": rule[3], "stocks_rule": rule[4], "damage": rule[6],
+            "time_limit": rule[8], "team_attack": rule[9], "pause": rule[0xA],
+            "alc_rule": rule[0xB], "assist_rule": rule[0xC], "alc_assist_match": alc_assist,
+            "item_frequency": raw[B.MM_ITEM_FREQUENCY], "item_switch": raw[0x30:0x40].hex(),
+            "hazards_off": bool(raw[0x29] & 0x20),
+            "stocks": [raw[0x98 + 4], raw[0x98 + 0x5C + 4]],
+            "alc": [v for k, (v, _d) in values.items() if k.startswith(CODE_MENU_ALC)],
+            "code_menu": {k: v for k, (v, _d) in values.items()},
+        }
+        g.shot("01-in-match")
+    cks = _confirm_checksums(a, b)
+    print(facts, cks)
+    fa, fb = facts[a.name], facts[b.name]
+    assert fa == fb, facts
+    assert fa["session_rules"] == SERVER_RULES, fa
+    assert (fa["style"], fa["target"], fa["stocks_rule"], fa["damage"], fa["time_limit"], fa["team_attack"],
+            fa["pause"], fa["alc_rule"], fa["assist_rule"]) == (1, 0, 3, 15, 5, 0, 0, 1, 1), fa
+    assert fa["alc_assist_match"] == 3, fa   # P+ took both into the match
+    assert fa["item_frequency"] == 1 and fa["hazards_off"] and fa["stocks"] == [3, 3], fa
+    assert fa["alc"] == [0, 0, 0, 0], fa      # the Code Menu's own lines: P+'s defaults
+    assert cks["compared"] > 100 and cks["mismatches"] == 0, cks
+    # A's own rules come back with its menus.
+    b.inst.kill()
+    online_set.wait(lambda: online_set.scene(a.c) == online_set.CSS, 120, "A back on the CSS")
+    a.steps("wait 60", "hold B 90", "until muMenuMain 900", "wait 30")
+    m = B.Mem(a.c.read_mem)
+    assert a.c.read_mem(m.chain(B.GAME_GLOBAL_PTR, B.GG_SET_RULE), 0x10) == own_rule["rule"]
     a.shot("02-menus-own-settings-back")
 
 

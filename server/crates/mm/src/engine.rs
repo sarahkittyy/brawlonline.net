@@ -136,7 +136,7 @@ pub struct EngineConfig {
     pub ranked_band_step: f64,
     /// ... for every this long the longer-waiting player has waited.
     pub ranked_band_interval: Duration,
-    /// Rooms: timeouts and limits. Their stages and items are Direct's ruleset.
+    /// Rooms: timeouts and limits. Their stages, items and rules are Direct's ruleset.
     pub rooms: RoomsConfig,
     /// `hello`s per account (a game opens its online connection once per start or reconnect).
     pub hello_window: Window,
@@ -1271,6 +1271,7 @@ impl Engine {
                 stages: Some(rules.stages.clone()),
                 starters: (mode == Mode::Ranked && !rules.starters.is_empty()).then(|| rules.starters.clone()),
                 items: Some(rules.items),
+                rules: Some(rules.rules.clone()),
                 ..Default::default()
             };
             Self::send(out, *conn, &resp);
@@ -1998,6 +1999,9 @@ mod tests {
             // The ruleset's stage list, as Slippi's server sends it for the mode.
             assert_eq!(g["stages"], json!([1, 2, 3, 4, 5, 6, 9, 12, 13, 28, 31, 33, 35, 45, 46]));
             assert_eq!(g["items"], 0);
+            // The mode's rules: P+'s competitive set, hold-START pause in Unranked.
+            let rules: common::rules::MatchRules = serde_json::from_value(g["rules"].clone()).unwrap();
+            assert_eq!(rules, common::rules::MatchRules { pause: common::rules::Pause::Hold, ..Default::default() });
             for p in g["players"].as_array().unwrap() {
                 assert_eq!(p["chatMessages"].as_array().unwrap().len(), 16);
                 assert!(p["ipAddress"].as_str().unwrap().starts_with("203.0.113."));
@@ -2534,6 +2538,8 @@ mod tests {
             assert_eq!(local["port"], port);
             assert_eq!(players[1]["ipAddress"], "203.0.113.12:41012");
             assert_eq!(resp["stages"].as_array().unwrap().len(), 15);
+            // Direct's rules (normal pause).
+            assert_eq!(resp["rules"], serde_json::to_value(common::rules::MatchRules::default()).unwrap());
             assert!(disconnected(&out, conn));
         }
         // Recorded for the match history, as mode 3 with the room.

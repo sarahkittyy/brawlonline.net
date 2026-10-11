@@ -166,6 +166,9 @@ pub struct GetTicketResp {
     pub starters: Option<Vec<u16>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub items: Option<u32>,
+    /// The match's rules (ours; `crate::rules`). A client without them plays P+'s competitive set.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub rules: Option<crate::rules::MatchRules>,
 }
 
 impl GetTicketResp {

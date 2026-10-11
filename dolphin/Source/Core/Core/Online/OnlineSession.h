@@ -38,6 +38,7 @@
 #include <picojson.h>
 
 #include "Common/CommonTypes.h"
+#include "Core/Online/MatchRules.h"
 
 // ENet's types, forward-declared so this header does not pull in enet.h (and with it winsock.h,
 // whose macros clash with ordinary names such as s_host).
@@ -82,6 +83,9 @@ struct Match
   // client has them built in). Empty: Online::GameSetup's default.
   std::vector<u16> starters;
   u32 items = 0;
+  // The match's rules (get-ticket-resp `rules`, MatchRules.h); nullopt: the server sent none and the
+  // game plays its built-in set (P+'s competitive defaults).
+  std::optional<MatchRules> rules;
   // One per remote player, in the order of `players` without the local one: the address chosen
   // with Slippi's rule (LAN address when both share an external IP) ...
   std::vector<Endpoint> remotes;

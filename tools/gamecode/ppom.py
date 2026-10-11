@@ -113,7 +113,7 @@ def _parse_block(c: HarnessClient, a: int):
     if hdr[:4] != MAGIC:
         return None
     ver, sz, mbo, mbs, so, ss, lo, ls, dbo, dbs = struct.unpack_from(">HHHHHHHHHH", hdr, 4)
-    if ver in (1, 2, 3, 4, 5) and 0x100 < sz < 0x4000 and mbo and dbo:
+    if ver in (1, 2, 3, 4, 5, 6) and 0x100 < sz < 0x4000 and mbo and dbo:
         return Block(a, ver, sz, a + mbo, mbs, a + dbo, dbs, a + so if ss else 0, ss,
                      a + lo if ls else 0, ls)
     return None
@@ -332,7 +332,25 @@ def read_session(c: HarnessClient, b: Block) -> dict:
     if len(d) >= 0x220:
         se.update(gone=list(d[0x20C:0x210]), teams=d[0x210], setup_error=d[0x211],
                   out_count=d[0x212], quit_ports=d[S_QUIT_PORTS], quit_stays=d[S_QUIT_STAYS])
+    if len(d) >= S_RULES + RULES_SIZE:   # v6: the match's rules
+        se["rules"] = read_rules(d[S_RULES:S_RULES + RULES_SIZE])
     return se
+
+
+# ---- v6: the match's rules (ppom.h Rules, docs/design/room-rules.md section 3) ----
+S_RULES, RULES_SIZE = 0x220, 0x20
+STYLES = {0: "time", 1: "stock", 2: "coin"}
+
+
+def read_rules(r: bytes) -> dict | None:
+    """SESSION's Rules in the server's field names (server/crates/common/src/rules.rs), or None
+    when Dolphin wrote none (`valid` 0: the game plays its built-in set)."""
+    if not r[0]:
+        return None
+    return {"style": STYLES.get(r[1], r[1]), "stocks": r[2], "timeMinutes": r[3],
+            "damageRatio": r[4] / 10, "teamAttack": bool(r[5]), "pause": "normal" if r[6] else "hold",
+            "itemFrequency": r[7], "itemSwitch": list(r[8:0x10]), "hazards": bool(r[0x10]),
+            "autoLCancel": bool(r[0x11]), "inputAssist": bool(r[0x12])}
 
 
 # ---- v4: 3-4 player matches (docs/nplayer/setup.md) ----

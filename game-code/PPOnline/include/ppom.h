@@ -37,7 +37,9 @@ namespace PPOM {
     // lock-in's team in LOCAL.
     // 5: rooms (docs/rooms-game-interface.md): CMD_ROOM, LOCAL screen/roomJoin/room, the room view
     // in SESSION's spare bytes. No size or offset of v4 changed.
-    const u16 VERSION = 5;
+    // 6: the match's rules (docs/design/room-rules.md section 3): SESSION grows to 0x240 with Rules
+    // at +0x220. No other size or offset changed.
+    const u16 VERSION = 6;
 
     // Slippi command bytes (EXI_DeviceSlippi.h), kept for familiarity (design 5.3).
     enum Cmd {
@@ -352,6 +354,26 @@ namespace PPOM {
 
     enum SessionState { SS_NONE = 0, SS_LOBBY = 1, SS_MATCH_READY = 2 };
 
+    // The match's rules (Dolphin, with the rest of SESSION: the server's get-ticket-resp `rules`,
+    // checked by Dolphin's Online/MatchRules). OnlineMenu::applyRules puts them into the match;
+    // without them (valid 0: an older server) it plays P+'s competitive set.
+    enum RuleStyle { STYLE_TIME = 0, STYLE_STOCK = 1, STYLE_COIN = 2 };   // gmSetRule::m_rule
+    struct Rules {
+        u8 valid;         // 1: the session's rules
+        u8 style;         // RuleStyle
+        u8 stocks;        // 1-99
+        u8 timeMinutes;   // MORE RULES' time limit, every style (stock: 0 none)
+        u8 damageRatio;   // times 10 (5-20)
+        u8 teamAttack;
+        u8 pause;         // 1 NORMAL, 0 HOLD (P+: START held 50 frames)
+        u8 itemFrequency; // 0 none .. 3 high
+        u8 itemSwitch[8]; // the ITEM SWITCH screen's switches (the menu record's +0x818)
+        u8 hazards;       // 1 on
+        u8 autoLCancel;   // MORE RULES' AUTO L-CANCEL (set rule +0xB)
+        u8 inputAssist;   // MORE RULES' INPUT ASSIST (set rule +0xC, P+'s 3-frame buffer)
+        u8 _reserved[13];
+    };                    // 0x20
+
     // Why the next game cannot be set up (Session.setupError; the CSS shows the text).
     enum SetupError {
         SE_NONE = 0,
@@ -395,7 +417,8 @@ namespace PPOM {
         u8 quitPorts;     // 0x21B
         u8 quitStays;     // 0x21C
         u8 _reserved[3];
-    };                    // 0x220
+        Rules rules;      // 0x220 (v6)
+    };                    // 0x240
 
     // The last MuMsg::printIndex calls (a ring). 16, not 32: the plugin's Syringe heap block has
     // no room for more (docs/game-code.md, heap budget).

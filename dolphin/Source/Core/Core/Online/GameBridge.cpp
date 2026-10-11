@@ -23,6 +23,7 @@
 #include "Core/NetPlayClient.h"
 #include "Core/Online/Chat.h"
 #include "Core/Online/GameSetup.h"
+#include "Core/Online/MatchRules.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/Ranked.h"
 #include "Core/Online/RecentCodes.h"
@@ -43,7 +44,9 @@ constexpr u32 MAGIC = 0x50504F4D;  // "PPOM"
 // stage pickers, the elimination order, the gone flags and the teams switch; LOCAL's lock team.
 // 5: rooms (docs/rooms-game-interface.md): CMD_ROOM, LOCAL screen/roomJoin/room and the room view
 // in SESSION's spare bytes; no size or offset of v4 changed, so a v4 plugin still works (no rooms).
-constexpr u16 VERSION = 5;
+// 6: the match's rules (docs/design/room-rules.md §3): SESSION grows to 0x240 with ppom.h Rules at
+// +0x220 (MatchRules.h); a v4 or v5 plugin still works (its built-in rules).
+constexpr u16 VERSION = 6;
 constexpr u16 MIN_VERSION = 4;
 constexpr u32 HEADER_SIZE = 0x24;
 
@@ -83,7 +86,14 @@ constexpr u32 LK_SEQ = 0x00, LK_READY = 0x04, LK_CSS = 0x05, LK_KIND = 0x06, LK_
 constexpr u32 L_LOCK_TEAM = 0x34;
 // SESSION (the same on every machine of a session; written only outside a match, except the
 // gone flags and the elimination order, which are rolled-back match state).
-constexpr u32 SESSION_SIZE = 0x220;
+constexpr u32 SESSION_SIZE_V5 = 0x220;
+constexpr u32 SESSION_SIZE = 0x240;
+constexpr u32 S_RULES = 0x220;  // v6: ppom.h Rules
+static_assert(S_RULES == SESSION_SIZE_V5 && S_RULES + RULES_SIZE == SESSION_SIZE);
+constexpr u32 SessionSize(u16 version)
+{
+  return version >= 6 ? SESSION_SIZE : SESSION_SIZE_V5;
+}
 constexpr u32 S_SEQ = 0x00, S_STATE = 0x04, S_MODE = 0x05, S_GAME = 0x06, S_LAST_WINNER = 0x07,
               S_STAGE = 0x08, S_ASL = 0x0A, S_NUM_PLAYERS = 0x0B, S_PLAYERS = 0x0C,
               S_TEAMS = 0x210, S_SETUP_ERROR = 0x211;
@@ -360,7 +370,7 @@ std::optional<Located> Locate(const Core::CPUThreadGuard& guard)
           const u32 lo_size = R16(guard, a + H_LOCAL_SIZE);
           // The mailbox and LOCAL are contiguous: one range excluded from rollback.
           if (mb_off < HEADER_SIZE || mb_size != MAILBOX_SIZE || lo_off != mb_off + mb_size ||
-              lo_size != LOCAL_SIZE || se_size != SESSION_SIZE || se_off < HEADER_SIZE ||
+              lo_size != LOCAL_SIZE || se_size != SessionSize(version) || se_off < HEADER_SIZE ||
               se_off + se_size > block_size || lo_off + lo_size > block_size ||
               a + block_size > offset + size)
           {
@@ -1079,11 +1089,13 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   const Gprb::Session::Lobby lobby = Gprb::Session::GetLobby();
   std::vector<std::string> names(SESSION_PLAYERS), codes(SESSION_PLAYERS);
   std::string peer_name;
+  std::optional<MatchRules> rules;
   if (lobby.active)
   {
     const Client::MatchState ms = Client::GetMatchState();
     if (ms.match && ms.handoff == "started")
     {
+      rules = ms.match->rules;
       // In-game ports: a 1v1's decider (host) is P1, as in the gameplay session; with more
       // players, and in every room game (ports = slots, the room host deciding from any slot),
       // each sits on its server port (GameplayOnlineBackend). A room's 2-player game once took
@@ -1180,7 +1192,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     s_session_written.clear();
     return;
   }
-  std::vector<u8> session(SESSION_SIZE, 0);
+  std::vector<u8> session(SessionSize(loc.version), 0);
   if (lobby.active)
   {
     session[S_STATE] = lobby.setup_ready ? 2 : 1;
@@ -1227,6 +1239,13 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   }
   if (v5 && in_room)
     PutRoom(session, room, lobby);
+  // v6: the session's rules, the same on every machine (each got them from the server with its
+  // ticket; the gameplay session compares what the game applied before every match).
+  if (loc.version >= 6)
+  {
+    const auto bytes = SessionBytes(rules);
+    std::copy(bytes.begin(), bytes.end(), session.begin() + S_RULES);
+  }
   WriteBlock(guard, loc.session, session, &s_session_written, &s_session_seq);
 }
 }  // namespace

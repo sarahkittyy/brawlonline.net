@@ -312,6 +312,7 @@ picojson::object MatchmakingStatus()
         stages.emplace_back(static_cast<double>(s));
       m["stages"] = picojson::value(stages);
       m["items"] = picojson::value(static_cast<double>(match->items));
+      m["rules"] = match->rules ? picojson::value(ToJson(*match->rules)) : picojson::value();
       m["remote_addresses"] = EndpointsJson(match->remotes);
       m["connected_addresses"] = EndpointsJson(match->connected);
       m["connect_ms"] = picojson::value(static_cast<double>(match->connect_ms));
