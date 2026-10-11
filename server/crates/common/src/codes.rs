@@ -193,7 +193,9 @@ pub fn encode_search_code_fullwidth(code: &str) -> Vec<u8> {
     bytes.into_owned()
 }
 
-fn is_name_char(c: char) -> bool {
+/// A character a display name (or a ruleset's name) may have: printable ASCII, Hiragana or
+/// Katakana, without `\` or `` ` `` (what the game's font draws).
+pub fn is_name_char(c: char) -> bool {
     matches!(c, ' '..='~' | '\u{3041}'..='\u{3093}' | '\u{30A1}'..='\u{30F3}') && c != '\\' && c != '`'
 }
 
