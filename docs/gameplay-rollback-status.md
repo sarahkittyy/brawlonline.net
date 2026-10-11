@@ -870,7 +870,7 @@ Machine state outside the region set at the switch (a pending CP interrupt, a pa
 
 A first version froze only the AX voices (DSP HLE) during resimulation. That left two problems. The game's sound thread kept running (envelopes and fades went ahead of the waveforms). The guest plays each mix one AX frame later, so the first AX frame after a re-run was silence and the last one before it was dropped. Replaced by the paused audio clock.
 
-**Verification.** `gprb_mispredict.py --dump-audio DIR` copies the DSP dump (what a player hears) of each run. `harness/tools/gprb_audio.py` compares a rollback run with the `--no-rollback` ground truth of the same recording. It reports the waveform match per half second (strict: a sound 3 ms early drops it), the drift, and band levels (32 bands, 32 ms windows, ±32 ms tolerance): the median difference in dB and the share of loud moments more than 6 dB quieter (cut off) or louder (doubled). The harness plays no music (`SDStreamOpen Failed: …/X02.brstm`: the BRSTMs are not on its SD image), so these are sound effects only. Every run below is a misprediction test, `distance` 4: every frame is rolled back and 3 frames are re-run, far more than a session. Gameplay traces were identical to the ground truth in every run, old and new.
+**Verification.** `gprb_mispredict.py --dump-audio DIR` copies the DSP dump (what a player hears) of each run. `harness/tools/gprb_audio.py` compares a rollback run with the `--no-rollback` ground truth of the same recording. It reports the waveform match per half second (strict: a sound 3 ms early drops it), the drift, and band levels (32 bands, 32 ms windows, ±32 ms tolerance): the median difference in dB and the share of loud moments more than 6 dB quieter (cut off) or louder (doubled). The countdown fixtures play no song after loading (Phase 20; not, as first written here, a harness without music), so these are sound effects only. Every run below is a misprediction test, `distance` 4: every frame is rolled back and 3 frames are re-run, far more than a session. Gameplay traces were identical to the ground truth in every run, old and new.
 
 | Fixture (3,600 frames, dual core) | Input | Old: cut off / doubled / median diff | New: cut off / doubled / median diff | New waveform match |
 |---|---|---|---|---|
@@ -888,7 +888,7 @@ The 4-player match drifts by at most 3 ms over the minute (against -99 ms with a
 
 Network sessions (`gprb_session.py`, two independently booted instances, dual core, 2-minute rule, Fox/Falco Battlefield): `typical` game set on both, 2,132 confirmed checksums, 0 mismatches; `bad_wifi` (435 rollbacks, up to 6 frames deep, 317 waits for the peer) game set on both, 4,398 checksums, 0 mismatches; both peers' traces identical. Raw: `run/qa/sfx/`.
 
-**Not measured here:** music (absent in the harness), and listening. The numbers say the cut-outs are gone, but ears on an unmuted session should confirm it.
+**Not measured here:** music (absent from the fixtures; measured in sessions in Phase 20), and listening. The numbers say the cut-outs are gone, but ears on an unmuted session should confirm it.
 
 ## Phase 15: "desync at frame 0" after offline 4-player Versus (staging, 2026-10-10)
 
@@ -989,6 +989,43 @@ With the joiner at 97% and only the speed nudge, the joiner (at most 1% faster) 
 The player: "SUPER playable". Without the hold the joiner's own presents are uneven again (Phase 17's stutter), which the fix keeps for PCs with slack.
 
 **Fix.** A hold never exceeds the CPU's slack: the throttle's sleep between the previous presented XFB copy and this one (`CoreTimingManager::TakeThrottleSleep`, taken with the copy decision, `CopyDecision::slack`). A PC behind its schedule never sleeps there and is not held; a PC with slack holds as before. Not yet measured in a session with a CPU-limited peer.
+
+## Phase 20: music on, and attempts to desync with it (2026-10-11)
+
+Music was off by default (`[NetPlay] BrawlMusicOff`, P+'s `[P+] Music Off` patch: 0 into the music volume float `0x90E60F34`, outside the set). The question: is music a sync or sound risk under rollback, or could it simply be turned on? (Answer: turned on. Since this phase the setting is `[Online] Music`, default on, the launcher's Settings → Game → Music; off applies the same patch. Runs below used the old key.)
+
+**The harness has always streamed music.** Phase 14's note that the harness plays no music was wrong: `SDStreamOpen Failed: …/X02.brstm` is a vanilla Brawl song (`X`/`W`/`Z` ids, read from the disc instead), and SD songs open as `SDStreamOpen (slot:1): /Project+/pf/sound/strm/Melee/Break the Targets.brstm`. The Music Off patch only zeroes the volume: the song is picked, opened and streamed either way, so every session since Phase 4 has run the music stream, silently. A music-off session's dump has near-silent stretches (up to 51% of 100 ms windows in a 10 s block, the menus); a music-on dump has none.
+
+**The countdown fixtures (`run/qa/gprbw/*-cd.sav`) play no song after loading:** music-on and music-off dumps of `fd-cd.sav` are identical (match 1.00). Music has to be tested in sessions that boot to the match.
+
+**Tools.** `gprb_session.py --sd-a/--sd-b LOCAL=SD_PATH|-SD_PATH` patch one peer's SD card only; with `--config Dolphin.DSP.DumpAudio=True` each peer's DSP dump is copied to `--log-dir`. `gprb_mispredict.py --config` passes `-C` overrides. `tools/sdcard/tlst.py` writes a one-song tracklist (to force a song; patch both `tracklist/` and `netplaylist/`).
+
+**Desync attempts.** Fox/Falco, dual core unless noted, 1-minute rule, music on (`--config Dolphin.NetPlay.BrawlMusicOff=False`); raw `run/qa/music/mx/`:
+
+| Case | Link | Songs (host / joiner) | Confirmed checksums | Mismatches |
+|---|---|---|---|---|
+| both on, stock tracklists | typical | X04 (disc) / Break the Targets (SD) | 3,578 | 0 |
+| both on | bad_wifi | X04 / Break the Targets | 1,544 | 0 |
+| joiner music off | bad_wifi | X04 / Break the Targets (silent) | 2,043 | 0 |
+| forced different songs (one-song tracklists) | bad_wifi | Final Destination (9.6 MB) / Break the Targets (1.5 MB) | 3,578 | 0 |
+| joiner's song file missing | bad_wifi | Final Destination / `Nope/Missing Song` (open failed, silence) | 3,578 | 0 |
+| one-song tracklist against the stock 11-song one | bad_wifi | Final Destination / Break the Targets | 3,504 | 0 |
+| Smashville, joiner's clock Saturday 21:00 | bad_wifi | K.K. Cruisin' / Remix 10 | 2,992 | 0 |
+| three consecutive matches (stale tracklist state, Phase 12) | typical | different on each | 3,578 in each (BF, FD, Smashville) | 0 |
+| single core | bad_wifi | X04 / Break the Targets | 3,578 | 0 |
+
+Every run reached game set on both peers with identical traces. The forced-song runs show 0 `io_waits`: song streaming does not go through `gfFileIOManager` (whose queues are in the set), and the stream buffers are outside the set (different songs, equal checksums). In the one-song-against-stock run both instances froze for 2-3 s at the same wall-clock moments (a 2.3 s rollback on the host): the PC stalled, not the session.
+
+**What rollback does to the music.** Both peers forced to the same song in the same match, so the joiner's dump differs from the host's only by rollback artefacts; each 0.5 s window of the joiner's match is located in the host's dump (normalized cross-correlation, 8 kHz):
+
+| `bad_wifi`, ~150-380 rollbacks per peer, max depth 4-6 | Joiner's lag behind the host over the match | Window match |
+|---|---|---|
+| paused audio clock (Phase 14, the default) | constant, -18.534 s from first window to game set | 0.57-1.00, most > 0.8 (the dips are sound effects) |
+| `PPR_GPRB_RESIM_AUDIO=advance` (rollbacks cut the re-run's span out) | wanders, -18.05 to -17.24 s (0.8 s lost over 40 s), outliers | ~0.45 |
+
+So with the Phase 14 audio clock the music plays through rollbacks without a skip; the old behaviour cut every rollback's span out of it, which is what continuous music makes audible. Clips: `run/qa/music/listen/` (1 and 2: the same match on both peers; 3: the old behaviour).
+
+**Not covered:** host audio underruns (the dump is the mixer's input, so a slow PC that starves the audio backend is not in it); stages whose music changes mid-match with gameplay (WarioWare's microgames; not in the harness's stage list, not P+-legal); listening on an unmuted real session.
 
 ## Open issues
 

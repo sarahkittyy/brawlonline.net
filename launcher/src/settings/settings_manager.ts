@@ -128,6 +128,10 @@ export class SettingsManager extends EventEmitter {
     return this.get().settings.inputDelay;
   }
 
+  getEnableMusic(): boolean {
+    return this.get().settings.enableMusic;
+  }
+
   getDolphinPath(type: DolphinLaunchType): string | null {
     const settings = this.get().settings;
     switch (type) {

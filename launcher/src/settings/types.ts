@@ -37,6 +37,9 @@ export interface SettingsSchema {
   // else 1-4 frames. Synced to Dolphin.ini `[Online] InputDelay`.
   inputDelay: number;
 
+  // Online: the game's music in matches and menus. Synced to Dolphin.ini `[Online] Music`.
+  enableMusic: boolean;
+
   // Dolphin settings: the executable of our Dolphin build (null = default, see dolphin/install/paths.ts)
   netplayDolphinPath: string | null;
   playbackDolphinPath: string | null;

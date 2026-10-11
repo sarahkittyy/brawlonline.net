@@ -42,6 +42,7 @@ export const defaultAppSettings: AppSettings = {
     extraSlpPaths: [],
     launchGameOnPlay: true,
     inputDelay: INPUT_DELAY_AUTO,
+    enableMusic: true,
     autoUpdateLauncher: true,
     netplayDolphinPath: null,
     playbackDolphinPath: null,

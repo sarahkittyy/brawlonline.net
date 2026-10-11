@@ -585,6 +585,7 @@ export class DolphinManager {
       enableNetplayReplays: this.settingsManager.getEnableNetplayReplays(),
       enableMonthlySubfolders: this.settingsManager.getEnableMonthlySubfolders(),
       inputDelay: this.settingsManager.getInputDelay(),
+      enableMusic: this.settingsManager.getEnableMusic(),
     });
   }
 
@@ -609,6 +610,9 @@ export class DolphinManager {
     );
     await this._updateLauncherSetting(this.settingsManager.getInputDelay(), newSettings.inputDelay, (val) =>
       this.settingsManager.updateSetting("inputDelay", val),
+    );
+    await this._updateLauncherSetting(this.settingsManager.getEnableMusic(), newSettings.enableMusic, (val) =>
+      this.settingsManager.updateSetting("enableMusic", val),
     );
   }
 

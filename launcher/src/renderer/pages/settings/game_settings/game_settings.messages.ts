@@ -11,6 +11,8 @@ export const GameSettingsMessages = {
   inputDelay: () => "Input Delay",
   inputDelayAuto: () => "Auto",
   inputDelayFrames: (frames: number) => (frames === 1 ? "1 frame" : `${frames} frames`),
+  enableMusic: () => "Music",
+  enableMusicDescription: () => "Play the game's music in menus and matches.",
   valid: () => "Valid",
   unknown: () => "Unknown",
   invalid: () => "Invalid",

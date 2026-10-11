@@ -37,6 +37,7 @@
 #include "Core/Boot/Boot.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/NetplaySettings.h"
+#include "Core/Config/OnlineSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #ifdef HAS_LIBMGBA
@@ -1234,7 +1235,7 @@ void NetPlayDialog::LoadSettings()
   const bool strict_settings_sync = Config::Get(Config::NETPLAY_STRICT_SETTINGS_SYNC);
   const bool golf_mode_overlay = Config::Get(Config::NETPLAY_GOLF_MODE_OVERLAY);
   const bool hide_remote_gbas = Config::Get(Config::NETPLAY_HIDE_REMOTE_GBAS);
-  const bool brawlmusic_off = Config::Get(Config::NETPLAY_BRAWL_MUSIC_OFF);
+  const bool brawlmusic_off = !Config::Get(Config::ONLINE_MUSIC);
   const bool spectator_mode = Config::Get(Config::NETPLAY_SPECTATOR_MODE);
 
   m_minimum_buffer_size_box->setValue(minimum_buffer_size);
@@ -1307,7 +1308,7 @@ void NetPlayDialog::SaveSettings()
   Config::SetBase(Config::NETPLAY_STRICT_SETTINGS_SYNC, m_strict_settings_sync_action->isChecked());
   Config::SetBase(Config::NETPLAY_GOLF_MODE_OVERLAY, m_golf_mode_overlay_action->isChecked());
   Config::SetBase(Config::NETPLAY_HIDE_REMOTE_GBAS, m_hide_remote_gbas_action->isChecked());
-  Config::SetBase(Config::NETPLAY_BRAWL_MUSIC_OFF, m_brawlmusic_off->isChecked());
+  Config::SetBase(Config::ONLINE_MUSIC, !m_brawlmusic_off->isChecked());
   Config::SetBase(Config::NETPLAY_SPECTATOR_MODE, m_spectator_mode->isChecked());
 
   std::string network_mode;

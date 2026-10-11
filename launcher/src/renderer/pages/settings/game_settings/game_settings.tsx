@@ -13,10 +13,11 @@ import RadioGroup from "@mui/material/RadioGroup";
 import Tooltip from "@mui/material/Tooltip";
 import React from "react";
 
+import { Toggle } from "@/components/form/toggle";
 import { PathInput } from "@/components/path_input/path_input";
 import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { useIsoVerification, useIsoVerificationFraction } from "@/lib/hooks/use_iso_verification";
-import { useInputDelay, useIsoPath, useLaunchGameOnPlay } from "@/lib/hooks/use_settings";
+import { useEnableMusic, useInputDelay, useIsoPath, useLaunchGameOnPlay } from "@/lib/hooks/use_settings";
 
 import { SettingItem } from "../setting_item_section";
 import { GameSettingsMessages as Messages } from "./game_settings.messages";
@@ -59,6 +60,7 @@ export const GameSettings = React.memo(() => {
   const verifyFraction = useIsoVerificationFraction(verifying ? isoPath : null);
   const [launchMeleeOnPlay, setLaunchMelee] = useLaunchGameOnPlay();
   const [inputDelay, setInputDelay] = useInputDelay();
+  const [enableMusic, setEnableMusic] = useEnableMusic();
   const netplayDolphinOpen = useDolphinStore((store) => store.netplayOpened);
   const playbackDolphinOpen = useDolphinStore((store) => store.playbackOpened);
 
@@ -133,6 +135,19 @@ export const GameSettings = React.memo(() => {
               />
             ))}
           </RadioGroup>
+        </Tooltip>
+      </SettingItem>
+      <SettingItem>
+        <Tooltip title={netplayDolphinOpen ? Messages.closeDolphinToChange() : ""} placement="bottom-start">
+          <div>
+            <Toggle
+              value={enableMusic}
+              onChange={(checked) => setEnableMusic(checked)}
+              label={Messages.enableMusic()}
+              description={Messages.enableMusicDescription()}
+              disabled={netplayDolphinOpen}
+            />
+          </div>
         </Tooltip>
       </SettingItem>
     </div>

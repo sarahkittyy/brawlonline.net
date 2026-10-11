@@ -42,6 +42,10 @@ extern const Info<std::string> ONLINE_SESSION_BACKEND;
 // inputs, as Slippi's delay frames do.
 extern const Info<int> ONLINE_INPUT_DELAY;
 
+// The game's music (the launcher's setting). Off applies P+'s "[P+] Music Off" patch, which
+// zeroes the music volume every frame (docs/gameplay-rollback-status.md, Phase 20).
+extern const Info<bool> ONLINE_MUSIC;
+
 // The chat window (docs/chat-protocol.md §6): shown while a match runs, and where it was put
 // ("x y w h collapsed", the first four as fractions of the window; empty: the default place).
 extern const Info<bool> ONLINE_CHAT_IN_MATCHES;

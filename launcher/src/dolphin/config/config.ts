@@ -11,6 +11,8 @@ export type SyncedDolphinSettings = {
   enableMonthlySubfolders: boolean;
   /** 0: automatic, else frames (`[Online] InputDelay`). */
   inputDelay: number;
+  /** The game's music (`[Online] Music`; off applies P+'s Music Off code). */
+  enableMusic: boolean;
 };
 
 export async function addGamePath(iniFile: IniFile, gameDir: string): Promise<void> {
@@ -49,6 +51,9 @@ export async function setOnlineSettings(iniFile: IniFile, options: Partial<Synce
   if (options.inputDelay !== undefined) {
     section.set("InputDelay", String(normalizeInputDelay(options.inputDelay)));
   }
+  if (options.enableMusic !== undefined) {
+    section.set("Music", convertBooleanToIniVal(options.enableMusic));
+  }
 
   await iniFile.save();
 }
@@ -60,12 +65,14 @@ export async function getOnlineSettings(iniFile: IniFile): Promise<SyncedDolphin
   const enableNetplayReplays = section.get("SaveReplays", "True") === "True";
   const enableMonthlySubfolders = section.get("ReplayMonthlyFolders", "True") === "True";
   const inputDelay = normalizeInputDelay(section.get("InputDelay", "0"));
+  const enableMusic = section.get("Music", "True") === "True";
 
   return {
     replayPath,
     enableNetplayReplays,
     enableMonthlySubfolders,
     inputDelay,
+    enableMusic,
   };
 }
 

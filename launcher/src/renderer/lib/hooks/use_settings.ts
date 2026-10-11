@@ -80,6 +80,8 @@ export const useExtraSlpPaths = () => useSetting("extraSlpPaths");
 
 export const useInputDelay = () => useSetting("inputDelay");
 
+export const useEnableMusic = () => useSetting("enableMusic");
+
 export const useLaunchGameOnPlay = () => useSetting("launchGameOnPlay");
 
 export const useAutoUpdateLauncher = () => useSetting("autoUpdateLauncher");
