@@ -704,6 +704,99 @@ def test_launcher_direct_invite(backend: OnlineBackend, dolphin: Callable[..., D
             m.stop()
 
 
+def test_launcher_create_request(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                 tmp_path: Path) -> None:
+    """The launcher's create (join-room.json kind "create", docs/rooms-protocol.md §5): malformed
+    requests are ignored; a valid one is answered `accepted`, Dolphin creates a public room (as
+    Create Room) and bumps LOCAL roomCreate; from a room the old room is left first; refused while
+    busy or on other screens; mm's refusal (too many rooms) answers `failed` with its text."""
+    ua, ub = backend.create_user("gina", "GINA"), backend.create_user("hugo", "HUGO")
+    a = _boot(dolphin, "rooms-create", backend, ua)
+    clients: list[MmClient] = []
+
+    def final(rid: str, result: str, timeout: float = 10) -> dict[str, Any]:
+        def got() -> dict[str, Any] | None:
+            try:
+                lr = a.game_status().get("lastRequest")
+            except (OSError, ValueError):
+                return None
+            return lr if lr and lr.get("id") == rid and lr["result"] == result else None
+        try:
+            return _wait(got, timeout, f"{result} for {rid}", interval=0.1)
+        except AssertionError:
+            raise AssertionError(f"lastRequest {a.game_status().get('lastRequest')}, rooms {a.rooms()['log'][-8:]}")
+
+    try:
+        _to_versus_css(a)
+        _online(a)
+        a.screen("menus")
+        _wait(lambda: a.game_status()["state"] == "idle", 10, "idle")
+        c0 = a.view()["create"]
+
+        # Ignored.
+        for body in ({"kind": "create", "version": 2}, {"kind": "Create"}, {"kind": "create", "id": None},
+                     {"kind": "create", "createdAt": "2020-01-01T00:00:00.000Z"},
+                     {"kind": "create", "createdAt": "yesterday"}):
+            _write_request(a, body)
+            _wait(lambda: not (a.online_dir() / "join-room.json").exists(), 5, "the request taken")
+        time.sleep(1)
+        assert a.game_status()["lastRequest"] is None and a.view()["create"] == c0 and a.view()["flags"] == 0
+
+        # Accepted: a public room with this player as host in slot 1 (as Create Room).
+        rid = _write_request(a, {"kind": "create", "code": "ignored"})
+        assert _answer(a, rid) == {"id": rid, "result": "accepted"}
+        v = a.until_view(lambda v: v["flags"] & ppom.RF_IN, "the new room")
+        assert v["flags"] == ppom.RF_IN | ppom.RF_PUBLIC and v["host"] == 0 and v["local_port"] == 0, v
+        assert v["create"] == (c0 + 1) & 0xFF and v["slots"][1]["bits"] == ppom.SLOT_OPEN, v
+        first = v["code"]
+        _wait(lambda: a.game_status()["room"] == first, 10, "game-status's room")
+        time.sleep(1)
+        assert a.game_status()["lastRequest"] == {"id": rid, "result": "accepted"}
+
+        # Busy: refused; on another screen: "Go back to the menus first."
+        a.screen("match")
+        _wait(lambda: a.game_status()["state"] == "busy", 10, "busy")
+        rid = _write_request(a, {"kind": "create"})
+        assert _answer(a, rid) == {"id": rid, "result": "refused", "message": "Finish your current game first."}
+        a.screen("other")
+        rid = _write_request(a, {"kind": "create"})
+        assert _answer(a, rid) == {"id": rid, "result": "refused", "message": "Go back to the menus first."}
+        assert a.view()["code"] == first and a.view()["create"] == (c0 + 1) & 0xFF
+
+        # From another player's room: left first, then a new room of our own.
+        owner = MmClient(backend, ub, tmp_path, "room", "--create", "--hold-secs", "120")
+        clients.append(owner)
+        theirs = owner.code()
+        a.screen("room")
+        rid = _write_request(a, {"kind": "room", "code": theirs})
+        assert _answer(a, rid)["result"] == "accepted"
+        a.until_view(lambda v: v["flags"] & ppom.RF_IN and v["code"] == theirs, "in hugo's room")
+        owner.until(lambda m: m.get("type") == "room-state" and m["slots"][1]["player"], "gina in")
+        rid = _write_request(a, {"kind": "create"})
+        assert _answer(a, rid) == {"id": rid, "result": "accepted"}
+        v = a.until_view(lambda v: v["flags"] & ppom.RF_IN and v["code"] not in (theirs, ""), "a room of her own")
+        assert v["host"] == 0 and v["local_port"] == 0 and v["create"] == (c0 + 2) & 0xFF, v
+        owner.until(lambda m: m.get("type") == "room-state" and not m["slots"][1]["player"], "gina gone")
+        log = a.rooms()["log"]
+        assert any(f"leaving {theirs} for the launcher's create" in l for l in log), log
+
+        # mm allows 5 creates a minute per account: three more from the game, then the launcher's
+        # sixth is refused: `failed` with mm's text, and the room it left is gone.
+        for _ in range(3):
+            before = a.view()["code"]
+            a.room("create", 1)
+            a.until_view(lambda v: v["flags"] & ppom.RF_IN and v["code"] != before, "another room")
+        rid = _write_request(a, {"kind": "create"})
+        final(rid, "failed")
+        lr = a.game_status()["lastRequest"]
+        assert lr == {"id": rid, "result": "failed", "message": "Too many rooms. Wait a moment."}, lr
+        a.until_view(lambda v: v["flags"] == 0 and v["phase"] == 0, "out of any room")
+        a.until_text("Too many rooms. Wait a moment.", error=True)
+    finally:
+        for m in clients:
+            m.stop()
+
+
 def test_online_connection_comes_back_after_mm_restarts(dolphin: Callable[..., DolphinInstance]) -> None:
     """mm goes away while the player is in a room: the line says the connection is lost and the
     room is gone; once mm is back (same port) Dolphin reconnects by itself with its backoff, says

@@ -107,11 +107,23 @@ struct RoomGame
   bool abort = false;  // the player left the room: end the room's game (no room-back)
 };
 
+enum class LaunchKind
+{
+  Room,    // kind absent or "room": join the room `code`
+  Direct,  // kind "direct": a Direct invite, `code` is the other player's connect code
+  Create,  // kind "create": a new room, as WITH FRIENDS > Create Room (no code)
+};
+
+const char* LaunchKindName(LaunchKind k)
+{
+  return k == LaunchKind::Direct ? "direct" : k == LaunchKind::Create ? "create" : "room";
+}
+
 struct Launch
 {
   std::string id;
-  bool direct = false;    // kind "direct": a Direct invite, `code` is the other player's connect code
-  std::string code;       // the room code (kind "room"), or the connect code (canonical)
+  LaunchKind kind = LaunchKind::Room;
+  std::string code;       // the room code (Room), the connect code (Direct, canonical), "" (Create)
   s64 created_ms = 0;     // its createdAt
   bool answered = false;  // "accepted" already (held during the game's boot)
 };
@@ -170,6 +182,11 @@ struct State
   u8 join_seq = 0;
   u8 direct_seq = 0;        // bumped on an accepted Direct invite (LOCAL.directJoin)
   std::string direct_code;  // its connect code (LOCAL.directPrefix / directNumber)
+  u8 create_seq = 0;        // bumped on an accepted launcher create (LOCAL.roomCreate)
+  // A launcher create from a room: room-leave goes out right before the pending create (the
+  // outbox would send it after, and leave the new room).
+  bool leave_before_pending = false;
+  std::string create_left;  // the room a launcher create left: its late pushes are not the answer
   picojson::value last_request;  // null or {id, result, message}
   std::string status_written;
   Clock::time_point status_at{};
@@ -383,6 +400,12 @@ void Handle(const Message& m, Actions* a, Clock::time_point now)
   case Message::Kind::RoomState:
   {
     const View& v = *m.view;
+    if (s.pending && s.pending->op == Op::Create && !s.create_left.empty() && v.code == s.create_left)
+    {
+      Log(fmt::format("room-state for {} (left for the launcher's create): ignored", v.code));
+      return;
+    }
+    s.create_left.clear();
     const bool new_room = !s.view || s.view->code != v.code;
     s.view = v;
     s.phase = Phase::In;
@@ -508,6 +531,7 @@ void OnDropped(Clock::time_point now, const std::string& why, bool count)
   }
   if (s.pending)
     s.pending_sent = false;
+  s.leave_before_pending = false;  // the server took us out of the room with the connection
   s.outbox.clear();
   Chat::OnConnectionLost();
   ++s.serial;
@@ -562,16 +586,26 @@ void PollJoinRequest()
     return;
   }
   // "kind": absent or "room" is a room to join ("code"); "direct" a Direct invite
-  // ("connectCode", the other player's connect code). docs/rooms-protocol.md §5.
+  // ("connectCode", the other player's connect code); "create" a new room (no code).
+  // docs/rooms-protocol.md §5.
   if (kind && (!kind->is<std::string>() ||
-               (kind->get<std::string>() != "room" && kind->get<std::string>() != "direct")))
+               (kind->get<std::string>() != "room" && kind->get<std::string>() != "direct" &&
+                kind->get<std::string>() != "create")))
   {
-    Log("join-room.json: kind is not \"room\" or \"direct\": ignored");
+    Log("join-room.json: kind is not \"room\", \"direct\" or \"create\": ignored");
     return;
   }
-  const bool direct = kind && kind->get<std::string>() == "direct";
+  LaunchKind launch_kind = LaunchKind::Room;
+  if (kind && kind->get<std::string>() == "direct")
+    launch_kind = LaunchKind::Direct;
+  else if (kind && kind->get<std::string>() == "create")
+    launch_kind = LaunchKind::Create;
   std::optional<std::string> target;
-  if (direct)
+  if (launch_kind == LaunchKind::Create)
+  {
+    target = std::string();
+  }
+  else if (launch_kind == LaunchKind::Direct)
   {
     const picojson::value* cc = get("connectCode");
     if (cc && cc->is<std::string>())
@@ -601,12 +635,15 @@ void PollJoinRequest()
   const s64 age = at ? UnixMs() - *at : REQUEST_MAX_AGE_MS + 1;
   if (age > REQUEST_MAX_AGE_MS)
   {
-    Log(fmt::format("join-room.json for {} is {} s old: ignored", *target, age / 1000));
+    Log(fmt::format("join-room.json ({} {}) is {} s old: ignored", LaunchKindName(launch_kind),
+                    *target, age / 1000));
     return;
   }
-  s.launch = Launch{CleanText(id->get<std::string>(), 100), direct, *target, *at};
-  Log(fmt::format("launcher asks to {} {} (request {})", direct ? "play Direct with" : "join",
-                  *target, s.launch->id));
+  s.launch = Launch{CleanText(id->get<std::string>(), 100), launch_kind, *target, *at};
+  const char* what = launch_kind == LaunchKind::Direct ? "play Direct with " :
+                     launch_kind == LaunchKind::Create ? "create a room" :
+                                                         "join ";
+  Log(fmt::format("launcher asks to {}{} (request {})", what, *target, s.launch->id));
 }
 
 bool BusyScreen(u8 screen)
@@ -673,7 +710,7 @@ void DecideLaunch(const DolphinBusy& busy, bool logged_in, const std::string& ow
   if (screen == Screen::Unknown || !logged_in)
     return;
   s.launch.reset();
-  if (l.direct)
+  if (l.kind == LaunchKind::Direct)
   {
     if (!own_code.empty() && NormalizeConnectCode(own_code) == l.code)
     {
@@ -707,6 +744,32 @@ void DecideLaunch(const DolphinBusy& busy, bool logged_in, const std::string& ow
   }
   if (!l.answered)
     AnswerLaunch(l.id, "accepted", "");
+  if (l.kind == LaunchKind::Create)
+  {
+    // As WITH FRIENDS > Create Room (public, the in-game default): out of any room first, then
+    // room-create; the game goes to the new room's CSS (LOCAL.roomCreate) and does not send a
+    // create of its own. mm's refusal ("Too many rooms. Wait a moment.", "No rooms free. Try
+    // later.") answers the request `failed` (Handle, RoomError).
+    Request r;
+    r.op = Op::Create;
+    r.flag = true;
+    s.error.clear();
+    s.rejoin.clear();
+    s.leave_before_pending = s.view.has_value() && s.conn == Conn::Online;
+    s.create_left = s.view ? s.view->code : std::string();
+    if (s.view)
+      Log(fmt::format("leaving {} for the launcher's create", s.view->code));
+    s.pending = r;
+    s.pending_sent = false;
+    s.pending_since = now;
+    s.pending_launch = l.id;
+    s.conn_hold = false;
+    ClearRoom();  // phase Joining (the pending create)
+    ++s.create_seq;
+    RestartAway();
+    ++s.serial;
+    return;
+  }
   Request r;
   r.op = Op::Join;
   r.code = l.code;
@@ -1113,6 +1176,15 @@ void Thread()
         // A create or join waiting for the connection goes first; then the queued ops.
         if (s.pending && !s.pending_sent)
         {
+          if (s.leave_before_pending)
+          {
+            Request leave;
+            leave.op = Op::Leave;
+            Send(peer, *RequestJson(leave));
+            ++s.sent;
+            Log("sent room-leave (before the launcher's create)");
+            s.leave_before_pending = false;
+          }
           if (const auto json = RequestJson(*s.pending))
           {
             Send(peer, *json);
@@ -1249,6 +1321,7 @@ void Submit(const Request& request)
   case Op::Create:
   case Op::Join:
   {
+    s.leave_before_pending = false;  // the player's own create / join replaces the launcher's
     if (request.op == Op::Join && !NormalizeRoomCode(request.code))
     {
       Log(fmt::format("join '{}': not a room code", request.code));
@@ -1270,6 +1343,7 @@ void Submit(const Request& request)
     return;
   }
   case Op::Leave:
+    s.leave_before_pending = false;
     if (s.rg.active)
       s.rg.abort = true;
     s.pending.reset();
@@ -1345,6 +1419,7 @@ Snapshot GetSnapshot()
   snap.join_seq = s.join_seq;
   snap.direct_seq = s.direct_seq;
   snap.direct_code = s.direct_code;
+  snap.create_seq = s.create_seq;
   snap.game_active = s.rg.active;
   auto [text, error] = Line(Clock::now());
   const std::string shown = text + (error ? "\x01" : "\x02");
@@ -1463,7 +1538,9 @@ picojson::object Status()
     o["view"] = picojson::value();
   }
   o["launch_pending"] = s.launch ? picojson::value(s.launch->code) : picojson::value();
-  o["launch_pending_direct"] = picojson::value(s.launch && s.launch->direct);
+  o["launch_pending_kind"] =
+      s.launch ? picojson::value(LaunchKindName(s.launch->kind)) : picojson::value();
+  o["create_seq"] = picojson::value(static_cast<double>(s.create_seq));
   o["direct_seq"] = picojson::value(static_cast<double>(s.direct_seq));
   o["direct_code"] = picojson::value(s.direct_code);
   o["last_request"] = s.last_request;

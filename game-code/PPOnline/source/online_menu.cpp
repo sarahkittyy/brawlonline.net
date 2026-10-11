@@ -2053,6 +2053,56 @@ namespace OnlineMenu {
         }
     }
 
+    // The launcher's create (LOCAL.roomCreate bumped: Dolphin has left any room and sent the
+    // create, public as Create Room's): the room CSS as WITH FRIENDS > Create Room left it, its
+    // create already sent ("Creating room", a refusal in red, then the new room), from a menu page,
+    // an idle online CSS (built again as a room's) or a room's CSS (its panels follow).
+    static u8 s_createSeen = 0;
+    static bool s_createInit = false;
+    static void enterCreated()
+    {
+        s.roomEntry = ROOM_ENTRY_CREATE;
+        s.roomCreateSent = true;   // Dolphin sent it
+        s.roomText[0] = 0;
+        s.roomError = false;
+        s.roomSeen = false;        // the join sounds start over with the new room
+        s.roomKickPort = -1;
+        s.roomZHeld = 0;
+        NetMenu::setReturnButton(0);   // back from the CSS: WITH FRIENDS, Create Room
+        PPOM::g_block.debug.scratch[9] += 0x100;   // tests: launcher creates taken
+    }
+    static void launcherCreate(const char* scene)
+    {
+        u8 j = PPOM::g_block.local.roomCreate;
+        if (!s_createInit) {
+            s_createSeen = j;   // only later bumps are creates (the value at boot is old)
+            s_createInit = true;
+            return;
+        }
+        if (j == s_createSeen) return;
+        if (onJumpPage(scene)) {
+            if (!decideOnlineCss()) return;
+            enterRoom(ROOM_ENTRY_CREATE);
+            enterCreated();
+            s_createSeen = j;
+            s_jumpPage = NULL;
+            return;
+        }
+        if (g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0 && !CodeEntry::active()) {
+            s_createSeen = j;
+            if (roomCss()) {
+                unlock();   // a ready in the old room is not one in the new
+                enterCreated();
+                return;
+            }
+            if (s.phase != PH_IDLE) return;
+            enterRoom(ROOM_ENTRY_CREATE);
+            enterCreated();
+            s.roomReload = true;   // the four panels need the CSS built again
+            leaveCss(1);           // OnlineMatch: no match armed -> back to the CSS (restoreCss)
+        }
+    }
+
     // The launcher's Direct invite (LOCAL.directJoin bumped: Dolphin accepted it and has left any
     // room): the other player's code from LOCAL, checked again (2-4 letters, '#', 1-9999, at most
     // 8 characters, as the server's codes). False: no code (a plain Direct CSS).
@@ -2179,6 +2229,7 @@ namespace OnlineMenu {
         pollStep();
         launcherJoin(scene);
         launcherDirect(scene);
+        launcherCreate(scene);
 
         bool onCss = g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0;
         if (!onCss) s.stepFloor = s.stepSeq;   // only a step asked for on the CSS counts there

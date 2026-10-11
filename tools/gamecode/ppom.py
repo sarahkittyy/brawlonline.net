@@ -376,6 +376,8 @@ ROOM_OPS = {"poll": 0, "create": 1, "join": 2, "leave": 3, "slot": 4, "teams": 5
 L_SCREEN, L_ROOM_JOIN, L_ROOM = 0x36, 0x37, 0x38
 # The launcher's Direct invite (still v5): counter, the code's letters (4, NUL-padded), its number.
 L_DIRECT_JOIN, L_DIRECT_PREFIX, L_DIRECT_NUMBER = 0x39, 0x3A, 0x3E
+# The launcher's create (still v5): bumped when Dolphin sent room-create for the launcher.
+L_ROOM_CREATE = 0x7E
 SCREENS = {"unknown": 0, "menus": 1, "online-css": 2, "room": 3, "online-busy": 4, "match": 5,
            "offline": 6, "other": 7}
 S_ROOM_FLAGS, S_ROOM_CODE, S_ROOM_HOST, S_ROOM_STATUS, S_ROOM_MODE = 0x213, 0x214, 0x218, 0x219, 0x21A
@@ -399,7 +401,7 @@ def decode_room_status(payload: bytes) -> dict:
 
 def read_room(c: HarnessClient, b: Block) -> dict:
     """The room view (v5): SESSION's room bytes and LOCAL's room phase, screen and join counter,
-    and the launcher's Direct invite (counter and code, "" for none)."""
+    the launcher's Direct invite (counter and code, "" for none) and its create counter."""
     se = c.read_mem(b.session, b.session_size)
     lo = c.read_mem(b.local, b.local_size)
     prefix = lo[L_DIRECT_PREFIX:L_DIRECT_PREFIX + 4].rstrip(b"\0").decode("ascii", "replace")
@@ -417,7 +419,7 @@ def read_room(c: HarnessClient, b: Block) -> dict:
             "game": se[6], "session_state": se[4], "session_seq": struct.unpack_from(">I", se, 0)[0],
             "slots": slots, "phase": lo[L_ROOM], "join": lo[L_ROOM_JOIN], "screen": lo[L_SCREEN],
             "local_port": lo[5], "local_state": lo[4],
-            "direct_join": lo[L_DIRECT_JOIN], "direct_code": direct_code}
+            "direct_join": lo[L_DIRECT_JOIN], "direct_code": direct_code, "create": lo[L_ROOM_CREATE]}
 
 
 def set_test_gone(c: HarnessClient, b: Block, frame: int, ports: int, later_ports: int = 0,

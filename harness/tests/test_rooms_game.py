@@ -775,6 +775,107 @@ def test_direct_invite_before_the_game_starts(backend: OnlineBackend, dolphin: C
     g.shot("01-direct-css-after-the-boot")
 
 
+def write_create(g: Game) -> str:
+    """The launcher's Create room (join-room.json kind "create", docs/rooms-protocol.md §5)."""
+    import json
+    import os
+    import uuid
+    from datetime import datetime, timezone
+    rid = str(uuid.uuid4())
+    created = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    d = Path(g.inst.user_dir) / "Online"
+    tmp = d / "join-room.json.tmp"
+    tmp.write_text(json.dumps({"version": 1, "id": rid, "kind": "create", "createdAt": created}))
+    os.replace(tmp, d / "join-room.json")
+    return rid
+
+
+def test_room_launcher_create(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                              gpu_backend: str) -> None:
+    """The launcher's Create room: from the ONLINE menu page the game lands on its new room's CSS
+    as Create Room leaves it (host, public, slots 1-2 open; one room-create, Dolphin's); from an
+    idle Direct CSS the CSS is built again as the new room's; another player joins it by code."""
+    test = "launcher-create"
+    ua = backend.create_user("rchost", "RCHS")
+    ub = backend.create_user("rcjoin", "RCJN")
+    a = _boot(dolphin, "room-ca", backend, ua, gpu_backend, test, "gameplay", artifacts=ART)
+    b = _boot(dolphin, "room-cb", backend, ub, gpu_backend, test, "gameplay", artifacts=ART)
+    _all(a.to_main_menu, b.to_main_menu)
+    _all(a.to_online_page, b.to_online_page)
+    a.steps("wait 30")
+    assert room_view(a)["screen"] == ppom.SCREENS["menus"], room_view(a)
+    c0 = room_view(a)["create"]
+
+    rid = write_create(a)
+    assert launcher_answer(a, rid)["result"] == "accepted"
+    _wait(lambda: a.scene() == CSS, 60, "A on the room's CSS")
+    v = until_view(a, lambda v: v["flags"] & ppom.RF_IN and v["screen"] == ppom.SCREENS["room"], "A in its room",
+                   timeout=60)
+    assert v["host"] == v["local_port"] == 0 and v["flags"] & ppom.RF_PUBLIC and v["create"] == (c0 + 1) & 0xFF, v
+    assert v["slots"][1]["bits"] == ppom.SLOT_OPEN and v["slots"][2]["bits"] == 0, v
+    assert menu_state(a) == 0x10 | 1, hex(menu_state(a))   # the room CSS entered as Create Room's
+    assert a.debug_scratch()[9] >> 8 & 0xFF == 1, hex(a.debug_scratch()[9])
+    code = v["code"]
+    a.steps("wait 120")   # the game must not send a create of its own
+    assert room_view(a)["code"] == code
+    log = " ".join(a.c.call("rooms_status")["log"])
+    assert log.count("sent create") == 1 and "game asks to create" not in log, log
+    a.shot("01-created-from-the-online-page")
+
+    # B joins it with the code (the keypad, as Join Room).
+    to_join_room(b)
+    pick(b)
+    type_room_code(b, code)
+    until_view(a, lambda v: v["slots"][1]["bits"] & ppom.SLOT_TAKEN, "A sees B")
+
+    # A leaves (hold B: back to WITH FRIENDS on Create Room), up to Direct 1v1 and its CSS; a
+    # second launcher create builds that CSS again as the new room's.
+    a.steps("hold B 120", "until muMenuMain 600", "wait 90")
+    a.shot("02-back-on-create-room")
+    a.steps("tap DRIGHT 8", "wait 20", "tap A", "wait 400", f"until {CSS} 600", "wait 60")
+    assert room_view(a)["screen"] == ppom.SCREENS["online-css"] and menu_state(a) == 3, room_view(a)
+    pick(a, right=2)
+    rid = write_create(a)
+    assert launcher_answer(a, rid)["result"] == "accepted"
+    v = until_view(a, lambda v: v["flags"] & ppom.RF_IN and v["code"] != code and
+                   v["screen"] == ppom.SCREENS["room"], "A in a new room from the Direct CSS", timeout=60)
+    assert v["host"] == 0 and v["create"] == (c0 + 2) & 0xFF, v
+    _wait(lambda: a.scene() == CSS, 60, "A on the room's CSS")
+    a.steps("wait 90")
+    a.shot("03-created-from-the-direct-css")
+
+
+def test_room_launcher_create_before_the_game_starts(backend: OnlineBackend,
+                                                     dolphin: Callable[..., DolphinInstance],
+                                                     gpu_backend: str) -> None:
+    """Create room clicked with the game closed: accepted at once, held through the boot, and the
+    game goes from the boot's ONLINE page to its new room's CSS."""
+    import json
+    import uuid
+    from datetime import datetime, timezone
+    ua = backend.create_user("rcboot", "RCBT")
+    rid = str(uuid.uuid4())
+
+    def put(user_dir: Path) -> None:
+        created = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        (Path(user_dir) / "Online" / "join-room.json").write_text(json.dumps(
+            {"version": 1, "id": rid, "kind": "create", "createdAt": created}))
+
+    g = _boot(dolphin, "room-cboot", backend, ua, gpu_backend, "launcher-create-boot", "gameplay",
+              artifacts=ART, before_launch=put)
+    assert launcher_answer(g, rid)["result"] == "accepted"
+    g.c.wait_state("running", timeout=120)
+    _wait(lambda: g.scene() == CSS, 120, "the room's CSS")
+    v = until_view(g, lambda v: v["flags"] & ppom.RF_IN and v["screen"] == ppom.SCREENS["room"], "in its room",
+                   timeout=60)
+    assert v["host"] == v["local_port"] == 0 and v["create"] >= 1, v
+    assert menu_state(g) == 0x10 | 1, hex(menu_state(g))
+    g.steps("wait 90")
+    log = " ".join(g.c.call("rooms_status")["log"])
+    assert log.count("sent create") == 1 and "game asks to create" not in log, log
+    g.shot("01-room-created-after-the-boot")
+
+
 SLOT_POS = 16.0 / 0.99   # a panel's model offset per slot (room_css.cpp SLOT_POS)
 
 

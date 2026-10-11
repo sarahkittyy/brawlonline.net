@@ -10,8 +10,8 @@
 // - a room's game: on `room-start`, the mode-3 ticket from the P2P port (Client::FindMatch) while
 //   the online connection stays open, the gameplay session with ports = slots and the room's
 //   host deciding, `room-back` once the match is over (or the start failed);
-// - the launcher hand-off: <User>/Online/join-room.json in (a room to join, or a Direct invite
-//   naming the other player's connect code), game-status.json out.
+// - the launcher hand-off: <User>/Online/join-room.json in (a room to join, a new room to create,
+//   or a Direct invite naming the other player's connect code), game-status.json out.
 //
 // One background thread owns the connection and the files. Every function is thread-safe.
 
@@ -76,6 +76,9 @@ struct Snapshot
   // with the other player's connect code (canonical, NormalizeConnectCode; "" before the first).
   u8 direct_seq = 0;
   std::string direct_code;
+  // The launcher's create (join-room.json kind "create"): bumped when Dolphin accepted one and
+  // sent room-create itself; the game goes to the room CSS as Create Room without sending one.
+  u8 create_seq = 0;
   std::string text;           // the status line ("" = the game's own)
   bool error = false;
   u32 serial = 0;             // changes with text, error, phase or the view

@@ -309,7 +309,10 @@ namespace PPOM {
                              // stands in only when the game does not); 0 at each match setup
         u8 desynced;      // Dolphin: the session ended the match because the two machines'
                           // game states differ, until the match scene is left
-        u8 _reserved2[2];
+        u8 roomCreate;    // Dolphin: bumped when it accepted a launcher create (still v5, was
+                          // reserved) and sent room-create itself (after leaving any room): go to
+                          // the room CSS as WITH FRIENDS > Create Room, without a ROOM_CREATE
+        u8 _reserved2[1];
     };                    // 0x80
 
     // ---- SESSION ----

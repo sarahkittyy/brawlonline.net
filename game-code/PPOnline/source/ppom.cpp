@@ -33,6 +33,7 @@ namespace PPOM {
                   __builtin_offsetof(Local, room) == 0x38 && __builtin_offsetof(Local, own) == 0x40, "local rooms");
     static_assert(__builtin_offsetof(Local, directJoin) == 0x39 && __builtin_offsetof(Local, directPrefix) == 0x3A &&
                   __builtin_offsetof(Local, directNumber) == 0x3E, "local direct invite");
+    static_assert(__builtin_offsetof(Local, roomCreate) == 0x7E, "local launcher create");
     static_assert(__builtin_offsetof(SessionPlayer, roomSlot) == 0x38 && __builtin_offsetof(SessionPlayer, roomTeam) == 0x39 &&
                   __builtin_offsetof(SessionPlayer, roomChar) == 0x3A && __builtin_offsetof(SessionPlayer, roomCostume) == 0x3B &&
                   __builtin_offsetof(SessionPlayer, pv) == 0x40, "session player rooms");
