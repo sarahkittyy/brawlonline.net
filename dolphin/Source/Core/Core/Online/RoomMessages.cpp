@@ -171,6 +171,42 @@ std::optional<std::string> NormalizeRoomCode(const std::string& ascii)
   return NormalizeRoomCode(u);
 }
 
+std::optional<std::string> NormalizeConnectCode(const std::string& ascii)
+{
+  if (ascii.size() > MAX_CODE_BYTES)
+    return std::nullopt;
+  const size_t hash = ascii.find('#');
+  if (hash == std::string::npos || hash < 2 || hash > 4)
+    return std::nullopt;
+  std::string out;
+  for (size_t i = 0; i < hash; ++i)
+  {
+    char c = ascii[i];
+    if (c >= 'a' && c <= 'z')
+      c = static_cast<char>(c - 'a' + 'A');
+    if (c < 'A' || c > 'Z')
+      return std::nullopt;
+    out.push_back(c);
+  }
+  const std::string digits = ascii.substr(hash + 1);
+  if (digits.empty() || digits.size() > 4)
+    return std::nullopt;
+  int number = 0;
+  for (const char c : digits)
+  {
+    if (c < '0' || c > '9')
+      return std::nullopt;
+    number = number * 10 + (c - '0');
+  }
+  if (number < 1)
+    return std::nullopt;
+  out += '#';
+  out += std::to_string(number);
+  if (out.size() > MAX_CONNECT_CODE_LEN)
+    return std::nullopt;
+  return out;
+}
+
 std::string CleanText(const std::string& s, size_t max_bytes)
 {
   std::string out;

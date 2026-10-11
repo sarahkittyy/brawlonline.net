@@ -646,6 +646,135 @@ def test_room_launcher_join_while_the_game_starts(backend: OnlineBackend,
         owner.stop()
 
 
+def write_direct(g: Game, connect_code: str) -> str:
+    """The launcher's Direct invite (join-room.json kind "direct", docs/rooms-protocol.md §5)."""
+    import json
+    import os
+    import uuid
+    from datetime import datetime, timezone
+    rid = str(uuid.uuid4())
+    created = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    d = Path(g.inst.user_dir) / "Online"
+    tmp = d / "join-room.json.tmp"
+    tmp.write_text(json.dumps({"version": 1, "id": rid, "kind": "direct", "connectCode": connect_code,
+                               "createdAt": created}))
+    os.replace(tmp, d / "join-room.json")
+    return rid
+
+
+def launcher_answer(g: Game, rid: str, timeout: float = 5) -> dict[str, Any]:
+    import json
+
+    def got() -> dict[str, Any] | None:
+        try:
+            lr = json.loads((Path(g.inst.user_dir) / "Online" / "game-status.json").read_text())["lastRequest"]
+        except (OSError, ValueError, KeyError):
+            return None
+        return lr if lr and lr.get("id") == rid else None
+    return _wait(got, timeout, f"{g.name}: the answer to {rid}", interval=0.1)
+
+
+def menu_state(g: Game) -> int:
+    """The plugin's DEBUG menuState: PPOM mode + 1 on an online CSS (3 = Direct), 0x10 | entry on
+    a room's."""
+    block = int(g.bridge()["block"])
+    debug_off = int.from_bytes(g.c.read_mem(block + 0x14, 2), "big")
+    return _u32(g, block + debug_off + 0x14)
+
+
+def test_direct_invite_from_the_launcher(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                         gpu_backend: str) -> None:
+    """The launcher's Direct invite, accepted: both launchers hand their game the other player's
+    connect code. A idles on the ONLINE menu page, B is in its own room's CSS (Dolphin leaves the
+    room; the CSS is built again as Direct's). Both games land on the Direct CSS with the code
+    filled in; once a character is picked, START searches that code without the keypad, and mm
+    pairs them as a normal Direct match."""
+    from test_online_game import _find_logged, _peer_shown
+    test = "direct-invite"
+    ua = backend.create_user("dimenu", "DIMN")
+    ub = backend.create_user("diroom", "DIRM")
+    a = _boot(dolphin, "dinv-a", backend, ua, gpu_backend, test, "record", artifacts=ART)
+    b = _boot(dolphin, "dinv-b", backend, ub, gpu_backend, test, "record", artifacts=ART)
+    _all(a.to_main_menu, b.to_main_menu)
+    _all(a.to_online_page, b.to_online_page)
+    create_room(b)
+    pick(b)
+    a.steps("wait 30")
+    assert room_view(a)["screen"] == ppom.SCREENS["menus"], room_view(a)
+    assert room_view(b)["screen"] == ppom.SCREENS["room"], room_view(b)
+    ja, jb = room_view(a)["direct_join"], room_view(b)["direct_join"]
+
+    ra, rb = write_direct(a, ub.connect_code), write_direct(b, ua.connect_code)
+    assert launcher_answer(a, ra)["result"] == "accepted"
+    assert launcher_answer(b, rb)["result"] == "accepted"
+    for g, other, j in ((a, ub, ja), (b, ua, jb)):
+        v = until_view(g, lambda v: v["direct_join"] == (j + 1) & 0xFF and v["flags"] == 0 and
+                       v["screen"] == ppom.SCREENS["online-css"], "on the Direct CSS", timeout=60)
+        assert v["direct_code"] == other.connect_code, v
+        _wait(lambda g=g: g.scene() == CSS, 60, f"{g.name} on the CSS")
+        _wait(lambda g=g: menu_state(g) == 3, 10, f"{g.name}'s CSS is Direct's")
+        assert g.debug_scratch()[9] >> 24 == 1, hex(g.debug_scratch()[9])
+        g.steps("wait 90")
+        g.shot("01-direct-css-invited")
+    assert "left the room for the Direct invite" in " ".join(b.c.call("rooms_status")["log"])
+
+    # A picks a character (B kept the one from the room). START searches the code: no keypad.
+    pick(a)
+    if b.css()["char"] == 0x28:
+        pick(b)
+    for g in (a, b):
+        g.shot("02-character-picked")
+        n = g.finds()
+        g.press_until("START", lambda g=g: g.finds() > n, f"{g.name}'s FIND_OPPONENT")
+        time.sleep(2.2)   # mm takes one ticket per account per 2 s (both search once anyway)
+    _find_logged(a, 2, ub.connect_code)
+    _find_logged(b, 2, ua.connect_code)
+    for g in (a, b):
+        assert g.debug_scratch()[4] == 0, f"{g.name}: the keypad opened ({g.debug_scratch()})"
+
+    ra_, rb_ = _peer_shown(a, ub), _peer_shown(b, ua)
+    assert ra_["peer_code"] == ub.connect_code and rb_["peer_code"] == ua.connect_code
+    sa, sb = a.c.mm_status(), b.c.mm_status()
+    assert sa["state"] == sb["state"] == "connection_success", (sa, sb)
+    assert sa["match"]["match_id"] == sb["match"]["match_id"]
+    assert sa["mode"] == sb["mode"] == "direct"
+    assert sa["opponent_code"] == ub.connect_code and sb["opponent_code"] == ua.connect_code
+    for g in (a, b):
+        g.steps("wait 30")
+        g.shot("03-connected")
+        g.c.mm_cancel()
+
+
+def test_direct_invite_before_the_game_starts(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                              gpu_backend: str) -> None:
+    """A Direct invite accepted with the game closed (the launcher writes join-room.json, then
+    starts Dolphin): answered `accepted` at once, held through the boot, and the game goes from
+    the boot's ONLINE page to the Direct CSS with the code filled in."""
+    import json
+    import uuid
+    from datetime import datetime, timezone
+    ua, ub = backend.create_user("diboot", "DIBT"), backend.create_user("diother", "DIOT")
+    rid = str(uuid.uuid4())
+
+    def put(user_dir: Path) -> None:
+        created = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+        (Path(user_dir) / "Online" / "join-room.json").write_text(json.dumps(
+            {"version": 1, "id": rid, "kind": "direct", "connectCode": ub.connect_code, "createdAt": created}))
+
+    g = _boot(dolphin, "dinv-boot", backend, ua, gpu_backend, "direct-invite-boot", "record", artifacts=ART,
+              before_launch=put)
+    assert launcher_answer(g, rid)["result"] == "accepted"
+    g.c.wait_state("running", timeout=120)
+    _wait(lambda: g.scene() == CSS, 120, "the Direct CSS")
+    v = until_view(g, lambda v: v["screen"] == ppom.SCREENS["online-css"] and v["direct_join"] >= 1,
+                   "on the Direct CSS", timeout=60)
+    assert v["direct_code"] == ub.connect_code, v
+    _wait(lambda: menu_state(g) == 3, 10, "the CSS is Direct's")
+    assert g.debug_scratch()[9] >> 24 == 1, hex(g.debug_scratch()[9])
+    g.steps("wait 60")
+    g.shot("01-direct-css-after-the-boot")
+
+
 SLOT_POS = 16.0 / 0.99   # a panel's model offset per slot (room_css.cpp SLOT_POS)
 
 

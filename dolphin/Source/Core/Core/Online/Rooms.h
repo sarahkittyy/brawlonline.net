@@ -10,7 +10,8 @@
 // - a room's game: on `room-start`, the mode-3 ticket from the P2P port (Client::FindMatch) while
 //   the online connection stays open, the gameplay session with ports = slots and the room's
 //   host deciding, `room-back` once the match is over (or the start failed);
-// - the launcher hand-off: <User>/Online/join-room.json in, game-status.json out.
+// - the launcher hand-off: <User>/Online/join-room.json in (a room to join, or a Direct invite
+//   naming the other player's connect code), game-status.json out.
 //
 // One background thread owns the connection and the files. Every function is thread-safe.
 
@@ -71,6 +72,10 @@ struct Snapshot
   u32 game = 1;               // the room's next game number (lock in with it)
   u8 pickers = 0;             // ports (bits) that pick the next room game's stage
   u8 join_seq = 0;            // bumped on every accepted launcher join
+  // The launcher's Direct invite (join-room.json kind "direct"): bumped on every accepted one,
+  // with the other player's connect code (canonical, NormalizeConnectCode; "" before the first).
+  u8 direct_seq = 0;
+  std::string direct_code;
   std::string text;           // the status line ("" = the game's own)
   bool error = false;
   u32 serial = 0;             // changes with text, error, phase or the view

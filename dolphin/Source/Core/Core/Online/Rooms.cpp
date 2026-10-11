@@ -110,7 +110,8 @@ struct RoomGame
 struct Launch
 {
   std::string id;
-  std::string code;
+  bool direct = false;    // kind "direct": a Direct invite, `code` is the other player's connect code
+  std::string code;       // the room code (kind "room"), or the connect code (canonical)
   s64 created_ms = 0;     // its createdAt
   bool answered = false;  // "accepted" already (held during the game's boot)
 };
@@ -167,6 +168,8 @@ struct State
   // The launcher.
   std::optional<Launch> launch;
   u8 join_seq = 0;
+  u8 direct_seq = 0;        // bumped on an accepted Direct invite (LOCAL.directJoin)
+  std::string direct_code;  // its connect code (LOCAL.directPrefix / directNumber)
   picojson::value last_request;  // null or {id, result, message}
   std::string status_written;
   Clock::time_point status_at{};
@@ -549,31 +552,61 @@ void PollJoinRequest()
   };
   const picojson::value* version = get("version");
   const picojson::value* id = get("id");
-  const picojson::value* code = get("code");
+  const picojson::value* kind = get("kind");
   const picojson::value* created = get("createdAt");
   if (!version || !version->is<double>() || version->get<double>() != 1 || !id ||
       !id->is<std::string>() || id->get<std::string>().empty() ||
-      id->get<std::string>().size() > 100 || !code || !code->is<std::string>() || !created ||
-      !created->is<std::string>())
+      id->get<std::string>().size() > 100 || !created || !created->is<std::string>())
   {
-    Log("join-room.json: not version 1 with an id, code and createdAt: ignored");
+    Log("join-room.json: not version 1 with an id and createdAt: ignored");
     return;
   }
-  const auto room = NormalizeRoomCode(code->get<std::string>());
-  if (!room)
+  // "kind": absent or "room" is a room to join ("code"); "direct" a Direct invite
+  // ("connectCode", the other player's connect code). docs/rooms-protocol.md §5.
+  if (kind && (!kind->is<std::string>() ||
+               (kind->get<std::string>() != "room" && kind->get<std::string>() != "direct")))
   {
-    Log("join-room.json: not a room code: ignored");
+    Log("join-room.json: kind is not \"room\" or \"direct\": ignored");
     return;
+  }
+  const bool direct = kind && kind->get<std::string>() == "direct";
+  std::optional<std::string> target;
+  if (direct)
+  {
+    const picojson::value* cc = get("connectCode");
+    if (cc && cc->is<std::string>())
+      target = NormalizeConnectCode(cc->get<std::string>());
+    if (!target)
+    {
+      Log("join-room.json: a direct request without a valid connectCode: ignored");
+      return;
+    }
+  }
+  else
+  {
+    const picojson::value* code = get("code");
+    if (!code || !code->is<std::string>())
+    {
+      Log("join-room.json: a room request without a code: ignored");
+      return;
+    }
+    target = NormalizeRoomCode(code->get<std::string>());
+    if (!target)
+    {
+      Log("join-room.json: not a room code: ignored");
+      return;
+    }
   }
   const auto at = ParseIsoUtc(created->get<std::string>());
   const s64 age = at ? UnixMs() - *at : REQUEST_MAX_AGE_MS + 1;
   if (age > REQUEST_MAX_AGE_MS)
   {
-    Log(fmt::format("join-room.json for {} is {} s old: ignored", *room, age / 1000));
+    Log(fmt::format("join-room.json for {} is {} s old: ignored", *target, age / 1000));
     return;
   }
-  s.launch = Launch{CleanText(id->get<std::string>(), 100), *room, *at};
-  Log(fmt::format("launcher asks to join {} (request {})", *room, s.launch->id));
+  s.launch = Launch{CleanText(id->get<std::string>(), 100), direct, *target, *at};
+  Log(fmt::format("launcher asks to {} {} (request {})", direct ? "play Direct with" : "join",
+                  *target, s.launch->id));
 }
 
 bool BusyScreen(u8 screen)
@@ -602,7 +635,8 @@ DolphinBusy QueryBusy()
   return b;
 }
 
-void DecideLaunch(const DolphinBusy& busy, bool logged_in, Clock::time_point now)
+void DecideLaunch(const DolphinBusy& busy, bool logged_in, const std::string& own_code,
+                  Clock::time_point now)
 {
   // under s_mutex
   if (!s.launch)
@@ -639,6 +673,38 @@ void DecideLaunch(const DolphinBusy& busy, bool logged_in, Clock::time_point now
   if (screen == Screen::Unknown || !logged_in)
     return;
   s.launch.reset();
+  if (l.direct)
+  {
+    if (!own_code.empty() && NormalizeConnectCode(own_code) == l.code)
+    {
+      AnswerLaunch(l.id, l.answered ? "failed" : "refused", "That's your own code.");
+      return;
+    }
+    if (!l.answered)
+      AnswerLaunch(l.id, "accepted", "");
+    // A Direct invite: out of any room first (as a room join from a room), then the game goes to
+    // the Direct CSS with the code and searches it on lock-in (LOCAL.directJoin).
+    s.error.clear();
+    s.rejoin.clear();
+    if (s.view || s.pending)
+    {
+      s.pending.reset();
+      s.pending_launch.clear();
+      if (s.view)
+      {
+        Request leave;
+        leave.op = Op::Leave;
+        s.outbox.push_back(leave);
+      }
+      ClearRoom();
+      Log("left the room for the Direct invite");
+    }
+    s.direct_code = l.code;
+    ++s.direct_seq;
+    Log(fmt::format("Direct invite: the game plays {} (direct {})", l.code, s.direct_seq));
+    ++s.serial;
+    return;
+  }
   if (!l.answered)
     AnswerLaunch(l.id, "accepted", "");
   Request r;
@@ -1124,7 +1190,7 @@ void Thread()
       const DolphinBusy busy = QueryBusy();
       {
         std::lock_guard lk(s_mutex);
-        DecideLaunch(busy, logged_in, now);
+        DecideLaunch(busy, logged_in, info.connect_code, now);
       }
       WriteGameStatus(busy, now, false);
     }
@@ -1277,6 +1343,8 @@ Snapshot GetSnapshot()
   snap.game = s.game;
   snap.pickers = s.pickers;
   snap.join_seq = s.join_seq;
+  snap.direct_seq = s.direct_seq;
+  snap.direct_code = s.direct_code;
   snap.game_active = s.rg.active;
   auto [text, error] = Line(Clock::now());
   const std::string shown = text + (error ? "\x01" : "\x02");
@@ -1395,6 +1463,9 @@ picojson::object Status()
     o["view"] = picojson::value();
   }
   o["launch_pending"] = s.launch ? picojson::value(s.launch->code) : picojson::value();
+  o["launch_pending_direct"] = picojson::value(s.launch && s.launch->direct);
+  o["direct_seq"] = picojson::value(static_cast<double>(s.direct_seq));
+  o["direct_code"] = picojson::value(s.direct_code);
   o["last_request"] = s.last_request;
   o["requests_seen"] = picojson::value(static_cast<double>(s.requests_seen));
   picojson::array log;

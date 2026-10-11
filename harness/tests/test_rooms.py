@@ -608,6 +608,102 @@ def test_launcher_join_waiting_at_start_up(backend: OnlineBackend,
         owner.stop()
 
 
+def _write_request(p: Player, body: dict[str, Any]) -> str:
+    """join-room.json with `body` over a fresh id and createdAt (None removes a field)."""
+    rid = str(uuid.uuid4())
+    created = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    full = {"version": 1, "id": rid, "createdAt": created, **body}
+    full = {k: v for k, v in full.items() if v is not None}
+    d = p.online_dir()
+    tmp = d / "join-room.json.tmp"
+    tmp.write_text(json.dumps(full))
+    os.replace(tmp, d / "join-room.json")
+    return str(full.get("id", rid))
+
+
+def test_launcher_direct_invite(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                tmp_path: Path) -> None:
+    """The launcher's Direct invite (join-room.json kind "direct", docs/rooms-protocol.md §5):
+    malformed requests and codes are deleted and ignored; a valid one is answered `accepted`, bumps
+    LOCAL directJoin and puts the code (canonical) into LOCAL for the game; refused while busy and
+    for the player's own code; from a room, the room is left first."""
+    ua, ub = backend.create_user("dora", "DORA"), backend.create_user("finn", "FINN")
+    a = _boot(dolphin, "rooms-direct", backend, ua)
+    clients: list[MmClient] = []
+    try:
+        _to_versus_css(a)
+        _online(a)
+        a.screen("menus")
+        _wait(lambda: a.game_status()["state"] == "idle", 10, "idle")
+        v0 = a.view()
+        seq0 = a.rooms()["direct_seq"]
+
+        # Ignored: bad codes and kinds (each file is taken and nothing answers it).
+        bad = [{"kind": "direct"}, {"kind": "direct", "connectCode": 123},
+               {"kind": "direct", "connectCode": "A#1"}, {"kind": "direct", "connectCode": "ABCDE#1"},
+               {"kind": "direct", "connectCode": "ABC#0"}, {"kind": "direct", "connectCode": "ABCD#1234"},
+               {"kind": "direct", "connectCode": "AB1#2"}, {"kind": "direct", "connectCode": "AB C#2"},
+               {"kind": "direct", "connectCode": "ＡBC#1"}, {"kind": "direct", "connectCode": "ABC#1#2"},
+               {"kind": "direct", "connectCode": "x" * 5000}, {"kind": "party", "connectCode": "FINN#1"},
+               {"kind": 1, "code": "KFQB"}, {"kind": "room"},
+               {"kind": "direct", "connectCode": "FINN#1", "version": 2},
+               {"kind": "direct", "connectCode": "FINN#1", "createdAt": "2020-01-01T00:00:00.000Z"},
+               {"kind": "direct", "connectCode": "FINN#1", "id": ""}]
+        ids = []
+        for body in bad:
+            ids.append(_write_request(a, body))
+            _wait(lambda: not (a.online_dir() / "join-room.json").exists(), 5, "the request taken")
+        time.sleep(1)
+        lr = a.game_status()["lastRequest"]
+        assert lr is None or lr["id"] not in ids, lr
+        assert a.rooms()["direct_seq"] == seq0 and a.view()["direct_join"] == v0["direct_join"]
+        log = a.rooms()["log"]
+        assert any("without a valid connectCode: ignored" in l for l in log), log
+        assert any("kind is not" in l for l in log), log
+
+        # Accepted: the counter and the code in LOCAL (any case and leading zeros: canonical).
+        prefix, number = ub.connect_code.split("#")
+        rid = _write_request(a, {"kind": "direct", "connectCode": f"{prefix.lower()}#{number.zfill(4)}"})
+        assert _answer(a, rid) == {"id": rid, "result": "accepted"}
+        v = a.until_view(lambda v: v["direct_join"] == (v0["direct_join"] + 1) & 0xFF, "LOCAL directJoin")
+        assert v["direct_code"] == ub.connect_code, v
+        assert a.rooms()["direct_code"] == ub.connect_code
+        assert not (a.online_dir() / "join-room.json").exists()
+
+        # The player's own code: refused, nothing changes.
+        rid = _write_request(a, {"kind": "direct", "connectCode": ua.connect_code})
+        assert _answer(a, rid) == {"id": rid, "result": "refused", "message": "That's your own code."}
+        assert a.view()["direct_join"] == v["direct_join"]
+
+        # Busy (a match): refused with the room requests' text.
+        a.screen("match")
+        _wait(lambda: a.game_status()["state"] == "busy", 10, "busy")
+        rid = _write_request(a, {"kind": "direct", "connectCode": ub.connect_code})
+        assert _answer(a, rid) == {"id": rid, "result": "refused", "message": "Finish your current game first."}
+        assert a.view()["direct_join"] == v["direct_join"]
+
+        # In a room (an explicit kind "room" request joins it): a Direct invite leaves it first.
+        owner = MmClient(backend, ub, tmp_path, "room", "--create", "--hold-secs", "120")
+        clients.append(owner)
+        code = owner.code()
+        a.screen("menus")
+        rid = _write_request(a, {"kind": "room", "code": code})
+        assert _answer(a, rid) == {"id": rid, "result": "accepted"}
+        a.screen("room")
+        a.until_view(lambda v: v["flags"] & ppom.RF_IN and v["code"] == code, "in finn's room")
+        owner.until(lambda m: m.get("type") == "room-state" and m["slots"][1]["player"], "dora in")
+        rid = _write_request(a, {"kind": "direct", "connectCode": ub.connect_code})
+        assert _answer(a, rid) == {"id": rid, "result": "accepted"}
+        v2 = a.until_view(lambda v: v["direct_join"] == (v0["direct_join"] + 2) & 0xFF, "LOCAL directJoin again")
+        assert v2["flags"] == 0 and v2["phase"] == 0 and v2["direct_code"] == ub.connect_code, v2
+        owner.until(lambda m: m.get("type") == "room-state" and not m["slots"][1]["player"], "dora gone")
+        assert any("left the room for the Direct invite" in l for l in a.rooms()["log"])
+        _wait(lambda: a.game_status()["room"] is None, 10, "game-status without a room")
+    finally:
+        for m in clients:
+            m.stop()
+
+
 def test_online_connection_comes_back_after_mm_restarts(dolphin: Callable[..., DolphinInstance]) -> None:
     """mm goes away while the player is in a room: the line says the connection is lost and the
     room is gone; once mm is back (same port) Dolphin reconnects by itself with its backoff, says

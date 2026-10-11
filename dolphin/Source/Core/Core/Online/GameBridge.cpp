@@ -90,11 +90,18 @@ constexpr u32 SP_SIZE = 0x80, SP_PRESENT = 0, SP_KIND = 1, SP_COSTUME = 2, SP_TE
 // the room phase. SESSION: the room's flags, code, host, status and mode; per player its slot bits,
 // colour, and the character and costume of its lock-in while ready.
 constexpr u32 L_SCREEN = 0x36, L_ROOM_JOIN = 0x37, L_ROOM = 0x38;
+// The launcher's Direct invite (still v5: bytes reserved in v5's LOCAL; a plugin without it
+// ignores them): the counter Dolphin bumps on an accepted one and the other player's connect
+// code as its letters (ASCII, upper case, NUL-padded) and its number (u16, 1-9999).
+constexpr u32 L_DIRECT_JOIN = 0x39, L_DIRECT_PREFIX = 0x3A, L_DIRECT_NUMBER = 0x3E;
+constexpr u32 DIRECT_PREFIX_LEN = 4;
 constexpr u32 S_ROOM_FLAGS = 0x213, S_ROOM_CODE = 0x214, S_ROOM_HOST = 0x218, S_ROOM_STATUS = 0x219,
               S_ROOM_MODE = 0x21A;
 constexpr u32 SP_ROOM_SLOT = 0x38, SP_ROOM_TEAM = 0x39, SP_ROOM_CHAR = 0x3A, SP_ROOM_COSTUME = 0x3B;
 constexpr u8 SLOT_OPEN = 1, SLOT_TAKEN = 2, SLOT_READY = 4, SLOT_HOST = 8, SLOT_IN_GAME = 0x10;
 constexpr u8 RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4;
+static_assert(L_ROOM < L_DIRECT_JOIN && L_DIRECT_NUMBER + 2 == L_OWN &&
+              L_DIRECT_PREFIX + DIRECT_PREFIX_LEN == L_DIRECT_NUMBER);
 static_assert(L_ROOM < L_OWN && S_ROOM_MODE < SESSION_SIZE && SP_ROOM_COSTUME < SP_PORT_VALUES &&
               SESSION_PLAYER_OUT < SP_ROOM_SLOT && S_ROOM_FLAGS == S_SETUP_ERROR + 2);
 static_assert(SESSION_GONE + 4 <= S_TEAMS && SESSION_PLAYER_OUT == SP_PICKS_STAGE + 1);
@@ -911,6 +918,27 @@ void PutRoom(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::
   session[S_ROOM_MODE] = static_cast<u8>(v.mode);
 }
 
+// LOCAL's Direct invite bytes. The code is Rooms' canonical one (NormalizeConnectCode: 2-4
+// letters, '#', 1-9999); it is checked again here, and anything else leaves the bytes zero (the
+// counter still moves, so the game goes to a plain Direct CSS).
+void PutDirectInvite(std::vector<u8>& local, u8 seq, const std::string& code)
+{
+  local[L_DIRECT_JOIN] = seq;
+  for (u32 i = L_DIRECT_PREFIX; i < L_DIRECT_NUMBER + 2; ++i)
+    local[i] = 0;
+  const auto canon = Rooms::NormalizeConnectCode(code);
+  if (!canon || *canon != code)
+    return;
+  const size_t hash = code.find('#');
+  if (hash == std::string::npos || hash > DIRECT_PREFIX_LEN)
+    return;
+  const int number = std::stoi(code.substr(hash + 1));
+  for (size_t i = 0; i < hash; ++i)
+    local[L_DIRECT_PREFIX + i] = static_cast<u8>(code[i]);
+  local[L_DIRECT_NUMBER] = static_cast<u8>(number >> 8);
+  local[L_DIRECT_NUMBER + 1] = static_cast<u8>(number);
+}
+
 // The SESSION and LOCAL blocks (design 5.2): the game's lock-in to the gameplay session, the
 // session's lobby and match setup back to the game.
 void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
@@ -1060,6 +1088,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   {
     local[L_ROOM_JOIN] = room.join_seq;
     local[L_ROOM] = static_cast<u8>(room.phase);
+    PutDirectInvite(local, room.direct_seq, room.direct_code);
   }
   WriteBlock(guard, loc.local, local, &s_local_written, &s_local_seq);
 

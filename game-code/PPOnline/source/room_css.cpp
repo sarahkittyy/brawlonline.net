@@ -119,17 +119,47 @@ namespace RoomCss {
         return isPtr(a) ? (u8*)a : NULL;
     }
 
-    void prepareRecords()
+    // Records 1-3 as the Wi-Fi CSS had them before the first prepareRecords (releaseRecords puts
+    // them back).
+    static bool s_recordsSaved = false;
+    static u8 s_savedState[4], s_savedCss[4];
+
+    static u8* selCharData()
     {
         u32 gg = *(u32*)0x805A00E0;
-        if (!isPtr(gg)) return;
+        if (!isPtr(gg)) return NULL;
         u32 sel = *(u32*)(gg + 0x10);
-        if (!isPtr(sel)) return;
+        return isPtr(sel) ? (u8*)sel : NULL;
+    }
+
+    void prepareRecords()
+    {
+        u8* sel = selCharData();
+        if (!sel) return;
         for (int i = 1; i < 4; i++) {
-            u8* rec = (u8*)sel + 0xB8 + 0x5C * i;
+            u8* rec = sel + 0xB8 + 0x5C * i;
+            if (!s_recordsSaved) {
+                s_savedState[i] = rec[0x01];
+                s_savedCss[i] = sel[0x0A + 4 * i];
+            }
             rec[0x01] = 0;                     // human: the CSS builds a full panel
-            ((u8*)sel)[0x0A + 4 * i] = CSS_NONE;
+            sel[0x0A + 4 * i] = CSS_NONE;
         }
+        s_recordsSaved = true;
+    }
+
+    // A room's CSS about to be built again as another online CSS (the launcher's Direct invite on
+    // a room's CSS): records 1-3 back to what the Wi-Fi CSS had, so it builds its own panels.
+    void releaseRecords()
+    {
+        u8* sel = selCharData();
+        if (!sel || !s_recordsSaved) return;
+        for (int i = 1; i < 4; i++) {
+            u8* rec = sel + 0xB8 + 0x5C * i;
+            rec[0x01] = s_savedState[i];
+            sel[0x0A + 4 * i] = s_savedCss[i];
+        }
+        reset();
     }
 
     void reset()

@@ -35,6 +35,14 @@ constexpr size_t MAX_TEXT_BYTES = 200;
 std::optional<std::string> NormalizeRoomCode(const std::u16string& typed);
 std::optional<std::string> NormalizeRoomCode(const std::string& ascii);
 
+// A connect code from outside (the launcher's Direct invite, join-room.json): the server's rule
+// (server/crates/common/src/codes.rs parse_connect_code): 2-4 ASCII letters, '#', 1-4 digits with a
+// value of 1-9999, at most 8 characters as written back. Any case and leading zeros are taken;
+// the result is canonical ("abc#007" -> "ABC#7"). nullopt for anything else (spaces, full-width
+// or non-ASCII characters, a second '#').
+constexpr size_t MAX_CONNECT_CODE_LEN = 8;
+std::optional<std::string> NormalizeConnectCode(const std::string& ascii);
+
 // A server string made safe to show and log: control characters dropped, invalid UTF-8 replaced,
 // cut to `max_bytes` on a character boundary.
 std::string CleanText(const std::string& s, size_t max_bytes);

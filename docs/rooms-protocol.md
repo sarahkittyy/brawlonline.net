@@ -192,6 +192,19 @@ The launcher's list (`launcher/src/renderer/pages/home/overview/public_rooms/`) 
 {"version": 1, "id": "5b0f3f0e-…", "code": "KFQB", "createdAt": "2026-10-09T15:00:00.000Z"}
 ```
 
+or, for a **Direct invite** (the player list's "Invite to game" when the inviter is in no room; both launchers write one once the invite is accepted, each naming the *other* player's connect code):
+
+```json
+{"version": 1, "id": "5b0f3f0e-…", "kind": "direct", "connectCode": "SARA#123", "createdAt": "2026-10-10T15:00:00.000Z"}
+```
+
+| Field | |
+|---|---|
+| `kind` | Absent or `"room"`: the room request above (`code` required). `"direct"`: a Direct invite (`connectCode` required, `code` ignored). Any other value: the file is ignored. |
+| `connectCode` | The other player's connect code, checked as the server checks codes (`server/crates/common/src/codes.rs`, Dolphin `NormalizeConnectCode`): 2-4 ASCII letters, `#`, 1-4 digits with a value of 1-9999, at most 8 characters as written back; any case and leading zeros are taken (`sara#0123` is `SARA#123`). Anything else (spaces, full-width or non-ASCII characters, a second `#`, not a string) and the file is ignored with a log line. |
+
+A Direct invite follows the room request's rules: the same freshness (3 minutes from `createdAt`), `refused` with "Finish your current game first." while busy ("Go back to the menus first." on other screens), `accepted` at once and held while the game boots until it shows its menus, answered by `id` in `lastRequest`. Also `refused` "That's your own code." for the player's own code (`failed` if it was already accepted during the boot). Accepted while the player is in a room (or joining one), Dolphin leaves the room first. The game then goes to the Direct 1v1 character select (WITH FRIENDS > Direct 1v1) from the menus or any idle online CSS, a room's included, with the code filled in: the status line reads "Select character vs SARA#123", then "Press START to play SARA#123" once a character is picked; START locks in and searches that code with no keypad. Both players search each other's code, so mm pairs them as any Direct match. The code is used for that one search: cancelled, failed or after the set, and after leaving the CSS, Direct works as usual (the code is then in the recent codes). There is no `failed` answer for the search itself; it shows on the CSS as any Direct search does. The game side: `docs/rooms-game-interface.md` (LOCAL `directJoin`).
+
 **`game-status.json`**, game → launcher, written atomically by Dolphin on every change and at least every 5 s:
 
 ```json
@@ -211,7 +224,7 @@ The launcher's list (`launcher/src/renderer/pages/home/overview/public_rooms/`) 
 | `state` | `idle`: the main menus, the online menus, an online CSS that is not searching, or a room's CSS. `busy`: a match (any mode, online or not), a search or connect (Direct, Unranked, Ranked, a room's start), a single-player mode. |
 | `screen` | `menus`, `online-css`, `room`, `match`, `searching`, `single-player`, `other` (for logs and later UI). |
 | `room` | The room the player is in, or null. |
-| `lastRequest` | The answer to the last `join-room.json`: `accepted`, `refused` (with `message`), or `failed` (with `message`, e.g. the server's "Room not found."). |
+| `lastRequest` | The answer to the last `join-room.json` (a room request or a Direct invite): `accepted`, `refused` (with `message`), or `failed` (with `message`, e.g. the server's "Room not found."). |
 
 ### What Dolphin and the game must do (next phase)
 

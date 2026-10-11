@@ -43,6 +43,7 @@ namespace RoomCss {
         char name[NAME_CHARS + 1];
     };
     void prepareRecords();               // before the CSS is built: four full panels
+    void releaseRecords();               // a room's CSS built again as another: records as before
     void reset();                        // the CSS is gone
     void tick(const PanelView views[3], bool teams, int myTeam, bool meHost, const char* myName, bool meReady);
     int myTeamClicked();                 // the local player's flag changed: the team, else -1

@@ -296,7 +296,14 @@ namespace PPOM {
         u8 roomJoin;      // Dolphin: bumped when it accepted a launcher join and sent it: go to
                           // the room CSS
         u8 room;          // Dolphin: RoomPhase
-        u8 _reserved1[7];
+        // The launcher's Direct invite (docs/rooms-game-interface.md, still v5: these were
+        // reserved): Dolphin bumps directJoin when it accepted one (and left any room); the game
+        // then goes to the Direct CSS with the other player's code, directPrefix (2-4 ASCII
+        // letters, upper case, NUL-padded) + '#' + directNumber (1-9999), and searches it on
+        // START without the keypad. A zero prefix: a plain Direct CSS.
+        u8 directJoin;
+        char directPrefix[4];
+        u16 directNumber;
         PortValues own;   // written by the game with the lock-in (its seq covers both)
         u8 hudDisconnected;  // game: 1 once it draws DISCONNECTED in the match (Dolphin's OSD
                              // stands in only when the game does not); 0 at each match setup

@@ -59,6 +59,32 @@ TEST(RoomMessages, RoomCodes)
   EXPECT_EQ(NormalizeRoomCode(std::u16string(u"KF\u0000QB")), std::nullopt);  // NUL ends it
 }
 
+TEST(RoomMessages, ConnectCodes)
+{
+  EXPECT_EQ(NormalizeConnectCode("SARA#123"), "SARA#123");
+  EXPECT_EQ(NormalizeConnectCode("sara#123"), "SARA#123");
+  EXPECT_EQ(NormalizeConnectCode("AB#1"), "AB#1");
+  EXPECT_EQ(NormalizeConnectCode("ABC#9999"), "ABC#9999");
+  EXPECT_EQ(NormalizeConnectCode("ABC#007"), "ABC#7");          // the server's canonical form
+  EXPECT_EQ(NormalizeConnectCode("ABCD#0123"), "ABCD#123");
+  EXPECT_EQ(NormalizeConnectCode("ABCD#1234"), std::nullopt);   // 9 characters
+  EXPECT_EQ(NormalizeConnectCode("A#12"), std::nullopt);        // prefix 2-4 letters
+  EXPECT_EQ(NormalizeConnectCode("ABCDE#1"), std::nullopt);
+  EXPECT_EQ(NormalizeConnectCode("#12"), std::nullopt);
+  EXPECT_EQ(NormalizeConnectCode("ABC#0"), std::nullopt);       // 1-9999
+  EXPECT_EQ(NormalizeConnectCode("ABC#"), std::nullopt);
+  EXPECT_EQ(NormalizeConnectCode("ABC#12345"), std::nullopt);
+  EXPECT_EQ(NormalizeConnectCode("ABC"), std::nullopt);
+  EXPECT_EQ(NormalizeConnectCode("ABC#1#2"), std::nullopt);
+  EXPECT_EQ(NormalizeConnectCode("AB1#2"), std::nullopt);
+  EXPECT_EQ(NormalizeConnectCode(" ABC#12"), std::nullopt);
+  EXPECT_EQ(NormalizeConnectCode("ABC#12 "), std::nullopt);
+  EXPECT_EQ(NormalizeConnectCode("ABC#-1"), std::nullopt);
+  EXPECT_EQ(NormalizeConnectCode("\xEF\xBC\xA1" "BC#1"), std::nullopt);   // a full-width A
+  EXPECT_EQ(NormalizeConnectCode(std::string("AB\0C#1", 6)), std::nullopt);
+  EXPECT_EQ(NormalizeConnectCode(std::string(1000, 'A') + "#1"), std::nullopt);
+}
+
 TEST(RoomMessages, CleanText)
 {
   EXPECT_EQ(CleanText("Room not found.", 200), "Room not found.");

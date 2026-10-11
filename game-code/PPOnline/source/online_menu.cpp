@@ -40,6 +40,8 @@ namespace OnlineMenu {
         int mode;               // PPOM::Mode, or -1 when not in the online flow
         int phase;
         char code[PPOM::CODE_LEN + 1];      // Direct/Teams: the code searched for
+        bool codePreset;                    // Direct: `code` is the launcher's invite (LOCAL
+                                            // directJoin): the first START searches it, no keypad
         char peerName[PPOM::NAME_LEN + 1];
         char peerCode[PPOM::CODE_LEN + 1];
         char error[PPOM::ERROR_LEN + 1];
@@ -722,7 +724,12 @@ namespace OnlineMenu {
         }
         switch (s.phase) {
         case PH_IDLE:
-            if (selectedChar() < 0) {
+            if (s.codePreset && s.code[0]) {
+                // The launcher's invite: the other player's code where Direct shows it.
+                // (one line: "Select your character to play ABCD#123" wrapped and was cut off)
+                sprintf(buf, selectedChar() < 0 ? "Select character vs %s" : "Press START to play %s", s.code);
+                setStatus(buf, false);
+            } else if (selectedChar() < 0) {
                 setStatus("Select your character", false);
             } else {
                 setStatus(usesCode() ? "Press START to enter code" : "Press START to search", false);
@@ -1190,6 +1197,7 @@ namespace OnlineMenu {
         s.cssMsg = NULL;
         s.zHeld = 0;
         s.code[0] = 0;
+        s.codePreset = false;
         s.startPad = 0;
         s.lastButtons = 0xFFFFFFFF;   // ignore buttons held from the menu
         s.searchSeq = 0;
@@ -1245,6 +1253,7 @@ namespace OnlineMenu {
         if (roomCss() && roomActive()) postRoom(PPOM::ROOM_LEAVE, 0, 0, NULL);
         s.roomEntry = ROOM_ENTRY_NONE;
         s.mode = -1;
+        s.codePreset = false;
         s.phase = PH_IDLE;
         s.searchSeq = 0;
         s.pollPending = false;
@@ -1266,6 +1275,9 @@ namespace OnlineMenu {
         req.lockedChar = c < 0 ? 0xFF : (u8)plainCss(c);
         req.costume = (u8)selectedCostume();
         PPOM::asciiToU16(req.code, s.code, PPOM::CODE_LEN);
+        // A launcher invite's code is searched once: cancelled, failed or played, START opens
+        // the keypad afterwards as in a plain Direct (the code is in the recent codes then).
+        s.codePreset = false;
         // The search locks the player in for game 1 (Slippi FN_LOCK_IN_AND_SEARCH); the session
         // gets the lock-in from LOCAL as soon as it exists.
         lockIn(1, 0xFFFF, 0);
@@ -1979,6 +1991,34 @@ namespace OnlineMenu {
         NetMenu::ensureWifiTask();   // the boot to the ONLINE page opens no connect window
     }
 
+    // A menu page the launcher's requests can leave from is running (menuPageRunning).
+    static bool onJumpPage(const char* scene)
+    {
+        return strcmp(scene, "muMenuMain") == 0 && PPOM::g_block.debug.frames - s_jumpFrame < 3 && s_jumpPage;
+    }
+
+    // Leave that page for the Wi-Fi CSS (sqNetAnyOkiraku): muProcMenu's decide (sora_menu_rule,
+    // module 18, text+0x1AE0) with decision 0x1E, as the WITH FRIENDS buttons do. The caller says
+    // which CSS it is (enter / enterRoom) right after.
+    static bool decideOnlineCss()
+    {
+        u32 m = *(u32*)0x800030C8;
+        u32 rule = 0;
+        for (int n = 0; isPtr(m) && n < 64; n++) {
+            if (*(u32*)m == 18) {
+                u32 sec = *(u32*)(m + 0x10);
+                rule = isPtr(sec) ? (*(u32*)(sec + 8) & ~1u) : 0;
+                break;
+            }
+            m = *(u32*)(m + 4);
+        }
+        if (!rule) return false;
+        typedef void (*DecideFn)(u8*, int, int);
+        ((DecideFn)(rule + 0x1AE0))(s_jumpPage, 0x1E, 0);
+        playSE(1);
+        return true;
+    }
+
     // The launcher's join (LOCAL.roomJoin bumped: Dolphin has already sent the join): go to the
     // room's CSS from a menu page (muProcMenu's decision 0x1E, as the WITH FRIENDS buttons) or an
     // idle online CSS (built again as a room's).
@@ -1993,21 +2033,8 @@ namespace OnlineMenu {
             return;
         }
         if (j == s_roomJoinSeen) return;
-        if (strcmp(scene, "muMenuMain") == 0 && PPOM::g_block.debug.frames - s_jumpFrame < 3 && s_jumpPage) {
-            u32 m = *(u32*)0x800030C8;
-            u32 rule = 0;
-            for (int n = 0; isPtr(m) && n < 64; n++) {
-                if (*(u32*)m == 18) {
-                    u32 sec = *(u32*)(m + 0x10);
-                    rule = isPtr(sec) ? (*(u32*)(sec + 8) & ~1u) : 0;
-                    break;
-                }
-                m = *(u32*)(m + 4);
-            }
-            if (!rule) return;
-            typedef void (*DecideFn)(u8*, int, int);
-            ((DecideFn)(rule + 0x1AE0))(s_jumpPage, 0x1E, 0);
-            playSE(1);
+        if (onJumpPage(scene)) {
+            if (!decideOnlineCss()) return;
             enterRoom(ROOM_ENTRY_JOIN);
             NetMenu::setReturnButton(2);
             s_roomJoinSeen = j;
@@ -2023,6 +2050,79 @@ namespace OnlineMenu {
             s.roomReload = true;   // the four panels need the CSS built again
             PPOM::g_block.debug.scratch[9] += 0x10000;
             leaveCss(1);           // OnlineMatch: no match armed -> back to the CSS (restoreCss)
+        }
+    }
+
+    // The launcher's Direct invite (LOCAL.directJoin bumped: Dolphin accepted it and has left any
+    // room): the other player's code from LOCAL, checked again (2-4 letters, '#', 1-9999, at most
+    // 8 characters, as the server's codes). False: no code (a plain Direct CSS).
+    static bool inviteCode(char* out)
+    {
+        const PPOM::Local& l = PPOM::g_block.local;
+        int n = 0;
+        while (n < 4 && l.directPrefix[n]) {
+            char c = l.directPrefix[n];
+            if (c < 'A' || c > 'Z') return false;
+            out[n++] = c;
+        }
+        for (int k = n; k < 4; k++) {
+            if (l.directPrefix[k]) return false;   // NUL-padded
+        }
+        u32 num = l.directNumber;
+        int digits = num >= 1000 ? 4 : num >= 100 ? 3 : num >= 10 ? 2 : 1;
+        if (n < 2 || num < 1 || num > 9999 || n + 1 + digits > PPOM::CODE_LEN - 1) return false;
+        sprintf(out + n, "#%u", num);
+        return true;
+    }
+
+    static void presetCode()
+    {
+        char code[PPOM::CODE_LEN + 1];
+        s.codePreset = inviteCode(code);
+        if (s.codePreset) strcpy(s.code, code);
+        else s.code[0] = 0;
+        s.statusDirty = true;
+    }
+
+    // Go to the Direct CSS with that code from a menu page (as a room join), an idle online CSS of
+    // another mode or a room's CSS (built again as Direct's, the character kept), or stay on an
+    // idle Direct CSS with the new code. START then searches it once the character is picked.
+    static u8 s_directSeen = 0;
+    static bool s_directInit = false;
+    static void launcherDirect(const char* scene)
+    {
+        u8 j = PPOM::g_block.local.directJoin;
+        if (!s_directInit) {
+            s_directSeen = j;   // only later bumps are invites (the value at boot is old)
+            s_directInit = true;
+            return;
+        }
+        if (j == s_directSeen) return;
+        if (onJumpPage(scene)) {
+            if (!decideOnlineCss()) return;
+            enter(PPOM::MODE_DIRECT);
+            presetCode();
+            NetMenu::setReturnButton(1);   // back from the CSS: WITH FRIENDS, Direct 1v1
+            s_directSeen = j;
+            s_jumpPage = NULL;
+            PPOM::g_block.debug.scratch[9] += 0x1000000;   // tests: launcher Direct invites taken
+            return;
+        }
+        if (g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0 && !CodeEntry::active()) {
+            s_directSeen = j;
+            bool room = roomCss();
+            if (!room && s.phase != PH_IDLE) return;   // searching or connected: not taken
+            PPOM::g_block.debug.scratch[9] += 0x1000000;
+            if (s.mode == PPOM::MODE_DIRECT && !room) {
+                presetCode();   // already on Direct's CSS: only the code changes
+                return;
+            }
+            // A room's CSS: Dolphin has left the room; its panels go with the CSS built again.
+            enter(PPOM::MODE_DIRECT);
+            presetCode();
+            NetMenu::setReturnButton(1);
+            if (room) RoomCss::releaseRecords();
+            leaveCss(1);   // OnlineMatch: no match armed -> back to the CSS (restoreCss)
         }
     }
 
@@ -2078,6 +2178,7 @@ namespace OnlineMenu {
         pollMatchState();
         pollStep();
         launcherJoin(scene);
+        launcherDirect(scene);
 
         bool onCss = g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0;
         if (!onCss) s.stepFloor = s.stepSeq;   // only a step asked for on the CSS counts there
@@ -2132,7 +2233,9 @@ namespace OnlineMenu {
             // START: lock in and search (Unranked) or enter the code (Direct, Teams), once a
             // character is selected (Slippi shows the START prompt only then).
             if ((pressed & BTN_START) && s.phase == PH_IDLE && selectedChar() >= 0) {
-                if (usesCode()) {
+                if (usesCode() && s.codePreset && s.code[0]) {
+                    startSearch();   // the launcher's invite: the code is known, no keypad
+                } else if (usesCode()) {
                     CodeEntry::open(LOCAL_PORT, false);
                 } else {
                     startSearch();

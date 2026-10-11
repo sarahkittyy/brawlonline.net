@@ -19,6 +19,7 @@ _2026-10-10. Owner: the Dolphin side (`Online/GameBridge.cpp`, `Online/Rooms.cpp
 | ready / unready | the existing lock-in (`writeLockIn`, LOCAL `LockIn`) with `game` = `Session.game`. Dolphin turns it into `room-ready`. |
 | start the match | as Direct: once `Session.state == SS_MATCH_READY && Session.game == the locked game`, leave the CSS (`tickConnected`'s path). The loser's stage pick as Direct (`picksStage`, `STAGE_PENDING`, `LOCAL.remoteReady`). |
 | jump to the room from the menus (launcher click) | `Local.roomJoin` changes: go to the room CSS (Dolphin has already sent the join). |
+| the launcher's Direct invite | `Local.directJoin` changes: go to the Direct CSS with `directPrefix` + `#` + `directNumber` filled in (Dolphin has left any room); START searches that code without the keypad. |
 | tell Dolphin whether it is busy | write `Local.screen` every frame (or on change). |
 
 ---
@@ -33,7 +34,11 @@ _2026-10-10. Owner: the Dolphin side (`Online/GameBridge.cpp`, `Online/Rooms.cpp
 | 0x36 | `_reserved1[0]` | **`screen`** | game | `Screen`: where the game is (below). |
 | 0x37 | `_reserved1[1]` | **`roomJoin`** | Dolphin | Counter, bumped when Dolphin accepted a launcher join (`join-room.json`) and sent the join: go to the room CSS. |
 | 0x38 | `_reserved[0]` byte 0 | **`room`** | Dolphin | `RoomPhase`: 0 `RP_NONE`, 1 `RP_JOINING` (create/join pending), 2 `RP_IN` (in a room). |
-| 0x39-0x3F | `_reserved[..]` | `_reserved1[7]` | - | still free |
+| 0x39 | `_reserved[..]` | **`directJoin`** | Dolphin | Counter, bumped when Dolphin accepted a launcher Direct invite (`join-room.json` kind `direct`, `docs/rooms-protocol.md` §5) and left any room: go to the Direct CSS with the code below. |
+| 0x3A | `_reserved[..]` | **`directPrefix[4]`** | Dolphin | The other player's connect code, its letters: 2-4 ASCII `A`-`Z`, NUL-padded. Written with `directJoin` (one LOCAL write) and kept until the next invite. |
+| 0x3E | `_reserved[..]` | **`directNumber`** (u16) | Dolphin | Its number, 1-9999: the code is `directPrefix` + `#` + the number in decimal (`SARA#123`). A zero prefix: no code (a plain Direct CSS). |
+
+`directJoin`, `directPrefix` and `directNumber` were added on 2026-10-10 without a version change: they were reserved, a plugin without them ignores them, and a plugin with them under an older v5 Dolphin just never sees `directJoin` move.
 
 ### SESSION (rolled back; Dolphin writes it only outside matches)
 
@@ -139,6 +144,14 @@ Dolphin also counts as busy whatever it knows itself (a search, a session, a roo
 
 **Launcher click.** Dolphin reads `join-room.json`. Busy (`screen` 4-7, or a search/session/room start): refused, nothing changes in the game. Idle: Dolphin sends the join itself (leaving any old room), bumps `Local.roomJoin`, and the game goes to the room CSS from wherever it is (menus or an idle online CSS; already on the room CSS: stay). While the game boots (until `screen` first reads 1-3 after a boot), a request, also one already there when Dolphin starts, is answered `accepted` at once and kept (at most 3 minutes from its `createdAt`), and nothing the game reports meanwhile counts as busy; then Dolphin joins and bumps `roomJoin`. The game should remember the last `roomJoin` it acted on (start from the value it finds at boot: Dolphin only bumps it later).
 
+**Launcher Direct invite.** Dolphin reads a `join-room.json` of kind `direct` (validated: `connectCode` as the server's codes) and applies the same rules (busy: refused; booting: accepted at once and held until `screen` first reads 1-3). Accepted: Dolphin leaves any room (as `ROOM_LEAVE`), writes the code into `directPrefix`/`directNumber` and bumps `directJoin`. The game (`online_menu.cpp` `launcherDirect`), remembering the last `directJoin` it acted on as for `roomJoin`:
+- on a menu page it can jump from (ONLINE, WITH FRIENDS, WITH ANYONE): the menus' decision 0x1E (as the room jump), the CSS entered as Direct's (`MODE_DIRECT`, back to WITH FRIENDS on Direct 1v1);
+- on an idle online CSS of another mode, or a room's CSS: the CSS built again as Direct's (a room's records 1-3 put back first, `RoomCss::releaseRecords`), the character kept;
+- on an idle Direct CSS: only the code changes;
+- with the keypad open it waits until the keypad closes; on an online CSS that is searching or connected (the game started a search in the moment between Dolphin's check and the frame) it is dropped.
+
+Then the status line reads "Select character vs SARA#123" / "Press START to play SARA#123", and START (with a character picked) is `FIND_OPPONENT` mode 2 with that code, no keypad. The code is used once: after that search (cancelled with Z/B, failed, or the set over) and after leaving the CSS, START opens the keypad as usual. DEBUG `scratch[9]` bits 24-31 count the invites the game took (tests).
+
 **Not logged in / no server.** The line says so in red ("Log in in the launcher.", "Can't reach the server.", or mm's own `hello` refusal such as "Close Dolphin and update to 0.2.1"); Dolphin keeps retrying the online connection with backoff and sends a pending create/join once it is up.
 
 ---
@@ -152,13 +165,15 @@ const u8 CMD_ROOM = 0xD0;          // in enum Cmd
 enum Screen { SCREEN_UNKNOWN = 0, SCREEN_MENUS = 1, SCREEN_ONLINE_CSS = 2, SCREEN_ROOM = 3,
               SCREEN_ONLINE_BUSY = 4, SCREEN_MATCH = 5, SCREEN_OFFLINE = 6, SCREEN_OTHER = 7 };
 
-struct Local {                     // only 0x36-0x3F change
+struct Local {                     // only 0x36-0x3F change (0x39-0x3F: the Direct invite, 2026-10-10)
     ...
     u8 lockPad;                    // 0x35
     u8 screen;                     // 0x36 game: Screen
     u8 roomJoin;                   // 0x37 Dolphin: bumped on an accepted launcher join
     u8 room;                       // 0x38 Dolphin: RoomPhase
-    u8 _reserved1[7];              // 0x39
+    u8 directJoin;                 // 0x39 Dolphin: bumped on an accepted launcher Direct invite
+    char directPrefix[4];          // 0x3A Dolphin: its code's letters, NUL-padded
+    u16 directNumber;              // 0x3E Dolphin: its code's number (1-9999)
     PortValues own;                // 0x40
     ...
 };
@@ -187,7 +202,7 @@ struct Session {                   // only 0x213-0x21F change
 };
 ```
 
-static_asserts added in `ppom.cpp`: `offsetof(Local, screen) == 0x36`, `roomJoin == 0x37`, `room == 0x38`, `offsetof(Local, own) == 0x40`, `sizeof(Local) == 0x80`; `offsetof(SessionPlayer, roomSlot) == 0x38`, `roomTeam == 0x39`, `roomChar == 0x3A`, `roomCostume == 0x3B`, `offsetof(SessionPlayer, pv) == 0x40`, `sizeof(SessionPlayer) == 0x80`; `offsetof(Session, roomFlags) == 0x213`, `roomCode == 0x214`, `roomHost == 0x218`, `roomStatus == 0x219`, `roomMode == 0x21A`, `sizeof(Session) == 0x220`; `sizeof(RoomRequest) == 0x18`, `sizeof(RoomStatus) == 0x88`, both within the payload sizes. Dolphin mirrors every offset in `GameBridge.cpp` and `tools/gamecode/ppom.py` reads them.
+static_asserts added in `ppom.cpp`: `offsetof(Local, screen) == 0x36`, `roomJoin == 0x37`, `room == 0x38`, `directJoin == 0x39`, `directPrefix == 0x3A`, `directNumber == 0x3E`, `offsetof(Local, own) == 0x40`, `sizeof(Local) == 0x80`; `offsetof(SessionPlayer, roomSlot) == 0x38`, `roomTeam == 0x39`, `roomChar == 0x3A`, `roomCostume == 0x3B`, `offsetof(SessionPlayer, pv) == 0x40`, `sizeof(SessionPlayer) == 0x80`; `offsetof(Session, roomFlags) == 0x213`, `roomCode == 0x214`, `roomHost == 0x218`, `roomStatus == 0x219`, `roomMode == 0x21A`, `sizeof(Session) == 0x220`; `sizeof(RoomRequest) == 0x18`, `sizeof(RoomStatus) == 0x88`, both within the payload sizes. Dolphin mirrors every offset in `GameBridge.cpp` and `tools/gamecode/ppom.py` reads them.
 
 ---
 
