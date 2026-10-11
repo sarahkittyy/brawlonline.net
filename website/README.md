@@ -9,6 +9,7 @@ The landing page for Brawl Online. It is a static site with no build step, no an
 | `script.js` | The download links (`DOWNLOADS` at the top), OS detection and video start. |
 | `assets/fonts/` | The wordmark font (Barlow Condensed Black Italic, OFL) and its licence. |
 | `assets/bg.webm`, `assets/bg.mp4`, `assets/bg-poster.jpg` | Background video and its still frame. **Not present yet.** |
+| `r/index.html`, `r/ruleset.js`, `r/ruleset.css` | The ruleset page, `brawlonline.net/r/<code>` (below). |
 | `LICENSES.txt` | Credits for the font, the icons and (later) the video. Deploy it with the site. |
 
 Without the video files the page is plain dark and still looks right. The browser logs 404s for the three missing files until they exist.
@@ -73,6 +74,12 @@ These are placeholders: there are no builds yet. Also update the three `href`s i
 The script picks the visitor's OS (Windows, macOS, Linux; the Steam Deck counts as Linux) and puts that OS's icon and link on the button. It then reads that OS's update feed (`/updates/launcher/latest.yml`, `latest-mac.yml`, `latest-linux.yml`; `FEEDS` in `script.js`), points the button at the installer the feed names and writes the version and size under it (the Windows feed gives no size, so the script asks the server with a HEAD request). This needs `connect-src 'self'` in the CSP. If the feed can't be read, the button keeps the stable `/downloads/` link and the line stays empty. Phones, tablets (iPad included), ChromeOS and anything unrecognised get a neutral download icon that opens the list of all three. `window.BrawlOnline.detectOS({ ua, platform, touchPoints, uaData })` is exposed for testing the detection with any user agent.
 
 The launcher's own update feed (electron-updater, `generic` provider) is `https://brawlonline.net/updates/launcher` (`launcher/src/common/product.ts`). The download links can point at the installers there once releases are published, or at a stable copy under `/downloads/`.
+
+## The ruleset page (`/r/<code>`)
+
+A published ruleset's share link (`docs/rulesets-protocol.md` §4). nginx serves `r/index.html` for every `/r/<code>` (`location /r/` in `server/deploy/sarahvps2/brawl-online.conf`; `handle /r/*` in the Caddyfile). `r/ruleset.js` reads the code from the address (also `/r/?<code>` and `/r/#<code>`, for a plain static server), fetches `GET /v1/rulesets/<code>` from the accounts API (same origin, so `connect-src 'self'` covers it) and shows the name, version, publisher, a "newer version" link, the set format, every rule and the stage lists. Everything from the server goes in as text, never HTML. **Create room with this ruleset** opens `brawlonline://room/create?ruleset=<code>`, which the launcher registers; if the page keeps focus after the click (nothing took the link), the "Don't have the launcher? Download" line is highlighted. The stage names are a copy of the launcher's (`launcher/src/common/rulesets.ts`).
+
+Preview it with the accounts API behind the same origin (a plain `python -m http.server` has no `/v1/`): open `/r/?<code>` against any server that proxies `/v1/` to accounts.
 
 ## Deploying
 

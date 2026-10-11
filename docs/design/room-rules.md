@@ -1,4 +1,4 @@
-# Room rules, published rulesets and sets (design, nothing built)
+# Room rules, published rulesets and sets (design; phases 1 and 3a built, §8)
 
 _2026-10-11. The user's decisions, plus defaults chosen without asking (marked **default**); the user agreed with every default in §1 and §2 the same day. Builds on `rooms.md` (rooms, host, ready, start) and replaces its "Rules: P+ competitive" default for rooms. Direct, Unranked and Ranked keep today's fixed rules (`game-code.md` §6, Settings on the online CSS)._
 
@@ -120,6 +120,12 @@ Details, addresses and screenshots: `game-code.md` §14, "Room rules RE". Nothin
 
 1. The rules record in SESSION, `applyRules` from it, its hash in the setup key. **Done 2026-10-11:** `get-ticket-resp.rules` (`common::rules::MatchRules`, per mode in `rulesets.json`), Dolphin `Online/MatchRules`, PPOM v6 SESSION `Rules`, `applyRules` (the set rule as the rules menu keeps it: style, stocks, damage, time limit at +8 for every style, team attack, pause normal / hold, auto L-cancel +0xB, input assist +0xC; items; hazards), and the setup key compares the applied set rule, hazard bit, item switch and Code Menu values (rather than a hash of the record). Not yet: `target`, handicap (decision 19).
 2. Host-edited room rules: server room state, the RULES button and screens, the status line.
-3. Rulesets: accounts storage, codes, the launcher page and box, the remembered ruleset, the in-game Ruleset line, the URL scheme and `/r/<code>`.
+3. Rulesets: accounts storage, codes, the launcher page and box, the remembered ruleset, the in-game Ruleset line, the URL scheme and `/r/<code>`. **3a done 2026-10-11** (everything but the game and mm; format, API and links in `docs/rulesets-protocol.md`):
+   - `common::rules::Ruleset` (§4's fields, serde camelCase like `MatchRules`), `normalize()` (clears what the set format leaves unused, so rulesets that play the same hash the same), `validate()`, `hash()` = SHA-256 of the canonical JSON (every field but `by`, keys sorted; pinned in a test), codes (6 letters, `parse_ruleset_code`).
+   - Decided with the user the same day: **starters and counterpicks are separate lists** (games 2+ pick from both; no stage in both), the **recent list** is the rulesets made the remembered one (newest 10), **publishing needs an account that can play online** (verified email, a connect code) and is limited to 10 an hour / 30 a day, and `/r/<code>` is a **static website page** reading the API.
+   - accounts: migration `0008_rulesets.sql` (published versions can't change or be deleted, a trigger enforces it; a deleted publisher's rulesets stay with their name), drafts, the remembered ruleset, the recent list, mm's grants; the API (§6's endpoints and drafts CRUD, hide). `common::db` has what mm needs (fetch by code, remembered get/set, recent).
+   - Launcher: the Rulesets page (drafts, every field, publish with the code and link, hide, edit as a new version, import / export files), the code box next to Create room (the remembered ruleset; X = P+ default), `join-room.json` create's `ruleset`, the `brawlonline://room/create?ruleset=<code>` scheme on Windows, macOS and Linux.
+   - Website: `/r/<code>` with "Create room with this ruleset" and the download link; nginx and Caddy route `/r/*` to it.
+   - Not yet (the room-rules session: mm, Dolphin, the game): rooms created with a ruleset, the in-game Ruleset line and Enter code, "Custom (based on ...)", ruleset info in `/v1/rooms`.
 4. Sets: GameSetup driven by the ruleset, 1v1 then 2v2; the paused set.
 5. The ruleset code, hash and set score in results and replays.
