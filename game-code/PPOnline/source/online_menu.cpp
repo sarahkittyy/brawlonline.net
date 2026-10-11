@@ -504,6 +504,26 @@ namespace OnlineMenu {
         return p >= 0 && p == PPOM::g_block.local.localPort;
     }
 
+    // Another player picks the next game's stage and is on its stage select now (Direct and the
+    // rooms): connected, this player locked in for the game, every other player too (the
+    // picker's stage select opens on its LOCAL.remoteReady, which is the same "all locked in"),
+    // and the setup not decided yet (the host waits for the pick). The picker's port, else -1;
+    // the others' line reads "P<n> choosing stage...". Of several pickers (a 1v1 draw) the
+    // lowest port picks, as stagePicker.
+    static int otherPickerChoosing(bool room)
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        const PPOM::Local& lo = PPOM::g_block.local;
+        if (!room && s.mode != PPOM::MODE_DIRECT && s.mode != PPOM::MODE_TEAMS) return -1;
+        if (lo.state != PPOM::LS_CONNECTED || !lo.remoteReady || se.state != PPOM::SS_LOBBY ||
+            !se.game || s.lockedGame != se.game)
+            return -1;
+        for (int i = 0; i < PPOM::SESSION_PLAYERS; i++) {
+            if (se.players[i].picksStage) return i == lo.localPort ? -1 : i;
+        }
+        return -1;
+    }
+
     static bool lockedForNext()
     {
         int g = sessionGame();
@@ -798,8 +818,12 @@ namespace OnlineMenu {
             // the stage, so the others wait on the opponent until that pick.
             if (lockedForNext()) {
                 const PPOM::Session& se = PPOM::g_block.session;
+                int picker = otherPickerChoosing(false);
                 if (se.state == PPOM::SS_MATCH_READY && se.game == s.lockedGame) {
                     sprintf(buf, "Playing: %s", s.peerName);
+                    setStatus(buf, false);
+                } else if (picker >= 0) {
+                    sprintf(buf, "P%d choosing stage...", picker + 1);
                     setStatus(buf, false);
                 } else {
                     setStatus("Waiting on opponent", false);
@@ -1781,6 +1805,15 @@ namespace OnlineMenu {
         if (roomIn() && se.roomStatus == 0 && roomPicksStage() && !roomLockedForNext() && lockChar() >= 0 &&
             !s.roomError && roomFull()) {
             setStatus("Press START to select stage", false);   // Direct's (rooms.md §3)
+            return;
+        }
+        // In the room's game session, before its match: the picker on the stage select (the
+        // server's line says "In game" for the whole session).
+        int picker = s.roomError ? -1 : otherPickerChoosing(true);
+        if (picker >= 0) {
+            char buf[32];
+            sprintf(buf, "P%d choosing stage...", picker + 1);
+            setStatus(buf, false);
             return;
         }
         if (s.roomText[0] && (roomActive() || s.roomError)) {

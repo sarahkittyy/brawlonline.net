@@ -63,6 +63,7 @@ Defaults: "online" counts players whose game is running and logged in (Dolphin k
 | Everyone present, some not ready | "Waiting on: BO, CY" |
 | Teams all one color | "Pick different teams" |
 | Your stage pick | "Press START to select stage" (Direct's) |
+| Another player on the stage select (the room's game started, everyone locked in) | "P2 choosing stage..." (the picker's slot; also in Direct) |
 | Joined during a game | "Waiting for the game to end" |
 | Joining | "Joining room KFQB" > "Connecting to room KFQB" |
 

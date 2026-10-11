@@ -231,6 +231,7 @@ def test_room_two_players_through_the_game(backend: OnlineBackend, dolphin: Call
     _wait(lambda: loser.scene() == "scSelStage", 60, "the loser on the stage select")
     loser.steps("wait 40")
     loser.shot("06a-stage-select")
+    winner.shot("06a-other-picks-the-stage")   # the line: "P<n> choosing stage..."
     # The room has started (everyone ready): it can no longer be unreadied, so B does not leave
     # the stage select (it once left it unlocked, and the room never took START again).
     loser.steps("tap B 8", "wait 60")
