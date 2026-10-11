@@ -8,7 +8,13 @@ import type {
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
+  MyRulesets,
+  PublishRulesetRequest,
+  RecentRuleset,
   RoomList,
+  RulesetDraft,
+  RulesetDraftRequest,
+  RulesetView,
   SignUpRequest,
 } from "./types";
 
@@ -71,6 +77,58 @@ export const ipc_accountsMatchHistory = makeEndpoint.main(
 );
 
 export const ipc_accountsRooms = makeEndpoint.main("accounts_rooms", <{ uid: string }>_, <R<RoomList>>_);
+
+export const ipc_accountsRuleset = makeEndpoint.main("accounts_ruleset", <{ code: string }>_, <R<RulesetView>>_);
+
+export const ipc_accountsMyRulesets = makeEndpoint.main("accounts_myRulesets", <{ uid: string }>_, <R<MyRulesets>>_);
+
+export const ipc_accountsRecentRulesets = makeEndpoint.main(
+  "accounts_recentRulesets",
+  <{ uid: string }>_,
+  <R<RecentRuleset[]>>_,
+);
+
+export const ipc_accountsPublishRuleset = makeEndpoint.main(
+  "accounts_publishRuleset",
+  <{ uid: string; req: PublishRulesetRequest }>_,
+  <R<RulesetView>>_,
+);
+
+export const ipc_accountsSetRulesetHidden = makeEndpoint.main(
+  "accounts_setRulesetHidden",
+  <{ uid: string; code: string; hidden: boolean }>_,
+  <R<null>>_,
+);
+
+export const ipc_accountsCreateRulesetDraft = makeEndpoint.main(
+  "accounts_createRulesetDraft",
+  <{ uid: string; req: RulesetDraftRequest }>_,
+  <R<RulesetDraft>>_,
+);
+
+export const ipc_accountsUpdateRulesetDraft = makeEndpoint.main(
+  "accounts_updateRulesetDraft",
+  <{ uid: string; id: string; req: RulesetDraftRequest }>_,
+  <R<RulesetDraft>>_,
+);
+
+export const ipc_accountsDeleteRulesetDraft = makeEndpoint.main(
+  "accounts_deleteRulesetDraft",
+  <{ uid: string; id: string }>_,
+  <R<null>>_,
+);
+
+export const ipc_accountsRememberedRuleset = makeEndpoint.main(
+  "accounts_rememberedRuleset",
+  <{ uid: string }>_,
+  <R<RulesetView | null>>_,
+);
+
+export const ipc_accountsSetRememberedRuleset = makeEndpoint.main(
+  "accounts_setRememberedRuleset",
+  <{ uid: string; code: string | null }>_,
+  <R<RulesetView | null>>_,
+);
 
 export const ipc_accountsServiceUrls = makeEndpoint.main(
   "accounts_serviceUrls",

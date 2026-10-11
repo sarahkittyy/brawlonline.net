@@ -1,6 +1,7 @@
 import HomeOutlinedIcon from "@mui/icons-material/HomeOutlined";
 import LeaderboardOutlinedIcon from "@mui/icons-material/LeaderboardOutlined";
 import PersonOutlineIcon from "@mui/icons-material/PersonOutline";
+import RuleOutlinedIcon from "@mui/icons-material/RuleOutlined";
 import SlowMotionVideoIcon from "@mui/icons-material/SlowMotionVideo";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import React from "react";
@@ -10,6 +11,7 @@ import { useAppStore } from "@/lib/hooks/use_app_store";
 import { useLastPageTracker } from "@/lib/hooks/use_last_page";
 import { usePageRequestListeners } from "@/lib/hooks/use_page_request_listeners";
 import { usePageNavigationShortcuts } from "@/lib/hooks/use_shortcuts";
+import { useBrawlLinks } from "@/lib/rulesets/use_brawl_links";
 import { HomePage } from "@/pages/home/home_page";
 import { LeaderboardPage } from "@/pages/leaderboard/leaderboard_page";
 import { NotFoundPage } from "@/pages/not_found/not_found_page";
@@ -17,6 +19,7 @@ import { ProfilePage } from "@/pages/profile/profile_page";
 import { createQuickStartPage } from "@/pages/quick_start/create";
 import { useQuickStartStore } from "@/pages/quick_start/use_quick_start";
 import { createReplaysPage } from "@/pages/replays/create";
+import { RulesetsPage } from "@/pages/rulesets/rulesets_page";
 import { createSettingsPage } from "@/pages/settings/create";
 import { createServiceProvider } from "@/services";
 import type { Services } from "@/services/types";
@@ -53,6 +56,12 @@ export function createApp({ services }: { services: Services }): {
       Icon: LeaderboardOutlinedIcon,
     },
     {
+      subpath: "rulesets",
+      title: () => Messages.rulesets(),
+      Component: RulesetsPage,
+      Icon: RuleOutlinedIcon,
+    },
+    {
       subpath: "profile",
       title: () => Messages.profile(),
       Component: ProfilePage,
@@ -65,6 +74,8 @@ export function createApp({ services }: { services: Services }): {
 
   const MainAppPage = React.memo(() => {
     usePageNavigationShortcuts(navigationPaths);
+    // `brawlonline://room/create?ruleset=...` links (the website's /r/<code> pages).
+    useBrawlLinks();
 
     return <AppImpl menuItems={menuItems} />;
   });

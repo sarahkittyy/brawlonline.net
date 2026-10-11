@@ -38,6 +38,12 @@ export const BASE_DOMAIN = "brawlonline.net";
  */
 export const APP_ID = "net.brawlonline.launcher";
 
+/**
+ * The launcher's URL scheme (electron-builder.json `protocols`): `brawlonline://room/create?ruleset=<code>`
+ * links from the website's `/r/<code>` pages (src/common/brawl_link.ts, docs/rulesets-protocol.md §4).
+ */
+export const URL_SCHEME = "brawlonline";
+
 export const defaultServiceUrls = {
   /** HTTP accounts API (server/crates/accounts), served under /v1 on the apex domain. */
   accountsApi: `https://${BASE_DOMAIN}`,

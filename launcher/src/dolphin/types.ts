@@ -147,10 +147,13 @@ export interface DolphinService {
   removePlayKeyFile(): Promise<void>;
   viewSlpReplay(files: ReplayQueueItem[]): Promise<void>;
   launchNetplayDolphin(): Promise<void>;
-  /** Hands a room code to the running game; `not-running` when no netplay Dolphin is open. */
-  joinRoomInGame(code: string): Promise<RoomHandOffResult>;
-  /** Leaves a room request for the game that Play is about to start. */
-  prepareRoomLaunch(code: string): Promise<{ id: string }>;
+  /**
+   * Hands a room code to the running game; `not-running` when no netplay Dolphin is open. `ruleset`:
+   * a create request's ruleset code.
+   */
+  joinRoomInGame(code: string, ruleset?: string): Promise<RoomHandOffResult>;
+  /** Leaves a room request (a create with its ruleset code, if any) for the game that Play is about to start. */
+  prepareRoomLaunch(code: string, ruleset?: string): Promise<{ id: string }>;
   /** Takes a prepared room request back. */
   cancelRoomLaunch(id: string): Promise<void>;
   fetchGeckoCodes(dolphinLaunchType: DolphinLaunchType): Promise<GeckoCode[]>;

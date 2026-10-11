@@ -1,6 +1,8 @@
+import type { BrawlLink } from "@common/brawl_link";
 import { ipcRenderer } from "electron";
 
 import {
+  ipc_brawlLinkEvent,
   ipc_checkForUpdate,
   ipc_checkValidIso,
   ipc_clearTempFolder,
@@ -15,6 +17,7 @@ import {
   ipc_requiredLauncherUpdate,
   ipc_runNetworkDiagnostics,
   ipc_showOpenDialog,
+  ipc_takeBrawlLinks,
 } from "./ipc";
 
 export default {
@@ -79,6 +82,18 @@ export default {
   },
   onAppUpdateReady(handle: () => void) {
     const { destroy } = ipc_launcherUpdateReadyEvent.renderer!.handle(async () => {
+      handle();
+    });
+    return destroy;
+  },
+  /** The `brawlonline://` links that arrived since the last call (each is handed out once). */
+  async takeBrawlLinks(): Promise<BrawlLink[]> {
+    const { result } = await ipc_takeBrawlLinks.renderer!.trigger({});
+    return result.links;
+  },
+  /** A `brawlonline://` link arrived: take it with `takeBrawlLinks`. */
+  onBrawlLink(handle: () => void) {
+    const { destroy } = ipc_brawlLinkEvent.renderer!.handle(async () => {
       handle();
     });
     return destroy;

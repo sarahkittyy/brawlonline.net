@@ -120,7 +120,7 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     return { success: true };
   });
 
-  ipc_joinRoomInGame.main!.handle(async ({ code }) => {
+  ipc_joinRoomInGame.main!.handle(async ({ code, ruleset }) => {
     if (!isHandOffCode(code)) {
       throw new Error(`Not a room or connect code: ${code}`);
     }
@@ -129,16 +129,16 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     }
     const onlineDir = dolphinManager.netplayOnlineDir();
     await mkdir(onlineDir, { recursive: true });
-    const result = await handOffRoom(onlineDir, code);
-    log.info(`Room ${code} handed to the running game: ${result.outcome}`);
+    const result = await handOffRoom(onlineDir, code, { ruleset });
+    log.info(`Room ${code}${ruleset ? ` (ruleset ${ruleset})` : ""} handed to the running game: ${result.outcome}`);
     return result;
   });
 
-  ipc_prepareRoomLaunch.main!.handle(async ({ code }) => {
+  ipc_prepareRoomLaunch.main!.handle(async ({ code, ruleset }) => {
     const onlineDir = dolphinManager.netplayOnlineDir();
     await mkdir(onlineDir, { recursive: true });
-    const req = await writeRoomRequest(onlineDir, code);
-    log.info(`Room ${code} requested for the game about to start (${req.id})`);
+    const req = await writeRoomRequest(onlineDir, code, new Date(), ruleset);
+    log.info(`Room ${code}${ruleset ? ` (ruleset ${ruleset})` : ""} requested for the game about to start (${req.id})`);
     return { id: req.id };
   });
 

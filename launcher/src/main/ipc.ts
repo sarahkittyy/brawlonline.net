@@ -1,3 +1,4 @@
+import type { BrawlLink } from "@common/brawl_link";
 import type { IsoValidity, NatType, PortMapping, Presence } from "@common/types";
 import type { EmptyPayload, SuccessPayload } from "utils/ipc";
 import { _, makeEndpoint } from "utils/ipc";
@@ -54,6 +55,12 @@ export const ipc_launcherUpdateDownloadingEvent = makeEndpoint.renderer(
   "launcherupdate_download",
   <{ progressPercent: number }>_,
 );
+
+/** The `brawlonline://` links that arrived (src/common/brawl_link.ts), each handed out once. */
+export const ipc_takeBrawlLinks = makeEndpoint.main("takeBrawlLinks", <EmptyPayload>_, <{ links: BrawlLink[] }>_);
+
+/** A `brawlonline://` link arrived: the renderer takes it with `takeBrawlLinks`. */
+export const ipc_brawlLinkEvent = makeEndpoint.renderer("brawlLink_arrived", <EmptyPayload>_);
 
 /** Bytes of the disc image hashed so far while `checkValidIso` verifies `path`. */
 export const ipc_isoVerificationProgressEvent = makeEndpoint.renderer(

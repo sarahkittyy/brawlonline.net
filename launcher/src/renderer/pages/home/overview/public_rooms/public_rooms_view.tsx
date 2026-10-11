@@ -34,6 +34,8 @@ export type PublicRoomsViewProps = {
   onCreate?: () => void;
   /** A create is being handed to the game. */
   creating?: boolean;
+  /** Shown left of Create room: the ruleset box (ruleset_box.tsx). */
+  rulesetBox?: React.ReactNode;
   /** Stories and screenshots: show this row as hovered or pressed. */
   forceRowState?: { code: string; state: "hover" | "pressed" };
 };
@@ -51,6 +53,7 @@ export const PublicRoomsView = ({
   onLogIn,
   onCreate,
   creating = false,
+  rulesetBox,
   forceRowState,
 }: PublicRoomsViewProps) => {
   const online =
@@ -68,23 +71,26 @@ export const PublicRoomsView = ({
         title={Messages.publicRooms()}
         titleAction={
           onCreate && state.kind !== "logged-out" ? (
-            <Tooltip title={Messages.createRoomTooltip()} placement="top" enterDelay={400} disableInteractive={true}>
-              <span>
-                <Button
-                  variant="contained"
-                  color="secondary"
-                  size="small"
-                  disableElevation={true}
-                  disabled={creating || joiningCode != null}
-                  startIcon={creating ? <CircularProgress color="inherit" size={14} /> : <AddRoundedIcon />}
-                  onClick={onCreate}
-                  data-testid="create-room"
-                  sx={{ textTransform: "none", fontWeight: 600, borderRadius: "8px", px: 1.5 }}
-                >
-                  {Messages.createRoom()}
-                </Button>
-              </span>
-            </Tooltip>
+            <div className={styles.titleActions}>
+              {rulesetBox}
+              <Tooltip title={Messages.createRoomTooltip()} placement="top" enterDelay={400} disableInteractive={true}>
+                <span>
+                  <Button
+                    variant="contained"
+                    color="secondary"
+                    size="small"
+                    disableElevation={true}
+                    disabled={creating || joiningCode != null}
+                    startIcon={creating ? <CircularProgress color="inherit" size={14} /> : <AddRoundedIcon />}
+                    onClick={onCreate}
+                    data-testid="create-room"
+                    sx={{ textTransform: "none", fontWeight: 600, borderRadius: "8px", px: 1.5 }}
+                  >
+                    {Messages.createRoom()}
+                  </Button>
+                </span>
+              </Tooltip>
+            </div>
           ) : undefined
         }
         endIcon={online}
