@@ -1,6 +1,6 @@
 # brawlonline.net
 
-The landing page for Brawl Online. It is a static site with no build step, no analytics, no cookies and no external requests (a Content-Security-Policy meta tag in `index.html` enforces `'self'` only). The page shows a logo with the tagline "rollback + matchmaking for pm" under its bottom right corner, one download button for the visitor's OS, a tiny "download for other operating systems" toggle, and a dim looping gameplay video behind them. The logo and the button sit together in the middle of the screen, both on green menu-button frames in the style of Project M's menus. There is no other text, by design (the tagline is `.tagline` in `index.html` and `style.css`).
+The landing page for Brawl Online. It is a static site with no build step, no analytics, no cookies and no external requests (a Content-Security-Policy meta tag in `index.html` enforces `'self'` only). The page shows a logo with the tagline "rollback + matchmaking for pm" under its bottom right corner, four short feature lines (`.features`), one download button for the visitor's OS ("Download for Windows", with the version and size under it), a tiny "download for other operating systems" toggle, and a dim looping gameplay video behind them. The logo and the button sit on green menu-button frames in the style of Project M's menus. A "FAQ" link at the top left opens a `<dialog>` (`#faq` in `index.html`; `/#faq` opens it too, and without JavaScript it shows through `:target`), and a GitHub icon sits at the bottom right. Keep all text short.
 
 | File | What it is |
 | --- | --- |
@@ -70,7 +70,7 @@ const DOWNLOADS = {
 
 These are placeholders: there are no builds yet. Also update the three `href`s in the `<ul id="other">` list in `index.html`, which are the fallback for visitors without JavaScript.
 
-The script picks the visitor's OS (Windows, macOS, Linux; the Steam Deck counts as Linux) and puts that OS's icon and link on the button. Phones, tablets (iPad included), ChromeOS and anything unrecognised get a neutral download icon that opens the list of all three. `window.BrawlOnline.detectOS({ ua, platform, touchPoints, uaData })` is exposed for testing the detection with any user agent.
+The script picks the visitor's OS (Windows, macOS, Linux; the Steam Deck counts as Linux) and puts that OS's icon and link on the button. It then reads that OS's update feed (`/updates/launcher/latest.yml`, `latest-mac.yml`, `latest-linux.yml`; `FEEDS` in `script.js`), points the button at the installer the feed names and writes the version and size under it (the Windows feed gives no size, so the script asks the server with a HEAD request). This needs `connect-src 'self'` in the CSP. If the feed can't be read, the button keeps the stable `/downloads/` link and the line stays empty. Phones, tablets (iPad included), ChromeOS and anything unrecognised get a neutral download icon that opens the list of all three. `window.BrawlOnline.detectOS({ ua, platform, touchPoints, uaData })` is exposed for testing the detection with any user agent.
 
 The launcher's own update feed (electron-updater, `generic` provider) is `https://brawlonline.net/updates/launcher` (`launcher/src/common/product.ts`). The download links can point at the installers there once releases are published, or at a stable copy under `/downloads/`.
 

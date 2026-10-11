@@ -3,11 +3,12 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; media-src 'self'; base-uri 'none'; form-action 'none'">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; font-src 'self'; img-src 'self' data:; media-src 'self'; connect-src 'self'; base-uri 'none'; form-action 'none'">
 <meta name="referrer" content="no-referrer">
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#08080b">
 <title>Brawl Online</title>
+<meta name="description" content="Play Project+ online with rollback netcode. Lobbies, matchmaking and direct connect for 2-4 players.">
 <link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
 <link rel="icon" href="assets/icon-512.png" type="image/png" sizes="512x512">
 <link rel="apple-touch-icon" href="assets/icon-180.png">
@@ -20,7 +21,7 @@
     (https://github.com/jpt/barlow), SIL Open Font License 1.1 (assets/fonts/OFL.txt).
   - Icons: Font Awesome Free 7.3.1 by @fontawesome (https://fontawesome.com), CC BY 4.0
     (https://creativecommons.org/licenses/by/4.0/). Copyright 2026 Fonticons, Inc.
-    Brand icons: windows, apple, linux. Solid icon: download. Unmodified paths.
+    Brand icons: windows, apple, linux, github. Solid icons: download, xmark. Unmodified paths.
   - Background video: our own recording (4 level-9 CPUs on Battlefield, Brawl Online build); see LICENSES.txt.
   - The green menu-button frames are drawn in CSS (style.css, ".plate"); no game textures are used.
   - Icon: a Smash Ball with a Wi-Fi symbol drawn in place of the Smash cross (tools/icon/make-icon.py).
@@ -33,6 +34,9 @@
   <source src="assets/bg.mp4" type="video/mp4">
 </video>
 
+<!-- Opens the FAQ dialog. Without JavaScript the link shows the dialog through :target (style.css). -->
+<a class="corner faq-open" id="faq-open" href="#faq">FAQ</a>
+
 <main>
   <div class="brand">
     <h1 class="logo plate">
@@ -43,11 +47,22 @@
     <p class="tagline">rollback + matchmaking for pm</p>
   </div>
 
+  <ul class="features">
+    <li>Dedicated launcher</li>
+    <li>Lobbies, matchmaking + direct connect</li>
+    <li>2&ndash;4 players: 1v1, teams, FFA</li>
+    <li>Built-in chat</li>
+  </ul>
+
   <div class="get">
-    <a class="dl plate" id="dl" href="#other" aria-label="Download">
+    <!-- The script puts the visitor's OS on the button ("Download for Windows") and its newest
+         installer from the update feed, and fills .dl-meta with the version and size. -->
+    <a class="dl plate" id="dl" href="#other">
       <!-- Font Awesome Free 7.3.1 "download" (solid), CC BY 4.0, https://fontawesome.com -->
       <svg viewBox="0 0 448 512" aria-hidden="true"><path fill="currentColor" d="M256 32c0-17.7-14.3-32-32-32s-32 14.3-32 32l0 210.7-41.4-41.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3l96 96c12.5 12.5 32.8 12.5 45.3 0l96-96c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L256 242.7 256 32zM64 320c-35.3 0-64 28.7-64 64l0 32c0 35.3 28.7 64 64 64l320 0c35.3 0 64-28.7 64-64l0-32c0-35.3-28.7-64-64-64l-46.9 0-56.6 56.6c-31.2 31.2-81.9 31.2-113.1 0L110.9 320 64 320zm304 56a24 24 0 1 1 0 48 24 24 0 1 1 0-48z"/></svg>
+      <span class="dl-label">Download</span>
     </a>
+    <p class="dl-meta" id="dl-meta" aria-live="polite"></p>
 
     <details class="more" id="more">
       <summary>download for other operating systems</summary>
@@ -69,6 +84,38 @@
     </details>
   </div>
 </main>
+
+<!-- Source link, bottom right. -->
+<a class="corner gh" href="https://github.com/sarahkittyy/brawlonline.net" target="_blank" rel="noopener" aria-label="Source code on GitHub" title="Source code on GitHub">
+  <!-- Font Awesome Free 7.3.1 "github" (brands), CC BY 4.0, https://fontawesome.com -->
+  <svg viewBox="0 0 512 512" aria-hidden="true"><path fill="currentColor" d="M216.5 362.5c-66-8-112.5-55.5-112.5-117 0-25 9-52 24-70-6.5-16.5-5.5-51.5 2-66 20-2.5 47 8 63 22.5 19-6 39-9 63.5-9s44.5 3 62.5 8.5c15.5-14 43-24.5 63-22 7 13.5 8 48.5 1.5 65.5 16 19 24.5 44.5 24.5 70.5 0 61.5-46.5 108-113.5 116.5 17 11 28.5 35 28.5 62.5l0 52C323 491.5 335.5 500 350.5 494 441 459.5 512 369 512 257 512 115.5 397 0 255.5 0S0 115.5 0 257c0 111 70.5 203 165.5 237.5 13.5 5 26.5-4 26.5-17.5l0-40c-7 3-16 5-24 5-33 0-52.5-18-66.5-51.5-5.5-13.5-11.5-21.5-23-23-6-.5-8-3-8-6 0-6 10-10.5 20-10.5 14.5 0 27 9 40 27.5 10 14.5 20.5 21 33 21s20.5-4.5 32-16c8.5-8.5 15-16 21-21z"/></svg>
+</a>
+
+<dialog class="faq" id="faq" aria-labelledby="faq-title">
+  <div class="faq-head">
+    <h2 id="faq-title">FAQ</h2>
+    <a class="faq-close" id="faq-close" href="#" aria-label="Close">
+      <!-- Font Awesome Free 7.3.1 "xmark" (solid), CC BY 4.0, https://fontawesome.com -->
+      <svg viewBox="0 0 384 512" aria-hidden="true"><path fill="currentColor" d="M55.1 73.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L147.2 256 9.9 393.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192.5 301.3 329.9 438.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.8 256 375.1 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192.5 210.7 55.1 73.4z"/></svg>
+    </a>
+  </div>
+  <dl>
+    <dt>What is this?</dt>
+    <dd>An app for playing Project+ online, with rollback netcode. It sets everything up for you. You just need your own Brawl ISO.</dd>
+
+    <dt>Is this Brawlback?</dt>
+    <dd>No. It's built on Brawlback's rollback code, with a launcher, lobbies, matchmaking and more added on top.</dd>
+
+    <dt>Is this yougame.co?</dt>
+    <dd>No. We're a separate project.</dd>
+
+    <dt>Is this free?</dt>
+    <dd>Yes.</dd>
+
+    <dt>Who can I ask for help?</dt>
+    <dd>Add <strong>sarahkittyy</strong> on Discord.</dd>
+  </dl>
+</dialog>
 
 </body>
 </html>
