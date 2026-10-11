@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { inviteBlocked } from "@/lib/social/use_social";
+import { arrivedRoom, inviteBlocked, waitsForRoom } from "@/lib/social/use_social";
 import { volumeOf } from "@/lib/social/volume";
 
 import { deleteWordBefore } from "./chat_dock";
@@ -27,5 +27,26 @@ describe("chat box", () => {
     expect(volumeOf(-3)).toBe(0);
     expect(volumeOf(undefined)).toBe(0.15);
     expect(volumeOf("loud")).toBe(0.15);
+  });
+
+  it("invites wait for a room the player asked for until a new room shows up", () => {
+    const room = (code: string) => ({
+      code,
+      players: 1,
+      openSlots: 2,
+      mode: "1v1" as const,
+      status: "waiting" as const,
+      joinable: true,
+    });
+    const fresh = { since: 0, fromCode: null, invites: [] };
+    expect(waitsForRoom(null, null)).toBe(false);
+    expect(waitsForRoom(fresh, null)).toBe(true);
+    expect(arrivedRoom(fresh, room("KFQB"))?.code).toBe("KFQB");
+    expect(waitsForRoom(fresh, room("KFQB"))).toBe(false);
+    // Created from inside a room: the old room doesn't count, the new one does.
+    const fromRoom = { since: 0, fromCode: "BCDF", invites: [] };
+    expect(waitsForRoom(fromRoom, room("BCDF"))).toBe(true);
+    expect(waitsForRoom(fromRoom, null)).toBe(true);
+    expect(arrivedRoom(fromRoom, room("KFQB"))?.code).toBe("KFQB");
   });
 });

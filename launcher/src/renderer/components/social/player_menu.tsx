@@ -3,7 +3,7 @@ import Menu from "@mui/material/Menu";
 import MenuItem from "@mui/material/MenuItem";
 import type { SocialPlayer } from "@social/types";
 
-import { inviteBlocked, useSocial } from "@/lib/social/use_social";
+import { inviteBlocked, useSocial, waitsForRoom } from "@/lib/social/use_social";
 import { useSocialActions } from "@/lib/social/use_social_actions";
 
 import { SocialMessages as Messages } from "./social.messages";
@@ -21,10 +21,11 @@ export const PlayerMenu = ({
   showMessage?: boolean;
 }) => {
   const room = useSocial((s) => s.state.room);
+  const waiting = useSocial((s) => waitsForRoom(s.pendingRoom, s.state.room));
   const ignored = useSocial((s) => (target ? s.state.ignored.includes(target.player.uid) : false));
   const online = useSocial((s) => (target ? s.state.online.some((p) => p.uid === target.player.uid) : false));
   const { invite, setIgnored, message } = useSocialActions();
-  const blocked = inviteBlocked(room);
+  const blocked = waiting ? undefined : inviteBlocked(room);
   const player = target?.player;
 
   const act = (fn: (p: SocialPlayer) => unknown) => () => {
