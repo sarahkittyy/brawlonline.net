@@ -30,6 +30,9 @@ export const GAME_NAME = "Project+";
 
 export const BASE_DOMAIN = "brawlonline.net";
 
+/** The community Discord server, linked from the header and the website. */
+export const DISCORD_INVITE_URL = "https://discord.gg/BsR9xq5bgM";
+
 /**
  * The app id: electron-builder.json's appId (the macOS bundle id) and, on Windows, the
  * AppUserModelID. The NSIS installer gives the Start Menu shortcut this AppUserModelID, and

@@ -20,6 +20,10 @@ from BrawlCrate / BrawlLib (https://github.com/soopercool101/BrawlCrate,
 GPL-3.0). The BRFNT/RFNT layout follows the format documentation on the Custom
 Mario Kart Wiiki (wiki.tockdom.com).
 
+The Discord icon in the header is Font Awesome Free 7.3.1's "discord" brand icon
+(https://fontawesome.com), Copyright 2026 Fonticons, Inc., licensed under CC BY 4.0
+(https://creativecommons.org/licenses/by/4.0/). Discord's mark is Discord's.
+
 Project+ is made by the Project+ Development Team; Super Smash Bros. Brawl is
 Nintendo's. No game data is included in this program or its distributions: the
 launcher reads the user's own disc image and SD card at run time and caches what

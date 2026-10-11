@@ -395,7 +395,7 @@ summary:focus-visible {
   width: auto;
 }
 
-/* ---- Corner links: FAQ top left, GitHub bottom right ------------------------ */
+/* ---- Corner links: FAQ top left, Discord and GitHub bottom right ------------ */
 .corner {
   position: fixed;
   z-index: 3;
@@ -437,6 +437,19 @@ summary:focus-visible {
 
 .gh svg {
   width: 24px;
+  height: 24px;
+}
+
+/* Left of the GitHub icon: its 36px box plus an 8px gap. */
+.dc {
+  right: calc(max(16px, env(safe-area-inset-right)) + 44px);
+  bottom: max(16px, env(safe-area-inset-bottom));
+  padding: 6px;
+  line-height: 0;
+}
+
+.dc svg {
+  width: 27px;
   height: 24px;
 }
 

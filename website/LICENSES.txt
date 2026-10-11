@@ -14,9 +14,11 @@ Brawl Online website (brawlonline.net): third-party material and credits
    Icons licensed under Creative Commons Attribution 4.0 International (CC BY 4.0):
    https://creativecommons.org/licenses/by/4.0/
    Full Font Awesome Free licence: https://fontawesome.com/license/free
-   Used, as inline SVG with unmodified paths: "windows", "apple", "linux" (brands) and
-   "download" (solid). The brand icons stand for the operating systems only; the marks
-   belong to their owners (Microsoft, Apple, and Linus Torvalds for Linux/Tux).
+   Used, as inline SVG with unmodified paths: "windows", "apple", "linux", "github",
+   "discord" (brands) and "download", "xmark" (solid). The OS icons stand for the
+   operating systems only, and the GitHub and Discord icons link to our pages there;
+   the marks belong to their owners (Microsoft, Apple, Linus Torvalds for Linux/Tux,
+   GitHub and Discord).
 
 3. Background video (assets/bg.webm, assets/bg.mp4, assets/bg-poster.jpg)
    Our own recording, made for this site: four level 9 CPUs (Fox, Marth, Mario, Pikachu,
