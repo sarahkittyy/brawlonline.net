@@ -144,6 +144,56 @@ export const FONT_ROLES: FontRole[] = [
 ];
 
 // ---------------------------------------------------------------------------------------------------------------
+// Sound effects.
+//
+// Taken from the disc's sound archive (sound/smashbros_sound.brsar), by the archive's own symbol names. Project+
+// replaces whole sound groups with /Project+/pf/sfx/<group>.sawnd files on the SD card; an "sd" candidate reads the
+// sound out of that replacement and is skipped when P+ does not replace the sound's group. (P+ 3.x replaces group 0,
+// which holds the star KO sound, with identical audio, and does not replace Fox's group.) Entries were identified
+// with `cli.ts sounds` and the fighter's action scripts: FitFox.pac plays snd_se_fox_Special_L01 with the "sound
+// effect" event at the start of the down special and loops snd_se_fox_Special_L02 while the Reflector is held.
+
+export type SoundCandidate = {
+  origin: "disc" | "sd";
+  /** BRSAR symbol name of a wave sound. */
+  sound: string;
+};
+
+export type SoundRole = {
+  role: string;
+  description: string;
+  optional?: boolean;
+  candidates: SoundCandidate[];
+};
+
+/** The sound archive, relative to the disc's DATA/files (P+ keeps using the disc's). */
+export const BRSAR_FILE = "sound/smashbros_sound.brsar";
+
+function soundBoth(sound: string): SoundCandidate[] {
+  return [
+    { origin: "sd", sound },
+    { origin: "disc", sound },
+  ];
+}
+
+export const SOUND_ROLES: SoundRole[] = [
+  {
+    role: "chat-message",
+    description:
+      'Fox\'s Reflector ("shine") activation, snd_se_fox_Special_L01 in snd_group_chara_Fox (ADPCM 22050 Hz, about 2 s ' +
+      "with a long ring-out). Played for a new chat message.",
+    candidates: soundBoth("snd_se_fox_Special_L01"),
+  },
+  {
+    role: "invite",
+    description:
+      'Star KO twinkle ("hoshikie", star vanish), snd_se_common_Damage_hoshikie in snd_group_joucyu (ADPCM 22050 Hz, ' +
+      "about 1.1 s): the sparkle when a fighter flies into the background, not the voice. Played for an invite.",
+    candidates: soundBoth("snd_se_common_Damage_hoshikie"),
+  },
+];
+
+// ---------------------------------------------------------------------------------------------------------------
 // Stock icons.
 //
 // StockFaceTex.brres holds one TEX0 per character costume. The character number ("stock id") is the same on the disc

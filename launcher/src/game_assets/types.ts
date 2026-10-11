@@ -34,6 +34,12 @@ export type GameAssetManifest = {
   >;
   fonts: Record<string, { file: string; family: string; sheets: string[]; metrics: string; origin: string }>;
   stocks: Record<string, { file: string; origin: string }>;
+  /**
+   * Sound effects as 16-bit PCM WAVs, by role: "chat-message" (Fox's shine), "invite" (star KO twinkle). Play
+   * `${GAME_ASSET_BASE_URL}${sounds[role].file}`, e.g. game-asset://cache/sounds/chat-message.wav. Absent in caches
+   * extracted before sounds existed until the manager fills them in.
+   */
+  sounds?: Record<string, { file: string; origin: string; durationMs: number; sound?: string }>;
   missing: string[];
   warnings?: string[];
 };

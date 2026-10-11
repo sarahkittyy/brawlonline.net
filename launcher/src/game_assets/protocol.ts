@@ -9,7 +9,8 @@ export function registerGameAssetScheme() {
   protocol.registerSchemesAsPrivileged([
     {
       scheme: GAME_ASSET_SCHEME,
-      privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true },
+      // stream: <audio> elements play the extracted sound effects (sounds/*.wav) from this scheme.
+      privileges: { standard: true, secure: true, supportFetchAPI: true, corsEnabled: true, stream: true },
     },
   ]);
 }

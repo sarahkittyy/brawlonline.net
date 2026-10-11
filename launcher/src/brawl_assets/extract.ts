@@ -1,15 +1,16 @@
 // First-run extraction of the launcher theme assets from the user's own Brawl disc and Project+ SD card.
-// Writes PNGs, TrueType fonts, glyph sheets and a manifest.json into `cacheDir`. Nothing is bundled.
+// Writes PNGs, TrueType fonts, glyph sheets, WAV sound effects and a manifest.json into `cacheDir`. Nothing is bundled.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 import fs from "fs";
 import path from "path";
 
-import type { FontRole, Slice, TextureCandidate, TextureRole } from "./catalog";
+import type { FontRole, Slice, SoundRole, TextureCandidate, TextureRole } from "./catalog";
 import {
   FONT_ROLES,
   parseStockTextureName,
+  SOUND_ROLES,
   STOCK_CHARACTERS,
   STOCK_FILES,
   stockTextureName,
@@ -22,8 +23,10 @@ import type { FoundTexture } from "./formats/container";
 import { findTextures, walk } from "./formats/container";
 import { parseRfnt } from "./formats/rfnt";
 import { encodePng } from "./png";
+import { SoundLibrary } from "./sounds";
 import type { GameFileSource } from "./sources";
 import { DiscFolderSource, DiscIsoSource, SdSource } from "./sources";
+import { encodeWav } from "./wav";
 
 export type Origin = "disc" | "sd";
 
@@ -32,6 +35,7 @@ export type Origin = "disc" | "sd";
  *  textures: background, backgroundTile, button, buttonSelected, panel, cursor
  *  fonts:    menuFont, titleFont, smallFont
  *  stocks:   character keys from catalog.STOCK_CHARACTERS (e.g. "mario", "roy", "knuckles")
+ *  sounds:   chat-message, invite (sounds/<role>.wav, 16-bit PCM)
  * All paths are relative to the cache directory and use forward slashes.
  */
 export type AssetManifest = {
@@ -74,6 +78,21 @@ export type AssetManifest = {
     }
   >;
   stocks: Record<string, { file: string; origin: Origin; name: string; costumes?: string[] }>;
+  /** Absent in manifests written before sounds were extracted (extractMissingSounds fills it in). */
+  sounds?: Record<
+    string,
+    {
+      /** 16-bit PCM WAV. */
+      file: string;
+      origin: Origin;
+      durationMs: number;
+      /** BRSAR symbol name and sound id. */
+      sound: string;
+      soundId: number;
+      /** Where the audio came from: the BRSAR path, or the P+ .sawnd path. */
+      source: string;
+    }
+  >;
   missing: string[];
   warnings: string[];
 };
@@ -131,6 +150,13 @@ class ArchiveCache {
     const list = findTextures(buf);
     this.textures.set(key, list);
     return list;
+  }
+
+  private soundLibrary: SoundLibrary | null = null;
+
+  get sounds(): SoundLibrary {
+    this.soundLibrary ??= new SoundLibrary((origin, file) => this.read(origin, file));
+    return this.soundLibrary;
   }
 }
 
@@ -251,6 +277,57 @@ async function extractFontRole(role: FontRole, cache: ArchiveCache, cacheDir: st
   return false;
 }
 
+/** Writes sounds/<role>.wav from the first candidate found. Errors of one candidate become warnings. */
+async function extractSoundRole(role: SoundRole, cache: ArchiveCache, cacheDir: string, manifest: AssetManifest) {
+  for (const c of role.candidates) {
+    if (!cache.source(c.origin)) {
+      continue;
+    }
+    let loaded;
+    try {
+      loaded = await cache.sounds.load(c);
+    } catch (err: any) {
+      manifest.warnings.push(`sound ${role.role} (${c.origin}:${c.sound}): ${err?.message ?? err}`);
+      continue;
+    }
+    if (!loaded || loaded.decoded.channels.every((ch) => ch.length === 0)) {
+      continue;
+    }
+    const file = posix("sounds", `${role.role}.wav`);
+    await writeFile(cacheDir, file, encodeWav(loaded.decoded.sampleRate, loaded.decoded.channels));
+    (manifest.sounds ??= {})[role.role] = {
+      file,
+      origin: c.origin,
+      durationMs: loaded.durationMs,
+      sound: loaded.sound.name,
+      soundId: loaded.sound.id,
+      source: loaded.source,
+    };
+    return true;
+  }
+  return false;
+}
+
+async function extractSounds(
+  cache: ArchiveCache,
+  cacheDir: string,
+  manifest: AssetManifest,
+  step: (label: string) => void = () => undefined,
+) {
+  manifest.sounds ??= {};
+  for (const role of SOUND_ROLES) {
+    try {
+      if (!(await extractSoundRole(role, cache, cacheDir, manifest))) {
+        manifest.missing.push(`sound:${role.role}`);
+      }
+    } catch (err: any) {
+      manifest.missing.push(`sound:${role.role}`);
+      manifest.warnings.push(`sound ${role.role}: ${err?.message ?? err}`);
+    }
+    step(`sound ${role.role}`);
+  }
+}
+
 async function extractStocks(
   cache: ArchiveCache,
   cacheDir: string,
@@ -357,12 +434,13 @@ export async function runExtraction(
     textures: {},
     fonts: {},
     stocks: {},
+    sounds: {},
     missing: [],
     warnings: [],
   };
   await fs.promises.mkdir(opts.cacheDir, { recursive: true });
   const cache = new ArchiveCache(disc, sd);
-  const total = TEXTURE_ROLES.length + FONT_ROLES.length + STOCK_CHARACTERS.length + 1;
+  const total = TEXTURE_ROLES.length + FONT_ROLES.length + STOCK_CHARACTERS.length + SOUND_ROLES.length + 1;
   let done = 0;
   const step = (label: string) => opts.onProgress?.(++done, total, label);
   opts.onProgress?.(0, total, "starting");
@@ -395,6 +473,7 @@ export async function runExtraction(
     manifest.missing.push("stocks");
     manifest.warnings.push(`stocks: ${err?.message ?? err}`);
   }
+  await extractSounds(cache, opts.cacheDir, manifest, step);
   done = total - 1;
   await writeFile(opts.cacheDir, "manifest.json", JSON.stringify(manifest, null, 2));
   step("done");
@@ -409,4 +488,33 @@ export async function readManifest(cacheDir: string): Promise<AssetManifest | nu
   } catch {
     return null;
   }
+}
+
+/**
+ * Adds the sound effects to a cache extracted before the launcher had them (its manifest has no `sounds`), without
+ * extracting everything again. Returns the updated manifest, the unchanged one when it already has sounds, or null
+ * when there is no readable manifest in `cacheDir`.
+ */
+export async function extractMissingSounds(
+  opts: Pick<ExtractOptions, "disc" | "sdRawPath" | "cacheDir" | "tmpDir">,
+): Promise<AssetManifest | null> {
+  const manifest = await readManifest(opts.cacheDir);
+  if (!manifest || manifest.sounds) {
+    return manifest;
+  }
+  manifest.warnings ??= [];
+  manifest.missing ??= [];
+  const disc = await openDisc(opts.disc, opts.tmpDir);
+  let sd: GameFileSource | null = null;
+  try {
+    if (opts.sdRawPath) {
+      sd = await SdSource.open(opts.sdRawPath);
+    }
+    await extractSounds(new ArchiveCache(disc, sd), opts.cacheDir, manifest);
+  } finally {
+    await sd?.close();
+    await disc.close();
+  }
+  await writeFile(opts.cacheDir, "manifest.json", JSON.stringify(manifest, null, 2));
+  return manifest;
 }

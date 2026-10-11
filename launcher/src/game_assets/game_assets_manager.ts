@@ -19,6 +19,12 @@ export type ExtractOptions = {
 
 export type ExtractFn = (opts: ExtractOptions) => Promise<GameAssetManifest>;
 
+/**
+ * Adds what a cache made by an older launcher lacks (the sound effects) to the manifest in `cacheDir`, keeping the
+ * rest. Returns the updated manifest (null if there is none).
+ */
+export type FillMissingFn = (opts: Omit<ExtractOptions, "onProgress">) => Promise<GameAssetManifest | null>;
+
 /** Where the assets come from right now; null when no disc is set (fallback look). */
 export type SourceResolver = () => Promise<{ disc: DiscSource; sdRawPath?: string } | null>;
 
@@ -47,6 +53,7 @@ export class GameAssetsManager {
     readonly cacheDir: string,
     private readonly resolveSources: SourceResolver,
     private readonly extract: ExtractFn,
+    private readonly fillMissing?: FillMissingFn,
   ) {}
 
   getState(): GameAssetsState {
@@ -84,6 +91,9 @@ export class GameAssetsManager {
       const cached = await this._loadCached(stamp);
       if (cached) {
         this._setState({ status: GameAssetsStatus.READY, manifest: cached });
+        if (!cached.sounds && this.fillMissing) {
+          await this._fillMissing(sources);
+        }
         return this.state;
       }
     }
@@ -123,6 +133,25 @@ export class GameAssetsManager {
       this._setState({ status: GameAssetsStatus.ERROR, manifest: null, error: message });
     }
     return this.state;
+  }
+
+  /** Extracts the sound effects into a cache from before they existed, instead of extracting everything again. */
+  private async _fillMissing(sources: { disc: DiscSource; sdRawPath?: string }) {
+    try {
+      const manifest = await this.fillMissing!({
+        disc: sources.disc,
+        sdRawPath: sources.sdRawPath,
+        cacheDir: this.cacheDir,
+      });
+      if (manifest) {
+        if (manifest.missing.some((m) => m.startsWith("sound:"))) {
+          log.warn(`Sounds not found: ${manifest.missing.filter((m) => m.startsWith("sound:")).join(", ")}`);
+        }
+        this._setState({ status: GameAssetsStatus.READY, manifest });
+      }
+    } catch (err) {
+      log.warn(`Could not add the sound effects to the asset cache: ${err instanceof Error ? err.message : err}`);
+    }
   }
 
   private async _loadCached(stamp: SourceStamp): Promise<GameAssetManifest | null> {

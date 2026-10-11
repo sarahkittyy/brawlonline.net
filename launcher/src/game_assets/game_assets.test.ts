@@ -3,7 +3,7 @@ import os from "os";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import type { ExtractFn } from "./game_assets_manager";
+import type { ExtractFn, FillMissingFn } from "./game_assets_manager";
 import { GameAssetsManager } from "./game_assets_manager";
 import { resolveAssetPath } from "./protocol";
 import type { GameAssetManifest } from "./types";
@@ -85,5 +85,48 @@ describe("game assets", () => {
     expect(state.status).toBe(GameAssetsStatus.ERROR);
     expect(state.manifest).toBeNull();
     expect(state.error).toContain("DolphinTool");
+  });
+
+  it("adds the sounds to a cache from before they existed instead of extracting again", async () => {
+    const cacheDir = path.join(dir, "theme");
+    const resolve = async () => ({ disc: { kind: "folder" as const, path: dir } });
+    let extractions = 0;
+    const extract: ExtractFn = async (opts) => {
+      extractions += 1;
+      const m = manifest(opts.disc.path); // an older launcher's manifest: no sounds
+      await writeFile(path.join(opts.cacheDir, "manifest.json"), JSON.stringify(m));
+      return m;
+    };
+    await new GameAssetsManager(cacheDir, resolve, extract).refresh();
+    expect(extractions).toBe(1);
+
+    const fills: string[] = [];
+    const fill: FillMissingFn = async (opts) => {
+      fills.push(opts.cacheDir);
+      const m: GameAssetManifest = {
+        ...JSON.parse(await readFile(path.join(opts.cacheDir, "manifest.json"), "utf8")),
+        sounds: { invite: { file: "sounds/invite.wav", origin: "disc", durationMs: 1081 } },
+      };
+      await writeFile(path.join(opts.cacheDir, "manifest.json"), JSON.stringify(m));
+      return m;
+    };
+    const state = await new GameAssetsManager(cacheDir, resolve, extract, fill).refresh();
+    expect(state.status).toBe(GameAssetsStatus.READY);
+    expect(state.manifest?.sounds?.invite.file).toBe("sounds/invite.wav");
+    expect(extractions).toBe(1);
+    expect(fills).toEqual([cacheDir]);
+
+    // Filled once: the next start loads the cache as it is.
+    const next = await new GameAssetsManager(cacheDir, resolve, extract, fill).refresh();
+    expect(next.manifest?.sounds?.invite.durationMs).toBe(1081);
+    expect(fills).toHaveLength(1);
+
+    // A failing fill keeps the cached look.
+    await writeFile(path.join(cacheDir, "manifest.json"), JSON.stringify(manifest(dir)));
+    const failing = await new GameAssetsManager(cacheDir, resolve, extract, async () => {
+      throw new Error("no DolphinTool");
+    }).refresh();
+    expect(failing.status).toBe(GameAssetsStatus.READY);
+    expect(failing.manifest?.sources.disc).toBe(dir);
   });
 });

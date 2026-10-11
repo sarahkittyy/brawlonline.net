@@ -7,7 +7,7 @@ import electronLog from "electron-log";
 import { existsSync } from "fs";
 import path from "path";
 
-import { extractGameAssets } from "./extractor";
+import { extractGameAssets, fillMissingGameAssets } from "./extractor";
 import type { DiscSource } from "./game_assets_manager";
 import { GameAssetsManager } from "./game_assets_manager";
 import { ipc_extractGameAssets, ipc_gameAssetsStateChangedEvent, ipc_getGameAssetsState } from "./ipc";
@@ -109,6 +109,7 @@ export default function setupGameAssetsIpc({
       return { disc, sdRawPath: sdCardSeen ? sdRawPath : undefined };
     },
     extractGameAssets,
+    fillMissingGameAssets,
   );
 
   manager.onStateChange((state) => {

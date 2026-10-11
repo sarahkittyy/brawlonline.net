@@ -8,7 +8,7 @@ This is a fork of the [Slippi Launcher](https://github.com/project-slippi/slippi
 
 ## Game assets are never bundled
 
-The launcher's look comes from the user's own copy of Super Smash Bros. Brawl and Project+ SD card. At first run, after a disc is chosen, it extracts menu frames, fonts and stock icons into a local cache (`src/brawl_assets`, `src/game_assets`). Until then it shows a plain, unstyled fallback. Nothing from the game is committed or distributed; `.asset-cache/` is gitignored.
+The launcher's look comes from the user's own copy of Super Smash Bros. Brawl and Project+ SD card. At first run, after a disc is chosen, it extracts menu frames, fonts, stock icons and two sound effects into a local cache (`src/brawl_assets`, `src/game_assets`). Until then it shows a plain, unstyled fallback. Nothing from the game is committed or distributed; `.asset-cache/` is gitignored.
 
 ## Development
 
