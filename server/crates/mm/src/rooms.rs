@@ -248,6 +248,20 @@ pub struct TicketOutcome {
     pub replaced: Option<ConnId>,
     /// Every member's ticket is in: answer each of these connections with its response.
     pub matched: Vec<(ConnId, GetTicketResp)>,
+    /// Every member's ticket is in: the game to record in `mm_matches` (match history).
+    pub record: Option<RoomRecord>,
+}
+
+/// A room's game as `mm_matches` records it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RoomRecord {
+    pub match_id: String,
+    /// In slot order.
+    pub players: Vec<Uuid>,
+    /// The room's host (the session's decider).
+    pub host: Uuid,
+    pub stages: Vec<u16>,
+    pub room: common::db::MatchRoom,
 }
 
 pub struct RoomBook {
@@ -796,6 +810,24 @@ impl RoomBook {
             players = ?players.iter().map(|p| format!("{}@{}", p.connect_code, p.ip_address)).collect::<Vec<_>>(),
             "room matched"
         );
+        let mode = room.mode();
+        outcome.record = Some(RoomRecord {
+            match_id: match_id.clone(),
+            players: room.members().map(|(_, m)| m.info.uid).collect(),
+            host: room.slots[host].as_ref().map_or(Uuid::nil(), |m| m.info.uid),
+            stages: self.cfg.rules.stages.clone(),
+            room: common::db::MatchRoom {
+                code: code.to_string(),
+                mode: match mode {
+                    RoomMode::OneVsOne => "1v1",
+                    RoomMode::Ffa => "ffa",
+                    RoomMode::Teams => "teams",
+                }
+                .into(),
+                ports: room.members().map(|(i, _)| i as i16 + 1).collect(),
+                teams: (mode == RoomMode::Teams).then(|| room.members().map(|(_, m)| i16::from(m.team)).collect()),
+            },
+        });
         room.phase = Phase::InGame { since: Instant::now() };
         for m in room.slots.iter_mut().flatten() {
             m.in_game = true;
@@ -1114,9 +1146,19 @@ mod tests {
             .unwrap()
             .matched
             .is_empty());
-        assert!(t.book.ticket(102, addr(2), String::new(), info(2).uid, &code).unwrap().matched.is_empty());
+        let waiting = t.book.ticket(102, addr(2), String::new(), info(2).uid, &code).unwrap();
+        assert!(waiting.matched.is_empty() && waiting.record.is_none());
         let done = t.book.ticket(103, addr(3), String::new(), info(3).uid, &code).unwrap();
         assert_eq!(done.matched.len(), 3);
+        // Recorded for the match history: a free-for-all, players in slot order.
+        let rec = done.record.as_ref().expect("record");
+        assert_eq!(Some(&rec.match_id), done.matched[0].1.match_id.as_ref());
+        assert_eq!(rec.players, vec![info(1).uid, info(2).uid, info(3).uid]);
+        assert_eq!(rec.host, info(1).uid);
+        assert_eq!(
+            rec.room,
+            common::db::MatchRoom { code: code.clone(), mode: "ffa".into(), ports: vec![1, 2, 3], teams: None }
+        );
         for (conn, resp) in &done.matched {
             let ps = resp.players.as_ref().unwrap();
             assert_eq!(ps.len(), 3);
@@ -1189,6 +1231,32 @@ mod tests {
         // 2v1 is fine.
         let out = t.req(3, RoomRequest::Team { team: 0 });
         assert!(msgs(&out, 1).iter().any(|m| m["type"] == "room-start"));
+        // The teams are recorded with the game.
+        let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
+        for c in 1..=2u8 {
+            t.book.ticket(100 + u64::from(c), addr(c), String::new(), info(c).uid, &code).unwrap();
+        }
+        let done = t.book.ticket(103, addr(3), String::new(), info(3).uid, &code).unwrap();
+        let room = done.record.expect("record").room;
+        assert_eq!((room.mode.as_str(), room.ports, room.teams), ("teams", vec![1, 2, 3], Some(vec![1, 1, 0])));
+    }
+
+    #[test]
+    fn two_player_rooms_record_a_1v1_on_their_slots() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        // Slots 1 and 3, Teams on: still a 1v1.
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
+        t.req(1, RoomRequest::Slot { slot: 2, open: false });
+        t.req(1, RoomRequest::Teams { on: true });
+        join(&mut t, 2, &code);
+        ready_all(&mut t, &[1, 2]);
+        let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
+        t.book.ticket(102, addr(2), String::new(), info(2).uid, &code).unwrap();
+        let done = t.book.ticket(101, addr(1), String::new(), info(1).uid, &code).unwrap();
+        let rec = done.record.expect("record");
+        assert_eq!(rec.players, vec![info(1).uid, info(2).uid]);
+        assert_eq!((rec.room.mode.as_str(), rec.room.ports, rec.room.teams), ("1v1", vec![1, 3], None));
     }
 
     #[test]

@@ -36,6 +36,9 @@ using Clock = std::chrono::steady_clock;
 // Matchmaking::Mode::Ranked (Slippi's mode numbers).
 constexpr int MODE_RANKED = 0;
 constexpr int MODE_DIRECT = 2;
+// A room's game is a Teams (mode 3) match (docs/rooms-protocol.md §3).
+constexpr int MODE_TEAMS = 3;
+constexpr int MAX_PLAYERS = Gprb::Session::MAX_LOBBY_PLAYERS;
 // Best of three.
 constexpr int WINS_NEEDED = 2;
 constexpr u8 DRAW = 0xFE;
@@ -73,9 +76,13 @@ bool s_stop = false;
 
 // The current ranked set.
 bool s_active = false;     // a ranked set is tracked
-bool s_reporting = false;  // the games of this 1v1 match are reported (every mode but Teams)
+// The games of this match are reported: a 1v1 of Ranked, Unranked or Direct, or a room's game.
+bool s_reporting = false;
+bool s_room = false;  // a room's game: 2-4 players, each on their slot
 std::string s_match_id;
-std::array<std::string, 2> s_uids;  // by in-game port: the host is 0, the joiner 1
+// By in-game port: a 1v1's host is 0, the joiner 1; a room's players are on their slots. Empty:
+// nobody on that port.
+std::array<std::string, MAX_PLAYERS> s_uids;
 int s_local_port = 0;
 std::array<int, 2> s_wins{};
 bool s_set_over = false;
@@ -333,17 +340,24 @@ void OnSessionStart(const Match& match)
   if (s_active && !s_set_over)
     WARN_LOG_FMT(NETPLAY, "Ranked: set {} replaced before it ended", s_match_id);
   s_active = ranked;
-  // Every online 1v1 game is reported (Slippi's reportOnlineGame), for the players' match
-  // history; only Ranked's are rated.
-  s_reporting = match.players.size() == 2 && match.mode >= MODE_RANKED && match.mode <= MODE_DIRECT;
+  // Every online 1v1 game and every room game is reported (Slippi's reportOnlineGame), for the
+  // players' match history; only Ranked's are rated. A room's game has every player's place.
+  s_room = match.mode == MODE_TEAMS && match.room_host_port >= 1 &&
+           match.room_host_port <= MAX_PLAYERS && match.players.size() >= 2 &&
+           match.players.size() <= MAX_PLAYERS;
+  s_reporting = s_room || (match.players.size() == 2 && match.mode >= MODE_RANKED &&
+                           match.mode <= MODE_DIRECT);
   if (!s_reporting)
     return;
   s_match_id = match.match_id;
   s_uids = {};
   for (const auto& p : match.players)
   {
-    // In-game ports: the decider (host) is port 0, as in the gameplay session.
-    const int port = p.is_local == match.is_host ? 0 : 1;
+    // In-game ports, as in the gameplay session: a room's slots, else the decider (host) is
+    // port 0.
+    const int port = s_room ? p.port - 1 : (p.is_local == match.is_host ? 0 : 1);
+    if (port < 0 || port >= MAX_PLAYERS)
+      continue;
     s_uids[port] = p.uid;
     if (p.is_local)
       s_local_port = port;
@@ -368,15 +382,36 @@ void OnGameResult(const Gprb::Session::GameResult& r)
   picojson::object body;
   body["matchId"] = picojson::value(s_match_id);
   body["gameIndex"] = picojson::value(static_cast<double>(r.game));
-  body["winner"] = r.winner < 2 ? picojson::value(s_uids[r.winner]) : picojson::value();
+  const size_t ports = s_room ? MAX_PLAYERS : 2;
+  body["winner"] = r.winner < ports && !s_uids[r.winner].empty() ? picojson::value(s_uids[r.winner]) :
+                                                                   picojson::value();
   if (r.stage != Gprb::Session::NO_STAGE)
     body["stageId"] = picojson::value(static_cast<double>(r.stage));
   body["durationFrames"] = picojson::value(static_cast<double>(r.frames));
   picojson::array players;
-  for (size_t i = 0; i < 2; ++i)
+  for (size_t i = 0; i < ports; ++i)
   {
+    if (s_uids[i].empty())
+      continue;
     picojson::object p;
     p["uid"] = picojson::value(s_uids[i]);
+    if (s_room)
+    {
+      // The history shows a room game's places (and teams), from what most players report.
+      p["port"] = picojson::value(static_cast<double>(i + 1));
+      if (!r.present[i])
+      {
+        // Left during the game: not placed.
+        p["left"] = picojson::value(true);
+        players.emplace_back(p);
+        continue;
+      }
+      // 3-4 players: the game's places; a 1v1 has none (the winner first, both after a draw).
+      const u8 place = r.place[i] ? r.place[i] : (r.winner == i || r.winner == DRAW ? 1 : 2);
+      p["place"] = picojson::value(static_cast<double>(place));
+      if (r.team[i] != Gprb::Session::NO_TEAM)
+        p["team"] = picojson::value(static_cast<double>(r.team[i]));
+    }
     p["characterId"] = picojson::value(static_cast<double>(r.char_kind[i]));
     p["stocksRemaining"] = picojson::value(static_cast<double>(r.stocks[i]));
     p["damage"] = picojson::value(std::isfinite(r.damage[i]) ? static_cast<double>(r.damage[i]) : 0.0);
@@ -464,6 +499,7 @@ picojson::object Status()
   picojson::object o;
   o["active"] = picojson::value(s_active);
   o["reporting"] = picojson::value(s_reporting);
+  o["room"] = picojson::value(s_room);
   o["match_id"] = picojson::value(s_match_id);
   o["wins"] = picojson::value(picojson::array{picojson::value(static_cast<double>(s_wins[0])),
                                               picojson::value(static_cast<double>(s_wins[1]))});

@@ -90,6 +90,71 @@ describe("MatchRow", () => {
     expect(cells[2]).toBe("annANN#1");
     expect(cells[4]).toBe("bobBOB#2");
   });
+
+  const roomPlayer = (uid: string, name: string, place: number | null, port: number, team: number | null = null) => ({
+    uid,
+    displayName: name,
+    connectCode: `${name.toUpperCase()}#${port}`,
+    wins: place === 1 ? 1 : 0,
+    ratingBefore: null,
+    ratingAfter: null,
+    ratingChange: null,
+    place,
+    port,
+    team,
+  });
+  const roomGame = (mode: "1v1" | "ffa" | "teams", players: MatchHistoryItem["players"]): MatchHistoryItem => ({
+    matchId: "mode.room-KFQB-1",
+    mode: "room",
+    createdAt: "2026-10-08T20:00:00Z",
+    status: "ASSIGNED",
+    ranked: false,
+    players,
+    winner: null,
+    endReason: null,
+    room: { code: "KFQB", mode },
+  });
+
+  it("shows a free-for-all with my place and everyone else's, best first", () => {
+    const ffa = roomGame("ffa", [
+      roomPlayer("b", "bob", 3, 1),
+      roomPlayer("me", "ann", 2, 2),
+      roomPlayer("c", "cy", 1, 3),
+      roomPlayer("d", "dee", null, 4),
+    ]);
+    const { container } = render(inTable(<MatchRow item={ffa} myUid="me" />));
+    const cells = Array.from(container.querySelectorAll("td")).map((td) => td.textContent);
+    expect(cells[0]).toBe("FFARoom KFQB");
+    expect(cells[2]).toBe("annANN#2");
+    expect(cells[3]).toBe("2nd");
+    expect(cells[4]).toBe("cyCY#31stbobBOB#13rddeeDEE#4");
+  });
+
+  it("shows a team battle with my teammate on my side, team colours and the result", () => {
+    const teams = roomGame("teams", [
+      roomPlayer("b", "bob", 2, 1, 0),
+      roomPlayer("me", "ann", 1, 2, 1),
+      roomPlayer("c", "cy", 2, 3, 0),
+      roomPlayer("d", "dee", 1, 4, 1),
+    ]);
+    const { container } = render(inTable(<MatchRow item={teams} myUid="me" />));
+    const cells = Array.from(container.querySelectorAll("td")).map((td) => td.textContent);
+    expect(cells[0]).toBe("TeamsRoom KFQB");
+    expect(cells[2]).toBe("annANN#2deeDEE#4");
+    expect(cells[3]).toBe("Won");
+    expect(cells[4]).toBe("bobBOB#1cyCY#3");
+    const dots = Array.from(container.querySelectorAll("span[aria-label]")).map((s) => s.getAttribute("aria-label"));
+    expect(dots).toEqual(["Blue team", "Blue team", "Red team", "Red team"]);
+  });
+
+  it("shows a room 1v1 by games won", () => {
+    const duel = roomGame("1v1", [roomPlayer("b", "bob", 1, 1), roomPlayer("me", "ann", 2, 3)]);
+    const { container } = render(inTable(<MatchRow item={duel} myUid="me" />));
+    const cells = Array.from(container.querySelectorAll("td")).map((td) => td.textContent);
+    expect(cells[0]).toBe("1v1Room KFQB");
+    expect(cells[3]).toBe("0 - 1");
+    expect(cells[4]).toBe("bobBOB#1");
+  });
 });
 
 describe("LeaderboardRow", () => {

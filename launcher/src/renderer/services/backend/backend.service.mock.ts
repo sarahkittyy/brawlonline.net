@@ -110,7 +110,7 @@ const mockLeaderboard: LeaderboardEntry[] = Array.from({ length: 137 }, (_, i) =
 
 function mockMatchHistory(): MatchHistoryItem[] {
   const opponents = mockLeaderboard.filter((e) => e.uid !== fakeUserId);
-  const modes: MatchHistoryItem["mode"][] = ["ranked", "unranked", "ranked", "direct", "ranked"];
+  const modes: MatchHistoryItem["mode"][] = ["ranked", "unranked", "room", "ranked", "direct", "room", "ranked"];
   let rating = mockRankedProfile.rating;
   const start = Date.UTC(2026, 9, 8, 20, 0, 0);
   return Array.from({ length: 45 }, (_, i) => {
@@ -120,6 +120,13 @@ function mockMatchHistory(): MatchHistoryItem[] {
     const me = { uid: fakeUserId, displayName: "Demo user 0", connectCode: "DEMO#0" };
     const them = { uid: opp.uid, displayName: opp.displayName, connectCode: opp.connectCode };
     const createdAt = new Date(start - i * 47 * 60 * 1000).toISOString();
+    if (mode === "room") {
+      const more = opponents
+        .filter((o) => o.uid !== opp.uid)
+        .slice(i % 5, (i % 5) + 2)
+        .map((o) => ({ uid: o.uid, displayName: o.displayName, connectCode: o.connectCode }));
+      return mockRoomGame(i, createdAt, [me, them, ...more]);
+    }
     if (mode !== "ranked") {
       const games = 2 + (i % 5);
       const myWins = won ? Math.ceil(games / 2) : Math.floor(games / 2);
@@ -169,6 +176,45 @@ function mockMatchHistory(): MatchHistoryItem[] {
       endReason: abandoned ? `abandoned by ${opp.uid}` : null,
     };
   });
+}
+
+/** A room's game: a free-for-all of four, a 2v2 or a 1v1 on slots 1 and 3, in turn. */
+function mockRoomGame(
+  i: number,
+  createdAt: string,
+  people: { uid: string; displayName: string; connectCode: string }[],
+): MatchHistoryItem {
+  const none = { ratingBefore: null, ratingAfter: null, ratingChange: null };
+  const kind = (["ffa", "teams", "1v1"] as const)[i % 3];
+  const base = { matchId: `mode.room-KFQB-mock-${i}`, mode: "room" as const, createdAt, status: "ASSIGNED" };
+  const rest = { ranked: false, winner: null, endReason: null, room: { code: "KFQB", mode: kind } };
+  if (kind === "1v1") {
+    const won = i % 2 === 0;
+    return {
+      ...base,
+      ...rest,
+      players: [
+        { ...people[0], wins: won ? 1 : 0, port: 1, team: null, place: won ? 1 : 2, ...none },
+        { ...people[1], wins: won ? 0 : 1, port: 3, team: null, place: won ? 2 : 1, ...none },
+      ],
+    };
+  }
+  const ffaPlaces = i % 2 === 0 ? [2, 1, 4, 3] : [1, 3, 2, 4];
+  const teamPlaces = i % 2 === 0 ? [1, 2, 1, 2] : [2, 1, 2, 1];
+  const places = kind === "ffa" ? ffaPlaces : teamPlaces;
+  return {
+    ...base,
+    ...rest,
+    players: people.slice(0, 4).map((p, k) => ({
+      ...p,
+      wins: places[k] === 1 ? 1 : 0,
+      port: k + 1,
+      team: kind === "teams" ? k % 2 : null,
+      // The last player left one free-for-all.
+      place: kind === "ffa" && k === 3 && i % 2 === 0 ? null : places[k],
+      ...none,
+    })),
+  };
 }
 
 /** Cursor = index of the next row, as a string (the real cursors are opaque). */
@@ -242,7 +288,13 @@ class MockBackendClient implements BackendService {
 
   @delayAndMaybeError(SHOULD_ERROR)
   async fetchMatchHistory(mode: MatchHistoryFilter, before?: string): Promise<MatchHistoryPage> {
-    const all = mockMatchHistory().filter((m) => mode === "all" || (mode === "ranked") === m.ranked);
+    const all = mockMatchHistory().filter(
+      (m) =>
+        mode === "all" ||
+        (mode === "ranked" && m.ranked) ||
+        (mode === "unranked" && (m.mode === "unranked" || m.mode === "direct")) ||
+        (mode === "rooms" && m.mode === "room"),
+    );
     const { rows, next } = mockPage(all, before, 20);
     return { matches: rows, next };
   }

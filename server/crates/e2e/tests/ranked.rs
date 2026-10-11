@@ -58,7 +58,7 @@ async fn ranked_match(stack: &Stack, a: &UserJson, b: &UserJson) -> (String, Sea
 async fn direct_set(stack: &Stack, a: &UserJson, b: &UserJson, n: u32) -> String {
     let id = format!("mode.ranked-test-{n}-{}", Uuid::new_v4());
     let players = [Uuid::parse_str(&a.uid).unwrap(), Uuid::parse_str(&b.uid).unwrap()];
-    common::db::insert_match(&stack.pool, &id, 0, &players, players[0], &[], "other").await.unwrap();
+    common::db::insert_match(&stack.pool, &id, 0, &players, players[0], &[], "other", None).await.unwrap();
     id
 }
 
@@ -225,7 +225,7 @@ async fn abandoning_disagreeing_and_bad_reports() {
     // leaving is for ranked sets only.
     let unranked = format!("mode.unranked-test-{}", Uuid::new_v4());
     let ids = [Uuid::parse_str(&a.uid).unwrap(), Uuid::parse_str(&b.uid).unwrap()];
-    common::db::insert_match(&stack.pool, &unranked, 1, &ids, ids[0], &[], "other").await.unwrap();
+    common::db::insert_match(&stack.pool, &unranked, 1, &ids, ids[0], &[], "other", None).await.unwrap();
     let (st, s) = report(&stack, a, &unranked, 1, Some(a)).await;
     assert_eq!((st, s["status"].as_str()), (200, Some("ASSIGNED")), "{s}");
     assert!(s["rating"].is_null());

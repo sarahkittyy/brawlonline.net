@@ -75,8 +75,8 @@ export type LeaderboardPage = {
   total: number;
 };
 
-/** The `mode` filter of `GET /v1/me/matches`. `unranked` is every mode but Ranked (Unranked and Direct). */
-export type MatchHistoryFilter = "all" | "ranked" | "unranked";
+/** The `mode` filter of `GET /v1/me/matches`. `unranked` is Unranked and Direct; `rooms` is rooms' games. */
+export type MatchHistoryFilter = "all" | "ranked" | "unranked" | "rooms";
 
 export type MatchHistoryPlayer = {
   uid: string;
@@ -89,11 +89,17 @@ export type MatchHistoryPlayer = {
   ratingBefore: number | null;
   ratingAfter: number | null;
   ratingChange: number | null;
+  /** A room's game: the player's slot (1-4); null for the other modes. */
+  port?: number | null;
+  /** A room's team battle: 0 red, 1 blue, 2 green. */
+  team?: number | null;
+  /** A room's game: 1 = first, shared by a tie and by a team; null until the reports agree, and for a player who left. */
+  place?: number | null;
 };
 
 export type MatchHistoryItem = {
   matchId: string;
-  mode: "ranked" | "unranked" | "direct";
+  mode: "ranked" | "unranked" | "direct" | "room";
   /** RFC 3339. */
   createdAt: string;
   /** `ASSIGNED` (undecided, and always for Unranked and Direct), `COMPLETE`, `ABANDONED`, `TERMINATED`, `ERROR`, `ORPHANED`. */
@@ -104,6 +110,8 @@ export type MatchHistoryItem = {
   winner: string | null;
   /** For example `abandoned by <uid>`, or why a set was void. */
   endReason: string | null;
+  /** A room's game: the room's code and how it played; null for the other modes. */
+  room?: { code: string; mode: RoomMode } | null;
 };
 
 /** `GET /v1/me/matches?mode=&limit=&before=`: newest first; `next` is the `before` of the next page. */

@@ -7,10 +7,11 @@ export const ProfilePageMessages = {
   all: () => "All",
   ranked: () => "Ranked",
   unranked: () => "Unranked",
+  rooms: () => "Rooms",
   mode: () => "Mode",
   date: () => "Date",
   you: () => "You",
   score: () => "Score",
-  opponent: () => "Opponent",
+  opponent: () => "Opponents",
   noMatches: () => "No matches yet.",
 };

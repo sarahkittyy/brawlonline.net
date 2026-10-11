@@ -1,4 +1,4 @@
-import type { MatchHistoryItem, MatchHistoryPlayer } from "@/services/backend/types";
+import type { MatchHistoryItem, MatchHistoryPlayer, RoomMode } from "@/services/backend/types";
 
 import { RankedFormatMessages as Messages } from "./ranked_format.messages";
 
@@ -48,15 +48,30 @@ export function formatPosition(position: number | null | undefined, total: numbe
   return total ? `#${position} of ${total}` : `#${position}`;
 }
 
-export function modeLabel(mode: MatchHistoryItem["mode"]): string {
+/** The mode as the history shows it; a room's game by how the room played (`roomMode`). */
+export function modeLabel(mode: MatchHistoryItem["mode"], roomMode?: RoomMode): string {
   switch (mode) {
     case "ranked":
       return Messages.ranked();
     case "direct":
       return Messages.direct();
+    case "room":
+      return roomMode === "ffa" ? Messages.ffa() : roomMode === "teams" ? Messages.teams() : Messages.oneVsOne();
     default:
       return Messages.unranked();
   }
+}
+
+/** A room's team colours (0 red, 1 blue, 2 green), as on the game's character select. */
+export const TEAM_COLORS = ["#ef5350", "#42a5f5", "#66bb6a"] as const;
+
+export function teamName(team: number): string {
+  return [Messages.redTeam, Messages.blueTeam, Messages.greenTeam][team]?.() ?? "";
+}
+
+/** A room game's place (1-4): `1st`, `2nd`, `3rd`, `4th`. */
+export function formatPlace(place: number): string {
+  return ["1st", "2nd", "3rd"][place - 1] ?? `${place}th`;
 }
 
 export function playerName(p: Pick<MatchHistoryPlayer, "displayName">): string {
@@ -75,10 +90,63 @@ export function formatScore(players: readonly MatchHistoryPlayer[]): string {
 }
 
 /**
- * A short note for a ranked set that did not simply finish: in progress, abandoned (by whom),
- * or void (why). Null for a finished set and for Unranked and Direct matches.
+ * A row's two sides: mine (me first) and the others. A room's team battle puts my teammates on
+ * my side; a room's others are in place order (unplaced last), then by slot.
  */
-export function matchNote(item: Pick<MatchHistoryItem, "ranked" | "status" | "endReason" | "players">): string | null {
+export function matchSides(
+  item: Pick<MatchHistoryItem, "mode" | "room" | "players">,
+  myUid: string | undefined,
+): [MatchHistoryPlayer[], MatchHistoryPlayer[]] {
+  const [me, ...rest] = orderPlayers(item.players, myUid);
+  if (!me) {
+    return [[], []];
+  }
+  if (item.mode !== "room" || !item.room || item.room.mode === "1v1") {
+    return [[me], rest];
+  }
+  const byPlace = (a: MatchHistoryPlayer, b: MatchHistoryPlayer) =>
+    (a.place ?? 99) - (b.place ?? 99) || (a.port ?? 99) - (b.port ?? 99);
+  const teammate = (p: MatchHistoryPlayer) => item.room?.mode === "teams" && p.team != null && p.team === me.team;
+  return [[me, ...rest.filter(teammate).sort(byPlace)], rest.filter((p) => !teammate(p)).sort(byPlace)];
+}
+
+/**
+ * The score column: games won for a 1v1 (`2 - 1`, mine first); a free-for-all's place (`2nd`);
+ * a team battle's result (Won, Lost). A draw (every player who stayed first) is Draw; `–` before
+ * the players' reports agree on the places, or when I left the game.
+ */
+export function formatMatchScore(
+  item: Pick<MatchHistoryItem, "mode" | "room" | "players">,
+  myUid: string | undefined,
+): string {
+  const players = orderPlayers(item.players, myUid);
+  if (item.mode !== "room" || !item.room || item.room.mode === "1v1") {
+    return formatScore(players);
+  }
+  const place = players[0]?.uid === myUid ? players[0]?.place : null;
+  if (place == null) {
+    return "–";
+  }
+  if (players.every((p) => p.place == null || p.place === 1)) {
+    return Messages.draw();
+  }
+  if (item.room.mode === "teams") {
+    return place === 1 ? Messages.won() : Messages.lost();
+  }
+  return formatPlace(place);
+}
+
+/**
+ * A short note for a ranked set that did not simply finish: in progress, abandoned (by whom),
+ * or void (why); for a room's game, the room. Null for a finished set and for Unranked and
+ * Direct matches.
+ */
+export function matchNote(
+  item: Pick<MatchHistoryItem, "ranked" | "status" | "endReason" | "players"> & Pick<Partial<MatchHistoryItem>, "room">,
+): string | null {
+  if (item.room) {
+    return Messages.room(item.room.code);
+  }
   if (!item.ranked) {
     return null;
   }

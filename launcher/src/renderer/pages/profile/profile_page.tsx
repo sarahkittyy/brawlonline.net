@@ -14,15 +14,18 @@ import { PagedListStatus } from "@/components/paged_list_status/paged_list_statu
 import { useAccount } from "@/lib/hooks/use_account";
 import { useCursorPages } from "@/lib/hooks/use_cursor_pages";
 import {
+  formatMatchScore,
+  formatPlace,
   formatPosition,
   formatRating,
   formatRatingChange,
-  formatScore,
   matchNote,
+  matchSides,
   modeLabel,
-  orderPlayers,
   playerName,
   ratingChangeColor,
+  TEAM_COLORS,
+  teamName,
 } from "@/lib/ranked_format";
 import { monthDayHourFormat } from "@/lib/time";
 import { useServices } from "@/services";
@@ -117,6 +120,7 @@ const MatchHistory = ({ uid }: { uid: string }) => {
           <ToggleButton value="all">{Messages.all()}</ToggleButton>
           <ToggleButton value="ranked">{Messages.ranked()}</ToggleButton>
           <ToggleButton value="unranked">{Messages.unranked()}</ToggleButton>
+          <ToggleButton value="rooms">{Messages.rooms()}</ToggleButton>
         </ToggleButtonGroup>
       </div>
       <div style={{ flex: 1, minHeight: 0 }}>
@@ -157,35 +161,59 @@ const MatchHistory = ({ uid }: { uid: string }) => {
 };
 
 export const MatchRow = React.memo(function MatchRow({ item, myUid }: { item: MatchHistoryItem; myUid: string }) {
-  const players = orderPlayers(item.players, myUid);
-  const [me, ...others] = players;
+  // A room's team battle: my teammates on my side. A free-for-all: everyone else's place.
+  const [mine, others] = matchSides(item, myUid);
+  const showPlaces = item.room?.mode === "ffa";
   const note = matchNote(item);
   return (
     <TableRow>
       <TableCell>
-        <div>{modeLabel(item.mode)}</div>
+        <div>{modeLabel(item.mode, item.room?.mode)}</div>
         {note && <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{note}</div>}
       </TableCell>
       <TableCell sx={{ whiteSpace: "nowrap" }}>{monthDayHourFormat(new Date(item.createdAt))}</TableCell>
-      <TableCell>{me && <PlayerCell player={me} />}</TableCell>
+      <TableCell>
+        {mine.map((p) => (
+          <PlayerCell key={p.uid} player={p} />
+        ))}
+      </TableCell>
       <TableCell align="center" sx={{ fontWeight: "bold", whiteSpace: "nowrap" }}>
-        {formatScore(players)}
+        {formatMatchScore(item, myUid)}
       </TableCell>
       <TableCell>
         {others.map((p) => (
-          <PlayerCell key={p.uid} player={p} />
+          <PlayerCell key={p.uid} player={p} showPlace={showPlaces} />
         ))}
       </TableCell>
     </TableRow>
   );
 });
 
-const PlayerCell = ({ player }: { player: MatchHistoryPlayer }) => {
+const PlayerCell = ({ player, showPlace = false }: { player: MatchHistoryPlayer; showPlace?: boolean }) => {
+  const team = player.team;
   return (
     <div>
+      {team != null && TEAM_COLORS[team] && (
+        <span
+          title={teamName(team)}
+          aria-label={teamName(team)}
+          style={{
+            display: "inline-block",
+            width: 8,
+            height: 8,
+            borderRadius: "50%",
+            marginRight: 6,
+            verticalAlign: "middle",
+            backgroundColor: TEAM_COLORS[team],
+          }}
+        />
+      )}
       <span>{playerName(player)}</span>
       {player.connectCode && (
         <span style={{ marginLeft: 8, color: "var(--text-secondary)" }}>{player.connectCode}</span>
+      )}
+      {showPlace && player.place != null && (
+        <span style={{ marginLeft: 8, fontWeight: "bold" }}>{formatPlace(player.place)}</span>
       )}
       {player.ratingBefore != null && player.ratingChange != null && (
         <div style={{ fontSize: 12 }}>

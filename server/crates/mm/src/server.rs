@@ -233,8 +233,17 @@ fn queue_fetch(jobs: &tk_mpsc::Sender<FetchJob>, done: &std_mpsc::Sender<Fetched
 /// and must not be lost when the lookup queue is full.
 async fn record_match(pool: PgPool, m: MatchRecord) {
     let stages: Vec<i16> = m.stages.iter().map(|s| *s as i16).collect();
-    if let Err(e) =
-        db::insert_match(&pool, &m.match_id, m.mode.as_u8() as i16, &m.players, m.host, &stages, &m.region).await
+    if let Err(e) = db::insert_match(
+        &pool,
+        &m.match_id,
+        m.mode.as_u8() as i16,
+        &m.players,
+        m.host,
+        &stages,
+        &m.region,
+        m.room.as_ref(),
+    )
+    .await
     {
         tracing::error!(match_id = %m.match_id, "recording match failed: {e}");
     }

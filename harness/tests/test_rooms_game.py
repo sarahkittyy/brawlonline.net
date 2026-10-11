@@ -137,6 +137,30 @@ def type_room_code(g: Game, code: str) -> None:
     g.steps("tap START 8", "wait 30")
 
 
+def room_history(backend: OnlineBackend, gs: list[Game], users: list[Any], ports: tuple | list,
+                 mode: str) -> dict[str, Any]:
+    """The room's game in every player's match history (docs/rooms-protocol.md §3): each game
+    reported it once (POST /v1/ranked/report-game, nothing failed or pending), and every player's
+    Rooms history has it with the room's mode, each player's slot and the places the reports
+    agree on. Returns the history entry (players in slot order)."""
+    _wait(lambda: all((lambda r: r["reports_sent"] == 1 and r["pending_jobs"] == 0)(g.c.online_status()["ranked"])
+                      for g in gs), 60, "every game's report sent")
+    for g in gs:
+        r = g.c.online_status()["ranked"]
+        assert r["room"] and r["reports_failed"] == 0 and r["last_status"] == "ASSIGNED", (g.name, r)
+    pages = [backend._http("GET", "/v1/me/matches?mode=rooms", token=u.session_token) for u in users]
+    assert all(len(pg["matches"]) == 1 for pg in pages), pages
+    m = pages[0]["matches"][0]
+    assert all(pg["matches"][0]["matchId"] == m["matchId"] for pg in pages), pages
+    assert m["mode"] == "room" and not m["ranked"] and m["room"]["mode"] == mode, m
+    assert [p["uid"] for p in m["players"]] == [u.uid for u in users], m
+    assert [p["port"] for p in m["players"]] == [p + 1 for p in ports], m
+    assert all(p["place"] is not None for p in m["players"]), m
+    assert not backend._http("GET", "/v1/me/matches?mode=unranked", token=users[0].session_token)["matches"]
+    print(f"history: {m['room']}, places {[p['place'] for p in m['players']]}, teams {[p['team'] for p in m['players']]}")
+    return m
+
+
 def test_room_two_players_through_the_game(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                            gpu_backend: str) -> None:
     test = "two-players"
@@ -516,6 +540,9 @@ def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[...,
                    "the room waiting for its next game", timeout=60)
         g.steps("wait 60")
         g.shot("08-back-in-the-room")
+    # The history: red (A, B) first together, blue second.
+    m = room_history(backend, gs, users, (0, 1, 2), "teams")
+    assert [(p["team"], p["place"], p["wins"]) for p in m["players"]] == [(0, 1, 1), (0, 1, 1), (1, 2, 0)], m
 
 
 def write_join(g: Game, code: str) -> str:
@@ -990,6 +1017,11 @@ def test_room_four_players(backend: OnlineBackend, dolphin: Callable[..., Dolphi
                    "the room waiting for its next game", timeout=60)
         g.steps("wait 60")
         g.shot("06-back-in-the-room")
+    # The history: P1 first, the others placed by when they went out.
+    m = room_history(backend, gs, users, ports, "ffa")
+    places = [p["place"] for p in m["players"]]
+    assert places[0] == 1 and all(2 <= x <= len(ports) for x in places[1:]), m
+    assert [p["wins"] for p in m["players"]] == [1] + [0] * (len(ports) - 1) and all(p["team"] is None for p in m["players"])
 
 
 def test_room_three_players_second_game_on_the_losers_pick(backend: OnlineBackend,

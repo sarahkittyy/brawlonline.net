@@ -42,6 +42,19 @@ pub async fn fetch_mm_user(pool: &sqlx::PgPool, uid: Uuid) -> sqlx::Result<Optio
     .await
 }
 
+/// A room's game (`migrations/0007_room_matches.sql`): the room and, in the order of the
+/// match's players, each one's slot and team.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchRoom {
+    pub code: String,
+    /// `1v1`, `ffa` or `teams`.
+    pub mode: String,
+    /// 1-4.
+    pub ports: Vec<i16>,
+    /// 0 red, 1 blue, 2 green; `None` unless the room played a team battle.
+    pub teams: Option<Vec<i16>>,
+}
+
 /// Records a pairing (best effort; mm does not wait for it).
 #[allow(clippy::too_many_arguments)]
 pub async fn insert_match(
@@ -52,9 +65,11 @@ pub async fn insert_match(
     is_host: Uuid,
     stages: &[i16],
     region: &str,
+    room: Option<&MatchRoom>,
 ) -> sqlx::Result<()> {
     sqlx::query(
-        "INSERT INTO mm_matches (match_id, mode, players, is_host, stages, region) VALUES ($1, $2, $3, $4, $5, $6)
+        "INSERT INTO mm_matches (match_id, mode, players, is_host, stages, region, room_code, room_mode, ports, teams)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
          ON CONFLICT (match_id) DO NOTHING",
     )
     .bind(match_id)
@@ -63,6 +78,10 @@ pub async fn insert_match(
     .bind(is_host)
     .bind(stages)
     .bind(region)
+    .bind(room.map(|r| r.code.as_str()))
+    .bind(room.map(|r| r.mode.as_str()))
+    .bind(room.map(|r| r.ports.as_slice()))
+    .bind(room.and_then(|r| r.teams.as_deref()))
     .execute(pool)
     .await
     .map(|_| ())

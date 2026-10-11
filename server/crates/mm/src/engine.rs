@@ -198,6 +198,8 @@ pub struct MatchRecord {
     pub stages: Vec<u16>,
     /// The players' region, or `a+b` when they differ.
     pub region: String,
+    /// A room's game: the room, each player's slot and team.
+    pub room: Option<common::db::MatchRoom>,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -997,6 +999,28 @@ impl Engine {
         for (c, resp) in &outcome.matched {
             Self::send(out, *c, resp);
         }
+        if let Some(rec) = outcome.record {
+            // For the match history (`docs/rooms-protocol.md` §3): the players' games report it.
+            let mut regions: Vec<String> = outcome
+                .matched
+                .iter()
+                .filter_map(|(c, _)| match self.conns.get(c).map(|c| &c.state) {
+                    Some(State::Waiting(w)) => Some(w.region.clone()),
+                    _ => None,
+                })
+                .collect();
+            regions.sort_unstable();
+            regions.dedup();
+            out.push(Output::RecordMatch(MatchRecord {
+                match_id: rec.match_id,
+                mode: Mode::Teams,
+                players: rec.players,
+                host: rec.host,
+                stages: rec.stages,
+                region: regions.join("+"),
+                room: Some(rec.room),
+            }));
+        }
         for (c, _) in &outcome.matched {
             self.finish(out, *c);
         }
@@ -1269,6 +1293,7 @@ impl Engine {
             host: host_uid,
             stages: rules.stages.clone(),
             region,
+            room: None,
         }));
         for (conn, _, _) in &entrants {
             self.finish(out, *conn);
@@ -2511,6 +2536,20 @@ mod tests {
             assert_eq!(resp["stages"].as_array().unwrap().len(), 15);
             assert!(disconnected(&out, conn));
         }
+        // Recorded for the match history, as mode 3 with the room.
+        let rec = out
+            .iter()
+            .find_map(|o| match o {
+                Output::RecordMatch(m) => Some(m.clone()),
+                _ => None,
+            })
+            .expect("the room game is recorded");
+        let resp = sent(&out, 11).into_iter().find(|m| m["type"] == "get-ticket-resp").unwrap();
+        assert_eq!(rec.match_id, resp["matchId"].as_str().unwrap());
+        assert_eq!((rec.mode, rec.players.clone(), rec.host), (Mode::Teams, vec![a.uid, b.uid], a.uid));
+        assert_eq!(rec.stages.len(), 15);
+        let room = rec.room.expect("room");
+        assert_eq!((room.code, room.mode.as_str(), room.ports, room.teams), (code.clone(), "1v1", vec![1, 2], None));
         assert_eq!(state_of(&out, 1)["status"], "in-game");
         assert_eq!(h.e.status(Utc::now()).rooms[0].status, common::rooms::RoomStatus::InGame);
         // The ticket connections closing does not touch the room.

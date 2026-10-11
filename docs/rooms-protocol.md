@@ -13,7 +13,7 @@ _2026-10-09. What is built: the server side (`server/crates/mm/src/rooms.rs`, `s
 | Room list | accounts, `GET /v1/rooms` | What launchers read (session auth). accounts reads mm's status (`MM_STATUS_URL`, default `http://127.0.0.1:43181/status`) and serves one read for 1 s. |
 | Hand-off | `<User>/Online/join-room.json` and `game-status.json` | A room clicked in the launcher reaches the game through a file next to `user.json`; the game reports busy or idle in another. |
 
-Rooms are never ranked, never change a rating and are not recorded in `mm_matches` (so `report-game` refuses their match ids; Dolphin must not report room games).
+Rooms are never ranked and never change a rating. Each room game is recorded in `mm_matches` for the match history (mode 3, with the room's code, its mode and each player's slot and team: section 3), and every player's game reports it like a 1v1 (`POST /v1/ranked/report-game`, with every player's place; `server/README.md`).
 
 ## 2. The online connection
 
@@ -139,7 +139,7 @@ The room starts by itself once **every open slot is taken, every player is ready
    ```
 
    `search.connectCode` is the room code as the keypad's Shift-JIS bytes (full width, as Direct sends a connect code) or plain ASCII. mm answers `create-ticket-resp {}`, or an error (`Room not found.`, `You are not in this room.`, `The room is not starting a game.`).
-3. Once every member's ticket is in, each gets one `get-ticket-resp` in Slippi's shape: `matchId` (`mode.room-<code>-…`), `isHost` true for the room's host (the session's decider), `players` with every member (`port` = slot, `isLocalPlayer`, `ipAddress` as mm saw the ticket, so the NAT mapping of the P2P port, `ipAddressLan`), and Direct's `stages` and `items` (rooms play like Direct: game 1 random from the list, then the loser picks). The ticket connections are closed after 1 s, as after any match. `status` becomes `in-game`, every player's `inGame` is true and `ready` false.
+3. Once every member's ticket is in, mm records the game in `mm_matches` (mode 3; `room_code`, `room_mode` `1v1`/`ffa`/`teams`, and per player `ports` and, in a team battle, `teams`) and each member gets one `get-ticket-resp` in Slippi's shape: `matchId` (`mode.room-<code>-…`), `isHost` true for the room's host (the session's decider), `players` with every member (`port` = slot, `isLocalPlayer`, `ipAddress` as mm saw the ticket, so the NAT mapping of the P2P port, `ipAddressLan`), and Direct's `stages` and `items` (rooms play like Direct: game 1 random from the list, then the loser picks). The ticket connections are closed after 1 s, as after any match. `status` becomes `in-game`, every player's `inGame` is true and `ready` false.
 4. The game does what `Matchmaking.cpp` already does for Teams: disconnect from mm, connect to every remote from the P2P port within 8 s (Slippi's LAN rule per peer), and on failure report "Could not connect to players: …" (no requeue in mode 3). Then the N-player session.
 5. After the game (or after a failed connect), each game sends `room-back` and is on the room's CSS again, characters kept, ready cleared. When nobody is in the game any more, `status` is `waiting`. A game that never says `room-back` is taken to be over after 30 minutes.
 
@@ -244,7 +244,7 @@ What the launcher shows (suggested): `accepted`: "Creating a room in your game."
 4. **Write `game-status.json`** on every state change and every 5 s, atomically, with `lastRequest` set to the answer for the request's `id`.
 5. **The online connection**: open it (`hello`) when `user.json` is read and the game is logged in, keep it while the game runs (reconnect with backoff if it drops), close it on logout or exit. It carries the room's requests and pushed state; it is what counts the player as online.
 6. **The room's game ticket** (section 3): on `room-start`, the mode-3 ticket from the P2P port while the online connection stays open; `room-back` after the game.
-7. Do not report room games to `/v1/ranked/report-game`.
+7. Report each room game as it ends to `/v1/ranked/report-game` (match history): `winner` the winner's uid (a team battle: the winning team's lowest slot), and in `players` every player of the game with `port` and `place` (1 = first, shared by a tie and by a team; a 1v1's winner 1 and loser 2, both 1 after a draw) and `team` in a team battle, or `{uid, port, left: true}` for one who left (`Online/Ranked.cpp`).
 
 ## 6. mmclient
 

@@ -241,7 +241,7 @@ async fn mm_match(stack: &Stack, mode: i16, a: &UserJson, b: &UserJson, t0: Date
     let kind = ["ranked", "unranked", "direct"][mode as usize];
     let id = format!("mode.{kind}-test-{minutes}-{}", Uuid::new_v4().simple());
     let p = [uuid(a), uuid(b)];
-    common::db::insert_match(&stack.pool, &id, mode, &p, p[0], &[], "other").await.unwrap();
+    common::db::insert_match(&stack.pool, &id, mode, &p, p[0], &[], "other", None).await.unwrap();
     sqlx::query("UPDATE mm_matches SET created_at = $2 WHERE match_id = $1")
         .bind(&id)
         .bind(t0 + Duration::minutes(minutes))
@@ -490,5 +490,162 @@ async fn match_history_and_unrated_reports() {
     let lb = board(&stack, "?limit=1").await;
     let (st, _) = stack.get(&format!("/v1/me/matches?before={}", lb["next"].as_str().unwrap()), Some(sa)).await;
     assert_eq!(st, 400);
+    stack.shutdown().await;
+}
+
+/// A room's game as mm records it (mode 3), made `minutes` after `t0`: the players on `ports`,
+/// `teams` for a team battle.
+async fn room_match(
+    stack: &Stack,
+    room_mode: &str,
+    ps: &[&UserJson],
+    ports: &[i16],
+    teams: Option<&[i16]>,
+    t0: DateTime<Utc>,
+    minutes: i64,
+) -> String {
+    let id = format!("mode.room-ABCD-test-{minutes}-{}", Uuid::new_v4().simple());
+    let uids: Vec<Uuid> = ps.iter().map(|u| uuid(u)).collect();
+    let room = common::db::MatchRoom {
+        code: "ABCD".into(),
+        mode: room_mode.into(),
+        ports: ports.to_vec(),
+        teams: teams.map(<[i16]>::to_vec),
+    };
+    common::db::insert_match(&stack.pool, &id, 3, &uids, uids[0], &[], "other", Some(&room)).await.unwrap();
+    sqlx::query("UPDATE mm_matches SET created_at = $2 WHERE match_id = $1")
+        .bind(&id)
+        .bind(t0 + Duration::minutes(minutes))
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+    id
+}
+
+/// A room game's report as Dolphin sends it: every player's place (None: left the game).
+async fn room_report(stack: &Stack, by: &UserJson, id: &str, places: &[(&UserJson, Option<u32>)]) -> Value {
+    let winner = places.iter().find(|(_, p)| *p == Some(1)).map(|(u, _)| u.uid.clone());
+    let players: Vec<Value> = places
+        .iter()
+        .enumerate()
+        .map(|(i, (u, place))| match place {
+            Some(p) => json!({"uid": u.uid, "port": i + 1, "characterId": 9, "stocksRemaining": 1,
+                              "damage": 10.0, "place": p, "team": 255}),
+            None => json!({"uid": u.uid, "port": i + 1, "left": true}),
+        })
+        .collect();
+    let (st, body) = stack
+        .post(
+            "/v1/ranked/report-game",
+            None,
+            json!({"uid": by.uid, "playKey": by.play_key, "matchId": id, "gameIndex": 1, "winner": winner,
+                   "stageId": 31, "durationFrames": 9000, "players": players}),
+        )
+        .await;
+    assert_eq!(st, 200, "{body}");
+    body
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn room_games_in_the_history() {
+    let stack = Stack::start(StackOptions::default()).await.unwrap();
+    let u = players(&stack, &["kira", "lena", "milo", "nora", "otto"]).await;
+    let s0 = &u[0].0;
+    let (a, b, c, d, e) = (&u[0].1, &u[1].1, &u[2].1, &u[3].1, &u[4].1);
+    let t0 = Utc::now() - Duration::minutes(20);
+
+    // 1. A free-for-all of four: c first, a second, d third, b left during the game. Three
+    //    reports agree; d's disagrees and is outvoted.
+    let m1 = room_match(&stack, "ffa", &[a, b, c, d], &[1, 2, 3, 4], None, t0, 1).await;
+    let ffa = [(a, Some(2)), (b, None), (c, Some(1)), (d, Some(3))];
+    let s = room_report(&stack, a, &m1, &ffa).await;
+    assert_eq!(s["status"], "ASSIGNED");
+    assert_eq!(s["wins"], json!([0, 0, 1, 0]), "every player's wins, by winner");
+    room_report(&stack, b, &m1, &ffa).await;
+    room_report(&stack, c, &m1, &ffa).await;
+    room_report(&stack, d, &m1, &[(a, Some(1)), (b, None), (c, Some(2)), (d, Some(3))]).await;
+    // 2. Teams 2v2 on slots 1-4 (red a and c, blue b and d): blue wins.
+    let m2 = room_match(&stack, "teams", &[a, b, c, d], &[1, 2, 3, 4], Some(&[0, 1, 0, 1]), t0, 2).await;
+    let teams = [(a, Some(2)), (b, Some(1)), (c, Some(2)), (d, Some(1))];
+    for by in [a, b, c, d] {
+        room_report(&stack, by, &m2, &teams).await;
+    }
+    // 3. A room 1v1 on slots 1 and 3, reported by a only: a wins.
+    let m3 = room_match(&stack, "1v1", &[a, e], &[1, 3], None, t0, 3).await;
+    room_report(&stack, a, &m3, &[(a, Some(1)), (e, Some(2))]).await;
+    // 4. A free-for-all of three whose two reports disagree: no places.
+    let m4 = room_match(&stack, "ffa", &[a, b, e], &[1, 2, 3], None, t0, 4).await;
+    room_report(&stack, a, &m4, &[(a, Some(1)), (b, Some(2)), (e, Some(3))]).await;
+    room_report(&stack, b, &m4, &[(a, Some(2)), (b, Some(1)), (e, Some(3))]).await;
+    // 5. A room game whose players never connected: no report, not in the history.
+    let m5 = room_match(&stack, "ffa", &[a, b, c], &[1, 2, 3], None, t0, 5).await;
+    // 6. An Unranked match, for the filters.
+    let m6 = mm_match(&stack, 1, a, b, t0, 6).await;
+    ok_report(&stack, a, &m6, 1, Some(a)).await;
+    // A stranger cannot report a room game.
+    let (st, _) = report(&stack, e, &m1, 1, Some(e)).await;
+    assert_eq!(st, 404);
+
+    let all = history(&stack, s0, "").await;
+    assert_eq!(ids(&all), vec![m6.clone(), m4.clone(), m3.clone(), m2.clone(), m1.clone()]);
+    assert!(!ids(&all).contains(&m5));
+    assert_eq!(ids(&history(&stack, s0, "?mode=rooms").await), vec![m4.clone(), m3.clone(), m2.clone(), m1.clone()]);
+    assert_eq!(ids(&history(&stack, s0, "?mode=unranked").await), vec![m6.clone()]);
+    assert!(ids(&history(&stack, s0, "?mode=ranked").await).is_empty());
+    assert!(item(&all, &m6)["room"].is_null());
+    assert!(player(item(&all, &m6), a)["place"].is_null() && player(item(&all, &m6), a)["port"].is_null());
+
+    let r1 = item(&all, &m1);
+    assert_eq!((r1["mode"].as_str(), r1["ranked"].as_bool()), (Some("room"), Some(false)));
+    assert_eq!(r1["room"], json!({"code": "ABCD", "mode": "ffa"}));
+    assert_eq!(r1["status"], "ASSIGNED");
+    let got: Vec<(Value, Value, Value, Value)> = [a, b, c, d]
+        .iter()
+        .map(|u| {
+            let p = player(r1, u);
+            (p["port"].clone(), p["place"].clone(), p["wins"].clone(), p["team"].clone())
+        })
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (json!(1), json!(2), json!(0), Value::Null),
+            (json!(2), Value::Null, json!(0), Value::Null),
+            (json!(3), json!(1), json!(1), Value::Null),
+            (json!(4), json!(3), json!(0), Value::Null),
+        ]
+    );
+
+    let r2 = item(&all, &m2);
+    assert_eq!(r2["room"]["mode"], "teams");
+    let got: Vec<(Value, Value, Value)> = [a, b, c, d]
+        .iter()
+        .map(|u| (player(r2, u)["team"].clone(), player(r2, u)["place"].clone(), player(r2, u)["wins"].clone()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![
+            (json!(0), json!(2), json!(0)),
+            (json!(1), json!(1), json!(1)),
+            (json!(0), json!(2), json!(0)),
+            (json!(1), json!(1), json!(1))
+        ]
+    );
+
+    let r3 = item(&all, &m3);
+    assert_eq!(r3["room"]["mode"], "1v1");
+    assert_eq!((player(r3, a)["port"].as_u64(), player(r3, e)["port"].as_u64()), (Some(1), Some(3)));
+    assert_eq!((player(r3, a)["wins"].as_u64(), player(r3, e)["wins"].as_u64()), (Some(1), Some(0)));
+    assert_eq!((player(r3, a)["place"].as_u64(), player(r3, e)["place"].as_u64()), (Some(1), Some(2)));
+
+    let r4 = item(&all, &m4);
+    for u in [a, b, e] {
+        assert!(player(r4, u)["place"].is_null(), "split reports place nobody");
+        assert_eq!(player(r4, u)["wins"], 0);
+    }
+    // Nothing about a room game is rated.
+    for id in [&m1, &m2, &m3, &m4] {
+        assert_eq!(rating_events(&stack.pool, id).await, 0);
+    }
     stack.shutdown().await;
 }

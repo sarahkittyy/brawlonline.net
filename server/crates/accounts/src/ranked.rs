@@ -9,8 +9,9 @@
 //! `mm_matches` row, so a set is rated exactly once. Sets that wait on a grace period or go
 //! silent are settled by [`sweep`], which runs in the background.
 //!
-//! Unranked and Direct games are reported with the same endpoint and stored the same way (for
-//! the match history, [`crate::history`]); they are never settled or rated.
+//! Unranked and Direct games, and rooms' games (with every player's place), are reported with
+//! the same endpoint and stored the same way (for the match history, [`crate::history`]); they
+//! are never settled or rated.
 //!
 //! `GET /v1/ranked/result?matchId=&uid=` (Slippi's `getRankedMatchPersonalResult`) and
 //! `GET /user/{uid}` (`rank`) give the rating back.
@@ -248,7 +249,7 @@ pub struct SetState {
     pub status: String,
     pub players: Vec<Uuid>,
     /// Games won, in the order of `players`.
-    pub wins: [u32; 2],
+    pub wins: Vec<u32>,
     pub winner: Option<Uuid>,
     pub reason: Option<String>,
     /// The asking player's rating change, once the set changed it.
@@ -265,8 +266,8 @@ async fn set_state(pool: &PgPool, match_id: &str, uid: Uuid, timing: Timing) -> 
     let (games, leaves) = reports(&mut tx, match_id).await?;
     tx.commit().await?;
     let wins = match <[Uuid; 2]>::try_from(row.players.clone()) {
-        Ok(p) => ranked::resolve(p, row.created_at, &games, &leaves, Utc::now(), timing).wins(),
-        Err(_) => [0, 0],
+        Ok(p) => ranked::resolve(p, row.created_at, &games, &leaves, Utc::now(), timing).wins().to_vec(),
+        Err(_) => vec![0; row.players.len()],
     };
     let event: Option<(f64, f64, i32)> = sqlx::query_as(
         "SELECT rating_before, rating_after, sets_before FROM rating_events WHERE match_id = $1 AND uid = $2",
@@ -328,14 +329,16 @@ pub struct ReportGameReq {
     pub stage_id: Option<i32>,
     #[serde(default)]
     pub duration_frames: Option<i32>,
-    /// Per player: `{uid, characterId, stocksRemaining, damage}` (kept for review).
+    /// Per player: `{uid, characterId, stocksRemaining, damage}`, and in a room's game also
+    /// `{port, team, place}` (or `{uid, port, left: true}` for a player who left). Kept for
+    /// review; the history reads a room game's places from it.
     #[serde(default)]
     pub players: serde_json::Value,
 }
 
-/// `reportOnlineGame`. For a ranked game the set is settled after the report. Unranked and
-/// Direct games are stored the same way and never rated: the answer is the match's state with
-/// status `ASSIGNED` and the wins counted from the reports ([`ranked::count_wins`]).
+/// `reportOnlineGame`. For a ranked game the set is settled after the report. Unranked, Direct
+/// and room games are stored the same way and never rated: the answer is the match's state with
+/// status `ASSIGNED` and the wins counted from the reports ([`ranked::count_wins`], by winner).
 /// Idempotent: the same report again is accepted; a different winner for a game already
 /// reported is refused.
 pub async fn report_game(State(state): State<AppState>, Json(req): Json<ReportGameReq>) -> ApiResult<Json<SetState>> {
@@ -395,16 +398,15 @@ pub async fn report_game(State(state): State<AppState>, Json(req): Json<ReportGa
     Ok(Json(set_state(&state.pool, &req.match_id, uid, timing).await?))
 }
 
-/// The state of an Unranked or Direct match: never settled or rated.
+/// The state of an Unranked, Direct or room match: never settled or rated.
 async fn session_state(pool: &PgPool, match_id: &str, row: MatchRow) -> ApiResult<SetState> {
     let mut tx = pool.begin().await?;
     let (games, _) = reports(&mut tx, match_id).await?;
     tx.commit().await?;
-    let wins = ranked::count_wins(&row.players, &games);
     Ok(SetState {
         match_id: match_id.to_string(),
         status: "ASSIGNED".into(),
-        wins: [wins.first().copied().unwrap_or(0), wins.get(1).copied().unwrap_or(0)],
+        wins: ranked::count_wins(&row.players, &games),
         players: row.players,
         winner: None,
         reason: None,
