@@ -23,10 +23,22 @@ _2026-10-11. The user's decisions, plus defaults chosen without asking (marked *
 | 13 | Editing a ruleset room | Allowed: the room becomes **"Custom (based on NorCal Weekly v3)"** and the code disappears, so it never claims to match the tournament. |
 | 14 | First striker | **Random**, from the session seed (the online stand-in for RPS). |
 | 15 | FFA | **No striking, no sets.** An FFA ruleset is match rules plus a stage list. |
-| 16 | Mid-set disconnect | **The host decides**: the set pauses; when the player is back the host chooses **Resume** (keep the score) or **Restart** (game 1). |
+| 16 | Mid-set disconnect | ~~The host decides~~ **Replaced 2026-10-12 by A** (§1.1): the set waits for the player and goes on by itself when they are back. |
 | 17 | No Bo1 | Sets are **Bo3, Bo5, Bo7**. Without a set (one game at a time, as rooms are now) the ruleset has a **stage choice**: **loser picks** (game 1 random, then the loser; today's rooms), **strike every game** (from the starters with the ruleset's pattern, the first striker random each game; this is a tournament's Bo1), or **random every game**. FFA: loser picks or random only. |
 | 18 | Links | The launcher **registers a URL scheme** for `/r/<code>` (§6). |
 | 19 | Handicap | **Left out for now** (2026-10-11): P+'s Stock Control needs per-player stock counts nobody can set online; off in every room and ruleset. Can be added later as a new field. |
+
+### 1.1 Decisions of 2026-10-12 (before the first push; the user's, through the coordinating session)
+
+Defaults the coordinating session chose where the user asked a question are marked **default**.
+
+| # | Topic | Decision |
+|---|---|---|
+| A | Mid-set disconnect | The room **stays open but becomes private**. When the player reconnects (joins the room again), **the set continues as it was**: the server remembers the set's state (score, game, the strike / ban / pick step so far) and syncs it to everyone; no Resume / Restart. **Leaving mid-game counts as a loss of that game.** **Default:** a dropped connection mid-game counts the same as leaving. **Default:** the slot stays reserved for that account. **Default:** the room goes back to its old public / private setting when the set resumes. **Default:** if the host kicks the absent player (closes the reserved slot), that is a **forfeit of the set** (the others win it). |
+| B | After a set | **Default:** everyone stays in the room on the CSS (nobody is sent to the launcher). The game shows the result ("alice wins the set 2-1") on the status line and the final score stays shown. The next all-ready starts a new set at game 1, and that is when the score resets (also reset by a ruleset or rules change, or a player change between sets). The user's idea for the score: Brawl's **stars on each player's panel**, one per game won (RE: what the CSS has; rooms already use one star for the host, `rooms.md` #8). |
+| C | In-game Ruleset picker | Decision 12 is required. Built in P+'s RULES page (the STAGE CHOICE row becomes RULESET: P+ default, the player's rulesets, Enter code on Brawl's keypad), `room_play.cpp`. |
+| D | 2v2 sets | Required. |
+| E | Match history | Stores the ruleset (code, name, hash) and the history shows its name, linked to `/r/<code>`. Not for P+'s default rules, nor for matches from before this update. Replays: not required. |
 
 ## 2. Defaults (not asked)
 
@@ -45,15 +57,9 @@ _2026-10-11. The user's decisions, plus defaults chosen without asking (marked *
 | Timers | Ranked's step timers (strikes 30 s, last game-1 strike 10 s, bans and pick 30 s each, 3 s grace). Not part of the ruleset at first. |
 | Code Menu modifiers | Not in rules or rulesets (hitstun, staling, Special Modes...): still forced to P+'s defaults. Alternate stages (P+'s held-button variants): **open question for later**, they change what a stage pick means. |
 
-### 2.1 The paused set (decision 16, details are defaults)
+### 2.1 The paused set
 
-| Situation | Default |
-|---|---|
-| A player drops (connection lost or game closed) | The game ends as today (DISCONNECTED, 1v1; despawn, 3-4). It does not count. The room shows "Set paused: bob left" and keeps the score. |
-| The slot | Stays reserved for that account while paused; nobody else can join into it. The host can close it (kick), which ends the set. |
-| The player is back | The host sees **Resume** / **Restart** on the RULES screen (and in the status line: "bob is back: host decides"). Resume replays the unfinished game from its stage step (the same stage choice is made again). |
-| The host is the one who dropped | Host passes as today (`rooms.md` #9); the new host decides. |
-| Nobody comes back | No timeout: the set stays paused until the host restarts, kicks or the room empties. |
+Replaced by decision A (§1.1, 2026-10-12): no host decision, no Resume / Restart.
 
 ## 3. The rules record
 

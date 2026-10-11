@@ -150,3 +150,86 @@ def test_room_bo3_set(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
         g.steps("wait 60")
         g.shot("05-set-over")
     _all(lambda: a.steps("wait 1"), lambda: b.steps("wait 1"))
+
+
+def keypad_letters(g: Game, code: str) -> None:
+    """Type letters on Brawl's keypad in its room-code letter layout (the ruleset mode has the
+    same keys), from the top-left letter key (as test_rooms_game.type_room_code moves there)."""
+    from test_rooms_game import ROOM_KEYS
+    steps: list[str] = []
+    move = lambda d: steps.extend([f"tap {d} 8", "wait 6"])  # noqa: E731
+    for _ in range(6):
+        move("DUP")
+    move("DDOWN")
+    move("DLEFT")
+    move("DLEFT")
+    pos, last = (1, 0), None
+    for ch in code:
+        key = next(k for k, v in ROOM_KEYS.items() if ch in v)
+        if key == last:
+            move("DRIGHT" if pos[1] < 2 else "DLEFT")
+            move("DLEFT" if pos[1] < 2 else "DRIGHT")
+        r, c = pos
+        while r < key[0]:
+            move("DDOWN"); r += 1
+        while r > key[0]:
+            move("DUP"); r -= 1
+        while c < key[1]:
+            move("DRIGHT"); c += 1
+        while c > key[1]:
+            move("DLEFT"); c -= 1
+        pos = (r, c)
+        steps.extend(["tap A 8", "wait 10"] * (ROOM_KEYS[key].index(ch) + 1))
+        last = key
+    g.steps(*steps)
+
+
+def test_ruleset_picked_in_game(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                gpu_backend: str) -> None:
+    """The game's Ruleset line (room_play.cpp, decision 12) against the real server: the host's own
+    published ruleset comes in the list (CMD_RULESETS <- mm room-rulesets), right and A play it in
+    the room; "Enter code" types another one's code on the keypad. Each becomes the room's
+    ruleset on both machines and the host's remembered one."""
+    from test_room_rules import menu_open, open_rules, two_in_a_room
+    a, b, _code = two_in_a_room(backend, dolphin, gpu_backend, "picked")
+    for g in (a, b):
+        g.out = SETS_ART / "picked" / g.name
+        g.out.mkdir(parents=True, exist_ok=True)
+    first = backend._http("POST", "/v1/rulesets", {"ruleset": BO3}, token=a.user.session_token)["code"]
+    other = dict(BO3, name="Typed Ruleset", bestOf=0, bans=0, dsr=False, stageChoice="random", strikes=[])
+    second = backend._http("POST", "/v1/rulesets", {"ruleset": other}, token=a.user.session_token)["code"]
+
+    # The list: P+ default (the room's), then the host's rulesets; one right is the newest own one.
+    open_rules(a)
+    a.steps("tap DDOWN 8", "wait 8", "tap DDOWN 8", "wait 8", "tap DDOWN 8", "wait 8", "tap DDOWN 8", "wait 40")
+    a.shot("01-ruleset-line")
+    a.steps("tap DRIGHT 8", "wait 30")
+    a.shot("02-browse")
+    a.steps("tap A 8", "wait 40")
+    _wait(lambda: not menu_open(a), 10, "the menu closed by the pick")
+    for g in (a, b):
+        _wait(lambda g=g: rooms(g).get("ruleset", {}).get("code") in (first, second), 30,
+              f"{g.name}: a picked ruleset")
+    picked = rooms(a)["ruleset"]["code"]
+    assert backend._http("GET", "/v1/me/ruleset", token=a.user.session_token)["ruleset"]["code"] == picked
+    a.steps("wait 30")
+    a.shot("03-picked")
+
+    # Enter code: left from the room's ruleset to the end of the list, A, the keypad, START.
+    want = first if picked == second else second
+    open_rules(a)
+    a.steps("tap DDOWN 8", "wait 8", "tap DDOWN 8", "wait 8", "tap DDOWN 8", "wait 8", "tap DDOWN 8", "wait 30")
+    # (the list wraps: the room's ruleset, P+ default, then "Enter code" at the end)
+    a.steps("tap DLEFT 8", "wait 15", "tap DLEFT 8", "wait 15")
+    a.shot("04-enter-code")
+    a.steps("tap A 8", "wait 60")
+    assert not menu_open(a), "Enter code did not open the keypad"
+    keypad_letters(a, want)
+    a.shot("05-code-typed")
+    a.steps("tap START 8", "wait 60")
+    for g in (a, b):
+        _wait(lambda g=g: rooms(g).get("ruleset", {}).get("code") == want, 30, f"{g.name}: the typed ruleset")
+    assert backend._http("GET", "/v1/me/ruleset", token=a.user.session_token)["ruleset"]["code"] == want
+    assert not ppom.read_local(a.c, ppom.find_block(a.c))["lock"]["ready"], "the keypad's START locked in"
+    a.steps("wait 30")
+    a.shot("06-typed")
