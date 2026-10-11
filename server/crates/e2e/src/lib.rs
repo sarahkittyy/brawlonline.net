@@ -220,6 +220,28 @@ impl Stack {
         (status, serde_json::from_str(&text).unwrap_or(Value::Null))
     }
 
+    pub async fn put(&self, path: &str, token: Option<&str>, body: Value) -> (u16, Value) {
+        let mut req = self.http.put(self.url(path)).json(&body);
+        if let Some(t) = token {
+            req = req.bearer_auth(t);
+        }
+        let resp = req.send().await.expect("http");
+        let status = resp.status().as_u16();
+        let text = resp.text().await.unwrap_or_default();
+        (status, serde_json::from_str(&text).unwrap_or(Value::Null))
+    }
+
+    pub async fn delete(&self, path: &str, token: Option<&str>) -> (u16, Value) {
+        let mut req = self.http.delete(self.url(path));
+        if let Some(t) = token {
+            req = req.bearer_auth(t);
+        }
+        let resp = req.send().await.expect("http");
+        let status = resp.status().as_u16();
+        let text = resp.text().await.unwrap_or_default();
+        (status, serde_json::from_str(&text).unwrap_or(Value::Null))
+    }
+
     /// The token from the last email sent to `email`.
     pub fn mailed_token(&self, email: &str) -> String {
         let mail = self.mailer.last_to(email).unwrap_or_else(|| panic!("no email to {email}"));
