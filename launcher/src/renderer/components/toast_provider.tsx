@@ -32,6 +32,10 @@ export const ToastProvider = ({ children }: { children: React.ReactNode }) => {
     <SnackbarProvider
       maxSnack={3}
       preventDuplicate={true}
+      // notistack stops every toast's timer while the window is unfocused, and the launcher is unfocused
+      // whenever the game is, so toasts shown around a hand-off stayed until the launcher was clicked again.
+      // Hovering a toast still holds it.
+      disableWindowBlurListener={true}
       anchorOrigin={{
         vertical: "bottom",
         horizontal: "right",

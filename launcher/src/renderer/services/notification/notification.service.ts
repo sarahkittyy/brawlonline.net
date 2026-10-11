@@ -13,8 +13,9 @@ export default function createNotificationClient(): NotificationService {
       } else {
         message = JSON.stringify(error);
       }
-      // Let's not automatically hide error messages
-      enqueueSnackbar(message, { variant: "error", persist: true });
+      // Errors stay up longer than the other toasts, but still go away on their own: most are transient
+      // ("Close Dolphin to switch accounts", a chat message that didn't send) and used to stay until closed.
+      enqueueSnackbar(message, { variant: "error", autoHideDuration: 10000 });
     },
     showSuccess: (message: string) => enqueueSnackbar(message, { variant: "success", autoHideDuration: 2500 }),
     showWarning: (message: string) => enqueueSnackbar(message, { variant: "warning" }),
