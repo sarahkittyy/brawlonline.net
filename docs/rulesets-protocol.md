@@ -1,0 +1,87 @@
+# Rulesets: format, accounts API, links
+
+_Phase 3a of `docs/design/room-rules.md` §8 (2026-10-11): the ruleset format, publishing and storage in accounts, the launcher's Rulesets page and code box, the `brawlonline://` URL scheme and the website's `/r/<code>` page. mm (rooms created with a ruleset, the in-game Ruleset line), Dolphin and the game read what is described here; they are built separately._
+
+---
+
+## 1. The format
+
+`common::rules::Ruleset` (`server/crates/common/src/rules.rs`), JSON in camelCase. Missing fields take the defaults (P+ default, below); an unknown field is refused, so an older server or launcher never drops a field it does not know.
+
+| Field | Values | Notes |
+|---|---|---|
+| `format` | `1` | `RULESET_FORMAT`. A newer format is refused: "This ruleset was made by a newer version. Update to use it." |
+| `name` | 1-32 characters | What a display name may hold (printable ASCII, Hiragana, Katakana; no `\` or `` ` ``): the game draws it. No leading or trailing spaces (the server trims). Not unique. |
+| `version` | 1, 2, ... | Assigned by the server when published; 0 in drafts and files. |
+| `by` | text | The publisher's display name, filled by the server (follows renames; the name at publishing once the account is deleted). Ignored when sent. |
+| `rules` | `MatchRules` | Every field of the room rules: `style`, `stocks`, `timeMinutes`, `damageRatio`, `teamAttack`, `pause`, `itemFrequency`, `itemSwitch`, `hazards`, `autoLCancel`, `inputAssist` (`room-rules.md` §3). |
+| `stages.starters` | stage ids | `srStageKind` (1-255), at least one. Game 1 of a set, and every game with `stageChoice: "strike"`, strikes from these. |
+| `stages.counterpicks` | stage ids | The extra stages of games 2+: games 2+ pick from starters **and** counterpicks. No stage is in both lists. The launcher offers P+'s 15 legal stages (`PPLUS_LEGAL_STAGES`). |
+| `players` | `"1v1"`, `"2v2"`, `"ffa"` | A room can't start until its slots and teams match. |
+| `bestOf` | `0`, `3`, `5`, `7` | 0: no set, one game at a time. FFA: 0. |
+| `stageChoice` | `"loser-picks"`, `"strike"`, `"random"` | No set only (with a set it is `"loser-picks"` and unused). FFA: not `"strike"`. |
+| `strikes` | e.g. `[1, 2, 1]` | The strike pattern over the starters, turns alternating from the first striker (`[1, 2, 1]`: first strikes 1, the other 2, the first 1). The sum is the starter count minus one: it leaves exactly one stage. Used by sets and `"strike"`; empty otherwise. |
+| `bans` | 0-3 | Games 2+ of a set: the winner bans. Fewer than the stages. 0 without a set. |
+| `dsr` | bool | Games 2+ of a set: the loser can't pick a stage they won on. false without a set. |
+
+**Normalizing.** `Ruleset::normalize()` clears what the format leaves unused (with a set `stageChoice` is `"loser-picks"`; without one `bans` 0 and `dsr` false; `strikes` empty unless striking; the name trimmed), so two rulesets that play the same have the same JSON. The server normalizes before it validates and publishes; `validate()` refuses an unused field with a value.
+
+**Hash.** `Ruleset::hash()`: SHA-256 (lowercase hex) of `canonical_json()`: every field except `by`, keys sorted at every level, no whitespace, numbers and strings as serde_json writes them (`1.0` for a damage ratio of 1). The name and version are in it: the hash names one published snapshot. accounts stores exactly the canonical bytes (`rulesets.json`, text) next to the hash. A test pins one hash, so a change to the canonical form is noticed.
+
+**Codes.** 6 letters of the room codes' 20 (`BCDFGHJKLMNPQRSTVWXZ`), random, assigned by accounts. `parse_ruleset_code` accepts any case, full width and surrounding spaces.
+
+**P+ default** (`Ruleset::default()`, what "no ruleset" means): P+'s competitive `MatchRules`, Ranked's starters (Battlefield, Final Destination, Smashville, Dream Land, Pokémon Stadium 2) and the other 10 legal stages as counterpicks, 1v1, no set, loser picks.
+
+## 2. Storage (`server/migrations/0008_rulesets.sql`)
+
+| Table | What |
+|---|---|
+| `rulesets` | Published versions: `code` (PK), `owner` (NULL once the account is deleted), `lineage` (every version of one ruleset), `version`, `name`, `publisher_name`, `json` (canonical, text), `hash`, `hidden`, `created_at`. A trigger refuses every change but `hidden` (and the owner going to NULL) and every delete. |
+| `ruleset_drafts` | The owner's unpublished rulesets (`json` as sent; may not validate), `based_on` (the published version it edits). |
+| `remembered_rulesets` | One per account (decision 11). No row: P+ default. |
+| `ruleset_recent` | The rulesets the account made its remembered one, newest 10 kept. |
+
+mm's role `pp_mm` may read `rulesets` and read and write `remembered_rulesets` and `ruleset_recent` (`common::db::fetch_ruleset`, `remembered_ruleset`, `set_remembered_ruleset`, `recent_rulesets`, `newer_ruleset_version`), never drafts; `e2e/tests/mm_grants.rs` checks it.
+
+## 3. accounts API
+
+JSON, errors as everywhere in accounts (`{"error": {"code", "message"}}`, 429 with `Retry-After`). Session auth (`Authorization: Bearer`) except the lookup. Limits: `server/README.md`, "Rate limits".
+
+A **ruleset view** (`RulesetView`):
+
+```json
+{
+  "code": "KFQBTR",
+  "ruleset": { "format": 1, "name": "NorCal Weekly", "version": 3, "by": "sarah", "rules": {...}, "stages": {...}, ... },
+  "hash": "2fa7e67d...",
+  "createdAt": "2026-10-11T21:30:00Z",
+  "newer": { "code": "MNPQRS", "version": 4 },
+  "link": "https://brawlonline.net/r/KFQBTR",
+  "hidden": false
+}
+```
+
+`newer` is the newest later version that is not hidden (null if none). `hidden` is only in the owner's own lists.
+
+| Endpoint | What |
+|---|---|
+| `POST /v1/rulesets` | Publish. Body `{"draftId": "<uuid>"}` (the draft is deleted once published) or `{"ruleset": {...}, "basedOn": "<code>"?}`. Based on one of the account's own rulesets: that ruleset's next version (409 `unchanged` if it plays the same as the newest version, ignoring `version` and `by`); based on someone else's, or on nothing: version 1 of a new ruleset. 201 with the view. 400 `invalid_ruleset` with the reason; 404 `unknown_ruleset` for a `basedOn` nobody published. Needs an account that can play online: 403 `email_not_verified` (when verification is required), 403 `not_activated` (no connect code yet). |
+| `GET /v1/rulesets/<code>` | Public: any published ruleset, hidden ones too. 404 `unknown_ruleset`. Limited per IP. |
+| `GET /v1/me/rulesets` | `{"drafts": [draft...], "published": [view...]}`: drafts newest edit first, published newest first, hidden ones included. |
+| `GET /v1/me/rulesets/recent` | `{"rulesets": [view + "usedAt"...]}`, newest first, at most 10. |
+| `PUT /v1/me/rulesets/<code>/hidden` | `{"hidden": true}`: off the owner's list and off "newer version" links; the code keeps working. 204; 404 unless it is the account's. |
+| `POST /v1/me/ruleset-drafts` | `{"ruleset": {...}, "basedOn": "<code>"?}`. 201 with the draft. 409 `too_many_drafts` at 50. |
+| `GET` / `PUT` / `DELETE /v1/me/ruleset-drafts/<id>` | Read, replace (same body as POST), delete (204). 404 unless it is the account's. |
+| `GET /v1/me/ruleset` | `{"ruleset": view | null}`: the remembered ruleset (null: P+ default). |
+| `PUT /v1/me/ruleset` | `{"code": "<code>" | null}`: sets it (null: P+ default); a code also goes to the top of the recent list. Answers like GET. 404 `unknown_ruleset`. |
+
+A **draft**: `{"id", "basedOn", "ruleset", "problem", "createdAt", "updatedAt"}`. `problem` is why it can't be published yet (`validate()` after `normalize()`), or null. A draft's `version` is 0 and `by` empty.
+
+Published versions are never changed or deleted, by the API or by hand (the trigger). A tournament's link always shows the same rules; an old version's page links the newest one.
+
+## 4. Launcher and links
+
+- **Rulesets page** (launcher, `/rulesets`): drafts (create, edit every field, save, delete), publishing (shows the code and the link), the account's published rulesets (hide / show, edit as a new version, copy the link), import and export of a ruleset as a JSON file (the format above; `by`, `version` ignored on import).
+- **Code box** next to Home's **Create room**: the remembered ruleset's code with its name and publisher beside it, read from and saved to `GET`/`PUT /v1/me/ruleset`; X clears it (P+ default). Create room writes the code into `join-room.json` (`docs/rooms-game-interface.md`): `{"kind": "create", "ruleset": "<code>"}`.
+- **URL scheme** `brawlonline://`, registered on Windows, macOS and Linux (electron-builder `protocols`; `app.setAsDefaultProtocolClient` for unpackaged and AppImage runs). `brawlonline://room/create?ruleset=<code>` makes the code the remembered ruleset (when logged in) and creates a room with it, as Create room does. Anything else is ignored (logged).
+- **`https://brawlonline.net/r/<code>`** (`website/r/index.html`): the ruleset (name, by, version, every rule, the stages, the set format, a "newer version" link) from `GET /v1/rulesets/<code>`, with **Create room with this ruleset** (opens `brawlonline://room/create?ruleset=<code>`) and a download link for visitors without the launcher. nginx serves `r/index.html` for every `/r/<code>`.

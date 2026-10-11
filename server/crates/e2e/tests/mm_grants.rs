@@ -1,5 +1,5 @@
 //! mm's queries work as production's `pp_mm` role, with only the privileges the migrations grant
-//! it (0005_mm_grants.sql). A migration that adds something mm reads without granting it fails
+//! it (0005_mm_grants.sql and the later migrations' grants). A migration that adds something mm reads without granting it fails
 //! here instead of in production ("Matchmaking unavailable", 2026-10-09).
 
 use common::db;
@@ -43,7 +43,7 @@ async fn mm_pool(stack: &Stack) -> PgPool {
 async fn mm_queries_work_as_pp_mm() {
     ensure_mm_role().await;
     let stack = Stack::start(StackOptions::default()).await.unwrap();
-    let (_, alice) = stack.create_player("alice@example.test", "alice", "alic").await;
+    let (alice_session, alice) = stack.create_player("alice@example.test", "alice", "alic").await;
     let (_, bob) = stack.create_player("bob@example.test", "bob", "bo").await;
     let a: Uuid = alice.uid.parse().unwrap();
     let b: Uuid = bob.uid.parse().unwrap();
@@ -107,6 +107,32 @@ async fn mm_queries_work_as_pp_mm() {
     assert_eq!(rows, vec![(Some(a), Some(b)), (Some(a), None)]);
     // Reports are write-only for mm.
     let err = sqlx::query("SELECT reason FROM chat_reports").execute(&pool).await.unwrap_err();
+    assert!(err.to_string().contains("permission denied"), "{err}");
+
+    // Rulesets (0008_rulesets.sql): mm reads published ones and reads and writes the remembered
+    // ruleset and the recent list (in-game Create Room, the RULES screen's Ruleset line).
+    let (st, published) = stack
+        .post(
+            "/v1/rulesets",
+            Some(&alice_session),
+            serde_json::json!({"ruleset": {"name": "Weekly", "bestOf": 3, "strikes": [1, 2, 1]}}),
+        )
+        .await;
+    assert_eq!(st, 201, "{published}");
+    let code = published["code"].as_str().unwrap();
+    let p = db::fetch_ruleset(&pool, code).await.unwrap().unwrap();
+    assert_eq!((p.ruleset.name.as_str(), p.ruleset.by.as_str(), p.ruleset.version), ("Weekly", "alice", 1));
+    assert_eq!(p.hash, published["hash"].as_str().unwrap());
+    db::set_remembered_ruleset(&pool, b, Some(code)).await.unwrap();
+    assert_eq!(db::remembered_ruleset(&pool, b).await.unwrap().unwrap().code, code);
+    assert_eq!(db::recent_rulesets(&pool, b).await.unwrap().len(), 1);
+    db::set_remembered_ruleset(&pool, b, None).await.unwrap();
+    assert!(db::remembered_ruleset(&pool, b).await.unwrap().is_none());
+    assert!(db::newer_ruleset_version(&pool, p.lineage, 1).await.unwrap().is_none());
+    // Drafts are not mm's, and mm can't publish or hide.
+    let err = sqlx::query("SELECT json FROM ruleset_drafts").execute(&pool).await.unwrap_err();
+    assert!(err.to_string().contains("permission denied"), "{err}");
+    let err = sqlx::query("UPDATE rulesets SET hidden = true").execute(&pool).await.unwrap_err();
     assert!(err.to_string().contains("permission denied"), "{err}");
 
     // And nothing else: no password hashes or emails.

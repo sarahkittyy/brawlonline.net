@@ -50,6 +50,19 @@ pub const HISTORY_WINDOWS: [Window; 1] = [Window::new(60, MINUTE)];
 /// every 4 s while Home is open (15 a minute), so this leaves room for a second launcher.
 pub const ROOMS_WINDOWS: [Window; 1] = [Window::new(60, MINUTE)];
 
+/// Rulesets published per account (`POST /v1/rulesets`): 10 per hour and 30 per day. Each one is
+/// a row that is never deleted, so the limit is the store's growth.
+pub const RULESET_PUBLISH_WINDOWS: [Window; 2] = [Window::new(10, HOUR), Window::new(30, DAY)];
+
+/// Ruleset lookups by code (`GET /v1/rulesets/<code>`, public: the website's /r/ page) per client
+/// IP (IPv6 per /64): 60 per minute and 1,000 per hour. Codes are random, so this also keeps
+/// anyone from walking the 64 M codes.
+pub const RULESET_LOOKUP_IP_WINDOWS: [Window; 2] = [Window::new(60, MINUTE), Window::new(1000, HOUR)];
+
+/// The account's own ruleset calls (drafts, hide, the remembered ruleset, lists) per account: 120
+/// per minute. The launcher saves a draft when the player stops typing.
+pub const RULESET_EDIT_WINDOWS: [Window; 1] = [Window::new(120, MINUTE)];
+
 #[derive(Debug)]
 pub struct RateLimiter<K> {
     windows: Vec<Window>,

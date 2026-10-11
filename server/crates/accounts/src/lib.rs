@@ -13,18 +13,19 @@ pub mod pages;
 pub mod password;
 pub mod ranked;
 pub mod rooms;
+pub mod rulesets;
 pub mod social;
 pub mod store;
 
 use std::net::{IpAddr, SocketAddr};
 use std::sync::{Arc, Mutex};
 
-use axum::routing::{get, post};
+use axum::routing::{get, post, put};
 use axum::Router;
 use common::playkey::PlayKeySecret;
 use common::ratelimit::{
     RateLimiter, Window, AUTH_WINDOWS, DAY, HISTORY_WINDOWS, LEADERBOARD_IP_WINDOWS, MAIL_RECIPIENT_WINDOWS,
-    ROOMS_WINDOWS, SIGNUP_IP_WINDOWS,
+    ROOMS_WINDOWS, RULESET_EDIT_WINDOWS, RULESET_LOOKUP_IP_WINDOWS, RULESET_PUBLISH_WINDOWS, SIGNUP_IP_WINDOWS,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -84,6 +85,12 @@ pub struct Limits {
     pub history: RateLimiter<uuid::Uuid>,
     /// Room list requests per account: [`ROOMS_WINDOWS`].
     pub rooms: RateLimiter<uuid::Uuid>,
+    /// Rulesets published per account: [`RULESET_PUBLISH_WINDOWS`].
+    pub ruleset_publish: RateLimiter<uuid::Uuid>,
+    /// Ruleset lookups per client IP (IPv6 per /64): [`RULESET_LOOKUP_IP_WINDOWS`].
+    pub ruleset_lookup_ip: RateLimiter<IpAddr>,
+    /// The account's own ruleset calls: [`RULESET_EDIT_WINDOWS`].
+    pub ruleset_edit: RateLimiter<uuid::Uuid>,
 }
 
 impl Limits {
@@ -103,6 +110,9 @@ impl Limits {
             leaderboard_ip: RateLimiter::new(&LEADERBOARD_IP_WINDOWS),
             history: RateLimiter::new(&HISTORY_WINDOWS),
             rooms: RateLimiter::new(&ROOMS_WINDOWS),
+            ruleset_publish: RateLimiter::new(&RULESET_PUBLISH_WINDOWS),
+            ruleset_lookup_ip: RateLimiter::new(&RULESET_LOOKUP_IP_WINDOWS),
+            ruleset_edit: RateLimiter::new(&RULESET_EDIT_WINDOWS),
         }
     }
 
@@ -136,6 +146,17 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/ranked/result", get(ranked::result))
         .route("/v1/ranked/leaderboard", get(leaderboard::leaderboard))
         .route("/v1/rooms", get(rooms::rooms))
+        .route("/v1/rulesets", post(rulesets::publish))
+        .route("/v1/rulesets/{code}", get(rulesets::lookup))
+        .route("/v1/me/rulesets", get(rulesets::mine))
+        .route("/v1/me/rulesets/recent", get(rulesets::recent))
+        .route("/v1/me/rulesets/{code}/hidden", put(rulesets::set_hidden))
+        .route("/v1/me/ruleset-drafts", post(rulesets::create_draft))
+        .route(
+            "/v1/me/ruleset-drafts/{id}",
+            get(rulesets::get_draft).put(rulesets::update_draft).delete(rulesets::delete_draft),
+        )
+        .route("/v1/me/ruleset", get(rulesets::remembered).put(rulesets::set_remembered))
         .route("/v1/social/stream", get(social::stream))
         .route("/v1/social/dm", post(social::dm))
         .route("/v1/social/invite", post(social::invite))
