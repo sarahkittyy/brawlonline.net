@@ -303,6 +303,13 @@ jobs:
         run: |
           npm ci --no-audit --no-fund
           node node_modules/electron/install.js
+      # On a hit, the one thing npm ci's postinstall made outside the cached paths: the
+      # src/node_modules junction to release/app/node_modules, without which webpack cannot
+      # resolve the app's own dependencies (threads) from src/.
+      - name: Launcher module link
+        if: steps.node-modules.outputs.cache-hit == 'true'
+        working-directory: launcher/release/app
+        run: npm run link-modules
       - name: Package (NSIS)
         working-directory: launcher
         shell: bash
