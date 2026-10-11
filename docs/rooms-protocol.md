@@ -54,7 +54,7 @@ or refuses and disconnects:
 | `{"type": "room-create", "public": true}` | anyone | any time | A new room, the sender in slot 1 as host, slots 1-2 open, 3-4 closed. `public` is optional (default true). Leaves the sender's old room first. |
 | `{"type": "room-join", "code": "KFQB"}` | anyone | any time | Takes the lowest open, empty slot. The code is matched case- and width-insensitively (`kfqb`, `ＫＦＱＢ`). Leaves the sender's old room first. Joining the room one is in answers its state. |
 | `{"type": "room-leave"}` | member | any time | Leaves (answered with `room-left`). |
-| `{"type": "room-slot", "slot": 3, "open": true}` | host | between games | Opens or closes slot 1-4. Closing an occupied slot removes its player ("Removed from the room."), who cannot join this room again. |
+| `{"type": "room-slot", "slot": 3, "open": true}` | host | between games | Opens or closes slot 1-4. Closing an occupied slot removes its player ("Removed from the room."), who may join again once a slot is open. |
 | `{"type": "room-teams", "on": true}` | host | between games | The Teams switch. Changing it clears everyone's ready. |
 | `{"type": "room-public", "public": false}` | host | any time | Public or private (a private room is joinable by code only). |
 | `{"type": "room-ready", "ready": true, "character": 12, "costume": 0}` | member | not during the start, not while still in the last game | START on the CSS (lock-in) or taking it back. `character` and `costume` are optional numbers 0-255 the server only passes on; they are shown to the others while ready. |

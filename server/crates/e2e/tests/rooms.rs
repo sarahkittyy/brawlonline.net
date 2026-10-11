@@ -98,7 +98,7 @@ async fn create_join_full_not_found_kick_and_host_hand_over() {
     join(&mut c, &code);
     assert_eq!(room_state(&mut c)["you"], 3);
 
-    // Closing bob's slot removes him; he cannot come back.
+    // Closing bob's slot removes him. He is not banned: once the slot is open again he joins again.
     a.send(&RoomRequest::Slot { slot: 2, open: false });
     let left = b.wait_for(WAIT, |m| m["type"] == "room-left").unwrap();
     assert_eq!(left, json!({"type": "room-left", "code": code, "reason": msg::REMOVED}));
@@ -107,7 +107,9 @@ async fn create_join_full_not_found_kick_and_host_hand_over() {
     a.send(&RoomRequest::Slot { slot: 2, open: true });
     room_state_where(&mut a, |s| s["slots"][1]["open"] == true);
     join(&mut b, &code);
-    assert_eq!(room_error(&mut b)["error"], msg::REMOVED);
+    assert_eq!(room_state(&mut b)["you"], 2);
+    b.send(&RoomRequest::Leave);
+    b.wait_for(WAIT, |m| m["type"] == "room-left").unwrap();
 
     // The host's game closes: carol (the earliest-joined left) is the host, the code stays.
     a.close();
