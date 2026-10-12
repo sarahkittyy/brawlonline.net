@@ -47,6 +47,7 @@ std::array<std::vector<u8>, 2> s_members{std::vector<u8>{0}, std::vector<u8>{1}}
 // The session host's in-game port: in a set of two-player sides its machine decides which presses
 // count (SetFormat.h TakePresses).
 int s_host_port = 0;
+std::array<std::string, MAX_PORTS> s_names;  // by in-game port (SetPortNames)
 // The session's game 1's actions so far, per side (the ticket's: a session started again).
 std::array<std::vector<u8>, 2> s_seed;
 // The last TakeStepReport.
@@ -449,6 +450,19 @@ size_t Usable(const std::vector<u16>& list)
   return seen.size();
 }
 
+// Under s_mutex: side `side`'s players by name ("alice", "alice & bo"), "" when not known.
+std::string SideNames(int side)
+{
+  std::string out;
+  for (const u8 p : s_members[side])
+  {
+    if (p >= MAX_PORTS || s_names[p].empty())
+      return "";
+    out += (out.empty() ? "" : " & ") + s_names[p];
+  }
+  return out;
+}
+
 Gprb::Session::StageDecision Decide(u32 game)
 {
   // Called by the session with its lock held: read the players' extras first, then take ours.
@@ -523,6 +537,12 @@ void Begin(int local_port, const SetTicket& ticket, int host_port)
                  Shared() ? fmt::format(", either teammate presses, P{} decides", host_port + 1) : "");
 }
 
+void SetPortNames(const std::array<std::string, MAX_PORTS>& names)
+{
+  std::lock_guard lk(s_mutex);
+  s_names = names;
+}
+
 u32 SetGameOf(u32 session_game)
 {
   std::lock_guard lk(s_mutex);
@@ -588,6 +608,7 @@ void Begin(int local_port, Format format)
     s_side_ports = {0, 1};
     s_members = {std::vector<u8>{0}, std::vector<u8>{1}};
     s_host_port = 0;
+    s_names = {};
     s_seed = {};
     s_reported.reset();
     s_act_game = 0;
@@ -802,6 +823,13 @@ View Current()
         const bool loser_locked = side_locked(1 - winner_side);
         const auto& peer_lock = locks[s_side_ports[winner_side]];
         const bool pair = s_members[0].size() > 1;
+        // Who is picking, by name ("alice is picking", "alice & bo are picking").
+        const auto picking = [&](int side) {
+          const std::string names = SideNames(side);
+          if (names.empty())
+            return std::string(pair ? "Opponents are picking" : "Opponent is picking");
+          return names + (pair ? " are picking" : " is picking");
+        };
         v.type = StepType::Char;
         if (!winner_locked || !loser_locked)
         {
@@ -813,12 +841,16 @@ View Current()
           if (mine && winner)
             v.text = fmt::format("Press START to lock in ({})", v.seconds);
           else if (mine && pair)
-            v.text = fmt::format("Opponents locked in ({})", v.seconds);
+            v.text = fmt::format("Your turn: they locked in ({})", v.seconds);
           else if (mine)
-            v.text = fmt::format("Opponent picked {} ({})",
+            v.text = fmt::format("Your turn: {} picked {} ({})",
+                                 SideNames(winner_side).empty() ? "they" : SideNames(winner_side),
                                  CharName(peer_lock ? peer_lock->char_kind : 0xFF), v.seconds);
+          else if (!winner)
+            // The loser waits for the winner's character (Slippi's order), then picks.
+            v.text = fmt::format("{}, then you ({})", picking(winner_side), v.seconds);
           else
-            v.text = fmt::format("{} choosing ({})", pair ? "Opponents are" : "Opponent is", v.seconds);
+            v.text = fmt::format("{} ({})", picking(1 - winner_side), v.seconds);
         }
         v.may_lock = v.my_turn;
       }

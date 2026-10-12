@@ -1818,6 +1818,14 @@ namespace OnlineMenu {
 
     static bool roomLockedForNext() { return roomGame() && s.lockedGame == roomGame(); }
 
+    // A set's character step (Ranked's, a room's set; Slippi's order) that is not this player's
+    // yet: the winner picks first, the loser after seeing it. The token stays where it is until
+    // then (staging 2026-10-12: picked up during the winner's turn it could not be put down).
+    static bool waitsForCharTurn()
+    {
+        return stepSession() && s.step.active && s.step.type == PPOM::STEP_CHAR && !s.step.myTurn;
+    }
+
     static bool roomLocked()
     {
         // Ready, or the room is starting (the lock-in must not change then), or a game is armed.
@@ -2659,7 +2667,7 @@ namespace OnlineMenu {
 
         bool onCss = g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0;
         if (!onCss) s.stepFloor = s.stepSeq;   // only a step asked for on the CSS counts there
-        g_onlineCssLock = (onCss && lockedIn()) ? 1 : 0;
+        g_onlineCssLock = (onCss && (lockedIn() || waitsForCharTurn())) ? 1 : 0;
         if (g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelStage") == 0) {
             if (s.quitNoticeFrames) --s.quitNoticeFrames;   // shown with the step (rankedText)
             // Direct's loser picks the stage on P+'s stage select. The pick is the stage and its
@@ -2752,7 +2760,7 @@ namespace OnlineMenu {
                 tickConnected(pressed);
             }
         }
-        g_onlineCssLock = lockedIn() ? 1 : 0;
+        g_onlineCssLock = (lockedIn() || waitsForCharTurn()) ? 1 : 0;
         PPOM::g_block.debug.scratch[1] = (u32)g_onlineCssLock | ((u32)s.phase << 4);   // harness/tests
         if (s.quitNoticeFrames) --s.quitNoticeFrames;
         updateStatus();

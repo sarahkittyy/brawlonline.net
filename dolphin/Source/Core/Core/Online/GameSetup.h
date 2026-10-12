@@ -114,6 +114,10 @@ const std::vector<u16>& DefaultStarters();
 // are in-game ports (0 = P1); a room's slot is its port, and ports may be empty (P1, P3).
 
 constexpr int MAX_PORTS = 4;
+
+// The players' names by in-game port, for the character step's line ("alice is picking, then
+// you"); empty: "Opponent". Set after Begin.
+void SetPortNames(const std::array<std::string, MAX_PORTS>& names);
 constexpr u8 NO_TEAM = 0xFF;
 // Brawl's team colours (gmPlayerInitData+0x0B; Slippi's order): 0 red, 1 blue, 2 green.
 constexpr u8 NUM_TEAMS = 3;

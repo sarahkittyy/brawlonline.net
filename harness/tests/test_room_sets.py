@@ -620,9 +620,10 @@ def test_room_set_characters_between_games(backend: OnlineBackend, dolphin: Call
                                            gpu_backend: str) -> None:
     """After a set game (staging, 2026-10-12): both players are on the CSS inside the set's
     session, and their panels show them choosing or ready, not "Brawling" (the room says in game
-    for the whole session). The loser changes character during the winner's turn (B calls the
-    token back, a new one placed), sees the winner's character once the winner locks in, and then
-    locks in; game 2 starts with the loser's new character."""
+    for the whole session). Slippi's order, kept by the user: the winner picks first; the line
+    names them ("<winner> is picking, then you") and the loser's token stays where it is until
+    their turn (B does not call it back). Then the loser sees the winner's character, changes
+    theirs and locks in; game 2 starts with the loser's new character."""
     a, b, code = bo3_room(backend, dolphin, gpu_backend, "chars")
     players = [a, b]
     _all(lambda: a.steps("tap START 8", "wait 30"), lambda: b.steps("tap START 8", "wait 30"))
@@ -636,17 +637,22 @@ def test_room_set_characters_between_games(backend: OnlineBackend, dolphin: Call
     for g, other in ((a, 1), (b, 0)):
         bits = room_view(g)["slots"][other]["bits"]
         assert not bits & ppom.SLOT_IN_GAME, (g.name, room_view(g)["slots"])
-    assert setup_view(b)["text"].startswith("Opponent is choosing"), setup_view(b)
+    assert setup_view(b)["text"].startswith(f"{a.name} is picking, then you ("), setup_view(b)
     b.shot("01-not-brawling")
-    # The loser's new character, during the winner's turn.
+    # During the winner's turn the loser's token stays put: B does not call it back.
     before = rooms(b)["lock"]["char_kind"]
     b.steps("tap B 8", "wait 30")
-    placed = B.css_pick_character(b.c, 0, 0x0A)
-    assert placed.placed and placed.character == 0x0A, placed
-    # The winner locks in: the loser's panel for them shows it.
+    held = B.read_css_area(b.c.read_mem, 0)
+    assert held is not None and held.placed, held
+    # The winner locks in: the loser's turn, with the winner's character shown.
     a.steps("tap START 8", "wait 60")
     v = until_setup(b, lambda v: v["my_turn"] and v["may_lock"], "the loser's turn")
-    assert v["text"].startswith("Opponent picked"), v
+    assert v["text"].startswith(f"Your turn: {a.name} picked "), v
+    # B calls the token back, the hand takes it down a row onto another character, A puts it.
+    old_css = B.read_css_area(b.c.read_mem, 0).character
+    b.steps("tap B 8", "wait 30", "stick down 12", "wait 20", "tap A 8", "wait 30")
+    placed = B.read_css_area(b.c.read_mem, 0)
+    assert placed is not None and placed.placed and placed.character not in (old_css, 0x28), (old_css, placed)
     _wait(lambda: room_view(b)["slots"][0]["bits"] & ppom.SLOT_READY and room_view(b)["slots"][0]["char"] != 0xFF,
           10, "B sees A ready with a character")
     b.shot("02-winner-ready")

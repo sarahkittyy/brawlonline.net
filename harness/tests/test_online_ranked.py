@@ -191,14 +191,15 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
 
         # Characters: the winner first; the loser's START does nothing until then.
         v = _wait_view(loser, lambda v: v["type"] == 3, "the character step")
-        assert not v["may_lock"] and v["text"].startswith("Opponent is choosing ("), v
+        # The winner by name, and that the loser is next (staging 2026-10-12).
+        assert not v["may_lock"] and v["text"].startswith(f"{winner.name} is picking, then you ("), v
         n = _locks(loser)
         loser.steps("tap START 8", "wait 40")
         assert _locks(loser) == n, "the loser locked in before the winner"
         loser.shot(f"g{game}-css-loser-waits")
         winner.steps("tap START 8", "wait 30")
         v = _wait_view(loser, lambda v: v["may_lock"], "the loser's turn")
-        assert v["text"].startswith("Opponent picked "), v
+        assert v["text"].startswith(f"Your turn: {winner.name} picked "), v
         loser.shot(f"g{game}-css-loser-turn")
         if game == 2:
             # Slippi's character step: 45 s, then 3 s of grace, then the character selected.

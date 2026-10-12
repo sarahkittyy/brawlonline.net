@@ -8,9 +8,11 @@
 //   it is right then, sampled without locks: its instruction pointer and the words on its stack
 //   that point into a loaded module (Windows; elsewhere the CPU time only);
 // - when the next field comes (also for a stall it could not see, the whole process stopped):
-//   how long the stall was and how much CPU time each thread used
-//   during it. Little CPU time means the OS did not run the process (a busy machine); a thread
-//   that kept a core busy was working through it (emulation, a shader compile, a lock spin).
+//   how long the stall was and how much CPU time each thread used during it. A thread that kept
+//   a core busy was working through it (emulation, a shader compile, a lock spin); little CPU
+//   time on every thread means they all waited: for something (the sample's stacks show a wait
+//   function and who called it) or for the OS to run them at all (a busy machine: the stacks
+//   show ordinary work, and the process got no CPU).
 // Staging feedback 2026-10-12: second-long freezes on one machine only, with nothing in the log.
 
 #pragma once

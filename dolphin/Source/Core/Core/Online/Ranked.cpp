@@ -336,6 +336,13 @@ void OnSessionStart(const Match& match)
   {
     // A room's set (docs/design/room-rules.md §5; 1v1 or 2v2): in-game ports are the room's slots.
     GameSetup::Begin(room_local_port, *match.set, match.room_host_port - 1);
+    std::array<std::string, GameSetup::MAX_PORTS> names;
+    for (const auto& p : match.players)
+    {
+      if (p.port >= 1 && p.port <= GameSetup::MAX_PORTS)
+        names[p.port - 1] = p.display_name;
+    }
+    GameSetup::SetPortNames(names);
     Rooms::SetSetSession(match.set->format.best_of > 0);
   }
   else if (ranked)
@@ -347,6 +354,11 @@ void OnSessionStart(const Match& match)
         local_port = p.is_local == match.is_host ? 0 : 1;
     }
     GameSetup::Begin(local_port, match.starters, match.stages);
+    // Ranked's in-game ports: the host 0, the joiner 1.
+    std::array<std::string, GameSetup::MAX_PORTS> names;
+    for (const auto& p : match.players)
+      names[p.is_local ? local_port : 1 - local_port] = p.display_name;
+    GameSetup::SetPortNames(names);
   }
   else
   {
