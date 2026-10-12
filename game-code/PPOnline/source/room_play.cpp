@@ -512,15 +512,15 @@ namespace RoomPlay {
         if (!name[0]) strcpy(name, p.custom ? "Custom" : "P+ default");
         int n = sprintf(out, "Ruleset: %s", name);
         if (p.setOn) {
-            n += sprintf(out + n, "   Bo%d: %s %d - %d %s", p.bestOf, name0, p.score[0], p.score[1], name1);
+            n += sprintf(out + n, "\nBo%d: %s %d - %d %s", p.bestOf, name0, p.score[0], p.score[1], name1);
             if (p.setFlags & PPOM::SET_PAUSED) sprintf(out + n, " (paused)");
             else if (p.setFlags & PPOM::SET_FINISHED) sprintf(out + n, " (final)");
         } else if (p.bestOf) {
-            sprintf(out + n, "   Best of %d", p.bestOf);
+            sprintf(out + n, "\nBest of %d", p.bestOf);
         } else {
             static const char* const CHOICE[3] = {"Loser picks the stage", "Stages struck every game",
                                                   "Random stage"};
-            if (p.stageChoice < 3) sprintf(out + n, "   %s", CHOICE[p.stageChoice]);
+            if (p.stageChoice < 3) sprintf(out + n, "\n%s", CHOICE[p.stageChoice]);
         }
     }
 

@@ -138,6 +138,35 @@ namespace RoomRules {
         s.statusFrames = 0;
     }
 
+    // P+'s openRules (sel_char text+0x105D8) called with every non-volatile register (r14-r31,
+    // CR, LR) saved and put back around it: called as an ordinary function, the caller's values in
+    // them did not survive (staging feedback 2026-10-12: a viewer's portraits swapped places while
+    // RULES was open and swapped back, "as if re-entering the room"; seen live: right after the call
+    // tickRoom's own local slot read 0 instead of the viewer's 2, so its panels were placed for
+    // slot 1 until the menu closed and the next tick placed them again; the host, in the first
+    // slot, already had 0).
+    extern "C" __attribute__((naked)) void pponline_callPreserving(u32 fn, u32 a0, u32 a1)
+    {
+        asm volatile(
+            "stwu 1, -0x60(1)\n\t"
+            "mflr 0\n\t"
+            "stw 0, 0x64(1)\n\t"
+            "mfcr 0\n\t"
+            "stw 0, 0x08(1)\n\t"
+            "stmw 14, 0x10(1)\n\t"
+            "mtctr 3\n\t"
+            "mr 3, 4\n\t"
+            "mr 4, 5\n\t"
+            "bctrl\n\t"
+            "lmw 14, 0x10(1)\n\t"
+            "lwz 0, 0x08(1)\n\t"
+            "mtcrf 0xFF, 0\n\t"
+            "lwz 0, 0x64(1)\n\t"
+            "mtlr 0\n\t"
+            "addi 1, 1, 0x60\n\t"
+            "blr\n\t");
+    }
+
     void open(bool setOnly)
     {
         u8* task = cssTask();
@@ -149,11 +178,11 @@ namespace RoomRules {
         s.setOnly = setOnly && s.asHost;
         // The menu shows what is in the set rule and the menu record: the room's rules.
         OnlineMenu::applyRules();
-        typedef void (*OpenFn)(u8* task, int mode);
-        ((OpenFn)OPEN_RULES)(task, 0);
+        pponline_callPreserving(OPEN_RULES, (u32)task, 0);
         s.opened = isOpen();
         if (s.opened) playSE(1);
     }
+
 
     // The host's edits as SESSION's Rules: what the rules menu wrote back into the set rule and
     // the menu record (game-code.md §14's table). The rest of the record (hazards) stays the

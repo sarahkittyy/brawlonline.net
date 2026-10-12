@@ -22,8 +22,9 @@ namespace RoomPlay {
     // "Enter code" was picked: once the rules menu has closed, the caller opens the keypad's
     // ruleset mode (true once).
     bool takeKeypadRequest();
-    // The room CSS's line under the character grid: the ruleset, the set and its score
-    // (`names`: the two sides' players), "" outside a room.
+    // The room CSS's line under the character grid: the ruleset, '\n', the set and its score
+    // (`names`: the two sides' players), "" outside a room (the caller puts the two parts on one
+    // line when they fit, else on two).
     void cssLine(char* out, int size, const char* name0, const char* name1);
     // The rules menu's description line for RULESET / SET (P+'s are for stage choice and stock
     // control), or NULL (Text::overrideFor).

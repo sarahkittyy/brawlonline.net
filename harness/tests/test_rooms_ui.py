@@ -487,6 +487,9 @@ def test_rules_button_at_4_3(rules_game_4_3: Game) -> None:
     g.wait(20)
     assert hand_button(g) == BUTTON_RULES
     g.shot("4x3-hover")
+    # The ruleset / set line with the longest names, at 4:3.
+    long_set_line(g)
+    g.shot("4x3-long-ruleset")
 
 
 # ---- the room's ruleset and set (room_play.cpp; docs/game-code.md §14 "The Ruleset line and the set")
@@ -809,6 +812,88 @@ def test_host_changes_the_set_length(play_game: Game) -> None:
     close_rules(g)
     g.wait(20)
     assert len(sim.room_ops("best_of")) == 2
+
+
+def test_viewer_opens_rules_panels_stay(play_game: Game) -> None:
+    """A player who is not the host (in slot 3: their panel drawn two slots right) opens RULES to
+    look and closes it: the panels stay where they are the whole time and nothing about the room
+    changes (staging feedback 2026-10-12: the portraits swapped places while the menu was open and
+    swapped back, as if the player had entered the room again)."""
+    g = play_game
+    g.c.game_bridge_config(enabled=False)
+    create_room(g)
+    sim = g.sim
+    g.hand_to(*FOX)                                 # a character: START then enters a code
+    g.tap("A")
+    g.wait(20)
+    g.hold("Z", 60)
+    g.wait(20)
+    sim.joinable["KFQB"] = roomsim.Room(code="KFQB", host=1, open=[True, True, True, False],
+                                        members=[roomsim.Member("carol", team=0),
+                                                 roomsim.Member("bob", team=1), None, None])
+    g.tap("START")
+    g.wait(40)
+    keypad_type(g, "KFQB")
+    g.tap("START")
+    g.wait(90)
+    assert sim.room is not None and sim.me() == 2
+    want = [round(g.panel_offset(i), 2) for i in range(4)]
+    assert abs(want[0] - 2 * SLOT_POS) < 0.1 and abs(want[2] + 2 * SLOT_POS) < 0.1, want
+    joins, leaves = len(sim.room_ops("join")), len(sim.room_ops("leave"))
+    g.shot("17-viewer-before")
+    rb = RulesButton(g)
+    g.hand_to(*rb.centre(), tol=0.4)
+    g.tap("A")
+    seen = []
+    for _ in range(8):
+        g.wait(10)
+        seen.append([round(g.panel_offset(i), 2) for i in range(4)])
+    assert menu_open(g)
+    g.shot("18-viewer-rules-open")
+    g.tap("B")
+    for _ in range(6):
+        g.wait(10)
+        seen.append([round(g.panel_offset(i), 2) for i in range(4)])
+    assert not menu_open(g)
+    g.shot("19-viewer-rules-closed")
+    assert all(o == want for o in seen), (want, seen)
+    assert (len(sim.room_ops("join")), len(sim.room_ops("leave"))) == (joins, leaves)
+    assert sim.room is not None and sim.me() == 2 and sim.room.members[2] is not None
+
+
+LONG_RULESET = "NorCal Weekly Bo3 Tournament v1"          # 31 characters: all RoomPlay.name holds
+LONG_NAMES = ("Sarahkittyalpha", "Bobthebuilderxy")   # 15 characters each
+
+
+def long_set_line(g: Game) -> None:
+    """A room with the longest ruleset name and two long player names, in a set: the line under the
+    grid shows all of it (staging feedback 2026-10-12: it was cut), on two lines."""
+    sim = g.sim
+    sim.name = LONG_NAMES[0]
+    r = sim.room
+    r.members[0].name = LONG_NAMES[0]
+    sim.add_player(1, LONG_NAMES[1])
+    r.ruleset_name, r.ruleset_code, r.best_of = LONG_RULESET, "NQRBTW", 3
+    r.set_on, r.score, r.sides = True, [1, 0], [0, 1]
+    g.wait(40)
+    g.hand_to(20.0, 12.0, tol=0.5)
+    g.wait(10)
+    want = "Ruleset: " + LONG_RULESET + "\nBo3: %s 1 - 0 %s" % LONG_NAMES
+    assert RoomPlayView(g).line() == want, RoomPlayView(g).line()
+    # a short one stays on one line
+    r.ruleset_name = "Short"
+    g.wait(30)
+    assert RoomPlayView(g).line() == "Ruleset: Short   Bo3: %s 1 - 0 %s" % LONG_NAMES, RoomPlayView(g).line()
+    r.ruleset_name = LONG_RULESET
+    g.wait(30)
+
+
+def test_room_play_line_long_names(play_game: Game) -> None:
+    g = play_game
+    g.c.game_bridge_config(enabled=False)
+    create_room(g)
+    long_set_line(g)
+    g.shot("20-long-ruleset-16x9")
 
 
 # The keypad's letter keys by (row, column), as test_online_game.ALPHA_KEYS (room-code mode takes

@@ -2058,7 +2058,13 @@ namespace OnlineMenu {
     static const u32 ROOM_PLAY_WINDOW = 3;
     static const float ROOM_PLAY_X1 = -817.0f, ROOM_PLAY_X2 = 260.0f;
     static const float ROOM_PLAY_Y = 348.0f, ROOM_PLAY_HALF = 20.0f, ROOM_PLAY_SCALE = 0.6f;
-    static char s_playPrinted[128];
+    // Staging feedback 2026-10-12: a long ruleset name with the score did not fit and was cut. One
+    // line while it fits (ROOM_PLAY_FIT: font units at scale 1, as statusWidths measures, about
+    // 1.5 px each at 2000 wide, for the window's 1400 px), else the ruleset and the set on two
+    // lines at ROOM_PLAY_SCALE2, smaller still if a line is wider than the window.
+    static const int ROOM_PLAY_FIT = 900;
+    static const float ROOM_PLAY_SCALE2 = 0.5f, ROOM_PLAY_LINES = 17.0f;
+    static char s_playPrinted[140];
 
     static void roomButtons(bool in, bool host)
     {
@@ -2113,9 +2119,39 @@ namespace OnlineMenu {
             }
             RoomPlay::cssLine(play, sizeof(play), side[0], side[1]);
         }
-        if (strcmp(play, s_playPrinted) != 0) {
-            m->printf(ROOM_PLAY_WINDOW, "%s", play);
-            strcpy(s_playPrinted, play);
+        // One line ("Ruleset: X   Bo3: a 1 - 0 b") when it fits, else two.
+        char* nl = NULL;   // (the DOL has no strchr)
+        for (char* q = play; *q && !nl; q++) if (*q == '\n') nl = q;
+        char line[140];
+        float scale = ROOM_PLAY_SCALE;
+        bool two = false;
+        if (nl) {
+            int a = (int)(nl - play);
+            memcpy(line, play, a);
+            strcpy(line + a, "   ");
+            strcpy(line + a + 3, nl + 1);
+            int w = statusWidths(line, (int)strlen(line), NULL);
+            if (w * ROOM_PLAY_SCALE > ROOM_PLAY_FIT) {
+                two = true;
+                strcpy(line, play);
+                int w1 = statusWidths(play, a, NULL), w2 = statusWidths(nl + 1, (int)strlen(nl + 1), NULL);
+                int wmax = w1 > w2 ? w1 : w2;
+                scale = ROOM_PLAY_SCALE2;
+                if (wmax * scale > ROOM_PLAY_FIT) scale = (float)ROOM_PLAY_FIT / (float)wmax;
+            }
+        } else {
+            strcpy(line, play);
+        }
+        if (strcmp(line, s_playPrinted) != 0) {
+            WindowSetting* wp = (WindowSetting*)(*(u32*)((u8*)m + 0xC) + 0x48 * ROOM_PLAY_WINDOW);
+            float mid = (s.windowY1 + s.windowY2) * 0.5f + ROOM_PLAY_Y;
+            float half = two ? ROOM_PLAY_HALF * 2.0f : ROOM_PLAY_HALF;
+            wp->y1 = mid + half;
+            wp->y2 = mid - half;
+            wp->scaleX = wp->scaleY = scale;
+            if (two) wp->lineSpace = ROOM_PLAY_LINES;
+            m->printf(ROOM_PLAY_WINDOW, "%s", line);
+            strcpy(s_playPrinted, line);
         }
         char text[40];
         text[0] = 0;
