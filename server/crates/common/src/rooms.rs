@@ -36,6 +36,7 @@ pub const ROOM_RULES: &str = "room-rules";
 pub const ROOM_RESULT: &str = "room-result";
 pub const ROOM_SET: &str = "room-set";
 pub const ROOM_STEP: &str = "room-step";
+pub const ROOM_BEST_OF: &str = "room-best-of";
 /// A side's stage actions in one `room-step` at most (a strike pattern of 8 steps of up to 8).
 pub const STEP_ACTIONS_MAX: usize = 64;
 pub const ROOM_RULESET: &str = "room-ruleset";
@@ -156,6 +157,9 @@ pub enum RoomRequest {
     /// started. The server keeps them, so a session that starts again after a player left goes on
     /// from the same step; leaving once the match started loses the game (room-rules.md A).
     Step { game: u32, actions: [Vec<u8>; 2], match_started: bool },
+    /// `room-best-of {bestOf}` (host, between games, no set on): the room plays sets of 3, 5 or 7
+    /// games, or none (0). Like a rules edit it makes the room's ruleset custom.
+    BestOf { best_of: u8 },
     /// `room-ruleset {code}` (host, between games, no set on): play a published ruleset (a code),
     /// or P+'s default (`code` null). The code also becomes the host's remembered ruleset.
     Ruleset { code: Option<String> },
@@ -181,6 +185,7 @@ impl RoomRequest {
             RoomRequest::Result { .. } => ROOM_RESULT,
             RoomRequest::Set { .. } => ROOM_SET,
             RoomRequest::Step { .. } => ROOM_STEP,
+            RoomRequest::BestOf { .. } => ROOM_BEST_OF,
             RoomRequest::Ruleset { .. } => ROOM_RULESET,
             RoomRequest::RulesetList => ROOM_RULESETS,
         }
@@ -224,6 +229,7 @@ impl RoomRequest {
             RoomRequest::Step { game, actions, match_started } => {
                 json!({ "game": game, "actions": actions, "matchStarted": match_started })
             }
+            RoomRequest::BestOf { best_of } => json!({ "bestOf": best_of }),
             RoomRequest::Ruleset { code } => json!({ "code": code }),
         };
         v["type"] = json!(self.op());
@@ -296,6 +302,11 @@ impl RoomRequest {
                 rules.validate().map_err(|e| format!("{kind}: {e}"))?;
                 RoomRequest::Rules { rules }
             }
+            ROOM_BEST_OF => RoomRequest::BestOf {
+                best_of: small("bestOf", 7)?
+                    .filter(|b| [0, 3, 5, 7].contains(b))
+                    .ok_or_else(|| format!("{kind}: `bestOf` must be 0, 3, 5 or 7"))?,
+            },
             ROOM_STEP => {
                 let game = v
                     .get("game")
@@ -651,6 +662,8 @@ mod tests {
             RoomRequest::Result { game: 2, winner_side: 1, stage: 0x21 },
             RoomRequest::Step { game: 1, actions: [vec![0x01], vec![0x02, 0x21]], match_started: false },
             RoomRequest::Step { game: 3, actions: [vec![], vec![]], match_started: true },
+            RoomRequest::BestOf { best_of: 5 },
+            RoomRequest::BestOf { best_of: 0 },
             RoomRequest::RulesetList,
             RoomRequest::Join { code: "KFQB".into() },
             RoomRequest::Leave,
@@ -700,6 +713,9 @@ mod tests {
             (ROOM_RESULT, json!({"game": 1, "winnerSide": 2, "stage": 1})),
             (ROOM_SET, json!({"action": "pause"})),
             (ROOM_STEP, json!({"game": 1, "actions": [[1]]})),
+            (ROOM_BEST_OF, json!({"bestOf": 1})),
+            (ROOM_BEST_OF, json!({"bestOf": 9})),
+            (ROOM_BEST_OF, json!({})),
             (ROOM_STEP, json!({"game": 1, "actions": [[0], []]})),
             (ROOM_STEP, json!({"game": 1, "actions": [[256], []]})),
             (ROOM_STEP, json!({"game": 0, "actions": [[], []]})),

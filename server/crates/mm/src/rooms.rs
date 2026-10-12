@@ -199,6 +199,50 @@ impl Room {
         }
     }
 
+    /// The host changed what the room plays: no longer the published ruleset (it becomes custom,
+    /// based on it, decision 13); a finished set's score goes; and nobody starts under rules they
+    /// did not see (room-rules.md #5).
+    fn edited(&mut self) {
+        if self.ruleset_code.take().is_some() {
+            self.based_on = Some(format!("{} v{}", self.ruleset.name, self.ruleset.version));
+        }
+        self.ruleset.name = "Custom".into();
+        self.ruleset.version = 0;
+        self.ruleset.by.clear();
+        self.set = None;
+        for m in self.slots.iter_mut().flatten() {
+            m.ready = false;
+        }
+    }
+
+    /// The room's ruleset with sets of `best_of` (0: none): a set is 1v1 (two open slots) or 2v2
+    /// (four, Teams on); a ruleset without a strike pattern gets Ranked's ([1, 2, 1] over five
+    /// starters), and turning a set on gives the winner Ranked's two bans and Dave's rule.
+    fn with_best_of(&self, best_of: u8) -> Result<Ruleset, &'static str> {
+        let mut r = self.ruleset.clone();
+        if best_of > 0 {
+            r.players = match (self.open_count(), self.teams) {
+                (2, _) => Players::OneVsOne,
+                (4, true) => Players::TwoVsTwo,
+                _ => return Err(msg::SETS_1V1_2V2),
+            };
+            if r.strikes.is_empty() {
+                r.strikes = room_set::default_strikes(r.stages.starters.len());
+            }
+            if r.best_of == 0 {
+                r.bans = 2.min(r.stages.all().count().saturating_sub(2) as u8);
+                r.dsr = true;
+            }
+        }
+        r.best_of = best_of;
+        r.normalize();
+        r.validate().map_err(|e| {
+            tracing::debug!(code = %self.code, "best of {best_of}: {e}");
+            msg::SETS_NOT_POSSIBLE
+        })?;
+        Ok(r)
+    }
+
     /// The two sides of a set about to start: each player (1v1) or each team (2v2), or None when
     /// the room's players do not make two sides of the ruleset's size.
     fn set_sides(&self) -> Option<[Vec<room_set::Seat>; 2]> {
@@ -900,18 +944,23 @@ impl RoomBook {
                 }
                 if room.ruleset.rules != rules {
                     room.ruleset.rules = rules;
-                    room.set = None;
-                    // Changed rules are no longer the published ruleset (decision 13).
-                    if room.ruleset_code.take().is_some() {
-                        room.based_on = Some(format!("{} v{}", room.ruleset.name, room.ruleset.version));
-                    }
-                    room.ruleset.name = "Custom".into();
-                    room.ruleset.version = 0;
-                    room.ruleset.by.clear();
-                    // Nobody starts a game under rules they did not see (room-rules.md #5).
-                    for m in room.slots.iter_mut().flatten() {
-                        m.ready = false;
-                    }
+                    room.edited();
+                }
+            }
+            RoomRequest::BestOf { best_of } => {
+                if !is_host {
+                    return Err(msg::HOST_ONLY);
+                }
+                if !waiting {
+                    return Err(msg::BETWEEN_GAMES);
+                }
+                if room.set_on() {
+                    return Err(msg::SET_ON);
+                }
+                if room.ruleset.best_of != best_of {
+                    room.ruleset = room.with_best_of(best_of)?;
+                    tracing::info!(%code, best_of, "room best of");
+                    room.edited();
                 }
             }
             RoomRequest::Result { game, winner_side, stage } => {
@@ -1683,6 +1732,51 @@ mod tests {
             (s["code"].clone(), s["name"].as_str(), s["basedOn"].as_str()),
             (Value::Null, Some("Custom"), Some("Weekly v3"))
         );
+    }
+
+    #[test]
+    fn the_host_sets_the_set_length() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        join(&mut t, 2, &code);
+        assert_eq!(msgs(&t.req(2, RoomRequest::BestOf { best_of: 3 }), 2)[0]["error"], msg::HOST_ONLY);
+        // P+'s default with sets of 3: custom, Ranked's strikes, bans and DSR; everyone unready.
+        t.req(2, RoomRequest::Ready { ready: true, character: Some(1), costume: Some(0) });
+        let out = t.req(1, RoomRequest::BestOf { best_of: 3 });
+        let s = last_state(&out, 2);
+        assert_eq!((s["ruleset"]["bestOf"].as_u64(), s["ruleset"]["name"].as_str()), (Some(3), Some("Custom")));
+        assert_eq!(s["ruleset"]["stageChoice"], "loser-picks");
+        assert_eq!(s["slots"][1]["player"]["ready"], false);
+        let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
+        ready_all(&mut t, &[1, 2]);
+        t.book.ticket(101, addr(1), String::new(), info(1).uid, &code).unwrap();
+        let done = t.book.ticket(102, addr(2), String::new(), info(2).uid, &code).unwrap();
+        let set = done.matched[0].1.set.clone().expect("a set");
+        assert_eq!((set.best_of, set.strikes.clone(), set.bans, set.dsr), (3, vec![1, 2, 1], 2, true));
+        // While it is on, the length waits.
+        let mut out = vec![];
+        t.book.announce(&code, &mut out);
+        t.req(1, RoomRequest::Back);
+        t.req(2, RoomRequest::Back);
+        assert_eq!(msgs(&t.req(1, RoomRequest::BestOf { best_of: 5 }), 1)[0]["error"], msg::SET_ON);
+        t.req(1, RoomRequest::Set { resume: false });
+        // Back to no set: no bans, no strikes; a published ruleset becomes custom based on it.
+        let out = t.req(1, RoomRequest::BestOf { best_of: 0 });
+        assert_eq!(last_state(&out, 1)["ruleset"]["bestOf"], 0);
+        let mut r =
+            Ruleset { name: "Weekly".into(), version: 2, best_of: 3, strikes: vec![1, 2, 1], ..Default::default() };
+        r.normalize();
+        let mut out = vec![];
+        t.book.apply_ruleset(&code, r, Some("BCDFGH".into()), &mut out).unwrap();
+        let out = t.req(1, RoomRequest::BestOf { best_of: 5 });
+        let s = last_state(&out, 1)["ruleset"].clone();
+        assert_eq!(
+            (s["bestOf"].as_u64(), s["basedOn"].as_str(), s["code"].clone()),
+            (Some(5), Some("Weekly v2"), Value::Null)
+        );
+        // Three open slots: no sets.
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
+        assert_eq!(msgs(&t.req(1, RoomRequest::BestOf { best_of: 3 }), 1)[0]["error"], msg::SETS_1V1_2V2);
     }
 
     #[test]

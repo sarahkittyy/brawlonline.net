@@ -687,6 +687,12 @@ std::optional<std::string> RequestJson(const Request& r)
     o["matchStarted"] = picojson::value(r.flag);
     break;
   }
+  case Op::BestOf:
+    if (r.best_of != 0 && r.best_of != 3 && r.best_of != 5 && r.best_of != 7)
+      return std::nullopt;
+    o["type"] = picojson::value("room-best-of");
+    o["bestOf"] = picojson::value(static_cast<double>(r.best_of));
+    break;
   case Op::SetAction:
     o["type"] = picojson::value("room-set");
     o["action"] = picojson::value(r.flag ? "resume" : "restart");
@@ -734,6 +740,8 @@ const char* OpName(Op op)
     return "result";
   case Op::Step:
     return "step";
+  case Op::BestOf:
+    return "best-of";
   case Op::Ruleset:
     return "ruleset";
   case Op::RulesetList:

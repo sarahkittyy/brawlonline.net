@@ -37,6 +37,25 @@ pub fn plays_set(ruleset: &Ruleset, open_slots: usize, teams: bool) -> bool {
         }
 }
 
+/// A strike pattern over `starters` stages for a set made in the room (Ranked's [1, 2, 1] over
+/// five): one, then twos, then what is left; it leaves exactly one stage.
+pub fn default_strikes(starters: usize) -> Vec<u8> {
+    let mut left = starters.saturating_sub(1);
+    let mut out = Vec::new();
+    if left > 0 {
+        out.push(1);
+        left -= 1;
+    }
+    while left > 2 {
+        out.push(2);
+        left -= 2;
+    }
+    if left > 0 {
+        out.push(left as u8);
+    }
+    out
+}
+
 /// Whether every game of `ruleset` is struck without a set (a tournament's Bo1, decision 17).
 pub fn strikes_every_game(ruleset: &Ruleset, open_slots: usize) -> bool {
     ruleset.best_of == 0 && ruleset.stage_choice == StageChoice::Strike && open_slots == 2
@@ -482,6 +501,19 @@ mod tests {
         }
         // (paused while away: reports still count with those present)
         assert_eq!(s.report(uid(3), 2, 0, 0x02), Reported::Counted);
+    }
+
+    #[test]
+    fn default_strike_patterns_leave_one_stage() {
+        assert_eq!(default_strikes(5), vec![1, 2, 1]);
+        assert_eq!(default_strikes(7), vec![1, 2, 2, 1]);
+        assert_eq!(default_strikes(3), vec![1, 1]);
+        assert_eq!(default_strikes(6), vec![1, 2, 2]);
+        assert_eq!(default_strikes(2), vec![1]);
+        assert!(default_strikes(1).is_empty());
+        for n in 2..=12 {
+            assert_eq!(default_strikes(n).iter().map(|&k| k as usize).sum::<usize>(), n - 1);
+        }
     }
 
     #[test]

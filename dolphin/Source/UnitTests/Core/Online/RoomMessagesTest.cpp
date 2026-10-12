@@ -325,6 +325,12 @@ TEST(RoomMessages, RulesetCodesAndRequests)
   r.flag = true;
   EXPECT_EQ(RequestJson(r), R"({"action":"resume","type":"room-set"})");
   r = {};
+  r.op = Op::BestOf;
+  r.best_of = 5;
+  EXPECT_EQ(RequestJson(r), R"({"bestOf":5,"type":"room-best-of"})");
+  r.best_of = 4;
+  EXPECT_EQ(RequestJson(r), std::nullopt);
+  r = {};
   r.op = Op::Step;
   r.game = 2;
   r.actions = {std::vector<u8>{0x21, 2}, std::vector<u8>{}};

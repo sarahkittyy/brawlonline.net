@@ -199,6 +199,7 @@ enum class Op : u8
   SetAction = 9,  // the host resumes (flag) or restarts the room's set
   Ruleset = 10,   // the host plays a published ruleset (`ruleset`) or P+'s default (empty)
   RulesetList = 11,  // the player's rulesets to offer (room-rulesets)
+  BestOf = 12,       // the host's set length (`best_of` 0 / 3 / 5 / 7; the game's ROOM_BEST_OF)
   // Dolphin's own (not game ops)
   Ready = 100,
   Back = 101,
@@ -224,6 +225,7 @@ struct Request
   u32 game = 0;                           // Result: the set's game
   u8 winner_side = 0;                     // Result: 0 / 1, SIDE_DRAW, SIDE_VOID
   u16 stage = 0;                          // Result
+  u8 best_of = 0;                         // BestOf: 0 (no set), 3, 5, 7
   std::array<std::vector<u8>, 2> actions;  // Step: each side's stage actions (`game`; `flag`:
                                            // its match started)
 };

@@ -695,6 +695,12 @@ Response RoomResponse(const Core::CPUThreadGuard& guard, u32 payload, std::strin
     r.op = Rooms::Op::SetAction;
     r.flag = arg != 0;
     break;
+  case 11:
+    // v6, the host's set length on P+'s RULES page (ROOM_BEST_OF: arg 0 / 3 / 5 / 7).
+    r.op = Rooms::Op::BestOf;
+    r.best_of = arg;
+    ok = arg == 0 || arg == 3 || arg == 5 || arg == 7;
+    break;
   case 10:
   {
     // The host's ruleset: a code typed or picked in the game, or none (P+'s default).
