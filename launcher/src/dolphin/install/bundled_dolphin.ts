@@ -115,7 +115,9 @@ export async function installBundledDolphin({
   const old = new Set([...(installed?.entries ?? []), ...manifest.entries]);
   for (const name of old) {
     if (!PROTECTED_ENTRIES.has(name) && !name.includes("/") && !name.includes("\\") && name !== "." && name !== "..") {
-      await fs.promises.rm(path.join(destDir, name), { recursive: true, force: true });
+      // Windows will not delete a running executable (EPERM): a DolphinTool run that is ending
+      // gets about 10 s (linear backoff) before the install gives up.
+      await fs.promises.rm(path.join(destDir, name), { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
     }
   }
 

@@ -99,6 +99,11 @@ export default function setupGameAssetsIpc({
       const sdRawPath = netplaySdCard();
       sdCardSeen = existsSync(sdRawPath);
       const folder = devDiscFolder();
+      if (!folder) {
+        // DolphinTool runs from the bundled Dolphin's install folder; after a launcher update the
+        // install replaces it, which fails on Windows while DolphinTool runs (2026-10-12).
+        await dolphinManager.bundledDolphinReady();
+      }
       const disc: DiscSource = folder
         ? { kind: "folder", path: folder }
         : {

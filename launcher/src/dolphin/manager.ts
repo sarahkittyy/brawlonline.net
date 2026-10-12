@@ -225,6 +225,7 @@ export class DolphinManager {
     await this.launchGate();
 
     const netplayInstallation = this.getInstallation(DolphinLaunchType.NETPLAY);
+    await this._repairBundledDolphin();
     const dolphinPath = await netplayInstallation.findDolphinExecutable();
     await netplayInstallation.ensureUserFolder();
     await this._updateDolphinSettings(DolphinLaunchType.NETPLAY);
@@ -457,6 +458,31 @@ export class DolphinManager {
         });
     }
     return this.bundledInstall;
+  }
+
+  /**
+   * Waits for the bundled Dolphin's install, starting it if it has not started. The theme
+   * extraction runs DolphinTool from the install folder, and the install cannot replace a running
+   * DolphinTool on Windows. Never throws: a failed install is reported by the Dolphin set-up.
+   */
+  async bundledDolphinReady(): Promise<void> {
+    await this._installBundledDolphin().catch(() => undefined);
+  }
+
+  /**
+   * Start-up's install of the bundled Dolphin removes the old build before it copies the new one,
+   * so one that stopped half-way (a file in use) leaves no executable. Play then installs it
+   * again, with the set-up progress, instead of failing until the launcher restarts.
+   */
+  private async _repairBundledDolphin(): Promise<void> {
+    if (await fileExists(this.getDolphinExecutablePath(DolphinLaunchType.NETPLAY))) {
+      return;
+    }
+    try {
+      await this._installBundledDolphin();
+    } finally {
+      this._onComplete(DolphinLaunchType.NETPLAY, this._cachedVersion(DolphinLaunchType.NETPLAY));
+    }
   }
 
   /**
