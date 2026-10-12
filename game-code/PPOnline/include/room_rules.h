@@ -10,8 +10,12 @@ namespace RoomRules {
     void install(CoreApi* api);   // the read-only input filter (module 18)
     // Every frame on the room CSS, before the room's own controls: returns true while the rules
     // menu is open (the room's buttons, START, B and Z wait then).
-    bool tick(bool inRoom, bool host, bool waiting);
-    void open();                  // the RULES button (or the tests' CFG_TEST_OPEN_RULES)
+    // `setBetween`: on the CSS between a running set's games (the host only): the menu may open
+    // there for End set alone (the user's, 2026-10-12: End set is a CSS action, never mid-match).
+    bool tick(bool inRoom, bool host, bool waiting, bool setBetween);
+    // The RULES button (or the tests' CFG_TEST_OPEN_RULES). `setOnly`: between a set's games,
+    // everything read-only but the host's SET line (End set), nothing sent back on close.
+    void open(bool setOnly);
     bool isOpen();
     // The room's rules changed this frame (the server took back everyone's ready: the game takes
     // back its lock-in too, or Dolphin would send it again).

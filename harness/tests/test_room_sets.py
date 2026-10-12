@@ -559,8 +559,6 @@ def test_room_2v2_set(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
 
 
 @pytest.mark.slow
-@pytest.mark.skip(reason="the game opens RULES only while the room waits; between a running set's games "
-                         "the room is in game (room_rules.cpp tick): the RULES-button session's change")
 def test_room_set_ended_between_games(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                       gpu_backend: str) -> None:
     """End set on the CSS between a running set's games (the user's, 2026-10-11): game 1 played,

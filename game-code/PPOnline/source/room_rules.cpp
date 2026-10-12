@@ -83,6 +83,7 @@ namespace RoomRules {
         bool opened;        // we opened the menu that is open now
         bool asHost;        // ... as the host (its edits are the room's)
         bool readOnly;      // ... for viewing: the input filter is on
+        bool setOnly;       // ... between a set's games: read-only but the host's SET line (End set)
         bool haveRules;
         bool changedNow;
         PPOM::Rules last;   // SESSION's rules last frame (a change: "Host changed the rules")
@@ -132,19 +133,20 @@ namespace RoomRules {
 
     void reset()
     {
-        s.opened = s.asHost = s.readOnly = false;
+        s.opened = s.asHost = s.readOnly = s.setOnly = false;
         s.haveRules = false;
         s.statusFrames = 0;
     }
 
-    void open()
+    void open(bool setOnly)
     {
         u8* task = cssTask();
         const PPOM::Session& se = PPOM::g_block.session;
         if (!task || isOpen() || !se.rules.valid) return;
         int me = PPOM::g_block.local.localPort;
         s.asHost = me < PPOM::SESSION_PLAYERS && se.roomHost == me;
-        s.readOnly = !s.asHost;
+        s.readOnly = !s.asHost || setOnly;
+        s.setOnly = setOnly && s.asHost;
         // The menu shows what is in the set rule and the menu record: the room's rules.
         OnlineMenu::applyRules();
         typedef void (*OpenFn)(u8* task, int mode);
@@ -192,7 +194,7 @@ namespace RoomRules {
         PPOM::post(PPOM::CMD_ROOM, &req, sizeof(req));
     }
 
-    bool tick(bool inRoom, bool host, bool waiting)
+    bool tick(bool inRoom, bool host, bool waiting, bool setBetween)
     {
         const PPOM::Session& se = PPOM::g_block.session;
         if (s.statusFrames > 0) s.statusFrames--;
@@ -214,16 +216,21 @@ namespace RoomRules {
         if (s.opened && menuOpen) {
             // Close it for a game, for a host who no longer is one, and for a viewer whose screens
             // are out of date (they can open it again).
-            if (!inRoom || !waiting || (s.asHost && !host) || (changed && !s.asHost)) forceClose();
+            // (Between a set's games it stays open while that lasts, or until the set's session
+            // ends and the room is waiting again: End set.)
+            bool allowed = s.setOnly ? (waiting || setBetween) : waiting;
+            if (!inRoom || !allowed || (s.asHost && !host) || (changed && !s.asHost)) forceClose();
         }
         if (s.opened && !menuOpen) {
+            bool edits = s.asHost && !s.setOnly && host && inRoom && waiting;
             s.opened = false;
             s.readOnly = false;
-            if (s.asHost && host && inRoom && waiting) sendEdits();
+            s.setOnly = false;
+            if (edits) sendEdits();
         }
         if (PPOM::g_block.debug.cfg & PPOM::CFG_TEST_OPEN_RULES) {
             PPOM::g_block.debug.cfg &= ~PPOM::CFG_TEST_OPEN_RULES;
-            if (inRoom && waiting) open();
+            if (inRoom && (waiting || setBetween)) open(!waiting);
         }
         return menuOpen || isOpen();
     }
@@ -253,7 +260,9 @@ namespace RoomRules {
         if (page == *(u32*)(rt + RULES_PAGE1)) {
             if (line >= 5) return bits & (IN_MOVE | IN_SIDE | IN_A | IN_B);   // the page buttons
             // STOCK CONTROL and STAGE CHOICE are the room's SET and RULESET lines (room_play.cpp)
-            if (line == 2 || line == 4) return RoomPlay::rulesInput(line, bits, s.asHost && !s.readOnly);
+            // (between a set's games the host keeps the SET line alone: End set)
+            if (line == 2 || line == 4)
+                return RoomPlay::rulesInput(line, bits, s.asHost && (!s.readOnly || (line == 2 && s.setOnly)));
             if (s.readOnly) return bits & (IN_MOVE | IN_B);
             bool stock = *(u8*)(page + RULES_STYLE) == PPOM::STYLE_STOCK;
             if (line == 2 || line == 4 || (line == 1 && !stock)) return bits & (IN_MOVE | IN_B);

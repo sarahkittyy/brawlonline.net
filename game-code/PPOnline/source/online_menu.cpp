@@ -2105,10 +2105,16 @@ namespace OnlineMenu {
         const u32 BTN_A = 0x100, BTN_L = 0x40, BTN_R = 0x20;
         // P+'s rules menu over the CSS (room_rules.cpp): while it is open its pages take the
         // buttons; the room's own (L/R, START, B, Z, the header buttons, the panels) wait.
-        bool rulesOpen = RoomRules::tick(in, host, waiting);
+        // On the CSS between a running set's games (the room in game, its session on, not in a
+        // match): the host may open RULES for End set alone, while not locked in for the next game
+        // (a lock-in could start the match under the menu).
+        const PPOM::RoomPlay& play = se.play;
+        bool setBetween = in && !waiting && host && play.valid && play.setOn && !(play.setFlags & PPOM::SET_FINISHED) &&
+                          stepSession() && !g_onlineMatchGame && !roomLockedForNext();
+        bool rulesOpen = RoomRules::tick(in, host, waiting, setBetween);
         // RULES next to PUBLIC / FFA (rules_button.cpp); greyed while the menu would not open
         // (a game starting, no room rules), and passed over by the hand under the open menu.
-        RulesButton::tick(in, waiting && se.rules.valid);
+        RulesButton::tick(in, (waiting || setBetween) && se.rules.valid);
         // The ruleset and the set on the RULES page's RULESET / SET lines (room_play.cpp).
         RoomPlay::tick(in, host);
         // rules.md #5: a change of the rules or of the ruleset (its set length) took back every ready
@@ -2180,7 +2186,7 @@ namespace OnlineMenu {
                 else if (host && hdr == 0x19) pressed |= BTN_L;         // as L
                 else playSE(SE_ERROR);
             }
-            if (RulesButton::pressed()) RoomRules::open();   // host edits, others view
+            if (RulesButton::pressed()) RoomRules::open(!waiting);   // host edits, others view; End set
             if ((pressed & BTN_L) && host) {
                 postRoom(PPOM::ROOM_PUBLIC, (se.roomFlags & PPOM::RF_PUBLIC) ? 0 : 1, 0, NULL);
                 playSE(1);
