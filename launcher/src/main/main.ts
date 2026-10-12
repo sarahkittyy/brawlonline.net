@@ -30,6 +30,7 @@ import { fileExists } from "utils/file_exists";
 
 import { getConfigFlags } from "./flags/flags";
 import { installModules } from "./install_modules";
+import { attachInterfaceZoom } from "./interface_zoom";
 import { ipc_brawlLinkEvent, ipc_takeBrawlLinks } from "./ipc";
 import { legacyUserDataNames, migrateLegacyUserData } from "./legacy_user_data";
 import { chooseGtkInputMethod } from "./linux_input_method";
@@ -128,7 +129,7 @@ if (!lockObtained) {
 registerGameAssetScheme();
 
 const flags = getConfigFlags();
-const { dolphinManager, appUpdater, browserWindowManager } = installModules(flags);
+const { dolphinManager, settingsManager, appUpdater, browserWindowManager } = installModules(flags);
 
 if (isDevelopment) {
   require("electron-debug")();
@@ -210,6 +211,7 @@ const createWindow = async () => {
     },
   });
 
+  attachInterfaceZoom(mainWindow, settingsManager, isMac);
   mainWindow.loadURL(resolveHtmlPath("index.html")).catch(log.error);
 
   mainWindow.on("ready-to-show", () => {

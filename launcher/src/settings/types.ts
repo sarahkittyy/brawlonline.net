@@ -50,6 +50,9 @@ export interface SettingsSchema {
   // Sounds for chat messages and invites (the bell next to the settings gear) and their volume, 0-100.
   notificationSounds: boolean;
   notificationVolume: number;
+
+  // The launcher's interface size in percent (one of common/interface_zoom.ts's levels); Ctrl +/-/0 and Ctrl + wheel change it.
+  interfaceZoom: number;
 }
 
 /**

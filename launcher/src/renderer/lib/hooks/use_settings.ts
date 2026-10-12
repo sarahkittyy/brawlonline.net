@@ -92,5 +92,7 @@ export const useNotificationSounds = () => useSetting("notificationSounds");
 
 export const useNotificationVolume = () => useSetting("notificationVolume");
 
+export const useInterfaceZoom = () => useSetting("interfaceZoom");
+
 export const useDolphinPath = (dolphinType: DolphinLaunchType) =>
   useSetting(dolphinType === DolphinLaunchType.NETPLAY ? "netplayDolphinPath" : "playbackDolphinPath");

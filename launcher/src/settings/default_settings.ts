@@ -49,5 +49,6 @@ export const defaultAppSettings: AppSettings = {
     enableRankDisplay: true,
     notificationSounds: true,
     notificationVolume: 15,
+    interfaceZoom: 100,
   },
 };
