@@ -99,15 +99,16 @@ export const RulesetBoxView = ({ ruleset, busy, error, onSubmit, onClear }: Rule
           sx={{
             width: 150,
             "& input": {
+              fontFamily: "monospace",
+              letterSpacing: "0.1em",
               py: "5px",
             },
             // The code in a wide monospace; the placeholder smaller and plain, so it fits the box.
-            "& input:not(:placeholder-shown)": {
-              fontFamily: "monospace",
-              letterSpacing: "0.1em",
-            },
-            "& input:placeholder-shown": {
+            // Only the pseudo-element changes: the input's own font sets the box's height.
+            "& input::placeholder": {
+              fontFamily: (theme) => theme.typography.fontFamily,
               fontSize: "0.75rem",
+              letterSpacing: "normal",
             },
           }}
           InputProps={{
