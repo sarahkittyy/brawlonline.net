@@ -39,7 +39,7 @@ struct MatchRules
   bool pause_normal = true;
   u8 item_frequency = 0;  // 0 none, 1 low, 2 medium, 3 high
   std::array<u8, 8> item_switch{0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00};
-  bool hazards = true;
+  bool hazards = false;  // stage hazards off by default (the user's, 2026-10-12)
   bool auto_l_cancel = false;  // MORE RULES' AUTO L-CANCEL
   bool input_assist = false;   // MORE RULES' INPUT ASSIST (P+'s 3-frame buffer)
 

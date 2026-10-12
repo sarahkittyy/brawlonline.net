@@ -278,7 +278,7 @@ TEST(RoomMessages, Requests)
   rules.auto_l_cancel = true;
   r.rules = rules;
   EXPECT_EQ(RequestJson(r),
-            R"({"rules":{"autoLCancel":true,"damageRatio":1,"hazards":true,"inputAssist":false,)"
+            R"({"rules":{"autoLCancel":true,"damageRatio":1,"hazards":false,"inputAssist":false,)"
             R"("itemFrequency":0,"itemSwitch":[0,6,0,0,0,0,0,0],"pause":"normal","stocks":3,)"
             R"("style":"stock","teamAttack":true,"timeMinutes":8},"type":"room-rules"})");
   r = {};

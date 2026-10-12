@@ -89,7 +89,7 @@ One record, decided by the server, applied by the game from SESSION. Both machin
 | `pause` | normal / hold | set rule +0xA: 1 normal, **0 = P+'s hold START to pause** (there is no "off") |
 | `items` | frequency 0-4, switch bitfield | menu record (`GameGlobal+0x24`) +0x810, +0x818 (8 bytes) |
 | `stages` | starters, counterpicks (P+ stage ids) | the random stage switch's pages (`RSS_EXDATA` `0x8042C4E8`, 6 bytes a page, 32 stage bits) as the editing screen; online the stage list is the server's, so it only feeds the room's list |
-| `hazards` | bool (or per stage) | stage select data +0x25, forced by `applyRules` as today; P+'s hazard switch (`RSS_EXDATA`+0x1E, a bit per stage) is the per-stage form |
+| `hazards` | bool (or per stage) | **default off** (the user's, 2026-10-12: `MatchRules::default`, so new rulesets, rooms' P+ default, and Unranked / Ranked / Direct in `config/rulesets.json`). Stage select data +0x25 (1 = off), forced by `applyRules` at every online match setup and compared by the setup key; P+'s hazard switch (`RSS_EXDATA`+0x1E, a bit per stage) is the per-stage form |
 | `autoLCancel` | bool | set rule +0xB (P+'s rules menu line; Brawl's score display). **Global**, not per player |
 | `inputAssist` | bool | set rule +0xC (P+'s 3-frame buffer; Brawl's damage gauge). **Global** |
 

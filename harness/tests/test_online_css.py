@@ -312,9 +312,9 @@ def test_stale_settings_do_not_reach_the_match(backend: OnlineBackend,
                                                gpu_backend: str) -> None:
     """Player A's machine carries settings of its own into an online Direct match: items on
     (frequency high, every switch on, as set offline or on the CSS's item switch), the hazard
-    switch off (P+'s stage select keeps it in GameGlobal+0x14 +0x25 from the last offline pick)
+    switch on (P+'s stage select keeps it in GameGlobal+0x14 +0x25 from the last offline pick)
     and 1 stock. The match setup forces the online ruleset on both machines: the same item
-    frequency (none), hazards, stocks and pause, the session runs with agreeing confirmed
+    frequency (none), hazards off (the default since 2026-10-12), stocks and pause, the session runs with agreeing confirmed
     frames, and A's own settings come back when its menus load.
     With the plugin before this change (PPHARNESS_PLUGIN) the same steps show what reached the
     match: see docs/game-code.md §6 "Rules (item 2)"."""
@@ -322,13 +322,13 @@ def test_stale_settings_do_not_reach_the_match(backend: OnlineBackend,
 
     def make_stale(g: Game) -> None:
         """What player A's machine brings: the item switch's frequency High and every switch on
-        (the bytes the CSS's ITEM screen writes, docs/game-code.md §6), P+'s hazard switch off
+        (the bytes the CSS's ITEM screen writes, docs/game-code.md §6), P+'s hazard switch on
         for the stage (the last offline stage select's pick) and a 1-stock rule."""
         m = B.Mem(g.c.read_mem)
         g.c.write_mem(RECORD_MENU, b"\x03")
         g.c.write_mem(RECORD_MENU + 8, b"\xff" * 8)
         st = m.chain(B.GAME_GLOBAL_PTR, B.GG_SEL_STAGE_DATA)
-        g.c.write_mem(st + 0x25, b"\x01")
+        g.c.write_mem(st + 0x25, b"\x00")
         rule = m.chain(B.GAME_GLOBAL_PTR, B.GG_SET_RULE)
         g.c.write_mem(rule + 4, b"\x01")
         # P+'s Code Menu: Big Head Mode on, hitstun x0.5, P1 infinite shield, and its
@@ -336,7 +336,7 @@ def test_stale_settings_do_not_reach_the_match(backend: OnlineBackend,
         for name, value in CODE_MENU_STALE.items():
             g.c.write_mem(_code_menu_value(g, name), value)
         g.c.write_mem(_code_menu_value(g, CODE_MENU_ACTIVATION), struct.pack(">I", 1))
-        stale.update(record=g.c.read_mem(RECORD_MENU, 0x10), hazard=1, stocks=1,
+        stale.update(record=g.c.read_mem(RECORD_MENU, 0x10), hazard=0, stocks=1,
                      code_menu={k: v for k, (v, _d) in _code_menu_values(g).items()})
 
     a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, "stale-settings", ("olga", "piet"),
@@ -365,7 +365,7 @@ def test_stale_settings_do_not_reach_the_match(backend: OnlineBackend,
     print(facts)
     fa, fb = facts[a.name], facts[b.name]
     assert fa == fb, facts
-    assert fa["item_frequency"] == 0 and not fa["hazards_off"] and fa["stocks"] == [4, 4], facts
+    assert fa["item_frequency"] == 0 and fa["hazards_off"] and fa["stocks"] == [4, 4], facts
     # The Code Menu: the same on both, the stale lines back at P+'s defaults (B never changed).
     for name in CODE_MENU_STALE:
         k = next(k for k in fa["code_menu"] if k.startswith(name))
