@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "Core/Core.h"
+#include "Core/StallTracer.h"
 
 #include <algorithm>
 #include <atomic>
@@ -220,6 +221,9 @@ bool Init(Core::System& system, std::unique_ptr<BootParameters> boot, const Wind
 {
   std::lock_guard lock(s_core_mutex);
 
+  // The host's thread that starts the emulation (its UI thread), for the stall tracer.
+  StallTracer::RegisterThread(StallTracer::Role::UI);
+
   if (s_emu_thread.joinable())
   {
     if (!IsUninitialized(system))
@@ -328,6 +332,8 @@ static void CpuThread(Core::System& system, const std::optional<std::string>& sa
     Common::SetCurrentThreadName("CPU thread");
   else
     Common::SetCurrentThreadName("CPU-GPU thread");
+  StallTracer::RegisterThread(StallTracer::Role::CPU);
+  Common::ScopeGuard stall_tracer_cpu{[] { StallTracer::UnregisterThread(StallTracer::Role::CPU); }};
 
   // This needs to be delayed until after the video backend is ready.
   DolphinAnalytics::Instance().ReportGameStart();
@@ -471,6 +477,9 @@ static void FifoPlayerThread(Core::System& system, const std::optional<std::stri
     // Spawn the GPU thread.
     std::thread gpu_thread{[&] {
       Common::SetCurrentThreadName("Video thread");
+      StallTracer::RegisterThread(StallTracer::Role::GPU);
+      Common::ScopeGuard stall_tracer_gpu{
+          [] { StallTracer::UnregisterThread(StallTracer::Role::GPU); }};
 
       const bool is_init = init_video();
       init_from_thread.set_value(is_init);
@@ -525,6 +534,8 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
   }};
 
   Common::SetCurrentThreadName("Emuthread - Starting");
+  StallTracer::Start();
+  Common::ScopeGuard stall_tracer_guard{[] { StallTracer::Stop(); }};
 
   // This will become the CPU thread.
   DeclareAsCPUThread();
@@ -875,6 +886,7 @@ void Callback_FramePresented(const PresentInfo& present_info)
 // Called from VideoInterface::Update (CPU thread) at emulated field boundaries
 void Callback_NewField(Core::System& system)
 {
+  StallTracer::OnField();
   if (s_frame_step)
   {
     // To ensure that s_stop_frame_step is up to date, wait for the GPU thread queue to empty,

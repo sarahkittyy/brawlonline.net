@@ -59,6 +59,8 @@ add_library(core
   ConfigManager.h
   Core.cpp
   Core.h
+  StallTracer.cpp
+  StallTracer.h
   CoreTiming.cpp
   CoreTiming.h
   CPUThreadConfigCallback.cpp
