@@ -201,6 +201,20 @@ pub struct MatchRoom {
     pub code: String,
     /// `1v1`, `ffa` or `teams`.
     pub mode: String,
+    /// The published ruleset it played (its page: `/r/<code>`); null for P+'s default, custom
+    /// rules and games from before rulesets were recorded.
+    pub ruleset: Option<MatchRuleset>,
+}
+
+/// A room game's published ruleset, as it was when played.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MatchRuleset {
+    pub code: String,
+    pub name: String,
+    pub version: u32,
+    /// Its page on the website (`<PUBLIC_BASE_URL>/r/<code>`).
+    pub link: String,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -246,6 +260,9 @@ struct Row {
     room_mode: Option<String>,
     ports: Option<Vec<i16>>,
     teams: Option<Vec<i16>>,
+    ruleset_code: Option<String>,
+    ruleset_name: Option<String>,
+    ruleset_version: Option<i32>,
 }
 
 /// One page of `uid`'s matches older than `before` (newest first).
@@ -263,7 +280,7 @@ pub async fn matches(
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ, READ ONLY").execute(&mut *tx).await?;
     let sql = format!(
         "SELECT m.match_id, m.mode, m.created_at, m.status, m.players, m.winner, m.end_reason,
-                m.room_code, m.room_mode, m.ports, m.teams
+                m.room_code, m.room_mode, m.ports, m.teams, m.ruleset_code, m.ruleset_name, m.ruleset_version
            FROM mm_matches m
           WHERE m.players @> ARRAY[$1]::uuid[]{}
             AND ($2::timestamptz IS NULL OR (m.created_at, m.match_id) < ($2, $3))
@@ -382,7 +399,16 @@ pub async fn matches(
                 })
                 .collect();
             let room = match (is_room, r.room_code) {
-                (true, Some(code)) => Some(MatchRoom { code, mode: r.room_mode.unwrap_or_default() }),
+                (true, Some(code)) => Some(MatchRoom {
+                    code,
+                    mode: r.room_mode.unwrap_or_default(),
+                    ruleset: r.ruleset_code.map(|code| MatchRuleset {
+                        code,
+                        name: r.ruleset_name.unwrap_or_default(),
+                        version: r.ruleset_version.and_then(|v| u32::try_from(v).ok()).unwrap_or(0),
+                        link: String::new(),
+                    }),
+                }),
                 _ => None,
             };
             MatchItem {
@@ -427,7 +453,12 @@ pub async fn my_matches(
         Some(b) => Some(Key::parse(b).ok_or_else(|| ApiError::bad_request("invalid_cursor", "Invalid cursor"))?),
     };
     let n = cursor::page_limit(q.limit, DEFAULT_LIMIT, MAX_LIMIT);
-    let page = matches(&state.pool, user.uid, mode, before.as_ref(), n, Utc::now(), state.cfg.ranked_timing()).await?;
+    let mut page =
+        matches(&state.pool, user.uid, mode, before.as_ref(), n, Utc::now(), state.cfg.ranked_timing()).await?;
+    let base = state.cfg.public_base_url.trim_end_matches('/');
+    for r in page.matches.iter_mut().filter_map(|m| m.room.as_mut()?.ruleset.as_mut()) {
+        r.link = format!("{base}/r/{}", r.code);
+    }
     Ok(Json(page))
 }
 

@@ -94,7 +94,7 @@ constexpr u32 S_RULES = 0x220;  // v6: ppom.h Rules
 // score[2], sides[2], setFlags.
 constexpr u32 S_PLAY = 0x240, RP_VALID = 0, RP_BEST_OF = 1, RP_CHOICE = 2, RP_CUSTOM = 3, RP_CODE = 4,
               RP_NAME = 0x0C, RP_NAME_LEN = 32, RP_SET_ON = 0x2C, RP_SET_GAME = 0x2D, RP_SCORE = 0x2E,
-              RP_SIDES = 0x30, RP_SET_FLAGS = 0x32;
+              RP_SIDES = 0x30, RP_SET_FLAGS = 0x32, RP_SIDE_SLOTS = 0x33, RP_WINNER = 0x35;
 static_assert(S_RULES == SESSION_SIZE_V5 && S_RULES + RULES_SIZE == S_PLAY && S_PLAY + 0x40 == SESSION_SIZE);
 constexpr u32 SessionSize(u16 version)
 {
@@ -1328,6 +1328,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
       const u8 c = static_cast<u8>(v.ruleset.name[i]);
       session[p + RP_NAME + i] = c >= 0x20 && c < 0x7F ? c : '?';
     }
+    session[p + RP_WINNER] = 0xFF;
     if (const auto& st = v.set)
     {
       session[p + RP_SET_ON] = 1;
@@ -1337,6 +1338,9 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
       session[p + RP_SIDES] = static_cast<u8>(st->sides[0] - 1);
       session[p + RP_SIDES + 1] = static_cast<u8>(st->sides[1] - 1);
       session[p + RP_SET_FLAGS] = (st->paused ? 1 : 0) | (st->can_resume ? 2 : 0) | (st->finished ? 4 : 0);
+      session[p + RP_SIDE_SLOTS] = st->side_slots[0];
+      session[p + RP_SIDE_SLOTS + 1] = st->side_slots[1];
+      session[p + RP_WINNER] = st->finished ? st->winner : 0xFF;
     }
   }
   // v6: the session's rules, the same on every machine (each got them from the server with its

@@ -478,6 +478,7 @@ impl Loop {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn event_loop(
     host: Host<EnetSocket>,
     engine: Engine,

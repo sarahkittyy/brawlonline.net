@@ -114,7 +114,12 @@ export type MatchHistoryItem = {
   /** For example `abandoned by <uid>`, or why a set was void. */
   endReason: string | null;
   /** A room's game: the room's code and how it played; null for the other modes. */
-  room?: { code: string; mode: RoomMode } | null;
+  room?: {
+    code: string;
+    mode: RoomMode;
+    /** The published ruleset it played (as it was then) and its page; null for P+'s default, custom rules and older games. */
+    ruleset?: { code: string; name: string; version: number; link: string } | null;
+  } | null;
 };
 
 /** `GET /v1/me/matches?mode=&limit=&before=`: newest first; `next` is the `before` of the next page. */

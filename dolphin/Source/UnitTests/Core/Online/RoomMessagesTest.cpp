@@ -322,6 +322,18 @@ TEST(RoomMessages, RulesetCodesAndRequests)
   r.op = Op::SetAction;
   r.flag = true;
   EXPECT_EQ(RequestJson(r), R"({"action":"resume","type":"room-set"})");
+  r = {};
+  r.op = Op::Step;
+  r.game = 2;
+  r.actions = {std::vector<u8>{0x21, 2}, std::vector<u8>{}};
+  EXPECT_EQ(RequestJson(r), R"({"actions":[[33,2],[]],"game":2,"matchStarted":false,"type":"room-step"})");
+  r.flag = true;
+  EXPECT_EQ(RequestJson(r), R"({"actions":[[33,2],[]],"game":2,"matchStarted":true,"type":"room-step"})");
+  r.actions[1] = {0};
+  EXPECT_EQ(RequestJson(r), std::nullopt);
+  r.actions[1] = {};
+  r.game = 0;
+  EXPECT_EQ(RequestJson(r), std::nullopt);
 }
 
 TEST(RoomMessages, RulesetList)

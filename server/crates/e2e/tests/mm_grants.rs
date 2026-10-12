@@ -71,7 +71,18 @@ async fn mm_queries_work_as_pp_mm() {
     db::insert_match(&pool, &id, 0, &[a, b], a, &[1, 2], "test", None).await.unwrap();
     // A room's game (0007_room_matches.sql): the room's columns too.
     let id = format!("mode.room-ABCD-grants-{}", Uuid::new_v4());
-    let room = db::MatchRoom { code: "ABCD".into(), mode: "teams".into(), ports: vec![1, 3], teams: Some(vec![0, 1]) };
+    let room = db::MatchRoom {
+        code: "ABCD".into(),
+        mode: "teams".into(),
+        ports: vec![1, 3],
+        teams: Some(vec![0, 1]),
+        ruleset: Some(db::MatchRuleset {
+            code: "BCDFGH".into(),
+            name: "Weekly".into(),
+            version: 2,
+            hash: "00".repeat(32),
+        }),
+    };
     db::insert_match(&pool, &id, 3, &[a, b], a, &[1, 2], "test", Some(&room)).await.unwrap();
     let row: (String, String, Vec<i16>, Option<Vec<i16>>) =
         sqlx::query_as("SELECT room_code, room_mode, ports, teams FROM mm_matches WHERE match_id = $1")

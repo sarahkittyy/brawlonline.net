@@ -88,15 +88,59 @@ bool SetOver(const Format& f, const SetState& set);
 // The striking order's first player for `game`.
 int FirstStriker(const Format& f, u32 game);
 
+// ---- A side of two (2v2): either teammate strikes, bans and picks (room-rules.md D) ----
+// The session host's machine is the single authority: every player sends its presses (each with
+// the step it was made for), and the host takes them in the order it sees them (on the same frame:
+// one press per port per round, lower ports first). A press counts when its side is on that very
+// step and the stage can still be chosen; otherwise it is dropped. Every machine plays the host's
+// lists; a player shows its own presses the host has not answered yet on top of them, so a press
+// shows at once, and one the host dropped disappears again.
+
+constexpr int MAX_PORTS_SHARED = 4;
+
+// One press: the step (EvaluateSteps' step index) it was made for, and the stage.
+struct Press
+{
+  u8 step = 0;
+  u8 stage = 0;
+  bool operator==(const Press&) const = default;
+};
+
+// The host's lists: each side's actions so far, and how many of each port's presses it has taken.
+struct SharedSteps
+{
+  std::array<std::vector<u8>, 2> actions;
+  std::array<u32, MAX_PORTS_SHARED> taken{};
+};
+
+// The host takes every press of `presses` (per port, in its order) not taken yet. `side_of_port`
+// is each port's side (-1: no player of the set). Returns the presses it dropped (port, press).
+std::vector<std::pair<int, Press>>
+TakePresses(const Format& f, const SetState& set, u32 game,
+            const std::array<int, MAX_PORTS_SHARED>& side_of_port,
+            const std::array<std::vector<Press>, MAX_PORTS_SHARED>& presses, SharedSteps& host);
+
+// What a player of `side` shows: the host's lists with its own presses the host has not taken yet
+// (`pending`) applied where they still fit the step they were made for.
+std::array<std::vector<u8>, 2> WithPending(const Format& f, const SetState& set, u32 game, int side,
+                                           const std::array<std::vector<u8>, 2>& host,
+                                           const std::vector<Press>& pending);
+
 // A room's set as the server starts its session (get-ticket-resp `set`, ours; the server's
 // common::proto::SetTicket): the format, the score so far and the set's game the session starts
-// with. Sides are the set's two players (side 0 the lower slot); `side_ports` their in-game ports.
+// with. Sides are the set's two players or teams (side 0 the one with the lower slot);
+// `side_ports` each side's first (lowest) in-game port.
 struct SetTicket
 {
   Format format;
   SetState state;
   u32 first_game = 1;
   std::array<u8, 2> side_ports{0, 1};
+  // Each side's in-game ports, the lowest first: one player, or a team of two.
+  std::array<std::vector<u8>, 2> members{std::vector<u8>{0}, std::vector<u8>{1}};
+  // `first_game`'s stage actions so far, per side (the server keeps them from room-step): a
+  // session that starts again in the middle of a game's steps goes on from them.
+  std::array<std::vector<u8>, 2> actions;
 };
 struct ParsedSet
 {

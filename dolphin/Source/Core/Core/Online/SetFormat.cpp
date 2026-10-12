@@ -132,6 +132,57 @@ ParsedSet ParseSetTicket(const picojson::object& resp)
   }
   if (f.best_of > 0 && SetOver(f, t.state))
     return fail("a set that is already won");
+  // Each side's members (a team of two in 2v2; 1v1 tickets may leave them out): the lowest
+  // first, every port once.
+  t.members = {std::vector<u8>{t.side_ports[0]}, std::vector<u8>{t.side_ports[1]}};
+  if (const auto m = o.find("members"); m != o.end() && !m->second.is<picojson::null>())
+  {
+    if (!m->second.is<picojson::array>() || m->second.get<picojson::array>().size() != 2)
+      return fail("members");
+    u8 seen = 0;
+    for (size_t side = 0; side < 2; ++side)
+    {
+      const picojson::value& list = m->second.get<picojson::array>()[side];
+      if (!list.is<picojson::array>() || list.get<picojson::array>().empty() ||
+          list.get<picojson::array>().size() > 2)
+      {
+        return fail("members");
+      }
+      t.members[side].clear();
+      for (const picojson::value& p : list.get<picojson::array>())
+      {
+        if (!p.is<double>() || p.get<double>() < 0 || p.get<double>() > 3 ||
+            p.get<double>() != static_cast<double>(static_cast<int>(p.get<double>())) ||
+            (seen & (1u << static_cast<int>(p.get<double>()))))
+        {
+          return fail("members");
+        }
+        seen |= static_cast<u8>(1u << static_cast<int>(p.get<double>()));
+        t.members[side].push_back(static_cast<u8>(p.get<double>()));
+      }
+      if (t.members[side][0] != t.side_ports[side])
+        return fail("members: the side's port first");
+    }
+    if (t.members[0].size() != t.members[1].size())
+      return fail("members: sides of different sizes");
+  }
+  if (const auto a = o.find("actions"); a != o.end() && !a->second.is<picojson::null>())
+  {
+    if (!a->second.is<picojson::array>() || a->second.get<picojson::array>().size() != 2)
+      return fail("actions");
+    for (size_t side = 0; side < 2; ++side)
+    {
+      const picojson::value& list = a->second.get<picojson::array>()[side];
+      if (!list.is<picojson::array>() || list.get<picojson::array>().size() > 64)
+        return fail("actions");
+      for (const picojson::value& k : list.get<picojson::array>())
+      {
+        if (!k.is<double>() || k.get<double>() < 1 || k.get<double>() > 0xFF)
+          return fail("actions");
+        t.actions[side].push_back(static_cast<u8>(k.get<double>()));
+      }
+    }
+  }
   out.set = std::move(t);
   return out;
 }
@@ -244,5 +295,59 @@ Steps EvaluateSteps(const Format& f, const SetState& set, u32 game,
   if (e.striking && !e.remaining.empty())
     e.stage = e.remaining.front();
   return e;
+}
+
+namespace
+{
+// Applies `p` (a press of `side`) to `lists` when the steps are on its step, its side's turn, and
+// the stage can be chosen. True when it counted.
+bool Apply(const Format& f, const SetState& set, u32 game, int side, const Press& p,
+           std::array<std::vector<u8>, 2>& lists)
+{
+  const Steps e = EvaluateSteps(f, set, game, {&lists[0], &lists[1]});
+  if (e.step_idx < 0 || e.step_idx != p.step || e.steps[e.step_idx].player != side ||
+      std::find(e.remaining.begin(), e.remaining.end(), p.stage) == e.remaining.end() ||
+      lists[side].size() >= 64)
+  {
+    return false;
+  }
+  lists[side].push_back(p.stage);
+  return true;
+}
+}  // namespace
+
+std::vector<std::pair<int, Press>>
+TakePresses(const Format& f, const SetState& set, u32 game,
+            const std::array<int, MAX_PORTS_SHARED>& side_of_port,
+            const std::array<std::vector<Press>, MAX_PORTS_SHARED>& presses, SharedSteps& host)
+{
+  std::vector<std::pair<int, Press>> dropped;
+  for (bool any = true; any;)
+  {
+    any = false;
+    for (int port = 0; port < MAX_PORTS_SHARED; ++port)
+    {
+      if (host.taken[port] >= presses[port].size())
+        continue;
+      const Press p = presses[port][host.taken[port]++];
+      any = true;
+      const int side = side_of_port[port];
+      if (side < 0 || side > 1 || !Apply(f, set, game, side, p, host.actions))
+        dropped.emplace_back(port, p);
+    }
+  }
+  return dropped;
+}
+
+std::array<std::vector<u8>, 2> WithPending(const Format& f, const SetState& set, u32 game, int side,
+                                           const std::array<std::vector<u8>, 2>& host,
+                                           const std::vector<Press>& pending)
+{
+  std::array<std::vector<u8>, 2> lists = host;
+  if (side < 0 || side > 1)
+    return lists;
+  for (const Press& p : pending)
+    Apply(f, set, game, side, p, lists);
+  return lists;
 }
 }  // namespace Online::GameSetup

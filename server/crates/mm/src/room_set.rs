@@ -1,10 +1,18 @@
-//! A room's set (`docs/design/room-rules.md` §5): the score the server keeps across the room's
-//! games, so a set paused by a player leaving can go on when they are back (decision 16: the host
-//! decides). The games themselves are played in one gameplay session (Dolphin's GameSetup runs the
-//! strikes, bans and picks); each player's game reports every game's result (`room-result`), and a
-//! game counts once both players of the set reported the same.
+//! A room's set (`docs/design/room-rules.md` §5, decisions A, B and D): the score the server keeps
+//! across the room's games. The games themselves are played in one gameplay session (Dolphin's
+//! GameSetup runs the strikes, bans and picks); every player's game reports each game's result
+//! (`room-result`), and a game counts once every player of the set reported the same. Their games
+//! also report the steps of the game being set up (`room-step`), so a session that starts again
+//! after a player left goes on from the same strike, ban or pick.
 //!
-//! Sides are the set's two players: side 0 the lower slot.
+//! A player who leaves (or whose connection drops) pauses the set: the room turns private, their
+//! slot waits for them, and the set goes on by itself when they are back (decision A). Leaving
+//! after the game's match started loses that game. The host closing an absent player's slot
+//! forfeits the set for that side.
+//!
+//! Sides are the set's two players (1v1) or two teams (2v2): side 0 is the side with the lowest
+//! slot. In 2v2 either teammate strikes, bans and picks (the session host's game decides between
+//! their presses, `docs/design/room-rules.md`).
 
 use std::collections::HashMap;
 
@@ -16,10 +24,17 @@ use uuid::Uuid;
 /// No last winner yet (`SetTicket.last_winner`).
 pub const SIDE_NONE: u8 = 0xFF;
 pub const NO_STAGE: u16 = 0xFFFF;
+/// Stage actions kept per side for the game being set up (a strike pattern of 8 steps of up to 8).
+const MAX_ACTIONS: usize = 64;
 
-/// Whether `ruleset` plays a set in a room of `open_slots` open slots (1v1 sets only for now).
-pub fn plays_set(ruleset: &Ruleset, open_slots: usize) -> bool {
-    ruleset.best_of > 0 && ruleset.players == Players::OneVsOne && open_slots == 2
+/// Whether `ruleset` plays a set in a room of `open_slots` open slots with the Teams switch `teams`.
+pub fn plays_set(ruleset: &Ruleset, open_slots: usize, teams: bool) -> bool {
+    ruleset.best_of > 0
+        && match ruleset.players {
+            Players::OneVsOne => open_slots == 2,
+            Players::TwoVsTwo => open_slots == 4 && teams,
+            Players::Ffa => false,
+        }
 }
 
 /// Whether every game of `ruleset` is struck without a set (a tournament's Bo1, decision 17).
@@ -27,12 +42,20 @@ pub fn strikes_every_game(ruleset: &Ruleset, open_slots: usize) -> bool {
     ruleset.best_of == 0 && ruleset.stage_choice == StageChoice::Strike && open_slots == 2
 }
 
+/// A player of the set.
 #[derive(Debug, Clone, PartialEq)]
-pub enum Pause {
-    /// The side's player left the room.
-    Left(usize),
-    /// The two players reported different results for a game.
-    Differ,
+pub struct Seat {
+    pub slot: usize,
+    pub uid: Uuid,
+    pub name: String,
+}
+
+/// The game being set up: each side's stage actions so far and whether its match has started.
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct Steps {
+    pub game: u32,
+    pub actions: [Vec<u8>; 2],
+    pub match_started: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -42,23 +65,28 @@ pub struct SetProgress {
     pub wins: [u8; 2],
     pub last_winner: u8,
     pub last_win_stage: [u16; 2],
-    /// Each side's slot (0-3) and player.
-    pub sides: [usize; 2],
-    pub players: [Uuid; 2],
-    pub names: [String; 2],
+    /// Each side's players, lowest slot first.
+    pub sides: [Vec<Seat>; 2],
     pub first_striker_bits: u32,
-    /// This game's reports: side -> (winner side, stage).
-    reports: HashMap<usize, (u8, u16)>,
-    pub paused: Option<Pause>,
+    /// This game's reports by player: (winner side, stage).
+    reports: HashMap<Uuid, (u8, u16)>,
+    pub steps: Steps,
+    /// Players of the set who left: the set waits for them.
+    pub away: Vec<Uuid>,
+    /// The players' reports of a game differed: the set waits for the host (restart).
+    pub differ: bool,
+    /// Someone won it (or the other side forfeited it).
     pub finished: bool,
+    /// The side that won, once finished.
+    pub winner: Option<usize>,
 }
 
 /// What a report did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Reported {
-    /// Waiting for the other player's report.
+    /// Waiting for the others' reports.
     Waiting,
-    /// Both agreed: the game counts.
+    /// Everyone agreed: the game counts.
     Counted,
     /// They differ: the set is paused.
     Differ,
@@ -67,28 +95,38 @@ pub enum Reported {
 }
 
 impl SetProgress {
-    /// A new set between the players in `slots` (two of 0-3, any order).
-    pub fn new(best_of: u8, mut seats: [(usize, Uuid, String); 2], first_striker_bits: u32) -> Self {
-        seats.sort_by_key(|s| s.0);
-        let [(s0, p0, n0), (s1, p1, n1)] = seats;
+    /// A new set between two sides (any order; side 0 becomes the one with the lowest slot).
+    pub fn new(best_of: u8, mut sides: [Vec<Seat>; 2], first_striker_bits: u32) -> Self {
+        for s in &mut sides {
+            s.sort_by_key(|x| x.slot);
+        }
+        let low = |s: &Vec<Seat>| s.first().map_or(usize::MAX, |x| x.slot);
+        if low(&sides[1]) < low(&sides[0]) {
+            sides.swap(0, 1);
+        }
         SetProgress {
             best_of,
             game: 1,
             wins: [0, 0],
             last_winner: SIDE_NONE,
             last_win_stage: [NO_STAGE, NO_STAGE],
-            sides: [s0, s1],
-            players: [p0, p1],
-            names: [n0, n1],
+            sides,
             first_striker_bits,
             reports: HashMap::new(),
-            paused: None,
+            steps: Steps { game: 1, ..Default::default() },
+            away: Vec::new(),
+            differ: false,
             finished: false,
+            winner: None,
         }
     }
 
     pub fn side_of(&self, uid: Uuid) -> Option<usize> {
-        self.players.iter().position(|p| *p == uid)
+        (0..2).find(|&s| self.sides[s].iter().any(|x| x.uid == uid))
+    }
+
+    fn players(&self) -> impl Iterator<Item = &Seat> {
+        self.sides.iter().flatten()
     }
 
     /// On (started, not won, whether paused or not).
@@ -96,78 +134,147 @@ impl SetProgress {
         !self.finished
     }
 
-    /// A player's report of `game`.
-    pub fn report(&mut self, uid: Uuid, game: u32, winner_side: u8, stage: u16) -> Reported {
-        let Some(side) = self.side_of(uid) else { return Reported::Ignored };
-        if self.finished || self.paused.is_some() || game != self.game {
-            return Reported::Ignored;
-        }
-        self.reports.insert(side, (winner_side, stage));
-        if self.reports.len() < 2 {
-            return Reported::Waiting;
-        }
-        let (a, b) = (self.reports[&0], self.reports[&1]);
-        self.reports.clear();
-        if a != b {
-            self.paused = Some(Pause::Differ);
-            return Reported::Differ;
-        }
-        let (winner, stage) = a;
+    /// Waiting for a player to come back, or for the host after reports that differed.
+    pub fn paused(&self) -> bool {
+        self.on() && (!self.away.is_empty() || self.differ)
+    }
+
+    fn count(&mut self, winner: u8, stage: u16) {
         self.last_winner = winner;
         if winner <= 1 {
             self.wins[winner as usize] += 1;
             self.last_win_stage[winner as usize] = stage;
         }
         self.game += 1;
+        self.reports.clear();
+        self.steps = Steps { game: self.game, ..Default::default() };
         let need = self.best_of / 2 + 1;
-        if self.wins.iter().any(|w| *w >= need) {
+        if let Some(side) = (0..2).find(|&s| self.wins[s] >= need) {
             self.finished = true;
+            self.winner = Some(side);
         }
+    }
+
+    /// A player's report of `game`.
+    pub fn report(&mut self, uid: Uuid, game: u32, winner_side: u8, stage: u16) -> Reported {
+        if self.side_of(uid).is_none() || !self.on() || self.differ || game != self.game {
+            return Reported::Ignored;
+        }
+        self.reports.insert(uid, (winner_side, stage));
+        let first = self.reports[&uid];
+        if self.reports.values().any(|r| *r != first) {
+            self.reports.clear();
+            self.differ = true;
+            return Reported::Differ;
+        }
+        // Every player of the set who is here has reported it.
+        let waiting = self.players().any(|x| !self.away.contains(&x.uid) && !self.reports.contains_key(&x.uid));
+        if waiting {
+            return Reported::Waiting;
+        }
+        self.count(first.0, first.1);
         Reported::Counted
     }
 
-    /// A player of the set left the room: the set waits for them.
-    pub fn left(&mut self, uid: Uuid) {
-        if let Some(side) = self.side_of(uid) {
-            if self.on() && self.paused.is_none() {
-                self.paused = Some(Pause::Left(side));
+    /// A player's game reports the steps of the game being set up (each side's actions in order,
+    /// and whether its match has started). The longest report is kept: every game sees the same
+    /// actions, some sooner than others.
+    pub fn report_steps(&mut self, uid: Uuid, game: u32, actions: [Vec<u8>; 2], match_started: bool) -> bool {
+        if self.side_of(uid).is_none() || !self.on() || game != self.game {
+            return false;
+        }
+        let mut changed = false;
+        for (side, list) in actions.into_iter().enumerate() {
+            if list.len() > self.steps.actions[side].len() && list.len() <= MAX_ACTIONS {
+                self.steps.actions[side] = list;
+                changed = true;
             }
-            self.reports.clear();
         }
-    }
-
-    /// The slot kept for a player who left (nobody else joins into it), and whose it is.
-    pub fn reserved(&self) -> Option<(usize, Uuid)> {
-        match self.paused {
-            Some(Pause::Left(side)) if self.on() => Some((self.sides[side], self.players[side])),
-            _ => None,
+        if match_started && !self.steps.match_started {
+            self.steps.match_started = true;
+            changed = true;
         }
+        changed
     }
 
-    /// `present(slot)`: the player in that slot now, if any.
-    pub fn can_resume(&self, present: impl Fn(usize) -> Option<Uuid>) -> bool {
-        self.paused.is_some() && (0..2).all(|s| present(self.sides[s]) == Some(self.players[s]))
+    /// A player of the set left the room: the set waits for them. Leaving after the game's match
+    /// started loses that game for their side (decision A); returns true then.
+    pub fn left(&mut self, uid: Uuid) -> bool {
+        let Some(side) = self.side_of(uid) else { return false };
+        if !self.on() {
+            return false;
+        }
+        // A player who already reported the game saw it end: the others' reports count it.
+        let lost = self.steps.game == self.game && self.steps.match_started && !self.reports.contains_key(&uid);
+        if lost {
+            self.count((1 - side) as u8, NO_STAGE);
+        }
+        if self.on() && !self.away.contains(&uid) {
+            self.away.push(uid);
+        }
+        lost
     }
 
-    pub fn view(&self, present: impl Fn(usize) -> Option<Uuid>) -> RoomSet {
+    /// A player of the set is back in the room: true when that was the last one away (the set goes
+    /// on by itself).
+    pub fn back(&mut self, uid: Uuid) -> bool {
+        let before = self.away.len();
+        self.away.retain(|a| *a != uid);
+        before > 0 && self.away.is_empty()
+    }
+
+    /// The slots kept for players who left, and whose they are.
+    pub fn reserved(&self) -> Vec<(usize, Uuid)> {
+        if !self.on() {
+            return Vec::new();
+        }
+        self.players().filter(|x| self.away.contains(&x.uid)).map(|x| (x.slot, x.uid)).collect()
+    }
+
+    /// `side` gives the set up (the host closed an absent player's slot): the other side wins it.
+    pub fn forfeit(&mut self, side: usize) {
+        self.finished = true;
+        self.winner = Some(1 - side);
+        self.away.clear();
+        self.differ = false;
+    }
+
+    /// The host restarts it after reports that differed: the game is played again.
+    pub fn replay_game(&mut self) {
+        self.differ = false;
+        self.reports.clear();
+        self.steps = Steps { game: self.game, ..Default::default() };
+    }
+
+    /// The side's name for the status line: the player's, or a team's first player and partner.
+    pub fn side_name(&self, side: usize) -> String {
+        let names: Vec<&str> = self.sides[side].iter().map(|x| x.name.as_str()).collect();
+        names.join(" & ")
+    }
+
+    pub fn view(&self) -> RoomSet {
+        let away: Vec<&str> = self.players().filter(|x| self.away.contains(&x.uid)).map(|x| x.name.as_str()).collect();
         RoomSet {
             best_of: self.best_of,
             game: self.game,
             score: self.wins,
-            sides: [self.sides[0] as u8 + 1, self.sides[1] as u8 + 1],
-            paused: self.paused.is_some(),
-            waiting_for: match self.paused {
-                Some(Pause::Left(side)) if present(self.sides[side]) != Some(self.players[side]) => {
-                    Some(self.names[side].clone())
-                }
-                _ => None,
-            },
-            can_resume: self.can_resume(&present),
+            sides: [
+                self.sides[0].first().map_or(0, |x| x.slot as u8 + 1),
+                self.sides[1].first().map_or(0, |x| x.slot as u8 + 1),
+            ],
+            members: [
+                self.sides[0].iter().map(|x| x.slot as u8 + 1).collect(),
+                self.sides[1].iter().map(|x| x.slot as u8 + 1).collect(),
+            ],
+            paused: self.paused(),
+            waiting_for: (!away.is_empty()).then(|| away.join(", ")),
+            can_resume: self.differ && self.away.is_empty(),
             finished: self.finished,
+            winner: self.winner.map(|w| w as u8),
         }
     }
 
-    /// The set as a session starts it.
+    /// The set as a session starts it: the format, the score so far, the game and its steps so far.
     pub fn ticket(&self, ruleset: &Ruleset) -> SetTicket {
         SetTicket {
             best_of: self.best_of,
@@ -178,11 +285,23 @@ impl SetProgress {
             bans: ruleset.bans,
             dsr: ruleset.dsr,
             first_striker_bits: self.first_striker_bits,
-            sides: [self.sides[0] as u8, self.sides[1] as u8],
+            sides: [
+                self.sides[0].first().map_or(0, |x| x.slot as u8),
+                self.sides[1].first().map_or(0, |x| x.slot as u8),
+            ],
+            members: vec![
+                self.sides[0].iter().map(|x| x.slot as u8).collect(),
+                self.sides[1].iter().map(|x| x.slot as u8).collect(),
+            ],
             game: self.game,
             wins: self.wins,
             last_winner: self.last_winner,
             last_win_stage: self.last_win_stage,
+            actions: if self.steps.game == self.game && !self.steps.match_started {
+                vec![self.steps.actions[0].clone(), self.steps.actions[1].clone()]
+            } else {
+                Vec::new()
+            },
         }
     }
 }
@@ -200,10 +319,12 @@ pub fn strike_ticket(ruleset: &Ruleset, mut slots: [usize; 2], first_striker_bit
         dsr: false,
         first_striker_bits,
         sides: [slots[0] as u8, slots[1] as u8],
+        members: vec![vec![slots[0] as u8], vec![slots[1] as u8]],
         game: 1,
         wins: [0, 0],
         last_winner: SIDE_NONE,
         last_win_stage: [NO_STAGE, NO_STAGE],
+        actions: Vec::new(),
     }
 }
 
@@ -220,73 +341,115 @@ mod tests {
         Uuid::from_bytes([n; 16])
     }
 
+    fn seat(slot: usize, n: u8, name: &str) -> Seat {
+        Seat { slot, uid: uid(n), name: name.into() }
+    }
+
     fn bo3() -> SetProgress {
-        SetProgress::new(3, [(2, uid(3), "carol".into()), (0, uid(1), "alice".into())], 0b10)
+        SetProgress::new(3, [vec![seat(2, 3, "carol")], vec![seat(0, 1, "alice")]], 0b10)
     }
 
     #[test]
     fn sides_are_the_lower_slot_first() {
         let s = bo3();
-        assert_eq!(s.sides, [0, 2]);
-        assert_eq!(s.players, [uid(1), uid(3)]);
+        assert_eq!(s.sides[0][0].slot, 0);
         assert_eq!(s.side_of(uid(3)), Some(1));
+        assert_eq!(s.view().sides, [1, 3]);
     }
 
     #[test]
-    fn a_game_counts_when_both_agree_and_the_set_ends() {
+    fn a_game_counts_when_everyone_agrees_and_the_set_ends() {
         let mut s = bo3();
         assert_eq!(s.report(uid(1), 1, 0, 0x21), Reported::Waiting);
         assert_eq!(s.report(uid(3), 1, 0, 0x21), Reported::Counted);
         assert_eq!((s.game, s.wins, s.last_winner, s.last_win_stage), (2, [1, 0], 0, [0x21, NO_STAGE]));
-        // A draw counts for nobody.
         s.report(uid(1), 2, SIDE_DRAW, 0x02);
         s.report(uid(3), 2, SIDE_DRAW, 0x02);
         assert_eq!((s.game, s.wins, s.last_winner), (3, [1, 0], SIDE_DRAW));
-        // Old games and strangers are ignored.
         assert_eq!(s.report(uid(1), 2, 0, 0x02), Reported::Ignored);
         assert_eq!(s.report(uid(9), 3, 0, 0x02), Reported::Ignored);
         s.report(uid(1), 3, 0, 0x01);
         assert_eq!(s.report(uid(3), 3, 0, 0x01), Reported::Counted);
-        assert!(s.finished && !s.on());
+        assert!(s.finished && s.winner == Some(0) && s.view().finished);
         assert_eq!(s.report(uid(1), 4, 0, 0x01), Reported::Ignored);
     }
 
     #[test]
-    fn different_results_pause_the_set() {
+    fn different_results_pause_until_the_host_replays_the_game() {
         let mut s = bo3();
         s.report(uid(1), 1, 0, 0x21);
         assert_eq!(s.report(uid(3), 1, 1, 0x21), Reported::Differ);
-        assert_eq!(s.paused, Some(Pause::Differ));
+        assert!(s.paused() && s.view().can_resume);
+        s.replay_game();
+        assert!(!s.paused());
         assert_eq!((s.game, s.wins), (1, [0, 0]));
-        let here = |slot: usize| match slot {
-            0 => Some(uid(1)),
-            2 => Some(uid(3)),
-            _ => None,
-        };
-        assert!(s.can_resume(here));
     }
 
     #[test]
-    fn a_player_who_leaves_pauses_it_and_keeps_their_slot() {
+    fn leaving_during_the_steps_waits_and_the_return_resumes_from_them() {
         let mut s = bo3();
-        s.report(uid(1), 1, 0, 0x21);
+        assert!(s.report_steps(uid(1), 1, [vec![0x01], vec![0x02, 0x21]], false));
+        // A shorter (older) report changes nothing.
+        assert!(!s.report_steps(uid(3), 1, [vec![], vec![0x02]], false));
+        assert!(!s.left(uid(3)));
+        assert!(s.paused());
+        assert_eq!(s.reserved(), vec![(2, uid(3))]);
+        assert_eq!(s.view().waiting_for.as_deref(), Some("carol"));
+        assert!(s.back(uid(3)));
+        assert!(!s.paused());
+        // The session starts again from the strikes made so far.
+        let t = s.ticket(&Ruleset::default());
+        assert_eq!(t.actions, vec![vec![0x01], vec![0x02, 0x21]]);
+        assert_eq!(t.game, 1);
+    }
+
+    #[test]
+    fn leaving_mid_match_loses_the_game() {
+        let mut s = bo3();
+        s.report_steps(uid(1), 1, [vec![0x01, 0x2E], vec![0x02, 0x21]], true);
+        assert!(s.left(uid(1)));
+        assert_eq!((s.game, s.wins, s.last_winner), (2, [0, 1], 1));
+        assert!(s.paused());
+        // Not mid-match any more (the next game has no steps yet).
+        assert!(s.ticket(&Ruleset::default()).actions.is_empty() || s.steps.actions.iter().all(|a| a.is_empty()));
+        // A second mid-match leave the next game: the set is won by the side still there.
+        s.back(uid(1));
+        s.report_steps(uid(3), 2, [vec![], vec![]], true);
+        assert!(s.left(uid(1)));
+        assert!(s.finished && s.winner == Some(1));
+        assert!(s.reserved().is_empty());
+    }
+
+    #[test]
+    fn closing_an_absent_players_slot_forfeits_the_set() {
+        let mut s = bo3();
         s.left(uid(3));
-        assert_eq!(s.paused, Some(Pause::Left(1)));
-        assert_eq!(s.reserved(), Some((2, uid(3))));
-        let gone = |slot: usize| (slot == 0).then(|| uid(1));
-        let v = s.view(gone);
-        assert!(v.paused && !v.can_resume);
-        assert_eq!(v.waiting_for.as_deref(), Some("carol"));
-        let back = |slot: usize| match slot {
-            0 => Some(uid(1)),
-            2 => Some(uid(3)),
-            _ => None,
-        };
-        let v = s.view(back);
-        assert!(v.can_resume && v.waiting_for.is_none());
-        // The half-reported game is played again.
-        s.paused = None;
-        assert_eq!(s.report(uid(1), 1, 1, 0x02), Reported::Waiting);
+        s.forfeit(1);
+        assert!(s.finished && s.winner == Some(0) && !s.paused());
+    }
+
+    #[test]
+    fn a_2v2_set_is_two_teams_and_every_player_reports() {
+        let red = vec![seat(1, 2, "bo"), seat(0, 1, "alice")];
+        let blue = vec![seat(3, 4, "dan"), seat(2, 3, "carol")];
+        let mut s = SetProgress::new(3, [blue, red], 0);
+        assert_eq!((s.sides[0][0].slot, s.sides[1][0].slot), (0, 2));
+        assert_eq!(s.side_name(0), "alice & bo");
+        let t = s.ticket(&Ruleset::default());
+        assert_eq!((t.sides, t.members.clone()), ([0, 2], vec![vec![0, 1], vec![2, 3]]));
+        for n in [1, 2, 3] {
+            assert_eq!(s.report(uid(n), 1, 1, 0x21), Reported::Waiting);
+        }
+        assert_eq!(s.report(uid(4), 1, 1, 0x21), Reported::Counted);
+        // One player away: the others' reports are enough.
+        s.left(uid(4));
+        s.back(uid(4));
+        s.left(uid(4));
+        for n in [1, 2] {
+            s.report(uid(n), 2, 0, 0x02);
+        }
+        // (paused while away: reports still count with those present)
+        assert_eq!(s.report(uid(3), 2, 0, 0x02), Reported::Counted);
     }
 
     #[test]
@@ -296,12 +459,13 @@ mod tests {
         let s = bo3();
         let t = s.ticket(&r);
         assert_eq!((t.best_of, t.game, t.sides, t.first_striker_bits), (3, 1, [0, 2], 0b10));
-        assert_eq!(t.starters, r.stages.starters);
         assert_eq!(t.counterpicks.len(), r.stages.starters.len() + r.stages.counterpicks.len());
-        assert!(plays_set(&r, 2) && !plays_set(&r, 3));
+        assert!(plays_set(&r, 2, false) && !plays_set(&r, 3, false));
+        let r2 = Ruleset { players: Players::TwoVsTwo, ..r.clone() };
+        assert!(plays_set(&r2, 4, true) && !plays_set(&r2, 4, false) && !plays_set(&r2, 2, false));
         let mut bo1 = Ruleset { stage_choice: StageChoice::Strike, strikes: vec![1, 2, 1], ..Default::default() };
         bo1.normalize();
-        assert!(strikes_every_game(&bo1, 2) && !plays_set(&bo1, 2));
+        assert!(strikes_every_game(&bo1, 2) && !plays_set(&bo1, 2, false));
         let t = strike_ticket(&bo1, [3, 1], 7);
         assert!(t.strike_every_game && t.sides == [1, 3] && t.best_of == 0);
     }

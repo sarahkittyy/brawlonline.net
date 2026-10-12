@@ -105,11 +105,13 @@ struct SetView
   u8 best_of = 0;
   u32 game = 1;
   std::array<u8, 2> score{};
-  std::array<int, 2> sides{};  // slots 1-4
+  std::array<int, 2> sides{};  // each side's first (lowest) slot, 1-4
+  std::array<u8, 2> side_slots{};  // each side's slots as bits (bit s: slot s + 1)
   bool paused = false;
   std::string waiting_for;
-  bool can_resume = false;
+  bool can_resume = false;  // the results differed and everyone is here: the host may replay
   bool finished = false;
+  u8 winner = 0xFF;  // the side that won it, once finished
 };
 
 // `room-state`, validated.
@@ -201,6 +203,7 @@ enum class Op : u8
   Ready = 100,
   Back = 101,
   Result = 102,  // a game of the room's set (room-result)
+  Step = 103,    // the set's game being set up (room-step)
 };
 struct Request
 {
@@ -216,6 +219,8 @@ struct Request
   u32 game = 0;                           // Result: the set's game
   u8 winner_side = 0;                     // Result: 0 / 1, 0xFE a draw
   u16 stage = 0;                          // Result
+  std::array<std::vector<u8>, 2> actions;  // Step: each side's stage actions (`game`; `flag`:
+                                           // its match started)
 };
 // The JSON for `r`, or nullopt for Poll and anything out of range.
 std::optional<std::string> RequestJson(const Request& r);

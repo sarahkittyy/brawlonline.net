@@ -368,9 +368,31 @@ std::optional<View> ParseView(const picojson::object& o, std::string* why)
         set.sides[i] = static_cast<int>(b.get<double>());
       }
     }
+    // Each side's slots (older servers: the first only).
+    for (size_t i = 0; ok && i < 2; ++i)
+      set.side_slots[i] = static_cast<u8>(1u << (set.sides[i] - 1));
+    if (const picojson::value* m = Find(so, "members");
+        ok && m && m->is<picojson::array>() && m->get<picojson::array>().size() == 2)
+    {
+      for (size_t i = 0; i < 2; ++i)
+      {
+        const picojson::value& list = m->get<picojson::array>()[i];
+        if (!list.is<picojson::array>())
+          continue;
+        u8 bits = 0;
+        for (const picojson::value& s : list.get<picojson::array>())
+        {
+          if (s.is<double>() && s.get<double>() >= 1 && s.get<double>() <= ROOM_SLOTS)
+            bits |= static_cast<u8>(1u << (static_cast<int>(s.get<double>()) - 1));
+        }
+        if (bits)
+          set.side_slots[i] = bits;
+      }
+    }
     if (ok)
     {
       set.best_of = static_cast<u8>(*best_of);
+      set.winner = static_cast<u8>(Int(so, "winner", 0, 1).value_or(0xFF));
       set.game = static_cast<u32>(*game);
       set.paused = Bool(so, "paused").value_or(false);
       set.can_resume = Bool(so, "canResume").value_or(false);
@@ -642,6 +664,28 @@ std::optional<std::string> RequestJson(const Request& r)
     o["winnerSide"] = picojson::value(static_cast<double>(r.winner_side));
     o["stage"] = picojson::value(static_cast<double>(r.stage));
     break;
+  case Op::Step:
+  {
+    if (r.game < 1 || r.game > 99 || r.actions[0].size() > 64 || r.actions[1].size() > 64)
+      return std::nullopt;
+    picojson::array lists;
+    for (const auto& side : r.actions)
+    {
+      picojson::array a;
+      for (const u8 k : side)
+      {
+        if (k == 0)
+          return std::nullopt;
+        a.emplace_back(static_cast<double>(k));
+      }
+      lists.emplace_back(a);
+    }
+    o["type"] = picojson::value("room-step");
+    o["game"] = picojson::value(static_cast<double>(r.game));
+    o["actions"] = picojson::value(lists);
+    o["matchStarted"] = picojson::value(r.flag);
+    break;
+  }
   case Op::SetAction:
     o["type"] = picojson::value("room-set");
     o["action"] = picojson::value(r.flag ? "resume" : "restart");
@@ -687,6 +731,8 @@ const char* OpName(Op op)
     return "rules";
   case Op::Result:
     return "result";
+  case Op::Step:
+    return "step";
   case Op::Ruleset:
     return "ruleset";
   case Op::RulesetList:

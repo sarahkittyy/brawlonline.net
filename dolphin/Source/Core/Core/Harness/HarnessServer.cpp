@@ -56,6 +56,7 @@
 #include "Core/NetPlayClient.h"
 #include "Core/Online/Chat.h"
 #include "Core/Online/GameBridge.h"
+#include "Core/Online/GameSetup.h"
 #include "Core/Online/Matchmaking.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/OnlineSession.h"
@@ -1516,6 +1517,19 @@ Result CmdRoomsStatus(const Args&)
   return Online::Rooms::Status();
 }
 
+// A set's stage step as the game's GP_COMPLETE_STEP makes it (GameSetup::Act): `kind` struck,
+// banned or picked now, so a test can press on two machines within the same few frames.
+Result CmdGameSetupAct(const Args& args)
+{
+  const u64 kind = GetU64(args, "kind");
+  if (kind < 1 || kind > 0xFF)
+    Fail("kind must be a stage kind (1-255)");
+  picojson::object o;
+  o["ok"] = picojson::value(Online::GameSetup::Act(static_cast<u8>(kind)));
+  o["setup"] = picojson::value(Online::GameSetup::Status());
+  return o;
+}
+
 // Tests without the game plugin: an op as the room CSS would send it (op: create, join, leave,
 // slot, teams, public, team), or `ready` / `release_lock` / `screen` standing in for the game.
 Result CmdRoomsRequest(const Args& args)
@@ -1745,6 +1759,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"game_bridge_status", CmdGameBridgeStatus},
       {"game_bridge_config", CmdGameBridgeConfig},
       {"rooms_status", CmdRoomsStatus},
+      {"game_setup_act", CmdGameSetupAct},
       {"rooms_request", CmdRoomsRequest},
       {"chat_status", CmdChatStatus},
       {"chat_send", CmdChatSend},

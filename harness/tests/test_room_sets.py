@@ -73,11 +73,20 @@ def play_steps(players: list[Game], game: int) -> None:
     raise AssertionError(f"game {game}: the steps did not end: {[setup_view(g) for g in players]}")
 
 
-@pytest.mark.slow
-def test_room_bo3_set(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
-                      gpu_backend: str) -> None:
-    test = "bo3"
-    ua, ub = backend.create_user("setah", "STAH"), backend.create_user("setbj", "STBJ")
+def join_by_code(g: Game, code: str) -> None:
+    """From the main menu: WITH FRIENDS > Join Room, a character, the room's code."""
+    g.to_online_page()
+    to_join_room(g)
+    pick(g, right=2)
+    type_room_code(g, code)
+    until_view(g, lambda v: v["flags"] & ppom.RF_IN, f"{g.name} in the room")
+
+
+def bo3_room(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str,
+             test: str) -> tuple[Game, Game, str]:
+    """A and B in a room playing a published Bo3 (created from the launcher's ruleset box): A, B and
+    the room code."""
+    ua, ub = backend.create_user(f"{test[:4]}ah", "STAH"), backend.create_user(f"{test[:4]}bj", "STBJ")
     a = _boot(dolphin, "set-a", backend, ua, gpu_backend, test, "gameplay", artifacts=SETS_ART)
     b = _boot(dolphin, "set-b", backend, ub, gpu_backend, test, "gameplay", artifacts=SETS_ART)
     _all(a.to_main_menu, b.to_main_menu)
@@ -99,6 +108,13 @@ def test_room_bo3_set(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
         _wait(lambda g=g: rooms(g).get("ruleset", {}).get("code") == rs_code, 30, f"{g.name}: the room's ruleset")
         _wait(lambda g=g: (session_rules(g) or {}).get("stocks") == 1, 20, f"{g.name}: the ruleset's rules")
     assert room_view(a)["code"] == code
+    return a, b, code
+
+
+@pytest.mark.slow
+def test_room_bo3_set(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                      gpu_backend: str) -> None:
+    a, b, code = bo3_room(backend, dolphin, gpu_backend, "bo3")
     a.shot("01-ruleset")
 
     # Ready: the set starts; game 1 is a blind pick (the other's character stays hidden).
@@ -147,9 +163,79 @@ def test_room_bo3_set(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
     for g in (a, b):
         st = rooms(g)["set"]
         assert st["finished"] and max(st["score"]) == 2 and sum(st["score"]) == len(games), st
+        # Everyone stays in the room; the status line has the result until the next set
+        # (room-rules.md B).
+        winner = (a, b)[st["winner"]]
+        _wait(lambda g=g: rooms(g)["view"]["status_text"].startswith(f"{winner.name} wins the set 2-"), 30,
+              f"{g.name}: the set's result")
         g.steps("wait 60")
         g.shot("05-set-over")
     _all(lambda: a.steps("wait 1"), lambda: b.steps("wait 1"))
+
+
+@pytest.mark.slow
+def test_room_set_waits_for_a_player(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                     gpu_backend: str) -> None:
+    """Decision A (room-rules.md §1.1) against the real server: a player whose Dolphin goes away
+    during game 1's strikes pauses the set (the room turns private, their slot kept); when they
+    join again it goes on by itself from the strike made, the room public again. Going away in the
+    match loses that game."""
+    a, b, code = bo3_room(backend, dolphin, gpu_backend, "waits")
+    ub = b.user
+    players = [a, b]
+    a.steps("tap START 8", "wait 40")
+    b.steps("tap START 8", "wait 10")
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "both on the stage select")
+    for g in players:
+        until_setup(g, lambda v: v["active"] and v["type"] == 1 and sorted(v["selectable"]) == STARTERS, "the starters")
+    # The first striker strikes one stage; then B's Dolphin is gone.
+    mover = _wait(lambda: next((g for g in players if setup_view(g)["my_turn"]), None), 30, "the first striker")
+    struck = setup_view(mover)["selectable"][0]
+    strike(mover, struck)
+    for g in players:
+        until_setup(g, lambda v: struck not in v["selectable"], "the strike seen")
+    a.steps("wait 60")   # room-step reaches the server
+    b.inst.kill()
+    st = _wait(lambda: (lambda s: s if s and s["paused"] else None)(rooms(a).get("set")), 120, "A: the set waits")
+    assert st["waiting_for"] == ub.display_name and st["score"] == [0, 0], st
+    assert rooms(a)["view"]["public"] is False
+    _wait(lambda: rooms(a)["view"]["status_text"] == f"Set paused: {ub.display_name} left", 30, "A: the pause text")
+    _wait(lambda: a.scene() == CSS, 120, "A back on the room's CSS")
+    a.shot("01-paused")
+
+    # B comes back: the set goes on by itself, the room public again; game 1 goes on from the strike.
+    b = _boot(dolphin, "set-b2", backend, ub, gpu_backend, "waits", "gameplay", artifacts=SETS_ART)
+    b.to_main_menu()
+    join_by_code(b, code)
+    assert rooms(b)["view"]["you"] == 2
+    _wait(lambda: not rooms(a)["set"]["paused"] and rooms(a)["view"]["public"], 30, "A: the set goes on, public")
+    players = [a, b]
+    a.steps("tap START 8", "wait 40")
+    b.steps("tap START 8", "wait 10")
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "again on the stage select")
+    for g in players:
+        v = until_setup(g, lambda v: v["active"] and v["type"] == 1, "the strikes")
+        assert v["game"] == 1 and struck not in v["selectable"] and len(v["selectable"]) == 4, v
+    b.shot("02-resumed-strikes")
+    play_steps(players, 1)
+    # In the match, B goes away again: game 1 is A's (side 0, the host's slot).
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
+                    "game 1 running")
+    a.steps("wait 120")
+    b.inst.kill()
+    st = _wait(lambda: (lambda s: s if s and s["paused"] and s["score"] == [1, 0] else None)(rooms(a).get("set")),
+               120, "A: game 1 counted for A, the set waits")
+    assert st["game"] == 2, st
+    _wait(lambda: a.scene() == CSS, 120, "A back on the room's CSS")
+    b = _boot(dolphin, "set-b3", backend, ub, gpu_backend, "waits", "gameplay", artifacts=SETS_ART)
+    b.to_main_menu()
+    join_by_code(b, code)
+    for g in (a, b):
+        st = _wait(lambda g=g: (lambda s: s if s and not s["paused"] else None)(rooms(g).get("set")), 30,
+                   f"{g.name}: the set goes on at game 2")
+        assert st["score"] == [1, 0] and st["game"] == 2, st
+        g.steps("wait 60")
+        g.shot("03-game-2")
 
 
 def keypad_letters(g: Game, code: str) -> None:
@@ -233,3 +319,149 @@ def test_ruleset_picked_in_game(backend: OnlineBackend, dolphin: Callable[..., D
     assert not ppom.read_local(a.c, ppom.find_block(a.c))["lock"]["ready"], "the keypad's START locked in"
     a.steps("wait 30")
     a.shot("06-typed")
+
+
+BO3_2V2 = dict(BO3, name="Doubles Set Test", players="2v2")
+
+
+@pytest.mark.slow
+def test_room_2v2_set(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                      gpu_backend: str) -> None:
+    """Decision D against the real server: a published 2v2 Bo3 in a four-slot Teams room. Red
+    (slots 1 and 3) is side 0 and blue (2 and 4) side 1; either teammate strikes, bans and picks,
+    and the session host's machine decides which presses count. Both teammates press within a
+    few milliseconds of each other (different stages for a one-stage step, then the same stage),
+    and every machine ends on the host's lists. Red wins game 1 and the server counts it from all
+    four reports; game 2 starts with red banning, blue picking, then both red players choosing
+    characters."""
+    import contextlib
+    import threading
+
+    from ppharness import flows as F
+
+    from test_rooms_game import PANEL_X, hand_to
+    test = "doubles"
+    users = [backend.create_user(n, f"DB{'ABCD'[k]}T") for k, n in enumerate(("dbred1", "dbblu1", "dbred2", "dbblu2"))]
+    gs = [_boot(dolphin, f"dbl-{x}", backend, u, gpu_backend, test, "gameplay", artifacts=SETS_ART)
+          for x, u in zip("abcd", users)]
+    a, b, c, d = gs
+    _all(*[g.to_main_menu for g in gs])
+    _all(*[g.to_online_page for g in gs])
+    rs_code = backend._http("POST", "/v1/rulesets", {"ruleset": BO3_2V2}, token=users[0].session_token)["code"]
+    rid = write_create(a, ruleset=rs_code)
+    assert launcher_answer(a, rid)["result"] == "accepted"
+    _wait(lambda: a.scene() == CSS, 60, "A on the room's CSS")
+    code = until_view(a, lambda v: v["flags"] & ppom.RF_IN, "A in its room", timeout=60)["code"]
+    pick(a)
+    for slot in (2, 3):
+        hand_to(a, PANEL_X[slot], -10.0)
+        a.steps("tap A 8", "wait 30")
+        until_view(a, lambda v, s=slot: v["slots"][s]["bits"] & ppom.SLOT_OPEN, f"slot {slot + 1} open")
+    a.steps("tap R 8", "wait 30")
+    until_view(a, lambda v: v["flags"] & ppom.RF_TEAMS, "Teams on")
+    hand_to(a, -23.0, 10.5)
+    _all(*[lambda g=g: to_join_room(g) for g in gs[1:]])
+    for k, g in enumerate(gs[1:], 1):
+        pick(g, right=2 * k)
+    for k, g in enumerate(gs[1:], 1):
+        type_room_code(g, code)
+        until_view(g, lambda v: v["flags"] & ppom.RF_IN, f"player {k + 1} in the room")
+    # Slot 3 green -> red, slot 4 red -> blue (X): red 1 + 3, blue 2 + 4.
+    c.steps("tap X 8", "wait 20")
+    d.steps("tap X 8", "wait 20")
+    until_view(a, lambda v: [s["team"] for s in v["slots"]] == [0, 1, 0, 1], "two teams of two")
+    for g in gs:
+        _wait(lambda g=g: rooms(g).get("ruleset", {}).get("code") == rs_code, 30, f"{g.name}: the room's ruleset")
+        g.steps("wait 40")
+        g.shot("01-two-teams")
+
+    for g in gs:
+        g.steps("tap START 8", "wait 10")
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in gs), 120, "game 1: all on the stage select")
+    st = _wait(lambda: rooms(a).get("set"), 30, "the set")
+    assert st["side_slots"] == [0b0101, 0b1010], st
+    for g in gs:
+        until_setup(g, lambda v: v["active"] and v["type"] == 1 and sorted(v["selectable"]) == STARTERS, "the starters")
+    teams = {0: (a, c), 1: (b, d)}
+    first = 0 if setup_view(a)["my_turn"] else 1
+    x, y = teams[first]
+    assert setup_view(x)["my_turn"] and setup_view(y)["my_turn"], (setup_view(x), setup_view(y))
+    assert not any(setup_view(g)["my_turn"] for g in teams[1 - first])
+
+    def press_together(pairs: list[tuple[Game, int]]) -> list[bool]:
+        """Each (player, stage) presses at once on its own thread: GameSetup::Act, as the game's
+        GP_COMPLETE_STEP, within a few ms of each other."""
+        out: list[bool] = [False] * len(pairs)
+        go = threading.Event()
+
+        def one(i: int, g: Game, kind: int) -> None:
+            go.wait()
+            out[i] = g.c.call("game_setup_act", kind=kind)["ok"]
+        th = [threading.Thread(target=one, args=(i, g, k)) for i, (g, k) in enumerate(pairs)]
+        for t in th:
+            t.start()
+        go.set()
+        for t in th:
+            t.join(30)
+        return out
+
+    def converged(n: int, what: str) -> list[int]:
+        """Every machine shows the same `n` selectable stages and step (the host's lists)."""
+        def same() -> list[int] | None:
+            views = [setup_view(g) for g in gs]
+            sel = [sorted(v["selectable"]) for v in views]
+            ok = all(s_ == sel[0] for s_ in sel) and len(sel[0]) == n and len({v["type"] for v in views}) == 1
+            return sel[0] if ok else None
+        return _wait(same, 20, what)
+
+    # One stage to strike: both teammates press a different stage at once. Both show theirs at
+    # first; the host takes one, and every machine ends on it.
+    ok = press_together([(x, STARTERS[0]), (y, STARTERS[1])])
+    assert all(ok), ok
+    # The teammate whose press the host dropped is told (its stage comes back).
+    _wait(lambda: any(setup_view(g)["text"].startswith("Partner was first") for g in (x, y)), 5,
+          "Partner was first")
+    left = converged(4, "the first strike on every machine")
+    assert len(left) == 4 and (STARTERS[0] in left) != (STARTERS[1] in left), left
+    assert not any(setup_view(h)["my_turn"] for h in teams[first]), [setup_view(h) for h in teams[first]]
+    x.shot("02-one-strike-counted")
+    # The other team strikes two: both press the same stage at once; one counts, one is dropped,
+    # and the team still has one to strike.
+    x2, y2 = teams[1 - first]
+    _wait(lambda: setup_view(x2)["my_turn"] and setup_view(y2)["my_turn"], 20, "the other team's turn")
+    press_together([(x2, left[0]), (y2, left[0])])
+    left2 = converged(3, "the same stage pressed twice")
+    assert left2 == [k for k in left if k != left[0]], (left, left2)
+    v = setup_view(x2)
+    assert v["my_turn"] and v["count"] == 1, v
+    play_steps(gs, 1)
+
+    # Red wins game 1: blue walks off. Every player's report counts it.
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in gs), 240, "game 1 running")
+    def off(g: Game, port: int) -> None:
+        with contextlib.suppress(Exception):
+            F.fight([F.Seat(g.c, port, 0, g.name)], 60 * 60 * 3, mode="selfdestruct", seed=f"dbl{port}",
+                    stop=lambda: online_set.gstatus(g.c)["phase"] != "running" or online_set.scene(g.c) != "scMelee")
+    th = [threading.Thread(target=off, args=(g, port)) for g, port in ((b, 1), (d, 3))]
+    for t in th:
+        t.start()
+    for t in th:
+        t.join(300)
+    st = _wait(lambda: (lambda s: s if s and s["score"] == [1, 0] else None)(rooms(a).get("set")), 240,
+               "game 1 counted for red")
+    assert st["game"] == 2 and not st["paused"], st
+
+    # Game 2: red's captain bans, blue's captain picks, then both red players choose characters.
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in gs), 180, "game 2: all on the stage select")
+    v = until_setup(a, lambda v: v["active"] and v["game"] >= 2 and v["type"] == 1, "red bans")
+    assert v["my_turn"] and setup_view(c)["my_turn"], (v, setup_view(c))
+    assert setup_view(b)["text"].startswith("Opponents are banning"), setup_view(b)
+    a.shot("03-g2-red-bans")
+    play_steps(gs, 2)
+    online_set.wait(lambda: all(online_set.scene(g.c) == CSS for g in gs), 120, "game 2: all back on the CSS")
+    movers = _wait(lambda: (lambda m: m if len(m) == 2 else None)(
+        [g.name for g in gs if setup_view(g)["type"] == 3 and setup_view(g)["my_turn"]]), 60, "red's character turn")
+    assert sorted(movers) == sorted([a.name, c.name]), movers
+    for g in gs:
+        g.steps("wait 40")
+        g.shot("04-g2-red-characters")

@@ -9,6 +9,7 @@
 #include <random>
 
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 
 #include "Common/Logging/Log.h"
 #include "Core/Rollback/GameplaySession.h"
@@ -35,14 +36,31 @@ constexpr int TIMER_LOSER_CHAR = 101;
 // decider with its own lock held).
 std::mutex s_mutex;
 bool s_active = false;
-int s_local = 0;
+int s_local = 0;       // this player's side
+int s_local_port = 0;  // this player's in-game port
 Format s_format;
 SetState s_set;
 // A room's set: the set's game of the session's game 1, and each side's in-game port.
 u32 s_first_game = 1;
-std::array<u8, 2> s_side_ports{0, 1};
+std::array<u8, 2> s_side_ports{0, 1};  // each side's first port
+std::array<std::vector<u8>, 2> s_members{std::vector<u8>{0}, std::vector<u8>{1}};
+// The session host's in-game port: in a set of two-player sides its machine decides which presses
+// count (SetFormat.h TakePresses).
+int s_host_port = 0;
+// The session's game 1's actions so far, per side (the ticket's: a session started again).
+std::array<std::vector<u8>, 2> s_seed;
+// The last TakeStepReport.
+std::optional<StepReport> s_reported;
 u32 s_act_game = 0;
-std::vector<u8> s_actions;  // this player's actions for s_act_game, in order
+std::vector<u8> s_actions;  // 1v1: this player's actions for s_act_game, in order
+// Sides of two: this player's presses for s_act_game; on the host, its lists for s_host_game; on
+// the others, how many of their presses the host has answered, and when it last dropped one.
+std::vector<Press> s_presses;
+SharedSteps s_host;
+u32 s_host_game = 0;
+u32 s_seen_taken = 0;
+std::optional<Clock::time_point> s_overruled;
+std::string s_last_extra;  // the extra last published
 u32 s_timer_game = 0;
 int s_timer_step = -1;
 Clock::time_point s_timer_start;
@@ -103,50 +121,287 @@ const char* CharName(u8 kind)
   }
 }
 
-std::vector<u8> ActionsFrom(const picojson::object& extra, u32 game)
+using Extras = std::array<picojson::object, MAX_PORTS>;
+
+// Every port's extra (Gprb::Session::GetPlayerExtra: what that player's machine sends; {} for
+// this player). Called without s_mutex.
+Extras PlayerExtras()
 {
-  std::vector<u8> out;
+  Extras out;
+  for (int p = 0; p < MAX_PORTS; ++p)
+    out[p] = Gprb::Session::GetPlayerExtra(p);
+  return out;
+}
+
+// The extra's `gs` for the session's `game`, or nullptr.
+const picojson::object* GsOf(const picojson::object& extra, u32 game)
+{
   const auto gs = extra.find("gs");
   if (gs == extra.end() || !gs->second.is<picojson::object>())
-    return out;
+    return nullptr;
   const auto& o = gs->second.get<picojson::object>();
   const auto g = o.find("g");
-  const auto a = o.find("a");
   if (g == o.end() || !g->second.is<double>() || g->second.get<double>() != static_cast<double>(game))
+    return nullptr;
+  return &o;
+}
+
+// A list of stage kinds (1-255), at most MAX_ACTIONS; anything else ends it.
+std::vector<u8> KindsFrom(const picojson::value* v)
+{
+  std::vector<u8> out;
+  if (!v || !v->is<picojson::array>())
     return out;
-  if (a == o.end() || !a->second.is<picojson::array>())
-    return out;
-  for (const auto& v : a->second.get<picojson::array>())
+  for (const auto& x : v->get<picojson::array>())
   {
-    if (out.size() >= MAX_ACTIONS || !v.is<double>())
+    if (out.size() >= MAX_ACTIONS || !x.is<double>())
       break;
-    const double d = v.get<double>();
-    if (d >= 1 && d <= 0xFF && d == static_cast<double>(static_cast<int>(d)))
-      out.push_back(static_cast<u8>(d));
+    const double d = x.get<double>();
+    if (!(d >= 1 && d <= 0xFF && d == static_cast<double>(static_cast<int>(d))))
+      break;
+    out.push_back(static_cast<u8>(d));
   }
   return out;
 }
 
-// Under s_mutex. The steps of the session's `game` with both players' actions applied
-// (SetFormat.cpp): the set's game number decides striking and the first striker.
-Steps Evaluate(u32 game, const std::vector<u8>& mine, const std::vector<u8>& theirs)
+const picojson::value* Field(const picojson::object& o, const char* key)
 {
-  std::array<const std::vector<u8>*, 2> lists{};
-  lists[s_local] = &mine;
-  lists[1 - s_local] = &theirs;
-  return EvaluateSteps(s_format, s_set, s_first_game - 1 + game, lists);
+  const auto it = o.find(key);
+  return it == o.end() ? nullptr : &it->second;
 }
 
-picojson::object ExtraJson(u32 game, const std::vector<u8>& actions)
+// 1v1: the player's own actions (`gs.a`).
+std::vector<u8> ActionsFrom(const picojson::object& extra, u32 game)
+{
+  const picojson::object* gs = GsOf(extra, game);
+  return gs ? KindsFrom(Field(*gs, "a")) : std::vector<u8>{};
+}
+
+// Sides of two: the player's presses (`gs.p`: step, stage, step, stage...).
+std::vector<Press> PressesFrom(const picojson::object& extra, u32 game)
+{
+  std::vector<Press> out;
+  const picojson::object* gs = GsOf(extra, game);
+  const picojson::value* p = gs ? Field(*gs, "p") : nullptr;
+  if (!p || !p->is<picojson::array>())
+    return out;
+  const auto& arr = p->get<picojson::array>();
+  for (size_t i = 0; i + 1 < arr.size() && out.size() < MAX_ACTIONS; i += 2)
+  {
+    if (!arr[i].is<double>() || !arr[i + 1].is<double>())
+      break;
+    const double step = arr[i].get<double>(), kind = arr[i + 1].get<double>();
+    if (step < 0 || step > 63 || kind < 1 || kind > 0xFF)
+      break;
+    out.push_back({static_cast<u8>(step), static_cast<u8>(kind)});
+  }
+  return out;
+}
+
+// Sides of two: the host's lists (`gs.h`) and how many presses of each port it took (`gs.n`).
+std::optional<SharedSteps> HostStepsFrom(const picojson::object& extra, u32 game)
+{
+  const picojson::object* gs = GsOf(extra, game);
+  const picojson::value* h = gs ? Field(*gs, "h") : nullptr;
+  const picojson::value* n = gs ? Field(*gs, "n") : nullptr;
+  if (!h || !h->is<picojson::array>() || h->get<picojson::array>().size() != 2 || !n ||
+      !n->is<picojson::array>() || n->get<picojson::array>().size() != MAX_PORTS)
+  {
+    return std::nullopt;
+  }
+  SharedSteps out;
+  for (int side = 0; side < 2; ++side)
+    out.actions[side] = KindsFrom(&h->get<picojson::array>()[side]);
+  for (int p = 0; p < MAX_PORTS; ++p)
+  {
+    const picojson::value& x = n->get<picojson::array>()[p];
+    out.taken[p] = x.is<double>() && x.get<double>() >= 0 && x.get<double>() <= MAX_ACTIONS ?
+                       static_cast<u32>(x.get<double>()) :
+                       0;
+  }
+  return out;
+}
+
+// Under s_mutex: each side has two players (2v2): either teammate strikes, bans and picks, and the
+// session host's machine decides which presses count (SetFormat.h).
+bool Shared()
+{
+  return s_members[0].size() > 1 || s_members[1].size() > 1;
+}
+
+bool IsHost()
+{
+  return s_local_port == s_host_port;
+}
+
+// Under s_mutex: the session's `game` is the one this player acts in (its own actions start over;
+// 1v1: from the ticket's for the session's first game). True when they changed.
+bool EnterGame(u32 game)
+{
+  if (s_act_game == game)
+    return false;
+  s_act_game = game;
+  s_actions = game == 1 && !Shared() ? s_seed[s_local] : std::vector<u8>{};
+  s_presses.clear();
+  s_seen_taken = 0;
+  s_overruled.reset();
+  return true;
+}
+
+// Under s_mutex, host of a set of two-player sides: takes every player's new presses for `game`.
+void HostTake(u32 game, const Extras& extras)
+{
+  if (s_host_game != game)
+  {
+    s_host_game = game;
+    s_host = {};
+    if (game == 1)
+      s_host.actions = s_seed;
+  }
+  std::array<std::vector<Press>, MAX_PORTS> presses;
+  std::array<int, MAX_PORTS> side_of{-1, -1, -1, -1};
+  for (int side = 0; side < 2; ++side)
+  {
+    for (const u8 p : s_members[side])
+    {
+      if (p < MAX_PORTS)
+        side_of[p] = side;
+    }
+  }
+  for (int p = 0; p < MAX_PORTS; ++p)
+  {
+    presses[p] = p == s_local_port ? (s_act_game == game ? s_presses : std::vector<Press>{}) :
+                                     PressesFrom(extras[p], game);
+  }
+  for (const auto& [port, press] :
+       TakePresses(s_format, s_set, s_first_game - 1 + game, side_of, presses, s_host))
+  {
+    INFO_LOG_FMT(NETPLAY, "GameSetup: game {}: P{}'s {:#x} for step {} dropped", game, port + 1,
+                 press.stage, press.step);
+    if (port == s_local_port)
+      s_overruled = Clock::now();
+  }
+}
+
+// Under s_mutex: side `side`'s actions in the session's `game` (1v1): this player's own for its
+// side, else what the other player's machine sends; the session's first game has at least the
+// ticket's.
+std::vector<u8> SideActions(int side, u32 game, const Extras& extras)
+{
+  std::vector<u8> a = side == s_local ? (s_act_game == game ? s_actions : std::vector<u8>{}) :
+                                        ActionsFrom(extras[s_side_ports[side]], game);
+  if (game == 1 && s_seed[side].size() > a.size())
+    a = s_seed[side];
+  return a;
+}
+
+// Under s_mutex: the lists every machine plays for the session's `game`: 1v1 each player's own;
+// sides of two the host's (the host takes the new presses first).
+std::array<std::vector<u8>, 2> SideLists(u32 game, const Extras& extras)
+{
+  if (!Shared())
+    return {SideActions(0, game, extras), SideActions(1, game, extras)};
+  std::array<std::vector<u8>, 2> lists;
+  if (IsHost())
+  {
+    HostTake(game, extras);
+    lists = s_host.actions;
+  }
+  else if (const auto h = HostStepsFrom(extras[s_host_port], game))
+  {
+    lists = h->actions;
+  }
+  for (int side = 0; side < 2 && game == 1; ++side)
+  {
+    if (s_seed[side].size() > lists[side].size())
+      lists[side] = s_seed[side];
+  }
+  return lists;
+}
+
+// Under s_mutex: what this player shows: the lists played, and (sides of two, not the host) its
+// own presses the host has not answered yet on top. A press the host answered without playing
+// its stage was overruled (the partner was first): noted for the status line.
+std::array<std::vector<u8>, 2> ShownLists(u32 game, const Extras& extras)
+{
+  std::array<std::vector<u8>, 2> lists = SideLists(game, extras);
+  if (!Shared() || IsHost() || s_act_game != game)
+    return lists;
+  const auto h = HostStepsFrom(extras[s_host_port], game);
+  const u32 taken = std::min<u32>(h ? h->taken[s_local_port] : 0, static_cast<u32>(s_presses.size()));
+  for (u32 i = s_seen_taken; i < taken; ++i)
+  {
+    const auto& mine = lists[s_local];
+    if (std::find(mine.begin(), mine.end(), s_presses[i].stage) == mine.end())
+    {
+      s_overruled = Clock::now();
+      INFO_LOG_FMT(NETPLAY, "GameSetup: game {}: our {:#x} for step {} was overruled", game,
+                   s_presses[i].stage, s_presses[i].step);
+    }
+  }
+  s_seen_taken = std::max(s_seen_taken, taken);
+  const std::vector<Press> pending(s_presses.begin() + taken, s_presses.end());
+  return WithPending(s_format, s_set, s_first_game - 1 + game, s_local, lists, pending);
+}
+
+// Under s_mutex. The steps of the session's `game` as played (SetFormat.cpp): the set's game
+// number decides striking and the first striker.
+Steps Evaluate(u32 game, const Extras& extras)
+{
+  const auto lists = SideLists(game, extras);
+  return EvaluateSteps(s_format, s_set, s_first_game - 1 + game, {&lists[0], &lists[1]});
+}
+
+// Under s_mutex. The steps as this player shows them (its pending presses included).
+Steps EvaluateShown(u32 game, const Extras& extras)
+{
+  const auto lists = ShownLists(game, extras);
+  return EvaluateSteps(s_format, s_set, s_first_game - 1 + game, {&lists[0], &lists[1]});
+}
+
+picojson::value KindsJson(const std::vector<u8>& kinds)
 {
   picojson::array a;
-  for (const u8 k : actions)
+  for (const u8 k : kinds)
     a.emplace_back(static_cast<double>(k));
+  return picojson::value(a);
+}
+
+// Under s_mutex: this player's extra for `game` when it changed since the last one published.
+// 1v1: `gs.a`, its actions. Sides of two: `gs.p`, its presses; the host also `gs.h` (the lists
+// played) and `gs.n` (the presses it took per port).
+std::optional<picojson::object> ToPublish(u32 game)
+{
   picojson::object gs;
   gs["g"] = picojson::value(static_cast<double>(game));
-  gs["a"] = picojson::value(a);
+  if (!Shared())
+  {
+    gs["a"] = KindsJson(s_act_game == game ? s_actions : std::vector<u8>{});
+  }
+  else
+  {
+    picojson::array p;
+    for (const Press& x : s_act_game == game ? s_presses : std::vector<Press>{})
+    {
+      p.emplace_back(static_cast<double>(x.step));
+      p.emplace_back(static_cast<double>(x.stage));
+    }
+    gs["p"] = picojson::value(p);
+    if (IsHost() && s_host_game == game)
+    {
+      gs["h"] = picojson::value(picojson::array{KindsJson(s_host.actions[0]), KindsJson(s_host.actions[1])});
+      picojson::array n;
+      for (const u32 t : s_host.taken)
+        n.emplace_back(static_cast<double>(t));
+      gs["n"] = picojson::value(n);
+    }
+  }
   picojson::object o;
   o["gs"] = picojson::value(gs);
+  std::string text = picojson::value(o).serialize();
+  if (text == s_last_extra)
+    return std::nullopt;
+  s_last_extra = std::move(text);
   return o;
 }
 
@@ -196,8 +451,8 @@ size_t Usable(const std::vector<u16>& list)
 
 Gprb::Session::StageDecision Decide(u32 game)
 {
-  // Called by the session with its lock held: read the peer first, then take ours.
-  const picojson::object extra = Gprb::Session::GetPeerExtra();
+  // Called by the session with its lock held: read the players' extras first, then take ours.
+  const Extras extras = PlayerExtras();
   std::lock_guard lk(s_mutex);
   Gprb::Session::StageDecision d;
   if (!s_active)
@@ -209,8 +464,7 @@ Gprb::Session::StageDecision Decide(u32 game)
     d.wait = true;
     return d;
   }
-  const std::vector<u8> mine = s_act_game == game ? s_actions : std::vector<u8>{};
-  const Steps e = Evaluate(game, mine, ActionsFrom(extra, game));
+  const Steps e = Evaluate(game, extras);
   if (e.step_idx >= 0 || e.stage == NO_STAGE)
   {
     d.wait = true;
@@ -248,15 +502,25 @@ void Begin(int local_port, std::vector<u16> starters, std::vector<u16> counterpi
                                                         std::move(counterpicks)));
 }
 
-void Begin(int local_side, const SetTicket& ticket)
+void Begin(int local_port, const SetTicket& ticket, int host_port)
 {
-  Begin(local_side, ticket.format);
+  const int side =
+      std::find(ticket.members[1].begin(), ticket.members[1].end(), local_port) != ticket.members[1].end() ? 1 : 0;
+  Begin(side, ticket.format);
   std::lock_guard lk(s_mutex);
+  s_local_port = local_port;
   s_set = ticket.state;
   s_first_game = ticket.first_game;
   s_side_ports = ticket.side_ports;
-  NOTICE_LOG_FMT(NETPLAY, "GameSetup: from the set's game {} ({}-{}), sides on ports {} and {}",
-                 s_first_game, s_set.wins[0], s_set.wins[1], s_side_ports[0] + 1, s_side_ports[1] + 1);
+  s_members = ticket.members;
+  s_seed = ticket.actions;
+  s_host_port = host_port;
+  NOTICE_LOG_FMT(NETPLAY,
+                 "GameSetup: from the set's game {} ({}-{}), sides on ports {} and {}, {} and {} "
+                 "steps made{}",
+                 s_first_game, s_set.wins[0], s_set.wins[1], fmt::join(s_members[0], "+"),
+                 fmt::join(s_members[1], "+"), s_seed[0].size(), s_seed[1].size(),
+                 Shared() ? fmt::format(", either teammate presses, P{} decides", host_port + 1) : "");
 }
 
 u32 SetGameOf(u32 session_game)
@@ -272,10 +536,30 @@ std::optional<u8> SideOfPort(u8 port)
     return port;
   for (u8 side = 0; side < 2; ++side)
   {
-    if (s_side_ports[side] == port)
+    if (std::find(s_members[side].begin(), s_members[side].end(), port) != s_members[side].end())
       return side;
   }
   return std::nullopt;
+}
+
+std::optional<StepReport> TakeStepReport()
+{
+  const Gprb::Session::Lobby lobby = Gprb::Session::GetLobby();
+  const Extras extras = PlayerExtras();
+  std::lock_guard lk(s_mutex);
+  if (!s_active || s_format.best_of == 0 || !lobby.active || SetOver())
+    return std::nullopt;
+  StepReport r;
+  r.set_game = s_first_game - 1 + lobby.game;
+  r.actions = SideLists(lobby.game, extras);
+  r.match_started = lobby.in_match;
+  if (s_reported && s_reported->set_game == r.set_game && s_reported->actions == r.actions &&
+      s_reported->match_started == r.match_started)
+  {
+    return std::nullopt;
+  }
+  s_reported = r;
+  return r;
 }
 
 bool SetDone()
@@ -297,12 +581,23 @@ void Begin(int local_port, Format format)
     std::lock_guard lk(s_mutex);
     s_active = true;
     s_local = local_port == 1 ? 1 : 0;
+    s_local_port = s_local;
     s_format = std::move(format);
     s_set = SetState{};
     s_first_game = 1;
     s_side_ports = {0, 1};
+    s_members = {std::vector<u8>{0}, std::vector<u8>{1}};
+    s_host_port = 0;
+    s_seed = {};
+    s_reported.reset();
     s_act_game = 0;
     s_actions.clear();
+    s_presses.clear();
+    s_host = {};
+    s_host_game = 0;
+    s_seen_taken = 0;
+    s_overruled.reset();
+    s_last_extra.clear();
     s_timer_step = -1;
     s_auto_actions = 0;
     s_opponent_stalled = false;
@@ -335,9 +630,14 @@ void OnGameResult(u8 winner, u16 stage)
   std::lock_guard lk(s_mutex);
   if (!s_active)
     return;
-  // The winner's side (Ranked: ports 0 and 1 are the sides).
+  // The winner's side (Ranked: ports 0 and 1 are the sides; teams: the winning team's lowest port).
   if (winner != 0xFE)
-    winner = winner == s_side_ports[0] ? 0 : winner == s_side_ports[1] ? 1 : 0xFF;
+  {
+    const auto in = [winner](const std::vector<u8>& m) {
+      return std::find(m.begin(), m.end(), winner) != m.end();
+    };
+    winner = in(s_members[0]) ? 0 : in(s_members[1]) ? 1 : 0xFF;
+  }
   s_set.last_winner = winner;
   if (winner < 2)
   {
@@ -349,40 +649,48 @@ void OnGameResult(u8 winner, u16 stage)
 bool Act(u8 kind)
 {
   const Gprb::Session::Lobby lobby = Gprb::Session::GetLobby();
-  const picojson::object extra = Gprb::Session::GetPeerExtra();
-  picojson::object publish;
+  const Extras extras = PlayerExtras();
+  std::optional<picojson::object> publish;
   {
     std::lock_guard lk(s_mutex);
     if (!s_active || !lobby.active || lobby.in_match || lobby.setup_ready)
       return false;
     const u32 game = lobby.game;
-    if (s_act_game != game)
-    {
-      s_act_game = game;
-      s_actions.clear();
-    }
-    const Steps e = Evaluate(game, s_actions, ActionsFrom(extra, game));
+    EnterGame(game);
+    const Steps e = EvaluateShown(game, extras);
     if (e.step_idx < 0 || e.steps[e.step_idx].player != s_local ||
         std::find(e.remaining.begin(), e.remaining.end(), kind) == e.remaining.end() ||
-        s_actions.size() >= MAX_ACTIONS)
+        (Shared() ? s_presses.size() : s_actions.size()) >= MAX_ACTIONS)
     {
       return false;
     }
-    s_actions.push_back(kind);
+    if (Shared())
+    {
+      // Shown at once; it counts once the host's machine takes it (the host's own at once).
+      s_presses.push_back({static_cast<u8>(e.step_idx), kind});
+      if (IsHost())
+        HostTake(game, extras);
+    }
+    else
+    {
+      s_actions.push_back(kind);
+    }
     INFO_LOG_FMT(NETPLAY, "GameSetup: game {}: {} {:#x}", game,
                  e.steps[e.step_idx].type == StepType::Pick ? "picked" : "struck", kind);
-    publish = ExtraJson(game, s_actions);
+    publish = ToPublish(game);
   }
-  Gprb::Session::SetLocalExtra(publish);
+  if (publish)
+    Gprb::Session::SetLocalExtra(*publish);
   return true;
 }
 
 View Current()
 {
   const Gprb::Session::Lobby lobby = Gprb::Session::GetLobby();
-  const picojson::object extra = Gprb::Session::GetPeerExtra();
-  const Gprb::Session::LockIn peer_lock = Gprb::Session::GetPeerLock();
-  const Gprb::Session::LockIn local_lock = Gprb::Session::GetLocalLock();
+  const Extras extras = PlayerExtras();
+  std::array<std::optional<Gprb::Session::LockIn>, MAX_PORTS> locks;
+  for (int p = 0; p < MAX_PORTS; ++p)
+    locks[p] = Gprb::Session::GetPlayerLock(p);
   View v;
   std::optional<picojson::object> publish;
   {
@@ -394,12 +702,7 @@ View Current()
       return v;
     }
     const u32 game = lobby.game;
-    if (s_act_game != game)
-    {
-      s_act_game = game;
-      s_actions.clear();
-      publish = ExtraJson(game, s_actions);
-    }
+    EnterGame(game);
     v.active = true;
     v.game = game;
     if (SetOver())
@@ -411,29 +714,31 @@ View Current()
       s_last_view = v;
       return v;
     }
-    Steps e = Evaluate(game, s_actions, ActionsFrom(extra, game));
+    Steps e = EvaluateShown(game, extras);
     if (e.step_idx >= 0)
     {
       const StepInfo& st = e.steps[e.step_idx];
-      const bool mine = st.player == s_local;
-      if (mine && Elapsed(game, e.step_idx) >= st.seconds + GRACE_SECONDS &&
-          !e.remaining.empty() && s_actions.size() < MAX_ACTIONS)
+      // Slippi: a step whose time runs out is completed with a random selection, by the player
+      // whose step it is (1v1), or for sides of two by the host's machine, which decides them.
+      const bool decides = Shared() ? IsHost() : st.player == s_local;
+      std::vector<u8>& list = Shared() ? s_host.actions[st.player] : s_actions;
+      if (decides && Elapsed(game, e.step_idx) >= st.seconds + GRACE_SECONDS &&
+          !e.remaining.empty() && list.size() < MAX_ACTIONS)
       {
-        // Slippi: a step whose time runs out is completed with a random selection.
         std::uniform_int_distribution<size_t> pick(0, e.remaining.size() - 1);
         const u8 k = e.remaining[pick(s_rng)];
-        s_actions.push_back(k);
+        list.push_back(k);
         ++s_auto_actions;
-        publish = ExtraJson(game, s_actions);
-        NOTICE_LOG_FMT(NETPLAY, "GameSetup: game {}: time is up, {} {:#x}", game,
-                       st.type == StepType::Pick ? "picked" : "struck", k);
-        e = Evaluate(game, s_actions, ActionsFrom(extra, game));
+        NOTICE_LOG_FMT(NETPLAY, "GameSetup: game {}: time is up, {} {:#x} for side {}", game,
+                       st.type == StepType::Pick ? "picked" : "struck", k, st.player);
+        e = EvaluateShown(game, extras);
       }
     }
     v.selectable = e.remaining;
     if (e.step_idx >= 0)
     {
       const StepInfo& st = e.steps[e.step_idx];
+      // Sides of two: either teammate presses for the side.
       const bool mine = st.player == s_local;
       v.type = st.type;
       v.my_turn = mine;
@@ -441,17 +746,22 @@ View Current()
       v.to_sss = true;
       v.may_lock = false;
       v.seconds = TimerShown(st.seconds, Elapsed(game, e.step_idx), mine);
+      const char* who = s_members[1 - s_local].size() > 1 ? "Opponents are" : "Opponent is";
       std::string what;
       if (st.type == StepType::Pick)
-        what = mine ? "Pick a stage" : "Opponent is picking";
+        what = mine ? "Pick a stage" : fmt::format("{} picking", who);
       else if (!e.striking && mine)
         what = e.left == 1 ? "Ban 1 stage" : fmt::format("Ban {} stages", e.left);
       else if (!e.striking)
-        what = "Opponent is banning";
+        what = fmt::format("{} banning", who);
       else if (mine)
         what = e.left == 1 ? "Strike 1 stage" : fmt::format("Strike {} stages", e.left);
       else
-        what = "Opponent is striking";
+        what = fmt::format("{} striking", who);
+      // A press of ours the host's machine dropped (the partner was first): said for 2 s, while
+      // the stage it showed goes back (the step has usually gone on to the other team).
+      if (s_overruled && Clock::now() - *s_overruled < std::chrono::seconds(2))
+        what = "Partner was first";
       v.text = fmt::format("{} ({})", what, v.seconds);
     }
     else
@@ -467,11 +777,22 @@ View Current()
       else
       {
         // Slippi: the winner chooses a character first, then the loser, seeing it; 45 s each,
-        // then the character on the CSS is taken.
-        const bool winner = s_set.last_winner == s_local;
-        const bool local_locked = local_lock.ready && local_lock.game == game;
-        const bool winner_locked = winner ? local_locked : lobby.remote_ready;
-        const bool loser_locked = winner ? lobby.remote_ready : local_locked;
+        // then the character on the CSS is taken. In 2v2 each side's players together.
+        const u8 winner_side = s_set.last_winner <= 1 ? s_set.last_winner : 0;
+        const bool winner = winner_side == s_local;
+        const auto side_locked = [&](int side) {
+          for (const u8 p : s_members[side])
+          {
+            const auto& l = locks[p];
+            if (!l || !l->ready || l->game != game || l->char_kind == 0xFF)
+              return false;
+          }
+          return true;
+        };
+        const bool winner_locked = side_locked(winner_side);
+        const bool loser_locked = side_locked(1 - winner_side);
+        const auto& peer_lock = locks[s_side_ports[winner_side]];
+        const bool pair = s_members[0].size() > 1;
         v.type = StepType::Char;
         if (!winner_locked || !loser_locked)
         {
@@ -482,10 +803,13 @@ View Current()
           v.time_up = mine && elapsed >= CHAR_SECONDS + GRACE_SECONDS;
           if (mine && winner)
             v.text = fmt::format("Press START to lock in ({})", v.seconds);
+          else if (mine && pair)
+            v.text = fmt::format("Opponents locked in ({})", v.seconds);
           else if (mine)
-            v.text = fmt::format("Opponent picked {} ({})", CharName(peer_lock.char_kind), v.seconds);
+            v.text = fmt::format("Opponent picked {} ({})",
+                                 CharName(peer_lock ? peer_lock->char_kind : 0xFF), v.seconds);
           else
-            v.text = fmt::format("Opponent is choosing ({})", v.seconds);
+            v.text = fmt::format("{} choosing ({})", pair ? "Opponents are" : "Opponent is", v.seconds);
         }
         v.may_lock = v.my_turn;
       }
@@ -494,6 +818,7 @@ View Current()
   {
     std::lock_guard lk(s_mutex);
     s_last_view = v;
+    publish = ToPublish(v.game);
   }
   if (publish)
     Gprb::Session::SetLocalExtra(*publish);
@@ -522,6 +847,9 @@ picojson::object Status()
     a.emplace_back(static_cast<double>(k));
   o["actions"] = picojson::value(a);
   o["auto_actions"] = picojson::value(static_cast<double>(s_auto_actions));
+  o["shared"] = picojson::value(Shared());
+  o["presses"] = picojson::value(static_cast<double>(s_presses.size()));
+  o["host_lists"] = picojson::value(picojson::array{KindsJson(s_host.actions[0]), KindsJson(s_host.actions[1])});
   o["opponent_stalled"] = picojson::value(s_opponent_stalled);
   picojson::array st;
   for (const u16 k : s_format.starters)

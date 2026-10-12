@@ -155,6 +155,16 @@ describe("MatchRow", () => {
     expect(cells[3]).toBe("0 - 1");
     expect(cells[4]).toBe("bobBOB#1");
   });
+
+  it("links a room game's published ruleset to its page", () => {
+    const duel = roomGame("1v1", [roomPlayer("b", "bob", 1, 1), roomPlayer("me", "ann", 2, 3)]);
+    const link = "https://brawlonline.net/r/BCDFGH";
+    duel.room = { code: "KFQB", mode: "1v1", ruleset: { code: "BCDFGH", name: "NorCal Weekly", version: 3, link } };
+    const { container } = render(inTable(<MatchRow item={duel} myUid="me" />));
+    const a = container.querySelector("td a");
+    expect(a?.textContent).toBe("NorCal Weekly v3");
+    expect(a?.getAttribute("href")).toBe(link);
+  });
 });
 
 describe("LeaderboardRow", () => {

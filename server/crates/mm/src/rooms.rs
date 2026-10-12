@@ -129,8 +129,12 @@ struct Room {
     ruleset_code: Option<String>,
     based_on: Option<String>,
     /// The ruleset's set (`room_set.rs`): kept across the room's games until someone wins it, or
-    /// the host restarts it.
+    /// the host restarts it; a finished one stays (its result shown) until the next set starts or
+    /// the rules, ruleset or players change (room-rules.md B).
     set: Option<SetProgress>,
+    /// While a set waits for a player who left the room is private (room-rules.md A): whether it
+    /// was public before, to go back to when the set goes on.
+    public_before_pause: Option<bool>,
 }
 
 impl Room {
@@ -175,7 +179,51 @@ impl Room {
             && self.members().all(|(_, m)| m.ready && !m.in_game)
             && !self.one_colour()
             && self.players_misfit().is_none()
-            && !self.set.as_ref().is_some_and(|s| s.paused.is_some())
+            && !self.set.as_ref().is_some_and(|s| s.paused())
+    }
+
+    /// A set that waits for a player makes the room private; when it goes on (or ends) the room
+    /// is public again if it was.
+    fn settle_privacy(&mut self) {
+        let waiting = self.set.as_ref().is_some_and(|s| s.paused() && !s.away.is_empty());
+        match (waiting, self.public_before_pause) {
+            (true, None) => {
+                self.public_before_pause = Some(self.public);
+                self.public = false;
+            }
+            (false, Some(was)) => {
+                self.public = was;
+                self.public_before_pause = None;
+            }
+            _ => {}
+        }
+    }
+
+    /// The two sides of a set about to start: each player (1v1) or each team (2v2), or None when
+    /// the room's players do not make two sides of the ruleset's size.
+    fn set_sides(&self) -> Option<[Vec<room_set::Seat>; 2]> {
+        let seat =
+            |i: usize, m: &Member| room_set::Seat { slot: i, uid: m.info.uid, name: m.info.display_name.clone() };
+        let members: Vec<(usize, &Member)> = self.members().collect();
+        match self.ruleset.players {
+            Players::OneVsOne | Players::Ffa => match members.as_slice() {
+                [(a, ma), (b, mb)] => Some([vec![seat(*a, ma)], vec![seat(*b, mb)]]),
+                _ => None,
+            },
+            Players::TwoVsTwo => {
+                let mut teams: Vec<(u8, Vec<room_set::Seat>)> = Vec::new();
+                for (i, m) in &members {
+                    match teams.iter_mut().find(|(t, _)| *t == m.team) {
+                        Some((_, seats)) => seats.push(seat(*i, m)),
+                        None => teams.push((m.team, vec![seat(*i, m)])),
+                    }
+                }
+                match <[_; 2]>::try_from(teams) {
+                    Ok([(_, a), (_, b)]) if a.len() == 2 && b.len() == 2 => Some([a, b]),
+                    _ => None,
+                }
+            }
+        }
     }
 
     /// The ruleset is for another number of players than the room's slots and teams: the text.
@@ -206,13 +254,9 @@ impl Room {
         self.set.as_ref().is_some_and(|s| s.on())
     }
 
-    fn present(&self) -> impl Fn(usize) -> Option<Uuid> + '_ {
-        move |slot: usize| self.slots.get(slot).and_then(|m| m.as_ref()).map(|m| m.info.uid)
-    }
-
     /// Game 1 of a set is a blind pick (room-rules.md §2): the others' characters stay hidden.
     fn blind(&self) -> bool {
-        room_set::plays_set(&self.ruleset, self.open_count())
+        room_set::plays_set(&self.ruleset, self.open_count(), self.teams)
             && self.set.as_ref().is_none_or(|s| s.finished || s.game == 1)
     }
 
@@ -236,12 +280,19 @@ impl Room {
             Phase::InGame { .. } => msg::WAITING_FOR_GAME.into(),
             Phase::Waiting => {
                 let (players, open) = (self.player_count(), self.open_count());
-                if let Some(set) = self.set.as_ref().filter(|s| s.paused.is_some()) {
-                    return match set.view(self.present()).waiting_for {
+                if let Some(set) = self.set.as_ref().filter(|s| s.paused()) {
+                    let view = set.view();
+                    return match view.waiting_for {
                         Some(name) => msg::set_paused(&name),
-                        None if set.can_resume(self.present()) => msg::SET_HOST_DECIDES.into(),
+                        None if view.can_resume => msg::SET_HOST_DECIDES.into(),
                         None => msg::SET_RESULTS_DIFFER.into(),
                     };
+                }
+                // After a set: its result until someone readies for the next one (decision B).
+                if let Some((set, w)) = self.set.as_ref().and_then(|s| s.winner.map(|w| (s, w))) {
+                    if players == open && self.members().all(|(_, m)| !m.ready) {
+                        return msg::set_won(&set.side_name(w), set.wins[w], set.wins[1 - w]);
+                    }
                 }
                 if players == 1 {
                     msg::ROOM_WAITING.to_string()
@@ -300,7 +351,7 @@ impl Room {
             status_text: self.status_text(me),
             rules: self.ruleset.rules.clone(),
             ruleset: self.ruleset_view(),
-            set: self.set.as_ref().map(|s| s.view(self.present())),
+            set: self.set.as_ref().map(|s| s.view()),
         })
     }
 
@@ -566,6 +617,7 @@ impl RoomBook {
                 ruleset_code: None,
                 based_on: None,
                 set: None,
+                public_before_pause: None,
             },
         );
         self.changed.push((code.clone(), self.room_counter));
@@ -592,14 +644,13 @@ impl RoomBook {
             self.broadcast(&code, out);
             return Ok(());
         }
-        // A paused set keeps its missing player's slot for them (room-rules.md §2.1).
-        let reserved = room.set.as_ref().and_then(|s| s.reserved());
-        let slot = match reserved {
-            Some((kept, uid)) if uid == who.uid && room.open[kept] && room.slots[kept].is_none() => kept,
-            Some((kept, _)) => {
-                (0..ROOM_SLOTS).find(|&i| i != kept && room.open[i] && room.slots[i].is_none()).ok_or(msg::ROOM_FULL)?
-            }
-            None => room.free_slot().ok_or(msg::ROOM_FULL)?,
+        // A set that waits keeps its missing players' slots for them (room-rules.md A).
+        let reserved = room.set.as_ref().map(|s| s.reserved()).unwrap_or_default();
+        let slot = match reserved.iter().find(|(kept, uid)| *uid == who.uid && room.open[*kept]) {
+            Some((kept, _)) if room.slots[*kept].is_none() => *kept,
+            _ => (0..ROOM_SLOTS)
+                .find(|&i| room.open[i] && room.slots[i].is_none() && !reserved.iter().any(|(k, _)| *k == i))
+                .ok_or(msg::ROOM_FULL)?,
         };
         if let Some(old) = self.member_of.get(&conn).cloned() {
             self.leave(now, &old, conn, None, true, out);
@@ -619,6 +670,12 @@ impl RoomBook {
             in_game: false,
         });
         tracing::info!(%code, player = %who.connect_code, slot = slot + 1, "joined room");
+        if let Some(set) = room.set.as_mut() {
+            if set.back(who.uid) {
+                tracing::info!(%code, game = set.game, "room set goes on");
+            }
+        }
+        room.settle_privacy();
         self.changed.push((code.clone(), room.serial));
         self.member_of.insert(conn, code.clone());
         self.broadcast(&code, out);
@@ -648,15 +705,20 @@ impl RoomBook {
         let Some(slot) = room.slot_of(conn) else { return };
         let gone = room.slots[slot].take();
         if let (Some(set), Some(m)) = (room.set.as_mut(), gone.as_ref()) {
-            if set.side_of(m.info.uid).is_some() && set.on() {
-                if reason == Some(msg::REMOVED) {
-                    // The host closed the slot: that ends the set (room-rules.md §2.1).
+            if let Some(side) = set.side_of(m.info.uid) {
+                if !set.on() {
+                    // Another player after this set: the next one starts from 0-0 (decision B).
                     room.set = None;
-                } else {
-                    set.left(m.info.uid);
+                } else if reason == Some(msg::REMOVED) {
+                    // The host closed their slot: their side forfeits the set (decision A).
+                    set.forfeit(side);
+                    tracing::info!(%code, side, "room set forfeited");
+                } else if set.left(m.info.uid) {
+                    tracing::info!(%code, side, game = set.game - 1, "room set game lost by leaving");
                 }
             }
         }
+        room.settle_privacy();
         self.changed.push((code.to_string(), room.serial));
         tracing::info!(
             %code,
@@ -723,7 +785,25 @@ impl RoomBook {
                 if !waiting {
                     return Err(msg::BETWEEN_GAMES);
                 }
-                // Closing a set player's slot (a kick) ends the set; anything else waits for it.
+                // Closing the held slot of a set player who left forfeits the set for their side
+                // (decision A); a 1v1 room keeps its two slots open.
+                let held = room
+                    .set
+                    .as_ref()
+                    .and_then(|x| x.reserved().iter().find(|(k, _)| *k == s).and_then(|(_, uid)| x.side_of(*uid)));
+                if let (false, Some(side), true) = (open, held, room.slots[s].is_none()) {
+                    if let Some(set) = room.set.as_mut() {
+                        set.forfeit(side);
+                    }
+                    tracing::info!(%code, side, "room set forfeited (held slot closed)");
+                    if room.open_count() > 2 {
+                        room.open[s] = false;
+                    }
+                    room.settle_privacy();
+                    self.broadcast(&code, out);
+                    return Ok(());
+                }
+                // Closing a set player's slot (a kick) forfeits the set; anything else waits for it.
                 let kicks_a_set_player = !open
                     && room.slots[s]
                         .as_ref()
@@ -760,6 +840,7 @@ impl RoomBook {
                 }
                 if room.teams != on {
                     room.teams = on;
+                    room.set = None;
                     // Everyone's lock-in was made for the other mode.
                     for m in room.slots.iter_mut().flatten() {
                         m.ready = false;
@@ -771,6 +852,11 @@ impl RoomBook {
                     return Err(msg::HOST_ONLY);
                 }
                 room.public = public;
+                // The host's choice while a set waits is the one the room goes back to.
+                if room.public_before_pause.is_some() {
+                    room.public_before_pause = Some(public);
+                    room.public = false;
+                }
             }
             RoomRequest::Ready { ready, character, costume } => {
                 if starting {
@@ -814,6 +900,7 @@ impl RoomBook {
                 }
                 if room.ruleset.rules != rules {
                     room.ruleset.rules = rules;
+                    room.set = None;
                     // Changed rules are no longer the published ruleset (decision 13).
                     if room.ruleset_code.take().is_some() {
                         room.based_on = Some(format!("{} v{}", room.ruleset.name, room.ruleset.version));
@@ -842,20 +929,31 @@ impl RoomBook {
                 if !waiting {
                     return Err(msg::BETWEEN_GAMES);
                 }
-                let can_resume = room.set.as_ref().is_some_and(|s| s.can_resume(room.present()));
+                // Only results that differed wait for the host: replay that game, or end the set.
+                let can_resume = room.set.as_ref().is_some_and(|s| s.view().can_resume);
                 if resume {
                     if !can_resume {
                         return Err(msg::SET_NOT_RESUMABLE);
                     }
                     if let Some(s) = room.set.as_mut() {
-                        s.paused = None;
+                        s.replay_game();
                     }
                 } else {
                     room.set = None;
+                    room.settle_privacy();
                 }
                 for m in room.slots.iter_mut().flatten() {
                     m.ready = false;
                 }
+            }
+            RoomRequest::Step { game, actions, match_started } => {
+                let uid = room.slots[me].as_ref().map(|m| m.info.uid).ok_or(msg::NOT_IN_ROOM)?;
+                let set = room.set.as_mut().ok_or(msg::NO_SET_GAME)?;
+                if set.report_steps(uid, game, actions, match_started) {
+                    tracing::debug!(%code, game, match_started, "set steps");
+                }
+                // Kept for the next ticket; nothing the room shows changed.
+                return Ok(());
             }
             RoomRequest::Create { .. }
             | RoomRequest::Join { .. }
@@ -998,12 +1096,14 @@ impl RoomBook {
             self.match_counter
         );
         tracing::info!(%code, %match_id, players = room.player_count(), "room starting");
-        if room_set::plays_set(&room.ruleset, room.open_count()) && room.set.as_ref().is_none_or(|s| s.finished) {
-            let seats: Vec<(usize, Uuid, String)> =
-                room.members().map(|(i, m)| (i, m.info.uid, m.info.display_name.clone())).collect();
-            if let [a, b] = seats.as_slice() {
-                room.set = Some(SetProgress::new(room.ruleset.best_of, [a.clone(), b.clone()], rand::random()));
+        if room_set::plays_set(&room.ruleset, room.open_count(), room.teams)
+            && room.set.as_ref().is_none_or(|s| s.finished)
+        {
+            if let Some(sides) = room.set_sides() {
+                room.set = Some(SetProgress::new(room.ruleset.best_of, sides, rand::random()));
                 tracing::info!(%code, best_of = room.ruleset.best_of, "room set starts");
+            } else {
+                room.set = None;
             }
         }
         room.phase = Phase::Starting { match_id: match_id.clone(), since: now, tickets: BTreeMap::new() };
@@ -1140,6 +1240,12 @@ impl RoomBook {
                 .into(),
                 ports: room.members().map(|(i, _)| i as i16 + 1).collect(),
                 teams: (mode == RoomMode::Teams).then(|| room.members().map(|(_, m)| i16::from(m.team)).collect()),
+                ruleset: room.ruleset_code.as_ref().map(|code| common::db::MatchRuleset {
+                    code: code.clone(),
+                    name: room.ruleset.name.clone(),
+                    version: i32::try_from(room.ruleset.version).unwrap_or(i32::MAX),
+                    hash: room.ruleset.hash(),
+                }),
             },
         });
         room.phase = Phase::InGame { since: Instant::now() };
@@ -1500,54 +1606,71 @@ mod tests {
         let out = t.req(2, RoomRequest::Result { game: 1, winner_side: 0, stage: 0x21 });
         let s = last_state(&out, 2);
         assert_eq!((s["set"]["score"].clone(), s["set"]["game"].as_u64()), (serde_json::json!([1, 0]), Some(2)));
-        // Player 2 leaves mid-set: paused, their slot kept; someone else can't take it.
+        // Player 2's game reports game 2's first strikes, then they leave: the set waits for them,
+        // the room turns private and keeps their slot; nobody else can take it.
+        assert!(t
+            .req(2, RoomRequest::Step { game: 2, actions: [vec![0x02, 0x03], vec![]], match_started: false })
+            .is_empty());
         t.req(2, RoomRequest::Leave);
         let out = t.req(1, RoomRequest::Back);
         let s = last_state(&out, 1);
         assert_eq!((s["set"]["paused"].as_bool(), s["set"]["waitingFor"].as_str()), (Some(true), Some("player2")));
-        assert_eq!(s["statusText"], "Set paused: player2 left");
+        assert_eq!((s["statusText"].as_str(), s["public"].as_bool()), (Some("Set paused: player2 left"), Some(false)));
+        assert_eq!(s["set"]["canResume"], false);
         assert_eq!(msgs(&join(&mut t, 3, &code), 3)[0]["error"], msg::ROOM_FULL);
         assert_eq!(msgs(&t.req(1, RoomRequest::Teams { on: true }), 1)[0]["error"], msg::SET_ON);
         assert_eq!(msgs(&t.req(1, RoomRequest::Set { resume: true }), 1)[0]["error"], msg::SET_NOT_RESUMABLE);
-        // They come back into their slot; the host resumes; the next start goes on at game 2.
+        // They come back into their slot: the set goes on by itself, the room is public again,
+        // and the next start goes on at game 2 from the strikes made so far.
         let out = join(&mut t, 2, &code);
         let s = last_state(&out, 2);
-        assert_eq!(s["you"], 2);
         assert_eq!(
-            (s["set"]["canResume"].as_bool(), s["statusText"].as_str()),
-            (Some(true), Some(msg::SET_HOST_DECIDES))
+            (s["you"].as_u64(), s["set"]["paused"].as_bool(), s["public"].as_bool()),
+            (Some(2), Some(false), Some(true))
         );
+        let set = play(&mut t, &code, 103);
+        assert_eq!((set.game, set.wins, set.last_winner, set.last_win_stage[0]), (2, [1, 0], 0, 0x21));
+        assert_eq!(set.actions, vec![vec![0x02, 0x03], vec![]]);
+        // Game 2's match starts and player 2 leaves in it: that game is theirs lost, and the set
+        // (2-0) is over. Back in the room, the result shows until someone readies.
+        t.req(1, RoomRequest::Step { game: 2, actions: [vec![0x02, 0x03], vec![0x21]], match_started: true });
+        t.req(2, RoomRequest::Leave);
+        let out = t.req(1, RoomRequest::Back);
+        let s = last_state(&out, 1);
+        assert_eq!((s["set"]["finished"].as_bool(), s["set"]["winner"].as_u64()), (Some(true), Some(0)));
+        assert_eq!((s["set"]["score"].clone(), s["public"].as_bool()), (serde_json::json!([2, 0]), Some(true)));
+        let out = join(&mut t, 2, &code);
+        assert_eq!(last_state(&out, 2)["statusText"], "player1 wins the set 2-0");
+        // The next all-ready starts a new set at game 1.
+        let set = play(&mut t, &code, 105);
+        assert_eq!((set.game, set.wins, set.last_winner), (1, [0, 0], room_set::SIDE_NONE));
+        // Different results pause it until the host replays the game, or ends the set.
+        t.req(1, RoomRequest::Result { game: 1, winner_side: 0, stage: 0x02 });
+        let out = t.req(2, RoomRequest::Result { game: 1, winner_side: 1, stage: 0x02 });
+        assert_eq!(last_state(&out, 1)["set"]["paused"], true);
+        t.req(1, RoomRequest::Back);
+        let out = t.req(2, RoomRequest::Back);
+        assert_eq!(last_state(&out, 1)["statusText"], msg::SET_HOST_DECIDES);
+        assert_eq!(last_state(&out, 1)["set"]["canResume"], true);
         assert_eq!(msgs(&t.req(2, RoomRequest::Set { resume: true }), 2)[0]["error"], msg::HOST_ONLY);
         let out = t.req(1, RoomRequest::Set { resume: true });
-        assert_eq!(last_state(&out, 1)["set"]["paused"], false);
-        ready_all(&mut t, &[1, 2]);
-        t.book.ticket(103, addr(1), String::new(), info(1).uid, &code).unwrap();
-        let done = t.book.ticket(104, addr(2), String::new(), info(2).uid, &code).unwrap();
-        let set = done.matched[0].1.set.clone().unwrap();
-        assert_eq!((set.game, set.wins, set.last_winner, set.last_win_stage[0]), (2, [1, 0], 0, 0x21));
-        // Different results pause it; game 2 then side 0 wins it.
-        t.req(1, RoomRequest::Result { game: 2, winner_side: 0, stage: 0x02 });
-        let out = t.req(2, RoomRequest::Result { game: 2, winner_side: 1, stage: 0x02 });
-        assert_eq!(last_state(&out, 1)["set"]["paused"], true);
+        let s = last_state(&out, 1);
+        assert_eq!((s["set"]["paused"].as_bool(), s["set"]["game"].as_u64()), (Some(false), Some(1)));
+        // A new ruleset waits for a set that is on; so do the rules.
         let mut out = vec![];
-        t.book.announce(&code, &mut out);
-        t.req(1, RoomRequest::Back);
-        t.req(2, RoomRequest::Back);
-        // The host restarts it: no set until the next start.
-        let out = t.req(1, RoomRequest::Set { resume: false });
-        assert!(last_state(&out, 1).get("set").is_none());
-        // A new ruleset waits for a set that is on.
-        ready_all(&mut t, &[1, 2]);
-        t.book.ticket(105, addr(1), String::new(), info(1).uid, &code).unwrap();
-        t.book.ticket(106, addr(2), String::new(), info(2).uid, &code).unwrap();
-        let mut out = vec![];
-        assert_eq!(t.book.apply_ruleset(&code, Ruleset::default(), None, &mut out), Err(msg::BETWEEN_GAMES));
-        t.book.announce(&code, &mut out);
-        t.req(1, RoomRequest::Back);
-        t.req(2, RoomRequest::Back);
+        assert_eq!(t.book.apply_ruleset(&code, Ruleset::default(), None, &mut out), Err(msg::SET_ON));
         assert_eq!(msgs(&t.req(1, RoomRequest::Rules { rules: Default::default() }), 1)[0]["error"], msg::SET_ON);
-        // (A 1v1 room keeps its two slots open, so no kick there: the host restarts instead.)
+        // (A 1v1 room keeps its two slots open, so no kick there.)
         assert_eq!(msgs(&t.req(1, RoomRequest::Slot { slot: 2, open: false }), 1)[0]["error"], msg::MIN_OPEN_SLOTS);
+        // A player who left and whose held slot the host closes forfeits the set (the slot of a
+        // 1v1 stays open).
+        t.req(2, RoomRequest::Leave);
+        let out = t.req(1, RoomRequest::Slot { slot: 2, open: false });
+        let s = last_state(&out, 1);
+        assert_eq!((s["set"]["finished"].as_bool(), s["set"]["winner"].as_u64()), (Some(true), Some(0)));
+        assert_eq!((s["slots"][1]["open"].as_bool(), s["public"].as_bool()), (Some(true), Some(true)));
+        join(&mut t, 2, &code);
+        // The host ends a set; a ruleset change between sets clears the score.
         let out = t.req(1, RoomRequest::Set { resume: false });
         assert!(last_state(&out, 1).get("set").is_none());
         // The host's rule change makes the ruleset custom, based on the published one.
@@ -1622,6 +1745,70 @@ mod tests {
         assert_eq!(last_state(&out, 1)["statusText"], msg::RULESET_2V2);
     }
 
+    /// Players 1 and 2 ready up and their tickets come in (as `ticket..ticket+1`): the set ticket.
+    fn play(t: &mut T, code: &str, ticket: ConnId) -> common::proto::SetTicket {
+        ready_all(t, &[1, 2]);
+        let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
+        t.book.ticket(ticket, addr(1), String::new(), info(1).uid, code).unwrap();
+        let done = t.book.ticket(ticket + 1, addr(2), String::new(), info(2).uid, code).unwrap();
+        let mut out = vec![];
+        t.book.announce(code, &mut out);
+        done.matched[0].1.set.clone().expect("the set ticket")
+    }
+
+    #[test]
+    fn a_2v2_set_is_played_by_teams() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
+        t.req(1, RoomRequest::Slot { slot: 4, open: true });
+        t.req(1, RoomRequest::Teams { on: true });
+        for n in 2..=4 {
+            join(&mut t, n, &code);
+        }
+        // Teams by colour: players 1 and 3 red, 2 and 4 blue.
+        t.req(3, RoomRequest::Team { team: 0 });
+        t.req(4, RoomRequest::Team { team: 1 });
+        let mut r = Ruleset { players: Players::TwoVsTwo, best_of: 3, strikes: vec![1, 2, 1], ..Default::default() };
+        r.normalize();
+        let mut out = vec![];
+        t.book.apply_ruleset(&code, r, Some("BCDFGH".into()), &mut out).unwrap();
+        ready_all(&mut t, &[1, 2, 3, 4]);
+        let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
+        let mut done = TicketOutcome::default();
+        for n in 1..=4u8 {
+            done = t.book.ticket(100 + n as ConnId, addr(n), String::new(), info(n).uid, &code).unwrap();
+        }
+        let set = done.matched[0].1.set.clone().expect("the set ticket");
+        assert_eq!((set.sides, set.members.clone()), ([0, 1], vec![vec![0, 2], vec![1, 3]]));
+        let mut out = vec![];
+        t.book.announce(&code, &mut out);
+        let s = last_state(&out, 1);
+        assert_eq!(s["set"]["members"], serde_json::json!([[1, 3], [2, 4]]));
+        // Every player reports; the game counts once all four agree.
+        for n in 1..=3 {
+            t.req(n, RoomRequest::Result { game: 1, winner_side: 1, stage: 0x21 });
+        }
+        let out = t.req(4, RoomRequest::Result { game: 1, winner_side: 1, stage: 0x21 });
+        assert_eq!(last_state(&out, 1)["set"]["score"], serde_json::json!([0, 1]));
+        // A teammate who leaves mid-match loses the game for the team.
+        t.req(2, RoomRequest::Step { game: 2, actions: [vec![], vec![]], match_started: true });
+        t.req(3, RoomRequest::Leave);
+        let out = t.req(1, RoomRequest::Back);
+        let s = last_state(&out, 1);
+        assert_eq!(
+            (s["set"]["score"].clone(), s["set"]["finished"].as_bool()),
+            (serde_json::json!([0, 2]), Some(true))
+        );
+        assert_eq!(s["set"]["winner"], 1);
+        for n in [2, 4] {
+            t.req(n, RoomRequest::Back);
+        }
+        join(&mut t, 3, &code);
+        let out = t.req(3, RoomRequest::Team { team: 0 });
+        assert_eq!(last_state(&out, 1)["statusText"], "player2 & player4 wins the set 2-0");
+    }
+
     fn ready_all(t: &mut T, conns: &[ConnId]) -> Vec<Output> {
         let mut out = vec![];
         for &c in conns {
@@ -1672,7 +1859,13 @@ mod tests {
         assert_eq!(rec.host, info(1).uid);
         assert_eq!(
             rec.room,
-            common::db::MatchRoom { code: code.clone(), mode: "ffa".into(), ports: vec![1, 2, 3], teams: None }
+            common::db::MatchRoom {
+                code: code.clone(),
+                mode: "ffa".into(),
+                ports: vec![1, 2, 3],
+                teams: None,
+                ruleset: None
+            }
         );
         for (conn, resp) in &done.matched {
             let ps = resp.players.as_ref().unwrap();

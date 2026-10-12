@@ -192,6 +192,39 @@ TEST(SetFormat, ParsesTheServersTicket)
   EXPECT_FALSE(e.striking);
   EXPECT_EQ(e.steps[0].player, 0);
   EXPECT_FALSE(ParseSetTicket(picojson::object{}).set);
+  // Without members (a 1v1 ticket may leave them out): each side is its captain.
+  EXPECT_EQ(t.members[0], std::vector<u8>{0});
+  EXPECT_EQ(t.members[1], std::vector<u8>{2});
+  EXPECT_TRUE(t.actions[0].empty() && t.actions[1].empty());
+}
+
+TEST(SetFormat, ParsesTeamsAndTheStepsSoFar)
+{
+  std::string s = TICKET;
+  s.replace(s.find(R"("sides": [0, 2])"), 15,
+            R"("sides": [0, 1], "members": [[0, 2], [1, 3]], "actions": [[33, 2], [46]])");
+  const ParsedSet p = ParseSet(s);
+  ASSERT_TRUE(p.set) << p.detail;
+  EXPECT_EQ(p.set->members[0], (std::vector<u8>{0, 2}));
+  EXPECT_EQ(p.set->members[1], (std::vector<u8>{1, 3}));
+  EXPECT_EQ(p.set->actions[0], (std::vector<u8>{33, 2}));
+  EXPECT_EQ(p.set->actions[1], (std::vector<u8>{46}));
+  for (const char* bad : {
+           R"("members": [[2, 0], [1, 3]])",   // the captain not first
+           R"("members": [[0, 1], [1, 3]])",   // a port on both sides
+           R"("members": [[0, 2], [1]])",      // sides of different sizes
+           R"("members": [[0, 2, 3], [1]])",
+           R"("members": [[0, 4], [1, 3]])",
+           R"("members": [[0, 2]])",
+           R"("actions": [[0], []])",
+           R"("actions": [[256], []])",
+           R"("actions": [[1]])",
+       })
+  {
+    std::string b = TICKET;
+    b.replace(b.find(R"("sides": [0, 2])"), 15, std::string(R"("sides": [0, 1], )") + bad);
+    EXPECT_FALSE(ParseSet(b).set) << bad;
+  }
 }
 
 TEST(SetFormat, RefusesBadTickets)
@@ -220,4 +253,84 @@ TEST(SetFormat, RefusesBadTickets)
     EXPECT_FALSE(p.error.empty()) << to;
   }
   EXPECT_FALSE(ParseSet("[]").set);
+}
+
+// 2v2, either teammate (room-rules.md D): ports 0 and 2 are side 0, 1 and 3 side 1; side 0
+// strikes first, 1-2-1 over the five starters.
+namespace
+{
+constexpr std::array<int, MAX_PORTS_SHARED> TEAMS{0, 1, 0, 1};
+Format Doubles()
+{
+  return RankedFormat({0x01, 0x02, 0x21, 0x2D, 0x2E}, {0x01, 0x02, 0x21, 0x2D, 0x2E, 0x0D, 0x1F});
+}
+}  // namespace
+
+TEST(SetFormat, TeammatesPressingOnTheSameFrame)
+{
+  const Format f = Doubles();
+  // Both press the same stage for step 0: port 0 (lower) counts, port 2's is dropped.
+  SharedSteps host;
+  std::array<std::vector<Press>, MAX_PORTS_SHARED> presses{};
+  presses[0] = {{0, 0x01}};
+  presses[2] = {{0, 0x01}};
+  auto dropped = TakePresses(f, {}, 1, TEAMS, presses, host);
+  EXPECT_EQ(host.actions[0], std::vector<u8>{0x01});
+  ASSERT_EQ(dropped.size(), 1u);
+  EXPECT_EQ(dropped[0].first, 2);
+  // Different stages for a one-stage step: still only one counts.
+  SharedSteps host2;
+  presses[2] = {{0, 0x02}};
+  dropped = TakePresses(f, {}, 1, TEAMS, presses, host2);
+  EXPECT_EQ(host2.actions[0], std::vector<u8>{0x01});
+  EXPECT_EQ(dropped.size(), 1u);
+  EXPECT_EQ(host2.taken, (std::array<u32, 4>{1, 0, 1, 0}));
+  // Taking again changes nothing.
+  EXPECT_TRUE(TakePresses(f, {}, 1, TEAMS, presses, host2).empty());
+  EXPECT_EQ(host2.actions[0], std::vector<u8>{0x01});
+  // The other side pressing on side 0's step is dropped.
+  SharedSteps host3;
+  std::array<std::vector<Press>, MAX_PORTS_SHARED> wrong{};
+  wrong[1] = {{0, 0x01}};
+  EXPECT_EQ(TakePresses(f, {}, 1, TEAMS, wrong, host3).size(), 1u);
+  EXPECT_TRUE(host3.actions[0].empty() && host3.actions[1].empty());
+}
+
+TEST(SetFormat, TeammatesSharingAStepAndLatePresses)
+{
+  const Format f = Doubles();
+  SharedSteps host;
+  std::array<std::vector<Press>, MAX_PORTS_SHARED> presses{};
+  presses[0] = {{0, 0x01}};
+  TakePresses(f, {}, 1, TEAMS, presses, host);
+  // Side 1 strikes two: one each, on nearby frames (two rounds) or the same one.
+  presses[1] = {{1, 0x02}};
+  presses[3] = {{1, 0x21}};
+  EXPECT_TRUE(TakePresses(f, {}, 1, TEAMS, presses, host).empty());
+  EXPECT_EQ(host.actions[1], (std::vector<u8>{0x02, 0x21}));
+  // Port 2's press made for step 0 (it saw step 0 still open) arrives now, with side 0 on step
+  // 2: it is dropped, not taken as step 2's strike.
+  presses[2] = {{0, 0x2D}};
+  EXPECT_EQ(TakePresses(f, {}, 1, TEAMS, presses, host).size(), 1u);
+  EXPECT_EQ(host.actions[0], std::vector<u8>{0x01});
+  // Step 2's press counts; the stage is decided.
+  presses[2].push_back({2, 0x2D});
+  EXPECT_TRUE(TakePresses(f, {}, 1, TEAMS, presses, host).empty());
+  const Steps e = StepsOf(f, {}, 1, host.actions[0], host.actions[1]);
+  EXPECT_EQ(e.step_idx, -1);
+  EXPECT_EQ(e.stage, 0x2E);
+}
+
+TEST(SetFormat, PendingPressesShowUntilTheHostAnswers)
+{
+  const Format f = Doubles();
+  const std::array<std::vector<u8>, 2> none{};
+  // Port 2's own press shows at once.
+  auto shown = WithPending(f, {}, 1, 0, none, {{0, 0x02}});
+  EXPECT_EQ(shown[0], std::vector<u8>{0x02});
+  // The host took the partner's press for step 0 instead: port 2's no longer fits and is not
+  // shown; the host's lists are.
+  const std::array<std::vector<u8>, 2> host{std::vector<u8>{0x01}, std::vector<u8>{}};
+  shown = WithPending(f, {}, 1, 0, host, {{0, 0x02}});
+  EXPECT_EQ(shown, host);
 }

@@ -4045,6 +4045,17 @@ picojson::object GetPeerExtra()
   return slot >= 0 ? s.peers[slot].extra : picojson::object{};
 }
 
+picojson::object GetPlayerExtra(int port)
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  if (s.mode != Mode::Network || port < 0 || port >= MAX_LOBBY_PLAYERS || port == s.local_slot ||
+      !s.peers[port].expected || s.peers[port].left)
+  {
+    return {};
+  }
+  return s.peers[port].extra;
+}
+
 LockIn GetPeerLock()
 {
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);

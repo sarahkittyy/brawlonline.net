@@ -329,11 +329,10 @@ void OnSessionStart(const Match& match)
     if (p.is_local)
       room_local_port = p.port - 1;
   }
-  if (match.set && match.players.size() == 2)
+  if (match.set && match.players.size() == match.set->members[0].size() + match.set->members[1].size())
   {
-    // A room's set (docs/design/room-rules.md §5): in-game ports are the room's slots.
-    const u8 side = room_local_port == match.set->side_ports[1] ? 1 : 0;
-    GameSetup::Begin(side, *match.set);
+    // A room's set (docs/design/room-rules.md §5; 1v1 or 2v2): in-game ports are the room's slots.
+    GameSetup::Begin(room_local_port, *match.set, match.room_host_port - 1);
     Rooms::SetSetSession(match.set->format.best_of > 0);
   }
   else if (ranked)

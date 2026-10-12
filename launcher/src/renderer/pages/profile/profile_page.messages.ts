@@ -14,4 +14,5 @@ export const ProfilePageMessages = {
   score: () => "Score",
   opponent: () => "Opponents",
   noMatches: () => "No matches yet.",
+  rulesetPage: (code: string) => `Ruleset ${code} on the website`,
 };

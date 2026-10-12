@@ -53,6 +53,19 @@ pub struct MatchRoom {
     pub ports: Vec<i16>,
     /// 0 red, 1 blue, 2 green; `None` unless the room played a team battle.
     pub teams: Option<Vec<i16>>,
+    /// The published ruleset it played (`migrations/0009_match_rulesets.sql`); `None` for P+'s
+    /// default and custom rules.
+    pub ruleset: Option<MatchRuleset>,
+}
+
+/// A published ruleset as a room's match records it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct MatchRuleset {
+    pub code: String,
+    pub name: String,
+    pub version: i32,
+    /// `Ruleset::hash`.
+    pub hash: String,
 }
 
 /// Records a pairing (best effort; mm does not wait for it).
@@ -68,8 +81,9 @@ pub async fn insert_match(
     room: Option<&MatchRoom>,
 ) -> sqlx::Result<()> {
     sqlx::query(
-        "INSERT INTO mm_matches (match_id, mode, players, is_host, stages, region, room_code, room_mode, ports, teams)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        "INSERT INTO mm_matches (match_id, mode, players, is_host, stages, region, room_code, room_mode, ports, teams,
+                                 ruleset_code, ruleset_name, ruleset_version, ruleset_hash)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
          ON CONFLICT (match_id) DO NOTHING",
     )
     .bind(match_id)
@@ -82,6 +96,10 @@ pub async fn insert_match(
     .bind(room.map(|r| r.mode.as_str()))
     .bind(room.map(|r| r.ports.as_slice()))
     .bind(room.and_then(|r| r.teams.as_deref()))
+    .bind(room.and_then(|r| r.ruleset.as_ref()).map(|s| s.code.as_str()))
+    .bind(room.and_then(|r| r.ruleset.as_ref()).map(|s| s.name.as_str()))
+    .bind(room.and_then(|r| r.ruleset.as_ref()).map(|s| s.version))
+    .bind(room.and_then(|r| r.ruleset.as_ref()).map(|s| s.hash.as_str()))
     .execute(pool)
     .await
     .map(|_| ())

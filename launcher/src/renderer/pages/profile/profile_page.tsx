@@ -170,6 +170,7 @@ export const MatchRow = React.memo(function MatchRow({ item, myUid }: { item: Ma
       <TableCell>
         <div>{modeLabel(item.mode, item.room?.mode)}</div>
         {note && <div style={{ fontSize: 12, color: "var(--text-secondary)" }}>{note}</div>}
+        {item.room?.ruleset && <RulesetLink ruleset={item.room.ruleset} />}
       </TableCell>
       <TableCell sx={{ whiteSpace: "nowrap" }}>{monthDayHourFormat(new Date(item.createdAt))}</TableCell>
       <TableCell>
@@ -188,6 +189,21 @@ export const MatchRow = React.memo(function MatchRow({ item, myUid }: { item: Ma
     </TableRow>
   );
 });
+
+/** A room game's published ruleset: its name, opening its page on the website (`/r/<code>`). */
+const RulesetLink = ({ ruleset }: { ruleset: { code: string; name: string; version: number; link: string } }) => (
+  <a
+    href={ruleset.link}
+    title={Messages.rulesetPage(ruleset.code)}
+    onClick={(e) => {
+      e.preventDefault();
+      window.electron.shell.openExternal(ruleset.link).catch(() => undefined);
+    }}
+    style={{ fontSize: 12, color: "var(--text-secondary)" }}
+  >
+    {ruleset.version > 0 ? `${ruleset.name} v${ruleset.version}` : ruleset.name}
+  </a>
+);
 
 const PlayerCell = ({ player, showPlace = false }: { player: MatchHistoryPlayer; showPlace?: boolean }) => {
   const team = player.team;

@@ -276,6 +276,8 @@ void SetGameResultCallback(std::function<void(const GameResult&)> callback);
 // With more than two players, "the peer" is the other player with the lowest in-game port.
 void SetLocalExtra(const picojson::object& extra);
 picojson::object GetPeerExtra();
+// The extra of the player on in-game `port` ({} for this player, an empty port or one not heard).
+picojson::object GetPlayerExtra(int port);
 // The peer's lock-in as last heard (its character choice between games).
 LockIn GetPeerLock();
 // The lock-in of the player on in-game `port` (this player's own too), as last heard.

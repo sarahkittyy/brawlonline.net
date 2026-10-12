@@ -49,6 +49,9 @@ constexpr auto STABLE_ONLINE = 60s;      // online this long: the backoff starts
 constexpr auto PENDING_TIMEOUT = 20s;    // a create/join waiting for the connection or answer
 constexpr auto ERROR_SHOWN = 5s;         // an error's time on the line while in a room
 constexpr auto AWAY_LEAVE = 5s;          // the game away from the room CSS: leave the room
+// ... on the online stage select or a loading screen, where a room's set game leaves the game
+// when its session ends (the game goes back to the room CSS from there).
+constexpr auto AWAY_LEAVE_BUSY = 30s;
 constexpr auto FILE_POLL = 500ms;
 constexpr auto STATUS_EVERY = 5s;
 constexpr auto READY_RETRY = 1s;         // a room-ready not answered yet
@@ -920,6 +923,9 @@ void EndGame(bool played, const std::string& error, std::optional<u8> pickers, b
   // A set's session played several games: the room's game numbers go on after all of them.
   const u32 games = std::max<u32>(1, s.rg.games);
   s.rg = RoomGame{};
+  // The time away from the room CSS counts from the game's end (a set's session can end with
+  // the game on the stage select).
+  RestartAway();
   s.game += games;
   if ((s.game & 0xFF) == 0)  // the game's lock-in carries the number in a byte; 0 is none
     ++s.game;
@@ -944,6 +950,21 @@ void EndGame(bool played, const std::string& error, std::optional<u8> pickers, b
   ++s.serial;
   Log(fmt::format("room game {} ({}); next game {}, pickers {:#x}", played ? "over" : "failed",
                   error.empty() ? "ok" : error, s.game, s.pickers));
+}
+
+void ReportSetSteps(const GameSetup::StepReport& step)
+{
+  Request r;
+  r.op = Op::Step;
+  r.game = step.set_game;
+  r.actions = step.actions;
+  r.flag = step.match_started;
+  std::lock_guard lk(s_mutex);
+  if (!s.view || !RequestJson(r))
+    return;
+  s.outbox.push_back(r);
+  Log(fmt::format("set game {} steps: {}+{}{}", step.set_game, step.actions[0].size(),
+                  step.actions[1].size(), step.match_started ? ", match started" : ""));
 }
 
 void SuperviseGame(Clock::time_point now)
@@ -979,6 +1000,12 @@ void SuperviseGame(Clock::time_point now)
     g.saw_session = true;
   if (lobby.in_match)
     g.saw_match = true;
+  // A set's steps so far, kept by the server for a session that starts again (room-rules.md A).
+  if (g.set)
+  {
+    if (const auto step = GameSetup::TakeStepReport())
+      ReportSetSteps(*step);
+  }
   // The match is over once the game has left its scene (the game shows DISCONNECTED or DESYNC
   // DETECTED from LOCAL, which the cleanup would clear).
   const bool match_over =
@@ -1305,7 +1332,9 @@ void Thread()
         }
         // The game left the room CSS without leaving the room: leave for it.
         if (s.phase == Phase::In && s.view && !s.rg.active && s.view->status == Status::Waiting &&
-            s.away_since && now - *s.away_since > AWAY_LEAVE)
+            s.away_since &&
+            now - *s.away_since >
+                (s.screen == static_cast<u8>(Screen::OnlineBusy) ? AWAY_LEAVE_BUSY : AWAY_LEAVE))
         {
           Request r;
           r.op = Op::Leave;
@@ -1593,6 +1622,9 @@ picojson::object Status()
       so["can_resume"] = picojson::value(st->can_resume);
       so["finished"] = picojson::value(st->finished);
       so["waiting_for"] = picojson::value(st->waiting_for);
+      so["winner"] = picojson::value(static_cast<double>(st->winner));
+      so["side_slots"] = picojson::value(picojson::array{picojson::value(static_cast<double>(st->side_slots[0])),
+                                                         picojson::value(static_cast<double>(st->side_slots[1]))});
       o["set"] = picojson::value(so);
     }
   }

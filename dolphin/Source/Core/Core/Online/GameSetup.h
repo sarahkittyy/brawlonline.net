@@ -67,14 +67,27 @@ void Begin(int local_port, std::vector<u16> starters, std::vector<u16> counterpi
 // (CheckFormat) is logged and Ranked's is used, the same on every machine.
 void Begin(int local_port, Format format);
 // A room's set (SetTicket: its format, the score so far, the set's game the session starts with,
-// and which in-game port each side is). `local_side` is this player's side.
-void Begin(int local_side, const SetTicket& ticket);
+// each side's in-game ports and the steps made so far). `local_port` is this player's in-game
+// port. In 2v2 the sides are teams: either teammate strikes, bans and picks for the side, and the
+// session host's machine (`host_port`) decides which presses count (SetFormat.h TakePresses);
+// every player of the winning side, then of the losing one, chooses a character.
+void Begin(int local_port, const SetTicket& ticket, int host_port);
 // The set's game a session game is (a room's session starts at the set's game N).
 u32 SetGameOf(u32 session_game);
 // The side an in-game port plays (0xFE stays a draw); nullopt for no side.
 std::optional<u8> SideOfPort(u8 port);
 // The set is won (no more games), or there is no set.
 bool SetDone();
+// A room set's steps as the server keeps them (room-step): the set's game being set up, each
+// side's actions so far, and whether its match has started. Returns one when they changed since
+// the last one taken; nullopt otherwise (and without a room set).
+struct StepReport
+{
+  u32 set_game = 0;
+  std::array<std::vector<u8>, 2> actions;
+  bool match_started = false;
+};
+std::optional<StepReport> TakeStepReport();
 void End();
 bool IsActive();
 // A game ended: the winner's in-game port (0xFE draw) and the stage it was played on.

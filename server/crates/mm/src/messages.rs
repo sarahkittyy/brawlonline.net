@@ -94,8 +94,19 @@ pub fn set_paused(name: &str) -> String {
 }
 /// The status line when the set's players disagree about a game.
 pub const SET_RESULTS_DIFFER: &str = "Set paused: results differ";
-/// The status line once everyone is back: the host resumes or restarts.
-pub const SET_HOST_DECIDES: &str = "Host: resume or restart the set";
+/// The status line once everyone is back after results that differed: the host replays the game
+/// or ends the set.
+pub const SET_HOST_DECIDES: &str = "Results differ: host decides";
+/// The status line after a set until the next one starts: "alice wins the set 2-1" (a name too
+/// wide for the line: "Set over: 2-1").
+pub fn set_won(name: &str, won: u8, lost: u8) -> String {
+    let full = format!("{name} wins the set {won}-{lost}");
+    if full.chars().count() <= 36 && rough_width(&full) <= 640 {
+        full
+    } else {
+        format!("Set over: {won}-{lost}")
+    }
+}
 /// The room's ruleset is for another number of players than its slots and teams.
 pub const RULESET_1V1: &str = "This ruleset is for 1v1.";
 pub const RULESET_2V2: &str = "This ruleset needs 2 teams of 2.";
@@ -253,6 +264,9 @@ mod tests {
             set_paused("player1"),
             SET_RESULTS_DIFFER.to_string(),
             SET_HOST_DECIDES.to_string(),
+            set_won(&"W".repeat(15), 4, 3),
+            set_won("player1", 2, 1),
+            set_won("WWWWWWWWWWWWWWW & WWWWWWWWWWWWWWW", 2, 0),
             RULESET_1V1.to_string(),
             RULESET_2V2.to_string(),
             RULESET_FFA.to_string(),

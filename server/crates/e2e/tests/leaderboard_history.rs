@@ -511,6 +511,13 @@ async fn room_match(
         mode: room_mode.into(),
         ports: ports.to_vec(),
         teams: teams.map(<[i16]>::to_vec),
+        // The 1v1s play a published ruleset (room-rules.md E).
+        ruleset: (room_mode == "1v1").then(|| common::db::MatchRuleset {
+            code: "BCDFGH".into(),
+            name: "Weekly".into(),
+            version: 3,
+            hash: "ab".repeat(32),
+        }),
     };
     common::db::insert_match(&stack.pool, &id, 3, &uids, uids[0], &[], "other", Some(&room)).await.unwrap();
     sqlx::query("UPDATE mm_matches SET created_at = $2 WHERE match_id = $1")
@@ -597,7 +604,7 @@ async fn room_games_in_the_history() {
 
     let r1 = item(&all, &m1);
     assert_eq!((r1["mode"].as_str(), r1["ranked"].as_bool()), (Some("room"), Some(false)));
-    assert_eq!(r1["room"], json!({"code": "ABCD", "mode": "ffa"}));
+    assert_eq!(r1["room"], json!({"code": "ABCD", "mode": "ffa", "ruleset": null}));
     assert_eq!(r1["status"], "ASSIGNED");
     let got: Vec<(Value, Value, Value, Value)> = [a, b, c, d]
         .iter()
@@ -634,6 +641,12 @@ async fn room_games_in_the_history() {
 
     let r3 = item(&all, &m3);
     assert_eq!(r3["room"]["mode"], "1v1");
+    assert_eq!(
+        (r3["room"]["ruleset"]["code"].as_str(), r3["room"]["ruleset"]["name"].as_str()),
+        (Some("BCDFGH"), Some("Weekly"))
+    );
+    assert_eq!(r3["room"]["ruleset"]["version"], 3);
+    assert!(r3["room"]["ruleset"]["link"].as_str().unwrap().ends_with("/r/BCDFGH"));
     assert_eq!((player(r3, a)["port"].as_u64(), player(r3, e)["port"].as_u64()), (Some(1), Some(3)));
     assert_eq!((player(r3, a)["wins"].as_u64(), player(r3, e)["wins"].as_u64()), (Some(1), Some(0)));
     assert_eq!((player(r3, a)["place"].as_u64(), player(r3, e)["place"].as_u64()), (Some(1), Some(2)));

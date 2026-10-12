@@ -192,6 +192,9 @@ pub struct SetTicket {
     /// Bit (game - 1) % 32: the side that strikes first in that game.
     pub first_striker_bits: u32,
     pub sides: [u8; 2],
+    /// Each side's ports (0-3), lowest first: one player in 1v1, a team in 2v2.
+    #[serde(default)]
+    pub members: Vec<Vec<u8>>,
     /// The set's game the session starts with (1 for a new set).
     pub game: u32,
     pub wins: [u8; 2],
@@ -199,6 +202,10 @@ pub struct SetTicket {
     pub last_winner: u8,
     /// Each side's stage of its last win (0xFFFF none).
     pub last_win_stage: [u16; 2],
+    /// The game's stage actions so far, per side (`room-step`): a session that starts again in the
+    /// middle of a game's strikes goes on from them. Empty for a game not set up yet.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub actions: Vec<Vec<u8>>,
 }
 
 impl GetTicketResp {

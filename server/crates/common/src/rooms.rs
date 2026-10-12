@@ -35,6 +35,9 @@ pub const ROOM_BACK: &str = "room-back";
 pub const ROOM_RULES: &str = "room-rules";
 pub const ROOM_RESULT: &str = "room-result";
 pub const ROOM_SET: &str = "room-set";
+pub const ROOM_STEP: &str = "room-step";
+/// A side's stage actions in one `room-step` at most (a strike pattern of 8 steps of up to 8).
+pub const STEP_ACTIONS_MAX: usize = 64;
 pub const ROOM_RULESET: &str = "room-ruleset";
 pub const ROOM_RULESETS: &str = "room-rulesets";
 pub const RULESET_LIST: &str = "ruleset-list";
@@ -141,8 +144,14 @@ pub enum RoomRequest {
     /// it end (`winnerSide` 0 / 1, [`SIDE_DRAW`]; `stage` the srStageKind played). The server
     /// counts it once every player of the set reported the same.
     Result { game: u32, winner_side: u8, stage: u16 },
-    /// `room-set {action}` (host, between games): `resume` a paused set, or `restart` it.
+    /// `room-set {action}` (host, between games): `resume` replays the game whose results differed,
+    /// `restart` ends the set (the next start begins a new one).
     Set { resume: bool },
+    /// `room-step {game, actions, matchStarted}`: the set's game being set up as this member's game
+    /// sees it: each side's struck / banned / picked stages in order, and whether its match has
+    /// started. The server keeps them, so a session that starts again after a player left goes on
+    /// from the same step; leaving once the match started loses the game (room-rules.md A).
+    Step { game: u32, actions: [Vec<u8>; 2], match_started: bool },
     /// `room-ruleset {code}` (host, between games, no set on): play a published ruleset (a code),
     /// or P+'s default (`code` null). The code also becomes the host's remembered ruleset.
     Ruleset { code: Option<String> },
@@ -167,6 +176,7 @@ impl RoomRequest {
             RoomRequest::Rules { .. } => ROOM_RULES,
             RoomRequest::Result { .. } => ROOM_RESULT,
             RoomRequest::Set { .. } => ROOM_SET,
+            RoomRequest::Step { .. } => ROOM_STEP,
             RoomRequest::Ruleset { .. } => ROOM_RULESET,
             RoomRequest::RulesetList => ROOM_RULESETS,
         }
@@ -207,6 +217,9 @@ impl RoomRequest {
                 json!({ "game": game, "winnerSide": winner_side, "stage": stage })
             }
             RoomRequest::Set { resume } => json!({ "action": if *resume { "resume" } else { "restart" } }),
+            RoomRequest::Step { game, actions, match_started } => {
+                json!({ "game": game, "actions": actions, "matchStarted": match_started })
+            }
             RoomRequest::Ruleset { code } => json!({ "code": code }),
         };
         v["type"] = json!(self.op());
@@ -278,6 +291,28 @@ impl RoomRequest {
                     serde_json::from_value(raw.clone()).map_err(|e| format!("{kind}: {e}"))?;
                 rules.validate().map_err(|e| format!("{kind}: {e}"))?;
                 RoomRequest::Rules { rules }
+            }
+            ROOM_STEP => {
+                let game = v
+                    .get("game")
+                    .and_then(|g| g.as_u64())
+                    .filter(|g| (1..=99).contains(g))
+                    .ok_or_else(|| format!("{kind}: `game` must be 1 to 99"))? as u32;
+                let bad = || format!("{kind}: `actions` must be two lists of stage ids");
+                let lists = v.get("actions").and_then(|a| a.as_array()).filter(|a| a.len() == 2).ok_or_else(bad)?;
+                let mut actions: [Vec<u8>; 2] = Default::default();
+                for (side, list) in lists.iter().enumerate() {
+                    let list = list.as_array().filter(|l| l.len() <= STEP_ACTIONS_MAX).ok_or_else(bad)?;
+                    for k in list {
+                        let k = k.as_u64().filter(|k| (1..=0xFF).contains(k)).ok_or_else(bad)?;
+                        actions[side].push(k as u8);
+                    }
+                }
+                let match_started = match v.get("matchStarted") {
+                    None => false,
+                    Some(b) => b.as_bool().ok_or_else(|| format!("{kind}: `matchStarted` must be true or false"))?,
+                };
+                RoomRequest::Step { game, actions, match_started }
             }
             ROOM_RESULT => {
                 let game = v
@@ -432,16 +467,22 @@ pub struct RoomSet {
     /// The game being played or next (1-based).
     pub game: u32,
     pub score: [u8; 2],
-    /// Each side's slot (1-4).
+    /// Each side's first (lowest) slot, 1-4.
     pub sides: [u8; 2],
-    /// A player of the set left (or the results differed): the set waits for the host.
+    /// Each side's slots (1-4): one player in 1v1, a team in 2v2.
+    #[serde(default)]
+    pub members: [Vec<u8>; 2],
+    /// A player of the set left (or the results differed): the set waits.
     pub paused: bool,
-    /// The missing player's name while paused.
+    /// The missing players' names while they are away (the set goes on when they are back).
     pub waiting_for: Option<String>,
-    /// The host may resume (everyone of the set is here).
+    /// The host may restart the game (the players' results differed, everyone is here).
     pub can_resume: bool,
     /// Someone won it (the score stays until the next set starts).
     pub finished: bool,
+    /// The side that won it, once finished.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub winner: Option<u8>,
 }
 
 /// One ruleset in `ruleset-list`.
@@ -604,6 +645,8 @@ mod tests {
             RoomRequest::Ruleset { code: None },
             RoomRequest::Set { resume: true },
             RoomRequest::Result { game: 2, winner_side: 1, stage: 0x21 },
+            RoomRequest::Step { game: 1, actions: [vec![0x01], vec![0x02, 0x21]], match_started: false },
+            RoomRequest::Step { game: 3, actions: [vec![], vec![]], match_started: true },
             RoomRequest::RulesetList,
             RoomRequest::Join { code: "KFQB".into() },
             RoomRequest::Leave,
@@ -652,6 +695,12 @@ mod tests {
             (ROOM_RESULT, json!({"game": 0, "winnerSide": 0, "stage": 1})),
             (ROOM_RESULT, json!({"game": 1, "winnerSide": 2, "stage": 1})),
             (ROOM_SET, json!({"action": "pause"})),
+            (ROOM_STEP, json!({"game": 1, "actions": [[1]]})),
+            (ROOM_STEP, json!({"game": 1, "actions": [[0], []]})),
+            (ROOM_STEP, json!({"game": 1, "actions": [[256], []]})),
+            (ROOM_STEP, json!({"game": 0, "actions": [[], []]})),
+            (ROOM_STEP, json!({"game": 1, "actions": [vec![1; 65], []]})),
+            (ROOM_STEP, json!({"game": 1, "actions": [[], []], "matchStarted": 1})),
             (ROOM_PUBLIC, json!({})),
             (ROOM_READY, json!({"ready": true, "character": 256})),
             (ROOM_READY, json!({"ready": true, "costume": -1})),
