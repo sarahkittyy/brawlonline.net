@@ -4,6 +4,7 @@
 #include "VideoCommon/VideoState.h"
 
 #include "Common/ChunkFile.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 #include "VideoCommon/BPMemory.h"
 #include "VideoCommon/BPStructs.h"
@@ -171,18 +172,28 @@ void VideoCommon_DoState(PointerWrap& p)
   system.GetPixelEngine().DoState(p);
   p.DoMarker("PixelEngine");
 
+  // A whole-machine session's machine image carries the guest's GPU state only: what the host
+  // derives from it (shader constants and their dirty flags, vertex caches, presentation) depends
+  // on how far each host's GPU thread got, so two players' images of the same machine differed.
+  // The joiner recomputes it from bpmem/xfmem.
+  const bool image = Machine::InImageDoState();
+
   // the old way of replaying current bpmem as writes to push side effects to pixel shader manager
   // doesn't really work.
-  system.GetPixelShaderManager().DoState(p);
+  if (!image)
+    system.GetPixelShaderManager().DoState(p);
   p.DoMarker("PixelShaderManager");
 
-  system.GetVertexShaderManager().DoState(p);
+  if (!image)
+    system.GetVertexShaderManager().DoState(p);
   p.DoMarker("VertexShaderManager");
 
-  system.GetGeometryShaderManager().DoState(p);
+  if (!image)
+    system.GetGeometryShaderManager().DoState(p);
   p.DoMarker("GeometryShaderManager");
 
-  g_vertex_manager->DoState(p);
+  if (!image)
+    g_vertex_manager->DoState(p);
   p.DoMarker("VertexManager");
 
   // Skip GPU readbacks during rollback; GPU resources rebuild from restored CPU state.
@@ -198,8 +209,11 @@ void VideoCommon_DoState(PointerWrap& p)
   }
   p.DoMarker("TextureCache");
 
-  g_presenter->DoState(p);
-  g_frame_dumper->DoState(p);
+  if (!image)
+  {
+    g_presenter->DoState(p);
+    g_frame_dumper->DoState(p);
+  }
   p.DoMarker("Presenter");
 
   if (!s_skip_gpu_readback_for_rollback)
@@ -208,15 +222,25 @@ void VideoCommon_DoState(PointerWrap& p)
   }
   p.DoMarker("Bounding Box");
 
-  g_widescreen->DoState(p);
+  if (!image)
+    g_widescreen->DoState(p);
   p.DoMarker("Widescreen");
 
-  system.GetXFStateManager().DoState(p);
+  if (!image)
+    system.GetXFStateManager().DoState(p);
   p.DoMarker("XFStateManager");
 
   // Refresh state.
   if (p.IsReadMode())
   {
+    if (image)
+    {
+      // Recomputed from the registers just loaded.
+      system.GetXFStateManager().SetAllChanged();
+      system.GetPixelShaderManager().Dirty();
+      system.GetGeometryShaderManager().Dirty();
+      system.GetVertexShaderManager().dirty = true;
+    }
     // Inform backend of new state from registers.
     BPReload();
     VertexLoaderManager::MarkAllDirty();

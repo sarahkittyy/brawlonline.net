@@ -783,6 +783,7 @@ PRIVATE
   xxhash::xxhash
   LZO::LZO
   LZ4::LZ4
+  zstd::zstd
   ZLIB::ZLIB
   tracy
 )

@@ -18,6 +18,9 @@ public:
   void DoState(PointerWrap& p);
 
   void InvalidateXFRange(int start, int end);
+  // Everything is recomputed from xfmem at the next draw (after a state that did not carry this
+  // manager's own tracking: a whole-machine session's image).
+  void SetAllChanged();
 
   void SetTexMatrixChangedA(u32 value);
   bool DidTexMatrixAChange() const { return m_tex_matrices_changed[0]; }

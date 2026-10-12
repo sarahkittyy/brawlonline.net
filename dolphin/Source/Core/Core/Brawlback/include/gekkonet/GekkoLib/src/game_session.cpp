@@ -14,6 +14,7 @@ Gekko::GameSession::GameSession()
     _last_sent_healthcheck = GameInput::NULL_FRAME;
     _runahead_start_frame = GameInput::NULL_FRAME;
     _runahead_frames = 0;
+    _frame_limit = INT32_MAX;
     _config = GekkoConfig();
 }
 
@@ -145,6 +146,28 @@ void Gekko::GameSession::AddLocalInput(i32 player, void* input)
             break;
         }
     }
+}
+
+void Gekko::GameSession::SetLocalDelayInput(i32 player, const void* input)
+{
+    for (u32 i = 0; i < _msg.locals.size(); i++) {
+        if (_msg.locals[i]->handle == player) {
+            _sync.SetDelayFillInput(player, (const u8*)input);
+        }
+    }
+}
+
+void Gekko::GameSession::SetFrameLimit(i32 frame)
+{
+    _frame_limit = frame < 0 ? INT32_MAX : frame;
+}
+
+i32 Gekko::GameSession::ConfirmedFrame()
+{
+    if (!_started) {
+        return GameInput::NULL_FRAME;
+    }
+    return GetConfirmedFrame();
 }
 
 GekkoGameEvent** Gekko::GameSession::UpdateSession(i32* count)
@@ -669,6 +692,11 @@ Frame Gekko::GameSession::GetConfirmedFrame()
 
 bool Gekko::GameSession::ShouldStallAdvance()
 {
+    // the user stops the session at a frame (rollbacks of earlier frames still run).
+    if (_sync.GetCurrentFrame() >= _frame_limit) {
+        return true;
+    }
+
     // while the claims for a disconnected player are settling a peer may still
     // carry more inputs, dont outrun what the session can roll back to.
     const Frame hold = _msg.GetDisconnectHoldFrame();

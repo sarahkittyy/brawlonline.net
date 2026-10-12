@@ -1453,7 +1453,16 @@ Result CmdMachineWiimote(const Args& args)
 
 Result CmdMachineDigest(const Args& args)
 {
-  return Machine::Digest(static_cast<s64>(GetU64(args, "frame"))).get<picojson::object>();
+  std::vector<u32> addrs;
+  if (const auto it = args.find("addrs"); it != args.end() && it->second.is<picojson::array>())
+  {
+    for (const auto& v : it->second.get<picojson::array>())
+    {
+      if (v.is<std::string>())
+        addrs.push_back(static_cast<u32>(std::strtoul(v.get<std::string>().c_str(), nullptr, 16)));
+    }
+  }
+  return Machine::Digest(static_cast<s64>(GetU64(args, "frame")), addrs).get<picojson::object>();
 }
 
 Result CmdMachineStop(const Args&)

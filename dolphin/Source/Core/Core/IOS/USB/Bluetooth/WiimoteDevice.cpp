@@ -24,6 +24,7 @@
 #include "Core/IOS/USB/Bluetooth/BTEmu.h"
 #include "Core/IOS/USB/Bluetooth/WiimoteHIDAttr.h"
 #include "Core/IOS/USB/Bluetooth/l2cap.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 
 namespace IOS::HLE
@@ -68,6 +69,17 @@ WiimoteDevice::WiimoteDevice(BluetoothEmuDevice* host, bdaddr_t bd, unsigned int
   m_lmp_subversion = 0x229;
 
   const auto hid_source = WiimoteCommon::GetHIDWiimoteSource(hid_source_number);
+
+  if (hid_source && Machine::IsArmed())
+  {
+    // A whole-machine session has every Wii Remote (the same on every machine) and connects one
+    // when a player's input says it is on (Machine::SyncWiimotes), not at boot.
+    hid_source->SetWiimoteDeviceIndex(GetNumber());
+    m_hid_source = hid_source;
+    m_hid_source->SetInterruptCallback(
+        std::bind_front(&WiimoteDevice::InterruptDataInputCallback, this));
+    return;
+  }
 
   if (hid_source)
   {

@@ -57,10 +57,15 @@ constexpr int MAX_PLAYERS = 4;
 //   1-8    GameCube pad: buttons (2, big endian), stick X, stick Y, C-stick X, C-stick Y, L, R
 //   9      Wii Remote state length (0-31)
 //   10-40  WiimoteEmu::SerializedWiimoteState::data
-//   41-47  reserved, 0
+//   41     a membership request (INPUT_REQUEST_*): the frame it first appears in starts an epoch
+//          EPOCH_LEAD frames later (docs/design/brawl-mods.md §6.3)
+//   42-47  reserved, 0
 constexpr int INPUT_SIZE = 48;
 constexpr u8 INPUT_GC_PRESENT = 1 << 0;
 constexpr u8 INPUT_WIIMOTE_CONNECTED = 1 << 1;
+constexpr int INPUT_REQUEST = 41;
+constexpr u8 INPUT_REQUEST_ADMIT = 0x80;     // admit the player in slot (bits 0-1)
+constexpr u8 INPUT_REQUEST_WIIMOTE = 1 << 2;  // ... who plays a Wii Remote
 using Input = std::array<u8, INPUT_SIZE>;
 
 GCPadStatus DecodePad(const Input& input);
@@ -86,6 +91,9 @@ struct Peer
   std::string host;  // its address
   u16 port = 0;
   Controller controller = Controller::GameCube;
+  // Not in the session at its start: a player who joins later (connected to, admitted at an
+  // epoch when it asks).
+  bool late = false;
 };
 
 struct Options
@@ -107,6 +115,9 @@ struct Options
   int local_pad = 0;
   Controller controller = Controller::GameCube;
   std::string name;
+  // Join a running session: boot, connect to every peer (the session's players), ask to join,
+  // and continue from the machine image the session sends at its next epoch.
+  bool join = false;
 };
 
 // Parses options from JSON ({"slot":0,"port":5000,"delay":2,"peers":[{"slot":1,"host":"..",
@@ -123,6 +134,10 @@ void Stop();
 bool IsArmed();
 // The session is past its start barrier (GekkoNet runs).
 bool IsRunning();
+
+// A machine image is being saved or loaded (both sides): Dolphin's savestate code leaves out the
+// host-only video state and refuses a change of device type (docs/brawl-mods-security.md).
+bool InImageDoState();
 
 // The configuration every player runs with (ConfigLoaders::GenerateNetPlayConfigLoader).
 NetPlay::NetSettings MakeNetSettings();
@@ -160,5 +175,6 @@ picojson::value Status();
 picojson::value History(s64 since);
 // With PPR_MACHINE_DIGESTS=1: the granule digest of a recent frame's save (RollbackManager::
 // LastSaveDigest), to diff two machines whose checksums differ.
-picojson::value Digest(s64 frame);
+// With PPR_MACHINE_DIGESTS=2 the bytes too: those of the granules in `addrs` (hex).
+picojson::value Digest(s64 frame, const std::vector<u32>& addrs = {});
 }  // namespace Machine

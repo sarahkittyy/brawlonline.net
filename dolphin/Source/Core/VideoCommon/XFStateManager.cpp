@@ -51,6 +51,18 @@ void XFStateManager::DoState(PointerWrap& p)
   }
 }
 
+void XFStateManager::SetAllChanged()
+{
+  InvalidateXFRange(0, XFMEM_LIGHTS_END);
+  m_materials_changed = BitSet32(0xF);
+  m_tex_matrices_changed = {true, true};
+  m_pos_normal_matrix_changed = true;
+  m_projection_changed = true;
+  m_viewport_changed = true;
+  m_tex_mtx_info_changed = true;
+  m_lighting_config_changed = true;
+}
+
 void XFStateManager::InvalidateXFRange(int start, int end)
 {
   if (((u32)start >= (u32)g_main_cp_state.matrix_index_a.PosNormalMtxIdx * 4 &&
@@ -129,7 +141,8 @@ void XFStateManager::InvalidateXFRange(int start, int end)
 
   if (start < XFMEM_POSTMATRICES_END && end > XFMEM_POSTMATRICES)
   {
-    int _start = start < XFMEM_POSTMATRICES ? XFMEM_POSTMATRICES : start - XFMEM_POSTMATRICES;
+    // Offsets into the post matrices (a transfer that starts before them starts at their first).
+    int _start = start < XFMEM_POSTMATRICES ? 0 : start - XFMEM_POSTMATRICES;
     int _end = end < XFMEM_POSTMATRICES_END ? end - XFMEM_POSTMATRICES :
                                               XFMEM_POSTMATRICES_END - XFMEM_POSTMATRICES;
 
@@ -150,7 +163,9 @@ void XFStateManager::InvalidateXFRange(int start, int end)
 
   if (start < XFMEM_LIGHTS_END && end > XFMEM_LIGHTS)
   {
-    int _start = start < XFMEM_LIGHTS ? XFMEM_LIGHTS : start - XFMEM_LIGHTS;
+    // Offsets into the lights (as for the post matrices: the base address here wrote far past
+    // the shader constants).
+    int _start = start < XFMEM_LIGHTS ? 0 : start - XFMEM_LIGHTS;
     int _end = end < XFMEM_LIGHTS_END ? end - XFMEM_LIGHTS : XFMEM_LIGHTS_END - XFMEM_LIGHTS;
 
     if (m_minmax_lights_changed[0] == -1)

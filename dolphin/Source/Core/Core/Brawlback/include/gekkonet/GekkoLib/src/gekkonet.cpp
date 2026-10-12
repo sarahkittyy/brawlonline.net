@@ -76,6 +76,21 @@ void gekko_set_disconnected_input(GekkoSession* session, const void* input)
     session->SetDisconnectedInput(input);
 }
 
+void gekko_set_local_delay_input(GekkoSession* session, int player, const void* input)
+{
+    session->SetLocalDelayInput(player, input);
+}
+
+void gekko_set_frame_limit(GekkoSession* session, int frame)
+{
+    session->SetFrameLimit(frame);
+}
+
+int gekko_confirmed_frame(GekkoSession* session)
+{
+    return session->ConfirmedFrame();
+}
+
 void gekko_set_local_delay(GekkoSession* session, int player, unsigned char delay)
 {
     session->SetLocalDelay(player, delay);

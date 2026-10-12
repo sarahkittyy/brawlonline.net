@@ -210,6 +210,18 @@ GEKKONET_API void gekko_set_disconnect_timeout(GekkoSession* session, unsigned i
 // default). input_size bytes; call after gekko_start.
 GEKKONET_API void gekko_set_disconnected_input(GekkoSession* session, const void* input);
 
+// the input of a local player for the first frames its delay holds back (zeroes by default); call
+// before its first gekko_add_local_input. For a session that continues an earlier one.
+GEKKONET_API void gekko_set_local_delay_input(GekkoSession* session, int player, const void* input);
+
+// the session does not advance `frame` or any later frame; rollbacks of earlier frames still run
+// (a negative frame removes the limit). For a host that ends a session at an agreed frame.
+GEKKONET_API void gekko_set_frame_limit(GekkoSession* session, int frame);
+
+// the newest frame whose inputs from every player are final: no rollback goes back to it or
+// earlier (-1 before the session runs or while nothing is confirmed).
+GEKKONET_API int gekko_confirmed_frame(GekkoSession* session);
+
 // holds a local players input back by the given amount of frames before the
 // session uses it, trading input lag for less mispredictions.
 GEKKONET_API void gekko_set_local_delay(GekkoSession* session, int player, unsigned char delay);

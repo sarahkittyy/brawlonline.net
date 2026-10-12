@@ -61,6 +61,9 @@ public:
   // miss a difference in memory that is not written again; the slices find it within seconds.
   static constexpr u32 CHECK_SLICES = 360;
   u32 SaveChecksumWithSlice(s64 frame) const;
+  // All of guest RAM (MEM1, MEM2) with the same exclusions: two machines in the same state agree
+  // (a whole-machine session's epoch barrier compares it, and a joiner's loaded image).
+  u32 FullChecksum() const;
   // The granules LastSaveChecksum covers: (physical address, CRC32 of the 64 bytes), for finding
   // what differs between two machines whose checksums differ (diagnostics).
   std::vector<std::pair<u32, u32>> LastSaveDigest() const;

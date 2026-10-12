@@ -30,6 +30,8 @@ namespace Gekko {
 		bool GetLocalInput(Handle player, std::unique_ptr<u8[]>& input, Frame frame);
 
 		void SetLocalDelay(Handle player, u8 delay);
+
+		void SetDelayFillInput(Handle player, const u8* input);
 		
 		u8 GetLocalDelay(Handle player);
 

@@ -42,6 +42,9 @@ namespace Gekko {
 
 		void SetDelay(u8 delay);
 
+		// the input of the frames the local delay holds back at the start (zeroes by default).
+		void SetDelayFillInput(const u8* input);
+
 		u8 GetDelay();
 		
 		void SetInputPredictionWindow(u8 input_window);
@@ -77,6 +80,8 @@ namespace Gekko {
 		u32 _buff_size;
 
         std::unique_ptr<u8[]> _empty_input;
+
+        std::unique_ptr<u8[]> _delay_fill_input;
 
 		Frame _last_received_input;
 

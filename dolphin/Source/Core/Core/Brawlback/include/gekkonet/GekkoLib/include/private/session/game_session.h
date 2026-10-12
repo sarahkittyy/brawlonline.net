@@ -35,6 +35,12 @@ namespace Gekko {
 
         void AddLocalInput(i32 player, void* input) override;
 
+        void SetFrameLimit(i32 frame) override;
+
+        void SetLocalDelayInput(i32 player, const void* input) override;
+
+        i32 ConfirmedFrame() override;
+
         GekkoGameEvent** UpdateSession(i32* count) override;
 
         GekkoSessionEvent** Events(i32* count) override;
@@ -104,6 +110,9 @@ namespace Gekko {
 		Frame _runahead_start_frame;
 
 		u8 _runahead_frames;
+
+		// the session does not advance this frame or later ones (INT32_MAX: no limit).
+		Frame _frame_limit;
 
 		std::unique_ptr<u8[]> _disconnected_input;
 

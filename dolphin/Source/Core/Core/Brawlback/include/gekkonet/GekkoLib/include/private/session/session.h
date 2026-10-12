@@ -14,6 +14,9 @@ struct GekkoSession {
     virtual void SetDisconnectTimeout(u32 timeout) {}
     virtual void SetDisconnectedInput(const void* input) {}
     virtual void AddLocalInput(i32 player, void* input) {}
+    virtual void SetFrameLimit(i32 frame) {}
+    virtual void SetLocalDelayInput(i32 player, const void* input) {}
+    virtual i32 ConfirmedFrame() { return -1; }
     virtual GekkoGameEvent** UpdateSession(i32* count) = 0;
     virtual GekkoSessionEvent** Events(i32* count) = 0;
     virtual f32 FramesAhead() { return 0.f; }

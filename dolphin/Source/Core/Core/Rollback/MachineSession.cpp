@@ -9,16 +9,22 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <functional>
 #include <map>
 #include <mutex>
+#include <set>
 #include <thread>
 
 #include <enet/enet.h>
 #include <fmt/format.h>
+#include <mbedtls/sha256.h>
+#include <zstd.h>
 
+#include "Common/Buffer.h"
 #include "Common/CommonTypes.h"
 #include "Common/Config/Config.h"
 #include "Common/ENet.h"
+#include "Common/FileUtil.h"
 #include "Common/Hash.h"
 #include "Common/Logging/Log.h"
 #include "Common/Swap.h"
@@ -37,6 +43,13 @@
 #include "Core/HW/Memmap.h"
 #include "Core/HW/SI/SI_Device.h"
 #include "Core/HW/WII_IPC.h"
+#include "Common/ChunkFile.h"
+#include "VideoCommon/PixelEngine.h"
+#include "VideoCommon/CommandProcessor.h"
+#include "Core/HW/AudioInterface.h"
+#include "Core/HW/SI/SI.h"
+#include "Core/HW/VideoInterface.h"
+#include "Core/HW/ProcessorInterface.h"
 #include "Core/HW/Wiimote.h"
 #include "Core/HW/WiimoteCommon/WiimoteHid.h"
 #include "Core/HW/WiimoteEmu/DesiredWiimoteState.h"
@@ -47,15 +60,19 @@
 #include "Core/IOS/USB/Bluetooth/WiimoteDevice.h"
 #include "Core/Harness/Harness.h"
 #include "Core/NetPlayProto.h"
+#include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/RollbackManager.h"
+#include "Core/State.h"
 #include "Core/System.h"
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
 #include "InputCommon/GCAdapter.h"
 #include "InputCommon/GCPadStatus.h"
+#include "VideoCommon/Fifo.h"
 #include "VideoCommon/OnScreenDisplay.h"
+#include "VideoCommon/VideoState.h"
 
 namespace HLE_Misc
 {
@@ -77,13 +94,29 @@ constexpr u32 BRAWL_LOOP_TOP_OPCODE = 0x3B200001;
 // ENet channels of the session's links.
 constexpr u8 CHANNEL_GEKKO = 0;    // GekkoNet's packets (unsequenced)
 constexpr u8 CHANNEL_CONTROL = 1;  // small JSON messages (reliable)
-constexpr u8 CHANNEL_COUNT = 3;    // 2: machine images (later)
+constexpr u8 CHANNEL_IMAGE = 2;    // a machine image for a joiner (reliable, in chunks)
+constexpr u8 CHANNEL_COUNT = 3;
 constexpr size_t MAX_CONTROL_SIZE = 4096;
 // GekkoNet's largest packet is a disconnect claim: a dropped player's whole input queue (128
 // inputs of INPUT_SIZE, 6 KiB; ENet fragments it).
 constexpr size_t MAX_GEKKO_PACKET = 16384;
 constexpr int MAX_ADVANCE = MAX_ROLLBACK_FRAMES + 2;
 constexpr size_t HISTORY_SIZE = 1 << 14;
+// An epoch (a change of who plays) starts this many frames after the frame whose input first
+// carries its request: more than GekkoNet's prediction window, so every machine has run that
+// frame with its real input before it can get to the epoch, and all of them stop at the same one.
+constexpr s64 EPOCH_LEAD = MAX_ROLLBACK_FRAMES + 3;
+// How long the players wait at an epoch for the image to reach a joiner and load there.
+constexpr auto EPOCH_TIMEOUT = std::chrono::seconds(120);
+// A joiner gives up after this long without being admitted.
+constexpr auto JOIN_TIMEOUT = std::chrono::seconds(300);
+// Machine images: sent in chunks of IMAGE_CHUNK; a received one is at most MAX_IMAGE_PACKED
+// compressed and MAX_IMAGE_RAW decompressed (MEM1 + MEM2 + device state + the NAND).
+constexpr size_t IMAGE_CHUNK = 256 * 1024;
+constexpr size_t MAX_IMAGE_PACKED = 256u << 20;
+constexpr size_t MAX_IMAGE_RAW = 768u << 20;
+constexpr u32 IMAGE_MAGIC = 0x424D4931;  // "BMI1"
+constexpr u32 IMAGE_VERSION = 2;
 // GekkoNet drops a peer it has not heard from for this long.
 constexpr unsigned int DISCONNECT_TIMEOUT_MS = 5000;
 
@@ -94,6 +127,8 @@ enum class Phase
   Connecting, // at the first boundary, waiting for every peer
   Starting,   // GekkoNet runs its handshake / the start barrier
   Running,
+  Epoch,      // at an epoch's frame: the players agree on it, a joiner gets the machine
+  Joining,    // a joiner: waits to be admitted and for the machine image
   Stopped,
   Error,
 };
@@ -107,6 +142,8 @@ const char* PhaseName(Phase p)
   case Phase::Connecting: return "connecting";
   case Phase::Starting: return "starting";
   case Phase::Running: return "running";
+  case Phase::Epoch: return "epoch";
+  case Phase::Joining: return "joining";
   case Phase::Stopped: return "stopped";
   case Phase::Error: return "error";
   }
@@ -120,11 +157,20 @@ struct PeerLink
   u16 port = 0;
   ENetPeer* peer = nullptr;  // the connection kept for this slot
   bool hello = false;        // its hello arrived on `peer`
-  bool started = false;      // its GekkoNet session started (start barrier)
-  bool go = false;           // the barrier's host told it to go
+  int started = -1;          // the epoch whose GekkoNet session it started (start barrier)
+  int go = -1;               // the epoch whose start barrier it said go for
   bool left = false;
+  bool late = false;         // not a player when the session started (it joins)
+  bool join_asked = false;   // it asked to join (a joiner)
+  Controller join_controller = Controller::GameCube;
+  int epoch_at = -1;         // the epoch whose frame it reached, with its machine's checksum
+  u32 epoch_sum = 0;
+  // A player's digest of the machine image at that epoch (for a joiner: it loads an image only if
+  // every player's digest matches it).
+  std::string epoch_digest;
   bool dropped = false;  // GekkoNet was told (DropLeftPeers)
   Clock::time_point last_connect{};
+  ENetPeer* connecting = nullptr;  // this side's latest connection attempt
   double rtt_ms = -1;
 };
 
@@ -172,6 +218,33 @@ struct State
   std::deque<std::pair<int, std::vector<u8>>> gekko_rx;  // (slot, packet)
   std::vector<GekkoNetResult*> gekko_rx_ptrs;
   std::vector<std::pair<int, std::vector<u8>>> gekko_tx;  // (slot, packet)
+  // The decider's epoch_go (the epoch's players), from the net thread.
+  struct EpochGo
+  {
+    int epoch = -1;
+    s64 frame = -1;
+    u32 players = 0;
+    std::array<Controller, MAX_PLAYERS> controllers{};
+  };
+  std::optional<EpochGo> epoch_go;
+  bool join_refused = false;
+  std::string join_refused_why;
+  // A machine image on its way to this joiner (net thread): header, then the compressed bytes.
+  struct ImageRx
+  {
+    int from = -1;
+    int epoch = -1;
+    s64 frame = -1;
+    u32 sum = 0;
+    u64 packed_size = 0, raw_size = 0;
+    std::vector<u8> data;
+    bool complete = false;
+    Clock::time_point started{};
+  } image_rx;
+  // A machine image this player sends (net thread: to `image_to`, in chunks).
+  std::vector<u8> image_tx;
+  int image_to = -1;
+  size_t image_tx_sent = 0;
 
   // GekkoNet and the frame loop (CPU thread).
   GekkoSession* gekko = nullptr;
@@ -196,6 +269,33 @@ struct State
   std::array<Input, MAX_PLAYERS> latched{};  // the inputs of the frame running now
   Input local_input{};
   s64 current_frame = -1;
+  // GekkoNet's sessions start at frame 0; a session after an epoch continues the global frame
+  // count from the epoch's frame.
+  s64 frame_base = 0;
+  int epoch = 0;
+  // The next epoch, from a request in some player's input (PlanEpoch).
+  struct Plan
+  {
+    bool active = false;
+    s64 request_frame = -1;  // the frame whose input first carried the request
+    s64 frame = -1;          // the epoch's frame (request_frame + EPOCH_LEAD): nobody runs it yet
+    int from = -1;           // the player who asked (decides the epoch)
+    int admit = -1;          // the slot it admits
+    Controller controller = Controller::GameCube;
+  } plan;
+  // This player asks to admit a joiner (its input carries the request until it is planned).
+  std::optional<std::pair<int, Controller>> local_request;
+  // At an epoch.
+  Clock::time_point epoch_since{};
+  u32 epoch_sum = 0;
+  std::string epoch_digest;  // of this machine's image at the epoch (when it admits a joiner)
+  bool image_built = false;
+  double image_ms = 0;
+  u64 image_packed = 0, image_raw = 0;
+  // A joiner.
+  bool join_sent = false;
+  bool join_loaded = false;
+  Clock::time_point join_since{};
   double speed = 1.0;
   s64 last_timesync_frame = -1;
 
@@ -209,7 +309,8 @@ struct State
   // the newer ones, and the journal forgets changes older than the oldest snapshot.
   std::deque<u64> journal_marks;
   u64 journal_errors = 0;
-  std::vector<std::string> log;
+  std::mutex log_mutex;
+  std::vector<std::string> log;  // under log_mutex
 };
 
 State s;
@@ -222,6 +323,8 @@ void AfterLoad(Core::System& system, int frames_back);
 void AddLog(std::string line)
 {
   INFO_LOG_FMT(BRAWLBACK, "machine: {}", line);
+  // The network thread logs too (peers connecting and leaving).
+  std::lock_guard lk(s.log_mutex);
   if (s.log.size() >= 64)
     s.log.erase(s.log.begin());
   s.log.push_back(std::move(line));
@@ -305,6 +408,13 @@ void OnHello(ENetPeer* peer, const picojson::object& msg)
     enet_peer_disconnect_later(p.peer, 0);
   p.peer = peer;
   p.hello = true;
+  if (p.late && !((s.players >> slot) & 1))
+  {
+    // A joiner (again): what an earlier visit left does not count.
+    p.left = false;
+    p.dropped = false;
+    p.join_asked = false;
+  }
   AddLog(fmt::format("peer {} connected ({}:{})", slot, p.host, p.port));
 }
 
@@ -330,12 +440,129 @@ void HandleControl(ENetPeer* peer, const u8* data, size_t size)
   if (slot < 0 || slot >= MAX_PLAYERS || s.peers[slot].peer != peer)
     return;
   PeerLink& p = s.peers[slot];
+  auto num = [&](const char* key, double def) {
+    const auto it = msg.find(key);
+    return it != msg.end() && it->second.is<double>() ? it->second.get<double>() : def;
+  };
+  const int epoch = static_cast<int>(num("epoch", -1));
   if (type == "started")
-    p.started = true;
+    p.started = epoch;
   else if (type == "go")
-    p.go = true;
+    p.go = epoch;
   else if (type == "leave")
     p.left = true;
+  else if (type == "join")
+  {
+    // A joiner asks to play in its slot (only a peer this session expects to join: `late`).
+    if (!p.late || s.opts.join)
+      return;
+    const auto c = msg.find("controller");
+    p.join_controller = c != msg.end() && c->second.is<std::string>() &&
+                                c->second.get<std::string>() == "wiimote" ?
+                            Controller::WiiRemote :
+                            Controller::GameCube;
+    // The same session clock, or its machine could never run as ours.
+    if (num("rtc", 0) != static_cast<double>(s.opts.rtc))
+    {
+      picojson::object no;
+      no["type"] = picojson::value("join_refused");
+      no["why"] = picojson::value("the session's clock differs");
+      SendControl(slot, no);
+      return;
+    }
+    p.join_asked = true;
+    AddLog(fmt::format("player {} asks to join", slot + 1));
+  }
+  else if (type == "epoch_at")
+  {
+    p.epoch_at = epoch;
+    p.epoch_sum = static_cast<u32>(num("sum", 0));
+    const auto d = msg.find("digest");
+    p.epoch_digest.clear();
+    if (d != msg.end() && d->second.is<std::string>() && d->second.get<std::string>().size() == 64)
+      p.epoch_digest = d->second.get<std::string>();
+  }
+  else if (type == "epoch_go")
+  {
+    State::EpochGo go;
+    go.epoch = epoch;
+    go.frame = static_cast<s64>(num("frame", -1));
+    const double players = num("players", 0);
+    if (go.epoch < 0 || go.frame < 0 || players < 1 || players > 15)
+      return;
+    go.players = static_cast<u32>(players);
+    const auto cit = msg.find("controllers");
+    if (cit != msg.end() && cit->second.is<picojson::array>())
+    {
+      const auto& arr = cit->second.get<picojson::array>();
+      for (size_t i = 0; i < arr.size() && i < MAX_PLAYERS; ++i)
+      {
+        go.controllers[i] = arr[i].is<std::string>() && arr[i].get<std::string>() == "wiimote" ?
+                                Controller::WiiRemote :
+                                Controller::GameCube;
+      }
+    }
+    s.epoch_go = go;
+  }
+  else if (type == "join_refused")
+  {
+    s.join_refused = true;
+    const auto w = msg.find("why");
+    s.join_refused_why = w != msg.end() && w->second.is<std::string>() ?
+                             w->second.get<std::string>().substr(0, 160) :
+                             "refused";
+  }
+}
+
+// Net thread: a packet of a machine image for this joiner. The first packet of an image is its
+// header; the rest is the compressed image, in order (the channel is reliable and sequenced).
+void HandleImagePacket(int slot, const u8* data, size_t size)
+{
+  State::ImageRx& rx = s.image_rx;
+  if (!s.opts.join || s.join_loaded || rx.complete)
+    return;
+  if (rx.from < 0)
+  {
+    // Header: magic, epoch, frame, sum, packed size, raw size (little endian).
+    if (size != 4 + 4 + 8 + 4 + 8 + 8)
+      return;
+    u32 magic, epoch, sum;
+    s64 frame;
+    u64 packed, raw;
+    std::memcpy(&magic, data, 4);
+    std::memcpy(&epoch, data + 4, 4);
+    std::memcpy(&frame, data + 8, 8);
+    std::memcpy(&sum, data + 16, 4);
+    std::memcpy(&packed, data + 20, 8);
+    std::memcpy(&raw, data + 28, 8);
+    if (magic != IMAGE_MAGIC || frame < 0 || packed == 0 || packed > MAX_IMAGE_PACKED ||
+        raw == 0 || raw > MAX_IMAGE_RAW || epoch > 1000000)
+    {
+      WARN_LOG_FMT(BRAWLBACK, "machine: player {} sent an image header that is not valid", slot + 1);
+      return;
+    }
+    rx.from = slot;
+    rx.epoch = static_cast<int>(epoch);
+    rx.frame = frame;
+    rx.sum = sum;
+    rx.packed_size = packed;
+    rx.raw_size = raw;
+    rx.data.clear();
+    rx.data.reserve(static_cast<size_t>(packed));
+    rx.started = Clock::now();
+    return;
+  }
+  if (slot != rx.from)
+    return;
+  if (rx.data.size() + size > rx.packed_size)
+  {
+    WARN_LOG_FMT(BRAWLBACK, "machine: player {} sent more image than it announced", slot + 1);
+    rx = {};
+    return;
+  }
+  rx.data.insert(rx.data.end(), data, data + size);
+  if (rx.data.size() == rx.packed_size)
+    rx.complete = true;
 }
 
 void NetThread()
@@ -357,6 +584,33 @@ void NetThread()
       enet_peer_send(p.peer, CHANNEL_GEKKO, packet);
     }
     s.gekko_tx.clear();
+    // A machine image for a joiner: a few chunks at a time, so ENet's queue stays short.
+    if (!s.image_tx.empty() && s.image_to >= 0)
+    {
+      PeerLink& p = s.peers[s.image_to];
+      if (!p.peer || !p.hello)
+      {
+        s.image_tx.clear();
+      }
+      else
+      {
+        for (int n = 0; n < 8 && s.image_tx_sent < s.image_tx.size() &&
+                        p.peer->reliableDataInTransit < 4 * IMAGE_CHUNK;
+             ++n)
+        {
+          const size_t len = std::min(IMAGE_CHUNK, s.image_tx.size() - s.image_tx_sent);
+          enet_peer_send(p.peer, CHANNEL_IMAGE,
+                         enet_packet_create(s.image_tx.data() + s.image_tx_sent, len,
+                                            ENET_PACKET_FLAG_RELIABLE));
+          s.image_tx_sent += len;
+        }
+        if (s.image_tx_sent >= s.image_tx.size())
+        {
+          s.image_tx.clear();
+          s.image_tx.shrink_to_fit();
+        }
+      }
+    }
     // Keep connecting to every peer without a link (both sides do).
     const auto now = Clock::now();
     for (PeerLink& p : s.peers)
@@ -364,13 +618,21 @@ void NetThread()
       if (p.slot < 0 || p.hello || p.host.empty() || now - p.last_connect < std::chrono::seconds(1))
         continue;
       p.last_connect = now;
+      // One attempt at a time: a peer that is not there yet (a joiner that has not started)
+      // would otherwise collect an attempt a second until the host has no peers left.
+      if (p.connecting && p.connecting != p.peer && p.connecting->state != ENET_PEER_STATE_CONNECTED)
+        enet_peer_reset(p.connecting);
+      p.connecting = nullptr;
       ENetAddress addr{};
       if (enet_address_set_host(&addr, p.host.c_str()) != 0)
         continue;
       addr.port = p.port;
       ENetPeer* peer = enet_host_connect(s.host, &addr, CHANNEL_COUNT, 0);
       if (peer)
+      {
         peer->data = reinterpret_cast<void*>(static_cast<intptr_t>(p.slot + 1) | OUTGOING);
+        p.connecting = peer;
+      }
     }
     ENetEvent ev;
     int r = enet_host_service(s.host, &ev, 0);
@@ -414,6 +676,12 @@ void NetThread()
           }
           HandleControl(ev.peer, ev.packet->data, ev.packet->dataLength);
         }
+        else if (ev.channelID == CHANNEL_IMAGE && ev.packet->dataLength <= IMAGE_CHUNK)
+        {
+          const int slot = SlotOf(ev.peer);
+          if (slot >= 0 && slot < MAX_PLAYERS && s.peers[slot].peer == ev.peer)
+            HandleImagePacket(slot, ev.packet->data, ev.packet->dataLength);
+        }
         else if (ev.channelID == CHANNEL_GEKKO && ev.packet->dataLength <= MAX_GEKKO_PACKET)
         {
           const int slot = SlotOf(ev.peer);
@@ -432,11 +700,14 @@ void NetThread()
       {
         for (PeerLink& p : s.peers)
         {
+          if (p.connecting == ev.peer)
+            p.connecting = nullptr;
           if (p.peer == ev.peer)
           {
             p.peer = nullptr;
             p.hello = false;
-            if (s.phase == Phase::Running || s.phase == Phase::Starting)
+            if (s.phase == Phase::Running || s.phase == Phase::Starting ||
+                s.phase == Phase::Epoch)
               p.left = true;
             AddLog(fmt::format("peer {} disconnected", p.slot));
           }
@@ -467,7 +738,7 @@ bool StartNetwork()
   ENetAddress addr{};
   addr.host = ENET_HOST_ANY;
   addr.port = s.opts.local_port;
-  s.host = enet_host_create(&addr, MAX_PLAYERS * 2, CHANNEL_COUNT, 0, 0);
+  s.host = enet_host_create(&addr, MAX_PLAYERS * 4, CHANNEL_COUNT, 0, 0);
   if (!s.host)
   {
     s.error = fmt::format("could not bind UDP port {}", s.opts.local_port);
@@ -608,6 +879,19 @@ bool CreateGekko()
     gekko_set_disconnect_timeout(s.gekko, DISCONNECT_TIMEOUT_MS);
     static const Input unplugged{};
     gekko_set_disconnected_input(s.gekko, unplugged.data());
+    // After an epoch, the frames this player's delay holds back repeat its input of the frame
+    // before (as every machine has it), instead of nothing: its controller stays plugged in.
+    if (s.frame_base > 0)
+    {
+      const HistoryEntry& last =
+          s.history[static_cast<size_t>(s.frame_base - 1) % HISTORY_SIZE];
+      if (last.frame == s.frame_base - 1)
+      {
+        Input fill = last.inputs[s.opts.local_slot];
+        fill[INPUT_REQUEST] = 0;
+        gekko_set_local_delay_input(s.gekko, s.local_handle, fill.data());
+      }
+    }
   }
   else
   {
@@ -661,12 +945,22 @@ void CaptureLocalWiimote(Core::System& system, Input* in)
   std::memcpy(in->data() + 10, ser.data.data(), len);
 }
 
+void AddLocalRequest(Input* in)
+{
+  if (!s.local_request)
+    return;
+  (*in)[INPUT_REQUEST] = static_cast<u8>(
+      INPUT_REQUEST_ADMIT | (s.local_request->first & 3) |
+      (s.local_request->second == Controller::WiiRemote ? INPUT_REQUEST_WIIMOTE : 0));
+}
+
 void CaptureLocalInput()
 {
   if (s.controller[s.opts.local_slot] == Controller::WiiRemote)
   {
     Input in{};
     CaptureLocalWiimote(Core::System::GetInstance(), &in);
+    AddLocalRequest(&in);
     s.local_input = in;
     return;
   }
@@ -684,6 +978,7 @@ void CaptureLocalInput()
   }
   Input in{};
   EncodePad(pad, &in);
+  AddLocalRequest(&in);
   s.local_input = in;
 }
 
@@ -728,9 +1023,9 @@ void ProcessSessionEvents()
     }
     case GekkoDesyncDetected:
       s.desyncs++;
-      s.last_desync_frame = e.data.desynced.frame;
+      s.last_desync_frame = s.frame_base + e.data.desynced.frame;
       WARN_LOG_FMT(BRAWLBACK, "machine: desync at frame {} (local {:08x}, remote {:08x})",
-                   e.data.desynced.frame, e.data.desynced.local_checksum,
+                   s.last_desync_frame, e.data.desynced.local_checksum,
                    e.data.desynced.remote_checksum);
       break;
     default:
@@ -777,7 +1072,7 @@ void Update(Core::System& system)
       break;
     case GekkoLoadEvent:
       pending_load = true;
-      load_frame = e.data.load.frame;
+      load_frame = static_cast<int>(s.frame_base + e.data.load.frame);
       break;
     case GekkoAdvanceEvent:
     {
@@ -787,7 +1082,13 @@ void Update(Core::System& system)
         break;
       }
       const int k = s.ops.count++;
-      s.ops.frame[k] = e.data.adv.frame;
+      s.ops.frame[k] = static_cast<s32>(s.frame_base + e.data.adv.frame);
+      if (s.plan.active && s.ops.frame[k] >= s.plan.frame)
+      {
+        // GekkoNet's frame limit holds every machine before the epoch's frame.
+        ERROR_LOG_FMT(BRAWLBACK, "machine: GekkoNet advanced frame {} past epoch frame {}",
+                      s.ops.frame[k], s.plan.frame);
+      }
       if (pending_load && load_before < 0)
         load_before = k;
       pending_load = false;
@@ -921,11 +1222,20 @@ struct FrameDigest
   s64 frame = -1;
   u32 checksum = 0;
   std::vector<std::pair<u32, u32>> granules;
+  std::map<u32, std::array<u8, ROLLBACK_PAGE_SIZE>> bytes;  // PPR_MACHINE_DIGESTS=2
 };
 std::array<FrameDigest, 256> s_digests;
 bool DigestsEnabled()
 {
   static const bool on = std::getenv("PPR_MACHINE_DIGESTS") != nullptr;
+  return on;
+}
+bool DigestBytesEnabled()
+{
+  static const bool on = [] {
+    const char* e = std::getenv("PPR_MACHINE_DIGESTS");
+    return e && std::strcmp(e, "2") == 0;
+  }();
   return on;
 }
 u64 s_diag_frames = 0;
@@ -1020,6 +1330,17 @@ void PerformQueuedSave(Core::System& system)
     d.frame = s.queued_save.frame;
     d.checksum = sum;
     d.granules = rb.LastSaveDigest();
+    d.bytes.clear();
+    if (DigestBytesEnabled())
+    {
+      auto& memory = system.GetMemory();
+      for (const auto& [addr, crc] : d.granules)
+      {
+        const u8* src = addr < MEM2_BASE ? memory.GetRAM() + addr :
+                                           memory.GetEXRAM() + (addr - MEM2_BASE);
+        std::memcpy(d.bytes[addr].data(), src, ROLLBACK_PAGE_SIZE);
+      }
+    }
   }
   if (s.queued_save.checksum)
     *s.queued_save.checksum = sum;
@@ -1051,6 +1372,7 @@ bool StartBarrier()
     s.last_barrier_send = now;
     picojson::object msg;
     msg["type"] = picojson::value("started");
+    msg["epoch"] = picojson::value(static_cast<double>(s.epoch));
     BroadcastControl(msg);
   }
   if (lowest == s.opts.local_slot)
@@ -1060,21 +1382,22 @@ bool StartBarrier()
       double rtt = 0;
       for (const PeerLink& p : s.peers)
       {
-        if (p.slot < 0)
+        if (p.slot < 0 || !((s.players >> p.slot) & 1))
           continue;
-        if (!p.started)
+        if (p.started != s.epoch)
           return false;
         rtt = std::max(rtt, p.rtt_ms);
       }
       picojson::object go;
       go["type"] = picojson::value("go");
+      go["epoch"] = picojson::value(static_cast<double>(s.epoch));
       BroadcastControl(go);
       s.start_at = now + std::chrono::microseconds(static_cast<s64>(rtt * 500));
       AddLog(fmt::format("start barrier: everyone started, go in {} ms", rtt / 2));
     }
     return now >= *s.start_at;
   }
-  return s.peers[lowest].go;
+  return s.peers[lowest].go == s.epoch;
 }
 
 bool PeersConnected()
@@ -1082,7 +1405,7 @@ bool PeersConnected()
   std::lock_guard lk(s.net_mutex);
   for (const PeerLink& p : s.peers)
   {
-    if (p.slot >= 0 && !p.hello)
+    if (p.slot >= 0 && ((s.players >> p.slot) & 1) && !p.hello)
       return false;
   }
   return true;
@@ -1116,6 +1439,1016 @@ void DropLeftPeers()
   }
 }
 
+// ------------------------------------------------------------------------------ epochs
+
+void SetFrameLimit()
+{
+  if (s.gekko)
+    gekko_set_frame_limit(s.gekko, s.plan.active ? static_cast<int>(s.plan.frame - s.frame_base) : -1);
+}
+
+// CPU thread, at the start of every pass of `frame` (first runs and re-runs alike): the epoch a
+// request in this frame's inputs starts. A request counts in the first frame that carries it
+// (the frame before does not), the same on every machine since it is input; a re-run of the
+// request's frame or an earlier one derives the plan again, so a request seen in a mispredicted
+// input never stands.
+void PlanEpoch(s64 frame)
+{
+  if (s.plan.active && frame <= s.plan.request_frame)
+  {
+    s.plan = {};
+    SetFrameLimit();
+  }
+  if (s.plan.active)
+    return;
+  const HistoryEntry& prev = s.history[static_cast<size_t>(frame - 1) % HISTORY_SIZE];
+  const bool have_prev = frame > 0 && prev.frame == frame - 1;
+  for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+  {
+    if (!((s.players >> slot) & 1))
+      continue;
+    const u8 r = s.latched[slot][INPUT_REQUEST];
+    if (!(r & INPUT_REQUEST_ADMIT))
+      continue;
+    if (have_prev && prev.inputs[slot][INPUT_REQUEST] == r)
+      continue;
+    s.plan.active = true;
+    s.plan.request_frame = frame;
+    s.plan.frame = frame + EPOCH_LEAD;
+    s.plan.from = slot;
+    s.plan.admit = r & 3;
+    s.plan.controller = (r & INPUT_REQUEST_WIIMOTE) ? Controller::WiiRemote : Controller::GameCube;
+    SetFrameLimit();
+    if (!s.resim)
+    {
+      AddLog(fmt::format("epoch {} at frame {}: player {} admits player {}", s.epoch + 1,
+                         s.plan.frame, slot + 1, s.plan.admit + 1));
+    }
+    // This player's request is in its inputs now; it stops asking.
+    if (slot == s.opts.local_slot)
+      s.local_request.reset();
+    break;
+  }
+}
+
+// The decider asks to admit a joiner that asked (one at a time).
+void UpdateLocalRequest()
+{
+  if (s.plan.active || s.local_request || s.phase != Phase::Running)
+    return;
+  std::lock_guard lk(s.net_mutex);
+  int lowest = -1;
+  for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+  {
+    if (!((s.players >> slot) & 1))
+      continue;
+    if (slot != s.opts.local_slot && s.peers[slot].left)
+      continue;
+    lowest = slot;
+    break;
+  }
+  if (lowest != s.opts.local_slot)
+    return;
+  for (const PeerLink& p : s.peers)
+  {
+    if (p.slot >= 0 && p.late && p.join_asked && p.hello && !p.left && !((s.players >> p.slot) & 1))
+    {
+      s.local_request = std::make_pair(p.slot, p.join_controller);
+      AddLog(fmt::format("asking to admit player {}", p.slot + 1));
+      return;
+    }
+  }
+}
+
+bool s_image_dostate = false;
+
+// The session NAND's files a game writes (its save, shared2, /tmp) and the FS's metadata
+// (fst.bin), at host level: a savestate carries /tmp through the FS's own listing, which skips
+// names longer than the Wii's 12 characters (Brawl keeps its font cache in /tmp/font_latin1.arc)
+// and reverses the directory order. Layout: u32 count, then per entry u8 kind (0 file, 1 directory),
+// u16 path length, the path (relative to the NAND root, '/'), and for a file u32 size and bytes.
+constexpr std::array<const char*, 3> NAND_IMAGE_DIRS = {"tmp", "title", "shared2"};
+constexpr size_t MAX_NAND_IMAGE_FILES = 4096;
+
+std::vector<u8> PackNand(Core::System& system)
+{
+  std::vector<u8> out(4);
+  u32 count = 0;
+  const std::string root = File::GetUserPath(D_SESSION_WIIROOT_IDX);
+  auto add = [&](u8 kind, const std::string& rel, const std::string* data) {
+    out.push_back(kind);
+    const u16 len = static_cast<u16>(rel.size());
+    out.insert(out.end(), reinterpret_cast<const u8*>(&len), reinterpret_cast<const u8*>(&len) + 2);
+    out.insert(out.end(), rel.begin(), rel.end());
+    if (data)
+    {
+      const u32 size = static_cast<u32>(data->size());
+      out.insert(out.end(), reinterpret_cast<const u8*>(&size),
+                 reinterpret_cast<const u8*>(&size) + 4);
+      out.insert(out.end(), data->begin(), data->end());
+    }
+    count++;
+  };
+  // Every guest handle's buffered writes reach the host files first.
+  auto* fs = HostFS(system);
+  if (fs)
+    fs->CloseHostFiles();
+  std::function<void(const File::FSTEntry&, const std::string&)> walk =
+      [&](const File::FSTEntry& e, const std::string& rel) {
+        if (e.isDirectory)
+        {
+          add(1, rel, nullptr);
+          // Sorted, so every player's machine packs the same bytes (its digest vouches for it).
+          std::vector<const File::FSTEntry*> children;
+          for (const auto& c : e.children)
+            children.push_back(&c);
+          std::ranges::sort(children, {}, [](const File::FSTEntry* c) { return c->virtualName; });
+          for (const File::FSTEntry* c : children)
+            walk(*c, rel + "/" + c->virtualName);
+          return;
+        }
+        std::string data;
+        File::ReadFileToString(e.physicalName, data);
+        add(0, rel, &data);
+      };
+  for (const char* dir : NAND_IMAGE_DIRS)
+  {
+    if (File::IsDirectory(root + dir))
+      walk(File::ScanDirectoryTree(root + dir, true), dir);
+  }
+  std::string fst;
+  if (File::ReadFileToString(root + "fst.bin", fst))
+    add(0, "fst.bin", &fst);
+  if (fs)
+    fs->ReopenHostFiles();
+  std::memcpy(out.data(), &count, 4);
+  return out;
+}
+
+bool IsAllowedNandPath(const std::string& path)
+{
+  bool ok = path == "fst.bin";
+  for (const char* dir : NAND_IMAGE_DIRS)
+  {
+    const std::string d = dir;
+    ok |= path == d || path.starts_with(d + "/");
+  }
+  for (const char c : path)
+    ok &= c >= 0x20 && c < 0x7F && c != '\\' && c != ':';
+  size_t start = 0;
+  while (ok && start <= path.size())
+  {
+    const size_t slash = std::min(path.find('/', start), path.size());
+    const std::string part = path.substr(start, slash - start);
+    ok &= !part.empty() && part != "." && part != "..";
+    start = slash + 1;
+  }
+  return ok;
+}
+
+// A joiner: its session NAND's game files become the image's. Every path came from a peer: only
+// these directories, no "." or ".." component, printable, bounded.
+bool UnpackNand(Core::System& system, const u8* data, size_t size, std::string* error)
+{
+  struct Entry
+  {
+    u8 kind = 0;
+    std::string path;
+    const u8* bytes = nullptr;
+    u32 size = 0;
+  };
+  std::vector<Entry> entries;
+  size_t pos = 0;
+  auto need = [&](size_t n) { return size - pos >= n; };
+  auto fail = [&](const char* why) {
+    *error = why;
+    return false;
+  };
+  if (!need(4))
+    return fail("the NAND is cut short");
+  u32 count;
+  std::memcpy(&count, data, 4);
+  pos = 4;
+  if (count > MAX_NAND_IMAGE_FILES)
+    return fail("the NAND has too many files");
+  for (u32 i = 0; i < count; ++i)
+  {
+    Entry e;
+    u16 len;
+    if (!need(3))
+      return fail("the NAND is cut short");
+    e.kind = data[pos];
+    std::memcpy(&len, data + pos + 1, 2);
+    pos += 3;
+    if (e.kind > 1 || len == 0 || len > 255 || !need(len))
+      return fail("the NAND has an entry that is not valid");
+    e.path.assign(reinterpret_cast<const char*>(data + pos), len);
+    pos += len;
+    if (!IsAllowedNandPath(e.path) || (e.path == "fst.bin" && e.kind != 0))
+      return fail("the NAND has a path that is not allowed");
+    if (e.kind == 0)
+    {
+      if (!need(4))
+        return fail("the NAND is cut short");
+      std::memcpy(&e.size, data + pos, 4);
+      pos += 4;
+      if (!need(e.size))
+        return fail("the NAND is cut short");
+      e.bytes = data + pos;
+      pos += e.size;
+    }
+    entries.push_back(std::move(e));
+  }
+  const std::string root = File::GetUserPath(D_SESSION_WIIROOT_IDX);
+  auto* fs = HostFS(system);
+  if (fs)
+    fs->CloseHostFiles();
+  for (const char* dir : NAND_IMAGE_DIRS)
+    File::DeleteDirRecursively(root + dir);
+  bool ok = true;
+  for (const Entry& e : entries)
+  {
+    const std::string host = root + e.path;
+    if (e.kind == 1)
+    {
+      ok &= File::CreateFullPath(host + "/");
+    }
+    else
+    {
+      ok &= File::CreateFullPath(host) &&
+            File::WriteStringToFile(
+                host, std::string_view(reinterpret_cast<const char*>(e.bytes), e.size));
+    }
+  }
+  if (fs)
+  {
+    fs->ReloadFst();
+    fs->ReopenHostFiles();
+  }
+  if (!ok)
+    return fail("the NAND could not be written");
+  return true;
+}
+
+void Put32(std::vector<u8>* v, u32 x)
+{
+  const u8* b = reinterpret_cast<const u8*>(&x);
+  v->insert(v->end(), b, b + 4);
+}
+
+// The decider, at an epoch's frame (the loop top, the previous frame saved): the whole machine
+// for a joiner, compressed. Layout (little endian): magic, version, frame, checksum, MEM1 size,
+// MEM2 size, the previous frame's inputs, the state (Dolphin's savestate with the NAND), the GPU
+// written granules of MEM1 and MEM2.
+// The parts of a machine image that every player's machine has the same at the epoch's frame:
+// the state (Dolphin's savestate in image mode), the NAND's game files, the inputs of the frame
+// before. Their digest is how the other players vouch for the image one of them sends.
+struct ImageParts
+{
+  s64 frame = -1;
+  u32 mem1 = 0, mem2 = 0;
+  std::array<Input, MAX_PLAYERS> last{};
+  std::vector<u8> state;
+  std::vector<u8> nand;
+};
+
+std::string ImageDigest(s64 frame, u32 mem1, u32 mem2, const std::array<Input, MAX_PLAYERS>& last,
+                        std::span<const u8> state, std::span<const u8> nand)
+{
+  mbedtls_sha256_context ctx;
+  mbedtls_sha256_init(&ctx);
+  mbedtls_sha256_starts_ret(&ctx, 0);
+  auto put = [&](const void* p, size_t n) {
+    mbedtls_sha256_update_ret(&ctx, static_cast<const unsigned char*>(p), n);
+  };
+  const u64 state_size = state.size(), nand_size = nand.size();
+  put(&frame, sizeof(frame));
+  put(&mem1, sizeof(mem1));
+  put(&mem2, sizeof(mem2));
+  for (const Input& in : last)
+    put(in.data(), in.size());
+  put(&state_size, sizeof(state_size));
+  put(state.data(), state.size());
+  put(&nand_size, sizeof(nand_size));
+  put(nand.data(), nand.size());
+  std::array<unsigned char, 32> out{};
+  mbedtls_sha256_finish_ret(&ctx, out.data());
+  mbedtls_sha256_free(&ctx);
+  std::string hex;
+  for (const unsigned char b : out)
+    hex += fmt::format("{:02x}", b);
+  return hex;
+}
+
+bool MakeImageParts(Core::System& system, s64 frame, ImageParts* parts)
+{
+  auto& memory = system.GetMemory();
+  Rollback::RollbackManager::SyncGPUForDoState(system);
+  Common::UniqueBuffer<u8> state(192u << 20);
+  // Image mode on both sides: the host-only video state (textures, EFB contents, bounding box: the
+  // joiner rebuilds them) stays out, and the loader refuses device changes.
+  s_image_dostate = true;
+  VideoCommon_SetSkipGPUReadbackForRollback(true);
+  const size_t state_size = ::State::SaveToBuffer(system, state);
+  VideoCommon_SetSkipGPUReadbackForRollback(false);
+  s_image_dostate = false;
+  if (state_size == 0)
+    return false;
+  parts->frame = frame;
+  parts->mem1 = memory.GetRamSizeReal();
+  parts->mem2 = memory.GetExRamSizeReal();
+  parts->last = s.history[static_cast<size_t>(frame - 1) % HISTORY_SIZE].inputs;
+  parts->state.assign(state.data(), state.data() + state_size);
+  parts->nand = PackNand(system);
+  return true;
+}
+
+std::string ImageDigest(const ImageParts& p)
+{
+  return ImageDigest(p.frame, p.mem1, p.mem2, p.last, p.state, p.nand);
+}
+
+std::optional<ImageParts> s_image_parts;  // this player's, at the epoch it admits a joiner at
+
+std::vector<u8> BuildImage(const ImageParts& parts, u32 sum, u64* raw_size)
+{
+  const u32 mem1 = parts.mem1, mem2 = parts.mem2;
+  const s64 frame = parts.frame;
+  const u32 g1 = mem1 / ROLLBACK_PAGE_SIZE;
+  const u32 g2 = mem2 / ROLLBACK_PAGE_SIZE;
+  const auto& nand = parts.nand;
+  std::vector<u8> raw;
+  raw.reserve(parts.state.size() + g1 + g2 + nand.size() + 1024);
+  Put32(&raw, IMAGE_MAGIC);
+  Put32(&raw, IMAGE_VERSION);
+  Put32(&raw, static_cast<u32>(frame));
+  Put32(&raw, static_cast<u32>(frame >> 32));
+  Put32(&raw, sum);
+  Put32(&raw, mem1);
+  Put32(&raw, mem2);
+  for (const Input& in : parts.last)
+    raw.insert(raw.end(), in.begin(), in.end());
+  Put32(&raw, static_cast<u32>(parts.state.size()));
+  raw.insert(raw.end(), parts.state.begin(), parts.state.end());
+  const u8* gpu = Rollback::GPUWrittenBitmap::Get().entries;
+  Put32(&raw, g1);
+  raw.insert(raw.end(), gpu, gpu + g1);
+  Put32(&raw, g2);
+  raw.insert(raw.end(), gpu + MEM2_FIRST_PAGE, gpu + MEM2_FIRST_PAGE + g2);
+  Put32(&raw, static_cast<u32>(nand.size()));
+  raw.insert(raw.end(), nand.begin(), nand.end());
+  *raw_size = raw.size();
+
+  ZSTD_CCtx* cctx = ZSTD_createCCtx();
+  if (!cctx)
+    return {};
+  ZSTD_CCtx_setParameter(cctx, ZSTD_c_compressionLevel, 3);
+  // The state holds the NAND's /tmp twice (Brawl's is 37 MB): a long window finds the copy.
+  ZSTD_CCtx_setParameter(cctx, ZSTD_c_enableLongDistanceMatching, 1);
+  ZSTD_CCtx_setParameter(cctx, ZSTD_c_windowLog, 27);
+  ZSTD_CCtx_setParameter(cctx, ZSTD_c_nbWorkers, 4);  // fails harmlessly without threads
+  std::vector<u8> packed(ZSTD_compressBound(raw.size()));
+  const size_t n = ZSTD_compress2(cctx, packed.data(), packed.size(), raw.data(), raw.size());
+  ZSTD_freeCCtx(cctx);
+  if (ZSTD_isError(n))
+    return {};
+  packed.resize(n);
+  return packed;
+}
+
+// A joiner, at its loop top: replaces its machine with the image (every value bounded: it came
+// from a peer). Its own boot is gone; it is at the epoch's frame, as every player.
+bool LoadImage(Core::System& system, std::string* error, bool self = false)
+{
+  State::ImageRx rx;
+  {
+    std::lock_guard lk(s.net_mutex);
+    rx = std::move(s.image_rx);
+    s.image_rx = {};
+  }
+  const unsigned long long content = ZSTD_getFrameContentSize(rx.data.data(), rx.data.size());
+  if (content == ZSTD_CONTENTSIZE_ERROR || content == ZSTD_CONTENTSIZE_UNKNOWN ||
+      content != rx.raw_size || content > MAX_IMAGE_RAW)
+  {
+    *error = "the machine image's size is not what it said";
+    return false;
+  }
+  std::vector<u8> raw(static_cast<size_t>(content));
+  ZSTD_DCtx* dctx = ZSTD_createDCtx();
+  if (!dctx)
+  {
+    *error = "out of memory";
+    return false;
+  }
+  ZSTD_DCtx_setParameter(dctx, ZSTD_d_windowLogMax, 27);
+  const size_t n = ZSTD_decompressDCtx(dctx, raw.data(), raw.size(), rx.data.data(), rx.data.size());
+  ZSTD_freeDCtx(dctx);
+  rx.data = {};
+  if (ZSTD_isError(n) || n != raw.size())
+  {
+    *error = "the machine image does not decompress";
+    return false;
+  }
+
+  size_t pos = 0;
+  auto get32 = [&](u32* v) {
+    if (raw.size() - pos < 4)
+      return false;
+    std::memcpy(v, raw.data() + pos, 4);
+    pos += 4;
+    return true;
+  };
+  u32 magic, version, frame_lo, frame_hi, sum, mem1, mem2;
+  auto& memory = system.GetMemory();
+  if (!get32(&magic) || !get32(&version) || !get32(&frame_lo) || !get32(&frame_hi) ||
+      !get32(&sum) || !get32(&mem1) || !get32(&mem2) || magic != IMAGE_MAGIC ||
+      version != IMAGE_VERSION)
+  {
+    *error = "not a machine image of this version";
+    return false;
+  }
+  const s64 frame = static_cast<s64>((static_cast<u64>(frame_hi) << 32) | frame_lo);
+  if (frame != rx.frame || mem1 != memory.GetRamSizeReal() || mem2 != memory.GetExRamSizeReal())
+  {
+    *error = "the machine image is of another frame or memory size";
+    return false;
+  }
+  std::array<Input, MAX_PLAYERS> last{};
+  for (Input& in : last)
+  {
+    if (raw.size() - pos < INPUT_SIZE)
+    {
+      *error = "the machine image is cut short";
+      return false;
+    }
+    std::memcpy(in.data(), raw.data() + pos, INPUT_SIZE);
+    pos += INPUT_SIZE;
+  }
+  u32 state_size;
+  if (!get32(&state_size) || raw.size() - pos < state_size)
+  {
+    *error = "the machine image is cut short";
+    return false;
+  }
+  const size_t state_pos = pos;
+  pos += state_size;
+  u32 g1, g2;
+  if (!get32(&g1) || g1 != mem1 / ROLLBACK_PAGE_SIZE || raw.size() - pos < g1)
+  {
+    *error = "the machine image is cut short";
+    return false;
+  }
+  const size_t g1_pos = pos;
+  pos += g1;
+  if (!get32(&g2) || g2 != mem2 / ROLLBACK_PAGE_SIZE || raw.size() - pos < g2)
+  {
+    *error = "the machine image is cut short";
+    return false;
+  }
+  const size_t g2_pos = pos;
+  pos += g2;
+  u32 nand_size;
+  if (!get32(&nand_size) || raw.size() - pos < nand_size)
+  {
+    *error = "the machine image is cut short";
+    return false;
+  }
+  const size_t nand_pos = pos;
+
+  // Every player vouches for the machine: its own digest of the image at this epoch must be this
+  // image's (a player who sends a crafted machine is outvoted by any honest one).
+  {
+    const std::string digest =
+        ImageDigest(frame, mem1, mem2, last, std::span<const u8>(raw.data() + state_pos, state_size),
+                    std::span<const u8>(raw.data() + nand_pos, nand_size));
+    std::lock_guard lk(s.net_mutex);
+    for (const PeerLink& p : s.peers)
+    {
+      if (p.slot < 0 || p.left || !p.hello)
+        continue;
+      if (p.epoch_at != rx.epoch || p.epoch_digest != digest)
+      {
+        *error = fmt::format("player {} does not vouch for this machine", p.slot + 1);
+        return false;
+      }
+    }
+  }
+
+  auto& rb = Rollback::RollbackManager::Get();
+  // The ring and its base snapshot hold this machine's own boot: start them again after. (A
+  // self-load, a diagnostic, loads the state the ring already ends with.)
+  if (!self && rb.m_frame_save_enabled.load(std::memory_order_relaxed))
+    rb.ToggleFrameSave();
+  auto* fs = HostFS(system);
+  if (fs)
+    fs->JournalStop();
+  // The video thread stops for the load, as for any savestate load (Core::PauseAndLock): the FIFO
+  // pointers change under it, and with it running a joiner's GPU saw the old ones and raised a
+  // command processor status no other machine had.
+  auto& fifo = system.GetFifo();
+  fifo.PauseAndLock();
+  // Loaded from inside the loop top's hook: the JIT keeps running the hook's block, so its cache
+  // is not cleared under it; the blocks of all of RAM are erased below instead (as a rollback
+  // load erases those of what it restored).
+  rb.m_skip_jit_clear_in_dostate.store(true, std::memory_order_seq_cst);
+  s_image_dostate = true;
+  VideoCommon_SetSkipGPUReadbackForRollback(true);
+  const bool ok = ::State::LoadFromBuffer(
+      system, std::span<u8>(raw.data() + state_pos, static_cast<size_t>(state_size)));
+  VideoCommon_SetSkipGPUReadbackForRollback(false);
+  s_image_dostate = false;
+  rb.m_skip_jit_clear_in_dostate.store(false, std::memory_order_seq_cst);
+  fifo.RestoreState(true);
+  auto& jit = system.GetJitInterface();
+  jit.EraseBlocksForRestoredRange(0x00000000, mem1);
+  jit.EraseBlocksForRestoredRange(MEM2_BASE, mem2);
+  if (!ok)
+  {
+    *error = "the machine image's state does not load";
+    return false;
+  }
+  if (!UnpackNand(system, raw.data() + nand_pos, nand_size, error))
+    return false;
+  u8* gpu = Rollback::GPUWrittenBitmap::Get().entries;
+  std::memcpy(gpu, raw.data() + g1_pos, g1);
+  std::memcpy(gpu + MEM2_FIRST_PAGE, raw.data() + g2_pos, g2);
+  if (!self)
+  {
+    rb.ToggleFrameSave();
+    s.journal_marks.clear();
+    // The players' rings end with the epoch frame's state saved after the frame before it (and
+    // GekkoNet's first save of the new session adds it again): the joiner's ring gets the same
+    // snapshot, so a rollback in the first frames after the epoch finds it.
+    rb.SaveFrame(system);
+    AfterSave(system);
+    s.saves++;
+  }
+  HistoryEntry& e = s.history[static_cast<size_t>(frame - 1) % HISTORY_SIZE];
+  e.frame = frame - 1;
+  e.inputs = last;
+  e.checksum = 0;
+  s.current_frame = frame - 1;
+  s.latched = last;
+  const u32 mine = rb.FullChecksum();
+  if (mine != sum)
+  {
+    *error = fmt::format("the machine image loaded with checksum {:08x}, not {:08x}", mine, sum);
+    return false;
+  }
+  s.epoch_sum = mine;
+  return true;
+}
+
+// Diagnostics (PPR_MACHINE_SELFLOAD_AT=<frame>): at that frame this machine saves its own image
+// and loads it again, as a joiner would. A machine image that loads exactly leaves it in sync.
+void SelfLoad(Core::System& system, s64 frame)
+{
+  u64 raw = 0;
+  const u32 sum = Rollback::RollbackManager::Get().FullChecksum();
+  ImageParts parts;
+  if (!MakeImageParts(system, frame, &parts))
+    return;
+  std::vector<u8> image = BuildImage(parts, sum, &raw);
+  {
+    std::lock_guard lk(s.net_mutex);
+    s.image_rx = {};
+    s.image_rx.from = s.opts.local_slot;
+    s.image_rx.frame = frame;
+    s.image_rx.sum = sum;
+    s.image_rx.packed_size = image.size();
+    s.image_rx.raw_size = raw;
+    s.image_rx.data = std::move(image);
+    s.image_rx.complete = true;
+  }
+  std::string why;
+  const bool ok = LoadImage(system, &why, true);
+  AddLog(fmt::format("self-load at frame {}: {}", frame, ok ? "loaded" : why));
+}
+
+void LogParts(Core::System& system, s64 frame);
+
+// Diagnostics (PPR_MACHINE_DUMP_DIR): this machine's whole state at an epoch's frame, to compare
+// a joiner's loaded machine with the players'.
+void DumpEpochState(Core::System& system, s64 frame, const char* who)
+{
+  const char* dir = std::getenv("PPR_MACHINE_DUMP_DIR");
+  if (!dir || !*dir)
+    return;
+  Rollback::RollbackManager::SyncGPUForDoState(system);
+  Common::UniqueBuffer<u8> state(192u << 20);
+  const size_t n = ::State::SaveToBuffer(system, state);
+  const std::string path = fmt::format("{}/state-{}-p{}-{}.bin", dir, frame, s.opts.local_slot + 1, who);
+  if (std::FILE* f = std::fopen(path.c_str(), "wb"))
+  {
+    std::fwrite(state.data(), 1, n, f);
+    std::fclose(f);
+  }
+  AddLog(fmt::format("dumped {} bytes to {}", n, path));
+  LogParts(system, frame);
+}
+
+// Diagnostics: small device states and CoreTiming's event queue as hex, in the log.
+void LogParts(Core::System& system, s64 frame)
+{
+  // Small devices one by one, to name what differs.
+  auto part = [&](const char* name, auto&& fn) {
+    std::vector<u8> buf(1 << 16);
+    u8* ptr = buf.data();
+    PointerWrap p(&ptr, buf.size(), PointerWrap::Mode::Write);
+    fn(p);
+    const size_t len = static_cast<size_t>(ptr - buf.data());
+    std::string hex;
+    for (size_t i = 0; i < len && i < 8192; ++i)
+      hex += fmt::format("{:02x}", buf[i]);
+    INFO_LOG_FMT(BRAWLBACK, "machine: frame {} part {} {} bytes: {}", frame, name, len, hex);
+  };
+  part("cp", [&](PointerWrap& p) { system.GetCommandProcessor().DoState(p); });
+  part("pe", [&](PointerWrap& p) { system.GetPixelEngine().DoState(p); });
+  part("pi", [&](PointerWrap& p) { system.GetProcessorInterface().DoState(p); });
+  part("vi", [&](PointerWrap& p) { system.GetVideoInterface().DoState(p); });
+  part("si", [&](PointerWrap& p) { system.GetSerialInterface().DoState(p); });
+  part("ai", [&](PointerWrap& p) { system.GetAudioInterface().DoState(p); });
+  part("ipc", [&](PointerWrap& p) { system.GetWiiIPC().DoState(p); });
+  part("ct", [&](PointerWrap& p) { system.GetCoreTiming().DoState(p); });
+  // The session NAND's files a game writes (host side: no guest handle is touched).
+  {
+    std::string nand;
+    const std::string root = File::GetUserPath(D_SESSION_WIIROOT_IDX);
+    std::function<void(const File::FSTEntry&)> walk = [&](const File::FSTEntry& e) {
+      if (!e.isDirectory)
+      {
+        std::string data;
+        File::ReadFileToString(e.physicalName, data);
+        nand += fmt::format("{}:{}:{:08x} ", e.physicalName.substr(root.size()), data.size(),
+                            Common::ComputeCRC32(reinterpret_cast<const u8*>(data.data()),
+                                                 static_cast<u32>(data.size())));
+      }
+      for (const auto& c : e.children)
+        walk(c);
+    };
+    for (const char* dir : {"tmp", "title", "shared2"})
+      walk(File::ScanDirectoryTree(root + dir, true));
+    if (auto fs = system.GetIOS() ? system.GetIOS()->GetFS() : nullptr)
+    {
+      if (const auto names = fs->ReadDirectory(0, 0, "/tmp"))
+      {
+        nand += "order:";
+        for (const auto& n : *names)
+          nand += n + ",";
+      }
+    }
+    INFO_LOG_FMT(BRAWLBACK, "machine: frame {} part nand 0 bytes: {}", frame,
+                 Common::ComputeCRC32(reinterpret_cast<const u8*>(nand.data()),
+                                      static_cast<u32>(nand.size())));
+    INFO_LOG_FMT(BRAWLBACK, "machine: frame {} nandlist {}", frame, nand);
+  }
+  const auto& ppc = system.GetPPCState();
+  INFO_LOG_FMT(BRAWLBACK, "machine: frame {} cpu ticks {} downcount {} pc {:08x} exceptions {:08x}",
+               frame, system.GetCoreTiming().GetTicks(), ppc.downcount, ppc.pc, ppc.Exceptions);
+}
+
+// Every player in the epoch's set: a new GekkoNet session from the epoch's frame on.
+void StartEpoch(const State::EpochGo& go)
+{
+  s.epoch = go.epoch;
+  s.frame_base = go.frame;
+  s.players = go.players;
+  for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+  {
+    if ((go.players >> slot) & 1)
+      s.controller[slot] = go.controllers[slot];
+  }
+  s.plan = {};
+  s.local_request.reset();
+  s_image_parts.reset();
+  {
+    std::lock_guard lk(s.net_mutex);
+    s.epoch_go.reset();
+    for (PeerLink& p : s.peers)
+    {
+      if (p.slot < 0)
+        continue;
+      if ((go.players >> p.slot) & 1)
+      {
+        p.join_asked = false;
+        p.dropped = false;
+      }
+    }
+  }
+  s.start_at.reset();
+  DestroyGekko();
+  if (!CreateGekko())
+  {
+    Fail("GekkoNet could not start");
+    return;
+  }
+  s.phase = Phase::Starting;
+  AddLog(fmt::format("epoch {}: frame {}, players {:04b}", s.epoch, s.frame_base, s.players));
+  OSD::AddMessage("Players changed", 2000, OSD::Color::CYAN);
+}
+
+// The players at the epoch's frame: it is final on every machine (every input before it is
+// confirmed and GekkoNet ran its rollbacks). Each tells the decider its checksum.
+void EnterEpoch()
+{
+  auto& rb = Rollback::RollbackManager::Get();
+  s.phase = Phase::Epoch;
+  s.epoch_since = Clock::now();
+  s.epoch_sum = rb.FullChecksum();
+  s.image_built = false;
+  DumpEpochState(Core::System::GetInstance(), s.plan.frame, "member");
+  const int joiner = s.plan.admit;
+  const bool admitting = joiner >= 0 && !((s.players >> joiner) & 1);
+  s_image_parts.reset();
+  s.epoch_digest.clear();
+  if (admitting)
+  {
+    ImageParts parts;
+    if (MakeImageParts(Core::System::GetInstance(), s.plan.frame, &parts))
+    {
+      s.epoch_digest = ImageDigest(parts);
+      // Diagnostics (PPR_MACHINE_DUMP_DIR): the parts, to compare players whose digests differ.
+      if (const char* dir = std::getenv("PPR_MACHINE_DUMP_DIR"); dir && *dir)
+      {
+        for (const auto& [name, bytes] : {std::pair{"state", &parts.state}, std::pair{"nand", &parts.nand}})
+        {
+          const std::string path =
+              fmt::format("{}/image-{}-p{}-{}.bin", dir, s.plan.frame, s.opts.local_slot + 1, name);
+          File::WriteStringToFile(path, std::string_view(reinterpret_cast<const char*>(bytes->data()),
+                                                         bytes->size()));
+        }
+      }
+      s_image_parts = std::move(parts);
+    }
+  }
+  AddLog(fmt::format("at epoch {} (frame {}), checksum {:08x}, image digest {}", s.epoch + 1,
+                     s.plan.frame, s.epoch_sum, s.epoch_digest.substr(0, 16)));
+  std::lock_guard lk(s.net_mutex);
+  picojson::object at;
+  at["type"] = picojson::value("epoch_at");
+  at["epoch"] = picojson::value(static_cast<double>(s.epoch + 1));
+  at["frame"] = picojson::value(static_cast<double>(s.plan.frame));
+  at["sum"] = picojson::value(static_cast<double>(s.epoch_sum));
+  if (!s.epoch_digest.empty())
+    at["digest"] = picojson::value(s.epoch_digest);
+  if (s.plan.from != s.opts.local_slot)
+    SendControl(s.plan.from, at);
+  // The joiner hears every player's digest of the image it is about to get.
+  if (admitting && s.peers[joiner].hello)
+    SendControl(joiner, at);
+}
+
+picojson::array ControllerNames(const std::array<Controller, MAX_PLAYERS>& c)
+{
+  picojson::array a;
+  for (const Controller x : c)
+    a.emplace_back(x == Controller::WiiRemote ? "wiimote" : "gc");
+  return a;
+}
+
+// At an epoch, every wait loop iteration. The decider waits for every player's checksum, sends
+// the joiner the machine, waits for the joiner's checksum, and says who plays from now on.
+void EpochStep(Core::System& system)
+{
+  const int next = s.epoch + 1;
+  // GekkoNet keeps sending this player's inputs and acks: a player still waiting for the last
+  // frames before the epoch to be confirmed gets them.
+  if (s.gekko)
+    gekko_network_poll(s.gekko);
+  if (Clock::now() - s.epoch_since > EPOCH_TIMEOUT)
+  {
+    Fail("The players did not agree on the change of players");
+    return;
+  }
+  if (s.plan.from != s.opts.local_slot)
+  {
+    std::optional<State::EpochGo> go;
+    {
+      std::lock_guard lk(s.net_mutex);
+      if (s.epoch_go && s.epoch_go->epoch == next && s.epoch_go->frame == s.plan.frame)
+        go = s.epoch_go;
+    }
+    if (go)
+      StartEpoch(*go);
+    return;
+  }
+  const int joiner = s.plan.admit;
+  u32 others = 0;
+  bool joiner_ok = false, joiner_gone = false, all_at = true;
+  {
+    std::lock_guard lk(s.net_mutex);
+    for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+    {
+      if (!((s.players >> slot) & 1) || slot == s.opts.local_slot)
+        continue;
+      const PeerLink& p = s.peers[slot];
+      if (p.left)
+        continue;
+      others |= 1u << slot;
+      if (p.epoch_at != next)
+        all_at = false;
+      else if (p.epoch_sum != s.epoch_sum)
+        WARN_LOG_FMT(BRAWLBACK, "machine: player {} is at epoch {} with checksum {:08x}, not {:08x}",
+                     slot + 1, next, p.epoch_sum, s.epoch_sum);
+    }
+    if (joiner >= 0 && !((s.players >> joiner) & 1))
+    {
+      const PeerLink& j = s.peers[joiner];
+      joiner_gone = j.slot < 0 || j.left || !j.hello;
+      joiner_ok = !joiner_gone && j.epoch_at == next && j.epoch_sum == s.epoch_sum;
+      if (!joiner_gone && j.epoch_at == next && j.epoch_sum != s.epoch_sum)
+      {
+        WARN_LOG_FMT(BRAWLBACK, "machine: player {} loaded the machine with checksum {:08x}, not {:08x}",
+                     joiner + 1, j.epoch_sum, s.epoch_sum);
+        joiner_gone = true;
+      }
+    }
+  }
+  if (!all_at)
+    return;
+  const bool admitting = joiner >= 0 && !((s.players >> joiner) & 1);
+  if (admitting && !joiner_gone && !s.image_built)
+  {
+    s.image_built = true;
+    const auto t0 = Clock::now();
+    u64 raw = 0;
+    std::vector<u8> image =
+        s_image_parts ? BuildImage(*s_image_parts, s.epoch_sum, &raw) : std::vector<u8>{};
+    s_image_parts.reset();
+    s.image_ms = std::chrono::duration<double, std::milli>(Clock::now() - t0).count();
+    s.image_packed = image.size();
+    s.image_raw = raw;
+    if (image.empty())
+    {
+      AddLog("the machine image could not be made");
+      joiner_gone = true;
+    }
+    else
+    {
+      AddLog(fmt::format("machine image for player {}: {:.1f} MB ({:.1f} MB raw) in {:.0f} ms",
+                         joiner + 1, image.size() / 1048576.0, raw / 1048576.0, s.image_ms));
+      std::vector<u8> header(36);
+      const u32 magic = IMAGE_MAGIC, ep = static_cast<u32>(next), sum = s.epoch_sum;
+      const s64 frame = s.plan.frame;
+      const u64 packed = image.size();
+      std::memcpy(header.data(), &magic, 4);
+      std::memcpy(header.data() + 4, &ep, 4);
+      std::memcpy(header.data() + 8, &frame, 8);
+      std::memcpy(header.data() + 16, &sum, 4);
+      std::memcpy(header.data() + 20, &packed, 8);
+      std::memcpy(header.data() + 28, &raw, 8);
+      std::lock_guard lk(s.net_mutex);
+      PeerLink& j = s.peers[joiner];
+      if (j.peer)
+      {
+        enet_peer_send(j.peer, CHANNEL_IMAGE,
+                       enet_packet_create(header.data(), header.size(), ENET_PACKET_FLAG_RELIABLE));
+      }
+      s.image_tx = std::move(image);
+      s.image_to = joiner;
+      s.image_tx_sent = 0;
+    }
+  }
+  if (admitting && !joiner_gone && !joiner_ok)
+    return;  // the image is on its way, or loading there
+  State::EpochGo go;
+  go.epoch = next;
+  go.frame = s.plan.frame;
+  go.players = (1u << s.opts.local_slot) | others | (admitting && joiner_ok ? 1u << joiner : 0);
+  go.controllers = s.controller;
+  if (admitting && joiner_ok)
+    go.controllers[joiner] = s.plan.controller;
+  {
+    std::lock_guard lk(s.net_mutex);
+    picojson::object m;
+    m["type"] = picojson::value("epoch_go");
+    m["epoch"] = picojson::value(static_cast<double>(go.epoch));
+    m["frame"] = picojson::value(static_cast<double>(go.frame));
+    m["players"] = picojson::value(static_cast<double>(go.players));
+    m["controllers"] = picojson::value(ControllerNames(go.controllers));
+    BroadcastControl(m);
+    if (admitting && !joiner_ok && s.peers[joiner].hello)
+    {
+      picojson::object no;
+      no["type"] = picojson::value("join_refused");
+      no["why"] = picojson::value("the machine image did not load");
+      SendControl(joiner, no);
+    }
+    s.image_tx.clear();
+  }
+  StartEpoch(go);
+}
+
+// A joiner, every wait loop iteration until it is admitted: ask, load the image, wait for the go.
+void JoinStep(Core::System& system)
+{
+  if (Clock::now() - s.join_since > JOIN_TIMEOUT)
+  {
+    Fail("Not admitted to the session");
+    return;
+  }
+  std::optional<State::EpochGo> go;
+  bool image = false;
+  std::optional<std::string> refused;
+  {
+    std::lock_guard lk(s.net_mutex);
+    if (s.join_refused)
+      refused = s.join_refused_why;
+    if (!s.join_sent)
+    {
+      bool all = true;
+      for (const PeerLink& p : s.peers)
+        all &= p.slot < 0 || p.hello;
+      if (all)
+      {
+        picojson::object m;
+        m["type"] = picojson::value("join");
+        m["controller"] = picojson::value(s.opts.controller == Controller::WiiRemote ? "wiimote" : "gc");
+        m["rtc"] = picojson::value(static_cast<double>(s.opts.rtc));
+        BroadcastControl(m);
+        s.join_sent = true;
+        AddLog("asked to join");
+      }
+    }
+    image = !s.join_loaded && s.image_rx.complete;
+    // Not before every player's digest of this epoch's image is in.
+    for (const PeerLink& p : s.peers)
+    {
+      if (p.slot >= 0 && p.hello && !p.left && p.epoch_at != s.image_rx.epoch)
+        image = false;
+    }
+    if (s.join_loaded && s.epoch_go && s.epoch_go->frame == s.current_frame + 1)
+      go = s.epoch_go;
+  }
+  if (refused)
+  {
+    Fail("Could not join: " + *refused);
+    return;
+  }
+  if (image)
+  {
+    const int from = s.image_rx.from;
+    const int epoch = s.image_rx.epoch;
+    const double ms =
+        std::chrono::duration<double, std::milli>(Clock::now() - s.image_rx.started).count();
+    const u64 packed = s.image_rx.packed_size;
+    std::string why;
+    const auto t0 = Clock::now();
+    if (!LoadImage(system, &why))
+    {
+      Fail("Could not load the session's machine: " + why);
+      return;
+    }
+    s.join_loaded = true;
+    DumpEpochState(system, s.current_frame + 1, "joiner");
+    AddLog(fmt::format("machine image from player {} ({:.1f} MB in {:.0f} ms) loaded in {:.0f} ms; "
+                       "at frame {}",
+                       from + 1, packed / 1048576.0, ms,
+                       std::chrono::duration<double, std::milli>(Clock::now() - t0).count(),
+                       s.current_frame + 1));
+    std::lock_guard lk(s.net_mutex);
+    picojson::object at;
+    at["type"] = picojson::value("epoch_at");
+    at["epoch"] = picojson::value(static_cast<double>(epoch));
+    at["frame"] = picojson::value(static_cast<double>(s.current_frame + 1));
+    at["sum"] = picojson::value(static_cast<double>(s.epoch_sum));
+    SendControl(from, at);
+    return;
+  }
+  if (go)
+  {
+    if (!((go->players >> s.opts.local_slot) & 1))
+    {
+      Fail("Could not join: not admitted");
+      return;
+    }
+    StartEpoch(*go);
+  }
+}
+
+// Every Wii Remote is plugged in exactly while its player's input says so (the same frame on
+// every machine): a joiner's connects, a leaver's disconnects.
+void SyncWiimotes(Core::System& system)
+{
+  const auto ios = system.GetIOS();
+  if (!ios)
+    return;
+  // The session forces Bluetooth passthrough off (the netplay config layer): the device is the
+  // emulated stack.
+  const auto bt = std::static_pointer_cast<IOS::HLE::BluetoothEmuDevice>(
+      ios->GetDeviceByName("/dev/usb/oh1/57e/305"));
+  if (!bt)
+    return;
+  for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+  {
+    auto* wiimote = bt->AccessWiimoteByIndex(static_cast<size_t>(slot));
+    if (!wiimote)
+      continue;
+    // Activate(true) only acts on a Wii Remote that is off, Activate(false) on a connected one.
+    wiimote->Activate((s.latched[slot][0] & INPUT_WIIMOTE_CONNECTED) != 0);
+  }
+}
+
 enum class Wait
 {
   Frames,  // this pass has a frame to run
@@ -1139,7 +2472,8 @@ Wait WaitForFrames(Core::System& system)
   {
     const auto waited_for = Clock::now() - since;
     if ((s.phase == Phase::Running && waited_for > STALL_LIMIT) ||
-        (s.phase != Phase::Running && waited_for > CONNECT_LIMIT))
+        ((s.phase == Phase::Connecting || s.phase == Phase::Starting) &&
+         waited_for > CONNECT_LIMIT))
     {
       Fail(s.phase == Phase::Running ? "Connection lost" : "Could not connect to the players");
       return Wait::Ended;
@@ -1163,6 +2497,12 @@ Wait WaitForFrames(Core::System& system)
         AddLog("every peer connected; GekkoNet handshake");
       }
     }
+    if (s.phase == Phase::Joining)
+      JoinStep(system);
+    if (s.phase == Phase::Epoch)
+      EpochStep(system);
+    if (s.phase == Phase::Error)
+      return Wait::Ended;
     if (s.phase == Phase::Starting)
     {
       if (!s.gekko_started)
@@ -1186,12 +2526,21 @@ Wait WaitForFrames(Core::System& system)
     if (s.phase == Phase::Running)
     {
       DropLeftPeers();
+      UpdateLocalRequest();
       CaptureLocalInput();
       Update(system);
       if (s.phase == Phase::Error)
         return Wait::Ended;
       if (s.ops.count > 0)
         break;
+      // At the epoch's frame: every frame before it ran with confirmed inputs (GekkoNet holds
+      // here, and ran its last rollback in an earlier update).
+      if (s.plan.active && s.current_frame == s.plan.frame - 1)
+      {
+        const int confirmed = gekko_confirmed_frame(s.gekko);
+        if (confirmed >= 0 && s.frame_base + confirmed >= s.plan.frame - 1)
+          EnterEpoch();
+      }
     }
     waited = true;
     // The lock is let go while sleeping, so status and control requests get through. OnLoopTop
@@ -1205,43 +2554,14 @@ Wait WaitForFrames(Core::System& system)
   return Wait::Frames;
 }
 
-// A Wii Remote whose player's input stops saying "connected" (they left) disconnects at that
-// frame, on every machine; a player who comes back connects it with a button press.
-void UnplugWiimotes(Core::System& system, s64 frame, const std::array<Input, MAX_PLAYERS>& now)
-{
-  if (frame <= 0)
-    return;
-  const HistoryEntry& prev = s.history[static_cast<size_t>(frame - 1) % HISTORY_SIZE];
-  if (prev.frame != frame - 1)
-    return;
-  const auto ios = system.GetIOS();
-  if (!ios)
-    return;
-  // The session forces Bluetooth passthrough off (the netplay config layer): the device is the
-  // emulated stack.
-  const auto bt = std::static_pointer_cast<IOS::HLE::BluetoothEmuDevice>(
-      ios->GetDeviceByName("/dev/usb/oh1/57e/305"));
-  if (!bt)
-    return;
-  for (int slot = 0; slot < MAX_PLAYERS; ++slot)
-  {
-    const bool was = prev.inputs[slot][0] & INPUT_WIIMOTE_CONNECTED;
-    const bool is = now[slot][0] & INPUT_WIIMOTE_CONNECTED;
-    if (was && !is)
-    {
-      if (auto* wiimote = bt->AccessWiimoteByIndex(static_cast<size_t>(slot)))
-        wiimote->Activate(false);
-    }
-  }
-}
-
 void BeginPass(Core::System& system)
 {
   // The inputs this pass runs with, for the SI (GetPad) and the Wii Remotes (GetWiimote).
   s.latched = s.ops.inputs[s.iteration];
   s.current_frame = s.ops.frame[s.iteration];
-  UnplugWiimotes(system, s.current_frame, s.latched);
   s.resim = s.ops.count > 1 && s.iteration != s.ops.count - 1;
+  SyncWiimotes(system);
+  PlanEpoch(s.current_frame);
   RecordHistory(s.current_frame, s.latched, 0);
   auto& core_timing = system.GetCoreTiming();
   core_timing.SetRollbackResimulating(s.resim);
@@ -1255,7 +2575,7 @@ bool Active()
 {
   const Phase p = s.phase;
   return p == Phase::Armed || p == Phase::Connecting || p == Phase::Starting ||
-         p == Phase::Running;
+         p == Phase::Running || p == Phase::Epoch || p == Phase::Joining;
 }
 
 void CheckEnvironment()
@@ -1427,8 +2747,17 @@ std::optional<Options> ParseOptions(const picojson::value& json, std::string* er
       }
       p.host = h->second.get<std::string>();
       p.port = static_cast<u16>(pp);
+      if (const auto l = po.find("late"); l != po.end() && l->second.is<bool>())
+        p.late = l->second.get<bool>();
       opts.peers.push_back(std::move(p));
     }
+  }
+  if (const auto j = o.find("join"); j != o.end() && j->second.is<bool>())
+    opts.join = j->second.get<bool>();
+  if (opts.join && opts.peers.empty())
+  {
+    *error = "a joiner needs the session's players as peers";
+    return std::nullopt;
   }
   if (opts.synctest > 0 && !opts.peers.empty())
   {
@@ -1451,9 +2780,13 @@ bool Arm(const Options& options, std::string* error)
   DestroyGekko();
   s.opts = options;
   s.error.clear();
-  s.log.clear();
+  {
+    std::lock_guard llk(s.log_mutex);
+    s.log.clear();
+  }
   s.peers = {};
-  s.players = 1u << options.local_slot;
+  // A joiner plays from the epoch that admits it; its peers' set comes with that epoch.
+  s.players = options.join ? 0u : 1u << options.local_slot;
   s.controller = {};
   s.controller[options.local_slot] = options.controller;
   s.wiimote_captures = 0;
@@ -1465,7 +2798,9 @@ bool Arm(const Options& options, std::string* error)
     link.slot = p.slot;
     link.host = p.host;
     link.port = p.port;
-    s.players |= 1u << p.slot;
+    link.late = p.late;
+    if (!p.late && !options.join)
+      s.players |= 1u << p.slot;
     s.controller[p.slot] = p.controller;
   }
   s.ops.Clear();
@@ -1475,6 +2810,23 @@ bool Arm(const Options& options, std::string* error)
   s.latched = {};
   s.local_input = {};
   s.current_frame = -1;
+  s.frame_base = 0;
+  s.epoch = 0;
+  s.plan = {};
+  s.local_request.reset();
+  s.image_built = false;
+  s.image_ms = 0;
+  s.image_packed = s.image_raw = 0;
+  s.join_sent = false;
+  s.join_loaded = false;
+  {
+    std::lock_guard nlk(s.net_mutex);
+    s.epoch_go.reset();
+    s.join_refused = false;
+    s.image_rx = {};
+    s.image_tx.clear();
+    s.image_to = -1;
+  }
   s.speed = 1.0;
   s.last_timesync_frame = -1;
   s.barrier_done = false;
@@ -1534,6 +2886,11 @@ bool IsArmed()
     CheckEnvironment();
   }
   return Active();
+}
+
+bool InImageDoState()
+{
+  return s_image_dostate;
 }
 
 bool IsRunning()
@@ -1631,11 +2988,11 @@ NetPlay::NetSettings MakeNetSettings()
   ns.wiimote_map.fill(0);
   for (int slot = 0; slot < MAX_PLAYERS; ++slot)
   {
-    // Every port is a standard controller (plugged in or not by the input); Wii Remotes exist for
-    // the players who play one (an emulated Wii Remote connects as soon as it exists).
+    // Every port is a standard controller and every Wii Remote an emulated one, the same on every
+    // machine whoever plays (a joiner's too); whether one is plugged in or connected is the
+    // frame's input.
     ns.pad_map[slot] = static_cast<NetPlay::PlayerId>(slot + 1);
-    if (((s.players >> slot) & 1) && s.controller[slot] == Controller::WiiRemote)
-      ns.wiimote_map[slot] = static_cast<NetPlay::PlayerId>(slot + 1);
+    ns.wiimote_map[slot] = static_cast<NetPlay::PlayerId>(slot + 1);
   }
   ns.local_player_id = static_cast<NetPlay::PlayerId>(s.opts.local_slot + 1);
   return ns;
@@ -1672,8 +3029,7 @@ bool GetWiimote(int index, WiimoteEmu::DesiredWiimoteState* state)
 {
   if (!IsArmed() || index < 0 || index >= MAX_PLAYERS)
     return false;
-  if (!((s.players >> index) & 1) || s.controller[index] != Controller::WiiRemote)
-    return false;
+  // Every Wii Remote is the session's: one nobody plays is at rest (no button connects it).
   const Input& in = s.latched[index];
   ResetWiimoteState(state);
   // Before the session runs (boot), or a player who sent nothing yet: a Wii Remote at rest.
@@ -1722,6 +3078,16 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     s.journal_marks.clear();
     if (!rb.m_frame_save_enabled.load(std::memory_order_relaxed))
       rb.ToggleFrameSave();
+    if (s.opts.join)
+    {
+      // A joiner runs this frame by itself and waits at the next loop top, which (as on every
+      // player's machine) starts a JIT block of its own: the image loads in the same place.
+      s.phase = Phase::Joining;
+      s.join_since = Clock::now();
+      AddLog("first boundary (scBoot): asking to join");
+      run_original();
+      return true;
+    }
     s.phase = Phase::Connecting;
     AddLog("first boundary (scBoot): waiting for the players");
   }
@@ -1753,6 +3119,69 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       ppc.npc = BRAWL_LOOP_END;
       s.ops.count = 0;
       return true;
+    }
+  }
+  static const s64 selfload_at = [] {
+    const char* e = std::getenv("PPR_MACHINE_SELFLOAD_AT");
+    return e ? std::strtoll(e, nullptr, 10) : -1;
+  }();
+  static bool selfloaded = false;
+  if (selfload_at >= 0 && !selfloaded && s.phase == Phase::Running && s.iteration == 0 &&
+      s.ops.count == 1 && s.ops.frame[0] >= selfload_at)
+  {
+    selfloaded = true;
+    SelfLoad(system, s.ops.frame[0]);
+  }
+  // Diagnostics (PPR_MACHINE_DUMP_AT=<frame>, with PPR_MACHINE_DUMP_DIR): the state at the start of
+  // that frame's first run, on every machine.
+  // PPR_MACHINE_PARTS_AT=+A,+B: the small parts at every first run of frames A..B after the epoch.
+  static const std::pair<s64, s64> parts_range = [] {
+    const char* e = std::getenv("PPR_MACHINE_PARTS_AT");
+    if (!e || *e != '+')
+      return std::pair<s64, s64>{-1, -1};
+    char* end = nullptr;
+    const s64 a = std::strtoll(e + 1, &end, 10);
+    const s64 b = end && *end == ',' && end[1] == '+' ? std::strtoll(end + 2, nullptr, 10) : a;
+    return std::pair<s64, s64>{a, b};
+  }();
+  static s64 parts_logged = -1;
+  if (parts_range.first >= 0 && s.epoch > 0 && s.phase == Phase::Running && s.gekko &&
+      s.iteration < s.ops.count)
+  {
+    const s64 f = s.ops.frame[s.iteration];
+    // Only a run with every input of the frame confirmed (the run that counts).
+    const bool confirmed = s.frame_base + gekko_confirmed_frame(s.gekko) >= f;
+    if (confirmed && f > parts_logged && f >= s.frame_base + parts_range.first &&
+        f <= s.frame_base + parts_range.second)
+    {
+      parts_logged = f;
+      LogParts(system, f);
+    }
+  }
+  // A comma-separated list of frames; "+N" counts from the last epoch's frame.
+  static const std::string dump_at = [] {
+    const char* e = std::getenv("PPR_MACHINE_DUMP_AT");
+    return std::string(e ? e : "");
+  }();
+  static std::set<s64> dumped;
+  if (!dump_at.empty() && s.phase == Phase::Running && s.iteration < s.ops.count)
+  {
+    const s64 f = s.ops.frame[s.iteration];
+    size_t pos = 0;
+    while (pos < dump_at.size())
+    {
+      const size_t end = std::min(dump_at.find(',', pos), dump_at.size());
+      const std::string item = dump_at.substr(pos, end - pos);
+      pos = end + 1;
+      if (item.empty())
+        continue;
+      const s64 target = item[0] == '+' ? (s.epoch > 0 ? s.frame_base + std::strtoll(item.c_str() + 1, nullptr, 10) : -1) :
+                                          std::strtoll(item.c_str(), nullptr, 10);
+      if (target == f && !dumped.contains(f))
+      {
+        dumped.insert(f);
+        DumpEpochState(system, f, "at");
+      }
     }
   }
   BeginPass(system);
@@ -1824,6 +3253,12 @@ picojson::value Status()
   o["frames_ahead"] = picojson::value(static_cast<double>(s.frames_ahead));
   o["speed"] = picojson::value(s.speed);
   o["synctest"] = picojson::value(static_cast<double>(s.opts.synctest));
+  o["epoch"] = picojson::value(static_cast<double>(s.epoch));
+  o["frame_base"] = picojson::value(static_cast<double>(s.frame_base));
+  o["plan_frame"] = picojson::value(static_cast<double>(s.plan.active ? s.plan.frame : -1));
+  o["image_ms"] = picojson::value(s.image_ms);
+  o["image_mb"] = picojson::value(s.image_packed / 1048576.0);
+  o["image_raw_mb"] = picojson::value(s.image_raw / 1048576.0);
   picojson::array peers;
   {
     std::lock_guard nlk(s.net_mutex);
@@ -1834,7 +3269,9 @@ picojson::value Status()
       picojson::object po;
       po["slot"] = picojson::value(static_cast<double>(p.slot));
       po["connected"] = picojson::value(p.hello);
-      po["started"] = picojson::value(p.started);
+      po["started"] = picojson::value(static_cast<double>(p.started));
+      po["late"] = picojson::value(p.late);
+      po["join_asked"] = picojson::value(p.join_asked);
       po["left"] = picojson::value(p.left);
       po["rtt_ms"] = picojson::value(p.rtt_ms);
       peers.emplace_back(po);
@@ -1842,6 +3279,7 @@ picojson::value Status()
   }
   o["peers"] = picojson::value(peers);
   picojson::array log;
+  std::lock_guard llk(s.log_mutex);
   for (const auto& l : s.log)
     log.emplace_back(l);
   o["log"] = picojson::value(log);
@@ -1859,7 +3297,7 @@ picojson::value Status()
   return picojson::value(o);
 }
 
-picojson::value Digest(s64 frame)
+picojson::value Digest(s64 frame, const std::vector<u32>& addrs)
 {
   std::lock_guard lk(s.mutex);
   picojson::object o;
@@ -1874,6 +3312,18 @@ picojson::value Digest(s64 frame)
   for (const auto& [addr, crc] : d.granules)
     text += fmt::format("{:08x}:{:08x} ", addr, crc);
   o["granules"] = picojson::value(text);
+  picojson::object bytes;
+  for (const u32 a : addrs)
+  {
+    const auto it = d.bytes.find(a & ~(ROLLBACK_PAGE_SIZE - 1));
+    if (it == d.bytes.end())
+      continue;
+    std::string hex;
+    for (const u8 b : it->second)
+      hex += fmt::format("{:02x}", b);
+    bytes[fmt::format("{:08x}", it->first)] = picojson::value(hex);
+  }
+  o["bytes"] = picojson::value(bytes);
   return picojson::value(o);
 }
 

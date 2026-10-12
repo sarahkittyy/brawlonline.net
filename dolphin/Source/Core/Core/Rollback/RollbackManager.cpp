@@ -1152,6 +1152,33 @@ u32 RollbackManager::SaveChecksumWithSlice(s64 frame) const
   return crc ? crc : 1;
 }
 
+u32 RollbackManager::FullChecksum() const
+{
+  if (!m_initialized)
+    return 0;
+  const u32 mem1_pages = static_cast<u32>(m_mem1_size / ROLLBACK_PAGE_SIZE);
+  const u32 mem2_pages = static_cast<u32>(m_mem2_size / ROLLBACK_PAGE_SIZE);
+  const u8* gpu = GPUWrittenBitmap::Get().entries;
+  u32 crc = Common::StartCRC32();
+  for (u32 g = 0; g < mem1_pages + mem2_pages; ++g)
+  {
+    const bool mem2 = g >= mem1_pages;
+    const u32 page = mem2 ? MEM2_FIRST_PAGE + (g - mem1_pages) : g;
+    if (gpu[page])
+      continue;
+    const u32 phys = page << ROLLBACK_PAGE_SHIFT;
+    bool excluded = false;
+    for (const MemoryRegion& r : m_exclude_regions)
+      excluded |= phys < r.phys_end && phys + ROLLBACK_PAGE_SIZE > r.phys_start;
+    if (excluded)
+      continue;
+    const u8* src = mem2 ? m_mem2_ptr + static_cast<size_t>(g - mem1_pages) * ROLLBACK_PAGE_SIZE :
+                           m_mem1_ptr + static_cast<size_t>(g) * ROLLBACK_PAGE_SIZE;
+    crc = Common::UpdateCRC32(crc, src, ROLLBACK_PAGE_SIZE);
+  }
+  return crc ? crc : 1;
+}
+
 std::vector<std::pair<u32, u32>> RollbackManager::LastSaveDigest() const
 {
   std::vector<std::pair<u32, u32>> out;

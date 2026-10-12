@@ -110,6 +110,13 @@ bool Gekko::SyncSystem::GetLocalInput(Handle player, std::unique_ptr<u8[]>& inpu
 	return true;
 }
 
+void Gekko::SyncSystem::SetDelayFillInput(Handle player, const u8* input)
+{
+    if (player >= 0 && player < _num_players) {
+        _input_buffers[player].SetDelayFillInput(input);
+    }
+}
+
 void Gekko::SyncSystem::SetLocalDelay(Handle player, u8 delay)
 {
 	_input_buffers[player].SetDelay(delay);

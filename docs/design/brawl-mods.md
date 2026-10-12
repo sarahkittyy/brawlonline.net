@@ -105,15 +105,18 @@ Inputs enter where the hardware does, so nothing depends on the game:
   | 1-8 | GC pad: buttons (2), stick X/Y, C-stick X/Y, L, R |
   | 9 | Wii Remote state length (0-31) |
   | 10-40 | `SerializedWiimoteState::data` |
-  | 41-47 | reserved, zero |
+  | 41 | a membership request (§6.3): bit 7 admit, bits 0-1 the slot, bit 2 it plays a Wii Remote |
+  | 42-47 | reserved, zero |
 
-- **Plugging** is a change of the flags at an agreed frame: the GC port's SI device is set (`SerialInterface::ChangeDevice`, which takes effect through its own CoreTiming event, the same on every machine) and the Wii Remote is connected or disconnected (`WiimoteDevice::Activate`). The SI device types and Wii Remote sources are pinned for the session; a player's own choice of GC pad or Wii Remote (and which extension) travels in their input.
+- **Plugging** is the input itself (built 2026-10-12): every port is a standard controller and every Wii Remote an emulated one on every machine, whoever plays (so a joiner's machine is configured like everyone's). A port whose input lacks the GC flag answers as an empty port; a Wii Remote is connected exactly while its input says so (`WiimoteDevice::Activate`, checked at the start of every frame, the same frame on every machine; none connects at boot). A player who leaves gets GekkoNet's disconnected input (all zero) from the frame the others agreed on, so their controller is unplugged everywhere at once, as at a LAN.
 - **Prediction:** a remote player's last confirmed input repeated (GekkoNet's), Wii Remote included.
 
 ### 6.3 Sessions and epochs
 
-- **GekkoNet** carries inputs (fixed size, §6.2), as in the P+ paths. Its player count is fixed per session, so a session is a chain of **epochs**: each change of membership (plug-in, unplug, slot move, kick) ends the epoch at an agreed frame K and starts a new GekkoNet session at K with the new set of players. Frame numbers keep counting across epochs.
-- **Agreeing on K:** the session host proposes K = (its newest frame) + margin (**default** 30 frames) on the control channel of the P2P link; every member acknowledges; members that cannot reach K in time (a stalled peer) are dropped first. The host is the room's host; when it leaves, the room's next host takes over (mm already moves the host).
+- **GekkoNet** carries inputs (fixed size, §6.2), as in the P+ paths. Its player count is fixed per session, so a session is a chain of **epochs**: a player joining ends the epoch at an agreed frame K and starts a new GekkoNet session at K with the new set of players. Frame numbers keep counting across epochs (the epoch's frame + GekkoNet's frame).
+- **Leaving needs no epoch** (built): GekkoNet's disconnect claims agree on the last frame of the leaver's input, and the others play on with that controller unplugged. A claim carries the leaver's whole input queue (128 inputs of 48 bytes), so the session's limit for a GekkoNet packet is 16 KiB.
+- **Agreeing on K** (built): the request travels in the input. The player who admits a joiner (the lowest slot that is playing) sets byte 41 of its input; the first frame F whose input carries it plans the epoch at **K = F + 10** (`EPOCH_LEAD`, more than GekkoNet's prediction window of 7). Nobody can run K before F's input is confirmed, so every machine plans the same K, and a request seen in a mispredicted input is planned again when the frame re-runs. GekkoNet gets a frame limit (`gekko_set_frame_limit`, added to our GekkoNet): it never advances into K but still rolls back earlier frames; when `gekko_confirmed_frame` (added) reaches K-1, every machine holds the same state at K. No proposal, acknowledgement or timeout race.
+- **At K:** every player sends the requester a checksum of all its RAM at K (they agree: the players' machines at K are bit-identical, savestates included); the requester sends the joiner the machine image (§6.7), waits for the joiner's checksum of the loaded machine, and tells everyone the new set of players (`epoch_go`). Each starts a new GekkoNet session; the frames its input delay holds back repeat its input of K-1 (`gekko_set_local_delay_input`, added), so no controller unplugs for two frames. If the joiner's image does not load within 120 s, the players go on without it.
 - **Transport:** the P2P ENet hosts and hole punching of `Online/Matchmaking.cpp`, with GekkoNet's adapter over them (as `GameplaySession` does). Channel 0: GekkoNet; channel 1: session control (JSON, small); channel 2: machine images (§6.7), rate-limited.
 - **Pacing, time sync, presentation:** reused from the P+ gameplay session where they are not Brawl-specific (`CoreTimingManager::BeginRollbackBurst`, present pacing, audio clock waiting during resimulated passes).
 
@@ -124,22 +127,28 @@ Inputs enter where the hardware does, so nothing depends on the game:
 ### 6.5 NAND and SD
 
 - **NAND:** the session runs on a temporary NAND, as Dolphin's netplay does. A rollback must also undo file writes: a **write journal** records each file's previous contents (or absence) at its first change after a snapshot; a load undoes the journal back to the snapshot's mark (**default**; Orca and Nyx do this, `IOS/FS/HostBackend/Journal.cpp`, GPL, ported with attribution). Saves made during the session are written back to the player's own NAND at the end only if the user ticks "Keep saves from this session" (**default** off).
+- **Every player must boot with the same save.** Today each player's session NAND copies its own save of the game (`WiiRoot.cpp`), so players whose saves differ (unlocks) desync from boot. Open question 5.
 - **SD:** read-only (§4).
 
 ### 6.6 Desyncs
 
-- Each confirmed frame's checksum (GekkoNet compares them) is **CRC32 of the dirty granules of MEM1 and MEM2 since the last confirmed frame**, skipping granules that the GPU thread wrote (EFB and XFB copies to RAM: Brawl copies 4x4 rendered pixels into RAM for its lighting, which differs between GPUs and backends; `docs/determinism-findings.md`) and the Rev 1 / Rev 2 disc ID word.
+- Each confirmed frame's checksum (GekkoNet compares them) is **CRC32 of the granules of MEM1 and MEM2 written in the frame, plus a rotating 1/360 slice of all RAM** (every byte is covered every 6 s), skipping granules the GPU writes. EFB and XFB copies stay on the GPU in a session (pinned), so nothing rendered reaches guest RAM: with copies to RAM, a dual-core re-run diverged where Brawl reads rendered pixels back (`docs/determinism-findings.md`).
 - A desync shows "Desync detected, resyncing" in the OSD and the session host sends its machine to the players that differ (§6.7). Twice in a minute ends the session with "Desync: this build does not stay in sync online" (**default**).
 
 ### 6.7 Joining: the machine image
 
-1. The joiner's Dolphin boots the same build with nothing run (it never executes the game before the image loads).
-2. The session host captures an image at a boundary: MEM1 and MEM2 (from the rollback base snapshot plus the ring, so no pause), the device state (`State::DoState` minus RAM), the NAND files that differ from a fresh session NAND, and the frame number F0.
-3. The image is compressed (zstd), checksummed and sent on channel 2 at no more than 2 MB/s (**default**; Orca saw an unthrottled upload delay pings). Nobody stops.
-4. The joiner validates and loads it (§7), then runs the frames F0..K from the inputs the host relays, unthrottled and unrendered.
-5. At K everyone starts the next epoch with the joiner plugged in.
+**Built (2026-10-12), version 1: the players wait at K while the image travels.**
 
-Expected size: MEM1 24 MiB + MEM2 64 MiB + device state (a few MiB) + NAND; compressed size to be measured (target under 40 MB for Brawl on a menu).
+1. The joiner's Dolphin boots the same build, runs its first scBoot frame on its own and waits at the next loop top. That loop top starts a JIT block of its own, as the players' loop tops do, so the image loads at the same instruction (loaded in the middle of a longer block, the block's remaining cycles would be counted after the load).
+2. The requester captures the image at K's loop top: Dolphin's savestate (`State::SaveToBuffer`: RAM, devices, video state), the session NAND's game files at host level (`tmp`, `title`, `shared2` and the FS's `fst.bin`; Dolphin's own directory listing skips names over 12 characters, and Brawl caches its font in `/tmp/font_latin1.arc`), the map of GPU-written granules, and the inputs of K-1. zstd level 3 with a 128 MiB window.
+3. Sent on channel 2: a 36-byte header, then 256 KiB chunks, a few in flight at a time.
+4. The joiner loads it with the video thread paused and the JIT blocks of all RAM erased, replaces its NAND game files, starts its snapshot ring with one snapshot (the players' rings end with K's state twice; without it the joiner could not roll back the first frame after K), and compares its RAM checksum with the requester's.
+
+Measured on Brawl Minus at the main menu, on one PC: **29-48 MB compressed (185 MB raw), built in 260 ms, sent in 0.8-1.4 s, loaded in 200-430 ms**; then 0 mismatches over 1,600-3,600 compared frames, single and dual core. Over the internet at 10 Mbit/s the others would wait about 30 s.
+
+Why joins desynced on the way there, for the record: the joiner's ring lacked K's second snapshot (a rollback in the first frame after K was skipped); the joiner lacked `/tmp/font_latin1.arc`, so the game rebuilt its font cache and the emulated NAND latency moved an IPC reply by 1.3 M cycles; the savestate's own NAND copy reverses directory order. Found by logging confirmed frames' device states, CoreTiming queues and NAND digests on every machine (`PPR_MACHINE_PARTS_AT`) and comparing them.
+
+**Version 2 (planned): nobody stops.** The image is taken at an epoch K1 and sent while everyone plays on; the joiner replays K1..K2 from the inputs, unthrottled and unrendered, and is admitted at a second epoch K2 once it has caught up.
 
 ## 7. Security of the machine image
 
@@ -150,11 +159,12 @@ The machine image is the first thing in this project where **one player's machin
 | Part | Risk | Why |
 |---|---|---|
 | MEM1, MEM2, L1 | **Low** | Guest memory: the emulated console runs it. It can only do what any game disc could do in Dolphin: emulator escapes would be Dolphin bugs reachable by any disc. |
-| NAND files | **Medium** | Paths and sizes come from the peer: path traversal (`../`), huge files, file counts. Validated like any peer data: a fixed allowlist of directories (the title's data folder, `shared2`, `sys`), no `..`, total size and count limits. |
+| NAND files | **Medium** | Paths and sizes come from the peer: path traversal (`../`), huge files, file counts. Validated (built): only `tmp/`, `title/`, `shared2/` and `fst.bin`; printable; no empty, `.` or `..` component; no `\` or `:`; at most 4096 entries; sizes within the image. `fst.bin` (the FS's own metadata) is then parsed by the FS: part of the audit. |
 | Device state (`DoState`) | **High** | Dolphin's savestate loader trusts its input: counts read from the stream size vectors and index arrays, pointers are rebuilt from offsets, enum values select code paths. A crafted state could corrupt Dolphin's own memory: code execution on the joiner's PC. |
 
-**Plan:**
+**Plan** (progress and findings: `docs/brawl-mods-security.md`):
 
+0. **The other players vouch for the image** (built): every player computes the image's digest at K themselves (their machines are identical there) and the joiner loads only an image whose digest every player sent. A crafted image needs every other player to collude; a room of two trusts its host.
 1. **Audit** every `DoState` reachable from `State::DoState` for the session's configuration (Wii, the pinned devices): list each value read from the stream that sizes an allocation, indexes an array, selects a type, or becomes a pointer or length. Record the list in `docs/brawl-mods-security.md`.
 2. **Harden** the load: `PointerWrap` read mode checks every read against the buffer end (it does; verify) and fails the whole load on the first error; every count and index found in step 1 is checked against its real bound; allocations from stream sizes are capped. A failed load leaves the joiner on a fresh boot with "Could not load the game from <host>".
 3. **Fuzz** the hardened loader: mutate real images (byte flips, length fields, truncation, splices between images) and load them in a harness Dolphin, with ASan in a dedicated build. Exit criterion: no crash and no sanitizer report in a long run (**default** 24 hours across the configs of step 1).
@@ -173,8 +183,8 @@ The machine image is the first thing in this project where **one player's machin
 |---|---|---|
 | 1 | Dolphin: machine session of 2 players started from the command line (peer address, seat, build), boot together, Brawl boundary, GC pads | Two harness Dolphins play vanilla Brawl and Brawl Minus from boot through menus into a match under netsim `typical`, 0 desyncs, dual core |
 | 2 | Wii Remotes (all extensions); NAND journal; SD read-only; generic desync checksums | The same with one player on Wii Remote + Nunchuk and one on Classic Controller; a save written during the session and rolled back stays consistent |
-| 3 | Epochs; 3-4 players; unplug, slot move | 4 harness Dolphins; a player leaves and another moves slot mid-match, the rest play on, 0 desyncs |
-| 4 | Machine image join (unhardened, behind a test switch) | A third player joins a running 2-player match and plays; checksums agree after the plug-in |
+| 3 | Epochs; 3-4 players; unplug, slot move | 4 harness Dolphins; a player leaves and another moves slot mid-match, the rest play on, 0 desyncs. **Built 2026-10-12:** leaving (3 players, one leaves: 0 mismatches), epochs. Slot moves and 4 players not yet |
+| 4 | Machine image join (unhardened, behind a test switch) | A third player joins a running 2-player match and plays; checksums agree after the plug-in. **Built 2026-10-12** (version 1, the players wait): 0 mismatches over ~3,300 frames after joins, GameCube and Wii Remote joiners, single and dual core |
 | 5 | Security: audit, hardening, fuzzing (§7) | §7 step 3's exit criterion; the security doc |
 | 6 | mm: mod rooms and signaling; Dolphin room client; local control channel | Host and join through a local mm, two machines on the LAN (this PC and the Mac) |
 | 7 | Launcher: tab, builds and hashes, room window, public list | Staging run (`tools/staging/staging.py`) with Windows and Mac clients |
@@ -187,3 +197,4 @@ The machine image is the first thing in this project where **one player's machin
 2. **Riivolution builds** (some mods ship as Riivolution XML instead of a launcher `.dol`): later, after phase 7.
 3. **Keep saves from the session** (§6.5) off by default.
 4. **Who may send an image before §7 is met** (§7 step 5): friends in private rooms.
+5. **Which save everyone boots with** (§6.5): default for now: each player's own (a mismatch desyncs from boot). Options: the host's save sent before boot (as Dolphin's netplay does), or a full-unlock save per known build.

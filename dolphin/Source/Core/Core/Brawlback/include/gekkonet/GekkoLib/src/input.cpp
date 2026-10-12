@@ -46,11 +46,22 @@ void Gekko::InputBuffer::Init(u8 delay, u8 input_window, u32 input_size, u32 buf
 	}
 }
 
+void Gekko::InputBuffer::SetDelayFillInput(const u8* input)
+{
+    if (!input || _input_size == 0) {
+        _delay_fill_input.reset();
+        return;
+    }
+    _delay_fill_input = std::make_unique<u8[]>(_input_size);
+    std::memcpy(_delay_fill_input.get(), input, _input_size);
+}
+
 void Gekko::InputBuffer::AddLocalInput(Frame frame, u8* input)
 {
 	if (_inputs[frame % _buff_size]->frame == GameInput::NULL_FRAME && _input_delay > 0) {
+		u8* fill = _delay_fill_input ? _delay_fill_input.get() : _empty_input.get();
 		for (i32 i = 0; i < _input_delay; i++) {
-			AddInput(i,  _empty_input.get());
+			AddInput(i, fill);
 		}
 	}
 	AddInput(frame + _input_delay, input);
