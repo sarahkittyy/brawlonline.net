@@ -504,6 +504,11 @@ impl RoomBook {
         self.rooms.len()
     }
 
+    /// A live room has this code (Brawl Mods rooms take codes no P+ room has).
+    pub fn has_code(&self, code: &str) -> bool {
+        self.rooms.contains_key(code)
+    }
+
     /// The code of the room this online connection is in.
     pub fn room_of(&self, conn: ConnId) -> Option<&str> {
         self.member_of.get(&conn).map(String::as_str)

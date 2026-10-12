@@ -19,6 +19,7 @@ pub mod chat;
 pub mod config;
 pub mod engine;
 pub mod messages;
+pub mod mod_rooms;
 pub mod region;
 pub mod room_set;
 pub mod rooms;

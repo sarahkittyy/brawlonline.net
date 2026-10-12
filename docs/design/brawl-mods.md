@@ -68,19 +68,20 @@ A build is what the player picks once in the Brawl Mods tab ("Add a build"):
 
 ## 5. Rooms (server)
 
-Mod rooms are mm rooms with a different kind. What changes from `docs/rooms-protocol.md`:
+Mod rooms live next to P+ rooms in mm (`server/crates/mm/src/mod_rooms.rs`, messages in `server/crates/common/src/mods.rs`), on the same online connection after `hello`, with their own messages rather than a kind on `room-create` (they share nothing with P+ rooms but slots and codes). A player is in at most one room: creating or joining a mod room leaves their P+ room.
 
 | | P+ rooms | Mod rooms |
 |---|---|---|
-| Create | `room-create {public, ruleset}` | `room-create {kind: "mods", build: {hash, name}, public}` |
-| Join | anyone | only with the same `build.hash` (`room-error` "You need <name> (<hash>) to join.") |
-| Ruleset, rules, stages, sets, ready, teams | yes | **none** (refused) |
+| Create | `room-create {public, ruleset}` | `mods-create {build: {hash, name}, public, controller}` (`controller` is `"gc"` or `"wiimote"`) |
+| Join | anyone | `mods-join {code, build: {hash}, controller}`: only with the same `build.hash` (`mods-error` "You need <name> (<hash>) to join.") |
+| Ruleset, rules, stages, sets, ready, teams | yes | **none** |
 | Start | when every open slot is ready | **never**: the host's session runs from creation; members plug in |
-| Slots | open/close, kick by closing | the same, plus **slot moves** (`room-move {slot}` by a member to an open empty slot; `room-move {from, to}` by the host). A move is an unplug and a plug-in at the same agreed frame. |
-| Public list | `GET /v1/rooms` | the same list, with `kind` and `build` per room; the P+ list filters `kind: "pplus"`, the Mods tab `kind: "mods"` |
-| Session signaling | room ticket at the start | **`session-endpoint`** (from the P2P port, like a ticket: mm records the public endpoint) and **`session-peers`** pushed to every member on every change (slot, endpoint, connect code, display name) |
+| Slots | open/close, kick by closing | `mods-slot {slot, open}`, `mods-kick {slot}` (host); `mods-public {public}`; `mods-leave`. Slot moves (`docs` §9 phase 3) later |
+| State | `room-state` | `mods-state {code, public, build, host, you, token, slots: [{slot, open, player?: {displayName, connectCode, controller, endpoint}}]}` to every member after every change; `mods-left` when the receiver is out (left, kicked, slot closed) |
+| Public list | `GET /v1/rooms` | `public_rooms()`: code, build, host name, players, open slots (the launcher's list, phase 7) |
+| Session signaling | room ticket at the start | **`mods-endpoint {token}`**: the member's session sends its `mods-state` token from its P2P UDP port's address on a connection of its own (no `hello`); mm records the address it came from as the member's `endpoint`, answers `mods-endpoint-resp` (with `error` for an unknown token) and closes it. Every member gets the new `mods-state` |
 
-mm stays the only server involved. No game data goes through it: the machine image and inputs are P2P. Rate limits as for P+ rooms. Kicked or banned players cannot rejoin the same room for 10 minutes (**default**).
+mm stays the only server involved. No game data goes through it: the machine image and inputs are P2P. Room codes are never a live P+ room's code. Rate limits as for P+ rooms. Kicked players cannot rejoin the same room for 10 minutes (**default**). An empty room closes; a host who leaves hands the room to the member who has been in it longest.
 
 ## 6. Dolphin
 
@@ -186,7 +187,7 @@ The machine image is the first thing in this project where **one player's machin
 | 3 | Epochs; 3-4 players; unplug, slot move | 4 harness Dolphins; a player leaves and another moves slot mid-match, the rest play on, 0 desyncs. **Built 2026-10-12:** leaving (3 players, one leaves: 0 mismatches), epochs. Slot moves and 4 players not yet |
 | 4 | Machine image join (unhardened, behind a test switch) | A third player joins a running 2-player match and plays; checksums agree after the plug-in. **Built 2026-10-12** (version 1, the players wait): 0 mismatches over ~3,300 frames after joins, GameCube and Wii Remote joiners, single and dual core |
 | 5 | Security: audit, hardening, fuzzing (§7) | §7 step 3's exit criterion; the security doc |
-| 6 | mm: mod rooms and signaling; Dolphin room client; local control channel | Host and join through a local mm, two machines on the LAN (this PC and the Mac) |
+| 6 | mm: mod rooms and signaling; Dolphin room client; local control channel | Host and join through a local mm, two machines on the LAN (this PC and the Mac). **mm built 2026-10-12** (§5) |
 | 7 | Launcher: tab, builds and hashes, room window, public list | Staging run (`tools/staging/staging.py`) with Windows and Mac clients |
 | 8 | VI boundary for non-Brawl games | A non-Brawl game boots and stays in sync (which game: §10) |
 | 9 | Desync repair by resend, Rev 1 / Rev 2 interop test, Linux and Steam Deck | — |

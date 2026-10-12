@@ -76,6 +76,7 @@ use uuid::Uuid;
 use crate::chat::{chat_error, Candidate, ChatBook, ChatConfig, ChatReportRecord, GroupKind};
 use crate::messages as msg;
 use crate::region::RegionMap;
+use crate::mod_rooms::{ModRoomBook, ModRoomsConfig};
 use crate::rooms::{MemberInfo, RoomBook, RoomsConfig};
 use crate::ruleset::Rulesets;
 use crate::versions::FeedVersions;
@@ -138,6 +139,8 @@ pub struct EngineConfig {
     pub ranked_band_interval: Duration,
     /// Rooms: timeouts and limits. Their stages, items and rules are Direct's ruleset.
     pub rooms: RoomsConfig,
+    /// Brawl Mods rooms (`mod_rooms.rs`).
+    pub mod_rooms: ModRoomsConfig,
     /// `hello`s per account (a game opens its online connection once per start or reconnect).
     pub hello_window: Window,
     /// Chat: rate limits.
@@ -166,6 +169,7 @@ impl Default for EngineConfig {
             ranked_band_step: 50.0,
             ranked_band_interval: Duration::from_secs(15),
             rooms: RoomsConfig::default(),
+            mod_rooms: ModRoomsConfig::default(),
             hello_window: Window::new(10, Duration::from_secs(60)),
             chat: ChatConfig::default(),
         }
@@ -376,6 +380,7 @@ pub struct Engine {
     ip_limiter: RateLimiter<IpAddr>,
     hello_limiter: RateLimiter<Uuid>,
     rooms: RoomBook,
+    mod_rooms: ModRoomBook,
     chat: ChatBook,
     next_seq: u64,
     match_counter: u64,
@@ -415,6 +420,7 @@ impl Engine {
         let mut rooms_cfg = cfg.rooms.clone();
         rooms_cfg.rules = cfg.rulesets.for_mode(Mode::Direct);
         let chat = ChatBook::new(cfg.chat.clone());
+        let mod_rooms_cfg = cfg.mod_rooms.clone();
         Engine {
             cfg,
             secret,
@@ -426,6 +432,7 @@ impl Engine {
             ticket_limiter,
             ip_limiter,
             hello_limiter,
+            mod_rooms: ModRoomBook::new(mod_rooms_cfg),
             rooms: RoomBook::new(rooms_cfg),
             chat,
             next_seq: 1,
@@ -533,6 +540,7 @@ impl Engine {
                     self.unindex(conn);
                     self.chat.conn_gone(conn, &mut out);
                     self.rooms.conn_gone(now, conn, &mut out);
+                    self.mod_rooms.conn_gone(conn, &mut out);
                     self.fail_room_tickets(&mut out);
                 }
             }
@@ -610,6 +618,7 @@ impl Engine {
         }
         out.push(Output::Disconnect { conn });
         self.rooms.conn_gone(Instant::now(), conn, out);
+        self.mod_rooms.conn_gone(conn, out);
     }
 
     /// Answers the room game tickets the room book gave up on (a start that timed out, a member
@@ -678,9 +687,23 @@ impl Engine {
                 }
                 return self.on_hello(now, conn, *h, out);
             }
-            Ok(ClientMessage::Room(_) | ClientMessage::Chat(_)) => {
+            Ok(ClientMessage::Room(_) | ClientMessage::Chat(_) | ClientMessage::Mods(_)) => {
                 // Rooms and chat need an online connection: `hello` first.
                 return self.fail_online(out, conn, msg::NOT_LOGGED_IN);
+            }
+            Ok(ClientMessage::ModsEndpoint(probe)) => {
+                // A Brawl Mods member's session, from its P2P socket: where its peers reach it.
+                let addr = self.conns.get(&conn).map(|c| c.addr);
+                let known = addr.is_some_and(|a| self.mod_rooms.endpoint(&probe.token, a, out));
+                let resp = if known {
+                    serde_json::json!({"type": common::mods::MODS_ENDPOINT_RESP})
+                } else {
+                    serde_json::json!({"type": common::mods::MODS_ENDPOINT_RESP, "error": crate::mod_rooms::NOT_FOUND})
+                };
+                Self::send(out, conn, &resp);
+                self.conns.remove(&conn);
+                out.push(Output::Disconnect { conn });
+                return;
             }
             Ok(ClientMessage::Unknown(kind)) => {
                 tracing::warn!(conn, %kind, "unknown message type");
@@ -741,6 +764,31 @@ impl Engine {
                 tracing::warn!(conn, "bad room request: {why}");
                 room_error(out, "invalid", msg::INVALID_REQUEST);
             }
+            Ok(ClientMessage::Mods(Ok(req))) => {
+                let who = MemberInfo {
+                    uid: o.user.uid,
+                    display_name: o.user.display_name.clone(),
+                    connect_code: o.code.clone(),
+                };
+                // One room at a time: a mod room leaves the P+ room.
+                if matches!(req, common::mods::ModsRequest::Create { .. } | common::mods::ModsRequest::Join { .. })
+                    && self.rooms.room_of(conn).is_some()
+                {
+                    self.rooms.request(now, conn, &who, RoomRequest::Leave, out);
+                    self.fail_room_tickets(out);
+                }
+                let rooms = &self.rooms;
+                self.mod_rooms.request(now, conn, &who, req, &|c| rooms.has_code(c), out);
+            }
+            Ok(ClientMessage::Mods(Err(why))) => {
+                tracing::warn!(conn, "bad mods request: {why}");
+                Self::send(
+                    out,
+                    conn,
+                    &RoomError { kind: common::mods::MODS_ERROR.into(), op: "invalid".into(), error: msg::INVALID_REQUEST.into() },
+                );
+            }
+            Ok(ClientMessage::ModsEndpoint(_)) => room_error(out, common::mods::MODS_ENDPOINT, msg::INVALID_REQUEST),
             Ok(ClientMessage::Chat(req)) => self.on_chat(now, conn, &o, req, out),
             Ok(ClientMessage::Hello(_)) => Self::send(out, conn, &hello_ok()),
             Ok(ClientMessage::CreateTicket(_)) => Self::send(out, conn, &CreateTicketResp::error(msg::INVALID_REQUEST)),
@@ -1136,6 +1184,7 @@ impl Engine {
         let window = self.cfg.requeue_window;
         self.history.retain(|_, h| now.saturating_duration_since(h.last_match) < window);
         self.rooms.tick(now, out);
+        self.mod_rooms.tick(now);
         self.fail_room_tickets(out);
     }
 
@@ -2425,6 +2474,45 @@ mod tests {
         let out = h.raw(3, b"{");
         assert_eq!(sent(&out, 3)[0]["type"], "room-error");
         assert!(!disconnected(&out, 3));
+    }
+
+    #[test]
+    fn mod_rooms_on_the_online_connection_and_the_endpoint_probe() {
+        const HASH: &str = "3f9a1c07aa00000000000000000000000000000000000000000000000000beef";
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b) = (user("AA#1", "a"), user("BB#1", "b"));
+        h.add(&a);
+        h.add(&b);
+        h.connect(1, 1);
+        h.connect(2, 2);
+        // Before hello: refused.
+        let out = h.room(1, json!({"type": "mods-create", "build": {"hash": HASH}}));
+        assert!(disconnected(&out, 1));
+        h.connect(1, 1);
+        h.hello(1, &a, "3.4.0");
+        h.hello(2, &b, "3.4.0");
+        let out = h.room(1, json!({"type": "mods-create", "build": {"hash": HASH, "name": "Brawl Minus"}, "public": false}));
+        let s1 = sent(&out, 1).into_iter().find(|m| m["type"] == "mods-state").expect("mods-state");
+        let code = s1["code"].as_str().unwrap().to_string();
+        let out = h.room(2, json!({"type": "mods-join", "code": code, "build": {"hash": HASH}, "controller": "wiimote"}));
+        let s2 = sent(&out, 2).into_iter().find(|m| m["type"] == "mods-state").expect("mods-state");
+        let token = s2["token"].as_str().unwrap().to_string();
+        // Player 2's session probes from its P2P socket, on a connection of its own.
+        h.connect_from(3, "203.0.113.9:51000");
+        let out = h.raw(3, json!({"type": "mods-endpoint", "token": token}).to_string().as_bytes());
+        assert_eq!(sent(&out, 3), vec![json!({"type": "mods-endpoint-resp"})]);
+        assert!(disconnected(&out, 3));
+        let s1 = sent(&out, 1).into_iter().rev().find(|m| m["type"] == "mods-state").expect("mods-state");
+        assert_eq!(s1["slots"][1]["player"]["endpoint"], json!({"host": "203.0.113.9", "port": 51000}));
+        // An unknown token is answered with an error, and the connection closes too.
+        h.connect_from(4, "203.0.113.10:51000");
+        let out = h.raw(4, json!({"type": "mods-endpoint", "token": "00"}).to_string().as_bytes());
+        assert!(sent(&out, 4)[0]["error"].is_string());
+        assert!(disconnected(&out, 4));
+        // The host leaving hands the room over.
+        let out = h.input(Input::Disconnected { conn: 1 });
+        let s2 = sent(&out, 2).into_iter().rev().find(|m| m["type"] == "mods-state").expect("mods-state");
+        assert_eq!(s2["host"], 2);
     }
 
     fn hello_on(h: &mut Harness, conn: ConnId, u: &MmUser, version: &str, platform: &str) -> Vec<Output> {

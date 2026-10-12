@@ -9,6 +9,7 @@
 pub mod chat;
 pub mod codes;
 pub mod db;
+pub mod mods;
 pub mod net;
 pub mod playkey;
 pub mod proto;

@@ -272,6 +272,10 @@ pub enum ClientMessage {
     /// answer in `chat-error` (the message type, `invalid` for an unknown `chat-*` type) and the
     /// reason.
     Chat(Result<crate::chat::ChatRequest, (&'static str, String)>),
+    /// A `mods-*` request (Brawl Mods rooms, `crate::mods`), or why it could not be read.
+    Mods(Result<crate::mods::ModsRequest, String>),
+    /// `mods-endpoint`: a member's session probing from its P2P socket (no `hello`).
+    ModsEndpoint(crate::mods::EndpointProbe),
     /// Valid JSON object with a `type` we do not handle.
     Unknown(String),
 }
@@ -301,6 +305,10 @@ pub fn parse_client_message(data: &[u8]) -> Result<ClientMessage, ParseError> {
             .map(|h| ClientMessage::Hello(Box::new(h)))
             .map_err(|e| ParseError::Malformed(crate::rooms::HELLO, e.to_string())),
         k if k.starts_with("room-") => Ok(ClientMessage::Room(crate::rooms::RoomRequest::parse(k, &value))),
+        crate::mods::MODS_ENDPOINT => serde_json::from_value::<crate::mods::EndpointProbe>(value)
+            .map(ClientMessage::ModsEndpoint)
+            .map_err(|e| ParseError::Malformed(crate::mods::MODS_ENDPOINT, e.to_string())),
+        k if k.starts_with("mods-") => Ok(ClientMessage::Mods(crate::mods::ModsRequest::parse(k, &value))),
         k if k.starts_with("chat-") => {
             Ok(ClientMessage::Chat(crate::chat::ChatRequest::parse(k, &value).map_err(|e| (crate::chat::op_of(k), e))))
         }
