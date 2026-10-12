@@ -601,11 +601,37 @@ namespace OnlineMatch {
     // START on the Direct CSS no longer opened the keypad. Cleared here once the match is left.
     static const u32 PPLUS_PAUSE_OFF = 0x80584084;
 
+    // The HOME Menu is banned for the whole online match (the user's crash, 2026-10-12: "i paused
+    // and it crashed!"). sora_melee lifts its own ban (bit 1) and calls gfHomeMenu's preload
+    // (0x800377D4) on every pause (text+0x256F24) and at the match's end (text+0x2574A8), and
+    // bans it again with an unload (0x80037BE4) on the unpause: an asynchronous read of
+    // /system/homebutton/home_eng.pac (0xD0260 bytes, about 40 frames) into the Network heap,
+    // with a 0x1D000 buffer. gfHomeMenu (DOL .bss 0x80495510), the Network heap and the file
+    // thread are outside the rollback set, while the pause that loads and unloads it is rolled
+    // back, so rollbacks across a pause or an unpause left a loaded archive the menu no longer
+    // knew of: the next pause's load found no room ("File Read (DVD): Alloc Buffer failed"), and
+    // the game hung or crashed. Any ban bit makes preload return at once (and HOME shows the
+    // game's "cannot be used" icon). Bit 6 is the collection viewer's (sora_menu_collect_viewer),
+    // never set in a match; it is set here every match frame (gfHomeMenu is not rolled back, so
+    // it holds) and cleared once when the match is left. The CSS after an online match no longer
+    // keeps the archive in the Network heap either.
+    static const u32 HOME_MENU = 0x805A0090;   // gfHomeMenu* g_gfHomeMenu
+    static const u32 HOME_MENU_SET_BAN = 0x80037D44;
+    static const u32 HOME_BAN_BIT = 6;
+    typedef int (*SetBanFn)(void*, u32, u32);
+
+    static void banHomeMenu(bool ban)
+    {
+        u32 hm = *(u32*)HOME_MENU;
+        if (isPtr(hm)) ((SetBanFn)HOME_MENU_SET_BAN)((void*)hm, ban ? 1 : 0, HOME_BAN_BIT);
+    }
+
     void offMatch()
     {
         s_seen = 0;
         if (s_inMatch) {
             *(volatile u32*)PPLUS_PAUSE_OFF = 0;
+            banHomeMenu(false);
             s_inMatch = false;
         }
     }
@@ -619,6 +645,7 @@ namespace OnlineMatch {
     {
         PPOM::Debug& dbg = PPOM::g_block.debug;
         s_inMatch = true;
+        if (g_onlineCss && g_onlineMatchGame) banHomeMenu(true);
         if ((g_onlineCss && g_onlineMatchGame) || (dbg.cfg & PPOM::CFG_TEST_GONE)) tickPlayers();
         // This player quit a 3-4 player match (pponline_pauseResult) and Dolphin has ended the
         // session for this machine (LOCAL, set only after the session ended): the match ends here
