@@ -1829,8 +1829,16 @@ namespace OnlineMenu {
     static bool roomLocked()
     {
         // Ready, or the room is starting (the lock-in must not change then), or a game is armed.
-        return roomLockedForNext() || g_onlineMatchGame != 0 ||
-               (roomIn() && PPOM::g_block.session.roomStatus == 1);
+        // In a set's session also when Dolphin has this player locked in for the next game (its
+        // panel bit, from the session's lock-in), whatever this CSS thinks: a locked-in token is
+        // never picked up (staging 2026-10-12: a ready player picked it up and could not put it
+        // down).
+        const PPOM::Session& se = PPOM::g_block.session;
+        const int me = roomMe();
+        const bool sessionReady = stepSession() && me >= 0 && me < PPOM::SESSION_PLAYERS &&
+                                  (se.players[me].roomSlot & PPOM::SLOT_READY);
+        return roomLockedForNext() || g_onlineMatchGame != 0 || sessionReady ||
+               (roomIn() && se.roomStatus == 1);
     }
 
     // Every open slot has a player (the room can start once all are ready, rooms.md #7).

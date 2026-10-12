@@ -644,8 +644,20 @@ def test_room_set_characters_between_games(backend: OnlineBackend, dolphin: Call
     b.steps("tap B 8", "wait 30")
     held = B.read_css_area(b.c.read_mem, 0)
     assert held is not None and held.placed, held
-    # The winner locks in: the loser's turn, with the winner's character shown.
-    a.steps("tap START 8", "wait 60")
+    # The winner changes character (B, a row down, A: the hand rests on the token), locks in, and
+    # then A on the locked-in token does nothing (Slippi: it stays put; staging 2026-10-12, a
+    # ready player picked it up and could not put it down).
+    a_old = B.read_css_area(a.c.read_mem, 0).character
+    a.steps("tap B 8", "wait 30", "stick down 12", "wait 20", "tap A 8", "wait 30")
+    a_new = B.read_css_area(a.c.read_mem, 0)
+    assert a_new is not None and a_new.placed and a_new.character not in (a_old, 0x28), (a_old, a_new)
+    a.steps("tap START 8", "wait 30")
+    assert rooms(a)["lock"]["ready"], rooms(a)["lock"]
+    for k in ("A", "B"):
+        a.steps(f"tap {k} 8", "wait 30")
+        held = B.read_css_area(a.c.read_mem, 0)
+        assert held is not None and held.placed and held.character == a_new.character, (k, held)
+    assert rooms(a)["lock"]["ready"], rooms(a)["lock"]
     v = until_setup(b, lambda v: v["my_turn"] and v["may_lock"], "the loser's turn")
     assert v["text"].startswith(f"Your turn: {a.name} picked "), v
     # B calls the token back, the hand takes it down a row onto another character, A puts it.
@@ -656,7 +668,10 @@ def test_room_set_characters_between_games(backend: OnlineBackend, dolphin: Call
     _wait(lambda: room_view(b)["slots"][0]["bits"] & ppom.SLOT_READY and room_view(b)["slots"][0]["char"] != 0xFF,
           10, "B sees A ready with a character")
     b.shot("02-winner-ready")
-    b.steps("tap START 8", "wait 30")
+    # The loser locks in and presses A on the token at once: it stays put (the match is on its way).
+    b.steps("tap START 8", "wait 4", "tap A 8", "wait 6")
+    held = B.read_css_area(b.c.read_mem, 0)
+    assert held is None or (held.placed and held.character == placed.character), held
     online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
                     "game 2 running")
     # The loser (port 1) plays the new character, on both machines.

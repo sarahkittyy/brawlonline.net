@@ -197,7 +197,16 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
         loser.steps("tap START 8", "wait 40")
         assert _locks(loser) == n, "the loser locked in before the winner"
         loser.shot(f"g{game}-css-loser-waits")
+        # The loser's token stays put during the winner's turn; the winner locks in, and then A
+        # and B on the winner's locked-in token do nothing either (staging 2026-10-12).
+        loser.steps("tap B 8", "wait 30")
+        lt = B.read_css_area(loser.c.read_mem, 0)
+        assert lt is not None and lt.placed, lt
         winner.steps("tap START 8", "wait 30")
+        for k in ("A", "B"):
+            winner.steps(f"tap {k} 8", "wait 30")
+            wt = B.read_css_area(winner.c.read_mem, 0)
+            assert wt is None or wt.placed, (k, wt)
         v = _wait_view(loser, lambda v: v["may_lock"], "the loser's turn")
         assert v["text"].startswith(f"Your turn: {winner.name} picked "), v
         loser.shot(f"g{game}-css-loser-turn")
