@@ -18,6 +18,7 @@
 #include "Core/FifoPlayer/FifoRecorder.h"
 #include "Core/HW/Memmap.h"
 #include "Core/HW/VideoInterface.h"
+#include "Core/Rollback/DeltaSaveSlot.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/System.h"
 
@@ -834,6 +835,12 @@ void LoadBPReg(u8 reg, u32 value, int cycles_into_future)
             system.GetGeometryShaderManager(), bp, cycles_into_future);
 }
 
+// The EFB copy registers as the CPU thread's preprocessing of the FIFO sees them, for marking
+// where a copy will write guest RAM (below).
+static u32 s_pp_efb_wh = 0;
+static u32 s_pp_efb_addr = 0;
+static u32 s_pp_efb_stride = 0;
+
 void LoadBPRegPreprocess(u8 reg, u32 value, int cycles_into_future)
 {
   auto& system = Core::System::GetInstance();
@@ -842,6 +849,15 @@ void LoadBPRegPreprocess(u8 reg, u32 value, int cycles_into_future)
   u32 newval = value & 0xffffff;
   switch (reg)
   {
+  case BPMEM_EFB_WH:
+    s_pp_efb_wh = newval;
+    break;
+  case BPMEM_EFB_ADDR:
+    s_pp_efb_addr = newval;
+    break;
+  case BPMEM_EFB_STRIDE:
+    s_pp_efb_stride = newval;
+    break;
   case BPMEM_SETDRAWDONE:
     if ((newval & 0xff) == 0x02)
       system.GetPixelEngine().SetFinish(cycles_into_future);
@@ -859,6 +875,17 @@ void LoadBPRegPreprocess(u8 reg, u32 value, int cycles_into_future)
     UPE_Copy copy;
     copy.Hex = newval;
     Rollback::PresentStats::OnEFBCopyPreprocess(copy.copy_to_xfb != 0);
+    // Mark where the copy will write guest RAM, here in emulated time, so the game-independent
+    // desync checksum skips the same bytes on every machine (the GPU thread marks them too, but
+    // when depends on the host). An over-estimate: a copy writes at most one stride per source
+    // row (texture formats pack four rows into one stride), an XFB copy at most twice the source
+    // rows after its Y scaling.
+    {
+      const u32 height = ((s_pp_efb_wh >> 10) & 0x3FF) + 1;
+      const u32 stride = (s_pp_efb_stride & 0x3FF) << 5;
+      const u32 rows = copy.copy_to_xfb ? 2 * height + 2 : height + 1;
+      Rollback::GPUWrittenBitmap::Get().Mark(s_pp_efb_addr << 5, stride * rows);
+    }
     break;
   }
   }

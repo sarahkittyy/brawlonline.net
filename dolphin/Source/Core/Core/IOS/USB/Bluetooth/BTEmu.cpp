@@ -23,6 +23,7 @@
 #include "Core/Movie.h"
 #include "Core/NetPlayClient.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/SysConf.h"
 #include "Core/System.h"
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
@@ -379,6 +380,17 @@ void BluetoothEmuDevice::Update()
           if (!WiimoteEmu::DeserializeDesiredState(&wiimote_states[wiimote], serialized[wiimote]))
             PanicAlertFmtT("Received invalid Wii Remote data from Netplay.");
         }
+      }
+    }
+
+    // A whole-machine session: every Wii Remote a player plays is that player's input for the
+    // frame running now (the local player's too, which went through the session with its delay).
+    if (Machine::IsArmed())
+    {
+      for (int i = 0; i != MAX_WIIMOTES; ++i)
+      {
+        if (next_call[i] != WiimoteDevice::NextUpdateInputCall::None)
+          Machine::GetWiimote(i, &wiimote_states[i]);
       }
     }
 

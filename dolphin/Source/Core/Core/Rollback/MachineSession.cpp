@@ -36,6 +36,11 @@
 #include "Core/HW/GCPad.h"
 #include "Core/HW/Memmap.h"
 #include "Core/HW/SI/SI_Device.h"
+#include "Core/HW/WII_IPC.h"
+#include "Core/HW/Wiimote.h"
+#include "Core/HW/WiimoteCommon/WiimoteHid.h"
+#include "Core/HW/WiimoteEmu/DesiredWiimoteState.h"
+#include "Core/HW/WiimoteEmu/Extension/Nunchuk.h"
 #include "Core/IOS/FS/HostBackend/FS.h"
 #include "Core/IOS/IOS.h"
 #include "Core/Harness/Harness.h"
@@ -149,6 +154,9 @@ struct State
   bool env_checked = false;
   // The player's controller is a GameCube controller adapter (their own SI device setting).
   bool local_adapter = false;
+  std::array<Controller, MAX_PLAYERS> controller{};
+  u32 wiimote_captures = 0;
+  std::optional<WiimoteOverride> wiimote_override;
 
   // Network (net thread, under `net_mutex`).
   std::mutex net_mutex;
@@ -214,12 +222,24 @@ void AddLog(std::string line)
   s.log.push_back(std::move(line));
 }
 
+void BroadcastControl(const picojson::object& msg);
+
 void Fail(std::string why)
 {
   ERROR_LOG_FMT(BRAWLBACK, "machine: {}", why);
   s.error = std::move(why);
   s.phase = Phase::Error;
   OSD::AddMessage("Session ended: " + s.error, 10000, OSD::Color::RED);
+  // The others stop too, instead of waiting for frames that never come.
+  std::lock_guard lk(s.net_mutex);
+  if (s.host)
+  {
+    picojson::object msg;
+    msg["type"] = picojson::value("leave");
+    msg["reason"] = picojson::value(s.error);
+    BroadcastControl(msg);
+    enet_host_flush(s.host);
+  }
 }
 
 // ------------------------------------------------------------------------------ network thread
@@ -591,8 +611,58 @@ bool CreateGekko()
 
 // ------------------------------------------------------------------------------ frame loop
 
+void CaptureLocalWiimote(Core::System& system, Input* in)
+{
+  auto* hid = WiimoteCommon::GetHIDWiimoteSource(static_cast<unsigned int>(s.opts.local_pad));
+  WiimoteEmu::DesiredWiimoteState state;
+  if (hid)
+  {
+    g_controller_interface.SetCurrentInputChannel(ciface::InputChannel::Bluetooth);
+    g_controller_interface.UpdateInput();
+    const bool bar = static_cast<bool>(system.GetWiiIPC().GetGPIOOutFlags()[IOS::GPIO::SENSOR_BAR]);
+    // The motion simulation (swing, shake, tilt) steps at the Wii Remote's 200 Hz: three or four
+    // steps per frame, 3.33 on average.
+    const int steps = (s.wiimote_captures++ % 3 == 0) ? 4 : 3;
+    for (int i = 0; i < steps; ++i)
+    {
+      hid->PrepareInput(&state, bar ? WiimoteCommon::HIDWiimote::SensorBarState::Enabled :
+                                      WiimoteCommon::HIDWiimote::SensorBarState::Disabled);
+    }
+  }
+  if (s.wiimote_override)
+  {
+    const WiimoteOverride& o = *s.wiimote_override;
+    state.buttons.hex = o.buttons & WiimoteCommon::ButtonData::BUTTON_MASK;
+    if (o.nunchuk)
+    {
+      WiimoteEmu::Nunchuk::DataFormat nc{};
+      nc.jx = o.stick_x;
+      nc.jy = o.stick_y;
+      nc.SetAccel({0x200, 0x200, 0x2CC});
+      nc.SetButtons(o.nunchuk_buttons);
+      state.extension.data = nc;
+    }
+    else
+    {
+      state.extension.data = std::monostate{};
+    }
+  }
+  const WiimoteEmu::SerializedWiimoteState ser = WiimoteEmu::SerializeDesiredState(state);
+  const u8 len = std::min<u8>(ser.length, 31);
+  (*in)[0] |= INPUT_WIIMOTE_CONNECTED;
+  (*in)[9] = len;
+  std::memcpy(in->data() + 10, ser.data.data(), len);
+}
+
 void CaptureLocalInput()
 {
+  if (s.controller[s.opts.local_slot] == Controller::WiiRemote)
+  {
+    Input in{};
+    CaptureLocalWiimote(Core::System::GetInstance(), &in);
+    s.local_input = in;
+    return;
+  }
   GCPadStatus pad;
   if (s.local_adapter)
   {
@@ -831,6 +901,19 @@ struct GranuleMap
 };
 std::array<GranuleMap, 16> s_first_runs;
 std::vector<std::string> s_diag;
+// PPR_MACHINE_DIGESTS: the last frames' granule digests, by frame.
+struct FrameDigest
+{
+  s64 frame = -1;
+  u32 checksum = 0;
+  std::vector<std::pair<u32, u32>> granules;
+};
+std::array<FrameDigest, 256> s_digests;
+bool DigestsEnabled()
+{
+  static const bool on = std::getenv("PPR_MACHINE_DIGESTS") != nullptr;
+  return on;
+}
 u64 s_diag_frames = 0;
 
 void DiagnoseSave(s64 frame)
@@ -917,6 +1000,13 @@ void PerformQueuedSave(Core::System& system)
   s.saves++;
   DiagnoseSave(s.queued_save.frame);
   const u32 sum = rb.LastSaveChecksum();
+  if (DigestsEnabled() && s.queued_save.frame >= 0)
+  {
+    FrameDigest& d = s_digests[static_cast<size_t>(s.queued_save.frame) % s_digests.size()];
+    d.frame = s.queued_save.frame;
+    d.checksum = sum;
+    d.granules = rb.LastSaveDigest();
+  }
   if (s.queued_save.checksum)
     *s.queued_save.checksum = sum;
   // Record the frame's inputs with its checksum (the pass that ran it last is the one that counts).
@@ -1010,10 +1100,22 @@ enum class Wait
 // move emulated time in a way no other machine (and no re-run) repeats.
 Wait WaitForFrames(Core::System& system)
 {
+  // A peer that sends nothing for this long is gone (GekkoNet drops one after 5 s of silence; a
+  // start barrier or handshake that never completes ends the same way).
+  constexpr auto STALL_LIMIT = std::chrono::seconds(10);
+  constexpr auto CONNECT_LIMIT = std::chrono::seconds(60);
   auto& cpu = system.GetCPU();
   bool waited = false;
+  const auto since = Clock::now();
   for (;;)
   {
+    const auto waited_for = Clock::now() - since;
+    if ((s.phase == Phase::Running && waited_for > STALL_LIMIT) ||
+        (s.phase != Phase::Running && waited_for > CONNECT_LIMIT))
+    {
+      Fail(s.phase == Phase::Running ? "Connection lost" : "Could not connect to the players");
+      return Wait::Ended;
+    }
     const Phase phase = s.phase;
     if (phase == Phase::Error || phase == Phase::Stopped || phase == Phase::Idle)
       return Wait::Ended;
@@ -1069,7 +1171,11 @@ Wait WaitForFrames(Core::System& system)
         break;
     }
     waited = true;
+    // The lock is let go while sleeping, so status and control requests get through. OnLoopTop
+    // holds it exactly once.
+    s.mutex.unlock();
     std::this_thread::sleep_for(std::chrono::microseconds(250));
+    s.mutex.lock();
   }
   if (waited)
     system.GetCoreTiming().ResetThrottleToNow();
@@ -1217,6 +1323,26 @@ std::optional<Options> ParseOptions(const picojson::value& json, std::string* er
   opts.rtc = static_cast<u64>(rtc);
   if (const auto it = o.find("name"); it != o.end() && it->second.is<std::string>())
     opts.name = it->second.get<std::string>().substr(0, 64);
+  auto controller_of = [](const picojson::object& obj, Controller* c) {
+    const auto it = obj.find("controller");
+    if (it == obj.end())
+      return true;
+    if (!it->second.is<std::string>())
+      return false;
+    const std::string& v = it->second.get<std::string>();
+    if (v == "gc")
+      *c = Controller::GameCube;
+    else if (v == "wiimote")
+      *c = Controller::WiiRemote;
+    else
+      return false;
+    return true;
+  };
+  if (!controller_of(o, &opts.controller))
+  {
+    *error = "controller must be \"gc\" or \"wiimote\"";
+    return std::nullopt;
+  }
   if (const auto it = o.find("peers"); it != o.end() && it->second.is<picojson::array>())
   {
     for (const auto& pv : it->second.get<picojson::array>())
@@ -1242,6 +1368,11 @@ std::optional<Options> ParseOptions(const picojson::value& json, std::string* er
         return std::nullopt;
       }
       p.slot = static_cast<int>(ps);
+      if (!controller_of(po, &p.controller))
+      {
+        *error = "a peer's controller must be \"gc\" or \"wiimote\"";
+        return std::nullopt;
+      }
       p.host = h->second.get<std::string>();
       p.port = static_cast<u16>(pp);
       opts.peers.push_back(std::move(p));
@@ -1271,6 +1402,9 @@ bool Arm(const Options& options, std::string* error)
   s.log.clear();
   s.peers = {};
   s.players = 1u << options.local_slot;
+  s.controller = {};
+  s.controller[options.local_slot] = options.controller;
+  s.wiimote_captures = 0;
   s.local_adapter = Config::Get(Config::GetInfoForSIDevice(options.local_pad)) ==
                     SerialInterface::SIDEVICE_WIIU_ADAPTER;
   for (const Peer& p : options.peers)
@@ -1280,6 +1414,7 @@ bool Arm(const Options& options, std::string* error)
     link.host = p.host;
     link.port = p.port;
     s.players |= 1u << p.slot;
+    s.controller[p.slot] = p.controller;
   }
   s.ops.Clear();
   s.iteration = 0;
@@ -1437,7 +1572,11 @@ NetPlay::NetSettings MakeNetSettings()
   ns.wiimote_map.fill(0);
   for (int slot = 0; slot < MAX_PLAYERS; ++slot)
   {
-    if ((s.players >> slot) & 1)
+    if (!((s.players >> slot) & 1))
+      continue;
+    if (s.controller[slot] == Controller::WiiRemote)
+      ns.wiimote_map[slot] = static_cast<NetPlay::PlayerId>(slot + 1);
+    else
       ns.pad_map[slot] = static_cast<NetPlay::PlayerId>(slot + 1);
   }
   ns.local_player_id = static_cast<NetPlay::PlayerId>(s.opts.local_slot + 1);
@@ -1455,7 +1594,7 @@ bool GetPad(int port, GCPadStatus* status)
     return false;
   if (port < 0 || port >= MAX_PLAYERS)
     return false;
-  if (!((s.players >> port) & 1))
+  if (!((s.players >> port) & 1) || s.controller[port] != Controller::GameCube)
   {
     *status = GCPadStatus{};
     status->isConnected = false;
@@ -1464,6 +1603,42 @@ bool GetPad(int port, GCPadStatus* status)
   // Before the session runs (boot) every player's controller is neutral on every machine.
   *status = DecodePad(s.latched[port]);
   return true;
+}
+
+// A Wii Remote at rest, no extension (the struct has no assignment).
+void ResetWiimoteState(WiimoteEmu::DesiredWiimoteState* state)
+{
+  state->buttons = {};
+  state->acceleration = WiimoteEmu::DesiredWiimoteState::DEFAULT_ACCELERATION;
+  state->camera_points = WiimoteEmu::DesiredWiimoteState::DEFAULT_CAMERA;
+  state->motion_plus.reset();
+  state->extension.data = std::monostate{};
+}
+
+bool GetWiimote(int index, WiimoteEmu::DesiredWiimoteState* state)
+{
+  if (!IsArmed() || index < 0 || index >= MAX_PLAYERS)
+    return false;
+  if (!((s.players >> index) & 1) || s.controller[index] != Controller::WiiRemote)
+    return false;
+  const Input& in = s.latched[index];
+  ResetWiimoteState(state);
+  // Before the session runs (boot), or a player who sent nothing yet: a Wii Remote at rest.
+  if (!(in[0] & INPUT_WIIMOTE_CONNECTED))
+    return true;
+  WiimoteEmu::SerializedWiimoteState ser{};
+  ser.length = std::min<u8>(in[9], static_cast<u8>(ser.data.size()));
+  std::memcpy(ser.data.data(), in.data() + 10, ser.length);
+  // The bytes came from a peer: anything that does not parse is a Wii Remote at rest.
+  if (!WiimoteEmu::DeserializeDesiredState(state, ser))
+    ResetWiimoteState(state);
+  return true;
+}
+
+void SetWiimoteOverride(std::optional<WiimoteOverride> value)
+{
+  std::lock_guard lk(s.mutex);
+  s.wiimote_override = value;
 }
 
 bool OnLoopTop(const Core::CPUThreadGuard& guard)
@@ -1631,6 +1806,24 @@ picojson::value Status()
   return picojson::value(o);
 }
 
+picojson::value Digest(s64 frame)
+{
+  std::lock_guard lk(s.mutex);
+  picojson::object o;
+  if (frame < 0)
+    return picojson::value(o);
+  const FrameDigest& d = s_digests[static_cast<size_t>(frame) % s_digests.size()];
+  if (d.frame != frame)
+    return picojson::value(o);
+  o["frame"] = picojson::value(static_cast<double>(frame));
+  o["checksum"] = picojson::value(static_cast<double>(d.checksum));
+  std::string text;
+  for (const auto& [addr, crc] : d.granules)
+    text += fmt::format("{:08x}:{:08x} ", addr, crc);
+  o["granules"] = picojson::value(text);
+  return picojson::value(o);
+}
+
 picojson::value History(s64 since)
 {
   std::lock_guard lk(s.mutex);
@@ -1649,7 +1842,8 @@ picojson::value History(s64 since)
     for (const Input& in : e.inputs)
     {
       std::string hex;
-      for (int i = 0; i < 9; ++i)
+      const int n = (in[0] & INPUT_WIIMOTE_CONNECTED) ? 10 + std::min<int>(in[9], 31) : 9;
+      for (int i = 0; i < n; ++i)
         hex += fmt::format("{:02x}", in[i]);
       row.emplace_back(hex);
     }

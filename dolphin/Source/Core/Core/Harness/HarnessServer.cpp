@@ -1428,6 +1428,34 @@ Result CmdMachineHistory(const Args& args)
   return Machine::History(static_cast<s64>(GetU64(args, "since", 0))).get<picojson::object>();
 }
 
+// machine_wiimote: what the local Wii Remote reads in a machine session ({"clear": true} ends it):
+// "buttons" (WiimoteCommon::ButtonData hex), and optionally "nunchuk": {"x", "y", "buttons"}.
+Result CmdMachineWiimote(const Args& args)
+{
+  if (GetBool(args, "clear", false))
+  {
+    Machine::SetWiimoteOverride(std::nullopt);
+    return {};
+  }
+  Machine::WiimoteOverride o;
+  o.buttons = static_cast<u16>(GetU64(args, "buttons", 0));
+  if (const picojson::value* nc = Find(args, "nunchuk"); nc && nc->is<picojson::object>())
+  {
+    const Args& n = nc->get<picojson::object>();
+    o.nunchuk = true;
+    o.stick_x = static_cast<u8>(GetU64(n, "x", 0x80));
+    o.stick_y = static_cast<u8>(GetU64(n, "y", 0x80));
+    o.nunchuk_buttons = static_cast<u8>(GetU64(n, "buttons", 0));
+  }
+  Machine::SetWiimoteOverride(o);
+  return {};
+}
+
+Result CmdMachineDigest(const Args& args)
+{
+  return Machine::Digest(static_cast<s64>(GetU64(args, "frame"))).get<picojson::object>();
+}
+
 Result CmdMachineStop(const Args&)
 {
   Machine::Stop();
@@ -1822,6 +1850,8 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"machine_status", CmdMachineStatus},
       {"machine_history", CmdMachineHistory},
       {"machine_stop", CmdMachineStop},
+      {"machine_wiimote", CmdMachineWiimote},
+      {"machine_digest", CmdMachineDigest},
       {"gprb_samples", CmdGprbSamples},
       {"gpu_state", CmdGpuState},
       {"gprb_census", CmdGprbCensus},

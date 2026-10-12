@@ -45,7 +45,7 @@ struct NetSettings;
 
 namespace WiimoteEmu
 {
-struct SerializedWiimoteState;
+struct DesiredWiimoteState;
 }
 
 namespace Machine
@@ -71,11 +71,21 @@ enum class Boundary
   BrawlLoop,  // the Brawl game loop's HLE hooks
 };
 
+// What a player plays with. A player in slot N drives GameCube port N, or Wii Remote N (with
+// whatever extension their own Wii Remote config has: it travels in their input). The other
+// device of that slot is not plugged in.
+enum class Controller
+{
+  GameCube,
+  WiiRemote,
+};
+
 struct Peer
 {
   int slot = -1;     // the peer's in-game port (0-3)
   std::string host;  // its address
   u16 port = 0;
+  Controller controller = Controller::GameCube;
 };
 
 struct Options
@@ -93,8 +103,9 @@ struct Options
   // Sync test (one player, no network): a GekkoNet stress session that loads the state from
   // `synctest` frames back on every frame and runs the frames again, comparing checksums.
   int synctest = 0;
-  // The local controller (Dolphin's GameCube pad config index) this player plays with.
+  // The local controller (Dolphin's GameCube pad / Wii Remote config index) this player plays with.
   int local_pad = 0;
+  Controller controller = Controller::GameCube;
   std::string name;
 };
 
@@ -129,8 +140,25 @@ bool IsResimulationPass();
 // CPU thread: the GameCube controller in `port` for the frame running now. False when the session
 // is not armed (the caller reads the local controller as usual).
 bool GetPad(int port, GCPadStatus* status);
+// CPU thread, from the emulated Bluetooth stack's Wii Remote update: replaces `state` with Wii
+// Remote `index`'s state for the frame running now. False when the session is not armed or no
+// player plays that Wii Remote.
+bool GetWiimote(int index, WiimoteEmu::DesiredWiimoteState* state);
+
+// Harness: replaces what the local Wii Remote reads (core buttons; a Nunchuk's stick and C/Z).
+struct WiimoteOverride
+{
+  u16 buttons = 0;  // WiimoteCommon::ButtonData::hex
+  bool nunchuk = false;
+  u8 stick_x = 0x80, stick_y = 0x80;
+  u8 nunchuk_buttons = 0;  // Nunchuk::BUTTON_C | BUTTON_Z
+};
+void SetWiimoteOverride(std::optional<WiimoteOverride> value);
 
 picojson::value Status();
 // Confirmed frames from `since`: frame -> [input bytes of each player (hex), checksum].
 picojson::value History(s64 since);
+// With PPR_MACHINE_DIGESTS=1: the granule digest of a recent frame's save (RollbackManager::
+// LastSaveDigest), to diff two machines whose checksums differ.
+picojson::value Digest(s64 frame);
 }  // namespace Machine

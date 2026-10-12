@@ -20,6 +20,7 @@
 #include "Core/HW/Memmap.h"
 #include "Core/IOS/IOS.h"
 #include "Core/IOS/VersionInfo.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 
 namespace IOS::HLE
@@ -54,7 +55,26 @@ void SDIOSlot0Device::RefreshConfig()
 void SDIOSlot0Device::DoState(PointerWrap& p)
 {
   Device::DoState(p);
+  // The pending insert/remove event (the request it will answer) and the card's inserted state:
+  // without them a rollback lost or kept an event the restored timeline has not got, and the
+  // event's reply reached guest RAM differently on the machine that rolled back (from Nyx's fork
+  // of Project-Plus-Dolphin).
+  bool has_event = m_event != nullptr;
+  EventType event_type = has_event ? m_event->type : EVENT_INVALID;
+  u32 event_request_address = has_event ? m_event->request.address : 0;
+  p.Do(has_event);
+  p.Do(event_type);
+  p.Do(event_request_address);
+  p.Do(m_sd_card_inserted);
   if (p.IsReadMode())
+  {
+    if (has_event)
+      m_event = std::make_unique<Event>(event_type, Request(GetSystem(), event_request_address));
+    else
+      m_event.reset();
+  }
+  // A whole-machine session loads snapshots many times a second: keep the open card image.
+  if (p.IsReadMode() && !(Machine::IsArmed() && m_card.IsOpen()))
   {
     OpenInternal();
   }

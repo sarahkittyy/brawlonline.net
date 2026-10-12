@@ -1120,6 +1120,35 @@ u32 RollbackManager::LastSaveChecksum() const
   return crc ? crc : 1;
 }
 
+std::vector<std::pair<u32, u32>> RollbackManager::LastSaveDigest() const
+{
+  std::vector<std::pair<u32, u32>> out;
+  if (!m_initialized || m_ring_count == 0)
+    return out;
+  const DeltaSaveSlot& saved = m_slots[Wrap(m_ring_next - 1, NUM_SAVE_SLOTS)];
+  const u8* gpu = GPUWrittenBitmap::Get().entries;
+  for (const auto& [delta, first_page] :
+       {std::pair{&saved.m_mem1_delta, 0u}, std::pair{&saved.m_mem2_delta, MEM2_FIRST_PAGE}})
+  {
+    for (u32 i = 0; i < delta->page_count; ++i)
+    {
+      const u32 page = first_page + delta->page_indices[i];
+      if (gpu[page])
+        continue;
+      const u32 phys = page << ROLLBACK_PAGE_SHIFT;
+      bool excluded = false;
+      for (const MemoryRegion& r : m_exclude_regions)
+        excluded |= phys < r.phys_end && phys + ROLLBACK_PAGE_SIZE > r.phys_start;
+      if (excluded)
+        continue;
+      out.emplace_back(phys, Common::ComputeCRC32(delta->page_data.data() +
+                                                      static_cast<size_t>(i) * ROLLBACK_PAGE_SIZE,
+                                                  ROLLBACK_PAGE_SIZE));
+    }
+  }
+  return out;
+}
+
 void RollbackManager::SetBrawlExclusions(bool brawl)
 {
   m_brawl_exclusions = brawl;
@@ -1382,6 +1411,16 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
   };
 
   bool ok = true;
+  // With the IOS devices in the snapshots (a whole-machine session), RAM must be back before their
+  // states load: the emulated Bluetooth stack, for one, re-reads its pending IPC requests from
+  // guest RAM while loading (it read the newer timeline's RAM and crashed on a null request). The
+  // netplay path overlaps the two.
+  job::Job* ram_job = nullptr;
+  if (!m_region_mode && m_full_ios_in_snapshots)
+  {
+    ROLLBACK_ZONE_N("RAM restore before devices");
+    job::DrainJobsUntilComplete(m_dispatch_thread, restore_ram());
+  }
   if (!m_region_mode)
   {
     ROLLBACK_ZONE_N("DoState restore");
@@ -1397,7 +1436,8 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
     EndDoState();
   }
 
-  job::Job* ram_job = restore_ram();
+  if (m_region_mode || !m_full_ios_in_snapshots)
+    ram_job = restore_ram();
 
   if (m_region_mode)
   {
@@ -1433,7 +1473,8 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
       std::memcpy(m_l1_cache_ptr, deltaSave.m_l1_cache_snapshot.data(), m_l1_cache_size);
   }
 
-  job::DrainJobsUntilComplete(m_dispatch_thread, ram_job);
+  if (ram_job)
+    job::DrainJobsUntilComplete(m_dispatch_thread, ram_job);
 
 #if ROLLBACK_VALIDATE
   CompareValSnapshot(target_slot, frames_back);

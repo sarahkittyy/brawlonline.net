@@ -56,6 +56,9 @@ public:
   // the same frame from the same state, whatever the game (Machine::Session's desync check). 0
   // before the first save.
   u32 LastSaveChecksum() const;
+  // The granules LastSaveChecksum covers: (physical address, CRC32 of the 64 bytes), for finding
+  // what differs between two machines whose checksums differ (diagnostics).
+  std::vector<std::pair<u32, u32>> LastSaveDigest() const;
   // Whole-machine snapshots exclude Brawl's framebuffer region (Init). Other games: nothing.
   void SetBrawlExclusions(bool brawl);
 
