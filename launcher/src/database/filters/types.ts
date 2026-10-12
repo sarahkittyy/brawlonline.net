@@ -175,8 +175,22 @@ export type TeamsFilter = {
   negate?: boolean;
 };
 
+/**
+ * Filter for the online match a game was part of (a set's games, a runback): the replay's match
+ * id (game.session_id), as the server's match history names it.
+ *
+ * Examples:
+ * - { sessionIds: ["mode.ranked-2026-10-12T18:02:55.120Z-1a"] } = that set's games
+ */
+export type SessionFilter = {
+  type: "session";
+  sessionIds: string[];
+  negate?: boolean;
+};
+
 export type ReplayFilter =
   | DurationFilter
+  | SessionFilter
   | PlayerFilter
   | GameModeFilter
   | StageFilter

@@ -131,6 +131,10 @@ namespace OnlineMenu {
         int roomZHeld;
         int roomKickPort;                   // the host holds A on this occupied slot (-1 none)
         int roomKickHeld;                   // for this many frames
+        // A replay (PPOM v8, the playback Dolphin): this CSS plays the replays Dolphin puts in
+        // SESSION, each one's match once (playbackPending), and takes no input.
+        bool playback;
+        bool playbackPending;
     };
     static State s;
     bool roomCss();
@@ -1404,6 +1408,8 @@ namespace OnlineMenu {
         s.roomReload = false;
         s.roomZHeld = 0;
         s.roomKickPort = -1;
+        s.playback = false;
+        s.playbackPending = false;
         // Leaving the CSS goes back to the page the mode was picked on (netmenu.cpp
         // exitToOnlinePage): Direct to the ONLINE page, Unranked/Teams to WITH ANYONE.
         // Direct (BASIC VERSUS) goes back to WITH FRIENDS' page (sqMenuMain entry 0x1C reopens
@@ -1438,6 +1444,8 @@ namespace OnlineMenu {
         s.roomEntry = ROOM_ENTRY_NONE;
         s.mode = -1;
         s.codePreset = false;
+        s.playback = false;
+        s.playbackPending = false;
         s.phase = PH_IDLE;
         s.searchSeq = 0;
         s.pollPending = false;
@@ -2579,13 +2587,24 @@ namespace OnlineMenu {
 
     // The launcher's Play unranked / Play ranked: LOCAL.directJoin bumped with a zero prefix and
     // directNumber 1 / 2 (docs/rooms-game-interface.md). That mode, else -1 (a Direct invite).
+    static const int QUEUE_PLAYBACK = 100;   // launcherQueue: a replay (PPOM v8)
     static int launcherQueue()
     {
         const PPOM::Local& l = PPOM::g_block.local;
         for (int k = 0; k < 4; k++) {
             if (l.directPrefix[k]) return -1;
         }
-        return l.directNumber == 1 ? PPOM::MODE_UNRANKED : l.directNumber == 2 ? PPOM::MODE_RANKED : -1;
+        if (l.directNumber == PPOM::QUEUE_PLAYBACK) return QUEUE_PLAYBACK;
+        return l.directNumber == PPOM::QUEUE_UNRANKED ? PPOM::MODE_UNRANKED :
+               l.directNumber == PPOM::QUEUE_RANKED ? PPOM::MODE_RANKED : -1;
+    }
+
+    // A replay: the CSS of the mode it was played in (SESSION's), which then starts its match.
+    static void enterPlayback(int mode)
+    {
+        enter(mode);
+        s.playback = true;
+        s.playbackPending = true;
     }
 
     // The CSS of `mode`: Direct with the invite's code (back from the CSS: WITH FRIENDS, Direct
@@ -2614,6 +2633,30 @@ namespace OnlineMenu {
         }
         if (j == s_directSeen) return;
         int queue = launcherQueue();
+        if (queue == QUEUE_PLAYBACK) {
+            u8 sm = PPOM::g_block.session.mode;
+            int mode = sm <= PPOM::MODE_TEAMS ? sm : PPOM::MODE_UNRANKED;
+            if (onJumpPage(scene)) {
+                if (!decideOnlineCss()) return;
+                enterPlayback(mode);
+                s_directSeen = j;
+                s_jumpPage = NULL;
+                return;
+            }
+            if (g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0 && !CodeEntry::active()) {
+                s_directSeen = j;
+                if (s.mode == mode && !roomCss() && s.phase == PH_IDLE) {
+                    s.playback = true;
+                    s.playbackPending = true;
+                    return;
+                }
+                bool room = roomCss();
+                enterPlayback(mode);
+                if (room) RoomCss::releaseRecords();
+                leaveCss(1);   // OnlineMatch: no match armed -> back to the CSS (restoreCss)
+            }
+            return;
+        }
         int mode = queue >= 0 ? queue : PPOM::MODE_DIRECT;
         if (onJumpPage(scene)) {
             if (!decideOnlineCss()) return;
@@ -2645,7 +2688,7 @@ namespace OnlineMenu {
     // until START locks in.
     static bool startReadies()
     {
-        if (CodeEntry::active()) return false;
+        if (CodeEntry::active() || s.playback) return false;
         if (roomCss()) {
             const PPOM::Session& se = PPOM::g_block.session;
             if (!roomIn()) {
@@ -2780,6 +2823,25 @@ namespace OnlineMenu {
             if (p >= 0) s.startPad = (u8)p;
         }
         maskStart();
+        if (s.playback) {
+            // A replay: nothing the player presses here does anything (START would search, B and
+            // Z would leave). Its match starts once SESSION has it, as a connected game's does.
+            maskButtons(BTN_START | BTN_B | BTN_Z);
+            const PPOM::Session& se = PPOM::g_block.session;
+            if (s.playbackPending && se.state == PPOM::SS_MATCH_READY && se.game) {
+                s.playbackPending = false;
+                g_onlineMatchGame = se.game;
+                PPOM::g_block.debug.scratch[10] = 0x100 * se.game;   // tests: the match started
+                leaveCss(1);
+            }
+            g_onlineCssLock = 1;
+            setStatus(s.playbackPending ? "Loading replay" : "Replay", false);
+            if (s.statusDirty && s.cssMsg) {
+                printCssStatus();
+                s.statusDirty = false;
+            }
+            return;
+        }
         if (CodeEntry::active()) {
             CodeEntry::tick(pressed & BTN_START);
         } else if (roomCss()) {

@@ -81,6 +81,7 @@ export interface ReplayProvider {
       excludeFilePaths?: string[];
     },
   ): Promise<{ deletedCount: number }>;
+  findReplaysForMatches(matchIds: string[], folders: string[]): Promise<Record<string, string[]>>;
 }
 
 export type SearchGamesOptions = {
@@ -119,6 +120,12 @@ export interface ReplayService {
   calculateStadiumStats(filePath: string): Promise<{ file: FileResult; stadiumStats: StadiumStatsType | undefined }>;
   deleteReplays(fileIds: string[]): Promise<void>;
   bulkDeleteReplays(options: BulkDeleteOptions): Promise<BulkDeleteResult>;
+  /**
+   * The replays on this computer of each online match (the server's match id: a set's games, a
+   * runback), oldest first, from the replay folders (`folders` and their month folders, indexed
+   * first). A match without any is left out.
+   */
+  findReplaysForMatches(matchIds: string[], folders: string[]): Promise<Record<string, string[]>>;
   onReplayLoadProgressUpdate(handle: (progress: Progress) => void): () => void;
   onStatsPageRequest(handle: (filePath: string) => void): () => void;
 }

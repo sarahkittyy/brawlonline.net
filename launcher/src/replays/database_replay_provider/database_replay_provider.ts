@@ -11,6 +11,7 @@ import { shell } from "electron";
 import log from "electron-log";
 import { pathExists } from "fs-extra";
 import type { Kysely, Transaction } from "kysely";
+import { readdir } from "node:fs/promises";
 import path from "path";
 
 import { extractPlayerNames } from "../extract_player_names";
@@ -160,6 +161,47 @@ export class DatabaseReplayProvider implements ReplayProvider {
       continuation: newContinuation,
       totalCount,
     };
+  }
+
+  async findReplaysForMatches(matchIds: string[], folders: string[]): Promise<Record<string, string[]>> {
+    // The replay folders and their month folders (Dolphin's ReplayMonthlyFolders), indexed first:
+    // only files the database has can be found by match.
+    const toSync: string[] = [];
+    for (const folder of folders.slice(0, 16)) {
+      if (!(await pathExists(folder))) {
+        continue;
+      }
+      toSync.push(folder);
+      try {
+        const entries = await readdir(folder, { withFileTypes: true });
+        for (const e of entries) {
+          if (e.isDirectory() && /^\d{4}-\d{2}$/.test(e.name)) {
+            toSync.push(path.join(folder, e.name));
+          }
+        }
+      } catch (err) {
+        log.warn(`Could not list ${folder}: ${err}`);
+      }
+    }
+    for (const folder of toSync) {
+      await this.syncReplayDatabase(folder, undefined, INSERT_REPLAY_BATCH_SIZE);
+    }
+    const found: Record<string, string[]> = {};
+    for (const matchId of matchIds.slice(0, 200)) {
+      if (!matchId) {
+        continue;
+      }
+      const records = await GameRepository.getAllFilePaths(
+        this.db,
+        null,
+        [{ type: "session", sessionIds: [matchId] }],
+        { field: "startTime", direction: "asc" },
+      );
+      if (records.length > 0) {
+        found[matchId] = records.map((record) => path.resolve(record.folder, record.name));
+      }
+    }
+    return found;
   }
 
   async getAllFilePaths(

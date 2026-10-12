@@ -83,6 +83,13 @@ export const FILTER_SCHEMA: FilterDefinition[] = [
     category: "game",
   },
   {
+    key: "match",
+    description: "The online match the game was part of (the match history's Replays link)",
+    valueType: "string",
+    examples: ['match:"mode.ranked-2026-10-12T18:02:55.120Z-1a"'],
+    category: "game",
+  },
+  {
     key: "code",
     description: "Player's connect code",
     valueType: "string",

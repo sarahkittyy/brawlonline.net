@@ -128,6 +128,24 @@ public:
       if (p.is_local)
         o.name = p.display_name;
     }
+    // The replays of this session's games: who sits on which in-game port (as SESSION's names: a
+    // 1v1 outside rooms has the decider on P1, else the server's ports).
+    o.replay_meta.match_id = match.match_id;
+    o.replay_meta.mode = match.mode;
+    o.replay_meta.room = room;
+    if (match.rules)
+      o.replay_meta.rules = Online::ToJson(*match.rules);
+    for (const auto& p : match.players)
+    {
+      const int port = o.local_slot >= 0 ? p.port - 1 : (p.is_local == match.is_host ? 0 : 1);
+      if (port < 0 || port >= Session::MAX_LOBBY_PLAYERS)
+        continue;
+      auto& m = o.replay_meta.players[port];
+      m.present = true;
+      m.uid = p.uid;
+      m.name = p.display_name;
+      m.code = p.connect_code;
+    }
 
     // Free the punched port (polite ENet disconnect, acknowledged), then bind it again.
     link.Release();

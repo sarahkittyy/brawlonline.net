@@ -45,6 +45,12 @@ export const ipc_deleteReplays = makeEndpoint.main("deleteReplays", <{ fileIds: 
 
 export const ipc_bulkDeleteReplays = makeEndpoint.main("bulkDeleteReplays", <BulkDeleteOptions>_, <BulkDeleteResult>_);
 
+export const ipc_findReplaysForMatches = makeEndpoint.main(
+  "findReplaysForMatches",
+  <{ matchIds: string[]; folders: string[] }>_,
+  <Record<string, string[]>>_,
+);
+
 // Events
 
 export const ipc_loadProgressUpdatedEvent = makeEndpoint.renderer("replays_loadProgressUpdated", <Progress>_);

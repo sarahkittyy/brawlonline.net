@@ -15,6 +15,17 @@ export type ReplayCommunication = {
   rollbackDisplayMethod?: "off" | "normal" | "visible"; // default off; normal shows like a player experienced it, visible shows ALL frames (normal and rollback)
   gameStation?: string;
   queue?: ReplayQueueItem[];
+  /** Ours: play a replay recorded with another version anyway (the player was asked). */
+  playAnyway?: boolean;
+};
+
+/** What the playback Dolphin writes to `<comm file>.status.json` (Core/Rollback/ReplayPlayback.h). */
+export type ReplayPlaybackStatus = {
+  commandId?: string;
+  state?: "idle" | "loading" | "waiting" | "playing" | "ended" | "error";
+  replay?: string;
+  error?: string;
+  needsPlayAnyway?: boolean;
 };
 
 export type ReplayQueueItem = {

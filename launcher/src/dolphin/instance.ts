@@ -7,12 +7,12 @@ import electronLog from "electron-log";
 import { EventEmitter } from "events";
 import debounce from "lodash/debounce";
 import { mkdirSync } from "node:fs";
-import { unlink, writeFile } from "node:fs/promises";
+import { readFile, unlink, writeFile } from "node:fs/promises";
 import path from "path";
 import { fileExists } from "utils/file_exists";
 
 import { sanitizeAppImageEnv } from "./app_image_env/app_image_env";
-import type { ReplayCommunication } from "./types";
+import type { ReplayCommunication, ReplayPlaybackStatus } from "./types";
 
 const log = electronLog.scope("dolphin/instance");
 const isMac = process.platform === "darwin";
@@ -133,23 +133,71 @@ export class DolphinInstance extends EventEmitter {
 export class PlaybackDolphinInstance extends DolphinInstance {
   private commPath: string;
   private lastWriteMs: number;
+  private lastOptions: ReplayCommunication | null = null;
+  private statusTimer: ReturnType<typeof setInterval> | null = null;
+  private askedFor = new Set<string>();
+  /**
+   * Called when Dolphin refused the current replay because it was recorded with another version
+   * (or its match could not be rebuilt here): the launcher asks the player, and `playAnyway()`
+   * plays it all the same (docs/design/replays.md §6.5).
+   */
+  onNeedsPlayAnyway: ((status: ReplayPlaybackStatus) => void) | null = null;
 
   constructor(execPath: string, baseParams: string[] = []) {
     super(execPath, baseParams);
     this.commPath = generateTempCommunicationFile();
     this.lastWriteMs = 0;
 
-    // Delete the comm file once Dolphin is closed
+    // Delete the comm file (and Dolphin's status next to it) once Dolphin is closed
     this.on("close", async () => {
-      try {
-        const exists = await fileExists(this.commPath);
-        if (exists) {
-          await unlink(this.commPath);
+      if (this.statusTimer) {
+        clearInterval(this.statusTimer);
+        this.statusTimer = null;
+      }
+      for (const file of [this.commPath, `${this.commPath}.status.json`]) {
+        try {
+          if (await fileExists(file)) {
+            await unlink(file);
+          }
+        } catch (err) {
+          log.warn(err);
         }
-      } catch (err) {
-        log.warn(err);
       }
     });
+  }
+
+  /** Dolphin's status of what it plays (`<comm>.status.json`), or null before it wrote one. */
+  async readStatus(): Promise<ReplayPlaybackStatus | null> {
+    try {
+      const text = await readFile(`${this.commPath}.status.json`, "utf8");
+      const status = JSON.parse(text);
+      return status !== null && typeof status === "object" ? (status as ReplayPlaybackStatus) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  private watchStatus() {
+    if (this.statusTimer) {
+      return;
+    }
+    this.statusTimer = setInterval(() => {
+      void this.readStatus().then((status) => {
+        const id = this.lastOptions?.commandId;
+        if (!status || !id || status.commandId !== id || !status.needsPlayAnyway || this.askedFor.has(id)) {
+          return;
+        }
+        this.askedFor.add(id);
+        this.onNeedsPlayAnyway?.(status);
+      });
+    }, 500);
+  }
+
+  /** Plays the last request again, as one recorded with another version. */
+  async playAnyway() {
+    if (this.lastOptions) {
+      await this.play({ ...this.lastOptions, commandId: undefined, playAnyway: true });
+    }
   }
 
   private async writeCommsFile(options: ReplayCommunication) {
@@ -178,6 +226,8 @@ export class PlaybackDolphinInstance extends DolphinInstance {
     }
 
     await this.writeCommsFile(options);
+    this.lastOptions = { ...options };
+    this.watchStatus();
 
     if (!this.process) {
       const params: string[] = [];

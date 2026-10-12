@@ -1,4 +1,5 @@
 import { exists } from "@common/exists";
+import { stageInfo as pplusStageInfo } from "@common/stages";
 import { css } from "@emotion/react";
 import EqualizerIcon from "@mui/icons-material/Equalizer";
 import EventIcon from "@mui/icons-material/Event";
@@ -9,7 +10,7 @@ import SportsCricket from "@mui/icons-material/SportsCricket";
 import TimerIcon from "@mui/icons-material/Timer";
 import TrackChangesIcon from "@mui/icons-material/TrackChanges";
 import type { FileResult } from "@replays/types";
-import { frameToGameTimer, GameMode, stages as stageUtils } from "@slippi/slippi-js";
+import { frameToGameTimer, GameMode } from "@slippi/slippi-js";
 import { groupBy } from "common/group_by";
 import React, { useCallback, useMemo } from "react";
 
@@ -45,8 +46,9 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
   fullPath,
   selectedFilesSet,
 }: ReplayFileContainerProps) {
-  const stageInfo = game.stageId != null ? stageUtils.getStageInfo(game.stageId) : undefined;
-  const stageImageUrl = stageInfo != null && stageInfo.id !== -1 ? getStageImage(stageInfo.id) : undefined;
+  // Our replays name P+'s stage ids (the stage select's, @common/stages), not Melee's.
+  const stageInfo = game.stageId != null ? pplusStageInfo(game.stageId) : undefined;
+  const stageImageUrl = stageInfo != null ? getStageImage(stageInfo.id) : undefined;
   const stageName = stageInfo != null ? stageInfo.name : Messages.unknownStage();
 
   // Use Set for O(1) lookup instead of O(n) indexOf

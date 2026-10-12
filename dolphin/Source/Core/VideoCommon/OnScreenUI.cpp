@@ -27,6 +27,7 @@
 #include "VideoCommon/NetPlayGolfUI.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/OnlineChatUI.h"
+#include "VideoCommon/ReplayOverlayUI.h"
 #include "VideoCommon/PerformanceMetrics.h"
 #include "VideoCommon/Present.h"
 #include "VideoCommon/Statistics.h"
@@ -120,6 +121,7 @@ bool OnScreenUI::Initialize(u32 width, u32 height, float scale)
     }
   }
   OnlineChatUI::SetFont(chat_font);
+  ReplayOverlayUI::SetFont(chat_font);
 
   // Setup new font management behavior
   io.BackendFlags |= ImGuiBackendFlags_RendererHasTextures | ImGuiBackendFlags_RendererHasVtxOffset;
@@ -348,6 +350,7 @@ void OnScreenUI::DrawDebugText()
     g_netplay_golf_ui->Display();
 
   OnlineChatUI::Display(m_backbuffer_scale);
+  ReplayOverlayUI::Display(m_backbuffer_scale);
 
   if (g_ActiveConfig.bOverlayProjStats)
     g_stats.DisplayProj();

@@ -61,6 +61,8 @@ target_include_directories(OnlineSecurityTest PRIVATE
 )
 target_compile_definitions(OnlineSecurityTest PRIVATE GEKKONET_STATIC GEKKONET_NO_ASIO)
 
+# Replay files (Core/Rollback/ReplayFile): round trip, cut and damaged files, hostile sizes.
+add_dolphin_test(ReplayFileTest Rollback/ReplayFileTest.cpp)
 # 3-4 player matches: teams and who picks the next stage (Core/Online/GameSetup).
 add_dolphin_test(NPlayerSetupTest Online/NPlayerSetupTest.cpp)
 # Rooms: the mm server's room messages, validated before they reach the game (Core/Online/RoomMessages).

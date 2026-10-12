@@ -16,8 +16,8 @@
   ],
   "afterSign": ".erb/scripts/notarize.js",
   "fileAssociations": {
-    "ext": "rep",
-    "name": "rep",
+    "ext": "brep",
+    "name": "brep",
     "description": "Brawl Online replay"
   },
   "protocols": [
@@ -40,7 +40,7 @@
       }
     ],
     "fileAssociations": {
-      "ext": "rep",
+      "ext": "brep",
       "role": "Viewer"
     },
     "type": "distribution",

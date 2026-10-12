@@ -49,6 +49,8 @@ function applyFilter(
       return applyRankedFilter(query, filter);
     case "teams":
       return applyTeamsFilter(query, filter);
+    case "session":
+      return applySessionFilter(query, filter);
     default: {
       // TypeScript exhaustiveness check
       const _exhaustive: never = filter;
@@ -435,6 +437,21 @@ function applyRankedFilter(
  * Filters games by is_teams column (0 = singles, 1 = teams/doubles)
  * Supports negation to include the opposite
  */
+function applySessionFilter(
+  query: SelectQueryBuilder<Database, "file" | "game", {}>,
+  filter: Extract<ReplayFilter, { type: "session" }>,
+): SelectQueryBuilder<Database, "file" | "game", {}> {
+  if (filter.sessionIds.length === 0) {
+    return query;
+  }
+  if (filter.negate) {
+    return query.where((eb) =>
+      eb.or([eb("game.session_id", "is", null), eb("game.session_id", "not in", filter.sessionIds)]),
+    );
+  }
+  return query.where("game.session_id", "in", filter.sessionIds);
+}
+
 function applyTeamsFilter(
   query: SelectQueryBuilder<Database, "file" | "game", {}>,
   filter: Extract<ReplayFilter, { type: "teams" }>,

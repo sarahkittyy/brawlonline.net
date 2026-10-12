@@ -10,6 +10,7 @@ import {
   ipc_calculateGameStats,
   ipc_calculateStadiumStats,
   ipc_deleteReplays,
+  ipc_findReplaysForMatches,
   ipc_getAllFilePaths,
   ipc_initializeFolderTree,
   ipc_loadProgressUpdatedEvent,
@@ -109,6 +110,11 @@ export default function setupReplaysIpc() {
     const replayProvider = await replayProviderPromise;
     await replayProvider.deleteReplays(fileIds);
     return { success: true };
+  });
+
+  ipc_findReplaysForMatches.main!.handle(async ({ matchIds, folders }) => {
+    const replayProvider = await replayProviderPromise;
+    return await replayProvider.findReplaysForMatches(matchIds, folders);
   });
 
   ipc_bulkDeleteReplays.main!.handle(async (options) => {

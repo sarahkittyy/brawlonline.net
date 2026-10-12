@@ -189,6 +189,13 @@ function applyFilter(filters: QueryFilters, key: string, value: any, negate: boo
     return;
   }
 
+  // Online match filter
+  if (lowerKey === "match") {
+    filters.sessionIds = filters.sessionIds || [];
+    filters.sessionIds.push(String(value));
+    return;
+  }
+
   // Connect code filter
   if (lowerKey === "code") {
     filters.playerFilters = filters.playerFilters || [];
@@ -493,6 +500,14 @@ export function convertToReplayFilters(queryFilters: QueryFilters): ReplayFilter
     filters.push({
       type: "teams",
       isTeams: queryFilters.isTeams,
+    });
+  }
+
+  // Online match filter
+  if (queryFilters.sessionIds && queryFilters.sessionIds.length > 0) {
+    filters.push({
+      type: "session",
+      sessionIds: queryFilters.sessionIds,
     });
   }
 

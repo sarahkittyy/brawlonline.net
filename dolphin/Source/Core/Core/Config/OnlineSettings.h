@@ -51,6 +51,13 @@ extern const Info<bool> ONLINE_MUSIC;
 extern const Info<bool> ONLINE_CHAT_IN_MATCHES;
 extern const Info<std::string> ONLINE_CHAT_WINDOW;
 
+// Replays (docs/design/replays.md §4.5; the launcher's Settings > Replays writes them): every online
+// game is saved into ReplayDir (empty: <User>/Replays), in a folder per month (YYYY-MM) when
+// ReplayMonthlyFolders is on.
+extern const Info<bool> ONLINE_SAVE_REPLAYS;
+extern const Info<std::string> ONLINE_REPLAY_DIR;
+extern const Info<bool> ONLINE_REPLAY_MONTHLY_FOLDERS;
+
 // The matchmaking host and port in effect (the dev override applied).
 std::string GetMatchmakingHost();
 int GetMatchmakingPort();
