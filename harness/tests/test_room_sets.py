@@ -7,6 +7,7 @@ Screenshots: run/artifacts/game-code/rooms/sets/<test>/<player>/.
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Callable
 
 import pytest
@@ -664,3 +665,95 @@ def test_room_set_characters_between_games(backend: OnlineBackend, dolphin: Call
     setups = [B.read_match_setup(g.c.read_mem) for g in players]
     assert setups[0] == setups[1], setups
     assert after != before and setups[0].players[1].character == after, (before, after, setups[0])
+
+
+def held_coin(g: Game) -> tuple[int, int]:
+    """The local hand's held coin (muSelCharHand+0xA0, 0 = none) and the local area's own coin
+    (muSelCharPlayerArea+0x1AC): A on the token must take this player's own."""
+    import struct
+    rd = lambda a: struct.unpack(">I", g.c.read_mem(a, 4))[0]
+    area = rd(rd(rd(rd(0x805A0060) + 4) + 0x400) + 0x44)
+    return rd(rd(area + 0x1A8) + 0xA0), rd(area + 0x1AC)
+
+
+def hand_onto_own_token(g: Game, port: int = 0, timeout: int = 1200) -> B.CssArea:
+    """Closed loop: the hand over the grid until it is over this player's own placed token (hand
+    target 3), at rest."""
+    c = g.c
+    route = B._serpentine(B.CSS_SCAN_X, B.CSS_SCAN_Y)
+    start, wp = B.polls(c), 0
+    while B.polls(c) - start < timeout:
+        a = B.read_css_area(c.read_mem, port)
+        assert a is not None, "left the CSS"
+        if a.hand_target == B.CSS_HAND_OWN_TOKEN:
+            B.neutral(c, port)
+            B.step(c, 6)
+            a = B.read_css_area(c.read_mem, port)
+            if a is not None and a.hand_target == B.CSS_HAND_OWN_TOKEN:
+                return a
+        tx, ty = route[wp % len(route)]
+        if math.hypot(tx - a.hand_x, ty - a.hand_y) < 2.5:
+            wp += 1
+        c.pad_set(port, buttons=(), main=B.steer_toward(a.hand_x, a.hand_y, tx, ty, full_tilt_at=3.0))
+        B.step(c, 1)
+    B.neutral(c, port)
+    raise AssertionError(f"{g.name}: the hand never found its own token: {B.read_css_area(c.read_mem, port)}")
+
+
+def pick_up_and_place(g: Game, css_ids: list[int], what: str) -> None:
+    """For each of css_ids: A on the player's own placed token takes it back into the hand, the CSS
+    shows the character under it as the hand moves, and it is placed again on css_id (staging
+    feedback 2026-10-12: picked up with A the token sometimes stayed in the hand, invisible, with
+    no character under it, and could not be placed again)."""
+    stick = {"right": (200, 128), "down": (128, 56), "left": (56, 128), "up": (128, 200)}
+    for css in css_ids:
+        a0 = hand_onto_own_token(g)
+        B.tap(g.c, 0, ["A"], hold=3, release=3)
+        B.step(g.c, 20)
+        a1 = B.read_css_area(g.c.read_mem, 0)
+        assert a1 is not None and a1.in_hand and not a1.placed, (what, css, a0, a1)
+        held, own = held_coin(g)
+        assert held == own != 0, (what, css, hex(held), hex(own))
+        g.shot(f"{what}-picked-up-{css:#x}")
+        trail = []
+        for d in ("right", "down", "left", "up"):
+            g.c.pad_set(0, buttons=(), main=stick[d])
+            B.step(g.c, 10)
+            B.neutral(g.c, 0)
+            B.step(g.c, 6)
+            ar = B.read_css_area(g.c.read_mem, 0)
+            trail.append((ar.hand_target, ar.character, ar.in_hand))
+        assert any(t == B.CSS_HAND_GRID_HOLDING and ch != B.CSS_NONE and h for t, ch, h in trail), (what, css, trail)
+        placed = B.css_pick_character(g.c, 0, css)
+        assert placed.placed and placed.character == css, (what, css, placed)
+
+
+def test_room_set_token_picked_up_between_games(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                                gpu_backend: str) -> None:
+    """A on one's own placed token takes it back into the hand and it can be placed again, any
+    number of times: in the room before a set, and on the CSS between a set's games (the loser,
+    with the token the CSS put back from game 1: it stays put during the winner's turn, then is
+    picked up and placed again in the loser's own)."""
+    a, b, code = bo3_room(backend, dolphin, gpu_backend, "token")
+    players = [a, b]
+    pick_up_and_place(a, [0x13, 0x07], "room")
+    _all(lambda: a.steps("tap START 8", "wait 30"), lambda: b.steps("tap START 8", "wait 30"))
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "game 1: the stage select")
+    play_steps(players, 1)
+    online_set.play_game(players, 1, winner=a)
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 180, "game 2: the stage select")
+    play_steps(players, 2)
+    online_set.wait(lambda: all(online_set.scene(g.c) == CSS for g in players), 120, "game 2: the CSS")
+    b.steps("wait 30")
+    # The winner's turn: A on the loser's token leaves it where it is (ebcb3ac7).
+    a0 = hand_onto_own_token(b)
+    b.steps("tap A 8", "wait 30")
+    a1 = B.read_css_area(b.c.read_mem, 0)
+    assert a1 is not None and a1.placed and a1.character == a0.character, (a0, a1)
+    # The loser's turn: up and down again, twice.
+    a.steps("tap START 8", "wait 60")
+    until_setup(b, lambda v: v["my_turn"] and v["may_lock"], "the loser's turn")
+    pick_up_and_place(b, [0x24, 0x07], "between-games")
+    v = setup_view(b)
+    assert v["my_turn"] and v["may_lock"] and not v["time_up"], v
+    b.shot("03-placed-again")
