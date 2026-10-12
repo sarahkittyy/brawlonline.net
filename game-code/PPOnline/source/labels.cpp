@@ -244,6 +244,20 @@ namespace Labels {
 
     static bool renderImpl(u8* tex0, const char* text, int x0, int y0, int x1, int y1, int rim, int boxOnly);
 
+    static int clampi(int v, int lo, int hi) { return v < lo ? lo : v > hi ? hi : v; }
+
+    // A mask over part of the texture (x0, y0, w, h in texels); 0 outside it.
+    struct Mask {
+        const u8* m;
+        int x0, y0, w, h;
+        int at(int x, int y) const
+        {
+            x -= x0;
+            y -= y0;
+            return x >= 0 && y >= 0 && x < w && y < h ? m[y * w + x] : 0;
+        }
+    };
+
     bool render(u8* tex0, const char* text, int x0, int y0, int x1, int y1, int rim)
     {
         return renderImpl(tex0, text, x0, y0, x1, y1, rim, 0);
@@ -267,19 +281,28 @@ namespace Labels {
         // multiple of the block (the 88x20 "Seeking") has padding blocks at the right and the bottom.
         const int bw = fmt == 5 ? 4 : 8, bh = fmt == 5 ? 4 : 8;
         const int bpr = (w + bw - 1) / bw;   // blocks per row
-        u32 n = (u32)(w * h);
-        u8* mask = (u8*)gfHeapManager::alloc(Heaps::Network, n * 2);
-        if (!mask) return false;
-        u8* rimMask = mask + n;
-        memset(mask, 0, n);
-        layout(mask, w, h, text, x0, y0, x1, y1);
+        // The masks cover only the box, with room for the glyphs' edges and the rim: they come
+        // from the Network heap, which has about 60 KB free once a match has loaded Brawl's HOME
+        // Menu archive into it, and the whole 800x40 strip's took 64000 bytes (prod 2026-10-12:
+        // the RULESET line's text was no longer drawn after a game).
+        const int pad = rim + 3;
+        const int mx0 = clampi(x0 - pad, 0, w), my0 = clampi(y0 - pad, 0, h);
+        const int mw = clampi(x1 + pad, 0, w) - mx0, mh = clampi(y1 + pad, 0, h) - my0;
+        if (mw <= 0 || mh <= 0) return false;
+        u32 n = (u32)(mw * mh);
+        u8* buf = (u8*)gfHeapManager::alloc(Heaps::Network, n * 2);
+        if (!buf) return false;
+        u8* rimBuf = buf + n;
+        memset(buf, 0, n);
+        layout(buf, mw, mh, text, x0 - mx0, y0 - my0, x1 - mx0, y1 - my0);
+        Mask mask = {buf, mx0, my0, mw, mh}, rimMask = {rimBuf, mx0, my0, mw, mh};
         if (fmt == 5) {
-            grow(mask, rimMask, w, h, rim);
+            grow(buf, rimBuf, mw, mh, rim);
             // RGB5A3, 4x4 blocks of u16: opaque 1rrrrrgggggbbbbb, else 0aaarrrrggggbbbb.
             u16* out = (u16*)data;
             for (int y = 0; y < h; y++) {
                 for (int x = 0; x < w; x++) {
-                    int m = mask[y * w + x], o = rimMask[y * w + x] * 2;
+                    int m = mask.at(x, y), o = rimMask.at(x, y) * 2;
                     if (o > 255) o = 255;
                     int a = m > o ? m : o;
                     int c = 255 - m;            // black letters on a white rim
@@ -299,7 +322,7 @@ namespace Labels {
         } else if (fmt == 14) {
             // CMPR, 8x8 blocks of four 4x4 sub-blocks {u16 c0, u16 c1, u32 2-bit indices}. With
             // c0 = black <= c1 = white the palette is black, white, grey, transparent.
-            grow(mask, rimMask, w, h, rim);
+            grow(buf, rimBuf, mw, mh, rim);
             const int bpc = (h + bh - 1) / bh;
             for (int by = 0; by < bpc; by++) {
                 for (int bx = 0; bx < bpr; bx++) {
@@ -316,7 +339,7 @@ namespace Labels {
                                 int x = sx + xx, y = sy + yy;
                                 u32 k = 3;
                                 if (x < w && y < h) {
-                                    int m = mask[y * w + x], o = rimMask[y * w + x];
+                                    int m = mask.at(x, y), o = rimMask.at(x, y);
                                     if (m >= 0xA0) k = letter;
                                     else if (m >= 0x50) k = 2;
                                     else if (o >= 0x40 || m >= 0x20) k = outline;
@@ -336,14 +359,14 @@ namespace Labels {
             // I4, 8x8 blocks, two texels a byte.
             for (int y = 0; y < h; y++) {
                 for (int x = 0; x < w; x += 2) {
-                    int a = mask[y * w + x] >> 4, b = x + 1 < w ? mask[y * w + x + 1] >> 4 : 0;
+                    int a = mask.at(x, y) >> 4, b = x + 1 < w ? mask.at(x + 1, y) >> 4 : 0;
                     u32 blk = (u32)((y >> 3) * bpr + (x >> 3));
                     data[blk * 32 + (y & 7) * 4 + ((x & 7) >> 1)] = (u8)((a << 4) | b);
                 }
             }
             DCFlushRange(data, (u32)(bpr * ((h + bh - 1) / bh) * 32));
         }
-        free(mask);
+        free(buf);
         return true;
     }
 

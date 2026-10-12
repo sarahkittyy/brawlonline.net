@@ -8,6 +8,7 @@ Screenshots: run/artifacts/game-code/rooms/sets/<test>/<player>/.
 from __future__ import annotations
 
 import math
+import struct
 from typing import Any, Callable
 
 import pytest
@@ -425,6 +426,141 @@ def test_ruleset_picked_in_game(backend: OnlineBackend, dolphin: Callable[..., D
     assert not ppom.read_local(a.c, ppom.find_block(a.c))["lock"]["ready"], "the keypad's START locked in"
     a.steps("wait 30")
     a.shot("06-typed")
+
+
+RULESET_VALUE_TEX = "MenMainRule03Sel03"   # the RULESET row's value strip (room_play.cpp ROWS)
+
+
+def _image_word(tex: int) -> int:
+    return ((tex + 0x40) & 0x1FFFFFFF) >> 5
+
+
+def _bound_texture(g: Game, mdl: int, name: str) -> int:
+    """Labels::boundTexture: the TEX0 the MDL0's texture link `name` points at (its first pair)."""
+    s32 = lambda a: struct.unpack(">i", g.c.read_mem(a, 4))[0]  # noqa: E731
+    dic = mdl + s32(mdl + 0x10 + 9 * 4)
+    for i in range(1, min(g.c.read_u32(dic + 4), 255) + 1):
+        e = dic + 8 + 16 * i
+        if g.c.read_mem(dic + s32(e + 8), len(name) + 1) == name.encode() + b"\0":
+            link = dic + s32(e + 12)
+            return g.c.read_u32(link + s32(link + 8) + 8)
+    raise KeyError(name)
+
+
+def ruleset_row(g: Game) -> dict[str, Any]:
+    """What the RULES page's RULESET row draws (room_play.cpp showRow / bind): the text room_play
+    last drew, the image words of its two value copies, the copy the MDL0 is bound to and the
+    texture image words the row's ScnMdl draws with (its own and its material buffers')."""
+    from types import SimpleNamespace
+    from test_room_rules import TASK_RULES, css_task
+    from test_rooms_ui import ppom_sym
+    rows = g.c.read_mem(ppom_sym(SimpleNamespace(u32=g.c.read_u32, c=g.c), "s_rows"), 0x40)
+    v0, v1, shown = struct.unpack_from(">3I", rows, 4)
+    rt = g.c.read_u32(css_task(g) + TASK_RULES)
+    obj = g.c.read_u32(rt + 0x58)
+    mdl, scn = g.c.read_u32(obj + 8), g.c.read_u32(obj + 0xC)
+    drawn: set[int] = set()
+    for p, n in ((scn, 0x2000), (g.c.read_u32(scn + 0x14C), 0x1000), (g.c.read_u32(scn + 0x140), 0x1000)):
+        if not 0x80000000 <= p < 0x94000000:
+            continue
+        for (w,) in struct.iter_unpack(">I", g.c.read_mem(p, n)):
+            if 0x94 <= w >> 24 <= 0x97 or 0xB4 <= w >> 24 <= 0xB7:
+                drawn.add(w & 0xFFFFFF)
+    copies = [_image_word(v0), _image_word(v1)]
+    return {"text": rows[16:56].split(b"\0")[0].decode("ascii", "replace"), "shown": copies[shown & 1],
+            "other": copies[(shown & 1) ^ 1], "orig": struct.unpack_from(">I", rows, 60)[0],
+            "bound": _image_word(_bound_texture(g, mdl, RULESET_VALUE_TEX)), "drawn": drawn}
+
+
+def hash_samples(g: Game, word: int, size: int = 800 * 40 // 2) -> list[int]:
+    """What Dolphin's texture cache hashes of a texture (Common::GetHash64 with the default 128
+    samples of TextureCacheBase::GetTexture): one u64 every len / 8 / 128 u64s."""
+    data = g.c.read_mem(0x80000000 | (word << 5), size)
+    step = max(size // 8 // 128, 1)
+    return [struct.unpack_from(">Q", data, 8 * k)[0] for k in range(0, size // 8, step)]
+
+
+def check_ruleset_row(g: Game, text: str, what: str) -> dict[str, Any]:
+    """The row shows `text`: drawn into the copy it shows, which the model and its ScnMdl draw
+    with, and nothing else of the row's value (the other copy, the game's own strip)."""
+    r = _wait(lambda: (lambda r: r if r["text"] == text else None)(ruleset_row(g)), 5, f"{g.name}: {what}: {text!r} drawn")
+    print(what, {k: (sorted(hex(x) for x in v) if isinstance(v, set) else hex(v) if isinstance(v, int) else v)
+                 for k, v in r.items()})
+    assert r["bound"] == r["shown"] and r["shown"] in r["drawn"], (what, r)
+    assert r["other"] not in r["drawn"] and r["orig"] not in r["drawn"], (what, r)
+    return r
+
+
+def shown_cell(g: Game, word: int) -> bytes:
+    """The value copy's first 160 texels of each row (I4 8x8 blocks of the 800-wide strip: block
+    columns 0-19), the cell the row shows."""
+    data = g.c.read_mem(0x80000000 | (word << 5), 800 * 40 // 2)
+    return b"".join(data[(r * 100) * 32:(r * 100 + 20) * 32] for r in range(5))
+
+
+def browse_redraws(g: Game, text: str, what: str) -> None:
+    """Right on the line: the copy not shown gets `text` drawn in the cell it shows and is shown,
+    and what Dolphin's texture cache hashes of it changed (else Dolphin keeps the copy's old
+    image on screen)."""
+    r = ruleset_row(g)
+    cell, before = shown_cell(g, r["other"]), hash_samples(g, r["other"])
+    g.steps("tap DRIGHT 8", "wait 30")
+    r = check_ruleset_row(g, text, what)
+    assert shown_cell(g, r["shown"]) != cell, f"{what}: {text!r} was not drawn into the copy (Labels::render)"
+    assert hash_samples(g, r["shown"]) != before, f"{what}: Dolphin's hash of the redrawn copy did not change"
+
+
+def test_ruleset_line_after_a_game(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                   gpu_backend: str) -> None:
+    """The Ruleset line still changes its text after a game (the user's, prod 2026-10-12: after a
+    game, right on RULESET kept showing the room's ruleset while A played the next one; leaving
+    and making the room again fixed it). A match loads Brawl's HOME Menu archive into the
+    Network heap and keeps it, about 60 KB stay free, and Labels::render's mask for the whole
+    800x40 strip (64000 bytes) no longer fitted: nothing was drawn, and the row was switched to
+    the copy with an older text. The host picks a ruleset on the line, both play a game, and back
+    on the room's CSS each right draws the new text into the copy the row then shows (its cell
+    changed, and what Dolphin's texture cache hashes of it).
+    Screenshots: run/artifacts/game-code/rooms/sets/after-game/."""
+    from test_room_rules import menu_open, open_rules, two_in_a_room
+    a, b, _code = two_in_a_room(backend, dolphin, gpu_backend, "after-game")
+    for g in (a, b):
+        g.out = SETS_ART / "after-game" / g.name
+        g.out.mkdir(parents=True, exist_ok=True)
+    quick = dict(BO3, name="Quick Rules", bestOf=0, bans=0, dsr=False, stageChoice="random", strikes=[])
+    code = backend._http("POST", "/v1/rulesets", {"ruleset": quick}, token=a.user.session_token)["code"]
+
+    def to_ruleset_line() -> None:
+        open_rules(a)
+        a.steps("tap DDOWN 8", "wait 8", "tap DDOWN 8", "wait 8", "tap DDOWN 8", "wait 8", "tap DDOWN 8", "wait 40")
+
+    # Before the game: P+ default, right to Quick Rules, A plays it.
+    to_ruleset_line()
+    check_ruleset_row(a, "P+ default", "before the game")
+    a.steps("tap DRIGHT 8", "wait 30")
+    check_ruleset_row(a, "Quick Rules", "before the game, browsed")
+    a.shot("01-browse-before")
+    a.steps("tap A 8", "wait 40")
+    _wait(lambda: not menu_open(a), 10, "the menu closed by the pick")
+    for g in (a, b):
+        _wait(lambda g=g: rooms(g).get("ruleset", {}).get("code") == code, 30, f"{g.name}: Quick Rules")
+        _wait(lambda g=g: (session_rules(g) or {}).get("stocks") == 1, 20, f"{g.name}: its rules")
+
+    # A game.
+    game = room_view(a)["game"]
+    _all(lambda: a.steps("tap START 8", "wait 30"), lambda: b.steps("tap START 8", "wait 30"))
+    rep = online_set.play_game([a, b], game)
+    assert rep["checksums"]["mismatches"] == 0, rep
+    _wait(lambda: a.scene() == CSS and b.scene() == CSS, 180, "both back on the room's CSS")
+    _all(lambda: a.steps("wait 120"), lambda: b.steps("wait 120"))
+
+    # After it: the line shows the room's; right shows the next one (Enter code), then P+ default.
+    to_ruleset_line()
+    check_ruleset_row(a, "Quick Rules", "after the game")
+    a.shot("02-after-game")
+    browse_redraws(a, "Enter code", "after the game, right")
+    a.shot("03-after-game-right")
+    browse_redraws(a, "P+ default", "after the game, right again")
+    a.shot("04-after-game-right-again")
 
 
 # The same ruleset plays a 2v2 set in a room of two teams of two (rulesets have no player count,

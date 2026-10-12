@@ -117,6 +117,7 @@ namespace RoomPlay {
         int shown;          // the value copy the model shows
         char text[40];      // ... and its text
         u32 origLabel, origValue;   // the game's image words
+        bool labelDrawn;
     };
     static RowTex s_rows[2];
 
@@ -208,8 +209,6 @@ namespace RoomPlay {
                 T.origLabel = imageWord(lab);
                 T.label = copyTex(lab);
                 if (!T.label) return;
-                int h = *(u16*)(T.label + 0x1E);
-                Labels::render(T.label, R.label, 2, 1, R.labelW, h - 1, 0);
             }
             for (int k = 0; k < 2; k++) {
                 if (T.value[k]) continue;
@@ -220,10 +219,15 @@ namespace RoomPlay {
             T.text[0] = 1;   // (no text drawn yet)
             T.shown = 1;
         }
-        if (strcmp(T.text, value) != 0) {
-            int next = T.shown ^ 1;
-            Labels::render(T.value[next], value, R.box[0], R.box[1], R.box[2], R.box[3], 0);
-            T.shown = next;
+        // (a render that failed is tried again next frame; the copy it was drawing into is not
+        // shown: it still has an older text, prod 2026-10-12)
+        if (!T.labelDrawn) {
+            int h = *(u16*)(T.label + 0x1E);
+            T.labelDrawn = Labels::render(T.label, R.label, 2, 1, R.labelW, h - 1, 0);
+        }
+        if (strcmp(T.text, value) != 0 &&
+            Labels::render(T.value[T.shown ^ 1], value, R.box[0], R.box[1], R.box[2], R.box[3], 0)) {
+            T.shown ^= 1;
             strncpy(T.text, value, sizeof(T.text) - 1);
             T.text[sizeof(T.text) - 1] = 0;
             g_roomPlay.drawn++;
