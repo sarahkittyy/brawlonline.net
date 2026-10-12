@@ -257,6 +257,8 @@ PRESETS: dict[str, NetProfile] = {
     "typical": NetProfile.from_rtt(40, 8, loss=0.005, name="typical"),
     "bad_wifi": NetProfile.from_rtt(60, 25, burst_loss=0.02, mean_burst=3, name="bad_wifi"),
     "cross_country": NetProfile.from_rtt(80, 5, name="cross_country"),
+    # Prod 2026-10-12, Peru to the US east coast: 92 ms on the control channel, 8-10 ms of jitter.
+    "long_haul": NetProfile.from_rtt(92, 9, name="long_haul"),
     "awful": NetProfile.from_rtt(150, 50, loss=0.05, name="awful"),
 }
 

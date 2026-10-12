@@ -351,6 +351,8 @@ def run_session(preset: str, cpu: str, args: argparse.Namespace, run: int) -> Di
         if "host" in name and args.rtc_a:
             kw["rtc"] = args.rtc_a
         inst = orig(name, **kw)
+        if "join" in name:
+            inst.env.update(dict(e.split("=", 1) for e in args.env_b))
         sd = args.sd_b if "join" in name else args.sd_a
         if sd:
             # One peer's SD card differs (e.g. another song file under a tracklist's name, or none).
@@ -744,6 +746,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--config-b", action="append", default=[],
                     help="extra Dolphin -C override for the joiner only, e.g. Dolphin.Core.EmulationSpeed=0.62 "
                          "(a peer that cannot keep full speed)")
+    ap.add_argument("--env-b", action="append", default=[], metavar="NAME=VALUE",
+                    help="environment variable for the joiner only, e.g. PPR_GPRB_TEST_FRAME_COST_US=14000 "
+                         "(every pass costs that much more CPU time: a PC that cannot keep full speed)")
     ap.add_argument("--sd-a", action="append", default=[], metavar="LOCAL=SD_PATH|-SD_PATH",
                     help="the host's SD card only: add (or with a leading -, remove) a file")
     ap.add_argument("--sd-b", action="append", default=[], metavar="LOCAL=SD_PATH|-SD_PATH",

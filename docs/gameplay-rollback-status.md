@@ -1046,6 +1046,31 @@ So with the Phase 14 audio clock the music plays through rollbacks without a ski
 - **bad_wifi** dual core: to game set, 0 mismatches on 1,924 confirmed frames, about 200 rollbacks per side; start barrier 91-132 ms, in the countdown.
 - **Online harness** (the plugin, the local server): `test_online_unranked.py` (server stage, pause quit), `test_salty_runback.py` (2), `test_rooms_game.py` `test_room_three_players_teams` (0 mismatches), `test_room_four_players[three-with-a-gap]`, `test_room_player_quits_with_lras` (both): passed. `test_room_four_players[four-long-names]` first hit login and probe timeouts while other sessions ran their harnesses (it failed on the previous build, `run/bin/main-a`, in the same conditions); run alone it passed: 4 players to game set, 0 mismatches on 643 confirmed frames.
 
+## Phase 22: following a peer that cannot keep full speed (prod, 2026-10-12)
+
+**Symptom.** IMPY (host, Ryzen 7 9800X3D) against seimi (Core i3-7100U laptop: 2 cores at 2.4 GHz, 8 GB, HD 620; input delay 2 set), 92 ms round trip (110 in game), 4 games, 0.1.63: "felt HORRIBLE". Both peers' logs.
+
+**Reading.** The laptop missed its schedule on every frame of every game it played that day (18 games, 4 opponents: 99.8-100% late, only 1-20% of them after a rollback; 9,327 of 9,330 late in a game with 0.8% rollbacks), at 54-59 frames a second; a rollback cost it 15-19 ms at depth 1.2. Its catch-up frames (up to 899 a game) did nothing (Phase 19: no wait to skip). So it stayed 2-5 frames behind, and the host paid: in its worst windows 4.5-6 frames ahead with the speed at its 0.995 floor, rollbacks 5.7-6.5 deep at 14-16 ms (on a 9800X3D: about 2.2 ms per re-run frame, `0.65 + 2.23 x depth` over the 5 games), 54 frames a second and 190 screen hitches per 10 s; in its good windows (1.5 ahead) depth 3, 6.6 ms, 59.6 frames a second. GekkoNet's frames ahead is the frame gap itself (each side's advantage subtracts its own delay; the delays cancel in the halved difference), so the host's +5 is the laptop's -5.
+
+Beyond (one-way latency - the fast peer's delay) frames, the gap is pure waste: the slow peer's rollbacks are already 0 (its depth is about one-way - the other's delay - gap), and every further frame deepens the fast peer's. Slippi's sync (Phase 18) leaves the gap to the peer behind; the peer ahead only slows by 0.5%, which cannot match a peer at 92%.
+
+**Change** (`UpdatePeerFollow`, in `UpdateTimeSync`). Every 30 frames after frame 120, the peer's frame rate is estimated as (frames this peer ran - the change of the gap) / wall time. When the gap is more than a frame over its target, is not closing (by 0.25 frames per interval), and this PC kept its own schedule on at least half the interval's frames, the peer ahead *follows*: its speed is the peer's frame rate, 2% slower per frame over the target (faster below it), changing at most 5% per interval, never below 50%. It stops when the speed is back at 1 with the gap at its target. The target is (one-way latency in frames, from GekkoNet's average ping - this peer's input delay), clamped to 0.5-2.5: the gap at which the slow PC stops rolling back. The schedule check keeps a PC that is itself behind its schedule from slowing down further (in a first version the laptop-like peer engaged once after a hitch on the host).
+
+Logs: `gprb: following the peer's speed from frame N ...` / `... ends at frame N`; the `gprb net:` lines get `frames at the peer's speed N (the peer at X/s)`; at the end of a session one `gprb perf:` line says whether this PC could not keep full speed (more than half its frames late without a rollback before them), the peer could not (followed on more than a quarter of the frames), or neither. Harness: `PPR_GPRB_TEST_FRAME_COST_US` (every pass costs that much more CPU time: a PC that cannot keep full speed, rollbacks included; `Dolphin.Core.EmulationSpeed` below 1 is not one, since its catch-up frames find a wait to skip), `PPR_GPRB_TEST_NO_FOLLOW` (A/B), `gprb_session.py --env-b`, netsim preset `long_haul` (92 +- 9 ms).
+
+**Results** (`gprb_session.py --preset long_haul --cpu dc --delay auto`, Null video, two Dolphins of another session running on the same PC; raw `run/qa/pacing/`). Averages over the first 2,400 frames (the macros fight; later they idle and nothing rolls back). The joiner at `PPR_GPRB_TEST_FRAME_COST_US=14500` (slow: 51-54 frames a second, every frame late, as the laptop) or `13100` (borderline: 55-58); "before" is `PPR_GPRB_TEST_NO_FOLLOW=1`:
+
+| Run | Frames a second | Host frames ahead | Host rollback depth / cost | Host waits for the peer (polls) | Host present interval sd | Joiner rollbacks (cost) | Mismatches |
+|---|---|---|---|---|---|---|---|
+| slow, before (`base2`) | 53.1 | 5.82 | 6.70 / 19.2 ms | 132,627 | 8.8 ms | 0% | 0 of 5,723 |
+| slow, after (`follow3`) | 52.5 | 2.07 | 3.57 / 12.5 ms | 7,485 (all before the first 10 s were over) | 9.0 ms | 1.8% (25.8 ms) | 0 of 2,909 |
+| borderline, before (`border-base`) | 57.2 | 4.90 | 6.34 / 18.9 ms | 29,724 | 8.3 ms | 0.1% | 0 of 6,121 |
+| borderline, after (`border-follow3`) | 55.2 | 2.18 | 3.59 / 12.8 ms | 2,745 | 6.3 ms | 1.6% (21.6 ms) | 0 of 2,751 |
+
+The host keeps the gap at its target (2.2-2.4 frames here: 110 ms with GekkoNet's jitter of ~18 ms) instead of GekkoNet's prediction window, and its rollbacks are about half as deep. The match still runs at the slow PC's speed: that PC's frames are late either way. The earlier versions on the way: with no jitter in the target (`follow2`, `border-follow`) the gap held at 1.6-2.0 and the joiner rolled back on 2.6-2.7% of its frames at 20-27 ms each; with following ending at the first gap under the target (`border-follow`) it ended and started 5 times in a game; with a 0.8 floor (`follow1`) a joiner at 43-46 frames a second kept the host at the prediction window.
+
+Regressions, both peers at full speed (no following expected): `long_haul` 60.0/59.9 frames a second, 0.06-0.28 ahead, 0 of 7,105; `bad_wifi` 59.9, 0.20-0.30 ahead, 0 of 6,877; `long_haul` with the joiner frozen 0.5, 0.5, 1, 0.5 and 0.5 s (NtSuspendProcess, 10 s apart; `run/qa/pacing/freeze.txt`): no following, the gap closed each time (-0.47 to +0.63 per window), 0 of 3,413. The `gprb perf:` lines read "this PC could not keep full speed" on the slow joiners, "the peer could not keep full speed" on their hosts, and the neutral line in the freeze run.
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).
@@ -1078,6 +1103,7 @@ Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v
 | `gpu_state` | CP FIFO, PI FIFO, PE control, interrupt cause/mask, deterministic-GPU flag |
 | `gprb_sound_state` | the sound archive player's allocated sounds (id, handle, owned/orphaned, duplicate ids) |
 | `gprb_status` (Phase 14 field) | `sound_stops_ignored` (resimulated stops of sounds the re-run timeline had not started yet) |
+| `gprb_status` (Phase 22 fields) | `following_peer` (this peer runs at the speed of a peer that cannot keep full speed), `peer_fps` (the peer's estimated frame rate) |
 
 Diagnostics through environment variables:
 - `PPR_GPRB_DIFF_FRAME=N`: byte diff of the region set, first run against resimulation.
@@ -1092,6 +1118,8 @@ Diagnostics through environment variables:
 - `PPR_GPRB_EVICT_DELAY_US=N`: every eviction job (the oldest slot merged into the base snapshot) sleeps N µs first, as on a starved machine (Phase 9).
 - `PPR_GPRB_EVICT_NO_WAIT=1`: loads do not wait for the eviction job (the behaviour before Phase 9, to reproduce the race).
 - `PPR_GPRB_RESIM_AUDIO=advance`: the sound system runs through resimulated passes and their samples are dropped (the behaviour before Phase 14, for A/B runs).
+- `PPR_GPRB_TEST_FRAME_COST_US=N`: every pass (a rollback's too) busy-waits N µs more, as on a PC that cannot keep full speed (Phase 22; `gprb_session.py --env-b`).
+- `PPR_GPRB_TEST_NO_FOLLOW=1`: no following of a slow peer, Slippi's time sync alone (Phase 22, for A/B runs).
 
 ## Commits (`dolphin-gprb`, branch `gameplay-rollback`)
 

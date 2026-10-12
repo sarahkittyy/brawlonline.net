@@ -365,6 +365,17 @@ struct State
   std::array<u8, 4 * INPUT_SIZE> local_inputs{};
   double speed_factor = 1.0;
   u32 last_timesync_frame = UINT32_MAX;
+  // Following a peer that cannot keep full speed (UpdatePeerFollow): whether it is on, this peer's
+  // speed while it is, the gap, frame and time at the last time sync, and the peer's frame rate.
+  bool following = false;
+  double follow_speed = 1.0;
+  double follow_prev_gap = 0;
+  s64 follow_prev_frame = -1;
+  u64 follow_prev_own_late = 0;
+  int follow_release = 0;  // time syncs in a row that saw the peer at full speed
+  Clock::time_point follow_t{};
+  double peer_fps = 0;
+  u64 own_late = 0;  // displayed frames late without a rollback before them (this PC's own speed)
   // Slippi's frame advance (UpdateTimeSync): catch-up frames left in this batch, whether a batch
   // runs, and whether the frame running now / the previous displayed frame was one (its throttle
   // point is a frame early on purpose, not late).
@@ -400,6 +411,8 @@ struct State
     double late_ms_max = 0;
     u64 stalls = 0;  // updates with no frame to run (waited for the peer)
     u64 advances = 0;  // catch-up frames (UpdateTimeSync)
+    u64 followed = 0;  // frames run at the speed of a peer that cannot keep full speed
+    double peer_fps_sum = 0;  // the peer's frame rate over the followed frames
     double wall_ms = 0;  // wall-clock time of the window (its frames per second: the game's speed)
     double stall_ms = 0, stall_ms_max = 0;
     double ahead_sum = 0, ahead_min = 1e9, ahead_max = -1e9;
@@ -514,6 +527,7 @@ State s;
 std::string NetStatsLine(const State::NetStats& w);
 void CloseNetWindowClock();
 void NetStatsFold(State::NetStats& t, const State::NetStats& w);
+void LogPerfVerdict(const State::NetStats& t);
 }  // namespace
 
 bool InMatchPhase();
@@ -2232,6 +2246,15 @@ void ResetRunStats()
   s.current_frame = -1;
   s.speed_factor = 1.0;
   s.last_timesync_frame = UINT32_MAX;
+  s.following = false;
+  s.follow_speed = 1.0;
+  s.follow_prev_gap = 0;
+  s.follow_prev_frame = -1;
+  s.follow_prev_own_late = 0;
+  s.follow_release = 0;
+  s.follow_t = {};
+  s.peer_fps = 0;
+  s.own_late = 0;
   s.frames_to_advance = 0;
   s.advancing = s.advanced_this_frame = s.prev_frame_advanced = false;
   s.last_advance_frame = -1;
@@ -2405,7 +2428,10 @@ void EndRunning(Core::System& system, const std::string& reason)
     NetStatsFold(s.net_total, s.net_window);
     s.net_window = {};
     if (s.net_total.frames)
+    {
       INFO_LOG_FMT(BRAWLBACK, "gprb net: session: {}", NetStatsLine(s.net_total));
+      LogPerfVerdict(s.net_total);
+    }
   }
   s.end_game_frame = GuestOf(system).U32(Addr::GAME_FRAME + 4).value_or(0);
   INFO_LOG_FMT(BRAWLBACK, "gprb: session ended at game frame {} ({}), {} rollbacks, {} desyncs",
@@ -2848,6 +2874,11 @@ std::string NetStatsLine(const State::NetStats& w)
       w.stall_ms, w.stall_ms_max, w.ahead_sum / n, w.frames ? w.ahead_min : 0.0,
       w.frames ? w.ahead_max : 0.0, w.frames ? w.speed_min : 1.0, w.frames ? w.speed_max : 1.0,
       w.advances);
+  if (w.followed)
+  {
+    line += fmt::format(", frames at the peer's speed {} (the peer at {:.1f}/s)", w.followed,
+                        w.peer_fps_sum / static_cast<double>(w.followed));
+  }
   if (const auto& c = w.cadence; c.presents)
   {
     const double mean = c.interval_ms_sum / c.presents;
@@ -2884,6 +2915,8 @@ void NetStatsFold(State::NetStats& t, const State::NetStats& w)
   t.resim += w.resim;
   t.max_depth = std::max(t.max_depth, w.max_depth);
   t.bursts += w.bursts;
+  t.followed += w.followed;
+  t.peer_fps_sum += w.peer_fps_sum;
   t.late += w.late;
   t.late_after_rollback += w.late_after_rollback;
   t.burst_ms += w.burst_ms;
@@ -2910,6 +2943,41 @@ void NetStatsFold(State::NetStats& t, const State::NetStats& w)
   t.cadence.interval_ms_sum += w.cadence.interval_ms_sum;
   t.cadence.interval_ms_sq += w.cadence.interval_ms_sq;
   t.cadence.interval_ms_max = std::max(t.cadence.interval_ms_max, w.cadence.interval_ms_max);
+}
+
+// At the end of a network session, one line on whether a PC held the match back, for the logs
+// players send in. A frame late without a rollback before it is this PC's own speed (CPU or GPU);
+// frames at the peer's speed are the peer's (UpdatePeerFollow).
+void LogPerfVerdict(const State::NetStats& t)
+{
+  if (t.frames < NET_STATS_WINDOW)
+    return;
+  const double n = static_cast<double>(t.frames);
+  const double fps = t.wall_ms > 0 ? t.frames * 1000.0 / t.wall_ms : 0.0;
+  const double own_late = static_cast<double>(t.late - t.late_after_rollback) / n;
+  if (own_late > 0.5)
+  {
+    WARN_LOG_FMT(BRAWLBACK,
+                 "gprb perf: this PC could not keep full speed: {:.0f}% of frames ran late "
+                 "without a rollback before them, {:.1f} frames a second; the match ran at this "
+                 "PC's speed",
+                 100 * own_late, fps);
+  }
+  else if (t.followed * 4 > t.frames)
+  {
+    WARN_LOG_FMT(
+        BRAWLBACK,
+        "gprb perf: the peer could not keep full speed: this PC ran at its speed on {:.0f}% "
+        "of frames, the peer at {:.1f} frames a second",
+        100 * t.followed / n, t.peer_fps_sum / static_cast<double>(t.followed));
+  }
+  else
+  {
+    INFO_LOG_FMT(BRAWLBACK,
+                 "gprb perf: {:.1f} frames a second, {:.0f}% of frames late ({:.0f}% after a "
+                 "rollback), at the peer's speed on {:.0f}%",
+                 fps, 100 * t.late / n, 100 * t.late_after_rollback / n, 100 * t.followed / n);
+  }
 }
 
 // Network sessions: every NET_STATS_WINDOW displayed frames, one log line of what the netcode did,
@@ -2954,6 +3022,8 @@ void NetStatsOnDisplayedFrame(Core::System& system)
       ++w.late;
       if (s.prev_frame_rolled_back)
         ++w.late_after_rollback;
+      else
+        ++s.own_late;
       w.late_ms_max = std::max(w.late_ms_max, ms);
     }
     s.prev_frame_rolled_back = s.ops.adv_count > 1;
@@ -2963,6 +3033,11 @@ void NetStatsOnDisplayedFrame(Core::System& system)
   w.ahead_max = std::max<double>(w.ahead_max, s.frames_ahead);
   w.speed_min = std::min(w.speed_min, s.speed_factor);
   w.speed_max = std::max(w.speed_max, s.speed_factor);
+  if (s.following)
+  {
+    ++w.followed;
+    w.peer_fps_sum += s.peer_fps;
+  }
   if (w.frames < NET_STATS_WINDOW)
     return;
   w.cadence = Rollback::PresentStats::TakeCadence();
@@ -3221,6 +3296,105 @@ constexpr int MAX_ADVANCE_FRAMES = 3;
 constexpr u32 ADVANCE_EVERY = 5;
 constexpr s64 HARD_SYNC_UNTIL = 120;
 
+// Following a peer that cannot keep full speed. Slippi's sync leaves the gap to the peer behind,
+// which closes it with its spare time; a PC without any never does, and this peer runs on ahead,
+// rolling back deeper on every frame. Prod (2026-10-12, a 9800X3D against an i3-7100U laptop that
+// missed its schedule on every frame, even without rollbacks, at 110 ms): the fast PC 4-6 frames
+// ahead for whole 10 s windows, at its 0.995 speed floor, rolling back 6 frames deep at 14-16 ms a
+// frame, so it ran at 54 frames a second with 190 screen hitches per window, while the laptop ran
+// at its own 55-58 with almost no rollbacks. The match can only run at the slow PC's speed either
+// way; following it, the fast PC runs at it evenly instead of in bursts of rollbacks.
+//
+// Every TIME_SYNC_INTERVAL frames after HARD_SYNC_UNTIL, the peer's frame rate is the frames this
+// peer ran minus the change of the gap, over the wall time. When the gap is more than FOLLOW_ENGAGE
+// frames over its target and not closing, and this PC kept its own schedule on most of the
+// interval's frames (a PC that cannot keep full speed never slows itself down further), this
+// peer's speed follows the peer's frame rate, slower by FOLLOW_CLOSE_RATE per frame over the
+// target (faster below it), at most FOLLOW_MAX_STEP per interval. Following ends when the peer runs
+// at full speed again with the gap at its target, FOLLOW_RELEASE time syncs in a row; a gap below
+// it alone does not end it (a harness peer at 56-58 frames a second otherwise had it end and start
+// again every few seconds, the gap swinging between 0 and 3-5 frames), nor one estimate of the
+// peer's frame rate (GekkoNet averages the gap over 26 frames, so the estimate trails a change of
+// this peer's speed, by up to 2-3 frames a second).
+//
+// The target gap: the peer behind rolls back about (one-way latency - this peer's input delay -
+// gap) frames, so a gap of that much, and the link's jitter on top, spares the slow PC its
+// rollbacks (19 ms each on the laptop; without the jitter a harness peer still rolled back on 2.6%
+// of its frames, at 20-27 ms each); more only deepens this peer's, which has time to spare.
+constexpr double FOLLOW_ENGAGE = 1.0;
+constexpr double FOLLOW_CLOSING = 0.25;  // the gap closes this much per interval: left to the peer
+constexpr double FOLLOW_CLOSE_RATE = 0.02;
+constexpr double FOLLOW_MAX_STEP = 0.05;
+// A harness peer at 43 frames a second (72%) kept a floor of 0.8 at GekkoNet's prediction window.
+constexpr double FOLLOW_MIN = 0.5;
+constexpr double FOLLOW_TARGET_MIN = 0.5, FOLLOW_TARGET_MAX = 2.5;
+constexpr int FOLLOW_RELEASE = 4;
+
+double FollowTargetGap()
+{
+  GekkoNetworkStats st{};
+  if (!WorstLink(&st) || st.avg_ping <= 0)
+    return 1.0;
+  // GekkoNet's ping is the round trip in game (a frame of polling included, GameRoundTrip).
+  const double one_way_frames = (st.avg_ping / 2.0 + st.jitter) / (FRAME_US / 1000.0);
+  return std::clamp(one_way_frames - s.input_delay, FOLLOW_TARGET_MIN, FOLLOW_TARGET_MAX);
+}
+
+void UpdatePeerFollow()
+{
+  // Test (PPR_GPRB_TEST_NO_FOLLOW=1): Slippi's sync alone, for A/B runs.
+  static const bool off = std::getenv("PPR_GPRB_TEST_NO_FOLLOW") != nullptr;
+  if (off)
+    return;
+  const auto now = Clock::now();
+  const double gap = s.frames_ahead;
+  const double change = gap - s.follow_prev_gap;
+  const double frames = static_cast<double>(s.current_frame - s.follow_prev_frame);
+  const double own_late = static_cast<double>(s.own_late - s.follow_prev_own_late);
+  const double dt = s.follow_t == Clock::time_point{} ?
+                        0.0 :
+                        std::chrono::duration<double>(now - s.follow_t).count();
+  s.follow_prev_gap = gap;
+  s.follow_prev_frame = s.current_frame;
+  s.follow_prev_own_late = s.own_late;
+  s.follow_t = now;
+  if (dt <= 0 || frames <= 0 || s.current_frame <= HARD_SYNC_UNTIL)
+    return;
+  const double peer_fps = std::max(0.0, (frames - change) / dt);
+  s.peer_fps = s.peer_fps > 0 ? (s.peer_fps + peer_fps) / 2 : peer_fps;
+
+  const double target = FollowTargetGap();
+  const double over = gap - target;
+  if (!s.following)
+  {
+    if (over <= FOLLOW_ENGAGE || change < -FOLLOW_CLOSING || own_late * 2 > frames)
+      return;
+    s.following = true;
+    s.follow_speed = 1.0;
+    s.follow_release = 0;
+    INFO_LOG_FMT(
+        BRAWLBACK,
+        "gprb: following the peer's speed from frame {}: {:.2f} frames ahead (target {:.2f}) and "
+        "not closing, the peer at {:.1f} frames a second",
+        s.current_frame, gap, target, s.peer_fps);
+  }
+  const double peer_speed = s.peer_fps * FRAME_US / 1e6;
+  const double want = peer_speed - std::clamp(over, -1.0, 4.0) * FOLLOW_CLOSE_RATE;
+  s.follow_speed = std::clamp(
+      std::clamp(want, s.follow_speed - FOLLOW_MAX_STEP, s.follow_speed + FOLLOW_MAX_STEP),
+      FOLLOW_MIN, 1.0);
+  s.follow_release =
+      peer_speed >= 1.0 && s.follow_speed >= 1.0 && over <= 0 ? s.follow_release + 1 : 0;
+  if (s.follow_release >= FOLLOW_RELEASE)
+  {
+    s.following = false;
+    INFO_LOG_FMT(BRAWLBACK,
+                 "gprb: following the peer's speed ends at frame {}: {:.2f} frames ahead (target "
+                 "{:.2f}), the peer at {:.1f} frames a second",
+                 s.current_frame, gap, target, s.peer_fps);
+  }
+}
+
 void UpdateTimeSync(Core::System& system)
 {
   if (s.mode != Mode::Network || s.current_frame < 0)
@@ -3237,7 +3411,8 @@ void UpdateTimeSync(Core::System& system)
       deviation = std::min(-offset_us / (SPEED_WINDOW_FRAMES * FRAME_US), 1.0) * MAX_SPEED_UP;
     else
       deviation = -std::min(offset_us / (SPEED_WINDOW_FRAMES * FRAME_US), 1.0) * MAX_SLOW_DOWN;
-    s.speed_factor = 1.0 + deviation;
+    UpdatePeerFollow();
+    s.speed_factor = s.following ? s.follow_speed : 1.0 + deviation;
 
     if (offset_us < -(FRAME_US + SYNC_T1_US) && !s.advancing)
     {
@@ -3913,6 +4088,21 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   // A load above may have rewound the frame counter: let an armed trace see the frame this pass
   // really produces.
   CpuTraceOnLoopTop(system);
+  // Test (PPR_GPRB_TEST_FRAME_COST_US): every pass, a rollback's too, costs this much more CPU
+  // time, as on a slower PC, so that a harness peer can be one that cannot keep full speed.
+  static const long test_frame_cost_us = [] {
+    const char* v = std::getenv("PPR_GPRB_TEST_FRAME_COST_US");
+    return v ? std::atol(v) : 0L;
+  }();
+  if (test_frame_cost_us > 0)
+  {
+    const auto until = Clock::now() + std::chrono::microseconds(test_frame_cost_us);
+    s.mutex.unlock();
+    while (Clock::now() < until)
+    {
+    }
+    s.mutex.lock();
+  }
   SetLoopDefault(ppc);
   s.cpu_where = "guest";
   return true;
@@ -4297,6 +4487,8 @@ picojson::value Status()
   o["desync_log"] = picojson::value(dlog);
   o["frames_ahead"] = picojson::value(static_cast<double>(s.frames_ahead));
   o["time_sync_speed"] = picojson::value(s.speed_factor);
+  o["following_peer"] = picojson::value(s.following);
+  o["peer_fps"] = picojson::value(s.peer_fps);
   o["region_bytes"] = picojson::value(static_cast<double>(s.region_bytes));
   o["region_ranges"] = picojson::value(static_cast<double>(s.ranges.size()));
   o["end_reason"] = picojson::value(s.end_reason);
