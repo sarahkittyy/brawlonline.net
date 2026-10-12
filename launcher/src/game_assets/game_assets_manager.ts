@@ -55,7 +55,7 @@ export class GameAssetsManager {
     private readonly extract: ExtractFn,
     private readonly fillMissing?: FillMissingFn,
     /** Whether a cached manifest needs fillMissing (by default: it has no sounds). */
-    private readonly needsFill: (manifest: GameAssetManifest) => boolean = (m) => !m.sounds,
+    private readonly needsFill: (manifest: GameAssetManifest) => boolean = (m) => !m.sounds || !m.items,
   ) {}
 
   getState(): GameAssetsState {

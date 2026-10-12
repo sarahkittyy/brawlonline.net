@@ -104,6 +104,11 @@ describe.skipIf(!hasDisc || !hasSd)("full extraction (disc folder + sd.raw)", ()
       expect(m.stocks[key]?.origin, key).toBe("sd");
     }
     expect(m.stocks.pokemon_trainer).toBeUndefined();
+    // P+'s 53 ITEM SWITCH icons (src/common/items.ts), 64x64 apart from one 56x56.
+    expect(Object.keys(m.items ?? {}).length).toBe(53);
+    expect(m.items?.["36"]?.name).toBe("Smoke Ball");
+    const smashBall = decodePng(fs.readFileSync(path.join(cacheDir, m.items!["0"].file)));
+    expect([smashBall.width, smashBall.height]).toEqual([64, 64]);
     const button = decodePng(fs.readFileSync(path.join(cacheDir, m.textures.button.file)));
     expect([button.width, button.height]).toEqual([48, 48]);
     const ttf = readTtf(fs.readFileSync(path.join(cacheDir, m.fonts.menuFont.file)));

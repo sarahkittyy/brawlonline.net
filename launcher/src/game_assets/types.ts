@@ -40,6 +40,11 @@ export type GameAssetManifest = {
    * Absent in caches extracted before sounds existed until the manager fills them in.
    */
   sounds?: Record<string, { file: string; origin: string; durationMs: number; sound?: string }>;
+  /**
+   * P+'s ITEM SWITCH icons by bit ("0".."52", src/common/items.ts): items/<bit>.png. Absent in caches extracted
+   * before them until the manager fills them in; empty without a P+ SD card.
+   */
+  items?: Record<string, { file: string; name: string }>;
   missing: string[];
   warnings?: string[];
 };

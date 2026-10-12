@@ -279,3 +279,35 @@ button.itemMain {
   text-overflow: ellipsis;
   white-space: nowrap;
 }
+
+.details {
+  display: grid;
+  grid-template-columns: max-content 1fr;
+  gap: 4px 18px;
+  margin: 0;
+}
+
+.detailRow {
+  display: contents;
+}
+
+.detailRow dt {
+  color: var(--text-secondary);
+}
+
+.detailRow dd {
+  margin: 0;
+}
+
+.stageChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.stageChip {
+  padding: 2px 9px;
+  border-radius: 999px;
+  border: 1px solid rgb(255 255 255 / 15%);
+  font-size: 13px;
+}

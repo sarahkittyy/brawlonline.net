@@ -27,6 +27,20 @@
   };
   const stageName = (id) => STAGES[id] || `Stage ${id}`;
 
+  // P+'s ITEM SWITCH, in its screen order = bit order (launcher/src/common/items.ts, docs/game-code.md §14):
+  // bit i of the 8 bytes read as one big-endian number. The last four are P+ settings, not items.
+  const ITEMS = [
+    "Smash Ball", "Assist Trophy", "Poké Ball", "Container", "Blast Box", "Sandbag", "Food", "Maxim Tomato",
+    "Heart Container", "Dragoon Parts", "Super Mushroom", "Poison Mushroom", "Warp Star", "Starman", "Metal Box",
+    "Bunny Hood", "Turbo", "Timer", "Lightning", "Beam Sword", "Home-Run Bat", "Fan", "Lip's Stick", "Star Rod",
+    "Hammer", "Golden Hammer", "Ray Gun", "Super Scope", "Fire Flower", "Cracker Launcher", "Bob-omb",
+    "Motion-Sensor Bomb", "Gooey Bomb", "Smart Bomb", "Deku Nut", "Freezie", "Smoke Ball", "Pitfall", "Hothead",
+    "Mr. Saturn", "Green Shell", "Banana Peel", "Bumper", "Spring", "Unira", "Soccer Ball", "Team Healer",
+    "Franklin Badge", "Screw Attack",
+  ];
+  const ITEM_SETTINGS = ["Stage Items", "EX Items", "Mayhem Mode", "Passive-Aggression"];
+  const itemOn = (sw, bit) => (((sw || [])[7 - (bit >> 3)] || 0) & (1 << (bit & 7))) !== 0;
+
   /** The code from /r/<code>; /r/?<code> and /r/#<code> also work (a plain static server). */
   function codeFromLocation(loc) {
     const parts = loc.pathname.split("/").filter(Boolean);
@@ -50,7 +64,6 @@
 
   function rulesRows(rules) {
     const style = { stock: "Stock", time: "Time", coin: "Coin" }[rules.style] || rules.style;
-    const items = ["Off", "Low", "Medium", "High"][rules.itemFrequency] || String(rules.itemFrequency);
     const time = rules.timeMinutes === 0 ? "No limit" : `${rules.timeMinutes} min`;
     const rows = [["Style", style]];
     if (rules.style === "stock") rows.push(["Stocks", String(rules.stocks)]);
@@ -59,12 +72,39 @@
       ["Damage ratio", Number(rules.damageRatio).toFixed(1)],
       ["Team attack", onOff(rules.teamAttack)],
       ["Pause", rules.pause === "hold" ? "Hold START" : "On"],
-      ["Items", items],
       ["Stage hazards", onOff(rules.hazards)],
       ["Auto L-cancel", onOff(rules.autoLCancel)],
       ["Input assist", onOff(rules.inputAssist)],
     );
     return rows;
+  }
+
+  /** Items as P+ plays them: none when the frequency is None or no item is on. */
+  function itemsGroup(rules) {
+    const box = el("div", "group");
+    box.appendChild(el("h2", null, "Items"));
+    const on = ITEMS.filter((_, bit) => itemOn(rules.itemSwitch, bit));
+    const freq = ["None", "Low", "Medium", "High"][rules.itemFrequency] || String(rules.itemFrequency);
+    const dl = el("dl");
+    const row = (k, v) => {
+      dl.appendChild(el("dt", null, k));
+      dl.appendChild(el("dd", null, v));
+    };
+    if (rules.itemFrequency === 0 || on.length === 0) {
+      row("Items", "None");
+    } else {
+      row("Items", on.length === ITEMS.length ? "All items" : `${on.length} of ${ITEMS.length}`);
+      row("Frequency", freq);
+    }
+    const settings = ITEM_SETTINGS.filter((_, i) => itemOn(rules.itemSwitch, ITEMS.length + i));
+    row("P+ settings", settings.length ? settings.join(", ") : "None");
+    box.appendChild(dl);
+    if (rules.itemFrequency > 0 && on.length > 0 && on.length < ITEMS.length) {
+      const ul = el("ul", "stages");
+      for (const name of on) ul.appendChild(el("li", null, name));
+      box.appendChild(ul);
+    }
+    return box;
   }
 
   function formatRows(r) {
@@ -147,6 +187,7 @@
     const grid = el("div", "grid");
     grid.appendChild(table("Format", formatRows(r)));
     grid.appendChild(table("Rules", rulesRows(r.rules)));
+    grid.appendChild(itemsGroup(r.rules));
     grid.appendChild(stageList(r.players === "ffa" || r.bestOf === 0 ? "Stages" : "Starters", r.stages.starters));
     if (r.stages.counterpicks.length > 0 || r.bestOf > 0) {
       grid.appendChild(stageList("Counterpicks", r.stages.counterpicks));

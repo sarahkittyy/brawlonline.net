@@ -181,6 +181,10 @@ dd {
   font-size: 14px;
 }
 
+.group dl + .stages {
+  margin-top: 10px;
+}
+
 .stages .none {
   color: var(--dim);
 }

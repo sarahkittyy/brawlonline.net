@@ -14,7 +14,7 @@ _Phase 3a of `docs/design/room-rules.md` §8 (2026-10-11): the ruleset format, p
 | `name` | 1-32 characters | What a display name may hold (printable ASCII, Hiragana, Katakana; no `\` or `` ` ``): the game draws it. No leading or trailing spaces (the server trims). Not unique. |
 | `version` | 1, 2, ... | Assigned by the server when published; 0 in drafts and files. |
 | `by` | text | The publisher's display name, filled by the server (follows renames; the name at publishing once the account is deleted). Ignored when sent. |
-| `rules` | `MatchRules` | Every field of the room rules: `style`, `stocks`, `timeMinutes`, `damageRatio`, `teamAttack`, `pause`, `itemFrequency`, `itemSwitch`, `hazards`, `autoLCancel`, `inputAssist` (`room-rules.md` §3). |
+| `rules` | `MatchRules` | Every field of the room rules: `style`, `stocks`, `timeMinutes`, `damageRatio`, `teamAttack`, `pause`, `itemFrequency` (0-3: None, Low, Medium, High), `itemSwitch` (P+'s ITEM SWITCH, 8 bytes, bit `i` = cell `i` of its screen: `docs/game-code.md` §14, "Item switch layout"; the launcher and the website show the items, never the bytes), `hazards`, `autoLCancel`, `inputAssist` (`room-rules.md` §3). |
 | `stages.starters` | stage ids | `srStageKind` (1-255), at least one. Game 1 of a set, and every game with `stageChoice: "strike"`, strikes from these. |
 | `stages.counterpicks` | stage ids | The extra stages of games 2+: games 2+ pick from starters **and** counterpicks. No stage is in both lists. The launcher offers P+'s 15 legal stages (`PPLUS_LEGAL_STAGES`). |
 | `players` | `"1v1"`, `"2v2"`, `"ffa"` | A room can't start until its slots and teams match. |

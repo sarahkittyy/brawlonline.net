@@ -27,6 +27,7 @@ import { useToasts } from "@/lib/hooks/use_toasts";
 import { rulesetTitle, useRememberedRuleset } from "@/lib/rulesets/use_remembered_ruleset";
 import { useServices } from "@/services";
 
+import { RulesetDetails } from "./ruleset_details";
 import { RulesetEditor } from "./ruleset_editor";
 import { RulesetsPageMessages as Messages } from "./rulesets_page.messages";
 import styles from "./rulesets_page.module.css";
@@ -61,6 +62,8 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
   const [justPublished, setJustPublished] = useState<RulesetView | null>(null);
   const [showHidden, setShowHidden] = useState(false);
   const [busy, setBusy] = useState<"save" | "publish" | null>(null);
+  /** The published ruleset shown read-only (its code) while nothing is being edited. */
+  const [viewing, setViewing] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const query = useQuery({
@@ -84,11 +87,15 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
   }
 
   /** Opens something in the editor, asking first if unsaved changes would be lost. */
-  const open = (next: Editing | null) => {
-    if (editing?.dirty) {
-      setPendingSwitch(() => () => setEditing(next));
-    } else {
+  const open = (next: Editing | null, view: string | null = null) => {
+    const go = () => {
       setEditing(next);
+      setViewing(view);
+    };
+    if (editing?.dirty) {
+      setPendingSwitch(() => go);
+    } else {
+      go();
     }
   };
 
@@ -186,6 +193,7 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
   const hiddenCount = published.filter((p) => p.hidden).length;
   const shownPublished = showHidden ? published : published.filter((p) => !p.hidden);
   const problem = editing ? rulesetProblem(editing.ruleset) : null;
+  const viewed = viewing ? published.find((p) => p.code === viewing) : undefined;
 
   return (
     <div className={styles.page}>
@@ -299,6 +307,8 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
                   key={p.code}
                   view={p}
                   inUse={remembered.ruleset?.code === p.code}
+                  selected={!editing && viewing === p.code}
+                  onView={() => open(null, p.code)}
                   onEdit={() => open({ basedOn: p.code, ruleset: { ...p.ruleset }, dirty: false })}
                   onCopy={copy}
                   onExport={() => exportFile(p.ruleset)}
@@ -314,6 +324,34 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
           </div>
         )}
       </div>
+
+      {!editing && viewed && (
+        <div className={styles.editorColumn} data-testid="ruleset-view">
+          <div className={styles.editorHeader}>
+            <Typography variant="h6">{rulesetTitle(viewed)}</Typography>
+            <span className={clsx(styles.unsaved, styles.code)}>{viewed.code}</span>
+          </div>
+          <div className={styles.editorScroll}>
+            <RulesetDetails ruleset={viewed.ruleset} />
+          </div>
+          <div className={styles.editorFooter}>
+            <span className={styles.problem} />
+            <div className={styles.footerButtons}>
+              <Button color="secondary" onClick={() => setViewing(null)}>
+                {Messages.close()}
+              </Button>
+              <Button
+                color="primary"
+                variant="contained"
+                disableElevation={true}
+                onClick={() => open({ basedOn: viewed.code, ruleset: { ...viewed.ruleset }, dirty: false })}
+              >
+                {Messages.editAsNewVersion()}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {editing && (
         <div className={styles.editorColumn} data-testid="ruleset-editor">
@@ -456,6 +494,8 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
 const PublishedRow = ({
   view,
   inUse,
+  selected,
+  onView,
   onEdit,
   onCopy,
   onExport,
@@ -464,14 +504,19 @@ const PublishedRow = ({
 }: {
   view: RulesetView;
   inUse: boolean;
+  selected: boolean;
+  onView: () => void;
   onEdit: () => void;
   onCopy: (text: string) => void;
   onExport: () => void;
   onToggleHidden: () => void;
   onUse: () => void;
 }) => (
-  <div className={clsx(styles.item, view.hidden && styles.hiddenItem)} data-ruleset={view.code}>
-    <div className={styles.itemMain}>
+  <div
+    className={clsx(styles.item, view.hidden && styles.hiddenItem, selected && styles.selected)}
+    data-ruleset={view.code}
+  >
+    <button type="button" className={styles.itemMain} onClick={onView}>
       <span className={styles.itemName}>
         {view.ruleset.name} <span className={styles.itemVersion}>{Messages.version(view.ruleset.version)}</span>
       </span>
@@ -481,7 +526,7 @@ const PublishedRow = ({
         {view.newer && <span>{Messages.newerVersion(view.newer.version)}</span>}
         {inUse && <span className={styles.inUse}>{Messages.inUse()}</span>}
       </span>
-    </div>
+    </button>
     <div className={styles.itemActions}>
       <Tooltip title={Messages.copyLink()}>
         <IconButton size="small" onClick={() => onCopy(view.link)} aria-label={Messages.copyLink()}>

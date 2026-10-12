@@ -248,3 +248,14 @@
 .rulesetError {
   color: #f28b82;
 }
+
+.rulesetLink {
+  background: none;
+  border: none;
+  padding: 0;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}

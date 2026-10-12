@@ -15,5 +15,5 @@ export const fillMissingGameAssets: FillMissingFn = async (opts) => {
   return manifest as GameAssetManifest | null;
 };
 
-/** Whether a cached manifest needs fillMissingGameAssets: no sounds, or not the catalog's. */
-export const gameAssetsNeedFill = (manifest: GameAssetManifest) => soundsOutdated(manifest);
+/** Whether a cached manifest needs fillMissingGameAssets: no sounds, or not the catalog's; no ITEM SWITCH icons. */
+export const gameAssetsNeedFill = (manifest: GameAssetManifest) => soundsOutdated(manifest) || !manifest.items;

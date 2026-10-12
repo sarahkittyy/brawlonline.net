@@ -22,6 +22,7 @@ import { decodeTex0, listBrresTextures, parseBrres } from "./formats/brres";
 import type { FoundTexture } from "./formats/container";
 import { findTextures, walk } from "./formats/container";
 import { parseRfnt } from "./formats/rfnt";
+import { extractItemIcons } from "./items";
 import { encodePng } from "./png";
 import { SoundLibrary } from "./sounds";
 import type { GameFileSource } from "./sources";
@@ -36,6 +37,7 @@ export type Origin = "disc" | "sd";
  *  fonts:    menuFont, titleFont, smallFont
  *  stocks:   character keys from catalog.STOCK_CHARACTERS (e.g. "mario", "roy", "knuckles")
  *  sounds:   chat-message, invite (sounds/<role>.wav, 16-bit PCM)
+ *  items:    ITEM SWITCH bits, "0".."52" (items/<bit>.png, P+'s SD only; src/brawl_assets/items.ts)
  * All paths are relative to the cache directory and use forward slashes.
  */
 export type AssetManifest = {
@@ -93,6 +95,8 @@ export type AssetManifest = {
       source: string;
     }
   >;
+  /** ITEM SWITCH icons by bit. Absent in manifests written before they were extracted (extractMissingSounds fills it in). */
+  items?: Record<string, { file: string; name: string }>;
   missing: string[];
   warnings: string[];
 };
@@ -435,6 +439,7 @@ export async function runExtraction(
     fonts: {},
     stocks: {},
     sounds: {},
+    items: {},
     missing: [],
     warnings: [],
   };
@@ -474,6 +479,7 @@ export async function runExtraction(
     manifest.warnings.push(`stocks: ${err?.message ?? err}`);
   }
   await extractSounds(cache, opts.cacheDir, manifest, step);
+  await extractItems(sd, opts.cacheDir, manifest);
   done = total - 1;
   await writeFile(opts.cacheDir, "manifest.json", JSON.stringify(manifest, null, 2));
   step("done");
@@ -487,6 +493,18 @@ export async function readManifest(cacheDir: string): Promise<AssetManifest | nu
     return m?.schemaVersion === 1 ? (m as AssetManifest) : null;
   } catch {
     return null;
+  }
+}
+
+async function extractItems(sd: GameFileSource | null, cacheDir: string, manifest: AssetManifest) {
+  try {
+    const r = await extractItemIcons(sd, (rel, data) => writeFile(cacheDir, rel, data));
+    manifest.items = r.items;
+    manifest.missing.push(...r.missing);
+  } catch (err: any) {
+    manifest.items = {};
+    manifest.missing.push("items");
+    manifest.warnings.push(`items: ${err?.message ?? err}`);
   }
 }
 
@@ -508,28 +526,35 @@ export function soundsOutdated(manifest: { sounds?: Record<string, { sound?: str
 }
 
 /**
- * Brings the sound effects of a cache in line with the catalog (see soundsOutdated): a cache extracted before the
- * launcher had them, or with a sound the catalog has replaced since, without extracting everything again. Returns the
- * updated manifest, the unchanged one when its sounds are current, or null when there is no readable manifest in
- * `cacheDir`.
+ * Brings the sound effects of a cache in line with the catalog (see soundsOutdated) and adds the ITEM SWITCH icons
+ * to a cache extracted before them (no `items`): a cache extracted before the launcher had them, or with a sound the
+ * catalog has replaced since, without extracting everything again. Returns the updated manifest, the unchanged one
+ * when its sounds are current and it has the icons, or null when there is no readable manifest in `cacheDir`.
  */
 export async function extractMissingSounds(
   opts: Pick<ExtractOptions, "disc" | "sdRawPath" | "cacheDir" | "tmpDir">,
 ): Promise<AssetManifest | null> {
   const manifest = await readManifest(opts.cacheDir);
-  if (!manifest || !soundsOutdated(manifest)) {
+  if (!manifest || (!soundsOutdated(manifest) && manifest.items)) {
     return manifest;
   }
-  delete manifest.sounds;
-  manifest.warnings = (manifest.warnings ?? []).filter((w) => !w.startsWith("sound "));
-  manifest.missing = (manifest.missing ?? []).filter((m) => !m.startsWith("sound:"));
+  if (soundsOutdated(manifest)) {
+    delete manifest.sounds;
+    manifest.warnings = (manifest.warnings ?? []).filter((w) => !w.startsWith("sound "));
+    manifest.missing = (manifest.missing ?? []).filter((m) => !m.startsWith("sound:"));
+  }
   const disc = await openDisc(opts.disc, opts.tmpDir);
   let sd: GameFileSource | null = null;
   try {
     if (opts.sdRawPath) {
       sd = await SdSource.open(opts.sdRawPath);
     }
-    await extractSounds(new ArchiveCache(disc, sd), opts.cacheDir, manifest);
+    if (!manifest.sounds) {
+      await extractSounds(new ArchiveCache(disc, sd), opts.cacheDir, manifest);
+    }
+    if (!manifest.items) {
+      await extractItems(sd, opts.cacheDir, manifest);
+    }
   } finally {
     await sd?.close();
     await disc.close();

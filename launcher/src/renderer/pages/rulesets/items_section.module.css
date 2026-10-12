@@ -1,0 +1,149 @@
+.section {
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 8px;
+}
+
+.header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.headerTitle {
+  font-weight: 600;
+}
+
+.headerSummary {
+  flex: 1;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.chevron {
+  transition: transform 0.15s;
+}
+
+.chevronOpen {
+  transform: rotate(180deg);
+}
+
+.body {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 4px 10px 12px;
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.label {
+  font-size: 12px;
+  color: var(--text-secondary);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+
+.allButtons {
+  margin-left: auto;
+  display: flex;
+  gap: 4px;
+}
+
+.note {
+  margin: 0;
+  font-size: 12px;
+  color: #e8b45a;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+  gap: 6px;
+}
+
+.cell {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  padding: 3px 6px 3px 3px;
+  border-radius: 6px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  background: rgb(255 255 255 / 3%);
+  color: inherit;
+  font: inherit;
+  font-size: 12px;
+  text-align: left;
+}
+
+button.cell {
+  cursor: pointer;
+}
+
+button.cell:hover {
+  border-color: rgb(255 255 255 / 35%);
+}
+
+.on {
+  border-color: rgb(116 194 122 / 70%);
+  background: rgb(116 194 122 / 12%);
+}
+
+.off .icon {
+  filter: grayscale(1);
+  opacity: 0.45;
+}
+
+.off .name {
+  color: var(--text-secondary);
+}
+
+.icon,
+.iconPlaceholder {
+  width: 28px;
+  height: 28px;
+  flex-shrink: 0;
+}
+
+.iconPlaceholder {
+  border-radius: 50%;
+  background: rgb(255 255 255 / 8%);
+}
+
+.name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.state {
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 4px;
+  border-radius: 3px;
+}
+
+.stateOn {
+  color: #0d2a10;
+  background: #74c27a;
+}
+
+.stateOff {
+  color: var(--text-secondary);
+  background: rgb(255 255 255 / 8%);
+}

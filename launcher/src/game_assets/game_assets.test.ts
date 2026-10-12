@@ -87,7 +87,7 @@ describe("game assets", () => {
     expect(state.error).toContain("DolphinTool");
   });
 
-  it("adds the sounds to a cache from before they existed instead of extracting again", async () => {
+  it("adds the sounds and item icons to a cache from before they existed instead of extracting again", async () => {
     const cacheDir = path.join(dir, "theme");
     const resolve = async () => ({ disc: { kind: "folder" as const, path: dir } });
     let extractions = 0;
@@ -106,6 +106,7 @@ describe("game assets", () => {
       const m: GameAssetManifest = {
         ...JSON.parse(await readFile(path.join(opts.cacheDir, "manifest.json"), "utf8")),
         sounds: { invite: { file: "sounds/invite.wav", origin: "disc", durationMs: 1081 } },
+        items: { "0": { file: "items/0.png", name: "Smash Ball" } },
       };
       await writeFile(path.join(opts.cacheDir, "manifest.json"), JSON.stringify(m));
       return m;
@@ -113,6 +114,7 @@ describe("game assets", () => {
     const state = await new GameAssetsManager(cacheDir, resolve, extract, fill).refresh();
     expect(state.status).toBe(GameAssetsStatus.READY);
     expect(state.manifest?.sounds?.invite.file).toBe("sounds/invite.wav");
+    expect(state.manifest?.items?.["0"].file).toBe("items/0.png");
     expect(extractions).toBe(1);
     expect(fills).toEqual([cacheDir]);
 

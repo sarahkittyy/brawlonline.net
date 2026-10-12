@@ -2,7 +2,6 @@ import type { MatchRules, Ruleset, RulesetPlayers, StageChoice } from "@common/r
 import {
   MAX_BANS,
   MAX_RULESET_NAME_LEN,
-  PPLUS_ITEM_SWITCH,
   PPLUS_LEGAL_STAGES,
   stageName,
   strikesUsed,
@@ -17,6 +16,7 @@ import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
 import Typography from "@mui/material/Typography";
 import React, { useEffect, useState } from "react";
 
+import { ItemsSection } from "./items_section";
 import { RulesetEditorMessages as Messages } from "./rulesets_page.messages";
 import styles from "./rulesets_page.module.css";
 
@@ -213,30 +213,11 @@ export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (
         </Row>
       </Section>
 
-      <Section title={Messages.items()}>
-        <Row label={Messages.itemFrequency()}>
-          <Choice
-            value={String(r.rules.itemFrequency)}
-            onChange={(v) => setRules({ itemFrequency: Number(v) })}
-            options={[
-              ["0", Messages.itemOff()],
-              ["1", Messages.itemLow()],
-              ["2", Messages.itemMedium()],
-              ["3", Messages.itemHigh()],
-            ]}
-          />
-        </Row>
-        <Row label={Messages.itemSwitch()} help={Messages.itemSwitchHelp()}>
-          <ItemSwitchInput value={r.rules.itemSwitch} onChange={(itemSwitch) => setRules({ itemSwitch })} />
-          <Button
-            size="small"
-            sx={{ textTransform: "none" }}
-            onClick={() => setRules({ itemSwitch: [...PPLUS_ITEM_SWITCH] })}
-          >
-            {Messages.reset()}
-          </Button>
-        </Row>
-      </Section>
+      <ItemsSection
+        frequency={r.rules.itemFrequency}
+        itemSwitch={r.rules.itemSwitch}
+        onChange={(itemFrequency, itemSwitch) => setRules({ itemFrequency, itemSwitch })}
+      />
 
       <Section title={Messages.stages()}>
         <Typography variant="caption" color="text.secondary">
@@ -395,37 +376,6 @@ const StrikesInput = ({ value, onChange }: { value: number[]; onChange: (s: numb
         onChange(parts.map(Number));
       }}
       onBlur={() => setText(value.join("-"))}
-    />
-  );
-};
-
-/** The item switch's 8 bytes as hex pairs. */
-const ItemSwitchInput = ({ value, onChange }: { value: number[]; onChange: (b: number[]) => void }) => {
-  const show = (bytes: number[]) => bytes.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(" ");
-  const [text, setText] = useState(show(value));
-  useEffect(() => setText(show(value)), [value]);
-  const parse = (t: string): number[] | null => {
-    const hex = t.replace(/[^0-9a-fA-F]/g, "");
-    if (hex.length !== 16) {
-      return null;
-    }
-    return Array.from({ length: 8 }, (_, i) => parseInt(hex.slice(i * 2, i * 2 + 2), 16));
-  };
-  return (
-    <TextField
-      size="small"
-      hiddenLabel={true}
-      value={text}
-      error={parse(text) === null}
-      inputProps={{ style: { width: 190, fontFamily: "monospace" } }}
-      onChange={(e) => {
-        setText(e.target.value);
-        const bytes = parse(e.target.value);
-        if (bytes) {
-          onChange(bytes);
-        }
-      }}
-      onBlur={() => setText(show(value))}
     />
   );
 };
