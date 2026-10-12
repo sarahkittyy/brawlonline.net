@@ -235,19 +235,6 @@ button.itemMain {
   flex-shrink: 0;
 }
 
-.stageList {
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.stageRow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-}
-
 .centered {
   display: flex;
   flex-direction: column;

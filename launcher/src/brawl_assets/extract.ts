@@ -27,6 +27,7 @@ import { encodePng } from "./png";
 import { SoundLibrary } from "./sounds";
 import type { GameFileSource } from "./sources";
 import { DiscFolderSource, DiscIsoSource, SdSource } from "./sources";
+import { extractStageIcons } from "./stages";
 import { encodeWav } from "./wav";
 
 export type Origin = "disc" | "sd";
@@ -38,6 +39,7 @@ export type Origin = "disc" | "sd";
  *  stocks:   character keys from catalog.STOCK_CHARACTERS (e.g. "mario", "roy", "knuckles")
  *  sounds:   chat-message, invite (sounds/<role>.wav, 16-bit PCM)
  *  items:    ITEM SWITCH bits, "0".."52" (items/<bit>.png, P+'s SD only; src/brawl_assets/items.ts)
+ *  stages:   P+ stage ids (stages/<id>.png, the stage select's icons, P+'s SD only; src/brawl_assets/stages.ts)
  * All paths are relative to the cache directory and use forward slashes.
  */
 export type AssetManifest = {
@@ -97,6 +99,8 @@ export type AssetManifest = {
   >;
   /** ITEM SWITCH icons by bit. Absent in manifests written before they were extracted (extractMissingSounds fills it in). */
   items?: Record<string, { file: string; name: string }>;
+  /** Stage select icons by P+ stage id. Absent in manifests written before they were extracted (filled in likewise). */
+  stages?: Record<string, { file: string; name: string }>;
   missing: string[];
   warnings: string[];
 };
@@ -440,6 +444,7 @@ export async function runExtraction(
     stocks: {},
     sounds: {},
     items: {},
+    stages: {},
     missing: [],
     warnings: [],
   };
@@ -480,6 +485,7 @@ export async function runExtraction(
   }
   await extractSounds(cache, opts.cacheDir, manifest, step);
   await extractItems(sd, opts.cacheDir, manifest);
+  await extractStages(sd, opts.cacheDir, manifest);
   done = total - 1;
   await writeFile(opts.cacheDir, "manifest.json", JSON.stringify(manifest, null, 2));
   step("done");
@@ -508,6 +514,18 @@ async function extractItems(sd: GameFileSource | null, cacheDir: string, manifes
   }
 }
 
+async function extractStages(sd: GameFileSource | null, cacheDir: string, manifest: AssetManifest) {
+  try {
+    const r = await extractStageIcons(sd, (rel, data) => writeFile(cacheDir, rel, data));
+    manifest.stages = r.stages;
+    manifest.missing.push(...r.missing);
+  } catch (err: any) {
+    manifest.stages = {};
+    manifest.missing.push("stages");
+    manifest.warnings.push(`stages: ${err?.message ?? err}`);
+  }
+}
+
 /**
  * True when the manifest's sounds do not match the catalog: none extracted yet, a role neither extracted nor recorded
  * missing (added since), or a role taken under a sound the catalog no longer lists for it (changed since).
@@ -526,16 +544,17 @@ export function soundsOutdated(manifest: { sounds?: Record<string, { sound?: str
 }
 
 /**
- * Brings the sound effects of a cache in line with the catalog (see soundsOutdated) and adds the ITEM SWITCH icons
- * to a cache extracted before them (no `items`): a cache extracted before the launcher had them, or with a sound the
- * catalog has replaced since, without extracting everything again. Returns the updated manifest, the unchanged one
- * when its sounds are current and it has the icons, or null when there is no readable manifest in `cacheDir`.
+ * Brings the sound effects of a cache in line with the catalog (see soundsOutdated) and adds the ITEM SWITCH and
+ * stage select icons to a cache extracted before them (no `items` / `stages`): a cache extracted before the launcher
+ * had them, or with a sound the catalog has replaced since, without extracting everything again. Returns the updated
+ * manifest, the unchanged one when its sounds are current and it has the icons, or null when there is no readable
+ * manifest in `cacheDir`.
  */
 export async function extractMissingSounds(
   opts: Pick<ExtractOptions, "disc" | "sdRawPath" | "cacheDir" | "tmpDir">,
 ): Promise<AssetManifest | null> {
   const manifest = await readManifest(opts.cacheDir);
-  if (!manifest || (!soundsOutdated(manifest) && manifest.items)) {
+  if (!manifest || (!soundsOutdated(manifest) && manifest.items && manifest.stages)) {
     return manifest;
   }
   if (soundsOutdated(manifest)) {
@@ -554,6 +573,9 @@ export async function extractMissingSounds(
     }
     if (!manifest.items) {
       await extractItems(sd, opts.cacheDir, manifest);
+    }
+    if (!manifest.stages) {
+      await extractStages(sd, opts.cacheDir, manifest);
     }
   } finally {
     await sd?.close();

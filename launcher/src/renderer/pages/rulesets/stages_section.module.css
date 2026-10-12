@@ -1,0 +1,157 @@
+.section {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(176px, 1fr));
+  gap: 8px;
+}
+
+.tile {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid rgb(255 255 255 / 12%);
+  background: rgb(255 255 255 / 3%);
+}
+
+.starter {
+  border-color: rgb(127 176 255 / 75%);
+}
+
+.counterpick {
+  border-color: rgb(116 194 122 / 70%);
+}
+
+.banner {
+  position: relative;
+  display: flex;
+  align-items: center;
+  height: 52px;
+  padding: 0 10px;
+  overflow: hidden;
+  background: rgb(255 255 255 / 6%);
+}
+
+.art {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  filter: brightness(0.45);
+}
+
+.off .art {
+  filter: grayscale(1) brightness(0.3);
+}
+
+.name {
+  position: relative;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 600;
+  font-size: 14px;
+  text-shadow: 0 1px 3px rgb(0 0 0 / 90%);
+}
+
+.off .name {
+  color: var(--text-secondary);
+}
+
+.roles {
+  display: grid;
+  grid-template-columns: 1fr 1.4fr 0.8fr;
+  border-top: 1px solid rgb(255 255 255 / 10%);
+}
+
+.role {
+  min-width: 0;
+  padding: 4px 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  border: none;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 11px;
+  cursor: pointer;
+}
+
+.role + .role {
+  border-left: 1px solid rgb(255 255 255 / 10%);
+}
+
+.role:hover {
+  color: inherit;
+  background: rgb(255 255 255 / 6%);
+}
+
+.roleOn {
+  font-weight: 700;
+  cursor: default;
+}
+
+.starter .roleOn {
+  color: #0d1a2e;
+  background: #7fb0ff;
+}
+
+.counterpick .roleOn {
+  color: #0d2a10;
+  background: #74c27a;
+}
+
+.off .roleOn {
+  color: inherit;
+  background: rgb(255 255 255 / 12%);
+}
+
+.other {
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 8px;
+}
+
+.otherHeader {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 8px 10px;
+  background: none;
+  border: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.otherTitle {
+  font-weight: 600;
+}
+
+.otherSummary {
+  flex: 1;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.chevron {
+  transition: transform 0.15s;
+}
+
+.chevronOpen {
+  transform: rotate(180deg);
+}
+
+.otherBody {
+  padding: 4px 10px 12px;
+}

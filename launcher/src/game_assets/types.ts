@@ -45,6 +45,11 @@ export type GameAssetManifest = {
    * before them until the manager fills them in; empty without a P+ SD card.
    */
   items?: Record<string, { file: string; name: string }>;
+  /**
+   * P+'s stage select icons by P+ stage id (src/common/stages.ts): stages/<id>.png, 128x112. Absent in caches
+   * extracted before them until the manager fills them in; empty without a P+ SD card.
+   */
+  stages?: Record<string, { file: string; name: string }>;
   missing: string[];
   warnings?: string[];
 };

@@ -54,8 +54,8 @@ export class GameAssetsManager {
     private readonly resolveSources: SourceResolver,
     private readonly extract: ExtractFn,
     private readonly fillMissing?: FillMissingFn,
-    /** Whether a cached manifest needs fillMissing (by default: it has no sounds). */
-    private readonly needsFill: (manifest: GameAssetManifest) => boolean = (m) => !m.sounds || !m.items,
+    /** Whether a cached manifest needs fillMissing (by default: no sounds, item icons or stage icons). */
+    private readonly needsFill: (manifest: GameAssetManifest) => boolean = (m) => !m.sounds || !m.items || !m.stages,
   ) {}
 
   getState(): GameAssetsState {

@@ -4,6 +4,8 @@
  * can say what is wrong before publishing; the server checks again and has the last word.
  */
 
+import { stageInfo } from "./stages";
+
 export type RuleStyle = "time" | "stock" | "coin";
 export type RulePause = "normal" | "hold";
 export type StageChoice = "loser-picks" | "strike" | "random";
@@ -87,7 +89,7 @@ export const PPLUS_LEGAL_STAGES: readonly { id: number; name: string }[] = [
 export const PPLUS_STARTERS = [0x01, 0x02, 0x21, 0x2d, 0x2e];
 
 export function stageName(id: number): string {
-  return PPLUS_LEGAL_STAGES.find((s) => s.id === id)?.name ?? `Stage ${id}`;
+  return stageInfo(id)?.name ?? `Stage ${id}`;
 }
 
 export function defaultMatchRules(): MatchRules {

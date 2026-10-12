@@ -1,12 +1,5 @@
 import type { MatchRules, Ruleset, StageChoice } from "@common/rulesets";
-import {
-  MAX_BANS,
-  MAX_RULESET_NAME_LEN,
-  PPLUS_LEGAL_STAGES,
-  stageName,
-  strikesUsed,
-  suggestStrikes,
-} from "@common/rulesets";
+import { MAX_BANS, MAX_RULESET_NAME_LEN, strikesUsed, suggestStrikes } from "@common/rulesets";
 import Button from "@mui/material/Button";
 import MenuItem from "@mui/material/MenuItem";
 import Switch from "@mui/material/Switch";
@@ -19,8 +12,8 @@ import React, { useEffect, useState } from "react";
 import { ItemsSection } from "./items_section";
 import { RulesetEditorMessages as Messages } from "./rulesets_page.messages";
 import styles from "./rulesets_page.module.css";
-
-type StageRole = "starter" | "counterpick" | "off";
+import type { StageRole } from "./stages_section";
+import { StagesSection } from "./stages_section";
 
 /** Every field of a ruleset (docs/rulesets-protocol.md §1), controlled. */
 export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (r: Ruleset) => void }) => {
@@ -48,12 +41,6 @@ export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (
     const byId = (a: number, b: number) => a - b;
     onChange(withStrikes({ ...r, stages: { starters: starters.sort(byId), counterpicks: counterpicks.sort(byId) } }));
   };
-
-  // P+'s legal stages, then any other id an imported file brought.
-  const legalIds = PPLUS_LEGAL_STAGES.map((s) => s.id);
-  const otherIds = [...r.stages.starters, ...r.stages.counterpicks].filter((id) => !legalIds.includes(id));
-  const roleOf = (id: number): StageRole =>
-    r.stages.starters.includes(id) ? "starter" : r.stages.counterpicks.includes(id) ? "counterpick" : "off";
 
   return (
     <div className={styles.editorFields}>
@@ -200,29 +187,7 @@ export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (
         <Row label={Messages.hazards()}>
           <Switch checked={r.rules.hazards} onChange={(e) => setRules({ hazards: e.target.checked })} />
         </Row>
-        <div className={styles.stageList}>
-          {[...legalIds, ...otherIds].map((id) => (
-            <div key={id} className={styles.stageRow} data-stage={id}>
-              <span>{stageName(id)}</span>
-              <ToggleButtonGroup
-                size="small"
-                exclusive={true}
-                value={roleOf(id)}
-                onChange={(_, role: StageRole | null) => role && setStageRole(id, role)}
-              >
-                <ToggleButton value="starter" sx={toggleSx}>
-                  {Messages.stageStarter()}
-                </ToggleButton>
-                <ToggleButton value="counterpick" sx={toggleSx}>
-                  {Messages.stageCounterpick()}
-                </ToggleButton>
-                <ToggleButton value="off" sx={toggleSx}>
-                  {Messages.stageOff()}
-                </ToggleButton>
-              </ToggleButtonGroup>
-            </div>
-          ))}
-        </div>
+        <StagesSection stages={r.stages} onRole={setStageRole} />
       </Section>
     </div>
   );
