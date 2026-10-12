@@ -23,6 +23,7 @@
 #include "online_menu.h"
 #include "ppom.h"
 #include "room_play.h"
+#include "stage_switch.h"
 
 namespace RoomRules {
 
@@ -76,6 +77,7 @@ namespace RoomRules {
     static const u32 RULES_CLOSE = 0x288;                            // muRuleTask: u8, 1 = close
     static const u32 RULES_PAGE1 = 0x268, RULES_PAGE2 = 0x26C;       // RULES, MORE RULES
     static const u32 RULES_ITEMS = 0x270;                            // the item switch
+    static const u32 RULES_SWITCH = 0x274;                           // the stage switch
     static const u32 OPEN_RULES = 0x80692E9C;                        // sel_char text+0x105D8
     static const int STATUS_FRAMES = 180;
 
@@ -87,6 +89,7 @@ namespace RoomRules {
         bool haveRules;
         bool changedNow;
         PPOM::Rules last;   // SESSION's rules last frame (a change: "Host changed the rules")
+        PPOM::RoomStages lastStages;   // ... and the room's stages (the STAGE SWITCH)
         int statusFrames;
         bool statusRed;
         const char* status;
@@ -133,6 +136,7 @@ namespace RoomRules {
 
     void reset()
     {
+        StageSwitch::close();   // (P+'s switch put back)
         s.opened = s.asHost = s.readOnly = s.setOnly = false;
         s.haveRules = false;
         s.statusFrames = 0;
@@ -176,8 +180,10 @@ namespace RoomRules {
         s.asHost = me < PPOM::SESSION_PLAYERS && se.roomHost == me;
         s.readOnly = !s.asHost || setOnly;
         s.setOnly = setOnly && s.asHost;
-        // The menu shows what is in the set rule and the menu record: the room's rules.
+        // The menu shows what is in the set rule and the menu record: the room's rules; its stage
+        // switch the room's stages.
         OnlineMenu::applyRules();
+        StageSwitch::open(!s.readOnly);
         pponline_callPreserving(OPEN_RULES, (u32)task, 0);
         s.opened = isOpen();
         if (s.opened) playSE(1);
@@ -209,6 +215,7 @@ namespace RoomRules {
         ru.inputAssist = r[0xC] ? 1 : 0;
         ru.itemFrequency = m[0];
         memcpy(ru.itemSwitch, m + 8, sizeof(ru.itemSwitch));
+        ru.hazards = StageSwitch::hazards() ? 1 : 0;   // the STAGE SWITCH's Z
         if (same(&ru, &cur, sizeof(ru))) return;
         if (ru.style != PPOM::STYLE_STOCK && ru.timeMinutes == 0) {
             say("A time match needs a time limit.", true);
@@ -231,8 +238,10 @@ namespace RoomRules {
         // it is news (and what they were looking at is out of date).
         bool changed = false;
         if (inRoom && se.rules.valid) {
-            changed = s.haveRules && !same(&s.last, &se.rules, sizeof(s.last));
+            changed = s.haveRules && (!same(&s.last, &se.rules, sizeof(s.last)) ||
+                                      !same(&s.lastStages, &se.stages, sizeof(s.lastStages)));
             memcpy(&s.last, &se.rules, sizeof(s.last));
+            memcpy(&s.lastStages, &se.stages, sizeof(s.lastStages));
             s.haveRules = true;
             if (changed && !host) say("Host changed the rules", false);
             s.changedNow = changed;
@@ -243,6 +252,8 @@ namespace RoomRules {
 
         bool menuOpen = isOpen();
         if (s.opened && menuOpen) {
+            u8* rt = rulesTask();
+            if (rt) StageSwitch::tick(rt);
             // Close it for a game, for a host who no longer is one, and for a viewer whose screens
             // are out of date (they can open it again).
             // (Between a set's games it stays open while that lasts, or until the set's session
@@ -252,10 +263,12 @@ namespace RoomRules {
         }
         if (s.opened && !menuOpen) {
             bool edits = s.asHost && !s.setOnly && host && inRoom && waiting;
+            if (edits) sendEdits();                  // (with the STAGE SWITCH's hazards)
+            bool stages = StageSwitch::close();
             s.opened = false;
             s.readOnly = false;
             s.setOnly = false;
-            if (edits) sendEdits();
+            if (edits && stages) StageSwitch::send();
         }
         if (PPOM::g_block.debug.cfg & PPOM::CFG_TEST_OPEN_RULES) {
             PPOM::g_block.debug.cfg &= ~PPOM::CFG_TEST_OPEN_RULES;
@@ -302,7 +315,8 @@ namespace RoomRules {
             return s.readOnly ? bits & (IN_MOVE | IN_B) : bits;
         }
         if (page == *(u32*)(rt + RULES_ITEMS)) return s.readOnly ? bits & (IN_DIRS | IN_B) : bits;
-        return bits & (IN_DIRS | IN_B);                                         // the stage switch
+        if (page == *(u32*)(rt + RULES_SWITCH)) return StageSwitch::input((u8*)page, bits);   // stage_switch.cpp
+        return bits & (IN_DIRS | IN_B);
     }
 
     // module 18 text+0x15B4 `mr r3,r31` (0x806A50D8): r3 = the filtered input, the page in r30.

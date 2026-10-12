@@ -13,6 +13,7 @@ namespace StageLegal {
     void setList(const u8* kinds, int n);  // srStageKind list (SESSION later); n <= 0: P+'s legal list
     bool allowedKind(int kind);
     bool selectableKind(int kind);         // a srStageKind on any page of P+'s stage select
+    int kindAt(int page, int pos);         // the stage at a page's position (P+'s tables), -1 none
     void onMsgCreate(MuMsg* m, u32 caller);  // the stage select's message object (its rule line)
     void onSssPrint(u32 caller);             // the stage select printed its rule line itself
 }

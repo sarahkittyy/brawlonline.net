@@ -181,6 +181,7 @@ namespace PPOM {
         ROOM_RULESET = 10,  // v6, host: code = a ruleset code (6 letters), empty: P+'s default
         ROOM_BEST_OF = 11,  // v6, host: arg = the set's length, 0 (no set) / 3 / 5 / 7 (the room's
                             // rules become Custom); not while a set is on
+        ROOM_STAGES = 12,   // v7, host: RoomStagesRequest (the STAGE SWITCH); not while a set is on
     };
 
     // CMD_ROOM request payload.
@@ -430,6 +431,16 @@ namespace PPOM {
     };                    // 0x40
 
     inline bool stageBit(const u8* mask, int id) { return id >= 0 && id < 256 && (mask[id >> 3] >> (id & 7)) & 1; }
+
+    // CMD_ROOM payload for ROOM_STAGES (v7): the room's stages as the host left the STAGE SWITCH
+    // (RoomStages' masks; a stage on both lists is a starter) and the loser's choice
+    // (CHOICE_LOSER_PICKS / CHOICE_LOSER_PICKS_LIST, 0xFF as it is).
+    struct RoomStagesRequest {
+        u8 op;            // ROOM_STAGES
+        u8 choice;
+        u8 _pad[2];
+        RoomStages stages;
+    };                    // 0x44
 
     struct RoomRulesRequest {
         u8 op;            // ROOM_RULES

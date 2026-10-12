@@ -162,6 +162,9 @@ constexpr u32 RL_ENTRIES = 4, RL_ENTRY = 32, RL_CODE = 0, RL_NAME = 8, RL_NAME_L
 constexpr u32 RR_CODE = 4, RS_SERIAL = 4, RS_TEXT = 8, RS_TEXT_LEN = 64;
 // v6: RoomRulesRequest (op 8): op, pad[3], Rules.
 constexpr u32 RR_RULES = 4;
+// v7, ppom.h RoomStagesRequest: op, choice (0 any stage / 3 from the list / 0xFF as it is), pad[2],
+// then the starters and the counterpicks as RoomStages' 32-byte masks.
+constexpr u32 RSQ_CHOICE = 1, RSQ_STARTERS = 4, RSQ_COUNTERPICKS = 0x24;
 
 constexpr u8 STATUS_OK = 0;
 constexpr u8 STATUS_UNSUPPORTED = 0xFF;
@@ -711,6 +714,35 @@ Response RoomResponse(const Core::CPUThreadGuard& guard, u32 payload, std::strin
     r.best_of = arg;
     ok = arg == 0 || arg == 3 || arg == 5 || arg == 7;
     break;
+  case 12:
+  {
+    // v7, the host's STAGE SWITCH: the room's stages and the loser's choice.
+    r.op = Rooms::Op::Stages;
+    const auto ids = [&](u32 off) {
+      std::vector<u16> out;
+      for (u32 k = 1; k < 0x100; ++k)
+      {
+        if (R8(guard, payload + off + k / 8) & (1u << (k % 8)))
+          out.push_back(static_cast<u16>(k));
+      }
+      return out;
+    };
+    r.starters = ids(RSQ_STARTERS);
+    r.counterpicks = ids(RSQ_COUNTERPICKS);
+    for (const u16 k : r.starters)
+    {
+      // A stage on both lists is a starter.
+      r.counterpicks.erase(std::remove(r.counterpicks.begin(), r.counterpicks.end(), k),
+                           r.counterpicks.end());
+    }
+    const u8 choice = R8(guard, payload + RSQ_CHOICE);
+    r.stage_choice = choice == CHOICE_LOSER_PICKS      ? "loser-picks" :
+                     choice == CHOICE_LOSER_PICKS_LIST ? "loser-picks-list" :
+                                                         "";
+    ok = (choice == CHOICE_LOSER_PICKS || choice == CHOICE_LOSER_PICKS_LIST || choice == 0xFF) &&
+         (!r.starters.empty() || !r.counterpicks.empty());
+    break;
+  }
   case 10:
   {
     // The host's ruleset: a code typed or picked in the game, or none (P+'s default).

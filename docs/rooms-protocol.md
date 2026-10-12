@@ -116,6 +116,7 @@ A request that is refused changes nothing and is answered with `room-error`. Mal
           "waitingFor": null, "canResume": false, "finished": false}
 ```
 
+- `room-stages {stages: {starters, counterpicks}, stageChoice?}` (host, between games, no set on; the game's STAGE SWITCH): the room's stage lists, and the loser's choice between `loser-picks` and `loser-picks-list` (only when the ruleset's is one of those two; absent: as it is). It needs a starter ("Make at least one stage a starter."); a strike pattern that no longer fits becomes the default one; like `room-rules` it makes the room's ruleset Custom and takes back every ready.
 - `ruleset.stages`: the ruleset's stage lists (`common::rules::StageLists`); the game shows and holds the loser's pick to them (Dolphin's SESSION `RoomStages`, `rooms-game-interface.md`). An mm from before it sends none: the game's own stage select.
 - `ruleset.code` null: P+'s default, or custom rules (`name` "Custom", `basedOn` "NorCal Weekly v3" when they were made from a published one: the host's `room-rules` turns a published ruleset into custom rules).
 - Any ruleset plays in any room (`docs/design/room-rules.md` decision G): a set, or striking every game, needs the room to make two sides (two players, or two teams of two with Teams on); elsewhere its games are single games on a random stage of the ruleset's, and while nobody is ready the status line says "Sets need 1v1 or 2v2" / "Strikes need 1v1 or 2v2". Nothing waits for it.

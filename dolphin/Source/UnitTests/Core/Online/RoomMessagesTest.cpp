@@ -176,6 +176,38 @@ TEST(RoomMessages, RoomRulesetStages)
   EXPECT_TRUE(m.view->ruleset.starters.empty());
 }
 
+TEST(RoomMessages, StagesRequest)
+{
+  // The host's STAGE SWITCH (room-stages, docs/rooms-protocol.md).
+  Request r;
+  r.op = Op::Stages;
+  r.starters = {1, 2};
+  r.counterpicks = {42};
+  r.stage_choice = "loser-picks-list";
+  auto j = RequestJson(r);
+  ASSERT_TRUE(j);
+  picojson::value v;
+  ASSERT_TRUE(picojson::parse(v, *j).empty());
+  EXPECT_EQ(v.get("type").to_str(), "room-stages");
+  EXPECT_EQ(v.get("stageChoice").to_str(), "loser-picks-list");
+  EXPECT_EQ(v.get("stages").get("starters").serialize(), "[1,2]");
+  EXPECT_EQ(v.get("stages").get("counterpicks").serialize(), "[42]");
+  // "As it is": no stageChoice.
+  r.stage_choice.clear();
+  j = RequestJson(r);
+  ASSERT_TRUE(j);
+  EXPECT_EQ(j->find("stageChoice"), std::string::npos);
+  // Out of range: nothing is sent.
+  r.stage_choice = "strike";
+  EXPECT_FALSE(RequestJson(r));
+  r.stage_choice.clear();
+  r.counterpicks = {256};
+  EXPECT_FALSE(RequestJson(r));
+  r.starters.clear();
+  r.counterpicks.clear();
+  EXPECT_FALSE(RequestJson(r));
+}
+
 TEST(RoomMessages, RefusesBadRoomStates)
 {
   const std::string ok = STATE;

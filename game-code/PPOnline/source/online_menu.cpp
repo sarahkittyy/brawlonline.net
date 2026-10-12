@@ -17,6 +17,7 @@
 #include "ppom.h"
 #include "netmenu.h"
 #include "room_play.h"
+#include "stage_switch.h"
 #include "room_rules.h"
 #include "rules_button.h"
 
@@ -2192,7 +2193,8 @@ namespace OnlineMenu {
         }
         char text[40];
         text[0] = 0;
-        if (in) {
+        // (not under the rules menu, where it read as the menu's own help)
+        if (in && !RoomRules::isOpen()) {
             char hostName[RoomCss::NAME_CHARS + 1];
             hostName[0] = 0;
             if (se.roomHost < PPOM::SESSION_PLAYERS) u16Name(hostName, se.players[se.roomHost].name);
@@ -2238,6 +2240,7 @@ namespace OnlineMenu {
             s_headerPress = 0;
             s.roomZHeld = 0;
             s.roomKickPort = -1;
+            roomButtons(in, host);   // (the host's "A: open/close" hint goes while the menu is open)
             return;
         }
         // The RULESET line's "Enter code": the keypad's ruleset mode once the menu has closed.
@@ -2892,6 +2895,8 @@ namespace Text {
         if (css) return css;
         const char* play = RoomPlay::menuText(msbin, line);   // the RULESET / SET descriptions
         if (play) return play;
+        const char* sw = StageSwitch::menuText(msg, msbin, line);  // the room's STAGE SWITCH
+        if (sw) return sw;
         const char* anyone = AnyoneMenu::line(msg, window, line, msbin);
         if (anyone) return anyone;
         const char* scene = Online::currentSceneName();

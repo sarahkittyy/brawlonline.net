@@ -276,10 +276,11 @@ namespace Labels {
         u32 fmt = *(u32*)(tex0 + 0x20);
         u8* data = tex0 + *(u32*)(tex0 + 0x10);
         if (w <= 0 || h <= 0 || w > 1024 || h > 256) return false;   // (P+'s rules values: 800x40 strips)
-        if (fmt != 5 && fmt != 0 && fmt != 14) return false;
-        // Textures are stored in whole blocks (RGB5A3 4x4, I4 and CMPR 8x8): a size that is no
-        // multiple of the block (the 88x20 "Seeking") has padding blocks at the right and the bottom.
-        const int bw = fmt == 5 ? 4 : 8, bh = fmt == 5 ? 4 : 8;
+        if (fmt != 5 && fmt != 0 && fmt != 14 && fmt != 2) return false;
+        // Textures are stored in whole blocks (RGB5A3 4x4, IA4 8x4, I4 and CMPR 8x8): a size that
+        // is no multiple of the block (the 88x20 "Seeking") has padding blocks at the right and
+        // the bottom.
+        const int bw = fmt == 5 ? 4 : 8, bh = fmt == 5 || fmt == 2 ? 4 : 8;
         const int bpr = (w + bw - 1) / bw;   // blocks per row
         // The masks cover only the box, with room for the glyphs' edges and the rim: they come
         // from the Network heap, which has about 60 KB free once a match has loaded Brawl's HOME
@@ -355,6 +356,21 @@ namespace Labels {
                 }
             }
             DCFlushRange(data, (u32)(bpr * bpc * 32));
+        } else if (fmt == 2) {
+            // IA4, 8x4 blocks, a texel a byte {alpha 4, intensity 4}: white letters, a black rim
+            // (P+'s switch labels, MenMainSwitch11Panel "TOGGLE PAGE").
+            grow(buf, rimBuf, mw, mh, rim);
+            for (int y = 0; y < h; y++) {
+                for (int x = 0; x < w; x++) {
+                    int m = mask.at(x, y), o = rimMask.at(x, y) * 2;
+                    if (o > 255) o = 255;
+                    int a = m > o ? m : o;
+                    int i = a ? m * 255 / a : 0;   // the letter's share of the coverage: white
+                    u32 blk = (u32)((y >> 2) * bpr + (x >> 3));
+                    data[blk * 32 + (y & 3) * 8 + (x & 7)] = (u8)(((a >> 4) << 4) | (i >> 4));
+                }
+            }
+            DCFlushRange(data, (u32)(bpr * ((h + bh - 1) / bh) * 32));
         } else {
             // I4, 8x8 blocks, two texels a byte.
             for (int y = 0; y < h; y++) {
@@ -499,5 +515,80 @@ namespace Labels {
             return isPtr((u32)tex) && *(u32*)tex == 0x54455830 ? tex : NULL;
         }
         return NULL;
+    }
+    u32 imageWord(const u8* tex0) { return ((u32)(tex0 + 0x40) & 0x1FFFFFFF) >> 5; }
+
+    u8* copyTexture(const u8* tex0)
+    {
+        u32 fmt = *(u32*)(tex0 + 0x20);
+        if (*(u32*)(tex0 + 0x10) != 0x40 || (fmt != 0 && fmt != 2)) return NULL;   // I4, IA4
+        int w = *(u16*)(tex0 + 0x1C), h = *(u16*)(tex0 + 0x1E), bh = fmt == 2 ? 4 : 8;
+        u32 bytes = (u32)(((w + 7) / 8) * ((h + bh - 1) / bh) * 32);
+        u8* m = (u8*)gfHeapManager::alloc(Heaps::Network, 0x40 + bytes + 32);
+        if (!m) return NULL;
+        u8* c = (u8*)(((u32)m + 31) & ~31u);
+        memcpy(c, tex0, 0x40 + bytes);
+        return c;
+    }
+
+    static void retarget(u8* p, u32 size, u32 from, u32 to)
+    {
+        // As room_css.cpp: the GXTexObj image words and the display lists' texture image
+        // registers (BP 0x61, 0x94-0x97 / 0xB4-0xB7).
+        for (u32 off = 0; off + 4 <= size; off += 4) {
+            if (*(u32*)(p + off) == from) *(u32*)(p + off) = to;
+        }
+        for (u32 off = 0; off + 5 <= size; off++) {
+            u8* q = p + off;
+            if (q[0] != 0x61 || !((q[1] >= 0x94 && q[1] <= 0x97) || (q[1] >= 0xB4 && q[1] <= 0xB7))) continue;
+            if ((((u32)q[2] << 16) | ((u32)q[3] << 8) | q[4]) != (from & 0xFFFFFF)) continue;
+            q[2] = (u8)(to >> 16);
+            q[3] = (u8)(to >> 8);
+            q[4] = (u8)to;
+        }
+    }
+
+    bool bindModel(u8* mdl, const char* name, u8* want)
+    {
+        if (!isPtr((u32)mdl) || *(u32*)mdl != 0x4D444C30 /* MDL0 */) return false;
+        u8* cur = boundTexture(mdl, name);
+        if (!cur) return false;
+        if (cur != want) {
+            rebindTexture(mdl, name, want);
+            u32 size = *(u32*)(mdl + 4);
+            if (size > 0x40 && size < 0x100000) {
+                retarget(mdl, size, imageWord(cur), imageWord(want));
+                DCFlushRange(mdl, size);
+            }
+        }
+        return true;
+    }
+
+    void bindTexture(u8* obj, const char* name, u8* want, const u32* from, int nFrom)
+    {
+        u8* mdl = *(u8**)(obj + 8);
+        if (!bindModel(mdl, name, want)) return;
+        u32 to = imageWord(want);
+        u8* scn = *(u8**)(obj + 0xC);
+        if (!isPtr((u32)scn)) return;
+        u8* bufs[3] = {scn, *(u8**)(scn + 0x14C), *(u8**)(scn + 0x140)};
+        for (int i = 0; i < 3; i++) {
+            u8* p = bufs[i];
+            if (!isPtr((u32)p)) continue;
+            u32 len = i == 0 ? 0x2000 : 0x1000;
+            for (u32 off = 0; off < len; off += 4) {
+                u32 w = *(u32*)(p + off);
+                u32 r = w >> 24;
+                if (!((r >= 0x94 && r <= 0x97) || (r >= 0xB4 && r <= 0xB7))) continue;
+                u32 a = w & 0xFFFFFF;
+                if (a == to || !a) continue;
+                for (int k = 0; k < nFrom; k++) {
+                    if (from[k] && a == from[k]) {
+                        *(u32*)(p + off) = (w & 0xFF000000u) | to;
+                        break;
+                    }
+                }
+            }
+        }
     }
 }

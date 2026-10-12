@@ -710,6 +710,34 @@ std::optional<std::string> RequestJson(const Request& r)
     o["type"] = picojson::value("room-best-of");
     o["bestOf"] = picojson::value(static_cast<double>(r.best_of));
     break;
+  case Op::Stages:
+  {
+    if (r.starters.empty() && r.counterpicks.empty())
+      return std::nullopt;
+    const auto ids = [](const std::vector<u16>& v) -> std::optional<picojson::array> {
+      picojson::array a;
+      for (const u16 k : v)
+      {
+        if (k == 0 || k > 0xFF)
+          return std::nullopt;
+        a.emplace_back(static_cast<double>(k));
+      }
+      return a;
+    };
+    const auto starters = ids(r.starters), counterpicks = ids(r.counterpicks);
+    if (!starters || !counterpicks)
+      return std::nullopt;
+    picojson::object so;
+    so["starters"] = picojson::value(*starters);
+    so["counterpicks"] = picojson::value(*counterpicks);
+    o["type"] = picojson::value("room-stages");
+    o["stages"] = picojson::value(so);
+    if (r.stage_choice == "loser-picks" || r.stage_choice == "loser-picks-list")
+      o["stageChoice"] = picojson::value(r.stage_choice);
+    else if (!r.stage_choice.empty())
+      return std::nullopt;
+    break;
+  }
   case Op::SetAction:
     o["type"] = picojson::value("room-set");
     o["action"] = picojson::value(r.flag ? "resume" : "restart");
@@ -759,6 +787,8 @@ const char* OpName(Op op)
     return "step";
   case Op::BestOf:
     return "best-of";
+  case Op::Stages:
+    return "stages";
   case Op::Ruleset:
     return "ruleset";
   case Op::RulesetList:

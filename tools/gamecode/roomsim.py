@@ -66,6 +66,18 @@ class Room:
     set_flags: int = 0        # 1 paused, 2 can resume (results differed, everyone there), 4 finished
     side_slots: list = field(default_factory=lambda: [0, 0])   # each side's slots, a bit per slot
     winner: int = 0xFF
+    # SESSION RoomStages (ppom.h, v7): the ruleset's starters and counterpicks (P+ default's).
+    starters: list = field(default_factory=lambda: [0x01, 0x02, 0x21, 0x2D, 0x2E])
+    counterpicks: list = field(default_factory=lambda: [0x03, 0x04, 0x05, 0x06, 0x09, 0x0C, 0x0D, 0x1C, 0x1F, 0x23])
+
+
+def stage_mask(ids) -> bytes:
+    """A RoomStages mask (ppom.h, v7): bit k of byte k / 8 for stage id k."""
+    m = bytearray(0x20)
+    for k in ids:
+        if 0 <= k < 256:
+            m[k // 8] |= 1 << (k % 8)
+    return bytes(m)
 
 
 class RoomSim:
@@ -85,6 +97,7 @@ class RoomSim:
         self.rulesets: list[tuple[str, str]] = []
         self.rulesets_state = 2
         self.ruleset_db: dict[str, tuple[str, int]] = {}
+        self.stages_requests: list[tuple[int, list, list]] = []   # ROOM_STAGES seen: (choice, starters, counterpicks)
 
     # ---- the room model -------------------------------------------------------------------
     def me(self) -> int:
@@ -246,6 +259,19 @@ class RoomSim:
                 for m in r.members:
                     if m:
                         m.ready = False
+        elif op == 12 and r:   # ROOM_STAGES (v7): choice at +1, the starters' and counterpicks' masks
+            if host:
+                ids = lambda m: [k for k in range(1, 256) if m[k // 8] >> (k % 8) & 1]  # noqa: E731
+                r.starters = ids(p[4:0x24])
+                r.counterpicks = [k for k in ids(p[0x24:0x44]) if k not in r.starters]
+                if p[1] in (0, 3):
+                    r.stage_choice = p[1]
+                self.stages_requests.append((p[1], list(r.starters), list(r.counterpicks)))
+                for m in r.members:
+                    if m:
+                        m.ready = False
+            else:
+                self.set_error("Only the host can do that.")
         elif op == 8 and r:   # ROOM_RULES (v6): the payload's Rules from +4; every ready taken back
             if host:
                 r.rules = bytes(p[4:4 + ppom.RULES_SIZE])
@@ -297,6 +323,10 @@ class RoomSim:
                                        r.sides[0], r.sides[1], r.set_flags,
                                        r.side_slots[0], r.side_slots[1], r.winner])
             se[ppom.S_PLAY:ppom.S_PLAY + 0x40] = pl
+        if len(se) >= ppom.S_STAGES + 0x40:   # v7: RoomStages, the room's stages
+            in_room = r and self.phase == 2
+            se[ppom.S_STAGES:ppom.S_STAGES + 0x40] = (stage_mask(r.starters) + stage_mask(r.counterpicks)
+                                                      if in_room else bytes(0x40))
         if len(se) >= ppom.S_RULES + ppom.RULES_SIZE:   # v6: the room's rules on the room CSS
             se[ppom.S_RULES:ppom.S_RULES + ppom.RULES_SIZE] = r.rules if (r and self.phase == 2) else bytes(ppom.RULES_SIZE)
         for i in range(4):

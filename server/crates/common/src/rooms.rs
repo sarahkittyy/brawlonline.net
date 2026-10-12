@@ -37,6 +37,7 @@ pub const ROOM_RESULT: &str = "room-result";
 pub const ROOM_SET: &str = "room-set";
 pub const ROOM_STEP: &str = "room-step";
 pub const ROOM_BEST_OF: &str = "room-best-of";
+pub const ROOM_STAGES: &str = "room-stages";
 /// A side's stage actions in one `room-step` at most (a strike pattern of 8 steps of up to 8).
 pub const STEP_ACTIONS_MAX: usize = 64;
 pub const ROOM_RULESET: &str = "room-ruleset";
@@ -161,6 +162,11 @@ pub enum RoomRequest {
     /// `room-best-of {bestOf}` (host, between games, no set on): the room plays sets of 3, 5 or 7
     /// games, or none (0). Like a rules edit it makes the room's ruleset custom.
     BestOf { best_of: u8 },
+    /// `room-stages {stages, stageChoice?}` (host, between games, no set on): the room's stage
+    /// lists as the host left the game's STAGE SWITCH, and whether the loser picks from them
+    /// (`loser-picks` / `loser-picks-list`; absent: as it is). Like a rules edit it makes the
+    /// room's ruleset custom.
+    Stages { stages: crate::rules::StageLists, stage_choice: Option<crate::rules::StageChoice> },
     /// `room-ruleset {code}` (host, between games, no set on): play a published ruleset (a code),
     /// or P+'s default (`code` null). The code also becomes the host's remembered ruleset.
     Ruleset { code: Option<String> },
@@ -187,6 +193,7 @@ impl RoomRequest {
             RoomRequest::Set { .. } => ROOM_SET,
             RoomRequest::Step { .. } => ROOM_STEP,
             RoomRequest::BestOf { .. } => ROOM_BEST_OF,
+            RoomRequest::Stages { .. } => ROOM_STAGES,
             RoomRequest::Ruleset { .. } => ROOM_RULESET,
             RoomRequest::RulesetList => ROOM_RULESETS,
         }
@@ -231,6 +238,10 @@ impl RoomRequest {
                 json!({ "game": game, "actions": actions, "matchStarted": match_started })
             }
             RoomRequest::BestOf { best_of } => json!({ "bestOf": best_of }),
+            RoomRequest::Stages { stages, stage_choice } => match stage_choice {
+                Some(c) => json!({ "stages": stages, "stageChoice": c }),
+                None => json!({ "stages": stages }),
+            },
             RoomRequest::Ruleset { code } => json!({ "code": code }),
         };
         v["type"] = json!(self.op());
@@ -347,6 +358,22 @@ impl RoomRequest {
                 RoomRequest::Result { game, winner_side, stage }
             }
             ROOM_RULESETS => RoomRequest::RulesetList,
+            ROOM_STAGES => {
+                let raw = v.get("stages").ok_or_else(|| format!("{kind}: `stages` is missing"))?;
+                let stages: crate::rules::StageLists =
+                    serde_json::from_value(raw.clone()).map_err(|e| format!("{kind}: {e}"))?;
+                let mut seen = std::collections::HashSet::new();
+                for s in stages.all() {
+                    if s == 0 || s > crate::rules::MAX_STAGE_ID || !seen.insert(s) {
+                        return Err(format!("{kind}: `stages` must list stage ids 1-255 once each"));
+                    }
+                }
+                let stage_choice = match v.get("stageChoice") {
+                    None | Some(serde_json::Value::Null) => None,
+                    Some(c) => Some(serde_json::from_value(c.clone()).map_err(|e| format!("{kind}: {e}"))?),
+                };
+                RoomRequest::Stages { stages, stage_choice }
+            }
             ROOM_RULESET => RoomRequest::Ruleset {
                 code: match v.get("code") {
                     None | Some(serde_json::Value::Null) => None,
@@ -684,6 +711,11 @@ mod tests {
             RoomRequest::Step { game: 3, actions: [vec![], vec![]], match_started: true },
             RoomRequest::BestOf { best_of: 5 },
             RoomRequest::BestOf { best_of: 0 },
+            RoomRequest::Stages {
+                stages: crate::rules::StageLists { starters: vec![1, 2], counterpicks: vec![0x2A] },
+                stage_choice: Some(crate::rules::StageChoice::LoserPicksList),
+            },
+            RoomRequest::Stages { stages: crate::rules::StageLists::default(), stage_choice: None },
             RoomRequest::RulesetList,
             RoomRequest::Join { code: "KFQB".into() },
             RoomRequest::Leave,
@@ -737,6 +769,11 @@ mod tests {
             (ROOM_BEST_OF, json!({"bestOf": 1})),
             (ROOM_BEST_OF, json!({"bestOf": 9})),
             (ROOM_BEST_OF, json!({})),
+            (ROOM_STAGES, json!({})),
+            (ROOM_STAGES, json!({"stages": {"starters": [0]}})),
+            (ROOM_STAGES, json!({"stages": {"starters": [1], "counterpicks": [1]}})),
+            (ROOM_STAGES, json!({"stages": {"starters": [1], "bans": []}})),
+            (ROOM_STAGES, json!({"stages": {"starters": [1]}, "stageChoice": "pick"})),
             (ROOM_STEP, json!({"game": 1, "actions": [[0], []]})),
             (ROOM_STEP, json!({"game": 1, "actions": [[256], []]})),
             (ROOM_STEP, json!({"game": 0, "actions": [[], []]})),

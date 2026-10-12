@@ -11,6 +11,7 @@ Screenshots: run/artifacts/game-code/rooms/stage-list/<test>/<player>/.
 """
 from __future__ import annotations
 
+import struct
 from typing import Callable
 
 import pytest
@@ -166,3 +167,37 @@ def test_room_loser_picks_any_stage(backend: OnlineBackend, dolphin: Callable[..
     rep = online_set.play_game([a, b], game + 1)
     assert rep["checksums"]["mismatches"] == 0, rep
     assert rep["stage"] in (BF, FD, YS), ("P+'s random left the room's stages", rep)
+
+
+@pytest.mark.slow
+def test_host_edits_the_stages_in_game(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                       gpu_backend: str) -> None:
+    """The host's STAGE SWITCH (stage_switch.cpp) with the real Dolphin and mm: Yoshi's Story becomes
+    a counterpick and the loser picks from the list; when the menu closes the room is Custom, both
+    machines' SESSION has the new stages and choice, and the other player's ready is taken back."""
+    from test_room_rules import TASK_RULES, close_menu, css_task, open_rules, two_in_a_room
+    a, b, _code = two_in_a_room(backend, dolphin, gpu_backend, "switch-edits")
+    b.steps("tap START 8", "wait 40")
+    until_view(a, lambda v: v["slots"][1]["bits"] & ppom.SLOT_READY, "A sees B ready")
+
+    def cursor() -> tuple[int, int]:
+        page = a.c.read_u32(a.c.read_u32(css_task(a) + TASK_RULES) + 0x274)
+        return struct.unpack(">2i", a.c.read_mem(page + 0x670, 8))
+
+    open_rules(a)
+    for k in ["DDOWN"] * 5 + ["DRIGHT", "A"] + ["DDOWN"] * 5 + ["A"]:
+        a.steps(f"tap {k} 8", "wait 14")
+    a.steps("wait 40")
+    assert cursor() == (0, 0), cursor()
+    a.steps("tap DDOWN 8", "wait 14")             # Yoshi's Story, page 1's first stage
+    assert cursor() == (0, 1), cursor()
+    a.steps("tap A 8", "wait 14", "tap DUP 8", "wait 14", "tap A 8", "wait 14")   # counterpick; the bar
+    a.shot("10-host-switch")
+    close_menu(a)
+    for g in (a, b):
+        _wait(lambda g=g: YS in (session(g).get("stages") or {}).get("counterpicks", []), 20,
+              f"{g.name}: Yoshi's Story on the room's list")
+        se = session(g)
+        assert se["play"]["stage_choice"] == CHOICE_LOSER_PICKS_LIST, se["play"]
+        assert se["play"]["name"] == "Custom", se["play"]
+    until_view(b, lambda v: not v["slots"][1]["bits"] & ppom.SLOT_READY, "B's ready taken back")

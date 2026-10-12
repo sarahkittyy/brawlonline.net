@@ -110,6 +110,10 @@ pub fn set_won(name: &str, won: u8, lost: u8) -> String {
 }
 /// `room-best-of` for a ruleset whose stages can't make a set (fewer than two starters...).
 pub const SETS_NOT_POSSIBLE: &str = "These stages can't play a set.";
+/// `room-stages` without a starter (every ruleset strikes or draws from at least one).
+pub const NO_STARTER_STAGE: &str = "Make at least one stage a starter.";
+/// `room-stages` the ruleset can't play otherwise (a set's bans with too few stages...).
+pub const STAGES_NOT_POSSIBLE: &str = "The room can't play these stages.";
 /// The status line, nobody ready yet, when the room's ruleset plays a set (or strikes every game)
 /// but the room does not make two sides (two players, or two teams of two): its games are single
 /// games, on a random stage of the ruleset's (room-rules.md decision G). Nothing waits for it.
@@ -272,6 +276,8 @@ mod tests {
             set_won("player1", 2, 1),
             set_won("WWWWWWWWWWWWWWW & WWWWWWWWWWWWWWW", 2, 0),
             SETS_NOT_POSSIBLE.to_string(),
+            NO_STARTER_STAGE.to_string(),
+            STAGES_NOT_POSSIBLE.to_string(),
             SETS_NEED_TWO_SIDES.to_string(),
             STRIKES_NEED_TWO_SIDES.to_string(),
             RULESET_NOT_FOUND.to_string(),

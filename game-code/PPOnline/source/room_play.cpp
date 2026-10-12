@@ -121,78 +121,6 @@ namespace RoomPlay {
     };
     static RowTex s_rows[2];
 
-    static u32 imageWord(const u8* tex) { return ((u32)(tex + 0x40) & 0x1FFFFFFF) >> 5; }
-
-    static u8* copyTex(const u8* tex)
-    {
-        if (*(u32*)(tex + 0x10) != 0x40 || *(u32*)(tex + 0x20) != 0) return NULL;   // I4 only
-        int w = *(u16*)(tex + 0x1C), h = *(u16*)(tex + 0x1E);
-        u32 bytes = (u32)(((w + 7) / 8) * ((h + 7) / 8) * 32);
-        u8* m = (u8*)gfHeapManager::alloc(Heaps::Network, 0x40 + bytes + 32);
-        if (!m) return NULL;
-        u8* c = (u8*)(((u32)m + 31) & ~31u);
-        memcpy(c, tex, 0x40 + bytes);
-        return c;
-    }
-
-    static void retarget(u8* p, u32 size, u32 from, u32 to)
-    {
-        // As room_css.cpp: the GXTexObj image words and the display lists' texture image
-        // registers (BP 0x61, 0x94-0x97 / 0xB4-0xB7).
-        for (u32 off = 0; off + 4 <= size; off += 4) {
-            if (*(u32*)(p + off) == from) *(u32*)(p + off) = to;
-        }
-        for (u32 off = 0; off + 5 <= size; off++) {
-            u8* q = p + off;
-            if (q[0] != 0x61 || !((q[1] >= 0x94 && q[1] <= 0x97) || (q[1] >= 0xB4 && q[1] <= 0xB7))) continue;
-            if ((((u32)q[2] << 16) | ((u32)q[3] << 8) | q[4]) != (from & 0xFFFFFF)) continue;
-            q[2] = (u8)(to >> 16);
-            q[3] = (u8)(to >> 8);
-            q[4] = (u8)to;
-        }
-    }
-
-    // Point the model's `name` at `want` (the MDL0's texture links and lists), and its ScnMdl's own
-    // copies of the texture objects (ScnMdl and its material buffers +0x14C / +0x140, every
-    // frame) from any of `from` to it.
-    static void bind(u8* obj, const char* name, u8* want, const u32* from, int nFrom)
-    {
-        u8* mdl = *(u8**)(obj + 8);
-        if (!isPtr((u32)mdl) || *(u32*)mdl != 0x4D444C30 /* MDL0 */) return;
-        u8* cur = Labels::boundTexture(mdl, name);
-        if (!cur) return;
-        u32 to = imageWord(want);
-        if (cur != want) {
-            Labels::rebindTexture(mdl, name, want);
-            u32 size = *(u32*)(mdl + 4);
-            if (size > 0x40 && size < 0x100000) {
-                retarget(mdl, size, imageWord(cur), to);
-                DCFlushRange(mdl, size);
-            }
-        }
-        u8* scn = *(u8**)(obj + 0xC);
-        if (!isPtr((u32)scn)) return;
-        u8* bufs[3] = {scn, *(u8**)(scn + 0x14C), *(u8**)(scn + 0x140)};
-        for (int i = 0; i < 3; i++) {
-            u8* p = bufs[i];
-            if (!isPtr((u32)p)) continue;
-            u32 len = i == 0 ? 0x2000 : 0x1000;
-            for (u32 off = 0; off < len; off += 4) {
-                u32 w = *(u32*)(p + off);
-                u32 r = w >> 24;
-                if (!((r >= 0x94 && r <= 0x97) || (r >= 0xB4 && r <= 0xB7))) continue;
-                u32 a = w & 0xFFFFFF;
-                if (a == to || !a) continue;
-                for (int k = 0; k < nFrom; k++) {
-                    if (from[k] && a == from[k]) {
-                        *(u32*)(p + off) = (w & 0xFF000000u) | to;
-                        break;
-                    }
-                }
-            }
-        }
-    }
-
     static void showRow(u8* rt, int r, const char* value)
     {
         const Row& R = ROWS[r];
@@ -206,14 +134,14 @@ namespace RoomPlay {
             u8* val = Labels::boundTexture(mdl, R.valueTex);
             if (!lab || !val) return;
             if (!T.label) {
-                T.origLabel = imageWord(lab);
-                T.label = copyTex(lab);
+                T.origLabel = Labels::imageWord(lab);
+                T.label = Labels::copyTexture(lab);
                 if (!T.label) return;
             }
             for (int k = 0; k < 2; k++) {
                 if (T.value[k]) continue;
-                if (k == 0) T.origValue = imageWord(val);
-                T.value[k] = copyTex(val);
+                if (k == 0) T.origValue = Labels::imageWord(val);
+                T.value[k] = Labels::copyTexture(val);
                 if (!T.value[k]) return;
             }
             T.text[0] = 1;   // (no text drawn yet)
@@ -233,9 +161,9 @@ namespace RoomPlay {
             g_roomPlay.drawn++;
         }
         u32 fromLabel[1] = {T.origLabel};
-        bind(obj, R.labelTex, T.label, fromLabel, 1);
-        u32 fromValue[3] = {T.origValue, imageWord(T.value[0]), imageWord(T.value[1])};
-        bind(obj, R.valueTex, T.value[T.shown], fromValue, 3);
+        Labels::bindTexture(obj, R.labelTex, T.label, fromLabel, 1);
+        u32 fromValue[3] = {T.origValue, Labels::imageWord(T.value[0]), Labels::imageWord(T.value[1])};
+        Labels::bindTexture(obj, R.valueTex, T.value[T.shown], fromValue, 3);
         strncpy(g_roomPlay.value[r], value, sizeof(g_roomPlay.value[r]) - 1);
     }
 

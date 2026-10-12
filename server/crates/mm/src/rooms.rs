@@ -36,7 +36,7 @@ use crate::engine::{ConnId, Output, RulesetFetch};
 use crate::messages as msg;
 use crate::room_set::{self, SetProgress};
 use crate::ruleset::ModeRules;
-use common::rules::Ruleset;
+use common::rules::{Ruleset, StageChoice, StageLists};
 
 #[derive(Debug, Clone)]
 pub struct RoomsConfig {
@@ -233,6 +233,33 @@ impl Room {
         r.validate().map_err(|e| {
             tracing::debug!(code = %self.code, "best of {best_of}: {e}");
             msg::SETS_NOT_POSSIBLE
+        })?;
+        Ok(r)
+    }
+
+    /// The room's ruleset with the host's stages from the game's STAGE SWITCH, and the loser's
+    /// choice between any stage and the list (only between those two: strike and random are the
+    /// launcher's). A strike pattern that no longer fits the starters becomes the default one.
+    fn with_stages(&self, stages: StageLists, choice: Option<StageChoice>) -> Result<Ruleset, &'static str> {
+        if stages.starters.is_empty() {
+            return Err(msg::NO_STARTER_STAGE);
+        }
+        let mut r = self.ruleset.clone();
+        r.stages = stages;
+        let loser_picks = |c: StageChoice| matches!(c, StageChoice::LoserPicks | StageChoice::LoserPicksList);
+        if let Some(c) = choice.filter(|&c| loser_picks(c) && loser_picks(r.stage_choice) && r.best_of == 0) {
+            r.stage_choice = c;
+        }
+        if r.strikes_used() {
+            let fits = r.strikes.iter().map(|&n| n as usize).sum::<usize>() + 1 == r.stages.starters.len();
+            if !fits {
+                r.strikes = room_set::default_strikes(r.stages.starters.len());
+            }
+        }
+        r.normalize();
+        r.validate().map_err(|e| {
+            tracing::debug!(code = %self.code, "stages: {e}");
+            msg::STAGES_NOT_POSSIBLE
         })?;
         Ok(r)
     }
@@ -950,6 +977,23 @@ impl RoomBook {
                 if room.ruleset.best_of != best_of {
                     room.ruleset = room.with_best_of(best_of)?;
                     tracing::info!(%code, best_of, "room best of");
+                    room.edited();
+                }
+            }
+            RoomRequest::Stages { stages, stage_choice } => {
+                if !is_host {
+                    return Err(msg::HOST_ONLY);
+                }
+                if !waiting {
+                    return Err(msg::BETWEEN_GAMES);
+                }
+                if room.set_on() {
+                    return Err(msg::SET_ON);
+                }
+                let r = room.with_stages(stages, stage_choice)?;
+                if r != room.ruleset {
+                    tracing::info!(%code, stages = ?r.stages, choice = ?r.stage_choice, "room stages");
+                    room.ruleset = r;
                     room.edited();
                 }
             }
@@ -1935,6 +1979,44 @@ mod tests {
         let resp = start(&mut t, &code, 200);
         assert!(serde_json::to_string(&resp).unwrap().contains(r#""pickFromStages":true"#));
         assert_eq!((resp.pick_from_stages, resp.stages), (Some(true), Some(vec![1, 2, 0x2A])));
+    }
+
+    /// The host's STAGE SWITCH (`room-stages`): the room's stages and the loser's choice between any
+    /// stage and the list; the rules become custom and every ready is taken back. Strike and random
+    /// stay as they are, and a strike pattern that no longer fits becomes the default one.
+    #[test]
+    fn the_host_edits_the_rooms_stages() {
+        use common::rules::StageChoice;
+        let stages = |starters: Vec<u16>, counterpicks: Vec<u16>| StageLists { starters, counterpicks };
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        join(&mut t, 2, &code);
+        t.req(2, RoomRequest::Ready { ready: true, character: Some(2), costume: Some(0) });
+        let req = |s: StageLists, c: Option<StageChoice>| RoomRequest::Stages { stages: s, stage_choice: c };
+        let out = t.req(2, req(stages(vec![1], vec![]), None));
+        assert_eq!(msgs(&out, 2)[0]["error"], msg::HOST_ONLY);
+        let out = t.req(1, req(stages(vec![], vec![1]), None));
+        assert_eq!(msgs(&out, 1)[0]["error"], msg::NO_STARTER_STAGE);
+
+        let out = t.req(1, req(stages(vec![1, 2], vec![0x2A]), Some(StageChoice::LoserPicksList)));
+        let s = last_state(&out, 2);
+        assert_eq!(s["ruleset"]["name"], "Custom");
+        assert_eq!(s["ruleset"]["stageChoice"], "loser-picks-list");
+        assert_eq!(s["ruleset"]["stages"], serde_json::json!({"starters": [1, 2], "counterpicks": [0x2A]}));
+        assert!(s["slots"][1]["player"]["ready"] == false, "B's ready not taken back: {s}");
+        // Back to any stage.
+        let out = t.req(1, req(stages(vec![1, 2], vec![0x2A]), Some(StageChoice::LoserPicks)));
+        assert_eq!(last_state(&out, 1)["ruleset"]["stageChoice"], "loser-picks");
+
+        // Striking every game: the choice stays, the pattern follows the starters.
+        let strike = Ruleset { stage_choice: StageChoice::Strike, strikes: vec![1, 2, 1], ..Default::default() };
+        let mut out = vec![];
+        t.book.apply_ruleset(&code, strike, Some("BCDFGH".into()), &mut out).unwrap();
+        let out = t.req(1, req(stages(vec![1, 2, 0x21], vec![]), Some(StageChoice::LoserPicksList)));
+        let s = last_state(&out, 1);
+        assert_eq!((s["ruleset"]["stageChoice"].clone(), s["ruleset"]["name"].clone()), ("strike".into(), "Custom".into()));
+        assert_eq!(s["ruleset"]["basedOn"], "P+ default v0");
+        assert_eq!(t.book.rooms[&code].ruleset.strikes, vec![1, 1]);
     }
 
     /// Players 1 and 2 ready up and their tickets come in (as `ticket..ticket+1`): the set ticket.

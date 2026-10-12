@@ -210,6 +210,7 @@ enum class Op : u8
   Ruleset = 10,   // the host plays a published ruleset (`ruleset`) or P+'s default (empty)
   RulesetList = 11,  // the player's rulesets to offer (room-rulesets)
   BestOf = 12,       // the host's set length (`best_of` 0 / 3 / 5 / 7; the game's ROOM_BEST_OF)
+  Stages = 13,       // v7, the host's STAGE SWITCH (`starters`, `counterpicks`, `stage_choice`)
   // Dolphin's own (not game ops)
   Ready = 100,
   Back = 101,
@@ -236,6 +237,8 @@ struct Request
   u8 winner_side = 0;                     // Result: 0 / 1, SIDE_DRAW, SIDE_VOID
   u16 stage = 0;                          // Result
   u8 best_of = 0;                         // BestOf: 0 (no set), 3, 5, 7
+  std::vector<u16> starters, counterpicks;  // Stages: stage ids 1-255
+  std::string stage_choice;                 // Stages: "loser-picks" / "loser-picks-list", "" as it is
   std::array<std::vector<u8>, 2> actions;  // Step: each side's stage actions (`game`; `flag`:
                                            // its match started)
 };
