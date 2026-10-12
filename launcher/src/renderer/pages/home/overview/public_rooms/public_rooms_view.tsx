@@ -253,23 +253,23 @@ export const RoomRow = React.memo(function RoomRow({
 });
 
 /**
- * The room's ruleset, left of the mode: a published ruleset's name (a click shows it), "Custom (based on ...)" for
- * custom rules, nothing for P+ default. Long names are cut, the whole name in the tooltip. Inside the row's button, so
- * it stops the click (and Enter / Space) from joining the room.
+ * The room's ruleset, left of the mode: a published ruleset's name (a click shows it), "Custom" for rules the host
+ * changed (whatever they started from: the server's `basedOn` is not shown, since one change or many read the same;
+ * the user's, 2026-10-12), nothing for P+ default. Long names are cut, the whole name in the tooltip. Inside the row's
+ * button, so it stops the click (and Enter / Space) from joining the room.
  */
 const RulesetCell = ({ room, onShow }: { room: PublicRoom; onShow?: (room: PublicRoom) => void }) => {
   const r = room.ruleset;
-  if (!r || (!r.code && !r.basedOn)) {
+  // Custom: a published ruleset edited (`basedOn`), or P+ default edited (mm names it "Custom").
+  const custom = !!r && !r.code && (!!r.basedOn || r.name === "Custom");
+  if (!r || (!r.code && !custom)) {
     return <span className={styles.ruleset} />;
   }
   if (!r.code) {
-    const text = Messages.customRuleset(r.basedOn ?? "");
     return (
-      <Tooltip title={text} placement="top" enterDelay={400} disableInteractive={true}>
-        <span className={clsx(styles.ruleset, styles.rulesetCustom)} data-ruleset-cell="custom">
-          {text}
-        </span>
-      </Tooltip>
+      <span className={clsx(styles.ruleset, styles.rulesetCustom)} data-ruleset-cell="custom">
+        {Messages.customRuleset()}
+      </span>
     );
   }
   const full = Messages.rulesetTooltip(r.name, r.version, r.by);

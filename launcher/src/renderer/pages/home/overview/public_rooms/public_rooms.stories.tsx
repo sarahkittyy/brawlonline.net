@@ -87,9 +87,9 @@ const mockRooms: PublicRoom[] = [
     joinable: false,
     ruleset: {
       code: null,
-      name: "NorCal Weekly",
-      version: 3,
-      by: "sarah",
+      name: "Custom",
+      version: 0,
+      by: "",
       basedOn: "NorCal Weekly v3",
       bestOf: 0,
       stageChoice: "loser-picks",

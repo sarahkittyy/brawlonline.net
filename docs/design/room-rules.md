@@ -20,7 +20,7 @@ _2026-10-11. The user's decisions, plus defaults chosen without asking (marked *
 | 10 | Launcher box | Next to **Create room**: a ruleset code box with the ruleset's name beside it. A link fills it, and it **persists**, so the next room uses it without going back to Discord. An X clears it (P+ default). |
 | 11 | Remembered ruleset | **One per account, shared by the launcher box and in-game Create Room** (server-side). A new room, created either way, starts with it. The room always shows its name. |
 | 12 | In-game choice | RULES screen has a **Ruleset** line: a list of **recent and own published rulesets**, plus **Enter code** on Brawl's keypad (letter mode). Picking one also makes it the remembered ruleset. "P+ default" is the first entry. |
-| 13 | Editing a ruleset room | Allowed: the room becomes **"Custom (based on NorCal Weekly v3)"** and the code disappears, so it never claims to match the tournament. |
+| 13 | Editing a ruleset room | Allowed: the room becomes **"Custom"** and the code disappears, so it never claims to match the tournament. (It first read "Custom (based on NorCal Weekly v3)"; the user's, 2026-10-12: one change or many read the same, so the room list says only "Custom". mm still sends `basedOn` in `room-state` and `/v1/rooms`; nothing shows it.) |
 | 14 | First striker | **Random**, from the session seed (the online stand-in for RPS). |
 | 15 | FFA | **No striking, no sets.** An FFA ruleset is match rules plus a stage list. |
 | 16 | Mid-set disconnect | ~~The host decides~~ **Replaced 2026-10-11 by A** (§1.1): the set waits for the player and goes on by itself when they are back. |
