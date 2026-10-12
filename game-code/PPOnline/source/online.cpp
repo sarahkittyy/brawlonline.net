@@ -6,6 +6,8 @@
 //   MuMsg::beginPrint      0x800B8EE8  replace  -> debug log of MuMsg::printf callers
 //   MuMsg::create          0x800B8930  replace  -> debug log of message objects
 //   gfSceneManager::setNextSequence 0x8002D640 replace -> boot to the ONLINE page (boot_menu.cpp)
+//   gfPadSystem::startMotor x2 0x8002A9E8 / 0x8002A948, stopMotor 0x8002AA8C, stopMotorH 0x8002AB00
+//                          replace -> a port outside 0-7 does nothing (it overwrote the pad thread)
 #include <gf/gf_scene.h>
 #include <memory.h>
 #include <mu/mu_msg.h>
@@ -112,6 +114,40 @@ namespace Online {
         Rpc::tick();
     }
 
+    // gfPadSystem's rumble: startMotor(port, frames) 0x8002A9E8, startMotor(port) 0x8002A948,
+    // stopMotor(port) 0x8002AA8C and stopMotorH(port) 0x8002AB00 store to m_padMotorMasks[port]
+    // (u16, +0xB58 + 2 * port) with no bounds check, and the word before the array (+0xB54) is the
+    // pad thread the pad alarm resumes. The stage select rumbles the port that pressed A or START,
+    // and with any controller in charge (0xF0) it finds it by scanning the pads: -1 when no pad
+    // pressed it, as for the A the ranked stage select leaves with once the steps are done
+    // (stage_legal.cpp). startMotor(-1, 10) wrote 0x000A over the pointer's low half (0x805BA100
+    // became 0x805B000A), the pad thread never ran again and the controllers were dead for the
+    // rest of the run (players' logs 2026-10-11/12, after game 1's stage pick timed out or the
+    // opponent picked). A port outside 0-7 does nothing.
+    typedef void (*MotorFramesFn)(void*, int, u16);
+    typedef void (*MotorFn)(void*, int);
+    static MotorFramesFn s_origStartMotorFrames = NULL;
+    static MotorFn s_origStartMotor = NULL;
+    static MotorFn s_origStopMotor = NULL;
+    static MotorFn s_origStopMotorH = NULL;
+
+    static void hkStartMotorFrames(void* ps, int port, u16 frames)
+    {
+        if ((u32)port < 8) s_origStartMotorFrames(ps, port, frames);
+    }
+    static void hkStartMotor(void* ps, int port)
+    {
+        if ((u32)port < 8) s_origStartMotor(ps, port);
+    }
+    static void hkStopMotor(void* ps, int port)
+    {
+        if ((u32)port < 8) s_origStopMotor(ps, port);
+    }
+    static void hkStopMotorH(void* ps, int port)
+    {
+        if ((u32)port < 8) s_origStopMotorH(ps, port);
+    }
+
     // MuMsg::beginPrint: log MuMsg::printf calls (line = -2, data = printf's caller).
     static void hkBeginPrint(MuMsg* self, u32 window)
     {
@@ -141,6 +177,10 @@ namespace Online {
         api->syReplaceFunc(0x8002A210, reinterpret_cast<void*>(hkPadUpdate), (void**)&s_origPadUpdate);
         api->syReplaceFunc(0x800B8EE8, reinterpret_cast<void*>(hkBeginPrint), (void**)&s_origBeginPrint);
         api->syReplaceFunc(0x800B8930, reinterpret_cast<void*>(hkMsgCreate), (void**)&s_origMsgCreate);
+        api->syReplaceFunc(0x8002A9E8, reinterpret_cast<void*>(hkStartMotorFrames), (void**)&s_origStartMotorFrames);
+        api->syReplaceFunc(0x8002A948, reinterpret_cast<void*>(hkStartMotor), (void**)&s_origStartMotor);
+        api->syReplaceFunc(0x8002AA8C, reinterpret_cast<void*>(hkStopMotor), (void**)&s_origStopMotor);
+        api->syReplaceFunc(0x8002AB00, reinterpret_cast<void*>(hkStopMotorH), (void**)&s_origStopMotorH);
         NetMenu::install(api);
         OnlineMenu::install(api);
         StageLegal::install(api);
