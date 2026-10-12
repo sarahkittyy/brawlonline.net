@@ -1020,6 +1020,10 @@ void PutRoom(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::
   session[S_MODE] = MODE_TEAMS;
   const u32 game = lobby.active && room.game_active ? room.game + (lobby.game - 1) : room.game;
   session[S_GAME] = static_cast<u8>(game);
+  // A set's session between its games: its players are back on the CSS (the room says in game
+  // for the whole session). Their panels show them choosing, or ready with the character they
+  // locked in for the next game, not "Brawling".
+  const bool session_css = lobby.active && room.game_active && !lobby.in_match;
   for (int i = 0; i < SESSION_PLAYERS; ++i)
   {
     const u32 p = S_PLAYERS + i * SP_SIZE;
@@ -1040,10 +1044,22 @@ void PutRoom(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::
       bits |= SLOT_TAKEN;
       if (pl.ready)
         bits |= SLOT_READY;
-      if (pl.in_game)
+      // (A session player's lock-in, as last heard; none for a player not in it or gone.)
+      const auto lock = session_css ? Gprb::Session::GetPlayerLock(i) : std::nullopt;
+      const bool in_session = lock.has_value();
+      if (pl.in_game && !in_session)
         bits |= SLOT_IN_GAME;
       session[p + SP_ROOM_TEAM] = pl.team < Rooms::NUM_TEAMS ? pl.team : GameSetup::NO_TEAM;
-      if (pl.ready && pl.character)
+      if (in_session)
+      {
+        if (lock->ready && lock->game == lobby.game && lock->char_kind != 0xFF)
+        {
+          bits |= SLOT_READY;
+          session[p + SP_ROOM_CHAR] = lock->char_kind;
+          session[p + SP_ROOM_COSTUME] = lock->costume;
+        }
+      }
+      else if (pl.ready && pl.character)
       {
         session[p + SP_ROOM_CHAR] = *pl.character;
         session[p + SP_ROOM_COSTUME] = pl.costume.value_or(0);
