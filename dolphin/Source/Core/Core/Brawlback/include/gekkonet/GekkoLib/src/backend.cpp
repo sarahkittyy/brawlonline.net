@@ -836,6 +836,9 @@ void Gekko::MessageSystem::OnSyncRequest(NetAddress& addr, NetPacket& pkt)
         }
 
         for (auto& player : *current) {
+            if (player->GetStatus() == Disconnected) {
+                continue;
+            }
             if (player->address.Equals(addr)) {
                 player->session_magic = body->rng_data;
                 if (player->sync_num == 0) {
@@ -874,6 +877,12 @@ void Gekko::MessageSystem::OnSyncResponse(NetAddress& addr, NetPacket& pkt)
             if (player->GetStatus() == Connected) {
                 // connected but the remote is still asking ? maybe high packet loss? send a response again
                 should_send++;
+                continue;
+            }
+
+            // a disconnected player stays disconnected: a late sync packet from it reconnected it,
+            // and its next timeout moved its agreed last frame without the claims' correction.
+            if (player->GetStatus() == Disconnected) {
                 continue;
             }
 
