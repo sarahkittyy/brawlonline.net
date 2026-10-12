@@ -43,6 +43,8 @@
 #include "Core/HW/CPU.h"
 #include "Core/HW/Memmap.h"
 #include "Core/HW/VideoInterface.h"
+#include "Core/Online/Chat.h"
+#include "Core/Online/ChatText.h"
 #include "Core/Online/GameBridge.h"
 #include "Core/Online/GameSetup.h"
 #include "Core/PowerPC/MMU.h"
@@ -203,6 +205,10 @@ struct PeerView
   Clock::time_point last_heard{};
   double rtt_ms = -1;
   bool oversize_logged = false;  // a control message over MAX_CONTROL_SIZE came from it
+  // Its PC is falling behind (its own check, UpdateSlowNotice): its frame rate, 0 if not; and
+  // whether this match showed the notice.
+  double slow_fps = 0;
+  bool slow_shown = false;
 };
 
 struct FrameRecord
@@ -376,6 +382,15 @@ struct State
   Clock::time_point follow_t{};
   double peer_fps = 0;
   u64 own_late = 0;  // displayed frames late without a rollback before them (this PC's own speed)
+  // "Falling behind" (UpdateSlowNotice): the last check of this PC's own speed, the checks in a
+  // row that found it slow, its frame rate once it is (0: not; sent to the peers), and whether
+  // this match showed the notice.
+  s64 slow_check_frame = -1;
+  u64 slow_check_own_late = 0;
+  Clock::time_point slow_check_t{};
+  int slow_checks = 0;
+  double slow_fps = 0;
+  bool slow_shown = false;
   // Slippi's frame advance (UpdateTimeSync): catch-up frames left in this batch, whether a batch
   // runs, and whether the frame running now / the previous displayed frame was one (its throttle
   // point is a frame early on purpose, not late).
@@ -1594,6 +1609,8 @@ void SendState()
     if (host && s.setup.game != 0)
       o["match_setup"] = SetupJson(s.setup);
     o["winner"] = picojson::value(static_cast<double>(s.last_winner));
+    if (s.slow_fps > 0)
+      o["slow"] = picojson::value(std::round(s.slow_fps * 10) / 10);
     if (!s_local_extra.empty())
       o["x"] = picojson::value(s_local_extra);
     if (host && !s.init_block.empty())
@@ -1738,6 +1755,14 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
   };
   if (const auto* x = get("name"); x && x->is<std::string>())
     p.name = PeerData::TruncateName(x->get<std::string>());
+  // Its PC is falling behind (UpdateSlowNotice): its frame rate; absent when it is not, and from
+  // builds before 2026-10-12.
+  {
+    const auto* x = get("slow");
+    p.slow_fps = x && x->is<double>() && x->get<double>() > 0 && x->get<double>() < 60 ?
+                     x->get<double>() :
+                     0;
+  }
   // The decider: the first peer that says it is, unless the host was configured.
   if (const auto* x = get("host"); x && x->is<bool>())
     p.claims_host = x->get<bool>();
@@ -2255,6 +2280,13 @@ void ResetRunStats()
   s.follow_t = {};
   s.peer_fps = 0;
   s.own_late = 0;
+  s.slow_check_frame = -1;
+  s.slow_check_own_late = 0;
+  s.slow_check_t = {};
+  s.slow_checks = 0;
+  s.slow_fps = 0;
+  s.slow_shown = false;
+  ForEachPeer([](int, PeerView& p) { p.slow_shown = false; });
   s.frames_to_advance = 0;
   s.advancing = s.advanced_this_frame = s.prev_frame_advanced = false;
   s.last_advance_frame = -1;
@@ -2420,6 +2452,7 @@ void EndRunning(Core::System& system, const std::string& reason)
   system.GetCoreTiming().SetPresentPacing(false);
   s.resim_pass = false;
   s.end_reason = reason;
+  s.slow_fps = 0;  // the peers stop showing this PC as falling behind
   if (s.mode == Mode::Network)
   {
     s.net_window.cadence = Rollback::PresentStats::TakeCadence();
@@ -3456,6 +3489,66 @@ void UpdatePingDisplay()
                        OSD::Duration::NORMAL, OSD::Color::CYAN);
 }
 
+// "Falling behind": a PC that cannot keep full speed slows the whole match down (UpdatePeerFollow),
+// and players blamed the netcode or the other player (prod 2026-10-12). Every SLOW_CHECK_FRAMES
+// after HARD_SYNC_UNTIL this PC checks its own speed: more than half of the frames late without a
+// rollback before them (LogPerfVerdict's test) and under SLOW_FPS frames a second. Two checks in a
+// row (10 s; one hitch, e.g. a shader compiling, is not enough) and it is falling behind: its
+// state messages carry its frame rate ("slow"), and every screen shows it once per match, on the
+// screen (OSD, which hidden chat does not hide) and in chat: "Your PC is falling behind" here,
+// "<name>'s PC is falling behind" on the others'. A peer's notice is shown no earlier than this
+// PC could have found one, so a late state message of the previous match shows nothing.
+constexpr s64 SLOW_CHECK_FRAMES = 300;
+constexpr int SLOW_CHECKS = 2;
+constexpr double SLOW_FPS = 58.0;
+
+void ShowSlowNotice(const std::string& who, double fps)
+{
+  const std::string text = fmt::format("{} is falling behind: {:.0f} fps, not 60", who, fps);
+  WARN_LOG_FMT(BRAWLBACK, "gprb: notice: {}", text);
+  OSD::AddMessage(text, OSD::Duration::VERY_LONG, OSD::Color::YELLOW);
+  Online::Chat::AddNotice(text);
+}
+
+void UpdateSlowNotice()
+{
+  if (s.mode != Mode::Network || s.current_frame <= HARD_SYNC_UNTIL)
+    return;
+  const auto now = Clock::now();
+  if (s.slow_check_frame < 0)
+  {
+    s.slow_check_frame = s.current_frame;
+    s.slow_check_own_late = s.own_late;
+    s.slow_check_t = now;
+  }
+  else if (s.current_frame - s.slow_check_frame >= SLOW_CHECK_FRAMES)
+  {
+    const double frames = static_cast<double>(s.current_frame - s.slow_check_frame);
+    const double late = static_cast<double>(s.own_late - s.slow_check_own_late);
+    const double dt = std::chrono::duration<double>(now - s.slow_check_t).count();
+    const double fps = dt > 0 ? frames / dt : 0.0;
+    s.slow_check_frame = s.current_frame;
+    s.slow_check_own_late = s.own_late;
+    s.slow_check_t = now;
+    s.slow_checks = late * 2 > frames && fps > 0 && fps < SLOW_FPS ? s.slow_checks + 1 : 0;
+    s.slow_fps = s.slow_checks >= SLOW_CHECKS ? fps : 0.0;
+    if (s.slow_fps > 0 && !s.slow_shown)
+    {
+      s.slow_shown = true;
+      ShowSlowNotice("Your PC", s.slow_fps);
+    }
+  }
+  if (s.current_frame <= HARD_SYNC_UNTIL + SLOW_CHECK_FRAMES * SLOW_CHECKS)
+    return;
+  ForEachPeer([](int, PeerView& p) {
+    if (p.left || p.slow_fps <= 0 || p.slow_shown)
+      return;
+    p.slow_shown = true;
+    const auto name = Online::ChatText::Clean(p.name, Online::ChatText::MAX_NAME_CODE_POINTS);
+    ShowSlowNotice(name ? *name + "'s PC" : std::string("The other player's PC"), p.slow_fps);
+  });
+}
+
 void CaptureLocalInputs()
 {
   const PadSlots latest = PadsLatestRaw();
@@ -3924,6 +4017,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
       s.net_window.stall_ms_max = std::max(s.net_window.stall_ms_max, ms);
     }
     UpdateTimeSync(system);
+    UpdateSlowNotice();
     StartTelemetry();
     UpdatePingDisplay();
     PassLogWrite();
