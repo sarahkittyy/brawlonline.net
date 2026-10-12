@@ -257,10 +257,11 @@ def test_ranked_quit_loses_the_game(backend: OnlineBackend, dolphin: Callable[..
                                     gpu_backend: str) -> None:
     """In Ranked any pause-screen quit loses that game for the quitter (docs/game-code.md §11, the
     quit per mode), the salty runback too (L+R+A+Y+START; elsewhere it restarts the match): game 1
-    struck and started, A pauses (Ranked: START held) and quits with L+R+A+Y+START. No restart:
-    both go on to game 2's stage select (through the CSS), where the step's line says who quit;
-    the game counts as B's win on both machines and on the server, and B bans first in game 2.
-    Screenshots: run/artifacts/game-bridge/ranked-quit/."""
+    struck and started, A pauses (Ranked: START held) and quits with L+R+A+Y+START. No restart;
+    the game counts as B's win on both machines and on the server. Both stay on the CSS, "rquin
+    quit - Press START", until each presses START (the user's, 2026-10-12; B's alone starts
+    nothing). Then game 2's steps: B bans, A picks, and the match starts with the characters of
+    that ready (no character step after the stages). Screenshots: run/artifacts/game-bridge/ranked-quit/."""
     test = "ranked-quit"
     ua, ub = backend.create_user("rquin", "RQIN"), backend.create_user("rquor", "RQOR")
     a = _boot(dolphin, "rkq-a", backend, ua, gpu_backend, test, "gameplay")
@@ -293,24 +294,45 @@ def test_ranked_quit_loses_the_game(backend: OnlineBackend, dolphin: Callable[..
     a.steps("wait 120", "hold START 70", "wait 30")   # P+'s hold-START pause (Ranked's rule)
     a.shot("01-paused")
     a.steps("hold L+R+A+Y+START 90")
-    # No restart: game 2's steps on the stage select (Ranked passes through the CSS at once).
-    _both_on(players, SSS, "game 2: both on the stage select")
+    # No restart, and not on to game 2's steps: both on the CSS.
+    _both_on(players, online_set.CSS, "both back on the CSS")
     _wait(lambda: all(g.debug_scratch()[10] & 0x2000000 for g in players), 30, "the quit notice on both")
     for g in players:
         assert (g.debug_scratch()[10] >> 26) & 3 == quitter, (g.inst.name, hex(g.debug_scratch()[10]))
         assert g.debug_scratch()[10] & 0x1000000, (g.inst.name, "the quit was not marked as a runback")
         assert online_set.gstatus(g.c)["end_reason"] == "quit"
         assert online_set.gstatus(g.c)["match_index"] == 1, online_set.gstatus(g.c)
-        g.shot("02-quit-notice-sss")
+        g.shot("02-quit-notice-css")
     want = [0, 0]
     want[1 - quitter] = 1
     for g in players:
         _wait(lambda g=g: _ranked(g)["wins"] == want, 30, f"{g.inst.name}: game 1 B's")
         assert _ranked(g)["setup"]["last_winner"] == 1 - quitter, _ranked(g)["setup"]
-    # B won game 1, so B bans first in game 2.
+    # They stay there (no step is asked for, so no step's time runs); B's START alone starts nothing.
+    a.steps("wait 180")
+    assert all(online_set.scene(g.c) == online_set.CSS for g in players), [online_set.scene(g.c) for g in players]
+    b.steps("tap START 8", "wait 120")
+    assert all(online_set.scene(g.c) == online_set.CSS for g in players), [online_set.scene(g.c) for g in players]
+    b.shot("03-b-ready-waits")
+    a.steps("tap START 8")
+    # B won game 1, so B bans first in game 2, and A picks.
+    _both_on(players, SSS, "game 2: both on the stage select")
     v = _wait_view(b, lambda v: v["game"] == 2 and v["type"] == 1 and v["my_turn"], "B's ban")
     assert v["text"].startswith("Ban 2 stages"), v
-    b.shot("03-g2-winner-bans")
+    b.shot("04-g2-winner-bans")
+    bans = v["selectable"][:2]
+    _strike(b, bans[0], a)
+    _wait_view(b, lambda v: v["type"] == 1 and v["my_turn"] and v["count"] == 1, "the second ban")
+    _strike(b, bans[1], a)
+    v = _wait_view(a, lambda v: v["type"] == 2 and v["my_turn"], "A's pick")
+    pick = v["selectable"][0]
+    B.sss_pick_stage(a.c, pick, 0)
+    # Both readied with their characters on the CSS: no character step, the match starts.
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 120,
+                    "game 2 running on both")
+    setup = B.read_match_setup(a.c.read_mem)
+    assert setup == B.read_match_setup(b.c.read_mem) and setup.stage_kind == pick, (setup, hex(pick))
+    a.shot("05-g2-running")
     log = backend.log_text("accounts")
     assert log.count(" game reported") == 2, log[-3000:]
 

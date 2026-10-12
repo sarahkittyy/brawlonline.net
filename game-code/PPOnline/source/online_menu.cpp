@@ -72,6 +72,8 @@ namespace OnlineMenu {
         char quitNotice[PPOM::NAME_LEN + 8];   // "<name> quit": the last game ended by a quit
         u32 quitNoticeFrames;               // frames left to show it on the CSS
         u8 quitNoticePort;                  // whose quit it is
+        bool quitHold;                      // Ranked / a room's set: on the CSS after a quit until
+                                            // every player pressed START (quitHolding)
         u32 lastButtons;
         u32 startGuard;         // frames START presses are dropped after the keypad (see codeEntered)
         int zHeld;
@@ -835,8 +837,15 @@ namespace OnlineMenu {
     // back on the CSS, on every machine of the match.
     static bool quitNoticeShown()
     {
-        if (!s.quitNoticeFrames || s.phase == PH_ERROR || s.roomError) return false;
-        setStatus(s.quitNotice, false);
+        if ((!s.quitNoticeFrames && !s.quitHold) || s.phase == PH_ERROR || s.roomError) return false;
+        if (s.quitHold) {
+            char buf[sizeof(s.quitNotice) + 32];
+            const bool locked = roomCss() ? roomLockedForNext() : lockedForNext();
+            sprintf(buf, "%s - %s", s.quitNotice, locked ? "Waiting on opponent" : "Press START");
+            setStatus(buf, false);
+        } else {
+            setStatus(s.quitNotice, false);
+        }
         // tests: the notice is on the status line (0x2000000) and whose (bits 26-27)
         PPOM::g_block.debug.scratch[10] = (PPOM::g_block.debug.scratch[10] & ~0xE000000u) | 0x2000000 |
                                           ((u32)s.quitNoticePort << 26);
@@ -1518,6 +1527,36 @@ namespace OnlineMenu {
         return s.stepAnswered > s.stepFloor;
     }
 
+    // After a pause-screen quit in Ranked or a room's set (the user's, 2026-10-12; docs/game-code.md
+    // §11, the quit per mode): every player stays on the CSS ("<name> quit - Press START") until
+    // each pressed START, a fresh ready with the character on the CSS, which may change first (B
+    // takes it back). Then the steps go on as after any game: Ranked the winner's bans and the
+    // loser's pick (the character step after them is already done: both are locked in for the
+    // game), a set's quit game from its first step. Dolphin is asked no step meanwhile (pollStep),
+    // so no step's timer runs. True while holding.
+    static bool stepSession();
+    static bool quitHolding(u32 pressed, int game, bool locked)
+    {
+        if (!s.quitHold) return false;
+        if (!stepSession() || !game) {
+            s.quitHold = false;   // the session is over (Ranked: the set was decided)
+            return false;
+        }
+        if (!locked) {
+            if ((pressed & BTN_START) && lockChar() >= 0) lockIn(game, 0xFFFF, 0);
+        } else if (PPOM::g_block.local.remoteReady) {
+            s.quitHold = false;
+            s.quitNoticeFrames = 0;
+            s.stepFloor = s.stepSeq;   // the steps from a fresh answer
+            return false;
+        } else if (pressed & BTN_B) {
+            maskPressed(BTN_B);
+            unlock();
+            playSE(SE_BACK);
+        }
+        return true;
+    }
+
     // Connected on the CSS (Slippi HandleInputsOnCSS.asm HANDLE_CONNECTED): lock in with START
     // (Direct's loser first picks a stage on the stage select), and once SESSION has the setup
     // of the game this player is locked in for, leave the CSS for that match.
@@ -1527,6 +1566,7 @@ namespace OnlineMenu {
         int game = sessionGame();
         if (!game) return;
         const bool ranked = s.mode == PPOM::MODE_RANKED;
+        if (ranked && quitHolding(pressed, game, lockedForNext())) return;
         if (ranked && !stepFresh()) return;
         if (ranked && s.step.active && s.step.toSss) {
             // Ranked: both players are on the stage select for the strikes / ban / pick, also
@@ -1608,6 +1648,7 @@ namespace OnlineMenu {
             return;
         }
         if (s.stepPending && ++s.stepFrames < 60) return;
+        if (s.quitHold) return;   // no step asked for, so none of its timers runs (quitHolding)
         s.stepSeq = PPOM::post(PPOM::CMD_GP_FETCH_STEP, NULL, 0);
         s.stepPending = true;
         s.stepFrames = 0;
@@ -2135,7 +2176,8 @@ namespace OnlineMenu {
         s.roomStepSss = false;
         // A room's set (Dolphin's GameSetup, as Ranked): the stage steps on the stage select, the
         // characters on the CSS when the step allows (the winner first), START only then.
-        bool setStep = stepSession() && s.step.active;
+        const bool holding = in && quitHolding(pressed, roomGame(), roomLockedForNext());
+        bool setStep = stepSession() && s.step.active && !holding;
         if (setStep && stepFresh() && !g_onlineMatchGame) {
             if (s.step.toSss) {
                 s.roomStepSss = true;
@@ -2694,6 +2736,12 @@ namespace OnlineMenu {
         if (!name[0]) sprintf(name, "P%d", port + 1);
         sprintf(s.quitNotice, "%s quit", name);
         s.quitNoticeFrames = QUIT_NOTICE_FRAMES;
+        // Ranked, or a room's set that goes on: the steps wait for every player's START.
+        const PPOM::RoomPlay& play = PPOM::g_block.session.play;
+        s.quitHold = s.mode == PPOM::MODE_RANKED ||
+                     (roomCss() && play.valid && play.setOn && !(play.setFlags & PPOM::SET_FINISHED));
+        // The quit's own START may still be held when the CSS comes: no ready until it is let go.
+        if (s.quitHold) s.lastButtons = 0xFFFFFFFF;
         s.quitNoticePort = (u8)port;
     }
 

@@ -199,8 +199,9 @@ def test_room_set_quit_and_runback(backend: OnlineBackend, dolphin: Callable[...
                                    gpu_backend: str) -> None:
     """Quits in a room's set (docs/game-code.md §11, the quit per mode). Game 1 struck, picked and
     started, then A quits (L+R+A+START): it did not happen. Both back on the CSS, which says who
-    quit; the server's set still at game 1, 0-0, and game 1 struck again from the starters; played
-    to the end, it counts. In game 2 A runs back (L+R+A+Y+START): both go straight into the same
+    quit, and both stay there, the CSS not locked (characters may change), until each presses
+    START (the user's, 2026-10-12; B's alone starts nothing); the server's set still at game 1,
+    0-0, and then game 1 struck again from the starters; played to the end, it counts. In game 2 A runs back (L+R+A+Y+START): both go straight into the same
     match on the same stage, nothing counted; that match played to the end counts as game 2.
     Screenshots: run/artifacts/game-code/rooms/sets/set-quit/."""
     a, b, code = bo3_room(backend, dolphin, gpu_backend, "set-quit")
@@ -213,7 +214,7 @@ def test_room_set_quit_and_runback(backend: OnlineBackend, dolphin: Callable[...
                     "game 1 running on both")
     quitter = online_set.local(a.c)["local_port"]
     quit_match(a, "L+R+A+START")
-    online_set.wait(lambda: all(online_set.scene(g.c) != "scMelee" for g in players), 60, "both out of the match")
+    online_set.wait(lambda: all(online_set.scene(g.c) == CSS for g in players), 60, "both back on the CSS")
     _wait(lambda: all(g.debug_scratch()[10] & QUIT_NOTICE for g in players), 30, "the quit notice on both")
     for g in players:
         assert (g.debug_scratch()[10] >> 26) & 3 == quitter, (g.name, hex(g.debug_scratch()[10]))
@@ -222,11 +223,21 @@ def test_room_set_quit_and_runback(backend: OnlineBackend, dolphin: Callable[...
     for g in players:
         _wait(lambda g=g: (lambda st: st if st and st["game"] == 1 and st["score"] == [0, 0] else None)(rooms(g).get("set")),
               30, f"{g.name}: the set still at game 1, 0-0")
-    to_stage_select(players, 1)
+    # Both stay on the CSS, unlocked, until each presses START; B's alone starts nothing.
+    a.steps("wait 180")
+    for g in players:
+        assert online_set.scene(g.c) == CSS, (g.name, online_set.scene(g.c))
+        assert g.debug_scratch()[1] & 1 == 0, (g.name, "the CSS is locked: no character change")
+    b.steps("tap START 8", "wait 120")
+    assert all(online_set.scene(g.c) == CSS for g in players), [online_set.scene(g.c) for g in players]
+    assert b.debug_scratch()[1] & 1, "B's START did not ready B"
+    b.shot("02-b-ready-waits")
+    a.steps("tap START 8")
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 60, "game 1 again: both on the stage select")
     for g in players:
         until_setup(g, lambda v: v["active"] and v["type"] == 1 and sorted(v["selectable"]) == STARTERS,
                     "game 1 struck again from the starters")
-    a.shot("02-g1-struck-again")
+    a.shot("03-g1-struck-again")
     play_steps(players, 1)
     games = [online_set.play_game(players, 1)]
     _wait(lambda: (lambda st: st if st and sum(st["score"]) == 1 else None)(rooms(a).get("set")), 30,
