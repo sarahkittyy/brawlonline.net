@@ -6,14 +6,22 @@ import { PlayButtonsView } from "./play_buttons_view";
 describe("PlayButtonsView", () => {
   afterEach(cleanup);
 
-  it("shows each queue's count under its button and plays that queue", () => {
+  it("shows each queue's count and the players in its matches under its button and plays that queue", () => {
     const onPlay = vi.fn();
-    const { getByTestId } = render(<PlayButtonsView queues={{ unranked: 6, ranked: 1 }} onPlay={onPlay} />);
-    expect(getByTestId("play-unranked-count").textContent).toBe("6 in queue");
-    expect(getByTestId("play-ranked-count").textContent).toBe("1 in queue");
+    const { getByTestId } = render(
+      <PlayButtonsView queues={{ unranked: 6, ranked: 1 }} playing={{ unranked: 14, ranked: 0 }} onPlay={onPlay} />,
+    );
+    expect(getByTestId("play-unranked-count").textContent).toBe("6 in queue · 14 in game");
+    expect(getByTestId("play-ranked-count").textContent).toBe("1 in queue · 0 in game");
     fireEvent.click(getByTestId("play-ranked"));
     fireEvent.click(getByTestId("play-unranked"));
     expect(onPlay.mock.calls).toEqual([["ranked"], ["unranked"]]);
+  });
+
+  it("shows only the queues when the server does not send the players in game", () => {
+    const { getByTestId } = render(<PlayButtonsView queues={{ unranked: 6, ranked: 1 }} onPlay={vi.fn()} />);
+    expect(getByTestId("play-unranked-count").textContent).toBe("6 in queue");
+    expect(getByTestId("play-ranked-count").textContent).toBe("1 in queue");
   });
 
   it("hides the counts while they are unknown", () => {

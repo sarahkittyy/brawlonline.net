@@ -65,6 +65,7 @@ export function mockRoomList(): RoomList {
   return {
     online: 128,
     queues: { unranked: 6, ranked: 3 },
+    playing: { unranked: 14, ranked: 8 },
     updatedAt: new Date().toISOString(),
     rooms: [
       {

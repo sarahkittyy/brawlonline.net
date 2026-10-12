@@ -27,6 +27,7 @@ use common::chat::{
     self, ChatError, ChatGroup, ChatMember, ChatMsg, ChatReported, ChatRequest, ReportedMessage, CHAT_ERROR,
     CHAT_GROUP, CHAT_MSG, CHAT_REPORTED, MAX_GROUP_MEMBERS,
 };
+use common::proto::Mode;
 use common::ratelimit::{RateLimiter, Window};
 use uuid::Uuid;
 
@@ -100,6 +101,8 @@ struct Member {
 #[derive(Debug, Clone)]
 struct Group {
     kind: GroupKind,
+    /// A match group's mode (Direct, Unranked, Ranked); `None` for a room's.
+    mode: Option<Mode>,
     members: Vec<Member>,
 }
 
@@ -182,7 +185,7 @@ impl ChatBook {
             self.detach(w.uid, false, out, &mut dirty);
             self.groups
                 .entry(id.to_string())
-                .or_insert_with(|| Group { kind: GroupKind::Room, members: Vec::new() })
+                .or_insert_with(|| Group { kind: GroupKind::Room, mode: None, members: Vec::new() })
                 .members
                 .push(Member { who: w.clone(), kx: None });
             self.group_of.insert(w.uid, id.to_string());
@@ -192,9 +195,20 @@ impl ChatBook {
         self.settle(dirty, out);
     }
 
-    /// Starts the match group `id` with these players (the matched players that can chat). Each
-    /// leaves its previous group.
-    pub fn start_match(&mut self, id: &str, players: &[Candidate], out: &mut Vec<Output>) {
+    /// Players in a match of `mode` with someone: the members of its match groups that still have
+    /// two or more (a player whose opponent left is on the CSS alone until they search again or
+    /// leave it). For the launcher's "X in game" under Play unranked / Play ranked.
+    pub fn match_players(&self, mode: Mode) -> usize {
+        self.groups
+            .values()
+            .filter(|g| g.mode == Some(mode) && g.members.len() >= 2)
+            .map(|g| g.members.len())
+            .sum()
+    }
+
+    /// Starts the match group `id` of a `mode` match with these players (the matched players that
+    /// can chat). Each leaves its previous group.
+    pub fn start_match(&mut self, id: &str, mode: Mode, players: &[Candidate], out: &mut Vec<Output>) {
         if players.is_empty() {
             return;
         }
@@ -215,7 +229,7 @@ impl ChatBook {
             self.uid_of_conn.insert(p.conn, p.uid);
         }
         tracing::info!(group = %id, members = members.len(), "match chat started");
-        self.groups.insert(id.to_string(), Group { kind: GroupKind::Match, members });
+        self.groups.insert(id.to_string(), Group { kind: GroupKind::Match, mode: Some(mode), members });
         dirty.push(id.to_string());
         self.settle(dirty, out);
     }
@@ -631,7 +645,7 @@ mod tests {
         // 1 is matched with 2 (both online with keys): 1 leaves the room group for the match's.
         let mut out = vec![];
         let id = "mode.direct-2026-10-10T00:00:00.000Z-1";
-        book.start_match(id, &[cand(1), cand(2)], &mut out);
+        book.start_match(id, Mode::Direct, &[cand(1), cand(2)], &mut out);
         let g = last_group(&out, 1);
         assert_eq!((g["group"].as_str(), g["kind"].as_str()), (Some(id), Some("match")));
         assert_eq!(uids(&last_group(&out, 2)).len(), 2);
@@ -656,7 +670,7 @@ mod tests {
         assert_eq!(book.group_count(), 1);
         assert_eq!(book.members("room-KFQB-1"), [cand(3).uid]);
         // No players that can chat: no group.
-        book.start_match("mode.unranked-x-2", &[], &mut vec![]);
+        book.start_match("mode.unranked-x-2", Mode::Unranked, &[], &mut vec![]);
         assert_eq!(book.group_count(), 1);
     }
 

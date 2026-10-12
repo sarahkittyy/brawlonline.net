@@ -4,4 +4,5 @@ export const PlayButtonsMessages = {
   playUnrankedTooltip: () => "Opens Unranked's character select in your game, like Online > With Anyone > Unranked.",
   playRankedTooltip: () => "Opens Ranked's character select in your game, like Online > With Anyone > Ranked.",
   inQueue: (n: number) => `${n} in queue`,
+  inGame: (n: number) => `${n} in game`,
 };

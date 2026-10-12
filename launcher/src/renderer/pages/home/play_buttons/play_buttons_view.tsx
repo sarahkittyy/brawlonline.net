@@ -13,19 +13,25 @@ import styles from "./play_buttons.module.css";
 export type PlayButtonsViewProps = {
   /** Players searching each queue; absent while unknown (logged out, the list not read yet). */
   queues?: { unranked: number; ranked: number };
+  /** Players in a match of each queue; absent while unknown or from an older server (then not shown). */
+  playing?: { unranked: number; ranked: number };
   /** The queue being handed to the game (its button shows a spinner, both wait). */
   starting?: QueueTarget;
   onPlay: (queue: QueueTarget) => void;
 };
 
-/** Home's Play unranked / Play ranked, beside the Overview tab, each with its queue's count under it. */
-export const PlayButtonsView = ({ queues, starting, onPlay }: PlayButtonsViewProps) => (
+/**
+ * Home's Play unranked / Play ranked, beside the Overview tab, each with its queue's count and the
+ * players in its matches under it ("6 in queue · 14 in game").
+ */
+export const PlayButtonsView = ({ queues, playing, starting, onPlay }: PlayButtonsViewProps) => (
   <div className={styles.buttons}>
     <PlayButton
       label={Messages.playUnranked()}
       tooltip={Messages.playUnrankedTooltip()}
       icon={<PlayArrowRoundedIcon />}
       count={queues?.unranked}
+      inGame={playing?.unranked}
       starting={starting === QUEUE_UNRANKED}
       disabled={starting != null}
       onClick={() => onPlay(QUEUE_UNRANKED)}
@@ -36,6 +42,7 @@ export const PlayButtonsView = ({ queues, starting, onPlay }: PlayButtonsViewPro
       tooltip={Messages.playRankedTooltip()}
       icon={<EmojiEventsRoundedIcon />}
       count={queues?.ranked}
+      inGame={playing?.ranked}
       starting={starting === QUEUE_RANKED}
       disabled={starting != null}
       onClick={() => onPlay(QUEUE_RANKED)}
@@ -49,6 +56,7 @@ const PlayButton = ({
   tooltip,
   icon,
   count,
+  inGame,
   starting,
   disabled,
   onClick,
@@ -58,6 +66,7 @@ const PlayButton = ({
   tooltip: string;
   icon: React.ReactNode;
   count?: number;
+  inGame?: number;
   starting: boolean;
   disabled: boolean;
   onClick: () => void;
@@ -88,6 +97,7 @@ const PlayButton = ({
       style={{ visibility: count == null ? "hidden" : undefined }}
     >
       {Messages.inQueue(count ?? 0)}
+      {count != null && inGame != null && ` · ${Messages.inGame(inGame)}`}
     </span>
   </div>
 );

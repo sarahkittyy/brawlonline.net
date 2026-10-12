@@ -187,11 +187,13 @@ Session auth (`Authorization: Bearer <sessionToken>`; 401 without it, since the 
     {"code": "HBPL", "host": "mango", "players": 4, "openSlots": 4, "mode": "teams", "status": "in-game", "names": ["mango", "zain", "cody", "hbox"], "joinable": false}
   ],
   "queues": {"unranked": 6, "ranked": 3},
+  "playing": {"unranked": 14, "ranked": 8},
   "updatedAt": "2026-10-09T15:00:00.000Z"
 }
 ```
 
 - `queues` (2026-10-12): the Unranked and Ranked tickets waiting in mm, for the "X in queue" under Home's Play unranked / Play ranked. Absent from an older mm (accounts then sends zeros).
+- `playing` (2026-10-12): the players in an Unranked and a Ranked match, the "X in game" beside "X in queue". mm counts the members of the matches' chat groups (`docs/chat-protocol.md` §2) that still have two or more: a player is in from the pairing until their game leaves the online CSS (between games and runbacks too), searches again or closes, and a player whose opponent left is out. Absent from an older mm (zeros).
 - `online`: **players whose game is running and logged in**: distinct accounts with an online connection (`hello`). Launchers left open without the game do not count; neither do games that are not logged in.
 - Each room also has `ruleset` (`room-state`'s: `code`, `name`, `version`, `by`, `basedOn`, `bestOf`, `stageChoice`), so the list can show what it plays.
 - `rooms`: public rooms only, at most 200: joinable first, then waiting before in game, then fuller, then older. `players` / `openSlots` is what the launcher shows as "players n/N" (N is the number of open slots, the most the room takes). `status` is `waiting` or `in-game` (a starting room is listed as in game). `joinable`: an open slot is empty (also during a game).

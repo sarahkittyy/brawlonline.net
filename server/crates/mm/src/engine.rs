@@ -501,12 +501,17 @@ impl Engine {
         self.chat.group_count()
     }
 
-    /// The snapshot the launcher sees: the online count, the public rooms and the queues.
+    /// The snapshot the launcher sees: the online count, the public rooms, the queues and the
+    /// players in their matches.
     pub fn status(&self, wall: DateTime<Utc>) -> MmStatus {
         MmStatus {
             online: self.online_count(),
             rooms: self.rooms.public_rooms(200),
             queues: QueueCounts { unranked: self.unranked.len(), ranked: self.ranked.len() },
+            playing: QueueCounts {
+                unranked: self.chat.match_players(Mode::Unranked),
+                ranked: self.chat.match_players(Mode::Ranked),
+            },
             updated_at: wall.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             members: self.rooms.member_rooms(4000),
         }
@@ -1349,7 +1354,7 @@ impl Engine {
                 })
             })
             .collect();
-        self.chat.start_match(&match_id, &chatters, out);
+        self.chat.start_match(&match_id, mode, &chatters, out);
         out.push(Output::RecordMatch(MatchRecord {
             match_id,
             mode,
@@ -2864,6 +2869,32 @@ mod tests {
         assert_eq!(chat_members(&chat_group(&out, 2).unwrap()), uid_list(&[&b]));
         assert!(chat_group(&out, 5).is_none());
         assert_eq!(h.e.chat.group_of(a.uid), None);
+    }
+
+    #[test]
+    fn status_counts_the_players_in_unranked_and_ranked_matches() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b, c, d) = (user("AA#1", "a"), user("BB#1", "b"), user("CC#1", "c"), user("DD#1", "d"));
+        for (conn, u) in [(1, &a), (2, &b), (3, &c), (4, &d)] {
+            h.chatter(conn, u);
+        }
+        let playing = |h: &Harness| h.e.status(Utc::now()).playing;
+        // The tickets come from other connections (the games' P2P ports).
+        for conn in 11..=14 {
+            h.connect(conn, conn as u16);
+        }
+        h.unranked(11, &a);
+        assert_eq!(playing(&h), QueueCounts { unranked: 0, ranked: 0 }, "searching is not playing");
+        h.unranked(12, &b);
+        h.ranked(13, &c);
+        assert!(!matches(&h.ranked(14, &d)).is_empty());
+        assert_eq!(playing(&h), QueueCounts { unranked: 2, ranked: 2 });
+        // b's game leaves the online CSS: a is alone on it, in no match any more.
+        h.raw(2, json!({"type": "chat-leave", "group": h.e.chat.group_of(b.uid).unwrap()}).to_string().as_bytes());
+        assert_eq!(playing(&h), QueueCounts { unranked: 0, ranked: 2 });
+        // d's game closes.
+        h.input(Input::Disconnected { conn: 4 });
+        assert_eq!(playing(&h), QueueCounts { unranked: 0, ranked: 0 });
     }
 
     #[test]

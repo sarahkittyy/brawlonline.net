@@ -604,6 +604,11 @@ pub struct MmStatus {
     /// mm: zero.
     #[serde(default)]
     pub queues: QueueCounts,
+    /// Players in an Unranked and a Ranked match (from the pairing until their game leaves the
+    /// online CSS, as long as the opponent is still there), shown with the queues. Absent from an
+    /// older mm: zero.
+    #[serde(default)]
+    pub playing: QueueCounts,
     /// RFC 3339 time of the snapshot.
     pub updated_at: String,
     /// Every room player's room, public and private rooms alike. Internal: accounts reads it to
@@ -613,7 +618,7 @@ pub struct MmStatus {
     pub members: Vec<RoomMember>,
 }
 
-/// Tickets waiting in each queue, for [`MmStatus::queues`].
+/// A count per queue, for [`MmStatus::queues`] and [`MmStatus::playing`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct QueueCounts {

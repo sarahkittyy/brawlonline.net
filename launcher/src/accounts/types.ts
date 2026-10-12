@@ -165,13 +165,18 @@ export type RoomRuleset = {
   stageChoice: StageChoice;
 };
 
-/** `GET /v1/rooms`: players online (games running and logged in), the public rooms and the queues. */
+/**
+ * `GET /v1/rooms`: players online (games running and logged in), the public rooms, the queues and
+ * the players in their matches.
+ */
 export type RoomList = {
   online: number;
   /** Joinable first, then waiting before in game, then fuller first. */
   rooms: PublicRoom[];
   /** Players searching Unranked and Ranked (Home's Play buttons). Absent from an older server. */
   queues?: { unranked: number; ranked: number };
+  /** Players in an Unranked and a Ranked match (shown with the queues). Absent from an older server. */
+  playing?: { unranked: number; ranked: number };
   updatedAt: string;
 };
 
