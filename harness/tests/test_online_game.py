@@ -380,7 +380,8 @@ def _boot(dolphin: Callable[..., DolphinInstance], name: str, be: OnlineBackend,
           gcpad_ini: dict[str, dict[str, Any]] | None = None,
           dolphin_ini: dict[str, dict[str, Any]] | None = None,
           standard_controllers: tuple[int, ...] = (0, 1),
-          before_launch: Callable[[Path], Any] | None = None) -> Game:
+          before_launch: Callable[[Path], Any] | None = None,
+          env: dict[str, str] | None = None) -> Game:
     if not PLUGIN.exists():
         pytest.skip(f"{PLUGIN} not built (game-code/build.sh)")
     ini: dict[str, dict[str, Any]] = {"Online": {
@@ -389,7 +390,7 @@ def _boot(dolphin: Callable[..., DolphinInstance], name: str, be: OnlineBackend,
         ini.setdefault(section, {}).update(values)
     cfg = InstanceConfig(cpu_thread=True, video_backend=video, dolphin_ini=ini, gcpad_ini=gcpad_ini or {},
                          standard_controllers=standard_controllers)
-    inst = dolphin(name, config=cfg, client_timeout=60.0)
+    inst = dolphin(name, config=cfg, client_timeout=60.0, env=env)
     d = inst.create()
     patch_sd.patch_image(d / "Wii" / "sd.raw",
                          [(PLUGIN.read_bytes(), patch_sd.plugin_sd_path(PLUGIN))])

@@ -24,6 +24,8 @@ what ``test_online_unranked.py`` needs.
 
 from __future__ import annotations
 
+import calendar
+import datetime
 import re
 from typing import Any, Callable, Iterator
 
@@ -311,3 +313,178 @@ def test_ranked_quit_loses_the_game(backend: OnlineBackend, dolphin: Callable[..
     b.shot("03-g2-winner-bans")
     log = backend.log_text("accounts")
     assert log.count(" game reported") == 2, log[-3000:]
+
+
+def _strike_to(host: Game, join: Game, left: int) -> None:
+    """Game 1's strikes (1-2-1) that leave the starter `left`."""
+    order = [k for k in STARTERS if k != left]
+    _both_on([host, join], SSS, "game 1: both on the stage select")
+    _wait_view(host, lambda v: v["type"] == 1 and v["my_turn"], "the host's strike")
+    _strike(host, order[0], join)
+    _wait_view(join, lambda v: v["my_turn"], "the joiner's turn")
+    _strike(join, order[1], host)
+    _strike(join, order[2], host)
+    _strike(host, order[3], join)
+
+
+def _rtc(when: str) -> dict[str, dict[str, Any]]:
+    """Dolphin.ini for an emulated clock at local time `when` (the Wii's clock is local time)."""
+    t = calendar.timegm(datetime.datetime.fromisoformat(when).timetuple())
+    return {"Core": {"EnableCustomRTC": True, "CustomRTCValue": f"{t:#x}"}}
+
+
+def _log(g: Game) -> str:
+    return (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+
+
+def _to_ranked_css(*players: Game) -> None:
+    for g in players:
+        B.write_rules(g.c, stocks=1, minutes=2, items_off=True)
+        ppom.allow_test_rules(g.c)
+
+
+def _paired(*players: Game) -> None:
+    for g in players:
+        _wait(lambda g=g: g.c.mm_status()["handoff"] == "started", 30, "the hand-off")
+
+
+# The two players' clocks on 2026-10-12 (Pacific and Eastern time). Smashville's variant comes
+# from the clock: it was 03 on the host's machine and 06 on the joiner's.
+HOST_CLOCK, JOIN_CLOCK = "2026-10-11T22:05:00", "2026-10-12T01:05:00"
+SMASHVILLE = 0x21
+
+
+@pytest.mark.slow
+def test_ranked_after_a_set_cut_short(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                      gpu_backend: str) -> None:
+    """2026-10-12 (GALA vs POCH). The host's last set had ended in its first game (the opponent's
+    connection dropped), and the host kept that session's match init block, tagged match 0. In the
+    next set the joiner reached match 0's start first and took that stale block as this match's.
+    It was for another stage, so the joiner kept its own clock-derived stage variant, the setups
+    differed at the barrier and the session gave up.
+
+    Here set 1 ends in game 1 when the joiner's window closes. The same host then meets the same
+    player again, from a new game whose clock is 3 hours later. The host reaches the match start
+    1.5 s late (PPR_GPRB_TEST_HOST_START_DELAY_MS). Game 1 of set 2, on Smashville, must take the
+    host's fresh init block and run with equal setups. Screenshots:
+    run/artifacts/game-bridge/ranked-stale-init/."""
+    test = "ranked-stale-init"
+    env = {"PPR_GPRB_TEST_HOST_START_DELAY_MS": "1500"}   # only the host waits
+    ua, ub = backend.create_user("stina", "STIN"), backend.create_user("stig", "STIG")
+    a = _boot(dolphin, "rks-a", backend, ua, gpu_backend, test, "gameplay", dolphin_ini=_rtc(HOST_CLOCK), env=env)
+    b = _boot(dolphin, "rks-b", backend, ub, gpu_backend, test, "gameplay", dolphin_ini=_rtc(HOST_CLOCK), env=env)
+    _both(a.to_main_menu, b.to_main_menu)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("ranked"), lambda: b.to_css("ranked"))
+    _to_ranked_css(a, b)
+    _search_ranked(a)
+    _search_ranked(b)
+    _paired(a, b)
+    host = a if _ranked(a)["local_port"] == 0 else b
+    join = b if host is a else a
+    host_user, join_user = (ua, ub) if host is a else (ub, ua)
+
+    # Set 1, game 1 on Battlefield; the joiner's window closes in the middle of it.
+    _strike_to(host, join, 0x01)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (host, join)), 240,
+                    "set 1 game 1 running on both")
+    assert online_set.gstatus(host.c)["match_index"] == 0
+    host.steps("wait 120")
+    join.c.call("emu_stop")
+    _wait(lambda: online_set.gstatus(host.c)["disconnected"], 30, "the host sees the drop")
+    _wait(lambda: online_set.scene(host.c) == online_set.CSS, 60, "the host back on the CSS")
+    _wait(lambda: host.c.mm_status()["state"] == "idle", 30, "the host idle")
+    assert _ranked(host)["peer_gone"], _ranked(host)
+    join.inst.stop()
+
+    # Set 2: the same player again, from a new game whose clock is 3 hours later.
+    j2 = _boot(dolphin, "rks-j2", backend, join_user, gpu_backend, test, "gameplay",
+               dolphin_ini=_rtc(JOIN_CLOCK), env=env)
+    j2.to_main_menu()
+    j2.to_online_page()
+    j2.to_css("ranked")
+    _to_ranked_css(host, j2)
+    _search_ranked(host)
+    _search_ranked(j2)
+    _peer_shown(host, join_user)
+    _peer_shown(j2, host_user)
+    _paired(host, j2)
+    assert _ranked(host)["local_port"] == 0, "mm's decider changed between the two sets"
+    _strike_to(host, j2, SMASHVILLE)
+    rep = online_set.play_game([host, j2], 1)
+    assert rep["stage"] == SMASHVILLE, rep
+    assert rep["checksums"]["mismatches"] == 0 and all(e == "game set" for e in rep["end"]), rep
+    log = _log(j2)
+    assert "differs beyond the stage variant" not in log, "the joiner was handed another match's init block"
+    # The clocks differ, so the joiner's own variant differed and it took the host's.
+    assert "joiner took the host's match init block" in log
+    assert "PPR_GPRB_TEST_HOST_START_DELAY_MS" in _log(host)
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("giver", [1, 2], ids=["host-gives-up", "joiner-gives-up"])
+def test_ranked_failed_start_is_a_disconnect(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                             gpu_backend: str, giver: int) -> None:
+    """A session can give up on the way into a match when a barrier's check fails. Here
+    PPR_GPRB_TEST_GIVE_UP=<port> forces it; on 2026-10-12 the setups differed. Both machines must
+    then end the match as a disconnect: DISCONNECTED in the HUD, back on the CSS, idle. Both report
+    the opponent gone, so the set is TERMINATED and nobody is rated.
+
+    Before, the session that gave up did not tell its game. That game played the match on alone and
+    unsynced (on the joiner the local pad drove the host's fighter), and its CSS waited for a game 2
+    that never came, until the player backed out and lost the set as its leaver. The other player's
+    game reacts to the leave (as a peer that left, or, if it waits at the barrier, by giving up too:
+    "the host left before the match started"). Run with each player giving up: the one that gives
+    up is the new path. Screenshots: run/artifacts/game-bridge/ranked-failed-start-<port>/."""
+    test = f"ranked-failed-start-{giver}"
+    env = {"PPR_GPRB_TEST_GIVE_UP": str(giver)}   # that port's barrier gives up
+    ua = backend.create_user(f"frida{giver}", "FRI" + "AB"[giver - 1])
+    ub = backend.create_user(f"folke{giver}", "FOL" + "AB"[giver - 1])
+    a = _boot(dolphin, "rkf-a", backend, ua, gpu_backend, test, "gameplay", env=env)
+    b = _boot(dolphin, "rkf-b", backend, ub, gpu_backend, test, "gameplay", env=env)
+    _both(a.to_main_menu, b.to_main_menu)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("ranked"), lambda: b.to_css("ranked"))
+    _to_ranked_css(a, b)
+    _search_ranked(a)
+    _search_ranked(b)
+    players = [a, b]
+    _paired(a, b)
+    match_id = a.c.mm_status()["match"]["match_id"]
+    host = a if _ranked(a)["local_port"] == 0 else b
+    join = b if host is a else a
+    quitter, other = (host, join) if giver == 1 else (join, host)
+    _strike_to(host, join, 0x01)
+
+    # Both games are told. GameBridge cleans the session up right after, so it is read when it
+    # says so.
+    seen = {}
+    for g in players:
+        seen[g.inst.name] = _wait(lambda g=g: (lambda st: st if st["disconnected"] else None)(
+            online_set.gstatus(g.c)), 120, f"{g.inst.name}: told of the drop", interval=0.02)
+    st = seen[quitter.inst.name]
+    assert st["phase"] == "error" and st["error"] == "PPR_GPRB_TEST_GIVE_UP" and st["frames"] == 0, st
+    st = seen[other.inst.name]
+    assert st["frames"] == 0 and (
+        (st["phase"] == "ended" and st["error"] == "peer gave up: PPR_GPRB_TEST_GIVE_UP") or
+        (st["phase"] == "error" and st["error"] == "the host left before the match started")), st
+    for g in players:
+        _wait(lambda g=g: online_set.local(g.c)["hud_disconnected"] == 1, 10, f"{g.inst.name}: DISCONNECTED",
+              interval=0.05)
+        g.shot("01-disconnected")
+    for g in players:
+        _wait(lambda g=g: online_set.scene(g.c) == online_set.CSS, 60, f"{g.inst.name}: back on the CSS")
+        _wait(lambda g=g: g.c.mm_status()["state"] == "idle", 30, f"{g.inst.name}: idle")
+        g.steps("wait 60")
+        g.shot("02-back-on-css")
+        r = _ranked(g)
+        assert r["peer_gone"] and not r["left_reported"], r
+        log = _log(g)
+        assert "GameBridge: the opponent disconnected" in log and "session running" not in log
+
+    res = _wait(lambda: (lambda r: r if r["status"] != "ASSIGNED" else None)(
+        backend._http("GET", f"/v1/ranked/result?matchId={match_id}&uid={ua.uid}")), 60, "the set settled")
+    assert res["status"] == "TERMINATED" and res["rating"] is None, res
+    for u in (ua, ub):
+        pub = backend._http("GET", f"/user/{u.uid}?additionalFields=chatMessages,rank")
+        assert pub["rank"]["ratingUpdateCount"] == 0, pub

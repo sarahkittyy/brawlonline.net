@@ -1965,12 +1965,20 @@ void NetThread()
       last_state = now;
       SendState();
       // The session gave up (a barrier's check or timeout, a failed start): the others are told
-      // at once, so they do not wait for this player until their own timeout.
+      // at once, so they do not wait for this player until their own timeout. The game is told
+      // as of a disconnect (LOCAL `disconnected`): it ends the match it has started loading and
+      // goes back to the CSS, and a ranked set reports the opponent gone (both sides: no one
+      // rated). Before 2026-10-12 it was not told and played the match on alone, unsynced, with
+      // this player's pad on P1 (a joiner drove the host's fighter).
       std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-      if (s.mode == Mode::Network && s.phase == Phase::Error && !s.leave_sent)
+      if (s.mode == Mode::Network && s.phase == Phase::Error)
       {
-        WARN_LOG_FMT(BRAWLBACK, "gprb: leaving the session ({})", s.error);
-        SendLeave(s.error);
+        if (!s.leave_sent)
+        {
+          WARN_LOG_FMT(BRAWLBACK, "gprb: leaving the session ({})", s.error);
+          SendLeave(s.error);
+        }
+        s.disconnected = true;
       }
     }
     if (now - last_ping >= std::chrono::milliseconds(200))
@@ -4013,6 +4021,11 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.countdown_at.reset();
   s.did_frame0 = false;
   s.match_index = 0;
+  // The host's init block is tagged with its match index, which starts at 0 again: one kept
+  // from the last session (a set that ended in its first game) read as this session's match 0
+  // to a joiner that reached the match first, and its stage variant failed the barrier.
+  s.init_block.clear();
+  s.init_match = -1;
   s.setup = {};
   s.input_delay = DEFAULT_INPUT_DELAY;
   s.last_winner = 0xFF;
@@ -4506,6 +4519,16 @@ MatchStart ApplyMatchStart(Core::System& system, std::string_view when)
   }
   if (IsHost())
   {
+    // Tests (PPR_GPRB_TEST_HOST_START_DELAY_MS=<ms>): the host reaches the match start that much
+    // later, so its joiner gets there first and must wait for this match's init block (a slower
+    // host's machine on 2026-10-12 took the last session's).
+    if (const char* delay = std::getenv("PPR_GPRB_TEST_HOST_START_DELAY_MS"); delay && *delay)
+    {
+      WARN_LOG_FMT(BRAWLBACK, "gprb: PPR_GPRB_TEST_HOST_START_DELAY_MS: {} ms", delay);
+      s.mutex.unlock();
+      std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(delay)));
+      s.mutex.lock();
+    }
     s.init_block = InitBlock(g);
     s.init_match = s.match_index;
   }
@@ -4941,9 +4964,12 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     if (differs.empty() && HostSlot() != s.barrier_host)
       differs = "the host left before the match started";
     // Tests (PPR_GPRB_TEST_GIVE_UP=<port 1-4>): that player's barrier gives up as a failed check
-    // would, so the others' reaction can be seen.
+    // would, so the others' reaction can be seen: once every other player is at the barrier too,
+    // as a setup check can only fail then (the others wait there when it does).
+    bool all_at_s = true;
+    ForEachPeer([&](int, const PeerView& p) { all_at_s = all_at_s && (p.left || p.at_s); });
     if (const char* give_up = std::getenv("PPR_GPRB_TEST_GIVE_UP");
-        differs.empty() && give_up && std::atoi(give_up) == s.local_slot + 1)
+        differs.empty() && give_up && std::atoi(give_up) == s.local_slot + 1 && all_at_s)
     {
       differs = "PPR_GPRB_TEST_GIVE_UP";
     }
