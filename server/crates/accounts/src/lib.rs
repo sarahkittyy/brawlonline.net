@@ -146,7 +146,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/ranked/result", get(ranked::result))
         .route("/v1/ranked/leaderboard", get(leaderboard::leaderboard))
         .route("/v1/rooms", get(rooms::rooms))
-        .route("/v1/rulesets", post(rulesets::publish))
+        .route("/v1/rulesets", get(rulesets::browse).post(rulesets::publish))
         .route("/v1/rulesets/{code}", get(rulesets::lookup))
         .route("/v1/me/rulesets", get(rulesets::mine))
         .route("/v1/me/rulesets/recent", get(rulesets::recent))

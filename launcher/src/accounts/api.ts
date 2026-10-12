@@ -1,5 +1,6 @@
 /* eslint-disable import/no-default-export */
 import {
+  ipc_accountsBrowseRulesets,
   ipc_accountsCreateRulesetDraft,
   ipc_accountsDeleteRulesetDraft,
   ipc_accountsHasSession,
@@ -78,6 +79,9 @@ const accountsApi: AccountsApi = {
   },
   async ruleset(code) {
     return unwrap(await ipc_accountsRuleset.renderer!.trigger({ code }));
+  },
+  async browseRulesets(query) {
+    return unwrap(await ipc_accountsBrowseRulesets.renderer!.trigger(query));
   },
   async myRulesets(uid) {
     return unwrap(await ipc_accountsMyRulesets.renderer!.trigger({ uid }));

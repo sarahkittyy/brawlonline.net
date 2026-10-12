@@ -7,6 +7,7 @@ import { AccountsManager } from "./accounts_manager";
 import { AccountsHttpClient } from "./client";
 import { resolveServiceUrls } from "./config";
 import {
+  ipc_accountsBrowseRulesets,
   ipc_accountsCreateRulesetDraft,
   ipc_accountsDeleteRulesetDraft,
   ipc_accountsHasSession,
@@ -59,6 +60,9 @@ export default function setupAccountsIpc() {
   );
   ipc_accountsRooms.main!.handle(async ({ uid }) => await manager.rooms(uid));
   ipc_accountsRuleset.main!.handle(async ({ code }) => await manager.ruleset(code));
+  ipc_accountsBrowseRulesets.main!.handle(
+    async ({ q, limit, after }) => await manager.browseRulesets({ q, limit, after }),
+  );
   ipc_accountsMyRulesets.main!.handle(async ({ uid }) => await manager.myRulesets(uid));
   ipc_accountsRecentRulesets.main!.handle(async ({ uid }) => await manager.recentRulesets(uid));
   ipc_accountsPublishRuleset.main!.handle(async ({ uid, req }) => await manager.publishRuleset(uid, req));

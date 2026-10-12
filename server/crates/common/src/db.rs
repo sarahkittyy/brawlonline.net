@@ -333,3 +333,46 @@ pub async fn recent_rulesets(pool: &sqlx::PgPool, uid: Uuid) -> sqlx::Result<Vec
     .await?;
     rows.into_iter().map(|row| Ok((row.r.into_published()?, row.used_at))).collect()
 }
+
+/// Escapes `%`, `_` and `\` for a `LIKE` pattern (with the default `\` escape).
+fn like_escape(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        if matches!(c, '%' | '_' | '\\') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
+/// The public list of rulesets (`GET /v1/rulesets`): of every ruleset (lineage) its newest version
+/// that is not hidden, newest first (`created_at`, then `code`, both descending). `query` matches
+/// the name, the publisher's name and the code, case-insensitively, anywhere in them. `after` is
+/// the last row of the previous page; at most `limit` rows.
+pub async fn browse_rulesets(
+    pool: &sqlx::PgPool,
+    query: Option<&str>,
+    after: Option<(DateTime<Utc>, &str)>,
+    limit: i64,
+) -> sqlx::Result<Vec<PublishedRuleset>> {
+    let pattern = query.map(|q| format!("%{}%", like_escape(q)));
+    let rows: Vec<RulesetRow> = sqlx::query_as(&format!(
+        "WITH latest AS (
+             SELECT DISTINCT ON (lineage) code FROM rulesets WHERE NOT hidden ORDER BY lineage, version DESC)
+         SELECT {RULESET_COLS} FROM latest l
+           JOIN rulesets r ON r.code = l.code LEFT JOIN users u ON u.uid = r.owner
+          WHERE ($1::text IS NULL OR r.name ILIKE $1 OR COALESCE(u.display_name, r.publisher_name) ILIKE $1
+                 OR r.code ILIKE $1)
+            AND ($2::timestamptz IS NULL OR (r.created_at, r.code) < ($2, $3))
+          ORDER BY r.created_at DESC, r.code DESC
+          LIMIT $4"
+    ))
+    .bind(pattern)
+    .bind(after.map(|a| a.0))
+    .bind(after.map(|a| a.1.to_string()).unwrap_or_default())
+    .bind(limit)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter().map(RulesetRow::into_published).collect()
+}

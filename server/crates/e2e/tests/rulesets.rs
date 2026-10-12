@@ -365,3 +365,97 @@ async fn who_may_publish_and_the_rate_limit() {
 
     s.shutdown().await;
 }
+
+/// The codes of a public list page, in order.
+fn codes(page: &Value) -> Vec<String> {
+    page["rulesets"].as_array().unwrap().iter().map(code_of).collect()
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn public_list_and_search() {
+    let s = Stack::start(StackOptions::default()).await.unwrap();
+    let (alice, _) = s.create_player("alice@x.test", "alice", "ALIC").await;
+    let (bob, _) = s.create_player("bob@x.test", "bobby", "BOB").await;
+
+    // alice: two versions of one ruleset; bob: a name with LIKE's wildcards; alice: one she hides.
+    let a1 = publish(&s, &alice, json!({"ruleset": weekly()})).await;
+    let mut edited = weekly();
+    edited["bestOf"] = json!(5);
+    let a2 = publish(&s, &alice, json!({"ruleset": edited, "basedOn": code_of(&a1)})).await;
+    let mut ffa = weekly();
+    ffa["name"] = json!("100% FFA_night");
+    ffa["bestOf"] = json!(0);
+    let b1 = publish(&s, &bob, json!({"ruleset": ffa})).await;
+    let mut secret = weekly();
+    secret["name"] = json!("Secret");
+    let h1 = publish(&s, &alice, json!({"ruleset": secret})).await;
+    let (st, _) =
+        s.put(&format!("/v1/me/rulesets/{}/hidden", code_of(&h1)), Some(&alice), json!({"hidden": true})).await;
+    assert_eq!(st, 204);
+
+    // For anyone: each ruleset's newest visible version, newest first; hidden ones left out.
+    let (st, page) = s.get("/v1/rulesets", None).await;
+    assert_eq!(st, 200, "{page}");
+    assert_eq!(codes(&page), vec![code_of(&b1), code_of(&a2)]);
+    assert!(page["next"].is_null());
+    let first = &page["rulesets"][1];
+    assert_eq!((first["ruleset"]["by"].as_str(), first["ruleset"]["version"].as_u64()), (Some("alice"), Some(2)));
+    assert!(first["newer"].is_null() && first.get("hidden").is_none(), "{first}");
+    assert_eq!(first["link"], format!("{}/r/{}", s.base, code_of(&a2)));
+
+    // Search: the name, the publisher, the code, in any case; LIKE's wildcards are plain text.
+    for (q, want) in [
+        ("norcal", vec![code_of(&a2)]),
+        ("WEEKLY", vec![code_of(&a2)]),
+        ("bobby", vec![code_of(&b1)]),
+        ("ALI", vec![code_of(&a2)]),
+        ("%", vec![code_of(&b1)]),
+        ("_", vec![code_of(&b1)]),
+        ("secret", vec![]),
+        ("nothing like it", vec![]),
+    ] {
+        let (st, page) = s.get(&format!("/v1/rulesets?q={}", urlencode(q)), None).await;
+        assert_eq!(st, 200, "{q}: {page}");
+        assert_eq!(codes(&page), want, "{q}");
+    }
+    let (_, page) = s.get(&format!("/v1/rulesets?q={}", code_of(&a2).to_lowercase()), None).await;
+    assert_eq!(codes(&page), vec![code_of(&a2)]);
+    // The older version's code is not in the list (its newer version is).
+    let (_, page) = s.get(&format!("/v1/rulesets?q={}", code_of(&a1)), None).await;
+    assert!(codes(&page).is_empty());
+
+    // Pages: one at a time, following `next`.
+    let mut seen = vec![];
+    let mut q = "/v1/rulesets?limit=1".to_string();
+    loop {
+        let (st, page) = s.get(&q, None).await;
+        assert_eq!(st, 200, "{page}");
+        seen.extend(codes(&page));
+        match page["next"].as_str() {
+            Some(c) => q = format!("/v1/rulesets?limit=1&after={c}"),
+            None => break,
+        }
+        assert!(seen.len() < 10);
+    }
+    assert_eq!(seen, vec![code_of(&b1), code_of(&a2)]);
+    let (st, body) = s.get("/v1/rulesets?after=bogus", None).await;
+    assert_eq!((st, body["error"]["code"].as_str()), (400, Some("bad_cursor")));
+
+    // Hiding the newest version shows the one before it; showing it again brings it back.
+    let (st, _) =
+        s.put(&format!("/v1/me/rulesets/{}/hidden", code_of(&a2)), Some(&alice), json!({"hidden": true})).await;
+    assert_eq!(st, 204);
+    let (_, page) = s.get("/v1/rulesets", None).await;
+    assert_eq!(codes(&page), vec![code_of(&b1), code_of(&a1)]);
+    let (st, _) =
+        s.put(&format!("/v1/me/rulesets/{}/hidden", code_of(&a2)), Some(&alice), json!({"hidden": false})).await;
+    assert_eq!(st, 204);
+    let (_, page) = s.get("/v1/rulesets", None).await;
+    assert_eq!(codes(&page), vec![code_of(&b1), code_of(&a2)]);
+
+    s.shutdown().await;
+}
+
+fn urlencode(s: &str) -> String {
+    s.bytes().map(|b| if b.is_ascii_alphanumeric() { (b as char).to_string() } else { format!("%{b:02X}") }).collect()
+}

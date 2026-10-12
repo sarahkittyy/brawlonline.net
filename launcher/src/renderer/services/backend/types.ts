@@ -8,6 +8,7 @@ import type {
   RoomList,
   RulesetDraft,
   RulesetDraftRequest,
+  RulesetPage,
   RulesetView,
 } from "@accounts/types";
 import type { PlayKey } from "@dolphin/types";
@@ -28,6 +29,7 @@ export type {
   Ruleset,
   RulesetDraft,
   RulesetDraftRequest,
+  RulesetPage,
   RulesetView,
 } from "@accounts/types";
 
@@ -59,6 +61,8 @@ export interface BackendService {
   fetchRooms(): Promise<RoomList>;
   /** A published ruleset by code (anyone's; docs/rulesets-protocol.md). */
   fetchRuleset(code: string): Promise<RulesetView>;
+  /** A page of the public list, newest first; `q` searches the name, publisher and code. */
+  fetchPublicRulesets(q: string, after?: string): Promise<RulesetPage>;
   /** The logged-in account's drafts and published rulesets. */
   fetchMyRulesets(): Promise<MyRulesets>;
   /** The rulesets the account used lately, newest first. */

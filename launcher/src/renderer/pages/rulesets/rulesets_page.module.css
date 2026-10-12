@@ -311,3 +311,25 @@ button.itemMain {
   border: 1px solid rgb(255 255 255 / 15%);
   font-size: 13px;
 }
+
+.inlineStatus {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 0;
+  color: var(--text-secondary);
+}
+
+.itemBy {
+  font-weight: 400;
+  font-size: 13px;
+  color: var(--text-secondary);
+}
+
+.viewActions {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  flex: 1;
+  min-width: 0;
+}

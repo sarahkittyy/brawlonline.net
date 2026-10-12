@@ -1,14 +1,16 @@
 //! Rulesets (`docs/design/room-rules.md` §4, API: `docs/rulesets-protocol.md`): publishing,
-//! looking one up by code, the account's drafts and published ones, the remembered ruleset and
-//! the recent list.
+//! looking one up by code, the public list with its search, the account's drafts and published
+//! ones, the remembered ruleset and the recent list.
 //!
 //! A published version never changes and is never deleted (the database refuses it too,
-//! `migrations/0008_rulesets.sql`); editing one publishes the next version with a new code. The
-//! owner can hide one from their list; its code keeps working.
+//! `migrations/0008_rulesets.sql`); editing one publishes the next version with a new code. Every
+//! published ruleset is public (the user's decision, 2026-10-12): the public list shows each
+//! ruleset's newest version that is not hidden. The owner can hide one, which takes it off the
+//! public list and their own; its code and link keep working.
 
 use std::net::SocketAddr;
 
-use axum::extract::{ConnectInfo, Path, State};
+use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use chrono::{DateTime, Utc};
@@ -19,6 +21,7 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::api::{client_ip, current_user, limit};
+use crate::cursor;
 use crate::error::{ApiError, ApiResult};
 use crate::store::UserRow;
 use crate::AppState;
@@ -288,7 +291,7 @@ pub async fn publish(
 // ---------------------------------------------------------------- lookups
 
 /// `GET /v1/rulesets/<code>`: a published ruleset, for anyone (the website's `/r/<code>` page, the
-/// launcher's code box). Hidden ones too (hiding only takes them off the owner's list). Limited per
+/// launcher's code box). Hidden ones too (hiding only takes them off the public list). Limited per
 /// client IP ([`common::ratelimit::RULESET_LOOKUP_IP_WINDOWS`]).
 pub async fn lookup(
     State(state): State<AppState>,
@@ -304,6 +307,92 @@ pub async fn lookup(
     let code = code_or_404(&code)?;
     let p = db::fetch_ruleset(&state.pool, &code).await?.ok_or_else(unknown_ruleset)?;
     Ok(Json(view(&state, p, false).await?))
+}
+
+/// Public list page sizes.
+pub const BROWSE_DEFAULT_LIMIT: u32 = 30;
+pub const BROWSE_MAX_LIMIT: u32 = 100;
+/// Longest search text taken (longer is cut).
+pub const MAX_QUERY_CHARS: usize = 64;
+
+#[derive(Debug, Deserialize)]
+pub struct BrowseQuery {
+    pub q: Option<String>,
+    pub limit: Option<u32>,
+    pub after: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct BrowsePage {
+    /// Newest first.
+    pub rulesets: Vec<RulesetView>,
+    /// Pass as `after` for the next page; null on the last.
+    pub next: Option<String>,
+}
+
+fn browse_cursor(p: &PublishedRuleset) -> String {
+    cursor::encode("r1", &[&p.created_at.timestamp_micros().to_string(), &p.code])
+}
+
+fn parse_browse_cursor(c: &str) -> Option<(DateTime<Utc>, String)> {
+    let f = cursor::decode("r1", c, 2)?;
+    let at = DateTime::from_timestamp_micros(f[0].parse().ok()?)?;
+    Some((at, parse_ruleset_code(&f[1])?))
+}
+
+/// `GET /v1/rulesets?q=&limit=&after=`: the public list (the user's decision, 2026-10-12: every
+/// published ruleset is public). Of each ruleset its newest version that is not hidden, newest
+/// first, in pages (`next`). `q` matches the name, the publisher's name and the code,
+/// case-insensitively. For anyone; limited per client IP together with the code lookup
+/// ([`common::ratelimit::RULESET_LOOKUP_IP_WINDOWS`]). 400 `bad_cursor` for a cursor it did not
+/// give out.
+pub async fn browse(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Query(q): Query<BrowseQuery>,
+) -> ApiResult<Json<BrowsePage>> {
+    let ip = ip_key(client_ip(&state, &headers, peer));
+    limit(&state, |l, now| l.ruleset_lookup_ip.check(&ip, now)).map_err(|wait| {
+        ApiError::rate_limited(wait)
+            .with_message(format!("Too many requests. Try again in {} s.", wait.as_secs().max(1)))
+    })?;
+    let n = cursor::page_limit(q.limit, BROWSE_DEFAULT_LIMIT, BROWSE_MAX_LIMIT);
+    let after = match q.after.as_deref() {
+        Some(c) => Some(parse_browse_cursor(c).ok_or_else(|| ApiError::bad_request("bad_cursor", "Bad cursor"))?),
+        None => None,
+    };
+    let text: Option<String> =
+        q.q.as_deref().map(|t| t.trim().chars().take(MAX_QUERY_CHARS).collect::<String>()).filter(|t| !t.is_empty());
+    let mut rows = db::browse_rulesets(
+        &state.pool,
+        text.as_deref(),
+        after.as_ref().map(|(at, code)| (*at, code.as_str())),
+        n as i64 + 1,
+    )
+    .await?;
+    let next = if rows.len() > n as usize {
+        rows.truncate(n as usize);
+        rows.last().map(browse_cursor)
+    } else {
+        None
+    };
+    let base = state.cfg.public_base_url.trim_end_matches('/').to_string();
+    // Each is its ruleset's newest visible version: no newer one to link.
+    let rulesets = rows
+        .into_iter()
+        .map(|p| RulesetView {
+            link: format!("{base}/r/{}", p.code),
+            code: p.code,
+            ruleset: p.ruleset,
+            hash: p.hash,
+            created_at: p.created_at,
+            newer: None,
+            hidden: None,
+        })
+        .collect();
+    Ok(Json(BrowsePage { rulesets, next }))
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -364,8 +453,9 @@ pub struct HiddenReq {
     pub hidden: bool,
 }
 
-/// `PUT /v1/me/rulesets/<code>/hidden` `{hidden}`: hides one of the account's rulesets from its
-/// list (and from "newer version" links), or shows it again. 204; 404 unless it is the account's.
+/// `PUT /v1/me/rulesets/<code>/hidden` `{hidden}`: takes one of the account's rulesets off the
+/// public list (and "newer version" links), or puts it back. The owner's own list still shows it.
+/// 204; 404 unless it is the account's.
 pub async fn set_hidden(
     State(state): State<AppState>,
     headers: HeaderMap,

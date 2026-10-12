@@ -10,6 +10,7 @@ import type {
   RoomList,
   RulesetDraft,
   RulesetDraftRequest,
+  RulesetPage,
   RulesetView,
 } from "@accounts/types";
 import { Preconditions } from "@common/preconditions";
@@ -39,6 +40,8 @@ import type { BackendService, RankedProfile, UserData } from "./types";
 
 /** Leaderboard rows per page (the server's default and at most 100). */
 export const LEADERBOARD_PAGE_SIZE = 50;
+/** Public ruleset list rows per page (at most 100). */
+export const PUBLIC_RULESETS_PAGE_SIZE = 30;
 /** Match history rows per page (at most 50). */
 export const MATCH_HISTORY_PAGE_SIZE = 20;
 
@@ -128,6 +131,10 @@ class AccountsBackendClient implements BackendService {
 
   async fetchRuleset(code: string): Promise<RulesetView> {
     return await this._api.ruleset(code);
+  }
+
+  async fetchPublicRulesets(q: string, after?: string): Promise<RulesetPage> {
+    return await this._api.browseRulesets({ q: q.trim() || undefined, limit: PUBLIC_RULESETS_PAGE_SIZE, after });
   }
 
   async fetchMyRulesets(): Promise<MyRulesets> {

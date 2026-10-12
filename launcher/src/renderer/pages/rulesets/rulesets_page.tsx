@@ -6,6 +6,8 @@ import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import FileDownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
 import FileUploadOutlinedIcon from "@mui/icons-material/FileUploadOutlined";
 import LockOutlinedIcon from "@mui/icons-material/LockOutlined";
+import RefreshIcon from "@mui/icons-material/Refresh";
+import SearchIcon from "@mui/icons-material/Search";
 import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
 import Dialog from "@mui/material/Dialog";
@@ -13,15 +15,20 @@ import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
 import IconButton from "@mui/material/IconButton";
+import InputAdornment from "@mui/material/InputAdornment";
+import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { clsx } from "clsx";
 import log from "electron-log";
-import React, { useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { ConfirmationModal } from "@/components/confirmation_modal/confirmation_modal";
+import { InfiniteScrollContainer } from "@/components/infinite_scroll_container/infinite_scroll_container";
+import { PagedListStatus } from "@/components/paged_list_status/paged_list_status";
 import { useAccount } from "@/lib/hooks/use_account";
+import { useCursorPages } from "@/lib/hooks/use_cursor_pages";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { rulesetTitle, useRememberedRuleset } from "@/lib/rulesets/use_remembered_ruleset";
@@ -42,11 +49,34 @@ type Editing = {
 };
 
 export const myRulesetsKey = (uid: string | undefined) => ["myRulesets", uid] as const;
+export const PUBLIC_RULESETS_KEY = "publicRulesets";
+/** How long the search waits after the last keystroke. */
+const SEARCH_DEBOUNCE_MS = 300;
+
+/** "Bo3 · strikes 1-2-1 · 2 bans", "No set · loser picks". */
+export function setSummary(r: Ruleset): string {
+  if (r.bestOf > 0) {
+    const parts = [Messages.summaryBestOf(r.bestOf), Messages.summaryStrikes(r.strikes.join("-"))];
+    if (r.bans > 0) {
+      parts.push(Messages.summaryBans(r.bans));
+    }
+    return parts.join(" · ");
+  }
+  const choice =
+    r.stageChoice === "strike"
+      ? Messages.summaryStrikes(r.strikes.join("-"))
+      : r.stageChoice === "random"
+      ? Messages.summaryRandom()
+      : Messages.summaryLoserPicks();
+  return `${Messages.summaryNoSet()} · ${choice}`;
+}
 
 /**
- * The Rulesets page (docs/rulesets-protocol.md §4): drafts, publishing (a code and a link), the
- * account's published rulesets (hide, edit as a new version, copy the link, use for rooms), and
- * import / export of ruleset files.
+ * The Rulesets page (docs/rulesets-protocol.md §4), one column top to bottom: the account's drafts, its published
+ * rulesets (hide, edit as a new version, copy the link, use for rooms), then every public ruleset with a search and
+ * infinite scrolling (the user's decision, 2026-10-12: rulesets are all public). A published or public row opens its
+ * read-only preview; a draft opens in the editor. Both lists refresh with the button, when the page opens and when
+ * the window comes back into focus. Also import / export of ruleset files.
  */
 export const RulesetsPage = React.memo(function RulesetsPage() {
   const { backendService } = useServices();
@@ -62,8 +92,10 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
   const [justPublished, setJustPublished] = useState<RulesetView | null>(null);
   const [showHidden, setShowHidden] = useState(false);
   const [busy, setBusy] = useState<"save" | "publish" | null>(null);
-  /** The published ruleset shown read-only (its code) while nothing is being edited. */
-  const [viewing, setViewing] = useState<string | null>(null);
+  /** The published ruleset (the account's or anyone's) shown read-only while nothing is being edited. */
+  const [viewing, setViewing] = useState<RulesetView | null>(null);
+  const [search, setSearch] = useState("");
+  const [searchFor, setSearchFor] = useState("");
   const fileInput = useRef<HTMLInputElement>(null);
 
   const query = useQuery({
@@ -73,6 +105,35 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
     retry: false,
   });
   const refresh = () => queryClient.invalidateQueries({ queryKey: myRulesetsKey(uid) });
+
+  useEffect(() => {
+    const t = setTimeout(() => setSearchFor(search.trim()), SEARCH_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+  }, [search]);
+  const fetchPublic = useCallback(
+    async (after: string | undefined) => {
+      const page = await backendService.fetchPublicRulesets(searchFor, after);
+      return { items: page.rulesets, next: page.next };
+    },
+    [backendService, searchFor],
+  );
+  const pub = useCursorPages<RulesetView>({
+    queryKey: [PUBLIC_RULESETS_KEY, searchFor],
+    fetchPage: fetchPublic,
+    enabled: uid != null,
+  });
+
+  // Fresh lists when the page opens, on the refresh button and when the window comes back into focus (rulesets
+  // published from another machine show up without restarting).
+  const refreshAll = useCallback(() => {
+    void queryClient.invalidateQueries({ queryKey: myRulesetsKey(uid) });
+    void queryClient.invalidateQueries({ queryKey: [PUBLIC_RULESETS_KEY] });
+  }, [queryClient, uid]);
+  useEffect(() => {
+    refreshAll();
+    window.addEventListener("focus", refreshAll);
+    return () => window.removeEventListener("focus", refreshAll);
+  }, [refreshAll]);
 
   if (!uid) {
     return (
@@ -87,7 +148,7 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
   }
 
   /** Opens something in the editor, asking first if unsaved changes would be lost. */
-  const open = (next: Editing | null, view: string | null = null) => {
+  const open = (next: Editing | null, view: RulesetView | null = null) => {
     const go = () => {
       setEditing(next);
       setViewing(view);
@@ -174,7 +235,7 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
   const toggleHidden = async (view: RulesetView) => {
     try {
       await backendService.setRulesetHidden(view.code, !view.hidden);
-      await refresh();
+      refreshAll();
     } catch (err) {
       showError(err);
     }
@@ -193,7 +254,9 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
   const hiddenCount = published.filter((p) => p.hidden).length;
   const shownPublished = showHidden ? published : published.filter((p) => !p.hidden);
   const problem = editing ? rulesetProblem(editing.ruleset) : null;
-  const viewed = viewing ? published.find((p) => p.code === viewing) : undefined;
+  // One of the account's own: the fresh copy from its list (hidden may have changed).
+  const ownViewed = viewing ? published.find((p) => p.code === viewing.code) : undefined;
+  const viewed = ownViewed ?? viewing;
 
   return (
     <div className={styles.page}>
@@ -201,6 +264,16 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
         <div className={styles.header}>
           <Typography variant="h5">{Messages.rulesets()}</Typography>
           <div className={styles.headerActions}>
+            <Tooltip title={Messages.refresh()}>
+              <IconButton
+                size="small"
+                onClick={refreshAll}
+                aria-label={Messages.refresh()}
+                data-testid="refresh-rulesets"
+              >
+                <RefreshIcon fontSize="small" />
+              </IconButton>
+            </Tooltip>
             <Button
               size="small"
               variant="contained"
@@ -241,88 +314,138 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
           {Messages.intro()}
         </Typography>
 
-        {query.isLoading ? (
-          <div className={styles.centered}>
-            <CircularProgress color="inherit" />
-          </div>
-        ) : query.isError ? (
-          <div className={styles.centered}>
-            <p>{Messages.loadFailed()}</p>
-            <Button color="secondary" onClick={() => void query.refetch()}>
-              {Messages.retry()}
-            </Button>
-          </div>
-        ) : (
-          <div className={styles.lists}>
-            <Typography variant="subtitle2" className={styles.listTitle}>
-              {Messages.drafts()}
-            </Typography>
-            {data?.drafts.length ? (
-              data.drafts.map((d) => (
-                <div
-                  key={d.id}
-                  className={clsx(styles.item, editing?.draftId === d.id && styles.selected)}
-                  data-draft={d.id}
-                >
-                  <button
-                    type="button"
-                    className={styles.itemMain}
-                    onClick={() => open({ draftId: d.id, basedOn: d.basedOn, ruleset: d.ruleset, dirty: false })}
-                  >
-                    <span className={styles.itemName}>{d.ruleset.name || Messages.editorNew()}</span>
-                    <span className={styles.itemMeta}>
-                      {d.basedOn && Messages.editorEditing(d.basedOn)}
-                      {d.problem && <span className={styles.warn}>{Messages.notReady()}</span>}
-                    </span>
-                  </button>
-                  <Button size="small" color="secondary" sx={{ textTransform: "none" }} onClick={() => setDeleting(d)}>
-                    {Messages.delete()}
-                  </Button>
-                </div>
-              ))
-            ) : (
-              <Typography variant="body2" color="text.secondary" className={styles.empty}>
-                {Messages.noDrafts()}
-              </Typography>
-            )}
-
-            <div className={styles.listTitleRow}>
-              <Typography variant="subtitle2" className={styles.listTitle}>
-                {Messages.published()}
-              </Typography>
-              {hiddenCount > 0 && (
-                <Button
-                  size="small"
-                  color="secondary"
-                  sx={{ textTransform: "none" }}
-                  onClick={() => setShowHidden(!showHidden)}
-                >
-                  {showHidden ? Messages.hideHidden() : Messages.showHidden(hiddenCount)}
-                </Button>
-              )}
+        <InfiniteScrollContainer
+          className={styles.lists}
+          onLoadMore={pub.loadMore}
+          hasMore={pub.hasMore && !pub.error}
+          isLoading={pub.isLoading || pub.isLoadingMore}
+        >
+          {query.isLoading ? (
+            <div className={styles.inlineStatus}>
+              <CircularProgress color="inherit" size={20} />
             </div>
-            {shownPublished.length ? (
-              shownPublished.map((p) => (
-                <PublishedRow
-                  key={p.code}
-                  view={p}
-                  inUse={remembered.ruleset?.code === p.code}
-                  selected={!editing && viewing === p.code}
-                  onView={() => open(null, p.code)}
-                  onEdit={() => open({ basedOn: p.code, ruleset: { ...p.ruleset }, dirty: false })}
-                  onCopy={copy}
-                  onExport={() => exportFile(p.ruleset)}
-                  onToggleHidden={() => void toggleHidden(p)}
-                  onUse={() => void rememberForRooms(p.code)}
-                />
-              ))
-            ) : (
-              <Typography variant="body2" color="text.secondary" className={styles.empty}>
-                {Messages.noPublished()}
+          ) : query.isError ? (
+            <div className={styles.inlineStatus}>
+              <span>{Messages.loadFailed()}</span>
+              <Button color="secondary" onClick={() => void query.refetch()}>
+                {Messages.retry()}
+              </Button>
+            </div>
+          ) : (
+            <>
+              <Typography variant="subtitle2" className={styles.listTitle}>
+                {Messages.drafts()}
               </Typography>
-            )}
-          </div>
-        )}
+              {data?.drafts.length ? (
+                data.drafts.map((d) => (
+                  <div
+                    key={d.id}
+                    className={clsx(styles.item, editing?.draftId === d.id && styles.selected)}
+                    data-draft={d.id}
+                  >
+                    <button
+                      type="button"
+                      className={styles.itemMain}
+                      onClick={() => open({ draftId: d.id, basedOn: d.basedOn, ruleset: d.ruleset, dirty: false })}
+                    >
+                      <span className={styles.itemName}>{d.ruleset.name || Messages.editorNew()}</span>
+                      <span className={styles.itemMeta}>
+                        {d.basedOn && Messages.editorEditing(d.basedOn)}
+                        {d.problem && <span className={styles.warn}>{Messages.notReady()}</span>}
+                      </span>
+                    </button>
+                    <Button
+                      size="small"
+                      color="secondary"
+                      sx={{ textTransform: "none" }}
+                      onClick={() => setDeleting(d)}
+                    >
+                      {Messages.delete()}
+                    </Button>
+                  </div>
+                ))
+              ) : (
+                <Typography variant="body2" color="text.secondary" className={styles.empty}>
+                  {Messages.noDrafts()}
+                </Typography>
+              )}
+
+              <div className={styles.listTitleRow}>
+                <Typography variant="subtitle2" className={styles.listTitle}>
+                  {Messages.published()}
+                </Typography>
+                {hiddenCount > 0 && (
+                  <Button
+                    size="small"
+                    color="secondary"
+                    sx={{ textTransform: "none" }}
+                    onClick={() => setShowHidden(!showHidden)}
+                  >
+                    {showHidden ? Messages.hideHidden() : Messages.showHidden(hiddenCount)}
+                  </Button>
+                )}
+              </div>
+              {shownPublished.length ? (
+                shownPublished.map((p) => (
+                  <PublishedRow
+                    key={p.code}
+                    view={p}
+                    inUse={remembered.ruleset?.code === p.code}
+                    selected={!editing && viewing?.code === p.code}
+                    onView={() => open(null, p)}
+                    onEdit={() => open({ basedOn: p.code, ruleset: { ...p.ruleset }, dirty: false })}
+                    onCopy={copy}
+                    onExport={() => exportFile(p.ruleset)}
+                    onToggleHidden={() => void toggleHidden(p)}
+                    onUse={() => void rememberForRooms(p.code)}
+                  />
+                ))
+              ) : (
+                <Typography variant="body2" color="text.secondary" className={styles.empty}>
+                  {Messages.noPublished()}
+                </Typography>
+              )}
+            </>
+          )}
+
+          <Typography variant="subtitle2" className={styles.listTitle}>
+            {Messages.publicRulesets()}
+          </Typography>
+          <TextField
+            size="small"
+            hiddenLabel={true}
+            fullWidth={true}
+            value={search}
+            placeholder={Messages.searchPlaceholder()}
+            onChange={(e) => setSearch(e.target.value)}
+            inputProps={{ "aria-label": Messages.searchPlaceholder(), "data-testid": "public-search", maxLength: 64 }}
+            InputProps={{
+              startAdornment: (
+                <InputAdornment position="start">
+                  <SearchIcon fontSize="small" />
+                </InputAdornment>
+              ),
+            }}
+            sx={{ mb: 1 }}
+          />
+          {pub.items.map((p) => (
+            <PublicRow
+              key={p.code}
+              view={p}
+              inUse={remembered.ruleset?.code === p.code}
+              selected={!editing && viewing?.code === p.code}
+              onView={() => open(null, p)}
+              onCopy={copy}
+              onUse={() => void rememberForRooms(p.code)}
+            />
+          ))}
+          {!pub.isLoading && !pub.error && pub.items.length === 0 && (
+            <Typography variant="body2" color="text.secondary" className={styles.empty}>
+              {searchFor ? Messages.noMatches(searchFor) : Messages.noPublic()}
+            </Typography>
+          )}
+          <PagedListStatus pages={pub} />
+        </InfiniteScrollContainer>
       </div>
 
       {!editing && viewed && (
@@ -330,24 +453,53 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
           <div className={styles.editorHeader}>
             <Typography variant="h6">{rulesetTitle(viewed)}</Typography>
             <span className={clsx(styles.unsaved, styles.code)}>{viewed.code}</span>
+            {viewed.hidden && <span className={styles.unsaved}>{Messages.hiddenLabel()}</span>}
           </div>
           <div className={styles.editorScroll}>
             <RulesetDetails ruleset={viewed.ruleset} />
           </div>
           <div className={styles.editorFooter}>
-            <span className={styles.problem} />
+            <div className={styles.viewActions}>
+              <Tooltip title={Messages.copyCode()}>
+                <IconButton size="small" onClick={() => copy(viewed.code)} aria-label={Messages.copyCode()}>
+                  <ContentCopyIcon fontSize="small" />
+                </IconButton>
+              </Tooltip>
+              <Button color="secondary" sx={{ textTransform: "none" }} onClick={() => copy(viewed.link)}>
+                {Messages.copyLink()}
+              </Button>
+              {remembered.ruleset?.code === viewed.code ? (
+                <span className={styles.inUse}>{Messages.inUse()}</span>
+              ) : (
+                <Button
+                  color="secondary"
+                  sx={{ textTransform: "none" }}
+                  onClick={() => void rememberForRooms(viewed.code)}
+                  data-testid="view-use"
+                >
+                  {Messages.forMyRooms()}
+                </Button>
+              )}
+            </div>
             <div className={styles.footerButtons}>
               <Button color="secondary" onClick={() => setViewing(null)}>
                 {Messages.close()}
               </Button>
-              <Button
-                color="primary"
-                variant="contained"
-                disableElevation={true}
-                onClick={() => open({ basedOn: viewed.code, ruleset: { ...viewed.ruleset }, dirty: false })}
-              >
-                {Messages.editAsNewVersion()}
-              </Button>
+              {ownViewed && (
+                <Button color="secondary" onClick={() => void toggleHidden(ownViewed)}>
+                  {ownViewed.hidden ? Messages.show() : Messages.hide()}
+                </Button>
+              )}
+              {ownViewed && (
+                <Button
+                  color="primary"
+                  variant="contained"
+                  disableElevation={true}
+                  onClick={() => open({ basedOn: ownViewed.code, ruleset: { ...ownViewed.ruleset }, dirty: false })}
+                >
+                  {Messages.editAsNewVersion()}
+                </Button>
+              )}
             </div>
           </div>
         </div>
@@ -522,6 +674,7 @@ const PublishedRow = ({
       </span>
       <span className={styles.itemMeta}>
         <span className={styles.code}>{view.code}</span>
+        <span>{setSummary(view.ruleset)}</span>
         {view.hidden && <span>{Messages.hiddenLabel()}</span>}
         {view.newer && <span>{Messages.newerVersion(view.newer.version)}</span>}
         {inUse && <span className={styles.inUse}>{Messages.inUse()}</span>}
@@ -553,6 +706,48 @@ const PublishedRow = ({
           {view.hidden ? Messages.show() : Messages.hide()}
         </Button>
       </Tooltip>
+    </div>
+  </div>
+);
+
+const PublicRow = ({
+  view,
+  inUse,
+  selected,
+  onView,
+  onCopy,
+  onUse,
+}: {
+  view: RulesetView;
+  inUse: boolean;
+  selected: boolean;
+  onView: () => void;
+  onCopy: (text: string) => void;
+  onUse: () => void;
+}) => (
+  <div className={clsx(styles.item, selected && styles.selected)} data-public={view.code}>
+    <button type="button" className={styles.itemMain} onClick={onView}>
+      <span className={styles.itemName}>
+        {view.ruleset.name} <span className={styles.itemVersion}>{Messages.version(view.ruleset.version)}</span>{" "}
+        <span className={styles.itemBy}>{Messages.by(view.ruleset.by)}</span>
+      </span>
+      <span className={styles.itemMeta}>
+        <span className={styles.code}>{view.code}</span>
+        <span>{setSummary(view.ruleset)}</span>
+        {inUse && <span className={styles.inUse}>{Messages.inUse()}</span>}
+      </span>
+    </button>
+    <div className={styles.itemActions}>
+      <Tooltip title={Messages.copyLink()}>
+        <IconButton size="small" onClick={() => onCopy(view.link)} aria-label={Messages.copyLink()}>
+          <ContentCopyIcon fontSize="inherit" />
+        </IconButton>
+      </Tooltip>
+      {!inUse && (
+        <Button size="small" color="secondary" sx={{ textTransform: "none" }} onClick={onUse}>
+          {Messages.forMyRooms()}
+        </Button>
+      )}
     </div>
   </div>
 );

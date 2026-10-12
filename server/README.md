@@ -138,7 +138,7 @@ Rules:
   | Match history pages | account | 60 per minute |
   | Room list (`/v1/rooms`) | account | 60 per minute |
   | Rulesets published (`POST /v1/rulesets`; never deleted, so this bounds the store) | account | 10 per hour, 30 per day. Refused (invalid, unchanged) publishes don't count |
-  | Ruleset lookups by code (`GET /v1/rulesets/<code>`, public) | IP | 60 per minute, 1,000 per hour |
+  | Ruleset lookups by code and public list pages (`GET /v1/rulesets/<code>`, `GET /v1/rulesets`, public; one count) | IP | 60 per minute, 1,000 per hour |
   | Own ruleset calls (drafts, hide, remembered ruleset, lists) | account | 120 per minute |
   | mm tickets | account | 1 per 2 s |
   | mm `hello` (online connection) | account | 10 per minute |

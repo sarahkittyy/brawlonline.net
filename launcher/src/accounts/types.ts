@@ -187,6 +187,9 @@ export type RulesetDraft = {
   updatedAt: string;
 };
 
+/** `GET /v1/rulesets`: a page of the public list (newest first); `next` is the cursor of the page after it. */
+export type RulesetPage = { rulesets: RulesetView[]; next: string | null };
+
 /** `GET /v1/me/rulesets`. */
 export type MyRulesets = { drafts: RulesetDraft[]; published: RulesetView[] };
 
@@ -241,6 +244,8 @@ export interface AccountsApi {
   rooms(uid: string): Promise<RoomList>;
   /** A published ruleset by code (public). */
   ruleset(code: string): Promise<RulesetView>;
+  /** A page of the public list (`q` searches the name, publisher and code). */
+  browseRulesets(query: { q?: string; limit?: number; after?: string }): Promise<RulesetPage>;
   myRulesets(uid: string): Promise<MyRulesets>;
   recentRulesets(uid: string): Promise<RecentRuleset[]>;
   publishRuleset(uid: string, req: PublishRulesetRequest): Promise<RulesetView>;

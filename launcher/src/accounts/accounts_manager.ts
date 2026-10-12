@@ -14,6 +14,7 @@ import type {
   RoomList,
   RulesetDraft,
   RulesetDraftRequest,
+  RulesetPage,
   RulesetView,
   SignUpRequest,
 } from "./types";
@@ -104,6 +105,10 @@ export class AccountsManager {
 
   ruleset(code: string): Promise<AccountsResult<RulesetView>> {
     return wrap(() => this.client.ruleset(code));
+  }
+
+  browseRulesets(query: { q?: string; limit?: number; after?: string }): Promise<AccountsResult<RulesetPage>> {
+    return wrap(() => this.client.browseRulesets(query));
   }
 
   myRulesets(uid: string): Promise<AccountsResult<MyRulesets>> {

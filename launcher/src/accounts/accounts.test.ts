@@ -224,6 +224,20 @@ describe("accounts", () => {
     expect(calls.length).toBe(2);
   });
 
+  it("pages the public rulesets without a session, with the search", async () => {
+    const page = { rulesets: [], next: "cjE" };
+    const { impl, calls } = fakeFetch({ "GET /v1/rulesets": () => ({ status: 200, body: page }) });
+    const manager = new AccountsManager(
+      new AccountsHttpClient("http://api", "test", impl),
+      new SessionStore(path.join(dir, "s.json"), null),
+    );
+    expect(await manager.browseRulesets({})).toEqual({ ok: true, value: page });
+    expect(calls[0].url).toBe("http://api/v1/rulesets");
+    await manager.browseRulesets({ q: "nor cal", limit: 30, after: "cjE" });
+    expect(calls[1].url).toBe("http://api/v1/rulesets?q=nor+cal&limit=30&after=cjE");
+    expect(calls[1].headers.authorization).toBeUndefined();
+  });
+
   it("reports an unreachable server as a network error", async () => {
     const failing = (async () => {
       throw new TypeError("fetch failed");

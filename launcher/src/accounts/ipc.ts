@@ -14,6 +14,7 @@ import type {
   RoomList,
   RulesetDraft,
   RulesetDraftRequest,
+  RulesetPage,
   RulesetView,
   SignUpRequest,
 } from "./types";
@@ -79,6 +80,12 @@ export const ipc_accountsMatchHistory = makeEndpoint.main(
 export const ipc_accountsRooms = makeEndpoint.main("accounts_rooms", <{ uid: string }>_, <R<RoomList>>_);
 
 export const ipc_accountsRuleset = makeEndpoint.main("accounts_ruleset", <{ code: string }>_, <R<RulesetView>>_);
+
+export const ipc_accountsBrowseRulesets = makeEndpoint.main(
+  "accounts_browseRulesets",
+  <{ q?: string; limit?: number; after?: string }>_,
+  <R<RulesetPage>>_,
+);
 
 export const ipc_accountsMyRulesets = makeEndpoint.main("accounts_myRulesets", <{ uid: string }>_, <R<MyRulesets>>_);
 

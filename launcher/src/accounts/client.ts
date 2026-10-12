@@ -11,6 +11,7 @@ import type {
   RoomList,
   RulesetDraft,
   RulesetDraftRequest,
+  RulesetPage,
   RulesetView,
   SignUpRequest,
   UserJson,
@@ -108,6 +109,10 @@ export class AccountsHttpClient {
 
   ruleset(code: string): Promise<RulesetView> {
     return this._request("GET", `/v1/rulesets/${encodeURIComponent(code)}`, {});
+  }
+
+  browseRulesets(query: { q?: string; limit?: number; after?: string }): Promise<RulesetPage> {
+    return this._request("GET", `/v1/rulesets${queryString(query)}`, {});
   }
 
   myRulesets(token: string): Promise<MyRulesets> {

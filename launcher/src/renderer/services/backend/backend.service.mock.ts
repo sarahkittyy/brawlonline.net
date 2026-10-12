@@ -18,6 +18,7 @@ import type {
   RoomList,
   RulesetDraft,
   RulesetDraftRequest,
+  RulesetPage,
   RulesetView,
   UserData,
 } from "./types";
@@ -344,6 +345,33 @@ class MockBackendClient implements BackendService {
       throw new Error("No ruleset has this code");
     }
     return this._withNewer(found);
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async fetchPublicRulesets(q: string, after?: string): Promise<RulesetPage> {
+    const text = q.trim().toLowerCase();
+    // Each ruleset's newest visible version (same name and publisher in the mock), newest first.
+    const latest = new Map<string, RulesetView>();
+    for (const r of this.rulesets.filter((x) => !x.hidden)) {
+      const key = `${r.ruleset.by}/${r.ruleset.name}`;
+      const have = latest.get(key);
+      if (!have || have.ruleset.version < r.ruleset.version) {
+        latest.set(key, r);
+      }
+    }
+    const all = [...latest.values()]
+      .filter(
+        (r) =>
+          !text ||
+          r.ruleset.name.toLowerCase().includes(text) ||
+          r.ruleset.by.toLowerCase().includes(text) ||
+          r.code.toLowerCase().includes(text),
+      )
+      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .map(({ hidden: _hidden, ...r }) => ({ ...r, newer: null }));
+    const start = after ? all.findIndex((r) => r.code === after) + 1 : 0;
+    const rows = all.slice(start, start + 30);
+    return { rulesets: rows, next: start + 30 < all.length ? rows[rows.length - 1].code : null };
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
