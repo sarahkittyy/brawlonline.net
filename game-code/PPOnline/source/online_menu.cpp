@@ -687,6 +687,22 @@ namespace OnlineMenu {
         }
     }
 
+    // P+'s salty runback and results skip: its "End Match" control code (Net-CodeMenu.asm, hook at
+    // 0x806D4850) reads this machine's own pads when the match scene ends and, with the header's
+    // buttons held (u16 0x804E000A, L+R+Y: the pause screen's quit with Y; 0x804E000E, L+R+X),
+    // sets the sequence's next state to 1 or 13 instead of 10. In sqNetAnyOkiraku that skips
+    // OnlineMatch's state 10 (back to the online CSS) on that machine only. The header bytes
+    // 0x804E0008 / 0x804E000C switch each one off (non-zero; nothing else writes them). Off
+    // online, as Slippi has no runback online; the player's own values come back with the
+    // other lines (restoreRules).
+    static const u32 CM_RUNBACK_OFF = 0x804E0008, CM_SKIP_RESULTS_OFF = 0x804E000C;
+    static u8 s_runbackSaved[2];
+    static void runbackOff()
+    {
+        *(volatile u8*)CM_RUNBACK_OFF = 1;
+        *(volatile u8*)CM_SKIP_RESULTS_OFF = 1;
+    }
+
     // Every frame until the Code Menu is loaded (at boot, before any match): its defaults.
     static void readCodeMenuDefaults()
     {
@@ -704,6 +720,8 @@ namespace OnlineMenu {
         memcpy(s.savedItemSwitch, m + ITEM_SWITCH, sizeof(s.savedItemSwitch));
         s.savedHazard = st[HAZARD];
         s_codeMenuSavedCount = codeMenuLines(0);
+        s_runbackSaved[0] = *(u8*)CM_RUNBACK_OFF;
+        s_runbackSaved[1] = *(u8*)CM_SKIP_RESULTS_OFF;
         s.haveSavedRules = true;
     }
 
@@ -718,6 +736,8 @@ namespace OnlineMenu {
         memcpy(m + ITEM_SWITCH, s.savedItemSwitch, sizeof(s.savedItemSwitch));
         st[HAZARD] = s.savedHazard;
         codeMenuLines(2);
+        *(u8*)CM_RUNBACK_OFF = s_runbackSaved[0];
+        *(u8*)CM_SKIP_RESULTS_OFF = s_runbackSaved[1];
         s.haveSavedRules = false;
     }
 
@@ -773,6 +793,7 @@ namespace OnlineMenu {
         }
         int lines = codeMenuLines(1);                      // every Code Menu line at its default
         codeMenuOff();                                     // except its activation: OFF
+        runbackOff();                                      // and P+'s salty runback
         PPOM::g_block.debug.scratch[3] = ((u32)lines << 16) | ((PPOM::g_block.debug.scratch[3] + 1) & 0xFFFF);
     }
 
@@ -1290,6 +1311,7 @@ namespace OnlineMenu {
     {
         saveRules();
         codeMenuOff();
+        runbackOff();
         s.mode = mode;
         s.phase = PH_IDLE;
         s.rankText[0] = 0;
