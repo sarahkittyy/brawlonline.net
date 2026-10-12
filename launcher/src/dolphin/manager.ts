@@ -838,7 +838,8 @@ async function defaultGameFilesTarget(defaultFolder: string, current: string): P
 }
 
 async function confirmAdoptGameFiles(folder: string, current: string): Promise<boolean> {
-  const window = BrowserWindow.getFocusedWindow();
+  // On the launcher's window even when it is not focused, never a free-floating box over a game.
+  const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
   const options: MessageBoxOptions = {
     type: "question",
     buttons: ["Use these files", "Cancel"],

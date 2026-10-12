@@ -66,7 +66,8 @@ export const GameFilesFolder = () => {
     ? Messages.waitForSetup()
     : "";
   const disabled = moving || disabledReason !== "";
-  const moveProgress = moving && progress?.phase === "moveGameFiles" ? progress : undefined;
+  // A move shows its progress here whichever page started it.
+  const moveProgress = progress?.phase === "moveGameFiles" ? progress : undefined;
 
   return (
     <SettingItem name={Messages.gameFilesFolder()} description={Messages.gameFilesFolderDescription()}>
@@ -89,7 +90,7 @@ export const GameFilesFolder = () => {
           ) : undefined
         }
       />
-      {moving && (
+      {(moving || moveProgress) && (
         <div
           css={css`
             margin-top: 10px;
