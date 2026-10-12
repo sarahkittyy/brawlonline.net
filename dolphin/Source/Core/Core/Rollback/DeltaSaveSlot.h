@@ -143,6 +143,33 @@ struct alignas(64) JITDirtyBitmap
   }
 };
 
+// One byte per granule, as JITDirtyBitmap: 1 once the GPU has written guest RAM there (EFB and
+// XFB copies, fills; PresentStats::OnGpuRamWrite). Never cleared while a game runs. Those bytes are
+// rendered output whose arrival time depends on the host GPU and thread timing, so the
+// game-independent desync checksum (RollbackManager::LastSaveChecksum) skips them.
+struct alignas(64) GPUWrittenBitmap
+{
+  uint8_t entries[JITDirtyBitmap::ENTRY_COUNT];
+
+  static GPUWrittenBitmap& Get()
+  {
+    static GPUWrittenBitmap s_instance;
+    return s_instance;
+  }
+
+  void Clear() { std::memset(entries, 0, sizeof(entries)); }
+  void Mark(uint32_t address, uint32_t size)
+  {
+    if (size == 0)
+      return;
+    const uint32_t phys = address & 0x1FFF'FFFFu;
+    const uint64_t first = phys >> ROLLBACK_PAGE_SHIFT;
+    const uint64_t last = (static_cast<uint64_t>(phys) + size - 1) >> ROLLBACK_PAGE_SHIFT;
+    for (uint64_t p = first; p <= last && p < JITDirtyBitmap::ENTRY_COUNT; ++p)
+      entries[p] = 1;
+  }
+};
+
 struct RegionDelta
 {
   uint32_t page_count = 0;

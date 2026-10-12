@@ -406,6 +406,7 @@ add_library(core
   IOS/FS/HostBackend/File.cpp
   IOS/FS/HostBackend/FS.cpp
   IOS/FS/HostBackend/FS.h
+  IOS/FS/HostBackend/Journal.cpp
   IOS/IOS.cpp
   IOS/IOS.h
   IOS/IOSC.cpp
@@ -624,6 +625,8 @@ add_library(core
   Rollback/GprbCpuTrace.cpp
   Rollback/FullMemcpySaveSlot.h
   Rollback/IRollbackSaveSlot.h
+  Rollback/MachineSession.cpp
+  Rollback/MachineSession.h
   Rollback/PeerData.cpp
   Rollback/PeerData.h
   Rollback/Perf.cpp

@@ -21,3 +21,10 @@ Not imported (25 files): game data that Project-Plus-Dolphin keeps in its tree, 
 Brawl save template (Data/Sys/NetplaySave/, Data/user/Wii/title/) and the Project+ launcher
 .dol binaries (Data/user/Launcher/*.dol). The launcher takes these from the user's own
 Project+ files.
+
+Ported code (GPL-2.0-or-later):
+  Source/Core/Core/IOS/FS/HostBackend/Journal.cpp and the journal parts of FS.cpp, FS.h and
+  File.cpp (the NAND undo journal for whole-machine rollback) come from NyxTheShield's fork of
+  Brawlback's Project-Plus-Dolphin (https://github.com/NyxTheShield/Project-Plus-Dolphin, branch
+  master at 3d6f8b5b4), which took them from Orca by YouGame
+  (https://github.com/yougame-co/orca-netplay). Copyright 2026 YouGame.

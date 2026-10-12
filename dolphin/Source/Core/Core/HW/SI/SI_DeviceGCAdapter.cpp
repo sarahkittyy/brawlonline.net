@@ -14,6 +14,7 @@
 #include "Core/HW/GCPad.h"
 #include "Core/Harness/Harness.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 #include "InputCommon/GCAdapter.h"
 
@@ -34,6 +35,9 @@ CSIDevice_GCAdapter::CSIDevice_GCAdapter(Core::System& system, SIDevices device,
 GCPadStatus CSIDevice_GCAdapter::GetPadStatus()
 {
   GCPadStatus pad_status = {};
+
+  if (Machine::GetPad(m_device_number, &pad_status))
+    return pad_status;
 
   // For netplay, the local controllers are polled in GetNetPads(), and
   // the remote controllers receive their status there as well

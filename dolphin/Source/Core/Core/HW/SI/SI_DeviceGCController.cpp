@@ -17,6 +17,7 @@
 #include "Core/Movie.h"
 #include "Core/NetPlayClient.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 #include "InputCommon/GCPadStatus.h"
 
@@ -142,6 +143,10 @@ void CSIDevice_GCController::HandleMoviePadStatus(Movie::MovieManager& movie, in
 GCPadStatus CSIDevice_GCController::GetPadStatus()
 {
   GCPadStatus pad_status = {};
+
+  // A whole-machine session: every port's controller is the session's input for this frame.
+  if (Machine::GetPad(m_device_number, &pad_status))
+    return pad_status;
 
   if (!NetPlay::IsNetPlayRunning())
   {

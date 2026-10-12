@@ -21,6 +21,7 @@
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/GameplayRollback.h"
 #include "Core/Rollback/GameplaySession.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/RollbackManager.h"
 #include "Core/System.h"
@@ -162,6 +163,10 @@ void BrawlbackGekkoNetUnconditionalFrame(const Core::CPUThreadGuard& guard)
   auto& system = guard.GetSystem();
   auto& ppc_state = system.GetPPCState();
 
+  // A whole-machine session (Brawl Mods) owns the loop when armed.
+  if (Machine::OnLoopTop(guard))
+    return;
+
   // A running gameplay session arms the trace itself, after any load has rewound the frame.
   if (!Gprb::Session::IsRunning())
     Gprb::CpuTraceOnLoopTop(system);
@@ -288,6 +293,8 @@ void BrawlbackGekkoNetFrameEnd(const Core::CPUThreadGuard& guard)
 
   static constexpr u32 BRAWL_FRAME_END_NEXT_ADDR = 0x80017508;
 
+  if (Machine::OnFrameEnd(guard))
+    return;
   if (Gprb::Session::OnFrameEnd(guard))
     return;
 
@@ -328,6 +335,8 @@ void BrawlbackGekkoNetLoopEnd(const Core::CPUThreadGuard& guard)
 
   static constexpr u32 BRAWL_LOOP_START_ADDR = 0x800171b4;
 
+  if (Machine::OnLoopEnd(guard))
+    return;
   if (Gprb::Session::OnLoopEnd(guard))
     return;
 
@@ -571,6 +580,8 @@ static bool IsShortcutResimulationPass()
 
 bool IsResimulationPass()
 {
+  if (Machine::IsArmed())
+    return Machine::IsResimulationPass();
   if (!NetPlay::IsNetPlayRunning() || !NetPlay::IsInRollbackMode())
     return false;
 

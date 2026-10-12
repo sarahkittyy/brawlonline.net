@@ -68,6 +68,7 @@
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/Rollback/GameplayRollback.h"
 #include "Core/Rollback/GameplaySession.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/GameplayOnlineBackend.h"
 #include "Core/Rollback/PresentStats.h"
 #include "VideoCommon/OnlineChatUI.h"
@@ -1400,6 +1401,39 @@ Result CmdGprbCensus(const Args&)
   return r;
 }
 
+// Whole-machine session (Brawl Mods, Core/Rollback/MachineSession.h). machine_arm takes the
+// options of Machine::ParseOptions under "options"; usually the session is armed before boot
+// through PPR_MACHINE_SESSION instead.
+Result CmdMachineArm(const Args& args)
+{
+  const auto it = args.find("options");
+  if (it == args.end())
+    Fail("missing 'options'");
+  std::string error;
+  const auto opts = Machine::ParseOptions(it->second, &error);
+  if (!opts)
+    Fail(error);
+  if (!Machine::Arm(*opts, &error))
+    Fail(error);
+  return {};
+}
+
+Result CmdMachineStatus(const Args&)
+{
+  return Machine::Status().get<picojson::object>();
+}
+
+Result CmdMachineHistory(const Args& args)
+{
+  return Machine::History(static_cast<s64>(GetU64(args, "since", 0))).get<picojson::object>();
+}
+
+Result CmdMachineStop(const Args&)
+{
+  Machine::Stop();
+  return {};
+}
+
 Result CmdGprbStop(const Args&)
 {
   Gprb::Session::Stop();
@@ -1784,6 +1818,10 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"gprb_status", CmdGprbStatus},
       {"gprb_checksums", CmdGprbChecksums},
       {"gprb_stop", CmdGprbStop},
+      {"machine_arm", CmdMachineArm},
+      {"machine_status", CmdMachineStatus},
+      {"machine_history", CmdMachineHistory},
+      {"machine_stop", CmdMachineStop},
       {"gprb_samples", CmdGprbSamples},
       {"gpu_state", CmdGpuState},
       {"gprb_census", CmdGprbCensus},

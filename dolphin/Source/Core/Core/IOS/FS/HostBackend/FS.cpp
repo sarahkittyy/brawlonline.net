@@ -2,10 +2,12 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "Core/IOS/FS/HostBackend/FS.h"
+#include "Core/Rollback/RollbackManager.h"
 
 #include <algorithm>
 #include <expected>
 #include <optional>
+#include <source_location>
 #include <string_view>
 #include <type_traits>
 #include <unordered_map>
@@ -21,6 +23,7 @@
 #include "Common/NandPaths.h"
 #include "Common/StringUtil.h"
 #include "Common/Swap.h"
+#include "Common/Timer.h"
 #include "Core/IOS/ES/ES.h"
 #include "Core/IOS/IOS.h"
 #include "Core/Movie.h"
@@ -29,7 +32,9 @@
 
 namespace IOS::HLE::FS
 {
-HostFileSystem::HostFilename HostFileSystem::BuildFilename(const std::string& wii_path) const
+HostFileSystem::HostFilename
+HostFileSystem::BuildFilename(const std::string& wii_path, std::string_view context,
+                              const std::source_location& location) const
 {
   for (const auto& redirect : m_nand_redirects)
   {
@@ -47,7 +52,38 @@ HostFileSystem::HostFilename HostFileSystem::BuildFilename(const std::string& wi
   if (wii_path.starts_with("/"))
     return HostFilename{m_root_path + Common::EscapePath(wii_path), false};
 
-  ASSERT_MSG(IOS_FS, false, "Invalid Wii path '{}' given to BuildFilename()", wii_path);
+  const std::string diagnostic_path =
+      File::GetUserPath(D_LOGS_IDX) + "wii-fs-invalid-path.log";
+  File::CreateFullPath(diagnostic_path);
+  File::IOFile diagnostic{diagnostic_path, "ab"};
+  if (diagnostic)
+  {
+    std::lock_guard lock(m_handles_mutex);
+    diagnostic.WriteString(fmt::format(
+        "\n=== Invalid Wii path ===\nunix_time={}\ncontext={}\ncaller={}:{} ({})\n"
+        "wii_path='{}' size={}\nrollback_snapshot={} resimulating={} root_path_empty={}\n"
+        "handles:\n",
+        Common::Timer::GetLocalTimeSinceJan1970(), context, location.file_name(), location.line(),
+        location.function_name(), wii_path, wii_path.size(), Rollback::InSnapshotDoState(),
+        Rollback::IsResimulating(), m_root_path.empty()));
+    for (size_t i = 0; i < m_handles.size(); ++i)
+    {
+      const Handle& handle = m_handles[i];
+      diagnostic.WriteString(
+          fmt::format("  [{}] opened={} mode={} path='{}' host_file={} host_open={} offset={}\n", i,
+                      handle.opened, static_cast<u8>(handle.mode), handle.wii_path,
+                      static_cast<bool>(handle.host_file),
+                      handle.host_file && handle.host_file->IsOpen(), handle.file_offset));
+    }
+    diagnostic.Flush();
+  }
+
+  ERROR_LOG_FMT(IOS_FS,
+                "Invalid Wii path '{}' in {} from {}:{}; diagnostic written to {}", wii_path,
+                context, location.file_name(), location.line(), diagnostic_path);
+  ASSERT_MSG(IOS_FS, false,
+             "Invalid Wii path '{}' in {}\nCaller: {}:{}\nDiagnostic: {}", wii_path, context,
+             location.file_name(), location.line(), diagnostic_path);
   return HostFilename{m_root_path, false};
 }
 
@@ -203,7 +239,7 @@ void HostFileSystem::LoadFst()
   m_root_entry = *root_entry;
 }
 
-void HostFileSystem::SaveFst()
+bool HostFileSystem::SaveFst()
 {
   std::vector<SerializedFstEntry> to_write;
   auto collect_entries = [&to_write](const auto& collect, const FstEntry& entry) -> void {
@@ -221,14 +257,21 @@ void HostFileSystem::SaveFst()
   {
     // This temporary file must be closed before it can be renamed.
     File::IOFile file{temp_path, "wb"};
-    if (!file.WriteArray(to_write.data(), to_write.size()))
+    if (!file.WriteArray(to_write.data(), to_write.size()) || !file.Flush())
     {
       PanicAlertFmt("IOS_FS: Failed to write new FST");
-      return;
+      file.Close();
+      File::Delete(temp_path);
+      return false;
     }
   }
-  if (!File::Rename(temp_path, dest_path))
+  if (!File::RenameSync(temp_path, dest_path))
+  {
     PanicAlertFmt("IOS_FS: Failed to rename temporary FST file");
+    File::Delete(temp_path);
+    return false;
+  }
+  return true;
 }
 
 HostFileSystem::FstEntry* HostFileSystem::GetFstEntryForPath(const std::string& path)
@@ -261,6 +304,7 @@ HostFileSystem::FstEntry* HostFileSystem::GetFstEntryForPath(const std::string& 
       // proper metadata is filled in later.
       INFO_LOG_FMT(IOS_FS, "Creating a default entry for {} ({})", complete_path,
                    host_file.is_redirect ? "redirect" : "NAND");
+      JournalFst();
       entry = &entry->children.emplace_back();
       entry->name = component;
       entry->data.modes = {Mode::ReadWrite, Mode::ReadWrite, Mode::ReadWrite};
@@ -279,9 +323,28 @@ HostFileSystem::FstEntry* HostFileSystem::GetFstEntryForPath(const std::string& 
 
 void HostFileSystem::DoState(PointerWrap& p)
 {
-  // Temporarily close the file, to prevent any issues with the savestating of files/folders.
-  for (Handle& handle : m_handles)
-    handle.host_file.reset();
+  std::lock_guard lock(m_handles_mutex);
+
+  // This piece of code is handling four separate problems:
+  // 1. Close host handles by calling reset on them, in case DoStateRead needs to modify a file that
+  //    was open.
+  // 2. Close guest handles by setting opened to false on each element in m_handles, in case
+  //    DoStateRead needs to modify a file that was open.
+  // 3. Close guest handles by setting opened to false on each element in m_handles, because if all
+  //    of them were open, it would make DoStateRead/DoStateWriteOrMeasure's calls to OpenFile fail.
+  // 4. Create a copy of m_handles that we can restore later in case we're writing/measuring,
+  //    because OpenFile happily stomps over elements in m_handles that have opened set to false.
+  // Rollback snapshots read no file contents, so saving one leaves the host files open.
+  const bool rollback_snapshot = Rollback::InSnapshotDoState();
+  const bool keep_files_open = rollback_snapshot && !p.IsReadMode();
+  decltype(m_handles) handles_copy{};
+  if (!keep_files_open)
+  {
+    handles_copy = std::move(m_handles);
+    m_handles = {};
+    for (Handle& handle : handles_copy)
+      handle.host_file.reset();
+  }
 
   // The format for the next part of the save state is follows:
   // 1. bool is_full_nand_in_state (movie active && temporary wii root)
@@ -300,10 +363,20 @@ void HostFileSystem::DoState(PointerWrap& p)
 
   const bool is_full_nand_wanted = movie.IsMovieActive() && Core::WiiRootIsTemporary();
 
-  bool is_full_nand_in_state = is_full_nand_wanted;
+  // Rollback snapshots keep the handle table below but not the NAND contents (a game's "/tmp" can
+  // be tens of MB; Brawl's is about 37 MB). They record a journal mark instead, and loading one
+  // undoes the NAND changes journaled since (Journal.cpp), with every host file closed.
+  bool is_full_nand_in_state = is_full_nand_wanted && !rollback_snapshot;
   p.Do(is_full_nand_in_state);
 
-  if (!p.IsReadMode())
+  if (rollback_snapshot)
+  {
+    u64 journal_mark = p.IsWriteMode() ? JournalMark() : m_journal_mark;
+    p.Do(journal_mark);
+    if (p.IsReadMode())
+      JournalUndo(journal_mark);
+  }
+  else if (!p.IsReadMode())
   {
     DoStateWriteOrMeasure(p, "/tmp");
     u8* const nand_size_ptr = p.ReserveU32();
@@ -316,6 +389,8 @@ void HostFileSystem::DoState(PointerWrap& p)
         memcpy(nand_size_ptr, &size_of_nand, sizeof(size_of_nand));
       }
     }
+
+    m_handles = std::move(handles_copy);
   }
   else  // case where we're in read mode.
   {
@@ -335,26 +410,90 @@ void HostFileSystem::DoState(PointerWrap& p)
 
   for (Handle& handle : m_handles)
   {
+    // An opened handle without an absolute Wii path is never a valid guest-visible handle. Older
+    // builds could expose this transient OpenFile state to rollback saves. Drop it without showing
+    // a modal assertion so an old/corrupt snapshot cannot wedge a headless netplay process.
+    if (!p.IsReadMode() && rollback_snapshot && handle.opened &&
+        !handle.wii_path.starts_with('/'))
+    {
+      ERROR_LOG_FMT(IOS_FS,
+                    "Rollback save: discarding incomplete NAND handle with path '{}'",
+                    handle.wii_path);
+      handle = Handle{};
+    }
+
     p.Do(handle.opened);
     p.Do(handle.mode);
     p.Do(handle.wii_path);
     p.Do(handle.file_offset);
-    if (handle.opened)
-      handle.host_file = OpenHostFile(BuildFilename(handle.wii_path).host_path);
+    if (!handle.opened)
+      continue;
+    if (rollback_snapshot && !handle.wii_path.starts_with('/'))
+    {
+      ERROR_LOG_FMT(IOS_FS,
+                    "Rollback load: discarding invalid NAND handle with path '{}'",
+                    handle.wii_path);
+      handle = Handle{};
+      continue;
+    }
+    const std::string_view state_context =
+        p.IsReadMode()    ? "DoState read/restore" :
+        p.IsWriteMode()   ? "DoState write/save" :
+        p.IsMeasureMode() ? "DoState measure" :
+                            "DoState verify";
+    const std::string host_path = BuildFilename(handle.wii_path, state_context).host_path;
+    // The journal should have restored every file an open handle refers to. If one is missing,
+    // opening it would prompt and leave a null host_file that the next access dereferences; close
+    // the handle instead.
+    if (rollback_snapshot && p.IsReadMode() && !File::Exists(host_path))
+    {
+      ERROR_LOG_FMT(IOS_FS, "Rollback load: NAND file {} for an open handle no longer exists",
+                    handle.wii_path);
+      handle.opened = false;
+      continue;
+    }
+    handle.host_file = OpenHostFile(host_path);
+  }
+}
+
+void HostFileSystem::CloseHostFiles()
+{
+  std::lock_guard lock(m_handles_mutex);
+
+  for (Handle& handle : m_handles)
+    handle.host_file.reset();
+}
+
+void HostFileSystem::ReopenHostFiles()
+{
+  std::lock_guard lock(m_handles_mutex);
+
+  for (Handle& handle : m_handles)
+  {
+    if (handle.opened && !handle.host_file)
+      handle.host_file = OpenHostFile(BuildFilename(handle.wii_path, "ReopenHostFiles").host_path);
   }
 }
 
 ResultCode HostFileSystem::Format(Uid uid)
 {
+  std::lock_guard lock(m_handles_mutex);
+
   if (uid != 0)
     return ResultCode::AccessDenied;
   if (m_root_path.empty())
     return ResultCode::AccessDenied;
   const std::string root = BuildFilename("/").host_path;
+  if (m_journal_active)
+  {
+    ERROR_LOG_FMT(IOS_FS, "Refusing an unjournaled NAND format during a rollback session");
+    return ResultCode::InUse;
+  }
   if (!File::DeleteDirRecursively(root) || !File::CreateDir(root))
     return ResultCode::UnknownError;
   ResetFst();
-  SaveFst();
+  if (!SaveFst())
+    return ResultCode::UnknownError;
   // Reset and close all handles.
   m_handles = {};
   return ResultCode::Success;
@@ -384,10 +523,14 @@ ResultCode HostFileSystem::CreateFileOrDirectory(Uid uid, Gid gid, const std::st
   if (File::Exists(host_path))
     return ResultCode::AlreadyExists;
 
+  const JournalCheckpoint checkpoint = JournalBeginTransaction(true);
+  JournalFst();
+  JournalCreated(host_path);
   const bool ok = is_file ? File::CreateEmptyFile(host_path) : File::CreateDir(host_path);
   if (!ok)
   {
     ERROR_LOG_FMT(IOS_FS, "Failed to create file or directory: {}", host_path);
+    JournalAbortTransaction(checkpoint);
     return ResultCode::UnknownError;
   }
 
@@ -399,7 +542,11 @@ ResultCode HostFileSystem::CreateFileOrDirectory(Uid uid, Gid gid, const std::st
   child->data.uid = uid;
   child->data.gid = gid;
   child->data.attribute = attr;
-  SaveFst();
+  if (!SaveFst())
+  {
+    JournalAbortTransaction(checkpoint);
+    return ResultCode::UnknownError;
+  }
   return ResultCode::Success;
 }
 
@@ -417,6 +564,7 @@ ResultCode HostFileSystem::CreateDirectory(Uid uid, Gid gid, const std::string& 
 
 bool HostFileSystem::IsFileOpened(const std::string& path) const
 {
+  std::lock_guard lock(m_handles_mutex);
   return std::ranges::any_of(m_handles, [&path](const Handle& handle) {
     return handle.opened && handle.wii_path == path;
   });
@@ -424,6 +572,7 @@ bool HostFileSystem::IsFileOpened(const std::string& path) const
 
 bool HostFileSystem::IsDirectoryInUse(const std::string& path) const
 {
+  std::lock_guard lock(m_handles_mutex);
   return std::ranges::any_of(m_handles, [&path](const Handle& handle) {
     return handle.opened && handle.wii_path.starts_with(path);
   });
@@ -447,17 +596,38 @@ ResultCode HostFileSystem::Delete(Uid uid, Gid gid, const std::string& path)
   if (!File::Exists(host_path))
     return ResultCode::NotFound;
 
+  const JournalCheckpoint checkpoint = JournalBeginTransaction(true);
   if (File::IsFile(host_path) && !IsFileOpened(path))
-    File::Delete(host_path);
+  {
+    JournalFst();
+    if (!JournalRemoved(host_path) || !File::Delete(host_path))
+    {
+      JournalAbortTransaction(checkpoint);
+      return ResultCode::UnknownError;
+    }
+  }
   else if (File::IsDirectory(host_path) && !IsDirectoryInUse(path))
-    File::DeleteDirRecursively(host_path);
+  {
+    JournalFst();
+    if (!JournalRemoved(host_path) || !File::DeleteDirRecursively(host_path))
+    {
+      JournalAbortTransaction(checkpoint);
+      return ResultCode::UnknownError;
+    }
+  }
   else
+  {
     return ResultCode::InUse;
+  }
 
   const auto it = std::ranges::find(parent->children, split_path.file_name, &FstEntry::name);
   if (it != parent->children.end())
     parent->children.erase(it);
-  SaveFst();
+  if (!SaveFst())
+  {
+    JournalAbortTransaction(checkpoint);
+    return ResultCode::UnknownError;
+  }
 
   return ResultCode::Success;
 }
@@ -495,23 +665,40 @@ ResultCode HostFileSystem::Rename(Uid uid, Gid gid, const std::string& old_path,
   {
     return ResultCode::InUse;
   }
+  // Orca rollback: replacing a file that is still open would leave its handles writing to an
+  // unlinked file the journal can't see (and fail outright on Windows), so a session refuses it.
+  if (m_journal_active && (IsFileOpened(new_path) || IsDirectoryInUse(new_path)))
+    return ResultCode::InUse;
 
   const auto host_old_info = BuildFilename(old_path);
   const auto host_new_info = BuildFilename(new_path);
   const std::string& host_old_path = host_old_info.host_path;
   const std::string& host_new_path = host_new_info.host_path;
 
+  const JournalCheckpoint checkpoint = JournalBeginTransaction(true);
   // If there is already something of the same type at the new path, delete it.
+  JournalFst();
   if (File::Exists(host_new_path))
   {
     const bool old_is_file = File::IsFile(host_old_path);
     const bool new_is_file = File::IsFile(host_new_path);
-    if (old_is_file && new_is_file)
-      File::Delete(host_new_path);
-    else if (!old_is_file && !new_is_file)
-      File::DeleteDirRecursively(host_new_path);
-    else
+    if (old_is_file != new_is_file)
+    {
+      JournalAbortTransaction(checkpoint);
       return ResultCode::Invalid;
+    }
+    if (!JournalRemoved(host_new_path))
+    {
+      JournalAbortTransaction(checkpoint);
+      return ResultCode::UnknownError;
+    }
+    const bool deleted = new_is_file ? File::Delete(host_new_path) :
+                                       File::DeleteDirRecursively(host_new_path);
+    if (!deleted)
+    {
+      JournalAbortTransaction(checkpoint);
+      return ResultCode::UnknownError;
+    }
   }
 
   if (!File::Rename(host_old_path, host_new_path))
@@ -524,20 +711,24 @@ ResultCode HostFileSystem::Rename(Uid uid, Gid gid, const std::string& old_path,
       {
         ERROR_LOG_FMT(IOS_FS, "Copying {} to {} in Rename fallback failed", host_old_path,
                       host_new_path);
+        JournalAbortTransaction(checkpoint);
         return ResultCode::NotFound;
       }
       if (!File::Delete(host_old_path))
       {
         ERROR_LOG_FMT(IOS_FS, "Deleting {} in Rename fallback failed", host_old_path);
+        JournalAbortTransaction(checkpoint);
         return ResultCode::Invalid;
       }
     }
     else
     {
       ERROR_LOG_FMT(IOS_FS, "Rename {} to {} - failed", host_old_path, host_new_path);
+      JournalAbortTransaction(checkpoint);
       return ResultCode::NotFound;
     }
   }
+  JournalRenamed(host_old_path, host_new_path);
 
   FstEntry* new_entry = GetFstEntryForPath(new_path);
   new_entry->name = split_new_path.file_name;
@@ -553,7 +744,11 @@ ResultCode HostFileSystem::Rename(Uid uid, Gid gid, const std::string& old_path,
     old_parent->children.erase(it);
   }
 
-  SaveFst();
+  if (!SaveFst())
+  {
+    JournalAbortTransaction(checkpoint);
+    return ResultCode::UnknownError;
+  }
 
   return ResultCode::Success;
 }
@@ -663,11 +858,17 @@ ResultCode HostFileSystem::SetMetadata(Uid caller_uid, const std::string& path, 
   if (entry->data.gid != gid || entry->data.uid != uid || entry->data.attribute != attr ||
       entry->data.modes != modes)
   {
+    const JournalCheckpoint checkpoint = JournalBeginTransaction(true);
+    JournalFst();
     entry->data.gid = gid;
     entry->data.uid = uid;
     entry->data.attribute = attr;
     entry->data.modes = modes;
-    SaveFst();
+    if (!SaveFst())
+    {
+      JournalAbortTransaction(checkpoint);
+      return ResultCode::UnknownError;
+    }
   }
 
   return ResultCode::Success;

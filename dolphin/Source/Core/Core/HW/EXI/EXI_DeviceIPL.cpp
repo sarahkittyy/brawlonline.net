@@ -27,6 +27,7 @@
 #include "Core/HW/SystemTimers.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 
 #include "DiscIO/Enums.h"
@@ -408,6 +409,12 @@ u32 CEXIIPL::GetEmulatedTime(Core::System& system, u32 epoch)
     ltime = movie.GetRecordingStartTime();
 
     // let's keep time moving forward, regardless of what it starts at
+    ltime += system.GetCoreTiming().GetTicks() / system.GetSystemTimers().GetTicksPerSecond();
+  }
+  else if (Machine::IsArmed())
+  {
+    // A whole-machine session: the session's clock, the same on every machine.
+    ltime = Machine::GetInitialRTC();
     ltime += system.GetCoreTiming().GetTicks() / system.GetSystemTimers().GetTicksPerSecond();
   }
   else if (NetPlay::IsNetPlayRunning())

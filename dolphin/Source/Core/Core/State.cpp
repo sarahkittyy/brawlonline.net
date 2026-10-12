@@ -45,6 +45,7 @@
 #include "Core/HW/Wiimote.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
 
@@ -209,6 +210,12 @@ static bool CheckIfStateLoadIsAllowed(Core::System& system)
   if (NetPlay::IsNetPlayRunning())
   {
     OSD::AddMessage("Loading savestates is disabled in Netplay to prevent desyncs");
+    return false;
+  }
+
+  if (Machine::IsArmed())
+  {
+    OSD::AddMessage("Loading savestates is disabled in an online session");
     return false;
   }
 

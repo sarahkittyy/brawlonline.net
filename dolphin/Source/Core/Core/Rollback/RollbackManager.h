@@ -51,6 +51,14 @@ public:
   void SaveFrame(Core::System& system);
   bool LoadFrame(Core::System& system, int frames_back = 1);
 
+  // CRC32 of the guest RAM the last SaveFrame copied (the granules written since the save before
+  // it: indices and contents, MEM1 then MEM2). Game-independent: equal on two machines that ran
+  // the same frame from the same state, whatever the game (Machine::Session's desync check). 0
+  // before the first save.
+  u32 LastSaveChecksum() const;
+  // Whole-machine snapshots exclude Brawl's framebuffer region (Init). Other games: nothing.
+  void SetBrawlExclusions(bool brawl);
+
   void AddExcludeRegion(uint32_t virt_addr, uint32_t size_bytes);
   // The game<->Dolphin mailbox (Online/GameBridge.h): never part of rollback state. Kept across
   // Init(); size 0 removes it. CPU thread only.
@@ -123,6 +131,9 @@ public:
   alignas(64) std::atomic<bool> m_skip_ram_in_dostate{false};
   alignas(64) std::atomic<bool> m_skip_ios_in_dostate{false};
   alignas(64) std::atomic<bool> m_skip_jit_clear_in_dostate{false};
+  // Snapshots include the IOS device states (Machine::Session); InSnapshotDoState() during them.
+  bool m_full_ios_in_snapshots = false;
+  std::atomic<bool> m_in_snapshot_dostate{false};
 
   void NotifyDBATMappingsWereUpdated() {}
 
@@ -155,6 +166,7 @@ public:
 
   std::vector<MemoryRegion> m_exclude_regions;
   std::optional<MemoryRegion> m_mailbox_region;
+  bool m_brawl_exclusions = true;
 
   bool m_region_mode = false;
   u64 m_region_bytes = 0;
@@ -219,6 +231,13 @@ public:
 };
 
 uint32_t ReadBrawlMatchFrameCounter(const uint8_t* mem2_ptr, size_t mem2_size);
+
+// True while a rollback snapshot is saved or loaded with the IOS device states included (a
+// whole-machine session, Machine::Session): the NAND keeps no contents in the snapshot, only a
+// mark of its undo journal (IOS/FS/HostBackend/Journal.cpp, ported from Orca with Nyx's fork).
+bool InSnapshotDoState();
+// True while frames are re-run after a load (a whole-machine session).
+bool IsResimulating();
 
 // Per-frame desync checksums, all 0 outside scMelee. `combined` is what GekkoNet compares; the
 // parts are kept separately so the harness can tell which one diverged.

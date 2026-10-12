@@ -2276,6 +2276,8 @@ void TextureCacheBase::CopyRenderTargetToTexture(
         {
           UninitializeEFBMemory(dst, dstStride, bytes_per_row, num_blocks_y);
           memory.MarkRangeDirty(dstAddr, covered_range);
+          Rollback::PresentStats::OnGpuRamWrite(Rollback::PresentStats::GpuRamWriteKind::Fill,
+                                                dstAddr, covered_range);
         }
         return;
       }

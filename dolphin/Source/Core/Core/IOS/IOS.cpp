@@ -915,6 +915,13 @@ void EmulationKernel::DoState(PointerWrap& p)
           break;
         }
       }
+      else
+      {
+        // A descriptor opened after the state was saved is closed in it. Leaving it open leaked
+        // the slot: after a rollback the game's next IOS_Open got the next descriptor number
+        // instead of the one the first run got, and the machines diverged.
+        m_fdmap[i] = nullptr;
+      }
     }
   }
   else

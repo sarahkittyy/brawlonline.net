@@ -21,6 +21,7 @@
 #include "Core/CoreTiming.h"
 #include "Core/HW/Memmap.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/Perf.h"
 #include "Core/System.h"
 #include "VideoCommon/Fifo.h"
@@ -284,7 +285,10 @@ void RollbackManager::BeginDoState()
   m_skip_jit_clear_in_dostate.store(true, std::memory_order_seq_cst);
   VideoCommon_SetSkipGPUReadbackForRollback(true);
   VideoCommon_SetSkipVertexFlushForRollback(true);
-  m_skip_ios_in_dostate.store(true, std::memory_order_seq_cst);
+  // A whole-machine session rolls the IOS devices back too (the NAND by its journal, the Wii
+  // Remotes, open files); the Brawlback netplay path keeps only their IPC queues and timing.
+  m_skip_ios_in_dostate.store(!m_full_ios_in_snapshots, std::memory_order_seq_cst);
+  m_in_snapshot_dostate.store(m_full_ios_in_snapshots, std::memory_order_seq_cst);
   PowerPC_SetSkipDCacheFlushForRollback(true);
   PowerPC_SetSkipCPURegsForRollback(true);
 }
@@ -294,6 +298,7 @@ void RollbackManager::EndDoState()
   PowerPC_SetSkipCPURegsForRollback(false);
   PowerPC_SetSkipDCacheFlushForRollback(false);
   m_skip_ios_in_dostate.store(false, std::memory_order_seq_cst);
+  m_in_snapshot_dostate.store(false, std::memory_order_seq_cst);
   VideoCommon_SetSkipVertexFlushForRollback(false);
   VideoCommon_SetSkipGPUReadbackForRollback(false);
   m_skip_jit_clear_in_dostate.store(false, std::memory_order_seq_cst);
@@ -586,7 +591,10 @@ void RollbackManager::Init(Core::System& system)
     }
   }
 
-  m_exclude_regions = s_brawlback_hardcoded_exclude_regions;
+  if (m_brawl_exclusions)
+    m_exclude_regions = s_brawlback_hardcoded_exclude_regions;
+  else
+    m_exclude_regions.clear();
   if (m_mailbox_region)
     m_exclude_regions.push_back(*m_mailbox_region);
   PerfInit();
@@ -607,6 +615,7 @@ void RollbackManager::Init(Core::System& system)
   m_needs_source_mem2.assign(m_mem2_size / ROLLBACK_PAGE_SIZE, 0);
 
   JITDirtyBitmap::Get().Clear();
+  GPUWrittenBitmap::Get().Clear();
 
   m_ring_next = 0;
   m_ring_count = 0;
@@ -1061,6 +1070,64 @@ void RollbackManager::SaveFrame(Core::System& system)
   RollbackSnapshot& snap = m_val_snapshots[slot];
   CaptureFullRamSnapshot(snap);
 #endif
+}
+
+bool InSnapshotDoState()
+{
+  auto& rb = RollbackManager::Get();
+  return rb.m_in_snapshot_dostate.load(std::memory_order_relaxed);
+}
+
+bool IsResimulating()
+{
+  return Machine::IsResimulationPass();
+}
+
+u32 RollbackManager::LastSaveChecksum() const
+{
+  if (!m_initialized || m_ring_count == 0)
+    return 0;
+  const DeltaSaveSlot& saved = m_slots[Wrap(m_ring_next - 1, NUM_SAVE_SLOTS)];
+  const u8* gpu = GPUWrittenBitmap::Get().entries;
+  u32 crc = Common::StartCRC32();
+  for (const auto& [delta, first_page] :
+       {std::pair{&saved.m_mem1_delta, 0u}, std::pair{&saved.m_mem2_delta, MEM2_FIRST_PAGE}})
+  {
+    for (u32 i = 0; i < delta->page_count; ++i)
+    {
+      const u32 page = first_page + delta->page_indices[i];
+      // Rendered output (GPU copies to RAM) and the regions snapshots exclude are not game state.
+      if (gpu[page])
+        continue;
+      const u32 phys = page << ROLLBACK_PAGE_SHIFT;
+      bool excluded = false;
+      for (const MemoryRegion& r : m_exclude_regions)
+      {
+        if (phys < r.phys_end && phys + ROLLBACK_PAGE_SIZE > r.phys_start)
+        {
+          excluded = true;
+          break;
+        }
+      }
+      if (excluded)
+        continue;
+      crc = Common::UpdateCRC32(crc, reinterpret_cast<const u8*>(&page), sizeof(page));
+      crc = Common::UpdateCRC32(crc, delta->page_data.data() + static_cast<size_t>(i) * ROLLBACK_PAGE_SIZE,
+                                ROLLBACK_PAGE_SIZE);
+    }
+  }
+  // GekkoNet takes 0 as "no checksum"; never report a real one as 0.
+  return crc ? crc : 1;
+}
+
+void RollbackManager::SetBrawlExclusions(bool brawl)
+{
+  m_brawl_exclusions = brawl;
+  m_exclude_regions.clear();
+  if (brawl)
+    m_exclude_regions = s_brawlback_hardcoded_exclude_regions;
+  if (m_mailbox_region)
+    m_exclude_regions.push_back(*m_mailbox_region);
 }
 
 bool RollbackManager::LoadFrame(Core::System& system, int frames_back)

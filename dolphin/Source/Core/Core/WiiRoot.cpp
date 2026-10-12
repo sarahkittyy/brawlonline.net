@@ -26,6 +26,9 @@
 #include "Core/IOS/Uids.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayClient.h"
+#include "Core/Rollback/MachineSession.h"
+#include "Core/Config/MainSettings.h"
+#include "DiscIO/Volume.h"
 #include "Core/SysConf.h"
 #include "Core/System.h"
 #include "Core/Config/SYSCONFSettings.h"
@@ -144,6 +147,31 @@ static void InitializeDeterministicWiiSaves(FS::FileSystem* session_fs,
       const std::string path = Common::GetTitleDataPath(title_id) + "/banner.bin";
       movie.SetClearSave(!configured_fs->GetMetadata(IOS::PID_KERNEL, IOS::PID_KERNEL, path));
     }
+  }
+
+  if (Machine::IsArmed() && !NetPlay::IsNetPlayRunning() && !movie.IsMovieActive())
+  {
+    // A whole-machine session: the player's own save of this game (a joiner gets the host's
+    // NAND with the machine; players who boot together must have the same save). A launcher .dol
+    // boots as title 0 and then starts the disc Dolphin inserted (the default disc): its save.
+    u64 save_title = title_id;
+    if (save_title == 0)
+    {
+      if (const auto volume = DiscIO::CreateVolume(Config::Get(Config::MAIN_DEFAULT_ISO)))
+      {
+        if (const auto disc_title = volume->GetTitleID(volume->GetGamePartition()))
+          save_title = *disc_title;
+      }
+    }
+    INFO_LOG_FMT(CORE, "Wii Save Init: machine session, copying {0:016x}.", save_title);
+    if (save_title != 0)
+      CopySave(configured_fs.get(), session_fs, save_title);
+    if (!CopyNandFile(configured_fs.get(), Common::GetMiiDatabasePath(), session_fs,
+                      Common::GetMiiDatabasePath()))
+    {
+      WARN_LOG_FMT(CORE, "Failed to copy Mii database to the NAND");
+    }
+    return;
   }
 
   if ((NetPlay::IsNetPlayRunning() && SConfig::GetInstance().bCopyWiiSaveNetplay) ||

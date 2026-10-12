@@ -77,11 +77,13 @@ std::shared_ptr<File::IOFile> HostFileSystem::OpenHostFile(const std::string& ho
 
 Result<FileHandle> HostFileSystem::OpenFile(Uid, Gid, const std::string& path, Mode mode)
 {
+  std::lock_guard lock(m_handles_mutex);
+
   Handle* handle = AssignFreeHandle();
   if (!handle)
     return std::unexpected{ResultCode::NoFreeHandle};
 
-  const std::string host_path = BuildFilename(path).host_path;
+  const std::string host_path = BuildFilename(path, "OpenFile guest request").host_path;
   if (File::IsDirectory(host_path))
   {
     *handle = Handle{};
@@ -94,21 +96,28 @@ Result<FileHandle> HostFileSystem::OpenFile(Uid, Gid, const std::string& path, M
     return std::unexpected{ResultCode::NotFound};
   }
 
-  handle->host_file = OpenHostFile(host_path);
-  if (!handle->host_file)
-  {
-    *handle = Handle{};
+  std::shared_ptr<File::IOFile> host_file = OpenHostFile(host_path);
+  if (!host_file)
     return std::unexpected{ResultCode::AccessDenied};
-  }
 
-  handle->wii_path = path;
-  handle->mode = mode;
-  handle->file_offset = 0;
-  return FileHandle{this, ConvertHandleToFd(handle)};
+  // Publish the handle only after every field is valid. Rollback DoState must never observe the
+  // opened=true intermediate state that AssignFreeHandle previously exposed before wii_path was
+  // assigned.
+  const Fd fd = ConvertHandleToFd(handle);
+  Handle completed_handle;
+  completed_handle.opened = true;
+  completed_handle.mode = mode;
+  completed_handle.wii_path = path;
+  completed_handle.host_file = std::move(host_file);
+  completed_handle.file_offset = 0;
+  *handle = std::move(completed_handle);
+  return FileHandle{this, fd};
 }
 
 ResultCode HostFileSystem::Close(Fd fd)
 {
+  std::lock_guard lock(m_handles_mutex);
+
   Handle* handle = GetHandleFromFd(fd);
   if (!handle)
     return ResultCode::Invalid;
@@ -121,6 +130,8 @@ ResultCode HostFileSystem::Close(Fd fd)
 
 Result<u32> HostFileSystem::ReadBytesFromFile(Fd fd, u8* ptr, u32 count)
 {
+  std::lock_guard lock(m_handles_mutex);
+
   Handle* handle = GetHandleFromFd(fd);
   if (!handle || !handle->host_file->IsOpen())
     return std::unexpected{ResultCode::Invalid};
@@ -148,6 +159,8 @@ Result<u32> HostFileSystem::ReadBytesFromFile(Fd fd, u8* ptr, u32 count)
 
 Result<u32> HostFileSystem::WriteBytesToFile(Fd fd, const u8* ptr, u32 count)
 {
+  std::lock_guard lock(m_handles_mutex);
+
   Handle* handle = GetHandleFromFd(fd);
   if (!handle || !handle->host_file->IsOpen())
     return std::unexpected{ResultCode::Invalid};
@@ -155,10 +168,20 @@ Result<u32> HostFileSystem::WriteBytesToFile(Fd fd, const u8* ptr, u32 count)
   if ((u8(handle->mode) & u8(Mode::Write)) == 0)
     return std::unexpected{ResultCode::AccessDenied};
 
-  // File might be opened twice, need to seek before we read
-  handle->host_file->Seek(handle->file_offset, File::SeekOrigin::Begin);
-  if (!handle->host_file->WriteBytes(ptr, count))
+  const JournalCheckpoint checkpoint = JournalBeginTransaction();
+  if (!JournalWritten(BuildFilename(handle->wii_path, "WriteBytesToFile handle").host_path,
+                      *handle->host_file, handle->file_offset, count))
+  {
+    JournalAbortTransaction(checkpoint);
     return std::unexpected{ResultCode::AccessDenied};
+  }
+  // File might be opened twice, need to seek before we read
+  if (!handle->host_file->Seek(handle->file_offset, File::SeekOrigin::Begin) ||
+      !handle->host_file->WriteBytes(ptr, count))
+  {
+    JournalAbortTransaction(checkpoint);
+    return std::unexpected{ResultCode::AccessDenied};
+  }
 
   handle->file_offset += count;
   return count;
@@ -166,6 +189,8 @@ Result<u32> HostFileSystem::WriteBytesToFile(Fd fd, const u8* ptr, u32 count)
 
 Result<u32> HostFileSystem::SeekFile(Fd fd, std::uint32_t offset, SeekMode mode)
 {
+  std::lock_guard lock(m_handles_mutex);
+
   Handle* handle = GetHandleFromFd(fd);
   if (!handle || !handle->host_file->IsOpen())
     return std::unexpected{ResultCode::Invalid};
@@ -196,6 +221,8 @@ Result<u32> HostFileSystem::SeekFile(Fd fd, std::uint32_t offset, SeekMode mode)
 
 Result<FileStatus> HostFileSystem::GetFileStatus(Fd fd)
 {
+  std::lock_guard lock(m_handles_mutex);
+
   const Handle* handle = GetHandleFromFd(fd);
   if (!handle || !handle->host_file->IsOpen())
     return std::unexpected{ResultCode::Invalid};
@@ -214,7 +241,6 @@ HostFileSystem::Handle* HostFileSystem::AssignFreeHandle()
     return nullptr;
 
   *it = Handle{};
-  it->opened = true;
   return &*it;
 }
 

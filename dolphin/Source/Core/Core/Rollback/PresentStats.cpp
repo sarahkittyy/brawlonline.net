@@ -3,6 +3,8 @@
 
 #include "Core/Rollback/PresentStats.h"
 
+#include "Core/Rollback/DeltaSaveSlot.h"
+
 #include <algorithm>
 #include <atomic>
 #include <chrono>
@@ -474,6 +476,8 @@ std::FILE* GpuRamWriteLog()
 
 void OnGpuRamWrite(GpuRamWriteKind kind, u32 address, u32 size)
 {
+  if (kind != GpuRamWriteKind::EFBCopyDeferred)
+    GPUWrittenBitmap::Get().Mark(address, size);
   switch (kind)
   {
   case GpuRamWriteKind::EFBCopy:

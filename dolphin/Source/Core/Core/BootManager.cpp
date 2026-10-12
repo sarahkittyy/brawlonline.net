@@ -37,6 +37,7 @@
 #include "Core/HW/Sram.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 #include "Core/WiiRoot.h"
 
@@ -86,6 +87,23 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
     Config::AddLayer(ConfigLoaders::GenerateNetPlayConfigLoader(*netplay_settings));
     StartUp.bCopyWiiSaveNetplay = netplay_settings->savedata_load;
     StartUp.bIsSpectator = netplay_settings->spectator_mode;
+  }
+  else if (Machine::IsArmed())
+  {
+    // A whole-machine session (Brawl Mods): the settings that change what the game computes are
+    // the session's, through the same layer as Dolphin's netplay.
+    const NetPlay::NetSettings settings = Machine::MakeNetSettings();
+    Config::AddLayer(ConfigLoaders::GenerateNetPlayConfigLoader(settings));
+    StartUp.bCopyWiiSaveNetplay = false;
+    StartUp.bIsSpectator = false;
+    // Every player's port is a standard controller (the session reads each player's own
+    // controller, adapter or not, and sends it); the other ports have none.
+    for (int i = 0; i < SerialInterface::MAX_SI_CHANNELS; ++i)
+    {
+      Config::SetCurrent(Config::GetInfoForSIDevice(i),
+                         settings.pad_map[i] > 0 ? SerialInterface::SIDEVICE_GC_CONTROLLER :
+                                                   SerialInterface::SIDEVICE_NONE);
+    }
   }
 
   // Override out-of-region languages/countries to prevent games from crashing or behaving oddly

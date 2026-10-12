@@ -27,6 +27,7 @@
 #include "Core/HW/SystemTimers.h"
 #include "Core/IOS/ES/Formats.h"
 #include "Core/NetPlayClient.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 
 #include "DiscIO/Enums.h"
@@ -217,7 +218,7 @@ void DVDThread::StartReadInternal(bool copy_to_ram, u32 output_address, u64 dvd_
   request.time_started_ticks = core_timing.GetTicks();
   request.realtime_started_us = Common::Timer::NowUs();
 
-  if (NetPlay::IsNetPlayRunning() && NetPlay::IsInRollbackMode())
+  if ((NetPlay::IsNetPlayRunning() && NetPlay::IsInRollbackMode()) || Machine::IsArmed())
   {
     // In rollback mode, savestates can be saved/loaded many times per real second while the
     // real DVD thread completes reads asynchronously on its own schedule. FinishRead() blocks
