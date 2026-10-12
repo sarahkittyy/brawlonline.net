@@ -705,10 +705,16 @@ std::array<u8, MAX_LOBBY_PLAYERS> MatchTeams(const Guest& g)
   return teams;
 }
 
-u64 SetupHash(const Guest& g)
+// The setup key and the session's start frame: peers that would start the rollback on different
+// frames (builds with different start frames) fail the barrier instead of desyncing.
+u64 SetupHash(const Guest& g, u32 start_frame)
 {
-  const auto key = SetupKey(g);
-  return key.empty() ? 0 : XXH3_64bits(key.data(), key.size());
+  auto key = SetupKey(g);
+  if (key.empty())
+    return 0;
+  for (int shift = 24; shift >= 0; shift -= 8)
+    key.push_back(static_cast<u8>(start_frame >> shift));
+  return XXH3_64bits(key.data(), key.size());
 }
 
 std::string Hex(const std::vector<u8>& v)
@@ -4870,7 +4876,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     if (s.phase != Phase::Connected || !IsSimStart(g, &fc))
       return false;
     // The first frame of the match simulation: the barrier.
-    s.setup_hash = SetupHash(g);
+    s.setup_hash = SetupHash(g, StartFrame());
     s.task_order = TaskOrderNames(g);
     // The match's ports: a 1v1 is P1 and P2. With ports, the human ports of the game's own match
     // setup, which the peers compare (the setup hash): each must be this player or a peer of the
@@ -4999,17 +5005,26 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
                    relinked);
       s.applied = true;
       SendState();
-      const double rtt = std::clamp(hp->rtt_ms, 0.0, PeerData::MAX_RTT_MS);
+      double rtt = 0;
+      ForEachPeer([&](int, const PeerView& p) {
+        if (!p.left)
+          rtt = std::max(rtt, std::clamp(p.rtt_ms, 0.0, PeerData::MAX_RTT_MS));
+      });
       s.countdown_at = Clock::now() + std::chrono::microseconds(static_cast<s64>(rtt * 500.0));
     }
-    // Everyone proceeds into the countdown once the joiners have copied the host's values: the
-    // host when it hears so from all, a joiner RTT/2 after it told the host, so the countdowns
+    // Everyone proceeds into the countdown once every joiner has copied the host's values: the
+    // host when it hears so from all; a joiner once it has heard so from every other joiner too
+    // (state goes to every peer), and not before the slowest round trip's half after its own
+    // apply (the last joiner to apply: the others hear of it about then). So the countdowns
     // (which run without rollback) start about together and the peers reach the start barrier
-    // together.
+    // together. Before, a joiner went on RTT/2 after its own apply: with 3-4 players, one that
+    // reached the match first ran its countdown ahead of the others and stood at the start
+    // barrier for as long (1-2 s in the harness's 4-player sessions).
     if (s.peer_left)
       return OnLoopTop(guard);  // ends the session (everyone else left)
     const bool proceed =
-        IsHost() ? all_applied : (s.applied && s.countdown_at && Clock::now() >= *s.countdown_at);
+        IsHost() ? all_applied :
+                   (s.applied && all_applied && s.countdown_at && Clock::now() >= *s.countdown_at);
     if (proceed)
     {
       s.phase = Phase::Countdown;

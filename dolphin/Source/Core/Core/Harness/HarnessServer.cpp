@@ -1258,7 +1258,7 @@ Result CmdGprbSyncTest(const Args& args)
   o.distance = static_cast<int>(GetU64(args, "distance", 2));
   o.region_set = GetString(args, "region_set", std::string("gp-v22"));
   o.hash_regions = GetBool(args, "hash_regions", true);
-  o.start_frame = static_cast<u32>(GetU64(args, "start_frame", 240));
+  o.start_frame = static_cast<u32>(GetU64(args, "start_frame", o.start_frame));
   o.ports = static_cast<u32>(GetU64(args, "ports", 3));
   o.suppress_resim_sounds = GetBool(args, "suppress_resim_sounds", false);
   o.dedupe_resim_sounds = GetBool(args, "dedupe_resim_sounds", false);
@@ -1286,7 +1286,7 @@ Result CmdGprbConnect(const Args& args)
   o.remote_host = GetString(args, "host", std::string(""));
   o.remote_port = static_cast<u16>(GetU64(args, "remote_port", 0));
   o.region_set = GetString(args, "region_set", std::string("gp-v22"));
-  o.start_frame = static_cast<u32>(GetU64(args, "start_frame", 240));
+  o.start_frame = static_cast<u32>(GetU64(args, "start_frame", o.start_frame));
   if (Find(args, "delay"))
     o.delay = static_cast<int>(GetU64(args, "delay"));
   o.local_pad = static_cast<int>(GetU64(args, "local_pad", 0));

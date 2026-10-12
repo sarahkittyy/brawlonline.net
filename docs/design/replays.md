@@ -61,7 +61,7 @@ The pass log proves the key property: replaying a peer's inputs reproduces that 
 | Match start: seeds from `MatchSeeds(session_seed, match_index)`, the host's init block for the joiner, serial counter | GS:672-680, GS:2816-2870, GS:3213-3223 | Playback applies the recorded values the same way |
 | Barrier: setup key and hash, the host's sync block, the host's task order | GS:412-471, GS:3088-3145 | Playback compares the recorded setup key and applies the recorded sync block and task order |
 | Sync block (frame counters, RNGs, serial, start points) | GS:120-131, GS:591-669 | Recorded in full |
-| Countdown with neutral input, then GekkoNet from `start_frame` 240 | GS:2117-2127, GS:2918-3035; `start_frame` default GSH:86 | Playback runs the same countdown |
+| Countdown with neutral input, then GekkoNet from `start_frame` (120; 240 when this was written) | GS:2117-2127, GS:2918-3035; `start_frame` default GSH:86 | Playback runs the same countdown |
 | Frame-anchored pads | GR.h:166-207 | Playback feeds file inputs through `PadsSetCurrent` like the session (GS:2433-2434) |
 | Pacing: one logic step per pass while the session drives the loop | GS:3726-3730, `HLE/HLE_Misc.cpp:647-690`, STATUS:151 | Playback must report `DrivesLoop()` in the same phases |
 | File IO wait at the loop top | GS:3384 ff., STATUS:624 | Runs unchanged in playback (same code path) |
@@ -106,7 +106,7 @@ A recording starts at the barrier and covers one game. Games of a set are separa
 | Barrier values | setup key bytes and hash, the host's sync block (`g_GameFrame` 0x18, app counter, three RNG words, serial, start points), the host's task order (names) | GS:412-471, GS:120-131, GS:3091-3101 |
 | Emulation settings | the host's `NetPlay::NetSettings` the session ran with (CPU core, clock override, dual core, DSP, MMU, EFB and texture settings and the rest of what netplay syncs). Playback forces them (6.2) | `NetPlayProto.h:46`, built by `NetPlayServer::SetupNetSettings` (`NetPlayServer.cpp:1427`) |
 | Diagnostics | the host's whole `gmGlobalModeMelee` (0x320 bytes) at the barrier, compare only | `Addr::MODE_MELEE_SIZE` GR.h:51 |
-| Timing | `start_frame` (240), number of countdown frames | GSH:86 |
+| Timing | `start_frame` (120; was 240), number of countdown frames | GSH:86 |
 | Inputs | per frame from `start_frame`, per playing port: the 0x40-byte `gfPadStatus` slot the frame ran with | the final pass's `ops.slots[i]` (GS:1950-1970, 2408) |
 | Checksums | per frame: the 32-bit frame checksum; every 60 frames also its parts (three RNG words, fighters CRC) | `FrameRecord` GS:168-177, `history` GS:289 |
 | Player state (stats) | per frame per port: active instance, ftKind, status kind, motion kind, animation frame, x, y, facing, damage, stocks | verified offsets `docs/brawl-memory-map.md:140-163`; partly read already by `ReadFighterFields` (GR.cpp:178-218) |

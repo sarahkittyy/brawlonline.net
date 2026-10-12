@@ -728,7 +728,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--delay", type=lambda v: None if v == "auto" else int(v), default=2,
                     help="input delay in frames, or auto (from the round trip, as players get it)")
     ap.add_argument("--region-set", default="gp-v22")
-    ap.add_argument("--start-frame", type=int, default=240)
+    ap.add_argument("--start-frame", type=int, default=120)
     ap.add_argument("--frames", type=int, default=30000)
     ap.add_argument("--rtc-a", type=lambda x: int(x, 0), default=0, help="A's custom RTC (0: the fixed default)")
     ap.add_argument("--rtc-b", type=lambda x: int(x, 0), default=0x69C9A3D0, help="B's custom RTC (A: the default)")

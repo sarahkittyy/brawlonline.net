@@ -406,7 +406,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--distance", type=int, default=2)
     ap.add_argument("--region-set", default="gp-v22")
     ap.add_argument("--frames", type=int, default=30000)
-    ap.add_argument("--start-frame", type=int, default=240)
+    ap.add_argument("--start-frame", type=int, default=120)
     ap.add_argument("--cpu", default="sc", choices=("sc", "dc"))
     ap.add_argument("--no-hash", action="store_true")
     ap.add_argument("--suppress-resim-sounds", action="store_true")

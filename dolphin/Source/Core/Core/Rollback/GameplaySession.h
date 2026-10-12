@@ -73,12 +73,26 @@ static_assert(AutoInputDelay(GameRoundTrip(-1)) == 2 && AutoInputDelay(GameRound
               AutoInputDelay(GameRoundTrip(83)) == 1 && AutoInputDelay(GameRoundTrip(84)) == 2 &&
               AutoInputDelay(GameRoundTrip(90)) == 2);
 
+// The game frame the rollback starts at. The match's first frames are the countdown, during which
+// the game loads RNG-chosen resources (Pokemon, Assist Trophies) and each fighter's HUD portrait
+// on a loader thread into heaps of the region set (the last at about game frame 95: the last
+// fighter is created at frame 92 for any player count); rolling those heaps back under an
+// in-flight load corrupts it. So from the first simulation frame (the barrier, where the RNG,
+// frame counters and task order are copied) to here, every peer runs with neutral input and no
+// rollback; GekkoNet starts here behind a second barrier, and a file read still in flight is
+// waited out before the base snapshot. The game reads input from GO on: game frame 214 (verified
+// offline, P+ v3.2, a 1v1). Was 240 (after GO): inputs were thrown away for the first
+// 26 frames of play and the start barrier's hitch (base snapshot, deterministic GPU thread, the
+// barrier's round trip) came right after GO. At 120 that hitch falls in the countdown, 1.5 s
+// before GO, and the first frame of play takes the player's input.
+constexpr u32 DEFAULT_START_FRAME = 120;
+
 struct SyncTestOptions
 {
   int distance = 2;                 // frames rolled back on every frame (1..MAX_ROLLBACK_FRAMES)
   std::string region_set = "gp-v22";  // Sys/Rollback/<name>.json or a path
   bool hash_regions = true;          // also compare a hash of the whole region set per frame
-  u32 start_frame = 240;             // game frame the rollback starts at (after GO, see Connect)
+  u32 start_frame = DEFAULT_START_FRAME;  // game frame the rollback starts at
   u32 ports = 3;                     // local controller ports that play (bit per port)
   bool suppress_resim_sounds = false;  // see ConnectOptions
   bool dedupe_resim_sounds = false;    // see ConnectOptions
@@ -126,13 +140,9 @@ struct ConnectOptions
   // The deciding player's port as the joiners know it (-1: learned from the peers' messages).
   int host_slot = -1;
   std::string region_set = "gp-v22";
-  // The match's first frames are the countdown, during which the game loads RNG-chosen resources
-  // (Pokemon, Assist Trophies) on a loader thread into heaps of the region set. Rolling those
-  // heaps back under an in-flight load corrupts it, and nobody can act before GO anyway. So from
-  // the first simulation frame (the barrier, where the RNG, frame counters and task order are
-  // copied) to `start_frame`, both peers run with neutral input and no rollback; GekkoNet starts
-  // at `start_frame` behind a second barrier.
-  u32 start_frame = 240;
+  // The game frame the rollback starts at (DEFAULT_START_FRAME). Every peer must use the same:
+  // it is part of the setup hash the first barrier compares.
+  u32 start_frame = DEFAULT_START_FRAME;
   // This player's input delay in frames (0-MAX_INPUT_DELAY). Unset: automatic, per game
   // (AutoInputDelay).
   std::optional<int> delay;

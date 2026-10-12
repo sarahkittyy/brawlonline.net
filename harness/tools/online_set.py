@@ -40,7 +40,7 @@ from ppharness import flows as F  # noqa: E402
 from ppharness.client import HarnessClient, HarnessError  # noqa: E402
 
 CONFIRM_MARGIN = 16      # frames behind the slower peer that can no longer roll back
-START_FRAME = 240        # the session's start barrier (gameplay rollback begins after GO)
+START_FRAME = 120        # the session's start barrier (gameplay rollback begins in the countdown, before GO)
 CSS = "scSelctCharacter"
 STAGE_PICK = "final_destination"   # what the Direct loser picks on the stage select
 # The loser's pick by game: a new one each game (a pick is for its own game only).

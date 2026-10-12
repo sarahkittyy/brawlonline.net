@@ -1284,7 +1284,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                     help="keep every sync run's countdown state and pass log, passed runs too (replays)")
     ap.add_argument("--no-ground-truth", action="store_true",
                     help="sync tests: skip the no-rollback replay and the trace comparison")
-    ap.add_argument("--start-frame", type=int, default=240)
+    ap.add_argument("--start-frame", type=int, default=120)
     ap.add_argument("--preset", default="typical", help="netsim preset of the sessions")
     ap.add_argument("--compare", default=None, help="report: a second result dir shown as an extra column")
     ap.add_argument("--compare-label", default="no C-stick", help="report: the extra column's label")
