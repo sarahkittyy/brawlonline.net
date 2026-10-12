@@ -323,6 +323,9 @@ void OnSessionStart(const Match& match)
   // Ranked's stage striking (GameSetup.h). Outside s_mutex: it talks to the session, which calls
   // OnGameResult with its own lock held.
   const bool ranked = match.mode == MODE_RANKED && match.players.size() == 2;
+  // Ranked: a pause-screen quit (a runback too) loses the game; elsewhere it does not count, and a
+  // runback plays the same match again (docs/game-code.md §11, the quit per mode).
+  Gprb::Session::SetQuitLoses(ranked);
   int room_local_port = -1;
   for (const auto& p : match.players)
   {
@@ -392,6 +395,22 @@ void OnGameResult(const Gprb::Session::GameResult& r)
   std::lock_guard lk(s_mutex);
   if (!s_reporting || (s_active && s_set_over))
     return;
+  if (r.end != Gprb::Session::GameEnd::GameSet && !s_active)
+  {
+    // A quit outside Ranked did not count (no history either). A room's set plays that game
+    // again: a quit from its first step (the server's agreement on SIDE_VOID clears its steps),
+    // a runback on the same stage (the session set it up again; nothing to report).
+    if (s_room && GameSetup::IsActive())
+    {
+      const u32 set_game = GameSetup::SetGameOf(r.game);
+      GameSetup::OnGameNotCounted();
+      if (r.end == Gprb::Session::GameEnd::Quit)
+        Rooms::ReportSetGame(set_game, Rooms::SIDE_VOID, r.stage == Gprb::Session::NO_STAGE ? 0 : r.stage);
+      NOTICE_LOG_FMT(NETPLAY, "Ranked: room set game {} {} by P{}: played again", set_game,
+                     r.end == Gprb::Session::GameEnd::Runback ? "run back" : "quit", r.quitter + 1);
+    }
+    return;
+  }
   picojson::object body;
   body["matchId"] = picojson::value(s_match_id);
   body["gameIndex"] = picojson::value(static_cast<double>(r.game));

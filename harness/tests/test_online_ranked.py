@@ -248,3 +248,66 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
     assert "ranked set settled" in log and "ranked leave reported" not in log
     for g in players:
         assert g.bridge()["lost"] == 0
+
+
+@pytest.mark.slow
+def test_ranked_quit_loses_the_game(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                    gpu_backend: str) -> None:
+    """In Ranked any pause-screen quit loses that game for the quitter (docs/game-code.md §11, the
+    quit per mode), the salty runback too (L+R+A+Y+START; elsewhere it restarts the match): game 1
+    struck and started, A pauses (Ranked: START held) and quits with L+R+A+Y+START. No restart:
+    both go on to game 2's stage select (through the CSS), where the step's line says who quit;
+    the game counts as B's win on both machines and on the server, and B bans first in game 2.
+    Screenshots: run/artifacts/game-bridge/ranked-quit/."""
+    test = "ranked-quit"
+    ua, ub = backend.create_user("rquin", "RQIN"), backend.create_user("rquor", "RQOR")
+    a = _boot(dolphin, "rkq-a", backend, ua, gpu_backend, test, "gameplay")
+    b = _boot(dolphin, "rkq-b", backend, ub, gpu_backend, test, "gameplay")
+    _both(a.to_main_menu, b.to_main_menu)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("ranked"), lambda: b.to_css("ranked"))
+    for g in (a, b):
+        B.write_rules(g.c, stocks=1, minutes=2, items_off=True)
+        ppom.allow_test_rules(g.c)
+    _search_ranked(a)
+    _search_ranked(b)
+    _peer_shown(a, ub)
+    _peer_shown(b, ua)
+    players = [a, b]
+    for g in players:
+        _wait(lambda g=g: g.c.mm_status()["handoff"] == "started", 30, "the hand-off")
+    host = a if _ranked(a)["local_port"] == 0 else b
+    join = b if host is a else a
+    _both_on(players, SSS, "game 1: both on the stage select")
+    _wait_view(host, lambda v: v["type"] == 1 and v["my_turn"], "the host's strike")
+    _strike(host, 0x02, join)
+    _wait_view(join, lambda v: v["my_turn"], "the joiner's turn")
+    _strike(join, 0x21, host)
+    _strike(join, 0x2E, host)
+    _strike(host, 0x2D, join)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
+                    "game 1 running on both")
+    quitter = _ranked(a)["local_port"]
+    a.steps("wait 120", "hold START 70", "wait 30")   # P+'s hold-START pause (Ranked's rule)
+    a.shot("01-paused")
+    a.steps("hold L+R+A+Y+START 90")
+    # No restart: game 2's steps on the stage select (Ranked passes through the CSS at once).
+    _both_on(players, SSS, "game 2: both on the stage select")
+    _wait(lambda: all(g.debug_scratch()[10] & 0x2000000 for g in players), 30, "the quit notice on both")
+    for g in players:
+        assert (g.debug_scratch()[10] >> 26) & 3 == quitter, (g.inst.name, hex(g.debug_scratch()[10]))
+        assert g.debug_scratch()[10] & 0x1000000, (g.inst.name, "the quit was not marked as a runback")
+        assert online_set.gstatus(g.c)["end_reason"] == "quit"
+        assert online_set.gstatus(g.c)["match_index"] == 1, online_set.gstatus(g.c)
+        g.shot("02-quit-notice-sss")
+    want = [0, 0]
+    want[1 - quitter] = 1
+    for g in players:
+        _wait(lambda g=g: _ranked(g)["wins"] == want, 30, f"{g.inst.name}: game 1 B's")
+        assert _ranked(g)["setup"]["last_winner"] == 1 - quitter, _ranked(g)["setup"]
+    # B won game 1, so B bans first in game 2.
+    v = _wait_view(b, lambda v: v["game"] == 2 and v["type"] == 1 and v["my_turn"], "B's ban")
+    assert v["text"].startswith("Ban 2 stages"), v
+    b.shot("03-g2-winner-bans")
+    log = backend.log_text("accounts")
+    assert log.count(" game reported") == 2, log[-3000:]

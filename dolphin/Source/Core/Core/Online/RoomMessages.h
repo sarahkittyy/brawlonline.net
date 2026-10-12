@@ -205,6 +205,11 @@ enum class Op : u8
   Result = 102,  // a game of the room's set (room-result)
   Step = 103,    // the set's game being set up (room-step)
 };
+// room-result winnerSide: a draw, and a game that was quit (it did not happen; the server plays it
+// again from its first step once every player of the set reported it, room_set.rs).
+constexpr u8 SIDE_DRAW = 0xFE;
+constexpr u8 SIDE_VOID = 0xFD;
+
 struct Request
 {
   Op op = Op::Poll;
@@ -217,7 +222,7 @@ struct Request
   std::optional<u8> character, costume;  // Ready
   std::optional<MatchRules> rules;        // Rules
   u32 game = 0;                           // Result: the set's game
-  u8 winner_side = 0;                     // Result: 0 / 1, 0xFE a draw
+  u8 winner_side = 0;                     // Result: 0 / 1, SIDE_DRAW, SIDE_VOID
   u16 stage = 0;                          // Result
   std::array<std::vector<u8>, 2> actions;  // Step: each side's stage actions (`game`; `flag`:
                                            // its match started)

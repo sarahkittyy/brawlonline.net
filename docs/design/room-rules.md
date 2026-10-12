@@ -39,6 +39,7 @@ Defaults the coordinating session chose where the user asked a question are mark
 | C | In-game Ruleset picker | Decision 12 is required. Built in P+'s RULES page (the STAGE CHOICE row becomes RULESET: P+ default, the player's rulesets, Enter code on Brawl's keypad), `room_play.cpp`. |
 | D | 2v2 sets | Required. |
 | E | Match history | Stores the ruleset (code, name, hash) and the history shows its name, linked to `/r/<code>`. Not for P+'s default rules, nor for matches from before this update. Replays: not required. |
+| F | Quits and the salty runback (the user's, 2026-10-11) | **The pause screen's quit (L+R+A+START) in a set: the game did not happen.** Back on the CSS, no loss; the same set game is struck again from its first step (game 1 from the starters). Tournaments play warmup games and quit out of them. In a **2v2 set** one player's quit voids it for all four. **The salty runback (L+R+A+Y+START) in a set** plays the same game again at once, on the same stage and characters, not counted. Elsewhere: Unranked and Direct, a quit sends both to the CSS and a runback restarts the same match for both; 3-4 players without a set, only the quitter leaves (as built); **Ranked: any quit, the runback too, loses that game.** Every quit to the CSS says who quit ("rhea quit"). `docs/game-code.md` §11, the quit per mode. |
 
 ## 2. Defaults (not asked)
 

@@ -17,7 +17,7 @@
 use std::collections::HashMap;
 
 use common::proto::SetTicket;
-use common::rooms::{RoomSet, SIDE_DRAW};
+use common::rooms::{RoomSet, SIDE_DRAW, SIDE_VOID};
 use common::rules::{Players, Ruleset, StageChoice};
 use uuid::Uuid;
 
@@ -88,6 +88,8 @@ pub enum Reported {
     Waiting,
     /// Everyone agreed: the game counts.
     Counted,
+    /// Everyone agreed it was quit: it did not happen, and is played again from its first step.
+    Voided,
     /// They differ: the set is paused.
     Differ,
     /// Not a report this set takes (another game, not a player of the set, the set is over).
@@ -157,7 +159,7 @@ impl SetProgress {
 
     /// A player's report of `game`.
     pub fn report(&mut self, uid: Uuid, game: u32, winner_side: u8, stage: u16) -> Reported {
-        if self.side_of(uid).is_none() || !self.on() || self.differ || game != self.game {
+        if self.side_of(uid).is_none() || !self.on() || self.differ || game != self.game || !valid_side(winner_side) {
             return Reported::Ignored;
         }
         self.reports.insert(uid, (winner_side, stage));
@@ -171,6 +173,12 @@ impl SetProgress {
         let waiting = self.players().any(|x| !self.away.contains(&x.uid) && !self.reports.contains_key(&x.uid));
         if waiting {
             return Reported::Waiting;
+        }
+        if first.0 == SIDE_VOID {
+            // A quit game: its strikes, picks and "match started" go too, so leaving before the
+            // game is played again does not lose it.
+            self.replay_game();
+            return Reported::Voided;
         }
         self.count(first.0, first.1);
         Reported::Counted
@@ -330,7 +338,7 @@ pub fn strike_ticket(ruleset: &Ruleset, mut slots: [usize; 2], first_striker_bit
 
 /// `room-result.winnerSide` values the set takes.
 pub fn valid_side(s: u8) -> bool {
-    s <= 1 || s == SIDE_DRAW
+    s <= 1 || s == SIDE_DRAW || s == SIDE_VOID
 }
 
 #[cfg(test)]
@@ -383,6 +391,30 @@ mod tests {
         s.replay_game();
         assert!(!s.paused());
         assert_eq!((s.game, s.wins), (1, [0, 0]));
+    }
+
+    #[test]
+    fn a_quit_game_did_not_happen_and_is_struck_again() {
+        let mut s = bo3();
+        s.report(uid(1), 1, 0, 0x21);
+        s.report(uid(3), 1, 0, 0x21);
+        // Game 2: struck, picked and started, then quit (L+R+A+START).
+        s.report_steps(uid(1), 2, [vec![0x01, 0x2E], vec![0x02, 0x21]], true);
+        assert_eq!(s.report(uid(1), 2, SIDE_VOID, 0x2E), Reported::Waiting);
+        assert_eq!(s.report(uid(3), 2, SIDE_VOID, 0x2E), Reported::Voided);
+        // Still game 2, the score as it was, and nothing of its steps: struck again from the start,
+        // and leaving now does not lose it.
+        assert_eq!((s.game, s.wins, s.last_winner), (2, [1, 0], 0));
+        assert_eq!(s.steps, Steps { game: 2, ..Default::default() });
+        assert!(!s.left(uid(3)));
+        assert_eq!((s.game, s.wins), (2, [1, 0]));
+        // A void against a result: the reports differ (the host decides).
+        s.back(uid(3));
+        s.report(uid(1), 2, SIDE_VOID, 0x2E);
+        assert_eq!(s.report(uid(3), 2, 1, 0x2E), Reported::Differ);
+        // Not a side the set takes.
+        s.replay_game();
+        assert_eq!(s.report(uid(1), 2, 7, 0x2E), Reported::Ignored);
     }
 
     #[test]

@@ -92,6 +92,9 @@ void End();
 bool IsActive();
 // A game ended: the winner's in-game port (0xFE draw) and the stage it was played on.
 void OnGameResult(u8 winner, u16 stage);
+// A game of a room's set was quit (or run back): it did not count, and the session's next game is
+// the same set game again (SetGameOf), its steps made again unless the session set it up itself.
+void OnGameNotCounted();
 // The game's GP_COMPLETE_STEP: this player strikes, bans or picks `kind`. False if refused.
 bool Act(u8 kind);
 // GP_FETCH_STEP; also runs the step timers. CPU thread.

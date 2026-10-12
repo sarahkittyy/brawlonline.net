@@ -43,6 +43,10 @@ pub const ROOM_RULESETS: &str = "room-rulesets";
 pub const RULESET_LIST: &str = "ruleset-list";
 /// `room-result.winnerSide` of a draw.
 pub const SIDE_DRAW: u8 = 0xFE;
+/// `room-result.winnerSide` of a game that was quit (the pause screen's quit, L+R+A+START): it did
+/// not happen. Once every player of the set reported it, the set plays that game again from its
+/// first step (`docs/design/room-rules.md` §1.1, quits in a set).
+pub const SIDE_VOID: u8 = 0xFD;
 pub const ROOM_STATE: &str = "room-state";
 pub const ROOM_ERROR: &str = "room-error";
 pub const ROOM_LEFT: &str = "room-left";
@@ -141,8 +145,8 @@ pub enum RoomRequest {
     /// (`docs/design/room-rules.md`), checked by `MatchRules::validate`.
     Rules { rules: crate::rules::MatchRules },
     /// `room-result {game, winnerSide, stage}`: a game of the room's set as this member's game saw
-    /// it end (`winnerSide` 0 / 1, [`SIDE_DRAW`]; `stage` the srStageKind played). The server
-    /// counts it once every player of the set reported the same.
+    /// it end (`winnerSide` 0 / 1, [`SIDE_DRAW`], [`SIDE_VOID`] a quit game; `stage` the srStageKind
+    /// played). The server counts it once every player of the set reported the same.
     Result { game: u32, winner_side: u8, stage: u16 },
     /// `room-set {action}` (host, between games): `resume` replays the game whose results differed,
     /// `restart` ends the set (the next start begins a new one).

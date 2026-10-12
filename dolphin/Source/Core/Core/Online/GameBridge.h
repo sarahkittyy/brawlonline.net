@@ -57,6 +57,12 @@ constexpr u32 SESSION_PLAYER_OUT = 0x37;
 //   one player or team in (the game set ends the session for everyone, the quitter included).
 constexpr u32 SESSION_QUIT_PORTS = 0x21B;
 constexpr u32 SESSION_QUIT_STAYS = 0x21C;
+// - SESSION_QUIT_BY: u8, the in-game port + 1 of the player whose pause-screen quit ended the
+//   match for everyone (a 1v1, a 2v2 set), 0 none; SESSION_QUIT_RUNBACK: 1 when L+R+Y were held
+//   with it (P+'s salty runback). Game-written in the frame of the quit, rolled back with the
+//   match, cleared at its setup.
+constexpr u32 SESSION_QUIT_BY = 0x21D;
+constexpr u32 SESSION_QUIT_RUNBACK = 0x21E;
 // SESSION's address in game memory, 0 before the plugin's block is found.
 u32 SessionAddress();
 

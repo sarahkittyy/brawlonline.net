@@ -69,6 +69,9 @@ namespace OnlineMenu {
         char status[128];
         bool statusRed;
         bool statusDirty;
+        char quitNotice[PPOM::NAME_LEN + 8];   // "<name> quit": the last game ended by a quit
+        u32 quitNoticeFrames;               // frames left to show it on the CSS
+        u8 quitNoticePort;                  // whose quit it is
         u32 lastButtons;
         u32 startGuard;         // frames START presses are dropped after the keypad (see codeEntered)
         int zHeld;
@@ -803,6 +806,8 @@ namespace OnlineMenu {
     // that carries the state: "Select your character" -> "Press START to search/enter code"
     // -> "Searching for ..." -> "Connecting to ..." -> "Playing: <name>", errors in red.
 
+    static const u32 QUIT_NOTICE_FRAMES = 300;   // 5 s
+
     static void setStatus(const char* text, bool red)
     {
         // Texts from Dolphin, the server and the opponent's name: printable ASCII only (the
@@ -825,9 +830,22 @@ namespace OnlineMenu {
     static bool usesCode() { return s.mode == PPOM::MODE_DIRECT || s.mode == PPOM::MODE_TEAMS; }
 
     static void updateRoomStatus();
+    // Who quit the last game (noteQuit), shown over every line but an error for its first frames
+    // back on the CSS, on every machine of the match.
+    static bool quitNoticeShown()
+    {
+        if (!s.quitNoticeFrames || s.phase == PH_ERROR || s.roomError) return false;
+        setStatus(s.quitNotice, false);
+        // tests: the notice is on the status line (0x2000000) and whose (bits 26-27)
+        PPOM::g_block.debug.scratch[10] = (PPOM::g_block.debug.scratch[10] & ~0xE000000u) | 0x2000000 |
+                                          ((u32)s.quitNoticePort << 26);
+        return true;
+    }
+
     static void updateStatus()
     {
         char buf[128];
+        if (quitNoticeShown()) return;
         if (roomCss()) {
             updateRoomStatus();
             return;
@@ -1604,7 +1622,15 @@ namespace OnlineMenu {
 
     bool stepsDecideStage() { return s.mode == PPOM::MODE_RANKED || (roomCss() && s.roomStepSss); }
 
-    const char* rankedText() { return s.stepText; }
+    // On the stage select (Ranked, a room's set) the step's line, after the quit notice while it is
+    // on: the steps can follow a quit at once, and the CSS is then only passed through.
+    const char* rankedText()
+    {
+        static char line[sizeof(s.quitNotice) + sizeof(s.stepText) + 4];
+        if (!s.quitNoticeFrames || !s.stepText[0]) return s.stepText;
+        sprintf(line, "%s - %s", s.quitNotice, s.stepText);
+        return line;
+    }
 
     // Ranked: GET_RANK once a second on the CSS, so the rating appears as soon as Dolphin has it
     // and the change shows up once the server has rated a finished set.
@@ -2529,6 +2555,7 @@ namespace OnlineMenu {
         if (!onCss) s.stepFloor = s.stepSeq;   // only a step asked for on the CSS counts there
         g_onlineCssLock = (onCss && lockedIn()) ? 1 : 0;
         if (g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelStage") == 0) {
+            if (s.quitNoticeFrames) --s.quitNoticeFrames;   // shown with the step (rankedText)
             // Direct's loser picks the stage on P+'s stage select. The pick is the stage and its
             // alternate (L/R); P+'s hazard toggle (Z on a stage or on Random) is a rule, which the
             // match setup forces on both machines, so Z is taken out here; so is the Code Menu.
@@ -2621,6 +2648,7 @@ namespace OnlineMenu {
         }
         g_onlineCssLock = lockedIn() ? 1 : 0;
         PPOM::g_block.debug.scratch[1] = (u32)g_onlineCssLock | ((u32)s.phase << 4);   // harness/tests
+        if (s.quitNoticeFrames) --s.quitNoticeFrames;
         updateStatus();
         if (s.statusDirty && s.cssMsg) {
             printCssStatus();
@@ -2628,6 +2656,17 @@ namespace OnlineMenu {
         }
         pollRank();
         showOwnCode();
+    }
+
+    void noteQuit(int port)
+    {
+        if (port < 0 || port >= PPOM::SESSION_PLAYERS) return;
+        char name[PPOM::NAME_LEN + 1];
+        PPOM::u16ToAscii(name, PPOM::g_block.session.players[port].name, sizeof(name));
+        if (!name[0]) sprintf(name, "P%d", port + 1);
+        sprintf(s.quitNotice, "%s quit", name);
+        s.quitNoticeFrames = QUIT_NOTICE_FRAMES;
+        s.quitNoticePort = (u8)port;
     }
 
     // Called from the printIndex hook for every message line; returns a replacement or NULL.

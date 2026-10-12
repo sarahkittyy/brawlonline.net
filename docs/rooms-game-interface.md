@@ -55,7 +55,9 @@ Room fields are written whenever this player is in a room and no match runs; dur
 | 0x218 | `_reserved[5]` | **`roomHost`** | the host's slot as in-game port 0-3; 0xFF none. |
 | 0x219 | `_reserved[6]` | **`roomStatus`** | 0 waiting, 1 starting (everyone ready; tickets and P2P connect), 2 in game (until every player of the game is back). |
 | 0x21A | `_reserved[7]` | **`roomMode`** | 0 1v1 (two open slots), 1 free-for-all, 2 teams (server's `mode`). |
-| 0x21B-0x21F | | `_reserved[5]` | free |
+| 0x21B-0x21C | | **`quitPorts`, `quitStays`** | 3-4 player matches: the pause screen's quit takes only the quitter out (`docs/nplayer/session.md`). |
+| 0x21D-0x21E | | **`quitBy`, `quitRunback`** (still v6) | game, in the frame of a quit that ends the match for everyone (a 1v1, a 2v2 set): the quitter's port + 1, and 1 when L+R+Y were held (P+'s salty runback). Rolled back with the match, cleared at its setup; Dolphin decides what the quit means (`docs/game-code.md` §11, the quit per mode). |
+| 0x21F | | `_reserved[1]` | free |
 | player i +0x04 `name` | name in a session | also every **taken slot's** member name in a room | UTF-16, 15 units max + NUL. In a room's game, port i's is slot i's player (the ticket's ports), also with 2 players: Direct's decider-first order put the new host's name under P1 after the host left and came back to slot 1 (staging, 2026-10-10; `test_room_names_follow_the_slots_after_the_host_left`). |
 | player i +0x24 `code` | code in a session | also every taken slot's connect code | |
 | player i +0x36 `picksStage` | the session's pickers | in a room between games: this port picks the next room game's stage (the last room game's loser, carried by Dolphin) | as Direct |
@@ -220,7 +222,11 @@ struct Session {                   // only 0x213-0x21F change
     u8 roomHost;                   // 0x218
     u8 roomStatus;                 // 0x219
     u8 roomMode;                   // 0x21A
-    u8 _reserved[5];               // 0x21B
+    u8 quitPorts;                  // 0x21B
+    u8 quitStays;                  // 0x21C
+    u8 quitBy;                     // 0x21D
+    u8 quitRunback;                // 0x21E
+    u8 _reserved[1];               // 0x21F
 };
 ```
 
@@ -233,7 +239,7 @@ static_asserts added in `ppom.cpp`: `offsetof(Local, screen) == 0x36`, `roomJoin
 - **Equal on every machine?** The room fields in SESSION come from mm's pushes; two members can write them a frame apart, so SESSION may differ slightly between machines at a match start. Nothing compares SESSION between machines (the desync check uses the gameplay checksums), and the game does not read the room fields during a match.
 - **Sounds.** Join / leave sounds: the game compares `SLOT_TAKEN` bits with what it last saw (4 bits).
 - **After a room game, other players' cleanups.** Each Dolphin ends its room game's session once its own game has left the match scene, so a slower player's session can see the others leave right after game set: `LOCAL.disconnected` may read 1 for a moment on the results screen or the room CSS. Outside a match the room CSS ignores it (the room's own state, in SESSION, is what counts); in a match it is the usual DISCONNECTED.
-- **L+R+A+START in a 3-4 player game** takes only the quitter out (`docs/nplayer/session.md`): the quitter's game goes back to the room's CSS ("Waiting for the game to end": mm marks it out of the game with its `room-back`), the others play on, and the next game includes the quitter as usual. In a 1v1 it ends the game for both, as in Direct.
+- **L+R+A+START in a 3-4 player game** takes only the quitter out (`docs/nplayer/session.md`): the quitter's game goes back to the room's CSS ("Waiting for the game to end": mm marks it out of the game with its `room-back`), the others play on, and the next game includes the quitter as usual. In a 1v1, and in a 2v2 set, it ends the game for everyone, as in Direct. In a set the game did not happen (`room-result` with `winnerSide` 253; with L+R+Y it is played again on the same stage at once), and the CSS says who quit (`docs/game-code.md` §11, the quit per mode).
 - **Leaving during the start** (`ROOM_LEAVE` while `roomStatus` is 1 or the session is connecting) ends this player's room game at once; the others' sessions see the player leave (a 1v1: their room game ends, "Lost the connection to the other players."; 3-4 players: the others' sessions go on without them; if the host had already set up the game with them, the match start fails and the others' room game ends with that error; not tested yet).
 - **Diagnostics.** The harness's `rooms_status` (docs/harness-protocol.md) shows everything Dolphin knows; dolphin.log has a `Rooms:` line for every request, answer and state change.
 - **Room games are never ranked**: Dolphin never reports them to `/v1/ranked/report-game`.

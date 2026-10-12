@@ -463,7 +463,15 @@ namespace PPOM {
         // stays in the session until it ends: bit p of quitStays too.
         u8 quitPorts;     // 0x21B
         u8 quitStays;     // 0x21C
-        u8 _reserved[3];
+        // A quit that ends the match for everyone (a 1v1, or a 2v2 set; game, in the frame of the
+        // quit, rolled back with the match, cleared at its setup; still v6, these were reserved):
+        // quitBy = the quitter's in-game port + 1 (0 none), quitRunback = 1 when L+R+Y were held
+        // with it (P+'s salty runback, L+R+A+Y+START). Dolphin decides what the quit means: Ranked
+        // a lost game, a room's set a game that did not happen (a runback: played again on the
+        // same stage), Unranked and Direct a runback restarts the same match.
+        u8 quitBy;        // 0x21D
+        u8 quitRunback;   // 0x21E
+        u8 _reserved[1];
         Rules rules;      // 0x220 (v6)
         RoomPlay play;    // 0x240 (v6)
     };                    // 0x280

@@ -93,6 +93,12 @@ namespace OnlineMatch {
     static u8* s_quitOp = NULL;   // the operator a quit is pending on
     static u8 s_quitKind = 0;     // the pause screen's result: 3 or 4
     static u16 s_quitFrames = 0;
+    // This match's quits, for the game's own end (afterMatch): SESSION's quitBy, quitRunback and
+    // quitPorts are rewritten by Dolphin as soon as the session ends, before the scene leaves the
+    // match. Like the pending quit, these are in the rolled-back .bss.
+    static u8 s_matchQuitBy = 0;      // SESSION quitBy of the quit that ended the match
+    static u8 s_matchQuitRunback = 0;
+    static u8 s_matchQuitPorts = 0;   // 3-4 players: the ports that quit
     static u32 s_seen = 0;          // ports seen with stocks in this match (tickPlayers)
     static bool s_inMatch = false;  // a match ran since the last frame outside scMelee (offMatch)
 
@@ -307,6 +313,8 @@ namespace OnlineMatch {
         se.outCount = 0;
         se.quitPorts = 0;
         se.quitStays = 0;
+        se.quitBy = 0;
+        se.quitRunback = 0;
         s_seen = 0;
         *(u16*)ASL_BUTTONS = se.asl;
         keepPortValues(se);
@@ -344,6 +352,7 @@ namespace OnlineMatch {
         memoryChangeTo(seq, 9, 0);   // then state 9: scMelee
         s_discFrames = -1;
         s_quitOp = NULL;
+        s_matchQuitBy = s_matchQuitRunback = s_matchQuitPorts = 0;
         return true;
     }
 
@@ -435,8 +444,28 @@ namespace OnlineMatch {
     {
         if (!g_onlineCss || !g_onlineMatchGame) return 0;
         PPOM::g_block.debug.scratch[10] = (PPOM::g_block.debug.scratch[10] & ~0xFF) | 10;
+        const PPOM::Session& se = PPOM::g_block.session;
+        const u8 played = g_onlineMatchGame;
         g_onlineMatchGame = 0;
         s_discFrames = -1;
+        // P+'s salty runback (pponline_pauseResult): where it restarts (Unranked, Direct, a room's
+        // 1v1 or set), Dolphin has set the next game up as this one again (same players, stage
+        // and alternate stage) when the session ended, the same on every machine: straight into
+        // it, as P+'s own runback, without the CSS. Ranked counts it as a lost game and sets
+        // nothing up: the CSS as after any quit.
+        if (s_matchQuitBy && s_matchQuitRunback && se.state == PPOM::SS_MATCH_READY && se.game == played + 1) {
+            g_onlineMatchGame = se.game;
+            PPOM::g_block.debug.scratch[10] = (PPOM::g_block.debug.scratch[10] & ~0xFF) | 0x1B;
+            if (setupMatch(seq)) return 1;
+            g_onlineMatchGame = 0;
+        }
+        // Who quit, for the CSS's status line (both machines; a 3-4 player match: the first port
+        // that quit).
+        int quitter = s_matchQuitBy ? s_matchQuitBy - 1 : -1;
+        for (int p = 0; quitter < 0 && p < PPOM::SESSION_PLAYERS; p++) {
+            if ((s_matchQuitPorts >> p) & 1) quitter = p;
+        }
+        if (quitter >= 0) OnlineMenu::noteQuit(quitter);
         backToCss(seq);
         return 1;
     }
@@ -670,6 +699,12 @@ namespace OnlineMatch {
     static const int PAUSE_END_QUIT = 0x100;   // asm: the quit's flags and end, without its sound
     static const int PAUSE_RESUME = 2;
     static const u32 OP_PAUSER = 0x124;
+    static const u32 OP_PAUSE_PAD = 0x120;   // the controller whose START paused (fn_80110310)
+    // P+'s salty runback: L+R+Y held with the quit (the Code Menu header's 0x804E000A, 0x0860).
+    // Online the Code Menu's own runback is off (OnlineMenu::runbackOff): it reads this machine's
+    // pads. Here the buttons are the pauser's in the game's pad status, the session's inputs, so
+    // every machine sees the same.
+    static const u32 RUNBACK_BUTTONS = 0x0860;
 
     typedef void (*PlaySEArgsFn)(void*, int, int, int, int, int);
 
@@ -688,12 +723,31 @@ namespace OnlineMatch {
         return n;
     }
 
+    // A room's set is being played (2v2: one player's quit is the whole game's, docs/design/
+    // room-rules.md; SESSION's RoomPlay is the same on every machine during the match).
+    static bool roomSetPlaying()
+    {
+        const PPOM::RoomPlay& rp = PPOM::g_block.session.play;
+        return rp.valid && rp.setOn && !(rp.setFlags & PPOM::SET_FINISHED);
+    }
+
+    // The pauser's buttons: gfPadSystem's first pad array (+0x44, 0x40 a pad, +0 the buttons
+    // down), where the session's inputs arrive (and P+'s Code Menu reads); found live, the same
+    // on both machines at the quit (START+Y+A+L+R 0x1960). The sys pads (+0x244) are empty then.
+    static u32 pauserHeld(u8* op)
+    {
+        u32 ps = *(u32*)0x805A0040;
+        s32 pad = *(s32*)(op + OP_PAUSE_PAD);
+        if (!isPtr(ps) || pad < 0 || pad >= 8) return 0;
+        return *(volatile u32*)(ps + 0x44 + 0x40 * pad);
+    }
+
     extern "C" int pponline_pauseResult(int result, u8* op)
     {
         if (!g_onlineCss || !g_onlineMatchGame) return result;
         PPOM::Debug& dbg = PPOM::g_block.debug;
         s32 pauser = *(s32*)(op + OP_PAUSER);
-        if (s_quitOp != op && matchPlayers() >= 3 && pauser >= 0 && pauser < 4) {
+        if (s_quitOp != op && matchPlayers() >= 3 && !roomSetPlaying() && pauser >= 0 && pauser < 4) {
             PPOM::Session& se = PPOM::g_block.session;
             u8 bit = (u8)(1u << pauser);
             if (se.gone[pauser] || (se.quitPorts & bit)) {
@@ -703,6 +757,7 @@ namespace OnlineMatch {
             if (result != 3 && result != 4) return result;
             if (sidesLeftWithout(bit) <= 1) se.quitStays |= bit;
             se.quitPorts |= bit;
+            s_matchQuitPorts = se.quitPorts;
             playQuitSound(result);
             dbg.scratch[10] |= 0x400000;
             return PAUSE_RESUME;
@@ -713,6 +768,13 @@ namespace OnlineMatch {
             s_quitKind = (u8)result;
             s_quitFrames = 0;
             op[0x11B] |= result == 3 ? 0x30 : 0x20;
+            PPOM::Session& se = PPOM::g_block.session;
+            se.quitBy = pauser >= 0 && pauser < 4 ? (u8)(pauser + 1) : 0;
+            u32 held = pauserHeld(op);
+            se.quitRunback = (held & RUNBACK_BUTTONS) == RUNBACK_BUTTONS ? 1 : 0;
+            s_matchQuitBy = se.quitBy;
+            s_matchQuitRunback = se.quitRunback;
+            if (se.quitRunback) dbg.scratch[10] |= 0x1000000;
             playQuitSound(result);
             dbg.scratch[10] |= 0x40000;
             return 0;   // stay paused

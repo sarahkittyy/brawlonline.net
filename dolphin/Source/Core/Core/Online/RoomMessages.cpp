@@ -657,7 +657,8 @@ std::optional<std::string> RequestJson(const Request& r)
     o["type"] = picojson::value("room-back");
     break;
   case Op::Result:
-    if (r.game < 1 || r.game > 99 || (r.winner_side > 1 && r.winner_side != 0xFE) || r.stage > 0xFF)
+    if (r.game < 1 || r.game > 99 ||
+        (r.winner_side > 1 && r.winner_side != SIDE_DRAW && r.winner_side != SIDE_VOID) || r.stage > 0xFF)
       return std::nullopt;
     o["type"] = picojson::value("room-result");
     o["game"] = picojson::value(static_cast<double>(r.game));

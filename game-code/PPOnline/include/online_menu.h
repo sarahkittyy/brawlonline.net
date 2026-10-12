@@ -29,6 +29,7 @@ namespace OnlineMenu {
     bool stepsDecideStage();             // Ranked or a room's set: GameSetup's steps pick the stage
     void prepareCss();                   // the CSS is about to be built (sqNetAnyOkiraku)
     void menuPageRunning(u8* page);      // a menu page the launcher's join can leave from ran
+    void noteQuit(int port);             // the last game ended by this port's quit: the CSS says so
 }
 
 namespace RoomCss {

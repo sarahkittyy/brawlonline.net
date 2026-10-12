@@ -302,6 +302,9 @@ struct State
   u32 quit_addr = 0;
   s64 local_quit_frame = -1;
   bool quit_left = false;
+  // SESSION during a match (any size; 0: not found), for a quit that ended it for everyone
+  // (SESSION_QUIT_BY, SESSION_QUIT_RUNBACK), read when the session ends on it.
+  u32 session_addr = 0;
   // Host: the stages not drawn yet (Slippi's stage_pool, refilled from the match's list when empty).
   std::vector<u16> stage_pool;
 
@@ -1401,6 +1404,7 @@ u16 DrawRandomStage(u32 game)
 
 std::mutex s_result_callback_mutex;
 std::function<void(const GameResult&)> s_result_callback;
+std::atomic<bool> s_quit_loses{false};  // SetQuitLoses
 std::function<StageDecision(u32)> s_stage_decider;  // under s_result_callback_mutex
 picojson::object s_local_extra;                      // under s.mutex
 
@@ -2279,6 +2283,13 @@ u8 ReadQuitByte(const Guest& g, u32 session_off)
   return p ? *p : 0;
 }
 
+// A byte of SESSION during the match (0 when the block was not found).
+u8 ReadSessionByte(const Guest& g, u32 session_off)
+{
+  const u8* p = s.session_addr ? g.Ptr(s.session_addr + session_off, 1) : nullptr;
+  return p ? *p : 0;
+}
+
 // The result of a game that ended with game set, from the state every peer ended on: per port of
 // the match its stocks and damage (ReadFighterFields, by player number), its team and its place in
 // the game's elimination order (SESSION `out`, rolled back with the match), the winner and who
@@ -2378,6 +2389,43 @@ void EndRunning(Core::System& system, const std::string& reason)
   }
   else
   {
+    // A pause-screen quit that ended the match for everyone (docs/game-code.md §11, the quit
+    // per mode): who quit and whether with L+R+Y, from the state both peers ended on. Ranked
+    // (SetQuitLoses): the quitter lost the game. Otherwise it does not count (a room's set plays
+    // it again, Online/Ranked.cpp), and a runback sets the next game up as this one again.
+    std::optional<MatchSetup> runback;
+    if (reason == "quit")
+    {
+      const Guest g = GuestOf(system);
+      const u8 by = ReadSessionByte(g, Online::GameBridge::SESSION_QUIT_BY);
+      if (by >= 1 && by <= MAX_LOBBY_PLAYERS && (s.match_ports & (1u << (by - 1))))
+      {
+        GameResult r = ReadGameResult(system);
+        r.quitter = static_cast<u8>(by - 1);
+        const bool rb = ReadSessionByte(g, Online::GameBridge::SESSION_QUIT_RUNBACK) != 0;
+        r.end = rb ? GameEnd::Runback : GameEnd::Quit;
+        if (s_quit_loses && std::popcount(s.match_ports) == 2)
+        {
+          r.end = GameEnd::Quit;
+          r.winner = static_cast<u8>(std::countr_zero(s.match_ports & ~(1u << r.quitter)));
+          r.pickers = static_cast<u8>(1u << r.quitter);
+          s.last_winner = r.winner;
+          s.last_pickers = r.pickers;
+        }
+        else
+        {
+          r.winner = 0xFF;
+          r.pickers = 0;
+          if (rb && s.setup.game != 0)
+            runback = s.setup;
+        }
+        INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} quit by P{}{}{}", r.game, r.quitter + 1,
+                     rb ? " with L+R+Y (runback)" : "",
+                     r.winner < MAX_LOBBY_PLAYERS ? fmt::format(": P{} wins it", r.winner + 1) :
+                     runback ? ": the same match again" : ": not counted");
+        ReportGameResult(r);
+      }
+    }
     // The winner (lobby: the loser picks the next stage in Direct), from the state both peers
     // ended on: more stocks, then less damage (P+'s time-out rule); equal is a draw.
     if (reason == "game set")
@@ -2416,11 +2464,22 @@ void EndRunning(Core::System& system, const std::string& reason)
     s.countdown_at.reset();
     ++s.match_index;
     s.await_scene_exit = true;
+    if (runback)
+    {
+      // Every machine sets it up itself from the same setup (the host's copy is then the same and
+      // is not taken again): the game goes from the match straight into this one.
+      runback->game = NextGame();
+      s.setup = *runback;
+      s.last_stage = runback->stage;
+      INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} setup: the last game again (runback), stage {:#x}",
+                   runback->game, runback->stage);
+    }
   }
   s.match_ports = 0;
   s.gone_enabled = false;
   s.gone_addr = 0;
   s.quit_addr = 0;
+  s.session_addr = 0;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -4020,6 +4079,11 @@ void SetLocalLock(const LockIn& lock_in)
   MaybeDecideSetup();
 }
 
+void SetQuitLoses(bool loses)
+{
+  s_quit_loses = loses;
+}
+
 void SetGameResultCallback(std::function<void(const GameResult&)> callback)
 {
   std::lock_guard lk(s_result_callback_mutex);
@@ -4825,6 +4889,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     s.gone_enabled = std::popcount(s.match_ports) >= 3;
     s.gone_addr = 0;
     s.quit_addr = 0;
+    s.session_addr = Online::GameBridge::SessionAddress();
     s.quit_left = false;
     s.gone_written.fill(0);
     if (s.gone_enabled)

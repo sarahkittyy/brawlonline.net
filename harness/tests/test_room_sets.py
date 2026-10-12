@@ -173,6 +173,95 @@ def test_room_bo3_set(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
     _all(lambda: a.steps("wait 1"), lambda: b.steps("wait 1"))
 
 
+QUIT_NOTICE = 0x2000000   # debug scratch[10]: "<name> quit" on the CSS, the quitter's port in bits 26-27
+
+
+def to_stage_select(players: list[Game], game: int, timeout: float = 120) -> None:
+    """Both on the stage select for the set's `game`: whoever has a character turn (or is not locked
+    in on the CSS) presses START."""
+    def step() -> bool:
+        if all(online_set.scene(g.c) == SSS for g in players):
+            return True
+        for g in players:
+            v = setup_view(g)
+            if online_set.scene(g.c) == CSS and v["active"] and v["type"] == 3 and v["my_turn"]:
+                g.steps("tap START 8", "wait 30")
+        return False
+    _wait(step, timeout, f"game {game}: both on the stage select")
+
+
+def quit_match(g: Game, buttons: str) -> None:
+    g.steps("wait 120", "tap START 8", "wait 60", f"hold {buttons} 90")
+
+
+@pytest.mark.slow
+def test_room_set_quit_and_runback(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                   gpu_backend: str) -> None:
+    """Quits in a room's set (docs/game-code.md §11, the quit per mode). Game 1 struck, picked and
+    started, then A quits (L+R+A+START): it did not happen. Both back on the CSS, which says who
+    quit; the server's set still at game 1, 0-0, and game 1 struck again from the starters; played
+    to the end, it counts. In game 2 A runs back (L+R+A+Y+START): both go straight into the same
+    match on the same stage, nothing counted; that match played to the end counts as game 2.
+    Screenshots: run/artifacts/game-code/rooms/sets/set-quit/."""
+    a, b, code = bo3_room(backend, dolphin, gpu_backend, "set-quit")
+    players = [a, b]
+    a.steps("tap START 8", "wait 40")
+    b.steps("tap START 8", "wait 10")
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "game 1: both on the stage select")
+    play_steps(players, 1)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
+                    "game 1 running on both")
+    quitter = online_set.local(a.c)["local_port"]
+    quit_match(a, "L+R+A+START")
+    online_set.wait(lambda: all(online_set.scene(g.c) != "scMelee" for g in players), 60, "both out of the match")
+    _wait(lambda: all(g.debug_scratch()[10] & QUIT_NOTICE for g in players), 30, "the quit notice on both")
+    for g in players:
+        assert (g.debug_scratch()[10] >> 26) & 3 == quitter, (g.name, hex(g.debug_scratch()[10]))
+        g.shot("01-quit-notice")
+    # Not counted: the server's set is still at game 1, 0-0, and game 1 is struck again.
+    for g in players:
+        _wait(lambda g=g: (lambda st: st if st and st["game"] == 1 and st["score"] == [0, 0] else None)(rooms(g).get("set")),
+              30, f"{g.name}: the set still at game 1, 0-0")
+    to_stage_select(players, 1)
+    for g in players:
+        until_setup(g, lambda v: v["active"] and v["type"] == 1 and sorted(v["selectable"]) == STARTERS,
+                    "game 1 struck again from the starters")
+    a.shot("02-g1-struck-again")
+    play_steps(players, 1)
+    games = [online_set.play_game(players, 1)]
+    _wait(lambda: (lambda st: st if st and sum(st["score"]) == 1 else None)(rooms(a).get("set")), 30,
+          "game 1 counted by the server")
+
+    # Game 2: the bans, the characters (the winner first), then a runback.
+    to_stage_select(players, 2)
+    play_steps(players, 2)
+    online_set.wait(lambda: all(online_set.scene(g.c) == CSS for g in players), 120, "game 2: both back on the CSS")
+    for _ in range(2):
+        mover = _wait(lambda: next((g for g in players if setup_view(g)["type"] == 3 and setup_view(g)["my_turn"]), None),
+                      60, "a character turn")
+        mover.steps("tap START 8", "wait 30")
+        if all(not setup_view(g)["active"] or setup_view(g)["type"] != 3 for g in players):
+            break
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
+                    "game 2 running on both")
+    before = [online_set.gstatus(g.c)["match_index"] for g in players]
+    setup = B.read_match_setup(a.c.read_mem)
+    quit_match(a, "L+R+A+Y+START")
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" and
+                                online_set.gstatus(g.c)["match_index"] == before[0] + 1 for g in players),
+                    90, "game 2 again on both")
+    for g in players:
+        assert B.read_match_setup(g.c.read_mem) == setup, (g.name, "not the same match")
+        g.shot("03-g2-runback")
+    st = rooms(a)["set"]
+    assert st["game"] == 2 and sum(st["score"]) == 1, st
+    games.append(online_set.play_game(players, 2))
+    _wait(lambda: (lambda st: st if st and sum(st["score"]) == 2 else None)(rooms(a).get("set")), 30,
+          "game 2 counted by the server")
+    for rep in games:
+        assert rep["checksums"]["mismatches"] == 0, rep
+
+
 @pytest.mark.slow
 def test_room_set_waits_for_a_player(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                      gpu_backend: str) -> None:

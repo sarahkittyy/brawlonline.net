@@ -646,6 +646,15 @@ void OnGameResult(u8 winner, u16 stage)
   }
 }
 
+void OnGameNotCounted()
+{
+  std::lock_guard lk(s_mutex);
+  if (!s_active)
+    return;
+  --s_first_game;  // u32: SetGameOf's s_first_game - 1 + session_game stays right modulo 2^32
+  s_reported.reset();
+}
+
 bool Act(u8 kind)
 {
   const Gprb::Session::Lobby lobby = Gprb::Session::GetLobby();

@@ -316,6 +316,8 @@ TEST(RoomMessages, RulesetCodesAndRequests)
   r.winner_side = 1;
   r.stage = 0x21;
   EXPECT_EQ(RequestJson(r), R"({"game":2,"stage":33,"type":"room-result","winnerSide":1})");
+  r.winner_side = SIDE_VOID;
+  EXPECT_EQ(RequestJson(r), R"({"game":2,"stage":33,"type":"room-result","winnerSide":253})");
   r.winner_side = 2;
   EXPECT_EQ(RequestJson(r), std::nullopt);
   r = {};

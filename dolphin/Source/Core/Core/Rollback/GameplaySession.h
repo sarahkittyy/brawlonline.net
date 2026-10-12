@@ -248,10 +248,19 @@ struct Lobby
 };
 Lobby GetLobby();
 
-// A game of a network session that ended with GAME SET, read from the state every peer ended on
-// (Online/Ranked.h reports it). Ports are in-game ports (2 players: the host is 0, the joiner 1).
+// A game of a network session that ended with GAME SET or with a pause-screen quit that ended it
+// for everyone, read from the state every peer ended on (Online/Ranked.h reports it). Ports are
+// in-game ports (2 players: the host is 0, the joiner 1).
+enum class GameEnd : u8
+{
+  GameSet,
+  Quit,     // L+R+A+START: Ranked (SetQuitLoses) the quitter lost it, else it did not count
+  Runback,  // the same with L+R+Y held (P+'s salty runback): unless a quit loses, played again
+};
 struct GameResult
 {
+  GameEnd end = GameEnd::GameSet;
+  u8 quitter = 0xFF;      // in-game port of the player who quit (Quit, Runback)
   u32 game = 0;           // 1-based, counting draws
   u8 winner = 0xFF;       // in-game port, 0xFE draw; teams: the lowest port of the winning team
   // Ports (a bit each) that pick the next game's stage: a 1v1's loser (both after a draw); 3-4
@@ -270,6 +279,10 @@ struct GameResult
 };
 // Called on the CPU thread for every such game; must not block. nullptr removes it.
 void SetGameResultCallback(std::function<void(const GameResult&)> callback);
+// Whether a pause-screen quit loses the game for the quitter (Ranked) rather than not counting.
+// When it does not, a runback (the quit with L+R+Y) sets the next game up as the same match on
+// every machine, and the game goes straight into it.
+void SetQuitLoses(bool loses);
 
 // A small JSON object of another module (Online/GameSetup.h: Ranked's stage strikes) carried in
 // this player's control messages, and the peer's latest one ({} before any). Sizes are capped.
