@@ -556,3 +556,46 @@ def test_room_2v2_set(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
     for g in gs:
         g.steps("wait 40")
         g.shot("04-g2-red-characters")
+
+
+@pytest.mark.slow
+@pytest.mark.skip(reason="the game opens RULES only while the room waits; between a running set's games "
+                         "the room is in game (room_rules.cpp tick): the RULES-button session's change")
+def test_room_set_ended_between_games(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                      gpu_backend: str) -> None:
+    """End set on the CSS between a running set's games (the user's, 2026-10-11): game 1 played,
+    game 2's bans and pick made, and on the CSS (the characters) the host's RULES > SET > End set
+    ends the set with no result: the session ends for both, both are back on the room's CSS with
+    no set, and the next all-ready starts a new set at game 1."""
+    from test_room_rules import menu_open, open_rules, tap
+    a, b, code = bo3_room(backend, dolphin, gpu_backend, "ended")
+    players = [a, b]
+    _all(lambda: a.steps("tap START 8", "wait 30"), lambda: b.steps("tap START 8", "wait 30"))
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "game 1: both on the stage select")
+    play_steps(players, 1)
+    games = [online_set.play_game(players, 1)]
+    _wait(lambda: (lambda st: st if st and sum(st["score"]) == 1 else None)(rooms(a).get("set")), 60, "game 1 counted")
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "game 2: both on the stage select")
+    play_steps(players, 2)
+    online_set.wait(lambda: all(online_set.scene(g.c) == CSS for g in players), 120, "game 2: both back on the CSS")
+    assert rooms(a)["room_game"]["active"] and rooms(b)["room_game"]["active"]
+    a.steps("wait 30")
+    open_rules(a)
+    tap(a, "DDOWN", "DDOWN", "DRIGHT")              # SET: 1-0 -> End set
+    a.shot("01-end-set")
+    tap(a, "A")
+    _wait(lambda: not menu_open(a), 10, "A's menu closed by End set")
+    for g in players:
+        _wait(lambda g=g: rooms(g).get("set") is None, 30, f"{g.name}: the set gone")
+        _wait(lambda g=g: not rooms(g)["room_game"]["active"], 60, f"{g.name}: the set's session over")
+        _wait(lambda g=g: g.scene() == CSS and room_view(g)["flags"] & ppom.RF_IN, 60, f"{g.name}: on the room's CSS")
+        g.steps("wait 60")
+        g.shot("02-set-ended")
+    assert games[0]["checksums"]["mismatches"] == 0, games[0]
+    # The next all-ready starts a new set at game 1, 0-0.
+    _all(lambda: a.steps("tap START 8", "wait 30"), lambda: b.steps("tap START 8", "wait 30"))
+    st = _wait(lambda: rooms(a).get("set"), 60, "a new set")
+    assert st["game"] == 1 and st["score"] == [0, 0], st
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "the new set's game 1")
+    for g in players:
+        until_setup(g, lambda v: v["active"] and v["game"] == 1 and sorted(v["selectable"]) == STARTERS, "the starters")

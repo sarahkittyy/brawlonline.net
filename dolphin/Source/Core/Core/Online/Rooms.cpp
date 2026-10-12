@@ -1006,6 +1006,23 @@ void SuperviseGame(Clock::time_point now)
     if (const auto step = GameSetup::TakeStepReport())
       ReportSetSteps(*step);
   }
+  // The host ended the set (RULES > SET > End set) between its games: the set is gone from the
+  // room's state. The session ends with it and everyone is back on the room's CSS (never in a
+  // match: the server refuses End set once the game's match started).
+  bool set_ended = false;
+  {
+    std::lock_guard lk(s_mutex);
+    set_ended = g.set && s.view && !s.view->set && s.rg.active && s.rg.match_id == g.match_id;
+  }
+  if (set_ended && !lobby.in_match)
+  {
+    {
+      std::lock_guard lk(s_mutex);
+      Log("the host ended the set: the session ends");
+    }
+    EndGame(true, "The host ended the set.", std::nullopt, true);
+    return;
+  }
   // The match is over once the game has left its scene (the game shows DISCONNECTED or DESYNC
   // DETECTED from LOCAL, which the cleanup would clear).
   const bool match_over =

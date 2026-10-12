@@ -964,7 +964,13 @@ impl RoomBook {
                 if !is_host {
                     return Err(msg::HOST_ONLY);
                 }
-                if !waiting {
+                // End set also works between a running set's games: its session is on the CSS or
+                // the stage select (the game's match not started, room-step); never in a match.
+                // The players' games end the session when the set is gone from room-state.
+                let between_set_games = !resume
+                    && matches!(room.phase, Phase::InGame { .. })
+                    && room.set.as_ref().is_some_and(|s| s.on() && !s.steps.match_started);
+                if !waiting && !between_set_games {
                     return Err(msg::BETWEEN_GAMES);
                 }
                 // `resume`: results that differed, the game is played again. `restart` (RULES > SET >
@@ -1748,7 +1754,8 @@ mod tests {
         t.req(1, RoomRequest::Back);
         t.req(2, RoomRequest::Back);
         assert_eq!(msgs(&t.req(1, RoomRequest::BestOf { best_of: 5 }), 1)[0]["error"], msg::SET_ON);
-        // The host ends the set that is on (End set): no result, the room is free again.
+        // The host ends the set that is on (End set): no result, the room is free again. (In its
+        // session, between games, too: see the_host_ends_a_running_set_between_games.)
         assert_eq!(msgs(&t.req(2, RoomRequest::Set { resume: false }), 2)[0]["error"], msg::HOST_ONLY);
         let out = t.req(1, RoomRequest::Set { resume: false });
         assert!(last_state(&out, 1).get("set").is_none());
@@ -1770,6 +1777,34 @@ mod tests {
         t.req(1, RoomRequest::Slot { slot: 3, open: true });
         let out = t.req(1, RoomRequest::BestOf { best_of: 3 });
         assert_eq!(last_state(&out, 1)["ruleset"]["bestOf"], 3);
+    }
+
+    #[test]
+    fn the_host_ends_a_running_set_between_games() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        join(&mut t, 2, &code);
+        t.req(1, RoomRequest::BestOf { best_of: 3 });
+        let set = play(&mut t, &code, 101);
+        assert_eq!(set.game, 1);
+        // Game 1's match is on: End set waits for it.
+        t.req(1, RoomRequest::Step { game: 1, actions: [vec![0x01, 0x2E], vec![0x02, 0x21]], match_started: true });
+        assert_eq!(msgs(&t.req(1, RoomRequest::Set { resume: false }), 1)[0]["error"], msg::BETWEEN_GAMES);
+        // Game 1 counted; the players are back on the CSS in the set's session: End set ends it.
+        t.req(1, RoomRequest::Result { game: 1, winner_side: 0, stage: 0x21 });
+        t.req(2, RoomRequest::Result { game: 1, winner_side: 0, stage: 0x21 });
+        assert_eq!(msgs(&t.req(2, RoomRequest::Set { resume: false }), 2)[0]["error"], msg::HOST_ONLY);
+        let out = t.req(1, RoomRequest::Set { resume: false });
+        let s = last_state(&out, 2);
+        assert!(s.get("set").is_none(), "{s}");
+        // Replay (resume) still only between games.
+        assert_eq!(msgs(&t.req(1, RoomRequest::Set { resume: true }), 1)[0]["error"], msg::BETWEEN_GAMES);
+        // Their games end the session; the room waits again, and the next all-ready starts a new set.
+        t.req(1, RoomRequest::Back);
+        let out = t.req(2, RoomRequest::Back);
+        assert_eq!(last_state(&out, 1)["status"], "waiting");
+        let set = play(&mut t, &code, 103);
+        assert_eq!((set.game, set.wins), (1, [0, 0]));
     }
 
     #[test]
