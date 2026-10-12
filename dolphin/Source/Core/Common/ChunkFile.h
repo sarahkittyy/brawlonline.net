@@ -57,6 +57,23 @@ public:
   }
 
   void SetMeasureMode() { m_mode = Mode::Measure; }
+
+  // Read mode: a count read from the stream may not ask for more elements than the bytes left can
+  // hold (each takes at least `min_bytes`); otherwise the load fails here and this returns false,
+  // before anything is sized by it (a crafted count would allocate gigabytes). A state is data,
+  // possibly another machine's (a whole-machine session's image).
+  bool CheckReadCount(u64 count, size_t min_bytes)
+  {
+    if (m_mode != Mode::Read)
+      return true;
+    const size_t left = static_cast<size_t>(m_ptr_end - *m_ptr_current);
+    if (min_bytes != 0 && count > left / min_bytes)
+    {
+      SetMeasureMode();
+      return false;
+    }
+    return true;
+  }
   void SetVerifyMode() { m_mode = Mode::Verify; }
   bool IsReadMode() const { return m_mode == Mode::Read; }
   bool IsWriteMode() const { return m_mode == Mode::Write; }
@@ -68,11 +85,13 @@ public:
   {
     u32 count = (u32)x.size();
     Do(count);
+    if (!CheckReadCount(count, 1))
+      count = 0;
 
     switch (m_mode)
     {
     case Mode::Read:
-      for (x.clear(); count != 0; --count)
+      for (x.clear(); count != 0 && IsReadMode(); --count)
       {
         std::pair<K, V> pair;
         Do(pair.first);
@@ -98,11 +117,13 @@ public:
   {
     u32 count = (u32)x.size();
     Do(count);
+    if (!CheckReadCount(count, 1))
+      count = 0;
 
     switch (m_mode)
     {
     case Mode::Read:
-      for (x.clear(); count != 0; --count)
+      for (x.clear(); count != 0 && IsReadMode(); --count)
       {
         V value = {};
         Do(value);
@@ -287,8 +308,10 @@ public:
       x = stable != 0;
   }
 
+  // A pointer into [base, base + limit]: saved as its offset. A loaded offset outside that range
+  // (a state is data, possibly from another machine) fails the load and leaves `x` as it was.
   template <typename T>
-  void DoPointer(T*& x, T* const base)
+  void DoPointer(T*& x, T* const base, size_t limit)
   {
     // pointers can be more than 2^31 apart, but you're using this function wrong if you need that
     // much range
@@ -296,15 +319,13 @@ public:
     Do(offset);
     if (IsReadMode())
     {
+      if (offset < 0 || static_cast<size_t>(offset) > limit)
+      {
+        SetMeasureMode();
+        return;
+      }
       x = base + offset;
     }
-  }
-
-  void DoPointer(void*& x, void* const base)
-  {
-    auto* ptr = static_cast<u8*>(x);
-    DoPointer(ptr, static_cast<u8*>(base));
-    x = ptr;
   }
 
   void DoMarker(const std::string& prevName, u32 arbitraryNumber = 0x42)
@@ -327,6 +348,8 @@ public:
   {
     u32 size = static_cast<u32>(container.size());
     Do(size);
+    if (!CheckReadCount(size, 1))
+      size = 0;
     container.resize(size);
 
     for (auto& elem : container)
@@ -339,6 +362,11 @@ private:
   {
     u32 size = static_cast<u32>(container.size());
     Do(size);
+    constexpr size_t min_bytes = std::is_trivially_copyable_v<typename T::value_type> ?
+                                     sizeof(typename T::value_type) :
+                                     1;
+    if (!CheckReadCount(size, min_bytes))
+      size = 0;
     container.resize(size);
 
     if (size > 0)

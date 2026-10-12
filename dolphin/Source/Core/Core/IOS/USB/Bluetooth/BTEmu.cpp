@@ -99,6 +99,14 @@ void BluetoothEmuDevice::DoState(PointerWrap& p)
   p.DoArray(m_packet_count);
   p.Do(m_scan_enable);
   p.Do(m_event_queue);
+  // An event's size is copied out of its buffer later: no larger than the buffer.
+  if (p.IsReadMode() && std::ranges::any_of(m_event_queue, [](const SQueuedEvent& event) {
+        return event.size > sizeof(event.buffer);
+      }))
+  {
+    p.SetMeasureMode();
+    return;
+  }
   m_acl_pool.DoState(p);
 
   for (unsigned int i = 0; i < MAX_BBMOTES; i++)

@@ -28,6 +28,7 @@
 #include "Core/HW/SystemTimers.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
@@ -216,6 +217,13 @@ void SerialInterfaceManager::DoState(PointerWrap& p)
 
     if (type != device->GetDeviceType())
     {
+      // A machine image comes from another player: it does not plug in devices (some open host
+      // sockets); the session's are pinned.
+      if (Machine::InImageDoState())
+      {
+        p.SetMeasureMode();
+        return;
+      }
       AddDevice(SIDevice_Create(m_system, type, i));
     }
 

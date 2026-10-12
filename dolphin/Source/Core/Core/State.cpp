@@ -198,7 +198,10 @@ static void DoState(Core::System& system, PointerWrap& p)
   p.DoMarker("Gecko");
 
 #ifdef USE_RETRO_ACHIEVEMENTS
-  AchievementManager::GetInstance().DoState(p);
+  // Not in a whole-machine session (hardcore or not): nothing there may depend on it, and its
+  // loader sizes a buffer from the state.
+  if (!Machine::IsArmed())
+    AchievementManager::GetInstance().DoState(p);
 #endif  // USE_RETRO_ACHIEVEMENTS
 }
 

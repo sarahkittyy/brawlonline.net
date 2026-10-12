@@ -98,7 +98,10 @@ protected:
   int m_samples_auxB_right[32 * 5]{};
   int m_samples_auxB_surround[32 * 5]{};
 
-  u16 m_cmdlist[512]{};
+  // A command list from guest memory, at most CMDLIST_SIZE words. Its parser checks the bound
+  // before each command; a command reads a few words more, which the padding keeps inside.
+  static constexpr size_t CMDLIST_SIZE = 512;
+  u16 m_cmdlist[CMDLIST_SIZE + 32]{};
   u32 m_cmdlist_size = 0;
 
   // Table of coefficients for polyphase sample rate conversion.

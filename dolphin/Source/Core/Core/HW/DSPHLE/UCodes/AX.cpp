@@ -121,7 +121,9 @@ void AXUCode::HandleCommandList()
 
   u32 curr_idx = 0;
   bool end = false;
-  while (!end)
+  // The list comes from guest memory: one without an end command stops at the buffer's end
+  // instead of reading past it.
+  while (!end && curr_idx < CMDLIST_SIZE)
   {
     u16 cmd = m_cmdlist[curr_idx++];
 
@@ -780,7 +782,7 @@ void AXUCode::HandleMail(u32 mail)
 
 void AXUCode::CopyCmdList(u32 addr, u16 size)
 {
-  if (size >= std::size(m_cmdlist))
+  if (size >= CMDLIST_SIZE)
   {
     ERROR_LOG_FMT(DSPHLE, "Command list at {:08x} is too large: size={}", addr, size);
     return;
@@ -801,7 +803,7 @@ void AXUCode::Update()
 
 void AXUCode::DoAXState(PointerWrap& p)
 {
-  p.Do(m_cmdlist);
+  p.DoArray(m_cmdlist, CMDLIST_SIZE);
   p.Do(m_cmdlist_size);
   p.Do(m_mail_state);
 

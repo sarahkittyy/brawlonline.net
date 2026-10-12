@@ -18,6 +18,7 @@
 #include "Core/IOS/USB/Bluetooth/BTEmu.h"
 #include "Core/IOS/USB/Bluetooth/WiimoteDevice.h"
 #include "Core/Movie.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 #include "Core/WiiUtils.h"
 
@@ -232,6 +233,12 @@ void DoState(PointerWrap& p)
     const WiimoteSource source = GetSource(i);
     auto state_wiimote_source = u8(source);
     p.Do(state_wiimote_source);
+    // A machine image keeps the session's Wii Remotes (all emulated).
+    if (Machine::InImageDoState() && WiimoteSource(state_wiimote_source) != source)
+    {
+      p.SetMeasureMode();
+      return;
+    }
 
     if (WiimoteSource(state_wiimote_source) == WiimoteSource::Emulated)
     {

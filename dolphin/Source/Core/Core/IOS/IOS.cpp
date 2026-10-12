@@ -57,6 +57,7 @@
 #include "Core/IOS/WFS/WFSI.h"
 #include "Core/IOS/WFS/WFSSRV.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 #include "Core/WiiRoot.h"
 
@@ -900,6 +901,13 @@ void EmulationKernel::DoState(PointerWrap& p)
       {
         auto device_type = Device::DeviceType::Static;
         p.Do(device_type);
+        // A machine image (another player's) opens nothing but the emulated devices: no USB
+        // passthrough device of the host.
+        if (Machine::InImageDoState() && device_type != Device::DeviceType::Static)
+        {
+          p.SetMeasureMode();
+          return;
+        }
         switch (device_type)
         {
         case Device::DeviceType::Static:
@@ -913,6 +921,9 @@ void EmulationKernel::DoState(PointerWrap& p)
           m_fdmap[i] = std::make_shared<OH0Device>(*this, "");
           m_fdmap[i]->DoState(p);
           break;
+        default:
+          p.SetMeasureMode();
+          return;
         }
       }
       else

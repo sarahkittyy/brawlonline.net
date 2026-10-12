@@ -1187,6 +1187,9 @@ void WiiSockMan::DoState(PointerWrap& p)
   bool saving = p.IsWriteMode() || p.IsMeasureMode();
   auto size = pending_polls.size();
   p.Do(size);
+  // Each command takes at least its request address and output buffer.
+  if (!saving && !p.CheckReadCount(size, 8))
+    return;
   if (!saving)
     pending_polls.resize(size);
   for (auto& pcmd : pending_polls)

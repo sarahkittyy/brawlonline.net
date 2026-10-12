@@ -185,6 +185,9 @@ void TitleContext::DoState(PointerWrap& p)
   ticket.DoState(p);
   tmd.DoState(p);
   p.Do(active);
+  // The readers' getters assume a valid blob (a state is data, possibly another machine's).
+  if (p.IsReadMode() && active && (!ticket.IsValid() || !tmd.IsValid()))
+    p.SetMeasureMode();
 }
 
 void TitleContext::Update(const ES::TMDReader& tmd_, const ES::TicketReader& ticket_,

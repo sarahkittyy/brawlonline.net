@@ -541,6 +541,14 @@ void Wiimote::DoState(PointerWrap& p)
 
   p.Do(m_reporting_mode);
   p.Do(m_reporting_continuous);
+  // Checked as a game's request is: a state is data, possibly another machine's (an invalid mode
+  // left no report builder).
+  if (p.IsReadMode() && m_reporting_mode != InputReportID::ReportDisabled &&
+      !DataReportBuilder::IsValidMode(m_reporting_mode))
+  {
+    p.SetMeasureMode();
+    return;
+  }
 
   p.Do(m_speaker_mute);
 
@@ -557,6 +565,14 @@ void Wiimote::DoState(PointerWrap& p)
 
   p.Do(m_is_motion_plus_attached);
   p.Do(m_active_extension);
+  // An index into the attachments: out of range it picked an object past the list's end.
+  if (p.IsReadMode() && static_cast<size_t>(m_active_extension) >=
+                            m_attachments->GetAttachmentList().size())
+  {
+    m_active_extension = ExtensionNumber::NONE;
+    p.SetMeasureMode();
+    return;
+  }
 
   // Attach M+/Extensions.
   m_extension_port.AttachExtension(m_is_motion_plus_attached ? &m_motion_plus : GetNoneExtension());

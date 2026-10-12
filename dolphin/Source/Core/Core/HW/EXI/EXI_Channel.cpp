@@ -15,6 +15,7 @@
 #include "Core/HW/EXI/EXI_Device.h"
 #include "Core/HW/MMIO.h"
 #include "Core/Movie.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 
 namespace ExpansionInterface
@@ -254,6 +255,12 @@ void CEXIChannel::DoState(PointerWrap& p)
     if (type == device->m_device_type)
     {
       device->DoState(p);
+    }
+    else if (Machine::InImageDoState())
+    {
+      // A machine image does not plug in devices (network adapters, memory cards on the host).
+      p.SetMeasureMode();
+      return;
     }
     else
     {

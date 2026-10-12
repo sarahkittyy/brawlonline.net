@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <cstddef>
 #include <deque>
 #include <memory>
@@ -81,7 +82,16 @@ private:
 
     bool IsEmpty() const { return m_queue.empty(); }
     // For SaveStates
-    void DoState(PointerWrap& p) { p.Do(m_queue); }
+    void DoState(PointerWrap& p)
+    {
+      p.Do(m_queue);
+      // A packet's size is copied out of its buffer later: no larger than the buffer.
+      if (p.IsReadMode() &&
+          std::ranges::any_of(m_queue, [](const Packet& packet) { return packet.size > ACL_PKT_SIZE; }))
+      {
+        p.SetMeasureMode();
+      }
+    }
 
   private:
     struct Packet
