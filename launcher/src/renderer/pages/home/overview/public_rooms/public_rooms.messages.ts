@@ -2,7 +2,7 @@ export const PublicRoomsMessages = {
   publicRooms: () => "Public rooms",
   createRoom: () => "Create room",
   createRoomTooltip: () => "Opens a new room in your game, like Online > With Friends > Create Room.",
-  playersOnline: (n: number) => (n === 1 ? "1 player online" : `${n} players online`),
+  playersInGame: (n: number) => (n === 1 ? "1 player in-game" : `${n} players in-game`),
   loggedOut: () => "Log in to see who's online and join public rooms.",
   logIn: () => "Log in",
   unreachable: () => "Can't reach the server right now.",

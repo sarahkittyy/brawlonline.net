@@ -63,7 +63,7 @@ export const PublicRoomsView = ({
     state.kind === "ready" ? (
       <div className={styles.online} data-testid="players-online">
         <span className={styles.onlineDot} />
-        {Messages.playersOnline(state.online)}
+        {Messages.playersInGame(state.online)}
       </div>
     ) : undefined;
 
