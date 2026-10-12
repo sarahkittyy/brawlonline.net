@@ -2156,9 +2156,6 @@ namespace OnlineMenu {
                 if (!side[i][0]) strcpy(side[i], i ? "P2" : "P1");
             }
             RoomPlay::cssLine(play, sizeof(play), side[0], side[1]);
-        } else if (in) {
-            // Under the STAGE SWITCH's grid: what its tiles say, and the hazards (stage_switch.cpp).
-            if (!StageSwitch::legend(play, sizeof(play))) play[0] = 0;
         }
         // One line ("Ruleset: X   Bo3: a 1 - 0 b") when it fits, else two.
         char* nl = NULL;   // (the DOL has no strchr)
@@ -2182,8 +2179,6 @@ namespace OnlineMenu {
             }
         } else {
             strcpy(line, play);
-            int w = statusWidths(line, (int)strlen(line), NULL);
-            if (w * ROOM_PLAY_SCALE > ROOM_PLAY_FIT) scale = (float)ROOM_PLAY_FIT / (float)w;
         }
         if (strcmp(line, s_playPrinted) != 0) {
             WindowSetting* wp = (WindowSetting*)(*(u32*)((u8*)m + 0xC) + 0x48 * ROOM_PLAY_WINDOW);

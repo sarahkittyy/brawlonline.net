@@ -14,11 +14,13 @@
 //    SWITCH" (MenMainSwitch10Panel, which a PAT0 sets every frame: its resolved TEX0 pointers in
 //    the menu's brres are pointed at the copy too, and back when the menu closes), the top bar
 //    (P+'s TOGGLE PAGE, MenMainSwitch11Panel) "LOSER PICKS FROM LIST", and MORE RULES' row "STAGE
-//    SWITCH". Under the grid (the room CSS's ruleset line, online_menu.cpp) a legend: what ON, STR
-//    and OFF mean, and the room's hazards, one switch for every stage. The footer is the stage
-//    hovered (P+'s own line), or on the top row what the bar or the page button does. P+'s hazard
-//    switch button (the page's object 0x80) is never in the page's scene and is not usable: put in
-//    the scene group, the next draw crashed.
+//    SWITCH". The footer is two smaller lines: the stage hovered (P+'s name), or on the top row
+//    what the bar or the page button does, and under it a legend: what ON, STR and OFF mean, and
+//    the room's hazards, one switch for every stage. (In the room CSS's ruleset line under the
+//    grid it was dimmed by the menu and hidden by the START banner; that window attached to the
+//    page's frame model drew over both but crashed the GPU after a few seconds, and the footer's
+//    MuMsg has no second window.) P+'s hazard switch button (the page's object 0x80) is never in
+//    the page's scene and is not usable: put in the scene group, the next draw crashed.
 //  - The host: A on a tile cycles Off -> Counterpick -> Starter, A on the bar switches the loser
 //    between any stage and the list (only for a ruleset whose loser picks), Z the stage hazards;
 //    P+'s presets (L/R) and its whole-page toggle do nothing. When the menu closes, the changes go
@@ -82,6 +84,8 @@ namespace StageSwitch {
     // spacing on the page (world units, measured from the tiles' ScnMdl matrices).
     static const int GRID = 7;
     static const float TILE_DX = 8.4f, TILE_DY = 4.4f;
+    static const int FW_Y1 = 8;      // MuMsg::WindowSetting: y1 .. scaleY (+8 .. +0x38)
+    static const float FOOT_HALF = 44.0f, FOOT_SCALE = 0.85f;   // the footer's two lines
     static const int SE_MOVE = 0;    static const int SE_TOGGLE = 0x24, SE_ERROR = 3;
 
 
@@ -124,11 +128,14 @@ namespace StageSwitch {
         u8* strTex;
         u32 onWord, strWord;
         u32* onSlot[MAX_TILES];
-        // The footer (P+'s preset line on the top row) as last printed: printed again when A on
-        // the bar changes what it says.
+        // The footer as last printed: printed again when A on the bar or Z changes what it says.
         void* footMsg;
         const void* footMsbin;
         u32 footLine;
+        // Its window (MuMsg window 0) while it has two lines, and P+'s settings (+8 .. +0x38),
+        // put back when the menu closes.
+        u8* footWin;
+        float footSaved[12];
     } s;
 
     static void playSE(int id)
@@ -230,6 +237,9 @@ namespace StageSwitch {
                         s.choice != s.roomChoice);
         s.on = false;
         s.activeFrames = 0;
+        if (s.footWin) memcpy(s.footWin + FW_Y1, s.footSaved, sizeof(s.footSaved));
+        s.footWin = NULL;
+        s.footMsg = NULL;
         return changed;
     }
 
@@ -510,6 +520,13 @@ namespace StageSwitch {
         return b;
     }
 
+    // The footer printed again (MuMsg::printIndex, through Text's hook: menuText).
+    static void reprintFooter()
+    {
+        typedef void (*PrintIndexFn)(void* msg, u32 window, u32 line, const void* msbin);
+        if (isPtr((u32)s.footMsg)) ((PrintIndexFn)0x800B91B8)(s.footMsg, 0, s.footLine, s.footMsbin);
+    }
+
     u32 input(u8* page, u32 bits)
     {
         s.activeFrames = 2;
@@ -532,10 +549,7 @@ namespace StageSwitch {
                 } else {
                     s.choice = s.choice == PPOM::CHOICE_LOSER_PICKS ? PPOM::CHOICE_LOSER_PICKS_LIST : PPOM::CHOICE_LOSER_PICKS;
                     playSE(SE_TOGGLE);
-                    // The footer says what A does now: printed again (MuMsg::printIndex, through
-                    // Text's hook).
-                    typedef void (*PrintIndexFn)(void* msg, u32 window, u32 line, const void* msbin);
-                    if (isPtr((u32)s.footMsg)) ((PrintIndexFn)0x800B91B8)(s.footMsg, 0, s.footLine, s.footMsbin);
+                    reprintFooter();   // it says what A does now
                 }
             } else if (tile >= 0 && tile < n && tile < MAX_TILES) {
                 int kind = StageLegal::kindAt(*(u8*)(page + PAGE_NUMBER), tile);
@@ -547,22 +561,30 @@ namespace StageSwitch {
                 }
             }
         }
-        if (padPressed() & PAD_Z) {   // (the legend under the grid shows it)
+        if (padPressed() & PAD_Z) {
             s.hazards = !s.hazards;
             playSE(SE_TOGGLE);
+            reprintFooter();   // its legend says the hazards
         }
         return keep;
     }
 
-    static bool shown() { return s.on && s.activeFrames > 0; }
-
-    bool legend(char* buf, int size)
+    // The footer's window (MuMsg::WindowSetting: y1 +8, y2 +0x10, scale +0x30 / +0x34) set for
+    // two lines at 0.85 (P+'s: one line, 16 .. -16 at 1; seen in screenshots, 0.85 fills the
+    // footer's black band and the legend fits its width), P+'s own kept for close().
+    static void footerTwoLines(void* msg)
     {
-        if (!shown() || size < 96) return false;
-        sprintf(buf, s.canEdit ? "ON = counterpick    STR = starter    OFF = not played    Hazards (Z): %s, every stage"
-                               : "ON = counterpick    STR = starter    OFF = not played    Hazards: %s, every stage",
-                s.hazards ? "ON" : "OFF");
-        return true;
+        u8* ws = isPtr((u32)msg) ? *(u8**)((u8*)msg + 0xC) : NULL;
+        if (!isPtr((u32)ws)) return;
+        if (s.footWin != ws) {
+            if (s.footWin) memcpy(s.footWin + FW_Y1, s.footSaved, sizeof(s.footSaved));
+            memcpy(s.footSaved, ws + FW_Y1, sizeof(s.footSaved));
+            s.footWin = ws;
+        }
+        *(float*)(ws + 0x08) = FOOT_HALF;
+        *(float*)(ws + 0x10) = -FOOT_HALF;
+        *(float*)(ws + 0x30) = FOOT_SCALE;
+        *(float*)(ws + 0x34) = FOOT_SCALE;
     }
 
     // The footer on the top row: what the bar or the page button does.
@@ -590,16 +612,38 @@ namespace StageSwitch {
     const char* menuText(void* msg, const void* msbin, u32 line)
     {
         if (!s.on) return NULL;
+        bool switchLines = Online::msbinLineContains(msbin, 0, "swap preset");
+        // Another page printing with the same message: P+'s window again.
+        if (!switchLines && s.footWin && isPtr((u32)msg) && *(u8**)((u8*)msg + 0xC) == s.footWin) {
+            memcpy(s.footWin + FW_Y1, s.footSaved, sizeof(s.footSaved));
+            s.footWin = NULL;
+        }
         // The footer's msbin: P+'s presets (line 0 "Default (L/R to swap preset)", up to 8), then
         // every stage's name at its icon + 8 (P+'s own), printed as the cursor moves.
-        if (Online::msbinLineContains(msbin, 0, "swap preset")) {
-            if (line >= 8) return NULL;
+        if (switchLines) {
             s.footMsg = msg;
             s.footMsbin = msbin;
             s.footLine = line;
-            const char* row = rowText();
-            if (row) return row;
-            return s.canEdit ? "A: off / counterpick / starter." : "The room's stages.";
+            static char buf[160];
+            int n = 0;
+            if (line >= 8) {
+                int len = 0;
+                const char* name = Online::msbinLine(msbin, (int)line, &len);
+                if (!name) return NULL;
+                if (len > 48) len = 48;
+                for (int i = 0; i < len && name[i]; i++) buf[n++] = name[i];
+                buf[n] = 0;
+            } else {
+                const char* row = rowText();
+                if (!row) row = s.canEdit ? "A: off / counterpick / starter." : "The room's stages.";
+                strcpy(buf, row);
+                n = (int)strlen(buf);
+            }
+            sprintf(buf + n, s.canEdit ? "\nON = counterpick   STR = starter   OFF = not played   Hazards (Z): %s, all stages"
+                                       : "\nON = counterpick   STR = starter   OFF = not played   Hazards: %s, all stages",
+                    s.hazards ? "ON" : "OFF");
+            footerTwoLines(msg);
+            return buf;
         }
         if (Online::msbinLineContains(msbin, (int)line, "open/clos")) return " ";
         if (Online::msbinLineContains(msbin, (int)line, "Adjust stages in random selection")) {

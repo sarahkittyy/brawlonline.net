@@ -17,9 +17,7 @@ namespace StageSwitch {
     u32 input(u8* page, u32 bits);
     // The hazards the host chose (sent with the room's rules).
     bool hazards();
-    // The legend under the grid (what ON, STR and OFF mean, the hazards) while the page is shown.
-    bool legend(char* buf, int size);
     // The menu's bottom-line texts while it is open in a room, or NULL.
-    // `msg`: the MuMsg printing (the footer is printed again when A on the bar changes it).
+    // `msg`: the MuMsg printing (the footer is printed again when A on the bar or Z changes it).
     const char* menuText(void* msg, const void* msbin, u32 line);
 }
