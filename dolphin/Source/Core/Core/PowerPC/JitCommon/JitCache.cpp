@@ -302,6 +302,30 @@ void JitBaseBlockCache::InvalidateICache(u32 initial_address, u32 initial_length
   }
 }
 
+void JitBaseBlockCache::EraseBlocksForRestoredRange(u32 physical_address, u32 length)
+{
+  bool any = false;
+  for (u32 line = physical_address / 32; line < (physical_address + length + 31) / 32; ++line)
+  {
+    if (valid_block.Test(line))
+    {
+      valid_block.Clear(line);
+      any = true;
+    }
+  }
+  if (!any)
+    return;
+  ErasePhysicalRange(physical_address, length);
+  // As for modified code (InvalidateICacheInternal): the per-instruction hints are stale too.
+  const u32 effective = physical_address | 0x80000000;
+  for (u32 i = effective; i < effective + length; i += 4)
+  {
+    m_jit.js.fifoWriteAddresses.erase(i);
+    m_jit.js.pairedQuantizeAddresses.erase(i);
+    m_jit.js.noSpeculativeConstantsAddresses.erase(i);
+  }
+}
+
 void JitBaseBlockCache::InvalidateICacheInternal(u32 physical_address, u32 address, u32 length,
                                                  bool forced)
 {

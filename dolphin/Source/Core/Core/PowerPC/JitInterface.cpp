@@ -283,6 +283,12 @@ void JitInterface::InvalidateICache(u32 address, u32 size, bool forced)
     m_jit->GetBlockCache()->InvalidateICache(address, size, forced);
 }
 
+void JitInterface::EraseBlocksForRestoredRange(u32 physical_address, u32 length)
+{
+  if (m_jit)
+    m_jit->GetBlockCache()->EraseBlocksForRestoredRange(physical_address, length);
+}
+
 void JitInterface::InvalidateICacheLine(u32 address)
 {
   if (m_jit)

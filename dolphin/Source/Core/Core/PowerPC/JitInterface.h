@@ -86,6 +86,8 @@ public:
   // If "forced" is true, a recompile is being requested on code that hasn't been modified.
   void InvalidateICache(u32 address, u32 size, bool forced);
   void InvalidateICacheLine(u32 address);
+  // Rollback: see JitBaseBlockCache::EraseBlocksForRestoredRange.
+  void EraseBlocksForRestoredRange(u32 physical_address, u32 length);
   void InvalidateICacheLines(u32 address, u32 count);
   static void InvalidateICacheLineFromJIT(JitInterface& jit_interface, u32 address);
   static void InvalidateICacheLinesFromJIT(JitInterface& jit_interface, u32 address, u32 count);

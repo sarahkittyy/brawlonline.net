@@ -56,6 +56,11 @@ public:
   // the same frame from the same state, whatever the game (Machine::Session's desync check). 0
   // before the first save.
   u32 LastSaveChecksum() const;
+  // LastSaveChecksum plus one slice of all guest RAM, chosen by `frame` (CHECK_SLICES slices:
+  // every byte is covered once every CHECK_SLICES frames). The granules written each frame alone
+  // miss a difference in memory that is not written again; the slices find it within seconds.
+  static constexpr u32 CHECK_SLICES = 360;
+  u32 SaveChecksumWithSlice(s64 frame) const;
   // The granules LastSaveChecksum covers: (physical address, CRC32 of the 64 bytes), for finding
   // what differs between two machines whose checksums differ (diagnostics).
   std::vector<std::pair<u32, u32>> LastSaveDigest() const;

@@ -999,7 +999,7 @@ void PerformQueuedSave(Core::System& system)
   AfterSave(system);
   s.saves++;
   DiagnoseSave(s.queued_save.frame);
-  const u32 sum = rb.LastSaveChecksum();
+  const u32 sum = rb.SaveChecksumWithSlice(s.queued_save.frame);
   if (DigestsEnabled() && s.queued_save.frame >= 0)
   {
     FrameDigest& d = s_digests[static_cast<size_t>(s.queued_save.frame) % s_digests.size()];
@@ -1527,16 +1527,23 @@ NetPlay::NetSettings MakeNetSettings()
         [&](auto* info) { ns.sysconf_settings[i] = static_cast<u32>(Pinned(*info)); },
         Config::SYSCONF_SETTINGS[i].config_info);
   }
-  ns.efb_access_enable = Pinned(Config::GFX_HACK_EFB_ACCESS_ENABLE);
-  ns.bbox_enable = Pinned(Config::GFX_HACK_BBOX_ENABLE);
+  // Nothing the host GPU computes may reach guest RAM or registers: its results depend on the GPU
+  // and driver, and in dual core on when the GPU thread gets to them. Brawl copies a few rendered
+  // pixels into RAM for its lighting (docs/determinism-findings.md); in dual core with a real
+  // backend those copies landed at host-dependent times and a re-run diverged (frame 1285 of the
+  // Minus sync test, never in single core or with the Null backend). EFB and XFB copies stay on
+  // the GPU (the copies' RAM keeps what it had: the same everywhere), the CPU reads no EFB, and
+  // bounding box and performance counters are off.
+  ns.efb_access_enable = false;
+  ns.bbox_enable = false;
   ns.force_progressive = Pinned(Config::GFX_HACK_FORCE_PROGRESSIVE);
-  ns.efb_to_texture_enable = Pinned(Config::GFX_HACK_SKIP_EFB_COPY_TO_RAM);
-  ns.xfb_to_texture_enable = Pinned(Config::GFX_HACK_SKIP_XFB_COPY_TO_RAM);
+  ns.efb_to_texture_enable = true;
+  ns.xfb_to_texture_enable = true;
   ns.disable_copy_to_vram = Pinned(Config::GFX_HACK_DISABLE_COPY_TO_VRAM);
   ns.immediate_xfb_enable = Config::Get(Config::GFX_HACK_IMMEDIATE_XFB);
   ns.efb_emulate_format_changes = Pinned(Config::GFX_HACK_EFB_EMULATE_FORMAT_CHANGES);
   ns.safe_texture_cache_color_samples = Pinned(Config::GFX_SAFE_TEXTURE_CACHE_COLOR_SAMPLES);
-  ns.perf_queries_enable = Pinned(Config::GFX_PERF_QUERIES_ENABLE);
+  ns.perf_queries_enable = false;
   ns.float_exceptions = Pinned(Config::MAIN_FLOAT_EXCEPTIONS);
   ns.divide_by_zero_exceptions = Pinned(Config::MAIN_DIVIDE_BY_ZERO_EXCEPTIONS);
   ns.fprf = Pinned(Config::MAIN_FPRF);

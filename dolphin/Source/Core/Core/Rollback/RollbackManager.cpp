@@ -20,6 +20,7 @@
 #include "Common/Swap.h"
 #include "Core/CoreTiming.h"
 #include "Core/HW/Memmap.h"
+#include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/Perf.h"
@@ -1120,6 +1121,37 @@ u32 RollbackManager::LastSaveChecksum() const
   return crc ? crc : 1;
 }
 
+u32 RollbackManager::SaveChecksumWithSlice(s64 frame) const
+{
+  u32 crc = LastSaveChecksum();
+  if (!m_initialized || frame < 0)
+    return crc;
+  const u32 mem1_pages = static_cast<u32>(m_mem1_size / ROLLBACK_PAGE_SIZE);
+  const u32 mem2_pages = static_cast<u32>(m_mem2_size / ROLLBACK_PAGE_SIZE);
+  const u32 total = mem1_pages + mem2_pages;
+  const u32 per = (total + CHECK_SLICES - 1) / CHECK_SLICES;
+  const u32 first = static_cast<u32>(frame % CHECK_SLICES) * per;
+  const u32 last = std::min(total, first + per);
+  const u8* gpu = GPUWrittenBitmap::Get().entries;
+  for (u32 g = first; g < last; ++g)
+  {
+    const bool mem2 = g >= mem1_pages;
+    const u32 page = mem2 ? MEM2_FIRST_PAGE + (g - mem1_pages) : g;
+    if (gpu[page])
+      continue;
+    const u32 phys = page << ROLLBACK_PAGE_SHIFT;
+    bool excluded = false;
+    for (const MemoryRegion& r : m_exclude_regions)
+      excluded |= phys < r.phys_end && phys + ROLLBACK_PAGE_SIZE > r.phys_start;
+    if (excluded)
+      continue;
+    const u8* src = mem2 ? m_mem2_ptr + static_cast<size_t>(g - mem1_pages) * ROLLBACK_PAGE_SIZE :
+                           m_mem1_ptr + static_cast<size_t>(g) * ROLLBACK_PAGE_SIZE;
+    crc = Common::UpdateCRC32(crc, src, ROLLBACK_PAGE_SIZE);
+  }
+  return crc ? crc : 1;
+}
+
 std::vector<std::pair<u32, u32>> RollbackManager::LastSaveDigest() const
 {
   std::vector<std::pair<u32, u32>> out;
@@ -1475,6 +1507,17 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
 
   if (ram_job)
     job::DrainJobsUntilComplete(m_dispatch_thread, ram_job);
+
+  if (!m_region_mode)
+  {
+    // The JIT's blocks for restored memory were compiled from the timeline being thrown away: a
+    // module the newer timeline loaded where the restored one still runs other code (a scene
+    // change) left blocks of the wrong code in the cache, and the re-run diverged.
+    ROLLBACK_ZONE_N("JIT blocks of restored memory");
+    auto& jit = system.GetJitInterface();
+    for (const u32 key : restore_keys)
+      jit.EraseBlocksForRestoredRange(key << ROLLBACK_PAGE_SHIFT, ROLLBACK_PAGE_SIZE);
+  }
 
 #if ROLLBACK_VALIDATE
   CompareValSnapshot(target_slot, frames_back);

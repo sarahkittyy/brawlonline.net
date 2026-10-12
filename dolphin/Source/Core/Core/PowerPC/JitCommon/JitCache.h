@@ -183,6 +183,10 @@ public:
   const u8* Dispatch();
 
   void InvalidateICache(u32 address, u32 length, bool forced);
+  // Rollback: a load replaced guest RAM in [physical_address, +length). Blocks compiled from what
+  // was there are dropped, the JIT only: the emulated instruction cache is machine state and is
+  // restored with the rest.
+  void EraseBlocksForRestoredRange(u32 physical_address, u32 length);
   void InvalidateICacheLine(u32 address);
   void ErasePhysicalRange(u32 address, u32 length);
   void EraseSingleBlock(const JitBlock& block);
