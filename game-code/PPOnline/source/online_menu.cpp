@@ -974,6 +974,10 @@ namespace OnlineMenu {
     static const int ROOM_STATUS_FIT = 378;
     static const float STATUS_X2 = 330.0f;
     static const float WRAP_SCALE = 0.7f;
+    // A text a little too wide for one line at scale 1 is one line, smaller (down to this),
+    // rather than two lines at WRAP_SCALE (staging feedback 2026-10-12: "Press START to select
+    // stage" on two lines in a room).
+    static const float ONE_LINE_MIN = 0.75f;
     static const float WRAP_LINE_SPACE = 22.0f; // two lines at 0.7 inside the bar
     static const float WRAP_Y = 27.0f;          // the rule window's own is +-18.4
     // Font units that fit in the widened window at scale 1: at scale 1 a font unit is a window
@@ -1015,7 +1019,7 @@ namespace OnlineMenu {
     enum { LAYOUT_ONE = 1, LAYOUT_TWO = 2, LAYOUT_ONE_SMALL = 3 };
 
     // Lay the status out into `out` (room for 164 bytes): one line at the normal size if it
-    // fits; else two lines at WRAP_SCALE, split at the space that makes the longer line
+    // fits; one line made smaller to fit if it fits at ONE_LINE_MIN; else two lines at WRAP_SCALE, split at the space that makes the longer line
     // shortest; a single word too long for the normal size: one small line; a text too long
     // even for two small lines: the first line as much as fits (cut at a space), the second
     // cut at a space and ended with "...".
@@ -1029,6 +1033,7 @@ namespace OnlineMenu {
         memcpy(out, text, len);
         out[len] = 0;
         if (total <= fit) return LAYOUT_ONE;
+        if (total * ONE_LINE_MIN <= fit) return LAYOUT_ONE_SMALL;
         int wide = (int)(fit / WRAP_SCALE);
         // Balanced split: line 1 = [0, i), line 2 = (i, len) for a space at i.
         int best = -1, bestMax = 0x7FFFFFFF, left = 0;
@@ -1171,9 +1176,16 @@ namespace OnlineMenu {
             }
             ws->x1 = STATUS_X1;
             ws->x2 = roomCss() && roomIn() ? ROOM_STATUS_X2 : STATUS_X2;
-            layout = layoutStatus(s.status, text, roomCss() && roomIn() ? ROOM_STATUS_FIT : STATUS_FIT);
+            int fit = roomCss() && roomIn() ? ROOM_STATUS_FIT : STATUS_FIT;
+            layout = layoutStatus(s.status, text, fit);
             bool two = layout == LAYOUT_TWO;
-            ws->scaleX = ws->scaleY = layout == LAYOUT_ONE ? 1.0f : WRAP_SCALE;
+            // one small line: as large as fits (at least WRAP_SCALE: a single long word, or
+            // ONE_LINE_MIN)
+            int total = statusWidths(s.status, (int)strlen(s.status), NULL);
+            float small = total > 0 ? (float)fit / (float)total : WRAP_SCALE;
+            if (small > 1.0f) small = 1.0f;
+            if (small < WRAP_SCALE) small = WRAP_SCALE;
+            ws->scaleX = ws->scaleY = layout == LAYOUT_ONE ? 1.0f : layout == LAYOUT_ONE_SMALL ? small : WRAP_SCALE;
             ws->lineSpace = two ? WRAP_LINE_SPACE : s.windowLineSpace;
             ws->y1 = two ? WRAP_Y : s.windowY1;
             ws->y2 = two ? -WRAP_Y : s.windowY2;

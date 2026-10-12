@@ -358,6 +358,35 @@ def create_room(g: Game) -> None:
     g.wait(60)
 
 
+
+def test_the_pickers_start_line_is_one_line(game: Game) -> None:
+    """The stage picker's "Press START to select stage" (a little wider than the room's status
+    line at scale 1) is one smaller line, not two (staging feedback 2026-10-12)."""
+    g = game
+    c = g.c
+    c.game_bridge_config(enabled=False)
+    g.steps("until muMenuMain 3000", "wait 60")
+    g.sim = sim = roomsim.RoomSim(c)
+    g.wait(60)
+    g.tap("A")
+    g.wait(60)
+    g.tap("DLEFT", 4)
+    g.wait(20)
+    g.tap("A")
+    sim.service(400, until=lambda: g.scene() == "scSelctCharacter" and sim.room is not None)
+    g.wait(60)
+    sim.add_player(1, "alice")
+    g.wait(40)
+    g.hand_to(*FOX)
+    g.tap("A")
+    g.wait(20)
+    # We lost the last game: we pick the next stage (SESSION players[0].picksStage; the sim
+    # leaves the byte as it is).
+    c.write_mem(sim.b.session + 0x0C + ppom.SP_PICKS_STAGE, b"")
+    g.wait(30)
+    assert g.scratch(14) >> 24 == 3, hex(g.scratch(14))   # LAYOUT_ONE_SMALL
+    g.shot("40-select-stage-one-line")
+
 @pytest.fixture
 def rules_game(dolphin_exe):
     g = Game("rules-button", art=RULES_ART)
