@@ -491,19 +491,38 @@ export async function readManifest(cacheDir: string): Promise<AssetManifest | nu
 }
 
 /**
- * Adds the sound effects to a cache extracted before the launcher had them (its manifest has no `sounds`), without
- * extracting everything again. Returns the updated manifest, the unchanged one when it already has sounds, or null
- * when there is no readable manifest in `cacheDir`.
+ * True when the manifest's sounds do not match the catalog: none extracted yet, a role neither extracted nor recorded
+ * missing (added since), or a role taken under a sound the catalog no longer lists for it (changed since).
+ */
+export function soundsOutdated(manifest: { sounds?: Record<string, { sound?: string }>; missing?: string[] }) {
+  const sounds = manifest.sounds;
+  if (!sounds) {
+    return true;
+  }
+  return SOUND_ROLES.some((role) => {
+    const s = sounds[role.role];
+    return s
+      ? !role.candidates.some((c) => c.sound === s.sound)
+      : !(manifest.missing ?? []).includes(`sound:${role.role}`);
+  });
+}
+
+/**
+ * Brings the sound effects of a cache in line with the catalog (see soundsOutdated): a cache extracted before the
+ * launcher had them, or with a sound the catalog has replaced since, without extracting everything again. Returns the
+ * updated manifest, the unchanged one when its sounds are current, or null when there is no readable manifest in
+ * `cacheDir`.
  */
 export async function extractMissingSounds(
   opts: Pick<ExtractOptions, "disc" | "sdRawPath" | "cacheDir" | "tmpDir">,
 ): Promise<AssetManifest | null> {
   const manifest = await readManifest(opts.cacheDir);
-  if (!manifest || manifest.sounds) {
+  if (!manifest || !soundsOutdated(manifest)) {
     return manifest;
   }
-  manifest.warnings ??= [];
-  manifest.missing ??= [];
+  delete manifest.sounds;
+  manifest.warnings = (manifest.warnings ?? []).filter((w) => !w.startsWith("sound "));
+  manifest.missing = (manifest.missing ?? []).filter((m) => !m.startsWith("sound:"));
   const disc = await openDisc(opts.disc, opts.tmpDir);
   let sd: GameFileSource | null = null;
   try {

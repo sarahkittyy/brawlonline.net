@@ -20,8 +20,8 @@ export type ExtractOptions = {
 export type ExtractFn = (opts: ExtractOptions) => Promise<GameAssetManifest>;
 
 /**
- * Adds what a cache made by an older launcher lacks (the sound effects) to the manifest in `cacheDir`, keeping the
- * rest. Returns the updated manifest (null if there is none).
+ * Adds what a cache made by an older launcher lacks or has out of date (the sound effects) to the manifest in
+ * `cacheDir`, keeping the rest. Returns the updated manifest (null if there is none).
  */
 export type FillMissingFn = (opts: Omit<ExtractOptions, "onProgress">) => Promise<GameAssetManifest | null>;
 
@@ -54,6 +54,8 @@ export class GameAssetsManager {
     private readonly resolveSources: SourceResolver,
     private readonly extract: ExtractFn,
     private readonly fillMissing?: FillMissingFn,
+    /** Whether a cached manifest needs fillMissing (by default: it has no sounds). */
+    private readonly needsFill: (manifest: GameAssetManifest) => boolean = (m) => !m.sounds,
   ) {}
 
   getState(): GameAssetsState {
@@ -91,7 +93,7 @@ export class GameAssetsManager {
       const cached = await this._loadCached(stamp);
       if (cached) {
         this._setState({ status: GameAssetsStatus.READY, manifest: cached });
-        if (!cached.sounds && this.fillMissing) {
+        if (this.fillMissing && this.needsFill(cached)) {
           await this._fillMissing(sources);
         }
         return this.state;
@@ -135,7 +137,7 @@ export class GameAssetsManager {
     return this.state;
   }
 
-  /** Extracts the sound effects into a cache from before they existed, instead of extracting everything again. */
+  /** Extracts missing or outdated sound effects into a cache, instead of extracting everything again. */
   private async _fillMissing(sources: { disc: DiscSource; sdRawPath?: string }) {
     try {
       const manifest = await this.fillMissing!({

@@ -4,7 +4,7 @@ import path from "path";
 import { afterAll, describe, expect, it } from "vitest";
 
 import { BRSAR_FILE, SOUND_ROLES } from "./catalog";
-import { extractMissingSounds, readManifest, runExtraction } from "./extract";
+import { extractMissingSounds, readManifest, runExtraction, soundsOutdated } from "./extract";
 import { buildBrsar } from "./formats/brsar";
 import { buildRwsd, WaveEncoding } from "./formats/rwsd";
 import { buildSawnd } from "./formats/sawnd";
@@ -142,5 +142,33 @@ describe("sound extraction (synthetic archive)", () => {
     expect(
       await extractMissingSounds({ disc: { kind: "folder", path: path.join(tmpRoot, "absent") }, cacheDir }),
     ).toEqual(filled);
+  });
+
+  it("extracts again a sound the catalog has replaced since (the chat sound was Brawl's shared Reflector)", async () => {
+    const discRoot = makeDisc(path.join(tmpRoot, "disc6"));
+    const cacheDir = path.join(tmpRoot, "cache6");
+    const full = await runExtraction(await DiscFolderSource.open(discRoot), null, { cacheDir });
+    expect(soundsOutdated(full)).toBe(false);
+
+    const old = JSON.parse(JSON.stringify(full)) as typeof full;
+    old.sounds!["chat-message"] = { ...old.sounds!["chat-message"], sound: "snd_se_fox_Special_L01", durationMs: 2027 };
+    old.warnings.push("sound chat-message (sd:snd_se_fox_Special_L01): stale");
+    fs.writeFileSync(path.join(cacheDir, "sounds", "chat-message.wav"), "stale");
+    fs.writeFileSync(path.join(cacheDir, "manifest.json"), JSON.stringify(old));
+    expect(soundsOutdated(old)).toBe(true);
+
+    const filled = await extractMissingSounds({ disc: { kind: "folder", path: discRoot }, cacheDir });
+    expect(filled?.sounds?.["chat-message"]).toMatchObject({ sound: soundName("chat-message"), durationMs: 20 });
+    expect(filled?.sounds?.invite).toEqual(full.sounds?.invite);
+    expect(filled?.warnings).toEqual(full.warnings);
+    expect(decodeWav(fs.readFileSync(path.join(cacheDir, "sounds", "chat-message.wav"))).sampleRate).toBe(32000);
+    expect(soundsOutdated(filled!)).toBe(false);
+  });
+
+  it("does not count a sound recorded missing as outdated, but does count a role added since", () => {
+    const invite = { sound: soundName("invite") };
+    expect(soundsOutdated({ sounds: { invite }, missing: ["sound:chat-message"] })).toBe(false);
+    expect(soundsOutdated({ sounds: { invite }, missing: [] })).toBe(true);
+    expect(soundsOutdated({ missing: [] })).toBe(true);
   });
 });

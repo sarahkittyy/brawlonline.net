@@ -150,8 +150,10 @@ export const FONT_ROLES: FontRole[] = [
 // replaces whole sound groups with /Project+/pf/sfx/<group>.sawnd files on the SD card; an "sd" candidate reads the
 // sound out of that replacement and is skipped when P+ does not replace the sound's group. (P+ 3.x replaces group 0,
 // which holds the star KO sound, with identical audio, and does not replace Fox's group.) Entries were identified
-// with `cli.ts sounds` and the fighter's action scripts: FitFox.pac plays snd_se_fox_Special_L01 with the "sound
-// effect" event at the start of the down special and loops snd_se_fox_Special_L02 while the Reflector is held.
+// with `cli.ts sounds` and the fighter's action scripts. Brawl's FitFox.pac plays snd_se_fox_Special_L01 at the start
+// of the down special, but that wave is byte-identical to snd_se_Wolf_Special_L01 (Brawl's shared Reflector sound,
+// what P+ players know as Wolf's shine). P+'s FitFox.pac instead plays snd_se_item_Item_Get (sound 8109) from the
+// main subactions of SpecialLwStart and SpecialAirLwStart: the short Melee-style shine that P+'s Fox makes in game.
 
 export type SoundCandidate = {
   origin: "disc" | "sd";
@@ -180,9 +182,9 @@ export const SOUND_ROLES: SoundRole[] = [
   {
     role: "chat-message",
     description:
-      'Fox\'s Reflector ("shine") activation, snd_se_fox_Special_L01 in snd_group_chara_Fox (ADPCM 22050 Hz, about 2 s ' +
-      "with a long ring-out). Played for a new chat message.",
-    candidates: soundBoth("snd_se_fox_Special_L01"),
+      "Fox's shine as P+ plays it, snd_se_item_Item_Get in snd_group_item (ADPCM 16000 Hz, about 0.12 s; not " +
+      "snd_se_fox_Special_L01, Brawl's 2 s Reflector sound that Wolf shares). Played for a new chat message.",
+    candidates: soundBoth("snd_se_item_Item_Get"),
   },
   {
     role: "invite",

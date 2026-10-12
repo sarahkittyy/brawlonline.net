@@ -121,6 +121,12 @@ describe("game assets", () => {
     expect(next.manifest?.sounds?.invite.durationMs).toBe(1081);
     expect(fills).toHaveLength(1);
 
+    // Sounds the catalog has changed since (needsFill): filled again, still without a full extraction.
+    const outdated = await new GameAssetsManager(cacheDir, resolve, extract, fill, (m) => Boolean(m.sounds)).refresh();
+    expect(outdated.status).toBe(GameAssetsStatus.READY);
+    expect(fills).toHaveLength(2);
+    expect(extractions).toBe(1);
+
     // A failing fill keeps the cached look.
     await writeFile(path.join(cacheDir, "manifest.json"), JSON.stringify(manifest(dir)));
     const failing = await new GameAssetsManager(cacheDir, resolve, extract, async () => {
