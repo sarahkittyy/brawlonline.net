@@ -1,7 +1,7 @@
 export const RulesetsPageMessages = {
   rulesets: () => "Rulesets",
   intro: () =>
-    "Publish your rules for rooms. A published ruleset gets a code and a link; anyone who opens it creates a room with these rules. Published versions never change: editing one publishes a new version with a new code.",
+    "Publish custom rulesets to use in your games! Create one, publish it, and you get a code for it. You can pass this code around to, e.g., standardize rulesets for tournaments. You can't change rulesets once they're published, only publish a new one.",
   newRuleset: () => "New ruleset",
   importFile: () => "Import file",
   drafts: () => "Drafts",

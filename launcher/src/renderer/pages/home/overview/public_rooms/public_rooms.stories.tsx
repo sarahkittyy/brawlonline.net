@@ -1,3 +1,4 @@
+import type { RulesetView } from "@accounts/types";
 import { enqueueSnackbar } from "notistack";
 import React from "react";
 
@@ -8,6 +9,7 @@ import overviewStyles from "../overview.module.css";
 import { PublicRoomsMessages as Messages } from "./public_rooms.messages";
 import type { PublicRoomsState, PublicRoomsViewProps } from "./public_rooms_view";
 import { PublicRoomsView } from "./public_rooms_view";
+import { RulesetBoxView } from "./ruleset_box";
 
 export default {
   title: "pages/Home/PublicRooms",
@@ -102,6 +104,30 @@ export const Empty = () => <Frame state={{ kind: "ready", online: 12, rooms: [] 
 /** A player who has never created a room: "Create room" glows. */
 export const FirstRoom = () => (
   <Frame state={{ kind: "ready", online: 12, rooms: [] }} onCreate={noop} highlightCreate={true} />
+);
+
+/** The ruleset code box beside Create room: empty (its placeholder), and with a ruleset. */
+export const RulesetBoxEmpty = () => (
+  <Frame
+    state={{ kind: "ready", online: 12, rooms: mockRooms }}
+    onCreate={noop}
+    rulesetBox={<RulesetBoxView ruleset={null} busy={false} onSubmit={noop} onClear={noop} />}
+  />
+);
+
+export const RulesetBoxSet = () => (
+  <Frame
+    state={{ kind: "ready", online: 12, rooms: mockRooms }}
+    onCreate={noop}
+    rulesetBox={
+      <RulesetBoxView
+        ruleset={{ code: "QBHFSM", ruleset: { name: "NorCal Weekly", version: 1, by: "bob" } } as RulesetView}
+        busy={false}
+        onSubmit={noop}
+        onClear={noop}
+      />
+    }
+  />
 );
 
 export const Loading = () => <Frame state={{ kind: "loading" }} />;
