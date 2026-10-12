@@ -17,9 +17,8 @@ _Phase 3a of `docs/design/room-rules.md` §8 (2026-10-11): the ruleset format, p
 | `rules` | `MatchRules` | Every field of the room rules: `style`, `stocks`, `timeMinutes`, `damageRatio`, `teamAttack`, `pause`, `itemFrequency` (0-3: None, Low, Medium, High), `itemSwitch` (P+'s ITEM SWITCH, 8 bytes, bit `i` = cell `i` of its screen: `docs/game-code.md` §14, "Item switch layout"; the launcher and the website show the items, never the bytes), `hazards`, `autoLCancel`, `inputAssist` (`room-rules.md` §3). |
 | `stages.starters` | stage ids | `srStageKind` (1-255), at least one. Game 1 of a set, and every game with `stageChoice: "strike"`, strikes from these. |
 | `stages.counterpicks` | stage ids | The extra stages of games 2+: games 2+ pick from starters **and** counterpicks. No stage is in both lists. The launcher offers P+'s 15 legal stages (`PPLUS_LEGAL_STAGES`). |
-| `players` | `"1v1"`, `"2v2"`, `"ffa"` | A room can't start until its slots and teams match. |
-| `bestOf` | `0`, `3`, `5`, `7` | 0: no set, one game at a time. FFA: 0. |
-| `stageChoice` | `"loser-picks"`, `"strike"`, `"random"` | No set only (with a set it is `"loser-picks"` and unused). FFA: not `"strike"`. |
+| `bestOf` | `0`, `3`, `5`, `7` | 0: no set, one game at a time. A ruleset is for any room (no player count since 2026-10-11, the user's decision): the set and striking apply when the room makes two sides (1v1, or two teams of two); other rooms play single games on a random stage from the lists. The launcher drops an older ruleset file's `players` key on import. |
+| `stageChoice` | `"loser-picks"`, `"strike"`, `"random"` | No set only (with a set it is `"loser-picks"` and unused). |
 | `strikes` | e.g. `[1, 2, 1]` | The strike pattern over the starters, turns alternating from the first striker (`[1, 2, 1]`: first strikes 1, the other 2, the first 1). The sum is the starter count minus one: it leaves exactly one stage. Used by sets and `"strike"`; empty otherwise. |
 | `bans` | 0-3 | Games 2+ of a set: the winner bans. Fewer than the stages. 0 without a set. |
 | `dsr` | bool | Games 2+ of a set: the loser can't pick a stage they won on. false without a set. |

@@ -1,5 +1,5 @@
 import type { Ruleset } from "@common/rulesets";
-import { stageName } from "@common/rulesets";
+import { stageName, strikesUsed } from "@common/rulesets";
 import Typography from "@mui/material/Typography";
 
 import { ItemsSection } from "./items_section";
@@ -9,8 +9,7 @@ import styles from "./rulesets_page.module.css";
 const onOff = (b: boolean) => (b ? Messages.on() : Messages.off());
 
 function formatRows(r: Ruleset): [string, string][] {
-  const players = { "1v1": "1v1", "2v2": "2v2", ffa: Messages.ffa() }[r.players] ?? r.players;
-  const rows: [string, string][] = [[Messages.players(), players]];
+  const rows: [string, string][] = [];
   if (r.bestOf > 0) {
     rows.push([Messages.set(), Messages.bestOf(r.bestOf)]);
     rows.push([Messages.game1(), Messages.strikes(r.strikes.join("-"))]);
@@ -86,6 +85,7 @@ export const RulesetDetails = ({ ruleset }: { ruleset: Ruleset }) => {
   return (
     <div className={styles.editorFields} data-testid="ruleset-details">
       <Table title={Messages.format()} rows={formatRows(r)} />
+      {strikesUsed(r) && <p className={styles.itemMeta}>{Messages.anyRoom()}</p>}
       <Table title={Messages.rules()} rows={ruleRows(r)} />
       <ItemsSection frequency={r.rules.itemFrequency} itemSwitch={r.rules.itemSwitch} />
       <Stages

@@ -61,8 +61,6 @@ describe("rulesets", () => {
       [weekly({ stages: { starters: [], counterpicks: [1] } }), "starter"],
       [weekly({ stages: { starters: [1], counterpicks: [1] }, strikes: [] }), "twice"],
       [weekly({ bestOf: 2 }), "bestOf"],
-      [weekly({ players: "ffa" }), "FFA has no sets"],
-      [{ ...defaultRuleset(), players: "ffa", stageChoice: "strike" }, "FFA can't"],
       [weekly({ strikes: [1, 2] }), "exactly one"],
       [weekly({ strikes: [0, 1, 2, 1] }), "at least one"],
       [weekly({ stages: three }), "exactly one"],
@@ -83,7 +81,8 @@ describe("rulesets", () => {
     }
     expect(validateRuleset(weekly({ stages: three, strikes: [1, 1] }))).toBeNull();
     expect(validateRuleset(weekly({ name: "スマブラ カップ" }))).toBeNull();
-    expect(validateRuleset(weekly({ players: "2v2" }))).toBeNull();
+    // Rulesets are for any room: no player count, so a set and striking are always allowed.
+    expect(validateRuleset({ ...defaultRuleset(), stageChoice: "strike", strikes: [1, 2, 1] })).toBeNull();
   });
 
   it("normalizes like the server", () => {
@@ -138,7 +137,10 @@ describe("rulesets", () => {
     expect(() => rulesetFromJson(`{"bestof": 3}`)).toThrow("doesn't know (bestof)");
     expect(() => rulesetFromJson(`{"rules": {"stonks": 3}}`)).toThrow("stonks");
     expect(() => rulesetFromJson(`{"format": 2}`)).toThrow("newer version");
-    expect(() => rulesetFromJson(`{"players": "3v3"}`)).toThrow("bad value");
+    expect(() => rulesetFromJson(`{"stageChoice": "rps"}`)).toThrow("bad value");
+    // An older file's player count is dropped.
+    expect(rulesetFromJson(`{"name": "x", "players": "ffa"}`)).toEqual({ ...defaultRuleset(), name: "x" });
+    expect("players" in rulesetFromJson(`{"players": "1v1"}`)).toBe(false);
     expect(() => rulesetFromJson(`{"rules": {"itemSwitch": [1]}}`)).toThrow("itemSwitch");
   });
 });
