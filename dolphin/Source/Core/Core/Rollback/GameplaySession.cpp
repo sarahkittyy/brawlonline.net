@@ -3495,8 +3495,9 @@ void UpdatePingDisplay()
 // rollback before them (LogPerfVerdict's test) and under SLOW_FPS frames a second. Two checks in a
 // row (10 s; one hitch, e.g. a shader compiling, is not enough) and it is falling behind: its
 // state messages carry its frame rate ("slow"), and every screen shows it once per match, on the
-// screen (OSD, which hidden chat does not hide) and in chat: "Your PC is falling behind" here,
-// "<name>'s PC is falling behind" on the others'. A peer's notice is shown no earlier than this
+// screen (OSD, which hidden chat does not hide) and in chat: "Your PC can't keep up. Expect
+// slowdowns." here, "<name>'s PC can't keep up. Expect slowdowns." on the others'; the log has its
+// frame rate. A peer's notice is shown no earlier than this
 // PC could have found one, so a late state message of the previous match shows nothing.
 constexpr s64 SLOW_CHECK_FRAMES = 300;
 constexpr int SLOW_CHECKS = 2;
@@ -3504,8 +3505,8 @@ constexpr double SLOW_FPS = 58.0;
 
 void ShowSlowNotice(const std::string& who, double fps)
 {
-  const std::string text = fmt::format("{} is falling behind: {:.0f} fps, not 60", who, fps);
-  WARN_LOG_FMT(BRAWLBACK, "gprb: notice: {}", text);
+  const std::string text = fmt::format("{} can't keep up. Expect slowdowns.", who);
+  WARN_LOG_FMT(BRAWLBACK, "gprb: notice: {} ({:.1f} frames a second)", text, fps);
   OSD::AddMessage(text, OSD::Duration::VERY_LONG, OSD::Color::YELLOW);
   Online::Chat::AddNotice(text);
 }

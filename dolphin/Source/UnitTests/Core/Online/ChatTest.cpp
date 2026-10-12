@@ -425,12 +425,12 @@ TEST_F(ChatTest, NoticesAreLocalSystemLines)
   Peer bob(BOB, 2);
   Join({&bob});
   (void)Chat::TakeOutbox();
-  Chat::AddNotice("bob‮'s PC is falling  behind: 54 fps, not 60 ");
+  Chat::AddNotice("bob‮'s PC can't  keep up. Expect slowdowns. ");
   const picojson::array lines = Status()["lines"].get<picojson::array>();
   ASSERT_FALSE(lines.empty());
   const auto& last = lines.back().get<picojson::object>();
   EXPECT_EQ(last.at("kind").get<std::string>(), "system");
-  EXPECT_EQ(last.at("text").get<std::string>(), "bob's PC is falling behind: 54 fps, not 60");
+  EXPECT_EQ(last.at("text").get<std::string>(), "bob's PC can't keep up. Expect slowdowns.");
   EXPECT_TRUE(Chat::TakeOutbox().empty());  // nothing is sent
   Chat::AddNotice("‮ ");                // nothing left after cleaning: no line
   EXPECT_EQ(Status()["lines"].get<picojson::array>().size(), lines.size());
