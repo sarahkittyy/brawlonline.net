@@ -185,3 +185,49 @@ def test_host_edits_the_room_rules_everyone_plays_them(backend: OnlineBackend,
         g.steps("wait 60")
         assert session_rules(g) == want, (g.name, session_rules(g))
         g.shot("07-back-in-the-room")
+
+
+def room_play(g: Game) -> dict[str, Any] | None:
+    return ppom.read_session(g.c, ppom.find_block(g.c)).get("play")
+
+
+def test_host_sets_the_set_length(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                  gpu_backend: str) -> None:
+    """The SET line of P+'s RULES page (room_play.cpp; staging feedback 2026-10-12: left / right did
+    nothing): the host's left / right pick the set's length, sent as room-best-of when the menu
+    closes. The room's ruleset becomes Custom with that bestOf on both machines and the other
+    player's ready is taken back; the other player's left / right change nothing; both ready, a
+    Bo3 set starts. (The whole cycle, No set / 3 / 5 / 7: test_rooms_ui.py
+    test_host_changes_the_set_length.)"""
+    a, b, code = two_in_a_room(backend, dolphin, gpu_backend, "set-length")
+    for g in (a, b):
+        assert room_play(g)["best_of"] == 0, (g.name, room_play(g))
+    b.steps("tap START 8", "wait 40")
+    until_view(a, lambda v: v["slots"][1]["bits"] & ppom.SLOT_READY, "A sees B ready")
+
+    open_rules(a)
+    tap(a, "DDOWN", "DDOWN", "DRIGHT")             # SET: No set -> Best of 3
+    a.shot("08-host-set-length")
+    close_menu(a)
+    for g in (a, b):
+        _wait(lambda g=g: (room_play(g) or {}).get("best_of") == 3, 20, f"{g.name}: Best of 3", interval=0.3)
+        assert room_play(g)["custom"], (g.name, room_play(g))
+    until_view(b, lambda v: not v["slots"][1]["bits"] & ppom.SLOT_READY, "B's ready taken back")
+    a.steps("wait 30")
+    a.shot("09-best-of-3")
+
+    # The other player: left / right on SET change nothing.
+    open_rules(b)
+    tap(b, "DDOWN", "DDOWN", "DRIGHT", "DRIGHT", "DLEFT")
+    b.shot("10-viewer-set-length")
+    close_menu(b)
+    b.steps("wait 90")
+    for g in (a, b):
+        assert room_play(g)["best_of"] == 3, (g.name, room_play(g))
+
+    # Both ready: the set starts, with that length (the next game is its game 1).
+    _all(lambda: a.steps("tap START 8", "wait 30"), lambda: b.steps("tap START 8", "wait 30"))
+    for g in (a, b):
+        _wait(lambda g=g: ((room_play(g) or {}).get("set") or {}).get("game") == 1 and room_play(g)["best_of"] == 3,
+              60, f"{g.name}: a Bo3 set on", interval=0.5)
+    a.shot("11-bo3-set-on")

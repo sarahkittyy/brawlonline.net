@@ -13,6 +13,9 @@ namespace RoomPlay {
 
     // Every frame on the room CSS (also while the rules menu is open).
     void tick(bool inRoom, bool host);
+    // The room's ruleset changed this frame (another ruleset, its set length, custom): the server
+    // took back every ready, so the game takes back its lock-in too (or Dolphin sends it again).
+    bool changedNow();
     // RULES page lines 2 and 4 (room_rules.cpp's input filter): the input left for the page.
     u32 rulesInput(u32 line, u32 bits, bool host);
     void onRulesets(const PPOM::Response& r);   // a CMD_RULESETS answer

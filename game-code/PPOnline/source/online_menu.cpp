@@ -2111,7 +2111,8 @@ namespace OnlineMenu {
         RulesButton::tick(in, waiting && se.rules.valid);
         // The ruleset and the set on the RULES page's RULESET / SET lines (room_play.cpp).
         RoomPlay::tick(in, host);
-        if (RoomRules::changedNow() && waiting && roomLockedForNext()) unlock();   // rules.md #5
+        // rules.md #5: a change of the rules or of the ruleset (its set length) took back every ready
+        if ((RoomRules::changedNow() || RoomPlay::changedNow()) && waiting && roomLockedForNext()) unlock();
         if (rulesOpen) {
             s_headerPress = 0;
             s.roomZHeld = 0;

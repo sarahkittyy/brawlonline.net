@@ -230,6 +230,22 @@ class RoomSim:
                 for m in r.members:
                     if m:
                         m.ready = False
+        elif op == 11 and r:   # ROOM_BEST_OF (v6): the set's length; the rules become Custom
+            if not host:
+                self.set_error("Only the host can do that.")
+            elif r.set_on and not r.set_flags & 4:
+                self.set_error("Not during a set.")
+            elif arg not in (0, 3, 5, 7):
+                self.set_error("Invalid set length.")
+            else:
+                r.best_of, r.custom, r.stage_choice = arg, True, 0
+                if r.ruleset_code or not r.ruleset_name.startswith("Custom"):
+                    r.ruleset_name = "Custom" if r.ruleset_name == "P+ default" else f"Custom ({r.ruleset_name})"
+                r.ruleset_code = ""
+                r.set_on, r.set_game, r.score, r.set_flags, r.side_slots = False, 1, [0, 0], 0, [0, 0]
+                for m in r.members:
+                    if m:
+                        m.ready = False
         elif op == 8 and r:   # ROOM_RULES (v6): the payload's Rules from +4; every ready taken back
             if host:
                 r.rules = bytes(p[4:4 + ppom.RULES_SIZE])

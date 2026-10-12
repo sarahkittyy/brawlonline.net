@@ -413,7 +413,7 @@ def write_session(c: HarnessClient, b: Block, *, game: int, stage: int, players:
 CMD_ROOM = 0xD0
 CMD_RULESETS = 0xD1   # v6: the Ruleset line's list (RulesetList)
 ROOM_OPS = {"poll": 0, "create": 1, "join": 2, "leave": 3, "slot": 4, "teams": 5, "public": 6,
-            "team": 7, "rules": 8, "set": 9, "ruleset": 10}
+            "team": 7, "rules": 8, "set": 9, "ruleset": 10, "best_of": 11}
 L_SCREEN, L_ROOM_JOIN, L_ROOM = 0x36, 0x37, 0x38
 # The launcher's Direct invite (still v5): counter, the code's letters (4, NUL-padded), its number.
 L_DIRECT_JOIN, L_DIRECT_PREFIX, L_DIRECT_NUMBER = 0x39, 0x3A, 0x3E

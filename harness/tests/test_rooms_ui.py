@@ -711,6 +711,82 @@ def test_room_ruleset_and_set(play_game: Game) -> None:
     g.shot("12-2v2-stars")
 
 
+def test_host_changes_the_set_length(play_game: Game) -> None:
+    """The SET line (staging feedback 2026-10-12: left / right did nothing): the host's left / right
+    pick No set / Best of 3 / 5 / 7, sent as ROOM_BEST_OF when the menu closes; the room's rules
+    become Custom; a viewer can't change it, nor the host while a set is on."""
+    g = play_game
+    g.c.game_bridge_config(enabled=False)
+    create_room(g)
+    sim = g.sim
+    sim.add_player(1, "alice")
+    g.wait(40)
+    v = RoomPlayView(g)
+    open_rules_line(g, 2)
+    assert v.read()["set"] == "No set"
+    g.tap("DRIGHT", 4)
+    g.wait(10)
+    assert v.read()["set"] == "Best of 3", v.read()
+    g.tap("DRIGHT", 4)
+    g.wait(10)
+    assert v.read()["set"] == "Best of 5"
+    g.shot("13-set-length")
+    g.tap("DLEFT", 4)
+    g.wait(10)
+    assert v.read()["set"] == "Best of 3"
+    assert not sim.room_ops("best_of"), "sent before the menu closed"
+    close_rules(g)
+    g.wait(20)
+    ops = sim.room_ops("best_of")
+    assert len(ops) == 1 and ops[0][1] == 3, ops
+    assert sim.room.best_of == 3 and sim.room.custom
+    g.hand_to(20.0, 12.0, tol=0.5)
+    g.wait(10)
+    assert v.line() == "Ruleset: Custom   Best of 3", v.line()
+    g.shot("14-best-of-3")
+    # Around to No set (3 -> 5 -> 7 -> none).
+    open_rules_line(g, 2)
+    assert v.read()["set"] == "Best of 3"
+    for want in ("Best of 5", "Best of 7", "No set"):
+        g.tap("DRIGHT", 4)
+        g.wait(10)
+        assert v.read()["set"] == want, v.read()
+    close_rules(g)
+    g.wait(20)
+    assert sim.room_ops("best_of")[-1][1] == 0 and sim.room.best_of == 0
+    # Unchanged: nothing is sent.
+    open_rules_line(g, 2)
+    g.tap("DRIGHT", 4)
+    g.tap("DLEFT", 4)
+    g.wait(10)
+    close_rules(g)
+    g.wait(20)
+    assert len(sim.room_ops("best_of")) == 2
+    # During a set: locked.
+    r = sim.room
+    r.best_of, r.set_on, r.score = 3, True, [1, 0]
+    g.wait(30)
+    open_rules_line(g, 2)
+    g.tap("DRIGHT", 4)
+    g.wait(10)
+    assert v.read()["set"] == "Bo3 1-0"
+    close_rules(g)
+    g.wait(20)
+    assert len(sim.room_ops("best_of")) == 2
+    r.set_on, r.score = False, [0, 0]
+    # Not the host: read-only.
+    r.host = 1
+    g.wait(30)
+    open_rules_line(g, 2)
+    g.tap("DRIGHT", 4)
+    g.wait(10)
+    assert v.read()["set"] == "Best of 3"
+    g.shot("15-viewer-set-length")
+    close_rules(g)
+    g.wait(20)
+    assert len(sim.room_ops("best_of")) == 2
+
+
 # The keypad's letter keys by (row, column), as test_online_game.ALPHA_KEYS (room-code mode takes
 # every letter they show); (1, 0) is the symbols key.
 ROOM_KEYS = {(1, 1): "ABC", (1, 2): "DEF", (2, 0): "GHI", (2, 1): "JKL", (2, 2): "MNO", (3, 0): "PQRS",

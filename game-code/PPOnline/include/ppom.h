@@ -177,6 +177,8 @@ namespace PPOM {
         ROOM_RULES = 8,     // v6, host: RoomRulesRequest (the room's rules as the host edited them)
         ROOM_SET = 9,       // v6, host: arg = 1 resume / 0 restart the room's paused set
         ROOM_RULESET = 10,  // v6, host: code = a ruleset code (6 letters), empty: P+'s default
+        ROOM_BEST_OF = 11,  // v6, host: arg = the set's length, 0 (no set) / 3 / 5 / 7 (the room's
+                            // rules become Custom); not while a set is on
     };
 
     // CMD_ROOM request payload.

@@ -16,7 +16,10 @@
 //     (code_entry.cpp). The ruleset is locked during a set (rules.md §2).
 //   - SET: the STOCK CONTROL row (MenMainIcon0124 at +0x50, line 2; handicap is left out,
 //     decision 19): label MenMainRule00font.04, value strip MenMainRule03Sel02 (I4 480x40). It
-//     shows the set ("No set", "Best of 3", "Bo3 1-0", "Paused 1-0"). A set paused because a player
+//     shows the set ("No set", "Best of 3", "Bo3 1-0", "Paused 1-0"). With no set on (or after one
+//     finished) the host changes its length there with left / right (No set, Best of 3, 5, 7), as
+//     P+'s value lines change; it is sent as ROOM_BEST_OF when the menu closes (the server makes the
+//     room's rules Custom and takes back every ready). A set paused because a player
 //     left waits for them (rules.md §1.1 A: it resumes by itself when they are back in their held
 //     slot), with nothing to pick. Only a set paused because the machines' results differed, with
 //     everyone there (SET_CAN_RESUME), gives the host a choice with left / right: Replay game
@@ -242,6 +245,9 @@ namespace RoomPlay {
         bool keypad;         // "Enter code": open the keypad once the menu has closed
         bool wasOpen;
         bool host;
+        int bestOf;          // SET: the length the host picked in the menu (-1: none), sent on close
+        u32 playKey;         // the ruleset as last seen (changedNow), 0 none
+        bool changed;
     } s;
 
     static const PPOM::RoomPlay& play() { return PPOM::g_block.session.play; }
@@ -299,6 +305,10 @@ namespace RoomPlay {
     static bool setPaused() { return play().setOn && (play().setFlags & PPOM::SET_PAUSED); }
     // Paused because the results differed, everyone there: the host replays the game or ends the set.
     static bool hostChoice() { return setPaused() && (play().setFlags & PPOM::SET_CAN_RESUME) != 0; }
+    // The set's length can change while no set is on, or once it is finished (the next all-ready
+    // starts a new one).
+    static bool lengthEditable() { return !play().setOn || (play().setFlags & PPOM::SET_FINISHED); }
+    static const u8 LENGTHS[4] = {0, 3, 5, 7};
 
     static void post(u8 op, u8 arg, const char* code)
     {
@@ -317,6 +327,7 @@ namespace RoomPlay {
 
     static void pickRuleset(int i)
     {
+        s.bestOf = -1;   // a ruleset brings its own set length
         if (i > listCount()) {
             s.keypad = true;                   // Enter code: the keypad once the menu is gone
         } else {
@@ -356,8 +367,20 @@ namespace RoomPlay {
         }
         if (line == 2) {
             if (!(bits & (IN_SIDE | IN_A))) return keep;
+            if (!hostChoice() && lengthEditable()) {
+                // The set's length: left / right through No set, Best of 3, 5, 7 (A does nothing)
+                if (bits & IN_SIDE) {
+                    int cur = s.bestOf >= 0 ? s.bestOf : play().bestOf, k = 0;
+                    while (k < 4 && LENGTHS[k] != cur) k++;
+                    if (k == 4) k = 0;
+                    k = (k + ((bits & IN_LEFT) ? 3 : 1)) % 4;
+                    s.bestOf = LENGTHS[k];
+                    playSE(SE_CURSOR);
+                }
+                return keep;
+            }
             if (!hostChoice()) {
-                if (setPaused()) playSE(SE_ERROR);   // waiting for a player: nothing to pick
+                playSE(SE_ERROR);   // a set on, or waiting for a player: nothing to change
                 return keep;
             }
             if (bits & IN_SIDE) {
@@ -377,7 +400,11 @@ namespace RoomPlay {
     static void setText(char* out, bool host)
     {
         const PPOM::RoomPlay& p = play();
-        if (!p.bestOf) {
+        if (host && s.bestOf >= 0 && lengthEditable()) {
+            // the length the host is picking (sent when the menu closes)
+            if (s.bestOf) sprintf(out, "Best of %d", s.bestOf);
+            else strcpy(out, "No set");
+        } else if (!p.bestOf) {
             strcpy(out, "No set");
         } else if (!p.setOn) {
             sprintf(out, "Best of %d", p.bestOf);
@@ -391,11 +418,33 @@ namespace RoomPlay {
         }
     }
 
+    // What the room plays, as one number: a change of any of it took back every ready.
+    static u32 playKey()
+    {
+        const PPOM::RoomPlay& p = play();
+        if (!p.valid) return 0;
+        u32 h = 0x80000000u | ((u32)p.bestOf << 16) | ((u32)p.stageChoice << 8) | p.custom;
+        for (int k = 0; k < 8 && p.code[k]; k++) h = h * 31 + (u8)p.code[k];
+        for (int k = 0; k < 32 && p.name[k]; k++) h = h * 31 + (u8)p.name[k];
+        return h | 1u;
+    }
+
+    bool changedNow() { return s.changed; }
+
     void tick(bool inRoom, bool host)
     {
         s.host = host;
+        u32 key = inRoom ? playKey() : 0;
+        s.changed = key && s.playKey && key != s.playKey;
+        s.playKey = key;
         u8* rt = inRoom && play().valid ? rulesTask() : NULL;
         if (!rt) {
+            // The menu closed: the set length the host picked goes to the room (ROOM_BEST_OF).
+            if (s.wasOpen && s.bestOf >= 0 && host && inRoom && play().valid && s.bestOf != play().bestOf &&
+                lengthEditable()) {
+                post(PPOM::ROOM_BEST_OF, (u8)s.bestOf, NULL);
+            }
+            s.bestOf = -1;
             s.browse = -1;
             s.asked = false;
             s.wasOpen = false;
@@ -406,6 +455,7 @@ namespace RoomPlay {
             s.wasOpen = true;
             s.browse = -1;
             s.setChoice = 0;
+            s.bestOf = -1;
         }
         // The list: asked for when the host opens the menu, and again while Dolphin loads it.
         if (host && (!s.asked || (s.listWait > 0 && --s.listWait == 0))) {
@@ -477,7 +527,7 @@ namespace RoomPlay {
         if (!s.wasOpen || !rulesTask()) return NULL;   // the rules menu, opened in a room
         // P+'s descriptions for the values these rows keep: stock control OFF, stage choice CHOOSE
         if (Online::msbinLineContains(msbin, (int)line, "same stock count")) {
-            return s.host ? "The set. Results differed: left/right and A, replay or end it."
+            return s.host ? "Left/right: the set's length. Results differed: replay or end it."
                           : "The room's set and its score.";
         }
         if (Online::msbinLineContains(msbin, (int)line, "complete freedom")) {
@@ -489,6 +539,9 @@ namespace RoomPlay {
 
     void reset()
     {
+        s.playKey = 0;
+        s.changed = false;
+        s.bestOf = -1;
         s.browse = -1;
         s.asked = false;
         s.wasOpen = false;
