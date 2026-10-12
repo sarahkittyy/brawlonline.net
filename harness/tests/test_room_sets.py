@@ -223,6 +223,11 @@ def test_room_set_quit_and_runback(backend: OnlineBackend, dolphin: Callable[...
     for g in players:
         _wait(lambda g=g: (lambda st: st if st and st["game"] == 1 and st["score"] == [0, 0] else None)(rooms(g).get("set")),
               30, f"{g.name}: the set still at game 1, 0-0")
+    # The server took both reports of the quit game as void (room-result winnerSide 253; staging
+    # 2026-10-12: mm's parser refused it as an invalid request, a777ad34) and voided it.
+    _wait(lambda: "Voided" in backend.log_text("mm"), 30, "mm: game 1 voided")
+    for g in players:
+        assert "Invalid matchmaking request" not in g.inst.log.read(), g.name
     # Both stay on the CSS, unlocked, until each presses START; B's alone starts nothing.
     a.steps("wait 180")
     for g in players:
@@ -608,3 +613,48 @@ def test_room_set_ended_between_games(backend: OnlineBackend, dolphin: Callable[
     online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "the new set's game 1")
     for g in players:
         until_setup(g, lambda v: v["active"] and v["game"] == 1 and sorted(v["selectable"]) == STARTERS, "the starters")
+
+
+@pytest.mark.slow
+def test_room_set_characters_between_games(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                           gpu_backend: str) -> None:
+    """After a set game (staging, 2026-10-12): both players are on the CSS inside the set's
+    session, and their panels show them choosing or ready, not "Brawling" (the room says in game
+    for the whole session). The loser changes character during the winner's turn (B calls the
+    token back, a new one placed), sees the winner's character once the winner locks in, and then
+    locks in; game 2 starts with the loser's new character."""
+    a, b, code = bo3_room(backend, dolphin, gpu_backend, "chars")
+    players = [a, b]
+    _all(lambda: a.steps("tap START 8", "wait 30"), lambda: b.steps("tap START 8", "wait 30"))
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "game 1: the stage select")
+    play_steps(players, 1)
+    online_set.play_game(players, 1, winner=a)
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 180, "game 2: the stage select")
+    play_steps(players, 2)
+    online_set.wait(lambda: all(online_set.scene(g.c) == CSS for g in players), 120, "game 2: the CSS")
+    a.steps("wait 30")
+    for g, other in ((a, 1), (b, 0)):
+        bits = room_view(g)["slots"][other]["bits"]
+        assert not bits & ppom.SLOT_IN_GAME, (g.name, room_view(g)["slots"])
+    assert setup_view(b)["text"].startswith("Opponent is choosing"), setup_view(b)
+    b.shot("01-not-brawling")
+    # The loser's new character, during the winner's turn.
+    before = rooms(b)["lock"]["char_kind"]
+    b.steps("tap B 8", "wait 30")
+    placed = B.css_pick_character(b.c, 0, 0x0A)
+    assert placed.placed and placed.character == 0x0A, placed
+    # The winner locks in: the loser's panel for them shows it.
+    a.steps("tap START 8", "wait 60")
+    v = until_setup(b, lambda v: v["my_turn"] and v["may_lock"], "the loser's turn")
+    assert v["text"].startswith("Opponent picked"), v
+    _wait(lambda: room_view(b)["slots"][0]["bits"] & ppom.SLOT_READY and room_view(b)["slots"][0]["char"] != 0xFF,
+          10, "B sees A ready with a character")
+    b.shot("02-winner-ready")
+    b.steps("tap START 8", "wait 30")
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
+                    "game 2 running")
+    # The loser (port 1) plays the new character, on both machines.
+    after = rooms(b)["lock"]["char_kind"]
+    setups = [B.read_match_setup(g.c.read_mem) for g in players]
+    assert setups[0] == setups[1], setups
+    assert after != before and setups[0].players[1].character == after, (before, after, setups[0])
