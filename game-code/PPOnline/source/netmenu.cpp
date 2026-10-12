@@ -478,9 +478,18 @@ namespace NetMenu {
 
     void setReturnButton(int b) { s_returnButton = b; }
 
+    // muProcTop's update (vtable slot 5, sora_menu_main text+0x14FAC; vtable .data+0x1E10, name
+    // "muProcTop"): the main menu's top page is one the launcher's requests can leave from.
+    typedef int (*PageUpdateFn)(u8*);
+    static PageUpdateFn s_origTopUpdate = NULL;
+    static int topUpdate(u8* page)
+    {
+        OnlineMenu::topPageRunning(page);
+        return s_origTopUpdate(page);
+    }
+
     // muProcWifiAnybody's update (vtable slot 5, sora_menu_main text+0x2E794): the WITH FRIENDS
     // page is one the launcher's join can leave from (OnlineMenu::launcherJoin).
-    typedef int (*PageUpdateFn)(u8*);
     static PageUpdateFn s_origAnybodyUpdate = NULL;
     static int anybodyUpdate(u8* page)
     {
@@ -790,6 +799,7 @@ namespace NetMenu {
         api->syInlineHookRel(0x0002EB70, reinterpret_cast<void*>(anybodyDecision), 2);
         api->syInlineHookRel(0x0002E760, reinterpret_cast<void*>(friendsTitle), 2);
         api->syReplaceFuncRel(0x0002E794, reinterpret_cast<void*>(anybodyUpdate), (void**)&s_origAnybodyUpdate, 2);
+        api->syReplaceFuncRel(0x00014FAC, reinterpret_cast<void*>(topUpdate), (void**)&s_origTopUpdate, 2);
         // the four `stw r3,0x66C(r29)` after WifiCnctWnd's create (text+0x38530)
         api->syInlineHookRel(0x00015288, reinterpret_cast<void*>(skipConnectWindow), 2);
         api->syInlineHookRel(0x00015460, reinterpret_cast<void*>(skipConnectWindow), 2);

@@ -2398,13 +2398,23 @@ namespace OnlineMenu {
         PPOM::g_block.local.screen = screen;
     }
 
-    // A menu page the launcher's join can leave from (ONLINE, WITH FRIENDS, WITH ANYONE): its
-    // update runs (netmenu.cpp / anyone_menu.cpp report it every frame).
+    // A menu page the launcher's join can leave from (the top page, ONLINE, WITH FRIENDS, WITH
+    // ANYONE): its update runs (netmenu.cpp / anyone_menu.cpp report it every frame).
     void menuPageRunning(u8* page)
     {
         s_jumpFrame = PPOM::g_block.debug.frames;
         s_jumpPage = page;
         NetMenu::ensureWifiTask();   // the boot to the ONLINE page opens no connect window
+    }
+
+    // The main menu's top page (GROUP, SOLO, PLAY ONLINE, ...; netmenu.cpp topUpdate) is one too:
+    // a player who backed out of the ONLINE page after a set was told "Finish your current game
+    // first." (prod, 2026-10-12). Its Wi-Fi task is made on the way out (decideOnlineCss), as the
+    // connect window makes it on PLAY ONLINE, not while the player may still go offline.
+    void topPageRunning(u8* page)
+    {
+        s_jumpFrame = PPOM::g_block.debug.frames;
+        s_jumpPage = page;
     }
 
     // A menu page the launcher's requests can leave from is running (menuPageRunning).
@@ -2429,6 +2439,7 @@ namespace OnlineMenu {
             m = *(u32*)(m + 4);
         }
         if (!rule) return false;
+        NetMenu::ensureWifiTask();   // from the top page none has been made yet
         typedef void (*DecideFn)(u8*, int, int);
         ((DecideFn)(rule + 0x1AE0))(s_jumpPage, 0x1E, 0);
         playSE(1);

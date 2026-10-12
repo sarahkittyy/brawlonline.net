@@ -120,7 +120,7 @@ A request the server refuses changes nothing and turns the line red with the ser
 | Value | Name | When | Launcher join |
 |---|---|---|---|
 | 0 | `SCREEN_UNKNOWN` | not written yet (boot), or a v4 plugin | kept until the game reports a screen |
-| 1 | `SCREEN_MENUS` | main menu, the online pages, any menu page the game can jump to the room CSS from | accepted |
+| 1 | `SCREEN_MENUS` | the main menu's top page and the online pages (ONLINE, WITH FRIENDS, WITH ANYONE): the menu pages the game can jump to the room CSS from. Other pages of the main menu (VERSUS', SOLO's, OPTIONS ...) are `SCREEN_OTHER` | accepted |
 | 2 | `SCREEN_ONLINE_CSS` | an online CSS (Direct/Unranked/Ranked), not searching | accepted |
 | 3 | `SCREEN_ROOM` | the room CSS (in a room or not) | accepted (leaves the old room) |
 | 4 | `SCREEN_ONLINE_BUSY` | an online CSS while searching, connecting, or connected to an opponent (a Direct/Ranked set) | refused, "Finish your current game first." |
@@ -161,7 +161,7 @@ Dolphin also counts as busy whatever it knows itself (a search, a session, a roo
 **Launcher click.** Dolphin reads `join-room.json`. Busy (`screen` 4-7, or a search/session/room start): refused, nothing changes in the game. Idle: Dolphin sends the join itself (leaving any old room), bumps `Local.roomJoin`, and the game goes to the room CSS from wherever it is (menus or an idle online CSS; already on the room CSS: stay). While the game boots (until `screen` first reads 1-3 after a boot), a request, also one already there when Dolphin starts, is answered `accepted` at once and kept (at most 3 minutes from its `createdAt`), and nothing the game reports meanwhile counts as busy; then Dolphin joins and bumps `roomJoin`. The game should remember the last `roomJoin` it acted on (start from the value it finds at boot: Dolphin only bumps it later).
 
 **Launcher Direct invite.** Dolphin reads a `join-room.json` of kind `direct` (validated: `connectCode` as the server's codes) and applies the same rules (busy: refused; booting: accepted at once and held until `screen` first reads 1-3). Accepted: Dolphin leaves any room (as `ROOM_LEAVE`), writes the code into `directPrefix`/`directNumber` and bumps `directJoin`. The game (`online_menu.cpp` `launcherDirect`), remembering the last `directJoin` it acted on as for `roomJoin`:
-- on a menu page it can jump from (ONLINE, WITH FRIENDS, WITH ANYONE): the menus' decision 0x1E (as the room jump), the CSS entered as Direct's (`MODE_DIRECT`, back to WITH FRIENDS on Direct 1v1);
+- on a menu page it can jump from (the main menu's top page, ONLINE, WITH FRIENDS, WITH ANYONE): the menus' decision 0x1E (as the room jump), the CSS entered as Direct's (`MODE_DIRECT`, back to WITH FRIENDS on Direct 1v1);
 - on an idle online CSS of another mode, or a room's CSS: the CSS built again as Direct's (a room's records 1-3 put back first, `RoomCss::releaseRecords`), the character kept;
 - on an idle Direct CSS: only the code changes;
 - with the keypad open it waits until the keypad closes; on an online CSS that is searching or connected (the game started a search in the moment between Dolphin's check and the frame) it is dropped.

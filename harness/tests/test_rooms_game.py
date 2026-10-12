@@ -943,6 +943,41 @@ def test_room_launcher_create(backend: OnlineBackend, dolphin: Callable[..., Dol
     a.shot("03-created-from-the-direct-css")
 
 
+def test_room_launcher_create_from_the_top_page(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                                gpu_backend: str) -> None:
+    """The launcher's Create room from the main menu's top page (GROUP, SOLO, PLAY ONLINE, ...):
+    the page reports itself as menus and the game goes from it to its new room's CSS (prod,
+    2026-10-12: backed out of the ONLINE page after a Ranked set, the launcher said "Finish your
+    current game first.")."""
+    test = "launcher-create-top"
+    ua = backend.create_user("rctop", "RCTP")
+    a = _boot(dolphin, "room-ct", backend, ua, gpu_backend, test, "gameplay", artifacts=ART)
+    a.to_main_menu()
+    a.steps("tap B", "wait 60")
+    a.shot("00-top-page")
+    assert a.scene() == "muMenuMain"
+    assert room_view(a)["screen"] == ppom.SCREENS["menus"], room_view(a)
+    c0 = room_view(a)["create"]
+
+    rid = write_create(a)
+    assert launcher_answer(a, rid)["result"] == "accepted"
+    _wait(lambda: a.scene() == CSS, 60, "A on the room's CSS")
+    v = until_view(a, lambda v: v["flags"] & ppom.RF_IN and v["screen"] == ppom.SCREENS["room"], "A in its room",
+                   timeout=60)
+    assert v["host"] == v["local_port"] == 0 and v["flags"] & ppom.RF_PUBLIC and v["create"] == (c0 + 1) & 0xFF, v
+    assert menu_state(a) == 0x10 | 1, hex(menu_state(a))   # the room CSS entered as Create Room's
+    a.steps("wait 90")
+    a.shot("01-created-from-the-top-page")
+    # The CSS is whole (the Wi-Fi task was made on the way): a character can be picked.
+    pick(a)
+    a.shot("02-picked")
+
+    # Back out (hold B): WITH FRIENDS on Create Room, as after WITH FRIENDS > Create Room.
+    a.steps("hold B 120", "until muMenuMain 600", "wait 90")
+    a.shot("03-back-on-create-room")
+    _wait(lambda: not room_view(a)["flags"] & ppom.RF_IN, 30, "A out of the room")
+
+
 def test_room_launcher_create_before_the_game_starts(backend: OnlineBackend,
                                                      dolphin: Callable[..., DolphinInstance],
                                                      gpu_backend: str) -> None:
