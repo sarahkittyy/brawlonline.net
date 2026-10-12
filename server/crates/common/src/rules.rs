@@ -129,9 +129,13 @@ pub const MAX_BANS: u8 = 3;
 /// what the launcher's ruleset editor offers.
 pub const PPLUS_LEGAL_STAGES: [u16; 15] =
     [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x09, 0x0C, 0x0D, 0x1C, 0x1F, 0x21, 0x23, 0x2D, 0x2E];
-/// Ranked's starters (`config/rulesets.json`): Battlefield, Final Destination, Smashville,
-/// Dream Land, Pokémon Stadium 2. The default ruleset's starters.
-pub const PPLUS_STARTERS: [u16; 5] = [0x01, 0x02, 0x21, 0x2D, 0x2E];
+/// Ranked's starters (`config/rulesets.json`; the user's list, 2026-10-12): Battlefield, Luigi's
+/// Mansion, Temple of Time, Smashville, Pokémon Stadium 2. The default ruleset's starters.
+pub const PPLUS_STARTERS: [u16; 5] = [0x01, 0x04, 0x09, 0x21, 0x2E];
+/// Ranked's counterpicks, the stages games 2+ add to the starters: Frigate Husk, Fountain of
+/// Dreams, Green Hill Zone, Dream Land. The default ruleset's counterpicks. Unranked and Direct
+/// draw their random stages from the starters and these.
+pub const PPLUS_COUNTERPICKS: [u16; 4] = [0x0C, 0x1F, 0x23, 0x2D];
 
 /// A key the format had until 2026-10-11 and no longer has: `players` (1v1 / 2v2 / ffa), when a
 /// ruleset was for one player count. Every ruleset works in any room now (room-rules.md decision
@@ -184,7 +188,7 @@ impl Default for StageLists {
     fn default() -> Self {
         StageLists {
             starters: PPLUS_STARTERS.to_vec(),
-            counterpicks: PPLUS_LEGAL_STAGES.iter().copied().filter(|s| !PPLUS_STARTERS.contains(s)).collect(),
+            counterpicks: PPLUS_COUNTERPICKS.to_vec(),
         }
     }
 }
@@ -233,8 +237,8 @@ pub struct Ruleset {
 }
 
 impl Default for Ruleset {
-    /// P+'s defaults as rooms play them today: P+'s competitive rules, the legal stages (Ranked's
-    /// starters), no set, loser picks.
+    /// P+'s defaults as rooms play them today: P+'s competitive rules, Ranked's starters and
+    /// counterpicks, no set, loser picks.
     fn default() -> Self {
         Ruleset {
             format: RULESET_FORMAT,
@@ -482,6 +486,10 @@ mod tests {
     fn weekly() -> Ruleset {
         Ruleset {
             name: "NorCal Weekly".into(),
+            stages: StageLists {
+                starters: vec![0x01, 0x02, 0x21, 0x2D, 0x2E],
+                counterpicks: vec![0x03, 0x04, 0x05, 0x06, 0x09, 0x0C, 0x0D, 0x1C, 0x1F, 0x23],
+            },
             best_of: 3,
             strikes: vec![1, 2, 1],
             bans: 2,
@@ -496,10 +504,12 @@ mod tests {
         r.validate().unwrap();
         assert_eq!(r.rules, MatchRules::default());
         assert_eq!((r.best_of, r.stage_choice), (0, StageChoice::LoserPicks));
-        let mut all: Vec<u16> = r.stages.all().collect();
-        all.sort();
-        assert_eq!(all, PPLUS_LEGAL_STAGES);
         assert_eq!(r.stages.starters, PPLUS_STARTERS);
+        assert_eq!(r.stages.counterpicks, PPLUS_COUNTERPICKS);
+        // Every one of them is a legal stage (the editor's first tiles).
+        assert!(r.stages.all().all(|s| PPLUS_LEGAL_STAGES.contains(&s)));
+        assert_eq!(serde_json::to_value(&r.stages).unwrap()["starters"], serde_json::json!([1, 4, 9, 33, 46]));
+        assert_eq!(serde_json::to_value(&r.stages).unwrap()["counterpicks"], serde_json::json!([12, 31, 35, 45]));
         weekly().validate().unwrap();
     }
 

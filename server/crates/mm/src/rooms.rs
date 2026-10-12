@@ -1642,7 +1642,7 @@ mod tests {
         let done = t.book.ticket(102, addr(2), String::new(), info(2).uid, &code).unwrap();
         let set = done.matched[0].1.set.clone().expect("the set ticket");
         assert_eq!((set.best_of, set.game, set.sides, set.wins), (3, 1, [0, 1], [0, 0]));
-        assert_eq!(set.counterpicks.len(), 15);
+        assert_eq!(set.counterpicks.len(), 9);
         // Rules, slots and Teams wait for the set.
         let mut out = vec![];
         t.book.announce(&code, &mut out);
@@ -1912,7 +1912,7 @@ mod tests {
         let out = join(&mut t, 2, &code);
         let s = last_state(&out, 1);
         assert_eq!(s["ruleset"]["stageChoice"], "loser-picks");
-        assert_eq!(s["ruleset"]["stages"]["starters"], serde_json::json!([1, 2, 0x21, 0x2D, 0x2E]));
+        assert_eq!(s["ruleset"]["stages"]["starters"], serde_json::json!([1, 4, 9, 0x21, 0x2E]));
         assert_eq!(start(&mut t, &code, 100).pick_from_stages, None);
         for n in 1..=2 {
             t.req(n, RoomRequest::Back);

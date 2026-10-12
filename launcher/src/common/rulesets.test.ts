@@ -29,8 +29,8 @@ describe("rulesets", () => {
     expect(validateRuleset(r)).toBeNull();
     // As `Ruleset::default()` serializes (rules.rs canonical JSON test).
     expect(r.stages).toEqual({
-      starters: [1, 2, 33, 45, 46],
-      counterpicks: [3, 4, 5, 6, 9, 12, 13, 28, 31, 35],
+      starters: [1, 4, 9, 33, 46],
+      counterpicks: [12, 31, 35, 45],
     });
     expect(r.rules).toEqual({
       style: "stock",

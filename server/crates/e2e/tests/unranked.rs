@@ -9,9 +9,9 @@ use mm::engine::EngineConfig;
 use mm::ruleset::Rulesets;
 use mmclient::{SearchOptions, SearchResult, Status};
 
-/// P+ v3.2's legal stages (srStageKind), the Unranked list of `config/rulesets.json`.
-const PPLUS_LEGAL: [u16; 15] =
-    [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x09, 0x0C, 0x0D, 0x1C, 0x1F, 0x21, 0x23, 0x2D, 0x2E];
+/// The Unranked list of `config/rulesets.json` (srStageKind): the default ruleset's starters and
+/// counterpicks (the user's nine, 2026-10-12).
+const UNRANKED_STAGES: [u16; 9] = [0x01, 0x04, 0x09, 0x0C, 0x1F, 0x21, 0x23, 0x2D, 0x2E];
 
 async fn search(opts: SearchOptions) -> SearchResult {
     tokio::task::spawn_blocking(move || mmclient::search(&opts)).await.unwrap().unwrap()
@@ -55,7 +55,7 @@ async fn two_strangers_meet_in_unranked() {
     assert!(match_id.starts_with("mode.unranked-"), "{match_id}");
     assert_ne!(ta.is_host, tb.is_host, "exactly one host");
     // The stage list of the Unranked ruleset, in the response as Slippi's server sends it.
-    assert_eq!(ta.stages.as_deref(), Some(&PPLUS_LEGAL[..]));
+    assert_eq!(ta.stages.as_deref(), Some(&UNRANKED_STAGES[..]));
     assert_eq!(tb.stages, ta.stages);
     assert_eq!((ta.items, tb.items), (Some(0), Some(0)));
     assert_eq!(opponent_uid(&ra), u[1].uid);
@@ -87,7 +87,7 @@ async fn two_strangers_meet_in_unranked() {
     }
     let (mode, stages, region) = row.expect("match recorded");
     assert_eq!(mode, 1);
-    assert_eq!(stages, PPLUS_LEGAL.iter().map(|s| *s as i16).collect::<Vec<_>>());
+    assert_eq!(stages, UNRANKED_STAGES.iter().map(|s| *s as i16).collect::<Vec<_>>());
     assert_eq!(region.as_deref(), Some(mm::region::DEFAULT_REGION));
     stack.shutdown().await;
 }

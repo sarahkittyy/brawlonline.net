@@ -42,8 +42,9 @@ pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 
 DEFAULT_RATING = 1400.0   # common::ranked::DEFAULT_RATING
 FIRST_SET_SWING = 100.0   # K_START / 2: a first set between two players at the same rating
-# server/config/rulesets.json ranked.starters: Battlefield, FD, Smashville, Dream Land, PS2.
-STARTERS = [0x01, 0x02, 0x21, 0x2D, 0x2E]
+# server/config/rulesets.json ranked.starters: Battlefield, Luigi's Mansion, Temple of Time,
+# Smashville, PS2.
+STARTERS = [0x01, 0x04, 0x09, 0x21, 0x2E]
 SSS = "scSelStage"
 
 
@@ -139,7 +140,7 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
     join.steps("wait 30", "tap A 8", "wait 40")
     assert online_set.scene(join.c) == SSS, online_set.scene(join.c)
     assert sorted(_view(join)["selectable"]) == STARTERS and _view(join)["my_turn"] is False
-    _strike(host, 0x02, join)
+    _strike(host, 0x04, join)
     v = _wait_view(join, lambda v: v["my_turn"], "the joiner's turn")
     assert v["count"] == 2 and v["text"].startswith("Strike 2 stages"), v
     # START (P+'s random pick) and B (back to the CSS) leave no ranked stage select: neither the
@@ -153,7 +154,7 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
     _strike(join, 0x21, host)
     _strike(join, 0x2E, host)
     join.shot("g1-sss-after-join")
-    _strike(host, 0x2D, join)
+    _strike(host, 0x09, join)
     # Battlefield is left: both leave for the CSS and the match.
     rep1 = online_set.play_game(players, 1)
     assert rep1["stage"] == 0x01, rep1
@@ -293,11 +294,11 @@ def test_ranked_quit_loses_the_game(backend: OnlineBackend, dolphin: Callable[..
     join = b if host is a else a
     _both_on(players, SSS, "game 1: both on the stage select")
     _wait_view(host, lambda v: v["type"] == 1 and v["my_turn"], "the host's strike")
-    _strike(host, 0x02, join)
+    _strike(host, 0x04, join)
     _wait_view(join, lambda v: v["my_turn"], "the joiner's turn")
     _strike(join, 0x21, host)
     _strike(join, 0x2E, host)
-    _strike(host, 0x2D, join)
+    _strike(host, 0x09, join)
     online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
                     "game 1 running on both")
     quitter = _ranked(a)["local_port"]

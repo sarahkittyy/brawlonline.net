@@ -29,7 +29,7 @@ pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 
 SETS_ART = ART / "sets"
 SSS = "scSelStage"
-STARTERS = [0x01, 0x02, 0x21, 0x2D, 0x2E]   # the default ruleset's (Ranked's)
+STARTERS = [0x01, 0x04, 0x09, 0x21, 0x2E]   # the default ruleset's (Ranked's)
 
 BO3 = {"format": 1, "name": "Room Set Test", "rules": {"stocks": 1, "timeMinutes": 2},
        "bestOf": 3, "stageChoice": "loser-picks", "strikes": [1, 2, 1], "bans": 2,

@@ -27,9 +27,11 @@ describe("stages", () => {
     expect(stageName(0xfe)).toBe("Stage 254");
   });
 
-  it("leaves every stage outside the legal list off in the default ruleset", () => {
+  it("has only legal stages on in the default ruleset", () => {
     const r = defaultRuleset();
-    const on = [...r.stages.starters, ...r.stages.counterpicks].sort((a, b) => a - b);
-    expect(on).toEqual(PPLUS_LEGAL_STAGES.map((s) => s.id).sort((a, b) => a - b));
+    const legal = PPLUS_LEGAL_STAGES.map((s) => s.id);
+    for (const id of [...r.stages.starters, ...r.stages.counterpicks]) {
+      expect(legal).toContain(id);
+    }
   });
 });

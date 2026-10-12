@@ -8,23 +8,23 @@
 //! Direct's rules), elsewhere P+'s hold-START pause, as the game always did.
 //!
 //! **Stage ids** are Brawl's `srStageKind` values, the ids the game's own match setup and P+'s
-//! stage file loader key on (`docs/game-code.md` section 11, "Stages"). The legal list in
-//! `config/rulesets.json` is P+ v3.2's own: the 15 stages its random-stage switch "Default" preset
-//! (`/Project+/pf/stage/switch/Switch00.rss`) turns on:
+//! stage file loader key on (`docs/game-code.md` section 11, "Stages"). The list in
+//! `config/rulesets.json` is the user's (2026-10-12), the same nine stages as the rooms' P+
+//! default (`common::rules::PPLUS_STARTERS` and `PPLUS_COUNTERPICKS`):
 //!
-//! | id | stage | id | stage | id | stage |
-//! |---|---|---|---|---|---|
-//! | 0x01 (1) | Battlefield | 0x06 (6) | Bowser's Castle | 0x1C (28) | Wario Land |
-//! | 0x02 (2) | Final Destination | 0x09 (9) | Temple of Time | 0x1F (31) | Fountain of Dreams |
-//! | 0x03 (3) | Delfino's Secret | 0x0C (12) | Frigate Husk | 0x21 (33) | Smashville |
-//! | 0x04 (4) | Luigi's Mansion | 0x0D (13) | Yoshi's Island | 0x23 (35) | Green Hill Zone |
-//! | 0x05 (5) | Metal Cavern | | | 0x2D (45) | Dream Land |
-//! | | | | | 0x2E (46) | Pokémon Stadium 2 |
+//! | id | stage | | id | stage |
+//! |---|---|---|---|---|
+//! | 0x01 (1) | Battlefield (starter) | | 0x0C (12) | Frigate Husk |
+//! | 0x04 (4) | Luigi's Mansion (starter) | | 0x1F (31) | Fountain of Dreams |
+//! | 0x09 (9) | Temple of Time (starter) | | 0x23 (35) | Green Hill Zone |
+//! | 0x21 (33) | Smashville (starter) | | 0x2D (45) | Dream Land |
+//! | 0x2E (46) | Pokémon Stadium 2 (starter) | | | |
 //!
 //! How the client uses the list (as Slippi's does, `EXI_DeviceSlippi.cpp:2134-2153, 2707-2722`):
 //! Unranked and Ranked (fixed-rules modes) draw every game's stage from it; Direct draws game 1
 //! from it, and the loser's pick for later games must be in it (design 5.4, screen 5). An empty
-//! list makes the client fall back to its built-in copy of the same legal list.
+//! list makes the client fall back to its built-in copy of P+ v3.2's 15 legal stages (the ones its
+//! random-stage switch "Default" preset, `/Project+/pf/stage/switch/Switch00.rss`, turns on).
 
 use std::collections::{HashMap, HashSet};
 
@@ -106,22 +106,27 @@ mod tests {
     use common::proto::Mode;
     use common::rules::Pause;
 
-    /// P+ v3.2's legal stages as srStageKind (docs/game-code.md section 11; Dolphin's
-    /// `Gprb::Session::DefaultStages()` has the same list).
-    const PPLUS_LEGAL: [u16; 15] =
-        [0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x09, 0x0C, 0x0D, 0x1C, 0x1F, 0x21, 0x23, 0x2D, 0x2E];
+    /// The user's nine stages (2026-10-12): the default ruleset's starters and counterpicks.
+    fn nine_stages() -> Vec<u16> {
+        let mut all: Vec<u16> = common::rules::PPLUS_STARTERS.iter().chain(&common::rules::PPLUS_COUNTERPICKS).copied().collect();
+        all.sort();
+        all
+    }
 
     #[test]
     fn default_file_has_the_pplus_ruleset() {
         let r = Rulesets::parse(DEFAULT_RULESETS).unwrap();
         for mode in [Mode::Direct, Mode::Unranked, Mode::Ranked] {
             let m = r.for_mode(mode);
-            assert_eq!(m.stages, PPLUS_LEGAL, "{mode:?}");
+            assert_eq!(m.stages, nine_stages(), "{mode:?}");
             assert_eq!(m.items, 0, "{mode:?}");
             // P+'s competitive set; normal pause only in Direct, else hold START.
             let pause = if mode == Mode::Direct { Pause::Normal } else { Pause::Hold };
             assert_eq!(m.rules, MatchRules { pause, ..Default::default() }, "{mode:?}");
         }
+        assert_eq!(r.for_mode(Mode::Ranked).starters, common::rules::PPLUS_STARTERS);
+        assert!(r.for_mode(Mode::Direct).starters.is_empty());
+        assert!(r.for_mode(Mode::Unranked).starters.is_empty());
         assert_eq!(r.for_mode(Mode::Party), ModeRules::default());
         assert_eq!(r.for_mode(Mode::Teams), ModeRules::default());
     }

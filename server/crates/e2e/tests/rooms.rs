@@ -277,7 +277,7 @@ async fn a_room_plays_with_every_member_and_takes_a_joiner_during_the_game() {
         assert_eq!(local.port as usize, i + 1);
         assert_eq!(local.ip_address, format!("127.0.0.1:{}", r.local_port));
         assert_eq!(r.remote_addresses.len(), 2);
-        assert_eq!(resp.stages.as_ref().unwrap().len(), 15);
+        assert_eq!(resp.stages.as_ref().unwrap().len(), 9);
     }
     let s = room_state_where(&mut a, |s| s["status"] == "in-game");
     assert_eq!(s["slots"][0]["player"]["inGame"], true);

@@ -90,8 +90,17 @@ export const PPLUS_LEGAL_STAGES: readonly { id: number; name: string }[] = [
   { id: 0x1c, name: "Wario Land" },
 ];
 
-/** Ranked's starters: the default ruleset's. */
-export const PPLUS_STARTERS = [0x01, 0x02, 0x21, 0x2d, 0x2e];
+/**
+ * Ranked's starters, the default ruleset's (the user's list, 2026-10-12): Battlefield, Luigi's
+ * Mansion, Temple of Time, Smashville, Pokémon Stadium 2.
+ */
+export const PPLUS_STARTERS = [0x01, 0x04, 0x09, 0x21, 0x2e];
+
+/**
+ * Ranked's counterpicks, the default ruleset's: Frigate Husk, Fountain of Dreams, Green Hill Zone,
+ * Dream Land. Unranked and Direct draw their random stages from the starters and these.
+ */
+export const PPLUS_COUNTERPICKS = [0x0c, 0x1f, 0x23, 0x2d];
 
 export function stageName(id: number): string {
   return stageInfo(id)?.name ?? `Stage ${id}`;
@@ -124,9 +133,7 @@ export function defaultRuleset(): Ruleset {
     rules: defaultMatchRules(),
     stages: {
       starters: [...PPLUS_STARTERS],
-      counterpicks: PPLUS_LEGAL_STAGES.map((s) => s.id)
-        .filter((id) => !PPLUS_STARTERS.includes(id))
-        .sort((a, b) => a - b),
+      counterpicks: [...PPLUS_COUNTERPICKS],
     },
     bestOf: 0,
     stageChoice: "loser-picks",

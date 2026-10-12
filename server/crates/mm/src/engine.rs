@@ -2065,7 +2065,7 @@ mod tests {
             assert_eq!(g["players"].as_array().unwrap().iter().filter(|p| p["isLocalPlayer"] == true).count(), 1);
             assert!(g.get("starters").is_none(), "only Ranked strikes starters: {g}");
             // The ruleset's stage list, as Slippi's server sends it for the mode.
-            assert_eq!(g["stages"], json!([1, 2, 3, 4, 5, 6, 9, 12, 13, 28, 31, 33, 35, 45, 46]));
+            assert_eq!(g["stages"], json!([1, 4, 9, 12, 31, 33, 35, 45, 46]));
             assert_eq!(g["items"], 0);
             // The mode's rules: P+'s competitive set, hold-START pause in Unranked.
             let rules: common::rules::MatchRules = serde_json::from_value(g["rules"].clone()).unwrap();
@@ -2311,9 +2311,10 @@ mod tests {
         assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
         let g = &sent(&out, 3)[1];
         assert!(g["matchId"].as_str().unwrap().starts_with("mode.ranked-"), "{g}");
-        assert_eq!(g["stages"].as_array().unwrap().len(), 15);
-        // The starters struck for game 1: P+'s Battlefield, FD, Smashville, Dream Land, PS2.
-        assert_eq!(g["starters"], json!([1, 2, 33, 45, 46]));
+        assert_eq!(g["stages"].as_array().unwrap().len(), 9);
+        // The starters struck for game 1: Battlefield, Luigi's Mansion, Temple of Time, Smashville,
+        // PS2.
+        assert_eq!(g["starters"], json!([1, 4, 9, 33, 46]));
         let ps = g["players"].as_array().unwrap();
         for p in ps {
             let me = if p["uid"] == u[0].uid.to_string() { &u[0] } else { &u[2] };
@@ -2609,7 +2610,7 @@ mod tests {
             let local = players.iter().find(|p| p["isLocalPlayer"] == true).unwrap();
             assert_eq!(local["port"], port);
             assert_eq!(players[1]["ipAddress"], "203.0.113.12:41012");
-            assert_eq!(resp["stages"].as_array().unwrap().len(), 15);
+            assert_eq!(resp["stages"].as_array().unwrap().len(), 9);
             // Direct's rules (normal pause).
             assert_eq!(resp["rules"], serde_json::to_value(common::rules::MatchRules::default()).unwrap());
             assert!(disconnected(&out, conn));
@@ -2625,7 +2626,7 @@ mod tests {
         let resp = sent(&out, 11).into_iter().find(|m| m["type"] == "get-ticket-resp").unwrap();
         assert_eq!(rec.match_id, resp["matchId"].as_str().unwrap());
         assert_eq!((rec.mode, rec.players.clone(), rec.host), (Mode::Teams, vec![a.uid, b.uid], a.uid));
-        assert_eq!(rec.stages.len(), 15);
+        assert_eq!(rec.stages.len(), 9);
         let room = rec.room.expect("room");
         assert_eq!((room.code, room.mode.as_str(), room.ports, room.teams), (code.clone(), "1v1", vec![1, 2], None));
         assert_eq!(state_of(&out, 1)["status"], "in-game");
