@@ -1,4 +1,4 @@
-import type { MatchRules, Ruleset, RulesetPlayers, StageChoice } from "@common/rulesets";
+import type { MatchRules, Ruleset, StageChoice } from "@common/rulesets";
 import {
   MAX_BANS,
   MAX_RULESET_NAME_LEN,
@@ -28,16 +28,6 @@ export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (
   const set = (patch: Partial<Ruleset>) => onChange({ ...r, ...patch });
   const setRules = (patch: Partial<MatchRules>) => onChange({ ...r, rules: { ...r.rules, ...patch } });
 
-  const setPlayers = (players: RulesetPlayers) => {
-    const next: Ruleset = { ...r, players };
-    if (players === "ffa") {
-      next.bestOf = 0;
-      if (next.stageChoice === "strike") {
-        next.stageChoice = "loser-picks";
-      }
-    }
-    onChange(withStrikes(next));
-  };
   const setBestOf = (bestOf: number) => {
     const next: Ruleset = { ...r, bestOf };
     if (r.bestOf === 0 && bestOf > 0) {
@@ -78,26 +68,18 @@ export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (
       />
 
       <Section title={Messages.format()}>
-        <Row label={Messages.players()}>
-          <Choice
-            value={r.players}
-            onChange={setPlayers}
-            options={[
-              ["1v1", Messages.oneVsOne()],
-              ["2v2", Messages.twoVsTwo()],
-              ["ffa", Messages.ffa()],
-            ]}
-          />
-        </Row>
+        <Typography variant="caption" color="text.secondary">
+          {Messages.anyRoomHelp()}
+        </Typography>
         <Row label={Messages.set()}>
           <Choice
             value={String(r.bestOf)}
             onChange={(v) => setBestOf(Number(v))}
             options={[
               ["0", Messages.noSet()],
-              ["3", Messages.bestOf(3), r.players === "ffa"],
-              ["5", Messages.bestOf(5), r.players === "ffa"],
-              ["7", Messages.bestOf(7), r.players === "ffa"],
+              ["3", Messages.bestOf(3)],
+              ["5", Messages.bestOf(5)],
+              ["7", Messages.bestOf(7)],
             ]}
           />
         </Row>
@@ -108,7 +90,7 @@ export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (
               onChange={(stageChoice: StageChoice) => onChange(withStrikes({ ...r, stageChoice }))}
               options={[
                 ["loser-picks", Messages.loserPicks()],
-                ["strike", Messages.strike(), r.players === "ffa"],
+                ["strike", Messages.strike()],
                 ["random", Messages.random()],
               ]}
             />
@@ -116,11 +98,6 @@ export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (
         ) : (
           <Typography variant="caption" color="text.secondary">
             {Messages.setHelp()}
-          </Typography>
-        )}
-        {r.players === "ffa" && (
-          <Typography variant="caption" color="text.secondary">
-            {Messages.ffaHelp()}
           </Typography>
         )}
         {strikesUsed(r) && (

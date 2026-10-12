@@ -6,7 +6,6 @@
 
 export type RuleStyle = "time" | "stock" | "coin";
 export type RulePause = "normal" | "hold";
-export type RulesetPlayers = "1v1" | "2v2" | "ffa";
 export type StageChoice = "loser-picks" | "strike" | "random";
 
 /** `common::rules::MatchRules`. */
@@ -46,8 +45,10 @@ export type Ruleset = {
   by: string;
   rules: MatchRules;
   stages: StageLists;
-  players: RulesetPlayers;
-  /** 0 (no set), 3, 5 or 7. */
+  /**
+   * 0 (no set), 3, 5 or 7. A ruleset is for any room: a set (and striking) applies when the room makes two sides
+   * (1v1, or two teams of two); otherwise the room plays single games on a random stage from the lists.
+   */
   bestOf: number;
   stageChoice: StageChoice;
   strikes: number[];
@@ -119,7 +120,6 @@ export function defaultRuleset(): Ruleset {
         .filter((id) => !PPLUS_STARTERS.includes(id))
         .sort((a, b) => a - b),
     },
-    players: "1v1",
     bestOf: 0,
     stageChoice: "loser-picks",
     strikes: [],
@@ -128,9 +128,9 @@ export function defaultRuleset(): Ruleset {
   };
 }
 
-/** Whether the ruleset strikes (game 1 of a set, or every game with `strike`). */
+/** Whether the ruleset strikes (game 1 of a set, or every game with `strike`), in rooms with two sides. */
 export function strikesUsed(r: Ruleset): boolean {
-  return r.players !== "ffa" && (r.bestOf > 0 || r.stageChoice === "strike");
+  return r.bestOf > 0 || r.stageChoice === "strike";
 }
 
 /**
@@ -240,14 +240,6 @@ export function validateRuleset(r: Ruleset): string | null {
   if (!(BEST_OF_CHOICES as readonly number[]).includes(r.bestOf)) {
     return `bestOf ${r.bestOf} is not 0 (no set), 3, 5 or 7`;
   }
-  if (r.players === "ffa") {
-    if (r.bestOf !== 0) {
-      return "FFA has no sets";
-    }
-    if (r.stageChoice === "strike") {
-      return "FFA can't strike stages";
-    }
-  }
   if (r.bestOf > 0 && r.stageChoice !== "loser-picks") {
     return "The stage choice is for rulesets without a set";
   }
@@ -287,6 +279,8 @@ export function parseRulesetCode(input: string): string | null {
 }
 
 const RULESET_KEYS = Object.keys(defaultRuleset());
+/** Keys older rulesets had that are dropped on import: `players` (rulesets were for one player count until 2026-10-11). */
+const LEGACY_RULESET_KEYS = ["players"];
 const RULES_KEYS = Object.keys(defaultMatchRules());
 
 /**
@@ -306,7 +300,7 @@ export function rulesetFromJson(text: string): Ruleset {
   if (!isObject(obj)) {
     throw new Error("This file isn't a ruleset.");
   }
-  const unknown = Object.keys(obj).filter((k) => !RULESET_KEYS.includes(k));
+  const unknown = Object.keys(obj).filter((k) => !RULESET_KEYS.includes(k) && !LEGACY_RULESET_KEYS.includes(k));
   if (unknown.length > 0) {
     throw new Error(`This ruleset has fields this launcher doesn't know (${unknown.join(", ")}). Update to use it.`);
   }
@@ -322,9 +316,10 @@ export function rulesetFromJson(text: string): Ruleset {
       `This ruleset has rules this launcher doesn't know (${unknownRules.join(", ")}). Update to use it.`,
     );
   }
+  const known = Object.fromEntries(Object.entries(obj).filter(([k]) => RULESET_KEYS.includes(k)));
   const r: Ruleset = {
     ...base,
-    ...(obj as Partial<Ruleset>),
+    ...(known as Partial<Ruleset>),
     version: 0,
     by: "",
     rules: { ...base.rules, ...(rules as Partial<MatchRules>) },
@@ -358,9 +353,6 @@ function checkTypes(r: Ruleset): string | null {
   }
   if (typeof r.name !== "string") {
     return "name";
-  }
-  if (!["1v1", "2v2", "ffa"].includes(r.players)) {
-    return "players";
   }
   if (!["loser-picks", "strike", "random"].includes(r.stageChoice)) {
     return "stageChoice";

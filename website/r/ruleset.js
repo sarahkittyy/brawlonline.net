@@ -108,8 +108,7 @@
   }
 
   function formatRows(r) {
-    const players = { "1v1": "1v1", "2v2": "2v2", ffa: "Free for all" }[r.players] || r.players;
-    const rows = [["Players", players]];
+    const rows = [];
     if (r.bestOf > 0) {
       rows.push(["Set", `Best of ${r.bestOf}`]);
       rows.push(["Game 1", `Strike ${r.strikes.join("-")} from the starters`]);
@@ -123,6 +122,9 @@
       }[r.stageChoice];
       rows.push(["Set", "No set: one game at a time"]);
       rows.push(["Stages", choice || r.stageChoice]);
+    }
+    if (r.bestOf > 0 || r.stageChoice === "strike") {
+      rows.push(["Rooms", "Sets and striking in 1v1 and 2v2 rooms; others play single games on a random stage"]);
     }
     return rows;
   }
@@ -188,7 +190,7 @@
     grid.appendChild(table("Format", formatRows(r)));
     grid.appendChild(table("Rules", rulesRows(r.rules)));
     grid.appendChild(itemsGroup(r.rules));
-    grid.appendChild(stageList(r.players === "ffa" || r.bestOf === 0 ? "Stages" : "Starters", r.stages.starters));
+    grid.appendChild(stageList(r.bestOf > 0 || r.stageChoice === "strike" ? "Starters" : "Stages", r.stages.starters));
     if (r.stages.counterpicks.length > 0 || r.bestOf > 0) {
       grid.appendChild(stageList("Counterpicks", r.stages.counterpicks));
     }
