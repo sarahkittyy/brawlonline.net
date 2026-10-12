@@ -28,6 +28,7 @@
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PPCSymbolDB.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 
 static bool s_skip_dcache_flush_for_rollback = false;
@@ -123,7 +124,13 @@ void PowerPCManager::DoState(PointerWrap& p)
     p.Do(m_ppc_state.reserve_address);
 
     auto& memory = m_system.GetMemory();
-    m_ppc_state.iCache.DoState(memory, p);
+    // A machine image leaves the instruction cache out: its lines are filled when the JIT compiles,
+    // so a player who joined (and compiled everything again) had other lines than the others.
+    // The joiner starts with it empty, as after an ICBI of everything.
+    if (!Machine::InImageDoState())
+      m_ppc_state.iCache.DoState(memory, p);
+    else if (p.IsReadMode())
+      m_ppc_state.iCache.Reset(m_system.GetJitInterface());
     m_ppc_state.dCache.DoState(memory, p);
   }
 

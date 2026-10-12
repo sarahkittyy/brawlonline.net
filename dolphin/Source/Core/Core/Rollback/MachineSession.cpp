@@ -2356,9 +2356,10 @@ void JoinStep(Core::System& system)
       refused = s.join_refused_why;
     if (!s.join_sent)
     {
+      // The session's players (not other joiners, who may not be there yet).
       bool all = true;
       for (const PeerLink& p : s.peers)
-        all &= p.slot < 0 || p.hello;
+        all &= p.slot < 0 || p.late || p.hello;
       if (all)
       {
         picojson::object m;

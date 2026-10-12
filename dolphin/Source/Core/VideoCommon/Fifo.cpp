@@ -20,6 +20,7 @@
 #include "Core/HW/GPFifo.h"
 #include "Core/HW/Memmap.h"
 #include "Core/Host.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/System.h"
 
@@ -56,11 +57,34 @@ void FifoManager::DoState(PointerWrap& p)
   if (p.IsReadMode())
     DropVideoThreadCaptures();  // their stream positions mean nothing after this
 
-  p.DoArray(m_video_buffer, FIFO_SIZE);
-  u8* write_ptr = m_video_buffer_write_ptr;
-  p.DoPointer(write_ptr, m_video_buffer, FIFO_SIZE);
-  m_video_buffer_write_ptr = write_ptr;
-  p.DoPointer(m_video_buffer_read_ptr, m_video_buffer, FIFO_SIZE);
+  if (Machine::InImageDoState())
+  {
+    // A machine image: only the commands not run yet (the rest of the buffer is commands this
+    // host's GPU thread already ran, different on a player who joined), at the buffer's start.
+    u32 tail = 0;
+    if (!p.IsReadMode())
+      tail = static_cast<u32>(m_video_buffer_write_ptr.load() - m_video_buffer_read_ptr);
+    p.Do(tail);
+    if (p.IsReadMode() && tail > FIFO_SIZE)
+    {
+      p.SetMeasureMode();
+      return;
+    }
+    p.DoArray(p.IsReadMode() ? m_video_buffer : m_video_buffer_read_ptr, tail);
+    if (p.IsReadMode())
+    {
+      m_video_buffer_read_ptr = m_video_buffer;
+      m_video_buffer_write_ptr = m_video_buffer + tail;
+    }
+  }
+  else
+  {
+    p.DoArray(m_video_buffer, FIFO_SIZE);
+    u8* write_ptr = m_video_buffer_write_ptr;
+    p.DoPointer(write_ptr, m_video_buffer, FIFO_SIZE);
+    m_video_buffer_write_ptr = write_ptr;
+    p.DoPointer(m_video_buffer_read_ptr, m_video_buffer, FIFO_SIZE);
+  }
   if (p.IsReadMode() && m_use_deterministic_gpu_thread)
   {
     // We're good and paused, right?
