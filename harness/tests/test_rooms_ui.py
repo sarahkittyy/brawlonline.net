@@ -636,18 +636,23 @@ def test_room_ruleset_and_set(play_game: Game) -> None:
     g.wait(30)
     assert panel_stars(g)[:2] == [1, 0], panel_stars(g)
 
-    # Paused because a player left (rules.md §1.1 A): the set waits for them, nothing to pick.
+    # Paused because a player left (rules.md §1.1 A): the set waits for them; the host can only
+    # end it (End set, right), A on the score does nothing.
     r.set_flags = 1
     g.wait(30)
     assert v.line().endswith("(paused)"), v.line()
     posts = v.read()["posts"]
     open_rules_line(g, 2)
     assert v.read()["set"] == "Paused 1-0"
-    g.tap("DRIGHT", 4)
     g.tap("A", 4)
-    g.wait(20)
-    assert v.read()["set"] == "Paused 1-0" and v.read()["posts"] == posts and menu_open(g)
+    g.wait(10)
+    g.tap("DRIGHT", 4)
+    g.wait(10)
+    assert v.read()["set"] == "End set" and v.read()["posts"] == posts and menu_open(g), v.read()
     g.shot("09-paused-waiting")
+    g.tap("DLEFT", 4)
+    g.wait(10)
+    assert v.read()["set"] == "Paused 1-0"
     # The results differed, everyone there: Replay game first, End set; A sends ROOM_SET.
     r.set_flags = 3
     g.wait(20)
@@ -762,18 +767,37 @@ def test_host_changes_the_set_length(play_game: Game) -> None:
     close_rules(g)
     g.wait(20)
     assert len(sim.room_ops("best_of")) == 2
-    # During a set: locked.
+    # During a set the length is locked; the host can end the set (End set, the user's of
+    # 2026-10-12): ROOM_SET 0, the set gone, the length free again.
     r = sim.room
     r.best_of, r.set_on, r.score = 3, True, [1, 0]
     g.wait(30)
     open_rules_line(g, 2)
+    assert v.read()["set"] == "Bo3 1-0"
+    g.tap("DRIGHT", 4)
+    g.wait(10)
+    assert v.read()["set"] == "End set", v.read()
     g.tap("DRIGHT", 4)
     g.wait(10)
     assert v.read()["set"] == "Bo3 1-0"
+    g.tap("DLEFT", 4)
+    g.wait(10)
+    g.shot("16-end-set")
+    g.tap("A", 4)
+    g.wait(40)
+    st = v.read()
+    assert not menu_open(g) and (st["op"], st["arg"]) == (9, 0) and not r.set_on, st
+    assert len(sim.room_ops("best_of")) == 2
+    open_rules_line(g, 2)
+    assert v.read()["set"] == "Best of 3"
+    g.tap("DRIGHT", 4)
+    g.wait(10)
+    assert v.read()["set"] == "Best of 5"
+    g.tap("DLEFT", 4)
+    g.wait(10)
     close_rules(g)
     g.wait(20)
     assert len(sim.room_ops("best_of")) == 2
-    r.set_on, r.score = False, [0, 0]
     # Not the host: read-only.
     r.host = 1
     g.wait(30)

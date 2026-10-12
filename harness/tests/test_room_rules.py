@@ -197,7 +197,8 @@ def test_host_sets_the_set_length(backend: OnlineBackend, dolphin: Callable[...,
     nothing): the host's left / right pick the set's length, sent as room-best-of when the menu
     closes. The room's ruleset becomes Custom with that bestOf on both machines and the other
     player's ready is taken back; the other player's left / right change nothing; both ready, a
-    Bo3 set starts. (The whole cycle, No set / 3 / 5 / 7: test_rooms_ui.py
+    Bo3 set starts; the other player drops out, the set pauses and the host ends it on the same line
+    (End set). (The whole cycle, No set / 3 / 5 / 7: test_rooms_ui.py
     test_host_changes_the_set_length.)"""
     a, b, code = two_in_a_room(backend, dolphin, gpu_backend, "set-length")
     for g in (a, b):
@@ -231,3 +232,25 @@ def test_host_sets_the_set_length(backend: OnlineBackend, dolphin: Callable[...,
         _wait(lambda g=g: ((room_play(g) or {}).get("set") or {}).get("game") == 1 and room_play(g)["best_of"] == 3,
               60, f"{g.name}: a Bo3 set on", interval=0.5)
     a.shot("11-bo3-set-on")
+
+    # B drops out of the set's session (its Dolphin gone): the set pauses, A back on the CSS, and
+    # the host ends it (End set, the user's of 2026-10-12): no result, the set gone, the length as
+    # it was. (Between a running set's games the session goes on: mm answers "Wait for the game to
+    # end." there.)
+    import online_set  # noqa: E402
+    from test_room_sets import SSS  # noqa: E402
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in (a, b)), 120, "game 1: both on the stage select")
+    b.inst.kill()
+    _wait(lambda: a.scene() == CSS, 120, "A back on the room's CSS")
+    _wait(lambda: ((room_play(a) or {}).get("set") or {}).get("paused"), 60, "A: the set paused", interval=0.5)
+    a.steps("wait 60")
+    a.shot("12-set-paused")
+    open_rules(a)
+    tap(a, "DDOWN", "DDOWN", "DRIGHT")              # SET: Paused 0-0 -> End set
+    a.shot("13-end-set")
+    tap(a, "A")
+    _wait(lambda: not menu_open(a), 10, "A's menu closed by End set")
+    _wait(lambda: (room_play(a) or {}).get("set") is None, 20, "A: the set ended", interval=0.3)
+    assert room_play(a)["best_of"] == 3, room_play(a)
+    a.steps("wait 30")
+    a.shot("14-set-ended")

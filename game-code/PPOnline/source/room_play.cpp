@@ -16,14 +16,15 @@
 //     (code_entry.cpp). The ruleset is locked during a set (rules.md §2).
 //   - SET: the STOCK CONTROL row (MenMainIcon0124 at +0x50, line 2; handicap is left out,
 //     decision 19): label MenMainRule00font.04, value strip MenMainRule03Sel02 (I4 480x40). It
-//     shows the set ("No set", "Best of 3", "Bo3 1-0", "Paused 1-0"). With no set on (or after one
+//     shows the set ("No set", "Best of 3", "Bo3 1-0", "Paused 1-0"). During a set (not finished)
+//     the host's left / right go to "End set" and A ends it with no result (ROOM_SET 0, the
+//     user's of 2026-10-12; the server drops the set). With no set on (or after one
 //     finished) the host changes its length there with left / right (No set, Best of 3, 5, 7), as
 //     P+'s value lines change; it is sent as ROOM_BEST_OF when the menu closes (the server makes the
 //     room's rules Custom and takes back every ready). A set paused because a player
 //     left waits for them (rules.md §1.1 A: it resumes by itself when they are back in their held
-//     slot), with nothing to pick. Only a set paused because the machines' results differed, with
-//     everyone there (SET_CAN_RESUME), gives the host a choice with left / right: Replay game
-//     (ROOM_SET 1) or End set (ROOM_SET 0); A sends it and closes the menu.
+//     slot); the host can only end it. A set paused because the machines' results differed, with
+//     everyone there (SET_CAN_RESUME), offers Replay game (ROOM_SET 1) first, then End set.
 // The page's own left / right / A on those two lines are taken here (room_rules.cpp's input
 // filter calls rulesInput), so P+'s values never change.
 // Value texts change: each row's value has two copies, the next text is drawn into the one not
@@ -379,14 +380,13 @@ namespace RoomPlay {
                 }
                 return keep;
             }
-            if (!hostChoice()) {
-                playSE(SE_ERROR);   // a set on, or waiting for a player: nothing to change
-                return keep;
-            }
+            // A set on (playing, paused, or the results differed): left / right to End set (the
+            // user's, 2026-10-12: it ends with no result), A confirms; after differing results
+            // Replay game comes first.
             if (bits & IN_SIDE) {
                 s.setChoice ^= 1;
                 playSE(SE_CURSOR);
-            } else {
+            } else if (s.setChoice == 1 || hostChoice()) {
                 post(PPOM::ROOM_SET, s.setChoice == 0 ? 1 : 0, NULL);   // 1 replay, 0 end the set
                 playSE(SE_DECIDE);
                 closeMenu();
@@ -408,8 +408,10 @@ namespace RoomPlay {
             strcpy(out, "No set");
         } else if (!p.setOn) {
             sprintf(out, "Best of %d", p.bestOf);
+        } else if (host && !(p.setFlags & PPOM::SET_FINISHED) && s.setChoice == 1) {
+            strcpy(out, "End set");                    // the host's choice during a set
         } else if (p.setFlags & PPOM::SET_PAUSED) {
-            if (host && hostChoice()) strcpy(out, s.setChoice == 0 ? "Replay game" : "End set");
+            if (host && hostChoice()) strcpy(out, "Replay game");
             else sprintf(out, "Paused %d-%d", p.score[0], p.score[1]);
         } else if (p.setFlags & PPOM::SET_FINISHED) {
             sprintf(out, "Bo%d %d-%d final", p.bestOf, p.score[0], p.score[1]);
@@ -465,7 +467,7 @@ namespace RoomPlay {
         }
         u8* page = *(u8**)(rt + RULES_PAGE1);
         if (isPtr((u32)page) && *(u16*)(page + 0x42) != 4) s.browse = -1;   // the cursor left it
-        if (!hostChoice()) s.setChoice = 0;   // Replay game first, each time the choice appears
+        if (lengthEditable()) s.setChoice = 0;   // no set on: the score (or Replay game) first next time
         g_roomPlay.browse = s.browse < 0 ? 0xFF : (u8)s.browse;
         g_roomPlay.setChoice = (u8)s.setChoice;
         char text[40];
@@ -527,7 +529,7 @@ namespace RoomPlay {
         if (!s.wasOpen || !rulesTask()) return NULL;   // the rules menu, opened in a room
         // P+'s descriptions for the values these rows keep: stock control OFF, stage choice CHOOSE
         if (Online::msbinLineContains(msbin, (int)line, "same stock count")) {
-            return s.host ? "Left/right: the set's length. Results differed: replay or end it."
+            return s.host ? "Left/right: the set's length; during a set, End set (A)."
                           : "The room's set and its score.";
         }
         if (Online::msbinLineContains(msbin, (int)line, "complete freedom")) {
