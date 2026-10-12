@@ -55,16 +55,19 @@ export type CursorPages<T> = {
  * only when `loadMore` is called (the list calls it when the user scrolls near its bottom).
  * Stops at `next: null`. A 429 is retried after the server's `Retry-After` (or a growing
  * backoff); other errors, and a 429 after {@link MAX_RATE_LIMIT_RETRIES} retries, stop loading
- * until `retry` is called.
+ * until `retry` is called. With `refresh`, the loaded pages are fetched again on every mount
+ * and when the window regains focus (the app's default keeps the first load for the whole run).
  */
 export function useCursorPages<T>({
   queryKey,
   fetchPage,
   enabled = true,
+  refresh = false,
 }: {
   queryKey: QueryKey;
   fetchPage: (cursor: string | undefined) => Promise<CursorPage<T>>;
   enabled?: boolean;
+  refresh?: boolean;
 }): CursorPages<T> {
   const query = useInfiniteQuery({
     queryKey,
@@ -72,6 +75,8 @@ export function useCursorPages<T>({
     initialPageParam: undefined as string | undefined,
     getNextPageParam: (last: CursorPage<T>) => last.next ?? undefined,
     enabled,
+    refetchOnMount: refresh ? "always" : undefined,
+    refetchOnWindowFocus: refresh ? "always" : undefined,
     retry: (failures, err) => isRateLimited(err) && failures < MAX_RATE_LIMIT_RETRIES,
     retryDelay: (attempt, err) => retryDelayMs(err, attempt),
   });

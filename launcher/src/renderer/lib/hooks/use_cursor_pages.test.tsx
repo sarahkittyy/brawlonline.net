@@ -115,6 +115,34 @@ describe("useCursorPages", () => {
 });
 
 describe("rate-limit backoff", () => {
+  it("with refresh, fetches the list again on every mount; without, keeps the first load", async () => {
+    // The app's defaults (create.tsx): a query mounted again keeps what it has.
+    const client = new QueryClient({
+      defaultOptions: { queries: { retry: false, refetchOnMount: false, refetchOnWindowFocus: false } },
+    });
+    const shared = ({ children }: { children: React.ReactNode }) => (
+      <QueryClientProvider client={client}>{children}</QueryClientProvider>
+    );
+    // A set settles while the page is closed: the server has a new first row.
+    let rows = [1, 0];
+    const fetchPage = async (): Promise<CursorPage<number>> => ({ items: rows, next: null });
+    const visit = async (refresh: boolean, key: string) => {
+      const { result, unmount } = renderHook(() => useCursorPages({ queryKey: [key], fetchPage, refresh }), {
+        wrapper: shared,
+      });
+      await waitFor(() => expect(result.current.isLoading).toBe(false));
+      return { result, unmount };
+    };
+    for (const refresh of [true, false]) {
+      rows = [1, 0];
+      const key = `t-refresh-${refresh}`;
+      (await visit(refresh, key)).unmount();
+      rows = [2, 1, 0];
+      const { result } = await visit(refresh, key);
+      await waitFor(() => expect(result.current.items).toEqual(refresh ? [2, 1, 0] : [1, 0]));
+    }
+  });
+
   it("follows Retry-After, else doubles from 2 s up to a minute", () => {
     expect(isRateLimited(rateLimited())).toBe(true);
     expect(isRateLimited({ status: 500 })).toBe(false);

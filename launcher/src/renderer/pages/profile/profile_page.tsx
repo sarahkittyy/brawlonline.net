@@ -52,11 +52,13 @@ const RankedSummary = ({ uid }: { uid: string }) => {
   const stored = useAccount((s) => s.userData?.rankedNetplayProfile);
   const playKey = useAccount((s) => s.userData?.playKey);
   const displayName = useAccount((s) => s.displayName);
-  // Fresh on every visit (the rating changes after each set); the stored one until it arrives.
+  // Fresh on every visit and window focus (the rating changes after each set); the stored one
+  // until it arrives.
   const { data } = useQuery({
     queryKey: ["rankedProfile", uid],
     queryFn: () => backendService.fetchRankedNetplayProfile(uid),
     refetchOnMount: "always",
+    refetchOnWindowFocus: "always",
   });
   const updateRanking = useAccount((s) => s.updateRanking);
   useEffect(() => {
@@ -105,7 +107,9 @@ const MatchHistory = ({ uid }: { uid: string }) => {
     },
     [backendService, mode],
   );
-  const pages = useCursorPages<MatchHistoryItem>({ queryKey: ["matchHistory", uid, mode], fetchPage });
+  // Fresh on every visit and when the window regains focus (a set settles while the player is in
+  // Dolphin), like the rating above; else a set shows "In progress" until the launcher restarts.
+  const pages = useCursorPages<MatchHistoryItem>({ queryKey: ["matchHistory", uid, mode], fetchPage, refresh: true });
 
   return (
     <>
