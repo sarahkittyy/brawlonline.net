@@ -1,12 +1,7 @@
 import type { RulesetView } from "@accounts/types";
 import { parseRulesetCode } from "@common/rulesets";
 import CloseIcon from "@mui/icons-material/Close";
-import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
-import Dialog from "@mui/material/Dialog";
-import DialogActions from "@mui/material/DialogActions";
-import DialogContent from "@mui/material/DialogContent";
-import DialogTitle from "@mui/material/DialogTitle";
 import IconButton from "@mui/material/IconButton";
 import InputAdornment from "@mui/material/InputAdornment";
 import TextField from "@mui/material/TextField";
@@ -14,7 +9,7 @@ import Tooltip from "@mui/material/Tooltip";
 import React, { useEffect, useState } from "react";
 
 import { rulesetTitle, useRememberedRuleset } from "@/lib/rulesets/use_remembered_ruleset";
-import { RulesetDetails } from "@/pages/rulesets/ruleset_details";
+import { RulesetPreviewDialog } from "@/pages/rulesets/ruleset_preview_dialog";
 
 import styles from "./public_rooms.module.css";
 import { RulesetBoxMessages as Messages } from "./ruleset_box.messages";
@@ -182,23 +177,7 @@ export const RulesetBox = React.memo(function RulesetBox() {
         onClear={() => set(null)}
         onDetails={() => setDetails(true)}
       />
-      <Dialog open={details && ruleset !== null} onClose={() => setDetails(false)} fullWidth={true} maxWidth="md">
-        {ruleset && (
-          <>
-            <DialogTitle>
-              {rulesetTitle(ruleset)} <span className={styles.rulesetDefault}>{ruleset.code}</span>
-            </DialogTitle>
-            <DialogContent dividers={true}>
-              <RulesetDetails ruleset={ruleset.ruleset} />
-            </DialogContent>
-            <DialogActions>
-              <Button color="primary" onClick={() => setDetails(false)}>
-                {Messages.close()}
-              </Button>
-            </DialogActions>
-          </>
-        )}
-      </Dialog>
+      <RulesetPreviewDialog open={details && ruleset !== null} view={ruleset} onClose={() => setDetails(false)} />
     </>
   );
 });

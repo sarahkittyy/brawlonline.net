@@ -7,6 +7,7 @@
 //! mmclient raw --server 127.0.0.1:43113 --data '{"type":"bogus"}'
 //! mmclient online --user-json a.json --hold-secs 60
 //! mmclient room --user-json a.json --create --open 3,4 --teams --ready --play --hold-secs 600
+//! mmclient room --user-json a.json --create --ruleset KFQBTR --hold-secs 600
 //! mmclient room --user-json b.json --join KFQB --team 1 --ready --play --back-after-secs 5
 //! mmclient room --user-json c.json --join KFQB --chat --say "hello" --stdin
 //! ```
@@ -266,6 +267,9 @@ struct RoomArgs {
     /// Host: make the room private (public by default).
     #[arg(long)]
     private: bool,
+    /// Host: create the room with this published ruleset (its code, as the launcher's box sends it).
+    #[arg(long, conflicts_with = "join")]
+    ruleset: Option<String>,
     /// Host: open these slots after creating (e.g. `3,4`).
     #[arg(long, value_delimiter = ',')]
     open: Vec<u8>,
@@ -361,7 +365,7 @@ fn run_room(a: RoomArgs) -> anyhow::Result<i32> {
     }
     client.send(&match &a.join {
         Some(code) => RoomRequest::Join { code: code.clone() },
-        None => RoomRequest::Create { public: !a.private, ruleset: None, remembered: false },
+        None => RoomRequest::Create { public: !a.private, ruleset: a.ruleset.clone(), remembered: false },
     });
     let first = client.wait_for(Duration::from_secs(10), |m| m["type"] == "room-state" || m["type"] == "room-error")?;
     print_line(&first);

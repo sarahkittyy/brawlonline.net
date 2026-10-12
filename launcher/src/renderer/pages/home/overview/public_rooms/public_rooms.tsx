@@ -1,10 +1,11 @@
-import React from "react";
+import React, { useState } from "react";
 
 import { useLocalStorage } from "@/lib/hooks/use_local_storage";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
 import { useRememberedRuleset } from "@/lib/rulesets/use_remembered_ruleset";
 import { useCreateRoom } from "@/lib/social/use_create_room";
 import { useRoomList } from "@/lib/social/use_room_list";
+import { RulesetPreviewDialog } from "@/pages/rulesets/ruleset_preview_dialog";
 
 import type { PublicRoomsState } from "./public_rooms_view";
 import { PublicRoomsView } from "./public_rooms_view";
@@ -23,6 +24,8 @@ export const PublicRooms = React.memo(function PublicRooms() {
   const { join, joiningCode } = useJoinRoom();
   const { create: createRoom, creating } = useCreateRoom();
   const { ruleset } = useRememberedRuleset();
+  /** The ruleset whose rules are shown (a click on a room's ruleset). */
+  const [showRuleset, setShowRuleset] = useState<string | null>(null);
   const [hasCreatedRoom, setHasCreatedRoom] = useLocalStorage(CREATED_ROOM_STORAGE_KEY, false);
   // The room starts with the ruleset in the box (docs/rulesets-protocol.md §4).
   const create = () => {
@@ -45,16 +48,24 @@ export const PublicRooms = React.memo(function PublicRooms() {
   }
 
   return (
-    <PublicRoomsView
-      state={state}
-      joiningCode={joiningCode}
-      onJoin={(room) => void join(room)}
-      onRetry={() => void query.refetch()}
-      onLogIn={openLogin}
-      onCreate={create}
-      creating={creating}
-      rulesetBox={<RulesetBox />}
-      highlightCreate={!hasCreatedRoom}
-    />
+    <>
+      <PublicRoomsView
+        state={state}
+        joiningCode={joiningCode}
+        onJoin={(room) => void join(room)}
+        onRetry={() => void query.refetch()}
+        onLogIn={openLogin}
+        onCreate={create}
+        creating={creating}
+        rulesetBox={<RulesetBox />}
+        highlightCreate={!hasCreatedRoom}
+        onShowRuleset={(room) => {
+          if (room.ruleset?.code) {
+            setShowRuleset(room.ruleset.code);
+          }
+        }}
+      />
+      <RulesetPreviewDialog open={showRuleset !== null} code={showRuleset} onClose={() => setShowRuleset(null)} />
+    </>
   );
 });

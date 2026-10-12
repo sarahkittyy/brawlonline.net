@@ -93,7 +93,7 @@
   box-sizing: border-box;
   width: 100%;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 64px 64px 96px 56px;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 140px) 64px 64px 96px 56px;
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
@@ -214,7 +214,7 @@
 
 @media (width <= 1000px) {
   .row {
-    grid-template-columns: minmax(0, 1fr) 56px 52px 84px 48px;
+    grid-template-columns: minmax(0, 1fr) minmax(0, 110px) 56px 52px 84px 48px;
     gap: 8px;
   }
 }
@@ -258,4 +258,30 @@
   cursor: pointer;
   text-decoration: underline dotted;
   text-underline-offset: 3px;
+}
+
+/* The room's ruleset, left of the mode bubble. */
+.ruleset {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.rulesetLink {
+  cursor: pointer;
+  text-decoration: underline dotted;
+  text-underline-offset: 3px;
+}
+
+.rulesetLink:hover,
+.rulesetLink:focus-visible {
+  color: var(--text-primary);
+  outline: none;
+}
+
+.rulesetCustom {
+  font-style: italic;
 }

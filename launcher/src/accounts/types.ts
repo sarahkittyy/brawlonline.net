@@ -10,7 +10,7 @@
  */
 
 import type { ServiceUrls } from "@common/product";
-import type { Ruleset } from "@common/rulesets";
+import type { Ruleset, StageChoice } from "@common/rulesets";
 
 export type { Ruleset } from "@common/rulesets";
 
@@ -148,6 +148,21 @@ export type PublicRoom = {
   names: string[];
   /** An open slot is empty (also during a game: the joiner waits for it to end). */
   joinable: boolean;
+  /** What the room plays (common::rooms::RoomRuleset). Absent from an older server. */
+  ruleset?: RoomRuleset;
+};
+
+/** A room's ruleset as the room list has it: a published one (`code`), custom rules (`basedOn`) or P+ default. */
+export type RoomRuleset = {
+  /** The published ruleset's code; null for P+ default or custom rules. */
+  code: string | null;
+  name: string;
+  version: number;
+  by: string;
+  /** Custom rules made from a published ruleset: "NorCal Weekly v3". */
+  basedOn: string | null;
+  bestOf: number;
+  stageChoice: StageChoice;
 };
 
 /** `GET /v1/rooms`: players online (games running and logged in), the public rooms and the queues. */

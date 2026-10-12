@@ -1,5 +1,8 @@
 export const PublicRoomsMessages = {
   publicRooms: () => "Public rooms",
+  customRuleset: (basedOn: string) => (basedOn ? `Custom (based on ${basedOn})` : "Custom rules"),
+  rulesetTooltip: (name: string, version: number, by: string) =>
+    `${name} v${version} by ${by}. Click to see the rules.`,
   createRoom: () => "Create room",
   createRoomTooltip: () => "Opens a new room in your game, like Online > With Friends > Create Room.",
   playersOnline: (n: number) => (n === 1 ? "1 player online" : `${n} players online`),
