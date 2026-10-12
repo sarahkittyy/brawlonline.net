@@ -44,6 +44,10 @@ export interface SettingsSchema {
   netplayDolphinPath: string | null;
   playbackDolphinPath: string | null;
 
+  // Where the game files are (the netplay folder: Dolphin, its User folder, P+'s files, the patched
+  // SD card; null = <userData>/netplay). Only DolphinManager.moveGameFiles changes it, after moving them.
+  gameFilesFolder: string | null;
+
   // Appearance settings
   enableRankDisplay: boolean;
 

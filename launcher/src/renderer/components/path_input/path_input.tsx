@@ -16,10 +16,12 @@ type PathInputProps = {
   endAdornment?: JSX.Element;
   disabled?: boolean;
   tooltipText?: string;
+  /** The button's text (default "Select"). */
+  buttonText?: string;
 };
 
 export const PathInput = React.forwardRef<HTMLInputElement, PathInputProps>((props, ref) => {
-  const { value, placeholder, endAdornment, onSelect, options, disabled, tooltipText } = props;
+  const { value, placeholder, endAdornment, onSelect, options, disabled, tooltipText, buttonText } = props;
   const onClick = async () => {
     const result = await window.electron.common.showOpenDialog({ properties: ["openFile"], ...options });
     const res = result.filePaths;
@@ -37,7 +39,7 @@ export const PathInput = React.forwardRef<HTMLInputElement, PathInputProps>((pro
       <Tooltip title={tooltipText ?? ""}>
         <span>
           <Button color="secondary" variant="contained" onClick={onClick} disabled={disabled}>
-            {Messages.select()}
+            {buttonText ?? Messages.select()}
           </Button>
         </span>
       </Tooltip>

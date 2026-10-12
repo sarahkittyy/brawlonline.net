@@ -14,7 +14,6 @@ import type { DolphinInstallation, DolphinLaunchType } from "../types";
 import { nandRootFor } from "./brawl_save";
 import { executeCommand } from "./execute_command";
 import type { DolphinVersionResponse } from "./fetch_latest_version";
-import { launchTypeFolder } from "./paths";
 
 const log = electronLog.scope("dolphin/localInstallation");
 
@@ -39,9 +38,10 @@ const seeds = new Map<
  * playback. Replaces Slippi's Ishiiruka/mainline installations, which download
  * Slippi's builds into userData.
  *
- * - Executable: from Settings, defaulting to the dev build or `userData/netplay` (see paths.ts).
+ * - Executable: from Settings, defaulting to the dev build or the netplay folder (see paths.ts).
  * - User folder: `<install>/User` when the build is portable (`portable.txt` next to the
- *   binary, Dolphin's own rule and Slippi's Windows layout), else `userData/<netplay|playback>/User`.
+ *   binary, Dolphin's own rule and Slippi's Windows layout), else `<dataFolder>/User`: the
+ *   netplay folder (`<userData>/netplay` or where Settings moved it) or `<userData>/playback`.
  *   Dolphin is always started with `-u <User folder>`, so the location is explicit.
  */
 export class LocalDolphinInstallation implements DolphinInstallation {
@@ -51,14 +51,12 @@ export class LocalDolphinInstallation implements DolphinInstallation {
   constructor(
     private readonly dolphinLaunchType: DolphinLaunchType,
     private readonly executablePath: string,
-    userDataDir: string,
+    dataFolder: string,
     private readonly userTemplate: string | null = null,
     portable = false,
   ) {
     this.installationFolder = installationFolderOf(executablePath);
-    this._userFolder = portable
-      ? path.join(this.installationFolder, "User")
-      : path.join(userDataDir, launchTypeFolder(dolphinLaunchType), "User");
+    this._userFolder = portable ? path.join(this.installationFolder, "User") : path.join(dataFolder, "User");
   }
 
   /** True if `portable.txt` sits next to the binary (Dolphin then uses `<install>/User`). */

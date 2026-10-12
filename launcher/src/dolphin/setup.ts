@@ -18,6 +18,7 @@ import {
   ipc_installRosetta,
   ipc_joinRoomInGame,
   ipc_launchNetplayDolphin,
+  ipc_moveGameFiles,
   ipc_openDolphinSettingsFolder,
   ipc_prepareRoomLaunch,
   ipc_removePlayKeyFile,
@@ -73,7 +74,22 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     const installation = dolphinManager.getInstallation(dolphinType);
     const userFolder = installation.userFolder;
     const playKeyFile = path.join(userFolder, DOLPHIN_ONLINE_DIR, "user.json");
-    return { executable: dolphinManager.getDolphinExecutablePath(dolphinType), userFolder, playKeyFile };
+    return {
+      executable: dolphinManager.getDolphinExecutablePath(dolphinType),
+      userFolder,
+      playKeyFile,
+      gameFilesFolder: dolphinManager.netplayFolder(),
+    };
+  });
+
+  ipc_moveGameFiles.main!.handle(async ({ folder }) => {
+    try {
+      const result = await dolphinManager.moveGameFiles(folder);
+      return result.action === "cancelled" ? { action: "cancelled", folder: result.folder } : result;
+    } catch (err) {
+      log.error(err);
+      return { action: "error", message: err instanceof Error ? err.message : String(err) };
+    }
   });
 
   ipc_storePlayKeyFile.main!.handle(async ({ key }) => {

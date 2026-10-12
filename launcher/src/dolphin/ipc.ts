@@ -3,7 +3,7 @@ import { _, makeEndpoint } from "utils/ipc";
 
 import type { GeckoCode } from "./config/gecko_code";
 import type { RoomHandOffResult } from "./room_handoff";
-import type { DolphinEvent, DolphinLaunchType, PlayKey, ReplayQueueItem } from "./types";
+import type { DolphinEvent, DolphinLaunchType, GameFilesMoveOutcome, PlayKey, ReplayQueueItem } from "./types";
 
 // Handlers
 
@@ -40,7 +40,14 @@ export const ipc_openDolphinSettingsFolder = makeEndpoint.main(
 export const ipc_getDolphinPaths = makeEndpoint.main(
   "getDolphinPaths",
   <{ dolphinType: DolphinLaunchType }>_,
-  <{ executable: string; userFolder: string; playKeyFile: string }>_,
+  <{ executable: string; userFolder: string; playKeyFile: string; gameFilesFolder: string }>_,
+);
+
+/** Settings > Dolphin: moves the netplay folder (`folder` null: back to `<userData>/netplay`). */
+export const ipc_moveGameFiles = makeEndpoint.main(
+  "moveGameFiles",
+  <{ folder: string | null }>_,
+  <GameFilesMoveOutcome>_,
 );
 
 export const ipc_storePlayKeyFile = makeEndpoint.main("storePlayKeyFile", <{ key: PlayKey }>_, <SuccessPayload>_);

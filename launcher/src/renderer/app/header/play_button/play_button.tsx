@@ -60,6 +60,8 @@ export function setupPhaseLabel(phase: DolphinSetupPhase | undefined): string {
       return Messages.extractingProjectPlus();
     case "prepareSdCard":
       return Messages.preparingSdCard();
+    case "moveGameFiles":
+      return Messages.movingFiles();
     default:
       return Messages.updating();
   }
