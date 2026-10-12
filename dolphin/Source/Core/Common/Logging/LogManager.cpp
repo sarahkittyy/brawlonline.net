@@ -33,16 +33,19 @@ const Config::Info<bool> LOGGER_WRITE_TO_WINDOW{
 const Config::Info<LogLevel> LOGGER_VERBOSITY{{Config::System::Logger, "Options", "Verbosity"},
                                               LogLevel::LNOTICE};
 
-// The log starts fresh each run; the previous run's log is kept next to it (dolphin.prev.log). A
-// run that writes more than MAX_LOG_FILE_SIZE moves its own log there and starts again, so the
-// two files never take more than twice that.
-constexpr u64 MAX_LOG_FILE_SIZE = 50 * 1024 * 1024;
+// The log starts fresh each run; the previous runs' logs are kept next to it, newest first
+// (dolphin.prev.log, dolphin.prev2.log, dolphin.prev3.log). A run that writes more than
+// MAX_LOG_FILE_SIZE moves its own log there and starts again, so the files never take more than
+// (KEPT_LOGS + 1) times that. Several runs: a player's report of a problem that happened a few
+// Dolphin sessions ago (2026-10-11: three controller freezes, only one still in the logs).
+constexpr u64 MAX_LOG_FILE_SIZE = 25 * 1024 * 1024;
+constexpr int KEPT_LOGS = 3;
 
 class FileLogListener : public LogListener
 {
 public:
   FileLogListener(const std::string& filename)
-      : m_filename(filename), m_prev_filename(PrevFilename(filename))
+      : m_filename(filename)
   {
     if (File::GetSize(m_filename) > 0)
       MoveToPrev();
@@ -71,18 +74,26 @@ public:
   void SetEnable(bool enable) { m_enable = enable; }
 
 private:
-  static std::string PrevFilename(const std::string& filename)
+  // dolphin.prev.log for n = 1, dolphin.prev<n>.log after it.
+  static std::string PrevFilename(const std::string& filename, int n)
   {
+    const std::string suffix = n == 1 ? ".prev" : ".prev" + std::to_string(n);
     const auto dot = filename.rfind('.');
-    return dot == std::string::npos ? filename + ".prev" :
-                                      filename.substr(0, dot) + ".prev" + filename.substr(dot);
+    return dot == std::string::npos ? filename + suffix :
+                                      filename.substr(0, dot) + suffix + filename.substr(dot);
   }
 
-  // Not File::Rename: that logs its failures, and this runs with m_log_lock held.
+  // Shifts the kept logs one older (the oldest is dropped) and moves the current one to the
+  // newest. Not File::Rename: that logs its failures, and this runs with m_log_lock held.
   void MoveToPrev()
   {
     std::error_code error;
-    std::filesystem::rename(StringToPath(m_filename), StringToPath(m_prev_filename), error);
+    for (int n = KEPT_LOGS; n > 1; --n)
+    {
+      std::filesystem::rename(StringToPath(PrevFilename(m_filename, n - 1)),
+                              StringToPath(PrevFilename(m_filename, n)), error);
+    }
+    std::filesystem::rename(StringToPath(m_filename), StringToPath(PrevFilename(m_filename, 1)), error);
   }
 
   // Truncates when the old log could not be moved away, so the size limit holds.
@@ -93,7 +104,6 @@ private:
   }
 
   const std::string m_filename;
-  const std::string m_prev_filename;
   std::mutex m_log_lock;
   std::ofstream m_logfile;
   u64 m_size = 0;

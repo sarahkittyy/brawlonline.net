@@ -76,6 +76,8 @@ namespace OnlineMenu {
                                             // every player pressed START (quitHolding)
         u32 lastButtons;
         u32 startGuard;         // frames START presses are dropped after the keypad (see codeEntered)
+        bool cssSeen;           // the online CSS was up last frame (holdBGuard)
+        bool bGuard;            // B still held from before this CSS: taken out until released
         int zHeld;
         u32 searchSeq;          // seq of the current FIND_OPPONENT (0 = no search)
         bool pollPending;       // a GET_MATCH_STATE (or the FIND_OPPONENT) awaits its answer
@@ -197,6 +199,25 @@ namespace OnlineMenu {
         }
     }
     static void maskStart() { maskButtons(BTN_START); }
+
+    // Holding B on the CSS is Brawl's own way out (the hand's counter, see cssBPressed): back to
+    // the ONLINE page, which leaves a set or a room. A B still held from the scene before must not
+    // count: a ranked stage select takes B out (it never leaves before the steps are done), and
+    // a player who held it there while the opponent picked was on the CSS with B held when the
+    // stage select left by itself, and the counter took them out of the set (harness, 2026-10-12).
+    // So a B down when the online CSS comes up is taken out of every pad until it is released;
+    // a new hold leaves as before. The current field (+0x0) is the fresh read, before any mask.
+    static void holdBGuard()
+    {
+        const bool down = (padButtons(0x0) & BTN_B) != 0;
+        if (!s.cssSeen) {
+            s.cssSeen = true;
+            s.bGuard = down;
+        } else if (!down) {
+            s.bGuard = false;
+        }
+        if (s.bGuard) maskButtons(BTN_B);
+    }
 
     // Takes `mask` out of this frame's presses only (pressed, pressed2), so a press the plugin
     // has used does nothing else, while the held bits (Brawl's hold-B-to-leave counter) stay.
@@ -2703,9 +2724,11 @@ namespace OnlineMenu {
         if (onCss) blockCodeMenu();
         if (strcmp(scene, "scSelctCharacter") != 0 && !CodeEntry::active()) CodeEntry::forgetLabels();
         if (!onCss) {
+            s.cssSeen = false;
             PPOM::g_block.debug.scratch[1] = 0;
             return;
         }
+        holdBGuard();
 
         hideHeaderArt();
         // The panel's tag, for the next online CSS (and Dolphin's, with the lock-in). Once the

@@ -658,6 +658,8 @@ struct PadsState
   PadSlots latest{};
   std::chrono::steady_clock::time_point latest_at{};
   u64 latest_ticks = 0;  // emulated time of that pass (the watchdog's clock)
+  u32 latest_app_frame = 0;  // gfApplication's frame counter then (the watchdog's report)
+  u64 passes = 0;
 };
 PadsState s_pads;
 
@@ -737,6 +739,12 @@ void PadsOnPadThreadUpdated(Core::System& system)
   s_pads.have_latest = true;
   s_pads.latest_at = std::chrono::steady_clock::now();
   s_pads.latest_ticks = system.GetCoreTiming().GetTicks();
+  ++s_pads.passes;
+  {
+    const Guest g(memory);
+    if (const auto app = g.Ptr32(Addr::APPLICATION_PTR))
+      s_pads.latest_app_frame = g.U32(*app + Addr::APP_FRAME_COUNTER_OFF).value_or(0);
+  }
   if (s_pads.current_valid)
     WriteSlots(memory, s_pads.current_ports, s_pads.current);
 }
@@ -785,9 +793,11 @@ std::string ThreadReport(const Core::CPUThreadGuard& guard, u32 addr)
 {
   const Core::Debug::OSThreadView view(guard, addr);
   const auto& t = view.Data();
-  return fmt::format("{:08x} state {} suspend {} prio {}/{} queue {:08x} srr0 {:08x} lr {:08x} stack{}",
+  return fmt::format("{:08x} state {} suspend {} prio {}/{} queue {:08x} srr0 {:08x} lr {:08x} r3 {:08x} "
+                     "msr {:08x} stack{}",
                      addr, t.state, t.suspend, t.effective_priority, t.base_priority, t.queue_addr,
-                     t.context.srr0, t.context.lr, GuestBacktrace(guard, t.context.gpr[1], 12));
+                     t.context.srr0, t.context.lr, t.context.gpr[3], t.context.srr1,
+                     GuestBacktrace(guard, t.context.gpr[1], 12));
 }
 
 void ReportPadStall(const Core::CPUThreadGuard& guard, double seconds)
@@ -807,6 +817,38 @@ void ReportPadStall(const Core::CPUThreadGuard& guard, double seconds)
                    0,
                pad_system, pad_system ? rd(pad_system + Addr::PAD_SYS_THREAD_OFF) : 0, rd(0x800000E4));
   WARN_LOG_FMT(BRAWLBACK, "pad watchdog: pad thread {}", ThreadReport(guard, Addr::PAD_THREAD));
+
+  // What the controllers did up to the stop: the pad slots of the thread's last pass (gfPadStatus,
+  // per port: current, current2, held, pressed, released, pressed2, then the sticks and triggers)
+  // and the sys pads' held buttons now (gfPadSystem+0x244 + 0x40 * port, +8).
+  PadSlots last_slots;
+  u64 passes;
+  u32 last_frame;
+  {
+    std::lock_guard lk(s_pads.mutex);
+    last_slots = s_pads.latest;
+    passes = s_pads.passes;
+    last_frame = s_pads.latest_app_frame;
+  }
+  std::string slots;
+  for (u32 port = 0; port < 4; ++port)
+  {
+    slots += fmt::format(" P{}", port + 1);
+    for (u32 i = 0; i < 0x20; i += 4)
+    {
+      const u8* b = last_slots.data() + port * Addr::PAD_STRIDE + i;
+      slots += fmt::format(" {:02x}{:02x}{:02x}{:02x}", b[0], b[1], b[2], b[3]);
+    }
+  }
+  std::string held;
+  for (u32 port = 0; pad_system && port < 4; ++port)
+    held += fmt::format(" P{} {:08x}", port + 1, rd(pad_system + 0x244 + 0x40 * port + 8));
+  u32 now_frame = 0;
+  if (const auto app = g.Ptr32(Addr::APPLICATION_PTR))
+    now_frame = g.U32(*app + Addr::APP_FRAME_COUNTER_OFF).value_or(0);
+  WARN_LOG_FMT(BRAWLBACK, "pad watchdog: {} passes, the last at app frame {} (now {}); its pad slots:{}", passes,
+               last_frame, now_frame, slots);
+  WARN_LOG_FMT(BRAWLBACK, "pad watchdog: sys pads held now:{}", held);
 
   // The OS alarm queue (OSAlarm: handler +0, fire u64 +8, prev +0x10, next +0x14, period u64 +0x18).
   // "in": timebase ticks from now to the fire time, from the low words (the game's time base and

@@ -4,7 +4,7 @@ Players lost their controller for good after a ranked stage select (2026-10-11: 
 made no pass again). The pad thread suspends itself after every pass and the pad alarm resumes the
 thread gfPadSystem+0xB54 names, so clearing that pointer stops the thread the same way from the
 outside. After a second of emulated time without a pass the log has one report (the pad thread,
-its alarm in the OS alarm queue, every guest thread), and with the pointer back the thread runs
+its alarm in the OS alarm queue, the last pass's pad slots, every guest thread), and with the pointer back the thread runs
 again and the log says so.
 """
 from __future__ import annotations
@@ -60,6 +60,10 @@ def test_stopped_pad_thread_is_reported(booted: DolphinInstance) -> None:
         assert abs(int(m.group(1))) < 3 * 1013496, m.group(0)   # within a few fields (period 1013496)
         assert re.search(r"pad watchdog: alarm queue .*\[805bacc0 handler 80028b20", log), log[-3000:]
         assert len(re.findall(r"pad watchdog: thread [0-9a-f]{8} state", log)) >= 3, log[-3000:]
+        # The controllers up to the stop: the last pass's pad slots and the sys pads' held buttons.
+        assert re.search(r"pad watchdog: \d+ passes, the last at app frame \d+ \(now \d+\); its pad slots: "
+                         r"P1( [0-9a-f]{8}){8} P2", log), log[-3000:]
+        assert re.search(r"pad watchdog: sys pads held now: P1 [0-9a-f]{8} P2", log), log[-3000:]
         assert log.count("made no pass") == 1, "reported more than once"
         assert "runs again" not in log
     finally:
