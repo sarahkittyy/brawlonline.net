@@ -978,7 +978,9 @@ impl RoomBook {
                 if !waiting {
                     return Err(msg::BETWEEN_GAMES);
                 }
-                // Only results that differed wait for the host: replay that game, or end the set.
+                // `resume`: results that differed, the game is played again. `restart` (RULES > SET >
+                // End set): any set ends with no result; the games played stay as played, nobody
+                // wins it, and the next all-ready starts a new one.
                 let can_resume = room.set.as_ref().is_some_and(|s| s.view().can_resume);
                 if resume {
                     if !can_resume {
@@ -1759,7 +1761,10 @@ mod tests {
         t.req(1, RoomRequest::Back);
         t.req(2, RoomRequest::Back);
         assert_eq!(msgs(&t.req(1, RoomRequest::BestOf { best_of: 5 }), 1)[0]["error"], msg::SET_ON);
-        t.req(1, RoomRequest::Set { resume: false });
+        // The host ends the set that is on (End set): no result, the room is free again.
+        assert_eq!(msgs(&t.req(2, RoomRequest::Set { resume: false }), 2)[0]["error"], msg::HOST_ONLY);
+        let out = t.req(1, RoomRequest::Set { resume: false });
+        assert!(last_state(&out, 1).get("set").is_none());
         // Back to no set: no bans, no strikes; a published ruleset becomes custom based on it.
         let out = t.req(1, RoomRequest::BestOf { best_of: 0 });
         assert_eq!(last_state(&out, 1)["ruleset"]["bestOf"], 0);

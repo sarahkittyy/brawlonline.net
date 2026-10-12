@@ -150,7 +150,8 @@ pub enum RoomRequest {
     /// played). The server counts it once every player of the set reported the same.
     Result { game: u32, winner_side: u8, stage: u16 },
     /// `room-set {action}` (host, between games): `resume` replays the game whose results differed,
-    /// `restart` ends the set (the next start begins a new one).
+    /// `restart` ends any set that is on with no result (RULES > SET > End set; the next start
+    /// begins a new one).
     Set { resume: bool },
     /// `room-step {game, actions, matchStarted}`: the set's game being set up as this member's game
     /// sees it: each side's struck / banned / picked stages in order, and whether its match has

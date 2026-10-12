@@ -76,8 +76,9 @@ pub const TOO_MANY_REQUESTS: &str = "Too many requests. Wait a moment.";
 pub const NO_ROOMS_LEFT: &str = "No rooms free. Try later.";
 /// Rooms: a member left while the room's game was starting.
 pub const PLAYER_LEFT: &str = "A player left the room.";
-/// Slots, Teams or rules while a set is on.
-pub const SET_ON: &str = "Finish or restart the set first.";
+/// Slots, Teams, rules, the ruleset or the set's length while a set is on (the host ends it with
+/// RULES > SET > End set, `room-set restart`).
+pub const SET_ON: &str = "End the set first (RULES > SET).";
 /// `room-set resume` before everyone of the set is back.
 pub const SET_NOT_RESUMABLE: &str = "The set can't go on yet.";
 /// `room-result` without a set game to report.
