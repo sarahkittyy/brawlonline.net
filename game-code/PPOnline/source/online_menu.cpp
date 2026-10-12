@@ -2147,7 +2147,7 @@ namespace OnlineMenu {
         // The ruleset and the set: the sides' players by their in-game ports (the room's slots).
         char play[128];
         play[0] = 0;
-        if (in) {
+        if (in && !RoomRules::isOpen()) {   // (under the rules menu it showed below the STAGE SWITCH)
             char side[2][RoomCss::NAME_CHARS + 1];
             for (int i = 0; i < 2; i++) {
                 u8 port = se.play.sides[i];

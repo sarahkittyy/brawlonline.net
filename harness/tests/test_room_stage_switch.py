@@ -52,19 +52,41 @@ def cursor(g: Game) -> tuple[int, int]:
     return struct.unpack(">2i", g.c.read_mem(page(g) + PAGE_COL, 8))
 
 
-def goto(g: Game, col: int, row: int) -> None:
-    for _ in range(30):
+def tile(g: Game) -> int:
+    """The tile under the cursor (P+'s cursor counts rows of 5), -1 on the top row."""
+    c, r = cursor(g)
+    return (r - 1) * 5 + c if r >= 1 else -1
+
+
+def to_bar(g: Game) -> None:
+    for _ in range(8):
         c, r = cursor(g)
-        if (c, r) == (col, row):
-            return
-        g.tap("DDOWN" if r < row else "DUP" if r > row else "DRIGHT" if c < col else "DLEFT")
+        if r == 0:
+            break
+        g.tap("DUP")
         g.wait(10)
-    raise AssertionError(f"cursor at {cursor(g)}, not {(col, row)}")
+    if cursor(g)[0] >= 5:   # the page button
+        g.tap("DLEFT")
+        g.wait(10)
+    assert cursor(g) == (0, 0), cursor(g)
 
 
 def goto_stage(g: Game, kind: int) -> None:
+    """Down from the bar to the stage's row, then along it: the page is drawn in rows of 7 (page 1's
+    21 stages: three full rows), and the cursor moves so (down from the bar keeps the column)."""
     p = POS[kind]
-    goto(g, p % 5, p // 5 + 1)
+    to_bar(g)
+    g.tap("DDOWN")
+    g.wait(10)
+    while tile(g) // 7 < p // 7:
+        g.tap("DDOWN")
+        g.wait(10)
+    for _ in range(7):
+        if tile(g) == p:
+            break
+        g.tap("DRIGHT" if tile(g) < p else "DLEFT")
+        g.wait(10)
+    assert tile(g) == p, (tile(g), p)
 
 
 def open_switch(g: Game) -> None:
@@ -136,12 +158,22 @@ def test_host_edits_the_rooms_stages(game: Game) -> None:
         goto_stage(g, kind)
         g.tap("A")
         g.wait(10)
-    goto(g, 0, 0)
+    to_bar(g)
     g.tap("A")
     g.wait(10)
     g.c.pad_script(0, [PadInput(buttons=["Z"], hold=3), PadInput(hold=6)])
     g.wait(15)
     g.shot("02-edited")
+    # Rows of 7: from the first stage, down is the 8th (Yoshi's Island), then the 15th (Temple of
+    # Time), then the bar; down again keeps the column; left from the first wraps to the 7th.
+    goto_stage(g, YS)
+    to_bar(g)
+    seen = []
+    for k in ("DDOWN", "DDOWN", "DDOWN", "DDOWN", "DDOWN", "DLEFT"):
+        g.tap(k)
+        g.wait(10)
+        seen.append(tile(g))
+    assert seen == [0, 7, 14, -1, 0, 6], seen
     # L / R (P+'s presets) change nothing.
     g.tap("R")
     g.wait(15)
@@ -172,7 +204,7 @@ def test_another_player_only_looks(game: Game) -> None:
         goto_stage(g, kind)
         g.tap("A")
         g.wait(10)
-    goto(g, 0, 0)
+    to_bar(g)
     g.tap("A")
     g.c.pad_script(0, [PadInput(buttons=["Z"], hold=3), PadInput(hold=6)])
     g.wait(15)

@@ -62,7 +62,7 @@ namespace StageSwitch {
     static const u32 PAGE_NUMBER = 0x763;
     static const int COLS = 5;                  // the page's tiles in rows of 5 (row 0: bar, page button)
     // The page's objects (P+'s muObjects indices).
-    static const int OBJ_FRAME = 0x54, OBJ_BAR = 0x55, OBJ_TILE0 = 0x57;
+    static const int OBJ_FRAME = 0x54, OBJ_BAR = 0x55, OBJ_TILE0 = 0x57, OBJ_CURSOR = 0x81;
     static const int MAX_TILES = 31;
     static const int ANIM_CLR = 0x10;
     // module 18 (sora_menu_rule) and the DOL
@@ -72,7 +72,15 @@ namespace StageSwitch {
     typedef void (*ChangeClrFn)(u8* obj, const char* name);
     static const ChangeClrFn CHANGE_CLR = (ChangeClrFn)0x800B50CC;   // MuObject::changeClrAnimN
     static const char* const CLR_TILE = "MenMainSwitch0105_TopN__0";
-    static const int SE_TOGGLE = 0x24, SE_ERROR = 3;
+    typedef void (*SetPosFn)(u8* obj, float* pos);
+    static const SetPosFn SET_POS = (SetPosFn)0x800B6838;            // MuObject::setPos (an offset)
+    typedef void (*SetCursorFn)(u8* page);
+    static const SetCursorFn SET_CURSOR = (SetCursorFn)0x806ACD80;   // muProcStageSwitch::setCursor
+    // The stage select's rows of 7 (a short last row centred), from P+'s rows of 5: the tiles'
+    // spacing on the page (world units, measured from the tiles' ScnMdl matrices).
+    static const int GRID = 7;
+    static const float TILE_DX = 8.4f, TILE_DY = 4.4f;
+    static const int SE_MOVE = 0;    static const int SE_TOGGLE = 0x24, SE_ERROR = 3;
 
 
     // The input bits (room_rules.cpp): directions, A, B, L, R.
@@ -105,6 +113,7 @@ namespace StageSwitch {
         int shownPage;
         u8 tileShown[MAX_TILES];
         int barShown;
+        int navCol;           // the column the cursor goes up and down in (rows of 7)
         LabelTex title, bar, moreRow;
         // Starters: their tiles' ON label (MenMainSwitch05On, the same in every tile's model)
         // swapped for "STR" in each tile's own ScnMdl.
@@ -325,6 +334,105 @@ namespace StageSwitch {
         if (*slot != want) *slot = want;
     }
 
+    // ------------------------------------------------------------------------------------------
+    // Rows of 7.
+
+    // The column a tile is drawn in (a short last row centred: half columns).
+    static float gridCol(int i, int n)
+    {
+        int row = i / GRID, last = (n - 1) / GRID, inLast = n - last * GRID;
+        float shift = row == last ? (GRID - inLast) * 0.5f : 0.0f;
+        return (i % GRID) + shift;
+    }
+
+    // P+ draws tile i at column i % 5, row i / 5: the offset to its column and row of 7.
+    static void tileOffset(int i, int n, float* pos)
+    {
+        pos[0] = (gridCol(i, n) - (i % 5)) * TILE_DX;
+        pos[1] = -((i / GRID) - (i / 5)) * TILE_DY;
+        pos[2] = 0.0f;
+    }
+
+    static void placeTiles(u8* page, u8** objs, int n)
+    {
+        for (int i = 0; i < n; i++) {
+            u8* obj = objs[OBJ_TILE0 + i];
+            if (!isPtr((u32)obj)) continue;
+            float pos[3];
+            tileOffset(i, n, pos);
+            SET_POS(obj, pos);
+        }
+        // The cursor's frame (its own object, at P+'s place for the tile) with its tile.
+        u8* cur = objs[OBJ_CURSOR];
+        if (!isPtr((u32)cur)) return;
+        int col = *(int*)(page + PAGE_COL), row = *(int*)(page + PAGE_ROW);
+        int tile = row >= 1 ? (row - 1) * COLS + col : -1;
+        float pos[3] = {0.0f, 0.0f, 0.0f};
+        if (tile >= 0 && tile < n) tileOffset(tile, n, pos);
+        SET_POS(cur, pos);
+    }
+
+    // The tile in row `row` (rows of 7) nearest column `col`.
+    static int tileIn(int row, float col, int n)
+    {
+        int first = row * GRID, count = n - first < GRID ? n - first : GRID;
+        int best = first;
+        float bestD = 99.0f;
+        for (int k = 0; k < count; k++) {
+            float d = gridCol(first + k, n) - col;
+            if (d < 0) d = -d;
+            if (d < bestD) { bestD = d; best = first + k; }
+        }
+        return best;
+    }
+
+    // A D-pad move on the page, in rows of 7: P+'s cursor (rows of 5) set to the tile, and its
+    // setCursor (the highlight, the footer) as P+'s own move does. Row 0 is the bar (left) and the
+    // page button (right, over the last two columns).
+    static void navigate(u8* page, u32 dirs)
+    {
+        int n = *(int*)(page + PAGE_TILES);
+        if (n <= 0) return;
+        if (n > MAX_TILES) n = MAX_TILES;
+        int col = *(int*)(page + PAGE_COL), row = *(int*)(page + PAGE_ROW);
+        int rows = (n + GRID - 1) / GRID;
+        int tile = row >= 1 ? (row - 1) * COLS + col : -1;   // -1: row 0
+        if (tile >= n) tile = n - 1;
+        float vcol = tile >= 0 ? gridCol(tile, n) : (col >= COLS ? GRID - 1 : (s.navCol < GRID - 2 ? s.navCol : 0));
+        int target = tile;                 // -1: row 0
+        bool pageButton = row == 0 && col >= COLS;
+        if (dirs & 1) {                    // up
+            if (tile < 0) target = tileIn(rows - 1, vcol, n);
+            else target = tile / GRID == 0 ? -1 : tileIn(tile / GRID - 1, vcol, n);
+            if (target < 0) pageButton = vcol >= GRID - 2;
+        } else if (dirs & 2) {             // down
+            if (tile < 0) target = tileIn(0, vcol, n);
+            else target = tile / GRID + 1 >= rows ? -1 : tileIn(tile / GRID + 1, vcol, n);
+            if (target < 0) pageButton = vcol >= GRID - 2;
+        } else if (dirs & (4 | 8)) {       // left / right: along the row (round), or bar <-> page
+            if (tile < 0) {
+                pageButton = !pageButton;
+            } else {
+                int first = (tile / GRID) * GRID, count = n - first < GRID ? n - first : GRID;
+                int k = tile - first + ((dirs & 8) ? 1 : count - 1);
+                target = first + k % count;
+                vcol = gridCol(target, n);
+            }
+        }
+        if (target >= 0) {
+            *(int*)(page + PAGE_COL) = target % COLS;
+            *(int*)(page + PAGE_ROW) = target / COLS + 1;
+            s.navCol = (int)(gridCol(target, n) + 0.5f);
+        } else {
+            *(int*)(page + PAGE_COL) = pageButton ? COLS : 0;
+            *(int*)(page + PAGE_ROW) = 0;
+        }
+        if (*(int*)(page + PAGE_COL) != col || *(int*)(page + PAGE_ROW) != row) {
+            playSE(SE_MOVE);
+            SET_CURSOR(page);
+        }
+    }
+
     static void showTile(u8* page, u8** objs, int i, int role)
     {
         u8* obj = objs[OBJ_TILE0 + i];
@@ -363,6 +471,7 @@ namespace StageSwitch {
         }
         int n = *(int*)(page + PAGE_TILES);
         if (n > MAX_TILES) n = MAX_TILES;
+        placeTiles(page, objs, n);
         for (int i = 0; i < n; i++) {
             int kind = StageLegal::kindAt(pnum, i);
             int role = kind > 0 ? roleOf(kind) : OFF;
@@ -389,6 +498,10 @@ namespace StageSwitch {
     {
         s.activeFrames = 2;
         u32 keep = bits & (IN_DIRS | IN_B);
+        if (s.on && (bits & IN_DIRS)) {
+            navigate(page, bits & IN_DIRS);   // rows of 7 (P+'s own move would go by rows of 5)
+            keep &= ~IN_DIRS;
+        }
         int col = *(int*)(page + PAGE_COL), row = *(int*)(page + PAGE_ROW);
         bool pageButton = row == 0 && col >= COLS;
         if ((bits & IN_A) && pageButton) keep |= bits & IN_A;   // P+ turns the page, for everyone
