@@ -139,6 +139,11 @@ bool IsRunning();
 // host-only video state and refuses a change of device type (docs/brawl-mods-security.md).
 bool InImageDoState();
 
+// Testing the image loader (the harness fuzzes it): this machine's state as a machine image
+// carries it, and loading one with the image's rules. The caller holds the CPU (CPUThreadGuard).
+std::vector<u8> SaveImageStateForTest(Core::System& system);
+bool LoadImageStateForTest(Core::System& system, std::vector<u8> state);
+
 // The configuration every player runs with (ConfigLoaders::GenerateNetPlayConfigLoader).
 NetPlay::NetSettings MakeNetSettings();
 // The emulated wall clock at boot (EXI IPL), seconds since 1970.

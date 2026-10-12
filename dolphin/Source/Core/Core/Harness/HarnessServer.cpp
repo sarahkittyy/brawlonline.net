@@ -1465,6 +1465,47 @@ Result CmdMachineDigest(const Args& args)
   return Machine::Digest(static_cast<s64>(GetU64(args, "frame")), addrs).get<picojson::object>();
 }
 
+// machine_image_state_save {path}: the running machine's state as a Brawl Mods machine image
+// carries it (Machine::SaveImageStateForTest), to a file: the fuzzer's seed.
+Result CmdMachineImageStateSave(const Args& args)
+{
+  RequireRunning();
+  const std::string path = GetString(args, "path");
+  std::vector<u8> state;
+  {
+    const Core::CPUThreadGuard guard(Sys());
+    state = Machine::SaveImageStateForTest(Sys());
+  }
+  if (state.empty() ||
+      !File::WriteStringToFile(path, std::string_view(reinterpret_cast<const char*>(state.data()),
+                                                      state.size())))
+  {
+    Fail("could not save the state");
+  }
+  Result r;
+  r["size"] = Num(state.size());
+  return r;
+}
+
+// machine_image_state_load {path}: loads a state file with a machine image's rules (the fuzzer
+// loads mutated ones); "loaded" false when the loader refused it.
+Result CmdMachineImageStateLoad(const Args& args)
+{
+  RequireRunning();
+  std::string data;
+  if (!File::ReadFileToString(GetString(args, "path"), data))
+    Fail("could not read the state file");
+  std::vector<u8> state(data.begin(), data.end());
+  bool ok;
+  {
+    const Core::CPUThreadGuard guard(Sys());
+    ok = Machine::LoadImageStateForTest(Sys(), std::move(state));
+  }
+  Result r;
+  r["loaded"] = picojson::value(ok);
+  return r;
+}
+
 Result CmdMachineStop(const Args&)
 {
   Machine::Stop();
@@ -1861,6 +1902,8 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"machine_stop", CmdMachineStop},
       {"machine_wiimote", CmdMachineWiimote},
       {"machine_digest", CmdMachineDigest},
+      {"machine_image_state_save", CmdMachineImageStateSave},
+      {"machine_image_state_load", CmdMachineImageStateLoad},
       {"gprb_samples", CmdGprbSamples},
       {"gpu_state", CmdGpuState},
       {"gprb_census", CmdGprbCensus},

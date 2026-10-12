@@ -2893,6 +2893,27 @@ bool InImageDoState()
   return s_image_dostate;
 }
 
+std::vector<u8> SaveImageStateForTest(Core::System& system)
+{
+  Common::UniqueBuffer<u8> state(192u << 20);
+  s_image_dostate = true;
+  VideoCommon_SetSkipGPUReadbackForRollback(true);
+  const size_t n = ::State::SaveToBuffer(system, state);
+  VideoCommon_SetSkipGPUReadbackForRollback(false);
+  s_image_dostate = false;
+  return std::vector<u8>(state.data(), state.data() + n);
+}
+
+bool LoadImageStateForTest(Core::System& system, std::vector<u8> state)
+{
+  s_image_dostate = true;
+  VideoCommon_SetSkipGPUReadbackForRollback(true);
+  const bool ok = ::State::LoadFromBuffer(system, std::span<u8>(state.data(), state.size()));
+  VideoCommon_SetSkipGPUReadbackForRollback(false);
+  s_image_dostate = false;
+  return ok;
+}
+
 bool IsRunning()
 {
   return s.phase == Phase::Running;
