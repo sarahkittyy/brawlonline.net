@@ -170,6 +170,8 @@ async fn public_list_private_rooms_and_online_count() {
             "status": "waiting",
             "names": ["alice"],
             "joinable": true,
+            "ruleset": {"code": null, "name": "P+ default", "version": 0, "by": "", "basedOn": null,
+                        "players": "1v1", "bestOf": 0, "stageChoice": "loser-picks"},
         })
     );
     // A private room is joinable by code.
