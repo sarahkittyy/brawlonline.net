@@ -7,6 +7,9 @@ stages (SESSION RoomStages) and the host edits them; tools/gamecode/roomsim.py p
   the top bar switches the loser to the list, Z the hazards; closing the menu sends ROOM_STAGES
   and the hazards with the rules.
 - Another player: the same page, read-only; nothing is sent.
+- The cursor's frame is on its own tile on every frame of a move (it showed for a frame over
+  another stage, staging feedback 2026-10-12).
+- A set: the bar is ON (a set's loser always picks from the list) and A on it changes nothing.
 
 Screenshots: run/artifacts/game-code/rooms/stage-switch/.
 """
@@ -87,6 +90,20 @@ def goto_stage(g: Game, kind: int) -> None:
         g.tap("DRIGHT" if tile(g) < p else "DLEFT")
         g.wait(10)
     assert tile(g) == p, (tile(g), p)
+
+
+def cursor_xy(g: Game) -> tuple[float, float]:
+    """The cursor frame's place (its ScnMdl's world matrix), world units."""
+    obj = g.u32(g.u32(page(g) + 0x64C) + 0x81 * 4)
+    m = struct.unpack(">12f", g.c.read_mem(g.u32(obj + 0xC) + 0x34, 48))
+    return round(m[5], 1), round(m[9], 1)
+
+
+def tile_xy(t: int, n: int = 21) -> tuple[float, float]:
+    """Tile t's place in rows of 7 (a short last row centred), from tile 0 at (-25.3, 10.9)."""
+    last = (n - 1) // 7
+    col = t % 7 + ((7 - (n - last * 7)) * 0.5 if t // 7 == last else 0)
+    return round(-25.3 + col * 8.4, 1), round(10.9 - (t // 7) * 4.4, 1)
 
 
 def open_switch(g: Game) -> None:
@@ -174,6 +191,21 @@ def test_host_edits_the_rooms_stages(game: Game) -> None:
         g.wait(10)
         seen.append(tile(g))
     assert seen == [0, 7, 14, -1, 0, 6], seen
+    # The cursor's frame on its tile on every frame of a move, across rows of 5 and of 7.
+    wrong = []
+    for k in ["DRIGHT"] * 3 + ["DDOWN", "DDOWN", "DUP", "DLEFT", "DDOWN"]:
+        g.c.pad_script(0, [PadInput(buttons=[k], hold=3), PadInput(hold=6)])
+        g.c.pause()   # (frame by frame: the reads all from one frame)
+        try:
+            for f in range(12):
+                g.c.frame_advance(1)
+                t, xy = tile(g), cursor_xy(g)
+                if t >= 0 and xy != tile_xy(t):
+                    wrong.append((k, f, t, xy))
+        finally:
+            g.c.resume()
+        g.wait(5)
+    assert not wrong, wrong
     # L / R (P+'s presets) change nothing.
     g.tap("R")
     g.wait(15)
@@ -210,5 +242,18 @@ def test_another_player_only_looks(game: Game) -> None:
     g.wait(15)
     assert switch_bits(g) == before
     g.shot("01-viewer")
+    close_menu(g)
+    assert not sim.stages_requests, sim.stages_requests
+
+
+def test_a_sets_bar_is_the_list(game: Game) -> None:
+    g = game
+    sim = in_room(g, host=True)
+    sim.room.best_of = 3
+    g.wait(40)
+    open_switch(g)
+    g.tap("A")          # on the bar: refused
+    g.wait(15)
+    g.shot("01-set")
     close_menu(g)
     assert not sim.stages_requests, sim.stages_requests

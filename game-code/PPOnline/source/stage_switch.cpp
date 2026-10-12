@@ -14,9 +14,11 @@
 //    SWITCH" (MenMainSwitch10Panel, which a PAT0 sets every frame: its resolved TEX0 pointers in
 //    the menu's brres are pointed at the copy too, and back when the menu closes), the top bar
 //    (P+'s TOGGLE PAGE, MenMainSwitch11Panel) "LOSER PICKS FROM LIST", and MORE RULES' row "STAGE
-//    SWITCH". The footer (the stage hovered, or P+'s preset line) adds the hazards: "Final
-//    Destination    Hazards: OFF (Z)". P+'s hazard switch button (the page's object 0x80) is never
-//    in the page's scene and is not usable: put in the scene group, the next draw crashed.
+//    SWITCH". Under the grid (the room CSS's ruleset line, online_menu.cpp) a legend: what ON, STR
+//    and OFF mean, and the room's hazards, one switch for every stage. The footer is the stage
+//    hovered (P+'s own line), or on the top row what the bar or the page button does. P+'s hazard
+//    switch button (the page's object 0x80) is never in the page's scene and is not usable: put in
+//    the scene group, the next draw crashed.
 //  - The host: A on a tile cycles Off -> Counterpick -> Starter, A on the bar switches the loser
 //    between any stage and the list (only for a ruleset whose loser picks), Z the stage hazards;
 //    P+'s presets (L/R) and its whole-page toggle do nothing. When the menu closes, the changes go
@@ -105,6 +107,7 @@ namespace StageSwitch {
         u8 starters[32], counterpicks[32];          // the host's edits
         u8 roomStarters[32], roomCounterpicks[32];  // the room's, when the menu opened
         u8 choice, roomChoice;                      // CHOICE_LOSER_PICKS(_LIST), 0xFF: not the loser's
+        u8 fixedChoice;                             // with 0xFF: CHOICE_STRIKE, CHOICE_RANDOM, or 0xFF a set
         bool hazards, roomHazards;
         u8 savedSwitch[PAGE_BYTES];
         bool saved;
@@ -114,14 +117,15 @@ namespace StageSwitch {
         u8 tileShown[MAX_TILES];
         int barShown;
         int navCol;           // the column the cursor goes up and down in (rows of 7)
+        u8* page;             // the switch page, while it is shown (its cursor: the footer's text)
         LabelTex title, bar, moreRow;
         // Starters: their tiles' ON label (MenMainSwitch05On, the same in every tile's model)
         // swapped for "STR" in each tile's own ScnMdl.
         u8* strTex;
         u32 onWord, strWord;
         u32* onSlot[MAX_TILES];
-        // The footer (the stage's name, or P+'s preset line) as last printed: printed again when Z
-        // changes the hazards.
+        // The footer (P+'s preset line on the top row) as last printed: printed again when A on
+        // the bar changes what it says.
         void* footMsg;
         const void* footMsbin;
         u32 footLine;
@@ -188,6 +192,7 @@ namespace StageSwitch {
         u8 c = se.play.stageChoice;
         s.choice = se.play.bestOf == 0 && (c == PPOM::CHOICE_LOSER_PICKS || c == PPOM::CHOICE_LOSER_PICKS_LIST) ? c : 0xFF;
         s.roomChoice = s.choice;
+        s.fixedChoice = se.play.bestOf == 0 && (c == PPOM::CHOICE_STRIKE || c == PPOM::CHOICE_RANDOM) ? c : 0xFF;
         s.hazards = s.roomHazards = se.rules.hazards != 0;
         s.canEdit = canEdit;
         // P+'s switch for the menu: the room's stages on.
@@ -353,6 +358,18 @@ namespace StageSwitch {
         pos[2] = 0.0f;
     }
 
+    // The cursor's frame (its own object, at P+'s place for the tile) with its tile.
+    static void placeCursor(u8* page, u8** objs, int n)
+    {
+        u8* cur = objs[OBJ_CURSOR];
+        if (!isPtr((u32)cur)) return;
+        int col = *(int*)(page + PAGE_COL), row = *(int*)(page + PAGE_ROW);
+        int tile = row >= 1 ? (row - 1) * COLS + col : -1;
+        float pos[3] = {0.0f, 0.0f, 0.0f};
+        if (tile >= 0 && tile < n) tileOffset(tile, n, pos);
+        SET_POS(cur, pos);
+    }
+
     static void placeTiles(u8* page, u8** objs, int n)
     {
         for (int i = 0; i < n; i++) {
@@ -362,14 +379,7 @@ namespace StageSwitch {
             tileOffset(i, n, pos);
             SET_POS(obj, pos);
         }
-        // The cursor's frame (its own object, at P+'s place for the tile) with its tile.
-        u8* cur = objs[OBJ_CURSOR];
-        if (!isPtr((u32)cur)) return;
-        int col = *(int*)(page + PAGE_COL), row = *(int*)(page + PAGE_ROW);
-        int tile = row >= 1 ? (row - 1) * COLS + col : -1;
-        float pos[3] = {0.0f, 0.0f, 0.0f};
-        if (tile >= 0 && tile < n) tileOffset(tile, n, pos);
-        SET_POS(cur, pos);
+        placeCursor(page, objs, n);
     }
 
     // The tile in row `row` (rows of 7) nearest column `col`.
@@ -430,6 +440,11 @@ namespace StageSwitch {
         if (*(int*)(page + PAGE_COL) != col || *(int*)(page + PAGE_ROW) != row) {
             playSE(SE_MOVE);
             SET_CURSOR(page);
+            // The cursor's offset for its new tile now: P+'s place for it changed this frame, and
+            // with the old tile's offset until the next tick it showed for a frame over another
+            // stage (staging feedback 2026-10-12, "the highlight flickers on other stages").
+            u8** objs = objects(page);
+            if (objs) placeCursor(page, objs, n);
         }
     }
 
@@ -478,7 +493,8 @@ namespace StageSwitch {
             if (s.tileShown[i] != role) showTile(page, objs, i, role);
             if (isPtr((u32)objs[OBJ_TILE0 + i])) starterLabel(objs[OBJ_TILE0 + i], i, role == STARTER);
         }
-        int bar = s.choice == PPOM::CHOICE_LOSER_PICKS_LIST ? 1 : 0;
+        // ON: the loser picks from the list (or a set, strikes or random, which always use it).
+        int bar = s.choice != PPOM::CHOICE_LOSER_PICKS ? 1 : 0;
         if (s.barShown != bar) {
             SET_ANIM_FRAME(page, OBJ_BAR, ANIM_CLR, bar ? 1.0f : 0.0f);
             s.barShown = bar;
@@ -497,6 +513,7 @@ namespace StageSwitch {
     u32 input(u8* page, u32 bits)
     {
         s.activeFrames = 2;
+        s.page = page;
         u32 keep = bits & (IN_DIRS | IN_B);
         if (s.on && (bits & IN_DIRS)) {
             navigate(page, bits & IN_DIRS);   // rows of 7 (P+'s own move would go by rows of 5)
@@ -515,6 +532,10 @@ namespace StageSwitch {
                 } else {
                     s.choice = s.choice == PPOM::CHOICE_LOSER_PICKS ? PPOM::CHOICE_LOSER_PICKS_LIST : PPOM::CHOICE_LOSER_PICKS;
                     playSE(SE_TOGGLE);
+                    // The footer says what A does now: printed again (MuMsg::printIndex, through
+                    // Text's hook).
+                    typedef void (*PrintIndexFn)(void* msg, u32 window, u32 line, const void* msbin);
+                    if (isPtr((u32)s.footMsg)) ((PrintIndexFn)0x800B91B8)(s.footMsg, 0, s.footLine, s.footMsbin);
                 }
             } else if (tile >= 0 && tile < n && tile < MAX_TILES) {
                 int kind = StageLegal::kindAt(*(u8*)(page + PAGE_NUMBER), tile);
@@ -526,40 +547,59 @@ namespace StageSwitch {
                 }
             }
         }
-        if (padPressed() & PAD_Z) {
+        if (padPressed() & PAD_Z) {   // (the legend under the grid shows it)
             s.hazards = !s.hazards;
             playSE(SE_TOGGLE);
-            // The footer says the hazards: printed again (MuMsg::printIndex, through Text's hook).
-            typedef void (*PrintIndexFn)(void* msg, u32 window, u32 line, const void* msbin);
-            if (isPtr((u32)s.footMsg)) ((PrintIndexFn)0x800B91B8)(s.footMsg, 0, s.footLine, s.footMsbin);
         }
         return keep;
+    }
+
+    static bool shown() { return s.on && s.activeFrames > 0; }
+
+    bool legend(char* buf, int size)
+    {
+        if (!shown() || size < 96) return false;
+        sprintf(buf, s.canEdit ? "ON = counterpick    STR = starter    OFF = not played    Hazards (Z): %s, every stage"
+                               : "ON = counterpick    STR = starter    OFF = not played    Hazards: %s, every stage",
+                s.hazards ? "ON" : "OFF");
+        return true;
+    }
+
+    // The footer on the top row: what the bar or the page button does.
+    static const char* rowText()
+    {
+        // (the page's first footer is printed before its first input: the cursor on the bar)
+        u8* page = s.page;
+        if (isPtr((u32)page)) {
+            if (*(int*)(page + PAGE_ROW) != 0) return NULL;
+            if (*(int*)(page + PAGE_COL) >= COLS) return "A: the next page of stages.";
+        }
+        if (s.choice == 0xFF) {
+            if (s.fixedChoice == PPOM::CHOICE_STRIKE) return "Every game's stage is struck from the list.";
+            if (s.fixedChoice == PPOM::CHOICE_RANDOM) return "Every game's stage is drawn from the list.";
+            return "In a set the loser always picks from the list.";
+        }
+        if (!s.canEdit) {
+            return s.choice == PPOM::CHOICE_LOSER_PICKS_LIST ? "The loser picks only from the list."
+                                                             : "The loser picks any stage, variants too.";
+        }
+        return s.choice == PPOM::CHOICE_LOSER_PICKS_LIST ? "A: the loser picks any stage instead."
+                                                         : "A: the loser picks only from the list.";
     }
 
     const char* menuText(void* msg, const void* msbin, u32 line)
     {
         if (!s.on) return NULL;
         // The footer's msbin: P+'s presets (line 0 "Default (L/R to swap preset)", up to 8), then
-        // every stage's name at its icon + 8, printed as the cursor moves.
+        // every stage's name at its icon + 8 (P+'s own), printed as the cursor moves.
         if (Online::msbinLineContains(msbin, 0, "swap preset")) {
-            static char buf[96];
+            if (line >= 8) return NULL;
             s.footMsg = msg;
             s.footMsbin = msbin;
             s.footLine = line;
-            const char* hz = s.hazards ? "ON" : "OFF";
-            if (line < 8) {
-                if (s.canEdit) sprintf(buf, "A: off / counterpick / starter.  Z: hazards (%s).", hz);
-                else sprintf(buf, "The room's stages.  Hazards: %s.", hz);
-                return buf;
-            }
-            int len = 0;
-            const char* name = Online::msbinLine(msbin, (int)line, &len);
-            if (!name) return NULL;
-            if (len > 48) len = 48;
-            int n = 0;
-            for (int i = 0; i < len && name[i]; i++) buf[n++] = name[i];
-            sprintf(buf + n, s.canEdit ? "    Hazards: %s (Z)" : "    Hazards: %s", hz);
-            return buf;
+            const char* row = rowText();
+            if (row) return row;
+            return s.canEdit ? "A: off / counterpick / starter." : "The room's stages.";
         }
         if (Online::msbinLineContains(msbin, (int)line, "open/clos")) return " ";
         if (Online::msbinLineContains(msbin, (int)line, "Adjust stages in random selection")) {
