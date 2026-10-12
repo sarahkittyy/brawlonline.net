@@ -442,7 +442,8 @@ def decode_room_status(payload: bytes) -> dict:
 
 def read_room(c: HarnessClient, b: Block) -> dict:
     """The room view (v5): SESSION's room bytes and LOCAL's room phase, screen and join counter,
-    the launcher's Direct invite (counter and code, "" for none) and its create counter."""
+    the launcher's Direct invite (counter and code, "" for none; or Play unranked / Play ranked:
+    no code, `direct_queue` 1 / 2) and its create counter."""
     se = c.read_mem(b.session, b.session_size)
     lo = c.read_mem(b.local, b.local_size)
     prefix = lo[L_DIRECT_PREFIX:L_DIRECT_PREFIX + 4].rstrip(b"\0").decode("ascii", "replace")
@@ -460,7 +461,8 @@ def read_room(c: HarnessClient, b: Block) -> dict:
             "game": se[6], "session_state": se[4], "session_seq": struct.unpack_from(">I", se, 0)[0],
             "slots": slots, "phase": lo[L_ROOM], "join": lo[L_ROOM_JOIN], "screen": lo[L_SCREEN],
             "local_port": lo[5], "local_state": lo[4],
-            "direct_join": lo[L_DIRECT_JOIN], "direct_code": direct_code, "create": lo[L_ROOM_CREATE]}
+            "direct_join": lo[L_DIRECT_JOIN], "direct_code": direct_code,
+            "direct_queue": number if not prefix else 0, "create": lo[L_ROOM_CREATE]}
 
 
 def set_test_gone(c: HarnessClient, b: Block, frame: int, ports: int, later_ports: int = 0,

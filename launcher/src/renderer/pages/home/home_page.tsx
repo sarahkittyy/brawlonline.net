@@ -7,6 +7,7 @@ import { useRouteMemory } from "@/lib/hooks/use_route_memory";
 import { HomePageMessages as Messages } from "./home_page.messages";
 import { HOME_TABS } from "./home_routes";
 import { HomeOverview } from "./overview/overview";
+import { PlayButtons } from "./play_buttons/play_buttons";
 import { Tabs } from "./tabs/tabs";
 
 const Outer = styled.div`
@@ -15,6 +16,13 @@ const Outer = styled.div`
   flex: 1;
   position: relative;
   min-width: 0;
+`;
+
+// The tabs, with Play unranked / Play ranked right after them.
+const TabRow = styled.div`
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
 `;
 
 const RestoreHomeScope = React.memo(function RestoreHomeScope() {
@@ -48,12 +56,15 @@ export const HomePage = React.memo(function HomePage() {
   return (
     <Outer>
       <div style={{ flex: 1, display: "flex", flexDirection: "column", minHeight: 0 }}>
-        <Tabs
-          value={currentTab}
-          highlightedTabIds={[]}
-          onChange={handleTabChange}
-          tabs={[{ id: "overview", label: Messages.overview() }]}
-        />
+        <TabRow>
+          <Tabs
+            value={currentTab}
+            highlightedTabIds={[]}
+            onChange={handleTabChange}
+            tabs={[{ id: "overview", label: Messages.overview() }]}
+          />
+          <PlayButtons />
+        </TabRow>
         <Routes>
           <Route index={true} element={<RestoreHomeScope />} />
           <Route path="overview" element={<HomeOverview />} />

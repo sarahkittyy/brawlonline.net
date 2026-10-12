@@ -1067,12 +1067,19 @@ void PutRoom(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::
 
 // LOCAL's Direct invite bytes. The code is Rooms' canonical one (NormalizeConnectCode: 2-4
 // letters, '#', 1-9999); it is checked again here, and anything else leaves the bytes zero (the
-// counter still moves, so the game goes to a plain Direct CSS).
-void PutDirectInvite(std::vector<u8>& local, u8 seq, const std::string& code)
+// counter still moves, so the game goes to a plain Direct CSS). The launcher's Play unranked /
+// Play ranked (`queue` 1 / 2) is a zero prefix with the number 1 / 2: that mode's CSS (a plugin
+// without it reads a zero prefix as a plain Direct CSS).
+void PutDirectInvite(std::vector<u8>& local, u8 seq, const std::string& code, u8 queue)
 {
   local[L_DIRECT_JOIN] = seq;
   for (u32 i = L_DIRECT_PREFIX; i < L_DIRECT_NUMBER + 2; ++i)
     local[i] = 0;
+  if (queue != 0)
+  {
+    local[L_DIRECT_NUMBER + 1] = queue;
+    return;
+  }
   const auto canon = Rooms::NormalizeConnectCode(code);
   if (!canon || *canon != code)
     return;
@@ -1258,7 +1265,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   {
     local[L_ROOM_JOIN] = room.join_seq;
     local[L_ROOM] = static_cast<u8>(room.phase);
-    PutDirectInvite(local, room.direct_seq, room.direct_code);
+    PutDirectInvite(local, room.direct_seq, room.direct_code, room.direct_queue);
     local[L_ROOM_CREATE] = room.create_seq;
   }
   WriteBlock(guard, loc.local, local, &s_local_written, &s_local_seq);

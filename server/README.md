@@ -114,7 +114,7 @@ JSON in and out. Errors are `{"error": {"code": "...", "message": "..."}}`. Auth
 | `POST /v1/ranked/report-leave {uid, playKey, matchId, kind}` | `reportOnlineMatchStatus(abandoned)` | `kind`: `left` (this player left the set) or `opponent_left`. |
 | `GET /v1/ranked/result?matchId=&uid=` | `getRankedMatchPersonalResult` | Public. `{matchId, status, players, wins, winner, reason, rating: {before, after, change, setsPlayed} \| null}`. |
 | `GET /v1/ranked/leaderboard?limit=&after=` | | Public. `{entries: [{position, uid, displayName, connectCode, rating, setsPlayed, wins, losses}], next, total}` (see "Leaderboard"). `limit` 50 by default, at most 100; `after` is the previous page's `next`. |
-| `GET /v1/rooms` | | Session auth. Players online and the public rooms for the launcher's Home page, read from mm's status listener (`MM_STATUS_URL`) and cached 1 s: `{online, rooms: [{code, host, players, openSlots, mode, status, names, joinable}], updatedAt}`. 503 `mm_unavailable` when mm does not answer. See `docs/rooms-protocol.md`. |
+| `GET /v1/rooms` | | Session auth. Players online and the public rooms for the launcher's Home page, read from mm's status listener (`MM_STATUS_URL`) and cached 1 s: `{online, rooms: [{code, host, players, openSlots, mode, status, names, joinable}], queues: {unranked, ranked}, updatedAt}`. 503 `mm_unavailable` when mm does not answer. See `docs/rooms-protocol.md`. |
 | `GET /healthz` | | `ok` if Postgres answers. |
 
 Rules:

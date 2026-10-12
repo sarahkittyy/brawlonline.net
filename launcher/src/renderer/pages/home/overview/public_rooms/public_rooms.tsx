@@ -1,20 +1,16 @@
-import { useQuery } from "@tanstack/react-query";
 import React from "react";
 
-import { useAccount } from "@/lib/hooks/use_account";
 import { useLocalStorage } from "@/lib/hooks/use_local_storage";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
 import { useRememberedRuleset } from "@/lib/rulesets/use_remembered_ruleset";
 import { useCreateRoom } from "@/lib/social/use_create_room";
-import { useServices } from "@/services";
+import { useRoomList } from "@/lib/social/use_room_list";
 
 import type { PublicRoomsState } from "./public_rooms_view";
 import { PublicRoomsView } from "./public_rooms_view";
 import { RulesetBox } from "./ruleset_box";
 import { useJoinRoom } from "./use_join_room";
 
-/** How often the list is fetched while Home is shown (the server answers from a 1 s snapshot). */
-export const ROOMS_POLL_MS = 4000;
 /** How long a list stays shown while polls fail. */
 const STALE_AFTER_MS = 15_000;
 /** Set once the player clicks "Create room"; until then the button glows. */
@@ -22,8 +18,7 @@ const CREATED_ROOM_STORAGE_KEY = "HAS_CREATED_ROOM";
 
 /** Players online and the public rooms, polled every few seconds while Home > Overview is open. */
 export const PublicRooms = React.memo(function PublicRooms() {
-  const { backendService } = useServices();
-  const uid = useAccount((s) => s.user?.uid);
+  const { uid, query } = useRoomList();
   const openLogin = useLoginModal((s) => s.openModal);
   const { join, joiningCode } = useJoinRoom();
   const { create: createRoom, creating } = useCreateRoom();
@@ -34,14 +29,6 @@ export const PublicRooms = React.memo(function PublicRooms() {
     setHasCreatedRoom(true);
     void createRoom(ruleset?.code);
   };
-
-  const query = useQuery({
-    queryKey: ["publicRooms", uid],
-    queryFn: () => backendService.fetchRooms(),
-    enabled: uid != null,
-    refetchInterval: ROOMS_POLL_MS,
-    retry: false,
-  });
 
   // A failed poll keeps the last list for a little while (the next poll usually replaces it);
   // after that the list is too old to click on.

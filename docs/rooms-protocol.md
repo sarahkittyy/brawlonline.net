@@ -186,10 +186,12 @@ Session auth (`Authorization: Bearer <sessionToken>`; 401 without it, since the 
     {"code": "KFQB", "host": "alice", "players": 1, "openSlots": 2, "mode": "1v1", "status": "waiting", "names": ["alice"], "joinable": true},
     {"code": "HBPL", "host": "mango", "players": 4, "openSlots": 4, "mode": "teams", "status": "in-game", "names": ["mango", "zain", "cody", "hbox"], "joinable": false}
   ],
+  "queues": {"unranked": 6, "ranked": 3},
   "updatedAt": "2026-10-09T15:00:00.000Z"
 }
 ```
 
+- `queues` (2026-10-12): the Unranked and Ranked tickets waiting in mm, for the "X in queue" under Home's Play unranked / Play ranked. Absent from an older mm (accounts then sends zeros).
 - `online`: **players whose game is running and logged in**: distinct accounts with an online connection (`hello`). Launchers left open without the game do not count; neither do games that are not logged in.
 - Each room also has `ruleset` (`room-state`'s: `code`, `name`, `version`, `by`, `basedOn`, `bestOf`, `stageChoice`), so the list can show what it plays.
 - `rooms`: public rooms only, at most 200: joinable first, then waiting before in game, then fuller, then older. `players` / `openSlots` is what the launcher shows as "players n/N" (N is the number of open slots, the most the room takes). `status` is `waiting` or `in-game` (a starting room is listed as in game). `joinable`: an open slot is empty (also during a game).
@@ -225,7 +227,7 @@ or, for a **Direct invite** (the player list's "Invite to game" when the inviter
 
 | Field | |
 |---|---|
-| `kind` | Absent or `"room"`: the room request above (`code` required). `"direct"`: a Direct invite (`connectCode` required, `code` ignored). `"create"`: a new room (below; `code` and `connectCode` ignored). Any other value (also another case, `"Create"`): the file is ignored. |
+| `kind` | Absent or `"room"`: the room request above (`code` required). `"direct"`: a Direct invite (`connectCode` required, `code` ignored). `"create"`: a new room (below; `code` and `connectCode` ignored). `"queue"`: Play unranked / Play ranked (below; `queue` required). Any other value (also another case, `"Create"`): the file is ignored. |
 | `connectCode` | The other player's connect code, checked as the server checks codes (`server/crates/common/src/codes.rs`, Dolphin `NormalizeConnectCode`): 2-4 ASCII letters, `#`, 1-4 digits with a value of 1-9999, at most 8 characters as written back; any case and leading zeros are taken (`sara#0123` is `SARA#123`). Anything else (spaces, full-width or non-ASCII characters, a second `#`, not a string) and the file is ignored with a log line. |
 
 A Direct invite follows the room request's rules: the same freshness (3 minutes from `createdAt`), `refused` with "Finish your current game first." while busy ("Go back to the menus first." on other screens), `accepted` at once and held while the game boots until it shows its menus, answered by `id` in `lastRequest`. Also `refused` "That's your own code." for the player's own code (`failed` if it was already accepted during the boot). Accepted while the player is in a room (or joining one), Dolphin leaves the room first. The game then goes to the Direct 1v1 character select (WITH FRIENDS > Direct 1v1) from the menus or any idle online CSS, a room's included, with the code filled in: the status line reads "Select character vs SARA#123", then "Press START to play SARA#123" once a character is picked; START locks in and searches that code with no keypad. Both players search each other's code, so mm pairs them as any Direct match. The code is used for that one search: cancelled, failed or after the set, and after leaving the CSS, Direct works as usual (the code is then in the recent codes). There is no `failed` answer for the search itself; it shows on the CSS as any Direct search does. The game side: `docs/rooms-game-interface.md` (LOCAL `directJoin`).
@@ -239,6 +241,14 @@ A Direct invite follows the room request's rules: the same freshness (3 minutes 
 It does what WITH FRIENDS > Create Room does: a **public** room (the in-game default) with the player as host in slot 1 (slots 1-2 open, 3-4 closed), and the game lands on the new room's character select. The same rules as the other requests: 3 minutes from `createdAt`; `refused` "Finish your current game first." while busy, "Go back to the menus first." on other screens; `accepted` at once and held while the game boots until it shows its menus. Accepted, Dolphin leaves any room the player is in (`room-leave`, sent right before the create) and sends `room-create` itself; the game goes to the room CSS from the menus or any idle online CSS (built again as the room's), or stays on a room's CSS, and sends no create of its own. `lastRequest` reads `accepted` as soon as the request is taken; if mm then refuses the create, the same `id` is answered again `failed` with mm's text: "Too many rooms. Wait a moment." (5 creates a minute, 30 an hour per account), "No rooms free. Try later.", or "Can't reach the server." / "Log in in the launcher." after 20 s without an answer. The game then shows the same text in red on the room CSS, out of any room (START there enters a room code, as after a failed Create Room in game).
 
 What the launcher shows (suggested): `accepted`: "Creating a room in your game." (the room's code appears in `game-status.json` `room` once it exists); a later `failed` for the same `id`: its `message`; `refused`: its `message`; no answer in 5 s: "Your game didn't respond. Create the room in game: WITH FRIENDS > Create Room."
+
+**Play unranked / Play ranked** (the launcher's buttons beside Home's Overview tab, 2026-10-12):
+
+```json
+{"version": 1, "id": "5b0f3f0e-…", "kind": "queue", "queue": "ranked", "createdAt": "2026-10-12T15:00:00.000Z"}
+```
+
+`queue` is `"unranked"` or `"ranked"` (anything else, or absent: the file is ignored). The game goes to that mode's character select, as ONLINE > WITH ANYONE > Unranked / Ranked does; it does not search (the player picks a character and presses START). The rules are the Direct invite's: 3 minutes from `createdAt`, `refused` while busy or on other screens, `accepted` at once and held while the game boots until it shows its menus; Dolphin leaves any room first. The game side: `docs/rooms-game-interface.md` (LOCAL `directJoin`, `directNumber` 1 / 2). The launcher says "Your game is going to Ranked."; no answer in 5 s: "Your game didn't respond. In game: Online > With Anyone > Ranked."
 
 **`game-status.json`**, game → launcher, written atomically by Dolphin on every change and at least every 5 s:
 

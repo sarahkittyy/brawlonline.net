@@ -2434,9 +2434,31 @@ namespace OnlineMenu {
         s.statusDirty = true;
     }
 
+    // The launcher's Play unranked / Play ranked: LOCAL.directJoin bumped with a zero prefix and
+    // directNumber 1 / 2 (docs/rooms-game-interface.md). That mode, else -1 (a Direct invite).
+    static int launcherQueue()
+    {
+        const PPOM::Local& l = PPOM::g_block.local;
+        for (int k = 0; k < 4; k++) {
+            if (l.directPrefix[k]) return -1;
+        }
+        return l.directNumber == 1 ? PPOM::MODE_UNRANKED : l.directNumber == 2 ? PPOM::MODE_RANKED : -1;
+    }
+
+    // The CSS of `mode`: Direct with the invite's code (back from the CSS: WITH FRIENDS, Direct
+    // 1v1); Unranked / Ranked as WITH ANYONE's (enter: back to the ONLINE page).
+    static void enterLauncherMode(int mode)
+    {
+        enter(mode);
+        if (mode != PPOM::MODE_DIRECT) return;
+        presetCode();
+        NetMenu::setReturnButton(1);
+    }
+
     // Go to the Direct CSS with that code from a menu page (as a room join), an idle online CSS of
     // another mode or a room's CSS (built again as Direct's, the character kept), or stay on an
     // idle Direct CSS with the new code. START then searches it once the character is picked.
+    // Play unranked / Play ranked go to that mode's CSS the same way (an idle one of it stays).
     static u8 s_directSeen = 0;
     static bool s_directInit = false;
     static void launcherDirect(const char* scene)
@@ -2448,14 +2470,14 @@ namespace OnlineMenu {
             return;
         }
         if (j == s_directSeen) return;
+        int queue = launcherQueue();
+        int mode = queue >= 0 ? queue : PPOM::MODE_DIRECT;
         if (onJumpPage(scene)) {
             if (!decideOnlineCss()) return;
-            enter(PPOM::MODE_DIRECT);
-            presetCode();
-            NetMenu::setReturnButton(1);   // back from the CSS: WITH FRIENDS, Direct 1v1
+            enterLauncherMode(mode);
             s_directSeen = j;
             s_jumpPage = NULL;
-            PPOM::g_block.debug.scratch[9] += 0x1000000;   // tests: launcher Direct invites taken
+            PPOM::g_block.debug.scratch[9] += 0x1000000;   // tests: launcher Direct invites / Plays taken
             return;
         }
         if (g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0 && !CodeEntry::active()) {
@@ -2463,14 +2485,12 @@ namespace OnlineMenu {
             bool room = roomCss();
             if (!room && s.phase != PH_IDLE) return;   // searching or connected: not taken
             PPOM::g_block.debug.scratch[9] += 0x1000000;
-            if (s.mode == PPOM::MODE_DIRECT && !room) {
-                presetCode();   // already on Direct's CSS: only the code changes
+            if (s.mode == mode && !room) {
+                if (mode == PPOM::MODE_DIRECT) presetCode();   // already on Direct's CSS: only the code changes
                 return;
             }
             // A room's CSS: Dolphin has left the room; its panels go with the CSS built again.
-            enter(PPOM::MODE_DIRECT);
-            presetCode();
-            NetMenu::setReturnButton(1);
+            enterLauncherMode(mode);
             if (room) RoomCss::releaseRecords();
             leaveCss(1);   // OnlineMatch: no match armed -> back to the CSS (restoreCss)
         }

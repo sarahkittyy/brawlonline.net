@@ -600,6 +600,10 @@ pub struct MmStatus {
     pub online: usize,
     /// Public rooms: joinable first, then waiting before in game, then fuller first.
     pub rooms: Vec<PublicRoom>,
+    /// Players searching Unranked and Ranked (the launcher's Play buttons). Absent from an older
+    /// mm: zero.
+    #[serde(default)]
+    pub queues: QueueCounts,
     /// RFC 3339 time of the snapshot.
     pub updated_at: String,
     /// Every room player's room, public and private rooms alike. Internal: accounts reads it to
@@ -607,6 +611,14 @@ pub struct MmStatus {
     /// launchers (`GET /v1/rooms` sends only the fields above).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub members: Vec<RoomMember>,
+}
+
+/// Tickets waiting in each queue, for [`MmStatus::queues`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct QueueCounts {
+    pub unranked: usize,
+    pub ranked: usize,
 }
 
 /// One room player's room, for [`MmStatus::members`].

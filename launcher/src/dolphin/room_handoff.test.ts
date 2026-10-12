@@ -11,6 +11,8 @@ import {
   isConnectCode,
   isRoomCode,
   isRulesetCode,
+  QUEUE_RANKED,
+  QUEUE_UNRANKED,
   readGameStatus,
   requestPath,
   STATUS_FRESH_MS,
@@ -94,6 +96,21 @@ describe("room hand-off", () => {
     await expect(writeRoomRequest(dir, CREATE_ROOM, new Date(), "AEIOUY")).rejects.toThrow();
     expect(isRulesetCode("BCDFGH")).toBe(true);
     expect(isRulesetCode("BCDFG")).toBe(false);
+  });
+
+  it("writes a queue request for Play unranked and Play ranked", async () => {
+    for (const queue of [QUEUE_UNRANKED, QUEUE_RANKED]) {
+      const req = await writeRoomRequest(dir, queue, new Date("2026-10-12T12:00:00Z"));
+      expect(await readRequest()).toEqual({
+        version: 1,
+        id: req.id,
+        kind: "queue",
+        queue,
+        createdAt: "2026-10-12T12:00:00.000Z",
+      });
+    }
+    await expect(writeRoomRequest(dir, QUEUE_RANKED, new Date(), "KFQBTR")).rejects.toThrow();
+    await expect(writeRoomRequest(dir, "Ranked", new Date())).rejects.toThrow();
   });
 
   it("hands a create with its ruleset to a running game", async () => {

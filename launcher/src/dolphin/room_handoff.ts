@@ -19,6 +19,8 @@
  * (`{version, id, kind: "create", ruleset?, createdAt}`: the game creates a room as WITH FRIENDS >
  * Create Room does, from Home's "Create room" button or a `brawlonline://room/create` link;
  * `ruleset` is the code in Home's ruleset box, absent for P+ default; docs/rulesets-protocol.md §4).
+ * `QUEUE_UNRANKED` / `QUEUE_RANKED` make a queue request (`{version, id, kind: "queue", queue,
+ * createdAt}`, Home's Play unranked / Play ranked): the game goes to that mode's character select.
  *
  * Dolphin builds without this (everything before the rooms phase) write no status. Then the
  * launcher still writes the request, and when nothing answers it within a few seconds it takes
@@ -29,9 +31,9 @@ import { randomUUID } from "crypto";
 import { readFile, rename, unlink, writeFile } from "fs/promises";
 import path from "path";
 
-import { CREATE_ROOM } from "./hand_off_target";
+import { type QueueTarget, CREATE_ROOM, isQueueTarget, QUEUE_RANKED, QUEUE_UNRANKED } from "./hand_off_target";
 
-export { CREATE_ROOM };
+export { CREATE_ROOM, QUEUE_RANKED, QUEUE_UNRANKED };
 
 export const ROOM_REQUEST_FILE = "join-room.json";
 export const GAME_STATUS_FILE = "game-status.json";
@@ -49,7 +51,8 @@ export const FAILED_WATCH_MS = 3_000;
 export type RoomRequest =
   | { version: 1; id: string; code: string; createdAt: string }
   | { version: 1; id: string; kind: "direct"; connectCode: string; createdAt: string }
-  | { version: 1; id: string; kind: "create"; ruleset?: string; createdAt: string };
+  | { version: 1; id: string; kind: "create"; ruleset?: string; createdAt: string }
+  | { version: 1; id: string; kind: "queue"; queue: QueueTarget; createdAt: string };
 
 export type GameStatus = {
   version: number;
@@ -104,15 +107,15 @@ export function isRulesetCode(code: string): boolean {
   return /^[BCDFGHJKLMNPQRSTVWXZ]{6}$/.test(code);
 }
 
-/** A room code, a connect code (Direct) or `CREATE_ROOM`. */
+/** A room code, a connect code (Direct), `CREATE_ROOM`, `QUEUE_UNRANKED` or `QUEUE_RANKED`. */
 export function isHandOffCode(code: string): boolean {
-  return isRoomCode(code) || isConnectCode(code) || code === CREATE_ROOM;
+  return isRoomCode(code) || isConnectCode(code) || code === CREATE_ROOM || isQueueTarget(code);
 }
 
 /**
  * Writes `join-room.json` atomically (a reader never sees half a file): a room request for a room
  * code, a Direct request for a connect code, a create request (with the ruleset code, if any) for
- * `CREATE_ROOM`.
+ * `CREATE_ROOM`, a queue request for `QUEUE_UNRANKED` / `QUEUE_RANKED`.
  */
 export async function writeRoomRequest(
   onlineDir: string,
@@ -133,6 +136,8 @@ export async function writeRoomRequest(
       ? ruleset !== undefined
         ? { version: 1, id, kind: "create", ruleset, createdAt }
         : { version: 1, id, kind: "create", createdAt }
+      : isQueueTarget(code)
+      ? { version: 1, id, kind: "queue", queue: code, createdAt }
       : isRoomCode(code)
       ? { version: 1, id, code, createdAt }
       : { version: 1, id, kind: "direct", connectCode: code, createdAt };

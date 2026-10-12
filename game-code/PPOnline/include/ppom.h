@@ -311,7 +311,8 @@ namespace PPOM {
         // reserved): Dolphin bumps directJoin when it accepted one (and left any room); the game
         // then goes to the Direct CSS with the other player's code, directPrefix (2-4 ASCII
         // letters, upper case, NUL-padded) + '#' + directNumber (1-9999), and searches it on
-        // START without the keypad. A zero prefix: a plain Direct CSS.
+        // START without the keypad. A zero prefix: a plain Direct CSS, or with directNumber 1 / 2
+        // the launcher's Play unranked / Play ranked: the Unranked / Ranked CSS.
         u8 directJoin;
         char directPrefix[4];
         u16 directNumber;

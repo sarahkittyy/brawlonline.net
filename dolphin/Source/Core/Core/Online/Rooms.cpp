@@ -118,18 +118,23 @@ enum class LaunchKind
   Room,    // kind absent or "room": join the room `code`
   Direct,  // kind "direct": a Direct invite, `code` is the other player's connect code
   Create,  // kind "create": a new room, as WITH FRIENDS > Create Room (no code)
+  Queue,   // kind "queue": the Unranked or Ranked CSS, `code` is "unranked" or "ranked"
 };
 
 const char* LaunchKindName(LaunchKind k)
 {
-  return k == LaunchKind::Direct ? "direct" : k == LaunchKind::Create ? "create" : "room";
+  return k == LaunchKind::Direct ? "direct" :
+         k == LaunchKind::Create ? "create" :
+         k == LaunchKind::Queue  ? "queue" :
+                                   "room";
 }
 
 struct Launch
 {
   std::string id;
   LaunchKind kind = LaunchKind::Room;
-  std::string code;       // the room code (Room), the connect code (Direct, canonical), "" (Create)
+  std::string code;       // the room code (Room), the connect code (Direct, canonical), "" (Create),
+                          // "unranked" or "ranked" (Queue)
   std::string ruleset;    // Create: the launcher box's ruleset code (normalised), "" none
   s64 created_ms = 0;     // its createdAt
   bool answered = false;  // "accepted" already (held during the game's boot)
@@ -189,6 +194,9 @@ struct State
   u8 join_seq = 0;
   u8 direct_seq = 0;        // bumped on an accepted Direct invite (LOCAL.directJoin)
   std::string direct_code;  // its connect code (LOCAL.directPrefix / directNumber)
+  // Or the launcher's Play unranked / Play ranked (join-room.json kind "queue"), with direct_seq
+  // and no code: 1 Unranked, 2 Ranked, 0 a Direct invite (LOCAL.directNumber, zero prefix).
+  u8 direct_queue = 0;
   u8 create_seq = 0;        // bumped on an accepted launcher create (LOCAL.roomCreate)
   // A launcher create from a room: room-leave goes out right before the pending create (the
   // outbox would send it after, and leave the new room).
@@ -610,13 +618,13 @@ void PollJoinRequest()
     return;
   }
   // "kind": absent or "room" is a room to join ("code"); "direct" a Direct invite
-  // ("connectCode", the other player's connect code); "create" a new room (no code).
-  // docs/rooms-protocol.md §5.
+  // ("connectCode", the other player's connect code); "create" a new room (no code); "queue"
+  // the Unranked or Ranked CSS ("queue": "unranked" or "ranked"). docs/rooms-protocol.md §5.
   if (kind && (!kind->is<std::string>() ||
                (kind->get<std::string>() != "room" && kind->get<std::string>() != "direct" &&
-                kind->get<std::string>() != "create")))
+                kind->get<std::string>() != "create" && kind->get<std::string>() != "queue")))
   {
-    Log("join-room.json: kind is not \"room\", \"direct\" or \"create\": ignored");
+    Log("join-room.json: kind is not \"room\", \"direct\", \"create\" or \"queue\": ignored");
     return;
   }
   LaunchKind launch_kind = LaunchKind::Room;
@@ -624,6 +632,8 @@ void PollJoinRequest()
     launch_kind = LaunchKind::Direct;
   else if (kind && kind->get<std::string>() == "create")
     launch_kind = LaunchKind::Create;
+  else if (kind && kind->get<std::string>() == "queue")
+    launch_kind = LaunchKind::Queue;
   std::optional<std::string> target;
   std::string ruleset;
   if (launch_kind == LaunchKind::Create)
@@ -640,6 +650,18 @@ void PollJoinRequest()
         return;
       }
       ruleset = *code;
+    }
+  }
+  else if (launch_kind == LaunchKind::Queue)
+  {
+    const picojson::value* q = get("queue");
+    if (q && q->is<std::string>() &&
+        (q->get<std::string>() == "unranked" || q->get<std::string>() == "ranked"))
+      target = q->get<std::string>();
+    if (!target)
+    {
+      Log("join-room.json: a queue request without \"unranked\" or \"ranked\": ignored");
+      return;
     }
   }
   else if (launch_kind == LaunchKind::Direct)
@@ -679,6 +701,7 @@ void PollJoinRequest()
   s.launch = Launch{CleanText(id->get<std::string>(), 100), launch_kind, *target, ruleset, *at};
   const char* what = launch_kind == LaunchKind::Direct ? "play Direct with " :
                      launch_kind == LaunchKind::Create ? "create a room" :
+                     launch_kind == LaunchKind::Queue  ? "go to the CSS of " :
                                                          "join ";
   Log(fmt::format("launcher asks to {}{} (request {})", what, *target, s.launch->id));
 }
@@ -747,9 +770,10 @@ void DecideLaunch(const DolphinBusy& busy, bool logged_in, const std::string& ow
   if (screen == Screen::Unknown || !logged_in)
     return;
   s.launch.reset();
-  if (l.kind == LaunchKind::Direct)
+  if (l.kind == LaunchKind::Direct || l.kind == LaunchKind::Queue)
   {
-    if (!own_code.empty() && NormalizeConnectCode(own_code) == l.code)
+    if (l.kind == LaunchKind::Direct && !own_code.empty() &&
+        NormalizeConnectCode(own_code) == l.code)
     {
       AnswerLaunch(l.id, l.answered ? "failed" : "refused", "That's your own code.");
       return;
@@ -757,7 +781,8 @@ void DecideLaunch(const DolphinBusy& busy, bool logged_in, const std::string& ow
     if (!l.answered)
       AnswerLaunch(l.id, "accepted", "");
     // A Direct invite: out of any room first (as a room join from a room), then the game goes to
-    // the Direct CSS with the code and searches it on lock-in (LOCAL.directJoin).
+    // the Direct CSS with the code and searches it on lock-in (LOCAL.directJoin). Play unranked /
+    // Play ranked the same way, to that mode's CSS (no code; LOCAL.directNumber says the mode).
     s.error.clear();
     s.rejoin.clear();
     if (s.view || s.pending)
@@ -771,9 +796,21 @@ void DecideLaunch(const DolphinBusy& busy, bool logged_in, const std::string& ow
         s.outbox.push_back(leave);
       }
       ClearRoom();
-      Log("left the room for the Direct invite");
+      Log(l.kind == LaunchKind::Queue ? "left the room for the launcher's Play" :
+                                        "left the room for the Direct invite");
+    }
+    if (l.kind == LaunchKind::Queue)
+    {
+      s.direct_code.clear();
+      s.direct_queue = l.code == "ranked" ? 2 : 1;
+      ++s.direct_seq;
+      Log(fmt::format("launcher Play: the game goes to the {} CSS (direct {})", l.code,
+                      s.direct_seq));
+      ++s.serial;
+      return;
     }
     s.direct_code = l.code;
+    s.direct_queue = 0;
     ++s.direct_seq;
     Log(fmt::format("Direct invite: the game plays {} (direct {})", l.code, s.direct_seq));
     ++s.serial;
@@ -1572,6 +1609,7 @@ Snapshot GetSnapshot()
   snap.join_seq = s.join_seq;
   snap.direct_seq = s.direct_seq;
   snap.direct_code = s.direct_code;
+  snap.direct_queue = s.direct_queue;
   snap.create_seq = s.create_seq;
   snap.game_active = s.rg.active;
   auto [text, error] = Line(Clock::now());
@@ -1722,6 +1760,7 @@ picojson::object Status()
   o["create_seq"] = picojson::value(static_cast<double>(s.create_seq));
   o["direct_seq"] = picojson::value(static_cast<double>(s.direct_seq));
   o["direct_code"] = picojson::value(s.direct_code);
+  o["direct_queue"] = picojson::value(static_cast<double>(s.direct_queue));
   o["last_request"] = s.last_request;
   o["requests_seen"] = picojson::value(static_cast<double>(s.requests_seen));
   picojson::array log;

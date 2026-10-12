@@ -69,7 +69,7 @@ use common::proto::{
     Rank, GET_TICKET_RESP,
 };
 use common::ratelimit::{RateLimiter, Window};
-use common::rooms::{decode_room_search_code, HelloResp, MmStatus, RoomError, RoomRequest};
+use common::rooms::{decode_room_search_code, HelloResp, MmStatus, QueueCounts, RoomError, RoomRequest};
 use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
@@ -501,11 +501,12 @@ impl Engine {
         self.chat.group_count()
     }
 
-    /// The snapshot the launcher sees: the online count and the public rooms.
+    /// The snapshot the launcher sees: the online count, the public rooms and the queues.
     pub fn status(&self, wall: DateTime<Utc>) -> MmStatus {
         MmStatus {
             online: self.online_count(),
             rooms: self.rooms.public_rooms(200),
+            queues: QueueCounts { unranked: self.unranked.len(), ranked: self.ranked.len() },
             updated_at: wall.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             members: self.rooms.member_rooms(4000),
         }
@@ -2319,6 +2320,10 @@ mod tests {
         h.connect(4, 41004);
         assert!(matches(&h.unranked(4, &v[0])).is_empty());
         assert_eq!(h.e.waiting_count(), 2);
+        // The launcher's "X in queue" under Play unranked / Play ranked.
+        assert_eq!(h.e.status(Utc::now()).queues, QueueCounts { unranked: 1, ranked: 1 });
+        h.input(Input::Disconnected { conn: 4 });
+        assert_eq!(h.e.status(Utc::now()).queues, QueueCounts { unranked: 0, ranked: 1 });
     }
 
     #[test]

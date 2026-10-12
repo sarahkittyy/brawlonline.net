@@ -803,6 +803,72 @@ def test_direct_invite_before_the_game_starts(backend: OnlineBackend, dolphin: C
     g.shot("01-direct-css-after-the-boot")
 
 
+def write_queue(g: Game, queue: str) -> str:
+    """The launcher's Play unranked / Play ranked (join-room.json kind "queue", docs/rooms-protocol.md §5)."""
+    import json
+    import os
+    import uuid
+    from datetime import datetime, timezone
+    rid = str(uuid.uuid4())
+    created = datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    d = Path(g.inst.user_dir) / "Online"
+    tmp = d / "join-room.json.tmp"
+    tmp.write_text(json.dumps({"version": 1, "id": rid, "kind": "queue", "queue": queue, "createdAt": created}))
+    os.replace(tmp, d / "join-room.json")
+    return rid
+
+
+def test_play_buttons_from_the_launcher(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                        gpu_backend: str) -> None:
+    """Home's Play ranked / Play unranked: from a room's CSS Dolphin leaves the room and the game
+    goes to the Ranked CSS; from that idle CSS Play unranked builds it again as Unranked's; from the
+    ONLINE menu page Play ranked goes to the Ranked CSS. Nothing is searched until START, which then
+    searches that queue, and `GET /v1/rooms` counts the player in it (the launcher's "X in queue")."""
+    from test_online_game import _find_logged
+    ua = backend.create_user("playbtn", "PLBT")
+    g = _boot(dolphin, "play-a", backend, ua, gpu_backend, "play-buttons", "record", artifacts=ART)
+    g.to_main_menu()
+    g.to_online_page()
+    create_room(g)
+
+    def goes_to(queue: str, mode_state: int, shot: str) -> None:
+        j = room_view(g)["direct_join"]
+        rid = write_queue(g, queue)
+        assert launcher_answer(g, rid)["result"] == "accepted"
+        v = until_view(g, lambda v: v["direct_join"] == (j + 1) & 0xFF and v["flags"] == 0 and
+                       v["screen"] == ppom.SCREENS["online-css"], f"on the {queue} CSS", timeout=60)
+        assert v["direct_code"] == "" and v["direct_queue"] == (2 if queue == "ranked" else 1), v
+        _wait(lambda: g.scene() == CSS, 60, "on the CSS")
+        _wait(lambda: menu_state(g) == mode_state, 10, f"the CSS is {queue}'s")
+        g.steps("wait 60")
+        g.shot(shot)
+
+    # MODE_RANKED + 1, MODE_UNRANKED + 1 (ppom.h Mode). From the room's CSS: out of the room.
+    goes_to("ranked", 1, "01-ranked-css-from-a-room")
+    assert "left the room for the launcher's Play" in " ".join(g.c.call("rooms_status")["log"])
+    goes_to("unranked", 2, "02-unranked-css-from-ranked")
+    assert g.debug_scratch()[9] >> 24 == 2, hex(g.debug_scratch()[9])
+    assert g.finds() == 0, "a Play only opens the CSS"
+
+    # From the ONLINE menu page (Unranked's CSS goes back there).
+    g.steps("hold B 120", "until muMenuMain 600", "wait 90")
+    assert room_view(g)["screen"] == ppom.SCREENS["menus"], room_view(g)
+    goes_to("ranked", 1, "03-ranked-css-from-the-menus")
+    assert g.debug_scratch()[9] >> 24 == 3, hex(g.debug_scratch()[9])
+
+    # START searches Ranked (FIND_OPPONENT mode 0, no code), and the server counts it.
+    pick(g)
+    n = g.finds()
+    g.press_until("START", lambda: g.finds() > n, "FIND_OPPONENT")
+    _find_logged(g, 0, "")
+    rooms = _wait(lambda: (lambda r: r if r["queues"]["ranked"] == 1 else None)(
+        backend._http("GET", "/v1/rooms", token=ua.session_token)), 15, "/v1/rooms counts the ranked ticket")
+    assert rooms["queues"]["unranked"] == 0, rooms
+    g.steps("wait 30")
+    g.shot("04-searching-ranked")
+    g.c.mm_cancel()
+
+
 def write_create(g: Game, ruleset: str | None = None) -> str:
     """The launcher's Create room (join-room.json kind "create", docs/rooms-protocol.md §5), with
     the launcher's ruleset box (`ruleset`, a code) when given."""

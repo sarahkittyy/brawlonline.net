@@ -98,6 +98,9 @@ struct Snapshot
   // with the other player's connect code (canonical, NormalizeConnectCode; "" before the first).
   u8 direct_seq = 0;
   std::string direct_code;
+  // Or the launcher's Play unranked / Play ranked (kind "queue"), bumping direct_seq with no
+  // code: 1 the Unranked CSS, 2 the Ranked CSS; 0 for a Direct invite.
+  u8 direct_queue = 0;
   // The launcher's create (join-room.json kind "create"): bumped when Dolphin accepted one and
   // sent room-create itself; the game goes to the room CSS as Create Room without sending one.
   u8 create_seq = 0;
