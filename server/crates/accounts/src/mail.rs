@@ -408,13 +408,14 @@ pub fn verification_email(to: &str, display_name: &str, link: &str) -> Email {
         to: to.into(),
         subject: format!("Verify your {PRODUCT_NAME} email"),
         text: format!(
-            "Hi {display_name},\n\nOpen this link to verify the email address of your {PRODUCT_NAME} account:\n\n{link}\n\nThe link expires in 48 hours. If you did not sign up for {PRODUCT_NAME}, ignore this email.\n"
+            "Hi {display_name},\n\nOpen this link to verify the email address of your {PRODUCT_NAME} account:\n\n{link}\n\nIf the link doesn't open, copy this address into your browser.\n\nThe link expires in 48 hours. If you did not sign up for {PRODUCT_NAME}, ignore this email.\n"
         ),
+        // The address is also given as plain text, outside the link: Brevo rewrites every
+        // href through its click-tracking domain, which ad blockers and DNS filters block.
         html: format!(
-            "<p>Hi {},</p><p>Open this link to verify the email address of your {p} account:</p><p><a href=\"{}\">{}</a></p><p>The link expires in 48 hours. If you did not sign up for {p}, ignore this email.</p>",
+            "<p>Hi {},</p><p>Open this link to verify the email address of your {p} account:</p><p><a href=\"{l}\">Verify my email</a></p><p>If the link doesn't open, copy this address into your browser:<br>{l}</p><p>The link expires in 48 hours. If you did not sign up for {p}, ignore this email.</p>",
             escape_html(display_name),
-            escape_html(link),
-            escape_html(link),
+            l = escape_html(link),
             p = escape_html(PRODUCT_NAME)
         ),
     }
@@ -425,13 +426,12 @@ pub fn reset_email(to: &str, display_name: &str, link: &str) -> Email {
         to: to.into(),
         subject: format!("Reset your {PRODUCT_NAME} password"),
         text: format!(
-            "Hi {display_name},\n\nSomeone asked to reset the password for your {PRODUCT_NAME} account. Open this link to choose a new one:\n\n{link}\n\nThe link expires in 1 hour. If this was not you, ignore this email; your password has not changed.\n"
+            "Hi {display_name},\n\nSomeone asked to reset the password for your {PRODUCT_NAME} account. Open this link to choose a new one:\n\n{link}\n\nIf the link doesn't open, copy this address into your browser.\n\nThe link expires in 1 hour. If this was not you, ignore this email; your password has not changed.\n"
         ),
         html: format!(
-            "<p>Hi {},</p><p>Someone asked to reset the password for your {p} account. Open this link to choose a new one:</p><p><a href=\"{}\">{}</a></p><p>The link expires in 1 hour. If this was not you, ignore this email; your password has not changed.</p>",
+            "<p>Hi {},</p><p>Someone asked to reset the password for your {p} account. Open this link to choose a new one:</p><p><a href=\"{l}\">Choose a new password</a></p><p>If the link doesn't open, copy this address into your browser:<br>{l}</p><p>The link expires in 1 hour. If this was not you, ignore this email; your password has not changed.</p>",
             escape_html(display_name),
-            escape_html(link),
-            escape_html(link),
+            l = escape_html(link),
             p = escape_html(PRODUCT_NAME)
         ),
     }
@@ -764,5 +764,16 @@ mod tests {
         let e = verification_email("a@b.test", "<script>", "http://x/?token=a&b");
         assert!(!e.html.contains("<script>"));
         assert!(e.html.contains("&amp;b"));
+    }
+
+    #[test]
+    fn the_address_is_also_plain_text() {
+        // Outside any href, so a copy of it goes straight to us, not through a tracker.
+        let (v, r) = ("https://h/verify-email?token=t", "https://h/reset-password?token=t");
+        for (e, link) in [(verification_email("a@b.test", "x", v), v), (reset_email("a@b.test", "x", r), r)] {
+            assert!(e.html.contains(&format!("copy this address into your browser:<br>{link}</p>")), "{}", e.html);
+            assert_eq!(e.html.matches(link).count(), 2, "{}", e.html);
+            assert!(e.text.contains("copy this address into your browser"));
+        }
     }
 }
