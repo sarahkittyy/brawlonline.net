@@ -146,7 +146,8 @@ export interface DolphinService {
   checkPlayKeyExists(key: PlayKey): Promise<boolean>;
   removePlayKeyFile(): Promise<void>;
   viewSlpReplay(files: ReplayQueueItem[]): Promise<void>;
-  launchNetplayDolphin(): Promise<void>;
+  /** `bootGame`: boot P+ even when the Play button is set to open Dolphin only. */
+  launchNetplayDolphin(opts?: { bootGame?: boolean }): Promise<void>;
   /**
    * Hands a room code to the running game; `not-running` when no netplay Dolphin is open. `ruleset`:
    * a create request's ruleset code.

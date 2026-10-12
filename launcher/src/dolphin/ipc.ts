@@ -55,7 +55,12 @@ export const ipc_removePlayKeyFile = makeEndpoint.main("removePlayKeyFile", <Emp
 
 export const ipc_viewSlpReplay = makeEndpoint.main("viewSlpReplay", <{ files: ReplayQueueItem[] }>_, <SuccessPayload>_);
 
-export const ipc_launchNetplayDolphin = makeEndpoint.main("launchNetplayDolphin", <EmptyPayload>_, <SuccessPayload>_);
+/** `bootGame` boots P+ whatever the Play button setting says (an invite, a room, Create room). */
+export const ipc_launchNetplayDolphin = makeEndpoint.main(
+  "launchNetplayDolphin",
+  <{ bootGame?: boolean }>_,
+  <SuccessPayload>_,
+);
 
 /** A room in the list was clicked while the game may be running (docs/rooms-protocol.md). */
 export const ipc_joinRoomInGame = makeEndpoint.main(

@@ -115,8 +115,8 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     return { success: true };
   });
 
-  ipc_launchNetplayDolphin.main!.handle(async () => {
-    await dolphinManager.launchNetplayDolphin();
+  ipc_launchNetplayDolphin.main!.handle(async ({ bootGame }) => {
+    await dolphinManager.launchNetplayDolphin({ bootGame });
     return { success: true };
   });
 

@@ -86,7 +86,7 @@ class MockDolphinClient implements DolphinService {
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
-  async launchNetplayDolphin(): Promise<void> {
+  async launchNetplayDolphin(_opts?: { bootGame?: boolean }): Promise<void> {
     throw new Error("Method not implemented.");
   }
 

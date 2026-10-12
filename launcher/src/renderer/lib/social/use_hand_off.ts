@@ -61,7 +61,7 @@ export const useHandOff = () => {
             break;
           case "not-running": {
             const { id } = await dolphinService.prepareRoomLaunch(code, ruleset);
-            if (await play()) {
+            if (await play({ bootGame: true })) {
               showInfo(text.starting[kind]);
               return true;
             }

@@ -48,7 +48,7 @@ export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
   const { showError } = useToasts();
   // The Play checks and launch live in `usePlay`, so a room in Home's list can start the game too.
   const play = usePlay();
-  const onPlay = (offlineOnly?: boolean) => void play(offlineOnly);
+  const onPlay = (offlineOnly?: boolean) => void play({ offlineOnly });
   const { startGameOpen, activateOnlineOpen, setStartGameOpen, setActivateOnlineOpen } = usePlayDialogs();
 
   return (

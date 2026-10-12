@@ -42,7 +42,7 @@ export const useJoinRoom = () => {
             break;
           case "not-running": {
             const { id } = await dolphinService.prepareRoomLaunch(room.code);
-            const started = await play();
+            const started = await play({ bootGame: true });
             if (started) {
               showInfo(Messages.startingForRoom());
             } else {

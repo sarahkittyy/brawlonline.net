@@ -25,7 +25,9 @@ export const usePlayDialogs = create(
 /**
  * The Play button's checks and launch (Slippi's `onPlay`): logged in and online, a play key on
  * disk, a valid disc image, then the netplay Dolphin. Resolves to whether the game was started;
- * when a check fails it shows its dialog or error, as the Play button does.
+ * when a check fails it shows its dialog or error, as the Play button does. `offlineOnly` skips the
+ * account checks (Play offline); `bootGame` boots P+ even when the Play button is set to open
+ * Dolphin only (a hand-off: an invite, a room, Create room).
  */
 export const usePlay = () => {
   const { dolphinService, backendService } = useServices();
@@ -39,7 +41,7 @@ export const usePlay = () => {
   const { setStartGameOpen, setActivateOnlineOpen } = usePlayDialogs();
 
   return useCallback(
-    async (offlineOnly?: boolean): Promise<boolean> => {
+    async ({ offlineOnly, bootGame }: { offlineOnly?: boolean; bootGame?: boolean } = {}): Promise<boolean> => {
       if (!offlineOnly) {
         // Ensure user is logged in
         if (!currentUser || !isOnline) {
@@ -75,7 +77,7 @@ export const usePlay = () => {
         return false;
       }
 
-      return await launchNetplay();
+      return await launchNetplay(bootGame);
     },
     [
       currentUser,

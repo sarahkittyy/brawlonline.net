@@ -105,25 +105,31 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
     [dolphinService, showError],
   );
 
-  /** Starts the netplay Dolphin; resolves to whether it started (errors are shown). */
-  const launchNetplay = useCallback(async (): Promise<boolean> => {
-    if (getInstallStatus(DolphinLaunchType.NETPLAY) !== DolphinStatus.READY) {
-      showError(Messages.dolphinIsUpdating());
-      return false;
-    }
-    if (!(await launcherIsUpToDate())) {
-      return false;
-    }
+  /**
+   * Starts the netplay Dolphin; resolves to whether it started (errors are shown). `bootGame` boots
+   * P+ even when the Play button is set to open Dolphin only.
+   */
+  const launchNetplay = useCallback(
+    async (bootGame?: boolean): Promise<boolean> => {
+      if (getInstallStatus(DolphinLaunchType.NETPLAY) !== DolphinStatus.READY) {
+        showError(Messages.dolphinIsUpdating());
+        return false;
+      }
+      if (!(await launcherIsUpToDate())) {
+        return false;
+      }
 
-    try {
-      await dolphinService.launchNetplayDolphin();
-      setDolphinOpened(DolphinLaunchType.NETPLAY);
-      return true;
-    } catch (err) {
-      showError(err);
-      return false;
-    }
-  }, [getInstallStatus, launcherIsUpToDate, dolphinService, showError]);
+      try {
+        await dolphinService.launchNetplayDolphin({ bootGame });
+        setDolphinOpened(DolphinLaunchType.NETPLAY);
+        return true;
+      } catch (err) {
+        showError(err);
+        return false;
+      }
+    },
+    [getInstallStatus, launcherIsUpToDate, dolphinService, showError],
+  );
 
   const viewReplays = useCallback(
     async (...files: ReplayQueueItem[]) => {

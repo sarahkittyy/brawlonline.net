@@ -215,7 +215,12 @@ export class DolphinManager {
     }
   }
 
-  async launchNetplayDolphin() {
+  /**
+   * Starts the netplay Dolphin. It boots P+ when the Play button is set to (`launchGameOnPlay`) or
+   * when `bootGame` says so: a hand-off (an invite, a room, Create room) leaves a request only a
+   * booted game reads, and closing a Dolphin that never booted takes it back.
+   */
+  async launchNetplayDolphin(opts: { bootGame?: boolean } = {}) {
     Preconditions.checkState(this.netplayDolphinInstance == null, "Netplay dolphin is already open!");
     await this.launchGate();
 
@@ -225,7 +230,7 @@ export class DolphinManager {
     await this._updateDolphinSettings(DolphinLaunchType.NETPLAY);
 
     const testMode = readTestMode(process.env, app.isPackaged);
-    const launchGameOnPlay = this.settingsManager.get().settings.launchGameOnPlay;
+    const launchGameOnPlay = opts.bootGame || this.settingsManager.get().settings.launchGameOnPlay;
     let bootFile: string | null = null;
     if (launchGameOnPlay) {
       // Boot P+ the way P+ does: its netplay launcher DOL applies the codeset from the

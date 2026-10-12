@@ -67,8 +67,8 @@ const dolphinApi: DolphinService = {
   async viewSlpReplay(files: ReplayQueueItem[]): Promise<void> {
     await ipc_viewSlpReplay.renderer!.trigger({ files });
   },
-  async launchNetplayDolphin(): Promise<void> {
-    await ipc_launchNetplayDolphin.renderer!.trigger({});
+  async launchNetplayDolphin(opts?: { bootGame?: boolean }): Promise<void> {
+    await ipc_launchNetplayDolphin.renderer!.trigger({ bootGame: opts?.bootGame });
   },
   async joinRoomInGame(code: string, ruleset?: string) {
     const { result } = await ipc_joinRoomInGame.renderer!.trigger({ code, ruleset });
