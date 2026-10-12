@@ -21,6 +21,7 @@
 
 namespace Core
 {
+class CPUThreadGuard;
 class System;
 }
 namespace Memory
@@ -53,6 +54,10 @@ constexpr u32 MODE_MELEE_SIZE = 0x320;
 constexpr u32 PAD_SYSTEM_PTR = 0x805A0040;  // gfPadSystem* (0x805BACC0)
 constexpr u32 PAD_STATUS = 0x805BAD00;  // gfPadStatus[4], stride 0x40, what the game uses
 constexpr u32 PAD_STRIDE = 0x40;
+constexpr u32 PAD_THREAD = 0x805BA108;           // OSThread of Brawl's pad thread (object at -8)
+constexpr u32 PAD_THREAD_RUN = 0x805BA440;       // u8: the thread's loop runs while non-zero
+constexpr u32 PAD_SYS_THREAD_OFF = 0xB54;        // gfPadSystem+0xB54: the thread the alarm resumes
+constexpr u32 OS_ALARM_QUEUE = 0x805A0678;       // {head, tail} of the OS alarm queue (r13-0x3DA8)
 constexpr u32 SCM_OPERATOR_RULE_MELEE = 0x54;
 constexpr u32 OPR_IS_GAME_SET = 0x74;
 // scMelee's stOperatorInfoMelee (its gfTask name at +0) and its flags byte: 0x80 running, 0x40 stop
@@ -199,6 +204,15 @@ void PadsOnPadThreadUpdated(Core::System& system);
 PadSlots PadsLatestRaw();
 // Milliseconds since the pad thread produced that sample (-1: none yet).
 double PadsLatestAgeMs();
+
+// Pad thread watchdog (main thread, every loop top, any mode). The pad thread suspends itself after
+// every pass and the pad alarm (an OSAlarm at gfPadSystem, period one field) resumes it; players
+// have lost their controller for good after a ranked stage select (2026-10-11: the thread made no
+// pass again, menus and match alike). Once no pass came for a second of emulated time, logs one
+// report of what keeps it stopped: the pad thread (state, suspend count, wait queue, backtrace), its
+// run flag and gfPadSystem's thread pointer, the pad alarm and the OS alarm queue, and every guest
+// thread; and again when passes resume. Emulated time, so a paused emulation reports nothing.
+void PadsWatchdog(const Core::CPUThreadGuard& guard);
 
 // Anchor (recorder): at every loop top the frame's slots become the pad thread's newest sample for
 // the ports in `port_mask`, and stay constant for the whole main-thread frame.

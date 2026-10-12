@@ -20,9 +20,14 @@
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
 #include "Common/Swap.h"
+#include "Core/Core.h"
 #include "Core/CoreTiming.h"
+#include "Core/Debugger/OSThread.h"
 #include "Core/Harness/Harness.h"
 #include "Core/HW/Memmap.h"
+#include "Core/HW/SystemTimers.h"
+#include "Core/PowerPC/MMU.h"
+#include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
 
 namespace Gprb
@@ -652,6 +657,7 @@ struct PadsState
   bool have_latest = false;
   PadSlots latest{};
   std::chrono::steady_clock::time_point latest_at{};
+  u64 latest_ticks = 0;  // emulated time of that pass (the watchdog's clock)
 };
 PadsState s_pads;
 
@@ -730,6 +736,7 @@ void PadsOnPadThreadUpdated(Core::System& system)
   memory.CopyFromEmu(s_pads.latest.data(), Addr::PAD_STATUS, s_pads.latest.size());
   s_pads.have_latest = true;
   s_pads.latest_at = std::chrono::steady_clock::now();
+  s_pads.latest_ticks = system.GetCoreTiming().GetTicks();
   if (s_pads.current_valid)
     WriteSlots(memory, s_pads.current_ports, s_pads.current);
 }
@@ -747,6 +754,120 @@ double PadsLatestAgeMs()
     return -1;
   return std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - s_pads.latest_at)
       .count();
+}
+
+namespace
+{
+struct PadWatch
+{
+  bool stalled = false;
+  u32 reports = 0;
+};
+PadWatch s_pad_watch;
+constexpr u32 PAD_WATCH_MAX_REPORTS = 8;  // a run
+
+// The return addresses of the guest stack at `sp` (back chain), oldest call last.
+std::string GuestBacktrace(const Core::CPUThreadGuard& guard, u32 sp, int depth)
+{
+  std::string out;
+  for (int i = 0; i < depth && PowerPC::MMU::HostIsRAMAddress(guard, sp); ++i)
+  {
+    const u32 next = PowerPC::MMU::HostRead<u32>(guard, sp);
+    if (next <= sp || !PowerPC::MMU::HostIsRAMAddress(guard, next + 4))
+      break;
+    out += fmt::format(" {:08x}", PowerPC::MMU::HostRead<u32>(guard, next + 4));
+    sp = next;
+  }
+  return out;
+}
+
+std::string ThreadReport(const Core::CPUThreadGuard& guard, u32 addr)
+{
+  const Core::Debug::OSThreadView view(guard, addr);
+  const auto& t = view.Data();
+  return fmt::format("{:08x} state {} suspend {} prio {}/{} queue {:08x} srr0 {:08x} lr {:08x} stack{}",
+                     addr, t.state, t.suspend, t.effective_priority, t.base_priority, t.queue_addr,
+                     t.context.srr0, t.context.lr, GuestBacktrace(guard, t.context.gpr[1], 12));
+}
+
+void ReportPadStall(const Core::CPUThreadGuard& guard, double seconds)
+{
+  auto& system = guard.GetSystem();
+  const auto rd = [&](u32 a) {
+    return PowerPC::MMU::HostIsRAMAddress(guard, a) ? PowerPC::MMU::HostRead<u32>(guard, a) : 0u;
+  };
+  const Guest g(system.GetMemory());
+  const u32 pad_system = rd(Addr::PAD_SYSTEM_PTR);
+  WARN_LOG_FMT(BRAWLBACK,
+               "pad watchdog: the pad thread made no pass for {:.1f} s (scene {}): run flag {}, "
+               "gfPadSystem {:08x} thread {:08x}, current thread {:08x}",
+               seconds, CurrentSceneName(g),
+               PowerPC::MMU::HostIsRAMAddress(guard, Addr::PAD_THREAD_RUN) ?
+                   PowerPC::MMU::HostRead<u8>(guard, Addr::PAD_THREAD_RUN) :
+                   0,
+               pad_system, pad_system ? rd(pad_system + Addr::PAD_SYS_THREAD_OFF) : 0, rd(0x800000E4));
+  WARN_LOG_FMT(BRAWLBACK, "pad watchdog: pad thread {}", ThreadReport(guard, Addr::PAD_THREAD));
+
+  // The OS alarm queue (OSAlarm: handler +0, fire u64 +8, prev +0x10, next +0x14, period u64 +0x18).
+  // "in": timebase ticks from now to the fire time, from the low words (the game's time base and
+  // Dolphin's differed by one in the high word; good for +-35 s); the full values are logged too.
+  const u64 now_tb = system.GetSystemTimers().GetFakeTimeBase();
+  const auto in = [now_tb](u64 fire) { return s32(u32(fire) - u32(now_tb)); };
+  std::string alarms;
+  bool pad_alarm_queued = false;
+  u32 a = rd(Addr::OS_ALARM_QUEUE), prev = 0;
+  for (int i = 0; a && i < 64 && PowerPC::MMU::HostIsRAMAddress(guard, a + 0x1F); ++i)
+  {
+    const u64 fire = u64{rd(a + 8)} << 32 | rd(a + 12);
+    const u64 period = u64{rd(a + 0x18)} << 32 | rd(a + 0x1C);
+    alarms += fmt::format(" [{:08x} handler {:08x} fire {:x} in {} period {}{}]", a, rd(a), fire, in(fire),
+                          period, rd(a + 0x10) == prev ? "" : " BAD-PREV");
+    pad_alarm_queued |= a == pad_system;
+    prev = a;
+    a = rd(a + 0x14);
+  }
+  WARN_LOG_FMT(BRAWLBACK, "pad watchdog: alarm queue (now {:x}, tail {:08x}, last {:08x}){}", now_tb,
+               rd(Addr::OS_ALARM_QUEUE + 4), prev, alarms);
+  if (pad_system)
+  {
+    const u64 fire = u64{rd(pad_system + 8)} << 32 | rd(pad_system + 12);
+    WARN_LOG_FMT(BRAWLBACK,
+                 "pad watchdog: pad alarm {:08x} {}: handler {:08x} fire in {} ({:x}) prev {:08x} next {:08x} "
+                 "period {}",
+                 pad_system, pad_alarm_queued ? "queued" : "NOT QUEUED", rd(pad_system), in(fire), fire,
+                 rd(pad_system + 0x10), rd(pad_system + 0x14),
+                 u64{rd(pad_system + 0x18)} << 32 | rd(pad_system + 0x1C));
+  }
+  for (const auto& t : system.GetPowerPC().GetDebugInterface().GetThreads(guard))
+    WARN_LOG_FMT(BRAWLBACK, "pad watchdog: thread {}", ThreadReport(guard, t->GetAddress()));
+}
+}  // namespace
+
+void PadsWatchdog(const Core::CPUThreadGuard& guard)
+{
+  auto& system = guard.GetSystem();
+  u64 last;
+  {
+    std::lock_guard lk(s_pads.mutex);
+    last = s_pads.latest_ticks;
+  }
+  const u64 now = system.GetCoreTiming().GetTicks();
+  if (last == 0 || now < last)  // no pass yet, or a savestate went back in time
+    return;
+  const double seconds = double(now - last) / system.GetSystemTimers().GetTicksPerSecond();
+  if (!s_pad_watch.stalled)
+  {
+    if (seconds < 1.0)
+      return;
+    s_pad_watch.stalled = true;
+    if (s_pad_watch.reports++ < PAD_WATCH_MAX_REPORTS)
+      ReportPadStall(guard, seconds);
+  }
+  else if (seconds < 0.1)
+  {
+    s_pad_watch.stalled = false;
+    WARN_LOG_FMT(BRAWLBACK, "pad watchdog: the pad thread runs again");
+  }
 }
 
 void PadsSetAnchor(u32 port_mask)

@@ -166,6 +166,7 @@ void BrawlbackGekkoNetUnconditionalFrame(const Core::CPUThreadGuard& guard)
   if (!Gprb::Session::IsRunning())
     Gprb::CpuTraceOnLoopTop(system);
   Gprb::PadsOnLoopTop(system);
+  Gprb::PadsWatchdog(guard);
   // Gameplay-only rollback session (Core/Rollback/GameplaySession.h). Never together with a
   // Dolphin netplay rollback session.
   if (!NetPlay::IsNetPlayRunning() && Gprb::Session::OnLoopTop(guard))
