@@ -963,3 +963,110 @@ def ppom_sym(g: Game, name: str) -> int:
         elif len(parts) == 5 and (parts[4] == name or parts[4].startswith(name + "__")):
             return addrs[secidx[cur]] + int(parts[0], 16)
     raise KeyError(name)
+
+
+TOKEN_ART = ROOT / "run" / "artifacts" / "game-code" / "rooms" / "token"
+# Portraits (CSS ids, hand positions in the CSS's units: centroids seen while scanning).
+TOKEN_CHARS = [(0x13, (-15.3, 10.4)), (0x24, (3.6, 10.7)), (0x07, (-21.3, 10.7)), (0x2B, (-5.8, 5.9))]
+
+
+def css_area(g: Game):
+    from ppharness import brawl as B
+    return B.read_css_area(g.c.read_mem, 0)
+
+
+def token_round(g: Game, css: int, pos: tuple[float, float], gap: int, label: str, log: list) -> None:
+    """Place the token on `css`, A on it again `gap` frames after the placing press (the hand
+    still on it: it goes back into the hand), then over another portrait and placed there."""
+    from ppharness import brawl as B
+    g.hand_to(*pos, tol=0.6)
+    g.wait(4)
+    a = css_area(g)
+    assert a.in_hand and a.hand_target == B.CSS_HAND_GRID_HOLDING and a.character == css, (label, a)
+    g.c.pad_script(0, [PadInput(buttons=["A"], hold=2), PadInput(hold=gap), PadInput(buttons=["A"], hold=2),
+                       PadInput(hold=4)])
+    seen = []
+    for _ in range(gap + 30):
+        g.sim.service(1)
+        a = css_area(g)
+        seen.append((a.hand_target, a.character, a.in_hand, a.flying))
+    a = css_area(g)
+    log.append((label, gap, seen[:6], seen[-1]))
+    g.shot(f"{label}-gap{gap:02d}")
+    # Taken back: in the hand, and the CSS shows the portrait under it as the hand moves.
+    assert a.in_hand and not a.flying, (label, gap, a, seen)
+    nxt_css, nxt_pos = next((c, p) for c, p in TOKEN_CHARS if c != css)
+    g.hand_to(*nxt_pos, tol=0.6)
+    g.wait(4)
+    a = css_area(g)
+    assert a.in_hand and a.hand_target == B.CSS_HAND_GRID_HOLDING and a.character == nxt_css, (label, gap, a, seen)
+    g.tap("A")
+    g.wait(20)
+    a = css_area(g)
+    assert a.placed and a.character == nxt_css, (label, gap, a)
+    # and up again with A on it once still, for the next round
+    g.tap("A")
+    g.wait(20)
+    a = css_area(g)
+    assert a.in_hand and not a.placed, (label, gap, a)
+
+
+def token_rounds(g: Game, label: str) -> None:
+    log: list = []
+    try:
+        for i, gap in enumerate((1, 2, 3, 5, 8, 12, 20, 40)):
+            css, pos = TOKEN_CHARS[i % len(TOKEN_CHARS)]
+            token_round(g, css, pos, gap, label, log)
+    except AssertionError:
+        for row in log:   # (label, gap, the first frames' (target, character, in hand, +0x1F9), the last)
+            print(row, flush=True)
+        raise
+
+
+@pytest.fixture
+def token_game(dolphin_exe):
+    g = Game("token", art=TOKEN_ART)
+    yield g
+    g.close()
+
+
+def test_token_picked_up_and_placed_again(token_game: Game) -> None:
+    """A on one's own placed token takes it back into the hand, and it is placed again, however
+    soon after it went down (staging feedback 2026-10-12: picked up with A it sometimes stayed in
+    the hand invisible, the CSS showing no character under it, and could not be placed again):
+    as the host in slot 1, then as a player in slot 3 (the local panel's models drawn two slots
+    right)."""
+    g = token_game
+    g.c.game_bridge_config(enabled=False)
+    create_room(g)
+    sim = g.sim
+    sim.add_player(1, "alice")
+    g.wait(30)
+    g.hand_to(*TOKEN_CHARS[0][1], tol=0.6)
+    g.tap("A")
+    g.wait(20)
+    g.tap("A")                                      # up again: the rounds start with it in hand
+    g.wait(20)
+    token_rounds(g, "host")
+    # Leave, join a room in slot 3.
+    g.hand_to(*TOKEN_CHARS[0][1], tol=0.6)
+    g.tap("A")
+    g.wait(20)
+    g.hold("Z", 60)
+    g.wait(20)
+    sim.joinable["KFQB"] = roomsim.Room(code="KFQB", host=1, open=[True, True, True, False],
+                                        members=[roomsim.Member("carol", team=0),
+                                                 roomsim.Member("bob", team=1), None, None])
+    g.tap("START")
+    g.wait(40)
+    keypad_type(g, "KFQB")
+    g.tap("START")
+    g.wait(90)
+    assert sim.room is not None and sim.me() == 2
+    g.tap("A")                                      # the token put back on its portrait: up
+    g.wait(20)
+    if not css_area(g).in_hand:
+        g.hand_to(*TOKEN_CHARS[0][1], tol=0.6)
+        g.tap("A")
+        g.wait(20)
+    token_rounds(g, "slot3")
