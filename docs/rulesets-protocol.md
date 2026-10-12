@@ -17,12 +17,13 @@ _Phase 3a of `docs/design/room-rules.md` §8 (2026-10-11): the ruleset format, p
 | `rules` | `MatchRules` | Every field of the room rules: `style`, `stocks`, `timeMinutes`, `damageRatio`, `teamAttack`, `pause`, `itemFrequency` (0-3: None, Low, Medium, High), `itemSwitch` (P+'s ITEM SWITCH, 8 bytes, bit `i` = cell `i` of its screen: `docs/game-code.md` §14, "Item switch layout"; the launcher and the website show the items, never the bytes), `hazards`, `autoLCancel`, `inputAssist` (`room-rules.md` §3). |
 | `stages.starters` | stage ids | `srStageKind` (1-255), at least one. Game 1 of a set, and every game with `stageChoice: "strike"`, strikes from these. |
 | `stages.counterpicks` | stage ids | The extra stages of games 2+: games 2+ pick from starters **and** counterpicks. No stage is in both lists. The launcher offers P+'s 15 legal stages (`PPLUS_LEGAL_STAGES`). |
-| `players` | `"1v1"`, `"2v2"`, `"ffa"` | A room can't start until its slots and teams match. |
-| `bestOf` | `0`, `3`, `5`, `7` | 0: no set, one game at a time. FFA: 0. |
-| `stageChoice` | `"loser-picks"`, `"strike"`, `"random"` | No set only (with a set it is `"loser-picks"` and unused). FFA: not `"strike"`. |
+| `bestOf` | `0`, `3`, `5`, `7` | 0: no set, one game at a time. A set is played in a room that makes two sides (two players, or two teams of two); elsewhere its games are single games on a random stage of the ruleset's. |
+| `stageChoice` | `"loser-picks"`, `"strike"`, `"random"` | No set only (with a set it is `"loser-picks"` and unused). `"strike"` strikes between two sides; elsewhere a random stage. |
 | `strikes` | e.g. `[1, 2, 1]` | The strike pattern over the starters, turns alternating from the first striker (`[1, 2, 1]`: first strikes 1, the other 2, the first 1). The sum is the starter count minus one: it leaves exactly one stage. Used by sets and `"strike"`; empty otherwise. |
 | `bans` | 0-3 | Games 2+ of a set: the winner bans. Fewer than the stages. 0 without a set. |
 | `dsr` | bool | Games 2+ of a set: the loser can't pick a stage they won on. false without a set. |
+
+**No player count.** A ruleset has no `players` (1v1 / 2v2 / ffa) since 2026-10-11 (`room-rules.md` decision G): any ruleset works in any room. An older draft, file or published ruleset's `players` key is read and dropped (`Dropped`), never written, and is not in the canonical JSON or the hash. `format` stays 1.
 
 **Normalizing.** `Ruleset::normalize()` clears what the format leaves unused (with a set `stageChoice` is `"loser-picks"`; without one `bans` 0 and `dsr` false; `strikes` empty unless striking; the name trimmed), so two rulesets that play the same have the same JSON. The server normalizes before it validates and publishes; `validate()` refuses an unused field with a value.
 
@@ -30,7 +31,7 @@ _Phase 3a of `docs/design/room-rules.md` §8 (2026-10-11): the ruleset format, p
 
 **Codes.** 6 letters of the room codes' 20 (`BCDFGHJKLMNPQRSTVWXZ`), random, assigned by accounts. `parse_ruleset_code` accepts any case, full width and surrounding spaces.
 
-**P+ default** (`Ruleset::default()`, what "no ruleset" means): P+'s competitive `MatchRules`, Ranked's starters (Battlefield, Final Destination, Smashville, Dream Land, Pokémon Stadium 2) and the other 10 legal stages as counterpicks, 1v1, no set, loser picks.
+**P+ default** (`Ruleset::default()`, what "no ruleset" means): P+'s competitive `MatchRules`, Ranked's starters (Battlefield, Final Destination, Smashville, Dream Land, Pokémon Stadium 2) and the other 10 legal stages as counterpicks, no set, loser picks.
 
 ## 2. Storage (`server/migrations/0008_rulesets.sql`)
 

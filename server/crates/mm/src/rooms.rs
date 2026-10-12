@@ -36,7 +36,7 @@ use crate::engine::{ConnId, Output, RulesetFetch};
 use crate::messages as msg;
 use crate::room_set::{self, SetProgress};
 use crate::ruleset::ModeRules;
-use common::rules::{Players, Ruleset};
+use common::rules::Ruleset;
 
 #[derive(Debug, Clone)]
 pub struct RoomsConfig {
@@ -178,7 +178,6 @@ impl Room {
             && (0..ROOM_SLOTS).all(|i| self.open[i] == self.slots[i].is_some())
             && self.members().all(|(_, m)| m.ready && !m.in_game)
             && !self.one_colour()
-            && self.players_misfit().is_none()
             && !self.set.as_ref().is_some_and(|s| s.paused())
     }
 
@@ -215,17 +214,12 @@ impl Room {
         }
     }
 
-    /// The room's ruleset with sets of `best_of` (0: none): a set is 1v1 (two open slots) or 2v2
-    /// (four, Teams on); a ruleset without a strike pattern gets Ranked's ([1, 2, 1] over five
-    /// starters), and turning a set on gives the winner Ranked's two bans and Dave's rule.
+    /// The room's ruleset with sets of `best_of` (0: none; played when the room makes two sides);
+    /// a ruleset without a strike pattern gets Ranked's ([1, 2, 1] over five starters), and
+    /// turning a set on gives the winner Ranked's two bans and Dave's rule.
     fn with_best_of(&self, best_of: u8) -> Result<Ruleset, &'static str> {
         let mut r = self.ruleset.clone();
         if best_of > 0 {
-            r.players = match (self.open_count(), self.teams) {
-                (2, _) => Players::OneVsOne,
-                (4, true) => Players::TwoVsTwo,
-                _ => return Err(msg::SETS_1V1_2V2),
-            };
             if r.strikes.is_empty() {
                 r.strikes = room_set::default_strikes(r.stages.starters.len());
             }
@@ -243,18 +237,16 @@ impl Room {
         Ok(r)
     }
 
-    /// The two sides of a set about to start: each player (1v1) or each team (2v2), or None when
-    /// the room's players do not make two sides of the ruleset's size.
+    /// The room's two sides, when it makes two (room-rules.md decision G): two players (a 1v1,
+    /// whatever the Teams switch), or four on two teams of two (Teams on). A set or a struck game
+    /// is played between them; any other room plays single games.
     fn set_sides(&self) -> Option<[Vec<room_set::Seat>; 2]> {
         let seat =
             |i: usize, m: &Member| room_set::Seat { slot: i, uid: m.info.uid, name: m.info.display_name.clone() };
         let members: Vec<(usize, &Member)> = self.members().collect();
-        match self.ruleset.players {
-            Players::OneVsOne | Players::Ffa => match members.as_slice() {
-                [(a, ma), (b, mb)] => Some([vec![seat(*a, ma)], vec![seat(*b, mb)]]),
-                _ => None,
-            },
-            Players::TwoVsTwo => {
+        match members.as_slice() {
+            [(a, ma), (b, mb)] => Some([vec![seat(*a, ma)], vec![seat(*b, mb)]]),
+            [_, _, _, _] if self.teams => {
                 let mut teams: Vec<(u8, Vec<room_set::Seat>)> = Vec::new();
                 for (i, m) in &members {
                     match teams.iter_mut().find(|(t, _)| *t == m.team) {
@@ -267,29 +259,27 @@ impl Room {
                     _ => None,
                 }
             }
+            _ => None,
         }
     }
 
-    /// The ruleset is for another number of players than the room's slots and teams: the text.
-    /// Only a published ruleset (or custom rules made from one) says how many play; P+'s default
-    /// plays whatever the room is.
-    fn players_misfit(&self) -> Option<&'static str> {
-        if self.ruleset_code.is_none() && self.based_on.is_none() {
+    /// The ruleset plays a set and the room makes two sides.
+    fn plays_set(&self) -> bool {
+        self.ruleset.best_of > 0 && self.set_sides().is_some()
+    }
+
+    /// The ruleset plays a set or strikes every game, but the room does not make two sides: the
+    /// status line's note (its games are single games, nothing waits).
+    fn two_sides_note(&self) -> Option<&'static str> {
+        if self.set_sides().is_some() {
             return None;
         }
-        let open = self.open_count();
-        match self.ruleset.players {
-            Players::OneVsOne if open != 2 => Some(msg::RULESET_1V1),
-            Players::TwoVsTwo => {
-                let mut per_team = [0usize; TEAM_COUNT as usize];
-                for (_, m) in self.members() {
-                    per_team[m.team.min(TEAM_COUNT - 1) as usize] += 1;
-                }
-                let two_by_two = per_team.iter().filter(|n| **n == 2).count() == 2;
-                (open != 4 || !self.teams || (self.player_count() == 4 && !two_by_two)).then_some(msg::RULESET_2V2)
-            }
-            Players::Ffa if open < 3 || self.teams => Some(msg::RULESET_FFA),
-            _ => None,
+        if self.ruleset.best_of > 0 {
+            Some(msg::SETS_NEED_TWO_SIDES)
+        } else if room_set::strikes_every_game(&self.ruleset) {
+            Some(msg::STRIKES_NEED_TWO_SIDES)
+        } else {
+            None
         }
     }
 
@@ -300,8 +290,7 @@ impl Room {
 
     /// Game 1 of a set is a blind pick (room-rules.md §2): the others' characters stay hidden.
     fn blind(&self) -> bool {
-        room_set::plays_set(&self.ruleset, self.open_count(), self.teams)
-            && self.set.as_ref().is_none_or(|s| s.finished || s.game == 1)
+        self.plays_set() && self.set.as_ref().is_none_or(|s| s.finished || s.game == 1)
     }
 
     fn ruleset_view(&self) -> rooms::RoomRuleset {
@@ -311,7 +300,6 @@ impl Room {
             version: self.ruleset.version,
             by: self.ruleset.by.clone(),
             based_on: self.based_on.clone(),
-            players: self.ruleset.players,
             best_of: self.ruleset.best_of,
             stage_choice: self.ruleset.stage_choice,
         }
@@ -342,8 +330,6 @@ impl Room {
                     msg::ROOM_WAITING.to_string()
                 } else if players < open {
                     msg::waiting_for_players(players, open)
-                } else if let Some(text) = self.players_misfit() {
-                    text.into()
                 } else if self.one_colour() {
                     msg::PICK_TEAMS.into()
                 } else {
@@ -354,6 +340,9 @@ impl Room {
                         .collect();
                     if waiting.is_empty() {
                         msg::STARTING_GAME.into()
+                    } else if let Some(note) = self.two_sides_note().filter(|_| waiting.len() == players) {
+                        // Nobody ready yet: why this room plays single games.
+                        note.into()
                     } else {
                         msg::waiting_on(&waiting)
                     }
@@ -1147,15 +1136,16 @@ impl RoomBook {
             self.match_counter
         );
         tracing::info!(%code, %match_id, players = room.player_count(), "room starting");
-        if room_set::plays_set(&room.ruleset, room.open_count(), room.teams)
-            && room.set.as_ref().is_none_or(|s| s.finished)
-        {
-            if let Some(sides) = room.set_sides() {
-                room.set = Some(SetProgress::new(room.ruleset.best_of, sides, rand::random()));
-                tracing::info!(%code, best_of = room.ruleset.best_of, "room set starts");
-            } else {
-                room.set = None;
-            }
+        if room.set.as_ref().is_none_or(|s| s.finished) {
+            room.set = match room.set_sides() {
+                Some(sides) if room.ruleset.best_of > 0 => {
+                    tracing::info!(%code, best_of = room.ruleset.best_of, "room set starts");
+                    Some(SetProgress::new(room.ruleset.best_of, sides, rand::random()))
+                }
+                // Not a set here: single games (a finished set's score stays until then).
+                _ if room.ruleset.best_of > 0 => None,
+                _ => room.set.take(),
+            };
         }
         room.phase = Phase::Starting { match_id: match_id.clone(), since: now, tickets: BTreeMap::new() };
         let start = RoomStart {
@@ -1222,11 +1212,8 @@ impl RoomBook {
         // The set (or a struck game without one) the session plays.
         let set_ticket = if let Some(set) = room.set.as_ref().filter(|s| s.on()) {
             Some(set.ticket(&room.ruleset))
-        } else if room_set::strikes_every_game(&room.ruleset, room.open_count()) {
-            match member_slots.as_slice() {
-                [a, b] => Some(room_set::strike_ticket(&room.ruleset, [*a, *b], rand::random())),
-                _ => None,
-            }
+        } else if room_set::strikes_every_game(&room.ruleset) {
+            room.set_sides().map(|sides| room_set::strike_ticket(&room.ruleset, sides, rand::random()))
         } else {
             None
         };
@@ -1779,9 +1766,10 @@ mod tests {
             (s["bestOf"].as_u64(), s["basedOn"].as_str(), s["code"].clone()),
             (Some(5), Some("Weekly v2"), Value::Null)
         );
-        // Three open slots: no sets.
+        // Any room takes a set length (a room of three plays single games until it makes two sides).
         t.req(1, RoomRequest::Slot { slot: 3, open: true });
-        assert_eq!(msgs(&t.req(1, RoomRequest::BestOf { best_of: 3 }), 1)[0]["error"], msg::SETS_1V1_2V2);
+        let out = t.req(1, RoomRequest::BestOf { best_of: 3 });
+        assert_eq!(last_state(&out, 1)["ruleset"]["bestOf"], 3);
     }
 
     #[test]
@@ -1831,17 +1819,45 @@ mod tests {
             .any(|o| matches!(o, Output::FetchRuleset(_))));
     }
 
+    /// Decision G: a ruleset works in any room. One with a set, in a room that does not make two
+    /// sides (three players), says so while nobody is ready and plays single games: no set, no
+    /// strikes in the ticket; with a third player gone, the next start is a set.
     #[test]
-    fn a_ruleset_for_other_players_holds_the_start() {
+    fn a_set_ruleset_in_a_room_of_three_plays_single_games() {
         let mut t = T::new();
         let code = create(&mut t, 1);
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
         join(&mut t, 2, &code);
+        let out = join(&mut t, 3, &code);
+        assert_eq!(last_state(&out, 1)["statusText"], msg::waiting_on(&["player1", "player2", "player3"]));
+        let mut r =
+            Ruleset { name: "Weekly".into(), version: 1, best_of: 3, strikes: vec![1, 2, 1], ..Default::default() };
+        r.normalize();
         let mut out = vec![];
-        let r = Ruleset { players: common::rules::Players::TwoVsTwo, ..Default::default() };
-        t.book.apply_ruleset(&code, r, Some("BCDFGH".into()), &mut out).unwrap();
-        let out = ready_all(&mut t, &[1, 2]);
-        assert!(!msgs(&out, 1).iter().any(|m| m["type"] == "room-start"));
-        assert_eq!(last_state(&out, 1)["statusText"], msg::RULESET_2V2);
+        t.book.apply_ruleset(&code, r.clone(), Some("BCDFGH".into()), &mut out).unwrap();
+        assert_eq!(last_state(&out, 1)["statusText"], msg::SETS_NEED_TWO_SIDES);
+        // Once someone readies, the line is the usual one; the start is not held.
+        let out = t.req(1, RoomRequest::Ready { ready: true, character: Some(1), costume: Some(0) });
+        assert_eq!(last_state(&out, 1)["statusText"], msg::waiting_on(&["player2", "player3"]));
+        let out = ready_all(&mut t, &[2, 3]);
+        assert!(msgs(&out, 1).iter().any(|m| m["type"] == "room-start"));
+        let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
+        let mut done = TicketOutcome::default();
+        for n in 1..=3u8 {
+            done = t.book.ticket(100 + n as ConnId, addr(n), String::new(), info(n).uid, &code).unwrap();
+        }
+        assert!(done.matched[0].1.set.is_none());
+        let mut out = vec![];
+        t.book.announce(&code, &mut out);
+        assert!(last_state(&out, 1).get("set").is_none());
+        // Striking every game: the same, with its own note.
+        for n in 1..=3 {
+            t.req(n, RoomRequest::Back);
+        }
+        let strike = Ruleset { best_of: 0, stage_choice: common::rules::StageChoice::Strike, ..r };
+        let mut out = vec![];
+        t.book.apply_ruleset(&code, strike, Some("CDFGHJ".into()), &mut out).unwrap();
+        assert_eq!(last_state(&out, 1)["statusText"], msg::STRIKES_NEED_TWO_SIDES);
     }
 
     /// Players 1 and 2 ready up and their tickets come in (as `ticket..ticket+1`): the set ticket.
@@ -1868,7 +1884,7 @@ mod tests {
         // Teams by colour: players 1 and 3 red, 2 and 4 blue.
         t.req(3, RoomRequest::Team { team: 0 });
         t.req(4, RoomRequest::Team { team: 1 });
-        let mut r = Ruleset { players: Players::TwoVsTwo, best_of: 3, strikes: vec![1, 2, 1], ..Default::default() };
+        let mut r = Ruleset { best_of: 3, strikes: vec![1, 2, 1], ..Default::default() };
         r.normalize();
         let mut out = vec![];
         t.book.apply_ruleset(&code, r, Some("BCDFGH".into()), &mut out).unwrap();

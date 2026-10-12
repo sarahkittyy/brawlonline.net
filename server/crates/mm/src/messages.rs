@@ -108,14 +108,13 @@ pub fn set_won(name: &str, won: u8, lost: u8) -> String {
         format!("Set over: {won}-{lost}")
     }
 }
-/// `room-best-of` in a room that is not a 1v1 or two teams of two.
-pub const SETS_1V1_2V2: &str = "Sets are for 1v1 or 2v2.";
 /// `room-best-of` for a ruleset whose stages can't make a set (fewer than two starters...).
 pub const SETS_NOT_POSSIBLE: &str = "These stages can't play a set.";
-/// The room's ruleset is for another number of players than its slots and teams.
-pub const RULESET_1V1: &str = "This ruleset is for 1v1.";
-pub const RULESET_2V2: &str = "This ruleset needs 2 teams of 2.";
-pub const RULESET_FFA: &str = "This ruleset is for 3-4 players.";
+/// The status line, nobody ready yet, when the room's ruleset plays a set (or strikes every game)
+/// but the room does not make two sides (two players, or two teams of two): its games are single
+/// games, on a random stage of the ruleset's (room-rules.md decision G). Nothing waits for it.
+pub const SETS_NEED_TWO_SIDES: &str = "Sets need 1v1 or 2v2";
+pub const STRIKES_NEED_TWO_SIDES: &str = "Strikes need 1v1 or 2v2";
 /// `room-ruleset` / a create with a code: no published ruleset has it.
 pub const RULESET_NOT_FOUND: &str = "Ruleset not found.";
 /// The ruleset lookup failed (the database).
@@ -272,11 +271,9 @@ mod tests {
             set_won(&"W".repeat(15), 4, 3),
             set_won("player1", 2, 1),
             set_won("WWWWWWWWWWWWWWW & WWWWWWWWWWWWWWW", 2, 0),
-            SETS_1V1_2V2.to_string(),
             SETS_NOT_POSSIBLE.to_string(),
-            RULESET_1V1.to_string(),
-            RULESET_2V2.to_string(),
-            RULESET_FFA.to_string(),
+            SETS_NEED_TWO_SIDES.to_string(),
+            STRIKES_NEED_TWO_SIDES.to_string(),
             RULESET_NOT_FOUND.to_string(),
             RULESETS_UNAVAILABLE.to_string(),
             SIGNED_IN_ELSEWHERE.to_string(),

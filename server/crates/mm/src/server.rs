@@ -283,7 +283,6 @@ async fn fetch_ruleset_list(pool: &PgPool, uid: Uuid) -> Result<Vec<common::room
                 version: p.ruleset.version,
                 by: p.ruleset.by.clone(),
                 best_of: p.ruleset.best_of,
-                players: p.ruleset.players,
             });
         }
         Ok::<_, sqlx::Error>(out)

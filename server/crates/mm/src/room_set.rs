@@ -18,7 +18,7 @@ use std::collections::HashMap;
 
 use common::proto::SetTicket;
 use common::rooms::{RoomSet, SIDE_DRAW, SIDE_VOID};
-use common::rules::{Players, Ruleset, StageChoice};
+use common::rules::{Ruleset, StageChoice};
 use uuid::Uuid;
 
 /// No last winner yet (`SetTicket.last_winner`).
@@ -26,16 +26,6 @@ pub const SIDE_NONE: u8 = 0xFF;
 pub const NO_STAGE: u16 = 0xFFFF;
 /// Stage actions kept per side for the game being set up (a strike pattern of 8 steps of up to 8).
 const MAX_ACTIONS: usize = 64;
-
-/// Whether `ruleset` plays a set in a room of `open_slots` open slots with the Teams switch `teams`.
-pub fn plays_set(ruleset: &Ruleset, open_slots: usize, teams: bool) -> bool {
-    ruleset.best_of > 0
-        && match ruleset.players {
-            Players::OneVsOne => open_slots == 2,
-            Players::TwoVsTwo => open_slots == 4 && teams,
-            Players::Ffa => false,
-        }
-}
 
 /// A strike pattern over `starters` stages for a set made in the room (Ranked's [1, 2, 1] over
 /// five): one, then twos, then what is left; it leaves exactly one stage.
@@ -56,9 +46,22 @@ pub fn default_strikes(starters: usize) -> Vec<u8> {
     out
 }
 
-/// Whether every game of `ruleset` is struck without a set (a tournament's Bo1, decision 17).
-pub fn strikes_every_game(ruleset: &Ruleset, open_slots: usize) -> bool {
-    ruleset.best_of == 0 && ruleset.stage_choice == StageChoice::Strike && open_slots == 2
+/// Whether every game of `ruleset` is struck without a set (a tournament's Bo1, decision 17):
+/// played when the room makes two sides.
+pub fn strikes_every_game(ruleset: &Ruleset) -> bool {
+    ruleset.best_of == 0 && ruleset.stage_choice == StageChoice::Strike
+}
+
+/// The sides in set order: each one's lowest slot first, side 0 the one with the lowest slot.
+fn ordered(mut sides: [Vec<Seat>; 2]) -> [Vec<Seat>; 2] {
+    for s in &mut sides {
+        s.sort_by_key(|x| x.slot);
+    }
+    let low = |s: &Vec<Seat>| s.first().map_or(usize::MAX, |x| x.slot);
+    if low(&sides[1]) < low(&sides[0]) {
+        sides.swap(0, 1);
+    }
+    sides
 }
 
 /// A player of the set.
@@ -117,14 +120,8 @@ pub enum Reported {
 
 impl SetProgress {
     /// A new set between two sides (any order; side 0 becomes the one with the lowest slot).
-    pub fn new(best_of: u8, mut sides: [Vec<Seat>; 2], first_striker_bits: u32) -> Self {
-        for s in &mut sides {
-            s.sort_by_key(|x| x.slot);
-        }
-        let low = |s: &Vec<Seat>| s.first().map_or(usize::MAX, |x| x.slot);
-        if low(&sides[1]) < low(&sides[0]) {
-            sides.swap(0, 1);
-        }
+    pub fn new(best_of: u8, sides: [Vec<Seat>; 2], first_striker_bits: u32) -> Self {
+        let sides = ordered(sides);
         SetProgress {
             best_of,
             game: 1,
@@ -333,9 +330,10 @@ impl SetProgress {
     }
 }
 
-/// A no-set game struck from the starters (`StageChoice::Strike`) between the players in `slots`.
-pub fn strike_ticket(ruleset: &Ruleset, mut slots: [usize; 2], first_striker_bits: u32) -> SetTicket {
-    slots.sort();
+/// A no-set game struck from the starters (`StageChoice::Strike`) between two sides.
+pub fn strike_ticket(ruleset: &Ruleset, sides: [Vec<Seat>; 2], first_striker_bits: u32) -> SetTicket {
+    let sides = ordered(sides);
+    let slots = |s: &Vec<Seat>| -> Vec<u8> { s.iter().map(|x| x.slot as u8).collect() };
     SetTicket {
         best_of: 0,
         strike_every_game: true,
@@ -345,8 +343,8 @@ pub fn strike_ticket(ruleset: &Ruleset, mut slots: [usize; 2], first_striker_bit
         bans: 0,
         dsr: false,
         first_striker_bits,
-        sides: [slots[0] as u8, slots[1] as u8],
-        members: vec![vec![slots[0] as u8], vec![slots[1] as u8]],
+        sides: [sides[0].first().map_or(0, |x| x.slot as u8), sides[1].first().map_or(0, |x| x.slot as u8)],
+        members: vec![slots(&sides[0]), slots(&sides[1])],
         game: 1,
         wins: [0, 0],
         last_winner: SIDE_NONE,
@@ -524,13 +522,14 @@ mod tests {
         let t = s.ticket(&r);
         assert_eq!((t.best_of, t.game, t.sides, t.first_striker_bits), (3, 1, [0, 2], 0b10));
         assert_eq!(t.counterpicks.len(), r.stages.starters.len() + r.stages.counterpicks.len());
-        assert!(plays_set(&r, 2, false) && !plays_set(&r, 3, false));
-        let r2 = Ruleset { players: Players::TwoVsTwo, ..r.clone() };
-        assert!(plays_set(&r2, 4, true) && !plays_set(&r2, 4, false) && !plays_set(&r2, 2, false));
         let mut bo1 = Ruleset { stage_choice: StageChoice::Strike, strikes: vec![1, 2, 1], ..Default::default() };
         bo1.normalize();
-        assert!(strikes_every_game(&bo1, 2) && !plays_set(&bo1, 2, false));
-        let t = strike_ticket(&bo1, [3, 1], 7);
+        assert!(strikes_every_game(&bo1) && !strikes_every_game(&r));
+        let t = strike_ticket(&bo1, [vec![seat(3, 4, "d")], vec![seat(1, 2, "b")]], 7);
         assert!(t.strike_every_game && t.sides == [1, 3] && t.best_of == 0);
+        // Two teams: each side's slots, lowest first.
+        let t =
+            strike_ticket(&bo1, [vec![seat(3, 4, "d"), seat(1, 2, "b")], vec![seat(2, 3, "c"), seat(0, 1, "a")]], 7);
+        assert_eq!((t.sides, t.members), ([0, 1], vec![vec![0, 2], vec![1, 3]]));
     }
 }

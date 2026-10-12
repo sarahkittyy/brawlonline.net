@@ -470,7 +470,6 @@ pub struct RoomRuleset {
     pub by: String,
     /// Custom rules made from a published ruleset: "NorCal Weekly v3".
     pub based_on: Option<String>,
-    pub players: crate::rules::Players,
     pub best_of: u8,
     pub stage_choice: crate::rules::StageChoice,
 }
@@ -510,7 +509,6 @@ pub struct RulesetEntry {
     pub version: u32,
     pub by: String,
     pub best_of: u8,
-    pub players: crate::rules::Players,
 }
 
 /// `ruleset-list`, server → the player who asked (`room-rulesets`): their recent rulesets, newest

@@ -15,7 +15,7 @@ fn weekly() -> Value {
         "format": 1, "name": "NorCal Weekly",
         "rules": {"stocks": 3, "timeMinutes": 7, "autoLCancel": true},
         "stages": {"starters": [1, 2, 33, 45, 46], "counterpicks": [3, 31]},
-        "players": "1v1", "bestOf": 3, "strikes": [1, 2, 1], "bans": 2, "dsr": true
+        "bestOf": 3, "strikes": [1, 2, 1], "bans": 2, "dsr": true
     })
 }
 

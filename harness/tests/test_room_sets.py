@@ -30,7 +30,7 @@ SSS = "scSelStage"
 STARTERS = [0x01, 0x02, 0x21, 0x2D, 0x2E]   # the default ruleset's (Ranked's)
 
 BO3 = {"format": 1, "name": "Room Set Test", "rules": {"stocks": 1, "timeMinutes": 2},
-       "players": "1v1", "bestOf": 3, "stageChoice": "loser-picks", "strikes": [1, 2, 1], "bans": 2,
+       "bestOf": 3, "stageChoice": "loser-picks", "strikes": [1, 2, 1], "bans": 2,
        "dsr": True}
 
 
@@ -410,7 +410,9 @@ def test_ruleset_picked_in_game(backend: OnlineBackend, dolphin: Callable[..., D
     a.shot("06-typed")
 
 
-BO3_2V2 = dict(BO3, name="Doubles Set Test", players="2v2")
+# The same ruleset plays a 2v2 set in a room of two teams of two (rulesets have no player count,
+# room-rules.md decision G).
+BO3_2V2 = dict(BO3, name="Doubles Set Test")
 
 
 @pytest.mark.slow

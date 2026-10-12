@@ -131,16 +131,23 @@ pub const PPLUS_LEGAL_STAGES: [u16; 15] =
 /// Dream Land, Pokémon Stadium 2. The default ruleset's starters.
 pub const PPLUS_STARTERS: [u16; 5] = [0x01, 0x02, 0x21, 0x2D, 0x2E];
 
-/// Who a ruleset is for: a room can't start until its slots and teams match.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
-pub enum Players {
-    #[default]
-    #[serde(rename = "1v1")]
-    OneVsOne,
-    #[serde(rename = "2v2")]
-    TwoVsTwo,
-    #[serde(rename = "ffa")]
-    Ffa,
+/// A key the format had until 2026-10-11 and no longer has: `players` (1v1 / 2v2 / ffa), when a
+/// ruleset was for one player count. Every ruleset works in any room now (room-rules.md decision
+/// G); the key of an older draft, file or published ruleset is read and dropped, never written,
+/// and is not part of the hash.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct Dropped;
+
+impl PartialEq for Dropped {
+    fn eq(&self, _: &Self) -> bool {
+        true
+    }
+}
+
+impl<'de> Deserialize<'de> for Dropped {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        serde::de::IgnoredAny::deserialize(d).map(|_| Dropped)
+    }
 }
 
 /// How the stage is chosen without a set (`bestOf` 0), every game (decision 17).
@@ -201,14 +208,17 @@ pub struct Ruleset {
     pub by: String,
     pub rules: MatchRules,
     pub stages: StageLists,
-    pub players: Players,
-    /// 0 (no set: one game at a time), 3, 5 or 7. FFA: 0.
+    /// The old `players` key ([`Dropped`]).
+    #[serde(rename = "players", skip_serializing)]
+    pub legacy_players: Dropped,
+    /// 0 (no set: one game at a time), 3, 5 or 7. A set (and striking) is played when the room
+    /// makes two sides (two players, or two teams of two); otherwise its games are single games.
     pub best_of: u8,
     /// No set only (with a set it is [`StageChoice::LoserPicks`] and unused).
     pub stage_choice: StageChoice,
     /// The strike pattern over the starters, players taking turns (`[1, 2, 1]`: the first striker
     /// strikes one, the other two, the first one): it leaves exactly one stage. Used by game 1 of
-    /// a set and by [`StageChoice::Strike`]; empty otherwise, and for FFA.
+    /// a set and by [`StageChoice::Strike`]; empty otherwise.
     pub strikes: Vec<u8>,
     /// Games 2+ of a set: the winner bans 0-3 stages.
     pub bans: u8,
@@ -218,7 +228,7 @@ pub struct Ruleset {
 
 impl Default for Ruleset {
     /// P+'s defaults as rooms play them today: P+'s competitive rules, the legal stages (Ranked's
-    /// starters), 1v1, no set, loser picks.
+    /// starters), no set, loser picks.
     fn default() -> Self {
         Ruleset {
             format: RULESET_FORMAT,
@@ -227,7 +237,7 @@ impl Default for Ruleset {
             by: String::new(),
             rules: MatchRules::default(),
             stages: StageLists::default(),
-            players: Players::OneVsOne,
+            legacy_players: Dropped,
             best_of: 0,
             stage_choice: StageChoice::LoserPicks,
             strikes: Vec::new(),
@@ -240,7 +250,7 @@ impl Default for Ruleset {
 impl Ruleset {
     /// Whether this ruleset strikes (game 1 of a set, or every game with [`StageChoice::Strike`]).
     pub fn strikes_used(&self) -> bool {
-        self.players != Players::Ffa && (self.best_of > 0 || self.stage_choice == StageChoice::Strike)
+        self.best_of > 0 || self.stage_choice == StageChoice::Strike
     }
 
     /// Clears what the set format leaves unused, so two rulesets that play the same have the same
@@ -297,14 +307,6 @@ impl Ruleset {
 
         if ![0, 3, 5, 7].contains(&self.best_of) {
             return Err(format!("bestOf {} is not 0 (no set), 3, 5 or 7", self.best_of));
-        }
-        if self.players == Players::Ffa {
-            if self.best_of != 0 {
-                return Err("FFA has no sets".into());
-            }
-            if self.stage_choice == StageChoice::Strike {
-                return Err("FFA can't strike stages".into());
-            }
         }
         if self.best_of > 0 && self.stage_choice != StageChoice::LoserPicks {
             return Err("The stage choice is for rulesets without a set".into());
@@ -481,7 +483,7 @@ mod tests {
         let r = Ruleset::default();
         r.validate().unwrap();
         assert_eq!(r.rules, MatchRules::default());
-        assert_eq!((r.players, r.best_of, r.stage_choice), (Players::OneVsOne, 0, StageChoice::LoserPicks));
+        assert_eq!((r.best_of, r.stage_choice), (0, StageChoice::LoserPicks));
         let mut all: Vec<u16> = r.stages.all().collect();
         all.sort();
         assert_eq!(all, PPLUS_LEGAL_STAGES);
@@ -492,35 +494,31 @@ mod tests {
     #[test]
     fn ruleset_wire_shape() {
         let v = serde_json::to_value(weekly()).unwrap();
-        for key in [
-            "format",
-            "name",
-            "version",
-            "by",
-            "rules",
-            "stages",
-            "players",
-            "bestOf",
-            "stageChoice",
-            "strikes",
-            "bans",
-            "dsr",
-        ] {
+        for key in
+            ["format", "name", "version", "by", "rules", "stages", "bestOf", "stageChoice", "strikes", "bans", "dsr"]
+        {
             assert!(v.get(key).is_some(), "{key} in {v}");
         }
-        assert_eq!(v["players"], "1v1");
+        assert!(v.get("players").is_none(), "{v}");
         assert_eq!(v["stageChoice"], "loser-picks");
         assert_eq!(v["stages"]["starters"], serde_json::json!([1, 2, 33, 45, 46]));
         let back: Ruleset = serde_json::from_value(v).unwrap();
         assert_eq!(back, weekly());
         // Missing fields are the defaults; unknown ones are refused (in the rules too).
-        let r: Ruleset = serde_json::from_str(r#"{"name": "x", "players": "ffa", "stageChoice": "random"}"#).unwrap();
-        assert_eq!((r.players, r.stage_choice, r.format, r.best_of), (Players::Ffa, StageChoice::Random, 1, 0));
+        let r: Ruleset = serde_json::from_str(r#"{"name": "x", "stageChoice": "random"}"#).unwrap();
+        assert_eq!((r.stage_choice, r.format, r.best_of), (StageChoice::Random, 1, 0));
         r.validate().unwrap();
+        // The old `players` key (any value) is read and dropped: older drafts, files and published
+        // rulesets still load, and play the same as without it.
+        for old in [r#""1v1""#, r#""ffa""#, r#""3v3""#, "7"] {
+            let text = format!(r#"{{"name": "x", "players": {old}, "bestOf": 3, "strikes": [1, 2, 1]}}"#);
+            let o: Ruleset = serde_json::from_str(&text).unwrap();
+            assert_eq!(o, Ruleset { name: "x".into(), best_of: 3, strikes: vec![1, 2, 1], ..Default::default() });
+            assert!(!serde_json::to_string(&o).unwrap().contains("players"));
+        }
         assert!(serde_json::from_str::<Ruleset>(r#"{"bestof": 3}"#).is_err());
         assert!(serde_json::from_str::<Ruleset>(r#"{"rules": {"stonks": 3}}"#).is_err());
         assert!(serde_json::from_str::<Ruleset>(r#"{"stages": {"starters": [1], "extra": []}}"#).is_err());
-        assert!(serde_json::from_str::<Ruleset>(r#"{"players": "3v3"}"#).is_err());
         assert!(serde_json::from_str::<Ruleset>(r#"{"stageChoice": "rps"}"#).is_err());
     }
 
@@ -531,11 +529,11 @@ mod tests {
         assert!(!c.contains("\"by\""), "{c}");
         assert_eq!(
             c,
-            r#"{"bans":2,"bestOf":3,"dsr":true,"format":1,"name":"NorCal Weekly","players":"1v1","rules":{"autoLCancel":false,"damageRatio":1.0,"hazards":true,"inputAssist":false,"itemFrequency":0,"itemSwitch":[0,6,0,0,0,0,0,0],"pause":"normal","stocks":4,"style":"stock","teamAttack":true,"timeMinutes":8},"stageChoice":"loser-picks","stages":{"counterpicks":[3,4,5,6,9,12,13,28,31,35],"starters":[1,2,33,45,46]},"strikes":[1,2,1],"version":0}"#
+            r#"{"bans":2,"bestOf":3,"dsr":true,"format":1,"name":"NorCal Weekly","rules":{"autoLCancel":false,"damageRatio":1.0,"hazards":true,"inputAssist":false,"itemFrequency":0,"itemSwitch":[0,6,0,0,0,0,0,0],"pause":"normal","stocks":4,"style":"stock","teamAttack":true,"timeMinutes":8},"stageChoice":"loser-picks","stages":{"counterpicks":[3,4,5,6,9,12,13,28,31,35],"starters":[1,2,33,45,46]},"strikes":[1,2,1],"version":0}"#
         );
         // Pinned, so a change to the canonical form shows up here (the hash is in matches,
         // results and replays).
-        assert_eq!(r.hash(), "2fa7e67d855ede3bed3e348beaa36a793de0745aac65958d9b69b28709ec9b40");
+        assert_eq!(r.hash(), "0ca9327290ccf2111a02988d70e989e2402531a2e2d49ab77f41f4867a8e3477");
         // `by` is left out; every other field counts, even stage order.
         assert_eq!(Ruleset { by: "sarah".into(), ..r.clone() }.hash(), r.hash());
         assert_ne!(Ruleset { version: 2, ..r.clone() }.hash(), r.hash());
@@ -546,7 +544,7 @@ mod tests {
         let mut alc = r.clone();
         alc.rules.auto_l_cancel = true;
         assert_ne!(alc.hash(), r.hash());
-        // A JSON round trip (any key order) gives the same hash.
+        // A JSON round trip (any key order, an old `players` key) gives the same hash.
         let text = r#"{"version":0,"strikes":[1,2,1],"stages":{"starters":[1,2,33,45,46],"counterpicks":[3,4,5,6,9,12,13,28,31,35]},"stageChoice":"loser-picks","rules":{},"players":"1v1","name":"NorCal Weekly","format":1,"dsr":true,"bestOf":3,"bans":2,"by":"x"}"#;
         assert_eq!(serde_json::from_str::<Ruleset>(text).unwrap().hash(), r.hash());
         assert!(Ruleset { version: 3, by: "x".into(), ..r.clone() }.same_content(&r));
@@ -577,8 +575,8 @@ mod tests {
         s.normalize();
         assert_eq!(s.stage_choice, StageChoice::LoserPicks);
         s.validate().unwrap();
-        // FFA never strikes.
-        let mut f = Ruleset { players: Players::Ffa, strikes: vec![4], ..Default::default() };
+        // No set and no striking: no strike pattern.
+        let mut f = Ruleset { strikes: vec![4], ..Default::default() };
         f.normalize();
         assert!(f.strikes.is_empty());
         f.validate().unwrap();
@@ -616,8 +614,6 @@ mod tests {
             ),
             (Ruleset { best_of: 1, ..weekly() }, "bestOf"),
             (Ruleset { best_of: 2, ..weekly() }, "bestOf"),
-            (Ruleset { players: Players::Ffa, ..weekly() }, "FFA has no sets"),
-            (Ruleset { players: Players::Ffa, stage_choice: StageChoice::Strike, ..Default::default() }, "FFA can't"),
             (Ruleset { strikes: vec![1, 2], ..weekly() }, "leave exactly one"),
             (Ruleset { strikes: vec![2, 2, 1], ..weekly() }, "leave exactly one"),
             (Ruleset { strikes: vec![], ..weekly() }, "leave exactly one"),
@@ -660,7 +656,6 @@ mod tests {
         .unwrap();
         Ruleset { name: "スマブラ カップ".into(), ..weekly() }.validate().unwrap();
         Ruleset { name: "x".repeat(32), ..weekly() }.validate().unwrap();
-        Ruleset { players: Players::TwoVsTwo, ..weekly() }.validate().unwrap();
     }
 
     #[test]
