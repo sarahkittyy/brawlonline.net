@@ -67,10 +67,7 @@ export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (
         fullWidth={true}
       />
 
-      <Section title={Messages.format()}>
-        <Typography variant="caption" color="text.secondary">
-          {Messages.anyRoomHelp()}
-        </Typography>
+      <Section>
         <Row label={Messages.set()}>
           <Choice
             value={String(r.bestOf)}
@@ -101,7 +98,7 @@ export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (
           </Typography>
         )}
         {strikesUsed(r) && (
-          <Row label={Messages.strikes()} help={Messages.strikesHelp(r.stages.starters.length)}>
+          <Row label={Messages.strikes()}>
             <StrikesInput value={r.strikes} onChange={(strikes) => set({ strikes })} />
             <Button
               size="small"
@@ -256,11 +253,13 @@ function stageChoiceHelp(c: StageChoice): string {
   }
 }
 
-const Section = ({ title, children }: { title: string; children: React.ReactNode }) => (
+const Section = ({ title, children }: { title?: string; children: React.ReactNode }) => (
   <section className={styles.section}>
-    <Typography variant="subtitle2" className={styles.sectionTitle}>
-      {title}
-    </Typography>
+    {title && (
+      <Typography variant="subtitle2" className={styles.sectionTitle}>
+        {title}
+      </Typography>
+    )}
     {children}
   </section>
 );

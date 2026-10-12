@@ -41,7 +41,7 @@ describe("rulesets", () => {
       pause: "normal",
       itemFrequency: 0,
       itemSwitch: [0, 6, 0, 0, 0, 0, 0, 0],
-      hazards: true,
+      hazards: false,
       autoLCancel: false,
       inputAssist: false,
     });

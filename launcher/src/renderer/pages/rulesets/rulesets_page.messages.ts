@@ -59,10 +59,7 @@ export const RulesetsPageMessages = {
 export const RulesetEditorMessages = {
   name: () => "Name",
   nameHelp: (max: number) => `Up to ${max} characters. Shown with your name: "NorCal Weekly v1 by you".`,
-  format: () => "Format",
-  anyRoomHelp: () =>
-    "A ruleset works in any room. Sets and striking apply in 1v1 and 2v2 rooms; with more sides the room plays single games on a random stage from the lists.",
-  set: () => "Set",
+  set: () => "Set count",
   noSet: () => "No set",
   bestOf: (n: number) => `Best of ${n}`,
   stageChoice: () => "Stage each game",
@@ -73,8 +70,6 @@ export const RulesetEditorMessages = {
   random: () => "Random",
   randomHelp: () => "A random stage every game.",
   strikes: () => "Strike pattern",
-  strikesHelp: (starters: number) =>
-    `Strikes per turn, players taking turns, leaving one of the ${starters} starters (e.g. 1-2-1 for 5).`,
   suggest: () => "Suggest",
   bans: () => "Winner bans (games 2+)",
   dsr: () => "DSR",
@@ -107,10 +102,8 @@ export const RulesetEditorMessages = {
 };
 
 export const RulesetDetailsMessages = {
-  format: () => "Format",
   rules: () => "Rules",
-  anyRoom: () => "Sets and striking apply in 1v1 and 2v2 rooms; other rooms play single games on a random stage.",
-  set: () => "Set",
+  set: () => "Set count",
   bestOf: (n: number) => `Best of ${n}`,
   noSet: () => "No set: one game at a time",
   game1: () => "Game 1",

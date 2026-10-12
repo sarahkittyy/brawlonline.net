@@ -110,7 +110,7 @@
   function formatRows(r) {
     const rows = [];
     if (r.bestOf > 0) {
-      rows.push(["Set", `Best of ${r.bestOf}`]);
+      rows.push(["Set count", `Best of ${r.bestOf}`]);
       rows.push(["Game 1", `Strike ${r.strikes.join("-")} from the starters`]);
       rows.push(["Games 2+", `Winner bans ${r.bans}, loser picks`]);
       rows.push(["DSR", r.dsr ? "On (no picking a stage you won on)" : "Off"]);
@@ -120,18 +120,15 @@
         strike: `Strike ${r.strikes.join("-")} from the starters every game`,
         random: "Random every game",
       }[r.stageChoice];
-      rows.push(["Set", "No set: one game at a time"]);
+      rows.push(["Set count", "No set: one game at a time"]);
       rows.push(["Stages", choice || r.stageChoice]);
-    }
-    if (r.bestOf > 0 || r.stageChoice === "strike") {
-      rows.push(["Rooms", "Sets and striking in 1v1 and 2v2 rooms; others play single games on a random stage"]);
     }
     return rows;
   }
 
   function table(title, rows) {
     const box = el("div", "group");
-    box.appendChild(el("h2", null, title));
+    if (title) box.appendChild(el("h2", null, title));
     const dl = el("dl");
     for (const [k, v] of rows) {
       dl.appendChild(el("dt", null, k));
@@ -187,7 +184,7 @@
     }
 
     const grid = el("div", "grid");
-    grid.appendChild(table("Format", formatRows(r)));
+    grid.appendChild(table(null, formatRows(r)));
     grid.appendChild(table("Rules", rulesRows(r.rules)));
     grid.appendChild(itemsGroup(r.rules));
     grid.appendChild(stageList(r.bestOf > 0 || r.stageChoice === "strike" ? "Starters" : "Stages", r.stages.starters));

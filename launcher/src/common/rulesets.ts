@@ -100,7 +100,8 @@ export function defaultMatchRules(): MatchRules {
     pause: "normal",
     itemFrequency: 0,
     itemSwitch: [...PPLUS_ITEM_SWITCH],
-    hazards: true,
+    // Off by default (the user's decision, 2026-10-12), as the server's MatchRules::default.
+    hazards: false,
     autoLCancel: false,
     inputAssist: false,
   };

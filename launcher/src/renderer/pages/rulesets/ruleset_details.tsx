@@ -1,5 +1,5 @@
 import type { Ruleset } from "@common/rulesets";
-import { stageName, strikesUsed } from "@common/rulesets";
+import { stageName } from "@common/rulesets";
 import Typography from "@mui/material/Typography";
 
 import { ItemsSection } from "./items_section";
@@ -47,11 +47,13 @@ function ruleRows(r: Ruleset): [string, string][] {
   return rows;
 }
 
-const Table = ({ title, rows }: { title: string; rows: [string, string][] }) => (
+const Table = ({ title, rows }: { title?: string; rows: [string, string][] }) => (
   <section className={styles.section}>
-    <Typography variant="subtitle2" className={styles.sectionTitle}>
-      {title}
-    </Typography>
+    {title && (
+      <Typography variant="subtitle2" className={styles.sectionTitle}>
+        {title}
+      </Typography>
+    )}
     <dl className={styles.details}>
       {rows.map(([k, v]) => (
         <div key={k} className={styles.detailRow}>
@@ -84,8 +86,7 @@ export const RulesetDetails = ({ ruleset }: { ruleset: Ruleset }) => {
   const r = ruleset;
   return (
     <div className={styles.editorFields} data-testid="ruleset-details">
-      <Table title={Messages.format()} rows={formatRows(r)} />
-      {strikesUsed(r) && <p className={styles.itemMeta}>{Messages.anyRoom()}</p>}
+      <Table rows={formatRows(r)} />
       <Table title={Messages.rules()} rows={ruleRows(r)} />
       <ItemsSection frequency={r.rules.itemFrequency} itemSwitch={r.rules.itemSwitch} />
       <Stages
