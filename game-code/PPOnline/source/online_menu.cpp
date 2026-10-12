@@ -775,8 +775,8 @@ namespace OnlineMenu {
     // time / coin target +3 stays infinite), team attack (+9), pause (+0xA, 1 normal / 0 hold),
     // auto L-cancel (+0xB) and input assist (+0xC); the item frequency and switches in the menu
     // record, and the hazard switch. Without them (an older server), P+'s competitive set: the set rule's 16 bytes P+'s code writes, pause
-    // only in Direct, item frequency 0 with P+'s default item switch, hazards off (the default
-    // since 2026-10-12, the user's). Either way hazards
+    // only in Direct, item frequency 0 with P+'s default item switch, hazards off and auto
+    // L-cancel on (the defaults since 2026-10-12, the user's). Either way hazards
     // also hold for Direct's loser's pick (its hazard toggle is not part of the setup the other
     // machine gets), and every other Code Menu line is at its default but its activation, which is
     // OFF (codeMenuOff). Written when the Wi-Fi sequence starts (in place of Brawl's Wi-Fi rules) and
@@ -810,6 +810,7 @@ namespace OnlineMenu {
             if (st) st[HAZARD] = ru.hazards ? 0 : 1;
         } else {
             r[0xA] = (s.mode == PPOM::MODE_DIRECT) ? 1 : 0;   // m_allowPause
+            r[0xB] = 1;                                        // auto L-cancel on
             m[0] = 0;                                          // item frequency: none
             memcpy(m + ITEM_SWITCH, PPLUS_ITEM_SWITCH, sizeof(PPLUS_ITEM_SWITCH));
             if (st) st[HAZARD] = 1;                            // hazards off

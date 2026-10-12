@@ -76,7 +76,8 @@ TEST(MatchRules, MissingFieldsArePPlusDefaults)
   EXPECT_EQ(d.time_minutes, 8);
   EXPECT_EQ(d.damage_ratio, 10);
   EXPECT_TRUE(d.team_attack && d.pause_normal && !d.hazards);
-  EXPECT_FALSE(d.auto_l_cancel || d.input_assist);
+  EXPECT_TRUE(d.auto_l_cancel);
+  EXPECT_FALSE(d.input_assist);
   EXPECT_EQ(d.item_frequency, 0);
   // Stock with no time limit.
   const auto none = Parse(R"({"timeMinutes": 0})");
@@ -157,7 +158,7 @@ TEST(MatchRules, SessionBytes)
   time0[RU_TIME] = 0;
   EXPECT_FALSE(FromSessionBytes(time0));   // a time match needs a time limit
   const auto d = SessionBytes(MatchRules{});
-  // (byte 0x10: hazards, off by default since 2026-10-12)
-  const std::array<u8, RULES_SIZE> want_d{1, 1, 4, 8, 10, 1, 1, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 0};
+  // (byte 0x10: hazards, off by default since 2026-10-12; 0x11: auto L-cancel, on since then)
+  const std::array<u8, RULES_SIZE> want_d{1, 1, 4, 8, 10, 1, 1, 0, 0, 6, 0, 0, 0, 0, 0, 0, 0, 1};
   EXPECT_EQ(d, want_d);
 }

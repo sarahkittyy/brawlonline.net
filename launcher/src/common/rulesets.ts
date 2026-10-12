@@ -116,9 +116,10 @@ export function defaultMatchRules(): MatchRules {
     pause: "normal",
     itemFrequency: 0,
     itemSwitch: [...PPLUS_ITEM_SWITCH],
-    // Off by default (the user's decision, 2026-10-12), as the server's MatchRules::default.
+    // Hazards off and auto L-cancel on by default (the user's decisions, 2026-10-12), as the
+    // server's MatchRules::default.
     hazards: false,
-    autoLCancel: false,
+    autoLCancel: true,
     inputAssist: false,
   };
 }
