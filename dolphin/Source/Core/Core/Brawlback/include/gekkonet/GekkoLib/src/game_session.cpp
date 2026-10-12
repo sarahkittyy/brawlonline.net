@@ -431,6 +431,8 @@ void Gekko::GameSession::AddDisconnectedPlayerInputs()
             player->applied_disconnect_frame < disc_frame) {
             const Frame received = _sync.GetLastReceivedFrom(handle);
             const Frame raised_up_to = std::min(disc_frame, received);
+            INFO_LOG_FMT(BRAWLBACK, "GekkoNet: player {} raised {} -> {}, overwriting to {}",
+                         handle, player->applied_disconnect_frame, disc_frame, raised_up_to);
             for (Frame frame = player->applied_disconnect_frame + 1; frame <= raised_up_to; frame++) {
                 if (frame >= oldest && frame <= last_added) {
                     _sync.OverwriteInput(handle, input_q[frame - oldest].get(), frame);

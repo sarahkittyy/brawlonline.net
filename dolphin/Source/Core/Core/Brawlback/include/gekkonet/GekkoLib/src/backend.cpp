@@ -7,6 +7,8 @@
 
 #include "zpp/zpp_bits.h"
 
+#include "Common/Logging/Log.h"
+
 Gekko::MessageSystem::MessageSystem()
 {
     _num_players = 0;
@@ -546,6 +548,8 @@ void Gekko::MessageSystem::MarkActorDisconnected(Player* actor)
     if (actor->handle < _num_players) {
         actor->disconnect_frame = _net_player_queue[actor->handle].last_added_input;
         actor->last_claim_raise_time = TimeSinceEpoch();
+        INFO_LOG_FMT(BRAWLBACK, "GekkoNet: player {} disconnected, holds its input to frame {}",
+                     actor->handle, actor->disconnect_frame);
     }
 }
 
@@ -1169,6 +1173,9 @@ void Gekko::MessageSystem::OnDisconnectClaim(NetAddress& addr, NetPacket& pkt)
             peer->peer_claims[body->player] = body->last_frame;
         }
     }
+
+    INFO_LOG_FMT(BRAWLBACK, "GekkoNet: claim for player {}: frames {}..{} (we hold to {})",
+                 body->player, body->start_frame, body->last_frame, plyr->disconnect_frame);
 
     if (body->last_frame <= plyr->disconnect_frame) {
         return;

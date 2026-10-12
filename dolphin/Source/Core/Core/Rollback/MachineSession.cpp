@@ -43,6 +43,8 @@
 #include "Core/HW/WiimoteEmu/Extension/Nunchuk.h"
 #include "Core/IOS/FS/HostBackend/FS.h"
 #include "Core/IOS/IOS.h"
+#include "Core/IOS/USB/Bluetooth/BTEmu.h"
+#include "Core/IOS/USB/Bluetooth/WiimoteDevice.h"
 #include "Core/Harness/Harness.h"
 #include "Core/NetPlayProto.h"
 #include "Core/PowerPC/MMU.h"
@@ -77,7 +79,9 @@ constexpr u8 CHANNEL_GEKKO = 0;    // GekkoNet's packets (unsequenced)
 constexpr u8 CHANNEL_CONTROL = 1;  // small JSON messages (reliable)
 constexpr u8 CHANNEL_COUNT = 3;    // 2: machine images (later)
 constexpr size_t MAX_CONTROL_SIZE = 4096;
-constexpr size_t MAX_GEKKO_PACKET = 4096;
+// GekkoNet's largest packet is a disconnect claim: a dropped player's whole input queue (128
+// inputs of INPUT_SIZE, 6 KiB; ENet fragments it).
+constexpr size_t MAX_GEKKO_PACKET = 16384;
 constexpr int MAX_ADVANCE = MAX_ROLLBACK_FRAMES + 2;
 constexpr size_t HISTORY_SIZE = 1 << 14;
 // GekkoNet drops a peer it has not heard from for this long.
@@ -119,6 +123,7 @@ struct PeerLink
   bool started = false;      // its GekkoNet session started (start barrier)
   bool go = false;           // the barrier's host told it to go
   bool left = false;
+  bool dropped = false;  // GekkoNet was told (DropLeftPeers)
   Clock::time_point last_connect{};
   double rtt_ms = -1;
 };
@@ -601,6 +606,8 @@ bool CreateGekko()
   {
     gekko_set_local_delay(s.gekko, s.local_handle, static_cast<unsigned char>(s.opts.delay));
     gekko_set_disconnect_timeout(s.gekko, DISCONNECT_TIMEOUT_MS);
+    static const Input unplugged{};
+    gekko_set_disconnected_input(s.gekko, unplugged.data());
   }
   else
   {
@@ -707,9 +714,16 @@ void ProcessSessionEvents()
     {
       const int h = e.data.disconnected.handle;
       const int slot = h >= 0 && h < MAX_PLAYERS ? s.handle_slot[h] : -1;
-      AddLog(fmt::format("player {} dropped by GekkoNet", slot));
-      // Until epochs exist (phase 3), a dropped player ends a 2-player session.
-      Fail(fmt::format("player {} disconnected", slot + 1));
+      // GekkoNet agrees with the others on the frame from which the player's input is the
+      // disconnected input (all zero: nothing plugged in), so their controller is unplugged at the
+      // same frame everywhere and the others play on, as at a LAN.
+      AddLog(fmt::format("player {} left (unplugged)", slot + 1));
+      OSD::AddMessage(fmt::format("Player {} left", slot + 1), 4000, OSD::Color::YELLOW);
+      if (slot >= 0)
+      {
+        std::lock_guard lk(s.net_mutex);
+        s.peers[slot].left = true;
+      }
       break;
     }
     case GekkoDesyncDetected:
@@ -1074,18 +1088,32 @@ bool PeersConnected()
   return true;
 }
 
-bool AnyPeerLeft(std::string* who)
+// A peer that said it leaves, or whose link dropped: GekkoNet drops it now instead of after its
+// silence timeout, and agrees with the others on the frame its controller is unplugged.
+void DropLeftPeers()
 {
-  std::lock_guard lk(s.net_mutex);
-  for (const PeerLink& p : s.peers)
+  std::array<bool, MAX_PLAYERS> drop{};
   {
-    if (p.slot >= 0 && p.left)
+    std::lock_guard lk(s.net_mutex);
+    for (PeerLink& p : s.peers)
     {
-      *who = fmt::format("player {}", p.slot + 1);
-      return true;
+      if (p.slot >= 0 && p.left && !p.dropped)
+      {
+        p.dropped = true;
+        drop[p.slot] = true;
+      }
     }
   }
-  return false;
+  for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+  {
+    if (drop[slot] && s.gekko && s.slot_handle[slot] >= 0)
+    {
+      // GekkoNet's own PlayerDisconnected event for this is cleared by its next poll, unread.
+      gekko_disconnect_actor(s.gekko, s.slot_handle[slot]);
+      AddLog(fmt::format("player {} left", slot + 1));
+      OSD::AddMessage(fmt::format("Player {} left", slot + 1), 4000, OSD::Color::YELLOW);
+    }
+  }
 }
 
 enum class Wait
@@ -1157,12 +1185,7 @@ Wait WaitForFrames(Core::System& system)
     }
     if (s.phase == Phase::Running)
     {
-      std::string who;
-      if (AnyPeerLeft(&who))
-      {
-        Fail(who + " left");
-        return Wait::Ended;
-      }
+      DropLeftPeers();
       CaptureLocalInput();
       Update(system);
       if (s.phase == Phase::Error)
@@ -1182,11 +1205,42 @@ Wait WaitForFrames(Core::System& system)
   return Wait::Frames;
 }
 
+// A Wii Remote whose player's input stops saying "connected" (they left) disconnects at that
+// frame, on every machine; a player who comes back connects it with a button press.
+void UnplugWiimotes(Core::System& system, s64 frame, const std::array<Input, MAX_PLAYERS>& now)
+{
+  if (frame <= 0)
+    return;
+  const HistoryEntry& prev = s.history[static_cast<size_t>(frame - 1) % HISTORY_SIZE];
+  if (prev.frame != frame - 1)
+    return;
+  const auto ios = system.GetIOS();
+  if (!ios)
+    return;
+  // The session forces Bluetooth passthrough off (the netplay config layer): the device is the
+  // emulated stack.
+  const auto bt = std::static_pointer_cast<IOS::HLE::BluetoothEmuDevice>(
+      ios->GetDeviceByName("/dev/usb/oh1/57e/305"));
+  if (!bt)
+    return;
+  for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+  {
+    const bool was = prev.inputs[slot][0] & INPUT_WIIMOTE_CONNECTED;
+    const bool is = now[slot][0] & INPUT_WIIMOTE_CONNECTED;
+    if (was && !is)
+    {
+      if (auto* wiimote = bt->AccessWiimoteByIndex(static_cast<size_t>(slot)))
+        wiimote->Activate(false);
+    }
+  }
+}
+
 void BeginPass(Core::System& system)
 {
-  // The inputs this pass runs with, for the SI (GetPad) and later the Wii Remotes.
+  // The inputs this pass runs with, for the SI (GetPad) and the Wii Remotes (GetWiimote).
   s.latched = s.ops.inputs[s.iteration];
   s.current_frame = s.ops.frame[s.iteration];
+  UnplugWiimotes(system, s.current_frame, s.latched);
   s.resim = s.ops.count > 1 && s.iteration != s.ops.count - 1;
   RecordHistory(s.current_frame, s.latched, 0);
   auto& core_timing = system.GetCoreTiming();
@@ -1250,13 +1304,11 @@ T Pinned(const Config::Info<T>& info)
 GCPadStatus DecodePad(const Input& in)
 {
   GCPadStatus pad{};
+  // No GameCube controller in this port this frame: nobody plays it, its player plays a Wii
+  // Remote, the session has not started, or the player left. The SI answers as for an empty port.
   if (!(in[0] & INPUT_GC_PRESENT))
   {
-    pad.isConnected = true;
-    pad.stickX = GCPadStatus::MAIN_STICK_CENTER_X;
-    pad.stickY = GCPadStatus::MAIN_STICK_CENTER_Y;
-    pad.substickX = GCPadStatus::C_STICK_CENTER_X;
-    pad.substickY = GCPadStatus::C_STICK_CENTER_Y;
+    pad.isConnected = false;
     return pad;
   }
   pad.button = static_cast<u16>((in[1] << 8) | in[2]);
@@ -1579,12 +1631,11 @@ NetPlay::NetSettings MakeNetSettings()
   ns.wiimote_map.fill(0);
   for (int slot = 0; slot < MAX_PLAYERS; ++slot)
   {
-    if (!((s.players >> slot) & 1))
-      continue;
-    if (s.controller[slot] == Controller::WiiRemote)
+    // Every port is a standard controller (plugged in or not by the input); Wii Remotes exist for
+    // the players who play one (an emulated Wii Remote connects as soon as it exists).
+    ns.pad_map[slot] = static_cast<NetPlay::PlayerId>(slot + 1);
+    if (((s.players >> slot) & 1) && s.controller[slot] == Controller::WiiRemote)
       ns.wiimote_map[slot] = static_cast<NetPlay::PlayerId>(slot + 1);
-    else
-      ns.pad_map[slot] = static_cast<NetPlay::PlayerId>(slot + 1);
   }
   ns.local_player_id = static_cast<NetPlay::PlayerId>(s.opts.local_slot + 1);
   return ns;
@@ -1601,13 +1652,8 @@ bool GetPad(int port, GCPadStatus* status)
     return false;
   if (port < 0 || port >= MAX_PLAYERS)
     return false;
-  if (!((s.players >> port) & 1) || s.controller[port] != Controller::GameCube)
-  {
-    *status = GCPadStatus{};
-    status->isConnected = false;
-    return true;
-  }
-  // Before the session runs (boot) every player's controller is neutral on every machine.
+  // Every port is a standard controller on every machine; whether one is plugged in this frame is
+  // its player's input (nothing before the session runs).
   *status = DecodePad(s.latched[port]);
   return true;
 }
