@@ -337,8 +337,8 @@ impl RoomRequest {
                     .filter(|g| (1..=99).contains(g))
                     .ok_or_else(|| format!("{kind}: `game` must be 1 to 99"))? as u32;
                 let winner_side = small("winnerSide", SIDE_DRAW as u64)?
-                    .filter(|s| *s <= 1 || *s == SIDE_DRAW)
-                    .ok_or_else(|| format!("{kind}: `winnerSide` must be 0, 1 or {SIDE_DRAW}"))?;
+                    .filter(|s| *s <= 1 || *s == SIDE_DRAW || *s == SIDE_VOID)
+                    .ok_or_else(|| format!("{kind}: `winnerSide` must be 0, 1, {SIDE_DRAW} or {SIDE_VOID}"))?;
                 let stage = v
                     .get("stage")
                     .and_then(|s| s.as_u64())
@@ -671,6 +671,7 @@ mod tests {
             RoomRequest::Ruleset { code: None },
             RoomRequest::Set { resume: true },
             RoomRequest::Result { game: 2, winner_side: 1, stage: 0x21 },
+            RoomRequest::Result { game: 1, winner_side: SIDE_VOID, stage: 0x2E },
             RoomRequest::Step { game: 1, actions: [vec![0x01], vec![0x02, 0x21]], match_started: false },
             RoomRequest::Step { game: 3, actions: [vec![], vec![]], match_started: true },
             RoomRequest::BestOf { best_of: 5 },
@@ -722,6 +723,7 @@ mod tests {
             (ROOM_CREATE, json!({"ruleset": "AEIOUY"})),
             (ROOM_RESULT, json!({"game": 0, "winnerSide": 0, "stage": 1})),
             (ROOM_RESULT, json!({"game": 1, "winnerSide": 2, "stage": 1})),
+            (ROOM_RESULT, json!({"game": 1, "winnerSide": 252, "stage": 1})),
             (ROOM_SET, json!({"action": "pause"})),
             (ROOM_STEP, json!({"game": 1, "actions": [[1]]})),
             (ROOM_BEST_OF, json!({"bestOf": 1})),
