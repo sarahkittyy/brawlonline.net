@@ -798,7 +798,8 @@ void Matchmaking::HandleMatchmaking()
   // Allowed stages (srStageKind ids): the server's list for the mode (server/config/
   // rulesets.json). Slippi falls back to a default Melee list when `stages` is missing; ours is
   // in the session (Gprb::Session::DefaultStages(), P+'s legal list), which draws the random
-  // stages from this list (Unranked's games, Direct's game 1). Stage picks are not restricted.
+  // stages from this list (Unranked's games, Direct's game 1). Stage picks are not restricted,
+  // except in a room whose loser picks from the list (`pickFromStages`).
   const auto stages_it = get_resp.find("stages");
   if (stages_it != get_resp.end() && stages_it->second.is<picojson::array>())
   {
@@ -825,6 +826,7 @@ void Matchmaking::HandleMatchmaking()
         match.starters.push_back(static_cast<u16>(*kind));
     }
   }
+  match.pick_from_stages = GetBool(get_resp, "pickFromStages");
   match.items = static_cast<u32>(GetInt(get_resp, "items", 0, 0xFFFFFFFF).value_or(0));
   // The match's rules (MatchRules.h). Rules that are there but unusable refuse the match: playing
   // under other rules than the server set up is worse than not playing.

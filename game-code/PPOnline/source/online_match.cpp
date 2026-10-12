@@ -427,7 +427,9 @@ namespace OnlineMatch {
             u8* st = gg(0x14);
             bool picked = (code == 1 || code == 3) && st;
             s_pickedStage = picked ? *(u16*)(st + 0x22) : OnlineMatch::PICK_CANCELLED;
-            s_pickedAsl = picked ? s_sssAsl : 0;
+            // From a room's list: the stage's normal layout (alternate layouts only in a room
+            // whose loser picks any stage; Dolphin's host holds to it too).
+            s_pickedAsl = picked && !StageLegal::roomPicksFromList() ? s_sssAsl : 0;
         }
         s_sssAsl = 0;
         backToCss(seq);

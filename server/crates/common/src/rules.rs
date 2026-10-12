@@ -156,9 +156,13 @@ impl<'de> Deserialize<'de> for Dropped {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum StageChoice {
-    /// Game 1 random, then the loser picks (today's rooms).
+    /// Game 1 random, then the loser picks any stage of P+'s stage select, alternate layouts too
+    /// (today's rooms); the stage list only feeds the random stages.
     #[default]
     LoserPicks,
+    /// Game 1 random, then the loser picks from the stage list, on the stage's normal layout: the
+    /// stage select greys the other stages (the user's, 2026-10-12, `room-rules.md` §2).
+    LoserPicksList,
     /// Strike from the starters with the ruleset's pattern, the first striker random each game
     /// (a tournament's Bo1). Not for FFA.
     Strike,
@@ -253,6 +257,12 @@ impl Ruleset {
     /// Whether this ruleset strikes (game 1 of a set, or every game with [`StageChoice::Strike`]).
     pub fn strikes_used(&self) -> bool {
         self.best_of > 0 || self.stage_choice == StageChoice::Strike
+    }
+
+    /// Whether a loser's stage pick is held to the stage list, on the stage's normal layout
+    /// ([`StageChoice::LoserPicksList`]; a set picks from its list in its own steps).
+    pub fn pick_from_stages(&self) -> bool {
+        self.best_of == 0 && self.stage_choice == StageChoice::LoserPicksList
     }
 
     /// Clears what the set format leaves unused, so two rulesets that play the same have the same
@@ -510,6 +520,15 @@ mod tests {
         let r: Ruleset = serde_json::from_str(r#"{"name": "x", "stageChoice": "random"}"#).unwrap();
         assert_eq!((r.stage_choice, r.format, r.best_of), (StageChoice::Random, 1, 0));
         r.validate().unwrap();
+        // Loser picks from the list: held to the stages without a set; a set normalizes it away.
+        let mut r: Ruleset = serde_json::from_str(r#"{"name": "x", "stageChoice": "loser-picks-list"}"#).unwrap();
+        assert_eq!((r.stage_choice, r.pick_from_stages()), (StageChoice::LoserPicksList, true));
+        r.validate().unwrap();
+        assert!(!Ruleset::default().pick_from_stages());
+        r.best_of = 3;
+        r.strikes = vec![1, 2, 1];
+        r.normalize();
+        assert_eq!((r.stage_choice, r.pick_from_stages()), (StageChoice::LoserPicks, false));
         // The old `players` key (any value) is read and dropped: older drafts, files and published
         // rulesets still load, and play the same as without it.
         for old in [r#""1v1""#, r#""ffa""#, r#""3v3""#, "7"] {

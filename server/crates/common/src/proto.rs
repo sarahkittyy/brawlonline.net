@@ -172,6 +172,10 @@ pub struct GetTicketResp {
     /// A room's set: the session plays it game by game (`SetTicket`).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub set: Option<SetTicket>,
+    /// A room whose loser picks from the stage list (`StageChoice::LoserPicksList`): a stage pick
+    /// must be one of `stages`, played on its normal layout. Absent: any stage, any layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pick_from_stages: Option<bool>,
 }
 
 /// A room's set as its session starts it (ours; Dolphin's `Online/SetFormat.h` `Format` and

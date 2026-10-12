@@ -11,7 +11,11 @@
 // no highlight, blank preview) while the cursor is on a struck icon. P+'s random
 // (selectSequential, CODE @ 0x806B7638) draws from "random switch AND NOT struck".
 //
-// While the restriction is on (CFG_SSS_LEGAL; no online mode turns it on, see active()):
+// A room's loser (no set; SESSION RoomPlay / RoomStages, v7) picks on it with the room's stages:
+// from the list (CHOICE_LOSER_PICKS_LIST) they are the only ones offered, as below; any stage
+// (CHOICE_LOSER_PICKS) only P+'s random (START) draws from them (the random switch alone is set).
+//
+// While the restriction is on (CFG_SSS_LEGAL, Ranked's steps, a room's list; see active()):
 //  - H1 sel_stage+0x4EDC (`lwz r3,0x13C(r1)`, the pressed buttons, just before P+'s two hooks):
 //    the strike table = NOT allowed on every page, the random switch (RSS_EXDATA pages) = allowed
 //    (saved, put back once the stage select is gone), PAGE_INDEX = 0xFF when the table changed so
@@ -49,6 +53,7 @@ namespace StageLegal {
     static const u32 SLOT_KINDS = 0x8042C5EC;         // slot s at +2s: {u8 srStageKind, u8 cosmetic}
     static const u32 PAGE_INDEX = 0x8042C821;         // page P+'s strike art was last drawn for
     static const u32 STRIKE_TABLE = 0x8042C822;       // same layout as the random switch
+    static const u32 RSS_EXDATA_BONUS = 0x8042C840;   // bit 0: P+'s random may draw a custom (stage builder) stage
     const u32 STRIKE_TABLE_ADDR = STRIKE_TABLE;
     const u32 CURRENT_PAGE = 0x80496000;
     static const int PAGES = 5;
@@ -61,6 +66,7 @@ namespace StageLegal {
     static int s_count = -1;            // -1: P+'s legal list
 
     static u8 s_savedSwitch[PAGE_BYTES];
+    static u8 s_savedBonus = 0;
     static bool s_switchSaved = false;
 
     void setList(const u8* kinds, int n)
@@ -111,9 +117,34 @@ namespace StageLegal {
         return g_onlinePickStage ? OnlineMenu::rankedStep() : NULL;
     }
 
+    bool roomPicksFromList()
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        return OnlineMenu::roomCss() && se.play.valid && se.play.bestOf == 0 &&
+               se.play.stageChoice == PPOM::CHOICE_LOSER_PICKS_LIST;
+    }
+
+    // A room loser's stage select (a set's is run by its steps, as Ranked's): the room's stages as
+    // the list (setList), and how they apply. An older mm sends no stages: P+'s own stage select.
+    enum { ROOM_NONE, ROOM_RANDOM, ROOM_LIST };
+    static int roomPick()
+    {
+        if (!g_onlinePickStage || OnlineMenu::stepsDecideStage() || !OnlineMenu::roomCss()) return ROOM_NONE;
+        const PPOM::Session& se = PPOM::g_block.session;
+        if (!se.play.valid) return ROOM_NONE;
+        u8 kinds[sizeof(s_kinds)];
+        int n = 0;
+        for (int id = 1; id < 256 && n < (int)sizeof(kinds); id++) {
+            if (PPOM::stageBit(se.stages.starters, id) || PPOM::stageBit(se.stages.counterpicks, id)) kinds[n++] = (u8)id;
+        }
+        if (n == 0) return ROOM_NONE;
+        setList(kinds, n);
+        return roomPicksFromList() ? ROOM_LIST : ROOM_RANDOM;
+    }
+
     bool active()
     {
-        return (PPOM::g_block.debug.cfg & PPOM::CFG_SSS_LEGAL) != 0 || ranked() != NULL;
+        return (PPOM::g_block.debug.cfg & PPOM::CFG_SSS_LEGAL) != 0 || ranked() != NULL || roomPick() == ROOM_LIST;
     }
 
     // The stage select's message object: created by sel_stage+0xC38 (43 windows); window 0 is its
@@ -179,13 +210,16 @@ namespace StageLegal {
         return true;
     }
 
-    // Every frame of a restricted stage select (from H1). Idempotent.
-    static void apply()
+    // Every frame of a restricted stage select (from H1), or with `strike` false of a room's any-stage
+    // pick (only the random switch: P+'s random draws from the list). Idempotent.
+    static void apply(bool strike = true)
     {
         if (!s_switchSaved) {
             memcpy(s_savedSwitch, (const void*)RSS_EXDATA, PAGE_BYTES);
+            s_savedBonus = *(u8*)RSS_EXDATA_BONUS;
             s_switchSaved = true;
         }
+        *(u8*)RSS_EXDATA_BONUS &= ~1;   // no stage builder stage from P+'s random
         bool changed = false;
         for (int page = 0; page < PAGES; page++) {
             u16 ext;
@@ -196,6 +230,7 @@ namespace StageLegal {
             put16(sw, ext);
             put16(sw + 2, (u16)(main >> 16));
             put16(sw + 4, (u16)main);
+            if (!strike) continue;
             changed |= put16(st, (u16)~ext);
             changed |= put16(st + 2, (u16)(~main >> 16));
             changed |= put16(st + 4, (u16)~main);
@@ -214,6 +249,7 @@ namespace StageLegal {
         // its random roulette) is gone.
         if (s_switchSaved && !Online::inScene("scSelStage")) {
             memcpy((void*)RSS_EXDATA, s_savedSwitch, PAGE_BYTES);
+            *(u8*)RSS_EXDATA_BONUS = (u8)((*(u8*)RSS_EXDATA_BONUS & ~1) | (s_savedBonus & 1));
             memset((void*)STRIKE_TABLE, 0, PAGE_BYTES);   // P+'s random without a screen reads it too
             s_switchSaved = false;
         }
@@ -227,17 +263,24 @@ extern "C" {
     // H1: returns the pressed buttons the rest of buttonProc (P+'s hooks) sees in r3.
     __attribute__((used)) u32 pponline_sssButtons(u8* task, u32 pressed)
     {
+        if (StageLegal::roomPick() == StageLegal::ROOM_RANDOM) {
+            StageLegal::apply(false);   // any stage: only P+'s random keeps to the room's stages
+            return pressed;
+        }
         if (!StageLegal::active()) return pressed;
         const PPOM::GameStep* st = StageLegal::ranked();
         if (st) StageLegal::setList(st->kinds, st->nKinds ? st->nKinds : -1);
         StageLegal::apply();
         u32 out = pressed & ~(0x200u | 0x400u | 0x80000u);   // B, X (GameCube), X (Classic)
+        // P+'s striking (Random.asm, the buttonProc hook: the struck art, and no highlight on a
+        // struck stage) runs only while gfSceneManager+0x284 is 1, as after the Versus CSS; the
+        // online sequence opens the stage select with 0. (A room's list drew nothing struck
+        // without it, though its picks were refused.)
+        u32 mgr = *(u32*)0x805A0060;
+        bool online = st || StageLegal::roomPicksFromList();
+        if (online && mgr >= 0x80000000 && mgr < 0x81800000) *(int*)(mgr + 0x284) = 1;
         if (!st) return out;
         out &= ~(0x1000u | 0x10u);   // START (random), Z (hazards: the online rules set them)
-        // P+'s striking (Random.asm, the buttonProc hook) runs only while gfSceneManager+0x284
-        // is 1, as after the Versus CSS; the online sequence opens the stage select with 0.
-        u32 mgr = *(u32*)0x805A0060;
-        if (mgr >= 0x80000000 && mgr < 0x81800000) *(int*)(mgr + 0x284) = 1;
         StageLegal::showTurn(OnlineMenu::rankedText());
         s_autoLeave = !st->active || (st->type != PPOM::STEP_STRIKE && st->type != PPOM::STEP_PICK);
         if (s_autoLeave) return out | 0x100u;

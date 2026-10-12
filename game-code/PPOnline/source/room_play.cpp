@@ -522,9 +522,9 @@ namespace RoomPlay {
         } else if (p.bestOf) {
             sprintf(out + n, "\nBest of %d", p.bestOf);
         } else {
-            static const char* const CHOICE[3] = {"Loser picks the stage", "Stages struck every game",
-                                                  "Random stage"};
-            if (p.stageChoice < 3) sprintf(out + n, "\n%s", CHOICE[p.stageChoice]);
+            static const char* const CHOICE[4] = {"Loser picks the stage", "Stages struck every game",
+                                                  "Random stage", "Loser picks from the list"};
+            if (p.stageChoice < 4) sprintf(out + n, "\n%s", CHOICE[p.stageChoice]);
         }
     }
 

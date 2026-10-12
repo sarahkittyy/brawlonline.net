@@ -472,6 +472,9 @@ pub struct RoomRuleset {
     pub based_on: Option<String>,
     pub best_of: u8,
     pub stage_choice: crate::rules::StageChoice,
+    /// The ruleset's stages (an older mm sent none: P+'s default lists).
+    #[serde(default)]
+    pub stages: crate::rules::StageLists,
 }
 
 /// A room's set (`room-state.set`): the score by side, side 0 being the lower slot.

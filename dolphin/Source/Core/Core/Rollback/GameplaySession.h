@@ -164,8 +164,11 @@ struct ConnectOptions
   // The stages of the match (the server's `stages` list for the mode, Slippi's allowed stages;
   // empty: P+ v3.2's legal list, DefaultStages()): the host draws every random stage from it
   // without repeats until it is used up (Slippi's stage pool). A stage pick (Direct's loser) is
-  // not checked against it: Slippi does not restrict Direct's stage select.
+  // not checked against it: Slippi does not restrict Direct's stage select ...
   std::vector<u16> stages;
+  // ... unless set (a room whose loser picks from the list): a pick must be one of `stages` (else
+  // the stage is drawn as without a pick) and is played on its normal layout (asl 0).
+  bool pick_from_stages = false;
   // The room's Teams switch (docs/nplayer/setup.md): 3-4 players play a team battle with each
   // player's lock-in team (Online::GameSetup::DecideTeams); with 2 players it has no effect.
   bool teams = false;

@@ -341,9 +341,26 @@ std::optional<View> ParseView(const picojson::object& o, std::string* why)
     v.ruleset.version = static_cast<u32>(Int(ro, "version", 0, 100000).value_or(0));
     v.ruleset.based_on = Str(ro, "basedOn", MAX_NAME_BYTES + 16).value_or("");
     v.ruleset.best_of = static_cast<u8>(Int(ro, "bestOf", 0, 7).value_or(0));
-    const auto choice = Str(ro, "stageChoice", 16).value_or("loser-picks");
-    v.ruleset.stage_choice =
-        choice == "strike" || choice == "random" ? choice : std::string("loser-picks");
+    const auto choice = Str(ro, "stageChoice", 24).value_or("loser-picks");
+    v.ruleset.stage_choice = choice == "strike" || choice == "random" || choice == "loser-picks-list" ?
+                                 choice :
+                                 std::string("loser-picks");
+    if (const picojson::value* st = Find(ro, "stages"); st && st->is<picojson::object>())
+    {
+      const auto& so = st->get<picojson::object>();
+      const auto ids = [&](const char* key, std::vector<u16>* out) {
+        const picojson::value* a = Find(so, key);
+        if (!a || !a->is<picojson::array>())
+          return;
+        for (const picojson::value& e : a->get<picojson::array>())
+        {
+          if (const auto id = Int(e, 1, 0xFF); id && out->size() < 0x100)
+            out->push_back(static_cast<u16>(*id));
+        }
+      };
+      ids("starters", &v.ruleset.starters);
+      ids("counterpicks", &v.ruleset.counterpicks);
+    }
   }
   if (const picojson::value* sv = Find(o, "set"); sv && sv->is<picojson::object>())
   {

@@ -80,6 +80,9 @@ struct Match
   u16 local_port = 0;            // the punched UDP port this side used for mm and P2P
   std::vector<PlayerInfo> players;  // in server order
   std::vector<u16> stages;
+  // A room whose loser picks from the stage list (get-ticket-resp `pickFromStages`): a stage pick
+  // must be one of `stages`, played on its normal layout.
+  bool pick_from_stages = false;
   // Ranked: the starter stages struck for game 1 (get-ticket-resp `starters`, ours; Slippi's
   // client has them built in). Empty: Online::GameSetup's default.
   std::vector<u16> starters;

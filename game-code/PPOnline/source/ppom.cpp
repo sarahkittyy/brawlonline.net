@@ -24,7 +24,8 @@ namespace PPOM {
     static_assert(sizeof(Local) == 0x80, "local");
     static_assert(__builtin_offsetof(Local, lockPad) == 0x35, "lock pad");
     static_assert(sizeof(SessionPlayer) == 0x80, "session player");
-    static_assert(sizeof(Session) == 0x280, "session");
+    static_assert(sizeof(Session) == 0x2C0, "session");
+    static_assert(sizeof(RoomStages) == 0x40 && __builtin_offsetof(Session, stages) == 0x280, "session room stages");
     static_assert(sizeof(RoomPlay) == 0x40 && __builtin_offsetof(Session, play) == 0x240, "session room play");
     static_assert(__builtin_offsetof(RoomPlay, setOn) == 0x2C, "room play set");
     static_assert(sizeof(RulesetList) <= sizeof(((Response*)0)->payload), "ruleset list");

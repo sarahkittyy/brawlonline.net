@@ -147,6 +147,35 @@ TEST(RoomMessages, RoomRules)
   }
 }
 
+TEST(RoomMessages, RoomRulesetStages)
+{
+  // The ruleset's stages and the loser's choice (docs/rooms-protocol.md §2, `ruleset.stages`).
+  const auto with = [](const std::string& ruleset) {
+    return Parse(Replace(STATE, R"("statusText")", R"("ruleset": )" + ruleset + R"(, "statusText")"));
+  };
+  Message m = with(R"({"name": "Casual", "bestOf": 0, "stageChoice": "loser-picks-list",
+                       "stages": {"starters": [1, 2], "counterpicks": [42]}})");
+  ASSERT_EQ(m.kind, Message::Kind::RoomState) << m.why;
+  EXPECT_EQ(m.view->ruleset.stage_choice, "loser-picks-list");
+  EXPECT_TRUE(m.view->ruleset.LoserPicks());
+  EXPECT_TRUE(m.view->ruleset.PickFromList());
+  EXPECT_EQ(m.view->ruleset.starters, (std::vector<u16>{1, 2}));
+  EXPECT_EQ(m.view->ruleset.counterpicks, (std::vector<u16>{42}));
+  // Any stage: the lists only feed the random stages.
+  m = with(R"({"name": "P+ default", "stageChoice": "loser-picks", "stages": {"starters": [1]}})");
+  EXPECT_TRUE(m.view->ruleset.LoserPicks());
+  EXPECT_FALSE(m.view->ruleset.PickFromList());
+  EXPECT_TRUE(m.view->ruleset.counterpicks.empty());
+  // A set picks in its own steps; ids outside 1-255 and unknown choices are left out.
+  m = with(R"({"name": "x", "bestOf": 3, "stageChoice": "loser-picks-list",
+               "stages": {"starters": [0, 256, 3, "x"], "counterpicks": "no"}})");
+  EXPECT_FALSE(m.view->ruleset.PickFromList());
+  EXPECT_EQ(m.view->ruleset.starters, (std::vector<u16>{3}));
+  m = with(R"({"name": "x", "stageChoice": "pick-anything"})");
+  EXPECT_EQ(m.view->ruleset.stage_choice, "loser-picks");
+  EXPECT_TRUE(m.view->ruleset.starters.empty());
+}
+
 TEST(RoomMessages, RefusesBadRoomStates)
 {
   const std::string ok = STATE;

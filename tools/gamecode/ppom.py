@@ -113,7 +113,7 @@ def _parse_block(c: HarnessClient, a: int):
     if hdr[:4] != MAGIC:
         return None
     ver, sz, mbo, mbs, so, ss, lo, ls, dbo, dbs = struct.unpack_from(">HHHHHHHHHH", hdr, 4)
-    if ver in (1, 2, 3, 4, 5, 6) and 0x100 < sz < 0x4000 and mbo and dbo:
+    if ver in (1, 2, 3, 4, 5, 6, 7) and 0x100 < sz < 0x4000 and mbo and dbo:
         return Block(a, ver, sz, a + mbo, mbs, a + dbo, dbs, a + so if ss else 0, ss,
                      a + lo if ls else 0, ls)
     return None
@@ -337,12 +337,22 @@ def read_session(c: HarnessClient, b: Block) -> dict:
         se["rules"] = read_rules(d[S_RULES:S_RULES + RULES_SIZE])
     if len(d) >= S_PLAY + 0x40:          # v6: the room's ruleset and set
         se["play"] = read_play(d[S_PLAY:S_PLAY + 0x40])
+    if len(d) >= S_STAGES + 0x40:        # v7: the room's stages
+        se["stages"] = read_room_stages(d[S_STAGES:S_STAGES + 0x40])
     return se
 
 
 # ---- v6: the match's rules (ppom.h Rules, docs/design/room-rules.md section 3) ----
 S_RULES, RULES_SIZE = 0x220, 0x20
 S_PLAY = 0x240
+S_STAGES = 0x2C0 - 0x40   # v7: RoomStages (ppom.h)
+
+
+def read_room_stages(r: bytes) -> dict:
+    """SESSION's RoomStages (v7): the room's starters and counterpicks as stage id lists (bit k of
+    each 32-byte mask is stage id k)."""
+    ids = lambda m: [k for k in range(256) if m[k // 8] >> (k % 8) & 1]  # noqa: E731
+    return {"starters": ids(r[0:0x20]), "counterpicks": ids(r[0x20:0x40])}
 
 
 def read_play(p: bytes) -> dict | None:

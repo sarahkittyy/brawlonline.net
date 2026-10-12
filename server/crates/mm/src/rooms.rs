@@ -302,6 +302,7 @@ impl Room {
             based_on: self.based_on.clone(),
             best_of: self.ruleset.best_of,
             stage_choice: self.ruleset.stage_choice,
+            stages: self.ruleset.stages.clone(),
         }
     }
 
@@ -1257,6 +1258,7 @@ impl RoomBook {
                     items: Some(self.cfg.rules.items),
                     rules: Some(room.ruleset.rules.clone()),
                     set: set_ticket.clone(),
+                    pick_from_stages: room.ruleset.pick_from_stages().then_some(true),
                     ..Default::default()
                 },
             ));
@@ -1893,6 +1895,46 @@ mod tests {
         let mut out = vec![];
         t.book.apply_ruleset(&code, strike, Some("CDFGHJ".into()), &mut out).unwrap();
         assert_eq!(last_state(&out, 1)["statusText"], msg::STRIKES_NEED_TWO_SIDES);
+    }
+
+    /// The room's stages go to its members with the ruleset, and a ruleset whose loser picks from
+    /// the list says so in the ticket; P+ default (any stage) does not.
+    #[test]
+    fn a_loser_picks_from_the_list_room_holds_its_tickets_to_the_stages() {
+        let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
+        let start = |t: &mut T, code: &str, conn: ConnId| {
+            ready_all(t, &[1, 2]);
+            t.book.ticket(conn, addr(1), String::new(), info(1).uid, code).unwrap();
+            t.book.ticket(conn + 1, addr(2), String::new(), info(2).uid, code).unwrap().matched[0].1.clone()
+        };
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        let out = join(&mut t, 2, &code);
+        let s = last_state(&out, 1);
+        assert_eq!(s["ruleset"]["stageChoice"], "loser-picks");
+        assert_eq!(s["ruleset"]["stages"]["starters"], serde_json::json!([1, 2, 0x21, 0x2D, 0x2E]));
+        assert_eq!(start(&mut t, &code, 100).pick_from_stages, None);
+        for n in 1..=2 {
+            t.req(n, RoomRequest::Back);
+        }
+
+        let mut r = Ruleset {
+            name: "Casual".into(),
+            version: 1,
+            stage_choice: common::rules::StageChoice::LoserPicksList,
+            stages: common::rules::StageLists { starters: vec![1, 2], counterpicks: vec![0x2A] },
+            ..Default::default()
+        };
+        r.normalize();
+        r.validate().unwrap();
+        let mut out = vec![];
+        t.book.apply_ruleset(&code, r, Some("BCDFGH".into()), &mut out).unwrap();
+        let s = last_state(&out, 2);
+        assert_eq!(s["ruleset"]["stageChoice"], "loser-picks-list");
+        assert_eq!(s["ruleset"]["stages"], serde_json::json!({"starters": [1, 2], "counterpicks": [0x2A]}));
+        let resp = start(&mut t, &code, 200);
+        assert!(serde_json::to_string(&resp).unwrap().contains(r#""pickFromStages":true"#));
+        assert_eq!((resp.pick_from_stages, resp.stages), (Some(true), Some(vec![1, 2, 0x2A])));
     }
 
     /// Players 1 and 2 ready up and their tickets come in (as `ticket..ticket+1`): the set ticket.

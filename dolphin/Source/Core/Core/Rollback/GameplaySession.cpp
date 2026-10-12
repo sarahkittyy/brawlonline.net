@@ -1507,6 +1507,18 @@ void MaybeDecideSetup()
       st.players[port] = {true, l->char_kind, l->costume, l->port_values, teams.team[port]};
   }
   const LockIn* pick = pick_port >= 0 ? locks[pick_port] : nullptr;
+  if (pick && s.net_opts.pick_from_stages)
+  {
+    // A room whose loser picks from the list: the game's stage select offers only those stages;
+    // a pick that is not one of them (a game without that check) is drawn as without a pick.
+    const auto& allowed = AllowedStages();
+    if (std::find(allowed.begin(), allowed.end(), pick->stage_pick) == allowed.end())
+    {
+      WARN_LOG_FMT(BRAWLBACK, "gprb lobby: P{}'s stage pick {:#x} is not on the room's list; drawn instead",
+                   pick_port + 1, pick->stage_pick);
+      pick = nullptr;
+    }
+  }
   if (decided.applies)
   {
     st.stage = decided.stage;
@@ -1515,7 +1527,8 @@ void MaybeDecideSetup()
   else if (pick)
   {
     st.stage = pick->stage_pick;
-    st.asl = pick->asl;
+    // From the list: the stage's normal layout, whatever alternate-stage buttons were held.
+    st.asl = s.net_opts.pick_from_stages ? 0 : pick->asl;
   }
   else
   {
@@ -4395,6 +4408,7 @@ picojson::value Status()
       stages.emplace_back(static_cast<double>(st));
     lobby["stages"] = picojson::value(stages);
     lobby["stages_from_server"] = picojson::value(!s.net_opts.stages.empty());
+    lobby["pick_from_stages"] = picojson::value(s.net_opts.pick_from_stages);
     o["lobby"] = picojson::value(lobby);
     o["local_port"] = picojson::value(
         static_cast<double>(s.socket ? s.socket->getLocalPort() : 0));

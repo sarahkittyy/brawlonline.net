@@ -47,7 +47,10 @@ constexpr u32 MAGIC = 0x50504F4D;  // "PPOM"
 // 6: the match's rules (docs/design/room-rules.md §3): SESSION grows to 0x280 with ppom.h Rules at
 // +0x220 (MatchRules.h) and RoomPlay (the room's ruleset and set) at +0x240; a v4 or v5 plugin
 // still works (its built-in rules).
-constexpr u16 VERSION = 6;
+// 7: the room's stages (docs/design/room-rules.md §2, the stage switch): SESSION grows to 0x2C0 with
+// ppom.h RoomStages at +0x280 (a starter and a counterpick bit per stage id), and RoomPlay's stage
+// choice 3, loser picks from the list; a v4-v6 plugin still works (any stage).
+constexpr u16 VERSION = 7;
 constexpr u16 MIN_VERSION = 4;
 constexpr u32 HEADER_SIZE = 0x24;
 
@@ -88,17 +91,24 @@ constexpr u32 L_LOCK_TEAM = 0x34;
 // SESSION (the same on every machine of a session; written only outside a match, except the
 // gone flags and the elimination order, which are rolled-back match state).
 constexpr u32 SESSION_SIZE_V5 = 0x220;
-constexpr u32 SESSION_SIZE = 0x280;
+constexpr u32 SESSION_SIZE_V6 = 0x280;
+constexpr u32 SESSION_SIZE = 0x2C0;
 constexpr u32 S_RULES = 0x220;  // v6: ppom.h Rules
 // v6: ppom.h RoomPlay: valid, bestOf, stageChoice, custom, code[8], name[32], setOn, setGame,
 // score[2], sides[2], setFlags.
 constexpr u32 S_PLAY = 0x240, RP_VALID = 0, RP_BEST_OF = 1, RP_CHOICE = 2, RP_CUSTOM = 3, RP_CODE = 4,
               RP_NAME = 0x0C, RP_NAME_LEN = 32, RP_SET_ON = 0x2C, RP_SET_GAME = 0x2D, RP_SCORE = 0x2E,
               RP_SIDES = 0x30, RP_SET_FLAGS = 0x32, RP_SIDE_SLOTS = 0x33, RP_WINNER = 0x35;
-static_assert(S_RULES == SESSION_SIZE_V5 && S_RULES + RULES_SIZE == S_PLAY && S_PLAY + 0x40 == SESSION_SIZE);
+// RoomPlay's stage choice: 0 loser picks (any stage), 1 strike, 2 random, 3 loser picks from the list.
+constexpr u8 CHOICE_LOSER_PICKS = 0, CHOICE_STRIKE = 1, CHOICE_RANDOM = 2, CHOICE_LOSER_PICKS_LIST = 3;
+// v7: ppom.h RoomStages: the room's stages as bit masks over stage ids 0-255 (id k: byte k / 8,
+// mask 1 << k % 8), the starters and the counterpicks.
+constexpr u32 S_STAGES = 0x280, RS_STARTERS = 0, RS_COUNTERPICKS = 0x20, STAGE_MASK_BYTES = 0x20;
+static_assert(S_RULES == SESSION_SIZE_V5 && S_RULES + RULES_SIZE == S_PLAY && S_PLAY + 0x40 == SESSION_SIZE_V6);
+static_assert(S_STAGES == SESSION_SIZE_V6 && S_STAGES + 2 * STAGE_MASK_BYTES == SESSION_SIZE);
 constexpr u32 SessionSize(u16 version)
 {
-  return version >= 6 ? SESSION_SIZE : SESSION_SIZE_V5;
+  return version >= 7 ? SESSION_SIZE : version >= 6 ? SESSION_SIZE_V6 : SESSION_SIZE_V5;
 }
 constexpr u32 S_SEQ = 0x00, S_STATE = 0x04, S_MODE = 0x05, S_GAME = 0x06, S_LAST_WINNER = 0x07,
               S_STAGE = 0x08, S_ASL = 0x0A, S_NUM_PLAYERS = 0x0B, S_PLAYERS = 0x0C,
@@ -1348,7 +1358,13 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     const u32 p = S_PLAY;
     session[p + RP_VALID] = 1;
     session[p + RP_BEST_OF] = v.ruleset.best_of;
-    session[p + RP_CHOICE] = v.ruleset.stage_choice == "strike" ? 1 : v.ruleset.stage_choice == "random" ? 2 : 0;
+    session[p + RP_CHOICE] = v.ruleset.stage_choice == "strike"           ? CHOICE_STRIKE :
+                             v.ruleset.stage_choice == "random"           ? CHOICE_RANDOM :
+                             v.ruleset.stage_choice == "loser-picks-list" ? CHOICE_LOSER_PICKS_LIST :
+                                                                            CHOICE_LOSER_PICKS;
+    // A v6 plugin knows choices 0-2 only: loser picks (from the list) shows as loser picks.
+    if (loc.version < 7 && session[p + RP_CHOICE] == CHOICE_LOSER_PICKS_LIST)
+      session[p + RP_CHOICE] = CHOICE_LOSER_PICKS;
     session[p + RP_CUSTOM] = v.ruleset.code.empty() && v.ruleset.name != "P+ default" ? 1 : 0;
     for (size_t i = 0; i < 6 && i < v.ruleset.code.size(); ++i)
       session[p + RP_CODE + i] = static_cast<u8>(v.ruleset.code[i]);
@@ -1371,6 +1387,20 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
       session[p + RP_SIDE_SLOTS + 1] = st->side_slots[1];
       session[p + RP_WINNER] = st->finished ? st->winner : 0xFF;
     }
+  }
+  // v7: the room's stages (RoomStages), for the loser's stage select and the stage switch.
+  if (loc.version >= 7 && in_room)
+  {
+    const Rooms::View& v = *room.view;
+    const auto put = [&](u32 off, const std::vector<u16>& ids) {
+      for (const u16 id : ids)
+      {
+        if (id < 0x100)
+          session[S_STAGES + off + id / 8] |= static_cast<u8>(1u << (id % 8));
+      }
+    };
+    put(RS_STARTERS, v.ruleset.starters);
+    put(RS_COUNTERPICKS, v.ruleset.counterpicks);
   }
   // v6: the session's rules, the same on every machine (each got them from the server with its
   // ticket; the gameplay session compares what the game applied before every match).

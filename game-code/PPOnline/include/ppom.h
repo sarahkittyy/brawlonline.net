@@ -39,7 +39,9 @@ namespace PPOM {
     // in SESSION's spare bytes. No size or offset of v4 changed.
     // 6: the match's rules (docs/design/room-rules.md section 3): SESSION grows to 0x280 with Rules
     // at +0x220 and the room's ruleset and set (RoomPlay) at +0x240. No other size or offset changed.
-    const u16 VERSION = 6;
+    // 7: the room's stages (docs/design/room-rules.md section 2, the stage switch): SESSION grows to
+    // 0x2C0 with RoomStages at +0x280, and RoomPlay's stageChoice CHOICE_LOSER_PICKS_LIST.
+    const u16 VERSION = 7;
 
     // Slippi command bytes (EXI_DeviceSlippi.h), kept for familiarity (design 5.3).
     enum Cmd {
@@ -399,7 +401,9 @@ namespace PPOM {
     // in SESSION's layout (`valid` 1). Dolphin checks every value and sends room-rules.
     // On the room CSS (Dolphin, from room-state; docs/design/room-rules.md): what the room plays and
     // its set, for the room CSS to show (the ruleset's name, the score) and the host's set controls.
-    enum StageChoice { CHOICE_LOSER_PICKS = 0, CHOICE_STRIKE = 1, CHOICE_RANDOM = 2 };
+    // CHOICE_LOSER_PICKS: any stage, alternate layouts too (the room's stages only feed random
+    // stages); CHOICE_LOSER_PICKS_LIST (v7): only the room's stages, on their normal layout.
+    enum StageChoice { CHOICE_LOSER_PICKS = 0, CHOICE_STRIKE = 1, CHOICE_RANDOM = 2, CHOICE_LOSER_PICKS_LIST = 3 };
     enum SetFlags { SET_PAUSED = 1, SET_CAN_RESUME = 2, SET_FINISHED = 4 };
     struct RoomPlay {
         u8 valid;         // 1: in a room
@@ -417,6 +421,15 @@ namespace PPOM {
         u8 winner;        // the winning side (0 / 1) once the set is finished, else 0xFF
         u8 _reserved[10];
     };                    // 0x40
+
+    // v7, in a room (Dolphin, from room-state; all zero outside one or from an older mm): the
+    // ruleset's stages as bit masks over stage ids 0-255, id k at byte k / 8, mask 1 << k % 8.
+    struct RoomStages {
+        u8 starters[32];
+        u8 counterpicks[32];
+    };                    // 0x40
+
+    inline bool stageBit(const u8* mask, int id) { return id >= 0 && id < 256 && (mask[id >> 3] >> (id & 7)) & 1; }
 
     struct RoomRulesRequest {
         u8 op;            // ROOM_RULES
@@ -477,7 +490,8 @@ namespace PPOM {
         u8 _reserved[1];
         Rules rules;      // 0x220 (v6)
         RoomPlay play;    // 0x240 (v6)
-    };                    // 0x280
+        RoomStages stages;// 0x280 (v7)
+    };                    // 0x2C0
 
     // The last MuMsg::printIndex calls (a ring). 16, not 32: the plugin's Syringe heap block has
     // no room for more (docs/game-code.md, heap budget).

@@ -120,6 +120,7 @@ public:
     // The match's stages: the server's list for this mode (get-ticket-resp `stages`), else P+'s
     // legal list (the session's DefaultStages(), as Slippi falls back to its default list).
     o.stages = match.stages;
+    o.pick_from_stages = match.pick_from_stages && !match.stages.empty();
     if (match.stages.empty())
       WARN_LOG_FMT(BRAWLBACK, "gprb: the server sent no stage list; using P+'s legal list");
     for (const auto& p : match.players)

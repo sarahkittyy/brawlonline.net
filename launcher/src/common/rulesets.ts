@@ -8,7 +8,12 @@ import { stageInfo } from "./stages";
 
 export type RuleStyle = "time" | "stock" | "coin";
 export type RulePause = "normal" | "hold";
-export type StageChoice = "loser-picks" | "strike" | "random";
+/**
+ * Without a set: `loser-picks` (game 1 random, then the loser picks any stage, alternate layouts too; the list only
+ * feeds random stages), `loser-picks-list` (the same, held to the list on each stage's normal layout), `strike`
+ * (every game struck from the starters) or `random` (every game).
+ */
+export type StageChoice = "loser-picks" | "loser-picks-list" | "strike" | "random";
 
 /** `common::rules::MatchRules`. */
 export type MatchRules = {
@@ -357,7 +362,7 @@ function checkTypes(r: Ruleset): string | null {
   if (typeof r.name !== "string") {
     return "name";
   }
-  if (!["loser-picks", "strike", "random"].includes(r.stageChoice)) {
+  if (!["loser-picks", "loser-picks-list", "strike", "random"].includes(r.stageChoice)) {
     return "stageChoice";
   }
   if (!isInt(r.bestOf) || !isInt(r.bans) || typeof r.dsr !== "boolean") {

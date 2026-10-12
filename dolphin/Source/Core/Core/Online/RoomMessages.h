@@ -93,11 +93,21 @@ struct RulesetView
   u32 version = 0;
   std::string based_on;  // custom rules made from a published one ("NorCal Weekly v3")
   u8 best_of = 0;
-  // How the stage is chosen without a set: "loser-picks" (also with a set: its steps decide),
+  // How the stage is chosen without a set: "loser-picks" (any stage; also with a set: its steps
+  // decide), "loser-picks-list" (the loser picks from the stages, on their normal layout),
   // "strike" (struck every game, GameSetup), "random" (a random stage every game).
   std::string stage_choice = "loser-picks";
+  // The ruleset's stages (srStageKind): struck from, and picked from with the counterpicks. Empty
+  // from an mm that sends none.
+  std::vector<u16> starters;
+  std::vector<u16> counterpicks;
   // Only "loser picks" without a set leaves a stage to a player (the last game's loser).
-  bool LoserPicks() const { return best_of == 0 && stage_choice == "loser-picks"; }
+  bool LoserPicks() const
+  {
+    return best_of == 0 && (stage_choice == "loser-picks" || stage_choice == "loser-picks-list");
+  }
+  // ... held to the stages.
+  bool PickFromList() const { return best_of == 0 && stage_choice == "loser-picks-list"; }
 };
 // room-state's `set`: the room's set (sides: side 0 the lower slot).
 struct SetView

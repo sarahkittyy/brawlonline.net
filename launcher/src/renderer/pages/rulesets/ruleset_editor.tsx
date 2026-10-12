@@ -30,6 +30,13 @@ export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (
     }
     onChange(withStrikes(next));
   };
+  const loserPicks = r.stageChoice === "loser-picks" || r.stageChoice === "loser-picks-list";
+  const [lastLoserPicks, setLastLoserPicks] = useState<StageChoice>(loserPicks ? r.stageChoice : "loser-picks");
+  useEffect(() => {
+    if (loserPicks) {
+      setLastLoserPicks(r.stageChoice);
+    }
+  }, [loserPicks, r.stageChoice]);
   const setStageRole = (id: number, role: StageRole) => {
     const starters = r.stages.starters.filter((s) => s !== id);
     const counterpicks = r.stages.counterpicks.filter((s) => s !== id);
@@ -68,17 +75,37 @@ export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (
           />
         </Row>
         {r.bestOf === 0 ? (
-          <Row label={Messages.stageChoice()} help={stageChoiceHelp(r.stageChoice)}>
-            <Choice
-              value={r.stageChoice}
-              onChange={(stageChoice: StageChoice) => onChange(withStrikes({ ...r, stageChoice }))}
-              options={[
-                ["loser-picks", Messages.loserPicks()],
-                ["strike", Messages.strike()],
-                ["random", Messages.random()],
-              ]}
-            />
-          </Row>
+          <>
+            <Row label={Messages.stageChoice()} help={stageChoiceHelp(r.stageChoice)}>
+              <Choice
+                value={loserPicks ? "loser-picks" : r.stageChoice}
+                onChange={(c: StageChoice) =>
+                  // Back to loser picks: as it was (any stage or the list).
+                  onChange(withStrikes({ ...r, stageChoice: c === "loser-picks" ? lastLoserPicks : c }))
+                }
+                options={[
+                  ["loser-picks", Messages.loserPicks()],
+                  ["strike", Messages.strike()],
+                  ["random", Messages.random()],
+                ]}
+              />
+            </Row>
+            {loserPicks && (
+              <Row
+                label={Messages.loserPicksFrom()}
+                help={r.stageChoice === "loser-picks-list" ? Messages.stageListHelp() : Messages.anyStageHelp()}
+              >
+                <Choice
+                  value={r.stageChoice}
+                  onChange={(stageChoice: StageChoice) => onChange({ ...r, stageChoice })}
+                  options={[
+                    ["loser-picks", Messages.anyStage()],
+                    ["loser-picks-list", Messages.stageList()],
+                  ]}
+                />
+              </Row>
+            )}
+          </>
         ) : (
           <Typography variant="caption" color="text.secondary">
             {Messages.setHelp()}
@@ -210,6 +237,7 @@ function withStrikes(r: Ruleset): Ruleset {
 function stageChoiceHelp(c: StageChoice): string {
   switch (c) {
     case "loser-picks":
+    case "loser-picks-list":
       return Messages.loserPicksHelp();
     case "strike":
       return Messages.strikeHelp();
