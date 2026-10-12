@@ -18,6 +18,8 @@
 .title {
   margin: 0;
   height: 60px;
+  flex-shrink: 0;
+  white-space: nowrap;
   display: flex;
   align-items: center;
   color: var(--accent-primary-bright);
@@ -40,6 +42,7 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
+  gap: 14px;
   padding: 0 20px;
   color: var(--surface-3);
   height: 50px;

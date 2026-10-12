@@ -4,6 +4,7 @@
   --room-in-game: #d9a441;
 
   grid-column: span 2;
+  container-type: inline-size;
   min-height: 0;
   overflow: hidden;
   display: flex;
@@ -11,6 +12,7 @@
 }
 
 .online {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 8px;
@@ -220,10 +222,17 @@
 }
 
 .titleActions {
+  flex: 1 1 auto;
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
+}
+
+/* The header shrinks the ruleset's name (cut with "...") and nothing else: the code box and Create room keep
+   their size, on one line. */
+.createRoom {
+  flex-shrink: 0;
 }
 
 .rulesetBox {
@@ -234,11 +243,39 @@
 }
 
 .rulesetName {
+  min-width: 0;
   max-width: 260px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   font-size: 13px;
+}
+
+/* A button is cut without "..." by its parent: it cuts itself. */
+.rulesetName > button {
+  display: block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.rulesetCode {
+  flex-shrink: 0;
+}
+
+/* A narrow window: the header gives up the ruleset's name (the code box keeps the code) and then the players
+   in game, rather than squeezing them. A code that was not taken still says why. */
+@container (width < 760px) {
+  .rulesetName:not(:has(.rulesetError)) {
+    display: none;
+  }
+}
+
+@container (width < 670px) {
+  .online {
+    display: none;
+  }
 }
 
 .rulesetDefault {

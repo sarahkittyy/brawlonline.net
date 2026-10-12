@@ -81,6 +81,7 @@ export const RulesetBoxView = ({ ruleset, busy, error, onSubmit, onClear, onDeta
           value={text}
           placeholder={Messages.placeholder()}
           error={Boolean(shownError)}
+          className={styles.rulesetCode}
           inputProps={{
             maxLength: 12,
             spellCheck: false,

@@ -190,3 +190,26 @@ export const GameBusy = () => {
 
 /** The narrowest window the launcher allows (900 px). */
 export const NarrowWindow = () => <Frame width={900} state={{ kind: "ready", online: 128, rooms: mockRooms }} />;
+
+/** The narrowest window with the whole header: a long ruleset name, its code and Create room. */
+export const NarrowWindowRulesetSet = () => (
+  <Frame
+    width={900}
+    state={{ kind: "ready", online: 7, rooms: mockRooms }}
+    onCreate={noop}
+    rulesetBox={
+      <RulesetBoxView
+        ruleset={
+          {
+            code: "HBXLTQ",
+            ruleset: { name: "final destination all items", version: 1, by: "sarahkitty" },
+          } as RulesetView
+        }
+        busy={false}
+        onSubmit={noop}
+        onClear={noop}
+        onDetails={noop}
+      />
+    }
+  />
+);

@@ -80,7 +80,7 @@ export const PublicRoomsView = ({
             <div className={styles.titleActions}>
               {rulesetBox}
               <Tooltip title={Messages.createRoomTooltip()} placement="top" enterDelay={400} disableInteractive={true}>
-                <span>
+                <span className={styles.createRoom}>
                   <Button
                     variant="contained"
                     color="secondary"
@@ -91,7 +91,7 @@ export const PublicRoomsView = ({
                     onClick={onCreate}
                     className={clsx(highlightCreate && !creating && styles.createHighlight)}
                     data-testid="create-room"
-                    sx={{ textTransform: "none", fontWeight: 600, borderRadius: "8px", px: 1.5 }}
+                    sx={{ textTransform: "none", fontWeight: 600, borderRadius: "8px", px: 1.5, whiteSpace: "nowrap" }}
                   >
                     {Messages.createRoom()}
                   </Button>
