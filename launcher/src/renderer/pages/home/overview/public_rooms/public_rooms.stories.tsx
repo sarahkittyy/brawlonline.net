@@ -27,6 +27,15 @@ const mockRooms: PublicRoom[] = [
     status: "waiting",
     names: ["Sarah"],
     joinable: true,
+    ruleset: {
+      code: "KFQBTR",
+      name: "NorCal Weekly",
+      version: 3,
+      by: "sarah",
+      basedOn: null,
+      bestOf: 3,
+      stageChoice: "loser-picks",
+    },
   },
   {
     code: "TRZM",
@@ -57,6 +66,15 @@ const mockRooms: PublicRoom[] = [
     status: "waiting",
     names: ["VeryLongName123", "AnotherLongName"],
     joinable: false,
+    ruleset: {
+      code: "MNPQRS",
+      name: "Wednesday Night Fights Championship",
+      version: 12,
+      by: "VeryLongName123",
+      basedOn: null,
+      bestOf: 5,
+      stageChoice: "loser-picks",
+    },
   },
   {
     code: "HBPL",
@@ -67,6 +85,15 @@ const mockRooms: PublicRoom[] = [
     status: "in-game",
     names: ["Mango", "Zain", "Cody", "Hungrybox"],
     joinable: false,
+    ruleset: {
+      code: null,
+      name: "NorCal Weekly",
+      version: 3,
+      by: "sarah",
+      basedOn: "NorCal Weekly v3",
+      bestOf: 0,
+      stageChoice: "loser-picks",
+    },
   },
   {
     code: "MXWW",
@@ -81,6 +108,7 @@ const mockRooms: PublicRoom[] = [
 ];
 
 const noop = () => undefined;
+const showRuleset = (room: PublicRoom) => console.log("show ruleset", room.ruleset?.code); // eslint-disable-line no-console
 
 /** The view in Home > Overview's grid, at the launcher's default window size. */
 const Frame = ({
@@ -89,7 +117,7 @@ const Frame = ({
 }: Partial<PublicRoomsViewProps> & { state: PublicRoomsState; width?: number }) => (
   <div style={{ width, height: 560, background: "var(--theme-page-background)" }}>
     <div className={overviewStyles.container}>
-      <PublicRoomsView onJoin={noop} onRetry={noop} onLogIn={noop} {...props} />
+      <PublicRoomsView onJoin={noop} onRetry={noop} onLogIn={noop} onShowRuleset={showRuleset} {...props} />
       <div className={overviewStyles.rankedSidebar} />
     </div>
   </div>

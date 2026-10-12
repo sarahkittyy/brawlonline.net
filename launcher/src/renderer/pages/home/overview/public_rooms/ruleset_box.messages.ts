@@ -6,5 +6,4 @@ export const RulesetBoxMessages = {
   clear: () => "Use P+ default rules",
   notACode: () => "Codes are 6 letters",
   unknownCode: () => "No ruleset has this code",
-  close: () => "Close",
 };

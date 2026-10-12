@@ -26,6 +26,7 @@ export type {
   RecentRuleset,
   RoomList,
   RoomMode,
+  RoomRuleset,
   Ruleset,
   RulesetDraft,
   RulesetDraftRequest,

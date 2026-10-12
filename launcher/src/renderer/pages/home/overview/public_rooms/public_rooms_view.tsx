@@ -38,6 +38,8 @@ export type PublicRoomsViewProps = {
   rulesetBox?: React.ReactNode;
   /** The player has never created a room from here: "Create room" glows until they do. */
   highlightCreate?: boolean;
+  /** A click on a room's ruleset name: shows the ruleset. */
+  onShowRuleset?: (room: PublicRoom) => void;
   /** Stories and screenshots: show this row as hovered or pressed. */
   forceRowState?: { code: string; state: "hover" | "pressed" };
 };
@@ -57,6 +59,7 @@ export const PublicRoomsView = ({
   creating = false,
   rulesetBox,
   highlightCreate = false,
+  onShowRuleset,
   forceRowState,
 }: PublicRoomsViewProps) => {
   const online =
@@ -158,6 +161,7 @@ export const PublicRoomsView = ({
                   joining={joiningCode === room.code}
                   busy={joiningCode != null}
                   onJoin={onJoin}
+                  onShowRuleset={onShowRuleset}
                   forceState={forceRowState?.code === room.code ? forceRowState.state : undefined}
                 />
               </li>
@@ -184,6 +188,7 @@ export const RoomRow = React.memo(function RoomRow({
   joining,
   busy,
   onJoin,
+  onShowRuleset,
   forceState,
 }: {
   room: PublicRoom;
@@ -191,6 +196,7 @@ export const RoomRow = React.memo(function RoomRow({
   /** Another join is in progress. */
   busy: boolean;
   onJoin: (room: PublicRoom) => void;
+  onShowRuleset?: (room: PublicRoom) => void;
   forceState?: "hover" | "pressed";
 }) {
   const inGame = room.status === "in-game";
@@ -219,6 +225,7 @@ export const RoomRow = React.memo(function RoomRow({
           <div className={styles.host}>{room.host}</div>
           <div className={styles.names}>{room.names.join(" · ")}</div>
         </div>
+        <RulesetCell room={room} onShow={onShowRuleset} />
         <span className={styles.mode}>{modeLabel(room.mode)}</span>
         <span className={styles.players}>
           <PersonOutlineIcon style={{ fontSize: 16 }} />
@@ -244,3 +251,53 @@ export const RoomRow = React.memo(function RoomRow({
     </Tooltip>
   );
 });
+
+/**
+ * The room's ruleset, left of the mode: a published ruleset's name (a click shows it), "Custom (based on ...)" for
+ * custom rules, nothing for P+ default. Long names are cut, the whole name in the tooltip. Inside the row's button, so
+ * it stops the click (and Enter / Space) from joining the room.
+ */
+const RulesetCell = ({ room, onShow }: { room: PublicRoom; onShow?: (room: PublicRoom) => void }) => {
+  const r = room.ruleset;
+  if (!r || (!r.code && !r.basedOn)) {
+    return <span className={styles.ruleset} />;
+  }
+  if (!r.code) {
+    const text = Messages.customRuleset(r.basedOn ?? "");
+    return (
+      <Tooltip title={text} placement="top" enterDelay={400} disableInteractive={true}>
+        <span className={clsx(styles.ruleset, styles.rulesetCustom)} data-ruleset-cell="custom">
+          {text}
+        </span>
+      </Tooltip>
+    );
+  }
+  const full = Messages.rulesetTooltip(r.name, r.version, r.by);
+  const show = (e: React.SyntheticEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    onShow?.(room);
+  };
+  return (
+    <Tooltip title={full} placement="top" enterDelay={400} disableInteractive={true}>
+      <span
+        className={clsx(styles.ruleset, onShow && styles.rulesetLink)}
+        role={onShow ? "button" : undefined}
+        tabIndex={onShow ? 0 : undefined}
+        data-ruleset-cell={r.code}
+        onClick={onShow ? show : undefined}
+        onKeyDown={
+          onShow
+            ? (e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  show(e);
+                }
+              }
+            : undefined
+        }
+      >
+        {r.name}
+      </span>
+    </Tooltip>
+  );
+};
