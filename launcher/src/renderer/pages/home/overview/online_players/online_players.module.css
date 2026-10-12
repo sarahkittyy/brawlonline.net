@@ -11,6 +11,63 @@
   white-space: nowrap;
 }
 
+/* The magnifier after the title; open, its box grows over the rest of the header (the count hides). */
+.search {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  margin-left: -8px;
+}
+
+.searchOpen {
+  flex: 1;
+}
+
+.searchButton {
+  flex: none;
+  color: var(--text-secondary) !important;
+}
+
+.searchButton:hover {
+  color: var(--accent-primary-bright) !important;
+}
+
+.searchInput {
+  box-sizing: border-box;
+  flex: 1;
+  min-width: 0;
+  width: 0;
+  max-width: 0;
+  height: 30px;
+  padding: 0;
+  border: 1px solid transparent;
+  border-radius: 8px;
+  background-color: rgb(255 255 255 / 5%);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+  outline: none;
+  opacity: 0;
+  transition: max-width 0.2s ease-in-out, opacity 0.15s ease-in-out,
+    padding 0.2s ease-in-out;
+}
+
+.searchOpen .searchInput {
+  max-width: 100%;
+  padding: 0 10px;
+  opacity: 1;
+  border-color: rgb(159 116 192 / 25%);
+}
+
+.searchOpen .searchInput:focus {
+  border-color: var(--accent-primary-dark);
+}
+
+.searchInput::placeholder {
+  color: var(--text-dim);
+}
+
 .notice {
   margin: 0;
   padding: 16px 20px;
