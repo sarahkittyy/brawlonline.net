@@ -37,6 +37,8 @@ const SQLITE_PARAM_LIMIT_BATCH_SIZE = 500;
 
 export class DatabaseReplayProvider implements ReplayProvider {
   private currentSearchRequestId = 0;
+  /** loadFile calls in progress by path: the stats page's two calls load the same file at once. */
+  private readonly loadingFiles = new Map<string, Promise<FileResult>>();
 
   constructor(private readonly db: Kysely<Database>, private readonly workerPool?: ReplayIndexingPoolManager) {}
 
@@ -223,6 +225,18 @@ export class DatabaseReplayProvider implements ReplayProvider {
   }
 
   async loadFile(filePath: string): Promise<FileResult> {
+    // A file not indexed yet is inserted by the first call; a second call at the same time
+    // would insert it again (SQLITE_CONSTRAINT_UNIQUE), so it waits for the first one.
+    const inProgress = this.loadingFiles.get(filePath);
+    if (inProgress) {
+      return await inProgress;
+    }
+    const loading = this.loadFileOnce(filePath).finally(() => this.loadingFiles.delete(filePath));
+    this.loadingFiles.set(filePath, loading);
+    return await loading;
+  }
+
+  private async loadFileOnce(filePath: string): Promise<FileResult> {
     const filename = path.basename(filePath);
     const folder = path.dirname(filePath);
 
@@ -704,7 +718,8 @@ export class DatabaseReplayProvider implements ReplayProvider {
 
     const gameRecord = await GameRepository.insertGame(trx, newGame);
     const newPlayers = generateNewPlayers(gameRecord._id, parsedInfo);
-    const playerRecords = await PlayerRepository.insertPlayer(trx, ...newPlayers);
+    // A replay listed by name and date only has no players (an insert of none is an SQL error).
+    const playerRecords = newPlayers.length > 0 ? await PlayerRepository.insertPlayer(trx, ...newPlayers) : [];
 
     return { fileRecord, gameRecord, playerRecords };
   }

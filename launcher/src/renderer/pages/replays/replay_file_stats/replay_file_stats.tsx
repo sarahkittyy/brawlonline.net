@@ -67,7 +67,11 @@ export const ReplayFileStats = (props: ReplayFileStatsProps) => {
       ? String(gameStatsQuery.error)
       : null;
 
-  const file = gameStatsQuery.data?.file ?? props.file;
+  // A .brep's stats call always fails (STATS_NOT_AVAILABLE), so a file opened from outside the
+  // replay browser comes from the stadium stats call, which loads it too.
+  const file = gameStatsQuery.data?.file ?? stadiumStatsQuery.data?.file ?? props.file;
+  const loadError =
+    stadiumStatsQuery.error ?? (errorMessage && !errorMessage.includes(STATS_NOT_AVAILABLE) ? errorMessage : null);
   const numPlayers = file?.game.players.length;
   const gameStats = gameStatsQuery.data?.stats;
   const stadiumStats = stadiumStatsQuery.data?.stadiumStats;
@@ -93,7 +97,7 @@ export const ReplayFileStats = (props: ReplayFileStatsProps) => {
 
   // We only want to show this full-screen error if we don't have a
   // file in the prop. i.e. the SLP manually opened.
-  if (!props.file && errorMessage) {
+  if (!file && loadError) {
     return (
       <IconMessage Icon={ErrorIcon}>
         <div className={styles.errorContainer}>
