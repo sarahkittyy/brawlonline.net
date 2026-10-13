@@ -51,7 +51,16 @@ u32 s_armed_serial = 0;   // the session's serial of it
 std::string s_state = "idle";
 std::string s_error;
 bool s_needs_play_anyway = false;
+bool s_wait_boot = false;  // a comm file request, armed once the game has booted
 std::string s_last_status;
+
+// The disc's game is running. The launcher's playback Dolphin starts the comm file follower before
+// it boots, and boots P+'s launcher DOL, which runs as game 00000000 until it starts the disc.
+bool GameBooted()
+{
+  const std::string id = SConfig::GetInstance().GetGameID();
+  return !id.empty() && id != "00000000";
+}
 
 // A path from the comm file: an existing regular file, no larger than a replay can be.
 bool UsablePath(const std::string& path)
@@ -144,7 +153,7 @@ void ArmCurrent()
         game = g->second.get<std::string>();
     }
     const std::string here = SConfig::GetInstance().GetGameID();
-    if (!game.empty() && !here.empty() && game != here && !s_request.play_anyway)
+    if (!game.empty() && GameBooted() && game != here && !s_request.play_anyway)
     {
       error = fmt::format("the replay was recorded with another game ({}, this is {})", game, here);
       s_needs_play_anyway = true;
@@ -279,9 +288,14 @@ void Loop()
           }
           else
           {
-            ArmCurrent();
+            s_wait_boot = true;
           }
         }
+      }
+      if (s_wait_boot && GameBooted())
+      {
+        s_wait_boot = false;
+        ArmCurrent();
       }
       Step();
       WriteStatus();
@@ -318,6 +332,7 @@ std::optional<std::string> PlayFile(const std::string& path, bool play_anyway, b
   s_request.hold_at_end = hold_at_end;
   s_index = 0;
   s_error.clear();
+  s_wait_boot = false;
   ArmCurrent();
   EnsureThread();
   if (!s_armed)
