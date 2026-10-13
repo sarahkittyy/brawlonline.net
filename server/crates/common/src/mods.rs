@@ -48,8 +48,10 @@ pub enum Controller {
 pub enum ModsRequest {
     /// A new room, the sender its host in slot 1.
     Create { build: Build, public: bool, controller: Controller },
-    /// The lowest open, empty slot of the room with this code, if the build is the same.
-    Join { code: String, build_hash: String, controller: Controller },
+    /// The lowest open, empty slot of the room with this code, if the build is the same; `slot`
+    /// first if it is open and empty (a member back after its connection to mm dropped, whose
+    /// session still plays in that slot).
+    Join { code: String, build_hash: String, controller: Controller, slot: Option<u8> },
     Leave,
     /// Host: opens or closes a slot (closing an occupied one removes its player).
     Slot { slot: u8, open: bool },
@@ -119,6 +121,10 @@ impl ModsRequest {
                     code: code.chars().take(16).collect(),
                     build_hash: build_hash.to_string(),
                     controller: controller()?,
+                    slot: match v.get("slot") {
+                        None | Some(serde_json::Value::Null) => None,
+                        Some(_) => Some(slot()?),
+                    },
                 }
             }
             MODS_LEAVE => ModsRequest::Leave,
@@ -155,6 +161,9 @@ pub struct ModsPlayer {
     pub controller: Controller,
     /// Null until the member's session probed mm from its P2P socket.
     pub endpoint: Option<Endpoint>,
+    /// The member's LAN address and P2P port, as its session reported it: a member with the same
+    /// public address (the same network) connects to this one instead (as Slippi's matchmaking).
+    pub lan: Option<Endpoint>,
 }
 
 /// `mods-state`, to every member after every change (personalised by `you` and `token`).
@@ -181,6 +190,18 @@ pub struct EndpointProbe {
     #[serde(rename = "type")]
     pub kind: String,
     pub token: String,
+    /// The session's LAN address and port (`host` an IPv4 or IPv6 address, not a name).
+    #[serde(default)]
+    pub lan: Option<Endpoint>,
+}
+
+impl EndpointProbe {
+    /// The LAN endpoint if it is an address and a port (anything else is dropped).
+    pub fn lan_addr(&self) -> Option<std::net::SocketAddr> {
+        let lan = self.lan.as_ref()?;
+        let ip: std::net::IpAddr = lan.host.parse().ok()?;
+        (lan.port != 0 && !ip.is_unspecified() && !ip.is_multicast()).then(|| std::net::SocketAddr::new(ip, lan.port))
+    }
 }
 
 /// A public mod room for the launcher's list.
@@ -214,7 +235,10 @@ mod tests {
         );
         let r = ModsRequest::parse(MODS_JOIN, &json!({"code": "KFQB", "build": {"hash": HASH}, "controller": "wiimote"}))
             .unwrap();
-        assert_eq!(r, ModsRequest::Join { code: "KFQB".into(), build_hash: HASH.into(), controller: Controller::Wiimote });
+        assert_eq!(r, ModsRequest::Join { code: "KFQB".into(), build_hash: HASH.into(), controller: Controller::Wiimote, slot: None });
+        let r = ModsRequest::parse(MODS_JOIN, &json!({"code": "KFQB", "build": {"hash": HASH}, "slot": 3})).unwrap();
+        assert!(matches!(r, ModsRequest::Join { slot: Some(3), .. }));
+        assert!(ModsRequest::parse(MODS_JOIN, &json!({"code": "KFQB", "build": {"hash": HASH}, "slot": 0})).is_err());
         assert_eq!(ModsRequest::parse(MODS_KICK, &json!({"slot": 3})).unwrap(), ModsRequest::Kick { slot: 3 });
     }
 
@@ -227,6 +251,18 @@ mod tests {
         assert!(ModsRequest::parse(MODS_SLOT, &json!({"slot": 2})).is_err());
         assert!(ModsRequest::parse(MODS_CREATE, &json!({"build": {"hash": HASH}, "controller": "keyboard"})).is_err());
         assert!(ModsRequest::parse("mods-start", &json!({})).is_err());
+    }
+
+    #[test]
+    fn probe_lan_addresses() {
+        let p = |lan: serde_json::Value| -> EndpointProbe {
+            serde_json::from_value(json!({"type": MODS_ENDPOINT, "token": "t", "lan": lan})).unwrap()
+        };
+        assert_eq!(p(json!({"host": "192.168.0.5", "port": 5000})).lan_addr(), Some("192.168.0.5:5000".parse().unwrap()));
+        assert_eq!(p(json!({"host": "example.com", "port": 5000})).lan_addr(), None);
+        assert_eq!(p(json!({"host": "0.0.0.0", "port": 5000})).lan_addr(), None);
+        assert_eq!(p(json!({"host": "192.168.0.5", "port": 0})).lan_addr(), None);
+        assert_eq!(p(serde_json::Value::Null).lan_addr(), None);
     }
 
     #[test]

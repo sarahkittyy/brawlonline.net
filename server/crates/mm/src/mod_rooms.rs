@@ -60,12 +60,17 @@ impl Default for ModRoomsConfig {
     }
 }
 
+fn endpoint_of(a: SocketAddr) -> Endpoint {
+    Endpoint { host: a.ip().to_canonical().to_string(), port: a.port() }
+}
+
 #[derive(Debug, Clone)]
 struct Member {
     conn: ConnId,
     info: MemberInfo,
     controller: Controller,
     endpoint: Option<SocketAddr>,
+    lan: Option<SocketAddr>,
     token: String,
     joined: u64,
 }
@@ -112,7 +117,8 @@ impl Room {
                         display_name: m.info.display_name.clone(),
                         connect_code: m.info.connect_code.clone(),
                         controller: m.controller,
-                        endpoint: m.endpoint.map(|a| Endpoint { host: a.ip().to_canonical().to_string(), port: a.port() }),
+                        endpoint: m.endpoint.map(endpoint_of),
+                        lan: m.lan.map(endpoint_of),
                     }),
                 })
                 .collect(),
@@ -243,7 +249,7 @@ impl ModRoomBook {
                 tracing::info!(conn, %code, "mod room created");
                 self.broadcast(&code, out);
             }
-            ModsRequest::Join { code, build_hash, controller } => {
+            ModsRequest::Join { code, build_hash, controller, slot: prefer } => {
                 if self.join_limiter.check(&who.uid, now).is_err() {
                     return mods_error(out, conn, mods::MODS_JOIN, TOO_MANY);
                 }
@@ -262,7 +268,8 @@ impl ModRoomBook {
                 if self.banned.get(&(code.clone(), who.uid)).is_some_and(|&until| until > now) {
                     return mods_error(out, conn, mods::MODS_JOIN, KICKED);
                 }
-                let Some(slot) = room.free_slot() else {
+                let preferred = prefer.map(|s| s as usize - 1).filter(|&i| room.open[i] && room.slots[i].is_none());
+                let Some(slot) = preferred.or_else(|| room.free_slot()) else {
                     return mods_error(out, conn, mods::MODS_JOIN, ROOM_FULL);
                 };
                 self.leave(conn, out);
@@ -321,7 +328,7 @@ impl ModRoomBook {
         let token = new_token();
         self.tokens.insert(token.clone(), (code.to_string(), conn));
         self.join_seq += 1;
-        Member { conn, info: who.clone(), controller, endpoint: None, token, joined: self.join_seq }
+        Member { conn, info: who.clone(), controller, endpoint: None, lan: None, token, joined: self.join_seq }
     }
 
     /// The host's room and slot, or an error to the sender.
@@ -368,16 +375,18 @@ impl ModRoomBook {
         self.broadcast(&code, out);
     }
 
-    /// A probe from a member's P2P socket: records where it came from. False for an unknown token.
-    pub fn endpoint(&mut self, token: &str, addr: SocketAddr, out: &mut Vec<Output>) -> bool {
+    /// A probe from a member's P2P socket: records where it came from (and the LAN address it
+    /// reported). False for an unknown token.
+    pub fn endpoint(&mut self, token: &str, addr: SocketAddr, lan: Option<SocketAddr>, out: &mut Vec<Output>) -> bool {
         let Some((code, conn)) = self.tokens.get(token).cloned() else { return false };
         let Some(room) = self.rooms.get_mut(&code) else { return false };
         let Some(idx) = room.slot_of(conn) else { return false };
         let member = room.slots[idx].as_mut().expect("slot_of found it");
-        if member.endpoint == Some(addr) {
+        if member.endpoint == Some(addr) && member.lan == lan {
             return true;
         }
         member.endpoint = Some(addr);
+        member.lan = lan;
         self.broadcast(&code, out);
         true
     }
@@ -435,7 +444,7 @@ mod tests {
     }
 
     fn join(b: &mut ModRoomBook, conn: ConnId, code: &str) -> Vec<Output> {
-        req(b, conn, conn as u8, ModsRequest::Join { code: code.into(), build_hash: HASH.into(), controller: Controller::Wiimote })
+        req(b, conn, conn as u8, ModsRequest::Join { code: code.into(), build_hash: HASH.into(), controller: Controller::Wiimote, slot: None })
     }
 
     #[test]
@@ -455,10 +464,25 @@ mod tests {
     }
 
     #[test]
+    fn a_member_back_gets_its_slot_if_free() {
+        let mut b = ModRoomBook::new(ModRoomsConfig::default());
+        let code = create(&mut b, 1);
+        join(&mut b, 2, &code);
+        join(&mut b, 3, &code);
+        // Player 2's connection to mm drops; it comes back asking for slot 2 (its session's).
+        let _ = req(&mut b, 2, 2, ModsRequest::Leave);
+        let out = req(&mut b, 4, 2, ModsRequest::Join { code: code.clone(), build_hash: HASH.into(), controller: Controller::Gc, slot: Some(2) });
+        assert_eq!(last_state(&out, 4)["you"], 2);
+        // A slot that is taken: the lowest free one instead.
+        let out = req(&mut b, 5, 5, ModsRequest::Join { code, build_hash: HASH.into(), controller: Controller::Gc, slot: Some(3) });
+        assert_eq!(last_state(&out, 5)["you"], 4);
+    }
+
+    #[test]
     fn a_different_build_cannot_join() {
         let mut b = ModRoomBook::new(ModRoomsConfig::default());
         let code = create(&mut b, 1);
-        let out = req(&mut b, 2, 2, ModsRequest::Join { code, build_hash: "0".repeat(64), controller: Controller::Gc });
+        let out = req(&mut b, 2, 2, ModsRequest::Join { code, build_hash: "0".repeat(64), controller: Controller::Gc, slot: None });
         let m = &msgs(&out, 2)[0];
         assert_eq!(m["type"], "mods-error");
         assert!(m["error"].as_str().unwrap().contains("Brawl Minus 5.1"));
@@ -471,11 +495,12 @@ mod tests {
         let out = join(&mut b, 2, &code);
         let token2 = last_state(&out, 2)["token"].as_str().unwrap().to_string();
         let mut out = vec![];
-        assert!(b.endpoint(&token2, "198.51.100.7:40004".parse().unwrap(), &mut out));
+        assert!(b.endpoint(&token2, "198.51.100.7:40004".parse().unwrap(), Some("192.168.1.20:40004".parse().unwrap()), &mut out));
         let s1 = last_state(&out, 1);
         assert_eq!(s1["slots"][1]["player"]["endpoint"], json!({"host": "198.51.100.7", "port": 40004}));
+        assert_eq!(s1["slots"][1]["player"]["lan"], json!({"host": "192.168.1.20", "port": 40004}));
         assert!(!s1.to_string().contains(&token2));
-        assert!(!b.endpoint("nope", "198.51.100.7:1".parse().unwrap(), &mut vec![]));
+        assert!(!b.endpoint("nope", "198.51.100.7:1".parse().unwrap(), None, &mut vec![]));
     }
 
     #[test]

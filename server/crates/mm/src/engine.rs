@@ -694,7 +694,7 @@ impl Engine {
             Ok(ClientMessage::ModsEndpoint(probe)) => {
                 // A Brawl Mods member's session, from its P2P socket: where its peers reach it.
                 let addr = self.conns.get(&conn).map(|c| c.addr);
-                let known = addr.is_some_and(|a| self.mod_rooms.endpoint(&probe.token, a, out));
+                let known = addr.is_some_and(|a| self.mod_rooms.endpoint(&probe.token, a, probe.lan_addr(), out));
                 let resp = if known {
                     serde_json::json!({"type": common::mods::MODS_ENDPOINT_RESP})
                 } else {
