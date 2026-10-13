@@ -8,6 +8,7 @@
 #include "Core/Config/MainSettings.h"
 #include "Core/CoreTiming.h"
 #include "Core/HW/VideoInterface.h"
+#include "Core/Rollback/FrameProfile.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Host.h"
 #include "Core/System.h"
@@ -998,6 +999,7 @@ void Presenter::Present(PresentInfo* present_info)
 
   // Present to the window system.
   {
+    Rollback::FrameProfile::Scope present_scope{Rollback::FrameProfile::AddGpuPresent};
     std::lock_guard<std::mutex> guard(m_swap_mutex);
 
     if (present_info != nullptr)

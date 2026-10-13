@@ -132,23 +132,21 @@ void RestoreRegionDelta(const RegionDelta& delta, uint8_t* region_base, uint32_t
   }
 }
 
+// The region's dirty granules (cleared in the bitmap as they are found; those outside the region
+// set too) go to `scan`, and jobs copy them to `out`. `scan` must outlive the jobs (the slot's).
 void enqueueSubsectionJobs(u32 first_page, u32 page_count, const uint8_t* region_base,
                            Rollback::RegionDelta& out, JITDirtyBitmap& bitmap,
                            job::JobTaskThread& w, job::Job& root, std::vector<job::Job*>& jar,
-                           u32 num_work_chunks, const u8* region_mask)
+                           u32 num_work_chunks, const u8* region_mask, std::vector<u32>& scan)
 {
-  const uint8_t* entries = bitmap.entries;
-  auto dirty_pages = std::make_shared<std::vector<u32>>();
+  std::vector<u32>* const dirty_pages = &scan;
   {
     ROLLBACK_ZONE_N("dirty page population");
-    dirty_pages->reserve(page_count);
-    for (uint32_t i = 0; i < page_count; ++i)
-    {
-      if (entries[first_page + i] && (!region_mask || region_mask[i]))
-      {
-        dirty_pages->push_back(i + first_page);
-      }
-    }
+    dirty_pages->clear();
+    bitmap.ScanAndClear(first_page, page_count, [&](u32 page) {
+      if (!region_mask || region_mask[page - first_page])
+        dirty_pages->push_back(page);
+    });
   }
 
   u32 num_dirty = static_cast<u32>(dirty_pages->size());
@@ -167,7 +165,7 @@ void enqueueSubsectionJobs(u32 first_page, u32 page_count, const uint8_t* region
   uint32_t* page_indices_ptr = out.page_indices.data();
   uint8_t* page_data_ptr = out.page_data.data();
 
-  auto copySubsectionFn = [dirty_pages, entries, region_base, page_indices_ptr, page_data_ptr,
+  auto copySubsectionFn = [dirty_pages, region_base, page_indices_ptr, page_data_ptr,
                            first_page](u32 offset, u32 size) {
     ROLLBACK_ZONE_N("copy dirty pages");
     if (offset >= dirty_pages->size())
@@ -179,7 +177,6 @@ void enqueueSubsectionJobs(u32 first_page, u32 page_count, const uint8_t* region
          ++dirtyPagesIndex)
     {
       u32 pageidx = (*dirty_pages)[dirtyPagesIndex];
-      ASSERT(entries[pageidx]);
 
       // pageidx is global; subtract first_page to get region-relative index
       u32 relative_page_idx = pageidx - first_page;
@@ -325,7 +322,7 @@ void DeltaSaveSlot::Save(Core::System& system)
         ROLLBACK_ZONE_N("root mem1 save dispatch");
         std::vector<job::Job*> jar;
         enqueueSubsectionJobs(0, m_mem1_page_count, m_mem1_ptr, m_mem1_delta, bitmap, w, root, jar,
-                              SAVESTATE_NUM_WORK_CHUNKS, region_mask);
+                              SAVESTATE_NUM_WORK_CHUNKS, region_mask, m_mem1_scan);
         auto num_jobs = jar.size();
         ASSERT(num_jobs <= UINT16_MAX);
         w.do_work_and_kick_jobs(jar.data(), (uint16_t)num_jobs);
@@ -339,7 +336,8 @@ void DeltaSaveSlot::Save(Core::System& system)
         std::vector<job::Job*> jar;
         enqueueSubsectionJobs(MEM2_FIRST_PAGE, m_mem2_page_count, m_mem2_ptr, m_mem2_delta, bitmap,
                               w, root, jar, SAVESTATE_NUM_WORK_CHUNKS,
-                              region_mask ? region_mask + m_mem1_page_count : nullptr);
+                              region_mask ? region_mask + m_mem1_page_count : nullptr,
+                              m_mem2_scan);
         auto num_jobs = jar.size();
         ASSERT(num_jobs <= UINT16_MAX);
         w.do_work_and_kick_jobs(jar.data(), (uint16_t)num_jobs);
@@ -352,8 +350,7 @@ void DeltaSaveSlot::Save(Core::System& system)
                                        std::chrono::steady_clock::now() - ram_start)
                                        .count());
 
-  bitmap.ClearRange(0, m_mem1_page_count);
-  bitmap.ClearRange(MEM2_FIRST_PAGE, m_mem2_page_count);
+  // The scans cleared the bitmap's marks in both regions.
   m_has_state = true;
 }
 

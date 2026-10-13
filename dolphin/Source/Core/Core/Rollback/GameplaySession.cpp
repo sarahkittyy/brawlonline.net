@@ -51,6 +51,7 @@
 #include "Core/Online/GameSetup.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/FrameProfile.h"
 #include "Core/Rollback/GameplayRollback.h"
 #include "Core/Rollback/PeerData.h"
 #include "Core/Rollback/PresentStats.h"
@@ -487,6 +488,34 @@ struct State
   bool prev_frame_rolled_back = false;
   Clock::time_point burst_t0{};
   bool burst_open = false;
+  // Frame cost profile (Rollback::FrameProfile, docs/gameplay-rollback-status.md "Frame cost
+  // profile"): where re-run and presented passes spend their wall-clock time. A pass runs from
+  // the end of its loop top (RunFrame) to the next loop top.
+  struct PassCost
+  {
+    u64 passes = 0;
+    u64 guest_ns = 0;     // the pass: the game's frame
+    u64 save_ns = 0;      // the snapshot after it, with its checksum (the next loop top)
+    u64 loop_top_ns = 0;  // the loop top before it, without loads and saves (presented passes:
+                          // GekkoNet, the network, waits for the peer, time sync)
+    Rollback::FrameProfile::Counters c;  // during the pass
+    u64 event_passes = 0;  // passes whose CoreTiming events were timed (c.event_ns, c.events)
+  };
+  struct FrameCost
+  {
+    PassCost resim, shown;
+    u64 loads = 0, load_ns = 0;
+  };
+  FrameCost cost_window, cost_total;
+  s64 cost_window_first = -1;
+  bool cost_pass_open = false;
+  bool cost_pass_resim = false;  // the pass open, or the last one closed
+  bool cost_pass_events = false;  // the pass open times its CoreTiming events
+  u64 cost_pass_serial = 0;
+  Clock::time_point cost_pass_t0{};
+  Clock::time_point cost_loop_top_t0{};
+  u64 cost_loop_top_excl_ns = 0;  // loads and saves in the current loop top
+  Rollback::FrameProfile::Counters cost_pass_c0;
   std::vector<FrameRecord> history = std::vector<FrameRecord>(CHECKSUM_HISTORY);
   std::vector<FrameRecord> first_runs = std::vector<FrameRecord>(64);
   std::vector<std::string> desync_log;
@@ -2757,6 +2786,14 @@ void ResetRunStats()
   Core::System::GetInstance().GetCoreTiming().TakeMaxBehindSchedule();
   Rollback::PresentStats::TakeCadence();
   s.burst_open = false;
+  s.cost_window = s.cost_total = {};
+  s.cost_window_first = -1;
+  s.cost_pass_open = false;
+  s.cost_pass_resim = false;
+  s.cost_pass_events = false;
+  s.cost_pass_serial = 0;
+  s.cost_loop_top_t0 = {};
+  s.cost_loop_top_excl_ns = 0;
   s.last_desync_frame = -1;
   s.region_mismatches = 0;
   s.region_mismatch_log.clear();
@@ -2911,8 +2948,11 @@ GameResult ReadGameResult(Core::System& system)
   r.place = outcome.place;
   return r;
 }
+void CostSessionEnd();
+
 void EndRunning(Core::System& system, const std::string& reason)
 {
+  CostSessionEnd();
   PassLogClose();
   DestroyGekko();
   Rollback::RollbackManager::Get().EndRegionMode();
@@ -3594,6 +3634,236 @@ void LogPerfVerdict(const State::NetStats& t)
   }
 }
 
+// ---- Frame cost profile (Rollback::FrameProfile) ----
+
+double NsToMs(u64 ns)
+{
+  return static_cast<double>(ns) / 1e6;
+}
+
+u64 SinceNs(Clock::time_point t0, Clock::time_point t1)
+{
+  return static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
+}
+
+void CostFold(State::PassCost& t, const State::PassCost& w)
+{
+  t.passes += w.passes;
+  t.guest_ns += w.guest_ns;
+  t.save_ns += w.save_ns;
+  t.loop_top_ns += w.loop_top_ns;
+  t.event_passes += w.event_passes;
+  Rollback::FrameProfile::Accumulate(&t.c, w.c);
+}
+
+void CostFold(State::FrameCost& t, const State::FrameCost& w)
+{
+  CostFold(t.resim, w.resim);
+  CostFold(t.shown, w.shown);
+  t.loads += w.loads;
+  t.load_ns += w.load_ns;
+}
+
+u64 CostWaitNs(const Rollback::FrameProfile::Counters& c)
+{
+  u64 n = 0;
+  for (const u64 v : c.gpu_wait_ns)
+    n += v;
+  return n;
+}
+
+// The events of one category over all passes, estimated from the passes that timed them
+// (CostPassStart: one in EVENT_SAMPLE_EVERY).
+u64 CostEventNs(const State::PassCost& p, size_t cat)
+{
+  if (!p.event_passes)
+    return 0;
+  return static_cast<u64>(static_cast<double>(p.c.event_ns[cat]) * static_cast<double>(p.passes) /
+                          static_cast<double>(p.event_passes));
+}
+
+u64 CostEventNs(const State::PassCost& p)
+{
+  u64 n = 0;
+  for (size_t i = 0; i < Rollback::FrameProfile::EVENT_CATS; ++i)
+    n += CostEventNs(p, i);
+  return n;
+}
+
+// The pass's time in the game's own code: the JIT outside CoreTiming events, waits for the GPU
+// thread and the throttle's sleep.
+u64 CostGameNs(const State::PassCost& p)
+{
+  const u64 other = CostEventNs(p) + CostWaitNs(p.c) + p.c.throttle_ns;
+  return p.guest_ns > other ? p.guest_ns - other : 0;
+}
+
+std::string PassCostText(const State::PassCost& p)
+{
+  using namespace Rollback::FrameProfile;
+  const double n = static_cast<double>(std::max<u64>(p.passes, 1));
+  const auto avg = [n](u64 ns) { return NsToMs(ns) / n; };
+  const auto ev = [&](EventCat c) { return avg(CostEventNs(p, static_cast<size_t>(c))); };
+  std::string waits;
+  for (size_t i = 0; i < WAIT_REASONS; ++i)
+  {
+    if (p.c.gpu_wait_ns[i])
+    {
+      waits += fmt::format("{}{} {:.2f}", waits.empty() ? "" : ", ", WAIT_REASON_NAMES[i],
+                           avg(p.c.gpu_wait_ns[i]));
+    }
+  }
+  std::string line = fmt::format(
+      "{} avg {:.2f} ms: game code {:.2f}, waiting for the GPU thread {:.2f}{}, events {:.2f} "
+      "(gpu {:.2f}, vi {:.2f}, audio {:.2f}, ios {:.2f}, devices {:.2f})",
+      p.passes, avg(p.guest_ns + p.save_ns + p.loop_top_ns), avg(CostGameNs(p)),
+      avg(CostWaitNs(p.c)), waits.empty() ? "" : " (" + waits + ")", avg(CostEventNs(p)),
+      ev(EventCat::Gpu), ev(EventCat::Vi), ev(EventCat::Audio), ev(EventCat::Ios),
+      ev(EventCat::Devices));
+  if (p.c.throttle_ns)
+    line += fmt::format(", throttle sleep {:.2f}", avg(p.c.throttle_ns));
+  line += fmt::format(", save {:.2f}, loop top {:.2f}; GPU thread busy {:.2f} (presenting {:.2f})",
+                      avg(p.save_ns), avg(p.loop_top_ns), avg(p.c.gpu_busy_ns),
+                      avg(p.c.gpu_present_ns));
+  return line;
+}
+
+std::string FrameCostLine(const State::FrameCost& w)
+{
+  return fmt::format("re-run frames {}; loads {} avg {:.2f} ms; presented frames {}",
+                     PassCostText(w.resim), w.loads,
+                     w.loads ? NsToMs(w.load_ns) / static_cast<double>(w.loads) : 0.0,
+                     PassCostText(w.shown));
+}
+
+picojson::value PassCostJson(const State::PassCost& p)
+{
+  using namespace Rollback::FrameProfile;
+  const auto num = [](u64 v) { return picojson::value(static_cast<double>(v)); };
+  picojson::object o;
+  o["passes"] = num(p.passes);
+  o["guest_ns"] = num(p.guest_ns);
+  o["game_ns"] = num(CostGameNs(p));
+  o["save_ns"] = num(p.save_ns);
+  o["loop_top_ns"] = num(p.loop_top_ns);
+  o["throttle_ns"] = num(p.c.throttle_ns);
+  o["gpu_wait_ns"] = num(CostWaitNs(p.c));
+  o["gpu_waits"] = num(p.c.gpu_waits);
+  picojson::object waits;
+  for (size_t i = 0; i < WAIT_REASONS; ++i)
+    waits[std::string(WAIT_REASON_NAMES[i])] = num(p.c.gpu_wait_ns[i]);
+  o["gpu_wait_ns_by_reason"] = picojson::value(waits);
+  constexpr std::array<const char*, EVENT_CATS> EVENT_NAMES = {"gpu", "vi", "audio", "ios",
+                                                               "devices"};
+  // Estimated over all passes from those that timed their events.
+  picojson::object events;
+  for (size_t i = 0; i < EVENT_CATS; ++i)
+    events[EVENT_NAMES[i]] = num(CostEventNs(p, i));
+  o["event_ns"] = picojson::value(events);
+  o["events"] = num(p.c.events);
+  o["event_passes"] = num(p.event_passes);
+  o["gpu_busy_ns"] = num(p.c.gpu_busy_ns);
+  o["gpu_present_ns"] = num(p.c.gpu_present_ns);
+  return picojson::value(o);
+}
+
+picojson::value FrameCostJson()
+{
+  State::FrameCost t = s.cost_total;
+  CostFold(t, s.cost_window);
+  picojson::object o;
+  o["resim"] = PassCostJson(t.resim);
+  o["shown"] = PassCostJson(t.shown);
+  o["loads"] = picojson::value(static_cast<double>(t.loads));
+  o["load_ns"] = picojson::value(static_cast<double>(t.load_ns));
+  return picojson::value(o);
+}
+
+// RunFrame's entry: the pass that ran since the last loop top ends.
+void CostPassEnd()
+{
+  const auto now = Clock::now();
+  s.cost_loop_top_t0 = now;
+  s.cost_loop_top_excl_ns = 0;
+  if (!s.cost_pass_open)
+    return;
+  s.cost_pass_open = false;
+  Rollback::FrameProfile::SetTimeEvents(false);
+  auto& b = s.cost_pass_resim ? s.cost_window.resim : s.cost_window.shown;
+  ++b.passes;
+  if (s.cost_pass_events)
+    ++b.event_passes;
+  b.guest_ns += SinceNs(s.cost_pass_t0, now);
+  Rollback::FrameProfile::Accumulate(
+      &b.c, Rollback::FrameProfile::Delta(Rollback::FrameProfile::Snapshot(), s.cost_pass_c0));
+}
+
+// The snapshot after the pass that just ended.
+void CostAddSave(u64 ns)
+{
+  (s.cost_pass_resim ? s.cost_window.resim : s.cost_window.shown).save_ns += ns;
+  s.cost_loop_top_excl_ns += ns;
+}
+
+void CostAddLoad(u64 ns)
+{
+  ++s.cost_window.loads;
+  s.cost_window.load_ns += ns;
+  s.cost_loop_top_excl_ns += ns;
+}
+
+// RunFrame hands the CPU to the game: a pass starts. Every NET_STATS_WINDOW presented passes,
+// a log line (not for replays: their seeks are not rollbacks).
+void CostPassStart(bool resim)
+{
+  if (!resim && s.mode != Mode::Playback && s.cost_window.shown.passes >= NET_STATS_WINDOW)
+  {
+    INFO_LOG_FMT(BRAWLBACK, "gprb frame cost: frames {}-{}: {}", s.cost_window_first,
+                 s.current_frame - 1, FrameCostLine(s.cost_window));
+    CostFold(s.cost_total, s.cost_window);
+    s.cost_window = {};
+    s.cost_window_first = -1;
+  }
+  if (s.cost_window_first < 0)
+    s.cost_window_first = s.current_frame;
+  const auto now = Clock::now();
+  auto& b = resim ? s.cost_window.resim : s.cost_window.shown;
+  if (s.cost_loop_top_t0 != Clock::time_point{})
+  {
+    const u64 loop_top = SinceNs(s.cost_loop_top_t0, now);
+    b.loop_top_ns += loop_top > s.cost_loop_top_excl_ns ? loop_top - s.cost_loop_top_excl_ns : 0;
+  }
+  // One pass in EVENT_SAMPLE_EVERY times its CoreTiming events (a prime, so that it does not
+  // follow a pattern of re-run and presented passes).
+  constexpr u64 EVENT_SAMPLE_EVERY = 7;
+  s.cost_pass_events =
+      Rollback::FrameProfile::Enabled() && ++s.cost_pass_serial % EVENT_SAMPLE_EVERY == 0;
+  Rollback::FrameProfile::SetTimeEvents(s.cost_pass_events);
+  s.cost_pass_open = true;
+  s.cost_pass_resim = resim;
+  s.cost_pass_t0 = now;
+  s.cost_pass_c0 = Rollback::FrameProfile::Snapshot();
+}
+
+// The session ends: its totals.
+void CostSessionEnd()
+{
+  Rollback::FrameProfile::SetEnabled(false);
+  s.cost_pass_open = false;
+  CostFold(s.cost_total, s.cost_window);
+  s.cost_window = {};
+  if (s.mode != Mode::Playback && (s.cost_total.shown.passes || s.cost_total.resim.passes))
+    INFO_LOG_FMT(BRAWLBACK, "gprb frame cost: session: {}", FrameCostLine(s.cost_total));
+}
+
+// Rolls back: RollbackManager::LoadFrame, timed for the profile.
+void LoadForRollback(Core::System& system, int frames_back)
+{
+  const auto t0 = Clock::now();
+  Rollback::RollbackManager::Get().LoadFrame(system, frames_back);
+  CostAddLoad(SinceNs(t0, Clock::now()));
+}
+
 // Network sessions: every NET_STATS_WINDOW displayed frames, one log line of what the netcode did,
 // with the link's numbers from GekkoNet.
 void NetStatsOnDisplayedFrame(Core::System& system)
@@ -3863,7 +4133,7 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
         frames_back < rbm.m_ring_count)
     {
       BeginBurst(system);
-      rbm.LoadFrame(system, frames_back);
+      LoadForRollback(system, frames_back);
       ++s.rollbacks;
       s.max_rollback = std::max<u64>(s.max_rollback, static_cast<u64>(frames_back));
       s.iteration = 0;
@@ -4433,7 +4703,7 @@ bool ReplayNextUpdate(Core::System& system)
     if (load_back < rbm.m_ring_count)
     {
       BeginBurst(system);
-      rbm.LoadFrame(system, load_back);
+      LoadForRollback(system, load_back);
       ++s.rollbacks;
       s.max_rollback = std::max<u64>(s.max_rollback, static_cast<u64>(load_back));
     }
@@ -4505,6 +4775,9 @@ void StartRunning(Core::System& system)
   system.GetFifo().SetRollbackSessionDeterminism(true);
   system.GetCoreTiming().SetPresentPacing(true);
   ResetRunStats();
+  // PPR_GPRB_NO_FRAME_COST=1: no frame cost profile (to measure what it costs).
+  static const bool no_frame_cost = std::getenv("PPR_GPRB_NO_FRAME_COST") != nullptr;
+  Rollback::FrameProfile::SetEnabled(!no_frame_cost);
   PassLogOpen(system);
   if (s.mode == Mode::SyncTest && !s.st_opts.replay_path.empty())
   {
@@ -4722,6 +4995,7 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
 
 bool RunFrame(const Core::CPUThreadGuard& guard)
 {
+  CostPassEnd();
   s.cpu_where = "runframe";
   s.cpu_frame = s.current_frame;
   auto& system = guard.GetSystem();
@@ -4736,7 +5010,11 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     return true;
   }
 
-  PerformQueuedSave(system);
+  {
+    const auto save_t0 = Clock::now();
+    PerformQueuedSave(system);
+    CostAddSave(SinceNs(save_t0, Clock::now()));
+  }
 
   // Diagnostics (PPR_GPRB_SYNC_GPU=1): in dual core, wait at every loop top until the video thread
   // has executed everything the CPU thread has sent, so the GPU thread never lags behind a frame.
@@ -5029,6 +5307,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   }
   SetLoopDefault(ppc);
   s.cpu_where = "guest";
+  CostPassStart(s.resim_pass);
   return true;
 }
 }  // namespace
@@ -5811,6 +6090,7 @@ picojson::value Status()
   o["save_granules_max"] = picojson::value(static_cast<double>(t.save_granules_max));
   o["load_granules_total"] = picojson::value(static_cast<double>(t.load_granules_total));
   o["load_granules_max"] = picojson::value(static_cast<double>(t.load_granules_max));
+  o["frame_cost"] = FrameCostJson();
   if (s.mode == Mode::Network)
   {
     // Every other player ("peers", by port), and the first of them as "peer" (a 1v1's peer).

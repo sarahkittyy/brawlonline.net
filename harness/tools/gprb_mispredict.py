@@ -178,7 +178,8 @@ def _one_run(args, inp: Dict[str, Any], mode: str, run: int) -> Dict[str, Any]:
     t0 = time.monotonic()
     try:
         with G.instances([(f"{PREFIX}-mp-{'replay' if replay else mode}",
-                           dict(cpu_thread=args.cpu == "dc", controllers=controllers(meta)))]) as (inst,):
+                           dict(cpu_thread=args.cpu == "dc", controllers=controllers(meta),
+                                video=args.video))]) as (inst,):
             try:
                 c = inst.client
                 G.load_fixture(c, Path(args.state))
@@ -281,7 +282,7 @@ def _one_run(args, inp: Dict[str, Any], mode: str, run: int) -> Dict[str, Any]:
                                                         "region_ranges", "save_count", "save_us_total",
                                                         "save_us_max", "load_count", "load_us_total",
                                                         "load_us_max", "save_granules_total", "save_granules_max",
-                                                        "load_granules_total", "load_granules_max")}
+                                                        "load_granules_total", "load_granules_max", "frame_cost")}
                 rep.pop("run_t0", None)
                 rep.pop("run_f0", None)
                 rep["trace"] = c.call("frame_trace", since=args.start_frame)["rows"]
@@ -320,6 +321,25 @@ def _one_run(args, inp: Dict[str, Any], mode: str, run: int) -> Dict[str, Any]:
     return rep
 
 
+def print_frame_cost(fc: Mapping[str, Any]) -> None:
+    """The session's frame cost profile (gprb_status ``frame_cost``), per pass, in ms."""
+    for kind in ("resim", "shown"):
+        p = fc.get(kind) or {}
+        n = p.get("passes") or 0
+        if not n:
+            continue
+        ms = lambda ns: (ns or 0) / 1e6 / n  # noqa: E731
+        waits = ", ".join(f"{k} {ms(v):.2f}" for k, v in (p.get("gpu_wait_ns_by_reason") or {}).items() if v)
+        ev = ", ".join(f"{k} {ms(v):.2f}" for k, v in (p.get("event_ns") or {}).items())
+        total = (p.get("guest_ns") or 0) + (p.get("save_ns") or 0) + (p.get("loop_top_ns") or 0)
+        print(f"    {kind} passes {n}: {ms(total):.2f} ms = game code {ms(p.get('game_ns')):.2f} + GPU waits "
+              f"{ms(p.get('gpu_wait_ns')):.2f} ({waits}) + events ({ev}) + throttle {ms(p.get('throttle_ns')):.2f}"
+              f" + save {ms(p.get('save_ns')):.2f} + loop top {ms(p.get('loop_top_ns')):.2f}; GPU thread busy "
+              f"{ms(p.get('gpu_busy_ns')):.2f} (presenting {ms(p.get('gpu_present_ns')):.2f})", flush=True)
+    if fc.get("loads"):
+        print(f"    loads {fc['loads']}: {fc['load_ns'] / 1e6 / fc['loads']:.2f} ms each", flush=True)
+
+
 def cmd_run(args) -> int:
     inp = json.loads(Path(args.inputs).read_text())
     modes = args.modes.split(",")
@@ -354,6 +374,8 @@ def cmd_run(args) -> int:
                   f"{st.get('load_us_max')}, granules per save {(st.get('save_granules_total') or 0) / sv:.0f} "
                   f"max {st.get('save_granules_max')}, per load {(st.get('load_granules_total') or 0) / ld:.0f} "
                   f"max {st.get('load_granules_max')}, set {(st.get('region_bytes') or 0) / 2**20:.1f} MiB", flush=True)
+        if st.get("frame_cost"):
+            print_frame_cost(st["frame_cost"])
         if st.get("desyncs_detected"):
             print(f"    sync-test desyncs {st.get('desyncs_detected')}: {(st.get('desync_log') or [])[:3]}", flush=True)
         if args.save_traces:
@@ -413,6 +435,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                    help="cpu_trace the first run and the resimulation of this game frame (use --interpreter)")
     p.add_argument("--trace-out", default="run/qa/gprbw/trace")
     p.add_argument("--speed", type=float, default=0, help="emulation speed (0 = unthrottled)")
+    p.add_argument("--video", default="Null", help="video backend (D3D11 renders as players do)")
     p.add_argument("--poll", action="store_true", help="read guest memory continuously, as closed-loop players do")
     p.add_argument("--sound-mode", default="play", choices=("play", "suppress", "dedupe"),
                    help="what a resimulated pass does with sound starts")

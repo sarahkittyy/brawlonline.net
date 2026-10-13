@@ -1125,6 +1125,44 @@ The `AutoInputDelay` comment's premise ("a re-run frame is ~1.3 ms on a desktop"
 
 Test: `harness/tests/test_screen_ko_aspect.py` (the joiner's screen setting at 4:3, screen KOs forced): the old build desynced at its first screen KO (`desyncs_detected` 1 on both); this one runs through them with every confirmed checksum equal. A 4:3 option for a whole match (both players), as a room or Direct setting, would need the setup to carry it and our UI to fit 4:3 (the CSS's side messages are cut off there today).
 
+## Phase 26: the frame cost profile, and cheaper saves and loads (2026-10-13)
+
+**Report.** A player (host, i7-7700K, GTX 1070, 0.1.69): Auto input delay is "unplayable" at 100+ ms (input delay, uneven frame rate, freezes); delay 1 at 140 ms "with a little teleport" felt much better. Their `dolphin.log`: the Auto game (delay 2, 116 ms in game) rolled back on 35.8% of frames at depth 2.25, cost 14.6 ms a rollback, 75% of frames late, 17 waits for the peer and frames ahead down to -4.5 (the freezes: that link's jitter); five games at delay 1 (set, 137-143 ms) rolled back on 16-20% at depth 2.7, 16.5-17.3 ms a rollback, 40-47% late. A player's own delay only moves rollbacks onto the other screen, so the comparison was the opponent and the link, not Auto. What every high-ping game shared: a re-run frame cost about 6 ms on that PC, so a rollback of depth 2-3 took a whole frame.
+
+**Profile.** `Core/Rollback/FrameProfile` counts where a session's frames spend their wall-clock time, re-run and presented passes apart; GameplaySession takes the differences around each pass (from the end of a loop top to the next) and logs one line every 600 presented frames and at the end:
+
+    gprb frame cost: frames A-B: re-run frames N avg X ms: game code, waiting for the GPU thread (by SyncGPU reason), events (gpu, vi, audio, ios, devices), throttle sleep, save, loop top; GPU thread busy (presenting); loads N avg X ms; presented frames ...
+
+- *game code*: the pass minus everything below: the JIT running Brawl.
+- *waiting for the GPU thread*: the CPU thread blocked in `SyncGPU` (by reason), `FlushGpu` or `WaitForGpuThreadIdle`.
+- *events*: CoreTiming callbacks by category, without the waits and throttle sleep inside them. *gpu* is mostly `SyncGPUCallback`, the deterministic GPU thread's preprocessing on the CPU thread. Timed on one pass in 7 and scaled (about 1,000 events a frame; two clock reads each cost a few percent of it).
+- *save*: the snapshot after the pass and its checksum; *loads* per rollback; *loop top*: GekkoNet, the network, time sync, waits for the peer (presented passes).
+- *GPU thread busy*: the GPU thread executing commands while the CPU thread ran those passes (it runs in parallel; the CPU feels it only through the waits).
+
+`gprb_status` has the totals as `frame_cost` (docs/harness-protocol.md); `gprb_mispredict.py run --video D3D11` prints them. `PPR_GPRB_NO_FRAME_COST=1` turns the profile off.
+
+**Findings** (`gprb_mispredict.py run`, FD Mario/Marth, a 3-frame rollback every frame, dual core, D3D11, unthrottled; this PC shared with other sessions' Dolphins). A re-run frame cost 2.3-2.8 ms: game code 1.3-1.6, save 0.62-0.72, GPU preprocessing events 0.21-0.25, waits for the GPU thread 0.11-0.15 (nearly all *aux space*), the rest small; a load 0.85-0.99 ms. GPU thread 0.9-1.2 ms a pass, in parallel. The Null backend gave the same CPU-side numbers.
+
+- Saves and loads walked the whole dirty-granule bitmap byte by byte: about 1.4 million entries for MEM1 and MEM2, for a few thousand marks (8,600 granules a frame). Then each memset the whole range to clear it. Each save also allocated a 4 MB index list. Each load memset and then scanned 1.4 MB of "needs a source" flags to find the granules the base snapshot supplies.
+- *aux space*: deterministic dual core copies display lists and indexed XF data into a 2 MB buffer for the GPU thread. When it runs out, `SyncGPU` drains the GPU thread's whole backlog: once every 4 frames, about 0.5 ms each.
+
+**Changes.**
+- `JITDirtyBitmap::ScanAndClear`: reads 8 entries at a time and clears only the words that had marks, with an atomic exchange, so a mark the GPU thread sets meanwhile (an EFB copy to RAM) is kept for the next scan instead of being lost to the memset. Saves use it (into a list kept with the slot) and so do loads.
+- Loads list the granules they flag and walk only those for the base snapshot; the flags are clear between loads.
+- The aux buffer is 8 MB (`AUX_FIFO_SIZE`; not part of savestates).
+- A ring buffer that waits only when full was tried instead. Dolphin died a few seconds into every session with it, and no debugger was available to say where, so it was not kept.
+
+**Results.** Same benchmark, old and new builds interleaved (3 pairs): 8.4-9.2 → 6.5-7.2 ms per game frame (-22%); save 0.64-0.67 → 0.15-0.16 ms; load 0.87-0.93 → 0.22-0.24 ms; aux-space waits 0.11-0.13 → 0.03-0.07 ms a pass. Two instances through netsim `cross_country`, delay 1, D3D11, dual core, to game set (raw `run/qa/fcost/sess-*`; the two runs at different times on the shared machine):
+
+| build | rollback cost (depth ~2.1) | re-run frame | late frames | screen hitches |
+|---|---|---|---|---|
+| before | 10.1 / 10.8 ms | 4.3 / 4.6 ms | 801 / 792 | 582 / 598 |
+| after | 5.9 / 6.0 ms | 2.8 / 2.9 ms | 381 / 398 | 375 / 355 |
+
+Determinism: the new build's runs (`ref,mp,mp`) equal the old build's reference trace on all 2,245 compared frames; the session had 0 checksum mismatches on 3,177 frames and equal traces.
+
+**What is left** (per re-run frame, this PC): game code 1.3-1.9 ms; GPU preprocessing 0.3; waits for the GPU thread for *other* (CP status reads) about 0.25 in sessions. The game code is Brawl's own frame, its rendering included (Phase 6: skipping the render changed the simulation). The player PCs' numbers will come from the `gprb frame cost` lines in their logs.
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).

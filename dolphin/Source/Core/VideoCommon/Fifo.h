@@ -124,8 +124,14 @@ private:
 
   Common::Flag m_emu_running_state;
 
+  // Deterministic dual core: data the CPU thread's preprocessing copies for the GPU thread (display
+  // lists, indexed XF loads), filled from the start and emptied by a full SyncGPU when it runs out.
+  // That sync stalls the CPU thread for the GPU thread's whole backlog (about half a millisecond):
+  // at 2 MB, every fourth frame of a Brawl match (docs/gameplay-rollback-status.md, "Frame cost
+  // profile"). Not part of savestates.
+  static constexpr u32 AUX_FIFO_SIZE = 8 * 1024 * 1024;
   // Most of this array is unlikely to be faulted in...
-  u8 m_fifo_aux_data[FIFO_SIZE]{};
+  u8 m_fifo_aux_data[AUX_FIFO_SIZE]{};
   u8* m_fifo_aux_write_ptr = nullptr;
   u8* m_fifo_aux_read_ptr = nullptr;
 

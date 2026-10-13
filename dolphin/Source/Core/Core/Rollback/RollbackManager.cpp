@@ -1105,6 +1105,11 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
   // thousands of granules, and every one of them is looked up exactly once.
   static std::vector<u32> restore_keys;
   static std::vector<SourceEntry> restore_srcs;
+  // The granules the forward pass flagged in m_needs_source_mem1/2, which are all clear between
+  // loads (each flag is cleared where its source is found): the indexing never walks or clears
+  // the whole 1.4 million flags.
+  static std::vector<u32> flagged_mem1;
+  static std::vector<u32> flagged_mem2;
 
   DeltaSaveSlot& deltaSave = m_slots[target_slot];
 
@@ -1139,8 +1144,8 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
     u32 remaining = 0;
     {
       ROLLBACK_ZONE_N("ram page indexing - forward");
-      std::memset(m_needs_source_mem1.data(), 0, m_needs_source_mem1.size());
-      std::memset(m_needs_source_mem2.data(), 0, m_needs_source_mem2.size());
+      flagged_mem1.clear();
+      flagged_mem2.clear();
 
       for (int n = 0; n <= frames_back; n++)
       {
@@ -1152,6 +1157,7 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
           if (!m_needs_source_mem1[idx])
           {
             m_needs_source_mem1[idx] = 1;
+            flagged_mem1.push_back(idx);
             remaining++;
           }
         }
@@ -1162,6 +1168,7 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
           if (!m_needs_source_mem2[idx])
           {
             m_needs_source_mem2[idx] = 1;
+            flagged_mem2.push_back(idx);
             remaining++;
           }
         }
@@ -1208,18 +1215,20 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
       }
 
       // Any pages still marked have no delta anywhere in the ring — use the base snapshot
-      for (u32 i = 0; i < static_cast<u32>(m_needs_source_mem1.size()); i++)
+      for (const u32 i : flagged_mem1)
       {
         if (m_needs_source_mem1[i])
         {
+          m_needs_source_mem1[i] = 0;
           restore_keys.push_back(i);
           restore_srcs.push_back({BASE_SNAPSHOT_SENTINEL, 0});
         }
       }
-      for (u32 i = 0; i < static_cast<u32>(m_needs_source_mem2.size()); i++)
+      for (const u32 i : flagged_mem2)
       {
         if (m_needs_source_mem2[i])
         {
+          m_needs_source_mem2[i] = 0;
           restore_keys.push_back(MEM2_FIRST_PAGE + i);
           restore_srcs.push_back({BASE_SNAPSHOT_SENTINEL, 0});
         }
@@ -1376,9 +1385,12 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
   {
     ROLLBACK_ZONE_N("Clear JIT dirty bitmap");
     auto& bitmap = JITDirtyBitmap::Get();
-    bitmap.ClearRange(0, static_cast<uint32_t>(m_mem1_size / ROLLBACK_PAGE_SIZE));
+    bitmap.ScanAndClear(0, static_cast<uint32_t>(m_mem1_size / ROLLBACK_PAGE_SIZE), [](u32) {});
     if (m_mem2_ptr && m_mem2_size > 0)
-      bitmap.ClearRange(MEM2_FIRST_PAGE, static_cast<uint32_t>(m_mem2_size / ROLLBACK_PAGE_SIZE));
+    {
+      bitmap.ScanAndClear(MEM2_FIRST_PAGE, static_cast<uint32_t>(m_mem2_size / ROLLBACK_PAGE_SIZE),
+                          [](u32) {});
+    }
   }
 
   RecordTiming(timing_start, m_stat_load_count, m_stat_load_us_total, m_stat_load_us_max);

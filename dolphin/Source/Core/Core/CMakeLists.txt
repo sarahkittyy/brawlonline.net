@@ -628,6 +628,8 @@ add_library(core
   Rollback/PeerData.h
   Rollback/Perf.cpp
   Rollback/Perf.h
+  Rollback/FrameProfile.cpp
+  Rollback/FrameProfile.h
   Rollback/PresentStats.cpp
   Rollback/PresentStats.h
   Rollback/RollbackManager.cpp

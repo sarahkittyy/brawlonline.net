@@ -56,6 +56,7 @@ struct EventType
 {
   TimedCallback callback;
   const std::string* name;
+  u8 profile_category = 0;  // Rollback::FrameProfile::EventCat
 };
 
 struct Event
