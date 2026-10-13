@@ -10,6 +10,7 @@
 #include <Common/Assert.h>
 #include "Common/ChunkFile.h"
 #include "Common/Logging/Log.h"
+#include "Core/CoreTiming.h"
 #include "Core/Rollback/Perf.h"
 #include "Core/PowerPC/Gekko.h"
 #include "Core/PowerPC/MMU.h"
@@ -267,6 +268,10 @@ void RestoreMachineRegisters(Core::System& system, const DeltaSaveSlot& slot)
     ppc.msr.Hex = slot.m_msr;
     power_pc.MSRUpdated();
   }
+  ppc.pc = slot.m_pc;
+  ppc.npc = slot.m_npc;
+  ppc.reserve_address = slot.m_reserve_address;
+  ppc.reserve = slot.m_reserve;
 }
 
 void DeltaSaveSlot::Save(Core::System& system)
@@ -277,8 +282,13 @@ void DeltaSaveSlot::Save(Core::System& system)
 
   brawl_frame = ReadBrawlMatchFrameCounter(m_mem2_ptr, m_mem2_size);
   m_downcount = system.GetPPCState().downcount;
+  m_slice_length = system.GetCoreTiming().GetGlobals().slice_length;
   m_exceptions = system.GetPPCState().Exceptions;
   m_msr = system.GetPPCState().msr.Hex;
+  m_pc = system.GetPPCState().pc;
+  m_npc = system.GetPPCState().npc;
+  m_reserve_address = system.GetPPCState().reserve_address;
+  m_reserve = system.GetPPCState().reserve;
   std::copy(std::begin(system.GetPPCState().spr), std::end(system.GetPPCState().spr),
             m_all_spr.begin());
   SaveCPURegisters(system.GetPPCState(), m_cpu);

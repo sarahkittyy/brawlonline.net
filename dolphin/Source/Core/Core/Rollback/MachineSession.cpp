@@ -39,6 +39,7 @@
 #include "Core/Config/MainSettings.h"
 #include "Core/Config/SYSCONFSettings.h"
 #include "Core/Config/SessionSettings.h"
+#include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
 #include "Core/HW/CPU.h"
@@ -299,6 +300,13 @@ struct State
   PendingOps ops;
   int iteration = 0;
   bool resim = false;
+  // The boundary this session runs at (Auto until the first boundary resolves it).
+  Boundary boundary = Boundary::Auto;
+  // The VI-field boundary: a pass runs from BeginPass to the next field; vi_frame_ended says the
+  // frame-end half of a boundary ran and its frame-start half has to be taken again (it gave the
+  // CPU back while it waited).
+  bool pass_open = false;
+  bool vi_frame_ended = false;
   struct
   {
     bool pending = false;
@@ -1572,7 +1580,15 @@ void DiagnoseSave(s64 frame)
   {
     const auto it = now.granules.find(addr);
     if (it == now.granules.end())
-      diffs.push_back(fmt::format("{:08x} only first", addr));
+    {
+      // Not written by the re-run: are its bytes now what the first run wrote?
+      auto& memory = system.GetMemory();
+      const u32 phys = addr & 0x1FFFFFFF;
+      const u8* live = phys < 0x10000000 ? memory.GetRAM() + phys :
+                                               memory.GetEXRAM() + (phys - 0x10000000);
+      const bool same = std::memcmp(live, first.bytes[addr].data(), ROLLBACK_PAGE_SIZE) == 0;
+      diffs.push_back(fmt::format("{:08x} only first ({})", addr, same ? "same bytes" : "BYTES DIFFER"));
+    }
     else if (it->second != crc)
     {
       // The differing 4-byte words: offset first->rerun.
@@ -2992,6 +3008,7 @@ void BeginPass(Core::System& system)
   // The inputs this pass runs with, for the SI (GetPad) and the Wii Remotes (GetWiimote).
   s.latched = s.ops.inputs[s.iteration];
   s.current_frame = s.ops.frame[s.iteration];
+  s.pass_open = true;
   s.resim = s.ops.count > 1 && s.iteration != s.ops.count - 1;
   SyncWiimotes(system);
   PlanEpoch(s.current_frame);
@@ -3220,6 +3237,21 @@ std::optional<Options> ParseOptions(const picojson::value& json, std::string* er
       opts.peers.push_back(std::move(p));
     }
   }
+  if (const auto b = o.find("boundary"); b != o.end())
+  {
+    const std::string v = b->second.is<std::string>() ? b->second.get<std::string>() : "";
+    if (v == "auto")
+      opts.boundary = Boundary::Auto;
+    else if (v == "brawl")
+      opts.boundary = Boundary::BrawlLoop;
+    else if (v == "vi")
+      opts.boundary = Boundary::ViField;
+    else
+    {
+      *error = "boundary must be \"auto\", \"brawl\" or \"vi\"";
+      return std::nullopt;
+    }
+  }
   if (const auto j = o.find("join"); j != o.end() && j->second.is<bool>())
     opts.join = j->second.get<bool>();
   if (const auto r = o.find("room"); r != o.end() && r->second.is<bool>())
@@ -3278,6 +3310,10 @@ bool Arm(const Options& options, std::string* error)
   s.ops.Clear();
   s.iteration = 0;
   s.resim = false;
+  s.boundary = options.boundary;
+  s.pass_open = false;
+  s.vi_frame_ended = false;
+  g_vi_boundary = false;
   s.queued_save = {};
   s.latched = {};
   s.local_input = {};
@@ -3697,6 +3733,51 @@ void SetWiimoteOverride(std::optional<WiimoteOverride> value)
   s.wiimote_override = value;
 }
 
+// The boundary the session runs at: Auto becomes BrawlLoop for a Brawl build, ViField otherwise
+// (asked while the session waits for its first boundary: the game is known by then).
+Boundary SessionBoundary()
+{
+  if (s.phase == Phase::Armed && s.opts.boundary == Boundary::Auto)
+  {
+    s.boundary = IsBrawlGameId(SConfig::GetInstance().GetGameID()) ? Boundary::BrawlLoop :
+                                                                    Boundary::ViField;
+  }
+  return s.boundary == Boundary::Auto ? Boundary::BrawlLoop : s.boundary;
+}
+
+// The session's first boundary (either kind): snapshots start; a joiner asks to join (false: its
+// frame runs on its own, it waits at the next boundary), the others wait for the players.
+bool EnterFirstBoundary(const char* where)
+{
+  auto& rb = Rollback::RollbackManager::Get();
+  // Brawl's hard-coded exclusions are Brawl's addresses; any other game keeps all of its RAM.
+  rb.SetBrawlExclusions(s.boundary == Boundary::BrawlLoop);
+  rb.m_full_ios_in_snapshots = true;
+  s.journal_marks.clear();
+  if (!rb.m_frame_save_enabled.load(std::memory_order_relaxed))
+    rb.ToggleFrameSave();
+  if (s.opts.join)
+  {
+    // A joiner runs this frame by itself and waits at the next boundary, which (as on every
+    // player's machine) starts a JIT block of its own: the image loads in the same place.
+    s.phase = Phase::Joining;
+    s.join_since = Clock::now();
+    AddLog(fmt::format("first boundary ({}): asking to join", where));
+    return false;
+  }
+  s.phase = Phase::Connecting;
+  AddLog(fmt::format("first boundary ({}): waiting for the players", where));
+  return true;
+}
+
+enum class Top
+{
+  Run,    // run the frame (a pass began), or the game runs on its own (no session any more)
+  Yield,  // give the CPU back without running anything; take this boundary again
+};
+
+Top FrameTop(Core::System& system);
+
 bool OnLoopTop(const Core::CPUThreadGuard& guard)
 {
   if (!IsArmed())
@@ -3708,6 +3789,11 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     ppc.gpr[25] = 1;
     ppc.npc = BRAWL_LOOP_TOP + 4;
   };
+  if (SessionBoundary() != Boundary::BrawlLoop)
+  {
+    run_original();
+    return true;
+  }
 
   // The hook fires only for main.dol's loop; until the game reaches scBoot it runs freely, the
   // same on every machine (no input, the session's pinned settings and clock).
@@ -3719,31 +3805,111 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       run_original();
       return true;
     }
-    auto& rb = Rollback::RollbackManager::Get();
-    rb.SetBrawlExclusions(true);
-    rb.m_full_ios_in_snapshots = true;
-    s.journal_marks.clear();
-    if (!rb.m_frame_save_enabled.load(std::memory_order_relaxed))
-      rb.ToggleFrameSave();
-    if (s.opts.join)
+    if (!EnterFirstBoundary("scBoot"))
     {
-      // A joiner runs this frame by itself and waits at the next loop top, which (as on every
-      // player's machine) starts a JIT block of its own: the image loads in the same place.
-      s.phase = Phase::Joining;
-      s.join_since = Clock::now();
-      AddLog("first boundary (scBoot): asking to join");
       run_original();
       return true;
     }
-    s.phase = Phase::Connecting;
-    AddLog("first boundary (scBoot): waiting for the players");
   }
+  if (FrameTop(system) == Top::Yield)
+  {
+    // No game logic this pass; the next loop top waits again.
+    ppc.gpr[25] = 1;
+    ppc.npc = BRAWL_LOOP_END;
+    return true;
+  }
+  run_original();
+  return true;
+}
+
+bool g_vi_boundary = false;
+
+void OnViField()
+{
+  if (IsArmed())
+    g_vi_boundary = true;
+}
+
+void OnViBoundary(Core::System& system)
+{
+  std::lock_guard lk(s.mutex);
+  if (!Active() || SessionBoundary() != Boundary::ViField)
+  {
+    g_vi_boundary = false;
+    return;
+  }
+  auto& ppc = system.GetPPCState();
+  if (s.phase == Phase::Armed)
+  {
+    g_vi_boundary = false;
+    // Only once the game runs: not from the boot's own steps (the apploader), nor from the JIT's
+    // first Advance before any block set the next instruction (Nyx's fork waits for npc too).
+    if (system.GetCPU().GetState() != CPU::State::Running || ppc.npc == 0)
+      return;
+    if (!EnterFirstBoundary("VI field"))
+      return;
+  }
+  if (!s.vi_frame_ended)
+  {
+    // The end of the frame that ran since the last boundary (Brawl's FrameEnd and LoopEnd hooks).
+    s.vi_frame_ended = true;
+    if (s.pass_open)
+    {
+      s.pass_open = false;
+      if (s.phase == Phase::Running && s.iteration < s.ops.count)
+      {
+        if (s.ops.save_after[s.iteration])
+        {
+          s.queued_save.pending = true;
+          s.queued_save.frame = s.ops.frame[s.iteration];
+          s.queued_save.checksum = s.ops.checksum[s.iteration];
+        }
+        s.iteration++;
+        if (s.iteration >= s.ops.count)
+          s.iteration = 0;
+      }
+    }
+  }
+  if (FrameTop(system) == Top::Yield)
+    return;  // g_vi_boundary stays set: the next Advance takes this boundary again
+  s.vi_frame_ended = false;
+  g_vi_boundary = false;
+  // Diagnostics: PPR_MACHINE_VI_DEBUG=N logs the first N boundaries' timing state.
+  static const int vi_debug = [] {
+    const char* e = std::getenv("PPR_MACHINE_VI_DEBUG");
+    return e ? std::atoi(e) : 0;
+  }();
+  static int vi_logged = 0;
+  if (vi_logged < vi_debug && s.pass_open)
+  {
+    ++vi_logged;
+    auto& ct = system.GetCoreTiming();
+    std::string ev = ct.GetScheduledEventsSummary();
+    for (auto& c : ev)
+      if (c == '\n')
+        c = '|';
+    NOTICE_LOG_FMT(BRAWLBACK, "vi-debug frame {} {} timer {} slice {} down {} pc {:08x} npc {:08x} ev {}",
+                   s.current_frame, s.resim ? "rerun" : "first", ct.GetGlobals().global_timer,
+                   ct.GetGlobals().slice_length, ppc.downcount, ppc.pc, ppc.npc, ev.substr(0, 400));
+  }
+}
+
+bool IsBrawlGameId(std::string_view game_id)
+{
+  // A launcher (.dol/.elf) gets "ID-<file name>"; "00000000" is no game yet.
+  return game_id.starts_with("RSB") || game_id.starts_with("ID-") || game_id == "00000000" ||
+         game_id.empty();
+}
+
+// The start of a frame, at either boundary: the save of the frame that ended, the wait for the
+// next frames (and a rollback), the pass's inputs.
+Top FrameTop(Core::System& system)
+{
   if (s.phase == Phase::Error || s.phase == Phase::Stopped)
   {
     system.GetCoreTiming().SetRollbackResimulating(false);
     system.GetCoreTiming().SetRollbackSpeedAdjustment(1.0);
-    run_original();
-    return true;
+    return Top::Run;
   }
 
   PerformQueuedSave(system);
@@ -3758,14 +3924,10 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       // The session ended: from here the game runs on its own (as a local game).
       system.GetCoreTiming().SetRollbackResimulating(false);
       system.GetCoreTiming().SetRollbackSpeedAdjustment(1.0);
-      run_original();
-      return true;
+      return Top::Run;
     case Wait::Yield:
-      // No game logic this pass; the next loop top waits again.
-      ppc.gpr[25] = 1;
-      ppc.npc = BRAWL_LOOP_END;
       s.ops.count = 0;
-      return true;
+      return Top::Yield;
     }
   }
   static const s64 selfload_at = [] {
@@ -3913,8 +4075,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     }
   }
   BeginPass(system);
-  run_original();
-  return true;
+  return Top::Run;
 }
 
 bool OnFrameEnd(const Core::CPUThreadGuard& guard)
@@ -3924,6 +4085,12 @@ bool OnFrameEnd(const Core::CPUThreadGuard& guard)
   std::lock_guard lk(s.mutex);
   auto& system = guard.GetSystem();
   auto& ppc = system.GetPPCState();
+  if (SessionBoundary() != Boundary::BrawlLoop)
+  {
+    PowerPC::MMU::HostWrite<u32>(guard, ppc.gpr[0], ppc.gpr[23] + 0x100);
+    ppc.npc = BRAWL_LOOP_END;
+    return true;
+  }
   // The original instruction first (stw r0,0x100(r23)), so the save at the next loop top holds
   // this pass's frame counter (HLE_Misc::BrawlbackGekkoNetFrameEnd).
   PowerPC::MMU::HostWrite<u32>(guard, ppc.gpr[0], ppc.gpr[23] + 0x100);
@@ -3943,8 +4110,9 @@ bool OnLoopEnd(const Core::CPUThreadGuard& guard)
     return false;
   std::lock_guard lk(s.mutex);
   auto& ppc = guard.GetSystem().GetPPCState();
-  if (s.phase == Phase::Running && s.ops.count > 0)
+  if (SessionBoundary() == Boundary::BrawlLoop && s.phase == Phase::Running && s.ops.count > 0)
   {
+    s.pass_open = false;
     s.iteration++;
     if (s.iteration >= s.ops.count)
       s.iteration = 0;
@@ -4277,5 +4445,31 @@ void IoLogWrite(u32 addr, size_t size)
                                                                   std::string("cpu"));
   }
   IoLogRegs(system.GetPPCState());
+}
+}  // namespace Machine
+
+namespace Machine
+{
+static std::pair<u32, u32> WatchRange()
+{
+  const char* e = std::getenv("PPR_MACHINE_WATCH");
+  if (!e)
+    return {0, 0};
+  char* end = nullptr;
+  const u32 lo = static_cast<u32>(std::strtoul(e, &end, 16)) & 0x1FFFFFFF;
+  const u32 hi = end && *end == '-' ? static_cast<u32>(std::strtoul(end + 1, nullptr, 16)) & 0x1FFFFFFF : lo + 64;
+  return {lo, hi};
+}
+u32 g_watch_lo = WatchRange().first;
+u32 g_watch_hi = WatchRange().second;
+
+void WatchWrite(u32 addr, size_t size)
+{
+  auto& system = Core::System::GetInstance();
+  const std::string* ev = system.GetCoreTiming().m_current_event;
+  NOTICE_LOG_FMT(BRAWLBACK, "watch: frame {} {} write {:08x}+{:x} by {} pc {:08x} lr {:08x}",
+                 s.current_frame, s.resim ? "rerun" : "first", addr, size,
+                 !Core::IsCPUThread() ? std::string("thread") : ev ? *ev : std::string("cpu"),
+                 system.GetPPCState().pc, system.GetPPCState().spr[SPR_LR]);
 }
 }  // namespace Machine

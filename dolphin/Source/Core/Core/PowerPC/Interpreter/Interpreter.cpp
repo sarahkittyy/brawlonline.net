@@ -242,6 +242,9 @@ void Interpreter::Run()
     // one so it must always be called at the start. At boot, we are in slice -1 and must
     // advance into slice 0 to get a correct slice length before executing any cycles.
     core_timing.Advance();
+    // A whole-machine session's VI-field boundary may give the CPU back in Advance: run nothing.
+    if (cpu.GetState() != CPU::State::Running)
+      break;
 
     // we have to check exceptions at branches apparently (or maybe just rfi?)
     if (Config::IsDebuggingEnabled())

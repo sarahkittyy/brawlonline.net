@@ -412,6 +412,12 @@ void CoreTimingManager::Advance()
   // until the next slice:
   //        Pokemon Box refuses to boot if the first exception from the audio DMA is received late
   power_pc.CheckExternalExceptions();
+
+  // A whole-machine session's VI-field boundary (Machine::OnViBoundary): after the whole batch of
+  // events and the exceptions they raised, between two blocks, where a snapshot can be saved and
+  // loaded (a load replaces the event queue this function just ran).
+  if (Machine::g_vi_boundary) [[unlikely]]
+    Machine::OnViBoundary(m_system);
 }
 
 TimePoint CoreTimingManager::CalculateTargetHostTimeInternal(s64 target_cycle)

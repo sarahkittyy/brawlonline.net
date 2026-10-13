@@ -222,12 +222,19 @@ public:
   // CPU timing context that the rollback DoState skips with the other CPU registers: the
   // position within the current CoreTiming slice and the pending exceptions.
   int m_downcount = 0;
+  int m_slice_length = 0;  // CoreTiming's, which DoState restores; again with the downcount
   uint32_t m_exceptions = 0;
   // A whole-machine session restores these too (RestoreMachineRegisters): the MSR (its FP bit is
   // the OS's lazy FPU switch, and a re-run that took the FP-unavailable exception where the first
   // run did not drifted by its handler's cycles) and every SPR.
   uint32_t m_msr = 0;
   std::array<uint32_t, 1024> m_all_spr{};
+  // And where the CPU is: a session at the VI-field boundary saves between any two JIT blocks
+  // (Brawl's hook always resumes at its own address), and the lwarx reservation.
+  uint32_t m_pc = 0;
+  uint32_t m_npc = 0;
+  uint32_t m_reserve_address = 0;
+  bool m_reserve = false;
 
   // Instrumentation of the last Save: dual-core GPU sync time, whether it ran, and the pipelines
   // the video thread compiled synchronously meanwhile.

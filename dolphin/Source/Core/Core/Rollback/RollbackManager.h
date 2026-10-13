@@ -51,9 +51,12 @@ public:
   void SaveFrame(Core::System& system);
   bool LoadFrame(Core::System& system, int frames_back = 1);
 
-  // CRC32 of the guest RAM the last SaveFrame copied (the granules written since the save before
-  // it: indices and contents, MEM1 then MEM2). Game-independent: equal on two machines that ran
-  // the same frame from the same state, whatever the game (Machine::Session's desync check). 0
+  // CRC32 of the guest RAM the last SaveFrame found changed: of the granules written since the
+  // save before it, those whose bytes differ from that save's (indices and contents, MEM1 then
+  // MEM2). Game-independent: equal on two machines that ran the same frame from the same state,
+  // whatever the game (Machine::Session's desync check). Only what changed counts, not what was
+  // written: a store of the bytes already there marks a granule written on one run of a frame and
+  // not on another (seen in New Super Mario Bros. Wii: same state, other granules marked). 0
   // before the first save.
   u32 LastSaveChecksum() const;
   // LastSaveChecksum plus one slice of all guest RAM, chosen by `frame` (CHECK_SLICES slices:
@@ -220,6 +223,15 @@ public:
 
   // Rolling base: full MEM1+MEM2 state at the oldest reachable frame
   RollbackSnapshot m_base_snapshot;
+
+  // Whole-machine snapshots: MEM1+MEM2 as the newest save left them (taken with the base
+  // snapshot, updated by every save's written granules and every load's restored ones), so that a
+  // save can tell which written granules changed (LastSaveChecksum).
+  std::unique_ptr<uint8_t[]> m_shadow_mem1;
+  std::unique_ptr<uint8_t[]> m_shadow_mem2;
+  bool m_shadow_valid = false;
+  u32 m_last_change_crc = 0;
+  void UpdateShadowAfterSave(int slot);
 
   // The oldest slot's deltas being merged into m_base_snapshot (kicked by SaveFrame). Every reader
   // of the base snapshot (LoadFrame) and the next eviction wait for it: WaitForEviction().

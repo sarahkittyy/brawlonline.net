@@ -212,6 +212,12 @@ void JitArm64::GenerateAsm()
   // Load the PC back into DISPATCHER_PC (the exception handler might have changed it)
   LDR(IndexType::Unsigned, DISPATCHER_PC, PPC_REG, PPCSTATE_OFF(pc));
 
+  // A whole-machine session's VI-field boundary may give the CPU back inside GlobalAdvance (a
+  // pause or stop while it waited for the players): leave before running any block, so that the
+  // next GlobalAdvance takes the boundary again at the same instruction.
+  LDR(IndexType::Unsigned, ARM64Reg::W8, ARM64Reg::X8, MOVPage2R(ARM64Reg::X8, cpu.GetStatePtr()));
+  FixupBranch advance_exit = CBNZ(ARM64Reg::W8);
+
   // We can safely assume that downcount >= 1
   B(dispatcher_no_check);
 
@@ -225,6 +231,7 @@ void JitArm64::GenerateAsm()
 
   dispatcher_exit = GetCodePtr();
   SetJumpTarget(exit);
+  SetJumpTarget(advance_exit);
 
   // Reset the stack pointer, since the BLR optimization may have pushed things onto the stack
   // without popping them.

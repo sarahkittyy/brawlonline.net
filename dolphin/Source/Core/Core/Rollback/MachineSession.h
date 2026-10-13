@@ -25,6 +25,7 @@
 #include <array>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <picojson.h>
@@ -73,7 +74,9 @@ void EncodePad(const GCPadStatus& pad, Input* input);
 
 enum class Boundary
 {
-  BrawlLoop,  // the Brawl game loop's HLE hooks
+  Auto,       // BrawlLoop for a Brawl build (IsBrawlGameId), else ViField
+  BrawlLoop,  // the Brawl game loop's HLE hooks: one game frame per boundary
+  ViField,    // the start of each VI field (60 a second), for any game
 };
 
 // What a player plays with. A player in slot N drives GameCube port N, or Wii Remote N (with
@@ -102,7 +105,7 @@ struct Options
   std::vector<Peer> peers;     // every other player
   u16 local_port = 0;          // UDP port to bind (0: any)
   int delay = 2;               // this player's input delay in frames (0-9)
-  Boundary boundary = Boundary::BrawlLoop;
+  Boundary boundary = Boundary::Auto;  // "boundary": "auto", "brawl" or "vi"
   // The session's wall clock at boot, in seconds since 1970-01-01 (as Dolphin's custom RTC and
   // netplay's initial time); every player must use the same. Must be after 2000-01-01, the
   // console's epoch: an earlier clock leaves the SDK's timeouts waiting forever (Brawl's PAD
@@ -185,6 +188,20 @@ u64 GetInitialRTC();
 bool OnLoopTop(const Core::CPUThreadGuard& guard);
 bool OnFrameEnd(const Core::CPUThreadGuard& guard);
 bool OnLoopEnd(const Core::CPUThreadGuard& guard);
+
+// The VI-field boundary (any game but Brawl): a field started (CPU thread, from the VI's event).
+// CoreTiming::Advance then calls OnViBoundary once its events and external exceptions are done,
+// between two JIT blocks, where a snapshot can be taken and loaded (Nyx's Dolphin-Wide-Rollback
+// does the same). OnViBoundary may leave g_vi_boundary set: it gave the CPU back (a pause or stop
+// while it waited for the players), and the CPU cores leave right after Advance so that the next
+// Advance takes the same boundary again, at the same instruction.
+extern bool g_vi_boundary;
+void OnViField();
+void OnViBoundary(Core::System& system);
+// Brawl's game-loop hooks (HLE) are for Brawl only: a disc whose ID starts with RSB, or a
+// launcher (.dol/.elf, an "ID-" game ID) of a Brawl build. Any other game's code sits there.
+bool IsBrawlGameId(std::string_view game_id);
+
 // This pass re-runs a frame that was already shown (not presented, not throttled).
 bool IsResimulationPass();
 
@@ -224,6 +241,10 @@ picojson::value Digest(s64 frame, const std::vector<u32>& addrs = {});
 // PPR_MACHINE_IOLOG_LIGHT=1: only what comes from outside the CPU (no CPU stores, no registers),
 // fast enough to run for minutes.
 extern bool g_io_log;
+// Diagnostics, PPR_MACHINE_WATCH=lo-hi (physical, hex): every host write into that range is
+// logged with who made it and the frame (a sync test's first run or re-run).
+extern u32 g_watch_lo, g_watch_hi;
+void WatchWrite(u32 addr, size_t size);
 extern bool g_io_cpu_store;  // MMU::Write is marking a CPU store dirty
 void IoLogRead(u32 addr, u32 size, u64 value);
 void IoLogWrite(u32 addr, size_t size);

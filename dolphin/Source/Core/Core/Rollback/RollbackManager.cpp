@@ -647,6 +647,7 @@ void RollbackManager::Shutdown()
   }
 
   m_base_snapshot.valid = false;
+  m_shadow_valid = false;
   m_base_snapshot.mem1.reset();
   m_base_snapshot.mem2.reset();
 
@@ -812,6 +813,7 @@ void RollbackManager::EndRegionMode()
   m_ring_next = 0;
   m_ring_count = 0;
   m_base_snapshot.valid = false;
+  m_shadow_valid = false;
 }
 
 void RollbackManager::ToggleFrameSave()
@@ -843,6 +845,7 @@ void RollbackManager::ToggleFrameSave()
       m_eviction_job = nullptr;
     }
     m_base_snapshot.valid = false;
+    m_shadow_valid = false;
 
     JITDirtyBitmap::Get().Clear();
 
@@ -943,6 +946,17 @@ void RollbackManager::SaveFrame(Core::System& system)
     INFO_LOG_FMT(BRAWLBACK, "Captured base snapshot at brawl frame {}",
                  m_base_snapshot.brawl_frame);
   }
+  if (!m_region_mode && !m_shadow_valid)
+  {
+    if (!m_shadow_mem1)
+      m_shadow_mem1 = std::make_unique<uint8_t[]>(m_mem1_size);
+    if (!m_shadow_mem2 && m_mem2_size)
+      m_shadow_mem2 = std::make_unique<uint8_t[]>(m_mem2_size);
+    std::memcpy(m_shadow_mem1.get(), m_mem1_ptr, m_mem1_size);
+    if (m_mem2_size)
+      std::memcpy(m_shadow_mem2.get(), m_mem2_ptr, m_mem2_size);
+    m_shadow_valid = true;
+  }
 
   const int slot = m_ring_next;
   const auto t_base = std::chrono::steady_clock::now();
@@ -1011,6 +1025,8 @@ void RollbackManager::SaveFrame(Core::System& system)
   {
     m_slots[slot].Save(system);
   }
+  if (!m_region_mode && m_shadow_valid)
+    UpdateShadowAfterSave(slot);
   {
     const auto t_end = std::chrono::steady_clock::now();
     auto ms = [](auto a, auto b) {
@@ -1084,10 +1100,48 @@ bool IsResimulating()
   return Machine::IsResimulationPass();
 }
 
+void RollbackManager::UpdateShadowAfterSave(int slot)
+{
+  const DeltaSaveSlot& saved = m_slots[slot];
+  const u8* gpu = GPUWrittenBitmap::Get().entries;
+  u32 crc = Common::StartCRC32();
+  for (const auto& [delta, first_page, shadow] :
+       {std::tuple{&saved.m_mem1_delta, 0u, m_shadow_mem1.get()},
+        std::tuple{&saved.m_mem2_delta, MEM2_FIRST_PAGE, m_shadow_mem2.get()}})
+  {
+    if (!shadow)
+      continue;
+    for (u32 i = 0; i < delta->page_count; ++i)
+    {
+      const u32 index = delta->page_indices[i];
+      const u8* now = delta->page_data.data() + static_cast<size_t>(i) * ROLLBACK_PAGE_SIZE;
+      u8* before = shadow + static_cast<size_t>(index) * ROLLBACK_PAGE_SIZE;
+      if (std::memcmp(before, now, ROLLBACK_PAGE_SIZE) == 0)
+        continue;
+      std::memcpy(before, now, ROLLBACK_PAGE_SIZE);
+      const u32 page = first_page + index;
+      // Rendered output (GPU copies to RAM) and the regions snapshots exclude are not game state.
+      if (gpu[page])
+        continue;
+      const u32 phys = page << ROLLBACK_PAGE_SHIFT;
+      bool excluded = false;
+      for (const MemoryRegion& r : m_exclude_regions)
+        excluded |= phys < r.phys_end && phys + ROLLBACK_PAGE_SIZE > r.phys_start;
+      if (excluded)
+        continue;
+      crc = Common::UpdateCRC32(crc, reinterpret_cast<const u8*>(&page), sizeof(page));
+      crc = Common::UpdateCRC32(crc, now, ROLLBACK_PAGE_SIZE);
+    }
+  }
+  m_last_change_crc = crc ? crc : 1;
+}
+
 u32 RollbackManager::LastSaveChecksum() const
 {
   if (!m_initialized || m_ring_count == 0)
     return 0;
+  if (!m_region_mode && m_shadow_valid)
+    return m_last_change_crc;
   const DeltaSaveSlot& saved = m_slots[Wrap(m_ring_next - 1, NUM_SAVE_SLOTS)];
   const u8* gpu = GPUWrittenBitmap::Get().entries;
   u32 crc = Common::StartCRC32();
@@ -1521,6 +1575,9 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
     // of the slice, so every resimulation saw OSGetTick and the next interrupts shifted by up to a
     // slice from the original run.)
     system.GetPowerPC().GetPPCState().downcount = deltaSave.m_downcount;
+    // Together with its slice: anything during the load that shortened the slice
+    // (ForceExceptionCheck) left slice_length - downcount, the cycles run so far, wrong.
+    system.GetCoreTiming().GetGlobals().slice_length = deltaSave.m_slice_length;
     system.GetPowerPC().GetPPCState().Exceptions = deltaSave.m_exceptions;
     RestoreCPURegisters(system.GetPowerPC().GetPPCState(), deltaSave.m_cpu);
     RestoreMachineRegisters(system, deltaSave);
@@ -1535,6 +1592,21 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
 
   if (ram_job)
     job::DrainJobsUntilComplete(m_dispatch_thread, ram_job);
+
+  if (!m_region_mode && m_shadow_valid)
+  {
+    // The shadow follows the machine back: the restored granules hold the loaded frame's bytes.
+    ROLLBACK_ZONE_N("Shadow of restored memory");
+    for (const u32 key : restore_keys)
+    {
+      const bool mem2 = key >= MEM2_FIRST_PAGE;
+      const size_t off = static_cast<size_t>(mem2 ? key - MEM2_FIRST_PAGE : key) * ROLLBACK_PAGE_SIZE;
+      u8* shadow = mem2 ? m_shadow_mem2.get() : m_shadow_mem1.get();
+      const u8* live = mem2 ? m_mem2_ptr : m_mem1_ptr;
+      if (shadow && off + ROLLBACK_PAGE_SIZE <= (mem2 ? m_mem2_size : m_mem1_size))
+        std::memcpy(shadow + off, live + off, ROLLBACK_PAGE_SIZE);
+    }
+  }
 
   if (!m_region_mode)
   {

@@ -815,6 +815,9 @@ void MemoryManager::MarkRangeDirty(u32 address, size_t size)
   const uint32_t phys_addr = address & 0x1FFFFFFFu;
   if (Machine::g_io_log) [[unlikely]]
     Machine::IoLogWrite(address, size);
+  if (Machine::g_watch_hi && phys_addr < Machine::g_watch_hi &&
+      phys_addr + size > Machine::g_watch_lo) [[unlikely]]
+    Machine::WatchWrite(address, size);
 
   uint8_t* const entries = Rollback::JITDirtyBitmap::Get().entries;
   const uint32_t first_page = phys_addr >> ::ROLLBACK_PAGE_SHIFT;

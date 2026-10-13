@@ -74,6 +74,13 @@ void Jit64AsmRoutineManager::Generate()
   // update the membase so it makes sense to do this here.
   MOV(64, R(RMEM), PPCSTATE(mem_ptr));
 
+  // A whole-machine session's VI-field boundary may give the CPU back inside GlobalAdvance (a
+  // pause or stop while it waited for the players): leave before running any block, so that the
+  // next GlobalAdvance takes the boundary again at the same instruction.
+  MOV(64, R(RSCRATCH), ImmPtr(m_jit.m_system.GetCPU().GetStatePtr()));
+  CMP(32, MatR(RSCRATCH), Imm32(std::to_underlying(CPU::State::Running)));
+  FixupBranch advance_exit = J_CC(CC_NE, Jump::Near);
+
   // skip the sync and compare first time
   FixupBranch skipToRealDispatch = J(enable_debugging ? Jump::Near : Jump::Short);
 
@@ -236,6 +243,7 @@ void Jit64AsmRoutineManager::Generate()
   dispatcher_exit = GetCodePtr();
   if (enable_debugging)
     SetJumpTarget(dbg_exit);
+  SetJumpTarget(advance_exit);
 
   // Reset the stack pointer, since the BLR optimization may have pushed things onto the stack
   // without popping them.

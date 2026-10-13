@@ -910,6 +910,7 @@ void Callback_NewField(Core::System& system)
   }
 
   AchievementManager::GetInstance().DoFrame();
+  Machine::OnViField();
 }
 
 void UpdateTitle(Core::System& system)

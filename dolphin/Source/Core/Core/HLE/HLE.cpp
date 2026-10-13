@@ -12,6 +12,7 @@
 #include "Common/CommonTypes.h"
 
 #include "Core/Config/MainSettings.h"
+#include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/GeckoCode.h"
 #include "Core/HLE/HLE_Misc.h"
@@ -20,6 +21,7 @@
 #include "Core/Host.h"
 #include "Core/PowerPC/PPCSymbolDB.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 
 namespace HLE
@@ -130,6 +132,11 @@ void PatchFixedFunctions(Core::System& system)
   // This has to always be installed even if cheats are not enabled because of the possibility of
   // loading a savestate where PC is inside the code handler while cheats are disabled.
   Patch(system, Gecko::HLE_TRAMPOLINE_ADDRESS, "GeckoHandlerReturnTrampoline");
+
+  // Brawl's hooks below sit at fixed addresses in Brawl's main.dol (and its RELs): any other
+  // game has its own code there.
+  if (!Machine::IsBrawlGameId(SConfig::GetInstance().GetGameID()))
+    return;
 
   // Brawlback frame handling hooks
   Patch(system, 0x800171b4, "BrawlbackGekkoNetUnconditionalFrame"); // BRAWL_UNCONDITIONAL_HOOK_ADDR

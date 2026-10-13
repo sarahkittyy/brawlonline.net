@@ -98,6 +98,9 @@ void CachedInterpreter::Run()
     // Start new timing slice
     // NOTE: Exceptions may change PC
     core_timing.Advance();
+    // A whole-machine session's VI-field boundary may give the CPU back in Advance: run nothing.
+    if (*state_ptr != CPU::State::Running)
+      break;
 
     do
     {
