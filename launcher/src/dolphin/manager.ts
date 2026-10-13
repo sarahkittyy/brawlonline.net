@@ -34,6 +34,10 @@ import {
 } from "./install/pplus_release";
 import { installPluginOnSdCard, loadPlugin } from "./install/sd_card";
 import { DolphinInstance, MacOsRosettaRequiredError, PlaybackDolphinInstance } from "./instance";
+import type { ModsRoomArg } from "./mods/mods_args";
+import { buildModsDolphinArgs } from "./mods/mods_args";
+import { clearModRoomFiles } from "./mods/room_files";
+import type { ModBuild } from "./mods/types";
 import { buildNetplayDolphinArgs } from "./netplay_args";
 import { clearRoomRequest } from "./room_handoff";
 import { createProgressThrottle, runWithProgress } from "./setup_progress";
@@ -282,6 +286,55 @@ export class DolphinManager {
       throw err;
     });
 
+    try {
+      await dolphinInstance.start();
+    } catch (err) {
+      if (err instanceof MacOsRosettaRequiredError) {
+        this.eventSubject.next({
+          type: DolphinEventType.ERROR,
+          errorType: DolphinErrorType.ROSETTA_REQUIRED,
+          dolphinType: DolphinLaunchType.NETPLAY,
+        });
+      }
+      throw err;
+    }
+    this.netplayDolphinInstance = dolphinInstance;
+  }
+
+  /**
+   * Starts our Dolphin for a Brawl Mods room (docs/design/brawl-mods.md §3): the build instead of
+   * P+ (no P+ files, no online plugin on its SD card), and the room to open or join. It is the
+   * netplay Dolphin (its User folder, the login): Play and a mod room do not run at once.
+   * `onClose` runs when it exits.
+   */
+  async launchModsDolphin(build: ModBuild, room: ModsRoomArg, onClose?: () => void) {
+    Preconditions.checkState(this.netplayDolphinInstance == null, "Dolphin is already open. Close it first.");
+    await this.launchGate();
+    const installation = this.getInstallation(DolphinLaunchType.NETPLAY);
+    await this._repairBundledDolphin();
+    const dolphinPath = await installation.findDolphinExecutable();
+    await installation.ensureUserFolder();
+    await this._updateDolphinSettings(DolphinLaunchType.NETPLAY);
+    await clearModRoomFiles(this.netplayOnlineDir());
+    const params = buildModsDolphinArgs({
+      userArgs: installation.userArgs(),
+      build,
+      room,
+      testMode: readTestMode(process.env, app.isPackaged),
+    });
+    log.info(`Launching dolphin for a Brawl Mods room at path: ${dolphinPath} ${params.join(" ")}`);
+    const dolphinInstance = new DolphinInstance(dolphinPath, params);
+    dolphinInstance.on("close", async (exitCode: number | null, signal: string | null) => {
+      this.netplayDolphinInstance = null;
+      this.eventSubject.next({ type: DolphinEventType.CLOSED, dolphinType: DolphinLaunchType.NETPLAY, exitCode });
+      void clearModRoomFiles(this.netplayOnlineDir()).catch(() => undefined);
+      log.warn(`Dolphin (Brawl Mods) exit code: ${exitCode?.toString(16)}, signal: ${signal}`);
+      await this._keepCrashLog(installation, exitCode, signal);
+      onClose?.();
+    });
+    dolphinInstance.on("error", (err: Error) => {
+      log.error(err);
+    });
     try {
       await dolphinInstance.start();
     } catch (err) {

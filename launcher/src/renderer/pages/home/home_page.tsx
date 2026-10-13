@@ -6,6 +6,8 @@ import { useRouteMemory } from "@/lib/hooks/use_route_memory";
 
 import { HomePageMessages as Messages } from "./home_page.messages";
 import { HOME_TABS } from "./home_routes";
+import { ModsMessages } from "./mods/mods.messages";
+import { ModsTab } from "./mods/mods_tab";
 import { HomeOverview } from "./overview/overview";
 import { PlayButtons } from "./play_buttons/play_buttons";
 import { Tabs } from "./tabs/tabs";
@@ -61,13 +63,17 @@ export const HomePage = React.memo(function HomePage() {
             value={currentTab}
             highlightedTabIds={[]}
             onChange={handleTabChange}
-            tabs={[{ id: "overview", label: Messages.overview() }]}
+            tabs={[
+              { id: "overview", label: Messages.overview() },
+              { id: "mods", label: ModsMessages.tabLabel() },
+            ]}
           />
           <PlayButtons />
         </TabRow>
         <Routes>
           <Route index={true} element={<RestoreHomeScope />} />
           <Route path="overview" element={<HomeOverview />} />
+          <Route path="mods" element={<ModsTab />} />
         </Routes>
       </div>
     </Outer>

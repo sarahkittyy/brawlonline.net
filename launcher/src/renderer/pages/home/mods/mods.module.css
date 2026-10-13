@@ -1,0 +1,216 @@
+.page {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 12px 0;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.intro {
+  margin: 0;
+  max-width: 720px;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.error {
+  padding: 8px 12px;
+  border-radius: 6px;
+  background-color: rgb(255 80 80 / 12%);
+  color: var(--red-error);
+  font-size: 13px;
+}
+
+.empty {
+  margin: 8px 0;
+  color: var(--text-dim);
+  font-size: 14px;
+}
+
+.builds {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 8px 4px;
+}
+
+.controllerRow {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.build {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  background-color: var(--surface-1);
+}
+
+.buildHead {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-width: 0;
+}
+
+.buildName {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.name {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 14px;
+}
+
+.hash {
+  font-family: monospace;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: default;
+}
+
+.hashMissing {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.parts {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--text-dim);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.progress {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.progress > :first-child {
+  flex: 1;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+}
+
+.toggle {
+  display: flex;
+  align-items: center;
+  color: var(--text-secondary);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.separator {
+  width: 1px;
+  height: 20px;
+  margin: 0 4px;
+  background-color: var(--surface-4);
+}
+
+.codeInput {
+  width: 120px;
+}
+
+.room {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  padding: 8px 4px;
+}
+
+.roomActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.roomBuild {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
+.slots {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.slot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 36px;
+  padding: 4px 10px;
+  border-radius: 6px;
+  background-color: var(--surface-1);
+}
+
+.closed {
+  opacity: 0.55;
+}
+
+.slotLabel {
+  flex-shrink: 0;
+  width: 64px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.player {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.code {
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+
+.badge {
+  padding: 1px 6px;
+  border-radius: 4px;
+  background-color: var(--surface-3);
+  color: var(--text-secondary);
+  font-size: 11px;
+}
+
+.ping {
+  color: var(--room-waiting, #74c27a);
+  font-size: 12px;
+}
+
+.emptySlot {
+  flex: 1;
+  color: var(--text-dim);
+  font-size: 13px;
+}
+
+.slotActions {
+  flex-shrink: 0;
+}

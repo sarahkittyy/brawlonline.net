@@ -1,5 +1,6 @@
 import accountsApi from "@accounts/api";
 import dolphinApi from "@dolphin/api";
+import modsApi from "@dolphin/mods/api";
 import gameAssetsApi from "@game_assets/api";
 import replaysApi from "@replays/api";
 import settingsApi from "@settings/api";
@@ -21,6 +22,7 @@ const api = {
   accounts: accountsApi,
   gameAssets: gameAssetsApi,
   dolphin: dolphinApi,
+  mods: modsApi,
   replays: replaysApi,
   social: socialApi,
   utils: {

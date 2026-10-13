@@ -7,6 +7,7 @@ import createAuthClient from "./auth/auth.service";
 import createBackendClient from "./backend/backend.service";
 import createDolphinClient from "./dolphin/dolphin.service";
 import createI18nService from "./i18n/i18n.service";
+import createModsClient from "./mods/mods.service";
 import createNotificationClient from "./notification/notification.service";
 import createReplayClient from "./replay/replay.service";
 import type { Services } from "./types";
@@ -25,6 +26,7 @@ export async function installServices(): Promise<Services> {
   await i18nService.init();
 
   const dolphinService = createDolphinClient();
+  const modsService = createModsClient();
   const authService = createAuthClient();
   const replayService = createReplayClient();
   const backendService = createBackendClient(
@@ -38,6 +40,7 @@ export async function installServices(): Promise<Services> {
     authService,
     backendService,
     dolphinService,
+    modsService,
     replayService,
     notificationService,
     i18nService,

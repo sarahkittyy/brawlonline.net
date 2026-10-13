@@ -1,5 +1,6 @@
 import setupAccountsIpc from "@accounts/setup";
 import { DolphinManager } from "@dolphin/manager";
+import setupModsIpc from "@dolphin/mods/setup";
 import setupDolphinIpc from "@dolphin/setup";
 import setupGameAssetsIpc from "@game_assets/setup";
 import setupReplaysIpc from "@replays/setup";
@@ -23,6 +24,7 @@ export function installModules(flags: ConfigFlags) {
   setupSocialIpc({ accountsManager, accountsApi: serviceUrls.accountsApi, dolphinManager });
   setupReplaysIpc();
   setupSettingsIpc({ settingsManager, dolphinManager });
+  setupModsIpc({ settingsManager, dolphinManager });
   setupGameAssetsIpc({ settingsManager, dolphinManager, checkIso });
   const browserWindowManager = new BrowserWindowManager();
   setupMainIpc({ dolphinManager, settingsManager, flags, browserWindowManager, appUpdater });

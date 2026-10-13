@@ -1,3 +1,4 @@
+import type { ModsService } from "@dolphin/mods/types";
 import type { DolphinService } from "@dolphin/types";
 import type { ReplayService } from "@replays/types";
 
@@ -10,6 +11,7 @@ export type Services = {
   authService: AuthService;
   backendService: BackendService;
   dolphinService: DolphinService;
+  modsService: ModsService;
   replayService: ReplayService;
   notificationService: NotificationService;
   i18nService: I18nService;
