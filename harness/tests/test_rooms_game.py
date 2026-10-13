@@ -1478,3 +1478,83 @@ def test_room_player_quits_with_lras(backend: OnlineBackend, dolphin: Callable[.
         assert by_port[port]["place"] is None, m
     if len(quits) == 1:
         assert by_port[0]["place"] == 2, m
+
+
+def test_room_runback_restarts_for_everyone(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                            gpu_backend: str) -> None:
+    """A free-for-all of three without a set: P2 pauses and holds L+R+A+Y+START (P+'s salty
+    runback). The same match starts again for all three (the user's, 2026-10-13), not only P2
+    leaving as after a plain quit: the session sets it up on every machine and the room's game
+    goes on in it. The runback's match is the same game on all three (no checksum differs)."""
+    import secrets
+    from ppharness.client import PadInput
+    test = "room-runback-three"
+    users = [backend.create_user(n, f"RT{'ABC'[k]}H", email=f"roomrb{k}-{secrets.token_hex(4)}@example.test")
+             for k, n in enumerate(["rra", "rrb", "rrc"])]
+    gs = [_boot(dolphin, f"roomrb3-{x}", backend, u, gpu_backend, test, "gameplay", artifacts=ART)
+          for x, u in zip("abc", users)]
+    a = gs[0]
+    _all(*[g.to_main_menu for g in gs])
+    _all(*[g.to_online_page for g in gs])
+    code = create_room(a)
+    pick(a)
+    hand_to(a, PANEL_X[2], -10.0)
+    a.steps("tap A 8", "wait 30")
+    until_view(a, lambda v: v["slots"][2]["bits"] & ppom.SLOT_OPEN, "slot 3 open")
+    hand_to(a, -23.0, 10.5)
+    _all(*[lambda g=g: to_join_room(g) for g in gs[1:]])
+    for k, g in enumerate(gs[1:], 1):
+        pick(g, right=2 * k)
+    for g in gs:
+        B.write_rules(g.c, stocks=4, minutes=8, items_off=True)
+        ppom.allow_test_rules(g.c)
+    for k, g in enumerate(gs[1:], 1):
+        type_room_code(g, code)
+        until_view(g, lambda v: v["flags"] & ppom.RF_IN, f"player {k + 1} in the room")
+    until_view(a, lambda v: all(v["slots"][p]["bits"] & ppom.SLOT_TAKEN for p in range(3)), "all players")
+    for g in gs:
+        g.steps("wait 60")
+    for g in gs:
+        g.steps("tap START 8", "wait 10")
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] in ("running", "error", "ended") for g in gs),
+                    240, "the room's game running on all")
+    st = [online_set.gstatus(g.c) for g in gs]
+    assert all(s["phase"] == "running" for s in st), [(s["phase"], s.get("error")) for s in st]
+    first = st[0]["match_index"]
+    setup = B.read_match_setup(a.c.read_mem)
+    time.sleep(4)
+
+    walk = [PadInput(main=(40, 128), hold=7), PadInput(main=(216, 128), hold=7)]
+    q = gs[1]
+    for g in (gs[0], gs[2]):
+        g.c.pad_script(0, walk * 60)
+    q.steps("hold START 90", "wait 20")
+    assert online_set.gstatus(q.c)["phase"] == "running"
+    # Held past the session's end (the game stays paused until then), not into the next match.
+    q.steps("hold L+R+A+Y+START 90")
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" and
+                                online_set.gstatus(g.c)["match_index"] == first + 1 for g in gs),
+                    90, "the same match again on all three")
+    for g in gs:
+        g.c.pad_script(0, walk * 60)
+    time.sleep(6)
+    for g in gs:
+        g.shot("01-runback-for-everyone")
+        sc = g.debug_scratch()[10]
+        assert sc & 0x1000000 and sc & 0xFF == 0x1B, (g.name, hex(sc))   # marked a runback, straight in
+        assert not sc & 0x400000, (g.name, "taken as a player's own quit", hex(sc))
+        assert B.read_match_setup(g.c.read_mem) == setup, (g.name, "a different match")
+        log = g.inst.log.read()
+        assert log.count("the last game again (runback)") == 1, g.name
+        assert "game run back: the session plays it again" in log, g.name
+        assert online_set.session(g.c)["quit_ports"] == 0, g.name
+        s = online_set.gstatus(g.c)
+        assert s["phase"] == "running" and not any(p["left"] for p in s["peers"]), (g.name, s["peers"])
+    ends = [online_set.gstatus(g.c) for g in gs]
+    limit = min(s["current_frame"] for s in ends) - online_set.CONFIRM_MARGIN
+    cks = [{r[0]: r[1] for r in g.c.call("gprb_checksums", since=0)["rows"] if r[0] <= limit} for g in gs]
+    common = sorted(set(cks[0]).intersection(*cks[1:]))
+    bad = [f for f in common if len({ck[f] for ck in cks}) != 1]
+    print(f"runback match: frames {[s['current_frame'] for s in ends]}, checksums compared {len(common)}, "
+          f"mismatches {len(bad)}")
+    assert common and not bad, (len(common), bad[:5])

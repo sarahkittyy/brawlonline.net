@@ -513,7 +513,8 @@ namespace PPOM {
         // quitBy = the quitter's in-game port + 1 (0 none), quitRunback = 1 when L+R+Y were held
         // with it (P+'s salty runback, L+R+A+Y+START). Dolphin decides what the quit means: Ranked
         // a lost game, a room's set a game that did not happen (a runback: played again on the
-        // same stage), Unranked and Direct a runback restarts the same match.
+        // same stage), Unranked, Direct and a room's game without a set (3-4 players too) a runback
+        // restarts the same match.
         u8 quitBy;        // 0x21D
         u8 quitRunback;   // 0x21E
         // Dolphin: 1 = the next game plays a desynced one again (Ranked, a room's set; still v8,

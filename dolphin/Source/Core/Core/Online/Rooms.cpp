@@ -1102,6 +1102,24 @@ void SuperviseGame(Clock::time_point now)
     }
     return;
   }
+  if (match_over && scene_left && !g.set && lobby.active && lobby.setup_ready)
+  {
+    // A 1v1's salty runback (L+R+Y with the quit) outside a set: the session has set its next
+    // game up as the same match on every machine, and the game goes from the match straight into
+    // it (docs/game-code.md §11). The session goes on, watched like the first game; ending it
+    // here left both games playing the runback alone, each local pad driving P1 (prod
+    // 2026-10-13). Nothing else sets a next game up in a room game without a set.
+    std::lock_guard lk(s_mutex);
+    if (s.rg.active && s.rg.match_id == g.match_id)
+    {
+      ++s.rg.games;
+      s.rg.saw_match = false;
+      s.rg.match_ended.reset();
+      s.rg.pickers.reset();
+      Log(fmt::format("game run back: the session plays it again ({} played)", s.rg.games));
+    }
+    return;
+  }
   if (match_over && scene_left)
   {
     {

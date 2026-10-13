@@ -444,7 +444,7 @@ namespace OnlineMatch {
         g_onlineMatchGame = 0;
         s_discFrames = -1;
         // P+'s salty runback (pponline_pauseResult): where it restarts (Unranked, Direct, a room's
-        // 1v1 or set), Dolphin has set the next game up as this one again (same players, stage
+        // game, 3-4 players too), Dolphin has set the next game up as this one again (same players, stage
         // and alternate stage) when the session ended, the same on every machine: straight into
         // it, as P+'s own runback, without the CSS. Ranked counts it as a lost game and sets
         // nothing up: the CSS as after any quit.
@@ -802,12 +802,20 @@ namespace OnlineMatch {
                 return PAUSE_RESUME;
             }
             if (result != 3 && result != 4) return result;
-            if (sidesLeftWithout(bit) <= 1) se.quitStays |= bit;
-            se.quitPorts |= bit;
-            s_matchQuitPorts = se.quitPorts;
-            playQuitSound(result);
-            dbg.scratch[10] |= 0x400000;
-            return PAUSE_RESUME;
+            // The salty runback (L+R+Y held) outside a set restarts the match for everyone (the
+            // user's, 2026-10-13): it takes the quit below, which ends the match for all and is
+            // marked as a runback. Only while every player is still in: with one gone, the same
+            // match cannot start again, and the runback is this player's own quit.
+            bool allIn = se.quitPorts == 0;
+            for (int p = 0; p < PPOM::SESSION_PLAYERS; p++) allIn = allIn && !(se.players[p].present && se.gone[p]);
+            if (!allIn || (pauserHeld(op) & RUNBACK_BUTTONS) != RUNBACK_BUTTONS) {
+                if (sidesLeftWithout(bit) <= 1) se.quitStays |= bit;
+                se.quitPorts |= bit;
+                s_matchQuitPorts = se.quitPorts;
+                playQuitSound(result);
+                dbg.scratch[10] |= 0x400000;
+                return PAUSE_RESUME;
+            }
         }
         if (s_quitOp != op) {
             if (result != 3 && result != 4) return result;
