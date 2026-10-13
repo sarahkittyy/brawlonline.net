@@ -23,7 +23,8 @@
 
 namespace Gprb::PeerData
 {
-// Limits for control messages ('C' packets): the session's own messages are well under 4 KiB.
+// Limits for control messages ('C' packets, or 'F' pieces put back together): the session's own
+// messages are under 8 KiB (the host's state at the barrier, with the task order, about 5.5 KiB).
 constexpr size_t MAX_CONTROL_SIZE = 16 * 1024;
 constexpr int MAX_JSON_DEPTH = 8;
 constexpr size_t MAX_NAME_LEN = 64;
@@ -31,6 +32,52 @@ constexpr size_t MAX_NAME_LEN = 64;
 constexpr size_t MAX_TASK_LISTS = 128;
 constexpr size_t MAX_TASKS_PER_LIST = 4096;
 constexpr size_t MAX_TASK_NAME_LEN = 64;
+// Control messages on the wire. A UDP datagram larger than the path's MTU (1472 bytes of payload
+// on a 1500-byte MTU) travels as IP fragments, and some routers, CGNATs and ISPs drop fragments:
+// the host's state message at the barrier (its sync block and task order, about 5.5 KB) never reached
+// such a joiner, which then dropped the host after 7.2 s of silence (prod 2026-10-13). So a
+// control message whose 'C' packet would be larger than MAX_DATAGRAM goes as 'F' packets:
+// 'F', the message's id (u32, little-endian), the piece's index and the number of pieces (u8
+// each), then the piece. The receiver puts the pieces back together (ControlReassembler); a lost
+// piece loses that copy of the message, as a lost 'C' packet does (state is resent every 50 ms).
+constexpr size_t MAX_DATAGRAM = 1200;
+constexpr size_t FRAGMENT_HEADER = 1 + 4 + 1 + 1;
+constexpr size_t FRAGMENT_PIECE = MAX_DATAGRAM - FRAGMENT_HEADER;
+constexpr size_t MAX_FRAGMENTS = (MAX_CONTROL_SIZE + FRAGMENT_PIECE - 1) / FRAGMENT_PIECE;
+// Sources (address and port) with a message in progress; the least recently heard is forgotten.
+constexpr size_t MAX_REASSEMBLY_SOURCES = 8;
+
+// The datagrams for one control message `text` (at most MAX_CONTROL_SIZE): one 'C' packet when
+// it fits in MAX_DATAGRAM, else its 'F' packets with message id `id`.
+std::vector<std::vector<u8>> ControlDatagrams(std::string_view text, u32 id);
+
+// Puts 'F' packets back together, per source. Everything in a piece is checked: a malformed
+// piece is dropped, a piece of another message (id or count) than the one in progress from that
+// source starts over, and memory is bounded (MAX_REASSEMBLY_SOURCES messages of at most
+// MAX_CONTROL_SIZE).
+class ControlReassembler
+{
+public:
+  // One 'F' packet (`data` starts with the 'F') from `source`: the whole message once this piece
+  // completes it, else nullopt.
+  std::optional<std::string> Add(u64 source, const u8* data, size_t size);
+  void Clear() { m_partials.clear(); }
+  size_t InProgress() const { return m_partials.size(); }
+
+private:
+  struct Partial
+  {
+    u64 source = 0;
+    u32 id = 0;
+    u8 count = 0;
+    u32 have = 0;  // bit i: piece i arrived
+    u64 touched = 0;
+    std::array<std::string, MAX_FRAGMENTS> pieces;
+  };
+  std::vector<Partial> m_partials;
+  u64 m_clock = 0;
+};
+
 // Frames GekkoNet may queue on the CSS before a match polls them.
 constexpr size_t MAX_QUEUED_GEKKO_PACKETS = 1024;
 // A pong's round trip larger than this is not a measurement.

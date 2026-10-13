@@ -166,6 +166,21 @@ def test_bandwidth_cap_serializes_and_drops():
     assert max((d.deliveries[0] - now) for now, d in sent) <= 0.100 + 0.008 + 1e-9
 
 
+def test_max_datagram_drops_larger_datagrams_only():
+    # A path that drops IP fragments: a 1500-byte MTU carries 1472 bytes of UDP payload unfragmented.
+    prof = LinkProfile(max_datagram=1472)
+    assert all(d.dropped == "fragment" for _, d in run(prof, n=100, size=1473))
+    assert all(d.dropped is None for _, d in run(prof, n=100, size=1472))
+    # The packet's uniforms are drawn either way, so the other packets' fates do not change.
+    m1, m2 = LinkModel(random.Random("f")), LinkModel(random.Random("f"))
+    lossy = prof.replace(loss=0.3)
+    for i in range(1000):
+        a = m1.decide(lossy, i / 120, 2000 if i % 3 == 0 else 100)
+        b = m2.decide(lossy.replace(max_datagram=None), i / 120, 2000 if i % 3 == 0 else 100)
+        if i % 3:
+            assert a == b
+
+
 def test_spike_window():
     sp = Spike(at=10.0, duration=0.3, loss=0.5, extra_latency_ms=100)
     prof = LinkProfile(latency_ms=5, order="none")

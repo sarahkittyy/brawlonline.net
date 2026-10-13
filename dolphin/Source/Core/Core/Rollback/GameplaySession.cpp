@@ -267,6 +267,12 @@ struct State
   bool ported = false;
   // Packets from an address that is not a peer's, dropped (status: foreign_packets).
   u64 foreign_packets = 0;
+  // Control messages too large for one datagram go as 'F' pieces (PeerData::ControlDatagrams):
+  // the next message id (random at the session's start, so a peer's restarted session cannot
+  // mix its pieces with an older message's), and the others' pieces (network thread only).
+  std::atomic<u32> control_id{0};
+  PeerData::ControlReassembler reassembler;
+  bool split_logged = false;  // our state message went as 'F' pieces (logged once)
   // The session ends (fewer than two players left): handled on the CPU thread for a match.
   bool peer_left = false;
   std::string peer_left_reason;
@@ -1139,6 +1145,22 @@ void SendToAll(const std::vector<u8>& data)
   });
 }
 
+// A control message to every other player, `copies` times: one 'C' packet, or 'F' pieces when
+// one datagram would be fragmented on the way (PeerData::ControlDatagrams). Returns the number
+// of datagrams one copy took.
+size_t SendControlToAll(std::string_view text, int copies = 1)
+{
+  size_t sent = 0;
+  for (int i = 0; i < copies; ++i)
+  {
+    const auto datagrams = PeerData::ControlDatagrams(text, s.control_id.fetch_add(1));
+    for (const auto& d : datagrams)
+      SendToAll(d);
+    sent = datagrams.size();
+  }
+  return sent;
+}
+
 // Tells the other players that this one has left the session (under s.mutex), with why when the
 // session gave up (they log it). Slippi's graceful ENet disconnect: the others go on without it
 // (3-4 players) or end the session at once, instead of waiting at a barrier for their timeout or
@@ -1154,11 +1176,7 @@ void SendLeave(std::string_view why)
   if (!why.empty())
     o["why"] = picojson::value(PeerData::LeaveReason(why));
   const std::string text = picojson::value(o).serialize();
-  std::vector<u8> pkt(text.size() + 1);
-  pkt[0] = 'C';
-  std::memcpy(pkt.data() + 1, text.data(), text.size());
-  for (int i = 0; i < 3; ++i)
-    SendToAll(pkt);
+  SendControlToAll(text, 3);
   s.leave_sent = true;
 }
 
@@ -1181,11 +1199,7 @@ void SendDesync()
   if (!s.socket)
     return;
   const std::string text = fmt::format(R"({{"t":"desync","v":1,"m":{}}})", s.match_index);
-  std::vector<u8> pkt(text.size() + 1);
-  pkt[0] = 'C';
-  std::memcpy(pkt.data() + 1, text.data(), text.size());
-  for (int i = 0; i < 3; ++i)
-    SendToAll(pkt);
+  SendControlToAll(text, 3);
 }
 
 void GekkoSend(GekkoNetAddress* addr, const char* data, int length)
@@ -1722,10 +1736,13 @@ void SendState()
                   text.size(), PeerData::MAX_CONTROL_SIZE,
                   tasks != o.end() ? tasks->second.serialize().size() : 0);
   }
-  std::vector<u8> pkt(text.size() + 1);
-  pkt[0] = 'C';
-  std::memcpy(pkt.data() + 1, text.data(), text.size());
-  SendToAll(pkt);
+  const size_t datagrams = SendControlToAll(text);
+  if (datagrams > 1 && !s.split_logged)
+  {
+    s.split_logged = true;
+    INFO_LOG_FMT(BRAWLBACK, "gprb: our state message is {} bytes: sent as {} datagrams of at most {}",
+                 text.size(), datagrams, PeerData::MAX_DATAGRAM);
+  }
 }
 
 // The port a control packet from `from:from_port` belongs to (under s.mutex), or -1. Once a
@@ -2029,7 +2046,7 @@ void NetThread()
           slot = SlotOf(*from, from_port);
           if (slot >= 0 && s.peers[slot].left)
             slot = -1;
-          if (slot < 0 && buf[0] != 'C')
+          if (slot < 0 && buf[0] != 'C' && buf[0] != 'F')
             ++s.foreign_packets;
         }
         const bool known = slot >= 0;
@@ -2059,6 +2076,14 @@ void NetThread()
                             received - 1, slot + 1, PeerData::MAX_CONTROL_SIZE);
             }
           }
+        }
+        else if (buf[0] == 'F')
+        {
+          // A piece of a control message (PeerData::ControlDatagrams); like a 'C' packet it may
+          // come from an address that is not a peer's yet (HandleControl decides).
+          const u64 source = (static_cast<u64>(from->toInteger()) << 16) | from_port;
+          if (auto text = s.reassembler.Add(source, buf.data(), received))
+            HandleControl(*text, *from, from_port);
         }
         else if (buf[0] == 'P' && received == 9 && known)
         {
@@ -4769,6 +4794,9 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.stage_pool.clear();
   s.await_scene_exit = false;
   s.foreign_packets = 0;
+  s.control_id = std::random_device{}();
+  s.reassembler.Clear();
+  s.split_logged = false;
   s.peer_left = false;
   s.peer_left_reason.clear();
   s.leave_sent = false;
