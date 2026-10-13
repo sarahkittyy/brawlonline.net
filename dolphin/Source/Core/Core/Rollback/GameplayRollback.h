@@ -60,6 +60,8 @@ constexpr u32 PAD_SYS_THREAD_OFF = 0xB54;        // gfPadSystem+0xB54: the threa
 constexpr u32 OS_ALARM_QUEUE = 0x805A0678;       // {head, tail} of the OS alarm queue (r13-0x3DA8)
 constexpr u32 SCM_OPERATOR_RULE_MELEE = 0x54;
 constexpr u32 OPR_IS_GAME_SET = 0x74;
+constexpr u32 OPR_REMAINING_FRAMES = 0xE0;  // m_remainingFrameTime: the match timer, in frames
+constexpr u32 MM_TIME_LIMIT = 0x20;         // gmGlobalModeMelee: the time limit (s32 frames, 0 none)
 // scMelee's stOperatorInfoMelee (its gfTask name at +0) and its flags byte: 0x80 running, 0x40 stop
 // requested, 0x30 the pause screen's L+R+A+START quit (sora_melee text+0x256F80), 0x20 its other
 // quit (+0x256FB0).
@@ -115,6 +117,9 @@ u32 FightersCrc(const FighterFields& f);
 
 // scMelee's stOperatorRuleMelee "is game set" byte (0 if not in a match).
 bool IsGameSet(const Guest& g);
+// The match timer in frames (stOperatorRuleMelee m_remainingFrameTime; one that ran out reads 1),
+// 0 when the match has no time limit (gmGlobalModeMelee's) or none is running.
+u32 RemainingFrames(const Guest& g);
 // A pause-screen quit is chosen (online the plugin marks it and keeps the game paused until the
 // session has ended: docs/game-code.md, the pause-screen quit).
 bool IsQuitRequested(const Guest& g);

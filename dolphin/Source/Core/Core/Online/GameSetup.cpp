@@ -28,9 +28,11 @@ constexpr size_t MAX_ACTIONS = 64;
 constexpr int GRACE_SECONDS = 3;
 constexpr int WAIT_TIMEOUT_SECONDS = 15;
 constexpr int CHAR_SECONDS = 45;
-// Timer ids of the character steps (after the stage steps' indices).
+// Timer ids of the character steps (after the stage steps' indices), and of the ready-up before a
+// desynced game starts again.
 constexpr int TIMER_WINNER_CHAR = 100;
 constexpr int TIMER_LOSER_CHAR = 101;
+constexpr int TIMER_RESUME = 102;
 
 // Lock order: never call into Gprb::Session while holding s_mutex (the session calls the stage
 // decider with its own lock held).
@@ -67,6 +69,10 @@ int s_timer_step = -1;
 Clock::time_point s_timer_start;
 u64 s_auto_actions = 0;
 bool s_opponent_stalled = false;
+// A desynced game starts again (OnGameRestarting): the session game that plays it, 0 none, and
+// its stage.
+u32 s_resume_game = 0;
+u16 s_resume_stage = NO_STAGE;
 View s_last_view;  // the last Current() (harness)
 std::mt19937 s_rng{std::random_device{}()};
 
@@ -478,6 +484,12 @@ Gprb::Session::StageDecision Decide(u32 game)
     d.wait = true;
     return d;
   }
+  if (s_resume_game == game)
+  {
+    // A desynced game played again: its stage.
+    d.stage = s_resume_stage;
+    return d;
+  }
   const Steps e = Evaluate(game, extras);
   if (e.step_idx >= 0 || e.stage == NO_STAGE)
   {
@@ -622,6 +634,8 @@ void Begin(int local_port, Format format)
     s_timer_step = -1;
     s_auto_actions = 0;
     s_opponent_stalled = false;
+    s_resume_game = 0;
+    s_resume_stage = NO_STAGE;
   }
   Gprb::Session::SetLocalExtra({});
   Gprb::Session::SetStageDecider(Decide);
@@ -665,6 +679,7 @@ void OnGameResult(u8 winner, u16 stage)
     ++s_set.wins[winner];
     s_set.last_win_stage[winner] = stage;
   }
+  s_resume_game = 0;
 }
 
 void OnGameNotCounted()
@@ -674,6 +689,21 @@ void OnGameNotCounted()
     return;
   --s_first_game;  // u32: SetGameOf's s_first_game - 1 + session_game stays right modulo 2^32
   s_reported.reset();
+  s_resume_game = 0;  // a quit of a restarted game: the set game from its first step
+}
+
+void OnGameRestarting(u32 session_game, u16 stage)
+{
+  std::lock_guard lk(s_mutex);
+  if (!s_active)
+    return;
+  --s_first_game;  // the same set game again (as OnGameNotCounted)
+  s_reported.reset();
+  s_resume_game = session_game + 1;
+  s_resume_stage = stage;
+  NOTICE_LOG_FMT(NETPLAY, "GameSetup: set game {} desynced: it starts again (session game {}) on "
+                          "stage {:#x}, once every player is ready",
+                 s_first_game - 1 + s_resume_game, s_resume_game, stage);
 }
 
 bool Act(u8 kind)
@@ -741,6 +771,51 @@ View Current()
       v.type = StepType::Done;
       v.may_lock = false;
       v.text = "Set complete";
+      s_last_view = v;
+      return v;
+    }
+    if (s_resume_game == game)
+    {
+      // A desynced game starts again (the user's, 2026-10-13): no steps, the characters stay;
+      // every player readies up with START within RESUME_SECONDS, else this machine readies its
+      // player itself (time_up), as Slippi's character step takes the character on the CSS.
+      const auto locked = [&](u8 port) {
+        const auto& l = locks[port];
+        return l && l->ready && l->game == game && l->char_kind != 0xFF;
+      };
+      const bool mine = !locked(static_cast<u8>(s_local_port));
+      const int elapsed = Elapsed(game, TIMER_RESUME);
+      v.type = StepType::Resume;
+      v.stage = s_resume_stage;
+      v.my_turn = mine;
+      v.may_lock = mine;
+      v.seconds = TimerShown(RESUME_SECONDS, elapsed, true);
+      v.time_up = mine && elapsed >= RESUME_SECONDS;
+      if (mine)
+      {
+        v.text = fmt::format("Desync: press START ({})", v.seconds);
+      }
+      else
+      {
+        // Who is not ready yet, by name when known ("alice", "alice & bo"), else "opponent".
+        std::string waiting;
+        int unnamed = 0;
+        for (u8 side = 0; side < 2; ++side)
+        {
+          for (const u8 p : s_members[side])
+          {
+            if (p >= MAX_PORTS || p == s_local_port || locked(p))
+              continue;
+            if (s_names[p].empty())
+              ++unnamed;
+            else
+              waiting += (waiting.empty() ? "" : " & ") + s_names[p];
+          }
+        }
+        if (waiting.empty())
+          waiting = unnamed > 1 ? "opponents" : "opponent";
+        v.text = fmt::format("Waiting on {} ({})", waiting, v.seconds);
+      }
       s_last_view = v;
       return v;
     }

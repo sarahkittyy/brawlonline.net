@@ -9,16 +9,18 @@ from __future__ import annotations
 
 import math
 import struct
+import threading
 from typing import Any, Callable
 
 import pytest
 
 from ppharness import brawl as B
+from ppharness import flows as F
 from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
 
 from test_online import _wait
-from test_online_game import Game, _boot, backend  # noqa: F401  (the backend fixture)
+from test_online_game import Game, _boot, _p1_damage_addr, backend  # noqa: F401  (the backend fixture)
 from test_room_rules import session_rules
 from test_rooms_game import (ART, CSS, _all, launcher_answer, pick, room_view, to_join_room, type_room_code,
                              until_view, write_create)
@@ -278,6 +280,82 @@ def test_room_set_quit_and_runback(backend: OnlineBackend, dolphin: Callable[...
           "game 2 counted by the server")
     for rep in games:
         assert rep["checksums"]["mismatches"] == 0, rep
+
+
+def _fighters(g: Game) -> dict[int, tuple[int, float]]:
+    """Each player's (stocks, damage) in g's running 1v1, by in-game port."""
+    return {p.port: (p.stocks, round(p.damage, 3)) for p in B.read_players(g.c.read_mem, max_entries=2)
+            if p.stocks is not None and p.damage is not None}
+
+
+@pytest.mark.slow
+def test_room_set_desync_restarts_the_game(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                           gpu_backend: str) -> None:
+    """A desync in a room's set plays the set game again from the state both machines agreed on
+    (the user's, 2026-10-13; docs/game-code.md §11, desync recovery). Game 1 struck and started;
+    both fighters take damage; then A's P1 damage changes on A only. Both show DESYNC DETECTED,
+    go back to the room CSS ("Desync: press START"), the characters stay, and once both pressed
+    START the same game starts again on the same stage with the damage both had agreed on. The
+    server's set stays at game 1 meanwhile, and the restarted game counts as game 1.
+    Screenshots: run/artifacts/game-code/rooms/sets/set-desync/."""
+    a, b, code = bo3_room(backend, dolphin, gpu_backend, "set-desync")
+    players = [a, b]
+    a.steps("tap START 8", "wait 40")
+    b.steps("tap START 8", "wait 10")
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "game 1: both on the stage select")
+    play_steps(players, 1)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
+                    "game 1 running on both")
+    setup1 = B.read_match_setup(a.c.read_mem)
+
+    def drive(g: Game, mode: str, frames: int) -> None:
+        port = online_set.local(g.c)["local_port"]
+        F.fight([F.Seat(g.c, port, 0, g.name)], frames, mode=mode, seed=f"dsr-{g.name}")
+    th = [threading.Thread(target=drive, args=(g, "chase", 600)) for g in players]
+    for t in th:
+        t.start()
+    for t in th:
+        t.join(timeout=300)
+    a.steps("wait 240")
+    before = [_fighters(g) for g in players]
+    print("before the desync", before, flush=True)
+    assert before[0] == before[1] and all(st == 1 for st, _ in before[0].values()), before
+    assert any(d > 0 for _, d in before[0].values()), ("no damage taken", before)
+
+    for _ in range(6):
+        a.c.write_mem(_p1_damage_addr(a), struct.pack(">f", 77.0))
+        a.steps("wait 5")
+    online_set.wait(lambda: all(g.debug_scratch()[10] & 0x100000 for g in players), 30, "DESYNC DETECTED on both")
+    online_set.wait(lambda: all(online_set.scene(g.c) == CSS for g in players), 60, "both back on the CSS")
+    for g in players:
+        v = until_setup(g, lambda v: v["active"] and v["type"] == 5, "the ready-up after the desync")
+        assert v["may_lock"] and v["text"].startswith("Desync: press START ("), v
+        g.steps("wait 30")
+        g.shot("01-ready-up")
+    st = rooms(a)["set"]
+    assert st["game"] == 1 and st["score"] == [0, 0], st
+    b.steps("tap START 8", "wait 60")
+    v = setup_view(b)
+    assert v["type"] == 5 and v["text"].startswith(f"Waiting on {a.name} ("), v
+    assert all(online_set.gstatus(g.c)["phase"] == "connected" for g in players)
+    a.steps("tap START 8")
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 60,
+                    "the restarted game running on both")
+    rs = [online_set.gstatus(g.c)["restore"] for g in players]
+    assert rs[0] == rs[1], rs
+    for port, (stocks, damage) in before[0].items():
+        assert rs[0]["stocks"][port] == stocks and abs(rs[0]["damage"][port] - damage) < 0.01, (port, rs[0], before)
+    setup2 = B.read_match_setup(a.c.read_mem)
+    assert setup2.stage_kind == setup1.stage_kind and setup2.time_limit_frames == rs[0]["frames_left"], (setup1, setup2)
+    a.steps("wait 120")
+    for g in players:
+        assert _fighters(g) == before[0], (g.name, _fighters(g), before[0])
+        g.shot("02-restarted")
+    rep = online_set.play_game(players, 2)
+    assert rep["checksums"]["mismatches"] == 0 and rep["end"] == ["game set", "game set"], rep
+    st = _wait(lambda: (lambda st: st if st and sum(st["score"]) == 1 else None)(rooms(a).get("set")), 30,
+               "the restarted game counted by the server as game 1")
+    assert st["game"] == 2, st
 
 
 @pytest.mark.slow

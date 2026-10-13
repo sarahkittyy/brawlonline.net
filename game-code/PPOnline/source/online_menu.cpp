@@ -383,8 +383,11 @@ namespace OnlineMenu {
     // select the CSS has no coin placed yet, the lock-in with the pick found no character, the
     // pick was dropped and the stage select opened again, over and over).
     static bool roomLockedForNext();
+    static bool resumeStep();
     static int lockChar()
     {
+        // A desynced game played again: the character of that game, whatever the CSS shows.
+        if (resumeStep() && s.lastCss >= 0) return plainCss(s.lastCss);
         int c = selectedChar();
         if (c >= 0) return plainCss(c);
         return s.phase == PH_CONNECTED || (roomCss() && roomLockedForNext()) ? plainCss(s.lastCss) : -1;
@@ -939,8 +942,9 @@ namespace OnlineMenu {
             setStatus(buf, false);
             return;
         case PH_CONNECTED:
-            // Ranked's game setup has its own line (whose turn it is, the opponent's character).
-            if (rankedStep() && s.step.active && s.stepText[0] && !lockedForNext()) {
+            // Ranked's game setup has its own line (whose turn it is, the opponent's character;
+            // after a desync, also once locked in: who is not ready yet and the seconds left).
+            if (rankedStep() && s.step.active && s.stepText[0] && (!lockedForNext() || resumeStep())) {
                 setStatus(s.stepText, false);
                 return;
             }
@@ -1956,6 +1960,14 @@ namespace OnlineMenu {
         return stepSession() && s.step.active && s.step.type == PPOM::STEP_CHAR && !s.step.myTurn;
     }
 
+    // A desynced game starts again (Ranked, a room's set; GameSetup's Resume step): the characters
+    // stay as they were (the token cannot be picked up), START readies up, and when the step's
+    // time is up the game readies the player itself.
+    static bool resumeStep()
+    {
+        return stepSession() && s.step.active && s.step.type == PPOM::STEP_RESUME;
+    }
+
     static bool roomLocked()
     {
         // Ready, or the room is starting (the lock-in must not change then), or a game is armed.
@@ -2115,7 +2127,8 @@ namespace OnlineMenu {
     static void updateRoomStatus()
     {
         const PPOM::Session& se = PPOM::g_block.session;
-        if (stepSession() && s.step.active && s.stepText[0] && !roomLockedForNext() && !s.roomError) {
+        if (stepSession() && s.step.active && s.stepText[0] && (!roomLockedForNext() || resumeStep()) &&
+            !s.roomError) {
             setStatus(s.stepText, false);   // the set's step: whose turn, the seconds left
             return;
         }
@@ -2837,7 +2850,7 @@ namespace OnlineMenu {
 
         bool onCss = g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0;
         if (!onCss) s.stepFloor = s.stepSeq;   // only a step asked for on the CSS counts there
-        g_onlineCssLock = (onCss && (lockedIn() || waitsForCharTurn())) ? 1 : 0;
+        g_onlineCssLock = (onCss && (lockedIn() || waitsForCharTurn() || resumeStep())) ? 1 : 0;
         if (g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelStage") == 0) {
             if (s.quitNoticeFrames) --s.quitNoticeFrames;   // shown with the step (rankedText)
             // Direct's loser picks the stage on P+'s stage select. The pick is the stage and its
@@ -2947,7 +2960,7 @@ namespace OnlineMenu {
                 tickConnected(pressed);
             }
         }
-        g_onlineCssLock = (lockedIn() || waitsForCharTurn()) ? 1 : 0;
+        g_onlineCssLock = (lockedIn() || waitsForCharTurn() || resumeStep()) ? 1 : 0;
         PPOM::g_block.debug.scratch[1] = (u32)g_onlineCssLock | ((u32)s.phase << 4);   // harness/tests
         if (s.quitNoticeFrames) --s.quitNoticeFrames;
         updateStatus();

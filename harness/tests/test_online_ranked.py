@@ -27,16 +27,21 @@ from __future__ import annotations
 import calendar
 import datetime
 import re
+import struct
+import threading
+import time
 from typing import Any, Callable, Iterator
 
 import pytest
 
 from ppharness import brawl as B
+from ppharness import flows as F
 from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
 
 from test_online import _make_backend, _wait
-from test_online_game import Game, _boot, _both, _find_logged, _peer_shown, online_set, ppom
+from test_online_game import (Game, _boot, _both, _find_logged, _p1_damage_addr, _peer_shown, online_set,
+                              ppom)
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 
@@ -354,6 +359,141 @@ def test_ranked_quit_loses_the_game(backend: OnlineBackend, dolphin: Callable[..
     a.shot("05-g2-running")
     log = backend.log_text("accounts")
     assert log.count(" game reported") == 2, log[-3000:]
+
+
+def _fighters(g: Game) -> dict[int, tuple[int, float]]:
+    """Each player's (stocks, damage) in g's running 1v1, by in-game port."""
+    return {p.port: (p.stocks, round(p.damage, 3)) for p in B.read_players(g.c.read_mem, max_entries=2)
+            if p.stocks is not None and p.damage is not None}
+
+
+def _drive(seats: list[tuple[Game, str]], frames: int, stop: Callable[[], bool] | None = None) -> None:
+    """Each game drives its own player (local pad 0) with flows.fight's `mode` for `frames`."""
+    def run(g: Game, mode: str) -> None:
+        port = _ranked(g)["local_port"]
+        F.fight([F.Seat(g.c, port, 0, g.name)], frames, mode=mode, seed=f"dsr-{g.name}", stop=stop)
+    th = [threading.Thread(target=run, args=s) for s in seats]
+    for t in th:
+        t.start()
+    for t in th:
+        t.join(timeout=600)
+
+
+@pytest.mark.slow
+def test_ranked_desync_restarts_the_game(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                         gpu_backend: str) -> None:
+    """A desync in Ranked plays the game again from the state both machines agreed on (the user's,
+    2026-10-13; docs/game-code.md, desync recovery). Game 1 on Smashville with 3 stocks: both
+    fighters take damage and B's player loses a stock; then A's P1 damage is changed on A only.
+    Both games show DESYNC DETECTED and go back to the CSS, where the characters stay locked and
+    each player readies up: A with START ("Waiting on <B>"), B by the 45 s timer running out. The
+    same game then starts again, as a fresh one (the countdown, the spawn points), with every
+    player's stocks and damage of the last frame whose checksums both compared equal (A's damage
+    from before the write) and the time left then. It still counts as the set's game 1: B loses
+    its last stocks, and both report game 1 to the server, which counts it.
+    Screenshots: run/artifacts/game-bridge/ranked-desync/."""
+    test = "ranked-desync"
+    ua, ub = backend.create_user("dora", "DORA"), backend.create_user("dsyn", "DSYN")
+    a = _boot(dolphin, "rkd-a", backend, ua, gpu_backend, test, "gameplay")
+    b = _boot(dolphin, "rkd-b", backend, ub, gpu_backend, test, "gameplay")
+    players = [a, b]
+    _both(a.to_main_menu, b.to_main_menu)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("ranked"), lambda: b.to_css("ranked"))
+    for g in players:
+        B.write_rules(g.c, stocks=3, minutes=4, items_off=True)
+        ppom.allow_test_rules(g.c)
+    _search_ranked(a)
+    _search_ranked(b)
+    _peer_shown(a, ub)
+    _peer_shown(b, ua)
+    _paired(a, b)
+    host = a if _ranked(a)["local_port"] == 0 else b
+    join = b if host is a else a
+    port_a, port_b = _ranked(a)["local_port"], _ranked(b)["local_port"]
+    _strike_to(host, join, SMASHVILLE)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
+                    "game 1 running on both")
+    setup1 = B.read_match_setup(a.c.read_mem)
+    assert setup1.stage_kind == SMASHVILLE and setup1.time_limit_frames == 4 * 3600, setup1
+
+    # Both fight (damage on both), then B's player walks off the stage until it has lost a stock.
+    _drive([(a, "chase"), (b, "chase")], 900)
+    stocks_b = _fighters(b)[port_b][0]
+    _drive([(a, "idle"), (b, "selfdestruct")], 1200, stop=lambda: _fighters(b)[port_b][0] < stocks_b)
+    a.steps("wait 300")   # B's player respawns and lands; nobody moves
+    before = [_fighters(g) for g in players]
+    print("before the desync", before, flush=True)
+    assert before[0] == before[1], before
+    assert before[0][port_b][0] == 2 and before[0][port_a][0] == 3, before
+    assert any(d > 0 for _, d in before[0].values()), ("no damage taken", before)
+    for g in players:
+        g.shot("01-before-desync")
+
+    # A's P1 takes 77% on A only (a few times: a rollback may load a state from before a write).
+    for _ in range(6):
+        a.c.write_mem(_p1_damage_addr(a), struct.pack(">f", 77.0))
+        a.steps("wait 5")
+    online_set.wait(lambda: all(g.debug_scratch()[10] & 0x100000 for g in players), 30,
+                    "DESYNC DETECTED on both")
+    a.shot("02-desync-detected")
+    _both_on(players, online_set.CSS, "both back on the CSS")
+    back = time.monotonic()
+    for g in players:
+        st = online_set.gstatus(g.c)
+        assert st["end_reason"] == "desync" and st["phase"] == "connected", (g.name, st["end_reason"], st["phase"])
+        v = _wait_view(g, lambda v: v["type"] == 5, "the ready-up after the desync")
+        assert v["may_lock"] and v["text"].startswith("Desync: press START ("), v
+        # Not counted: no game was won.
+        assert _ranked(g)["wins"] == [0, 0], _ranked(g)
+    a.steps("wait 60")
+    for g in players:
+        g.shot("03-css-ready-up")
+    # The characters stay locked: A and B on the token change nothing.
+    for g in players:
+        g.steps("tap B 8", "wait 20", "tap A 8", "wait 20")
+        t = B.read_css_area(g.c.read_mem, 0)
+        assert t is None or t.placed, (g.name, t)
+    a.steps("tap START 8", "wait 40")
+    v = _view(a)
+    assert v["type"] == 5 and not v["may_lock"] and v["text"].startswith(f"Waiting on {b.name} ("), v
+    a.shot("04-a-ready-waits")
+    assert all(online_set.gstatus(g.c)["phase"] == "connected" for g in players)
+    # B does nothing: its 45 s run out and its game readies it.
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 90,
+                    "the restarted game running on both")
+    waited = time.monotonic() - back
+    assert waited > 40, ("the game started before B's time ran out", waited)
+
+    # The same game again from the agreed state, on both.
+    rs = [online_set.gstatus(g.c)["restore"] for g in players]
+    print("restore", rs, flush=True)
+    assert rs[0] == rs[1] and rs[0]["game"] == 2, rs
+    for port, (stocks, damage) in before[0].items():
+        assert rs[0]["stocks"][port] == stocks and abs(rs[0]["damage"][port] - damage) < 0.01, (port, rs[0], before)
+    assert 0 < rs[0]["frames_left"] < 4 * 3600, rs[0]
+    setup2 = B.read_match_setup(a.c.read_mem)
+    assert setup2 == B.read_match_setup(b.c.read_mem), (setup2, B.read_match_setup(b.c.read_mem))
+    assert setup2.stage_kind == SMASHVILLE and setup2.time_limit_frames == rs[0]["frames_left"], setup2
+    assert [(p.character, p.color_no) for p in setup2.players[:2]] == \
+        [(p.character, p.color_no) for p in setup1.players[:2]], (setup1, setup2)
+    a.steps("wait 120")
+    for g in players:
+        assert g.debug_scratch()[10] & 0xC00000 == 0xC00000, (g.name, hex(g.debug_scratch()[10]))
+        got = _fighters(g)
+        assert got == before[0], (g.name, "restored", got, before[0])
+        g.shot("05-restarted")
+
+    # It is the set's game 1: B loses it, both report game 1, the server counts it.
+    rep = online_set.play_game(players, 2, winner=host)
+    assert rep["checksums"]["mismatches"] == 0 and rep["end"] == ["game set", "game set"], rep
+    for g in players:
+        _wait(lambda g=g: sum(_ranked(g)["wins"]) == 1, 30, f"{g.name}: the restarted game counted")
+        assert _ranked(g)["wins"][_ranked(host)["local_port"]] == 1, _ranked(g)
+    _wait(lambda: backend.log_text("accounts").count(" game reported") >= 2, 30, "both reports")
+    reports = [re.sub(r"\x1b\[[0-9;]*m", "", l) for l in backend.log_text("accounts").splitlines()
+               if " game reported" in l]
+    assert len(reports) == 2 and all(re.search(r"\bgame=1\b", l) for l in reports), reports
 
 
 def _strike_to(host: Game, join: Game, left: int) -> None:

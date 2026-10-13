@@ -1167,6 +1167,26 @@ u32 s_playback_serial = 0;  // the replay last asked for
 u8 s_playback_bumps = 0;    // LOCAL.directJoin's value since then
 bool s_playback_warned = false;
 
+// A desynced game played again (Gprb::Session::Restore) into SESSION: the flag, every present
+// player's stocks and damage, and the time limit. Values out of range are clamped (0% for a
+// damage that is not a number).
+void PutRestore(std::vector<u8>& session, const Gprb::Session::Restore& r)
+{
+  if (!r.valid || session.size() < SESSION_SIZE_V6)
+    return;
+  session[SESSION_RESTORE] = 1;
+  for (int i = 0; i < SESSION_PLAYERS; ++i)
+  {
+    const u32 p = S_PLAYERS + i * SP_SIZE;
+    if (!session[p + SP_PRESENT])
+      continue;
+    session[p + SESSION_PLAYER_RESTORE_STOCKS] = std::min(r.stocks[i], Gprb::Session::MAX_RESTORE_STOCKS);
+    const float d = r.damage[i] >= 0.0f ? std::min(r.damage[i], Gprb::Session::MAX_RESTORE_DAMAGE) : 0.0f;
+    PutU32(session, p + SESSION_PLAYER_RESTORE_DAMAGE, std::bit_cast<u32>(d));
+  }
+  PutU32(session, SESSION_RESTORE_FRAMES, std::min(r.frames_left, Gprb::Session::MAX_RESTORE_FRAMES));
+}
+
 // The recorded SESSION, rebuilt from its fields: a replay is a stranger's file, so every field
 // the game reads is range-checked as GameBridge's own writes are, text is cleaned, and everything
 // else (the reserved bytes, the elimination order and quits of the match) is zero.
@@ -1280,6 +1300,30 @@ std::vector<u8> PlaybackSession(const std::vector<u8>& rec, u16 version)
   }
   if (version >= 7 && rec.size() >= SESSION_SIZE)
     std::copy(rec.begin() + S_STAGES, rec.begin() + SESSION_SIZE, out.begin() + S_STAGES);
+  // A desynced game played again: the restored values, in the ranges the session takes from a
+  // host (Gprb::Session::Restore).
+  if (version >= 6 && rec.size() >= SESSION_SIZE_V6 && rec[SESSION_RESTORE] == 1)
+  {
+    Gprb::Session::Restore r;
+    r.valid = true;
+    for (int i = 0; i < SESSION_PLAYERS; ++i)
+    {
+      const u32 p = S_PLAYERS + i * SP_SIZE;
+      if (!out[p + SP_PRESENT])
+        continue;
+      r.stocks[i] = std::min(rec[p + SESSION_PLAYER_RESTORE_STOCKS], Gprb::Session::MAX_RESTORE_STOCKS);
+      const u32 d = static_cast<u32>(rec[p + SESSION_PLAYER_RESTORE_DAMAGE]) << 24 |
+                    static_cast<u32>(rec[p + SESSION_PLAYER_RESTORE_DAMAGE + 1]) << 16 |
+                    static_cast<u32>(rec[p + SESSION_PLAYER_RESTORE_DAMAGE + 2]) << 8 |
+                    rec[p + SESSION_PLAYER_RESTORE_DAMAGE + 3];
+      r.damage[i] = std::bit_cast<float>(d);
+    }
+    r.frames_left = static_cast<u32>(rec[SESSION_RESTORE_FRAMES]) << 24 |
+                    static_cast<u32>(rec[SESSION_RESTORE_FRAMES + 1]) << 16 |
+                    static_cast<u32>(rec[SESSION_RESTORE_FRAMES + 2]) << 8 |
+                    rec[SESSION_RESTORE_FRAMES + 3];
+    PutRestore(out, r);
+  }
   return out;
 }
 
@@ -1627,6 +1671,9 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     const auto bytes = SessionBytes(rules);
     std::copy(bytes.begin(), bytes.end(), session.begin() + S_RULES);
   }
+  // The next game plays a desynced one again from the state every machine agreed on.
+  if (lobby.active && lobby.setup_ready)
+    PutRestore(session, lobby.restore);
   WriteBlock(guard, loc.session, session, &s_session_written, &s_session_seq);
 }
 }  // namespace

@@ -95,6 +95,12 @@ void OnGameResult(u8 winner, u16 stage);
 // A game of a room's set was quit (or run back): it did not count, and the session's next game is
 // the same set game again (SetGameOf), its steps made again unless the session set it up itself.
 void OnGameNotCounted();
+// A game of the set (Ranked or a room's) desynced and starts again from the state every machine
+// agreed on (Gprb::Session::SetDesyncRecovery): the session's next game is the same set game, on
+// the same stage, with the same characters. No steps: every player readies up on the CSS
+// (StepType::Resume, RESUME_SECONDS, then the character is locked in for them).
+void OnGameRestarting(u32 session_game, u16 stage);
+constexpr int RESUME_SECONDS = 45;
 // The game's GP_COMPLETE_STEP: this player strikes, bans or picks `kind`. False if refused.
 bool Act(u8 kind);
 // GP_FETCH_STEP; also runs the step timers. CPU thread.

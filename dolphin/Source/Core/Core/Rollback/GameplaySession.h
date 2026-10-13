@@ -239,6 +239,30 @@ struct LobbyPlayer
   u8 team = NO_TEAM;  // in a team battle (MatchSetup / Lobby `teams`), else NO_TEAM
 };
 
+// A game that starts again after a desync (SetDesyncRecovery; docs/game-code.md, desync
+// recovery): every player's stocks and damage and the time left at the last session frame whose
+// checksums all machines compared equal. The game starts as a fresh one (spawn points, the
+// countdown) with these. Not `valid`: no frame all machines agreed on was found, and the game
+// starts from the beginning.
+constexpr u8 MAX_RESTORE_STOCKS = 99;
+constexpr float MAX_RESTORE_DAMAGE = 999.0f;
+// The longest time limit a game can have (P+'s 99 minutes), in frames.
+constexpr u32 MAX_RESTORE_FRAMES = 99 * 60 * 60;
+struct Restore
+{
+  bool valid = false;
+  s64 frame = -1;  // the agreed session frame
+  u32 checksum = 0;  // its checksum (every machine's)
+  std::array<u8, MAX_LOBBY_PLAYERS> stocks{};   // by in-game port; 0: out of the game
+  std::array<float, MAX_LOBBY_PLAYERS> damage{};
+  u32 frames_left = 0;  // the match timer then (0: the match has no time limit)
+  bool operator==(const Restore&) const = default;
+};
+// Whether a desync restarts the game (Ranked and a room's set, the user's, 2026-10-13) rather
+// than only ending it (DESYNC DETECTED, no result: Unranked, Direct, a room's game without a set).
+// Every machine of a session sets the same.
+void SetDesyncRecovery(bool on);
+
 struct Lobby
 {
   bool active = false;        // a network session exists (connecting .. running)
@@ -262,17 +286,20 @@ struct Lobby
   u8 stage_pickers = 0;       // ports (bits) that pick the next stage (GameSetup::Outcome)
   u8 setup_error = 0;         // GameSetup::SetupError: why the next game is not set up
   bool after_match = false;   // a match ended and the game has not left its scene yet
+  Restore restore;            // the next game restarts a desynced one (with setup_ready)
 };
 Lobby GetLobby();
 
 // A game of a network session that ended with GAME SET or with a pause-screen quit that ended it
-// for everyone, read from the state every peer ended on (Online/Ranked.h reports it). Ports are
-// in-game ports (2 players: the host is 0, the joiner 1).
+// for everyone, read from the state every peer ended on (Online/Ranked.h reports it), or that a
+// desync ended where the game starts again (SetDesyncRecovery). Ports are in-game ports
+// (2 players: the host is 0, the joiner 1).
 enum class GameEnd : u8
 {
   GameSet,
   Quit,     // L+R+A+START: Ranked (SetQuitLoses) the quitter lost it, else it did not count
   Runback,  // the same with L+R+Y held (P+'s salty runback): unless a quit loses, played again
+  Desync,   // no result: the next game plays it again from the agreed state (game, stage only)
 };
 struct GameResult
 {

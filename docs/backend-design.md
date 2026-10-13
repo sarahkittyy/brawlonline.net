@@ -332,7 +332,8 @@ Parameters (initial, to tune on our data): mu = 25, sigma = 25/3, beta = 25/6, t
 ### 4.4 Disconnects and desyncs (Slippi-equivalent)
 
 - Abandon (a player closes Dolphin, or holds Z to disconnect in ranked): reported `abandoned` by the remaining side. The leaver takes a set loss; the remaining player gets a win only if at least one game has been played, otherwise the set is voided.
-- `poor_performance` termination and `abnormal_completion` with desync recovery failing: **void the set, no rating change**, and log it per uid. Repeat offenders (more than 3 in 24 h) get a cooldown from ranked (Slippi's "ban warning").
+- `poor_performance` termination and `abnormal_completion` with desync recovery failing: **void the set, no rating change**, and log it per uid. Repeat offenders (more than 3 in 24 h) get a cooldown from ranked (Slippi's "ban warning"). Not built.
+- A desync (built 2026-10-13, the user's rules; `docs/game-code.md` §11, desync recovery): the game starts again from the last frame whose checksums both machines compared equal (stocks, damage and time left), after both ready up on the CSS (45 s), and is reported under the same set game number. The server sees nothing of it.
 - The two clients' reports must agree on winner, stocks and end method. On disagreement the game is flagged, the rating is held, and the replay is kept for admin review.
 
 ---
@@ -522,7 +523,7 @@ The table maps each Slippi screen to the Brawl/P+ screen we reuse, using existin
 | 6 | Ranked GameSetup: strikes 1-2-1, then winner bans and loser picks; step timers 30/30/10 s for strikes, 30 s ban/pick, 45 s character (`C/Scenes/Ranked/GameSetup.c`, `.h:16-19`) | P+ **SSS in a strike mode**: struck stages greyed, turn text and timer in the SSS message area. Character re-pick happens on the CSS in Slippi's order. | The largest game-side piece. Text plus existing stage icons only; no Slippi rank badges or other art. |
 | 7 | Rank on the CSS: badge + "GOLD 2 1653.5", animated rating change after a set (`C/Scenes/CSS/RankInfo/RankInfo.c`) | A text-only rank line in the CSS info pane, with the rating change from LOCAL | Brawl has no badge art, so text only. Tier names are generic. |
 | 8 | Results → back to the CSS still connected; START to rematch | Brawl's results screen, then back to the Wi-Fi CSS in the same session | Hook the results→CSS transition. Exiting goes back to screen 1 (Gen 1's `ExitWifiCSS…` hook). |
-| 9 | "DISCONNECTED" (red), "DESYNC DETECTED", poor-connection OSD | Red text in the game's font: in a match drawn with the game's text renderer (`ms::CharWriter`) at the top of the HUD (no free `MuMsg` window exists there); none on the CSS, as on Slippi | Existing font. _DISCONNECTED built 2026-10-07_; _DESYNC DETECTED built 2026-10-09_ (ends the game on both, no winner, still connected) |
+| 9 | "DISCONNECTED" (red), "DESYNC DETECTED", poor-connection OSD | Red text in the game's font: in a match drawn with the game's text renderer (`ms::CharWriter`) at the top of the HUD (no free `MuMsg` window exists there); none on the CSS, as on Slippi | Existing font. _DISCONNECTED built 2026-10-07_; _DESYNC DETECTED built 2026-10-09_ (ends the game on both, no winner, still connected); _Ranked and room sets restart it from the agreed state, 2026-10-13_ |
 | 10 | Quick chat: D-pad category window, 16 messages (`C/Scenes/CSS/Chat/Chat.c`) | A text-only window in the CSS message pane; in-match notifications as text | Later phase |
 
 All new visible content is text in Brawl/P+'s own fonts, placed in existing panes. **No new images, and no AI-generated graphics.** Where Slippi shows art we don't have (rank badges, the chat window frame), we show text instead.

@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -164,6 +165,19 @@ struct MatchSetup
   int num_players = 0;
   std::array<LobbyPlayer, MAX_LOBBY_PLAYERS> players{};
   bool teams = false;  // a team battle (players[i].team)
+  Restore restore;     // a desynced game played again from the agreed state (SetDesyncRecovery)
+};
+
+// A desync where the game starts again (SetDesyncRecovery, docs/game-code.md desync recovery):
+// each machine's checksums of the last RECOVERY_WINDOW confirmed frames, which the players
+// exchange (the state message's "dsr") so that the host finds the last frame all of them agree
+// on. Frames past the prediction window may still be predictions, so the list ends there.
+constexpr s64 RECOVERY_WINDOW = 240;
+struct RecoveryList
+{
+  u32 match = 0;  // the desynced match's index
+  s64 from = 0;   // the session frame of crcs[0]
+  std::vector<u32> crcs;  // 0: no record of that frame
 };
 
 // One other player of the session, by in-game port (State::peers). Everything here that came
@@ -194,6 +208,7 @@ struct PeerView
   picojson::object extra;  // SetLocalExtra of the peer
   LockIn lock;
   MatchSetup setup;  // the host's setup (joiner)
+  std::optional<RecoveryList> recovery;  // its checksums after a desync (the state's "dsr")
   u8 last_winner = 0xFF;
   picojson::object selections;
   std::string name;
@@ -229,6 +244,11 @@ struct FrameRecord
   u64 region_hash = 0;
   u32 game_set = 0;
   u32 game_frame = 0;
+  // What a game restarted after a desync takes from the last frame every machine agreed on
+  // (Restore): per port the stocks and damage (raw, as the checksum has them) and the match timer.
+  std::array<u32, MAX_LOBBY_PLAYERS> stocks{};
+  std::array<u32, MAX_LOBBY_PLAYERS> damage{};
+  u32 frames_left = 0;
 };
 
 struct PendingOps
@@ -289,6 +309,15 @@ struct State
   // The last match ended on a desync: reported to the game (LOCAL `desynced`, DESYNC DETECTED
   // and the end without "GAME!") until it has left the match scene.
   bool desynced = false;
+  // The last match ended on a desync and the next game plays it again (SetDesyncRecovery): this
+  // machine's checksums, sent to the others until that game starts, and the desynced game's
+  // setup, which the next one repeats.
+  struct Recovery
+  {
+    bool pending = false;
+    RecoveryList list;
+    MatchSetup setup;
+  } recovery;
   std::thread net_thread;
   std::atomic<bool> net_run{false};
   std::mutex gekko_rx_mutex;
@@ -754,6 +783,25 @@ std::vector<u8> SetupKey(const Guest& g)
   key.push_back(p[MM_HAZARD] & MM_HAZARD_OFF);
   key.insert(key.end(), p + MM_ITEM_SWITCH, p + MM_ITEM_SWITCH + ITEM_SWITCH_SIZE);
   AppendCodeMenuValues(g, key);
+  // A desynced game played again: the restored stocks, damage and time limit the game applies from
+  // SESSION (the stocks and the time are in the setup above too). Only then, so that every other
+  // game's key is as before (replays compare it).
+  namespace GB = Online::GameBridge;
+  const u32 session = GB::SessionAddress();
+  const u8* restore = session ? g.Ptr(session + GB::SESSION_RESTORE, 1) : nullptr;
+  if (restore && *restore)
+  {
+    for (u32 port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+    {
+      const u32 pl = session + GB::SESSION_PLAYERS_OFF + port * GB::SESSION_PLAYER_SIZE;
+      if (const u8* st = g.Ptr(pl + GB::SESSION_PLAYER_RESTORE_STOCKS, 1))
+        key.push_back(*st);
+      if (const u8* d = g.Ptr(pl + GB::SESSION_PLAYER_RESTORE_DAMAGE, 4))
+        key.insert(key.end(), d, d + 4);
+    }
+    if (const u8* t = g.Ptr(session + GB::SESSION_RESTORE_FRAMES, 4))
+      key.insert(key.end(), t, t + 4);
+  }
   return key;
 }
 
@@ -1046,6 +1094,12 @@ u32 FrameChecksum(const Guest& g, FrameRecord* rec)
               g.U32(Addr::LIBC_RAND_NEXT).value_or(0)};
   rec->fighters_crc = FightersCrc(fighters);
   rec->game_set = IsGameSet(g) ? 1 : 0;
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    rec->damage[port] = fighters[port][1];
+    rec->stocks[port] = fighters[port][2];
+  }
+  rec->frames_left = RemainingFrames(g);
   u32 crc = Common::StartCRC32();
   crc = Common::UpdateCRC32(crc, reinterpret_cast<const u8*>(&game_frame), 4);
   crc = Common::UpdateCRC32(crc, reinterpret_cast<const u8*>(rec->rng.data()), 12);
@@ -1434,7 +1488,76 @@ picojson::value SetupJson(const MatchSetup& st)
   o["players"] = picojson::value(players);
   if (st.teams)
     o["teams"] = picojson::value(true);
+  if (st.restore.valid)
+  {
+    // The agreed frame, its checksum, per port the stocks and the damage (the float's bits, so
+    // every machine has the same value), and the timer.
+    const Restore& r = st.restore;
+    picojson::array stocks;
+    std::vector<u8> damage;
+    for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+    {
+      stocks.emplace_back(static_cast<double>(r.stocks[port]));
+      const u32 bits = std::bit_cast<u32>(r.damage[port]);
+      for (int shift = 24; shift >= 0; shift -= 8)
+        damage.push_back(static_cast<u8>(bits >> shift));
+    }
+    picojson::object rs;
+    rs["f"] = picojson::value(static_cast<double>(r.frame));
+    rs["c"] = picojson::value(static_cast<double>(r.checksum));
+    rs["s"] = picojson::value(stocks);
+    rs["d"] = picojson::value(Hex(damage));
+    rs["t"] = picojson::value(static_cast<double>(r.frames_left));
+    o["rs"] = picojson::value(rs);
+  }
   return picojson::value(o);
+}
+
+// The host's restore values (SetupJson's "rs"): every value in the range the game can play, else
+// none (the setup is then refused as a whole).
+std::optional<Restore> RestoreFromJson(const picojson::value& v)
+{
+  if (!v.is<picojson::object>())
+    return std::nullopt;
+  const auto& o = v.get<picojson::object>();
+  const auto field = [&](const char* k) -> const picojson::value* {
+    const auto it = o.find(k);
+    return it == o.end() ? nullptr : &it->second;
+  };
+  const auto frame = PeerData::JsonUInt(field("f"), 0x7FFFFFFF);
+  const auto crc = PeerData::JsonUInt(field("c"), 0xFFFFFFFF);
+  const auto left = PeerData::JsonUInt(field("t"), MAX_RESTORE_FRAMES);
+  const picojson::value* stocks = field("s");
+  const picojson::value* damage = field("d");
+  if (!frame || !crc || !left || !stocks || !stocks->is<picojson::array>() ||
+      stocks->get<picojson::array>().size() != MAX_LOBBY_PLAYERS || !damage ||
+      !damage->is<std::string>())
+  {
+    return std::nullopt;
+  }
+  const auto bytes = PeerData::ParseHex(damage->get<std::string>(), 4 * MAX_LOBBY_PLAYERS);
+  if (!bytes)
+    return std::nullopt;
+  Restore r;
+  r.valid = true;
+  r.frame = static_cast<s64>(*frame);
+  r.checksum = static_cast<u32>(*crc);
+  r.frames_left = static_cast<u32>(*left);
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    const auto n = PeerData::JsonUInt(&stocks->get<picojson::array>()[port], MAX_RESTORE_STOCKS);
+    if (!n)
+      return std::nullopt;
+    r.stocks[port] = static_cast<u8>(*n);
+    u32 bits = 0;
+    for (int i = 0; i < 4; ++i)
+      bits = (bits << 8) | (*bytes)[port * 4 + i];
+    const float d = std::bit_cast<float>(bits);
+    if (!(d >= 0.0f && d <= MAX_RESTORE_DAMAGE))
+      return std::nullopt;
+    r.damage[port] = d;
+  }
+  return r;
 }
 
 // The host's setup of a game. Every field is checked: a malformed setup is ignored as a whole
@@ -1493,6 +1616,13 @@ std::optional<MatchSetup> SetupFromJson(const picojson::object& o)
     return std::nullopt;
   if (st.num_players < 2)
     return std::nullopt;
+  if (const auto rs = o.find("rs"); rs != o.end())
+  {
+    const auto r = RestoreFromJson(rs->second);
+    if (!r)
+      return std::nullopt;
+    st.restore = *r;
+  }
   return st;
 }
 
@@ -1531,6 +1661,7 @@ u16 DrawRandomStage(u32 game)
 std::mutex s_result_callback_mutex;
 std::function<void(const GameResult&)> s_result_callback;
 std::atomic<bool> s_quit_loses{false};  // SetQuitLoses
+std::atomic<bool> s_desync_recovery{false};  // SetDesyncRecovery
 std::function<StageDecision(u32)> s_stage_decider;  // under s_result_callback_mutex
 picojson::object s_local_extra;                      // under s.mutex
 
@@ -1542,6 +1673,113 @@ StageDecision DecideStage(u32 game)
     d = s_stage_decider;
   }
   return d ? d(game) : StageDecision{};
+}
+
+// The values a game restarted after a desync takes from frame record `rec` (Restore), for the
+// players of `st`. Under s.mutex.
+Restore RestoreOf(const FrameRecord& rec, const MatchSetup& st)
+{
+  Restore r;
+  r.valid = true;
+  r.frame = rec.frame;
+  r.checksum = rec.checksum;
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    if (!st.players[port].present)
+      continue;
+    const s32 stocks = static_cast<s32>(rec.stocks[port]);
+    r.stocks[port] = static_cast<u8>(std::clamp<s32>(stocks, 0, MAX_RESTORE_STOCKS));
+    const float d = std::bit_cast<float>(rec.damage[port]);
+    r.damage[port] = d >= 0.0f ? std::min(d, MAX_RESTORE_DAMAGE) : 0.0f;  // NaN: 0
+  }
+  r.frames_left = std::min(rec.frames_left, MAX_RESTORE_FRAMES);
+  return r;
+}
+
+// Host, under s.mutex, every player locked in for `game` after a desync where the game starts
+// again (s.recovery): the desynced game's setup again (players, characters, stage), from the last
+// session frame whose checksum is the same on every machine, in a row from the first frame all
+// their lists have (s.recovery.list and the others' "dsr"; a frame no machine recorded ends the
+// row). No such frame: the game starts from the beginning. False when the restart does not apply
+// (the players changed): the usual setup then.
+bool DecideRestart(u32 game, const std::array<const LockIn*, MAX_LOBBY_PLAYERS>& locks)
+{
+  const MatchSetup& prev = s.recovery.setup;
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    if ((locks[port] != nullptr) != prev.players[port].present)
+    {
+      WARN_LOG_FMT(BRAWLBACK, "gprb lobby: game {}: the players are not the desynced game's; "
+                              "a new game instead",
+                   game);
+      s.recovery.pending = false;
+      return false;
+    }
+  }
+  const RecoveryList& own = s.recovery.list;
+  std::vector<const RecoveryList*> lists{&own};
+  bool all = true;
+  ForEachPeer([&](int, const PeerView& p) {
+    if (p.left)
+      return;
+    if (p.recovery && p.recovery->match == own.match)
+      lists.push_back(&*p.recovery);
+    else
+      all = false;
+  });
+  if (!all)
+    return true;  // a player's checksums have not come yet (they come with every state message)
+  s64 lo = 0, hi = std::numeric_limits<s64>::max();
+  for (const RecoveryList* l : lists)
+  {
+    lo = std::max(lo, l->from);
+    hi = std::min(hi, l->from + static_cast<s64>(l->crcs.size()) - 1);
+  }
+  s64 agreed = -1;
+  for (s64 f = lo; f <= hi; ++f)
+  {
+    const u32 c = own.crcs[static_cast<size_t>(f - own.from)];
+    const bool same = c != 0 && std::all_of(lists.begin(), lists.end(), [&](const RecoveryList* l) {
+                        return l->crcs[static_cast<size_t>(f - l->from)] == c;
+                      });
+    if (!same)
+      break;
+    agreed = f;
+  }
+  MatchSetup st = prev;
+  st.game = game;
+  // No agreed frame: the game's own start, which for a game that was itself restarted is its
+  // restored values (frame 0, checksum 0: no frame record to compare).
+  if (st.restore.valid)
+  {
+    st.restore.frame = 0;
+    st.restore.checksum = 0;
+  }
+  const FrameRecord* rec =
+      agreed >= 0 ? &s.history[static_cast<size_t>(agreed) % s.history.size()] : nullptr;
+  if (rec && rec->frame == agreed)
+    st.restore = RestoreOf(*rec, st);
+  s.setup = st;
+  s.last_stage = st.stage;
+  std::string what;
+  for (int port = 0; port < MAX_LOBBY_PLAYERS && st.restore.valid; ++port)
+  {
+    if (st.players[port].present)
+      what += fmt::format(", P{} {} stocks {:.2f}%", port + 1, st.restore.stocks[port], st.restore.damage[port]);
+  }
+  if (agreed >= 0)
+  {
+    INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} setup: the desynced game again from frame {} "
+                            "(checksum {:08x}, frames {}-{} compared on {} machines){}, {} frames left",
+                 game, agreed, st.restore.checksum, lo, hi, lists.size(), what, st.restore.frames_left);
+  }
+  else
+  {
+    WARN_LOG_FMT(BRAWLBACK, "gprb lobby: game {} setup: the desynced game again from its start{} "
+                            "(no frame of {}-{} is the same on all {} machines)",
+                 game, st.restore.valid ? " (its restored values)" : "", lo, hi, lists.size());
+  }
+  return true;
 }
 
 // Host, under s.mutex: once every player is locked in for the next game, decide its setup. The
@@ -1577,6 +1815,10 @@ void MaybeDecideSetup()
     ++count;
   }
   if (!all_seen || count < 2)
+    return;
+  // After a desync where the game starts again: the same game, whatever the lock-ins say (the
+  // characters stay locked on the CSS).
+  if (s.recovery.pending && s.recovery.list.match + 1 == s.match_index && DecideRestart(game, locks))
     return;
   // Free-for-all or a team battle (the room's Teams switch, each player's lock-in team).
   std::array<Online::GameSetup::Seat, Online::GameSetup::MAX_PORTS> seats{};
@@ -1704,6 +1946,21 @@ void SendState()
       o["slow"] = picojson::value(std::round(s.slow_fps * 10) / 10);
     if (!s_local_extra.empty())
       o["x"] = picojson::value(s_local_extra);
+    if (s.recovery.pending)
+    {
+      // After a desync where the game starts again: our checksums of the last confirmed frames
+      // (8 hex digits each), for the host to find the last frame every machine agrees on.
+      const RecoveryList& l = s.recovery.list;
+      std::string crcs;
+      crcs.reserve(l.crcs.size() * 8);
+      for (const u32 c : l.crcs)
+        crcs += fmt::format("{:08x}", c);
+      picojson::object dsr;
+      dsr["m"] = picojson::value(static_cast<double>(l.match));
+      dsr["from"] = picojson::value(static_cast<double>(l.from));
+      dsr["crc"] = picojson::value(crcs);
+      o["dsr"] = picojson::value(dsr);
+    }
     if (host && !s.init_block.empty())
     {
       o["init"] = picojson::value(Hex(s.init_block));
@@ -1945,6 +2202,37 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
   // Another module's state (GameSetup's strikes): only a small object is kept.
   if (const auto* x = get("x"); x && x->is<picojson::object>() && x->serialize().size() <= 1024)
     p.extra = x->get<picojson::object>();
+  // Its checksums after a desync where the game starts again: at most RECOVERY_WINDOW of them, of
+  // the match that just ended here (or ends here soon: its list may come before our own end).
+  if (const auto* x = get("dsr"); x && x->is<picojson::object>())
+  {
+    const auto& d = x->get<picojson::object>();
+    const auto field = [&](const char* k) -> const picojson::value* {
+      const auto it = d.find(k);
+      return it == d.end() ? nullptr : &it->second;
+    };
+    const auto m = PeerData::JsonUInt(field("m"), 0xFFFFFFFF);
+    const auto first_frame = PeerData::JsonUInt(field("from"), 0x7FFFFFFF);
+    const auto* crc = field("crc");
+    if (m && first_frame && crc && crc->is<std::string>() && crc->get<std::string>().size() % 8 == 0 &&
+        crc->get<std::string>().size() <= 8 * RECOVERY_WINDOW &&
+        (*m == s.match_index || *m + 1 == s.match_index))
+    {
+      const std::string& hex = crc->get<std::string>();
+      if (const auto bytes = PeerData::ParseHex(hex, hex.size() / 2))
+      {
+        RecoveryList l;
+        l.match = static_cast<u32>(*m);
+        l.from = static_cast<s64>(*first_frame);
+        for (size_t i = 0; i + 4 <= bytes->size(); i += 4)
+        {
+          l.crcs.push_back(static_cast<u32>((*bytes)[i]) << 24 | static_cast<u32>((*bytes)[i + 1]) << 16 |
+                           static_cast<u32>((*bytes)[i + 2]) << 8 | (*bytes)[i + 3]);
+        }
+        p.recovery = std::move(l);
+      }
+    }
+  }
   if (const auto* x = get("match_setup"); x && x->is<picojson::object>() && from_host)
   {
     auto st = SetupFromJson(x->get<picojson::object>());
@@ -1968,6 +2256,32 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
         s.last_stage = st->stage;
         INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} setup from the host: stage {:#x}", st->game,
                      st->stage);
+        if (st->restore.valid && st->restore.checksum == 0)
+        {
+          INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {}: the desynced game again from its start "
+                                  "(the values it was restarted with)",
+                       st->game);
+        }
+        else if (st->restore.valid)
+        {
+          // The host's restart of a desynced game: from a frame our own record has, with the
+          // same checksum and values (every machine's checksums of it were the same).
+          const Restore& r = st->restore;
+          const FrameRecord& rec = s.history[static_cast<size_t>(r.frame) % s.history.size()];
+          if (rec.frame != r.frame || rec.checksum != r.checksum || RestoreOf(rec, *st) != r)
+          {
+            WARN_LOG_FMT(BRAWLBACK, "gprb lobby: game {}: the host restarts it from frame {} "
+                                    "(checksum {:08x}), which our record of it does not match "
+                                    "(frame {}, checksum {:08x})",
+                         st->game, r.frame, r.checksum, rec.frame, rec.checksum);
+          }
+          else
+          {
+            INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {}: the desynced game again from frame {} "
+                                    "(checksum {:08x}, the same here)",
+                         st->game, r.frame, r.checksum);
+          }
+        }
       }
       p.setup = *st;
     }
@@ -2689,6 +3003,35 @@ void EndRunning(Core::System& system, const std::string& reason)
       replay_result = r;
       ReportGameResult(r);
     }
+    // A desync where the game starts again (SetDesyncRecovery; docs/game-code.md, desync
+    // recovery): this machine's checksums of its last confirmed frames, which the others get with
+    // every state message until the next game starts, and the setup the next game repeats. The
+    // game has no result: Online/Ranked.cpp plays its set game again.
+    s.recovery.pending = false;
+    if (reason == "desync" && s_desync_recovery)
+    {
+      RecoveryList& l = s.recovery.list;
+      l = {};
+      l.match = s.match_index;
+      const s64 last = s.current_frame - MAX_ROLLBACK_FRAMES - 1;
+      l.from = std::max<s64>(0, last - RECOVERY_WINDOW + 1);
+      for (s64 f = l.from; f <= last; ++f)
+      {
+        const FrameRecord& rec = s.history[static_cast<size_t>(f) % s.history.size()];
+        l.crcs.push_back(rec.frame == f ? rec.checksum : 0);
+      }
+      s.recovery.setup = s.setup;
+      s.recovery.pending = true;
+      INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} desynced: it starts again from the last frame "
+                              "every machine agrees on (ours: frames {}-{})",
+                   NextGame(), l.from, last);
+      GameResult r;
+      r.end = GameEnd::Desync;
+      r.game = NextGame();
+      r.stage = s.setup.stage;
+      r.frames = s.end_game_frame;
+      ReportGameResult(r);
+    }
     EndReplay(system, reason, replay_result ? &*replay_result : nullptr);
     // Ready for the next match on the same connection.
     bool seen = false;
@@ -2712,6 +3055,7 @@ void EndRunning(Core::System& system, const std::string& reason)
       // Every machine sets it up itself from the same setup (the host's copy is then the same and
       // is not taken again): the game goes from the match straight into this one.
       runback->game = NextGame();
+      runback->restore = {};  // a runback of a restarted game starts from the beginning
       s.setup = *runback;
       s.last_stage = runback->stage;
       INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} setup: the last game again (runback), stage {:#x}",
@@ -4805,6 +5149,7 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.disconnected = false;
   s.desync_end = false;
   s.desynced = false;
+  s.recovery = {};
   s.quit_left = false;
   s.socket = std::make_unique<sf::UdpSocket>();
   s.socket->setBlocking(false);
@@ -4857,6 +5202,11 @@ void SetLocalLock(const LockIn& lock_in)
 void SetQuitLoses(bool loses)
 {
   s_quit_loses = loses;
+}
+
+void SetDesyncRecovery(bool on)
+{
+  s_desync_recovery = on;
 }
 
 void SetGameResultCallback(std::function<void(const GameResult&)> callback)
@@ -4949,6 +5299,7 @@ Lobby GetLobby()
     l.asl = s.setup.asl;
     l.players = s.setup.players;
     l.teams = s.setup.teams;
+    l.restore = s.setup.restore;
   }
   l.last_winner = s.last_winner;
   l.stage_pickers = s.last_pickers;
@@ -5370,6 +5721,27 @@ picojson::value Status()
   o["game_set_frame"] = picojson::value(static_cast<double>(s.game_set_frame));
   o["local_quit_frame"] = picojson::value(static_cast<double>(s.local_quit_frame));
   o["quit_left"] = picojson::value(s.quit_left);
+  // A desync where the game starts again: our checksums wait for the restart's setup, and the
+  // restart's values once it is set up (the setup's game, "restore").
+  o["recovery_pending"] = picojson::value(s.recovery.pending);
+  if (s.setup.restore.valid)
+  {
+    const Restore& r = s.setup.restore;
+    picojson::object ro;
+    ro["game"] = picojson::value(static_cast<double>(s.setup.game));
+    ro["frame"] = picojson::value(static_cast<double>(r.frame));
+    ro["checksum"] = picojson::value(static_cast<double>(r.checksum));
+    picojson::array stocks, damage;
+    for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+    {
+      stocks.emplace_back(static_cast<double>(r.stocks[port]));
+      damage.emplace_back(static_cast<double>(r.damage[port]));
+    }
+    ro["stocks"] = picojson::value(stocks);
+    ro["damage"] = picojson::value(damage);
+    ro["frames_left"] = picojson::value(static_cast<double>(r.frames_left));
+    o["restore"] = picojson::value(ro);
+  }
   o["sound_allocs"] = picojson::value(static_cast<double>(s.sound_allocs));
   o["resim_sound_allocs"] = picojson::value(static_cast<double>(s.resim_sound_allocs));
   o["suppressed_sound_allocs"] = picojson::value(static_cast<double>(s.suppressed_sound_allocs));
@@ -6277,6 +6649,9 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     s.barrier_host = HostSlot();
     s.barrier_since = Clock::now();
     s.wait_logs = 0;
+    // A desynced game played again has started: its checksums are no longer needed.
+    s.recovery.pending = false;
+    ForEachPeer([](int, PeerView& p) { p.recovery.reset(); });
     s.phase = Phase::Barrier;
     SendState();
     INFO_LOG_FMT(BRAWLBACK, "gprb: at the barrier (P{} of ports {:#x}, setup {:016x}: {})",
