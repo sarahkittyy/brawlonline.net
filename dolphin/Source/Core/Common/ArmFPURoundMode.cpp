@@ -87,4 +87,14 @@ void LoadDefaultSIMDState()
   SetFPCR(default_fpcr);
 }
 
+u64 GetSIMDState()
+{
+  return GetFPCR();
+}
+
+void SetSIMDState(u64 state)
+{
+  SetFPCR(state);
+}
+
 }  // namespace Common::FPU

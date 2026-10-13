@@ -513,6 +513,13 @@ std::optional<IPCReply> NetIPTopDevice::IOCtl(const IOCtlRequest& request)
 
 std::optional<IPCReply> NetIPTopDevice::IOCtlV(const IOCtlVRequest& request)
 {
+  // As IOCtl: no host network when the emulation must be deterministic. GETADDRINFO asks the
+  // host's DNS on the network worker, which wrote its answer into guest memory whenever the host
+  // got it (a Brawl Mods session's machines diverged at Brawl's Wi-Fi login), and
+  // GETINTERFACEOPT gives the host's own address.
+  if (Core::WantsDeterminism())
+    return IPCReply(IPC_EACCES);
+
   switch (request.request)
   {
   case IOCTLV_SO_GETINTERFACEOPT:

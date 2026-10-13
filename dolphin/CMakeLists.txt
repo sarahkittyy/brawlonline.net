@@ -323,6 +323,9 @@ else()
   # gcc uses some optimizations which might break stuff without this flag
   check_and_add_flag(NO_STRICT_ALIASING -fno-strict-aliasing)
   check_and_add_flag(NO_EXCEPTIONS -fno-exceptions)
+  # No a * b + c fused into one rounding (clang does it by default on arm64; MSVC's /fp:precise
+  # does not): emulation results the guest sees must not depend on the host's compiler.
+  check_and_add_flag(FP_CONTRACT_OFF -ffp-contract=off)
 
   check_and_add_flag(VISIBILITY_INLINES_HIDDEN -fvisibility-inlines-hidden)
   check_and_add_flag(VISIBILITY_HIDDEN -fvisibility=hidden)

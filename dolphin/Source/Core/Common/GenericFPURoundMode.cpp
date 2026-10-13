@@ -20,4 +20,11 @@ void LoadSIMDState()
 void LoadDefaultSIMDState()
 {
 }
+u64 GetSIMDState()
+{
+  return 0;
+}
+void SetSIMDState(u64 state)
+{
+}
 }  // namespace Common::FPU

@@ -22,6 +22,7 @@
 #include "Common/Random.h"
 #include "Common/ScopeGuard.h"
 #include "Core/CommonTitles.h"
+#include "Core/Core.h"
 #include "Core/HW/Memmap.h"
 #include "Core/IOS/FS/FileSystem.h"
 #include "Core/IOS/Network/KD/NetKDTime.h"
@@ -212,6 +213,9 @@ void NetKDRequestDevice::SchedulerTimer()
   Common::SetCurrentThreadName("KD Scheduler Timer");
   while (true)
   {
+    // The scheduler runs on the host's clock (a task each minute of real time): none while the
+    // emulation must be deterministic.
+    if (!Core::WantsDeterminism())
     {
       std::lock_guard lg(m_scheduler_lock);
       if (m_mail_span <= mail_time_state && m_handle_mail)
@@ -1023,6 +1027,19 @@ std::optional<IPCReply> NetKDRequestDevice::IOCtl(const IOCtlRequest& request)
 
   auto& system = GetSystem();
   auto& memory = system.GetMemory();
+
+  // These do their network work on a worker thread, against the host's network, and answer when
+  // the host does: when the emulation must be deterministic (a movie, a whole-machine session)
+  // they fail at once with a network error, the same on every machine.
+  if (Core::WantsDeterminism() && (request.request == IOCTL_NWC24_REQUEST_REGISTER_USER_ID ||
+                                   request.request == IOCTL_NWC24_CHECK_MAIL_NOW ||
+                                   request.request == IOCTL_NWC24_DOWNLOAD_NOW_EX ||
+                                   request.request == IOCTL_NWC24_SEND_MAIL_NOW))
+  {
+    WriteReturnValue(memory, NWC24::WC24_ERR_NETWORK, request.buffer_out);
+    return IPCReply(IPC_SUCCESS);
+  }
+
   s32 return_value = 0;
   switch (request.request)
   {

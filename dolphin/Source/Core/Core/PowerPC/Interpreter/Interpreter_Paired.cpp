@@ -29,8 +29,8 @@ void Interpreter::ps_neg(Interpreter& interpreter, UGeckoInstruction inst)
   auto& ppc_state = interpreter.m_ppc_state;
   const auto& b = ppc_state.ps[inst.FB];
 
-  ppc_state.ps[inst.FD].SetBoth(b.PS0AsU64() ^ (UINT64_C(1) << 63),
-                                b.PS1AsU64() ^ (UINT64_C(1) << 63));
+  ppc_state.ps[inst.FD].SetBoth(Common::FlipSignBit(b.PS0AsU64()),
+                                Common::FlipSignBit(b.PS1AsU64()));
 
   if (inst.Rc)
     ppc_state.UpdateCR1();
@@ -50,8 +50,8 @@ void Interpreter::ps_nabs(Interpreter& interpreter, UGeckoInstruction inst)
   auto& ppc_state = interpreter.m_ppc_state;
   const auto& b = ppc_state.ps[inst.FB];
 
-  ppc_state.ps[inst.FD].SetBoth(b.PS0AsU64() | (UINT64_C(1) << 63),
-                                b.PS1AsU64() | (UINT64_C(1) << 63));
+  ppc_state.ps[inst.FD].SetBoth(Common::SetSignBit(b.PS0AsU64()),
+                                Common::SetSignBit(b.PS1AsU64()));
 
   if (inst.Rc)
     ppc_state.UpdateCR1();
@@ -62,8 +62,9 @@ void Interpreter::ps_abs(Interpreter& interpreter, UGeckoInstruction inst)
   auto& ppc_state = interpreter.m_ppc_state;
   const auto& b = ppc_state.ps[inst.FB];
 
-  ppc_state.ps[inst.FD].SetBoth(b.PS0AsU64() & ~(UINT64_C(1) << 63),
-                                b.PS1AsU64() & ~(UINT64_C(1) << 63));
+  // Common::ClearSignBit: on arm64, under FPCR.AH, the plain mask cleared nothing (FloatUtils.h).
+  ppc_state.ps[inst.FD].SetBoth(Common::ClearSignBit(b.PS0AsU64()),
+                                Common::ClearSignBit(b.PS1AsU64()));
 
   if (inst.Rc)
     ppc_state.UpdateCR1();

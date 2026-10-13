@@ -46,4 +46,14 @@ void LoadDefaultSIMDState()
 {
   _mm_setcsr(default_sse_state);
 }
+
+u64 GetSIMDState()
+{
+  return _mm_getcsr();
+}
+
+void SetSIMDState(u64 state)
+{
+  _mm_setcsr(static_cast<u32>(state));
+}
 }  // namespace Common::FPU

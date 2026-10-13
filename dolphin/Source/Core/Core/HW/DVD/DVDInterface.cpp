@@ -17,6 +17,7 @@
 #include "Common/ChunkFile.h"
 #include "Common/CommonTypes.h"
 #include "Common/Config/Config.h"
+#include "Common/FPURoundMode.h"
 #include "Common/Logging/Log.h"
 
 #include "Core/AchievementManager.h"
@@ -1359,6 +1360,10 @@ void DVDInterface::FinishExecutingCommand(ReplyType reply_type, DIInterruptType 
 void DVDInterface::ScheduleReads(u64 offset, u32 length, const DiscIO::Partition& partition,
                                  u32 output_address, ReplyType reply_type)
 {
+  // The read's timing is host floating point math that the guest sees: in the host's default FPU
+  // mode, the same on every host (Common::FPU::ScopedDefaultSIMDState).
+  const Common::FPU::ScopedDefaultSIMDState default_fpu_mode;
+
   // The drive continues to read 1 MiB beyond the last read position when idle.
   // If a future read falls within this window, part of the read may be returned
   // from the buffer. Data can be transferred from the buffer at up to 32 MiB/s.

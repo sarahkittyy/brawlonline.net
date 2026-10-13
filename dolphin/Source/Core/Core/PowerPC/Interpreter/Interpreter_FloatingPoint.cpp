@@ -40,7 +40,8 @@ double RoundToIntegerMode(double number)
   // numbers can only store subsequent integers, and no longer any decimals
   // This keeps the sign of the unrounded value because it needs to scale it
   // upwards when added
-  const double int_precision = std::copysign(4503599627370496.0, number);
+  // (Common::CopySign: std::copysign's mask is wrong on arm64 under FPCR.AH, FloatUtils.h.)
+  const double int_precision = Common::CopySign(4503599627370496.0, number);
 
   // By adding this value to the original number,
   // it will be forced to decide a integer to round to
@@ -264,7 +265,8 @@ void Interpreter::fmrx(Interpreter& interpreter, UGeckoInstruction inst)
 void Interpreter::fabsx(Interpreter& interpreter, UGeckoInstruction inst)
 {
   auto& ppc_state = interpreter.m_ppc_state;
-  ppc_state.ps[inst.FD].SetPS0(fabs(ppc_state.ps[inst.FB].PS0AsDouble()));
+  // On the integer side: a host FABS keeps a NaN's sign under FPCR.AH (FloatUtils.h).
+  ppc_state.ps[inst.FD].SetPS0(Common::ClearSignBit(ppc_state.ps[inst.FB].PS0AsU64()));
 
   // This is a binary instruction. Does not alter FPSCR
   if (inst.Rc)
@@ -274,7 +276,7 @@ void Interpreter::fabsx(Interpreter& interpreter, UGeckoInstruction inst)
 void Interpreter::fnabsx(Interpreter& interpreter, UGeckoInstruction inst)
 {
   auto& ppc_state = interpreter.m_ppc_state;
-  ppc_state.ps[inst.FD].SetPS0(ppc_state.ps[inst.FB].PS0AsU64() | (UINT64_C(1) << 63));
+  ppc_state.ps[inst.FD].SetPS0(Common::SetSignBit(ppc_state.ps[inst.FB].PS0AsU64()));
 
   // This is a binary instruction. Does not alter FPSCR
   if (inst.Rc)
@@ -284,7 +286,7 @@ void Interpreter::fnabsx(Interpreter& interpreter, UGeckoInstruction inst)
 void Interpreter::fnegx(Interpreter& interpreter, UGeckoInstruction inst)
 {
   auto& ppc_state = interpreter.m_ppc_state;
-  ppc_state.ps[inst.FD].SetPS0(ppc_state.ps[inst.FB].PS0AsU64() ^ (UINT64_C(1) << 63));
+  ppc_state.ps[inst.FD].SetPS0(Common::FlipSignBit(ppc_state.ps[inst.FB].PS0AsU64()));
 
   // This is a binary instruction. Does not alter FPSCR
   if (inst.Rc)

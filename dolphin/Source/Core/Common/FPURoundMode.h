@@ -27,4 +27,23 @@ void SetSIMDMode(RoundMode rounding_mode, bool non_ieee_mode);
 void SaveSIMDState();
 void LoadSIMDState();
 void LoadDefaultSIMDState();
+
+u64 GetSIMDState();
+void SetSIMDState(u64 state);
+
+// The host's default FPU mode for the rest of the scope, then the mode from before. For host
+// computations on the CPU thread whose results reach the guest (DVD timing): under the guest's
+// mode (its rounding and flushing, and FPCR.AH on arm64, see FloatUtils.h) the same C++ code gives
+// different results on different hosts.
+class ScopedDefaultSIMDState
+{
+public:
+  ScopedDefaultSIMDState() : m_saved(GetSIMDState()) { LoadDefaultSIMDState(); }
+  ~ScopedDefaultSIMDState() { SetSIMDState(m_saved); }
+  ScopedDefaultSIMDState(const ScopedDefaultSIMDState&) = delete;
+  ScopedDefaultSIMDState& operator=(const ScopedDefaultSIMDState&) = delete;
+
+private:
+  u64 m_saved;
+};
 }  // namespace Common::FPU

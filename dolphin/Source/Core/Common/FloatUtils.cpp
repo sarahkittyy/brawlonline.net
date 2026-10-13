@@ -151,6 +151,7 @@ const std::array<BaseAndDec, 32> fres_expected = {{
 // Used by fres and ps_res.
 double ApproximateReciprocal(double val)
 {
+  // Common::CopySign, not std::copysign: this runs under the guest's FPU mode (FloatUtils.h).
   s64 integral = std::bit_cast<s64>(val);
   const s64 mantissa = integral & ((1LL << 52) - 1);
   const s64 sign = integral & (1ULL << 63);
@@ -158,23 +159,23 @@ double ApproximateReciprocal(double val)
 
   // Special case 0
   if (mantissa == 0 && exponent == 0)
-    return std::copysign(std::numeric_limits<double>::infinity(), val);
+    return CopySign(std::numeric_limits<double>::infinity(), val);
 
   // Special case NaN-ish numbers
   if (exponent == (0x7FFLL << 52))
   {
     if (mantissa == 0)
-      return std::copysign(0.0, val);
+      return CopySign(0.0, val);
     return MakeQuiet(val);
   }
 
   // Special case small inputs
   if (exponent < (895LL << 52))
-    return std::copysign(std::numeric_limits<float>::max(), val);
+    return CopySign(std::numeric_limits<float>::max(), val);
 
   // Special case large inputs
   if (exponent >= (1149LL << 52))
-    return std::copysign(0.0, val);
+    return CopySign(0.0, val);
 
   exponent = (0x7FDLL << 52) - exponent;
 

@@ -33,6 +33,42 @@ static constexpr u32 FLOAT_ZERO = 0x00000000;
 static constexpr int FLOAT_EXP_WIDTH = 8;
 static constexpr int FLOAT_FRAC_WIDTH = 23;
 
+// Sign bit changes that are right under any host FPU mode. On arm64 hosts with FEAT_AFP,
+// Common::FPU::SetSIMDMode sets FPCR.AH while the guest is in non-IEEE mode, and then FABS and FNEG
+// leave a NaN as it is. The compiler both turns integer sign masking into FABS/FNEG and builds the
+// mask 0x7FF...F (for std::copysign, or |x| of two lanes) as FNEG of all ones, a NaN, which then
+// keeps its sign: Interpreter::ps_abs cleared no sign at all. Code that runs under the guest's FPU
+// mode changes signs with these, whose mask the compiler cannot see through.
+inline u64 OpaqueBits(u64 value)
+{
+#if defined(__GNUC__) || defined(__clang__)
+  asm("" : "+r"(value));
+#endif
+  return value;
+}
+
+inline u64 ClearSignBit(u64 bits)
+{
+  return bits & OpaqueBits(~DOUBLE_SIGN);
+}
+
+inline u64 SetSignBit(u64 bits)
+{
+  return bits | OpaqueBits(DOUBLE_SIGN);
+}
+
+inline u64 FlipSignBit(u64 bits)
+{
+  return bits ^ OpaqueBits(DOUBLE_SIGN);
+}
+
+// std::copysign(magnitude, sign), on the integer side.
+inline double CopySign(double magnitude, double sign)
+{
+  return std::bit_cast<double>(ClearSignBit(std::bit_cast<u64>(magnitude)) |
+                               (std::bit_cast<u64>(sign) & OpaqueBits(DOUBLE_SIGN)));
+}
+
 inline bool IsQNAN(double d)
 {
   const u64 i = std::bit_cast<u64>(d);
