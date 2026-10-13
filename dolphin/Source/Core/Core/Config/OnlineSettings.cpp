@@ -23,6 +23,7 @@ const Info<bool> ONLINE_FORCE_NETPLAY_PORT{{System::Main, "Online", "ForceNetpla
 const Info<int> ONLINE_NETPLAY_PORT{{System::Main, "Online", "NetplayPort"}, 2626};
 const Info<bool> ONLINE_FORCE_LAN_IP{{System::Main, "Online", "ForceLanIP"}, false};
 const Info<std::string> ONLINE_LAN_IP{{System::Main, "Online", "LanIP"}, ""};
+const Info<bool> ONLINE_UPNP{{System::Main, "Online", "UPnP"}, true};
 
 // "gameplay": the gameplay-only (Slippi-style) session; "netplay": the whole-machine netplay
 // session (synchronized reboot), kept as a fallback.

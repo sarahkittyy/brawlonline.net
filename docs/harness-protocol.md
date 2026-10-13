@@ -181,6 +181,7 @@ The online client (`Source/Core/Core/Online/`) logs in from `user.json` and find
 | `AccountsUrl`, `DevAccountsUrl` | `https://brawlonline.net`, `http://127.0.0.1:8080` | for the users-rest lookup after a login |
 | `ForceNetplayPort`, `NetplayPort` | `False`, `2626` | Slippi's "Force Netplay Port"; otherwise a random port in 41000-50999 |
 | `ForceLanIP`, `LanIP` | `False`, `""` | Slippi's "Force LAN IP" |
+| `UPnP` | `True` | ask the router to forward the search's UDP port before contacting mm (not with mm on 127.0.0.1); docs/backend-design.md 1.4 |
 
 **`online_status`.** Dolphin polls for `<User>/Online/user.json` every 500 ms until it parses (`watching` is true meanwhile), then stops, as Slippi does: a file written after the login is not reread. After reading the file it fetches `GET <accounts>/user/{uid}?additionalFields=chatMessages,rank` and takes the display name, code and latest version from there (`user_fetch`: `not_fetched`, `fetching`, `fetched`, `error`; on error the file's values stay). `app_state` is Slippi's: 0 logged out, 1 logged in, 2 `latestVersion` is newer than `app_version`.
 

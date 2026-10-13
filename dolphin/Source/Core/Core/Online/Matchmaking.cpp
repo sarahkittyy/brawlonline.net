@@ -20,6 +20,7 @@
 #include "Common/StringUtil.h"
 #include "Common/Thread.h"
 #include "Common/Timer.h"
+#include "Common/UPnP.h"
 #include "Core/Config/OnlineSettings.h"
 #include "Core/Online/Timeouts.h"
 #include "Core/Online/User.h"
@@ -44,6 +45,9 @@ constexpr int MM_CHANNELS = 3;
 // a backend that binds its own socket releases the link right away, so give the peer's side of
 // the handshake time to finish before our disconnect can overtake it.
 constexpr u64 P2P_SETTLE_MS = 500;
+// How long a search waits for the router's UPnP service to be found (GameBridge starts looking
+// at boot, so this only matters for a search right after it; no router answers in about 2 s).
+constexpr std::chrono::milliseconds UPNP_WAIT{2500};
 
 std::string IpToString(enet_uint32 host)
 {
@@ -536,6 +540,17 @@ void Matchmaking::StartMatchmaking()
   }
   addr.port = static_cast<enet_uint16>(mm_port);
 
+  // Not in Slippi: a UPnP mapping of the port, made before anything is sent from it so that the
+  // router uses the mapped port for the server too (Common::UPnP::MapUdpPort). Without it, a
+  // router that gives every destination its own port (2026-10-12: a player whose 50590 became
+  // 42831, 46463 became 62131) reaches nobody whose router checks the sender's port. Skipped for
+  // a server on this machine (the tests), where it would only add mappings to the router.
+  m_upnp_mapped = false;
+#ifdef USE_UPNP
+  if (Config::Get(Config::ONLINE_UPNP) && reinterpret_cast<const u8*>(&addr.host)[0] != 127)
+    m_upnp_mapped = Common::UPnP::MapUdpPort(m_host_port, UPNP_WAIT);
+#endif
+
   m_server = enet_host_connect(m_client, &addr, MM_CHANNELS, 0);
   if (m_server == nullptr)
   {
@@ -768,6 +783,14 @@ void Matchmaking::HandleMatchmaking()
       {
         local_external_ip = HostPart(player.ip_address);
         match.local_player_index = player.port - 1;
+        // The address the peers punch to. A port other than ours means the router changes it,
+        // and only peers whose router lets in any port of an address it sent to can reach us.
+        const auto parts = SplitString(player.ip_address, ':');
+        const bool same_port =
+            parts.size() == 2 && parts[1] == std::to_string(m_host_port.load());
+        INFO_LOG_FMT(NETPLAY, "[Matchmaking] The server sees us at {} (port {}{}{})",
+                     player.ip_address, m_host_port.load(), m_upnp_mapped ? ", UPnP-mapped" : "",
+                     same_port ? "" : "; the router changed the port");
       }
     }
 

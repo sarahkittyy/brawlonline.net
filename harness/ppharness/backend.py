@@ -94,7 +94,8 @@ class OnlineBackend:
     def __init__(self, run_dir: str | os.PathLike[str] | None = None, *,
                  latest_version: str = "0.1.0", min_app_version: str | None = None,
                  ticket_ttl_secs: int | None = None,
-                 rulesets_file: str | os.PathLike[str] | None = None, keep: bool = False):
+                 rulesets_file: str | os.PathLike[str] | None = None, keep: bool = False,
+                 mm_host: str = "127.0.0.1"):
         root = paths.workspace_root() / "run" / "backends"
         self.run_dir = Path(run_dir) if run_dir else root / f"be-{int(time.time())}-{secrets.token_hex(3)}"
         self.latest_version = latest_version
@@ -103,6 +104,9 @@ class OnlineBackend:
         # mm's per-mode rules (stage lists); None: the built-in server/config/rulesets.json.
         self.rulesets_file = Path(rulesets_file) if rulesets_file else None
         self.keep = keep
+        # The address mm listens on. Dolphin skips its UPnP mapping for a server on 127.0.0.1, so
+        # a test of the mapping puts mm on the machine's LAN address.
+        self.mm_host = mm_host
         self.pg_mode = ""
         self.admin_url = ""
         self.database_url = ""
@@ -318,7 +322,7 @@ class OnlineBackend:
 
         self.mm_port = find_free_port(kind=socket.SOCK_DGRAM)
         env = self._env()
-        env["MM_LISTEN"] = f"127.0.0.1:{self.mm_port}"
+        env["MM_LISTEN"] = f"{self.mm_host}:{self.mm_port}"
         env["MM_STATUS_LISTEN"] = f"127.0.0.1:{self.mm_status_port}"
         if self.min_app_version:
             env["MM_MIN_APP_VERSION"] = self.min_app_version
@@ -334,7 +338,7 @@ class OnlineBackend:
             if time.monotonic() > deadline:
                 raise BackendError(f"mm did not start:\n{self.log_text('mm')}")
             time.sleep(0.1)
-        log.info("accounts %s, mm udp 127.0.0.1:%d", self.accounts_url, self.mm_port)
+        log.info("accounts %s, mm udp %s:%d", self.accounts_url, self.mm_host, self.mm_port)
 
     def alive(self) -> bool:
         return all(p.poll() is None for p in self._procs.values())

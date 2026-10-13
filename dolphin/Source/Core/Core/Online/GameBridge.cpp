@@ -19,6 +19,8 @@
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
+#include "Common/UPnP.h"
+#include "Core/Config/OnlineSettings.h"
 #include "Core/Core.h"
 #include "Core/NetPlayClient.h"
 #include "Core/Online/Chat.h"
@@ -1702,6 +1704,11 @@ void Reset()
   // The online connection (hello) and the launcher hand-off (docs/rooms-protocol.md §5).
   Rooms::Start();
   Rooms::OnBoot();
+#ifdef USE_UPNP
+  // The router's UPnP service, for the searches' port mapping (Matchmaking::StartMatchmaking).
+  if (Config::Get(Config::ONLINE_UPNP))
+    Common::UPnP::StartDiscovery();
+#endif
   {
     std::lock_guard lk(s_mutex);
     s_located.reset();

@@ -8,6 +8,8 @@ see ``ppharness/backend.py``): ``cargo build --workspace`` in ``server/``, then
 
 from __future__ import annotations
 
+import re
+import socket
 import sys
 import time
 from pathlib import Path
@@ -16,6 +18,7 @@ from typing import Any, Callable, Iterator
 import pytest
 
 from ppharness.backend import BackendError, OnlineBackend, OnlineUser, server_binary
+from ppharness.fake_igd import Call, FakeIGD
 from ppharness.instance import DolphinInstance, InstanceConfig
 from ppharness.netsim import NetSim
 
@@ -152,9 +155,93 @@ def test_direct_match(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
     sa, sb = _search_both(a, b, ua, ub, session="none")
     _check_match(sa, sb, ua, ub)
     assert sa["handoff"] == sb["handoff"] == "kept"
-    for i in (a, b):
+    for i, s in ((a, sa), (b, sb)):
         st = i.client.mm_cancel()
         assert st["state"] == "idle" and not st["searching"]
+        # A server on 127.0.0.1 gets no UPnP mapping (it would only add mappings to the router).
+        log_text = i.log_path.read_text(errors="replace")
+        assert "UPnP: mapped" not in log_text
+        port = s["local_port"]
+        assert f"The server sees us at 127.0.0.1:{port} (port {port})" in log_text
+
+
+def _lan_address() -> str:
+    """This machine's address toward the internet (no packet is sent)."""
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
+        s.connect(("192.0.2.1", 9))
+        return s.getsockname()[0]
+
+
+def test_direct_match_maps_the_port_with_upnp(dolphin: Callable[..., DolphinInstance]) -> None:
+    """With mm on the LAN address (not 127.0.0.1), each search asks the router to forward its UDP
+    port (external = internal, to this machine) before contacting mm (Common::UPnP::MapUdpPort),
+    the match still connects, and quitting removes the mapping. The router is ppharness's fake
+    IGD, which only takes permanent leases: the 2 h lease is refused (725) and the mapping is made
+    again with 0. Whether a real NAT then forwards the port was checked with miniupnpd in network
+    namespaces (docs/backend-design.md 1.4, "a UPnP mapping of the port")."""
+    lan = _lan_address()
+    if lan.startswith("127."):
+        pytest.skip("no LAN address")
+    try:
+        igd = FakeIGD(lan, permanent_leases_only=True).start()
+    except OSError as e:
+        pytest.skip(f"cannot listen for SSDP on {lan}: {e}")
+    be = _make_backend(mm_host=lan)
+    try:
+        ua, ub = be.create_user("alice", "ALIC"), be.create_user("bob", "BOB")
+        cfg = InstanceConfig(dolphin_ini={"Online": {
+            "MatchmakingHost": lan,
+            "MatchmakingPort": be.mm_port,
+            "AccountsUrl": be.accounts_url,
+        }})
+        a = _launch(dolphin, "upnp-a", cfg, ua)
+        b = _launch(dolphin, "upnp-b", cfg, ub)
+        _logged_in(a, ua)
+        _logged_in(b, ub)
+        sa, sb = _search_both(a, b, ua, ub, session="none")
+        for i in (a, b):
+            found = i.wait_for_log(r"UPnP: (router at (\S+) for (\S+?)[,;].*|no router with UPnP "
+                                   r"found|discovery failed.*)", timeout=10)
+            if found.group(2) != igd.control_url:
+                pytest.fail(f"Dolphin did not use the fake router: {found.group(0)}")
+            assert found.group(3) == lan
+            assert "internet address 11.22.33.44" in found.group(0)
+        ports = {sa["local_port"], sb["local_port"]}
+        for i, st in ((a, sa), (b, sb)):
+            port = st["local_port"]
+            # Mapped before the server was contacted, and the server saw that port.
+            mapped = i.wait_for_log(rf"UPnP: mapped UDP port {port} to {re.escape(lan)}")
+            seen = i.wait_for_log(rf"\[Matchmaking\] The server sees us at "
+                                  rf"{re.escape(lan)}:{port} \(port {port}, UPnP-mapped\)")
+            assert mapped.start() < seen.start()
+            i.client.mm_cancel()
+        # Other programs on this machine may find the fake router too (a game-streaming host mapped
+        # its TCP ports to it): only Dolphin's UDP mappings count.
+        def dolphins(action: str) -> list[Call]:
+            return [c for c in igd.mapping_calls() if c.action == action and
+                    c.args.get("NewProtocol") == "UDP" and
+                    c.args.get("NewExternalPort") in {str(p) for p in ports}]
+
+        adds = dolphins("AddPortMapping")
+        # Each port: the 2 h lease (refused), then a permanent one, for this machine's port.
+        for port in ports:
+            mine = [c for c in adds if c.args.get("NewExternalPort") == str(port)]
+            assert [(c.args.get("NewLeaseDuration"), c.error) for c in mine] == \
+                [("7200", 725), ("0", 0)], mine
+            for c in mine:
+                assert c.args.get("NewInternalPort") == str(port)
+                assert c.args.get("NewInternalClient") == lan
+                assert c.args.get("NewPortMappingDescription") == f"Brawl Online UDP {port}"
+        assert len(adds) == 4
+        for i, st in ((a, sa), (b, sb)):
+            i.stop()
+            assert re.search(rf"UPnP: removed the mapping of UDP port {st['local_port']}\b",
+                             i.log_path.read_text(errors="replace"))
+        assert sorted(c.args.get("NewExternalPort") for c in dolphins("DeletePortMapping")) == \
+            sorted(str(p) for p in ports)
+    finally:
+        be.stop()
+        igd.stop()
 
 
 def test_direct_match_through_netsim(backend: OnlineBackend,

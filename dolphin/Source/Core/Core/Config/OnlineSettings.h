@@ -31,6 +31,10 @@ extern const Info<int> ONLINE_NETPLAY_PORT;
 // "Force LAN IP": report this address as ipAddressLan instead of the detected one.
 extern const Info<bool> ONLINE_FORCE_LAN_IP;
 extern const Info<std::string> ONLINE_LAN_IP;
+// Ask the router (UPnP) to forward that port while searching, for routers that change the port
+// for every destination (Matchmaking::StartMatchmaking). Not with a matchmaking server on this
+// machine (the tests).
+extern const Info<bool> ONLINE_UPNP;
 
 // The session backend a connected match is handed to (Online::Session): "gameplay" (the
 // gameplay-only, Slippi-style session, the default), "netplay" (whole-machine rollback netplay

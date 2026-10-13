@@ -151,6 +151,7 @@ private:
   std::atomic<ErrorSource> m_error_source{ErrorSource::None};
 
   std::atomic<u16> m_host_port{0};
+  bool m_upnp_mapped = false;  // the router forwards m_host_port (matchmaking thread only)
   std::atomic<int> m_ticket_count{0};
   std::atomic<int> m_connect_attempts{0};
 
