@@ -283,7 +283,16 @@ extern "C" {
         out &= ~(0x1000u | 0x10u);   // START (random), Z (hazards: the online rules set them)
         StageLegal::showTurn(OnlineMenu::rankedText());
         s_autoLeave = !st->active || (st->type != PPOM::STEP_STRIKE && st->type != PPOM::STEP_PICK);
-        if (s_autoLeave) return out | 0x100u;
+        if (s_autoLeave) {
+            // A goes to what the cursor is on (sel_stage+0x4F3C reads the hovered item, +0x244,
+            // after this hook): 0x30-0x37 are the buttons, and on P+'s page button (0x35) the A
+            // turned the page every frame and the stage select never left (staging 2026-10-12:
+            // the winner's cursor on PAGE 2 when the loser picked). Read as nothing hovered, A
+            // takes the stage pponline_sssFilterPos gives; setHover sets +0x244 again next frame.
+            u32* hovered = (u32*)(task + 0x244);
+            if (*hovered - 0x30u <= 7u) *hovered = 0;
+            return out | 0x100u;
+        }
         if (!(st->myTurn && st->type == PPOM::STEP_PICK)) out &= ~0x100u;   // A only to pick
         if (st->myTurn && st->type == PPOM::STEP_STRIKE && (pressed & (0x400u | 0x80000u))) {
             int kind = StageLegal::kindAt(*(u8*)StageLegal::CURRENT_PAGE, *(int*)(task + 0x248));

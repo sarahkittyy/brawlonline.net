@@ -187,7 +187,15 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
         v = _wait_view(loser, lambda v: v["type"] == 2 and v["my_turn"], "the pick")
         assert not set(bans) & set(v["selectable"]) and v["text"].startswith("Pick a stage"), v
         loser.shot(f"g{game}-sss-loser-picks")
+        # The winner's cursor rests on P+'s page button: the stage select still leaves by itself
+        # once the loser picked (staging 2026-10-12: its A turned the page every frame instead).
+        page = B.sss_hover_item(winner.c, B.SSS_ITEM_PAGE).page
         B.sss_pick_stage(loser.c, pick, 0)
+        def left_or_turned() -> bool:
+            v = B.read_sss(winner.c.read_mem)
+            return online_set.scene(winner.c) != SSS or (v is not None and v.page != page)
+        online_set.wait(left_or_turned, 20, f"game {game}: the winner leaves the stage select")
+        assert online_set.scene(winner.c) != SSS, ("the winner's stage select turned the page", page)
         _both_on(players, online_set.CSS, f"game {game}: both back on the CSS")
 
         # Characters: the winner first; the loser's START does nothing until then.
