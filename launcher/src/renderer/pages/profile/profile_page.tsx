@@ -201,12 +201,6 @@ const replayRootOf = (file: string, roots: string[]): string => {
 
 /** A match's replays: the button opens Replays, refreshed, with them pulsing gold (a set's games are one file each). */
 const ReplaysCell = ({ replays }: { replays: string[] | null }) => {
-  const presenter = useReplayPresenter();
-  const navigate = useNavigate();
-  const setSearchText = useReplayFilter((store) => store.setSearchText);
-  const highlight = useReplayHighlight((store) => store.highlight);
-  const rootSlpPath = useSettings((store) => store.settings.rootSlpPath);
-  const extraSlpPaths = useSettings((store) => store.settings.extraSlpPaths);
   if (!replays || replays.length === 0) {
     return (
       <Tooltip title={Messages.noReplaysHint()}>
@@ -214,6 +208,16 @@ const ReplaysCell = ({ replays }: { replays: string[] | null }) => {
       </Tooltip>
     );
   }
+  return <ShowReplaysButton replays={replays} />;
+};
+
+const ShowReplaysButton = ({ replays }: { replays: string[] }) => {
+  const presenter = useReplayPresenter();
+  const navigate = useNavigate();
+  const setSearchText = useReplayFilter((store) => store.setSearchText);
+  const highlight = useReplayHighlight((store) => store.highlight);
+  const rootSlpPath = useSettings((store) => store.settings.rootSlpPath);
+  const extraSlpPaths = useSettings((store) => store.settings.extraSlpPaths);
   const show = () => {
     // All replays (the replay folder with its month folders), newest first, no search hiding them
     setSearchText("");

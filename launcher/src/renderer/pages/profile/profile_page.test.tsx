@@ -1,12 +1,19 @@
 import { render } from "@testing-library/react";
 import React from "react";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 
 import { RATING_DOWN_COLOR, RATING_UP_COLOR } from "@/lib/ranked_format";
 import { LeaderboardRow } from "@/pages/leaderboard/leaderboard_page";
 import type { MatchHistoryItem } from "@/services/backend/types";
 
 import { MatchRow } from "./profile_page";
+
+// The replays cell reads the replay folders from the settings store, which loads window.electron's settings.
+vi.mock("@/lib/hooks/use_settings", () => {
+  const state = { settings: { rootSlpPath: "", extraSlpPaths: [] as string[] } };
+  const useSettings = Object.assign((select: (s: typeof state) => unknown) => select(state), { getState: () => state });
+  return { useSettings };
+});
 
 const inTable = (row: React.ReactNode) => (
   <table>
@@ -143,7 +150,10 @@ describe("MatchRow", () => {
     expect(cells[2]).toBe("annANN#2deeDEE#4");
     expect(cells[3]).toBe("Won");
     expect(cells[4]).toBe("bobBOB#1cyCY#3");
-    const dots = Array.from(container.querySelectorAll("span[aria-label]")).map((s) => s.getAttribute("aria-label"));
+    // The team dots, not the replays cell's tooltip label
+    const dots = Array.from(container.querySelectorAll("td:not(:last-child) span[aria-label]")).map((s) =>
+      s.getAttribute("aria-label"),
+    );
     expect(dots).toEqual(["Blue team", "Blue team", "Red team", "Red team"]);
   });
 
