@@ -40,7 +40,7 @@ import {
 } from "./install/pplus_release";
 import { installPluginOnSdCard, loadPlugin } from "./install/sd_card";
 import { DolphinInstance, MacOsRosettaRequiredError, PlaybackDolphinInstance } from "./instance";
-import { buildNetplayDolphinArgs } from "./netplay_args";
+import { buildNetplayDolphinArgs, buildPlaybackDolphinArgs } from "./netplay_args";
 import { clearRoomRequest } from "./room_handoff";
 import { createProgressThrottle, runWithProgress } from "./setup_progress";
 import type { DolphinEvent, DolphinSetupPhase, ReplayCommunication } from "./types";
@@ -186,9 +186,17 @@ export class DolphinManager {
     }
   }
 
+  /**
+   * Plays replays (docs/design/replays.md §6.2) in the playback Dolphin: the same executable as
+   * Play, with its own User folder (its own graphics settings and window, and a Brawl save of its
+   * own), booting the game from the netplay install's P+ files and patched SD card. A replay's
+   * game settings come from the replay itself (Dolphin forces them for the run only).
+   */
   async launchPlaybackDolphin(id: string, replayComm: ReplayCommunication): Promise<void> {
     const playbackInstallation = this.getInstallation(DolphinLaunchType.PLAYBACK);
     this._assertNotMoving();
+    const netplayInstallation = this.getInstallation(DolphinLaunchType.NETPLAY);
+    await this._repairBundledDolphin();
     const dolphinPath = await playbackInstallation.findDolphinExecutable();
     await playbackInstallation.ensureUserFolder();
 
@@ -199,7 +207,26 @@ export class DolphinManager {
     let playbackInstance = this.playbackDolphinInstances.get(id);
     if (!playbackInstance) {
       await this.launchGate();
-      playbackInstance = new PlaybackDolphinInstance(dolphinPath, playbackInstallation.userArgs());
+      const isoPath = await this._getIsoPath();
+      Preconditions.checkExists(isoPath, "No Brawl disc image set. Choose one in Settings > Game.");
+      await this.ensureNetplayUserFolder();
+      await this._ensureProjectPlusFiles(netplayInstallation);
+      await netplayInstallation.assertProjectPlusFiles();
+      const storeDir = projectPlusStoreFolder(app.getPath("userData"));
+      await this._ensureBrawlSave(playbackInstallation, storeDir);
+      await playbackInstallation.addGamePath(path.dirname(isoPath));
+      await playbackInstallation.setDefaultIso(isoPath);
+      const sdCardImage = await this._withProgress(DolphinLaunchType.PLAYBACK, "prepareSdCard", (onProgress) =>
+        this._installOnlinePlugin(netplayInstallation, true, onProgress),
+      );
+      const params = buildPlaybackDolphinArgs({
+        userArgs: playbackInstallation.userArgs(),
+        sdCardImage,
+        bootFile: netplayInstallation.netplayLauncherDol,
+        testMode: readTestMode(process.env, app.isPackaged),
+      });
+      log.info(`Launching playback dolphin at path: ${dolphinPath} ${params.join(" ")}`);
+      playbackInstance = new PlaybackDolphinInstance(dolphinPath, params);
       playbackInstance.on("close", async (exitCode) => {
         this.eventSubject.next({
           type: DolphinEventType.CLOSED,
@@ -215,6 +242,23 @@ export class DolphinManager {
         log.error(err);
         throw err;
       });
+      // A replay from another version: ask, as §6.5 of docs/design/replays.md says.
+      const instance = playbackInstance;
+      instance.onNeedsPlayAnyway = (status) => {
+        log.info(`Replay refused: ${status.error ?? ""}`);
+        void dialog
+          .showMessageBox({
+            type: "question",
+            buttons: ["Play anyway", "Cancel"],
+            defaultId: 1,
+            cancelId: 1,
+            title: "Replay",
+            message: "This replay may not play as it was played.",
+            detail: `${status.error ?? "It was recorded with another version."}\n\nPlay it anyway?`,
+          })
+          .then(({ response }) => (response === 0 ? instance.playAnyway() : undefined))
+          .catch((err) => log.error(err));
+      };
 
       this.playbackDolphinInstances.set(id, playbackInstance);
     }

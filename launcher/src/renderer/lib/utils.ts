@@ -4,10 +4,56 @@ import { assetUrl, useGameAssets } from "@/styles/game_theme";
 const EMPTY_IMAGE = "data:image/gif;base64,R0lGODlhAQABAIAAAAAAAP///yH5BAEAAAAALAAAAAABAAEAAAIBRAA7";
 
 /**
- * Character IDs in our replays -> stock icon keys of the extracted asset manifest.
- * Filled in when our replay format is defined (PPLUS_PORTING.md, "Replays").
+ * Character IDs in our replays (Brawl's gmCharacterKind, as the replay's INFO and the online
+ * lock-ins carry them) -> stock icon keys of the extracted asset manifest (brawl_assets/catalog.ts).
  */
-export const characterStockKeys: Record<number, string> = {};
+export const characterStockKeys: Record<number, string> = {
+  0x00: "mario",
+  0x01: "donkey_kong",
+  0x02: "link",
+  0x03: "samus",
+  0x04: "zero_suit_samus",
+  0x05: "yoshi",
+  0x06: "kirby",
+  0x07: "fox",
+  0x08: "pikachu",
+  0x09: "luigi",
+  0x0a: "captain_falcon",
+  0x0b: "ness",
+  0x0c: "bowser",
+  0x0d: "peach",
+  0x0e: "zelda",
+  0x0f: "sheik",
+  0x10: "ice_climbers",
+  0x11: "ice_climbers",
+  0x13: "marth",
+  0x14: "mr_game_and_watch",
+  0x15: "falco",
+  0x16: "ganondorf",
+  0x17: "wario",
+  0x18: "meta_knight",
+  0x19: "pit",
+  0x1a: "olimar",
+  0x1b: "lucas",
+  0x1c: "diddy_kong",
+  0x1e: "charizard",
+  0x20: "squirtle",
+  0x22: "ivysaur",
+  0x23: "king_dedede",
+  0x24: "lucario",
+  0x25: "ike",
+  0x26: "rob",
+  0x27: "jigglypuff",
+  0x28: "toon_link",
+  0x29: "wolf",
+  0x2a: "snake",
+  0x2b: "sonic",
+  0x2c: "giga_bowser",
+  0x2d: "wario_man",
+  0x32: "roy",
+  0x33: "mewtwo",
+  0x35: "knuckles",
+};
 
 /**
  * Stock icon for a character, from the stock icons extracted from the user's own

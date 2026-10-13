@@ -51,6 +51,9 @@ export type QueryFilters = {
   // Game type filters
   isRanked?: boolean;
   isTeams?: boolean;
+
+  // The online match the game was part of (match:<id>, from the profile's match history)
+  sessionIds?: string[];
 };
 
 /**

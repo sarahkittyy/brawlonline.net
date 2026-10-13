@@ -227,6 +227,7 @@ void Presenter::ViSwap(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height,
 
   video_events.before_present_event.Trigger(present_info);
 
+  m_last_swap_ticks = ticks;
   if (!is_duplicate || !g_ActiveConfig.bSkipPresentingDuplicateXFBs)
   {
     Present(&present_info);
@@ -264,11 +265,23 @@ void Presenter::ImmediateSwap(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_
 
   video_events.before_present_event.Trigger(present_info);
 
+  m_last_swap_ticks = ticks;
   Present(&present_info);
   ProcessFrameDumping(ticks);
   Rollback::PresentStats::OnPresent(false);
 
   video_events.after_present_event.Trigger(present_info);
+}
+
+void Presenter::RedrawLastFrame()
+{
+  Present();
+  if (m_xfb_entry)
+  {
+    ProcessFrameDumping(m_last_swap_ticks);
+    // (Normally at the end of the frame, which a paused game never reaches.)
+    g_frame_dumper->FlushFrameDump();
+  }
 }
 
 void Presenter::SetNextSwapEstimatedTime(u64 ticks, TimePoint host_time)

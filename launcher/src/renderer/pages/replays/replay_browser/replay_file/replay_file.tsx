@@ -1,5 +1,5 @@
 import { exists } from "@common/exists";
-import { css } from "@emotion/react";
+import { css, keyframes } from "@emotion/react";
 import styled from "@emotion/styled";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
@@ -34,6 +34,8 @@ type ReplayFileProps = {
   selectedIndex?: number;
   backgroundImage?: string;
   onFileNameDragStart?: (event: React.DragEvent<HTMLDivElement>) => void;
+  /** Non-zero: pulse gold (a new value pulses again); the replays the match history asked for. */
+  highlightKey?: number;
 };
 
 export const ReplayFile = React.memo(function ReplayFile({
@@ -44,10 +46,16 @@ export const ReplayFile = React.memo(function ReplayFile({
   fileName,
   details,
   onFileNameDragStart,
+  highlightKey = 0,
 }: ReplayFileProps) {
   const selected = exists(selectedIndex) && selectedIndex >= 0;
   return (
-    <Outer backgroundImage={backgroundImage} selected={selected}>
+    <Outer
+      backgroundImage={backgroundImage}
+      selected={selected}
+      data-replay-highlight={highlightKey ? highlightKey : undefined}
+    >
+      {highlightKey > 0 && <HighlightPulse key={highlightKey} />}
       <div
         css={css`
           display: flex;
@@ -125,6 +133,28 @@ export const ReplayFile = React.memo(function ReplayFile({
     </Outer>
   );
 });
+
+const goldPulse = keyframes`
+  0%, 50%, 100% {
+    opacity: 0;
+  }
+  25%, 75% {
+    opacity: 1;
+  }
+`;
+
+// Two gold pulses over the row, after the list has had time to scroll to it.
+const HighlightPulse = styled.div`
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+  border-radius: 10px;
+  opacity: 0;
+  background: rgba(255, 196, 57, 0.14);
+  box-shadow: inset 0 0 0 2px rgba(255, 196, 57, 0.95), inset 0 0 24px rgba(255, 196, 57, 0.45);
+  animation: ${goldPulse} 1.6s ease-in-out 0.4s 1 both;
+`;
 
 const Outer = styled.div<{
   backgroundImage?: string;

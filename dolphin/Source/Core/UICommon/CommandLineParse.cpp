@@ -106,6 +106,13 @@ std::unique_ptr<optparse::OptionParser> CreateParser(ParserOptions options)
       .type("string")
       .help("Start the automation harness control server on 127.0.0.1:<port> "
             "(see docs/harness-protocol.md; PPR_HARNESS_PORT is used if absent)");
+  parser->add_option("-i", "--replay-comm")
+      .action("store")
+      .dest("replay_comm")
+      .metavar("<file>")
+      .type("string")
+      .help("Play the replays this file names, and follow it for new ones (Slippi's playback "
+            "comm file; docs/design/replays.md)");
   parser->add_option("-s", "--save_state")
       .action("store")
       .metavar("<file>")

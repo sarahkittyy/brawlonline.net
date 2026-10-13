@@ -25,6 +25,7 @@
 #include <array>
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -33,6 +34,7 @@
 #include <picojson.h>
 
 #include "Common/CommonTypes.h"
+#include "Core/Rollback/ReplayRecorder.h"
 
 namespace Core
 {
@@ -175,6 +177,8 @@ struct ConnectOptions
   // Ports (bits) that pick the first game's stage: a room's game is a session of its own, and the
   // last room game's loser picks (docs/rooms-game-interface.md); every member carries the same.
   u8 initial_pickers = 0;
+  // Who plays (matchmaking's ticket), for the replays of this session's games (ReplayRecorder.h).
+  Replay::MatchMeta replay_meta;
 };
 
 // ---- The lobby: the online character select between matches (Slippi's MATCH_SELECTIONS). ----
@@ -326,6 +330,70 @@ void SetStageDecider(std::function<StageDecision(u32 game)> decider);
 // identical to the netplay SwitchFF.rss), as srStageKind values.
 const std::vector<u16>& DefaultStages();
 
+// ---- Playback (docs/design/replays.md §6) ----
+// A replay plays as a joiner whose host is the file: the game starts the replay's match from the
+// SESSION GameBridge writes (PPOM v8's playback request), the barrier checks the match is the one
+// recorded and applies the recorded host's values, and the recorded inputs run every frame once.
+// `play_anyway`: a replay from another simulation version, or whose setup differs, plays anyway
+// (its checksums then show where it stops matching).
+// `hold_at_end`: the last replay asked for holds at its last frame (paused, still seekable)
+// instead of ending its match.
+std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file, bool play_anyway,
+                                       bool hold_at_end = false);
+// Ends a playback (its match ends at the next loop top).
+void StopPlayback();
+// What GameBridge gives the game while a replay is armed or plays.
+struct PlaybackView
+{
+  bool active = false;
+  u32 serial = 0;              // a new replay to start
+  std::vector<u8> session;     // the recorded SESSION block (GameBridge checks every field)
+  int local_port = -1;         // the recorder's in-game port
+  bool in_match = false;       // the barrier passed and the replay's last frame has not run
+  bool disconnected = false;   // after the last frame: the live game ended with DISCONNECTED
+  bool desynced = false;       // ... with DESYNC DETECTED
+  bool quit_left = false;      // ... with this player's quit of a 3-4 player match
+};
+PlaybackView GetPlaybackView();
+// For the harness and the launcher: phase, frame, last frame, desync, error.
+picojson::object PlaybackStatus();
+
+// Playback controls (docs/design/replays.md §6.4; the replay hotkeys, the overlay's seek bar, the
+// harness). They act at the next loop top, between two frames. Frames are the replay's (session
+// frames, 60 a second): `Seek` shows that frame, `Jump` moves by `arg` seconds, the steps by one
+// frame (pausing), `Speed` sets the speed (0.25-2), `Faster`/`Slower` step through 1/4, 1/2, 3/4,
+// 1, 1.5, 2.
+enum class PlaybackCommand
+{
+  TogglePause,
+  Pause,
+  Play,
+  StepForward,
+  StepBack,
+  Jump,
+  Seek,
+  Speed,
+  Faster,
+  Slower,
+};
+void PlaybackControl(PlaybackCommand command, double arg = 0);
+// What the overlay shows (the playback's view, any thread).
+struct PlaybackInfo
+{
+  bool active = false;     // a replay's match runs (or holds at its end)
+  s64 first = 0, last = 0;  // its frames
+  s64 shown = 0;           // the frame on screen
+  bool paused = false;
+  bool seeking = false;
+  double speed = 1.0;
+  s64 desync_frame = -1;
+  std::string title;       // "Direct · Game 2"
+  std::array<std::string, MAX_LOBBY_PLAYERS> names{};  // "" for an empty port
+  std::array<u8, MAX_LOBBY_PLAYERS> chars{};
+  size_t keyframes = 0;
+};
+PlaybackInfo GetPlaybackInfo();
+
 // Arms a sync test that starts at the next match's first simulation frame.
 std::optional<std::string> ArmSyncTest(const SyncTestOptions& options);
 // Opens the UDP socket and starts connecting (joiner) or listening (host).
@@ -333,7 +401,7 @@ std::optional<std::string> Connect(const ConnectOptions& options);
 // This player's selections (free-form JSON object, e.g. {"character": "fox", "costume": 0}); the
 // host's may carry the stage and rules. Sent to the peer and shown in Status().
 std::optional<std::string> SetSelections(const picojson::object& selections);
-// Ends any session and closes the socket.
+// Ends any online session and closes the socket (an armed or playing replay stays: StopPlayback).
 void Stop();
 
 picojson::value Status();

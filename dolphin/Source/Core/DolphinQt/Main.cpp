@@ -30,6 +30,7 @@
 #include "Core/Core.h"
 #include "Core/DolphinAnalytics.h"
 #include "Core/Harness/Harness.h"
+#include "Core/Rollback/ReplayPlayback.h"
 #include "Core/System.h"
 
 #include "DolphinQt/HangWatchdog.h"
@@ -277,6 +278,10 @@ int main(int argc, char* argv[])
     Settings::Instance().InitDefaultPalette();
     Settings::Instance().ApplyStyle();
 
+    // Replays (the launcher's playback Dolphin): what to play, from the comm file.
+    if (options.is_set("replay_comm"))
+      Gprb::Replay::Playback::SetCommFile(static_cast<const char*>(options.get("replay_comm")));
+
     // Started before the main window exists so MainWindow can skip interactive startup prompts
     // (the update check) when running under the harness.
     if (const std::optional<u16> harness_port =
@@ -361,6 +366,7 @@ int main(int argc, char* argv[])
     hang_watchdog.Stop();
     Harness::Shutdown();
   }
+  Gprb::Replay::Playback::Shutdown();
 
   Core::Shutdown(Core::System::GetInstance());
   UICommon::Shutdown();

@@ -916,6 +916,11 @@ picojson::object Status()
   return o;
 }
 
+const char* CharacterName(u8 kind)
+{
+  return CharName(kind);
+}
+
 // ---- 3-4 player matches ----
 
 const char* SetupErrorText(SetupError error)

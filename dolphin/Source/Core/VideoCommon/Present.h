@@ -42,6 +42,10 @@ public:
   void SetNextSwapEstimatedTime(u64 ticks, TimePoint host_time);
 
   void Present(PresentInfo* present_info = nullptr);
+  // Shows the last frame again, with the on-screen UI, and takes a pending screenshot of it:
+  // while a replay is paused (the game makes no frames), so that its overlay still draws and a
+  // screenshot or capture still works. Video thread.
+  void RedrawLastFrame();
   void ClearLastXfbId() { m_last_xfb_id = std::numeric_limits<u64>::max(); }
 
   bool Initialize();
@@ -169,6 +173,7 @@ private:
   std::unique_ptr<VideoCommon::OnScreenUI> m_onscreen_ui;
 
   u64 m_frame_count = 0;
+  u64 m_last_swap_ticks = 0;  // the last swap's (RedrawLastFrame)
   u64 m_present_count = 0;
 
   // XFB tracking

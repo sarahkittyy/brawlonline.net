@@ -41,7 +41,10 @@ namespace PPOM {
     // at +0x220 and the room's ruleset and set (RoomPlay) at +0x240. No other size or offset changed.
     // 7: the room's stages (docs/design/room-rules.md section 2, the stage switch): SESSION grows to
     // 0x2C0 with RoomStages at +0x280, and RoomPlay's stageChoice CHOICE_LOSER_PICKS_LIST.
-    const u16 VERSION = 7;
+    // 8: replays (docs/design/replays.md section 6): LOCAL.directJoin with a zero prefix and
+    // directNumber 3 asks the game to play the replay whose SESSION Dolphin wrote (QUEUE_PLAYBACK).
+    // No size or offset changed.
+    const u16 VERSION = 8;
 
     // Slippi command bytes (EXI_DeviceSlippi.h), kept for familiarity (design 5.3).
     enum Cmd {
@@ -74,6 +77,9 @@ namespace PPOM {
     };
 
     const int CODE_LEN = 9;   // "ABCD#123" + NUL, UTF-16
+    // LOCAL.directNumber with a zero prefix: the launcher's Play unranked / Play ranked, and v8's
+    // replay playback.
+    enum DirectQueue { QUEUE_UNRANKED = 1, QUEUE_RANKED = 2, QUEUE_PLAYBACK = 3 };
     const int NAME_LEN = 16;
     const int ERROR_LEN = 120;
     const int TAG_CHARS = 5;  // a name tag's characters (the save's tag records, PortValues)
@@ -316,6 +322,8 @@ namespace PPOM {
         // letters, upper case, NUL-padded) + '#' + directNumber (1-9999), and searches it on
         // START without the keypad. A zero prefix: a plain Direct CSS, or with directNumber 1 / 2
         // the launcher's Play unranked / Play ranked: the Unranked / Ranked CSS.
+        // v8: directNumber 3 with a zero prefix: play the replay in SESSION (the playback Dolphin,
+        // docs/design/replays.md section 6): its mode's CSS, then its match at once.
         u8 directJoin;
         char directPrefix[4];
         u16 directNumber;

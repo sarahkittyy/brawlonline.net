@@ -66,3 +66,17 @@ export function buildNetplayDolphinArgs(input: NetplayArgsInput): string[] {
   }
   return args;
 }
+
+/**
+ * The playback Dolphin's command line (docs/design/replays.md §6.2): its own User folder (its own
+ * graphics, hotkeys and window), but the game from the netplay install: P+'s netplay launcher DOL
+ * and the same patched SD card, never a second copy. The card is shared with a Play Dolphin that
+ * may run at the same time, so this run may not write to it (`[Core] WiiSDCardAllowWrites`), and
+ * a replay is never recorded again (`[Online] SaveReplays`). The comm file (`-i`) says what to
+ * play; PlaybackDolphinInstance adds it.
+ */
+export function buildPlaybackDolphinArgs(input: NetplayArgsInput): string[] {
+  const args = buildNetplayDolphinArgs({ ...input, testMode: { ...input.testMode, harnessPort: null } });
+  args.push("-C", "Dolphin.Core.WiiSDCardAllowWrites=False", "-C", "Dolphin.Online.SaveReplays=False");
+  return args;
+}

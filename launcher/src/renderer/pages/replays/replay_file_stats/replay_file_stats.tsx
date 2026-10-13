@@ -5,13 +5,14 @@ import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import type { FileResult } from "@replays/types";
+import { STATS_NOT_AVAILABLE } from "@replays/types";
 import { frameToGameTimer, GameMode, stages as stageUtils } from "@slippi/slippi-js";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
 
 import { BasicFooter } from "@/components/footer/footer";
 import { LoadingScreen } from "@/components/loading_screen/loading_screen";
-import { IconMessage } from "@/components/message";
+import { IconMessage, Message } from "@/components/message";
 import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
 import { useMousetrap } from "@/lib/hooks/use_mousetrap";
 import { convertFrameCountToDurationString } from "@/lib/time";
@@ -172,6 +173,8 @@ export const ReplayFileStats = (props: ReplayFileStatsProps) => {
           <HomeRunProfile file={file} stats={stadiumStats} />
         ) : numPlayers !== 2 ? (
           <IconMessage Icon={ErrorIcon} label={Messages.gameStatsForTeamBattlesIsUnsupported()} />
+        ) : errorMessage?.includes(STATS_NOT_AVAILABLE) ? (
+          <Message label={Messages.comingSoon()} />
         ) : errorMessage ? (
           <IconMessage Icon={ErrorIcon} label={`Error: ${errorMessage}`} />
         ) : gameStats ? (

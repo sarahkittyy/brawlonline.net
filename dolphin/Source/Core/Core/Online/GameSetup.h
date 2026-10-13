@@ -114,6 +114,8 @@ const std::vector<u16>& DefaultStarters();
 // are in-game ports (0 = P1); a room's slot is its port, and ports may be empty (P1, P3).
 
 constexpr int MAX_PORTS = 4;
+// gmCharacterKind -> the name the game shows (P+ v3.2's roster), "a character" for anything else.
+const char* CharacterName(u8 kind);
 
 // The players' names by in-game port, for the character step's line ("alice is picking, then
 // you"); empty: "Opponent". Set after Begin.

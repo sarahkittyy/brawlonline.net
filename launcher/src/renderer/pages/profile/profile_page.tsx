@@ -1,3 +1,4 @@
+import Button from "@mui/material/Button";
 import Table from "@mui/material/Table";
 import TableBody from "@mui/material/TableBody";
 import TableCell from "@mui/material/TableCell";
@@ -5,14 +6,20 @@ import TableHead from "@mui/material/TableHead";
 import TableRow from "@mui/material/TableRow";
 import ToggleButton from "@mui/material/ToggleButton";
 import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
+import Tooltip from "@mui/material/Tooltip";
 import Typography from "@mui/material/Typography";
 import { useQuery } from "@tanstack/react-query";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
+import { useNavigate } from "react-router-dom";
 
 import { InfiniteScrollContainer } from "@/components/infinite_scroll_container/infinite_scroll_container";
 import { PagedListStatus } from "@/components/paged_list_status/paged_list_status";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useCursorPages } from "@/lib/hooks/use_cursor_pages";
+import { useReplayFilter } from "@/lib/hooks/use_replay_filter";
+import { useReplayHighlight } from "@/lib/hooks/use_replay_highlight";
+import { useReplayPresenter } from "@/lib/hooks/use_replays";
+import { useSettings } from "@/lib/hooks/use_settings";
 import {
   formatMatchScore,
   formatPlace,
@@ -110,6 +117,7 @@ const MatchHistory = ({ uid }: { uid: string }) => {
   // Fresh on every visit and when the window regains focus (a set settles while the player is in
   // Dolphin), like the rating above; else a set shows "In progress" until the launcher restarts.
   const pages = useCursorPages<MatchHistoryItem>({ queryKey: ["matchHistory", uid, mode], fetchPage, refresh: true });
+  const replays = useMatchReplays(pages.items);
 
   return (
     <>
@@ -143,11 +151,12 @@ const MatchHistory = ({ uid }: { uid: string }) => {
                   <TableCell>{Messages.you()}</TableCell>
                   <TableCell align="center">{Messages.score()}</TableCell>
                   <TableCell>{Messages.opponent()}</TableCell>
+                  <TableCell>{Messages.replays()}</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {pages.items.map((m) => (
-                  <MatchRow key={m.matchId} item={m} myUid={uid} />
+                  <MatchRow key={m.matchId} item={m} myUid={uid} replays={replays.data?.[m.matchId] ?? null} />
                 ))}
               </TableBody>
             </Table>
@@ -164,7 +173,72 @@ const MatchHistory = ({ uid }: { uid: string }) => {
   );
 };
 
-export const MatchRow = React.memo(function MatchRow({ item, myUid }: { item: MatchHistoryItem; myUid: string }) {
+/**
+ * The replays on this computer of each listed match (docs/design/replays.md §9.2): every player's
+ * Dolphin saves the games it played, named by match in the file, so the server's match id finds
+ * them in the replay folders. Looked up again when the list grows or the folders change.
+ */
+const useMatchReplays = (items: MatchHistoryItem[]) => {
+  const { replayService } = useServices();
+  const rootSlpPath = useSettings((store) => store.settings.rootSlpPath);
+  const extraSlpPaths = useSettings((store) => store.settings.extraSlpPaths);
+  const matchIds = useMemo(() => items.map((m) => m.matchId), [items]);
+  return useQuery({
+    queryKey: ["matchReplays", matchIds, rootSlpPath, extraSlpPaths],
+    queryFn: () => replayService.findReplaysForMatches(matchIds, [rootSlpPath, ...extraSlpPaths]),
+    enabled: matchIds.length > 0,
+    refetchOnWindowFocus: "always",
+  });
+};
+
+const dirname = (p: string) => p.slice(0, Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\")));
+
+/** The replay folder (Settings > Replays: the root or an extra one) that holds `file`, else its own folder. */
+const replayRootOf = (file: string, roots: string[]): string => {
+  const holding = roots.filter((r) => r && window.electron.utils.isSubdirectory(r, file));
+  return holding.sort((a, b) => b.length - a.length)[0] ?? dirname(file);
+};
+
+/** A match's replays: the button opens Replays, refreshed, with them pulsing gold (a set's games are one file each). */
+const ReplaysCell = ({ replays }: { replays: string[] | null }) => {
+  const presenter = useReplayPresenter();
+  const navigate = useNavigate();
+  const setSearchText = useReplayFilter((store) => store.setSearchText);
+  const highlight = useReplayHighlight((store) => store.highlight);
+  const rootSlpPath = useSettings((store) => store.settings.rootSlpPath);
+  const extraSlpPaths = useSettings((store) => store.settings.extraSlpPaths);
+  if (!replays || replays.length === 0) {
+    return (
+      <Tooltip title={Messages.noReplaysHint()}>
+        <span style={{ fontSize: 12, color: "var(--text-secondary)" }}>{Messages.noReplays()}</span>
+      </Tooltip>
+    );
+  }
+  const show = () => {
+    // All replays (the replay folder with its month folders), newest first, no search hiding them
+    setSearchText("");
+    highlight(replays);
+    void presenter.loadFolder(replayRootOf(replays[0], [rootSlpPath, ...extraSlpPaths]), true).catch(() => undefined);
+    navigate("/main/replays/list");
+  };
+  return (
+    <Tooltip title={Messages.showHint(replays.length)}>
+      <Button size="small" variant="outlined" onClick={show} style={{ whiteSpace: "nowrap" }}>
+        {Messages.show(replays.length)}
+      </Button>
+    </Tooltip>
+  );
+};
+
+export const MatchRow = React.memo(function MatchRow({
+  item,
+  myUid,
+  replays = null,
+}: {
+  item: MatchHistoryItem;
+  myUid: string;
+  replays?: string[] | null;
+}) {
   // A room's team battle: my teammates on my side. A free-for-all: everyone else's place.
   const [mine, others] = matchSides(item, myUid);
   const showPlaces = item.room?.mode === "ffa";
@@ -189,6 +263,9 @@ export const MatchRow = React.memo(function MatchRow({ item, myUid }: { item: Ma
         {others.map((p) => (
           <PlayerCell key={p.uid} player={p} showPlace={showPlaces} />
         ))}
+      </TableCell>
+      <TableCell>
+        <ReplaysCell replays={replays} />
       </TableCell>
     </TableRow>
   );
