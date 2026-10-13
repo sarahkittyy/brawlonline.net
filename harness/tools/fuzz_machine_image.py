@@ -89,7 +89,8 @@ def main() -> int:
     a = ap.parse_args()
     out = Path(a.out)
     out.mkdir(parents=True, exist_ok=True)
-    stats = {"iterations": 0, "loaded": 0, "refused": 0, "crashes": 0, "restore_failed": 0}
+    stats = {"iterations": 0, "loaded": 0, "refused": 0, "crashes": 0, "restore_failed": 0,
+             "harness_lost": 0}
     findings: list[dict] = []
     pristine_path = out / "pristine.bin"
     mutant_path = out / "mutant.bin"
@@ -102,8 +103,25 @@ def main() -> int:
         time.sleep(a.boot_wait)
         return inst
 
-    inst = start()
-    size = inst.client.call("machine_image_state_save", path=str(pristine_path), timeout=60)["size"]
+    # A Dolphin and its own pristine state (a state saved by another boot is not what this test
+    # is about). The harness connection to a Dolphin is sometimes reset with the Dolphin still
+    # running (seen on this shared PC, cause unknown): the boot and the save are retried.
+    def start_with_pristine() -> tuple[DolphinInstance, int]:
+        for _ in range(3):
+            new = start()
+            try:
+                n = new.client.call("machine_image_state_save", path=str(pristine_path),
+                                    timeout=60)["size"]
+                return new, n
+            except Exception as e:  # noqa: BLE001
+                print("save failed:", e, flush=True)
+                try:
+                    new.cleanup(True)
+                except Exception:  # noqa: BLE001
+                    pass
+        raise SystemExit("could not start a Dolphin and save its state")
+
+    inst, size = start_with_pristine()
     pristine = pristine_path.read_bytes()
     span = ram_span(pristine)
     print(f"pristine state {size} bytes, guest RAM at {span}", flush=True)
@@ -129,6 +147,18 @@ def main() -> int:
                 stats["restore_failed"] += 1
                 findings.append({"iteration": i, "mutation": what, "kind": "pristine refused after"})
         except Exception as e:  # noqa: BLE001 -- the Dolphin died or stopped answering
+            alive = inst.process is not None and inst.process.poll() is None
+            if alive:
+                # The harness connection went, not the Dolphin: no finding, a new Dolphin.
+                stats["harness_lost"] += 1
+                print("harness connection lost (Dolphin still running):", e, flush=True)
+                try:
+                    inst.cleanup(True)
+                except Exception:  # noqa: BLE001
+                    pass
+                inst, _ = start_with_pristine()
+                pristine = pristine_path.read_bytes()
+                continue
             stats["crashes"] += 1
             crash = ""
             stderr = inst.user_dir / "harness-stderr.txt" if inst.user_dir else None
@@ -142,7 +172,8 @@ def main() -> int:
                 inst.cleanup(True)
             except Exception:  # noqa: BLE001
                 pass
-            inst = start()
+            inst, _ = start_with_pristine()
+            pristine = pristine_path.read_bytes()
         if stats["iterations"] % 50 == 0:
             print(json.dumps(stats), flush=True)
         (out / "fuzz.json").write_text(json.dumps({"stats": stats, "findings": findings}, indent=1))

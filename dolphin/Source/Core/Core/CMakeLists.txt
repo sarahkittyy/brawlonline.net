@@ -608,6 +608,8 @@ add_library(core
   Online/RoomMessages.h
   Online/SetFormat.cpp
   Online/SetFormat.h
+  Online/ModsRoom.cpp
+  Online/ModsRoom.h
   Online/Rooms.cpp
   Online/Rooms.h
   Online/Timeouts.h

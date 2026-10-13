@@ -58,6 +58,7 @@
 #include "Core/Online/GameBridge.h"
 #include "Core/Online/GameSetup.h"
 #include "Core/Online/Matchmaking.h"
+#include "Core/Online/ModsRoom.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/OnlineSession.h"
 #include "Core/Online/RecentCodes.h"
@@ -118,6 +119,26 @@ std::mutex s_client_mutex;
 std::thread s_client_thread;
 std::atomic<bool> s_client_busy{false};
 socket_t s_client_socket = INVALID_SOCK;
+// Bumped when a client's socket was taken from under it (StolenClientSocket): its thread ends
+// without touching the handle, which is someone else's socket by then.
+std::atomic<u32> s_client_generation{0};
+
+// The client's socket handle no longer is its TCP connection: something else in the process
+// closed it (a handle closed twice), and the number may now name another socket. Seen on Windows
+// while a session's Dolphin boots: the test's side of the connection is reset, and this side's
+// thread waits forever on whatever the handle became.
+bool StolenClientSocket(socket_t sock)
+{
+  int type = 0;
+#ifdef _WIN32
+  int len = sizeof(type);
+#else
+  socklen_t len = sizeof(type);
+#endif
+  if (getsockopt(sock, SOL_SOCKET, SO_TYPE, reinterpret_cast<char*>(&type), &len) != 0)
+    return true;
+  return type != SOCK_STREAM;
+}
 
 // Serializes command execution (only one client, but keep it explicit).
 std::mutex s_command_mutex;
@@ -1644,6 +1665,19 @@ Result CmdGameSetupAct(const Args& args)
 
 // Tests without the game plugin: an op as the room CSS would send it (op: create, join, leave,
 // slot, teams, public, team), or `ready` / `release_lock` / `screen` standing in for the game.
+// Brawl Mods rooms (Online/ModsRoom.h).
+Result CmdModsStatus(const Args&)
+{
+  return Online::ModsRoom::Status();
+}
+
+Result CmdModsRequest(const Args& args)
+{
+  if (const auto error = Online::ModsRoom::Request(args))
+    Fail(*error);
+  return Online::ModsRoom::Status();
+}
+
 Result CmdRoomsRequest(const Args& args)
 {
   if (const auto error = Online::Rooms::HarnessRequest(args))
@@ -1873,6 +1907,8 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"rooms_status", CmdRoomsStatus},
       {"game_setup_act", CmdGameSetupAct},
       {"rooms_request", CmdRoomsRequest},
+      {"mods_status", CmdModsStatus},
+      {"mods_request", CmdModsRequest},
       {"chat_status", CmdChatStatus},
       {"chat_send", CmdChatSend},
       {"chat_hide", CmdChatHide},
@@ -1990,7 +2026,7 @@ bool LooksLikeRequest(const std::string& line)
 // A line longer than this without a newline is not a harness request.
 constexpr size_t MAX_REQUEST_BYTES = 64 * 1024 * 1024;
 
-void ClientThread(socket_t sock)
+void ClientThread(socket_t sock, u32 generation)
 {
   Common::SetCurrentThreadName("Harness client");
   std::string buffer;
@@ -1998,20 +2034,54 @@ void ClientThread(socket_t sock)
 
   while (s_server_running.load())
   {
+    if (s_client_generation.load() != generation)
+      return;  // the socket was taken from under this client; the handle is not ours
     fd_set read_set;
     FD_ZERO(&read_set);
     FD_SET(sock, &read_set);
     timeval tv{0, 200 * 1000};
     const int ready = select(static_cast<int>(sock + 1), &read_set, nullptr, nullptr, &tv);
     if (ready < 0)
+    {
+      WARN_LOG_FMT(HARNESS, "Harness: select on the client's socket {} failed",
+                   static_cast<u64>(sock));
       break;
+    }
+    // Idle too, every few rounds: the moment the handle stops being this connection is in the log.
+    static thread_local int idle_rounds = 0;
+    if (ready == 0 && ++idle_rounds % 5 != 0)
+      continue;
+    // Not a read from a handle that is not this connection any more (StolenClientSocket).
+    if (StolenClientSocket(sock))
+    {
+      ERROR_LOG_FMT(HARNESS, "Harness: the client's socket {} was closed by something else in "
+                             "this process",
+                    static_cast<u64>(sock));
+      std::lock_guard lk(s_client_mutex);
+      if (s_client_generation.load() == generation)
+      {
+        ++s_client_generation;
+        s_client_socket = INVALID_SOCK;
+        s_client_busy = false;
+      }
+      return;
+    }
     if (ready == 0)
       continue;
 
     const int received =
         static_cast<int>(recv(sock, chunk.data(), static_cast<int>(chunk.size()), 0));
     if (received <= 0)
+    {
+#ifdef _WIN32
+      const int err = WSAGetLastError();
+#else
+      const int err = errno;
+#endif
+      INFO_LOG_FMT(HARNESS, "Harness: the client's socket {} closed (recv {}, error {})",
+                   static_cast<u64>(sock), received, err);
       break;
+    }
     buffer.append(chunk.data(), static_cast<size_t>(received));
     if (buffer.size() > MAX_REQUEST_BYTES && buffer.find('\n') == std::string::npos)
       break;
@@ -2050,6 +2120,8 @@ void ClientThread(socket_t sock)
 
   {
     std::lock_guard lk(s_client_mutex);
+    if (s_client_generation.load() != generation)
+      return;
     CloseSocket(sock);
     s_client_socket = INVALID_SOCK;
   }
@@ -2090,6 +2162,21 @@ void AcceptThread()
 
     if (s_client_busy.load())
     {
+      std::lock_guard lk(s_client_mutex);
+      if (s_client_socket != INVALID_SOCK && StolenClientSocket(s_client_socket))
+      {
+        ERROR_LOG_FMT(HARNESS, "Harness: the client's socket {} was closed by something else in "
+                               "this process; taking the new client",
+                      static_cast<u64>(s_client_socket));
+        ++s_client_generation;
+        if (s_client_thread.joinable())
+          s_client_thread.detach();
+        s_client_socket = INVALID_SOCK;
+        s_client_busy = false;
+      }
+    }
+    if (s_client_busy.load())
+    {
       SendAll(client,
               "{\"id\":null,\"ok\":false,\"error\":\"another harness client is already "
               "connected\"}\n");
@@ -2100,9 +2187,10 @@ void AcceptThread()
     std::lock_guard lk(s_client_mutex);
     if (s_client_thread.joinable())
       s_client_thread.join();
+    INFO_LOG_FMT(HARNESS, "Harness: client connected (socket {})", static_cast<u64>(client));
     s_client_busy = true;
     s_client_socket = client;
-    s_client_thread = std::thread(ClientThread, client);
+    s_client_thread = std::thread(ClientThread, client, s_client_generation.load());
   }
 }
 }  // namespace

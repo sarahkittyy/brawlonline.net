@@ -118,6 +118,21 @@ struct Options
   // Join a running session: boot, connect to every peer (the session's players), ask to join,
   // and continue from the machine image the session sends at its next epoch.
   bool join = false;
+  // The players come from a Brawl Mods room (Online/ModsRoom.h): SetRoom gives the members and
+  // their addresses as they change, and a joiner's slot. `peers` may be empty.
+  bool room = false;
+};
+
+// A Brawl Mods room's member (Online/ModsRoom.h).
+struct RoomMember
+{
+  int slot = -1;     // 0-3
+  std::string code;  // connect code: who it is
+  std::string name;
+  std::string host;  // its public endpoint, as mm saw its probe ("" until it probed)
+  u16 port = 0;
+  std::string lan_host;  // the LAN endpoint its session reported
+  u16 lan_port = 0;
 };
 
 // Parses options from JSON ({"slot":0,"port":5000,"delay":2,"peers":[{"slot":1,"host":"..",
@@ -125,8 +140,21 @@ struct Options
 std::optional<Options> ParseOptions(const picojson::value& json, std::string* error);
 
 // Before boot: the next boot runs this session. Also armed from the environment variable
-// PPR_MACHINE_SESSION (JSON, as ParseOptions) at the first call of IsArmed.
+// PPR_MACHINE_SESSION (JSON, as ParseOptions) at the first call of IsArmed, or for a Brawl Mods
+// room from PPR_MODS_ROOM (Online/ModsRoom.h).
 bool Arm(const Options& options, std::string* error);
+
+// A room session's members changed (any thread; Online::ModsRoom): `local_slot` is this player's
+// slot in the room (a joiner takes it the first time). A new member is a joiner; a member in a
+// slot whose player left the room is unplugged once its link drops (or at once when someone else
+// has the slot now). A peer on this player's network (the same public address) is reached at its
+// LAN address. A peer's hello is taken only from one of its addresses.
+void SetRoom(int local_slot, const std::vector<RoomMember>& members);
+// Sends mm the room's endpoint token from the session's UDP socket (with its LAN address), so mm
+// records where peers reach this player; again every 2 s until mm answers (any thread).
+void ProbeEndpoint(const std::string& mm_host, u16 mm_port, const std::string& token);
+// "" (none), "probing", "done" or "failed: <why>".
+std::string ProbeState();
 // Ends the session (any thread); the game keeps running locally.
 void Stop();
 // A session is armed or running: the whole-machine rollback rules apply (pinned configuration,

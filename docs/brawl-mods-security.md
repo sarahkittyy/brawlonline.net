@@ -2,7 +2,7 @@
 
 A player who joins a running Brawl Mods session loads a **machine image** another player made: the whole emulated Wii, Dolphin's savestate of it, and the session NAND's game files (`docs/design/brawl-mods.md` §6.7). It is the first place in this project where data from another player's machine is loaded into the emulator itself, so it is treated like any network input: hostile until checked (§7 of the design). This document is the audit: what the loader reads from the image, what each part could do if crafted, and what has been done about it.
 
-Status (2026-10-12): **first pass of the audit done and its fixes built (§1-§3); the IOS devices, DSP ucodes and `LoadFst` are the second pass; no fuzzing yet.** Joins stay behind the test switch (`"join": true` in `PPR_MACHINE_SESSION`) until the exit criteria at the end are met.
+Status (2026-10-12): **first pass of the audit done and its fixes built (§1-§3); the IOS devices, DSP ucodes and `LoadFst` are the second pass; 2 h of fuzzing without a crash (§4), no sanitizer build yet.** Joins stay behind the test switch (`"join": true` in `PPR_MACHINE_SESSION`) until the exit criteria at the end are met.
 
 ## 0. The other players vouch for the image (built)
 
@@ -63,5 +63,10 @@ The image's sender controls the joiner's whole emulated machine, not only Dolphi
 
 ## 4. Testing
 
-- A fuzzer that mutates real images (byte flips, length fields, truncation, splices between two images) and loads them in a harness Dolphin built with AddressSanitizer.
+- **The fuzzer** (`harness/tools/fuzz_machine_image.py`, built): boots a game in a harness Dolphin, saves its state as a machine image carries it, and loads mutated copies with the image's rules (byte flips, 32-bit fields set to edge values, truncation, chunks copied within the image; 90 % outside guest RAM, which is what the loader parses); after each accepted one the machine runs half a second and the pristine state must load back. A Dolphin that dies leaves its crash report and the mutation; `--only N` replays one.
+- **Results** (release build, no sanitizer, Brawl Minus at its menus):
+  - 2026-10-12, 2 h: 8,237 mutated images, 7,021 loaded and ran, 1,216 refused, **0 crashes**, the pristine state loaded back every time.
+  - An earlier 2 h run (before the fuzzer took a fresh pristine state after restarting a Dolphin) reported two failures; both replayed cleanly (`--only 802`: loads and runs; `--only 1085`: refused). Neither left a crash report: the harness connection had dropped, not the Dolphin.
+  - One crash in an earlier, shorter run did not reproduce: a mutation of the FIFO's unprocessed commands (guest-reachable: the guest writes those commands itself).
+- **Next:** an AddressSanitizer build (MSVC `/fsanitize=address`) for the same fuzzer, and mutations aimed at the second pass's areas (§3.4).
 - **Exit criteria** (design §7): no crash and no sanitizer report over 24 hours of fuzzing. Until then images are accepted only in private rooms from friends (design §10, question 4).

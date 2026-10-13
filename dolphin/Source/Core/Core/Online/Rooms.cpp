@@ -23,6 +23,7 @@
 #include "Core/Online/Chat.h"
 #include "Core/Online/GameSetup.h"
 #include "Core/Online/Matchmaking.h"
+#include "Core/Online/ModsRoom.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/User.h"
 #include "Core/Rollback/GameplaySession.h"
@@ -1271,9 +1272,10 @@ void Thread()
           const std::string text(reinterpret_cast<const char*>(ev.packet->data),
                                  ev.packet->dataLength);
           enet_packet_destroy(ev.packet);
-          // Chat checks and decrypts outside the room lock (the CPU thread reads the room).
+          // Chat checks and decrypts outside the room lock (the CPU thread reads the room); Brawl
+          // Mods rooms (ModsRoom.h) are handled there too.
           lk.unlock();
-          const bool chat = Chat::OnServerMessage(text);
+          const bool chat = Chat::OnServerMessage(text) || ModsRoom::OnServerMessage(text);
           lk.lock();
           if (chat)
           {
@@ -1301,14 +1303,22 @@ void Thread()
       if (actions.abort_game)
         EndGame(false, "", std::nullopt, false);
 
-      // Chat's outgoing messages, signed and encrypted outside the room lock.
+      // Chat's outgoing messages, signed and encrypted outside the room lock; a Brawl Mods
+      // room's requests.
       bool online;
+      u64 connection;
       {
         std::lock_guard lk(s_mutex);
         online = host && s.conn == Conn::Online;
+        connection = s.connects;
       }
-      const std::vector<std::string> chat_out =
+      std::vector<std::string> chat_out =
           online ? Chat::TakeOutbox() : std::vector<std::string>{};
+      if (online)
+      {
+        for (std::string& m : ModsRoom::TakeOutbox(connection))
+          chat_out.push_back(std::move(m));
+      }
 
       std::lock_guard lk(s_mutex);
       if (host && (s.conn == Conn::Connecting || s.conn == Conn::Hello) &&

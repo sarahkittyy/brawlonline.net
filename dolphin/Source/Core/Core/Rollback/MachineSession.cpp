@@ -16,6 +16,9 @@
 #include <thread>
 
 #include <enet/enet.h>
+#if defined(_M_X86_64)
+#include <xmmintrin.h>
+#endif
 #include <fmt/format.h>
 #include <mbedtls/sha256.h>
 #include <zstd.h>
@@ -60,6 +63,7 @@
 #include "Core/IOS/USB/Bluetooth/WiimoteDevice.h"
 #include "Core/Harness/Harness.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Online/ModsRoom.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
@@ -172,6 +176,12 @@ struct PeerLink
   Clock::time_point last_connect{};
   ENetPeer* connecting = nullptr;  // this side's latest connection attempt
   double rtt_ms = -1;
+  // A room member (SetRoom): who is in this slot, and the addresses its hello may come from.
+  std::string code;
+  std::vector<enet_uint32> ips;
+  // Someone new has this player's slot in the room: `left` is the previous player's until
+  // GekkoNet unplugged it.
+  bool reseated = false;
 };
 
 struct PendingOps
@@ -229,6 +239,19 @@ struct State
   std::optional<EpochGo> epoch_go;
   bool join_refused = false;
   std::string join_refused_why;
+  // A room session (Options::room): the room's members arrived (SetRoom).
+  bool room_known = false;
+  // The endpoint probe to mm (ProbeEndpoint), on the session's socket.
+  struct Probe
+  {
+    std::string host;
+    u16 port = 0;
+    std::string token;
+    std::string state;
+    ENetPeer* peer = nullptr;
+    Clock::time_point last{};
+    int attempts = 0;
+  } probe;
   // A machine image on its way to this joiner (net thread): header, then the compressed bytes.
   struct ImageRx
   {
@@ -256,7 +279,11 @@ struct State
   std::array<int, MAX_PLAYERS> handle_slot{-1, -1, -1, -1};
   std::array<int, MAX_PLAYERS> slot_handle{-1, -1, -1, -1};
   int local_handle = -1;
-  u32 players = 0;  // a bit per slot that plays
+  // A bit per slot that plays (the net thread reads it: a hello's `playing`, a joiner's request).
+  std::atomic<u32> players{0};
+  // Players GekkoNet unplugged since this epoch started (DropLeftPeers): their slot is free for a
+  // joiner although they are still in `players` until the next epoch.
+  std::atomic<u32> gone{0};
   PendingOps ops;
   int iteration = 0;
   bool resim = false;
@@ -374,8 +401,40 @@ void BroadcastControl(const picojson::object& msg)
 }
 
 // ENetPeer::data: the peer's slot + 1 (0: not known yet), with OUTGOING for a connection this
-// side started.
+// side started; PROBE for the endpoint probe's connection to mm.
 constexpr intptr_t OUTGOING = 0x100;
+constexpr intptr_t PROBE = 0x200;
+
+bool Plays(int slot)
+{
+  return ((s.players.load() & ~s.gone.load()) >> slot) & 1;
+}
+
+bool LocalPlays()
+{
+  return Plays(s.opts.local_slot);
+}
+
+// A hello is taken from a peer's own addresses only (its slot is otherwise just a number anyone
+// could send). A room peer with no address yet has none.
+bool AddressAllowed(const PeerLink& p, const ENetAddress& from)
+{
+  if (p.ips.empty())
+    return !s.opts.room;
+  return std::find(p.ips.begin(), p.ips.end(), from.host) != p.ips.end();
+}
+
+std::vector<enet_uint32> ResolveIps(std::initializer_list<const std::string*> hosts)
+{
+  std::vector<enet_uint32> ips;
+  for (const std::string* h : hosts)
+  {
+    ENetAddress a{};
+    if (!h->empty() && enet_address_set_host(&a, h->c_str()) == 0)
+      ips.push_back(a.host);
+  }
+  return ips;
+}
 
 int SlotOf(ENetPeer* peer)
 {
@@ -399,6 +458,13 @@ void OnHello(ENetPeer* peer, const picojson::object& msg)
     return;
   }
   PeerLink& p = s.peers[slot];
+  if (!AddressAllowed(p, peer->address))
+  {
+    WARN_LOG_FMT(BRAWLBACK, "machine: a hello for slot {} from an address that is not its own",
+                 slot + 1);
+    enet_peer_disconnect(peer, 0);
+    return;
+  }
   const bool lower_is_me = s.opts.local_slot < slot;
   const bool this_is_mine = (reinterpret_cast<intptr_t>(peer->data) & OUTGOING) != 0;
   const bool keep = lower_is_me ? this_is_mine : !this_is_mine;
@@ -408,9 +474,19 @@ void OnHello(ENetPeer* peer, const picojson::object& msg)
     enet_peer_disconnect_later(p.peer, 0);
   p.peer = peer;
   p.hello = true;
-  if (p.late && !((s.players >> slot) & 1))
+  // Whether it plays in its session now: one that does not is a joiner (a room's joiner learns
+  // who the session's players are this way).
+  if (const auto pl = msg.find("playing"); pl != msg.end() && pl->second.is<bool>())
+  {
+    if (!pl->second.get<bool>())
+      p.late = true;
+    else if (s.opts.join && !LocalPlays())
+      p.late = false;
+  }
+  if (p.late && !Plays(slot))
   {
     // A joiner (again): what an earlier visit left does not count.
+    p.reseated = false;
     p.left = false;
     p.dropped = false;
     p.join_asked = false;
@@ -454,7 +530,7 @@ void HandleControl(ENetPeer* peer, const u8* data, size_t size)
   else if (type == "join")
   {
     // A joiner asks to play in its slot (only a peer this session expects to join: `late`).
-    if (!p.late || s.opts.join)
+    if (!p.late || !LocalPlays())
       return;
     const auto c = msg.find("controller");
     p.join_controller = c != msg.end() && c->second.is<std::string>() &&
@@ -550,6 +626,7 @@ void HandleImagePacket(int slot, const u8* data, size_t size)
     rx.data.clear();
     rx.data.reserve(static_cast<size_t>(packed));
     rx.started = Clock::now();
+    AddLog(fmt::format("machine image coming from player {}: {:.1f} MB", slot + 1, packed / 1048576.0));
     return;
   }
   if (slot != rx.from)
@@ -562,7 +639,102 @@ void HandleImagePacket(int slot, const u8* data, size_t size)
   }
   rx.data.insert(rx.data.end(), data, data + size);
   if (rx.data.size() == rx.packed_size)
+  {
     rx.complete = true;
+    AddLog("machine image received");
+  }
+}
+
+// Net thread: this machine's LAN address, as Slippi's matchmaking finds it (a UDP "connect"
+// towards mm makes the OS pick the interface; nothing is sent).
+std::string LanHost(const ENetAddress& towards)
+{
+  ENetSocket sock = enet_socket_create(ENET_SOCKET_TYPE_DATAGRAM);
+  if (sock == ENET_SOCKET_NULL)
+    return {};
+  ENetAddress local{};
+  const bool ok =
+      enet_socket_connect(sock, &towards) == 0 && enet_socket_get_address(sock, &local) == 0;
+  enet_socket_destroy(sock);
+  if (!ok || local.host == 0)
+    return {};
+  char text[64]{};
+  if (enet_address_get_host_ip(&local, text, sizeof(text)) != 0)
+    return {};
+  return text;
+}
+
+// Net thread: the endpoint probe (docs/design/brawl-mods.md §5): a connection of its own to mm
+// from the session's socket, one `mods-endpoint` message, closed by mm after its answer.
+void StepProbe(Clock::time_point now)
+{
+  State::Probe& pr = s.probe;
+  if (pr.state != "probing" || pr.peer || now - pr.last < std::chrono::seconds(2))
+    return;
+  pr.last = now;
+  if (++pr.attempts > 15)
+  {
+    pr.state = "failed: the server did not answer";
+    AddLog("endpoint probe: the server did not answer");
+    return;
+  }
+  ENetAddress addr{};
+  if (enet_address_set_host(&addr, pr.host.c_str()) != 0)
+    return;
+  addr.port = pr.port;
+  pr.peer = enet_host_connect(s.host, &addr, CHANNEL_COUNT, 0);
+  if (pr.peer)
+  {
+    pr.peer->data = reinterpret_cast<void*>(PROBE);
+    enet_peer_timeout(pr.peer, 0, 3000, 5000);
+  }
+}
+
+void SendProbe(ENetPeer* peer)
+{
+  picojson::object m;
+  m["type"] = picojson::value("mods-endpoint");
+  m["token"] = picojson::value(s.probe.token);
+  const std::string lan = LanHost(peer->address);
+  if (!lan.empty() && s.host)
+  {
+    picojson::object l;
+    l["host"] = picojson::value(lan);
+    l["port"] = picojson::value(static_cast<double>(s.host->address.port));
+    m["lan"] = picojson::value(l);
+  }
+  const std::string text = picojson::value(m).serialize();
+  enet_peer_send(peer, 0, enet_packet_create(text.data(), text.size(), ENET_PACKET_FLAG_RELIABLE));
+}
+
+void OnProbeAnswer(ENetPeer* peer, const u8* data, size_t size)
+{
+  picojson::value v;
+  if (size > MAX_CONTROL_SIZE ||
+      !picojson::parse(v, std::string(reinterpret_cast<const char*>(data), size)).empty() ||
+      !v.is<picojson::object>())
+  {
+    return;
+  }
+  const auto& o = v.get<picojson::object>();
+  const auto t = o.find("type");
+  if (t == o.end() || !t->second.is<std::string>() ||
+      t->second.get<std::string>() != "mods-endpoint-resp")
+  {
+    return;
+  }
+  const auto e = o.find("error");
+  if (e != o.end() && e->second.is<std::string>())
+  {
+    s.probe.state = "failed: " + e->second.get<std::string>().substr(0, 120);
+    AddLog("endpoint probe refused: " + e->second.get<std::string>().substr(0, 120));
+  }
+  else
+  {
+    s.probe.state = "done";
+    AddLog(fmt::format("endpoint probe answered (attempt {})", s.probe.attempts));
+  }
+  enet_peer_disconnect(peer, 0);
 }
 
 void NetThread()
@@ -613,6 +785,7 @@ void NetThread()
     }
     // Keep connecting to every peer without a link (both sides do).
     const auto now = Clock::now();
+    StepProbe(now);
     for (PeerLink& p : s.peers)
     {
       if (p.slot < 0 || p.hello || p.host.empty() || now - p.last_connect < std::chrono::seconds(1))
@@ -621,7 +794,10 @@ void NetThread()
       // One attempt at a time: a peer that is not there yet (a joiner that has not started)
       // would otherwise collect an attempt a second until the host has no peers left.
       if (p.connecting && p.connecting != p.peer && p.connecting->state != ENET_PEER_STATE_CONNECTED)
+      {
+        p.connecting->data = nullptr;
         enet_peer_reset(p.connecting);
+      }
       p.connecting = nullptr;
       ENetAddress addr{};
       if (enet_address_set_host(&addr, p.host.c_str()) != 0)
@@ -642,11 +818,24 @@ void NetThread()
       {
       case ENET_EVENT_TYPE_CONNECT:
       {
+        if (ev.peer == s.probe.peer)
+        {
+          SendProbe(ev.peer);
+          break;
+        }
+        // ENet hands out its peers again without clearing `data`: a connection this side did not
+        // start learns its slot from its hello, whatever an earlier one left there.
+        bool outgoing = false;
+        for (const PeerLink& p : s.peers)
+          outgoing |= p.connecting == ev.peer;
+        if (!outgoing)
+          ev.peer->data = nullptr;
         enet_peer_timeout(ev.peer, 0, 5000, 10000);
         picojson::object hello;
         hello["type"] = picojson::value("hello");
         hello["slot"] = picojson::value(static_cast<double>(s.opts.local_slot));
         hello["name"] = picojson::value(s.opts.name);
+        hello["playing"] = picojson::value(LocalPlays());
         const std::string text = picojson::value(hello).serialize();
         enet_peer_send(ev.peer, CHANNEL_CONTROL,
                        enet_packet_create(text.data(), text.size(), ENET_PACKET_FLAG_RELIABLE));
@@ -654,7 +843,9 @@ void NetThread()
       }
       case ENET_EVENT_TYPE_RECEIVE:
       {
-        if (ev.channelID == CHANNEL_CONTROL)
+        if (ev.peer == s.probe.peer)
+          OnProbeAnswer(ev.peer, ev.packet->data, ev.packet->dataLength);
+        else if (ev.channelID == CHANNEL_CONTROL)
         {
           // An incoming connection learns its slot from the hello.
           if (ev.peer->data == nullptr)
@@ -698,6 +889,12 @@ void NetThread()
       }
       case ENET_EVENT_TYPE_DISCONNECT:
       {
+        if (ev.peer == s.probe.peer)
+        {
+          s.probe.peer = nullptr;
+          ev.peer->data = nullptr;
+          break;
+        }
         for (PeerLink& p : s.peers)
         {
           if (p.connecting == ev.peer)
@@ -712,6 +909,7 @@ void NetThread()
             AddLog(fmt::format("peer {} disconnected", p.slot));
           }
         }
+        ev.peer->data = nullptr;
         break;
       }
       default:
@@ -755,6 +953,7 @@ void StopNetwork()
   if (s.net_thread.joinable())
     s.net_thread.join();
   std::lock_guard lk(s.net_mutex);
+  s.probe.peer = nullptr;
   if (s.host)
   {
     for (PeerLink& p : s.peers)
@@ -1195,8 +1394,12 @@ void AfterSave(Core::System& system)
 }
 
 // After a load of `frames_back` snapshots back: the newer snapshots are gone.
+void StartEventTrace(Core::System& system);
+
 void AfterLoad(Core::System& system, int frames_back)
 {
+  // The frame after the loaded state starts here.
+  StartEventTrace(system);
   for (int i = 0; i < frames_back && !s.journal_marks.empty(); ++i)
     s.journal_marks.pop_back();
   if (auto* fs = HostFS(system); fs && fs->TakeJournalError())
@@ -1213,7 +1416,24 @@ struct GranuleMap
   s64 frame = -1;
   std::map<u32, u32> granules;
   std::map<u32, std::array<u8, ROLLBACK_PAGE_SIZE>> bytes;
+  // PPR_MACHINE_EVENT_TRACE: the CoreTiming events the pass ran and the ticks at its end.
+  std::vector<CoreTiming::CoreTimingManager::TracedEvent> events;
+  u64 ticks = 0;
 };
+// The events of the pass running now (PPR_MACHINE_EVENT_TRACE, sync test).
+std::vector<CoreTiming::CoreTimingManager::TracedEvent> s_pass_events;
+bool EventTraceEnabled()
+{
+  static const bool on = std::getenv("PPR_MACHINE_EVENT_TRACE") != nullptr;
+  return on;
+}
+void StartEventTrace(Core::System& system)
+{
+  if (s.opts.synctest <= 0 || !EventTraceEnabled())
+    return;
+  s_pass_events.clear();
+  system.GetCoreTiming().m_event_trace = &s_pass_events;
+}
 std::array<GranuleMap, 16> s_first_runs;
 std::vector<std::string> s_diag;
 // PPR_MACHINE_DIGESTS: the last frames' granule digests, by frame.
@@ -1264,6 +1484,13 @@ void DiagnoseSave(s64 frame)
   };
   add(slot.m_mem1_delta, 0x80000000);
   add(slot.m_mem2_delta, 0x90000000);
+  auto& system = Core::System::GetInstance();
+  if (EventTraceEnabled())
+  {
+    now.events = std::move(s_pass_events);
+    now.ticks = system.GetCoreTiming().GetTicks();
+    StartEventTrace(system);  // the next frame's pass starts now
+  }
   GranuleMap& first = s_first_runs[static_cast<size_t>(frame) % s_first_runs.size()];
   if (first.frame != frame)
   {
@@ -1272,6 +1499,57 @@ void DiagnoseSave(s64 frame)
   }
   // A re-run of `frame`: report what differs from its first run.
   std::vector<std::string> diffs;
+  if (EventTraceEnabled())
+  {
+    // The first event at which the guest CPU stood elsewhere (or held other registers).
+    const size_t n = std::min(first.events.size(), now.events.size());
+    for (size_t k = 0; k < n; ++k)
+    {
+      const auto& a = first.events[k];
+      const auto& b = now.events[k];
+      if (a.pc != b.pc || a.lr != b.lr || a.sp != b.sp || a.gpr_hash != b.gpr_hash)
+      {
+        const auto& prev = k > 0 ? first.events[k - 1] : a;
+        std::string regs;
+        for (int r = 0; r < 32; ++r)
+        {
+          if (a.gpr[r] != b.gpr[r])
+            regs += fmt::format(" r{}:{:08x}->{:08x}", r, a.gpr[r], b.gpr[r]);
+        }
+        diffs.push_back("regs" + regs);
+        diffs.push_back(fmt::format(
+            "cpu at event {} ({} t={} late={} / rerun t={} late={}): pc {:08x}->{:08x} lr {:08x}->{:08x} sp {:08x}->{:08x} "
+            "gprs {:08x}->{:08x}; the event before: {} t={} pc {:08x} lr {:08x}",
+            k, a.name ? *a.name : "?", a.time, a.late, b.time, b.late, a.pc, b.pc, a.lr, b.lr, a.sp, b.sp, a.gpr_hash,
+            b.gpr_hash, prev.name ? *prev.name : "?", prev.time, prev.pc, prev.lr));
+        break;
+      }
+    }
+  }
+  if (EventTraceEnabled())
+  {
+    // The first event that ran at another time, or another event, than in the first run.
+    size_t i = 0;
+    while (i < first.events.size() && i < now.events.size() &&
+           first.events[i].time == now.events[i].time && first.events[i].name == now.events[i].name &&
+           first.events[i].userdata == now.events[i].userdata)
+    {
+      ++i;
+    }
+    auto describe = [](const std::vector<CoreTiming::CoreTimingManager::TracedEvent>& v, size_t k) {
+      if (k >= v.size())
+        return std::string("(none)");
+      return fmt::format("{} t={} late={} data={:x}", v[k].name ? *v[k].name : "?", v[k].time,
+                         v[k].late, v[k].userdata);
+    };
+    const s64 prev_time = i > 0 ? first.events[i - 1].time : 0;
+    if (first.ticks != now.ticks || i < std::max(first.events.size(), now.events.size()))
+    {
+      diffs.push_back(fmt::format("ticks {} -> {}; {} vs {} events; event {} (after t={}): {} -> {}",
+                                  first.ticks, now.ticks, first.events.size(), now.events.size(), i,
+                                  prev_time, describe(first.events, i), describe(now.events, i)));
+    }
+  }
   for (const auto& [addr, crc] : first.granules)
   {
     const auto it = now.granules.find(addr);
@@ -1424,6 +1702,12 @@ void DropLeftPeers()
       {
         p.dropped = true;
         drop[p.slot] = true;
+        // The previous player of a slot someone new has: the new one's link is not leaving.
+        if (p.reseated)
+        {
+          p.reseated = false;
+          p.left = false;
+        }
       }
     }
   }
@@ -1433,6 +1717,7 @@ void DropLeftPeers()
     {
       // GekkoNet's own PlayerDisconnected event for this is cleared by its next poll, unread.
       gekko_disconnect_actor(s.gekko, s.slot_handle[slot]);
+      s.gone |= 1u << slot;
       AddLog(fmt::format("player {} left", slot + 1));
       OSD::AddMessage(fmt::format("Player {} left", slot + 1), 4000, OSD::Color::YELLOW);
     }
@@ -1500,7 +1785,7 @@ void UpdateLocalRequest()
   int lowest = -1;
   for (int slot = 0; slot < MAX_PLAYERS; ++slot)
   {
-    if (!((s.players >> slot) & 1))
+    if (!Plays(slot))
       continue;
     if (slot != s.opts.local_slot && s.peers[slot].left)
       continue;
@@ -1511,7 +1796,7 @@ void UpdateLocalRequest()
     return;
   for (const PeerLink& p : s.peers)
   {
-    if (p.slot >= 0 && p.late && p.join_asked && p.hello && !p.left && !((s.players >> p.slot) & 1))
+    if (p.slot >= 0 && p.late && p.join_asked && p.hello && !p.left && !Plays(p.slot))
     {
       s.local_request = std::make_pair(p.slot, p.join_controller);
       AddLog(fmt::format("asking to admit player {}", p.slot + 1));
@@ -2113,6 +2398,18 @@ void StartEpoch(const State::EpochGo& go)
   s.epoch = go.epoch;
   s.frame_base = go.frame;
   s.players = go.players;
+  s.gone = 0;
+  // Every machine runs the epoch's frame with the code caches a joiner starts with: the
+  // instruction cache empty and no JIT blocks for RAM. A machine image carries neither (they are
+  // filled as the JIT compiles), and code a game writes without invalidating the instruction
+  // cache ran stale on the players and fresh on the joiner: their RAM drifted apart later.
+  {
+    auto& system = Core::System::GetInstance();
+    auto& jit = system.GetJitInterface();
+    system.GetPPCState().iCache.Reset(jit);
+    jit.EraseBlocksForRestoredRange(0x00000000, system.GetMemory().GetRamSizeReal());
+    jit.EraseBlocksForRestoredRange(MEM2_BASE, system.GetMemory().GetExRamSizeReal());
+  }
   for (int slot = 0; slot < MAX_PLAYERS; ++slot)
   {
     if ((go.players >> slot) & 1)
@@ -2143,7 +2440,7 @@ void StartEpoch(const State::EpochGo& go)
     return;
   }
   s.phase = Phase::Starting;
-  AddLog(fmt::format("epoch {}: frame {}, players {:04b}", s.epoch, s.frame_base, s.players));
+  AddLog(fmt::format("epoch {}: frame {}, players {:04b}", s.epoch, s.frame_base, s.players.load()));
   OSD::AddMessage("Players changed", 2000, OSD::Color::CYAN);
 }
 
@@ -2158,7 +2455,7 @@ void EnterEpoch()
   s.image_built = false;
   DumpEpochState(Core::System::GetInstance(), s.plan.frame, "member");
   const int joiner = s.plan.admit;
-  const bool admitting = joiner >= 0 && !((s.players >> joiner) & 1);
+  const bool admitting = joiner >= 0 && !Plays(joiner);
   s_image_parts.reset();
   s.epoch_digest.clear();
   if (admitting)
@@ -2239,7 +2536,7 @@ void EpochStep(Core::System& system)
     std::lock_guard lk(s.net_mutex);
     for (int slot = 0; slot < MAX_PLAYERS; ++slot)
     {
-      if (!((s.players >> slot) & 1) || slot == s.opts.local_slot)
+      if (!Plays(slot) || slot == s.opts.local_slot)
         continue;
       const PeerLink& p = s.peers[slot];
       if (p.left)
@@ -2251,7 +2548,7 @@ void EpochStep(Core::System& system)
         WARN_LOG_FMT(BRAWLBACK, "machine: player {} is at epoch {} with checksum {:08x}, not {:08x}",
                      slot + 1, next, p.epoch_sum, s.epoch_sum);
     }
-    if (joiner >= 0 && !((s.players >> joiner) & 1))
+    if (joiner >= 0 && !Plays(joiner))
     {
       const PeerLink& j = s.peers[joiner];
       joiner_gone = j.slot < 0 || j.left || !j.hello;
@@ -2266,7 +2563,7 @@ void EpochStep(Core::System& system)
   }
   if (!all_at)
     return;
-  const bool admitting = joiner >= 0 && !((s.players >> joiner) & 1);
+  const bool admitting = joiner >= 0 && !Plays(joiner);
   if (admitting && !joiner_gone && !s.image_built)
   {
     s.image_built = true;
@@ -2354,9 +2651,10 @@ void JoinStep(Core::System& system)
     std::lock_guard lk(s.net_mutex);
     if (s.join_refused)
       refused = s.join_refused_why;
-    if (!s.join_sent)
+    if (!s.join_sent && (!s.opts.room || s.room_known))
     {
-      // The session's players (not other joiners, who may not be there yet).
+      // The session's players (not other joiners, who may not be there yet). A room's joiner
+      // knows them by their hello (`playing`), so it hears from every member first.
       bool all = true;
       for (const PeerLink& p : s.peers)
         all &= p.slot < 0 || p.late || p.hello;
@@ -2555,6 +2853,122 @@ Wait WaitForFrames(Core::System& system)
   return Wait::Frames;
 }
 
+// Sync test diagnostics (PPR_MACHINE_STATE_CHECK=N): the machine's state as an image carries it
+// at the start of every Nth frame's first pass, compared with the state a re-run of that frame
+// starts from. What differs is guest state a rollback did not restore.
+struct PassState
+{
+  s64 frame = -1;
+  std::vector<u8> state;
+  std::vector<u8> nand;
+};
+std::array<PassState, 4> s_pass_states;
+
+// The last marker-like text (DoMarker names, device names) before `pos`.
+std::string MarkerBefore(const std::vector<u8>& st, size_t pos)
+{
+  size_t run = 0;
+  for (size_t i = pos; i-- > 0 && pos - i < (1u << 20);)
+  {
+    const u8 c = st[i];
+    if (c >= 0x20 && c < 0x7f)
+    {
+      if (++run >= 6)
+      {
+        size_t end = i + run;
+        while (end < st.size() && st[end] >= 0x20 && st[end] < 0x7f)
+          ++end;
+        return fmt::format("\"{}\" {} before", std::string(st.begin() + i, st.begin() + end),
+                           pos - i);
+      }
+    }
+    else
+    {
+      run = 0;
+    }
+  }
+  return "?";
+}
+
+void CheckPassState(Core::System& system)
+{
+  static const int every = [] {
+    const char* e = std::getenv("PPR_MACHINE_STATE_CHECK");
+    return e ? std::atoi(e) : 0;
+  }();
+  if (every <= 0 || s.opts.synctest <= 0 || s.current_frame <= 0 || s.current_frame % every)
+    return;
+  Rollback::RollbackManager::SyncGPUForDoState(system);
+  std::vector<u8> st = SaveImageStateForTest(system);
+  std::vector<u8> nand = PackNand(system);
+  PassState& ps = s_pass_states[static_cast<size_t>(s.current_frame / every) % s_pass_states.size()];
+  if (ps.frame != s.current_frame)
+  {
+    ps.frame = s.current_frame;
+    ps.state = std::move(st);
+    ps.nand = std::move(nand);
+    return;
+  }
+  if (nand != ps.nand)
+  {
+    // The NAND's files (the journal undoes a rolled-back frame's writes): where they differ.
+    size_t i = 0;
+    while (i < nand.size() && i < ps.nand.size() && nand[i] == ps.nand[i])
+      ++i;
+    std::string line = fmt::format("nand at frame {} start differs ({} vs {} bytes) at {} ({})",
+                                   s.current_frame, ps.nand.size(), nand.size(), i,
+                                   MarkerBefore(i < nand.size() ? nand : ps.nand,
+                                                std::min(i, std::max(nand.size(), ps.nand.size()) - 1)));
+    AddLog(line);
+    if (s_diag.size() < 200)
+      s_diag.push_back(std::move(line));
+  }
+  if (st == ps.state)
+    return;
+  // PPR_MACHINE_DUMP_DIR: both states of the first frame that differs, to read offline.
+  static bool dumped = false;
+  if (const char* dir = std::getenv("PPR_MACHINE_DUMP_DIR"); dir && *dir && !dumped)
+  {
+    dumped = true;
+    for (const auto& [name, bytes] : {std::pair{"first", &ps.state}, std::pair{"rerun", &st}})
+    {
+      File::WriteStringToFile(fmt::format("{}/passstate-{}-{}.bin", dir, s.current_frame, name),
+                              std::string_view(reinterpret_cast<const char*>(bytes->data()),
+                                               bytes->size()));
+    }
+  }
+  std::string line = fmt::format("state at frame {} start ({} vs {} bytes):", s.current_frame,
+                                 ps.state.size(), st.size());
+  const size_t n = std::min(st.size(), ps.state.size());
+  int ranges = 0;
+  for (size_t i = 0; i < n && ranges < 10;)
+  {
+    if (st[i] == ps.state[i])
+    {
+      ++i;
+      continue;
+    }
+    size_t j = i;
+    while (j < n && (st[j] != ps.state[j] || (j + 16 < n && std::memcmp(&st[j], &ps.state[j], 16))))
+      ++j;
+    std::string a, b;
+    for (size_t k = i; k < std::min(j, i + 16); ++k)
+    {
+      a += fmt::format("{:02x}", ps.state[k]);
+      b += fmt::format("{:02x}", st[k]);
+    }
+    std::string ctx;
+    for (size_t k = i >= 48 ? i - 48 : 0; k < i; ++k)
+      ctx += fmt::format("{:02x}", st[k]);
+    line += fmt::format(" [{} +{}: {} -> {}; {}; before: {}]", i, j - i, a, b, MarkerBefore(st, i), ctx);
+    ++ranges;
+    i = j;
+  }
+  AddLog(line.substr(0, 600));
+  if (s_diag.size() < 200)
+    s_diag.push_back(std::move(line));
+}
+
 void BeginPass(Core::System& system)
 {
   // The inputs this pass runs with, for the SI (GetPad) and the Wii Remotes (GetWiimote).
@@ -2570,6 +2984,28 @@ void BeginPass(Core::System& system)
   core_timing.SetRollbackSpeedAdjustment(s.speed);
   if (!s.resim)
     Rollback::PresentStats::OnDisplayedFrameStart(s.ops.count > 1);
+  CheckPassState(system);
+#if defined(_M_X86_64)
+  {
+    // The host's float mode (MXCSR: rounding, flush to zero) is the guest's FPSCR's on the CPU
+    // thread. Host code that ran on this thread since may have changed it (a pass that presented
+    // a frame runs more of it than a re-run): set it again, and say when it was off.
+    const u32 before = _mm_getcsr() & ~0x3Fu;
+    PowerPC::RoundingModeUpdated(system.GetPPCState());
+    const u32 after = _mm_getcsr() & ~0x3Fu;
+    static int reported = 0;
+    if (before != after && reported < 20)
+    {
+      ++reported;
+      AddLog(fmt::format("host float mode was {:08x}, the guest's is {:08x} (frame {}, {})", before,
+                         after, s.current_frame, s.resim ? "re-run" : "first run"));
+    }
+  }
+#endif
+  // Diagnostics: PPR_MACHINE_JIT_CLEAR_EACH_PASS compiles every pass from an empty JIT cache.
+  static const bool clear_each_pass = std::getenv("PPR_MACHINE_JIT_CLEAR_EACH_PASS") != nullptr;
+  if (clear_each_pass)
+    system.GetJitInterface().ClearSafe();
 }
 
 bool Active()
@@ -2586,7 +3022,20 @@ void CheckEnvironment()
   s.env_checked = true;
   const char* env = std::getenv("PPR_MACHINE_SESSION");
   if (!env || !*env)
+  {
+    // A Brawl Mods room (Online/ModsRoom.h): its session.
+    std::string why;
+    if (const auto opts = Online::ModsRoom::FromEnvironment(&why))
+    {
+      if (!Arm(*opts, &why))
+        ERROR_LOG_FMT(BRAWLBACK, "machine: could not arm the room's session: {}", why);
+    }
+    else if (!why.empty())
+    {
+      ERROR_LOG_FMT(BRAWLBACK, "machine: {}", why);
+    }
     return;
+  }
   picojson::value v;
   const std::string err = picojson::parse(v, env);
   std::string why;
@@ -2755,7 +3204,9 @@ std::optional<Options> ParseOptions(const picojson::value& json, std::string* er
   }
   if (const auto j = o.find("join"); j != o.end() && j->second.is<bool>())
     opts.join = j->second.get<bool>();
-  if (opts.join && opts.peers.empty())
+  if (const auto r = o.find("room"); r != o.end() && r->second.is<bool>())
+    opts.room = r->second.get<bool>();
+  if (opts.join && opts.peers.empty() && !opts.room)
   {
     *error = "a joiner needs the session's players as peers";
     return std::nullopt;
@@ -2788,6 +3239,7 @@ bool Arm(const Options& options, std::string* error)
   s.peers = {};
   // A joiner plays from the epoch that admits it; its peers' set comes with that epoch.
   s.players = options.join ? 0u : 1u << options.local_slot;
+  s.gone = 0;
   s.controller = {};
   s.controller[options.local_slot] = options.controller;
   s.wiimote_captures = 0;
@@ -2800,6 +3252,7 @@ bool Arm(const Options& options, std::string* error)
     link.host = p.host;
     link.port = p.port;
     link.late = p.late;
+    link.ips = ResolveIps({&p.host});
     if (!p.late && !options.join)
       s.players |= 1u << p.slot;
     s.controller[p.slot] = p.controller;
@@ -2824,6 +3277,8 @@ bool Arm(const Options& options, std::string* error)
     std::lock_guard nlk(s.net_mutex);
     s.epoch_go.reset();
     s.join_refused = false;
+    s.room_known = false;
+    s.probe = {};
     s.image_rx = {};
     s.image_tx.clear();
     s.image_to = -1;
@@ -2913,6 +3368,146 @@ bool LoadImageStateForTest(Core::System& system, std::vector<u8> state)
   VideoCommon_SetSkipGPUReadbackForRollback(false);
   s_image_dostate = false;
   return ok;
+}
+
+// Net mutex held: this side stops using a peer's link (a joiner gone from the room).
+static void ForgetLink(PeerLink& p)
+{
+  if (p.peer)
+    enet_peer_disconnect(p.peer, 0);
+  if (p.connecting && p.connecting != p.peer)
+  {
+    p.connecting->data = nullptr;
+    enet_peer_reset(p.connecting);
+  }
+  p = PeerLink{};
+}
+
+void SetRoom(int local_slot, const std::vector<RoomMember>& members)
+{
+  if (local_slot < 0 || local_slot >= MAX_PLAYERS)
+    return;
+  std::lock_guard lk(s.net_mutex);
+  if (!Active() || !s.opts.room || !s.host)
+    return;
+  if (local_slot != s.opts.local_slot)
+  {
+    // A joiner's slot is the room's. Nothing went out with the one it was armed with: it had no
+    // peers before the room's first state.
+    if (s.room_known || !s.opts.join || LocalPlays())
+    {
+      if (!s.room_known)
+        AddLog(fmt::format("the room has this player in slot {}, the session in slot {}",
+                           local_slot + 1, s.opts.local_slot + 1));
+      return;
+    }
+    s.controller[s.opts.local_slot] = Controller::GameCube;
+    s.controller[local_slot] = s.opts.controller;
+    s.opts.local_slot = local_slot;
+  }
+  if (!s.room_known)
+    AddLog(fmt::format("room: this player is in slot {}", local_slot + 1));
+  s.room_known = true;
+  std::array<const RoomMember*, MAX_PLAYERS> by_slot{};
+  for (const RoomMember& m : members)
+  {
+    if (m.slot >= 0 && m.slot < MAX_PLAYERS)
+      by_slot[m.slot] = &m;
+  }
+  const RoomMember* self = by_slot[local_slot];
+  for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+  {
+    if (slot == local_slot)
+      continue;
+    PeerLink& p = s.peers[slot];
+    const RoomMember* m = by_slot[slot];
+    if (!m)
+    {
+      // Gone from the room. A player's link stays until it drops (a player whose connection to
+      // mm dropped still plays); a joiner's is forgotten.
+      if (p.slot >= 0 && !Plays(slot))
+      {
+        AddLog(fmt::format("room: player {} ({}) is gone", slot + 1, p.code));
+        ForgetLink(p);
+      }
+      continue;
+    }
+    const bool fresh = p.slot < 0 || p.code != m->code;
+    if (fresh)
+    {
+      if (p.slot >= 0)
+      {
+        // Someone else has this slot now: whoever was in it has left the session.
+        const bool was_playing = Plays(slot);
+        AddLog(fmt::format("room: {} took slot {} from {}", m->code, slot + 1, p.code));
+        if (p.peer)
+          enet_peer_disconnect(p.peer, 0);
+        if (p.connecting && p.connecting != p.peer)
+        {
+          p.connecting->data = nullptr;
+          enet_peer_reset(p.connecting);
+        }
+        p.peer = nullptr;
+        p.connecting = nullptr;
+        p.hello = false;
+        p.join_asked = false;
+        p.epoch_at = -1;
+        p.epoch_digest.clear();
+        if (was_playing && !p.dropped)
+        {
+          p.left = true;
+          p.reseated = true;
+        }
+      }
+      else
+      {
+        p = PeerLink{};
+        AddLog(fmt::format("room: {} is in slot {}", m->code, slot + 1));
+      }
+      p.slot = slot;
+      p.code = m->code;
+      // A session's player takes a new member for a joiner; a joiner waits for its hello to know.
+      p.late = !(s.opts.join && !LocalPlays());
+      p.last_connect = {};
+    }
+    // Its address: on this player's network (the same public address), its LAN one.
+    const bool same_net =
+        self && !self->host.empty() && self->host == m->host && !m->lan_host.empty();
+    const std::string& host = same_net ? m->lan_host : m->host;
+    const u16 port = same_net ? m->lan_port : m->port;
+    if (host != p.host || port != p.port)
+    {
+      p.host = host;
+      p.port = port;
+      p.last_connect = {};
+    }
+    p.ips = ResolveIps({&m->host, &m->lan_host});
+  }
+}
+
+void ProbeEndpoint(const std::string& mm_host, u16 mm_port, const std::string& token)
+{
+  std::lock_guard lk(s.net_mutex);
+  if (!s.host || token.empty())
+    return;
+  if (s.probe.token == token && (s.probe.state == "probing" || s.probe.state == "done"))
+    return;
+  if (s.probe.peer)
+  {
+    s.probe.peer->data = nullptr;
+    enet_peer_reset(s.probe.peer);
+  }
+  s.probe = {};
+  s.probe.host = mm_host;
+  s.probe.port = mm_port;
+  s.probe.token = token;
+  s.probe.state = "probing";
+}
+
+std::string ProbeState()
+{
+  std::lock_guard lk(s.net_mutex);
+  return s.probe.state;
 }
 
 bool IsRunning()
@@ -3281,9 +3876,22 @@ picojson::value Status()
   o["image_ms"] = picojson::value(s.image_ms);
   o["image_mb"] = picojson::value(s.image_packed / 1048576.0);
   o["image_raw_mb"] = picojson::value(s.image_raw / 1048576.0);
+  o["room"] = picojson::value(s.opts.room);
+  o["gone"] = picojson::value(static_cast<double>(s.gone.load()));
   picojson::array peers;
   {
     std::lock_guard nlk(s.net_mutex);
+    o["room_known"] = picojson::value(s.room_known);
+    o["probe"] = picojson::value(s.probe.state);
+    picojson::object rx;
+    rx["from"] = picojson::value(static_cast<double>(s.image_rx.from));
+    rx["epoch"] = picojson::value(static_cast<double>(s.image_rx.epoch));
+    rx["received"] = picojson::value(static_cast<double>(s.image_rx.data.size()));
+    rx["size"] = picojson::value(static_cast<double>(s.image_rx.packed_size));
+    rx["complete"] = picojson::value(s.image_rx.complete);
+    rx["sent"] = picojson::value(static_cast<double>(s.image_tx_sent));
+    rx["to_send"] = picojson::value(static_cast<double>(s.image_tx.size()));
+    o["image_rx"] = picojson::value(rx);
     for (const PeerLink& p : s.peers)
     {
       if (p.slot < 0)
@@ -3296,6 +3904,9 @@ picojson::value Status()
       po["join_asked"] = picojson::value(p.join_asked);
       po["left"] = picojson::value(p.left);
       po["rtt_ms"] = picojson::value(p.rtt_ms);
+      po["code"] = picojson::value(p.code);
+      po["epoch_at"] = picojson::value(static_cast<double>(p.epoch_at));
+      po["host"] = picojson::value(fmt::format("{}:{}", p.host, p.port));
       peers.emplace_back(po);
     }
   }

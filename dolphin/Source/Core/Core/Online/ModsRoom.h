@@ -1,0 +1,55 @@
+// Copyright 2026 Dolphin Emulator Project
+// SPDX-License-Identifier: GPL-2.0-or-later
+
+// Brawl Mods rooms (docs/design/brawl-mods.md §3, §5), Dolphin's side. A mod room has no rules or
+// start: its host's whole-machine session (Rollback/MachineSession.h) runs from boot, alone, and
+// every member who joins the room boots the same build, joins the session and is plugged in.
+//
+// - Dolphin is armed before boot from PPR_MODS_ROOM (the launcher sets it, or the harness): the
+//   room to open or join and the session's options (FromEnvironment);
+// - the room's requests and pushed state go over the online connection Rooms.cpp keeps (`hello`
+//   first): mods-create or mods-join once it is up, again on a new connection (the same room and
+//   slot; a new room when it is gone);
+// - every mods-state becomes the session's members (Machine::SetRoom), and while mm has no
+//   endpoint for this player the session probes mm from its UDP socket (Machine::ProbeEndpoint);
+// - leaving the room (or being removed) ends the session here.
+//
+// Thread-safe. OnServerMessage and TakeOutbox are called on the Rooms thread without its lock.
+
+#pragma once
+
+#include <optional>
+#include <string>
+#include <vector>
+
+#include <picojson.h>
+
+#include "Common/CommonTypes.h"
+
+namespace Machine
+{
+struct Options;
+}
+
+namespace Online::ModsRoom
+{
+// Before boot (Machine's environment check). PPR_MODS_ROOM, JSON:
+//   {"host": true, "build": {"hash": "<64 hex>", "name": "Brawl Minus"}, "public": true,
+//    "controller": "gc" | "wiimote", "delay": 2, "port": 0, "pad": 0}
+//   {"join": "KFQB", "build": {"hash": ..}, "controller": .., "delay": .., "port": .., "pad": ..}
+// Set: the room to open or join and the options to arm the session with (alone as the room's
+// host, or a joiner who takes its slot from the room). Not set: nullopt with *error empty.
+std::optional<Machine::Options> FromEnvironment(std::string* error);
+
+// Rooms thread. A mods-* message from mm: handled (true); anything else: false.
+bool OnServerMessage(const std::string& text);
+// What to send on online connection `connection` (a new number for every connection: the room is
+// created or joined again on a new one). Nothing when there is no room to be in.
+std::vector<std::string> TakeOutbox(u64 connection);
+
+// Harness (`mods_status`, `mods_request`): the room as mm shows it, and the host's and member's
+// requests: {"op": "leave"}, {"op": "kick", "slot": 1-4}, {"op": "slot", "slot", "open"},
+// {"op": "public", "public"}.
+picojson::object Status();
+std::optional<std::string> Request(const picojson::object& args);
+}  // namespace Online::ModsRoom
