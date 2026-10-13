@@ -4,17 +4,26 @@
 #include "Core/Online/ModsRoom.h"
 
 #include <array>
+#include <chrono>
 #include <cstdlib>
+#include <ctime>
 #include <deque>
 #include <mutex>
 
 #include <fmt/format.h>
 
+#include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Core/Config/OnlineSettings.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/User.h"
 #include "Core/Rollback/MachineSession.h"
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <unistd.h>
+#endif
 
 namespace Online::ModsRoom
 {
@@ -73,6 +82,10 @@ struct Room
   u64 states = 0;
   std::deque<std::string> outbox;
   std::vector<std::string> log;
+  // The launcher's hand-off (Files).
+  picojson::value last_request;
+  std::string status_written;
+  std::chrono::steady_clock::time_point status_at{};
 };
 
 struct State : Room
@@ -186,6 +199,51 @@ std::optional<View> ParseState(const picojson::object& o)
   if (!v.slots[v.you - 1])
     return std::nullopt;
   return v;
+}
+
+std::string IsoUtcNow()
+{
+  const std::time_t t = std::time(nullptr);
+  std::tm tm{};
+#ifdef _WIN32
+  gmtime_s(&tm, &t);
+#else
+  gmtime_r(&t, &tm);
+#endif
+  return fmt::format("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", tm.tm_year + 1900, tm.tm_mon + 1,
+                     tm.tm_mday, tm.tm_hour, tm.tm_min, tm.tm_sec);
+}
+
+picojson::object RoomJson(const View& v)
+{
+  picojson::object r;
+  r["code"] = picojson::value(v.code);
+  r["public"] = picojson::value(v.is_public);
+  picojson::object build;
+  build["hash"] = picojson::value(v.build_hash);
+  build["name"] = picojson::value(v.build_name);
+  r["build"] = picojson::value(build);
+  r["host"] = picojson::value(static_cast<double>(v.host));
+  r["you"] = picojson::value(static_cast<double>(v.you));
+  picojson::array slots;
+  for (int i = 0; i < 4; ++i)
+  {
+    picojson::object so;
+    so["slot"] = picojson::value(static_cast<double>(i + 1));
+    so["open"] = picojson::value(v.open[i]);
+    if (const auto& m = v.slots[i])
+    {
+      picojson::object p;
+      p["displayName"] = picojson::value(m->name);
+      p["connectCode"] = picojson::value(m->code);
+      p["controller"] = picojson::value(m->controller);
+      p["connected"] = picojson::value(!m->host.empty());
+      so["player"] = picojson::value(p);
+    }
+    slots.emplace_back(so);
+  }
+  r["slots"] = picojson::value(slots);
+  return r;
 }
 
 std::string CreateJson()
@@ -421,6 +479,116 @@ std::vector<std::string> TakeOutbox(u64 connection)
     s.outbox.pop_front();
   }
   return out;
+}
+
+void Files(const std::string& dir)
+{
+  {
+    std::lock_guard lk(s.mutex);
+    if (s.kind == Kind::None && s.log.empty())
+      return;
+  }
+  // The launcher's request, if any: read, deleted, answered in the status.
+  const std::string req_path = dir + "mods-request.json";
+  if (File::Exists(req_path))
+  {
+    std::string text;
+    const bool read = File::GetSize(req_path) <= 4096 && File::ReadFileToString(req_path, text);
+    File::Delete(req_path, File::IfAbsentBehavior::NoConsoleWarning);
+    picojson::value v;
+    picojson::object answer;
+    if (read && picojson::parse(v, text).empty() && v.is<picojson::object>())
+    {
+      const auto& o = v.get<picojson::object>();
+      const std::string id = Str(o, "id", 100);
+      answer["id"] = picojson::value(id);
+      if (Num(o, "version", 0) != 1 || id.empty())
+      {
+        answer["result"] = picojson::value("failed");
+        answer["error"] = picojson::value("not version 1 with an id");
+      }
+      else if (const auto error = Request(o))
+      {
+        answer["result"] = picojson::value("failed");
+        answer["error"] = picojson::value(*error);
+      }
+      else
+      {
+        answer["result"] = picojson::value("ok");
+      }
+    }
+    else
+    {
+      answer["result"] = picojson::value("failed");
+      answer["error"] = picojson::value("not a JSON object");
+    }
+    std::lock_guard lk(s.mutex);
+    s.last_request = picojson::value(answer);
+  }
+
+  // The session as the launcher shows it.
+  picojson::object session;
+  const picojson::value ms = Machine::Status();
+  if (ms.is<picojson::object>())
+  {
+    const auto& m = ms.get<picojson::object>();
+    for (const char* key : {"phase", "error", "players", "epoch", "frame", "slot"})
+    {
+      if (const auto it = m.find(key); it != m.end())
+        session[key] = it->second;
+    }
+    picojson::array peers;
+    if (const auto it = m.find("peers"); it != m.end() && it->second.is<picojson::array>())
+    {
+      for (const auto& pv : it->second.get<picojson::array>())
+      {
+        if (!pv.is<picojson::object>())
+          continue;
+        const auto& po = pv.get<picojson::object>();
+        picojson::object p;
+        p["slot"] = picojson::value(Num(po, "slot", -1) + 1);
+        p["connected"] = picojson::value(Flag(po, "connected", false));
+        p["rttMs"] = picojson::value(Num(po, "rtt_ms", -1));
+        peers.emplace_back(p);
+      }
+    }
+    session["peers"] = picojson::value(peers);
+  }
+
+  picojson::object o;
+  std::string key;
+  {
+    std::lock_guard lk(s.mutex);
+    o["version"] = picojson::value(1.0);
+    o["kind"] = picojson::value(s.kind == Kind::Host ? "host" : s.kind == Kind::Join ? "join" : "none");
+    o["state"] = picojson::value(s.done ? "left" : s.view ? "in" : "joining");
+    o["error"] = picojson::value(s.error);
+    o["room"] = s.view ? picojson::value(RoomJson(*s.view)) : picojson::value();
+    o["session"] = picojson::value(session);
+    o["lastRequest"] = s.last_request;
+#ifdef _WIN32
+    o["pid"] = picojson::value(static_cast<double>(GetCurrentProcessId()));
+#else
+    o["pid"] = picojson::value(static_cast<double>(getpid()));
+#endif
+    // The frame counts up all the time: not a change by itself.
+    picojson::object keyed = o;
+    picojson::object ks = session;
+    ks.erase("frame");
+    keyed["session"] = picojson::value(ks);
+    key = picojson::value(keyed).serialize();
+    const auto now = std::chrono::steady_clock::now();
+    if (key == s.status_written && now - s.status_at < std::chrono::seconds(5))
+      return;
+    s.status_written = key;
+    s.status_at = now;
+  }
+  o["updatedAt"] = picojson::value(IsoUtcNow());
+  File::CreateFullPath(dir);
+  const std::string tmp = dir + "mods-room.json.tmp";
+  const std::string path = dir + "mods-room.json";
+  if (!File::WriteStringToFile(tmp, picojson::value(o).serialize(true)) || !File::Rename(tmp, path))
+    WARN_LOG_FMT(NETPLAY, "ModsRoom: cannot write {}", path);
 }
 
 picojson::object Status()

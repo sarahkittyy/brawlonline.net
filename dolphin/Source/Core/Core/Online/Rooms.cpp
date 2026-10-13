@@ -1417,6 +1417,7 @@ void Thread()
     {
       next_file = now + FILE_POLL;
       PollJoinRequest();
+      ModsRoom::Files(OnlineDir());
       const DolphinBusy busy = QueryBusy();
       {
         std::lock_guard lk(s_mutex);

@@ -49,6 +49,13 @@ bool OnServerMessage(const std::string& text);
 // created or joined again on a new one). Nothing when there is no room to be in.
 std::vector<std::string> TakeOutbox(u64 connection);
 
+// Rooms thread, every half second: the launcher's hand-off in Dolphin's online folder `dir`.
+// `mods-request.json` in (launcher -> Dolphin: {version: 1, id, op: "leave" | "kick" | "slot" |
+// "public", slot, open, public, createdAt}; read and deleted), `mods-room.json` out (Dolphin ->
+// launcher: {version: 1, kind, state, error, room, session, lastRequest: {id, result, error}, pid,
+// updatedAt}; on every change and at least every 5 s). Nothing while no room was asked for.
+void Files(const std::string& dir);
+
 // Harness (`mods_status`, `mods_request`): the room as mm shows it, and the host's and member's
 // requests: {"op": "leave"}, {"op": "kick", "slot": 1-4}, {"op": "slot", "slot", "open"},
 // {"op": "public", "public"}.
