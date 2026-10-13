@@ -57,8 +57,12 @@ pub struct MatchRules {
     pub input_assist: bool,
 }
 
-/// P+ v3.2's item switch after a fresh boot (its save's default).
+/// P+ v3.2's item switch after a fresh boot (its save's default): Stage Items and EX Items on.
 pub const PPLUS_ITEM_SWITCH: [u8; 8] = [0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+
+/// Our default item switch: P+'s with Stage Items (bit 49) off (the user's, 2026-10-13), so a
+/// ruleset that turns an item or two on does not also get the stages' items. EX Items stays on.
+pub const DEFAULT_ITEM_SWITCH: [u8; 8] = [0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
 
 impl Default for MatchRules {
     fn default() -> Self {
@@ -70,7 +74,7 @@ impl Default for MatchRules {
             team_attack: true,
             pause: Pause::Normal,
             item_frequency: 0,
-            item_switch: PPLUS_ITEM_SWITCH,
+            item_switch: DEFAULT_ITEM_SWITCH,
             // Stage hazards off (the user's, 2026-10-12): new rulesets, rooms' P+ default and
             // Unranked, Ranked and Direct.
             hazards: false,
@@ -439,7 +443,8 @@ mod tests {
         assert_eq!((r.style, r.stocks, r.time_minutes, r.damage_ratio_tenths()), (Style::Stock, 4, 8, 10));
         assert!(r.team_attack && !r.hazards && !r.auto_l_cancel && !r.input_assist);
         assert_eq!(r.pause, Pause::Normal);
-        assert_eq!((r.item_frequency, r.item_switch), (0, PPLUS_ITEM_SWITCH));
+        assert_eq!((r.item_frequency, r.item_switch), (0, DEFAULT_ITEM_SWITCH));
+        assert_eq!(DEFAULT_ITEM_SWITCH, [PPLUS_ITEM_SWITCH[0], PPLUS_ITEM_SWITCH[1] & !0x02, 0, 0, 0, 0, 0, 0]);
         r.validate().unwrap();
     }
 
@@ -451,7 +456,7 @@ mod tests {
             serde_json::json!({
                 "style": "stock", "stocks": 4, "timeMinutes": 8, "damageRatio": 1.0,
                 "teamAttack": true, "pause": "hold", "itemFrequency": 0,
-                "itemSwitch": [0, 6, 0, 0, 0, 0, 0, 0], "hazards": false, "autoLCancel": true,
+                "itemSwitch": [0, 4, 0, 0, 0, 0, 0, 0], "hazards": false, "autoLCancel": true,
                 "inputAssist": false
             })
         );
@@ -560,11 +565,11 @@ mod tests {
         assert!(!c.contains("\"by\""), "{c}");
         assert_eq!(
             c,
-            r#"{"bans":2,"bestOf":3,"dsr":true,"format":1,"name":"NorCal Weekly","rules":{"autoLCancel":false,"damageRatio":1.0,"hazards":false,"inputAssist":false,"itemFrequency":0,"itemSwitch":[0,6,0,0,0,0,0,0],"pause":"normal","stocks":4,"style":"stock","teamAttack":true,"timeMinutes":8},"stageChoice":"loser-picks","stages":{"counterpicks":[3,4,5,6,9,12,13,28,31,35],"starters":[1,2,33,45,46]},"strikes":[1,2,1],"version":0}"#
+            r#"{"bans":2,"bestOf":3,"dsr":true,"format":1,"name":"NorCal Weekly","rules":{"autoLCancel":false,"damageRatio":1.0,"hazards":false,"inputAssist":false,"itemFrequency":0,"itemSwitch":[0,4,0,0,0,0,0,0],"pause":"normal","stocks":4,"style":"stock","teamAttack":true,"timeMinutes":8},"stageChoice":"loser-picks","stages":{"counterpicks":[3,4,5,6,9,12,13,28,31,35],"starters":[1,2,33,45,46]},"strikes":[1,2,1],"version":0}"#
         );
         // Pinned, so a change to the canonical form shows up here (the hash is in matches,
         // results and replays).
-        assert_eq!(r.hash(), "f3c6ee0b856ee8b0c715a6d353294ae3337e55e0eb12eaa43f15756b2700d08b");
+        assert_eq!(r.hash(), "1e778cce399b34eb7efaa0b9b5773d2246998660e3b1af6f8c8f76085d1bdf23");
         // `by` is left out; every other field counts, even stage order.
         assert_eq!(Ruleset { by: "sarah".into(), ..r.clone() }.hash(), r.hash());
         assert_ne!(Ruleset { version: 2, ..r.clone() }.hash(), r.hash());

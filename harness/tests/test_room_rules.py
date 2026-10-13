@@ -136,7 +136,7 @@ def test_host_edits_the_room_rules_everyone_plays_them(backend: OnlineBackend,
     print("RULES cursor after MORE RULES", cursor(a, 0))
     close_menu(a)
     want = {"style": "stock", "stocks": 3, "timeMinutes": 1, "damageRatio": 1.0, "teamAttack": True,
-            "pause": "normal", "itemFrequency": 0, "itemSwitch": [0, 6, 0, 0, 0, 0, 0, 0], "hazards": False,
+            "pause": "normal", "itemFrequency": 0, "itemSwitch": [0, 4, 0, 0, 0, 0, 0, 0], "hazards": False,
             "autoLCancel": True, "inputAssist": False}
     for g in (a, b):
         _wait(lambda g=g: session_rules(g) == want, 20, f"{g.name}: the host's rules", interval=0.3)

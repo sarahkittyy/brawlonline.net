@@ -40,7 +40,7 @@ describe("rulesets", () => {
       teamAttack: true,
       pause: "normal",
       itemFrequency: 0,
-      itemSwitch: [0, 6, 0, 0, 0, 0, 0, 0],
+      itemSwitch: [0, 4, 0, 0, 0, 0, 0, 0],
       hazards: false,
       autoLCancel: false,
       inputAssist: false,
