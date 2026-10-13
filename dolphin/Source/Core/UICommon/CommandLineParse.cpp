@@ -106,6 +106,13 @@ std::unique_ptr<optparse::OptionParser> CreateParser(ParserOptions options)
       .type("string")
       .help("Start the automation harness control server on 127.0.0.1:<port> "
             "(see docs/harness-protocol.md; PPR_HARNESS_PORT is used if absent)");
+  parser->add_option("--mods-room")
+      .action("store")
+      .dest("mods_room")
+      .metavar("<json>")
+      .type("string")
+      .help("Open or join a Brawl Mods room before booting (JSON as PPR_MODS_ROOM, "
+            "docs/design/brawl-mods.md section 3)");
   parser->add_option("-s", "--save_state")
       .action("store")
       .metavar("<file>")
@@ -125,6 +132,7 @@ std::unique_ptr<optparse::OptionParser> CreateParser(ParserOptions options)
   }
 
   parser->set_defaults("harness_port", "");
+  parser->set_defaults("mods_room", "");
   parser->set_defaults("video_backend", "");
   parser->set_defaults("audio_emulation", "");
   parser->add_option("-v", "--video_backend").action("store").help("Specify a video backend");

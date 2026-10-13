@@ -81,6 +81,7 @@ struct State : Room
 };
 
 State s;
+std::string s_command_line;  // --mods-room (before boot, then read once)
 
 void Log(std::string line)
 {
@@ -215,10 +216,15 @@ std::string JoinJson(const std::string& code, int slot)
 }
 }  // namespace
 
+void SetCommandLine(std::string json)
+{
+  s_command_line = std::move(json);
+}
+
 std::optional<Machine::Options> FromEnvironment(std::string* error)
 {
   error->clear();
-  const char* env = std::getenv("PPR_MODS_ROOM");
+  const char* env = !s_command_line.empty() ? s_command_line.c_str() : std::getenv("PPR_MODS_ROOM");
   if (!env || !*env)
     return std::nullopt;
   picojson::value v;

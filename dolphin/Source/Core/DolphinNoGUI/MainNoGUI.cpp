@@ -22,6 +22,7 @@
 #include "Core/DolphinAnalytics.h"
 #include "Core/Harness/Harness.h"
 #include "Core/Host.h"
+#include "Core/Online/ModsRoom.h"
 #include "Core/Online/OnlineSession.h"
 #include "Core/Rollback/GameplayOnlineBackend.h"
 #include "Core/System.h"
@@ -218,6 +219,8 @@ int main(const int argc, char* argv[])
 
   const std::optional<u16> harness_port =
       Harness::ResolvePort(static_cast<const char*>(options.get("harness_port")));
+  if (const char* room = static_cast<const char*>(options.get("mods_room")); room && *room)
+    Online::ModsRoom::SetCommandLine(room);
 
   std::optional<std::string> save_state_path;
   if (options.is_set("save_state"))

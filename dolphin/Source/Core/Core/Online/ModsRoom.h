@@ -40,6 +40,8 @@ namespace Online::ModsRoom
 // Set: the room to open or join and the options to arm the session with (alone as the room's
 // host, or a joiner who takes its slot from the room). Not set: nullopt with *error empty.
 std::optional<Machine::Options> FromEnvironment(std::string* error);
+// The --mods-room command line option (the same JSON), taken instead of PPR_MODS_ROOM. Before boot.
+void SetCommandLine(std::string json);
 
 // Rooms thread. A mods-* message from mm: handled (true); anything else: false.
 bool OnServerMessage(const std::string& text);
