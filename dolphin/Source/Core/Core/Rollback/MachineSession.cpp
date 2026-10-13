@@ -1459,6 +1459,12 @@ bool DigestBytesEnabled()
   return on;
 }
 u64 s_diag_frames = 0;
+// PPR_MACHINE_IOLOG (MachineSession.h): by frame, the last run's MMIO reads and host writes.
+std::mutex s_io_mutex;
+std::map<s64, std::string> s_io_frames;
+std::string* s_io_current = nullptr;
+u64 s_io_events = 0;  // this frame's I/O log events so far
+s64 s_io_frame = -1;
 
 void DiagnoseSave(s64 frame)
 {
@@ -3334,6 +3340,13 @@ void Stop()
   OSD::AddMessage("Session ended", 3000, OSD::Color::YELLOW);
 }
 
+void RecheckEnvironment()
+{
+  std::lock_guard lk(s.mutex);
+  if (!Active())
+    s.env_checked = false;
+}
+
 bool IsArmed()
 {
   if (!s.env_checked)
@@ -3775,6 +3788,87 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       LogParts(system, f);
     }
   }
+  static const s64 io_frames = [] {
+    const char* e = std::getenv("PPR_MACHINE_IOLOG");
+    return e ? std::strtoll(e, nullptr, 10) : 0;
+  }();
+  static bool io_written = false;
+  // PPR_MACHINE_IOLOG=-K: the last K frames' logs, written at the first desync (whenever it comes).
+  const auto write_io_log = [&](std::string_view why) {
+    io_written = true;
+    s_io_current = nullptr;
+    g_io_log = false;
+    const char* dir = std::getenv("PPR_MACHINE_DUMP_DIR");
+    if (!dir || !*dir)
+      return;
+    const std::string path = fmt::format("{}/iolog-p{}.txt", dir, s.opts.local_slot + 1);
+    if (std::FILE* out = std::fopen(path.c_str(), "wb"))
+    {
+      for (const auto& [frame, text] : s_io_frames)
+        std::fwrite(text.data(), 1, text.size(), out);
+      std::fclose(out);
+    }
+    AddLog(fmt::format("I/O log of {} frames written to {} ({})", s_io_frames.size(), path, why));
+    s_io_frames.clear();
+  };
+  if (io_frames < 0 && !io_written && s.epoch > 0 && s.phase == Phase::Running && s.iteration < s.ops.count)
+  {
+    const s64 f = s.ops.frame[s.iteration];
+    std::lock_guard io_lk(s_io_mutex);
+    if (s.desyncs > 0)
+    {
+      write_io_log(fmt::format("the first desync, at frame {}", s.last_desync_frame));
+    }
+    else
+    {
+      s_io_current = &(s_io_frames[f] = std::string());
+      s_io_events = 0;
+      s_io_frame = f;
+      const auto& cpu = system.GetPPCState();
+      *s_io_current += fmt::format("F {} ticks {} pc {:08x} lr {:08x} msr {:08x} dec {:08x}\n", f,
+                                   system.GetCoreTiming().GetTicks(), cpu.pc, cpu.spr[SPR_LR], cpu.msr.Hex,
+                                   cpu.spr[SPR_DEC]);
+      g_io_log = true;
+      while (!s_io_frames.empty() && s_io_frames.begin()->first <= f + io_frames)
+        s_io_frames.erase(s_io_frames.begin());
+    }
+  }
+  // PPR_MACHINE_IOLOG_FROM=F: the N frames from frame F (counted from boot) instead.
+  static const s64 io_from = [] {
+    const char* e = std::getenv("PPR_MACHINE_IOLOG_FROM");
+    return e ? std::strtoll(e, nullptr, 10) : -1;
+  }();
+  if (io_frames > 0 && !io_written && s.epoch > 0 && s.phase == Phase::Running && s.iteration < s.ops.count)
+  {
+    const s64 f = s.ops.frame[s.iteration];
+    const s64 first = io_from >= 0 ? io_from : s.frame_base;
+    std::lock_guard io_lk(s_io_mutex);
+    if (f < first)
+    {
+      s_io_current = nullptr;
+      g_io_log = false;
+    }
+    else if (f < first + io_frames)
+    {
+      // A re-run replaces the frame's log: the last run is the one that counts.
+      s_io_current = &(s_io_frames[f] = std::string());
+      s_io_events = 0;
+      s_io_frame = f;
+      const auto& cpu = system.GetPPCState();
+      *s_io_current += fmt::format("F {} ticks {} pc {:08x} lr {:08x} msr {:08x} dec {:08x}\n", f,
+                                   system.GetCoreTiming().GetTicks(), cpu.pc, cpu.spr[SPR_LR], cpu.msr.Hex,
+                                   cpu.spr[SPR_DEC]);
+      g_io_log = true;
+    }
+    else
+    {
+      s_io_current = nullptr;
+      g_io_log = false;
+      // Written once no rollback can reach the logged frames any more.
+      if (f >= first + io_frames + 32)
+        write_io_log(io_from >= 0 ? "the frames asked for" : "the first frames after the epoch");
+    }
+  }
   // A comma-separated list of frames; "+N" counts from the last epoch's frame.
   static const std::string dump_at = [] {
     const char* e = std::getenv("PPR_MACHINE_DUMP_AT");
@@ -3989,5 +4083,129 @@ picojson::value History(s64 since)
   picojson::object o;
   o["frames"] = picojson::value(frames);
   return picojson::value(o);
+}
+
+bool g_io_log = false;
+bool g_io_cpu_store = false;
+
+bool IoLogLight()
+{
+  static const bool light = [] {
+    const char* e = std::getenv("PPR_MACHINE_IOLOG_LIGHT");
+    return e && *e && *e != '0';
+  }();
+  return light;
+}
+
+// The end of an I/O log line: CRCs of the FPRs (both halves) and GPRs, CR and FPSCR, so the first
+// event after which two machines' registers differ brackets the instruction. With
+// PPR_MACHINE_IOLOG_REGS=FRAME:FIRST-LAST (FRAME counted from the epoch), the FPRs and GPRs in full
+// for those events of that frame.
+void IoLogRegs(const PowerPC::PowerPCState& ppc)
+{
+  static const std::array<s64, 3> regs_at = [] {
+    std::array<s64, 3> r{-1, 0, -1};
+    if (const char* e = std::getenv("PPR_MACHINE_IOLOG_REGS"))
+      std::sscanf(e, "%lld:%lld-%lld", reinterpret_cast<long long*>(&r[0]),
+                  reinterpret_cast<long long*>(&r[1]), reinterpret_cast<long long*>(&r[2]));
+    return r;
+  }();
+  const u64 n = s_io_events++;
+  if (IoLogLight())
+  {
+    *s_io_current += "\n";
+    return;
+  }
+  *s_io_current += fmt::format(" f {:08x} g {:08x} cr {:08x} fpscr {:08x}\n",
+                               Common::ComputeCRC32(reinterpret_cast<const u8*>(ppc.ps), sizeof(ppc.ps)),
+                               Common::ComputeCRC32(reinterpret_cast<const u8*>(ppc.gpr), sizeof(ppc.gpr)),
+                               ppc.cr.Get(), ppc.fpscr.Hex);
+  if (s_io_frame - s.frame_base == regs_at[0] && static_cast<s64>(n) >= regs_at[1] && static_cast<s64>(n) <= regs_at[2])
+  {
+    for (int i = 0; i < 32; ++i)
+      *s_io_current += fmt::format("  f{} {:016x} {:016x}\n", i, ppc.ps[i].PS0AsU64(), ppc.ps[i].PS1AsU64());
+    for (int i = 0; i < 32; ++i)
+      *s_io_current += fmt::format("  r{} {:08x}\n", i, ppc.gpr[i]);
+    // The code before pc as RAM holds it and as the instruction cache would give it (a peek: no
+    // line is filled), "-" where the cache has no valid line.
+    auto& memory = Core::System::GetInstance().GetMemory();
+    for (u32 a = ppc.pc - 0x60; a <= ppc.pc + 0x8; a += 4)
+    {
+      if (a < 0x80000000 || a >= 0x81800000)
+        continue;
+      const u32 phys = a & 0x1FFFFFFF;
+      u32 ram;
+      std::memcpy(&ram, memory.GetRAM() + phys, 4);
+      const u8 way = ppc.iCache.lookup_table[(phys & memory.GetRamMask()) >> 5];
+      const u32 set = (phys >> 5) & 0x7f;
+      const std::string ic = way == 0xff ? std::string("-") :
+                                           fmt::format("{:08x}", Common::swap32(ppc.iCache.data[set][way][(phys >> 2) & 7]));
+      *s_io_current += fmt::format("  i{:08x} {:08x} {}\n", a, Common::swap32(ram), ic);
+    }
+  }
+}
+
+bool IoLogInRegsWindow()
+{
+  static const std::array<s64, 3> regs_at = [] {
+    std::array<s64, 3> r{-1, 0, -1};
+    if (const char* e = std::getenv("PPR_MACHINE_IOLOG_REGS"))
+      std::sscanf(e, "%lld:%lld-%lld", reinterpret_cast<long long*>(&r[0]),
+                  reinterpret_cast<long long*>(&r[1]), reinterpret_cast<long long*>(&r[2]));
+    return r;
+  }();
+  return s_io_frame - s.frame_base == regs_at[0] && static_cast<s64>(s_io_events) >= regs_at[1] &&
+         static_cast<s64>(s_io_events) <= regs_at[2];
+}
+
+void IoLogStep(u32 pc, u32 inst)
+{
+  std::lock_guard lk(s_io_mutex);
+  if (!s_io_current || !IoLogInRegsWindow())
+    return;
+  const auto& ppc = Core::System::GetInstance().GetPPCState();
+  std::string line = fmt::format("  x{:08x} {:08x} f {:08x}", pc, inst,
+                                 Common::ComputeCRC32(reinterpret_cast<const u8*>(ppc.ps), sizeof(ppc.ps)));
+  for (int i = 0; i < 8; ++i)
+    line += fmt::format(" {:016x}:{:016x}", ppc.ps[i].PS0AsU64(), ppc.ps[i].PS1AsU64());
+  *s_io_current += line + "\n";
+}
+
+void IoLogRead(u32 addr, u32 size, u64 value)
+{
+  std::lock_guard lk(s_io_mutex);
+  if (!s_io_current)
+    return;
+  const auto& ppc = Core::System::GetInstance().GetPPCState();
+  *s_io_current += fmt::format("R {:08x} {} {:x} pc {:08x}", addr, size, value, ppc.pc);
+  IoLogRegs(ppc);
+}
+
+void IoLogWrite(u32 addr, size_t size)
+{
+  if (g_io_cpu_store && IoLogLight())
+    return;
+  std::lock_guard lk(s_io_mutex);
+  if (!s_io_current)
+    return;
+  auto& system = Core::System::GetInstance();
+  auto& memory = system.GetMemory();
+  const u32 phys = addr & 0x1FFFFFFF;
+  const u8* src = nullptr;
+  if (phys + size <= memory.GetRamSizeReal())
+    src = memory.GetRAM() + phys;
+  else if (phys >= 0x10000000 && memory.GetEXRAM() && phys - 0x10000000 + size <= memory.GetExRamSizeReal())
+    src = memory.GetEXRAM() + (phys - 0x10000000);
+  const u32 crc = src ? Common::ComputeCRC32(src, static_cast<u32>(size)) : 0;
+  *s_io_current += fmt::format("W {:08x} {:x} {:08x} pc {:08x}", addr, size, crc, system.GetPPCState().pc);
+  if (!g_io_cpu_store)
+  {
+    // Who wrote it: a CoreTiming event's callback, or another thread (a device's worker).
+    const std::string* ev = system.GetCoreTiming().m_current_event;
+    *s_io_current += fmt::format(" by {}", !Core::IsCPUThread() ? std::string("thread") :
+                                            ev                  ? *ev :
+                                                                  std::string("cpu"));
+  }
+  IoLogRegs(system.GetPPCState());
 }
 }  // namespace Machine

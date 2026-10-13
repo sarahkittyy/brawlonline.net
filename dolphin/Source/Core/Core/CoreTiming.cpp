@@ -388,7 +388,9 @@ void CoreTimingManager::Advance()
       std::copy(std::begin(ps.gpr), std::end(ps.gpr), te.gpr.begin());
       m_event_trace->push_back(te);
     }
+    m_current_event = evt.type->name;
     evt.type->callback(m_system, evt.userdata, m_globals.global_timer - evt.time);
+    m_current_event = nullptr;
   }
 
   m_is_global_timer_sane = false;

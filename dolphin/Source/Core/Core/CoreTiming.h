@@ -108,6 +108,8 @@ public:
     std::array<u32, 32> gpr;
   };
   std::vector<TracedEvent>* m_event_trace = nullptr;
+  // The event whose callback Advance is running (diagnostics: Machine::IoLogWrite).
+  const std::string* m_current_event = nullptr;
 
   // CoreTiming begins at the boundary of timing slice -1. An initial call to Advance() is
   // required to end slice -1 and start slice 0 before the first cycle of code is executed.

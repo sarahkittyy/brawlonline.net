@@ -143,6 +143,9 @@ std::optional<Options> ParseOptions(const picojson::value& json, std::string* er
 // PPR_MACHINE_SESSION (JSON, as ParseOptions) at the first call of IsArmed, or for a Brawl Mods
 // room from PPR_MODS_ROOM (Online/ModsRoom.h).
 bool Arm(const Options& options, std::string* error);
+// The environment (or the command line's room) changed before boot: the next IsArmed reads it again.
+// Something may have asked IsArmed already (on macOS, before main read its options).
+void RecheckEnvironment();
 
 // A room session's members changed (any thread; Online::ModsRoom): `local_slot` is this player's
 // slot in the room (a joiner takes it the first time). A new member is a joiner; a member in a
@@ -210,4 +213,20 @@ picojson::value History(s64 since);
 // LastSaveDigest), to diff two machines whose checksums differ.
 // With PPR_MACHINE_DIGESTS=2 the bytes too: those of the granules in `addrs` (hex).
 picojson::value Digest(s64 frame, const std::vector<u32>& addrs = {});
+
+// Diagnostics, PPR_MACHINE_IOLOG=N (with PPR_MACHINE_DUMP_DIR): the first N frames after an epoch,
+// every MMIO read the MMU makes (all of them with an interpreter core; a JIT inlines some) and
+// every host write into guest memory (MarkRangeDirty: DMA, IOS replies, DVD reads), to
+// iolog-p<slot>.txt. Two machines' logs show the first outside input that differs. With an
+// interpreter core, CPU stores go through MarkRangeDirty too, and every event carries CRCs of the
+// FPRs and GPRs: the first event after which the registers differ brackets the instruction.
+// PPR_MACHINE_IOLOG=-K: the last K frames instead, written at the first desync.
+// PPR_MACHINE_IOLOG_LIGHT=1: only what comes from outside the CPU (no CPU stores, no registers),
+// fast enough to run for minutes.
+extern bool g_io_log;
+extern bool g_io_cpu_store;  // MMU::Write is marking a CPU store dirty
+void IoLogRead(u32 addr, u32 size, u64 value);
+void IoLogWrite(u32 addr, size_t size);
+// In the PPR_MACHINE_IOLOG_REGS window: each instruction an interpreter core ran, with the FPRs.
+void IoLogStep(u32 pc, u32 inst);
 }  // namespace Machine

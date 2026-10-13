@@ -219,8 +219,9 @@ int main(const int argc, char* argv[])
 
   const std::optional<u16> harness_port =
       Harness::ResolvePort(static_cast<const char*>(options.get("harness_port")));
-  if (const char* room = static_cast<const char*>(options.get("mods_room")); room && *room)
-    Online::ModsRoom::SetCommandLine(room);
+  // Copied while options.get's value lives: a pointer into it dangled after this statement.
+  if (std::string room = static_cast<const char*>(options.get("mods_room")); !room.empty())
+    Online::ModsRoom::SetCommandLine(std::move(room));
 
   std::optional<std::string> save_state_path;
   if (options.is_set("save_state"))

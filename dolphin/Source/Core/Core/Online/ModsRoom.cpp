@@ -277,6 +277,8 @@ std::string JoinJson(const std::string& code, int slot)
 void SetCommandLine(std::string json)
 {
   s_command_line = std::move(json);
+  // Read at the next IsArmed even if something asked it before main read its options.
+  Machine::RecheckEnvironment();
 }
 
 std::optional<Machine::Options> FromEnvironment(std::string* error)
@@ -286,9 +288,11 @@ std::optional<Machine::Options> FromEnvironment(std::string* error)
   if (!env || !*env)
     return std::nullopt;
   picojson::value v;
-  if (const std::string err = picojson::parse(v, env); !err.empty() || !v.is<picojson::object>())
+  const std::string text = env;
+  if (const std::string err = picojson::parse(v, text); !err.empty() || !v.is<picojson::object>())
   {
-    *error = "PPR_MODS_ROOM is not a JSON object";
+    *error = fmt::format("the room ({} bytes, \"{}\") is not a JSON object: {}", text.size(),
+                         text.substr(0, 60), err.substr(0, 80));
     return std::nullopt;
   }
   const auto& o = v.get<picojson::object>();

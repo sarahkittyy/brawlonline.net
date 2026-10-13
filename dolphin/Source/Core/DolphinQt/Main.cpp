@@ -278,8 +278,9 @@ int main(int argc, char* argv[])
     Settings::Instance().InitDefaultPalette();
     Settings::Instance().ApplyStyle();
 
-    if (const char* room = static_cast<const char*>(options.get("mods_room")); room && *room)
-      Online::ModsRoom::SetCommandLine(room);
+    // Copied while options.get's value lives: a pointer into it dangled after this statement.
+    if (std::string room = static_cast<const char*>(options.get("mods_room")); !room.empty())
+      Online::ModsRoom::SetCommandLine(std::move(room));
 
     // Started before the main window exists so MainWindow can skip interactive startup prompts
     // (the update check) when running under the harness.

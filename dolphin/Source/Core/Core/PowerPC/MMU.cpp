@@ -57,6 +57,7 @@
 
 #include "VideoCommon/EFBInterface.h"
 
+#include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/RollbackManager.h"
 
 namespace PowerPC
@@ -240,8 +241,11 @@ T MMU::ReadFromHardware(u32 em_address)
     }
     else
     {
-      return static_cast<T>(
-          m_memory.GetMMIOMapping()->Read<std::make_unsigned_t<T>>(m_system, em_address));
+      const auto value =
+          m_memory.GetMMIOMapping()->Read<std::make_unsigned_t<T>>(m_system, em_address);
+      if (Machine::g_io_log) [[unlikely]]
+        Machine::IoLogRead(em_address, sizeof(T), value);
+      return static_cast<T>(value);
     }
   }
 
@@ -699,8 +703,10 @@ void MMU::Write(const Common::MakeAtLeastU32<T> var, const u32 address)
 {
   Memcheck(address, var, true, sizeof(T));
   WriteToHardware<XCheckTLBFlag::Write>(address, var, sizeof(T));
+  Machine::g_io_cpu_store = true;
   m_memory.MarkRangeDirty(address,
                           sizeof(T));  // Track MMU slow-path writes (interpreter, backpatch).
+  Machine::g_io_cpu_store = false;
 }
 template void MMU::Write<u8>(const u32 var, const u32 address);
 template void MMU::Write<u16>(const u32 var, const u32 address);
@@ -711,7 +717,9 @@ void MMU::Write<u64>(const u64 var, const u32 address)
   Memcheck(address, var, true, 8);
   WriteToHardware<XCheckTLBFlag::Write>(address, static_cast<u32>(var >> 32), 4);
   WriteToHardware<XCheckTLBFlag::Write>(address + sizeof(u32), static_cast<u32>(var), 4);
+  Machine::g_io_cpu_store = true;
   m_memory.MarkRangeDirty(address, 8);
+  Machine::g_io_cpu_store = false;
 }
 
 void MMU::Write_U16_Swap(const u32 var, const u32 address)
@@ -1063,7 +1071,9 @@ void MMU::ClearDCacheLine(u32 address)
   for (u32 i = 0; i < 32; i += 4)
     WriteToHardware<XCheckTLBFlag::Write, true>(address + i, 0, 4);
 
+  Machine::g_io_cpu_store = true;
   m_memory.MarkRangeDirty(address, 32);
+  Machine::g_io_cpu_store = false;
 }
 
 void MMU::StoreDCacheLine(u32 address)

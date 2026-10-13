@@ -24,6 +24,7 @@
 #include "Core/PowerPC/PPCAnalyst.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
+#include "Core/Rollback/MachineSession.h"
 
 CachedInterpreter::CachedInterpreter(Core::System& system) : JitBase(system), m_block_cache(*this)
 {
@@ -142,6 +143,8 @@ s32 CachedInterpreter::Interpret(PowerPC::PowerPCState& ppc_state,
     ppc_state.npc = operands.current_pc + 4;
   }
   operands.func(operands.interpreter, operands.inst);
+  if (Machine::g_io_log) [[unlikely]]
+    Machine::IoLogStep(operands.current_pc, operands.inst.hex);
   return sizeof(AnyCallback) + sizeof(operands);
 }
 
@@ -155,6 +158,8 @@ s32 CachedInterpreter::InterpretAndCheckExceptions(
     ppc_state.npc = operands.current_pc + 4;
   }
   operands.func(operands.interpreter, operands.inst);
+  if (Machine::g_io_log) [[unlikely]]
+    Machine::IoLogStep(operands.current_pc, operands.inst.hex);
 
   if ((ppc_state.Exceptions & (EXCEPTION_DSI | EXCEPTION_PROGRAM)) != 0)
   {

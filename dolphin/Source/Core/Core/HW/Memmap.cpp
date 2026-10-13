@@ -42,6 +42,7 @@
 #include "Core/System.h"
 #include "VideoCommon/CommandProcessor.h"
 #include "VideoCommon/PixelEngine.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/RollbackManager.h"
 
 
@@ -812,6 +813,8 @@ void MemoryManager::MarkRangeDirty(u32 address, size_t size)
     return;
 
   const uint32_t phys_addr = address & 0x1FFFFFFFu;
+  if (Machine::g_io_log) [[unlikely]]
+    Machine::IoLogWrite(address, size);
 
   uint8_t* const entries = Rollback::JITDirtyBitmap::Get().entries;
   const uint32_t first_page = phys_addr >> ::ROLLBACK_PAGE_SHIFT;
