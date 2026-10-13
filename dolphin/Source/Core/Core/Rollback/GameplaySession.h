@@ -401,7 +401,7 @@ std::optional<std::string> Connect(const ConnectOptions& options);
 // This player's selections (free-form JSON object, e.g. {"character": "fox", "costume": 0}); the
 // host's may carry the stage and rules. Sent to the peer and shown in Status().
 std::optional<std::string> SetSelections(const picojson::object& selections);
-// Ends any session and closes the socket.
+// Ends any online session and closes the socket (an armed or playing replay stays: StopPlayback).
 void Stop();
 
 picojson::value Status();

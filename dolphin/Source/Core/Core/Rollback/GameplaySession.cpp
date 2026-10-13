@@ -4898,6 +4898,11 @@ void Stop()
 {
   {
     std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+    // A replay is no online connection: the game's CLEANUP_CONNECTION (sent whenever it is on the
+    // menus, e.g. on its way from the boot to the CSS a replay starts from) and the online
+    // backend's stops leave it. StopPlayback ends it.
+    if (s.mode == Mode::Playback)
+      return;
     // Leaving tells the peer at once, so it does not wait for the 7.2 s silence timeout.
     SendLeave("");
     s.quit_left = false;

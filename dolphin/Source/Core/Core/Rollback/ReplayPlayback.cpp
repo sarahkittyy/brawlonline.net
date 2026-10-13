@@ -17,6 +17,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/Thread.h"
 #include "Core/ConfigManager.h"
+#include "Core/Online/GameBridge.h"
 #include "Core/Rollback/GameplaySession.h"
 #include "Core/Rollback/PeerData.h"
 #include "Core/Rollback/ReplayFile.h"
@@ -54,12 +55,13 @@ bool s_needs_play_anyway = false;
 bool s_wait_boot = false;  // a comm file request, armed once the game has booted
 std::string s_last_status;
 
-// The disc's game is running. The launcher's playback Dolphin starts the comm file follower before
-// it boots, and boots P+'s launcher DOL, which runs as game 00000000 until it starts the disc.
+// The game is running with our plugin (GameBridge found its block). The launcher's playback
+// Dolphin starts the comm file follower before it boots, and boots P+'s launcher DOL, whose game
+// ID is 00000000, then "ID-Project+ Netplay Launcher", and the disc's (RSBE01) only once the disc
+// runs; the plugin runs only in the disc's game.
 bool GameBooted()
 {
-  const std::string id = SConfig::GetInstance().GetGameID();
-  return !id.empty() && id != "00000000";
+  return Online::GameBridge::SessionAddress() != 0;
 }
 
 // A path from the comm file: an existing regular file, no larger than a replay can be.

@@ -15,21 +15,24 @@ Screenshots and replays: run/artifacts/replays/.
 from __future__ import annotations
 
 import concurrent.futures
+import json
 import shutil
 import sys
 import time
+import types
 from pathlib import Path
 from typing import Any, Callable
 
 import pytest
 
 from ppharness.backend import OnlineBackend
-from ppharness.instance import DolphinInstance
+from ppharness.instance import DolphinInstance, InstanceConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_online_game import (  # noqa: E402
-    ROOT, Game, _boot, _connected_direct, _wait, backend)  # noqa: F401
+    PLUGIN, ROOT, Game, _boot, _connected_direct, _wait, backend)  # noqa: F401
 import online_set  # noqa: E402
+import patch_sd  # noqa: E402
 import ppom  # noqa: E402
 from ppharness import brawl as B  # noqa: E402
 from ppharness import replay as R  # noqa: E402
@@ -267,3 +270,67 @@ def test_three_player_room_game_plays_back(backend: OnlineBackend,
     assert st["phase"] != "error", st
     assert st["desync_frame"] == -1, st
     assert st["frames_checked"] >= files[1].endg["finalFrame"] - files[1].first_frame, st
+
+
+@pytest.mark.slow
+def test_launcher_comm_file_plays_from_a_fresh_boot(backend: OnlineBackend,
+                                                   dolphin: Callable[..., DolphinInstance],
+                                                   gpu_backend: str) -> None:
+    """The launcher's way (docs/design/replays.md §6.2): a Direct game on the server's rules,
+    then a Dolphin started with `-i <comm.json>` (written before it starts, as
+    PlaybackDolphinInstance does) and no account. Nothing drives it: the game boots to the ONLINE
+    page by itself, Dolphin arms the replay once the plugin runs (not at the boot DOL, whose game
+    ID is not the disc's), the plugin opens the CSS and starts the match, and the replay plays to
+    its end with no checksum differing. The status file next to the comm file says so."""
+    test = "comm"
+    a, b, _, _ = _connected_direct(backend, dolphin, gpu_backend, "replay-comm", ("lena", "otto"),
+                                   test_rules=False)
+    online_set.play_set([a, b], games=1, mode="direct", panels={g.name: g.panel for g in (a, b)})
+    online_set.wait(lambda: not any(g.c.call("replay_recording")["recording"] for g in (a, b)), 60,
+                    "both recordings to end")
+    fa = _recording(a)
+    assert fa.trailer and fa.endg["endMethod"] == "game", (fa.truncated, fa.endg)
+    out = ARTIFACTS / test
+    out.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(fa.path, out / fa.path.name)
+    for g in (a, b):
+        g.c.mm_cancel()
+
+    comm = out / "playback-comms.json"
+    status = Path(str(comm) + ".status.json")
+    status.unlink(missing_ok=True)
+    comm.write_text(json.dumps({"mode": "normal", "replay": str(fa.path), "commandId": "c1"}))
+    cfg = InstanceConfig(cpu_thread=True, video_backend=gpu_backend, extra_args=("-i", str(comm)),
+                         dolphin_ini={"Online": {"UseDevServer": True, "MatchmakingPort": backend.mm_port,
+                                                 "DevAccountsUrl": backend.accounts_url}})
+    inst = dolphin("viewer", config=cfg, client_timeout=60.0)
+    d = inst.create()
+    patch_sd.patch_image(d / "Wii" / "sd.raw", [(PLUGIN.read_bytes(), patch_sd.plugin_sd_path(PLUGIN))])
+    inst.launch()
+    inst.connect()
+    v = Game(inst, types.SimpleNamespace(display_name="viewer"), out / "viewer")  # no account
+
+    def file_status() -> dict[str, Any]:
+        try:
+            return json.loads(status.read_text())
+        except (OSError, ValueError):
+            return {}
+    seen: set[str] = set()
+
+    def started() -> dict[str, Any] | None:
+        fs = file_status()
+        seen.add(fs.get("state", ""))
+        assert fs.get("state") != "error", fs
+        st = v.c.call("replay_status")
+        return st if st["started"] else None
+    _wait(started, 300, "the replay's match to start by itself")
+    assert "loading" in seen or "waiting" in seen, seen
+    v.shot("started")
+    st = _wait(lambda: (lambda s: s if s["at_end"] or s["finished"] else None)(_status(v)), 900,
+               "the replay's last frame")
+    v.shot("end")
+    assert st["phase"] != "error", st
+    assert st["desync_frame"] == -1, st
+    assert st["frames_checked"] >= fa.endg["finalFrame"] - fa.first_frame, st
+    fs = file_status()
+    assert fs.get("commandId") == "c1" and fs.get("state") in ("playing", "ended"), fs
