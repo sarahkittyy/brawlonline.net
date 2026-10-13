@@ -1,4 +1,5 @@
 import { IsoValidity } from "@common/types";
+import { dolphinToolNextTo } from "@dolphin/dolphin_tool";
 import type { DolphinManager } from "@dolphin/manager";
 import { DolphinEventType, DolphinLaunchType } from "@dolphin/types";
 import type { SettingsManager } from "@settings/settings_manager";
@@ -55,19 +56,6 @@ function devDiscFolder(): string | null {
     return existsSync(folder) ? folder : null;
   }
   return null;
-}
-
-function dolphinToolNextTo(dolphinExecutable: string): string {
-  const dir = path.dirname(dolphinExecutable);
-  switch (process.platform) {
-    case "win32":
-      return path.join(dir, "DolphinTool.exe");
-    case "darwin":
-      // <install>/Dolphin.app/Contents/MacOS/Dolphin -> dolphin-tool in the same folder
-      return path.join(dir, "dolphin-tool");
-    default:
-      return path.join(dir, "dolphin-tool");
-  }
 }
 
 export default function setupGameAssetsIpc({

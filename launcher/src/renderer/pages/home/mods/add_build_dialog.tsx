@@ -11,38 +11,50 @@ import { PathInput } from "@/components/path_input/path_input";
 
 import { ModsMessages as Messages } from "./mods.messages";
 
-const DISC_FILTERS = [{ name: "Wii disc images", extensions: ["iso", "rvz", "wbfs", "gcz", "ciso", "wia"] }];
+const DISC_FILTERS = [
+  { name: "Wii and GameCube disc images", extensions: ["iso", "rvz", "wbfs", "gcz", "ciso", "wia", "gcm", "nkit.iso"] },
+];
 const DOL_FILTERS = [{ name: "Launchers", extensions: ["dol", "elf"] }];
 const SD_FILTERS = [{ name: "SD card images", extensions: ["raw", "img"] }];
 
-/** "Add a build" (docs/design/brawl-mods.md §8): a name, the disc, an optional launcher and SD card. */
+/** What the dialog opens with: a game (a disc), or a mod found in its Dolphin folder (on the Brawl
+ * disc set in Settings). */
+export type AddBuildInitial = {
+  kind: "game" | "mod";
+  name: string;
+  discPath: string | null;
+  launcherPath: string | null;
+  sdPath: string | null;
+};
+
+/** "Add a game" / "Add a mod" (docs/design/brawl-mods.md §8): a name, the disc, an optional
+ * launcher and SD card. */
 export const AddBuildDialog = ({
-  open,
-  defaultDisc,
+  initial,
   onClose,
   onAdd,
 }: {
-  open: boolean;
-  /** The Brawl disc set in Settings. */
-  defaultDisc: string | null;
+  /** null: closed. */
+  initial: AddBuildInitial | null;
   onClose: () => void;
   onAdd: (input: ModBuildInput) => Promise<void>;
 }) => {
+  const open = initial !== null;
   const [name, setName] = useState("");
-  const [discPath, setDiscPath] = useState<string | null>(defaultDisc);
+  const [discPath, setDiscPath] = useState<string | null>(null);
   const [launcherPath, setLauncherPath] = useState<string | null>(null);
   const [sdPath, setSdPath] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
 
   useEffect(() => {
-    if (open) {
-      setName("");
-      setDiscPath(defaultDisc);
-      setLauncherPath(null);
-      setSdPath(null);
+    if (initial) {
+      setName(initial.name);
+      setDiscPath(initial.discPath);
+      setLauncherPath(initial.launcherPath);
+      setSdPath(initial.sdPath);
       setAdding(false);
     }
-  }, [open, defaultDisc]);
+  }, [initial]);
 
   const add = async () => {
     if (!discPath) {
@@ -65,7 +77,7 @@ export const AddBuildDialog = ({
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth={true} maxWidth="sm">
-      <DialogTitle>{Messages.addBuildTitle()}</DialogTitle>
+      <DialogTitle>{initial?.kind === "mod" ? Messages.addModTitle() : Messages.addBuildTitle()}</DialogTitle>
       <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 1 }}>
         <TextField
           label={Messages.name()}

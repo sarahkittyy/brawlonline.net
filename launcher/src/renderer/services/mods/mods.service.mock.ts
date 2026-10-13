@@ -1,6 +1,7 @@
 import type {
   ModBuild,
   ModBuildInput,
+  ModFolderParts,
   ModRoomRequest,
   ModRoomStatus,
   ModsEvent,
@@ -9,16 +10,32 @@ import type {
   ModsService,
   ModsState,
 } from "@dolphin/mods/types";
+import { controllerOf } from "@dolphin/mods/types";
 
 /** Dev mode (`npm run dev -- --env mock=mods`): a fake room that a click opens, with two players. */
 class MockModsClient implements ModsService {
   private builds: ModBuild[] = [
     {
+      id: "nsmbw",
+      name: "New Super Mario Bros. Wii (USA, Rev 2)",
+      discPath: "C:/Games/New Super Mario Bros. Wii.rvz",
+      launcherPath: null,
+      sdPath: null,
+      gameId: "SMNE01",
+      gameTitle: "New SUPER MARIO BROS. Wii",
+      platform: "wii",
+      hash: "8e21d0c3aa00000000000000000000000000000000000000000000000000a11a",
+      hashKey: "1",
+    },
+    {
       id: "vanilla",
-      name: "Brawl (vanilla)",
+      name: "Super Smash Bros. Brawl",
       discPath: "C:/Games/Brawl.iso",
       launcherPath: null,
       sdPath: null,
+      gameId: "RSBE01",
+      gameTitle: "SUPER SMASH BROS. BRAWL",
+      platform: "wii",
       hash: "3f9a1c07aa00000000000000000000000000000000000000000000000000beef",
       hashKey: "1",
     },
@@ -26,8 +43,11 @@ class MockModsClient implements ModsService {
       id: "minus",
       name: "Brawl Minus",
       discPath: "C:/Games/Brawl.iso",
-      launcherPath: "C:/Games/Minus/MinusLauncher/minus.dol",
-      sdPath: "C:/Games/Minus/sd.raw",
+      launcherPath: "C:/Games/Minus/Launcher/Minus Launcher.dol",
+      sdPath: "C:/Games/Minus/User/Wii/sd.raw",
+      gameId: "RSBE01",
+      gameTitle: "SUPER SMASH BROS. BRAWL",
+      platform: "wii",
       hash: null,
       hashKey: null,
     },
@@ -49,7 +69,15 @@ class MockModsClient implements ModsService {
   }
 
   async addBuild(input: ModBuildInput) {
-    const build: ModBuild = { ...input, id: String(Date.now()), hash: null, hashKey: null };
+    const build: ModBuild = {
+      ...input,
+      name: input.name || input.discPath.split(/[\\/]/).pop() || "Game",
+      id: String(Date.now()),
+      gameId: "SMNE01",
+      platform: "wii",
+      hash: null,
+      hashKey: null,
+    };
     this.builds = [...this.builds, build];
     this.emit();
     return build;
@@ -59,6 +87,14 @@ class MockModsClient implements ModsService {
     this.builds = this.builds.map((b) => (b.id === id ? { ...b, ...input } : b));
     this.emit();
     return this.builds.find((b) => b.id === id)!;
+  }
+
+  async inspectFolder(folder: string): Promise<ModFolderParts> {
+    return {
+      name: folder.split(/[\\/]/).pop() ?? "Mod",
+      launcherPath: `${folder}/Launcher/Launcher.dol`,
+      sdPath: `${folder}/User/Wii/sd.raw`,
+    };
   }
 
   async removeBuild(id: string) {
@@ -121,12 +157,12 @@ class MockModsClient implements ModsService {
 
   async host(options: ModsHostOptions) {
     const build = await this.hashBuild(options.buildId);
-    this.open(build, "KFQB", true, options.controller);
+    this.open(build, "KFQB", true, controllerOf(build));
   }
 
   async join(options: ModsJoinOptions) {
     const build = await this.hashBuild(options.buildId);
-    this.open(build, options.code.toUpperCase(), false, options.controller);
+    this.open(build, options.code.toUpperCase(), false, controllerOf(build));
   }
 
   async request(request: ModRoomRequest) {

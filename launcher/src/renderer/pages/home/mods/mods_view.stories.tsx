@@ -111,9 +111,9 @@ const Frame = (props: Partial<ModsViewProps> & { state: ModsState | null }) => (
       hashProgress={{}}
       startingBuildId={null}
       error={null}
-      controller="gc"
       onControllerChange={noop}
       onAddBuild={noop}
+      onAddFolder={noop}
       onRemoveBuild={noop}
       onHost={noop}
       onJoin={noop}
@@ -130,7 +130,7 @@ export const Builds = () => <Frame state={{ builds, running: false, status: null
 
 export const Hosting = () => <Frame state={{ builds, running: true, status: room(1) }} />;
 
-export const Member = () => <Frame state={{ builds, running: true, status: room(2) }} controller="wiimote" />;
+export const Member = () => <Frame state={{ builds, running: true, status: room(2) }} />;
 
 export const Starting = () => <Frame state={{ builds, running: true, status: null }} />;
 

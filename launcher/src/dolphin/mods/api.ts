@@ -5,6 +5,7 @@ import {
   ipc_modsGetState,
   ipc_modsHashBuild,
   ipc_modsHost,
+  ipc_modsInspectFolder,
   ipc_modsJoin,
   ipc_modsRemoveBuild,
   ipc_modsRequest,
@@ -26,6 +27,10 @@ const modsApi: ModsService = {
   },
   async removeBuild(id) {
     await ipc_modsRemoveBuild.renderer!.trigger({ id });
+  },
+  async inspectFolder(folder) {
+    const { result } = await ipc_modsInspectFolder.renderer!.trigger({ folder });
+    return result.parts;
   },
   async hashBuild(id) {
     const { result } = await ipc_modsHashBuild.renderer!.trigger({ id });

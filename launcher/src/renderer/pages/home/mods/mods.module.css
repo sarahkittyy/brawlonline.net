@@ -229,3 +229,9 @@
 .centered p {
   margin: 0;
 }
+
+.gameId {
+  font-family: monospace;
+  margin-right: 8px;
+  opacity: 0.8;
+}

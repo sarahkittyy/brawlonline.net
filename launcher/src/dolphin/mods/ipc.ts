@@ -4,6 +4,7 @@ import { _, makeEndpoint } from "utils/ipc";
 import type {
   ModBuild,
   ModBuildInput,
+  ModFolderParts,
   ModRoomRequest,
   ModsEvent,
   ModsHostOptions,
@@ -24,6 +25,12 @@ export const ipc_modsUpdateBuild = makeEndpoint.main(
 export const ipc_modsRemoveBuild = makeEndpoint.main("mods_removeBuild", <{ id: string }>_, <SuccessPayload>_);
 
 export const ipc_modsHashBuild = makeEndpoint.main("mods_hashBuild", <{ id: string }>_, <{ build: ModBuild }>_);
+
+export const ipc_modsInspectFolder = makeEndpoint.main(
+  "mods_inspectFolder",
+  <{ folder: string }>_,
+  <{ parts: ModFolderParts }>_,
+);
 
 export const ipc_modsHost = makeEndpoint.main("mods_host", <ModsHostOptions>_, <SuccessPayload>_);
 

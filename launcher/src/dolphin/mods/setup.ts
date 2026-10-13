@@ -1,13 +1,16 @@
 import type { SettingsManager } from "@settings/settings_manager";
 import electronLog from "electron-log";
 
+import { dolphinToolNextTo } from "../dolphin_tool";
 import type { DolphinManager } from "../manager";
+import { DolphinLaunchType } from "../types";
 import {
   ipc_modsAddBuild,
   ipc_modsEvent,
   ipc_modsGetState,
   ipc_modsHashBuild,
   ipc_modsHost,
+  ipc_modsInspectFolder,
   ipc_modsJoin,
   ipc_modsRemoveBuild,
   ipc_modsRequest,
@@ -24,7 +27,11 @@ export default function setupModsIpc({
   settingsManager: SettingsManager;
   dolphinManager: DolphinManager;
 }) {
-  const mods = new ModsManager(settingsManager, dolphinManager);
+  const mods = new ModsManager(settingsManager, dolphinManager, async () => {
+    // DolphinTool runs from the bundled Dolphin's install folder (as for the game assets).
+    await dolphinManager.bundledDolphinReady();
+    return dolphinToolNextTo(dolphinManager.getDolphinExecutablePath(DolphinLaunchType.NETPLAY));
+  });
   mods.onEvent((event) => {
     void ipc_modsEvent.main!.trigger(event).catch(log.error);
   });
@@ -37,6 +44,7 @@ export default function setupModsIpc({
     return { success: true };
   });
   ipc_modsHashBuild.main!.handle(async ({ id }) => ({ build: await mods.hashBuild(id) }));
+  ipc_modsInspectFolder.main!.handle(async ({ folder }) => ({ parts: await mods.inspectFolder(folder) }));
   ipc_modsHost.main!.handle(async (options) => {
     await mods.host(options);
     return { success: true };

@@ -1,24 +1,29 @@
 export const ModsMessages = {
-  tabLabel: () => "Brawl Mods",
+  tabLabel: () => "Other Games",
   intro: () =>
-    "Play any Brawl build online with rollback: vanilla Brawl, Brawl Minus, REX and more. Everyone in a room needs the same build, and Wii Remotes work too.",
-  yourBuilds: () => "Your builds",
-  addBuild: () => "Add a build",
-  noBuilds: () => "Add the build you want to play: the Brawl disc, plus the mod's launcher and SD card if it has them.",
+    "Play Wii and GameCube games and Brawl mods online with rollback: New Super Mario Bros. Wii, Mario Kart, Brawl Minus, REX and more. The whole game is shared, menus included, and friends can drop in and out. Everyone in a room needs the same game files. Games that don't work on Dolphin's own netplay won't work here either.",
+  yourBuilds: () => "Your games",
+  addBuild: () => "Add a game",
+  addBuildTooltip: () => "A Wii or GameCube disc image (ISO, RVZ, WBFS…).",
+  addFolder: () => "Add a mod folder",
+  addFolderTooltip: () =>
+    "A Brawl mod that comes as its own Dolphin folder (Brawl Minus, REX…): its launcher and SD card are found for you.",
+  noBuilds: () => "Add a game you want to play, or a Brawl mod's Dolphin folder.",
   notHashed: () => "Not checked yet",
-  hashTooltip: (hash: string) => `Build ${hash}. Everyone in a room has this build.`,
+  hashTooltip: (hash: string) => `Files ${hash}. Everyone in a room has these exact files.`,
   checking: (percent: number) => `Checking files… ${percent}%`,
   remove: () => "Remove",
   removeTooltip: () => "Remove this build from the list (your files stay where they are).",
   host: () => "Host",
-  hostTooltip: () => "Start Dolphin with this build and open a room for it.",
+  hostTooltip: () => "Start Dolphin with this game and open a room for it.",
   join: () => "Join",
-  joinTooltip: () => "Start Dolphin with this build and join the room with this code.",
+  joinTooltip: () => "Start Dolphin with this game and join the room with this code.",
   roomCode: () => "Room code",
   publicRoom: () => "Public",
-  publicRoomTooltip: () =>
-    "Public rooms are listed for everyone with the same build. Private rooms are joined by code.",
+  publicRoomTooltip: () => "Public rooms are listed for everyone. Private rooms are joined by code.",
   controller: () => "Controller",
+  controllerTooltip: () =>
+    "What you play this game with. Set up its buttons in Dolphin's Controllers settings (Wii Remote 1 or GameCube port 1).",
   gameCube: () => "GameCube controller",
   wiiRemote: () => "Wii Remote",
   parts: (disc: string, launcher: string | null, sd: string | null) =>
@@ -49,13 +54,14 @@ export const ModsMessages = {
   buildName: (name: string, hash: string) => (name ? `${name} (${hash})` : hash),
 
   // Adding a build.
-  addBuildTitle: () => "Add a build",
+  addBuildTitle: () => "Add a game",
+  addModTitle: () => "Add a mod",
   name: () => "Name",
-  namePlaceholder: () => "Brawl Minus 5.1",
+  namePlaceholder: () => "Leave empty to use the game's name",
   disc: () => "Disc image",
-  discHelp: () => "The Super Smash Bros. Brawl disc (NTSC-U).",
-  launcher: () => "Launcher (optional)",
-  launcherHelp: () => "The mod's .dol, for example Minus Launcher. Leave empty to boot the disc.",
+  discHelp: () => "The game's disc image. For a Brawl mod: your Super Smash Bros. Brawl disc.",
+  launcher: () => "Mod launcher (optional)",
+  launcherHelp: () => "A mod's .dol or .elf, for example Minus Launcher. Leave empty to play the disc as it is.",
   sdCard: () => "SD card image (optional)",
   sdCardHelp: () => "The mod's SD card image (.raw), if it has one.",
   clear: () => "Clear",
@@ -65,13 +71,14 @@ export const ModsMessages = {
 
   // Public rooms.
   publicRooms: () => "Public rooms",
-  publicRoomsLoggedOut: () => "Log in to see the public Brawl Mods rooms.",
+  publicRoomsLoggedOut: () => "Log in to see the public rooms.",
   logIn: () => "Log in",
   publicRoomsLoading: () => "Loading rooms…",
   publicRoomsUnreachable: () => "Can't reach the server right now.",
-  publicRoomsNone: () => "No public Brawl Mods rooms right now. Host one above!",
+  publicRoomsNone: () => "No public rooms right now. Host one above!",
   roomPlayers: (players: number, open: number) => `${players}/${open}`,
   roomHost: (name: string) => `${name}'s room`,
-  needBuild: (name: string, hash: string) => `You don't have this build: ${name ? `${name} ` : ""}(${hash}).`,
+  needBuild: (name: string, hash: string) =>
+    `You don't have these files: ${name ? `${name} ` : ""}(${hash}). Add the same game (and mod) to join.`,
   joinPublicTooltip: (build: string) => `Start Dolphin with ${build} and join this room.`,
 };

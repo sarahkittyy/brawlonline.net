@@ -6,12 +6,16 @@ import path from "path";
 import { throttleProgress } from "utils/copy_file";
 
 import type { DolphinManager } from "../manager";
-import { buildHashKey, computeBuildHash } from "./build_hash";
+import { buildHashKey, combineBuildHash, computeBuildParts } from "./build_hash";
+import { discContentSha1, readDiscInfo } from "./disc_info";
+import { findModParts } from "./folder_import";
+import { knownDiscName, knownModName } from "./known_builds";
 import type { ModsRoomArg } from "./mods_args";
 import { readModRoomStatus, writeModRoomRequest } from "./room_files";
 import type {
   ModBuild,
   ModBuildInput,
+  ModFolderParts,
   ModRoomRequest,
   ModRoomStatus,
   ModsEvent,
@@ -19,6 +23,7 @@ import type {
   ModsJoinOptions,
   ModsState,
 } from "./types";
+import { controllerOf } from "./types";
 
 const log = electronLog.scope("dolphin/mods");
 
@@ -32,13 +37,26 @@ export function normalizeRoomCode(code: string): string | null {
   return /^[A-Z0-9]{2,16}$/.test(c) ? c : null;
 }
 
-function cleanName(name: string, fallbackPath: string): string {
+function cleanName(name: string, fallback: string): string {
   // Control characters (a pasted name) are dropped.
   const printable = Array.from(name)
     .filter((c) => c >= " " && c !== "\u007f")
     .join("");
   const n = printable.trim().slice(0, MAX_BUILD_NAME);
-  return n || path.basename(fallbackPath).slice(0, MAX_BUILD_NAME);
+  return n || fallback.slice(0, MAX_BUILD_NAME);
+}
+
+/** A name for a build the player did not name: the known mod's or game's, else the launcher's file
+ * name for a mod, else the disc's title. */
+export function autoName(build: Pick<ModBuild, "gameTitle" | "launcherPath" | "parts" | "discPath">): string {
+  const mod = knownModName(build.parts?.launcher, build.parts?.sd);
+  if (mod) {
+    return mod;
+  }
+  if (build.launcherPath) {
+    return path.basename(build.launcherPath).replace(/\.(dol|elf)$/i, "");
+  }
+  return knownDiscName(build.parts?.disc) ?? build.gameTitle ?? path.basename(build.discPath);
 }
 
 async function assertFile(file: string | null, what: string): Promise<void> {
@@ -63,7 +81,12 @@ export class ModsManager {
   private readonly listeners = new Set<(event: ModsEvent) => void>();
   private readonly hashing = new Map<string, Promise<ModBuild>>();
 
-  constructor(private readonly settings: SettingsManager, private readonly dolphin: DolphinManager) {}
+  /** `toolPath` resolves DolphinTool (the bundled Dolphin's, once it is installed). */
+  constructor(
+    private readonly settings: SettingsManager,
+    private readonly dolphin: DolphinManager,
+    private readonly toolPath: () => Promise<string>,
+  ) {}
 
   onEvent(listener: (event: ModsEvent) => void): () => void {
     this.listeners.add(listener);
@@ -82,24 +105,46 @@ export class ModsManager {
     await assertFile(input.discPath, "disc image");
     await assertFile(input.launcherPath, "launcher");
     await assertFile(input.sdPath, "SD card image");
-    const build: ModBuild = {
-      id: randomUUID(),
-      name: cleanName(input.name, input.launcherPath ?? input.discPath),
+    const info = await readDiscInfo(await this.toolPath(), input.discPath);
+    const base = {
       discPath: input.discPath,
       launcherPath: input.launcherPath || null,
       sdPath: input.sdPath || null,
+      gameTitle: info.title,
+      parts: null,
+    };
+    const named = cleanName(input.name, "");
+    const build: ModBuild = {
+      id: randomUUID(),
+      name: named || autoName(base),
+      autoName: !named,
+      ...base,
+      gameId: info.gameId,
+      platform: info.platform,
+      controller: input.controller ?? null,
       hash: null,
       hashKey: null,
     };
     await this.saveBuilds([...this.builds(), build]);
+    // Hashed at once (in the background): a known game or mod gets its name, and Host is quick.
+    void this.hashBuild(build.id).catch((err) => log.warn(`hashing ${build.name}: ${err}`));
     return build;
+  }
+
+  async inspectFolder(folder: string): Promise<ModFolderParts> {
+    return findModParts(folder);
   }
 
   async updateBuild(id: string, input: Partial<ModBuildInput>): Promise<ModBuild> {
     const current = this.findBuild(id);
     const next: ModBuild = { ...current };
     if (input.name !== undefined) {
-      next.name = cleanName(input.name, current.launcherPath ?? current.discPath);
+      const named = cleanName(input.name, "");
+      next.name = named || autoName(current);
+      next.autoName = !named;
+    }
+    if (input.controller !== undefined) {
+      next.controller = input.controller;
     }
     for (const key of ["discPath", "launcherPath", "sdPath"] as const) {
       if (input[key] !== undefined && input[key] !== current[key]) {
@@ -109,11 +154,18 @@ export class ModsManager {
         );
         (next as Record<string, unknown>)[key] = input[key] || null;
         next.hash = null;
+        next.parts = null;
         next.hashKey = null;
       }
     }
     if (!next.discPath) {
       throw new Error("A build needs a disc image.");
+    }
+    if (next.discPath !== current.discPath) {
+      const info = await readDiscInfo(await this.toolPath(), next.discPath);
+      next.gameId = info.gameId;
+      next.gameTitle = info.title;
+      next.platform = info.platform;
     }
     await this.saveBuilds(this.builds().map((b) => (b.id === id ? next : b)));
     return next;
@@ -140,7 +192,7 @@ export class ModsManager {
       host: true,
       build: { hash: build.hash!, name: build.name },
       public: options.public,
-      controller: options.controller,
+      controller: controllerOf(build),
     });
   }
 
@@ -153,7 +205,7 @@ export class ModsManager {
     await this.launch(build, {
       join: code,
       build: { hash: build.hash!, name: build.name },
-      controller: options.controller,
+      controller: controllerOf(build),
     });
   }
 
@@ -189,10 +241,18 @@ export class ModsManager {
     const progress = throttleProgress((done, total) => {
       this.emit({ type: "hashProgress", progress: { id, done, total } });
     }, 200);
-    const hash = await computeBuildHash(build, progress);
+    const tool = await this.toolPath();
+    const parts = await computeBuildParts(build, (disc) => discContentSha1(tool, disc), progress);
+    const hash = combineBuildHash(parts);
     // The build may have been edited meanwhile: keep the newest, with this hash if its parts are the same.
     const latest = this.findBuild(id);
-    const updated: ModBuild = (await buildHashKey(latest)) === key ? { ...latest, hash, hashKey: key } : latest;
+    let updated: ModBuild = latest;
+    if ((await buildHashKey(latest)) === key) {
+      updated = { ...latest, hash, parts, hashKey: key };
+      if (updated.autoName) {
+        updated.name = autoName(updated);
+      }
+    }
     await this.saveBuilds(this.builds().map((b) => (b.id === id ? updated : b)));
     return updated;
   }
