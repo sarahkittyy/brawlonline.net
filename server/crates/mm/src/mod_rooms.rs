@@ -78,6 +78,9 @@ struct Member {
 #[derive(Debug, Clone)]
 struct Room {
     code: String,
+    /// Rooms created before this one since mm started, plus one: the `n` of its chat group
+    /// (`mods-<CODE>-<n>`), so a new room that reuses a code gets a group of its own.
+    serial: u64,
     build: Build,
     public: bool,
     /// Index of the host's slot.
@@ -135,6 +138,10 @@ pub struct ModRoomBook {
     /// (room code, account) → until when it cannot join that room.
     banned: HashMap<(String, Uuid), Instant>,
     join_seq: u64,
+    room_seq: u64,
+    /// Rooms whose members changed since the engine last asked ([`ModRoomBook::take_changed`]):
+    /// their chat groups follow them.
+    changed: Vec<(String, u64)>,
     create_limiter: RateLimiter<Uuid>,
     join_limiter: RateLimiter<Uuid>,
     request_limiter: RateLimiter<ConnId>,
@@ -166,6 +173,8 @@ impl ModRoomBook {
             tokens: HashMap::new(),
             banned: HashMap::new(),
             join_seq: 0,
+            room_seq: 0,
+            changed: Vec::new(),
         }
     }
 
@@ -201,8 +210,9 @@ impl ModRoomBook {
         list
     }
 
-    fn broadcast(&self, code: &str, out: &mut Vec<Output>) {
+    fn broadcast(&mut self, code: &str, out: &mut Vec<Output>) {
         let Some(room) = self.rooms.get(code) else { return };
+        self.changed.push((code.to_string(), room.serial));
         for (slot, m) in room.members() {
             if let Some(state) = room.state_for(slot) {
                 send(out, m.conn, &state);
@@ -242,9 +252,11 @@ impl ModRoomBook {
                 let member = self.new_member(conn, who, controller, &code);
                 let mut slots: [Option<Member>; mods::MAX_PLAYERS] = Default::default();
                 slots[0] = Some(member);
+                self.room_seq += 1;
+                let serial = self.room_seq;
                 self.rooms.insert(
                     code.clone(),
-                    Room { code: code.clone(), build, public, host: 0, slots, open: [true; mods::MAX_PLAYERS] },
+                    Room { code: code.clone(), serial, build, public, host: 0, slots, open: [true; mods::MAX_PLAYERS] },
                 );
                 self.member_of.insert(conn, code.clone());
                 tracing::info!(conn, %code, "mod room created");
@@ -365,6 +377,7 @@ impl ModRoomBook {
             self.tokens.remove(&m.token);
         }
         if room.members().next().is_none() {
+            self.changed.push((code.clone(), room.serial));
             self.rooms.remove(&code);
             self.banned.retain(|(c, _), _| c != &code);
             tracing::info!(%code, "mod room closed");
@@ -394,6 +407,23 @@ impl ModRoomBook {
 
     pub fn conn_gone(&mut self, conn: ConnId, out: &mut Vec<Output>) {
         self.leave(conn, out);
+    }
+
+    /// The rooms whose members changed since the last call (each once), for their chat groups.
+    pub fn take_changed(&mut self) -> Vec<(String, u64)> {
+        let mut changed = std::mem::take(&mut self.changed);
+        let mut seen = std::collections::HashSet::new();
+        changed.retain(|c| seen.insert(c.clone()));
+        changed
+    }
+
+    /// The online connections of a room's members in joining order, if the room with this code
+    /// is still the one with this serial (none once it closed).
+    pub fn players(&self, code: &str, serial: u64) -> Vec<ConnId> {
+        let Some(room) = self.rooms.get(code).filter(|r| r.serial == serial) else { return Vec::new() };
+        let mut members: Vec<&Member> = room.members().map(|(_, m)| m).collect();
+        members.sort_by_key(|m| m.joined);
+        members.into_iter().map(|m| m.conn).collect()
     }
 
     pub fn tick(&mut self, now: Instant) {

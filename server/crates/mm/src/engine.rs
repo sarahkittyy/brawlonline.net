@@ -588,6 +588,19 @@ impl Engine {
                 .collect();
             self.chat.sync_room(&format!("room-{code}-{serial}"), &wanted, out);
         }
+        // Brawl Mods rooms too: their members chat as a room's players do (docs/chat-protocol.md).
+        for (code, serial) in self.mod_rooms.take_changed() {
+            let wanted: Vec<Candidate> = self
+                .mod_rooms
+                .players(&code, serial)
+                .into_iter()
+                .filter_map(|conn| match self.conns.get(&conn) {
+                    Some(Conn { state: State::Online(o), .. }) => o.candidate(conn),
+                    _ => None,
+                })
+                .collect();
+            self.chat.sync_room(&format!("mods-{code}-{serial}"), &wanted, out);
+        }
     }
 
     fn send(out: &mut Vec<Output>, conn: ConnId, msg: &impl serde::Serialize) {
@@ -2851,6 +2864,46 @@ mod tests {
         h.ticket(5, &c, "AA#1");
         let out = h.raw(5, br#"{"type":"chat-leave","group":"room-KFQB-1"}"#);
         assert_eq!(sent(&out, 5)[0]["error"], msg::NOT_LOGGED_IN);
+    }
+
+    #[test]
+    fn mod_room_members_chat_as_a_room() {
+        const HASH: &str = "3f9a1c070000000000000000000000000000000000000000000000000000beef";
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b, c) = (user("AA#1", "a"), user("BB#1", "b"), user("CC#1", "c"));
+        for (conn, u) in [(1, &a), (2, &b), (3, &c)] {
+            h.chatter(conn, u);
+        }
+        let out = h.room(1, json!({"type": "mods-create", "build": {"hash": HASH, "name": "New Super Mario Bros. Wii"}}));
+        let code = sent(&out, 1).into_iter().find(|m| m["type"] == "mods-state").expect("mods-state")["code"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let g = chat_group(&out, 1).expect("the host's group");
+        let group = g["group"].as_str().unwrap().to_string();
+        assert!(group.starts_with(&format!("mods-{code}-")), "{group}");
+        assert_eq!(g["kind"], "room");
+        assert_eq!(chat_members(&g), uid_list(&[&a]));
+        // Joiners join the group, in joining order.
+        h.room(2, json!({"type": "mods-join", "code": code, "build": {"hash": HASH}, "controller": "wiimote"}));
+        let out = h.room(3, json!({"type": "mods-join", "code": code, "build": {"hash": HASH}}));
+        for conn in [1, 2, 3] {
+            assert_eq!(chat_members(&chat_group(&out, conn).expect("group")), uid_list(&[&a, &b, &c]), "{conn}");
+        }
+        // Messages go through to the members with a key.
+        h.chat_key(1, &group);
+        h.chat_key(2, &group);
+        let out = h.chat_send(1, &group, &[&b]);
+        assert!(chat_errors(&out, 1).is_empty(), "{:?}", chat_errors(&out, 1));
+        assert_eq!(chat_msgs(&out, 2).len(), 1);
+        // A member who leaves the room leaves the group; the last one out ends it.
+        let out = h.room(2, json!({"type": "mods-leave"}));
+        assert_eq!(chat_group(&out, 2), Some(null_group()));
+        assert_eq!(chat_members(&chat_group(&out, 1).expect("group")), uid_list(&[&a, &c]));
+        h.input(Input::Disconnected { conn: 3 });
+        let out = h.room(1, json!({"type": "mods-leave"}));
+        assert_eq!(chat_group(&out, 1), Some(null_group()));
+        assert_eq!(h.e.chat_group_count(), 0);
     }
 
     #[test]

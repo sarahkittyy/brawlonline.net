@@ -22,6 +22,7 @@ mm puts each online connection in **at most one** chat group:
 | Group | Id | Members | Ends for a member when |
 |---|---|---|---|
 | Room | `room-<CODE>-<n>` (`n` counts rooms since mm started) | The room's players (every occupied slot) whose online connection has a `chatKey` | They leave or are removed from the room, or their connection drops |
+| Brawl Mods room | `mods-<CODE>-<n>` (`n` counts mod rooms since mm started) | The mod room's members, in joining order, whose online connection has a `chatKey`; `kind` is `room` | They leave or are removed from the mod room, or their connection drops |
 | Match | the match's `matchId` (Direct, Unranked, Ranked; never a room's game) | The matched players that have an online connection with a `chatKey` | They send `chat-leave`, a ticket (any mode), `room-create` or `room-join`, or their connection drops |
 
 Entering a group leaves the previous one. A group with no members is forgotten. Ids are at most 96 characters of `A-Z a-z 0-9 . _ : + -`. A room's game (mode-3 tickets) changes nothing in the chat: the room's group goes on. A ticket ends the account's match group only after its play key checked out, and a new `hello` from the same account (another game) takes the old connection out of its group like a drop.
