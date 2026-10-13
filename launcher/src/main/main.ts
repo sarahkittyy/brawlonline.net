@@ -45,6 +45,17 @@ const isDevelopment = process.env.NODE_ENV === "development" || process.env.DEBU
 
 const isMac = process.platform === "darwin";
 
+// stdout and stderr can close while the launcher runs: the terminal that started the AppImage is
+// closed, or whatever started it stops reading. Every console write then fails with EPIPE, emitted
+// on the stream with no listener, so each log line was an uncaught error and electron-log's
+// "A JavaScript error occurred in the browser process" box (player report 2026-10-13). The log
+// file is unaffected; the console transport stops once its stream is gone.
+for (const stream of [process.stdout, process.stderr]) {
+  stream?.on("error", () => {
+    log.transports.console.level = false;
+  });
+}
+
 let menu: CrossProcessExports.Menu | null = null;
 let mainWindow: BrowserWindow | null = null;
 let didFinishLoad = false;
