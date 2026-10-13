@@ -2343,10 +2343,12 @@ namespace OnlineMenu {
                     playSE(1);
                 }
             }
+            // The held field (+0x8) has A a frame after the press (harness, 2026-10-12: the hold
+            // was let go on the frame it began and nobody could be removed), so the press counts.
             if (s.roomKickPort >= 0) {
                 if (port != s.roomKickPort || !(se.players[port].roomSlot & PPOM::SLOT_TAKEN)) {
                     s.roomKickPort = -1;   // the hand moved off, the player left, or a game started
-                } else if (!(held & BTN_A)) {
+                } else if (!((held | pressed) & BTN_A)) {
                     s.roomKickPort = -1;
                     playSE(SE_ERROR);
                 } else if (++s.roomKickHeld > DISCONNECT_HOLD_DELAY) {

@@ -17,7 +17,7 @@ _2026-10-09. The user's decisions from a question round, plus the defaults chose
 | 7 | Open slots | **Open slots must fill before a game starts.** The open slots are the player count; to play 3, the host closes a slot. |
 | 8 | Host | The creator. **Marked with a reused Brawl icon** next to their name plate (which icon: RE, §4). |
 | 9 | Host leaves | **Host passes to the earliest-joined player**; the icon moves; the room keeps its code. The room closes when the last player leaves. |
-| 10 | Kick | **Host closes an occupied slot = kick**, between games only, by **holding A** on the player's panel (as long as Hold Z to leave; a tap only buzzes, so a press meant for the team flag kicks nobody). An empty slot opens or closes with a press. The kicked player goes idle with "Removed from the room." **Not a ban** (user decision, 2026-10-10): they may join again once a slot is open, so a misclick is undone by opening the slot. |
+| 10 | Kick | **Host closes an occupied slot = kick**, between games only, by **holding A** on the player's panel (as long as Hold Z to leave; a tap only buzzes, so a press meant for the team flag kicks nobody). With only 2 slots open the kick leaves the slot open (a 1v1 room's player can be removed too; player feedback 2026-10-12). An empty slot opens or closes with a press. The kicked player goes idle with "Removed from the room." **Not a ban** (user decision, 2026-10-10): they may join again once a slot is open, so a misclick is undone by opening the slot. |
 | 11 | Teams or FFA | **Host toggles Teams on/off** for the room. With Teams on, **each player picks their own color** on their own panel (Slippi Teams). |
 | 12 | Splits | **Any split except everyone on one color** (2v2, 2v1, 3v1 allowed, as Brawl's Versus). All on one color: status "Pick different teams", no start. With 2 players the Teams switch has no effect: 1v1 (**default**). |
 | 13 | Start | **Automatic once every open slot is filled and every player is ready.** START = lock in (ready); unlocking takes the ready back. As Direct. |
@@ -50,7 +50,7 @@ Defaults: "online" counts players whose game is running and logged in (Dolphin k
 | After a game | Everyone back on the room CSS, characters kept, ready cleared. |
 | Disconnect in a match | 1v1: today's DISCONNECTED flow. 3-4 players: the dropped player is despawned at an agreed frame and the match goes on (Slippi's rule); their slot stays open and empty. |
 | Leaving | Hold Z: leave the room, idle on the CSS. Hold B: leave to the menus (WITH FRIENDS, the room's button highlighted). As Direct. |
-| Host limits | The host can't close their own slot. At least 2 slots stay open. |
+| Host limits | The host can't close their own slot. At least 2 slots stay open (a kick of 2 open leaves its slot open). |
 | Ranked / Unranked | Rooms are never ranked and never change a rating. Matchmade sessions stay closed. |
 | Recent codes | None for rooms (codes are throwaway). |
 

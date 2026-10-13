@@ -141,7 +141,7 @@ A request that is refused changes nothing and is answered with `room-error`. Mal
 | A host-only request from someone else | `Only the host can do that.` |
 | Slots or Teams during a start or a game | `Wait for the game to end.` |
 | The host closes their own slot | `You can't close your own slot.` |
-| Closing would leave fewer than 2 open | `At least 2 slots stay open.` |
+| Closing an empty slot would leave fewer than 2 open | `At least 2 slots stay open.` |
 | A room request from someone in no room | `You are not in a room.` |
 | Ready or team during the start | `The game is starting.` |
 | More than 5 rooms a minute or 30 an hour (per account) | `Too many rooms. Wait a moment.` |

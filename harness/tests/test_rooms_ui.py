@@ -359,6 +359,42 @@ def create_room(g: Game) -> None:
 
 
 
+def test_host_holds_a_on_a_player_to_remove_them(game: Game) -> None:
+    """The host removes a player by holding A on their panel (rooms.md #10). Player feedback
+    2026-10-12: nothing happened, with three slots open and one other player (the held field has
+    A a frame after the press, and the hold was let go on its first frame); a 1v1 room's player
+    can be removed too (its slot stays open). A tap removes nobody."""
+    g = game
+    g.c.game_bridge_config(enabled=False)
+    create_room(g)
+    sim = g.sim
+    kicks = lambda: [tuple(o[1:3]) for o in sim.room_ops("slot")]  # noqa: E731
+    sim.add_player(1, "alice")
+    sim.room.open[2] = True
+    g.wait(40)
+    g.hand_to(PANEL_X[1], -10.0)
+    g.wait(5)
+    # A tap on alice: nothing sent, she stays.
+    g.tap("A")
+    g.wait(70)
+    assert kicks() == [] and sim.room.members[1] is not None
+    # Held: removed, her slot closed (three were open).
+    g.hold("A", 70)
+    g.wait(20)
+    g.shot("30-alice-removed")
+    assert kicks() == [(1, 0)], (kicks(), g.hand())
+    assert sim.room.members[1] is None and sim.room.open == [True, False, True, False]
+    # A 1v1 room (slots 1-2 open): removed, the slot stays open.
+    sim.room.open = [True, True, False, False]
+    sim.add_player(1, "bob")
+    g.wait(40)
+    g.hold("A", 70)
+    g.wait(20)
+    g.shot("31-bob-removed-1v1")
+    assert kicks() == [(1, 0), (1, 0)], kicks()
+    assert sim.room.members[1] is None and sim.room.open == [True, True, False, False] and not sim.error
+
+
 def test_the_pickers_start_line_is_one_line(game: Game) -> None:
     """The stage picker's "Press START to select stage" (a little wider than the room's status
     line at scale 1) is one smaller line, not two (staging feedback 2026-10-12)."""

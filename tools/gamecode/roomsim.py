@@ -199,10 +199,12 @@ class RoomSim:
                 self.set_error("Only the host can do that.")
             elif arg == self.me() and not arg2:
                 self.set_error("You can't close your own slot.")
-            elif not arg2 and sum(1 for o in r.open if o) <= 2:
+            elif not arg2 and sum(1 for o in r.open if o) <= 2 and not r.members[arg]:
                 self.set_error("At least 2 slots stay open.")
             elif arg < 4:
-                r.open[arg] = bool(arg2)
+                # closing an occupied slot removes its player; of two open slots it stays open
+                if arg2 or sum(1 for o in r.open if o) > 2:
+                    r.open[arg] = bool(arg2)
                 if not arg2:
                     r.members[arg] = None
                 self.text, self.error = "", 0
