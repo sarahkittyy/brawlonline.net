@@ -118,6 +118,29 @@ describe("installBundledDolphin", () => {
     expect(await read("Dolphin.exe")).toBe("exe-3");
   });
 
+  it("installs the same version again when a file went missing or changed size", async () => {
+    const src = await makeBundle("0.1.5", {
+      "Dolphin.exe": "exe-5",
+      "Sys/Rollback/gp-v22.json": "{}",
+      "Sys/GameSettings/RSBE01.ini": "ini-5",
+    });
+    await installBundledDolphin({ sourceDir: src, destDir: dest });
+    // Extra files (a user's own) do not count.
+    await fs.promises.writeFile(path.join(dest, "Sys", "extra.txt"), "mine");
+    expect((await installBundledDolphin({ sourceDir: src, destDir: dest })).action).toBe("unchanged");
+
+    await fs.promises.rm(path.join(dest, "Sys", "Rollback", "gp-v22.json"));
+    const logs: string[] = [];
+    const again = await installBundledDolphin({ sourceDir: src, destDir: dest, log: (m) => logs.push(m) });
+    expect(again.action).toBe("installed");
+    expect(await read("Sys", "Rollback", "gp-v22.json")).toBe("{}");
+    expect(logs[0]).toContain(path.join("Sys", "Rollback", "gp-v22.json"));
+
+    await fs.promises.writeFile(path.join(dest, "Sys", "GameSettings", "RSBE01.ini"), "ini");
+    expect((await installBundledDolphin({ sourceDir: src, destDir: dest })).action).toBe("installed");
+    expect(await read("Sys", "GameSettings", "RSBE01.ini")).toBe("ini-5");
+  });
+
   it("refuses a bundle without a manifest or with an entry that would replace user data", async () => {
     const empty = path.join(root, `empty-${n}`);
     await fs.promises.mkdir(empty, { recursive: true });

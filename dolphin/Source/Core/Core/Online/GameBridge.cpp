@@ -460,6 +460,15 @@ Response MatchStateResponse(const Client::MatchState& ms, bool just_started)
   // The game counts a fresh search as running from the moment it asked.
   if (just_started && state == Matchmaking::State::Idle)
     state = Matchmaking::State::Initializing;
+  // Connected, but the session did not start (dolphin.log: "session start failed", e.g. a
+  // missing Sys/Rollback file): the CSS would sit at "Press START to lock in" with nothing to
+  // lock into. Rooms end their game for it (Rooms.cpp); Direct, Unranked and Ranked show it here.
+  std::string error = ms.error;
+  if (state == Matchmaking::State::ConnectionSuccess && ms.handoff == "failed")
+  {
+    state = Matchmaking::State::ErrorEncountered;
+    error = "Could not start the game. Restart the launcher and try again.";
+  }
   r.payload[0] = static_cast<u8>(state);
   std::string peer_name, peer_code;
   if (ms.match)
@@ -480,11 +489,11 @@ Response MatchStateResponse(const Client::MatchState& ms, bool just_started)
   WriteU16Text(r.payload, MS_PEER_NAME, peer_name, NAME_LEN);
   WriteU16Text(r.payload, MS_PEER_CODE, peer_code, CODE_LEN);
   if (state == Matchmaking::State::ErrorEncountered)
-    WriteU16Text(r.payload, MS_ERROR, ms.error, ERROR_LEN);
+    WriteU16Text(r.payload, MS_ERROR, error, ERROR_LEN);
   r.summary = fmt::format("GET_MATCH_STATE mmState={} ({}) peer='{}' '{}'{}", u8(state),
                           Matchmaking::StateName(state), peer_name, peer_code,
                           state == Matchmaking::State::ErrorEncountered ?
-                              fmt::format(" error='{}'", ms.error) :
+                              fmt::format(" error='{}'", error) :
                               std::string());
   return r;
 }

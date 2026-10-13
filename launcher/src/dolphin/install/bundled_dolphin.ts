@@ -6,7 +6,9 @@
 //
 // The bundle carries `dolphin.json` ({version, executable, entries, files, size}), written by
 // .github/scripts/dolphin-manifest.sh. The installed copy keeps it, so a matching version means
-// nothing to do.
+// nothing to do, as long as every file of the bundle is still there with its size: an install
+// that lost a file afterwards (prod 2026-10-13: Sys/Rollback/gp-v22.json gone, so every session
+// that player started failed) is installed again.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -73,6 +75,41 @@ function checkEntryName(name: string) {
 }
 
 /**
+ * The first file of the bundle (relative path) that `destDir` lacks or holds with another size,
+ * or null when every one is in place. Symbolic links only need to exist.
+ */
+export async function firstMissingFile(sourceDir: string, destDir: string, entries: string[]): Promise<string | null> {
+  const check = async (rel: string): Promise<string | null> => {
+    const st = await fs.promises.lstat(path.join(sourceDir, rel));
+    const got = await fs.promises.lstat(path.join(destDir, rel)).catch(() => null);
+    if (!got) {
+      return rel;
+    }
+    if (st.isDirectory()) {
+      if (!got.isDirectory()) {
+        return rel;
+      }
+      for (const child of await fs.promises.readdir(path.join(sourceDir, rel))) {
+        const missing = await check(path.join(rel, child));
+        if (missing) {
+          return missing;
+        }
+      }
+    } else if (!st.isSymbolicLink() && (!got.isFile() || got.size !== st.size)) {
+      return rel;
+    }
+    return null;
+  };
+  for (const name of entries) {
+    const missing = await check(name);
+    if (missing) {
+      return missing;
+    }
+  }
+  return null;
+}
+
+/**
  * Installs (or updates) the bundled Dolphin from `sourceDir` into `destDir`. Entries listed by
  * the previously installed manifest and by the new one are replaced; the User folder, the
  * patched SD card and other launcher data in `destDir` are left alone.
@@ -105,7 +142,11 @@ export async function installBundledDolphin({
       () => false,
     ))
   ) {
-    return { action: "unchanged", manifest };
+    const missing = await firstMissingFile(sourceDir, destDir, manifest.entries);
+    if (!missing) {
+      return { action: "unchanged", manifest };
+    }
+    log(`The installed Dolphin ${manifest.version} lacks ${missing} (or has another size): installing it again`);
   }
   log(`Installing Dolphin ${manifest.version} from ${sourceDir} into ${destDir} (was ${installed?.version ?? "none"})`);
 
