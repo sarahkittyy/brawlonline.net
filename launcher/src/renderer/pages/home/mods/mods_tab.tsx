@@ -3,6 +3,8 @@ import { DolphinLaunchType } from "@dolphin/types";
 import React, { useCallback, useEffect, useState } from "react";
 
 import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
+import { usePlayDialogs } from "@/lib/dolphin/use_play";
+import { useAccount } from "@/lib/hooks/use_account";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
 import { useSettings } from "@/lib/hooks/use_settings";
 import { useToasts } from "@/lib/hooks/use_toasts";
@@ -22,7 +24,10 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : String
 
 /** Home > Other Games: the games, mods and the room, from the main process's ModsManager. */
 export const ModsTab = React.memo(function ModsTab() {
-  const { modsService, dolphinService } = useServices();
+  const { modsService, dolphinService, backendService } = useServices();
+  const currentUser = useAccount((store) => store.user);
+  const userData = useAccount((store) => store.userData);
+  const { setActivateOnlineOpen } = usePlayDialogs();
   const { openConfigureDolphin } = useDolphinActions(dolphinService);
   const { showError, showSuccess } = useToasts();
   const isoPath = useSettings((store) => store.settings.isoPath);
@@ -71,22 +76,48 @@ export const ModsTab = React.memo(function ModsTab() {
     };
   }, [modsService]);
 
-  const start = useCallback(async (build: ModBuild, run: () => Promise<void>) => {
-    setError(null);
-    setStartingBuildId(build.id);
-    try {
-      await run();
-    } catch (err) {
-      setError(errorText(err));
-    } finally {
-      setStartingBuildId(null);
-      setHashProgress((p) => {
-        const next = { ...p };
-        delete next[build.id];
-        return next;
-      });
+  // A room needs the player's login in Dolphin (its online connection): logged in, with an online
+  // code, and the play key on disk, as Play makes sure (use_play.ts).
+  const ensureOnline = useCallback(async (): Promise<boolean> => {
+    if (!currentUser) {
+      openLogin();
+      return false;
     }
-  }, []);
+    if (!userData?.playKey) {
+      setActivateOnlineOpen(true);
+      return false;
+    }
+    await backendService.assertPlayKey(userData.playKey);
+    return true;
+  }, [currentUser, userData, openLogin, setActivateOnlineOpen, backendService]);
+
+  const start = useCallback(
+    async (build: ModBuild, run: () => Promise<void>) => {
+      setError(null);
+      try {
+        if (!(await ensureOnline())) {
+          return;
+        }
+      } catch (err) {
+        setError(errorText(err));
+        return;
+      }
+      setStartingBuildId(build.id);
+      try {
+        await run();
+      } catch (err) {
+        setError(errorText(err));
+      } finally {
+        setStartingBuildId(null);
+        setHashProgress((p) => {
+          const next = { ...p };
+          delete next[build.id];
+          return next;
+        });
+      }
+    },
+    [ensureOnline],
+  );
 
   const onAdd = async (input: ModBuildInput) => {
     try {
