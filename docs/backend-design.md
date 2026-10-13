@@ -236,7 +236,7 @@ Option: serve a tiny GraphQL endpoint with exactly these operations (async-graph
 | `GET /v1/ranked/result?matchId=&uid=` (built) | `getRankedMatchPersonalResult` | public |
 | `GET /v1/ranked/leaderboard?limit=&after=` (built; keyset pages, no regions or seasons) | slippi.gg | public, per-IP limit |
 | `GET /v1/me/matches?mode=all\|ranked\|unranked&limit=&before=` (built) | slippi.gg profile | session |
-| `POST /v1/rulesets`, `GET /v1/rulesets/<code>`, `GET /v1/me/rulesets[/recent]`, `PUT /v1/me/rulesets/<code>/hidden`, `/v1/me/ruleset-drafts[/<id>]`, `GET`/`PUT /v1/me/ruleset` (built 2026-10-11: room rulesets, `docs/rulesets-protocol.md`) | (none: ours) | public lookup (per-IP limit); the rest session |
+| `POST /v1/rulesets`, `GET /v1/rulesets/<code>[/preview]`, `GET /v1/me/rulesets[/recent]`, `PUT /v1/me/rulesets/<code>/hidden`, `/v1/me/ruleset-drafts[/<id>]`, `GET`/`PUT /v1/me/ruleset` (built 2026-10-11: room rulesets, `docs/rulesets-protocol.md`) | (none: ours) | public lookup (per-IP limit); the rest session |
 
 Play key: 32 random bytes in base64url. Store only its SHA-256. Rotate it on password change and on admin action.
 

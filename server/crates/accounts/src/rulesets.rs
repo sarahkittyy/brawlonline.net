@@ -12,6 +12,7 @@ use std::net::SocketAddr;
 
 use axum::extract::{ConnectInfo, Path, Query, State};
 use axum::http::{HeaderMap, StatusCode};
+use axum::response::Html;
 use axum::Json;
 use chrono::{DateTime, Utc};
 use common::db::{self, PublishedRuleset};
@@ -307,6 +308,35 @@ pub async fn lookup(
     let code = code_or_404(&code)?;
     let p = db::fetch_ruleset(&state.pool, &code).await?.ok_or_else(unknown_ruleset)?;
     Ok(Json(view(&state, p, false).await?))
+}
+
+/// `GET /v1/rulesets/<code>/preview`: the ruleset page as link previews (Discord, Slack, ...) see
+/// it. They don't run the page's script, so the static `/r/<code>` page can't name the ruleset;
+/// nginx sends them here instead (`deploy/sarahvps2/nginx-brawl-online.conf`, `$brawl_unfurler`).
+/// The page's title is "<name> v<version> by <publisher>" and there is no description, so the
+/// embed shows the name alone (the user's, 2026-10-12). Limited as the lookup is, together with it.
+pub async fn preview(
+    State(state): State<AppState>,
+    ConnectInfo(peer): ConnectInfo<SocketAddr>,
+    headers: HeaderMap,
+    Path(code): Path<String>,
+) -> ApiResult<Html<String>> {
+    let ip = ip_key(client_ip(&state, &headers, peer));
+    limit(&state, |l, now| l.ruleset_lookup_ip.check(&ip, now)).map_err(|wait| {
+        ApiError::rate_limited(wait)
+            .with_message(format!("Too many requests. Try again in {} s.", wait.as_secs().max(1)))
+    })?;
+    let code = code_or_404(&code)?;
+    let p = db::fetch_ruleset(&state.pool, &code).await?.ok_or_else(unknown_ruleset)?;
+    Ok(Html(preview_page(&p.ruleset)))
+}
+
+fn preview_page(r: &Ruleset) -> String {
+    let title = crate::pages::esc(&format!("{} v{} by {}", r.name, r.version, r.by));
+    // theme-color is the embed's side bar, as on the static page.
+    format!(
+        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">         <meta name=\"theme-color\" content=\"#08080b\"><title>{title}</title>         <meta property=\"og:title\" content=\"{title}\"></head><body><h1>{title}</h1></body></html>"
+    )
 }
 
 /// Public list page sizes.
