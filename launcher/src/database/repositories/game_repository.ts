@@ -5,6 +5,7 @@ import type { ExpressionOrFactory, Kysely, OperandValueExpressionOrList, SqlBool
 import { applyFilters } from "../filters/apply";
 import type { ReplayFilter } from "../filters/types";
 import type { Database, GameRecord, NewGame } from "../schema";
+import { inFolderTree } from "./file_repository";
 
 type DB = Kysely<Database>;
 
@@ -37,7 +38,7 @@ export class GameRepository {
    * Count games with filters
    *
    * @param db Database connection
-   * @param folder Folder to search in (if empty/null, searches all folders)
+   * @param folder Folder to search in, with its subfolders (if empty/null, searches all folders)
    * @param filters Array of filters to apply (AND logic between filters)
    * @returns Number of games matching the criteria
    */
@@ -46,7 +47,7 @@ export class GameRepository {
 
     // Apply folder filter if specified
     if (folder != null && folder !== "") {
-      query = query.where("folder", "=", folder);
+      query = query.where(inFolderTree(folder));
     }
 
     // Apply all filters (AND logic)
@@ -61,7 +62,7 @@ export class GameRepository {
    * Search for games with filters and pagination
    *
    * @param db Database connection
-   * @param folder Folder to search in (if empty/null, searches all folders)
+   * @param folder Folder to search in, with its subfolders (if empty/null, searches all folders)
    * @param filters Array of filters to apply (AND logic between filters)
    * @param options Pagination and ordering options
    * @returns Array of game records with file information
@@ -81,7 +82,7 @@ export class GameRepository {
 
     // Apply folder filter if specified
     if (folder != null && folder !== "") {
-      query = query.where("folder", "=", folder);
+      query = query.where(inFolderTree(folder));
     }
 
     // Apply all filters (AND logic)
@@ -117,7 +118,7 @@ export class GameRepository {
    * Get file IDs for games matching filters (for bulk deletion)
    *
    * @param db Database connection
-   * @param folder Folder to search in (if empty/null, searches all folders)
+   * @param folder Folder to search in, with its subfolders (if empty/null, searches all folders)
    * @param filters Array of filters to apply (AND logic between filters)
    * @param excludeFileIds Optional file IDs to exclude from the results
    * @returns Array of file IDs
@@ -132,7 +133,7 @@ export class GameRepository {
 
     // Apply folder filter if specified
     if (folder != null && folder !== "") {
-      query = query.where("folder", "=", folder);
+      query = query.where(inFolderTree(folder));
     }
 
     // Apply all filters (AND logic)
@@ -164,7 +165,7 @@ export class GameRepository {
    * Get all file paths for games matching filters with ordering
    *
    * @param db Database connection
-   * @param folder Folder to search in (if empty/null, searches all folders)
+   * @param folder Folder to search in, with its subfolders (if empty/null, searches all folders)
    * @param filters Array of filters to apply (AND logic between filters)
    * @param orderBy Ordering options
    * @returns Array of file paths with folder and name
@@ -179,7 +180,7 @@ export class GameRepository {
 
     // Apply folder filter if specified
     if (folder != null && folder !== "") {
-      query = query.where("folder", "=", folder);
+      query = query.where(inFolderTree(folder));
     }
 
     // Apply all filters (AND logic)

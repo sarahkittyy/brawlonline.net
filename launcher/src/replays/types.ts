@@ -1,6 +1,9 @@
 import type { ReplayFilter } from "@database/filters/types";
 import type { StadiumStatsType, StatsType } from "@slippi/slippi-js";
 
+/** The stats call's error for a replay whose stats are not decoded yet (.brep): the stats page says "Coming soon". */
+export const STATS_NOT_AVAILABLE = "Stats are not available for this replay format yet.";
+
 export type PlayerInfo = {
   playerIndex: number;
   port: number;

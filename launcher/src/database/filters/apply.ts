@@ -127,6 +127,19 @@ function applyDurationFilter(
       conditions.push(durationCondition);
     }
 
+    // A game someone won counts whatever its length (a quick game set is still a game)
+    if (filter.orWon) {
+      conditions.push(
+        eb.exists(
+          eb
+            .selectFrom("player")
+            .whereRef("player.game_id", "=", "game._id")
+            .where("player.is_winner", "=", 1)
+            .select("player._id"),
+        ),
+      );
+    }
+
     // Always include games with unknown duration (null)
     conditions.push(eb("game.last_frame", "is", null));
 

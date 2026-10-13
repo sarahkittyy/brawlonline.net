@@ -14,6 +14,7 @@ import { frameToGameTimer, GameMode } from "@slippi/slippi-js";
 import { groupBy } from "common/group_by";
 import React, { useCallback, useMemo } from "react";
 
+import { useReplayHighlight } from "@/lib/hooks/use_replay_highlight";
 import { useReplays } from "@/lib/hooks/use_replays";
 import { convertFrameCountToDurationString, monthDayHourFormat } from "@/lib/time";
 import { getStageImage } from "@/lib/utils";
@@ -53,6 +54,7 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
 
   // Use Set for O(1) lookup instead of O(n) indexOf
   const selected = selectedFilesSet.has(fullPath);
+  const highlightKey = useReplayHighlight((store) => (store.paths.includes(fullPath) ? store.nonce : 0));
 
   // Only calculate index if actually selected (for display purposes)
   const selectedFiles = useReplays((store) => store.selectedFiles);
@@ -164,6 +166,7 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
           actions={actions}
           details={details}
           onFileNameDragStart={onFileNameDragStart}
+          highlightKey={highlightKey}
         />
       </div>
     </DraggableFile>

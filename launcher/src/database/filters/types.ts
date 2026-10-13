@@ -12,6 +12,8 @@ export type DurationFilter = {
   minFrames?: number;
   maxFrames?: number;
   negate?: boolean; // If true, excludes matches instead of including them
+  /** Also include games someone won, whatever their length (with `minFrames`: hide only short games that did not finish). */
+  orWon?: boolean;
 };
 
 /**

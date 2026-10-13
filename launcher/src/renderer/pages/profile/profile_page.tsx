@@ -14,10 +14,10 @@ import { useNavigate } from "react-router-dom";
 
 import { InfiniteScrollContainer } from "@/components/infinite_scroll_container/infinite_scroll_container";
 import { PagedListStatus } from "@/components/paged_list_status/paged_list_status";
-import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useCursorPages } from "@/lib/hooks/use_cursor_pages";
 import { useReplayFilter } from "@/lib/hooks/use_replay_filter";
+import { useReplayHighlight } from "@/lib/hooks/use_replay_highlight";
 import { useReplayPresenter } from "@/lib/hooks/use_replays";
 import { useSettings } from "@/lib/hooks/use_settings";
 import {
@@ -193,13 +193,20 @@ const useMatchReplays = (items: MatchHistoryItem[]) => {
 
 const dirname = (p: string) => p.slice(0, Math.max(p.lastIndexOf("/"), p.lastIndexOf("\\")));
 
-/** A match's replays: Watch plays them in order (a set's games one after another), the count opens them in Replays. */
-const ReplaysCell = ({ matchId, replays }: { matchId: string; replays: string[] | null }) => {
-  const { dolphinService } = useServices();
-  const { viewReplays } = useDolphinActions(dolphinService);
+/** The replay folder (Settings > Replays: the root or an extra one) that holds `file`, else its own folder. */
+const replayRootOf = (file: string, roots: string[]): string => {
+  const holding = roots.filter((r) => r && window.electron.utils.isSubdirectory(r, file));
+  return holding.sort((a, b) => b.length - a.length)[0] ?? dirname(file);
+};
+
+/** A match's replays: the button opens Replays, refreshed, with them pulsing gold (a set's games are one file each). */
+const ReplaysCell = ({ replays }: { replays: string[] | null }) => {
   const presenter = useReplayPresenter();
   const navigate = useNavigate();
   const setSearchText = useReplayFilter((store) => store.setSearchText);
+  const highlight = useReplayHighlight((store) => store.highlight);
+  const rootSlpPath = useSettings((store) => store.settings.rootSlpPath);
+  const extraSlpPaths = useSettings((store) => store.settings.extraSlpPaths);
   if (!replays || replays.length === 0) {
     return (
       <Tooltip title={Messages.noReplaysHint()}>
@@ -208,30 +215,18 @@ const ReplaysCell = ({ matchId, replays }: { matchId: string; replays: string[] 
     );
   }
   const show = () => {
-    setSearchText(`match:"${matchId}"`);
-    void presenter.loadFolder(dirname(replays[0]), true).catch(() => undefined);
+    // All replays (the replay folder with its month folders), newest first, no search hiding them
+    setSearchText("");
+    highlight(replays);
+    void presenter.loadFolder(replayRootOf(replays[0], [rootSlpPath, ...extraSlpPaths]), true).catch(() => undefined);
     navigate("/main/replays/list");
   };
   return (
-    <div style={{ display: "flex", alignItems: "center", gap: 8, whiteSpace: "nowrap" }}>
-      <Tooltip title={Messages.watchHint(replays.length)}>
-        <Button size="small" variant="outlined" onClick={() => void viewReplays(...replays.map((p) => ({ path: p })))}>
-          {Messages.watch()}
-        </Button>
-      </Tooltip>
-      <Tooltip title={Messages.showHint()}>
-        <a
-          href="#"
-          onClick={(e) => {
-            e.preventDefault();
-            show();
-          }}
-          style={{ fontSize: 12, color: "var(--text-secondary)" }}
-        >
-          {Messages.show(replays.length)}
-        </a>
-      </Tooltip>
-    </div>
+    <Tooltip title={Messages.showHint(replays.length)}>
+      <Button size="small" variant="outlined" onClick={show} style={{ whiteSpace: "nowrap" }}>
+        {Messages.show(replays.length)}
+      </Button>
+    </Tooltip>
   );
 };
 
@@ -270,7 +265,7 @@ export const MatchRow = React.memo(function MatchRow({
         ))}
       </TableCell>
       <TableCell>
-        <ReplaysCell matchId={item.matchId} replays={replays} />
+        <ReplaysCell replays={replays} />
       </TableCell>
     </TableRow>
   );
