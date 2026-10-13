@@ -16,6 +16,10 @@ Decided by the user later the same day:
 - A spectator who joins **always catches up to live** on their own, with visible progress (§6.2).
 - The list is **newest first** by default and refreshes often while the tab is open. It shows who is playing and how long the game has been going (§6.1).
 - Clicking another game while watching switches the open playback Dolphin to it. It catches up again, so a switch is slow, which is accepted.
+- Between games of a set, including a room's set, the spectator waits on "Game 2 starts soon" and watches the next game.
+- At the end, the final few seconds are held, then the playback Dolphin closes. Launcher setting **"Close Dolphin after a spectated game ends"**, on by default.
+- The setting's description adds "Your opponent's game may still stream the match." This may be revisited if players push back.
+- **Spectator chat:** a chat window shared by everyone watching a game. **Players in that game never see it.** It may be unencrypted, without the lock icon, if end-to-end encryption doesn't scale (§6.4).
 
 ## 1. Summary
 
@@ -143,6 +147,7 @@ Measured 2026-10-13:
 | Live game (ingest from the primary + witness digests) | ~5 kbit/s in; ≤ 0.5 MB RAM including 10 min after the set | 5 Mbit/s in, ~0.5 GB RAM, ~1,000 small ENet packets/s (one core does far more) |
 | Live spectator | ~5 kbit/s out; one WebSocket (~50 KB RAM in nginx and mm) | 5 Mbit/s out, ~50 MB RAM |
 | Spectator joining mid-game | a one-time burst of the game so far: ~140 KB at 4 min into a 1v1 | 140 MB if all 1,000 join at once (11 s at 100 Mbit/s) |
+| Spectator chat at its cap (§6.4) | 5 lines/s per game × ~150 B to every spectator ≈ 6 kbit/s out per spectator | 6 Mbit/s out; at the cap, chat costs about as much as the game stream |
 
 The ballpark: CPU, RAM and disk allow **thousands** of concurrent games, far beyond today's player base. The first limit is outbound bandwidth to spectators, about **5 Mbit/s per 1,000 watching**. A 100 Mbit/s cap is about 15,000 spectators minus what TURN and `srcds` use. The burst to watch for is many people joining one popular game at once. That costs bandwidth, not CPU, and the history chunks are immutable, so nginx could serve them from its cache if it ever matters. Disk only matters if streams are ever kept (Ranked upload); 17 GB holds about 60,000 games' inputs.
 
@@ -174,11 +179,13 @@ The ballpark: CPU, RAM and disk allow **thousands** of concurrent games, far bey
   - At the live edge the overlay fades, sound comes on and normal live play starts.
   - Any control (pause, seek, step) stops the catch-up where it is, and LIVE starts it again.
   - The catch-up rate has to stay well above 1x, because the live edge keeps moving. That rate isn't measured yet (§8 P0). If a slow machine runs under about 1.5x, the overlay says so ("Your computer is catching up slowly") instead of looking stuck.
-- **Sets:** at the end of a game, a spectator at the live edge sees the last frame held with "Game 2 starts soon". The next game's `SETP` starts it through `queue` mode's next-game path. A spectator who is behind keeps watching, with the next game queued. Every earlier game of the set stays available and can be watched again.
+- **Sets** (Direct, Unranked, Ranked and room sets alike; in a room without a set, the room's next game with the same players): at the end of a game, a spectator at the live edge sees the last frame held with "Game 2 starts soon". The next game's `SETP` starts it through `queue` mode's next-game path. A spectator who is behind keeps watching, with the next game queued. Every earlier game of the set stays available and can be watched again.
 - **When the stream ends** (the set is over, a room's players change, or every uploader left):
   - **Still behind:** playback goes on. Everything is on disk, so a finished stream on the server changes nothing for this spectator.
-  - **At the end:** the last frame is held with the result ("Drsmsh wins 2-1") and "Closing in 10 s · press any button to stay". Then the playback Dolphin closes, and the launcher comes to the front on the Spectate tab, ready for the next pick.
+  - **At the end, with "Close Dolphin after a spectated game ends" on** (launcher Settings, default on): the last frame is held for 5 s with the result ("Drsmsh wins 2-1") and "Closing in 5 s · press any button to stay". Then the playback Dolphin closes, and the launcher comes to the front on the Spectate tab, ready for the next pick.
   - **Any input** cancels the countdown. Dolphin then holds at the end like a finished replay: seekable, and Play closes it.
+  - **With the setting off:** Dolphin holds at the end like a finished replay from the start, with no countdown.
+  - The setting travels in the comm file (`closeOnEnd`), so a change applies from the next game watched.
   - **Why not close at once:** that cuts off the last KO and the result. **Why not black:** an empty window looks broken and gives the spectator nothing to do. Clicking another game from the end screen switches to it, as always.
 - **Desync recovery** (`game-code.md` §11): the restarted game is just the next game in the stream.
 - **A spectator checksum that differs:** "Lost sync with this game" and a jump to the next game. The spectator's launcher reports the frame to mm. That makes spectators a free desync canary for settings nothing pins yet.
@@ -188,11 +195,43 @@ The ballpark: CPU, RAM and disk allow **thousands** of concurrent games, far bey
 
 - Watching requires being logged in, as joining rooms does. This allows per-account and per-IP rate limits on `/v1/live`.
 - Every mode is listed: Ranked, Unranked, Direct and rooms (the user, 2026-10-13).
-- **"Let others stream my games"** (launcher Settings, on by default; the user, 2026-10-13). Description: "Streams inputs to the server for others to spectate you. Very minimal network load." Behaviour:
+- **"Let others stream my games"** (launcher Settings, on by default; the user, 2026-10-13). Description: "Streams inputs to the server for others to spectate you. Very minimal network load. Your opponent's game may still stream the match." Behaviour:
   - Off means this player's game uploads nothing, not even digests.
   - The game is still streamed from any other player who has it on.
   - Only a game where every player has it off is not listed.
   - The setting travels in the matchmaking ticket, so a change applies from the next match.
+
+### 6.4 Spectator chat
+
+The user's decisions (2026-10-13): a chat window for everyone watching a game; **the players in that game never see it**; unencrypted is fine if end-to-end encryption doesn't scale, losing the lock icon.
+
+**Why it isn't end-to-end encrypted.** Today's chat (`design/chat.md`, `chat-protocol.md`) is pairwise: each message is encrypted once per other member, at most 3 copies in a 4-member group, and a box is up to 512 B. That doesn't scale:
+- With 1,000 spectators, one message is 999 boxes, about 500 KB. That's far over mm's 8 KiB packet and a lot of upload for whoever typed it.
+- A group key (Signal's sender keys, MLS) would fix the size. But every join or leave would mean redistributing keys among up to 1,000 members, and spectators come and go all the time.
+- It would also protect nothing. Anyone logged in can open the Spectate tab and join the chat, so a reader doesn't have to break anything; they just watch the game.
+
+So spectator chat is **in the clear to mm, and encrypted on the wire by TLS** (it travels on the spectator's WebSocket, §3.2). The window has **no padlock**. Its title reads "Spectators · 214" instead of the players' codes.
+
+**Players never see it:**
+- Spectator chat is its own group kind, `spectate:<stream>`. Only spectator WebSockets join it, and mm never sends it on a game's online connection (ENet). A player's Dolphin has no way to receive it.
+- mm refuses to let a player watch a stream they are playing in ("You're playing in this game."). The launcher shows no Watch button on the player's own rows, so they can't read it from the launcher either. Players' own chat stays end-to-end encrypted between them; spectators never get it.
+- The rule can't stop a friend from relaying spectator chat to a player some other way. That's out of scope.
+
+**Where it's drawn:** in the playback Dolphin, with the same `OnlineChatUI` window players know: the same look, hotkey, typing, Ignore/Report menu, and drag, resize and collapse. "Show during matches" doesn't apply, because spectating is the match.
+- The playback Dolphin stays without credentials and without an internet connection (`replays.md` §6.2). The launcher owns the WebSocket and passes chat to Dolphin over a **loopback-only** channel: `127.0.0.1`, a random port, and a per-launch token on Dolphin's command line, so no other program can inject lines.
+- Lines the spectator types go back the same way, and the launcher sends them.
+- Ignoring uses the same shared `chat-hidden.json`. The launcher reads it from the netplay User folder, and Dolphin's Ignore goes back to the launcher, which writes it as today.
+
+**Server (mm):**
+- Text goes through the same cleaner as players' chat (`common::chat::clean_text`), with the same 100 code points and 300 bytes. mm cleans it before fan-out, and Dolphin cleans again before drawing.
+- Names come from mm.
+- A spectator who joins gets the last 20 lines.
+- **Limits:**
+  - Per account: the same 5 in 5 s and 30 a minute as players' chat.
+  - Slow mode grows with the crowd: one line every 3 s per account above 50 spectators, every 10 s above 200.
+  - At most 5 lines a second are delivered per game. Over that, the line is refused with "Chat is busy. Try again in a moment."
+- **Reports:** mm keeps each stream's last 200 lines in memory. A report names the line, and mm stores that line and the 20 before it from its own copy in `chat_reports` as verified (mm saw them, so no signatures are needed). Admins see them in `admin chat-reports` as today.
+- The chat ends with the stream, 10 min after the set. Nothing is written to disk except reports.
 
 ## 7. Aspect ratio in playback (checked 2026-10-13)
 
@@ -209,12 +248,18 @@ The ballpark: CPU, RAM and disk allow **thousands** of concurrent games, far bey
 | **P1 Safety harness first** | `netsim` shared uplink; T1-T3 scaffolding with off/forced modes; writer thread priority (useful on its own) | "Forced" shows harm in T1/T2; "off" baselines recorded |
 | **P2 Upload** | mm: channel, primary/witness, validation, live store, kill switch (default `off`). Dolphin: uploader on the `Rooms` thread, pacer, backoff, digests, telemetry | T1-T4 pass |
 | **P3 Watch** | mm public listener + WebSocket, nginx location; launcher download to file; Dolphin `mirror`, LIVE, buffer, sets; the §7 playback aspect test | A harness spectator watches a Direct set and a 4-player room game with every checksum equal; joins mid-game; survives a takeover |
-| **P4 Spectate tab** | `/v1/live` list, the tab, settings | Storybook stories like Public Rooms; launcher tests |
+| **P4 Spectate tab + chat** | `/v1/live` list, the tab, settings ("Let others stream my games", "Close Dolphin after a spectated game ends"); spectator chat: mm group, limits and reports, the launcher's loopback channel, `OnlineChatUI` without the padlock | Storybook stories like Public Rooms; launcher tests; a harness spectator chats while a player's chat status shows no spectator line |
 | **P5 Rollout** | Staging (T5), then `witness`, allowlist `on` (T6), then everyone | T6 shows no change for allowlisted players |
 
 ## 9. Open questions
 
-Answered 2026-10-13: opt-out, per uploader; Ranked listed with no extra delay; Direct listed; always catch up to live with visible progress; newest first.
+Answered 2026-10-13:
+- opt-out per uploader, with "Your opponent's game may still stream the match." in the description;
+- Ranked listed with no extra delay, and Direct listed;
+- joining always catches up to live, with visible progress;
+- newest first;
+- "Close Dolphin after a spectated game ends", on by default;
+- spectator chat, unencrypted, never shown to players.
 
-1. **The setting's wording.** Turning "Let others stream my games" off stops this player's upload, but the opponent's game can still stream the match. A player who turns it off for privacy would still be watched. If that's intended, the description could say "Your opponent's game may still stream the match." If not, off should hide the whole game. That would change the "stream it from the peer who has it on" rule.
-2. **Max spectators per game:** none at first. The counts above show the box can take it.
+1. **Max spectators per game:** none at first. The counts above show the box can take it.
+2. **Saving chat with a spectated game:** spectator chat isn't recorded anywhere. Should a spectated game saved to Replays keep its chat? Proposed: no.
