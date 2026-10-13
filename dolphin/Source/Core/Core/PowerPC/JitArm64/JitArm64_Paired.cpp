@@ -189,8 +189,8 @@ void JitArm64::ps_arith(UGeckoInstruction inst)
         if (V1Q == ARM64Reg::INVALID_REG)
           V1Q = fpr.GetScopedReg();
 
-        if (duplicated_c || VD == result_reg)
-          V2Q = fpr.GetScopedReg();
+        // Also the generated-NaN sign fix's temporary.
+        V2Q = fpr.GetScopedReg();
       }
     }
 
@@ -370,6 +370,18 @@ void JitArm64::ps_arith(UGeckoInstruction inst)
       SwitchToFarCode();
       SetJumpTarget(nan);
 
+      // A NaN the operation generated is negative on an arm64 host with FPCR.AH set (Dolphin's
+      // non-IEEE mode on FEAT_AFP CPUs); PowerPC's default NaN is positive. Every NaN lane gets its
+      // sign cleared (the top bit of each 16-bit lane: the default NaN's others are 0); a lane
+      // whose NaN came from an input gets that input back below.
+      {
+        const ARM64Reg sign_fixed = reg_encoder(V2Q);
+        m_float_emit.MOV(sign_fixed, result_reg);
+        m_float_emit.BIC(16, sign_fixed, 0x80, 8);
+        m_float_emit.FCMEQ(size, nan_temp_reg_paired, result_reg, result_reg);
+        m_float_emit.BIF(result_reg, sign_fixed, nan_temp_reg_paired);
+      }
+
       // Pick the right NaNs
 
       const auto check_input = [&](ARM64Reg input) {
@@ -526,7 +538,35 @@ void JitArm64::ps_sumX(UGeckoInstruction inst)
       SetJumpTarget(a_not_nan);
     }
 
-    if (upper)
+    if (m_accurate_nans)
+    {
+      // The sum aside: a NaN it generated (no input is a NaN) is negative on an arm64 host with
+      // FPCR.AH set (Dolphin's non-IEEE mode on FEAT_AFP CPUs) and positive on PowerPC.
+      const auto V1 = fpr.GetScopedReg();
+      const ARM64Reg sum = scalar_reg_encoder(V1);
+      m_float_emit.FADD(sum, scalar_reg_encoder(V0), scalar_reg_encoder(VA));
+      m_float_emit.FCMP(sum);
+      FixupBranch not_nan = B(CCFlags::CC_VC);
+      m_float_emit.FCMP(scalar_reg_encoder(VA));
+      FixupBranch a_is_nan = B(CCFlags::CC_VS);
+      m_float_emit.FCMP(scalar_reg_encoder(V0));
+      FixupBranch b_is_nan = B(CCFlags::CC_VS);
+      m_float_emit.BIC(16, EncodeRegToDouble(V1), 0x80, 8);
+      SetJumpTarget(not_nan);
+      SetJumpTarget(a_is_nan);
+      SetJumpTarget(b_is_nan);
+      if (upper)
+      {
+        m_float_emit.TRN1(size, reg_encoder(VD), reg_encoder(VC), reg_encoder(V1));
+      }
+      else
+      {
+        m_float_emit.INS(size, VD, 0, V1, 0);
+        if (d != c)
+          m_float_emit.INS(size, VD, 1, VC, 1);
+      }
+    }
+    else if (upper)
     {
       m_float_emit.FADD(scalar_reg_encoder(V0), scalar_reg_encoder(V0), scalar_reg_encoder(VA));
       m_float_emit.TRN1(size, reg_encoder(VD), reg_encoder(VC), reg_encoder(V0));

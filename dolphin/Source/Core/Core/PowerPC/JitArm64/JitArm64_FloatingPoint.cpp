@@ -244,6 +244,13 @@ void JitArm64::fp_arith(UGeckoInstruction inst)
         SetJumpTarget(skip);
       }
 
+      // No input but maybe the last is a NaN: unless it is, the operation generated the NaN, and
+      // PowerPC's default NaN is positive where an arm64 host with FPCR.AH set made it negative.
+      m_float_emit.FCMP(inputs[inputs.size() - 1]);
+      FixupBranch last_is_nan = B(CCFlags::CC_VS);
+      m_float_emit.BIC(16, EncodeRegToDouble(result_reg), 0x80, 8);
+      SetJumpTarget(last_is_nan);
+
       if (negate_result)
       {
         // If we have a NaN, we must not execute FNEG.
