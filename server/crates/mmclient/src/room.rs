@@ -97,6 +97,19 @@ impl OnlineClient {
         self.host.flush();
     }
 
+    /// A spectate data packet (channel 1, `docs/spectate-protocol.md` §1).
+    pub fn send_data(&mut self, packet: &[u8]) {
+        let _ = self.host.peer_mut(self.mm).send(common::spectate::DATA_CHANNEL, &Packet::reliable(packet));
+        self.host.flush();
+    }
+
+    /// Uploads one replay chunk on `slot`, split into data packets as a game sends it.
+    pub fn upload_chunk(&mut self, slot: u32, seq: u32, chunk: &[u8]) {
+        for p in common::spectate::data_packets(slot, seq, chunk) {
+            self.send_data(&p);
+        }
+    }
+
     pub fn send(&mut self, req: &RoomRequest) {
         self.send_json(&req.to_json());
     }

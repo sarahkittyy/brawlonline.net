@@ -18,6 +18,7 @@
 pub mod chat;
 pub mod config;
 pub mod engine;
+pub mod live;
 pub mod messages;
 pub mod region;
 pub mod room_set;

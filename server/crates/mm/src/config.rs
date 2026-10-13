@@ -89,6 +89,11 @@ pub struct Config {
     /// Seconds a starting room waits for every member's game ticket.
     #[arg(long, env = "MM_ROOM_START_TIMEOUT_SECS", default_value_t = 15)]
     pub room_start_timeout_secs: u64,
+
+    /// Spectating's kill switch (`docs/spectate-protocol.md` §1): `off` (no game uploads
+    /// anything), `witness` (only digests, nothing listed) or `on`.
+    #[arg(long, env = "MM_SPECTATE", default_value = "off")]
+    pub spectate: String,
 }
 
 impl Config {
@@ -120,6 +125,10 @@ impl Config {
                 start_timeout: Duration::from_secs(self.room_start_timeout_secs.max(1)),
                 ..defaults.rooms.clone()
             },
+            live: crate::live::LiveConfig {
+                mode: self.spectate.parse().map_err(|e: String| anyhow::anyhow!(e))?,
+                ..defaults.live.clone()
+            },
             ..defaults
         })
     }
@@ -144,6 +153,7 @@ impl Config {
             max_conns_per_ip: 8,
             status_listen: "127.0.0.1:0".into(),
             room_start_timeout_secs: 15,
+            spectate: "off".into(),
         }
     }
 }

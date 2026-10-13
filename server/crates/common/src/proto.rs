@@ -272,6 +272,9 @@ pub enum ClientMessage {
     /// answer in `chat-error` (the message type, `invalid` for an unknown `chat-*` type) and the
     /// reason.
     Chat(Result<crate::chat::ChatRequest, (&'static str, String)>),
+    /// A `spectate-*` message (`docs/spectate-protocol.md` §1), or why it could not be read: the
+    /// `op` to answer in `spectate-error` and the reason.
+    Spectate(Result<crate::spectate::SpectateRequest, (&'static str, String)>),
     /// Valid JSON object with a `type` we do not handle.
     Unknown(String),
 }
@@ -303,6 +306,9 @@ pub fn parse_client_message(data: &[u8]) -> Result<ClientMessage, ParseError> {
         k if k.starts_with("room-") => Ok(ClientMessage::Room(crate::rooms::RoomRequest::parse(k, &value))),
         k if k.starts_with("chat-") => {
             Ok(ClientMessage::Chat(crate::chat::ChatRequest::parse(k, &value).map_err(|e| (crate::chat::op_of(k), e))))
+        }
+        k if k.starts_with("spectate-") => {
+            Ok(ClientMessage::Spectate(crate::spectate::SpectateRequest::parse(k, &value)))
         }
         _ => Ok(ClientMessage::Unknown(kind)),
     }

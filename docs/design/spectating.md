@@ -18,7 +18,7 @@ Decided by the user later the same day:
 - Clicking another game while watching switches the open playback Dolphin to it. It catches up again, so a switch is slow, which is accepted.
 - Between games of a set, including a room's set, the spectator waits on "Game 2 starts soon" and watches the next game.
 - At the end, the final few seconds are held, then the playback Dolphin closes. Launcher setting **"Close Dolphin after a spectated game ends"**, on by default.
-- An **Auto play** toggle on the Spectate tab, off by default: when a watched stream ends, it starts spectating the newest live game at once (§6.2).
+- An **Auto play** toggle on the Spectate tab, off by default: when a watched stream ends, it starts spectating the newest live game at once (§6.2). It overrides the Close setting.
 - The setting's description adds "Your opponent's game may still stream the match." This may be revisited if players push back.
 - **Spectator chat:** a chat window shared by everyone watching a game. **Players in that game never see it.** It may be unencrypted, without the lock icon, if end-to-end encryption doesn't scale (§6.4).
 
@@ -193,7 +193,7 @@ The ballpark: CPU, RAM and disk allow **thousands** of concurrent games, far bey
     - It catches up to live as any switch does.
     - The launcher fetches `/v1/live` once at that moment, so this works even when the Spectate tab isn't showing.
     - A set's next game is not the end of the stream: Auto play stays for game 2, as without it.
-    - With no other live game, the Close setting decides: close, or hold at the end.
+    - Auto play **overrides** "Close Dolphin after a spectated game ends" (the user, 2026-10-13): with Auto play on, Dolphin never closes at a stream's end. With no other live game, it holds the last frame with "Waiting for the next live game…" and the launcher polls `/v1/live` every 3 s until one starts.
     - Turning Auto play off while watching takes effect at the next end.
   - **Why not close at once:** that cuts off the last KO and the result. **Why not black:** an empty window looks broken and gives the spectator nothing to do. Clicking another game from the end screen switches to it, as always.
 - **Desync recovery** (`game-code.md` §11): the restarted game is just the next game in the stream.
