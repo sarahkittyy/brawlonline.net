@@ -5,12 +5,13 @@ import type { SettingsManager } from "@settings/settings_manager";
 import { app, dialog } from "electron";
 import electronLog from "electron-log";
 import { existsSync } from "fs";
+import { readdir } from "fs/promises";
 import { Observable, Subject } from "observable-fns";
 import path from "path";
 import { fileExists } from "utils/file_exists";
 
 import { isAbnormalExit, keepCrashLog } from "./crash_log";
-import { ensureBrawlSave } from "./install/brawl_save";
+import { brawlSaveDir, ensureBrawlSave } from "./install/brawl_save";
 import { bundledDolphinSource, installBundledDolphin } from "./install/bundled_dolphin";
 import { fetchLatestVersion } from "./install/fetch_latest_version";
 import { LocalDolphinInstallation } from "./install/local_installation";
@@ -207,6 +208,8 @@ export class DolphinManager {
         bootFile: netplayInstallation.netplayLauncherDol,
         testMode: readTestMode(process.env, app.isPackaged),
       });
+      // The playback NAND must have a Brawl save, or P+ asks to create one before every first replay
+      await this._checkBrawlSave(playbackInstallation, storeDir);
       log.info(`Launching playback dolphin at path: ${dolphinPath} ${params.join(" ")}`);
       playbackInstance = new PlaybackDolphinInstance(dolphinPath, params);
       playbackInstance.on("close", async (exitCode) => {
@@ -609,12 +612,38 @@ export class DolphinManager {
         ],
         log: (message) => log.info(message),
       });
-      if (result.action !== "seeded") {
+      if (result.action === "no-template") {
+        log.warn(`Brawl save: no template for ${result.dir}`);
+      } else if (result.action !== "seeded") {
         log.info(`Brawl save: ${result.action} (${result.dir})`);
       }
     } catch (err) {
       log.error(`Could not seed the Brawl save: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  /**
+   * Right before a Dolphin starts: its NAND has a Brawl save, else it is seeded again (a playback
+   * Dolphin on the user's prod, 2026-10-12, met P+'s "Create save file" prompt although the seed ran
+   * earlier in the same launch). Logged as warnings, which a release's log keeps.
+   */
+  private async _checkBrawlSave(installation: LocalDolphinInstallation, storeDir: string): Promise<void> {
+    const hasSave = async () => {
+      const dir = brawlSaveDir(await installation.nandRoot());
+      try {
+        return { dir, ok: (await readdir(dir, { withFileTypes: true })).some((e) => e.isFile()) };
+      } catch {
+        return { dir, ok: false };
+      }
+    };
+    const before = await hasSave();
+    if (before.ok) {
+      return;
+    }
+    log.warn(`No Brawl save in ${before.dir} before starting Dolphin (${installation.userFolder}); seeding it`);
+    await this._ensureBrawlSave(installation, storeDir);
+    const after = await hasSave();
+    log.warn(`Brawl save in ${after.dir}: ${after.ok ? "seeded" : "still missing (P+ will ask to create one)"}`);
   }
 
   /**
@@ -648,6 +677,11 @@ export class DolphinManager {
       return result.image;
     } catch (err) {
       log.error(err);
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "EBUSY" || code === "EPERM") {
+        // Windows: a Dolphin started before a launcher update still has the card open
+        throw new Error("Another Dolphin is using the game files. Close it, then try again.");
+      }
       throw new Error(
         `Could not install the online game plugin on the Project+ SD card: ${
           err instanceof Error ? err.message : String(err)
