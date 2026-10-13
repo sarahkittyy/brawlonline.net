@@ -5205,6 +5205,7 @@ PlaybackInfo GetPlaybackInfo()
   info.last = file.first_frame + static_cast<s64>(file.pads.size()) - 1;
   info.shown = s.phase == Phase::Running ? std::max<s64>(PlaybackShown(), info.first) : info.first;
   info.paused = s.pb.paused;
+  info.at_end = s.pb.at_end;
   info.seeking = s.pb.seek_to >= 0 || s.pb.ff_until >= 0;
   info.speed = s.pb.speed;
   info.desync_frame = s.pb.desync_frame;

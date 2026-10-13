@@ -384,6 +384,7 @@ struct PlaybackInfo
   s64 first = 0, last = 0;  // its frames
   s64 shown = 0;           // the frame on screen
   bool paused = false;
+  bool at_end = false;     // held at its last frame
   bool seeking = false;
   double speed = 1.0;
   s64 desync_frame = -1;

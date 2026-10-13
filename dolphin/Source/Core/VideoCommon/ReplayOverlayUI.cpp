@@ -77,6 +77,12 @@ void Display(float scale)
     s_last_mouse = io.MousePos;
     s_mouse_moved = now;
   }
+  // A click on the game (not on the overlay) pauses or plays, whether the overlay shows or not.
+  // A double click (Dolphin's fullscreen) is two clicks: it toggles twice. Held at the end, where
+  // Play ends the replay, a click does nothing (the button and Space still end it).
+  if (io.MouseClicked[0] && !s_dragging && !info.at_end &&
+      !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow))
+    Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::TogglePause, 0);
   const bool wanted = info.paused || info.seeking || s_dragging || now - s_mouse_moved < SHOW_AFTER_MOUSE;
   if (s_hidden || !wanted)
     return;
@@ -116,11 +122,43 @@ void Display(float scale)
     ImGui::SameLine(width - ImGui::CalcTextSize(time.c_str()).x - ImGui::GetStyle().WindowPadding.x);
     ImGui::TextUnformatted(time.c_str());
 
-    // The bar: click or drag to seek.
+    // Play / pause, left of the bar: a triangle while paused (or held at the end), two bars while
+    // playing.
+    const float row_h = 24.0f * scale;
     const float bar_h = 14.0f * scale;
-    const ImVec2 p0 = ImGui::GetCursorScreenPos();
+    {
+      const ImVec2 b0 = ImGui::GetCursorScreenPos();
+      if (ImGui::InvisibleButton("##replayplay", ImVec2(row_h, row_h)))
+        Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::TogglePause, 0);
+      const bool over = ImGui::IsItemHovered();
+      ImDrawList* dl = ImGui::GetWindowDrawList();
+      const ImU32 col = over ? IM_COL32(255, 255, 255, 255) : IM_COL32(230, 230, 230, 220);
+      const float pad = 6.0f * scale;
+      const ImVec2 a(b0.x + pad, b0.y + pad);
+      const ImVec2 z(b0.x + row_h - pad, b0.y + row_h - pad);
+      if (over)
+        dl->AddRectFilled(b0, ImVec2(b0.x + row_h, b0.y + row_h), IM_COL32(255, 255, 255, 40), 4.0f * scale);
+      if (info.paused || info.at_end)
+      {
+        dl->AddTriangleFilled(a, ImVec2(a.x, z.y), ImVec2(z.x, (a.y + z.y) * 0.5f), col);
+      }
+      else
+      {
+        const float w = (z.x - a.x) / 3.0f;
+        dl->AddRectFilled(a, ImVec2(a.x + w, z.y), col);
+        dl->AddRectFilled(ImVec2(z.x - w, a.y), z, col);
+      }
+      if (over)
+        ImGui::SetTooltip("%s", info.paused || info.at_end ? "Play (Space)" : "Pause (Space)");
+      ImGui::SameLine();
+    }
+
+    // The bar: click or drag to seek (the whole row's height takes the click; the bar is drawn
+    // in its middle).
+    const ImVec2 row0 = ImGui::GetCursorScreenPos();
     const float bar_w = ImGui::GetContentRegionAvail().x;
-    ImGui::InvisibleButton("##replayseek", ImVec2(bar_w, bar_h));
+    ImGui::InvisibleButton("##replayseek", ImVec2(bar_w, row_h));
+    const ImVec2 p0(row0.x, row0.y + (row_h - bar_h) * 0.5f);
     const bool hovered = ImGui::IsItemHovered();
     const bool active = ImGui::IsItemActive();
     const auto at = [&](float x) { return std::clamp((x - p0.x) / std::max(bar_w, 1.0f), 0.0f, 1.0f); };
