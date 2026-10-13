@@ -12,6 +12,7 @@
 #include "Core/HW/Wiimote.h"
 #include "Core/HW/WiimoteEmu/Extension/DesiredExtensionState.h"
 #include "Core/HW/WiimoteEmu/WiimoteEmu.h"
+#include "Core/Rollback/MachineSession.h"
 
 #include "InputCommon/ControllerEmu/ControlGroup/AnalogStick.h"
 #include "InputCommon/ControllerEmu/ControlGroup/Buttons.h"
@@ -169,9 +170,13 @@ void Nunchuk::DoState(PointerWrap& p)
 {
   EncryptedExtension::DoState(p);
 
-  p.Do(m_swing_state);
-  p.Do(m_tilt_state);
-  p.Do(m_shake_state);
+  // Not in a Brawl Mods machine image: host state there (Wiimote::DoState).
+  if (!Machine::InImageDoState())
+  {
+    p.Do(m_swing_state);
+    p.Do(m_tilt_state);
+    p.Do(m_shake_state);
+  }
 }
 
 void Nunchuk::LoadDefaults()

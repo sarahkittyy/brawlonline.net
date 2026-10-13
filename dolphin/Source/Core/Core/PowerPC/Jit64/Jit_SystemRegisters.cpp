@@ -14,6 +14,7 @@
 #include "Core/PowerPC/Jit64/RegCache/JitRegCache.h"
 #include "Core/PowerPC/Jit64Common/Jit64PowerPCState.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 
 using namespace Gen;
@@ -330,7 +331,19 @@ void Jit64::mfspr(UGeckoInstruction inst)
     // An inline implementation of CoreTiming::GetFakeTimeBase, since in timer-heavy games the
     // cost of calling out to C for this is actually significant.
     // Scale downcount by the CPU overclocking factor.
-    CVTSI2SS(XMM0, PPCSTATE(downcount));
+    if (Machine::IsArmed() && js.downcountAmount)
+    {
+      // A whole-machine session (Brawl Mods) reads the time of this instruction, not of its
+      // block's start: blocks start elsewhere after a rollback erased them or on a machine that
+      // joined later, and the same instruction read another time there (the machines drifted).
+      MOV(32, rdx, PPCSTATE(downcount));
+      SUB(32, rdx, Imm32(js.downcountAmount));
+      CVTSI2SS(XMM0, rdx);
+    }
+    else
+    {
+      CVTSI2SS(XMM0, PPCSTATE(downcount));
+    }
     MULSS(XMM0, MDisp(rcx, offsetof(CoreTiming::Globals, last_OC_factor_inverted)));
     CVTSS2SI(rdx, R(XMM0));  // RDX is downcount scaled by the overclocking factor
     MOV(32, rax, MDisp(rcx, offsetof(CoreTiming::Globals, slice_length)));

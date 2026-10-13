@@ -17,6 +17,7 @@
 #include "Core/HW/Wiimote.h"
 #include "Core/HW/WiimoteCommon/DataReport.h"
 #include "Core/HW/WiimoteCommon/WiimoteHid.h"
+#include "Core/Rollback/MachineSession.h"
 
 namespace WiimoteEmu
 {
@@ -585,11 +586,16 @@ void Wiimote::DoState(PointerWrap& p)
   if (m_active_extension != ExtensionNumber::NONE)
     GetActiveExtension()->DoState(p);
 
-  // Dynamics
-  p.Do(m_swing_state);
-  p.Do(m_tilt_state);
-  p.Do(m_point_state);
-  p.Do(m_shake_state);
+  // Dynamics. A Brawl Mods machine image leaves them out: in a whole-machine session they only
+  // build this machine's own player's input (the game gets every Wii Remote's state from the
+  // session's inputs), so they are host state, as the IMU cursor is.
+  if (!Machine::InImageDoState())
+  {
+    p.Do(m_swing_state);
+    p.Do(m_tilt_state);
+    p.Do(m_point_state);
+    p.Do(m_shake_state);
+  }
 
   // We'll consider the IMU state part of the user's physical controller state and not sync it.
   // (m_imu_cursor_state)

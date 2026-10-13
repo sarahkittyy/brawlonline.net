@@ -28,6 +28,9 @@ struct SQueuedEvent
   u8 buffer[1024] = {};
   u32 size = 0;
   u16 connection_handle = 0;
+  // The struct's padding, named so it is zero: states copy events as bytes, and two machines'
+  // states of the same session must be the same bytes (a Brawl Mods machine image).
+  u16 padding = 0;
 
   SQueuedEvent(u32 size_, u16 handle);
   SQueuedEvent() = default;

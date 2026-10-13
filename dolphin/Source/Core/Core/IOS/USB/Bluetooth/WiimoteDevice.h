@@ -121,6 +121,9 @@ private:
     u16 psm;
     u16 remote_cid;
     u16 remote_mtu = 0;
+    // The struct's padding, named so it is zero: states copy the struct as bytes, and two
+    // machines' states of the same session must be the same bytes (a Brawl Mods machine image).
+    u16 padding = 0;
   };
 
   using ChannelMap = std::map<u16, SChannel>;

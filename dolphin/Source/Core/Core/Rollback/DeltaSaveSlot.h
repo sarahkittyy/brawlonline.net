@@ -223,6 +223,11 @@ public:
   // position within the current CoreTiming slice and the pending exceptions.
   int m_downcount = 0;
   uint32_t m_exceptions = 0;
+  // A whole-machine session restores these too (RestoreMachineRegisters): the MSR (its FP bit is
+  // the OS's lazy FPU switch, and a re-run that took the FP-unavailable exception where the first
+  // run did not drifted by its handler's cycles) and every SPR.
+  uint32_t m_msr = 0;
+  std::array<uint32_t, 1024> m_all_spr{};
 
   // Instrumentation of the last Save: dual-core GPU sync time, whether it ran, and the pipelines
   // the video thread compiled synchronously meanwhile.
@@ -275,6 +280,9 @@ public:
 
 void SaveCPURegisters(const PowerPC::PowerPCState& ppc, DeltaSaveSlot::CPURegisters& out);
 void RestoreCPURegisters(PowerPC::PowerPCState& ppc, const DeltaSaveSlot::CPURegisters& in);
+// A whole-machine rollback's load: the MSR and every SPR as saved, with what changing them does
+// (the JIT's feature flags, the BATs, the performance monitor).
+void RestoreMachineRegisters(Core::System& system, const DeltaSaveSlot& slot);
 
 void RestoreRegionDelta(const RegionDelta& delta, uint8_t* region_base, uint32_t region_phys_base,
                         const std::vector<MemoryRegion>& excl);

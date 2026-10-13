@@ -16,6 +16,7 @@
 // inside callback:
 //   ScheduleEvent(periodInCycles - cyclesLate, callback, "whatever")
 
+#include <array>
 #include <mutex>
 #include <optional>
 #include <string>
@@ -93,6 +94,20 @@ class CoreTimingManager
 {
 public:
   explicit CoreTimingManager(Core::System& system);
+
+  // Diagnostics (a whole-machine session's sync test, PPR_MACHINE_EVENT_TRACE): when set, every
+  // event Advance runs is appended here (CPU thread).
+  struct TracedEvent
+  {
+    s64 time;      // the global timer when it ran
+    s64 late;      // cycles after its due time
+    u64 userdata;
+    const std::string* name;
+    // The guest CPU where the event interrupted it: pc, lr, r1 and a hash of r0-r31.
+    u32 pc, lr, sp, gpr_hash;
+    std::array<u32, 32> gpr;
+  };
+  std::vector<TracedEvent>* m_event_trace = nullptr;
 
   // CoreTiming begins at the boundary of timing slice -1. An initial call to Advance() is
   // required to end slice -1 and start slice 0 before the first cycle of code is executed.

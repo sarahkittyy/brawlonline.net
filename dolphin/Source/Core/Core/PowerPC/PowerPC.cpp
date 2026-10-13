@@ -133,6 +133,14 @@ void PowerPCManager::DoState(PointerWrap& p)
       m_ppc_state.iCache.Reset(m_system.GetJitInterface());
     m_ppc_state.dCache.DoState(memory, p);
   }
+  else if (Machine::IsArmed())
+  {
+    // A whole-machine session's rollback snapshots carry the instruction cache (the registers
+    // above are restored by the rollback itself). The JIT compiles through it: after a scene
+    // change the timeline a rollback threw away had left its new module's code in lines where the
+    // restored memory holds the old module again, and the re-run compiled that code.
+    m_ppc_state.iCache.DoState(m_system.GetMemory(), p);
+  }
 
 
   auto& mmu = m_system.GetMMU();

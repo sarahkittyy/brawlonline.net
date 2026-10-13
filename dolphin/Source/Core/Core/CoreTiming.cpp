@@ -377,6 +377,17 @@ void CoreTimingManager::Advance()
     Event evt = m_event_queue.front();
     std::ranges::pop_heap(m_event_queue, std::ranges::greater{});
     m_event_queue.pop_back();
+    if (m_event_trace)
+    {
+      const auto& ps = m_system.GetPPCState();
+      u32 h = 2166136261u;
+      for (const u32 r : ps.gpr)
+        h = (h ^ r) * 16777619u;
+      TracedEvent te{m_globals.global_timer, m_globals.global_timer - evt.time, evt.userdata,
+                     evt.type->name, ps.pc, ps.spr[SPR_LR], ps.gpr[1], h, {}};
+      std::copy(std::begin(ps.gpr), std::end(ps.gpr), te.gpr.begin());
+      m_event_trace->push_back(te);
+    }
     evt.type->callback(m_system, evt.userdata, m_globals.global_timer - evt.time);
   }
 

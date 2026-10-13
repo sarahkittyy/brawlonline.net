@@ -16,6 +16,7 @@
 #include "Core/PowerPC/Interpreter/ExceptionUtils.h"
 #include "Core/PowerPC/PPCTables.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 
 using namespace Arm64Gen;
@@ -408,6 +409,10 @@ void JitArm64::mfspr(UGeckoInstruction inst)
     MOVP2R(Xg, &core_timing_globals);
 
     LDR(IndexType::Unsigned, WA, PPC_REG, PPCSTATE_OFF(downcount));
+    // A whole-machine session (Brawl Mods) reads the time of this instruction, not of its block's
+    // start (Jit64's mfspr says why).
+    if (Machine::IsArmed() && js.downcountAmount)
+      SUBI2R(WA, WA, js.downcountAmount, WB);
     m_float_emit.SCVTF(SC, WA);
     m_float_emit.LDR(32, IndexType::Unsigned, SD, Xg,
                      offsetof(CoreTiming::Globals, last_OC_factor_inverted));

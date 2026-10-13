@@ -12,6 +12,7 @@
 #include "Common/Logging/Log.h"
 #include "Core/Rollback/Perf.h"
 #include "Core/PowerPC/Gekko.h"
+#include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/RollbackManager.h"
 #include "Core/System.h"
@@ -243,6 +244,31 @@ void RestoreCPURegisters(PowerPC::PowerPCState& ppc, const DeltaSaveSlot::CPUReg
     ppc.spr[kRollbackSPRs[i]] = in.spr[i];
 }
 
+void RestoreMachineRegisters(Core::System& system, const DeltaSaveSlot& slot)
+{
+  auto& power_pc = system.GetPowerPC();
+  auto& ppc = power_pc.GetPPCState();
+  auto differ = [&](u32 first, u32 count) {
+    return !std::equal(slot.m_all_spr.begin() + first, slot.m_all_spr.begin() + first + count,
+                       std::begin(ppc.spr) + first);
+  };
+  const bool bats = differ(SPR_IBAT0U, 16) || differ(SPR_IBAT4U, 16) || differ(SPR_HID4, 1);
+  const bool mmcr = differ(SPR_MMCR0, 1) || differ(SPR_MMCR1, 1);
+  std::copy(slot.m_all_spr.begin(), slot.m_all_spr.end(), std::begin(ppc.spr));
+  if (bats)
+  {
+    system.GetMMU().IBATUpdated();
+    system.GetMMU().DBATUpdated();
+  }
+  if (mmcr)
+    PowerPC::MMCRUpdated(ppc);
+  if (ppc.msr.Hex != slot.m_msr)
+  {
+    ppc.msr.Hex = slot.m_msr;
+    power_pc.MSRUpdated();
+  }
+}
+
 void DeltaSaveSlot::Save(Core::System& system)
 {
   ROLLBACK_ZONE();
@@ -252,6 +278,9 @@ void DeltaSaveSlot::Save(Core::System& system)
   brawl_frame = ReadBrawlMatchFrameCounter(m_mem2_ptr, m_mem2_size);
   m_downcount = system.GetPPCState().downcount;
   m_exceptions = system.GetPPCState().Exceptions;
+  m_msr = system.GetPPCState().msr.Hex;
+  std::copy(std::begin(system.GetPPCState().spr), std::end(system.GetPPCState().spr),
+            m_all_spr.begin());
   SaveCPURegisters(system.GetPPCState(), m_cpu);
   auto& bitmap = JITDirtyBitmap::Get();
   auto& rbm = RollbackManager::Get();

@@ -1523,6 +1523,7 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
     system.GetPowerPC().GetPPCState().downcount = deltaSave.m_downcount;
     system.GetPowerPC().GetPPCState().Exceptions = deltaSave.m_exceptions;
     RestoreCPURegisters(system.GetPowerPC().GetPPCState(), deltaSave.m_cpu);
+    RestoreMachineRegisters(system, deltaSave);
   }
 
   if (!m_region_mode)
@@ -1541,8 +1542,11 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
     // module the newer timeline loaded where the restored one still runs other code (a scene
     // change) left blocks of the wrong code in the cache, and the re-run diverged.
     ROLLBACK_ZONE_N("JIT blocks of restored memory");
+    // Diagnostics: PPR_MACHINE_NO_JIT_ERASE keeps them (to tell whether recompiled blocks are what
+    // a re-run differs by).
+    static const bool keep_blocks = std::getenv("PPR_MACHINE_NO_JIT_ERASE") != nullptr;
     auto& jit = system.GetJitInterface();
-    for (const u32 key : restore_keys)
+    for (const u32 key : keep_blocks ? std::vector<u32>{} : restore_keys)
       jit.EraseBlocksForRestoredRange(key << ROLLBACK_PAGE_SHIFT, ROLLBACK_PAGE_SIZE);
   }
 
