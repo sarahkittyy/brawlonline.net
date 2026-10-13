@@ -23,7 +23,7 @@ Decisions the user made for it (2026-10-12): the file stores, besides the inputs
 | Launcher | `launcher/src/replays/replay_format.ts` (+ test), `database/filters` (`session` filter), `renderer/lib/query_language` (`match:"<id>"`), `renderer/pages/profile/profile_page.tsx` | The indexer reads `INFO` and, through the trailer, `ENDG` (bounded, CRC-checked) into the existing tables: match id as the session, the game number, players with names, codes, uids and characters (gmCharacterKind, stock icons from the user's own disc), stage (P+'s ids, `@common/stages`), winners. The profile's match history has a Replays column: Watch plays the match's games one after another (a set), "N games" opens them in Replays (`match:"<id>"` in the search, in their folder); a match whose replays are not on this computer says so. |
 | Tests | `harness/tests/test_replay.py`, `launcher/src/replays/replay_format.test.ts` | A Direct game between two Dolphins: both files have the same game id, inputs and confirmed checksums, the fighters' positions move in `FTRM`; a fresh Dolphin plays each to the end with no checksum differing; on the second, a pause, steps both ways, jumps both ways, a seek to the start, holding at the end and a step back there, still with no checksum differing. A 3-player room game (Fox, Wolf, Toon Link): the three files have the same game id and result, and player 2's plays back on a fresh Dolphin, from the Direct CSS, to its end with no checksum differing. `ReplayFileTest.cpp` (Dolphin unit tests) and the launcher test cover the reader with damaged, cut and hostile files. |
 
-Not done yet: stats from the fighter memory (§9.3); upload of Ranked replays (§9.5); Unranked, Ranked and 4-player games are recorded and played by the same code but have no harness test of their own yet; the launcher's playback start (comm file, playback User folder) has not been run end to end outside the harness.
+Not done yet: stats from the fighter memory (§9.3); Unranked, Ranked and 4-player games are recorded and played by the same code but have no harness test of their own yet; the launcher's playback start (comm file, playback User folder) has not been run end to end outside the harness.
 
 Path prefixes used below:
 - `GS` = `dolphin/Source/Core/Core/Rollback/GameplaySession.cpp`
@@ -497,6 +497,8 @@ Recommendation: record `POST` from R3 on (or from R1 if cheap). Without it, the 
 `.rep` is already registered (`L/electron-builder.json:18-22, 34-37`), and opening a file plays it and shows stats (`L/src/main/main.ts:316-330`). StarCraft also uses `.rep` (open question 1).
 
 ### 9.5 Upload (later, Ranked only)
+
+Not wanted for now (the user, 2026-10-12): replays, Ranked ones too, stay on the players' computers.
 
 Dolphin's reporter uploads the finished file to the signed `uploadUrl` (backend-design.md:112-115, 243), as Slippi's game reporter does. Chunks are already compressed, so no gzip. Server-side re-simulation for disputes would run a headless playback, which needs the disc and P+ files on the server (open question 9).
 
