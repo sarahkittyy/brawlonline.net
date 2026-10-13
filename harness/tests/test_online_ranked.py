@@ -521,3 +521,92 @@ def test_ranked_failed_start_is_a_disconnect(backend: OnlineBackend, dolphin: Ca
     for u in (ua, ub):
         pub = backend._http("GET", f"/user/{u.uid}?additionalFields=chatMessages,rank")
         assert pub["rank"]["ratingUpdateCount"] == 0, pub
+
+
+G_MTRAND_SEED = 0x805A00BC   # g_mtRand's seed: randi, the match's RNG (GameplayRollback.h)
+CSS_RANDOM = 0x29
+
+
+@pytest.mark.slow
+def test_ranked_random_draws_every_game(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                        gpu_backend: str) -> None:
+    """Both players on Random for a whole set (the user's, 2026-10-12: a player on Random was
+    reported to be the same character in all three games of a Ranked set). Every lock-in is a
+    real character drawn for that game and played, and the coin stays on Random between games.
+    The draw is the game's randi (g_mtRand, the match's RNG, which the session seeds for every
+    match); its state at each character step is logged for both machines. Pass: neither player's
+    lock-ins are all one character (1 in 1,764 by chance), and the two players did not draw the
+    same character in every game (1 in 74,088). Screenshots: run/artifacts/game-bridge/ranked-random/."""
+    test = "ranked-random"
+    ua, ub = backend.create_user("rory", "RORY"), backend.create_user("rita", "RITA")
+    a = _boot(dolphin, "rr-a", backend, ua, gpu_backend, test, "gameplay")
+    b = _boot(dolphin, "rr-b", backend, ub, gpu_backend, test, "gameplay")
+    players = [a, b]
+    _both(a.to_main_menu, b.to_main_menu)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("ranked"), lambda: b.to_css("ranked"))
+    for g in players:
+        B.css_pick_character(g.c, 0, CSS_RANDOM)
+        g.steps("wait 30")
+        assert online_set.css_panel(g.c)["char"] == CSS_RANDOM
+        B.write_rules(g.c, stocks=1, minutes=2, items_off=True)
+        ppom.allow_test_rules(g.c)
+        g.shot("01-css-random")
+    _search_ranked(a)
+    _search_ranked(b)
+    _peer_shown(a, ub)
+    _peer_shown(b, ua)
+    _paired(a, b)
+    host = a if _ranked(a)["local_port"] == 0 else b
+    join = b if host is a else a
+
+    drawn: dict[str, list[int]] = {g.inst.name: [] for g in players}
+
+    def note_setup(game: int, rep: dict[str, Any]) -> None:
+        for g in players:
+            lock = online_set.local(g.c)["lock"]
+            assert lock["game"] == game and lock["css"] != CSS_RANDOM, (g.inst.name, lock)
+            # The match played the character drawn for it.
+            assert f"port={_ranked(g)['local_port']}, character={lock['char_kind']}," in rep["setup"], (
+                g.inst.name, lock, rep["setup"])
+            drawn[g.inst.name].append(lock["char_kind"])
+        print(f"game {game}: drawn {drawn}", flush=True)
+
+    _strike_to(host, join, 0x01)
+    winners = {1: b, 2: a, 3: b}   # 1-1, so game 3 decides
+    note_setup(1, online_set.play_game(players, 1, winner=winners[1]))
+    game = 1
+    while True:
+        _wait(lambda: all(sum(_ranked(g)["wins"]) >= game for g in players), 30, f"game {game} counted")
+        if any(_ranked(g)["set_over"] for g in players):
+            break
+        game += 1
+        winner_port = _ranked(a)["setup"]["last_winner"]
+        winner = a if _ranked(a)["local_port"] == winner_port else b
+        loser = b if winner is a else a
+        _both_on(players, SSS, f"game {game}: both on the stage select")
+        v = _wait_view(winner, lambda v: v["game"] == game and v["type"] == 1 and v["my_turn"], "the ban")
+        bans, pick = v["selectable"][:2], v["selectable"][2]
+        _strike(winner, bans[0], loser)
+        _wait_view(winner, lambda v: v["type"] == 1 and v["my_turn"] and v["count"] == 1, "the second ban")
+        _strike(winner, bans[1], loser)
+        _wait_view(loser, lambda v: v["type"] == 2 and v["my_turn"], "the pick")
+        B.sss_pick_stage(loser.c, pick, 0)
+        _both_on(players, online_set.CSS, f"game {game}: both back on the CSS")
+        _wait_view(loser, lambda v: v["type"] == 3, "the character step")
+        for g in players:
+            g.steps("wait 30")
+            assert online_set.css_panel(g.c)["char"] == CSS_RANDOM, (g.inst.name, "Random kept")
+        print(f"game {game}: g_mtRand at the character step "
+              f"{ {g.inst.name: hex(g.c.read_u32(G_MTRAND_SEED)) for g in players} }", flush=True)
+        winner.shot(f"g{game}-css-random")
+        winner.steps("tap START 8", "wait 30")
+        _wait_view(loser, lambda v: v["may_lock"], "the loser's turn")
+        loser.steps("tap START 8", "wait 30")
+        note_setup(game, online_set.play_game(players, game, winner=winners[game]))
+
+    assert game == 3, drawn
+    for name, chars in drawn.items():
+        assert len(set(chars)) > 1, (name, "the same character every game", drawn)
+    ca, cb = drawn[a.inst.name], drawn[b.inst.name]
+    assert any(x != y for x, y in zip(ca, cb)), ("both drew the same character every game", drawn)
