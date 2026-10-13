@@ -683,6 +683,36 @@ void WriteU32(Core::System& system, u32 addr, u32 value)
   system.GetMemory().CopyToEmu(addr, &be, 4);
 }
 
+// Brawl's screen setting (Options > Screen; at boot the game copies the Wii's aspect ratio, SYSCONF
+// IPL.AR, into it): gmGlobalRecord (GameGlobal+0x24) menu data +0x810, byte +0x28 (0x9017BE78 on
+// P+), 0xC0 with 16:9 and 0x00 with 4:3. The game frames its camera with it, and a screen KO places
+// the fighter from the camera: peers with different settings desynced on every screen KO (prod
+// 2026-10-12, docs/gameplay-rollback-status.md Phase 25). Every match is played with the value a
+// fresh install has (16:9); how the picture is shown (Dolphin's aspect ratio, window, resolution)
+// stays each player's.
+constexpr u32 GG_RECORD = 0x24;
+constexpr u32 RECORD_SCREEN = 0x810 + 0x28;
+constexpr u8 SCREEN_BITS = 0xC0, SCREEN_WIDE = 0xC0;
+
+void PinScreenSetting(Core::System& system)
+{
+  const Guest g(system.GetMemory());
+  const auto gg = g.Ptr32(Addr::GAME_GLOBAL_PTR);
+  const auto record = gg ? g.Ptr32(*gg + GG_RECORD) : std::nullopt;
+  const u8* p = record ? g.Ptr(*record + RECORD_SCREEN, 1) : nullptr;
+  if (!p)
+  {
+    WARN_LOG_FMT(BRAWLBACK, "gprb: no game record: the screen setting is left as it is");
+    return;
+  }
+  const u8 was = *p;
+  const u8 now = static_cast<u8>((was & ~SCREEN_BITS) | SCREEN_WIDE);
+  if (now == was)
+    return;
+  system.GetMemory().CopyToEmu(*record + RECORD_SCREEN, &now, 1);
+  INFO_LOG_FMT(BRAWLBACK, "gprb: screen setting {:02x} -> {:02x} (16:9) for the match", was, now);
+}
+
 constexpr u32 PAD_CONFIG = 0x805B7480;  // g_PadConfig (ipPadConfig, 0x1AC bytes)
 constexpr u32 PAD_CONFIG_KEY_SIZE = 0xB9;
 
@@ -6037,6 +6067,7 @@ MatchStart ApplyMatchStart(Core::System& system, std::string_view when)
       WARN_LOG_FMT(BRAWLBACK, "gprb: PPR_GPRB_TEST_TEAMS: a team battle ({})", teams);
     }
   }
+  PinScreenSetting(system);
   const auto seeds = MatchSeeds(s.session_seed, s.match_index);
   WriteU32(system, Addr::MTRAND_DEFAULT_SEED, seeds[0]);
   WriteU32(system, Addr::MTRAND_OTHER_SEED, seeds[1]);
@@ -6203,6 +6234,7 @@ void ApplyPlaybackStart(Core::System& system, std::string_view when)
   }
   if (const auto mm = ModeMeleeAddr(g); mm && merged != mine)
     system.GetMemory().CopyToEmu(*mm + INIT_BLOCK_OFFSET, merged.data(), merged.size());
+  PinScreenSetting(system);
   const auto seeds = MatchSeeds(s.pb.seed, s.pb.match_index);
   WriteU32(system, Addr::MTRAND_DEFAULT_SEED, seeds[0]);
   WriteU32(system, Addr::MTRAND_OTHER_SEED, seeds[1]);

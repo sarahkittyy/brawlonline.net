@@ -2,7 +2,7 @@ import { INACTIVE_TEST_MODE, readTestMode } from "@common/test_mode";
 import path from "path";
 import { describe, expect, it } from "vitest";
 
-import { buildNetplayDolphinArgs, LOGGING_CONFIG_ARGS } from "./netplay_args";
+import { buildNetplayDolphinArgs, LOGGING_CONFIG_ARGS, WII_SETTINGS_CONFIG_ARGS } from "./netplay_args";
 
 const sd = path.resolve("/data/netplay/pponline-sd/sd.raw");
 const dol = path.resolve("/data/netplay/User/Launcher/Project+ Netplay Launcher.dol");
@@ -14,6 +14,7 @@ describe("buildNetplayDolphinArgs", () => {
       [
         ...userArgs,
         ...LOGGING_CONFIG_ARGS,
+        ...WII_SETTINGS_CONFIG_ARGS,
         "-C",
         `Dolphin.General.WiiSDCardPath=${sd}`,
         "-C",
@@ -29,7 +30,12 @@ describe("buildNetplayDolphinArgs", () => {
   it("leaves the SD card and boot target out when there are none", () => {
     expect(
       buildNetplayDolphinArgs({ userArgs, sdCardImage: null, bootFile: null, testMode: INACTIVE_TEST_MODE }),
-    ).toEqual([...userArgs, ...LOGGING_CONFIG_ARGS]);
+    ).toEqual([...userArgs, ...LOGGING_CONFIG_ARGS, ...WII_SETTINGS_CONFIG_ARGS]);
+  });
+
+  it("pins the Wii's aspect ratio to 16:9, the setting every player's camera must share", () => {
+    const args = buildNetplayDolphinArgs({ userArgs, sdCardImage: null, bootFile: null, testMode: INACTIVE_TEST_MODE });
+    expect(args[args.indexOf("SYSCONF.IPL.AR=True") - 1]).toBe("-C");
   });
 
   it("turns on Dolphin's log file for the online code", () => {

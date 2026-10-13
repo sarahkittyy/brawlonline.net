@@ -50,6 +50,8 @@ SCENARIOS: Dict[str, tuple] = {
     "bf-toonlink-diddy": ("toon_link", "diddy_kong", "battlefield", False),
     "fd-rob-olimar": ("rob", "olimar", "final_destination", False),
     "sv-peach-gw": ("peach", "game_and_watch", "smashville", False),
+    # With --modes upsmash,random --damage-ratio 2: KOs off the top (star KOs) under rollback.
+    "fd-zelda-mario": ("zelda", "mario", "final_destination", False),
 }
 
 
@@ -170,6 +172,10 @@ def setup_match(c: HarnessClient, p1: str, p2: str, stage: str, items: bool) -> 
     setup_match_n(c, Scenario((p1, p2), stage, items))
 
 
+DAMAGE_RATIO = 0.0  # --damage-ratio
+MODES: Optional[List[str]] = None  # --modes: flows.fight mode per port (default random)
+
+
 def setup_match_n(c: HarnessClient, sc: Scenario) -> None:
     """CSS (team battle if ``sc.teams``), Fox/Falco tokens on every port, Start, the wanted
     characters and teams written on the stage select, the stage."""
@@ -177,6 +183,8 @@ def setup_match_n(c: HarnessClient, sc: Scenario) -> None:
     B.wait_scene(c, [B.Scene.CSS], 60 * 120)
     B.wait_css_ready(c, ports)
     B.write_rules(c, stocks=4, minutes=8, items_off=not sc.items)
+    if DAMAGE_RATIO:
+        c.write_mem(B.SET_RULE_OBJ + B.RULE_DAMAGE_RATIO, bytes([round(DAMAGE_RATIO * 10)]))
     if sc.items:
         set_items(c, 2)
     for port in ports:
@@ -249,7 +257,7 @@ def fight_n(c: HarnessClient, sc: Scenario, frames: int, seed: Any, stage_kind: 
     """flows.fight for every port of the scenario (random macros), team-aware."""
     team_of = {p: t for p, t in enumerate(sc.teams)} if sc.teams is not None else None
     if team_of is None:
-        F.fight([F.Seat(c, p) for p in range(len(sc.chars))], frames, mode="random", seed=seed,
+        F.fight([F.Seat(c, p) for p in range(len(sc.chars))], frames, mode=MODES or "random", seed=seed,
                 stage_kind=stage_kind, stop=stop)
         return
     orig = F.Fighter
@@ -417,9 +425,14 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--log-dir", default=None, help="copy each instance's dolphin.log here")
     ap.add_argument("--name-prefix", default="gprb", help="instance name prefix (ppharness clean --prefix)")
     ap.add_argument("--runs", type=int, default=1, help="run every scenario this many times")
+    ap.add_argument("--modes", default="", help="fight modes per port, e.g. upsmash,random (free-for-all only)")
+    ap.add_argument("--damage-ratio", type=float, default=0.0, help="write this damage ratio (e.g. 2.0) on the CSS")
     ap.add_argument("--pass-log", default=None,
                     help="diagnostics: per run, the passes and a countdown savestate in this directory")
     args = ap.parse_args(argv)
+    global DAMAGE_RATIO, MODES
+    DAMAGE_RATIO = args.damage_ratio
+    MODES = args.modes.split(",") if args.modes else None
     groups = {"all": list(SCENARIOS), "np": list(NP_SCENARIOS),
               "f4": [n for n in NP_SCENARIOS if n.startswith("f4-")],
               "f3": [n for n in NP_SCENARIOS if n.startswith("f3-")],
