@@ -100,8 +100,8 @@ def test_host_edits_the_room_rules_everyone_plays_them(backend: OnlineBackend,
                                                        dolphin: Callable[..., DolphinInstance],
                                                        gpu_backend: str) -> None:
     """The host opens P+'s rules menu over the room CSS (CFG_TEST_OPEN_RULES, as the RULES button
-    will), sets 3 stocks, a 1-minute time limit and auto L-cancel off (on by default since
-    2026-10-12); stock control (handicap, not a room rule) does not move for the host either. When the menu closes the rules reach the other
+    will), sets 3 stocks, a 1-minute time limit and auto L-cancel; stock control (handicap, not a
+    room rule) does not move for the host either. When the menu closes the rules reach the other
     player (SESSION Rules from room-state), whose ready is taken back. The other player opens the
     same menu and can change nothing. Both ready: the game is played with the host's rules on both
     machines, in sync."""
@@ -126,10 +126,9 @@ def test_host_edits_the_room_rules_everyone_plays_them(backend: OnlineBackend,
     tap(a, "A")
     a.steps("wait 20")
     tap(a, *["DLEFT"] * 7)                         # time limit 8 -> 1
-    assert rules_working(a)[1][3] == 1, rules_working(a)[1].hex()   # the default: on
-    tap(a, "DDOWN", "DDOWN", "DDOWN", "DRIGHT")    # auto L-cancel off
+    tap(a, "DDOWN", "DDOWN", "DDOWN", "DRIGHT")    # auto L-cancel on
     _, w2 = rules_working(a)
-    assert (w2[0], w2[3]) == (1, 0), w2.hex()
+    assert (w2[0], w2[3]) == (1, 1), w2.hex()
     a.shot("03-host-more-rules")
     # The item switch, for the record (its layout is not mapped yet).
     tap(a, "B")
@@ -138,7 +137,7 @@ def test_host_edits_the_room_rules_everyone_plays_them(backend: OnlineBackend,
     close_menu(a)
     want = {"style": "stock", "stocks": 3, "timeMinutes": 1, "damageRatio": 1.0, "teamAttack": True,
             "pause": "normal", "itemFrequency": 0, "itemSwitch": [0, 6, 0, 0, 0, 0, 0, 0], "hazards": False,
-            "autoLCancel": False, "inputAssist": False}
+            "autoLCancel": True, "inputAssist": False}
     for g in (a, b):
         _wait(lambda g=g: session_rules(g) == want, 20, f"{g.name}: the host's rules", interval=0.3)
     _wait(lambda: not menu_open(b), 10, "B's out-of-date rules menu closed by the change")
@@ -156,7 +155,7 @@ def test_host_edits_the_room_rules_everyone_plays_them(backend: OnlineBackend,
     tap(b, "A")
     b.steps("wait 20")
     more = rules_working(b)[1]                     # (the page fills its copy when it opens)
-    assert (more[0], more[3]) == (1, 0), more.hex()
+    assert (more[0], more[3]) == (1, 1), more.hex()
     tap(b, "DLEFT", "DDOWN", "DLEFT", "DDOWN", "DLEFT", "DDOWN", "DLEFT")
     assert rules_working(b)[1] == more, (more.hex(), rules_working(b)[1].hex())
     b.shot("06-viewer-more-rules")
@@ -177,8 +176,8 @@ def test_host_edits_the_room_rules_everyone_plays_them(backend: OnlineBackend,
         mm = B.Mem(g.c.read_mem).chain(B.GAME_GLOBAL_PTR, B.GG_MODE_MELEE)
         raw = g.c.read_mem(mm, 0x98 + 2 * 0x5C)
         alc = g.c.read_mem(mm + 0xE5, 1)[0] & 3
-        assert (r[4], r[8], r[0xB], r[0xC]) == (3, 1, 0, 0), (g.name, r.hex())
-        assert [raw[0x98 + 4], raw[0x98 + 0x5C + 4]] == [3, 3] and alc == 0, (g.name, raw[0x98:0x9D].hex(), alc)
+        assert (r[4], r[8], r[0xB], r[0xC]) == (3, 1, 1, 0), (g.name, r.hex())
+        assert [raw[0x98 + 4], raw[0x98 + 0x5C + 4]] == [3, 3] and alc == 1, (g.name, raw[0x98:0x9D].hex(), alc)
     rep = online_set.play_game([a, b], game)
     assert rep["checksums"]["mismatches"] == 0, rep
     _wait(lambda: a.scene() == CSS and b.scene() == CSS, 180, "both back on the room's CSS")

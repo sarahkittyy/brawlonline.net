@@ -7,8 +7,7 @@
 //!
 //! The defaults are P+'s competitive set (P+ v3.2's "Default Settings Modifier": stock, 4 stocks,
 //! damage 1.0, an 8-minute time limit, team attack on, pause on; items off) with stage hazards
-//! off and auto L-cancel on (the user's, 2026-10-12; P+'s own defaults are hazards on, auto
-//! L-cancel off). Every field is a line of P+'s rules
+//! off (the user's, 2026-10-12; P+'s own default is on). Every field is a line of P+'s rules
 //! menu (RULES, MORE RULES, the item switch, the hazard switch); where the game keeps each one is
 //! `docs/game-code.md` §14, "Room rules RE".
 
@@ -75,8 +74,7 @@ impl Default for MatchRules {
             // Stage hazards off (the user's, 2026-10-12): new rulesets, rooms' P+ default and
             // Unranked, Ranked and Direct.
             hazards: false,
-            // Auto L-cancel on (the user's, 2026-10-12), for the same rulesets and modes.
-            auto_l_cancel: true,
+            auto_l_cancel: false,
             input_assist: false,
         }
     }
@@ -439,7 +437,7 @@ mod tests {
     fn defaults_are_pplus_competitive_and_valid() {
         let r = MatchRules::default();
         assert_eq!((r.style, r.stocks, r.time_minutes, r.damage_ratio_tenths()), (Style::Stock, 4, 8, 10));
-        assert!(r.team_attack && !r.hazards && r.auto_l_cancel && !r.input_assist);
+        assert!(r.team_attack && !r.hazards && !r.auto_l_cancel && !r.input_assist);
         assert_eq!(r.pause, Pause::Normal);
         assert_eq!((r.item_frequency, r.item_switch), (0, PPLUS_ITEM_SWITCH));
         r.validate().unwrap();
@@ -447,13 +445,13 @@ mod tests {
 
     #[test]
     fn wire_shape() {
-        let r = MatchRules { auto_l_cancel: false, pause: Pause::Hold, ..Default::default() };
+        let r = MatchRules { auto_l_cancel: true, pause: Pause::Hold, ..Default::default() };
         assert_eq!(
             serde_json::to_value(&r).unwrap(),
             serde_json::json!({
                 "style": "stock", "stocks": 4, "timeMinutes": 8, "damageRatio": 1.0,
                 "teamAttack": true, "pause": "hold", "itemFrequency": 0,
-                "itemSwitch": [0, 6, 0, 0, 0, 0, 0, 0], "hazards": false, "autoLCancel": false,
+                "itemSwitch": [0, 6, 0, 0, 0, 0, 0, 0], "hazards": false, "autoLCancel": true,
                 "inputAssist": false
             })
         );
@@ -562,11 +560,11 @@ mod tests {
         assert!(!c.contains("\"by\""), "{c}");
         assert_eq!(
             c,
-            r#"{"bans":2,"bestOf":3,"dsr":true,"format":1,"name":"NorCal Weekly","rules":{"autoLCancel":true,"damageRatio":1.0,"hazards":false,"inputAssist":false,"itemFrequency":0,"itemSwitch":[0,6,0,0,0,0,0,0],"pause":"normal","stocks":4,"style":"stock","teamAttack":true,"timeMinutes":8},"stageChoice":"loser-picks","stages":{"counterpicks":[3,4,5,6,9,12,13,28,31,35],"starters":[1,2,33,45,46]},"strikes":[1,2,1],"version":0}"#
+            r#"{"bans":2,"bestOf":3,"dsr":true,"format":1,"name":"NorCal Weekly","rules":{"autoLCancel":false,"damageRatio":1.0,"hazards":false,"inputAssist":false,"itemFrequency":0,"itemSwitch":[0,6,0,0,0,0,0,0],"pause":"normal","stocks":4,"style":"stock","teamAttack":true,"timeMinutes":8},"stageChoice":"loser-picks","stages":{"counterpicks":[3,4,5,6,9,12,13,28,31,35],"starters":[1,2,33,45,46]},"strikes":[1,2,1],"version":0}"#
         );
         // Pinned, so a change to the canonical form shows up here (the hash is in matches,
         // results and replays).
-        assert_eq!(r.hash(), "f30fdde02faa058fc02088358dfae503e375993a2020af89562413a052f1d8f8");
+        assert_eq!(r.hash(), "f3c6ee0b856ee8b0c715a6d353294ae3337e55e0eb12eaa43f15756b2700d08b");
         // `by` is left out; every other field counts, even stage order.
         assert_eq!(Ruleset { by: "sarah".into(), ..r.clone() }.hash(), r.hash());
         assert_ne!(Ruleset { version: 2, ..r.clone() }.hash(), r.hash());
@@ -575,7 +573,7 @@ mod tests {
         swapped.stages.starters.swap(0, 1);
         assert_ne!(swapped.hash(), r.hash());
         let mut alc = r.clone();
-        alc.rules.auto_l_cancel = false;
+        alc.rules.auto_l_cancel = true;
         assert_ne!(alc.hash(), r.hash());
         // A JSON round trip (any key order, an old `players` key) gives the same hash.
         let text = r#"{"version":0,"strikes":[1,2,1],"stages":{"starters":[1,2,33,45,46],"counterpicks":[3,4,5,6,9,12,13,28,31,35]},"stageChoice":"loser-picks","rules":{},"players":"1v1","name":"NorCal Weekly","format":1,"dsr":true,"bestOf":3,"bans":2,"by":"x"}"#;

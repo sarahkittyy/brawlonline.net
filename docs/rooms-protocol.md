@@ -87,7 +87,7 @@ A request that is refused changes nothing and is answered with `room-error`. Mal
   "statusText": "Waiting on: bob",
   "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "damageRatio": 1.0, "teamAttack": true,
             "pause": "normal", "itemFrequency": 0, "itemSwitch": [0, 6, 0, 0, 0, 0, 0, 0],
-            "hazards": false, "autoLCancel": true, "inputAssist": false}
+            "hazards": false, "autoLCancel": false, "inputAssist": false}
 }
 ```
 

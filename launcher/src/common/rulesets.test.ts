@@ -42,7 +42,7 @@ describe("rulesets", () => {
       itemFrequency: 0,
       itemSwitch: [0, 6, 0, 0, 0, 0, 0, 0],
       hazards: false,
-      autoLCancel: true,
+      autoLCancel: false,
       inputAssist: false,
     });
     expect(validateRuleset(weekly())).toBeNull();

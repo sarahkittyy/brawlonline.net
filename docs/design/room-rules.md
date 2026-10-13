@@ -91,7 +91,7 @@ One record, decided by the server, applied by the game from SESSION. Both machin
 | `items` | frequency 0-4, switch bitfield | menu record (`GameGlobal+0x24`) +0x810, +0x818 (8 bytes) |
 | `stages` | starters, counterpicks (P+ stage ids) | the random stage switch's pages (`RSS_EXDATA` `0x8042C4E8`, 6 bytes a page, 32 stage bits) as the editing screen; online the stage list is the server's, so it only feeds the room's list |
 | `hazards` | bool (or per stage) | **default off** (the user's, 2026-10-12: `MatchRules::default`, so new rulesets, rooms' P+ default, and Unranked / Ranked / Direct in `config/rulesets.json`). Stage select data +0x25 (1 = off), forced by `applyRules` at every online match setup and compared by the setup key; P+'s hazard switch (`RSS_EXDATA`+0x1E, a bit per stage) is the per-stage form |
-| `autoLCancel` | bool | **default on** (the user's, 2026-10-12: `MatchRules::default`, so new rulesets, rooms' P+ default, and Unranked / Ranked / Direct in `config/rulesets.json`; P+'s own default is off). Set rule +0xB (P+'s rules menu line; Brawl's score display). **Global**, not per player |
+| `autoLCancel` | bool | set rule +0xB (P+'s rules menu line; Brawl's score display). **Global**, not per player |
 | `inputAssist` | bool | set rule +0xC (P+'s 3-frame buffer; Brawl's damage gauge). **Global** |
 
 Not a room rule: set rule +7 (stage choice: the session picks the stage). The Code Menu's per player Input Buffer / Automatic L-Cancelling lines stay at their defaults (off), as `applyRules` keeps them. P+ copies +0xB / +0xC into `gmGlobalModeMelee+0xE5`; Dolphin's setup key compares the set rule's first 16 bytes (since phase 1), which covers them.
