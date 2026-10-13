@@ -14,6 +14,10 @@ The edits below make variants of a log, to find which rollback of a session chan
                                             only their last pass runs
     gprb_passlog.py flat LOG OUT            no rollbacks at all: every frame once, final input
                                             (the session's ground truth)
+    gprb_passlog.py chain LOG OUT F K       frames F..F+K-1 run first as a chain of first runs,
+                                            then one update loads back K frames and runs F..F+K
+                                            again (final input; with PPR_GPRB_FORCE_FINAL_AT=F:p:first,
+                                            a Final Smash only the discarded chain had)
 """
 
 from __future__ import annotations
@@ -95,6 +99,16 @@ def main(argv: List[str]) -> int:
             u[0] = 0
             u[2] = [[p[0], p[1], last[p[0]]] for p in u[2][-1:]]
         write(argv[2], header, ups)
+    elif cmd == "chain":
+        first, k = int(argv[3]), int(argv[4])
+        out: List[Update] = []
+        for u in ups:
+            if not first <= u[2][-1][0] <= first + k:
+                out.append(u)
+            elif not any(p[0] == first + k for n in out for p in n[2]):
+                out += [[0, 0, [[f, 1, last[f]]]] for f in range(first, first + k)]
+                out.append([k, 0, [[f, 1, last[f]] for f in range(first, first + k + 1)]])
+        write(argv[2], header, out)
     else:
         print(__doc__)
         return 2

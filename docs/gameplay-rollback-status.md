@@ -1085,6 +1085,27 @@ The `AutoInputDelay` comment's premise ("a re-run frame is ~1.3 ms on a desktop"
 
 **Not the fix: a longer hold.** `cross_country`, delay 1, D3D11 windows, dual core, full-speed 10 s windows only (raw `run/qa/padfields/`; the machine shared with six Dolphins of other sessions, run at `PPHARNESS_DOLPHIN_PRIORITY=normal`): a cap of 8 ms, 12.3% rollbacks at 10.1 ms, 17.7% hitches, average hold 5.8 ms; 16 ms, 12.2% at 9.3 ms, 16.8% hitches, hold 6.7 ms (max 14.7). The cap is not what limits the hold: the CPU's slack is (Phase 19: in deterministic dual core a hold longer than the throttle's sleep stalls the CPU thread), and a rollback that takes 9-10 ms of a 16.7 ms frame leaves no slack to hold the next frames by. Left at 8 ms. More input delay was ruled out (the user's: no compromise that changes play or adds delay for players on stable connections), as was quantising sticks.
 
+## Phase 24: a Smash Ball that gave a Final Smash on one screen only, then a desync and a crash (prod, 2026-10-12)
+
+**Symptom.** Unranked room, the user's Roy (host, P1) against iposbltngs's Ganondorf, Hyrule Castle, all items; round trip 34 ms, delay 1 (auto), 59.8 frames a second, 23.5% of frames rolled back (depth 1.05, max 7), one wait for the peer. The player hit a Smash Ball; on their screen it vanished and Roy did not glow; on the peer's screen Roy glowed with a Final Smash ready. A few seconds later they pressed B and the game ended with DESYNC DETECTED; then their game froze. Only the host's `dolphin.log` (kept as `run/qa/sball/prod-2026-10-12-host-dolphin.log`).
+
+**Reading.**
+- The desync check (`FrameChecksum`: game frame, the three RNGs, and per fighter instance, damage, stocks, x/y, status kind) covers neither items nor the Final Smash state. A difference there stays silent until it reaches one of those fields: here, neutral B (Flare Blade on one machine, the Final Smash on the other) changed the status kind. `gprb: desync at frame 9795`, game frame ~9915.
+- The host loaded `FitGanonFinal.pac` at game frame 1822 and `FitRoyFinal.pac` at 6747, and no Final Smash file after that: the break a few seconds before the desync loaded nothing on the host. In every harness run below, each break loads the file, again after an earlier Final Smash (Roy: 4913 and 8296 in one match), and again when a rollback re-runs the break.
+- The freeze: 1.6 s after the desync the game left the match and crashed in `scMelee`'s exit (sora_scene `fn_1_19968`, loaded at 0x806BB480; LR 0x806D51A8 = .text+0x19C54): a virtual call (`*(r30+0x2C)`, vtable at +0x3C, slot +0x68) through a dead object, to address 0; `Unhandled Exception 6`. So that machine's game state was not only different from the peer's but inconsistent in itself, as state left outside the set by a rollback would leave it. The process was closed before its memory could be read.
+
+**Not reproduced** (build `9dcdd268` + the diagnostic below, `run/qa/sball/`):
+- Misprediction test, Roy/Ganondorf Battlefield, Smash Ball only at the highest frequency, a recorded closed-loop match (`sb.sav`, `sb-in.json`; Roy broke balls at 4913 and 8296, Ganondorf at 5638), dual core, every first run given another frame's input: identical to the reference for 10,737 frames, twice.
+- Three two-instance sessions (`gprb_session.py` with the item switch at Smash Ball only, `typical`, dual core, delay 1, 3 minutes): 10,913, 3,644 and 10,913 frames, 0 desyncs; Ganondorf broke 2 balls and Roy 5 (one of them re-run by a rollback, read twice).
+- A ball broken only in a discarded run (`PPR_GPRB_FORCE_FINAL_AT`, below): `2000:0:first,2600:0` in a sync test against the ground truth `2600:0` without rollback: identical for 5,868 frames to game set. In the replay of session 2 (`s1/pass/r2`) with frames 3000-3002 or 3000-3006 run first as a chain of first runs and then rolled back (`gprb_passlog.py chain`), Roy's Final Smash at 3000 in the chain's first run only: identical to the flattened replay for 10,928 frames, and Roy's real break at 3927 loaded the file and played as in the ground truth.
+
+**Leads not yet tested.**
+- Settings that differ between players and reach the game: nothing pins the Wii's aspect ratio (SYSCONF `IPL.AR`, `Dolphin.Wii.Widescreen`) between peers, and the Smash Ball's flight is bounded by the camera's range. A replay from a countdown savestate cannot test it (the game reads it at boot; `--config Dolphin.Wii.Widescreen=False` on a replay changed nothing).
+- What the prod run had that the harness runs did not: the D3D11 window and real GPU, the PPOnline plugin in the Network heap, Hyrule Castle, all items (not Smash Ball only).
+- A desync dump: on a desync, both machines could write their region-set state (or at least items, `ftManager`'s final fields and the camera) so that the next report shows where the states differ.
+
+`gprb_mispredict.py`'s `--start-frame` defaults to 240; replays of session pass logs (sessions start at 120 since Phase 21) need `--start-frame 120`, or the replay drifts from frame 0.
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).
@@ -1129,6 +1150,7 @@ Diagnostics through environment variables:
 - `PPR_GPRB_CENSUS=1`: record non-set granules written during the match (`gprb_census`).
 - `PPR_GPRB_INTERP_FROM=<game frame>`: JIT up to that frame, then the interpreter (and a break the harness resumes), for `cpu_trace` of late frames.
 - `PPR_GPRB_FORCE_FINAL=<port mask>`: those ports get their Final Smash at the last countdown frame (Phase 8; the sweep's `ffs` group).
+- `PPR_GPRB_FORCE_FINAL_AT=<session frame>:<port>[:first],...`: that port gets its Final Smash (`ftManager::setFinal`) before the frame's pass, in every pass of the frame, or with `first` only in its first run, as a Smash Ball broken by a run a rollback discards (Phase 24).
 - `PPR_GPRB_EVICT_DELAY_US=N`: every eviction job (the oldest slot merged into the base snapshot) sleeps N µs first, as on a starved machine (Phase 9).
 - `PPR_GPRB_EVICT_NO_WAIT=1`: loads do not wait for the eviction job (the behaviour before Phase 9, to reproduce the race).
 - `PPR_GPRB_RESIM_AUDIO=advance`: the sound system runs through resimulated passes and their samples are dropped (the behaviour before Phase 14, for A/B runs).

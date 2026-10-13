@@ -30,6 +30,7 @@
 
 #include "Common/Hash.h"
 #include "Common/Logging/Log.h"
+#include "Common/StringUtil.h"
 #include "Common/Swap.h"
 #include "Common/Thread.h"
 #include "Common/Timer.h"
@@ -519,6 +520,18 @@ struct State
   bool force_final_inited = false;  // read for the coming match (reset when a match starts)
   bool force_final_active = false;
   GuestRegs force_final_saved;
+  // Diagnostics (PPR_GPRB_FORCE_FINAL_AT): Final Smashes given in the match, before a session
+  // frame's pass, in every pass of that frame or only in its first run.
+  struct ForceFinalAt
+  {
+    s64 frame;
+    u32 port;
+    bool first_only;
+  };
+  std::vector<ForceFinalAt> force_final_at;
+  bool force_final_at_active = false;  // a guest call for the coming pass is running
+  bool force_final_at_reenter = false;  // RunFrame comes back for the same pass after the call
+  GuestRegs force_final_at_saved;
   u64 pass_serial = 0;  // counts session passes (diagnostics)
   u64 mispredicted_passes = 0;  // misprediction sync test: first runs given a wrong input
   // Pass log (PPR_GPRB_PASS_LOG=path): every GekkoNet update's load and passes, for replays.
@@ -556,6 +569,9 @@ bool PauseResimAudio();
 // File loads in a match (defined with RunSoundStops below).
 bool RunIoWait(const Core::CPUThreadGuard& guard);
 bool RunForceFinal(const Core::CPUThreadGuard& guard);
+bool RunForceFinalAt(const Core::CPUThreadGuard& guard, s64 frame, bool first_run);
+void SaveGuestRegs(const PowerPC::PowerPCState& ppc, State::GuestRegs* out);
+void RestoreGuestRegs(PowerPC::PowerPCState& ppc, const State::GuestRegs& in);
 
 // ---------------------------------------------------------------------------------------------
 // Guest helpers
@@ -2335,6 +2351,24 @@ void ResetRunStats()
   s.io_wait_n = 0;
   s.io_waits = s.io_wait_retraces = s.io_wait_timeouts = 0;
   s.force_final_inited = false;  // the next match's countdown reads PPR_GPRB_FORCE_FINAL again
+  s.force_final_at.clear();
+  s.force_final_at_active = s.force_final_at_reenter = false;
+  if (const char* v = std::getenv("PPR_GPRB_FORCE_FINAL_AT"))
+  {
+    // <session frame>:<port>[:first], comma separated.
+    for (const auto& item : SplitString(v, ','))
+    {
+      const auto f = SplitString(item, ':');
+      if (f.size() < 2)
+        continue;
+      s.force_final_at.push_back({std::strtoll(f[0].c_str(), nullptr, 0),
+                                  static_cast<u32>(std::strtoul(f[1].c_str(), nullptr, 0)) & 3,
+                                  f.size() > 2 && f[2] == "first"});
+      INFO_LOG_FMT(BRAWLBACK, "gprb: force final at session frame {}, port {}{}",
+                   s.force_final_at.back().frame, s.force_final_at.back().port,
+                   s.force_final_at.back().first_only ? ", first run only" : "");
+    }
+  }
   s.mispredicted_passes = 0;
   s.sample_chunks.clear();
   s.sample_bytes.clear();
@@ -3960,7 +3994,11 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   if (sync_gpu && system.IsDualCoreMode())
     system.GetFifo().SyncGPU(Fifo::SyncGPUReason::Other, true);
 
-  if (s.iteration == 0 && s.replay)
+  if (s.force_final_at_reenter)
+  {
+    // Back from PPR_GPRB_FORCE_FINAL_AT's guest call: the same pass, already fetched.
+  }
+  else if (s.iteration == 0 && s.replay)
   {
     if (!ReplayNextUpdate(system))
     {
@@ -4034,6 +4072,20 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
 
   const int i = s.iteration;
   s.resim_pass = s.ops.adv_count > 1 && i != s.ops.adv_count - 1;
+
+  if (s.force_final_at_active)
+  {
+    RestoreGuestRegs(ppc, s.force_final_at_saved);
+    s.force_final_at_active = false;
+  }
+  else if (!s.force_final_at.empty() &&
+           RunForceFinalAt(guard, static_cast<s64>(s.ops.adv_frame[i]),
+                           static_cast<s64>(s.ops.adv_frame[i]) > s.snd_max_frame))
+  {
+    s.force_final_at_reenter = true;
+    return true;
+  }
+  s.force_final_at_reenter = false;
 
   // Match end: the state at this loop top is the end of the previous frame.
   {
@@ -5721,6 +5773,49 @@ bool RunForceFinal(const Core::CPUThreadGuard& guard)
   {
     RestoreGuestRegs(ppc, s.force_final_saved);
     s.force_final_active = false;
+  }
+  return false;
+}
+
+// Diagnostics (PPR_GPRB_FORCE_FINAL_AT=<session frame>:<port>[:first],...): before a pass of that
+// session frame (after its load, with the previous frame saved), give the port its Final Smash as
+// breaking a Smash Ball does (ftManager::setFinal, as RunForceFinal). With "first", only in the
+// frame's first run: a rollback then discards it, as a Smash Ball broken by a mispredicted run.
+// The call returns to the loop top, and RunFrame comes back for the same pass. Returns true while
+// calling.
+bool RunForceFinalAt(const Core::CPUThreadGuard& guard, s64 frame, bool first_run)
+{
+  auto& ppc = guard.GetSystem().GetPPCState();
+  for (const auto& e : s.force_final_at)
+  {
+    if (e.frame != frame || (e.first_only && !first_run))
+      continue;
+    if (ReadGuest(guard, FT_MANAGER_SET_FINAL) != 0x9421FFE0)
+    {
+      WARN_LOG_FMT(BRAWLBACK, "gprb: force final at: ftManager::setFinal not found");
+      return false;
+    }
+    const u32 entries = ReadGuest(guard, FT_ENTRY_MANAGER);
+    const u32 count = std::min<u32>(ReadGuest(guard, FT_ENTRY_MANAGER + 4), 16);
+    u32 entry_id = 0xFFFFFFFF;
+    for (u32 i = 0; i < count; ++i)
+    {
+      const u32 en = entries + i * FT_ENTRY_SIZE;
+      if (ReadGuest(guard, en + 0x28) != 0 && ReadGuest(guard, en + 0x58) == e.port)
+        entry_id = ReadGuest(guard, en + 4);
+    }
+    if (entry_id == 0xFFFFFFFF)
+      return false;
+    INFO_LOG_FMT(BRAWLBACK, "gprb: force final at session frame {} ({} run): port {} entry {:#x}",
+                 frame, first_run ? "first" : "a later", e.port, entry_id);
+    SaveGuestRegs(ppc, &s.force_final_at_saved);
+    s.force_final_at_active = true;
+    ppc.gpr[3] = FT_MANAGER;
+    ppc.gpr[4] = entry_id;
+    ppc.gpr[5] = 0;
+    ppc.spr[SPR_LR] = LOOP_TOP;
+    ppc.npc = FT_MANAGER_SET_FINAL;
+    return true;
   }
   return false;
 }
