@@ -62,4 +62,16 @@ export const ModsMessages = {
   cancel: () => "Cancel",
   add: () => "Add",
   dolphinOpen: () => "Dolphin is already open. Close it first.",
+
+  // Public rooms.
+  publicRooms: () => "Public rooms",
+  publicRoomsLoggedOut: () => "Log in to see the public Brawl Mods rooms.",
+  logIn: () => "Log in",
+  publicRoomsLoading: () => "Loading rooms…",
+  publicRoomsUnreachable: () => "Can't reach the server right now.",
+  publicRoomsNone: () => "No public Brawl Mods rooms right now. Host one above!",
+  roomPlayers: (players: number, open: number) => `${players}/${open}`,
+  roomHost: (name: string) => `${name}'s room`,
+  needBuild: (name: string, hash: string) => `You don't have this build: ${name ? `${name} ` : ""}(${hash}).`,
+  joinPublicTooltip: (build: string) => `Start Dolphin with ${build} and join this room.`,
 };

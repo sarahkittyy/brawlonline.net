@@ -21,6 +21,7 @@ export type {
   MatchHistoryPage,
   MatchHistoryPlayer,
   MyRulesets,
+  PublicModRoom,
   PublicRoom,
   PublishRulesetRequest,
   RecentRuleset,

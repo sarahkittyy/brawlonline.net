@@ -641,6 +641,10 @@ pub struct MmStatus {
     pub playing: QueueCounts,
     /// RFC 3339 time of the snapshot.
     pub updated_at: String,
+    /// Public Brawl Mods rooms (`docs/design/brawl-mods.md` §5), for the launcher's Brawl Mods
+    /// tab: fuller first. Absent from an older mm: none.
+    #[serde(default)]
+    pub mod_rooms: Vec<crate::mods::PublicModRoom>,
     /// Every room player's room, public and private rooms alike. Internal: accounts reads it to
     /// check and address launcher invites (`docs/social-protocol.md`) and never serves it to
     /// launchers (`GET /v1/rooms` sends only the fields above).

@@ -46,6 +46,8 @@ const room = (you: number): ModRoomStatus => ({
 
 const props = (state: ModsState | null, extra: Partial<ModsViewProps> = {}): ModsViewProps => ({
   state,
+  publicRooms: { kind: "ready", rooms: [] },
+  onLogIn: vi.fn(),
   hashProgress: {},
   startingBuildId: null,
   error: null,
@@ -121,5 +123,35 @@ describe("ModsView", () => {
     const p = props({ builds: [minus], running: true, status });
     const { getByText } = render(<ModsView {...p} />);
     expect(getByText(Messages.sessionError("Could not join: not admitted"))).toBeTruthy();
+  });
+  it("lists public rooms, with Join only for a build the player has", () => {
+    const other = "9".repeat(64);
+    const p = props(
+      { builds: [minus], running: false, status: null },
+      {
+        publicRooms: {
+          kind: "ready",
+          rooms: [
+            { code: "PLNX", build: { hash: minus.hash!, name: "Brawl Minus" }, hostName: "Keiko", players: 3, open: 4 },
+            { code: "QRHQ", build: { hash: other, name: "Project M" }, hostName: "Dee", players: 1, open: 2 },
+          ],
+        },
+      },
+    );
+    const { getByText } = render(<ModsView {...p} />);
+    const row = (name: string) => getByText(Messages.roomHost(name)).closest("div") as HTMLElement;
+    const joinIn = (el: HTMLElement) =>
+      Array.from(el.querySelectorAll("button")).find((b) => b.textContent === Messages.join()) as HTMLButtonElement;
+    expect(joinIn(row("Dee")).disabled).toBe(true);
+    fireEvent.click(joinIn(row("Keiko")));
+    expect(p.onJoin).toHaveBeenCalledWith(minus, "PLNX");
+    expect(getByText(Messages.roomPlayers(3, 4))).toBeTruthy();
+  });
+
+  it("asks to log in for the public rooms", () => {
+    const p = props({ builds: [], running: false, status: null }, { publicRooms: { kind: "logged-out" } });
+    const { getByText } = render(<ModsView {...p} />);
+    fireEvent.click(getByText(Messages.logIn()));
+    expect(p.onLogIn).toHaveBeenCalled();
   });
 });

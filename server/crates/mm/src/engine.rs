@@ -520,6 +520,7 @@ impl Engine {
                 ranked: self.chat.match_players(Mode::Ranked),
             },
             updated_at: wall.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            mod_rooms: self.mod_rooms.public_rooms(200),
             members: self.rooms.member_rooms(4000),
         }
     }
@@ -2958,6 +2959,28 @@ mod tests {
         assert_eq!(chat_members(&chat_group(&out, 2).unwrap()), uid_list(&[&b]));
         assert!(chat_group(&out, 5).is_none());
         assert_eq!(h.e.chat.group_of(a.uid), None);
+    }
+
+    #[test]
+    fn status_lists_public_mod_rooms() {
+        const HASH: &str = "3f9a1c07aa00000000000000000000000000000000000000000000000000beef";
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b) = (user("AA#1", "a"), user("BB#1", "b"));
+        h.add(&a);
+        h.add(&b);
+        h.connect(1, 1);
+        h.connect(2, 2);
+        h.hello(1, &a, "3.4.0");
+        h.hello(2, &b, "3.4.0");
+        h.room(1, json!({"type": "mods-create", "build": {"hash": HASH, "name": "Brawl Minus"}}));
+        h.room(2, json!({"type": "mods-create", "build": {"hash": HASH}, "public": false}));
+        let status = h.e.status(Utc::now());
+        assert_eq!(status.mod_rooms.len(), 1, "the private room is not listed");
+        let r = &status.mod_rooms[0];
+        assert_eq!((r.build.name.as_str(), r.players, r.open), ("Brawl Minus", 1, 4));
+        assert_eq!(r.host_name, a.display_name);
+        let json = serde_json::to_value(&status).unwrap();
+        assert_eq!(json["modRooms"][0]["hostName"], json!(a.display_name));
     }
 
     #[test]

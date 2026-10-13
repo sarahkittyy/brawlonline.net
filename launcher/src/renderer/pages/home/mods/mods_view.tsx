@@ -1,3 +1,4 @@
+import type { PublicModRoom } from "@accounts/types";
 import type {
   ModBuild,
   ModRoomRequest,
@@ -18,15 +19,25 @@ import Switch from "@mui/material/Switch";
 import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import { clsx } from "clsx";
+import type { ReactNode } from "react";
 import { useState } from "react";
 
 import { ContentBlock } from "../overview/content_block/content_block";
 import { ModsMessages as Messages } from "./mods.messages";
 import styles from "./mods.module.css";
 
+/** The public Brawl Mods rooms (Home's room list). */
+export type ModsPublicRooms =
+  | { kind: "logged-out" }
+  | { kind: "loading" }
+  | { kind: "unreachable" }
+  | { kind: "ready"; rooms: PublicModRoom[] };
+
 export type ModsViewProps = {
   /** null while it loads. */
   state: ModsState | null;
+  publicRooms: ModsPublicRooms;
+  onLogIn: () => void;
   /** Hashing progress (0-1) by build id. */
   hashProgress: Record<string, number>;
   /** A build whose host or join is starting Dolphin. */
@@ -89,8 +100,84 @@ export const ModsView = (props: ModsViewProps) => {
           </div>
         }
       />
+      <PublicRoomsBlock
+        rooms={props.publicRooms}
+        builds={state?.builds ?? []}
+        disabled={!!state?.running || props.startingBuildId !== null}
+        onJoin={props.onJoin}
+        onLogIn={props.onLogIn}
+      />
     </div>
   );
+};
+
+const PublicRoomsBlock = ({
+  rooms,
+  builds,
+  disabled,
+  onJoin,
+  onLogIn,
+}: {
+  rooms: ModsPublicRooms;
+  builds: ModBuild[];
+  disabled: boolean;
+  onJoin: (build: ModBuild, code: string) => void;
+  onLogIn: () => void;
+}) => {
+  let content: ReactNode;
+  if (rooms.kind === "logged-out") {
+    content = (
+      <div className={styles.centered}>
+        <p>{Messages.publicRoomsLoggedOut()}</p>
+        <Button variant="outlined" size="small" onClick={onLogIn}>
+          {Messages.logIn()}
+        </Button>
+      </div>
+    );
+  } else if (rooms.kind === "loading") {
+    content = <p className={styles.empty}>{Messages.publicRoomsLoading()}</p>;
+  } else if (rooms.kind === "unreachable") {
+    content = <p className={styles.empty}>{Messages.publicRoomsUnreachable()}</p>;
+  } else if (rooms.rooms.length === 0) {
+    content = <p className={styles.empty}>{Messages.publicRoomsNone()}</p>;
+  } else {
+    content = (
+      <div className={styles.slots}>
+        {rooms.rooms.map((room) => {
+          const build = builds.find((b) => b.hash === room.build.hash);
+          const label = Messages.buildName(room.build.name, room.build.hash.slice(0, 8));
+          return (
+            <div key={room.code} className={clsx(styles.slot, !build && styles.closed)}>
+              <span className={styles.player}>
+                <span className={styles.name}>{Messages.roomHost(room.hostName)}</span>
+                <span className={styles.code}>{label}</span>
+                <span className={styles.badge}>{Messages.roomPlayers(room.players, room.open)}</span>
+              </span>
+              <Tooltip
+                title={
+                  build
+                    ? Messages.joinPublicTooltip(build.name)
+                    : Messages.needBuild(room.build.name, room.build.hash.slice(0, 8))
+                }
+              >
+                <span>
+                  <Button
+                    size="small"
+                    variant="outlined"
+                    disabled={!build || disabled}
+                    onClick={() => build && onJoin(build, room.code)}
+                  >
+                    {Messages.join()}
+                  </Button>
+                </span>
+              </Tooltip>
+            </div>
+          );
+        })}
+      </div>
+    );
+  }
+  return <ContentBlock title={Messages.publicRooms()} content={<div className={styles.room}>{content}</div>} />;
 };
 
 const BuildRow = ({

@@ -2,13 +2,19 @@ import type { ModBuild, ModBuildInput, ModRoomRequest, ModsController, ModsState
 import React, { useCallback, useEffect, useState } from "react";
 
 import { useLocalStorage } from "@/lib/hooks/use_local_storage";
+import { useLoginModal } from "@/lib/hooks/use_login_modal";
 import { useSettings } from "@/lib/hooks/use_settings";
 import { useToasts } from "@/lib/hooks/use_toasts";
+import { useRoomList } from "@/lib/social/use_room_list";
 import { useServices } from "@/services";
 
 import { AddBuildDialog } from "./add_build_dialog";
 import { ModsMessages as Messages } from "./mods.messages";
+import type { ModsPublicRooms } from "./mods_view";
 import { ModsView } from "./mods_view";
+
+/** How long a list stays shown while polls fail (as Home > Overview). */
+const STALE_AFTER_MS = 15_000;
 
 const CONTROLLER_STORAGE_KEY = "MODS_CONTROLLER";
 
@@ -25,6 +31,19 @@ export const ModsTab = React.memo(function ModsTab() {
   const [error, setError] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
   const [controller, setController] = useLocalStorage<ModsController>(CONTROLLER_STORAGE_KEY, "gc");
+  const { uid, query } = useRoomList();
+  const openLogin = useLoginModal((s) => s.openModal);
+  const outdated = query.isError && Date.now() - query.dataUpdatedAt > STALE_AFTER_MS;
+  let publicRooms: ModsPublicRooms;
+  if (!uid) {
+    publicRooms = { kind: "logged-out" };
+  } else if (query.data && !outdated) {
+    publicRooms = { kind: "ready", rooms: query.data.modRooms ?? [] };
+  } else if (query.isError) {
+    publicRooms = { kind: "unreachable" };
+  } else {
+    publicRooms = { kind: "loading" };
+  }
 
   useEffect(() => {
     let alive = true;
@@ -85,6 +104,8 @@ export const ModsTab = React.memo(function ModsTab() {
     <>
       <ModsView
         state={state}
+        publicRooms={publicRooms}
+        onLogIn={openLogin}
         hashProgress={hashProgress}
         startingBuildId={startingBuildId}
         error={error}

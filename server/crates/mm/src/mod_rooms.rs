@@ -195,7 +195,8 @@ impl ModRoomBook {
                 open: r.open.iter().filter(|&&o| o).count() as u8,
             })
             .collect();
-        list.sort_by(|a, b| a.code.cmp(&b.code));
+        // Fuller first (a room about to fill), then by code so the list stays put.
+        list.sort_by(|a, b| b.players.cmp(&a.players).then_with(|| a.code.cmp(&b.code)));
         list.truncate(limit);
         list
     }

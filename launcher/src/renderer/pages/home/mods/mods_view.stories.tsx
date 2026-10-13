@@ -88,6 +88,26 @@ const room = (you: number, extra: Partial<ModRoomStatus> = {}): ModRoomStatus =>
 const Frame = (props: Partial<ModsViewProps> & { state: ModsState | null }) => (
   <div style={{ width: 900, height: 640, padding: 16, background: "var(--theme-page-background)" }}>
     <ModsView
+      publicRooms={{
+        kind: "ready",
+        rooms: [
+          {
+            code: "PLNX",
+            build: { hash: builds[1].hash!, name: builds[1].name },
+            hostName: "Keiko",
+            players: 3,
+            open: 4,
+          },
+          {
+            code: "QRHQ",
+            build: { hash: "9" + "0".repeat(63), name: "Project M 3.6" },
+            hostName: "Dee",
+            players: 1,
+            open: 2,
+          },
+        ],
+      }}
+      onLogIn={noop}
       hashProgress={{}}
       startingBuildId={null}
       error={null}

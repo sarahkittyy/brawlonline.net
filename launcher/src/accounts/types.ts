@@ -178,6 +178,18 @@ export type RoomList = {
   /** Players in an Unranked and a Ranked match (shown with the queues). Absent from an older server. */
   playing?: { unranked: number; ranked: number };
   updatedAt: string;
+  /** Public Brawl Mods rooms (docs/design/brawl-mods.md §5), fuller first. Absent from an older server. */
+  modRooms?: PublicModRoom[];
+};
+
+/** A public Brawl Mods room: its build, its host and how full it is. */
+export type PublicModRoom = {
+  code: string;
+  build: { hash: string; name: string };
+  hostName: string;
+  players: number;
+  /** Open slots (the room's size). */
+  open: number;
 };
 
 /** A published ruleset (docs/rulesets-protocol.md §3). */
