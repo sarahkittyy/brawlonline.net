@@ -41,4 +41,5 @@ void HotkeyGeneral::LoadSettings()
 void HotkeyGeneral::SaveSettings()
 {
   HotkeyManagerEmu::GetConfig()->SaveConfig();
+  HotkeyManagerEmu::SaveChatKey();
 }

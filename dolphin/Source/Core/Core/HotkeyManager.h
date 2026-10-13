@@ -255,6 +255,8 @@ namespace HotkeyManagerEmu
 void Initialize();
 void Shutdown();
 void LoadConfig();
+// After Hotkey Settings saved: [Online] ChatKey follows the chat hotkey's binding.
+void SaveChatKey();
 
 InputConfig* GetConfig();
 ControllerEmu::ControlGroup* GetHotkeyGroup(HotkeyGroup group);

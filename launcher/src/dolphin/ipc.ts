@@ -1,3 +1,4 @@
+import type { ChatKeyPress } from "@common/chat_key";
 import type { EmptyPayload, SuccessPayload } from "utils/ipc";
 import { _, makeEndpoint } from "utils/ipc";
 
@@ -96,6 +97,16 @@ export const ipc_saveGeckoCodes = makeEndpoint.main(
   "saveGeckoCodes",
   <{ dolphinType: DolphinLaunchType; geckoCodes: GeckoCode[] }>_,
   <SuccessPayload>_,
+);
+
+/** The key that opens the chat box, as an expression (common/chat_key.ts). */
+export const ipc_getChatKey = makeEndpoint.main("getChatKey", <EmptyPayload>_, <{ chatKey: string }>_);
+
+/** Sets the chat key to the pressed key; `chatKey` is null for a key that can't open chat. */
+export const ipc_setChatKey = makeEndpoint.main(
+  "setChatKey",
+  <{ press: ChatKeyPress }>_,
+  <{ chatKey: string | null }>_,
 );
 
 export const ipc_installRosetta = makeEndpoint.main("installRosetta", <EmptyPayload>_, <{ exitCode: number }>_);

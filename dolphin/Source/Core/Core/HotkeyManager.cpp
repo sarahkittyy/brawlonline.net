@@ -15,6 +15,10 @@
 #include "Common/Common.h"
 #include "Common/CommonTypes.h"
 
+#include "Core/Config/OnlineSettings.h"
+
+#include "InputCommon/ControlReference/ControlReference.h"
+#include "InputCommon/ControllerEmu/Control/Control.h"
 #include "InputCommon/ControllerEmu/ControlGroup/Buttons.h"
 #include "InputCommon/ControllerEmu/ControlGroup/ControlGroup.h"
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
@@ -268,9 +272,38 @@ void Initialize()
   s_enabled = true;
 }
 
+// The "Activate NetPlay Chat" binding.
+static ControlReference& ChatHotkey()
+{
+  auto* const manager = static_cast<HotkeyManager*>(s_config.GetController(0));
+  const int group = manager->FindGroupByID(HK_ACTIVATE_CHAT);
+  return *manager->GetHotkeyGroup(static_cast<HotkeyGroup>(group))
+              ->controls[manager->GetIndexForGroup(group, HK_ACTIVATE_CHAT)]
+              ->control_ref;
+}
+
 void LoadConfig()
 {
   s_config.LoadConfig();
+
+  // The launcher's chat key replaces the chat hotkey's binding (the rest of Hotkeys.ini stays).
+  const std::string chat_key = Config::Get(Config::ONLINE_CHAT_KEY);
+  if (!chat_key.empty())
+  {
+    ChatHotkey().SetExpression(chat_key);
+    s_config.GetController(0)->UpdateReferences(g_controller_interface);
+  }
+}
+
+void SaveChatKey()
+{
+  if (Config::Get(Config::ONLINE_CHAT_KEY).empty())
+    return;
+  // The launcher set the chat key: a binding made in Hotkey Settings replaces its setting, or the
+  // next LoadConfig would put the launcher's key back.
+  const std::string expression = ChatHotkey().GetExpression();
+  if (!expression.empty())
+    Config::SetBaseOrCurrent(Config::ONLINE_CHAT_KEY, expression);
 }
 
 ControllerEmu::ControlGroup* GetHotkeyGroup(HotkeyGroup group)

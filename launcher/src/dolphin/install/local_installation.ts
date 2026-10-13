@@ -1,7 +1,14 @@
 import { DOLPHIN_ONLINE_DIR, PPLUS_NETPLAY_LAUNCHER_DOL } from "@common/product";
 import { sanitizeAppImageEnv } from "@dolphin/app_image_env/app_image_env";
 import type { SyncedDolphinSettings } from "@dolphin/config/config";
-import { addGamePath, getOnlineSettings, setDefaultIso, setOnlineSettings } from "@dolphin/config/config";
+import {
+  addGamePath,
+  getChatKey,
+  getOnlineSettings,
+  setChatKey,
+  setDefaultIso,
+  setOnlineSettings,
+} from "@dolphin/config/config";
 import { IniFile } from "@dolphin/config/ini_file";
 import electronLog from "electron-log";
 import { pathExists } from "fs-extra";
@@ -286,6 +293,16 @@ export class LocalDolphinInstallation implements DolphinInstallation {
 
   async updateSettings(options: Partial<SyncedDolphinSettings>): Promise<void> {
     await IniFile.modify(this._dolphinIniPath(), (iniFile) => setOnlineSettings(iniFile, options));
+  }
+
+  /** The key that opens the chat box (dolphin/config/config.ts getChatKey). */
+  async getChatKey(): Promise<string> {
+    const hotkeysIni = path.join(this.userFolder, "Config", "Hotkeys.ini");
+    return getChatKey(await IniFile.init(this._dolphinIniPath()), await IniFile.init(hotkeysIni));
+  }
+
+  async setChatKey(expression: string): Promise<void> {
+    await IniFile.modify(this._dolphinIniPath(), (iniFile) => setChatKey(iniFile, expression));
   }
 
   async getDolphinVersion(): Promise<string | undefined> {
