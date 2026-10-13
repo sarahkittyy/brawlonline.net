@@ -49,7 +49,7 @@ Defaults: "online" counts players whose game is running and logged in (Dolphin k
 | Rules | P+ competitive (4 stocks, 8 minutes, items off), pause on, as Direct. |
 | After a game | Everyone back on the room CSS, characters kept, ready cleared. |
 | Disconnect in a match | 1v1: today's DISCONNECTED flow. 3-4 players: the dropped player is despawned at an agreed frame and the match goes on (Slippi's rule); their slot stays open and empty. |
-| Leaving | Hold Z: leave the room, idle on the CSS. Hold B: leave to the menus (WITH FRIENDS, the room's button highlighted). As Direct. |
+| Leaving | Hold B: leave to the menus (WITH FRIENDS, the room's button highlighted). No hold Z (the user's, 2026-10-12): it was Direct's, carried over, and P+ picks AltZ characters with Z held, so picking one left the room. |
 | Host limits | The host can't close their own slot. At least 2 slots stay open (a kick of 2 open leaves its slot open). |
 | Ranked / Unranked | Rooms are never ranked and never change a rating. Matchmade sessions stay closed. |
 | Recent codes | None for rooms (codes are throwaway). |

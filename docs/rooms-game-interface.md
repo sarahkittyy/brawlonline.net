@@ -78,7 +78,7 @@ enum RoomOp {
     ROOM_POLL = 0,     // nothing; answers the status line
     ROOM_CREATE = 1,   // arg: 1 public (the default), 0 private
     ROOM_JOIN = 2,     // code: the room code as typed (4 letters)
-    ROOM_LEAVE = 3,    // leave the room (hold Z: idle on the CSS; hold B: to the menus)
+    ROOM_LEAVE = 3,    // leave the room (hold B: to the menus)
     ROOM_SLOT = 4,     // host: arg = in-game port 0-3, arg2 = 1 open / 0 close (close occupied = kick)
     ROOM_TEAMS = 5,    // host: arg = 1 Teams on, 0 off
     ROOM_PUBLIC = 6,   // host: arg = 1 public, 0 private
@@ -138,7 +138,7 @@ Dolphin also counts as busy whatever it knows itself (a search, a session, a roo
 
 **Join.** Join Room > the keypad in room-code mode > START posts `ROOM_JOIN` with the code. `room` 1 ("Joining room KFQB"; "Connecting to room KFQB" while the online connection is still coming up), then 2, or back to 0 with the server's error in red ("Room not found.", "This room is full.").
 
-**Leave.** Hold Z: `ROOM_LEAVE`, stay on the CSS idle. Hold B: `ROOM_LEAVE`, then the menus. The game must send `ROOM_LEAVE` whenever it leaves the room CSS other than for the room's match. Safety net: if the game reports `SCREEN_MENUS`, `SCREEN_ONLINE_*` or `SCREEN_OFFLINE` for 5 s while in a waiting room, Dolphin leaves the room itself.
+**Leave.** Hold B: `ROOM_LEAVE`, then the menus (a room has no hold Z since 2026-10-12: P+ picks AltZ characters with Z held). The game must send `ROOM_LEAVE` whenever it leaves the room CSS other than for the room's match. Safety net: if the game reports `SCREEN_MENUS`, `SCREEN_ONLINE_*` or `SCREEN_OFFLINE` for 5 s while in a waiting room, Dolphin leaves the room itself.
 
 **Kicked / host gone.** "Removed from the room.": `room` 0, `roomFlags` 0, red line. Host hand-over: `roomHost` and `SLOT_HOST` move.
 

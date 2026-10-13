@@ -88,6 +88,15 @@ def to_join_room(g: Game) -> None:
     g.steps("tap A", "wait 400", f"until {CSS} 600")
 
 
+def back_to_join_room(g: Game) -> None:
+    """Out of the room and onto Join Room's CSS: hold B (ROOM_LEAVE; WITH FRIENDS, on Create
+    Room), then Join Room below it. A room has no hold Z to leave (P+ picks AltZ characters with
+    Z held; the user's, 2026-10-12)."""
+    g.steps("hold B 120", "until muMenuMain 600", "wait 90", "tap DDOWN 4", "wait 30", "tap A", "wait 400",
+            f"until {CSS} 600")
+    assert menu_state(g) == 0x12, hex(menu_state(g))   # 0x10 | ROOM_ENTRY_JOIN
+
+
 def pick(g: Game, right: int = 0) -> None:
     """A character: the hand from the name plate up to the grid's second row (Fox), then `right`
     portraits to the right."""
@@ -261,8 +270,10 @@ def test_room_two_players_through_the_game(backend: OnlineBackend, dolphin: Call
         g.steps("wait 60")
         g.shot("06b-back-after-game-2")
 
-    # B holds Z: leaves the room and stays on the CSS; A sees the slot empty again.
-    b.steps("hold Z 70", "wait 30")
+    # B holds Z: stays in the room (P+'s AltZ pick); holds B: leaves it, A sees the slot empty again.
+    b.steps("hold Z 90", "wait 30")
+    assert room_view(b)["flags"] & ppom.RF_IN, "hold Z left the room"
+    b.steps("hold B 120", "until muMenuMain 600", "wait 30")
     until_view(b, lambda v: not v["flags"] & ppom.RF_IN, "B out of the room")
     until_view(a, lambda v: v["slots"][1]["bits"] == ppom.SLOT_OPEN, "A sees B gone")
     a.steps("wait 40")
@@ -300,10 +311,11 @@ def test_room_names_follow_the_slots_after_the_host_left(backend: OnlineBackend,
     type_room_code(b, code)
     until_view(b, lambda v: v["flags"] & ppom.RF_IN and v["local_port"] == 1, "B in slot 2")
 
-    # A (the host) holds Z: out of the room, on the CSS; B is the host now.
-    a.steps("hold Z 70", "wait 30")
+    # A (the host) leaves: on Join Room's CSS; B is the host now.
+    back_to_join_room(a)
     until_view(a, lambda v: not v["flags"] & ppom.RF_IN, "A out of the room")
     until_view(b, lambda v: v["host"] == 1 and not v["slots"][0]["bits"] & ppom.SLOT_TAKEN, "B the host")
+    pick(a)
     # A joins again by the code: slot 1, B still the host.
     type_room_code(a, code)
     va = until_view(a, lambda v: v["flags"] & ppom.RF_IN, "A in the room again")

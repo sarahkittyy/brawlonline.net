@@ -128,7 +128,6 @@ namespace OnlineMenu {
         u8 roomTaken;                       // SLOT_TAKEN bits seen (sounds)
         bool roomSeen;                      // roomTaken is from this room's view
         bool roomReload;                    // a launcher join on an online CSS: build it again
-        int roomZHeld;
         int roomKickPort;                   // the host holds A on this occupied slot (-1 none)
         int roomKickHeld;                   // for this many frames
         // A replay (PPOM v8, the playback Dolphin): this CSS plays the replays Dolphin puts in
@@ -258,6 +257,38 @@ namespace OnlineMenu {
         *(volatile u32*)0x804E0074 = 0;
         *state = 0;
         PPOM::g_block.debug.scratch[15] += 0x1000000u;   // tests: Code Menu opens refused
+    }
+
+    // Hold Z (DISCONNECT_HOLD_DELAY frames) to disconnect (Slippi); true on the frame the hold
+    // is done. P+'s "Hold Z for AltZ Characters" picks a character with Z held (the user's,
+    // 2026-10-12: holding Z to pick one in a room left the room, which no longer has a hold Z),
+    // so the hold counts only while Z is the only button down and the stick is still: the stick
+    // moving starts it again (the hand on its way to a portrait; 16 is where the CSS hand starts
+    // to move), any other button (A on the portrait) ends it until Z is let go. *frames < 0: ended.
+    static const u32 PAD_BUTTONS = 0x1F7F;   // START Y X B A L R Z and the d-pad
+    static const int STICK_STILL = 16;       // gfPadStatus +0x30/+0x31, signed
+    static bool zHoldDone(u32 held, int* frames)
+    {
+        if (!(held & BTN_Z)) {
+            *frames = 0;
+            return false;
+        }
+        if (*frames < 0) return false;
+        if (held & PAD_BUTTONS & ~BTN_Z) {
+            *frames = -1;
+            return false;
+        }
+        u8* ps = padSystem();
+        for (int p = 0; ps && p < 4; p++) {
+            s8 x = *(volatile s8*)(ps + 0x244 + 0x40 * p + 0x30), y = *(volatile s8*)(ps + 0x244 + 0x40 * p + 0x31);
+            if (x > STICK_STILL || x < -STICK_STILL || y > STICK_STILL || y < -STICK_STILL) {
+                *frames = 0;
+                return false;
+            }
+        }
+        if (++*frames <= DISCONNECT_HOLD_DELAY) return false;
+        *frames = -1;
+        return true;
     }
 
     static void playSE(int id)
@@ -1406,7 +1437,6 @@ namespace OnlineMenu {
         s.roomText[0] = 0;
         s.roomSeen = false;
         s.roomReload = false;
-        s.roomZHeld = 0;
         s.roomKickPort = -1;
         s.playback = false;
         s.playbackPending = false;
@@ -1823,7 +1853,6 @@ namespace OnlineMenu {
     // create one as soon as the CSS is up; Join Room waits for START, which opens the keypad in
     // its room-code mode (code_entry.cpp), and its OK sends the code. In a room:
     //   START       lock in (ready) with Session.game, the room's next game; B takes it back
-    //   hold Z      leave the room and stay on the CSS (then START enters a code again)
     //   hold B      Brawl's own: back to WITH FRIENDS, which leaves the room (leave())
     //   L           host, any time: public / private
     //   R           host, between games: Teams on / off
@@ -2242,7 +2271,7 @@ namespace OnlineMenu {
         bool waiting = in && se.roomStatus == 0;
         const u32 BTN_A = 0x100, BTN_L = 0x40, BTN_R = 0x20;
         // P+'s rules menu over the CSS (room_rules.cpp): while it is open its pages take the
-        // buttons; the room's own (L/R, START, B, Z, the header buttons, the panels) wait.
+        // buttons; the room's own (L/R, START, B, the header buttons, the panels) wait.
         // On the CSS between a running set's games (the room in game, its session on, not in a
         // match): the host may open RULES for End set alone, while not locked in for the next game
         // (a lock-in could start the match under the menu).
@@ -2259,7 +2288,6 @@ namespace OnlineMenu {
         if ((RoomRules::changedNow() || RoomPlay::changedNow()) && waiting && roomLockedForNext()) unlock();
         if (rulesOpen) {
             s_headerPress = 0;
-            s.roomZHeld = 0;
             s.roomKickPort = -1;
             roomButtons(in, host);   // (the host's "A: open/close" hint goes while the menu is open)
             return;
@@ -2286,11 +2314,10 @@ namespace OnlineMenu {
                 lockIn(roomGame(), 0xFFFF, 0);
         }
         if (!in) {
-            // Not in a room (Join Room, or after leaving one): START enters a room code.
+            // Not in a room (Join Room, or no longer in one): START enters a room code.
             if ((pressed & BTN_START) && selectedChar() >= 0 && s.roomPhase != PPOM::RP_JOINING) {
                 CodeEntry::open(LOCAL_PORT, true);
             }
-            s.roomZHeld = 0;
             s.roomKickPort = -1;
         } else {
             if (pressed & BTN_START) {
@@ -2304,19 +2331,6 @@ namespace OnlineMenu {
                 maskPressed(BTN_B);   // the coin stays where it is (as Direct's B)
                 unlock();
                 playSE(SE_BACK);
-            }
-            if (held & BTN_Z) {
-                if (++s.roomZHeld > DISCONNECT_HOLD_DELAY) {
-                    postRoom(PPOM::ROOM_LEAVE, 0, 0, NULL);
-                    unlock();
-                    s.roomEntry = ROOM_ENTRY_JOIN;
-                    s.roomText[0] = 0;
-                    s.roomError = false;
-                    s.roomZHeld = 0;
-                    playSE(SE_BACK);
-                }
-            } else {
-                s.roomZHeld = 0;
             }
             // ITEM (Public / Private) and STAGE (FFA / Teams), pressed with A as the game does
             u8 hdr = s_headerPress;
@@ -2520,7 +2534,6 @@ namespace OnlineMenu {
         s.roomError = false;
         s.roomSeen = false;        // the join sounds start over with the new room
         s.roomKickPort = -1;
-        s.roomZHeld = 0;
         NetMenu::setReturnButton(0);   // back from the CSS: WITH FRIENDS, Create Room
         PPOM::g_block.debug.scratch[9] += 0x100;   // tests: launcher creates taken
     }
@@ -2694,7 +2707,7 @@ namespace OnlineMenu {
         if (roomCss()) {
             const PPOM::Session& se = PPOM::g_block.session;
             if (!roomIn()) {
-                // Join Room, or after leaving one: START enters a room code ("Creating room":
+                // Join Room, or no longer in one: START enters a room code ("Creating room":
                 // the room is on its way, START is not the next step).
                 if (s.roomEntry == ROOM_ENTRY_CREATE && !s.roomError) return false;
                 return selectedChar() >= 0 && s.roomPhase != PPOM::RP_JOINING;
@@ -2871,13 +2884,9 @@ namespace OnlineMenu {
                     playSE(SE_BACK);
                 }
             } else if (s.phase == PH_CONNECTED) {
-                if (b & BTN_Z) {
-                    if (++s.zHeld > DISCONNECT_HOLD_DELAY) {
-                        cleanup();
-                        playSE(SE_BACK);
-                    }
-                } else {
-                    s.zHeld = 0;
+                if (zHoldDone(b | pressed, &s.zHeld)) {
+                    cleanup();
+                    playSE(SE_BACK);
                 }
                 tickConnected(pressed);
             }
