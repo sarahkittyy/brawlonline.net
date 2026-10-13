@@ -164,6 +164,29 @@ TEST(Arm64Emitter, CallFunction_ThreeRegistersCycle2)
   test.Run();
 }
 
+// Vector ORR/BIC (immediate) with 16-bit lanes is cmode 10x1; it was encoded as the 32-bit lane
+// form, so JitArm64's fctiwx (BIC(16, ..., 0x7)) left the result's upper word 0xFFFF0000.
+// Expected words from clang's assembler.
+TEST(Arm64Emitter, VectorOrrBicImmediate)
+{
+  class Block : public ARM64CodeBlock
+  {
+  public:
+    Block() { AllocCodeSpace(4096); }
+  } block;
+  const u32* const start = reinterpret_cast<const u32*>(block.GetCodePtr());
+  {
+    const Common::ScopedJITPageWriteAndNoExecute enable_jit_page_writes;
+    ARM64FloatEmitter float_emit(&block);
+    float_emit.BIC(16, ARM64Reg::D0, 7);        // bic v0.4h, #7
+    float_emit.BIC(32, ARM64Reg::D0, 7);        // bic v0.2s, #7
+    float_emit.ORR(16, ARM64Reg::Q1, 1, 8);     // orr v1.8h, #1, lsl #8
+  }
+  EXPECT_EQ(0x2f0094e0u, start[0]);
+  EXPECT_EQ(0x2f0014e0u, start[1]);
+  EXPECT_EQ(0x4f00b421u, start[2]);
+}
+
 TEST(Arm64Emitter, CallFunction_EightRegistersMixed)
 {
   TestCallFunction test;

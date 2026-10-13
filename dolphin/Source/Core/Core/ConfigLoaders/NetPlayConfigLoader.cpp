@@ -23,6 +23,7 @@
 #include "Core/HW/Wiimote.h"
 #include "Core/NetPlayProto.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/MachineSession.h"
 
 #include "InputCommon/GCAdapter.h"
 
@@ -31,11 +32,17 @@ namespace ConfigLoaders
 // Rollback snapshots only copy the memory that the dirty bitmap says changed. Jit64 marks every
 // guest store in that bitmap; JitArm64 has no such barrier yet, so a rollback session on any other
 // host runs the cached interpreter, whose stores all go through the MMU and are marked there.
+// A whole-machine session (Brawl Mods) runs JitArm64: its fast stores mark the bitmap since
+// a3fd38ff (JitArm64_BackPatch.cpp), and the cached interpreter runs Brawl at ~35 frames/s, too
+// slow to play (docs/design/brawl-mods.md §6.6).
 static PowerPC::CPUCore NetPlayCPUCore(const NetPlay::NetSettings& settings)
 {
 #ifndef _M_X86_64
-  if (settings.m_RollbackMode && settings.cpu_core != PowerPC::CPUCore::Interpreter)
+  if (settings.m_RollbackMode && !Machine::IsArmed() &&
+      settings.cpu_core != PowerPC::CPUCore::Interpreter)
+  {
     return PowerPC::CPUCore::CachedInterpreter;
+  }
 #endif
   return settings.cpu_core;
 }

@@ -346,6 +346,10 @@ void Jit64::mfspr(UGeckoInstruction inst)
     }
     MULSS(XMM0, MDisp(rcx, offsetof(CoreTiming::Globals, last_OC_factor_inverted)));
     CVTSS2SI(rdx, R(XMM0));  // RDX is downcount scaled by the overclocking factor
+    // Signed: the downcount (and this instruction's, above, more often) can be below zero, and the
+    // 32-bit result taken as 64 bits read 2^32 cycles more: a time base 0x15555555 ahead
+    // (JitArm64 converts to 64 bits; a PC and a Mac in a session differed there).
+    MOVSX(64, 32, rdx, R(rdx));
     MOV(32, rax, MDisp(rcx, offsetof(CoreTiming::Globals, slice_length)));
     SUB(64, rax, rdx);  // cycles since the last CoreTiming::Advance() event is (slicelength -
                         // Scaled_downcount)

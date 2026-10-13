@@ -26,6 +26,7 @@
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/System.h"
+#include "Core/Rollback/MachineSession.h"
 
 #include "VideoCommon/Fifo.h"
 #include "VideoCommon/OnScreenDisplay.h"
@@ -389,6 +390,8 @@ void CoreTimingManager::Advance()
       m_event_trace->push_back(te);
     }
     m_current_event = evt.type->name;
+    if (Machine::g_io_log) [[unlikely]]
+      Machine::IoLogEvent(*evt.type->name, m_globals.global_timer, m_globals.global_timer - evt.time);
     evt.type->callback(m_system, evt.userdata, m_globals.global_timer - evt.time);
     m_current_event = nullptr;
   }

@@ -3874,6 +3874,9 @@ void ARM64FloatEmitter::ORR_BIC(u8 size, ARM64Reg Rd, u8 imm, u8 shift, u8 op)
     ASSERT_MSG(DYNA_REC, shift == 0 || shift == 8, "size16 only supports shift of 0 or 8! {}",
                shift);
 
+    // 16-bit lanes are cmode 10x1 (without the 8, this was the 32-bit lane form: fctiwx's
+    // BIC(16, ..., 0x7) left its result's upper word 0xFFFF0000 instead of 0xFFF80000).
+    cmode |= 8;
     if (shift == 8)
       cmode |= 2;
   }

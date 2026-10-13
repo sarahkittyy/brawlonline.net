@@ -3585,8 +3585,11 @@ NetPlay::NetSettings MakeNetSettings()
   ns.perf_queries_enable = false;
   ns.float_exceptions = Pinned(Config::MAIN_FLOAT_EXCEPTIONS);
   ns.divide_by_zero_exceptions = Pinned(Config::MAIN_DIVIDE_BY_ZERO_EXCEPTIONS);
-  ns.fprf = Pinned(Config::MAIN_FPRF);
-  ns.accurate_nans = Pinned(Config::MAIN_ACCURATE_NANS);
+  // On, whatever the game's settings: every machine computes FPSCR's FPRF and PowerPC's NaNs, so
+  // Jit64, JitArm64 and their interpreter fallbacks (each JIT falls back for other instructions)
+  // give the same results; a host's own NaN rules would differ (docs/design/brawl-mods.md §6.6).
+  ns.fprf = true;
+  ns.accurate_nans = true;
   ns.accurate_fmadds = Pinned(Config::MAIN_ACCURATE_FMADDS);
   ns.disable_icache = Pinned(Config::MAIN_DISABLE_ICACHE);
   ns.sync_on_skip_idle = Pinned(Config::MAIN_SYNC_ON_SKIP_IDLE);
@@ -3603,7 +3606,9 @@ NetPlay::NetSettings MakeNetSettings()
   ns.defer_efb_copies = Pinned(Config::GFX_HACK_DEFER_EFB_COPIES);
   ns.efb_access_tile_size = Pinned(Config::GFX_HACK_EFB_ACCESS_TILE_SIZE);
   ns.efb_access_defer_invalidation = Pinned(Config::GFX_HACK_EFB_DEFER_INVALIDATION);
-  ns.use_fma = Config::Get(Config::SESSION_USE_FMA);
+  // Fused multiply-adds on every machine (the default was the host CPU's support: an x86 without
+  // FMA3 and an arm64 would round differently).
+  ns.use_fma = true;
   ns.savedata_load = true;
   // The session runs on a temporary NAND (WiiRoot), thrown away at the end: the game may write
   // its save there (Brawl asks to create one, and asks again if the write fails).
@@ -4169,6 +4174,17 @@ void IoLogStep(u32 pc, u32 inst)
   for (int i = 0; i < 8; ++i)
     line += fmt::format(" {:016x}:{:016x}", ppc.ps[i].PS0AsU64(), ppc.ps[i].PS1AsU64());
   *s_io_current += line + "\n";
+}
+
+void IoLogEvent(const std::string& name, s64 time, s64 late)
+{
+  std::lock_guard lk(s_io_mutex);
+  if (!s_io_current)
+    return;
+  const auto& ppc = Core::System::GetInstance().GetPPCState();
+  *s_io_current += fmt::format("E {} t {} late {} pc {:08x} lr {:08x} g {:08x}\n", name, time, late, ppc.pc,
+                               ppc.spr[SPR_LR],
+                               Common::ComputeCRC32(reinterpret_cast<const u8*>(ppc.gpr), sizeof(ppc.gpr)));
 }
 
 void IoLogRead(u32 addr, u32 size, u64 value)

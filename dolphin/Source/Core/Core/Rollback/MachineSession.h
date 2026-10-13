@@ -229,4 +229,7 @@ void IoLogRead(u32 addr, u32 size, u64 value);
 void IoLogWrite(u32 addr, size_t size);
 // In the PPR_MACHINE_IOLOG_REGS window: each instruction an interpreter core ran, with the FPRs.
 void IoLogStep(u32 pc, u32 inst);
+// Each CoreTiming event (name, time, how late, the guest CPU where it fired): two machines that
+// count cycles differently (two JITs) part at the first event that differs.
+void IoLogEvent(const std::string& name, s64 time, s64 late);
 }  // namespace Machine
