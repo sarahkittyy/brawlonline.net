@@ -249,18 +249,16 @@ const BuildRow = ({
         </div>
       )}
       <div className={styles.actions}>
-        <Tooltip title={Messages.controllerTooltip()}>
-          <Select
-            size="small"
-            value={controllerOf(build)}
-            disabled={disabled}
-            inputProps={{ "aria-label": Messages.controller() }}
-            onChange={(e) => onControllerChange(e.target.value as ModsController)}
-          >
-            <MenuItem value="gc">{Messages.gameCube()}</MenuItem>
-            <MenuItem value="wiimote">{Messages.wiiRemote()}</MenuItem>
-          </Select>
-        </Tooltip>
+        <Select
+          size="small"
+          value={controllerOf(build)}
+          disabled={disabled}
+          inputProps={{ "aria-label": Messages.controller() }}
+          onChange={(e) => onControllerChange(e.target.value as ModsController)}
+        >
+          <MenuItem value="gc">{Messages.gameCube()}</MenuItem>
+          <MenuItem value="wiimote">{Messages.wiiRemote()}</MenuItem>
+        </Select>
         <Tooltip title={Messages.publicRoomTooltip()}>
           <label className={styles.toggle}>
             <Switch size="small" checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} />

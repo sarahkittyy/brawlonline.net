@@ -102,6 +102,15 @@ export class ModsManager {
   }
 
   async addBuild(input: ModBuildInput): Promise<ModBuild> {
+    const same = this.builds().find(
+      (b) =>
+        b.discPath === input.discPath &&
+        (b.launcherPath ?? null) === (input.launcherPath || null) &&
+        (b.sdPath ?? null) === (input.sdPath || null),
+    );
+    if (same) {
+      throw new Error(`You already have this game: ${same.name}.`);
+    }
     await assertFile(input.discPath, "disc image");
     await assertFile(input.launcherPath, "launcher");
     await assertFile(input.sdPath, "SD card image");
@@ -248,6 +257,14 @@ export class ModsManager {
     const latest = this.findBuild(id);
     let updated: ModBuild = latest;
     if ((await buildHashKey(latest)) === key) {
+      // The same files as a game already in the list (another copy, an ISO and an RVZ of one
+      // disc): this one goes again.
+      const twin = this.builds().find((b) => b.id !== id && b.hash === hash);
+      if (twin) {
+        await this.saveBuilds(this.builds().filter((b) => b.id !== id));
+        this.emit({ type: "duplicate", name: twin.name });
+        throw new Error(`You already have this game: ${twin.name}.`);
+      }
       updated = { ...latest, hash, parts, hashKey: key };
       if (updated.autoName) {
         updated.name = autoName(updated);

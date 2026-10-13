@@ -57,6 +57,8 @@ export const ModsTab = React.memo(function ModsTab() {
     const stop = modsService.onEvent((event) => {
       if (event.type === "state") {
         setState(event.state);
+      } else if (event.type === "duplicate") {
+        showError(Messages.duplicate(event.name));
       } else {
         const { id, done, total } = event.progress;
         setHashProgress((p) => {
@@ -74,7 +76,7 @@ export const ModsTab = React.memo(function ModsTab() {
       alive = false;
       stop();
     };
-  }, [modsService]);
+  }, [modsService, showError]);
 
   // A room needs the player's login in Dolphin (its online connection): logged in, with an online
   // code, and the play key on disk, as Play makes sure (use_play.ts).

@@ -131,7 +131,11 @@ export type ModsState = {
   status: ModRoomStatus | null;
 };
 
-export type ModsEvent = { type: "state"; state: ModsState } | { type: "hashProgress"; progress: ModsHashProgress };
+export type ModsEvent =
+  | { type: "state"; state: ModsState }
+  | { type: "hashProgress"; progress: ModsHashProgress }
+  /** A game added twice (the same hash as one already in the list): it was taken out again. */
+  | { type: "duplicate"; name: string };
 
 export type ModsHostOptions = { buildId: string; public: boolean };
 export type ModsJoinOptions = { buildId: string; code: string };
