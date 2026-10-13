@@ -10,11 +10,18 @@ Status: proposal (2026-10-13). Nothing here is built.
 - **Players' games must not be affected in any way.** Under bad performance the replay and upload work is the first thing to throttle or stop. This has to be tested and verified before it ships.
 - The playback Dolphin plays at the pinned 16:9, like the players' games, so a screen KO can't desync a replay or a spectated game (§7).
 
+Decided by the user later the same day:
+- **"Let others stream my games"** is an opt-out in the launcher's settings, on by default. Its description: "Streams inputs to the server for others to spectate you. Very minimal network load." It decides whether **this player's game uploads**. When one player has it on and another off, the game is streamed from the player who has it on. Only a game where every player has it off is not listed (§3.1, §6.3).
+- **Ranked is listed** with no extra delay. **Direct is listed** too. Every mode gets the same short client-side buffer and nothing more.
+- A spectator who joins **always catches up to live** on their own, with visible progress (§6.2).
+- The list is **newest first** by default and refreshes often while the tab is open. It shows who is playing and how long the game has been going (§6.1).
+- Clicking another game while watching switches the open playback Dolphin to it. It catches up again, so a switch is slow, which is accepted.
+
 ## 1. Summary
 
 Spectating is a live replay. The players' games already record every game's confirmed inputs and checksums (`FRMS` chunks, `replays.md` §4.2). Playback rebuilds the match from those inputs and checks every frame against the recorded checksum. For spectating:
 
-1. One player's game sends those chunks to mm over the online connection it already keeps open. The other players send small digests of the same chunks, so mm can check the stream and switch uploaders if one stops.
+1. One player's game sends those chunks to mm over the online connection it already keeps open. Other players who allow streaming send small digests of the same chunks, so mm can check the stream and switch uploaders if one stops.
 2. mm keeps each live game's chunks in memory. It serves each spectator the game from frame 1 and then pushes new chunks as they arrive.
 3. The spectator's launcher writes the chunks into a local `.brep`. The playback Dolphin follows that file in `mirror` mode (reserved in `replays.md` §6.2). It plays 3 s behind the newest frame so network jitter never shows as stutter.
 
@@ -40,7 +47,7 @@ The alternative, streaming state, has two problems. A playable state is the roll
 
 - **What:** the `.brep` chunks the replay writer already produces, minus `FTRM` and `FTSP`: `INFO`, `SETP`, `SYNC`, every `FRMS` (one per 60 confirmed frames), `EVNT`, `ENDG`. Nothing new is encoded. The writer already deflated each chunk.
 - **Where:** on a new ENet channel of the **online connection** a logged-in game already keeps to mm (UDP 43113, `rooms-protocol.md`: "A running, logged-in game keeps one connection open"). That means no new socket, no TLS handshake and no new login. The connection is serviced by the `Rooms` thread (`Online/Rooms.cpp:1146`), never by the CPU thread.
-- **Who:** one **primary** per game, chosen by mm at the barrier. It is the player with the most headroom (§4.3), the host on a tie. Every other player is a **witness**. A witness sends a 12-byte digest per chunk (`first_frame` plus a hash of the uncompressed pads and checksums), batched every 5 s, about 0.1 kbit/s. It keeps its own copy of the chunks in memory (≤ 0.5 MB per game, kept even with `SaveReplays` off).
+- **Who:** only players whose "Let others stream my games" is on take part. Their game says so in its ticket. A player with it off sends nothing at all: no chunks and no digests. From those who have it on, mm picks one **primary** per game at the barrier: the player with the most headroom (§4.3), the host on a tie. Every other player with it on is a **witness**. In a 1v1 where only one player has it on, there is no witness, so no takeover and no cross-check. That stream is trusted as sent, and the game ends for spectators if its only uploader stops. A witness sends a 12-byte digest per chunk (`first_frame` plus a hash of the uncompressed pads and checksums), batched every 5 s, about 0.1 kbit/s. It keeps its own copy of the chunks in memory (≤ 0.5 MB per game, kept even with `SaveReplays` off).
 - **Takeover:** mm sends `spectate-upload {from_frame}` to a witness when the primary goes quiet for 5 s or says it paused (§4.3). The witness sends from that frame through the same pacer. Spectators show "Buffering…" while the gap fills.
 - **Validation:** if a digest differs from the primary's chunk, mm ends the stream ("This game can't be shown") and logs it. One modified client can't show spectators a fake game. Peers' confirmed inputs are byte-identical; the files' `inputsSha256` already matches.
 - **Cost on the primary:** a 500-650 B chunk per second plus ENet/UDP headers ≈ **4.5-5.5 kbit/s up**. That is roughly 25-50 % on top of the game's own traffic (estimated at 10-20 kbit/s per player in `backend-design.md` §2.7; to be measured, §8 P0). §4 explains why that still can't hurt the game.
@@ -49,11 +56,18 @@ The alternative, streaming state, has two problems. A playable state is the roll
 
 - **Live store:** each live game holds its chunks in memory, plus the match's earlier games, so a set can be scrubbed. A game stays listed while it plays and for 10 min after its set ends. Nothing is written to disk.
 - **Limits** (uploads are untrusted): a chunk ≤ 64 KB; a game ≤ 2 MB; an uploader ≤ 4 KB/s; frames contiguous. Headers, CRCs and sizes are checked as `ReplayFile` reads them (`replays.md` §8.1).
-- **Server delay:** mm never relays a chunk until it is `D` seconds old. Live delay is decided per mode (open question 2). Because mm enforces it, a client can't bypass it.
+- **No server delay** (the user, 2026-10-13: not for Ranked either). mm relays each chunk as soon as it is validated. The only delay is the spectator's own buffer (§6.2), about 4-5 s behind the players in all: up to 1 s for a chunk to fill, the network, and the 3 s buffer.
 - **Fan-out** runs in a tokio task, off mm's ENet thread. The ENet thread only hands each validated chunk to a `tokio::sync::broadcast`.
-- **List:** `GET /v1/live`, served from a 1 s snapshot like `/v1/rooms`. It lists mode, ruleset, stage, players (name, code, character, costume), set score, game number, elapsed time and spectator count. A player who opted out hides the game (§6.3).
-- **Watching:** `GET /v1/live/{stream}/ws` (WebSocket). The client sends `{from: <game>, <frame>}`. mm sends everything from there, then each new chunk as it passes the delay. On reconnect the client asks from its newest frame, so nothing is sent twice. Each spectator downloads each chunk exactly once.
-- **nginx:** `location ^~ /v1/live` proxies to a new public axum listener in mm, with `Upgrade` headers for the WebSocket. The nginx site is installed by hand on sarahvps2 (memory: push is a deploy), so it has to go in before the matching server code ships.
+- **List:** `GET /v1/live`, served from a 1 s snapshot like `/v1/rooms`. For each stream it gives:
+  - mode, ruleset and stage;
+  - players (name, code, character, costume);
+  - set score and game number;
+  - the set's and the current game's start times (UTC), so the client can show elapsed time;
+  - the spectator count.
+
+  A game is listed when at least one of its players streams it (§3.1).
+- **Watching:** `GET /v1/live/{stream}/ws` (WebSocket). The client sends `{from: <game>, <frame>}`. mm sends everything from there, then each new chunk as it arrives. On reconnect the client asks from its newest frame, so nothing is sent twice. Each spectator downloads each chunk exactly once.
+- **nginx:** `location ^~ /v1/live` proxies to a new public axum listener in mm, with `Upgrade` headers for the WebSocket. A push doesn't deploy the nginx site; it is installed by hand on sarahvps2, so it has to go in before the matching server code ships.
 
 ### 3.3 Spectator (launcher + playback Dolphin)
 
@@ -97,9 +111,9 @@ The primary's uploader reads signals the session already has, every frame, on th
 | Upload queue | more than 2 KB of upload is unacknowledged |
 
 - **Resume** after 10 s with no signal. After the third pause in a game, the primary stops uploading for that game and tells mm, which moves the stream to a witness.
-- **Choosing the primary:** each game reports its last game's pauses and its average rollbacks at the barrier. mm picks the player with fewer. A player who paused last game is never chosen while another player can upload.
-- When **every** player is paused, spectators see "Buffering — the players' connections are busy" and wait. The game never pays for the stream.
-- **Kill switches:** mm's `hello` reply carries `spectateUpload: off | witness | on` and the pacer rate. One server config change turns uploading off for everyone at once, without a launcher update, which matters because a launcher update is slow to reach everyone. A player can also turn it off for themselves (§6.3).
+- **Choosing the primary** (among players who stream, §3.1): each game reports its last game's pauses and its average rollbacks at the barrier. mm picks the player with fewer. A player who paused last game is never chosen while another streaming player can upload.
+- When **every** streaming player is paused, spectators see "Buffering — the players' connections are busy" and wait. The game never pays for the stream.
+- **Kill switches:** mm's `hello` reply carries `spectateUpload: off | witness | on` and the pacer rate. One server config change turns uploading off for everyone at once, without a launcher update, which matters because a launcher update is slow to reach everyone. A player can also turn it off for themselves ("Let others stream my games", §6.3).
 
 ### 4.4 Verification before shipping (pass criteria)
 
@@ -137,9 +151,14 @@ The ballpark: CPU, RAM and disk allow **thousands** of concurrent games, far bey
 ### 6.1 Launcher: Home > Spectate
 
 - `HOME_TABS` (`pages/home/home_routes.ts`) gets `spectate`; `home_page.tsx:64` gets `{ id: "spectate", label: Messages.spectate() }`.
-- The page copies Public Rooms' structure (`public_rooms.tsx`, `public_rooms_view.tsx`). It has the same states (logged out, loading, ready, unreachable), the same 4 s poll, and the same 15 s staleness rule. It only polls while the tab is open.
-- **Rows:** a mode badge (Ranked, Unranked, Direct, Room), each player's stock icon, name and code, the stage, "Game 2 · 1-0", elapsed time, and the spectator count. Teams are shown as rooms show them. The default sort is most watched, then newest. A filter lets people narrow by mode.
-- **Watch** opens the playback Dolphin. With one playback Dolphin already open, it switches what that Dolphin plays (`commandId`). This is a departure from Slippi, whose spectating is per-broadcaster, chosen by the user (2026-10-13).
+- The page copies Public Rooms' structure (`public_rooms.tsx`, `public_rooms_view.tsx`). It has the same states (logged out, loading, ready, unreachable) and the same 15 s staleness rule. It polls `/v1/live` **every 3 s, only while the tab is open**. The server answers from its 1 s snapshot, so a new game shows within about 4 s.
+- **Rows:**
+  - who is playing: each player's stock icon, name and code, with teams shown as rooms show them;
+  - **how long the game has been going**: the current game's time, ticking every second in the client from its start time, so it moves between polls;
+  - a mode badge (Ranked, Unranked, Direct, Room), the stage, "Game 2 · 1-0", and the spectator count.
+- **Sort:** newest first by default, by the set's start time. A set's next game doesn't move its row, so the list doesn't reshuffle every few minutes. A new row slides in at the top and pulses once. If the list is scrolled, the scroll position stays anchored to the rows already shown. A sort menu offers "Most watched".
+- **Watch** opens the playback Dolphin. With one already open, it **switches** what that Dolphin plays (`commandId`). The old stream's WebSocket closes, and the new game catches up from its start (§6.2). The row being watched is marked "Watching". This is a departure from Slippi, whose spectating is per-broadcaster, chosen by the user (2026-10-13).
+- **Spectate files:** `Spectate/` in the playback User folder is cleared at launcher start. Only games the spectator saved to Replays are kept.
 
 ### 6.2 Playback Dolphin, `mirror` mode
 
@@ -149,8 +168,18 @@ The ballpark: CPU, RAM and disk allow **thousands** of concurrent games, far bey
   - The seek bar shows the received part and the live edge moving.
   - "-12 s" beside LIVE while behind.
   - Fast-forward stops at the live edge and switches to LIVE.
-- **Joining mid-game:** the game is shown from frame 1 at once, so there is no wait. LIVE catches up by running frames without drawing them (the seek's resimulation mode), with "Catching up… 62 %". How fast that runs on a weak machine is not measured (§8 P0). If it's too slow for long games, joining starts at the beginning and LIVE stays optional.
-- **Sets:** at the end of a game, a spectator at the live edge sees "Game 2 starts soon". The next game's `SETP` starts it through `queue` mode's next-game path. A spectator who is behind keeps watching, with the next game queued. Every earlier game of the set stays in the list and can be watched again.
+- **Joining (and switching games) always catches up to live** (the user, 2026-10-13):
+  - Frames run as fast as the machine can, without drawing them (the seek's resimulation mode), with sound off.
+  - **Progress is visible:** one frame in every 15 is drawn, so the game visibly fast-forwards. An overlay bar reads "Catching up to live · 2:14 / 4:05 · about 20 s". Its end is the moving live edge, and the time left comes from the measured catch-up rate. The seek bar's playhead runs toward the live edge.
+  - At the live edge the overlay fades, sound comes on and normal live play starts.
+  - Any control (pause, seek, step) stops the catch-up where it is, and LIVE starts it again.
+  - The catch-up rate has to stay well above 1x, because the live edge keeps moving. That rate isn't measured yet (§8 P0). If a slow machine runs under about 1.5x, the overlay says so ("Your computer is catching up slowly") instead of looking stuck.
+- **Sets:** at the end of a game, a spectator at the live edge sees the last frame held with "Game 2 starts soon". The next game's `SETP` starts it through `queue` mode's next-game path. A spectator who is behind keeps watching, with the next game queued. Every earlier game of the set stays available and can be watched again.
+- **When the stream ends** (the set is over, a room's players change, or every uploader left):
+  - **Still behind:** playback goes on. Everything is on disk, so a finished stream on the server changes nothing for this spectator.
+  - **At the end:** the last frame is held with the result ("Drsmsh wins 2-1") and "Closing in 10 s · press any button to stay". Then the playback Dolphin closes, and the launcher comes to the front on the Spectate tab, ready for the next pick.
+  - **Any input** cancels the countdown. Dolphin then holds at the end like a finished replay: seekable, and Play closes it.
+  - **Why not close at once:** that cuts off the last KO and the result. **Why not black:** an empty window looks broken and gives the spectator nothing to do. Clicking another game from the end screen switches to it, as always.
 - **Desync recovery** (`game-code.md` §11): the restarted game is just the next game in the stream.
 - **A spectator checksum that differs:** "Lost sync with this game" and a jump to the next game. The spectator's launcher reports the frame to mm. That makes spectators a free desync canary for settings nothing pins yet.
 - **Another build:** a spectator whose `SIM_VERSION` or build differs gets the replay check's message ("recorded with X, you have Y") and an update prompt. Spectating has no "Play anyway", because a live game would only lose sync.
@@ -158,7 +187,12 @@ The ballpark: CPU, RAM and disk allow **thousands** of concurrent games, far bey
 ### 6.3 Who can watch
 
 - Watching requires being logged in, as joining rooms does. This allows per-account and per-IP rate limits on `/v1/live`.
-- **"Let others watch my games"** (Settings > Online, on by default; open question 1): if any player in a game has it off, the game isn't listed and nothing is uploaded. **"Upload my games for spectators"** (Advanced, on by default): off makes this player a witness only, never the primary.
+- Every mode is listed: Ranked, Unranked, Direct and rooms (the user, 2026-10-13).
+- **"Let others stream my games"** (launcher Settings, on by default; the user, 2026-10-13). Description: "Streams inputs to the server for others to spectate you. Very minimal network load." Behaviour:
+  - Off means this player's game uploads nothing, not even digests.
+  - The game is still streamed from any other player who has it on.
+  - Only a game where every player has it off is not listed.
+  - The setting travels in the matchmaking ticket, so a change applies from the next match.
 
 ## 7. Aspect ratio in playback (checked 2026-10-13)
 
@@ -180,7 +214,7 @@ The ballpark: CPU, RAM and disk allow **thousands** of concurrent games, far bey
 
 ## 9. Open questions
 
-1. **Opt-out or opt-in?** The proposal is on by default with a setting to turn it off. That matches showing every live game, but it's a privacy call.
-2. **Delay per mode.** Proposed: 3 s for Direct, Unranked and rooms. Ranked at 20 s, enforced by mm, so nobody can coach a player live. Or should Ranked not be listed at all?
-3. **Direct games:** listed like the rest, or only rooms and matchmade games? Direct is two friends who found each other by code.
-4. **Max spectators per game:** none at first. The counts above show the box can take it.
+Answered 2026-10-13: opt-out, per uploader; Ranked listed with no extra delay; Direct listed; always catch up to live with visible progress; newest first.
+
+1. **The setting's wording.** Turning "Let others stream my games" off stops this player's upload, but the opponent's game can still stream the match. A player who turns it off for privacy would still be watched. If that's intended, the description could say "Your opponent's game may still stream the match." If not, off should hide the whole game. That would change the "stream it from the peer who has it on" rule.
+2. **Max spectators per game:** none at first. The counts above show the box can take it.
