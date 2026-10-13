@@ -414,10 +414,15 @@ def _u32(g: Game, a: int) -> int:
     return int.from_bytes(g.c.read_mem(a, 4), "big")
 
 
+def css_area(g: Game) -> int:
+    """The local player's area (muSelCharPlayerArea): +0x1A8 the hand, +0x1BC the costume."""
+    task = _u32(g, _u32(g, _u32(g, 0x805A0060) + 4) + 0x400)
+    return _u32(g, task + 0x44)
+
+
 def hand(g: Game) -> tuple[float, float]:
     import struct
-    task = _u32(g, _u32(g, _u32(g, 0x805A0060) + 4) + 0x400)
-    h = _u32(g, _u32(g, task + 0x44) + 0x1A8)
+    h = _u32(g, css_area(g) + 0x1A8)
     return struct.unpack(">ff", g.c.read_mem(h + HAND_X, 8))
 
 
@@ -446,10 +451,11 @@ def status_line(g: Game) -> str:
 
 def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                   gpu_backend: str) -> None:
-    """Three games: the host opens slot 3 with the hand and A, R turns Teams on, two players join
-    by code; everyone on red (X / Y) is refused ("Pick different teams", no start although all
+    """Three games: the host opens slot 3 with the hand and A, R turns Teams on, picks a costume
+    with A on its own panel (its team stays), two players join by code; everyone on red (X / Y) is refused ("Pick different teams", no start although all
     are ready); one player to blue and the room starts a 2-against-1 team battle under the
-    gameplay session on all three; blue walks off, and everyone is back on the room's CSS."""
+    gameplay session on all three, everyone in the costume they locked in (not the team's); blue
+    walks off, and everyone is back on the room's CSS."""
     test = "three-players"
     users = [backend.create_user(n, n[:4].upper()) for n in ("rkira", "rlars", "rmona")]
     a, b, c = gs = [_boot(dolphin, f"room3-{x}", backend, u, gpu_backend, test, "gameplay", artifacts=ART)
@@ -465,6 +471,14 @@ def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[...,
     until_view(a, lambda v: v["slots"][2]["bits"] & ppom.SLOT_OPEN, "slot 3 open")
     a.steps("tap R 8", "wait 30")
     until_view(a, lambda v: v["flags"] & ppom.RF_TEAMS, "Teams on")
+    # Any costume on any team (the user's, 2026-10-12): A on our own panel, twice, the costume
+    # after next; the team stays (Brawl's team battle CSS cycles the team there).
+    costume0 = _u32(a, css_area(a) + 0x1BC)
+    hand_to(a, PANEL_X[0], -10.0)
+    a.steps("tap A 8", "wait 20", "tap A 8", "wait 20")
+    my_costume = _u32(a, css_area(a) + 0x1BC)
+    assert my_costume not in (costume0, 0), (costume0, my_costume)
+    assert room_view(a)["slots"][0]["team"] == 0, room_view(a)
     hand_to(a, -23.0, 10.5)   # back on Fox
     a.steps("wait 30")
     a.shot("03-slot-3-open-teams-on")
@@ -522,6 +536,10 @@ def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[...,
         assert [pl["team"] for pl in se["players"][:3]] == [0, 0, 1], se
     setups = [B.read_match_setup(g.c.read_mem) for g in gs]
     assert setups[0] == setups[1] == setups[2], setups
+    # Every player in the costume they locked in, not their team's.
+    locked = [pl["costume"] for pl in se["players"][:3]]
+    assert locked[0] == my_costume, (locked, my_costume)
+    assert [p.color_no for p in setups[0].players[:3]] == locked, (setups[0].players, locked)
     time.sleep(8)
     for g in gs:
         g.shot("07-team-battle")

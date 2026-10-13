@@ -580,8 +580,9 @@ class PlayerSetup:
     character: int        # gmCharacterKind
     state: int            # 0 human, 1 CPU, 3 none
     stocks: int
-    color: int
+    color: int            # +0x05 m_colorFileNo (the Versus setup's, from the character and costume)
     controller: int
+    color_no: int = -1    # +0x06 m_colorNo: the costume as the CSS (or the plugin) wrote it
 
     @property
     def present(self) -> bool:
@@ -665,7 +666,8 @@ def _game_global(m: Mem, off: int) -> int:
 def _read_player_init(m: Mem, base: int, port: int) -> PlayerSetup:
     b = m.read(base + port * MM_PLAYER_SIZE, 8)
     return PlayerSetup(port, b[PI_CHARACTER], b[PI_STATE], struct.unpack(">b", b[4:5])[0],
-                       struct.unpack(">b", b[5:6])[0], struct.unpack(">b", b[7:8])[0])
+                       struct.unpack(">b", b[5:6])[0], struct.unpack(">b", b[7:8])[0],
+                       struct.unpack(">b", b[6:7])[0])
 
 
 def read_match_setup(read_mem: ReadMem) -> Optional[MatchSetup]:

@@ -148,37 +148,13 @@ namespace OnlineMatch {
         seq[0x11] = type;
     }
 
-    // A player's costume in a team battle: the one the CSS would give them for their team. The CSS
-    // calls muMenu::findCharTeamColorNo (0x800AF520) with the CSS character, the team and P+'s
-    // "team set" (which of the team's costumes), and P+ v3.2 replaces that function (Legacy TE
-    // UnboundedTeamEngine.asm) with a walk over the character's costume list in its CSS slot table
-    // (0x80585B00 + slot * 0x10, +8: 2-byte entries whose first byte is the costume's colour,
-    // ending with colour 0x0C); a team's colour is the byte at r2 - 0x7130 + team (0x805A21F0:
-    // 0 red, 1 blue, 3 green). The same walk here: the player's own costume if it already has
-    // the team's colour (they picked that shade), else the character's first costume of it.
-    static u8 teamCostume(u8 charKind, u8 team, u8 costume)
-    {
-        typedef int (*ToSelchFn)(int);
-        int slot = ((ToSelchFn)0x800AF708)(charKind);   // exchangeGmCharacterKind2MuSelchkind
-        u32 list = *(u32*)(0x80585B08 + ((u32)slot & 0xFF) * 0x10);
-        if (!isPtr(list)) return costume;
-        u8 colour = *(u8*)(0x805A21F0 + team);
-        int first = -1;
-        for (int i = 0; i < 0x20; i++) {
-            u8 c = *(u8*)(list + 2 * i);
-            if (c == 0x0C) break;
-            if (c != colour) continue;
-            if (i == costume) return costume;
-            if (first < 0) first = i;
-        }
-        return first < 0 ? costume : (u8)first;
-    }
-
-    // The character's costume list (as teamCostume): its length and each costume's colour.
+    // The character's costume list: its length and each costume's colour. P+ v3.2 keeps it in
+    // the character's CSS slot table (0x80585B00 + slot * 0x10, +8: 2-byte entries whose first
+    // byte is the costume's colour, ending with colour 0x0C; Legacy TE UnboundedTeamEngine.asm).
     static int costumeList(u8 charKind, u8* colours)
     {
         typedef int (*ToSelchFn)(int);
-        int slot = ((ToSelchFn)0x800AF708)(charKind);
+        int slot = ((ToSelchFn)0x800AF708)(charKind);   // exchangeGmCharacterKind2MuSelchkind
         u32 list = *(u32*)(0x80585B08 + ((u32)slot & 0xFF) * 0x10);
         if (!isPtr(list)) return 0;
         int n = 0;
@@ -190,15 +166,15 @@ namespace OnlineMatch {
         return n;
     }
 
-    // Two players with the same character and costume in a free-for-all (staging feedback
-    // 2026-10-10): P+'s Versus never shows that. Its CSS does not let a costume another player
-    // has be picked: X skips it, and a player taking a character whose costume is taken gets the
-    // next free one (found live: three Game & Watch on P1-P3 came out 0, 1, 2; cycling skipped
-    // the others'). So the later player (in port order) gets the next costume in the
-    // character's list that no other player of that character has, of the same colour if the
-    // list has one (P+'s variants: a second green), else the next free one. Deterministic: the
-    // same SESSION gives the same costumes on every machine. Only if the list has none left
-    // (fewer costumes than players) is the shading below the fallback.
+    // Two players with the same character and costume (staging feedback 2026-10-10; in a team battle
+    // too, since its costumes are the players' own, 2026-10-12): P+'s Versus never shows that. Its CSS
+    // does not let a costume another player has be picked: X skips it, and a player taking a character
+    // whose costume is taken gets the next free one (found live: three Game & Watch on P1-P3 came out
+    // 0, 1, 2; cycling skipped the others'). So the later player (in port order) gets the next costume
+    // in the character's list that no other player of that character has, of the same colour if the
+    // list has one (P+'s variants: a second green), else the next free one. Deterministic: the same
+    // SESSION gives the same costumes on every machine. Only if the list has none left (fewer costumes
+    // than players) is the shading below the fallback.
     static void distinctCostumes(const PPOM::Session& se, u8* costume)
     {
         for (int i = 0; i < se.numPlayers && i < 4; i++) {
@@ -291,8 +267,9 @@ namespace OnlineMatch {
             se.gone[i] = 0;
             if (i < se.numPlayers && se.players[i].present) {
                 const PPOM::SessionPlayer& pl = se.players[i];
-                // A team battle: the team's costume, as the CSS gives it in team mode.
-                costume[i] = teams ? teamCostume(pl.charKind, pl.team, pl.costume) : pl.costume;
+                // The player's own costume, in a team battle too (the user's, 2026-10-12: any
+                // costume on any team; Brawl's team battle CSS would give the team's).
+                costume[i] = pl.costume;
                 p[0x00] = pl.charKind;
                 p[0x01] = 0;                         // human
                 p[0x05] = costume[i];                // colour number
@@ -303,11 +280,9 @@ namespace OnlineMatch {
                 p[0x01] = 3;                         // none
             }
         }
-        if (!teams) {
-            distinctCostumes(se, costume);
-            for (int i = 0; i < se.numPlayers && i < 4; i++) {
-                if (se.players[i].present) sel[SEL_PLAYERS + i * PLAYER_SIZE + 0x05] = costume[i];
-            }
+        distinctCostumes(se, costume);
+        for (int i = 0; i < se.numPlayers && i < 4; i++) {
+            if (se.players[i].present) sel[SEL_PLAYERS + i * PLAYER_SIZE + 0x05] = costume[i];
         }
         sel[SEL_TEAMS] = teams ? 1 : 0;
         se.outCount = 0;

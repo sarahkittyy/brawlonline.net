@@ -1310,6 +1310,63 @@ namespace OnlineMenu {
             "bctr\n\t");
     }
 
+    // Any costume in a team battle (the user's, 2026-10-12: a room's team battle gave everyone
+    // their team's costume, whatever they had picked). Brawl's team battle CSS (task+0x5C8) ties
+    // the costume to the team: A on the player's own panel (hand target 0x1B) cycles team and
+    // P+'s team set (area+0x1C0, +0x1C4) instead of the costume, and every portrait is drawn in
+    // the team's costume (setCharPic's isTeam). Online the costume stays the player's own pick
+    // and the team is ours (X / Y, the flag: tickRoom), so:
+    // sel_char+0x88B4 `lbz r0,0x5C8(r27)`, the panel click's "team battle?" test (team: on at
+    // +0x88C0, else the costume at +0x8A24, as in a free-for-all): online, the costume. While
+    // locked in, nothing (the function's exit, +0x95A0), as X / Y (cssCostume): the click
+    // changed the costume shown but not the one locked in (harness, 2026-10-12; FFA too).
+    __attribute__((naked)) void cssPanelClick()
+    {
+        asm volatile(
+            "lis 12, g_onlineCssLock@ha\n\t"
+            "lbz 12, g_onlineCssLock@l(12)\n\t"
+            "cmpwi 12, 0\n\t"
+            "bne 2f\n\t"
+            "lis 12, g_onlineCss@ha\n\t"
+            "lbz 12, g_onlineCss@l(12)\n\t"
+            "cmpwi 12, 0\n\t"
+            "bne 1f\n\t"
+            "lbz 0, 0x5C8(27)\n\t"
+            "lis 12, 0x8068\n\t"
+            "ori 12, 12, 0xB17C\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t"
+            "1:\n\t"
+            "lis 12, 0x8068\n\t"
+            "ori 12, 12, 0xB2E8\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t"
+            "2:\n\t"
+            "lis 12, 0x8068\n\t"
+            "ori 12, 12, 0xBE64\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t");
+    }
+
+    // setCharPic(area, css, kind, costume, isTeam, team, teamSet), sel_char+0x14B68 (0x8069742C)
+    // `stwu r1,-0x80(r1)`, its first instruction: online, isTeam (r7) 0, so the portrait is the
+    // costume's (with isTeam it is findCharTeamColorNo's, the team's). Back at +0x14B6C.
+    __attribute__((naked)) void cssCharPic()
+    {
+        asm volatile(
+            "lis 12, g_onlineCss@ha\n\t"
+            "lbz 12, g_onlineCss@l(12)\n\t"
+            "cmpwi 12, 0\n\t"
+            "beq 1f\n\t"
+            "li 7, 0\n\t"
+            "1:\n\t"
+            "stwu 1, -0x80(1)\n\t"
+            "lis 12, 0x8069\n\t"
+            "ori 12, 12, 0x7430\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t");
+    }
+
     // The CSS's ITEM and STAGE buttons (hand buttons 0x19 and 0x1A) open P+'s item switch
     // (frequency and item switches) and its random stage switch with the hazard switch, all of
     // which change the match on the machine where they are set. Online nothing in the rules is
@@ -1401,6 +1458,8 @@ namespace OnlineMenu {
         api->sySimpleHookRel(0x7280, reinterpret_cast<void*>(cssCostume), 10);
         api->sySimpleHookRel(0x75B4, reinterpret_cast<void*>(cssCoinAPress), 10);
         api->sySimpleHookRel(0x7CCC, reinterpret_cast<void*>(cssSwitchButtons), 10);
+        api->sySimpleHookRel(0x88B4, reinterpret_cast<void*>(cssPanelClick), 10);
+        api->sySimpleHookRel(0x14B68, reinterpret_cast<void*>(cssCharPic), 10);
         api->sySimpleHookRel(0xDDB0, reinterpret_cast<void*>(cssReadyBanner), 10);
         RulesButton::install(api);
     }
@@ -2379,9 +2438,9 @@ namespace OnlineMenu {
                     playSE(1);
                 }
             }
-            // Teams on: A on the local panel's flag (Brawl's team battle way) or X picks the next
-            // team colour, Y the previous one (in a team battle the costume follows the team
-            // anyway, so the costume buttons are free; their press is used up).
+            // Teams on: A on the local panel's flag or X picks the next team colour, Y the
+            // previous one (their press is used up: the costume is A on the panel, as in a
+            // free-for-all, cssPanelClick; any costume on any team, the user's, 2026-10-12).
             const u32 BTN_X = 0x400, BTN_Y = 0x800;
             bool teamsOn = (se.roomFlags & PPOM::RF_TEAMS) && se.roomMode == 2;
             u32 teamPress = pressed & (BTN_X | BTN_Y);
@@ -2395,8 +2454,6 @@ namespace OnlineMenu {
                     playSE(1);
                 }
             }
-            int team = RoomCss::myTeamClicked();
-            if (team >= 0 && waiting) postRoom(PPOM::ROOM_TEAM, (u8)team, 0, NULL);
             roomMatch();
         }
         RoomCss::setLocalSlot(in && me >= 0 ? me : 0, in);

@@ -44,6 +44,7 @@ MY_FLAG = (-26.0, -4.5)             # our own panel's team flag (room_css.cpp ha
 SLOT_POS = 16.0 / 0.99              # a panel's model offset per slot (room_css.cpp SLOT_POS)
 PANEL_X = [-22.0, -7.0, 8.0, 23.0]  # the four panels' centres, y about -10
 GMKIND_MARIO, GMKIND_FOX = 0x00, 0x07
+AREA_COSTUME = 0x1BC                # the local area's costume (muSelCharPlayerArea m_charColorNo)
 
 
 class Game:
@@ -236,6 +237,26 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     g.tap("Y")
     g.wait(30)
     assert sim.room.members[0].team == team0
+    # A on our own panel: the next costume, the team stays (any costume on any team, the user's,
+    # 2026-10-12; Brawl's team battle CSS cycles the team there). Our lock-in carries it, and
+    # while locked in A there changes nothing (as X / Y).
+    costume0 = g.u32(g.area(0) + AREA_COSTUME)
+    g.hand_to(PANEL_X[0], -10.0)
+    g.tap("A")
+    g.wait(30)
+    costume = g.u32(g.area(0) + AREA_COSTUME)
+    assert costume != costume0 and sim.room.members[0].team == team0, (costume0, costume, sim.room.members[0])
+    g.shot("08c-costume-on-a-team")
+    g.tap("START")
+    g.wait(30)
+    lock = ppom.read_local(c, sim.b)["lock"]
+    assert lock["ready"] == 1 and lock["costume"] == costume, (lock, costume)
+    g.tap("A")
+    g.wait(30)
+    assert g.u32(g.area(0) + AREA_COSTUME) == costume and sim.room.members[0].team == team0
+    g.tap("B")
+    g.wait(20)
+    assert ppom.read_local(c, sim.b)["lock"]["ready"] == 0
     # The PUBLIC button (the bar's ITEM button; A on it, as L): private.
     g.hand_to(*PUBLIC_BUTTON, tol=0.5)
     g.tap("A")
