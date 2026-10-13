@@ -213,7 +213,8 @@ export class DolphinManager {
       await this.ensureNetplayUserFolder();
       await this._ensureProjectPlusFiles(netplayInstallation);
       await netplayInstallation.assertProjectPlusFiles();
-      const storeDir = projectPlusStoreFolder(app.getPath("userData"));
+      // The template is in the netplay folder (also when Settings moved it), not in userData
+      const storeDir = projectPlusStoreFolder(this.netplayFolder());
       await this._ensureBrawlSave(playbackInstallation, storeDir);
       await playbackInstallation.addGamePath(path.dirname(isoPath));
       await playbackInstallation.setDefaultIso(isoPath);
@@ -718,6 +719,7 @@ export class DolphinManager {
         templateRoots: [
           netplaySaveStore(storeDir),
           path.join(installation.userFolder, NETPLAY_SAVE_DIR),
+          path.join(this.getInstallation(DolphinLaunchType.NETPLAY).userFolder, NETPLAY_SAVE_DIR),
           path.join(installation.sysFolder, NETPLAY_SAVE_DIR),
         ],
         log: (message) => log.info(message),
