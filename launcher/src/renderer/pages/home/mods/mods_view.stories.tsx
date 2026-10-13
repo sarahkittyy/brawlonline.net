@@ -114,6 +114,7 @@ const Frame = (props: Partial<ModsViewProps> & { state: ModsState | null }) => (
       onControllerChange={noop}
       onAddBuild={noop}
       onAddFolder={noop}
+      onConfigureControllers={noop}
       onRemoveBuild={noop}
       onHost={noop}
       onJoin={noop}

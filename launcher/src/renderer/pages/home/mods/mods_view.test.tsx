@@ -54,6 +54,7 @@ const props = (state: ModsState | null, extra: Partial<ModsViewProps> = {}): Mod
   onControllerChange: vi.fn(),
   onAddBuild: vi.fn(),
   onAddFolder: vi.fn(),
+  onConfigureControllers: vi.fn(),
   onRemoveBuild: vi.fn(),
   onHost: vi.fn(),
   onJoin: vi.fn(),

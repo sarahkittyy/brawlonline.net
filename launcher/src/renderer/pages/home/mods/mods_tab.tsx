@@ -1,6 +1,8 @@
 import type { ModBuild, ModBuildInput, ModRoomRequest, ModsState } from "@dolphin/mods/types";
+import { DolphinLaunchType } from "@dolphin/types";
 import React, { useCallback, useEffect, useState } from "react";
 
+import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
 import { useSettings } from "@/lib/hooks/use_settings";
 import { useToasts } from "@/lib/hooks/use_toasts";
@@ -20,7 +22,8 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : String
 
 /** Home > Other Games: the games, mods and the room, from the main process's ModsManager. */
 export const ModsTab = React.memo(function ModsTab() {
-  const { modsService } = useServices();
+  const { modsService, dolphinService } = useServices();
+  const { openConfigureDolphin } = useDolphinActions(dolphinService);
   const { showError, showSuccess } = useToasts();
   const isoPath = useSettings((store) => store.settings.isoPath);
   const [state, setState] = useState<ModsState | null>(null);
@@ -132,6 +135,7 @@ export const ModsTab = React.memo(function ModsTab() {
         }
         onAddBuild={() => setAdding({ kind: "game", name: "", discPath: null, launcherPath: null, sdPath: null })}
         onAddFolder={() => void onAddFolder()}
+        onConfigureControllers={() => void openConfigureDolphin(DolphinLaunchType.NETPLAY)}
         onRemoveBuild={(build) => void modsService.removeBuild(build.id).catch(showError)}
         onHost={(build, isPublic) => void start(build, () => modsService.host({ buildId: build.id, public: isPublic }))}
         onJoin={(build, code) => void start(build, () => modsService.join({ buildId: build.id, code }))}

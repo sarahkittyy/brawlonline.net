@@ -12,6 +12,7 @@ import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import CreateNewFolderOutlinedIcon from "@mui/icons-material/CreateNewFolderOutlined";
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
+import SportsEsportsOutlinedIcon from "@mui/icons-material/SportsEsportsOutlined";
 import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
 import LinearProgress from "@mui/material/LinearProgress";
@@ -48,6 +49,7 @@ export type ModsViewProps = {
   onControllerChange: (build: ModBuild, controller: ModsController) => void;
   onAddBuild: () => void;
   onAddFolder: () => void;
+  onConfigureControllers: () => void;
   onRemoveBuild: (build: ModBuild) => void;
   onHost: (build: ModBuild, isPublic: boolean) => void;
   onJoin: (build: ModBuild, code: string) => void;
@@ -79,6 +81,18 @@ export const ModsView = (props: ModsViewProps) => {
               <Button size="small" startIcon={<CreateNewFolderOutlinedIcon />} onClick={props.onAddFolder}>
                 {Messages.addFolder()}
               </Button>
+            </Tooltip>
+            <Tooltip title={Messages.controllerSetupTooltip()}>
+              <span>
+                <Button
+                  size="small"
+                  startIcon={<SportsEsportsOutlinedIcon />}
+                  disabled={!!state?.running}
+                  onClick={props.onConfigureControllers}
+                >
+                  {Messages.controllerSetup()}
+                </Button>
+              </span>
             </Tooltip>
           </div>
         }

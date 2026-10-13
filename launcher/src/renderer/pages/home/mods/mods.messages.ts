@@ -22,6 +22,9 @@ export const ModsMessages = {
   publicRoom: () => "Public",
   publicRoomTooltip: () => "Public rooms are listed for everyone. Private rooms are joined by code.",
   controller: () => "Controller",
+  controllerSetup: () => "Set up controllers",
+  controllerSetupTooltip: () =>
+    "Opens Dolphin: click Controllers, then configure GameCube Port 1 or Wii Remote 1 (Emulated Wii Remote; add a Nunchuk or Classic Controller as its extension, or turn on Sideways Wii Remote for games like New Super Mario Bros. Wii). Close Dolphin when you're done.",
   controllerTooltip: () =>
     "What you play this game with. Set up its buttons in Dolphin's Controllers settings (Wii Remote 1 or GameCube port 1).",
   gameCube: () => "GameCube controller",
