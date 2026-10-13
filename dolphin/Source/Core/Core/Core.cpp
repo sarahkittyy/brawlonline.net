@@ -291,6 +291,10 @@ void Stop(Core::System& system)  // - Hammertime!
 
   INFO_LOG_FMT(CONSOLE, "Stop [Main Thread]\t\t---- Shutting down ----");
 
+  // A whole-machine session ends with the emulation: the other players hear this one left, and
+  // its network thread stops (it outlived the game, and a joinable thread at exit aborted).
+  Machine::Stop();
+
   // Stop the CPU
   INFO_LOG_FMT(CONSOLE, "{}", StopMessage(true, "Stop CPU"));
   system.GetCPU().Stop();

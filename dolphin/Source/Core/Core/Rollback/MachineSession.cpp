@@ -30,6 +30,7 @@
 #include "Common/FileUtil.h"
 #include "Common/Hash.h"
 #include "Common/Logging/Log.h"
+#include "Common/StringUtil.h"
 #include "Common/Swap.h"
 #include "Common/Thread.h"
 #include "Core/Brawlback/include/brawlback-common/BrawlbackConstants.h"
@@ -225,6 +226,17 @@ struct State
   std::thread net_thread;
   std::atomic<bool> net_run{false};
   std::array<PeerLink, MAX_PLAYERS> peers;  // by slot (this player's unused)
+
+  // At exit without Stop (a session never started, an error, the process ending): a joinable
+  // thread's destructor calls std::terminate ("libc++abi: terminating", a crash report on every
+  // exit on macOS). Joining here could wait on statics already gone: the thread is told to stop
+  // and left to the process's end.
+  ~State()
+  {
+    net_run = false;
+    if (net_thread.joinable())
+      net_thread.detach();
+  }
   std::deque<std::pair<int, std::vector<u8>>> gekko_rx;  // (slot, packet)
   std::vector<GekkoNetResult*> gekko_rx_ptrs;
   std::vector<std::pair<int, std::vector<u8>>> gekko_tx;  // (slot, packet)
@@ -4176,6 +4188,42 @@ void IoLogStep(u32 pc, u32 inst)
   *s_io_current += line + "\n";
 }
 
+bool IoLogBlocks()
+{
+  static const bool on = std::getenv("PPR_MACHINE_IOLOG_BLOCKS") != nullptr;
+  return on;
+}
+
+void IoLogBlock(u32 pc)
+{
+  if (!g_io_log)
+    return;
+  std::lock_guard lk(s_io_mutex);
+  if (!s_io_current)
+    return;
+  const auto& ppc = Core::System::GetInstance().GetPPCState();
+  *s_io_current += fmt::format("B {:08x} f {:08x} g {:08x}\n", pc,
+                               Common::ComputeCRC32(reinterpret_cast<const u8*>(ppc.ps), sizeof(ppc.ps)),
+                               Common::ComputeCRC32(reinterpret_cast<const u8*>(ppc.gpr), sizeof(ppc.gpr)));
+  // PPR_MACHINE_IOLOG_BLOCK_DUMP=pc,pc,... (hex): every FPR at those blocks' entries.
+  static const std::vector<u32> dump_at = [] {
+    std::vector<u32> v;
+    if (const char* e = std::getenv("PPR_MACHINE_IOLOG_BLOCK_DUMP"))
+    {
+      for (const std::string& item : SplitString(e, ','))
+        v.push_back(static_cast<u32>(std::strtoul(item.c_str(), nullptr, 16)));
+    }
+    return v;
+  }();
+  if (std::ranges::find(dump_at, pc) != dump_at.end())
+  {
+    std::string fpr = "  fpr";
+    for (const auto& ps : ppc.ps)
+      fpr += fmt::format(" {:016x}:{:016x}", ps.PS0AsU64(), ps.PS1AsU64());
+    *s_io_current += fpr + "\n";
+  }
+}
+
 void IoLogEvent(const std::string& name, s64 time, s64 late)
 {
   std::lock_guard lk(s_io_mutex);
@@ -4185,6 +4233,12 @@ void IoLogEvent(const std::string& name, s64 time, s64 late)
   *s_io_current += fmt::format("E {} t {} late {} pc {:08x} lr {:08x} g {:08x}\n", name, time, late, ppc.pc,
                                ppc.spr[SPR_LR],
                                Common::ComputeCRC32(reinterpret_cast<const u8*>(ppc.gpr), sizeof(ppc.gpr)));
+  // Events run between JIT blocks, with every register in ppcState: all FPRs (ps0 and ps1), to
+  // find the register two JITs part on.
+  std::string fpr = "  fpr";
+  for (const auto& ps : ppc.ps)
+    fpr += fmt::format(" {:016x}:{:016x}", ps.PS0AsU64(), ps.PS1AsU64());
+  *s_io_current += fpr + "\n";
 }
 
 void IoLogRead(u32 addr, u32 size, u64 value)

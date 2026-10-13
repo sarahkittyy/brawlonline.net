@@ -48,6 +48,7 @@
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
 #include "Core/NetPlayClient.h"
+#include "Core/Rollback/MachineSession.h"
 
 using namespace Gen;
 using namespace PowerPC;
@@ -937,6 +938,14 @@ bool Jit64::DoJit(u32 em_address, JitBlock* b, u32 nextPC)
   // Conditionally add profiling code.
   if (IsProfilingEnabled())
     ABI_CallFunctionP(&JitBlock::ProfileData::BeginProfiling, b->profile_data.get());
+
+  // Diagnostics (Machine::IoLogBlocks): every register is in ppcState at a block's entry.
+  if (Machine::IoLogBlocks())
+  {
+    ABI_PushRegistersAndAdjustStack({}, 0);
+    ABI_CallFunctionC(&Machine::IoLogBlock, js.blockStart);
+    ABI_PopRegistersAndAdjustStack({}, 0);
+  }
 
 #if defined(_DEBUG) || defined(DEBUGFAST) || defined(NAN_CHECK)
   // should help logged stack-traces become more accurate

@@ -232,4 +232,9 @@ void IoLogStep(u32 pc, u32 inst);
 // Each CoreTiming event (name, time, how late, the guest CPU where it fired): two machines that
 // count cycles differently (two JITs) part at the first event that differs.
 void IoLogEvent(const std::string& name, s64 time, s64 late);
+// PPR_MACHINE_IOLOG_BLOCKS=1 (read when a block is compiled): Jit64 and JitArm64 call IoLogBlock at
+// each block's entry, logging its pc with CRCs of the FPRs (both halves) and GPRs: the first block
+// after which two JITs' registers differ is the one that computed differently.
+bool IoLogBlocks();
+void IoLogBlock(u32 pc);
 }  // namespace Machine

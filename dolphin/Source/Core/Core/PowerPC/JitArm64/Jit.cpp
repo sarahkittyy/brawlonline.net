@@ -37,6 +37,7 @@
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
+#include "Core/Rollback/MachineSession.h"
 
 using namespace Arm64Gen;
 
@@ -1175,6 +1176,10 @@ bool JitArm64::DoJit(u32 em_address, JitBlock* b, u32 nextPC)
   // Conditionally add profiling code.
   if (IsProfilingEnabled())
     ABI_CallFunction(&JitBlock::ProfileData::BeginProfiling, b->profile_data.get());
+
+  // Diagnostics (Machine::IoLogBlocks): every register is in ppcState at a block's entry.
+  if (Machine::IoLogBlocks())
+    ABI_CallFunction(&Machine::IoLogBlock, js.blockStart);
 
   if (code_block.m_gqr_used.Count() == 1 && !js.pairedQuantizeAddresses.contains(js.blockStart))
   {

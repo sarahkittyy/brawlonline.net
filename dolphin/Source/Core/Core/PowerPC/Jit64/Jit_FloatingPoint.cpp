@@ -302,17 +302,22 @@ void Jit64::fp_arith(UGeckoInstruction inst)
     {
       (this->*sseOp)(dest, Ra);
     }
-    else if (cpu_info.bAVX && Ra.IsSimpleReg())
+    // An AVX three-operand scalar op copies its first source's upper half into dest: a double
+    // result (ps1 kept, as in the interpreter and JitArm64) can't use it, or fmul f0,f1,f2 gave f0
+    // f1's ps1, and only on hosts with AVX (a PC and a Mac in a session differed there).
+    else if (cpu_info.bAVX && (packed || single) && Ra.IsSimpleReg())
     {
       (this->*avxOp)(dest, Ra.GetSimpleReg(), Rarg2);
     }
-    else if (cpu_info.bAVX && reversible && Rarg2.IsSimpleReg())
+    else if (cpu_info.bAVX && (packed || single) && reversible && Rarg2.IsSimpleReg())
     {
       (this->*avxOp)(dest, Rarg2.GetSimpleReg(), Ra);
     }
     else
     {
-      if (Rarg2.IsSimpleReg(dest))
+      // MOVSD from memory zeroes the upper half: a double result is computed aside then and
+      // merged into d (FinalizeDoubleResult), which keeps d's ps1.
+      if (Rarg2.IsSimpleReg(dest) || (!packed && !single && !Ra.IsSimpleReg()))
         dest = XMM1;
 
       if (packed)
@@ -840,6 +845,33 @@ void Jit64::fsign(UGeckoInstruction inst)
   int b = inst.FB;
   bool packed = inst.OPCD == 4;
 
+  if (!packed)
+  {
+    // fneg, fnabs, fabs change ps0 only; ps1 stays d's, as in the interpreter and JitArm64 (a
+    // write-only bind and a whole-register op gave d b's ps1, or another register's).
+    RCOpArg src = fpr.Use(b, RCMode::Read);
+    RCX64Reg Rd = fpr.Bind(d, RCMode::ReadWrite);
+    RegCache::Realize(src, Rd);
+    MOVSD(XMM0, src);
+    switch (inst.SUBOP10)
+    {
+    case 40:  // neg
+      XORPD(XMM0, MConst(psSignBits));
+      break;
+    case 136:  // nabs
+      ORPD(XMM0, MConst(psSignBits));
+      break;
+    case 264:  // abs
+      ANDPD(XMM0, MConst(psAbsMask));
+      break;
+    default:
+      PanicAlertFmt("fsign bleh");
+      break;
+    }
+    MOVSD(Rd, R(XMM0));
+    return;
+  }
+
   RCOpArg src = fpr.Use(b, RCMode::Read);
   RCX64Reg Rd = fpr.Bind(d, RCMode::Write);
   RegCache::Realize(src, Rd);
@@ -1105,8 +1137,10 @@ void Jit64::fctiwx(UGeckoInstruction inst)
   int d = inst.RD;
   int b = inst.RB;
 
+  // ReadWrite: the MOVSD below keeps d[64+] only if d was loaded (written only, its upper half was
+  // whatever the host register held).
   RCOpArg Rb = fpr.Use(b, RCMode::Read);
-  RCX64Reg Rd = fpr.Bind(d, RCMode::Write);
+  RCX64Reg Rd = fpr.Bind(d, RCMode::ReadWrite);
   RegCache::Realize(Rb, Rd);
 
   // Intel uses 0x80000000 as a generic error code while PowerPC uses clamping:
@@ -1166,7 +1200,8 @@ void Jit64::frsqrtex(UGeckoInstruction inst)
 
   RCX64Reg scratch_guard = gpr.Scratch(RSCRATCH_EXTRA);
   RCOpArg Rb = fpr.Use(b, RCMode::Read);
-  RCX64Reg Rd = fpr.Bind(d, RCMode::Write);
+  // ReadWrite: a double result keeps d's ps1 (FinalizeDoubleResult's MOVSD), if d was loaded.
+  RCX64Reg Rd = fpr.Bind(d, RCMode::ReadWrite);
   RegCache::Realize(scratch_guard, Rb, Rd);
 
   MOVAPD(XMM0, Rb);
