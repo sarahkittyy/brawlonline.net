@@ -99,23 +99,24 @@ The rule: **no part of spectating may make a player's game worse, and the test s
 
 - **No new connection:** the online connection already exists and is already the heartbeat.
 - **Pacer:** a token bucket at 2 KB/s with a 2 KB burst. The uploader also keeps at most 2 KB unacknowledged in ENet. On a congested uplink it fills almost no router queue. A backlog (after a pause or a takeover) goes through the same pacer and is never burst.
-- **Small packets, sent between game packets:** each chunk goes out as packets of at most 256 B. They are spread over the second and sent just after the session sends its own input packet for a frame, so an upload packet is never queued just ahead of a game packet. At 256 kbit/s up, a 256 B packet holds the link for 8 ms.
+- **Small packets:** each chunk goes out as packets of at most 512 B (header included), at most 2 KB/s, and nothing more while 2 KB are unacknowledged. At 256 kbit/s up, a 512 B packet holds the link for 16 ms. (Built 2026-10-13: the pacer runs on the Rooms thread's 10 ms tick; sending right after the session's own input packets is not done.)
 - **DSCP CS1** ("background") on the upload's packets where the OS allows it (Linux, macOS). Home routers mostly ignore it, so nothing relies on it.
 
 ### 4.3 Backoff (the uploader stops first)
 
-The primary's uploader reads signals the session already has, every frame, on the `Rooms` thread. **Any** of these pauses it at once:
+The primary's uploader reads signals the session already has (`Gprb::Session::GetLinkHealth`: counters and averages the CPU thread publishes with relaxed atomics), every 10 ms, on the `Rooms` thread. **Any** of these pauses it at once (as built 2026-10-13, `Online/Spectate.h` `Options`):
 
 | Signal | Pause when |
 |---|---|
-| Emulation speed | a frame missed its deadline in the last 2 s (the throttle fell behind) |
-| Time sync | the session stalled waiting for a peer's input in the last 2 s |
-| Rollbacks | the 2 s average rollback depth is over the game's own average for its first 10 s + 1 frame |
-| P2P latency | the RTT to any peer is 20 ms over its baseline from the game's first 10 s (the uplink is queuing) |
-| P2P loss | any loss on the P2P link in the last 2 s |
-| Upload queue | more than 2 KB of upload is unacknowledged |
+| Emulation speed (`frame`) | the displayed frames that ran late (over their schedule) in the last 2 s are more than twice the game's normal for 2 s plus 4 (a hitch is let through) |
+| Time sync | not used: the session can't tell a wait for another player's input from its routine pacing polls (about 116 updates a second with no frame to run in normal play, measured 2026-10-13); the ping and the rollbacks show that trouble |
+| Rollbacks (`rollback`) | the ~2 s average rollback depth is over the game's own average for its first 10 s + 1 frame |
+| P2P latency (`rtt`) | the worst link's average ping is 20 ms over its average in the game's first 10 s (the uplink is queuing) |
+| P2P loss | not measured: GekkoNet reports no loss; lost input packets show as stalls and rollbacks |
+| Upload queue (`queue`) | more than 8 KB of upload unacknowledged (from 2 KB on, nothing more is sent) |
 
-- **Resume** after 10 s with no signal. After the third pause in a game, the primary stops uploading for that game and tells mm, which moves the stream to a witness.
+- **The game's normal** is its own first 10 s of running (built 2026-10-13, after the first harness run): nothing but the queue pauses during them (the start of a match has its hitch at GO), and every rule compares with them. A PC that always shows some late frames is not held to a faster PC's normal: on the shared test PC two Dolphins showed about 13% of frames late for a whole game, and a fixed limit kept the upload paused until the game ended.
+- **Resume** after 10 s with no signal (a signal looks back 2 s, so about 12 s after the pause). After the third pause in a game, the primary stops uploading for that game and tells mm, which moves the stream to a witness.
 - **Choosing the primary** (among players who stream, §3.1): each game reports its last game's pauses and its average rollbacks at the barrier. mm picks the player with fewer. A player who paused last game is never chosen while another streaming player can upload.
 - When **every** streaming player is paused, spectators see "Buffering — the players' connections are busy" and wait. The game never pays for the stream.
 - **Kill switches:** mm's `hello` reply carries `spectateUpload: off | witness | on` and the pacer rate. One server config change turns uploading off for everyone at once, without a launcher update, which matters because a launcher update is slow to reach everyone. A player can also turn it off for themselves ("Let others stream my games", §6.3).

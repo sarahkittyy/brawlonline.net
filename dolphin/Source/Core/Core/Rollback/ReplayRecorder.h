@@ -14,7 +14,13 @@
 //   the newest) are final and go to the writer;
 // - End when the session ends: the rest of the frames, the result, the trailer.
 // These only copy small records. A writer thread does all the encoding, compression and file
-// writes, so a slow disk never slows the game; a crash loses at most the last second.
+// writes, so a slow disk never slows the game; a crash loses at most the last second. The writer
+// runs below the emulator's threads (Common::SetCurrentThreadBackgroundPriority): on a machine
+// short of CPU it falls behind (its queue grows, up to MAX_QUEUED) before the game does.
+//
+// The same chunks go to spectators (Online/Spectate.h) when the player lets others stream their
+// games ([Online] StreamGames): each chunk is encoded once, for the file and for the upload, and
+// never fighter memory. A game that only streams (SaveReplays off) reads no fighter memory at all.
 
 #pragma once
 
@@ -101,7 +107,8 @@ struct EndInfo
   u64 desyncs = 0;
 };
 
-// Settings ([Online] SaveReplays, ReplayDir, ReplayMonthlyFolders) are read at Begin.
+// Whether games are recorded: saved ([Online] SaveReplays) or streamed ([Online] StreamGames).
+// The settings (and ReplayDir, ReplayMonthlyFolders) are read at Begin.
 bool Enabled();
 
 // CPU thread. Begin opens the file (on the writer thread) under its final name; false when

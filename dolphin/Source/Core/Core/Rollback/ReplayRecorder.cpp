@@ -24,6 +24,7 @@
 #include "Core/ConfigManager.h"
 #include "Core/HW/Memmap.h"
 #include "Core/Online/GameSetup.h"
+#include "Core/Online/Spectate.h"
 #include "Core/Rollback/GameplayRollback.h"
 #include "Core/System.h"
 #include "VideoCommon/OnScreenDisplay.h"
@@ -80,6 +81,7 @@ private:
   void Loop()
   {
     Common::SetCurrentThreadName("Replay writer");
+    Common::SetCurrentThreadBackgroundPriority();
     std::unique_lock lk(m_mutex);
     while (true)
     {
@@ -114,11 +116,15 @@ WriterThread& Writers()
   return s_writers;
 }
 
-// The file of one recording, shared by its jobs. Once a write fails, the rest are skipped.
+// One recording's outputs, shared by its jobs: the file (once a write fails, the rest of the file
+// is skipped) and the spectate upload.
 struct Output
 {
   Writer writer;
   std::string path;
+  bool save = true;
+  bool stream = false;
+  std::array<u8, 16> uid{};
   bool failed = false;
   bool warned = false;
 };
@@ -154,6 +160,7 @@ struct Recording
 {
   bool active = false;
   bool overflowed = false;
+  bool save = true;  // to a file: fighter memory is read and recorded only then
   std::shared_ptr<Output> out;
   u32 ports = 0;
   int num_ports = 0;
@@ -358,15 +365,32 @@ void Queue(std::function<void(Output&)> fn, size_t bytes)
   if (!s_rec.out || s_rec.overflowed)
     return;
   std::shared_ptr<Output> out = s_rec.out;
-  if (!Writers().Push({[out, fn = std::move(fn)] {
-                         if (!out->failed)
-                           fn(*out);
-                       },
-                       bytes}))
+  if (!Writers().Push({[out, fn = std::move(fn)] { fn(*out); }, bytes}))
   {
     s_rec.overflowed = true;
     ERROR_LOG_FMT(BRAWLBACK, "replay: the disk is not keeping up; the rest of this game is not saved");
   }
+}
+
+// Encodes a chunk once: into the file when saving, to the spectate upload when streaming (never
+// fighter memory).
+void Put(Output& out, u32 type, u32 flags, std::span<const u8> raw, std::string_view what)
+{
+  const bool to_file = out.save && !out.failed;
+  const bool to_stream = out.stream && type != CHUNK_FTSP && type != CHUNK_FTRM;
+  if (!to_file && !to_stream)
+    return;
+  auto chunk = EncodeChunk(type, flags, raw);
+  if (!chunk)
+  {
+    if (to_file)
+      Fail(out, what);
+    return;
+  }
+  if (to_file && !out.writer.AppendChunk(*chunk))
+    Fail(out, what);
+  if (to_stream)
+    Online::Spectate::AddChunk(out.uid, type, std::move(*chunk), raw);
 }
 
 void QueueChunks(bool all)
@@ -386,21 +410,18 @@ void QueueChunks(bool all)
       [frames = std::move(frames), fighters = std::move(fighters),
        events = std::move(events)](Output& out) {
         const auto f = EncodeFrames(frames);
-        if (!out.writer.Append(CHUNK_FRMS, FLAG_DEFLATE | FLAG_CRITICAL, f))
-          return Fail(out, "cannot write frames");
-        if (fighters.count && !fighters.data.empty())
+        Put(out, CHUNK_FRMS, FLAG_DEFLATE | FLAG_CRITICAL, f, "cannot write frames");
+        if (out.save && fighters.count && !fighters.data.empty())
         {
           const auto m = EncodeFighters(fighters);
-          if (!out.writer.Append(CHUNK_FTRM, FLAG_DEFLATE, m))
-            return Fail(out, "cannot write fighter memory");
+          Put(out, CHUNK_FTRM, FLAG_DEFLATE, m, "cannot write fighter memory");
         }
         if (!events.empty())
         {
           picojson::object o;
           o["events"] = picojson::value(events);
           const auto e = Bytes(picojson::value(o).serialize());
-          if (!out.writer.Append(CHUNK_EVNT, FLAG_DEFLATE, e))
-            return Fail(out, "cannot write events");
+          Put(out, CHUNK_EVNT, FLAG_DEFLATE, e, "cannot write events");
         }
       },
       bytes);
@@ -422,25 +443,31 @@ void EmitFrame(s64 f)
     s_rec.frames.first_frame = static_cast<u32>(f);
     s_rec.frames.ports = static_cast<u8>(s_rec.ports);
     s_rec.fighters = {};
-    s_rec.fighters.first_frame = static_cast<u32>(f);
-    s_rec.fighters.ports = static_cast<u8>(s_rec.ports);
-    s_rec.fighters.block = FighterBlockBytes();
-    s_rec.fighters.data.assign(s_rec.num_ports, {});
+    if (s_rec.save)
+    {
+      s_rec.fighters.first_frame = static_cast<u32>(f);
+      s_rec.fighters.ports = static_cast<u8>(s_rec.ports);
+      s_rec.fighters.block = FighterBlockBytes();
+      s_rec.fighters.data.assign(s_rec.num_ports, {});
+    }
   }
   s_rec.frames.pads.push_back(r.pads);
   s_rec.frames.checksums.push_back(r.saved ? r.checksum : 0);
   if (r.saved && f % PARTS_EVERY == 0)
     s_rec.frames.parts.push_back(r.parts);
-  const u32 block = FighterBlockBytes();
-  for (int i = 0; i < s_rec.num_ports; ++i)
+  if (s_rec.save)
   {
-    auto& d = s_rec.fighters.data[i];
-    if (r.saved && r.fighters.size() == static_cast<size_t>(s_rec.num_ports) * block)
-      d.insert(d.end(), r.fighters.begin() + i * block, r.fighters.begin() + (i + 1) * block);
-    else
-      d.insert(d.end(), block, 0);
+    const u32 block = FighterBlockBytes();
+    for (int i = 0; i < s_rec.num_ports; ++i)
+    {
+      auto& d = s_rec.fighters.data[i];
+      if (r.saved && r.fighters.size() == static_cast<size_t>(s_rec.num_ports) * block)
+        d.insert(d.end(), r.fighters.begin() + i * block, r.fighters.begin() + (i + 1) * block);
+      else
+        d.insert(d.end(), block, 0);
+    }
+    ++s_rec.fighters.count;
   }
-  ++s_rec.fighters.count;
   QueueChunks(false);
 }
 }  // namespace
@@ -558,53 +585,71 @@ void ReadFighterMemory(Core::System& system, int port, u8* out)
 
 // ---- Recording ----
 
-bool Enabled()
+bool Saving()
 {
   return Config::Get(Config::ONLINE_SAVE_REPLAYS);
+}
+
+bool Enabled()
+{
+  return Saving() || Config::Get(Config::ONLINE_STREAM_GAMES);
 }
 
 bool Begin(Core::System& system, const BeginInfo& info)
 {
   if (s_rec.active)
     Abort();
-  if (!Enabled())
+  const bool save = Saving();
+  // Only a match mm made can be streamed (its id names it to mm).
+  const bool stream = Config::Get(Config::ONLINE_STREAM_GAMES) && !info.meta.match_id.empty();
+  if (!save && !stream)
     return false;
   s_rec = {};
+  s_rec.save = save;
   s_rec.ports = info.match_ports & 0xF;
   for (int p = 0; p < PORTS; ++p)
     s_rec.num_ports += (s_rec.ports >> p) & 1;
   if (s_rec.num_ports == 0)
     return false;
-  const std::string dir = ReplayDir();
-  const std::string stem = FileStem(info);
-  std::string path = dir + stem + EXTENSION;
-  for (int n = 2; ::File::Exists(path) && n < 100; ++n)
-    path = fmt::format("{}{} ({}){}", dir, stem, n, EXTENSION);
-  s_rec.path = path;
-  s_rec.out = std::make_shared<Output>();
-  s_rec.out->path = path;
-  s_rec.active = true;
+  std::string dir, path;
+  if (save)
   {
+    dir = ReplayDir();
+    const std::string stem = FileStem(info);
+    path = dir + stem + EXTENSION;
+    for (int n = 2; ::File::Exists(path) && n < 100; ++n)
+      path = fmt::format("{}{} ({}){}", dir, stem, n, EXTENSION);
     std::lock_guard lk(s_path_mutex);
     s_last_path = path;
   }
+  s_rec.path = path;
+  s_rec.out = std::make_shared<Output>();
+  s_rec.out->path = path;
+  s_rec.out->save = save;
+  s_rec.out->stream = stream;
+  s_rec.out->uid = info.uid;
+  s_rec.active = true;
   const std::string info_json = InfoJson(info);
   const std::string setup_json = info.setup_json;
-  const std::string spec_json = FighterSpecJson();
-  const auto uid = info.uid;
+  const std::string spec_json = save ? FighterSpecJson() : std::string();
+  const Online::Spectate::GameInfo game{info.meta.match_id, info.uid, info.game};
   Queue(
-      [dir, info_json, setup_json, spec_json, uid](Output& out) {
-        ::File::CreateFullPath(dir);
-        std::string error;
-        if (!out.writer.Open(out.path, uid, &error))
-          return Fail(out, fmt::format("cannot create the replay file: {}", error));
-        if (!out.writer.Append(CHUNK_INFO, 0, Bytes(info_json)) ||
-            !out.writer.Append(CHUNK_SETP, FLAG_CRITICAL, Bytes(setup_json)) ||
-            !out.writer.Append(CHUNK_FTSP, 0, Bytes(spec_json)))
+      [dir, info_json, setup_json, spec_json, game](Output& out) {
+        if (out.save)
         {
-          return Fail(out, "cannot write the replay header");
+          ::File::CreateFullPath(dir);
+          std::string error;
+          if (!out.writer.Open(out.path, game.uid, &error))
+            Fail(out, fmt::format("cannot create the replay file: {}", error));
         }
-        NOTICE_LOG_FMT(BRAWLBACK, "replay: recording to {}", out.path);
+        if (out.stream)
+          Online::Spectate::BeginGame(game);
+        Put(out, CHUNK_INFO, 0, Bytes(info_json), "cannot write the replay header");
+        Put(out, CHUNK_SETP, FLAG_CRITICAL, Bytes(setup_json), "cannot write the replay header");
+        if (out.save)
+          Put(out, CHUNK_FTSP, 0, Bytes(spec_json), "cannot write the replay header");
+        if (out.save && !out.failed)
+          NOTICE_LOG_FMT(BRAWLBACK, "replay: recording to {}", out.path);
       },
       info_json.size() + setup_json.size());
   (void)system;
@@ -647,6 +692,8 @@ void OnSave(Core::System& system, s64 frame, u32 checksum, const Parts& parts)
   r.parts = parts;
   r.parts.frame = static_cast<u32>(frame);
   r.saved = true;
+  if (!s_rec.save)
+    return;  // only streamed: no fighter memory
   const u32 block = FighterBlockBytes();
   r.fighters.resize(static_cast<size_t>(s_rec.num_ports) * block);
   int i = 0;
@@ -726,6 +773,15 @@ void End(const EndInfo& info)
   {
     Queue(
         [endg, last_frame](Output& out) {
+          if (out.stream)
+          {
+            const auto raw = Bytes(endg);
+            if (auto chunk = EncodeChunk(CHUNK_ENDG, 0, raw))
+              Online::Spectate::AddChunk(out.uid, CHUNK_ENDG, std::move(*chunk), raw);
+            Online::Spectate::EndGame(out.uid);
+          }
+          if (!out.save || out.failed)
+            return;
           if (!out.writer.Finish(Bytes(endg), last_frame))
             return Fail(out, "cannot finish the replay");
           NOTICE_LOG_FMT(BRAWLBACK, "replay: saved {}", out.path);
@@ -745,6 +801,10 @@ void Abort()
   {
     Queue(
         [](Output& out) {
+          if (out.stream)
+            Online::Spectate::AbortGame(out.uid);
+          if (!out.save)
+            return;
           out.writer.Close();
           ::File::Delete(out.path);
         },

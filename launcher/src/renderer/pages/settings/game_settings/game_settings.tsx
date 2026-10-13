@@ -17,7 +17,13 @@ import { Toggle } from "@/components/form/toggle";
 import { PathInput } from "@/components/path_input/path_input";
 import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { useIsoVerification, useIsoVerificationFraction } from "@/lib/hooks/use_iso_verification";
-import { useEnableMusic, useInputDelay, useIsoPath, useLaunchGameOnPlay } from "@/lib/hooks/use_settings";
+import {
+  useEnableMusic,
+  useEnableStreamGames,
+  useInputDelay,
+  useIsoPath,
+  useLaunchGameOnPlay,
+} from "@/lib/hooks/use_settings";
 
 import { SettingItem } from "../setting_item_section";
 import { ChatKeySetting } from "./chat_key_setting";
@@ -62,6 +68,7 @@ export const GameSettings = React.memo(() => {
   const [launchMeleeOnPlay, setLaunchMelee] = useLaunchGameOnPlay();
   const [inputDelay, setInputDelay] = useInputDelay();
   const [enableMusic, setEnableMusic] = useEnableMusic();
+  const [enableStreamGames, setEnableStreamGames] = useEnableStreamGames();
   const netplayDolphinOpen = useDolphinStore((store) => store.netplayOpened);
   const playbackDolphinOpen = useDolphinStore((store) => store.playbackOpened);
 
@@ -146,6 +153,19 @@ export const GameSettings = React.memo(() => {
               onChange={(checked) => setEnableMusic(checked)}
               label={Messages.enableMusic()}
               description={Messages.enableMusicDescription()}
+              disabled={netplayDolphinOpen}
+            />
+          </div>
+        </Tooltip>
+      </SettingItem>
+      <SettingItem>
+        <Tooltip title={netplayDolphinOpen ? Messages.closeDolphinToChange() : ""} placement="bottom-start">
+          <div>
+            <Toggle
+              value={enableStreamGames}
+              onChange={(checked) => setEnableStreamGames(checked)}
+              label={Messages.enableStreamGames()}
+              description={Messages.enableStreamGamesDescription()}
               disabled={netplayDolphinOpen}
             />
           </div>

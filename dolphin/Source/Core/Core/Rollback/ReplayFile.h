@@ -117,6 +117,10 @@ void SetNoController(Slots* pads, int port);
 
 // ---- Writing (the recorder's writer thread) ----
 
+// One whole chunk as the file stores it: the 20-byte header, then the stored bytes (deflated when
+// `flags` has FLAG_DEFLATE). nullopt if compression fails.
+std::optional<std::vector<u8>> EncodeChunk(u32 type, u32 flags, std::span<const u8> raw);
+
 class Writer
 {
 public:
@@ -130,6 +134,8 @@ public:
   bool IsOpen() const { return m_file.IsOpen(); }
   // Appends one chunk (compressed with FLAG_DEFLATE) and flushes the file to the OS.
   bool Append(u32 type, u32 flags, std::span<const u8> raw);
+  // Appends a chunk EncodeChunk made (the same bytes go to spectators: Online/Spectate.h).
+  bool AppendChunk(std::span<const u8> chunk);
   // ENDG, then the trailer; flushes to the disk and closes.
   bool Finish(std::span<const u8> endg, u32 last_frame);
   void Close();

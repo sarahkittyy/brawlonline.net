@@ -36,6 +36,22 @@ describe("online settings: music", () => {
   });
 });
 
+describe("online settings: let others stream my games", () => {
+  it("is on in a Dolphin.ini without the key", async () => {
+    const ini = await IniFile.init(iniPath);
+    expect((await getOnlineSettings(ini)).enableStreamGames).toBe(true);
+  });
+
+  it("round-trips through [Online] StreamGames", async () => {
+    const ini = await IniFile.init(iniPath);
+    await setOnlineSettings(ini, { enableStreamGames: false });
+    expect(await fs.promises.readFile(iniPath, "utf8")).toMatch(/\[Online\][^[]*StreamGames = False/);
+    expect((await getOnlineSettings(await IniFile.init(iniPath))).enableStreamGames).toBe(false);
+    await setOnlineSettings(ini, { enableStreamGames: true });
+    expect((await getOnlineSettings(await IniFile.init(iniPath))).enableStreamGames).toBe(true);
+  });
+});
+
 describe("chat key", () => {
   const hotkeys = async (text?: string) => {
     const file = path.join(tmp, "Hotkeys.ini");

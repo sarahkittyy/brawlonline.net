@@ -43,6 +43,7 @@ export const defaultAppSettings: AppSettings = {
     launchGameOnPlay: true,
     inputDelay: INPUT_DELAY_AUTO,
     enableMusic: true,
+    enableStreamGames: true,
     autoUpdateLauncher: true,
     netplayDolphinPath: null,
     playbackDolphinPath: null,

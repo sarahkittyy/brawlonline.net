@@ -609,6 +609,8 @@ add_library(core
   Online/SetFormat.h
   Online/Rooms.cpp
   Online/Rooms.h
+  Online/Spectate.cpp
+  Online/Spectate.h
   Online/Timeouts.h
   Online/User.cpp
   Online/User.h

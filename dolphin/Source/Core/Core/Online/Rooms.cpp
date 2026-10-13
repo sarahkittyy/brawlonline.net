@@ -24,6 +24,7 @@
 #include "Core/Online/GameSetup.h"
 #include "Core/Online/Matchmaking.h"
 #include "Core/Online/OnlineClient.h"
+#include "Core/Online/Spectate.h"
 #include "Core/Online/User.h"
 #include "Core/Rollback/GameplaySession.h"
 
@@ -338,6 +339,15 @@ void Send(ENetPeer* peer, const std::string& json)
     enet_packet_destroy(packet);
 }
 
+// A spectate data packet (docs/spectate-protocol.md §1): reliable, on channel 1.
+constexpr enet_uint8 SPECTATE_CHANNEL = 1;
+void SendData(ENetPeer* peer, const std::vector<u8>& data)
+{
+  ENetPacket* packet = enet_packet_create(data.data(), data.size(), ENET_PACKET_FLAG_RELIABLE);
+  if (enet_peer_send(peer, SPECTATE_CHANNEL, packet) != 0)
+    enet_packet_destroy(packet);
+}
+
 // What a message asks the thread to do outside the lock.
 struct Actions
 {
@@ -538,6 +548,7 @@ void OnDropped(Clock::time_point now, const std::string& why, bool count)
   s.leave_before_pending = false;  // the server took us out of the room with the connection
   s.outbox.clear();
   Chat::OnConnectionLost();
+  Spectate::OnConnectionLost();
   ++s.serial;
   Log(fmt::format("connection down ({}); next try in {} ms", why,
                   std::chrono::duration_cast<std::chrono::milliseconds>(delay).count()));
@@ -1261,9 +1272,10 @@ void Thread()
           const std::string text(reinterpret_cast<const char*>(ev.packet->data),
                                  ev.packet->dataLength);
           enet_packet_destroy(ev.packet);
-          // Chat checks and decrypts outside the room lock (the CPU thread reads the room).
+          // Chat checks and decrypts outside the room lock (the CPU thread reads the room), and
+          // spectating takes its own messages there too.
           lk.unlock();
-          const bool chat = Chat::OnServerMessage(text);
+          const bool chat = Chat::OnServerMessage(text) || Spectate::OnServerMessage(text);
           lk.lock();
           if (chat)
           {
@@ -1299,6 +1311,12 @@ void Thread()
       }
       const std::vector<std::string> chat_out =
           online ? Chat::TakeOutbox() : std::vector<std::string>{};
+      // Spectating's upload (Online/Spectate.h): it backs off on the game's health and on what
+      // is still unacknowledged to mm, before the game feels anything.
+      const Gprb::Session::LinkHealth lh = Gprb::Session::GetLinkHealth();
+      const Spectate::Outgoing spectate_out = Spectate::Service(
+          now, online, online && peer ? peer->reliableDataInTransit : 0,
+          Spectate::Health{lh.running, lh.late_frames, lh.rollback_avg, lh.ping_ms});
 
       std::lock_guard lk(s_mutex);
       if (host && (s.conn == Conn::Connecting || s.conn == Conn::Hello) &&
@@ -1336,6 +1354,13 @@ void Thread()
           Send(peer, json);
           ++s.sent;
         }
+        for (const std::string& json : spectate_out.json)
+        {
+          Send(peer, json);
+          ++s.sent;
+        }
+        for (const std::vector<u8>& data : spectate_out.data)
+          SendData(peer, data);
         while (!s.outbox.empty())
         {
           const Request r = s.outbox.front();

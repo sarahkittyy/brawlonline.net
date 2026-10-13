@@ -64,6 +64,10 @@ extern const Info<std::string> ONLINE_CHAT_KEY;
 // ReplayMonthlyFolders is on.
 extern const Info<bool> ONLINE_SAVE_REPLAYS;
 extern const Info<std::string> ONLINE_REPLAY_DIR;
+// Spectating (docs/design/spectating.md): this player's game uploads its games' inputs to the
+// server for spectators. The launcher's "Let others stream my games". Off: the game sends nothing
+// for spectating (the other players' games may still stream the match).
+extern const Info<bool> ONLINE_STREAM_GAMES;
 extern const Info<bool> ONLINE_REPLAY_MONTHLY_FOLDERS;
 
 // The matchmaking host and port in effect (the dev override applied).

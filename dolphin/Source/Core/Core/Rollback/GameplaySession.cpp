@@ -687,6 +687,15 @@ struct State
 
 State s;
 
+// LinkHealth (GetLinkHealth): written on the CPU thread, read by the spectate uploader.
+std::atomic<bool> s_health_running{false};
+std::atomic<u64> s_health_late{0};
+std::atomic<double> s_health_rollback{0};
+std::atomic<double> s_health_ping{-1};
+// The rollback depth's running average (CPU thread only): about 2 s at 60 frames a second.
+double s_rollback_ema = 0;
+constexpr double ROLLBACK_EMA_ALPHA = 1.0 / 120;
+
 std::string NetStatsLine(const State::NetStats& w);
 void CloseNetWindowClock();
 void NetStatsFold(State::NetStats& t, const State::NetStats& w);
@@ -3092,6 +3101,7 @@ void EndRunning(Core::System& system, const std::string& reason)
   system.GetCoreTiming().SetPresentPacing(false);
   s.resim_pass = false;
   s.end_reason = reason;
+  s_health_running.store(false, std::memory_order_relaxed);
   s.slow_fps = 0;  // the peers stop showing this PC as falling behind
   if (s.mode == Mode::Network)
   {
@@ -4029,6 +4039,7 @@ void NetStatsOnDisplayedFrame(Core::System& system)
                       (advanced ? FRAME_US / 1000 : 0.0);
     if (ms > LATE_MS)
     {
+      s_health_late.fetch_add(1, std::memory_order_relaxed);
       ++w.late;
       if (s.prev_frame_rolled_back)
         ++w.late_after_rollback;
@@ -4037,6 +4048,16 @@ void NetStatsOnDisplayedFrame(Core::System& system)
       w.late_ms_max = std::max(w.late_ms_max, ms);
     }
     s.prev_frame_rolled_back = s.ops.adv_count > 1;
+  }
+  {
+    const double depth = s.ops.adv_count > 1 ? std::max(s.last_load_back, 0) : 0;
+    s_rollback_ema += ROLLBACK_EMA_ALPHA * (depth - s_rollback_ema);
+    s_health_rollback.store(s_rollback_ema, std::memory_order_relaxed);
+    if (w.frames % 60 == 0)
+    {
+      if (GekkoNetworkStats st{}; WorstLink(&st) && st.avg_ping > 0)
+        s_health_ping.store(st.avg_ping, std::memory_order_relaxed);
+    }
   }
   w.ahead_sum += s.frames_ahead;
   w.ahead_min = std::min<double>(w.ahead_min, s.frames_ahead);
@@ -4925,6 +4946,13 @@ void StartRunning(Core::System& system)
   }
   s.phase = Phase::Running;
   s.frames = 0;
+  if (s.mode == Mode::Network)
+  {
+    s_rollback_ema = 0;
+    s_health_rollback.store(0, std::memory_order_relaxed);
+    s_health_ping.store(-1, std::memory_order_relaxed);
+    s_health_running.store(true, std::memory_order_relaxed);
+  }
   INFO_LOG_FMT(BRAWLBACK, "gprb: session running ({}; dual core {}, deterministic GPU thread {})",
                s.mode == Mode::SyncTest ? "sync test" :
                !s.ported ? std::string(IsHost() ? "host" : "joiner") :
@@ -7326,6 +7354,16 @@ bool IsResimulationPass()
 bool IsRunning()
 {
   return s.phase == Phase::Running;
+}
+
+LinkHealth GetLinkHealth()
+{
+  LinkHealth h;
+  h.running = s_health_running.load(std::memory_order_relaxed);
+  h.late_frames = s_health_late.load(std::memory_order_relaxed);
+  h.rollback_avg = s_health_rollback.load(std::memory_order_relaxed);
+  h.ping_ms = s_health_ping.load(std::memory_order_relaxed);
+  return h;
 }
 
 namespace

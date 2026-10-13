@@ -36,6 +36,7 @@ const Info<std::string> ONLINE_CHAT_WINDOW{{System::Main, "Online", "ChatWindow"
 const Info<std::string> ONLINE_CHAT_KEY{{System::Main, "Online", "ChatKey"}, ""};
 const Info<bool> ONLINE_SAVE_REPLAYS{{System::Main, "Online", "SaveReplays"}, true};
 const Info<std::string> ONLINE_REPLAY_DIR{{System::Main, "Online", "ReplayDir"}, ""};
+const Info<bool> ONLINE_STREAM_GAMES{{System::Main, "Online", "StreamGames"}, true};
 const Info<bool> ONLINE_REPLAY_MONTHLY_FOLDERS{{System::Main, "Online", "ReplayMonthlyFolders"},
                                               true};
 

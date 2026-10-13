@@ -82,6 +82,11 @@ function setupSettingsSubscriptions(settingsManager: SettingsManager, dolphinMan
     await installation.updateSettings({ enableMusic });
   });
 
+  settingsManager.onSettingChange("enableStreamGames", async (enableStreamGames) => {
+    const installation = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
+    await installation.updateSettings({ enableStreamGames });
+  });
+
   // A different Dolphin build: re-check it like Slippi re-checks after an install
   settingsManager.onSettingChange("netplayDolphinPath", async () => {
     await dolphinManager.installDolphin(DolphinLaunchType.NETPLAY);

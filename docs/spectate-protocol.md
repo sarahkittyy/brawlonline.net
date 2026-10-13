@@ -72,7 +72,7 @@ mm's `MM_SPECTATE` setting, the kill switch, decides what offers get:
 u32 slot | u32 seq | u32 offset | u32 total | bytes
 ```
 
-These are little-endian. `seq` counts the slot's chunks from 0, and `total` is the chunk's whole size including its header (at most 64 KiB + 20). A chunk may come in several packets: `offset` is where these bytes start, the packets of one chunk come in order, and the next chunk starts after the last one (`offset + len = total`). Packets are at most 1,200 bytes.
+These are little-endian. Dolphin (`Online/Spectate.cpp`) sends packets of at most 512 bytes, at the role's `rate` with a 1 s burst, and nothing more while 2 KB to mm are unacknowledged. `seq` counts the slot's chunks from 0, and `total` is the chunk's whole size including its header (at most 64 KiB + 20). A chunk may come in several packets: `offset` is where these bytes start, the packets of one chunk come in order, and the next chunk starts after the last one (`offset + len = total`). Packets are at most 1,200 bytes.
 
 mm checks every chunk. A failure ends the slot (`role: none`) and, when a witness exists, a takeover starts:
 - **Header:** the type is one of the six; the flags are only deflate and critical; the stored length matches; the CRC-32 matches.
