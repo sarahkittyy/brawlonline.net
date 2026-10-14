@@ -8,6 +8,7 @@ import React, { useCallback } from "react";
 
 import { InfiniteScrollContainer } from "@/components/infinite_scroll_container/infinite_scroll_container";
 import { PagedListStatus } from "@/components/paged_list_status/paged_list_status";
+import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { useAccount } from "@/lib/hooks/use_account";
 import type { CursorPage } from "@/lib/hooks/use_cursor_pages";
 import { useCursorPages } from "@/lib/hooks/use_cursor_pages";
@@ -61,6 +62,9 @@ export const LeaderboardPage = React.memo(function LeaderboardPage() {
                   <TableCell align="right" sx={{ width: 64 }}>
                     {Messages.position()}
                   </TableCell>
+                  <TableCell align="center" sx={{ width: 96 }}>
+                    {Messages.rank()}
+                  </TableCell>
                   <TableCell>{Messages.player()}</TableCell>
                   <TableCell>{Messages.connectCode()}</TableCell>
                   <TableCell align="right">{Messages.rating()}</TableCell>
@@ -98,6 +102,9 @@ export const LeaderboardRow = React.memo(function LeaderboardRow({
     <TableRow data-me={isMe || undefined} sx={isMe ? { backgroundColor: "rgba(255, 255, 255, 0.1)" } : undefined}>
       <TableCell align="right" sx={strong}>
         {entry.position}
+      </TableCell>
+      <TableCell align="center" sx={{ paddingY: "4px" }}>
+        <RankBadge rank={entry.rank} setsToPlace={entry.setsToPlace} size="small" />
       </TableCell>
       <TableCell sx={strong}>{entry.displayName}</TableCell>
       <TableCell sx={{ color: "text.secondary", ...strong }}>{entry.connectCode}</TableCell>

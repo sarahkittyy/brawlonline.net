@@ -108,7 +108,7 @@
 </main>
 
 <!-- Ranked top 10, filled from GET /v1/ranked/leaderboard (script.js); stays hidden if that can't be read or
-     nobody is rated yet. Rating only. Wide screens: tucked into the top right corner, sized to the space beside
+     nobody is rated yet. Rank badge and rating. Wide screens: tucked into the top right corner, sized to the space beside
      the centre column. Phones and narrow windows: a second full-screen "page" below the first (scroll snap). -->
 <section class="top" id="top10" aria-labelledby="top-title" hidden>
   <a class="swipe swipe-up" href="#">
@@ -122,7 +122,7 @@
     </div>
     <table>
       <thead>
-        <tr><th class="pos" scope="col">#</th><th scope="col">Player</th><th class="code" scope="col">Connect code</th><th class="rating" scope="col">Rating</th></tr>
+        <tr><th class="pos" scope="col">#</th><th class="rank" scope="col">Rank</th><th scope="col">Player</th><th class="code" scope="col">Connect code</th><th class="rating" scope="col">Rating</th></tr>
       </thead>
       <tbody id="top-rows"></tbody>
     </table>

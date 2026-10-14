@@ -53,8 +53,18 @@ export type AccountsPublicUser = {
     position: number | null;
     /** Players on the leaderboard (at least one rated set). */
     rankedPlayers: number;
+    /** The rank held; null while placing (or from an older server). */
+    tier?: Rank | null;
+    /** Rated sets left before the rank shows; 0 once placed. */
+    setsToPlace?: number;
   };
 };
+
+/** A ranked tier (docs/design/ranked-tiers.md), lowest first. */
+export type RankTier = "bronze" | "silver" | "gold" | "emerald" | "diamond" | "master" | "legendary";
+
+/** The rank a player holds. Division 3 is a tier's lowest and 1 its highest; Legendary has none (null). */
+export type Rank = { tier: RankTier; division: 1 | 2 | 3 | null };
 
 /** One row of `GET /v1/ranked/leaderboard`. */
 export type LeaderboardEntry = {
@@ -68,6 +78,10 @@ export type LeaderboardEntry = {
   /** Sets won and lost. */
   wins: number;
   losses: number;
+  /** The rank held; null while placing (or from an older server). */
+  rank?: Rank | null;
+  /** Rated sets left before the rank shows; 0 once placed. */
+  setsToPlace?: number;
 };
 
 /** `GET /v1/ranked/leaderboard?limit=&after=`: `next` is the `after` of the next page, null on the last. */

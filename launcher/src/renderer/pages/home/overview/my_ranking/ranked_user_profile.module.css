@@ -21,6 +21,35 @@
   background-position: left 25%;
 }
 
+/* The rating on the left, the rank badge on the right, the buttons under both. */
+.top {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 12px;
+}
+
+.info {
+  flex: 1;
+  min-width: 0;
+}
+
+.rankBadge {
+  display: flex;
+  align-items: center;
+  margin: -6px 4px 0 0;
+
+  --rank-badge-size: 116px;
+}
+
+@media (height <= 850px) {
+  .rankBadge {
+    margin: -6px 4px 0 0;
+
+    --rank-badge-size: 68px;
+  }
+}
+
 .gradientContainer {
   overflow: hidden;
   height: 100%;
@@ -45,6 +74,7 @@
 
 .content {
   position: absolute;
+  inset: 0;
   display: flex;
   flex-direction: column;
   justify-content: space-between;

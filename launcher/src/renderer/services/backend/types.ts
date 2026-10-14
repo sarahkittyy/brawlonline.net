@@ -4,6 +4,7 @@ import type {
   MatchHistoryPage,
   MyRulesets,
   PublishRulesetRequest,
+  Rank,
   RecentRuleset,
   RoomList,
   RulesetDraft,
@@ -24,6 +25,8 @@ export type {
   PublicModRoom,
   PublicRoom,
   PublishRulesetRequest,
+  Rank,
+  RankTier,
   RecentRuleset,
   RoomList,
   RoomMode,
@@ -35,7 +38,8 @@ export type {
   RulesetView,
 } from "@accounts/types";
 
-/** The ranked rating: an Elo number on Slippi's scale (server/crates/common/src/ranked.rs). No tiers. */
+/** The ranked rating: an Elo number on Slippi's scale (server/crates/common/src/ranked.rs), and the rank
+ * it gives (docs/design/ranked-tiers.md). */
 export type RankedProfile = {
   rating: number;
   /** Rated ranked sets (Slippi's `ratingUpdateCount`). */
@@ -44,6 +48,10 @@ export type RankedProfile = {
   position?: number | null;
   /** Players on the leaderboard. */
   rankedPlayers?: number;
+  /** The rank held; null while placing (or from an older server). */
+  rank?: Rank | null;
+  /** Rated sets left before the rank shows; 0 once placed. */
+  setsToPlace?: number;
 };
 
 export type UserData = {

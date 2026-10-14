@@ -7,6 +7,7 @@ import Tooltip from "@mui/material/Tooltip";
 import { useMutation } from "@tanstack/react-query";
 import { useNavigate } from "react-router-dom";
 
+import { RankBadge } from "@/components/rank_badge/rank_badge";
 import { useAccount } from "@/lib/hooks/use_account";
 import { formatPosition } from "@/lib/ranked_format";
 import { useServices } from "@/services";
@@ -16,20 +17,25 @@ import { MyRankingMessages as Messages } from "./my_ranking.messages";
 import styles from "./ranked_user_profile.module.css";
 
 export const RankedUserProfile = ({ rankedProfile, onHide }: { rankedProfile: RankedProfile; onHide: () => void }) => {
-  const { rating, setsPlayed } = rankedProfile;
+  const { rating, setsPlayed, rank, setsToPlace } = rankedProfile;
   const position = formatPosition(rankedProfile.position, rankedProfile.rankedPlayers);
   const navigate = useNavigate();
-  // Slippi shows its rank badge and tier here. We have no tiers: the Elo rating is the rank.
+  // Slippi shows its rank badge and tier here; so do we, with the rating beside it (docs/design/ranked-tiers.md).
 
   return (
     <div className={styles.container}>
       <div className={styles.content}>
-        <div>
-          <h3 className={styles.rankNameLabel}>{Messages.rating()}</h3>
-          <div style={{ color: "var(--accent-primary)", fontWeight: "bold" }}>{rating.toFixed(1)}</div>
-          <div style={{ fontSize: "12px", opacity: 0.7 }}>
-            {Messages.setsPlayed(setsPlayed)}
-            {position && ` · ${position}`}
+        <div className={styles.top}>
+          <div className={styles.info}>
+            <h3 className={styles.rankNameLabel}>{Messages.rating()}</h3>
+            <div style={{ color: "var(--accent-primary)", fontWeight: "bold" }}>{rating.toFixed(1)}</div>
+            <div style={{ fontSize: "12px", opacity: 0.7 }}>
+              {Messages.setsPlayed(setsPlayed)}
+              {position && ` · ${position}`}
+            </div>
+          </div>
+          <div className={styles.rankBadge}>
+            <RankBadge rank={rank} setsToPlace={setsToPlace} size="large" />
           </div>
         </div>
         <div style={{ display: "flex", gap: 16 }}>

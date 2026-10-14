@@ -174,8 +174,60 @@ function setupFaq() {
   fromHash();
 }
 
-// Ranked top 10 from the accounts API (same origin). Rating only, one decimal, as the launcher shows it.
-// Everything from the server goes in as text. If it can't be read, the section and its hint stay hidden.
+// Rank badges (docs/design/ranked-tiers.md): Layerlab's 2D League Icon Pack with each division's numeral baked
+// on. Hovering names the rank.
+const RANK_TIERS = {
+  bronze: "Bronze", silver: "Silver", gold: "Gold", emerald: "Emerald",
+  diamond: "Diamond", master: "Master", legendary: "Legendary",
+};
+// The emblems' common silhouette (256 x 256), drawn dotted while a player is placing.
+const RANK_OUTLINE =
+  "M123 9 L112 16 L94 34 L49 35 L32 39 L27 46 L26 64 L17 69 L16 81 L22 116 L27 121 L30 174 L36 191 L52 207 " +
+  "L75 223 L116 247 L131 249 L142 245 L194 213 L209 201 L220 188 L225 165 L227 124 L236 116 L240 97 L242 72 " +
+  "L238 66 L228 65 L227 46 L222 39 L203 35 L159 34 L136 12 L130 9 Z";
+
+// The badge for a leaderboard entry, or null without a rank (an older server).
+function rankBadge(entry) {
+  const badge = document.createElement("span");
+  badge.className = "rb";
+  badge.tabIndex = 0;
+  const left = Number(entry.setsToPlace) || 0;
+  if (left > 0) {
+    badge.dataset.tier = "placing";
+    badge.dataset.name = left === 1 ? "Placing: 1 more ranked set" : "Placing: " + left + " more ranked sets";
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 256 256");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", RANK_OUTLINE);
+    svg.appendChild(path);
+    badge.appendChild(svg);
+    const tag = document.createElement("span");
+    tag.className = "rb-tag";
+    tag.textContent = left + " more";
+    badge.appendChild(tag);
+    return badge;
+  }
+  const rank = entry.rank;
+  const name = rank && RANK_TIERS[rank.tier];
+  if (!name) return null;
+  const division = rank.tier === "legendary" ? 0 : Number(rank.division);
+  if (rank.tier !== "legendary" && ![1, 2, 3].includes(division)) return null;
+  const label = division ? name + " " + division : name;
+  badge.dataset.tier = rank.tier;
+  badge.dataset.name = label;
+  const img = document.createElement("img");
+  img.src = "assets/ranks/" + rank.tier + (division ? "-" + division : "") + ".png";
+  img.alt = label;
+  img.width = 128;
+  img.height = 128;
+  badge.appendChild(img);
+  return badge;
+}
+
+// Ranked top 10 from the accounts API (same origin): rank badge and rating, one decimal, as the launcher
+// shows it. Everything from the server goes in as text. If it can't be read, the section and its hint stay
+// hidden.
 async function setupTop10() {
   const section = document.getElementById("top10");
   const rows = document.getElementById("top-rows");
@@ -195,6 +247,9 @@ async function setupTop10() {
         tr.appendChild(td);
       };
       cell("pos", String(e.position));
+      cell("rank", "");
+      const badge = rankBadge(e);
+      if (badge) tr.lastChild.appendChild(badge);
       cell("name", String(e.displayName || ""));
       cell("code", String(e.connectCode || ""));
       cell("rating", Number(e.rating).toFixed(1));

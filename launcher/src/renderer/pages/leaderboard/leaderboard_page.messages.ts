@@ -2,6 +2,7 @@ export const LeaderboardPageMessages = {
   leaderboard: () => "Leaderboard",
   rankedPlayers: (n: number) => (n === 1 ? "1 ranked player" : `${n} ranked players`),
   position: () => "#",
+  rank: () => "Rank",
   player: () => "Player",
   connectCode: () => "Connect code",
   rating: () => "Rating",

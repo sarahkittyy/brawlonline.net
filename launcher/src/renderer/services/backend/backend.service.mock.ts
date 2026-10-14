@@ -13,7 +13,9 @@ import type {
   MatchHistoryPage,
   MyRulesets,
   PublishRulesetRequest,
+  Rank,
   RankedProfile,
+  RankTier,
   RecentRuleset,
   RoomList,
   RulesetDraft,
@@ -51,11 +53,59 @@ const savedMessages = [
   "bad connection",
 ];
 
+// The server's cutoffs (common::ranked::RANK_FLOORS): each division's lowest rating, Bronze 3 first.
+// The server holds the real rank (with its demotion buffer); the mock derives it from the rating.
+const MOCK_RANK_FLOORS = [
+  -Infinity,
+  1050,
+  1100,
+  1150,
+  1200,
+  1250,
+  1300,
+  1350,
+  1400,
+  1450,
+  1510,
+  1570,
+  1625,
+  1750,
+  1875,
+  2000,
+  2085,
+  2170,
+  2250,
+];
+const MOCK_TIERS: RankTier[] = ["bronze", "silver", "gold", "emerald", "diamond", "master", "legendary"];
+
+function mockRank(rating: number): Rank {
+  const index = MOCK_RANK_FLOORS.filter((floor) => rating >= floor).length - 1;
+  const tier = MOCK_TIERS[Math.floor(index / 3)];
+  return tier === "legendary" ? { tier, division: null } : { tier, division: (3 - (index % 3)) as 1 | 2 | 3 };
+}
+
+/** `?mockRank=gold-2`, `?mockRank=legendary` or `?mockRank=placing-3` in the dev URL sets the mock user's rank. */
+function mockRankOverride(): Pick<RankedProfile, "rank" | "setsToPlace"> | undefined {
+  const value = typeof window === "undefined" ? null : new URLSearchParams(window.location.search).get("mockRank");
+  const m = value?.match(/^(bronze|silver|gold|emerald|diamond|master|legendary|placing)(?:-(\d+))?$/);
+  if (!m) {
+    return undefined;
+  }
+  if (m[1] === "placing") {
+    return { rank: null, setsToPlace: Number(m[2] ?? 3) };
+  }
+  const division = m[2] ? (Number(m[2]) as 1 | 2 | 3) : null;
+  return { rank: { tier: m[1] as RankTier, division }, setsToPlace: 0 };
+}
+
 const mockRankedProfile: RankedProfile = {
   rating: 1523.4,
   setsPlayed: 42,
   position: 23,
   rankedPlayers: 137,
+  rank: mockRank(1523.4),
+  setsToPlace: 0,
+  ...mockRankOverride(),
 };
 
 const MOCK_PAGE_SIZE = 50;
@@ -111,10 +161,16 @@ const mockLeaderboard: LeaderboardEntry[] = Array.from({ length: 137 }, (_, i) =
     uid: i === 22 ? fakeUserId : `mock-player-${i + 1}`,
     displayName: i === 22 ? "Demo user 0" : `Player ${i + 1}`,
     connectCode: i === 22 ? "DEMO#0" : `PLYR#${100 + i}`,
-    rating: i === 22 ? mockRankedProfile.rating : 2150 - i * 9.3 - (i % 3) * 0.4,
+    rating: i === 22 ? mockRankedProfile.rating : 2300 - i * 10.5 - (i % 3) * 0.4,
     setsPlayed,
     wins,
     losses: setsPlayed - wins,
+    ...(i !== 22 && i % 13 === 6
+      ? { rank: null, setsToPlace: 1 + (i % 4) }
+      : {
+          rank: i === 22 ? mockRankedProfile.rank : mockRank(2300 - i * 10.5),
+          setsToPlace: i === 22 ? mockRankedProfile.setsToPlace : 0,
+        }),
   };
 });
 

@@ -191,10 +191,31 @@ describe("LeaderboardRow", () => {
     };
     const { container } = render(inTable(<LeaderboardRow entry={entry} isMe={true} />));
     const cells = Array.from(container.querySelectorAll("td")).map((td) => td.textContent);
-    expect(cells).toEqual(["7", "ann", "ANN#1", "1612.3", "10-5"]);
+    // No rank from an older server: the rank cell stays empty.
+    expect(cells).toEqual(["7", "", "ann", "ANN#1", "1612.3", "10-5"]);
     expect(container.querySelector("tr")!.getAttribute("data-me")).toBe("true");
     const { container: other } = render(inTable(<LeaderboardRow entry={{ ...entry, uid: "x" }} isMe={false} />));
     expect(other.querySelector("tr")!.getAttribute("data-me")).toBeNull();
+  });
+
+  it("shows the rank's emblem, named in its alt text, or the sets left while placing", () => {
+    const entry = {
+      position: 3,
+      uid: "x",
+      displayName: "bo",
+      connectCode: "BO#2",
+      rating: 1540,
+      setsPlayed: 30,
+      wins: 20,
+      losses: 10,
+    };
+    const ranked = render(
+      inTable(<LeaderboardRow entry={{ ...entry, rank: { tier: "emerald", division: 2 } }} isMe={false} />),
+    );
+    expect(ranked.container.querySelector("img")!.getAttribute("alt")).toBe("Emerald 2");
+    const placing = render(inTable(<LeaderboardRow entry={{ ...entry, rank: null, setsToPlace: 3 }} isMe={false} />));
+    expect(placing.container.querySelector("img")).toBeNull();
+    expect(placing.container.querySelectorAll("td")[1].textContent).toBe("3 more");
   });
 });
 
