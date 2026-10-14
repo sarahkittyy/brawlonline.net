@@ -48,7 +48,7 @@ import type { ModBuild } from "./mods/types";
 import { buildNetplayDolphinArgs, buildPlaybackDolphinArgs } from "./netplay_args";
 import { clearRoomRequest } from "./room_handoff";
 import { createProgressThrottle, runWithProgress } from "./setup_progress";
-import type { DolphinEvent, DolphinSetupPhase, ReplayCommunication } from "./types";
+import type { DolphinEvent, DolphinSetupPhase, ReplayCommunication, ReplayPlaybackStatus } from "./types";
 import { DolphinErrorType, DolphinEventType, DolphinLaunchType } from "./types";
 
 /** Progress events are sent at most this often per launch type (a 2 GB step has thousands of chunks). */
@@ -226,6 +226,26 @@ export class DolphinManager {
    * own), booting the game from the netplay install's P+ files and patched SD card. A replay's
    * game settings come from the replay itself (Dolphin forces them for the run only).
    */
+  /** Whether the playback Dolphin `id` is open. */
+  isPlaybackOpen(id = "playback"): boolean {
+    return this.playbackDolphinInstances.has(id);
+  }
+
+  /** What the playback Dolphin `id` plays (its status file), or null when it isn't open. */
+  async playbackStatus(id = "playback"): Promise<ReplayPlaybackStatus | null> {
+    return (await this.playbackDolphinInstances.get(id)?.readStatus()) ?? null;
+  }
+
+  /** Closes the playback Dolphin `id`. */
+  closePlaybackDolphin(id = "playback"): void {
+    this.playbackDolphinInstances.get(id)?.stop();
+  }
+
+  /** Where spectated games are written (docs/design/spectating.md §3.3): the playback User folder's `Spectate`. */
+  spectateDir(): string {
+    return path.join(this.getInstallation(DolphinLaunchType.PLAYBACK).userFolder, "Spectate");
+  }
+
   async launchPlaybackDolphin(id: string, replayComm: ReplayCommunication): Promise<void> {
     const playbackInstallation = this.getInstallation(DolphinLaunchType.PLAYBACK);
     this._assertNotMoving();

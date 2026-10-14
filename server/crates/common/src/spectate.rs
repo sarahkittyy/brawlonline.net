@@ -442,6 +442,10 @@ pub enum GameState {
 #[serde(rename_all = "camelCase")]
 pub struct LiveGame {
     pub number: u32,
+    /// The game's place in the stream (1-based): a watch from `?game=<place>` starts with it, so
+    /// a spectator joining a set mid-way starts at the game being played.
+    #[serde(default)]
+    pub place: u32,
     pub started_at: String,
     pub stage_id: u32,
     pub state: GameState,

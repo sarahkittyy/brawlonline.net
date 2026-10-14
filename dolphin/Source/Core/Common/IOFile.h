@@ -24,6 +24,9 @@ enum class SharedAccess
 {
   Default,
   Read,
+  // Others may go on reading and writing it (Windows; elsewhere files are never locked): a file
+  // another program is still writing, such as a spectated game's replay (Rollback/ReplayFile.h).
+  ReadWrite,
 };
 
 // simple wrapper for cstdlib file functions to

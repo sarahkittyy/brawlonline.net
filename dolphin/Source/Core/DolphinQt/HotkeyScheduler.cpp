@@ -281,6 +281,8 @@ void HotkeyScheduler::Run()
           PlaybackControl(PlaybackCommand::Faster);
         if (IsHotkey(HK_REPLAY_TOGGLE_OVERLAY))
           VideoCommon::ReplayOverlayUI::ToggleHidden();
+        if (IsHotkey(HK_REPLAY_GO_LIVE))
+          PlaybackControl(PlaybackCommand::GoLive);
       }
 
       if (IsHotkey(HK_EXPORT_RECORDING))

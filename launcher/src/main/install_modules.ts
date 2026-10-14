@@ -7,6 +7,7 @@ import setupReplaysIpc from "@replays/setup";
 import { SettingsManager } from "@settings/settings_manager";
 import setupSettingsIpc from "@settings/setup";
 import setupSocialIpc from "@social/setup";
+import setupSpectateIpc from "@spectate/setup";
 
 import { AppUpdater } from "./app_updater";
 import { BrowserWindowManager } from "./browser_window_manager";
@@ -22,6 +23,7 @@ export function installModules(flags: ConfigFlags) {
   setupDolphinIpc({ dolphinManager });
   const { accountsManager, serviceUrls } = setupAccountsIpc();
   setupSocialIpc({ accountsManager, accountsApi: serviceUrls.accountsApi, dolphinManager });
+  setupSpectateIpc({ accountsManager, accountsApi: serviceUrls.accountsApi, dolphinManager, settingsManager });
   setupReplaysIpc();
   setupSettingsIpc({ settingsManager, dolphinManager });
   setupModsIpc({ settingsManager, dolphinManager, accountsManager });

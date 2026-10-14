@@ -82,6 +82,7 @@ export const useInputDelay = () => useSetting("inputDelay");
 
 export const useEnableMusic = () => useSetting("enableMusic");
 export const useEnableStreamGames = () => useSetting("enableStreamGames");
+export const useCloseDolphinAfterSpectating = () => useSetting("closeDolphinAfterSpectating");
 
 export const useLaunchGameOnPlay = () => useSetting("launchGameOnPlay");
 

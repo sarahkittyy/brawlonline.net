@@ -1557,8 +1557,19 @@ Result CmdReplayPlay(const Args& args)
   return Gprb::Replay::Playback::Status();
 }
 
-// replay_control {action: pause|play|toggle|step|back|jump|seek|speed|faster|slower, arg}: the
-// playback controls (seconds for jump, a frame for seek, a factor for speed).
+// replay_comm {path}: follows a comm file as the launcher's playback Dolphin does (`-i`), e.g. a
+// spectating `mirror` request (docs/design/spectating.md §6.2).
+Result CmdReplayComm(const Args& args)
+{
+  const std::string path = GetString(args, "path");
+  if (path.empty())
+    Fail("argument 'path' is required");
+  Gprb::Replay::Playback::SetCommFile(path);
+  return Gprb::Replay::Playback::Status();
+}
+
+// replay_control {action: pause|play|toggle|step|back|jump|seek|speed|faster|slower|live, arg}:
+// the playback controls (seconds for jump, a frame for seek, a factor for speed; live: Go live).
 Result CmdReplayControl(const Args& args)
 {
   using Gprb::Session::PlaybackCommand;
@@ -1576,6 +1587,7 @@ Result CmdReplayControl(const Args& args)
       {"back", PlaybackCommand::StepBack},      {"jump", PlaybackCommand::Jump},
       {"seek", PlaybackCommand::Seek},          {"speed", PlaybackCommand::Speed},
       {"faster", PlaybackCommand::Faster},      {"slower", PlaybackCommand::Slower},
+      {"live", PlaybackCommand::GoLive},
   };
   for (const auto& [name, command] : COMMANDS)
   {
@@ -2027,6 +2039,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"machine_image_state_save", CmdMachineImageStateSave},
       {"machine_image_state_load", CmdMachineImageStateLoad},
       {"replay_play", CmdReplayPlay},
+      {"replay_comm", CmdReplayComm},
       {"replay_status", CmdReplayStatus},
       {"replay_control", CmdReplayControl},
       {"replay_recording", CmdReplayRecording},

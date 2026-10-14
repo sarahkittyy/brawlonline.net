@@ -18,6 +18,7 @@ import { PathInput } from "@/components/path_input/path_input";
 import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { useIsoVerification, useIsoVerificationFraction } from "@/lib/hooks/use_iso_verification";
 import {
+  useCloseDolphinAfterSpectating,
   useEnableMusic,
   useEnableStreamGames,
   useInputDelay,
@@ -69,6 +70,7 @@ export const GameSettings = React.memo(() => {
   const [inputDelay, setInputDelay] = useInputDelay();
   const [enableMusic, setEnableMusic] = useEnableMusic();
   const [enableStreamGames, setEnableStreamGames] = useEnableStreamGames();
+  const [closeAfterSpectating, setCloseAfterSpectating] = useCloseDolphinAfterSpectating();
   const netplayDolphinOpen = useDolphinStore((store) => store.netplayOpened);
   const playbackDolphinOpen = useDolphinStore((store) => store.playbackOpened);
 
@@ -170,6 +172,14 @@ export const GameSettings = React.memo(() => {
             />
           </div>
         </Tooltip>
+      </SettingItem>
+      <SettingItem>
+        <Toggle
+          value={closeAfterSpectating}
+          onChange={(checked) => setCloseAfterSpectating(checked)}
+          label={Messages.closeDolphinAfterSpectating()}
+          description={Messages.closeDolphinAfterSpectatingDescription()}
+        />
       </SettingItem>
       <ChatKeySetting />
     </div>

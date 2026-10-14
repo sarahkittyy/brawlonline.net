@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <string>
 
 #include <fmt/format.h>
@@ -83,7 +84,9 @@ void Display(float scale)
   if (io.MouseClicked[0] && !s_dragging && !info.at_end &&
       !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow))
     Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::TogglePause, 0);
-  const bool wanted = info.paused || info.seeking || s_dragging || now - s_mouse_moved < SHOW_AFTER_MOUSE;
+  // Spectating: also while catching up, buffering, or with something to say (the banner).
+  const bool wanted = info.paused || info.seeking || s_dragging || info.catching_up ||
+                      info.buffering || !info.banner.empty() || now - s_mouse_moved < SHOW_AFTER_MOUSE;
   if (s_hidden || !wanted)
     return;
 
@@ -112,9 +115,33 @@ void Display(float scale)
       ImGui::TextUnformatted(players.c_str());
     }
 
+    if (!info.banner.empty())
+      ImGui::TextUnformatted(info.banner.c_str());
+
     const s64 span = std::max<s64>(info.last - info.first, 1);
     const s64 shown = std::clamp(info.shown, info.first, info.last);
+    const bool live = info.live && !info.ended;
     std::string state = info.seeking ? "Seeking..." : info.paused ? "Paused" : "Playing";
+    if (live && info.catching_up)
+    {
+      // "Catching up to live - 2:14 / 4:05 - about 20 s": the edge moves on at 1x, so it closes
+      // at the catch-up rate less one.
+      state = fmt::format("Catching up to live - {} / {}", Clock60(shown - info.first),
+                          Clock60(info.live_edge - info.first));
+      if (info.catch_rate > 0 && info.catch_rate < 1.5)
+        state += " - your computer is catching up slowly";
+      else if (info.catch_rate > 1.0)
+        state += fmt::format(" - about {} s", static_cast<s64>(std::ceil(
+                                                  (info.live_edge - shown) / ((info.catch_rate - 1.0) * 60.0))));
+    }
+    else if (live && info.buffering)
+    {
+      state = "Buffering...";
+    }
+    else if (live && info.at_live)
+    {
+      state = "Live";
+    }
     if (info.speed != 1.0)
       state += fmt::format("   {}x", info.speed);
     const std::string time = fmt::format("{} / {}", Clock60(shown - info.first), Clock60(span));
@@ -153,10 +180,22 @@ void Display(float scale)
       ImGui::SameLine();
     }
 
+    // Spectating: LIVE (red, playing at the live edge) or GO LIVE with how far behind, right of
+    // the bar (End, or a click).
+    std::string live_label;
+    if (live)
+    {
+      const s64 behind = std::max<s64>(info.live_edge - shown, 0) / 60;
+      live_label = info.at_live || behind == 0 ? std::string("LIVE") :
+                                                 fmt::format("GO LIVE  -{} s", behind);
+    }
+    const float live_w =
+        live ? ImGui::CalcTextSize(live_label.c_str()).x + 16.0f * scale + ImGui::GetStyle().ItemSpacing.x : 0.0f;
+
     // The bar: click or drag to seek (the whole row's height takes the click; the bar is drawn
     // in its middle).
     const ImVec2 row0 = ImGui::GetCursorScreenPos();
-    const float bar_w = ImGui::GetContentRegionAvail().x;
+    const float bar_w = ImGui::GetContentRegionAvail().x - live_w;
     ImGui::InvisibleButton("##replayseek", ImVec2(bar_w, row_h));
     const ImVec2 p0(row0.x, row0.y + (row_h - bar_h) * 0.5f);
     const bool hovered = ImGui::IsItemHovered();
@@ -186,10 +225,35 @@ void Display(float scale)
       dl->AddRectFilled(ImVec2(x - 1.0f * scale, p0.y), ImVec2(x + 1.0f * scale, p1.y),
                         IM_COL32(230, 60, 60, 255));
     }
+    if (live)
+    {
+      // The live edge: what is played live (the rest of the bar is the buffer received).
+      const float x = p0.x + static_cast<float>(info.live_edge - info.first) / span * bar_w;
+      dl->AddRectFilled(ImVec2(x - 1.0f * scale, p0.y - 2.0f * scale),
+                        ImVec2(x + 1.0f * scale, p1.y + 2.0f * scale), IM_COL32(230, 60, 60, 255));
+    }
     if (hovered || s_dragging)
     {
       const float hx = s_dragging ? s_drag_at : at(io.MousePos.x);
       ImGui::SetTooltip("%s", Clock60(static_cast<s64>(hx * span)).c_str());
+    }
+    if (live)
+    {
+      ImGui::SameLine();
+      const ImVec2 b0 = ImGui::GetCursorScreenPos();
+      const float w = live_w - ImGui::GetStyle().ItemSpacing.x;
+      if (ImGui::InvisibleButton("##replaylive", ImVec2(w, row_h)) && !info.at_live)
+        Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::GoLive, 0);
+      const bool over = ImGui::IsItemHovered();
+      const ImU32 bg = info.at_live ? IM_COL32(200, 40, 40, 230) :
+                       over         ? IM_COL32(255, 255, 255, 70) :
+                                      IM_COL32(255, 255, 255, 40);
+      dl->AddRectFilled(b0, ImVec2(b0.x + w, b0.y + row_h), bg, 4.0f * scale);
+      const ImVec2 ts = ImGui::CalcTextSize(live_label.c_str());
+      dl->AddText(ImVec2(b0.x + (w - ts.x) * 0.5f, b0.y + (row_h - ts.y) * 0.5f),
+                  IM_COL32(255, 255, 255, 255), live_label.c_str());
+      if (over && !info.at_live)
+        ImGui::SetTooltip("Go live (End)");
     }
   }
   ImGui::End();

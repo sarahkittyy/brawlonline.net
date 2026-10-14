@@ -4,30 +4,40 @@ others stream their games; the second has [Online] StreamGames off and sends not
 game uploads its replay's chunks over its online connection; a third account lists the game and
 watches it from accounts (/v1/live, server-sent events). What a spectator gets must be exactly the
 streaming player's own replay file, chunk for chunk, without the fighter memory.
+
+Watching (§6.2): a fresh playback Dolphin follows the stream as the launcher's does, through a
+`mirror` comm file and the growing files StreamWriter writes, joining a set mid-game.
 """
 
 from __future__ import annotations
 
 import base64
 import json
+import os
 import struct
 import sys
 import threading
 import time
+import types
 import urllib.error
 import urllib.request
+import zlib
 from pathlib import Path
 from typing import Any, Callable, Iterator
 
 import pytest
 
 from ppharness.backend import OnlineBackend, OnlineUser
-from ppharness.instance import DolphinInstance
+from ppharness.instance import DolphinInstance, InstanceConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_online import _make_backend  # noqa: E402
-from test_online_game import _connected_direct  # noqa: E402
+from test_online_game import PLUGIN, ROOT, Game, _connected_direct  # noqa: E402
 import online_set  # noqa: E402
+import patch_sd  # noqa: E402
+from ppharness import replay as R  # noqa: E402
+
+ARTIFACTS = ROOT / "run" / "artifacts" / "spectate"
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 
@@ -64,14 +74,11 @@ def get_json(be: OnlineBackend, path: str, token: str) -> Any:
         return json.load(r)
 
 
-def watch(be: OnlineBackend, stream: str, token: str, until: Callable[[dict[str, Any]], bool],
-          timeout: float = 60) -> list[dict[str, Any]]:
-    """The watch stream's events until `until` accepts one (that one included)."""
+def watch_events(be: OnlineBackend, stream: str, token: str) -> Iterator[dict[str, Any]]:
+    """The watch stream's events as they come."""
     req = urllib.request.Request(be.accounts_url + f"/v1/live/{stream}/watch",
                                  headers={"Authorization": f"Bearer {token}"})
-    events: list[dict[str, Any]] = []
-    deadline = time.monotonic() + timeout
-    with urllib.request.urlopen(req, timeout=30) as r:
+    with urllib.request.urlopen(req, timeout=60) as r:
         data: list[str] = []
         for raw in r:
             line = raw.decode("utf-8").rstrip("\r\n")
@@ -80,11 +87,111 @@ def watch(be: OnlineBackend, stream: str, token: str, until: Callable[[dict[str,
             elif line == "" and data:
                 ev = json.loads("".join(data))
                 data = []
-                events.append(ev)
-                if until(ev):
-                    return events
-            assert time.monotonic() < deadline, f"watch timed out after {len(events)} events"
+                yield ev
+
+
+def watch(be: OnlineBackend, stream: str, token: str, until: Callable[[dict[str, Any]], bool],
+          timeout: float = 60) -> list[dict[str, Any]]:
+    """The watch stream's events until `until` accepts one (that one included)."""
+    events: list[dict[str, Any]] = []
+    deadline = time.monotonic() + timeout
+    for ev in watch_events(be, stream, token):
+        events.append(ev)
+        if until(ev):
+            return events
+        assert time.monotonic() < deadline, f"watch timed out after {len(events)} events"
     raise AssertionError(f"the watch stream ended early: {events[-3:]}")
+
+
+BREP_MAGIC = b"\x89BRP\r\n\x1a\n"
+
+
+class StreamWriter:
+    """What the launcher does with a watch stream (docs/design/spectating.md §3.3): each game of
+    the stream into its own growing .brep (the header, then every chunk as it comes, the trailer
+    at the game's end), and the `mirror` comm file the playback Dolphin follows: the games so far,
+    those whose rest won't come (`cut`: the stream said `bad`, its uploader stopped), and whether
+    the stream is over."""
+
+    def __init__(self, be: OnlineBackend, token: str, out: Path, comm: Path, close_on_end: bool = True):
+        self.be, self.token, self.out, self.comm = be, token, out, comm
+        self.close_on_end = close_on_end
+        self.paths: list[Path] = [out / "1.brep"]   # the first game's, before it exists
+        self.cut: set[Path] = set()
+        self.over = False
+        self.error: BaseException | None = None
+        self.stream: str | None = None
+        self.write_comm()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def write_comm(self) -> None:
+        tmp = self.comm.with_suffix(".tmp")
+        tmp.write_text(json.dumps({
+            "mode": "mirror", "commandId": "watch-1",
+            "queue": [{"path": str(p), "cut": p in self.cut} for p in self.paths],
+            "streamOver": self.over, "closeOnEnd": self.close_on_end}))
+        os.replace(tmp, self.comm)
+
+    def _run(self) -> None:
+        try:
+            while self.stream is None:
+                games = get_json(self.be, "/v1/live", self.token)["games"]
+                if games:
+                    self.stream = games[0]["id"]
+                else:
+                    time.sleep(1)
+            files: dict[int, Any] = {}
+            meta: dict[int, dict[str, int]] = {}
+            for ev in watch_events(self.be, self.stream, self.token):
+                t = ev["type"]
+                if t == "game":
+                    n = ev["game"]
+                    for m, f in files.items():
+                        if m < n and not f.closed:
+                            f.close()
+                            self.cut.add(self.out / f"{m}.brep")
+                    path = self.out / f"{n}.brep"
+                    f = path.open("wb")
+                    f.write(BREP_MAGIC + struct.pack("<HHI", 1, 0, 32) + bytes.fromhex(ev["uid"]))
+                    f.flush()
+                    files[n], meta[n] = f, {"at": 32, "last": -1, "endg": -1}
+                    if path not in self.paths:
+                        self.paths.append(path)
+                        self.write_comm()
+                elif t == "chunk":
+                    n, b = ev["game"], base64.b64decode(ev["b"])
+                    m = meta[n]
+                    if b[:4] == b"FRMS":
+                        raw = zlib.decompress(b[20:])
+                        first, count = struct.unpack_from("<IH", raw, 0)
+                        m["last"] = first + count - 1
+                    elif b[:4] == b"ENDG":
+                        m["endg"] = m["at"]
+                    files[n].write(b)
+                    files[n].flush()
+                    m["at"] += len(b)
+                elif t == "bad":
+                    print("stream: game", ev["game"], "cut:", ev.get("error"), flush=True)
+                    if not files[ev["game"]].closed:
+                        files[ev["game"]].close()
+                    self.cut.add(self.out / f"{ev['game']}.brep")
+                    self.write_comm()
+                elif t == "end":
+                    n, m = ev["game"], meta[ev["game"]]
+                    body = b"BRPT" + struct.pack("<II", m["endg"], m["last"])
+                    files[n].write(body + struct.pack("<I", zlib.crc32(body)))
+                    files[n].close()
+                elif t == "over":
+                    break
+            for m, f in files.items():
+                if not f.closed:
+                    f.close()
+                    self.cut.add(self.out / f"{m}.brep")
+            self.over = True
+            self.write_comm()
+        except BaseException as e:  # noqa: BLE001 - reported by the test
+            self.error = e
 
 
 class ListPoller:
@@ -162,3 +269,119 @@ def test_a_direct_game_streams_from_the_player_who_allows_it(
 
     for g in (a, b):
         g.c.mm_cancel()
+
+
+def _viewer(be: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str,
+            comm: Path, out: Path) -> Game:
+    """The launcher's playback Dolphin: `-i <comm>`, no account, booted from the menus."""
+    cfg = InstanceConfig(cpu_thread=True, video_backend=gpu_backend, extra_args=("-i", str(comm)),
+                         dolphin_ini={"Online": {"UseDevServer": True, "MatchmakingPort": be.mm_port,
+                                                 "DevAccountsUrl": be.accounts_url}})
+    inst = dolphin("viewer", config=cfg, client_timeout=60.0)
+    d = inst.create()
+    patch_sd.patch_image(d / "Wii" / "sd.raw", [(PLUGIN.read_bytes(), patch_sd.plugin_sd_path(PLUGIN))])
+    inst.launch()
+    inst.connect()
+    return Game(inst, types.SimpleNamespace(display_name="viewer"), out / "viewer")
+
+
+class Sampler:
+    """The viewer's playback status twice a second, kept (what it went through)."""
+
+    def __init__(self, v: Game, status_file: Path):
+        self.v, self.status_file = v, status_file
+        self.samples: list[dict[str, Any]] = []
+        self._stop = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._thread.start()
+
+    def _run(self) -> None:
+        while not self._stop.wait(0.5):
+            try:
+                st = self.v.c.call("replay_status")
+                try:
+                    st["file"] = json.loads(self.status_file.read_text())
+                except (OSError, ValueError):
+                    st["file"] = {}
+                self.samples.append(st)
+            except Exception:  # noqa: BLE001 - a missed sample
+                pass
+
+    def stop(self) -> None:
+        self._stop.set()
+        self._thread.join(5)
+
+
+@pytest.mark.slow
+def test_a_spectator_joins_a_set_mid_game_and_watches_it_live(
+        spectate_backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str) -> None:
+    """A two-game Direct set on the server's rules, streamed by the first player. A playback
+    Dolphin booted while game 1 runs follows the stream in `mirror` mode: it waits for the game's
+    first frames, catches up to the live edge, plays live, takes game 2 when it is queued, and at
+    the stream's end holds the last frame, counts down and asks to be closed. Every frame it runs
+    matches the recorded checksum. On a busy PC the uploader may stop for a game (players first,
+    docs/design/spectating.md §4.3): then the viewer plays what came and goes on to the next."""
+    be = spectate_backend
+    dana: OnlineUser = be.create_user("dana", "DANA")
+    out = ARTIFACTS / "watch"
+    out.mkdir(parents=True, exist_ok=True)
+    for old in out.glob("*.brep"):
+        old.unlink()
+    comm = out / "comm.json"
+    status_file = Path(str(comm) + ".status.json")
+    status_file.unlink(missing_ok=True)
+
+    a, b, _, _ = _connected_direct(be, dolphin, gpu_backend, "spectate-watch", ("sora", "tobi"),
+                                   test_rules=False,
+                                   dolphin_ini=(None, {"Online": {"StreamGames": False}}))
+    # The upload without its backoff: this test is about the viewer. On this busy PC (three
+    # Dolphins, one catching up flat out) the shipping uploader holds for most of a game and sends
+    # it at its end, which test_spectate_safety.py covers.
+    st = a.c.call("spectate_config", stream=True, forced=True)
+    assert st["stream"], st
+    writer = StreamWriter(be, dana.session_token, out, comm)
+    v = _viewer(be, dolphin, gpu_backend, comm, out)
+    sampler = Sampler(v, status_file)
+    try:
+        online_set.play_set([a, b], games=2, mode="direct", panels={g.name: g.panel for g in (a, b)})
+        for g in (a, b):
+            g.c.mm_cancel()
+        # The stream is over 120 s after its last game (docs/spectate-protocol.md §2).
+        online_set.wait(lambda: writer.over or writer.error, 400, "the stream to be over")
+        assert writer.error is None, writer.error
+        online_set.wait(lambda: sampler.samples and sampler.samples[-1]["file"].get("state") == "close",
+                        900, "the viewer to reach the end and ask to be closed")
+        v.shot("end")
+    finally:
+        sampler.stop()
+
+    samples = sampler.samples
+    (out / "samples.json").write_text(json.dumps(samples, indent=1))
+    states = [s["file"].get("state") for s in samples]
+    print("viewer states:", sorted(set(s for s in states if s)))
+    assert "loading" in states, "it waited for the game's first frames"
+    # It caught up, then played at the live edge (before the game had ended).
+    caught = [i for i, s in enumerate(samples) if s.get("catching_up")]
+    assert caught, "never caught up to live"
+    live = [s for s in samples[caught[0]:]
+            if s.get("live") and not s.get("catching_up") and not s.get("complete", True) and
+            not s.get("buffering") and s.get("live_edge", 0) - s.get("shown", 0) <= 90]
+    assert live, "never played at the live edge"
+    rates = [s.get("catch_rate", 0) for s in samples if s.get("catch_rate")]
+    print(f"catch-up rate: max {max(rates or [0]):.1f}x")
+    # Both games played, each with every frame checked and none differing.
+    by_index: dict[int, dict[str, Any]] = {}
+    for s in samples:
+        if s.get("started"):
+            by_index[s["file"].get("index", -1)] = s
+    assert set(by_index) >= {0, 1}, sorted(by_index)
+    for i, path in enumerate(writer.paths[:2]):
+        rep = R.read(path)
+        s = by_index[i]
+        assert s["desync_frame"] == -1, s
+        if path in writer.cut:
+            print(f"game {i + 1} was cut after {len(rep.slots)} frames")
+            assert s["frames_checked"] >= len(rep.slots) - 1, (i, s)
+        else:
+            assert rep.trailer, f"{path}: the writer's file is a whole replay"
+            assert s["frames_checked"] >= rep.endg["finalFrame"] - rep.first_frame - 1, (i, s, rep.endg)

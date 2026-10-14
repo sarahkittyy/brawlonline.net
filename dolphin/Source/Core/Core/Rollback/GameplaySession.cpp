@@ -673,6 +673,22 @@ struct State
     std::array<std::string, MAX_LOBBY_PLAYERS> names{};
     std::array<u8, MAX_LOBBY_PLAYERS> chars{};
     std::string title;
+    // Spectating (ArmPlayback's `live`, docs/design/spectating.md §6.2): the file grows
+    // (`live_file` is `file`, writable under s.mutex: ExtendPlayback); the catch-up to the live
+    // edge, its rate (frames run, since when), the wait for frames, the speed nudge that keeps the
+    // buffer, and the overlay's banner.
+    std::shared_ptr<Replay::File> live_file;
+    bool live = false;
+    bool catch_up = false;
+    s64 catch_frames = 0;
+    Clock::time_point catch_since{};
+    double catch_rate = 0;
+    bool buffering = false;
+    double nudge = 1.0;
+    std::string banner;
+    bool cut = false;  // the rest of the live game won't come
+    // PlaybackControl calls (any of them cancels a spectated game's close countdown).
+    u32 controls = 0;
   } pb;
   // Keyframes for seeking (ReplayKeyframes.h), from the replay's first frame on.
   std::unique_ptr<Replay::Keyframes> pb_keys = std::make_unique<Replay::Keyframes>();
@@ -5011,10 +5027,100 @@ void WriteGoneFlags(Core::System& system, PadSlots* slots, s64 frame)
 constexpr s64 KEYFRAME_EVERY = 300;
 constexpr s64 DENSE_EVERY = 60;
 
+// Spectating (docs/design/spectating.md §6.2): the live edge is the newest frame less 3 s. Live
+// play keeps 2-4 s of frames by nudging the speed 2 %; out of frames, it holds ("Buffering") until
+// 2 s are there again. Catching up to the edge shows one frame in 15, so the game visibly runs.
+constexpr s64 LIVE_BUFFER = 180;
+constexpr s64 LIVE_LOW = 120;
+constexpr s64 LIVE_HIGH = 240;
+constexpr s64 LIVE_NEAR = 60;
+constexpr s64 CATCH_UP_SHOW_EVERY = 15;
+
 // The frame on screen (the last one run), and the next one.
 s64 PlaybackShown()
 {
   return static_cast<s64>(s.pb.file->first_frame + s.pb.next) - 1;
+}
+
+// The file's last frame (a live one's grows).
+s64 PlaybackLast()
+{
+  return static_cast<s64>(s.pb.file->first_frame + s.pb.file->pads.size()) - 1;
+}
+
+// Whether the whole game is there: always for a replay, once its ENDG came for a live one.
+bool PlaybackComplete()
+{
+  return !s.pb.live || s.pb.cut || !s.pb.file->endg.empty();
+}
+
+s64 LiveEdge()
+{
+  const s64 last = PlaybackLast();
+  return PlaybackComplete() ? last :
+                              std::max<s64>(last - LIVE_BUFFER, s.pb.file->first_frame);
+}
+
+// Whether a live playback waits for frames before frame `f`: out of frames it holds until
+// LIVE_LOW are there (or the game's end came).
+bool LiveWaiting(s64 f)
+{
+  auto& pb = s.pb;
+  if (!pb.live || PlaybackComplete())
+  {
+    pb.buffering = false;
+    return false;
+  }
+  const s64 last = PlaybackLast();
+  if (f > last)
+    pb.buffering = true;
+  else if (pb.buffering && last - f >= LIVE_LOW)
+    pb.buffering = false;
+  return pb.buffering;
+}
+
+// At a live playback's loop top, before frame `f`: the catch-up follows the moving edge and ends
+// there (or when paused), fast-forward stops there, and live play nudges its speed to keep the
+// buffer.
+void LiveLoopTop(s64 f)
+{
+  auto& pb = s.pb;
+  const s64 edge = LiveEdge();
+  if (pb.catch_up)
+  {
+    if (f >= edge || pb.paused)
+    {
+      pb.catch_up = false;
+      pb.ff_until = -1;
+      if (f >= edge)
+      {
+        INFO_LOG_FMT(BRAWLBACK, "replay: live at frame {} ({:.1f}x while catching up)", f,
+                     pb.catch_rate);
+        OSD::AddMessage("Live", OSD::Duration::SHORT);
+      }
+    }
+    else
+    {
+      pb.ff_until = edge;
+      const auto now = Clock::now();
+      if (pb.catch_frames++ == 0)
+        pb.catch_since = now;
+      const double secs = std::chrono::duration<double>(now - pb.catch_since).count();
+      if (secs >= 1.0)
+        pb.catch_rate = static_cast<double>(pb.catch_frames) / (secs * 60.0);
+    }
+  }
+  if (pb.speed > 1.0 && f >= edge && !PlaybackComplete())
+  {
+    pb.speed = 1.0;
+    OSD::AddMessage("Live", OSD::Duration::SHORT);
+  }
+  pb.nudge = 1.0;
+  if (!PlaybackComplete() && !pb.paused && !pb.catch_up && f >= edge - LIVE_NEAR)
+  {
+    const s64 buffer = PlaybackLast() - f;
+    pb.nudge = buffer > LIVE_HIGH ? 1.02 : buffer < LIVE_LOW ? 0.98 : 1.0;
+  }
 }
 
 // Starts a seek to s.pb.seek_to (under s.mutex, at the loop top): the newest keyframe at or before
@@ -5074,15 +5180,21 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
   auto& pb = s.pb;
   const auto& file = *pb.file;
   const s64 first = file.first_frame;
-  const s64 last = first + static_cast<s64>(file.pads.size()) - 1;
   for (;;)
   {
     if (pb.seek_to >= 0)
       PlaybackSeek(system);
+    // A live file grows while this waits.
+    const s64 last = PlaybackLast();
     const s64 f = first + static_cast<s64>(pb.next);
+    if (pb.live)
+      LiveLoopTop(f);
     const bool ff = f < pb.ff_until;
-    if (f > last && !ff)
+    const bool waiting = !ff && LiveWaiting(f);
+    if (f > last && !ff && !waiting)
     {
+      if (pb.live && pb.cut && pb.file->endg.empty() && !pb.at_end)
+        OSD::AddMessage("The rest of this game wasn't streamed.", OSD::Duration::NORMAL, OSD::Color::YELLOW);
       // The last frame has run: the match ends as it did for its player, unless this is the last
       // replay asked for, which holds there (paused) so that it can still be sought back.
       if (!pb.hold_at_end)
@@ -5097,21 +5209,26 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
       if (!pb.paused)
         return PlaybackStep::End;
     }
-    else if (!pb.paused || pb.step > 0 || ff)
+    else if (!waiting && (!pb.paused || pb.step > 0 || ff))
     {
       break;
     }
-    // Paused at the loop top: the game stands still between two frames (emulated time too).
-    // The video thread shows the last frame again about 30 times a second, so the overlay draws
-    // and a screenshot or a capture of the window still gets the paused frame. Commands
-    // (PlaybackControl) wake it.
-    s.cpu_where = "replay paused";
+    // Paused at the loop top (or a live playback waiting for frames): the game stands still
+    // between two frames (emulated time too). The video thread shows the last frame again about
+    // 30 times a second, so the overlay draws and a screenshot or a capture of the window still
+    // gets the paused frame. Commands (PlaybackControl) and frames arriving (ExtendPlayback) wake
+    // it.
+    s.cpu_where = waiting ? "replay buffering" : "replay paused";
     AsyncRequests::GetInstance()->PushEvent([] {
       if (g_presenter)
         g_presenter->RedrawLastFrame();
     });
     const bool woke = HostWait(
-        system, [] { return !s.pb.paused || s.pb.step > 0 || s.pb.seek_to >= 0; },
+        system,
+        [] {
+          const s64 next = static_cast<s64>(s.pb.file->first_frame + s.pb.next);
+          return s.pb.seek_to >= 0 || (!LiveWaiting(next) && (!s.pb.paused || s.pb.step > 0));
+        },
         std::chrono::milliseconds(33));
     if (!woke && !CpuRunning(system))
       return PlaybackStep::Wait;  // Dolphin pauses or stops: let it, and come back here
@@ -5278,8 +5395,10 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
 
   const int i = s.iteration;
   // A replay's seek runs the frames before its target unpresented (as a rollback's resimulation).
+  // Catching up to a live edge shows a frame in CATCH_UP_SHOW_EVERY.
   s.resim_pass = s.mode == Mode::Playback ?
-                     static_cast<s64>(s.ops.adv_frame[i]) < s.pb.ff_until :
+                     static_cast<s64>(s.ops.adv_frame[i]) < s.pb.ff_until &&
+                         !(s.pb.catch_up && s.ops.adv_frame[i] % CATCH_UP_SHOW_EVERY == 0) :
                      s.ops.adv_count > 1 && i != s.ops.adv_count - 1;
 
   if (s.force_final_at_active)
@@ -5396,7 +5515,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     s.audio_pass_start = now;
     s.audio_pass_resim = s.resim_pass;
   }
-  ct.SetRollbackSpeedAdjustment(s.mode == Mode::Playback ? s.pb.speed : s.speed_factor);
+  ct.SetRollbackSpeedAdjustment(s.mode == Mode::Playback ? s.pb.speed * s.pb.nudge : s.speed_factor);
   if (!s.resim_pass)
   {
     Rollback::PresentStats::OnDisplayedFrameStart(s.ops.adv_count > 1);
@@ -5825,8 +5944,24 @@ void Stop()
   }
 }
 
+// How the recorded game ended (ENDG): its end method and final frame.
+void ReadPlaybackEnd(const std::string& endg, std::string* method, s64* final_frame)
+{
+  picojson::value e;
+  if (endg.empty() || !picojson::parse(e, endg).empty() || !e.is<picojson::object>())
+    return;
+  const auto& eo = e.get<picojson::object>();
+  if (const auto it = eo.find("endMethod"); it != eo.end() && it->second.is<std::string>())
+    *method = it->second.get<std::string>().substr(0, 32);
+  if (const auto it = eo.find("finalFrame"); it != eo.end())
+  {
+    if (const auto f = PeerData::JsonUInt(&it->second, Replay::MAX_FRAMES))
+      *final_frame = static_cast<s64>(*f);
+  }
+}
+
 std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file, bool play_anyway,
-                                       bool hold_at_end)
+                                       bool hold_at_end, bool live)
 {
   if (!file)
     return "no replay";
@@ -5936,22 +6071,19 @@ std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file,
     return "the replay has no frames";
   if (file->ports != pb.ports)
     return "the replay's frames do not match its players";
-  if (!file->endg.empty())
+  ReadPlaybackEnd(file->endg, &pb.end_method, &pb.final_frame);
+  pb.live = live;
+  if (live)
   {
-    picojson::value e;
-    if (picojson::parse(e, file->endg).empty() && e.is<picojson::object>())
-    {
-      const auto& eo = e.get<picojson::object>();
-      if (const auto it = eo.find("endMethod"); it != eo.end() && it->second.is<std::string>())
-        pb.end_method = it->second.get<std::string>().substr(0, 32);
-      if (const auto it = eo.find("finalFrame"); it != eo.end())
-      {
-        if (const auto f = PeerData::JsonUInt(&it->second, Replay::MAX_FRAMES))
-          pb.final_frame = static_cast<s64>(*f);
-      }
-    }
+    // Its own copy, which ExtendPlayback grows; it starts by waiting for a buffer's frames.
+    pb.live_file = std::make_shared<Replay::File>(*file);
+    pb.file = pb.live_file;
+    pb.buffering = true;
   }
-  pb.file = std::move(file);
+  else
+  {
+    pb.file = std::move(file);
+  }
 
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
   if (s.mode == Mode::Network && s.phase != Phase::Idle && s.phase != Phase::Ended &&
@@ -5971,11 +6103,72 @@ std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file,
   s.match_index = s.pb.match_index;
   s.session_seed = s.pb.seed;
   s.end_reason.clear();
-  INFO_LOG_FMT(BRAWLBACK, "replay: armed ({} frames from frame {}, ports {:#x}, P{}'s file, end {}{})",
+  INFO_LOG_FMT(BRAWLBACK, "replay: armed ({} frames from frame {}, ports {:#x}, P{}'s file, end {}{}{})",
                s.pb.file->pads.size(), s.pb.file->first_frame, s.pb.ports, s.pb.local_slot + 1,
                s.pb.end_method.empty() ? "incomplete" : s.pb.end_method,
-               s.pb.play_anyway ? ", played anyway" : "");
+               s.pb.play_anyway ? ", played anyway" : "", s.pb.live ? ", live" : "");
   return std::nullopt;
+}
+
+// What a live file read again has past `have` (under s.mutex).
+void ExtendLiveFile(Replay::File& have, const Replay::File& file)
+{
+  auto& pb = s.pb;
+  const size_t n = have.pads.size();
+  if (file.pads.size() > n)
+  {
+    have.pads.insert(have.pads.end(), file.pads.begin() + n, file.pads.end());
+    have.checksums.insert(have.checksums.end(), file.checksums.begin() + n, file.checksums.end());
+    for (const auto& p : file.parts)
+    {
+      if (have.parts.empty() || p.frame > have.parts.back().frame)
+        have.parts.push_back(p);
+    }
+  }
+  for (size_t i = have.events.size(); i < file.events.size(); ++i)
+    have.events.push_back(file.events[i]);
+  if (have.endg.empty() && !file.endg.empty())
+  {
+    have.endg = file.endg;
+    ReadPlaybackEnd(have.endg, &pb.end_method, &pb.final_frame);
+    INFO_LOG_FMT(BRAWLBACK, "replay: the live game ended ({}, {} frames)",
+                 pb.end_method.empty() ? "no end method" : pb.end_method, have.pads.size());
+  }
+}
+
+void ExtendPlayback(std::shared_ptr<const Replay::File> file, bool hold_at_end, bool cut)
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  auto& pb = s.pb;
+  if (s.mode != Mode::Playback || !pb.live || !pb.live_file)
+    return;
+  Replay::File& have = *pb.live_file;
+  if (file && (file->uid != have.uid || file->first_frame != have.first_frame ||
+               file->ports != have.ports || file->checksums.size() != file->pads.size()))
+  {
+    WARN_LOG_FMT(BRAWLBACK, "replay: the live file changed under playback; not followed");
+    file = nullptr;
+  }
+  if (file)
+    ExtendLiveFile(have, *file);
+  if (cut && !pb.cut)
+  {
+    pb.cut = true;
+    INFO_LOG_FMT(BRAWLBACK, "replay: the live game was cut after {} frames", have.pads.size());
+  }
+  if (pb.hold_at_end != hold_at_end)
+  {
+    pb.hold_at_end = hold_at_end;
+    // Held at the end for the set's next game, which has come: the match ends and it plays.
+    if (!hold_at_end && pb.at_end)
+      pb.paused = false;
+  }
+}
+
+void SetPlaybackBanner(std::string text)
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  s.pb.banner = std::move(text);
 }
 
 void PlaybackControl(PlaybackCommand command, double arg)
@@ -5986,8 +6179,32 @@ void PlaybackControl(PlaybackCommand command, double arg)
     return;
   const s64 shown = s.phase == Phase::Running ? PlaybackShown() : static_cast<s64>(pb.file->first_frame);
   static constexpr std::array<double, 6> SPEEDS{0.25, 0.5, 0.75, 1.0, 1.5, 2.0};
+  ++pb.controls;
+  // Any other control stops a catch-up to the live edge where it is (GoLive starts it again).
+  if (command != PlaybackCommand::GoLive && pb.catch_up)
+  {
+    pb.catch_up = false;
+    pb.ff_until = -1;
+  }
   switch (command)
   {
+  case PlaybackCommand::GoLive:
+    if (!pb.live)
+      break;
+    pb.paused = false;
+    pb.step = 0;
+    pb.speed = 1.0;
+    if (PlaybackComplete())
+    {
+      pb.seek_to = PlaybackLast();
+      break;
+    }
+    // A seek to the edge (from a keyframe when one is nearer), which the catch-up then follows.
+    pb.seek_to = LiveEdge();
+    pb.catch_up = true;
+    pb.catch_frames = 0;
+    pb.catch_rate = 0;
+    break;
   case PlaybackCommand::TogglePause:
     pb.paused = !pb.paused;
     pb.step = 0;
@@ -6064,6 +6281,18 @@ PlaybackInfo GetPlaybackInfo()
   info.names = s.pb.names;
   info.chars = s.pb.chars;
   info.keyframes = s.pb_keys->Count();
+  info.live = s.pb.live;
+  if (s.pb.live)
+  {
+    info.ended = PlaybackComplete();
+    info.live_edge = LiveEdge();
+    info.buffering = s.pb.buffering;
+    info.catching_up = s.pb.catch_up;
+    info.catch_rate = s.pb.catch_rate;
+    info.at_live = !info.ended && !s.pb.paused && !s.pb.catch_up && s.pb.seek_to < 0 &&
+                   info.shown >= info.live_edge - LIVE_NEAR;
+  }
+  info.banner = s.pb.banner;
   return info;
 }
 
@@ -6137,6 +6366,16 @@ picojson::object PlaybackStatus()
       playback && s.pb.file && s.phase == Phase::Running ? PlaybackShown() : -1));
   o["keyframes"] = picojson::value(static_cast<double>(s.pb_keys->Count()));
   o["keyframe_bytes"] = picojson::value(static_cast<double>(s.pb_keys->Bytes()));
+  o["live"] = picojson::value(s.pb.live);
+  o["controls"] = picojson::value(static_cast<double>(s.pb.controls));
+  if (playback && s.pb.live && s.pb.file)
+  {
+    o["complete"] = picojson::value(PlaybackComplete());
+    o["live_edge"] = picojson::value(static_cast<double>(LiveEdge()));
+    o["buffering"] = picojson::value(s.pb.buffering);
+    o["catching_up"] = picojson::value(s.pb.catch_up);
+    o["catch_rate"] = picojson::value(s.pb.catch_rate);
+  }
   return o;
 }
 
@@ -6768,6 +7007,12 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
                           "countdown until game frame {}",
                s.match_ports, relinked, StartFrame());
   s.pb.started = true;
+  // Spectating starts behind the players: it catches up to the live edge at once.
+  if (s.pb.live)
+  {
+    s.pb.catch_up = true;
+    s.pb.catch_frames = 0;
+  }
   s.phase = Phase::Countdown;
   system.GetCoreTiming().ResetThrottleToNow();
   PadsSetCurrent(0xF, NeutralSlots());

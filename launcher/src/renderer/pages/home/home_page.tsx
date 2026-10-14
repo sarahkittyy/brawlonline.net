@@ -10,6 +10,7 @@ import { ModsMessages } from "./mods/mods.messages";
 import { ModsTab } from "./mods/mods_tab";
 import { HomeOverview } from "./overview/overview";
 import { PlayButtons } from "./play_buttons/play_buttons";
+import { Spectate } from "./spectate/spectate";
 import { Tabs } from "./tabs/tabs";
 
 const Outer = styled.div`
@@ -65,6 +66,7 @@ export const HomePage = React.memo(function HomePage() {
             onChange={handleTabChange}
             tabs={[
               { id: "overview", label: Messages.overview() },
+              { id: "spectate", label: Messages.spectate() },
               { id: "mods", label: ModsMessages.tabLabel() },
             ]}
           />
@@ -73,6 +75,7 @@ export const HomePage = React.memo(function HomePage() {
         <Routes>
           <Route index={true} element={<RestoreHomeScope />} />
           <Route path="overview" element={<HomeOverview />} />
+          <Route path="spectate" element={<Spectate />} />
           <Route path="mods" element={<ModsTab />} />
         </Routes>
       </div>
