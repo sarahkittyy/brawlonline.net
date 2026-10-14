@@ -154,7 +154,9 @@ Final T1 run (2026-10-13 23:05, Null video backend; the streamer was joiner, 156
 | 249 kbit/s (1.6x) | 9.4 / 16.9 ms, 0 (one 256 B packet is 9 ms here) | 40 / 157 ms | |
 | 467 kbit/s (3x) | 3.6 / 9.0 ms, 0 | 7.7 / 21 ms | |
 
-Earlier runs (two packets in flight) at 160-2,437 kbit/s: the shipping uploader never caused a drop, cost at most 15 ms at p99, and sent nothing at all on links the game itself overflowed. T3 (mm silent, 2 s late, trickling at 1 kbit/s, for a whole game): the game's packets stayed at their 15 ms base, no drops, the online connection dropped and came back. T2 (CPU starvation) is still to run.
+Earlier runs (two packets in flight) at 160-2,437 kbit/s: the shipping uploader never caused a drop, cost at most 15 ms at p99, and sent nothing at all on links the game itself overflowed. T3 (mm silent, 2 s late, trickling at 1 kbit/s, for a whole game): the game's packets stayed at their 15 ms base, no drops, the online connection dropped and came back.
+
+T2 (2026-10-14 01:45, Null video; passed): two players and a burner on half of the PC's 16 threads, so both games ran late about half the time. The streamer's late frames per second were 31.8 and 40.2 with streaming off, and 35.3 and 30.4 with it on, so on stays within off's spread. Forced was 29.1, in one short game. The uploader read the starvation as its own signal and backed off: it paused once in each "on" game, and in the second one it sent 1 of its 65 chunks. A spectator of a starved game falls behind; the players don't. No checksum mismatch in any game. The first attempt failed before any game: a harness client could not connect to the second Dolphin ("another harness client is already connected"), a one-off harness race that the rerun did not hit.
 
 ## 5. Server capacity (sarahvps2 as it is)
 
