@@ -161,6 +161,13 @@ void PowerPCManager::DoState(PointerWrap& p)
 
     mmu.IBATUpdated();
     mmu.DBATUpdated();
+
+    // The JITs' memory base follows MSR.DR (the logical or the physical mapping). A state loaded
+    // while the JIT runs (a whole-machine session's machine image or rollback, from inside a
+    // boundary hook) is not followed by Run(), which sets it otherwise: a joiner whose own boot
+    // had translation on loaded a machine in real mode (Mario Kart Wii at its VI-field boundary)
+    // and read physical addresses through the logical mapping (a crash on the Mac).
+    m_system.GetJitInterface().UpdateMembase();
   }
   else
   {
