@@ -233,6 +233,7 @@ struct State
   std::mutex pick_mutex;
   LocalControllerInfo pick;
   bool use_real_wiimote = false;
+  bool picked = false;  // `pick` is the CPU thread's (it captured once)
   std::unique_ptr<WiimoteEmu::Wiimote> real_wiimote;
   std::string real_wiimote_device;
 
@@ -1407,6 +1408,7 @@ void UpdateLocalController()
   if (s.use_real_wiimote)
     UseRealWiimote(p.device);
   std::lock_guard lk(s.pick_mutex);
+  s.picked = true;
   if (p.controller != s.pick.controller || p.index != s.pick.index || p.device != s.pick.device ||
       p.plugged != s.pick.plugged)
   {
@@ -3596,6 +3598,7 @@ bool Arm(const Options& options, std::string* error)
   s.use_real_wiimote = false;
   {
     std::lock_guard plk(s.pick_mutex);
+    s.picked = false;
     s.pick = {};
     s.pick.controller = options.controller;
     s.pick.index = options.local_pad;
@@ -4047,12 +4050,22 @@ void SetLocalController(Controller controller)
 
 LocalControllerInfo GetLocalControllerInfo()
 {
-  std::lock_guard lk(s.pick_mutex);
-  LocalControllerInfo p = s.pick;
-  // Asked for, not yet taken (the next frame takes it).
-  if (const int requested = s.requested_controller.load(); requested >= 0)
-    p.controller = static_cast<Controller>(requested);
-  return p;
+  const int requested = s.requested_controller.load();
+  {
+    std::lock_guard lk(s.pick_mutex);
+    // Asked for and not yet taken, or before the session's first frame (a joiner waiting for the
+    // game): what the next frame will pick.
+    if (s.picked && requested < 0)
+      return s.pick;
+    if (!s.opts.auto_pad)
+    {
+      LocalControllerInfo p = s.pick;
+      if (requested >= 0)
+        p.controller = static_cast<Controller>(requested);
+      return p;
+    }
+  }
+  return PickLocal(requested >= 0 ? static_cast<Controller>(requested) : s.opts.controller);
 }
 
 // The boundary the session runs at: Auto becomes BrawlLoop for a Brawl build, ViField otherwise

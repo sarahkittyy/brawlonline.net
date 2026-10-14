@@ -519,7 +519,10 @@ void Handle(const Message& m, Actions* a, Clock::time_point now)
     Log(fmt::format("error: {}", m.error));
     s.conn_error = m.error;
     if (m.error == "Signed in from another game.")
+    {
       s.conn_hold = true;
+      ModsRoom::OnSignedInElsewhere();
+    }
     SetError(m.error.empty() ? std::string(TEXT_LOST) : m.error);
     a->drop = true;
     return;

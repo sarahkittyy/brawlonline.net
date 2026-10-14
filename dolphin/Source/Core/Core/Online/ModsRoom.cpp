@@ -5,6 +5,7 @@
 
 #include <array>
 #include <atomic>
+#include <utility>
 #include <chrono>
 #include <cstdlib>
 #include <ctime>
@@ -78,6 +79,10 @@ struct Room
   bool rejoining = false;
   bool leaving = false;
   bool done = false;  // out of the room for good (left, removed, could not join)
+  // Was in the room (a mods-state came): a joiner that never was has nothing to play.
+  bool ever_in = false;
+  // Close Dolphin once mods-room.json says why (a join that failed before the game was shared).
+  bool quit_after_write = false;
   std::optional<View> view;
   std::string error;
   u64 states = 0;
@@ -374,6 +379,7 @@ bool OnServerMessage(const std::string& text)
       if (!s.view || s.view->code != view->code || s.view->you != view->you)
         Log(fmt::format("in room {} (slot {}, host slot {})", view->code, view->you, view->host));
       s.view = view;
+      s.ever_in = true;
       s.room_code = view->code;
       s.room_slot = view->you;
       s.rejoining = false;
@@ -409,6 +415,13 @@ bool OnServerMessage(const std::string& text)
       else if ((op == "mods-create" || op == "mods-join") && !s.view)
       {
         s.done = true;
+        // Never in the room: no game was shared with this player. Dolphin closes (it would sit on
+        // a black screen); the launcher shows why.
+        if (!s.ever_in)
+        {
+          s.quit_after_write = true;
+          stop = true;
+        }
       }
     }
   }
@@ -491,6 +504,32 @@ std::vector<std::string> TakeOutbox(u64 connection)
 picojson::object InputJson();
 
 std::atomic<bool> s_configure_requested{false};
+std::atomic<bool> s_quit_requested{false};
+
+bool TakeQuitRequest()
+{
+  return s_quit_requested.exchange(false);
+}
+
+void OnSignedInElsewhere()
+{
+  bool stop = false;
+  {
+    std::lock_guard lk(s.mutex);
+    if (s.kind == Kind::None || s.done)
+      return;
+    Log("this account signed in from another game: out of the room");
+    s.error = "This account signed in from another game, so you are out of the room. Use a "
+              "different account on each computer.";
+    s.view.reset();
+    s.room_code.clear();
+    s.done = true;
+    s.quit_after_write = !s.ever_in;
+    stop = true;
+  }
+  if (stop)
+    Machine::Stop();
+}
 
 bool TakeConfigureRequest()
 {
@@ -596,7 +635,12 @@ void Files(const std::string& dir)
     key = picojson::value(keyed).serialize();
     const auto now = std::chrono::steady_clock::now();
     if (key == s.status_written && now - s.status_at < std::chrono::seconds(5))
+    {
+      // The file already says it.
+      if (std::exchange(s.quit_after_write, false))
+        s_quit_requested = true;
       return;
+    }
     s.status_written = key;
     s.status_at = now;
   }
@@ -606,6 +650,9 @@ void Files(const std::string& dir)
   const std::string path = dir + "mods-room.json";
   if (!File::WriteStringToFile(tmp, picojson::value(o).serialize(true)) || !File::Rename(tmp, path))
     WARN_LOG_FMT(NETPLAY, "ModsRoom: cannot write {}", path);
+  std::lock_guard lk(s.mutex);
+  if (std::exchange(s.quit_after_write, false))
+    s_quit_requested = true;
 }
 
 picojson::object Status()

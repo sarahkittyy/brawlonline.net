@@ -47,6 +47,12 @@ void SetCommandLine(std::string json);
 // UI thread: the launcher asked for Dolphin's Controllers settings (a "configure" request);
 // true once per request.
 bool TakeConfigureRequest();
+// UI thread: Dolphin should close (a join that failed before any game was shared; the launcher
+// shows why from mods-room.json, written first). True once.
+bool TakeQuitRequest();
+// Rooms thread: mm dropped this account's connection for another game's ("Signed in from another
+// game."): out of the room, the session ends (the game keeps running locally).
+void OnSignedInElsewhere();
 
 // Rooms thread. A mods-* message from mm: handled (true); anything else: false.
 bool OnServerMessage(const std::string& text);

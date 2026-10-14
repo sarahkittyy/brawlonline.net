@@ -263,6 +263,15 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
   connect(mods_configure_timer, &QTimer::timeout, this, [this] {
     if (Online::ModsRoom::TakeConfigureRequest())
       ShowControllersWindow();
+    // A join that failed before any game was shared: nothing to play, so Dolphin closes.
+    if (Online::ModsRoom::TakeQuitRequest())
+    {
+      m_exit_requested = true;
+      if (Core::IsUninitialized(m_system))
+        QGuiApplication::exit(0);
+      else
+        ForceStop();
+    }
   });
   mods_configure_timer->start(250);
 
