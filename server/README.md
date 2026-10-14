@@ -115,6 +115,8 @@ JSON in and out. Errors are `{"error": {"code": "...", "message": "..."}}`. Auth
 | `GET /v1/ranked/result?matchId=&uid=` | `getRankedMatchPersonalResult` | Public. `{matchId, status, players, wins, winner, reason, rating: {before, after, change, setsPlayed} \| null}`. |
 | `GET /v1/ranked/leaderboard?limit=&after=` | | Public. `{entries: [{position, uid, displayName, connectCode, rating, setsPlayed, wins, losses}], next, total}` (see "Leaderboard"). `limit` 50 by default, at most 100; `after` is the previous page's `next`. |
 | `GET /v1/rooms` | | Session auth. Players online and the public rooms for the launcher's Home page, read from mm's status listener (`MM_STATUS_URL`) and cached 1 s: `{online, rooms: [{code, host, players, openSlots, mode, status, names, joinable}], queues: {unranked, ranked}, updatedAt}`. 503 `mm_unavailable` when mm does not answer. See `docs/rooms-protocol.md`. |
+| `POST /v1/bug-reports {description, launcherVersion, platform}` | | The launcher's bug button (see "Bug reports"). Session auth optional: with a valid session the report carries the account, without one (or with a dead one) it is anonymous. 201 `{id, uploadToken}`. |
+| `PUT /v1/bug-reports/{id}/logs` | | The report's logs zip as the body, `X-Upload-Token: <uploadToken>`. Once per report, within an hour of it. 204; 404 wrong token, unknown, already sent or too late; 400 `not_a_zip`; 413 `too_large`; 507 `storage_full`; 503 `storage_unavailable` when the folder can't be written. |
 | `GET /healthz` | | `ok` if Postgres answers. |
 
 Rules:
@@ -147,6 +149,7 @@ Rules:
   | Chat messages (`chat-send`) | account | 5 per 5 s and 30 per minute |
   | Chat group keys and leaves (`chat-key`, `chat-leave`) | account | 10 per 10 s |
   | Chat reports | account | 5 per hour |
+  | Bug reports (`POST /v1/bug-reports`) | IP | 5 per hour, 20 per day. Each can carry one zip of up to `BUG_REPORT_MAX_LOGS_BYTES` |
 
   Worst case for one IP: 10 verification emails a day. For one inbox: 1 + 5 verification emails (one account per address) and 5 reset emails a day. The two global shares add up to `MAIL_DAILY_LIMIT`, so accounts never sends more than that per UTC day. Set it below the provider's quota, with room for `admin user reset-password --send-email` (a separate process with its own count).
 - **Email**: an SMTP provider (`MAILER=smtp`), Brevo's HTTP API (`MAILER=brevo`) or Resend's (`MAILER=resend`) in production, with a daily cap per process (`MAIL_DAILY_LIMIT`, default 90, split as above). A `Mailer` trait has SMTP, Brevo, Resend, stdout, file and in-memory implementations, and `mail::from_config` is the one place that picks one: `accounts` and the admin CLI's `reset-password --send-email` build their mailer from the same settings. Tests only use the in-memory and file mailers, plus the SMTP client against a local fake server (`crates/fakesmtp`) and the Brevo and Resend clients against local fake HTTP servers.
@@ -270,6 +273,14 @@ Rules in `crates/common/src/ranked.rs` (unit-tested), storage and endpoints in `
 
 How Dolphin uses it (as Slippi's client does): the host draws every random stage from it without repeats until the list is used up (Slippi's stage pool). That covers every Unranked game and Direct's game 1. Direct's loser picks games 2+ on P+'s whole stage select, and Dolphin plays that pick even when it is not in the list (Slippi does not restrict Direct). With no list, Dolphin falls back to its built-in copy of the same legal list.
 
+## Bug reports
+
+The launcher's bug icon (next to the profile in the header) opens a popup: the player describes what went wrong and presses Upload Logs. The launcher sends the text (`POST /v1/bug-reports`), then the same zip as Settings > Help's "Download logs" (`system.txt`, the launcher's logs, both Dolphins' logs and config files, each file's last 8 MiB) to `PUT /v1/bug-reports/{id}/logs`. The text is kept when the zip fails; the launcher then says why. Code: `crates/accounts/src/bug_reports.rs`, migration `0011_bug_reports.sql`, launcher `main/setup.ts` (`sendBugReport`) and `renderer/app/header/bug_report/`.
+
+- The zips are files, `bug-<id>.zip` in `BUG_REPORTS_DIR` (default `bug-reports` in the working directory; on prod `/var/lib/ppserver/bug-reports`, the unit's `StateDirectory`), not database rows, so backups stay small. Written as a `.partial` next to it and renamed; a refused upload leaves nothing.
+- Limits: one zip at most `BUG_REPORT_MAX_LOGS_BYTES` (32 MiB), all zips at most `BUG_REPORTS_MAX_TOTAL_BYTES` (4 GiB; past it a zip is refused with 507 and the text is still kept), 5000 characters of text, the per-IP rate limit above.
+- `admin bug list` / `bug show ID` / `bug resolve ID [--note]` / `bug reopen ID` / `bug delete ID...` / `bug clear --yes` (below). Resolving keeps the zip; delete and clear remove the rows and their zips.
+
 ## Admin CLI
 
 ```sh
@@ -286,7 +297,15 @@ admin user set-code IDENT CODE
 admin user delete IDENT --yes                  # with its sessions and email tokens; the connect code is free again at once
 admin chat-reports [--limit N]                 # unhandled chat reports, newest first: who, group, reason, verified/total, the texts
 admin chat-report-done ID                      # mark a chat report handled
+admin bug list [--all] [--limit N]             # unresolved bug reports, newest first: id, when, who, zip size, first line
+admin bug show ID                              # one report in full: launcher version, platform, the zip's path, the text
+admin bug resolve ID [--note TEXT]             # off the list (the zip stays)
+admin bug reopen ID
+admin bug delete ID...                         # the reports and their zips, for good
+admin bug clear --yes                          # every resolved report and its zip, for good
 ```
+
+`bug` reads `BUG_REPORTS_DIR` like accounts (default `bug-reports`, relative to the working directory, which `pp-admin` sets to `/var/lib/ppserver`).
 
 Every change is written to `audit_log`. `reset-password --send-email` reads the same mail settings as accounts (`MAILER`, `MAIL_*`, `SMTP_*`, `BREVO_*`, `RESEND_*`; `admin user reset-password --help` lists them), so with `MAILER=file` the email is appended to `MAIL_FILE` and nothing goes over the network. A bad mail setting fails before the token is issued; the audit row records `emailed` and the mailer.
 
@@ -326,6 +345,7 @@ Without Docker, start the portable Postgres (above) and point the tests at it, e
 - `crates/e2e/tests/rooms.rs`: create (code format), join by code in lower case, full, not found, host-only slots, closing an occupied slot (removed, joins again once the slot is open), host hand-over when the host's game closes, the room closing with its last player; the public list over HTTP (401 logged out, the row fields, private rooms left out and joinable by code, made public, modes 1v1/FFA/Teams), the online count rising and falling with the games, 503 when mm is gone; a 3-player Teams room (one colour refused, 2v1 starts) whose three tickets get one response each with ports 1-3 and the host deciding, the room in game in the list, a player whose game closes mid-match (slot open, room joinable) and a joiner who waits, then back to waiting; `hello` with an old version or a forged play key, bad room requests answered without a disconnect.
 - Unit tests (chat): `common::chat` (the test vectors, seal/open and every kind of tampering, small-order keys, signatures bound to every field, plaintext and request parsing, every rule of the text cleaner), `mm::chat` (room and match groups, keys, routing, every refusal, rate limits, report rows with forged and altered messages), the engine paths (`hello` with good and bad keys, room groups through joins, kicks, leaves and disconnects, a second game, match groups for Direct and Unranked but not a room's game, a new search ending a match group, refusals, reports), `mmclient::chat` (round trip, replays, keys that do not verify).
 - `crates/e2e/tests/chat.rs`: three games in a room exchange encrypted messages, a kicked player gets nothing more (and mm refuses a box for her); a Direct match's chat group until one player searches again and the other sends `chat-leave`; a report with one genuine and one made-up message is stored as 1 of 2 verified; the send rate limit; a game without a key. `mm_grants.rs` runs the chat queries as `pp_mm`; `crates/admin/tests/chat_reports.rs` runs `admin chat-reports` and `chat-report-done`.
+- `crates/e2e/tests/bug_reports.rs`: a report with a session (the account kept, the text cleaned) and its zip (`bug-<id>.zip`, byte for byte, once); another token, an unknown report, a non-zip and an oversized zip refused without leaving a file; logged out and with a dead session (no account); a zip after the hour refused; the per-IP limit (5, then 429; another address has its own). `crates/admin/tests/bug_reports.rs` runs `admin bug list/show/resolve/reopen/clear/delete` with zips in a temp folder, and the audit rows.
 - `crates/e2e/tests/unranked.rs`:
   - two strangers meet: response fields, the ruleset's 15 stages, a real P2P connection, and the `mm_matches` row with mode, stages and region;
   - first come, first served, and the third ticket ends with the expiry error;

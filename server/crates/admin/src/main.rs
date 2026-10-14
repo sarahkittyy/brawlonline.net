@@ -16,6 +16,10 @@ use sqlx::PgPool;
 struct Cli {
     #[arg(long, env = "DATABASE_URL", global = true, hide_env_values = true)]
     database_url: Option<String>,
+    /// Where accounts keeps bug reports' logs zips (as accounts reads it; relative to the
+    /// working directory, which pp-admin sets to /var/lib/ppserver).
+    #[arg(long, env = "BUG_REPORTS_DIR", global = true, default_value = "bug-reports")]
+    bug_reports_dir: std::path::PathBuf,
     #[command(subcommand)]
     cmd: Cmd,
 }
@@ -37,6 +41,43 @@ enum Cmd {
     },
     /// Mark a chat report handled (it leaves `chat-reports`).
     ChatReportDone { id: i64 },
+    /// Bug reports from the launcher's bug button, with their logs zips.
+    #[command(subcommand)]
+    Bug(BugCmd),
+}
+
+#[derive(Subcommand)]
+enum BugCmd {
+    /// Unresolved reports, newest first: id, when, who, launcher version, zip size, first line.
+    List {
+        /// Resolved ones too.
+        #[arg(long)]
+        all: bool,
+        #[arg(long, default_value_t = 50)]
+        limit: i64,
+    },
+    /// One report in full, with the path of its logs zip.
+    Show { id: i64 },
+    /// Mark a report resolved (it leaves `bug list`). The zip stays until `bug delete` / `bug clear`.
+    Resolve {
+        id: i64,
+        /// What fixed it (kept with the report).
+        #[arg(long, default_value = "")]
+        note: String,
+    },
+    /// Put a resolved report back on the list.
+    Reopen { id: i64 },
+    /// Delete reports and their zips for good.
+    Delete {
+        #[arg(required = true)]
+        ids: Vec<i64>,
+    },
+    /// Delete every resolved report and its zip for good.
+    Clear {
+        /// Required: confirms the deletion.
+        #[arg(long)]
+        yes: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -120,6 +161,49 @@ fn print_chat_report(r: &admin::ChatReportRow) {
     }
 }
 
+fn print_bug_report(r: &admin::BugReportRow, dir: &std::path::Path, full: bool) {
+    let who = match r.uid {
+        Some(_) => who(r.uid, &r.connect_code, &r.display_name),
+        None => "(logged out or deleted account)".into(),
+    };
+    let logs = match r.logs_bytes {
+        Some(n) if n < 1024 * 1024 => format!("{} KB", (n + 1023) / 1024),
+        Some(n) => format!("{:.1} MB", n as f64 / (1024.0 * 1024.0)),
+        None => "no logs".into(),
+    };
+    let state = match r.resolved_at {
+        Some(t) => format!("  RESOLVED {}", t.format("%Y-%m-%d %H:%M UTC")),
+        None => String::new(),
+    };
+    println!("#{}  {}  {}  [{}]{state}", r.id, r.created_at.format("%Y-%m-%d %H:%M UTC"), who, logs);
+    if !full {
+        let first = r.description.lines().find(|l| !l.trim().is_empty()).unwrap_or("(no description)");
+        let mut first: String = first.chars().take(100).collect();
+        if r.description.trim().chars().count() > first.chars().count() {
+            first.push_str(" ...");
+        }
+        println!("  {first}");
+        return;
+    }
+    println!("  launcher:   {}", r.launcher_version);
+    println!("  platform:   {}", r.platform);
+    if r.logs_bytes.is_some() {
+        let path = accounts::bug_reports::logs_path(dir, r.id);
+        let path = std::path::absolute(&path).unwrap_or(path);
+        println!("  logs:       {}", path.display());
+    }
+    if r.resolved_at.is_some() && !r.resolution.is_empty() {
+        println!("  resolution: {}", r.resolution);
+    }
+    println!();
+    if r.description.trim().is_empty() {
+        println!("  (no description)");
+    }
+    for line in r.description.lines() {
+        println!("  {line}");
+    }
+}
+
 fn print_user(u: &UserRow) {
     println!("uid:            {}", u.uid);
     println!("email:          {} ({})", u.email, if u.email_verified() { "verified" } else { "not verified" });
@@ -176,6 +260,40 @@ async fn main() -> anyhow::Result<()> {
         Cmd::ChatReportDone { id } => {
             anyhow::ensure!(admin::chat_report_done(&pool, &actor, id).await?, "no unhandled chat report #{id}");
             println!("chat report #{id} handled");
+        }
+        Cmd::Bug(BugCmd::List { all, limit }) => {
+            let reports = admin::bug_reports(&pool, all, limit.clamp(1, 1000)).await?;
+            if reports.is_empty() {
+                println!("{}", if all { "no bug reports" } else { "no unresolved bug reports" });
+            }
+            for r in &reports {
+                print_bug_report(r, &cli.bug_reports_dir, false);
+            }
+        }
+        Cmd::Bug(BugCmd::Show { id }) => {
+            print_bug_report(&admin::bug_report(&pool, id).await?, &cli.bug_reports_dir, true);
+        }
+        Cmd::Bug(BugCmd::Resolve { id, note }) => {
+            anyhow::ensure!(
+                admin::resolve_bug_report(&pool, &actor, id, &note).await?,
+                "no unresolved bug report #{id}"
+            );
+            println!("bug report #{id} resolved");
+        }
+        Cmd::Bug(BugCmd::Reopen { id }) => {
+            anyhow::ensure!(admin::reopen_bug_report(&pool, &actor, id).await?, "no resolved bug report #{id}");
+            println!("bug report #{id} reopened");
+        }
+        Cmd::Bug(BugCmd::Delete { ids }) => {
+            let deleted = admin::delete_bug_reports(&pool, &actor, &cli.bug_reports_dir, &ids).await?;
+            let missing: Vec<_> = ids.iter().filter(|id| !deleted.contains(id)).collect();
+            println!("deleted {} bug report(s) {deleted:?}", deleted.len());
+            anyhow::ensure!(missing.is_empty(), "no bug report(s) {missing:?}");
+        }
+        Cmd::Bug(BugCmd::Clear { yes }) => {
+            anyhow::ensure!(yes, "this deletes every resolved bug report and its logs for good; add --yes to confirm");
+            let deleted = admin::delete_bug_reports(&pool, &actor, &cli.bug_reports_dir, &[]).await?;
+            println!("deleted {} resolved bug report(s)", deleted.len());
         }
         Cmd::User(UserCmd::List) => {
             println!("{:<36} {:<10} {:<16} {:<30} {:<5} banned", "uid", "code", "name", "email", "ver.");

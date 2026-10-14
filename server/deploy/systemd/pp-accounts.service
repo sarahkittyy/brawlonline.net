@@ -13,7 +13,11 @@ EnvironmentFile=/etc/ppserver/accounts.env
 Restart=on-failure
 RestartSec=2s
 
-# Sandboxing: no state on disk, so a throwaway user and a read-only system.
+# Bug reports' logs zips: /var/lib/pp-accounts/bug-reports, the one thing kept on disk.
+StateDirectory=pp-accounts/bug-reports
+Environment=BUG_REPORTS_DIR=/var/lib/pp-accounts/bug-reports
+
+# Sandboxing: a throwaway user and a read-only system (the state directory above aside).
 DynamicUser=yes
 ProtectSystem=strict
 ProtectHome=yes

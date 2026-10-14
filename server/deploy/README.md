@@ -23,6 +23,15 @@ The original plan kept these services off the existing VPSes (`sarahvps`, `sarah
 
 `PLAY_KEY_SECRET` must be identical in `accounts.env` and `mm.env`. Generate it once with `admin gen-secret`. Changing it invalidates every play key; launchers fetch new keys on their next Play, and running games need a relaunch.
 
+## Bug reports' logs zips
+
+Accounts writes them to `BUG_REPORTS_DIR` (default `bug-reports` in its working directory; `server/README.md`, "Bug reports"). Two things outside the binaries, which a release does not install:
+
+- the unit's state directory (`StateDirectory=ppserver/bug-reports` in `sarahvps2/pp-accounts.service`, `pp-accounts/bug-reports` in `systemd/`), which creates the folder and keeps it writable under `ProtectSystem=strict`; install the unit, `systemctl daemon-reload`, restart accounts;
+- the proxy letting the upload through: nginx's `^/v1/bug-reports/<id>/logs$` location with `client_max_body_size 40m` (`sarahvps2/nginx-brawl-online.conf`; every other path keeps 64k), then `nginx -t` and a reload.
+
+Until both are in place, reports still arrive (the text is a small JSON body) and their zips fail with 413 or 503; the launcher tells the player the report was sent without its logs.
+
 ## Steps (Debian 12/13)
 
 ```sh

@@ -5,6 +5,8 @@ import type {
   AccountsMe,
   AccountsPublicUser,
   AccountsResult,
+  BugReportRequest,
+  BugReportSent,
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
@@ -156,6 +158,28 @@ export class AccountsManager {
 
   setRememberedRuleset(uid: string, code: string | null): Promise<AccountsResult<RulesetView | null>> {
     return this._withSession(uid, (token) => this.client.setRememberedRuleset(token, code));
+  }
+
+  /**
+   * A bug report: its text first (with `uid`'s session when there is one; logged out it goes
+   * without an account, since logging in may be what is broken), then the logs zip `logs` makes.
+   * The text is kept when the zip fails, and the answer says why it did.
+   */
+  sendBugReport(
+    uid: string | null,
+    req: BugReportRequest,
+    logs: () => Promise<Uint8Array<ArrayBuffer>>,
+  ): Promise<AccountsResult<BugReportSent>> {
+    return wrap(async () => {
+      const token = uid ? await this.sessions.get(uid) : undefined;
+      const { id, uploadToken } = await this.client.createBugReport(token, req);
+      try {
+        await this.client.uploadBugReportLogs(id, uploadToken, await logs());
+        return { id, logsSent: true };
+      } catch (err) {
+        return { id, logsSent: false, logsError: err instanceof Error ? err.message : String(err) };
+      }
+    });
   }
 
   /** The account's session token (for the social stream, which is not a JSON call). */

@@ -27,6 +27,7 @@ import { platformTitleBarStyles } from "@/styles/platform_title_bar_styles";
 import { titleFont } from "@/styles/with_font";
 
 import { ActivateOnlineDialog } from "./activate_online_dialog";
+import { BugReportButton } from "./bug_report/bug_report_button";
 import { HeaderMessages as Messages } from "./header.messages";
 import type { MenuItem } from "./main_menu";
 import { MainMenu } from "./main_menu";
@@ -35,6 +36,10 @@ import { StartGameOfflineDialog } from "./start_game_offline_dialog";
 import { UserMenu } from "./user_menu/user_menu";
 
 const isMac = window.electron.bootstrap.isMac;
+
+/** Narrower than this (a small window, or a large Interface Size), the header's right side is
+ * compact: the account's picture without its name (user_info.module.css) and tighter icons. */
+const COMPACT_HEADER = "@media (width <= 1120px)";
 
 const OuterBox = styled(Box)`
   background-color: var(--surface-1);
@@ -74,9 +79,39 @@ export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
         >
           <PlayButton onClick={() => onPlay()} />
         </div>
-        <MainMenu menuItems={menuItems} />
+        <div
+          css={css`
+            display: flex;
+            height: 100%;
+            /* Narrower still (a large Interface Size): the tab icons give up some of their room. */
+            @media (width <= 860px) {
+              & .MuiButton-root {
+                min-width: 44px;
+                padding: 6px 10px;
+              }
+            }
+          `}
+        >
+          <MainMenu menuItems={menuItems} />
+        </div>
       </div>
-      <Box display="flex" alignItems="center">
+      <Box
+        display="flex"
+        alignItems="center"
+        css={css`
+          flex-shrink: 0;
+          ${COMPACT_HEADER} {
+            & .MuiIconButton-root {
+              padding: 8px;
+            }
+          }
+          @media (width <= 760px) {
+            & .MuiIconButton-root {
+              padding: 4px;
+            }
+          }
+        `}
+      >
         {currentUser ? (
           <UserMenu user={currentUser} handleError={showError} />
         ) : (
@@ -84,6 +119,7 @@ export const Header = ({ menuItems }: { menuItems: readonly MenuItem[] }) => {
             {Messages.logIn()}
           </Button>
         )}
+        <BugReportButton />
         <Tooltip title={Messages.discord()}>
           <IconButton
             component="a"

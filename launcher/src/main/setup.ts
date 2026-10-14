@@ -1,3 +1,4 @@
+import type { AccountsManager } from "@accounts/accounts_manager";
 import { IsoValidity } from "@common/types";
 import type { DolphinManager } from "@dolphin/manager";
 import { DolphinLaunchType } from "@dolphin/types";
@@ -27,10 +28,17 @@ import {
   ipc_openInNewBrowserWindow,
   ipc_requiredLauncherUpdate,
   ipc_runNetworkDiagnostics,
+  ipc_sendBugReport,
   ipc_showOpenDialog,
 } from "./ipc";
 import type { ArchiveFile } from "./logs_archive";
-import { dolphinUserFiles, folderFiles, writeLogsArchive } from "./logs_archive";
+import {
+  BUG_REPORT_MAX_FILE_BYTES,
+  dolphinUserFiles,
+  folderFiles,
+  logsArchiveBuffer,
+  writeLogsArchive,
+} from "./logs_archive";
 import { getNetworkDiagnostics } from "./network_diagnostics";
 import { clearTempFolder } from "./util";
 
@@ -46,12 +54,14 @@ export default function setupMainIpc({
   flags,
   browserWindowManager,
   appUpdater,
+  accountsManager,
 }: {
   dolphinManager: DolphinManager;
   settingsManager: SettingsManager;
   flags: ConfigFlags;
   browserWindowManager: BrowserWindowManager;
   appUpdater: AppUpdater;
+  accountsManager: AccountsManager;
 }) {
   ipcMain.on("onDragStart", (event, files: string[]) => {
     // The Electron.Item type declaration is missing the files attribute
@@ -85,27 +95,28 @@ export default function setupMainIpc({
     if (canceled || !filePath) {
       return { path: null };
     }
-
-    // The app name is set before logging starts (main.ts), so dev and packaged builds agree.
-    const logsFolder = isMac ? app.getPath("logs") : path.resolve(app.getPath("userData"), "logs");
-    const files: ArchiveFile[] = [
-      { name: "system.txt", source: { text: await systemInfo(dolphinManager, settingsManager, flags) } },
-      ...(await folderFiles(logsFolder, "launcher")),
-    ];
-    for (const [launchType, zipFolder] of [
-      [DolphinLaunchType.NETPLAY, "netplay-dolphin"],
-      [DolphinLaunchType.PLAYBACK, "playback-dolphin"],
-    ] as const) {
-      try {
-        files.push(...(await dolphinUserFiles(dolphinManager.getInstallation(launchType).userFolder, zipFolder)));
-      } catch (err) {
-        log.error(`Could not find the ${launchType} Dolphin's User folder: `, err);
-      }
-    }
-
-    await writeLogsArchive(filePath, files);
+    await writeLogsArchive(filePath, await logFiles(dolphinManager, settingsManager, flags));
     shell.showItemInFolder(filePath);
     return { path: filePath };
+  });
+
+  ipc_sendBugReport.main!.handle(async ({ uid, description }) => {
+    const req = {
+      description,
+      launcherVersion: `${app.getVersion()}${app.isPackaged ? "" : " (development)"}`,
+      platform: `${getAppBootstrap(flags).operatingSystem} ${process.arch}`,
+    };
+    const sent = await accountsManager.sendBugReport(uid, req, async () =>
+      logsArchiveBuffer(await logFiles(dolphinManager, settingsManager, flags), BUG_REPORT_MAX_FILE_BYTES),
+    );
+    if (!sent.ok) {
+      log.warn(`Bug report not sent: ${sent.error.message}`);
+    } else if (sent.value.logsSent) {
+      log.info(`Bug report #${sent.value.id} sent with its logs`);
+    } else {
+      log.warn(`Bug report #${sent.value.id} sent, its logs not: ${sent.value.logsError}`);
+    }
+    return sent;
   });
 
   // check for updates
@@ -170,6 +181,31 @@ export default function setupMainIpc({
     await browserWindowManager.openInNewBrowserWindow(url);
     return { success: true };
   });
+}
+
+/** What a logs zip holds: system.txt, the launcher's logs, and both Dolphins' logs and config files. */
+async function logFiles(
+  dolphinManager: DolphinManager,
+  settingsManager: SettingsManager,
+  flags: ConfigFlags,
+): Promise<ArchiveFile[]> {
+  // The app name is set before logging starts (main.ts), so dev and packaged builds agree.
+  const logsFolder = isMac ? app.getPath("logs") : path.resolve(app.getPath("userData"), "logs");
+  const files: ArchiveFile[] = [
+    { name: "system.txt", source: { text: await systemInfo(dolphinManager, settingsManager, flags) } },
+    ...(await folderFiles(logsFolder, "launcher")),
+  ];
+  for (const [launchType, zipFolder] of [
+    [DolphinLaunchType.NETPLAY, "netplay-dolphin"],
+    [DolphinLaunchType.PLAYBACK, "playback-dolphin"],
+  ] as const) {
+    try {
+      files.push(...(await dolphinUserFiles(dolphinManager.getInstallation(launchType).userFolder, zipFolder)));
+    } catch (err) {
+      log.error(`Could not find the ${launchType} Dolphin's User folder: `, err);
+    }
+  }
+  return files;
 }
 
 /** system.txt in the logs zip: versions, machine and the settings that change how Dolphin starts. */

@@ -240,6 +240,15 @@ export type SignUpRequest = {
   displayName: string;
 };
 
+/** `POST /v1/bug-reports` (the launcher's bug button). */
+export type BugReportRequest = { description: string; launcherVersion: string; platform: string };
+
+/** Its answer: the report's id and the one-time token for its logs zip. */
+export type BugReportCreated = { id: number; uploadToken: string };
+
+/** What a bug report got to the server: its id, and whether the logs zip went too (else why not). */
+export type BugReportSent = { id: number; logsSent: boolean; logsError?: string };
+
 /** Error body: `{"error": {"code": "...", "message": "..."}}`. */
 export type AccountsErrorBody = { code: string; message: string; status?: number; retryAfter?: number };
 

@@ -4,7 +4,7 @@ import os from "os";
 import path from "path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
-import { dolphinUserFiles, folderFiles, redactDolphinIni, writeLogsArchive } from "./logs_archive";
+import { dolphinUserFiles, folderFiles, logsArchiveBuffer, redactDolphinIni, writeLogsArchive } from "./logs_archive";
 
 async function readZip(zipPath: string): Promise<Record<string, string>> {
   const zip = new AsyncStreamZip({ file: zipPath });
@@ -85,5 +85,19 @@ describe("logs archive", () => {
       10,
     );
     expect(await readZip(zipPath)).toEqual({ "big.log": "new lines\n", "empty.log": "" });
+  });
+
+  it("makes the same zip in memory, for a bug report", async () => {
+    const big = await write("big.log", "old old old\nnew lines\n");
+    const zip = await logsArchiveBuffer(
+      [
+        { name: "system.txt", source: { text: "Launcher: 1.0\n" } },
+        { name: "big.log", source: { path: big } },
+      ],
+      10,
+    );
+    const zipPath = path.join(dir, "memory.zip");
+    await fs.promises.writeFile(zipPath, zip);
+    expect(await readZip(zipPath)).toEqual({ "system.txt": "Launcher: 1.0\n", "big.log": "new lines\n" });
   });
 });

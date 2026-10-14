@@ -125,6 +125,8 @@ pub struct StackOptions {
     /// `RANKED_REPORT_GRACE_SECS` and `RANKED_SWEEP_SECS` (defaults: the service's).
     pub ranked_report_grace_secs: Option<u64>,
     pub ranked_sweep_secs: Option<u64>,
+    /// `BUG_REPORT_MAX_LOGS_BYTES` (default: the service's).
+    pub bug_report_max_logs_bytes: Option<u64>,
 }
 
 /// accounts + mm + a database, all for one test.
@@ -136,6 +138,8 @@ pub struct Stack {
     pub db_name: String,
     pub mailer: MemoryMailer,
     pub http: reqwest::Client,
+    /// `BUG_REPORTS_DIR`: a folder of its own in the temp dir (ids restart in each database).
+    pub bug_reports_dir: std::path::PathBuf,
     accounts_task: tokio::task::JoinHandle<()>,
 }
 
@@ -171,6 +175,11 @@ impl Stack {
         if let Some(n) = opts.ranked_sweep_secs {
             cfg.ranked_sweep_secs = n;
         }
+        if let Some(n) = opts.bug_report_max_logs_bytes {
+            cfg.bug_report_max_logs_bytes = n;
+        }
+        let bug_reports_dir = std::env::temp_dir().join(format!("pp-e2e-bug-reports-{db_name}"));
+        cfg.bug_reports_dir = bug_reports_dir.clone();
         let mailer = MemoryMailer::new();
         let state = accounts::AppState::new(pool.clone(), cfg, Arc::new(mailer.clone()))?;
         let accounts_task = tokio::spawn(async move {
@@ -186,6 +195,7 @@ impl Stack {
             db_name,
             mailer,
             http: reqwest::Client::new(),
+            bug_reports_dir,
             accounts_task,
         })
     }
@@ -277,6 +287,7 @@ impl Stack {
         self.accounts_task.abort();
         self.pool.close().await;
         drop_db(&self.db_name).await;
+        let _ = std::fs::remove_dir_all(&self.bug_reports_dir);
     }
 }
 

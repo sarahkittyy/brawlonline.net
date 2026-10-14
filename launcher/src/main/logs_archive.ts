@@ -6,6 +6,9 @@ import { ZipFile } from "yazl";
 /** The most of any one file that goes in (its end): logs from builds before Dolphin capped them can be huge. */
 export const MAX_ARCHIVED_FILE_BYTES = 50 * 1024 * 1024;
 
+/** The same for a bug report's zip, which is uploaded (the server takes at most 32 MiB in all). */
+export const BUG_REPORT_MAX_FILE_BYTES = 8 * 1024 * 1024;
+
 /** Dolphin config files worth sending. Not RetroAchievements.ini (an API token) or Online/user.json (the play key). */
 const DOLPHIN_CONFIG_FILES = ["Dolphin.ini", "GFX.ini", "Logger.ini", "GCPadNew.ini"];
 
@@ -58,16 +61,11 @@ export function redactDolphinIni(text: string): string {
 }
 
 /**
- * Writes `files` into a zip at `dest`. A file that is still being written (Dolphin's log during a
- * match) goes in as it was when the archive started, and only its last `maxFileBytes`.
- * Files that are gone by then are left out. The zip is written next to `dest` and renamed, so a
- * failed archive leaves nothing behind.
+ * A zip of `files`. A file that is still being written (Dolphin's log during a match) goes in as
+ * it was when the archive started, and only its last `maxFileBytes`. Files that are gone by then
+ * are left out.
  */
-export async function writeLogsArchive(
-  dest: string,
-  files: ArchiveFile[],
-  maxFileBytes = MAX_ARCHIVED_FILE_BYTES,
-): Promise<void> {
+async function logsZip(files: ArchiveFile[], maxFileBytes: number): Promise<ZipFile> {
   const zip = new ZipFile();
   for (const file of files) {
     if ("text" in file.source) {
@@ -90,7 +88,16 @@ export async function writeLogsArchive(
     );
   }
   zip.end();
+  return zip;
+}
 
+/** Writes the zip of `files` (`logsZip`) to `dest`: next to it first, then renamed, so a failed archive leaves nothing behind. */
+export async function writeLogsArchive(
+  dest: string,
+  files: ArchiveFile[],
+  maxFileBytes = MAX_ARCHIVED_FILE_BYTES,
+): Promise<void> {
+  const zip = await logsZip(files, maxFileBytes);
   const partial = `${dest}.partial`;
   try {
     await new Promise<void>((resolve, reject) => {
@@ -111,4 +118,23 @@ export async function writeLogsArchive(
     await rm(partial, { force: true });
     throw err;
   }
+}
+
+/** The zip of `files` (`logsZip`) in memory, for uploading. */
+export async function logsArchiveBuffer(files: ArchiveFile[], maxFileBytes: number): Promise<Uint8Array<ArrayBuffer>> {
+  const zip = await logsZip(files, maxFileBytes);
+  const chunks = await new Promise<Buffer[]>((resolve, reject) => {
+    const out: Buffer[] = [];
+    zip.on("error", reject);
+    zip.outputStream.on("error", reject);
+    zip.outputStream.on("data", (chunk: Buffer) => out.push(chunk));
+    zip.outputStream.on("end", () => resolve(out));
+  });
+  const all = new Uint8Array(chunks.reduce((n, c) => n + c.length, 0));
+  let offset = 0;
+  for (const chunk of chunks) {
+    all.set(chunk, offset);
+    offset += chunk.length;
+  }
+  return all;
 }

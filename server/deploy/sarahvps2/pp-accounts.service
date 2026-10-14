@@ -27,7 +27,12 @@ CPUWeight=50
 MemoryMax=1G
 TasksMax=256
 
-# Sandboxing. The only writable path is the mail log (MAILER=file).
+# Bug reports' logs zips (BUG_REPORTS_DIR, default "bug-reports" in the working directory):
+# systemd creates /var/lib/ppserver/bug-reports for ppserver (0750) and makes it writable.
+StateDirectory=ppserver/bug-reports
+StateDirectoryMode=0750
+
+# Sandboxing. The only writable paths are the mail log (MAILER=file) and the bug reports above.
 ReadWritePaths=/var/log/ppserver
 ProtectSystem=strict
 ProtectHome=yes

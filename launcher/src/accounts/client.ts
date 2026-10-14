@@ -2,6 +2,8 @@ import type {
   AccountsErrorBody,
   AccountsMe,
   AccountsPublicUser,
+  BugReportCreated,
+  BugReportRequest,
   LeaderboardPage,
   MatchHistoryFilter,
   MatchHistoryPage,
@@ -40,6 +42,8 @@ export class AccountsHttpError extends Error {
 type FetchLike = typeof fetch;
 
 const REQUEST_TIMEOUT_MS = 15000;
+/** A bug report's logs zip can be tens of MB on a slow uplink. */
+const UPLOAD_TIMEOUT_MS = 5 * 60 * 1000;
 
 /**
  * Minimal HTTP client for the accounts service. Stateless: callers pass the
@@ -163,19 +167,46 @@ export class AccountsHttpClient {
     return res.ruleset;
   }
 
+  /** A bug report's text. With a session token it carries the account; without one it is anonymous. */
+  createBugReport(token: string | undefined, req: BugReportRequest): Promise<BugReportCreated> {
+    return this._request("POST", "/v1/bug-reports", { token, body: req });
+  }
+
+  /** The report's logs zip, with the token `createBugReport` answered (once, within an hour). */
+  async uploadBugReportLogs(id: number, uploadToken: string, zip: Uint8Array<ArrayBuffer>): Promise<void> {
+    await this._request("PUT", `/v1/bug-reports/${id}/logs`, {
+      raw: { data: zip, contentType: "application/zip" },
+      headers: { "x-upload-token": uploadToken },
+      timeoutMs: UPLOAD_TIMEOUT_MS,
+    });
+  }
+
   private async _request<T>(
     method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
-    opts: { token?: string; body?: unknown },
+    opts: {
+      token?: string;
+      body?: unknown;
+      raw?: { data: Uint8Array<ArrayBuffer>; contentType: string };
+      headers?: Record<string, string>;
+      timeoutMs?: number;
+    },
   ): Promise<T> {
-    const headers: Record<string, string> = { accept: "application/json", "user-agent": this.userAgent };
+    const headers: Record<string, string> = {
+      accept: "application/json",
+      "user-agent": this.userAgent,
+      ...opts.headers,
+    };
     if (opts.token) {
       headers.authorization = `Bearer ${opts.token}`;
     }
-    let payload: string | undefined;
+    let payload: string | Uint8Array<ArrayBuffer> | undefined;
     if (opts.body !== undefined) {
       headers["content-type"] = "application/json";
       payload = JSON.stringify(opts.body);
+    } else if (opts.raw) {
+      headers["content-type"] = opts.raw.contentType;
+      payload = opts.raw.data;
     }
 
     let res: Response;
@@ -184,7 +215,7 @@ export class AccountsHttpClient {
         method,
         headers,
         body: payload,
-        signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+        signal: AbortSignal.timeout(opts.timeoutMs ?? REQUEST_TIMEOUT_MS),
       });
     } catch (err) {
       const reason = err instanceof Error ? err.message : String(err);

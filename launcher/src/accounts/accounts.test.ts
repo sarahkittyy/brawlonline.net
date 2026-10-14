@@ -36,7 +36,7 @@ function fakeFetch(routes: Record<string, Route>) {
       url,
       method: init.method,
       headers: init.headers,
-      body: init.body ? JSON.parse(init.body) : undefined,
+      body: typeof init.body === "string" ? JSON.parse(init.body) : init.body ?? undefined,
     };
     calls.push(call);
     const route = routes[`${init.method} ${new URL(url).pathname}`];
@@ -110,6 +110,47 @@ describe("accounts", () => {
       new SessionStore(sessionsFile, fakeCipher),
     );
     expect(await fresh.me(UID)).toEqual({ ok: true, value: me() });
+  });
+
+  it("sends a bug report's text, then its zip; a failed zip keeps the report", async () => {
+    let uploads = 0;
+    const { impl, calls } = fakeFetch({
+      "POST /v1/bug-reports": () => ({ status: 201, body: { id: 7, uploadToken: "up-7" } }),
+      "PUT /v1/bug-reports/7/logs": () =>
+        ++uploads === 1
+          ? { status: 204 }
+          : { status: 413, body: { error: { code: "too_large", message: "The logs are larger than 32 MB." } } },
+    });
+    const store = new SessionStore(path.join(dir, "sessions.json"), null);
+    await store.set(UID, "tok-1");
+    const manager = new AccountsManager(new AccountsHttpClient("http://api", "test", impl), store);
+    const req = { description: "froze", launcherVersion: "1.0.0", platform: "Windows 11 x64" };
+    const zip = new Uint8Array([0x50, 0x4b, 5, 6]);
+
+    // Logged in: the session goes with the text; the zip goes with the upload token, not the session.
+    expect(await manager.sendBugReport(UID, req, async () => zip)).toEqual({
+      ok: true,
+      value: { id: 7, logsSent: true },
+    });
+    expect(calls[0].headers.authorization).toBe("Bearer tok-1");
+    expect(calls[0].body).toEqual(req);
+    expect(calls[1].headers["x-upload-token"]).toBe("up-7");
+    expect(calls[1].headers["content-type"]).toBe("application/zip");
+    expect(calls[1].headers.authorization).toBeUndefined();
+    expect(calls[1].body).toBe(zip);
+
+    // Logged out, and the zip refused: the report is still there, with the reason.
+    expect(await manager.sendBugReport(null, req, async () => zip)).toEqual({
+      ok: true,
+      value: { id: 7, logsSent: false, logsError: "The logs are larger than 32 MB." },
+    });
+    expect(calls[2].headers.authorization).toBeUndefined();
+
+    // Making the zip failed: the same.
+    const res = await manager.sendBugReport(null, req, async () => {
+      throw new Error("disk full");
+    });
+    expect(res).toEqual({ ok: true, value: { id: 7, logsSent: false, logsError: "disk full" } });
   });
 
   it("returns the server's error message and forgets a rejected session", async () => {

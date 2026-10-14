@@ -63,6 +63,11 @@ pub const RULESET_LOOKUP_IP_WINDOWS: [Window; 2] = [Window::new(60, MINUTE), Win
 /// per minute. The launcher saves a draft when the player stops typing.
 pub const RULESET_EDIT_WINDOWS: [Window; 1] = [Window::new(120, MINUTE)];
 
+/// Bug reports (`POST /v1/bug-reports`) per client IP (IPv6 per /64): 5 per hour, 20 per day.
+/// Each can carry a logs zip of up to `BUG_REPORT_MAX_LOGS_BYTES`, so this also bounds the disk
+/// one address can fill (with `BUG_REPORTS_MAX_TOTAL_BYTES` as the cap for everyone).
+pub const BUG_REPORT_IP_WINDOWS: [Window; 2] = [Window::new(5, HOUR), Window::new(20, DAY)];
+
 #[derive(Debug)]
 pub struct RateLimiter<K> {
     windows: Vec<Window>,

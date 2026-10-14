@@ -29,6 +29,6 @@ export function installModules(flags: ConfigFlags) {
   setupModsIpc({ settingsManager, dolphinManager, accountsManager });
   setupGameAssetsIpc({ settingsManager, dolphinManager, checkIso });
   const browserWindowManager = new BrowserWindowManager();
-  setupMainIpc({ dolphinManager, settingsManager, flags, browserWindowManager, appUpdater });
+  setupMainIpc({ dolphinManager, settingsManager, flags, browserWindowManager, appUpdater, accountsManager });
   return { dolphinManager, settingsManager, browserWindowManager, appUpdater };
 }

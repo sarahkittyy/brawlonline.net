@@ -3,6 +3,7 @@
 //! to `user.json`. See docs/backend-design.md sections 2.4 and 3.
 
 pub mod api;
+pub mod bug_reports;
 pub mod config;
 pub mod cursor;
 pub mod error;
@@ -25,8 +26,9 @@ use axum::routing::{get, post, put};
 use axum::Router;
 use common::playkey::PlayKeySecret;
 use common::ratelimit::{
-    RateLimiter, Window, AUTH_WINDOWS, DAY, HISTORY_WINDOWS, LEADERBOARD_IP_WINDOWS, MAIL_RECIPIENT_WINDOWS,
-    ROOMS_WINDOWS, RULESET_EDIT_WINDOWS, RULESET_LOOKUP_IP_WINDOWS, RULESET_PUBLISH_WINDOWS, SIGNUP_IP_WINDOWS,
+    RateLimiter, Window, AUTH_WINDOWS, BUG_REPORT_IP_WINDOWS, DAY, HISTORY_WINDOWS, LEADERBOARD_IP_WINDOWS,
+    MAIL_RECIPIENT_WINDOWS, ROOMS_WINDOWS, RULESET_EDIT_WINDOWS, RULESET_LOOKUP_IP_WINDOWS, RULESET_PUBLISH_WINDOWS,
+    SIGNUP_IP_WINDOWS,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -97,6 +99,8 @@ pub struct Limits {
     pub ruleset_lookup_ip: RateLimiter<IpAddr>,
     /// The account's own ruleset calls: [`RULESET_EDIT_WINDOWS`].
     pub ruleset_edit: RateLimiter<uuid::Uuid>,
+    /// Bug reports per client IP (IPv6 per /64): [`BUG_REPORT_IP_WINDOWS`].
+    pub bug_report_ip: RateLimiter<IpAddr>,
 }
 
 impl Limits {
@@ -120,6 +124,7 @@ impl Limits {
             ruleset_publish: RateLimiter::new(&RULESET_PUBLISH_WINDOWS),
             ruleset_lookup_ip: RateLimiter::new(&RULESET_LOOKUP_IP_WINDOWS),
             ruleset_edit: RateLimiter::new(&RULESET_EDIT_WINDOWS),
+            bug_report_ip: RateLimiter::new(&BUG_REPORT_IP_WINDOWS),
         }
     }
 
@@ -132,6 +137,13 @@ impl Limits {
 }
 
 pub fn router(state: AppState) -> Router {
+    // A bug report's logs zip is the one large body; everything else stays at 16 KiB. The upload
+    // checks BUG_REPORT_MAX_LOGS_BYTES itself (with a message the launcher shows); this is a
+    // backstop above it.
+    let logs_limit = usize::try_from(state.cfg.bug_report_max_logs_bytes.saturating_mul(2)).unwrap_or(usize::MAX);
+    let uploads = Router::new()
+        .route("/v1/bug-reports/{id}/logs", put(bug_reports::upload_logs))
+        .layer(RequestBodyLimitLayer::new(logs_limit));
     Router::new()
         .route("/v1/auth/signup", post(api::signup))
         .route("/v1/auth/login", post(api::login))
@@ -177,7 +189,9 @@ pub fn router(state: AppState) -> Router {
         .route("/verify-email", get(pages::verify_email_page))
         .route("/reset-password", get(pages::reset_password_page).post(pages::reset_password_submit))
         .route("/healthz", get(api::healthz))
+        .route("/v1/bug-reports", post(bug_reports::create))
         .layer(RequestBodyLimitLayer::new(16 * 1024))
+        .merge(uploads)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

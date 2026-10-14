@@ -101,3 +101,110 @@ pub async fn chat_report_done(pool: &PgPool, actor: &str, id: i64) -> anyhow::Re
     }
     Ok(done)
 }
+
+/// A bug report as `admin bug list` / `admin bug show` print it (`migrations/0011_bug_reports.sql`).
+#[derive(Debug, Clone, sqlx::FromRow)]
+pub struct BugReportRow {
+    pub id: i64,
+    pub created_at: chrono::DateTime<chrono::Utc>,
+    pub uid: Option<uuid::Uuid>,
+    pub connect_code: Option<String>,
+    pub display_name: Option<String>,
+    pub description: String,
+    pub launcher_version: String,
+    pub platform: String,
+    /// The zip's size, or `None` when no zip came (yet).
+    pub logs_bytes: Option<i64>,
+    pub resolved_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub resolution: String,
+}
+
+const BUG_REPORT_COLUMNS: &str = "b.id, b.created_at, b.uid, u.connect_code, u.display_name, b.description,
+    b.launcher_version, b.platform, b.logs_bytes, b.resolved_at, b.resolution
+    FROM bug_reports b LEFT JOIN users u ON u.uid = b.uid";
+
+/// Newest first: the unresolved ones, or with `all` the resolved ones too.
+pub async fn bug_reports(pool: &PgPool, all: bool, limit: i64) -> anyhow::Result<Vec<BugReportRow>> {
+    Ok(sqlx::query_as::<_, BugReportRow>(&format!(
+        "SELECT {BUG_REPORT_COLUMNS} WHERE $1 OR b.resolved_at IS NULL ORDER BY b.id DESC LIMIT $2"
+    ))
+    .bind(all)
+    .bind(limit)
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn bug_report(pool: &PgPool, id: i64) -> anyhow::Result<BugReportRow> {
+    sqlx::query_as::<_, BugReportRow>(&format!("SELECT {BUG_REPORT_COLUMNS} WHERE b.id = $1"))
+        .bind(id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no bug report #{id}"))
+}
+
+/// Marks a report resolved, with an optional note (it leaves `bug list`). `false` if there is no
+/// such unresolved report.
+pub async fn resolve_bug_report(pool: &PgPool, actor: &str, id: i64, note: &str) -> anyhow::Result<bool> {
+    let done = sqlx::query(
+        "UPDATE bug_reports SET resolved_at = now(), resolution = $2 WHERE id = $1 AND resolved_at IS NULL",
+    )
+    .bind(id)
+    .bind(note)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        == 1;
+    if done {
+        store::audit(pool, actor, "bug_report.resolve", Some(&id.to_string()), serde_json::json!({"note": note}))
+            .await?;
+    }
+    Ok(done)
+}
+
+/// Puts a resolved report back on the list. `false` if there is no such resolved report.
+pub async fn reopen_bug_report(pool: &PgPool, actor: &str, id: i64) -> anyhow::Result<bool> {
+    let done = sqlx::query("UPDATE bug_reports SET resolved_at = NULL WHERE id = $1 AND resolved_at IS NOT NULL")
+        .bind(id)
+        .execute(pool)
+        .await?
+        .rows_affected()
+        == 1;
+    if done {
+        store::audit(pool, actor, "bug_report.reopen", Some(&id.to_string()), serde_json::json!({})).await?;
+    }
+    Ok(done)
+}
+
+/// Deletes reports and their zips in `dir`: the ids given, or with `ids` empty every resolved
+/// report. The zips go first, so a report is never left pointing at nothing it claims to have.
+/// Returns the ids deleted.
+pub async fn delete_bug_reports(
+    pool: &PgPool,
+    actor: &str,
+    dir: &std::path::Path,
+    ids: &[i64],
+) -> anyhow::Result<Vec<i64>> {
+    let found: Vec<i64> = if ids.is_empty() {
+        sqlx::query_scalar("SELECT id FROM bug_reports WHERE resolved_at IS NOT NULL ORDER BY id")
+            .fetch_all(pool)
+            .await?
+    } else {
+        sqlx::query_scalar("SELECT id FROM bug_reports WHERE id = ANY($1) ORDER BY id")
+            .bind(ids)
+            .fetch_all(pool)
+            .await?
+    };
+    for &id in &found {
+        let path = accounts::bug_reports::logs_path(dir, id);
+        match std::fs::remove_file(&path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => anyhow::bail!("deleting {}: {e}", path.display()),
+        }
+        sqlx::query("DELETE FROM bug_reports WHERE id = $1").bind(id).execute(pool).await?;
+    }
+    if !found.is_empty() {
+        store::audit(pool, actor, "bug_report.delete", None, serde_json::json!({"ids": found})).await?;
+    }
+    Ok(found)
+}

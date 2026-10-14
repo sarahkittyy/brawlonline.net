@@ -1,3 +1,4 @@
+import type { AccountsResult, BugReportSent } from "@accounts/types";
 import type { BrawlLink } from "@common/brawl_link";
 import type { IsoValidity, NatType, PortMapping, Presence } from "@common/types";
 import type { EmptyPayload, SuccessPayload } from "utils/ipc";
@@ -11,6 +12,13 @@ export const ipc_checkValidIso = makeEndpoint.main(
 
 /** Asks where to save, then zips the launcher's and Dolphin's logs there (null if the player cancelled). */
 export const ipc_downloadLogs = makeEndpoint.main("downloadLogs", <EmptyPayload>_, <{ path: string | null }>_);
+
+/** Sends a bug report with a zip of the logs (`AccountsManager.sendBugReport`); `uid` is the logged-in account, if any. */
+export const ipc_sendBugReport = makeEndpoint.main(
+  "sendBugReport",
+  <{ uid: string | null; description: string }>_,
+  <AccountsResult<BugReportSent>>_,
+);
 
 export const ipc_checkForUpdate = makeEndpoint.main("checkForUpdate", <EmptyPayload>_, <{ updateAvailable: boolean }>_);
 

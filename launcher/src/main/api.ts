@@ -1,3 +1,5 @@
+import type { BugReportSent } from "@accounts/types";
+import { AccountsError } from "@accounts/types";
 import type { BrawlLink } from "@common/brawl_link";
 import { ipcRenderer } from "electron";
 
@@ -16,6 +18,7 @@ import {
   ipc_openInNewBrowserWindow,
   ipc_requiredLauncherUpdate,
   ipc_runNetworkDiagnostics,
+  ipc_sendBugReport,
   ipc_showOpenDialog,
   ipc_takeBrawlLinks,
 } from "./ipc";
@@ -32,6 +35,15 @@ export default {
   async downloadLogs(): Promise<string | null> {
     const { result } = await ipc_downloadLogs.renderer!.trigger({});
     return result.path;
+  },
+  /** Sends a bug report and the logs. Throws if the text did not get there; a failed zip is in the answer. */
+  async sendBugReport(uid: string | null, description: string): Promise<BugReportSent> {
+    const { result } = await ipc_sendBugReport.renderer!.trigger({ uid, description });
+    if (!result.ok) {
+      const e = result.error;
+      throw new AccountsError(e.code, e.message, e.status, e.retryAfter);
+    }
+    return result.value;
   },
   async checkForAppUpdates(): Promise<{ updateAvailable: boolean }> {
     const { result } = await ipc_checkForUpdate.renderer!.trigger({});

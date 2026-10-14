@@ -30,7 +30,9 @@
   margin-left: 10px;
 }
 
-@media (width <= 800px) {
+/* Below this the header's icons don't fit beside the name (header.tsx's COMPACT_HEADER): the
+   picture alone, the name is in the menu. */
+@media (width <= 1120px) {
   .content, .expandMoreIcon {
     display: none;
   }
@@ -40,4 +42,8 @@
   margin: 0;
   margin-bottom: 6px;
   font-size: 18px;
+  max-width: 160px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }

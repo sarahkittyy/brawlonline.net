@@ -231,6 +231,20 @@ pub struct Config {
     /// mm's status listener (`MM_STATUS_LISTEN` on mm), read for `GET /v1/rooms`.
     #[arg(long, env = "MM_STATUS_URL", default_value = "http://127.0.0.1:43181/status")]
     pub mm_status_url: String,
+
+    /// Where bug reports' logs zips go (`bug-<id>.zip`). Relative to the working directory
+    /// (on prod /var/lib/ppserver, so /var/lib/ppserver/bug-reports, the unit's StateDirectory).
+    #[arg(long, env = "BUG_REPORTS_DIR", default_value = "bug-reports")]
+    pub bug_reports_dir: std::path::PathBuf,
+
+    /// The largest logs zip one bug report may send (bytes; default 32 MiB).
+    #[arg(long, env = "BUG_REPORT_MAX_LOGS_BYTES", default_value_t = 32 * 1024 * 1024)]
+    pub bug_report_max_logs_bytes: u64,
+
+    /// All bug reports' zips together (bytes; default 4 GiB). Past it a report keeps its text
+    /// and its zip is refused (507) until `admin bug clear` / `admin bug delete` makes room.
+    #[arg(long, env = "BUG_REPORTS_MAX_TOTAL_BYTES", default_value_t = 4 * 1024 * 1024 * 1024)]
+    pub bug_reports_max_total_bytes: u64,
 }
 
 impl Config {
@@ -265,6 +279,9 @@ impl Config {
             ranked_stale_secs: 1800,
             ranked_sweep_secs: 30,
             mm_status_url: "http://127.0.0.1:9/never".into(),
+            bug_reports_dir: std::env::temp_dir().join("pp-accounts-test-bug-reports"),
+            bug_report_max_logs_bytes: 32 * 1024 * 1024,
+            bug_reports_max_total_bytes: 4 * 1024 * 1024 * 1024,
         }
     }
 }
