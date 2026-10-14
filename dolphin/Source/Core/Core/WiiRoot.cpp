@@ -234,7 +234,10 @@ static void InitializeDeterministicWiiSaves(FS::FileSystem* session_fs,
                      save_title, s_store_root, ok ? "" : " (incomplete)");
       }
     }
-    if (save_title != 0 && !from_store)
+    // A session outside a room (PPR_MACHINE_SESSION, tests) has no store and keeps the save its
+    // NAND started with: with none, buttons pressed at Brawl's boot message about it could leave
+    // the game stopped there for good.
+    if (save_title != 0 && !from_store && !s_store_root.empty())
     {
       // No save of this build yet: the game makes its own. The session's NAND was seeded with P+'s
       // template save (InitializeWiiRoot), and every Brawl mod uses Brawl's title, so a Brawl build

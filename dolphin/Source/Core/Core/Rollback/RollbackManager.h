@@ -11,6 +11,7 @@
 #include <mutex>
 #include <optional>
 #include <shared_mutex>
+#include <span>
 #include <thread>
 #include <unordered_map>
 #include <vector>
@@ -138,6 +139,10 @@ public:
   // DoState touches the FIFO and video state (Dolphin's own savestates get this from PauseAndLock).
   // Returns the microseconds spent waiting.
   static u64 SyncGPUForDoState(Core::System& system);
+  // LoadFrame: whether the JIT keeps its blocks through a load to `slot` that restores these
+  // granules with these changed words (see the definition).
+  bool JitKeepsBlocks(Core::System& system, const DeltaSaveSlot& slot, std::span<const u32> keys,
+                      std::span<const u16> changed);
   // Deterministic dual core: snapshots keep the video thread's state separately, captured by the
   // video thread in command order, instead of syncing the GPU thread (see VideoState.h).
   static bool UseSplitVideoState(Core::System& system);
@@ -165,6 +170,12 @@ public:
   std::atomic<u64> m_stat_evict_waits{0}, m_stat_evict_wait_us_max{0};
   std::atomic<u64> m_stat_save_gran_total{0}, m_stat_save_gran_max{0};
   std::atomic<u64> m_stat_load_gran_total{0}, m_stat_load_gran_max{0};
+  // The last load's parts (CPU thread): its wait for the video thread, its device states, the
+  // granules it restored and, of those, the ones whose bytes it changed, and (whole-machine mode)
+  // its JIT step and whether that dropped the restored granules' blocks.
+  u64 m_last_load_sync_us = 0, m_last_load_dostate_us = 0, m_last_load_jit_us = 0;
+  u32 m_last_load_granules = 0, m_last_load_changed = 0;
+  bool m_last_load_jit_dropped = false;
   mutable std::mutex m_sample_mutex;
   std::vector<SaveSample> m_save_samples;  // ring, SAVE_SAMPLE_RING entries once used
   u64 m_save_sample_next = 0;

@@ -187,6 +187,13 @@ public:
   // was there are dropped, the JIT only: the emulated instruction cache is machine state and is
   // restored with the rest.
   void EraseBlocksForRestoredRange(u32 physical_address, u32 length);
+  // Rollback: how many times compiled code or what it was compiled with went away (a block
+  // destroyed, the cache cleared, a line invalidated, a per-instruction hint learned or dropped).
+  // While it stays the same, the cache only gained blocks; see RollbackManager::LoadFrame.
+  u64 Invalidations() const { return m_invalidations; }
+  void NoteInvalidation() { ++m_invalidations; }
+  // Whether a block was compiled from an instruction in [physical_address, +length).
+  bool HasCodeAt(u32 physical_address, u32 length) const;
   void InvalidateICacheLine(u32 address);
   void ErasePhysicalRange(u32 address, u32 length);
   void EraseSingleBlock(const JitBlock& block);
@@ -230,6 +237,7 @@ private:
   // This bitsets shows which cachelines overlap with any blocks.
   // It is used to provide a fast way to query if no icache invalidation is needed.
   ValidBlockBitSet valid_block;
+  u64 m_invalidations = 0;
 
   // This contains the entry points for each block.
   // It is used by the assembly dispatcher to quickly

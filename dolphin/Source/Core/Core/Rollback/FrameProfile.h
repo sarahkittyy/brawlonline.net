@@ -54,6 +54,8 @@ struct Counters
   u64 gpu_waits = 0;
   u64 gpu_busy_ns = 0;     // GPU thread executing commands
   u64 gpu_present_ns = 0;  // of that, presenting (hold + swap)
+  u64 jit_ns = 0;          // the JIT compiling blocks (CPU thread)
+  u64 jit_blocks = 0;
 };
 
 extern std::atomic<bool> g_enabled;
@@ -78,6 +80,8 @@ inline void SetTimeEvents(bool on)
 // CPU thread (CoreTiming::Advance, Throttle).
 void AddEvent(EventCat cat, u64 ns);
 void AddThrottle(u64 ns);
+// CPU thread: the JIT compiled a block.
+void AddJit(u64 ns);
 // Any thread that waits for the GPU thread (normally the CPU thread).
 void AddGpuWait(size_t reason, u64 ns);
 // GPU thread.

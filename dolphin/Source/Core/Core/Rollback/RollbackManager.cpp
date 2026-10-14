@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <array>
+#include <bit>
 #include <bitset>
 #include <chrono>
 #include <cstdlib>
@@ -1272,6 +1273,34 @@ void RollbackManager::SetBrawlExclusions(bool brawl)
     m_exclude_regions.push_back(*m_mailbox_region);
 }
 
+bool RollbackManager::JitKeepsBlocks(Core::System& system, const DeltaSaveSlot& slot,
+                                     std::span<const u32> keys, std::span<const u16> changed)
+{
+  // The JIT keeps its blocks through this load when it only gained blocks since the snapshot, of
+  // code that was there at the snapshot's frame and is again (JitBaseBlockCache::Invalidations,
+  // RollbackManager::LoadFrame):
+  auto& jit = system.GetJitInterface();
+  // nothing compiled went away since (no line invalidated, no hint learned or dropped);
+  if (jit.Invalidations() != slot.m_jit_invalidations)
+    return false;
+  // and no instruction a block was compiled from is changed by the restore (code written since
+  // without invalidating the instruction cache; a REX code's data next to it is not code).
+  for (size_t n = 0; n < keys.size(); ++n)
+  {
+    u32 bits = changed[n];
+    const u32 granule = keys[n] << ROLLBACK_PAGE_SHIFT;
+    while (bits != 0)
+    {
+      const u32 first = static_cast<u32>(std::countr_zero(bits));
+      const u32 run = static_cast<u32>(std::countr_one(bits >> first));
+      if (jit.HasCodeAt(granule + first * 4, run * 4))
+        return false;
+      bits &= ~(((1u << run) - 1) << first);
+    }
+  }
+  return true;
+}
+
 bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
 {
   ROLLBACK_ZONE();
@@ -1314,6 +1343,10 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
   // thousands of granules, and every one of them is looked up exactly once.
   static std::vector<u32> restore_keys;
   static std::vector<SourceEntry> restore_srcs;
+  // Per restored granule, the words whose bytes the restore changed (bit i: word i). Most granules
+  // a rollback names hold the same bytes again (about 93% in REX: values written back, stores of
+  // the same bytes): those are not copied.
+  static std::vector<u16> restore_changed;
   // The granules the forward pass flagged in m_needs_source_mem1/2, which are all clear between
   // loads (each flag is cleared where its source is found): the indexing never walks or clears
   // the whole 1.4 million flags.
@@ -1452,10 +1485,12 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
 #endif
 
       const u32 total = static_cast<u32>(restore_keys.size());
+      m_last_load_granules = total;
       m_stat_load_gran_total.fetch_add(total, std::memory_order_relaxed);
       if (total > m_stat_load_gran_max.load(std::memory_order_relaxed))
         m_stat_load_gran_max.store(total, std::memory_order_relaxed);
       const u32 chunk = (total + SAVESTATE_NUM_WORK_CHUNKS - 1) / SAVESTATE_NUM_WORK_CHUNKS;
+      restore_changed.resize(total);
 
       // One job per granule would be millions of jobs, so each job restores a contiguous slice.
       // Every granule is a distinct destination, so slices are safe to run concurrently.
@@ -1520,6 +1555,18 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
                     continue;
                   }
                 }
+                if (std::memcmp(dst, src, ROLLBACK_PAGE_SIZE) == 0)
+                {
+                  restore_changed[n] = 0;
+                  continue;
+                }
+                u32 changed = 0;
+                for (u32 w = 0; w < ROLLBACK_PAGE_SIZE / 4; ++w)
+                {
+                  if (std::memcmp(dst + w * 4, src + w * 4, 4) != 0)
+                    changed |= 1u << w;
+                }
+                restore_changed[n] = static_cast<u16>(changed);
                 savestateMemcpy(dst, src, ROLLBACK_PAGE_SIZE, dst_phys, *sorted_exclude_regions);
               }
             }));
@@ -1547,7 +1594,8 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
   {
     ROLLBACK_ZONE_N("DoState restore");
     // The video thread finishes everything queued, including the captures of every snapshot.
-    SyncGPUForDoState(system);
+    const auto dostate_start = std::chrono::steady_clock::now();
+    m_last_load_sync_us = SyncGPUForDoState(system);
     BeginDoState();
     VideoCommon_SetRollbackSplitState(deltaSave.m_split_video);
     ok = State::LoadFromBuffer(
@@ -1556,6 +1604,10 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
     if (deltaSave.m_split_video)
       deltaSave.RestoreVideoState();
     EndDoState();
+    m_last_load_dostate_us = static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                                  std::chrono::steady_clock::now() - dostate_start)
+                                                  .count()) -
+                             m_last_load_sync_us;
   }
 
   if (m_region_mode || !m_full_ios_in_snapshots)
@@ -1623,12 +1675,39 @@ bool RollbackManager::LoadFrame(Core::System& system, int frames_back)
     // module the newer timeline loaded where the restored one still runs other code (a scene
     // change) left blocks of the wrong code in the cache, and the re-run diverged.
     ROLLBACK_ZONE_N("JIT blocks of restored memory");
-    // Diagnostics: PPR_MACHINE_NO_JIT_ERASE keeps them (to tell whether recompiled blocks are what
-    // a re-run differs by).
+    // Only when the JIT lost code since the loaded snapshot (JitBaseBlockCache::Invalidations:
+    // the game invalidated lines, a module came in, a hint was learned). Otherwise the cache only
+    // gained blocks since, of code that was there at the snapshot's frame, and everything stays:
+    // dropping every block of every restored granule at every rollback threw away hundreds of a
+    // REX frame's blocks (its codes keep their data next to their code; most restored granules
+    // hold the same bytes again), and the re-run compiled them again: 10 of a re-run frame's
+    // 14 ms on this PC with fast input (2026-10-14).
+    // It is one or the other, never some of the blocks: compiling reads the code through the
+    // emulated instruction cache (machine state), and a block recompiled with the hints learned
+    // since (a gather pipe write's interrupt check) takes interrupts elsewhere, so a partial rule
+    // can make a re-run differ from both the first run and the old full drop.
+    // Diagnostics: PPR_MACHINE_NO_JIT_ERASE keeps them all (to tell whether recompiled blocks are
+    // what a re-run differs by); PPR_MACHINE_JIT_ERASE_ALL drops those of every restored granule,
+    // as before.
     static const bool keep_blocks = std::getenv("PPR_MACHINE_NO_JIT_ERASE") != nullptr;
+    static const bool erase_all = std::getenv("PPR_MACHINE_JIT_ERASE_ALL") != nullptr;
+    const auto jit_start = std::chrono::steady_clock::now();
     auto& jit = system.GetJitInterface();
-    for (const u32 key : keep_blocks ? std::vector<u32>{} : restore_keys)
-      jit.EraseBlocksForRestoredRange(key << ROLLBACK_PAGE_SHIFT, ROLLBACK_PAGE_SIZE);
+    u32 changed_granules = 0;
+    for (const u16 changed : restore_changed)
+      changed_granules += changed != 0;
+    m_last_load_changed = changed_granules;
+    m_last_load_jit_dropped = false;
+    if (erase_all ||
+        (!keep_blocks && !JitKeepsBlocks(system, deltaSave, restore_keys, restore_changed)))
+    {
+      for (const u32 key : restore_keys)
+        jit.EraseBlocksForRestoredRange(key << ROLLBACK_PAGE_SHIFT, ROLLBACK_PAGE_SIZE);
+      m_last_load_jit_dropped = true;
+    }
+    m_last_load_jit_us = static_cast<u64>(std::chrono::duration_cast<std::chrono::microseconds>(
+                                              std::chrono::steady_clock::now() - jit_start)
+                                              .count());
   }
 
 #if ROLLBACK_VALIDATE

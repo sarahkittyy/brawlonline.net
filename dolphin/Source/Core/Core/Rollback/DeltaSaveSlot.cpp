@@ -279,6 +279,7 @@ void DeltaSaveSlot::Save(Core::System& system)
 
   brawl_frame = ReadBrawlMatchFrameCounter(m_mem2_ptr, m_mem2_size);
   m_downcount = system.GetPPCState().downcount;
+  m_jit_invalidations = system.GetJitInterface().Invalidations();
   m_slice_length = system.GetCoreTiming().GetGlobals().slice_length;
   m_exceptions = system.GetPPCState().Exceptions;
   m_msr = system.GetPPCState().msr.Hex;

@@ -289,6 +289,16 @@ void JitInterface::EraseBlocksForRestoredRange(u32 physical_address, u32 length)
     m_jit->GetBlockCache()->EraseBlocksForRestoredRange(physical_address, length);
 }
 
+u64 JitInterface::Invalidations() const
+{
+  return m_jit ? m_jit->GetBlockCache()->Invalidations() : 0;
+}
+
+bool JitInterface::HasCodeAt(u32 physical_address, u32 length) const
+{
+  return m_jit && m_jit->GetBlockCache()->HasCodeAt(physical_address, length);
+}
+
 void JitInterface::InvalidateICacheLine(u32 address)
 {
   if (m_jit)
@@ -357,6 +367,7 @@ void JitInterface::CompileExceptionCheck(ExceptionType type)
         return;
     }
     exception_addresses->insert(ppc_state.pc);
+    m_jit->GetBlockCache()->NoteInvalidation();
 
     // Invalidate the JIT block so that it gets recompiled with the external exception check
     // included.

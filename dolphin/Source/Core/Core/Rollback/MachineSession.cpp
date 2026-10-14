@@ -4,6 +4,7 @@
 #include "Core/Rollback/MachineSession.h"
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstdlib>
@@ -12,6 +13,7 @@
 #include <functional>
 #include <map>
 #include <mutex>
+#include <optional>
 #include <set>
 #include <thread>
 
@@ -74,6 +76,7 @@
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/FrameProfile.h"
 #include "Core/Rollback/MachineSDCard.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/RollbackManager.h"
@@ -448,6 +451,8 @@ const char* s_gekko_addr[MAX_PLAYERS] = {"p0", "p1", "p2", "p3"};
 
 void AfterSave(Core::System& system);
 void AfterLoad(Core::System& system, int frames_back);
+void PaceLoad(Clock::duration took);
+void PaceSave(Clock::duration took);
 
 void AddLog(std::string line)
 {
@@ -475,8 +480,22 @@ struct PaceStats
   u32 frames = 0, resim = 0, rollbacks = 0, waits = 0, late25 = 0, late50 = 0;
   double wait_ms = 0, late_ms = 0, speed_sum = 0, ahead_sum = 0;
   float ahead_min = 1e9f, ahead_max = -1e9f;
+  // Where a rollback's time goes: its loads (the wait for the video thread, the device states,
+  // the granules restored), its re-run passes (each from its start to the next pass's: the frame
+  // and its save), and every pass's save.
+  double load_ms = 0, load_max_ms = 0, load_sync_ms = 0, load_dostate_ms = 0, load_jit_ms = 0;
+  double resim_ms = 0, resim_max_ms = 0, save_ms = 0, save_max_ms = 0;
+  u64 load_granules = 0, load_changed = 0, load_jit_dropped = 0;
+  u32 saves = 0;
+  // The frame profile (Rollback::FrameProfile) of re-run passes and of shown passes (a shown
+  // pass's includes the rollback load before the re-runs that follow it, and the throttle).
+  Rollback::FrameProfile::Counters resim_c{}, shown_c{};
 };
 PaceStats s_pace;
+// The pass that started last (kept across the pace log's seconds).
+Clock::time_point s_pace_pass_start{};
+bool s_pace_pass_resim = false;
+Rollback::FrameProfile::Counters s_pace_pass_c0{};
 
 void Fail(std::string why)
 {
@@ -1882,6 +1901,43 @@ void LogLocalInput(const GCPadStatus& pad)
   l.peak = 0;
 }
 
+// Diagnostics: PPR_MACHINE_TEST_INPUT=SEED[:FIRST] plays this machine's GameCube pad from SEED,
+// as a function of the frame alone (6-frame steps of a stick direction, a button or nothing, from
+// frame FIRST, 900 by default: not at Brawl's boot message), so two runs take the same path
+// through the game whatever their speed (A/B tests of rollback changes).
+bool TestInput(GCPadStatus* pad)
+{
+  static const auto cfg = []() -> std::optional<std::pair<u64, s64>> {
+    const char* e = std::getenv("PPR_MACHINE_TEST_INPUT");
+    if (!e)
+      return std::nullopt;
+    const char* colon = std::strchr(e, ':');
+    return std::pair<u64, s64>{std::strtoull(e, nullptr, 10),
+                               colon ? std::strtoll(colon + 1, nullptr, 10) : 900};
+  }();
+  if (!cfg || s.current_frame < cfg->second)
+    return false;
+  u64 z = cfg->first ^ (static_cast<u64>(s.current_frame / 6) * 0x9E3779B97F4A7C15ULL);
+  z = (z ^ (z >> 30)) * 0xBF58476D1CE4E5B9ULL;
+  z = (z ^ (z >> 27)) * 0x94D049BB133111EBULL;
+  z ^= z >> 31;
+  *pad = GCPadStatus{};
+  const u32 kind = z % 10;
+  if (kind < 4)
+  {
+    pad->stickX = static_cast<u8>(z >> 8);
+    pad->stickY = static_cast<u8>(z >> 16);
+  }
+  else if (kind < 8)
+  {
+    static constexpr std::array<u16, 8> BUTTONS = {
+        PAD_BUTTON_A,  PAD_BUTTON_A,    PAD_BUTTON_B,    PAD_BUTTON_START,
+        PAD_BUTTON_UP, PAD_BUTTON_DOWN, PAD_BUTTON_LEFT, PAD_BUTTON_RIGHT};
+    pad->button = BUTTONS[(z >> 24) % BUTTONS.size()];
+  }
+  return true;
+}
+
 void CaptureLocalInput()
 {
   UpdateLocalController();
@@ -1905,6 +1961,7 @@ void CaptureLocalInput()
     g_controller_interface.UpdateInput();
     pad = Pad::GetStatus(s.opts.local_pad);
   }
+  TestInput(&pad);
   LogLocalInput(pad);
   Input in{};
   EncodePad(pad, &in);
@@ -2061,8 +2118,10 @@ void Update(Core::System& system)
       static const bool old_throttle = std::getenv("PPR_MACHINE_OLD_THROTTLE") != nullptr;
       if (!old_throttle)
         system.GetCoreTiming().BeginRollbackBurst();
+      const auto load_start = Clock::now();
       rb.LoadFrame(system, frames_back);
       AfterLoad(system, frames_back);
+      PaceLoad(Clock::now() - load_start);
       s.rollbacks++;
       s_pace.rollbacks++;
       s.max_rollback = std::max<u64>(s.max_rollback, static_cast<u64>(frames_back));
@@ -2352,11 +2411,13 @@ void PerformQueuedSave(Core::System& system)
     return;
   s.queued_save.pending = false;
   auto& rb = Rollback::RollbackManager::Get();
+  const auto save_start = Clock::now();
   rb.SaveFrame(system);
   AfterSave(system);
   s.saves++;
   DiagnoseSave(s.queued_save.frame);
   const u32 sum = rb.SaveChecksumWithSlice(s.queued_save.frame);
+  PaceSave(Clock::now() - save_start);
   if (DigestsEnabled() && s.queued_save.frame >= 0)
   {
     FrameDigest& d = s_digests[static_cast<size_t>(s.queued_save.frame) % s_digests.size()];
@@ -3801,6 +3862,32 @@ void PaceWait(Clock::duration waited)
   s_pace.wait_ms += std::chrono::duration<double, std::milli>(waited).count();
 }
 
+void PaceLoad(Clock::duration took)
+{
+  if (!PaceLogOn())
+    return;
+  const double ms = std::chrono::duration<double, std::milli>(took).count();
+  const auto& rb = Rollback::RollbackManager::Get();
+  s_pace.load_ms += ms;
+  s_pace.load_max_ms = std::max(s_pace.load_max_ms, ms);
+  s_pace.load_sync_ms += rb.m_last_load_sync_us / 1000.0;
+  s_pace.load_dostate_ms += rb.m_last_load_dostate_us / 1000.0;
+  s_pace.load_granules += rb.m_last_load_granules;
+  s_pace.load_changed += rb.m_last_load_changed;
+  s_pace.load_jit_ms += rb.m_last_load_jit_us / 1000.0;
+  s_pace.load_jit_dropped += rb.m_last_load_jit_dropped;
+}
+
+void PaceSave(Clock::duration took)
+{
+  if (!PaceLogOn())
+    return;
+  const double ms = std::chrono::duration<double, std::milli>(took).count();
+  s_pace.save_ms += ms;
+  s_pace.save_max_ms = std::max(s_pace.save_max_ms, ms);
+  s_pace.saves++;
+}
+
 void PaceFrame(Core::System& system, bool resim)
 {
   if (!PaceLogOn())
@@ -3808,6 +3895,26 @@ void PaceFrame(Core::System& system, bool resim)
   const auto now = Clock::now();
   if (s_pace.since == Clock::time_point{})
     s_pace.since = now;
+  if (!Rollback::FrameProfile::Enabled())
+  {
+    Rollback::FrameProfile::SetEnabled(true);
+    Rollback::FrameProfile::SetTimeEvents(true);
+    s_pace_pass_c0 = Rollback::FrameProfile::Snapshot();
+  }
+  if (s_pace_pass_resim && s_pace_pass_start != Clock::time_point{})
+  {
+    const double ms = std::chrono::duration<double, std::milli>(now - s_pace_pass_start).count();
+    s_pace.resim_ms += ms;
+    s_pace.resim_max_ms = std::max(s_pace.resim_max_ms, ms);
+  }
+  {
+    const auto c = Rollback::FrameProfile::Snapshot();
+    Rollback::FrameProfile::Accumulate(s_pace_pass_resim ? &s_pace.resim_c : &s_pace.shown_c,
+                                       Rollback::FrameProfile::Delta(c, s_pace_pass_c0));
+    s_pace_pass_c0 = c;
+  }
+  s_pace_pass_start = now;
+  s_pace_pass_resim = resim;
   if (resim)
   {
     s_pace.resim++;
@@ -3845,6 +3952,39 @@ void PaceFrame(Core::System& system, bool resim)
                  s_pace.waits, s_pace.wait_ms, s_pace.late25, s_pace.late50, s_pace.late_ms,
                  s_pace.speed_sum / n, s_pace.ahead_sum / n, s_pace.ahead_min, s_pace.ahead_max,
                  behind);
+  if (s_pace.rollbacks > 0 || s_pace.saves > 0)
+  {
+    const u32 r = std::max<u32>(s_pace.rollbacks, 1);
+    NOTICE_LOG_FMT(
+        BRAWLBACK,
+        "machine pace costs: loads {:.1f} ms (each {:.2f}, at most {:.2f}: video thread "
+        "{:.2f}, devices {:.2f}, {} granules, {} changed, JIT {:.2f}, {} dropped its blocks); "
+        "re-run frames {:.1f} ms (each {:.2f}, at most {:.2f}); {} saves {:.1f} ms (each "
+        "{:.2f}, at most {:.2f})",
+        s_pace.load_ms, s_pace.load_ms / r, s_pace.load_max_ms, s_pace.load_sync_ms / r,
+        s_pace.load_dostate_ms / r, s_pace.load_granules / r, s_pace.load_changed / r,
+        s_pace.load_jit_ms / r, s_pace.load_jit_dropped, s_pace.resim_ms,
+        s_pace.resim ? s_pace.resim_ms / s_pace.resim : 0.0, s_pace.resim_max_ms, s_pace.saves,
+        s_pace.save_ms, s_pace.saves ? s_pace.save_ms / s_pace.saves : 0.0, s_pace.save_max_ms);
+  }
+  {
+    // Per frame, in ms: JIT compiling (blocks), CoreTiming events by kind, waits for the GPU
+    // thread, and the GPU thread's busy time; shown frames add the throttle's sleep.
+    auto line = [](const Rollback::FrameProfile::Counters& c, u32 frames) {
+      const double f = std::max<u32>(frames, 1) * 1e6;
+      u64 wait = 0;
+      for (const u64 w : c.gpu_wait_ns)
+        wait += w;
+      return fmt::format(
+          "jit {:.2f} ({:.1f} blocks), events gpu {:.2f} vi {:.2f} audio {:.2f} ios "
+          "{:.2f} devices {:.2f}, gpu waits {:.2f}, gpu busy {:.2f}, throttle {:.2f}",
+          c.jit_ns / f, c.jit_blocks / (f / 1e6), c.event_ns[0] / f, c.event_ns[1] / f,
+          c.event_ns[2] / f, c.event_ns[3] / f, c.event_ns[4] / f, wait / f, c.gpu_busy_ns / f,
+          c.throttle_ns / f);
+    };
+    NOTICE_LOG_FMT(BRAWLBACK, "machine pace profile: re-run frame: {}; shown frame: {}",
+                   line(s_pace.resim_c, s_pace.resim), line(s_pace.shown_c, s_pace.frames));
+  }
   const auto last = s_pace.last_frame;
   s_pace = {};
   s_pace.since = now;

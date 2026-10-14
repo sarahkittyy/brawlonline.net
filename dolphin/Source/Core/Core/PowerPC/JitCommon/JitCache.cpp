@@ -89,6 +89,7 @@ void JitBaseBlockCache::Clear()
   block_map.clear();
   links_to.clear();
   block_range_map.clear();
+  ++m_invalidations;
 
   valid_block.ClearAll();
 
@@ -315,6 +316,7 @@ void JitBaseBlockCache::EraseBlocksForRestoredRange(u32 physical_address, u32 le
   }
   if (!any)
     return;
+  ++m_invalidations;
   ErasePhysicalRange(physical_address, length);
   // As for modified code (InvalidateICacheInternal): the per-instruction hints are stale too.
   const u32 effective = physical_address | 0x80000000;
@@ -324,6 +326,26 @@ void JitBaseBlockCache::EraseBlocksForRestoredRange(u32 physical_address, u32 le
     m_jit.js.pairedQuantizeAddresses.erase(i);
     m_jit.js.noSpeculativeConstantsAddresses.erase(i);
   }
+}
+
+bool JitBaseBlockCache::HasCodeAt(u32 physical_address, u32 length) const
+{
+  bool any = false;
+  for (u32 line = physical_address / 32; line < (physical_address + length + 31) / 32; ++line)
+    any = any || valid_block.Test(line);
+  if (!any)
+    return false;
+  auto start = block_range_map.lower_bound(physical_address & BLOCK_RANGE_MAP_MASK);
+  const auto end = block_range_map.lower_bound(physical_address + length);
+  for (; start != end; ++start)
+  {
+    for (const JitBlock* block : start->second)
+    {
+      if (block->OverlapsPhysicalRange(physical_address, length))
+        return true;
+    }
+  }
+  return false;
 }
 
 void JitBaseBlockCache::InvalidateICacheInternal(u32 physical_address, u32 address, u32 length,
@@ -353,6 +375,7 @@ void JitBaseBlockCache::InvalidateICacheInternal(u32 physical_address, u32 addre
 
   if (destroy_block)
   {
+    ++m_invalidations;
     // destroy JIT blocks
     ErasePhysicalRange(physical_address, length);
 
@@ -521,6 +544,7 @@ void JitBaseBlockCache::UnlinkBlock(const JitBlock& block)
 
 void JitBaseBlockCache::DestroyBlock(JitBlock& block)
 {
+  ++m_invalidations;
   if (m_entry_points_ptr)
   {
     if (m_entry_points_ptr[block.fast_block_map_index] == block.normalEntry)

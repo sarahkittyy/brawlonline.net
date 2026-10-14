@@ -48,6 +48,7 @@
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/System.h"
 #include "Core/NetPlayClient.h"
+#include "Core/Rollback/FrameProfile.h"
 #include "Core/Rollback/MachineSession.h"
 
 using namespace Gen;
@@ -788,6 +789,7 @@ void Jit64::Jit(u32 em_address)
 
 void Jit64::Jit(u32 em_address, bool clear_cache_and_retry_on_failure)
 {
+  Rollback::FrameProfile::Scope jit_scope{Rollback::FrameProfile::AddJit};
   CleanUpAfterStackFault();
 
   if (trampolines.IsAlmostFull() || SConfig::GetInstance().bJITNoBlockCache)

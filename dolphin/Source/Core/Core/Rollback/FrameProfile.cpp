@@ -18,6 +18,8 @@ struct alignas(64) CpuCounters
   std::array<std::atomic<u64>, EVENT_CATS> event_ns{};
   std::atomic<u64> events{0};
   std::atomic<u64> throttle_ns{0};
+  std::atomic<u64> jit_ns{0};
+  std::atomic<u64> jit_blocks{0};
 };
 struct alignas(64) WaitCounters
 {
@@ -83,6 +85,12 @@ void AddThrottle(u64 ns)
   Bump(s_cpu.throttle_ns, ns);
 }
 
+void AddJit(u64 ns)
+{
+  Bump(s_cpu.jit_ns, ns);
+  Bump(s_cpu.jit_blocks, 1);
+}
+
 void AddGpuWait(size_t reason, u64 ns)
 {
   s_wait.ns[std::min(reason, WAIT_REASONS - 1)].fetch_add(ns, std::memory_order_relaxed);
@@ -118,6 +126,8 @@ Counters Snapshot()
   c.gpu_waits = s_wait.count.load(std::memory_order_relaxed);
   c.gpu_busy_ns = s_gpu.busy_ns.load(std::memory_order_relaxed);
   c.gpu_present_ns = s_gpu.present_ns.load(std::memory_order_relaxed);
+  c.jit_ns = s_cpu.jit_ns.load(std::memory_order_relaxed);
+  c.jit_blocks = s_cpu.jit_blocks.load(std::memory_order_relaxed);
   return c;
 }
 
@@ -133,6 +143,8 @@ Counters Delta(const Counters& now, const Counters& then)
   d.gpu_waits = now.gpu_waits - then.gpu_waits;
   d.gpu_busy_ns = now.gpu_busy_ns - then.gpu_busy_ns;
   d.gpu_present_ns = now.gpu_present_ns - then.gpu_present_ns;
+  d.jit_ns = now.jit_ns - then.jit_ns;
+  d.jit_blocks = now.jit_blocks - then.jit_blocks;
   return d;
 }
 
@@ -147,5 +159,7 @@ void Accumulate(Counters* into, const Counters& d)
   into->gpu_waits += d.gpu_waits;
   into->gpu_busy_ns += d.gpu_busy_ns;
   into->gpu_present_ns += d.gpu_present_ns;
+  into->jit_ns += d.jit_ns;
+  into->jit_blocks += d.jit_blocks;
 }
 }  // namespace Rollback::FrameProfile

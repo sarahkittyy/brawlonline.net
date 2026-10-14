@@ -286,6 +286,8 @@ public:
   // CPU timing context that the rollback DoState skips with the other CPU registers: the
   // position within the current CoreTiming slice and the pending exceptions.
   int m_downcount = 0;
+  // The JIT's invalidation count at the save (JitBaseBlockCache::Invalidations).
+  u64 m_jit_invalidations = 0;
   int m_slice_length = 0;  // CoreTiming's, which DoState restores; again with the downcount
   uint32_t m_exceptions = 0;
   // A whole-machine session restores these too (RestoreMachineRegisters): the MSR (its FP bit is
