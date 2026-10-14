@@ -44,6 +44,7 @@ import { DolphinInstance, MacOsRosettaRequiredError, PlaybackDolphinInstance } f
 import type { ModsRoomArg } from "./mods/mods_args";
 import { buildModsDolphinArgs } from "./mods/mods_args";
 import { clearModRoomFiles } from "./mods/room_files";
+import { clearTemplateSeededSaves } from "./mods/template_saves";
 import type { ModBuild } from "./mods/types";
 import { buildNetplayDolphinArgs, buildPlaybackDolphinArgs } from "./netplay_args";
 import { clearRoomRequest } from "./room_handoff";
@@ -435,6 +436,10 @@ export class DolphinManager {
     await installation.ensureUserFolder();
     await this._updateDolphinSettings(DolphinLaunchType.NETPLAY);
     await clearModRoomFiles(this.netplayOnlineDir());
+    // Builds' saves that started from P+'s save go, once (mods/template_saves.ts).
+    await clearTemplateSeededSaves(installation.userFolder, (message) => log.warn(message)).catch((err) =>
+      log.error(`Could not clear the builds' saves made from P+'s save: ${err}`),
+    );
     const params = buildModsDolphinArgs({
       userArgs: installation.userArgs(),
       build,

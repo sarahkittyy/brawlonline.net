@@ -218,24 +218,35 @@ static void InitializeDeterministicWiiSaves(FS::FileSystem* session_fs,
     s_store_root = hash.size() >= 16 ?
                        File::GetUserPath(D_USER_IDX) + "Saves" DIR_SEP + hash.substr(0, 16) + DIR_SEP :
                        std::string{};
+    const std::string data = Common::GetTitleDataPath(save_title);
+    bool from_store = false;
     if (save_title != 0 && !s_store_root.empty())
     {
       FS::HostFileSystem store(s_store_root);
-      const std::string data = Common::GetTitleDataPath(save_title);
       const auto files = store.ReadDirectory(IOS::PID_KERNEL, IOS::PID_KERNEL, data);
       if (files && !files->empty())
       {
         // The build's save replaces whatever the session's NAND starts with (P+'s template save).
         session_fs->Delete(IOS::PID_KERNEL, IOS::PID_KERNEL, data);
         const bool ok = CopyNandTree(&store, session_fs, data);
+        from_store = true;
         INFO_LOG_FMT(CORE, "Wii Save Init: machine session, {0:016x} from the build's save in {1}{2}",
                      save_title, s_store_root, ok ? "" : " (incomplete)");
       }
-      else
-      {
-        INFO_LOG_FMT(CORE, "Wii Save Init: machine session, no save of {0:016x} in {1} yet",
-                     save_title, s_store_root);
-      }
+    }
+    if (save_title != 0 && !from_store)
+    {
+      // No save of this build yet: the game makes its own. The session's NAND was seeded with P+'s
+      // template save (InitializeWiiRoot), and every Brawl mod uses Brawl's title, so a Brawl build
+      // started from P+'s save, its name tags and controls ("NoTap") included, and kept it in its
+      // store at the end (prod 2026-10-14: REX and vanilla Brawl). The folder stays, only its
+      // files go.
+      const auto files = session_fs->ReadDirectory(IOS::PID_KERNEL, IOS::PID_KERNEL, data);
+      for (const std::string& name : files ? *files : std::vector<std::string>{})
+        session_fs->Delete(IOS::PID_KERNEL, IOS::PID_KERNEL, data + '/' + name);
+      INFO_LOG_FMT(CORE, "Wii Save Init: machine session, no save of {0:016x} in {1} yet{2}",
+                   save_title, s_store_root,
+                   files && !files->empty() ? " (P+'s template save left out)" : "");
     }
     if (!CopyNandFile(configured_fs.get(), Common::GetMiiDatabasePath(), session_fs,
                       Common::GetMiiDatabasePath()))
