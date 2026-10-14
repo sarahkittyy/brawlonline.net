@@ -293,6 +293,9 @@ picojson::object StatusLocked()
                                                      *s_close_at - std::chrono::steady_clock::now())
                                                      .count()));
   }
+  // (Not armed yet: what the session has is the last request's.)
+  if (s_wait_boot)
+    return o;
   const auto st = Session::PlaybackStatus();
   for (const char* k : {"frame", "first_frame", "last_frame", "desync_frame", "end_method",
                         "at_end", "live_edge", "buffering", "catching_up", "catch_rate", "complete"})
@@ -493,12 +496,17 @@ void Loop()
           }
         }
       }
-      if (s_wait_boot && GameBooted())
+      // Another request while a replay played (spectating: another game picked): its match ends
+      // first and the game leaves it; armed before that, the new replay would take over the
+      // old match and never start.
+      const bool stopping = Session::PlaybackStopping();
+      if (s_wait_boot && GameBooted() && !stopping)
       {
         s_wait_boot = false;
         ArmCurrent();
       }
-      Step();
+      if (!stopping)
+        Step();
       WriteStatus();
     }
     std::this_thread::sleep_for(POLL);

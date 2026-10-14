@@ -416,3 +416,86 @@ def test_a_spectator_joins_a_set_mid_game_and_watches_it_live(
         else:
             assert rep.trailer, f"{path}: the writer's file is a whole replay"
             assert s["frames_checked"] >= rep.endg["finalFrame"] - rep.first_frame - 1, (i, s, rep.endg)
+
+
+@pytest.mark.slow
+def test_another_game_picked_mid_game_plays_it(
+        spectate_backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str) -> None:
+    """Picking another game while one plays (the user, 2026-10-14: the names changed, but the
+    first game's match stayed on screen with no seek bar). The launcher writes a new `mirror`
+    request (a new commandId) to the playback Dolphin's comm file; the game must leave the match
+    it is in and start the new one. Twice: once while the first game plays, then back to it while
+    the second one is paused (the CPU thread waits at the loop top then). Each game plays from its
+    start with every frame checked."""
+    be = spectate_backend
+    out = ARTIFACTS / "switch"
+    out.mkdir(parents=True, exist_ok=True)
+    comm = out / "comm.json"
+    status_file = Path(str(comm) + ".status.json")
+    status_file.unlink(missing_ok=True)
+
+    a, b, _, _ = _connected_direct(be, dolphin, gpu_backend, "spectate-switch", ("sora", "tobi"),
+                                   test_rules=False)
+    online_set.play_set([a, b], games=1, mode="direct", panels={g.name: g.panel for g in (a, b)})
+    online_set.wait(lambda: not any(g.c.call("replay_recording")["recording"] for g in (a, b)), 60,
+                    "both recordings to end")
+    paths = []
+    for g in (a, b):
+        src = Path(g.c.call("replay_recording", flush=True)["path"])
+        paths.append(out / f"{g.name}.brep")
+        paths[-1].write_bytes(src.read_bytes())
+        g.c.mm_cancel()
+    reps = [R.read(p) for p in paths]
+    assert all(r.trailer for r in reps), "whole replays"
+
+    def request(command: str, path: Path) -> None:
+        tmp = comm.with_suffix(".tmp")
+        tmp.write_text(json.dumps({"mode": "mirror", "commandId": command,
+                                   "queue": [{"path": str(path), "cut": False}],
+                                   "streamOver": True, "closeOnEnd": False}))
+        os.replace(tmp, comm)
+
+    def file_status() -> dict[str, Any]:
+        try:
+            return json.loads(status_file.read_text())
+        except (OSError, ValueError):
+            return {}
+
+    def playing(command: str, after_serial: int, what: str) -> dict[str, Any]:
+        """The request's game started (its own serial) and played a second from near its start."""
+        def check() -> dict[str, Any] | None:
+            fs = file_status()
+            assert fs.get("state") != "error", fs
+            st = v.c.call("replay_status")
+            if (fs.get("commandId") == command and st.get("serial", 0) > after_serial and st["started"]
+                    and st.get("shown", -1) >= st.get("first_frame", 0) + 60):
+                return st
+            return None
+        return online_set.wait(check, 240, what)
+
+    request("c1", paths[0])
+    v = _viewer(be, dolphin, gpu_backend, comm, out)
+    st = playing("c1", 0, "the first game to play")
+    serial = st["serial"]
+    online_set.wait(lambda: v.c.call("replay_status").get("shown", 0) >= st["first_frame"] + 300, 60,
+                    "5 s of the first game")
+    v.shot("first")
+
+    # Another game while this one plays.
+    request("c2", paths[1])
+    st = playing("c2", serial, "the second game to start after the switch")
+    serial = st["serial"]
+    assert st["shown"] < st["first_frame"] + 600, f"the second game didn't start at its start: {st}"
+    v.shot("second")
+
+    # Back to the first while the second is paused.
+    v.c.call("replay_control", action="pause")
+    online_set.wait(lambda: v.c.call("replay_status")["paused"], 30, "the pause")
+    request("c3", paths[0])
+    st = playing("c3", serial, "the first game again after a switch while paused")
+    v.shot("first-again")
+    st = online_set.wait(lambda: (lambda s: s if s["at_end"] or s["finished"] else None)(
+        v.c.call("replay_status")), 900, "the first game's end")
+    assert st["desync_frame"] == -1, st
+    assert st["frames_checked"] >= reps[0].endg["finalFrame"] - reps[0].first_frame - 1, st
+    assert not st["paused"] or st["at_end"], st

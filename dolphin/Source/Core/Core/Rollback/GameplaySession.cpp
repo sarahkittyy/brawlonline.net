@@ -663,6 +663,10 @@ struct State
     bool end_disconnected = false;
     bool end_desynced = false;
     bool end_quit_left = false;
+    // StopPlayback with the game in (or on its way into) its match: the session ends at the next
+    // loop top and the game leaves the match as after this player's quit of a 3-4 player match
+    // (end_quit_left), straight to the CSS; the next replay arms once it is out (PlaybackStopping).
+    bool stopped = false;
     std::string error;
     // Controls (PlaybackControl): paused at the loop top, frames to run before pausing again, a
     // seek's target (the frame to show; -1 none), the frames before which passes run unpresented
@@ -3206,13 +3210,16 @@ void EndRunning(Core::System& system, const std::string& reason)
       s.pb.end_disconnected = !s.pb.end_desynced && !s.pb.end_quit_left && m != "game" &&
                               m != "quit" && m != "runback";
     }
+    if (s.pb.stopped)
+      s.pb.end_quit_left = true;
     s.await_scene_exit = true;
     INFO_LOG_FMT(BRAWLBACK, "replay: playback ended ({}; recorded end: {}), {} frames checked, {}",
                  reason, s.pb.end_method.empty() ? "incomplete" : s.pb.end_method,
                  s.pb.frames_checked,
                  s.pb.desync_frame < 0 ? std::string("no desync") :
                                          fmt::format("desynced at frame {}", s.pb.desync_frame));
-    OSD::AddMessage("Replay finished", OSD::Duration::NORMAL);
+    if (!s.pb.stopped)
+      OSD::AddMessage("Replay finished", OSD::Duration::NORMAL);
   }
   else
   {
@@ -5234,6 +5241,9 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
   const s64 first = file.first_frame;
   for (;;)
   {
+    // Stopped while paused, held at the end or waiting for frames: OnLoopTop ends it.
+    if (pb.stopped)
+      return PlaybackStep::Wait;
     if (pb.seek_to >= 0)
       PlaybackSeek(system);
     // A live file grows while this waits.
@@ -5283,7 +5293,8 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
         system,
         [] {
           const s64 next = static_cast<s64>(s.pb.file->first_frame + s.pb.next);
-          return s.pb.seek_to >= 0 || (!LiveWaiting(next) && (!s.pb.paused || s.pb.step > 0));
+          return s.pb.stopped || s.pb.seek_to >= 0 ||
+                 (!LiveWaiting(next) && (!s.pb.paused || s.pb.step > 0));
         },
         std::chrono::milliseconds(33));
     if (!woke && !CpuRunning(system))
@@ -5976,6 +5987,12 @@ bool InMatchPhase()
          s.phase == Phase::StartBarrier;
 }
 
+// A replay stopped in its match whose game has not left it yet (StopPlayback).
+bool PlaybackStoppingLocked()
+{
+  return s.mode == Mode::Playback && s.pb.stopped && (InMatchPhase() || s.await_scene_exit);
+}
+
 void Stop()
 {
   {
@@ -6154,6 +6171,8 @@ std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file,
   }
   if (s.mode == Mode::Playback && InMatchPhase())
     return "a replay is playing";
+  if (PlaybackStoppingLocked())
+    return "the last replay's match is still ending";
   CloseNetwork();
   pb.serial = s.pb.serial + 1;
   s.pb = std::move(pb);
@@ -6375,15 +6394,34 @@ void StopPlayback()
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
   if (s.mode != Mode::Playback)
     return;
+  // The game must leave a match it is in, or on its way into, before another replay can start
+  // (spectating, the user 2026-10-14: another game picked while one played was armed into the
+  // match still running, never passed its barrier, and the first game's match stayed on screen).
+  // Left to itself (no session, nothing DISCONNECTED or quit) the game plays such a match on.
   if (InMatchPhase())
   {
-    // Ends on the CPU thread at the next loop top.
-    s.end_reason = "stopped";
-    s.mode = Mode::None;
+    // Ends on the CPU thread at the next loop top (OnLoopTop).
+    s.pb.stopped = true;
+    return;
+  }
+  if (s.phase == Phase::Armed && s.did_frame0)
+  {
+    // Seeded, its match on the way: nothing runs yet; the game quits it once in it.
+    s.pb.stopped = true;
+    s.pb.end_quit_left = true;
+    s.phase = Phase::Ended;
+    s.await_scene_exit = true;
+    INFO_LOG_FMT(BRAWLBACK, "replay: stopped on the way into its match");
     return;
   }
   s.mode = Mode::None;
   s.phase = Phase::Idle;
+}
+
+bool PlaybackStopping()
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  return PlaybackStoppingLocked();
 }
 
 PlaybackView GetPlaybackView()
@@ -7126,6 +7164,15 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       return true;
     }
     return false;
+  }
+
+  // A replay stopped in its match (StopPlayback): the session ends here; the game then leaves the
+  // match (end_quit_left).
+  if (s.mode == Mode::Playback && s.pb.stopped && InMatchPhase())
+  {
+    EndRunning(system, "stopped");
+    SetLoopDefault(ppc);
+    return true;
   }
 
   if (s.mode == Mode::Network && s.peer_left && InMatchPhase())

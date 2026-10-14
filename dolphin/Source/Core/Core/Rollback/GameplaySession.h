@@ -397,8 +397,11 @@ std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file,
 void ExtendPlayback(std::shared_ptr<const Replay::File> file, bool hold_at_end, bool cut = false);
 // A line the overlay shows above the bar (spectating: "Game 3 starts soon", the close countdown).
 void SetPlaybackBanner(std::string text);
-// Ends a playback (its match ends at the next loop top).
+// Ends a playback (its match ends at the next loop top, and the game then leaves it).
 void StopPlayback();
+// A stopped playback's game is still in its match: the next replay arms once this is false
+// (ArmPlayback refuses until then).
+bool PlaybackStopping();
 // What GameBridge gives the game while a replay is armed or plays.
 struct PlaybackView
 {
