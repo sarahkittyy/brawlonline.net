@@ -69,6 +69,7 @@
 #include "Core/IOS/USB/Bluetooth/WiimoteDevice.h"
 #include "Core/Harness/Harness.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Online/Chat.h"
 #include "Core/Online/ModsRoom.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/MMU.h"
@@ -193,7 +194,11 @@ struct PeerLink
   double rtt_ms = -1;
   // A room member (SetRoom): who is in this slot, and the addresses its hello may come from.
   std::string code;
+  std::string name;
   std::vector<enet_uint32> ips;
+  // A joiner: how much of its machine image it has (tenths), for the image of `image_epoch`.
+  int image_epoch = -1;
+  int image_tenths = -1;
   // Someone new has this player's slot in the room: `left` is the previous player's until
   // GekkoNet unplugged it.
   bool reseated = false;
@@ -406,9 +411,11 @@ struct State
   bool image_built = false;
   double image_ms = 0;
   u64 image_packed = 0, image_raw = 0;
+  int image_tenths_shown = -1;  // the joiner's progress last shown in chat
   // A joiner.
   bool join_sent = false;
   bool join_loaded = false;
+  int join_tenths_shown = -1;  // -1: the image's header not shown yet; then tenths received
   Clock::time_point join_since{};
   double speed = 1.0;
   s64 last_timesync_frame = -1;
@@ -442,6 +449,13 @@ void AddLog(std::string line)
   if (s.log.size() >= 64)
     s.log.erase(s.log.begin());
   s.log.push_back(std::move(line));
+}
+
+// A grey line in the chat window (only here) and the log. Not with `net_mutex` held.
+void ShowNotice(const std::string& text)
+{
+  AddLog("notice: " + text);
+  Online::Chat::AddNotice(text);
 }
 
 void BroadcastControl(const picojson::object& msg);
@@ -500,6 +514,22 @@ bool Plays(int slot)
 bool LocalPlays()
 {
   return Plays(s.opts.local_slot);
+}
+
+// A joiner: whether a peer's digest of the image at `epoch` must be in (and match) before the
+// image loads. Every connected player's. Another joiner's (its hello said it does not play) only
+// if it sent one: it is not at the epoch, and two joiners waiting for each other's digest held
+// the decider at the epoch for good (2026-10-14, REX: one joiner had the image, the other asked).
+bool MustVouch(const PeerLink& p, int epoch)
+{
+  return p.slot >= 0 && p.hello && !p.left && (!p.late || p.epoch_at == epoch);
+}
+
+// A player in the chat window's notices: its room name, or its slot.
+std::string NameOf(int slot)
+{
+  const PeerLink& p = s.peers[slot];
+  return p.name.empty() ? fmt::format("Player {}", slot + 1) : p.name;
 }
 
 // A hello is taken from a peer's own addresses only (its slot is otherwise just a number anyone
@@ -677,6 +707,16 @@ void HandleControl(ENetPeer* peer, const u8* data, size_t size)
       }
     }
     s.epoch_go = go;
+  }
+  else if (type == "image_progress")
+  {
+    // A joiner's progress with its machine image, for the players' chat notices.
+    const double tenths = num("tenths", -1);
+    if (epoch >= 0 && tenths >= 0 && tenths <= 10)
+    {
+      p.image_epoch = epoch;
+      p.image_tenths = static_cast<int>(tenths);
+    }
   }
   else if (type == "join_refused")
   {
@@ -2954,7 +2994,7 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
     std::lock_guard lk(s.net_mutex);
     for (const PeerLink& p : s.peers)
     {
-      if (p.slot < 0 || p.left || !p.hello)
+      if (!MustVouch(p, rx.epoch))
         continue;
       if (p.epoch_at != rx.epoch || p.epoch_digest != digest)
       {
@@ -3223,6 +3263,7 @@ void StartEpoch(const State::EpochGo& go)
 {
   // A player before this epoch (not the joiner, who just loaded the epoch's image).
   const bool member = LocalPlays();
+  const int joiner = s.plan.admit >= 0 && !Plays(s.plan.admit) ? s.plan.admit : -1;
   if (go.move.first >= 0)
   {
     SwapSlots(go.move.first, go.move.second);
@@ -3249,6 +3290,17 @@ void StartEpoch(const State::EpochGo& go)
   {
     if ((go.players >> slot) & 1)
       s.controller[slot] = go.controllers[slot];
+  }
+  // How a join the players waited for ended (the joiner sees its game go on).
+  if (member && joiner >= 0)
+  {
+    std::string name;
+    {
+      std::lock_guard lk(s.net_mutex);
+      name = NameOf(joiner);
+    }
+    ShowNotice((go.players >> joiner) & 1 ? fmt::format("{} is in the game.", name) :
+                                            fmt::format("{} could not join.", name));
   }
   s.plan = {};
   s.local_request.reset();
@@ -3293,9 +3345,19 @@ void EnterEpoch()
   s.epoch_since = Clock::now();
   s.epoch_sum = rb.FullChecksum();
   s.image_built = false;
+  s.image_tenths_shown = -1;
   DumpEpochState(Core::System::GetInstance(), s.plan.frame, "member");
   const int joiner = s.plan.admit;
   const bool admitting = joiner >= 0 && !Plays(joiner);
+  if (admitting && s.plan.from != s.opts.local_slot)
+  {
+    std::string name;
+    {
+      std::lock_guard lk(s.net_mutex);
+      name = NameOf(joiner);
+    }
+    ShowNotice(fmt::format("{} is joining. The game waits until they have it.", name));
+  }
   s_image_parts.reset();
   s.epoch_digest.clear();
   if (admitting)
@@ -3343,6 +3405,27 @@ picojson::array ControllerNames(const std::array<Controller, MAX_PLAYERS>& c)
   return a;
 }
 
+// At an epoch that admits a joiner, every wait loop iteration (every player): the joiner's
+// progress with the machine image, in the chat window at every tenth it reports.
+void ShowJoinProgress()
+{
+  const int joiner = s.plan.admit;
+  if (joiner < 0 || Plays(joiner))
+    return;
+  std::string notice;
+  {
+    std::lock_guard lk(s.net_mutex);
+    const PeerLink& j = s.peers[joiner];
+    if (j.image_epoch != s.epoch + 1 || j.image_tenths <= s.image_tenths_shown)
+      return;
+    s.image_tenths_shown = j.image_tenths;
+    notice = s.plan.from == s.opts.local_slot ?
+                 fmt::format("Sending the game to {}: {}%", NameOf(joiner), j.image_tenths * 10) :
+                 fmt::format("{} is getting the game: {}%", NameOf(joiner), j.image_tenths * 10);
+  }
+  ShowNotice(notice);
+}
+
 // At an epoch, every wait loop iteration. The decider waits for every player's checksum, sends
 // the joiner the machine, waits for the joiner's checksum, and says who plays from now on.
 void EpochStep(Core::System& system)
@@ -3352,6 +3435,7 @@ void EpochStep(Core::System& system)
   // frames before the epoch to be confirmed gets them.
   if (s.gekko)
     gekko_network_poll(s.gekko);
+  ShowJoinProgress();
   if (Clock::now() - s.epoch_since > EPOCH_TIMEOUT)
   {
     Fail("The players did not agree on the change of players");
@@ -3424,6 +3508,13 @@ void EpochStep(Core::System& system)
     {
       AddLog(fmt::format("machine image for player {}: {:.1f} MB ({:.1f} MB raw) in {:.0f} ms",
                          joiner + 1, image.size() / 1048576.0, raw / 1048576.0, s.image_ms));
+      std::string name;
+      {
+        std::lock_guard lk(s.net_mutex);
+        name = NameOf(joiner);
+      }
+      ShowNotice(fmt::format("Sending the game to {} ({:.1f} MB). The game waits until they have it.",
+                             name, image.size() / 1048576.0));
       std::vector<u8> header(36);
       const u32 magic = IMAGE_MAGIC, ep = static_cast<u32>(next), sum = s.epoch_sum;
       const s64 frame = s.plan.frame;
@@ -3504,10 +3595,34 @@ void JoinStep(Core::System& system)
   std::optional<State::EpochGo> go;
   bool image = false;
   std::optional<std::string> refused;
+  std::vector<std::string> notices;
   {
     std::lock_guard lk(s.net_mutex);
     if (s.join_refused)
       refused = s.join_refused_why;
+    // The image's progress, in the chat window at every tenth (the game waits for it: across an
+    // ocean a REX image took about a minute), and to the players for theirs.
+    const State::ImageRx& rx = s.image_rx;
+    if (rx.from >= 0 && !s.join_loaded && rx.packed_size > 0)
+    {
+      if (s.join_tenths_shown < 0)
+      {
+        notices.push_back(fmt::format("Getting the game from {} ({:.1f} MB)", NameOf(rx.from),
+                                      rx.packed_size / 1048576.0));
+        s.join_tenths_shown = 0;
+      }
+      const int tenths = static_cast<int>(rx.data.size() * 10 / rx.packed_size);
+      if (tenths > s.join_tenths_shown)
+      {
+        s.join_tenths_shown = tenths;
+        notices.push_back(fmt::format("Getting the game: {}%", tenths * 10));
+        picojson::object m;
+        m["type"] = picojson::value("image_progress");
+        m["epoch"] = picojson::value(static_cast<double>(rx.epoch));
+        m["tenths"] = picojson::value(static_cast<double>(tenths));
+        BroadcastControl(m);
+      }
+    }
     if (!s.join_sent && (!s.opts.room || s.room_known))
     {
       // The session's players (not other joiners, who may not be there yet). A room's joiner
@@ -3530,12 +3645,14 @@ void JoinStep(Core::System& system)
     // Not before every player's digest of this epoch's image is in.
     for (const PeerLink& p : s.peers)
     {
-      if (p.slot >= 0 && p.hello && !p.left && p.epoch_at != s.image_rx.epoch)
+      if (MustVouch(p, s.image_rx.epoch) && p.epoch_at != s.image_rx.epoch)
         image = false;
     }
     if (s.join_loaded && s.epoch_go && s.epoch_go->frame == s.current_frame + 1)
       go = s.epoch_go;
   }
+  for (const std::string& n : notices)
+    ShowNotice(n);
   if (refused)
   {
     Fail("Could not join: " + *refused);
@@ -4163,6 +4280,7 @@ bool Arm(const Options& options, std::string* error)
   s.image_packed = s.image_raw = 0;
   s.join_sent = false;
   s.join_loaded = false;
+  s.join_tenths_shown = -1;
   {
     std::lock_guard nlk(s.net_mutex);
     s.epoch_go.reset();
@@ -4392,6 +4510,7 @@ void SetRoom(int local_slot, const std::vector<RoomMember>& members)
       p.late = !(s.opts.join && !LocalPlays());
       p.last_connect = {};
     }
+    p.name = m->name;
     // Its address: on this player's network (the same public address), its LAN one.
     const bool same_net =
         self && !self->host.empty() && self->host == m->host && !m->lan_host.empty();
