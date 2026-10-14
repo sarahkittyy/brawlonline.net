@@ -378,8 +378,19 @@ LinkHealth GetLinkHealth();
 // (its checksums then show where it stops matching).
 // `hold_at_end`: the last replay asked for holds at its last frame (paused, still seekable)
 // instead of ending its match.
+// `live`: spectating (docs/design/spectating.md §6.2, `mirror`): the file is still growing.
+// ExtendPlayback adds what arrives; playback catches up to the live edge (the newest frame less a
+// 3 s buffer) at once, holds with "Buffering" when the frames run out, and ends only once the
+// game's ENDG has come.
 std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file, bool play_anyway,
-                                       bool hold_at_end = false);
+                                       bool hold_at_end = false, bool live = false);
+// A live playback's file as read again: its frames past those already known are added, and its
+// ENDG once there. `hold_at_end` replaces the armed value (a set's next game arrived: the game
+// ends its match and the next one plays). `cut`: the stream says the rest of the game won't come
+// (its uploader stopped): what is there is all of it. The file must be the armed one, grown.
+void ExtendPlayback(std::shared_ptr<const Replay::File> file, bool hold_at_end, bool cut = false);
+// A line the overlay shows above the bar (spectating: "Game 3 starts soon", the close countdown).
+void SetPlaybackBanner(std::string text);
 // Ends a playback (its match ends at the next loop top).
 void StopPlayback();
 // What GameBridge gives the game while a replay is armed or plays.
@@ -415,6 +426,7 @@ enum class PlaybackCommand
   Speed,
   Faster,
   Slower,
+  GoLive,  // spectating: catch up to the live edge and play live
 };
 void PlaybackControl(PlaybackCommand command, double arg = 0);
 // What the overlay shows (the playback's view, any thread).
@@ -432,6 +444,15 @@ struct PlaybackInfo
   std::array<std::string, MAX_LOBBY_PLAYERS> names{};  // "" for an empty port
   std::array<u8, MAX_LOBBY_PLAYERS> chars{};
   size_t keyframes = 0;
+  // Spectating (a live playback).
+  bool live = false;
+  bool ended = false;        // the game's end arrived: no live edge anymore
+  s64 live_edge = 0;         // the newest frame less the buffer
+  bool at_live = false;      // playing at the live edge
+  bool buffering = false;    // no frames to play yet
+  bool catching_up = false;  // running to the live edge
+  double catch_rate = 0;     // frames run per real frame while catching up (0: not measured yet)
+  std::string banner;
 };
 PlaybackInfo GetPlaybackInfo();
 

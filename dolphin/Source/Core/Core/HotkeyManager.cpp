@@ -213,6 +213,7 @@ constexpr std::array<const char*, NUM_HOTKEYS> s_hotkey_labels{{
     _trans("Slower"),
     _trans("Faster"),
     _trans("Show / Hide Seek Bar"),
+    _trans("Go Live (Spectating)"),
 }};
 // clang-format on
 static_assert(NUM_HOTKEYS == s_hotkey_labels.size(), "Wrong count of hotkey_labels");
@@ -370,7 +371,7 @@ constexpr std::array<HotkeyGroupInfo, NUM_HOTKEY_GROUPS> s_groups_info = {
      {_trans("GBA Volume"), HK_GBA_VOLUME_DOWN, HK_GBA_TOGGLE_MUTE, true},
      {_trans("GBA Window Size"), HK_GBA_1X, HK_GBA_4X, true},
      {_trans("USB Emulation Devices"), HK_SKYLANDERS_PORTAL, HK_INFINITY_BASE},
-     {_trans("Replays"), HK_REPLAY_PLAY_PAUSE, HK_REPLAY_TOGGLE_OVERLAY}}};
+     {_trans("Replays"), HK_REPLAY_PLAY_PAUSE, HK_REPLAY_GO_LIVE}}};
 
 HotkeyManager::HotkeyManager()
 {
@@ -538,6 +539,7 @@ void HotkeyManager::LoadDefaults(const ControllerInterface& ciface)
   set_key_expression(HK_REPLAY_SLOWER, "MINUS");
   set_key_expression(HK_REPLAY_FASTER, "EQUALS");
   set_key_expression(HK_REPLAY_TOGGLE_OVERLAY, "H");
+  set_key_expression(HK_REPLAY_GO_LIVE, "END");
 #elif defined(__APPLE__)
   set_key_expression(HK_REPLAY_PLAY_PAUSE, "Space");
   set_key_expression(HK_REPLAY_JUMP_BACK, "`Left Arrow`");
@@ -547,6 +549,7 @@ void HotkeyManager::LoadDefaults(const ControllerInterface& ciface)
   set_key_expression(HK_REPLAY_SLOWER, "`-`");
   set_key_expression(HK_REPLAY_FASTER, "`=`");
   set_key_expression(HK_REPLAY_TOGGLE_OVERLAY, "H");
+  set_key_expression(HK_REPLAY_GO_LIVE, "End");
 #else
   set_key_expression(HK_REPLAY_PLAY_PAUSE, "space");
   set_key_expression(HK_REPLAY_JUMP_BACK, "Left");
@@ -556,5 +559,6 @@ void HotkeyManager::LoadDefaults(const ControllerInterface& ciface)
   set_key_expression(HK_REPLAY_SLOWER, "minus");
   set_key_expression(HK_REPLAY_FASTER, "equal");
   set_key_expression(HK_REPLAY_TOGGLE_OVERLAY, "h");
+  set_key_expression(HK_REPLAY_GO_LIVE, "End");
 #endif
 }

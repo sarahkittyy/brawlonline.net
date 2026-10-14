@@ -688,7 +688,9 @@ std::optional<File> Parse(std::span<const u8> bytes, const ReadOptions& options,
 
 std::optional<File> ReadFile(const std::string& path, const ReadOptions& options, std::string* error)
 {
-  ::File::IOFile f(path, "rb");
+  // Shared: a spectated game's file is read while the launcher still writes it, and on Windows
+  // the default open refuses a file another program has open for writing.
+  ::File::IOFile f(path, "rb", ::File::SharedAccess::ReadWrite);
   if (!f.IsOpen())
   {
     *error = "cannot open the file";

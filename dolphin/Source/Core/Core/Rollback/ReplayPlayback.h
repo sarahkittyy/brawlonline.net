@@ -10,6 +10,13 @@
 // what it is doing to <comm.json>.status.json:
 //   {"commandId", "state": "loading" | "waiting" | "playing" | "ended" | "error", "replay",
 //    "index", "count", "frame", "lastFrame", "desyncFrame", "error", "needsPlayAnyway"}
+//
+// Ours, `mirror` (spectating, docs/spectate-protocol.md §4): the queue is a live stream's games,
+// still being written; games are added at its end under the same commandId, a game whose rest
+// won't come has `"cut": true`, and `streamOver`, `closeOnEnd` and `banner` say what to do at the
+// stream's end. The status adds "mirror", "at_end", "live_edge", "buffering", "catching_up",
+// "catch_rate", "complete", "closeIn", and the states "between" (the set's next game is coming)
+// and "close" (the end's countdown ran out: the launcher closes Dolphin).
 
 #pragma once
 

@@ -139,13 +139,14 @@ Every endpoint needs a session (`Authorization: Bearer`).
 {"games": [{
   "id": "3fa9c0d1e2b4", "mode": "ranked", "room": null, "isTeams": false,
   "startedAt": "2026-10-13T18:03:12.345Z", "spectators": 4,
-  "game": {"number": 2, "startedAt": "…", "stageId": 3, "state": "playing"},
+  "game": {"number": 2, "place": 2, "startedAt": "…", "stageId": 3, "state": "playing"},
   "players": [{"uid": "…", "displayName": "Drsmsh", "connectCode": "DRS#1",
                "characterId": 17, "costume": 0, "teamId": null, "wins": 1}]
 }]}
 ```
 
 - The order is newest first (`startedAt`).
+- `place` is the current game's place in the stream (the `game` of §2's lines). A launcher joining a set mid-way watches from `?game=<place>` (`place + 1` between games), so it starts with the game being played.
 - `state` is `playing`, `between` (waiting for the set's next game) or `over`.
 - A game marked bad is listed with `state: "over"`.
 - The answer comes from a snapshot about a second old (mm refreshes it every 0.5 s and accounts keeps it for 1 s). It's limited like `/v1/rooms`.
@@ -182,3 +183,25 @@ The text goes through `common::chat::clean_text` (100 code points, 300 bytes). N
 The body is `{"line": <id>, "reason": "…"}`, and the answer is 204. accounts stores the reported line and up to 20 lines before it from its own copy in `chat_reports`, with group `spectate-<id>`, `verified` = the number of lines, and `sig` empty. The limit is 5 an hour per account.
 
 Spectator chat lives only in accounts' memory: the last 200 lines per stream, dropped with the stream. **It is never sent to a game's online connection**, so players never see it.
+
+## 4. Playback (launcher ↔ the playback Dolphin)
+
+The launcher (`launcher/src/spectate/spectate_client.ts`) writes each game of the watched stream to `<playback User folder>/Spectate/<stream>/<place>.brep` as it comes: the 32-byte `.brep` header with the game's `uid`, every chunk exactly as relayed, and at `end` the trailer, which makes it a whole replay (`live_game_file.ts`). `Spectate/` is cleared at every launcher start.
+
+The playback Dolphin follows those files through Slippi's comm file (`-i`, `Rollback/ReplayPlayback.h`) in `mirror` mode:
+
+```json
+{"mode": "mirror", "commandId": "spectate-3fa9c0d1e2b4-…",
+ "queue": [{"path": "…/1.brep", "cut": true}, {"path": "…/2.brep"}],
+ "streamOver": false, "closeOnEnd": true, "banner": "Waiting for the next live game..."}
+```
+
+| Field | Meaning |
+|---|---|
+| `queue` | the stream's games so far. Under the same `commandId` games are only added at the end (a set's next game); a new `commandId` is another stream. |
+| `cut` | the stream said `bad` for the game, or ended before it did: the file won't grow. Playback plays what is there ("The rest of this game wasn't streamed.") and goes on. |
+| `streamOver` | `over` came: no more games. |
+| `closeOnEnd` | "Close Dolphin after a spectated game ends" and not Auto play: at the end, a 5 s countdown, then status `close`, and the launcher closes Dolphin. Any replay key cancels it. |
+| `banner` | shown at the end of a stream that is over (Auto play: "Waiting for the next live game..."). |
+
+Dolphin re-reads a game's file when its size changes (every 200 ms) and adds the new frames to the playing match (`Gprb::Session::ExtendPlayback`). It waits for a game's setup and first frames before it starts it, then catches up to the live edge (the newest frame less 3 s) unpresented but for one frame in 15, plays live keeping 2-4 s of frames by nudging its speed 2 %, and holds ("Buffering…") when the frames run out. A finished game is followed by the next one in the queue; with none yet, it holds its last frame ("The next game starts soon"). Its status file adds `mirror`, `at_end`, `live_edge`, `buffering`, `catching_up`, `catch_rate`, `complete` and `closeIn`, and the states `between` and `close`.

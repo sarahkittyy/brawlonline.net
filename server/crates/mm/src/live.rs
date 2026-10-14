@@ -871,7 +871,7 @@ impl LiveBook {
             room: m.as_ref().and_then(|m| m.room.clone()),
             is_teams: false,
             started_at,
-            game: LiveGame { number, started_at: rfc3339(wall), stage_id: 0, state: GameState::Playing },
+            game: LiveGame { number, place: 0, started_at: rfc3339(wall), stage_id: 0, state: GameState::Playing },
             players: Vec::new(),
             spectators: None,
         };
@@ -915,6 +915,7 @@ impl LiveBook {
             s.games.push(GameView { number, uid: game_uid.to_string(), ..Default::default() });
             ordinal = s.games.len() - 1;
             s.entry = entry;
+            s.entry.game.place = s.games.len() as u32;
             s.over = false;
         });
         ordinal
@@ -1581,6 +1582,7 @@ mod tests {
         let entries = t.book.store.entries();
         assert_eq!(entries.len(), 1);
         assert_eq!(entries[0].game.number, 2);
+        assert_eq!(entries[0].game.place, 2, "a watch from ?game=2 starts with the game being played");
         assert_eq!(entries[0].players[0].wins, 2);
         let id = entries[0].id.clone();
         let lines = read_all(&t.book.store, &id);

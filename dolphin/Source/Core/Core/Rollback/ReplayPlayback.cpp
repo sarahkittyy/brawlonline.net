@@ -35,10 +35,23 @@ struct Request
 {
   std::string command_id;
   std::vector<std::string> paths;
+  // Mirror: the games whose rest won't come (`"cut": true` in the queue).
+  std::vector<bool> cut;
   bool play_anyway = false;
   // The last replay holds at its last frame (the launcher's), or ends its match (the harness).
   bool hold_at_end = true;
+  // Spectating (`mirror`, docs/design/spectating.md §6.2): the files are a live stream's games,
+  // still growing; the launcher adds a set's next game to `paths` under the same commandId and
+  // says when the stream is over. Then, at its end: close (the launcher closes Dolphin) after a
+  // countdown, unless any control is used; or show `banner` (Auto play's wait).
+  bool mirror = false;
+  bool stream_over = false;
+  bool close_on_end = false;
+  std::string banner;
 };
+
+// A spectated game's end: how long the last frame shows before Dolphin closes.
+constexpr auto CLOSE_AFTER = std::chrono::seconds(5);
 
 std::mutex s_mutex;
 std::string s_comm_path;
@@ -54,6 +67,15 @@ std::string s_error;
 bool s_needs_play_anyway = false;
 bool s_wait_boot = false;  // a comm file request, armed once the game has booted
 std::string s_last_status;
+// Mirror: the armed file's size when last read, and the hold it was given; the game's wait for
+// its first frames; the close countdown (and the controls count it started at).
+u64 s_mirror_size = 0;
+bool s_mirror_hold = true;
+bool s_mirror_cut = false;
+bool s_mirror_pending = false;
+std::optional<std::chrono::steady_clock::time_point> s_close_at;
+double s_close_controls = 0;
+bool s_close_cancelled = false;
 
 // The game is running with our plugin (GameBridge found its block). The launcher's playback
 // Dolphin starts the comm file follower before it boots, and boots P+'s launcher DOL, whose game
@@ -97,9 +119,21 @@ std::optional<Request> ReadComm(const std::string& path)
   };
   Request r;
   r.command_id = str("commandId").substr(0, 128);
-  const auto anyway = o.find("playAnyway");
-  r.play_anyway = anyway != o.end() && anyway->second.is<bool>() && anyway->second.get<bool>();
-  if (str("mode") == "queue")
+  const auto flag = [&](const char* k) {
+    const auto it = o.find(k);
+    return it != o.end() && it->second.is<bool>() && it->second.get<bool>();
+  };
+  r.play_anyway = flag("playAnyway");
+  r.mirror = str("mode") == "mirror";
+  if (r.mirror)
+  {
+    // A live game never plays "anyway": it would only lose sync.
+    r.play_anyway = false;
+    r.stream_over = flag("streamOver");
+    r.close_on_end = flag("closeOnEnd");
+    r.banner = str("banner").substr(0, 120);
+  }
+  if (str("mode") == "queue" || r.mirror)
   {
     const auto q = o.find("queue");
     if (q != o.end() && q->second.is<picojson::array>())
@@ -111,7 +145,11 @@ std::optional<Request> ReadComm(const std::string& path)
         const auto& io = item.get<picojson::object>();
         const auto p = io.find("path");
         if (p != io.end() && p->second.is<std::string>())
+        {
           r.paths.push_back(p->second.get<std::string>());
+          const auto c = io.find("cut");
+          r.cut.push_back(c != io.end() && c->second.is<bool>() && c->second.get<bool>());
+        }
       }
     }
   }
@@ -127,6 +165,9 @@ void ArmCurrent()
 {
   s_armed = false;
   s_needs_play_anyway = false;
+  s_mirror_pending = false;
+  s_close_at.reset();
+  s_close_cancelled = false;
   if (s_index >= s_request.paths.size())
   {
     s_state = "ended";
@@ -135,6 +176,30 @@ void ArmCurrent()
   const std::string& path = s_request.paths[s_index];
   std::string error;
   std::shared_ptr<const File> file;
+  const u64 size = ::File::Exists(path) ? ::File::GetSize(path) : 0;
+  if (s_request.mirror)
+  {
+    // A live game's file fills from its start: until it has the setup and a first second of
+    // frames, wait (the launcher shows that it is getting the game).
+    std::string why;
+    std::optional<File> f;
+    if (UsablePath(path))
+      f = ReadFile(path, ReadOptions{}, &why);
+    if (!f || f->setup.empty() || f->pads.empty())
+    {
+      // A game cut before its first frames came: on to the next one, if it has come.
+      if (s_index < s_request.cut.size() && s_request.cut[s_index] &&
+          s_index + 1 < s_request.paths.size())
+      {
+        ++s_index;
+        ArmCurrent();
+        return;
+      }
+      s_mirror_pending = true;
+      s_state = "loading";
+      return;
+    }
+  }
   if (!UsablePath(path))
   {
     error = "the replay file is missing";
@@ -164,12 +229,16 @@ void ArmCurrent()
     {
       file = std::make_shared<const File>(std::move(*f));
       const bool last = s_index + 1 == s_request.paths.size();
-      if (const auto e = Session::ArmPlayback(file, s_request.play_anyway, last && s_request.hold_at_end))
+      const bool hold = last && s_request.hold_at_end;
+      if (const auto e = Session::ArmPlayback(file, s_request.play_anyway, hold, s_request.mirror))
       {
         error = *e;
-        s_needs_play_anyway = e->find("another version") != std::string::npos ||
-                              e->find("setup differs") != std::string::npos;
+        s_needs_play_anyway = !s_request.mirror && (e->find("another version") != std::string::npos ||
+                                                    e->find("setup differs") != std::string::npos);
       }
+      s_mirror_size = size;
+      s_mirror_hold = hold;
+      s_mirror_cut = false;
     }
   }
   if (!error.empty())
@@ -200,8 +269,16 @@ picojson::object StatusLocked()
   o["replay"] = picojson::value(s_index < s_request.paths.size() ? s_request.paths[s_index] : "");
   o["error"] = picojson::value(s_error);
   o["needsPlayAnyway"] = picojson::value(s_needs_play_anyway);
+  o["mirror"] = picojson::value(s_request.mirror);
+  if (s_close_at)
+  {
+    o["closeIn"] = picojson::value(std::max(0.0, std::chrono::duration<double>(
+                                                     *s_close_at - std::chrono::steady_clock::now())
+                                                     .count()));
+  }
   const auto st = Session::PlaybackStatus();
-  for (const char* k : {"frame", "first_frame", "last_frame", "desync_frame", "end_method"})
+  for (const char* k : {"frame", "first_frame", "last_frame", "desync_frame", "end_method",
+                        "at_end", "live_edge", "buffering", "catching_up", "catch_rate", "complete"})
   {
     if (const auto it = st.find(k); it != st.end())
       o[k] = it->second;
@@ -209,9 +286,85 @@ picojson::object StatusLocked()
   return o;
 }
 
+// Mirror (under s_mutex): the armed game's file as it grows, and the set's next game once it is
+// queued (the armed one then ends its match at its end instead of holding there).
+void FollowMirror()
+{
+  const std::string& path = s_request.paths[s_index];
+  const bool hold = s_index + 1 >= s_request.paths.size();
+  const bool cut = s_index < s_request.cut.size() && s_request.cut[s_index];
+  const u64 size = ::File::Exists(path) ? ::File::GetSize(path) : 0;
+  if (size == s_mirror_size && hold == s_mirror_hold && cut == s_mirror_cut)
+    return;
+  std::shared_ptr<const File> file;
+  if (size != s_mirror_size && size <= MAX_FILE_SIZE)
+  {
+    std::string error;
+    if (auto f = ReadFile(path, ReadOptions{}, &error))
+      file = std::make_shared<const File>(std::move(*f));
+    else
+      return;  // read again at the next poll
+  }
+  s_mirror_size = size;
+  s_mirror_hold = hold;
+  s_mirror_cut = cut;
+  Session::ExtendPlayback(file, hold, cut);
+}
+
+// Mirror, held at the armed game's end (under s_mutex): the set's next game is coming, or the
+// stream is over: then Auto play's banner, or the close countdown, which any control cancels.
+void MirrorAtEnd(const picojson::object& st)
+{
+  using std::chrono::steady_clock;
+  if (!s_request.stream_over)
+  {
+    s_state = "between";
+    Session::SetPlaybackBanner("The next game starts soon");
+    return;
+  }
+  s_state = "ended";
+  if (!s_request.close_on_end || s_close_cancelled)
+  {
+    s_close_at.reset();
+    Session::SetPlaybackBanner(s_request.banner);
+    return;
+  }
+  const auto c = st.find("controls");
+  const double controls = c != st.end() && c->second.is<double>() ? c->second.get<double>() : 0;
+  const auto now = steady_clock::now();
+  if (!s_close_at)
+  {
+    s_close_at = now + CLOSE_AFTER;
+    s_close_controls = controls;
+  }
+  else if (controls != s_close_controls)
+  {
+    // Any control: it stays, held at the end like a finished replay.
+    s_close_cancelled = true;
+    s_close_at.reset();
+    Session::SetPlaybackBanner("");
+    return;
+  }
+  const auto left = std::chrono::ceil<std::chrono::seconds>(*s_close_at - now).count();
+  if (left <= 0)
+  {
+    // The launcher closes Dolphin.
+    s_state = "close";
+    Session::SetPlaybackBanner("");
+    return;
+  }
+  Session::SetPlaybackBanner(
+      fmt::format("Closing in {} s - press any replay key to stay", std::max<long long>(left, 1)));
+}
+
 // One step of the loop (under s_mutex): follow the session, go on with the queue.
 void Step()
 {
+  if (s_request.mirror && s_mirror_pending)
+  {
+    ArmCurrent();
+    return;
+  }
   if (!s_armed)
     return;
   const auto st = Session::PlaybackStatus();
@@ -227,6 +380,8 @@ void Step()
     s_state = "ended";
     return;
   }
+  if (s_request.mirror)
+    FollowMirror();
   const std::string phase = st.at("phase").is<std::string>() ? st.at("phase").get<std::string>() : "";
   if (phase == "error")
   {
@@ -247,9 +402,20 @@ void Step()
     }
     else
     {
-      s_state = "ended";
+      // A spectated stream's next game may still come: it is armed when the launcher adds it.
+      s_state = s_request.mirror && !s_request.stream_over ? "between" : "ended";
     }
     return;
+  }
+  if (s_request.mirror && get_bool("at_end"))
+  {
+    MirrorAtEnd(st);
+    return;
+  }
+  if (s_request.mirror)
+  {
+    s_close_at.reset();
+    Session::SetPlaybackBanner("");
   }
   s_state = get_bool("started") ? "playing" : "waiting";
 }
@@ -275,7 +441,22 @@ void Loop()
       std::lock_guard lk(s_mutex);
       if (!s_comm_path.empty())
       {
-        if (auto r = ReadComm(s_comm_path); r && r->command_id != last_command)
+        auto r = ReadComm(s_comm_path);
+        if (r && r->mirror && s_request.mirror && r->command_id == last_command)
+        {
+          // The same stream: a set's next game added, the stream over, the settings changed.
+          // Games are only ever added at the end.
+          if (r->paths.size() >= s_request.paths.size() &&
+              std::equal(s_request.paths.begin(), s_request.paths.end(), r->paths.begin()))
+          {
+            s_request.paths = std::move(r->paths);
+            s_request.cut = std::move(r->cut);
+          }
+          s_request.stream_over = r->stream_over;
+          s_request.close_on_end = r->close_on_end;
+          s_request.banner = std::move(r->banner);
+        }
+        else if (r && r->command_id != last_command)
         {
           last_command = r->command_id;
           Session::StopPlayback();
