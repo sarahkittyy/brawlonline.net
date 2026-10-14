@@ -377,6 +377,41 @@ def test_ranked_has_no_pause_and_closing_abandons(backend: OnlineBackend, dolphi
     assert "Ranked: leaving set" in text and want in text, text[-3000:]
 
 
+@pytest.mark.slow
+def test_ranked_game_1_strikes_after_a_slow_hand_off(backend: OnlineBackend,
+                                                      dolphin: Callable[..., DolphinInstance],
+                                                      gpu_backend: str) -> None:
+    """2026-10-14, under load: game 1 skipped the strikes and played a random stage. The hand-off
+    started the session before Ranked began its game setup, and the session set up game 1 in
+    between with no stage decider ("game 1 setup: stage 0x2d (random from 9 stages ...)").
+    PPR_TEST_HANDOFF_DELAY_MS holds the hand-off 3 s after the session starts, on both machines:
+    game 1 must still go to the stage select with the five starters to strike."""
+    test = "ranked-slow-hand-off"
+    ua, ub = backend.create_user("rsha", "RSHA"), backend.create_user("rshb", "RSHB")
+    env = {"PPR_TEST_HANDOFF_DELAY_MS": "3000"}
+    a = _boot(dolphin, "rsh-a", backend, ua, gpu_backend, test, "gameplay", env=env)
+    b = _boot(dolphin, "rsh-b", backend, ub, gpu_backend, test, "gameplay", env=env)
+    _both(a.to_main_menu, b.to_main_menu)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("ranked"), lambda: b.to_css("ranked"))
+    _to_ranked_css(a, b)
+    _search_ranked(a)
+    _search_ranked(b)
+    _peer_shown(a, ub)
+    _peer_shown(b, ua)
+    players = [a, b]
+    _paired(a, b)
+    host = a if _ranked(a)["local_port"] == 0 else b
+    _both_on(players, SSS, "game 1: both on the stage select")
+    for g in players:
+        v = _wait_view(g, lambda v: v["type"] == 1 and sorted(v["selectable"]) == STARTERS, "the starters")
+        assert v["my_turn"] == (g is host) and v["count"] == 1, v
+        g.shot("g1-sss")
+        text = _log(g)
+        assert "PPR_TEST_HANDOFF_DELAY_MS: 3000 ms" in text, text[-3000:]
+        assert not re.search(r"game 1 setup: stage \S+ \(random", text), text[-3000:]
+
+
 def _fighters(g: Game) -> dict[int, tuple[int, float]]:
     """Each player's (stocks, damage) in g's running 1v1, by in-game port."""
     return {p.port: (p.stocks, round(p.damage, 3)) for p in B.read_players(g.c.read_mem, max_entries=2)

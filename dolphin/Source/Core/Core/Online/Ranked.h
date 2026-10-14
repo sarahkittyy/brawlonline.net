@@ -45,7 +45,10 @@ struct Match;
 namespace Ranked
 {
 // The hand-off of a connected match to the session (any mode; only ranked ones are tracked).
+// Called before the session starts: its game setup must be in place before game 1.
 void OnSessionStart(const Match& match);
+// The session did not start after OnSessionStart: nothing of that match is tracked.
+void OnSessionStartFailed();
 // CPU thread: a game of the session ended with GAME SET (the gameplay session's callback).
 void OnGameResult(const Gprb::Session::GameResult& result);
 // The opponent disconnected or went silent (GameBridge sees the lobby's disconnected flag).

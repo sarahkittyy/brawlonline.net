@@ -3,6 +3,8 @@
 
 #include "Core/Online/OnlineClient.h"
 
+#include <chrono>
+#include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -77,13 +79,24 @@ void OnConnected(u64 generation, const Match& found, P2PLink& link, bool hand_of
     SetHandoff("kept");
     return;
   }
+  // Ranked's and a room set's game setup before the session: once started, the session can set
+  // up game 1 at any moment, and without GameSetup's stage decider it took a random stage, no
+  // strikes (seen under load on 2026-10-14, about 130 ms before the setup began).
+  Ranked::OnSessionStart(match);
   if (auto error = Session::Start(match, std::move(link), selections))
   {
     ERROR_LOG_FMT(NETPLAY, "Online: session start failed: {}", *error);
+    Ranked::OnSessionStartFailed();
     SetHandoff("failed", *error);
     return;
   }
-  Ranked::OnSessionStart(match);
+  // Tests (PPR_TEST_HANDOFF_DELAY_MS=<ms>): the hand-off finishes that much after the session
+  // started, as on a loaded PC, so the session runs before anything after this point.
+  if (const char* delay = std::getenv("PPR_TEST_HANDOFF_DELAY_MS"); delay && *delay)
+  {
+    WARN_LOG_FMT(NETPLAY, "Online: PPR_TEST_HANDOFF_DELAY_MS: {} ms", delay);
+    std::this_thread::sleep_for(std::chrono::milliseconds(std::atoi(delay)));
+  }
   SetHandoff("started");
 }
 

@@ -444,6 +444,16 @@ void OnSessionStart(const Match& match)
     NOTICE_LOG_FMT(NETPLAY, "Ranked: reporting the games of {}", s_match_id);
 }
 
+void OnSessionStartFailed()
+{
+  GameSetup::End();
+  std::lock_guard lk(s_mutex);
+  if (s_active)
+    NOTICE_LOG_FMT(NETPLAY, "Ranked: set {} not started (the session did not start)", s_match_id);
+  s_active = false;
+  s_reporting = false;
+}
+
 void OnGameResult(const Gprb::Session::GameResult& r)
 {
   std::lock_guard lk(s_mutex);
