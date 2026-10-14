@@ -232,6 +232,13 @@
   white-space: nowrap;
 }
 
+/* An ended stream: red ENDED where its game time was. */
+.ended {
+  color: var(--live-red);
+  font-weight: 700;
+  letter-spacing: 0.04em;
+}
+
 .liveDot {
   width: 7px;
   height: 7px;

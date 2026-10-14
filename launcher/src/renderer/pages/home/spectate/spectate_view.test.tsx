@@ -108,6 +108,26 @@ describe("SpectateView", () => {
     expect(onAutoPlayChange).toHaveBeenCalledWith(true);
   });
 
+  it("puts ended streams at the bottom with a red ENDED, still watchable", () => {
+    const onWatch = vi.fn();
+    const ended = game("dddddddddddd", "2026-10-14T02:09:00Z", {
+      game: { number: 2, place: 2, startedAt: "2026-10-14T02:09:30Z", stageId: 0x02, state: "over" },
+    });
+    const { container } = view({ kind: "ready", games: [ended, ...games] }, { onWatch });
+    const rows = Array.from(container.querySelectorAll("button[data-stream]"));
+    expect(rows.map((r) => r.getAttribute("data-stream"))).toEqual([
+      "bbbbbbbbbbbb",
+      "cccccccccccc",
+      "aaaaaaaaaaaa",
+      "dddddddddddd",
+    ]);
+    const time = container.querySelector('[data-stream="dddddddddddd"] [data-testid="game-time"]')!;
+    expect(time.textContent).toBe(Messages.ended());
+    expect(time.className).toMatch(/ended/);
+    fireEvent.click(container.querySelector('[data-stream="dddddddddddd"]')!);
+    expect(onWatch.mock.calls.map((c) => c[0].id)).toEqual(["dddddddddddd"]);
+  });
+
   it("shows the empty, logged-out and unreachable states", () => {
     expect(view({ kind: "ready", games: [] }).getByText(Messages.noGames())).toBeTruthy();
     expect(view({ kind: "logged-out" }).getByText(Messages.logIn())).toBeTruthy();

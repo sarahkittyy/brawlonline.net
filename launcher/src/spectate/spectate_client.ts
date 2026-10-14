@@ -68,20 +68,27 @@ function abortableSleep(ms: number, signal: AbortSignal): Promise<void> {
   });
 }
 
-/** The newest live game Auto play would watch: not `skip`, none `uid` plays in, not over. */
+/**
+ * The live game Auto play would watch: not `skip`, none `uid` plays in, not over. The newest game being played; only
+ * if none is, the newest waiting for its set's next game (which may be a while: stage striking, or a set that ended).
+ */
 export function pickAutoPlay(list: LiveList, skip: string | null, uid: string): LiveGameEntry | null {
   const candidates = list.games.filter(
     (g) => g.id !== skip && g.game.state !== "over" && !g.players.some((p) => p.uid === uid),
   );
-  candidates.sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
+  const between = (g: LiveGameEntry) => (g.game.state === "between" ? 1 : 0);
+  candidates.sort((a, b) => between(a) - between(b) || Date.parse(b.startedAt) - Date.parse(a.startedAt));
   return candidates[0] ?? null;
 }
 
-/** The game to start watching from: the one being played, or the next one between games. */
+/**
+ * The game to start watching from: the one being played, or the next one between games. An ended stream is
+ * watched from its first game, like a set's replay (the server keeps it for 10 minutes).
+ */
 export function startPlace(entry: LiveGameEntry): number | null {
   const place = entry.game.place ?? 0;
-  if (!place) {
-    return null; // an older server: from the stream's start
+  if (!place || entry.game.state === "over") {
+    return null; // from the stream's start
   }
   return entry.game.state === "between" ? place + 1 : place;
 }
@@ -186,7 +193,7 @@ export class SpectateClient {
     } catch (err) {
       return { ok: false, message: err instanceof Error ? err.message : String(err) };
     }
-    if (!entry || entry.game.state === "over") {
+    if (!entry) {
       return { ok: false, message: "This game has ended." };
     }
     if (entry.players.some((p) => p.uid === uid)) {

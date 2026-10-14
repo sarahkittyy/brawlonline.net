@@ -44,9 +44,13 @@ export type SpectateViewProps = {
   freshIds?: ReadonlySet<string>;
 };
 
-/** Newest set first (docs/design/spectating.md §6.1): a set's next game doesn't move its row. */
+/**
+ * Newest set first (docs/design/spectating.md §6.1): a set's next game doesn't move its row. Ended streams go to the
+ * bottom (still newest first among them): they can still be watched from the server for a while.
+ */
 export function sortLiveGames(games: readonly LiveGameEntry[]): LiveGameEntry[] {
-  return [...games].sort((a, b) => Date.parse(b.startedAt) - Date.parse(a.startedAt));
+  const ended = (g: LiveGameEntry) => (g.game.state === "over" ? 1 : 0);
+  return [...games].sort((a, b) => ended(a) - ended(b) || Date.parse(b.startedAt) - Date.parse(a.startedAt));
 }
 
 /** "4:05": how long the current game has been going. */
@@ -244,8 +248,8 @@ export const LiveGameRow = React.memo(function LiveGameRow({
   onWatch: (game: LiveGameEntry) => void;
 }) {
   const over = game.game.state === "over";
-  const disabled = own || over;
-  const tooltip = own ? Messages.yourGameTooltip() : over ? Messages.endedTooltip() : Messages.watchTooltip();
+  const disabled = own;
+  const tooltip = own ? Messages.yourGameTooltip() : over ? Messages.watchEndedTooltip() : Messages.watchTooltip();
   const sides = sidesOf(game);
   const stage = stageInfo(game.game.stageId)?.name;
   const time =
@@ -292,7 +296,10 @@ export const LiveGameRow = React.memo(function LiveGameRow({
           <div>{Messages.gameScore(game.game.number, setScore(game))}</div>
           {stage && <div className={styles.stage}>{stage}</div>}
         </div>
-        <span className={clsx(styles.time, game.game.state === "playing" && styles.live)} data-testid="game-time">
+        <span
+          className={clsx(styles.time, game.game.state === "playing" && styles.live, over && styles.ended)}
+          data-testid="game-time"
+        >
           {game.game.state === "playing" && <span className={styles.liveDot} />}
           {time}
         </span>
@@ -309,8 +316,6 @@ export const LiveGameRow = React.memo(function LiveGameRow({
             Messages.yourGame()
           ) : watching ? (
             Messages.watching()
-          ) : over ? (
-            Messages.ended()
           ) : (
             <>
               {Messages.watch()}

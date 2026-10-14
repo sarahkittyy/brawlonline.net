@@ -111,6 +111,10 @@ describe("choosing what to watch", () => {
     const old = entry(STREAM, "2026-10-14T01:00:00Z");
     old.game = { ...old.game, place: undefined };
     expect(startPlace(old)).toBeNull();
+    // An ended stream is watched from its first game.
+    const ended = entry(STREAM, "2026-10-14T01:00:00Z");
+    ended.game = { ...ended.game, place: 3, state: "over" };
+    expect(startPlace(ended)).toBeNull();
   });
 
   it("Auto play takes the newest live game, leaving out the one watched, the player's own and ended ones", () => {
@@ -130,6 +134,11 @@ describe("choosing what to watch", () => {
     expect(pickAutoPlay(list, null, ME)?.id).toBe("bbbbbbbbbbbb");
     expect(pickAutoPlay(list, "bbbbbbbbbbbb", ME)?.id).toBe("aaaaaaaaaaaa");
     expect(pickAutoPlay({ games: [list.games[2]] }, null, ME)).toBeNull();
+    // A game being played comes before a newer one waiting for its set's next game.
+    const waiting = entry("eeeeeeeeeeee", "2026-10-14T01:20:00Z");
+    waiting.game = { ...waiting.game, state: "between" };
+    expect(pickAutoPlay({ games: [...list.games, waiting] }, null, ME)?.id).toBe("bbbbbbbbbbbb");
+    expect(pickAutoPlay({ games: [list.games[0], waiting] }, "aaaaaaaaaaaa", ME)?.id).toBe("eeeeeeeeeeee");
   });
 });
 
