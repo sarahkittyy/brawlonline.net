@@ -6,7 +6,151 @@
   box-sizing: border-box;
   padding: 16px 20px 20px;
   min-height: 0;
+  overflow: hidden;
+}
+
+/* Left: public rooms (under the player's room while one runs); right: the player's games. Each
+   column scrolls on its own; a narrow window stacks them and the page scrolls. */
+.columns {
+  flex: 1;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 16px;
+  min-height: 0;
+}
+
+.column {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  min-height: 0;
   overflow-y: auto;
+}
+
+.roomSlot {
+  flex: 0 1 auto;
+  max-height: 60%;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow-y: auto;
+}
+
+@media (width <= 900px) {
+  .page {
+    overflow-y: auto;
+  }
+
+  .columns {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .column {
+    overflow-y: visible;
+  }
+
+  .roomSlot {
+    max-height: none;
+  }
+}
+
+/* The public rooms, as Home > Overview's (public_rooms.module.css): the whole row joins. */
+.roomList {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-self: start;
+}
+
+.roomRow {
+  all: unset;
+  box-sizing: border-box;
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 56px 64px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.15s ease-in-out;
+}
+
+.roomRow:hover {
+  background-color: rgb(255 255 255 / 5%);
+}
+
+.roomRow:active {
+  background-color: rgb(255 255 255 / 9%);
+}
+
+.roomRow:focus-visible {
+  outline: 2px solid var(--accent-primary-dark);
+  outline-offset: -2px;
+}
+
+.roomRow[aria-disabled="true"] {
+  cursor: default;
+}
+
+.roomRow[aria-disabled="true"]:hover,
+.roomRow[aria-disabled="true"]:active {
+  background-color: transparent;
+}
+
+.roomRowOff {
+  opacity: 0.45;
+}
+
+.roomMain {
+  min-width: 0;
+}
+
+.roomHost {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.roomGame {
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.roomPlayers {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.roomAction {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transition: color 0.15s ease-in-out;
+}
+
+.roomRow:hover:not([aria-disabled="true"]) .roomAction {
+  color: var(--text-primary);
 }
 
 .intro {

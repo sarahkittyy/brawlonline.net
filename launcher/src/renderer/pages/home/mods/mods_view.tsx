@@ -9,9 +9,11 @@ import type {
 } from "@dolphin/mods/types";
 import { defaultController } from "@dolphin/mods/types";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
+import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import CreateNewFolderOutlinedIcon from "@mui/icons-material/CreateNewFolderOutlined";
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
+import PersonOutlineIcon from "@mui/icons-material/PersonOutline";
 import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
 import LinearProgress from "@mui/material/LinearProgress";
@@ -78,50 +80,65 @@ export const ModsView = (props: ModsViewProps) => {
           onOpen={props.onRefreshControllers}
         />
       )}
-      {error && <div className={styles.error}>{error}</div>}
-      {state?.running && <RoomPanel status={status} onRequest={props.onRequest} onCopyCode={props.onCopyCode} />}
-      <ContentBlock
-        title={Messages.yourBuilds()}
-        titleAction={
-          <div className={styles.roomActions}>
-            <Tooltip title={Messages.addBuildTooltip()}>
-              <Button size="small" startIcon={<AddRoundedIcon />} onClick={props.onAddBuild}>
-                {Messages.addBuild()}
-              </Button>
-            </Tooltip>
-            <Tooltip title={Messages.addFolderTooltip()}>
-              <Button size="small" startIcon={<CreateNewFolderOutlinedIcon />} onClick={props.onAddFolder}>
-                {Messages.addFolder()}
-              </Button>
-            </Tooltip>
-          </div>
-        }
-        content={
-          <div className={styles.builds}>
-            {state && state.builds.length === 0 && <p className={styles.empty}>{Messages.noBuilds()}</p>}
-            {state?.builds.map((build) => (
-              <BuildRow
-                key={build.id}
-                build={build}
-                progress={props.hashProgress[build.id]}
-                starting={props.startingBuildId === build.id}
-                disabled={!!state.running || props.startingBuildId !== null}
-                onRemove={() => props.onRemoveBuild(build)}
-                onHost={(isPublic) => props.onHost(build, isPublic)}
-                onJoin={(code) => props.onJoin(build, code)}
-              />
-            ))}
-          </div>
-        }
-      />
-      <PublicRoomsBlock
-        rooms={props.publicRooms}
-        ownCode={status?.room?.code ?? null}
-        builds={state?.builds ?? []}
-        disabled={!!state?.running || props.startingBuildId !== null}
-        onJoin={props.onJoin}
-        onLogIn={props.onLogIn}
-      />
+      {(error ?? (!state?.running ? state?.lastError : null)) && (
+        <div className={styles.error}>{error ?? state?.lastError}</div>
+      )}
+      <div className={styles.columns}>
+        {/* Left: the public rooms, under the player's own room while Dolphin runs one. */}
+        <div className={styles.column}>
+          {state?.running && (
+            <div className={styles.roomSlot}>
+              <RoomPanel status={status} onRequest={props.onRequest} onCopyCode={props.onCopyCode} />
+            </div>
+          )}
+          <PublicRoomsBlock
+            rooms={props.publicRooms}
+            ownCode={status?.room?.code ?? null}
+            builds={state?.builds ?? []}
+            disabled={!!state?.running || props.startingBuildId !== null}
+            onJoin={props.onJoin}
+            onLogIn={props.onLogIn}
+          />
+        </div>
+        {/* Right: the player's games. */}
+        <div className={styles.column}>
+          <ContentBlock
+            fill={true}
+            title={Messages.yourBuilds()}
+            titleAction={
+              <div className={styles.roomActions}>
+                <Tooltip title={Messages.addBuildTooltip()}>
+                  <Button size="small" startIcon={<AddRoundedIcon />} onClick={props.onAddBuild}>
+                    {Messages.addBuild()}
+                  </Button>
+                </Tooltip>
+                <Tooltip title={Messages.addFolderTooltip()}>
+                  <Button size="small" startIcon={<CreateNewFolderOutlinedIcon />} onClick={props.onAddFolder}>
+                    {Messages.addFolder()}
+                  </Button>
+                </Tooltip>
+              </div>
+            }
+            content={
+              <div className={styles.builds}>
+                {state && state.builds.length === 0 && <p className={styles.empty}>{Messages.noBuilds()}</p>}
+                {state?.builds.map((build) => (
+                  <BuildRow
+                    key={build.id}
+                    build={build}
+                    progress={props.hashProgress[build.id]}
+                    starting={props.startingBuildId === build.id}
+                    disabled={!!state.running || props.startingBuildId !== null}
+                    onRemove={() => props.onRemoveBuild(build)}
+                    onHost={(isPublic) => props.onHost(build, isPublic)}
+                    onJoin={(code) => props.onJoin(build, code)}
+                  />
+                ))}
+              </div>
+            }
+          />
+        </div>
+      </div>
     </div>
   );
 };
@@ -160,43 +177,65 @@ const PublicRoomsBlock = ({
   } else if (listed.length === 0) {
     content = <p className={styles.empty}>{Messages.publicRoomsNone()}</p>;
   } else {
+    // As Home > Overview's rooms: the whole row joins.
     content = (
-      <div className={styles.slots}>
+      <ul className={styles.roomList}>
         {listed.map((room) => {
           const build = builds.find((b) => b.hash === room.build.hash);
           const label = Messages.buildName(room.build.name, room.build.hash.slice(0, 8));
+          const off = !build || disabled;
           return (
-            <div key={room.code} className={clsx(styles.slot, !build && styles.closed)}>
-              <span className={styles.player}>
-                <span className={styles.name}>{Messages.roomHost(room.hostName)}</span>
-                <span className={styles.code}>{label}</span>
-                <span className={styles.badge}>{Messages.roomPlayers(room.players, room.open)}</span>
-              </span>
+            <li key={room.code}>
               <Tooltip
                 title={
                   build
                     ? Messages.joinPublicTooltip(build.name)
                     : Messages.needBuild(room.build.name, room.build.hash.slice(0, 8))
                 }
+                placement="top"
+                enterDelay={600}
+                disableInteractive={true}
               >
-                <span>
-                  <Button
-                    size="small"
-                    variant="outlined"
-                    disabled={!build || disabled}
-                    onClick={() => build && onJoin(build, room.code)}
-                  >
-                    {Messages.join()}
-                  </Button>
-                </span>
+                <button
+                  type="button"
+                  className={clsx(styles.roomRow, !build && styles.roomRowOff)}
+                  aria-disabled={off}
+                  data-room={room.code}
+                  onClick={() => {
+                    if (build && !disabled) {
+                      onJoin(build, room.code);
+                    }
+                  }}
+                >
+                  <div className={styles.roomMain}>
+                    <div className={styles.roomHost}>{Messages.roomHost(room.hostName)}</div>
+                    <div className={styles.roomGame}>{label}</div>
+                  </div>
+                  <span className={styles.roomPlayers}>
+                    <PersonOutlineIcon style={{ fontSize: 16 }} />
+                    {Messages.roomPlayers(room.players, room.open)}
+                  </span>
+                  <span className={styles.roomAction}>
+                    {build ? (
+                      <>
+                        {Messages.join()}
+                        <ChevronRightIcon style={{ fontSize: 18 }} />
+                      </>
+                    ) : (
+                      Messages.noGame()
+                    )}
+                  </span>
+                </button>
               </Tooltip>
-            </div>
+            </li>
           );
         })}
-      </div>
+      </ul>
     );
   }
-  return <ContentBlock title={Messages.publicRooms()} content={<div className={styles.room}>{content}</div>} />;
+  return (
+    <ContentBlock fill={true} title={Messages.publicRooms()} content={<div className={styles.room}>{content}</div>} />
+  );
 };
 
 const BuildRow = ({

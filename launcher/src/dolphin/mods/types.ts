@@ -153,6 +153,9 @@ export type ModsState = {
   running: boolean;
   /** The room Dolphin last reported, while it runs. */
   status: ModRoomStatus | null;
+  /** Why the last room ended, once Dolphin closed (a join that failed: "Room not found."), until
+   * the next host or join. */
+  lastError: string | null;
   /** What the player plays with (the launcher's controller menu). */
   controller: ModsController;
   /** The controllers set up in Dolphin, as last read. */

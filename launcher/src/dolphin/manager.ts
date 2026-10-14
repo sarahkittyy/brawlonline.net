@@ -312,7 +312,7 @@ export class DolphinManager {
    * netplay Dolphin (its User folder, the login): Play and a mod room do not run at once.
    * `onClose` runs when it exits.
    */
-  async launchModsDolphin(build: ModBuild, room: ModsRoomArg, onClose?: () => void) {
+  async launchModsDolphin(build: ModBuild, room: ModsRoomArg, onClose?: () => void | Promise<void>) {
     Preconditions.checkState(this.netplayDolphinInstance == null, "Dolphin is already open. Close it first.");
     await this.launchGate();
     const installation = this.getInstallation(DolphinLaunchType.NETPLAY);
@@ -332,10 +332,11 @@ export class DolphinManager {
     dolphinInstance.on("close", async (exitCode: number | null, signal: string | null) => {
       this.netplayDolphinInstance = null;
       this.eventSubject.next({ type: DolphinEventType.CLOSED, dolphinType: DolphinLaunchType.NETPLAY, exitCode });
-      void clearModRoomFiles(this.netplayOnlineDir()).catch(() => undefined);
       log.warn(`Dolphin (Brawl Mods) exit code: ${exitCode?.toString(16)}, signal: ${signal}`);
+      // The room file's last words first (why a join failed), then it goes.
+      await Promise.resolve(onClose?.()).catch((err) => log.error(err));
+      void clearModRoomFiles(this.netplayOnlineDir()).catch(() => undefined);
       await this._keepCrashLog(installation, exitCode, signal);
-      onClose?.();
     });
     dolphinInstance.on("error", (err: Error) => {
       log.error(err);

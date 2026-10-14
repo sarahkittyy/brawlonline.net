@@ -56,11 +56,12 @@ const nsmbw: ModBuild = {
   hashKey: "k",
 };
 
-type ViewState = Omit<ModsState, "controller" | "controllers"> & Partial<ModsState>;
+type ViewState = Omit<ModsState, "controller" | "controllers" | "lastError"> & Partial<ModsState>;
 
 const props = (state: ViewState | null, extra: Partial<ModsViewProps> = {}): ModsViewProps => ({
   state: state && {
     controller: "gc",
+    lastError: null,
     controllers: {
       gc: [{ index: 1, device: "XInput/0/Gamepad", label: "Xbox controller" }],
       wiimote: [{ index: 1, device: "", label: "Real Wii Remote", real: true }],
@@ -162,11 +163,13 @@ describe("ModsView", () => {
       },
     );
     const { getByText } = render(<ModsView {...p} />);
-    const row = (name: string) => getByText(Messages.roomHost(name)).closest("div") as HTMLElement;
-    const joinIn = (el: HTMLElement) =>
-      Array.from(el.querySelectorAll("button")).find((b) => b.textContent === Messages.join()) as HTMLButtonElement;
-    expect(joinIn(row("Dee")).disabled).toBe(true);
-    fireEvent.click(joinIn(row("Keiko")));
+    const row = (name: string) => getByText(Messages.roomHost(name)).closest("button") as HTMLButtonElement;
+    // The whole row joins; a room whose game the player lacks says so and does nothing.
+    expect(row("Dee").getAttribute("aria-disabled")).toBe("true");
+    expect(row("Dee").textContent).toContain(Messages.noGame());
+    fireEvent.click(row("Dee"));
+    expect(p.onJoin).not.toHaveBeenCalled();
+    fireEvent.click(row("Keiko"));
     expect(p.onJoin).toHaveBeenCalledWith(minus, "PLNX");
     expect(getByText(Messages.roomPlayers(3, 4))).toBeTruthy();
   });
@@ -223,6 +226,12 @@ describe("ModsView", () => {
     const { getByText, queryByText } = render(<ModsView {...p} />);
     expect(queryByText(Messages.roomHost("Ann"))).toBeNull();
     expect(getByText(Messages.publicRoomsNone())).toBeTruthy();
+  });
+
+  it("keeps saying why a join failed after Dolphin closed", () => {
+    const p = props({ builds: [minus], running: false, status: null, lastError: "Room not found." });
+    const { getByText } = render(<ModsView {...p} />);
+    expect(getByText("Room not found.")).toBeTruthy();
   });
 
   it("asks to log in for the public rooms", () => {

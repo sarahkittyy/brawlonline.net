@@ -84,6 +84,7 @@ export class ModsManager {
   private readonly listeners = new Set<(event: ModsEvent) => void>();
   private readonly hashing = new Map<string, Promise<ModBuild>>();
   private controllers: DolphinControllers = { gc: [], wiimote: [] };
+  private lastError: string | null = null;
   private controllersRead = false;
 
   /** `toolPath` resolves DolphinTool (the bundled Dolphin's, once it is installed). */
@@ -107,6 +108,7 @@ export class ModsManager {
       builds: this.builds(),
       running: this.running,
       status: this.status,
+      lastError: this.lastError,
       controller: this.controller(),
       controllers: this.controllers,
     };
@@ -335,13 +337,19 @@ export class ModsManager {
     }
     await this.dolphin.launchModsDolphin(build, room, () => this.onDolphinClosed());
     this.running = true;
+    this.lastError = null;
     this.status = null;
     this.statusText = "";
     this.startPolling();
     this.emitState();
   }
 
-  private onDolphinClosed(): void {
+  private async onDolphinClosed(): Promise<void> {
+    // Dolphin closes itself when a join fails before any game was shared: the reason is in the
+    // room file it wrote last (perhaps after the last poll).
+    const last = await readModRoomStatus(this.dolphin.netplayOnlineDir()).catch(() => null);
+    const status = last ?? this.status;
+    this.lastError = status?.error || (status?.session?.phase === "error" ? status.session.error : "") || null;
     this.running = false;
     this.status = null;
     this.statusText = "";

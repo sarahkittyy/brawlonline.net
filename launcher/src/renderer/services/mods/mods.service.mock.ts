@@ -66,6 +66,7 @@ class MockModsClient implements ModsService {
       builds: this.builds,
       running: this.status !== null,
       status: this.status,
+      lastError: null,
       controller: this.controller,
       controllers: this.controllers,
     };
