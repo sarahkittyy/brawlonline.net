@@ -293,7 +293,7 @@ namespace PPOM {
         u8 ready;         // 1 = locked in for `game`
         u8 cssChar;       // CSS id (diagnostics)
         u8 charKind;      // gmCharacterKind (random resolved)
-        u8 costume;       // colour number
+        u8 costume;       // colour number (0-0x1F), | COSTUME_ALT_Z / COSTUME_ALT_R
         u16 stagePick;    // stage kind picked on the stage select (Direct loser), 0xFFFF none,
                           // STAGE_PENDING: the loser locked in, its stage select still to come
         u8 asl;           // P+ alternate-stage buttons held for that pick
@@ -350,10 +350,19 @@ namespace PPOM {
     // Team colours (Brawl's team battle: gmPlayerInitData+0x0B; Slippi's order).
     enum Team { TEAM_RED = 0, TEAM_BLUE = 1, TEAM_GREEN = 2, TEAM_COUNT = 3, TEAM_NONE = 0xFF };
 
+    // P+'s "Hold Z for AltZ / R (C on a Nunchuk) for AltR" (LegacyTE/AltCostume.asm), carried in a
+    // costume byte (LockIn, SessionPlayer costume and roomCostume) above the colour number, which
+    // the CSS keeps under 0x20: the buttons held on the START that locked in. The match setup
+    // turns them into P+'s per-slot alt word (online_match.cpp setupMatch). Not both.
+    const u8 COSTUME_ALT_Z = 0x40;
+    const u8 COSTUME_ALT_R = 0x80;
+    const u8 COSTUME_ALTS = COSTUME_ALT_Z | COSTUME_ALT_R;
+    const u8 COSTUME_COLOUR = 0x1F;
+
     struct SessionPlayer {
         u8 present;
         u8 charKind;      // gmCharacterKind
-        u8 costume;       // colour number
+        u8 costume;       // colour number, | COSTUME_ALT_Z / COSTUME_ALT_R
         u8 team;          // Team in a team battle (Session.teams), TEAM_NONE in a free-for-all
         u16 name[NAME_LEN];
         u16 code[CODE_LEN];

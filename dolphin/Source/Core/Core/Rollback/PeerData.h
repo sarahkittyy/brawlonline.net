@@ -125,8 +125,12 @@ std::optional<u64> JsonUInt(const picojson::value* v, u64 max);
 // the playable kinds 0x00-0x11 and 0x13-0x2B, and P+'s Roy 0x32, Mewtwo 0x33 and Knuckles 0x35.
 // Not P+'s hold-shield forms 0x2C (Giga Bowser) and 0x2D (Wario-Man): they are not played online.
 bool ValidCharKind(u32 kind);
-// Colour numbers: the character select's own bound (game-code online_menu.cpp selectedCostume).
+// Colour numbers: the character select's own bound (game-code online_menu.cpp selectedCostume),
+// with at most one of P+'s alt costume bits above it (ppom.h COSTUME_ALT_Z 0x40 / COSTUME_ALT_R
+// 0x80: Z or R held on the START that locked in).
 constexpr u32 MAX_COSTUME = 0x1F;
+constexpr u32 COSTUME_ALT_Z = 0x40;
+constexpr u32 COSTUME_ALT_R = 0x80;
 bool ValidCostume(u32 costume);
 // A lock-in's team: Brawl's three team colours 0-2 (gmPlayerInitData::m_teamNo; 0 red, 1 blue,
 // 2 green), or 0xFF for none.

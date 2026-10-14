@@ -158,7 +158,8 @@ bool ValidCharKind(u32 kind)
 
 bool ValidCostume(u32 costume)
 {
-  return costume <= MAX_COSTUME;
+  const u32 alt = costume & (COSTUME_ALT_Z | COSTUME_ALT_R);
+  return (costume & ~alt) <= MAX_COSTUME && alt != (COSTUME_ALT_Z | COSTUME_ALT_R);
 }
 
 bool ValidTeam(u32 team)

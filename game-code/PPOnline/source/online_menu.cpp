@@ -117,6 +117,9 @@ namespace OnlineMenu {
         // The controller port (0-3) that last pressed START on the CSS: the lock-in carries it,
         // and the match plays the local player from that controller.
         u8 startPad;
+        // P+'s alt costume (PPOM::COSTUME_ALT_Z / _R, 0 none) held on that START, the CSS's
+        // own (not the keypad's); every lock-in carries it (altHeld).
+        u8 startAlt;
         // Rooms (RoomEntry; MODE_TEAMS): how the room CSS was entered, and what Dolphin says.
         int roomEntry;
         bool roomCreateSent;
@@ -130,6 +133,7 @@ namespace OnlineMenu {
         bool roomReload;                    // a launcher join on an online CSS: build it again
         int roomKickPort;                   // the host holds A on this occupied slot (-1 none)
         int roomKickHeld;                   // for this many frames
+        bool roomRHeld;                     // the host's R is down: TEAMS on its release (tickRoom)
         // A replay (PPOM v8, the playback Dolphin): this CSS plays the replays Dolphin puts in
         // SESSION, each one's match once (playbackPending), and takes no input.
         bool playback;
@@ -329,6 +333,26 @@ namespace OnlineMenu {
         return (c >= 0 && c < 0x40 && c != 0x28) ? c : -1;
     }
 
+    // P+'s "Hold Z for AltZ Characters, R/C for AltR Characters" (LegacyTE/AltCostume.asm, hook
+    // 0x8068478C) reads the buttons of the player's controller when its CSS is left: Z AltZ, else R
+    // AltR; a Nunchuk Z / C; a Wii Remote alone none. The online CSS never leaves that way (P+'s
+    // flags are written by the match setup from SESSION, online_match.cpp), so the buttons are read
+    // here, on the START that locks in, from that controller (gfPadStatus +0x0, the fresh read P+
+    // uses), with the controller type P+ takes from the player's area (+0x1E0: 2 Wii Remote,
+    // 3 Nunchuk, else GameCube / Classic).
+    static u8 altHeld(int port)
+    {
+        u8* ps = padSystem();
+        if (!ps || port < 0 || port > 3) return 0;
+        u32 b = *(volatile u32*)(ps + 0x244 + 0x40 * port);
+        u8* area = playerArea();
+        int type = area ? *(volatile int*)(area + 0x1E0) : 0;
+        if (type == 2) return 0;
+        if (b & 0x10) return PPOM::COSTUME_ALT_Z;
+        if (b & (type == 3 ? 0x400u : 0x20u)) return PPOM::COSTUME_ALT_R;
+        return 0;
+    }
+
     static int selectedCostume()
     {
         u8* area = playerArea();
@@ -466,8 +490,8 @@ namespace OnlineMenu {
         int tag = picked >= 0 ? selectedTag() : s.lastTag;
         PPOM::PortValues pv;
         portValuesOf(tag, &pv);
-        PPOM::writeLockIn(true, (u8)css, charKindOf(css), (u8)costume, stagePick, asl, (u8)game, &pv,
-                          s.startPad);
+        PPOM::writeLockIn(true, (u8)css, charKindOf(css), (u8)(costume | s.startAlt), stagePick, asl,
+                          (u8)game, &pv, s.startPad);
         s.lockedGame = game;
         s.lockStage = stagePick;
         s.lastCss = picked >= 0 ? picked : s.lastCss;
@@ -1481,6 +1505,7 @@ namespace OnlineMenu {
         s.code[0] = 0;
         s.codePreset = false;
         s.startPad = 0;
+        s.startAlt = 0;
         s.lastButtons = 0xFFFFFFFF;   // ignore buttons held from the menu
         s.searchSeq = 0;
         s.pollPending = false;
@@ -1500,6 +1525,7 @@ namespace OnlineMenu {
         s.roomSeen = false;
         s.roomReload = false;
         s.roomKickPort = -1;
+        s.roomRHeld = false;
         s.playback = false;
         s.playbackPending = false;
         // Leaving the CSS goes back to the page the mode was picked on (netmenu.cpp
@@ -2078,7 +2104,7 @@ namespace OnlineMenu {
                 } else if (css >= 0) {
                     p.kind = RoomCss::PV_READY;
                     p.css = (u8)css;
-                    p.costume = pl.roomCostume < 0x20 ? pl.roomCostume : 0;
+                    p.costume = pl.roomCostume & PPOM::COSTUME_COLOUR;   // (an alt shows its colour)
                 } else if (bits & PPOM::SLOT_READY) {
                     // Ready without a character shown: game 1 of a set is a blind pick (the
                     // server keeps the character from the others, room-rules.md §2).
@@ -2360,6 +2386,7 @@ namespace OnlineMenu {
         if (rulesOpen) {
             s_headerPress = 0;
             s.roomKickPort = -1;
+            s.roomRHeld = false;
             roomButtons(in, host);   // (the host's "A: open/close" hint goes while the menu is open)
             return;
         }
@@ -2406,9 +2433,18 @@ namespace OnlineMenu {
             // ITEM (Public / Private) and STAGE (FFA / Teams), pressed with A as the game does
             u8 hdr = s_headerPress;
             s_headerPress = 0;
+            // R switches TEAMS when it is let go, unless START was pressed while it was down: that
+            // is P+'s "hold R for AltR" lock-in (s.startAlt), which the room's switch must not eat.
+            bool teamsSwitch = false;
+            if ((pressed & BTN_R) && host && waiting) s.roomRHeld = true;
+            if (s.roomRHeld && (pressed & BTN_START)) s.roomRHeld = false;
+            if (s.roomRHeld && !(held & BTN_R) && !(pressed & BTN_R)) {
+                s.roomRHeld = false;
+                teamsSwitch = host && waiting;
+            }
             if (hdr) {
-                if (host && hdr == 0x1A && waiting) pressed |= BTN_R;   // as R
-                else if (host && hdr == 0x19) pressed |= BTN_L;         // as L
+                if (host && hdr == 0x1A && waiting) teamsSwitch = true;   // as R
+                else if (host && hdr == 0x19) pressed |= BTN_L;           // as L
                 else playSE(SE_ERROR);
             }
             if (RulesButton::pressed()) RoomRules::open(!waiting);   // host edits, others view; End set
@@ -2416,7 +2452,7 @@ namespace OnlineMenu {
                 postRoom(PPOM::ROOM_PUBLIC, (se.roomFlags & PPOM::RF_PUBLIC) ? 0 : 1, 0, NULL);
                 playSE(1);
             }
-            if ((pressed & BTN_R) && host && waiting) {
+            if (teamsSwitch) {
                 postRoom(PPOM::ROOM_TEAMS, (se.roomFlags & PPOM::RF_TEAMS) ? 0 : 1, 0, NULL);
                 playSE(1);
             }
@@ -2905,6 +2941,7 @@ namespace OnlineMenu {
         if (pressed & BTN_START) {
             int p = pressedPort(BTN_START);
             if (p >= 0) s.startPad = (u8)p;
+            if (p >= 0 && !CodeEntry::active()) s.startAlt = altHeld(p);
         }
         maskStart();
         if (s.playback) {

@@ -70,6 +70,12 @@ namespace OnlineMatch {
     static const u32 MM_PLAYERS = 0x98;        // gmGlobalModeMelee players
     static const u32 MM_TIME_LIMIT = 0x20;     // gmGlobalModeMelee: the time limit (s32 frames)
     static const u32 ASL_BUTTONS = 0x800B9EA2; // P+: buttons held on the stage select (u16)
+    // P+'s alt costume word per slot (LegacyTE/AltCostume.asm: gmSelCharData + 0x43AD8 + slot *
+    // 0x5C, which its Gecko lines read as 0x90180F20 + 0x436F8): 1 AltZ, 2 AltR, else none. Every
+    // frame, while it is 1 or 2, P+ sets the slot's costume in gmGlobalModeMelee to 62 (AltZ) or
+    // 61 (AltR), and the loader then takes Fit<Char>AltZ/AltR.pac. P+ writes the words when its
+    // CSS is left; the online CSS never is, so setupMatch writes all four from SESSION.
+    static const u32 ALT_COSTUME_WORDS = 0x901C4618;
 
     // gmSelCharData of the local CSS, saved before the match overwrites it and put back after,
     // so the CSS comes back with this player's own character and not the host's.
@@ -177,14 +183,22 @@ namespace OnlineMatch {
     // list has one (P+'s variants: a second green), else the next free one. Deterministic: the same
     // SESSION gives the same costumes on every machine. Only if the list has none left (fewer costumes
     // than players) is the shading below the fallback.
-    static void distinctCostumes(const PPOM::Session& se, u8* costume)
+    // P+'s alts (PPOM::COSTUME_ALT_Z / _R in `alt`): an alt is one look whatever the colour number
+    // (P+ sets the costume to 62 / 61), so it clashes only with the same alt of the same character
+    // and is never moved to another costume: two of them are told apart by the shading below, as
+    // Slippi's colour clash (offline P+ lets two players hold Z on one character too).
+    static bool sameLook(const u8* costume, const u8* alt, int i, int j)
+    {
+        return alt[i] == alt[j] && (alt[i] != 0 || costume[i] == costume[j]);
+    }
+    static void distinctCostumes(const PPOM::Session& se, u8* costume, const u8* alt)
     {
         for (int i = 0; i < se.numPlayers && i < 4; i++) {
-            if (!se.players[i].present) continue;
+            if (!se.players[i].present || alt[i]) continue;
             u8 kind = se.players[i].charKind;
             bool clash = false;
             for (int j = 0; j < i; j++) {
-                if (se.players[j].present && se.players[j].charKind == kind && costume[j] == costume[i]) clash = true;
+                if (se.players[j].present && se.players[j].charKind == kind && sameLook(costume, alt, i, j)) clash = true;
             }
             if (!clash) continue;
             u8 colours[0x20];
@@ -197,7 +211,8 @@ namespace OnlineMatch {
                     if (pass == 0 && colours[c] != colours[costume[i]]) continue;
                     bool used = false;
                     for (int j = 0; j < se.numPlayers && j < 4; j++) {
-                        if (j != i && se.players[j].present && se.players[j].charKind == kind && costume[j] == c) used = true;
+                        if (j != i && se.players[j].present && se.players[j].charKind == kind && !alt[j] && costume[j] == c)
+                            used = true;
                     }
                     if (!used) pick = c;
                 }
@@ -240,7 +255,8 @@ namespace OnlineMatch {
         for (int i = 0; i < se.numPlayers; i++) {
             const PPOM::SessionPlayer& pl = se.players[i];
             if (!pl.present) continue;
-            if (!OnlineMenu::selectableCharKind(pl.charKind) || pl.costume >= 0x20 ||
+            if (!OnlineMenu::selectableCharKind(pl.charKind) || (pl.costume & ~PPOM::COSTUME_ALTS) > PPOM::COSTUME_COLOUR ||
+                (pl.costume & PPOM::COSTUME_ALTS) == PPOM::COSTUME_ALTS ||
                 (teams && pl.team >= PPOM::TEAM_COUNT)) {
                 PPOM::g_block.debug.lastError = 0x5E72;   // "setup": a character or team this CSS cannot pick
                 return false;
@@ -262,6 +278,7 @@ namespace OnlineMatch {
         u8 tmpl[PLAYER_SIZE];
         memcpy(tmpl, TEMPLATE, PLAYER_SIZE);
         u8 costume[4];
+        u8 alt[4] = {0, 0, 0, 0};
         for (int i = 0; i < 4; i++) {
             u8* p = sel + SEL_PLAYERS + i * PLAYER_SIZE;
             memcpy(p, tmpl, PLAYER_SIZE);
@@ -271,7 +288,8 @@ namespace OnlineMatch {
                 const PPOM::SessionPlayer& pl = se.players[i];
                 // The player's own costume, in a team battle too (the user's, 2026-10-12: any
                 // costume on any team; Brawl's team battle CSS would give the team's).
-                costume[i] = pl.costume;
+                costume[i] = pl.costume & PPOM::COSTUME_COLOUR;
+                alt[i] = pl.costume & PPOM::COSTUME_ALTS;
                 p[0x00] = pl.charKind;
                 p[0x01] = 0;                         // human
                 p[0x05] = costume[i];                // colour number
@@ -282,9 +300,17 @@ namespace OnlineMatch {
                 p[0x01] = 3;                         // none
             }
         }
-        distinctCostumes(se, costume);
+        distinctCostumes(se, costume, alt);
         for (int i = 0; i < se.numPlayers && i < 4; i++) {
             if (se.players[i].present) sel[SEL_PLAYERS + i * PLAYER_SIZE + 0x05] = costume[i];
+        }
+        // P+'s alt words for all four slots, the same on every machine: an empty slot and a player
+        // without an alt 0. (Left over from offline play, P+'s CSS leaves 2 in empty slots and the
+        // last offline pick's in the others, which gave this machine alone an alt costume.) Offline
+        // play does not read them back: P+'s CSS writes all four again when it is left.
+        for (int i = 0; i < 4; i++) {
+            *(volatile u32*)(ALT_COSTUME_WORDS + i * PLAYER_SIZE) =
+                alt[i] == PPOM::COSTUME_ALT_Z ? 1 : alt[i] == PPOM::COSTUME_ALT_R ? 2 : 0;
         }
         sel[SEL_TEAMS] = teams ? 1 : 0;
         se.outCount = 0;
@@ -336,7 +362,7 @@ namespace OnlineMatch {
             int n = 0;
             for (int j = 0; j < i; j++) {
                 if (se.players[j].present && se.players[j].charKind == se.players[i].charKind &&
-                    costume[j] == costume[i]) n++;
+                    sameLook(costume, alt, i, j)) n++;
             }
             mm[MM_PLAYERS + i * PLAYER_SIZE + 0x0A] = SHADES[n];
         }

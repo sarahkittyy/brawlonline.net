@@ -103,6 +103,9 @@ class Game:
         self.c: HarnessClient = inst.client
         self.name = user.display_name
         self.pad = 0   # the controller port the steps press on
+        # Buttons held down before and with START on the CSS (open_keypad), e.g. ("Z",): P+'s
+        # "hold Z for AltZ" (test_online_alt_costumes.py).
+        self.start_with: tuple[str, ...] = ()
 
     # -- mailbox in game memory
     def bridge(self) -> dict[str, Any]:
@@ -273,7 +276,14 @@ class Game:
         the CSS appears, so press again until the plugin reports the keypad open (debug
         scratch[4] = 1 opened, scratch[5] = the hand's mode, 8 = keypad)."""
         for _ in range(6):
-            self.steps("tap START 8", "wait 40")
+            if self.start_with:
+                held = list(self.start_with)
+                self.c.pad_script(self.pad, [PadInput(buttons=held, r=255 if "R" in held else 0, hold=12),
+                                             PadInput(buttons=held + ["START"], r=255 if "R" in held else 0, hold=8),
+                                             PadInput(hold=6)])
+                self.steps("wait 66")
+            else:
+                self.steps("tap START 8", "wait 40")
             s = self.debug_scratch()
             if s[4] == 1 and s[5] == 8:
                 return

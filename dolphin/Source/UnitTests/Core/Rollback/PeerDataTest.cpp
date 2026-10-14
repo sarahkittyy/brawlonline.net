@@ -102,6 +102,12 @@ TEST(PeerData, Whitelists)
   EXPECT_TRUE(ValidCostume(MAX_COSTUME));
   EXPECT_FALSE(ValidCostume(MAX_COSTUME + 1));
   EXPECT_FALSE(ValidCostume(0xFF));
+  // P+'s alts: one of AltZ 0x40 / AltR 0x80 over a colour number, never both.
+  EXPECT_TRUE(ValidCostume(COSTUME_ALT_Z));
+  EXPECT_TRUE(ValidCostume(COSTUME_ALT_R | MAX_COSTUME));
+  EXPECT_FALSE(ValidCostume(COSTUME_ALT_Z | COSTUME_ALT_R));
+  EXPECT_FALSE(ValidCostume(COSTUME_ALT_Z | (MAX_COSTUME + 1)));
+  EXPECT_FALSE(ValidCostume(0x20 | COSTUME_ALT_R));
 
   // P+'s legal list, the rest of Brawl's versus stages, and P+'s own stages (all on P+ v3.2's
   // stage select, read from its tables).
