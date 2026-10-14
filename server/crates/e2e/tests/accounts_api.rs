@@ -109,8 +109,17 @@ async fn signup_verification_and_code_assignment() {
     let (_, body) =
         s.post("/v1/auth/signup", None, json!({"email": "b@x.test", "password": PW, "displayName": "sara b"})).await;
     let session_b = body["sessionToken"].as_str().unwrap().to_string();
+    // Every verification link works, not only the latest: the first email can arrive
+    // after the player asked for another.
     let token_b = s.mailed_token("b@x.test");
-    s.post("/v1/auth/verify-email", None, json!({"token": token_b})).await;
+    let (st, _) = s.post("/v1/auth/verify-email/resend", Some(&session_b), json!({})).await;
+    assert_eq!(st, 202);
+    let token_b2 = s.mailed_token("b@x.test");
+    assert_ne!(token_b, token_b2);
+    let (st, _) = s.post("/v1/auth/verify-email", None, json!({"token": token_b})).await;
+    assert_eq!(st, 200);
+    let (st, _) = s.post("/v1/auth/verify-email", None, json!({"token": token_b2})).await;
+    assert_eq!(st, 200);
     let (_, body) = s.post("/v1/me/netplay", Some(&session_b), json!({"codeStart": "SARA"})).await;
     let code_b = body["connectCode"].as_str().unwrap();
     assert!(code_b.starts_with("SARA#"));

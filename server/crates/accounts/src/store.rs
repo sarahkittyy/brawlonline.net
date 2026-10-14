@@ -185,8 +185,11 @@ impl TokenPurpose {
     }
 }
 
-/// Issues a one-time token. Older unused tokens of the same purpose for this
-/// user are invalidated, so only the latest link works.
+/// Issues a one-time token. A new reset token invalidates the user's older unused
+/// ones, so only the latest reset link works. Verification links all stay valid
+/// until they expire: Gmail held some for longer than players waited before asking
+/// for another (2026-10-14), and the late ones then said "invalid". Any of them
+/// proves the same address (an account's email never changes).
 pub async fn create_email_token(
     pool: &PgPool,
     uid: Uuid,
@@ -195,11 +198,13 @@ pub async fn create_email_token(
 ) -> sqlx::Result<String> {
     let token = random_token();
     let mut tx = pool.begin().await?;
-    sqlx::query("UPDATE email_tokens SET used_at = now() WHERE uid = $1 AND purpose = $2 AND used_at IS NULL")
-        .bind(uid)
-        .bind(purpose.as_str())
-        .execute(&mut *tx)
-        .await?;
+    if purpose == TokenPurpose::ResetPassword {
+        sqlx::query("UPDATE email_tokens SET used_at = now() WHERE uid = $1 AND purpose = $2 AND used_at IS NULL")
+            .bind(uid)
+            .bind(purpose.as_str())
+            .execute(&mut *tx)
+            .await?;
+    }
     sqlx::query("INSERT INTO email_tokens (token_hash, uid, purpose, expires_at) VALUES ($1, $2, $3, $4)")
         .bind(hash_token(&token))
         .bind(uid)
