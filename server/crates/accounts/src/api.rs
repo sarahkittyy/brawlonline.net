@@ -492,6 +492,10 @@ pub struct PublicRank {
     pub position: Option<u64>,
     /// Players on the leaderboard (at least one rated set).
     pub ranked_players: u64,
+    /// The rank held (docs/design/ranked-tiers.md); null while placing.
+    pub tier: Option<crate::ranked::RankView>,
+    /// Rated sets left before the player places; 0 once placed.
+    pub sets_to_place: u32,
 }
 
 #[derive(Debug, Serialize)]
@@ -509,12 +513,14 @@ pub struct PublicUser {
 /// which Dolphin's `user` crate polls (`slippi-rust-extensions/user/src/lib.rs:354-421`).
 /// Public, as on Slippi. `rank.ratingOrdinal` is the Elo rating (`common::ranked`; the default
 /// before the first set) and `ratingUpdateCount` the rated sets. There are no daily placements;
-/// `position` and `rankedPlayers` place the player on the leaderboard.
+/// `position` and `rankedPlayers` place the player on the leaderboard, and `tier` and `setsToPlace`
+/// give the rank badge (docs/design/ranked-tiers.md).
 pub async fn public_user(State(state): State<AppState>, Path(uid): Path<String>) -> ApiResult<Json<PublicUser>> {
     let uid = Uuid::parse_str(&uid).map_err(|_| ApiError::not_found())?;
     let user = store::user_by_uid(&state.pool, uid).await?.ok_or_else(ApiError::not_found)?;
     let standing = crate::ranked::standing(&state.pool, uid).await?;
     let (position, ranked_players) = crate::leaderboard::placement(&state.pool, uid, standing).await?;
+    let tier = crate::ranked::tier_state(&state.pool, uid).await?;
     Ok(Json(PublicUser {
         uid: user.uid,
         display_name: user.display_name,
@@ -528,6 +534,8 @@ pub async fn public_user(State(state): State<AppState>, Path(uid): Path<String>)
             daily_regional_placement: None,
             position,
             ranked_players,
+            tier: crate::ranked::RankView::of(tier.rank),
+            sets_to_place: common::ranked::sets_to_place(tier.rd, standing.sets_played),
         },
     }))
 }

@@ -14,7 +14,7 @@ use axum::extract::{ConnectInfo, Query, State};
 use axum::http::HeaderMap;
 use axum::Json;
 use common::net::ip_key;
-use common::ranked::Standing;
+use common::ranked::{self, Standing};
 use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -22,6 +22,7 @@ use uuid::Uuid;
 use crate::api::{client_ip, limit};
 use crate::cursor;
 use crate::error::{ApiError, ApiResult};
+use crate::ranked::{stored_tier, RankView};
 use crate::AppState;
 
 pub const DEFAULT_LIMIT: u32 = 50;
@@ -67,6 +68,10 @@ pub struct Entry {
     /// Sets won and lost.
     pub wins: u32,
     pub losses: u32,
+    /// The rank held (docs/design/ranked-tiers.md); null while placing.
+    pub rank: Option<RankView>,
+    /// Rated sets left before the player places; 0 once placed.
+    pub sets_to_place: u32,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -88,9 +93,12 @@ struct Row {
     sets_played: i32,
     wins: i32,
     losses: i32,
+    rank: Option<i16>,
+    rd: Option<f64>,
 }
 
-const PAGE_SQL: &str = "SELECT r.uid, u.display_name, u.connect_code, r.rating, r.sets_played, r.wins, r.losses
+const PAGE_SQL: &str = "SELECT r.uid, u.display_name, u.connect_code, r.rating, r.sets_played, r.wins, r.losses,
+                               r.rank, r.rd
                           FROM ratings r JOIN users u ON u.uid = r.uid
                          WHERE r.sets_played > 0";
 
@@ -135,15 +143,21 @@ pub async fn page(pool: &PgPool, after: Option<Key>, limit: u32) -> sqlx::Result
     let entries = rows
         .into_iter()
         .enumerate()
-        .map(|(i, r)| Entry {
-            position: ahead.max(0) as u64 + 1 + i as u64,
-            uid: r.uid,
-            display_name: r.display_name,
-            connect_code: r.connect_code.unwrap_or_default(),
-            rating: r.rating,
-            sets_played: r.sets_played.max(0) as u32,
-            wins: r.wins.max(0) as u32,
-            losses: r.losses.max(0) as u32,
+        .map(|(i, r)| {
+            let tier = stored_tier(r.rank, r.rd);
+            let sets_played = r.sets_played.max(0) as u32;
+            Entry {
+                position: ahead.max(0) as u64 + 1 + i as u64,
+                uid: r.uid,
+                display_name: r.display_name,
+                connect_code: r.connect_code.unwrap_or_default(),
+                rating: r.rating,
+                sets_played,
+                wins: r.wins.max(0) as u32,
+                losses: r.losses.max(0) as u32,
+                rank: RankView::of(tier.rank),
+                sets_to_place: ranked::sets_to_place(tier.rd, sets_played),
+            }
         })
         .collect();
     Ok(Page { entries, next, total: total.max(0) as u64 })

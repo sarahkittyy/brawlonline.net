@@ -15,11 +15,20 @@
 //! to about 2,500-2,800 at the top, with the middle around 1,400 (Silver 3 / Gold 1). A rating
 //! gap of 400 means 10:1 odds, so a top player 1,200 above the middle wins about 999 sets in
 //! 1,000 against it, which spreads the field over the same range. New players start at the
-//! middle. There are no rank tiers: the rating is shown as a number.
+//! middle.
+//!
+//! **Ranks** (docs/design/ranked-tiers.md) are shown on top of the rating: seven tiers, Bronze to
+//! Legendary, each but Legendary in three divisions (3 lowest, 1 highest). A player's rank follows
+//! from their sets in order ([`TierState::after_set`]): none while placing, then the division the
+//! rating reaches, held until the rating falls [`DEMOTION_BUFFER`] below its floor. Placing ends
+//! when the rating's uncertainty (Glicko's rating deviation) is small enough ([`RD_PLACED`]); the
+//! RD decides nothing else.
 //!
 //! **Sets.** Ranked is best of three ([`WINS_NEEDED`] game wins), as on Slippi. Both clients
 //! report every game; [`resolve`] turns the reports into the set's outcome. See its docs for the
 //! rules (agreement, one-sided reports, abandonment, void).
+
+use std::collections::HashMap;
 
 use chrono::{DateTime, Duration, Utc};
 use uuid::Uuid;
@@ -320,6 +329,243 @@ pub fn scores(players: [Uuid; 2], outcome: &Outcome) -> [Option<f64>; 2] {
     }
 }
 
+// ---------------------------------------------------------------- ranks
+
+/// A rank tier, lowest first.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub enum Tier {
+    Bronze,
+    Silver,
+    Gold,
+    Emerald,
+    Diamond,
+    Master,
+    Legendary,
+}
+
+impl Tier {
+    pub const ALL: [Tier; 7] =
+        [Tier::Bronze, Tier::Silver, Tier::Gold, Tier::Emerald, Tier::Diamond, Tier::Master, Tier::Legendary];
+
+    /// The API's name.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Tier::Bronze => "bronze",
+            Tier::Silver => "silver",
+            Tier::Gold => "gold",
+            Tier::Emerald => "emerald",
+            Tier::Diamond => "diamond",
+            Tier::Master => "master",
+            Tier::Legendary => "legendary",
+        }
+    }
+}
+
+/// The lowest rating of each rank, lowest rank first: Bronze 3, 2, 1, Silver 3, 2, 1, ..., Master 1,
+/// Legendary. Bronze 3 has no floor. Tiers: Silver 1150, Gold 1300, Emerald 1450, Diamond 1625,
+/// Master 2000, Legendary 2250, chosen so that on a grown ladder Bronze to Diamond each hold about a
+/// fifth of the players, Master a few percent and Legendary about one (docs/design/ranked-tiers.md
+/// §2). A change here needs `pp-admin ranked recompute` to apply to stored ranks.
+pub const RANK_FLOORS: [f64; 19] = [
+    f64::NEG_INFINITY,
+    1050.0,
+    1100.0,
+    1150.0,
+    1200.0,
+    1250.0,
+    1300.0,
+    1350.0,
+    1400.0,
+    1450.0,
+    1510.0,
+    1570.0,
+    1625.0,
+    1750.0,
+    1875.0,
+    2000.0,
+    2085.0,
+    2170.0,
+    2250.0,
+];
+
+/// A rank: an index into [`RANK_FLOORS`] (0 is Bronze 3, 18 Legendary), stored as `ratings.rank`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct Rank(u8);
+
+impl Rank {
+    pub const LOWEST: Rank = Rank(0);
+    pub const HIGHEST: Rank = Rank(RANK_FLOORS.len() as u8 - 1);
+
+    /// The rank a rating reaches.
+    pub fn for_rating(rating: f64) -> Rank {
+        let reached = RANK_FLOORS.iter().filter(|&&floor| rating >= floor).count();
+        Rank(reached.saturating_sub(1) as u8)
+    }
+
+    pub fn from_index(i: i16) -> Option<Rank> {
+        u8::try_from(i).ok().filter(|&i| usize::from(i) < RANK_FLOORS.len()).map(Rank)
+    }
+
+    pub fn index(self) -> i16 {
+        i16::from(self.0)
+    }
+
+    pub fn tier(self) -> Tier {
+        Tier::ALL[usize::from(self.0 / 3).min(Tier::ALL.len() - 1)]
+    }
+
+    /// 3 (a tier's lowest) to 1 (its highest); `None` for Legendary.
+    pub fn division(self) -> Option<u8> {
+        (self.tier() != Tier::Legendary).then_some(3 - self.0 % 3)
+    }
+
+    pub fn floor(self) -> f64 {
+        RANK_FLOORS[usize::from(self.0)]
+    }
+}
+
+/// How far below its floor a rank is kept: a placed player drops a division only once their
+/// rating is this far below the held division's floor, and then one division at a time.
+pub const DEMOTION_BUFFER: f64 = 100.0;
+
+/// The rank a placed player holds after a set: `held` before it, `rating` after it. A rating at a
+/// higher division's floor promotes to the highest one reached (divisions can be skipped); a rating
+/// more than [`DEMOTION_BUFFER`] below the held division's floor demotes to `rank(rating + buffer)`,
+/// which is one division down for a set's usual change and never below the rating's own rank.
+pub fn held_rank(held: Rank, rating: f64) -> Rank {
+    let reached = Rank::for_rating(rating);
+    if reached >= held {
+        return reached;
+    }
+    held.min(Rank::for_rating(rating + DEMOTION_BUFFER)).max(reached)
+}
+
+/// The rating deviation (Glicko-1) of a player who has not played a ranked set.
+pub const RD_START: f64 = 350.0;
+/// RD at or below which a player is placed and gets a rank.
+pub const RD_PLACED: f64 = 150.0;
+/// The lowest RD kept, so a veteran's opponents still learn something from a set.
+pub const RD_MIN: f64 = 30.0;
+/// The opponent RD assumed when counting the sets a player has left to place.
+pub const RD_ESTABLISHED: f64 = 80.0;
+/// Placing takes at least this many sets...
+pub const MIN_PLACEMENT_SETS: u32 = 5;
+/// ...and at most this many, whatever the RD (K reaches its floor here too).
+pub const MAX_PLACEMENT_SETS: u32 = 10;
+
+const GLICKO_Q: f64 = std::f64::consts::LN_10 / 400.0;
+
+/// The RD after one set (Glicko-1's update; the outcome does not matter, only how much a set
+/// against this opponent can tell): `1/RD'^2 = 1/RD^2 + 1/d^2`. An even set against an established
+/// player tells the most; a lopsided one, or one against another new player, less.
+pub fn rd_after(rd: f64, own: f64, opponent: f64, opponent_rd: f64) -> f64 {
+    let pi2 = std::f64::consts::PI * std::f64::consts::PI;
+    let g = 1.0 / (1.0 + 3.0 * GLICKO_Q * GLICKO_Q * opponent_rd * opponent_rd / pi2).sqrt();
+    let e = 1.0 / (1.0 + 10f64.powf(-g * (own - opponent) / 400.0));
+    let d2_inv = GLICKO_Q * GLICKO_Q * g * g * e * (1.0 - e);
+    (1.0 / (1.0 / (rd * rd) + d2_inv)).sqrt().max(RD_MIN)
+}
+
+/// Whether a player with this RD after `sets_played` rated sets is placed.
+pub fn placed(rd: f64, sets_played: u32) -> bool {
+    sets_played >= MAX_PLACEMENT_SETS || (sets_played >= MIN_PLACEMENT_SETS && rd <= RD_PLACED)
+}
+
+/// Rated sets a player still needs to place (0 once placed): even sets against an established
+/// player that would bring the RD to [`RD_PLACED`], within [`MIN_PLACEMENT_SETS`] and
+/// [`MAX_PLACEMENT_SETS`]. Lopsided sets lower the RD less, so the count can stay the same after one.
+pub fn sets_to_place(rd: f64, sets_played: u32) -> u32 {
+    let (mut rd, mut n) = (rd, sets_played);
+    while !placed(rd, n) {
+        rd = rd_after(rd, 0.0, 0.0, RD_ESTABLISHED);
+        n += 1;
+    }
+    n - sets_played
+}
+
+/// A player's rank state: the RD, and the rank once placed.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct TierState {
+    pub rd: f64,
+    pub rank: Option<Rank>,
+}
+
+impl Default for TierState {
+    fn default() -> Self {
+        TierState { rd: RD_START, rank: None }
+    }
+}
+
+impl TierState {
+    /// The state after one rated set: `sets_before` rated sets before it, `rating_before` and
+    /// `rating_after` this player's, `opponent` the opponent's rating and RD before the set.
+    pub fn after_set(self, sets_before: u32, rating_before: f64, rating_after: f64, opponent: (f64, f64)) -> TierState {
+        let rd = rd_after(self.rd, rating_before, opponent.0, opponent.1);
+        let rank = if !placed(rd, sets_before + 1) {
+            None
+        } else {
+            Some(match self.rank {
+                // Placed with this set: the rating's own rank.
+                None => Rank::for_rating(rating_after),
+                Some(held) => held_rank(held, rating_after),
+            })
+        };
+        TierState { rd, rank }
+    }
+}
+
+/// One stored rating change, as [`replay`] reads it (`rating_events`, in order).
+#[derive(Debug, Clone, PartialEq)]
+pub struct RatedSet {
+    pub id: i64,
+    pub uid: Uuid,
+    pub match_id: String,
+    pub opponent: Option<Uuid>,
+    pub rating_before: f64,
+    pub rating_after: f64,
+    pub opponent_rating: f64,
+    pub sets_before: u32,
+}
+
+/// What [`replay`] computes for one stored rating change.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct ReplayedSet {
+    pub id: i64,
+    pub rank_before: Option<Rank>,
+    pub rank_after: Option<Rank>,
+    pub rd_after: f64,
+}
+
+/// Every player's rank state from their rating changes, in the order they were made (`created_at`,
+/// then `id`). The two changes of one set use each other's RD from before the set. Returns each
+/// change's ranks and RD, and each player's final state.
+pub fn replay(sets: &[RatedSet]) -> (Vec<ReplayedSet>, HashMap<Uuid, TierState>) {
+    let mut states: HashMap<Uuid, TierState> = HashMap::new();
+    let mut out = Vec::with_capacity(sets.len());
+    let mut i = 0;
+    while i < sets.len() {
+        // The rows of one set are next to each other (one transaction, same time).
+        let mut j = i + 1;
+        while j < sets.len() && sets[j].match_id == sets[i].match_id {
+            j += 1;
+        }
+        let before: Vec<(f64, TierState)> = sets[i..j]
+            .iter()
+            .map(|s| {
+                let opp = s.opponent.and_then(|o| states.get(&o).copied()).unwrap_or_default();
+                (opp.rd, states.get(&s.uid).copied().unwrap_or_default())
+            })
+            .collect();
+        for (s, (opp_rd, me)) in sets[i..j].iter().zip(before) {
+            let next = me.after_set(s.sets_before, s.rating_before, s.rating_after, (s.opponent_rating, opp_rd));
+            out.push(ReplayedSet { id: s.id, rank_before: me.rank, rank_after: next.rank, rd_after: next.rd });
+            states.insert(s.uid, next);
+        }
+        i = j;
+    }
+    (out, states)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -539,5 +785,136 @@ mod tests {
         s.games.push(GameReport { game_index: 2, reporter: uid(9), winner: Some(s.p[1]), at: s.at(6) });
         s.games.push(GameReport { game_index: 2, reporter: s.p[0], winner: Some(uid(9)), at: s.at(6) });
         assert_eq!(s.at_min(20), Outcome::InProgress { wins: [1, 0] });
+    }
+    // ------------------------------------------------------------ ranks
+
+    fn rank(tier: Tier, division: Option<u8>) -> Rank {
+        (0..RANK_FLOORS.len() as i16)
+            .filter_map(Rank::from_index)
+            .find(|r| r.tier() == tier && r.division() == division)
+            .unwrap()
+    }
+
+    #[test]
+    fn ranks_by_rating() {
+        assert_eq!(Rank::for_rating(-50.0), Rank::LOWEST);
+        assert_eq!(Rank::for_rating(1049.9), rank(Tier::Bronze, Some(3)));
+        assert_eq!(Rank::for_rating(1050.0), rank(Tier::Bronze, Some(2)));
+        assert_eq!(Rank::for_rating(1149.0), rank(Tier::Bronze, Some(1)));
+        assert_eq!(Rank::for_rating(1150.0), rank(Tier::Silver, Some(3)));
+        // A new player's rating is Gold 1.
+        assert_eq!(Rank::for_rating(DEFAULT_RATING), rank(Tier::Gold, Some(1)));
+        assert_eq!(Rank::for_rating(1450.0), rank(Tier::Emerald, Some(3)));
+        assert_eq!(Rank::for_rating(1625.0), rank(Tier::Diamond, Some(3)));
+        assert_eq!(Rank::for_rating(1999.0), rank(Tier::Diamond, Some(1)));
+        assert_eq!(Rank::for_rating(2000.0), rank(Tier::Master, Some(3)));
+        assert_eq!(Rank::for_rating(2249.0), rank(Tier::Master, Some(1)));
+        assert_eq!(Rank::for_rating(2250.0), Rank::HIGHEST);
+        assert_eq!(Rank::HIGHEST.tier(), Tier::Legendary);
+        assert_eq!(Rank::HIGHEST.division(), None);
+        assert_eq!(Rank::for_rating(3000.0), Rank::HIGHEST);
+        for w in RANK_FLOORS.windows(2) {
+            assert!(w[0] < w[1]);
+        }
+        for i in 0..RANK_FLOORS.len() as i16 {
+            assert_eq!(Rank::from_index(i).unwrap().index(), i);
+        }
+        assert_eq!(Rank::from_index(19), None);
+        assert_eq!(Rank::from_index(-1), None);
+    }
+
+    #[test]
+    fn promotion_skips_divisions_and_demotion_waits_for_the_buffer() {
+        let g3 = rank(Tier::Gold, Some(3)); // 1300
+                                            // Up: the highest division reached.
+        assert_eq!(held_rank(g3, 1460.0), rank(Tier::Emerald, Some(3)));
+        let e3 = rank(Tier::Emerald, Some(3)); // 1450
+                                               // Down: kept until 100 below the floor...
+        assert_eq!(held_rank(e3, 1440.0), e3);
+        assert_eq!(held_rank(e3, 1350.0), e3);
+        // ...then one division (Gold 1, though the rating is already Gold 2's).
+        assert_eq!(held_rank(e3, 1349.0), rank(Tier::Gold, Some(1)));
+        // From Gold 1 (1400) the next drop needs below 1300.
+        let g1 = rank(Tier::Gold, Some(1));
+        assert_eq!(held_rank(g1, 1300.0), g1);
+        assert_eq!(held_rank(g1, 1299.0), rank(Tier::Gold, Some(2)));
+        // A collapse never shows a rank above what rating + buffer reaches.
+        assert_eq!(held_rank(rank(Tier::Master, Some(3)), 1500.0), rank(Tier::Emerald, Some(1)));
+        // Legendary keeps its buffer too.
+        assert_eq!(held_rank(Rank::HIGHEST, 2160.0), Rank::HIGHEST);
+        assert_eq!(held_rank(Rank::HIGHEST, 2140.0), rank(Tier::Master, Some(1)));
+    }
+
+    #[test]
+    fn placement_takes_five_to_ten_sets() {
+        // From scratch, even sets against established players: five.
+        assert_eq!(sets_to_place(RD_START, 0), MIN_PLACEMENT_SETS);
+        let mut rd = RD_START;
+        for n in 0..MIN_PLACEMENT_SETS {
+            assert!(!placed(rd, n));
+            rd = rd_after(rd, 1400.0, 1400.0, RD_ESTABLISHED);
+        }
+        assert!(placed(rd, MIN_PLACEMENT_SETS));
+        // Lopsided sets against other new players tell less: not placed by RD before ten.
+        let mut rd = RD_START;
+        for n in 0..MAX_PLACEMENT_SETS {
+            assert!(!placed(rd, n), "set {n}");
+            let left = sets_to_place(rd, n);
+            assert!(left >= 1 && left <= MAX_PLACEMENT_SETS - n, "set {n}: {left}");
+            rd = rd_after(rd, 1400.0, 1900.0, RD_START);
+        }
+        assert!(placed(rd, MAX_PLACEMENT_SETS));
+        assert_eq!(sets_to_place(rd, MAX_PLACEMENT_SETS), 0);
+        // The RD only falls, never below the floor.
+        assert!(rd_after(100.0, 1400.0, 1400.0, 50.0) < 100.0);
+        assert!(rd_after(RD_MIN, 1400.0, 1400.0, 50.0) >= RD_MIN);
+    }
+
+    #[test]
+    fn a_player_places_then_holds_their_rank() {
+        let mut st = TierState::default();
+        let mut rating = DEFAULT_RATING;
+        for n in 0..5 {
+            let after = rating + 60.0;
+            st = st.after_set(n, rating, after, (rating, RD_ESTABLISHED));
+            rating = after;
+            assert_eq!(st.rank.is_some(), n + 1 >= 5, "after set {}", n + 1);
+        }
+        // Placed at 1700: Diamond 3.
+        assert_eq!(st.rank, Some(rank(Tier::Diamond, Some(3))));
+        // A loss to 1610 keeps Diamond 3 (buffer); a fall to 1520 drops to Emerald 1.
+        st = st.after_set(5, 1700.0, 1610.0, (1700.0, RD_ESTABLISHED));
+        assert_eq!(st.rank, Some(rank(Tier::Diamond, Some(3))));
+        st = st.after_set(6, 1610.0, 1520.0, (1610.0, RD_ESTABLISHED));
+        assert_eq!(st.rank, Some(rank(Tier::Emerald, Some(1))));
+    }
+
+    #[test]
+    fn replay_uses_the_opponents_rd_from_before_the_set() {
+        let (a, b) = (uid(1), uid(2));
+        let set = |id: i64, m: &str, me: Uuid, opp: Uuid, before: f64, after: f64, opp_r: f64, n: u32| RatedSet {
+            id,
+            uid: me,
+            match_id: m.to_string(),
+            opponent: Some(opp),
+            rating_before: before,
+            rating_after: after,
+            opponent_rating: opp_r,
+            sets_before: n,
+        };
+        let sets = vec![
+            set(1, "m1", a, b, 1400.0, 1500.0, 1400.0, 0),
+            set(2, "m1", b, a, 1400.0, 1300.0, 1400.0, 0),
+            set(3, "m2", a, b, 1500.0, 1580.0, 1300.0, 1),
+        ];
+        let (rows, states) = replay(&sets);
+        assert_eq!(rows.len(), 3);
+        // Both players' first set saw the other at RD_START.
+        let first = rd_after(RD_START, 1400.0, 1400.0, RD_START);
+        assert!(close(rows[0].rd_after, first) && close(rows[1].rd_after, first));
+        assert!(close(rows[2].rd_after, rd_after(first, 1500.0, 1300.0, first)));
+        assert_eq!(rows[2].rank_after, None);
+        assert!(close(states[&a].rd, rows[2].rd_after));
+        assert!(close(states[&b].rd, first));
     }
 }

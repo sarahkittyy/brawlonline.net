@@ -44,6 +44,16 @@ enum Cmd {
     /// Bug reports from the launcher's bug button, with their logs zips.
     #[command(subcommand)]
     Bug(BugCmd),
+    /// Ranked: ranks and placement (docs/design/ranked-tiers.md).
+    #[command(subcommand)]
+    Ranked(RankedCmd),
+}
+
+#[derive(Subcommand)]
+enum RankedCmd {
+    /// Recompute every player's rank and placement from the rating history. Run it after changing
+    /// the rank cutoffs, or after a manual correction of ratings or rating_events.
+    Recompute,
 }
 
 #[derive(Subcommand)]
@@ -247,6 +257,16 @@ async fn main() -> anyhow::Result<()> {
         Cmd::Migrate => {
             common::db::MIGRATOR.run(&pool).await?;
             println!("migrations applied");
+            if let Some(done) = accounts::ranked::backfill_tiers(&pool).await? {
+                println!("ranked tiers filled: {} players from {} rating changes", done.players, done.sets);
+            }
+        }
+        Cmd::Ranked(RankedCmd::Recompute) => {
+            let done = admin::recompute_ranked_tiers(&pool, &actor).await?;
+            println!(
+                "ranked tiers recomputed: {} players from {} rating changes, {} rank(s) changed",
+                done.players, done.sets, done.ranks_changed
+            );
         }
         Cmd::ChatReports { limit } => {
             let reports = admin::unhandled_chat_reports(&pool, limit.clamp(1, 1000)).await?;

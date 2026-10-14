@@ -224,6 +224,7 @@ pub async fn run(cfg: Config) -> anyhow::Result<()> {
     let pool = connect_db(&cfg.database_url).await?;
     if cfg.run_migrations {
         common::db::MIGRATOR.run(&pool).await?;
+        ranked::backfill_tiers(&pool).await?;
     }
     let mailer = mail::from_config(&cfg.mail)?;
     tracing::info!(

@@ -22,7 +22,8 @@ use axum::extract::{Query, State};
 use axum::Json;
 use chrono::{DateTime, Utc};
 use common::ranked::{
-    self, GameReport, Leave, LeaveReport, Outcome, Standing, Timing, MAX_GAME_INDEX, MAX_SESSION_GAME_INDEX,
+    self, GameReport, Leave, LeaveReport, Outcome, Rank, RatedSet, Standing, TierState, Timing, MAX_GAME_INDEX,
+    MAX_SESSION_GAME_INDEX,
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{PgPool, Postgres, Transaction};
@@ -42,6 +43,123 @@ pub async fn standing(pool: &PgPool, uid: Uuid) -> sqlx::Result<Standing> {
     let row: Option<(f64, i32)> =
         sqlx::query_as("SELECT rating, sets_played FROM ratings WHERE uid = $1").bind(uid).fetch_optional(pool).await?;
     Ok(row.map(|(rating, n)| Standing { rating, sets_played: n.max(0) as u32 }).unwrap_or_default())
+}
+
+/// A player's rank state, or a new player's.
+pub async fn tier_state(pool: &PgPool, uid: Uuid) -> sqlx::Result<TierState> {
+    let row: Option<(Option<i16>, Option<f64>)> =
+        sqlx::query_as("SELECT rank, rd FROM ratings WHERE uid = $1").bind(uid).fetch_optional(pool).await?;
+    Ok(row.map(|(rank, rd)| stored_tier(rank, rd)).unwrap_or_default())
+}
+
+/// `ratings.rank` and `ratings.rd` as a [`TierState`] (a NULL rd: not filled yet, a new player's).
+pub(crate) fn stored_tier(rank: Option<i16>, rd: Option<f64>) -> TierState {
+    TierState { rd: rd.unwrap_or(ranked::RD_START), rank: rank.and_then(Rank::from_index) }
+}
+
+/// A rank as the API shows it: `{"tier": "gold", "division": 2}` (division null for Legendary).
+#[derive(Debug, Clone, Copy, PartialEq, Serialize)]
+pub struct RankView {
+    pub tier: &'static str,
+    pub division: Option<u8>,
+}
+
+impl RankView {
+    pub fn of(rank: Option<Rank>) -> Option<RankView> {
+        rank.map(|r| RankView { tier: r.tier().as_str(), division: r.division() })
+    }
+}
+
+/// What [`recompute_tiers`] did.
+#[derive(Debug, Clone, Copy, PartialEq, Default)]
+pub struct Recomputed {
+    /// Rating changes replayed.
+    pub sets: usize,
+    /// Players with a ratings row.
+    pub players: usize,
+    /// Players whose stored rank changed.
+    pub ranks_changed: usize,
+}
+
+/// Recomputes every player's rank and RD, and every rating change's, by replaying `rating_events`
+/// in order ([`ranked::replay`]). For the migration that adds them (see [`backfill_tiers`]), a
+/// change of the cutoffs, or a manual correction of the ratings. Holds `ratings` locked against
+/// settles meanwhile.
+pub async fn recompute_tiers(pool: &PgPool) -> sqlx::Result<Recomputed> {
+    let mut tx = pool.begin().await?;
+    sqlx::query("LOCK TABLE ratings IN SHARE ROW EXCLUSIVE MODE").execute(&mut *tx).await?;
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(i64, Uuid, String, Option<Uuid>, f64, f64, f64, i32)> = sqlx::query_as(
+        "SELECT id, uid, match_id, opponent, rating_before, rating_after, opponent_rating, sets_before
+           FROM rating_events ORDER BY created_at, id",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    let sets: Vec<RatedSet> = rows
+        .into_iter()
+        .map(|(id, uid, match_id, opponent, rating_before, rating_after, opponent_rating, n)| RatedSet {
+            id,
+            uid,
+            match_id,
+            opponent,
+            rating_before,
+            rating_after,
+            opponent_rating,
+            sets_before: n.max(0) as u32,
+        })
+        .collect();
+    let (events, states) = ranked::replay(&sets);
+
+    let ids: Vec<i64> = events.iter().map(|e| e.id).collect();
+    let before: Vec<Option<i16>> = events.iter().map(|e| e.rank_before.map(Rank::index)).collect();
+    let after: Vec<Option<i16>> = events.iter().map(|e| e.rank_after.map(Rank::index)).collect();
+    let rd: Vec<f64> = events.iter().map(|e| e.rd_after).collect();
+    sqlx::query(
+        "UPDATE rating_events e SET rank_before = v.b, rank_after = v.a, rd_after = v.rd
+           FROM unnest($1::bigint[], $2::smallint[], $3::smallint[], $4::float8[]) AS v(id, b, a, rd)
+          WHERE e.id = v.id",
+    )
+    .bind(&ids)
+    .bind(&before)
+    .bind(&after)
+    .bind(&rd)
+    .execute(&mut *tx)
+    .await?;
+
+    let old: Vec<(Uuid, Option<i16>)> = sqlx::query_as("SELECT uid, rank FROM ratings").fetch_all(&mut *tx).await?;
+    let ranks_changed = old
+        .iter()
+        .filter(|(uid, rank)| states.get(uid).copied().unwrap_or_default().rank.map(Rank::index) != *rank)
+        .count();
+    let uids: Vec<Uuid> = old.iter().map(|(uid, _)| *uid).collect();
+    let state = |uid: &Uuid| states.get(uid).copied().unwrap_or_default();
+    let ranks: Vec<Option<i16>> = uids.iter().map(|u| state(u).rank.map(Rank::index)).collect();
+    let rds: Vec<f64> = uids.iter().map(|u| state(u).rd).collect();
+    sqlx::query(
+        "UPDATE ratings r SET rank = v.rank, rd = v.rd
+           FROM unnest($1::uuid[], $2::smallint[], $3::float8[]) AS v(uid, rank, rd)
+          WHERE r.uid = v.uid",
+    )
+    .bind(&uids)
+    .bind(&ranks)
+    .bind(&rds)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(Recomputed { sets: events.len(), players: uids.len(), ranks_changed })
+}
+
+/// Fills ranks and RDs after the migration that adds them (any `ratings.rd` still NULL). Run after
+/// migrating, before serving.
+pub async fn backfill_tiers(pool: &PgPool) -> sqlx::Result<Option<Recomputed>> {
+    let (missing,): (bool,) =
+        sqlx::query_as("SELECT EXISTS (SELECT 1 FROM ratings WHERE rd IS NULL)").fetch_one(pool).await?;
+    if !missing {
+        return Ok(None);
+    }
+    let done = recompute_tiers(pool).await?;
+    tracing::info!(sets = done.sets, players = done.players, "ranked tiers filled from the rating history");
+    Ok(Some(done))
 }
 
 #[derive(Debug, Clone, sqlx::FromRow)]
@@ -137,28 +255,39 @@ pub async fn settle(
         let mut sorted = players;
         sorted.sort();
         sqlx::query(
-            "INSERT INTO ratings (uid, rating) SELECT u, $2 FROM unnest($1::uuid[]) AS u ON CONFLICT (uid) DO NOTHING",
+            "INSERT INTO ratings (uid, rating, rd) SELECT u, $2, $3 FROM unnest($1::uuid[]) AS u
+             ON CONFLICT (uid) DO NOTHING",
         )
         .bind(&sorted[..])
         .bind(ranked::DEFAULT_RATING)
+        .bind(ranked::RD_START)
         .execute(&mut *tx)
         .await?;
-        let rows: Vec<(Uuid, f64, i32)> =
-            sqlx::query_as("SELECT uid, rating, sets_played FROM ratings WHERE uid = ANY($1) ORDER BY uid FOR UPDATE")
-                .bind(&sorted[..])
-                .fetch_all(&mut *tx)
-                .await?;
-        let before: HashMap<Uuid, Standing> =
-            rows.into_iter().map(|(u, rating, n)| (u, Standing { rating, sets_played: n.max(0) as u32 })).collect();
+        #[allow(clippy::type_complexity)]
+        let rows: Vec<(Uuid, f64, i32, Option<i16>, Option<f64>)> = sqlx::query_as(
+            "SELECT uid, rating, sets_played, rank, rd FROM ratings WHERE uid = ANY($1) ORDER BY uid FOR UPDATE",
+        )
+        .bind(&sorted[..])
+        .fetch_all(&mut *tx)
+        .await?;
+        let before: HashMap<Uuid, (Standing, TierState)> = rows
+            .into_iter()
+            .map(|(u, rating, n, rank, rd)| {
+                (u, (Standing { rating, sets_played: n.max(0) as u32 }, stored_tier(rank, rd)))
+            })
+            .collect();
         let st = players.map(|p| before.get(&p).copied().unwrap_or_default());
         for i in 0..2 {
             let Some(score) = scores[i] else { continue };
-            let (me, opp) = (st[i], st[1 - i]);
+            let ((me, my_tier), (opp, opp_tier)) = (st[i], st[1 - i]);
             let k = ranked::k_factor(me.sets_played);
             let after = ranked::updated(me.rating, me.sets_played, opp.rating, score);
+            // Both players' rank states move on from the states before the set (the opponent's RD
+            // as it was), as `ranked::replay` does.
+            let tier = my_tier.after_set(me.sets_played, me.rating, after, (opp.rating, opp_tier.rd));
             sqlx::query(
                 "UPDATE ratings SET rating = $2, sets_played = sets_played + 1,
-                        wins = wins + $3, losses = losses + $4, updated_at = $5
+                        wins = wins + $3, losses = losses + $4, updated_at = $5, rank = $6, rd = $7
                   WHERE uid = $1",
             )
             .bind(players[i])
@@ -166,12 +295,15 @@ pub async fn settle(
             .bind(i32::from(score > 0.5))
             .bind(i32::from(score < 0.5))
             .bind(now)
+            .bind(tier.rank.map(Rank::index))
+            .bind(tier.rd)
             .execute(&mut *tx)
             .await?;
             sqlx::query(
                 "INSERT INTO rating_events (uid, match_id, opponent, score, rating_before, rating_after,
-                                            opponent_rating, k, sets_before, created_at)
-                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+                                            opponent_rating, k, sets_before, created_at,
+                                            rank_before, rank_after, rd_after)
+                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
             )
             .bind(players[i])
             .bind(match_id)
@@ -183,6 +315,9 @@ pub async fn settle(
             .bind(k)
             .bind(me.sets_played as i32)
             .bind(now)
+            .bind(my_tier.rank.map(Rank::index))
+            .bind(tier.rank.map(Rank::index))
+            .bind(tier.rd)
             .execute(&mut *tx)
             .await?;
         }

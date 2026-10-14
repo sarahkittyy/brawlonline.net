@@ -102,6 +102,20 @@ pub async fn chat_report_done(pool: &PgPool, actor: &str, id: i64) -> anyhow::Re
     Ok(done)
 }
 
+/// `admin ranked recompute`: every rank and placement from the rating history, audit-logged.
+pub async fn recompute_ranked_tiers(pool: &PgPool, actor: &str) -> anyhow::Result<accounts::ranked::Recomputed> {
+    let done = accounts::ranked::recompute_tiers(pool).await?;
+    store::audit(
+        pool,
+        actor,
+        "ranked.recompute_tiers",
+        None,
+        serde_json::json!({ "players": done.players, "sets": done.sets, "ranks_changed": done.ranks_changed }),
+    )
+    .await?;
+    Ok(done)
+}
+
 /// A bug report as `admin bug list` / `admin bug show` print it (`migrations/0011_bug_reports.sql`).
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct BugReportRow {
