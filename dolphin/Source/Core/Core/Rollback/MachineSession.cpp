@@ -4485,6 +4485,20 @@ picojson::value Status()
   o["speed"] = picojson::value(s.speed);
   o["synctest"] = picojson::value(static_cast<double>(s.opts.synctest));
   o["epoch"] = picojson::value(static_cast<double>(s.epoch));
+  {
+    // What this machine's UDP socket sent and received (ENet's counters; datagrams, UDP payload
+    // bytes): the session's upload, for traffic tests.
+    std::unique_lock nlk(s.net_mutex, std::try_to_lock);
+    if (nlk.owns_lock() && s.host)
+    {
+      picojson::object net;
+      net["sent_bytes"] = picojson::value(static_cast<double>(s.host->totalSentData));
+      net["sent_datagrams"] = picojson::value(static_cast<double>(s.host->totalSentPackets));
+      net["received_bytes"] = picojson::value(static_cast<double>(s.host->totalReceivedData));
+      net["received_datagrams"] = picojson::value(static_cast<double>(s.host->totalReceivedPackets));
+      o["net"] = picojson::value(net);
+    }
+  }
   o["frame_base"] = picojson::value(static_cast<double>(s.frame_base));
   o["plan_frame"] = picojson::value(static_cast<double>(s.plan.active ? s.plan.frame : -1));
   o["image_ms"] = picojson::value(s.image_ms);
