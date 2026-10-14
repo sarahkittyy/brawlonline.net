@@ -70,6 +70,8 @@ const fileName = (p: string | null) => (p ? p.split(/[\\/]/).pop() ?? p : null);
 
 /** Where Wii Rollback's beta feedback goes. */
 const FEEDBACK_URL = "https://brawlonline.net/discord";
+/** How long the public switch shows a click the room file does not say yet. */
+const PUBLIC_WAIT_MS = 5000;
 
 /** Home > Other Games (docs/design/brawl-mods.md §8): the player's games and mods, and the room Dolphin runs. */
 export const ModsView = (props: ModsViewProps) => {
@@ -413,8 +415,24 @@ const RoomPanel = ({
   onCopyCode: (code: string) => void;
 }) => {
   const [dragFrom, setDragFrom] = useState<number | null>(null);
+  // The public switch moves at the click: the room file says it only after Dolphin and the
+  // server have (up to ~1.5 s of file polls plus the round trip). Back to the room's value once
+  // it agrees, or when it never does (refused, lost).
+  const [publicClicked, setPublicClicked] = useState<boolean | null>(null);
   const room = status?.room ?? null;
   const isHost = !!room && room.host === room.you;
+  const roomPublic = room?.public;
+  useEffect(() => {
+    if (publicClicked === null) {
+      return;
+    }
+    if (roomPublic === publicClicked) {
+      setPublicClicked(null);
+      return;
+    }
+    const timer = setTimeout(() => setPublicClicked(null), PUBLIC_WAIT_MS);
+    return () => clearTimeout(timer);
+  }, [publicClicked, roomPublic]);
   const sessionError = status?.session?.phase === "error" ? status.session.error : undefined;
   let title: string = Messages.yourRoom();
   if (room) {
@@ -440,8 +458,11 @@ const RoomPanel = ({
                 <label className={styles.toggle}>
                   <Switch
                     size="small"
-                    checked={room.public}
-                    onChange={(e) => onRequest({ op: "public", public: e.target.checked })}
+                    checked={publicClicked ?? room.public}
+                    onChange={(e) => {
+                      setPublicClicked(e.target.checked);
+                      onRequest({ op: "public", public: e.target.checked });
+                    }}
                   />
                   {Messages.publicRoom()}
                 </label>

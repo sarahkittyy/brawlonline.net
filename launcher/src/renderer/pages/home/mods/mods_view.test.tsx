@@ -1,5 +1,5 @@
 import type { ModBuild, ModRoomStatus, ModsState } from "@dolphin/mods/types";
-import { cleanup, fireEvent, render, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ModsMessages as Messages } from "./mods.messages";
@@ -159,6 +159,34 @@ describe("ModsView", () => {
     expect(p.onRequest).toHaveBeenCalledWith({ op: "leave" });
     // Host and join are off while Dolphin runs a room.
     expect((getByText(Messages.host()).closest("button") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("moves the room's public switch at the click, before the room file says it", () => {
+    vi.useFakeTimers();
+    try {
+      const p = props({ builds: [minus], running: true, status: room(1) });
+      const { getAllByLabelText, rerender } = render(<ModsView {...p} />);
+      // The room's switch comes first (the build row's own is for the next Host).
+      const toggle = () => getAllByLabelText(Messages.publicRoom())[0] as HTMLInputElement;
+      expect(toggle().checked).toBe(false);
+      fireEvent.click(toggle());
+      expect(p.onRequest).toHaveBeenCalledWith({ op: "public", public: true });
+      expect(toggle().checked).toBe(true);
+      // The room file agrees: it is the room's value from then on.
+      const on = room(1);
+      on.room!.public = true;
+      rerender(<ModsView {...p} state={{ ...p.state!, status: on }} />);
+      expect(toggle().checked).toBe(true);
+      // A click the room never takes (refused, lost) goes back after a while.
+      fireEvent.click(toggle());
+      expect(toggle().checked).toBe(false);
+      act(() => {
+        vi.advanceTimersByTime(5000);
+      });
+      expect(toggle().checked).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("gives a member no host controls", () => {
