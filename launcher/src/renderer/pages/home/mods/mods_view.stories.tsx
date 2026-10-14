@@ -85,7 +85,7 @@ const room = (you: number, extra: Partial<ModRoomStatus> = {}): ModRoomStatus =>
   ...extra,
 });
 
-type ViewState = Omit<ModsState, "controller" | "controllers" | "lastError"> & Partial<ModsState>;
+type ViewState = Omit<ModsState, "controller" | "controllers" | "lastError" | "hashing"> & Partial<ModsState>;
 
 const Frame = ({ state, ...props }: Omit<Partial<ModsViewProps>, "state"> & { state: ViewState | null }) => (
   <div style={{ width: 900, height: 640, display: "flex", background: "var(--theme-page-background)" }}>
@@ -94,6 +94,7 @@ const Frame = ({ state, ...props }: Omit<Partial<ModsViewProps>, "state"> & { st
         state && {
           controller: "gc",
           lastError: null,
+          hashing: {},
           controllers: {
             gc: [{ index: 1, device: "GameCube adapter", label: "GameCube adapter" }],
             wiimote: [{ index: 1, device: "", label: "Real Wii Remote", real: true }],
@@ -144,6 +145,11 @@ const Frame = ({ state, ...props }: Omit<Partial<ModsViewProps>, "state"> & { st
 export const NoBuilds = () => <Frame state={{ builds: [], running: false, status: null }} />;
 
 export const Builds = () => <Frame state={{ builds, running: false, status: null }} hashProgress={{ rex: 0.37 }} />;
+
+/** DolphinTool hashing a compressed disc: no share to show until it is done. */
+export const CheckingCompressedDisc = () => (
+  <Frame state={{ builds, running: false, status: null }} hashProgress={{ rex: null }} />
+);
 
 export const Hosting = () => <Frame state={{ builds, running: true, status: room(1) }} />;
 

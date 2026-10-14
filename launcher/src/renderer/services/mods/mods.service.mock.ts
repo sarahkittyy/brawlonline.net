@@ -55,6 +55,7 @@ class MockModsClient implements ModsService {
   ];
   private status: ModRoomStatus | null = null;
   private listeners = new Set<(event: ModsEvent) => void>();
+  private hashing: Record<string, number | null> = {};
   private controller: ModsController = "gc";
   private readonly controllers: DolphinControllers = {
     gc: [{ index: 1, device: "GameCube adapter", label: "GameCube adapter" }],
@@ -69,6 +70,7 @@ class MockModsClient implements ModsService {
       lastError: null,
       controller: this.controller,
       controllers: this.controllers,
+      hashing: { ...this.hashing },
     };
   }
 
@@ -116,11 +118,15 @@ class MockModsClient implements ModsService {
   }
 
   async hashBuild(id: string) {
-    const total = 8_500_000_000;
-    for (let done = 0; done <= total; done += total / 20) {
-      this.listeners.forEach((l) => l({ type: "hashProgress", progress: { id, done, total } }));
+    this.hashing[id] = 0;
+    this.emit();
+    for (let step = 0; step <= 20; step++) {
+      const fraction = step / 20;
+      this.hashing[id] = fraction;
+      this.listeners.forEach((l) => l({ type: "hashProgress", progress: { id, fraction } }));
       await new Promise((resolve) => setTimeout(resolve, 100));
     }
+    delete this.hashing[id];
     this.builds = this.builds.map((b) => (b.id === id ? { ...b, hash: "a".repeat(64), hashKey: "1" } : b));
     this.emit();
     return this.builds.find((b) => b.id === id)!;

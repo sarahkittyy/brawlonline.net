@@ -45,8 +45,8 @@ export type ModsViewProps = {
   state: ModsState | null;
   publicRooms: ModsPublicRooms;
   onLogIn: () => void;
-  /** Hashing progress (0-1) by build id. */
-  hashProgress: Record<string, number>;
+  /** The builds being hashed, by id: the share done (0-1), or null while it is not known. */
+  hashProgress: Record<string, number | null>;
   /** A build whose host or join is starting Dolphin. */
   startingBuildId: string | null;
   error: string | null;
@@ -340,7 +340,8 @@ const BuildRow = ({
   onHost,
 }: {
   build: ModBuild;
-  progress: number | undefined;
+  /** Hashing: the share done, null while not known; undefined when not hashing. */
+  progress: number | null | undefined;
   starting: boolean;
   disabled: boolean;
   onRemove: () => void;
@@ -375,8 +376,12 @@ const BuildRow = ({
       </div>
       {hashing && (
         <div className={styles.progress}>
-          <LinearProgress variant="determinate" value={progress * 100} />
-          <span>{Messages.checking(Math.floor(progress * 100))}</span>
+          {progress === null ? (
+            <LinearProgress variant="indeterminate" />
+          ) : (
+            <LinearProgress variant="determinate" value={progress * 100} />
+          )}
+          <span>{progress === null ? Messages.checkingDisc() : Messages.checking(Math.floor(progress * 100))}</span>
         </div>
       )}
       <div className={styles.actions}>
@@ -389,7 +394,7 @@ const BuildRow = ({
         <Tooltip title={Messages.hostTooltip()}>
           <span>
             <Button variant="contained" size="small" disabled={disabled || hashing} onClick={() => onHost(isPublic)}>
-              {starting ? Messages.opening() : Messages.host()}
+              {starting && !hashing ? Messages.opening() : Messages.host()}
             </Button>
           </span>
         </Tooltip>

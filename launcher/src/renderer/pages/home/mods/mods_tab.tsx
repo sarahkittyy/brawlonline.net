@@ -39,7 +39,7 @@ export const ModsTab = React.memo(function ModsTab() {
   const { showError, showSuccess } = useToasts();
   const isoPath = useSettings((store) => store.settings.isoPath);
   const [state, setState] = useState<ModsState | null>(null);
-  const [hashProgress, setHashProgress] = useState<Record<string, number>>({});
+  const [hashProgress, setHashProgress] = useState<Record<string, number | null>>({});
   const [startingBuildId, setStartingBuildId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   // The add dialog: closed, a game (a disc), or a mod (found in a folder, on the Brawl disc).
@@ -62,23 +62,25 @@ export const ModsTab = React.memo(function ModsTab() {
 
   useEffect(() => {
     let alive = true;
-    void modsService.getState().then((s) => alive && setState(s));
+    // The hashes running come with the state (a check started before this tab opened shows), and
+    // their progress between states as events.
+    void modsService.getState().then((s) => {
+      if (alive) {
+        setState(s);
+        setHashProgress(s.hashing);
+      }
+    });
     const stop = modsService.onEvent((event) => {
       if (event.type === "state") {
         setState(event.state);
+        setHashProgress(event.state.hashing);
       } else if (event.type === "duplicate") {
         showError(Messages.duplicate(event.name));
+      } else if (event.type === "hashFailed") {
+        showError(Messages.hashFailed(event.name, event.error));
       } else {
-        const { id, done, total } = event.progress;
-        setHashProgress((p) => {
-          const next = { ...p };
-          if (total > 0 && done >= total) {
-            delete next[id];
-          } else {
-            next[id] = total > 0 ? done / total : 0;
-          }
-          return next;
-        });
+        const { id, fraction } = event.progress;
+        setHashProgress((p) => ({ ...p, [id]: fraction }));
       }
     });
     return () => {
@@ -120,11 +122,6 @@ export const ModsTab = React.memo(function ModsTab() {
         setError(errorText(err));
       } finally {
         setStartingBuildId(null);
-        setHashProgress((p) => {
-          const next = { ...p };
-          delete next[build.id];
-          return next;
-        });
       }
     },
     [ensureOnline],

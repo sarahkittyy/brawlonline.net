@@ -56,12 +56,13 @@ const nsmbw: ModBuild = {
   hashKey: "k",
 };
 
-type ViewState = Omit<ModsState, "controller" | "controllers" | "lastError"> & Partial<ModsState>;
+type ViewState = Omit<ModsState, "controller" | "controllers" | "lastError" | "hashing"> & Partial<ModsState>;
 
 const props = (state: ViewState | null, extra: Partial<ModsViewProps> = {}): ModsViewProps => ({
   state: state && {
     controller: "gc",
     lastError: null,
+    hashing: {},
     controllers: {
       gc: [{ index: 1, device: "XInput/0/Gamepad", label: "Xbox controller" }],
       wiimote: [{ index: 1, device: "", label: "Real Wii Remote", real: true }],
@@ -121,6 +122,27 @@ describe("ModsView", () => {
     const { getByText } = render(<ModsView {...p} />);
     expect(getByText(Messages.checking(42))).toBeTruthy();
     expect((getByText(Messages.host()).closest("button") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("shows a check whose share is not known (DolphinTool on a compressed disc) without a percentage", () => {
+    const p = props(
+      { builds: [{ ...minus, hash: null }], running: false, status: null },
+      { hashProgress: { minus: null } },
+    );
+    const { getByText, getByRole } = render(<ModsView {...p} />);
+    expect(getByText(Messages.checkingDisc())).toBeTruthy();
+    expect(getByRole("progressbar").getAttribute("aria-valuenow")).toBeNull();
+    expect((getByText(Messages.host()).closest("button") as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("keeps Host's label while Host waits for the check, and the bar shows it", () => {
+    const p = props(
+      { builds: [{ ...minus, hash: null }], running: false, status: null },
+      { hashProgress: { minus: 0.1 }, startingBuildId: "minus" },
+    );
+    const { getByText, queryByText } = render(<ModsView {...p} />);
+    expect(getByText(Messages.checking(10))).toBeTruthy();
+    expect(queryByText(Messages.opening())).toBeNull();
   });
 
   it("shows the room to its host, with a kick for the other player and an open slot to close", () => {

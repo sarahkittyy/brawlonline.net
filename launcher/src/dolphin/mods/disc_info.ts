@@ -6,7 +6,16 @@
  * - `verify -a sha1`: the SHA-1 of the disc's contents, not of the file: an ISO and an RVZ of the
  *   same disc hash the same (and match the published dump hashes), since the machine reads the
  *   same bytes from either.
+ *
+ * A plain disc image (an ISO or GCM: the disc's bytes as they are) is the disc's contents, so its
+ * SHA-1 is the file's, hashed here instead: DolphinTool also checks every Wii block's hashes, and
+ * reports nothing until it is done (minutes for an 8.5 GB Brawl disc on a USB hard drive, with the
+ * bar at 0%), while the file's hash reports its progress.
  */
+
+import { open } from "fs/promises";
+import type { ByteProgress } from "utils/copy_file";
+import { hashFileWithProgress } from "utils/copy_file";
 
 import type { ExecFn } from "../dolphin_tool";
 import { execTool } from "../dolphin_tool";
@@ -49,7 +58,48 @@ export async function readDiscInfo(toolPath: string, discPath: string, exec: Exe
   return parseHeaderJson(out);
 }
 
-/** The SHA-1 (hex) of the disc's contents. */
+/** The magic numbers of a disc's header (Dolphin's DiscIO/VolumeWii.h and VolumeGC.h). */
+const WII_DISC_MAGIC = 0x5d1c9ea3;
+const GC_DISC_MAGIC = 0xc2339f3d;
+
+/**
+ * Whether the file holds the disc's bytes as they are: its header's magic is where the disc has
+ * it (a compressed image starts with a header of its own, so Dolphin's CISO, GCZ, TGC, WBFS, WIA,
+ * RVZ and NFS are not). Split images ("game.part0.iso" and on) go to DolphinTool, which reads
+ * all the parts.
+ */
+export async function isPlainDiscImage(discPath: string): Promise<boolean> {
+  if (/\.part\d+\.iso$/i.test(discPath)) {
+    return false;
+  }
+  const file = await open(discPath, "r");
+  try {
+    const header = Buffer.alloc(0x20);
+    const { bytesRead } = await file.read(header, 0, header.length, 0);
+    if (bytesRead < header.length) {
+      return false;
+    }
+    return header.readUInt32BE(0x18) === WII_DISC_MAGIC || header.readUInt32BE(0x1c) === GC_DISC_MAGIC;
+  } finally {
+    await file.close();
+  }
+}
+
+/** The SHA-1 (hex) of the disc's contents: the file's for a plain image (`onProgress` follows it),
+ * else DolphinTool's (`onProgress` hears nothing until it is done). */
+export async function discContentSha1WithProgress(
+  toolPath: string,
+  discPath: string,
+  onProgress?: ByteProgress,
+  exec: ExecFn = execTool,
+): Promise<string> {
+  if (await isPlainDiscImage(discPath)) {
+    return hashFileWithProgress(discPath, "sha1", onProgress);
+  }
+  return discContentSha1(toolPath, discPath, exec);
+}
+
+/** The SHA-1 (hex) of the disc's contents, from DolphinTool (any format). */
 export async function discContentSha1(toolPath: string, discPath: string, exec: ExecFn = execTool): Promise<string> {
   const out = await exec(toolPath, ["verify", "-i", discPath, "-a", "sha1"], VERIFY_TIMEOUT_MS);
   const hash = out.trim().toLowerCase();

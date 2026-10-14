@@ -22,8 +22,8 @@ export const BUILD_HASH_PREFIX = "brawl-mods-build-v2\n";
 
 type PathsOf = Pick<ModBuild, "discPath" | "launcherPath" | "sdPath">;
 
-/** The SHA-1 of a disc's contents (DolphinTool, `disc_info.ts`). */
-export type DiscDigest = (discPath: string) => Promise<string>;
+/** The SHA-1 of a disc's contents (`disc_info.ts`), reporting the disc's bytes done if it can. */
+export type DiscDigest = (discPath: string, onProgress?: ByteProgress) => Promise<string>;
 
 /** "<size>:<mtimeMs>" of each part ("-" for none): when it changes, the build is hashed again. */
 export async function buildHashKey(build: PathsOf): Promise<string> {
@@ -47,7 +47,7 @@ export function combineBuildHash(parts: ModBuildParts): string {
 
 /**
  * Every part's hash; `onProgress` gets the bytes done of all parts (the disc's all at once when
- * DolphinTool is done with it).
+ * the digest reports none: DolphinTool's).
  */
 export async function computeBuildParts(
   build: PathsOf,
@@ -59,7 +59,7 @@ export async function computeBuildParts(
   const sdSize = build.sdPath ? (await stat(build.sdPath)).size : 0;
   const total = discSize + launcherSize + sdSize;
   onProgress?.(0, total);
-  const disc = await discDigest(build.discPath);
+  const disc = await discDigest(build.discPath, (done) => onProgress?.(Math.min(done, discSize), total));
   onProgress?.(discSize, total);
   const launcher = build.launcherPath
     ? await hashFileWithProgress(build.launcherPath, "sha256", (done) => onProgress?.(discSize + done, total))

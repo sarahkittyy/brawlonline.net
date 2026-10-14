@@ -10,7 +10,7 @@ import type { DolphinManager } from "../manager";
 import { DolphinLaunchType } from "../types";
 import { buildHashKey, combineBuildHash, computeBuildParts } from "./build_hash";
 import { defaultControllerKind, readDolphinControllers } from "./controllers";
-import { discContentSha1, readDiscInfo } from "./disc_info";
+import { discContentSha1WithProgress, isPlainDiscImage, readDiscInfo } from "./disc_info";
 import { findModParts } from "./folder_import";
 import { knownDiscName, knownModName } from "./known_builds";
 import type { ModsRoomArg } from "./mods_args";
@@ -101,6 +101,8 @@ export class ModsManager {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private readonly listeners = new Set<(event: ModsEvent) => void>();
   private readonly hashing = new Map<string, Promise<ModBuild>>();
+  /** The progress of each hash running (`ModsState.hashing`). */
+  private readonly hashProgress = new Map<string, number | null>();
   private controllers: DolphinControllers = { gc: [], wiimote: [] };
   private lastError: string | null = null;
   private controllersRead = false;
@@ -148,6 +150,7 @@ export class ModsManager {
       lastError: this.lastError,
       controller: this.controller(),
       controllers: this.controllers,
+      hashing: Object.fromEntries(this.hashProgress),
     };
   }
 
@@ -227,7 +230,13 @@ export class ModsManager {
     };
     await this.saveBuilds([...this.builds(), build]);
     // Hashed at once (in the background): a known game or mod gets its name, and Host is quick.
-    void this.hashBuild(build.id).catch((err) => log.warn(`hashing ${build.name}: ${err}`));
+    void this.hashBuild(build.id).catch((err) => {
+      log.warn(`hashing ${build.name}: ${err}`);
+      // A duplicate was said already ("duplicate"), and the game is gone.
+      if (this.builds().some((b) => b.id === build.id)) {
+        this.emit({ type: "hashFailed", name: build.name, error: err instanceof Error ? err.message : String(err) });
+      }
+    });
     return build;
   }
 
@@ -278,7 +287,12 @@ export class ModsManager {
     if (running) {
       return running;
     }
-    const job = this.doHash(id).finally(() => this.hashing.delete(id));
+    const job = this.doHash(id).finally(() => {
+      this.hashing.delete(id);
+      if (this.hashProgress.delete(id)) {
+        this.emitState();
+      }
+    });
     this.hashing.set(id, job);
     return job;
   }
@@ -341,11 +355,21 @@ export class ModsManager {
     if (build.hash && build.hashKey === key) {
       return build;
     }
-    const progress = throttleProgress((done, total) => {
-      this.emit({ type: "hashProgress", progress: { id, done, total } });
-    }, 200);
     const tool = await this.toolPath();
-    const parts = await computeBuildParts(build, (disc) => discContentSha1(tool, disc), progress);
+    // DolphinTool reports nothing while it hashes a compressed disc: the bar has no share then.
+    const plain = await isPlainDiscImage(build.discPath);
+    const discSize = (await stat(build.discPath)).size;
+    const progress = throttleProgress((done, total) => {
+      this.setHashProgress(id, !plain && done < discSize ? null : total > 0 ? done / total : 0);
+    }, 200);
+    const started = Date.now();
+    log.info(`Hashing ${build.name} (${plain ? "plain disc image" : "DolphinTool"}): ${build.discPath}`);
+    const parts = await computeBuildParts(
+      build,
+      (disc, onDisc) => discContentSha1WithProgress(tool, disc, onDisc),
+      progress,
+    );
+    log.info(`Hashed ${build.name} in ${((Date.now() - started) / 1000).toFixed(1)} s`);
     const hash = combineBuildHash(parts);
     // The build may have been edited meanwhile: keep the newest, with this hash if its parts are the same.
     const latest = this.findBuild(id);
@@ -419,6 +443,15 @@ export class ModsManager {
         })
         .catch((err) => log.warn(`reading the room file: ${err}`));
     }, POLL_MS);
+  }
+
+  private setHashProgress(id: string, fraction: number | null): void {
+    const first = !this.hashProgress.has(id);
+    this.hashProgress.set(id, fraction);
+    if (first) {
+      this.emitState();
+    }
+    this.emit({ type: "hashProgress", progress: { id, fraction } });
   }
 
   private emitState(): void {

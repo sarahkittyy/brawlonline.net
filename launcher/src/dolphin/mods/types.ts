@@ -146,8 +146,9 @@ export type ModRoomRequest =
   /** Opens Dolphin's Controllers settings over the game. */
   | { op: "configure" };
 
-/** Hashing a build: bytes done of the total. */
-export type ModsHashProgress = { id: string; done: number; total: number };
+/** Hashing a build: the share done (0-1), or null while the step running reports none
+ * (DolphinTool hashing a compressed disc image). */
+export type ModsHashProgress = { id: string; fraction: number | null };
 
 export type ModsState = {
   builds: ModBuild[];
@@ -162,13 +163,18 @@ export type ModsState = {
   controller: ModsController;
   /** The controllers set up in Dolphin, as last read. */
   controllers: DolphinControllers;
+  /** The builds being hashed, by id, with their progress (`ModsHashProgress.fraction`): kept here,
+   * so a tab opened again mid-hash shows it. */
+  hashing: Record<string, number | null>;
 };
 
 export type ModsEvent =
   | { type: "state"; state: ModsState }
   | { type: "hashProgress"; progress: ModsHashProgress }
   /** A game added twice (the same hash as one already in the list): it was taken out again. */
-  | { type: "duplicate"; name: string };
+  | { type: "duplicate"; name: string }
+  /** The check started when a game was added failed (Host checks it again). */
+  | { type: "hashFailed"; name: string; error: string };
 
 export type ModsHostOptions = { buildId: string; public: boolean };
 export type ModsJoinOptions = { buildId: string; code: string };
