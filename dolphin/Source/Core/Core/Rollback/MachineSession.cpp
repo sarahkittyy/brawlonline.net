@@ -1258,8 +1258,9 @@ std::vector<std::string> RealWiimoteDevices()
 
 // From the player's own settings (the base layer: the session's layer makes every port a standard
 // controller and every Wii Remote an emulated one): the first controller of the kind set up that
-// is plugged in, else the first set up, else port 1 / Wii Remote 1. A Wii Remote set up as a real
-// one is the next real Wii Remote connected, in Dolphin's order.
+// is plugged in, else the first set up, else port 1 / Wii Remote 1. Wii Remote N set up as a real
+// one is the Nth real Wii Remote connected (in Dolphin's order), else the next one: two Dolphins
+// on one computer (Wii Remote 1 and Wii Remote 2) each play their own.
 LocalControllerInfo PickLocal(Controller kind)
 {
   std::optional<LocalControllerInfo> first;
@@ -1310,8 +1311,9 @@ LocalControllerInfo PickLocal(Controller kind)
       else if (source == WiimoteSource::Real)
       {
         p.real = true;
-        p.plugged = real_n < reals.size();
-        p.device = p.plugged ? reals[real_n] : fmt::format("Bluetooth/{}/Wii Remote", real_n);
+        const size_t n = static_cast<size_t>(i) < reals.size() ? static_cast<size_t>(i) : real_n;
+        p.plugged = n < reals.size();
+        p.device = p.plugged ? reals[n] : fmt::format("Bluetooth/{}/Wii Remote", i);
         ++real_n;
       }
       else
