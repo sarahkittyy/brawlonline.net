@@ -311,6 +311,14 @@ class Sampler:
         self._stop.set()
         self._thread.join(5)
 
+    def error(self) -> str | None:
+        """The viewer's error, once it has one (it never recovers from it: fail at once)."""
+        for s in self.samples:
+            f = s.get("file", {})
+            if f.get("state") == "error":
+                return f"{f.get('error')} (needsPlayAnyway {f.get('needsPlayAnyway')})"
+        return None
+
 
 @pytest.mark.slow
 def test_a_spectator_joins_a_set_mid_game_and_watches_it_live(
@@ -346,11 +354,17 @@ def test_a_spectator_joins_a_set_mid_game_and_watches_it_live(
         online_set.play_set([a, b], games=2, mode="direct", panels={g.name: g.panel for g in (a, b)})
         for g in (a, b):
             g.c.mm_cancel()
+        # The viewer rebuilds the match with the online rules (no account, as the launcher's
+        # playback Dolphin): a template whose games keep other rules ("setup differs") can't be
+        # watched, and nothing below would end.
+        assert sampler.error() is None, f"the viewer can't play the stream: {sampler.error()}"
         # The stream is over 120 s after its last game (docs/spectate-protocol.md §2).
-        online_set.wait(lambda: writer.over or writer.error, 400, "the stream to be over")
+        online_set.wait(lambda: writer.over or writer.error or sampler.error(), 400, "the stream to be over")
         assert writer.error is None, writer.error
-        online_set.wait(lambda: sampler.samples and sampler.samples[-1]["file"].get("state") == "close",
-                        900, "the viewer to reach the end and ask to be closed")
+        online_set.wait(lambda: sampler.error() or (
+            sampler.samples and sampler.samples[-1]["file"].get("state") == "close"),
+            900, "the viewer to reach the end and ask to be closed")
+        assert sampler.error() is None, f"the viewer can't play the stream: {sampler.error()}"
         v.shot("end")
     finally:
         sampler.stop()
