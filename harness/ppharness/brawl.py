@@ -580,8 +580,9 @@ class PlayerSetup:
     character: int        # gmCharacterKind
     state: int            # 0 human, 1 CPU, 3 none
     stocks: int
-    color: int
+    color: int            # +0x05 m_colorFileNo (the Versus setup's, from the character and costume)
     controller: int
+    color_no: int = -1    # +0x06 m_colorNo: the costume as the CSS (or the plugin) wrote it
 
     @property
     def present(self) -> bool:
@@ -665,7 +666,8 @@ def _game_global(m: Mem, off: int) -> int:
 def _read_player_init(m: Mem, base: int, port: int) -> PlayerSetup:
     b = m.read(base + port * MM_PLAYER_SIZE, 8)
     return PlayerSetup(port, b[PI_CHARACTER], b[PI_STATE], struct.unpack(">b", b[4:5])[0],
-                       struct.unpack(">b", b[5:6])[0], struct.unpack(">b", b[7:8])[0])
+                       struct.unpack(">b", b[5:6])[0], struct.unpack(">b", b[7:8])[0],
+                       struct.unpack(">b", b[6:7])[0])
 
 
 def read_match_setup(read_mem: ReadMem) -> Optional[MatchSetup]:
@@ -1829,6 +1831,38 @@ def sss_pick_stage(drv: Driver, stage_kind: int, port: int = 0, timeout_frames: 
     neutral(drv, port)
     raise RecipeError(f"could not pick stage {stage_kind:#x} (targets {targets})",
                       {"sss": read_sss(drv.read_mem), "learned": dict(LEARNED_SSS)})
+
+
+def sss_hover_item(drv: Driver, item: int, port: int = 0, timeout_frames: int = 900) -> SssView:
+    """Steer the stage select's cursor until the hovered item (task+0x244) is ``item`` (e.g.
+    ``SSS_ITEM_PAGE``, P+'s page button below the icons), let go of the stick and return the view.
+    Presses nothing."""
+    route = _serpentine(SSS_SCAN_X, (-18.0, -20.0, -22.0, -24.0, -16.0))
+    wp, stuck = 0, 0
+    prev: Optional[Tuple[float, float]] = None
+    start = polls(drv)
+    while polls(drv) - start < timeout_frames:
+        v = read_sss(drv.read_mem)
+        if v is None:
+            raise RecipeError("left the SSS while steering", read_scene(drv.read_mem))
+        if v.hovered_item == item:
+            neutral(drv, port)
+            step(drv, 10)
+            v = read_sss(drv.read_mem)
+            if v is not None and v.hovered_item == item:
+                return v
+            continue
+        x, y = v.cursor_x, v.cursor_y
+        tx, ty = route[wp % len(route)]
+        moved = prev is not None and math.hypot(x - prev[0], y - prev[1]) > 0.2
+        stuck = 0 if moved else stuck + 1
+        if math.hypot(tx - x, ty - y) < 2.5 or stuck > 8:
+            wp, stuck = wp + 1, 0
+        drv.pad_set(port, buttons=(), main=steer_toward(x, y, tx, ty, full_tilt_at=2.0))
+        prev = (x, y)
+        step(drv, 1)
+    neutral(drv, port)
+    raise RecipeError(f"could not hover SSS item {item:#x}", read_sss(drv.read_mem))
 
 
 def _confirm_stage(drv: Driver, stage_kind: int, view: Optional[SssView]) -> Optional[SssView]:

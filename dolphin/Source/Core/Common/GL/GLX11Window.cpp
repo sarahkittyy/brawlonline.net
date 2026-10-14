@@ -42,7 +42,10 @@ std::unique_ptr<GLX11Window> GLX11Window::Create(Display* display, Window parent
   Window window =
       XCreateWindow(display, parent_window, 0, 0, parent_attribs.width, parent_attribs.height, 0,
                     vi->depth, InputOutput, vi->visual, CWColormap, &attribs);
-  XSelectInput(display, parent_window, StructureNotifyMask);
+  // `display` is Qt's own connection (MainWindow's GetWindowSystemInfo), and X keeps one event
+  // mask per connection per window: selecting only StructureNotifyMask would replace Qt's, and the
+  // render widget would get no mouse or key events (ImGui's chat window could not be clicked).
+  XSelectInput(display, parent_window, parent_attribs.your_event_mask | StructureNotifyMask);
   XMapWindow(display, window);
   XSync(display, True);
 

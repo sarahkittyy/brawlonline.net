@@ -31,7 +31,8 @@ const room = (code: string, r?: RoomRuleset): PublicRoom => ({
 describe("the room list's ruleset column", () => {
   const rooms = [
     room("KFQB", ruleset({ code: "KFQBTR", name: "NorCal Weekly", version: 3, by: "sarah", bestOf: 3 })),
-    room("PLNX", ruleset({ name: "NorCal Weekly", basedOn: "NorCal Weekly v3" })),
+    room("PLNX", ruleset({ name: "Custom", basedOn: "NorCal Weekly v3" })),
+    room("CSTM", ruleset({ name: "Custom" })),
     room("HBPL", ruleset({})),
     room("MXWW"),
   ];
@@ -49,7 +50,8 @@ describe("the room list's ruleset column", () => {
     const cell = (roomCode: string) =>
       container.querySelector(`[data-room="${roomCode}"] [class*="ruleset"]`)?.textContent ?? null;
     expect(cell("KFQB")).toBe("NorCal Weekly");
-    expect(cell("PLNX")).toBe("Custom (based on NorCal Weekly v3)");
+    expect(cell("PLNX")).toBe("Custom"); // not what it was made from (the user's, 2026-10-12)
+    expect(cell("CSTM")).toBe("Custom"); // P+ default edited
     expect(cell("HBPL")).toBe("");
     expect(cell("MXWW")).toBe("");
   });

@@ -64,6 +64,11 @@ class MockReplayClient implements ReplayService {
     return { deletedCount: 4 };
   }
 
+  @delayAndMaybeError(SHOULD_ERROR)
+  async findReplaysForMatches(_matchIds: string[], _folders: string[]): Promise<Record<string, string[]>> {
+    return {};
+  }
+
   onReplayLoadProgressUpdate(_handle: (progress: Progress) => void): () => void {
     return () => void 0;
   }

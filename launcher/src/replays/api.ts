@@ -4,6 +4,7 @@ import {
   ipc_calculateGameStats,
   ipc_calculateStadiumStats,
   ipc_deleteReplays,
+  ipc_findReplaysForMatches,
   ipc_getAllFilePaths,
   ipc_initializeFolderTree,
   ipc_loadProgressUpdatedEvent,
@@ -43,6 +44,10 @@ const replayApi: ReplayService = {
   },
   async bulkDeleteReplays(options: BulkDeleteOptions) {
     const { result } = await ipc_bulkDeleteReplays.renderer!.trigger(options);
+    return result;
+  },
+  async findReplaysForMatches(matchIds: string[], folders: string[]) {
+    const { result } = await ipc_findReplaysForMatches.renderer!.trigger({ matchIds, folders });
     return result;
   },
   onReplayLoadProgressUpdate(handle: (progress: Progress) => void) {

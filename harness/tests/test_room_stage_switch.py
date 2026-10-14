@@ -10,6 +10,8 @@ stages (SESSION RoomStages) and the host edits them; tools/gamecode/roomsim.py p
 - The cursor's frame is on its own tile on every frame of a move (it showed for a frame over
   another stage, staging feedback 2026-10-12).
 - A set: the bar is ON (a set's loser always picks from the list) and A on it changes nothing.
+- The footer's two lines (the stage, and the legend: ON / STR / OFF and the hazards) over the
+  CSS's READY TO FIGHT banner (screenshots).
 
 Screenshots: run/artifacts/game-code/rooms/stage-switch/.
 """
@@ -19,7 +21,7 @@ import struct
 
 import pytest
 
-from test_rooms_ui import ROOT, Game, PadInput, ppom, roomsim
+from test_rooms_ui import FOX, ROOT, Game, PadInput, ppom, roomsim
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.gpu]
 
@@ -257,3 +259,19 @@ def test_a_sets_bar_is_the_list(game: Game) -> None:
     g.shot("01-set")
     close_menu(g)
     assert not sim.stages_requests, sim.stages_requests
+
+
+def test_the_footer_over_the_ready_banner(game: Game) -> None:
+    g = game
+    in_room(g, host=True)
+    g.hand_to(*FOX)
+    g.tap("A")
+    g.wait(20)
+    assert g.banner_shown(), "no READY TO FIGHT with a character"
+    open_switch(g)
+    g.shot("20-bar-over-banner")
+    goto_stage(g, FD)
+    g.wait(15)
+    g.shot("21-stage-over-banner")
+    close_menu(g)
+    assert g.banner_shown(), "READY TO FIGHT gone after the menu"

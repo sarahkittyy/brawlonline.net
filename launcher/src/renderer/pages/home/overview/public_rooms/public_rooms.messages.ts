@@ -1,6 +1,6 @@
 export const PublicRoomsMessages = {
   publicRooms: () => "Public rooms",
-  customRuleset: (basedOn: string) => (basedOn ? `Custom (based on ${basedOn})` : "Custom rules"),
+  customRuleset: () => "Custom",
   rulesetTooltip: (name: string, version: number, by: string) =>
     `${name} v${version} by ${by}. Click to see the rules.`,
   createRoom: () => "Create room",

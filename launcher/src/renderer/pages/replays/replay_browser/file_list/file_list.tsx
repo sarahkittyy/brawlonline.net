@@ -5,6 +5,7 @@ import React from "react";
 import { create } from "zustand";
 
 import { IconMenu } from "@/components/icon_menu";
+import { useReplayHighlight } from "@/lib/hooks/use_replay_highlight";
 
 import { ReplayFileContainer } from "../replay_file/replay_file.container";
 import { FileListMessages as Messages } from "./file_list.messages";
@@ -67,6 +68,28 @@ const FileListResults = ({
       }
     }
   }, [folderPath]);
+
+  // The replays the match history asked for: scroll to the first one once its row is there,
+  // loading further pages until it is (it may be an old match's)
+  const highlightNonce = useReplayHighlight((store) => (store.paths.length > 0 ? store.nonce : 0));
+  const scrolledNonceRef = React.useRef(0);
+  const pagesLoadedRef = React.useRef({ nonce: 0, count: 0 });
+  React.useEffect(() => {
+    if (!highlightNonce || scrolledNonceRef.current === highlightNonce || !scrollContainerRef.current) {
+      return;
+    }
+    if (pagesLoadedRef.current.nonce !== highlightNonce) {
+      pagesLoadedRef.current = { nonce: highlightNonce, count: 0 };
+    }
+    const row = scrollContainerRef.current.querySelector(`[data-replay-highlight="${highlightNonce}"]`);
+    if (row) {
+      scrolledNonceRef.current = highlightNonce;
+      row.scrollIntoView({ block: "center", behavior: "smooth" });
+    } else if (hasMoreReplays && files.length > 0 && pagesLoadedRef.current.count < 40) {
+      pagesLoadedRef.current.count += 1;
+      onLoadMore();
+    }
+  }, [highlightNonce, files, hasMoreReplays, onLoadMore]);
 
   // Use Intersection Observer for performant infinite scroll
   React.useEffect(() => {

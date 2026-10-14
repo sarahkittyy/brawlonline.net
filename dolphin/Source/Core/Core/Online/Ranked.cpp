@@ -326,6 +326,11 @@ void OnSessionStart(const Match& match)
   // Ranked: a pause-screen quit (a runback too) loses the game; elsewhere it does not count, and a
   // runback plays the same match again (docs/game-code.md §11, the quit per mode).
   Gprb::Session::SetQuitLoses(ranked);
+  // Ranked and a room's set: a desync plays the game again from the state every machine agreed on
+  // (the user's, 2026-10-13); elsewhere it only ends the game (docs/game-code.md, desync recovery).
+  const bool room_set = match.set && match.set->format.best_of > 0 &&
+                        match.players.size() == match.set->members[0].size() + match.set->members[1].size();
+  Gprb::Session::SetDesyncRecovery(ranked || room_set);
   int room_local_port = -1;
   for (const auto& p : match.players)
   {
@@ -407,6 +412,15 @@ void OnGameResult(const Gprb::Session::GameResult& r)
   std::lock_guard lk(s_mutex);
   if (!s_reporting || (s_active && s_set_over))
     return;
+  if (r.end == Gprb::Session::GameEnd::Desync)
+  {
+    // A desync in Ranked or a room's set (SetDesyncRecovery): no result; the session plays the
+    // same set game again, on its stage with its characters, from the agreed state.
+    if (GameSetup::IsActive())
+      GameSetup::OnGameRestarting(r.game, r.stage);
+    NOTICE_LOG_FMT(NETPLAY, "Ranked: game {} desynced: it starts again", r.game);
+    return;
+  }
   if (r.end != Gprb::Session::GameEnd::GameSet && !s_active)
   {
     // A quit outside Ranked did not count (no history either). A room's set plays that game
@@ -425,7 +439,10 @@ void OnGameResult(const Gprb::Session::GameResult& r)
   }
   picojson::object body;
   body["matchId"] = picojson::value(s_match_id);
-  body["gameIndex"] = picojson::value(static_cast<double>(r.game));
+  // Ranked: the set's game, which a desynced game played again keeps (the server counts a set's
+  // games in order and stops at a game nobody reported).
+  const u32 game_index = s_active && GameSetup::IsActive() ? GameSetup::SetGameOf(r.game) : r.game;
+  body["gameIndex"] = picojson::value(static_cast<double>(game_index));
   const size_t ports = s_room ? MAX_PLAYERS : 2;
   body["winner"] = r.winner < ports && !s_uids[r.winner].empty() ? picojson::value(s_uids[r.winner]) :
                                                                    picojson::value();

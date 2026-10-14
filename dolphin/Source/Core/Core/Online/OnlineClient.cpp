@@ -12,6 +12,7 @@
 
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
+#include "Common/UPnP.h"
 #include "Core/Config/OnlineSettings.h"
 #include "Core/Online/OnlineSession.h"
 #include "Core/Online/Ranked.h"
@@ -200,6 +201,10 @@ void Shutdown()
       t.join();
   }
   user.reset();
+#ifdef USE_UPNP
+  // The last search's port mapping (Matchmaking::StartMatchmaking); it would expire anyway.
+  Common::UPnP::UnmapUdpPort();
+#endif
 }
 
 picojson::object OnlineStatus()

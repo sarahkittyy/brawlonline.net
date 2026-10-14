@@ -14,6 +14,7 @@ import { useServices } from "@/services";
 
 import { SettingItem } from "../setting_item_section";
 import { DolphinSettingsMessages as Messages } from "./dolphin_settings.messages";
+import { GameFilesFolder } from "./game_files_folder";
 import { GeckoCodes } from "./gecko_codes/gecko_codes";
 
 enum ResetType {
@@ -85,7 +86,7 @@ export const DolphinSettings = ({ dolphinType }: { dolphinType: DolphinLaunchTyp
   }, [dolphinService, dolphinType]);
 
   const configureDolphinHandler = async () => {
-    openConfigureDolphin(dolphinType);
+    void openConfigureDolphin(dolphinType);
   };
 
   const softResetDolphinHandler = async () => {
@@ -106,6 +107,7 @@ export const DolphinSettings = ({ dolphinType }: { dolphinType: DolphinLaunchTyp
       <Typography variant="h5">{getDolphinSettingsName(dolphinType)}</Typography>
       <Typography variant="caption">{Messages.version(versionString)}</Typography>
 
+      {dolphinType === DolphinLaunchType.NETPLAY && <GameFilesFolder />}
       <SettingItem
         name={Messages.dolphinExecutable(dolphinTypeName)}
         description={Messages.dolphinExecutableDescription()}

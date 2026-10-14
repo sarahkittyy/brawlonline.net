@@ -1,3 +1,5 @@
+import type { ChatKeyPress } from "@common/chat_key";
+
 import type { SyncedDolphinSettings } from "./config/config";
 import type { GeckoCode } from "./config/gecko_code";
 import type { DolphinVersionResponse } from "./install/fetch_latest_version";
@@ -15,6 +17,17 @@ export type ReplayCommunication = {
   rollbackDisplayMethod?: "off" | "normal" | "visible"; // default off; normal shows like a player experienced it, visible shows ALL frames (normal and rollback)
   gameStation?: string;
   queue?: ReplayQueueItem[];
+  /** Ours: play a replay recorded with another version anyway (the player was asked). */
+  playAnyway?: boolean;
+};
+
+/** What the playback Dolphin writes to `<comm file>.status.json` (Core/Rollback/ReplayPlayback.h). */
+export type ReplayPlaybackStatus = {
+  commandId?: string;
+  state?: "idle" | "loading" | "waiting" | "playing" | "ended" | "error";
+  replay?: string;
+  error?: string;
+  needsPlayAnyway?: boolean;
 };
 
 export type ReplayQueueItem = {
@@ -79,10 +92,11 @@ export type DolphinDownloadStartEvent = {
 /**
  * The step a Dolphin download/progress event belongs to, so the Play button can name it. Slippi
  * had one step (its Dolphin download) and showed "Updating"; ours are:
- * - `installDolphin`: the bundled Dolphin copied into `<userData>/netplay` (bytes);
+ * - `installDolphin`: the bundled Dolphin copied into the netplay folder (bytes);
  * - `copyUserFolder`: development only, a new User folder seeded from the template (bytes);
  * - `downloadProjectPlus`, `verifyProjectPlus`, `extractProjectPlus`: P+'s release zip (bytes);
- * - `prepareSdCard`: the first Play's copy of the 2 GB SD card (bytes).
+ * - `prepareSdCard`: the first Play's copy of the 2 GB SD card (bytes);
+ * - `moveGameFiles`: Settings moving the netplay folder to another drive (bytes; nothing on one drive).
  */
 export type DolphinSetupPhase =
   | "installDolphin"
@@ -90,7 +104,8 @@ export type DolphinSetupPhase =
   | "downloadProjectPlus"
   | "verifyProjectPlus"
   | "extractProjectPlus"
-  | "prepareSdCard";
+  | "prepareSdCard"
+  | "moveGameFiles";
 
 export type DolphinDownloadProgressEvent = {
   type: DolphinEventType.DOWNLOAD_PROGRESS;
@@ -131,13 +146,24 @@ export type DolphinEventMap = {
 
 export type DolphinEvent = DolphinEventMap[DolphinEventType];
 
+/** What Settings > Dolphin's game files move did; `error` carries the reason to show. */
+export type GameFilesMoveOutcome =
+  | { action: "moved" | "adopted"; folder: string; leftBehind: string | null }
+  | { action: "cancelled"; folder: string }
+  | { action: "error"; message: string };
+
 export interface DolphinService {
   installRosetta(): Promise<{ exitCode: number }>;
   downloadDolphin(dolphinType: DolphinLaunchType): Promise<void>;
-  /** The Dolphin executable in use (configured or default), its User folder and the user.json path. */
+  /**
+   * The Dolphin executable in use (configured or default), its User folder, the user.json path and
+   * the netplay folder (where the game files are).
+   */
   getDolphinPaths(
     dolphinType: DolphinLaunchType,
-  ): Promise<{ executable: string; userFolder: string; playKeyFile: string }>;
+  ): Promise<{ executable: string; userFolder: string; playKeyFile: string; gameFilesFolder: string }>;
+  /** Moves the game files (the netplay folder) to `folder`, or back to the default with null. */
+  moveGameFiles(folder: string | null): Promise<GameFilesMoveOutcome>;
   configureDolphin(dolphinType: DolphinLaunchType): Promise<void>;
   softResetDolphin(dolphinType: DolphinLaunchType): Promise<void>;
   hardResetDolphin(dolphinType: DolphinLaunchType): Promise<void>;
@@ -157,6 +183,10 @@ export interface DolphinService {
   prepareRoomLaunch(code: string, ruleset?: string): Promise<{ id: string }>;
   /** Takes a prepared room request back. */
   cancelRoomLaunch(id: string): Promise<void>;
+  /** The key that opens the chat box, as an expression (common/chat_key.ts). */
+  getChatKey(): Promise<string>;
+  /** Sets the chat key to the pressed key; null (nothing changed) for a key that can't open chat. */
+  setChatKey(press: ChatKeyPress): Promise<string | null>;
   fetchGeckoCodes(dolphinLaunchType: DolphinLaunchType): Promise<GeckoCode[]>;
   saveGeckoCodes(dolphinLaunchType: DolphinLaunchType, geckoCodes: GeckoCode[]): Promise<void>;
   onEvent<T extends DolphinEventType>(eventType: T, handle: (event: DolphinEventMap[T]) => void): () => void;

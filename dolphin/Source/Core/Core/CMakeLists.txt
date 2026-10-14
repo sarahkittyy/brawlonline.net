@@ -633,10 +633,20 @@ add_library(core
   Rollback/PeerData.h
   Rollback/Perf.cpp
   Rollback/Perf.h
+  Rollback/FrameProfile.cpp
+  Rollback/FrameProfile.h
   Rollback/PresentStats.cpp
   Rollback/PresentStats.h
   Rollback/RollbackManager.cpp
   Rollback/RollbackManager.h
+  Rollback/ReplayFile.cpp
+  Rollback/ReplayFile.h
+  Rollback/ReplayKeyframes.cpp
+  Rollback/ReplayKeyframes.h
+  Rollback/ReplayPlayback.cpp
+  Rollback/ReplayPlayback.h
+  Rollback/ReplayRecorder.cpp
+  Rollback/ReplayRecorder.h
   Brawlback/include/gekkonet/GekkoLib/src/backend.cpp
   Brawlback/include/gekkonet/GekkoLib/src/event.cpp
   Brawlback/include/gekkonet/GekkoLib/src/game_session.cpp

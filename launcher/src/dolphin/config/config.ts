@@ -1,3 +1,4 @@
+import { DEFAULT_CHAT_KEY } from "@common/chat_key";
 import { normalizeInputDelay } from "@common/input_delay";
 import { DOLPHIN_INI_SECTION } from "@common/product";
 import { defaultAppSettings } from "@settings/default_settings";
@@ -74,6 +75,27 @@ export async function getOnlineSettings(iniFile: IniFile): Promise<SyncedDolphin
     inputDelay,
     enableMusic,
   };
+}
+
+/** Hotkeys.ini's key for the chat hotkey (Dolphin's HotkeyManager: group "General"). */
+const CHAT_HOTKEY = "General/Activate NetPlay Chat";
+
+/**
+ * The key that opens the chat box (common/chat_key.ts): `[Online] ChatKey` when the launcher set
+ * it, else Hotkeys.ini's binding (set in Dolphin's Hotkey Settings), else Dolphin's default.
+ */
+export function getChatKey(dolphinIni: IniFile, hotkeysIni: IniFile): string {
+  const chatKey = dolphinIni.getSection(DOLPHIN_INI_SECTION)?.get("ChatKey", "") ?? "";
+  if (chatKey !== "") {
+    return chatKey;
+  }
+  const hotkeys = hotkeysIni.getSection("Hotkeys");
+  return hotkeys?.exists(CHAT_HOTKEY) ? hotkeys.get(CHAT_HOTKEY, "") : DEFAULT_CHAT_KEY;
+}
+
+export async function setChatKey(dolphinIni: IniFile, expression: string): Promise<void> {
+  dolphinIni.getOrCreateSection(DOLPHIN_INI_SECTION).set("ChatKey", expression);
+  await dolphinIni.save();
 }
 
 function convertBooleanToIniVal(value?: boolean): string {

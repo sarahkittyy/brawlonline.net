@@ -46,12 +46,19 @@ export interface SettingsSchema {
   netplayDolphinPath: string | null;
   playbackDolphinPath: string | null;
 
+  // Where the game files are (the netplay folder: Dolphin, its User folder, P+'s files, the patched
+  // SD card; null = <userData>/netplay). Only DolphinManager.moveGameFiles changes it, after moving them.
+  gameFilesFolder: string | null;
+
   // Appearance settings
   enableRankDisplay: boolean;
 
   // Sounds for chat messages and invites (the bell next to the settings gear) and their volume, 0-100.
   notificationSounds: boolean;
   notificationVolume: number;
+
+  // The launcher's interface size in percent (one of common/interface_zoom.ts's levels); Ctrl +/-/0 and Ctrl + wheel change it.
+  interfaceZoom: number;
 }
 
 /**

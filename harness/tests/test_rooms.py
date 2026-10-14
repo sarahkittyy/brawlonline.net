@@ -359,8 +359,8 @@ def test_room_requests_errors_and_the_launcher(backend: OnlineBackend,
         v = a.until_view(lambda v: v["slots"][2]["bits"] == 0, "slot 3 closed")
         cleo.until(lambda m: m.get("type") == "room-left" and m.get("reason") == "Removed from the room.",
                    "cleo removed")
-        a.room("slot", 1, 0)
-        a.until_text("At least 2 slots stay open.", error=True)
+        a.room("slot", 0, 0)
+        a.until_text("You can't close your own slot.", error=True)
         # The error goes after 5 s in a room; the room's line comes back.
         a.until_text("Waiting on: anna, bert", timeout=10, error=False)
 
@@ -425,7 +425,7 @@ def test_room_requests_errors_and_the_launcher(backend: OnlineBackend,
 
 
 def _match_args() -> argparse.Namespace:
-    return argparse.Namespace(p1="fox", p2="falco", stage="battlefield", delay=2, region_set="gp-v22",
+    return argparse.Namespace(p1="fox", p2="falco", stage="battlefield", delay=2, region_set="gp-v23",
                               start_frame=120, frames=30000, minutes=1, timeout=400, cpu="sc",
                               save_countdown=None, sample_every=0, save_traces=None)
 

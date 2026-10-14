@@ -121,6 +121,8 @@ add_library(videocommon
   NetPlayChatUI.h
   OnlineChatUI.cpp
   OnlineChatUI.h
+  ReplayOverlayUI.cpp
+  ReplayOverlayUI.h
   NetPlayGolfUI.cpp
   NetPlayGolfUI.h
   OnScreenDisplay.cpp

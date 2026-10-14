@@ -20,6 +20,7 @@
 #include "Core/HW/GPFifo.h"
 #include "Core/HW/Memmap.h"
 #include "Core/Host.h"
+#include "Core/Rollback/FrameProfile.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/System.h"
@@ -156,6 +157,8 @@ void FifoManager::QueueVideoThreadCapture(Common::MoveOnlyFunction<void(bool)> c
 
 void FifoManager::WaitForGpuThreadIdle()
 {
+  Rollback::FrameProfile::Scope wait_scope{
+      [](u64 ns) { Rollback::FrameProfile::AddGpuWait(Rollback::FrameProfile::WAIT_IDLE, ns); }};
   m_gpu_mainloop.Wait();
 }
 
@@ -294,12 +297,19 @@ void FifoManager::SyncGPU(SyncGPUReason reason, bool may_move_read_ptr)
 {
   if (m_use_deterministic_gpu_thread)
   {
-    if (Rollback::PresentStats::PresentTraceEnabled())
+    if (Rollback::PresentStats::PresentTraceEnabled() || Rollback::FrameProfile::Enabled())
     {
       const auto t0 = Clock::now();
       m_gpu_mainloop.Wait();
-      Rollback::PresentStats::TraceCpuWaitForGpu(
-          std::chrono::duration<double, std::milli>(Clock::now() - t0).count());
+      const auto t1 = Clock::now();
+      if (Rollback::PresentStats::PresentTraceEnabled())
+      {
+        Rollback::PresentStats::TraceCpuWaitForGpu(
+            std::chrono::duration<double, std::milli>(t1 - t0).count());
+      }
+      Rollback::FrameProfile::AddGpuWait(
+          static_cast<size_t>(reason),
+          static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count()));
     }
     else
     {
@@ -363,7 +373,7 @@ void FifoManager::SyncGPU(SyncGPUReason reason, bool may_move_read_ptr)
 
 void FifoManager::PushFifoAuxBuffer(const void* ptr, size_t size)
 {
-  if (size > (size_t)(m_fifo_aux_data + FIFO_SIZE - m_fifo_aux_write_ptr))
+  if (size > (size_t)(m_fifo_aux_data + AUX_FIFO_SIZE - m_fifo_aux_write_ptr))
   {
     SyncGPU(SyncGPUReason::AuxSpace, /* may_move_read_ptr */ false);
     if (!m_gpu_mainloop.IsRunning())
@@ -371,7 +381,7 @@ void FifoManager::PushFifoAuxBuffer(const void* ptr, size_t size)
       // GPU is shutting down
       return;
     }
-    if (size > (size_t)(m_fifo_aux_data + FIFO_SIZE - m_fifo_aux_write_ptr))
+    if (size > (size_t)(m_fifo_aux_data + AUX_FIFO_SIZE - m_fifo_aux_write_ptr))
     {
       // That will sync us up to the last 32 bytes, so this short region
       // of FIFO would have to point to a 2MB display list or something.
@@ -493,6 +503,7 @@ void FifoManager::RunGpuLoop()
           // See comment in SyncGPU
           if (write_ptr > seen_ptr)
           {
+            Rollback::FrameProfile::Scope busy_scope{Rollback::FrameProfile::AddGpuBusy};
             m_video_buffer_read_ptr =
                 OpcodeDecoder::RunFifo(DataReader(m_video_buffer_read_ptr, write_ptr), nullptr);
             m_video_buffer_seen_ptr = write_ptr;
@@ -584,6 +595,8 @@ void FifoManager::FlushGpu()
   if (!m_system.IsDualCoreMode() || m_use_deterministic_gpu_thread)
     return;
 
+  Rollback::FrameProfile::Scope wait_scope{
+      [](u64 ns) { Rollback::FrameProfile::AddGpuWait(Rollback::FrameProfile::WAIT_FLUSH, ns); }};
   m_gpu_mainloop.Wait();
 }
 

@@ -286,34 +286,6 @@ s64 UnixMs()
       .count();
 }
 
-// Days since 1970-01-01 of a civil date (Howard Hinnant's algorithm).
-s64 DaysFromCivil(s64 y, unsigned m, unsigned d)
-{
-  y -= m <= 2;
-  const s64 era = (y >= 0 ? y : y - 399) / 400;
-  const unsigned yoe = static_cast<unsigned>(y - era * 400);
-  const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-  return era * 146097 + static_cast<s64>(doe) - 719468;
-}
-
-// "2026-10-09T15:00:00.000Z" (the launcher's toISOString) -> ms since the epoch.
-std::optional<s64> ParseIsoUtc(const std::string& t)
-{
-  int y, mo, d, h, mi;
-  double sec;
-  char z = 0;
-  if (t.size() > 40 || std::sscanf(t.c_str(), "%4d-%2d-%2dT%2d:%2d:%lf%c", &y, &mo, &d, &h, &mi,
-                                   &sec, &z) != 7 ||
-      z != 'Z' || mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || !(sec >= 0) ||
-      !(sec < 61) || y < 2000 || y > 9999)
-  {
-    return std::nullopt;
-  }
-  const s64 days = DaysFromCivil(y, static_cast<unsigned>(mo), static_cast<unsigned>(d));
-  return ((days * 24 + h) * 60 + mi) * 60000 + static_cast<s64>(sec * 1000);
-}
-
 std::string IsoUtcNow()
 {
   const s64 ms = UnixMs();
@@ -1103,6 +1075,24 @@ void SuperviseGame(Clock::time_point now)
       s.rg.match_ended.reset();
       s.rg.pickers.reset();
       Log(fmt::format("set game over; the set goes on ({} played)", s.rg.games));
+    }
+    return;
+  }
+  if (match_over && scene_left && !g.set && lobby.active && lobby.setup_ready)
+  {
+    // A 1v1's salty runback (L+R+Y with the quit) outside a set: the session has set its next
+    // game up as the same match on every machine, and the game goes from the match straight into
+    // it (docs/game-code.md §11). The session goes on, watched like the first game; ending it
+    // here left both games playing the runback alone, each local pad driving P1 (prod
+    // 2026-10-13). Nothing else sets a next game up in a room game without a set.
+    std::lock_guard lk(s_mutex);
+    if (s.rg.active && s.rg.match_id == g.match_id)
+    {
+      ++s.rg.games;
+      s.rg.saw_match = false;
+      s.rg.match_ended.reset();
+      s.rg.pickers.reset();
+      Log(fmt::format("game run back: the session plays it again ({} played)", s.rg.games));
     }
     return;
   }

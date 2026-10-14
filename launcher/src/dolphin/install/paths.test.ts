@@ -9,6 +9,7 @@ import {
   defaultUserTemplate,
   dolphinExecutableName,
   installedDolphinExecutable,
+  netplayFolder,
   patchedSdCardFolder,
   PLUGIN_SD_PATH,
   projectPlusStoreFolder,
@@ -18,7 +19,7 @@ const ctx = (over: Partial<DolphinPathEnv> = {}): DolphinPathEnv => ({
   env: {},
   isDevelopment: false,
   devRepoRoot: path.resolve("/repo/launcher"),
-  userDataDir: path.resolve("/userdata"),
+  netplayFolder: netplayFolder(path.resolve("/userdata"), null),
   platform: "win32",
   ...over,
 });
@@ -38,9 +39,17 @@ describe("dolphin paths", () => {
     const exe = defaultDolphinExecutable(DolphinLaunchType.NETPLAY, ctx({ platform: "linux" }));
     expect(exe).toBe(path.join(path.resolve("/userdata"), "netplay", "usr", "bin", "project-plus-dolphin"));
     expect(installedDolphinExecutable("win32")).toBe("Dolphin.exe");
-    expect(projectPlusStoreFolder(path.resolve("/userdata"))).toBe(
-      path.join(path.resolve("/userdata"), "netplay", "pplus"),
+    expect(projectPlusStoreFolder(ctx().netplayFolder)).toBe(path.join(path.resolve("/userdata"), "netplay", "pplus"));
+  });
+
+  it("puts everything in the game files folder chosen in Settings", () => {
+    const moved = path.resolve("/games/Brawl Online");
+    expect(netplayFolder(path.resolve("/userdata"), moved)).toBe(moved);
+    expect(defaultDolphinExecutable(DolphinLaunchType.NETPLAY, ctx({ netplayFolder: moved }))).toBe(
+      path.join(moved, "Dolphin.exe"),
     );
+    expect(projectPlusStoreFolder(moved)).toBe(path.join(moved, "pplus"));
+    expect(patchedSdCardFolder(moved)).toBe(path.join(moved, "pponline-sd"));
   });
 
   it("honours PPO_DOLPHIN_PATH", () => {
@@ -77,7 +86,7 @@ describe("dolphin paths", () => {
   });
 
   it("keeps the patched SD card under userData/netplay", () => {
-    expect(patchedSdCardFolder(path.resolve("/userdata"))).toBe(
+    expect(patchedSdCardFolder(ctx().netplayFolder)).toBe(
       path.join(path.resolve("/userdata"), "netplay", "pponline-sd"),
     );
     expect(PLUGIN_SD_PATH).toBe("/Project+/pf/plugins/PPOnline.rel");

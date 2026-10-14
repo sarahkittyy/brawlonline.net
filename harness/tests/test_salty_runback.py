@@ -20,7 +20,7 @@ from ppharness.backend import OnlineBackend
 from ppharness.client import PadInput
 from ppharness.instance import DolphinInstance
 
-from test_online_game import _connected_direct, backend  # noqa: E402,F401  (also puts tools on sys.path)
+from test_online_game import _boot, _connected_direct, backend  # noqa: E402,F401  (also puts tools on sys.path)
 import online_set  # noqa: E402
 from ppharness import brawl as B  # noqa: E402
 
@@ -89,6 +89,73 @@ def test_runback_restarts_the_same_match_in_direct(backend: OnlineBackend,
     _quit_shown_on_both(a, b, quitter)
     for g in (a, b):
         g.shot("02-quit-notice")
+
+
+@pytest.mark.slow
+def test_runback_restarts_the_same_match_in_a_room_without_a_set(backend: OnlineBackend,
+                                                                 dolphin: Callable[..., DolphinInstance],
+                                                                 gpu_backend: str) -> None:
+    """A 1v1 room without a set (prod 2026-10-13, DUCK#96 against sosa on Wario Land): the session
+    set the runback up, but the room ended its game as soon as the match scene ended, so both games
+    played the runback alone, each local pad driving P1. The room's game now goes on in the same
+    session; a plain quit of the runback then ends it and both are back on the room's CSS."""
+    from test_rooms_game import ART as ROOM_ART, _all, create_room, pick, room_view, to_join_room, \
+        type_room_code, until_view
+    import ppom
+    test = "room-runback"
+    ua = backend.create_user("rrba", "RRBA")
+    ub = backend.create_user("rrbb", "RRBB")
+    a = _boot(dolphin, "room-runback-a", backend, ua, gpu_backend, test, "gameplay", artifacts=ROOM_ART)
+    b = _boot(dolphin, "room-runback-b", backend, ub, gpu_backend, test, "gameplay", artifacts=ROOM_ART)
+    _all(a.to_main_menu, b.to_main_menu)
+    _all(a.to_online_page, b.to_online_page)
+    code = create_room(a)
+    to_join_room(b)
+    pick(a)
+    pick(b, right=2)
+    for g in (a, b):
+        B.write_rules(g.c, stocks=4, minutes=8, items_off=True)
+        ppom.allow_test_rules(g.c)
+    type_room_code(b, code)
+    until_view(b, lambda v: v["flags"] & ppom.RF_IN, "B in the room")
+    until_view(a, lambda v: v["slots"][1]["bits"] & ppom.SLOT_TAKEN, "A sees B")
+    game = room_view(a)["game"]
+    a.steps("tap START 8", "wait 40")
+    until_view(b, lambda v: v["slots"][0]["bits"] & ppom.SLOT_READY, "B sees A ready")
+    b.steps("tap START 8", "wait 10")
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)), 240,
+                    "the room's match to run on both")
+    first = [online_set.gstatus(g.c)["match_index"] for g in (a, b)]
+    setup = B.read_match_setup(a.c.read_mem)
+    _walk(b)
+    a.steps("wait 240")
+    _quit(a, "L+R+A+Y+START")
+    # Straight into the same match on both, still under the session (the bug: no session, phase
+    # ended, each game alone).
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" and
+                                online_set.gstatus(g.c)["match_index"] == first[0] + 1 for g in (a, b)),
+                    90, "the same match again on both")
+    _walk(b)
+    a.steps("wait 240")
+    for g in (a, b):
+        g.shot("01-room-runback")
+        sc = g.debug_scratch()[10]
+        assert sc & RUNBACK_MARKED and sc & 0xFF == RUNBACK_SETUP, (g.name, hex(sc))
+        assert B.read_match_setup(g.c.read_mem) == setup, (g.name, "a different match")
+        log = g.inst.log.read()
+        assert log.count("the last game again (runback)") == 1, g.name
+        assert "game run back: the session plays it again" in log, g.name
+        st = online_set.gstatus(g.c)
+        assert st["phase"] == "running", (g.name, st["phase"])
+        assert room_view(g)["status"] != 0, (g.name, "the room is no longer in its game", room_view(g))
+    # A plain quit of the runback's match ends the room's game: both on the room's CSS, the room's
+    # game numbers past both games.
+    _quit(a, "L+R+A+START")
+    for g in (a, b):
+        until_view(g, lambda v: v["flags"] & ppom.RF_IN and v["status"] == 0 and v["game"] == game + 2,
+                   "the room waiting for its next game", timeout=90)
+        g.steps("wait 60")
+        g.shot("02-back-in-the-room")
 
 
 @pytest.mark.slow

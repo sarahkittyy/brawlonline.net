@@ -46,8 +46,10 @@ export const defaultAppSettings: AppSettings = {
     autoUpdateLauncher: true,
     netplayDolphinPath: null,
     playbackDolphinPath: null,
+    gameFilesFolder: null,
     enableRankDisplay: true,
     notificationSounds: true,
     notificationVolume: 15,
+    interfaceZoom: 100,
   },
 };

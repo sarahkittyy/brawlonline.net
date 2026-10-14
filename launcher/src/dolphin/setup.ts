@@ -1,3 +1,4 @@
+import { chatKeyExpression } from "@common/chat_key";
 import { DOLPHIN_ONLINE_DIR } from "@common/product";
 import { shell } from "electron";
 import log from "electron-log";
@@ -13,15 +14,18 @@ import {
   ipc_dolphinEvent,
   ipc_downloadDolphin,
   ipc_fetchGeckoCodes,
+  ipc_getChatKey,
   ipc_getDolphinPaths,
   ipc_hardResetDolphin,
   ipc_installRosetta,
   ipc_joinRoomInGame,
   ipc_launchNetplayDolphin,
+  ipc_moveGameFiles,
   ipc_openDolphinSettingsFolder,
   ipc_prepareRoomLaunch,
   ipc_removePlayKeyFile,
   ipc_saveGeckoCodes,
+  ipc_setChatKey,
   ipc_softResetDolphin,
   ipc_storePlayKeyFile,
   ipc_viewSlpReplay,
@@ -73,7 +77,22 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     const installation = dolphinManager.getInstallation(dolphinType);
     const userFolder = installation.userFolder;
     const playKeyFile = path.join(userFolder, DOLPHIN_ONLINE_DIR, "user.json");
-    return { executable: dolphinManager.getDolphinExecutablePath(dolphinType), userFolder, playKeyFile };
+    return {
+      executable: dolphinManager.getDolphinExecutablePath(dolphinType),
+      userFolder,
+      playKeyFile,
+      gameFilesFolder: dolphinManager.netplayFolder(),
+    };
+  });
+
+  ipc_moveGameFiles.main!.handle(async ({ folder }) => {
+    try {
+      const result = await dolphinManager.moveGameFiles(folder);
+      return result.action === "cancelled" ? { action: "cancelled", folder: result.folder } : result;
+    } catch (err) {
+      log.error(err);
+      return { action: "error", message: err instanceof Error ? err.message : String(err) };
+    }
   });
 
   ipc_storePlayKeyFile.main!.handle(async ({ key }) => {
@@ -157,6 +176,19 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     const installation = dolphinManager.getInstallation(dolphinType);
     await saveGeckoCodes(installation, geckoCodes);
     return { success: true };
+  });
+
+  ipc_getChatKey.main!.handle(async () => {
+    const chatKey = await dolphinManager.getInstallation(DolphinLaunchType.NETPLAY).getChatKey();
+    return { chatKey };
+  });
+
+  ipc_setChatKey.main!.handle(async ({ press }) => {
+    const chatKey = chatKeyExpression(press, process.platform);
+    if (chatKey !== null) {
+      await dolphinManager.getInstallation(DolphinLaunchType.NETPLAY).setChatKey(chatKey);
+    }
+    return { chatKey };
   });
 
   ipc_installRosetta.main!.handle(async () => {

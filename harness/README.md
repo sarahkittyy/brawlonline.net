@@ -262,6 +262,7 @@ Other options: `--spike AT:DUR[:loss=..,latency=..,jitter=..,dir=up|down]` sched
 | `typical` | 40 ± 8 ms | 0.5 % |
 | `bad_wifi` | 60 ± 25 ms | 2 % in bursts (mean 3 packets) |
 | `cross_country` | 80 ± 5 ms | 0 |
+| `long_haul` | 92 ± 9 ms | 0 |
 | `awful` | 150 ± 50 ms | 5 % |
 | `none` | no impairment | 0 |
 

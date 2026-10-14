@@ -1,5 +1,7 @@
 /* eslint-disable import/no-default-export */
 
+import type { ChatKeyPress } from "@common/chat_key";
+
 import type { GeckoCode } from "./config/gecko_code";
 import {
   ipc_cancelRoomLaunch,
@@ -8,15 +10,18 @@ import {
   ipc_dolphinEvent,
   ipc_downloadDolphin,
   ipc_fetchGeckoCodes,
+  ipc_getChatKey,
   ipc_getDolphinPaths,
   ipc_hardResetDolphin,
   ipc_installRosetta,
   ipc_joinRoomInGame,
   ipc_launchNetplayDolphin,
+  ipc_moveGameFiles,
   ipc_openDolphinSettingsFolder,
   ipc_prepareRoomLaunch,
   ipc_removePlayKeyFile,
   ipc_saveGeckoCodes,
+  ipc_setChatKey,
   ipc_softResetDolphin,
   ipc_storePlayKeyFile,
   ipc_viewSlpReplay,
@@ -37,6 +42,10 @@ const dolphinApi: DolphinService = {
   },
   async getDolphinPaths(dolphinType: DolphinLaunchType) {
     const { result } = await ipc_getDolphinPaths.renderer!.trigger({ dolphinType });
+    return result;
+  },
+  async moveGameFiles(folder: string | null) {
+    const { result } = await ipc_moveGameFiles.renderer!.trigger({ folder });
     return result;
   },
   async downloadDolphin(dolphinType: DolphinLaunchType) {
@@ -80,6 +89,14 @@ const dolphinApi: DolphinService = {
   },
   async cancelRoomLaunch(id: string) {
     await ipc_cancelRoomLaunch.renderer!.trigger({ id });
+  },
+  async getChatKey(): Promise<string> {
+    const { result } = await ipc_getChatKey.renderer!.trigger({});
+    return result.chatKey;
+  },
+  async setChatKey(press: ChatKeyPress): Promise<string | null> {
+    const { result } = await ipc_setChatKey.renderer!.trigger({ press });
+    return result.chatKey;
   },
   async fetchGeckoCodes(dolphinType: DolphinLaunchType): Promise<GeckoCode[]> {
     const { result } = await ipc_fetchGeckoCodes.renderer!.trigger({ dolphinType });

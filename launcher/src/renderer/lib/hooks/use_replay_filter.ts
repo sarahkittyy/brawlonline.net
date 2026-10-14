@@ -82,10 +82,12 @@ export const buildReplayFilters = (
     const existingDurationFilter = filters.find((f) => f.type === "duration");
 
     if (!existingDurationFilter) {
-      // Filter out the short games
+      // Filter out the short games nobody won (quits, disconnects, handwarmers): a short game
+      // that ended in a game set is a real game and stays
       filters.push({
         type: "duration",
         minFrames: 30 * 60 - 123, // 30 seconds minus the offset
+        orWon: true,
       });
     }
   }

@@ -23,6 +23,7 @@ All in `harness/tools/`. They need numpy.
 | `gprb_late_divergence.py`, `gprb_transplant.py`, `gprb_nudge.py`, `gprb_debug.py` | The Phase 2 investigation. |
 | `gprb_synctest.py` | Phase 3 single-instance sync test. |
 | `gprb_session.py` | Phase 4 two-instance sessions through netsim. |
+| `gprb_traffic.py` | Phase 26: a `gprb_session.py` session through a netsim that classifies every datagram (GekkoNet message types, bundles, control messages, pings): packets and kbit/s per kind and direction over the match, frames per inputs packet; `--dolphin-b` runs the joiner on another build. |
 | `gprb_online.py` | Online hand-off: our accounts/mm servers, two logged-in instances, Direct search with `backend="gameplay"`, one match, then a leave or freeze case. |
 | `gprb_resimtrace.py` | Instruction-trace diff of a frame's first run against its resimulation. |
 | `gprb_rngcmp.py` | Compares two peers' `PPR_GPRB_RNG_LOG` logs frame by frame (newest pass) and shows the first differing `mtRand` calls with their callers. |
@@ -211,7 +212,49 @@ The region set is about 40 % cheaper per save and per load. The gain is modest b
 
 **Save outliers of 5-17 s** (`save_us_max`) were not save work. They were synchronous log writes: `RollbackManager` logged two INFO lines per frame, and a write stalled when the shared disk was saturated (the other agent's runs showed the same 16.8 s maximum). A WARN with a timing breakdown now reports any save over 100 ms; it never fired. The per-frame lines are DEBUG now (`fb111dc1ba`).
 
-### Open issues (Phase 3)
+### Phase 26: what a gameplay session sends (2026-10-13)
+
+**Symptom.** The spectating session's uplink test (`harness/tests/test_spectate_safety.py` T1) measured 555-650 kbit/s from one player of a Direct game; `backend-design.md` §2.7 had assumed 10-20 kbit/s per player. At an uplink of 1.25 times that rate the game's own packets queued up to ~100 ms (p99).
+
+**Measured** (`harness/tools/gprb_traffic.py`: `gprb_session.py` through a netsim that classifies every datagram; `typical`, 40 ms round trip, a 1-minute Fox/Falco Battlefield match, per second of the match, UDP/IP headers counted as 28 bytes):
+
+| | joiner's upload | host's upload |
+|---|---|---|
+| state message (`C:st`, every 50 ms) | 19/s × 434 B: 71 kbit/s | the same as 'F' pieces, 77/s × ~1,045 B: 657 kbit/s |
+| GekkoNet inputs | 111/s × 25 B: 47 kbit/s | the same |
+| GekkoNet checksum (`SessionHealth`, every frame) | 60/s × 13 B: 20 kbit/s | the same |
+| GekkoNet input acks | 60/s × 10 B: 18 kbit/s | the same |
+| pings and pongs, GekkoNet's network health | 14/s: 4 kbit/s | the same |
+| **total** | **264/s (4.4 a frame), 160 kbit/s** | **323/s (5.4 a frame), 747 kbit/s** |
+
+- **The host's state message kept its sync block and task order all match** (`"sync"`, `"tasks"`, about 5.5 KB, split into 5 datagrams since the fragment fix): 88% of the host's upload. Only joiners at the barrier read them, and the host goes on into the countdown only when every joiner has applied them (`all_applied`). T1's "up" was this direction.
+- **The state message went every 50 ms in the match too**, although nothing in it changes there (GekkoNet carries the match; silence in a match is GekkoNet's timeout).
+- **Inputs went twice a frame.** `SendInputsToPeer` rebuilt and sent the unacked inputs whenever the peer's ack changed, not only for a new input: the poll at the start of a frame (which receives the peer's ack) sent the remaining inputs, microseconds before the frame's own packet carried them again. No earlier repair: the next packet always follows that closely.
+- **One ack per frame received**, one checksum per frame, each its own datagram: at ~10-25 bytes, the 28-byte header cost more than the message.
+- The inputs themselves are small (delta + RLE: ~7 bytes for 3.6 frames, the unacked ones at this round trip): bounding the redundancy would save nothing worth having.
+
+**Fix.**
+- GekkoNet (`backend.cpp`, `game_session.cpp`): inputs are sent for a new input only (or after the 200 ms retry interval), and one ack per peer per poll, for the newest frame (acks are cumulative and the receiver takes only a newer one). Both are sender-side: older builds read them as before.
+- The host's state carries `sync`/`ports`/`tasks` only until the barrier is passed (not from the countdown on). In a running match the 50 ms tick sends the state only when it changed (then twice more, at 50 ms intervals, for loss) or every 500 ms; the steps a peer waits for are still sent at once. Pings once a second in a running match (their round trip is used before the match; the ping line is GekkoNet's).
+- `GekkoBatch` + `'B'` datagrams (`PeerData::AppendGekkoBundle`/`SplitGekkoBundle`): what GekkoNet sends to a peer during one frame's calls (network poll, local input, session update, microseconds apart) goes as one datagram: the frame's inputs, the ack of what that poll received, the checksum the previous update queued, a network-health ping now and then. Only to a peer whose state says `"gb": 1`; older builds get 'G' packets, and every build reads 'B'.
+
+**After** (same test; raw `run/qa/traffic/`): **64 datagrams a second each way (1.06 a frame), 45 kbit/s from the joiner and 47 from the host** (most of it the bundle, ~52 bytes, and its header), the state 1.9 a second. Old and new builds together (either one the host): game set, every confirmed checksum equal, the new peer sending 'G' packets to the old one (the new host: 75 kbit/s).
+
+**Rollback quality** (1-minute matches, both peers' `gprb net: session` lines; this machine shared with other sessions' Dolphins). Every run: game set, 0 desyncs, every confirmed checksum equal, traces identical through game set. Rollbacks per frame went down on every preset, about halved where there is loss:
+
+| preset | before | after |
+|---|---|---|
+| `typical` (0.5% loss) | 0.5-2.0% | 0.4-0.9% |
+| `bad_wifi` (60 ± 25 ms, 2% loss in bursts of 3 packets), 5 runs each | 10-11% | 5-7% |
+| 60 ± 25 ms, 2% independent loss | 11.0% | 6.0% |
+| 60 ± 25 ms, the link down 40 ms every 2 s | 10.3-10.8% | 5.6-6.8% |
+| `awful` (150 ± 50 ms, 5% loss) | 11.5% | 10.8% |
+
+Waits for the peer are small and noisy on both (7-271 ms a match before, 0-333 after; the 333 ms one with a 420 ms present gap on that PC). `stall_polls` (updates without a frame) rose on `bad_wifi`: netsim's bursts count packets, so at 64 datagrams a second a 3-packet burst takes ~47 ms of everything at once where it took ~11 ms at 264; with loss in time (the outage profile) or independent loss, it did not. Why the rollbacks fell is not proven: candidates are the state message no longer holding `s.mutex` (which `GekkoSend` needs) while it serialized 5.5 KB every 50 ms, and the netsim relay (Python) no longer forwarding 750 kbit/s.
+
+Tests: `GekkoNetTraffic.OneInputsPacketAndOneAckPerFrame` (3 frames of latency each way: the old code sent 1,200 Inputs packets for 600 frames), `GekkoNetTraffic.LostPacketsAreRepairedByTheNextFrame`, `PeerData.GekkoBundles*`, `harness/tests/test_session_traffic.py` (`typical`: at most 1.3 datagrams a frame and 80 kbit/s each way, no 'F' piece and at most 4 state messages a second in the match, no desync).
+
+## Open issues (Phase 3)
 
 See [Open issues](#open-issues) at the end: Peach crashes (an article outside the set), and the main-thread stalls.
 
@@ -220,7 +263,7 @@ See [Open issues](#open-issues) at the end: Peach crashes (an article outside th
 ### How a session starts (`Gprb::Session`, network mode)
 
 1. Both instances boot alone and reach the character select by different menu paths. B picks and drops other characters, backs out to the main menu, opens Rules, comes back, picks in the other order and lingers on the stage select.
-2. On the CSS: `gprb_connect` (A hosts, B joins, through a `ppharness.netsim` proxy). They exchange state over UDP (JSON control messages, ping/RTT, and GekkoNet packets on the same socket).
+2. On the CSS: `gprb_connect` (A hosts, B joins, through a `ppharness.netsim` proxy). They exchange state over UDP (JSON control messages, ping/RTT, and GekkoNet packets on the same socket). A control message whose packet would be over 1200 bytes goes as 'F' pieces of at most 1200 bytes (`PeerData::ControlDatagrams`, put back together by `ControlReassembler`): a larger UDP datagram travels as IP fragments, and some routers, CGNATs and ISPs drop them. The host's state at the barrier (sync block and task order, about 5.5 KB) never reached such a joiner, which dropped the host after 7.2 s of silence; every game that player joined froze 15 s at the barrier and ended "peer timed out" (prod 2026-10-13). dolphin.log says `gprb: our state message is N bytes: sent as K datagrams of at most 1200` once a session. Harness: netsim's `max_datagram` (1472, a 1500-byte MTU's unfragmented payload), `test_online_game.py::test_direct_match_on_a_path_that_drops_ip_fragments`.
 3. `gprb_set_selections` exchanges the selections. Each instance drives its own CSS/SSS to the agreed match. The sync test's `gmSelCharData` write is the fallback for icons the CSS recipe cannot reach. At its first pass through `scMelee` the joiner takes the host's `gmGlobalModeMelee` init block (stage, rules, stage variant), waiting for it if needed.
 4. **First pass through `scMelee`:** both seed the three RNGs from `MatchSeeds(session seed, match index)` and the object serial counter from 0x10000, before anything RNG-dependent loads.
 5. **Barrier at the first simulation frame:**
@@ -1046,6 +1089,123 @@ So with the Phase 14 audio clock the music plays through rollbacks without a ski
 - **bad_wifi** dual core: to game set, 0 mismatches on 1,924 confirmed frames, about 200 rollbacks per side; start barrier 91-132 ms, in the countdown.
 - **Online harness** (the plugin, the local server): `test_online_unranked.py` (server stage, pause quit), `test_salty_runback.py` (2), `test_rooms_game.py` `test_room_three_players_teams` (0 mismatches), `test_room_four_players[three-with-a-gap]`, `test_room_player_quits_with_lras` (both): passed. `test_room_four_players[four-long-names]` first hit login and probe timeouts while other sessions ran their harnesses (it failed on the previous build, `run/bin/main-a`, in the same conditions); run alone it passed: 4 players to game set, 0 mismatches on 643 confirmed frames.
 
+## Phase 22: following a peer that cannot keep full speed (prod, 2026-10-12)
+
+**Symptom.** IMPY (host, Ryzen 7 9800X3D) against seimi (Core i3-7100U laptop: 2 cores at 2.4 GHz, 8 GB, HD 620; input delay 2 set), 92 ms round trip (110 in game), 4 games, 0.1.63: "felt HORRIBLE". Both peers' logs.
+
+**Reading.** The laptop missed its schedule on every frame of every game it played that day (18 games, 4 opponents: 99.8-100% late, only 1-20% of them after a rollback; 9,327 of 9,330 late in a game with 0.8% rollbacks), at 54-59 frames a second; a rollback cost it 15-19 ms at depth 1.2. Its catch-up frames (up to 899 a game) did nothing (Phase 19: no wait to skip). So it stayed 2-5 frames behind, and the host paid: in its worst windows 4.5-6 frames ahead with the speed at its 0.995 floor, rollbacks 5.7-6.5 deep at 14-16 ms (on a 9800X3D: about 2.2 ms per re-run frame, `0.65 + 2.23 x depth` over the 5 games), 54 frames a second and 190 screen hitches per 10 s; in its good windows (1.5 ahead) depth 3, 6.6 ms, 59.6 frames a second. GekkoNet's frames ahead is the frame gap itself (each side's advantage subtracts its own delay; the delays cancel in the halved difference), so the host's +5 is the laptop's -5.
+
+Beyond (one-way latency - the fast peer's delay) frames, the gap is pure waste: the slow peer's rollbacks are already 0 (its depth is about one-way - the other's delay - gap), and every further frame deepens the fast peer's. Slippi's sync (Phase 18) leaves the gap to the peer behind; the peer ahead only slows by 0.5%, which cannot match a peer at 92%.
+
+**Change** (`UpdatePeerFollow`, in `UpdateTimeSync`). Every 30 frames after frame 120, the peer's frame rate is estimated as (frames this peer ran - the change of the gap) / wall time. When the gap is more than a frame over its target, is not closing (by 0.25 frames per interval), and this PC kept its own schedule on at least half the interval's frames, the peer ahead *follows*: its speed is the peer's frame rate, 2% slower per frame over the target (faster below it), changing at most 5% per interval, never below 50%. It stops when the speed is back at 1 with the gap at its target. The target is (one-way latency in frames, from GekkoNet's average ping - this peer's input delay), clamped to 0.5-2.5: the gap at which the slow PC stops rolling back. The schedule check keeps a PC that is itself behind its schedule from slowing down further (in a first version the laptop-like peer engaged once after a hitch on the host).
+
+Logs: `gprb: following the peer's speed from frame N ...` / `... ends at frame N`; the `gprb net:` lines get `frames at the peer's speed N (the peer at X/s)`; at the end of a session one `gprb perf:` line says whether this PC could not keep full speed (more than half its frames late without a rollback before them), the peer could not (followed on more than a quarter of the frames), or neither. Harness: `PPR_GPRB_TEST_FRAME_COST_US` (every pass costs that much more CPU time: a PC that cannot keep full speed, rollbacks included; `Dolphin.Core.EmulationSpeed` below 1 is not one, since its catch-up frames find a wait to skip), `PPR_GPRB_TEST_NO_FOLLOW` (A/B), `gprb_session.py --env-b`, netsim preset `long_haul` (92 +- 9 ms).
+
+**Results** (`gprb_session.py --preset long_haul --cpu dc --delay auto`, Null video, two Dolphins of another session running on the same PC; raw `run/qa/pacing/`). Averages over the first 2,400 frames (the macros fight; later they idle and nothing rolls back). The joiner at `PPR_GPRB_TEST_FRAME_COST_US=14500` (slow: 51-54 frames a second, every frame late, as the laptop) or `13100` (borderline: 55-58); "before" is `PPR_GPRB_TEST_NO_FOLLOW=1`:
+
+| Run | Frames a second | Host frames ahead | Host rollback depth / cost | Host waits for the peer (polls) | Host present interval sd | Joiner rollbacks (cost) | Mismatches |
+|---|---|---|---|---|---|---|---|
+| slow, before (`base2`) | 53.1 | 5.82 | 6.70 / 19.2 ms | 132,627 | 8.8 ms | 0% | 0 of 5,723 |
+| slow, after (`follow3`) | 52.5 | 2.07 | 3.57 / 12.5 ms | 7,485 (all before the first 10 s were over) | 9.0 ms | 1.8% (25.8 ms) | 0 of 2,909 |
+| borderline, before (`border-base`) | 57.2 | 4.90 | 6.34 / 18.9 ms | 29,724 | 8.3 ms | 0.1% | 0 of 6,121 |
+| borderline, after (`border-follow3`) | 55.2 | 2.18 | 3.59 / 12.8 ms | 2,745 | 6.3 ms | 1.6% (21.6 ms) | 0 of 2,751 |
+
+The host keeps the gap at its target (2.2-2.4 frames here: 110 ms with GekkoNet's jitter of ~18 ms) instead of GekkoNet's prediction window, and its rollbacks are about half as deep. The match still runs at the slow PC's speed: that PC's frames are late either way. The earlier versions on the way: with no jitter in the target (`follow2`, `border-follow`) the gap held at 1.6-2.0 and the joiner rolled back on 2.6-2.7% of its frames at 20-27 ms each; with following ending at the first gap under the target (`border-follow`) it ended and started 5 times in a game; with a 0.8 floor (`follow1`) a joiner at 43-46 frames a second kept the host at the prediction window.
+
+Regressions, both peers at full speed (no following expected): `long_haul` 60.0/59.9 frames a second, 0.06-0.28 ahead, 0 of 7,105; `bad_wifi` 59.9, 0.20-0.30 ahead, 0 of 6,877; `long_haul` with the joiner frozen 0.5, 0.5, 1, 0.5 and 0.5 s (NtSuspendProcess, 10 s apart; `run/qa/pacing/freeze.txt`): no following, the gap closed each time (-0.47 to +0.63 per window), 0 of 3,413. The `gprb perf:` lines read "this PC could not keep full speed" on the slow joiners, "the peer could not keep full speed" on their hosts, and the neutral line in the freeze run.
+
+**The falling-behind notice** (the user's, 2026-10-12: players blamed the netcode or the other player; a chat line alone is not enough, some hide chat). Every 5 s after frame 120 each PC checks its own speed: more than half of the frames late without a rollback before them, and under 58 frames a second. Two checks in a row (10 s; one hitch such as a shader compiling is not enough) and it is falling behind: its state messages carry its frame rate (`"slow"`, absent otherwise; older builds ignore the field and send none), and once per match every screen shows a yellow on-screen message for 10 s under the ping line ("Your PC can't keep up. Expect slowdowns." on that PC, "<name>'s PC can't keep up. Expect slowdowns." on the others'; the user's wording) and the same text as a chat system line (`Chat::AddNotice`, local only, cleaned as any line). A peer's notice is shown no earlier than one could have been found (720 frames), so a state message left over from the previous match shows nothing. The log has `gprb: notice: ...` with the frame rate. Harness: the slow joiner run showed it on both peers 0.1 s apart (`run/qa/pacing/notice-slow`); the freeze run (a full-speed joiner frozen five times) showed none; screenshots of both windows (D3D11, PrintWindow; the harness `screenshot` command is the frame without the OSD) in `run/qa/pacing/shots/`. `ChatTest.NoticesAreLocalSystemLines` is new; not run (ENABLE_TESTS is off in the local build).
+
+## Phase 23: "terrible connection" at 85 ms (prod, 2026-10-12)
+
+**Symptom.** Drsmsh (host, i7-10700KF, RTX 3080, 0.1.63) against honestgamer123, 7 ranked games: "terrible connection" with the ping line in the 80s. Only the host's `dolphin.log`.
+
+**Reading.** The network and both PCs were fine: ping 76-102 ms (jitter 1-14), 59.8 frames a second, frames ahead within ±0.3, speed ~1.000, 0-1 waits for the peer a game, 0 desyncs. The picture was not: 15-28% of presents were screen hitches (1,320-2,755 a game; the same player against GlezH at 30 ms: 3-5%). Input delay auto picked 1 (64 ms before the game, 81 in game; the cut-off for 2 is 100), so rollbacks were 1.4-1.5 deep, on 55-58% of frames, at 7.4-9.3 ms each. The presenter's hold (Phase 17) is at most 8 ms, so nearly every frame after a rollback was shown late. The rollback rate is the peer's: a rollback means the peer's input record differed from the frame before (local input is never predicted), and it differs by opponent (MarcoMLGPRO at 81-101 ms: 12% of frames; lilklon 41-42%, Huge 50-53%, honestgamer123 50-58%). The host's log cannot say whether that is play, stick or trigger noise, or something else.
+
+The `AutoInputDelay` comment's premise ("a re-run frame is ~1.3 ms on a desktop") is out of date: a depth-1 rollback costs 5.6-5.9 ms on this player's PC and ~10 ms at depth 2.1 on this machine (`cross_country`, below).
+
+**Not the cause: the pad record's derived fields.** GekkoNet's input is the pad thread's whole `gfPadStatus` slot (0x40 bytes) and its prediction repeats the last one, so fields that change on the frame after a press would double the rollbacks. In the slot they do not: a sync test with `+0x08..+0x17` (held, pressed, released, pressed2) zeroed on every first run (a one-off hook, not kept) changed no pass (0 of 4,629), and the per-frame log showed them 0 on every frame; only `+0x0` and `+0x4` (current buttons, equal) and the sticks and triggers carry anything. `updateGame` derives held/pressed/released itself (game pads, in the set). Nothing to drop. (Both that run and a control without the hook have a region-hash mismatch at `0x805B4E80` on every frame, sometimes `0x80B89DC0` / `0x805A0340`, with 0 checksum desyncs: dual-core sync tests on gp-v22, not looked into.)
+
+**Not the fix: a longer hold.** `cross_country`, delay 1, D3D11 windows, dual core, full-speed 10 s windows only (raw `run/qa/padfields/`; the machine shared with six Dolphins of other sessions, run at `PPHARNESS_DOLPHIN_PRIORITY=normal`): a cap of 8 ms, 12.3% rollbacks at 10.1 ms, 17.7% hitches, average hold 5.8 ms; 16 ms, 12.2% at 9.3 ms, 16.8% hitches, hold 6.7 ms (max 14.7). The cap is not what limits the hold: the CPU's slack is (Phase 19: in deterministic dual core a hold longer than the throttle's sleep stalls the CPU thread), and a rollback that takes 9-10 ms of a 16.7 ms frame leaves no slack to hold the next frames by. Left at 8 ms. More input delay was ruled out (the user's: no compromise that changes play or adds delay for players on stable connections), as was quantising sticks.
+
+## Phase 24: a Smash Ball that gave a Final Smash on one screen only, then a desync and a crash (prod, 2026-10-12)
+
+**Symptom.** Unranked room, the user's Roy (host, P1) against iposbltngs's Ganondorf, Hyrule Castle, all items; round trip 34 ms, delay 1 (auto), 59.8 frames a second, 23.5% of frames rolled back (depth 1.05, max 7), one wait for the peer. The player hit a Smash Ball; on their screen it vanished and Roy did not glow; on the peer's screen Roy glowed with a Final Smash ready. A few seconds later they pressed B and the game ended with DESYNC DETECTED; then their game froze. Only the host's `dolphin.log` (kept as `run/qa/sball/prod-2026-10-12-host-dolphin.log`).
+
+**Reading.**
+- The desync check (`FrameChecksum`: game frame, the three RNGs, and per fighter instance, damage, stocks, x/y, status kind) covers neither items nor the Final Smash state. A difference there stays silent until it reaches one of those fields: here, neutral B (Flare Blade on one machine, the Final Smash on the other) changed the status kind. `gprb: desync at frame 9795`, game frame ~9915.
+- The host loaded `FitGanonFinal.pac` at game frame 1822 and `FitRoyFinal.pac` at 6747, and no Final Smash file after that: the break a few seconds before the desync loaded nothing on the host. In every harness run below, each break loads the file, again after an earlier Final Smash (Roy: 4913 and 8296 in one match), and again when a rollback re-runs the break.
+- The freeze: 1.6 s after the desync the game left the match and crashed in `scMelee`'s exit (sora_scene `fn_1_19968`, loaded at 0x806BB480; LR 0x806D51A8 = .text+0x19C54): a virtual call (`*(r30+0x2C)`, vtable at +0x3C, slot +0x68) through a dead object, to address 0; `Unhandled Exception 6`. So that machine's game state was not only different from the peer's but inconsistent in itself, as state left outside the set by a rollback would leave it. The process was closed before its memory could be read.
+
+**Not reproduced** (build `9dcdd268` + the diagnostic below, `run/qa/sball/`):
+- Misprediction test, Roy/Ganondorf Battlefield, Smash Ball only at the highest frequency, a recorded closed-loop match (`sb.sav`, `sb-in.json`; Roy broke balls at 4913 and 8296, Ganondorf at 5638), dual core, every first run given another frame's input: identical to the reference for 10,737 frames, twice.
+- Three two-instance sessions (`gprb_session.py` with the item switch at Smash Ball only, `typical`, dual core, delay 1, 3 minutes): 10,913, 3,644 and 10,913 frames, 0 desyncs; Ganondorf broke 2 balls and Roy 5 (one of them re-run by a rollback, read twice).
+- A ball broken only in a discarded run (`PPR_GPRB_FORCE_FINAL_AT`, below): `2000:0:first,2600:0` in a sync test against the ground truth `2600:0` without rollback: identical for 5,868 frames to game set. In the replay of session 2 (`s1/pass/r2`) with frames 3000-3002 or 3000-3006 run first as a chain of first runs and then rolled back (`gprb_passlog.py chain`), Roy's Final Smash at 3000 in the chain's first run only: identical to the flattened replay for 10,928 frames, and Roy's real break at 3927 loaded the file and played as in the ground truth.
+
+**Leads not yet tested.**
+- Settings that differ between players and reach the game (Phase 25 found and pinned the aspect ratio, which moves the camera; a Smash Ball under different aspect ratios was not tried): nothing pinned the Wii's aspect ratio (SYSCONF `IPL.AR`, `Dolphin.Wii.Widescreen`) between peers, and the Smash Ball's flight is bounded by the camera's range. A replay from a countdown savestate cannot test it (the game reads it at boot; `--config Dolphin.Wii.Widescreen=False` on a replay changed nothing).
+- What the prod run had that the harness runs did not: the D3D11 window and real GPU, the PPOnline plugin in the Network heap, Hyrule Castle, all items (not Smash Ball only).
+- A desync dump: on a desync, both machines could write their region-set state (or at least items, `ftManager`'s final fields and the camera) so that the next report shows where the states differ.
+
+`gprb_mispredict.py`'s `--start-frame` defaults to 240; replays of session pass logs (sessions start at 120 since Phase 21) need `--start-frame 120`, or the replay drifts from frame 0.
+
+## Phase 25: screen KOs desync between a 4:3 and a 16:9 player (prod, 2026-10-12)
+
+**Symptom.** A Ranked set, Drsmsh (host, Zelda) against kittenbrix (Lucas), Pokémon Stadium 2 and Smashville, 0.1.67: three of seven games ended with `the game states differ from frame N` (4221; 1138 and 1139; 6095), "all kills off the top". The same host's sets against two other players that day had 0 desyncs. Only the host's logs and `.brep` files.
+
+**Reading.** In all three replays (`FTRM`), the desync is the frame after a fighter enters the dead status (189) at the top blast zone (y = 180.01), and on that frame the host's game moves the fighter to y ≈ 193, z ≈ +130 with x shifted by 20-45 units, then down about 2 units a frame: a screen KO (DeadUp_Fall), the fighter flying at the camera. A star KO goes into the background (z negative). The KO handler (sora_melee `fn_27_171414`, the Dead status's start) rolls `randi(100)` while the camera controller (`CameraController::getInstance`, 0x80663E00, mode at +0x40 = 2 in a match) is in modes 2, 3 or 12 and picks a screen KO when the roll is at most the fighter parameter 0x5A3B (`.text+0x4E4`; P+'s "Disable Screen-KOs in teams" hooks the compare at 0x8087C310); the screen KO's start point and flight are placed from the camera.
+
+**Cause.** The camera's framing follows the game's aspect setting: Brawl's Options > Screen (gmGlobalRecord menu data +0x28, 0x9017BE78 on P+: 0xC0 with 16:9, 0x00 with 4:3), which the game copies from the Wii's aspect ratio (SYSCONF `IPL.AR`, Dolphin's Config > Wii > Aspect Ratio) at boot, and the Wii setting itself, which the game also reads. Nothing made the two players' values equal: the gameplay session drives GekkoNet itself and never goes through Dolphin netplay, which sends the host's SYSCONF settings and save to every client. With different values the camera, effects and g3d state in the set differ from the first frames, silently (the checksum covers none of them), until a screen KO puts the camera into a fighter's position. Dolphin's own display settings (Graphics > Aspect Ratio, including custom ratios, the widescreen hack, window size, internal resolution) never touch emulated memory and play no part.
+
+**Not affected** (harness, one peer 4:3, `run/scratch/topko-aspect/`): 14 star KOs on Final Destination and Pokémon Stadium 2 (`flows.fight` mode `upsmash` against `idle`/`random`, damage ratio 2.0), identical fighters and RNG on both peers through every KO; off-screen damage (Kirby `hover` off the side: 1% on the same frame on both); the KO handler's position clamp, which reads the camera controller's range (+0x158..+0x164: the stage's blast zones, equal under both settings). Sync tests with KOs off the top at distances 2 and 6: 0 desyncs.
+
+**Reproduction.** `gprb_session.py --modes upsmash,idle --damage-ratio 2.0 --poke-match 0x8087C314=60000000` (the branch to "star KO" made a nop on both peers: every KO off the top is a screen KO) with the joiner at 4:3 (`--poke-b 0x9017BE78=00`, or `--config-b SYSCONF.IPL.AR=False`): desync on the first screen KO, as on prod. Both at 16:9: four screen KOs over two sessions, 0 mismatches.
+
+**Fix.** Every player's game plays with a fresh install's 16:9; how the picture is shown stays the player's.
+- The launcher starts the netplay and playback Dolphins with `-C SYSCONF.IPL.AR=True` (`WII_SETTINGS_CONFIG_ARGS`): checked with a NAND whose SYSCONF says 4:3, the game's screen setting reads 0xC0 (0x00 without the argument), and Dolphin writes 1 back into the NAND.
+- The gameplay session sets the screen setting's two bits to 0xC0 at every match start and replay start (`PinScreenSetting`, before the match scene loads; the log says `gprb: screen setting 00 -> c0 (16:9) for the match` when it changes it), for a player who changed Options > Screen in game.
+- Both are needed: the screen setting pinned alone, with the joiner's Wii at 4:3, still desynced at the first screen KO.
+
+Test: `harness/tests/test_screen_ko_aspect.py` (the joiner's screen setting at 4:3, screen KOs forced): the old build desynced at its first screen KO (`desyncs_detected` 1 on both); this one runs through them with every confirmed checksum equal. A 4:3 option for a whole match (both players), as a room or Direct setting, would need the setup to carry it and our UI to fit 4:3 (the CSS's side messages are cut off there today).
+
+## Phase 26: the frame cost profile, and cheaper saves and loads (2026-10-13)
+
+**Report.** A player (host, i7-7700K, GTX 1070, 0.1.69): Auto input delay is "unplayable" at 100+ ms (input delay, uneven frame rate, freezes); delay 1 at 140 ms "with a little teleport" felt much better. Their `dolphin.log`: the Auto game (delay 2, 116 ms in game) rolled back on 35.8% of frames at depth 2.25, cost 14.6 ms a rollback, 75% of frames late, 17 waits for the peer and frames ahead down to -4.5 (the freezes: that link's jitter); five games at delay 1 (set, 137-143 ms) rolled back on 16-20% at depth 2.7, 16.5-17.3 ms a rollback, 40-47% late. A player's own delay only moves rollbacks onto the other screen, so the comparison was the opponent and the link, not Auto. What every high-ping game shared: a re-run frame cost about 6 ms on that PC, so a rollback of depth 2-3 took a whole frame.
+
+**Profile.** `Core/Rollback/FrameProfile` counts where a session's frames spend their wall-clock time, re-run and presented passes apart; GameplaySession takes the differences around each pass (from the end of a loop top to the next) and logs one line every 600 presented frames and at the end:
+
+    gprb frame cost: frames A-B: re-run frames N avg X ms: game code, waiting for the GPU thread (by SyncGPU reason), events (gpu, vi, audio, ios, devices), throttle sleep, save, loop top; GPU thread busy (presenting); loads N avg X ms; presented frames ...
+
+- *game code*: the pass minus everything below: the JIT running Brawl.
+- *waiting for the GPU thread*: the CPU thread blocked in `SyncGPU` (by reason), `FlushGpu` or `WaitForGpuThreadIdle`.
+- *events*: CoreTiming callbacks by category, without the waits and throttle sleep inside them. *gpu* is mostly `SyncGPUCallback`, the deterministic GPU thread's preprocessing on the CPU thread. Timed on one pass in 7 and scaled (about 1,000 events a frame; two clock reads each cost a few percent of it).
+- *save*: the snapshot after the pass and its checksum; *loads* per rollback; *loop top*: GekkoNet, the network, time sync, waits for the peer (presented passes).
+- *GPU thread busy*: the GPU thread executing commands while the CPU thread ran those passes (it runs in parallel; the CPU feels it only through the waits).
+
+`gprb_status` has the totals as `frame_cost` (docs/harness-protocol.md); `gprb_mispredict.py run --video D3D11` prints them. `PPR_GPRB_NO_FRAME_COST=1` turns the profile off.
+
+**Findings** (`gprb_mispredict.py run`, FD Mario/Marth, a 3-frame rollback every frame, dual core, D3D11, unthrottled; this PC shared with other sessions' Dolphins). A re-run frame cost 2.3-2.8 ms: game code 1.3-1.6, save 0.62-0.72, GPU preprocessing events 0.21-0.25, waits for the GPU thread 0.11-0.15 (nearly all *aux space*), the rest small; a load 0.85-0.99 ms. GPU thread 0.9-1.2 ms a pass, in parallel. The Null backend gave the same CPU-side numbers.
+
+- Saves and loads walked the whole dirty-granule bitmap byte by byte: about 1.4 million entries for MEM1 and MEM2, for a few thousand marks (8,600 granules a frame). Then each memset the whole range to clear it. Each save also allocated a 4 MB index list. Each load memset and then scanned 1.4 MB of "needs a source" flags to find the granules the base snapshot supplies.
+- *aux space*: deterministic dual core copies display lists and indexed XF data into a 2 MB buffer for the GPU thread. When it runs out, `SyncGPU` drains the GPU thread's whole backlog: once every 4 frames, about 0.5 ms each.
+
+**Changes.**
+- `JITDirtyBitmap::ScanAndClear`: reads 8 entries at a time and clears only the words that had marks, with an atomic exchange, so a mark the GPU thread sets meanwhile (an EFB copy to RAM) is kept for the next scan instead of being lost to the memset. Saves use it (into a list kept with the slot) and so do loads.
+- Loads list the granules they flag and walk only those for the base snapshot; the flags are clear between loads.
+- The aux buffer is 8 MB (`AUX_FIFO_SIZE`; not part of savestates).
+- A ring buffer that waits only when full was tried instead. Dolphin died a few seconds into every session with it, and no debugger was available to say where, so it was not kept.
+
+**Results.** Same benchmark, old and new builds interleaved (3 pairs): 8.4-9.2 → 6.5-7.2 ms per game frame (-22%); save 0.64-0.67 → 0.15-0.16 ms; load 0.87-0.93 → 0.22-0.24 ms; aux-space waits 0.11-0.13 → 0.03-0.07 ms a pass. Two instances through netsim `cross_country`, delay 1, D3D11, dual core, to game set (raw `run/qa/fcost/sess-*`; the two runs at different times on the shared machine):
+
+| build | rollback cost (depth ~2.1) | re-run frame | late frames | screen hitches |
+|---|---|---|---|---|
+| before | 10.1 / 10.8 ms | 4.3 / 4.6 ms | 801 / 792 | 582 / 598 |
+| after | 5.9 / 6.0 ms | 2.8 / 2.9 ms | 381 / 398 | 375 / 355 |
+
+Determinism: the new build's runs (`ref,mp,mp`) equal the old build's reference trace on all 2,245 compared frames; the session had 0 checksum mismatches on 3,177 frames and equal traces.
+
+**What is left** (per re-run frame, this PC): game code 1.3-1.9 ms; GPU preprocessing 0.3; waits for the GPU thread for *other* (CP status reads) about 0.25 in sessions. The game code is Brawl's own frame, its rendering included (Phase 6: skipping the render changed the simulation). The player PCs' numbers will come from the `gprb frame cost` lines in their logs.
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).
@@ -1078,6 +1238,7 @@ Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v
 | `gpu_state` | CP FIFO, PI FIFO, PE control, interrupt cause/mask, deterministic-GPU flag |
 | `gprb_sound_state` | the sound archive player's allocated sounds (id, handle, owned/orphaned, duplicate ids) |
 | `gprb_status` (Phase 14 field) | `sound_stops_ignored` (resimulated stops of sounds the re-run timeline had not started yet) |
+| `gprb_status` (Phase 22 fields) | `following_peer` (this peer runs at the speed of a peer that cannot keep full speed), `peer_fps` (the peer's estimated frame rate) |
 
 Diagnostics through environment variables:
 - `PPR_GPRB_DIFF_FRAME=N`: byte diff of the region set, first run against resimulation.
@@ -1089,9 +1250,12 @@ Diagnostics through environment variables:
 - `PPR_GPRB_CENSUS=1`: record non-set granules written during the match (`gprb_census`).
 - `PPR_GPRB_INTERP_FROM=<game frame>`: JIT up to that frame, then the interpreter (and a break the harness resumes), for `cpu_trace` of late frames.
 - `PPR_GPRB_FORCE_FINAL=<port mask>`: those ports get their Final Smash at the last countdown frame (Phase 8; the sweep's `ffs` group).
+- `PPR_GPRB_FORCE_FINAL_AT=<session frame>:<port>[:first],...`: that port gets its Final Smash (`ftManager::setFinal`) before the frame's pass, in every pass of the frame, or with `first` only in its first run, as a Smash Ball broken by a run a rollback discards (Phase 24).
 - `PPR_GPRB_EVICT_DELAY_US=N`: every eviction job (the oldest slot merged into the base snapshot) sleeps N µs first, as on a starved machine (Phase 9).
 - `PPR_GPRB_EVICT_NO_WAIT=1`: loads do not wait for the eviction job (the behaviour before Phase 9, to reproduce the race).
 - `PPR_GPRB_RESIM_AUDIO=advance`: the sound system runs through resimulated passes and their samples are dropped (the behaviour before Phase 14, for A/B runs).
+- `PPR_GPRB_TEST_FRAME_COST_US=N`: every pass (a rollback's too) busy-waits N µs more, as on a PC that cannot keep full speed (Phase 22; `gprb_session.py --env-b`).
+- `PPR_GPRB_TEST_NO_FOLLOW=1`: no following of a slow peer, Slippi's time sync alone (Phase 22, for A/B runs).
 
 ## Commits (`dolphin-gprb`, branch `gameplay-rollback`)
 

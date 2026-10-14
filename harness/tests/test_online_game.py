@@ -34,7 +34,7 @@ from ppharness import paths
 from ppharness.backend import OnlineBackend, OnlineUser
 from ppharness.client import HarnessClient, PadInput
 from ppharness.instance import DolphinInstance, InstanceConfig
-from ppharness.netsim import NetSim
+from ppharness.netsim import LinkProfile, NetSim
 
 from test_online import _logged_in, _make_backend, _wait
 
@@ -869,7 +869,7 @@ def test_opponent_leaves_in_the_middle_of_a_game(backend: OnlineBackend,
     assert f1 - f0 < 140 and f2 - f0 < 200, (f0, f1, f2)
 
 
-def _p2p_through_netsim(preset: str) -> tuple[list[NetSim], tuple[dict[str, Any], dict[str, Any]]]:
+def _p2p_through_netsim(preset: str | LinkProfile) -> tuple[list[NetSim], tuple[dict[str, Any], dict[str, Any]]]:
     """Both games' P2P traffic through one netsim relay (the matchmaking server hands out real
     addresses). Both games are on 127.0.0.1, so each takes the other's LAN address (Slippi's
     rule for the same external IP); they announce loopback aliases instead ([Online] ForceLanIP /
@@ -887,6 +887,47 @@ def _p2p_through_netsim(preset: str) -> tuple[list[NetSim], tuple[dict[str, Any]
     inis = [{"Online": {"ForceNetplayPort": True, "NetplayPort": ports[i], "ForceLanIP": True,
                         "LanIP": aliases[i]}} for i in range(2)]
     return [sim], (inis[0], inis[1])
+
+
+def test_direct_match_on_a_path_that_drops_ip_fragments(backend: OnlineBackend,
+                                                        dolphin: Callable[..., DolphinInstance],
+                                                        gpu_backend: str) -> None:
+    """Some players' routers or ISPs drop IP fragments (prod 2026-10-13: every game one player
+    hosted against such a player froze for 15 s at the barrier and ended "peer timed out"; the
+    games that player hosted worked). At the barrier the host's state message carries its sync
+    block and task order, about 5.5 KB: one UDP datagram over the 1500-byte MTU goes as IP
+    fragments, so the joiner heard nothing from the host from the barrier on, dropped it after
+    7.2 s of silence, and the host dropped the joiner 7.2 s later. Here the P2P traffic goes
+    through netsim with max_datagram 1472 (what a 1500-byte MTU carries unfragmented): the
+    match starts on both and no datagram is dropped for its size, as the session splits a
+    control message that would be fragmented into datagrams that are not."""
+    sims, inis = _p2p_through_netsim(LinkProfile(max_datagram=1472))
+    try:
+        a, b, _, _ = _connected_direct(backend, dolphin, gpu_backend, "gameplay-no-fragments",
+                                       ("otis", "pia"), dolphin_ini=inis)
+        try:
+            online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running"
+                                        for g in (a, b)), 120, "the match to run on both")
+        finally:
+            print(sims[0].format_stats())
+            for g in (a, b):
+                st = online_set.gstatus(g.c)
+                print(g.name, st["phase"], st.get("error"), st.get("end_reason"))
+        a.steps("wait 120")
+        assert all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b))
+        stats = sims[0].stats()
+        assert all(stats[d]["dropped_by_reason"].get("fragment", 0) == 0 for d in ("up", "down")),             sims[0].format_stats()
+        # The host's state did need splitting (else this would pass without the fix).
+        split = [m.group(0) for g in (a, b) for m in re.finditer(
+            r"our state message is \d+ bytes: sent as \d+ datagrams of at most \d+",
+            (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace"))]
+        print(split)
+        assert split, "no state message was split"
+        for g in (a, b):
+            g.c.mm_cancel()
+    finally:
+        for sim in sims:
+            sim.stop()
 
 
 @pytest.mark.slow

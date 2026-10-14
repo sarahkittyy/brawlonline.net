@@ -1,16 +1,18 @@
 import { chunk } from "@common/chunk";
 import type { ReplayFilter } from "@database/filters/types";
-import { FileRepository } from "@database/repositories/file_repository";
+import { FileRepository, inFolderTree } from "@database/repositories/file_repository";
 import { GameRepository } from "@database/repositories/game_repository";
 import { PlayerRepository } from "@database/repositories/player_repository";
 import type { Database, FileRecord, GameRecord, NewFile, NewGame, NewPlayer, PlayerRecord } from "@database/schema";
 import { boolToInt, boolToIntOrNull } from "@database/utils";
 import type { FileResult, Progress, ReplayProvider } from "@replays/types";
+import { STATS_NOT_AVAILABLE } from "@replays/types";
 import type { StadiumStatsType, StatsType } from "@slippi/slippi-js/node";
 import { shell } from "electron";
 import log from "electron-log";
 import { pathExists } from "fs-extra";
 import type { Kysely, Transaction } from "kysely";
+import { readdir } from "node:fs/promises";
 import path from "path";
 
 import { extractPlayerNames } from "../extract_player_names";
@@ -21,6 +23,11 @@ import { Continuation } from "./continuation";
 import { inferStartTime } from "./infer_start_time";
 import { mapGameRecordToFileResult } from "./record_mapper";
 
+// A folder's view includes its subfolders (the replay folder's YYYY-MM folders): how deep and how
+// many folders are indexed with it at most
+const SUBFOLDER_DEPTH = 4;
+const MAX_FOLDERS = 256;
+
 // Batch size for processing replays - how many insertions to be done in a single transaction
 const INSERT_REPLAY_BATCH_SIZE = 500;
 
@@ -30,6 +37,8 @@ const SQLITE_PARAM_LIMIT_BATCH_SIZE = 500;
 
 export class DatabaseReplayProvider implements ReplayProvider {
   private currentSearchRequestId = 0;
+  /** loadFile calls in progress by path: the stats page's two calls load the same file at once. */
+  private readonly loadingFiles = new Map<string, Promise<FileResult>>();
 
   constructor(private readonly db: Kysely<Database>, private readonly workerPool?: ReplayIndexingPoolManager) {}
 
@@ -75,7 +84,7 @@ export class DatabaseReplayProvider implements ReplayProvider {
       // Only sync if the folder exists on disk
       if (await pathExists(folder)) {
         const syncStartTime = Date.now();
-        await this.syncReplayDatabase(folder, onProgress, INSERT_REPLAY_BATCH_SIZE, requestId);
+        await this.syncFolderTree(folder, onProgress, requestId);
         const syncDuration = Date.now() - syncStartTime;
         log.info(`[Request ${requestId}] Database sync completed in ${syncDuration}ms`);
 
@@ -162,6 +171,32 @@ export class DatabaseReplayProvider implements ReplayProvider {
     };
   }
 
+  async findReplaysForMatches(matchIds: string[], folders: string[]): Promise<Record<string, string[]>> {
+    // The replay folders and their month folders (Dolphin's ReplayMonthlyFolders), indexed first:
+    // only files the database has can be found by match.
+    for (const folder of folders.slice(0, 16)) {
+      if (await pathExists(folder)) {
+        await this.syncFolderTree(folder);
+      }
+    }
+    const found: Record<string, string[]> = {};
+    for (const matchId of matchIds.slice(0, 200)) {
+      if (!matchId) {
+        continue;
+      }
+      const records = await GameRepository.getAllFilePaths(
+        this.db,
+        null,
+        [{ type: "session", sessionIds: [matchId] }],
+        { field: "startTime", direction: "asc" },
+      );
+      if (records.length > 0) {
+        found[matchId] = records.map((record) => path.resolve(record.folder, record.name));
+      }
+    }
+    return found;
+  }
+
   async getAllFilePaths(
     folder: string | undefined,
     orderBy: {
@@ -176,7 +211,7 @@ export class DatabaseReplayProvider implements ReplayProvider {
     // Sync the database first (add new files, remove deleted files)
     // Only sync if folder is specified and exists on disk
     if (folder !== undefined && (await pathExists(folder))) {
-      await this.syncReplayDatabase(folder, undefined, INSERT_REPLAY_BATCH_SIZE);
+      await this.syncFolderTree(folder);
     }
 
     // Query all file paths using the dedicated repository method
@@ -190,6 +225,18 @@ export class DatabaseReplayProvider implements ReplayProvider {
   }
 
   async loadFile(filePath: string): Promise<FileResult> {
+    // A file not indexed yet is inserted by the first call; a second call at the same time
+    // would insert it again (SQLITE_CONSTRAINT_UNIQUE), so it waits for the first one.
+    const inProgress = this.loadingFiles.get(filePath);
+    if (inProgress) {
+      return await inProgress;
+    }
+    const loading = this.loadFileOnce(filePath).finally(() => this.loadingFiles.delete(filePath));
+    this.loadingFiles.set(filePath, loading);
+    return await loading;
+  }
+
+  private async loadFileOnce(filePath: string): Promise<FileResult> {
     const filename = path.basename(filePath);
     const folder = path.dirname(filePath);
 
@@ -214,7 +261,7 @@ export class DatabaseReplayProvider implements ReplayProvider {
 
   async calculateGameStats(_fullPath: string): Promise<StatsType | undefined> {
     // Slippi computes stats from .slp files with slippi-js; our replay format has no parser yet.
-    throw new Error("Stats are not available for this replay format yet.");
+    throw new Error(STATS_NOT_AVAILABLE);
   }
 
   async calculateStadiumStats(_fullPath: string): Promise<StadiumStatsType | undefined> {
@@ -262,7 +309,7 @@ export class DatabaseReplayProvider implements ReplayProvider {
     // Only sync if folder is specified and exists on disk
     if (folder !== undefined && (await pathExists(folder))) {
       const syncStartTime = Date.now();
-      await this.syncReplayDatabase(folder, undefined, INSERT_REPLAY_BATCH_SIZE);
+      await this.syncFolderTree(folder);
       const syncDuration = Date.now() - syncStartTime;
       log.info(`Pre-delete sync completed in ${syncDuration}ms`);
     }
@@ -280,7 +327,7 @@ export class DatabaseReplayProvider implements ReplayProvider {
 
         // Apply folder filter if specified
         if (folder !== undefined) {
-          excludeQuery = excludeQuery.where("folder", "=", folder);
+          excludeQuery = excludeQuery.where(inFolderTree(folder));
         }
 
         const excludeRecords = await excludeQuery.where("name", "in", batch).select("_id").execute();
@@ -387,6 +434,50 @@ export class DatabaseReplayProvider implements ReplayProvider {
     }
 
     return errCount;
+  }
+
+  /**
+   * Indexes `folder` and the folders under it (SUBFOLDER_DEPTH deep, MAX_FOLDERS at most), and
+   * forgets the files of folders under it that are gone from disk.
+   */
+  private async syncFolderTree(folder: string, onProgress?: (progress: Progress) => void, requestId?: number) {
+    const folders = [folder];
+    const depth = [0];
+    for (let i = 0; i < folders.length && folders.length < MAX_FOLDERS; i++) {
+      if (depth[i] >= SUBFOLDER_DEPTH) {
+        continue;
+      }
+      try {
+        const entries = await readdir(folders[i], { withFileTypes: true });
+        for (const e of entries) {
+          if (e.isDirectory() && folders.length < MAX_FOLDERS) {
+            folders.push(path.join(folders[i], e.name));
+            depth.push(depth[i] + 1);
+          }
+        }
+      } catch (err) {
+        log.warn(`Could not list ${folders[i]}: ${err}`);
+      }
+    }
+    for (const f of folders) {
+      if (this.isRequestSuperseded(requestId)) {
+        return;
+      }
+      await this.syncReplayDatabase(f, f === folder ? onProgress : undefined, INSERT_REPLAY_BATCH_SIZE, requestId);
+    }
+    const listed = new Set(folders);
+    for (const gone of await FileRepository.findFoldersUnder(this.db, folder)) {
+      if (!listed.has(gone) && !(await pathExists(gone))) {
+        const files = await FileRepository.findAllFilesInFolder(this.db, gone);
+        for (const batch of chunk(
+          files.map(({ _id }) => _id),
+          SQLITE_PARAM_LIMIT_BATCH_SIZE,
+        )) {
+          await FileRepository.deleteFileById(this.db, ...batch);
+        }
+        log.info(`Forgot ${files.length} replay(s) of ${gone} (no longer on disk)`);
+      }
+    }
   }
 
   private async syncReplayDatabase(
@@ -627,7 +718,8 @@ export class DatabaseReplayProvider implements ReplayProvider {
 
     const gameRecord = await GameRepository.insertGame(trx, newGame);
     const newPlayers = generateNewPlayers(gameRecord._id, parsedInfo);
-    const playerRecords = await PlayerRepository.insertPlayer(trx, ...newPlayers);
+    // A replay listed by name and date only has no players (an insert of none is an SQL error).
+    const playerRecords = newPlayers.length > 0 ? await PlayerRepository.insertPlayer(trx, ...newPlayers) : [];
 
     return { fileRecord, gameRecord, playerRecords };
   }

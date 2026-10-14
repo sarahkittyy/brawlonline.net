@@ -31,6 +31,7 @@
 #include "Core/DolphinAnalytics.h"
 #include "Core/Harness/Harness.h"
 #include "Core/Online/ModsRoom.h"
+#include "Core/Rollback/ReplayPlayback.h"
 #include "Core/System.h"
 
 #include "DolphinQt/HangWatchdog.h"
@@ -281,6 +282,9 @@ int main(int argc, char* argv[])
     // Copied while options.get's value lives: a pointer into it dangled after this statement.
     if (std::string room = static_cast<const char*>(options.get("mods_room")); !room.empty())
       Online::ModsRoom::SetCommandLine(std::move(room));
+    // Replays (the launcher's playback Dolphin): what to play, from the comm file.
+    if (options.is_set("replay_comm"))
+      Gprb::Replay::Playback::SetCommFile(static_cast<const char*>(options.get("replay_comm")));
 
     // Started before the main window exists so MainWindow can skip interactive startup prompts
     // (the update check) when running under the harness.
@@ -368,6 +372,7 @@ int main(int argc, char* argv[])
     hang_watchdog.Stop();
     Harness::Shutdown();
   }
+  Gprb::Replay::Playback::Shutdown();
 
   Core::Shutdown(Core::System::GetInstance());
   UICommon::Shutdown();

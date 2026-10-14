@@ -21,6 +21,7 @@
 #include "Core/Core.h"
 #include "Core/DolphinAnalytics.h"
 #include "Core/Harness/Harness.h"
+#include "Core/Rollback/ReplayPlayback.h"
 #include "Core/Host.h"
 #include "Core/Online/ModsRoom.h"
 #include "Core/Online/OnlineSession.h"
@@ -222,6 +223,8 @@ int main(const int argc, char* argv[])
   // Copied while options.get's value lives: a pointer into it dangled after this statement.
   if (std::string room = static_cast<const char*>(options.get("mods_room")); !room.empty())
     Online::ModsRoom::SetCommandLine(std::move(room));
+  if (options.is_set("replay_comm"))
+    Gprb::Replay::Playback::SetCommFile(static_cast<const char*>(options.get("replay_comm")));
 
   std::optional<std::string> save_state_path;
   if (options.is_set("save_state"))
@@ -354,6 +357,7 @@ int main(const int argc, char* argv[])
 
   s_platform->MainLoop();
   Harness::Shutdown();
+  Gprb::Replay::Playback::Shutdown();
   Core::Stop(Core::System::GetInstance());
 
   Core::Shutdown(Core::System::GetInstance());

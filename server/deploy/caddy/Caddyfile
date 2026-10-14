@@ -20,10 +20,22 @@ brawlonline.net {
 	}
 	# Everything else is the static website.
 	# Ruleset pages: /r/<code> is website/r/index.html (docs/rulesets-protocol.md §4).
+	# Link previews (Discordbot and the like) get accounts' preview page instead: they don't run
+	# the page's script, so only it can name the ruleset (title, no description).
 	handle /r/* {
-		root * /var/www/brawlonline
-		try_files {path} /r/index.html
-		file_server
+		@unfurler {
+			path_regexp code ^/r/([A-Za-z0-9]{1,16})$
+			header_regexp ua User-Agent (?i)(discordbot|twitterbot|slackbot|facebookexternalhit|telegrambot|whatsapp|linkedinbot|redditbot|mastodon|bluesky|skypeuripreview|embedly|iframely)
+		}
+		handle @unfurler {
+			rewrite * /v1/rulesets/{re.code.1}/preview
+			reverse_proxy 127.0.0.1:8080
+		}
+		handle {
+			root * /var/www/brawlonline
+			try_files {path} /r/index.html
+			file_server
+		}
 	}
 	handle {
 		root * /var/www/brawlonline

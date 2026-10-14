@@ -63,8 +63,18 @@ constexpr u32 SESSION_QUIT_STAYS = 0x21C;
 //   match, cleared at its setup.
 constexpr u32 SESSION_QUIT_BY = 0x21D;
 constexpr u32 SESSION_QUIT_RUNBACK = 0x21E;
-// SESSION's address in game memory, 0 before the plugin's block is found.
+// A game played again after a desync (Gprb::Session::Restore; docs/game-code.md, desync
+// recovery), from the setup, the same on every machine: SESSION_RESTORE u8 1, then per player its
+// stocks (u8, 0 out of the game) and damage (f32) and the match's time limit in frames (u32 in the
+// rules, 0 the rules' own).
+constexpr u32 SESSION_RESTORE = 0x21F;
+constexpr u32 SESSION_PLAYER_RESTORE_STOCKS = 0x3C;
+constexpr u32 SESSION_PLAYER_RESTORE_DAMAGE = 0x7C;
+constexpr u32 SESSION_RESTORE_FRAMES = 0x234;
+// SESSION's address in game memory, 0 before the plugin's block is found, and its size (the
+// plugin's PPOM version's).
 u32 SessionAddress();
+u32 SessionSize();
 
 // From the frame-end HLE hook (CPU thread), every game frame.
 void OnFrameEnd(const Core::CPUThreadGuard& guard);

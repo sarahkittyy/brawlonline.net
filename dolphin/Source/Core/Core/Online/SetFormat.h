@@ -27,6 +27,7 @@ enum class StepType : u8
   Pick = 2,    // choose the stage (the loser's counterpick)
   Char = 3,    // the characters (winner, then loser)
   Done = 4,    // the stage is decided and nothing is left to do for it
+  Resume = 5,  // a desynced game starts again: every player readies up with the same character
 };
 
 struct Format

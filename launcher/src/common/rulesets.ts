@@ -68,8 +68,14 @@ export const MAX_RULESET_NAME_LEN = 32;
 export const MAX_BANS = 3;
 export const BEST_OF_CHOICES = [0, 3, 5, 7] as const;
 
-/** P+ v3.2's item switch after a fresh boot. */
+/** P+ v3.2's item switch after a fresh boot: Stage Items and EX Items on. */
 export const PPLUS_ITEM_SWITCH = [0x00, 0x06, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
+
+/**
+ * Our default item switch: P+'s with Stage Items off (the user's decision, 2026-10-13), so a ruleset
+ * that turns an item or two on does not also get the stages' items. EX Items stays on.
+ */
+export const DEFAULT_ITEM_SWITCH = [0x00, 0x04, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00];
 
 /** P+ v3.2's legal stages (srStageKind) with their names, in the order the editor lists them. */
 export const PPLUS_LEGAL_STAGES: readonly { id: number; name: string }[] = [
@@ -115,7 +121,7 @@ export function defaultMatchRules(): MatchRules {
     teamAttack: true,
     pause: "normal",
     itemFrequency: 0,
-    itemSwitch: [...PPLUS_ITEM_SWITCH],
+    itemSwitch: [...DEFAULT_ITEM_SWITCH],
     // Off by default (the user's decision, 2026-10-12), as the server's MatchRules::default.
     hazards: false,
     autoLCancel: false,

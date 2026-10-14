@@ -1,6 +1,7 @@
 import type { ReplayFilter } from "@database/filters/types";
 import type { Database } from "@database/schema";
 import type { Kysely } from "kysely";
+import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { FileRepository } from "../repositories/file_repository";
@@ -114,6 +115,52 @@ describe("GameRepository.searchGames with filters", () => {
 
       expect(results).toHaveLength(1);
       expect(results[0].name).toBe("unknown.slp");
+    });
+  });
+
+  describe("DurationFilter orWon (Hide short games)", () => {
+    it("keeps a short game someone won and hides a short one nobody won", async () => {
+      const folder = "/replays";
+      const won = await addGameWithDuration(folder, "short-won.brep", 1000);
+      await PlayerRepository.insertPlayer(db, aMockPlayerWith(won.gameId, { port: 1, is_winner: 1 }));
+      await PlayerRepository.insertPlayer(db, aMockPlayerWith(won.gameId, { port: 2, is_winner: 0 }));
+      const quit = await addGameWithDuration(folder, "short-quit.brep", 1000);
+      await PlayerRepository.insertPlayer(db, aMockPlayerWith(quit.gameId, { port: 1, is_winner: 0 }));
+      await addGameWithDuration(folder, "long.brep", 3600);
+
+      const filters: ReplayFilter[] = [{ type: "duration", minFrames: 1800, orWon: true }];
+      const results = await GameRepository.searchGames(db, folder, filters, {
+        limit: 10,
+        orderBy: { field: "startTime", direction: "desc" },
+      });
+
+      expect(results.map((r) => r.name).sort()).toEqual(["long.brep", "short-won.brep"]);
+    });
+  });
+
+  describe("folder", () => {
+    it("includes the folder's subfolders, not folders that only share its name's start", async () => {
+      const root = path.join(path.sep, "replays", "Brawl Online");
+      await addGame(root, "root.brep");
+      await addGame(path.join(root, "2026-10"), "october.brep");
+      await addGame(path.join(root, "2026-10", "deeper"), "deeper.brep");
+      await addGame(`${root} 2`, "sibling.brep");
+
+      const all = await GameRepository.searchGames(db, root, [], {
+        limit: 10,
+        orderBy: { field: "startTime", direction: "desc" },
+      });
+      expect(all.map((r) => r.name).sort()).toEqual(["deeper.brep", "october.brep", "root.brep"]);
+      expect(await GameRepository.countGames(db, root, [])).toBe(3);
+
+      const month = await GameRepository.searchGames(db, path.join(root, "2026-10"), [], {
+        limit: 10,
+        orderBy: { field: "startTime", direction: "desc" },
+      });
+      expect(month.map((r) => r.name).sort()).toEqual(["deeper.brep", "october.brep"]);
+      expect(await FileRepository.findFoldersUnder(db, root)).toEqual(
+        expect.arrayContaining([path.join(root, "2026-10"), path.join(root, "2026-10", "deeper")]),
+      );
     });
   });
 

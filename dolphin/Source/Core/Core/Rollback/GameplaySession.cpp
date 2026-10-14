@@ -13,6 +13,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <limits>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -30,6 +31,7 @@
 
 #include "Common/Hash.h"
 #include "Common/Logging/Log.h"
+#include "Common/StringUtil.h"
 #include "Common/Swap.h"
 #include "Common/Thread.h"
 #include "Common/Timer.h"
@@ -43,16 +45,23 @@
 #include "Core/HW/CPU.h"
 #include "Core/HW/Memmap.h"
 #include "Core/HW/VideoInterface.h"
+#include "Core/Online/Chat.h"
+#include "Core/Online/ChatText.h"
 #include "Core/Online/GameBridge.h"
 #include "Core/Online/GameSetup.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/FrameProfile.h"
 #include "Core/Rollback/GameplayRollback.h"
 #include "Core/Rollback/PeerData.h"
 #include "Core/Rollback/PresentStats.h"
+#include "Core/Rollback/ReplayKeyframes.h"
+#include "Core/Rollback/ReplayRecorder.h"
 #include "Core/Rollback/RollbackManager.h"
 #include "Core/System.h"
+#include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/Fifo.h"
+#include "VideoCommon/Present.h"
 #include "VideoCommon/OnScreenDisplay.h"
 
 namespace Gprb::Session
@@ -87,6 +96,10 @@ enum class Mode
   None,
   SyncTest,
   Network,
+  // A replay (docs/design/replays.md §6): a joiner whose host is the file. Armed: waiting for the
+  // game to start the replay's match (the plugin does, from SESSION); then the barrier with the
+  // file's values, the countdown, and the recorded inputs, every frame once, without rollback.
+  Playback,
 };
 
 enum class Phase
@@ -153,6 +166,19 @@ struct MatchSetup
   int num_players = 0;
   std::array<LobbyPlayer, MAX_LOBBY_PLAYERS> players{};
   bool teams = false;  // a team battle (players[i].team)
+  Restore restore;     // a desynced game played again from the agreed state (SetDesyncRecovery)
+};
+
+// A desync where the game starts again (SetDesyncRecovery, docs/game-code.md desync recovery):
+// each machine's checksums of the last RECOVERY_WINDOW confirmed frames, which the players
+// exchange (the state message's "dsr") so that the host finds the last frame all of them agree
+// on. Frames past the prediction window may still be predictions, so the list ends there.
+constexpr s64 RECOVERY_WINDOW = 240;
+struct RecoveryList
+{
+  u32 match = 0;  // the desynced match's index
+  s64 from = 0;   // the session frame of crcs[0]
+  std::vector<u32> crcs;  // 0: no record of that frame
 };
 
 // One other player of the session, by in-game port (State::peers). Everything here that came
@@ -183,6 +209,7 @@ struct PeerView
   picojson::object extra;  // SetLocalExtra of the peer
   LockIn lock;
   MatchSetup setup;  // the host's setup (joiner)
+  std::optional<RecoveryList> recovery;  // its checksums after a desync (the state's "dsr")
   u8 last_winner = 0xFF;
   picojson::object selections;
   std::string name;
@@ -203,6 +230,13 @@ struct PeerView
   Clock::time_point last_heard{};
   double rtt_ms = -1;
   bool oversize_logged = false;  // a control message over MAX_CONTROL_SIZE came from it
+  // Its PC is falling behind (its own check, UpdateSlowNotice): its frame rate, 0 if not; and
+  // whether this match showed the notice.
+  double slow_fps = 0;
+  bool slow_shown = false;
+  // Its state says it takes GekkoNet's messages bundled ('B', PeerData::AppendGekkoBundle);
+  // builds before 2026-10-13 do not.
+  bool gekko_bundles = false;
 };
 
 struct FrameRecord
@@ -214,6 +248,11 @@ struct FrameRecord
   u64 region_hash = 0;
   u32 game_set = 0;
   u32 game_frame = 0;
+  // What a game restarted after a desync takes from the last frame every machine agreed on
+  // (Restore): per port the stocks and damage (raw, as the checksum has them) and the match timer.
+  std::array<u32, MAX_LOBBY_PLAYERS> stocks{};
+  std::array<u32, MAX_LOBBY_PLAYERS> damage{};
+  u32 frames_left = 0;
 };
 
 struct PendingOps
@@ -252,6 +291,12 @@ struct State
   bool ported = false;
   // Packets from an address that is not a peer's, dropped (status: foreign_packets).
   u64 foreign_packets = 0;
+  // Control messages too large for one datagram go as 'F' pieces (PeerData::ControlDatagrams):
+  // the next message id (random at the session's start, so a peer's restarted session cannot
+  // mix its pieces with an older message's), and the others' pieces (network thread only).
+  std::atomic<u32> control_id{0};
+  PeerData::ControlReassembler reassembler;
+  bool split_logged = false;  // our state message went as 'F' pieces (logged once)
   // The session ends (fewer than two players left): handled on the CPU thread for a match.
   bool peer_left = false;
   std::string peer_left_reason;
@@ -268,11 +313,28 @@ struct State
   // The last match ended on a desync: reported to the game (LOCAL `desynced`, DESYNC DETECTED
   // and the end without "GAME!") until it has left the match scene.
   bool desynced = false;
+  // The last match ended on a desync and the next game plays it again (SetDesyncRecovery): this
+  // machine's checksums, sent to the others until that game starts, and the desynced game's
+  // setup, which the next one repeats.
+  struct Recovery
+  {
+    bool pending = false;
+    RecoveryList list;
+    MatchSetup setup;
+  } recovery;
   std::thread net_thread;
   std::atomic<bool> net_run{false};
   std::mutex gekko_rx_mutex;
   std::deque<std::pair<int, std::vector<u8>>> gekko_rx;  // (sender's port, packet)
   std::vector<GekkoNetResult*> gekko_rx_ptrs;
+  // Open GekkoBatch scopes and, per peer, the GekkoNet messages they hold (under s.mutex).
+  int gekko_batch = 0;
+  std::array<std::vector<u8>, MAX_LOBBY_PLAYERS> gekko_bundle;
+  // The last state message sent, when, and how many more copies of it the 50 ms tick sends in a
+  // running match (SendState).
+  std::string state_sent;
+  Clock::time_point state_sent_at{};
+  int state_repeats = 0;
   std::array<PeerView, MAX_LOBBY_PLAYERS> peers;  // by in-game port (this player's unused)
   picojson::object local_selections;
   u32 session_seed = 0;  // host's, used to seed the RNG at the start of every match
@@ -314,6 +376,7 @@ struct State
   bool at_start = false;
   bool go = false;
   u64 setup_hash = 0;
+  std::vector<u8> setup_key;  // the bytes of setup_hash (SetupKey), for the replay
   // This player's input delay for the current game, fixed when its GekkoNet session is created.
   int input_delay = DEFAULT_INPUT_DELAY;
   SyncBlock sync;  // host: the values the joiner copies
@@ -365,6 +428,26 @@ struct State
   std::array<u8, 4 * INPUT_SIZE> local_inputs{};
   double speed_factor = 1.0;
   u32 last_timesync_frame = UINT32_MAX;
+  // Following a peer that cannot keep full speed (UpdatePeerFollow): whether it is on, this peer's
+  // speed while it is, the gap, frame and time at the last time sync, and the peer's frame rate.
+  bool following = false;
+  double follow_speed = 1.0;
+  double follow_prev_gap = 0;
+  s64 follow_prev_frame = -1;
+  u64 follow_prev_own_late = 0;
+  int follow_release = 0;  // time syncs in a row that saw the peer at full speed
+  Clock::time_point follow_t{};
+  double peer_fps = 0;
+  u64 own_late = 0;  // displayed frames late without a rollback before them (this PC's own speed)
+  // "Falling behind" (UpdateSlowNotice): the last check of this PC's own speed, the checks in a
+  // row that found it slow, its frame rate once it is (0: not; sent to the peers), and whether
+  // this match showed the notice.
+  s64 slow_check_frame = -1;
+  u64 slow_check_own_late = 0;
+  Clock::time_point slow_check_t{};
+  int slow_checks = 0;
+  double slow_fps = 0;
+  bool slow_shown = false;
   // Slippi's frame advance (UpdateTimeSync): catch-up frames left in this batch, whether a batch
   // runs, and whether the frame running now / the previous displayed frame was one (its throttle
   // point is a frame early on purpose, not late).
@@ -400,6 +483,8 @@ struct State
     double late_ms_max = 0;
     u64 stalls = 0;  // updates with no frame to run (waited for the peer)
     u64 advances = 0;  // catch-up frames (UpdateTimeSync)
+    u64 followed = 0;  // frames run at the speed of a peer that cannot keep full speed
+    double peer_fps_sum = 0;  // the peer's frame rate over the followed frames
     double wall_ms = 0;  // wall-clock time of the window (its frames per second: the game's speed)
     double stall_ms = 0, stall_ms_max = 0;
     double ahead_sum = 0, ahead_min = 1e9, ahead_max = -1e9;
@@ -414,6 +499,34 @@ struct State
   bool prev_frame_rolled_back = false;
   Clock::time_point burst_t0{};
   bool burst_open = false;
+  // Frame cost profile (Rollback::FrameProfile, docs/gameplay-rollback-status.md "Frame cost
+  // profile"): where re-run and presented passes spend their wall-clock time. A pass runs from
+  // the end of its loop top (RunFrame) to the next loop top.
+  struct PassCost
+  {
+    u64 passes = 0;
+    u64 guest_ns = 0;     // the pass: the game's frame
+    u64 save_ns = 0;      // the snapshot after it, with its checksum (the next loop top)
+    u64 loop_top_ns = 0;  // the loop top before it, without loads and saves (presented passes:
+                          // GekkoNet, the network, waits for the peer, time sync)
+    Rollback::FrameProfile::Counters c;  // during the pass
+    u64 event_passes = 0;  // passes whose CoreTiming events were timed (c.event_ns, c.events)
+  };
+  struct FrameCost
+  {
+    PassCost resim, shown;
+    u64 loads = 0, load_ns = 0;
+  };
+  FrameCost cost_window, cost_total;
+  s64 cost_window_first = -1;
+  bool cost_pass_open = false;
+  bool cost_pass_resim = false;  // the pass open, or the last one closed
+  bool cost_pass_events = false;  // the pass open times its CoreTiming events
+  u64 cost_pass_serial = 0;
+  Clock::time_point cost_pass_t0{};
+  Clock::time_point cost_loop_top_t0{};
+  u64 cost_loop_top_excl_ns = 0;  // loads and saves in the current loop top
+  Rollback::FrameProfile::Counters cost_pass_c0;
   std::vector<FrameRecord> history = std::vector<FrameRecord>(CHECKSUM_HISTORY);
   std::vector<FrameRecord> first_runs = std::vector<FrameRecord>(64);
   std::vector<std::string> desync_log;
@@ -491,6 +604,18 @@ struct State
   bool force_final_inited = false;  // read for the coming match (reset when a match starts)
   bool force_final_active = false;
   GuestRegs force_final_saved;
+  // Diagnostics (PPR_GPRB_FORCE_FINAL_AT): Final Smashes given in the match, before a session
+  // frame's pass, in every pass of that frame or only in its first run.
+  struct ForceFinalAt
+  {
+    s64 frame;
+    u32 port;
+    bool first_only;
+  };
+  std::vector<ForceFinalAt> force_final_at;
+  bool force_final_at_active = false;  // a guest call for the coming pass is running
+  bool force_final_at_reenter = false;  // RunFrame comes back for the same pass after the call
+  GuestRegs force_final_at_saved;
   u64 pass_serial = 0;  // counts session passes (diagnostics)
   u64 mispredicted_passes = 0;  // misprediction sync test: first runs given a wrong input
   // Pass log (PPR_GPRB_PASS_LOG=path): every GekkoNet update's load and passes, for replays.
@@ -500,6 +625,57 @@ struct State
   // Replay (SyncTestOptions::replay_path).
   FILE* replay = nullptr;
   bool replay_started = false;
+
+  // Playback (Mode::Playback): the replay, the next frame to play, the first frame whose
+  // checksum differed from the file's (-1: none), and how the recorded game ended.
+  struct Playback
+  {
+    std::shared_ptr<const Replay::File> file;
+    u32 start_frame = DEFAULT_START_FRAME;
+    u32 match_index = 0;
+    u32 seed = 0;
+    std::vector<u8> init;
+    std::vector<u8> setup_key;
+    u32 ports = 0;
+    int local_slot = 0;
+    SyncBlock sync;
+    std::vector<std::vector<std::string>> tasks;
+    bool sync_task_order = true;
+    std::vector<u8> session;
+    std::string end_method;
+    s64 final_frame = -1;
+    bool play_anyway = false;
+    u32 serial = 0;  // bumped for every replay armed (the game starts each one once)
+    size_t next = 0;
+    s64 desync_frame = -1;
+    std::string desync_text;
+    u64 frames_checked = 0;
+    bool started = false;   // its match started (the barrier passed)
+    bool finished = false;  // its last frame ran
+    // After its last frame, the end the live game showed: DISCONNECTED, DESYNC DETECTED, or the
+    // end of a 3-4 player match this player quit (LOCAL).
+    bool end_disconnected = false;
+    bool end_desynced = false;
+    bool end_quit_left = false;
+    std::string error;
+    // Controls (PlaybackControl): paused at the loop top, frames to run before pausing again, a
+    // seek's target (the frame to show; -1 none), the frames before which passes run unpresented
+    // (a seek's fast-forward), the speed, and whether to hold at the last frame (the last replay
+    // of what was asked) instead of ending the match.
+    bool paused = false;
+    int step = 0;
+    s64 seek_to = -1;
+    s64 ff_until = -1;
+    double speed = 1.0;
+    bool hold_at_end = false;
+    bool at_end = false;
+    // For the overlay: who played (INFO), the mode and game.
+    std::array<std::string, MAX_LOBBY_PLAYERS> names{};
+    std::array<u8, MAX_LOBBY_PLAYERS> chars{};
+    std::string title;
+  } pb;
+  // Keyframes for seeking (ReplayKeyframes.h), from the replay's first frame on.
+  std::unique_ptr<Replay::Keyframes> pb_keys = std::make_unique<Replay::Keyframes>();
 
   // Diagnostics: region-set samples (ConfigureSamples).
   u32 sample_every = 0;
@@ -514,9 +690,11 @@ State s;
 std::string NetStatsLine(const State::NetStats& w);
 void CloseNetWindowClock();
 void NetStatsFold(State::NetStats& t, const State::NetStats& w);
+void LogPerfVerdict(const State::NetStats& t);
 }  // namespace
 
 bool InMatchPhase();
+void EndReplay(Core::System& system, const std::string& reason, const GameResult* result);
 
 namespace
 {
@@ -527,6 +705,9 @@ bool PauseResimAudio();
 // File loads in a match (defined with RunSoundStops below).
 bool RunIoWait(const Core::CPUThreadGuard& guard);
 bool RunForceFinal(const Core::CPUThreadGuard& guard);
+bool RunForceFinalAt(const Core::CPUThreadGuard& guard, s64 frame, bool first_run);
+void SaveGuestRegs(const PowerPC::PowerPCState& ppc, State::GuestRegs* out);
+void RestoreGuestRegs(PowerPC::PowerPCState& ppc, const State::GuestRegs& in);
 
 // ---------------------------------------------------------------------------------------------
 // Guest helpers
@@ -540,6 +721,36 @@ void WriteU32(Core::System& system, u32 addr, u32 value)
 {
   const u32 be = Common::swap32(value);
   system.GetMemory().CopyToEmu(addr, &be, 4);
+}
+
+// Brawl's screen setting (Options > Screen; at boot the game copies the Wii's aspect ratio, SYSCONF
+// IPL.AR, into it): gmGlobalRecord (GameGlobal+0x24) menu data +0x810, byte +0x28 (0x9017BE78 on
+// P+), 0xC0 with 16:9 and 0x00 with 4:3. The game frames its camera with it, and a screen KO places
+// the fighter from the camera: peers with different settings desynced on every screen KO (prod
+// 2026-10-12, docs/gameplay-rollback-status.md Phase 25). Every match is played with the value a
+// fresh install has (16:9); how the picture is shown (Dolphin's aspect ratio, window, resolution)
+// stays each player's.
+constexpr u32 GG_RECORD = 0x24;
+constexpr u32 RECORD_SCREEN = 0x810 + 0x28;
+constexpr u8 SCREEN_BITS = 0xC0, SCREEN_WIDE = 0xC0;
+
+void PinScreenSetting(Core::System& system)
+{
+  const Guest g(system.GetMemory());
+  const auto gg = g.Ptr32(Addr::GAME_GLOBAL_PTR);
+  const auto record = gg ? g.Ptr32(*gg + GG_RECORD) : std::nullopt;
+  const u8* p = record ? g.Ptr(*record + RECORD_SCREEN, 1) : nullptr;
+  if (!p)
+  {
+    WARN_LOG_FMT(BRAWLBACK, "gprb: no game record: the screen setting is left as it is");
+    return;
+  }
+  const u8 was = *p;
+  const u8 now = static_cast<u8>((was & ~SCREEN_BITS) | SCREEN_WIDE);
+  if (now == was)
+    return;
+  system.GetMemory().CopyToEmu(*record + RECORD_SCREEN, &now, 1);
+  INFO_LOG_FMT(BRAWLBACK, "gprb: screen setting {:02x} -> {:02x} (16:9) for the match", was, now);
 }
 
 constexpr u32 PAD_CONFIG = 0x805B7480;  // g_PadConfig (ipPadConfig, 0x1AC bytes)
@@ -642,6 +853,25 @@ std::vector<u8> SetupKey(const Guest& g)
   key.push_back(p[MM_HAZARD] & MM_HAZARD_OFF);
   key.insert(key.end(), p + MM_ITEM_SWITCH, p + MM_ITEM_SWITCH + ITEM_SWITCH_SIZE);
   AppendCodeMenuValues(g, key);
+  // A desynced game played again: the restored stocks, damage and time limit the game applies from
+  // SESSION (the stocks and the time are in the setup above too). Only then, so that every other
+  // game's key is as before (replays compare it).
+  namespace GB = Online::GameBridge;
+  const u32 session = GB::SessionAddress();
+  const u8* restore = session ? g.Ptr(session + GB::SESSION_RESTORE, 1) : nullptr;
+  if (restore && *restore)
+  {
+    for (u32 port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+    {
+      const u32 pl = session + GB::SESSION_PLAYERS_OFF + port * GB::SESSION_PLAYER_SIZE;
+      if (const u8* st = g.Ptr(pl + GB::SESSION_PLAYER_RESTORE_STOCKS, 1))
+        key.push_back(*st);
+      if (const u8* d = g.Ptr(pl + GB::SESSION_PLAYER_RESTORE_DAMAGE, 4))
+        key.insert(key.end(), d, d + 4);
+    }
+    if (const u8* t = g.Ptr(session + GB::SESSION_RESTORE_FRAMES, 4))
+      key.insert(key.end(), t, t + 4);
+  }
   return key;
 }
 
@@ -934,6 +1164,12 @@ u32 FrameChecksum(const Guest& g, FrameRecord* rec)
               g.U32(Addr::LIBC_RAND_NEXT).value_or(0)};
   rec->fighters_crc = FightersCrc(fighters);
   rec->game_set = IsGameSet(g) ? 1 : 0;
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    rec->damage[port] = fighters[port][1];
+    rec->stocks[port] = fighters[port][2];
+  }
+  rec->frames_left = RemainingFrames(g);
   u32 crc = Common::StartCRC32();
   crc = Common::UpdateCRC32(crc, reinterpret_cast<const u8*>(&game_frame), 4);
   crc = Common::UpdateCRC32(crc, reinterpret_cast<const u8*>(rec->rng.data()), 12);
@@ -1033,6 +1269,22 @@ void SendToAll(const std::vector<u8>& data)
   });
 }
 
+// A control message to every other player, `copies` times: one 'C' packet, or 'F' pieces when
+// one datagram would be fragmented on the way (PeerData::ControlDatagrams). Returns the number
+// of datagrams one copy took.
+size_t SendControlToAll(std::string_view text, int copies = 1)
+{
+  size_t sent = 0;
+  for (int i = 0; i < copies; ++i)
+  {
+    const auto datagrams = PeerData::ControlDatagrams(text, s.control_id.fetch_add(1));
+    for (const auto& d : datagrams)
+      SendToAll(d);
+    sent = datagrams.size();
+  }
+  return sent;
+}
+
 // Tells the other players that this one has left the session (under s.mutex), with why when the
 // session gave up (they log it). Slippi's graceful ENet disconnect: the others go on without it
 // (3-4 players) or end the session at once, instead of waiting at a barrier for their timeout or
@@ -1048,11 +1300,7 @@ void SendLeave(std::string_view why)
   if (!why.empty())
     o["why"] = picojson::value(PeerData::LeaveReason(why));
   const std::string text = picojson::value(o).serialize();
-  std::vector<u8> pkt(text.size() + 1);
-  pkt[0] = 'C';
-  std::memcpy(pkt.data() + 1, text.data(), text.size());
-  for (int i = 0; i < 3; ++i)
-    SendToAll(pkt);
+  SendControlToAll(text, 3);
   s.leave_sent = true;
 }
 
@@ -1075,21 +1323,77 @@ void SendDesync()
   if (!s.socket)
     return;
   const std::string text = fmt::format(R"({{"t":"desync","v":1,"m":{}}})", s.match_index);
-  std::vector<u8> pkt(text.size() + 1);
-  pkt[0] = 'C';
-  std::memcpy(pkt.data() + 1, text.data(), text.size());
-  for (int i = 0; i < 3; ++i)
-    SendToAll(pkt);
+  SendControlToAll(text, 3);
+}
+
+// The messages GekkoSend holds for one peer while a GekkoBatch is open (a 'B' datagram,
+// PeerData::AppendGekkoBundle), sent when it closes (under s.mutex).
+void FlushGekkoBundle(int slot)
+{
+  auto& b = s.gekko_bundle[slot];
+  if (b.empty())
+    return;
+  const auto msgs = PeerData::SplitGekkoBundle(b.data(), b.size());
+  if (msgs && msgs->size() == 1)
+  {
+    // One message: as a 'G' packet, 2 bytes smaller.
+    std::vector<u8> pkt((*msgs)[0].size() + 1);
+    pkt[0] = 'G';
+    std::memcpy(pkt.data() + 1, (*msgs)[0].data(), (*msgs)[0].size());
+    SendRaw(slot, pkt);
+  }
+  else
+  {
+    SendRaw(slot, b);
+  }
+  b.clear();
 }
 
 void GekkoSend(GekkoNetAddress* addr, const char* data, int length)
 {
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  const int slot = GekkoAddrSlot(addr);
+  if (s.gekko_batch > 0 && slot >= 0 && s.peers[slot].gekko_bundles)
+  {
+    const auto* msg = reinterpret_cast<const u8*>(data);
+    auto& b = s.gekko_bundle[slot];
+    if (PeerData::AppendGekkoBundle(b, msg, static_cast<size_t>(length)))
+      return;
+    FlushGekkoBundle(slot);
+    if (PeerData::AppendGekkoBundle(b, msg, static_cast<size_t>(length)))
+      return;
+  }
   std::vector<u8> pkt(static_cast<size_t>(length) + 1);
   pkt[0] = 'G';
   std::memcpy(pkt.data() + 1, data, static_cast<size_t>(length));
-  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-  SendRaw(GekkoAddrSlot(addr), pkt);
+  SendRaw(slot, pkt);
 }
+
+// While one is open, what GekkoNet sends to a peer that takes 'B' datagrams waits and goes out as
+// one datagram when the last one closes. Open around the GekkoNet calls of one frame (the network
+// poll, the local input and the session update, microseconds apart): the frame's inputs, the ack
+// of the peer's inputs that poll received and the checksum the previous update queued then
+// travel together, one datagram a frame instead of about four. Never open one across emulation:
+// the messages would wait for it.
+struct GekkoBatch
+{
+  GekkoBatch()
+  {
+    std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+    ++s.gekko_batch;
+  }
+  ~GekkoBatch()
+  {
+    std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+    if (--s.gekko_batch == 0)
+    {
+      for (int slot = 0; slot < MAX_LOBBY_PLAYERS; ++slot)
+        FlushGekkoBundle(slot);
+    }
+  }
+  GekkoBatch(const GekkoBatch&) = delete;
+  GekkoBatch& operator=(const GekkoBatch&) = delete;
+};
 
 GekkoNetResult** GekkoReceive(int* length)
 {
@@ -1314,7 +1618,76 @@ picojson::value SetupJson(const MatchSetup& st)
   o["players"] = picojson::value(players);
   if (st.teams)
     o["teams"] = picojson::value(true);
+  if (st.restore.valid)
+  {
+    // The agreed frame, its checksum, per port the stocks and the damage (the float's bits, so
+    // every machine has the same value), and the timer.
+    const Restore& r = st.restore;
+    picojson::array stocks;
+    std::vector<u8> damage;
+    for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+    {
+      stocks.emplace_back(static_cast<double>(r.stocks[port]));
+      const u32 bits = std::bit_cast<u32>(r.damage[port]);
+      for (int shift = 24; shift >= 0; shift -= 8)
+        damage.push_back(static_cast<u8>(bits >> shift));
+    }
+    picojson::object rs;
+    rs["f"] = picojson::value(static_cast<double>(r.frame));
+    rs["c"] = picojson::value(static_cast<double>(r.checksum));
+    rs["s"] = picojson::value(stocks);
+    rs["d"] = picojson::value(Hex(damage));
+    rs["t"] = picojson::value(static_cast<double>(r.frames_left));
+    o["rs"] = picojson::value(rs);
+  }
   return picojson::value(o);
+}
+
+// The host's restore values (SetupJson's "rs"): every value in the range the game can play, else
+// none (the setup is then refused as a whole).
+std::optional<Restore> RestoreFromJson(const picojson::value& v)
+{
+  if (!v.is<picojson::object>())
+    return std::nullopt;
+  const auto& o = v.get<picojson::object>();
+  const auto field = [&](const char* k) -> const picojson::value* {
+    const auto it = o.find(k);
+    return it == o.end() ? nullptr : &it->second;
+  };
+  const auto frame = PeerData::JsonUInt(field("f"), 0x7FFFFFFF);
+  const auto crc = PeerData::JsonUInt(field("c"), 0xFFFFFFFF);
+  const auto left = PeerData::JsonUInt(field("t"), MAX_RESTORE_FRAMES);
+  const picojson::value* stocks = field("s");
+  const picojson::value* damage = field("d");
+  if (!frame || !crc || !left || !stocks || !stocks->is<picojson::array>() ||
+      stocks->get<picojson::array>().size() != MAX_LOBBY_PLAYERS || !damage ||
+      !damage->is<std::string>())
+  {
+    return std::nullopt;
+  }
+  const auto bytes = PeerData::ParseHex(damage->get<std::string>(), 4 * MAX_LOBBY_PLAYERS);
+  if (!bytes)
+    return std::nullopt;
+  Restore r;
+  r.valid = true;
+  r.frame = static_cast<s64>(*frame);
+  r.checksum = static_cast<u32>(*crc);
+  r.frames_left = static_cast<u32>(*left);
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    const auto n = PeerData::JsonUInt(&stocks->get<picojson::array>()[port], MAX_RESTORE_STOCKS);
+    if (!n)
+      return std::nullopt;
+    r.stocks[port] = static_cast<u8>(*n);
+    u32 bits = 0;
+    for (int i = 0; i < 4; ++i)
+      bits = (bits << 8) | (*bytes)[port * 4 + i];
+    const float d = std::bit_cast<float>(bits);
+    if (!(d >= 0.0f && d <= MAX_RESTORE_DAMAGE))
+      return std::nullopt;
+    r.damage[port] = d;
+  }
+  return r;
 }
 
 // The host's setup of a game. Every field is checked: a malformed setup is ignored as a whole
@@ -1373,6 +1746,13 @@ std::optional<MatchSetup> SetupFromJson(const picojson::object& o)
     return std::nullopt;
   if (st.num_players < 2)
     return std::nullopt;
+  if (const auto rs = o.find("rs"); rs != o.end())
+  {
+    const auto r = RestoreFromJson(rs->second);
+    if (!r)
+      return std::nullopt;
+    st.restore = *r;
+  }
   return st;
 }
 
@@ -1411,6 +1791,7 @@ u16 DrawRandomStage(u32 game)
 std::mutex s_result_callback_mutex;
 std::function<void(const GameResult&)> s_result_callback;
 std::atomic<bool> s_quit_loses{false};  // SetQuitLoses
+std::atomic<bool> s_desync_recovery{false};  // SetDesyncRecovery
 std::function<StageDecision(u32)> s_stage_decider;  // under s_result_callback_mutex
 picojson::object s_local_extra;                      // under s.mutex
 
@@ -1422,6 +1803,113 @@ StageDecision DecideStage(u32 game)
     d = s_stage_decider;
   }
   return d ? d(game) : StageDecision{};
+}
+
+// The values a game restarted after a desync takes from frame record `rec` (Restore), for the
+// players of `st`. Under s.mutex.
+Restore RestoreOf(const FrameRecord& rec, const MatchSetup& st)
+{
+  Restore r;
+  r.valid = true;
+  r.frame = rec.frame;
+  r.checksum = rec.checksum;
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    if (!st.players[port].present)
+      continue;
+    const s32 stocks = static_cast<s32>(rec.stocks[port]);
+    r.stocks[port] = static_cast<u8>(std::clamp<s32>(stocks, 0, MAX_RESTORE_STOCKS));
+    const float d = std::bit_cast<float>(rec.damage[port]);
+    r.damage[port] = d >= 0.0f ? std::min(d, MAX_RESTORE_DAMAGE) : 0.0f;  // NaN: 0
+  }
+  r.frames_left = std::min(rec.frames_left, MAX_RESTORE_FRAMES);
+  return r;
+}
+
+// Host, under s.mutex, every player locked in for `game` after a desync where the game starts
+// again (s.recovery): the desynced game's setup again (players, characters, stage), from the last
+// session frame whose checksum is the same on every machine, in a row from the first frame all
+// their lists have (s.recovery.list and the others' "dsr"; a frame no machine recorded ends the
+// row). No such frame: the game starts from the beginning. False when the restart does not apply
+// (the players changed): the usual setup then.
+bool DecideRestart(u32 game, const std::array<const LockIn*, MAX_LOBBY_PLAYERS>& locks)
+{
+  const MatchSetup& prev = s.recovery.setup;
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    if ((locks[port] != nullptr) != prev.players[port].present)
+    {
+      WARN_LOG_FMT(BRAWLBACK, "gprb lobby: game {}: the players are not the desynced game's; "
+                              "a new game instead",
+                   game);
+      s.recovery.pending = false;
+      return false;
+    }
+  }
+  const RecoveryList& own = s.recovery.list;
+  std::vector<const RecoveryList*> lists{&own};
+  bool all = true;
+  ForEachPeer([&](int, const PeerView& p) {
+    if (p.left)
+      return;
+    if (p.recovery && p.recovery->match == own.match)
+      lists.push_back(&*p.recovery);
+    else
+      all = false;
+  });
+  if (!all)
+    return true;  // a player's checksums have not come yet (they come with every state message)
+  s64 lo = 0, hi = std::numeric_limits<s64>::max();
+  for (const RecoveryList* l : lists)
+  {
+    lo = std::max(lo, l->from);
+    hi = std::min(hi, l->from + static_cast<s64>(l->crcs.size()) - 1);
+  }
+  s64 agreed = -1;
+  for (s64 f = lo; f <= hi; ++f)
+  {
+    const u32 c = own.crcs[static_cast<size_t>(f - own.from)];
+    const bool same = c != 0 && std::all_of(lists.begin(), lists.end(), [&](const RecoveryList* l) {
+                        return l->crcs[static_cast<size_t>(f - l->from)] == c;
+                      });
+    if (!same)
+      break;
+    agreed = f;
+  }
+  MatchSetup st = prev;
+  st.game = game;
+  // No agreed frame: the game's own start, which for a game that was itself restarted is its
+  // restored values (frame 0, checksum 0: no frame record to compare).
+  if (st.restore.valid)
+  {
+    st.restore.frame = 0;
+    st.restore.checksum = 0;
+  }
+  const FrameRecord* rec =
+      agreed >= 0 ? &s.history[static_cast<size_t>(agreed) % s.history.size()] : nullptr;
+  if (rec && rec->frame == agreed)
+    st.restore = RestoreOf(*rec, st);
+  s.setup = st;
+  s.last_stage = st.stage;
+  std::string what;
+  for (int port = 0; port < MAX_LOBBY_PLAYERS && st.restore.valid; ++port)
+  {
+    if (st.players[port].present)
+      what += fmt::format(", P{} {} stocks {:.2f}%", port + 1, st.restore.stocks[port], st.restore.damage[port]);
+  }
+  if (agreed >= 0)
+  {
+    INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} setup: the desynced game again from frame {} "
+                            "(checksum {:08x}, frames {}-{} compared on {} machines){}, {} frames left",
+                 game, agreed, st.restore.checksum, lo, hi, lists.size(), what, st.restore.frames_left);
+  }
+  else
+  {
+    WARN_LOG_FMT(BRAWLBACK, "gprb lobby: game {} setup: the desynced game again from its start{} "
+                            "(no frame of {}-{} is the same on all {} machines)",
+                 game, st.restore.valid ? " (its restored values)" : "", lo, hi, lists.size());
+  }
+  return true;
 }
 
 // Host, under s.mutex: once every player is locked in for the next game, decide its setup. The
@@ -1457,6 +1945,10 @@ void MaybeDecideSetup()
     ++count;
   }
   if (!all_seen || count < 2)
+    return;
+  // After a desync where the game starts again: the same game, whatever the lock-ins say (the
+  // characters stay locked on the CSS).
+  if (s.recovery.pending && s.recovery.list.match + 1 == s.match_index && DecideRestart(game, locks))
     return;
   // Free-for-all or a team battle (the room's Teams switch, each player's lock-in team).
   std::array<Online::GameSetup::Seat, Online::GameSetup::MAX_PORTS> seats{};
@@ -1555,7 +2047,16 @@ void MaybeDecideSetup()
                who);
 }
 
-void SendState()
+// In a running match the 50 ms tick sends the state message only when it changed (then the next
+// STATE_REPEATS ticks send it again, as a lost copy was replaced within 50 ms before) or after
+// STATE_KEEPALIVE: it holds the menus' and barriers' steps, which do not change in a match, and
+// GekkoNet carries the match itself. Before 2026-10-13 it went every 50 ms throughout (a joiner's
+// about 430 bytes: 71 kbit/s, nearly half of its upload).
+constexpr int STATE_REPEATS = 2;
+constexpr auto STATE_KEEPALIVE = std::chrono::milliseconds(500);
+
+// `tick`: from the network thread's 50 ms tick (else: a step a peer waits for, sent at once).
+void SendState(bool tick = false)
 {
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
   picojson::object o;
@@ -1563,6 +2064,8 @@ void SendState()
     const bool host = IsHost();
     o["t"] = picojson::value("st");
     o["v"] = picojson::value(1.0);
+    // Takes GekkoNet's messages bundled ('B', GekkoBatch).
+    o["gb"] = picojson::value(1.0);
     o["host"] = picojson::value(host);
     o["slot"] = picojson::value(static_cast<double>(s.local_slot));
     o["name"] = picojson::value(s.net_opts.name);
@@ -1580,14 +2083,38 @@ void SendState()
     if (host && s.setup.game != 0)
       o["match_setup"] = SetupJson(s.setup);
     o["winner"] = picojson::value(static_cast<double>(s.last_winner));
+    if (s.slow_fps > 0)
+      o["slow"] = picojson::value(std::round(s.slow_fps * 10) / 10);
     if (!s_local_extra.empty())
       o["x"] = picojson::value(s_local_extra);
+    if (s.recovery.pending)
+    {
+      // After a desync where the game starts again: our checksums of the last confirmed frames
+      // (8 hex digits each), for the host to find the last frame every machine agrees on.
+      const RecoveryList& l = s.recovery.list;
+      std::string crcs;
+      crcs.reserve(l.crcs.size() * 8);
+      for (const u32 c : l.crcs)
+        crcs += fmt::format("{:08x}", c);
+      picojson::object dsr;
+      dsr["m"] = picojson::value(static_cast<double>(l.match));
+      dsr["from"] = picojson::value(static_cast<double>(l.from));
+      dsr["crc"] = picojson::value(crcs);
+      o["dsr"] = picojson::value(dsr);
+    }
     if (host && !s.init_block.empty())
     {
       o["init"] = picojson::value(Hex(s.init_block));
       o["init_match"] = picojson::value(static_cast<double>(s.init_match));
     }
-    if (host && s.at_s && s.sync.valid)
+    // The sync block and task order (about 5.5 KB, 5 datagrams) only until every joiner has
+    // applied them: the host goes on into the countdown only then (all_applied), so from the
+    // countdown on nobody reads them (a joiner keeps the copy it has until the match ends).
+    // Before 2026-10-13 the host sent them with every state message of the match, 20 a second:
+    // about 650 kbit/s, nearly all of the host's upload.
+    const bool past_barrier = s.phase == Phase::Countdown || s.phase == Phase::StartBarrier ||
+                              s.phase == Phase::Running;
+    if (host && s.at_s && s.sync.valid && !past_barrier)
     {
       o["sync"] = SyncBlockJson(s.sync);
       o["ports"] = picojson::value(static_cast<double>(s.match_ports));
@@ -1602,7 +2129,16 @@ void SendState()
       o["tasks"] = picojson::value(lists);
     }
   }
-  const std::string text = picojson::value(o).serialize();
+  std::string text = picojson::value(o).serialize();
+  const auto now = Clock::now();
+  if (text != s.state_sent)
+    s.state_repeats = STATE_REPEATS;
+  else if (tick && s.phase == Phase::Running && s.state_repeats <= 0 &&
+           now - s.state_sent_at < STATE_KEEPALIVE)
+    return;
+  else if (tick && s.state_repeats > 0)
+    --s.state_repeats;
+  s.state_sent_at = now;
   if (text.size() > PeerData::MAX_CONTROL_SIZE && !s.state_size_logged)
   {
     // The others refuse a control message this large (PeerData::ParseControl).
@@ -1614,10 +2150,14 @@ void SendState()
                   text.size(), PeerData::MAX_CONTROL_SIZE,
                   tasks != o.end() ? tasks->second.serialize().size() : 0);
   }
-  std::vector<u8> pkt(text.size() + 1);
-  pkt[0] = 'C';
-  std::memcpy(pkt.data() + 1, text.data(), text.size());
-  SendToAll(pkt);
+  const size_t datagrams = SendControlToAll(text);
+  s.state_sent = std::move(text);
+  if (datagrams > 1 && !s.split_logged)
+  {
+    s.split_logged = true;
+    INFO_LOG_FMT(BRAWLBACK, "gprb: our state message is {} bytes: sent as {} datagrams of at most {}",
+                 s.state_sent.size(), datagrams, PeerData::MAX_DATAGRAM);
+  }
 }
 
 // The port a control packet from `from:from_port` belongs to (under s.mutex), or -1. Once a
@@ -1668,11 +2208,42 @@ void OnPeerLeft(int slot, const std::string& reason)
   const int active = ActivePlayers();
   INFO_LOG_FMT(BRAWLBACK, "gprb: P{} left the session ({}); {} player(s) left", slot + 1, reason,
                active);
+  {
+    picojson::object ev;
+    ev["type"] = picojson::value("left");
+    ev["port"] = picojson::value(static_cast<double>(slot + 1));
+    ev["reason"] = picojson::value(reason);
+    Replay::AddEvent(s.current_frame, ev);
+  }
   if (active < 2 && !s.peer_left)
   {
     s.peer_left = true;
     s.peer_left_reason = reason;
   }
+}
+
+// The host's task order (a peer's control message, or a replay's setup): lists of names, sizes
+// capped; a name too long reads "?" (ApplyTaskOrder then finds the sets differ).
+std::optional<std::vector<std::vector<std::string>>> TaskListsFromJson(const picojson::value& v)
+{
+  if (!v.is<picojson::array>() || v.get<picojson::array>().size() > PeerData::MAX_TASK_LISTS)
+    return std::nullopt;
+  std::vector<std::vector<std::string>> lists;
+  for (const auto& l : v.get<picojson::array>())
+  {
+    if (!l.is<picojson::array>() || l.get<picojson::array>().size() > PeerData::MAX_TASKS_PER_LIST)
+      return std::nullopt;
+    std::vector<std::string> names;
+    for (const auto& n : l.get<picojson::array>())
+    {
+      if (n.is<std::string>() && n.get<std::string>().size() <= PeerData::MAX_TASK_NAME_LEN)
+        names.push_back(n.get<std::string>());
+      else
+        names.push_back("?");
+    }
+    lists.push_back(std::move(names));
+  }
+  return lists;
 }
 
 void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_port)
@@ -1724,6 +2295,16 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
   };
   if (const auto* x = get("name"); x && x->is<std::string>())
     p.name = PeerData::TruncateName(x->get<std::string>());
+  // Its PC is falling behind (UpdateSlowNotice): its frame rate; absent when it is not, and from
+  // builds before 2026-10-12.
+  {
+    const auto* x = get("slow");
+    p.slow_fps = x && x->is<double>() && x->get<double>() > 0 && x->get<double>() < 60 ?
+                     x->get<double>() :
+                     0;
+  }
+  if (const auto* x = get("gb"); x && x->is<double>())
+    p.gekko_bundles = x->get<double>() >= 1;
   // The decider: the first peer that says it is, unless the host was configured.
   if (const auto* x = get("host"); x && x->is<bool>())
     p.claims_host = x->get<bool>();
@@ -1781,6 +2362,37 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
   // Another module's state (GameSetup's strikes): only a small object is kept.
   if (const auto* x = get("x"); x && x->is<picojson::object>() && x->serialize().size() <= 1024)
     p.extra = x->get<picojson::object>();
+  // Its checksums after a desync where the game starts again: at most RECOVERY_WINDOW of them, of
+  // the match that just ended here (or ends here soon: its list may come before our own end).
+  if (const auto* x = get("dsr"); x && x->is<picojson::object>())
+  {
+    const auto& d = x->get<picojson::object>();
+    const auto field = [&](const char* k) -> const picojson::value* {
+      const auto it = d.find(k);
+      return it == d.end() ? nullptr : &it->second;
+    };
+    const auto m = PeerData::JsonUInt(field("m"), 0xFFFFFFFF);
+    const auto first_frame = PeerData::JsonUInt(field("from"), 0x7FFFFFFF);
+    const auto* crc = field("crc");
+    if (m && first_frame && crc && crc->is<std::string>() && crc->get<std::string>().size() % 8 == 0 &&
+        crc->get<std::string>().size() <= 8 * RECOVERY_WINDOW &&
+        (*m == s.match_index || *m + 1 == s.match_index))
+    {
+      const std::string& hex = crc->get<std::string>();
+      if (const auto bytes = PeerData::ParseHex(hex, hex.size() / 2))
+      {
+        RecoveryList l;
+        l.match = static_cast<u32>(*m);
+        l.from = static_cast<s64>(*first_frame);
+        for (size_t i = 0; i + 4 <= bytes->size(); i += 4)
+        {
+          l.crcs.push_back(static_cast<u32>((*bytes)[i]) << 24 | static_cast<u32>((*bytes)[i + 1]) << 16 |
+                           static_cast<u32>((*bytes)[i + 2]) << 8 | (*bytes)[i + 3]);
+        }
+        p.recovery = std::move(l);
+      }
+    }
+  }
   if (const auto* x = get("match_setup"); x && x->is<picojson::object>() && from_host)
   {
     auto st = SetupFromJson(x->get<picojson::object>());
@@ -1804,6 +2416,32 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
         s.last_stage = st->stage;
         INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} setup from the host: stage {:#x}", st->game,
                      st->stage);
+        if (st->restore.valid && st->restore.checksum == 0)
+        {
+          INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {}: the desynced game again from its start "
+                                  "(the values it was restarted with)",
+                       st->game);
+        }
+        else if (st->restore.valid)
+        {
+          // The host's restart of a desynced game: from a frame our own record has, with the
+          // same checksum and values (every machine's checksums of it were the same).
+          const Restore& r = st->restore;
+          const FrameRecord& rec = s.history[static_cast<size_t>(r.frame) % s.history.size()];
+          if (rec.frame != r.frame || rec.checksum != r.checksum || RestoreOf(rec, *st) != r)
+          {
+            WARN_LOG_FMT(BRAWLBACK, "gprb lobby: game {}: the host restarts it from frame {} "
+                                    "(checksum {:08x}), which our record of it does not match "
+                                    "(frame {}, checksum {:08x})",
+                         st->game, r.frame, r.checksum, rec.frame, rec.checksum);
+          }
+          else
+          {
+            INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {}: the desynced game again from frame {} "
+                                    "(checksum {:08x}, the same here)",
+                         st->game, r.frame, r.checksum);
+          }
+        }
       }
       p.setup = *st;
     }
@@ -1823,32 +2461,11 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
   }
   // Task order: names only. ApplyTaskOrder only reorders this machine's own tasks, and only
   // when the host's lists hold exactly the same names.
-  if (const auto* x = get("tasks"); x && x->is<picojson::array>() &&
-                                    x->get<picojson::array>().size() <= PeerData::MAX_TASK_LISTS)
+  if (const auto* x = get("tasks"))
   {
-    std::vector<std::vector<std::string>> lists;
-    bool ok = true;
-    for (const auto& l : x->get<picojson::array>())
+    if (auto lists = TaskListsFromJson(*x))
     {
-      if (!l.is<picojson::array>() ||
-          l.get<picojson::array>().size() > PeerData::MAX_TASKS_PER_LIST)
-      {
-        ok = false;
-        break;
-      }
-      std::vector<std::string> names;
-      for (const auto& n : l.get<picojson::array>())
-      {
-        if (n.is<std::string>() && n.get<std::string>().size() <= PeerData::MAX_TASK_NAME_LEN)
-          names.push_back(n.get<std::string>());
-        else
-          names.push_back("?");
-      }
-      lists.push_back(std::move(names));
-    }
-    if (ok)
-    {
-      p.task_order = std::move(lists);
+      p.task_order = std::move(*lists);
       p.task_order_valid = true;
     }
   }
@@ -1903,7 +2520,7 @@ void NetThread()
           slot = SlotOf(*from, from_port);
           if (slot >= 0 && s.peers[slot].left)
             slot = -1;
-          if (slot < 0 && buf[0] != 'C')
+          if (slot < 0 && buf[0] != 'C' && buf[0] != 'F')
             ++s.foreign_packets;
         }
         const bool known = slot >= 0;
@@ -1914,6 +2531,25 @@ void NetThread()
           // otherwise grow it without bound.
           if (s.gekko_rx.size() < PeerData::MAX_QUEUED_GEKKO_PACKETS)
             s.gekko_rx.emplace_back(slot, std::vector<u8>(buf.begin() + 1, buf.begin() + received));
+        }
+        else if (buf[0] == 'B' && known)
+        {
+          // Several GekkoNet messages in one datagram (GekkoBatch); a malformed one is dropped
+          // whole, as GekkoNet drops a malformed message.
+          if (auto msgs = PeerData::SplitGekkoBundle(buf.data(), received))
+          {
+            std::lock_guard lk(s.gekko_rx_mutex);
+            for (auto& m : *msgs)
+            {
+              if (s.gekko_rx.size() < PeerData::MAX_QUEUED_GEKKO_PACKETS)
+                s.gekko_rx.emplace_back(slot, std::move(m));
+            }
+          }
+          else
+          {
+            std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+            ++s.foreign_packets;
+          }
         }
         else if (buf[0] == 'C')
         {
@@ -1933,6 +2569,14 @@ void NetThread()
                             received - 1, slot + 1, PeerData::MAX_CONTROL_SIZE);
             }
           }
+        }
+        else if (buf[0] == 'F')
+        {
+          // A piece of a control message (PeerData::ControlDatagrams); like a 'C' packet it may
+          // come from an address that is not a peer's yet (HandleControl decides).
+          const u64 source = (static_cast<u64>(from->toInteger()) << 16) | from_port;
+          if (auto text = s.reassembler.Add(source, buf.data(), received))
+            HandleControl(*text, *from, from_port);
         }
         else if (buf[0] == 'P' && received == 9 && known)
         {
@@ -1982,7 +2626,7 @@ void NetThread()
     if (now - last_state >= std::chrono::milliseconds(50))
     {
       last_state = now;
-      SendState();
+      SendState(true);
       // The session gave up (a barrier's check or timeout, a failed start): the others are told
       // at once, so they do not wait for this player until their own timeout. The game is told
       // as of a disconnect (LOCAL `disconnected`): it ends the match it has started loading and
@@ -2000,7 +2644,13 @@ void NetThread()
         s.disconnected = true;
       }
     }
-    if (now - last_ping >= std::chrono::milliseconds(200))
+    // The pings' round trip picks the input delay and times the start; in a running match
+    // GekkoNet measures its own (the ping line), so one a second is enough there.
+    const bool running = [] {
+      std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+      return s.phase == Phase::Running;
+    }();
+    if (now - last_ping >= std::chrono::milliseconds(running ? 1000 : 200))
     {
       last_ping = now;
       std::vector<u8> ping(9);
@@ -2232,6 +2882,22 @@ void ResetRunStats()
   s.current_frame = -1;
   s.speed_factor = 1.0;
   s.last_timesync_frame = UINT32_MAX;
+  s.following = false;
+  s.follow_speed = 1.0;
+  s.follow_prev_gap = 0;
+  s.follow_prev_frame = -1;
+  s.follow_prev_own_late = 0;
+  s.follow_release = 0;
+  s.follow_t = {};
+  s.peer_fps = 0;
+  s.own_late = 0;
+  s.slow_check_frame = -1;
+  s.slow_check_own_late = 0;
+  s.slow_check_t = {};
+  s.slow_checks = 0;
+  s.slow_fps = 0;
+  s.slow_shown = false;
+  ForEachPeer([](int, PeerView& p) { p.slow_shown = false; });
   s.frames_to_advance = 0;
   s.advancing = s.advanced_this_frame = s.prev_frame_advanced = false;
   s.last_advance_frame = -1;
@@ -2246,6 +2912,14 @@ void ResetRunStats()
   Core::System::GetInstance().GetCoreTiming().TakeMaxBehindSchedule();
   Rollback::PresentStats::TakeCadence();
   s.burst_open = false;
+  s.cost_window = s.cost_total = {};
+  s.cost_window_first = -1;
+  s.cost_pass_open = false;
+  s.cost_pass_resim = false;
+  s.cost_pass_events = false;
+  s.cost_pass_serial = 0;
+  s.cost_loop_top_t0 = {};
+  s.cost_loop_top_excl_ns = 0;
   s.last_desync_frame = -1;
   s.region_mismatches = 0;
   s.region_mismatch_log.clear();
@@ -2280,6 +2954,24 @@ void ResetRunStats()
   s.io_wait_n = 0;
   s.io_waits = s.io_wait_retraces = s.io_wait_timeouts = 0;
   s.force_final_inited = false;  // the next match's countdown reads PPR_GPRB_FORCE_FINAL again
+  s.force_final_at.clear();
+  s.force_final_at_active = s.force_final_at_reenter = false;
+  if (const char* v = std::getenv("PPR_GPRB_FORCE_FINAL_AT"))
+  {
+    // <session frame>:<port>[:first], comma separated.
+    for (const auto& item : SplitString(v, ','))
+    {
+      const auto f = SplitString(item, ':');
+      if (f.size() < 2)
+        continue;
+      s.force_final_at.push_back({std::strtoll(f[0].c_str(), nullptr, 0),
+                                  static_cast<u32>(std::strtoul(f[1].c_str(), nullptr, 0)) & 3,
+                                  f.size() > 2 && f[2] == "first"});
+      INFO_LOG_FMT(BRAWLBACK, "gprb: force final at session frame {}, port {}{}",
+                   s.force_final_at.back().frame, s.force_final_at.back().port,
+                   s.force_final_at.back().first_only ? ", first run only" : "");
+    }
+  }
   s.mispredicted_passes = 0;
   s.sample_chunks.clear();
   s.sample_bytes.clear();
@@ -2382,8 +3074,11 @@ GameResult ReadGameResult(Core::System& system)
   r.place = outcome.place;
   return r;
 }
+void CostSessionEnd();
+
 void EndRunning(Core::System& system, const std::string& reason)
 {
+  CostSessionEnd();
   PassLogClose();
   DestroyGekko();
   Rollback::RollbackManager::Get().EndRegionMode();
@@ -2397,6 +3092,7 @@ void EndRunning(Core::System& system, const std::string& reason)
   system.GetCoreTiming().SetPresentPacing(false);
   s.resim_pass = false;
   s.end_reason = reason;
+  s.slow_fps = 0;  // the peers stop showing this PC as falling behind
   if (s.mode == Mode::Network)
   {
     s.net_window.cadence = Rollback::PresentStats::TakeCadence();
@@ -2405,7 +3101,10 @@ void EndRunning(Core::System& system, const std::string& reason)
     NetStatsFold(s.net_total, s.net_window);
     s.net_window = {};
     if (s.net_total.frames)
+    {
       INFO_LOG_FMT(BRAWLBACK, "gprb net: session: {}", NetStatsLine(s.net_total));
+      LogPerfVerdict(s.net_total);
+    }
   }
   s.end_game_frame = GuestOf(system).U32(Addr::GAME_FRAME + 4).value_or(0);
   INFO_LOG_FMT(BRAWLBACK, "gprb: session ended at game frame {} ({}), {} rollbacks, {} desyncs",
@@ -2414,6 +3113,29 @@ void EndRunning(Core::System& system, const std::string& reason)
   {
     s.phase = Phase::Ended;
   }
+  else if (s.mode == Mode::Playback)
+  {
+    // The replay's last frame ran: the game ends its match as it did for the player who recorded
+    // it (GameBridge's LOCAL): GAME! and a quit by themselves, a disconnect with DISCONNECTED, a
+    // desync with DESYNC DETECTED, a quit of a 3-4 player match as that player's own.
+    s.phase = Phase::Ended;
+    s.pb.finished = true;
+    if (reason == "replay ended")
+    {
+      const std::string& m = s.pb.end_method;
+      s.pb.end_desynced = m == "desync";
+      s.pb.end_quit_left = m == "quit-left";
+      s.pb.end_disconnected = !s.pb.end_desynced && !s.pb.end_quit_left && m != "game" &&
+                              m != "quit" && m != "runback";
+    }
+    s.await_scene_exit = true;
+    INFO_LOG_FMT(BRAWLBACK, "replay: playback ended ({}; recorded end: {}), {} frames checked, {}",
+                 reason, s.pb.end_method.empty() ? "incomplete" : s.pb.end_method,
+                 s.pb.frames_checked,
+                 s.pb.desync_frame < 0 ? std::string("no desync") :
+                                         fmt::format("desynced at frame {}", s.pb.desync_frame));
+    OSD::AddMessage("Replay finished", OSD::Duration::NORMAL);
+  }
   else
   {
     // A pause-screen quit that ended the match for everyone (docs/game-code.md §11, the quit
@@ -2421,6 +3143,7 @@ void EndRunning(Core::System& system, const std::string& reason)
     // (SetQuitLoses): the quitter lost the game. Otherwise it does not count (a room's set plays
     // it again, Online/Ranked.cpp), and a runback sets the next game up as this one again.
     std::optional<MatchSetup> runback;
+    std::optional<GameResult> replay_result;
     if (reason == "quit")
     {
       const Guest g = GuestOf(system);
@@ -2450,6 +3173,7 @@ void EndRunning(Core::System& system, const std::string& reason)
                      rb ? " with L+R+Y (runback)" : "",
                      r.winner < MAX_LOBBY_PLAYERS ? fmt::format(": P{} wins it", r.winner + 1) :
                      runback ? ": the same match again" : ": not counted");
+        replay_result = r;
         ReportGameResult(r);
       }
     }
@@ -2472,8 +3196,39 @@ void EndRunning(Core::System& system, const std::string& reason)
       }
       INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} winner {} stage pickers {:#x} (stocks/damage:{})",
                    r.game, r.winner, r.pickers, who);
+      replay_result = r;
       ReportGameResult(r);
     }
+    // A desync where the game starts again (SetDesyncRecovery; docs/game-code.md, desync
+    // recovery): this machine's checksums of its last confirmed frames, which the others get with
+    // every state message until the next game starts, and the setup the next game repeats. The
+    // game has no result: Online/Ranked.cpp plays its set game again.
+    s.recovery.pending = false;
+    if (reason == "desync" && s_desync_recovery)
+    {
+      RecoveryList& l = s.recovery.list;
+      l = {};
+      l.match = s.match_index;
+      const s64 last = s.current_frame - MAX_ROLLBACK_FRAMES - 1;
+      l.from = std::max<s64>(0, last - RECOVERY_WINDOW + 1);
+      for (s64 f = l.from; f <= last; ++f)
+      {
+        const FrameRecord& rec = s.history[static_cast<size_t>(f) % s.history.size()];
+        l.crcs.push_back(rec.frame == f ? rec.checksum : 0);
+      }
+      s.recovery.setup = s.setup;
+      s.recovery.pending = true;
+      INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} desynced: it starts again from the last frame "
+                              "every machine agrees on (ours: frames {}-{})",
+                   NextGame(), l.from, last);
+      GameResult r;
+      r.end = GameEnd::Desync;
+      r.game = NextGame();
+      r.stage = s.setup.stage;
+      r.frames = s.end_game_frame;
+      ReportGameResult(r);
+    }
+    EndReplay(system, reason, replay_result ? &*replay_result : nullptr);
     // Ready for the next match on the same connection.
     bool seen = false;
     ForEachPeer([&](int, PeerView& p) {
@@ -2496,6 +3251,7 @@ void EndRunning(Core::System& system, const std::string& reason)
       // Every machine sets it up itself from the same setup (the host's copy is then the same and
       // is not taken again): the game goes from the match straight into this one.
       runback->game = NextGame();
+      runback->restore = {};  // a runback of a restarted game starts from the beginning
       s.setup = *runback;
       s.last_stage = runback->stage;
       INFO_LOG_FMT(BRAWLBACK, "gprb lobby: game {} setup: the last game again (runback), stage {:#x}",
@@ -2687,6 +3443,49 @@ void PerformQueuedSave(Core::System& system)
   if (!s.queued_save.pending)
     return;
   s.queued_save.pending = false;
+  if (s.mode == Mode::Playback)
+  {
+    // Nothing is rolled back: no snapshot. The frame's checksum against the file's (the
+    // recorder's machine computed it after the same frame).
+    const Guest g(system.GetMemory());
+    FrameRecord rec;
+    const s64 f = s.queued_save.frame;
+    const u32 crc = FrameChecksum(g, &rec);
+    RecordFrame(f, crc, rec);
+    const auto& file = *s.pb.file;
+    if (f >= file.first_frame && f - file.first_frame < static_cast<s64>(file.checksums.size()) &&
+        (s.pb.final_frame < 0 || f <= s.pb.final_frame))
+    {
+      ++s.pb.frames_checked;
+      const u32 want = file.checksums[static_cast<size_t>(f - file.first_frame)];
+      if (want != crc && s.pb.desync_frame < 0)
+      {
+        s.pb.desync_frame = f;
+        std::string parts;
+        for (const auto& p : file.parts)
+        {
+          if (p.frame == f)
+          {
+            parts = fmt::format(" (rng {:08x} {:08x} {:08x} fighters {:08x} recorded)", p.rng[0],
+                                p.rng[1], p.rng[2], p.fighters_crc);
+          }
+        }
+        s.pb.desync_text = fmt::format(
+            "frame {} (game frame {}): checksum {:08x}, recorded {:08x}; rng {:08x} {:08x} {:08x} "
+            "fighters {:08x}{}",
+            f, g.U32(Addr::GAME_FRAME + 4).value_or(0), crc, want, rec.rng[0], rec.rng[1],
+            rec.rng[2], rec.fighters_crc, parts);
+        WARN_LOG_FMT(BRAWLBACK, "replay: playback differs from the recording from {}",
+                     s.pb.desync_text);
+        const s64 seconds = std::max<s64>(f, 0) / 60;
+        OSD::AddMessage(fmt::format("The replay desynced at {}:{:02} (frame {}). From here the game "
+                                    "may differ from what was played.",
+                                    seconds / 60, seconds % 60, f),
+                        OSD::Duration::VERY_LONG, OSD::Color::YELLOW);
+      }
+    }
+    return;
+  }
   Rollback::RollbackManager::Get().SaveFrame(system);
   const Guest g(system.GetMemory());
   FrameRecord rec;
@@ -2779,6 +3578,13 @@ void PerformQueuedSave(Core::System& system)
     }
   }
   RecordFrame(s.queued_save.frame, crc, rec);
+  if (Replay::Active())
+  {
+    Replay::Parts parts;
+    parts.rng = rec.rng;
+    parts.fighters_crc = rec.fighters_crc;
+    Replay::OnSave(system, s.queued_save.frame, crc, parts);
+  }
 }
 
 // GekkoNet's save of frame 0 (the session's first state): the first snapshot of the region set.
@@ -2848,6 +3654,11 @@ std::string NetStatsLine(const State::NetStats& w)
       w.stall_ms, w.stall_ms_max, w.ahead_sum / n, w.frames ? w.ahead_min : 0.0,
       w.frames ? w.ahead_max : 0.0, w.frames ? w.speed_min : 1.0, w.frames ? w.speed_max : 1.0,
       w.advances);
+  if (w.followed)
+  {
+    line += fmt::format(", frames at the peer's speed {} (the peer at {:.1f}/s)", w.followed,
+                        w.peer_fps_sum / static_cast<double>(w.followed));
+  }
   if (const auto& c = w.cadence; c.presents)
   {
     const double mean = c.interval_ms_sum / c.presents;
@@ -2884,6 +3695,8 @@ void NetStatsFold(State::NetStats& t, const State::NetStats& w)
   t.resim += w.resim;
   t.max_depth = std::max(t.max_depth, w.max_depth);
   t.bursts += w.bursts;
+  t.followed += w.followed;
+  t.peer_fps_sum += w.peer_fps_sum;
   t.late += w.late;
   t.late_after_rollback += w.late_after_rollback;
   t.burst_ms += w.burst_ms;
@@ -2910,6 +3723,271 @@ void NetStatsFold(State::NetStats& t, const State::NetStats& w)
   t.cadence.interval_ms_sum += w.cadence.interval_ms_sum;
   t.cadence.interval_ms_sq += w.cadence.interval_ms_sq;
   t.cadence.interval_ms_max = std::max(t.cadence.interval_ms_max, w.cadence.interval_ms_max);
+}
+
+// At the end of a network session, one line on whether a PC held the match back, for the logs
+// players send in. A frame late without a rollback before it is this PC's own speed (CPU or GPU);
+// frames at the peer's speed are the peer's (UpdatePeerFollow).
+void LogPerfVerdict(const State::NetStats& t)
+{
+  if (t.frames < NET_STATS_WINDOW)
+    return;
+  const double n = static_cast<double>(t.frames);
+  const double fps = t.wall_ms > 0 ? t.frames * 1000.0 / t.wall_ms : 0.0;
+  const double own_late = static_cast<double>(t.late - t.late_after_rollback) / n;
+  if (own_late > 0.5)
+  {
+    WARN_LOG_FMT(BRAWLBACK,
+                 "gprb perf: this PC could not keep full speed: {:.0f}% of frames ran late "
+                 "without a rollback before them, {:.1f} frames a second; the match ran at this "
+                 "PC's speed",
+                 100 * own_late, fps);
+  }
+  else if (t.followed * 4 > t.frames)
+  {
+    WARN_LOG_FMT(
+        BRAWLBACK,
+        "gprb perf: the peer could not keep full speed: this PC ran at its speed on {:.0f}% "
+        "of frames, the peer at {:.1f} frames a second",
+        100 * t.followed / n, t.peer_fps_sum / static_cast<double>(t.followed));
+  }
+  else
+  {
+    INFO_LOG_FMT(BRAWLBACK,
+                 "gprb perf: {:.1f} frames a second, {:.0f}% of frames late ({:.0f}% after a "
+                 "rollback), at the peer's speed on {:.0f}%",
+                 fps, 100 * t.late / n, 100 * t.late_after_rollback / n, 100 * t.followed / n);
+  }
+}
+
+// ---- Frame cost profile (Rollback::FrameProfile) ----
+
+double NsToMs(u64 ns)
+{
+  return static_cast<double>(ns) / 1e6;
+}
+
+u64 SinceNs(Clock::time_point t0, Clock::time_point t1)
+{
+  return static_cast<u64>(std::chrono::duration_cast<std::chrono::nanoseconds>(t1 - t0).count());
+}
+
+void CostFold(State::PassCost& t, const State::PassCost& w)
+{
+  t.passes += w.passes;
+  t.guest_ns += w.guest_ns;
+  t.save_ns += w.save_ns;
+  t.loop_top_ns += w.loop_top_ns;
+  t.event_passes += w.event_passes;
+  Rollback::FrameProfile::Accumulate(&t.c, w.c);
+}
+
+void CostFold(State::FrameCost& t, const State::FrameCost& w)
+{
+  CostFold(t.resim, w.resim);
+  CostFold(t.shown, w.shown);
+  t.loads += w.loads;
+  t.load_ns += w.load_ns;
+}
+
+u64 CostWaitNs(const Rollback::FrameProfile::Counters& c)
+{
+  u64 n = 0;
+  for (const u64 v : c.gpu_wait_ns)
+    n += v;
+  return n;
+}
+
+// The events of one category over all passes, estimated from the passes that timed them
+// (CostPassStart: one in EVENT_SAMPLE_EVERY).
+u64 CostEventNs(const State::PassCost& p, size_t cat)
+{
+  if (!p.event_passes)
+    return 0;
+  return static_cast<u64>(static_cast<double>(p.c.event_ns[cat]) * static_cast<double>(p.passes) /
+                          static_cast<double>(p.event_passes));
+}
+
+u64 CostEventNs(const State::PassCost& p)
+{
+  u64 n = 0;
+  for (size_t i = 0; i < Rollback::FrameProfile::EVENT_CATS; ++i)
+    n += CostEventNs(p, i);
+  return n;
+}
+
+// The pass's time in the game's own code: the JIT outside CoreTiming events, waits for the GPU
+// thread and the throttle's sleep.
+u64 CostGameNs(const State::PassCost& p)
+{
+  const u64 other = CostEventNs(p) + CostWaitNs(p.c) + p.c.throttle_ns;
+  return p.guest_ns > other ? p.guest_ns - other : 0;
+}
+
+std::string PassCostText(const State::PassCost& p)
+{
+  using namespace Rollback::FrameProfile;
+  const double n = static_cast<double>(std::max<u64>(p.passes, 1));
+  const auto avg = [n](u64 ns) { return NsToMs(ns) / n; };
+  const auto ev = [&](EventCat c) { return avg(CostEventNs(p, static_cast<size_t>(c))); };
+  std::string waits;
+  for (size_t i = 0; i < WAIT_REASONS; ++i)
+  {
+    if (p.c.gpu_wait_ns[i])
+    {
+      waits += fmt::format("{}{} {:.2f}", waits.empty() ? "" : ", ", WAIT_REASON_NAMES[i],
+                           avg(p.c.gpu_wait_ns[i]));
+    }
+  }
+  std::string line = fmt::format(
+      "{} avg {:.2f} ms: game code {:.2f}, waiting for the GPU thread {:.2f}{}, events {:.2f} "
+      "(gpu {:.2f}, vi {:.2f}, audio {:.2f}, ios {:.2f}, devices {:.2f})",
+      p.passes, avg(p.guest_ns + p.save_ns + p.loop_top_ns), avg(CostGameNs(p)),
+      avg(CostWaitNs(p.c)), waits.empty() ? "" : " (" + waits + ")", avg(CostEventNs(p)),
+      ev(EventCat::Gpu), ev(EventCat::Vi), ev(EventCat::Audio), ev(EventCat::Ios),
+      ev(EventCat::Devices));
+  if (p.c.throttle_ns)
+    line += fmt::format(", throttle sleep {:.2f}", avg(p.c.throttle_ns));
+  line += fmt::format(", save {:.2f}, loop top {:.2f}; GPU thread busy {:.2f} (presenting {:.2f})",
+                      avg(p.save_ns), avg(p.loop_top_ns), avg(p.c.gpu_busy_ns),
+                      avg(p.c.gpu_present_ns));
+  return line;
+}
+
+std::string FrameCostLine(const State::FrameCost& w)
+{
+  return fmt::format("re-run frames {}; loads {} avg {:.2f} ms; presented frames {}",
+                     PassCostText(w.resim), w.loads,
+                     w.loads ? NsToMs(w.load_ns) / static_cast<double>(w.loads) : 0.0,
+                     PassCostText(w.shown));
+}
+
+picojson::value PassCostJson(const State::PassCost& p)
+{
+  using namespace Rollback::FrameProfile;
+  const auto num = [](u64 v) { return picojson::value(static_cast<double>(v)); };
+  picojson::object o;
+  o["passes"] = num(p.passes);
+  o["guest_ns"] = num(p.guest_ns);
+  o["game_ns"] = num(CostGameNs(p));
+  o["save_ns"] = num(p.save_ns);
+  o["loop_top_ns"] = num(p.loop_top_ns);
+  o["throttle_ns"] = num(p.c.throttle_ns);
+  o["gpu_wait_ns"] = num(CostWaitNs(p.c));
+  o["gpu_waits"] = num(p.c.gpu_waits);
+  picojson::object waits;
+  for (size_t i = 0; i < WAIT_REASONS; ++i)
+    waits[std::string(WAIT_REASON_NAMES[i])] = num(p.c.gpu_wait_ns[i]);
+  o["gpu_wait_ns_by_reason"] = picojson::value(waits);
+  constexpr std::array<const char*, EVENT_CATS> EVENT_NAMES = {"gpu", "vi", "audio", "ios",
+                                                               "devices"};
+  // Estimated over all passes from those that timed their events.
+  picojson::object events;
+  for (size_t i = 0; i < EVENT_CATS; ++i)
+    events[EVENT_NAMES[i]] = num(CostEventNs(p, i));
+  o["event_ns"] = picojson::value(events);
+  o["events"] = num(p.c.events);
+  o["event_passes"] = num(p.event_passes);
+  o["gpu_busy_ns"] = num(p.c.gpu_busy_ns);
+  o["gpu_present_ns"] = num(p.c.gpu_present_ns);
+  return picojson::value(o);
+}
+
+picojson::value FrameCostJson()
+{
+  State::FrameCost t = s.cost_total;
+  CostFold(t, s.cost_window);
+  picojson::object o;
+  o["resim"] = PassCostJson(t.resim);
+  o["shown"] = PassCostJson(t.shown);
+  o["loads"] = picojson::value(static_cast<double>(t.loads));
+  o["load_ns"] = picojson::value(static_cast<double>(t.load_ns));
+  return picojson::value(o);
+}
+
+// RunFrame's entry: the pass that ran since the last loop top ends.
+void CostPassEnd()
+{
+  const auto now = Clock::now();
+  s.cost_loop_top_t0 = now;
+  s.cost_loop_top_excl_ns = 0;
+  if (!s.cost_pass_open)
+    return;
+  s.cost_pass_open = false;
+  Rollback::FrameProfile::SetTimeEvents(false);
+  auto& b = s.cost_pass_resim ? s.cost_window.resim : s.cost_window.shown;
+  ++b.passes;
+  if (s.cost_pass_events)
+    ++b.event_passes;
+  b.guest_ns += SinceNs(s.cost_pass_t0, now);
+  Rollback::FrameProfile::Accumulate(
+      &b.c, Rollback::FrameProfile::Delta(Rollback::FrameProfile::Snapshot(), s.cost_pass_c0));
+}
+
+// The snapshot after the pass that just ended.
+void CostAddSave(u64 ns)
+{
+  (s.cost_pass_resim ? s.cost_window.resim : s.cost_window.shown).save_ns += ns;
+  s.cost_loop_top_excl_ns += ns;
+}
+
+void CostAddLoad(u64 ns)
+{
+  ++s.cost_window.loads;
+  s.cost_window.load_ns += ns;
+  s.cost_loop_top_excl_ns += ns;
+}
+
+// RunFrame hands the CPU to the game: a pass starts. Every NET_STATS_WINDOW presented passes,
+// a log line (not for replays: their seeks are not rollbacks).
+void CostPassStart(bool resim)
+{
+  if (!resim && s.mode != Mode::Playback && s.cost_window.shown.passes >= NET_STATS_WINDOW)
+  {
+    INFO_LOG_FMT(BRAWLBACK, "gprb frame cost: frames {}-{}: {}", s.cost_window_first,
+                 s.current_frame - 1, FrameCostLine(s.cost_window));
+    CostFold(s.cost_total, s.cost_window);
+    s.cost_window = {};
+    s.cost_window_first = -1;
+  }
+  if (s.cost_window_first < 0)
+    s.cost_window_first = s.current_frame;
+  const auto now = Clock::now();
+  auto& b = resim ? s.cost_window.resim : s.cost_window.shown;
+  if (s.cost_loop_top_t0 != Clock::time_point{})
+  {
+    const u64 loop_top = SinceNs(s.cost_loop_top_t0, now);
+    b.loop_top_ns += loop_top > s.cost_loop_top_excl_ns ? loop_top - s.cost_loop_top_excl_ns : 0;
+  }
+  // One pass in EVENT_SAMPLE_EVERY times its CoreTiming events (a prime, so that it does not
+  // follow a pattern of re-run and presented passes).
+  constexpr u64 EVENT_SAMPLE_EVERY = 7;
+  s.cost_pass_events =
+      Rollback::FrameProfile::Enabled() && ++s.cost_pass_serial % EVENT_SAMPLE_EVERY == 0;
+  Rollback::FrameProfile::SetTimeEvents(s.cost_pass_events);
+  s.cost_pass_open = true;
+  s.cost_pass_resim = resim;
+  s.cost_pass_t0 = now;
+  s.cost_pass_c0 = Rollback::FrameProfile::Snapshot();
+}
+
+// The session ends: its totals.
+void CostSessionEnd()
+{
+  Rollback::FrameProfile::SetEnabled(false);
+  s.cost_pass_open = false;
+  CostFold(s.cost_total, s.cost_window);
+  s.cost_window = {};
+  if (s.mode != Mode::Playback && (s.cost_total.shown.passes || s.cost_total.resim.passes))
+    INFO_LOG_FMT(BRAWLBACK, "gprb frame cost: session: {}", FrameCostLine(s.cost_total));
+}
+
+// Rolls back: RollbackManager::LoadFrame, timed for the profile.
+void LoadForRollback(Core::System& system, int frames_back)
+{
+  const auto t0 = Clock::now();
+  Rollback::RollbackManager::Get().LoadFrame(system, frames_back);
+  CostAddLoad(SinceNs(t0, Clock::now()));
 }
 
 // Network sessions: every NET_STATS_WINDOW displayed frames, one log line of what the netcode did,
@@ -2954,6 +4032,8 @@ void NetStatsOnDisplayedFrame(Core::System& system)
       ++w.late;
       if (s.prev_frame_rolled_back)
         ++w.late_after_rollback;
+      else
+        ++s.own_late;
       w.late_ms_max = std::max(w.late_ms_max, ms);
     }
     s.prev_frame_rolled_back = s.ops.adv_count > 1;
@@ -2963,6 +4043,11 @@ void NetStatsOnDisplayedFrame(Core::System& system)
   w.ahead_max = std::max<double>(w.ahead_max, s.frames_ahead);
   w.speed_min = std::min(w.speed_min, s.speed_factor);
   w.speed_max = std::max(w.speed_max, s.speed_factor);
+  if (s.following)
+  {
+    ++w.followed;
+    w.peer_fps_sum += s.peer_fps;
+  }
   if (w.frames < NET_STATS_WINDOW)
     return;
   w.cadence = Rollback::PresentStats::TakeCadence();
@@ -2986,12 +4071,17 @@ bool HandleGekkoFrame(Core::System& system)
   s.ops.Clear();
   if (!s.gekko)
     return false;
-  if (s.mode == Mode::Network)
-    gekko_network_poll(s.gekko);
-  for (int h : s.local_handles)
-    gekko_add_local_input(s.gekko, h, s.local_inputs.data() + s.handle_port[h] * INPUT_SIZE);
   int count = 0;
-  GekkoGameEvent** events = gekko_update_session(s.gekko, &count);
+  GekkoGameEvent** events;
+  {
+    // This frame's messages to each peer in one datagram (GekkoBatch).
+    GekkoBatch batch;
+    if (s.mode == Mode::Network)
+      gekko_network_poll(s.gekko);
+    for (int h : s.local_handles)
+      gekko_add_local_input(s.gekko, h, s.local_inputs.data() + s.handle_port[h] * INPUT_SIZE);
+    events = gekko_update_session(s.gekko, &count);
+  }
   return ProcessGekkoUpdate(system, events, count);
 }
 
@@ -3058,6 +4148,13 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
       WARN_LOG_FMT(BRAWLBACK, "gprb: desync at frame {} (local {:08x}, remote {:08x})",
                    sev[i]->data.desynced.frame, sev[i]->data.desynced.local_checksum,
                    sev[i]->data.desynced.remote_checksum);
+      {
+        picojson::object ev;
+        ev["type"] = picojson::value("desync");
+        ev["local"] = picojson::value(static_cast<double>(sev[i]->data.desynced.local_checksum));
+        ev["remote"] = picojson::value(static_cast<double>(sev[i]->data.desynced.remote_checksum));
+        Replay::AddEvent(sev[i]->data.desynced.frame, ev);
+      }
       if (s.mode == Mode::Network && !s.desync_end)
       {
         // A desync does not heal: the machines play different games from here on, and one
@@ -3167,7 +4264,7 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
         frames_back < rbm.m_ring_count)
     {
       BeginBurst(system);
-      rbm.LoadFrame(system, frames_back);
+      LoadForRollback(system, frames_back);
       ++s.rollbacks;
       s.max_rollback = std::max<u64>(s.max_rollback, static_cast<u64>(frames_back));
       s.iteration = 0;
@@ -3221,6 +4318,105 @@ constexpr int MAX_ADVANCE_FRAMES = 3;
 constexpr u32 ADVANCE_EVERY = 5;
 constexpr s64 HARD_SYNC_UNTIL = 120;
 
+// Following a peer that cannot keep full speed. Slippi's sync leaves the gap to the peer behind,
+// which closes it with its spare time; a PC without any never does, and this peer runs on ahead,
+// rolling back deeper on every frame. Prod (2026-10-12, a 9800X3D against an i3-7100U laptop that
+// missed its schedule on every frame, even without rollbacks, at 110 ms): the fast PC 4-6 frames
+// ahead for whole 10 s windows, at its 0.995 speed floor, rolling back 6 frames deep at 14-16 ms a
+// frame, so it ran at 54 frames a second with 190 screen hitches per window, while the laptop ran
+// at its own 55-58 with almost no rollbacks. The match can only run at the slow PC's speed either
+// way; following it, the fast PC runs at it evenly instead of in bursts of rollbacks.
+//
+// Every TIME_SYNC_INTERVAL frames after HARD_SYNC_UNTIL, the peer's frame rate is the frames this
+// peer ran minus the change of the gap, over the wall time. When the gap is more than FOLLOW_ENGAGE
+// frames over its target and not closing, and this PC kept its own schedule on most of the
+// interval's frames (a PC that cannot keep full speed never slows itself down further), this
+// peer's speed follows the peer's frame rate, slower by FOLLOW_CLOSE_RATE per frame over the
+// target (faster below it), at most FOLLOW_MAX_STEP per interval. Following ends when the peer runs
+// at full speed again with the gap at its target, FOLLOW_RELEASE time syncs in a row; a gap below
+// it alone does not end it (a harness peer at 56-58 frames a second otherwise had it end and start
+// again every few seconds, the gap swinging between 0 and 3-5 frames), nor one estimate of the
+// peer's frame rate (GekkoNet averages the gap over 26 frames, so the estimate trails a change of
+// this peer's speed, by up to 2-3 frames a second).
+//
+// The target gap: the peer behind rolls back about (one-way latency - this peer's input delay -
+// gap) frames, so a gap of that much, and the link's jitter on top, spares the slow PC its
+// rollbacks (19 ms each on the laptop; without the jitter a harness peer still rolled back on 2.6%
+// of its frames, at 20-27 ms each); more only deepens this peer's, which has time to spare.
+constexpr double FOLLOW_ENGAGE = 1.0;
+constexpr double FOLLOW_CLOSING = 0.25;  // the gap closes this much per interval: left to the peer
+constexpr double FOLLOW_CLOSE_RATE = 0.02;
+constexpr double FOLLOW_MAX_STEP = 0.05;
+// A harness peer at 43 frames a second (72%) kept a floor of 0.8 at GekkoNet's prediction window.
+constexpr double FOLLOW_MIN = 0.5;
+constexpr double FOLLOW_TARGET_MIN = 0.5, FOLLOW_TARGET_MAX = 2.5;
+constexpr int FOLLOW_RELEASE = 4;
+
+double FollowTargetGap()
+{
+  GekkoNetworkStats st{};
+  if (!WorstLink(&st) || st.avg_ping <= 0)
+    return 1.0;
+  // GekkoNet's ping is the round trip in game (a frame of polling included, GameRoundTrip).
+  const double one_way_frames = (st.avg_ping / 2.0 + st.jitter) / (FRAME_US / 1000.0);
+  return std::clamp(one_way_frames - s.input_delay, FOLLOW_TARGET_MIN, FOLLOW_TARGET_MAX);
+}
+
+void UpdatePeerFollow()
+{
+  // Test (PPR_GPRB_TEST_NO_FOLLOW=1): Slippi's sync alone, for A/B runs.
+  static const bool off = std::getenv("PPR_GPRB_TEST_NO_FOLLOW") != nullptr;
+  if (off)
+    return;
+  const auto now = Clock::now();
+  const double gap = s.frames_ahead;
+  const double change = gap - s.follow_prev_gap;
+  const double frames = static_cast<double>(s.current_frame - s.follow_prev_frame);
+  const double own_late = static_cast<double>(s.own_late - s.follow_prev_own_late);
+  const double dt = s.follow_t == Clock::time_point{} ?
+                        0.0 :
+                        std::chrono::duration<double>(now - s.follow_t).count();
+  s.follow_prev_gap = gap;
+  s.follow_prev_frame = s.current_frame;
+  s.follow_prev_own_late = s.own_late;
+  s.follow_t = now;
+  if (dt <= 0 || frames <= 0 || s.current_frame <= HARD_SYNC_UNTIL)
+    return;
+  const double peer_fps = std::max(0.0, (frames - change) / dt);
+  s.peer_fps = s.peer_fps > 0 ? (s.peer_fps + peer_fps) / 2 : peer_fps;
+
+  const double target = FollowTargetGap();
+  const double over = gap - target;
+  if (!s.following)
+  {
+    if (over <= FOLLOW_ENGAGE || change < -FOLLOW_CLOSING || own_late * 2 > frames)
+      return;
+    s.following = true;
+    s.follow_speed = 1.0;
+    s.follow_release = 0;
+    INFO_LOG_FMT(
+        BRAWLBACK,
+        "gprb: following the peer's speed from frame {}: {:.2f} frames ahead (target {:.2f}) and "
+        "not closing, the peer at {:.1f} frames a second",
+        s.current_frame, gap, target, s.peer_fps);
+  }
+  const double peer_speed = s.peer_fps * FRAME_US / 1e6;
+  const double want = peer_speed - std::clamp(over, -1.0, 4.0) * FOLLOW_CLOSE_RATE;
+  s.follow_speed = std::clamp(
+      std::clamp(want, s.follow_speed - FOLLOW_MAX_STEP, s.follow_speed + FOLLOW_MAX_STEP),
+      FOLLOW_MIN, 1.0);
+  s.follow_release =
+      peer_speed >= 1.0 && s.follow_speed >= 1.0 && over <= 0 ? s.follow_release + 1 : 0;
+  if (s.follow_release >= FOLLOW_RELEASE)
+  {
+    s.following = false;
+    INFO_LOG_FMT(BRAWLBACK,
+                 "gprb: following the peer's speed ends at frame {}: {:.2f} frames ahead (target "
+                 "{:.2f}), the peer at {:.1f} frames a second",
+                 s.current_frame, gap, target, s.peer_fps);
+  }
+}
+
 void UpdateTimeSync(Core::System& system)
 {
   if (s.mode != Mode::Network || s.current_frame < 0)
@@ -3237,7 +4433,8 @@ void UpdateTimeSync(Core::System& system)
       deviation = std::min(-offset_us / (SPEED_WINDOW_FRAMES * FRAME_US), 1.0) * MAX_SPEED_UP;
     else
       deviation = -std::min(offset_us / (SPEED_WINDOW_FRAMES * FRAME_US), 1.0) * MAX_SLOW_DOWN;
-    s.speed_factor = 1.0 + deviation;
+    UpdatePeerFollow();
+    s.speed_factor = s.following ? s.follow_speed : 1.0 + deviation;
 
     if (offset_us < -(FRAME_US + SYNC_T1_US) && !s.advancing)
     {
@@ -3279,6 +4476,67 @@ void UpdatePingDisplay()
     return;
   OSD::AddTypedMessage(OSD::MessageType::NetPlayPing, fmt::format("Ping: {}", stats.last_ping),
                        OSD::Duration::NORMAL, OSD::Color::CYAN);
+}
+
+// "Falling behind": a PC that cannot keep full speed slows the whole match down (UpdatePeerFollow),
+// and players blamed the netcode or the other player (prod 2026-10-12). Every SLOW_CHECK_FRAMES
+// after HARD_SYNC_UNTIL this PC checks its own speed: more than half of the frames late without a
+// rollback before them (LogPerfVerdict's test) and under SLOW_FPS frames a second. Two checks in a
+// row (10 s; one hitch, e.g. a shader compiling, is not enough) and it is falling behind: its
+// state messages carry its frame rate ("slow"), and every screen shows it once per match, on the
+// screen (OSD, which hidden chat does not hide) and in chat: "Your PC can't keep up. Expect
+// slowdowns." here, "<name>'s PC can't keep up. Expect slowdowns." on the others'; the log has its
+// frame rate. A peer's notice is shown no earlier than this
+// PC could have found one, so a late state message of the previous match shows nothing.
+constexpr s64 SLOW_CHECK_FRAMES = 300;
+constexpr int SLOW_CHECKS = 2;
+constexpr double SLOW_FPS = 58.0;
+
+void ShowSlowNotice(const std::string& who, double fps)
+{
+  const std::string text = fmt::format("{} can't keep up. Expect slowdowns.", who);
+  WARN_LOG_FMT(BRAWLBACK, "gprb: notice: {} ({:.1f} frames a second)", text, fps);
+  OSD::AddMessage(text, OSD::Duration::VERY_LONG, OSD::Color::YELLOW);
+  Online::Chat::AddNotice(text);
+}
+
+void UpdateSlowNotice()
+{
+  if (s.mode != Mode::Network || s.current_frame <= HARD_SYNC_UNTIL)
+    return;
+  const auto now = Clock::now();
+  if (s.slow_check_frame < 0)
+  {
+    s.slow_check_frame = s.current_frame;
+    s.slow_check_own_late = s.own_late;
+    s.slow_check_t = now;
+  }
+  else if (s.current_frame - s.slow_check_frame >= SLOW_CHECK_FRAMES)
+  {
+    const double frames = static_cast<double>(s.current_frame - s.slow_check_frame);
+    const double late = static_cast<double>(s.own_late - s.slow_check_own_late);
+    const double dt = std::chrono::duration<double>(now - s.slow_check_t).count();
+    const double fps = dt > 0 ? frames / dt : 0.0;
+    s.slow_check_frame = s.current_frame;
+    s.slow_check_own_late = s.own_late;
+    s.slow_check_t = now;
+    s.slow_checks = late * 2 > frames && fps > 0 && fps < SLOW_FPS ? s.slow_checks + 1 : 0;
+    s.slow_fps = s.slow_checks >= SLOW_CHECKS ? fps : 0.0;
+    if (s.slow_fps > 0 && !s.slow_shown)
+    {
+      s.slow_shown = true;
+      ShowSlowNotice("Your PC", s.slow_fps);
+    }
+  }
+  if (s.current_frame <= HARD_SYNC_UNTIL + SLOW_CHECK_FRAMES * SLOW_CHECKS)
+    return;
+  ForEachPeer([](int, PeerView& p) {
+    if (p.left || p.slow_fps <= 0 || p.slow_shown)
+      return;
+    p.slow_shown = true;
+    const auto name = Online::ChatText::Clean(p.name, Online::ChatText::MAX_NAME_CODE_POINTS);
+    ShowSlowNotice(name ? *name + "'s PC" : std::string("The other player's PC"), p.slow_fps);
+  });
 }
 
 void CaptureLocalInputs()
@@ -3446,7 +4704,9 @@ bool IsSimStart(const Guest& g, u32* frame)
 
 u32 StartFrame()
 {
-  return s.mode == Mode::SyncTest ? s.st_opts.start_frame : s.net_opts.start_frame;
+  return s.mode == Mode::SyncTest ? s.st_opts.start_frame :
+         s.mode == Mode::Playback ? s.pb.start_frame :
+                                    s.net_opts.start_frame;
 }
 
 // Countdown: every port reads as a neutral, connected GameCube controller (ports nobody plays as
@@ -3574,7 +4834,7 @@ bool ReplayNextUpdate(Core::System& system)
     if (load_back < rbm.m_ring_count)
     {
       BeginBurst(system);
-      rbm.LoadFrame(system, load_back);
+      LoadForRollback(system, load_back);
       ++s.rollbacks;
       s.max_rollback = std::max<u64>(s.max_rollback, static_cast<u64>(load_back));
     }
@@ -3594,6 +4854,51 @@ bool ReplayNextUpdate(Core::System& system)
   return true;
 }
 
+// Playback's keyframes hold what a rollback restores: the region set, without its excluded
+// bytes (the game<->Dolphin mailbox and LOCAL, which Dolphin writes, and the set's own excludes).
+void PreparePlaybackKeyframes(Core::System& system)
+{
+  s.pb_keys->Clear();
+  RegionSetSpec spec;
+  if (auto err = LoadRegionSet(s.net_opts.region_set, &spec))
+  {
+    WARN_LOG_FMT(BRAWLBACK, "replay: no seeking ({})", *err);
+    return;
+  }
+  const Guest g(system.GetMemory());
+  std::vector<std::pair<u32, u32>> ranges;
+  for (const auto& r : ResolveRegionSet(g, spec))
+    ranges.emplace_back(r.addr, r.size);
+  std::vector<std::pair<u32, u32>> holes;
+  for (const auto& r : spec.exclude)
+    holes.emplace_back(r.addr, r.size);
+  if (const auto& mb = Rollback::RollbackManager::Get().m_mailbox_region)
+    holes.emplace_back(mb->phys_start | 0x80000000u, mb->phys_end - mb->phys_start);
+  for (const auto& [hole, hole_size] : holes)
+  {
+    std::vector<std::pair<u32, u32>> out;
+    for (const auto& [addr, size] : ranges)
+    {
+      const u64 a = addr, e = u64(addr) + size, h = hole, he = u64(hole) + hole_size;
+      if (he <= a || h >= e)
+      {
+        out.emplace_back(addr, size);
+        continue;
+      }
+      if (h > a)
+        out.emplace_back(addr, static_cast<u32>(h - a));
+      if (he < e)
+        out.emplace_back(static_cast<u32>(he), static_cast<u32>(e - he));
+    }
+    ranges = std::move(out);
+  }
+  u64 bytes = 0;
+  for (const auto& [a, size] : ranges)
+    bytes += size;
+  INFO_LOG_FMT(BRAWLBACK, "replay: keyframes hold {} ranges, {} bytes", ranges.size(), bytes);
+  s.pb_keys->Reset(std::move(ranges));
+}
+
 void StartRunning(Core::System& system)
 {
   // Before the first frame (and its base snapshot): GPUDeterminismMode "auto" turns the
@@ -3601,6 +4906,9 @@ void StartRunning(Core::System& system)
   system.GetFifo().SetRollbackSessionDeterminism(true);
   system.GetCoreTiming().SetPresentPacing(true);
   ResetRunStats();
+  // PPR_GPRB_NO_FRAME_COST=1: no frame cost profile (to measure what it costs).
+  static const bool no_frame_cost = std::getenv("PPR_GPRB_NO_FRAME_COST") != nullptr;
+  Rollback::FrameProfile::SetEnabled(!no_frame_cost);
   PassLogOpen(system);
   if (s.mode == Mode::SyncTest && !s.st_opts.replay_path.empty())
   {
@@ -3667,8 +4975,158 @@ void WriteGoneFlags(Core::System& system, PadSlots* slots, s64 frame)
   s.gone_written = gone;
 }
 
+// ---- Playback controls (docs/design/replays.md §6.4) ----
+
+// A keyframe every KEYFRAME_EVERY frames (5 s; Slippi's are 15 s apart), and while a seek runs to
+// its target, every DENSE_EVERY frames of the last KEYFRAME_EVERY before it, so stepping back
+// from there is quick.
+constexpr s64 KEYFRAME_EVERY = 300;
+constexpr s64 DENSE_EVERY = 60;
+
+// The frame on screen (the last one run), and the next one.
+s64 PlaybackShown()
+{
+  return static_cast<s64>(s.pb.file->first_frame + s.pb.next) - 1;
+}
+
+// Starts a seek to s.pb.seek_to (under s.mutex, at the loop top): the newest keyframe at or before
+// it is put back, unless the target is ahead with no keyframe in between, and the frames up to the
+// target run unpresented. Paused, the target frame is run and shown, then it pauses again.
+void PlaybackSeek(Core::System& system)
+{
+  auto& pb = s.pb;
+  const auto& file = *pb.file;
+  const s64 first = file.first_frame;
+  const s64 last = first + static_cast<s64>(file.pads.size()) - 1;
+  const s64 target = std::clamp(pb.seek_to, first, last);
+  pb.seek_to = -1;
+  pb.at_end = false;
+  const s64 next = first + static_cast<s64>(pb.next);
+  const auto key = s.pb_keys->AtOrBefore(target);
+  if (target >= next && (!key || *key <= next))
+  {
+    pb.ff_until = target;  // straight on
+  }
+  else if (key && s.pb_keys->Restore(system, *key))
+  {
+    pb.next = static_cast<size_t>(*key - first);
+    pb.ff_until = target;
+    // What the session keeps about frames that ran: as if they had not yet.
+    s.current_frame = *key - 1;
+    s.game_set_frame = -1;
+    s.game_set_quit = false;
+    s.snd_max_frame = *key - 1;
+    for (auto& v : s.snd_played)
+      v.clear();
+    s.snd_tag.fill(-1);
+    s.snd_remaining.clear();
+    s.snd_to_stop.clear();
+    s.queued_save = {};
+    INFO_LOG_FMT(BRAWLBACK, "replay: seek to frame {}: keyframe {}, {} frames to run", target, *key,
+                 target - *key);
+  }
+  else
+  {
+    WARN_LOG_FMT(BRAWLBACK, "replay: cannot seek to frame {} (no keyframe at or before it)", target);
+    return;
+  }
+  if (pb.paused)
+    pb.step = std::max(pb.step, 1);
+}
+
+enum class PlaybackStep
+{
+  Run,   // s.ops holds the next frame
+  Wait,  // paused: spin this pass (the emulation is stopping or pausing)
+  End,   // the last frame has run
+};
+
+PlaybackStep PlaybackLoopTopControls(Core::System& system)
+{
+  auto& pb = s.pb;
+  const auto& file = *pb.file;
+  const s64 first = file.first_frame;
+  const s64 last = first + static_cast<s64>(file.pads.size()) - 1;
+  for (;;)
+  {
+    if (pb.seek_to >= 0)
+      PlaybackSeek(system);
+    const s64 f = first + static_cast<s64>(pb.next);
+    const bool ff = f < pb.ff_until;
+    if (f > last && !ff)
+    {
+      // The last frame has run: the match ends as it did for its player, unless this is the last
+      // replay asked for, which holds there (paused) so that it can still be sought back.
+      if (!pb.hold_at_end)
+        return PlaybackStep::End;
+      if (!pb.at_end)
+      {
+        pb.at_end = true;
+        pb.paused = true;
+        pb.step = 0;
+        OSD::AddMessage("Replay finished", OSD::Duration::NORMAL);
+      }
+      if (!pb.paused)
+        return PlaybackStep::End;
+    }
+    else if (!pb.paused || pb.step > 0 || ff)
+    {
+      break;
+    }
+    // Paused at the loop top: the game stands still between two frames (emulated time too).
+    // The video thread shows the last frame again about 30 times a second, so the overlay draws
+    // and a screenshot or a capture of the window still gets the paused frame. Commands
+    // (PlaybackControl) wake it.
+    s.cpu_where = "replay paused";
+    AsyncRequests::GetInstance()->PushEvent([] {
+      if (g_presenter)
+        g_presenter->RedrawLastFrame();
+    });
+    const bool woke = HostWait(
+        system, [] { return !s.pb.paused || s.pb.step > 0 || s.pb.seek_to >= 0; },
+        std::chrono::milliseconds(33));
+    if (!woke && !CpuRunning(system))
+      return PlaybackStep::Wait;  // Dolphin pauses or stops: let it, and come back here
+    system.GetCoreTiming().ResetThrottleToNow();
+  }
+  const s64 f = first + static_cast<s64>(pb.next);
+  const bool ff = f < pb.ff_until;
+  // Keyframes: the state before frame f.
+  if ((f - first) % KEYFRAME_EVERY == 0 ||
+      (ff && pb.ff_until - f <= KEYFRAME_EVERY && (f - first) % DENSE_EVERY == 0))
+  {
+    if (!s.pb_keys->Has(f))
+      s.pb_keys->Capture(system, f);
+  }
+  PadSlots slots = file.pads[pb.next];
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    if ((pb.ports >> port) & 1)
+    {
+      PeerData::SanitizePad(slots.data() + port * INPUT_SIZE);
+    }
+    else
+    {
+      std::fill(slots.begin() + port * INPUT_SIZE, slots.begin() + (port + 1) * INPUT_SIZE, u8(0));
+      slots[port * INPUT_SIZE + 0x38] = 0xFF;  // gfPadError NO_CONTROLLER
+    }
+  }
+  s.ops.adv_count = 1;
+  s.ops.adv_frame[0] = static_cast<int>(f);
+  s.ops.save_after[0] = true;
+  s.ops.slots[0] = slots;
+  s.current_frame = f;
+  ++pb.next;
+  if (!ff && pb.step > 0)
+    --pb.step;
+  if (!ff && pb.ff_until >= 0 && f >= pb.ff_until)
+    pb.ff_until = -1;
+  return PlaybackStep::Run;
+}
+
 bool RunFrame(const Core::CPUThreadGuard& guard)
 {
+  CostPassEnd();
   s.cpu_where = "runframe";
   s.cpu_frame = s.current_frame;
   auto& system = guard.GetSystem();
@@ -3683,7 +5141,11 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     return true;
   }
 
-  PerformQueuedSave(system);
+  {
+    const auto save_t0 = Clock::now();
+    PerformQueuedSave(system);
+    CostAddSave(SinceNs(save_t0, Clock::now()));
+  }
 
   // Diagnostics (PPR_GPRB_SYNC_GPU=1): in dual core, wait at every loop top until the video thread
   // has executed everything the CPU thread has sent, so the GPU thread never lags behind a frame.
@@ -3691,7 +5153,11 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   if (sync_gpu && system.IsDualCoreMode())
     system.GetFifo().SyncGPU(Fifo::SyncGPUReason::Other, true);
 
-  if (s.iteration == 0 && s.replay)
+  if (s.force_final_at_reenter)
+  {
+    // Back from PPR_GPRB_FORCE_FINAL_AT's guest call: the same pass, already fetched.
+  }
+  else if (s.iteration == 0 && s.replay)
   {
     if (!ReplayNextUpdate(system))
     {
@@ -3704,6 +5170,25 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   {
     s.ops_prefetched = false;  // StartRunning installed the start barrier's events
     PassLogWrite();
+  }
+  else if (s.iteration == 0 && s.mode == Mode::Playback)
+  {
+    // The next recorded frame: one advance, saved (for its checksum), never a load. Pauses, steps
+    // and seeks happen here, at the loop top, where a keyframe can be taken or put back.
+    s.ops.Clear();
+    switch (PlaybackLoopTopControls(system))
+    {
+    case PlaybackStep::Wait:
+      Spin(ppc);
+      return true;
+    case PlaybackStep::End:
+      s.pb.finished = true;
+      EndRunning(system, "replay ended");
+      SetLoopDefault(ppc);
+      return true;
+    case PlaybackStep::Run:
+      break;
+    }
   }
   else if (s.iteration == 0)
   {
@@ -3749,6 +5234,7 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
       s.net_window.stall_ms_max = std::max(s.net_window.stall_ms_max, ms);
     }
     UpdateTimeSync(system);
+    UpdateSlowNotice();
     StartTelemetry();
     UpdatePingDisplay();
     PassLogWrite();
@@ -3763,7 +5249,24 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   }
 
   const int i = s.iteration;
-  s.resim_pass = s.ops.adv_count > 1 && i != s.ops.adv_count - 1;
+  // A replay's seek runs the frames before its target unpresented (as a rollback's resimulation).
+  s.resim_pass = s.mode == Mode::Playback ?
+                     static_cast<s64>(s.ops.adv_frame[i]) < s.pb.ff_until :
+                     s.ops.adv_count > 1 && i != s.ops.adv_count - 1;
+
+  if (s.force_final_at_active)
+  {
+    RestoreGuestRegs(ppc, s.force_final_at_saved);
+    s.force_final_at_active = false;
+  }
+  else if (!s.force_final_at.empty() &&
+           RunForceFinalAt(guard, static_cast<s64>(s.ops.adv_frame[i]),
+                           static_cast<s64>(s.ops.adv_frame[i]) > s.snd_max_frame))
+  {
+    s.force_final_at_reenter = true;
+    return true;
+  }
+  s.force_final_at_reenter = false;
 
   // Match end: the state at this loop top is the end of the previous frame.
   {
@@ -3865,13 +5368,18 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     s.audio_pass_start = now;
     s.audio_pass_resim = s.resim_pass;
   }
-  ct.SetRollbackSpeedAdjustment(s.speed_factor);
+  ct.SetRollbackSpeedAdjustment(s.mode == Mode::Playback ? s.pb.speed : s.speed_factor);
   if (!s.resim_pass)
   {
     Rollback::PresentStats::OnDisplayedFrameStart(s.ops.adv_count > 1);
     ++s.frames;
     NetStatsOnDisplayedFrame(system);
   }
+  // The replay: this pass's input (a later pass of the frame overwrites it), once per update the
+  // frames no rollback can reach any more.
+  if (i == 0)
+    Replay::Advance(s.current_frame);
+  Replay::OnPass(static_cast<s64>(s.ops.adv_frame[i]), s.ops.slots[i]);
   PadSlots slots = s.ops.slots[i];
   if (s.gone_enabled)
     WriteGoneFlags(system, &slots, static_cast<s64>(s.ops.adv_frame[i]));
@@ -3913,8 +5421,24 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   // A load above may have rewound the frame counter: let an armed trace see the frame this pass
   // really produces.
   CpuTraceOnLoopTop(system);
+  // Test (PPR_GPRB_TEST_FRAME_COST_US): every pass, a rollback's too, costs this much more CPU
+  // time, as on a slower PC, so that a harness peer can be one that cannot keep full speed.
+  static const long test_frame_cost_us = [] {
+    const char* v = std::getenv("PPR_GPRB_TEST_FRAME_COST_US");
+    return v ? std::atol(v) : 0L;
+  }();
+  if (test_frame_cost_us > 0)
+  {
+    const auto until = Clock::now() + std::chrono::microseconds(test_frame_cost_us);
+    s.mutex.unlock();
+    while (Clock::now() < until)
+    {
+    }
+    s.mutex.lock();
+  }
   SetLoopDefault(ppc);
   s.cpu_where = "guest";
+  CostPassStart(s.resim_pass);
   return true;
 }
 }  // namespace
@@ -4054,6 +5578,13 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.stage_pool.clear();
   s.await_scene_exit = false;
   s.foreign_packets = 0;
+  s.control_id = std::random_device{}();
+  s.reassembler.Clear();
+  s.split_logged = false;
+  s.state_sent.clear();
+  s.state_repeats = 0;
+  for (auto& b : s.gekko_bundle)
+    b.clear();
   s.peer_left = false;
   s.peer_left_reason.clear();
   s.leave_sent = false;
@@ -4062,6 +5593,7 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.disconnected = false;
   s.desync_end = false;
   s.desynced = false;
+  s.recovery = {};
   s.quit_left = false;
   s.socket = std::make_unique<sf::UdpSocket>();
   s.socket->setBlocking(false);
@@ -4114,6 +5646,11 @@ void SetLocalLock(const LockIn& lock_in)
 void SetQuitLoses(bool loses)
 {
   s_quit_loses = loses;
+}
+
+void SetDesyncRecovery(bool on)
+{
+  s_desync_recovery = on;
 }
 
 void SetGameResultCallback(std::function<void(const GameResult&)> callback)
@@ -4206,6 +5743,7 @@ Lobby GetLobby()
     l.asl = s.setup.asl;
     l.players = s.setup.players;
     l.teams = s.setup.teams;
+    l.restore = s.setup.restore;
   }
   l.last_winner = s.last_winner;
   l.stage_pickers = s.last_pickers;
@@ -4235,6 +5773,11 @@ void Stop()
 {
   {
     std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+    // A replay is no online connection: the game's CLEANUP_CONNECTION (sent whenever it is on the
+    // menus, e.g. on its way from the boot to the CSS a replay starts from) and the online
+    // backend's stops leave it. StopPlayback ends it.
+    if (s.mode == Mode::Playback)
+      return;
     // Leaving tells the peer at once, so it does not wait for the 7.2 s silence timeout.
     SendLeave("");
     s.quit_left = false;
@@ -4254,6 +5797,321 @@ void Stop()
   }
 }
 
+std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file, bool play_anyway,
+                                       bool hold_at_end)
+{
+  if (!file)
+    return "no replay";
+  // Everything here comes from a file a stranger may have made: the setup is checked as the
+  // host's control message is (PeerData.h), and only what a joiner takes from its host is used.
+  picojson::value v;
+  if (!PeerData::JsonSafeToParse(file->setup, 12) || !picojson::parse(v, file->setup).empty() ||
+      !v.is<picojson::object>())
+  {
+    return "the replay has no match setup";
+  }
+  const auto& o = v.get<picojson::object>();
+  const auto get = [&](const char* k) -> const picojson::value* {
+    const auto it = o.find(k);
+    return it == o.end() ? nullptr : &it->second;
+  };
+  State::Playback pb;
+  pb.play_anyway = play_anyway;
+  pb.hold_at_end = hold_at_end;
+  // Who played and what, for the overlay (display only: cleaned and cut to length).
+  {
+    picojson::value info;
+    if (PeerData::JsonSafeToParse(file->info, 12) && picojson::parse(info, file->info).empty() &&
+        info.is<picojson::object>())
+    {
+      const auto& io = info.get<picojson::object>();
+      const auto str = [&](const picojson::object& o, const char* k) {
+        const auto it = o.find(k);
+        return it != o.end() && it->second.is<std::string>() ? it->second.get<std::string>() : std::string();
+      };
+      if (const auto it = io.find("players"); it != io.end() && it->second.is<picojson::array>())
+      {
+        for (const auto& p : it->second.get<picojson::array>())
+        {
+          if (!p.is<picojson::object>())
+            continue;
+          const auto& po = p.get<picojson::object>();
+          const auto port = po.find("port");
+          const auto n = PeerData::JsonUInt(port != po.end() ? &port->second : nullptr, MAX_LOBBY_PLAYERS);
+          if (!n || *n < 1)
+            continue;
+          const auto name = Online::ChatText::Clean(str(po, "displayName"), 16);
+          pb.names[*n - 1] = name ? *name : fmt::format("P{}", *n);
+          const auto ch = po.find("characterId");
+          pb.chars[*n - 1] =
+              static_cast<u8>(PeerData::JsonUInt(ch != po.end() ? &ch->second : nullptr, 0xFF).value_or(0xFF));
+        }
+      }
+      const std::string mode = str(io, "mode");
+      const auto game = io.find("gameIndex");
+      const auto g = PeerData::JsonUInt(game != io.end() ? &game->second : nullptr, 255);
+      const char* label = mode == "ranked"   ? "Ranked" :
+                          mode == "unranked" ? "Unranked" :
+                          mode == "direct"   ? "Direct" :
+                          mode == "room"     ? "Room" :
+                          mode == "teams"    ? "Teams" :
+                                               "Replay";
+      pb.title = g && *g ? fmt::format("{} - Game {}", label, *g) : std::string(label);
+    }
+  }
+  const auto sim = PeerData::JsonUInt(get("sim"), 0xFFFFFFFF);
+  if (!sim || (*sim != Replay::SIM_VERSION && !play_anyway))
+  {
+    return fmt::format("the replay was recorded with another version of the game's netcode ({}, "
+                       "this one plays {})",
+                       sim ? std::to_string(*sim) : std::string("unknown"), Replay::SIM_VERSION);
+  }
+  const auto start = PeerData::JsonUInt(get("start_frame"), 600);
+  const auto index = PeerData::JsonUInt(get("match_index"), 0xFFFFFFFF);
+  const auto seed = PeerData::JsonUInt(get("seed"), 0xFFFFFFFF);
+  const auto ports = PeerData::JsonUInt(get("ports"), 0xF);
+  const auto local = PeerData::JsonUInt(get("local_slot"), MAX_LOBBY_PLAYERS - 1);
+  if (!start || *start < 60 || !index || !seed || !ports || std::popcount(*ports) < 2 || !local ||
+      !((*ports >> *local) & 1))
+  {
+    return "the replay's match setup is damaged";
+  }
+  pb.start_frame = static_cast<u32>(*start);
+  pb.match_index = static_cast<u32>(*index);
+  pb.seed = static_cast<u32>(*seed);
+  pb.ports = static_cast<u32>(*ports);
+  pb.local_slot = static_cast<int>(*local);
+  const auto hex = [&](const char* k, size_t min, size_t max) -> std::optional<std::vector<u8>> {
+    const auto* x = get(k);
+    if (!x || !x->is<std::string>())
+      return std::nullopt;
+    const size_t n = x->get<std::string>().size() / 2;
+    if (n < min || n > max)
+      return std::nullopt;
+    return PeerData::ParseHex(x->get<std::string>(), n);
+  };
+  const auto init = hex("init", PeerData::INIT_BLOCK_SIZE, PeerData::INIT_BLOCK_SIZE);
+  const auto key = hex("setup_key", 1, 16 * 1024);
+  const auto session = hex("session", 0x220, 0x400);
+  const auto sync = get("sync") ? SyncBlockFromJson(*get("sync")) : std::nullopt;
+  const auto tasks = get("tasks") ? TaskListsFromJson(*get("tasks")) : std::nullopt;
+  if (!init || !key || !session || !sync || !tasks)
+    return "the replay's match setup is damaged";
+  pb.init = *init;
+  pb.setup_key = *key;
+  pb.session = *session;
+  pb.sync = *sync;
+  pb.tasks = *tasks;
+  if (const auto* x = get("sync_task_order"); x && x->is<bool>())
+    pb.sync_task_order = x->get<bool>();
+  if (file->pads.empty())
+    return "the replay has no frames";
+  if (file->ports != pb.ports)
+    return "the replay's frames do not match its players";
+  if (!file->endg.empty())
+  {
+    picojson::value e;
+    if (picojson::parse(e, file->endg).empty() && e.is<picojson::object>())
+    {
+      const auto& eo = e.get<picojson::object>();
+      if (const auto it = eo.find("endMethod"); it != eo.end() && it->second.is<std::string>())
+        pb.end_method = it->second.get<std::string>().substr(0, 32);
+      if (const auto it = eo.find("finalFrame"); it != eo.end())
+      {
+        if (const auto f = PeerData::JsonUInt(&it->second, Replay::MAX_FRAMES))
+          pb.final_frame = static_cast<s64>(*f);
+      }
+    }
+  }
+  pb.file = std::move(file);
+
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  if (s.mode == Mode::Network && s.phase != Phase::Idle && s.phase != Phase::Ended &&
+      s.phase != Phase::Error)
+  {
+    return "an online session is running";
+  }
+  if (s.mode == Mode::Playback && InMatchPhase())
+    return "a replay is playing";
+  CloseNetwork();
+  pb.serial = s.pb.serial + 1;
+  s.pb = std::move(pb);
+  s.mode = Mode::Playback;
+  s.phase = Phase::Armed;
+  s.error.clear();
+  s.did_frame0 = false;
+  s.match_index = s.pb.match_index;
+  s.session_seed = s.pb.seed;
+  s.end_reason.clear();
+  INFO_LOG_FMT(BRAWLBACK, "replay: armed ({} frames from frame {}, ports {:#x}, P{}'s file, end {}{})",
+               s.pb.file->pads.size(), s.pb.file->first_frame, s.pb.ports, s.pb.local_slot + 1,
+               s.pb.end_method.empty() ? "incomplete" : s.pb.end_method,
+               s.pb.play_anyway ? ", played anyway" : "");
+  return std::nullopt;
+}
+
+void PlaybackControl(PlaybackCommand command, double arg)
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  auto& pb = s.pb;
+  if (s.mode != Mode::Playback || !pb.file || (s.phase != Phase::Running && s.phase != Phase::Countdown))
+    return;
+  const s64 shown = s.phase == Phase::Running ? PlaybackShown() : static_cast<s64>(pb.file->first_frame);
+  static constexpr std::array<double, 6> SPEEDS{0.25, 0.5, 0.75, 1.0, 1.5, 2.0};
+  switch (command)
+  {
+  case PlaybackCommand::TogglePause:
+    pb.paused = !pb.paused;
+    pb.step = 0;
+    break;
+  case PlaybackCommand::Pause:
+    pb.paused = true;
+    pb.step = 0;
+    break;
+  case PlaybackCommand::Play:
+    pb.paused = false;
+    break;
+  case PlaybackCommand::StepForward:
+    pb.paused = true;
+    ++pb.step;
+    break;
+  case PlaybackCommand::StepBack:
+    pb.paused = true;
+    pb.step = 0;
+    pb.seek_to = std::max<s64>((pb.seek_to >= 0 ? pb.seek_to : shown) - 1, pb.file->first_frame);
+    break;
+  case PlaybackCommand::Jump:
+    if (std::isfinite(arg))
+    {
+      pb.seek_to = std::max<s64>((pb.seek_to >= 0 ? pb.seek_to : shown) +
+                                     static_cast<s64>(std::clamp(arg, -3600.0, 3600.0) * 60),
+                                 pb.file->first_frame);
+    }
+    break;
+  case PlaybackCommand::Seek:
+    if (std::isfinite(arg))
+      pb.seek_to = static_cast<s64>(std::clamp(arg, 0.0, static_cast<double>(Replay::MAX_FRAMES)));
+    break;
+  case PlaybackCommand::Speed:
+    if (std::isfinite(arg))
+      pb.speed = std::clamp(arg, 0.25, 2.0);
+    break;
+  case PlaybackCommand::Faster:
+  case PlaybackCommand::Slower:
+  {
+    size_t i = 0;
+    while (i + 1 < SPEEDS.size() && SPEEDS[i] < pb.speed - 1e-6)
+      ++i;
+    if (command == PlaybackCommand::Faster && i + 1 < SPEEDS.size() && SPEEDS[i] <= pb.speed + 1e-6)
+      ++i;
+    else if (command == PlaybackCommand::Slower && i > 0)
+      --i;
+    pb.speed = SPEEDS[i];
+    OSD::AddMessage(fmt::format("Speed {}x", pb.speed), OSD::Duration::SHORT);
+    break;
+  }
+  }
+}
+
+PlaybackInfo GetPlaybackInfo()
+{
+  PlaybackInfo info;
+  std::unique_lock<std::recursive_timed_mutex> lk(s.mutex, std::chrono::milliseconds(5));
+  if (!lk.owns_lock() || s.mode != Mode::Playback || !s.pb.file || !s.pb.started ||
+      (s.phase != Phase::Running && s.phase != Phase::Countdown))
+  {
+    return info;
+  }
+  const auto& file = *s.pb.file;
+  info.active = true;
+  info.first = file.first_frame;
+  info.last = file.first_frame + static_cast<s64>(file.pads.size()) - 1;
+  info.shown = s.phase == Phase::Running ? std::max<s64>(PlaybackShown(), info.first) : info.first;
+  info.paused = s.pb.paused;
+  info.at_end = s.pb.at_end;
+  info.seeking = s.pb.seek_to >= 0 || s.pb.ff_until >= 0;
+  info.speed = s.pb.speed;
+  info.desync_frame = s.pb.desync_frame;
+  info.title = s.pb.title;
+  info.names = s.pb.names;
+  info.chars = s.pb.chars;
+  info.keyframes = s.pb_keys->Count();
+  return info;
+}
+
+void StopPlayback()
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  if (s.mode != Mode::Playback)
+    return;
+  if (InMatchPhase())
+  {
+    // Ends on the CPU thread at the next loop top.
+    s.end_reason = "stopped";
+    s.mode = Mode::None;
+    return;
+  }
+  s.mode = Mode::None;
+  s.phase = Phase::Idle;
+}
+
+PlaybackView GetPlaybackView()
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  PlaybackView v;
+  if (s.mode != Mode::Playback)
+    return v;
+  v.active = true;
+  v.serial = s.pb.serial;
+  v.session = s.pb.session;
+  v.local_port = s.pb.local_slot;
+  v.in_match = InMatchPhase();
+  v.disconnected = s.pb.end_disconnected;
+  v.desynced = s.pb.end_desynced;
+  v.quit_left = s.pb.end_quit_left;
+  return v;
+}
+
+picojson::object PlaybackStatus()
+{
+  std::unique_lock<std::recursive_timed_mutex> lk(s.mutex, std::chrono::milliseconds(1000));
+  picojson::object o;
+  if (!lk.owns_lock())
+  {
+    o["busy"] = picojson::value(true);
+    return o;
+  }
+  const bool playback = s.mode == Mode::Playback;
+  o["active"] = picojson::value(playback);
+  o["phase"] = picojson::value(PhaseName(s.phase));
+  o["serial"] = picojson::value(static_cast<double>(s.pb.serial));
+  o["started"] = picojson::value(s.pb.started);
+  o["finished"] = picojson::value(s.pb.finished);
+  o["error"] = picojson::value(s.pb.error);
+  o["frame"] = picojson::value(static_cast<double>(playback ? s.current_frame : -1));
+  if (s.pb.file)
+  {
+    o["first_frame"] = picojson::value(static_cast<double>(s.pb.file->first_frame));
+    o["last_frame"] = picojson::value(
+        static_cast<double>(s.pb.file->first_frame + s.pb.file->pads.size() - 1));
+  }
+  o["final_frame"] = picojson::value(static_cast<double>(s.pb.final_frame));
+  o["frames_checked"] = picojson::value(static_cast<double>(s.pb.frames_checked));
+  o["desync_frame"] = picojson::value(static_cast<double>(s.pb.desync_frame));
+  o["desync"] = picojson::value(s.pb.desync_text);
+  o["end_method"] = picojson::value(s.pb.end_method);
+  o["play_anyway"] = picojson::value(s.pb.play_anyway);
+  o["paused"] = picojson::value(s.pb.paused);
+  o["speed"] = picojson::value(s.pb.speed);
+  o["at_end"] = picojson::value(s.pb.at_end);
+  o["seeking"] = picojson::value(s.pb.seek_to >= 0 || s.pb.ff_until >= 0);
+  o["shown"] = picojson::value(static_cast<double>(
+      playback && s.pb.file && s.phase == Phase::Running ? PlaybackShown() : -1));
+  o["keyframes"] = picojson::value(static_cast<double>(s.pb_keys->Count()));
+  o["keyframe_bytes"] = picojson::value(static_cast<double>(s.pb_keys->Bytes()));
+  return o;
+}
+
 picojson::value Status()
 {
   std::unique_lock<std::recursive_timed_mutex> lk(s.mutex, std::chrono::milliseconds(1000));
@@ -4270,6 +6128,7 @@ picojson::value Status()
   }
   o["mode"] = picojson::value(s.mode == Mode::SyncTest ? "synctest" :
                               s.mode == Mode::Network  ? "network" :
+                              s.mode == Mode::Playback ? "playback" :
                                                          "none");
   o["phase"] = picojson::value(PhaseName(s.phase));
   o["error"] = picojson::value(s.error);
@@ -4297,6 +6156,8 @@ picojson::value Status()
   o["desync_log"] = picojson::value(dlog);
   o["frames_ahead"] = picojson::value(static_cast<double>(s.frames_ahead));
   o["time_sync_speed"] = picojson::value(s.speed_factor);
+  o["following_peer"] = picojson::value(s.following);
+  o["peer_fps"] = picojson::value(s.peer_fps);
   o["region_bytes"] = picojson::value(static_cast<double>(s.region_bytes));
   o["region_ranges"] = picojson::value(static_cast<double>(s.ranges.size()));
   o["end_reason"] = picojson::value(s.end_reason);
@@ -4304,6 +6165,27 @@ picojson::value Status()
   o["game_set_frame"] = picojson::value(static_cast<double>(s.game_set_frame));
   o["local_quit_frame"] = picojson::value(static_cast<double>(s.local_quit_frame));
   o["quit_left"] = picojson::value(s.quit_left);
+  // A desync where the game starts again: our checksums wait for the restart's setup, and the
+  // restart's values once it is set up (the setup's game, "restore").
+  o["recovery_pending"] = picojson::value(s.recovery.pending);
+  if (s.setup.restore.valid)
+  {
+    const Restore& r = s.setup.restore;
+    picojson::object ro;
+    ro["game"] = picojson::value(static_cast<double>(s.setup.game));
+    ro["frame"] = picojson::value(static_cast<double>(r.frame));
+    ro["checksum"] = picojson::value(static_cast<double>(r.checksum));
+    picojson::array stocks, damage;
+    for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+    {
+      stocks.emplace_back(static_cast<double>(r.stocks[port]));
+      damage.emplace_back(static_cast<double>(r.damage[port]));
+    }
+    ro["stocks"] = picojson::value(stocks);
+    ro["damage"] = picojson::value(damage);
+    ro["frames_left"] = picojson::value(static_cast<double>(r.frames_left));
+    o["restore"] = picojson::value(ro);
+  }
   o["sound_allocs"] = picojson::value(static_cast<double>(s.sound_allocs));
   o["resim_sound_allocs"] = picojson::value(static_cast<double>(s.resim_sound_allocs));
   o["suppressed_sound_allocs"] = picojson::value(static_cast<double>(s.suppressed_sound_allocs));
@@ -4343,6 +6225,7 @@ picojson::value Status()
   o["save_granules_max"] = picojson::value(static_cast<double>(t.save_granules_max));
   o["load_granules_total"] = picojson::value(static_cast<double>(t.load_granules_total));
   o["load_granules_max"] = picojson::value(static_cast<double>(t.load_granules_max));
+  o["frame_cost"] = FrameCostJson();
   if (s.mode == Mode::Network)
   {
     // Every other player ("peers", by port), and the first of them as "peer" (a 1v1's peer).
@@ -4599,6 +6482,7 @@ MatchStart ApplyMatchStart(Core::System& system, std::string_view when)
       WARN_LOG_FMT(BRAWLBACK, "gprb: PPR_GPRB_TEST_TEAMS: a team battle ({})", teams);
     }
   }
+  PinScreenSetting(system);
   const auto seeds = MatchSeeds(s.session_seed, s.match_index);
   WriteU32(system, Addr::MTRAND_DEFAULT_SEED, seeds[0]);
   WriteU32(system, Addr::MTRAND_OTHER_SEED, seeds[1]);
@@ -4615,6 +6499,253 @@ MatchStart ApplyMatchStart(Core::System& system, std::string_view when)
     WARN_LOG_FMT(BRAWLBACK, "gprb: PPR_GPRB_TEST_RNG_SKEW: joiner's g_mtRand moved on");
   }
   return MatchStart::Done;
+}
+
+// The replay of this game (ReplayRecorder.h), at the barrier once every joiner has applied the
+// host's values: everything a fresh boot needs to rebuild the match as this machine played it
+// (SETP; playback applies it as a joiner applies its host's, GameplayPlayback), and the metadata.
+void BeginReplay(Core::System& system)
+{
+  if (s.mode != Mode::Network || !Replay::Enabled())
+    return;
+  const Guest g(system.GetMemory());
+  const PeerView* hp = HostPeer();
+  const bool host = IsHost() || !hp;
+  const SyncBlock& sync = host ? s.sync : hp->sync;
+  const auto& tasks = host ? s.task_order : hp->task_order;
+  const std::vector<u8>& init = host ? s.init_block : hp->init_block;
+
+  picojson::object o;
+  o["v"] = picojson::value(1.0);
+  o["sim"] = picojson::value(static_cast<double>(Replay::SIM_VERSION));
+  o["start_frame"] = picojson::value(static_cast<double>(StartFrame()));
+  o["match_index"] = picojson::value(static_cast<double>(s.match_index));
+  o["seed"] = picojson::value(static_cast<double>(s.session_seed));
+  o["init"] = picojson::value(Hex(init));
+  o["setup_key"] = picojson::value(Hex(s.setup_key));
+  o["setup_hash"] = picojson::value(fmt::format("{:016x}", s.setup_hash));
+  o["ports"] = picojson::value(static_cast<double>(s.match_ports));
+  o["local_slot"] = picojson::value(static_cast<double>(s.local_slot));
+  o["host_slot"] = picojson::value(static_cast<double>(HostSlot()));
+  o["sync"] = SyncBlockJson(sync);
+  picojson::array lists;
+  for (const auto& l : tasks)
+  {
+    picojson::array names;
+    for (const auto& n : l)
+      names.emplace_back(n);
+    lists.emplace_back(names);
+  }
+  o["tasks"] = picojson::value(lists);
+  o["sync_task_order"] = picojson::value(s.net_opts.sync_task_order);
+  if (s.setup.game != 0)
+    o["match_setup"] = SetupJson(s.setup);
+  o["gone"] = picojson::value(s.gone_enabled);
+  // SESSION as the game built this match from it (the same on every machine).
+  std::vector<u8> session;
+  if (const u32 sa = Online::GameBridge::SessionAddress())
+  {
+    const u32 size = Online::GameBridge::SessionSize();
+    if (const u8* p = size ? g.Ptr(sa, size) : nullptr)
+      session.assign(p, p + size);
+  }
+  o["session"] = picojson::value(Hex(session));
+
+  Replay::BeginInfo info;
+  info.meta = s.net_opts.replay_meta;
+  info.local_port = s.local_slot;
+  info.host = IsHost();
+  info.match_ports = s.match_ports;
+  info.session_game = NextGame();
+  info.game = session.size() > 6 && session[6] ? session[6] : NextGame();
+  info.start_frame = StartFrame();
+  info.input_delay = s.input_delay;
+  info.region_set = s.net_opts.region_set;
+  // Who plays what, from the match setup the game built (the same on every machine).
+  if (const auto mm = ModeMeleeAddr(g))
+  {
+    if (const u8* p = g.Ptr(*mm, Addr::MODE_MELEE_SIZE))
+    {
+      info.teams = p[MM_IS_TEAMS] != 0;
+      info.stage = static_cast<u16>(p[0x1A] << 8 | p[0x1B]);
+      for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+      {
+        const u8* pl = p + MM_PLAYERS + port * MM_PLAYER_SIZE;
+        info.char_kind[port] = pl[0];
+        info.costume[port] = pl[5];
+        info.team[port] = info.teams ? pl[PI_TEAM] : NO_TEAM;
+      }
+    }
+  }
+  if (s.setup.game != 0)
+  {
+    info.stage = s.setup.stage;
+    info.asl = s.setup.asl;
+  }
+  // The game's id, the same in every player's file of it.
+  {
+    std::vector<u8> id(info.meta.match_id.begin(), info.meta.match_id.end());
+    for (u32 v : {info.game, s.session_seed, s.match_index})
+    {
+      for (int shift = 0; shift < 32; shift += 8)
+        id.push_back(static_cast<u8>(v >> shift));
+    }
+    id.insert(id.end(), s.setup_key.begin(), s.setup_key.end());
+    const XXH128_hash_t h = XXH3_128bits(id.data(), id.size());
+    for (int k = 0; k < 8; ++k)
+    {
+      info.uid[k] = static_cast<u8>(h.high64 >> (56 - 8 * k));
+      info.uid[8 + k] = static_cast<u8>(h.low64 >> (56 - 8 * k));
+    }
+  }
+  info.setup_json = picojson::value(o).serialize();
+  Replay::Begin(system, info);
+}
+
+// The end of this game's replay (EndRunning): how and with what result it ended.
+void EndReplay(Core::System& system, const std::string& reason, const GameResult* result)
+{
+  if (!Replay::Active())
+    return;
+  Replay::EndInfo e;
+  e.method = reason == "game set"                                     ? "game" :
+             reason == "quit"                                         ? "quit" :
+             reason == "quit left"                                    ? "quit-left" :
+             reason == "desync"                                       ? "desync" :
+             reason == "stopped" || reason == "left the match scene"  ? "stopped" :
+             reason.find("peer") != std::string::npos                 ? "disconnect" :
+                                                                        "error";
+  if (result && result->end == GameEnd::Runback)
+    e.method = "runback";
+  e.game_set_frame = s.game_set_frame;
+  e.rollbacks = s.rollbacks;
+  e.max_rollback = s.max_rollback;
+  e.desyncs = s.desyncs;
+  const GameResult r = result ? *result : ReadGameResult(system);
+  e.winner = result ? r.winner : 0xFF;
+  e.quitter = r.quitter;
+  e.present = r.present;
+  e.stocks = r.stocks;
+  e.damage = r.damage;
+  e.place = r.place;
+  Replay::End(e);
+}
+
+// ---- Playback (docs/design/replays.md §6): a joiner whose host is the replay ----
+
+// The match start (ApplyMatchStart's joiner side): the recorded host's stage variant, the seeds of
+// the recorded session seed and match index, the serial counter.
+void ApplyPlaybackStart(Core::System& system, std::string_view when)
+{
+  const Guest g(system.GetMemory());
+  const auto mine = InitBlock(g);
+  bool rejected = false;
+  const auto merged = PeerData::MergeInitBlock(mine, s.pb.init, &rejected);
+  if (rejected)
+  {
+    WARN_LOG_FMT(BRAWLBACK, "replay: the recorded match init block differs beyond the stage variant; "
+                            "kept ours ({} against {})",
+                 Hex(mine), Hex(s.pb.init));
+  }
+  if (const auto mm = ModeMeleeAddr(g); mm && merged != mine)
+    system.GetMemory().CopyToEmu(*mm + INIT_BLOCK_OFFSET, merged.data(), merged.size());
+  PinScreenSetting(system);
+  const auto seeds = MatchSeeds(s.pb.seed, s.pb.match_index);
+  WriteU32(system, Addr::MTRAND_DEFAULT_SEED, seeds[0]);
+  WriteU32(system, Addr::MTRAND_OTHER_SEED, seeds[1]);
+  WriteU32(system, Addr::LIBC_RAND_NEXT, seeds[2]);
+  WriteU32(system, Addr::OBJECT_SERIAL_COUNTER, SERIAL_COUNTER_START);
+  s.did_frame0 = true;
+  INFO_LOG_FMT(BRAWLBACK, "replay: match RNG seeded ({:08x} {:08x} {:08x}){}{}", seeds[0], seeds[1],
+               seeds[2], when.empty() ? "" : " ", when);
+}
+
+bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
+{
+  auto& system = guard.GetSystem();
+  auto& ppc = system.GetPPCState();
+  const Guest g(system.GetMemory());
+  if (s.phase != Phase::Armed)
+  {
+    if (!IsSceneMelee(g) && !IsNextSceneMelee(g))
+      s.await_scene_exit = false;
+    return false;
+  }
+  const bool melee_pending = !IsSceneMelee(g) && IsNextSceneMelee(g) && !s.await_scene_exit;
+  if (!IsSceneMelee(g) && !melee_pending)
+  {
+    s.did_frame0 = false;
+    s.await_scene_exit = false;
+    return false;
+  }
+  if (s.await_scene_exit)
+    return false;
+  if (!s.did_frame0)
+    ApplyPlaybackStart(system, melee_pending ? "before the scene change" : "");
+  if (melee_pending)
+    return false;
+  u32 fc;
+  if (!IsSimStart(g, &fc))
+    return false;
+
+  // The barrier: the match must be the recorded one (the setup the live peers compared), then the
+  // recorded host's sync block and task order, as a joiner applies its host's.
+  const auto fail = [&](std::string why) {
+    s.pb.error = std::move(why);
+    s.error = s.pb.error;
+    ERROR_LOG_FMT(BRAWLBACK, "replay: {}", s.pb.error);
+    OSD::AddMessage(fmt::format("This replay cannot be played: {}", s.pb.error),
+                    OSD::Duration::VERY_LONG, OSD::Color::RED);
+    s.phase = Phase::Error;
+    s.await_scene_exit = true;
+    // The game ends the match it started (as after a disconnect) instead of playing it on.
+    s.pb.end_disconnected = true;
+    return false;
+  };
+  const auto key = SetupKey(g);
+  if (key != s.pb.setup_key)
+  {
+    WARN_LOG_FMT(BRAWLBACK, "replay: the match's setup differs from the recording's:\n  here {}\n  file {}",
+                 Hex(key), Hex(s.pb.setup_key));
+    if (!s.pb.play_anyway)
+      return fail("its match could not be rebuilt here (the setup differs)");
+  }
+  const u32 human = HumanPorts(g);
+  if (human != s.pb.ports)
+    return fail(fmt::format("its players could not be rebuilt here (ports {:#x}, recorded {:#x})",
+                            human, s.pb.ports));
+  s.match_ports = s.pb.ports;
+  s.local_slot = s.pb.local_slot;
+  s.peers = {};
+  for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+    s.peers[port].expected = port != s.local_slot && ((s.match_ports >> port) & 1);
+  s.gone_enabled = std::popcount(s.match_ports) >= 3;
+  s.gone_addr = s.quit_addr = 0;
+  s.session_addr = Online::GameBridge::SessionAddress();
+  s.gone_written.fill(0);
+  if (s.gone_enabled && s.session_addr)
+  {
+    s.gone_addr = s.session_addr + GONE_FLAG_OFFSET;
+    s.quit_addr = s.session_addr + Online::GameBridge::SESSION_QUIT_PORTS;
+  }
+  WriteSyncBlock(system, s.pb.sync);
+  int relinked = 0;
+  if (s.pb.sync_task_order)
+  {
+    relinked = ApplyTaskOrder(system, s.pb.tasks);
+    if (relinked < 0)
+      WARN_LOG_FMT(BRAWLBACK, "replay: the recorded task lists differ from this game's; not relinked");
+  }
+  INFO_LOG_FMT(BRAWLBACK, "replay: barrier passed (ports {:#x}, task lists relinked: {}), "
+                          "countdown until game frame {}",
+               s.match_ports, relinked, StartFrame());
+  s.pb.started = true;
+  s.phase = Phase::Countdown;
+  system.GetCoreTiming().ResetThrottleToNow();
+  PadsSetCurrent(0xF, NeutralSlots());
+  PadsOnLoopTop(system);
+  SetLoopDefault(ppc);
+  return true;
 }
 
 bool OnLoopTop(const Core::CPUThreadGuard& guard)
@@ -4700,6 +6831,15 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       return true;
     if (s.phase == Phase::Countdown && RunForceFinal(guard))
       return true;
+    if (s.mode == Mode::Playback)
+    {
+      // The recorded frames from here: no rollback, no GekkoNet, nobody to wait for. The region
+      // set is only resolved, for the keyframes of seeking.
+      PreparePlaybackKeyframes(system);
+      StartRunning(system);
+      system.GetCoreTiming().ResetThrottleToNow();
+      return RunFrame(guard);
+    }
     if (s.mode == Mode::SyncTest)
     {
       if (auto err = PrepareRegionSet(system, s.st_opts.region_set))
@@ -4851,6 +6991,9 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     return false;
   }
 
+  if (s.mode == Mode::Playback)
+    return PlaybackLoopTop(guard);
+
   if (s.mode != Mode::Network)
     return false;
 
@@ -4891,6 +7034,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       return false;
     // The first frame of the match simulation: the barrier.
     s.setup_hash = SetupHash(g, StartFrame());
+    s.setup_key = SetupKey(g);
     s.task_order = TaskOrderNames(g);
     // The match's ports: a 1v1 is P1 and P2. With ports, the human ports of the game's own match
     // setup, which the peers compare (the setup hash): each must be this player or a peer of the
@@ -4952,6 +7096,9 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     s.barrier_host = HostSlot();
     s.barrier_since = Clock::now();
     s.wait_logs = 0;
+    // A desynced game played again has started: its checksums are no longer needed.
+    s.recovery.pending = false;
+    ForEachPeer([](int, PeerView& p) { p.recovery.reset(); });
     s.phase = Phase::Barrier;
     SendState();
     INFO_LOG_FMT(BRAWLBACK, "gprb: at the barrier (P{} of ports {:#x}, setup {:016x}: {})",
@@ -5042,6 +7189,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     if (proceed)
     {
       s.phase = Phase::Countdown;
+      BeginReplay(system);
       ct.ResetThrottleToNow();
       // GekkoNet's handshake runs during the countdown (PumpGekkoInCountdown).
       if (CreateGekko(false, std::popcount(s.match_ports)))
@@ -5123,6 +7271,24 @@ bool OnLoopEnd(const Core::CPUThreadGuard& guard)
 void OnStageCreate(const Core::CPUThreadGuard& guard)
 {
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  if (s.mode == Mode::Playback)
+  {
+    // As below, with the recorded session's seeds.
+    if (s.phase != Phase::Armed || s.await_scene_exit)
+      return;
+    auto& system = guard.GetSystem();
+    if (!s.did_frame0)
+    {
+      ApplyPlaybackStart(system, "at the stage's construction");
+      return;
+    }
+    const auto seeds = MatchSeeds(s.pb.seed, s.pb.match_index);
+    WriteU32(system, Addr::MTRAND_DEFAULT_SEED, seeds[0]);
+    WriteU32(system, Addr::MTRAND_OTHER_SEED, seeds[1]);
+    WriteU32(system, Addr::LIBC_RAND_NEXT, seeds[2]);
+    INFO_LOG_FMT(BRAWLBACK, "replay: match RNG seeded again at the stage's construction");
+    return;
+  }
   if (s.mode != Mode::Network)
     return;
   INFO_LOG_FMT(BRAWLBACK, "gprb: stage constructed (match {}, seeded {})", s.match_index, s.did_frame0);
@@ -5434,6 +7600,49 @@ bool RunForceFinal(const Core::CPUThreadGuard& guard)
   {
     RestoreGuestRegs(ppc, s.force_final_saved);
     s.force_final_active = false;
+  }
+  return false;
+}
+
+// Diagnostics (PPR_GPRB_FORCE_FINAL_AT=<session frame>:<port>[:first],...): before a pass of that
+// session frame (after its load, with the previous frame saved), give the port its Final Smash as
+// breaking a Smash Ball does (ftManager::setFinal, as RunForceFinal). With "first", only in the
+// frame's first run: a rollback then discards it, as a Smash Ball broken by a mispredicted run.
+// The call returns to the loop top, and RunFrame comes back for the same pass. Returns true while
+// calling.
+bool RunForceFinalAt(const Core::CPUThreadGuard& guard, s64 frame, bool first_run)
+{
+  auto& ppc = guard.GetSystem().GetPPCState();
+  for (const auto& e : s.force_final_at)
+  {
+    if (e.frame != frame || (e.first_only && !first_run))
+      continue;
+    if (ReadGuest(guard, FT_MANAGER_SET_FINAL) != 0x9421FFE0)
+    {
+      WARN_LOG_FMT(BRAWLBACK, "gprb: force final at: ftManager::setFinal not found");
+      return false;
+    }
+    const u32 entries = ReadGuest(guard, FT_ENTRY_MANAGER);
+    const u32 count = std::min<u32>(ReadGuest(guard, FT_ENTRY_MANAGER + 4), 16);
+    u32 entry_id = 0xFFFFFFFF;
+    for (u32 i = 0; i < count; ++i)
+    {
+      const u32 en = entries + i * FT_ENTRY_SIZE;
+      if (ReadGuest(guard, en + 0x28) != 0 && ReadGuest(guard, en + 0x58) == e.port)
+        entry_id = ReadGuest(guard, en + 4);
+    }
+    if (entry_id == 0xFFFFFFFF)
+      return false;
+    INFO_LOG_FMT(BRAWLBACK, "gprb: force final at session frame {} ({} run): port {} entry {:#x}",
+                 frame, first_run ? "first" : "a later", e.port, entry_id);
+    SaveGuestRegs(ppc, &s.force_final_at_saved);
+    s.force_final_at_active = true;
+    ppc.gpr[3] = FT_MANAGER;
+    ppc.gpr[4] = entry_id;
+    ppc.gpr[5] = 0;
+    ppc.spr[SPR_LR] = LOOP_TOP;
+    ppc.npc = FT_MANAGER_SET_FINAL;
+    return true;
   }
   return false;
 }

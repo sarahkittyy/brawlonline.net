@@ -78,6 +78,10 @@ Client: `I/Slippi/SlippiMatchmaking.cpp`. Server: closed (`mm.slippi.gg`, dev `m
 6. The client disconnects from mm and ENet-connects to every peer from both sides at once. In 1v1, a failure **requeues** (back to step 3). In teams it shows "Could not connect to players: …" (`handleConnecting` `:810-909`).
 7. There is no relay. User options are "Force Netplay Port" and "Force LAN IP".
 
+**Ours: a UPnP mapping of the port (2026-10-12).** A router that gives every destination its own source port (endpoint-dependent mapping, "symmetric NAT") breaks step 3: mm sees a port that the router keeps open only for mm, so the peers' packets are dropped, and its own packets reach the peer from another port, which a router that filters on the sender's port drops too. Such a player connects only to peers whose router lets in any port of an address it sent to. Seen in prod: a player's local ports 50590, 46463, 47714 reached mm as 42831, 62131, 42910; every Direct, room and Unranked attempt against port-preserving peers timed out on both sides, and one Unranked opponent worked. So before contacting mm, `Matchmaking::StartMatchmaking` asks the router to forward UDP `port` to this machine's `port` (`Common::UPnP::MapUdpPort`: miniupnpc's `UPNP_GetValidIGD`, then `AddPortMapping` with a 2 h lease, or a permanent one on error 725). A mapping made before the first packet also makes most routers keep the port for what the machine sends from it (miniupnpd adds a `MASQUERADE --to-ports` rule), so mm sees the port the peers can reach, and nothing changes on the server. The discovery (about 2 s) starts at boot (`GameBridge::Reset`); a search waits for it at most 2.5 s. The previous search's mapping is removed at the next one and at exit. `[Online] UPnP = False` turns it off; it is skipped for mm on 127.0.0.1 (the harness).
+- The log says what happened: `UPnP: router at … for <lan>, internet address <ip>` (or "no router with UPnP found", or that the internet address is private, i.e. another NAT above the router, where the mapping cannot help), `UPnP: mapped UDP port …` or why the router refused, and on every match `[Matchmaking] The server sees us at <ip:port> (port <local>[, UPnP-mapped][; the router changed the port])`. "The router changed the port" with "UPnP-mapped" means a router that changes ports even for a mapped one: only the relay (2.7) helps there.
+- Checked with network namespaces in WSL (a symmetric `MASQUERADE --random-fully` router with miniupnpd, against a port-preserving router that only lets in replies): without the mapping neither side hears the other; with it, mm sees the local port and both sides connect. A router that changes ports despite the mapping still fails, and telling the peers the mapped port instead of the observed one only half works there (conntrack entries collide), so the server does not do that. Harness: `test_online.py::test_direct_match_maps_the_port_with_upnp` (a fake IGD, `ppharness/fake_igd.py`, on the LAN address; mm on the LAN address: the mapping is made before mm sees the port, retried with a permanent lease, and removed at exit); `test_direct_match` checks that mm on 127.0.0.1 gets no mapping.
+
 Findings from the Dolphin sweep (Ishiiruka @ `60f7b63`; mainline line numbers are close):
 - **No region, ping or latency field exists anywhere in the mm protocol.** The only message types are `create-ticket`, `create-ticket-resp` and `get-ticket-resp` (`SlippiMatchmaking.cpp:26-28`). The only ping in the code is the P2P ack round-trip (`SlippiNetplay.cpp:428-433`). Slippi must infer region server-side, presumably from the source IP; there are three leaderboards (NA, EU, Other; Upcomer). We do the same with an offline GeoIP DB (2.3).
 - **The client waits indefinitely for a match.** `get-ticket-resp` is polled in 2000 ms windows with no overall cap (`:480-493`). Only an mm disconnect ends the wait ("Lost connection to the mm server"). The server owns ticket expiry, so our 10-minute ticket TTL must send `get-ticket-resp {error}` rather than silently drop.
@@ -236,7 +240,7 @@ Option: serve a tiny GraphQL endpoint with exactly these operations (async-graph
 | `GET /v1/ranked/result?matchId=&uid=` (built) | `getRankedMatchPersonalResult` | public |
 | `GET /v1/ranked/leaderboard?limit=&after=` (built; keyset pages, no regions or seasons) | slippi.gg | public, per-IP limit |
 | `GET /v1/me/matches?mode=all\|ranked\|unranked&limit=&before=` (built) | slippi.gg profile | session |
-| `POST /v1/rulesets`, `GET /v1/rulesets/<code>`, `GET /v1/me/rulesets[/recent]`, `PUT /v1/me/rulesets/<code>/hidden`, `/v1/me/ruleset-drafts[/<id>]`, `GET`/`PUT /v1/me/ruleset` (built 2026-10-11: room rulesets, `docs/rulesets-protocol.md`) | (none: ours) | public lookup (per-IP limit); the rest session |
+| `POST /v1/rulesets`, `GET /v1/rulesets/<code>[/preview]`, `GET /v1/me/rulesets[/recent]`, `PUT /v1/me/rulesets/<code>/hidden`, `/v1/me/ruleset-drafts[/<id>]`, `GET`/`PUT /v1/me/ruleset` (built 2026-10-11: room rulesets, `docs/rulesets-protocol.md`) | (none: ours) | public lookup (per-IP limit); the rest session |
 
 Play key: 32 random bytes in base64url. Store only its SHA-256. Rotate it on password change and on admin action.
 
@@ -250,7 +254,7 @@ Server-rendered pages: `/signup`, `/login`, `/reset`, `/user/{code}` (code, disp
 
 ### 2.7 Relay
 
-Recommended. It is a stateless UDP forwarder: both peers send `RELAY_HELLO{token}` to `relay:43200`, then the relay forwards datagrams between the two bound source addresses, so ENet runs unchanged on top. The client tries direct and LAN for 3 s, then the relay. It is used only when the punch fails, so bandwidth stays small (rollback input traffic is about 10-20 kbit/s per player). Rate-limit it per token and expire it at match end. It is not visible to users (no new UI), so it complies with "no novel UI".
+Recommended. It is a stateless UDP forwarder: both peers send `RELAY_HELLO{token}` to `relay:43200`, then the relay forwards datagrams between the two bound source addresses, so ENet runs unchanged on top. The client tries direct and LAN for 3 s, then the relay. It is used only when the punch fails, so bandwidth stays small: a gameplay session sends one datagram a frame each way, about 45-50 kbit/s per player with UDP/IP headers (measured 2026-10-13, `harness/tools/gprb_traffic.py`; before that day's fix ~160 kbit/s from a joiner and ~740 from a host, see `gameplay-rollback-status.md` Phase 26). Rate-limit it per token and expire it at match end. It is not visible to users (no new UI), so it complies with "no novel UI".
 
 ### 2.8 Admin tooling
 
@@ -259,7 +263,7 @@ A CLI in the same binary (`ppo-admin user ban|unban|rename|reset-code|delete`, `
 Scaling notes:
 - **api:** stateless, so it scales by adding processes behind Caddy.
 - **Postgres:** a single instance is ample to six figures of users. Add a read replica only for leaderboard queries, and recompute leaderboards every 2 minutes as Slippi does, not per request.
-- **relay:** CPU-bound per packet, at about 20 kbit/s per relayed player.
+- **relay:** CPU-bound per packet: about 64 packets/s and 50 kbit/s per relayed player.
 - **replays:** disk. 2-5 MB per gzipped game, ranked only, means 1 TB holds hundreds of thousands of games.
 - **Friends-scale budget:** all services together need under 1 vCPU and under 2 GB RAM. The smallest OVH dedicated box is already oversized; buy for disk and bandwidth, not CPU.
 
@@ -328,7 +332,8 @@ Parameters (initial, to tune on our data): mu = 25, sigma = 25/3, beta = 25/6, t
 ### 4.4 Disconnects and desyncs (Slippi-equivalent)
 
 - Abandon (a player closes Dolphin, or holds Z to disconnect in ranked): reported `abandoned` by the remaining side. The leaver takes a set loss; the remaining player gets a win only if at least one game has been played, otherwise the set is voided.
-- `poor_performance` termination and `abnormal_completion` with desync recovery failing: **void the set, no rating change**, and log it per uid. Repeat offenders (more than 3 in 24 h) get a cooldown from ranked (Slippi's "ban warning").
+- `poor_performance` termination and `abnormal_completion` with desync recovery failing: **void the set, no rating change**, and log it per uid. Repeat offenders (more than 3 in 24 h) get a cooldown from ranked (Slippi's "ban warning"). Not built.
+- A desync (built 2026-10-13, the user's rules; `docs/game-code.md` §11, desync recovery): the game starts again from the last frame whose checksums both machines compared equal (stocks, damage and time left), after both ready up on the CSS (45 s), and is reported under the same set game number. The server sees nothing of it.
 - The two clients' reports must agree on winner, stocks and end method. On disagreement the game is flagged, the rating is held, and the replay is kept for admin review.
 
 ---
@@ -518,7 +523,7 @@ The table maps each Slippi screen to the Brawl/P+ screen we reuse, using existin
 | 6 | Ranked GameSetup: strikes 1-2-1, then winner bans and loser picks; step timers 30/30/10 s for strikes, 30 s ban/pick, 45 s character (`C/Scenes/Ranked/GameSetup.c`, `.h:16-19`) | P+ **SSS in a strike mode**: struck stages greyed, turn text and timer in the SSS message area. Character re-pick happens on the CSS in Slippi's order. | The largest game-side piece. Text plus existing stage icons only; no Slippi rank badges or other art. |
 | 7 | Rank on the CSS: badge + "GOLD 2 1653.5", animated rating change after a set (`C/Scenes/CSS/RankInfo/RankInfo.c`) | A text-only rank line in the CSS info pane, with the rating change from LOCAL | Brawl has no badge art, so text only. Tier names are generic. |
 | 8 | Results → back to the CSS still connected; START to rematch | Brawl's results screen, then back to the Wi-Fi CSS in the same session | Hook the results→CSS transition. Exiting goes back to screen 1 (Gen 1's `ExitWifiCSS…` hook). |
-| 9 | "DISCONNECTED" (red), "DESYNC DETECTED", poor-connection OSD | Red text in the game's font: in a match drawn with the game's text renderer (`ms::CharWriter`) at the top of the HUD (no free `MuMsg` window exists there); none on the CSS, as on Slippi | Existing font. _DISCONNECTED built 2026-10-07_; _DESYNC DETECTED built 2026-10-09_ (ends the game on both, no winner, still connected) |
+| 9 | "DISCONNECTED" (red), "DESYNC DETECTED", poor-connection OSD | Red text in the game's font: in a match drawn with the game's text renderer (`ms::CharWriter`) at the top of the HUD (no free `MuMsg` window exists there); none on the CSS, as on Slippi | Existing font. _DISCONNECTED built 2026-10-07_; _DESYNC DETECTED built 2026-10-09_ (ends the game on both, no winner, still connected); _Ranked and room sets restart it from the agreed state, 2026-10-13_ |
 | 10 | Quick chat: D-pad category window, 16 messages (`C/Scenes/CSS/Chat/Chat.c`) | A text-only window in the CSS message pane; in-match notifications as text | Later phase |
 
 All new visible content is text in Brawl/P+'s own fonts, placed in existing panes. **No new images, and no AI-generated graphics.** Where Slippi shows art we don't have (rank badges, the chat window frame), we show text instead.

@@ -19,6 +19,8 @@
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
+#include "Common/UPnP.h"
+#include "Core/Config/OnlineSettings.h"
 #include "Core/Core.h"
 #include "Core/NetPlayClient.h"
 #include "Core/Online/Chat.h"
@@ -31,6 +33,7 @@
 #include "Core/Online/User.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/Rollback/GameplaySession.h"
+#include "Core/Rollback/PeerData.h"
 #include "Core/Rollback/RollbackManager.h"
 #include "VideoCommon/OnScreenDisplay.h"
 
@@ -50,7 +53,9 @@ constexpr u32 MAGIC = 0x50504F4D;  // "PPOM"
 // 7: the room's stages (docs/design/room-rules.md §2, the stage switch): SESSION grows to 0x2C0 with
 // ppom.h RoomStages at +0x280 (a starter and a counterpick bit per stage id), and RoomPlay's stage
 // choice 3, loser picks from the list; a v4-v6 plugin still works (any stage).
-constexpr u16 VERSION = 7;
+// 8: replays (docs/design/replays.md §6): LOCAL's Direct-invite counter with a zero prefix and the
+// number 3 asks the game to play the replay SESSION holds; no layout changed.
+constexpr u16 VERSION = 8;
 constexpr u16 MIN_VERSION = 4;
 constexpr u32 HEADER_SIZE = 0x24;
 
@@ -455,6 +460,15 @@ Response MatchStateResponse(const Client::MatchState& ms, bool just_started)
   // The game counts a fresh search as running from the moment it asked.
   if (just_started && state == Matchmaking::State::Idle)
     state = Matchmaking::State::Initializing;
+  // Connected, but the session did not start (dolphin.log: "session start failed", e.g. a
+  // missing Sys/Rollback file): the CSS would sit at "Press START to lock in" with nothing to
+  // lock into. Rooms end their game for it (Rooms.cpp); Direct, Unranked and Ranked show it here.
+  std::string error = ms.error;
+  if (state == Matchmaking::State::ConnectionSuccess && ms.handoff == "failed")
+  {
+    state = Matchmaking::State::ErrorEncountered;
+    error = "Could not start the game. Restart the launcher and try again.";
+  }
   r.payload[0] = static_cast<u8>(state);
   std::string peer_name, peer_code;
   if (ms.match)
@@ -475,11 +489,11 @@ Response MatchStateResponse(const Client::MatchState& ms, bool just_started)
   WriteU16Text(r.payload, MS_PEER_NAME, peer_name, NAME_LEN);
   WriteU16Text(r.payload, MS_PEER_CODE, peer_code, CODE_LEN);
   if (state == Matchmaking::State::ErrorEncountered)
-    WriteU16Text(r.payload, MS_ERROR, ms.error, ERROR_LEN);
+    WriteU16Text(r.payload, MS_ERROR, error, ERROR_LEN);
   r.summary = fmt::format("GET_MATCH_STATE mmState={} ({}) peer='{}' '{}'{}", u8(state),
                           Matchmaking::StateName(state), peer_name, peer_code,
                           state == Matchmaking::State::ErrorEncountered ?
-                              fmt::format(" error='{}'", ms.error) :
+                              fmt::format(" error='{}'", error) :
                               std::string());
   return r;
 }
@@ -1151,10 +1165,235 @@ void PutDirectInvite(std::vector<u8>& local, u8 seq, const std::string& code, u8
   local[L_DIRECT_NUMBER + 1] = static_cast<u8>(number);
 }
 
+// ---- Playback (docs/design/replays.md §6, PPOM v8) ----
+// The game starts a replay's match as it starts an online one, from SESSION: Dolphin writes the
+// recorded SESSION block and asks for the playback with LOCAL's Direct-invite counter (a zero
+// prefix and the number 3; a plugin before v8 would open a plain Direct CSS, so it is not asked).
+// The plugin then opens the recorded mode's online CSS and leaves it for the match at once.
+constexpr u8 PLAYBACK_QUEUE = 3;
+constexpr u16 PLAYBACK_MIN_VERSION = 8;
+u32 s_playback_serial = 0;  // the replay last asked for
+u8 s_playback_bumps = 0;    // LOCAL.directJoin's value since then
+bool s_playback_warned = false;
+
+// A desynced game played again (Gprb::Session::Restore) into SESSION: the flag, every present
+// player's stocks and damage, and the time limit. Values out of range are clamped (0% for a
+// damage that is not a number).
+void PutRestore(std::vector<u8>& session, const Gprb::Session::Restore& r)
+{
+  if (!r.valid || session.size() < SESSION_SIZE_V6)
+    return;
+  session[SESSION_RESTORE] = 1;
+  for (int i = 0; i < SESSION_PLAYERS; ++i)
+  {
+    const u32 p = S_PLAYERS + i * SP_SIZE;
+    if (!session[p + SP_PRESENT])
+      continue;
+    session[p + SESSION_PLAYER_RESTORE_STOCKS] = std::min(r.stocks[i], Gprb::Session::MAX_RESTORE_STOCKS);
+    const float d = r.damage[i] >= 0.0f ? std::min(r.damage[i], Gprb::Session::MAX_RESTORE_DAMAGE) : 0.0f;
+    PutU32(session, p + SESSION_PLAYER_RESTORE_DAMAGE, std::bit_cast<u32>(d));
+  }
+  PutU32(session, SESSION_RESTORE_FRAMES, std::min(r.frames_left, Gprb::Session::MAX_RESTORE_FRAMES));
+}
+
+// The recorded SESSION, rebuilt from its fields: a replay is a stranger's file, so every field
+// the game reads is range-checked as GameBridge's own writes are, text is cleaned, and everything
+// else (the reserved bytes, the elimination order and quits of the match) is zero.
+std::vector<u8> PlaybackSession(const std::vector<u8>& rec, u16 version)
+{
+  std::vector<u8> out(SessionSize(version), 0);
+  if (rec.size() < SESSION_SIZE_V5)
+    return out;
+  const auto text = [&](u32 off, u32 units) {
+    for (u32 k = 0; k + 1 < units; ++k)
+    {
+      const u16 c = static_cast<u16>(rec[off + 2 * k] << 8 | rec[off + 2 * k + 1]);
+      if (c == 0)
+        break;
+      const u16 clean = c < 0x20 || c == 0x7F || (c >= 0x80 && c < 0xA0) ||
+                                (c >= 0x202A && c <= 0x202E) || (c >= 0x2066 && c <= 0x2069) ?
+                            u16('?') :
+                            c;
+      out[off + 2 * k] = static_cast<u8>(clean >> 8);
+      out[off + 2 * k + 1] = static_cast<u8>(clean);
+    }
+  };
+  const auto team = [](u8 t) { return t < Rooms::NUM_TEAMS ? t : GameSetup::NO_TEAM; };
+  out[S_STATE] = 2;  // SS_MATCH_READY
+  out[S_MODE] = rec[S_MODE] <= MODE_TEAMS ? rec[S_MODE] : 1;
+  out[S_GAME] = rec[S_GAME] ? rec[S_GAME] : 1;
+  out[S_LAST_WINNER] = rec[S_LAST_WINNER] < SESSION_PLAYERS || rec[S_LAST_WINNER] >= 0xFE ?
+                           rec[S_LAST_WINNER] :
+                           0xFF;
+  const u16 stage = static_cast<u16>(rec[S_STAGE] << 8 | rec[S_STAGE + 1]);
+  if (Gprb::PeerData::ValidStageKind(stage))
+  {
+    out[S_STAGE] = rec[S_STAGE];
+    out[S_STAGE + 1] = rec[S_STAGE + 1];
+  }
+  out[S_ASL] = rec[S_ASL];
+  out[S_NUM_PLAYERS] = std::min<u8>(rec[S_NUM_PLAYERS], SESSION_PLAYERS);
+  for (int i = 0; i < SESSION_PLAYERS; ++i)
+  {
+    const u32 p = S_PLAYERS + i * SP_SIZE;
+    const bool present = rec[p + SP_PRESENT] == 1 && Gprb::PeerData::ValidCharKind(rec[p + SP_KIND]) &&
+                         Gprb::PeerData::ValidCostume(rec[p + SP_COSTUME]);
+    out[p + SP_PRESENT] = present ? 1 : 0;
+    out[p + SP_KIND] = present ? rec[p + SP_KIND] : 0xFF;
+    out[p + SP_COSTUME] = present ? rec[p + SP_COSTUME] : 0;
+    out[p + SP_TEAM] = team(rec[p + SP_TEAM]);
+    text(p + SP_NAME, NAME_LEN);
+    text(p + SP_CODE, CODE_LEN);
+    out[p + SP_PICKS_STAGE] = rec[p + SP_PICKS_STAGE] ? 1 : 0;
+    out[p + SP_ROOM_SLOT] = rec[p + SP_ROOM_SLOT] & 0x1F;
+    out[p + SP_ROOM_TEAM] = team(rec[p + SP_ROOM_TEAM]);
+    out[p + SP_ROOM_CHAR] = Gprb::PeerData::ValidCharKind(rec[p + SP_ROOM_CHAR]) ? rec[p + SP_ROOM_CHAR] : 0xFF;
+    out[p + SP_ROOM_COSTUME] = Gprb::PeerData::ValidCostume(rec[p + SP_ROOM_COSTUME]) ? rec[p + SP_ROOM_COSTUME] : 0;
+    if (present)
+    {
+      std::array<u8, Gprb::Session::PORT_VALUES_SIZE> pv;
+      std::copy(rec.begin() + p + SP_PORT_VALUES, rec.begin() + p + SP_PORT_VALUES + pv.size(), pv.begin());
+      Gprb::PeerData::SanitizePortValues(pv);
+      std::copy(pv.begin(), pv.end(), out.begin() + p + SP_PORT_VALUES);
+    }
+  }
+  out[S_TEAMS] = rec[S_TEAMS] ? 1 : 0;
+  out[S_ROOM_FLAGS] = rec[S_ROOM_FLAGS] & (RF_IN | RF_PUBLIC | RF_TEAMS);
+  for (u32 k = 0; k < 4; ++k)
+  {
+    const u8 c = rec[S_ROOM_CODE + k];
+    out[S_ROOM_CODE + k] = (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ? c : 0;
+  }
+  out[S_ROOM_HOST] = rec[S_ROOM_HOST] < SESSION_PLAYERS ? rec[S_ROOM_HOST] : 0xFF;
+  out[S_ROOM_STATUS] = std::min<u8>(rec[S_ROOM_STATUS], 2);
+  out[S_ROOM_MODE] = std::min<u8>(rec[S_ROOM_MODE], 2);
+  if (version >= 6 && rec.size() >= SESSION_SIZE_V6)
+  {
+    std::array<u8, RULES_SIZE> rules;
+    std::copy(rec.begin() + S_RULES, rec.begin() + S_RULES + RULES_SIZE, rules.begin());
+    const auto bytes = SessionBytes(FromSessionBytes(rules));
+    std::copy(bytes.begin(), bytes.end(), out.begin() + S_RULES);
+    const u32 rp = S_PLAY;
+    if (rec[rp + RP_VALID] == 1)
+    {
+      out[rp + RP_VALID] = 1;
+      const u8 best_of = rec[rp + RP_BEST_OF];
+      out[rp + RP_BEST_OF] = best_of == 3 || best_of == 5 || best_of == 7 ? best_of : 0;
+      out[rp + RP_CHOICE] = rec[rp + RP_CHOICE] <= CHOICE_LOSER_PICKS_LIST ? rec[rp + RP_CHOICE] : 0;
+      out[rp + RP_CUSTOM] = rec[rp + RP_CUSTOM] ? 1 : 0;
+      for (u32 k = 0; k < 6; ++k)
+      {
+        const u8 c = rec[rp + RP_CODE + k];
+        out[rp + RP_CODE + k] = (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') ? c : 0;
+      }
+      for (u32 k = 0; k + 1 < RP_NAME_LEN && rec[rp + RP_NAME + k]; ++k)
+      {
+        const u8 c = rec[rp + RP_NAME + k];
+        out[rp + RP_NAME + k] = c >= 0x20 && c < 0x7F ? c : '?';
+      }
+      out[rp + RP_SET_ON] = rec[rp + RP_SET_ON] ? 1 : 0;
+      out[rp + RP_SET_GAME] = rec[rp + RP_SET_GAME];
+      out[rp + RP_SCORE] = rec[rp + RP_SCORE];
+      out[rp + RP_SCORE + 1] = rec[rp + RP_SCORE + 1];
+      out[rp + RP_SIDES] = rec[rp + RP_SIDES] & 3;
+      out[rp + RP_SIDES + 1] = rec[rp + RP_SIDES + 1] & 3;
+      out[rp + RP_SET_FLAGS] = rec[rp + RP_SET_FLAGS] & 7;
+      out[rp + RP_SIDE_SLOTS] = rec[rp + RP_SIDE_SLOTS] & 0xF;
+      out[rp + RP_SIDE_SLOTS + 1] = rec[rp + RP_SIDE_SLOTS + 1] & 0xF;
+      out[rp + RP_WINNER] = rec[rp + RP_WINNER] <= 1 ? rec[rp + RP_WINNER] : 0xFF;
+    }
+    else
+    {
+      out[rp + RP_WINNER] = 0xFF;
+    }
+  }
+  if (version >= 7 && rec.size() >= SESSION_SIZE)
+    std::copy(rec.begin() + S_STAGES, rec.begin() + SESSION_SIZE, out.begin() + S_STAGES);
+  // A desynced game played again: the restored values, in the ranges the session takes from a
+  // host (Gprb::Session::Restore).
+  if (version >= 6 && rec.size() >= SESSION_SIZE_V6 && rec[SESSION_RESTORE] == 1)
+  {
+    Gprb::Session::Restore r;
+    r.valid = true;
+    for (int i = 0; i < SESSION_PLAYERS; ++i)
+    {
+      const u32 p = S_PLAYERS + i * SP_SIZE;
+      if (!out[p + SP_PRESENT])
+        continue;
+      r.stocks[i] = std::min(rec[p + SESSION_PLAYER_RESTORE_STOCKS], Gprb::Session::MAX_RESTORE_STOCKS);
+      const u32 d = static_cast<u32>(rec[p + SESSION_PLAYER_RESTORE_DAMAGE]) << 24 |
+                    static_cast<u32>(rec[p + SESSION_PLAYER_RESTORE_DAMAGE + 1]) << 16 |
+                    static_cast<u32>(rec[p + SESSION_PLAYER_RESTORE_DAMAGE + 2]) << 8 |
+                    rec[p + SESSION_PLAYER_RESTORE_DAMAGE + 3];
+      r.damage[i] = std::bit_cast<float>(d);
+    }
+    r.frames_left = static_cast<u32>(rec[SESSION_RESTORE_FRAMES]) << 24 |
+                    static_cast<u32>(rec[SESSION_RESTORE_FRAMES + 1]) << 16 |
+                    static_cast<u32>(rec[SESSION_RESTORE_FRAMES + 2]) << 8 |
+                    rec[SESSION_RESTORE_FRAMES + 3];
+    PutRestore(out, r);
+  }
+  return out;
+}
+
+void SyncPlayback(const Core::CPUThreadGuard& guard, const Located& loc,
+                  const Gprb::Session::PlaybackView& pv)
+{
+  if (loc.version < PLAYBACK_MIN_VERSION)
+  {
+    if (!s_playback_warned)
+    {
+      s_playback_warned = true;
+      ERROR_LOG_FMT(NETPLAY, "GameBridge: the game plugin (PPOM v{}) cannot play replays (v{} can)",
+                    loc.version, PLAYBACK_MIN_VERSION);
+      OSD::AddMessage("This game plugin cannot play replays. Update Brawl Online.",
+                      OSD::Duration::VERY_LONG, OSD::Color::RED);
+    }
+    return;
+  }
+  // A new replay is asked for once the game can take it: on a menu page or an idle online CSS.
+  const u8 screen = R8(guard, loc.local + L_SCREEN);
+  if (pv.serial != s_playback_serial && !pv.in_match && (screen == 1 || screen == 2))
+  {
+    s_playback_serial = pv.serial;
+    ++s_playback_bumps;
+    NOTICE_LOG_FMT(NETPLAY, "GameBridge: asking the game to play replay {}", pv.serial);
+  }
+  std::vector<u8> local(LOCAL_SIZE, 0);
+  local[L_STATE] = pv.in_match ? 3 : 2;
+  local[L_LOCAL_PORT] = static_cast<u8>(pv.local_port);
+  local[L_REMOTE_READY] = 1;
+  local[L_DISCONNECTED] = pv.disconnected ? 1 : 0;
+  for (u32 i = L_LOCK; i < LOCAL_SIZE; ++i)
+    local[i] = R8(guard, loc.local + i);
+  local[L_DESYNCED] = pv.desynced ? 1 : 0;
+  local[L_QUIT_LEFT] = pv.quit_left ? 1 : 0;
+  local[L_ROOM_JOIN] = 0;
+  local[L_ROOM] = 0;
+  local[L_ROOM_CREATE] = 0;
+  local[L_DIRECT_JOIN] = s_playback_bumps;
+  for (u32 i = L_DIRECT_PREFIX; i < L_DIRECT_NUMBER + 2; ++i)
+    local[i] = 0;
+  local[L_DIRECT_NUMBER + 1] = PLAYBACK_QUEUE;
+  WriteBlock(guard, loc.local, local, &s_local_written, &s_local_seq);
+  if (pv.in_match)
+  {
+    s_session_written.clear();
+    return;
+  }
+  WriteBlock(guard, loc.session, PlaybackSession(pv.session, loc.version), &s_session_written,
+             &s_session_seq);
+}
+
 // The SESSION and LOCAL blocks (design 5.2): the game's lock-in to the gameplay session, the
 // session's lobby and match setup back to the game.
 void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
 {
+  if (const auto pv = Gprb::Session::GetPlaybackView(); pv.active)
+  {
+    SyncPlayback(guard, loc, pv);
+    return;
+  }
   // Rooms (v5): the game's screen in, the room out (LOCAL and SESSION's spare bytes).
   const bool v5 = loc.version >= 5;
   const Rooms::Snapshot room = Rooms::GetSnapshot();
@@ -1441,6 +1680,9 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     const auto bytes = SessionBytes(rules);
     std::copy(bytes.begin(), bytes.end(), session.begin() + S_RULES);
   }
+  // The next game plays a desynced one again from the state every machine agreed on.
+  if (lobby.active && lobby.setup_ready)
+    PutRestore(session, lobby.restore);
   WriteBlock(guard, loc.session, session, &s_session_written, &s_session_seq);
 }
 }  // namespace
@@ -1518,6 +1760,11 @@ void Reset()
   // The online connection (hello) and the launcher hand-off (docs/rooms-protocol.md §5).
   Rooms::Start();
   Rooms::OnBoot();
+#ifdef USE_UPNP
+  // The router's UPnP service, for the searches' port mapping (Matchmaking::StartMatchmaking).
+  if (Config::Get(Config::ONLINE_UPNP))
+    Common::UPnP::StartDiscovery();
+#endif
   {
     std::lock_guard lk(s_mutex);
     s_located.reset();
@@ -1535,6 +1782,12 @@ u32 SessionAddress()
 {
   std::lock_guard lk(s_mutex);
   return s_located ? s_located->session : 0;
+}
+
+u32 SessionSize()
+{
+  std::lock_guard lk(s_mutex);
+  return s_located ? SessionSize(s_located->version) : 0;
 }
 
 void SetHandOff(bool hand_off)

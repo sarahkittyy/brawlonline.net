@@ -128,9 +128,12 @@ namespace OnlineMenu {
         u8 roomTaken;                       // SLOT_TAKEN bits seen (sounds)
         bool roomSeen;                      // roomTaken is from this room's view
         bool roomReload;                    // a launcher join on an online CSS: build it again
-        int roomZHeld;
         int roomKickPort;                   // the host holds A on this occupied slot (-1 none)
         int roomKickHeld;                   // for this many frames
+        // A replay (PPOM v8, the playback Dolphin): this CSS plays the replays Dolphin puts in
+        // SESSION, each one's match once (playbackPending), and takes no input.
+        bool playback;
+        bool playbackPending;
     };
     static State s;
     bool roomCss();
@@ -256,6 +259,38 @@ namespace OnlineMenu {
         PPOM::g_block.debug.scratch[15] += 0x1000000u;   // tests: Code Menu opens refused
     }
 
+    // Hold Z (DISCONNECT_HOLD_DELAY frames) to disconnect (Slippi); true on the frame the hold
+    // is done. P+'s "Hold Z for AltZ Characters" picks a character with Z held (the user's,
+    // 2026-10-12: holding Z to pick one in a room left the room, which no longer has a hold Z),
+    // so the hold counts only while Z is the only button down and the stick is still: the stick
+    // moving starts it again (the hand on its way to a portrait; 16 is where the CSS hand starts
+    // to move), any other button (A on the portrait) ends it until Z is let go. *frames < 0: ended.
+    static const u32 PAD_BUTTONS = 0x1F7F;   // START Y X B A L R Z and the d-pad
+    static const int STICK_STILL = 16;       // gfPadStatus +0x30/+0x31, signed
+    static bool zHoldDone(u32 held, int* frames)
+    {
+        if (!(held & BTN_Z)) {
+            *frames = 0;
+            return false;
+        }
+        if (*frames < 0) return false;
+        if (held & PAD_BUTTONS & ~BTN_Z) {
+            *frames = -1;
+            return false;
+        }
+        u8* ps = padSystem();
+        for (int p = 0; ps && p < 4; p++) {
+            s8 x = *(volatile s8*)(ps + 0x244 + 0x40 * p + 0x30), y = *(volatile s8*)(ps + 0x244 + 0x40 * p + 0x31);
+            if (x > STICK_STILL || x < -STICK_STILL || y > STICK_STILL || y < -STICK_STILL) {
+                *frames = 0;
+                return false;
+            }
+        }
+        if (++*frames <= DISCONNECT_HOLD_DELAY) return false;
+        *frames = -1;
+        return true;
+    }
+
     static void playSE(int id)
     {
         typedef void (*PlaySEFn)(void*, int, int, int, int, int);
@@ -348,8 +383,11 @@ namespace OnlineMenu {
     // select the CSS has no coin placed yet, the lock-in with the pick found no character, the
     // pick was dropped and the stage select opened again, over and over).
     static bool roomLockedForNext();
+    static bool resumeStep();
     static int lockChar()
     {
+        // A desynced game played again: the character of that game, whatever the CSS shows.
+        if (resumeStep() && s.lastCss >= 0) return plainCss(s.lastCss);
         int c = selectedChar();
         if (c >= 0) return plainCss(c);
         return s.phase == PH_CONNECTED || (roomCss() && roomLockedForNext()) ? plainCss(s.lastCss) : -1;
@@ -904,8 +942,9 @@ namespace OnlineMenu {
             setStatus(buf, false);
             return;
         case PH_CONNECTED:
-            // Ranked's game setup has its own line (whose turn it is, the opponent's character).
-            if (rankedStep() && s.step.active && s.stepText[0] && !lockedForNext()) {
+            // Ranked's game setup has its own line (whose turn it is, the opponent's character;
+            // after a desync, also once locked in: who is not ready yet and the seconds left).
+            if (rankedStep() && s.step.active && s.stepText[0] && (!lockedForNext() || resumeStep())) {
                 setStatus(s.stepText, false);
                 return;
             }
@@ -974,6 +1013,10 @@ namespace OnlineMenu {
     static const int ROOM_STATUS_FIT = 378;
     static const float STATUS_X2 = 330.0f;
     static const float WRAP_SCALE = 0.7f;
+    // A text a little too wide for one line at scale 1 is one line, smaller (down to this),
+    // rather than two lines at WRAP_SCALE (staging feedback 2026-10-12: "Press START to select
+    // stage" on two lines in a room).
+    static const float ONE_LINE_MIN = 0.75f;
     static const float WRAP_LINE_SPACE = 22.0f; // two lines at 0.7 inside the bar
     static const float WRAP_Y = 27.0f;          // the rule window's own is +-18.4
     // Font units that fit in the widened window at scale 1: at scale 1 a font unit is a window
@@ -1015,7 +1058,7 @@ namespace OnlineMenu {
     enum { LAYOUT_ONE = 1, LAYOUT_TWO = 2, LAYOUT_ONE_SMALL = 3 };
 
     // Lay the status out into `out` (room for 164 bytes): one line at the normal size if it
-    // fits; else two lines at WRAP_SCALE, split at the space that makes the longer line
+    // fits; one line made smaller to fit if it fits at ONE_LINE_MIN; else two lines at WRAP_SCALE, split at the space that makes the longer line
     // shortest; a single word too long for the normal size: one small line; a text too long
     // even for two small lines: the first line as much as fits (cut at a space), the second
     // cut at a space and ended with "...".
@@ -1029,6 +1072,7 @@ namespace OnlineMenu {
         memcpy(out, text, len);
         out[len] = 0;
         if (total <= fit) return LAYOUT_ONE;
+        if (total * ONE_LINE_MIN <= fit) return LAYOUT_ONE_SMALL;
         int wide = (int)(fit / WRAP_SCALE);
         // Balanced split: line 1 = [0, i), line 2 = (i, len) for a space at i.
         int best = -1, bestMax = 0x7FFFFFFF, left = 0;
@@ -1171,9 +1215,16 @@ namespace OnlineMenu {
             }
             ws->x1 = STATUS_X1;
             ws->x2 = roomCss() && roomIn() ? ROOM_STATUS_X2 : STATUS_X2;
-            layout = layoutStatus(s.status, text, roomCss() && roomIn() ? ROOM_STATUS_FIT : STATUS_FIT);
+            int fit = roomCss() && roomIn() ? ROOM_STATUS_FIT : STATUS_FIT;
+            layout = layoutStatus(s.status, text, fit);
             bool two = layout == LAYOUT_TWO;
-            ws->scaleX = ws->scaleY = layout == LAYOUT_ONE ? 1.0f : WRAP_SCALE;
+            // one small line: as large as fits (at least WRAP_SCALE: a single long word, or
+            // ONE_LINE_MIN)
+            int total = statusWidths(s.status, (int)strlen(s.status), NULL);
+            float small = total > 0 ? (float)fit / (float)total : WRAP_SCALE;
+            if (small > 1.0f) small = 1.0f;
+            if (small < WRAP_SCALE) small = WRAP_SCALE;
+            ws->scaleX = ws->scaleY = layout == LAYOUT_ONE ? 1.0f : layout == LAYOUT_ONE_SMALL ? small : WRAP_SCALE;
             ws->lineSpace = two ? WRAP_LINE_SPACE : s.windowLineSpace;
             ws->y1 = two ? WRAP_Y : s.windowY1;
             ws->y2 = two ? -WRAP_Y : s.windowY2;
@@ -1258,6 +1309,63 @@ namespace OnlineMenu {
             "1:\n\t"
             "lis 12, 0x8068\n\t"
             "ori 12, 12, 0x9EAC\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t");
+    }
+
+    // Any costume in a team battle (the user's, 2026-10-12: a room's team battle gave everyone
+    // their team's costume, whatever they had picked). Brawl's team battle CSS (task+0x5C8) ties
+    // the costume to the team: A on the player's own panel (hand target 0x1B) cycles team and
+    // P+'s team set (area+0x1C0, +0x1C4) instead of the costume, and every portrait is drawn in
+    // the team's costume (setCharPic's isTeam). Online the costume stays the player's own pick
+    // and the team is ours (X / Y, the flag: tickRoom), so:
+    // sel_char+0x88B4 `lbz r0,0x5C8(r27)`, the panel click's "team battle?" test (team: on at
+    // +0x88C0, else the costume at +0x8A24, as in a free-for-all): online, the costume. While
+    // locked in, nothing (the function's exit, +0x95A0), as X / Y (cssCostume): the click
+    // changed the costume shown but not the one locked in (harness, 2026-10-12; FFA too).
+    __attribute__((naked)) void cssPanelClick()
+    {
+        asm volatile(
+            "lis 12, g_onlineCssLock@ha\n\t"
+            "lbz 12, g_onlineCssLock@l(12)\n\t"
+            "cmpwi 12, 0\n\t"
+            "bne 2f\n\t"
+            "lis 12, g_onlineCss@ha\n\t"
+            "lbz 12, g_onlineCss@l(12)\n\t"
+            "cmpwi 12, 0\n\t"
+            "bne 1f\n\t"
+            "lbz 0, 0x5C8(27)\n\t"
+            "lis 12, 0x8068\n\t"
+            "ori 12, 12, 0xB17C\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t"
+            "1:\n\t"
+            "lis 12, 0x8068\n\t"
+            "ori 12, 12, 0xB2E8\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t"
+            "2:\n\t"
+            "lis 12, 0x8068\n\t"
+            "ori 12, 12, 0xBE64\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t");
+    }
+
+    // setCharPic(area, css, kind, costume, isTeam, team, teamSet), sel_char+0x14B68 (0x8069742C)
+    // `stwu r1,-0x80(r1)`, its first instruction: online, isTeam (r7) 0, so the portrait is the
+    // costume's (with isTeam it is findCharTeamColorNo's, the team's). Back at +0x14B6C.
+    __attribute__((naked)) void cssCharPic()
+    {
+        asm volatile(
+            "lis 12, g_onlineCss@ha\n\t"
+            "lbz 12, g_onlineCss@l(12)\n\t"
+            "cmpwi 12, 0\n\t"
+            "beq 1f\n\t"
+            "li 7, 0\n\t"
+            "1:\n\t"
+            "stwu 1, -0x80(1)\n\t"
+            "lis 12, 0x8069\n\t"
+            "ori 12, 12, 0x7430\n\t"
             "mtctr 12\n\t"
             "bctr\n\t");
     }
@@ -1353,6 +1461,8 @@ namespace OnlineMenu {
         api->sySimpleHookRel(0x7280, reinterpret_cast<void*>(cssCostume), 10);
         api->sySimpleHookRel(0x75B4, reinterpret_cast<void*>(cssCoinAPress), 10);
         api->sySimpleHookRel(0x7CCC, reinterpret_cast<void*>(cssSwitchButtons), 10);
+        api->sySimpleHookRel(0x88B4, reinterpret_cast<void*>(cssPanelClick), 10);
+        api->sySimpleHookRel(0x14B68, reinterpret_cast<void*>(cssCharPic), 10);
         api->sySimpleHookRel(0xDDB0, reinterpret_cast<void*>(cssReadyBanner), 10);
         RulesButton::install(api);
     }
@@ -1389,8 +1499,9 @@ namespace OnlineMenu {
         s.roomText[0] = 0;
         s.roomSeen = false;
         s.roomReload = false;
-        s.roomZHeld = 0;
         s.roomKickPort = -1;
+        s.playback = false;
+        s.playbackPending = false;
         // Leaving the CSS goes back to the page the mode was picked on (netmenu.cpp
         // exitToOnlinePage): Direct to the ONLINE page, Unranked/Teams to WITH ANYONE.
         // Direct (BASIC VERSUS) goes back to WITH FRIENDS' page (sqMenuMain entry 0x1C reopens
@@ -1425,6 +1536,8 @@ namespace OnlineMenu {
         s.roomEntry = ROOM_ENTRY_NONE;
         s.mode = -1;
         s.codePreset = false;
+        s.playback = false;
+        s.playbackPending = false;
         s.phase = PH_IDLE;
         s.searchSeq = 0;
         s.pollPending = false;
@@ -1802,7 +1915,6 @@ namespace OnlineMenu {
     // create one as soon as the CSS is up; Join Room waits for START, which opens the keypad in
     // its room-code mode (code_entry.cpp), and its OK sends the code. In a room:
     //   START       lock in (ready) with Session.game, the room's next game; B takes it back
-    //   hold Z      leave the room and stay on the CSS (then START enters a code again)
     //   hold B      Brawl's own: back to WITH FRIENDS, which leaves the room (leave())
     //   L           host, any time: public / private
     //   R           host, between games: Teams on / off
@@ -1846,6 +1958,14 @@ namespace OnlineMenu {
     static bool waitsForCharTurn()
     {
         return stepSession() && s.step.active && s.step.type == PPOM::STEP_CHAR && !s.step.myTurn;
+    }
+
+    // A desynced game starts again (Ranked, a room's set; GameSetup's Resume step): the characters
+    // stay as they were (the token cannot be picked up), START readies up, and when the step's
+    // time is up the game readies the player itself.
+    static bool resumeStep()
+    {
+        return stepSession() && s.step.active && s.step.type == PPOM::STEP_RESUME;
     }
 
     static bool roomLocked()
@@ -2007,7 +2127,8 @@ namespace OnlineMenu {
     static void updateRoomStatus()
     {
         const PPOM::Session& se = PPOM::g_block.session;
-        if (stepSession() && s.step.active && s.stepText[0] && !roomLockedForNext() && !s.roomError) {
+        if (stepSession() && s.step.active && s.stepText[0] && (!roomLockedForNext() || resumeStep()) &&
+            !s.roomError) {
             setStatus(s.stepText, false);   // the set's step: whose turn, the seconds left
             return;
         }
@@ -2156,9 +2277,6 @@ namespace OnlineMenu {
                 if (!side[i][0]) strcpy(side[i], i ? "P2" : "P1");
             }
             RoomPlay::cssLine(play, sizeof(play), side[0], side[1]);
-        } else if (in) {
-            // Under the STAGE SWITCH's grid: what its tiles say, and the hazards (stage_switch.cpp).
-            if (!StageSwitch::legend(play, sizeof(play))) play[0] = 0;
         }
         // One line ("Ruleset: X   Bo3: a 1 - 0 b") when it fits, else two.
         char* nl = NULL;   // (the DOL has no strchr)
@@ -2182,8 +2300,6 @@ namespace OnlineMenu {
             }
         } else {
             strcpy(line, play);
-            int w = statusWidths(line, (int)strlen(line), NULL);
-            if (w * ROOM_PLAY_SCALE > ROOM_PLAY_FIT) scale = (float)ROOM_PLAY_FIT / (float)w;
         }
         if (strcmp(line, s_playPrinted) != 0) {
             WindowSetting* wp = (WindowSetting*)(*(u32*)((u8*)m + 0xC) + 0x48 * ROOM_PLAY_WINDOW);
@@ -2226,7 +2342,7 @@ namespace OnlineMenu {
         bool waiting = in && se.roomStatus == 0;
         const u32 BTN_A = 0x100, BTN_L = 0x40, BTN_R = 0x20;
         // P+'s rules menu over the CSS (room_rules.cpp): while it is open its pages take the
-        // buttons; the room's own (L/R, START, B, Z, the header buttons, the panels) wait.
+        // buttons; the room's own (L/R, START, B, the header buttons, the panels) wait.
         // On the CSS between a running set's games (the room in game, its session on, not in a
         // match): the host may open RULES for End set alone, while not locked in for the next game
         // (a lock-in could start the match under the menu).
@@ -2243,7 +2359,6 @@ namespace OnlineMenu {
         if ((RoomRules::changedNow() || RoomPlay::changedNow()) && waiting && roomLockedForNext()) unlock();
         if (rulesOpen) {
             s_headerPress = 0;
-            s.roomZHeld = 0;
             s.roomKickPort = -1;
             roomButtons(in, host);   // (the host's "A: open/close" hint goes while the menu is open)
             return;
@@ -2270,11 +2385,10 @@ namespace OnlineMenu {
                 lockIn(roomGame(), 0xFFFF, 0);
         }
         if (!in) {
-            // Not in a room (Join Room, or after leaving one): START enters a room code.
+            // Not in a room (Join Room, or no longer in one): START enters a room code.
             if ((pressed & BTN_START) && selectedChar() >= 0 && s.roomPhase != PPOM::RP_JOINING) {
                 CodeEntry::open(LOCAL_PORT, true);
             }
-            s.roomZHeld = 0;
             s.roomKickPort = -1;
         } else {
             if (pressed & BTN_START) {
@@ -2288,19 +2402,6 @@ namespace OnlineMenu {
                 maskPressed(BTN_B);   // the coin stays where it is (as Direct's B)
                 unlock();
                 playSE(SE_BACK);
-            }
-            if (held & BTN_Z) {
-                if (++s.roomZHeld > DISCONNECT_HOLD_DELAY) {
-                    postRoom(PPOM::ROOM_LEAVE, 0, 0, NULL);
-                    unlock();
-                    s.roomEntry = ROOM_ENTRY_JOIN;
-                    s.roomText[0] = 0;
-                    s.roomError = false;
-                    s.roomZHeld = 0;
-                    playSE(SE_BACK);
-                }
-            } else {
-                s.roomZHeld = 0;
             }
             // ITEM (Public / Private) and STAGE (FFA / Teams), pressed with A as the game does
             u8 hdr = s_headerPress;
@@ -2335,10 +2436,12 @@ namespace OnlineMenu {
                     playSE(1);
                 }
             }
+            // The held field (+0x8) has A a frame after the press (harness, 2026-10-12: the hold
+            // was let go on the frame it began and nobody could be removed), so the press counts.
             if (s.roomKickPort >= 0) {
                 if (port != s.roomKickPort || !(se.players[port].roomSlot & PPOM::SLOT_TAKEN)) {
                     s.roomKickPort = -1;   // the hand moved off, the player left, or a game started
-                } else if (!(held & BTN_A)) {
+                } else if (!((held | pressed) & BTN_A)) {
                     s.roomKickPort = -1;
                     playSE(SE_ERROR);
                 } else if (++s.roomKickHeld > DISCONNECT_HOLD_DELAY) {
@@ -2347,9 +2450,9 @@ namespace OnlineMenu {
                     playSE(1);
                 }
             }
-            // Teams on: A on the local panel's flag (Brawl's team battle way) or X picks the next
-            // team colour, Y the previous one (in a team battle the costume follows the team
-            // anyway, so the costume buttons are free; their press is used up).
+            // Teams on: A on the local panel's flag or X picks the next team colour, Y the
+            // previous one (their press is used up: the costume is A on the panel, as in a
+            // free-for-all, cssPanelClick; any costume on any team, the user's, 2026-10-12).
             const u32 BTN_X = 0x400, BTN_Y = 0x800;
             bool teamsOn = (se.roomFlags & PPOM::RF_TEAMS) && se.roomMode == 2;
             u32 teamPress = pressed & (BTN_X | BTN_Y);
@@ -2363,8 +2466,6 @@ namespace OnlineMenu {
                     playSE(1);
                 }
             }
-            int team = RoomCss::myTeamClicked();
-            if (team >= 0 && waiting) postRoom(PPOM::ROOM_TEAM, (u8)team, 0, NULL);
             roomMatch();
         }
         RoomCss::setLocalSlot(in && me >= 0 ? me : 0, in);
@@ -2502,7 +2603,6 @@ namespace OnlineMenu {
         s.roomError = false;
         s.roomSeen = false;        // the join sounds start over with the new room
         s.roomKickPort = -1;
-        s.roomZHeld = 0;
         NetMenu::setReturnButton(0);   // back from the CSS: WITH FRIENDS, Create Room
         PPOM::g_block.debug.scratch[9] += 0x100;   // tests: launcher creates taken
     }
@@ -2571,13 +2671,24 @@ namespace OnlineMenu {
 
     // The launcher's Play unranked / Play ranked: LOCAL.directJoin bumped with a zero prefix and
     // directNumber 1 / 2 (docs/rooms-game-interface.md). That mode, else -1 (a Direct invite).
+    static const int QUEUE_PLAYBACK = 100;   // launcherQueue: a replay (PPOM v8)
     static int launcherQueue()
     {
         const PPOM::Local& l = PPOM::g_block.local;
         for (int k = 0; k < 4; k++) {
             if (l.directPrefix[k]) return -1;
         }
-        return l.directNumber == 1 ? PPOM::MODE_UNRANKED : l.directNumber == 2 ? PPOM::MODE_RANKED : -1;
+        if (l.directNumber == PPOM::QUEUE_PLAYBACK) return QUEUE_PLAYBACK;
+        return l.directNumber == PPOM::QUEUE_UNRANKED ? PPOM::MODE_UNRANKED :
+               l.directNumber == PPOM::QUEUE_RANKED ? PPOM::MODE_RANKED : -1;
+    }
+
+    // A replay: the CSS of the mode it was played in (SESSION's), which then starts its match.
+    static void enterPlayback(int mode)
+    {
+        enter(mode);
+        s.playback = true;
+        s.playbackPending = true;
     }
 
     // The CSS of `mode`: Direct with the invite's code (back from the CSS: WITH FRIENDS, Direct
@@ -2606,6 +2717,30 @@ namespace OnlineMenu {
         }
         if (j == s_directSeen) return;
         int queue = launcherQueue();
+        if (queue == QUEUE_PLAYBACK) {
+            u8 sm = PPOM::g_block.session.mode;
+            int mode = sm <= PPOM::MODE_TEAMS ? sm : PPOM::MODE_UNRANKED;
+            if (onJumpPage(scene)) {
+                if (!decideOnlineCss()) return;
+                enterPlayback(mode);
+                s_directSeen = j;
+                s_jumpPage = NULL;
+                return;
+            }
+            if (g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0 && !CodeEntry::active()) {
+                s_directSeen = j;
+                if (s.mode == mode && !roomCss() && s.phase == PH_IDLE) {
+                    s.playback = true;
+                    s.playbackPending = true;
+                    return;
+                }
+                bool room = roomCss();
+                enterPlayback(mode);
+                if (room) RoomCss::releaseRecords();
+                leaveCss(1);   // OnlineMatch: no match armed -> back to the CSS (restoreCss)
+            }
+            return;
+        }
         int mode = queue >= 0 ? queue : PPOM::MODE_DIRECT;
         if (onJumpPage(scene)) {
             if (!decideOnlineCss()) return;
@@ -2637,11 +2772,11 @@ namespace OnlineMenu {
     // until START locks in.
     static bool startReadies()
     {
-        if (CodeEntry::active()) return false;
+        if (CodeEntry::active() || s.playback) return false;
         if (roomCss()) {
             const PPOM::Session& se = PPOM::g_block.session;
             if (!roomIn()) {
-                // Join Room, or after leaving one: START enters a room code ("Creating room":
+                // Join Room, or no longer in one: START enters a room code ("Creating room":
                 // the room is on its way, START is not the next step).
                 if (s.roomEntry == ROOM_ENTRY_CREATE && !s.roomError) return false;
                 return selectedChar() >= 0 && s.roomPhase != PPOM::RP_JOINING;
@@ -2715,7 +2850,7 @@ namespace OnlineMenu {
 
         bool onCss = g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0;
         if (!onCss) s.stepFloor = s.stepSeq;   // only a step asked for on the CSS counts there
-        g_onlineCssLock = (onCss && (lockedIn() || waitsForCharTurn())) ? 1 : 0;
+        g_onlineCssLock = (onCss && (lockedIn() || waitsForCharTurn() || resumeStep())) ? 1 : 0;
         if (g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelStage") == 0) {
             if (s.quitNoticeFrames) --s.quitNoticeFrames;   // shown with the step (rankedText)
             // Direct's loser picks the stage on P+'s stage select. The pick is the stage and its
@@ -2772,6 +2907,25 @@ namespace OnlineMenu {
             if (p >= 0) s.startPad = (u8)p;
         }
         maskStart();
+        if (s.playback) {
+            // A replay: nothing the player presses here does anything (START would search, B and
+            // Z would leave). Its match starts once SESSION has it, as a connected game's does.
+            maskButtons(BTN_START | BTN_B | BTN_Z);
+            const PPOM::Session& se = PPOM::g_block.session;
+            if (s.playbackPending && se.state == PPOM::SS_MATCH_READY && se.game) {
+                s.playbackPending = false;
+                g_onlineMatchGame = se.game;
+                PPOM::g_block.debug.scratch[10] = 0x100 * se.game;   // tests: the match started
+                leaveCss(1);
+            }
+            g_onlineCssLock = 1;
+            setStatus(s.playbackPending ? "Loading replay" : "Replay", false);
+            if (s.statusDirty && s.cssMsg) {
+                printCssStatus();
+                s.statusDirty = false;
+            }
+            return;
+        }
         if (CodeEntry::active()) {
             CodeEntry::tick(pressed & BTN_START);
         } else if (roomCss()) {
@@ -2799,18 +2953,14 @@ namespace OnlineMenu {
                     playSE(SE_BACK);
                 }
             } else if (s.phase == PH_CONNECTED) {
-                if (b & BTN_Z) {
-                    if (++s.zHeld > DISCONNECT_HOLD_DELAY) {
-                        cleanup();
-                        playSE(SE_BACK);
-                    }
-                } else {
-                    s.zHeld = 0;
+                if (zHoldDone(b | pressed, &s.zHeld)) {
+                    cleanup();
+                    playSE(SE_BACK);
                 }
                 tickConnected(pressed);
             }
         }
-        g_onlineCssLock = (lockedIn() || waitsForCharTurn()) ? 1 : 0;
+        g_onlineCssLock = (lockedIn() || waitsForCharTurn() || resumeStep()) ? 1 : 0;
         PPOM::g_block.debug.scratch[1] = (u32)g_onlineCssLock | ((u32)s.phase << 4);   // harness/tests
         if (s.quitNoticeFrames) --s.quitNoticeFrames;
         updateStatus();

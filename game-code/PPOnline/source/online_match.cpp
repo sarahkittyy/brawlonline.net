@@ -68,6 +68,7 @@ namespace OnlineMatch {
     static const u32 SEL_PLAYERS = 0xB8;       // gmSelCharData: gmPlayerInitData[7] at +0xB8
     static const u32 PLAYER_SIZE = 0x5C;
     static const u32 MM_PLAYERS = 0x98;        // gmGlobalModeMelee players
+    static const u32 MM_TIME_LIMIT = 0x20;     // gmGlobalModeMelee: the time limit (s32 frames)
     static const u32 ASL_BUTTONS = 0x800B9EA2; // P+: buttons held on the stage select (u16)
 
     // gmSelCharData of the local CSS, saved before the match overwrites it and put back after,
@@ -101,6 +102,7 @@ namespace OnlineMatch {
     static u8 s_matchQuitPorts = 0;   // 3-4 players: the ports that quit
     static u32 s_seen = 0;          // ports seen with stocks in this match (tickPlayers)
     static bool s_inMatch = false;  // a match ran since the last frame outside scMelee (offMatch)
+    static bool s_restore = false;  // this match plays a desynced game again (SESSION restore)
 
     // Each port's controls for this match (SESSION's port values, kept at the setup: SESSION is
     // the same on both machines, so are these). Applied by the ipPadConfig hook below.
@@ -148,37 +150,13 @@ namespace OnlineMatch {
         seq[0x11] = type;
     }
 
-    // A player's costume in a team battle: the one the CSS would give them for their team. The CSS
-    // calls muMenu::findCharTeamColorNo (0x800AF520) with the CSS character, the team and P+'s
-    // "team set" (which of the team's costumes), and P+ v3.2 replaces that function (Legacy TE
-    // UnboundedTeamEngine.asm) with a walk over the character's costume list in its CSS slot table
-    // (0x80585B00 + slot * 0x10, +8: 2-byte entries whose first byte is the costume's colour,
-    // ending with colour 0x0C); a team's colour is the byte at r2 - 0x7130 + team (0x805A21F0:
-    // 0 red, 1 blue, 3 green). The same walk here: the player's own costume if it already has
-    // the team's colour (they picked that shade), else the character's first costume of it.
-    static u8 teamCostume(u8 charKind, u8 team, u8 costume)
-    {
-        typedef int (*ToSelchFn)(int);
-        int slot = ((ToSelchFn)0x800AF708)(charKind);   // exchangeGmCharacterKind2MuSelchkind
-        u32 list = *(u32*)(0x80585B08 + ((u32)slot & 0xFF) * 0x10);
-        if (!isPtr(list)) return costume;
-        u8 colour = *(u8*)(0x805A21F0 + team);
-        int first = -1;
-        for (int i = 0; i < 0x20; i++) {
-            u8 c = *(u8*)(list + 2 * i);
-            if (c == 0x0C) break;
-            if (c != colour) continue;
-            if (i == costume) return costume;
-            if (first < 0) first = i;
-        }
-        return first < 0 ? costume : (u8)first;
-    }
-
-    // The character's costume list (as teamCostume): its length and each costume's colour.
+    // The character's costume list: its length and each costume's colour. P+ v3.2 keeps it in
+    // the character's CSS slot table (0x80585B00 + slot * 0x10, +8: 2-byte entries whose first
+    // byte is the costume's colour, ending with colour 0x0C; Legacy TE UnboundedTeamEngine.asm).
     static int costumeList(u8 charKind, u8* colours)
     {
         typedef int (*ToSelchFn)(int);
-        int slot = ((ToSelchFn)0x800AF708)(charKind);
+        int slot = ((ToSelchFn)0x800AF708)(charKind);   // exchangeGmCharacterKind2MuSelchkind
         u32 list = *(u32*)(0x80585B08 + ((u32)slot & 0xFF) * 0x10);
         if (!isPtr(list)) return 0;
         int n = 0;
@@ -190,15 +168,15 @@ namespace OnlineMatch {
         return n;
     }
 
-    // Two players with the same character and costume in a free-for-all (staging feedback
-    // 2026-10-10): P+'s Versus never shows that. Its CSS does not let a costume another player
-    // has be picked: X skips it, and a player taking a character whose costume is taken gets the
-    // next free one (found live: three Game & Watch on P1-P3 came out 0, 1, 2; cycling skipped
-    // the others'). So the later player (in port order) gets the next costume in the
-    // character's list that no other player of that character has, of the same colour if the
-    // list has one (P+'s variants: a second green), else the next free one. Deterministic: the
-    // same SESSION gives the same costumes on every machine. Only if the list has none left
-    // (fewer costumes than players) is the shading below the fallback.
+    // Two players with the same character and costume (staging feedback 2026-10-10; in a team battle
+    // too, since its costumes are the players' own, 2026-10-12): P+'s Versus never shows that. Its CSS
+    // does not let a costume another player has be picked: X skips it, and a player taking a character
+    // whose costume is taken gets the next free one (found live: three Game & Watch on P1-P3 came out
+    // 0, 1, 2; cycling skipped the others'). So the later player (in port order) gets the next costume
+    // in the character's list that no other player of that character has, of the same colour if the
+    // list has one (P+'s variants: a second green), else the next free one. Deterministic: the same
+    // SESSION gives the same costumes on every machine. Only if the list has none left (fewer costumes
+    // than players) is the shading below the fallback.
     static void distinctCostumes(const PPOM::Session& se, u8* costume)
     {
         for (int i = 0; i < se.numPlayers && i < 4; i++) {
@@ -291,8 +269,9 @@ namespace OnlineMatch {
             se.gone[i] = 0;
             if (i < se.numPlayers && se.players[i].present) {
                 const PPOM::SessionPlayer& pl = se.players[i];
-                // A team battle: the team's costume, as the CSS gives it in team mode.
-                costume[i] = teams ? teamCostume(pl.charKind, pl.team, pl.costume) : pl.costume;
+                // The player's own costume, in a team battle too (the user's, 2026-10-12: any
+                // costume on any team; Brawl's team battle CSS would give the team's).
+                costume[i] = pl.costume;
                 p[0x00] = pl.charKind;
                 p[0x01] = 0;                         // human
                 p[0x05] = costume[i];                // colour number
@@ -303,11 +282,9 @@ namespace OnlineMatch {
                 p[0x01] = 3;                         // none
             }
         }
-        if (!teams) {
-            distinctCostumes(se, costume);
-            for (int i = 0; i < se.numPlayers && i < 4; i++) {
-                if (se.players[i].present) sel[SEL_PLAYERS + i * PLAYER_SIZE + 0x05] = costume[i];
-            }
+        distinctCostumes(se, costume);
+        for (int i = 0; i < se.numPlayers && i < 4; i++) {
+            if (se.players[i].present) sel[SEL_PLAYERS + i * PLAYER_SIZE + 0x05] = costume[i];
         }
         sel[SEL_TEAMS] = teams ? 1 : 0;
         se.outCount = 0;
@@ -327,6 +304,22 @@ namespace OnlineMatch {
         // The match's controller numbers follow the in-game ports on both machines.
         for (int i = 0; i < se.numPlayers && i < 4; i++) {
             if (se.players[i].present) mm[MM_PLAYERS + i * PLAYER_SIZE + 0x07] = (u8)(i + 1);
+        }
+        // A desynced game played again (SESSION restore; docs/game-code.md, desync recovery): a
+        // fresh game with each player's stocks at the agreed frame (a player out of the game
+        // starts with one and leaves at RESTORE_FRAME, tickPlayers) and the time left then. The
+        // damage follows at RESTORE_FRAME. Stocks and time are in the setup the barrier compares.
+        s_restore = se.restore != 0;
+        if (s_restore) {
+            for (int i = 0; i < se.numPlayers && i < 4; i++) {
+                if (!se.players[i].present) continue;
+                u8 st = se.players[i].restoreStocks;
+                mm[MM_PLAYERS + i * PLAYER_SIZE + 0x04] = (u8)(st == 0 ? 1 : st > 99 ? 99 : st);
+            }
+            s32* limit = (s32*)(mm + MM_TIME_LIMIT);
+            u32 left = se.rules.restoreFrames;
+            if (*limit > 0 && left > 0 && left < (u32)*limit) *limit = (s32)left;
+            PPOM::g_block.debug.scratch[10] |= 0x400000;   // tests: this match is a restart
         }
         // Colour clash, the fallback when distinctCostumes found no free costume (Slippi's
         // prepareOnlineMatchState: the players are counted in port order
@@ -451,7 +444,7 @@ namespace OnlineMatch {
         g_onlineMatchGame = 0;
         s_discFrames = -1;
         // P+'s salty runback (pponline_pauseResult): where it restarts (Unranked, Direct, a room's
-        // 1v1 or set), Dolphin has set the next game up as this one again (same players, stage
+        // game, 3-4 players too), Dolphin has set the next game up as this one again (same players, stage
         // and alternate stage) when the session ended, the same on every machine: straight into
         // it, as P+'s own runback, without the CSS. Ranked counts it as a lost game and sets
         // nothing up: the CSS as after any quit.
@@ -508,6 +501,15 @@ namespace OnlineMatch {
     // stock: 0xBD, the dead status, then 0x10B).
     static const u32 SET_OUT = 0x80837B9C;
     static const u32 GAME_FRAME = 0x901812A4;   // g_GameFrame's frame counter (rolled back)
+    // ftOwner::setDamage(float damage, bool log) (sora_melee text+0x1113B8, the ftOwner vtable's
+    // slot 4 at 0x80B05F58; seen live: slot 5 is getDamage, text+0x111850): stores the damage
+    // (data+0x24) and tells the HUD; `log` also adds the change to the match's stats.
+    static const u32 SET_DAMAGE = 0x8081BDCC;
+    // A desynced game played again (setupMatch): every fighter exists by game frame 92 of the
+    // countdown, and the rollback session starts at 120 (Gprb DEFAULT_START_FRAME): the restored
+    // damage and the players out of the game are applied between the two, on the same frame on
+    // every machine, before anything can be rolled back.
+    static const u32 RESTORE_FRAME = 100;
 
     // Every frame of an online match (also resimulated ones), at the start of the frame
     // (gfPadSystem::updateSystem, before the frame's game code), from the rolled-back state only,
@@ -540,6 +542,11 @@ namespace OnlineMatch {
         u32 mgr = *(u32*)FT_MANAGER;
         if (!isPtr(entries) || !isPtr(mgr) || n > 9) return;   // 9 entries in a match; unused ones have no player number
         u8 next = se.outCount + 1;   // ports out on the same frame share their place in the order
+        // A desynced game played again (setupMatch): from RESTORE_FRAME on, the players who were
+        // out of the game leave it as a dropped player does; on that frame the others get their
+        // damage back.
+        const u32 frame = *(u32*)GAME_FRAME;
+        const bool restoreNow = s_restore && g_onlineCss && g_onlineMatchGame && frame >= RESTORE_FRAME;
         for (u32 k = 0; k < n; k++) {
             u8* e = (u8*)(entries + k * 0x244);
             u32 p = *(u32*)(e + 0x58);
@@ -547,11 +554,22 @@ namespace OnlineMatch {
             u32 data = isPtr(owner) ? *(u32*)owner : 0;
             if (p > 3 || !isPtr(data)) continue;
             s32* stocks = (s32*)(data + 0x34);
+            const PPOM::SessionPlayer& rp = se.players[p];
+            const bool restored = restoreNow && (int)p < se.numPlayers && rp.present;
+            if (restored && frame == RESTORE_FRAME && rp.restoreStocks > 0 && *stocks > 0) {
+                typedef void (*SetDamageFn)(u32 owner, float damage, int log);
+                float d = rp.restoreDamage;
+                if (d >= 0.0f && d <= 999.0f) {
+                    ((SetDamageFn)SET_DAMAGE)(owner, d, 0);
+                    dbg.scratch[10] |= 0x800000;   // tests: the damage was restored
+                }
+            }
             if (*stocks > 0) {
                 s_seen |= 1u << p;
                 u32 fighter = *(u32*)(e + 0x34 + 8 * (e[0x0A] & 3));   // the active instance
                 bool quit = (se.quitPorts >> p) & 1;   // the pause screen's quit (pponline_pauseResult)
-                if ((se.gone[p] || quit || ((test >> p) & 1)) && isPtr(fighter)) {
+                bool out = restored && rp.restoreStocks == 0;   // out at the agreed frame
+                if ((se.gone[p] || quit || out || ((test >> p) & 1)) && isPtr(fighter)) {
                     if ((test >> p) & 1) se.gone[p] = 1;
                     *stocks = 1;
                     ((SetDeadFn)SET_DEAD)(mgr, *(int*)(e + 0x04), 5, -1);
@@ -784,12 +802,20 @@ namespace OnlineMatch {
                 return PAUSE_RESUME;
             }
             if (result != 3 && result != 4) return result;
-            if (sidesLeftWithout(bit) <= 1) se.quitStays |= bit;
-            se.quitPorts |= bit;
-            s_matchQuitPorts = se.quitPorts;
-            playQuitSound(result);
-            dbg.scratch[10] |= 0x400000;
-            return PAUSE_RESUME;
+            // The salty runback (L+R+Y held) outside a set restarts the match for everyone (the
+            // user's, 2026-10-13): it takes the quit below, which ends the match for all and is
+            // marked as a runback. Only while every player is still in: with one gone, the same
+            // match cannot start again, and the runback is this player's own quit.
+            bool allIn = se.quitPorts == 0;
+            for (int p = 0; p < PPOM::SESSION_PLAYERS; p++) allIn = allIn && !(se.players[p].present && se.gone[p]);
+            if (!allIn || (pauserHeld(op) & RUNBACK_BUTTONS) != RUNBACK_BUTTONS) {
+                if (sidesLeftWithout(bit) <= 1) se.quitStays |= bit;
+                se.quitPorts |= bit;
+                s_matchQuitPorts = se.quitPorts;
+                playQuitSound(result);
+                dbg.scratch[10] |= 0x400000;
+                return PAUSE_RESUME;
+            }
         }
         if (s_quitOp != op) {
             if (result != 3 && result != 4) return result;

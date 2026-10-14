@@ -418,6 +418,24 @@ TEST_F(ChatTest, ReportCarriesVerifiableMessages)
   EXPECT_FALSE(Chat::Report(ME, ""));
 }
 
+// The netcode's notices (a PC falling behind) are system lines on this machine only, cleaned as
+// any line (the name in them came from the network).
+TEST_F(ChatTest, NoticesAreLocalSystemLines)
+{
+  Peer bob(BOB, 2);
+  Join({&bob});
+  (void)Chat::TakeOutbox();
+  Chat::AddNotice("bob\xE2\x80\xAE's PC can't  keep up. Expect slowdowns. ");
+  const picojson::array lines = Status()["lines"].get<picojson::array>();
+  ASSERT_FALSE(lines.empty());
+  const auto& last = lines.back().get<picojson::object>();
+  EXPECT_EQ(last.at("kind").get<std::string>(), "system");
+  EXPECT_EQ(last.at("text").get<std::string>(), "bob's PC can't keep up. Expect slowdowns.");
+  EXPECT_TRUE(Chat::TakeOutbox().empty());  // nothing is sent
+  Chat::AddNotice("\xE2\x80\xAE ");                // nothing left after cleaning: no line
+  EXPECT_EQ(Status()["lines"].get<picojson::array>().size(), lines.size());
+}
+
 TEST_F(ChatTest, HiddenPlayersAreKept)
 {
   Chat::SetHidden(BOB, true);

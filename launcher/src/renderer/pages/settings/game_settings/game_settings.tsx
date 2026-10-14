@@ -20,6 +20,7 @@ import { useIsoVerification, useIsoVerificationFraction } from "@/lib/hooks/use_
 import { useEnableMusic, useInputDelay, useIsoPath, useLaunchGameOnPlay } from "@/lib/hooks/use_settings";
 
 import { SettingItem } from "../setting_item_section";
+import { ChatKeySetting } from "./chat_key_setting";
 import { GameSettingsMessages as Messages } from "./game_settings.messages";
 
 const renderValidityStatus = (isoValidity: IsoValidity) => {
@@ -150,6 +151,7 @@ export const GameSettings = React.memo(() => {
           </div>
         </Tooltip>
       </SettingItem>
+      <ChatKeySetting />
     </div>
   );
 });

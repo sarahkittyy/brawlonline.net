@@ -1037,9 +1037,8 @@ bool IsKnownDeviceId(const USBUtils::DeviceInfo& device_info)
 
 void HandleWiimoteSourceChange(unsigned int index)
 {
-  std::lock_guard wm_lk(g_wiimotes_mutex);
-
   {
+    std::lock_guard wm_lk(g_wiimotes_mutex);
     const Core::CPUThreadGuard guard(Core::System::GetInstance());
     auto removed_wiimote = std::move(g_wiimotes[index]);
 
@@ -1050,6 +1049,9 @@ void HandleWiimoteSourceChange(unsigned int index)
     if (removed_wiimote != nullptr && !is_balance_board)
       AddWiimoteToPool(std::move(removed_wiimote));
   }
+  // Without g_wiimotes_mutex: populating takes the controller interface's population lock, and
+  // the scanner thread populates (ProcessWiimotePool takes g_wiimotes_mutex) while holding it. A
+  // source change at boot (a rollback session's config layer) deadlocked against the scanner.
   g_controller_interface.PlatformPopulateDevices([] { ProcessWiimotePool(); });
 }
 

@@ -32,6 +32,9 @@ Timing model (per direction, per client)::
   later packets overtake it, in either mode.
 * Loss: independent (``loss``) and/or Gilbert-Elliott bursts (``burst``). Spikes add
   loss/latency for a time window, measured from ``NetSim.epoch`` (``reset_epoch()``).
+* ``max_datagram``: a datagram with more payload bytes is dropped ("fragment"), as on a
+  path that drops IP fragments (some routers, CGNATs and ISPs do): on a 1500-byte MTU
+  anything over 1472 bytes of UDP payload goes as fragments.
 
 Scheduling: a heap of (deadline, packet) served by one thread using
 ``time.perf_counter`` (QPC on Windows). It waits on a Condition until ~2 ms before the
@@ -122,6 +125,7 @@ class LinkProfile:
     rate_kbps: float | None = None     # bandwidth cap, kilobits per second
     queue_ms: float = 250.0            # max queueing delay before tail drop (with rate_kbps)
     order: str = "fifo"                # fifo | none (see module docstring)
+    max_datagram: int | None = None    # larger datagrams are dropped (a path that drops fragments)
 
     def __post_init__(self) -> None:
         if self.jitter_dist not in ("normal", "uniform", "pareto"):
@@ -154,6 +158,8 @@ class LinkProfile:
             parts.append(f"reorder {self.reorder:.2%}")
         if self.rate_kbps:
             parts.append(f"{self.rate_kbps:g} kbit/s")
+        if self.max_datagram:
+            parts.append(f"drops datagrams over {self.max_datagram} bytes")
         return ", ".join(parts)
 
 
@@ -257,6 +263,8 @@ PRESETS: dict[str, NetProfile] = {
     "typical": NetProfile.from_rtt(40, 8, loss=0.005, name="typical"),
     "bad_wifi": NetProfile.from_rtt(60, 25, burst_loss=0.02, mean_burst=3, name="bad_wifi"),
     "cross_country": NetProfile.from_rtt(80, 5, name="cross_country"),
+    # Prod 2026-10-12, Peru to the US east coast: 92 ms on the control channel, 8-10 ms of jitter.
+    "long_haul": NetProfile.from_rtt(92, 9, name="long_haul"),
     "awful": NetProfile.from_rtt(150, 50, loss=0.05, name="awful"),
 }
 
@@ -278,7 +286,7 @@ def get_profile(profile: str | NetProfile | LinkProfile) -> NetProfile:
 @dataclass
 class Decision:
     deliveries: list[float]     # absolute clock() times; empty if dropped
-    dropped: str | None = None  # "loss" | "burst" | "spike" | "queue"
+    dropped: str | None = None  # "loss" | "burst" | "spike" | "queue" | "fragment"
     reordered: bool = False
     duplicated: bool = False
     target_delay: float = 0.0   # seconds of latency+jitter drawn for this packet
@@ -351,6 +359,8 @@ class LinkModel:
             p = ge.loss_bad if self.ge_bad else ge.loss_good
             burst_drop = u_ge_loss < p
 
+        if prof.max_datagram and size > prof.max_datagram:
+            return Decision([], "fragment")
         if u_loss < prof.loss:
             return Decision([], "loss")
         if burst_drop:
@@ -832,6 +842,7 @@ _LINK_FLAGS: list[tuple[str, str, type, str]] = [
     ("reorder-delay", "reorder_delay_ms", float, "hold-back for reordered packets, ms"),
     ("rate-kbps", "rate_kbps", float, "bandwidth cap, kbit/s"),
     ("queue-ms", "queue_ms", float, "max queueing delay before tail drop, ms"),
+    ("max-datagram", "max_datagram", int, "drop datagrams over N payload bytes (1472: a path that drops IP fragments)"),
 ]
 
 

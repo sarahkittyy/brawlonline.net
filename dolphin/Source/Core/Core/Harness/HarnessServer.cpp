@@ -72,6 +72,7 @@
 #include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/GameplayOnlineBackend.h"
 #include "Core/Rollback/PresentStats.h"
+#include "Core/Rollback/ReplayPlayback.h"
 #include "VideoCommon/OnlineChatUI.h"
 #include "VideoCommon/Present.h"
 #include "Core/Rollback/RollbackManager.h"
@@ -1278,7 +1279,7 @@ Result CmdGprbSyncTest(const Args& args)
 {
   Gprb::Session::SyncTestOptions o;
   o.distance = static_cast<int>(GetU64(args, "distance", 2));
-  o.region_set = GetString(args, "region_set", std::string("gp-v22"));
+  o.region_set = GetString(args, "region_set", std::string("gp-v23"));
   o.hash_regions = GetBool(args, "hash_regions", true);
   o.start_frame = static_cast<u32>(GetU64(args, "start_frame", o.start_frame));
   o.ports = static_cast<u32>(GetU64(args, "ports", 3));
@@ -1307,7 +1308,7 @@ Result CmdGprbConnect(const Args& args)
   o.local_port = static_cast<u16>(GetU64(args, "port", 0));
   o.remote_host = GetString(args, "host", std::string(""));
   o.remote_port = static_cast<u16>(GetU64(args, "remote_port", 0));
-  o.region_set = GetString(args, "region_set", std::string("gp-v22"));
+  o.region_set = GetString(args, "region_set", std::string("gp-v23"));
   o.start_frame = static_cast<u32>(GetU64(args, "start_frame", o.start_frame));
   if (Find(args, "delay"))
     o.delay = static_cast<int>(GetU64(args, "delay"));
@@ -1537,6 +1538,69 @@ Result CmdGprbStop(const Args&)
 {
   Gprb::Session::Stop();
   return Gprb::Session::Status().get<picojson::object>();
+}
+
+// Replays (docs/design/replays.md): replay_play {path, play_anyway} plays a file (the game then
+// starts its match by itself); replay_status is playback's and the comm file's state;
+// replay_recording is the path of the replay this instance is (or was last) recording, written
+// to the disk once `flush` is set.
+Result CmdReplayPlay(const Args& args)
+{
+  if (const auto error = Gprb::Replay::Playback::PlayFile(GetString(args, "path"),
+                                                         GetBool(args, "play_anyway", false),
+                                                         GetBool(args, "hold_at_end", false)))
+  {
+    Fail(*error);
+  }
+  return Gprb::Replay::Playback::Status();
+}
+
+// replay_control {action: pause|play|toggle|step|back|jump|seek|speed|faster|slower, arg}: the
+// playback controls (seconds for jump, a frame for seek, a factor for speed).
+Result CmdReplayControl(const Args& args)
+{
+  using Gprb::Session::PlaybackCommand;
+  const std::string cmd = GetString(args, "action");
+  double arg = 0;
+  if (const picojson::value* v = Find(args, "arg"))
+  {
+    if (!v->is<double>())
+      Fail("argument 'arg' must be a number");
+    arg = v->get<double>();
+  }
+  static const std::pair<const char*, PlaybackCommand> COMMANDS[] = {
+      {"pause", PlaybackCommand::Pause},       {"play", PlaybackCommand::Play},
+      {"toggle", PlaybackCommand::TogglePause}, {"step", PlaybackCommand::StepForward},
+      {"back", PlaybackCommand::StepBack},      {"jump", PlaybackCommand::Jump},
+      {"seek", PlaybackCommand::Seek},          {"speed", PlaybackCommand::Speed},
+      {"faster", PlaybackCommand::Faster},      {"slower", PlaybackCommand::Slower},
+  };
+  for (const auto& [name, command] : COMMANDS)
+  {
+    if (cmd == name)
+    {
+      Gprb::Session::PlaybackControl(command, arg);
+      return Gprb::Session::PlaybackStatus();
+    }
+  }
+  Fail("unknown replay command " + cmd);
+}
+
+Result CmdReplayStatus(const Args&)
+{
+  Result r = Gprb::Session::PlaybackStatus();
+  r["comm"] = picojson::value(Gprb::Replay::Playback::Status());
+  return r;
+}
+
+Result CmdReplayRecording(const Args& args)
+{
+  if (GetBool(args, "flush", false))
+    Gprb::Replay::Flush();
+  Result r;
+  r["path"] = picojson::value(Gprb::Replay::CurrentPath());
+  r["recording"] = picojson::value(Gprb::Replay::Active());
+  return r;
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1940,6 +2004,10 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"machine_digest", CmdMachineDigest},
       {"machine_image_state_save", CmdMachineImageStateSave},
       {"machine_image_state_load", CmdMachineImageStateLoad},
+      {"replay_play", CmdReplayPlay},
+      {"replay_status", CmdReplayStatus},
+      {"replay_control", CmdReplayControl},
+      {"replay_recording", CmdReplayRecording},
       {"gprb_samples", CmdGprbSamples},
       {"gpu_state", CmdGpuState},
       {"gprb_census", CmdGprbCensus},

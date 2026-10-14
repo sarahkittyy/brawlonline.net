@@ -294,6 +294,22 @@ bool IsGameSet(const Guest& g)
   return p && *p != 0;
 }
 
+u32 RemainingFrames(const Guest& g)
+{
+  const auto scene = CurrentScene(g);
+  if (!scene || !IsSceneMelee(g))
+    return 0;
+  const auto gg = g.Ptr32(Addr::GAME_GLOBAL_PTR);
+  const auto mm = gg ? g.Ptr32(*gg + Addr::GG_MODE_MELEE) : std::nullopt;
+  const auto limit = mm ? g.U32(*mm + Addr::MM_TIME_LIMIT) : std::nullopt;
+  if (!limit || static_cast<s32>(*limit) <= 0)
+    return 0;
+  const auto rule = g.Ptr32(*scene + Addr::SCM_OPERATOR_RULE_MELEE);
+  const u32 left = rule ? g.U32(*rule + Addr::OPR_REMAINING_FRAMES).value_or(0) : 0;
+  // A timer that ran out reads 1, so that 0 always means "no time limit".
+  return std::max<u32>(left, 1);
+}
+
 bool IsQuitRequested(const Guest& g)
 {
   const auto scene = CurrentScene(g);

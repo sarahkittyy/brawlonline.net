@@ -1069,6 +1069,15 @@ SendResult Send(const std::string& text)
   return SendResult::Sent;
 }
 
+void AddNotice(std::string_view text)
+{
+  auto clean = ChatText::Clean(text);
+  if (!clean)
+    return;
+  std::lock_guard lk(s_mutex);
+  AddSystemLine(std::move(*clean));
+}
+
 void SetHidden(const std::string& uid, bool hidden)
 {
   if (!IsUid(uid))

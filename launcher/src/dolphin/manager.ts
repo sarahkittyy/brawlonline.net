@@ -1,25 +1,32 @@
 import { Preconditions } from "@common/preconditions";
-import { DOLPHIN_ONLINE_DIR } from "@common/product";
+import { DOLPHIN_ONLINE_DIR, PRODUCT_NAME } from "@common/product";
 import { readTestMode } from "@common/test_mode";
 import type { SettingsManager } from "@settings/settings_manager";
-import { app } from "electron";
+import type { MessageBoxOptions } from "electron";
+import { app, BrowserWindow, dialog } from "electron";
 import electronLog from "electron-log";
 import { existsSync } from "fs";
+import { readdir } from "fs/promises";
 import { Observable, Subject } from "observable-fns";
 import path from "path";
 import { fileExists } from "utils/file_exists";
+import { isSubdirectory } from "utils/is_subdirectory";
 
 import { isAbnormalExit, keepCrashLog } from "./crash_log";
-import { ensureBrawlSave } from "./install/brawl_save";
+import { brawlSaveDir, ensureBrawlSave } from "./install/brawl_save";
 import { bundledDolphinSource, installBundledDolphin } from "./install/bundled_dolphin";
 import { fetchLatestVersion } from "./install/fetch_latest_version";
 import { LocalDolphinInstallation } from "./install/local_installation";
+import type { GameFilesTarget } from "./install/move_game_files";
+import { chooseGameFilesTarget, GameFilesMoveError, moveGameFiles, removeGameFiles } from "./install/move_game_files";
 import type { DolphinPathEnv } from "./install/paths";
 import {
   defaultDolphinExecutable,
+  defaultNetplayFolder,
   defaultPluginLocation,
   defaultUserTemplate,
-  netplayInstallFolder,
+  launchTypeFolder,
+  netplayFolder,
   patchedSdCardFolder,
   projectPlusStoreFolder,
 } from "./install/paths";
@@ -38,7 +45,7 @@ import type { ModsRoomArg } from "./mods/mods_args";
 import { buildModsDolphinArgs } from "./mods/mods_args";
 import { clearModRoomFiles } from "./mods/room_files";
 import type { ModBuild } from "./mods/types";
-import { buildNetplayDolphinArgs } from "./netplay_args";
+import { buildNetplayDolphinArgs, buildPlaybackDolphinArgs } from "./netplay_args";
 import { clearRoomRequest } from "./room_handoff";
 import { createProgressThrottle, runWithProgress } from "./setup_progress";
 import type { DolphinEvent, DolphinSetupPhase, ReplayCommunication } from "./types";
@@ -70,6 +77,8 @@ export class DolphinManager {
   private versionCache = new Map<string, string>();
   private bundledInstall: Promise<void> | null = null;
   private projectPlusInstall: Promise<void> | null = null;
+  /** True while Settings moves the game files (moveGameFiles): nothing may start Dolphin. */
+  private movingGameFiles = false;
   private eventSubject = new Subject<DolphinEvent>();
   private shouldSendProgress = createProgressThrottle(PROGRESS_INTERVAL_MS);
   /** Runs before a new Dolphin starts and throws to stop it (the launcher's update check). */
@@ -98,12 +107,17 @@ export class DolphinManager {
     return path.join(this.getInstallation(DolphinLaunchType.NETPLAY).userFolder, DOLPHIN_ONLINE_DIR);
   }
 
+  /** The netplay folder: the bundled Dolphin, its User folder, P+'s files (paths.ts). */
+  netplayFolder(): string {
+    return netplayFolder(app.getPath("userData"), this.settingsManager.get().settings.gameFilesFolder);
+  }
+
   private _pathEnv(): DolphinPathEnv {
     return {
       env: process.env,
       isDevelopment: !app.isPackaged,
       devRepoRoot: process.cwd(),
-      userDataDir: app.getPath("userData"),
+      netplayFolder: this.netplayFolder(),
     };
   }
 
@@ -118,7 +132,11 @@ export class DolphinManager {
     // Only the netplay User folder is seeded with P+'s files (2 GB SD card). Playback has
     // nothing to play until our replay format exists, so it gets a plain User folder.
     const template = launchType === DolphinLaunchType.NETPLAY ? defaultUserTemplate(this._pathEnv()) : null;
-    return new LocalDolphinInstallation(launchType, exePath, app.getPath("userData"), template, portable);
+    const dataFolder =
+      launchType === DolphinLaunchType.NETPLAY
+        ? this.netplayFolder()
+        : path.join(app.getPath("userData"), launchTypeFolder(launchType));
+    return new LocalDolphinInstallation(launchType, exePath, dataFolder, template, portable);
   }
 
   /**
@@ -178,8 +196,17 @@ export class DolphinManager {
     }
   }
 
+  /**
+   * Plays replays (docs/design/replays.md §6.2) in the playback Dolphin: the same executable as
+   * Play, with its own User folder (its own graphics settings and window, and a Brawl save of its
+   * own), booting the game from the netplay install's P+ files and patched SD card. A replay's
+   * game settings come from the replay itself (Dolphin forces them for the run only).
+   */
   async launchPlaybackDolphin(id: string, replayComm: ReplayCommunication): Promise<void> {
     const playbackInstallation = this.getInstallation(DolphinLaunchType.PLAYBACK);
+    this._assertNotMoving();
+    const netplayInstallation = this.getInstallation(DolphinLaunchType.NETPLAY);
+    await this._repairBundledDolphin();
     const dolphinPath = await playbackInstallation.findDolphinExecutable();
     await playbackInstallation.ensureUserFolder();
 
@@ -190,7 +217,29 @@ export class DolphinManager {
     let playbackInstance = this.playbackDolphinInstances.get(id);
     if (!playbackInstance) {
       await this.launchGate();
-      playbackInstance = new PlaybackDolphinInstance(dolphinPath, playbackInstallation.userArgs());
+      const isoPath = await this._getIsoPath();
+      Preconditions.checkExists(isoPath, "No Brawl disc image set. Choose one in Settings > Game.");
+      await this.ensureNetplayUserFolder();
+      await this._ensureProjectPlusFiles(netplayInstallation);
+      await netplayInstallation.assertProjectPlusFiles();
+      // The template is in the netplay folder (also when Settings moved it), not in userData
+      const storeDir = projectPlusStoreFolder(this.netplayFolder());
+      await this._ensureBrawlSave(playbackInstallation, storeDir);
+      await playbackInstallation.addGamePath(path.dirname(isoPath));
+      await playbackInstallation.setDefaultIso(isoPath);
+      const sdCardImage = await this._withProgress(DolphinLaunchType.PLAYBACK, "prepareSdCard", (onProgress) =>
+        this._installOnlinePlugin(netplayInstallation, true, onProgress),
+      );
+      const params = buildPlaybackDolphinArgs({
+        userArgs: playbackInstallation.userArgs(),
+        sdCardImage,
+        bootFile: netplayInstallation.netplayLauncherDol,
+        testMode: readTestMode(process.env, app.isPackaged),
+      });
+      // The playback NAND must have a Brawl save, or P+ asks to create one before every first replay
+      await this._checkBrawlSave(playbackInstallation, storeDir);
+      log.info(`Launching playback dolphin at path: ${dolphinPath} ${params.join(" ")}`);
+      playbackInstance = new PlaybackDolphinInstance(dolphinPath, params);
       playbackInstance.on("close", async (exitCode) => {
         this.eventSubject.next({
           type: DolphinEventType.CLOSED,
@@ -206,6 +255,23 @@ export class DolphinManager {
         log.error(err);
         throw err;
       });
+      // A replay from another version: ask, as §6.5 of docs/design/replays.md says.
+      const instance = playbackInstance;
+      instance.onNeedsPlayAnyway = (status) => {
+        log.info(`Replay refused: ${status.error ?? ""}`);
+        void dialog
+          .showMessageBox({
+            type: "question",
+            buttons: ["Play anyway", "Cancel"],
+            defaultId: 1,
+            cancelId: 1,
+            title: "Replay",
+            message: "This replay may not play as it was played.",
+            detail: `${status.error ?? "It was recorded with another version."}\n\nPlay it anyway?`,
+          })
+          .then(({ response }) => (response === 0 ? instance.playAnyway() : undefined))
+          .catch((err) => log.error(err));
+      };
 
       this.playbackDolphinInstances.set(id, playbackInstance);
     }
@@ -231,6 +297,7 @@ export class DolphinManager {
    */
   async launchNetplayDolphin(opts: { bootGame?: boolean } = {}) {
     Preconditions.checkState(this.netplayDolphinInstance == null, "Netplay dolphin is already open!");
+    this._assertNotMoving();
     await this.launchGate();
 
     const netplayInstallation = this.getInstallation(DolphinLaunchType.NETPLAY);
@@ -248,7 +315,7 @@ export class DolphinManager {
       const isoPath = await this._getIsoPath();
       Preconditions.checkExists(isoPath, "No Brawl disc image set. Choose one in Settings > Game.");
       await netplayInstallation.assertProjectPlusFiles();
-      const storeDir = projectPlusStoreFolder(app.getPath("userData"));
+      const storeDir = projectPlusStoreFolder(this.netplayFolder());
       await ensureNetplaySave(storeDir, netplayInstallation.userFolder);
       await this._ensureBrawlSave(netplayInstallation, storeDir);
       await netplayInstallation.setDefaultIso(isoPath);
@@ -359,6 +426,7 @@ export class DolphinManager {
   /** `extraArgs` (netplay only): more arguments (`--controllers`); `onClose`: after it closed. */
   async configureDolphin(launchType: DolphinLaunchType, options: { extraArgs?: string[]; onClose?: () => void } = {}) {
     log.debug(`configuring ${launchType} dolphin...`);
+    this._assertNotMoving();
 
     const installation = this.getInstallation(launchType);
     const dolphinPath = await installation.findDolphinExecutable();
@@ -435,6 +503,7 @@ export class DolphinManager {
       }
     }
 
+    this._assertNotMoving();
     const installation = this.getInstallation(launchType);
     this._onStart(launchType);
     await installation.clearCache();
@@ -442,6 +511,95 @@ export class DolphinManager {
       await installation.resetUserFolder();
     }
     await this.installDolphin(launchType);
+  }
+
+  /**
+   * Settings > Dolphin's game files folder: moves the netplay folder to the folder the player
+   * picked (null: back to `<userData>/netplay`), see move_game_files.ts, with the Play button
+   * showing the progress. A folder that already holds game files (a copy the player made) is used
+   * as it is once the player agrees. The old files are deleted afterwards and the bundled Dolphin
+   * is installed into the new folder.
+   */
+  async moveGameFiles(picked: string | null): Promise<GameFilesMoveResult> {
+    if (this.movingGameFiles) {
+      throw new GameFilesMoveError("The game files are already being moved.");
+    }
+    this.movingGameFiles = true;
+    try {
+      return await this._moveGameFiles(picked);
+    } finally {
+      this.movingGameFiles = false;
+    }
+  }
+
+  private async _moveGameFiles(picked: string | null): Promise<GameFilesMoveResult> {
+    if (this.netplayDolphinInstance || this.playbackDolphinInstances.size > 0) {
+      throw new GameFilesMoveError("Close Dolphin first.");
+    }
+    if (this.projectPlusInstall) {
+      throw new GameFilesMoveError("Wait for the Project+ download to finish first.");
+    }
+    const from = this.netplayFolder();
+    const defaultFolder = defaultNetplayFolder(app.getPath("userData"));
+    const target: GameFilesTarget =
+      picked == null
+        ? await defaultGameFilesTarget(defaultFolder, from)
+        : await chooseGameFilesTarget(picked, from, PRODUCT_NAME);
+    if (target.kind === "adopt" && !(await confirmAdoptGameFiles(target.folder, from))) {
+      return { action: "cancelled", folder: from, leftBehind: null };
+    }
+    // The bundled Dolphin's install must not write into the old folder while it is moved.
+    await this.bundledDolphinReady();
+
+    this._onStart(DolphinLaunchType.NETPLAY);
+    try {
+      if (target.kind === "move") {
+        await moveGameFiles({
+          from,
+          to: target.folder,
+          onProgress: (current, total) => this._onProgress(DolphinLaunchType.NETPLAY, current, total, "moveGameFiles"),
+          log: (message) => log.info(message),
+        });
+      } else {
+        log.info(`Using the game files already in ${target.folder}; deleting the ones in ${from}`);
+      }
+      const isDefault = path.relative(target.folder, defaultFolder) === "";
+      await this.settingsManager.updateSetting("gameFilesFolder", isDefault ? null : target.folder);
+    } catch (err) {
+      this._onComplete(DolphinLaunchType.NETPLAY, this._cachedVersion(DolphinLaunchType.NETPLAY));
+      throw err;
+    }
+
+    // An executable set to the old folder is gone, and one set to the new folder is the default now.
+    const settings = this.settingsManager.get().settings;
+    const inMovedFolder = (p: string | null) =>
+      p != null && [from, target.folder].some((dir) => isSubdirectory(dir, p));
+    if (inMovedFolder(settings.netplayDolphinPath)) {
+      await this.settingsManager.updateSetting("netplayDolphinPath", null);
+    }
+    if (inMovedFolder(settings.playbackDolphinPath)) {
+      await this.settingsManager.updateSetting("playbackDolphinPath", null);
+    }
+
+    let leftBehind: string | null = null;
+    try {
+      await removeGameFiles(from);
+    } catch (err) {
+      leftBehind = from;
+      log.warn(`Could not delete the old game files in ${from}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+
+    this.bundledInstall = null;
+    for (const dolphinType of [DolphinLaunchType.NETPLAY, DolphinLaunchType.PLAYBACK]) {
+      void this.installDolphin(dolphinType).catch((err) => log.error(err));
+    }
+    return { action: target.kind === "move" ? "moved" : "adopted", folder: target.folder, leftBehind };
+  }
+
+  private _assertNotMoving() {
+    if (this.movingGameFiles) {
+      throw new Error("The game files are being moved. Try again when the move is done.");
+    }
   }
 
   /**
@@ -500,7 +658,7 @@ export class DolphinManager {
       let started = false;
       this.bundledInstall = installBundledDolphin({
         sourceDir: source,
-        destDir: netplayInstallFolder(app.getPath("userData")),
+        destDir: this.netplayFolder(),
         onProgress: (current, total) => {
           if (!started) {
             started = true;
@@ -554,7 +712,7 @@ export class DolphinManager {
    */
   private _ensureProjectPlusFiles(installation: LocalDolphinInstallation): Promise<void> {
     if (!this.projectPlusInstall) {
-      const storeDir = projectPlusStoreFolder(app.getPath("userData"));
+      const storeDir = projectPlusStoreFolder(this.netplayFolder());
       const target: PPlusTarget = {
         userFolder: installation.userFolder,
         storeDir,
@@ -622,16 +780,43 @@ export class DolphinManager {
         templateRoots: [
           netplaySaveStore(storeDir),
           path.join(installation.userFolder, NETPLAY_SAVE_DIR),
+          path.join(this.getInstallation(DolphinLaunchType.NETPLAY).userFolder, NETPLAY_SAVE_DIR),
           path.join(installation.sysFolder, NETPLAY_SAVE_DIR),
         ],
         log: (message) => log.info(message),
       });
-      if (result.action !== "seeded") {
+      if (result.action === "no-template") {
+        log.warn(`Brawl save: no template for ${result.dir}`);
+      } else if (result.action !== "seeded") {
         log.info(`Brawl save: ${result.action} (${result.dir})`);
       }
     } catch (err) {
       log.error(`Could not seed the Brawl save: ${err instanceof Error ? err.message : String(err)}`);
     }
+  }
+
+  /**
+   * Right before a Dolphin starts: its NAND has a Brawl save, else it is seeded again (a playback
+   * Dolphin on the user's prod, 2026-10-12, met P+'s "Create save file" prompt although the seed ran
+   * earlier in the same launch). Logged as warnings, which a release's log keeps.
+   */
+  private async _checkBrawlSave(installation: LocalDolphinInstallation, storeDir: string): Promise<void> {
+    const hasSave = async () => {
+      const dir = brawlSaveDir(await installation.nandRoot());
+      try {
+        return { dir, ok: (await readdir(dir, { withFileTypes: true })).some((e) => e.isFile()) };
+      } catch {
+        return { dir, ok: false };
+      }
+    };
+    const before = await hasSave();
+    if (before.ok) {
+      return;
+    }
+    log.warn(`No Brawl save in ${before.dir} before starting Dolphin (${installation.userFolder}); seeding it`);
+    await this._ensureBrawlSave(installation, storeDir);
+    const after = await hasSave();
+    log.warn(`Brawl save in ${after.dir}: ${after.ok ? "seeded" : "still missing (P+ will ask to create one)"}`);
   }
 
   /**
@@ -655,7 +840,7 @@ export class DolphinManager {
       const plugin = await loadPlugin(defaultPluginLocation({ ...env, resourcesPath: process.resourcesPath }));
       const result = await installPluginOnSdCard({
         sourceImage,
-        outputDir: patchedSdCardFolder(env.userDataDir),
+        outputDir: patchedSdCardFolder(env.netplayFolder),
         plugin,
         protectedPaths: template ? [template] : [],
         log: (message) => log.info(message),
@@ -665,6 +850,11 @@ export class DolphinManager {
       return result.image;
     } catch (err) {
       log.error(err);
+      const code = (err as NodeJS.ErrnoException | undefined)?.code;
+      if (code === "EBUSY" || code === "EPERM") {
+        // Windows: a Dolphin started before a launcher update still has the card open
+        throw new Error("Another Dolphin is using the game files. Close it, then try again.");
+      }
       throw new Error(
         `Could not install the online game plugin on the Project+ SD card: ${
           err instanceof Error ? err.message : String(err)
@@ -766,4 +956,39 @@ export class DolphinManager {
       dolphinVersion,
     });
   }
+}
+
+export type GameFilesMoveResult = {
+  action: "moved" | "adopted" | "cancelled";
+  /** The netplay folder now in use. */
+  folder: string;
+  /** The old folder, when some of its files could not be deleted. */
+  leftBehind: string | null;
+};
+
+/** Moving back to `<userData>/netplay`: files left there (the launcher's own) are replaced. */
+async function defaultGameFilesTarget(defaultFolder: string, current: string): Promise<GameFilesTarget> {
+  if (path.relative(defaultFolder, current) === "") {
+    throw new GameFilesMoveError(`The game files are already in ${defaultFolder}.`);
+  }
+  if (await fileExists(path.join(defaultFolder, "User"))) {
+    return { folder: defaultFolder, kind: "adopt" };
+  }
+  await removeGameFiles(defaultFolder);
+  return { folder: defaultFolder, kind: "move" };
+}
+
+async function confirmAdoptGameFiles(folder: string, current: string): Promise<boolean> {
+  // On the launcher's window even when it is not focused, never a free-floating box over a game.
+  const window = BrowserWindow.getFocusedWindow() ?? BrowserWindow.getAllWindows()[0];
+  const options: MessageBoxOptions = {
+    type: "question",
+    buttons: ["Use these files", "Cancel"],
+    defaultId: 0,
+    cancelId: 1,
+    message: `${folder} already has game files.`,
+    detail: `Use them? The game files in ${current} are deleted.`,
+  };
+  const { response } = window ? await dialog.showMessageBox(window, options) : await dialog.showMessageBox(options);
+  return response === 0;
 }

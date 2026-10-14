@@ -41,7 +41,10 @@ namespace PPOM {
     // at +0x220 and the room's ruleset and set (RoomPlay) at +0x240. No other size or offset changed.
     // 7: the room's stages (docs/design/room-rules.md section 2, the stage switch): SESSION grows to
     // 0x2C0 with RoomStages at +0x280, and RoomPlay's stageChoice CHOICE_LOSER_PICKS_LIST.
-    const u16 VERSION = 7;
+    // 8: replays (docs/design/replays.md section 6): LOCAL.directJoin with a zero prefix and
+    // directNumber 3 asks the game to play the replay whose SESSION Dolphin wrote (QUEUE_PLAYBACK).
+    // No size or offset changed.
+    const u16 VERSION = 8;
 
     // Slippi command bytes (EXI_DeviceSlippi.h), kept for familiarity (design 5.3).
     enum Cmd {
@@ -74,6 +77,9 @@ namespace PPOM {
     };
 
     const int CODE_LEN = 9;   // "ABCD#123" + NUL, UTF-16
+    // LOCAL.directNumber with a zero prefix: the launcher's Play unranked / Play ranked, and v8's
+    // replay playback.
+    enum DirectQueue { QUEUE_UNRANKED = 1, QUEUE_RANKED = 2, QUEUE_PLAYBACK = 3 };
     const int NAME_LEN = 16;
     const int ERROR_LEN = 120;
     const int TAG_CHARS = 5;  // a name tag's characters (the save's tag records, PortValues)
@@ -138,7 +144,9 @@ namespace PPOM {
     // Ranked's game setup (Dolphin Online/GameSetup.h; Slippi's GP_FETCH_STEP / GP_COMPLETE_STEP):
     // stage strikes 1-2-1 for game 1, then the winner's two bans, the loser's pick and the characters
     // (winner first). 0xC0 GP_COMPLETE_STEP request payload: {u8 stage kind} (a strike or pick).
-    enum StepType { STEP_NONE = 0, STEP_STRIKE = 1, STEP_PICK = 2, STEP_CHAR = 3, STEP_DONE = 4 };
+    // STEP_RESUME: a desynced game starts again (Ranked, a room's set): the characters stay, START
+    // readies up (timeUp: readied for the player), no stage select.
+    enum StepType { STEP_NONE = 0, STEP_STRIKE = 1, STEP_PICK = 2, STEP_CHAR = 3, STEP_DONE = 4, STEP_RESUME = 5 };
     struct GameStep {     // 0xC1 GP_FETCH_STEP response payload
         u8 active;        // a ranked game setup runs (else the CSS works as in Unranked)
         u8 type;          // StepType
@@ -316,6 +324,8 @@ namespace PPOM {
         // letters, upper case, NUL-padded) + '#' + directNumber (1-9999), and searches it on
         // START without the keypad. A zero prefix: a plain Direct CSS, or with directNumber 1 / 2
         // the launcher's Play unranked / Play ranked: the Unranked / Ranked CSS.
+        // v8: directNumber 3 with a zero prefix: play the replay in SESSION (the playback Dolphin,
+        // docs/design/replays.md section 6): its mode's CSS, then its match at once.
         u8 directJoin;
         char directPrefix[4];
         u16 directNumber;
@@ -357,9 +367,13 @@ namespace PPOM {
         u8 roomTeam;      // the player's colour (TEAM_*), TEAM_NONE empty
         u8 roomChar;      // gmCharacterKind of the player's lock-in while SLOT_READY, else 0xFF
         u8 roomCostume;
-        u8 _pad2[4];
+        // Dolphin, with Session.restore (a desynced game played again; still v8, these were
+        // padding): the player's stocks (0 = out of the game) and damage at the last frame every
+        // machine agreed on.
+        u8 restoreStocks; // 0x3C
+        u8 _pad2[3];
         PortValues pv;    // the player's name tag and controls (from their lock-in)
-        u32 _pad3;
+        float restoreDamage;   // 0x7C
     };                    // 0x80
 
     enum SessionState { SS_NONE = 0, SS_LOBBY = 1, SS_MATCH_READY = 2 };
@@ -381,7 +395,11 @@ namespace PPOM {
         u8 hazards;       // 1 on
         u8 autoLCancel;   // MORE RULES' AUTO L-CANCEL (set rule +0xB)
         u8 inputAssist;   // MORE RULES' INPUT ASSIST (set rule +0xC, P+'s 3-frame buffer)
-        u8 _reserved[13];
+        u8 _reserved0;
+        // Dolphin, with Session.restore: the restarted game's time limit in frames (0: the rules'
+        // own; the match timer left at the agreed frame, at least 1).
+        u32 restoreFrames;     // +0x14
+        u8 _reserved[8];
     };                    // 0x20
 
     // CMD_RULESETS response payload (v6): the player's recent and own published rulesets, for the
@@ -495,10 +513,14 @@ namespace PPOM {
         // quitBy = the quitter's in-game port + 1 (0 none), quitRunback = 1 when L+R+Y were held
         // with it (P+'s salty runback, L+R+A+Y+START). Dolphin decides what the quit means: Ranked
         // a lost game, a room's set a game that did not happen (a runback: played again on the
-        // same stage), Unranked and Direct a runback restarts the same match.
+        // same stage), Unranked, Direct and a room's game without a set (3-4 players too) a runback
+        // restarts the same match.
         u8 quitBy;        // 0x21D
         u8 quitRunback;   // 0x21E
-        u8 _reserved[1];
+        // Dolphin: 1 = the next game plays a desynced one again (Ranked, a room's set; still v8,
+        // this was reserved): a fresh game (spawn points, the countdown) with every player's
+        // players[i].restoreStocks / restoreDamage and the time limit rules.restoreFrames.
+        u8 restore;       // 0x21F
         Rules rules;      // 0x220 (v6)
         RoomPlay play;    // 0x240 (v6)
         RoomStages stages;// 0x280 (v7)

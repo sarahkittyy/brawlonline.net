@@ -1,3 +1,5 @@
+import type { ChatKeyPress } from "@common/chat_key";
+import { chatKeyExpression, DEFAULT_CHAT_KEY } from "@common/chat_key";
 import { delay } from "@common/delay";
 import type { GeckoCode } from "@dolphin/config/gecko_code";
 import type { RoomHandOffResult } from "@dolphin/room_handoff";
@@ -7,6 +9,7 @@ import type {
   DolphinEventMap,
   DolphinLaunchType,
   DolphinService,
+  GameFilesMoveOutcome,
   PlayKey,
   ReplayQueueItem,
 } from "@dolphin/types";
@@ -23,7 +26,16 @@ class MockDolphinClient implements DolphinService {
   private events = Observable.from(this.eventSubject);
 
   async getDolphinPaths(_dolphinType: DolphinLaunchType) {
-    return { executable: "Dolphin.exe", userFolder: "User", playKeyFile: "User/Online/user.json" };
+    return {
+      executable: "Dolphin.exe",
+      userFolder: "User",
+      playKeyFile: "User/Online/user.json",
+      gameFilesFolder: "netplay",
+    };
+  }
+
+  async moveGameFiles(folder: string | null): Promise<GameFilesMoveOutcome> {
+    return { action: "moved", folder: folder ?? "netplay", leftBehind: null };
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
@@ -108,6 +120,20 @@ class MockDolphinClient implements DolphinService {
   @delayAndMaybeError(SHOULD_ERROR)
   async openDolphinSettingsFolder(_dolphinType: DolphinLaunchType): Promise<void> {
     throw new Error("Method not implemented.");
+  }
+
+  private chatKey = DEFAULT_CHAT_KEY;
+
+  async getChatKey(): Promise<string> {
+    return this.chatKey;
+  }
+
+  async setChatKey(press: ChatKeyPress): Promise<string | null> {
+    const chatKey = chatKeyExpression(press, "win32");
+    if (chatKey !== null) {
+      this.chatKey = chatKey;
+    }
+    return chatKey;
   }
 
   @delayAndMaybeError(SHOULD_ERROR)

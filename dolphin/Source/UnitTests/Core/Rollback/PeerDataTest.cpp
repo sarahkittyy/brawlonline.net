@@ -259,3 +259,187 @@ TEST(PeerData, GoneMarker)
   real[GONE_MARK_OFFSET + 1] = GONE_MARK[1];
   EXPECT_FALSE(TakeGoneMarker(real.data()));
 }
+TEST(PeerData, SmallControlMessageIsOneDatagram)
+{
+  const std::string text = R"({"t":"st","v":1})";
+  const auto d = ControlDatagrams(text, 7);
+  ASSERT_EQ(d.size(), 1u);
+  EXPECT_EQ(d[0][0], 'C');
+  EXPECT_EQ(std::string(d[0].begin() + 1, d[0].end()), text);
+  const std::string fits(MAX_DATAGRAM - 1, 'x');
+  EXPECT_EQ(ControlDatagrams(fits, 0).size(), 1u);
+}
+
+TEST(PeerData, LargeControlMessageIsSplitUnderTheMtuAndPutBackTogether)
+{
+  // The host's state at the barrier (sync block and task order, about 5.5 KB): as one datagram it went
+  // as IP fragments, which some paths drop.
+  std::string text;
+  for (int i = 0; text.size() < 4700; ++i)
+    text += "task" + std::to_string(i) + ",";
+  const auto d = ControlDatagrams(text, 0x12345678);
+  ASSERT_EQ(d.size(), (text.size() + FRAGMENT_PIECE - 1) / FRAGMENT_PIECE);
+  for (const auto& pkt : d)
+  {
+    EXPECT_EQ(pkt[0], 'F');
+    EXPECT_LE(pkt.size(), MAX_DATAGRAM);
+    EXPECT_LE(pkt.size(), 1472u);  // unfragmented on a 1500-byte MTU
+  }
+  // In any order (here: last piece first), with duplicates: the message once, when its last
+  // missing piece arrives.
+  ControlReassembler r;
+  int done = 0;
+  std::string got;
+  for (size_t k = d.size(); k-- > 0;)
+  {
+    for (int copy = 0; copy < 2; ++copy)
+    {
+      if (auto t = r.Add(1, d[k].data(), d[k].size()))
+      {
+        ++done;
+        got = *t;
+      }
+    }
+  }
+  EXPECT_EQ(done, 1);
+  EXPECT_EQ(got, text);
+  // The completing piece's duplicate starts the message over (until a newer message replaces it).
+  EXPECT_EQ(r.InProgress(), 1u);
+}
+
+TEST(PeerData, ReassemblyKeepsSourcesAndMessagesApart)
+{
+  const std::string a(3000, 'a'), b(3000, 'b');
+  const auto da = ControlDatagrams(a, 1), db = ControlDatagrams(b, 2);
+  ASSERT_EQ(da.size(), db.size());
+  ControlReassembler r;
+  // Two sources at once.
+  for (size_t i = 0; i + 1 < da.size(); ++i)
+  {
+    EXPECT_FALSE(r.Add(10, da[i].data(), da[i].size()));
+    EXPECT_FALSE(r.Add(11, db[i].data(), db[i].size()));
+  }
+  EXPECT_EQ(r.Add(10, da.back().data(), da.back().size()), a);
+  EXPECT_EQ(r.Add(11, db.back().data(), db.back().size()), b);
+  // A piece of a newer message from the same source starts over: the older one's pieces are
+  // never mixed in.
+  EXPECT_FALSE(r.Add(10, da[0].data(), da[0].size()));
+  for (size_t i = 1; i + 1 < db.size(); ++i)
+    EXPECT_FALSE(r.Add(10, db[i].data(), db[i].size()));
+  EXPECT_FALSE(r.Add(10, db.back().data(), db.back().size()));  // db[0] missing
+  EXPECT_EQ(r.Add(10, db[0].data(), db[0].size()), b);
+  // Memory is bounded: at most MAX_REASSEMBLY_SOURCES messages in progress.
+  for (u64 src = 100; src < 100 + 3 * MAX_REASSEMBLY_SOURCES; ++src)
+    r.Add(src, da[0].data(), da[0].size());
+  EXPECT_LE(r.InProgress(), MAX_REASSEMBLY_SOURCES);
+}
+
+TEST(PeerData, MalformedPiecesAreDropped)
+{
+  const std::string text(3000, 'x');
+  auto d = ControlDatagrams(text, 5);
+  ControlReassembler r;
+  auto bad = [&](std::vector<u8> pkt) { return !r.Add(1, pkt.data(), pkt.size()).has_value(); };
+  EXPECT_TRUE(bad({}));
+  EXPECT_TRUE(bad({'F', 0, 0, 0, 0, 0, 2}));  // no piece
+  auto p = d[0];
+  p[0] = 'C';
+  EXPECT_TRUE(bad(p));
+  p = d[0];
+  p[6] = 1;  // one piece is a 'C' packet's job
+  EXPECT_TRUE(bad(p));
+  p = d[0];
+  p[6] = static_cast<u8>(MAX_FRAGMENTS + 1);
+  EXPECT_TRUE(bad(p));
+  p = d[0];
+  p[5] = p[6];  // index out of range
+  EXPECT_TRUE(bad(p));
+  p = d[0];
+  p.pop_back();  // a short piece that is not the last
+  EXPECT_TRUE(bad(p));
+  p = d.back();
+  p.resize(MAX_DATAGRAM + 1, 'x');  // too large
+  EXPECT_TRUE(bad(p));
+  EXPECT_EQ(r.InProgress(), 0u);
+  // Too large a message is not split: the others refuse it.
+  EXPECT_TRUE(ControlDatagrams(std::string(MAX_CONTROL_SIZE + FRAGMENT_PIECE, 'x'), 0).empty());
+  // The real pieces still work afterwards.
+  std::optional<std::string> got;
+  for (const auto& pkt : d)
+    got = r.Add(1, pkt.data(), pkt.size());
+  EXPECT_EQ(got, text);
+}
+
+TEST(PeerData, GekkoBundlesRoundTrip)
+{
+  std::vector<u8> bundle;
+  const std::vector<u8> ack(9, 0x03), inputs(24, 0x01), health(12, 0x06);
+  ASSERT_TRUE(AppendGekkoBundle(bundle, ack.data(), ack.size()));
+  ASSERT_TRUE(AppendGekkoBundle(bundle, inputs.data(), inputs.size()));
+  ASSERT_TRUE(AppendGekkoBundle(bundle, health.data(), health.size()));
+  EXPECT_EQ(bundle[0], 'B');
+  EXPECT_EQ(bundle.size(), 1 + 3 * 2 + ack.size() + inputs.size() + health.size());
+  const auto msgs = SplitGekkoBundle(bundle.data(), bundle.size());
+  ASSERT_TRUE(msgs.has_value());
+  ASSERT_EQ(msgs->size(), 3u);
+  EXPECT_EQ((*msgs)[0], ack);
+  EXPECT_EQ((*msgs)[1], inputs);
+  EXPECT_EQ((*msgs)[2], health);
+}
+
+TEST(PeerData, GekkoBundlesStayUnderTheMtu)
+{
+  std::vector<u8> bundle;
+  const std::vector<u8> big(MAX_GEKKO_BUNDLE - 1 - 2, 0x01);
+  ASSERT_TRUE(AppendGekkoBundle(bundle, big.data(), big.size()));
+  EXPECT_EQ(bundle.size(), MAX_GEKKO_BUNDLE);
+  const u8 one = 0;
+  const auto before = bundle;
+  EXPECT_FALSE(AppendGekkoBundle(bundle, &one, 1));
+  EXPECT_EQ(bundle, before);
+  std::vector<u8> fresh;
+  const std::vector<u8> too_big(MAX_GEKKO_BUNDLE, 0x01);
+  EXPECT_FALSE(AppendGekkoBundle(fresh, too_big.data(), too_big.size()));
+  EXPECT_TRUE(fresh.empty());
+  EXPECT_FALSE(AppendGekkoBundle(fresh, &one, 0));
+
+  std::vector<u8> many;
+  for (size_t i = 0; i < MAX_BUNDLED_MESSAGES; ++i)
+    ASSERT_TRUE(AppendGekkoBundle(many, &one, 1));
+  EXPECT_FALSE(AppendGekkoBundle(many, &one, 1));
+}
+
+TEST(PeerData, MalformedGekkoBundlesAreDropped)
+{
+  std::vector<u8> good;
+  const std::vector<u8> msg(5, 0x07);
+  ASSERT_TRUE(AppendGekkoBundle(good, msg.data(), msg.size()));
+  ASSERT_TRUE(AppendGekkoBundle(good, msg.data(), msg.size()));
+  ASSERT_TRUE(SplitGekkoBundle(good.data(), good.size()).has_value());
+  // Cut anywhere inside: a length past the end (or half a length).
+  for (size_t n = 2; n < good.size(); ++n)
+  {
+    if (n != 1 + 2 + msg.size())  // there the first message ends: a valid bundle of one
+      EXPECT_FALSE(SplitGekkoBundle(good.data(), n).has_value()) << n;
+  }
+  EXPECT_FALSE(SplitGekkoBundle(good.data(), 1).has_value());  // no message
+  EXPECT_FALSE(SplitGekkoBundle(nullptr, 0).has_value());
+  auto zero = good;
+  zero[1] = zero[2] = 0;  // a zero length
+  EXPECT_FALSE(SplitGekkoBundle(zero.data(), zero.size()).has_value());
+  auto huge = good;
+  huge[1] = huge[2] = 0xFF;
+  EXPECT_FALSE(SplitGekkoBundle(huge.data(), huge.size()).has_value());
+  auto other = good;
+  other[0] = 'G';
+  EXPECT_FALSE(SplitGekkoBundle(other.data(), other.size()).has_value());
+  // More messages than any sender bundles.
+  std::vector<u8> flood{'B'};
+  for (size_t i = 0; i <= MAX_BUNDLED_MESSAGES; ++i)
+  {
+    flood.push_back(1);
+    flood.push_back(0);
+    flood.push_back(0x42);
+  }
+  EXPECT_FALSE(SplitGekkoBundle(flood.data(), flood.size()).has_value());
+}

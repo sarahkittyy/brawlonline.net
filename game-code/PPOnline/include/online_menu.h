@@ -50,7 +50,6 @@ namespace RoomCss {
     void releaseRecords();               // a room's CSS built again as another: records as before
     void reset();                        // the CSS is gone
     void tick(const PanelView views[3], bool teams, int myTeam, int myStars, const char* myName, bool meReady);
-    int myTeamClicked();                 // the local player's flag changed: the team, else -1
     int panelUnderHand();                // 1-3: the local hand is over that panel, else -1
     bool handOverMyFlag();               // the local hand is over the local panel's team flag
     void headerButtons(bool isPublic, bool teams);   // ITEM / STAGE as the room's two settings

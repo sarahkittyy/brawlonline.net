@@ -37,11 +37,19 @@ async function runCheck(isoPath: string): Promise<IsoValidity> {
     });
     const started = Date.now();
     const result = await verifyIsoCached(isoPath, cacheFile, onProgress);
-    if (hashed) {
-      log.info(`Verified ${isoPath} (${result}) in ${((Date.now() - started) / 1000).toFixed(1)} s`);
+    const took = hashed ? ` in ${((Date.now() - started) / 1000).toFixed(1)} s` : "";
+    const line = `ISO check of ${isoPath}: ${result.valid}${took}; ${result.detail}`;
+    // A rejected image is logged as a warning, which a release's log keeps.
+    if (result.valid === IsoValidity.VALID) {
+      log.info(line);
+    } else {
+      log.warn(line);
     }
-    return result;
+    return result.valid;
   } catch (err) {
+    // Reading the file failed (missing, access denied, locked, ...): the player sees "will not work".
+    const code = (err as NodeJS.ErrnoException)?.code;
+    log.warn(`ISO check of ${isoPath} failed${code ? ` (${code})` : ""}, treating the image as invalid:`, err);
     return IsoValidity.INVALID;
   }
 }

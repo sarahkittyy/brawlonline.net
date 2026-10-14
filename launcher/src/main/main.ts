@@ -30,6 +30,7 @@ import { fileExists } from "utils/file_exists";
 
 import { getConfigFlags } from "./flags/flags";
 import { installModules } from "./install_modules";
+import { attachInterfaceZoom } from "./interface_zoom";
 import { ipc_brawlLinkEvent, ipc_takeBrawlLinks } from "./ipc";
 import { legacyUserDataNames, migrateLegacyUserData } from "./legacy_user_data";
 import { chooseGtkInputMethod } from "./linux_input_method";
@@ -43,6 +44,17 @@ const BACKGROUND_COLOR = "#1c1c1c";
 const isDevelopment = process.env.NODE_ENV === "development" || process.env.DEBUG_PROD === "true";
 
 const isMac = process.platform === "darwin";
+
+// stdout and stderr can close while the launcher runs: the terminal that started the AppImage is
+// closed, or whatever started it stops reading. Every console write then fails with EPIPE, emitted
+// on the stream with no listener, so each log line was an uncaught error and electron-log's
+// "A JavaScript error occurred in the browser process" box (player report 2026-10-13). The log
+// file is unaffected; the console transport stops once its stream is gone.
+for (const stream of [process.stdout, process.stderr]) {
+  stream?.on("error", () => {
+    log.transports.console.level = false;
+  });
+}
 
 let menu: CrossProcessExports.Menu | null = null;
 let mainWindow: BrowserWindow | null = null;
@@ -128,7 +140,7 @@ if (!lockObtained) {
 registerGameAssetScheme();
 
 const flags = getConfigFlags();
-const { dolphinManager, appUpdater, browserWindowManager } = installModules(flags);
+const { dolphinManager, settingsManager, appUpdater, browserWindowManager } = installModules(flags);
 
 if (isDevelopment) {
   require("electron-debug")();
@@ -210,6 +222,7 @@ const createWindow = async () => {
     },
   });
 
+  attachInterfaceZoom(mainWindow, settingsManager, isMac);
   mainWindow.loadURL(resolveHtmlPath("index.html")).catch(log.error);
 
   mainWindow.on("ready-to-show", () => {

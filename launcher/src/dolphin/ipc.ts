@@ -1,9 +1,10 @@
+import type { ChatKeyPress } from "@common/chat_key";
 import type { EmptyPayload, SuccessPayload } from "utils/ipc";
 import { _, makeEndpoint } from "utils/ipc";
 
 import type { GeckoCode } from "./config/gecko_code";
 import type { RoomHandOffResult } from "./room_handoff";
-import type { DolphinEvent, DolphinLaunchType, PlayKey, ReplayQueueItem } from "./types";
+import type { DolphinEvent, DolphinLaunchType, GameFilesMoveOutcome, PlayKey, ReplayQueueItem } from "./types";
 
 // Handlers
 
@@ -40,7 +41,14 @@ export const ipc_openDolphinSettingsFolder = makeEndpoint.main(
 export const ipc_getDolphinPaths = makeEndpoint.main(
   "getDolphinPaths",
   <{ dolphinType: DolphinLaunchType }>_,
-  <{ executable: string; userFolder: string; playKeyFile: string }>_,
+  <{ executable: string; userFolder: string; playKeyFile: string; gameFilesFolder: string }>_,
+);
+
+/** Settings > Dolphin: moves the netplay folder (`folder` null: back to `<userData>/netplay`). */
+export const ipc_moveGameFiles = makeEndpoint.main(
+  "moveGameFiles",
+  <{ folder: string | null }>_,
+  <GameFilesMoveOutcome>_,
 );
 
 export const ipc_storePlayKeyFile = makeEndpoint.main("storePlayKeyFile", <{ key: PlayKey }>_, <SuccessPayload>_);
@@ -89,6 +97,16 @@ export const ipc_saveGeckoCodes = makeEndpoint.main(
   "saveGeckoCodes",
   <{ dolphinType: DolphinLaunchType; geckoCodes: GeckoCode[] }>_,
   <SuccessPayload>_,
+);
+
+/** The key that opens the chat box, as an expression (common/chat_key.ts). */
+export const ipc_getChatKey = makeEndpoint.main("getChatKey", <EmptyPayload>_, <{ chatKey: string }>_);
+
+/** Sets the chat key to the pressed key; `chatKey` is null for a key that can't open chat. */
+export const ipc_setChatKey = makeEndpoint.main(
+  "setChatKey",
+  <{ press: ChatKeyPress }>_,
+  <{ chatKey: string | null }>_,
 );
 
 export const ipc_installRosetta = makeEndpoint.main("installRosetta", <EmptyPayload>_, <{ exitCode: number }>_);

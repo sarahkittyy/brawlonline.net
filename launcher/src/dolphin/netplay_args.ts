@@ -30,16 +30,27 @@ export const LOGGING_CONFIG_ARGS: readonly string[] = [
 ].flatMap((setting) => ["-C", setting]);
 
 /**
+ * Wii system settings every player's game must share. The Wii's aspect ratio (Config > Wii >
+ * Aspect Ratio, SYSCONF `IPL.AR`) frames Brawl's camera, and a screen KO places the fighter from
+ * the camera: two players with different values desynced on every screen KO (prod 2026-10-12).
+ * Pinned to a fresh install's 16:9; Dolphin writes it into the Wii's settings at boot. Brawl's own
+ * Options > Screen is pinned by Dolphin at every match start. How the picture is shown (Graphics >
+ * Aspect Ratio, window size, resolution) is not game state and stays the player's.
+ */
+export const WII_SETTINGS_CONFIG_ARGS: readonly string[] = ["-C", "SYSCONF.IPL.AR=True"];
+
+/**
  * The netplay Dolphin's command line on Play.
  *
  * Settings are made with `-C System.Section.Key=Value`, which sets Dolphin's command-line config
- * layer for this run: logging (`LOGGING_CONFIG_ARGS`) and the SD card. `[General] WiiSDCardPath`
+ * layer for this run: logging (`LOGGING_CONFIG_ARGS`), the Wii settings players share
+ * (`WII_SETTINGS_CONFIG_ARGS`) and the SD card. `[General] WiiSDCardPath`
  * is `MAIN_WII_SD_CARD_IMAGE_PATH`. The card is also forced in (`[Core] WiiSDCard`) and folder sync
  * off (`[Core] WiiSDCardEnableFolderSync`), which would otherwise rebuild the image from a folder.
  * Test-mode switches (harness port, extra arguments) go last.
  */
 export function buildNetplayDolphinArgs(input: NetplayArgsInput): string[] {
-  const args = [...input.userArgs, ...LOGGING_CONFIG_ARGS];
+  const args = [...input.userArgs, ...LOGGING_CONFIG_ARGS, ...WII_SETTINGS_CONFIG_ARGS];
   if (input.sdCardImage) {
     const sd = path.resolve(input.sdCardImage);
     if (sd.includes("=")) {
@@ -64,5 +75,19 @@ export function buildNetplayDolphinArgs(input: NetplayArgsInput): string[] {
     }
     args.push(...input.testMode.dolphinExtraArgs);
   }
+  return args;
+}
+
+/**
+ * The playback Dolphin's command line (docs/design/replays.md §6.2): its own User folder (its own
+ * graphics, hotkeys and window), but the game from the netplay install: P+'s netplay launcher DOL
+ * and the same patched SD card, never a second copy. The card is shared with a Play Dolphin that
+ * may run at the same time, so this run may not write to it (`[Core] WiiSDCardAllowWrites`), and
+ * a replay is never recorded again (`[Online] SaveReplays`). The comm file (`-i`) says what to
+ * play; PlaybackDolphinInstance adds it.
+ */
+export function buildPlaybackDolphinArgs(input: NetplayArgsInput): string[] {
+  const args = buildNetplayDolphinArgs({ ...input, testMode: { ...input.testMode, harnessPort: null } });
+  args.push("-C", "Dolphin.Core.WiiSDCardAllowWrites=False", "-C", "Dolphin.Online.SaveReplays=False");
   return args;
 }

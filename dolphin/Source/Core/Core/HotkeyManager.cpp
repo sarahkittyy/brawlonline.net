@@ -15,6 +15,10 @@
 #include "Common/Common.h"
 #include "Common/CommonTypes.h"
 
+#include "Core/Config/OnlineSettings.h"
+
+#include "InputCommon/ControlReference/ControlReference.h"
+#include "InputCommon/ControllerEmu/Control/Control.h"
 #include "InputCommon/ControllerEmu/ControlGroup/Buttons.h"
 #include "InputCommon/ControllerEmu/ControlGroup/ControlGroup.h"
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
@@ -199,7 +203,16 @@ constexpr std::array<const char*, NUM_HOTKEYS> s_hotkey_labels{{
     _trans("4x"),
 
     _trans("Show Skylanders Portal"),
-    _trans("Show Infinity Base")
+    _trans("Show Infinity Base"),
+
+    _trans("Play / Pause"),
+    _trans("Jump Back 5 Seconds"),
+    _trans("Jump Forward 5 Seconds"),
+    _trans("Frame Back"),
+    _trans("Frame Forward"),
+    _trans("Slower"),
+    _trans("Faster"),
+    _trans("Show / Hide Seek Bar"),
 }};
 // clang-format on
 static_assert(NUM_HOTKEYS == s_hotkey_labels.size(), "Wrong count of hotkey_labels");
@@ -268,9 +281,38 @@ void Initialize()
   s_enabled = true;
 }
 
+// The "Activate NetPlay Chat" binding.
+static ControlReference& ChatHotkey()
+{
+  auto* const manager = static_cast<HotkeyManager*>(s_config.GetController(0));
+  const int group = manager->FindGroupByID(HK_ACTIVATE_CHAT);
+  return *manager->GetHotkeyGroup(static_cast<HotkeyGroup>(group))
+              ->controls[manager->GetIndexForGroup(group, HK_ACTIVATE_CHAT)]
+              ->control_ref;
+}
+
 void LoadConfig()
 {
   s_config.LoadConfig();
+
+  // The launcher's chat key replaces the chat hotkey's binding (the rest of Hotkeys.ini stays).
+  const std::string chat_key = Config::Get(Config::ONLINE_CHAT_KEY);
+  if (!chat_key.empty())
+  {
+    ChatHotkey().SetExpression(chat_key);
+    s_config.GetController(0)->UpdateReferences(g_controller_interface);
+  }
+}
+
+void SaveChatKey()
+{
+  if (Config::Get(Config::ONLINE_CHAT_KEY).empty())
+    return;
+  // The launcher set the chat key: a binding made in Hotkey Settings replaces its setting, or the
+  // next LoadConfig would put the launcher's key back.
+  const std::string expression = ChatHotkey().GetExpression();
+  if (!expression.empty())
+    Config::SetBaseOrCurrent(Config::ONLINE_CHAT_KEY, expression);
 }
 
 ControllerEmu::ControlGroup* GetHotkeyGroup(HotkeyGroup group)
@@ -327,7 +369,8 @@ constexpr std::array<HotkeyGroupInfo, NUM_HOTKEY_GROUPS> s_groups_info = {
      {_trans("GBA Core"), HK_GBA_LOAD, HK_GBA_RESET, true},
      {_trans("GBA Volume"), HK_GBA_VOLUME_DOWN, HK_GBA_TOGGLE_MUTE, true},
      {_trans("GBA Window Size"), HK_GBA_1X, HK_GBA_4X, true},
-     {_trans("USB Emulation Devices"), HK_SKYLANDERS_PORTAL, HK_INFINITY_BASE}}};
+     {_trans("USB Emulation Devices"), HK_SKYLANDERS_PORTAL, HK_INFINITY_BASE},
+     {_trans("Replays"), HK_REPLAY_PLAY_PAUSE, HK_REPLAY_TOGGLE_OVERLAY}}};
 
 HotkeyManager::HotkeyManager()
 {
@@ -484,4 +527,34 @@ void HotkeyManager::LoadDefaults(const ControllerInterface& ciface)
 
   set_key_expression(HK_SKYLANDERS_PORTAL, hotkey_string({"Ctrl", "P"}));
   set_key_expression(HK_INFINITY_BASE, hotkey_string({"Ctrl", "I"}));
+
+  // Replays: Slippi's playback keys (arrows to jump, period to step), each OS's key names.
+#ifdef _WIN32
+  set_key_expression(HK_REPLAY_PLAY_PAUSE, "SPACE");
+  set_key_expression(HK_REPLAY_JUMP_BACK, "LEFT");
+  set_key_expression(HK_REPLAY_JUMP_FORWARD, "RIGHT");
+  set_key_expression(HK_REPLAY_FRAME_BACK, "COMMA");
+  set_key_expression(HK_REPLAY_FRAME_FORWARD, "PERIOD");
+  set_key_expression(HK_REPLAY_SLOWER, "MINUS");
+  set_key_expression(HK_REPLAY_FASTER, "EQUALS");
+  set_key_expression(HK_REPLAY_TOGGLE_OVERLAY, "H");
+#elif defined(__APPLE__)
+  set_key_expression(HK_REPLAY_PLAY_PAUSE, "Space");
+  set_key_expression(HK_REPLAY_JUMP_BACK, "`Left Arrow`");
+  set_key_expression(HK_REPLAY_JUMP_FORWARD, "`Right Arrow`");
+  set_key_expression(HK_REPLAY_FRAME_BACK, "`,`");
+  set_key_expression(HK_REPLAY_FRAME_FORWARD, "`.`");
+  set_key_expression(HK_REPLAY_SLOWER, "`-`");
+  set_key_expression(HK_REPLAY_FASTER, "`=`");
+  set_key_expression(HK_REPLAY_TOGGLE_OVERLAY, "H");
+#else
+  set_key_expression(HK_REPLAY_PLAY_PAUSE, "space");
+  set_key_expression(HK_REPLAY_JUMP_BACK, "Left");
+  set_key_expression(HK_REPLAY_JUMP_FORWARD, "Right");
+  set_key_expression(HK_REPLAY_FRAME_BACK, "comma");
+  set_key_expression(HK_REPLAY_FRAME_FORWARD, "period");
+  set_key_expression(HK_REPLAY_SLOWER, "minus");
+  set_key_expression(HK_REPLAY_FASTER, "equal");
+  set_key_expression(HK_REPLAY_TOGGLE_OVERLAY, "h");
+#endif
 }

@@ -31,6 +31,10 @@ extern const Info<int> ONLINE_NETPLAY_PORT;
 // "Force LAN IP": report this address as ipAddressLan instead of the detected one.
 extern const Info<bool> ONLINE_FORCE_LAN_IP;
 extern const Info<std::string> ONLINE_LAN_IP;
+// Ask the router (UPnP) to forward that port while searching, for routers that change the port
+// for every destination (Matchmaking::StartMatchmaking). Not with a matchmaking server on this
+// machine (the tests).
+extern const Info<bool> ONLINE_UPNP;
 
 // The session backend a connected match is handed to (Online::Session): "gameplay" (the
 // gameplay-only, Slippi-style session, the default), "netplay" (whole-machine rollback netplay
@@ -50,6 +54,17 @@ extern const Info<bool> ONLINE_MUSIC;
 // ("x y w h collapsed", the first four as fractions of the window; empty: the default place).
 extern const Info<bool> ONLINE_CHAT_IN_MATCHES;
 extern const Info<std::string> ONLINE_CHAT_WINDOW;
+// The key that opens the chat box (the launcher's setting): an input expression for the hotkeys'
+// device, such as "`T`" (HotkeyManagerEmu::LoadConfig puts it on "Activate NetPlay Chat"). Empty:
+// the hotkey keeps what Hotkeys.ini has (T by default).
+extern const Info<std::string> ONLINE_CHAT_KEY;
+
+// Replays (docs/design/replays.md §4.5; the launcher's Settings > Replays writes them): every online
+// game is saved into ReplayDir (empty: <User>/Replays), in a folder per month (YYYY-MM) when
+// ReplayMonthlyFolders is on.
+extern const Info<bool> ONLINE_SAVE_REPLAYS;
+extern const Info<std::string> ONLINE_REPLAY_DIR;
+extern const Info<bool> ONLINE_REPLAY_MONTHLY_FOLDERS;
 
 // The matchmaking host and port in effect (the dev override applied).
 std::string GetMatchmakingHost();

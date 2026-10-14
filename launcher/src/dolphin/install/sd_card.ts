@@ -329,3 +329,42 @@ export async function installPluginOnSdCard(opts: SdInstallOptions): Promise<SdI
   }
   return finish("unchanged");
 }
+
+export type SdSource = PatchedSdManifest["source"];
+
+/** The source card's identity as the manifest records it, or null when it is missing. */
+export async function statSdSource(sourceImage: string): Promise<SdSource | null> {
+  try {
+    const st = await fs.promises.stat(sourceImage);
+    return { path: path.resolve(sourceImage), size: st.size, mtimeMs: st.mtimeMs };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * After the game files moved (move_game_files.ts), points the patched copy's manifest at the
+ * card's new path, so the next Play does not copy 2 GB again. Only when the manifest was made
+ * from `previous` (the card before the move); a copy made from another card is left to be redone.
+ */
+export async function relocatePatchedSdSource(
+  outputDir: string,
+  previous: SdSource,
+  sourceImage: string,
+): Promise<boolean> {
+  const manifestFile = path.join(outputDir, PATCHED_SD_MANIFEST_NAME);
+  const manifest = await readManifest(manifestFile);
+  const current = await statSdSource(sourceImage);
+  if (
+    !manifest ||
+    !current ||
+    manifest.source.path !== previous.path ||
+    manifest.source.size !== previous.size ||
+    manifest.source.mtimeMs !== previous.mtimeMs ||
+    current.size !== previous.size
+  ) {
+    return false;
+  }
+  await writeJsonAtomic(manifestFile, { ...manifest, source: current });
+  return true;
+}

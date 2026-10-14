@@ -25,6 +25,7 @@
 #include <array>
 
 #include <functional>
+#include <memory>
 #include <optional>
 #include <string>
 #include <utility>
@@ -33,6 +34,7 @@
 #include <picojson.h>
 
 #include "Common/CommonTypes.h"
+#include "Core/Rollback/ReplayRecorder.h"
 
 namespace Core
 {
@@ -90,7 +92,7 @@ constexpr u32 DEFAULT_START_FRAME = 120;
 struct SyncTestOptions
 {
   int distance = 2;                 // frames rolled back on every frame (1..MAX_ROLLBACK_FRAMES)
-  std::string region_set = "gp-v22";  // Sys/Rollback/<name>.json or a path
+  std::string region_set = "gp-v23";  // Sys/Rollback/<name>.json or a path
   bool hash_regions = true;          // also compare a hash of the whole region set per frame
   u32 start_frame = DEFAULT_START_FRAME;  // game frame the rollback starts at
   u32 ports = 3;                     // local controller ports that play (bit per port)
@@ -139,7 +141,7 @@ struct ConnectOptions
   std::vector<Peer> peers;
   // The deciding player's port as the joiners know it (-1: learned from the peers' messages).
   int host_slot = -1;
-  std::string region_set = "gp-v22";
+  std::string region_set = "gp-v23";
   // The game frame the rollback starts at (DEFAULT_START_FRAME). Every peer must use the same:
   // it is part of the setup hash the first barrier compares.
   u32 start_frame = DEFAULT_START_FRAME;
@@ -175,6 +177,8 @@ struct ConnectOptions
   // Ports (bits) that pick the first game's stage: a room's game is a session of its own, and the
   // last room game's loser picks (docs/rooms-game-interface.md); every member carries the same.
   u8 initial_pickers = 0;
+  // Who plays (matchmaking's ticket), for the replays of this session's games (ReplayRecorder.h).
+  Replay::MatchMeta replay_meta;
 };
 
 // ---- The lobby: the online character select between matches (Slippi's MATCH_SELECTIONS). ----
@@ -235,6 +239,30 @@ struct LobbyPlayer
   u8 team = NO_TEAM;  // in a team battle (MatchSetup / Lobby `teams`), else NO_TEAM
 };
 
+// A game that starts again after a desync (SetDesyncRecovery; docs/game-code.md, desync
+// recovery): every player's stocks and damage and the time left at the last session frame whose
+// checksums all machines compared equal. The game starts as a fresh one (spawn points, the
+// countdown) with these. Not `valid`: no frame all machines agreed on was found, and the game
+// starts from the beginning.
+constexpr u8 MAX_RESTORE_STOCKS = 99;
+constexpr float MAX_RESTORE_DAMAGE = 999.0f;
+// The longest time limit a game can have (P+'s 99 minutes), in frames.
+constexpr u32 MAX_RESTORE_FRAMES = 99 * 60 * 60;
+struct Restore
+{
+  bool valid = false;
+  s64 frame = -1;  // the agreed session frame
+  u32 checksum = 0;  // its checksum (every machine's)
+  std::array<u8, MAX_LOBBY_PLAYERS> stocks{};   // by in-game port; 0: out of the game
+  std::array<float, MAX_LOBBY_PLAYERS> damage{};
+  u32 frames_left = 0;  // the match timer then (0: the match has no time limit)
+  bool operator==(const Restore&) const = default;
+};
+// Whether a desync restarts the game (Ranked and a room's set, the user's, 2026-10-13) rather
+// than only ending it (DESYNC DETECTED, no result: Unranked, Direct, a room's game without a set).
+// Every machine of a session sets the same.
+void SetDesyncRecovery(bool on);
+
 struct Lobby
 {
   bool active = false;        // a network session exists (connecting .. running)
@@ -258,17 +286,20 @@ struct Lobby
   u8 stage_pickers = 0;       // ports (bits) that pick the next stage (GameSetup::Outcome)
   u8 setup_error = 0;         // GameSetup::SetupError: why the next game is not set up
   bool after_match = false;   // a match ended and the game has not left its scene yet
+  Restore restore;            // the next game restarts a desynced one (with setup_ready)
 };
 Lobby GetLobby();
 
 // A game of a network session that ended with GAME SET or with a pause-screen quit that ended it
-// for everyone, read from the state every peer ended on (Online/Ranked.h reports it). Ports are
-// in-game ports (2 players: the host is 0, the joiner 1).
+// for everyone, read from the state every peer ended on (Online/Ranked.h reports it), or that a
+// desync ended where the game starts again (SetDesyncRecovery). Ports are in-game ports
+// (2 players: the host is 0, the joiner 1).
 enum class GameEnd : u8
 {
   GameSet,
   Quit,     // L+R+A+START: Ranked (SetQuitLoses) the quitter lost it, else it did not count
   Runback,  // the same with L+R+Y held (P+'s salty runback): unless a quit loses, played again
+  Desync,   // no result: the next game plays it again from the agreed state (game, stage only)
 };
 struct GameResult
 {
@@ -326,6 +357,71 @@ void SetStageDecider(std::function<StageDecision(u32 game)> decider);
 // identical to the netplay SwitchFF.rss), as srStageKind values.
 const std::vector<u16>& DefaultStages();
 
+// ---- Playback (docs/design/replays.md §6) ----
+// A replay plays as a joiner whose host is the file: the game starts the replay's match from the
+// SESSION GameBridge writes (PPOM v8's playback request), the barrier checks the match is the one
+// recorded and applies the recorded host's values, and the recorded inputs run every frame once.
+// `play_anyway`: a replay from another simulation version, or whose setup differs, plays anyway
+// (its checksums then show where it stops matching).
+// `hold_at_end`: the last replay asked for holds at its last frame (paused, still seekable)
+// instead of ending its match.
+std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file, bool play_anyway,
+                                       bool hold_at_end = false);
+// Ends a playback (its match ends at the next loop top).
+void StopPlayback();
+// What GameBridge gives the game while a replay is armed or plays.
+struct PlaybackView
+{
+  bool active = false;
+  u32 serial = 0;              // a new replay to start
+  std::vector<u8> session;     // the recorded SESSION block (GameBridge checks every field)
+  int local_port = -1;         // the recorder's in-game port
+  bool in_match = false;       // the barrier passed and the replay's last frame has not run
+  bool disconnected = false;   // after the last frame: the live game ended with DISCONNECTED
+  bool desynced = false;       // ... with DESYNC DETECTED
+  bool quit_left = false;      // ... with this player's quit of a 3-4 player match
+};
+PlaybackView GetPlaybackView();
+// For the harness and the launcher: phase, frame, last frame, desync, error.
+picojson::object PlaybackStatus();
+
+// Playback controls (docs/design/replays.md §6.4; the replay hotkeys, the overlay's seek bar, the
+// harness). They act at the next loop top, between two frames. Frames are the replay's (session
+// frames, 60 a second): `Seek` shows that frame, `Jump` moves by `arg` seconds, the steps by one
+// frame (pausing), `Speed` sets the speed (0.25-2), `Faster`/`Slower` step through 1/4, 1/2, 3/4,
+// 1, 1.5, 2.
+enum class PlaybackCommand
+{
+  TogglePause,
+  Pause,
+  Play,
+  StepForward,
+  StepBack,
+  Jump,
+  Seek,
+  Speed,
+  Faster,
+  Slower,
+};
+void PlaybackControl(PlaybackCommand command, double arg = 0);
+// What the overlay shows (the playback's view, any thread).
+struct PlaybackInfo
+{
+  bool active = false;     // a replay's match runs (or holds at its end)
+  s64 first = 0, last = 0;  // its frames
+  s64 shown = 0;           // the frame on screen
+  bool paused = false;
+  bool at_end = false;     // held at its last frame
+  bool seeking = false;
+  double speed = 1.0;
+  s64 desync_frame = -1;
+  std::string title;       // "Direct · Game 2"
+  std::array<std::string, MAX_LOBBY_PLAYERS> names{};  // "" for an empty port
+  std::array<u8, MAX_LOBBY_PLAYERS> chars{};
+  size_t keyframes = 0;
+};
+PlaybackInfo GetPlaybackInfo();
+
 // Arms a sync test that starts at the next match's first simulation frame.
 std::optional<std::string> ArmSyncTest(const SyncTestOptions& options);
 // Opens the UDP socket and starts connecting (joiner) or listening (host).
@@ -333,7 +429,7 @@ std::optional<std::string> Connect(const ConnectOptions& options);
 // This player's selections (free-form JSON object, e.g. {"character": "fox", "costume": 0}); the
 // host's may carry the stage and rules. Sent to the peer and shown in Status().
 std::optional<std::string> SetSelections(const picojson::object& selections);
-// Ends any session and closes the socket.
+// Ends any online session and closes the socket (an armed or playing replay stays: StopPlayback).
 void Stop();
 
 picojson::value Status();

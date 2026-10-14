@@ -88,6 +88,15 @@ def to_join_room(g: Game) -> None:
     g.steps("tap A", "wait 400", f"until {CSS} 600")
 
 
+def back_to_join_room(g: Game) -> None:
+    """Out of the room and onto Join Room's CSS: hold B (ROOM_LEAVE; WITH FRIENDS, on Create
+    Room), then Join Room below it. A room has no hold Z to leave (P+ picks AltZ characters with
+    Z held; the user's, 2026-10-12)."""
+    g.steps("hold B 120", "until muMenuMain 600", "wait 90", "tap DDOWN 4", "wait 30", "tap A", "wait 400",
+            f"until {CSS} 600")
+    assert menu_state(g) == 0x12, hex(menu_state(g))   # 0x10 | ROOM_ENTRY_JOIN
+
+
 def pick(g: Game, right: int = 0) -> None:
     """A character: the hand from the name plate up to the grid's second row (Fox), then `right`
     portraits to the right."""
@@ -261,8 +270,10 @@ def test_room_two_players_through_the_game(backend: OnlineBackend, dolphin: Call
         g.steps("wait 60")
         g.shot("06b-back-after-game-2")
 
-    # B holds Z: leaves the room and stays on the CSS; A sees the slot empty again.
-    b.steps("hold Z 70", "wait 30")
+    # B holds Z: stays in the room (P+'s AltZ pick); holds B: leaves it, A sees the slot empty again.
+    b.steps("hold Z 90", "wait 30")
+    assert room_view(b)["flags"] & ppom.RF_IN, "hold Z left the room"
+    b.steps("hold B 120", "until muMenuMain 600", "wait 30")
     until_view(b, lambda v: not v["flags"] & ppom.RF_IN, "B out of the room")
     until_view(a, lambda v: v["slots"][1]["bits"] == ppom.SLOT_OPEN, "A sees B gone")
     a.steps("wait 40")
@@ -300,10 +311,11 @@ def test_room_names_follow_the_slots_after_the_host_left(backend: OnlineBackend,
     type_room_code(b, code)
     until_view(b, lambda v: v["flags"] & ppom.RF_IN and v["local_port"] == 1, "B in slot 2")
 
-    # A (the host) holds Z: out of the room, on the CSS; B is the host now.
-    a.steps("hold Z 70", "wait 30")
+    # A (the host) leaves: on Join Room's CSS; B is the host now.
+    back_to_join_room(a)
     until_view(a, lambda v: not v["flags"] & ppom.RF_IN, "A out of the room")
     until_view(b, lambda v: v["host"] == 1 and not v["slots"][0]["bits"] & ppom.SLOT_TAKEN, "B the host")
+    pick(a)
     # A joins again by the code: slot 1, B still the host.
     type_room_code(a, code)
     va = until_view(a, lambda v: v["flags"] & ppom.RF_IN, "A in the room again")
@@ -402,10 +414,15 @@ def _u32(g: Game, a: int) -> int:
     return int.from_bytes(g.c.read_mem(a, 4), "big")
 
 
+def css_area(g: Game) -> int:
+    """The local player's area (muSelCharPlayerArea): +0x1A8 the hand, +0x1BC the costume."""
+    task = _u32(g, _u32(g, _u32(g, 0x805A0060) + 4) + 0x400)
+    return _u32(g, task + 0x44)
+
+
 def hand(g: Game) -> tuple[float, float]:
     import struct
-    task = _u32(g, _u32(g, _u32(g, 0x805A0060) + 4) + 0x400)
-    h = _u32(g, _u32(g, task + 0x44) + 0x1A8)
+    h = _u32(g, css_area(g) + 0x1A8)
     return struct.unpack(">ff", g.c.read_mem(h + HAND_X, 8))
 
 
@@ -434,10 +451,11 @@ def status_line(g: Game) -> str:
 
 def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                   gpu_backend: str) -> None:
-    """Three games: the host opens slot 3 with the hand and A, R turns Teams on, two players join
-    by code; everyone on red (X / Y) is refused ("Pick different teams", no start although all
+    """Three games: the host opens slot 3 with the hand and A, R turns Teams on, picks a costume
+    with A on its own panel (its team stays), two players join by code; everyone on red (X / Y) is refused ("Pick different teams", no start although all
     are ready); one player to blue and the room starts a 2-against-1 team battle under the
-    gameplay session on all three; blue walks off, and everyone is back on the room's CSS."""
+    gameplay session on all three, everyone in the costume they locked in (not the team's); blue
+    walks off, and everyone is back on the room's CSS."""
     test = "three-players"
     users = [backend.create_user(n, n[:4].upper()) for n in ("rkira", "rlars", "rmona")]
     a, b, c = gs = [_boot(dolphin, f"room3-{x}", backend, u, gpu_backend, test, "gameplay", artifacts=ART)
@@ -453,6 +471,14 @@ def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[...,
     until_view(a, lambda v: v["slots"][2]["bits"] & ppom.SLOT_OPEN, "slot 3 open")
     a.steps("tap R 8", "wait 30")
     until_view(a, lambda v: v["flags"] & ppom.RF_TEAMS, "Teams on")
+    # Any costume on any team (the user's, 2026-10-12): A on our own panel, twice, the costume
+    # after next; the team stays (Brawl's team battle CSS cycles the team there).
+    costume0 = _u32(a, css_area(a) + 0x1BC)
+    hand_to(a, PANEL_X[0], -10.0)
+    a.steps("tap A 8", "wait 20", "tap A 8", "wait 20")
+    my_costume = _u32(a, css_area(a) + 0x1BC)
+    assert my_costume not in (costume0, 0), (costume0, my_costume)
+    assert room_view(a)["slots"][0]["team"] == 0, room_view(a)
     hand_to(a, -23.0, 10.5)   # back on Fox
     a.steps("wait 30")
     a.shot("03-slot-3-open-teams-on")
@@ -510,6 +536,10 @@ def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[...,
         assert [pl["team"] for pl in se["players"][:3]] == [0, 0, 1], se
     setups = [B.read_match_setup(g.c.read_mem) for g in gs]
     assert setups[0] == setups[1] == setups[2], setups
+    # Every player in the costume they locked in, not their team's.
+    locked = [pl["costume"] for pl in se["players"][:3]]
+    assert locked[0] == my_costume, (locked, my_costume)
+    assert [p.color_no for p in setups[0].players[:3]] == locked, (setups[0].players, locked)
     time.sleep(8)
     for g in gs:
         g.shot("07-team-battle")
@@ -1448,3 +1478,83 @@ def test_room_player_quits_with_lras(backend: OnlineBackend, dolphin: Callable[.
         assert by_port[port]["place"] is None, m
     if len(quits) == 1:
         assert by_port[0]["place"] == 2, m
+
+
+def test_room_runback_restarts_for_everyone(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                            gpu_backend: str) -> None:
+    """A free-for-all of three without a set: P2 pauses and holds L+R+A+Y+START (P+'s salty
+    runback). The same match starts again for all three (the user's, 2026-10-13), not only P2
+    leaving as after a plain quit: the session sets it up on every machine and the room's game
+    goes on in it. The runback's match is the same game on all three (no checksum differs)."""
+    import secrets
+    from ppharness.client import PadInput
+    test = "room-runback-three"
+    users = [backend.create_user(n, f"RT{'ABC'[k]}H", email=f"roomrb{k}-{secrets.token_hex(4)}@example.test")
+             for k, n in enumerate(["rra", "rrb", "rrc"])]
+    gs = [_boot(dolphin, f"roomrb3-{x}", backend, u, gpu_backend, test, "gameplay", artifacts=ART)
+          for x, u in zip("abc", users)]
+    a = gs[0]
+    _all(*[g.to_main_menu for g in gs])
+    _all(*[g.to_online_page for g in gs])
+    code = create_room(a)
+    pick(a)
+    hand_to(a, PANEL_X[2], -10.0)
+    a.steps("tap A 8", "wait 30")
+    until_view(a, lambda v: v["slots"][2]["bits"] & ppom.SLOT_OPEN, "slot 3 open")
+    hand_to(a, -23.0, 10.5)
+    _all(*[lambda g=g: to_join_room(g) for g in gs[1:]])
+    for k, g in enumerate(gs[1:], 1):
+        pick(g, right=2 * k)
+    for g in gs:
+        B.write_rules(g.c, stocks=4, minutes=8, items_off=True)
+        ppom.allow_test_rules(g.c)
+    for k, g in enumerate(gs[1:], 1):
+        type_room_code(g, code)
+        until_view(g, lambda v: v["flags"] & ppom.RF_IN, f"player {k + 1} in the room")
+    until_view(a, lambda v: all(v["slots"][p]["bits"] & ppom.SLOT_TAKEN for p in range(3)), "all players")
+    for g in gs:
+        g.steps("wait 60")
+    for g in gs:
+        g.steps("tap START 8", "wait 10")
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] in ("running", "error", "ended") for g in gs),
+                    240, "the room's game running on all")
+    st = [online_set.gstatus(g.c) for g in gs]
+    assert all(s["phase"] == "running" for s in st), [(s["phase"], s.get("error")) for s in st]
+    first = st[0]["match_index"]
+    setup = B.read_match_setup(a.c.read_mem)
+    time.sleep(4)
+
+    walk = [PadInput(main=(40, 128), hold=7), PadInput(main=(216, 128), hold=7)]
+    q = gs[1]
+    for g in (gs[0], gs[2]):
+        g.c.pad_script(0, walk * 60)
+    q.steps("hold START 90", "wait 20")
+    assert online_set.gstatus(q.c)["phase"] == "running"
+    # Held past the session's end (the game stays paused until then), not into the next match.
+    q.steps("hold L+R+A+Y+START 90")
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" and
+                                online_set.gstatus(g.c)["match_index"] == first + 1 for g in gs),
+                    90, "the same match again on all three")
+    for g in gs:
+        g.c.pad_script(0, walk * 60)
+    time.sleep(6)
+    for g in gs:
+        g.shot("01-runback-for-everyone")
+        sc = g.debug_scratch()[10]
+        assert sc & 0x1000000 and sc & 0xFF == 0x1B, (g.name, hex(sc))   # marked a runback, straight in
+        assert not sc & 0x400000, (g.name, "taken as a player's own quit", hex(sc))
+        assert B.read_match_setup(g.c.read_mem) == setup, (g.name, "a different match")
+        log = g.inst.log.read()
+        assert log.count("the last game again (runback)") == 1, g.name
+        assert "game run back: the session plays it again" in log, g.name
+        assert online_set.session(g.c)["quit_ports"] == 0, g.name
+        s = online_set.gstatus(g.c)
+        assert s["phase"] == "running" and not any(p["left"] for p in s["peers"]), (g.name, s["peers"])
+    ends = [online_set.gstatus(g.c) for g in gs]
+    limit = min(s["current_frame"] for s in ends) - online_set.CONFIRM_MARGIN
+    cks = [{r[0]: r[1] for r in g.c.call("gprb_checksums", since=0)["rows"] if r[0] <= limit} for g in gs]
+    common = sorted(set(cks[0]).intersection(*cks[1:]))
+    bad = [f for f in common if len({ck[f] for ck in cks}) != 1]
+    print(f"runback match: frames {[s['current_frame'] for s in ends]}, checksums compared {len(common)}, "
+          f"mismatches {len(bad)}")
+    assert common and not bad, (len(common), bad[:5])

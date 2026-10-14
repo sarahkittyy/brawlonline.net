@@ -1,7 +1,7 @@
 //! End-to-end: rulesets (docs/rulesets-protocol.md). Publishing (codes, versions, forks,
-//! "unchanged"), public lookups and "newer version" links, hiding, the database refusing to
-//! change or delete a published version, a deleted publisher, drafts, the remembered ruleset and
-//! the recent list, who may publish, and the publish rate limit.
+//! "unchanged"), public lookups, the link preview page and "newer version" links, hiding, the
+//! database refusing to change or delete a published version, a deleted publisher, drafts, the
+//! remembered ruleset and the recent list, who may publish, and the publish rate limit.
 
 use common::rules::{parse_ruleset_code, Ruleset};
 use e2e::{Stack, StackOptions};
@@ -72,6 +72,17 @@ async fn publish_lookup_versions_and_hiding() {
     let unknown = if c1 == "BBBBBB" { "CCCCCC" } else { "BBBBBB" };
     let (st, _) = s.get(&format!("/v1/rulesets/{unknown}"), None).await;
     assert_eq!(st, 404);
+
+    // The page link previews get (Discord): the name, version and publisher as the title, no
+    // description; unknown codes are 404.
+    let page = s.http.get(s.url(&format!("/v1/rulesets/{}/preview", c1.to_lowercase()))).send().await.unwrap();
+    assert_eq!(page.status(), 200);
+    let html = page.text().await.unwrap();
+    assert!(html.contains("<title>NorCal Weekly v1 by alice</title>"), "{html}");
+    assert!(html.contains("<meta property=\"og:title\" content=\"NorCal Weekly v1 by alice\">"), "{html}");
+    assert!(!html.contains("description"), "{html}");
+    let page = s.http.get(s.url(&format!("/v1/rulesets/{unknown}/preview"))).send().await.unwrap();
+    assert_eq!(page.status(), 404);
 
     // Republishing it unchanged (the version and publisher don't count) is refused.
     let mut same = v1["ruleset"].clone();

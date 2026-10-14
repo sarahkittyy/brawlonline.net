@@ -127,6 +127,7 @@ Everything in this section was added while fixing Brawlback's rollback (`rollbac
 | `gpu_sync_compiles`, `gpu_sync_compile_us_total`, `gpu_sync_compile_us_max`, `gpu_sync_utility_compiles`, `gpu_sync_utility_compile_us_total`, `shader_compilation_mode` | pipelines the video thread compiled synchronously (all; EFB-copy/texture-conversion ones), and the configured mode |
 | `peer_disconnects`, `skipped_loads`, `dropped_advances` | GekkoNet dropped the peer (the game is then stopped); rollbacks deeper than the snapshot ring; advances beyond one update's capacity. All should stay 0 |
 | `stall_fallbacks` | stall waits a pause request (e.g. a harness read) turned into a guest-side spin |
+| `frame_cost` | the session's frame cost profile (docs/gameplay-rollback-status.md, Phase 26): `resim` and `shown` passes, each with `passes`, `guest_ns`, `game_ns`, `save_ns`, `loop_top_ns`, `throttle_ns`, `gpu_wait_ns` (and `gpu_wait_ns_by_reason`, `gpu_waits`), `event_ns` by category (estimated from `event_passes`, `events`), `gpu_busy_ns`, `gpu_present_ns`; and `loads`, `load_ns` |
 
 ### Rollback input delay
 
@@ -165,6 +166,7 @@ During a rollback the resimulated frames are run and rendered in full but not pr
 | `PPR_ROLLBACK_SYNC_VIDEO=1` | dual core: drain the GPU thread for every snapshot and serialize the whole video state there, as before `5defc02845` (A/B runs) |
 | `PPR_LOG_GPU_RAM_WRITES=<file>` | append one line per guest-RAM write by the video thread (Brawl match frame, kind, address, size) |
 | `PPR_PRESENT_LOG=<file>` | one line per present with its timeline: the XFB copy, its due time, the last throttle, the loop top, the CPU's waits for the GPU thread, rollback bursts, the swap, the hold target and the present (`{pid}` in the path becomes the process ID); deterministic dual core |
+| `PPR_GPRB_NO_FRAME_COST=1` | no frame cost profile in gameplay sessions (`gprb frame cost` lines, `frame_cost`), to measure what it costs |
 | `PPR_ROLLBACK_PRESENT_RESIM=1` | present resimulated frames again (the behaviour before `2025577415`), for before/after measurements |
 | `PPR_HARNESS_PORT`, `PPR_HARNESS_AUDIO=1`, `PPR_HARNESS_POLL_SOURCE=si` | see above and "Deviations" |
 
@@ -181,6 +183,7 @@ The online client (`Source/Core/Core/Online/`) logs in from `user.json` and find
 | `AccountsUrl`, `DevAccountsUrl` | `https://brawlonline.net`, `http://127.0.0.1:8080` | for the users-rest lookup after a login |
 | `ForceNetplayPort`, `NetplayPort` | `False`, `2626` | Slippi's "Force Netplay Port"; otherwise a random port in 41000-50999 |
 | `ForceLanIP`, `LanIP` | `False`, `""` | Slippi's "Force LAN IP" |
+| `UPnP` | `True` | ask the router to forward the search's UDP port before contacting mm (not with mm on 127.0.0.1); docs/backend-design.md 1.4 |
 
 **`online_status`.** Dolphin polls for `<User>/Online/user.json` every 500 ms until it parses (`watching` is true meanwhile), then stops, as Slippi does: a file written after the login is not reread. After reading the file it fetches `GET <accounts>/user/{uid}?additionalFields=chatMessages,rank` and takes the display name, code and latest version from there (`user_fetch`: `not_fetched`, `fetching`, `fetched`, `error`; on error the file's values stay). `app_state` is Slippi's: 0 logged out, 1 logged in, 2 `latestVersion` is newer than `app_version`.
 

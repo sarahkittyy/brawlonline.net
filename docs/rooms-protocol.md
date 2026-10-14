@@ -86,8 +86,8 @@ A request that is refused changes nothing and is answered with `room-error`. Mal
   ],
   "statusText": "Waiting on: bob",
   "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "damageRatio": 1.0, "teamAttack": true,
-            "pause": "normal", "itemFrequency": 0, "itemSwitch": [0, 6, 0, 0, 0, 0, 0, 0],
-            "hazards": true, "autoLCancel": false, "inputAssist": false}
+            "pause": "normal", "itemFrequency": 0, "itemSwitch": [0, 4, 0, 0, 0, 0, 0, 0],
+            "hazards": false, "autoLCancel": false, "inputAssist": false}
 }
 ```
 
@@ -141,7 +141,7 @@ A request that is refused changes nothing and is answered with `room-error`. Mal
 | A host-only request from someone else | `Only the host can do that.` |
 | Slots or Teams during a start or a game | `Wait for the game to end.` |
 | The host closes their own slot | `You can't close your own slot.` |
-| Closing would leave fewer than 2 open | `At least 2 slots stay open.` |
+| Closing an empty slot would leave fewer than 2 open | `At least 2 slots stay open.` |
 | A room request from someone in no room | `You are not in a room.` |
 | Ready or team during the start | `The game is starting.` |
 | More than 5 rooms a minute or 30 an hour (per account) | `Too many rooms. Wait a moment.` |

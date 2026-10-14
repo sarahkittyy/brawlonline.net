@@ -189,6 +189,16 @@ enum Hotkey
   HK_SKYLANDERS_PORTAL,
   HK_INFINITY_BASE,
 
+  // Replays (docs/design/replays.md §6.4): only while one plays.
+  HK_REPLAY_PLAY_PAUSE,
+  HK_REPLAY_JUMP_BACK,
+  HK_REPLAY_JUMP_FORWARD,
+  HK_REPLAY_FRAME_BACK,
+  HK_REPLAY_FRAME_FORWARD,
+  HK_REPLAY_SLOWER,
+  HK_REPLAY_FASTER,
+  HK_REPLAY_TOGGLE_OVERLAY,
+
   NUM_HOTKEYS,
 };
 
@@ -221,6 +231,7 @@ enum HotkeyGroup : int
   HKGP_GBA_VOLUME,
   HKGP_GBA_SIZE,
   HKGP_USB_EMU,
+  HKGP_REPLAY,
 
   NUM_HOTKEY_GROUPS,
 };
@@ -255,6 +266,8 @@ namespace HotkeyManagerEmu
 void Initialize();
 void Shutdown();
 void LoadConfig();
+// After Hotkey Settings saved: [Online] ChatKey follows the chat hotkey's binding.
+void SaveChatKey();
 
 InputConfig* GetConfig();
 ControllerEmu::ControlGroup* GetHotkeyGroup(HotkeyGroup group);

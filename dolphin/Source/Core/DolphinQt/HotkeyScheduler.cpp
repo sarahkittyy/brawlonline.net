@@ -26,6 +26,7 @@
 #include "Core/FreeLookManager.h"
 #include "Core/HotkeyManager.h"
 #include "Core/IOS/IOS.h"
+#include "Core/Rollback/GameplaySession.h"
 #include "Core/State.h"
 #include "Core/System.h"
 #include "Core/WiiUtils.h"
@@ -40,6 +41,7 @@
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
 
 #include "VideoCommon/OnScreenDisplay.h"
+#include "VideoCommon/ReplayOverlayUI.h"
 #include "VideoCommon/VideoConfig.h"
 
 constexpr const char* DUBOIS_ALGORITHM_SHADER = "dubois";
@@ -258,6 +260,28 @@ void HotkeyScheduler::Run()
 
       if (IsHotkey(HK_REQUEST_GOLF_CONTROL))
         emit RequestGolfControl();
+
+      // Replays (only while one plays; the session ignores them otherwise).
+      {
+        using Gprb::Session::PlaybackCommand;
+        using Gprb::Session::PlaybackControl;
+        if (IsHotkey(HK_REPLAY_PLAY_PAUSE))
+          PlaybackControl(PlaybackCommand::TogglePause);
+        if (IsHotkey(HK_REPLAY_JUMP_BACK))
+          PlaybackControl(PlaybackCommand::Jump, -5);
+        if (IsHotkey(HK_REPLAY_JUMP_FORWARD))
+          PlaybackControl(PlaybackCommand::Jump, 5);
+        if (IsHotkey(HK_REPLAY_FRAME_BACK))
+          PlaybackControl(PlaybackCommand::StepBack);
+        if (IsHotkey(HK_REPLAY_FRAME_FORWARD))
+          PlaybackControl(PlaybackCommand::StepForward);
+        if (IsHotkey(HK_REPLAY_SLOWER))
+          PlaybackControl(PlaybackCommand::Slower);
+        if (IsHotkey(HK_REPLAY_FASTER))
+          PlaybackControl(PlaybackCommand::Faster);
+        if (IsHotkey(HK_REPLAY_TOGGLE_OVERLAY))
+          VideoCommon::ReplayOverlayUI::ToggleHidden();
+      }
 
       if (IsHotkey(HK_EXPORT_RECORDING))
         emit ExportRecording();

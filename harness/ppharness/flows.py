@@ -223,7 +223,7 @@ class Fighter:
     """Decides one seat's next input macro from the match state (see ``fight``)."""
 
     def __init__(self, seat: Seat, mode: str = "chase", seed: Any = 0, stage_kind: int | None = None):
-        if mode not in ("chase", "random", "idle", "selfdestruct"):
+        if mode not in ("chase", "random", "idle", "selfdestruct", "upsmash", "hover"):
             raise ValueError(f"unknown fight mode {mode!r}")
         self.seat, self.mode = seat, mode
         self.rng = random.Random(f"{seed}:{seat.port}")
@@ -243,6 +243,11 @@ class Fighter:
         t = 255 if toward > 0 else 1
         if self.mode == "selfdestruct":                            # walk off the nearer edge
             return [{"main": [255 if me.x >= 0 else 1, 128], "hold": 10}]
+        if self.mode == "hover":                                   # off the nearer edge, jumps spent out there
+            out = 255 if me.x >= 0 else 1
+            if abs(me.x) <= self.edge - 2 and me.y > -8:
+                return [{"main": [out, 128], "hold": 10}]
+            return [{"main": [out, 128], "buttons": ["X"], "hold": 2}, {"main": [out, 128], "hold": 28}]
         if abs(me.x) > self.edge - 2 or me.y < -8:                # off stage: recover
             to_c = 255 if me.x < 0 else 1
             if me.y < -8:
@@ -251,6 +256,10 @@ class Fighter:
             return [{"main": [to_c, 128], "hold": 8}]
         if self.mode == "idle":
             return [{"hold": 10}]
+        if self.mode == "upsmash":                                # chase, up smash in range
+            if abs(dx) < 12 and abs(dy) < 8:
+                return [{"c": [128, 255], "hold": 3}, {"hold": 45}]
+            return [{"main": [t, 128], "hold": 3}]
         if self.mode == "chase":
             if abs(dx) < 14 and abs(dy) < 10:
                 return [{"main": [t, 128], "hold": 1}, {"buttons": ["A"], "hold": 2}, {"hold": 6}]
@@ -269,7 +278,9 @@ def fight(seats: Seat | Sequence[Seat], frames: int, *, mode: str | Sequence[str
 
     mode (one, or one per seat): "chase" walks to the nearest opponent and jabs/tilts in range
     (reliably deals damage); "random" plays seeded random macros (``_macro``) biased toward the
-    opponent; "idle" stands still; "selfdestruct" walks off the nearer edge (to lose on purpose).
+    opponent; "idle" stands still; "selfdestruct" walks off the nearer edge (to lose on purpose);
+    "upsmash" walks to the nearest opponent and up smashes in range (KOs off the top); "hover" walks
+    off the nearer edge and spends its mid-air jumps drifting away (time off screen).
     All modes but "selfdestruct" recover when off stage. Never presses Start or the
     D-pad. For netplay, run one ``fight`` per instance in its own thread (``play``).
     """

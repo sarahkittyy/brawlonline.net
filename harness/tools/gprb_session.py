@@ -205,12 +205,22 @@ def play_match(ca, cb, sim, args, preset: str, cpu: str, run: int, mi: int, sel,
         rep["agreed"] = {"chars": chars, "stage": agreed_stage}
         notes_a: List[str] = []
         notes_b: List[str] = []
-        if args.minutes:
+        if args.minutes or args.damage_ratio:
             # Same rules on both (part of the setup hash): a shorter time limit ends matches sooner.
             for c in (ca, cb):
                 B.wait_scene(c, [B.Scene.CSS, B.Scene.RESULTS], 60 * 120)
                 if B.read_scene(c.read_mem).scene is B.Scene.CSS:
-                    B.write_rules(c, stocks=4, minutes=args.minutes, items_off=True)
+                    if args.minutes:
+                        B.write_rules(c, stocks=4, minutes=args.minutes, items_off=True)
+                    if args.damage_ratio:
+                        c.write_mem(B.SET_RULE_OBJ + B.RULE_DAMAGE_RATIO, bytes([round(args.damage_ratio * 10)]))
+        if mi == 0 and args.poke_b:
+            # Diagnostics: the joiner's memory written on its first CSS, before its menu path.
+            B.wait_scene(cb, [B.Scene.CSS], 60 * 90)
+            for p in args.poke_b:
+                addr, data = p.split("=", 1)
+                cb.write_mem(int(addr, 0), bytes.fromhex(data))
+                notes_b.append(f"poked {addr} = {data}")
         if mi == 0:
             # Independent menu paths to the same match.
             G.par([lambda: G.history_a(ca, chars, agreed_stage, notes_a),
@@ -250,6 +260,12 @@ def play_match(ca, cb, sim, args, preset: str, cpu: str, run: int, mi: int, sel,
             c.call("game_pads", record=True)
         sim.reset_epoch()
         setup = B.read_match_setup(ca.read_mem)
+        for c in (ca, cb):
+            # Diagnostics: the same bytes on both peers once the match runs (code patches too:
+            # write_mem invalidates the JIT's cache for the range).
+            for poke in args.poke_match:
+                addr, data = poke.split("=", 1)
+                c.write_mem(int(addr, 0), bytes.fromhex(data))
         F._macro = gentle_macro
         seats = [F.Seat(ca, 0, 0, "A"), F.Seat(cb, 1, 0, "B")]
         stop_at = time.monotonic() + args.timeout
@@ -260,7 +276,7 @@ def play_match(ca, cb, sim, args, preset: str, cpu: str, run: int, mi: int, sel,
 
         def play(seat: F.Seat, seed: str) -> None:
             with contextlib.suppress(HarnessError):
-                F.fight([seat], args.frames, mode="random", seed=seed,
+                F.fight([seat], args.frames, mode=args.modes.split(",")[seat.port], seed=seed,
                         stage_kind=setup.stage_kind if setup else None, stop=stop)
             stop_flag.set()
 
@@ -351,6 +367,8 @@ def run_session(preset: str, cpu: str, args: argparse.Namespace, run: int) -> Di
         if "host" in name and args.rtc_a:
             kw["rtc"] = args.rtc_a
         inst = orig(name, **kw)
+        if "join" in name:
+            inst.env.update(dict(e.split("=", 1) for e in args.env_b))
         sd = args.sd_b if "join" in name else args.sd_a
         if sd:
             # One peer's SD card differs (e.g. another song file under a tracklist's name, or none).
@@ -727,7 +745,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--stage", default="battlefield")
     ap.add_argument("--delay", type=lambda v: None if v == "auto" else int(v), default=2,
                     help="input delay in frames, or auto (from the round trip, as players get it)")
-    ap.add_argument("--region-set", default="gp-v22")
+    ap.add_argument("--region-set", default="gp-v23")
     ap.add_argument("--start-frame", type=int, default=120)
     ap.add_argument("--frames", type=int, default=30000)
     ap.add_argument("--rtc-a", type=lambda x: int(x, 0), default=0, help="A's custom RTC (0: the fixed default)")
@@ -744,6 +762,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--config-b", action="append", default=[],
                     help="extra Dolphin -C override for the joiner only, e.g. Dolphin.Core.EmulationSpeed=0.62 "
                          "(a peer that cannot keep full speed)")
+    ap.add_argument("--env-b", action="append", default=[], metavar="NAME=VALUE",
+                    help="environment variable for the joiner only, e.g. PPR_GPRB_TEST_FRAME_COST_US=14000 "
+                         "(every pass costs that much more CPU time: a PC that cannot keep full speed)")
+    ap.add_argument("--modes", default="random,random",
+                    help="fight modes of P1,P2 (flows.fight: random, chase, idle, selfdestruct, upsmash)")
+    ap.add_argument("--damage-ratio", type=float, default=0.0,
+                    help="write this damage ratio (e.g. 2.0) on both CSSs")
+    ap.add_argument("--poke-match", action="append", default=[], metavar="ADDR=HEX",
+                    help="diagnostics: write these bytes on both peers once the match runs, e.g. "
+                         "0x8087C314=60000000 (every top KO a screen KO)")
+    ap.add_argument("--poke-b", action="append", default=[], metavar="ADDR=HEX",
+                    help="diagnostics: write these bytes into the joiner's memory on its first CSS, e.g. "
+                         "0x9017BE78=00 (Brawl's saved widescreen flag off)")
     ap.add_argument("--sd-a", action="append", default=[], metavar="LOCAL=SD_PATH|-SD_PATH",
                     help="the host's SD card only: add (or with a leading -, remove) a file")
     ap.add_argument("--sd-b", action="append", default=[], metavar="LOCAL=SD_PATH|-SD_PATH",

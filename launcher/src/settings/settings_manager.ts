@@ -55,6 +55,8 @@ export class SettingsManager extends EventEmitter {
 
   constructor() {
     super();
+    // One listener per subscribing module (onSettingChange), more than Node's warning limit of 10.
+    this.setMaxListeners(50);
     this.setMutex = new Mutex();
     const restoredSettings = electronSettings.getSync() as Partial<AppSettings>;
 

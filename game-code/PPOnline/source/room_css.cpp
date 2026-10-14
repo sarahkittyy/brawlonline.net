@@ -90,12 +90,6 @@ namespace RoomCss {
     static bool s_teams = false;
     static bool s_seekingLabelled = false;
     static int s_myTeamShown = -1;
-    // A team the player just picked on their own panel (Brawl's click, which plays the flag's
-    // animation itself): the room's view still has the old one for a few frames, and showing
-    // that and then the new one played the flag twice (staging feedback 2026-10-10). The room's
-    // team is not shown again until it agrees or this runs out.
-    static int s_myTeamPicked = -1;
-    static int s_myTeamPickedFrames = 0;
     static u32 s_shownMask[4];   // per area: models that were visible when it was hidden
     static bool s_hidden[4];
     // The local plate: the tag or the account name, printed again a few frames after Brawl may have
@@ -173,8 +167,6 @@ namespace RoomCss {
         s_task = NULL;
         s_seekingLabelled = false;
         s_myTeamShown = -1;
-        s_myTeamPicked = -1;
-        s_myTeamPickedFrames = 0;
         s_myStarsShown = -1;
         s_myPlate[0] = 0;
         s_myTagShown = -2;
@@ -527,7 +519,9 @@ namespace RoomCss {
                 bool fresh = sh.kind != PV_READY || sh.css != v.css;
                 SET_CHAR(a, v.css);
                 *(u32*)(a + 0x1BC) = v.costume;
-                SET_CHAR_PIC(a, v.css, 1, v.costume, teams ? 1 : 0, *(u32*)(a + 0x1C0), 0);
+                // The player's own costume in a team battle too (not the team's: OnlineMenu's
+                // cssCharPic makes every portrait on the online CSS the costume's).
+                SET_CHAR_PIC(a, v.css, 1, v.costume, 0, *(u32*)(a + 0x1C0), 0);
                 if (fresh) DECIDE(a);
             } else if (*(u32*)(a + 0x1B8) != (u32)CSS_NONE) {
                 SET_CHAR(a, CSS_NONE);
@@ -726,7 +720,8 @@ namespace RoomCss {
         }
         placeAreas(task);
         // The team battle look: Brawl's own (task+0x5C8), with the flag on each panel; the local
-        // player clicks their own flag to change team (myTeamClicked).
+        // player changes team with X / Y or A on their own flag (OnlineMenu's tickRoom; A on the
+        // panel itself changes the costume, as in a free-for-all: OnlineMenu's cssPanelClick).
         bool wasTeams = task[0x5C8] != 0;
         if (wasTeams != teams || s_teams != teams) {
             task[0x5C8] = teams ? 1 : 0;
@@ -738,11 +733,7 @@ namespace RoomCss {
             }
             s_myTeamShown = -1;
         }
-        if (s_myTeamPickedFrames > 0 && (myTeam == s_myTeamPicked || --s_myTeamPickedFrames == 0)) {
-            s_myTeamPickedFrames = 0;
-        }
-        if (teams && a0 && myTeam >= 0 && myTeam < PPOM::TEAM_COUNT && myTeam != s_myTeamShown &&
-            s_myTeamPickedFrames == 0) {
+        if (teams && a0 && myTeam >= 0 && myTeam < PPOM::TEAM_COUNT && myTeam != s_myTeamShown) {
             *(u32*)(a0 + 0x1C0) = (u32)myTeam;
             showTeamAt(a0, 0);
             s_myTeamShown = myTeam;
@@ -756,22 +747,6 @@ namespace RoomCss {
         for (int i = 0; i < 3; i++) apply(task, i + 1, views[i], teams);
     }
 
-    // The team the local player has picked on their own panel (Brawl's flag), or -1 when it is
-    // still the one the room gave (tick's myTeam).
-    int myTeamClicked()
-    {
-        u8* task = cssTask();
-        if (!task || task != s_task || !s_teams) return -1;
-        u8* a0 = area(task, 0);
-        if (!a0) return -1;
-        int t = (int)*(u32*)(a0 + 0x1C0);
-        if (t < 0 || t >= PPOM::TEAM_COUNT || t == s_myTeamShown) return -1;
-        s_myTeamShown = t;
-        s_myTeamPicked = t;
-        s_myTeamPickedFrames = 90;
-        return t;
-    }
-
     // Which of the other players' panels (1-3) the local hand points at, -1 none. The hand's
     // position is muSelCharHand +0x90 (x) / +0x94 (y), in the CSS's own units (found live:
     // about 31 pixels a unit in a 2484-wide screenshot; x 0 is the screen's middle, y up); the four
@@ -780,10 +755,9 @@ namespace RoomCss {
     static const float PANEL_X0 = -22.0f, PANEL_STEP = 15.0f, PANEL_HALF = 7.0f;
     static const float PANEL_TOP = -1.5f, PANEL_BOTTOM = -20.0f;
     // The local player's own team flag (Brawl's, top left of the panel, drawn in a team battle):
-    // A on it picks the next team. Brawl's own team click works on the panel itself (its hand
-    // target 0x1B, from y -6 down: myTeamClicked) but not on the flag above it (no target
-    // there), so the plugin hit-tests the flag's upper part: found live, x -29.5..-23,
-    // y -6..-2.5. (Both on the panel played the flag's animation twice.)
+    // A on it picks the next team. The flag is no hand target of Brawl's (the panel below it,
+    // target 0x1B from y -6 down, changes the costume online: OnlineMenu's cssPanelClick), so
+    // the plugin hit-tests the flag's upper part: found live, x -29.5..-23, y -6..-2.5.
     bool handOverMyFlag()
     {
         u8* task = cssTask();

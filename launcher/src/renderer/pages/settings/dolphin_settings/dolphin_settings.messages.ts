@@ -19,4 +19,14 @@ export const DolphinSettingsMessages = {
   dolphinExecutable: (dolphinTypeName: string) => `{0} Executable`,
   dolphinExecutableDescription: () => "The Dolphin build to launch. Leave empty to use the default shown.",
   closeDolphinToChange: () => "Close Dolphin to change this setting",
+  gameFilesFolder: () => "Game Files Folder",
+  gameFilesFolderDescription: () =>
+    "Where Dolphin, Project+ and its SD card are kept (about 4 GB). Choose another folder to move them there, for example to another drive.",
+  moveGameFiles: () => "Move",
+  defaultFolderButton: () => "Use default",
+  waitForSetup: () => "Wait for Dolphin's set-up to finish",
+  movingGameFiles: (done: string, total: string) => `Moving: {0} of {1}`,
+  movingGameFilesNoBytes: () => "Moving...",
+  gameFilesMoved: (folder: string) => `The game files are now in {0}`,
+  gameFilesLeftBehind: (folder: string) => `Some old files could not be deleted. You can delete {0} yourself.`,
 };

@@ -4,6 +4,7 @@
 #include "Common/Timer.h"
 
 #include <chrono>
+#include <exception>
 #include <thread>
 #include "Common/CommonFuncs.h"
 
@@ -69,10 +70,34 @@ u64 Timer::ElapsedMs() const
 u64 Timer::GetLocalTimeSinceJan1970()
 {
 #ifdef _MSC_VER
-  std::chrono::zoned_seconds seconds(
-      std::chrono::current_zone(),
-      std::chrono::time_point_cast<std::chrono::seconds>(std::chrono::system_clock::now()));
-  return seconds.get_local_time().time_since_epoch().count();
+  // std::chrono's time zones need icu.dll, which Windows has from 10 1903 on: before it,
+  // current_zone() throws, and every boot ended in std::terminate (exit c0000409) at
+  // ExpansionInterface::Init (a player on 10 1809, 2026-10-13). Looked up once; without it, the
+  // offset Windows applies to the current time.
+  static const std::chrono::time_zone* const zone = []() -> const std::chrono::time_zone* {
+    try
+    {
+      return std::chrono::current_zone();
+    }
+    catch (const std::exception& e)
+    {
+      WARN_LOG_FMT(COMMON, "No time zone database ({}): local time from FileTimeToLocalFileTime",
+                   e.what());
+      return nullptr;
+    }
+  }();
+  if (zone)
+  {
+    std::chrono::zoned_seconds seconds(
+        zone, std::chrono::time_point_cast<std::chrono::seconds>(std::chrono::system_clock::now()));
+    return seconds.get_local_time().time_since_epoch().count();
+  }
+  FILETIME utc, local;
+  GetSystemTimeAsFileTime(&utc);
+  FileTimeToLocalFileTime(&utc, &local);
+  const u64 ticks = (static_cast<u64>(local.dwHighDateTime) << 32) | local.dwLowDateTime;
+  // 100 ns intervals since 1601-01-01 to seconds since 1970-01-01.
+  return ticks / 10'000'000 - 11'644'473'600;
 #else
   time_t sysTime, tzDiff, tzDST;
   time(&sysTime);

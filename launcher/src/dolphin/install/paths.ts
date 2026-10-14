@@ -15,8 +15,8 @@ export function dolphinExecutableName(platform: NodeJS.Platform = process.platfo
 }
 
 /**
- * The executable inside the Dolphin bundle the launcher ships and installs into
- * `<userData>/netplay` (see bundled_dolphin.ts). On Linux the bundle is an AppDir-style tree
+ * The executable inside the Dolphin bundle the launcher ships and installs into the netplay
+ * folder (see bundled_dolphin.ts). On Linux the bundle is an AppDir-style tree
  * (`usr/bin`, `usr/lib`) made by linuxdeploy, with `Sys` next to the binary.
  */
 export function installedDolphinExecutable(platform: NodeJS.Platform = process.platform): string {
@@ -31,7 +31,8 @@ export type DolphinPathEnv = {
   isDevelopment: boolean;
   /** The launcher repository (process.cwd() when running `npm start`). */
   devRepoRoot: string;
-  userDataDir: string;
+  /** The netplay folder (`netplayFolder`). */
+  netplayFolder: string;
   platform?: NodeJS.Platform;
 };
 
@@ -47,7 +48,7 @@ export function launchTypeFolder(launchType: DolphinLaunchType): string {
  * 2. Development: our Dolphin fork's build next to the launcher repo,
  *    `<repo>/../dolphin/build/release/x64/Binaries/Dolphin.exe`
  *    (D:\code\pm_rollback\dolphin\build\release\x64\Binaries\Dolphin.exe on the dev machine).
- * 3. Otherwise the bundled build the launcher installs into `<userData>/netplay` (Slippi's layout).
+ * 3. Otherwise the bundled build the launcher installs into the netplay folder (Slippi's layout).
  *
  * The playback Dolphin defaults to the netplay one: we ship a single build.
  */
@@ -66,7 +67,7 @@ export function defaultDolphinExecutable(_launchType: DolphinLaunchType, ctx: Do
         : path.join("build", "Binaries");
     return path.resolve(ctx.devRepoRoot, "..", "dolphin", binaries, dolphinExecutableName(platform));
   }
-  return path.join(ctx.userDataDir, launchTypeFolder(DolphinLaunchType.NETPLAY), installedDolphinExecutable(platform));
+  return path.join(ctx.netplayFolder, installedDolphinExecutable(platform));
 }
 
 /**
@@ -123,19 +124,28 @@ export function defaultPluginLocation(ctx: DolphinPathEnv & { resourcesPath: str
 }
 
 /**
- * The launcher-managed copy of the user's P+ SD card with the plugin installed:
- * `<userData>/netplay/pponline-sd/sd.raw`, plus `manifest.json` next to it.
+ * The netplay folder: the bundled Dolphin, its User folder, P+'s files and the patched SD card
+ * (about 4 GB). `<userData>/netplay` (Slippi's layout) unless Settings > Dolphin moved it
+ * (`gameFilesFolder`, see move_game_files.ts).
  */
-export function patchedSdCardFolder(userDataDir: string): string {
-  return path.join(userDataDir, launchTypeFolder(DolphinLaunchType.NETPLAY), "pponline-sd");
+export function netplayFolder(userDataDir: string, gameFilesFolder: string | null): string {
+  return gameFilesFolder ?? defaultNetplayFolder(userDataDir);
 }
 
-/** The netplay install folder (`<userData>/netplay`), where the bundled Dolphin is installed. */
-export function netplayInstallFolder(userDataDir: string): string {
+/** The netplay folder's default, `<userData>/netplay`. */
+export function defaultNetplayFolder(userDataDir: string): string {
   return path.join(userDataDir, launchTypeFolder(DolphinLaunchType.NETPLAY));
 }
 
-/** Launcher-owned P+ data: the Brawl save template and the marker (`<userData>/netplay/pplus`). */
-export function projectPlusStoreFolder(userDataDir: string): string {
-  return path.join(netplayInstallFolder(userDataDir), "pplus");
+/**
+ * The launcher-managed copy of the user's P+ SD card with the plugin installed:
+ * `<netplay folder>/pponline-sd/sd.raw`, plus `manifest.json` next to it.
+ */
+export function patchedSdCardFolder(netplayDir: string): string {
+  return path.join(netplayDir, "pponline-sd");
+}
+
+/** Launcher-owned P+ data: the Brawl save template and the marker (`<netplay folder>/pplus`). */
+export function projectPlusStoreFolder(netplayDir: string): string {
+  return path.join(netplayDir, "pplus");
 }

@@ -3,6 +3,7 @@
 
 #include <array>
 #include <atomic>
+#include <bit>
 #include <bitset>
 #include <cstddef>
 #include <cstdint>
@@ -10,6 +11,10 @@
 #include <functional>
 #include <memory>
 #include <vector>
+
+#ifdef _MSC_VER
+#include <intrin.h>
+#endif
 
 #include "Common/Buffer.h"
 #include "Common/CommonTypes.h"
@@ -141,6 +146,62 @@ struct alignas(64) JITDirtyBitmap
   {
     std::memset(&entries[first_page], 0, page_count);
   }
+
+  // Calls on_dirty(page) for every marked entry in [first_page, first_page + page_count), in
+  // order, and clears them. A frame marks a few thousand of the range's ~1.4 million entries, so
+  // this reads 8 entries at a time and writes only the words that had marks (a byte loop and a
+  // memset of the whole range cost a snapshot about as much as copying its granules). A word is
+  // cleared with an atomic exchange: a mark another thread sets meanwhile (the GPU thread's EFB
+  // copies to RAM) is either seen here or kept for the next scan, never dropped.
+  template <typename F>
+  void ScanAndClear(uint32_t first_page, uint32_t page_count, F&& on_dirty)
+  {
+    uint32_t i = first_page;
+    const uint32_t end = first_page + page_count;
+    for (; i < end && (i & 7) != 0; ++i)
+    {
+      if (entries[i])
+      {
+        entries[i] = 0;
+        on_dirty(i);
+      }
+    }
+    for (; i + 8 <= end; i += 8)
+    {
+      uint64_t word;
+      std::memcpy(&word, &entries[i], sizeof(word));
+      if (word == 0)
+        continue;
+      word = ExchangeWordWithZero(&entries[i]);
+      while (word != 0)
+      {
+        const int byte = std::countr_zero(word) >> 3;
+        on_dirty(i + static_cast<uint32_t>(byte));
+        word &= ~(uint64_t{0xFF} << (byte * 8));
+      }
+    }
+    for (; i < end; ++i)
+    {
+      if (entries[i])
+      {
+        entries[i] = 0;
+        on_dirty(i);
+      }
+    }
+  }
+
+private:
+  // `p` is 8-byte aligned (entries is 64-byte aligned and the scan's words start at multiples of
+  // 8). Stores from the JIT are single bytes.
+  static uint64_t ExchangeWordWithZero(uint8_t* p)
+  {
+#ifdef _MSC_VER
+    return static_cast<uint64_t>(
+        _InterlockedExchange64(reinterpret_cast<volatile long long*>(p), 0));
+#else
+    return __atomic_exchange_n(reinterpret_cast<uint64_t*>(p), uint64_t{0}, __ATOMIC_RELAXED);
+#endif
+  }
 };
 
 // One byte per granule, as JITDirtyBitmap: 1 once the GPU has written guest RAM there (EFB and
@@ -216,6 +277,9 @@ public:
 
   RegionDelta m_mem1_delta;
   RegionDelta m_mem2_delta;
+  // The granules a Save found dirty (absolute bitmap indices), kept to reuse their storage.
+  std::vector<u32> m_mem1_scan;
+  std::vector<u32> m_mem2_scan;
 
   uint32_t brawl_frame = 0;
 

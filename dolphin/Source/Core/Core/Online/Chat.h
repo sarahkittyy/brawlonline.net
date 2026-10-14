@@ -17,6 +17,7 @@
 
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <picojson.h>
@@ -108,6 +109,10 @@ enum class SendResult
   TooFast,    // over the local limit (mm's: 5 in 5 s)
 };
 SendResult Send(const std::string& text);
+
+// A system line from this machine (the netcode's notices, e.g. a PC falling behind), shown only
+// here; nothing is sent. Cleaned as any line.
+void AddNotice(std::string_view text);
 
 // The ignore list ("Ignore user" / "Unignore user"): <User>/Online/chat-hidden.json,
 // {"hidden": ["<uid>", ...]}, shared with the launcher. SetHidden re-reads the file first, so a

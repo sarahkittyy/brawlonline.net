@@ -883,14 +883,14 @@ impl RoomBook {
                     if s == me {
                         return Err(msg::OWN_SLOT);
                     }
-                    if room.open_count() <= 2 {
+                    // Closing an occupied slot removes its player, who may join again once a slot
+                    // is open (`docs/design/rooms.md` #10). With two open the slot stays open: the
+                    // host of a 1v1 room can remove a player too (player feedback 2026-10-12).
+                    kick = room.slots[s].as_ref().map(|m| m.conn);
+                    if room.open_count() > 2 {
+                        room.open[s] = false;
+                    } else if kick.is_none() {
                         return Err(msg::MIN_OPEN_SLOTS);
-                    }
-                    room.open[s] = false;
-                    if let Some(m) = &room.slots[s] {
-                        // Closing an occupied slot removes its player, who may join again once a
-                        // slot is open (`docs/design/rooms.md` #10).
-                        kick = Some(m.conn);
                     }
                 }
             }
@@ -1547,9 +1547,19 @@ mod tests {
         join(&mut t, 2, &code);
         // Not the host.
         assert_eq!(msgs(&t.req(2, RoomRequest::Slot { slot: 3, open: true }), 2)[0]["error"], msg::HOST_ONLY);
-        // Own slot, and at least two open.
+        // Own slot, and at least two open: an empty slot of two stays open.
         assert_eq!(msgs(&t.req(1, RoomRequest::Slot { slot: 1, open: false }), 1)[0]["error"], msg::OWN_SLOT);
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
+        let out = t.req(1, RoomRequest::Slot { slot: 3, open: false });
+        assert_eq!(last_state(&out, 1)["slots"][2]["open"], false);
+        // A 1v1 room: closing the occupied slot removes its player, and the slot stays open.
+        let out = t.req(1, RoomRequest::Slot { slot: 2, open: false });
+        assert_eq!(msgs(&out, 2).last().unwrap()["reason"], msg::REMOVED);
+        let s = last_state(&out, 1);
+        assert!(s["slots"][1]["player"].is_null());
+        assert_eq!(s["slots"][1]["open"], true);
         assert_eq!(msgs(&t.req(1, RoomRequest::Slot { slot: 2, open: false }), 1)[0]["error"], msg::MIN_OPEN_SLOTS);
+        join(&mut t, 2, &code);
         // Open 3 and 4: four slots, FFA.
         t.req(1, RoomRequest::Slot { slot: 3, open: true });
         let out = t.req(1, RoomRequest::Slot { slot: 4, open: true });
@@ -1755,8 +1765,6 @@ mod tests {
         let mut out = vec![];
         assert_eq!(t.book.apply_ruleset(&code, Ruleset::default(), None, &mut out), Err(msg::SET_ON));
         assert_eq!(msgs(&t.req(1, RoomRequest::Rules { rules: Default::default() }), 1)[0]["error"], msg::SET_ON);
-        // (A 1v1 room keeps its two slots open, so no kick there.)
-        assert_eq!(msgs(&t.req(1, RoomRequest::Slot { slot: 2, open: false }), 1)[0]["error"], msg::MIN_OPEN_SLOTS);
         // A player who left and whose held slot the host closes forfeits the set (the slot of a
         // 1v1 stays open).
         t.req(2, RoomRequest::Leave);

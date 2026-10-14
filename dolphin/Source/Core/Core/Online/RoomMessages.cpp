@@ -228,6 +228,75 @@ std::optional<std::string> NormalizeConnectCode(const std::string& ascii)
   return out;
 }
 
+namespace
+{
+// Days since 1970-01-01 of a civil date (Howard Hinnant's algorithm).
+s64 DaysFromCivil(s64 y, unsigned m, unsigned d)
+{
+  y -= m <= 2;
+  const s64 era = (y >= 0 ? y : y - 399) / 400;
+  const unsigned yoe = static_cast<unsigned>(y - era * 400);
+  const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
+  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+  return era * 146097 + static_cast<s64>(doe) - 719468;
+}
+}  // namespace
+
+std::optional<s64> ParseIsoUtc(const std::string& t)
+{
+  if (t.size() > 40)
+    return std::nullopt;
+  size_t i = 0;
+  // `n` digits at i, then the separator `sep` (0: none).
+  const auto field = [&](size_t n, char sep) -> std::optional<int> {
+    int v = 0;
+    for (size_t k = 0; k < n; ++k, ++i)
+    {
+      if (i >= t.size() || t[i] < '0' || t[i] > '9')
+        return std::nullopt;
+      v = v * 10 + (t[i] - '0');
+    }
+    if (sep != 0)
+    {
+      if (i >= t.size() || t[i] != sep)
+        return std::nullopt;
+      ++i;
+    }
+    return v;
+  };
+  const auto y = field(4, '-');
+  const auto mo = y ? field(2, '-') : std::nullopt;
+  const auto d = mo ? field(2, 'T') : std::nullopt;
+  const auto h = d ? field(2, ':') : std::nullopt;
+  const auto mi = h ? field(2, ':') : std::nullopt;
+  const auto sec = mi ? field(2, 0) : std::nullopt;
+  if (!sec || *y < 2000 || *mo < 1 || *mo > 12 || *d < 1 || *d > 31 || *h > 23 || *mi > 59 ||
+      *sec > 60)
+  {
+    return std::nullopt;
+  }
+  // Milliseconds: any number of fraction digits, the first three counted.
+  s64 ms = 0;
+  if (i < t.size() && t[i] == '.')
+  {
+    ++i;
+    int digits = 0;
+    for (; i < t.size() && t[i] >= '0' && t[i] <= '9'; ++i, ++digits)
+    {
+      if (digits < 3)
+        ms = ms * 10 + (t[i] - '0');
+    }
+    if (digits == 0)
+      return std::nullopt;
+    for (; digits < 3; ++digits)
+      ms *= 10;
+  }
+  if (i >= t.size() || t[i] != 'Z')
+    return std::nullopt;
+  const s64 days = DaysFromCivil(*y, static_cast<unsigned>(*mo), static_cast<unsigned>(*d));
+  return ((days * 24 + *h) * 60 + *mi) * 60000 + *sec * 1000 + ms;
+}
+
 std::string CleanText(const std::string& s, size_t max_bytes)
 {
   std::string out;

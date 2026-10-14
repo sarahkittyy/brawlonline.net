@@ -258,6 +258,131 @@ void SanitizePad(u8* pad)
   }
 }
 
+std::vector<std::vector<u8>> ControlDatagrams(std::string_view text, u32 id)
+{
+  std::vector<std::vector<u8>> out;
+  if (text.size() + 1 <= MAX_DATAGRAM)
+  {
+    std::vector<u8> pkt(text.size() + 1);
+    pkt[0] = 'C';
+    std::memcpy(pkt.data() + 1, text.data(), text.size());
+    out.push_back(std::move(pkt));
+    return out;
+  }
+  const size_t count = (text.size() + FRAGMENT_PIECE - 1) / FRAGMENT_PIECE;
+  if (count > MAX_FRAGMENTS)
+    return out;  // over MAX_CONTROL_SIZE: the others would refuse it anyway
+  for (size_t i = 0; i < count; ++i)
+  {
+    const std::string_view piece = text.substr(i * FRAGMENT_PIECE, FRAGMENT_PIECE);
+    std::vector<u8> pkt(FRAGMENT_HEADER + piece.size());
+    pkt[0] = 'F';
+    for (int b = 0; b < 4; ++b)
+      pkt[1 + b] = static_cast<u8>(id >> (8 * b));
+    pkt[5] = static_cast<u8>(i);
+    pkt[6] = static_cast<u8>(count);
+    std::memcpy(pkt.data() + FRAGMENT_HEADER, piece.data(), piece.size());
+    out.push_back(std::move(pkt));
+  }
+  return out;
+}
+
+bool AppendGekkoBundle(std::vector<u8>& bundle, const u8* msg, size_t size)
+{
+  if (!msg || size == 0 || size > 0xFFFF)
+    return false;
+  const size_t start = bundle.empty() ? 1 : 0;
+  if (bundle.size() + start + 2 + size > MAX_GEKKO_BUNDLE)
+    return false;
+  size_t count = 0;
+  for (size_t pos = 1; pos + 2 <= bundle.size(); ++count)
+    pos += 2 + (bundle[pos] | (bundle[pos + 1] << 8));
+  if (count >= MAX_BUNDLED_MESSAGES)
+    return false;
+  if (start)
+    bundle.push_back('B');
+  bundle.push_back(static_cast<u8>(size));
+  bundle.push_back(static_cast<u8>(size >> 8));
+  bundle.insert(bundle.end(), msg, msg + size);
+  return true;
+}
+
+std::optional<std::vector<std::vector<u8>>> SplitGekkoBundle(const u8* data, size_t size)
+{
+  if (!data || size < 1 || data[0] != 'B')
+    return std::nullopt;
+  std::vector<std::vector<u8>> out;
+  size_t pos = 1;
+  while (pos < size)
+  {
+    if (pos + 2 > size || out.size() >= MAX_BUNDLED_MESSAGES)
+      return std::nullopt;
+    const size_t len = data[pos] | (data[pos + 1] << 8);
+    pos += 2;
+    if (len == 0 || len > size - pos)
+      return std::nullopt;
+    out.emplace_back(data + pos, data + pos + len);
+    pos += len;
+  }
+  if (out.empty())
+    return std::nullopt;
+  return out;
+}
+
+std::optional<std::string> ControlReassembler::Add(u64 source, const u8* data, size_t size)
+{
+  if (!data || size <= FRAGMENT_HEADER || size > MAX_DATAGRAM || data[0] != 'F')
+    return std::nullopt;
+  u32 id = 0;
+  for (int b = 0; b < 4; ++b)
+    id |= static_cast<u32>(data[1 + b]) << (8 * b);
+  const u8 index = data[5], count = data[6];
+  if (count < 2 || count > MAX_FRAGMENTS || index >= count)
+    return std::nullopt;
+  // Every piece but the last is full, so the pieces cannot add up to more than count pieces.
+  const size_t piece_size = size - FRAGMENT_HEADER;
+  if (index + 1 < count ? piece_size != FRAGMENT_PIECE : piece_size > FRAGMENT_PIECE)
+    return std::nullopt;
+
+  auto it = std::find_if(m_partials.begin(), m_partials.end(),
+                         [&](const Partial& p) { return p.source == source; });
+  if (it == m_partials.end())
+  {
+    if (m_partials.size() >= MAX_REASSEMBLY_SOURCES)
+    {
+      it = std::min_element(m_partials.begin(), m_partials.end(),
+                            [](const Partial& a, const Partial& b) { return a.touched < b.touched; });
+      *it = Partial{};
+    }
+    else
+    {
+      it = m_partials.emplace(m_partials.end());
+    }
+    it->source = source;
+    it->id = id;
+    it->count = count;
+  }
+  else if (it->id != id || it->count != count)
+  {
+    *it = Partial{};
+    it->source = source;
+    it->id = id;
+    it->count = count;
+  }
+  it->touched = ++m_clock;
+  if (it->have & (1u << index))
+    return std::nullopt;  // a duplicate
+  it->have |= 1u << index;
+  it->pieces[index].assign(reinterpret_cast<const char*>(data) + FRAGMENT_HEADER, piece_size);
+  if (it->have != (1u << count) - 1)
+    return std::nullopt;
+  std::string text;
+  for (u8 i = 0; i < count; ++i)
+    text += it->pieces[i];
+  m_partials.erase(it);
+  return text;
+}
+
 std::string TruncateName(const std::string& name)
 {
   if (name.size() <= MAX_NAME_LEN)

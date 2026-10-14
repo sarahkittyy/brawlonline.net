@@ -44,6 +44,7 @@ MY_FLAG = (-26.0, -4.5)             # our own panel's team flag (room_css.cpp ha
 SLOT_POS = 16.0 / 0.99              # a panel's model offset per slot (room_css.cpp SLOT_POS)
 PANEL_X = [-22.0, -7.0, 8.0, 23.0]  # the four panels' centres, y about -10
 GMKIND_MARIO, GMKIND_FOX = 0x00, 0x07
+AREA_COSTUME = 0x1BC                # the local area's costume (muSelCharPlayerArea m_charColorNo)
 
 
 class Game:
@@ -236,6 +237,26 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     g.tap("Y")
     g.wait(30)
     assert sim.room.members[0].team == team0
+    # A on our own panel: the next costume, the team stays (any costume on any team, the user's,
+    # 2026-10-12; Brawl's team battle CSS cycles the team there). Our lock-in carries it, and
+    # while locked in A there changes nothing (as X / Y).
+    costume0 = g.u32(g.area(0) + AREA_COSTUME)
+    g.hand_to(PANEL_X[0], -10.0)
+    g.tap("A")
+    g.wait(30)
+    costume = g.u32(g.area(0) + AREA_COSTUME)
+    assert costume != costume0 and sim.room.members[0].team == team0, (costume0, costume, sim.room.members[0])
+    g.shot("08c-costume-on-a-team")
+    g.tap("START")
+    g.wait(30)
+    lock = ppom.read_local(c, sim.b)["lock"]
+    assert lock["ready"] == 1 and lock["costume"] == costume, (lock, costume)
+    g.tap("A")
+    g.wait(30)
+    assert g.u32(g.area(0) + AREA_COSTUME) == costume and sim.room.members[0].team == team0
+    g.tap("B")
+    g.wait(20)
+    assert ppom.read_local(c, sim.b)["lock"]["ready"] == 0
     # The PUBLIC button (the bar's ITEM button; A on it, as L): private.
     g.hand_to(*PUBLIC_BUTTON, tol=0.5)
     g.tap("A")
@@ -255,11 +276,11 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     g.wait(40)
     g.shot("10-alice-left")
 
-    # Hold Z: leave the room, idle on the CSS; START: the keypad in room-code mode.
+    # Hold Z leaves nothing (P+'s AltZ pick); hold B and Join Room: START, the keypad in room-code mode.
     g.hold("Z", 60)
     g.wait(20)
-    assert sim.room_ops("leave"), "no ROOM_LEAVE"
-    assert sim.room is None
+    assert not sim.room_ops("leave") and sim.room is not None, "hold Z left the room"
+    to_join_room(g)
     assert g.banner_shown(), "no READY TO FIGHT out of a room (START enters a code)"
     g.shot("11-left-the-room")
     # A room with two players: we join in its third slot (P3), and our panel is the third.
@@ -291,8 +312,7 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     g.shot("14-joined-bob-host")
 
     # A wrong code: "Room not found." in red.
-    g.hold("Z", 60)
-    g.wait(20)
+    to_join_room(g)
     g.tap("START")
     g.wait(40)
     keypad_type(g, "BBBB")
@@ -301,13 +321,12 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     assert sim.error and sim.text == "Room not found."
     g.shot("15-room-not-found")
 
-    # Hold B: back to WITH FRIENDS with the room's button (Create Room, cursor 0) highlighted.
+    # Hold B: back to WITH FRIENDS with the room's button (Join Room, cursor 2) highlighted.
     g.hold("B", 120)
     sim.service(600, until=lambda: g.scene() == "muMenuMain")
     g.wait(90)
     g.shot("16-back-on-with-friends")
-    page = g.u32(ppom_sym(g, "g_friendsPage"))
-    assert struct.unpack(">H", c.read_mem(page + 0x42, 2))[0] == 0
+    assert friends_cursor(g) == 2
     assert sim.screen() == ppom.SCREENS["menus"]
 
 
@@ -357,6 +376,156 @@ def create_room(g: Game) -> None:
     sim.service(400, until=lambda: g.scene() == "scSelctCharacter" and sim.room is not None)
     g.wait(60)
 
+
+def friends_cursor(g: Game) -> int:
+    """WITH FRIENDS' highlighted button: 0 Create Room, 1 Direct 1v1, 2 Join Room."""
+    return struct.unpack(">H", g.c.read_mem(g.u32(ppom_sym(g, "g_friendsPage")) + 0x42, 2))[0]
+
+
+def friends_to(g: Game, button: int) -> None:
+    """WITH FRIENDS' cursor to `button` (Create Room top left, Direct 1v1 right, Join Room below)."""
+    for d in ("DDOWN", "DRIGHT", "DDOWN", "DRIGHT") if button == 2 else ("DUP", "DLEFT", "DUP", "DLEFT"):
+        if friends_cursor(g) == button:
+            break
+        g.tap(d, 4)
+        g.wait(15)
+    assert friends_cursor(g) == button, friends_cursor(g)
+
+
+def to_join_room(g: Game, pick: tuple[float, float] = FOX) -> None:
+    """Out of the room and onto Join Room's CSS with a character picked, where START enters a room
+    code. A room has no hold Z to leave (P+ picks AltZ characters with Z held; the user's,
+    2026-10-12), so: hold B (ROOM_LEAVE, WITH FRIENDS), then Join Room."""
+    g.hold("B", 120)
+    g.sim.service(600, until=lambda: g.scene() == "muMenuMain")
+    g.wait(90)
+    assert g.sim.room is None and g.sim.room_ops("leave"), "hold B did not leave the room"
+    friends_to(g, 2)
+    g.tap("A")
+    g.sim.service(600, until=lambda: g.scene() == "scSelctCharacter")
+    g.wait(60)
+    g.hand_to(*pick, tol=0.6)
+    g.tap("A")
+    g.wait(20)
+
+
+def test_host_holds_a_on_a_player_to_remove_them(game: Game) -> None:
+    """The host removes a player by holding A on their panel (rooms.md #10). Player feedback
+    2026-10-12: nothing happened, with three slots open and one other player (the held field has
+    A a frame after the press, and the hold was let go on its first frame); a 1v1 room's player
+    can be removed too (its slot stays open). A tap removes nobody."""
+    g = game
+    g.c.game_bridge_config(enabled=False)
+    create_room(g)
+    sim = g.sim
+    kicks = lambda: [tuple(o[1:3]) for o in sim.room_ops("slot")]  # noqa: E731
+    sim.add_player(1, "alice")
+    sim.room.open[2] = True
+    g.wait(40)
+    g.hand_to(PANEL_X[1], -10.0)
+    g.wait(5)
+    # A tap on alice: nothing sent, she stays.
+    g.tap("A")
+    g.wait(70)
+    assert kicks() == [] and sim.room.members[1] is not None
+    # Held: removed, her slot closed (three were open).
+    g.hold("A", 70)
+    g.wait(20)
+    g.shot("30-alice-removed")
+    assert kicks() == [(1, 0)], (kicks(), g.hand())
+    assert sim.room.members[1] is None and sim.room.open == [True, False, True, False]
+    # A 1v1 room (slots 1-2 open): removed, the slot stays open.
+    sim.room.open = [True, True, False, False]
+    sim.add_player(1, "bob")
+    g.wait(40)
+    g.hold("A", 70)
+    g.wait(20)
+    g.shot("31-bob-removed-1v1")
+    assert kicks() == [(1, 0), (1, 0)], kicks()
+    assert sim.room.members[1] is None and sim.room.open == [True, True, False, False] and not sim.error
+
+
+def sys_stick(g: Game) -> tuple[int, int]:
+    """Port 1's main stick as the pad system has it (gfPadStatus +0x30/+0x31, signed)."""
+    ps = g.u32(0x805A0040)
+    x, y = struct.unpack(">bb", g.c.read_mem(ps + 0x244 + 0x30, 2))
+    return x, y
+
+
+def test_hold_z_to_pick_an_alt_stays_in_the_room(game: Game) -> None:
+    """P+'s "Hold Z for AltZ Characters" picks a character with Z held. The user's, 2026-10-12:
+    holding Z and picking a character in a room left the room ("Press START to enter code", as
+    Direct's CSS). A room no longer has a hold Z to leave: Z held the whole way to Fox and while A
+    picks him leaves nothing, and neither does Z alone."""
+    g = game
+    g.c.game_bridge_config(enabled=False)
+    create_room(g)
+    sim = g.sim
+    sim.add_player(1, "alice")
+    g.wait(40)
+    g.hand_to(PANEL_X[3], 10.0)   # away from Fox, so the way there is long
+    g.wait(10)
+    # Z down, then the hand to Fox with Z held (closed loop, as hand_to): over the hold's 48 frames.
+    frames = 0
+    sticks = []
+    for _ in range(80):
+        hx, hy = g.hand()
+        dx, dy = FOX[0] - hx, FOX[1] - hy
+        if abs(dx) <= 1.2 and abs(dy) <= 1.2:
+            break
+        def axis(d: float) -> int:   # slow, a little past the dead zone
+            return 128 if abs(d) <= 1.2 else 128 + (40 if d > 0 else -40)
+        g.c.pad_set(0, buttons=["Z"], main=(axis(dx), axis(dy)))
+        g.wait(3)
+        sticks.append(sys_stick(g))
+        frames += 3
+    assert frames > 48, f"the way to Fox took only {frames} frames"
+    print("sys stick on the way:", sorted(set(sticks)))
+    # A short stop with Z alone (under the hold), then A on Fox with Z held, and Z held on.
+    g.c.pad_set(0, buttons=["Z"])
+    g.wait(20)
+    g.c.pad_set(0, buttons=["Z", "A"])
+    g.wait(4)
+    g.c.pad_set(0, buttons=["Z"])
+    g.wait(90)
+    g.c.pad_set(0)
+    g.wait(20)
+    g.shot("32-alt-picked-in-the-room")
+    assert not sim.room_ops("leave"), f"Z held for the alt left the room (sticks {sorted(set(sticks))[:6]})"
+    assert sim.room is not None and sim.me() == 0
+    # Z alone, still: nothing either (a room has no hold Z; hold B leaves).
+    g.hold("Z", 90)
+    g.wait(20)
+    assert not sim.room_ops("leave") and sim.room is not None, "hold Z alone left the room"
+
+
+def test_the_pickers_start_line_is_one_line(game: Game) -> None:
+    """The stage picker's "Press START to select stage" (a little wider than the room's status
+    line at scale 1) is one smaller line, not two (staging feedback 2026-10-12)."""
+    g = game
+    c = g.c
+    c.game_bridge_config(enabled=False)
+    g.steps("until muMenuMain 3000", "wait 60")
+    g.sim = sim = roomsim.RoomSim(c)
+    g.wait(60)
+    g.tap("A")
+    g.wait(60)
+    g.tap("DLEFT", 4)
+    g.wait(20)
+    g.tap("A")
+    sim.service(400, until=lambda: g.scene() == "scSelctCharacter" and sim.room is not None)
+    g.wait(60)
+    sim.add_player(1, "alice")
+    g.wait(40)
+    g.hand_to(*FOX)
+    g.tap("A")
+    g.wait(20)
+    # We lost the last game: we pick the next stage (SESSION players[0].picksStage; the sim
+    # leaves the byte as it is).
+    c.write_mem(sim.b.session + 0x0C + ppom.SP_PICKS_STAGE, b"")
+    g.wait(30)
+    assert g.scratch(14) >> 24 == 3, hex(g.scratch(14))   # LAYOUT_ONE_SMALL
+    g.shot("40-select-stage-one-line")
 
 @pytest.fixture
 def rules_game(dolphin_exe):
@@ -444,10 +613,9 @@ def test_rules_button(rules_game: Game) -> None:
     sim.room.host = 0
     g.wait(20)
 
-    # Out of the room (hold Z): no RULES; the hand where it was finds nothing.
-    g.hold("Z", 60)
-    g.wait(30)
-    assert sim.room is None
+    # Out of the room (Join Room's CSS): no RULES; the hand where it was finds nothing.
+    to_join_room(g)
+    made0 = rb.read()["made"]
     g.hand_to(*rb.centre(), tol=0.4)
     g.wait(10)
     assert hand_button(g) != BUTTON_RULES
@@ -457,11 +625,12 @@ def test_rules_button(rules_game: Game) -> None:
     g.hold("B", 120)
     sim.service(600, until=lambda: g.scene() == "muMenuMain")
     g.wait(60)
+    friends_to(g, 0)
     g.tap("A")
     sim.service(400, until=lambda: g.scene() == "scSelctCharacter" and sim.room is not None)
     g.wait(60)
     st = rb.read()
-    assert st["made"] == 2 and abs(st["rect"][0] - l) < 0.05, st
+    assert st["made"] == made0 + 1 and abs(st["rect"][0] - l) < 0.05, st
     g.hand_to(*rb.centre(), tol=0.4)
     g.wait(10)
     assert hand_button(g) == BUTTON_RULES
@@ -823,11 +992,7 @@ def test_viewer_opens_rules_panels_stay(play_game: Game) -> None:
     g.c.game_bridge_config(enabled=False)
     create_room(g)
     sim = g.sim
-    g.hand_to(*FOX)                                 # a character: START then enters a code
-    g.tap("A")
-    g.wait(20)
-    g.hold("Z", 60)
-    g.wait(20)
+    to_join_room(g)                                 # a character: START then enters a code
     sim.joinable["KFQB"] = roomsim.Room(code="KFQB", host=1, open=[True, True, True, False],
                                         members=[roomsim.Member("carol", team=0),
                                                  roomsim.Member("bob", team=1), None, None])
@@ -1049,11 +1214,7 @@ def test_token_picked_up_and_placed_again(token_game: Game) -> None:
     g.wait(20)
     token_rounds(g, "host")
     # Leave, join a room in slot 3.
-    g.hand_to(*TOKEN_CHARS[0][1], tol=0.6)
-    g.tap("A")
-    g.wait(20)
-    g.hold("Z", 60)
-    g.wait(20)
+    to_join_room(g, TOKEN_CHARS[0][1])
     sim.joinable["KFQB"] = roomsim.Room(code="KFQB", host=1, open=[True, True, True, False],
                                         members=[roomsim.Member("carol", team=0),
                                                  roomsim.Member("bob", team=1), None, None])

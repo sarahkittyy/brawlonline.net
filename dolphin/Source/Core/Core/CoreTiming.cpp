@@ -24,6 +24,7 @@
 #include "Core/Core.h"
 #include "Core/HW/SystemTimers.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/FrameProfile.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/System.h"
 #include "Core/Rollback/MachineSession.h"
@@ -76,6 +77,8 @@ EventType* CoreTimingManager::RegisterEvent(const std::string& name, TimedCallba
   auto info = m_event_types.emplace(name, EventType{std::move(callback), nullptr});
   EventType* event_type = &info.first->second;
   event_type->name = &info.first->first;
+  event_type->profile_category =
+      static_cast<u8>(Rollback::FrameProfile::CategoryOf(event_type->name->c_str()));
   return event_type;
 }
 
@@ -373,6 +376,7 @@ void CoreTimingManager::Advance()
 
   m_is_global_timer_sane = true;
 
+  const bool profile = Rollback::FrameProfile::TimeEvents();
   while (!m_event_queue.empty() && m_event_queue.front().time <= m_globals.global_timer)
   {
     Event evt = m_event_queue.front();
@@ -392,7 +396,21 @@ void CoreTimingManager::Advance()
     m_current_event = evt.type->name;
     if (Machine::g_io_log) [[unlikely]]
       Machine::IoLogEvent(*evt.type->name, m_globals.global_timer, m_globals.global_timer - evt.time);
-    evt.type->callback(m_system, evt.userdata, m_globals.global_timer - evt.time);
+    if (profile)
+    {
+      const u64 nested0 = Rollback::FrameProfile::NestedNs();
+      const auto t0 = Clock::now();
+      evt.type->callback(m_system, evt.userdata, m_globals.global_timer - evt.time);
+      const u64 ns = Rollback::FrameProfile::NsSince(t0);
+      const u64 nested = Rollback::FrameProfile::NestedNs() - nested0;
+      Rollback::FrameProfile::AddEvent(
+          static_cast<Rollback::FrameProfile::EventCat>(evt.type->profile_category),
+          ns > nested ? ns - nested : 0);
+    }
+    else
+    {
+      evt.type->callback(m_system, evt.userdata, m_globals.global_timer - evt.time);
+    }
     m_current_event = nullptr;
   }
 
@@ -604,7 +622,10 @@ void CoreTimingManager::Throttle(const s64 target_cycle)
 
   if (target_time > time)
     m_throttle_sleep += target_time - time;
-  SleepUntil(target_time);
+  {
+    Rollback::FrameProfile::Scope sleep_scope{Rollback::FrameProfile::AddThrottle};
+    SleepUntil(target_time);
+  }
   if (Rollback::PresentStats::PresentTraceEnabled())
     Rollback::PresentStats::TraceThrottle(target_time, Clock::now());
 }
