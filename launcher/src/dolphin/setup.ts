@@ -32,7 +32,7 @@ import {
 } from "./ipc";
 import type { DolphinManager } from "./manager";
 import { deletePlayKeyFile, writePlayKeyFile } from "./playkey";
-import { clearRoomRequest, handOffRoom, isHandOffCode, writeRoomRequest } from "./room_handoff";
+import { clearRoomRequest, handOffRoom, isHandOffCode, readGameStatus, writeRoomRequest } from "./room_handoff";
 import { installRosettaElevated } from "./rosetta/install_rosetta";
 import { DolphinLaunchType } from "./types";
 import { fetchGeckoCodes, saveGeckoCodes } from "./util";
@@ -148,6 +148,10 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     }
     const onlineDir = dolphinManager.netplayOnlineDir();
     await mkdir(onlineDir, { recursive: true });
+    // A Dolphin open without a game (no game writes the status) closes, and the room starts one.
+    if ((await readGameStatus(onlineDir)).kind !== "fresh" && (await dolphinManager.closeNetplayIfIdle())) {
+      return { outcome: "not-running" };
+    }
     const result = await handOffRoom(onlineDir, code, { ruleset });
     log.info(`Room ${code}${ruleset ? ` (ruleset ${ruleset})` : ""} handed to the running game: ${result.outcome}`);
     return result;

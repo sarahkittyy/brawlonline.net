@@ -211,7 +211,7 @@ describe("ModsView", () => {
     expect(getByText(Messages.gameNeedsWiiRemote())).toBeTruthy();
   });
 
-  it("leaves the player's own room out of the public rooms", () => {
+  it("lists the player's own room among the public rooms, marked and not joinable", () => {
     const p = props(
       { builds: [minus], running: true, status: room(1) },
       {
@@ -223,15 +223,39 @@ describe("ModsView", () => {
         },
       },
     );
-    const { getByText, queryByText } = render(<ModsView {...p} />);
-    expect(queryByText(Messages.roomHost("Ann"))).toBeNull();
-    expect(getByText(Messages.publicRoomsNone())).toBeTruthy();
+    const { getByText } = render(<ModsView {...p} />);
+    const row = getByText(Messages.roomHost("Ann")).closest("button") as HTMLButtonElement;
+    expect(row.textContent).toContain(Messages.yourRoomLabel());
+    expect(row.getAttribute("aria-disabled")).toBe("true");
+    fireEvent.click(row);
+    expect(p.onJoin).not.toHaveBeenCalled();
   });
 
   it("keeps saying why a join failed after Dolphin closed", () => {
     const p = props({ builds: [minus], running: false, status: null, lastError: "Room not found." });
     const { getByText } = render(<ModsView {...p} />);
     expect(getByText("Room not found.")).toBeTruthy();
+  });
+
+  it("lets the host drag a player to another slot", () => {
+    const p = props({ builds: [minus], running: true, status: room(1) });
+    const { container } = render(<ModsView {...p} />);
+    const row = (n: number) => container.querySelector(`[data-slot="${n}"]`) as HTMLElement;
+    const data = { setData: vi.fn(), effectAllowed: "", dropEffect: "" };
+    fireEvent.dragStart(row(2), { dataTransfer: data });
+    fireEvent.dragOver(row(3), { dataTransfer: data });
+    fireEvent.drop(row(3), { dataTransfer: data });
+    expect(p.onRequest).toHaveBeenCalledWith({ op: "move", from: 2, to: 3 });
+    // A closed, empty slot takes nobody.
+    fireEvent.dragStart(row(2), { dataTransfer: data });
+    fireEvent.drop(row(4), { dataTransfer: data });
+    expect(p.onRequest).toHaveBeenCalledTimes(1);
+  });
+
+  it("gives a member no dragging", () => {
+    const p = props({ builds: [minus], running: true, status: room(2) });
+    const { container } = render(<ModsView {...p} />);
+    expect((container.querySelector('[data-slot="1"]') as HTMLElement).getAttribute("draggable")).toBe("false");
   });
 
   it("asks to log in for the public rooms", () => {

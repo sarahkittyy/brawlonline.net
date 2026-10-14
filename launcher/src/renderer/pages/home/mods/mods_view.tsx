@@ -13,6 +13,7 @@ import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import CreateNewFolderOutlinedIcon from "@mui/icons-material/CreateNewFolderOutlined";
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
+import DragIndicatorRoundedIcon from "@mui/icons-material/DragIndicatorRounded";
 import PersonOutlineIcon from "@mui/icons-material/PersonOutline";
 import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
@@ -23,6 +24,8 @@ import Tooltip from "@mui/material/Tooltip";
 import { clsx } from "clsx";
 import type { ReactNode } from "react";
 import { useState } from "react";
+
+import { ExternalLink } from "@/components/external_link";
 
 import { ContentBlock } from "../overview/content_block/content_block";
 import { ControllerMenu } from "./controller_menu";
@@ -60,6 +63,9 @@ export type ModsViewProps = {
 
 const fileName = (p: string | null) => (p ? p.split(/[\\/]/).pop() ?? p : null);
 
+/** Where Wii Rollback's beta feedback goes. */
+const FEEDBACK_URL = "https://brawlonline.net/discord";
+
 /** Home > Other Games (docs/design/brawl-mods.md §8): the player's games and mods, and the room Dolphin runs. */
 export const ModsView = (props: ModsViewProps) => {
   const { state, error } = props;
@@ -68,7 +74,15 @@ export const ModsView = (props: ModsViewProps) => {
   const roomBuild = status?.room ? state?.builds.find((b) => b.hash === status.room!.build.hash) : undefined;
   return (
     <div className={styles.page}>
-      <p className={styles.intro}>{Messages.intro()}</p>
+      <div className={styles.introRow}>
+        <p className={styles.intro}>{Messages.intro()}</p>
+        <p className={styles.beta}>
+          {Messages.betaLine1()}
+          <br />
+          {Messages.betaLine2Before()}
+          <ExternalLink href={FEEDBACK_URL}>{Messages.discord()}</ExternalLink>
+        </p>
+      </div>
       {state && (
         <ControllerMenu
           controller={state.controller}
@@ -152,7 +166,7 @@ const PublicRoomsBlock = ({
   onLogIn,
 }: {
   rooms: ModsPublicRooms;
-  /** The room this player is in: not listed. */
+  /** The room this player is in: listed, marked as theirs. */
   ownCode: string | null;
   builds: ModBuild[];
   disabled: boolean;
@@ -160,7 +174,7 @@ const PublicRoomsBlock = ({
   onLogIn: () => void;
 }) => {
   let content: ReactNode;
-  const listed = rooms.kind === "ready" ? rooms.rooms.filter((r) => r.code !== ownCode) : [];
+  const listed = rooms.kind === "ready" ? rooms.rooms : [];
   if (rooms.kind === "logged-out") {
     content = (
       <div className={styles.centered}>
@@ -183,12 +197,15 @@ const PublicRoomsBlock = ({
         {listed.map((room) => {
           const build = builds.find((b) => b.hash === room.build.hash);
           const label = Messages.buildName(room.build.name, room.build.hash.slice(0, 8));
-          const off = !build || disabled;
+          const own = room.code === ownCode;
+          const off = !build || disabled || own;
           return (
             <li key={room.code}>
               <Tooltip
                 title={
-                  build
+                  own
+                    ? Messages.yourRoomTooltip()
+                    : build
                     ? Messages.joinPublicTooltip(build.name)
                     : Messages.needBuild(room.build.name, room.build.hash.slice(0, 8))
                 }
@@ -202,7 +219,7 @@ const PublicRoomsBlock = ({
                   aria-disabled={off}
                   data-room={room.code}
                   onClick={() => {
-                    if (build && !disabled) {
+                    if (build && !off) {
                       onJoin(build, room.code);
                     }
                   }}
@@ -216,7 +233,9 @@ const PublicRoomsBlock = ({
                     {Messages.roomPlayers(room.players, room.open)}
                   </span>
                   <span className={styles.roomAction}>
-                    {build ? (
+                    {own ? (
+                      Messages.yourRoomLabel()
+                    ) : build ? (
                       <>
                         {Messages.join()}
                         <ChevronRightIcon style={{ fontSize: 18 }} />
@@ -346,6 +365,7 @@ const RoomPanel = ({
   onRequest: (request: ModRoomRequest) => void;
   onCopyCode: (code: string) => void;
 }) => {
+  const [dragFrom, setDragFrom] = useState<number | null>(null);
   const room = status?.room ?? null;
   const isHost = !!room && room.host === room.you;
   const sessionError = status?.session?.phase === "error" ? status.session.error : undefined;
@@ -392,6 +412,9 @@ const RoomPanel = ({
         <div className={styles.room}>
           {status?.error && <div className={styles.error}>{status.error}</div>}
           {sessionError && <div className={styles.error}>{Messages.sessionError(sessionError)}</div>}
+          {status?.lastRequest?.result === "failed" && status.lastRequest.error && (
+            <div className={styles.error}>{status.lastRequest.error}</div>
+          )}
           {status?.state === "left" && <p className={styles.empty}>{Messages.left()}</p>}
           {!room && !status?.error && <LinearProgress />}
           {room && (
@@ -403,6 +426,8 @@ const RoomPanel = ({
                     key={slot.slot}
                     slot={slot}
                     isHost={isHost}
+                    dragging={dragFrom}
+                    onDragFrom={setDragFrom}
                     isYou={slot.slot === room.you}
                     isRoomHost={slot.slot === room.host}
                     rttMs={status?.session?.peers?.find((p) => p.slot === slot.slot)?.rttMs}
@@ -424,6 +449,8 @@ const SlotRow = ({
   isYou,
   isRoomHost,
   rttMs,
+  dragging,
+  onDragFrom,
   onRequest,
 }: {
   slot: ModRoomSlot;
@@ -431,11 +458,56 @@ const SlotRow = ({
   isYou: boolean;
   isRoomHost: boolean;
   rttMs: number | undefined;
+  /** The slot whose player the host is dragging, if any. */
+  dragging: number | null;
+  onDragFrom: (slot: number | null) => void;
   onRequest: (request: ModRoomRequest) => void;
 }) => {
   const p = slot.player;
+  // The host drags a player to another slot (an open one, or another player's: they swap).
+  const draggable = isHost && !!p;
+  const target = isHost && dragging !== null && dragging !== slot.slot && (slot.open || !!p);
+  const [over, setOver] = useState(false);
   return (
-    <div className={clsx(styles.slot, !slot.open && styles.closed)}>
+    <div
+      className={clsx(
+        styles.slot,
+        !slot.open && styles.closed,
+        draggable && styles.draggable,
+        target && over && styles.dropTarget,
+      )}
+      draggable={draggable}
+      data-slot={slot.slot}
+      onDragStart={(e) => {
+        e.dataTransfer.setData("text/plain", String(slot.slot));
+        e.dataTransfer.effectAllowed = "move";
+        onDragFrom(slot.slot);
+      }}
+      onDragEnd={() => onDragFrom(null)}
+      onDragOver={(e) => {
+        if (target) {
+          e.preventDefault();
+          e.dataTransfer.dropEffect = "move";
+          setOver(true);
+        }
+      }}
+      onDragLeave={() => setOver(false)}
+      onDrop={(e) => {
+        e.preventDefault();
+        setOver(false);
+        if (target && dragging !== null) {
+          onRequest({ op: "move", from: dragging, to: slot.slot });
+        }
+        onDragFrom(null);
+      }}
+    >
+      {draggable ? (
+        <Tooltip title={Messages.dragTooltip()} placement="left" enterDelay={600} disableInteractive={true}>
+          <DragIndicatorRoundedIcon className={styles.dragHandle} fontSize="small" />
+        </Tooltip>
+      ) : (
+        isHost && <span className={styles.dragSpacer} />
+      )}
       <span className={styles.slotLabel}>{Messages.slot(slot.slot)}</span>
       {p ? (
         <span className={styles.player}>
@@ -456,12 +528,21 @@ const SlotRow = ({
         <span className={styles.slotActions}>
           {p ? (
             <Tooltip title={Messages.kickTooltip()}>
-              <Button size="small" color="secondary" onClick={() => onRequest({ op: "kick", slot: slot.slot })}>
+              <Button
+                size="small"
+                color="secondary"
+                sx={{ py: 0 }}
+                onClick={() => onRequest({ op: "kick", slot: slot.slot })}
+              >
                 {Messages.kick()}
               </Button>
             </Tooltip>
           ) : (
-            <Button size="small" onClick={() => onRequest({ op: "slot", slot: slot.slot, open: !slot.open })}>
+            <Button
+              size="small"
+              sx={{ py: 0 }}
+              onClick={() => onRequest({ op: "slot", slot: slot.slot, open: !slot.open })}
+            >
               {slot.open ? Messages.closeSlot() : Messages.openSlotAction()}
             </Button>
           )}

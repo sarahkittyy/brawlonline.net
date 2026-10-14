@@ -139,6 +139,8 @@ export type ModRoomRequest =
   | { op: "kick"; slot: number }
   | { op: "slot"; slot: number; open: boolean }
   | { op: "public"; public: boolean }
+  /** The host: two slots (1-4) swap players, mid-game too (the session swaps them at an epoch). */
+  | { op: "move"; from: number; to: number }
   /** This player's own controller, mid-game too. */
   | { op: "controller"; controller: ModsController }
   /** Opens Dolphin's Controllers settings over the game. */

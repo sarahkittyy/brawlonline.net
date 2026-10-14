@@ -6,7 +6,7 @@ import type { MessageBoxOptions } from "electron";
 import { app, BrowserWindow, dialog } from "electron";
 import electronLog from "electron-log";
 import { existsSync } from "fs";
-import { readdir } from "fs/promises";
+import { mkdir, readdir, unlink, writeFile } from "fs/promises";
 import { Observable, Subject } from "observable-fns";
 import path from "path";
 import { fileExists } from "utils/file_exists";
@@ -95,6 +95,30 @@ export class DolphinManager {
   /** True while the netplay Dolphin the launcher started (Play, or Configure) is running. */
   isNetplayRunning(): boolean {
     return this.netplayDolphinInstance != null;
+  }
+
+  /**
+   * Closes the open netplay Dolphin if it has no game (its main window only, after the game window
+   * closed, or Configure), so Play, a room or Other Games can start one without the player closing
+   * it first: `quit-if-idle.json` in its online folder, which a Dolphin without a game answers by
+   * closing (MainWindow) and one in a game ignores. True when no netplay Dolphin is open (any more).
+   */
+  async closeNetplayIfIdle(timeoutMs = 4000): Promise<boolean> {
+    if (!this.netplayDolphinInstance) {
+      return true;
+    }
+    const dir = this.netplayOnlineDir();
+    const file = path.join(dir, "quit-if-idle.json");
+    await mkdir(dir, { recursive: true });
+    await writeFile(file, JSON.stringify({ version: 1, createdAt: new Date().toISOString() }), "utf8");
+    const deadline = Date.now() + timeoutMs;
+    while (this.netplayDolphinInstance && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    await unlink(file).catch(() => undefined);
+    const closed = !this.netplayDolphinInstance;
+    log.info(closed ? "The open Dolphin had no game and closed" : "The open Dolphin is in a game");
+    return closed;
   }
 
   /** The netplay User folder (its `Config` has the controller settings). */
@@ -296,7 +320,10 @@ export class DolphinManager {
    * booted game reads, and closing a Dolphin that never booted takes it back.
    */
   async launchNetplayDolphin(opts: { bootGame?: boolean } = {}) {
-    Preconditions.checkState(this.netplayDolphinInstance == null, "Netplay dolphin is already open!");
+    // An open Dolphin without a game closes first (closeNetplayIfIdle).
+    if (this.netplayDolphinInstance && !(await this.closeNetplayIfIdle())) {
+      throw new Error("Dolphin is already open with a game. Close it first.");
+    }
     this._assertNotMoving();
     await this.launchGate();
 
