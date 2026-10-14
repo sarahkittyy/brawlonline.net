@@ -7,6 +7,7 @@
 
 #include <fmt/chrono.h>
 
+#include "Common/ChunkFile.h"
 #include "Common/CommonTypes.h"
 #include "Core/HW/EXI/EXI_DeviceIPL.h"
 #include "Core/HW/Memmap.h"
@@ -20,6 +21,16 @@ NetKDTimeDevice::NetKDTimeDevice(EmulationKernel& ios, const std::string& device
 }
 
 NetKDTimeDevice::~NetKDTimeDevice() = default;
+
+// The game sets these (NWC24's scheduler resume sets the RTC counter around every NAND access of
+// WiiConnect24's library, Brawl's save included) and reads them back: a state, a machine image or
+// a rollback must carry them like the rest of the machine.
+void NetKDTimeDevice::DoState(PointerWrap& p)
+{
+  Device::DoState(p);
+  p.Do(rtc);
+  p.Do(utcdiff);
+}
 
 std::optional<IPCReply> NetKDTimeDevice::IOCtl(const IOCtlRequest& request)
 {

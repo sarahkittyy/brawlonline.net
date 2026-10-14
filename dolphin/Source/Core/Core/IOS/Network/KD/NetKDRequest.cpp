@@ -10,6 +10,7 @@
 #include <utility>
 
 #include "Common/BitUtils.h"
+#include "Common/ChunkFile.h"
 #include "Common/CommonPaths.h"
 #include "Common/CommonTypes.h"
 #include "Common/Crypto/HMAC.h"
@@ -191,6 +192,18 @@ NetKDRequestDevice::~NetKDRequestDevice()
   m_scheduler_timer_thread.join();
   m_scheduler_work_queue.Shutdown();
   m_work_queue.Shutdown();
+}
+
+// What the game reads back (GET_SCHEDULER_STAT, the time triggers) goes with the machine: a
+// machine image or a rollback must leave it as the game last saw it.
+void NetKDRequestDevice::DoState(PointerWrap& p)
+{
+  Device::DoState(p);
+  std::lock_guard lg(m_scheduler_buffer_lock);
+  p.DoArray(m_scheduler_buffer);
+  p.Do(m_error_count);
+  p.Do(m_mail_span);
+  p.Do(m_download_span);
 }
 
 void NetKDRequestDevice::Update()

@@ -17,6 +17,7 @@ public:
   ~NetKDTimeDevice() override;
 
   std::optional<IPCReply> IOCtl(const IOCtlRequest& request) override;
+  void DoState(PointerWrap& p) override;
 
   // Returns seconds since Wii epoch
   // +/- any bias set from IOCTL_NW24_SET_UNIVERSAL_TIME

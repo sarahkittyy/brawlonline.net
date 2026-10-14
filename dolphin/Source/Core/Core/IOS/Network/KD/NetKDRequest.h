@@ -36,6 +36,7 @@ public:
 
   std::optional<IPCReply> IOCtl(const IOCtlRequest& request) override;
   void Update() override;
+  void DoState(PointerWrap& p) override;
 
 private:
   struct AsyncTask
