@@ -6,15 +6,18 @@
 #include <atomic>
 #include <chrono>
 #include <cstdio>
+#include <cstdlib>
 #include <ctime>
 #include <deque>
 #include <mutex>
 #include <random>
+#include <set>
 #include <thread>
 #include <utility>
 
 #include <enet/enet.h>
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
@@ -50,6 +53,7 @@ constexpr auto BACKOFF_MAX = 30s;
 constexpr auto STABLE_ONLINE = 60s;      // online this long: the backoff starts over
 constexpr auto PENDING_TIMEOUT = 20s;    // a create/join waiting for the connection or answer
 constexpr auto ERROR_SHOWN = 5s;         // an error's time on the line while in a room
+constexpr auto CONNECT_ERROR_SHOWN = 15s;  // ... one that names who could not connect
 constexpr auto AWAY_LEAVE = 5s;          // the game away from the room CSS: leave the room
 // ... on the online stage select or a loading screen, where a room's set game leaves the game
 // when its session ends (the game goes back to the room CSS from there).
@@ -178,6 +182,9 @@ struct State
   RoomGame rg;
   u64 games_started = 0, games_done = 0, games_failed = 0;
   std::string last_game_end;
+  std::string last_match_id;  // the last room game's, once it ended
+  // The pairs of players (match id and slots) named already: each is shown once.
+  std::set<std::string> unreachable_shown;
 
   // The game.
   u8 screen = 0;
@@ -249,12 +256,12 @@ void RestartAway()
     s.away_since.reset();
 }
 
-void SetError(std::string text)
+void SetError(std::string text, std::chrono::seconds shown = ERROR_SHOWN)
 {
   // under s_mutex
   s.error = std::move(text);
   s.error_timed = s.phase == Phase::In;
-  s.error_until = Clock::now() + ERROR_SHOWN;
+  s.error_until = Clock::now() + shown;
   ++s.serial;
 }
 
@@ -376,7 +383,21 @@ struct Actions
   u8 pickers = 0;
   bool abort_game = false;  // the server cancelled the start
   bool drop = false;        // fatal error: close the connection
+  std::string fail_game;    // the room's game cannot start: end it with this text (room-back)
+  std::vector<std::string> notices;  // the room chat's system lines (added outside the lock)
 };
+
+// The CSS line's name for slot 1-4 of the room (its player's, else "P<slot>").
+std::string SlotName(int slot)
+{
+  // under s_mutex
+  if (s.view && slot >= 1 && slot <= ROOM_SLOTS && s.view->slots[slot - 1].player &&
+      !s.view->slots[slot - 1].player->name.empty())
+  {
+    return s.view->slots[slot - 1].player->name;
+  }
+  return fmt::format("P{}", slot);
+}
 
 void Handle(const Message& m, Actions* a, Clock::time_point now)
 {
@@ -525,6 +546,36 @@ void Handle(const Message& m, Actions* a, Clock::time_point now)
     a->pickers = s.view && !s.view->ruleset.LoserPicks() ? 0 : s.pickers;
     ++s.serial;
     return;
+  case Message::Kind::RoomUnreachable:
+  {
+    // Players of the room's game that could not connect to each other (one of them told the
+    // server). Every member sees who, on the line and in the room's chat, once per pair: the
+    // others' game cannot start either, and should not look broken.
+    std::string first;
+    for (const auto& pair : m.pairs)
+    {
+      if (!s.unreachable_shown.insert(fmt::format("{} {} {}", m.match_id, pair[0], pair[1])).second)
+        continue;
+      const std::string a_name = SlotName(pair[0]), b_name = SlotName(pair[1]);
+      Log(fmt::format("room-unreachable {}: P{} ({}) and P{} ({})", m.match_id, pair[0], a_name,
+                      pair[1], b_name));
+      a->notices.push_back(fmt::format("{} and {} couldn't connect to each other. A VPN or "
+                                       "firewall can block it.",
+                                       a_name, b_name));
+      if (first.empty())
+        first = fmt::format("No connection between {} and {}.", a_name, b_name);
+    }
+    if (first.empty())
+      return;
+    if (s.rg.active && s.rg.match_id == m.match_id && !s.rg.saw_match)
+    {
+      if (a->fail_game.empty())  // (several messages in one pass: the first pair named)
+        a->fail_game = first;
+    }
+    else if (!s.rg.active && s.last_match_id == m.match_id)
+      SetError(first, CONNECT_ERROR_SHOWN);
+    return;
+  }
   case Message::Kind::Error:
     Log(fmt::format("error: {}", m.error));
     s.conn_error = m.error;
@@ -966,7 +1017,8 @@ void StartGame(const RoomGame& g, u8 pickers)
 }
 
 // The room's game is over (played, or failed): the session ends, mm hears room-back.
-void EndGame(bool played, const std::string& error, std::optional<u8> pickers, bool back)
+void EndGame(bool played, const std::string& error, std::optional<u8> pickers, bool back,
+             std::chrono::seconds shown = ERROR_SHOWN)
 {
   Client::Cleanup();
   std::lock_guard lk(s_mutex);
@@ -974,6 +1026,7 @@ void EndGame(bool played, const std::string& error, std::optional<u8> pickers, b
     return;
   // A set's session played several games: the room's game numbers go on after all of them.
   const u32 games = std::max<u32>(1, s.rg.games);
+  s.last_match_id = s.rg.match_id;
   s.rg = RoomGame{};
   // The time away from the room CSS counts from the game's end (a set's session can end with
   // the game on the stage select).
@@ -997,7 +1050,7 @@ void EndGame(bool played, const std::string& error, std::optional<u8> pickers, b
     s.outbox.push_back(r);
   }
   if (!error.empty())
-    SetError(error);
+    SetError(error, shown);
   s.last_game_end = played ? "played" : error;
   ++s.serial;
   Log(fmt::format("room game {} ({}); next game {}, pickers {:#x}", played ? "over" : "failed",
@@ -1039,8 +1092,24 @@ void SuperviseGame(Clock::time_point now)
   const Gprb::Session::Lobby lobby = Gprb::Session::GetLobby();
   if (!g.saw_session && ms.state == Matchmaking::State::ErrorEncountered)
   {
+    // The players this one could not reach: the server names each pair to the whole room.
+    // (PPR_TEST_ROOM_NO_UNREACHABLE: tests of the others' own timeout.)
+    if (ms.match && ms.match->match_id == g.match_id && !ms.match->unreachable_ports.empty() &&
+        !std::getenv("PPR_TEST_ROOM_NO_UNREACHABLE"))
+    {
+      Request r;
+      r.op = Op::Unreachable;
+      r.match_id = g.match_id;
+      r.ports = ms.match->unreachable_ports;
+      std::lock_guard lk(s_mutex);
+      if (s.view && RequestJson(r))
+      {
+        s.outbox.push_back(r);
+        Log(fmt::format("could not connect to slot(s) {}", fmt::join(r.ports, ", ")));
+      }
+    }
     EndGame(false, ms.error.empty() ? std::string("Could not connect to players.") : ms.error,
-            std::nullopt, true);
+            std::nullopt, true, CONNECT_ERROR_SHOWN);
     return;
   }
   if (!g.saw_session && ms.handoff == "failed")
@@ -1147,7 +1216,21 @@ void SuperviseGame(Clock::time_point now)
   }
   if (g.saw_session && !g.saw_match && !lobby.active)
   {
-    EndGame(false, TEXT_PLAYERS_LOST, std::nullopt, true);
+    // The session gave up on players it never heard from (their own connect to another player
+    // failed; the server's room-unreachable, which names the pair, normally comes first).
+    std::string text = TEXT_PLAYERS_LOST;
+    if (lobby.unheard != 0)
+    {
+      std::lock_guard lk(s_mutex);
+      std::vector<std::string> names;
+      for (int port = 0; port < ROOM_SLOTS; ++port)
+      {
+        if (lobby.unheard & (1 << port))
+          names.push_back(SlotName(port + 1));
+      }
+      text = fmt::format("Could not connect to players: {}", fmt::join(names, ", "));
+    }
+    EndGame(false, text, std::nullopt, true, lobby.unheard != 0 ? CONNECT_ERROR_SHOWN : ERROR_SHOWN);
     return;
   }
   if ((!g.saw_session && now - g.started > START_GUARD) || now - g.started > GAME_GUARD)
@@ -1335,6 +1418,10 @@ void Thread()
         StartGame(actions.start, actions.pickers);
       if (actions.abort_game)
         EndGame(false, "", std::nullopt, false);
+      if (!actions.fail_game.empty())
+        EndGame(false, actions.fail_game, std::nullopt, true, CONNECT_ERROR_SHOWN);
+      for (const std::string& line : actions.notices)
+        Chat::AddNotice(line);
 
       // Chat's outgoing messages, signed and encrypted outside the room lock; a Brawl Mods
       // room's requests.

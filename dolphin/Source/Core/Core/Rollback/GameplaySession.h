@@ -287,6 +287,9 @@ struct Lobby
   u8 setup_error = 0;         // GameSetup::SetupError: why the next game is not set up
   bool after_match = false;   // a match ended and the game has not left its scene yet
   Restore restore;            // the next game restarts a desynced one (with setup_ready)
+  // The session gave up connecting: these players (in-game ports as bits) were never heard from
+  // (Online::PEER_NEVER_HEARD_TIMEOUT_MS); kept until the next session.
+  u8 unheard = 0;
 };
 Lobby GetLobby();
 

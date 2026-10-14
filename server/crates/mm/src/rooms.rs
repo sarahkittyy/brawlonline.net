@@ -19,7 +19,7 @@
 //! [`RoomBook::take_changed`], so the engine can keep each room's chat group in step
 //! ([`crate::chat`]).
 
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::net::SocketAddrV4;
 use std::time::{Duration, Instant};
 
@@ -28,7 +28,7 @@ use common::proto::{GetTicketResp, Player, GET_TICKET_RESP};
 use common::ratelimit::{RateLimiter, Window};
 use common::rooms::{
     self, PublicRoom, RoomError, RoomLeft, RoomMember, RoomMode, RoomPlayer, RoomRequest, RoomSlot, RoomStart,
-    RoomState, RoomStatus, ROOM_SLOTS, TEAM_COUNT,
+    RoomState, RoomStatus, RoomUnreachable, ROOM_SLOTS, TEAM_COUNT,
 };
 use uuid::Uuid;
 
@@ -105,7 +105,9 @@ struct StartTicket {
 enum Phase {
     Waiting,
     Starting { match_id: String, since: Instant, tickets: BTreeMap<usize, StartTicket> },
-    InGame { since: Instant },
+    /// `unreachable`: the pairs of slots (1-4, lower first) that reported they could not connect
+    /// to each other (`room-unreachable`), each told to the room once.
+    InGame { since: Instant, match_id: String, unreachable: BTreeSet<[u8; 2]> },
 }
 
 #[derive(Debug, Clone)]
@@ -1051,6 +1053,49 @@ impl RoomBook {
                 // Kept for the next ticket; nothing the room shows changed.
                 return Ok(());
             }
+            RoomRequest::Unreachable { match_id, slots } => {
+                // Another game's report (it ended meanwhile) changes nothing.
+                let from = me as u8 + 1;
+                let codes: Vec<String> = room
+                    .slots
+                    .iter()
+                    .map(|m| m.as_ref().map_or_else(|| "?".to_string(), |m| m.info.connect_code.clone()))
+                    .collect();
+                let Phase::InGame { match_id: current, unreachable, .. } = &mut room.phase else {
+                    return Ok(());
+                };
+                if *current != match_id {
+                    return Ok(());
+                }
+                let mut new = false;
+                for slot in slots.into_iter().filter(|s| *s != from) {
+                    let pair = [from.min(slot), from.max(slot)];
+                    if unreachable.insert(pair) {
+                        new = true;
+                        tracing::info!(
+                            %code,
+                            %match_id,
+                            a = %codes[pair[0] as usize - 1],
+                            b = %codes[pair[1] as usize - 1],
+                            reporter = %codes[me],
+                            "room pair could not connect"
+                        );
+                    }
+                }
+                if new {
+                    let m = RoomUnreachable {
+                        kind: rooms::ROOM_UNREACHABLE.into(),
+                        code: code.clone(),
+                        match_id,
+                        pairs: unreachable.iter().copied().collect(),
+                    };
+                    for (_, member) in room.members() {
+                        send(out, member.conn, &m);
+                    }
+                }
+                // Nothing the room's state shows changed.
+                return Ok(());
+            }
             RoomRequest::Create { .. }
             | RoomRequest::Join { .. }
             | RoomRequest::Leave
@@ -1343,7 +1388,7 @@ impl RoomBook {
                 }),
             },
         });
-        room.phase = Phase::InGame { since: Instant::now() };
+        room.phase = Phase::InGame { since: Instant::now(), match_id: match_id.clone(), unreachable: BTreeSet::new() };
         for m in room.slots.iter_mut().flatten() {
             m.in_game = true;
             m.ready = false;
@@ -1384,7 +1429,7 @@ impl RoomBook {
                         .unwrap_or_default();
                     late.push((room.code.clone(), msg::did_not_connect(&missing)));
                 }
-                Phase::InGame { since } if now.saturating_duration_since(*since) >= self.cfg.game_max => {
+                Phase::InGame { since, .. } if now.saturating_duration_since(*since) >= self.cfg.game_max => {
                     stale.push(room.code.clone())
                 }
                 _ => {}
@@ -2181,6 +2226,55 @@ mod tests {
         assert_eq!(last_state(&out, 1)["status"], "waiting");
         assert_eq!(last_state(&out, 1)["statusText"], msg::waiting_on(&["player1", "player2", "player4"]));
         assert_eq!(msg::waiting_on(&["player1", "player2", "player4"]), "Waiting on: player1, player2 +1");
+    }
+
+    /// A pair that could not connect (prod 2026-10-14: a VPN's player and the host): the first
+    /// report names it to every member, once; the other side's report of the same pair and reports
+    /// of another game change nothing.
+    #[test]
+    fn a_pair_that_could_not_connect_is_told_to_the_room_once() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
+        t.req(1, RoomRequest::Slot { slot: 4, open: true });
+        for c in 2..=4 {
+            join(&mut t, c, &code);
+        }
+        let out = ready_all(&mut t, &[1, 2, 3, 4]);
+        let start = msgs(&out, 1).into_iter().find(|m| m["type"] == "room-start").expect("room-start");
+        let match_id = start["matchId"].as_str().unwrap().to_string();
+        let unreachable = |slots: Vec<u8>| RoomRequest::Unreachable { match_id: match_id.clone(), slots };
+        // Before the game: nothing to tell.
+        assert!(t.req(1, unreachable(vec![4])).is_empty());
+        let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
+        for n in 1..=4u8 {
+            t.book.ticket(100 + n as ConnId, addr(n), String::new(), info(n).uid, &code).unwrap();
+        }
+        let told = |out: &[Output], c: ConnId| -> Vec<Value> {
+            msgs(out, c).into_iter().filter(|m| m["type"] == rooms::ROOM_UNREACHABLE).collect()
+        };
+        // The host could not reach slot 4: every member hears the pair (and no room-state).
+        let out = t.req(1, unreachable(vec![4]));
+        for c in 1..=4 {
+            let m = told(&out, c);
+            assert_eq!(m.len(), 1);
+            assert_eq!(m[0]["matchId"], match_id.as_str());
+            assert_eq!(m[0]["code"], code.as_str());
+            assert_eq!(m[0]["pairs"], serde_json::json!([[1, 4]]));
+            assert!(msgs(&out, c).iter().all(|x| x["type"] != "room-state"));
+        }
+        // Slot 4 reports the same pair (and itself, which is left out): nothing new.
+        assert!(t.req(4, unreachable(vec![1, 4])).is_empty());
+        // Another pair is new: the message lists both.
+        let out = t.req(3, unreachable(vec![4]));
+        assert_eq!(told(&out, 2)[0]["pairs"], serde_json::json!([[1, 4], [3, 4]]));
+        // Another game's report changes nothing.
+        assert!(t.req(2, RoomRequest::Unreachable { match_id: "mode.room-old".into(), slots: vec![4] }).is_empty());
+        // Once the game is over, a late report changes nothing either.
+        for c in 1..=4 {
+            t.req(c, RoomRequest::Back);
+        }
+        assert!(t.req(2, unreachable(vec![1])).is_empty());
     }
 
     #[test]

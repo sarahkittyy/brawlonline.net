@@ -1160,6 +1160,100 @@ def test_room_four_players(backend: OnlineBackend, dolphin: Callable[..., Dolphi
     assert [p["wins"] for p in m["players"]] == [1] + [0] * (len(ports) - 1) and all(p["team"] is None for p in m["players"])
 
 
+@pytest.mark.parametrize("told", [True, False], ids=["the-server-names-the-pair", "the-session-gives-up"])
+def test_room_pair_that_cannot_connect(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                       gpu_backend: str, told: bool) -> None:
+    """Prod, 2026-10-14: in a 4-player room the host and a player on a VPN could not connect to each
+    other; their own connects timed out ("Could not connect to players: ..."), while the other two,
+    connected to everyone, sat on the CSS waiting for a host who never came, until they closed
+    Dolphin. Here three games, P1 and P3 dropping each other's packets (PPR_TEST_P2P_BLOCK).
+    `told`: P1 and P3 tell the server, which names the pair to the room; P2 ends its part at once
+    ("No connection between rpa and rpc." on the line, the pair in every player's chat).
+    Otherwise (PPR_TEST_ROOM_NO_UNREACHABLE, as with a player whose game never reports it) P2's
+    session gives up on the two players it never heard from after 20 s. Either way everyone is
+    back on the room's CSS with the room waiting."""
+    test = "pair-cannot-connect-" + ("told" if told else "timeout")
+    import secrets
+    names = ["rpa", "rpb", "rpc"]
+    users = [backend.create_user(n, f"RP{'ABC'[k]}{'T' if told else 'S'}",
+                                 email=f"pair{k}-{secrets.token_hex(4)}@example.test")
+             for k, n in enumerate(names)]
+    quiet = {} if told else {"PPR_TEST_ROOM_NO_UNREACHABLE": "1"}
+    envs = [{"PPR_TEST_P2P_BLOCK": users[2].connect_code, **quiet}, {},
+            {"PPR_TEST_P2P_BLOCK": users[0].connect_code, **quiet}]
+    gs = [_boot(dolphin, f"pair-{x}", backend, u, gpu_backend, test, "gameplay", artifacts=ART, env=e)
+          for x, u, e in zip("abc", users, envs)]
+    a, b, c = gs
+    _all(*[g.to_main_menu for g in gs])
+    _all(*[g.to_online_page for g in gs])
+
+    code = create_room(a)
+    pick(a)
+    hand_to(a, PANEL_X[2], -10.0)
+    a.steps("tap A 8", "wait 30")
+    until_view(a, lambda v: v["slots"][2]["bits"] & ppom.SLOT_OPEN, "slot 3 open")
+    hand_to(a, -23.0, 10.5)
+    _all(lambda: to_join_room(b), lambda: to_join_room(c))
+    pick(b, right=2)
+    pick(c, right=4)
+    for k, g in enumerate(gs[1:], 1):
+        type_room_code(g, code)
+        until_view(g, lambda v: v["flags"] & ppom.RF_IN, f"player {k + 1} in the room")
+    until_view(a, lambda v: all(v["slots"][p]["bits"] & ppom.SLOT_TAKEN for p in range(3)), "all players")
+    game = room_view(a)["game"]
+    for g in gs:
+        g.steps("wait 30", "tap START 8", "wait 10")
+    _wait(lambda: all(g.c.call("rooms_status")["room_game"]["active"] for g in gs), 30, "the room's game started")
+    t0 = time.monotonic()
+
+    # P2 is back first in the room's CSS, with who could not connect on the line.
+    want = "No connection between rpa and rpc." if told else "Could not connect to players: rpa, rpc"
+    seen: dict[str, float] = {}
+
+    def lines() -> bool:
+        for g in gs:
+            if g.name not in seen and want in status_line(g):
+                seen[g.name] = time.monotonic() - t0
+        return b.name in seen
+
+    _wait(lines, 60, f"P2's line: {want}", interval=0.2)
+    back_b = seen[b.name]
+    print(f"{test}: P2 told after {back_b:.1f} s; lines {seen}; rooms {[status_line(g) for g in gs]}")
+    if told:
+        assert back_b < 15, back_b      # the connect window (8 s), not the session's 20 s
+    else:
+        assert 20 <= back_b < 35, back_b
+    for g in gs:
+        g.steps("wait 20")
+        g.shot("01-told")
+    _wait(lambda: all(not g.c.call("rooms_status")["room_game"]["active"] for g in gs), 30,
+          "the room's game over everywhere")
+    for g in gs:
+        until_view(g, lambda v: v["flags"] & ppom.RF_IN and v["status"] == 0 and v["game"] == game + 1,
+                   "the room waiting for its next game", timeout=60)
+    _wait(lambda: all(g.scene() == CSS for g in gs), 60, "all on the room's CSS")
+    # The pair in every player's chat (once each), and only when the server named it.
+    pair = "rpa and rpc couldn't connect to each other. A VPN or firewall can block it."
+    if told:
+        _wait(lambda: all(any(ln["kind"] == "system" and ln["text"] == pair for ln in g.c.call("chat_status")["lines"])
+                          for g in gs), 20, "the pair in every chat")
+    for g in gs:
+        n = sum(1 for ln in g.c.call("chat_status")["lines"] if ln["text"] == pair)
+        assert n == (1 if told else 0), (g.name, g.c.call("chat_status")["lines"])
+    # P1's and P3's own connects named each other; with the server's word, their lines then name
+    # the pair too.
+    ends = [g.c.call("rooms_status")["room_game"]["last_end"] for g in gs]
+    # (With the server's word, the other side's report can reach P1 or P3 before its own connect
+    # gives up: its game then ends on the pair.)
+    own = {"Could not connect to players: rpc", *([want] if told else [])}
+    assert ends[0] in own and ends[2] in {x.replace("rpc", "rpa") if x != want else x for x in own}, ends
+    assert ends[1] == (want if told else "Could not connect to players: rpa, rpc"), ends
+    if told:
+        assert a.name in seen and c.name in seen, seen
+    for g in gs:
+        g.shot("02-back-in-the-room")
+
+
 @pytest.mark.parametrize("ports", [(0, 1, 2), (0, 1, 2, 3)], ids=["three", "four"])
 def test_room_player_quits_while_the_match_loads(backend: OnlineBackend,
                                                  dolphin: Callable[..., DolphinInstance],

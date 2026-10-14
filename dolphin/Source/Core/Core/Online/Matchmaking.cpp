@@ -49,6 +49,22 @@ constexpr u64 P2P_SETTLE_MS = 500;
 // at boot, so this only matters for a search right after it; no router answers in about 2 s).
 constexpr std::chrono::milliseconds UPNP_WAIT{2500};
 
+// Tests (the harness): PPR_TEST_P2P_BLOCK=<connect code>[,<connect code>...] drops every packet
+// of the P2P connect from those players, as two NATs that cannot reach each other do (prod
+// 2026-10-14: a VPN's player and the host of a 4-player room). Set on both players of the pair.
+// Matchmaking thread only.
+std::vector<ENetAddress> s_test_blocked;
+
+int ENET_CALLBACK DropTestBlocked(ENetHost* host, ENetEvent*)
+{
+  for (const ENetAddress& a : s_test_blocked)
+  {
+    if (a.host == host->receivedAddress.host && a.port == host->receivedAddress.port)
+      return 1;
+  }
+  return 0;
+}
+
 std::string IpToString(enet_uint32 host)
 {
   // ENetAddress::host is in network byte order: the bytes in memory are a.b.c.d.
@@ -963,6 +979,25 @@ void Matchmaking::HandleConnecting()
     remote_addrs.push_back(addr);
   }
 
+  s_test_blocked.clear();
+  if (const char* env = std::getenv("PPR_TEST_P2P_BLOCK"))
+  {
+    const std::string blocked = fmt::format(",{},", env);
+    for (size_t i = 0; i < remote_addrs.size(); ++i)
+    {
+      const size_t p = static_cast<int>(i) >= match.local_player_index ? i + 1 : i;
+      if (p < match.players.size() &&
+          blocked.find(fmt::format(",{},", match.players[p].connect_code)) != std::string::npos)
+      {
+        WARN_LOG_FMT(NETPLAY, "[Matchmaking] Test: no packets from {} ({})",
+                     match.players[p].connect_code, match.remotes[i].ToString());
+        s_test_blocked.push_back(remote_addrs[i]);
+      }
+    }
+    if (!s_test_blocked.empty())
+      client->intercept = DropTestBlocked;
+  }
+
   // --- SlippiNetplayClient::ThreadFunc, connect phase ---
   const u64 start_time = Common::Timer::NowMs();
   std::vector<bool> connections(remote_player_count, false);
@@ -1013,10 +1048,25 @@ void Matchmaking::HandleConnecting()
         }
 
         bool matched = false;
+        // The player at exactly this address first: players behind one public address (or on
+        // one PC) differ only by port, and the first one by address alone took the other's
+        // place, so the one whose connect timed out was named wrong.
+        int exact = -1;
+        for (size_t i = 0; i < servers.size(); i++)
+        {
+          if (!connections[i] && remote_addrs[i].host == net_event.peer->address.host &&
+              remote_addrs[i].port == net_event.peer->address.port)
+          {
+            exact = static_cast<int>(i);
+            break;
+          }
+        }
         for (size_t i = 0; i < servers.size(); i++)
         {
           // Slippi matches the host only, not the port: "for some people, their internet will
           // switch the port they're sending from".
+          if (exact >= 0 && static_cast<int>(i) != exact)
+            continue;
           if (remote_addrs[i].host == net_event.peer->address.host && !connections[i])
           {
             INFO_LOG_FMT(NETPLAY, "[Netplay] Overwriting ENetPeer for address: {}:{}",
@@ -1065,6 +1115,23 @@ void Matchmaking::HandleConnecting()
           failed_connections.push_back(static_cast<int>(i));
       }
       INFO_LOG_FMT(NETPLAY, "Online connection failed");
+
+      // Which players: by port (a room's slot), for the room's server.
+      for (const int i : failed_connections)
+      {
+        const int p = i >= match.local_player_index ? i + 1 : i;
+        if (p < static_cast<int>(match.players.size()))
+        {
+          match.unreachable_ports.push_back(match.players[p].port);
+          WARN_LOG_FMT(NETPLAY, "[Matchmaking] No connection to {} ({}, P{}) at {}",
+                       match.players[p].display_name, match.players[p].connect_code,
+                       match.players[p].port, match.remotes[i].ToString());
+        }
+      }
+      {
+        std::lock_guard lk(m_mutex);
+        m_match = match;
+      }
 
       if (m_search_settings.mode == Mode::Teams)
       {

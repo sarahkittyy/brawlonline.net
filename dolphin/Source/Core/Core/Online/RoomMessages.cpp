@@ -3,6 +3,7 @@
 
 #include "Core/Online/RoomMessages.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstring>
 
@@ -606,6 +607,28 @@ Message Parse(const std::string& packet)
     m.match_id = *match_id;
     m.timeout_secs = static_cast<int>(Int(o, "timeoutSecs", 1, 120).value_or(15));
   }
+  else if (m.type == "room-unreachable")
+  {
+    const auto match_id = Str(o, "matchId", 128);
+    const picojson::value* pairs = Find(o, "pairs");
+    if (!match_id || match_id->empty() || !pairs || !pairs->is<picojson::array>())
+      return invalid("room-unreachable without matchId or pairs");
+    for (const picojson::value& e : pairs->get<picojson::array>())
+    {
+      // At most the six pairs of four players.
+      if (m.pairs.size() >= 6)
+        break;
+      if (!e.is<picojson::array>() || e.get<picojson::array>().size() != 2)
+        return invalid("room-unreachable: a pair is not two slots");
+      const auto a = Int(e.get<picojson::array>()[0], 1, ROOM_SLOTS);
+      const auto b = Int(e.get<picojson::array>()[1], 1, ROOM_SLOTS);
+      if (!a || !b || *a == *b)
+        return invalid("room-unreachable: a pair is not two slots");
+      m.pairs.push_back({static_cast<u8>(std::min(*a, *b)), static_cast<u8>(std::max(*a, *b))});
+    }
+    m.kind = Message::Kind::RoomUnreachable;
+    m.match_id = *match_id;
+  }
   else if (m.type == "error")
   {
     m.kind = Message::Kind::Error;
@@ -742,6 +765,25 @@ std::optional<std::string> RequestJson(const Request& r)
   case Op::Back:
     o["type"] = picojson::value("room-back");
     break;
+  case Op::Unreachable:
+  {
+    if (r.match_id.empty() || r.match_id.size() > 128 || r.ports.empty() ||
+        r.ports.size() > ROOM_SLOTS - 1)
+    {
+      return std::nullopt;
+    }
+    picojson::array slots;
+    for (const int p : r.ports)
+    {
+      if (p < 1 || p > ROOM_SLOTS)
+        return std::nullopt;
+      slots.emplace_back(static_cast<double>(p));
+    }
+    o["type"] = picojson::value("room-unreachable");
+    o["matchId"] = picojson::value(r.match_id);
+    o["slots"] = picojson::value(slots);
+    break;
+  }
   case Op::Result:
     if (r.game < 1 || r.game > 99 ||
         (r.winner_side > 1 && r.winner_side != SIDE_DRAW && r.winner_side != SIDE_VOID) || r.stage > 0xFF)
@@ -864,6 +906,8 @@ const char* OpName(Op op)
     return "rulesets";
   case Op::SetAction:
     return "set";
+  case Op::Unreachable:
+    return "unreachable";
   }
   return "?";
 }

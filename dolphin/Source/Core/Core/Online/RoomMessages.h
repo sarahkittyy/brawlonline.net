@@ -176,6 +176,7 @@ struct Message
     Error,       // fatal: the server disconnects
     CreateTicketResp,  // a ticket answer on the online connection (refused; ignored)
     RulesetList,       // the player's rulesets to offer (room-rulesets)
+    RoomUnreachable,   // pairs of the room's game that could not connect to each other
   };
   Kind kind = Kind::Unknown;
   std::string type;
@@ -185,10 +186,13 @@ struct Message
   std::string op;          // RoomError
   std::string code;        // RoomLeft / RoomStart
   std::string reason;      // RoomLeft
-  std::string match_id;    // RoomStart
+  std::string match_id;    // RoomStart / RoomUnreachable
   int timeout_secs = 15;   // RoomStart
   std::optional<View> view;  // RoomState
   std::vector<RulesetEntry> rulesets;  // RulesetList
+  // RoomUnreachable: every pair of slots (1-4, lower first) of the game `match_id` that could not
+  // connect to each other, as reported so far.
+  std::vector<std::array<u8, 2>> pairs;
 };
 
 // Parses one JSON packet (the raw bytes as received). Never throws.
@@ -222,6 +226,7 @@ enum class Op : u8
   Back = 101,
   Result = 102,  // a game of the room's set (room-result)
   Step = 103,    // the set's game being set up (room-step)
+  Unreachable = 104,  // the room's game could not connect to these players (room-unreachable)
 };
 // room-result winnerSide: a draw, and a game that was quit (it did not happen; the server plays it
 // again from its first step once every player of the set reported it, room_set.rs).
@@ -247,6 +252,8 @@ struct Request
   std::string stage_choice;                 // Stages: "loser-picks" / "loser-picks-list", "" as it is
   std::array<std::vector<u8>, 2> actions;  // Step: each side's stage actions (`game`; `flag`:
                                            // its match started)
+  std::string match_id;     // Unreachable: the room's game
+  std::vector<int> ports;   // Unreachable: the players' slots (1-4)
 };
 // The JSON for `r`, or nullopt for Poll and anything out of range.
 std::optional<std::string> RequestJson(const Request& r);

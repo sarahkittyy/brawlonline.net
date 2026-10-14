@@ -99,6 +99,9 @@ struct Match
   // ... and the address the ENet connection actually came up with (the peer's source address).
   std::vector<Endpoint> connected;
   u64 connect_ms = 0;  // time the P2P connect took
+  // The players' ports (1-4) the P2P connect timed out on (set with the failure; a room tells the
+  // room's server, which names the pair to every member).
+  std::vector<int> unreachable_ports;
   // A room's game (docs/rooms-protocol.md §3; mode 3): the room host's slot (1-4; it decides),
   // the Teams switch and who picks the first stage. room_host_port 0: not a room game.
   int room_host_port = 0;

@@ -13,6 +13,14 @@ namespace Online
 // SlippiNetplayClient::ThreadFunc: "u64 timeout = 8000;" (the P2P connect window).
 constexpr u32 P2P_CONNECT_TIMEOUT_MS = 8000;
 
+// A player of a session that is never heard from at all (its own P2P connect to another player
+// failed, so it never started a session): the others give up waiting for it this long after
+// their own session began, and every player is back on the CSS instead of waiting there for good
+// (prod 2026-10-14: a 4-player room whose host could not reach one player left the other two
+// waiting until they closed Dolphin). Every player's session starts within the connect window of
+// the others', so this is the window with room to spare.
+constexpr u32 PEER_NEVER_HEARD_TIMEOUT_MS = 20000;
+
 // Slippi's ROLLBACK_MAX_FRAMES (SlippiNetplay.h).
 constexpr int SLIPPI_ROLLBACK_MAX_FRAMES = 7;
 // CEXISlippi::shouldSkipOnlineFrame: the opponent is force-disconnected once

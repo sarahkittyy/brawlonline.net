@@ -305,6 +305,10 @@ struct State
   // This player told the others it left: Stop, or the session gave up (Phase::Error), so they
   // do not wait for it at a barrier until their own timeout.
   bool leave_sent = false;
+  // When the session began connecting, and the players (in-game ports as bits) it gave up on
+  // because none of them was ever heard (Online::PEER_NEVER_HEARD_TIMEOUT_MS; Lobby::unheard).
+  Clock::time_point connecting_since{};
+  u8 unheard_ports = 0;
   // "Still waiting" lines logged at the current barrier (every WAIT_LOG_INTERVAL).
   int wait_logs = 0;
   bool state_size_logged = false;  // our state message was over MAX_CONTROL_SIZE (logged once)
@@ -2648,6 +2652,29 @@ void NetThread()
           OnPeerLeft(slot, "peer timed out");
         }
       });
+      // A player never heard from at all: its own connect to another player failed, so it never
+      // started a session. Everyone gives up (the leave below tells the others at once) rather
+      // than waiting on the CSS for good.
+      if (s.phase == Phase::Connecting &&
+          now - s.connecting_since > std::chrono::milliseconds(Online::PEER_NEVER_HEARD_TIMEOUT_MS))
+      {
+        u8 unheard = 0;
+        std::string list;
+        ForEachPeer([&](int slot, const PeerView& p) {
+          if (p.seen || p.left)
+            return;
+          unheard |= static_cast<u8>(1 << slot);
+          list += fmt::format("{}P{}", list.empty() ? "" : ", ", slot + 1);
+        });
+        if (unheard != 0)
+        {
+          WARN_LOG_FMT(BRAWLBACK, "gprb: nothing from {} in {} ms since the session began",
+                       list, Online::PEER_NEVER_HEARD_TIMEOUT_MS);
+          s.unheard_ports = unheard;
+          s.error = "never heard from " + list;
+          s.phase = Phase::Error;
+        }
+      }
       if (s.peer_left && (s.phase == Phase::Connected || s.phase == Phase::Connecting))
       {
         s.phase = Phase::Ended;
@@ -5772,6 +5799,7 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.desynced = false;
   s.recovery = {};
   s.quit_left = false;
+  s.unheard_ports = 0;
   s.socket = std::make_unique<sf::UdpSocket>();
   s.socket->setBlocking(false);
   if (s.socket->bind(options.local_port) != sf::Socket::Status::Done)
@@ -5787,6 +5815,7 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   INFO_LOG_FMT(BRAWLBACK, "gprb: session as {} on P{} with {} other player(s)",
                options.host ? "host" : "joiner", s.local_slot + 1, ActivePlayers() - 1);
   s.phase = Phase::Connecting;
+  s.connecting_since = Clock::now();
   s.net_run = true;
   s.net_thread = std::thread(NetThread);
   return std::nullopt;
@@ -5926,6 +5955,7 @@ Lobby GetLobby()
   l.stage_pickers = s.last_pickers;
   l.setup_error = s.setup_error;
   l.after_match = s.await_scene_exit;
+  l.unheard = s.unheard_ports;
   return l;
 }
 

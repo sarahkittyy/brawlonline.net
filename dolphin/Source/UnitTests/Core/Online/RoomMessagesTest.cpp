@@ -257,6 +257,48 @@ TEST(RoomMessages, StagesRequest)
   EXPECT_FALSE(RequestJson(r));
 }
 
+TEST(RoomMessages, Unreachable)
+{
+  // A room game's players this one could not connect to (room-unreachable, client -> server).
+  Request r;
+  r.op = Op::Unreachable;
+  r.match_id = "mode.room-KFQB-1";
+  r.ports = {4};
+  auto j = RequestJson(r);
+  ASSERT_TRUE(j);
+  picojson::value v;
+  ASSERT_TRUE(picojson::parse(v, *j).empty());
+  EXPECT_EQ(v.get("type").to_str(), "room-unreachable");
+  EXPECT_EQ(v.get("matchId").to_str(), "mode.room-KFQB-1");
+  EXPECT_EQ(v.get("slots").serialize(), "[4]");
+  r.ports = {0};
+  EXPECT_FALSE(RequestJson(r));
+  r.ports = {1, 2, 3, 4};
+  EXPECT_FALSE(RequestJson(r));
+  r.ports.clear();
+  EXPECT_FALSE(RequestJson(r));
+  r.ports = {4};
+  r.match_id.clear();
+  EXPECT_FALSE(RequestJson(r));
+
+  // The pairs, server -> every member: lower slot first, never a slot with itself.
+  Message m = Parse(
+      R"({"type": "room-unreachable", "code": "KFQB", "matchId": "mode.room-KFQB-1", "pairs": [[4, 1], [3, 4]]})");
+  ASSERT_EQ(m.kind, Message::Kind::RoomUnreachable);
+  EXPECT_EQ(m.match_id, "mode.room-KFQB-1");
+  ASSERT_EQ(m.pairs.size(), 2u);
+  EXPECT_EQ(m.pairs[0], (std::array<u8, 2>{1, 4}));
+  EXPECT_EQ(m.pairs[1], (std::array<u8, 2>{3, 4}));
+  EXPECT_EQ(Parse(R"({"type": "room-unreachable", "matchId": "m", "pairs": [[1, 1]]})").kind,
+            Message::Kind::Invalid);
+  EXPECT_EQ(Parse(R"({"type": "room-unreachable", "matchId": "m", "pairs": [[1, 5]]})").kind,
+            Message::Kind::Invalid);
+  EXPECT_EQ(Parse(R"({"type": "room-unreachable", "matchId": "m", "pairs": [[1]]})").kind,
+            Message::Kind::Invalid);
+  EXPECT_EQ(Parse(R"({"type": "room-unreachable", "pairs": [[1, 2]]})").kind,
+            Message::Kind::Invalid);
+}
+
 TEST(RoomMessages, RefusesBadRoomStates)
 {
   const std::string ok = STATE;

@@ -38,6 +38,9 @@ pub const ROOM_SET: &str = "room-set";
 pub const ROOM_STEP: &str = "room-step";
 pub const ROOM_BEST_OF: &str = "room-best-of";
 pub const ROOM_STAGES: &str = "room-stages";
+/// Client → server and server → every member: players of the room's game that could not connect
+/// to each other.
+pub const ROOM_UNREACHABLE: &str = "room-unreachable";
 /// A side's stage actions in one `room-step` at most (a strike pattern of 8 steps of up to 8).
 pub const STEP_ACTIONS_MAX: usize = 64;
 pub const ROOM_RULESET: &str = "room-ruleset";
@@ -173,6 +176,10 @@ pub enum RoomRequest {
     /// `room-rulesets {}`: the rulesets to offer this player in the game's Ruleset line (their
     /// recent ones, then their own published ones), answered with `ruleset-list`.
     RulesetList,
+    /// `room-unreachable {matchId, slots}`: this member's connect to these members (slots 1-4)
+    /// for the room's game `matchId` timed out. The server tells the whole room each pair once
+    /// ([`RoomUnreachable`]). No answer.
+    Unreachable { match_id: String, slots: Vec<u8> },
 }
 
 impl RoomRequest {
@@ -196,6 +203,7 @@ impl RoomRequest {
             RoomRequest::Stages { .. } => ROOM_STAGES,
             RoomRequest::Ruleset { .. } => ROOM_RULESET,
             RoomRequest::RulesetList => ROOM_RULESETS,
+            RoomRequest::Unreachable { .. } => ROOM_UNREACHABLE,
         }
     }
 
@@ -243,6 +251,7 @@ impl RoomRequest {
                 None => json!({ "stages": stages }),
             },
             RoomRequest::Ruleset { code } => json!({ "code": code }),
+            RoomRequest::Unreachable { match_id, slots } => json!({ "matchId": match_id, "slots": slots }),
         };
         v["type"] = json!(self.op());
         v
@@ -391,6 +400,26 @@ impl RoomRequest {
                     _ => return Err(format!("{kind}: `action` must be resume or restart")),
                 },
             },
+            ROOM_UNREACHABLE => {
+                let match_id = v
+                    .get("matchId")
+                    .and_then(|m| m.as_str())
+                    .filter(|m| !m.is_empty() && m.len() <= 128)
+                    .ok_or_else(|| format!("{kind}: `matchId` must be a match id"))?
+                    .to_string();
+                let bad = || format!("{kind}: `slots` must list 1 to {} slots", ROOM_SLOTS - 1);
+                let list = v
+                    .get("slots")
+                    .and_then(|l| l.as_array())
+                    .filter(|l| (1..ROOM_SLOTS).contains(&l.len()))
+                    .ok_or_else(bad)?;
+                let mut slots = Vec::new();
+                for x in list {
+                    let n = x.as_u64().filter(|n| (1..=ROOM_SLOTS as u64).contains(n)).ok_or_else(bad)?;
+                    slots.push(n as u8);
+                }
+                RoomRequest::Unreachable { match_id, slots }
+            }
             other => return Err(format!("unknown room message {other:?}")),
         })
     }
@@ -587,6 +616,18 @@ pub struct RoomStart {
     pub timeout_secs: u64,
 }
 
+/// `room-unreachable`, server → every member: the pairs of the room's game `match_id` (slots,
+/// lower first) whose connect to each other timed out, as reported so far; sent when one is new.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RoomUnreachable {
+    #[serde(rename = "type")]
+    pub kind: String,
+    pub code: String,
+    pub match_id: String,
+    pub pairs: Vec<[u8; 2]>,
+}
+
 /// `hello-resp`, server → client: the online connection is open (or `error`, then a disconnect).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -729,6 +770,8 @@ mod tests {
             },
             RoomRequest::Stages { stages: crate::rules::StageLists::default(), stage_choice: None },
             RoomRequest::RulesetList,
+            RoomRequest::Unreachable { match_id: "mode.room-KFQB-1".into(), slots: vec![4] },
+            RoomRequest::Unreachable { match_id: "mode.room-KFQB-1".into(), slots: vec![1, 2, 3] },
             RoomRequest::Join { code: "KFQB".into() },
             RoomRequest::Leave,
             RoomRequest::Slot { slot: 3, open: true },
@@ -799,6 +842,13 @@ mod tests {
             (ROOM_JOIN, json!({"code": 5})),
             (ROOM_JOIN, json!({"code": "x".repeat(33)})),
             (ROOM_CREATE, json!({"public": 1})),
+            (ROOM_UNREACHABLE, json!({"slots": [4]})),
+            (ROOM_UNREACHABLE, json!({"matchId": "", "slots": [4]})),
+            (ROOM_UNREACHABLE, json!({"matchId": "m", "slots": []})),
+            (ROOM_UNREACHABLE, json!({"matchId": "m", "slots": [1, 2, 3, 4]})),
+            (ROOM_UNREACHABLE, json!({"matchId": "m", "slots": [0]})),
+            (ROOM_UNREACHABLE, json!({"matchId": "m", "slots": [5]})),
+            (ROOM_UNREACHABLE, json!({"matchId": "x".repeat(129), "slots": [4]})),
             ("room-bogus", json!({})),
         ];
         for (kind, v) in bad {
