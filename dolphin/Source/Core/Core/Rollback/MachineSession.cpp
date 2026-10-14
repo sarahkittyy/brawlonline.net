@@ -137,6 +137,12 @@ constexpr size_t MAX_IMAGE_PACKED = 256u << 20;
 constexpr size_t MAX_IMAGE_RAW = 768u << 20;
 constexpr u32 IMAGE_MAGIC = 0x424D4931;  // "BMI1"
 constexpr u32 IMAGE_VERSION = 3;
+// The reliable data ENet keeps unacknowledged on a link. Its own is 64 KB (unless the hosts set
+// bandwidths), so a machine image or SD card chunks went at 64 KB per round trip: 1.3 MB/s at
+// 50 ms, a 22.5 MB image in 23 s with the whole room waiting (prod 2026-10-14), and a joiner's
+// chunk waiting behind the chunks asked for before it. ENet uses a peer's window only to send, so
+// each machine sets its own and a build without this still plays with one that has it.
+constexpr enet_uint32 SEND_WINDOW = 1u << 20;
 // GekkoNet drops a peer it has not heard from for this long.
 constexpr unsigned int DISCONNECT_TIMEOUT_MS = 5000;
 
@@ -1046,6 +1052,13 @@ void NetThread()
     std::unique_lock lk(s.net_mutex);
     if (!s.host)
       break;
+    // ENet sets a peer's window when it connects and again when any peer's bandwidth limits are
+    // recalculated (every new connection), so it is set back here.
+    for (PeerLink& p : s.peers)
+    {
+      if (p.peer && p.peer->windowSize < SEND_WINDOW)
+        p.peer->windowSize = SEND_WINDOW;
+    }
     // Outgoing: GekkoNet's packets queued by the CPU thread.
     for (auto& [slot, data] : s.gekko_tx)
     {

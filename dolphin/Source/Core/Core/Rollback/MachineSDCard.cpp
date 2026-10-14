@@ -678,8 +678,19 @@ std::shared_ptr<SessionCard> SessionCard::CreateGuestCard(const std::string& ima
   card->m_image.Open(image_path, "rb");
   const u64 own_size = card->m_image ? card->m_image.GetSize() : 0;
 
+  // This card's hashes from an earlier check (its own session as the starter, or a join): the
+  // chunks they say differ are known now. Those they say match are still checked when read.
+  std::optional<ImageHashes> cached;
+  if (own_size != 0)
+  {
+    if (const std::optional<s64> mtime = ModificationTime(image_path))
+      cached = LoadHashCache(image_path, own_size, *mtime);
+  }
+  card->m_scan_done = own_size == 0 || cached.has_value();
+
   const u32 count = card->ChunkCount();
   card->m_sources.resize(count, Source::Missing);
+  u32 cached_differ = 0;
   for (u32 i = 0; i < count; ++i)
   {
     if (card->m_manifest->chunks[i].zero)
@@ -690,9 +701,26 @@ std::shared_ptr<SessionCard> SessionCard::CreateGuestCard(const std::string& ima
     // This card's chunk must be as long as the session's for the hashes to say they match.
     const u64 start = u64{i} * CHUNK_SIZE;
     if (start < own_size && std::min(CHUNK_SIZE, own_size - start) == card->ChunkBytes(i))
-      card->m_sources[i] = Source::Unchecked;
+    {
+      if (cached && cached->hashes[i] != card->m_manifest->chunks[i].hash)
+      {
+        card->m_missing.push_back(i);
+        ++cached_differ;
+      }
+      else
+      {
+        card->m_sources[i] = Source::Unchecked;
+      }
+    }
     else
+    {
       card->m_missing.push_back(i);
+    }
+  }
+  if (cached)
+  {
+    INFO_LOG_FMT(BRAWLBACK, "SD card: this player's card was checked before: {} chunks differ",
+                 cached_differ);
   }
 
   static std::atomic<u32> s_counter{0};
@@ -896,6 +924,16 @@ bool SessionCard::Read(u64 offset, u8* dst, u64 size)
     {
       ++m_waits;
       const u64 start = NowMs();
+      RequestMissing(needed);
+      // While that request is on its way: the chunks after the read that this card lacks too.
+      std::vector<u32> ahead;
+      for (u32 c = last + 1; c < ChunkCount() && c - last <= READ_AHEAD_CHUNKS; ++c)
+      {
+        if (!m_overlay.contains(c))
+          ahead.push_back(c);
+      }
+      CheckLocal(ahead);
+      RequestMissing(ahead);
       if (!WaitForChunks(needed, true))
         return false;
       INFO_LOG_FMT(BRAWLBACK, "SD card: a read waited {} ms for {} chunks from the players",
@@ -1174,6 +1212,35 @@ bool SessionCard::WaitForChunks(std::span<const u32> chunks, bool keep_alive)
   }
 }
 
+void SessionCard::RequestMissing(std::span<const u32> chunks)
+{
+  std::vector<u32> to_request;
+  std::shared_ptr<Remote> remote;
+  {
+    std::lock_guard lock(m_fetch_mutex);
+    if (m_detached)
+      return;
+    const u64 now = NowMs();
+    for (const u32 c : chunks)
+    {
+      if (c < m_sources.size() && m_sources[c] == Source::Missing && !m_unavailable.contains(c) &&
+          !m_requested_at.contains(c) && m_requested_at.size() < MAX_OUTSTANDING_REQUESTS)
+      {
+        m_requested_at[c] = now;
+        to_request.push_back(c);
+      }
+    }
+    remote = m_remote;
+  }
+  if (!remote)
+    return;
+  for (size_t i = 0; i < to_request.size(); i += MAX_REQUEST_CHUNKS)
+  {
+    const size_t n = std::min<size_t>(MAX_REQUEST_CHUNKS, to_request.size() - i);
+    remote->Request(std::span<const u32>(to_request.data() + i, n));
+  }
+}
+
 void SessionCard::StartBackgroundFetch(std::span<const u32> first)
 {
   if (m_mode != Mode::GuestCard || m_background_thread.joinable())
@@ -1240,55 +1307,169 @@ std::vector<u32> SessionCard::ReadChunks(size_t max) const
   return {m_read_order.begin(), m_read_order.begin() + n};
 }
 
+bool SessionCard::ScanStep(File::IOFile& image, u64 own_size, std::vector<u8>& buffer,
+                           std::vector<u32>* differing)
+{
+  const u32 own_count = ChunkCountFor(own_size);
+  if (m_scan_next >= own_count)
+    return false;
+  const u32 first = m_scan_next;
+  const u32 n = std::min<u32>(static_cast<u32>(buffer.size() / CHUNK_SIZE), own_count - first);
+  const u64 offset = u64{first} * CHUNK_SIZE;
+  const u64 len = std::min<u64>(u64{n} * CHUNK_SIZE, own_size - offset);
+  if (!image.Seek(static_cast<s64>(offset), File::SeekOrigin::Begin) ||
+      !image.ReadBytes(buffer.data(), len))
+  {
+    return false;
+  }
+  for (u32 i = 0; i < n; ++i)
+  {
+    const u64 off = u64{i} * CHUNK_SIZE;
+    const std::span<const u8> chunk(buffer.data() + off, std::min(CHUNK_SIZE, len - off));
+    m_scan_hashes[first + i] = HashChunk(chunk);
+    m_scan_zero[first + i] = IsAllZero(chunk);
+  }
+  {
+    std::lock_guard lock(m_fetch_mutex);
+    for (u32 c = first; c < first + n && c < m_sources.size(); ++c)
+    {
+      // Unchecked only where this card's chunk is as long as the session's.
+      if (m_sources[c] != Source::Unchecked)
+        continue;
+      if (m_scan_hashes[c] == m_manifest->chunks[c].hash)
+      {
+        m_sources[c] = Source::Local;
+      }
+      else
+      {
+        m_sources[c] = Source::Missing;
+        differing->push_back(c);
+      }
+    }
+  }
+  m_scan_next = first + n;
+  return m_scan_next < own_count;
+}
+
 void SessionCard::BackgroundThreadFunc()
 {
-  constexpr u32 BATCH = 8;
+  // Small batches: a read's own request waits behind the stream's at the player who answers.
+  constexpr u32 BATCH = 4;
+  constexpr u32 SCAN_CHUNKS = 16;
   const u64 start = NowMs();
   u64 streamed = 0;
+  u64 scanned = 0;
+  u32 scan_differ = 0;
   size_t cursor = 0;
+
+  File::IOFile scan_image;
+  u64 own_size = 0;
+  std::optional<s64> own_mtime;
+  std::vector<u8> scan_buffer;
+  if (!m_scan_done.load())
+  {
+    own_mtime = ModificationTime(m_image_path);
+    scan_image.Open(m_image_path, "rb");
+    own_size = scan_image ? scan_image.GetSize() : 0;
+    if (own_size == 0 || own_size > MAX_CARD_SIZE)
+    {
+      m_scan_done = true;
+    }
+    else
+    {
+      m_scan_hashes.resize(ChunkCountFor(own_size));
+      m_scan_zero.resize(ChunkCountFor(own_size));
+      scan_buffer.resize(SCAN_CHUNKS * CHUNK_SIZE);
+    }
+  }
 
   while (!m_stop_background.load())
   {
+    const u64 elapsed = NowMs() - start;
     std::vector<u32> candidates;
+    bool more_to_fetch;
     {
       std::lock_guard lock(m_fetch_mutex);
-      if (m_detached || m_fetched_bytes >= BACKGROUND_CAP_BYTES ||
-          cursor >= m_background_order.size())
-      {
+      if (m_detached || m_fetched_bytes >= BACKGROUND_CAP_BYTES)
         break;
-      }
-      while (cursor < m_background_order.size() && candidates.size() < BATCH)
-        candidates.push_back(m_background_order[cursor++]);
-    }
-    // This card's own chunks among them first: only those that differ are fetched.
-    CheckLocal(candidates);
-    std::vector<u32> batch;
-    {
-      std::lock_guard lock(m_fetch_mutex);
-      for (const u32 c : candidates)
+      if (streamed * 1000 / BACKGROUND_BYTES_PER_SECOND <= elapsed)
       {
-        if (m_sources[c] == Source::Missing && !m_unavailable.contains(c) &&
-            !m_requested_at.contains(c))
+        while (cursor < m_background_order.size() && candidates.size() < BATCH)
+          candidates.push_back(m_background_order[cursor++]);
+      }
+      more_to_fetch = cursor < m_background_order.size();
+    }
+
+    if (!candidates.empty())
+    {
+      // This card's own chunks among them first: only those that differ are fetched.
+      CheckLocal(candidates);
+      std::vector<u32> batch;
+      {
+        std::lock_guard lock(m_fetch_mutex);
+        for (const u32 c : candidates)
         {
-          batch.push_back(c);
+          if (m_sources[c] == Source::Missing && !m_unavailable.contains(c) &&
+              !m_requested_at.contains(c))
+          {
+            batch.push_back(c);
+          }
         }
       }
-    }
-    if (batch.empty())
+      if (!batch.empty())
+      {
+        // A failed chunk only fails the reads that need it; the stream goes on.
+        WaitForChunks(batch, false);
+        for (const u32 c : batch)
+          streamed += ChunkBytes(c);
+      }
       continue;
-
-    // A failed chunk only fails the reads that need it; the stream goes on.
-    WaitForChunks(batch, false);
-    for (const u32 c : batch)
-      streamed += ChunkBytes(c);
-
-    // Keep to the rate.
-    const u64 due_ms = streamed * 1000 / BACKGROUND_BYTES_PER_SECOND;
-    while (!m_stop_background.load() && NowMs() - start < due_ms)
-    {
-      std::unique_lock lock(m_fetch_mutex);
-      m_fetch_cv.wait_for(lock, std::chrono::milliseconds(50));
     }
+
+    if (!m_scan_done.load())
+    {
+      if (scanned * 1000 / SCAN_BYTES_PER_SECOND <= elapsed)
+      {
+        std::vector<u32> differing;
+        const bool more = ScanStep(scan_image, own_size, scan_buffer, &differing);
+        scanned += scan_buffer.size();
+        scan_differ += static_cast<u32>(differing.size());
+        if (!differing.empty())
+        {
+          std::lock_guard lock(m_fetch_mutex);
+          m_background_order.insert(m_background_order.end(), differing.begin(),
+                                    differing.end());
+        }
+        if (!more)
+        {
+          const bool whole = m_scan_next >= ChunkCountFor(own_size);
+          INFO_LOG_FMT(BRAWLBACK, "SD card: checked this player's card{} in {} ms: {} chunks differ",
+                       whole ? "" : " (up to a read error)", NowMs() - start, scan_differ);
+          // Only what the file still is (it could have changed while it was read).
+          if (whole && own_mtime && ModificationTime(m_image_path) == own_mtime)
+          {
+            ImageHashes hashes;
+            hashes.size = own_size;
+            hashes.hashes = std::move(m_scan_hashes);
+            hashes.zero = std::move(m_scan_zero);
+            SaveHashCache(m_image_path, *own_mtime, hashes);
+          }
+          m_scan_hashes = {};
+          m_scan_zero = {};
+          scan_image.Close();
+          m_scan_done = true;
+        }
+        continue;
+      }
+    }
+    else if (!more_to_fetch)
+    {
+      break;
+    }
+
+    // Keep to the rates.
+    std::unique_lock lock(m_fetch_mutex);
+    m_fetch_cv.wait_for(lock, std::chrono::milliseconds(20));
   }
   INFO_LOG_FMT(BRAWLBACK, "SD card: background fetch done ({} bytes)", streamed);
 }

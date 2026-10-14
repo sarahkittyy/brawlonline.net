@@ -677,7 +677,11 @@ void Files(const std::string& dir)
   if (ms.is<picojson::object>())
   {
     const auto& m = ms.get<picojson::object>();
-    for (const char* key : {"phase", "error", "players", "epoch", "frame", "slot"})
+    // With how the session runs (passes with no frame to run while it waits for the others, how
+    // far ahead of them it is and the speed that sets, rollbacks), so a slow room says why while
+    // it is slow.
+    for (const char* key : {"phase", "error", "players", "epoch", "frame", "slot", "stall_polls",
+                            "frames_ahead", "speed", "rollbacks", "frames_resimulated", "desyncs"})
     {
       if (const auto it = m.find(key); it != m.end())
         session[key] = it->second;

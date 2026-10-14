@@ -609,13 +609,12 @@ TEST_F(MachineSDCardTest, BadChunksFromTheHostAreRejected)
   const std::vector<u8> host = PatternCard(6, 8);
   GuestSetup g = MakeGuest(host, nullptr);
 
-  // A chunk whose bytes do not match the manifest is never used.
+  // A chunk whose bytes do not match the manifest is never used. One the host says it cannot
+  // send (4, asked for with the chunks after 2) fails the reads that need it, not the others.
   g.host->corrupt.insert(2);
+  g.host->unavailable.insert(4);
   std::vector<u8> buf(CHUNK_SIZE);
   EXPECT_FALSE(g.card->Read(2 * CHUNK_SIZE, buf.data(), buf.size()));
-
-  // One the host says it cannot send fails the reads that need it, not the others.
-  g.host->unavailable.insert(4);
   EXPECT_FALSE(g.card->Read(4 * CHUNK_SIZE, buf.data(), buf.size()));
   EXPECT_TRUE(g.card->Read(0, buf.data(), buf.size()));
   EXPECT_TRUE(std::equal(buf.begin(), buf.end(), host.begin()));
@@ -958,4 +957,83 @@ TEST_F(MachineSDCardTest, AGuestFetchesFromAnotherGuest)
   EXPECT_EQ(second->GetStats().fetched_bytes, CHUNK_SIZE) << "only the chunk that differs";
   second->Detach();
   first.card->Detach();
+}
+
+TEST_F(MachineSDCardTest, AFetchingReadAsksForTheChunksAfterItToo)
+{
+  // The joiner's card differs in chunks 3-6 and 14 (a file whose start changed, prod's REX cards):
+  // the read of chunk 3 asks for 4-6 in the same round trip, but not for 14 (past the read-ahead).
+  const std::vector<u8> host = PatternCard(16, 2);
+  std::vector<u8> guest = host;
+  for (const u32 c : {3u, 4u, 5u, 6u, 14u})
+    guest[c * CHUNK_SIZE + 9] ^= 0x10;
+  GuestSetup g = MakeGuest(host, &guest);
+
+  std::vector<u8> out(100);
+  ASSERT_TRUE(g.card->Read(3 * CHUNK_SIZE + 10, out.data(), out.size()));
+  EXPECT_TRUE(std::equal(out.begin(), out.end(), host.begin() + 3 * CHUNK_SIZE + 10));
+  EXPECT_EQ(g.host->Requested(), std::vector<u32>({3, 4, 5, 6}));
+  EXPECT_EQ(g.card->GetStats().waits, 1u);
+
+  // The rest of the file reads without asking again.
+  std::vector<u8> rest(3 * CHUNK_SIZE);
+  ASSERT_TRUE(g.card->Read(4 * CHUNK_SIZE, rest.data(), rest.size()));
+  EXPECT_TRUE(std::equal(rest.begin(), rest.end(), host.begin() + 4 * CHUNK_SIZE));
+  EXPECT_EQ(g.host->Requested().size(), 4u);
+  EXPECT_EQ(g.card->GetStats().waits, 1u) << "4-6 had come with 3";
+  EXPECT_EQ(ReadAll(*g.card), host);
+}
+
+TEST_F(MachineSDCardTest, TheBackgroundCheckFindsWhatDiffersAndIsKept)
+{
+  // Nothing read yet: the background check goes through the joiner's whole card, fetches the
+  // chunks that differ, and keeps its hashes, so the next join knows them at once.
+  const std::vector<u8> host = PatternCard(40, 3);
+  std::vector<u8> guest = host;
+  guest[2 * CHUNK_SIZE + 1] ^= 0x01;
+  guest[33 * CHUNK_SIZE + 500] ^= 0x02;
+  GuestSetup g = MakeGuest(host, &guest);
+  EXPECT_EQ(g.card->MissingBytes(), 0u);
+  EXPECT_FALSE(g.card->ScanDone());
+  g.card->StartBackgroundFetch();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+  while ((!g.card->ScanDone() || g.card->MissingBytes() != 0) &&
+         std::chrono::steady_clock::now() < deadline)
+  {
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  }
+  EXPECT_TRUE(g.card->ScanDone());
+  EXPECT_EQ(g.card->UncheckedBytes(), 0u) << "every chunk checked";
+  EXPECT_EQ(g.card->MissingBytes(), 0u);
+  std::vector<u32> requested = g.host->Requested();
+  std::ranges::sort(requested);
+  EXPECT_EQ(requested, std::vector<u32>({2, 33}));
+  g.card->Detach();
+  EXPECT_EQ(ReadAll(*g.card), host) << "all of it here without the host";
+
+  // The next join with the same card: what differs is known before anything is read.
+  auto host2 = std::make_shared<FakeHost>();
+  host2->data = host;
+  host2->manifest = g.manifest;
+  auto again = SessionCard::CreateGuestCard(Path("guest.raw"), g.manifest, Path("cache2"), host2);
+  host2->card = again;
+  EXPECT_TRUE(again->ScanDone());
+  EXPECT_EQ(again->MissingBytes(), 2 * CHUNK_SIZE);
+  EXPECT_EQ(again->UncheckedBytes(), 38 * CHUNK_SIZE) << "the rest is still checked as read";
+  EXPECT_EQ(ReadAll(*again), host);
+  std::vector<u32> requested2 = host2->Requested();
+  std::ranges::sort(requested2);
+  EXPECT_EQ(requested2, std::vector<u32>({2, 33}));
+
+  // A changed card is checked again (Windows: nothing may have the image open to write it).
+  again.reset();
+  g.card.reset();
+  guest[20 * CHUNK_SIZE] ^= 0x04;
+  std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  WriteFile(Path("guest.raw"), guest);
+  auto changed =
+      SessionCard::CreateGuestCard(Path("guest.raw"), g.manifest, Path("cache3"), host2);
+  EXPECT_FALSE(changed->ScanDone());
+  EXPECT_EQ(changed->MissingBytes(), 0u);
+  changed->Detach();
 }

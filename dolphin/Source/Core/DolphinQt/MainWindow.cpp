@@ -77,6 +77,7 @@
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/OnlineSession.h"
 #include "Core/Rollback/GameplayOnlineBackend.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/ReplayPlayback.h"
 #include "Core/State.h"
 #include "Core/System.h"
@@ -1111,7 +1112,10 @@ bool MainWindow::RequestStop()
   OnStopRecording();
   // TODO: Add Debugger shutdown
 
-  if (!m_stop_requested && UICommon::TriggerSTMPowerEvent())
+  // Not in a whole-machine session: the power button would be an input to this player's machine
+  // only, so the game shut down there alone and the others saw desyncs until it was gone (prod
+  // 2026-10-14). The build's save is kept by the Wii FS cleanup, not by the game's shutdown.
+  if (!m_stop_requested && !Machine::IsArmed() && UICommon::TriggerSTMPowerEvent())
   {
     m_stop_requested = true;
 

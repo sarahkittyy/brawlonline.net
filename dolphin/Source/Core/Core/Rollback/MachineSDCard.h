@@ -52,6 +52,11 @@ constexpr u32 MAX_REQUEST_CHUNKS = 64;
 constexpr u64 BACKGROUND_CAP_BYTES = 2ull << 30;
 // The background stream's rate, so it never crowds out the game's own traffic.
 constexpr u64 BACKGROUND_BYTES_PER_SECOND = 256 * 1024;
+// A joiner's background check of its whole card against the manifest (a disk read), at this rate.
+constexpr u64 SCAN_BYTES_PER_SECOND = 128ull << 20;
+// A read that has to fetch also asks for the chunks after it that the card lacks, up to this
+// many: a game reads a file front to back, and those come in one round trip instead of one each.
+constexpr u32 READ_AHEAD_CHUNKS = 8;
 // A read that waits this long for the players' chunks fails (the session is broken by then).
 constexpr int FETCH_TIMEOUT_MS = 60'000;
 // A request with no answer after this long is sent again.
@@ -234,8 +239,12 @@ public:
   Stats GetStats() const;
   // Guest, once the game runs: streams the missing chunks in the background, up to
   // BACKGROUND_CAP_BYTES, the chunks in `first` (those the game is likely to read soon: checked
-  // first if this card has them) before the others.
+  // first if this card has them) before the others. Meanwhile it checks the rest of this card
+  // from its first chunk on (the FAT and directories first, which every file's read goes
+  // through), and those that differ join the stream; the hashes are kept for the next join.
   void StartBackgroundFetch(std::span<const u32> first = {});
+  // Guest: whether the background check has been through this whole card.
+  bool ScanDone() const { return m_scan_done.load(); }
 
   // Another player's request (any thread): the chunk as this machine has it before the session's
   // writes (its image where it matches the session's card, or fetched), or false when it has not
@@ -281,6 +290,12 @@ private:
   // Waits until every listed chunk has arrived (guest). False on timeout, detach or a chunk no
   // player could send.
   bool WaitForChunks(std::span<const u32> chunks, bool keep_alive);
+  // Asks the players for those of `chunks` still missing and not asked for yet, without waiting.
+  void RequestMissing(std::span<const u32> chunks);
+  // The background check's next stretch of this card (its own handle): its chunks' hashes, and
+  // those still unchecked become Local or Missing. False at the card's end or on a read error.
+  bool ScanStep(File::IOFile& image, u64 own_size, std::vector<u8>& buffer,
+                std::vector<u32>* differing);
   void BackgroundThreadFunc();
   void PruneHistory(u64 now);
 
@@ -319,6 +334,13 @@ private:
 
   std::thread m_background_thread;
   std::atomic<bool> m_stop_background{false};
+
+  // Guest: the background check of this card (the background thread), and the hashes it took,
+  // saved as the image's hash cache once it has been through the whole card.
+  u32 m_scan_next = 0;
+  std::vector<Hash> m_scan_hashes;
+  std::vector<bool> m_scan_zero;
+  std::atomic<bool> m_scan_done{false};
 
   // The chunks the game read (emulation thread), for ReadChunks.
   std::vector<bool> m_read_seen;

@@ -117,6 +117,14 @@ export type ModSession = {
   frame?: number;
   slot?: number;
   peers?: ModSessionPeer[];
+  /** How the session runs, for logs and support (absent from an older Dolphin): passes that
+   * waited for the others, frames ahead of them, the speed that sets, rollbacks. */
+  stall_polls?: number;
+  frames_ahead?: number;
+  speed?: number;
+  rollbacks?: number;
+  frames_resimulated?: number;
+  desyncs?: number;
 };
 
 /** `<User>/Online/mods-room.json`, written by Dolphin (design §3). */
