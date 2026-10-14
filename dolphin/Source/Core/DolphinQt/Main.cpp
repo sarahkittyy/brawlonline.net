@@ -310,6 +310,8 @@ int main(int argc, char* argv[])
 
     MainWindow win{Core::System::GetInstance(), std::move(boot),
                    static_cast<const char*>(options.get("movie"))};
+    if (options.is_set("controllers"))
+      win.ShowControllersOnly();
 
 #if defined(USE_ANALYTICS) && USE_ANALYTICS
     if (!Config::Get(Config::MAIN_ANALYTICS_PERMISSION_ASKED))

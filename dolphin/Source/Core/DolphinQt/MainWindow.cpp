@@ -4,6 +4,7 @@
 #include "DolphinQt/MainWindow.h"
 
 #include <QApplication>
+#include <QTimer>
 #include <QCloseEvent>
 #include <QDateTime>
 #include <QDesktopServices>
@@ -71,6 +72,7 @@
 #include "Core/NetPlayClient.h"
 #include "Core/NetPlayProto.h"
 #include "Core/NetPlayServer.h"
+#include "Core/Online/ModsRoom.h"
 #include "Core/Online/NetPlaySession.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/OnlineSession.h"
@@ -254,6 +256,15 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
 
   InitControllers();
   ConnectHotkeys();
+
+  // The launcher's controller menu asked for the Controllers settings over a Brawl Mods room's
+  // game ("Configure", Online::ModsRoom).
+  auto* mods_configure_timer = new QTimer(this);
+  connect(mods_configure_timer, &QTimer::timeout, this, [this] {
+    if (Online::ModsRoom::TakeConfigureRequest())
+      ShowControllersWindow();
+  });
+  mods_configure_timer->start(250);
 
 #if QT_VERSION >= QT_VERSION_CHECK(6, 5, 0)
   connect(QGuiApplication::styleHints(), &QStyleHints::colorSchemeChanged, this,
@@ -1362,6 +1373,13 @@ void MainWindow::ShowControllersWindow()
 {
   ShowSettingsWindow();
   m_settings_window->SelectPane(SettingsWindowPaneIndex::Controllers);
+}
+
+void MainWindow::ShowControllersOnly()
+{
+  hide();
+  ShowControllersWindow();
+  connect(m_settings_window, &QDialog::finished, this, [] { QApplication::quit(); });
 }
 
 void MainWindow::ShowTriforceWindow()

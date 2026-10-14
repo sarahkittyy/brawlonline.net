@@ -35,6 +35,7 @@
 #include "Core/HW/SI/SI.h"
 #include "Core/HW/SI/SI_Device.h"
 #include "Core/HW/Sram.h"
+#include "Core/HW/WiimoteReal/WiimoteReal.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayProto.h"
 #include "Core/Rollback/MachineSession.h"
@@ -93,7 +94,13 @@ bool BootCore(Core::System& system, std::unique_ptr<BootParameters> boot,
     // A whole-machine session (Brawl Mods): the settings that change what the game computes are
     // the session's, through the same layer as Dolphin's netplay.
     const NetPlay::NetSettings settings = Machine::MakeNetSettings();
+    // Real Wii Remotes play through Dolphin's controller interface ("Connect Wii Remotes for
+    // Emulated Controllers"): the session reads an emulated Wii Remote they drive and sends its
+    // state, as for any other controller. Set before the layer makes every Wii Remote emulated, so
+    // a real one connected now goes to the controller interface.
+    Config::SetCurrent(Config::MAIN_CONNECT_WIIMOTES_FOR_CONTROLLER_INTERFACE, true);
     Config::AddLayer(ConfigLoaders::GenerateNetPlayConfigLoader(settings));
+    WiimoteReal::HandleWiimotesInControllerInterfaceSettingChange();
     StartUp.bCopyWiiSaveNetplay = false;
     StartUp.bIsSpectator = false;
     // Every player's port is a standard controller (the session reads each player's own

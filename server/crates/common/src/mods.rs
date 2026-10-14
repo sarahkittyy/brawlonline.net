@@ -15,6 +15,7 @@ pub const MODS_LEAVE: &str = "mods-leave";
 pub const MODS_SLOT: &str = "mods-slot";
 pub const MODS_KICK: &str = "mods-kick";
 pub const MODS_PUBLIC: &str = "mods-public";
+pub const MODS_CONTROLLER: &str = "mods-controller";
 pub const MODS_STATE: &str = "mods-state";
 pub const MODS_LEFT: &str = "mods-left";
 pub const MODS_ERROR: &str = "mods-error";
@@ -59,6 +60,8 @@ pub enum ModsRequest {
     Kick { slot: u8 },
     /// Host: public (listed) or private (joinable by code).
     Public { public: bool },
+    /// Any member: what it plays with now (switched mid-game: the room shows it).
+    Controller { controller: Controller },
 }
 
 fn valid_hash(h: &str) -> bool {
@@ -131,6 +134,7 @@ impl ModsRequest {
             MODS_SLOT => ModsRequest::Slot { slot: slot()?, open: flag("open", None)? },
             MODS_KICK => ModsRequest::Kick { slot: slot()? },
             MODS_PUBLIC => ModsRequest::Public { public: flag("public", None)? },
+            MODS_CONTROLLER => ModsRequest::Controller { controller: controller()? },
             _ => return Err(format!("unknown request `{kind}`")),
         })
     }

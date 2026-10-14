@@ -36,12 +36,17 @@ namespace Online::ModsRoom
 // Before boot (Machine's environment check). PPR_MODS_ROOM, JSON:
 //   {"host": true, "build": {"hash": "<64 hex>", "name": "Brawl Minus"}, "public": true,
 //    "controller": "gc" | "wiimote", "delay": 2, "port": 0, "pad": 0}
+//   ("pad" left out: the first plugged-in controller of the kind, picked again as they come and go)
 //   {"join": "KFQB", "build": {"hash": ..}, "controller": .., "delay": .., "port": .., "pad": ..}
 // Set: the room to open or join and the options to arm the session with (alone as the room's
 // host, or a joiner who takes its slot from the room). Not set: nullopt with *error empty.
 std::optional<Machine::Options> FromEnvironment(std::string* error);
 // The --mods-room command line option (the same JSON), taken instead of PPR_MODS_ROOM. Before boot.
 void SetCommandLine(std::string json);
+
+// UI thread: the launcher asked for Dolphin's Controllers settings (a "configure" request);
+// true once per request.
+bool TakeConfigureRequest();
 
 // Rooms thread. A mods-* message from mm: handled (true); anything else: false.
 bool OnServerMessage(const std::string& text);
@@ -51,8 +56,9 @@ std::vector<std::string> TakeOutbox(u64 connection);
 
 // Rooms thread, every half second: the launcher's hand-off in Dolphin's online folder `dir`.
 // `mods-request.json` in (launcher -> Dolphin: {version: 1, id, op: "leave" | "kick" | "slot" |
-// "public", slot, open, public, createdAt}; read and deleted), `mods-room.json` out (Dolphin ->
-// launcher: {version: 1, kind, state, error, room, session, lastRequest: {id, result, error}, pid,
+// "public" | "controller", slot, open, public, controller, createdAt}; read and deleted),
+// `mods-room.json` out (Dolphin -> launcher: {version: 1, kind, state, error, room, session,
+// input: {controller, index, device, plugged, real}, lastRequest: {id, result, error}, pid,
 // updatedAt}; on every change and at least every 5 s). Nothing while no room was asked for.
 void Files(const std::string& dir);
 

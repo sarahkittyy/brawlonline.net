@@ -538,8 +538,12 @@ static void RefreshConfig()
 
   for (int i = 0; i < SerialInterface::MAX_SI_CHANNELS; ++i)
   {
+    // The player's own setting counts too: a rollback session's config layer makes every port a
+    // standard controller and reads the adapter itself (Machine::CaptureLocalInput).
     is_adapter_wanted |= Config::Get(Config::GetInfoForSIDevice(i)) ==
-                         SerialInterface::SIDevices::SIDEVICE_WIIU_ADAPTER;
+                             SerialInterface::SIDevices::SIDEVICE_WIIU_ADAPTER ||
+                         Config::GetBase(Config::GetInfoForSIDevice(i)) ==
+                             SerialInterface::SIDevices::SIDEVICE_WIIU_ADAPTER;
     s_config_rumble_enabled[i].store(Config::Get(Config::GetInfoForAdapterRumble(i)),
                                      std::memory_order_relaxed);
   }

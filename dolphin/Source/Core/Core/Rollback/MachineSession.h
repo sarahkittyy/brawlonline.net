@@ -117,6 +117,9 @@ struct Options
   // The local controller (Dolphin's GameCube pad / Wii Remote config index) this player plays with.
   int local_pad = 0;
   Controller controller = Controller::GameCube;
+  // Instead of `local_pad`: the first plugged-in controller of the kind, of the ones set up in
+  // Dolphin's Controllers settings (SetLocalController), picked again as controllers come and go.
+  bool auto_pad = false;
   std::string name;
   // Join a running session: boot, connect to every peer (the session's players), ask to join,
   // and continue from the machine image the session sends at its next epoch.
@@ -222,6 +225,22 @@ struct WiimoteOverride
   u8 nunchuk_buttons = 0;  // Nunchuk::BUTTON_C | BUTTON_Z
 };
 void SetWiimoteOverride(std::optional<WiimoteOverride> value);
+
+// The launcher's controller menu (a room's "controller" request), mid-game too (any thread): from
+// the next frame this player plays that kind of controller. The other machines see its GameCube
+// port unplugged and its Wii Remote connect, or the reverse, as when a controller is plugged in.
+void SetLocalController(Controller controller);
+// What this player plays with now (any thread).
+struct LocalControllerInfo
+{
+  Controller controller = Controller::GameCube;
+  int index = 0;         // the GameCube port or Wii Remote (0-3) it is set up as in Dolphin
+  std::string device;    // Dolphin's device ("" when none of the kind is set up)
+  bool plugged = false;
+  bool adapter = false;  // a GameCube controller adapter's port
+  bool real = false;     // a real Wii Remote
+};
+LocalControllerInfo GetLocalControllerInfo();
 
 picojson::value Status();
 // Confirmed frames from `since`: frame -> [input bytes of each player (hex), checksum].

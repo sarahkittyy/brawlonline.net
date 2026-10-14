@@ -4,6 +4,7 @@
 #include "Core/Online/ModsRoom.h"
 
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cstdlib>
 #include <ctime>
@@ -325,6 +326,8 @@ std::optional<Machine::Options> FromEnvironment(std::string* error)
   opts.local_port = static_cast<u16>(port);
   opts.delay = static_cast<int>(delay);
   opts.local_pad = static_cast<int>(pad);
+  // No "pad": the first plugged-in controller of the kind (the launcher's way).
+  opts.auto_pad = o.count("pad") == 0;
   opts.controller =
       controller == "wiimote" ? Machine::Controller::WiiRemote : Machine::Controller::GameCube;
   opts.name = Client::GetUser().GetUserInfo().display_name.substr(0, 64);
@@ -485,6 +488,15 @@ std::vector<std::string> TakeOutbox(u64 connection)
   return out;
 }
 
+picojson::object InputJson();
+
+std::atomic<bool> s_configure_requested{false};
+
+bool TakeConfigureRequest()
+{
+  return s_configure_requested.exchange(false);
+}
+
 void Files(const std::string& dir)
 {
   {
@@ -569,6 +581,7 @@ void Files(const std::string& dir)
     o["error"] = picojson::value(s.error);
     o["room"] = s.view ? picojson::value(RoomJson(*s.view)) : picojson::value();
     o["session"] = picojson::value(session);
+    o["input"] = picojson::value(InputJson());
     o["lastRequest"] = s.last_request;
 #ifdef _WIN32
     o["pid"] = picojson::value(static_cast<double>(GetCurrentProcessId()));
@@ -641,6 +654,20 @@ picojson::object Status()
   return o;
 }
 
+// What this player plays with now (Machine::GetLocalControllerInfo), for the launcher.
+picojson::object InputJson()
+{
+  const Machine::LocalControllerInfo p = Machine::GetLocalControllerInfo();
+  picojson::object o;
+  o["controller"] =
+      picojson::value(p.controller == Machine::Controller::WiiRemote ? "wiimote" : "gc");
+  o["index"] = picojson::value(static_cast<double>(p.index + 1));
+  o["device"] = picojson::value(p.device);
+  o["plugged"] = picojson::value(p.plugged);
+  o["real"] = picojson::value(p.real);
+  return o;
+}
+
 std::optional<std::string> Request(const picojson::object& args)
 {
   const std::string op = Str(args, "op", 16);
@@ -664,9 +691,32 @@ std::optional<std::string> Request(const picojson::object& args)
     m["type"] = picojson::value("mods-public");
     m["public"] = picojson::value(Flag(args, "public", true));
   }
+  else if (op == "configure")
+  {
+    s_configure_requested = true;
+    return std::nullopt;
+  }
+  else if (op == "controller")
+  {
+    // This player's own: taken at the next frame, in a room or not yet; the room shows it.
+    const std::string controller = Str(args, "controller", 16);
+    if (controller != "gc" && controller != "wiimote")
+      return "controller must be gc or wiimote";
+    Machine::SetLocalController(controller == "wiimote" ? Machine::Controller::WiiRemote :
+                                                          Machine::Controller::GameCube);
+    std::lock_guard lk(s.mutex);
+    s.controller = controller;
+    if (s.view)
+    {
+      m["type"] = picojson::value("mods-controller");
+      m["controller"] = picojson::value(controller);
+      s.outbox.push_back(picojson::value(m).serialize());
+    }
+    return std::nullopt;
+  }
   else
   {
-    return "op must be leave, kick, slot or public";
+    return "op must be leave, kick, slot, public, controller or configure";
   }
   std::lock_guard lk(s.mutex);
   if (!s.view)

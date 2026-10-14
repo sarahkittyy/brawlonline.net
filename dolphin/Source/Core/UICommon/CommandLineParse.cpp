@@ -113,6 +113,10 @@ std::unique_ptr<optparse::OptionParser> CreateParser(ParserOptions options)
       .type("string")
       .help("Open or join a Brawl Mods room before booting (JSON as PPR_MODS_ROOM, "
             "docs/design/brawl-mods.md section 3)");
+  parser->add_option("--controllers")
+      .action("store_true")
+      .help("Open only the Controllers settings; closing them closes Dolphin (the launcher's "
+            "controller menu)");
   parser->add_option("-s", "--save_state")
       .action("store")
       .metavar("<file>")

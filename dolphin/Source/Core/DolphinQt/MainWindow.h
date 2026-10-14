@@ -94,6 +94,9 @@ public:
   QMenu* createPopupMenu() override;
 
   void ShowTriforceWindow();
+  // --controllers: only the Controllers settings, without the main window; closing them closes
+  // Dolphin.
+  void ShowControllersOnly();
 
 signals:
   void ReadOnlyModeChanged(bool read_only);

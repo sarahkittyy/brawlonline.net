@@ -29,6 +29,7 @@
 #include "Common/ENet.h"
 #include "Common/FileUtil.h"
 #include "Common/Hash.h"
+#include "Common/IniFile.h"
 #include "Common/Logging/Log.h"
 #include "Common/StringUtil.h"
 #include "Common/Swap.h"
@@ -39,6 +40,7 @@
 #include "Core/Config/MainSettings.h"
 #include "Core/Config/SYSCONFSettings.h"
 #include "Core/Config/SessionSettings.h"
+#include "Core/Config/WiimoteSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
@@ -59,6 +61,7 @@
 #include "Core/HW/WiimoteCommon/WiimoteHid.h"
 #include "Core/HW/WiimoteEmu/DesiredWiimoteState.h"
 #include "Core/HW/WiimoteEmu/Extension/Nunchuk.h"
+#include "Core/HW/WiimoteEmu/WiimoteEmu.h"
 #include "Core/IOS/FS/HostBackend/FS.h"
 #include "Core/IOS/IOS.h"
 #include "Core/IOS/USB/Bluetooth/BTEmu.h"
@@ -76,6 +79,7 @@
 #include "InputCommon/ControllerInterface/ControllerInterface.h"
 #include "InputCommon/GCAdapter.h"
 #include "InputCommon/GCPadStatus.h"
+#include "InputCommon/InputConfig.h"
 #include "VideoCommon/Fifo.h"
 #include "VideoCommon/OnScreenDisplay.h"
 #include "VideoCommon/VideoState.h"
@@ -220,6 +224,17 @@ struct State
   std::array<Controller, MAX_PLAYERS> controller{};
   u32 wiimote_captures = 0;
   std::optional<WiimoteOverride> wiimote_override;
+  // The local controller (CPU thread): a switch the launcher asked for (a Controller, or -1), and
+  // the controller picked (opts.auto_pad) every PICK_EVERY captures. `pick` is copied out under
+  // `pick_mutex`. A real Wii Remote drives `real_wiimote`, an emulated Wii Remote with its
+  // controls (the session reads and sends an emulated Wii Remote's state).
+  std::atomic<int> requested_controller{-1};
+  u32 pick_countdown = 0;
+  std::mutex pick_mutex;
+  LocalControllerInfo pick;
+  bool use_real_wiimote = false;
+  std::unique_ptr<WiimoteEmu::Wiimote> real_wiimote;
+  std::string real_wiimote_device;
 
   // Network (net thread, under `net_mutex`).
   std::mutex net_mutex;
@@ -237,6 +252,9 @@ struct State
     net_run = false;
     if (net_thread.joinable())
       net_thread.detach();
+    // Its destructor unregisters from Dolphin's config, which may be gone by now: left to the
+    // process's end.
+    (void)real_wiimote.release();
   }
   std::deque<std::pair<int, std::vector<u8>>> gekko_rx;  // (slot, packet)
   std::vector<GekkoNetResult*> gekko_rx_ptrs;
@@ -1121,9 +1139,286 @@ bool CreateGekko()
 
 // ------------------------------------------------------------------------------ frame loop
 
+// ------------------------------------------------------------------------------ local controller
+
+// How often (in captures, frames) the local controller is picked again: one plugged in or
+// unplugged is taken within half a second.
+constexpr u32 PICK_EVERY = 30;
+
+// Dolphin's "Wii Remote with MotionPlus Pointing" profile (Data/Sys/Profiles/Wiimote), pointing
+// with the real Wii Remote's own IR camera (the sensor bar) instead of its MotionPlus: every
+// button, the accelerometer, a MotionPlus and the extension plugged into it as they are.
+constexpr std::pair<const char*, const char*> REAL_WIIMOTE_PROFILE[] = {
+    {"Device", "Bluetooth/0/Wii Remote"},
+    {"Buttons/A", "`A`"},
+    {"Buttons/B", "`B`"},
+    {"Buttons/1", "`1`"},
+    {"Buttons/2", "`2`"},
+    {"Buttons/-", "`-`"},
+    {"Buttons/+", "`+`"},
+    {"Buttons/Home", "`HOME`"},
+    {"D-Pad/Up", "`Up`"},
+    {"D-Pad/Down", "`Down`"},
+    {"D-Pad/Left", "`Left`"},
+    {"D-Pad/Right", "`Right`"},
+    {"IRPassthrough/Enabled", "True"},
+    {"IRPassthrough/Object 1 X", "`IR Object 1 X`"},
+    {"IRPassthrough/Object 1 Y", "`IR Object 1 Y`"},
+    {"IRPassthrough/Object 1 Size", "`IR Object 1 Size`"},
+    {"IRPassthrough/Object 2 X", "`IR Object 2 X`"},
+    {"IRPassthrough/Object 2 Y", "`IR Object 2 Y`"},
+    {"IRPassthrough/Object 2 Size", "`IR Object 2 Size`"},
+    {"IRPassthrough/Object 3 X", "`IR Object 3 X`"},
+    {"IRPassthrough/Object 3 Y", "`IR Object 3 Y`"},
+    {"IRPassthrough/Object 3 Size", "`IR Object 3 Size`"},
+    {"IRPassthrough/Object 4 X", "`IR Object 4 X`"},
+    {"IRPassthrough/Object 4 Y", "`IR Object 4 Y`"},
+    {"IRPassthrough/Object 4 Size", "`IR Object 4 Size`"},
+    {"IMUAccelerometer/Up", "`Accel Up`"},
+    {"IMUAccelerometer/Down", "`Accel Down`"},
+    {"IMUAccelerometer/Left", "`Accel Left`"},
+    {"IMUAccelerometer/Right", "`Accel Right`"},
+    {"IMUAccelerometer/Forward", "`Accel Forward`"},
+    {"IMUAccelerometer/Backward", "`Accel Backward`"},
+    {"IMUGyroscope/Dead Zone", "3"},
+    {"IMUGyroscope/Pitch Up", "`Gyro Pitch Up`"},
+    {"IMUGyroscope/Pitch Down", "`Gyro Pitch Down`"},
+    {"IMUGyroscope/Roll Left", "`Gyro Roll Left`"},
+    {"IMUGyroscope/Roll Right", "`Gyro Roll Right`"},
+    {"IMUGyroscope/Yaw Left", "`Gyro Yaw Left`"},
+    {"IMUGyroscope/Yaw Right", "`Gyro Yaw Right`"},
+    {"IMUIR/Enabled", "False"},
+    {"Extension/Attach MotionPlus", "`Attached MotionPlus`"},
+    {"Extension", "`Attached Extension`"},
+    {"Nunchuk/Buttons/C", "`Nunchuk C`"},
+    {"Nunchuk/Buttons/Z", "`Nunchuk Z`"},
+    {"Nunchuk/Stick/Up", "`Nunchuk Y+`"},
+    {"Nunchuk/Stick/Down", "`Nunchuk Y-`"},
+    {"Nunchuk/Stick/Left", "`Nunchuk X-`"},
+    {"Nunchuk/Stick/Right", "`Nunchuk X+`"},
+    {"Nunchuk/Stick/Calibration", "100 100 100 100 100 100 100 100"},
+    {"Nunchuk/IMUAccelerometer/Up", "`Nunchuk Accel Up`"},
+    {"Nunchuk/IMUAccelerometer/Down", "`Nunchuk Accel Down`"},
+    {"Nunchuk/IMUAccelerometer/Left", "`Nunchuk Accel Left`"},
+    {"Nunchuk/IMUAccelerometer/Right", "`Nunchuk Accel Right`"},
+    {"Nunchuk/IMUAccelerometer/Forward", "`Nunchuk Accel Forward`"},
+    {"Nunchuk/IMUAccelerometer/Backward", "`Nunchuk Accel Backward`"},
+    {"Classic/Buttons/A", "`Classic A`"},
+    {"Classic/Buttons/B", "`Classic B`"},
+    {"Classic/Buttons/X", "`Classic X`"},
+    {"Classic/Buttons/Y", "`Classic Y`"},
+    {"Classic/Buttons/ZL", "`Classic ZL`"},
+    {"Classic/Buttons/ZR", "`Classic ZR`"},
+    {"Classic/Buttons/-", "`Classic -`"},
+    {"Classic/Buttons/+", "`Classic +`"},
+    {"Classic/Buttons/Home", "`Classic HOME`"},
+    {"Classic/Left Stick/Up", "`Classic Left Y+`"},
+    {"Classic/Left Stick/Down", "`Classic Left Y-`"},
+    {"Classic/Left Stick/Left", "`Classic Left X-`"},
+    {"Classic/Left Stick/Right", "`Classic Left X+`"},
+    {"Classic/Left Stick/Calibration", "100 100 100 100 100 100 100 100"},
+    {"Classic/Right Stick/Up", "`Classic Right Y+`"},
+    {"Classic/Right Stick/Down", "`Classic Right Y-`"},
+    {"Classic/Right Stick/Left", "`Classic Right X-`"},
+    {"Classic/Right Stick/Right", "`Classic Right X+`"},
+    {"Classic/Right Stick/Calibration", "100 100 100 100 100 100 100 100"},
+    {"Classic/Triggers/L", "`Classic L`"},
+    {"Classic/Triggers/R", "`Classic R`"},
+    {"Classic/Triggers/L-Analog", "`Classic L-Analog`"},
+    {"Classic/Triggers/R-Analog", "`Classic R-Analog`"},
+    {"Classic/D-Pad/Up", "`Classic Up`"},
+    {"Classic/D-Pad/Down", "`Classic Down`"},
+    {"Classic/D-Pad/Left", "`Classic Left`"},
+    {"Classic/D-Pad/Right", "`Classic Right`"},
+    {"Rumble/Motor", "`Motor`"},
+    {"Options/Battery", "`Battery`"},
+};
+
+bool DevicePresent(const std::string& name)
+{
+  if (name.empty())
+    return false;
+  ciface::Core::DeviceQualifier q;
+  q.FromString(name);
+  return g_controller_interface.FindDevice(q) != nullptr;
+}
+
+// The real Wii Remotes in Dolphin's controller interface ("Connect Wii Remotes for Emulated
+// Controllers", which the session turns on), in its order.
+std::vector<std::string> RealWiimoteDevices()
+{
+  std::vector<std::string> out;
+  for (const std::string& d : g_controller_interface.GetAllDeviceStrings())
+  {
+    if (d.starts_with("Bluetooth/") && d.ends_with("/Wii Remote"))
+      out.push_back(d);
+  }
+  return out;
+}
+
+// From the player's own settings (the base layer: the session's layer makes every port a standard
+// controller and every Wii Remote an emulated one): the first controller of the kind set up that
+// is plugged in, else the first set up, else port 1 / Wii Remote 1. A Wii Remote set up as a real
+// one is the next real Wii Remote connected, in Dolphin's order.
+LocalControllerInfo PickLocal(Controller kind)
+{
+  std::optional<LocalControllerInfo> first;
+  if (kind == Controller::GameCube)
+  {
+    for (int i = 0; i < 4; ++i)
+    {
+      LocalControllerInfo p;
+      p.controller = kind;
+      p.index = i;
+      const auto si = Config::GetBase(Config::GetInfoForSIDevice(i));
+      if (si == SerialInterface::SIDEVICE_WIIU_ADAPTER)
+      {
+        p.adapter = true;
+        p.device = "GameCube adapter";
+        p.plugged = GCAdapter::DeviceConnected(i);
+      }
+      else if (si == SerialInterface::SIDEVICE_GC_CONTROLLER)
+      {
+        p.device = Pad::GetConfig()->GetController(i)->GetDefaultDevice().ToString();
+        p.plugged = DevicePresent(p.device);
+      }
+      else
+      {
+        continue;
+      }
+      if (p.plugged)
+        return p;
+      if (!first)
+        first = p;
+    }
+  }
+  else
+  {
+    const std::vector<std::string> reals = RealWiimoteDevices();
+    size_t real_n = 0;
+    for (int i = 0; i < 4; ++i)
+    {
+      LocalControllerInfo p;
+      p.controller = kind;
+      p.index = i;
+      const WiimoteSource source = Config::GetBase(Config::GetInfoForWiimoteSource(i));
+      if (source == WiimoteSource::Emulated)
+      {
+        p.device = ::Wiimote::GetConfig()->GetController(i)->GetDefaultDevice().ToString();
+        p.plugged = DevicePresent(p.device);
+      }
+      else if (source == WiimoteSource::Real)
+      {
+        p.real = true;
+        p.plugged = real_n < reals.size();
+        p.device = p.plugged ? reals[real_n] : fmt::format("Bluetooth/{}/Wii Remote", real_n);
+        ++real_n;
+      }
+      else
+      {
+        continue;
+      }
+      if (p.plugged)
+        return p;
+      if (!first)
+        first = p;
+    }
+  }
+  if (first)
+    return *first;
+  LocalControllerInfo p;
+  p.controller = kind;
+  p.adapter = kind == Controller::GameCube &&
+              Config::GetBase(Config::GetInfoForSIDevice(0)) == SerialInterface::SIDEVICE_WIIU_ADAPTER;
+  return p;
+}
+
+// CPU thread: the emulated Wii Remote a real one drives, bound to its device.
+void UseRealWiimote(const std::string& device)
+{
+  if (!s.real_wiimote)
+  {
+    s.real_wiimote = std::make_unique<WiimoteEmu::Wiimote>(0);
+    Common::IniFile ini;
+    Common::IniFile::Section* section = ini.GetOrCreateSection("Profile");
+    for (const auto& [key, value] : REAL_WIIMOTE_PROFILE)
+      section->Set(key, std::string(value));
+    s.real_wiimote->LoadConfig(section);
+    s.real_wiimote_device.clear();
+  }
+  if (device != s.real_wiimote_device)
+  {
+    s.real_wiimote->SetDefaultDevice(device);
+    s.real_wiimote_device = device;
+  }
+  // Binds its controls to the device (again: it may have connected since).
+  s.real_wiimote->UpdateReferences(g_controller_interface);
+}
+
+std::string DescribeLocal(const LocalControllerInfo& p)
+{
+  const char* kind = p.controller == Controller::WiiRemote ? "Wii Remote" : "GameCube controller";
+  if (p.device.empty())
+    return fmt::format("{} (none set up in Dolphin)", kind);
+  return fmt::format("{} {} ({}{})", kind, p.index + 1, p.device,
+                     p.plugged ? "" : ", not plugged in");
+}
+
+// CPU thread, before each capture: a switch the launcher asked for, and the controller to read.
+void UpdateLocalController()
+{
+  const int requested = s.requested_controller.exchange(-1);
+  bool now = s.pick_countdown == 0;
+  if (requested >= 0)
+  {
+    const Controller c = static_cast<Controller>(requested);
+    if (c != s.controller[s.opts.local_slot])
+    {
+      s.opts.controller = c;
+      s.controller[s.opts.local_slot] = c;
+      AddLog(fmt::format("controller: now a {}",
+                         c == Controller::WiiRemote ? "Wii Remote" : "GameCube controller"));
+    }
+    now = true;
+  }
+  if (!now)
+  {
+    --s.pick_countdown;
+    return;
+  }
+  s.pick_countdown = PICK_EVERY;
+  LocalControllerInfo p;
+  if (s.opts.auto_pad)
+  {
+    p = PickLocal(s.controller[s.opts.local_slot]);
+    s.opts.local_pad = p.index;
+    s.local_adapter = p.adapter;
+  }
+  else
+  {
+    p.controller = s.controller[s.opts.local_slot];
+    p.index = s.opts.local_pad;
+    p.adapter = s.local_adapter;
+    p.plugged = true;
+  }
+  s.use_real_wiimote = p.controller == Controller::WiiRemote && p.real;
+  if (s.use_real_wiimote)
+    UseRealWiimote(p.device);
+  std::lock_guard lk(s.pick_mutex);
+  if (p.controller != s.pick.controller || p.index != s.pick.index || p.device != s.pick.device ||
+      p.plugged != s.pick.plugged)
+  {
+    AddLog(fmt::format("plays with: {}", DescribeLocal(p)));
+  }
+  s.pick = p;
+}
+
 void CaptureLocalWiimote(Core::System& system, Input* in)
 {
-  auto* hid = WiimoteCommon::GetHIDWiimoteSource(static_cast<unsigned int>(s.opts.local_pad));
+  WiimoteCommon::HIDWiimote* hid =
+      s.use_real_wiimote && s.real_wiimote ?
+          s.real_wiimote.get() :
+          WiimoteCommon::GetHIDWiimoteSource(static_cast<unsigned int>(s.opts.local_pad));
   WiimoteEmu::DesiredWiimoteState state;
   if (hid)
   {
@@ -1175,6 +1470,7 @@ void AddLocalRequest(Input* in)
 
 void CaptureLocalInput()
 {
+  UpdateLocalController();
   if (s.controller[s.opts.local_slot] == Controller::WiiRemote)
   {
     Input in{};
@@ -3293,6 +3589,15 @@ bool Arm(const Options& options, std::string* error)
   s.controller = {};
   s.controller[options.local_slot] = options.controller;
   s.wiimote_captures = 0;
+  s.requested_controller = -1;
+  s.pick_countdown = 0;
+  s.use_real_wiimote = false;
+  {
+    std::lock_guard plk(s.pick_mutex);
+    s.pick = {};
+    s.pick.controller = options.controller;
+    s.pick.index = options.local_pad;
+  }
   s.local_adapter = Config::Get(Config::GetInfoForSIDevice(options.local_pad)) ==
                     SerialInterface::SIDEVICE_WIIU_ADAPTER;
   for (const Peer& p : options.peers)
@@ -3731,6 +4036,21 @@ void SetWiimoteOverride(std::optional<WiimoteOverride> value)
 {
   std::lock_guard lk(s.mutex);
   s.wiimote_override = value;
+}
+
+void SetLocalController(Controller controller)
+{
+  s.requested_controller = static_cast<int>(controller);
+}
+
+LocalControllerInfo GetLocalControllerInfo()
+{
+  std::lock_guard lk(s.pick_mutex);
+  LocalControllerInfo p = s.pick;
+  // Asked for, not yet taken (the next frame takes it).
+  if (const int requested = s.requested_controller.load(); requested >= 0)
+    p.controller = static_cast<Controller>(requested);
+  return p;
 }
 
 // The boundary the session runs at: Auto becomes BrawlLoop for a Brawl build, ViField otherwise

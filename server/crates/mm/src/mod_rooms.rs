@@ -334,6 +334,18 @@ impl ModRoomBook {
                 self.rooms.get_mut(&code).expect("host_request found it").public = public;
                 self.broadcast(&code, out);
             }
+            ModsRequest::Controller { controller } => {
+                let Some(code) = self.member_of.get(&conn).cloned() else {
+                    return mods_error(out, conn, mods::MODS_CONTROLLER, NOT_IN_ROOM);
+                };
+                let Some(room) = self.rooms.get_mut(&code) else { return };
+                let Some(idx) = room.slot_of(conn) else { return };
+                let Some(m) = room.slots[idx].as_mut() else { return };
+                if m.controller != controller {
+                    m.controller = controller;
+                    self.broadcast(&code, out);
+                }
+            }
         }
     }
 
@@ -575,5 +587,19 @@ mod tests {
         assert_eq!(b.public_rooms(10).len(), 1);
         req(&mut b, 1, 1, ModsRequest::Public { public: false });
         assert!(b.public_rooms(10).is_empty());
+    }
+
+    #[test]
+    fn a_member_switches_controller() {
+        let mut b = ModRoomBook::new(ModRoomsConfig::default());
+        let code = create(&mut b, 1);
+        join(&mut b, 2, &code);
+        let out = req(&mut b, 2, 2, ModsRequest::Controller { controller: Controller::Gc });
+        let s1 = msgs(&out, 1);
+        assert_eq!(s1.last().unwrap()["slots"][1]["player"]["controller"], "gc");
+        // The same controller again: nothing to tell.
+        assert!(req(&mut b, 2, 2, ModsRequest::Controller { controller: Controller::Gc }).is_empty());
+        let out = req(&mut b, 9, 9, ModsRequest::Controller { controller: Controller::Gc });
+        assert_eq!(msgs(&out, 9)[0]["error"], NOT_IN_ROOM);
     }
 }
