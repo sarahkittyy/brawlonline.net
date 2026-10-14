@@ -102,7 +102,7 @@ mm compares each entry with the primary's chunk of the same `first_frame`. An en
 
 - **Pause:** mm moves the upload to a witness at once if it has one. The paused player becomes a standby and sends nothing.
 - **Resume:** a standby that resumes stays standby, unless the current primary stops and no witness is left. Then the standby takes over again.
-- **Stop:** the player sends nothing more for this game.
+- **Stop:** the player sends nothing more for this game. If nobody else can take the upload over (no witness, no standby that resumed), mm cuts the game at once: spectators get `bad` "The rest of this game wasn't streamed." (they play what came), and the stream waits for the match's next game as after a game's end. The same holds when the last uploader leaves or sends a bad chunk; a pause is not cut (it comes back within seconds).
 
 mm also starts a takeover when the primary has sent no `FRMS` for 5 s while a witness's digests show the game going on.
 
@@ -124,7 +124,9 @@ On mm's status listener (`MM_STATUS_LISTEN`):
 An empty line is sent every 15 s, so idle connections stay open.
 
 A **stream** is a match: a Direct, Unranked or Ranked set, or a room's games while the same players play in the same room. Its id is 12 lowercase hex characters. A stream is over:
-- 120 s after its last game ended with no new offer;
+- at once when its set can't go on: a game ended by a disconnect, a player leaving the match or an error (ENDG `endMethod` `disconnect`, `stopped`, `error`), a Ranked quit, or a Ranked player's second win;
+- when one of its players leaves the match or the room, once no game of it is going on: mm sees them leave the match's (or room's) chat group, which Dolphin does when the game leaves the online CSS, a new search, another room or a dropped connection (`docs/chat-protocol.md` §2). Between games on the CSS the players stay in it;
+- otherwise 120 s after its last game ended with no new offer (players without in-game chat never join a group; Unranked, Direct and rooms have no set length);
 - when no game of it has been uploaded for 10 minutes.
 
 It stays readable for 10 minutes after that.
@@ -204,4 +206,4 @@ The playback Dolphin follows those files through Slippi's comm file (`-i`, `Roll
 | `closeOnEnd` | "Close Dolphin after a spectated game ends" and not Auto play: at the end, a 5 s countdown, then status `close`, and the launcher closes Dolphin. Any replay key cancels it. |
 | `banner` | shown at the end of a stream that is over (Auto play: "Waiting for the next live game..."). |
 
-Dolphin re-reads a game's file when its size changes (every 200 ms) and adds the new frames to the playing match (`Gprb::Session::ExtendPlayback`). It waits for a game's setup and first frames before it starts it, then catches up to the live edge (the newest frame less 3 s) unpresented but for one frame in 15, plays live keeping 2-4 s of frames by nudging its speed 2 %, and holds ("Buffering…") when the frames run out. A finished game is followed by the next one in the queue; with none yet, it holds its last frame ("The next game starts soon"). Its status file adds `mirror`, `at_end`, `live_edge`, `buffering`, `catching_up`, `catch_rate`, `complete` and `closeIn`, and the states `between` and `close`.
+Dolphin re-reads a game's file when its size changes (every 200 ms) and adds the new frames to the playing match (`Gprb::Session::ExtendPlayback`). It waits for a game's setup and first frames before it starts it. A game it is there for from about its start (the request's first game with at most 20 s received, and every next game of the stream) plays from its first frame at normal speed, as far behind the players as the stream comes (about 10 s, the upload's hold). A game joined well under way first catches up to the live edge (the newest frame less 3 s) unpresented but for one frame in 15; so does Go Live at any time. At the live edge it keeps 2-4 s of frames by nudging its speed 2 %. It holds ("Buffering…") when the frames run out. A finished game is followed by the next one in the queue; with none yet, it holds its last frame ("The next game starts soon"). Its status file adds `mirror`, `at_end`, `live_edge`, `buffering`, `catching_up`, `catch_rate`, `complete` and `closeIn`, and the states `between` and `close`.

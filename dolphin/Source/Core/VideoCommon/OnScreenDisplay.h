@@ -19,6 +19,8 @@ enum class MessageType
   NetPlayPing,
   NetPlayBuffer,
   BrawlbackBuffer,
+  // Spectating: a live game was picked and its first frames haven't come yet.
+  SpectateWaiting,
 
   // This entry must be kept last so that persistent typed messages are
   // displayed before other messages

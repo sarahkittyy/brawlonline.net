@@ -52,6 +52,11 @@ struct Request
 
 // A spectated game's end: how long the last frame shows before Dolphin closes.
 constexpr auto CLOSE_AFTER = std::chrono::seconds(5);
+// A spectator whose first game already has more than this much (20 s) when it starts joined it
+// well under way: it catches up to live. One there from about its start (the stream comes about
+// 10 s behind the players) watches it from the start at normal speed, as every next game of the
+// stream is (the user, 2026-10-14: tournaments watch the whole game; anyone can go live).
+constexpr size_t JOIN_CATCH_UP_FRAMES = 20 * 60;
 
 std::mutex s_mutex;
 std::string s_comm_path;
@@ -73,6 +78,7 @@ u64 s_mirror_size = 0;
 bool s_mirror_hold = true;
 bool s_mirror_cut = false;
 bool s_mirror_pending = false;
+bool s_mirror_started = false;  // a game of this request was armed (the next ones never catch up)
 std::optional<std::chrono::steady_clock::time_point> s_close_at;
 double s_close_controls = 0;
 bool s_close_cancelled = false;
@@ -197,6 +203,10 @@ void ArmCurrent()
       }
       s_mirror_pending = true;
       s_state = "loading";
+      // Retried every poll: the line stays while this waits and goes a second after (the upload
+      // holds a game's first 10 s, so a game picked at its start waits about that long).
+      OSD::AddTypedMessage(OSD::MessageType::SpectateWaiting, "Game found, waiting for data...", 1000,
+                           OSD::Color::CYAN);
       return;
     }
   }
@@ -230,7 +240,12 @@ void ArmCurrent()
       file = std::make_shared<const File>(std::move(*f));
       const bool last = s_index + 1 == s_request.paths.size();
       const bool hold = last && s_request.hold_at_end;
-      if (const auto e = Session::ArmPlayback(file, s_request.play_anyway, hold, s_request.mirror))
+      // (A game that has already ended, e.g. a finished stream watched afterwards, plays from its
+      // start.)
+      const bool catch_up = s_request.mirror && !s_mirror_started &&
+                            file->pads.size() > JOIN_CATCH_UP_FRAMES && file->endg.empty();
+      if (const auto e =
+              Session::ArmPlayback(file, s_request.play_anyway, hold, s_request.mirror, catch_up))
       {
         error = *e;
         s_needs_play_anyway = !s_request.mirror && (e->find("another version") != std::string::npos ||
@@ -239,6 +254,8 @@ void ArmCurrent()
       s_mirror_size = size;
       s_mirror_hold = hold;
       s_mirror_cut = false;
+      if (s_request.mirror)
+        s_mirror_started = true;
     }
   }
   if (!error.empty())
@@ -462,6 +479,7 @@ void Loop()
           Session::StopPlayback();
           s_request = std::move(*r);
           s_index = 0;
+          s_mirror_started = false;
           s_error.clear();
           s_state = "loading";
           if (s_request.paths.empty())

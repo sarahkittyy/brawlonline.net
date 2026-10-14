@@ -322,9 +322,37 @@ struct StreamBook {
     listed: bool,
     last_upload: Instant,
     last_end: Option<Instant>,
+    /// The set can't go on (a game ended by a disconnect, a player leaving or an error; a Ranked
+    /// quit; a Ranked set won): the stream is over at the next tick, not `between_games` later.
+    set_over: bool,
     over_at: Option<Instant>,
     wins: HashMap<Uuid, u32>,
     started_at: Option<String>,
+}
+
+impl StreamBook {
+    fn new(now: Instant, room_key: Option<(String, Vec<Uuid>)>, players: Vec<Uuid>) -> StreamBook {
+        StreamBook {
+            room_key,
+            players,
+            listed: false,
+            last_upload: now,
+            last_end: None,
+            set_over: false,
+            over_at: None,
+            wins: HashMap::new(),
+            started_at: None,
+        }
+    }
+}
+
+/// Whether a game that ended with `method` (ENDG's `endMethod`, `GameplaySession.cpp` EndReplay)
+/// ends its stream: nothing can follow a disconnect, a player leaving the match or an error; in
+/// Ranked a quit loses the set, and the first to `WINS_NEEDED` wins it. A desync restarts the game
+/// and runbacks and other modes' quits play on, as does a room's next game after its set.
+fn ends_stream(mode: &str, method: &str, best_wins: u32) -> bool {
+    matches!(method, "disconnect" | "stopped" | "error")
+        || (mode == "ranked" && (method == "quit" || best_wins >= common::ranked::WINS_NEEDED))
 }
 
 pub struct LiveBook {
@@ -396,19 +424,7 @@ impl LiveBook {
             })
             .unwrap_or_else(|| {
                 let id = new_stream_id();
-                self.streams.insert(
-                    id.clone(),
-                    StreamBook {
-                        room_key,
-                        players: m.players.clone(),
-                        listed: false,
-                        last_upload: now,
-                        last_end: None,
-                        over_at: None,
-                        wins: HashMap::new(),
-                        started_at: None,
-                    },
-                );
+                self.streams.insert(id.clone(), StreamBook::new(now, room_key, m.players.clone()));
                 id
             });
         let mode = if m.room.is_some() { "room" } else { m.mode.name() };
@@ -424,6 +440,48 @@ impl LiveBook {
                 stream,
             },
         );
+    }
+
+    /// `uid` left the chat group `group` (a match group's id is its match id; a room's is
+    /// `room-<CODE>-<n>`): they left the match or the room (their game's online session ended, a
+    /// new search, another room, their connection dropped). Its stream can't go on with the same
+    /// players: it is over once no game of it is going on (a game under way still ends, or is cut,
+    /// first). Players without in-game chat never join a group; for them the 120 s wait stays.
+    pub fn player_left(&mut self, is_room: bool, group: &str, uid: Uuid) {
+        let streams: Vec<String> = if is_room {
+            let Some(code) = group.strip_prefix("room-").and_then(|r| r.rsplit_once('-')).map(|(c, _)| c) else {
+                return;
+            };
+            self.streams
+                .iter()
+                .filter(|(_, b)| b.room_key.as_ref().is_some_and(|(c, p)| c == code && p.contains(&uid)))
+                .map(|(id, _)| id.clone())
+                .collect()
+        } else {
+            self.matches.get(group).filter(|m| m.players.contains(&uid)).map(|m| m.stream.clone()).into_iter().collect()
+        };
+        for id in streams {
+            if let Some(b) = self.streams.get_mut(&id).filter(|b| b.over_at.is_none() && !b.set_over) {
+                tracing::info!(stream = %id, group, %uid, "spectate: a player left; the stream ends after its game");
+                b.set_over = true;
+            }
+        }
+    }
+
+    /// A new stream for `match_id`'s next games (its own is over), with the same players and
+    /// room.
+    fn fresh_stream(&mut self, now: Instant, match_id: &str) -> String {
+        let id = new_stream_id();
+        let (players, room_key) = match self.matches.get(match_id) {
+            Some(m) => (m.players.clone(), self.streams.get(&m.stream).and_then(|b| b.room_key.clone())),
+            None => (Vec::new(), None),
+        };
+        self.streams.insert(id.clone(), StreamBook::new(now, room_key, players));
+        if let Some(m) = self.matches.get_mut(match_id) {
+            m.stream = id.clone();
+        }
+        tracing::info!(match_id, stream = %id, "spectate: the match's stream was over; its next game starts a new one");
+        id
     }
 
     fn next_slot(&mut self) -> u32 {
@@ -495,7 +553,7 @@ impl LiveBook {
             return Ok(());
         }
         let host = m.host == account;
-        let stream = m.stream.clone();
+        let mut stream = m.stream.clone();
         let n_players = m.players.len();
         let offerer = Offerer {
             conn,
@@ -519,6 +577,13 @@ impl LiveBook {
             let open: Vec<[u8; 16]> = of_match.iter().filter(|g| g.open()).map(|g| g.uid).collect();
             for old in open {
                 self.close_unfinished(now, old);
+            }
+            // A stream that is over stays over (its row keeps ENDED until it is forgotten, 10
+            // minutes after it ended): a later game of the match (Direct and Unranked play on with
+            // no set length) starts a new stream. Reopening the old one would let its forget timer
+            // delete it mid-game.
+            if self.streams.get(&stream).is_none_or(|b| b.over_at.is_some()) {
+                stream = self.fresh_stream(now, &o.match_id);
             }
             self.games.insert(
                 uid,
@@ -646,9 +711,40 @@ impl LiveBook {
                 self.give_role(now, uid, i, Role::Primary, out);
             }
             None => {
-                tracing::info!(match_id = %game.match_id, game = game.number, why, "spectate: nobody left to upload")
+                tracing::info!(match_id = %game.match_id, game = game.number, why, "spectate: nobody left to upload");
+                // Nobody will send the rest (a pause comes back within seconds; anything else
+                // doesn't): spectators get what came instead of "Buffering…" until the next game.
+                if why != "paused" {
+                    self.cut_game(now, uid);
+                }
             }
         }
+    }
+
+    /// The game's upload ended for good with nobody to take it over (its uploader stopped for the
+    /// players' sake, left, or sent a bad chunk): spectators keep what came, with "The rest of
+    /// this game wasn't streamed.", and the stream goes on as after a game's end (the match's next
+    /// game, or over once the wait between games has passed). The list's row is not "between":
+    /// the players are still playing it.
+    fn cut_game(&mut self, now: Instant, uid: [u8; 16]) {
+        let Some(game) = self.games.get_mut(&uid) else { return };
+        if game.bad || game.ended {
+            return;
+        }
+        game.bad = true;
+        game.finished_at = Some(now);
+        game.primary = None;
+        tracing::info!(match_id = %game.match_id, game = game.number, "spectate: game cut; spectators get what came");
+        let (stream_id, ordinal) = (game.stream.clone(), game.ordinal);
+        self.store.change(&stream_id, |s| {
+            if let Some(g) = ordinal.and_then(|o| s.games.get_mut(o)) {
+                g.bad = Some("The rest of this game wasn't streamed.".into());
+            }
+        });
+        if let Some(b) = self.streams.get_mut(&stream_id) {
+            b.last_end = Some(now);
+        }
+        self.slots.retain(|_, s| s.game != uid);
     }
 
     /// Ends the primary's upload after a bad chunk and hands the game on.
@@ -928,6 +1024,8 @@ impl LiveBook {
         game.finished_at = Some(now);
         game.primary = None;
         let (stream_id, ordinal) = (game.stream.clone(), game.ordinal);
+        let mode = self.matches.get(&game.match_id).map_or("", |m| m.mode);
+        let method = endg.and_then(|e| e.get("endMethod")).and_then(|m| m.as_str()).unwrap_or("").to_string();
         let winner_port = endg.and_then(|e| e.get("winnerPort")).and_then(|w| w.as_u64());
         let mut winners: Vec<String> = Vec::new();
         if let Some(port) = winner_port {
@@ -951,6 +1049,11 @@ impl LiveBook {
                 if let Ok(u) = Uuid::parse_str(w) {
                     *b.wins.entry(u).or_default() += 1;
                 }
+            }
+            let best = b.wins.values().copied().max().unwrap_or(0);
+            if endg.is_some() && ends_stream(mode, &method, best) {
+                tracing::info!(stream = %stream_id, mode, method, best, "spectate: the set can't go on; stream over");
+                b.set_over = true;
             }
         }
         self.store.change(&stream_id, |s| {
@@ -1188,7 +1291,8 @@ impl LiveBook {
                 Some(_) => {}
                 None => {
                     let open = self.games.values().any(|g| &g.stream == id && g.open() && g.ordinal.is_some());
-                    let between = !open && b.last_end.is_some_and(|t| now.duration_since(t) >= self.cfg.between_games);
+                    let between = !open
+                        && b.last_end.is_some_and(|t| b.set_over || now.duration_since(t) >= self.cfg.between_games);
                     let idle = now.duration_since(b.last_upload) >= self.cfg.idle;
                     if between || idle {
                         b.over_at = Some(now);
@@ -1260,12 +1364,16 @@ mod tests {
 
     impl T {
         fn new(mode: SpectateMode) -> T {
+            T::with_match_mode(mode, Mode::Direct)
+        }
+
+        fn with_match_mode(mode: SpectateMode, match_mode: Mode) -> T {
             let mut book = LiveBook::new(LiveConfig { mode, ..Default::default() });
             let (a, b) = (Uuid::new_v4(), Uuid::new_v4());
             let now = Instant::now();
             let rec = MatchRecord {
                 match_id: MATCH.into(),
-                mode: Mode::Direct,
+                mode: match_mode,
                 players: vec![a, b],
                 host: a,
                 stages: vec![],
@@ -1561,6 +1669,137 @@ mod tests {
         let out = t.send_chunk(A, slot, 0, &encode_chunk(b"INFO", v.to_string().as_bytes(), false));
         assert_eq!(role(&out, A).unwrap()["role"], "none");
         assert!(t.book.store.entries().is_empty());
+    }
+
+    /// Plays game `game` of the match to its end, uploaded by A, with `endg`.
+    fn play_game(t: &mut T, game: u8, endg: &str) {
+        let a = t.a;
+        t.offer(A, a, game, 0);
+        let out = t.advance(Duration::from_secs(3));
+        let slot = role(&out, A).unwrap()["slot"].as_u64().unwrap() as u32;
+        let info = t.info(game);
+        t.send_chunk(A, slot, 0, &info);
+        t.send_chunk(A, slot, 1, &encode_chunk(b"SETP", b"{}", false));
+        t.send_chunk(A, slot, 2, &encode_chunk(b"FRMS", &frms(120, 60, 1), true));
+        t.send_chunk(A, slot, 3, &encode_chunk(b"ENDG", endg.as_bytes(), false));
+    }
+
+    /// A set that can't go on ends its stream at once (the user, 2026-10-14: the list should show
+    /// it ended right away): a disconnect, a player leaving the match or an error in any mode; in
+    /// Ranked a quit, or a player's second win. A quit or a desync elsewhere plays on.
+    #[test]
+    fn a_set_that_cant_go_on_ends_its_stream_at_once() {
+        let over = |t: &T| t.book.store.entries()[0].game.state == GameState::Over;
+        for method in ["disconnect", "stopped", "error"] {
+            let mut t = T::new(SpectateMode::On);
+            play_game(&mut t, 1, &format!("{{\"endMethod\":\"{method}\"}}"));
+            t.advance(Duration::from_secs(1));
+            assert!(over(&t), "{method}");
+        }
+        for method in ["quit", "desync", "runback"] {
+            let mut t = T::new(SpectateMode::On);
+            play_game(&mut t, 1, &format!("{{\"endMethod\":\"{method}\"}}"));
+            t.advance(Duration::from_secs(1));
+            assert!(!over(&t), "Direct {method}");
+        }
+        let mut t = T::with_match_mode(SpectateMode::On, Mode::Ranked);
+        play_game(&mut t, 1, r#"{"endMethod":"quit","winnerPort":2}"#);
+        t.advance(Duration::from_secs(1));
+        assert!(over(&t), "a Ranked quit loses the set");
+        let mut t = T::with_match_mode(SpectateMode::On, Mode::Ranked);
+        play_game(&mut t, 1, r#"{"endMethod":"game","winnerPort":1}"#);
+        t.advance(Duration::from_secs(1));
+        assert!(!over(&t), "1-0 in a best of three");
+        play_game(&mut t, 2, r#"{"endMethod":"game","winnerPort":1}"#);
+        t.advance(Duration::from_secs(1));
+        assert!(over(&t), "2-0 wins a Ranked set");
+        assert!(matches!(read_all(&t.book.store, &t.book.store.entries()[0].id).last(), Some(LiveLine::Over)));
+    }
+
+    /// The only uploader stops mid-game (players first): spectators get the rest cut at once
+    /// ("The rest of this game wasn't streamed.") instead of "Buffering…" until the next game; the
+    /// row stays playing (the players are), and the wait between games starts. A pause doesn't cut.
+    #[test]
+    fn a_game_whose_only_uploader_stops_is_cut_at_once() {
+        let mut t = T::new(SpectateMode::On);
+        let a = t.a;
+        t.offer(A, a, 1, 0);
+        let out = t.advance(Duration::from_secs(3));
+        let slot = role(&out, A).unwrap()["slot"].as_u64().unwrap() as u32;
+        let info = t.info(1);
+        t.send_chunk(A, slot, 0, &info);
+        t.send_chunk(A, slot, 1, &encode_chunk(b"SETP", b"{}", false));
+        t.send_chunk(A, slot, 2, &encode_chunk(b"FRMS", &frms(120, 60, 1), true));
+        let id = t.book.store.entries()[0].id.clone();
+        let mut out = vec![];
+        t.book.request(t.now, A, a, SpectateRequest::Pause { slot, reason: "rtt".into() }, &mut out);
+        assert!(!read_all(&t.book.store, &id).iter().any(|l| matches!(l, LiveLine::Bad { .. })), "a pause comes back");
+        t.book.request(t.now, A, a, SpectateRequest::Stop { slot, reason: "frame".into() }, &mut out);
+        let lines = read_all(&t.book.store, &id);
+        assert!(
+            lines.iter().any(|l| matches!(l, LiveLine::Bad { game: 1, error } if error.contains("wasn't streamed"))),
+            "{lines:?}"
+        );
+        assert_eq!(t.book.store.entries()[0].game.state, GameState::Playing);
+        // Then the wait between games (Direct: no set length) ends the stream.
+        t.advance(Duration::from_secs(121));
+        assert_eq!(t.book.store.entries()[0].game.state, GameState::Over);
+    }
+
+    /// A player leaving the match (their chat group) ends its stream once no game is going on;
+    /// a game under way still ends first. Leaving another match or a room changes nothing here.
+    #[test]
+    fn a_player_leaving_the_match_ends_its_stream() {
+        let over = |t: &T| t.book.store.entries()[0].game.state == GameState::Over;
+        let mut t = T::new(SpectateMode::On);
+        play_game(&mut t, 1, r#"{"endMethod":"game","winnerPort":1}"#);
+        let b = t.b;
+        t.book.player_left(false, "another-match", b);
+        t.book.player_left(true, "room-KFQB-1", b);
+        t.advance(Duration::from_secs(1));
+        assert!(!over(&t), "not this match");
+        t.book.player_left(false, MATCH, b);
+        t.advance(Duration::from_secs(1));
+        assert!(over(&t), "between games: over at once");
+        // During a game: over once it ends.
+        let mut t = T::new(SpectateMode::On);
+        let a = t.a;
+        t.offer(A, a, 1, 0);
+        let out = t.advance(Duration::from_secs(3));
+        let slot = role(&out, A).unwrap()["slot"].as_u64().unwrap() as u32;
+        let info = t.info(1);
+        t.send_chunk(A, slot, 0, &info);
+        t.send_chunk(A, slot, 1, &encode_chunk(b"SETP", b"{}", false));
+        t.send_chunk(A, slot, 2, &encode_chunk(b"FRMS", &frms(120, 60, 1), true));
+        t.book.player_left(false, MATCH, t.b);
+        t.advance(Duration::from_secs(5));
+        assert!(!over(&t), "the game is still going");
+        t.send_chunk(A, slot, 3, &encode_chunk(b"ENDG", br#"{"endMethod":"disconnect"}"#, false));
+        t.advance(Duration::from_secs(1));
+        assert!(over(&t));
+    }
+
+    /// A game after the match's stream ended starts a new stream: the ended one stays ended and is
+    /// forgotten on time, never mid-game (it used to reopen with its forget timer still running).
+    #[test]
+    fn a_game_after_the_stream_ended_starts_a_new_stream() {
+        let mut t = T::new(SpectateMode::On);
+        play_game(&mut t, 1, r#"{"endMethod":"game","winnerPort":1}"#);
+        t.advance(Duration::from_secs(121));
+        let first = t.book.store.entries()[0].id.clone();
+        assert_eq!(t.book.store.entries()[0].game.state, GameState::Over);
+        t.advance(Duration::from_secs(300));
+        play_game(&mut t, 2, r#"{"endMethod":"game","winnerPort":2}"#);
+        let entries = t.book.store.entries();
+        assert_eq!(entries.len(), 2, "{entries:?}");
+        let second = entries.iter().find(|e| e.id != first).expect("a new stream");
+        assert_eq!(entries.iter().find(|e| e.id == first).unwrap().game.state, GameState::Over);
+        assert_eq!(second.game.number, 2);
+        assert_eq!(second.game.place, 1);
+        // The first is forgotten 10 minutes after it ended; the second is still there.
+        t.advance(Duration::from_secs(301));
+        let ids: Vec<String> = t.book.store.entries().iter().map(|e| e.id.clone()).collect();
+        assert!(!ids.contains(&first) && ids.len() == 1, "{ids:?}");
     }
 
     /// After a game, the next game of the match goes on in the same stream; 120 s with no game

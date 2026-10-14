@@ -601,6 +601,11 @@ impl Engine {
         }
         self.sync_room_chat(&mut out);
         self.register_live_matches(now, &out);
+        // A player who left their match's or room's chat group left the match: its stream ends
+        // once no game of it is going on, instead of 120 s later.
+        for (kind, group, uid) in self.chat.take_left() {
+            self.live.player_left(kind == crate::chat::GroupKind::Room, &group, uid);
+        }
         out
     }
 

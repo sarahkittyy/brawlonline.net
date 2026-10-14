@@ -679,6 +679,7 @@ struct State
     // buffer, and the overlay's banner.
     std::shared_ptr<Replay::File> live_file;
     bool live = false;
+    bool catch_up_at_start = false;  // ArmPlayback's `catch_up`
     bool catch_up = false;
     s64 catch_frames = 0;
     Clock::time_point catch_since{};
@@ -5395,10 +5396,11 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
 
   const int i = s.iteration;
   // A replay's seek runs the frames before its target unpresented (as a rollback's resimulation).
-  // Catching up to a live edge shows a frame in CATCH_UP_SHOW_EVERY.
+  // A live playback running ahead (catching up, a seek, a jump) shows a frame in
+  // CATCH_UP_SHOW_EVERY, so the game visibly moves instead of freezing until its target.
   s.resim_pass = s.mode == Mode::Playback ?
                      static_cast<s64>(s.ops.adv_frame[i]) < s.pb.ff_until &&
-                         !(s.pb.catch_up && s.ops.adv_frame[i] % CATCH_UP_SHOW_EVERY == 0) :
+                         !(s.pb.live && s.ops.adv_frame[i] % CATCH_UP_SHOW_EVERY == 0) :
                      s.ops.adv_count > 1 && i != s.ops.adv_count - 1;
 
   if (s.force_final_at_active)
@@ -5961,7 +5963,7 @@ void ReadPlaybackEnd(const std::string& endg, std::string* method, s64* final_fr
 }
 
 std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file, bool play_anyway,
-                                       bool hold_at_end, bool live)
+                                       bool hold_at_end, bool live, bool catch_up)
 {
   if (!file)
     return "no replay";
@@ -6073,6 +6075,7 @@ std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file,
     return "the replay's frames do not match its players";
   ReadPlaybackEnd(file->endg, &pb.end_method, &pb.final_frame);
   pb.live = live;
+  pb.catch_up_at_start = live && catch_up;
   if (live)
   {
     // Its own copy, which ExtendPlayback grows; it starts by waiting for a buffer's frames.
@@ -6255,6 +6258,19 @@ void PlaybackControl(PlaybackCommand command, double arg)
     OSD::AddMessage(fmt::format("Speed {}x", pb.speed), OSD::Duration::SHORT);
     break;
   }
+  }
+  // A live playback seeks no further than the live edge (past it there is nothing to play yet but
+  // the buffer): a seek or jump that gets there is Go Live, which then follows the moving edge.
+  if ((command == PlaybackCommand::Seek || command == PlaybackCommand::Jump) && pb.live &&
+      !PlaybackComplete() && pb.seek_to >= LiveEdge() - LIVE_NEAR)
+  {
+    pb.seek_to = LiveEdge();
+    pb.paused = false;
+    pb.step = 0;
+    pb.speed = 1.0;
+    pb.catch_up = true;
+    pb.catch_frames = 0;
+    pb.catch_rate = 0;
   }
 }
 
@@ -7007,8 +7023,9 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
                           "countdown until game frame {}",
                s.match_ports, relinked, StartFrame());
   s.pb.started = true;
-  // Spectating starts behind the players: it catches up to the live edge at once.
-  if (s.pb.live)
+  // A spectator who joined a game well under way catches up to the live edge at once; one there
+  // from its start watches it from the start (docs/design/spectating.md §6.2).
+  if (s.pb.live && s.pb.catch_up_at_start)
   {
     s.pb.catch_up = true;
     s.pb.catch_frames = 0;

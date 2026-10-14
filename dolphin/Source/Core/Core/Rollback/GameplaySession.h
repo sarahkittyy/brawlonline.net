@@ -379,11 +379,14 @@ LinkHealth GetLinkHealth();
 // `hold_at_end`: the last replay asked for holds at its last frame (paused, still seekable)
 // instead of ending its match.
 // `live`: spectating (docs/design/spectating.md §6.2, `mirror`): the file is still growing.
-// ExtendPlayback adds what arrives; playback catches up to the live edge (the newest frame less a
-// 3 s buffer) at once, holds with "Buffering" when the frames run out, and ends only once the
-// game's ENDG has come.
+// ExtendPlayback adds what arrives; playback holds with "Buffering" when the frames run out, and
+// ends only once the game's ENDG has come. It plays from the game's start at normal speed, as far
+// behind the players as the stream is (about 10 s: the upload's hold at a game's start), unless
+// `catch_up`: a spectator who joined a game well under way runs to the live edge (the newest frame
+// less a 3 s buffer) first. Go Live, the seek bar and fast-forward reach the live edge any time.
 std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file, bool play_anyway,
-                                       bool hold_at_end = false, bool live = false);
+                                       bool hold_at_end = false, bool live = false,
+                                       bool catch_up = false);
 // A live playback's file as read again: its frames past those already known are added, and its
 // ENDG once there. `hold_at_end` replaces the armed value (a set's next game arrived: the game
 // ends its match and the next one plays). `cut`: the stream says the rest of the game won't come

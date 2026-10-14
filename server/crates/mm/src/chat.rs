@@ -115,6 +115,9 @@ pub struct ChatBook {
     send_limiter: RateLimiter<Uuid>,
     report_limiter: RateLimiter<Uuid>,
     key_limiter: RateLimiter<Uuid>,
+    /// Who left which group since the engine last asked ([`ChatBook::take_left`]): spectating
+    /// ends a stream whose players left their match or room (`live.rs`).
+    left: Vec<(GroupKind, String, Uuid)>,
 }
 
 fn send(out: &mut Vec<Output>, conn: ConnId, m: &impl serde::Serialize) {
@@ -136,7 +139,13 @@ impl ChatBook {
             send_limiter: RateLimiter::new(&cfg.send_windows),
             report_limiter: RateLimiter::new(&cfg.report_windows),
             key_limiter: RateLimiter::new(&cfg.key_windows),
+            left: Vec::new(),
         }
+    }
+
+    /// The (kind, group id, account) of every member who left a group since the last call.
+    pub fn take_left(&mut self) -> Vec<(GroupKind, String, Uuid)> {
+        std::mem::take(&mut self.left)
     }
 
     pub fn group_count(&self) -> usize {
@@ -261,6 +270,7 @@ impl ChatBook {
         let Some(id) = self.group_of.remove(&uid) else { return };
         if let Some(g) = self.groups.get_mut(&id) {
             if let Some(i) = g.members.iter().position(|m| m.who.uid == uid) {
+                self.left.push((g.kind, id.clone(), uid));
                 let m = g.members.remove(i);
                 self.uid_of_conn.remove(&m.who.conn);
                 if notify {
@@ -658,9 +668,13 @@ mod tests {
         let mut out = vec![];
         book.request(now, 2, cand(2).uid, ChatRequest::Leave { group: "room-KFQB-1".into() }, &mut out);
         assert!(out.is_empty(), "not 2's group");
+        book.take_left();
         let mut out = vec![];
         book.request(now, 2, cand(2).uid, ChatRequest::Leave { group: id.into() }, &mut out);
         assert_eq!(msgs(&out, 2), vec![serde_json::json!({"type": "chat-group", "group": null})]);
+        // Spectating hears of it (live.rs ends the match's stream).
+        assert_eq!(book.take_left(), vec![(GroupKind::Match, id.to_string(), cand(2).uid)]);
+        assert!(book.take_left().is_empty());
         assert_eq!(uids(&last_group(&out, 1)), [cand(1).uid.to_string()]);
         // leave(Match) does nothing to a room member; the last match member's connection drops.
         assert!(!book.leave(cand(3).uid, Some(GroupKind::Match), true, &mut vec![]));

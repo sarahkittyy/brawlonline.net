@@ -286,11 +286,13 @@ def _viewer(be: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_back
 
 
 class Sampler:
-    """The viewer's playback status twice a second, kept (what it went through)."""
+    """The viewer's playback status twice a second, kept (what it went through). Once the set's
+    second game has played 5 s, it presses Go Live once (the harness client is this thread's)."""
 
     def __init__(self, v: Game, status_file: Path):
         self.v, self.status_file = v, status_file
         self.samples: list[dict[str, Any]] = []
+        self.went_live_at: int | None = None   # the sample index when Go Live was pressed
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -304,6 +306,10 @@ class Sampler:
                 except (OSError, ValueError):
                     st["file"] = {}
                 self.samples.append(st)
+                if (self.went_live_at is None and st["file"].get("index") == 1 and st.get("started")
+                        and not st.get("complete", True) and st.get("shown", -1) >= 300):
+                    self.v.c.call("replay_control", action="live")
+                    self.went_live_at = len(self.samples)
             except Exception:  # noqa: BLE001 - a missed sample
                 pass
 
@@ -325,8 +331,9 @@ def test_a_spectator_joins_a_set_mid_game_and_watches_it_live(
         spectate_backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str) -> None:
     """A two-game Direct set on the server's rules, streamed by the first player. A playback
     Dolphin booted while game 1 runs follows the stream in `mirror` mode: it waits for the game's
-    first frames, catches up to the live edge, plays live, takes game 2 when it is queued, and at
-    the stream's end holds the last frame, counts down and asks to be closed. Every frame it runs
+    first frames (catching up to live if game 1 was well under way by then), takes game 2 when it
+    is queued and plays it from its start at normal speed behind live, catches up when Go Live is
+    pressed, and at the stream's end holds the last frame, counts down and asks to be closed. Every frame it runs
     matches the recorded checksum. On a busy PC the uploader may stop for a game (players first,
     docs/design/spectating.md §4.3): then the viewer plays what came and goes on to the next."""
     be = spectate_backend
@@ -374,13 +381,23 @@ def test_a_spectator_joins_a_set_mid_game_and_watches_it_live(
     states = [s["file"].get("state") for s in samples]
     print("viewer states:", sorted(set(s for s in states if s)))
     assert "loading" in states, "it waited for the game's first frames"
-    # It caught up, then played at the live edge (before the game had ended).
-    caught = [i for i, s in enumerate(samples) if s.get("catching_up")]
-    assert caught, "never caught up to live"
-    live = [s for s in samples[caught[0]:]
+    # Game 2, there from its start (the user, 2026-10-14): from its first frame at normal speed,
+    # behind the players by the stream's delay, never catching up by itself...
+    assert sampler.went_live_at is not None, "game 2 never played 5 s"
+    g2 = [s for s in samples[:sampler.went_live_at] if s["file"].get("index") == 1 and s.get("started")]
+    assert g2 and not any(s.get("catching_up") for s in g2), "game 2 caught up by itself"
+    shown = [s["shown"] for s in g2 if s.get("shown", -1) >= 0]
+    assert shown and min(shown) < 120, f"game 2 didn't start at its start: {shown[:5]}"
+    behind = max(s.get("live_edge", 0) - s.get("shown", 0) for s in g2 if s.get("shown", -1) >= 0)
+    print(f"game 2 behind the live edge before Go Live: {behind / 60:.1f} s")
+    assert behind > 120, "game 2 was never behind live: nothing to test Go Live on"
+    # ... until Go Live: then it catches up and plays at the live edge (before the game ended).
+    after = samples[sampler.went_live_at:]
+    assert any(s.get("catching_up") for s in after), "Go Live didn't catch up"
+    live = [s for s in after
             if s.get("live") and not s.get("catching_up") and not s.get("complete", True) and
             not s.get("buffering") and s.get("live_edge", 0) - s.get("shown", 0) <= 90]
-    assert live, "never played at the live edge"
+    assert live, "never played at the live edge after Go Live"
     rates = [s.get("catch_rate", 0) for s in samples if s.get("catch_rate")]
     print(f"catch-up rate: max {max(rates or [0]):.1f}x")
     # Both games played, each with every frame checked and none differing.

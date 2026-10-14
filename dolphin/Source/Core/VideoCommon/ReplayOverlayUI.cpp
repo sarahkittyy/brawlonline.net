@@ -118,9 +118,12 @@ void Display(float scale)
     if (!info.banner.empty())
       ImGui::TextUnformatted(info.banner.c_str());
 
-    const s64 span = std::max<s64>(info.last - info.first, 1);
-    const s64 shown = std::clamp(info.shown, info.first, info.last);
+    // A live game's bar ends at the live edge (the frames past it are the 3 s buffer, not there to
+    // be played yet), so live is the bar's very end; a seek there is Go Live.
     const bool live = info.live && !info.ended;
+    const s64 end = live ? std::max(info.live_edge, info.first) : info.last;
+    const s64 span = std::max<s64>(end - info.first, 1);
+    const s64 shown = std::clamp(info.shown, info.first, end);
     std::string state = info.seeking ? "Seeking..." : info.paused ? "Paused" : "Playing";
     if (live && info.catching_up)
     {
@@ -218,19 +221,12 @@ void Display(float scale)
     const float done = s_dragging ? s_drag_at : static_cast<float>(shown - info.first) / span;
     dl->AddRectFilled(p0, ImVec2(p0.x + done * bar_w, p1.y), IM_COL32(110, 200, 120, 220),
                       3.0f * scale);
-    if (info.desync_frame >= info.first)
+    if (info.desync_frame >= info.first && info.desync_frame <= end)
     {
       // Where the replay stopped matching what was played.
       const float x = p0.x + static_cast<float>(info.desync_frame - info.first) / span * bar_w;
       dl->AddRectFilled(ImVec2(x - 1.0f * scale, p0.y), ImVec2(x + 1.0f * scale, p1.y),
                         IM_COL32(230, 60, 60, 255));
-    }
-    if (live)
-    {
-      // The live edge: what is played live (the rest of the bar is the buffer received).
-      const float x = p0.x + static_cast<float>(info.live_edge - info.first) / span * bar_w;
-      dl->AddRectFilled(ImVec2(x - 1.0f * scale, p0.y - 2.0f * scale),
-                        ImVec2(x + 1.0f * scale, p1.y + 2.0f * scale), IM_COL32(230, 60, 60, 255));
     }
     if (hovered || s_dragging)
     {
