@@ -8,6 +8,7 @@ import {
   ipc_modsHost,
   ipc_modsInspectFolder,
   ipc_modsJoin,
+  ipc_modsJoinByCode,
   ipc_modsRefreshControllers,
   ipc_modsRemoveBuild,
   ipc_modsRequest,
@@ -44,6 +45,10 @@ const modsApi: ModsService = {
   },
   async join(options) {
     await ipc_modsJoin.renderer!.trigger(options);
+  },
+  async joinByCode(options) {
+    const { result } = await ipc_modsJoinByCode.renderer!.trigger(options);
+    return result;
   },
   async request(request) {
     await ipc_modsRequest.renderer!.trigger({ request });

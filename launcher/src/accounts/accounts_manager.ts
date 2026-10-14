@@ -9,6 +9,7 @@ import type {
   MatchHistoryFilter,
   MatchHistoryPage,
   MyRulesets,
+  PublicModRoom,
   PublishRulesetRequest,
   RecentRuleset,
   RoomList,
@@ -101,6 +102,10 @@ export class AccountsManager {
 
   rooms(uid: string): Promise<AccountsResult<RoomList>> {
     return this._withSession(uid, (token) => this.client.rooms(token));
+  }
+
+  modRoom(uid: string, code: string): Promise<AccountsResult<PublicModRoom>> {
+    return this._withSession(uid, (token) => this.client.modRoom(token, code));
   }
 
   ruleset(code: string): Promise<AccountsResult<RulesetView>> {

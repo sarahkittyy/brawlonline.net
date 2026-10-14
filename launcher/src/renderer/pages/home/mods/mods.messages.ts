@@ -16,7 +16,7 @@ export const ModsMessages = {
   host: () => "Host",
   hostTooltip: () => "Open a room for this game.",
   join: () => "Join",
-  joinTooltip: () => "Join the room with this code.",
+  joinTooltip: () => "Join the room with this code. Its game is found among yours.",
   roomCode: () => "Room code",
   publicRoom: () => "Public",
   publicRoomTooltip: () => "Public rooms are listed for everyone. Private rooms need the code.",
@@ -91,5 +91,9 @@ export const ModsMessages = {
   yourRoomTooltip: () => "You're in this room.",
   roomHost: (name: string) => `${name}'s room`,
   needBuild: (name: string, hash: string) => `You don't have this game: ${name ? `${name} ` : ""}(${hash}).`,
+  noMatchingGameTitle: () => "You don't have any game matching this hash!",
+  noMatchingGame: (name: string, hash: string) =>
+    `This room plays ${name || "a game"} (${hash.slice(0, 8)}). Add the exact same game (or mod) to join it.`,
+  ok: () => "OK",
   joinPublicTooltip: (build: string) => `Start Dolphin with ${build} and join this room.`,
 };

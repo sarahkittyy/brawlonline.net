@@ -6,6 +6,7 @@ import type {
   MatchHistoryFilter,
   MatchHistoryPage,
   MyRulesets,
+  PublicModRoom,
   PublishRulesetRequest,
   RecentRuleset,
   RoomList,
@@ -105,6 +106,11 @@ export class AccountsHttpClient {
 
   rooms(token: string): Promise<RoomList> {
     return this._request("GET", "/v1/rooms", { token });
+  }
+
+  /** The Other Games room with this exact code, private ones too (which game it needs). */
+  modRoom(token: string, code: string): Promise<PublicModRoom> {
+    return this._request("GET", `/v1/mod-rooms/${encodeURIComponent(code)}`, { token });
   }
 
   ruleset(code: string): Promise<RulesetView> {

@@ -179,6 +179,15 @@ class MockModsClient implements ModsService {
     this.open(build, options.code.toUpperCase(), false, this.controller);
   }
 
+  async joinByCode(options: { uid: string; code: string }) {
+    const build = this.builds.find((b) => b.hash);
+    if (!build || options.code.toUpperCase() === "NOPE") {
+      return { outcome: "no-game" as const, name: "Some Mod", hash: "9".repeat(64) };
+    }
+    await this.join({ buildId: build.id, code: options.code });
+    return { outcome: "joining" as const };
+  }
+
   async request(request: ModRoomRequest) {
     if (!this.status?.room) {
       return;

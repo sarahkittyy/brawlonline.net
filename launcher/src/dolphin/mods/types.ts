@@ -172,6 +172,12 @@ export type ModsEvent =
 
 export type ModsHostOptions = { buildId: string; public: boolean };
 export type ModsJoinOptions = { buildId: string; code: string };
+/** A room code typed in: the room's game is looked up (`uid`: the account that asks). */
+export type ModsJoinByCodeOptions = { uid: string; code: string };
+export type ModsJoinByCodeResult =
+  | { outcome: "joining" }
+  /** No game in the list has the room's hash. */
+  | { outcome: "no-game"; name: string; hash: string };
 
 export interface ModsService {
   getState(): Promise<ModsState>;
@@ -184,6 +190,8 @@ export interface ModsService {
   hashBuild(id: string): Promise<ModBuild>;
   host(options: ModsHostOptions): Promise<void>;
   join(options: ModsJoinOptions): Promise<void>;
+  /** Joins the room with this code with the game whose hash it needs, if the player has it. */
+  joinByCode(options: ModsJoinByCodeOptions): Promise<ModsJoinByCodeResult>;
   request(request: ModRoomRequest): Promise<void>;
   /** Plays with this kind of controller from now on (the running room's at once). */
   setController(controller: ModsController): Promise<void>;

@@ -1,3 +1,4 @@
+import type { PublicModRoom } from "@accounts/types";
 import type { SettingsManager } from "@settings/settings_manager";
 import { randomUUID } from "crypto";
 import electronLog from "electron-log";
@@ -24,6 +25,8 @@ import type {
   ModsController,
   ModsEvent,
   ModsHostOptions,
+  ModsJoinByCodeOptions,
+  ModsJoinByCodeResult,
   ModsJoinOptions,
   ModsState,
 } from "./types";
@@ -92,7 +95,26 @@ export class ModsManager {
     private readonly settings: SettingsManager,
     private readonly dolphin: DolphinManager,
     private readonly toolPath: () => Promise<string>,
+    /** The room with this code (its game), or null when there is none. */
+    private readonly lookupRoom: (uid: string, code: string) => Promise<PublicModRoom | null> = async () => null,
   ) {}
+
+  async joinByCode(options: ModsJoinByCodeOptions): Promise<ModsJoinByCodeResult> {
+    const code = normalizeRoomCode(options.code);
+    if (!code) {
+      throw new Error("Enter the room's code.");
+    }
+    const room = await this.lookupRoom(options.uid, code);
+    if (!room) {
+      throw new Error("Room not found.");
+    }
+    const build = this.builds().find((b) => b.hash === room.build.hash);
+    if (!build) {
+      return { outcome: "no-game", name: room.build.name, hash: room.build.hash };
+    }
+    await this.join({ buildId: build.id, code });
+    return { outcome: "joining" };
+  }
 
   onEvent(listener: (event: ModsEvent) => void): () => void {
     this.listeners.add(listener);

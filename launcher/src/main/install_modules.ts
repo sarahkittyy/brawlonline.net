@@ -24,7 +24,7 @@ export function installModules(flags: ConfigFlags) {
   setupSocialIpc({ accountsManager, accountsApi: serviceUrls.accountsApi, dolphinManager });
   setupReplaysIpc();
   setupSettingsIpc({ settingsManager, dolphinManager });
-  setupModsIpc({ settingsManager, dolphinManager });
+  setupModsIpc({ settingsManager, dolphinManager, accountsManager });
   setupGameAssetsIpc({ settingsManager, dolphinManager, checkIso });
   const browserWindowManager = new BrowserWindowManager();
   setupMainIpc({ dolphinManager, settingsManager, flags, browserWindowManager, appUpdater });

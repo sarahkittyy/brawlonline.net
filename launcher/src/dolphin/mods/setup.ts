@@ -1,3 +1,4 @@
+import type { AccountsManager } from "@accounts/accounts_manager";
 import type { SettingsManager } from "@settings/settings_manager";
 import electronLog from "electron-log";
 
@@ -13,6 +14,7 @@ import {
   ipc_modsHost,
   ipc_modsInspectFolder,
   ipc_modsJoin,
+  ipc_modsJoinByCode,
   ipc_modsRefreshControllers,
   ipc_modsRemoveBuild,
   ipc_modsRequest,
@@ -26,15 +28,31 @@ const log = electronLog.scope("dolphin/mods");
 export default function setupModsIpc({
   settingsManager,
   dolphinManager,
+  accountsManager,
 }: {
   settingsManager: SettingsManager;
   dolphinManager: DolphinManager;
+  accountsManager: AccountsManager;
 }) {
-  const mods = new ModsManager(settingsManager, dolphinManager, async () => {
-    // DolphinTool runs from the bundled Dolphin's install folder (as for the game assets).
-    await dolphinManager.bundledDolphinReady();
-    return dolphinToolNextTo(dolphinManager.getDolphinExecutablePath(DolphinLaunchType.NETPLAY));
-  });
+  const mods = new ModsManager(
+    settingsManager,
+    dolphinManager,
+    async () => {
+      // DolphinTool runs from the bundled Dolphin's install folder (as for the game assets).
+      await dolphinManager.bundledDolphinReady();
+      return dolphinToolNextTo(dolphinManager.getDolphinExecutablePath(DolphinLaunchType.NETPLAY));
+    },
+    async (uid, code) => {
+      const result = await accountsManager.modRoom(uid, code);
+      if (result.ok) {
+        return result.value;
+      }
+      if (result.error.code === "unknown_room") {
+        return null;
+      }
+      throw new Error(result.error.message);
+    },
+  );
   mods.onEvent((event) => {
     void ipc_modsEvent.main!.trigger(event).catch(log.error);
   });
@@ -56,6 +74,7 @@ export default function setupModsIpc({
     await mods.join(options);
     return { success: true };
   });
+  ipc_modsJoinByCode.main!.handle(async (options) => await mods.joinByCode(options));
   ipc_modsRequest.main!.handle(async ({ request }) => {
     await mods.request(request);
     return { success: true };

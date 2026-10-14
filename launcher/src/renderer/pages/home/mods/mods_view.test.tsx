@@ -81,6 +81,8 @@ const props = (state: ViewState | null, extra: Partial<ModsViewProps> = {}): Mod
   onRemoveBuild: vi.fn(),
   onHost: vi.fn(),
   onJoin: vi.fn(),
+  onJoinCode: vi.fn(),
+  onMissingGame: vi.fn(),
   onRequest: vi.fn(),
   onCopyCode: vi.fn(),
   ...extra,
@@ -97,15 +99,18 @@ describe("ModsView", () => {
     expect(p.onAddBuild).toHaveBeenCalled();
   });
 
-  it("shows a build's short hash and hosts or joins with it", () => {
+  it("shows a build's short hash and hosts with it; one code box joins by code", () => {
     const p = props({ builds: [minus], running: false, status: null });
-    const { getByText, getByLabelText } = render(<ModsView {...p} />);
+    const { getByText, getAllByLabelText } = render(<ModsView {...p} />);
     expect(getByText("3f9a1c07")).toBeTruthy();
     fireEvent.click(getByText(Messages.host()));
     expect(p.onHost).toHaveBeenCalledWith(minus, true);
-    fireEvent.change(getByLabelText(Messages.roomCode()), { target: { value: "kfqb" } });
-    fireEvent.click(getByText(Messages.join()));
-    expect(p.onJoin).toHaveBeenCalledWith(minus, "KFQB");
+    // One box, by the public rooms (not one per game).
+    const boxes = getAllByLabelText(Messages.roomCode());
+    expect(boxes).toHaveLength(1);
+    fireEvent.change(boxes[0], { target: { value: "kfqb" } });
+    fireEvent.keyDown(boxes[0], { key: "Enter" });
+    expect(p.onJoinCode).toHaveBeenCalledWith("KFQB");
   });
 
   it("shows hashing progress and keeps the build's buttons off meanwhile", () => {
@@ -164,11 +169,11 @@ describe("ModsView", () => {
     );
     const { getByText } = render(<ModsView {...p} />);
     const row = (name: string) => getByText(Messages.roomHost(name)).closest("button") as HTMLButtonElement;
-    // The whole row joins; a room whose game the player lacks says so and does nothing.
-    expect(row("Dee").getAttribute("aria-disabled")).toBe("true");
+    // The whole row joins; a room whose game the player lacks says so, and a click explains.
     expect(row("Dee").textContent).toContain(Messages.noGame());
     fireEvent.click(row("Dee"));
     expect(p.onJoin).not.toHaveBeenCalled();
+    expect(p.onMissingGame).toHaveBeenCalledWith("Project M", other);
     fireEvent.click(row("Keiko"));
     expect(p.onJoin).toHaveBeenCalledWith(minus, "PLNX");
     expect(getByText(Messages.roomPlayers(3, 4))).toBeTruthy();
@@ -241,7 +246,7 @@ describe("ModsView", () => {
     const p = props({ builds: [minus], running: true, status: room(1) });
     const { container } = render(<ModsView {...p} />);
     const row = (n: number) => container.querySelector(`[data-slot="${n}"]`) as HTMLElement;
-    const data = { setData: vi.fn(), effectAllowed: "", dropEffect: "" };
+    const data = { setData: vi.fn(), getData: () => "2", effectAllowed: "", dropEffect: "" };
     fireEvent.dragStart(row(2), { dataTransfer: data });
     fireEvent.dragOver(row(3), { dataTransfer: data });
     fireEvent.drop(row(3), { dataTransfer: data });

@@ -1,4 +1,9 @@
 import type { ModBuild, ModBuildInput, ModRoomRequest, ModsState } from "@dolphin/mods/types";
+import Button from "@mui/material/Button";
+import Dialog from "@mui/material/Dialog";
+import DialogActions from "@mui/material/DialogActions";
+import DialogContent from "@mui/material/DialogContent";
+import DialogTitle from "@mui/material/DialogTitle";
 import React, { useCallback, useEffect, useState } from "react";
 
 import { usePlayDialogs } from "@/lib/dolphin/use_play";
@@ -35,6 +40,8 @@ export const ModsTab = React.memo(function ModsTab() {
   // The add dialog: closed, a game (a disc), or a mod (found in a folder, on the Brawl disc).
   const [adding, setAdding] = useState<AddBuildInitial | null>(null);
   const { uid, query } = useRoomList();
+  // A room whose game the player does not have (a code typed in, or a public room).
+  const [missing, setMissing] = useState<{ name: string; hash: string } | null>(null);
   const openLogin = useLoginModal((s) => s.openModal);
   const outdated = query.isError && Date.now() - query.dataUpdatedAt > STALE_AFTER_MS;
   let publicRooms: ModsPublicRooms;
@@ -118,6 +125,23 @@ export const ModsTab = React.memo(function ModsTab() {
     [ensureOnline],
   );
 
+  // A code typed by the public rooms: the room's game is looked up, then joined with the player's
+  // game with the same hash (or the popup says there is none).
+  const joinCode = async (code: string) => {
+    setError(null);
+    try {
+      if (!uid || !(await ensureOnline())) {
+        return;
+      }
+      const result = await modsService.joinByCode({ uid, code });
+      if (result.outcome === "no-game") {
+        setMissing({ name: result.name, hash: result.hash });
+      }
+    } catch (err) {
+      setError(errorText(err));
+    }
+  };
+
   const onAdd = async (input: ModBuildInput) => {
     try {
       await modsService.addBuild(input);
@@ -168,12 +192,21 @@ export const ModsTab = React.memo(function ModsTab() {
         onRemoveBuild={(build) => void modsService.removeBuild(build.id).catch(showError)}
         onHost={(build, isPublic) => void start(build, () => modsService.host({ buildId: build.id, public: isPublic }))}
         onJoin={(build, code) => void start(build, () => modsService.join({ buildId: build.id, code }))}
+        onJoinCode={(code) => void joinCode(code)}
+        onMissingGame={(name, hash) => setMissing({ name, hash })}
         onRequest={onRequest}
         onCopyCode={(code) => {
           void navigator.clipboard.writeText(code).then(() => showSuccess(Messages.copied()));
         }}
       />
       <AddBuildDialog initial={adding} onClose={() => setAdding(null)} onAdd={onAdd} />
+      <Dialog open={missing !== null} onClose={() => setMissing(null)} maxWidth="xs" fullWidth={true}>
+        <DialogTitle>{Messages.noMatchingGameTitle()}</DialogTitle>
+        <DialogContent>{missing && Messages.noMatchingGame(missing.name, missing.hash)}</DialogContent>
+        <DialogActions>
+          <Button onClick={() => setMissing(null)}>{Messages.ok()}</Button>
+        </DialogActions>
+      </Dialog>
     </>
   );
 });

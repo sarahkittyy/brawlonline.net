@@ -57,6 +57,10 @@ export type ModsViewProps = {
   onRemoveBuild: (build: ModBuild) => void;
   onHost: (build: ModBuild, isPublic: boolean) => void;
   onJoin: (build: ModBuild, code: string) => void;
+  /** A room code typed by the public rooms (its game is looked up). */
+  onJoinCode: (code: string) => void;
+  /** A public room whose game the player does not have. */
+  onMissingGame: (name: string, hash: string) => void;
   onRequest: (request: ModRoomRequest) => void;
   onCopyCode: (code: string) => void;
 };
@@ -111,6 +115,8 @@ export const ModsView = (props: ModsViewProps) => {
             builds={state?.builds ?? []}
             disabled={!!state?.running || props.startingBuildId !== null}
             onJoin={props.onJoin}
+            onJoinCode={props.onJoinCode}
+            onMissingGame={props.onMissingGame}
             onLogIn={props.onLogIn}
           />
         </div>
@@ -145,7 +151,6 @@ export const ModsView = (props: ModsViewProps) => {
                     disabled={!!state.running || props.startingBuildId !== null}
                     onRemove={() => props.onRemoveBuild(build)}
                     onHost={(isPublic) => props.onHost(build, isPublic)}
-                    onJoin={(code) => props.onJoin(build, code)}
                   />
                 ))}
               </div>
@@ -163,6 +168,8 @@ const PublicRoomsBlock = ({
   builds,
   disabled,
   onJoin,
+  onJoinCode,
+  onMissingGame,
   onLogIn,
 }: {
   rooms: ModsPublicRooms;
@@ -171,8 +178,11 @@ const PublicRoomsBlock = ({
   builds: ModBuild[];
   disabled: boolean;
   onJoin: (build: ModBuild, code: string) => void;
+  onJoinCode: (code: string) => void;
+  onMissingGame: (name: string, hash: string) => void;
   onLogIn: () => void;
 }) => {
+  const [code, setCode] = useState("");
   let content: ReactNode;
   const listed = rooms.kind === "ready" ? rooms.rooms : [];
   if (rooms.kind === "logged-out") {
@@ -198,7 +208,7 @@ const PublicRoomsBlock = ({
           const build = builds.find((b) => b.hash === room.build.hash);
           const label = Messages.buildName(room.build.name, room.build.hash.slice(0, 8));
           const own = room.code === ownCode;
-          const off = !build || disabled || own;
+          const off = disabled || own;
           return (
             <li key={room.code}>
               <Tooltip
@@ -219,8 +229,13 @@ const PublicRoomsBlock = ({
                   aria-disabled={off}
                   data-room={room.code}
                   onClick={() => {
-                    if (build && !off) {
+                    if (off) {
+                      return;
+                    }
+                    if (build) {
                       onJoin(build, room.code);
+                    } else {
+                      onMissingGame(room.build.name, room.build.hash);
                     }
                   }}
                 >
@@ -252,8 +267,45 @@ const PublicRoomsBlock = ({
       </ul>
     );
   }
+  const join = () => {
+    if (code.trim() && !disabled) {
+      onJoinCode(code.trim());
+    }
+  };
   return (
-    <ContentBlock fill={true} title={Messages.publicRooms()} content={<div className={styles.room}>{content}</div>} />
+    <ContentBlock
+      fill={true}
+      title={Messages.publicRooms()}
+      titleAction={
+        rooms.kind !== "logged-out" ? (
+          <div className={styles.roomActions}>
+            <TextField
+              size="small"
+              variant="outlined"
+              fullWidth={false}
+              sx={{ width: 140 }}
+              placeholder={Messages.roomCode()}
+              value={code}
+              inputProps={{ maxLength: 16, "aria-label": Messages.roomCode() }}
+              onChange={(e) => setCode(e.target.value.toUpperCase())}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  join();
+                }
+              }}
+            />
+            <Tooltip title={Messages.joinTooltip()}>
+              <span>
+                <Button variant="outlined" size="small" disabled={disabled || !code.trim()} onClick={join}>
+                  {Messages.join()}
+                </Button>
+              </span>
+            </Tooltip>
+          </div>
+        ) : undefined
+      }
+      content={<div className={styles.room}>{content}</div>}
+    />
   );
 };
 
@@ -264,7 +316,6 @@ const BuildRow = ({
   disabled,
   onRemove,
   onHost,
-  onJoin,
 }: {
   build: ModBuild;
   progress: number | undefined;
@@ -272,9 +323,7 @@ const BuildRow = ({
   disabled: boolean;
   onRemove: () => void;
   onHost: (isPublic: boolean) => void;
-  onJoin: (code: string) => void;
 }) => {
-  const [code, setCode] = useState("");
   const [isPublic, setIsPublic] = useState(true);
   const hashing = progress !== undefined;
   return (
@@ -319,35 +368,6 @@ const BuildRow = ({
           <span>
             <Button variant="contained" size="small" disabled={disabled || hashing} onClick={() => onHost(isPublic)}>
               {starting ? Messages.opening() : Messages.host()}
-            </Button>
-          </span>
-        </Tooltip>
-        <span className={styles.separator} />
-        <TextField
-          size="small"
-          variant="outlined"
-          fullWidth={false}
-          sx={{ width: 140 }}
-          placeholder={Messages.roomCode()}
-          value={code}
-          inputProps={{ maxLength: 16, "aria-label": Messages.roomCode() }}
-          onChange={(e) => setCode(e.target.value.toUpperCase())}
-          onKeyDown={(e) => {
-            if (e.key === "Enter" && code.trim() && !disabled && !hashing) {
-              onJoin(code.trim());
-            }
-          }}
-          className={styles.codeInput}
-        />
-        <Tooltip title={Messages.joinTooltip()}>
-          <span>
-            <Button
-              variant="outlined"
-              size="small"
-              disabled={disabled || hashing || !code.trim()}
-              onClick={() => onJoin(code.trim())}
-            >
-              {Messages.join()}
             </Button>
           </span>
         </Tooltip>
@@ -481,11 +501,11 @@ const SlotRow = ({
       onDragStart={(e) => {
         e.dataTransfer.setData("text/plain", String(slot.slot));
         e.dataTransfer.effectAllowed = "move";
-        onDragFrom(slot.slot);
+        window.setTimeout(() => onDragFrom(slot.slot), 0);
       }}
       onDragEnd={() => onDragFrom(null)}
       onDragOver={(e) => {
-        if (target) {
+        if (target || (isHost && dragging === null && (slot.open || !!p))) {
           e.preventDefault();
           e.dataTransfer.dropEffect = "move";
           setOver(true);
@@ -495,8 +515,10 @@ const SlotRow = ({
       onDrop={(e) => {
         e.preventDefault();
         setOver(false);
-        if (target && dragging !== null) {
-          onRequest({ op: "move", from: dragging, to: slot.slot });
+        // The dragged slot, from the drag's data (the state may not have caught up).
+        const from = dragging ?? Number(e.dataTransfer.getData("text/plain"));
+        if (isHost && from >= 1 && from <= 4 && from !== slot.slot && (slot.open || !!p)) {
+          onRequest({ op: "move", from, to: slot.slot });
         }
         onDragFrom(null);
       }}
