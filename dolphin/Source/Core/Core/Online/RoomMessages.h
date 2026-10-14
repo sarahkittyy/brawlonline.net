@@ -50,6 +50,12 @@ std::optional<std::string> NormalizeRulesetCode(const std::string& ascii);
 constexpr size_t MAX_CONNECT_CODE_LEN = 8;
 std::optional<std::string> NormalizeConnectCode(const std::string& ascii);
 
+// "2026-10-09T15:00:00.000Z" (the launcher's toISOString, join-room.json's createdAt) -> ms since
+// the epoch; nullopt for anything else. Read digit by digit, never with sscanf's %lf or strtod:
+// those follow the C locale, which Dolphin sets to the system's, and with a decimal comma
+// (es-UY, de-DE, pt-BR, ...) every request read as unparseable, so too old, and was ignored.
+std::optional<s64> ParseIsoUtc(const std::string& t);
+
 // A server string made safe to show and log: control characters dropped, invalid UTF-8 replaced,
 // cut to `max_bytes` on a character boundary.
 std::string CleanText(const std::string& s, size_t max_bytes);

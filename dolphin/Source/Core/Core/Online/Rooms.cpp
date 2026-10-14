@@ -285,34 +285,6 @@ s64 UnixMs()
       .count();
 }
 
-// Days since 1970-01-01 of a civil date (Howard Hinnant's algorithm).
-s64 DaysFromCivil(s64 y, unsigned m, unsigned d)
-{
-  y -= m <= 2;
-  const s64 era = (y >= 0 ? y : y - 399) / 400;
-  const unsigned yoe = static_cast<unsigned>(y - era * 400);
-  const unsigned doy = (153 * (m + (m > 2 ? -3 : 9)) + 2) / 5 + d - 1;
-  const unsigned doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-  return era * 146097 + static_cast<s64>(doe) - 719468;
-}
-
-// "2026-10-09T15:00:00.000Z" (the launcher's toISOString) -> ms since the epoch.
-std::optional<s64> ParseIsoUtc(const std::string& t)
-{
-  int y, mo, d, h, mi;
-  double sec;
-  char z = 0;
-  if (t.size() > 40 || std::sscanf(t.c_str(), "%4d-%2d-%2dT%2d:%2d:%lf%c", &y, &mo, &d, &h, &mi,
-                                   &sec, &z) != 7 ||
-      z != 'Z' || mo < 1 || mo > 12 || d < 1 || d > 31 || h > 23 || mi > 59 || !(sec >= 0) ||
-      !(sec < 61) || y < 2000 || y > 9999)
-  {
-    return std::nullopt;
-  }
-  const s64 days = DaysFromCivil(y, static_cast<unsigned>(mo), static_cast<unsigned>(d));
-  return ((days * 24 + h) * 60 + mi) * 60000 + static_cast<s64>(sec * 1000);
-}
-
 std::string IsoUtcNow()
 {
   const s64 ms = UnixMs();

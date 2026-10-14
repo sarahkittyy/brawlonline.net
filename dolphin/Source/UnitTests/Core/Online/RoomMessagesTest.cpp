@@ -4,6 +4,7 @@
 // The mm server's room messages as Dolphin parses them (Core/Online/RoomMessages.h): everything
 // the server sends is checked before it can reach the game's memory.
 
+#include <clocale>
 #include <string>
 
 #include <gtest/gtest.h>
@@ -83,6 +84,54 @@ TEST(RoomMessages, ConnectCodes)
   EXPECT_EQ(NormalizeConnectCode("\xEF\xBC\xA1" "BC#1"), std::nullopt);   // a full-width A
   EXPECT_EQ(NormalizeConnectCode(std::string("AB\0C#1", 6)), std::nullopt);
   EXPECT_EQ(NormalizeConnectCode(std::string(1000, 'A') + "#1"), std::nullopt);
+}
+
+static void ExpectIsoTimes()
+{
+  EXPECT_EQ(ParseIsoUtc("2026-10-13T23:55:05.123Z"), 1791935705123);
+  EXPECT_EQ(ParseIsoUtc("2026-10-13T23:55:05Z"), 1791935705000);
+  EXPECT_EQ(ParseIsoUtc("2026-10-13T23:55:05.1Z"), 1791935705100);
+  EXPECT_EQ(ParseIsoUtc("2026-10-13T23:55:05.123456Z"), 1791935705123);
+  EXPECT_EQ(ParseIsoUtc("2000-02-29T00:00:00.000Z"), 951782400000);
+  EXPECT_EQ(ParseIsoUtc("2026-10-13T23:55:05,123Z"), std::nullopt);
+  EXPECT_EQ(ParseIsoUtc("2026-10-13T23:55:05.Z"), std::nullopt);
+  EXPECT_EQ(ParseIsoUtc("2026-10-13T23:55:05.123"), std::nullopt);
+  EXPECT_EQ(ParseIsoUtc("2026-10-13T23:55:05.123+00:00"), std::nullopt);
+  EXPECT_EQ(ParseIsoUtc("2026-13-13T23:55:05.123Z"), std::nullopt);
+  EXPECT_EQ(ParseIsoUtc("2026-10-13T24:55:05.123Z"), std::nullopt);
+  EXPECT_EQ(ParseIsoUtc("1999-10-13T23:55:05.123Z"), std::nullopt);
+  EXPECT_EQ(ParseIsoUtc("2026-1-13T23:55:05.123Z"), std::nullopt);
+  EXPECT_EQ(ParseIsoUtc("yesterday"), std::nullopt);
+  EXPECT_EQ(ParseIsoUtc(""), std::nullopt);
+  EXPECT_EQ(ParseIsoUtc("2026-10-13T23:55:05." + std::string(40, '1') + "Z"), std::nullopt);
+}
+
+TEST(RoomMessages, IsoTimes)
+{
+  ExpectIsoTimes();
+}
+
+// Player report 2026-10-13 (Windows, es-UY): Dolphin sets the C locale to the system's, and the
+// old sscanf("%lf") stopped at the '.', so every launcher request was ignored as too old.
+TEST(RoomMessages, IsoTimesUnderADecimalCommaLocale)
+{
+  const std::string before = std::setlocale(LC_ALL, nullptr);
+  bool set = false;
+  for (const char* name : {"es-UY", "de-DE", "es_UY.UTF-8", "de_DE.UTF-8", "de_DE", "fr_FR.UTF-8"})
+  {
+    if (std::setlocale(LC_ALL, name) && std::localeconv()->decimal_point[0] == ',')
+    {
+      set = true;
+      break;
+    }
+  }
+  if (!set)
+  {
+    std::setlocale(LC_ALL, before.c_str());
+    GTEST_SKIP() << "no decimal-comma locale installed";
+  }
+  ExpectIsoTimes();
+  std::setlocale(LC_ALL, before.c_str());
 }
 
 TEST(RoomMessages, CleanText)
