@@ -1222,13 +1222,22 @@ void Gekko::MessageSystem::SendInputsToPeer(Player* peer, GekkoNetAdapter* host,
     // peer is caught up, nothing to send
     if (peer->stats.last_acked_frame >= last_input) return;
 
-    // check per-peer cache
-    if (peer->input_cache.IsValid(peer->stats.last_acked_frame, last_input)) {
-        // cache hit: nothing new to send, this is a pure re-send — rate limit it
+    // no input newer than the last packet: only an ack came in, the peer already has (or is
+    // about to get) everything we would send. A re-send waits for the retry interval; a lost
+    // packet is repaired sooner by the next frame's packet, which carries every unacked input.
+    // (Before 2026-10-13 each new ack sent the remaining inputs again: about one extra packet a
+    // frame.)
+    if (!peer->input_cache.packets.empty() && peer->input_cache.last_input_frame == last_input) {
         const u64 now = TimeSinceEpoch();
         if (peer->last_input_send_time + NetStats::INPUT_RETRY_INTERVAL > now) {
             return;
         }
+    }
+
+    // check per-peer cache
+    if (peer->input_cache.IsValid(peer->stats.last_acked_frame, last_input)) {
+        // cache hit: nothing new to send, this is a pure re-send (rate limited above)
+        const u64 now = TimeSinceEpoch();
         for (const auto& cached_msg : peer->input_cache.packets) {
             NetData data;
             data.addr.Copy(&peer->address);

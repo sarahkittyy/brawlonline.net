@@ -579,14 +579,20 @@ void Gekko::GameSession::HandleReceivedInputs()
                              "(holds {}..{})",
                              last_recv, min_frame - 1, handle, min_frame, last_added);
             }
+            Frame acked = GameInput::NULL_FRAME;
             for (int i = last_recv; i <= last_added; i++) {
                 if (i >= min_frame) {
                     int current_idx = i - min_frame;
                     u8* input = input_q[current_idx].get();
                     _sync.AddRemoteInput(handle, input, i);
-                    const i8 local_adv = (i8)(current_frame - i - local_delay);
-                    _msg.SendInputAck(handle, i, local_adv);
+                    acked = i;
                 }
+            }
+            // one ack for the newest frame: acks are cumulative and the peer only takes a newer
+            // one (and its frame advantage), so an ack per frame added nothing but packets.
+            if (acked != GameInput::NULL_FRAME) {
+                const i8 local_adv = (i8)(current_frame - acked - local_delay);
+                _msg.SendInputAck(handle, acked, local_adv);
             }
         }
     }

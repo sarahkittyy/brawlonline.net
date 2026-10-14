@@ -23,6 +23,7 @@ All in `harness/tools/`. They need numpy.
 | `gprb_late_divergence.py`, `gprb_transplant.py`, `gprb_nudge.py`, `gprb_debug.py` | The Phase 2 investigation. |
 | `gprb_synctest.py` | Phase 3 single-instance sync test. |
 | `gprb_session.py` | Phase 4 two-instance sessions through netsim. |
+| `gprb_traffic.py` | Phase 26: a `gprb_session.py` session through a netsim that classifies every datagram (GekkoNet message types, bundles, control messages, pings): packets and kbit/s per kind and direction over the match, frames per inputs packet; `--dolphin-b` runs the joiner on another build. |
 | `gprb_online.py` | Online hand-off: our accounts/mm servers, two logged-in instances, Direct search with `backend="gameplay"`, one match, then a leave or freeze case. |
 | `gprb_resimtrace.py` | Instruction-trace diff of a frame's first run against its resimulation. |
 | `gprb_rngcmp.py` | Compares two peers' `PPR_GPRB_RNG_LOG` logs frame by frame (newest pass) and shows the first differing `mtRand` calls with their callers. |
@@ -211,7 +212,49 @@ The region set is about 40 % cheaper per save and per load. The gain is modest b
 
 **Save outliers of 5-17 s** (`save_us_max`) were not save work. They were synchronous log writes: `RollbackManager` logged two INFO lines per frame, and a write stalled when the shared disk was saturated (the other agent's runs showed the same 16.8 s maximum). A WARN with a timing breakdown now reports any save over 100 ms; it never fired. The per-frame lines are DEBUG now (`fb111dc1ba`).
 
-### Open issues (Phase 3)
+### Phase 26: what a gameplay session sends (2026-10-13)
+
+**Symptom.** The spectating session's uplink test (`harness/tests/test_spectate_safety.py` T1) measured 555-650 kbit/s from one player of a Direct game; `backend-design.md` §2.7 had assumed 10-20 kbit/s per player. At an uplink of 1.25 times that rate the game's own packets queued up to ~100 ms (p99).
+
+**Measured** (`harness/tools/gprb_traffic.py`: `gprb_session.py` through a netsim that classifies every datagram; `typical`, 40 ms round trip, a 1-minute Fox/Falco Battlefield match, per second of the match, UDP/IP headers counted as 28 bytes):
+
+| | joiner's upload | host's upload |
+|---|---|---|
+| state message (`C:st`, every 50 ms) | 19/s × 434 B: 71 kbit/s | the same as 'F' pieces, 77/s × ~1,045 B: 657 kbit/s |
+| GekkoNet inputs | 111/s × 25 B: 47 kbit/s | the same |
+| GekkoNet checksum (`SessionHealth`, every frame) | 60/s × 13 B: 20 kbit/s | the same |
+| GekkoNet input acks | 60/s × 10 B: 18 kbit/s | the same |
+| pings and pongs, GekkoNet's network health | 14/s: 4 kbit/s | the same |
+| **total** | **264/s (4.4 a frame), 160 kbit/s** | **323/s (5.4 a frame), 747 kbit/s** |
+
+- **The host's state message kept its sync block and task order all match** (`"sync"`, `"tasks"`, about 5.5 KB, split into 5 datagrams since the fragment fix): 88% of the host's upload. Only joiners at the barrier read them, and the host goes on into the countdown only when every joiner has applied them (`all_applied`). T1's "up" was this direction.
+- **The state message went every 50 ms in the match too**, although nothing in it changes there (GekkoNet carries the match; silence in a match is GekkoNet's timeout).
+- **Inputs went twice a frame.** `SendInputsToPeer` rebuilt and sent the unacked inputs whenever the peer's ack changed, not only for a new input: the poll at the start of a frame (which receives the peer's ack) sent the remaining inputs, microseconds before the frame's own packet carried them again. No earlier repair: the next packet always follows that closely.
+- **One ack per frame received**, one checksum per frame, each its own datagram: at ~10-25 bytes, the 28-byte header cost more than the message.
+- The inputs themselves are small (delta + RLE: ~7 bytes for 3.6 frames, the unacked ones at this round trip): bounding the redundancy would save nothing worth having.
+
+**Fix.**
+- GekkoNet (`backend.cpp`, `game_session.cpp`): inputs are sent for a new input only (or after the 200 ms retry interval), and one ack per peer per poll, for the newest frame (acks are cumulative and the receiver takes only a newer one). Both are sender-side: older builds read them as before.
+- The host's state carries `sync`/`ports`/`tasks` only until the barrier is passed (not from the countdown on). In a running match the 50 ms tick sends the state only when it changed (then twice more, at 50 ms intervals, for loss) or every 500 ms; the steps a peer waits for are still sent at once. Pings once a second in a running match (their round trip is used before the match; the ping line is GekkoNet's).
+- `GekkoBatch` + `'B'` datagrams (`PeerData::AppendGekkoBundle`/`SplitGekkoBundle`): what GekkoNet sends to a peer during one frame's calls (network poll, local input, session update, microseconds apart) goes as one datagram: the frame's inputs, the ack of what that poll received, the checksum the previous update queued, a network-health ping now and then. Only to a peer whose state says `"gb": 1`; older builds get 'G' packets, and every build reads 'B'.
+
+**After** (same test; raw `run/qa/traffic/`): **64 datagrams a second each way (1.06 a frame), 45 kbit/s from the joiner and 47 from the host** (most of it the bundle, ~52 bytes, and its header), the state 1.9 a second. Old and new builds together (either one the host): game set, every confirmed checksum equal, the new peer sending 'G' packets to the old one (the new host: 75 kbit/s).
+
+**Rollback quality** (1-minute matches, both peers' `gprb net: session` lines; this machine shared with other sessions' Dolphins). Every run: game set, 0 desyncs, every confirmed checksum equal, traces identical through game set. Rollbacks per frame went down on every preset, about halved where there is loss:
+
+| preset | before | after |
+|---|---|---|
+| `typical` (0.5% loss) | 0.5-2.0% | 0.4-0.9% |
+| `bad_wifi` (60 ± 25 ms, 2% loss in bursts of 3 packets), 5 runs each | 10-11% | 5-7% |
+| 60 ± 25 ms, 2% independent loss | 11.0% | 6.0% |
+| 60 ± 25 ms, the link down 40 ms every 2 s | 10.3-10.8% | 5.6-6.8% |
+| `awful` (150 ± 50 ms, 5% loss) | 11.5% | 10.8% |
+
+Waits for the peer are small and noisy on both (7-271 ms a match before, 0-333 after; the 333 ms one with a 420 ms present gap on that PC). `stall_polls` (updates without a frame) rose on `bad_wifi`: netsim's bursts count packets, so at 64 datagrams a second a 3-packet burst takes ~47 ms of everything at once where it took ~11 ms at 264; with loss in time (the outage profile) or independent loss, it did not. Why the rollbacks fell is not proven: candidates are the state message no longer holding `s.mutex` (which `GekkoSend` needs) while it serialized 5.5 KB every 50 ms, and the netsim relay (Python) no longer forwarding 750 kbit/s.
+
+Tests: `GekkoNetTraffic.OneInputsPacketAndOneAckPerFrame` (3 frames of latency each way: the old code sent 1,200 Inputs packets for 600 frames), `GekkoNetTraffic.LostPacketsAreRepairedByTheNextFrame`, `PeerData.GekkoBundles*`, `harness/tests/test_session_traffic.py` (`typical`: at most 1.3 datagrams a frame and 80 kbit/s each way, no 'F' piece and at most 4 state messages a second in the match, no desync).
+
+## Open issues (Phase 3)
 
 See [Open issues](#open-issues) at the end: Peach crashes (an article outside the set), and the main-thread stalls.
 

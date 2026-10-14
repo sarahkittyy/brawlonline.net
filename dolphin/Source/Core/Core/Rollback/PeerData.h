@@ -51,6 +51,24 @@ constexpr size_t MAX_REASSEMBLY_SOURCES = 8;
 // it fits in MAX_DATAGRAM, else its 'F' packets with message id `id`.
 std::vector<std::vector<u8>> ControlDatagrams(std::string_view text, u32 id);
 
+// GekkoNet sends several small messages a frame to each peer (the frame's inputs, an ack, the
+// checksum of a confirmed frame, a ping now and then), each its own 'G' datagram: about four a
+// frame, and at 60 frames a second the 28 bytes of UDP/IP header each cost more than the
+// messages. To a peer whose state says it takes them ("gb"), the messages of one session update
+// go as one 'B' datagram: 'B', then per message its length (u16, little-endian, at least 1) and
+// the message as a 'G' packet carries it. Older builds get 'G' packets.
+constexpr size_t MAX_GEKKO_BUNDLE = MAX_DATAGRAM;
+constexpr size_t MAX_BUNDLED_MESSAGES = 64;
+
+// Appends GekkoNet message `msg` to the 'B' datagram `bundle` (starting it when empty). False,
+// with `bundle` unchanged, when the result would be larger than MAX_GEKKO_BUNDLE or hold more than
+// MAX_BUNDLED_MESSAGES messages, or `msg` is empty.
+bool AppendGekkoBundle(std::vector<u8>& bundle, const u8* msg, size_t size);
+
+// The GekkoNet messages of a 'B' datagram (`data` starts with the 'B'). nullopt for a malformed
+// one: a length of 0 or past the end, or more than MAX_BUNDLED_MESSAGES messages.
+std::optional<std::vector<std::vector<u8>>> SplitGekkoBundle(const u8* data, size_t size);
+
 // Puts 'F' packets back together, per source. Everything in a piece is checked: a malformed
 // piece is dropped, a piece of another message (id or count) than the one in progress from that
 // source starts over, and memory is bounded (MAX_REASSEMBLY_SOURCES messages of at most

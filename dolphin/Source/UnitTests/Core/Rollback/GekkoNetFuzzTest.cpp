@@ -14,6 +14,7 @@
 #include <deque>
 #include <optional>
 #include <random>
+#include <utility>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -33,14 +34,26 @@ struct Side
   std::deque<std::vector<unsigned char>> inbox;
   std::vector<GekkoNetResult*> results;
   std::vector<std::vector<unsigned char>> sent;  // everything this side sent
+  std::deque<std::pair<int, std::vector<unsigned char>>> in_flight;  // (arrival step, packet)
 };
 Side g_a, g_b;
+// Every this many packets A sends is lost on the way (0: none).
+int g_drop_a_every = 0;
+int g_a_sent_count = 0;
+// Packets arrive this many steps (frames) after they were sent (0: at once), and the step.
+int g_delay_steps = 0;
+int g_step = 0;
 
 void Deliver(Side& to, Side& from, const char* data, int length)
 {
   std::vector<unsigned char> v(data, data + length);
   from.sent.push_back(v);
-  to.inbox.push_back(std::move(v));
+  if (&from == &g_a && g_drop_a_every && ++g_a_sent_count % g_drop_a_every == 0)
+    return;
+  if (g_delay_steps)
+    to.in_flight.emplace_back(g_step + g_delay_steps, std::move(v));
+  else
+    to.inbox.push_back(std::move(v));
 }
 void SendFromA(GekkoNetAddress*, const char* d, int n)
 {
@@ -115,6 +128,10 @@ struct Pair
   {
     g_a = {};
     g_b = {};
+    g_drop_a_every = 0;
+    g_a_sent_count = 0;
+    g_delay_steps = 0;
+    g_step = 0;
     GekkoConfig cfg{};
     cfg.num_players = 2;
     cfg.input_prediction_window = 7;
@@ -177,6 +194,15 @@ struct Pair
 
   void Step(unsigned char a_fill = 0x11, unsigned char b_fill = 0x22)
   {
+    ++g_step;
+    for (Side* side : {&g_a, &g_b})
+    {
+      while (!side->in_flight.empty() && side->in_flight.front().first <= g_step)
+      {
+        side->inbox.push_back(std::move(side->in_flight.front().second));
+        side->in_flight.pop_front();
+      }
+    }
     gekko_network_poll(a);
     gekko_network_poll(b);
     advances_a += Update(a, 0, a_fill, &a_local_inputs_seen);
@@ -465,4 +491,51 @@ TEST(GekkoNetFuzz, MalformedPacketsDoNotCrash)
   for (int i = 0; i < 20; ++i)
     pair.Step();
   SUCCEED();
+}
+
+// What A sends B from `from` on (index into g_a.sent), by packet type.
+std::array<int, 16> CountASent(size_t from)
+{
+  std::array<int, 16> n{};
+  for (size_t i = from; i < g_a.sent.size(); ++i)
+  {
+    if (auto p = Decode(g_a.sent[i]); p && p->header.type < n.size())
+      ++n[p->header.type];
+  }
+  return n;
+}
+
+// A frame's inputs go once: a new ack used to make the next poll send the remaining unacked
+// inputs again (about two Inputs packets a frame), and every frame received got its own ack.
+// Three frames each way, so acks come in while inputs are still unacked.
+TEST(GekkoNetTraffic, OneInputsPacketAndOneAckPerFrame)
+{
+  Pair pair;
+  g_delay_steps = 3;
+  ASSERT_TRUE(pair.RunUntil(120));
+  const size_t from = g_a.sent.size();
+  const int frames_before = pair.advances_a;
+  for (int i = 0; i < 600; ++i)
+    pair.Step();
+  const int frames = pair.advances_a - frames_before;
+  ASSERT_GE(frames, 590);
+  const auto n = CountASent(from);
+  EXPECT_LE(n[Gekko::Inputs], frames + frames / 20) << "Inputs packets for " << frames << " frames";
+  EXPECT_LE(n[Gekko::InputAck], frames + frames / 20) << "acks for " << frames << " frames";
+  EXPECT_GE(n[Gekko::Inputs], frames - frames / 20);
+}
+
+// With a tenth of A's packets lost, every input still reaches B (the next frame's packet carries
+// the unacked ones again) and neither side stalls for long.
+TEST(GekkoNetTraffic, LostPacketsAreRepairedByTheNextFrame)
+{
+  Pair pair;
+  g_delay_steps = 3;
+  ASSERT_TRUE(pair.RunUntil(120));
+  g_drop_a_every = 10;
+  const int a0 = pair.advances_a, b0 = pair.advances_b;
+  for (int i = 0; i < 600; ++i)
+    pair.Step();
+  EXPECT_GE(pair.advances_a - a0, 590);
+  EXPECT_GE(pair.advances_b - b0, 590);
 }

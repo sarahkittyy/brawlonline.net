@@ -254,7 +254,7 @@ Server-rendered pages: `/signup`, `/login`, `/reset`, `/user/{code}` (code, disp
 
 ### 2.7 Relay
 
-Recommended. It is a stateless UDP forwarder: both peers send `RELAY_HELLO{token}` to `relay:43200`, then the relay forwards datagrams between the two bound source addresses, so ENet runs unchanged on top. The client tries direct and LAN for 3 s, then the relay. It is used only when the punch fails, so bandwidth stays small (rollback input traffic is about 10-20 kbit/s per player). Rate-limit it per token and expire it at match end. It is not visible to users (no new UI), so it complies with "no novel UI".
+Recommended. It is a stateless UDP forwarder: both peers send `RELAY_HELLO{token}` to `relay:43200`, then the relay forwards datagrams between the two bound source addresses, so ENet runs unchanged on top. The client tries direct and LAN for 3 s, then the relay. It is used only when the punch fails, so bandwidth stays small: a gameplay session sends one datagram a frame each way, about 45-50 kbit/s per player with UDP/IP headers (measured 2026-10-13, `harness/tools/gprb_traffic.py`; before that day's fix ~160 kbit/s from a joiner and ~740 from a host, see `gameplay-rollback-status.md` Phase 26). Rate-limit it per token and expire it at match end. It is not visible to users (no new UI), so it complies with "no novel UI".
 
 ### 2.8 Admin tooling
 
@@ -263,7 +263,7 @@ A CLI in the same binary (`ppo-admin user ban|unban|rename|reset-code|delete`, `
 Scaling notes:
 - **api:** stateless, so it scales by adding processes behind Caddy.
 - **Postgres:** a single instance is ample to six figures of users. Add a read replica only for leaderboard queries, and recompute leaderboards every 2 minutes as Slippi does, not per request.
-- **relay:** CPU-bound per packet, at about 20 kbit/s per relayed player.
+- **relay:** CPU-bound per packet: about 64 packets/s and 50 kbit/s per relayed player.
 - **replays:** disk. 2-5 MB per gzipped game, ranked only, means 1 TB holds hundreds of thousands of games.
 - **Friends-scale budget:** all services together need under 1 vCPU and under 2 GB RAM. The smallest OVH dedicated box is already oversized; buy for disk and bandwidth, not CPU.
 

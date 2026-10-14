@@ -234,6 +234,9 @@ struct PeerView
   // whether this match showed the notice.
   double slow_fps = 0;
   bool slow_shown = false;
+  // Its state says it takes GekkoNet's messages bundled ('B', PeerData::AppendGekkoBundle);
+  // builds before 2026-10-13 do not.
+  bool gekko_bundles = false;
 };
 
 struct FrameRecord
@@ -324,6 +327,14 @@ struct State
   std::mutex gekko_rx_mutex;
   std::deque<std::pair<int, std::vector<u8>>> gekko_rx;  // (sender's port, packet)
   std::vector<GekkoNetResult*> gekko_rx_ptrs;
+  // Open GekkoBatch scopes and, per peer, the GekkoNet messages they hold (under s.mutex).
+  int gekko_batch = 0;
+  std::array<std::vector<u8>, MAX_LOBBY_PLAYERS> gekko_bundle;
+  // The last state message sent, when, and how many more copies of it the 50 ms tick sends in a
+  // running match (SendState).
+  std::string state_sent;
+  Clock::time_point state_sent_at{};
+  int state_repeats = 0;
   std::array<PeerView, MAX_LOBBY_PLAYERS> peers;  // by in-game port (this player's unused)
   picojson::object local_selections;
   u32 session_seed = 0;  // host's, used to seed the RNG at the start of every match
@@ -1315,14 +1326,74 @@ void SendDesync()
   SendControlToAll(text, 3);
 }
 
+// The messages GekkoSend holds for one peer while a GekkoBatch is open (a 'B' datagram,
+// PeerData::AppendGekkoBundle), sent when it closes (under s.mutex).
+void FlushGekkoBundle(int slot)
+{
+  auto& b = s.gekko_bundle[slot];
+  if (b.empty())
+    return;
+  const auto msgs = PeerData::SplitGekkoBundle(b.data(), b.size());
+  if (msgs && msgs->size() == 1)
+  {
+    // One message: as a 'G' packet, 2 bytes smaller.
+    std::vector<u8> pkt((*msgs)[0].size() + 1);
+    pkt[0] = 'G';
+    std::memcpy(pkt.data() + 1, (*msgs)[0].data(), (*msgs)[0].size());
+    SendRaw(slot, pkt);
+  }
+  else
+  {
+    SendRaw(slot, b);
+  }
+  b.clear();
+}
+
 void GekkoSend(GekkoNetAddress* addr, const char* data, int length)
 {
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  const int slot = GekkoAddrSlot(addr);
+  if (s.gekko_batch > 0 && slot >= 0 && s.peers[slot].gekko_bundles)
+  {
+    const auto* msg = reinterpret_cast<const u8*>(data);
+    auto& b = s.gekko_bundle[slot];
+    if (PeerData::AppendGekkoBundle(b, msg, static_cast<size_t>(length)))
+      return;
+    FlushGekkoBundle(slot);
+    if (PeerData::AppendGekkoBundle(b, msg, static_cast<size_t>(length)))
+      return;
+  }
   std::vector<u8> pkt(static_cast<size_t>(length) + 1);
   pkt[0] = 'G';
   std::memcpy(pkt.data() + 1, data, static_cast<size_t>(length));
-  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
-  SendRaw(GekkoAddrSlot(addr), pkt);
+  SendRaw(slot, pkt);
 }
+
+// While one is open, what GekkoNet sends to a peer that takes 'B' datagrams waits and goes out as
+// one datagram when the last one closes. Open around the GekkoNet calls of one frame (the network
+// poll, the local input and the session update, microseconds apart): the frame's inputs, the ack
+// of the peer's inputs that poll received and the checksum the previous update queued then
+// travel together, one datagram a frame instead of about four. Never open one across emulation:
+// the messages would wait for it.
+struct GekkoBatch
+{
+  GekkoBatch()
+  {
+    std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+    ++s.gekko_batch;
+  }
+  ~GekkoBatch()
+  {
+    std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+    if (--s.gekko_batch == 0)
+    {
+      for (int slot = 0; slot < MAX_LOBBY_PLAYERS; ++slot)
+        FlushGekkoBundle(slot);
+    }
+  }
+  GekkoBatch(const GekkoBatch&) = delete;
+  GekkoBatch& operator=(const GekkoBatch&) = delete;
+};
 
 GekkoNetResult** GekkoReceive(int* length)
 {
@@ -1976,7 +2047,16 @@ void MaybeDecideSetup()
                who);
 }
 
-void SendState()
+// In a running match the 50 ms tick sends the state message only when it changed (then the next
+// STATE_REPEATS ticks send it again, as a lost copy was replaced within 50 ms before) or after
+// STATE_KEEPALIVE: it holds the menus' and barriers' steps, which do not change in a match, and
+// GekkoNet carries the match itself. Before 2026-10-13 it went every 50 ms throughout (a joiner's
+// about 430 bytes: 71 kbit/s, nearly half of its upload).
+constexpr int STATE_REPEATS = 2;
+constexpr auto STATE_KEEPALIVE = std::chrono::milliseconds(500);
+
+// `tick`: from the network thread's 50 ms tick (else: a step a peer waits for, sent at once).
+void SendState(bool tick = false)
 {
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
   picojson::object o;
@@ -1984,6 +2064,8 @@ void SendState()
     const bool host = IsHost();
     o["t"] = picojson::value("st");
     o["v"] = picojson::value(1.0);
+    // Takes GekkoNet's messages bundled ('B', GekkoBatch).
+    o["gb"] = picojson::value(1.0);
     o["host"] = picojson::value(host);
     o["slot"] = picojson::value(static_cast<double>(s.local_slot));
     o["name"] = picojson::value(s.net_opts.name);
@@ -2025,7 +2107,14 @@ void SendState()
       o["init"] = picojson::value(Hex(s.init_block));
       o["init_match"] = picojson::value(static_cast<double>(s.init_match));
     }
-    if (host && s.at_s && s.sync.valid)
+    // The sync block and task order (about 5.5 KB, 5 datagrams) only until every joiner has
+    // applied them: the host goes on into the countdown only then (all_applied), so from the
+    // countdown on nobody reads them (a joiner keeps the copy it has until the match ends).
+    // Before 2026-10-13 the host sent them with every state message of the match, 20 a second:
+    // about 650 kbit/s, nearly all of the host's upload.
+    const bool past_barrier = s.phase == Phase::Countdown || s.phase == Phase::StartBarrier ||
+                              s.phase == Phase::Running;
+    if (host && s.at_s && s.sync.valid && !past_barrier)
     {
       o["sync"] = SyncBlockJson(s.sync);
       o["ports"] = picojson::value(static_cast<double>(s.match_ports));
@@ -2040,7 +2129,16 @@ void SendState()
       o["tasks"] = picojson::value(lists);
     }
   }
-  const std::string text = picojson::value(o).serialize();
+  std::string text = picojson::value(o).serialize();
+  const auto now = Clock::now();
+  if (text != s.state_sent)
+    s.state_repeats = STATE_REPEATS;
+  else if (tick && s.phase == Phase::Running && s.state_repeats <= 0 &&
+           now - s.state_sent_at < STATE_KEEPALIVE)
+    return;
+  else if (tick && s.state_repeats > 0)
+    --s.state_repeats;
+  s.state_sent_at = now;
   if (text.size() > PeerData::MAX_CONTROL_SIZE && !s.state_size_logged)
   {
     // The others refuse a control message this large (PeerData::ParseControl).
@@ -2053,11 +2151,12 @@ void SendState()
                   tasks != o.end() ? tasks->second.serialize().size() : 0);
   }
   const size_t datagrams = SendControlToAll(text);
+  s.state_sent = std::move(text);
   if (datagrams > 1 && !s.split_logged)
   {
     s.split_logged = true;
     INFO_LOG_FMT(BRAWLBACK, "gprb: our state message is {} bytes: sent as {} datagrams of at most {}",
-                 text.size(), datagrams, PeerData::MAX_DATAGRAM);
+                 s.state_sent.size(), datagrams, PeerData::MAX_DATAGRAM);
   }
 }
 
@@ -2204,6 +2303,8 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
                      x->get<double>() :
                      0;
   }
+  if (const auto* x = get("gb"); x && x->is<double>())
+    p.gekko_bundles = x->get<double>() >= 1;
   // The decider: the first peer that says it is, unless the host was configured.
   if (const auto* x = get("host"); x && x->is<bool>())
     p.claims_host = x->get<bool>();
@@ -2431,6 +2532,25 @@ void NetThread()
           if (s.gekko_rx.size() < PeerData::MAX_QUEUED_GEKKO_PACKETS)
             s.gekko_rx.emplace_back(slot, std::vector<u8>(buf.begin() + 1, buf.begin() + received));
         }
+        else if (buf[0] == 'B' && known)
+        {
+          // Several GekkoNet messages in one datagram (GekkoBatch); a malformed one is dropped
+          // whole, as GekkoNet drops a malformed message.
+          if (auto msgs = PeerData::SplitGekkoBundle(buf.data(), received))
+          {
+            std::lock_guard lk(s.gekko_rx_mutex);
+            for (auto& m : *msgs)
+            {
+              if (s.gekko_rx.size() < PeerData::MAX_QUEUED_GEKKO_PACKETS)
+                s.gekko_rx.emplace_back(slot, std::move(m));
+            }
+          }
+          else
+          {
+            std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+            ++s.foreign_packets;
+          }
+        }
         else if (buf[0] == 'C')
         {
           if (received - 1 <= PeerData::MAX_CONTROL_SIZE)
@@ -2506,7 +2626,7 @@ void NetThread()
     if (now - last_state >= std::chrono::milliseconds(50))
     {
       last_state = now;
-      SendState();
+      SendState(true);
       // The session gave up (a barrier's check or timeout, a failed start): the others are told
       // at once, so they do not wait for this player until their own timeout. The game is told
       // as of a disconnect (LOCAL `disconnected`): it ends the match it has started loading and
@@ -2524,7 +2644,13 @@ void NetThread()
         s.disconnected = true;
       }
     }
-    if (now - last_ping >= std::chrono::milliseconds(200))
+    // The pings' round trip picks the input delay and times the start; in a running match
+    // GekkoNet measures its own (the ping line), so one a second is enough there.
+    const bool running = [] {
+      std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+      return s.phase == Phase::Running;
+    }();
+    if (now - last_ping >= std::chrono::milliseconds(running ? 1000 : 200))
     {
       last_ping = now;
       std::vector<u8> ping(9);
@@ -3945,12 +4071,17 @@ bool HandleGekkoFrame(Core::System& system)
   s.ops.Clear();
   if (!s.gekko)
     return false;
-  if (s.mode == Mode::Network)
-    gekko_network_poll(s.gekko);
-  for (int h : s.local_handles)
-    gekko_add_local_input(s.gekko, h, s.local_inputs.data() + s.handle_port[h] * INPUT_SIZE);
   int count = 0;
-  GekkoGameEvent** events = gekko_update_session(s.gekko, &count);
+  GekkoGameEvent** events;
+  {
+    // This frame's messages to each peer in one datagram (GekkoBatch).
+    GekkoBatch batch;
+    if (s.mode == Mode::Network)
+      gekko_network_poll(s.gekko);
+    for (int h : s.local_handles)
+      gekko_add_local_input(s.gekko, h, s.local_inputs.data() + s.handle_port[h] * INPUT_SIZE);
+    events = gekko_update_session(s.gekko, &count);
+  }
   return ProcessGekkoUpdate(system, events, count);
 }
 
@@ -5450,6 +5581,10 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.control_id = std::random_device{}();
   s.reassembler.Clear();
   s.split_logged = false;
+  s.state_sent.clear();
+  s.state_repeats = 0;
+  for (auto& b : s.gekko_bundle)
+    b.clear();
   s.peer_left = false;
   s.peer_left_reason.clear();
   s.leave_sent = false;

@@ -287,6 +287,48 @@ std::vector<std::vector<u8>> ControlDatagrams(std::string_view text, u32 id)
   return out;
 }
 
+bool AppendGekkoBundle(std::vector<u8>& bundle, const u8* msg, size_t size)
+{
+  if (!msg || size == 0 || size > 0xFFFF)
+    return false;
+  const size_t start = bundle.empty() ? 1 : 0;
+  if (bundle.size() + start + 2 + size > MAX_GEKKO_BUNDLE)
+    return false;
+  size_t count = 0;
+  for (size_t pos = 1; pos + 2 <= bundle.size(); ++count)
+    pos += 2 + (bundle[pos] | (bundle[pos + 1] << 8));
+  if (count >= MAX_BUNDLED_MESSAGES)
+    return false;
+  if (start)
+    bundle.push_back('B');
+  bundle.push_back(static_cast<u8>(size));
+  bundle.push_back(static_cast<u8>(size >> 8));
+  bundle.insert(bundle.end(), msg, msg + size);
+  return true;
+}
+
+std::optional<std::vector<std::vector<u8>>> SplitGekkoBundle(const u8* data, size_t size)
+{
+  if (!data || size < 1 || data[0] != 'B')
+    return std::nullopt;
+  std::vector<std::vector<u8>> out;
+  size_t pos = 1;
+  while (pos < size)
+  {
+    if (pos + 2 > size || out.size() >= MAX_BUNDLED_MESSAGES)
+      return std::nullopt;
+    const size_t len = data[pos] | (data[pos + 1] << 8);
+    pos += 2;
+    if (len == 0 || len > size - pos)
+      return std::nullopt;
+    out.emplace_back(data + pos, data + pos + len);
+    pos += len;
+  }
+  if (out.empty())
+    return std::nullopt;
+  return out;
+}
+
 std::optional<std::string> ControlReassembler::Add(u64 source, const u8* data, size_t size)
 {
   if (!data || size <= FRAGMENT_HEADER || size > MAX_DATAGRAM || data[0] != 'F')
