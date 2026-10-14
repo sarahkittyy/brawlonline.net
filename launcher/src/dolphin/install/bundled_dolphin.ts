@@ -22,6 +22,8 @@ export const PROGRESS_BYTES_PER_FILE = 128 * 1024;
 
 /** Entries of the install folder that belong to the user or the launcher, never replaced. */
 export const PROTECTED_ENTRIES = new Set(["User", "pponline-sd", "pplus", "downloads", DOLPHIN_MANIFEST_NAME]);
+/** Where an install moves the old build before deleting it (see moveAside). */
+export const OLD_DOLPHIN_DIR = ".old-dolphin";
 
 export type DolphinBundleManifest = {
   version: string;
@@ -68,6 +70,7 @@ function checkEntryName(name: string) {
     name.includes("\\") ||
     name === "." ||
     name === ".." ||
+    name === OLD_DOLPHIN_DIR ||
     PROTECTED_ENTRIES.has(name)
   ) {
     throw new Error(`Bad entry in the bundled Dolphin's manifest: ${name}`);
@@ -110,6 +113,48 @@ export async function firstMissingFile(sourceDir: string, destDir: string, entri
 }
 
 /**
+ * Takes an old entry of the build out of the way of the new one. On Windows, a file that another
+ * program has open (an antivirus scan, an overlay or recorder) is only marked for deletion: its name
+ * stays taken until that program lets go, so copying the new file fails and so does every later
+ * install, with EPERM even on lstat (prod 2026-10-13: "Dolphin stops working after every update"
+ * until the player restarted the PC). A running executable cannot be deleted at all. Both can be
+ * renamed, so the entry moves into the old-build folder first and is deleted from there.
+ */
+async function moveAside(from: string, to: string, log: (message: string) => void): Promise<void> {
+  try {
+    await fs.promises.mkdir(path.dirname(to), { recursive: true });
+    await fs.promises.rename(from, to);
+    return;
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException).code === "ENOENT") {
+      return;
+    }
+    log(`Could not move ${from} aside (${(err as Error).message}): deleting it in place`);
+  }
+  try {
+    // A DolphinTool run that is ending gets about 10 s (linear backoff) before the install gives up.
+    await fs.promises.rm(from, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === "EPERM" || code === "EBUSY" || code === "EACCES") {
+      throw new Error(
+        `Could not replace ${from}: another program still has the old Dolphin open (Dolphin itself, ` +
+          `an antivirus scan, or an overlay or recorder). Close it or restart your computer, then ` +
+          `start the launcher again. (${(err as Error).message})`,
+      );
+    }
+    throw err;
+  }
+}
+
+/** Deletes the old builds moved aside; what another program still holds goes on a later start. */
+async function removeOldBuilds(destDir: string, log: (message: string) => void): Promise<void> {
+  await fs.promises.rm(path.join(destDir, OLD_DOLPHIN_DIR), { recursive: true, force: true }).catch((err) => {
+    log(`Some of the old Dolphin is still in use and stays until a later start: ${(err as Error).message}`);
+  });
+}
+
+/**
  * Installs (or updates) the bundled Dolphin from `sourceDir` into `destDir`. Entries listed by
  * the previously installed manifest and by the new one are replaced; the User folder, the
  * patched SD card and other launcher data in `destDir` are left alone.
@@ -132,6 +177,7 @@ export async function installBundledDolphin({
     );
   }
   manifest.entries.forEach(checkEntryName);
+  await removeOldBuilds(destDir, log);
   const installed = await readDolphinManifest(destDir);
   if (
     installed &&
@@ -154,13 +200,20 @@ export async function installBundledDolphin({
   // The manifest goes first (removed) and last (written): an interrupted install is redone.
   await fs.promises.rm(path.join(destDir, DOLPHIN_MANIFEST_NAME), { force: true });
   const old = new Set([...(installed?.entries ?? []), ...manifest.entries]);
+  const trash = path.join(destDir, OLD_DOLPHIN_DIR, String(Date.now()));
   for (const name of old) {
-    if (!PROTECTED_ENTRIES.has(name) && !name.includes("/") && !name.includes("\\") && name !== "." && name !== "..") {
-      // Windows will not delete a running executable (EPERM): a DolphinTool run that is ending
-      // gets about 10 s (linear backoff) before the install gives up.
-      await fs.promises.rm(path.join(destDir, name), { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
+    if (
+      !PROTECTED_ENTRIES.has(name) &&
+      name !== OLD_DOLPHIN_DIR &&
+      !name.includes("/") &&
+      !name.includes("\\") &&
+      name !== "." &&
+      name !== ".."
+    ) {
+      await moveAside(path.join(destDir, name), path.join(trash, name), log);
     }
   }
+  await removeOldBuilds(destDir, log);
 
   // Progress counts each file as its bytes plus a fixed cost: most of the bundle's ~1000 files are
   // small, and creating them takes longer than copying their bytes (by bytes alone the last 7 %

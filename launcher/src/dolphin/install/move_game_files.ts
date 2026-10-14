@@ -13,7 +13,7 @@ import type { ByteProgress } from "utils/copy_file";
 import { copyFileWithProgress } from "utils/copy_file";
 import { isSubdirectory } from "utils/is_subdirectory";
 
-import { DOLPHIN_MANIFEST_NAME, PROTECTED_ENTRIES, readDolphinManifest } from "./bundled_dolphin";
+import { DOLPHIN_MANIFEST_NAME, OLD_DOLPHIN_DIR, PROTECTED_ENTRIES, readDolphinManifest } from "./bundled_dolphin";
 import { patchedSdCardFolder } from "./paths";
 import { relocatePatchedSdSource, statSdSource } from "./sd_card";
 
@@ -201,12 +201,12 @@ export async function moveGameFiles({
 
 /**
  * Removes the launcher's files from an old netplay folder: the game data entries, the Dolphin
- * build its manifest lists, and the folder itself if nothing else is left in it (it may be a
- * folder the player also uses for other things).
+ * build its manifest lists, old builds moved aside, and the folder itself if nothing else is left
+ * in it (it may be a folder the player also uses for other things).
  */
 export async function removeGameFiles(dir: string): Promise<void> {
   const manifest = await readDolphinManifest(dir);
-  const names = [...GAME_DATA_ENTRIES, ...(manifest?.entries ?? []), DOLPHIN_MANIFEST_NAME];
+  const names = [...GAME_DATA_ENTRIES, ...(manifest?.entries ?? []), DOLPHIN_MANIFEST_NAME, OLD_DOLPHIN_DIR];
   for (const name of names) {
     if (!name || name.includes("/") || name.includes("\\") || name === "." || name === "..") {
       continue;
