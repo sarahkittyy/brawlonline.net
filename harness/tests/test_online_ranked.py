@@ -276,20 +276,36 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
         assert g.bridge()["lost"] == 0
 
 
+# P+'s hold-to-pause timers (u32 at 0x80584080 + 8 * pad; NETPLAY.txt "Hold Start to Pause v3").
+PPLUS_PAUSE_HOLD = 0x80584080
+# The game's pause state, as P+'s hold code reads it: (*(r13 - 0x4350) + 0x18) -> +0x3C, 1 paused.
+PAUSE_STATE_PTR = 0x805A4420 - 0x4350
+
+
+def _paused(g: Game) -> bool:
+    p = g.c.read_u32(PAUSE_STATE_PTR)
+    if not 0x80000000 <= p < 0x81800000:
+        return False
+    q = g.c.read_u32(p + 0x18)
+    return 0x80000000 <= q < 0x81800000 and g.c.read_u32(q + 0x3C) == 1
+
+
 @pytest.mark.slow
-def test_ranked_quit_loses_the_game(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
-                                    gpu_backend: str) -> None:
-    """In Ranked any pause-screen quit loses that game for the quitter (docs/game-code.md §11, the
-    quit per mode), the salty runback too (L+R+A+Y+START; elsewhere it restarts the match): game 1
-    struck and started, A pauses (Ranked: START held) and quits with L+R+A+Y+START. No restart;
-    the game counts as B's win on both machines and on the server. Both stay on the CSS, "rquin
-    quit - Press START", until each presses START (the user's, 2026-10-12; B's alone starts
-    nothing). Then game 2's steps: B bans, A picks, and the match starts with the characters of
-    that ready (no character step after the stages). Screenshots: run/artifacts/game-bridge/ranked-quit/."""
-    test = "ranked-quit"
-    ua, ub = backend.create_user("rquin", "RQIN"), backend.create_user("rquor", "RQOR")
-    a = _boot(dolphin, "rkq-a", backend, ua, gpu_backend, test, "gameplay")
-    b = _boot(dolphin, "rkq-b", backend, ub, gpu_backend, test, "gameplay")
+@pytest.mark.parametrize("how", ["window", "app"])
+def test_ranked_has_no_pause_and_closing_abandons(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                                  gpu_backend: str, how: str) -> None:
+    """Ranked has no pause, as Slippi's (the user's, 2026-10-14: a player could pause a ranked game
+    and never unpause, and the opponent's only way out abandoned the set). Game 1 running: A holds
+    START far past P+'s 50 frames, then L+R+A+START: nothing pauses on either machine, nothing
+    quits, the game runs on. Then A leaves the only way left, closing the game: its window
+    (`window`: emulation stops, as the window's X does) or the whole app (`app`: the harness's
+    quit, as Cmd-Q). A reports its own leave right away, so the server settles the set as
+    abandoned by A at once, not after the opponent's report and the 2-minute grace; A takes the
+    set loss (no game was played, so B is credited nothing)."""
+    test = f"ranked-no-pause-{how}"
+    ua, ub = backend.create_user(f"rnp{how[0]}a", f"RNA{how[0].upper()}"), backend.create_user(f"rnp{how[0]}b", f"RNB{how[0].upper()}")
+    a = _boot(dolphin, f"rnp{how[0]}-a", backend, ua, gpu_backend, test, "gameplay")
+    b = _boot(dolphin, f"rnp{how[0]}-b", backend, ub, gpu_backend, test, "gameplay")
     _both(a.to_main_menu, b.to_main_menu)
     _both(a.to_online_page, b.to_online_page)
     _both(lambda: a.to_css("ranked"), lambda: b.to_css("ranked"))
@@ -303,6 +319,7 @@ def test_ranked_quit_loses_the_game(backend: OnlineBackend, dolphin: Callable[..
     players = [a, b]
     for g in players:
         _wait(lambda g=g: g.c.mm_status()["handoff"] == "started", 30, "the hand-off")
+    match_id = a.c.mm_status()["match"]["match_id"]
     host = a if _ranked(a)["local_port"] == 0 else b
     join = b if host is a else a
     _both_on(players, SSS, "game 1: both on the stage select")
@@ -314,51 +331,50 @@ def test_ranked_quit_loses_the_game(backend: OnlineBackend, dolphin: Callable[..
     _strike(host, 0x09, join)
     online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
                     "game 1 running on both")
-    quitter = _ranked(a)["local_port"]
-    a.steps("wait 120", "hold START 70", "wait 30")   # P+'s hold-START pause (Ranked's rule)
-    a.shot("01-paused")
-    a.steps("hold L+R+A+Y+START 90")
-    # No restart, and not on to game 2's steps: both on the CSS.
-    _both_on(players, online_set.CSS, "both back on the CSS")
-    _wait(lambda: all(g.debug_scratch()[10] & 0x2000000 for g in players), 30, "the quit notice on both")
+
+    # START held 2 s (P+ pauses after 50 frames), then the pause screen's quit: neither does anything.
+    a.steps("wait 120", "hold START 120")
     for g in players:
-        assert (g.debug_scratch()[10] >> 26) & 3 == quitter, (g.inst.name, hex(g.debug_scratch()[10]))
-        assert g.debug_scratch()[10] & 0x1000000, (g.inst.name, "the quit was not marked as a runback")
-        assert online_set.gstatus(g.c)["end_reason"] == "quit"
-        assert online_set.gstatus(g.c)["match_index"] == 1, online_set.gstatus(g.c)
-        g.shot("02-quit-notice-css")
-    want = [0, 0]
-    want[1 - quitter] = 1
+        assert not _paused(g), (g.inst.name, "paused")
+        timers = [g.c.read_u32(PPLUS_PAUSE_HOLD + 8 * pad) for pad in range(4)]
+        assert all(t < 50 for t in timers), (g.inst.name, timers)
+    a.shot("01-start-held")
+    a.steps("hold L+R+A+START 90", "wait 60")
     for g in players:
-        _wait(lambda g=g: _ranked(g)["wins"] == want, 30, f"{g.inst.name}: game 1 B's")
-        assert _ranked(g)["setup"]["last_winner"] == 1 - quitter, _ranked(g)["setup"]
-    # They stay there (no step is asked for, so no step's time runs); B's START alone starts nothing.
-    a.steps("wait 180")
-    assert all(online_set.scene(g.c) == online_set.CSS for g in players), [online_set.scene(g.c) for g in players]
-    b.steps("tap START 8", "wait 120")
-    assert all(online_set.scene(g.c) == online_set.CSS for g in players), [online_set.scene(g.c) for g in players]
-    b.shot("03-b-ready-waits")
-    a.steps("tap START 8")
-    # B won game 1, so B bans first in game 2, and A picks.
-    _both_on(players, SSS, "game 2: both on the stage select")
-    v = _wait_view(b, lambda v: v["game"] == 2 and v["type"] == 1 and v["my_turn"], "B's ban")
-    assert v["text"].startswith("Ban 2 stages"), v
-    b.shot("04-g2-winner-bans")
-    bans = v["selectable"][:2]
-    _strike(b, bans[0], a)
-    _wait_view(b, lambda v: v["type"] == 1 and v["my_turn"] and v["count"] == 1, "the second ban")
-    _strike(b, bans[1], a)
-    v = _wait_view(a, lambda v: v["type"] == 2 and v["my_turn"], "A's pick")
-    pick = v["selectable"][0]
-    B.sss_pick_stage(a.c, pick, 0)
-    # Both readied with their characters on the CSS: no character step, the match starts.
-    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 120,
-                    "game 2 running on both")
-    setup = B.read_match_setup(a.c.read_mem)
-    assert setup == B.read_match_setup(b.c.read_mem) and setup.stage_kind == pick, (setup, hex(pick))
-    a.shot("05-g2-running")
-    log = backend.log_text("accounts")
-    assert log.count(" game reported") == 2, log[-3000:]
+        assert not _paused(g), (g.inst.name, "paused")
+        assert not g.debug_scratch()[10] & 0x40000, (g.inst.name, "a pause-screen quit")
+        st = online_set.gstatus(g.c)
+        assert st["phase"] == "running" and st["match_index"] == 0, st
+        assert _ranked(g)["wins"] == [0, 0], _ranked(g)
+    a.shot("02-still-running")
+
+    # A closes the game mid-set.
+    left_at = time.monotonic()
+    if how == "window":
+        a.c.call("emu_stop")
+    else:
+        a.inst.stop()
+    _wait(lambda: _ranked(b)["peer_gone"], 30, "B sees A gone")
+    res = _wait(lambda: (lambda r: r if r["status"] != "ASSIGNED" else None)(
+        backend._http("GET", f"/v1/ranked/result?matchId={match_id}&uid={ub.uid}")), 60, "the set settled")
+    took = time.monotonic() - left_at
+    assert res["status"] == "ABANDONED", res
+    # The server's grace for a missing leave is 120 s and its sweep 30 s: settled well before both,
+    # so on A's own leave.
+    assert took < 25, f"settled after {took:.0f} s: A's leave did not arrive"
+    log = re.sub(r"\x1b\[[0-9;]*m", "", backend.log_text("accounts"))
+    assert re.search(rf'ranked leave reported.*uid={ua.uid}.*kind="?left"?(\s|$)', log), log[-3000:]
+    pub_a = backend._http("GET", f"/user/{ua.uid}?additionalFields=chatMessages,rank")
+    assert pub_a["rank"]["ratingUpdateCount"] == 1 and pub_a["rank"]["ratingOrdinal"] < DEFAULT_RATING, pub_a
+    pub_b = backend._http("GET", f"/user/{ub.uid}?additionalFields=chatMessages,rank")
+    assert (pub_b.get("rank") or {}).get("ratingUpdateCount", 0) == 0, pub_b
+    if how == "app":
+        assert a.inst.process is None or a.inst.process.poll() is not None
+    else:
+        a.inst.stop()
+    want = "the game is closing" if how == "window" else "Ranked: reports at exit sent"
+    text = _log(a)
+    assert "Ranked: leaving set" in text and want in text, text[-3000:]
 
 
 def _fighters(g: Game) -> dict[int, tuple[int, float]]:

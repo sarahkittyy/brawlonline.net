@@ -16,10 +16,12 @@
 
 #include <fmt/format.h>
 
+#include "Common/HookableEvent.h"
 #include "Common/HttpRequest.h"
 #include "Common/Logging/Log.h"
 #include "Common/Thread.h"
 #include "Core/Config/OnlineSettings.h"
+#include "Core/Core.h"
 #include "Core/Online/GameSetup.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/OnlineSession.h"
@@ -50,6 +52,8 @@ constexpr int REPORT_ATTEMPTS = 5;
 constexpr auto RESULT_POLL_INTERVAL = std::chrono::seconds(2);
 constexpr int RESULT_POLLS = 150;
 constexpr auto HTTP_TIMEOUT = std::chrono::seconds(5);
+// At exit, how long the reports still to send (a leave above all) may hold the process up.
+constexpr auto EXIT_REPORT_WAIT = std::chrono::seconds(2);
 
 enum class Outcome
 {
@@ -74,6 +78,9 @@ std::condition_variable s_cv;
 std::deque<Job> s_jobs;
 std::thread s_worker;
 bool s_stop = false;
+bool s_job_running = false;   // the worker is running a job (outside s_mutex)
+std::condition_variable s_idle_cv;  // a job finished
+Common::EventHook s_stop_hook;
 
 // The current ranked set.
 bool s_active = false;     // a ranked set is tracked
@@ -261,9 +268,12 @@ void WorkerLoop()
     }
     Job job = std::move(front);
     s_jobs.pop_front();
+    s_job_running = true;
     lk.unlock();
     const Outcome outcome = job.run();
     lk.lock();
+    s_job_running = false;
+    s_idle_cv.notify_all();
     ++job.attempts;
     if (outcome == Outcome::Retry && job.attempts < job.max_attempts && !s_stop)
     {
@@ -314,17 +324,44 @@ void EnqueueResult()
           [](int) -> Clock::duration { return RESULT_POLL_INTERVAL; }};
   Enqueue(std::move(job));
 }
+
+// Under s_mutex. This player leaves a set that is not over: Slippi counts that as abandoning it.
+// Reported once, whichever way the player leaves (the menus, the game window closing, the app
+// quitting). Returns whether it was reported now.
+bool LeaveUnfinishedSet(const char* how)
+{
+  if (!s_active || s_set_over || s_peer_gone || s_left_reported)
+    return false;
+  s_left_reported = true;
+  NOTICE_LOG_FMT(NETPLAY, "Ranked: leaving set {} before it is over ({})", s_match_id, how);
+  EnqueueLeave("left");
+  return true;
+}
 }  // namespace
 
 void OnSessionStart(const Match& match)
 {
   // The gameplay session tells us about every game; only ranked sets are tracked.
   Gprb::Session::SetGameResultCallback(OnGameResult);
+  // Closing the game window (or quitting the app) mid-set abandons it at once: without a leave
+  // of its own the set waited for the opponent's "opponent left" and the server's 2-minute grace,
+  // and with no report from the opponent either it went void after 30 minutes, the quitter's
+  // loss with it (the user's, 2026-10-14). Core::Stop notifies Stopping before the CPU stops.
+  if (!s_stop_hook)
+  {
+    s_stop_hook = Core::AddOnStateChangedCallback([](Core::State state) {
+      if (state != Core::State::Stopping)
+        return;
+      std::lock_guard lk(s_mutex);
+      LeaveUnfinishedSet("the game is closing");
+    });
+  }
   // Ranked's stage striking (GameSetup.h). Outside s_mutex: it talks to the session, which calls
   // OnGameResult with its own lock held.
   const bool ranked = match.mode == MODE_RANKED && match.players.size() == 2;
   // Ranked: a pause-screen quit (a runback too) loses the game; elsewhere it does not count, and a
-  // runback plays the same match again (docs/game-code.md §11, the quit per mode).
+  // runback plays the same match again (docs/game-code.md §11, the quit per mode). Ranked has no
+  // pause since 2026-10-14 (the plugin's noRankedPause), so there it is only a safeguard.
   Gprb::Session::SetQuitLoses(ranked);
   // Ranked and a room's set: a desync plays the game again from the state every machine agreed on
   // (the user's, 2026-10-13); elsewhere it only ends the game (docs/game-code.md, desync recovery).
@@ -529,14 +566,8 @@ void OnCleanup()
   s_reporting = false;
   if (!s_active)
     return;
-  if (!s_set_over && !s_peer_gone && !s_left_reported)
-  {
-    // This player leaves a set that is not over: Slippi counts that as abandoning it.
-    s_left_reported = true;
-    NOTICE_LOG_FMT(NETPLAY, "Ranked: leaving set {} before it is over", s_match_id);
-    EnqueueLeave("left");
+  if (LeaveUnfinishedSet("left the connection"))
     EnqueueResult();
-  }
   s_active = false;
 }
 
@@ -594,7 +625,17 @@ void Shutdown()
   Gprb::Session::SetGameResultCallback(nullptr);
   std::thread worker;
   {
-    std::lock_guard lk(s_mutex);
+    std::unique_lock lk(s_mutex);
+    // The app quits mid-set (Cmd-Q, the main window closed without a stop first): leave it too.
+    LeaveUnfinishedSet("the app is quitting");
+    // The reports still to send get a short wait (a set's result is for the CSS: not fetched).
+    std::erase_if(s_jobs, [](const Job& job) { return job.what.starts_with("result"); });
+    if ((!s_jobs.empty() || s_job_running) && s_worker.joinable())
+    {
+      const bool sent = s_idle_cv.wait_for(lk, EXIT_REPORT_WAIT,
+                                           [] { return s_jobs.empty() && !s_job_running; });
+      NOTICE_LOG_FMT(NETPLAY, "Ranked: reports at exit {}", sent ? "sent" : "still waiting, dropped");
+    }
     s_stop = true;
     if (!s_jobs.empty())
       WARN_LOG_FMT(NETPLAY, "Ranked: {} report(s) not sent at exit", s_jobs.size());

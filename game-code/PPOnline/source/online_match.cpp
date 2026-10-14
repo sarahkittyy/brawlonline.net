@@ -647,6 +647,23 @@ namespace OnlineMatch {
     // START on the Direct CSS no longer opened the keypad. Cleared here once the match is left.
     static const u32 PPLUS_PAUSE_OFF = 0x80584084;
 
+    // Ranked has no pause at all, as Slippi's (InitPause.asm: no pause in ranked, not even its
+    // client pause; the user's, 2026-10-14: a player could pause a ranked game and never unpause,
+    // and the opponent's only way out was to leave, which abandons the set). P+ has no pause that
+    // is off: the game's pause rule 0 is P+'s hold, which the hook above turns into a pause after
+    // START is held 50 frames. Its hold timers (u32 at 0x80584080 + 8 * pad, counted in the pad
+    // read at 0x801E6D24 while the word is 2) are set back to 0 every ranked match frame, so START
+    // never reaches the game and nothing pauses; with no pause there is no in-game quit either.
+    // The timers are in the rollback set (gp-v23), and SESSION's mode is the same on both
+    // machines, so a resimulated frame does the same.
+    static const u32 PPLUS_PAUSE_HOLD = 0x80584080;
+
+    static void noRankedPause()
+    {
+        if (PPOM::g_block.session.mode != PPOM::MODE_RANKED) return;
+        for (u32 pad = 0; pad < 4; pad++) *(volatile u32*)(PPLUS_PAUSE_HOLD + 8 * pad) = 0;
+    }
+
     // The HOME Menu is banned for the whole online match (the user's crash, 2026-10-12: "i paused
     // and it crashed!"). sora_melee lifts its own ban (bit 1) and calls gfHomeMenu's preload
     // (0x800377D4) on every pause (text+0x256F24) and at the match's end (text+0x2574A8), and
@@ -691,7 +708,10 @@ namespace OnlineMatch {
     {
         PPOM::Debug& dbg = PPOM::g_block.debug;
         s_inMatch = true;
-        if (g_onlineCss && g_onlineMatchGame) banHomeMenu(true);
+        if (g_onlineCss && g_onlineMatchGame) {
+            banHomeMenu(true);
+            noRankedPause();
+        }
         if ((g_onlineCss && g_onlineMatchGame) || (dbg.cfg & PPOM::CFG_TEST_GONE)) tickPlayers();
         // This player quit a 3-4 player match (pponline_pauseResult) and Dolphin has ended the
         // session for this machine (LOCAL, set only after the session ended): the match ends here
