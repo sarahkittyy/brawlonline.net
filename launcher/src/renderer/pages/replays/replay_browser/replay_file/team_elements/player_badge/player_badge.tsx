@@ -41,6 +41,29 @@ const BadgeContent = styled.div`
   white-space: nowrap;
 `;
 
+// Sits on the badge's top-right edge, where Slippi puts its crown.
+const CrownContainer = styled.div`
+  position: absolute;
+  top: -9px;
+  right: -2px;
+  line-height: 0;
+  pointer-events: none;
+`;
+
+// Our own drawing (Slippi's crown image left with their art): a gold crown with a dark
+// outline, so it reads on every port color.
+const WinnerCrown = () => (
+  <svg width={20} height={16} viewBox="0 0 20 16" role="img" aria-label="winner">
+    <path
+      d="M2.5 12.5 L1.5 4 L6.5 7.5 L10 1.5 L13.5 7.5 L18.5 4 L17.5 12.5 Z M2.5 13.5 H17.5 V15 H2.5 Z"
+      fill="#f5c542"
+      stroke="#6b4a00"
+      strokeWidth={1}
+      strokeLinejoin="round"
+    />
+  </svg>
+);
+
 const InternalPlayerBadge = ({
   port,
   characterColor,
@@ -56,6 +79,11 @@ const InternalPlayerBadge = ({
     <BadgeContainer color={color} isWinner={!!isWinner}>
       <CharIcon src={charIcon} />
       <BadgeContent>{children}</BadgeContent>
+      {isWinner && (
+        <CrownContainer>
+          <WinnerCrown />
+        </CrownContainer>
+      )}
     </BadgeContainer>
   );
 };
