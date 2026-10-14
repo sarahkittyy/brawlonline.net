@@ -35,7 +35,6 @@ use crate::engine::{ConnId, MatchRecord, Output};
 pub mod errors {
     pub const NOT_YOUR_MATCH: &str = "That match isn't yours to stream.";
     pub const TOO_MANY_GAMES: &str = "Too many games in this match.";
-    pub const GAME_OPEN: &str = "Another game of this match is still streaming.";
     pub const NOT_YOUR_SLOT: &str = "That upload isn't yours.";
     pub const INVALID: &str = "Invalid spectate message.";
     pub const UPDATE: &str = "Your game needs an update.";
@@ -514,9 +513,12 @@ impl LiveBook {
             if of_match.len() >= self.cfg.max_games_per_match {
                 return Err(errors::TOO_MANY_GAMES);
             }
-            // One game of a match at a time; a game whose upload stopped long ago doesn't count.
-            if of_match.iter().any(|g| g.open() && now.duration_since(g.progress) < Duration::from_secs(30)) {
-                return Err(errors::GAME_OPEN);
+            // One game of a match at a time: a player's offer for a new game means the last one is
+            // over for them, so a game still open (its upload stopped before ENDG, or it never
+            // got one) is closed: what was kept stays, marked as cut there.
+            let open: Vec<[u8; 16]> = of_match.iter().filter(|g| g.open()).map(|g| g.uid).collect();
+            for old in open {
+                self.close_unfinished(now, old);
             }
             self.games.insert(
                 uid,
@@ -988,6 +990,25 @@ impl LiveBook {
             }
         });
         map
+    }
+
+    /// A game whose upload stopped before its end: kept as it is, its end marked as cut (the
+    /// next game of the match starts).
+    fn close_unfinished(&mut self, now: Instant, uid: [u8; 16]) {
+        let Some(game) = self.games.get_mut(&uid) else { return };
+        game.ended = true;
+        game.finished_at = Some(now);
+        game.primary = None;
+        tracing::info!(match_id = %game.match_id, game = game.number, "spectate: game closed unfinished");
+        let (stream_id, ordinal) = (game.stream.clone(), game.ordinal);
+        self.store.change(&stream_id, |s| {
+            if let Some(g) = ordinal.and_then(|o| s.games.get_mut(o)) {
+                if !g.ended && g.bad.is_none() {
+                    g.bad = Some("The rest of this game wasn't streamed.".into());
+                }
+            }
+        });
+        self.slots.retain(|_, s| s.game != uid);
     }
 
     fn mark_bad(&mut self, now: Instant, uid: [u8; 16], why: &str) {
@@ -1570,6 +1591,33 @@ mod tests {
         t.advance(Duration::from_secs(601));
         assert!(t.book.store.entries().is_empty());
         assert!(t.book.store.subscribe(&id).is_none());
+    }
+
+    /// The upload of game 1 stopped before its ENDG; game 2's offer closes it and streams.
+    #[test]
+    fn a_new_game_closes_an_unfinished_one() {
+        let mut t = T::new(SpectateMode::On);
+        let a = t.a;
+        t.offer(A, a, 1, 0);
+        let out = t.advance(Duration::from_secs(3));
+        let slot = role(&out, A).unwrap()["slot"].as_u64().unwrap() as u32;
+        let info = t.info(1);
+        t.send_chunk(A, slot, 0, &info);
+        t.send_chunk(A, slot, 1, &encode_chunk(b"SETP", b"{}", false));
+        t.send_chunk(A, slot, 2, &encode_chunk(b"FRMS", &frms(120, 60, 1), true));
+        let out = t.offer(A, a, 2, 0);
+        assert!(sent(&out, A).iter().all(|m| m["type"] != "spectate-error"), "{out:?}");
+        let out = t.advance(Duration::from_secs(3));
+        let slot2 = role(&out, A).unwrap()["slot"].as_u64().unwrap() as u32;
+        let info2 = t.info(2);
+        t.send_chunk(A, slot2, 0, &info2);
+        let id = stream_id(&t);
+        let lines = read_all(&t.book.store, &id);
+        assert!(matches!(
+            lines.iter().find(|l| matches!(l, LiveLine::Bad { .. })),
+            Some(LiveLine::Bad { game: 1, .. })
+        ));
+        assert!(lines.iter().any(|l| matches!(l, LiveLine::Game { game: 2, number: 2, .. })));
     }
 
     #[test]

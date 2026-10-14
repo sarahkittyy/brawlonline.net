@@ -134,6 +134,28 @@ These tests are built before the feature (§8 P1). Each runs three ways: **uploa
 | **T5 Staging** | `tools/staging/staging.py`, a real home network with a throttled uplink (a router cap or `clumsy`), a session of manual play | No felt difference; uploader logs show backoffs firing |
 | **T6 Prod rollout** | `spectateUpload: off` by default. Then `witness` for everyone, then `on` for an allowlist. | Allowlisted players' per-game rollbacks, max rollback and desyncs (already in `ENDG` and the game report) don't rise against their own games before. Each game's report adds upload bytes, paused seconds, and pauses by reason. |
 
+### 4.5 Results (2026-10-13)
+
+`harness/tests/test_spectate_safety.py` (results in `run/artifacts/spectate-safety/`). The streamer's game packets and its upload to mm share one capped queue (netsim `SharedUplink`, 250 ms of buffer); each game packet records the upload bytes queued ahead of it (ENet channel 1 only: the online connection's own traffic is not blamed), so the upload's cost is exact whatever the game's own traffic does.
+
+What the runs changed in the uploader:
+- **The game's traffic is far more than assumed:** the host sends ~750 kbit/s (its 5.5 KB state message every 50 ms; the bandwidth session's local fix brings it to ~45), the joiner ~150. At 1.25x of it the game alone queues ~50-100 ms at its p99, and at about 1x it overflows by itself.
+- **No upload during a game's first 10 s.** An upload starting with the match tipped a link 85% full into a queue that never drained.
+- **LEDBAT-style yield:** nothing is sent while the round trip to mm (ENet's smoothed `roundTripTime`) is 25 ms over its lowest of the last 10 minutes, menus included. A lowest taken within the game misses a game that fills the link from its first frame; ENet's `lastRoundTripTime` is a 5 s window's lowest and lags.
+- **One 256-byte packet in flight**, counted with what is still queued in ENet (`reliableDataInTransit` alone missed it): two in flight cost 1.7 packets' time at the p99 at 260 kbit/s.
+- **Late frames are judged against the game's own first 10 s** (a fixed limit paused all game on a busy PC), and stalls are not a signal (routine pacing polls).
+- mm: a new game's offer closes an unfinished one (a stopped upload blocked the rest of the set).
+
+Final T1 numbers (Null video backend; the streamer was joiner, 157 kbit/s):
+
+| Uplink | Upload | Cost to the game's packets (p99 / max) | Game packets dropped with upload ahead |
+|---|---|---|---|
+| 189 kbit/s (1.2x) | shipping | 12.5 / 22.3 ms (one 256 B packet is 12 ms here) | 0 |
+| 189 kbit/s | forced (no backoff, 16 KB/s) | 49 / 210 ms | 35 |
+| 189 kbit/s | flood (16 KB/s junk) | 208 / 208 ms | 11,862 |
+
+Earlier runs (two packets in flight) at 160-2,437 kbit/s: the shipping uploader never caused a drop, cost at most 15 ms at p99, and sent nothing at all on links the game itself overflowed. T3 (mm silent, 2 s late, trickling at 1 kbit/s, for a whole game): the game's packets stayed at their 15 ms base, no drops, the online connection dropped and came back. T2 (CPU starvation) is still to run.
+
 ## 5. Server capacity (sarahvps2 as it is)
 
 Measured 2026-10-13:
@@ -162,7 +184,8 @@ The ballpark: CPU, RAM and disk allow **thousands** of concurrent games, far bey
 - **Rows:**
   - who is playing: each player's stock icon, name and code, with teams shown as rooms show them;
   - **how long the game has been going**: the current game's time, ticking every second in the client from its start time, so it moves between polls;
-  - a mode badge (Ranked, Unranked, Direct, Room), the stage, "Game 2 · 1-0", and the spectator count.
+  - a mode badge (Ranked, Unranked, Direct, Room), the stage, and "Game 2 · 1-0";
+  - **how many are watching: an eye icon with the number next to it** (the user, 2026-10-13), from `/v1/live`'s `spectators`, refreshed with the list. The watch view shows the same eye and number, live from the stream's `spectators` events.
 - **Sort:** newest first by default, by the set's start time. A set's next game doesn't move its row, so the list doesn't reshuffle every few minutes. A new row slides in at the top and pulses once. If the list is scrolled, the scroll position stays anchored to the rows already shown. A sort menu offers "Most watched".
 - **Watch** opens the playback Dolphin. With one already open, it **switches** what that Dolphin plays (`commandId`). The old stream's WebSocket closes, and the new game catches up from its start (§6.2). The row being watched is marked "Watching". This is a departure from Slippi, whose spectating is per-broadcaster, chosen by the user (2026-10-13).
 - **Auto play** (a toggle above the list, off by default, remembered in the launcher's local storage): see §6.2 "When the stream ends".

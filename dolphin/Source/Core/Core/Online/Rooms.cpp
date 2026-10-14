@@ -339,6 +339,24 @@ void Send(ENetPeer* peer, const std::string& json)
     enet_packet_destroy(packet);
 }
 
+// Reliable bytes to mm not acknowledged yet: on the wire (reliableDataInTransit) or still queued
+// in ENet (its outgoing lists), which the spectate uploader keeps small.
+size_t UnackedBytes(ENetPeer* peer)
+{
+  size_t n = peer->reliableDataInTransit;
+  for (ENetList* list : {&peer->outgoingCommands, &peer->outgoingSendReliableCommands})
+  {
+    for (ENetListIterator it = enet_list_begin(list); it != enet_list_end(list);
+         it = enet_list_next(it))
+    {
+      const auto* c = reinterpret_cast<const ENetOutgoingCommand*>(it);
+      if (c->packet)
+        n += c->fragmentLength ? c->fragmentLength : c->packet->dataLength;
+    }
+  }
+  return n;
+}
+
 // A spectate data packet (docs/spectate-protocol.md §1): reliable, on channel 1.
 constexpr enet_uint8 SPECTATE_CHANNEL = 1;
 void SendData(ENetPeer* peer, const std::vector<u8>& data)
@@ -1312,11 +1330,14 @@ void Thread()
       const std::vector<std::string> chat_out =
           online ? Chat::TakeOutbox() : std::vector<std::string>{};
       // Spectating's upload (Online/Spectate.h): it backs off on the game's health and on what
-      // is still unacknowledged to mm, before the game feels anything.
+      // is still unacknowledged to mm, before the game feels anything. The round trip is ENet's
+      // smoothed one (roundTripTime); lastRoundTripTime is the lowest of the last 5 s throttle
+      // window and lags a queue that builds.
       const Gprb::Session::LinkHealth lh = Gprb::Session::GetLinkHealth();
       const Spectate::Outgoing spectate_out = Spectate::Service(
-          now, online, online && peer ? peer->reliableDataInTransit : 0,
-          Spectate::Health{lh.running, lh.late_frames, lh.rollback_avg, lh.ping_ms});
+          now, online, online && peer ? UnackedBytes(peer) : 0,
+          Spectate::Health{lh.running, lh.late_frames, lh.rollback_avg, lh.ping_ms,
+                           online && peer ? static_cast<double>(peer->roundTripTime) : -1.0});
 
       std::lock_guard lk(s_mutex);
       if (host && (s.conn == Conn::Connecting || s.conn == Conn::Hello) &&

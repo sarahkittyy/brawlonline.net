@@ -18,8 +18,17 @@
 // a PC that always shows some late frames (a slower PC, a busy one) is not held to a stranger's
 // normal; the start itself (its hitch at GO) is that normal.
 //
-// Everything is measured against the game's first 10 s of running (`baseline`): that is when
-// headers and the first frames go out, at the pacer's rate.
+// Everything is measured against the game's first 10 s of running (`baseline`), and nothing is
+// sent during them: a match's start is when its link is busiest (the safety tests: an upload
+// starting with the match tipped a link 85% full into a queue that never drained).
+//
+// The upload also yields to any queue on the player's uplink, as LEDBAT background transfers do:
+// its own round trip to mm crosses the same queue as the game's packets, so when that round trip
+// is more than `rtt_target_ms` above its lowest of the last 10 minutes (menus included, when the
+// uplink is quiet), something is queued and nothing more is sent until it drains. That holds
+// whatever filled the queue, the game itself included, and a game whose link is full from its
+// first frame is measured against the quiet menus before it (a lowest taken within the game alone
+// would already be the full queue's).
 //
 // All functions are thread-safe.
 
@@ -57,6 +66,9 @@ struct Health
   u64 late_frames = 0;      // displayed frames that ran late (the game felt it)
   double rollback_avg = 0;  // rollback depth in frames, averaged over about 2 s
   double ping_ms = -1;      // the worst link's average ping (-1: not measured)
+  double mm_rtt_ms = -1;    // the online connection's latest round trip to mm (-1: none)
+  // Outgoing reliable bytes to mm not acknowledged yet, whether on the wire or still queued in
+  // ENet (Service's `unacked` is this; kept here for the record).
 };
 
 struct Outgoing
@@ -68,9 +80,14 @@ struct Outgoing
 // The uploader's rules and limits.
 struct Options
 {
-  size_t packet = 512;                   // the largest data packet (header included)
+  // The largest data packet (header included) and how much may be unacknowledged: on a slow
+  // uplink each packet holds the link (256 bytes at 160 kbit/s: 14 ms), so only one is in flight
+  // ahead of the game's packets (the safety tests: two in flight cost the game's packets 1.7
+  // packets' time at their 99th percentile at 260 kbit/s). One a round trip is still 5-8 KB/s,
+  // ten times what a game produces.
+  size_t packet = 256;
   double burst_seconds = 1.0;            // the pacer holds at most this many seconds of tokens
-  size_t max_unacked = 2048;             // nothing more is sent while this much is unacknowledged
+  size_t max_unacked = 256;              // nothing more is sent while this much is unacknowledged
   size_t queue_pause = 8192;             // ... and above this much the upload pauses ("queue")
   Clock::duration window = std::chrono::seconds(2);           // what the signals look back on
   // Late frames ("frame") in the window pause when they are over `rate_factor` times the game's
@@ -82,6 +99,7 @@ struct Options
   Clock::duration baseline = std::chrono::seconds(10);        // a game's normal is its first 10 s
   double rollback_margin = 1.0;          // frames above the normal that pause ("rollback")
   double ping_margin_ms = 20.0;          // ms above the normal that pause ("rtt")
+  double rtt_target_ms = 25.0;           // queueing (mm round trip over its lowest) that holds
   Clock::duration resume_after = std::chrono::seconds(10);
   int max_pauses = 3;                    // the third pause stops the upload for the game
   Clock::duration digest_every = std::chrono::seconds(5);
@@ -109,6 +127,11 @@ public:
   void ConnectionLost();
 
   picojson::object Status() const;
+
+  // Tests only (harness `spectate_config`): no backoff at all, 16 KB/s in 1,200-byte packets and
+  // no limit on what is unacknowledged. What the safety tests compare against: it must hurt a
+  // weak uplink where the normal uploader does not.
+  void SetForced(bool forced) { m_forced = forced; }
 
 private:
   enum class Role
@@ -170,6 +193,8 @@ private:
     bool baseline_done = false;
     double rollback_sum = 0;
     u64 rollback_n = 0;
+    // How long sending was held for a queue.
+    double held_s = 0;
   };
 
   std::optional<std::string> Unhealthy(Game& g, Clock::time_point now, size_t unacked,
@@ -178,7 +203,14 @@ private:
   void SendDigests(Game& g, Clock::time_point now, Outgoing* out);
   void FinishGame();
 
+  // The lowest round trip to mm per minute over the last 10 minutes (LEDBAT's base delay): the
+  // minute's index and its lowest. Kept across games; a new connection starts over.
+  double RttBase() const;
+  void SampleRtt(Clock::time_point now, double rtt_ms);
+  std::deque<std::pair<s64, double>> m_rtt_minutes;
+
   Options m_options;
+  bool m_forced = false;
   std::optional<Game> m_game;
   // The last game's figures, offered with the next game.
   u32 m_last_paused = 0;
@@ -200,4 +232,6 @@ Outgoing Service(Clock::time_point now, bool online, size_t unacked, const Healt
 void OnConnectionLost();
 
 picojson::object Status();
+// Tests only: see Uploader::SetForced.
+void SetForced(bool forced);
 }  // namespace Online::Spectate

@@ -177,6 +177,70 @@ TEST(Spectate, ThePrimarySendsEveryChunkPacedInSmallPackets)
   EXPECT_EQ(Rig::Join(packets, 7), t.chunks);
 }
 
+TEST(Spectate, NothingIsSentDuringTheGamesFirstTenSeconds)
+{
+  Rig t;
+  t.AddGame(5);
+  t.health.running = true;
+  t.Tick();
+  t.Role("primary", 7);
+  for (int i = 0; i < 95; ++i)
+    EXPECT_TRUE(t.Tick(100ms).data.empty()) << i;
+  bool sent = false;
+  for (int i = 0; i < 10 && !sent; ++i)
+    sent = !t.Tick(100ms).data.empty();
+  EXPECT_TRUE(sent) << "sending starts once the first 10 s are over";
+}
+
+TEST(Spectate, AQueueOnTheUplinkHoldsTheUpload)
+{
+  Rig t;
+  t.AddGame(30);
+  t.health.mm_rtt_ms = 40;
+  t.Tick();
+  t.Role("primary", 7);
+  EXPECT_FALSE(t.Tick().data.empty());
+  // 25 ms over the lowest round trip: still sending; 26 ms: a queue, nothing until it drains.
+  t.health.mm_rtt_ms = 65;
+  EXPECT_FALSE(t.Tick(500ms).data.empty());
+  t.health.mm_rtt_ms = 66;
+  for (int i = 0; i < 50; ++i)
+  {
+    auto out = t.Tick(100ms);
+    EXPECT_TRUE(out.data.empty() && out.json.empty()) << i;
+  }
+  t.health.mm_rtt_ms = 45;
+  auto out = t.Tick(100ms);
+  EXPECT_FALSE(out.data.empty());
+  // Held time does not turn into a burst: at most the pacer's 1 s of tokens.
+  size_t bytes = 0;
+  for (const auto& p : out.data)
+    bytes += p.size();
+  EXPECT_LE(bytes, 2048u + 512);
+}
+
+TEST(Spectate, AGameFullFromItsStartIsMeasuredAgainstTheMenus)
+{
+  Rig t;
+  t.AddGame(30);
+  // In the menus the round trip to mm is 30 ms.
+  t.health.mm_rtt_ms = 30;
+  t.Tick();
+  t.Role("primary", 7);
+  // The match fills the uplink from its first frame: 200 ms. A lowest taken within the game would
+  // be 200 and nothing would hold; against the menus' 30 it does.
+  t.health.running = true;
+  t.health.mm_rtt_ms = 200;
+  t.Learn();
+  for (int i = 0; i < 30; ++i)
+    EXPECT_TRUE(t.Tick(100ms).data.empty()) << i;
+  t.health.mm_rtt_ms = 40;
+  bool sent = false;
+  for (int i = 0; i < 5 && !sent; ++i)
+    sent = !t.Tick(100ms).data.empty();
+  EXPECT_TRUE(sent);
+}
+
 TEST(Spectate, NothingIsSentWhileTheUploadIsUnacknowledged)
 {
   Rig t;

@@ -52,6 +52,7 @@ CLI::
 from __future__ import annotations
 
 import argparse
+import collections
 import dataclasses
 import heapq
 import itertools
@@ -67,7 +68,7 @@ import threading
 import time
 from collections import Counter
 from dataclasses import dataclass, field
-from typing import Any, Iterable, Mapping
+from typing import Any, Callable, Iterable, Mapping
 
 from . import _platform
 
@@ -293,6 +294,115 @@ class Decision:
     held_back: bool = False     # FIFO made it wait for the previous packet
 
 
+# ENet command sizes before their data (enet/protocol.h), by command number.
+_ENET_FIXED = {1: 8, 2: 48, 3: 44, 4: 8, 5: 4, 6: 6, 7: 8, 8: 24, 9: 8, 10: 12, 11: 16, 12: 24}
+_ENET_DATA = {6: 4, 7: 6, 8: 6, 9: 6, 12: 6}   # offset of the 16-bit data length
+
+
+def enet_channels(datagram: bytes) -> set[int] | None:
+    """The channels an ENet datagram carries data on (uncompressed, no checksum), or None if it
+    does not parse."""
+    if len(datagram) < 2:
+        return None
+    peer = int.from_bytes(datagram[0:2], "big")
+    if peer & 0x4000:          # compressed
+        return None
+    at = 4 if peer & 0x8000 else 2   # sent time
+    chans: set[int] = set()
+    while at < len(datagram):
+        if at + 4 > len(datagram):
+            return None
+        cmd = datagram[at] & 0x0F
+        if cmd not in _ENET_FIXED:
+            return None
+        size = _ENET_FIXED[cmd]
+        if cmd in _ENET_DATA:
+            off = at + _ENET_DATA[cmd]
+            if off + 2 > len(datagram):
+                return None
+            size += int.from_bytes(datagram[off:off + 2], "big")
+            chans.add(datagram[at + 1])
+        at += size
+    return chans if at == len(datagram) else None
+
+
+def enet_class(channel: int, hit: str, miss: str) -> Callable[[bytes], str]:
+    """A SharedUplink class for ENet datagrams: `hit` when one carries data on `channel`."""
+    def classify(datagram: bytes) -> str:
+        chans = enet_channels(datagram)
+        return hit if chans and channel in chans else miss
+    return classify
+
+
+class SharedUplink:
+    """One upload link several proxies' ``up`` directions go through: a player's home connection,
+    which carries both their game's traffic to the other player and anything else they send (the
+    spectate upload to mm). One FIFO at ``rate_kbps`` with tail drop at ``queue_ms`` of queueing
+    (a bufferbloated home router holds about that much); every datagram costs its payload plus
+    ``overhead`` bytes of UDP/IPv4 headers. Thread-safe: each proxy has its own threads."""
+
+    def __init__(self, rate_kbps: float, queue_ms: float = 250.0, overhead: int = 28,
+                 blame: str | None = None):
+        """`blame`: count only that class's bytes as the cost to the others (default: every other
+        class's)."""
+        self.blame = blame
+        self.rate_kbps = rate_kbps
+        self.queue_ms = queue_ms
+        self.overhead = overhead
+        self.free_at = 0.0
+        self._lock = threading.Lock()
+        # What is in the queue: (leaves at, class, wire bytes), in order.
+        self._queue: collections.deque[tuple[float, str, int]] = collections.deque()
+        self.reset_counters()
+
+    def reset_counters(self) -> None:
+        """Per class: datagrams, wire bytes, drops, drops while another class's bytes were queued
+        ahead, and each datagram's delay caused by the *other* classes' bytes queued ahead of it
+        (what the other traffic costs this one, in ms)."""
+        with self._lock:
+            self.drops = 0
+            self.bytes = 0
+            self.counts: Counter[str] = Counter()
+            self.class_bytes: Counter[str] = Counter()
+            self.class_drops: Counter[str] = Counter()
+            self.blocked_drops: Counter[str] = Counter()
+            self.blocked_ms: dict[str, list[float]] = collections.defaultdict(list)
+
+    def set_rate(self, rate_kbps: float) -> None:
+        with self._lock:
+            self.rate_kbps = rate_kbps
+
+    def admit(self, now: float, size: int, cls: str = "game") -> float | None:
+        """When a datagram of class ``cls`` arriving at ``now`` has left the link, or None
+        (dropped: the queue is full)."""
+        with self._lock:
+            while self._queue and self._queue[0][0] <= now:
+                self._queue.popleft()
+            others = sum(b for _, c, b in self._queue
+                         if c != cls and (self.blame is None or c == self.blame))
+            start = max(now, self.free_at)
+            self.counts[cls] += 1
+            if start - now > self.queue_ms / 1000.0:
+                self.drops += 1
+                self.class_drops[cls] += 1
+                if others:
+                    self.blocked_drops[cls] += 1
+                return None
+            wire = size + self.overhead
+            self.blocked_ms[cls].append(others * 8.0 / self.rate_kbps)
+            self.free_at = start + wire * 8.0 / (self.rate_kbps * 1000.0)
+            self.bytes += wire
+            self.class_bytes[cls] += wire
+            self._queue.append((self.free_at, cls, wire))
+            return self.free_at
+
+    def report(self, cls: str) -> dict[str, Any]:
+        with self._lock:
+            return {"datagrams": self.counts[cls], "bytes": self.class_bytes[cls],
+                    "drops": self.class_drops[cls], "drops_with_others_ahead": self.blocked_drops[cls],
+                    "delay_by_others_ms": summarize(self.blocked_ms[cls])}
+
+
 class LinkModel:
     """Fate of packets on one direction of one client's link. Pure apart from its RNG."""
 
@@ -329,8 +439,10 @@ class LinkModel:
         return 2.0 * jitter_ms * ((1.0 - q) ** (-1.0 / alpha) - 1.0)
 
     def decide(self, prof: LinkProfile, now: float, size: int,
-               spikes: Iterable[Spike] = ()) -> Decision:
-        """Decide the fate of a packet that arrived at ``now`` (a ``clock()`` time)."""
+               spikes: Iterable[Spike] = (), shared: SharedUplink | None = None,
+               shared_class: str = "game") -> Decision:
+        """Decide the fate of a packet that arrived at ``now`` (a ``clock()`` time). ``shared``:
+        the link's bandwidth is that shared uplink's (``prof.rate_kbps`` is then not used)."""
         r = self.rng.random
         u_loss, u_ge, u_ge_loss, u_jit, u_reorder, u_dup = r(), r(), r(), r(), r(), r()
 
@@ -370,7 +482,12 @@ class LinkModel:
             return Decision([], "spike")
 
         t0 = now
-        if prof.rate_kbps:
+        if shared is not None:
+            left = shared.admit(now, size, shared_class)
+            if left is None:
+                return Decision([], "queue")
+            t0 = left
+        elif prof.rate_kbps:
             tx = size * 8.0 / (prof.rate_kbps * 1000.0)
             start = max(now, self.link_free_at)
             if start - now > prof.queue_ms / 1000.0:
@@ -533,6 +650,8 @@ class NetSim:
         recv_buffer: int = 4 << 20,
         upstream_bind: tuple[str, int] | None = None,
         client: tuple[str, int] | None = None,
+        shared_up: SharedUplink | None = None,
+        shared_class: str | Callable[[bytes], str] = "game",
     ):
         self.forward = parse_hostport(forward) if isinstance(forward, str) else tuple(forward)
         self.listen_requested = parse_hostport(listen) if isinstance(listen, str) else tuple(listen)
@@ -542,10 +661,14 @@ class NetSim:
         self.recv_buffer = recv_buffer
         self.upstream_bind = tuple(upstream_bind) if upstream_bind else None
         self.fixed_client = tuple(client) if client else None
+        # The "up" direction's bandwidth (SharedUplink): shared with other proxies.
+        self.shared_up = shared_up
+        self.shared_class = shared_class
         self.epoch = clock()
         self.started_at = self.epoch
 
         rng = random.Random(f"{seed}:stats")
+        self._sample_limit = sample_limit
         self._stats = {d: DirectionStats(sample_limit, rng) for d in DIRECTIONS}
         self._stats_lock = threading.Lock()
         self._sessions: dict[tuple, _Session] = {}
@@ -636,6 +759,12 @@ class NetSim:
     def add_spike(self, spike: Spike) -> None:
         self.profile = self.profile.with_spikes(spike)
 
+    def reset_stats(self) -> None:
+        """Starts the statistics over (e.g. per game of a set)."""
+        with self._stats_lock:
+            rng = random.Random(f"{self.seed}:stats:{clock()}")
+            self._stats = {d: DirectionStats(self._sample_limit, rng) for d in DIRECTIONS}
+
     def reset_epoch(self) -> None:
         """Spikes are timed from the epoch; call this e.g. when the game starts."""
         self.epoch = clock()
@@ -720,7 +849,9 @@ class NetSim:
         active = [sp for sp in prof.spikes if sp.active(t, direction)]
         st = self._stats[direction]
         with self._cond:
-            dec = sess.models[direction].decide(link, now, len(data), active)
+            cls = self.shared_class(data) if callable(self.shared_class) else self.shared_class
+            dec = sess.models[direction].decide(link, now, len(data), active,
+                                                self.shared_up if direction == "up" else None, cls)
             if not dec.dropped:
                 for when in dec.deliveries:
                     heapq.heappush(self._heap, (when, next(self._seq), direction, sess, data, now))

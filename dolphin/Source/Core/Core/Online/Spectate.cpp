@@ -150,8 +150,32 @@ void Uploader::AbortGame(const std::array<u8, 16>& uid)
     m_game.reset();
 }
 
+double Uploader::RttBase() const
+{
+  double base = -1;
+  for (const auto& [minute, rtt] : m_rtt_minutes)
+    base = base < 0 ? rtt : std::min(base, rtt);
+  return base;
+}
+
+void Uploader::SampleRtt(Clock::time_point now, double rtt_ms)
+{
+  if (rtt_ms <= 0)
+    return;
+  const s64 minute =
+      std::chrono::duration_cast<std::chrono::minutes>(now.time_since_epoch()).count();
+  if (m_rtt_minutes.empty() || m_rtt_minutes.back().first != minute)
+    m_rtt_minutes.emplace_back(minute, rtt_ms);
+  else
+    m_rtt_minutes.back().second = std::min(m_rtt_minutes.back().second, rtt_ms);
+  while (!m_rtt_minutes.empty() && m_rtt_minutes.front().first <= minute - 10)
+    m_rtt_minutes.pop_front();
+}
+
 void Uploader::ConnectionLost()
 {
+  // Another connection may take another route: its round trip is learned anew.
+  m_rtt_minutes.clear();
   // mm forgot this connection's slots: offer again once connected (mm treats it as a new offer).
   if (!m_game)
     return;
@@ -248,14 +272,17 @@ std::optional<std::string> Uploader::Unhealthy(Game& g, Clock::time_point now, s
 
 void Uploader::SendData(Game& g, Clock::time_point now, size_t unacked, Outgoing* out)
 {
+  const double rate = m_forced ? 16384.0 : g.rate;
+  const size_t packet = m_forced ? 1200 : m_options.packet;
+  const size_t max_unacked = m_forced ? (1u << 20) : m_options.max_unacked;
   if (g.refilled != Clock::time_point{})
   {
     const double dt = std::chrono::duration<double>(now - g.refilled).count();
-    g.tokens = std::min(g.tokens + g.rate * dt, g.rate * m_options.burst_seconds);
+    g.tokens = std::min(g.tokens + rate * dt, rate * m_options.burst_seconds);
   }
   g.refilled = now;
   size_t in_flight = unacked;
-  while (g.next < g.chunks.size() && in_flight < m_options.max_unacked)
+  while (g.next < g.chunks.size() && in_flight < max_unacked)
   {
     const Chunk& c = g.chunks[g.next];
     if (g.offset == 0)
@@ -294,7 +321,7 @@ void Uploader::SendData(Game& g, Clock::time_point now, size_t unacked, Outgoing
         continue;
       }
     }
-    const size_t room = m_options.packet - DATA_HEADER;
+    const size_t room = packet - DATA_HEADER;
     const size_t n = std::min(room, c.bytes->size() - g.offset);
     if (g.tokens < static_cast<double>(n + DATA_HEADER))
       return;
@@ -342,6 +369,9 @@ void Uploader::SendDigests(Game& g, Clock::time_point now, Outgoing* out)
 Outgoing Uploader::Service(Clock::time_point now, bool online, size_t unacked, const Health& health)
 {
   Outgoing out;
+  // The round trip to mm is sampled always, games or not: the menus are when the uplink is quiet.
+  if (online)
+    SampleRtt(now, health.mm_rtt_ms);
   if (!m_game)
     return out;
   Game& g = *m_game;
@@ -406,7 +436,7 @@ Outgoing Uploader::Service(Clock::time_point now, bool online, size_t unacked, c
   if (g.role != Role::Primary && g.role != Role::Witness)
     return out;
   const auto slot = picojson::value(static_cast<double>(g.slot));
-  const auto reason = Unhealthy(g, now, unacked, health);
+  const auto reason = m_forced ? std::nullopt : Unhealthy(g, now, unacked, health);
   if (g.role == Role::Witness)
   {
     if (!reason)
@@ -449,6 +479,23 @@ Outgoing Uploader::Service(Clock::time_point now, bool online, size_t unacked, c
     INFO_LOG_FMT(NETPLAY, "Spectate: game {}: upload resumed", g.info.game);
     out.json.push_back(Json({{"type", picojson::value("spectate-resume")}, {"slot", slot}}));
   }
+  if (m_forced)
+  {
+    SendData(g, now, unacked, &out);
+    return out;
+  }
+  // Nothing during the game's first `baseline` of running (the start is its busiest time).
+  if (health.running && !g.baseline_done)
+    return out;
+  // A queue on the uplink: hold until it drains (the pacer's tokens wait, capped at its burst).
+  const double base = RttBase();
+  if (health.mm_rtt_ms > 0 && base > 0 && health.mm_rtt_ms > base + m_options.rtt_target_ms)
+  {
+    if (g.refilled != Clock::time_point{})
+      g.held_s += std::chrono::duration<double>(now - g.refilled).count();
+    g.refilled = now;
+    return out;
+  }
   SendData(g, now, unacked, &out);
   return out;
 }
@@ -476,6 +523,9 @@ picojson::object Uploader::Status() const
   o["pauses"] = picojson::value(static_cast<double>(g.pauses));
   o["stopped"] = picojson::value(g.stopped);
   o["ended"] = picojson::value(g.ended);
+  o["forced"] = picojson::value(m_forced);
+  o["held_s"] = picojson::value(g.held_s);
+  o["mm_rtt_base"] = picojson::value(RttBase());
   return o;
 }
 
@@ -546,5 +596,11 @@ picojson::object Status()
 {
   std::lock_guard lk(s_mutex);
   return The().Status();
+}
+
+void SetForced(bool forced)
+{
+  std::lock_guard lk(s_mutex);
+  The().SetForced(forced);
 }
 }  // namespace Online::Spectate

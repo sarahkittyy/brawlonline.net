@@ -40,7 +40,7 @@ mm accepts an offer only:
 - for a match mm made in the last 6 hours;
 - for at most 64 games per match.
 
-A second offer for the same game from the same account replaces the first.
+A second offer for the same game from the same account replaces the first. An offer for a new game of the match closes the match's open game, if any (its upload stopped before ENDG): what was kept stays, and spectators get `bad` "The rest of this game wasn't streamed." for it.
 
 ### `spectate-role` (mm → game)
 
