@@ -10,4 +10,6 @@ export const IsoSelectionStepMessages = {
   rvzFilesAreIncompatible: (productName: string) =>
     "Compressed disc images (RVZ, WBFS) are not supported by {0}. Please provide an uncompressed ISO.",
   select: () => "Select",
+  skip: () => "Skip",
+  notHereForPPlus: () => " if you're not here for Project Plus.",
 };

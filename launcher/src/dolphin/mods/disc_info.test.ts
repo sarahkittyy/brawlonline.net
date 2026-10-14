@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { discContentSha1, isBrawlGameId, parseHeaderJson, readDiscInfo } from "./disc_info";
-import { controllerOf, defaultController } from "./types";
+import { defaultController } from "./types";
 
 describe("disc info", () => {
   it("reads DolphinTool's header: a Wii disc has a title ID", () => {
@@ -36,23 +36,10 @@ describe("disc info", () => {
     await expect(discContentSha1("tool", disc, async () => "Error: no hash")).rejects.toThrow(/Could not check/);
   });
 
-  it("picks the controller a game plays with", () => {
-    expect(defaultController({ gameId: "SMNE01", platform: "wii", launcherPath: null })).toBe("wiimote");
-    expect(defaultController({ gameId: "RSBE01", platform: "wii", launcherPath: "minus.dol" })).toBe("gc");
-    expect(defaultController({ gameId: "GALE01", platform: "gamecube", launcherPath: null })).toBe("gc");
+  it("knows what controller a game is made for", () => {
+    expect(defaultController({ gameId: "SMNE01", platform: "wii" })).toBe("wiimote");
+    expect(defaultController({ gameId: "RSBE01", platform: "wii" })).toBe("gc");
+    expect(defaultController({ gameId: "GALE01", platform: "gamecube" })).toBe("gc");
     expect(isBrawlGameId("RSBP01")).toBe(true);
-    const build = {
-      id: "1",
-      name: "x",
-      discPath: "d",
-      launcherPath: null,
-      sdPath: null,
-      gameId: "SMNE01",
-      platform: "wii" as const,
-      hash: null,
-      hashKey: null,
-    };
-    expect(controllerOf(build)).toBe("wiimote");
-    expect(controllerOf({ ...build, controller: "gc" })).toBe("gc");
   });
 });

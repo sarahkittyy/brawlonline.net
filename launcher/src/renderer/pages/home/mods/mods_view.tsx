@@ -7,17 +7,14 @@ import type {
   ModsController,
   ModsState,
 } from "@dolphin/mods/types";
-import { controllerOf } from "@dolphin/mods/types";
+import { defaultController } from "@dolphin/mods/types";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import CreateNewFolderOutlinedIcon from "@mui/icons-material/CreateNewFolderOutlined";
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
-import SportsEsportsOutlinedIcon from "@mui/icons-material/SportsEsportsOutlined";
 import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
 import LinearProgress from "@mui/material/LinearProgress";
-import MenuItem from "@mui/material/MenuItem";
-import Select from "@mui/material/Select";
 import Switch from "@mui/material/Switch";
 import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
@@ -26,6 +23,7 @@ import type { ReactNode } from "react";
 import { useState } from "react";
 
 import { ContentBlock } from "../overview/content_block/content_block";
+import { ControllerMenu } from "./controller_menu";
 import { ModsMessages as Messages } from "./mods.messages";
 import styles from "./mods.module.css";
 
@@ -46,10 +44,11 @@ export type ModsViewProps = {
   /** A build whose host or join is starting Dolphin. */
   startingBuildId: string | null;
   error: string | null;
-  onControllerChange: (build: ModBuild, controller: ModsController) => void;
+  onControllerChange: (controller: ModsController) => void;
+  onConfigureControllers: () => void;
+  onRefreshControllers: () => void;
   onAddBuild: () => void;
   onAddFolder: () => void;
-  onConfigureControllers: () => void;
   onRemoveBuild: (build: ModBuild) => void;
   onHost: (build: ModBuild, isPublic: boolean) => void;
   onJoin: (build: ModBuild, code: string) => void;
@@ -63,9 +62,22 @@ const fileName = (p: string | null) => (p ? p.split(/[\\/]/).pop() ?? p : null);
 export const ModsView = (props: ModsViewProps) => {
   const { state, error } = props;
   const status = state?.running ? state.status : null;
+  // The running room's game, if it is one of ours: what it is made for.
+  const roomBuild = status?.room ? state?.builds.find((b) => b.hash === status.room!.build.hash) : undefined;
   return (
     <div className={styles.page}>
       <p className={styles.intro}>{Messages.intro()}</p>
+      {state && (
+        <ControllerMenu
+          controller={state.controller}
+          controllers={state.controllers}
+          input={status?.input}
+          gameWants={roomBuild ? defaultController(roomBuild) : null}
+          onChange={props.onControllerChange}
+          onConfigure={props.onConfigureControllers}
+          onOpen={props.onRefreshControllers}
+        />
+      )}
       {error && <div className={styles.error}>{error}</div>}
       {state?.running && <RoomPanel status={status} onRequest={props.onRequest} onCopyCode={props.onCopyCode} />}
       <ContentBlock
@@ -82,18 +94,6 @@ export const ModsView = (props: ModsViewProps) => {
                 {Messages.addFolder()}
               </Button>
             </Tooltip>
-            <Tooltip title={Messages.controllerSetupTooltip()}>
-              <span>
-                <Button
-                  size="small"
-                  startIcon={<SportsEsportsOutlinedIcon />}
-                  disabled={!!state?.running}
-                  onClick={props.onConfigureControllers}
-                >
-                  {Messages.controllerSetup()}
-                </Button>
-              </span>
-            </Tooltip>
           </div>
         }
         content={
@@ -107,7 +107,6 @@ export const ModsView = (props: ModsViewProps) => {
                 starting={props.startingBuildId === build.id}
                 disabled={!!state.running || props.startingBuildId !== null}
                 onRemove={() => props.onRemoveBuild(build)}
-                onControllerChange={(c) => props.onControllerChange(build, c)}
                 onHost={(isPublic) => props.onHost(build, isPublic)}
                 onJoin={(code) => props.onJoin(build, code)}
               />
@@ -117,6 +116,7 @@ export const ModsView = (props: ModsViewProps) => {
       />
       <PublicRoomsBlock
         rooms={props.publicRooms}
+        ownCode={status?.room?.code ?? null}
         builds={state?.builds ?? []}
         disabled={!!state?.running || props.startingBuildId !== null}
         onJoin={props.onJoin}
@@ -128,18 +128,22 @@ export const ModsView = (props: ModsViewProps) => {
 
 const PublicRoomsBlock = ({
   rooms,
+  ownCode,
   builds,
   disabled,
   onJoin,
   onLogIn,
 }: {
   rooms: ModsPublicRooms;
+  /** The room this player is in: not listed. */
+  ownCode: string | null;
   builds: ModBuild[];
   disabled: boolean;
   onJoin: (build: ModBuild, code: string) => void;
   onLogIn: () => void;
 }) => {
   let content: ReactNode;
+  const listed = rooms.kind === "ready" ? rooms.rooms.filter((r) => r.code !== ownCode) : [];
   if (rooms.kind === "logged-out") {
     content = (
       <div className={styles.centered}>
@@ -153,12 +157,12 @@ const PublicRoomsBlock = ({
     content = <p className={styles.empty}>{Messages.publicRoomsLoading()}</p>;
   } else if (rooms.kind === "unreachable") {
     content = <p className={styles.empty}>{Messages.publicRoomsUnreachable()}</p>;
-  } else if (rooms.rooms.length === 0) {
+  } else if (listed.length === 0) {
     content = <p className={styles.empty}>{Messages.publicRoomsNone()}</p>;
   } else {
     content = (
       <div className={styles.slots}>
-        {rooms.rooms.map((room) => {
+        {listed.map((room) => {
           const build = builds.find((b) => b.hash === room.build.hash);
           const label = Messages.buildName(room.build.name, room.build.hash.slice(0, 8));
           return (
@@ -201,7 +205,6 @@ const BuildRow = ({
   starting,
   disabled,
   onRemove,
-  onControllerChange,
   onHost,
   onJoin,
 }: {
@@ -210,7 +213,6 @@ const BuildRow = ({
   starting: boolean;
   disabled: boolean;
   onRemove: () => void;
-  onControllerChange: (controller: ModsController) => void;
   onHost: (isPublic: boolean) => void;
   onJoin: (code: string) => void;
 }) => {
@@ -249,16 +251,6 @@ const BuildRow = ({
         </div>
       )}
       <div className={styles.actions}>
-        <Select
-          size="small"
-          value={controllerOf(build)}
-          disabled={disabled}
-          inputProps={{ "aria-label": Messages.controller() }}
-          onChange={(e) => onControllerChange(e.target.value as ModsController)}
-        >
-          <MenuItem value="gc">{Messages.gameCube()}</MenuItem>
-          <MenuItem value="wiimote">{Messages.wiiRemote()}</MenuItem>
-        </Select>
         <Tooltip title={Messages.publicRoomTooltip()}>
           <label className={styles.toggle}>
             <Switch size="small" checked={isPublic} onChange={(e) => setIsPublic(e.target.checked)} />

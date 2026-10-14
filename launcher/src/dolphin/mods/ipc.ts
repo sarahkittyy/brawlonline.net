@@ -6,6 +6,7 @@ import type {
   ModBuildInput,
   ModFolderParts,
   ModRoomRequest,
+  ModsController,
   ModsEvent,
   ModsHostOptions,
   ModsJoinOptions,
@@ -37,6 +38,24 @@ export const ipc_modsHost = makeEndpoint.main("mods_host", <ModsHostOptions>_, <
 export const ipc_modsJoin = makeEndpoint.main("mods_join", <ModsJoinOptions>_, <SuccessPayload>_);
 
 export const ipc_modsRequest = makeEndpoint.main("mods_request", <{ request: ModRoomRequest }>_, <SuccessPayload>_);
+
+export const ipc_modsSetController = makeEndpoint.main(
+  "mods_setController",
+  <{ controller: ModsController }>_,
+  <SuccessPayload>_,
+);
+
+export const ipc_modsRefreshControllers = makeEndpoint.main(
+  "mods_refreshControllers",
+  <EmptyPayload>_,
+  <SuccessPayload>_,
+);
+
+export const ipc_modsConfigureControllers = makeEndpoint.main(
+  "mods_configureControllers",
+  <EmptyPayload>_,
+  <SuccessPayload>_,
+);
 
 // Events
 

@@ -6,14 +6,17 @@ import type { DolphinManager } from "../manager";
 import { DolphinLaunchType } from "../types";
 import {
   ipc_modsAddBuild,
+  ipc_modsConfigureControllers,
   ipc_modsEvent,
   ipc_modsGetState,
   ipc_modsHashBuild,
   ipc_modsHost,
   ipc_modsInspectFolder,
   ipc_modsJoin,
+  ipc_modsRefreshControllers,
   ipc_modsRemoveBuild,
   ipc_modsRequest,
+  ipc_modsSetController,
   ipc_modsUpdateBuild,
 } from "./ipc";
 import { ModsManager } from "./mods_manager";
@@ -55,6 +58,18 @@ export default function setupModsIpc({
   });
   ipc_modsRequest.main!.handle(async ({ request }) => {
     await mods.request(request);
+    return { success: true };
+  });
+  ipc_modsSetController.main!.handle(async ({ controller }) => {
+    await mods.setController(controller);
+    return { success: true };
+  });
+  ipc_modsRefreshControllers.main!.handle(async () => {
+    await mods.refreshControllers();
+    return { success: true };
+  });
+  ipc_modsConfigureControllers.main!.handle(async () => {
+    await mods.configureControllers();
     return { success: true };
   });
   return mods;

@@ -1,14 +1,17 @@
 /* eslint-disable import/no-default-export */
 import {
   ipc_modsAddBuild,
+  ipc_modsConfigureControllers,
   ipc_modsEvent,
   ipc_modsGetState,
   ipc_modsHashBuild,
   ipc_modsHost,
   ipc_modsInspectFolder,
   ipc_modsJoin,
+  ipc_modsRefreshControllers,
   ipc_modsRemoveBuild,
   ipc_modsRequest,
+  ipc_modsSetController,
   ipc_modsUpdateBuild,
 } from "./ipc";
 import type { ModsService } from "./types";
@@ -44,6 +47,15 @@ const modsApi: ModsService = {
   },
   async request(request) {
     await ipc_modsRequest.renderer!.trigger({ request });
+  },
+  async setController(controller) {
+    await ipc_modsSetController.renderer!.trigger({ controller });
+  },
+  async refreshControllers() {
+    await ipc_modsRefreshControllers.renderer!.trigger({});
+  },
+  async configureControllers() {
+    await ipc_modsConfigureControllers.renderer!.trigger({});
   },
   onEvent(handle) {
     const { destroy } = ipc_modsEvent.renderer!.handle(async (event) => handle(event));

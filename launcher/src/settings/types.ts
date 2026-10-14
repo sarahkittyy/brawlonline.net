@@ -1,4 +1,4 @@
-import type { ModBuild } from "@dolphin/mods/types";
+import type { ModBuild, ModsController } from "@dolphin/mods/types";
 
 /**
  * Stored account information (for multi-account support)
@@ -61,6 +61,8 @@ export interface RootSettingsSchema {
   accounts: AccountData;
   // The Brawl Mods tab's builds (docs/design/brawl-mods.md §4); absent until one is added.
   modBuilds?: ModBuild[];
+  // Other Games: what the player plays with; absent until they pick (then by what is set up).
+  modsController?: ModsController;
   previousVersion?: string;
   pendingUpdateVersion?: string;
 }

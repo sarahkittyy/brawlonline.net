@@ -6,24 +6,27 @@ import path from "path";
 import { throttleProgress } from "utils/copy_file";
 
 import type { DolphinManager } from "../manager";
+import { DolphinLaunchType } from "../types";
 import { buildHashKey, combineBuildHash, computeBuildParts } from "./build_hash";
+import { defaultControllerKind, readDolphinControllers } from "./controllers";
 import { discContentSha1, readDiscInfo } from "./disc_info";
 import { findModParts } from "./folder_import";
 import { knownDiscName, knownModName } from "./known_builds";
 import type { ModsRoomArg } from "./mods_args";
 import { readModRoomStatus, writeModRoomRequest } from "./room_files";
 import type {
+  DolphinControllers,
   ModBuild,
   ModBuildInput,
   ModFolderParts,
   ModRoomRequest,
   ModRoomStatus,
+  ModsController,
   ModsEvent,
   ModsHostOptions,
   ModsJoinOptions,
   ModsState,
 } from "./types";
-import { controllerOf } from "./types";
 
 const log = electronLog.scope("dolphin/mods");
 
@@ -80,6 +83,8 @@ export class ModsManager {
   private pollTimer: ReturnType<typeof setInterval> | null = null;
   private readonly listeners = new Set<(event: ModsEvent) => void>();
   private readonly hashing = new Map<string, Promise<ModBuild>>();
+  private controllers: DolphinControllers = { gc: [], wiimote: [] };
+  private controllersRead = false;
 
   /** `toolPath` resolves DolphinTool (the bundled Dolphin's, once it is installed). */
   constructor(
@@ -94,7 +99,55 @@ export class ModsManager {
   }
 
   getState(): ModsState {
-    return { builds: this.builds(), running: this.running, status: this.status };
+    if (!this.controllersRead) {
+      this.controllersRead = true;
+      void this.refreshControllers().catch((err) => log.warn(`reading Dolphin's controllers: ${err}`));
+    }
+    return {
+      builds: this.builds(),
+      running: this.running,
+      status: this.status,
+      controller: this.controller(),
+      controllers: this.controllers,
+    };
+  }
+
+  /** What the player plays with: their pick, else a Wii Remote if only that is set up in Dolphin. */
+  controller(): ModsController {
+    return this.settings.get().modsController ?? defaultControllerKind(this.controllers);
+  }
+
+  async refreshControllers(): Promise<void> {
+    const next = await readDolphinControllers(this.dolphin.netplayUserFolder());
+    if (JSON.stringify(next) !== JSON.stringify(this.controllers)) {
+      this.controllers = next;
+      this.emitState();
+    }
+  }
+
+  async setController(controller: ModsController): Promise<void> {
+    await this.settings.updateSetting("modsController", controller);
+    this.emitState();
+    if (this.running) {
+      // Dolphin takes it at its next frame (Machine::SetLocalController) and tells the room.
+      await writeModRoomRequest(this.dolphin.netplayOnlineDir(), { op: "controller", controller });
+    }
+  }
+
+  /** Dolphin's Controllers settings: over the room's game, or in a Dolphin of their own (closing
+   * them closes it, and the menu reads what they set). */
+  async configureControllers(): Promise<void> {
+    if (this.running) {
+      await writeModRoomRequest(this.dolphin.netplayOnlineDir(), { op: "configure" });
+      return;
+    }
+    if (this.dolphin.isNetplayRunning()) {
+      throw new Error("Dolphin is already open. Close it first.");
+    }
+    await this.dolphin.configureDolphin(DolphinLaunchType.NETPLAY, {
+      extraArgs: ["--controllers"],
+      onClose: () => void this.refreshControllers().catch((err) => log.warn(`reading Dolphin's controllers: ${err}`)),
+    });
   }
 
   builds(): ModBuild[] {
@@ -130,7 +183,6 @@ export class ModsManager {
       ...base,
       gameId: info.gameId,
       platform: info.platform,
-      controller: input.controller ?? null,
       hash: null,
       hashKey: null,
     };
@@ -151,9 +203,6 @@ export class ModsManager {
       const named = cleanName(input.name, "");
       next.name = named || autoName(current);
       next.autoName = !named;
-    }
-    if (input.controller !== undefined) {
-      next.controller = input.controller;
     }
     for (const key of ["discPath", "launcherPath", "sdPath"] as const) {
       if (input[key] !== undefined && input[key] !== current[key]) {
@@ -201,7 +250,7 @@ export class ModsManager {
       host: true,
       build: { hash: build.hash!, name: build.name },
       public: options.public,
-      controller: controllerOf(build),
+      controller: await this.launchController(),
     });
   }
 
@@ -214,7 +263,7 @@ export class ModsManager {
     await this.launch(build, {
       join: code,
       build: { hash: build.hash!, name: build.name },
-      controller: controllerOf(build),
+      controller: await this.launchController(),
     });
   }
 
@@ -223,6 +272,12 @@ export class ModsManager {
       throw new Error("No Brawl Mods room is open.");
     }
     await writeModRoomRequest(this.dolphin.netplayOnlineDir(), request);
+  }
+
+  /** The controller to start with, from Dolphin's settings as they are now. */
+  private async launchController(): Promise<ModsController> {
+    await this.refreshControllers().catch((err) => log.warn(`reading Dolphin's controllers: ${err}`));
+    return this.controller();
   }
 
   private findBuild(id: string): ModBuild {

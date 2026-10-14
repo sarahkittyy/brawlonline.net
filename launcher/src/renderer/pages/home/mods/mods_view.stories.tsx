@@ -85,9 +85,21 @@ const room = (you: number, extra: Partial<ModRoomStatus> = {}): ModRoomStatus =>
   ...extra,
 });
 
-const Frame = (props: Partial<ModsViewProps> & { state: ModsState | null }) => (
-  <div style={{ width: 900, height: 640, padding: 16, background: "var(--theme-page-background)" }}>
+type ViewState = Omit<ModsState, "controller" | "controllers"> & Partial<ModsState>;
+
+const Frame = ({ state, ...props }: Omit<Partial<ModsViewProps>, "state"> & { state: ViewState | null }) => (
+  <div style={{ width: 900, height: 640, display: "flex", background: "var(--theme-page-background)" }}>
     <ModsView
+      state={
+        state && {
+          controller: "gc",
+          controllers: {
+            gc: [{ index: 1, device: "GameCube adapter", label: "GameCube adapter" }],
+            wiimote: [{ index: 1, device: "", label: "Real Wii Remote", real: true }],
+          },
+          ...state,
+        }
+      }
       publicRooms={{
         kind: "ready",
         rooms: [
@@ -112,9 +124,10 @@ const Frame = (props: Partial<ModsViewProps> & { state: ModsState | null }) => (
       startingBuildId={null}
       error={null}
       onControllerChange={noop}
+      onConfigureControllers={noop}
+      onRefreshControllers={noop}
       onAddBuild={noop}
       onAddFolder={noop}
-      onConfigureControllers={noop}
       onRemoveBuild={noop}
       onHost={noop}
       onJoin={noop}

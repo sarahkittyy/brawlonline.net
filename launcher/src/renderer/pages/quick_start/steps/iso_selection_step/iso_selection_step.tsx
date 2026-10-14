@@ -7,6 +7,7 @@ import Button from "@mui/material/Button";
 import { useQuery } from "@tanstack/react-query";
 import React, { useCallback } from "react";
 import { useDropzone } from "react-dropzone";
+import { useNavigate } from "react-router-dom";
 
 import { ProgressBar } from "@/components/loading_screen/loading_screen";
 import { useIsoVerificationFraction } from "@/lib/hooks/use_iso_verification";
@@ -51,8 +52,26 @@ const Container = styled.div`
   }
 `;
 
+// Other Games needs no Brawl disc: a player who came for those skips straight to the tab.
+const SkipLine = styled.div`
+  margin-top: 6px;
+  color: var(--text-dim, #999);
+  font-size: 13px;
+`;
+
+const SkipLink = styled.button`
+  padding: 0;
+  border: none;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-decoration: underline;
+  cursor: pointer;
+`;
+
 export const IsoSelectionStep = () => {
   const { showError } = useToasts();
+  const navigate = useNavigate();
   const [tempIsoPath, setTempIsoPath] = React.useState("");
   const validIsoPathQuery = useQuery({
     queryKey: ["validIsoPathQuery", tempIsoPath],
@@ -155,6 +174,12 @@ export const IsoSelectionStep = () => {
       >
         <QuickStartHeader>{Messages.selectMeleeIso()}</QuickStartHeader>
         <div>{Messages.thisApplicationUsesNtsc()}</div>
+        <SkipLine>
+          <SkipLink type="button" onClick={() => navigate("/main/home/mods")}>
+            {Messages.skip()}
+          </SkipLink>
+          {Messages.notHereForPPlus()}
+        </SkipLine>
       </div>
       <Container
         {...getRootProps({

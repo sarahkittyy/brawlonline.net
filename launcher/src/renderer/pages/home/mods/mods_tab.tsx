@@ -1,8 +1,6 @@
 import type { ModBuild, ModBuildInput, ModRoomRequest, ModsState } from "@dolphin/mods/types";
-import { DolphinLaunchType } from "@dolphin/types";
 import React, { useCallback, useEffect, useState } from "react";
 
-import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
 import { usePlayDialogs } from "@/lib/dolphin/use_play";
 import { useAccount } from "@/lib/hooks/use_account";
 import { useLoginModal } from "@/lib/hooks/use_login_modal";
@@ -24,11 +22,10 @@ const errorText = (err: unknown) => (err instanceof Error ? err.message : String
 
 /** Home > Other Games: the games, mods and the room, from the main process's ModsManager. */
 export const ModsTab = React.memo(function ModsTab() {
-  const { modsService, dolphinService, backendService } = useServices();
+  const { modsService, backendService } = useServices();
   const currentUser = useAccount((store) => store.user);
   const userData = useAccount((store) => store.userData);
   const { setActivateOnlineOpen } = usePlayDialogs();
-  const { openConfigureDolphin } = useDolphinActions(dolphinService);
   const { showError, showSuccess } = useToasts();
   const isoPath = useSettings((store) => store.settings.isoPath);
   const [state, setState] = useState<ModsState | null>(null);
@@ -163,12 +160,11 @@ export const ModsTab = React.memo(function ModsTab() {
         hashProgress={hashProgress}
         startingBuildId={startingBuildId}
         error={error}
-        onControllerChange={(build, controller) =>
-          void modsService.updateBuild(build.id, { controller }).catch(showError)
-        }
+        onControllerChange={(controller) => void modsService.setController(controller).catch(showError)}
+        onConfigureControllers={() => void modsService.configureControllers().catch(showError)}
+        onRefreshControllers={() => void modsService.refreshControllers().catch(() => undefined)}
         onAddBuild={() => setAdding({ kind: "game", name: "", discPath: null, launcherPath: null, sdPath: null })}
         onAddFolder={() => void onAddFolder()}
-        onConfigureControllers={() => void openConfigureDolphin(DolphinLaunchType.NETPLAY)}
         onRemoveBuild={(build) => void modsService.removeBuild(build.id).catch(showError)}
         onHost={(build, isPublic) => void start(build, () => modsService.host({ buildId: build.id, public: isPublic }))}
         onJoin={(build, code) => void start(build, () => modsService.join({ buildId: build.id, code }))}

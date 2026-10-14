@@ -1,16 +1,17 @@
 import type {
+  DolphinControllers,
   ModBuild,
   ModBuildInput,
   ModFolderParts,
   ModRoomRequest,
   ModRoomStatus,
+  ModsController,
   ModsEvent,
   ModsHostOptions,
   ModsJoinOptions,
   ModsService,
   ModsState,
 } from "@dolphin/mods/types";
-import { controllerOf } from "@dolphin/mods/types";
 
 /** Dev mode (`npm run dev -- --env mock=mods`): a fake room that a click opens, with two players. */
 class MockModsClient implements ModsService {
@@ -54,9 +55,20 @@ class MockModsClient implements ModsService {
   ];
   private status: ModRoomStatus | null = null;
   private listeners = new Set<(event: ModsEvent) => void>();
+  private controller: ModsController = "gc";
+  private readonly controllers: DolphinControllers = {
+    gc: [{ index: 1, device: "GameCube adapter", label: "GameCube adapter" }],
+    wiimote: [{ index: 1, device: "", label: "Real Wii Remote", real: true }],
+  };
 
   private state(): ModsState {
-    return { builds: this.builds, running: this.status !== null, status: this.status };
+    return {
+      builds: this.builds,
+      running: this.status !== null,
+      status: this.status,
+      controller: this.controller,
+      controllers: this.controllers,
+    };
   }
 
   private emit() {
@@ -148,6 +160,7 @@ class MockModsClient implements ModsService {
         slot: isHost ? 0 : 1,
         peers: [],
       },
+      input: { controller: this.controller, index: 1, device: "GameCube adapter", plugged: true, real: false },
       lastRequest: null,
       pid: 1,
       updatedAt: new Date().toISOString(),
@@ -157,12 +170,12 @@ class MockModsClient implements ModsService {
 
   async host(options: ModsHostOptions) {
     const build = await this.hashBuild(options.buildId);
-    this.open(build, "KFQB", true, controllerOf(build));
+    this.open(build, "KFQB", true, this.controller);
   }
 
   async join(options: ModsJoinOptions) {
     const build = await this.hashBuild(options.buildId);
-    this.open(build, options.code.toUpperCase(), false, controllerOf(build));
+    this.open(build, options.code.toUpperCase(), false, this.controller);
   }
 
   async request(request: ModRoomRequest) {
@@ -186,6 +199,26 @@ class MockModsClient implements ModsService {
       };
     }
     this.emit();
+  }
+
+  async setController(controller: ModsController) {
+    this.controller = controller;
+    if (this.status) {
+      const real = controller === "wiimote";
+      this.status = {
+        ...this.status,
+        input: { controller, index: 1, device: real ? "" : "GameCube adapter", plugged: true, real },
+      };
+    }
+    this.emit();
+  }
+
+  async refreshControllers() {
+    // Nothing to read in dev mode.
+  }
+
+  async configureControllers() {
+    // No Dolphin in dev mode.
   }
 
   onEvent(handle: (event: ModsEvent) => void) {

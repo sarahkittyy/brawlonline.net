@@ -1,5 +1,5 @@
 import type { ModBuild, ModRoomStatus, ModsState } from "@dolphin/mods/types";
-import { cleanup, fireEvent, render } from "@testing-library/react";
+import { cleanup, fireEvent, render, within } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ModsMessages as Messages } from "./mods.messages";
@@ -44,17 +44,39 @@ const room = (you: number): ModRoomStatus => ({
   updatedAt: "2026-10-12T20:00:00Z",
 });
 
-const props = (state: ModsState | null, extra: Partial<ModsViewProps> = {}): ModsViewProps => ({
-  state,
+const nsmbw: ModBuild = {
+  id: "nsmbw",
+  name: "New Super Mario Bros. Wii",
+  discPath: "C:/Games/NSMBW.rvz",
+  launcherPath: null,
+  sdPath: null,
+  gameId: "SMNE01",
+  platform: "wii",
+  hash: "bb372e26" + "0".repeat(56),
+  hashKey: "k",
+};
+
+type ViewState = Omit<ModsState, "controller" | "controllers"> & Partial<ModsState>;
+
+const props = (state: ViewState | null, extra: Partial<ModsViewProps> = {}): ModsViewProps => ({
+  state: state && {
+    controller: "gc",
+    controllers: {
+      gc: [{ index: 1, device: "XInput/0/Gamepad", label: "Xbox controller" }],
+      wiimote: [{ index: 1, device: "", label: "Real Wii Remote", real: true }],
+    },
+    ...state,
+  },
   publicRooms: { kind: "ready", rooms: [] },
   onLogIn: vi.fn(),
   hashProgress: {},
   startingBuildId: null,
   error: null,
   onControllerChange: vi.fn(),
+  onConfigureControllers: vi.fn(),
+  onRefreshControllers: vi.fn(),
   onAddBuild: vi.fn(),
   onAddFolder: vi.fn(),
-  onConfigureControllers: vi.fn(),
   onRemoveBuild: vi.fn(),
   onHost: vi.fn(),
   onJoin: vi.fn(),
@@ -147,6 +169,60 @@ describe("ModsView", () => {
     fireEvent.click(joinIn(row("Keiko")));
     expect(p.onJoin).toHaveBeenCalledWith(minus, "PLNX");
     expect(getByText(Messages.roomPlayers(3, 4))).toBeTruthy();
+  });
+
+  it("switches the controller, folding what Dolphin has set up, and opens Configure", () => {
+    const p = props({ builds: [minus], running: false, status: null });
+    const { getByRole } = render(<ModsView {...p} />);
+    fireEvent.mouseDown(getByRole("combobox", { name: Messages.controller() }));
+    expect(p.onRefreshControllers).toHaveBeenCalled();
+    const menu = within(getByRole("listbox"));
+    expect(menu.getByText("Xbox controller")).toBeTruthy();
+    expect(menu.getByText("Real Wii Remote")).toBeTruthy();
+    fireEvent.click(menu.getByText(Messages.wiiRemote()));
+    expect(p.onControllerChange).toHaveBeenCalledWith("wiimote");
+    fireEvent.mouseDown(getByRole("combobox", { name: Messages.controller() }));
+    fireEvent.click(within(getByRole("listbox")).getByText(Messages.configure()));
+    expect(p.onConfigureControllers).toHaveBeenCalled();
+    expect(p.onControllerChange).toHaveBeenCalledTimes(1);
+    // Configure is not a controller: the menu still shows the one played.
+    expect(getByRole("combobox", { name: Messages.controller() }).textContent).toBe(Messages.gameCube());
+  });
+
+  it("says what the player plays with in a room, and when it is missing", () => {
+    const status = room(1);
+    status.input = { controller: "wiimote", index: 1, device: "Bluetooth/0/Wii Remote", plugged: true, real: true };
+    const p = props({ builds: [minus], running: true, status, controller: "wiimote" });
+    const { getByText, rerender } = render(<ModsView {...p} />);
+    expect(getByText(Messages.playingWith(Messages.realWiiRemote()))).toBeTruthy();
+    status.input = { ...status.input, plugged: false };
+    rerender(<ModsView {...props({ builds: [minus], running: true, status: { ...status }, controller: "wiimote" })} />);
+    expect(getByText(Messages.notPluggedIn(Messages.wiiRemote()))).toBeTruthy();
+  });
+
+  it("warns that a Wii game may need a Wii Remote", () => {
+    const status = room(1);
+    status.room = { ...status.room!, build: { hash: nsmbw.hash!, name: nsmbw.name } };
+    const p = props({ builds: [nsmbw], running: true, status });
+    const { getByText } = render(<ModsView {...p} />);
+    expect(getByText(Messages.gameNeedsWiiRemote())).toBeTruthy();
+  });
+
+  it("leaves the player's own room out of the public rooms", () => {
+    const p = props(
+      { builds: [minus], running: true, status: room(1) },
+      {
+        publicRooms: {
+          kind: "ready",
+          rooms: [
+            { code: "KFQB", build: { hash: minus.hash!, name: "Brawl Minus" }, hostName: "Ann", players: 2, open: 3 },
+          ],
+        },
+      },
+    );
+    const { getByText, queryByText } = render(<ModsView {...p} />);
+    expect(queryByText(Messages.roomHost("Ann"))).toBeNull();
+    expect(getByText(Messages.publicRoomsNone())).toBeTruthy();
   });
 
   it("asks to log in for the public rooms", () => {

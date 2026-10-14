@@ -88,6 +88,11 @@ export class DolphinManager {
     return this.netplayDolphinInstance != null;
   }
 
+  /** The netplay User folder (its `Config` has the controller settings). */
+  netplayUserFolder(): string {
+    return this.getInstallation(DolphinLaunchType.NETPLAY).userFolder;
+  }
+
   /** The netplay User folder's online folder (`user.json`, the room hand-off files). */
   netplayOnlineDir(): string {
     return path.join(this.getInstallation(DolphinLaunchType.NETPLAY).userFolder, DOLPHIN_ONLINE_DIR);
@@ -350,7 +355,8 @@ export class DolphinManager {
     this.netplayDolphinInstance = dolphinInstance;
   }
 
-  async configureDolphin(launchType: DolphinLaunchType) {
+  /** `extraArgs` (netplay only): more arguments (`--controllers`); `onClose`: after it closed. */
+  async configureDolphin(launchType: DolphinLaunchType, options: { extraArgs?: string[]; onClose?: () => void } = {}) {
     log.debug(`configuring ${launchType} dolphin...`);
 
     const installation = this.getInstallation(launchType);
@@ -359,13 +365,14 @@ export class DolphinManager {
     await this._updateDolphinSettings(launchType);
     if (launchType === DolphinLaunchType.NETPLAY && !this.netplayDolphinInstance) {
       await this.launchGate();
-      const instance = new DolphinInstance(dolphinPath, installation.userArgs());
+      const instance = new DolphinInstance(dolphinPath, [...installation.userArgs(), ...(options.extraArgs ?? [])]);
       instance.on("close", async (exitCode: number | null, signal: string | null) => {
         try {
           await this._updateLauncherSettings(launchType);
         } catch (e) {
           log.error("Error encountered updating launcher settings.", e);
         }
+        options.onClose?.();
         this.eventSubject.next({
           type: DolphinEventType.CLOSED,
           dolphinType: DolphinLaunchType.NETPLAY,

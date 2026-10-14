@@ -6,8 +6,23 @@
  * file Dolphin writes (`mods-room.json`).
  */
 
-/** What a player plays with (design §6.2): their GameCube port or their Wii Remote. */
+/** What a player plays with (design §6.2): a GameCube controller or a Wii Remote. Dolphin plays
+ * the first one of the kind plugged in, of the ones set up in its Controllers settings. */
 export type ModsController = "gc" | "wiimote";
+
+/** A GameCube port or Wii Remote set up in Dolphin's Controllers settings (`controllers.ts`). */
+export type SetUpController = {
+  /** The port or Wii Remote number (1-4). */
+  index: number;
+  /** Dolphin's device ("XInput/0/Gamepad"); "" for a real Wii Remote. */
+  device: string;
+  /** What a player calls it ("Xbox controller", "Real Wii Remote", "Keyboard + Nunchuk"). */
+  label: string;
+  real?: boolean;
+};
+
+/** The controllers set up in Dolphin, folded by kind. */
+export type DolphinControllers = { gc: SetUpController[]; wiimote: SetUpController[] };
 
 export type DiscPlatform = "wii" | "gamecube";
 
@@ -31,8 +46,6 @@ export type ModBuild = {
   gameId?: string | null;
   gameTitle?: string | null;
   platform?: DiscPlatform | null;
-  /** What this player plays it with; null: the game's default (`defaultController`). */
-  controller?: ModsController | null;
   /** SHA-256 (64 hex digits) of the parts, null until hashed. */
   hash: string | null;
   /** The parts' hashes, with `hash`. */
@@ -41,22 +54,16 @@ export type ModBuild = {
   hashKey: string | null;
 };
 
-export type ModBuildInput = Pick<ModBuild, "name" | "discPath" | "launcherPath" | "sdPath"> & {
-  controller?: ModsController | null;
-};
+export type ModBuildInput = Pick<ModBuild, "name" | "discPath" | "launcherPath" | "sdPath">;
 
-/** A Wii game plays with a Wii Remote (Brawl and its mods take either: a GameCube controller by
- * default), a GameCube game with a GameCube controller. */
-export function defaultController(build: Pick<ModBuild, "gameId" | "platform" | "launcherPath">): ModsController {
+/** What a game is made for: a Wii game a Wii Remote (Brawl and its mods take either: a GameCube
+ * controller first), a GameCube game a GameCube controller. */
+export function defaultController(build: Pick<ModBuild, "gameId" | "platform">): ModsController {
   const brawl = !!build.gameId && build.gameId.startsWith("RSB");
   if (build.platform === "wii" && !brawl) {
     return "wiimote";
   }
   return "gc";
-}
-
-export function controllerOf(build: ModBuild): ModsController {
-  return build.controller ?? defaultController(build);
 }
 
 /** What "Add a mod folder" found (`folder_import.ts`). */
@@ -90,6 +97,17 @@ export type ModRoom = {
 
 export type ModSessionPeer = { slot: number; connected: boolean; rttMs: number };
 
+/** What this player plays with right now, as Dolphin picked it. */
+export type ModLocalInput = {
+  controller: ModsController;
+  /** The GameCube port or Wii Remote (1-4) it is set up as. */
+  index: number;
+  /** Dolphin's device; "" when none of the kind is set up. */
+  device: string;
+  plugged: boolean;
+  real: boolean;
+};
+
 export type ModSession = {
   phase?: string;
   error?: string;
@@ -108,6 +126,8 @@ export type ModRoomStatus = {
   error: string;
   room: ModRoom | null;
   session: ModSession;
+  /** Absent from an older Dolphin. */
+  input?: ModLocalInput;
   lastRequest: { id: string; result: "ok" | "failed"; error?: string } | null;
   pid: number;
   updatedAt: string;
@@ -118,7 +138,11 @@ export type ModRoomRequest =
   | { op: "leave" }
   | { op: "kick"; slot: number }
   | { op: "slot"; slot: number; open: boolean }
-  | { op: "public"; public: boolean };
+  | { op: "public"; public: boolean }
+  /** This player's own controller, mid-game too. */
+  | { op: "controller"; controller: ModsController }
+  /** Opens Dolphin's Controllers settings over the game. */
+  | { op: "configure" };
 
 /** Hashing a build: bytes done of the total. */
 export type ModsHashProgress = { id: string; done: number; total: number };
@@ -129,6 +153,10 @@ export type ModsState = {
   running: boolean;
   /** The room Dolphin last reported, while it runs. */
   status: ModRoomStatus | null;
+  /** What the player plays with (the launcher's controller menu). */
+  controller: ModsController;
+  /** The controllers set up in Dolphin, as last read. */
+  controllers: DolphinControllers;
 };
 
 export type ModsEvent =
@@ -152,5 +180,11 @@ export interface ModsService {
   host(options: ModsHostOptions): Promise<void>;
   join(options: ModsJoinOptions): Promise<void>;
   request(request: ModRoomRequest): Promise<void>;
+  /** Plays with this kind of controller from now on (the running room's at once). */
+  setController(controller: ModsController): Promise<void>;
+  /** Reads Dolphin's controller settings again (they may have changed in Dolphin). */
+  refreshControllers(): Promise<void>;
+  /** Opens Dolphin's Controllers settings: over the game while one runs, else in a Dolphin of its own. */
+  configureControllers(): Promise<void>;
   onEvent(handle: (event: ModsEvent) => void): () => void;
 }

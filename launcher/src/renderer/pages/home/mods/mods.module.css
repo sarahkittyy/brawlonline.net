@@ -1,8 +1,10 @@
 .page {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 12px;
-  padding: 12px 0;
+  box-sizing: border-box;
+  padding: 16px 20px 20px;
   min-height: 0;
   overflow-y: auto;
 }
@@ -38,10 +40,29 @@
 
 .controllerRow {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 10px;
   color: var(--text-secondary);
   font-size: 13px;
+}
+
+.controllerLabel {
+  font-weight: 600;
+}
+
+.controllerValue {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.controllerNote {
+  color: var(--text-secondary);
+}
+
+.controllerWarn {
+  color: var(--warning-text, #e6b450);
 }
 
 .build {
