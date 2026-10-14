@@ -39,6 +39,7 @@ export const ModsMessages = {
   joiningRoom: () => "Joining the room…",
   inRoom: (code: string) => `Room ${code}`,
   copyCode: () => "Copy code",
+  dismiss: () => "Dismiss",
   copied: () => "Copied",
   slot: (n: number) => `Player ${n}`,
   openSlot: () => "Open",

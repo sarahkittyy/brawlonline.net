@@ -10,6 +10,7 @@ import type {
 import { defaultController } from "@dolphin/mods/types";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
+import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import CreateNewFolderOutlinedIcon from "@mui/icons-material/CreateNewFolderOutlined";
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
@@ -23,7 +24,7 @@ import TextField from "@mui/material/TextField";
 import Tooltip from "@mui/material/Tooltip";
 import { clsx } from "clsx";
 import type { ReactNode } from "react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { ExternalLink } from "@/components/external_link";
 
@@ -76,6 +77,16 @@ export const ModsView = (props: ModsViewProps) => {
   const status = state?.running ? state.status : null;
   // The running room's game, if it is one of ours: what it is made for.
   const roomBuild = status?.room ? state?.builds.find((b) => b.hash === status.room!.build.hash) : undefined;
+  // Why the last Dolphin closed (a kick, a failed join), until the player closes the message; a
+  // new room clears it anyway.
+  const [dismissed, setDismissed] = useState<string | null>(null);
+  const running = !!state?.running;
+  useEffect(() => {
+    if (running) {
+      setDismissed(null);
+    }
+  }, [running]);
+  const shownError = error ?? (!state?.running && state?.lastError !== dismissed ? state?.lastError : null);
   return (
     <div className={styles.page}>
       <div className={styles.introRow}>
@@ -98,8 +109,19 @@ export const ModsView = (props: ModsViewProps) => {
           onOpen={props.onRefreshControllers}
         />
       )}
-      {(error ?? (!state?.running ? state?.lastError : null)) && (
-        <div className={styles.error}>{error ?? state?.lastError}</div>
+      {shownError && (
+        <div className={clsx(styles.error, styles.dismissable)}>
+          <span>{shownError}</span>
+          {!error && (
+            <IconButton
+              size="small"
+              aria-label={Messages.dismiss()}
+              onClick={() => setDismissed(state?.lastError ?? null)}
+            >
+              <CloseRoundedIcon fontSize="small" />
+            </IconButton>
+          )}
+        </div>
       )}
       <div className={styles.columns}>
         {/* Left: the public rooms, under the player's own room while Dolphin runs one. */}
@@ -484,9 +506,10 @@ const SlotRow = ({
   onRequest: (request: ModRoomRequest) => void;
 }) => {
   const p = slot.player;
-  // The host drags a player to another slot (an open one, or another player's: they swap).
+  // The host drags a player to any other slot: an empty one (open or closed), or another
+  // player's, and the two swap.
   const draggable = isHost && !!p;
-  const target = isHost && dragging !== null && dragging !== slot.slot && (slot.open || !!p);
+  const target = isHost && dragging !== null && dragging !== slot.slot;
   const [over, setOver] = useState(false);
   return (
     <div
@@ -505,7 +528,7 @@ const SlotRow = ({
       }}
       onDragEnd={() => onDragFrom(null)}
       onDragOver={(e) => {
-        if (target || (isHost && dragging === null && (slot.open || !!p))) {
+        if (target || (isHost && dragging === null)) {
           e.preventDefault();
           e.dataTransfer.dropEffect = "move";
           setOver(true);
@@ -517,7 +540,7 @@ const SlotRow = ({
         setOver(false);
         // The dragged slot, from the drag's data (the state may not have caught up).
         const from = dragging ?? Number(e.dataTransfer.getData("text/plain"));
-        if (isHost && from >= 1 && from <= 4 && from !== slot.slot && (slot.open || !!p)) {
+        if (isHost && from >= 1 && from <= 4 && from !== slot.slot) {
           onRequest({ op: "move", from, to: slot.slot });
         }
         onDragFrom(null);

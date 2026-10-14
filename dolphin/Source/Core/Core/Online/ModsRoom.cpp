@@ -80,6 +80,9 @@ struct Room
   int room_slot = 0;
   bool rejoining = false;
   bool leaving = false;
+  // When the launcher's Leave was sent: Dolphin closes once mm says the player left, or after
+  // LEAVE_WAIT without an answer.
+  std::chrono::steady_clock::time_point leave_at{};
   bool done = false;  // out of the room for good (left, removed, could not join)
   // Was in the room (a mods-state came): a joiner that never was has nothing to play.
   bool ever_in = false;
@@ -104,6 +107,7 @@ struct State : Room
 };
 
 State s;
+constexpr auto LEAVE_WAIT = std::chrono::seconds(3);
 std::string s_command_line;  // --mods-room (before boot, then read once)
 Common::EventHook s_stop_hook;
 
@@ -404,8 +408,15 @@ bool OnServerMessage(const std::string& text)
     else if (type == "mods-left")
     {
       Log(s.leaving ? "left the room" : "removed from the room");
+      // Out of the room either way: the game is the room's, so Dolphin closes (Leave, a kick).
+      s.quit_after_write = true;
       if (!s.leaving)
-        s.error = "You were removed from the room.";
+      {
+        // Kicked by the host (or its slot closed): the game is the room's, so Dolphin closes,
+        // with the reason in mods-room.json for the launcher.
+        const std::string why = Str(o, "reason", 200);
+        s.error = why.empty() ? "You were removed from the room." : why;
+      }
       s.view.reset();
       s.room_code.clear();
       s.done = true;
@@ -596,11 +607,24 @@ void Files(const std::string& dir)
       Log(fmt::format("slots {} and {} swapped: telling the room", moved->first + 1, moved->second + 1));
     }
   }
+  bool leave_now = false;
   {
     std::lock_guard lk(s.mutex);
     if (s.kind == Kind::None && s.log.empty())
       return;
+    // Leave sent and no answer from mm (the connection is down): close anyway.
+    if (s.leaving && !s.done && std::chrono::steady_clock::now() - s.leave_at > LEAVE_WAIT)
+    {
+      Log("no answer to the leave: closing");
+      s.view.reset();
+      s.room_code.clear();
+      s.done = true;
+      s.quit_after_write = true;
+      leave_now = true;
+    }
   }
+  if (leave_now)
+    Machine::Stop();
   // The launcher's request, if any: read, deleted, answered in the status.
   const std::string req_path = dir + "mods-request.json";
   if (File::Exists(req_path))
@@ -812,6 +836,31 @@ std::optional<std::string> Request(const picojson::object& args)
   if (op == "leave")
   {
     m["type"] = picojson::value("mods-leave");
+    bool close_now = false;
+    {
+      std::lock_guard lk(s.mutex);
+      // Leave again, or with no room (yet, or any more): nothing to tell mm, Dolphin just closes.
+      if (s.leaving || !s.view)
+      {
+        if (!s.leaving || s.done)
+        {
+          s.done = true;
+          s.quit_after_write = true;
+          close_now = true;
+        }
+        s.leaving = true;
+      }
+    }
+    if (close_now)
+    {
+      Machine::Stop();
+      return std::nullopt;
+    }
+    {
+      std::lock_guard lk(s.mutex);
+      if (s.leaving)
+        return std::nullopt;
+    }
   }
   else if (op == "kick" || op == "slot")
   {
@@ -841,9 +890,7 @@ std::optional<std::string> Request(const picojson::object& args)
         return "not in a room";
       if (s.view->host != s.view->you)
         return "only the room's host moves players";
-      const int f = static_cast<int>(from) - 1, t = static_cast<int>(to) - 1;
-      if ((!s.view->slots[f] && !s.view->open[f]) || (!s.view->slots[t] && !s.view->open[t]))
-        return "that slot is closed";
+      // Any slot, a closed one too (the room swaps the two slots' open state with them).
     }
     return Machine::RequestMove(static_cast<int>(from) - 1, static_cast<int>(to) - 1);
   }
@@ -878,7 +925,10 @@ std::optional<std::string> Request(const picojson::object& args)
   if (!s.view)
     return "not in a room";
   if (op == "leave")
+  {
     s.leaving = true;
+    s.leave_at = std::chrono::steady_clock::now();
+  }
   s.outbox.push_back(picojson::value(m).serialize());
   return std::nullopt;
 }

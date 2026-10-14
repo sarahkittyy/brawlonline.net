@@ -190,6 +190,15 @@
   font-size: 13px;
 }
 
+.dismissable {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding-top: 4px;
+  padding-bottom: 4px;
+}
+
 .empty {
   margin: 8px 12px;
   color: var(--text-dim);
@@ -360,6 +369,13 @@
 
 .draggable {
   cursor: grab;
+
+  /* The app turns dragging off for every element (styles.scss): Chromium starts no drag at all. */
+  -webkit-user-drag: element;
+}
+
+.draggable * {
+  -webkit-user-drag: auto;
 }
 
 .dropTarget {

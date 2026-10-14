@@ -251,10 +251,13 @@ describe("ModsView", () => {
     fireEvent.dragOver(row(3), { dataTransfer: data });
     fireEvent.drop(row(3), { dataTransfer: data });
     expect(p.onRequest).toHaveBeenCalledWith({ op: "move", from: 2, to: 3 });
-    // A closed, empty slot takes nobody.
+    // A closed, empty slot takes a player too, and a drop on its own slot moves nothing.
     fireEvent.dragStart(row(2), { dataTransfer: data });
     fireEvent.drop(row(4), { dataTransfer: data });
-    expect(p.onRequest).toHaveBeenCalledTimes(1);
+    expect(p.onRequest).toHaveBeenCalledWith({ op: "move", from: 2, to: 4 });
+    fireEvent.dragStart(row(2), { dataTransfer: data });
+    fireEvent.drop(row(2), { dataTransfer: data });
+    expect(p.onRequest).toHaveBeenCalledTimes(2);
   });
 
   it("gives a member no dragging", () => {

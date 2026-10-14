@@ -24,7 +24,7 @@ pub const NOT_FOUND: &str = "Room not found.";
 pub const ROOM_FULL: &str = "This room is full.";
 pub const NOT_HOST: &str = "Only the host can do that.";
 pub const NOT_IN_ROOM: &str = "You are not in a room.";
-pub const KICKED: &str = "You were removed from this room. Try again later.";
+pub const KICKED: &str = "You were removed from this room.";
 pub const SLOT_EMPTY: &str = "Nobody is in that slot.";
 pub const SLOT_CLOSED: &str = "That slot is closed.";
 pub const OWN_SLOT: &str = "You cannot do that to your own slot.";
@@ -294,8 +294,12 @@ impl ModRoomBook {
                 if room.build.hash != build_hash {
                     return mods_error(out, conn, mods::MODS_JOIN, &wrong_build(&room.build));
                 }
-                if self.banned.get(&(code.clone(), who.uid)).is_some_and(|&until| until > now) {
-                    return mods_error(out, conn, mods::MODS_JOIN, KICKED);
+                if let Some(&until) = self.banned.get(&(code.clone(), who.uid)).filter(|&&until| until > now) {
+                    // When they can come back, in whole minutes (rounded up).
+                    let mins = until.duration_since(now).as_secs().div_ceil(60).max(1);
+                    let unit = if mins == 1 { "minute" } else { "minutes" };
+                    let why = format!("{KICKED} You can join it again in {mins} {unit}.");
+                    return mods_error(out, conn, mods::MODS_JOIN, &why);
                 }
                 let preferred = prefer.map(|s| s as usize - 1).filter(|&i| room.open[i] && room.slots[i].is_none());
                 let Some(slot) = preferred.or_else(|| room.free_slot()) else {
@@ -354,13 +358,14 @@ impl ModRoomBook {
                 let Some((code, _)) = self.host_request(conn, mods::MODS_MOVE, out) else { return };
                 let room = self.rooms.get_mut(&code).expect("host_request found it");
                 let (a, b) = (from as usize - 1, to as usize - 1);
-                if (room.slots[a].is_none() && !room.open[a]) || (room.slots[b].is_none() && !room.open[b]) {
-                    return mods_error(out, conn, mods::MODS_MOVE, SLOT_CLOSED);
-                }
                 if room.slots[a].is_none() && room.slots[b].is_none() {
                     return mods_error(out, conn, mods::MODS_MOVE, SLOT_EMPTY);
                 }
+                // Any slot, a closed one too: the two swap whether they are open with their
+                // players, so a player moved into a closed slot leaves its old one closed (as
+                // many slots stay open).
                 room.slots.swap(a, b);
+                room.open.swap(a, b);
                 if room.host == a {
                     room.host = b;
                 } else if room.host == b {
@@ -594,7 +599,7 @@ mod tests {
         assert_eq!(last_state(&out, 1)["slots"][2]["player"], Value::Null);
         // A kicked player cannot come back for a while.
         let out = join(&mut b, 3, &code);
-        assert_eq!(msgs(&out, 3)[0]["error"], KICKED);
+        assert_eq!(msgs(&out, 3)[0]["error"], format!("{KICKED} You can join it again in 10 minutes."));
         // Closing an occupied slot removes its player.
         let out = req(&mut b, 1, 1, ModsRequest::Slot { slot: 2, open: false });
         assert_eq!(msgs(&out, 2)[0]["type"], "mods-left");
@@ -642,12 +647,17 @@ mod tests {
         let st = last_state(&out, 1);
         assert_eq!(st["you"], 3);
         assert_eq!(st["host"], 3);
-        // Two empty slots, or a closed one, move nothing.
+        // Two empty slots move nothing.
         let out = req(&mut b, 1, 1, ModsRequest::Move { from: 2, to: 4 });
         assert_eq!(msgs(&out, 1)[0]["error"], SLOT_EMPTY);
+        // A closed slot takes a player too, and the slot it left is the closed one now.
         req(&mut b, 1, 1, ModsRequest::Slot { slot: 4, open: false });
-        let out = req(&mut b, 1, 1, ModsRequest::Move { from: 1, to: 4 });
-        assert_eq!(msgs(&out, 1)[0]["error"], SLOT_CLOSED);
+        let out = req(&mut b, 1, 1, ModsRequest::Move { from: 3, to: 4 });
+        let st = last_state(&out, 1);
+        assert_eq!(st["you"], 4);
+        assert_eq!(st["host"], 4);
+        assert_eq!(st["slots"][3]["open"], true);
+        assert_eq!(st["slots"][2]["open"], false);
     }
 
     #[test]
