@@ -986,6 +986,15 @@ bool DeviceConnected(int chan)
   return s_port_states[chan].controller_type != ControllerType::None;
 }
 
+std::optional<GCPadStatus> Origin(int chan)
+{
+  std::lock_guard lk(s_read_mutex);
+  const auto& pad_state = s_port_states[chan];
+  if (pad_state.controller_type == ControllerType::None)
+    return std::nullopt;
+  return pad_state.origin;
+}
+
 void ResetDeviceType(int chan)
 {
   std::lock_guard lk(s_read_mutex);

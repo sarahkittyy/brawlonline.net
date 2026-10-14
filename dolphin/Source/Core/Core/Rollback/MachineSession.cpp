@@ -230,12 +230,25 @@ struct State
   // controls (the session reads and sends an emulated Wii Remote's state).
   std::atomic<int> requested_controller{-1};
   u32 pick_countdown = 0;
+  s64 pick_frame = -1;  // the frame the countdown last counted
   std::mutex pick_mutex;
   LocalControllerInfo pick;
   bool use_real_wiimote = false;
   bool picked = false;  // `pick` is the CPU thread's (it captured once)
   std::unique_ptr<WiimoteEmu::Wiimote> real_wiimote;
   std::string real_wiimote_device;
+  // A GameCube controller's analog input, every INPUT_LOG_EVERY frames in the log (CPU thread):
+  // how often the C-stick was pushed, in the controller's reads while waiting for a frame and in
+  // the samples GekkoNet took (one a frame), and the longest time between two samples.
+  struct
+  {
+    s64 frame = -1;
+    Clock::time_point at{};
+    u32 frames = 0, raw_pushes = 0, sampled_pushes = 0;
+    bool raw_pushed = false, sampled_pushed = false;
+    double max_gap_ms = 0;
+    int peak = 0;
+  } input_log;
 
   // Network (net thread, under `net_mutex`).
   std::mutex net_mutex;
@@ -1406,10 +1419,16 @@ void UpdateLocalController()
   }
   if (!now)
   {
-    --s.pick_countdown;
+    // Counted in frames: a frame waits for GekkoNet in many captures.
+    if (s.current_frame != s.pick_frame)
+    {
+      s.pick_frame = s.current_frame;
+      --s.pick_countdown;
+    }
     return;
   }
   s.pick_countdown = PICK_EVERY;
+  s.pick_frame = s.current_frame;
   LocalControllerInfo p;
   if (s.opts.auto_pad)
   {
@@ -1433,6 +1452,15 @@ void UpdateLocalController()
       p.plugged != s.pick.plugged)
   {
     AddLog(fmt::format("plays with: {}", DescribeLocal(p)));
+    if (p.controller == Controller::GameCube && p.adapter)
+    {
+      if (const auto o = GCAdapter::Origin(p.index))
+      {
+        AddLog(fmt::format("controller at rest: stick {},{} C-stick {},{} triggers {},{}", o->stickX,
+                           o->stickY, o->substickX, o->substickY, o->triggerLeft,
+                           o->triggerRight));
+      }
+    }
   }
   s.pick = p;
 }
@@ -1497,6 +1525,73 @@ void AddLocalRequest(Input* in)
       (s.local_request->second == Controller::WiiRemote ? INPUT_REQUEST_WIIMOTE : 0));
 }
 
+// A GameCube controller's state from the adapter, relative to the controller at rest, as the game
+// sees it. The session's ports are standard controllers whose origin is a perfectly centered one,
+// so the session moves the player's own origin into the values, as Dolphin's adapter device tells
+// the game the origin itself: a C-stick that rests off center reaches as far in every direction
+// (P+ in Dolphin's own netplay does the same).
+GCPadStatus AdapterInput(int chan)
+{
+  GCPadStatus pad = GCAdapter::Input(chan);
+  const auto origin = GCAdapter::Origin(chan);
+  if (!origin)
+    return pad;
+  const auto shift = [](u8 v, u8 rest, int center) {
+    return static_cast<u8>(std::clamp(int{v} - int{rest} + center, 0, 255));
+  };
+  pad.stickX = shift(pad.stickX, origin->stickX, GCPadStatus::MAIN_STICK_CENTER_X);
+  pad.stickY = shift(pad.stickY, origin->stickY, GCPadStatus::MAIN_STICK_CENTER_Y);
+  pad.substickX = shift(pad.substickX, origin->substickX, GCPadStatus::C_STICK_CENTER_X);
+  pad.substickY = shift(pad.substickY, origin->substickY, GCPadStatus::C_STICK_CENTER_Y);
+  pad.triggerLeft = shift(pad.triggerLeft, origin->triggerLeft, 0);
+  pad.triggerRight = shift(pad.triggerRight, origin->triggerRight, 0);
+  return pad;
+}
+
+constexpr u32 INPUT_LOG_EVERY = 600;
+constexpr int C_STICK_PUSHED = 0x30;
+
+// Every capture (many a frame while the frame waits for GekkoNet): the C-stick as read now, and,
+// in the first capture of a frame, as GekkoNet's sample of the frame (it takes the first input
+// added for each frame).
+void LogLocalInput(const GCPadStatus& pad)
+{
+  auto& l = s.input_log;
+  const int push = std::max(std::abs(int{pad.substickX} - GCPadStatus::C_STICK_CENTER_X),
+                            std::abs(int{pad.substickY} - GCPadStatus::C_STICK_CENTER_Y));
+  const bool pushed = push >= C_STICK_PUSHED;
+  if (pushed && !l.raw_pushed)
+    ++l.raw_pushes;
+  l.raw_pushed = pushed;
+  if (s.current_frame == l.frame)
+    return;
+  const Clock::time_point now = Clock::now();
+  if (l.frame >= 0)
+  {
+    l.max_gap_ms = std::max(
+        l.max_gap_ms, std::chrono::duration<double, std::milli>(now - l.at).count());
+  }
+  l.frame = s.current_frame;
+  l.at = now;
+  ++l.frames;
+  if (pushed && !l.sampled_pushed)
+    ++l.sampled_pushes;
+  l.sampled_pushed = pushed;
+  l.peak = std::max(l.peak, push);
+  if (l.frames < INPUT_LOG_EVERY)
+    return;
+  if (l.raw_pushes > 0 || l.sampled_pushes > 0)
+  {
+    AddLog(fmt::format("input: {} frames, C-stick pushed {} times ({} in the frames' samples, "
+                       "furthest {}), at most {:.1f} ms between samples, adapter at {:.0f} Hz",
+                       l.frames, l.raw_pushes, l.sampled_pushes, l.peak, l.max_gap_ms,
+                       GCAdapter::GetCurrentPollRate()));
+  }
+  l.frames = l.raw_pushes = l.sampled_pushes = 0;
+  l.max_gap_ms = 0;
+  l.peak = 0;
+}
+
 void CaptureLocalInput()
 {
   UpdateLocalController();
@@ -1511,7 +1606,7 @@ void CaptureLocalInput()
   GCPadStatus pad;
   if (s.local_adapter)
   {
-    pad = GCAdapter::Input(s.opts.local_pad);
+    pad = AdapterInput(s.opts.local_pad);
     Harness::ApplyPadOverride(s.opts.local_pad, &pad);
   }
   else
@@ -1520,6 +1615,7 @@ void CaptureLocalInput()
     g_controller_interface.UpdateInput();
     pad = Pad::GetStatus(s.opts.local_pad);
   }
+  LogLocalInput(pad);
   Input in{};
   EncodePad(pad, &in);
   AddLocalRequest(&in);
@@ -3773,6 +3869,8 @@ bool Arm(const Options& options, std::string* error)
   s.rollbacks = s.max_rollback = s.frames_resimulated = s.stall_polls = s.skipped_loads = 0;
   s.desyncs = s.saves = 0;
   s.last_desync_frame = -1;
+  s.input_log = {};
+  s.pick_frame = -1;
   for (auto& e : s.history)
     e.frame = -1;
   if (!StartNetwork())
