@@ -1,7 +1,7 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-#include "Core/NetPlaySDCard.h"
+#include "Core/Rollback/MachineSDCard.h"
 
 #include <algorithm>
 #include <chrono>
@@ -21,11 +21,10 @@
 #include "Core/CoreTiming.h"
 #include "Core/HW/SystemTimers.h"
 #include "Core/NetPlayCommon.h"
-#include "Core/NetPlayProto.h"
 #include "Core/System.h"
 #include "VideoCommon/OnScreenDisplay.h"
 
-namespace NetPlay::SDCard
+namespace Machine::SDCard
 {
 namespace
 {
@@ -36,13 +35,13 @@ constexpr size_t MANIFEST_ENTRY_MAX_BYTES = 1 + sizeof(Hash);
 constexpr u32 LZO_IN_LEN = 64 * 1024;
 constexpr u32 LZO_OUT_LEN = LZO_IN_LEN + (LZO_IN_LEN / 16) + 64 + 3;
 
-// Chunks a guest asks for at once, across all its waiting reads and prefetches (the host queues
-// at most CardServer::MAX_QUEUED_PER_PLAYER per guest).
+// Chunks a joiner asks for at once, across all its waiting reads and its background stream (a
+// player queues at most CardServer::MAX_QUEUED_PER_PLAYER per player).
 constexpr size_t MAX_OUTSTANDING_REQUESTS = 128;
-// A chunk the host sent wrong this many times counts as unavailable.
+// A chunk the players sent wrong this many times counts as unavailable.
 constexpr int MAX_BAD_DELIVERIES = 3;
 
-constexpr u32 HASH_CACHE_MAGIC = 0x4453504E;  // "NPSD"
+constexpr u32 HASH_CACHE_MAGIC = 0x4453534D;  // "MSSD"
 constexpr u32 HASH_CACHE_VERSION = 1;
 
 u64 NowMs()
@@ -57,7 +56,7 @@ bool IsAllZero(std::span<const u8> data)
   return std::ranges::all_of(data, [](u8 b) { return b == 0; });
 }
 
-// LZO-compressed data as NetPlay::CompressBufferIntoPacket writes it, read without trusting the
+// LZO-compressed data as NetPlay::CompressBufferIntoPacket (Dolphin's) writes it, read without trusting the
 // sender: the declared size is capped, and so is every block.
 std::optional<std::vector<u8>> ReadCompressed(sf::Packet& packet, u64 max_size)
 {
@@ -182,7 +181,7 @@ std::optional<FatVolume> ParseBootSector(const std::array<u8, 512>& bs, u64 volu
 std::string HashCachePath(const std::string& image_path)
 {
   const XXH64_hash_t key = XXH3_64bits(image_path.data(), image_path.size());
-  return fmt::format("{}NetPlaySD/{:016x}.bin", File::GetUserPath(D_CACHE_IDX), key);
+  return fmt::format("{}MachineSD/{:016x}.hashes", File::GetUserPath(D_CACHE_IDX), key);
 }
 
 std::optional<s64> ModificationTime(const std::string& path)
@@ -458,7 +457,7 @@ void WriteManifest(const Manifest& manifest, sf::Packet& packet)
     }
   }
   packet << manifest.size;
-  CompressBufferIntoPacket(entries, packet);
+  NetPlay::CompressBufferIntoPacket(entries, packet);
 }
 
 std::optional<Manifest> ReadManifest(sf::Packet& packet)
@@ -526,7 +525,7 @@ std::optional<std::vector<u32>> ReadChunkRequest(sf::Packet& packet)
 void WriteChunkData(u32 index, std::span<const u8> data, sf::Packet& packet)
 {
   packet << index << true;
-  CompressBufferIntoPacket(data, packet);
+  NetPlay::CompressBufferIntoPacket(data, packet);
 }
 
 void WriteChunkUnavailable(u32 index, sf::Packet& packet)
@@ -551,17 +550,6 @@ std::optional<ChunkData> ReadChunkData(sf::Packet& packet)
 
 // ---------------------------------------------------------------------------------- CardServer
 
-CardServer::CardServer(const std::string& image_path, std::shared_ptr<const Manifest> manifest,
-                       SendFunction send)
-    : m_image_path(image_path), m_manifest(std::move(manifest)),
-      m_header([](sf::Packet& packet) {
-        packet << MessageID::SyncSaveData << SyncSaveDataID::SDCardChunkData;
-      }),
-      m_send(std::move(send))
-{
-  m_thread = std::thread(&CardServer::ThreadFunc, this);
-}
-
 CardServer::CardServer(std::shared_ptr<const Manifest> manifest, ReadFunction read,
                        HeaderFunction header, SendFunction send)
     : m_manifest(std::move(manifest)), m_read(std::move(read)), m_header(std::move(header)),
@@ -580,30 +568,30 @@ CardServer::~CardServer()
   m_thread.join();
 }
 
-void CardServer::OnRequest(u8 pid, sf::Packet& packet)
+void CardServer::OnRequest(u8 player, sf::Packet& packet)
 {
   const std::optional<std::vector<u32>> chunks = ReadChunkRequest(packet);
   if (!chunks)
   {
-    WARN_LOG_FMT(NETPLAY, "SD card: malformed chunk request from player {}", pid);
+    WARN_LOG_FMT(BRAWLBACK, "SD card: malformed chunk request from player {}", player + 1);
     return;
   }
 
   {
     std::lock_guard lock(m_mutex);
-    size_t& queued = m_queued_per_player[pid];
+    size_t& queued = m_queued_per_player[player];
     for (const u32 c : *chunks)
     {
       // Only the chunks that hold data: a chunk no file uses may hold deleted files.
       if (c >= m_manifest->ChunkCount() || m_manifest->chunks[c].zero)
       {
-        WARN_LOG_FMT(NETPLAY, "SD card: player {} asked for chunk {}, which it may not have", pid,
-                     c);
+        WARN_LOG_FMT(BRAWLBACK, "SD card: player {} asked for chunk {}, which it may not have",
+                     player + 1, c);
         continue;
       }
       if (queued >= MAX_QUEUED_PER_PLAYER)
         break;
-      m_queue.emplace_back(pid, c);
+      m_queue.emplace_back(player, c);
       ++queued;
     }
   }
@@ -612,9 +600,6 @@ void CardServer::OnRequest(u8 pid, sf::Packet& packet)
 
 void CardServer::ThreadFunc()
 {
-  File::IOFile image;
-  if (!m_read)
-    image.Open(m_image_path, "rb");
   std::vector<u8> buffer(CHUNK_SIZE);
 
   while (true)
@@ -630,48 +615,40 @@ void CardServer::ThreadFunc()
       --m_queued_per_player[item.first];
     }
 
-    const auto [pid, index] = item;
+    const auto [player, index] = item;
     const u64 len = m_manifest->ChunkBytes(index);
     const std::span<u8> data(buffer.data(), len);
     sf::Packet packet;
     m_header(packet);
-    const bool read =
-        m_read ? m_read(index, data) :
-                 image &&
-                     image.Seek(static_cast<s64>(u64{index} * CHUNK_SIZE), File::SeekOrigin::Begin) &&
-                     image.ReadBytes(data.data(), data.size());
+    const bool read = m_read(index, data);
     if (read && HashChunk(data) == m_manifest->chunks[index].hash)
     {
       WriteChunkData(index, data, packet);
     }
     else
     {
-      // The card changed since its manifest was built (or cannot be read), or this player has
-      // not got the chunk (a guest serving what it has).
-      if (!m_read || read)
-        WARN_LOG_FMT(NETPLAY, "SD card: chunk {} no longer matches the manifest", index);
+      // This player has not got the chunk, or its card changed under the session.
+      if (read)
+        WARN_LOG_FMT(BRAWLBACK, "SD card: chunk {} no longer matches the manifest", index);
       WriteChunkUnavailable(index, packet);
     }
-    m_send(pid, std::move(packet));
+    m_send(player, std::move(packet));
   }
 }
 
 // --------------------------------------------------------------------------------- SessionCard
 
 SessionCard::SessionCard(Mode mode, const std::string& image_path,
-                         std::shared_ptr<const Manifest> manifest, bool write_back)
-    : m_mode(mode), m_image_path(image_path), m_manifest(std::move(manifest)),
-      m_write_back(write_back)
+                         std::shared_ptr<const Manifest> manifest)
+    : m_mode(mode), m_image_path(image_path), m_manifest(std::move(manifest))
 {
   m_clock = [] { return Core::System::GetInstance().GetCoreTiming().GetTicks(); };
   m_history_ticks = u64{Core::System::GetInstance().GetSystemTimers().GetTicksPerSecond()} * 10;
 }
 
-std::shared_ptr<SessionCard> SessionCard::CreateOwnCard(const std::string& image_path,
-                                                        bool write_back)
+std::shared_ptr<SessionCard> SessionCard::CreateOwnCard(const std::string& image_path)
 {
-  std::shared_ptr<SessionCard> card(
-      new SessionCard(Mode::OwnCard, image_path, nullptr, write_back));
+  std::shared_ptr<SessionCard> card(new SessionCard(Mode::OwnCard, image_path, nullptr));
   card->m_image.Open(image_path, "rb");
   card->m_size = card->m_image ? card->m_image.GetSize() : 0;
   if (card->m_size > MAX_CARD_SIZE)
@@ -680,52 +657,42 @@ std::shared_ptr<SessionCard> SessionCard::CreateOwnCard(const std::string& image
 }
 
 std::shared_ptr<SessionCard> SessionCard::CreateHostCard(const std::string& image_path,
-                                                         std::shared_ptr<const Manifest> manifest,
-                                                         bool write_back)
+                                                         std::shared_ptr<const Manifest> manifest)
 {
   std::shared_ptr<SessionCard> card(
-      new SessionCard(Mode::HostCard, image_path, std::move(manifest), write_back));
+      new SessionCard(Mode::HostCard, image_path, std::move(manifest)));
   card->m_image.Open(image_path, "rb");
   card->m_size = card->m_manifest->size;
   return card;
 }
 
-std::shared_ptr<SessionCard>
-SessionCard::CreateGuestCard(const std::string& image_path,
-                             std::shared_ptr<const Manifest> manifest,
-                             const std::optional<ImageHashes>& local, const std::string& cache_dir,
-                             std::shared_ptr<Remote> remote)
+std::shared_ptr<SessionCard> SessionCard::CreateGuestCard(const std::string& image_path,
+                                                          std::shared_ptr<const Manifest> manifest,
+                                                          const std::string& cache_dir,
+                                                          std::shared_ptr<Remote> remote)
 {
   std::shared_ptr<SessionCard> card(
-      new SessionCard(Mode::GuestCard, image_path, std::move(manifest), false));
+      new SessionCard(Mode::GuestCard, image_path, std::move(manifest)));
   card->m_size = card->m_manifest->size;
   card->m_remote = std::move(remote);
-  if (local)
-    card->m_image.Open(image_path, "rb");
-  const bool have_image = card->m_image && local && card->m_image.GetSize() == local->size;
+  card->m_image.Open(image_path, "rb");
+  const u64 own_size = card->m_image ? card->m_image.GetSize() : 0;
 
   const u32 count = card->ChunkCount();
   card->m_sources.resize(count, Source::Missing);
   for (u32 i = 0; i < count; ++i)
   {
-    const ChunkInfo& info = card->m_manifest->chunks[i];
-    if (info.zero)
+    if (card->m_manifest->chunks[i].zero)
     {
       card->m_sources[i] = Source::Zero;
       continue;
     }
-    // This card's chunk must be as long as the host's for the hashes to say they match.
-    const u64 len = card->ChunkBytes(i);
+    // This card's chunk must be as long as the session's for the hashes to say they match.
     const u64 start = u64{i} * CHUNK_SIZE;
-    if (have_image && i < local->hashes.size() && start + len <= local->size &&
-        std::min(CHUNK_SIZE, local->size - start) == len && local->hashes[i] == info.hash)
-    {
-      card->m_sources[i] = Source::Local;
-    }
+    if (start < own_size && std::min(CHUNK_SIZE, own_size - start) == card->ChunkBytes(i))
+      card->m_sources[i] = Source::Unchecked;
     else
-    {
       card->m_missing.push_back(i);
-    }
   }
 
   static std::atomic<u32> s_counter{0};
@@ -734,10 +701,12 @@ SessionCard::CreateGuestCard(const std::string& image_path,
   if (File::CreateFullPath(card->m_fetched_path))
     card->m_fetched_file.Open(card->m_fetched_path, "w+b");
   if (!card->m_fetched_file)
-    ERROR_LOG_FMT(NETPLAY, "SD card: could not create {}", card->m_fetched_path);
+    ERROR_LOG_FMT(BRAWLBACK, "SD card: could not create {}", card->m_fetched_path);
 
-  INFO_LOG_FMT(NETPLAY, "SD card: the host's card is {} bytes, {} chunks to fetch ({} bytes)",
-               card->m_size, card->m_missing.size(), card->MissingBytes());
+  INFO_LOG_FMT(BRAWLBACK,
+               "SD card: the session's card is {} bytes; {} bytes to fetch, {} bytes of this "
+               "player's card to check as the game reads them",
+               card->m_size, card->MissingBytes(), card->UncheckedBytes());
   return card;
 }
 
@@ -783,6 +752,44 @@ u64 SessionCard::GetWriteSeq() const
   return m_write_seq;
 }
 
+void SessionCard::CheckLocal(std::span<const u32> chunks)
+{
+  if (m_mode != Mode::GuestCard)
+    return;
+  std::vector<u32> unchecked;
+  {
+    std::lock_guard lock(m_fetch_mutex);
+    for (const u32 c : chunks)
+    {
+      if (c < m_sources.size() && m_sources[c] == Source::Unchecked)
+        unchecked.push_back(c);
+    }
+  }
+  if (unchecked.empty())
+    return;
+
+  std::vector<u8> buffer(CHUNK_SIZE);
+  std::lock_guard serve_lock(m_serve_mutex);
+  if (!m_serve_image)
+    m_serve_image.Open(m_image_path, "rb");
+  for (const u32 c : unchecked)
+  {
+    const std::span<u8> data(buffer.data(), ChunkBytes(c));
+    const bool same = m_serve_image &&
+                      m_serve_image.Seek(static_cast<s64>(u64{c} * CHUNK_SIZE),
+                                         File::SeekOrigin::Begin) &&
+                      m_serve_image.ReadBytes(data.data(), data.size()) &&
+                      HashChunk(data) == m_manifest->chunks[c].hash;
+    std::lock_guard lock(m_fetch_mutex);
+    if (m_sources[c] == Source::Unchecked)
+    {
+      m_sources[c] = same ? Source::Local : Source::Missing;
+      if (!same)
+        INFO_LOG_FMT(BRAWLBACK, "SD card: chunk {} of this player's card differs: fetched", c);
+    }
+  }
+}
+
 bool SessionCard::ReadBase(u32 index, u8* dst)
 {
   const u64 len = ChunkBytes(index);
@@ -818,6 +825,7 @@ bool SessionCard::ReadBase(u32 index, u8* dst)
              m_fetched_file.Seek(static_cast<s64>(it->second), File::SeekOrigin::Begin) &&
              m_fetched_file.ReadBytes(dst, len);
     }
+    case Source::Unchecked:
     case Source::Missing:
       return false;
     }
@@ -837,6 +845,7 @@ bool SessionCard::ReadChunk(u32 index, u8* dst)
   if (m_mode == Mode::GuestCard)
   {
     const u32 chunk[] = {index};
+    CheckLocal(chunk);
     if (!WaitForChunks(chunk, true))
       return false;
   }
@@ -864,23 +873,33 @@ bool SessionCard::Read(u64 offset, u8* dst, u64 size)
     }
   }
 
-  // A guest fetches everything the read needs at once.
+  // A guest checks its own chunks and fetches everything else the read needs at once.
   if (m_mode == Mode::GuestCard)
   {
+    std::vector<u32> range;
+    for (u32 c = first; c <= last; ++c)
+    {
+      if (!m_overlay.contains(c))
+        range.push_back(c);
+    }
+    CheckLocal(range);
     std::vector<u32> needed;
     {
       std::lock_guard lock(m_fetch_mutex);
-      for (u32 c = first; c <= last; ++c)
+      for (const u32 c : range)
       {
-        if (m_sources[c] == Source::Missing && !m_overlay.contains(c))
+        if (m_sources[c] == Source::Missing)
           needed.push_back(c);
       }
     }
     if (!needed.empty())
     {
       ++m_waits;
+      const u64 start = NowMs();
       if (!WaitForChunks(needed, true))
         return false;
+      INFO_LOG_FMT(BRAWLBACK, "SD card: a read waited {} ms for {} chunks from the players",
+                   NowMs() - start, needed.size());
     }
   }
 
@@ -908,22 +927,26 @@ bool SessionCard::Write(u64 offset, const u8* src, u64 size)
 
   const u32 first = static_cast<u32>(offset / CHUNK_SIZE);
   const u32 last = static_cast<u32>((offset + size - 1) / CHUNK_SIZE);
-  // A write of part of a chunk keeps the rest of it: a guest fetches those chunks first, so a
-  // write that fails changes nothing.
+  // A write of part of a chunk keeps the rest of it: a guest gets those chunks first, so a write
+  // that fails changes nothing.
   if (m_mode == Mode::GuestCard)
   {
+    std::vector<u32> partial;
+    for (const u32 c : {first, last})
+    {
+      const u64 chunk_start = u64{c} * CHUNK_SIZE;
+      const bool part = offset > chunk_start || offset + size < chunk_start + ChunkBytes(c);
+      if (part && !m_overlay.contains(c) && std::ranges::find(partial, c) == partial.end())
+        partial.push_back(c);
+    }
+    CheckLocal(partial);
     std::vector<u32> needed;
     {
       std::lock_guard lock(m_fetch_mutex);
-      for (const u32 c : {first, last})
+      for (const u32 c : partial)
       {
-        const u64 chunk_start = u64{c} * CHUNK_SIZE;
-        const bool partial = offset > chunk_start || offset + size < chunk_start + ChunkBytes(c);
-        if (partial && m_sources[c] == Source::Missing && !m_overlay.contains(c) &&
-            std::ranges::find(needed, c) == needed.end())
-        {
+        if (m_sources[c] == Source::Missing)
           needed.push_back(c);
-        }
       }
     }
     if (!needed.empty())
@@ -948,7 +971,7 @@ bool SessionCard::Write(u64 offset, const u8* src, u64 size)
     auto buffer = std::make_shared<std::vector<u8>>(len);
     if ((from != 0 || to != len) && !ReadChunk(c, buffer->data()))
     {
-      ERROR_LOG_FMT(NETPLAY, "SD card: could not read chunk {} to write part of it", c);
+      ERROR_LOG_FMT(BRAWLBACK, "SD card: could not read chunk {} to write part of it", c);
       return false;
     }
     std::memcpy(buffer->data() + from, src + done, to - from);
@@ -979,7 +1002,7 @@ void SessionCard::RewindTo(u64 write_seq)
   {
     // A state from after this point: only a rollback load happens in a session, and it never
     // goes forward.
-    WARN_LOG_FMT(NETPLAY, "SD card: cannot go forward to write {} from {}", write_seq,
+    WARN_LOG_FMT(BRAWLBACK, "SD card: cannot go forward to write {} from {}", write_seq,
                  m_write_seq);
     return;
   }
@@ -995,7 +1018,7 @@ void SessionCard::RewindTo(u64 write_seq)
   if (write_seq < m_pruned_seq)
   {
     // Rollback never goes back this far (the history covers seconds of emulated time).
-    WARN_LOG_FMT(NETPLAY, "SD card: rewound past the kept history (to write {})", write_seq);
+    WARN_LOG_FMT(BRAWLBACK, "SD card: rewound past the kept history (to write {})", write_seq);
   }
   m_write_seq = write_seq;
 }
@@ -1014,13 +1037,13 @@ void SessionCard::Deliver(const ChunkData& chunk)
 
     if (!chunk.ok)
     {
-      WARN_LOG_FMT(NETPLAY, "SD card: the host could not send chunk {}", chunk.index);
+      WARN_LOG_FMT(BRAWLBACK, "SD card: no player could send chunk {}", chunk.index);
       m_unavailable.insert(chunk.index);
     }
     else if (!valid)
     {
       // A wrong chunk is dropped and asked for again, a few times.
-      WARN_LOG_FMT(NETPLAY, "SD card: chunk {} from the host does not match its hash",
+      WARN_LOG_FMT(BRAWLBACK, "SD card: chunk {} from a player does not match its hash",
                    chunk.index);
       m_requested_at.erase(chunk.index);
       if (++m_bad_deliveries[chunk.index] >= MAX_BAD_DELIVERIES)
@@ -1066,9 +1089,23 @@ u64 SessionCard::MissingBytes() const
     return 0;
   std::lock_guard lock(m_fetch_mutex);
   u64 bytes = 0;
-  for (const u32 c : m_missing)
+  for (u32 c = 0; c < m_sources.size(); ++c)
   {
     if (m_sources[c] == Source::Missing)
+      bytes += ChunkBytes(c);
+  }
+  return bytes;
+}
+
+u64 SessionCard::UncheckedBytes() const
+{
+  if (m_mode != Mode::GuestCard)
+    return 0;
+  std::lock_guard lock(m_fetch_mutex);
+  u64 bytes = 0;
+  for (u32 c = 0; c < m_sources.size(); ++c)
+  {
+    if (m_sources[c] == Source::Unchecked)
       bytes += ChunkBytes(c);
   }
   return bytes;
@@ -1110,7 +1147,7 @@ bool SessionCard::WaitForChunks(std::span<const u32> chunks, bool keep_alive)
         return false;
       if (now - start >= FETCH_TIMEOUT_MS)
       {
-        ERROR_LOG_FMT(NETPLAY, "SD card: the host did not send its chunks in time");
+        ERROR_LOG_FMT(BRAWLBACK, "SD card: the players did not send its chunks in time");
         return false;
       }
       remote = m_remote;
@@ -1132,48 +1169,9 @@ bool SessionCard::WaitForChunks(std::span<const u32> chunks, bool keep_alive)
     if (keep_alive && !told_player && NowMs() - start >= 500)
     {
       told_player = true;
-      OSD::AddMessage("Loading the host's SD card...", 3000);
+      OSD::AddMessage("Loading the session's SD card...", 3000);
     }
   }
-}
-
-bool SessionCard::Prefetch(u64 budget, const std::atomic<bool>* cancel,
-                           const std::function<void(u64 done, u64 total)>& progress)
-{
-  if (m_mode != Mode::GuestCard)
-    return true;
-
-  std::vector<u32> chunks;
-  u64 total = 0;
-  {
-    std::lock_guard lock(m_fetch_mutex);
-    for (const u32 c : m_missing)
-    {
-      if (total >= budget)
-        break;
-      if (m_sources[c] == Source::Missing)
-      {
-        chunks.push_back(c);
-        total += ChunkBytes(c);
-      }
-    }
-  }
-
-  u64 done = 0;
-  for (size_t i = 0; i < chunks.size(); i += MAX_OUTSTANDING_REQUESTS)
-  {
-    if (cancel && cancel->load())
-      return false;
-    const size_t n = std::min(MAX_OUTSTANDING_REQUESTS, chunks.size() - i);
-    const std::span<const u32> window(chunks.data() + i, n);
-    if (!WaitForChunks(window, false))
-      return false;
-    for (const u32 c : window)
-      done += ChunkBytes(c);
-    if (progress)
-      progress(done, total);
-  }
-  return true;
 }
 
 void SessionCard::StartBackgroundFetch(std::span<const u32> first)
@@ -1183,11 +1181,12 @@ void SessionCard::StartBackgroundFetch(std::span<const u32> first)
   {
     std::lock_guard lock(m_fetch_mutex);
     m_background_order.clear();
-    m_background_order.reserve(m_missing.size());
+    m_background_order.reserve(first.size() + m_missing.size());
     std::vector<bool> queued(ChunkCount(), false);
     for (const u32 c : first)
     {
-      if (c < ChunkCount() && m_sources[c] == Source::Missing && !queued[c])
+      if (c < ChunkCount() && !queued[c] &&
+          (m_sources[c] == Source::Missing || m_sources[c] == Source::Unchecked))
       {
         queued[c] = true;
         m_background_order.push_back(c);
@@ -1206,9 +1205,10 @@ bool SessionCard::ReadForPeer(u32 index, std::span<u8> data)
 {
   if (m_mode == Mode::OwnCard || index >= ChunkCount() || data.size() != ChunkBytes(index))
     return false;
-  const u64 start = u64{index} * CHUNK_SIZE;
   if (m_mode == Mode::GuestCard)
   {
+    const u32 chunk[] = {index};
+    CheckLocal(chunk);
     std::lock_guard lock(m_fetch_mutex);
     switch (m_sources[index])
     {
@@ -1230,7 +1230,7 @@ bool SessionCard::ReadForPeer(u32 index, std::span<u8> data)
   if (!m_serve_image)
     m_serve_image.Open(m_image_path, "rb");
   return m_serve_image &&
-         m_serve_image.Seek(static_cast<s64>(start), File::SeekOrigin::Begin) &&
+         m_serve_image.Seek(static_cast<s64>(u64{index} * CHUNK_SIZE), File::SeekOrigin::Begin) &&
          m_serve_image.ReadBytes(data.data(), data.size());
 }
 
@@ -1249,14 +1249,24 @@ void SessionCard::BackgroundThreadFunc()
 
   while (!m_stop_background.load())
   {
+    std::vector<u32> candidates;
+    {
+      std::lock_guard lock(m_fetch_mutex);
+      if (m_detached || m_fetched_bytes >= BACKGROUND_CAP_BYTES ||
+          cursor >= m_background_order.size())
+      {
+        break;
+      }
+      while (cursor < m_background_order.size() && candidates.size() < BATCH)
+        candidates.push_back(m_background_order[cursor++]);
+    }
+    // This card's own chunks among them first: only those that differ are fetched.
+    CheckLocal(candidates);
     std::vector<u32> batch;
     {
       std::lock_guard lock(m_fetch_mutex);
-      if (m_detached || m_fetched_bytes >= BACKGROUND_CAP_BYTES)
-        break;
-      while (cursor < m_background_order.size() && batch.size() < BATCH)
+      for (const u32 c : candidates)
       {
-        const u32 c = m_background_order[cursor++];
         if (m_sources[c] == Source::Missing && !m_unavailable.contains(c) &&
             !m_requested_at.contains(c))
         {
@@ -1265,7 +1275,7 @@ void SessionCard::BackgroundThreadFunc()
       }
     }
     if (batch.empty())
-      break;
+      continue;
 
     // A failed chunk only fails the reads that need it; the stream goes on.
     WaitForChunks(batch, false);
@@ -1280,7 +1290,7 @@ void SessionCard::BackgroundThreadFunc()
       m_fetch_cv.wait_for(lock, std::chrono::milliseconds(50));
     }
   }
-  INFO_LOG_FMT(NETPLAY, "SD card: background fetch done ({} bytes)", streamed);
+  INFO_LOG_FMT(BRAWLBACK, "SD card: background fetch done ({} bytes)", streamed);
 }
 
 void SessionCard::Detach()
@@ -1293,36 +1303,4 @@ void SessionCard::Detach()
   m_stop_background = true;
   m_fetch_cv.notify_all();
 }
-
-bool SessionCard::Finish()
-{
-  Detach();
-  if (m_background_thread.joinable())
-    m_background_thread.join();
-
-  if (!m_write_back || m_overlay.empty() || m_mode == Mode::GuestCard)
-    return false;
-
-  m_image.Close();
-  File::IOFile image(m_image_path, "r+b");
-  if (!image)
-  {
-    ERROR_LOG_FMT(NETPLAY, "SD card: could not open {} to keep the session's writes",
-                  m_image_path);
-    return false;
-  }
-  for (const auto& [index, data] : m_overlay)
-  {
-    if (!image.Seek(static_cast<s64>(u64{index} * CHUNK_SIZE), File::SeekOrigin::Begin) ||
-        !image.WriteBytes(data->data(), data->size()))
-    {
-      ERROR_LOG_FMT(NETPLAY, "SD card: could not write chunk {} back to {}", index,
-                    m_image_path);
-      return true;
-    }
-  }
-  INFO_LOG_FMT(NETPLAY, "SD card: kept {} written chunks in {}", m_overlay.size(), m_image_path);
-  m_overlay.clear();
-  return true;
-}
-}  // namespace NetPlay::SDCard
+}  // namespace Machine::SDCard

@@ -155,20 +155,17 @@ void NetPlayDialog::CreateMainLayout()
   m_savedata_none_action = m_data_menu->addAction(tr("No Save Data"));
   m_savedata_none_action->setToolTip(
       tr("Netplay will start without any save data, and any created save data will be discarded at "
-         "the end of the Netplay session. Each player plays on their own SD card, and nothing "
-         "written to it is kept."));
+         "the end of the Netplay session."));
   m_savedata_none_action->setCheckable(true);
   m_savedata_load_only_action = m_data_menu->addAction(tr("Load Host's Save Data Only"));
   m_savedata_load_only_action->setToolTip(tr(
-      "Netplay will start using the Host's save data and SD card, but any save data created or "
-      "modified during the Netplay session will be discarded at the end of the session. Parts of "
-      "the Host's SD card that differ from yours are downloaded when the game reads them."));
+      "Netplay will start using the Host's save data, but any save data created or modified during "
+      "the Netplay session will be discarded at the end of the session."));
   m_savedata_load_only_action->setCheckable(true);
   m_savedata_load_and_write_action = m_data_menu->addAction(tr("Load and Write Host's Save Data"));
   m_savedata_load_and_write_action->setToolTip(
-      tr("Netplay will start using the Host's save data and SD card, and any save data created or "
-         "modified during the Netplay session will remain in the Host's local saves and SD card. "
-         "Other players' saves and SD cards are never changed."));
+      tr("Netplay will start using the Host's save data, and any save data created or modified "
+         "during the Netplay session will remain in the Host's local saves."));
   m_savedata_load_and_write_action->setCheckable(true);
 
   m_savedata_style_group = new QActionGroup(this);

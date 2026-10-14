@@ -57,9 +57,6 @@ struct NetSettings
   u32 mem1_size = 0;
   u32 mem2_size = 0;
   DiscIO::Region fallback_region{};
-  // The host's: whether the SD card is in, and whether the game may write to it (the writes only
-  // reach the session's card, see NetPlaySDCard.h).
-  bool sd_card_inserted = false;
   bool allow_sd_writes = false;
   bool oc_enable = false;
   float oc_factor = 0;
@@ -241,12 +238,7 @@ enum class SyncSaveDataID : u8
   RawData = 3,
   GCIData = 4,
   WiiData = 5,
-  GBAData = 6,
-  // The host's SD card (NetPlaySDCard.h): its manifest (host -> guests), a guest's request for
-  // chunks of it (guest -> host) and a chunk (host -> guest).
-  SDCardManifest = 7,
-  SDCardChunkRequest = 8,
-  SDCardChunkData = 9,
+  GBAData = 6
 };
 
 enum class SyncCodeID : u8

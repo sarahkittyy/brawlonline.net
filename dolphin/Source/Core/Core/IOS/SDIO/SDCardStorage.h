@@ -1,10 +1,10 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// What the emulated SD card reads and writes. Outside netplay this is the SD card image file
-// itself. A netplay session hands the slot its own storage instead (NetPlay::SDCard::SessionCard):
-// the session's writes land in a throwaway layer, a guest plays on the host's card, and the
-// layer rolls back with the rest of the machine.
+// What the emulated SD card reads and writes. Usually the SD card image file itself. A
+// whole-machine session (Other Games rooms) hands the slot its own storage instead
+// (Machine::SDCard::SessionCard): the session's writes land in a throwaway layer, a joiner plays
+// the session's card, and the layer rolls back with the rest of the machine.
 
 #pragma once
 
@@ -32,7 +32,7 @@ public:
   virtual void RewindTo(u64 write_seq) {}
 };
 
-// The SD card image file, read and written in place (Dolphin outside netplay).
+// The SD card image file, read and written in place (Dolphin outside a session).
 class SDCardFileStorage final : public SDCardStorage
 {
 public:

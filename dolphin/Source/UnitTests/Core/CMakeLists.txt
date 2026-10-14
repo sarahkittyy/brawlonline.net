@@ -61,9 +61,9 @@ target_include_directories(OnlineSecurityTest PRIVATE
 )
 target_compile_definitions(OnlineSecurityTest PRIVATE GEKKONET_STATIC GEKKONET_NO_ASIO)
 
-# The SD card in netplay (Core/NetPlaySDCard): the session's throwaway layer and its rollback, a
-# guest on the host's card, and hostile manifests, requests and chunks.
-add_dolphin_test(NetPlaySDCardTest NetPlaySDCardTest.cpp)
+# The SD card of a whole-machine session (Core/Rollback/MachineSDCard): the throwaway layer and its
+# rollback, a joiner on the session's card, and hostile manifests, requests and chunks.
+add_dolphin_test(MachineSDCardTest MachineSDCardTest.cpp)
 # Replay files (Core/Rollback/ReplayFile): round trip, cut and damaged files, hostile sizes.
 add_dolphin_test(ReplayFileTest Rollback/ReplayFileTest.cpp)
 # Spectating: the uploader's pacing, backoff and roles (Core/Online/Spectate).

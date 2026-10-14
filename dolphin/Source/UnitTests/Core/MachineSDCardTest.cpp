@@ -1,11 +1,11 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// The SD card in a netplay session (Core/NetPlaySDCard): the session's writes never reach an
-// image unless the host keeps them, they roll back with the machine, a guest plays on exactly
-// the host's card (its own chunks where they match, the host's fetched otherwise), and nothing
-// the other side sends is trusted (manifests, requests and chunks are checked; deleted data on
-// the host's card is never sent).
+// The SD card of a whole-machine session (Core/Rollback/MachineSDCard): the session's writes never
+// reach an image and they roll back with the machine, a joiner plays exactly the session's card
+// (its own chunks where they match, checked as they are read, the others fetched), and nothing
+// the other players send is trusted (manifests, requests and chunks are checked; deleted data on
+// a card is never sent).
 
 #include <algorithm>
 #include <array>
@@ -30,16 +30,15 @@
 #include "Common/SFMLHelper.h"
 #include "Common/StringUtil.h"
 #include "Core/NetPlayCommon.h"
-#include "Core/NetPlayProto.h"
-#include "Core/NetPlaySDCard.h"
+#include "Core/Rollback/MachineSDCard.h"
 
-using namespace NetPlay::SDCard;
+using namespace Machine::SDCard;
 
 namespace
 {
 constexpr u64 MiB = 1024 * 1024;
 
-class NetPlaySDCardTest : public ::testing::Test
+class MachineSDCardTest : public ::testing::Test
 {
 protected:
   void SetUp() override
@@ -147,18 +146,12 @@ protected:
     EXPECT_TRUE(manifest.has_value());
     GuestSetup g;
     g.manifest = std::make_shared<const Manifest>(std::move(*manifest));
-    std::optional<ImageHashes> local;
     if (guest_data)
-    {
       WriteFile(Path("guest.raw"), *guest_data);
-      local = HashImage(Path("guest.raw"));
-      EXPECT_TRUE(local.has_value());
-    }
     g.host = std::make_shared<FakeHost>();
     g.host->data = host_data;
     g.host->manifest = g.manifest;
-    g.card = SessionCard::CreateGuestCard(Path("guest.raw"), g.manifest, local, Path("cache"),
-                                          g.host);
+    g.card = SessionCard::CreateGuestCard(Path("guest.raw"), g.manifest, Path("cache"), g.host);
     g.host->card = g.card;
     return g;
   }
@@ -174,7 +167,9 @@ std::vector<u8> ReadAll(SessionCard& card)
   return out;
 }
 
-// What a CardServer sent, parsed back.
+// What a CardServer sent, parsed back (its packets start with the caller's header byte).
+constexpr u8 TEST_HEADER = 0x5A;
+
 struct SentChunk
 {
   u8 pid;
@@ -183,10 +178,9 @@ struct SentChunk
 
 std::optional<SentChunk> ParseSent(u8 pid, sf::Packet& packet)
 {
-  NetPlay::MessageID mid;
-  NetPlay::SyncSaveDataID sub;
-  packet >> mid >> sub;
-  if (mid != NetPlay::MessageID::SyncSaveData || sub != NetPlay::SyncSaveDataID::SDCardChunkData)
+  u8 header = 0;
+  packet >> header;
+  if (header != TEST_HEADER)
     return std::nullopt;
   auto chunk = ReadChunkData(packet);
   if (!chunk)
@@ -197,7 +191,7 @@ std::optional<SentChunk> ParseSent(u8 pid, sf::Packet& packet)
 
 // ------------------------------------------------------------------------------------ manifest
 
-TEST_F(NetPlaySDCardTest, ManifestRoundTrip)
+TEST_F(MachineSDCardTest, ManifestRoundTrip)
 {
   Manifest m;
   m.size = 5 * CHUNK_SIZE + 1000;  // the last chunk is short
@@ -224,7 +218,7 @@ TEST_F(NetPlaySDCardTest, ManifestRoundTrip)
   }
 }
 
-TEST_F(NetPlaySDCardTest, HostileManifestsAreRefused)
+TEST_F(MachineSDCardTest, HostileManifestsAreRefused)
 {
   auto encode = [](u64 size, const std::vector<u8>& entries) {
     sf::Packet p;
@@ -278,7 +272,7 @@ TEST_F(NetPlaySDCardTest, HostileManifestsAreRefused)
   }
 }
 
-TEST_F(NetPlaySDCardTest, ChunkRequestsAndDataAreChecked)
+TEST_F(MachineSDCardTest, ChunkRequestsAndDataAreChecked)
 {
   {
     sf::Packet p;
@@ -337,7 +331,7 @@ TEST_F(NetPlaySDCardTest, ChunkRequestsAndDataAreChecked)
 
 // --------------------------------------------------------------------------------- FAT / hashes
 
-TEST_F(NetPlaySDCardTest, FreeChunksFollowTheFat)
+TEST_F(MachineSDCardTest, FreeChunksFollowTheFat)
 {
   const std::string path = Path("card.raw");
   ASSERT_TRUE(Common::SDCardCreate(64, path));
@@ -380,7 +374,7 @@ TEST_F(NetPlaySDCardTest, FreeChunksFollowTheFat)
   EXPECT_TRUE((*free)[used_chunk + 1]);
 }
 
-TEST_F(NetPlaySDCardTest, FreeChunksBehindAnMbr)
+TEST_F(MachineSDCardTest, FreeChunksBehindAnMbr)
 {
   ASSERT_TRUE(Common::SDCardCreate(64, Path("volume.raw")));
   const std::vector<u8> volume = ReadFile(Path("volume.raw"));
@@ -405,7 +399,7 @@ TEST_F(NetPlaySDCardTest, FreeChunksBehindAnMbr)
   EXPECT_TRUE(free->back());
 }
 
-TEST_F(NetPlaySDCardTest, NotFatMeansEverythingInUse)
+TEST_F(MachineSDCardTest, NotFatMeansEverythingInUse)
 {
   WriteFile(Path("junk.raw"), PatternCard(4, 3));
   File::IOFile f(Path("junk.raw"), "rb");
@@ -420,7 +414,7 @@ TEST_F(NetPlaySDCardTest, NotFatMeansEverythingInUse)
   EXPECT_FALSE(FindFreeChunks(cut, card.size()));
 }
 
-TEST_F(NetPlaySDCardTest, HashesAreCachedUntilTheImageChanges)
+TEST_F(MachineSDCardTest, HashesAreCachedUntilTheImageChanges)
 {
   const std::string path = Path("card.raw");
   std::vector<u8> data = PatternCard(6, 1);
@@ -459,7 +453,7 @@ TEST_F(NetPlaySDCardTest, HashesAreCachedUntilTheImageChanges)
   EXPECT_FALSE(HashImage(path, &cancel));
 }
 
-TEST_F(NetPlaySDCardTest, ManifestZeroesFreeAndEmptyChunks)
+TEST_F(MachineSDCardTest, ManifestZeroesFreeAndEmptyChunks)
 {
   const std::string path = Path("card.raw");
   ASSERT_TRUE(Common::SDCardCreate(64, path));
@@ -475,22 +469,22 @@ TEST_F(NetPlaySDCardTest, ManifestZeroesFreeAndEmptyChunks)
   EXPECT_FALSE(m->chunks[0].zero) << "the boot sector";
   EXPECT_TRUE(m->chunks[50 * MiB / CHUNK_SIZE].zero) << "a free chunk with deleted data";
 
-  auto card = SessionCard::CreateHostCard(path, std::make_shared<const Manifest>(*m), false);
+  auto card = SessionCard::CreateHostCard(path, std::make_shared<const Manifest>(*m));
   std::vector<u8> chunk(CHUNK_SIZE, 1);
   ASSERT_TRUE(card->Read(50 * MiB, chunk.data(), chunk.size()));
   EXPECT_TRUE(std::ranges::all_of(chunk, [](u8 b) { return b == 0; }))
-      << "the host plays on the same card as its guests";
+      << "the starter plays the same card as its joiners";
 }
 
 // ------------------------------------------------------------------------------ the session card
 
-TEST_F(NetPlaySDCardTest, OwnCardWritesNeverReachTheImage)
+TEST_F(MachineSDCardTest, OwnCardWritesNeverReachTheImage)
 {
   const std::string path = Path("card.raw");
   const std::vector<u8> original = PatternCard(4, 2);
   WriteFile(path, original);
 
-  auto card = SessionCard::CreateOwnCard(path, false);
+  auto card = SessionCard::CreateOwnCard(path);
   card->SetClockForTesting([] { return u64{0}; }, 100);
   ASSERT_TRUE(card->IsOpen());
   EXPECT_EQ(card->GetSize(), original.size());
@@ -505,8 +499,6 @@ TEST_F(NetPlaySDCardTest, OwnCardWritesNeverReachTheImage)
   EXPECT_EQ(ReadAll(*card), expected) << "the game reads its writes";
   EXPECT_EQ(ReadFile(path), original) << "the image is untouched";
 
-  EXPECT_FALSE(card->Finish()) << "a card that does not keep its writes";
-  EXPECT_EQ(ReadFile(path), original);
 
   // Out of range.
   u8 b = 0;
@@ -514,30 +506,12 @@ TEST_F(NetPlaySDCardTest, OwnCardWritesNeverReachTheImage)
   EXPECT_FALSE(card->Write(original.size() - 1, w.data(), 2));
 }
 
-TEST_F(NetPlaySDCardTest, KeptWritesAreWrittenBackAtTheEnd)
-{
-  const std::string path = Path("card.raw");
-  const std::vector<u8> original = PatternCard(4, 5);
-  WriteFile(path, original);
-
-  auto card = SessionCard::CreateOwnCard(path, true);
-  card->SetClockForTesting([] { return u64{0}; }, 100);
-  std::vector<u8> w(70000, 0x11);
-  ASSERT_TRUE(card->Write(100, w.data(), w.size()));
-  EXPECT_EQ(ReadFile(path), original) << "nothing reaches the image during the game";
-
-  EXPECT_TRUE(card->Finish());
-  std::vector<u8> expected = original;
-  std::copy(w.begin(), w.end(), expected.begin() + 100);
-  EXPECT_EQ(ReadFile(path), expected);
-}
-
-TEST_F(NetPlaySDCardTest, WritesRollBack)
+TEST_F(MachineSDCardTest, WritesRollBack)
 {
   const std::string path = Path("card.raw");
   const std::vector<u8> original = PatternCard(3, 9);
   WriteFile(path, original);
-  auto card = SessionCard::CreateOwnCard(path, false);
+  auto card = SessionCard::CreateOwnCard(path);
   u64 now = 0;
   card->SetClockForTesting([&] { return now; }, 1000);
 
@@ -570,7 +544,7 @@ TEST_F(NetPlaySDCardTest, WritesRollBack)
   EXPECT_EQ(ReadAll(*card), after_b);
 }
 
-TEST_F(NetPlaySDCardTest, GuestPlaysOnTheHostsCard)
+TEST_F(MachineSDCardTest, GuestPlaysOnTheHostsCard)
 {
   const std::vector<u8> host = PatternCard(16, 1);
   std::vector<u8> guest = host;
@@ -582,22 +556,23 @@ TEST_F(NetPlaySDCardTest, GuestPlaysOnTheHostsCard)
   GuestSetup g = MakeGuest(host, &guest);
   EXPECT_EQ(g.card->GetMode(), SessionCard::Mode::GuestCard);
   EXPECT_EQ(g.card->GetSize(), host.size());
-  EXPECT_EQ(g.card->MissingBytes(), 4 * CHUNK_SIZE);
+  EXPECT_EQ(g.card->MissingBytes(), 2 * CHUNK_SIZE) << "chunks 14 and 15: its card has none";
+  EXPECT_EQ(g.card->UncheckedBytes(), 14 * CHUNK_SIZE);
 
   EXPECT_EQ(ReadAll(*g.card), host);
   std::vector<u32> requested = g.host->Requested();
   std::ranges::sort(requested);
   EXPECT_EQ(requested, std::vector<u32>({3, 9, 14, 15})) << "only what differs is fetched";
   EXPECT_EQ(g.card->MissingBytes(), 0u);
+  EXPECT_EQ(g.card->UncheckedBytes(), 0u);
 
   // Reading again fetches nothing more; the guest's own image is never written.
   EXPECT_EQ(ReadAll(*g.card), host);
   EXPECT_EQ(g.host->Requested().size(), 4u);
   EXPECT_EQ(ReadFile(Path("guest.raw")), guest);
-  EXPECT_FALSE(g.card->Finish()) << "a guest never keeps the session's writes";
 }
 
-TEST_F(NetPlaySDCardTest, GuestWithoutACardFetchesEverythingButZeroes)
+TEST_F(MachineSDCardTest, GuestWithoutACardFetchesEverythingButZeroes)
 {
   std::vector<u8> host = PatternCard(8, 4);
   std::fill_n(host.begin() + 5 * CHUNK_SIZE, CHUNK_SIZE, u8{0});
@@ -608,7 +583,7 @@ TEST_F(NetPlaySDCardTest, GuestWithoutACardFetchesEverythingButZeroes)
     EXPECT_NE(c, 5u) << "an all-zero chunk is never fetched";
 }
 
-TEST_F(NetPlaySDCardTest, PartialWriteFetchesTheRestOfTheChunk)
+TEST_F(MachineSDCardTest, PartialWriteFetchesTheRestOfTheChunk)
 {
   const std::vector<u8> host = PatternCard(4, 6);
   GuestSetup g = MakeGuest(host, nullptr);
@@ -629,7 +604,7 @@ TEST_F(NetPlaySDCardTest, PartialWriteFetchesTheRestOfTheChunk)
   EXPECT_EQ(ReadAll(*g.card), expected);
 }
 
-TEST_F(NetPlaySDCardTest, BadChunksFromTheHostAreRejected)
+TEST_F(MachineSDCardTest, BadChunksFromTheHostAreRejected)
 {
   const std::vector<u8> host = PatternCard(6, 8);
   GuestSetup g = MakeGuest(host, nullptr);
@@ -657,7 +632,7 @@ TEST_F(NetPlaySDCardTest, BadChunksFromTheHostAreRejected)
   EXPECT_TRUE(std::equal(buf.begin(), buf.end(), host.begin() + CHUNK_SIZE));
 }
 
-TEST_F(NetPlaySDCardTest, DetachEndsAWaitingRead)
+TEST_F(MachineSDCardTest, DetachEndsAWaitingRead)
 {
   const std::vector<u8> host = PatternCard(4, 2);
   GuestSetup g = MakeGuest(host, nullptr);
@@ -675,16 +650,7 @@ TEST_F(NetPlaySDCardTest, DetachEndsAWaitingRead)
   EXPECT_GT(g.host->keep_alives, 0) << "the game's connection is kept alive while it waits";
 }
 
-TEST_F(NetPlaySDCardTest, PrefetchTakesTheFirstChunksUpToItsBudget)
-{
-  const std::vector<u8> host = PatternCard(10, 3);
-  GuestSetup g = MakeGuest(host, nullptr);
-  EXPECT_TRUE(g.card->Prefetch(3 * CHUNK_SIZE, nullptr));
-  EXPECT_EQ(g.host->Requested(), std::vector<u32>({0, 1, 2}));
-  EXPECT_EQ(g.card->MissingBytes(), 7 * CHUNK_SIZE);
-}
-
-TEST_F(NetPlaySDCardTest, BackgroundFetchStreamsTheRest)
+TEST_F(MachineSDCardTest, BackgroundFetchStreamsTheRest)
 {
   const std::vector<u8> host = PatternCard(6, 7);
   GuestSetup g = MakeGuest(host, nullptr);
@@ -699,7 +665,21 @@ TEST_F(NetPlaySDCardTest, BackgroundFetchStreamsTheRest)
 
 // ------------------------------------------------------------------------------ the card server
 
-TEST_F(NetPlaySDCardTest, CardServerSendsOnlyChunksWithData)
+std::unique_ptr<CardServer> ImageServer(const std::string& path,
+                                        std::shared_ptr<const Manifest> manifest,
+                                        CardServer::SendFunction send)
+{
+  auto image = std::make_shared<File::IOFile>(path, "rb");
+  return std::make_unique<CardServer>(
+      std::move(manifest),
+      [image](u32 index, std::span<u8> data) {
+        return image->Seek(static_cast<s64>(u64{index} * CHUNK_SIZE), File::SeekOrigin::Begin) &&
+               image->ReadBytes(data.data(), data.size());
+      },
+      [](sf::Packet& p) { p << TEST_HEADER; }, std::move(send));
+}
+
+TEST_F(MachineSDCardTest, CardServerSendsOnlyChunksWithData)
 {
   const std::string path = Path("host.raw");
   std::vector<u8> host = PatternCard(8, 1);
@@ -710,7 +690,7 @@ TEST_F(NetPlaySDCardTest, CardServerSendsOnlyChunksWithData)
   std::mutex mutex;
   std::vector<SentChunk> sent;
   {
-    CardServer server(path, manifest, [&](u8 pid, sf::Packet&& p) {
+    auto server = ImageServer(path, manifest, [&](u8 pid, sf::Packet&& p) {
       auto s = ParseSent(pid, p);
       ASSERT_TRUE(s);
       std::lock_guard lock(mutex);
@@ -720,11 +700,11 @@ TEST_F(NetPlaySDCardTest, CardServerSendsOnlyChunksWithData)
     sf::Packet request;
     const u32 chunks[] = {1, 6, 99, 7};  // 6 is all zero, 99 is past the card
     WriteChunkRequest(chunks, request);
-    server.OnRequest(2, request);
+    server->OnRequest(2, request);
 
     sf::Packet malformed;
     malformed << u16{5};
-    server.OnRequest(2, malformed);
+    server->OnRequest(2, malformed);
 
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (std::chrono::steady_clock::now() < deadline)
@@ -750,7 +730,7 @@ TEST_F(NetPlaySDCardTest, CardServerSendsOnlyChunksWithData)
   }
 }
 
-TEST_F(NetPlaySDCardTest, CardServerRefusesAChangedChunk)
+TEST_F(MachineSDCardTest, CardServerRefusesAChangedChunk)
 {
   const std::string path = Path("host.raw");
   std::vector<u8> host = PatternCard(4, 1);
@@ -762,7 +742,7 @@ TEST_F(NetPlaySDCardTest, CardServerRefusesAChangedChunk)
   std::mutex mutex;
   std::vector<SentChunk> sent;
   {
-    CardServer server(path, manifest, [&](u8 pid, sf::Packet&& p) {
+    auto server = ImageServer(path, manifest, [&](u8 pid, sf::Packet&& p) {
       auto s = ParseSent(pid, p);
       ASSERT_TRUE(s);
       std::lock_guard lock(mutex);
@@ -771,7 +751,7 @@ TEST_F(NetPlaySDCardTest, CardServerRefusesAChangedChunk)
     sf::Packet request;
     const u32 chunks[] = {2};
     WriteChunkRequest(chunks, request);
-    server.OnRequest(3, request);
+    server->OnRequest(3, request);
     const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
     while (std::chrono::steady_clock::now() < deadline)
     {
@@ -787,7 +767,7 @@ TEST_F(NetPlaySDCardTest, CardServerRefusesAChangedChunk)
   EXPECT_FALSE(sent[0].chunk.ok);
 }
 
-TEST_F(NetPlaySDCardTest, HostToGuestEndToEnd)
+TEST_F(MachineSDCardTest, HostToGuestEndToEnd)
 {
   // The real wire format between a CardServer and a guest card.
   const std::string host_path = Path("host.raw");
@@ -802,7 +782,7 @@ TEST_F(NetPlaySDCardTest, HostToGuestEndToEnd)
   auto shared = std::make_shared<const Manifest>(std::move(*manifest));
 
   std::weak_ptr<SessionCard> weak_card;
-  CardServer server(host_path, shared, [&](u8, sf::Packet&& p) {
+  auto server = ImageServer(host_path, shared, [&](u8, sf::Packet&& p) {
     auto s = ParseSent(0, p);
     ASSERT_TRUE(s);
     if (auto card = weak_card.lock())
@@ -820,12 +800,11 @@ TEST_F(NetPlaySDCardTest, HostToGuestEndToEnd)
     }
   };
   auto wire = std::make_shared<Wire>();
-  wire->server = &server;
+  wire->server = server.get();
 
   std::vector<u8> guest = PatternCard(12, 9);  // nothing in common
   WriteFile(Path("guest.raw"), guest);
-  auto card = SessionCard::CreateGuestCard(Path("guest.raw"), shared, HashImage(Path("guest.raw")),
-                                           Path("cache"), wire);
+  auto card = SessionCard::CreateGuestCard(Path("guest.raw"), shared, Path("cache"), wire);
   weak_card = card;
   EXPECT_EQ(ReadAll(*card), host);
   card->Detach();
@@ -833,7 +812,7 @@ TEST_F(NetPlaySDCardTest, HostToGuestEndToEnd)
 
 // ------------------------------------------------- whole-machine sessions (Rollback/MachineSession)
 
-TEST_F(NetPlaySDCardTest, CanonicalManifestSurvivesTheWire)
+TEST_F(MachineSDCardTest, CanonicalManifestSurvivesTheWire)
 {
   std::vector<u8> host = PatternCard(6, 3);
   std::fill_n(host.begin() + 2 * CHUNK_SIZE, CHUNK_SIZE, u8{0});
@@ -853,7 +832,7 @@ TEST_F(NetPlaySDCardTest, CanonicalManifestSurvivesTheWire)
       << "another card is another manifest";
 }
 
-TEST_F(NetPlaySDCardTest, PlayersServeOnlyTheChunksTheyHave)
+TEST_F(MachineSDCardTest, PlayersServeOnlyTheChunksTheyHave)
 {
   std::vector<u8> host = PatternCard(6, 4);
   std::fill_n(host.begin() + 5 * CHUNK_SIZE, CHUNK_SIZE, u8{0});
@@ -881,20 +860,20 @@ TEST_F(NetPlaySDCardTest, PlayersServeOnlyTheChunksTheyHave)
   EXPECT_TRUE(std::equal(chunk.begin(), chunk.end(), host.begin()));
 
   WriteFile(Path("own.raw"), host);
-  auto own = SessionCard::CreateOwnCard(Path("own.raw"), false);
+  auto own = SessionCard::CreateOwnCard(Path("own.raw"));
   EXPECT_FALSE(own->ReadForPeer(0, chunk)) << "a player's own card is nobody else's";
 
-  auto starter = SessionCard::CreateHostCard(Path("host.raw"), g.manifest, false);
+  auto starter = SessionCard::CreateHostCard(Path("host.raw"), g.manifest);
   EXPECT_TRUE(starter->ReadForPeer(1, chunk));
   EXPECT_TRUE(std::equal(chunk.begin(), chunk.end(), host.begin() + CHUNK_SIZE));
   g.card->Detach();
 }
 
-TEST_F(NetPlaySDCardTest, ReadChunksListsFirstReadsInOrder)
+TEST_F(MachineSDCardTest, ReadChunksListsFirstReadsInOrder)
 {
   const std::vector<u8> data = PatternCard(6, 5);
   WriteFile(Path("card.raw"), data);
-  auto card = SessionCard::CreateOwnCard(Path("card.raw"), false);
+  auto card = SessionCard::CreateOwnCard(Path("card.raw"));
   std::vector<u8> buffer(2 * CHUNK_SIZE);
   ASSERT_TRUE(card->Read(3 * CHUNK_SIZE + 10, buffer.data(), 20));
   ASSERT_TRUE(card->Read(1 * CHUNK_SIZE, buffer.data(), 8));
@@ -904,7 +883,7 @@ TEST_F(NetPlaySDCardTest, ReadChunksListsFirstReadsInOrder)
   EXPECT_EQ(card->ReadChunks(2), (std::vector<u32>{3, 1}));
 }
 
-TEST_F(NetPlaySDCardTest, BackgroundFetchTakesTheGivenChunksFirst)
+TEST_F(MachineSDCardTest, BackgroundFetchTakesTheGivenChunksFirst)
 {
   const std::vector<u8> host = PatternCard(10, 6);
   GuestSetup g = MakeGuest(host, nullptr);
@@ -923,7 +902,7 @@ TEST_F(NetPlaySDCardTest, BackgroundFetchTakesTheGivenChunksFirst)
   EXPECT_EQ(ReadAll(*g.card), host);
 }
 
-TEST_F(NetPlaySDCardTest, AGuestFetchesFromAnotherGuest)
+TEST_F(MachineSDCardTest, AGuestFetchesFromAnotherGuest)
 {
   // A room: the session's card comes from its starter, the second joiner fetches from the first
   // (the starter may have left), through servers that read from the players' cards.
@@ -970,44 +949,13 @@ TEST_F(NetPlaySDCardTest, AGuestFetchesFromAnotherGuest)
   std::vector<u8> mine = host;
   mine[2 * CHUNK_SIZE] ^= 0x40;  // this joiner's own copy differs in one chunk
   WriteFile(Path("second.raw"), mine);
-  auto second = SessionCard::CreateGuestCard(Path("second.raw"), first.manifest,
-                                             HashImage(Path("second.raw")), Path("cache2"), wire);
+  auto second =
+      SessionCard::CreateGuestCard(Path("second.raw"), first.manifest, Path("cache2"), wire);
   second_weak = second;
-  EXPECT_EQ(second->MissingBytes(), CHUNK_SIZE);
+  EXPECT_EQ(second->MissingBytes(), 0u) << "nothing known to differ before it is read";
+  EXPECT_EQ(second->UncheckedBytes(), 8 * CHUNK_SIZE);
   EXPECT_EQ(ReadAll(*second), host);
+  EXPECT_EQ(second->GetStats().fetched_bytes, CHUNK_SIZE) << "only the chunk that differs";
   second->Detach();
   first.card->Detach();
-}
-
-// -------------------------------------------------------------------------------- code names
-
-TEST(NetPlayCodeNames, AreCleanedAndBounded)
-{
-  EXPECT_EQ(NetPlay::SanitizeCodeName("  Unlock\tAll\x01 Characters \n"), "UnlockAll Characters");
-  const std::string long_name(100, 'x');
-  EXPECT_EQ(NetPlay::SanitizeCodeName(long_name).size(), NetPlay::MAX_CODE_NAME_BYTES);
-
-  // Cut inside a UTF-8 sequence: the partial character goes.
-  std::string utf8(NetPlay::MAX_CODE_NAME_BYTES - 1, 'a');
-  utf8 += "\xE3\x81\x82";  // a 3-byte character straddling the limit
-  const std::string cut = NetPlay::SanitizeCodeName(utf8);
-  EXPECT_EQ(cut, std::string(NetPlay::MAX_CODE_NAME_BYTES - 1, 'a'));
-
-  std::vector<std::string> names = {"Infinite Time", "", "\x02\x03", "All Stages"};
-  sf::Packet p;
-  NetPlay::WriteCodeNames(names, p);
-  EXPECT_EQ(NetPlay::ReadCodeNames(p), std::vector<std::string>({"Infinite Time", "All Stages"}));
-
-  sf::Packet none;
-  EXPECT_TRUE(NetPlay::ReadCodeNames(none).empty()) << "an older host sends no names";
-
-  sf::Packet too_many;
-  too_many << static_cast<u16>(NetPlay::MAX_CODE_NAMES + 1);
-  EXPECT_TRUE(NetPlay::ReadCodeNames(too_many).empty());
-
-  std::vector<std::string> many;
-  for (int i = 0; i < 11; ++i)
-    many.push_back(fmt::format("Code {}", i));
-  EXPECT_EQ(NetPlay::DescribeCodeNames(many),
-            "Code 0, Code 1, Code 2, Code 3, Code 4, Code 5, Code 6, Code 7 and 3 more");
 }

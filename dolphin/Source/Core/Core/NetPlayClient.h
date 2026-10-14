@@ -58,12 +58,6 @@ struct SerializedWiimoteState;
 
 namespace NetPlay
 {
-namespace SDCard
-{
-struct Manifest;
-class SessionCard;
-}  // namespace SDCard
-
 // Brawl pad memory layout constants (EXI-style injection)
 // gfPadSystem instance at 0x805bacc0, raw pads at +0x40, stride sizeof(gfPadStatus)
 static constexpr u32 BRAWL_PADSYSTEM_INSTANCE = 0x805bacc0;
@@ -227,8 +221,6 @@ public:
 
   void SetWiiSyncData(std::unique_ptr<IOS::HLE::FS::FileSystem> fs, std::vector<u64> titles,
                       std::string redirect_folder);
-  // The running (or last) game's SD card, for the harness: nullptr outside a game.
-  std::shared_ptr<SDCard::SessionCard> GetSDCardSession() const;
 
   static SyncIdentifier GetSDCardIdentifier();
 
@@ -506,13 +498,6 @@ private:
   void OnSyncSaveDataGCI(sf::Packet& packet);
   void OnSyncSaveDataWii(sf::Packet& packet);
   void OnSyncSaveDataGBA(sf::Packet& packet);
-  void OnSyncSaveDataSDCard(sf::Packet& packet);
-  void OnSDCardChunkData(sf::Packet& packet);
-  void StopSDCardSync();
-  // The SD card session the game about to boot plays on.
-  std::shared_ptr<SDCard::SessionCard> MakeSDCardSession();
-  // From the emulation thread while a read of the SD card waits for the host's chunks.
-  void KeepGekkoAliveWhileStalled();
   void OnSyncCodes(sf::Packet& packet);
   void OnSyncCodesNotify();
   void OnSyncCodesNotifyGecko(sf::Packet& packet);
@@ -545,10 +530,6 @@ private:
   u8 m_sync_save_data_count = 0;
   u8 m_sync_save_data_success_count = 0;
   u16 m_sync_gecko_codes_count = 0;
-  // The names the host gave its synced codes (shown to the guest; nothing checks them).
-  std::vector<std::string> m_synced_code_names;
-  std::vector<std::string> m_synced_ar_code_names;
-  std::vector<std::string> SyncedCodeNames() const;
   u16 m_sync_gecko_codes_success_count = 0;
   bool m_sync_gecko_codes_complete = false;
   u16 m_sync_ar_codes_count = 0;
@@ -562,18 +543,6 @@ private:
   std::unique_ptr<IOS::HLE::FS::FileSystem> m_wii_sync_fs;
   std::vector<u64> m_wii_sync_titles;
   std::string m_wii_sync_redirect_folder;
-
-  // The SD card (NetPlaySDCard.h). A guest's card for the host's is prepared during the save
-  // sync (pending) and handed to the game at boot (active).
-  class SDCardRemote;
-  mutable std::mutex m_sd_card_mutex;
-  std::shared_ptr<SDCard::SessionCard> m_pending_sd_card;
-  std::shared_ptr<SDCard::SessionCard> m_active_sd_card;
-  std::shared_ptr<SDCardRemote> m_sd_card_remote;
-  std::thread m_sd_card_sync_thread;
-  std::atomic<bool> m_sd_card_sync_cancel{false};
-  // The prepared card's result for the netplay thread to report: -1 none, 0 failed, 1 ready.
-  std::atomic<int> m_sd_card_sync_result{-1};
 
   // GekkoNet adapter state
   struct GekkoNetPacket
@@ -735,9 +704,6 @@ private:
 };
 
 void NetPlay_Enable(NetPlayClient* const np);
-// The host's server, once its SD card's manifest is built (nullptr: no card sync this game); the
-// host's own client plays on that card at the next boot.
-void SetHostSDCardManifest(std::shared_ptr<const SDCard::Manifest> manifest);
 void NetPlay_Disable();
 bool NetPlay_GetWiimoteData(const std::span<NetPlayClient::WiimoteDataBatchEntry>& entries);
 unsigned int NetPlay_GetLocalWiimoteForSlot(unsigned int slot);

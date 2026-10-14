@@ -10,7 +10,6 @@
 #include <cstring>
 #include <deque>
 #include <functional>
-#include <future>
 #include <map>
 #include <mutex>
 #include <set>
@@ -70,11 +69,11 @@
 #include "Core/IOS/USB/Bluetooth/WiimoteDevice.h"
 #include "Core/Harness/Harness.h"
 #include "Core/NetPlayProto.h"
-#include "Core/NetPlaySDCard.h"
 #include "Core/Online/ModsRoom.h"
 #include "Core/PowerPC/JitInterface.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/MachineSDCard.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/RollbackManager.h"
 #include "Core/State.h"
@@ -113,7 +112,7 @@ constexpr u8 CHANNEL_COUNT = 4;
 // A CHANNEL_SD packet: one of these, then NetPlaySDCard's chunk request or chunk.
 constexpr u8 SD_REQUEST = 0;
 constexpr u8 SD_CHUNK = 1;
-constexpr size_t MAX_SD_PACKET = 2 * NetPlay::SDCard::CHUNK_SIZE;
+constexpr size_t MAX_SD_PACKET = 2 * SDCard::CHUNK_SIZE;
 // The chunks the game has read that a machine image lists for the joiner to fetch first.
 constexpr size_t MAX_SD_HOT_CHUNKS = 32768;
 constexpr size_t MAX_CONTROL_SIZE = 4096;
@@ -335,18 +334,15 @@ struct State
   // answering the other players' requests for its chunks, and what goes out on CHANNEL_SD.
   // A joiner asks the player that sent its image first, and the others for chunks that player
   // has not got (`sd_tried`: the slots that said so, as bits; `sd_asked`: whom it asked last).
-  std::shared_ptr<NetPlay::SDCard::SessionCard> sd_card;
+  std::shared_ptr<SDCard::SessionCard> sd_card;
   std::vector<u8> sd_manifest_wire, sd_manifest_canon;
-  std::unique_ptr<NetPlay::SDCard::CardServer> sd_server;
+  std::unique_ptr<SDCard::CardServer> sd_server;
   std::deque<std::pair<int, std::vector<u8>>> sd_tx;
   std::map<u32, u8> sd_tried;
   std::map<u32, int> sd_asked;
   int sd_source = -1;
-  // A joiner's own card (CPU thread): its path and its chunks' hashes, computed while it waits
-  // for the image, to compare with the session's card.
+  // A joiner's own card (CPU thread), checked chunk by chunk against the session's card.
   std::string sd_path;
-  std::shared_future<std::optional<NetPlay::SDCard::ImageHashes>> sd_local;
-  std::atomic<bool> sd_cancel{false};
 
   // GekkoNet and the frame loop (CPU thread).
   GekkoSession* gekko = nullptr;
@@ -779,12 +775,12 @@ void RequestChunksLocked(std::span<const u32> chunks)
   for (int slot = 0; slot < MAX_PLAYERS; ++slot)
   {
     const std::vector<u32>& list = by_slot[slot];
-    for (size_t i = 0; i < list.size(); i += NetPlay::SDCard::MAX_REQUEST_CHUNKS)
+    for (size_t i = 0; i < list.size(); i += SDCard::MAX_REQUEST_CHUNKS)
     {
-      const size_t n = std::min<size_t>(NetPlay::SDCard::MAX_REQUEST_CHUNKS, list.size() - i);
+      const size_t n = std::min<size_t>(SDCard::MAX_REQUEST_CHUNKS, list.size() - i);
       sf::Packet packet;
       packet << SD_REQUEST;
-      NetPlay::SDCard::WriteChunkRequest(std::span<const u32>(list.data() + i, n), packet);
+      SDCard::WriteChunkRequest(std::span<const u32>(list.data() + i, n), packet);
       const u8* data = static_cast<const u8*>(packet.getData());
       s.sd_tx.emplace_back(slot, std::vector<u8>(data, data + packet.getDataSize()));
     }
@@ -808,7 +804,7 @@ void HandleSDPacket(int slot, const u8* data, size_t size)
   }
   if (data[0] != SD_CHUNK || !s.sd_card)
     return;
-  const std::optional<NetPlay::SDCard::ChunkData> chunk = NetPlay::SDCard::ReadChunkData(packet);
+  const std::optional<SDCard::ChunkData> chunk = SDCard::ReadChunkData(packet);
   if (!chunk)
   {
     WARN_LOG_FMT(BRAWLBACK, "machine: player {} sent an SD card chunk that is not valid", slot + 1);
@@ -841,19 +837,19 @@ void HandleSDPacket(int slot, const u8* data, size_t size)
 // This machine plays the session's card `card` (`net_mutex` held): its manifest for the machine
 // images this player builds, and a server for the other players' requests. Returns the previous
 // server, which the caller destroys without the lock (its thread may be waiting for it).
-std::unique_ptr<NetPlay::SDCard::CardServer>
-SetSessionCardLocked(std::shared_ptr<NetPlay::SDCard::SessionCard> card)
+std::unique_ptr<SDCard::CardServer>
+SetSessionCardLocked(std::shared_ptr<SDCard::SessionCard> card)
 {
-  std::unique_ptr<NetPlay::SDCard::CardServer> old = std::move(s.sd_server);
+  std::unique_ptr<SDCard::CardServer> old = std::move(s.sd_server);
   s.sd_card = card;
-  const std::shared_ptr<const NetPlay::SDCard::Manifest>& manifest = card->GetManifest();
+  const std::shared_ptr<const SDCard::Manifest>& manifest = card->GetManifest();
   sf::Packet wire;
-  NetPlay::SDCard::WriteManifest(*manifest, wire);
+  SDCard::WriteManifest(*manifest, wire);
   const u8* data = static_cast<const u8*>(wire.getData());
   s.sd_manifest_wire.assign(data, data + wire.getDataSize());
-  s.sd_manifest_canon = NetPlay::SDCard::CanonicalManifest(*manifest);
-  std::weak_ptr<NetPlay::SDCard::SessionCard> weak = card;
-  s.sd_server = std::make_unique<NetPlay::SDCard::CardServer>(
+  s.sd_manifest_canon = SDCard::CanonicalManifest(*manifest);
+  std::weak_ptr<SDCard::SessionCard> weak = card;
+  s.sd_server = std::make_unique<SDCard::CardServer>(
       manifest,
       [weak](u32 index, std::span<u8> chunk) {
         const auto c = weak.lock();
@@ -873,9 +869,8 @@ SetSessionCardLocked(std::shared_ptr<NetPlay::SDCard::SessionCard> card)
 // The end of a session's card (Arm, Stop): this machine stops serving it and forgets it.
 void ResetSD()
 {
-  s.sd_cancel = true;
-  std::unique_ptr<NetPlay::SDCard::CardServer> server;
-  std::shared_ptr<NetPlay::SDCard::SessionCard> card;
+  std::unique_ptr<SDCard::CardServer> server;
+  std::shared_ptr<SDCard::SessionCard> card;
   {
     std::lock_guard lk(s.net_mutex);
     server = std::move(s.sd_server);
@@ -890,14 +885,11 @@ void ResetSD()
   server.reset();
   if (card)
     card->Detach();
-  // A joiner's hashing stops at the cancel.
-  s.sd_local = {};
   s.sd_path.clear();
-  s.sd_cancel = false;
 }
 
 // A joiner's card reaches the session's card through the players.
-class SessionCardRemote final : public NetPlay::SDCard::SessionCard::Remote
+class SessionCardRemote final : public SDCard::SessionCard::Remote
 {
 public:
   void Request(std::span<const u32> chunks) override
@@ -2789,7 +2781,7 @@ std::vector<u8> BuildImage(const ImageParts& parts, u32 sum, u64* raw_size)
   Put32(&raw, static_cast<u32>(nand.size()));
   raw.insert(raw.end(), nand.begin(), nand.end());
   std::vector<u8> sd_wire;
-  std::shared_ptr<NetPlay::SDCard::SessionCard> sd_card;
+  std::shared_ptr<SDCard::SessionCard> sd_card;
   {
     std::lock_guard lk(s.net_mutex);
     sd_wire = s.sd_manifest_wire;
@@ -2937,20 +2929,20 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
   std::memcpy(sd_hot.data(), raw.data() + pos, size_t{hot_count} * 4);
   pos += size_t{hot_count} * 4;
   // The session's SD card (checked like everything a peer sends; the players vouch for it below).
-  std::shared_ptr<const NetPlay::SDCard::Manifest> sd_manifest;
+  std::shared_ptr<const SDCard::Manifest> sd_manifest;
   std::vector<u8> sd_canon;
   if (sd_size > 0)
   {
     sf::Packet packet;
     packet.append(raw.data() + sd_pos, sd_size);
-    std::optional<NetPlay::SDCard::Manifest> manifest = NetPlay::SDCard::ReadManifest(packet);
+    std::optional<SDCard::Manifest> manifest = SDCard::ReadManifest(packet);
     if (!manifest)
     {
       *error = "the machine image's SD card is not valid";
       return false;
     }
-    sd_canon = NetPlay::SDCard::CanonicalManifest(*manifest);
-    sd_manifest = std::make_shared<const NetPlay::SDCard::Manifest>(std::move(*manifest));
+    sd_canon = SDCard::CanonicalManifest(*manifest);
+    sd_manifest = std::make_shared<const SDCard::Manifest>(std::move(*manifest));
   }
 
   // Every player vouches for the machine: its own digest of the image at this epoch must be this
@@ -2976,7 +2968,7 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
   // card's state takes the storage installed then): its own card's chunks where they match, the
   // others from the players. The game's SD configuration is part of the build, so a card on one
   // side only means another build.
-  std::shared_ptr<NetPlay::SDCard::SessionCard> sd_card;
+  std::shared_ptr<SDCard::SessionCard> sd_card;
   if (!self)
   {
     const bool inserted = Config::Get(Config::MAIN_WII_SD_CARD);
@@ -2992,17 +2984,10 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
     }
     if (sd_manifest)
     {
-      std::optional<NetPlay::SDCard::ImageHashes> local;
-      if (s.sd_local.valid())
-      {
-        if (s.sd_local.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
-          AddLog("SD card: waiting for this player's card to be compared");
-        local = s.sd_local.get();
-      }
-      sd_card = NetPlay::SDCard::SessionCard::CreateGuestCard(
-          s.sd_path, sd_manifest, local, File::GetUserPath(D_CACHE_IDX) + "MachineSD",
-          std::make_shared<SessionCardRemote>());
-      std::unique_ptr<NetPlay::SDCard::CardServer> old;
+      sd_card = SDCard::SessionCard::CreateGuestCard(s.sd_path, sd_manifest,
+                                                     File::GetUserPath(D_CACHE_IDX) + "MachineSD",
+                                                     std::make_shared<SessionCardRemote>());
+      std::unique_ptr<SDCard::CardServer> old;
       {
         std::lock_guard lk(s.net_mutex);
         s.sd_source = rx.from;
@@ -3010,9 +2995,11 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
       }
       old.reset();
       IOS::HLE::SetSDCardSessionStorage(sd_card);
-      AddLog(fmt::format("SD card: playing the session's card; {:.1f} MB of it differs from this "
-                         "player's and comes from the players",
-                         sd_card->MissingBytes() / 1048576.0));
+      AddLog(fmt::format("SD card: playing the session's card; {:.1f} MB this player's card has "
+                         "not got come from the players, {:.1f} MB of it is checked as the game "
+                         "reads it",
+                         sd_card->MissingBytes() / 1048576.0,
+                         sd_card->UncheckedBytes() / 1048576.0));
     }
   }
 
@@ -4455,41 +4442,35 @@ u64 GetInitialRTC()
   return s.opts.rtc;
 }
 
-std::shared_ptr<NetPlay::SDCard::SessionCard> CreateSDCard(const std::string& image_path)
+std::shared_ptr<SDCard::SessionCard> CreateSDCard(const std::string& image_path)
 {
-  using NetPlay::SDCard::SessionCard;
+  using SDCard::SessionCard;
   ResetSD();
   if (!Config::Get(Config::MAIN_WII_SD_CARD))
-    return SessionCard::CreateOwnCard(image_path, false);
+    return SessionCard::CreateOwnCard(image_path);
   if (JoinsRunningSession())
   {
-    // Its own card until the machine image comes; meanwhile its chunks are hashed, to compare
-    // with the session's card (cached for the next time: the image's size and time are the key).
+    // Its own card until the machine image comes, then the session's.
     s.sd_path = image_path;
-    s.sd_local = std::async(std::launch::async, [image_path] {
-                   return File::Exists(image_path) ?
-                              NetPlay::SDCard::HashImage(image_path, &s.sd_cancel) :
-                              std::nullopt;
-                 }).share();
-    return SessionCard::CreateOwnCard(image_path, false);
+    return SessionCard::CreateOwnCard(image_path);
   }
   const auto start = Clock::now();
-  std::optional<NetPlay::SDCard::Manifest> manifest = NetPlay::SDCard::BuildManifest(image_path);
+  std::optional<SDCard::Manifest> manifest = SDCard::BuildManifest(image_path);
   if (!manifest)
   {
     AddLog(fmt::format("SD card: could not read {}", image_path));
-    return SessionCard::CreateOwnCard(image_path, false);
+    return SessionCard::CreateOwnCard(image_path);
   }
   const u64 in_use = static_cast<u64>(std::ranges::count_if(
                          manifest->chunks, [](const auto& c) { return !c.zero; })) *
-                     NetPlay::SDCard::CHUNK_SIZE;
+                     SDCard::CHUNK_SIZE;
   AddLog(fmt::format("SD card: the session's card is this player's ({:.1f} GB, {:.1f} MB in use; "
                      "read in {:.1f} s)",
                      manifest->size / 1073741824.0, in_use / 1048576.0,
                      std::chrono::duration<double>(Clock::now() - start).count()));
-  auto shared = std::make_shared<const NetPlay::SDCard::Manifest>(std::move(*manifest));
-  std::shared_ptr<SessionCard> card = SessionCard::CreateHostCard(image_path, shared, false);
-  std::unique_ptr<NetPlay::SDCard::CardServer> old;
+  auto shared = std::make_shared<const SDCard::Manifest>(std::move(*manifest));
+  std::shared_ptr<SessionCard> card = SessionCard::CreateHostCard(image_path, shared);
+  std::unique_ptr<SDCard::CardServer> old;
   {
     std::lock_guard lk(s.net_mutex);
     old = SetSessionCardLocked(card);
@@ -4515,10 +4496,6 @@ NetPlay::NetSettings MakeNetSettings()
   ns.mem1_size = Pinned(Config::MAIN_MEM1_SIZE);
   ns.mem2_size = Pinned(Config::MAIN_MEM2_SIZE);
   ns.fallback_region = Pinned(Config::MAIN_FALLBACK_REGION);
-  // The build's: the launcher passes whether it has an SD card (part of its hash, so every player
-  // has the same). The netplay layer sets this setting too, and its default (no card) left mods
-  // that load from the card (REX, Brawl Minus) booting vanilla Brawl.
-  ns.sd_card_inserted = Config::Get(Config::MAIN_WII_SD_CARD);
   // The SD card is read-only in a session (docs/design/brawl-mods.md §4).
   ns.allow_sd_writes = false;
   ns.oc_enable = false;

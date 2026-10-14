@@ -86,10 +86,10 @@ void SDIOSlot0Device::DoState(PointerWrap& p)
   p.Do(m_protocol);
   p.Do(m_sdhc_supported);
 
-  // A netplay session's card rolls back with the machine (SDCardStorage::RewindTo), also while
-  // the game has the slot closed. Only states of a session have the counter: the session's card
-  // is installed for the whole emulation, and its states (rollback's) never leave it, so states
-  // made outside netplay keep their format.
+  // A session's card rolls back with the machine (SDCardStorage::RewindTo), also while the game
+  // has the slot closed. Only states of a session have the counter: the session's card is
+  // installed for the whole emulation on every player's machine (its rollback states and machine
+  // images stay among them), so states made outside a session keep their format.
   if (const std::shared_ptr<SDCardStorage> session = GetSDCardSessionStorage())
   {
     u64 write_seq = session->GetWriteSeq();

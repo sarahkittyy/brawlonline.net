@@ -43,11 +43,7 @@ class System;
 namespace NetPlay
 {
 struct NetSettings;
-namespace SDCard
-{
-class SessionCard;
 }
-}  // namespace NetPlay
 
 namespace WiimoteEmu
 {
@@ -56,6 +52,11 @@ struct DesiredWiimoteState;
 
 namespace Machine
 {
+namespace SDCard
+{
+class SessionCard;
+}
+
 constexpr int MAX_PLAYERS = 4;
 
 // One player's input for one frame (docs/design/brawl-mods.md §6.2).
@@ -198,7 +199,7 @@ NetPlay::NetSettings MakeNetSettings();
 // session plays its own (its manifest goes to joiners with the machine image), and a joiner,
 // which boots on its own card, plays the session's from its image on (its own chunks where they
 // match, the others fetched from the players). Writes never reach anyone's image.
-std::shared_ptr<NetPlay::SDCard::SessionCard> CreateSDCard(const std::string& image_path);
+std::shared_ptr<SDCard::SessionCard> CreateSDCard(const std::string& image_path);
 // The emulated wall clock at boot (EXI IPL), seconds since 1970.
 u64 GetInitialRTC();
 

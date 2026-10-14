@@ -55,10 +55,6 @@ class BootExecutableReader;
 namespace NetPlay
 {
 struct NetSettings;
-namespace SDCard
-{
-class SessionCard;
-}
 }
 
 enum class DeleteSavestateAfterBoot : u8
@@ -96,10 +92,6 @@ public:
   const NetPlay::NetSettings* GetNetplaySettings() const;
   void SetNetplaySettings(std::unique_ptr<NetPlay::NetSettings> netplay_settings);
 
-  // The SD card a netplay session plays on (NetPlaySDCard.h); nullptr outside netplay.
-  const std::shared_ptr<NetPlay::SDCard::SessionCard>& GetSDCardSession() const;
-  void SetSDCardSession(std::shared_ptr<NetPlay::SDCard::SessionCard> card);
-
 private:
   std::optional<std::string> m_savestate_path;
   DeleteSavestateAfterBoot m_delete_savestate = DeleteSavestateAfterBoot::No;
@@ -110,7 +102,6 @@ private:
   WiiSyncCleanupFunction m_wii_sync_cleanup;
 
   std::unique_ptr<NetPlay::NetSettings> m_netplay_settings;
-  std::shared_ptr<NetPlay::SDCard::SessionCard> m_sd_card_session;
 };
 
 struct BootParameters

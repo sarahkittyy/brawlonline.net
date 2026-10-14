@@ -1,21 +1,21 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// The SD card in a netplay session.
+// The SD card of a whole-machine session (Other Games rooms, docs/design/brawl-mods.md §6.5).
 //
-// Nothing a session does reaches anyone's SD card image: every write goes to a throwaway layer
-// (SessionCard), and only the host keeps it, and only when the host chose "Load and Write Host's
-// Save Data" (written back when the game ends). Like the NAND saves, the card everyone plays on is
-// the host's when the host loads its save data: the host sends a manifest of its card (a hash per
-// 64 KiB chunk, and which chunks hold no file), a guest compares it with its own card and plays
-// on the host's chunks wherever the two differ. Those are fetched from the host when the game
-// first reads them (the emulated read waits, so the game sees the same bytes on every machine),
-// a few before the game boots, and the rest in the background at a gentle rate.
+// Everyone plays the session's card: the card of the player who started the session. Nothing a
+// session does reaches anyone's image: every write goes to a throwaway layer (SessionCard) that
+// rolls back with the machine. The starter's card has a manifest (a hash per 64 KiB chunk, and
+// which chunks hold no file), which joiners get with the machine image. A joiner plays its own
+// card's chunks where they match the manifest (each checked the first time the game reads it)
+// and fetches the others from the players when the game first reads them (the emulated read
+// waits, so the game sees the same bytes on every machine), the chunks the game read before the
+// join first, in the background.
 //
-// The host is a stranger in a public lobby: everything it sends is checked (sizes, indices, every
-// chunk against its hash in the manifest), and none of it ever reaches the guest's own files. A
-// guest is a stranger to the host too: it can only ask for chunks of the card the host chose to
-// share, and the host never sends a chunk that holds no file (deleted data stays private).
+// Every player is a stranger to the others: everything they send is checked (sizes, indices,
+// every chunk against its hash in the manifest), and none of it reaches anyone's own files. A
+// player only serves chunks of the session's card that hold data and match their hash: what
+// differs on its own card, and deleted data, is never sent.
 
 #pragma once
 
@@ -40,7 +40,7 @@
 #include "Common/IOFile.h"
 #include "Core/IOS/SDIO/SDCardStorage.h"
 
-namespace NetPlay::SDCard
+namespace Machine::SDCard
 {
 constexpr u64 CHUNK_SIZE = 64 * 1024;
 // SDHC cards go up to 32 GiB; anything claiming more than this is refused.
@@ -48,13 +48,11 @@ constexpr u64 MAX_CARD_SIZE = 64ull << 30;
 constexpr u32 MAX_CHUNKS = static_cast<u32>(MAX_CARD_SIZE / CHUNK_SIZE);
 // Chunks one request may ask for.
 constexpr u32 MAX_REQUEST_CHUNKS = 64;
-// Fetched before the game boots, so its first reads (the FAT, the game's own files) rarely wait.
-constexpr u64 PREFETCH_BYTES = 32ull << 20;
 // The background stream stops after this much; reads still fetch what they need.
 constexpr u64 BACKGROUND_CAP_BYTES = 2ull << 30;
 // The background stream's rate, so it never crowds out the game's own traffic.
 constexpr u64 BACKGROUND_BYTES_PER_SECOND = 256 * 1024;
-// A read that waits this long for the host's chunks fails (the session is broken by then).
+// A read that waits this long for the players' chunks fails (the session is broken by then).
 constexpr int FETCH_TIMEOUT_MS = 60'000;
 // A request with no answer after this long is sent again.
 constexpr int REQUEST_RETRY_MS = 5'000;
@@ -97,7 +95,7 @@ struct ImageHashes
 std::optional<ImageHashes> HashImage(const std::string& path,
                                      const std::atomic<bool>* cancel = nullptr);
 
-// The host's manifest of its card image.
+// The manifest of the session starter's card image.
 std::optional<Manifest> BuildManifest(const std::string& path,
                                       const std::atomic<bool>* cancel = nullptr);
 
@@ -105,7 +103,7 @@ std::optional<Manifest> BuildManifest(const std::string& path,
 // compressed): what players compare to agree on the card.
 std::vector<u8> CanonicalManifest(const Manifest& manifest);
 
-// Wire format. ReadManifest checks everything (a stranger's packet) and returns nullopt for a
+// Wire format. ReadManifest checks everything (a stranger's bytes) and returns nullopt for a
 // malformed one.
 void WriteManifest(const Manifest& manifest, sf::Packet& packet);
 std::optional<Manifest> ReadManifest(sf::Packet& packet);
@@ -114,7 +112,7 @@ std::optional<Manifest> ReadManifest(sf::Packet& packet);
 void WriteChunkRequest(std::span<const u32> chunks, sf::Packet& packet);
 std::optional<std::vector<u32>> ReadChunkRequest(sf::Packet& packet);
 
-// A chunk's data; `data` empty when the host could not send it.
+// A chunk's data; `data` empty when the player asked has not got it.
 struct ChunkData
 {
   u32 index = 0;
@@ -125,39 +123,34 @@ void WriteChunkData(u32 index, std::span<const u8> data, sf::Packet& packet);
 void WriteChunkUnavailable(u32 index, sf::Packet& packet);
 std::optional<ChunkData> ReadChunkData(sf::Packet& packet);
 
-// The host's side: answers guests' chunk requests from its card image on a thread of its own, so
-// disk reads never hold up the netplay thread. Only chunks the manifest says hold data are sent,
-// and only while they still match their hash.
+// Answers the other players' chunk requests on a thread of its own, so disk reads never hold up
+// the network thread. Only chunks the manifest says hold data are sent, and only while they match
+// their hash.
 class CardServer
 {
 public:
-  using SendFunction = std::function<void(u8 pid, sf::Packet&& packet)>;
-  // Reads a chunk of the card (the server's thread); false when this machine does not have it.
+  using SendFunction = std::function<void(u8 player, sf::Packet&& packet)>;
+  // Reads a chunk of the card (the server's thread); false when this machine has not got it.
   using ReadFunction = std::function<bool(u32 index, std::span<u8> data)>;
-  // Starts each chunk's packet (the message IDs in front of WriteChunkData).
+  // Starts each chunk's packet (whatever goes in front of WriteChunkData).
   using HeaderFunction = std::function<void(sf::Packet& packet)>;
 
-  // Netplay's host: chunks from its card image, in netplay's SyncSaveData messages.
-  CardServer(const std::string& image_path, std::shared_ptr<const Manifest> manifest,
-             SendFunction send);
-  // Any player of a whole-machine session: chunks from wherever `read` finds them.
   CardServer(std::shared_ptr<const Manifest> manifest, ReadFunction read, HeaderFunction header,
              SendFunction send);
   ~CardServer();
   CardServer(const CardServer&) = delete;
   CardServer& operator=(const CardServer&) = delete;
 
-  // From the netplay thread: a guest's request (the packet past its sub-ID).
-  void OnRequest(u8 pid, sf::Packet& packet);
+  // From the network thread: a player's request.
+  void OnRequest(u8 player, sf::Packet& packet);
 
 private:
   void ThreadFunc();
 
-  // Requests queued per guest; more than this many waiting chunks and new ones are dropped (the
-  // guest asks again).
+  // Requests queued per player; more than this many waiting chunks and new ones are dropped (the
+  // player asks again).
   static constexpr size_t MAX_QUEUED_PER_PLAYER = 256;
 
-  std::string m_image_path;
   std::shared_ptr<const Manifest> m_manifest;
   ReadFunction m_read;
   HeaderFunction m_header;
@@ -171,11 +164,11 @@ private:
   std::thread m_thread;
 };
 
-// The storage the emulated SD card uses for one netplay session.
+// The storage the emulated SD card uses in a session.
 class SessionCard final : public IOS::HLE::SDCardStorage
 {
 public:
-  // How a guest's card reaches the host. Request() may be called from any thread.
+  // How a joiner's card reaches the other players. Request() may be called from any thread.
   class Remote
   {
   public:
@@ -188,32 +181,31 @@ public:
 
   enum class Mode
   {
-    // Each player's own card (the host does not load its save data, or plays alone).
+    // The player's own card (a session of a game without a card, or before a joiner's image).
     OwnCard,
-    // The host's card, on the host: its own image, with the chunks the manifest zeroes read as zero.
+    // The session's card, on its starter: its own image, the chunks the manifest zeroes read as
+    // zero.
     HostCard,
-    // The host's card, on a guest: its own image where it matches the host's, else fetched.
+    // The session's card, on a joiner: its own image where it matches the manifest, else fetched.
     GuestCard,
   };
 
-  static std::shared_ptr<SessionCard> CreateOwnCard(const std::string& image_path,
-                                                    bool write_back);
+  static std::shared_ptr<SessionCard> CreateOwnCard(const std::string& image_path);
   static std::shared_ptr<SessionCard> CreateHostCard(const std::string& image_path,
-                                                     std::shared_ptr<const Manifest> manifest,
-                                                     bool write_back);
-  // `local` is the guest's own image's hashes (nullopt: it has none). `cache_dir` holds the file
-  // of fetched chunks, deleted with the card.
-  static std::shared_ptr<SessionCard>
-  CreateGuestCard(const std::string& image_path, std::shared_ptr<const Manifest> manifest,
-                  const std::optional<ImageHashes>& local, const std::string& cache_dir,
-                  std::shared_ptr<Remote> remote);
+                                                     std::shared_ptr<const Manifest> manifest);
+  // `image_path` is the joiner's own card (it may not exist), checked chunk by chunk as the game
+  // reads it. `cache_dir` holds the file of fetched chunks, deleted with the card.
+  static std::shared_ptr<SessionCard> CreateGuestCard(const std::string& image_path,
+                                                      std::shared_ptr<const Manifest> manifest,
+                                                      const std::string& cache_dir,
+                                                      std::shared_ptr<Remote> remote);
 
   ~SessionCard() override;
   SessionCard(const SessionCard&) = delete;
   SessionCard& operator=(const SessionCard&) = delete;
 
   Mode GetMode() const { return m_mode; }
-  // The card everyone plays on (host and guest cards), or nullptr (each player's own card).
+  // The session's card (host and guest cards), or nullptr (the player's own card).
   const std::shared_ptr<const Manifest>& GetManifest() const { return m_manifest; }
 
   bool IsOpen() const override;
@@ -223,46 +215,37 @@ public:
   u64 GetWriteSeq() const override;
   void RewindTo(u64 write_seq) override;
 
-  // Guest: a chunk from the host (any thread). Checked against the manifest; a bad one is
+  // Guest: a chunk from a player (any thread). Checked against the manifest; a bad one is
   // dropped. An unavailable chunk fails the reads waiting for it.
   void Deliver(const ChunkData& chunk);
-  // Guest: the chunks of the host's card that are neither all zero nor the same on this card.
+  // Guest: the chunks known to need fetching (this card has none there, or it was checked and
+  // differs), and those of this card not checked yet.
   u64 MissingBytes() const;
+  u64 UncheckedBytes() const;
 
   struct Stats
   {
     u64 size = 0;
     u64 missing_bytes = 0;  // still to fetch
     u64 fetched_bytes = 0;
-    u32 waits = 0;          // reads and writes that waited for the host's chunks
+    u32 waits = 0;          // reads and writes that waited for the players' chunks
     u64 writes = 0;         // the session's write counter
   };
   Stats GetStats() const;
-  // Guest, before the game boots: fetches up to `budget` bytes of missing chunks, lowest first.
-  // False if the host stopped answering or the card was detached.
-  bool Prefetch(u64 budget, const std::atomic<bool>* cancel,
-                const std::function<void(u64 done, u64 total)>& progress = {});
-  // Guest, once the game runs: streams the rest in the background, up to BACKGROUND_CAP_BYTES,
-  // the chunks in `first` (those the game is likely to read soon) before the others.
+  // Guest, once the game runs: streams the missing chunks in the background, up to
+  // BACKGROUND_CAP_BYTES, the chunks in `first` (those the game is likely to read soon: checked
+  // first if this card has them) before the others.
   void StartBackgroundFetch(std::span<const u32> first = {});
 
   // Another player's request (any thread): the chunk as this machine has it before the session's
-  // writes (its image where it matches the shared card, or fetched), or false when it has not got
-  // it. Host and guest cards only; the caller checks it against the manifest before sending.
+  // writes (its image where it matches the session's card, or fetched), or false when it has not
+  // got it. Host and guest cards only; the caller checks it against the manifest before sending.
   bool ReadForPeer(u32 index, std::span<u8> data);
   // The chunks the game has read so far, in the order it first read them, at most `max` (the
   // emulation thread): a player joining later fetches these first.
   std::vector<u32> ReadChunks(size_t max) const;
-  // The connection to the host is gone (or the game stopped): waiting reads fail, no more fetches.
+  // The session is gone (or the game stopped): waiting reads fail, no more fetches.
   void Detach();
-
-  // At the end of the emulation: writes the session's writes into the image when this card keeps
-  // them (the host with "Load and Write Host's Save Data"). True if the image changed.
-  bool Finish();
-
-  // Whether Dolphin's SD folder sync should pack the folder into the image at boot (the host's
-  // card was already packed before its manifest was built, and a guest's own card is only a cache).
-  bool PacksFolderAtBoot() const { return m_mode == Mode::OwnCard; }
 
   // For tests: the clock rollback history is kept by (default: the emulated time).
   void SetClockForTesting(std::function<u64()> clock, u64 history_ticks);
@@ -279,21 +262,24 @@ private:
   enum class Source : u8
   {
     Zero,
-    Local,
+    Local,      // this card's chunk, checked against the manifest
+    Unchecked,  // this card has the chunk: checked when first needed
     Fetched,
     Missing,
   };
 
-  SessionCard(Mode mode, const std::string& image_path, std::shared_ptr<const Manifest> manifest,
-              bool write_back);
+  SessionCard(Mode mode, const std::string& image_path, std::shared_ptr<const Manifest> manifest);
 
   u32 ChunkCount() const;
   u64 ChunkBytes(u32 index) const;
+  // Guest: compares this card's chunks among `chunks` that are not checked yet with the manifest
+  // (any thread): each becomes Local or Missing.
+  void CheckLocal(std::span<const u32> chunks);
   // The chunk's current contents (the session's writes included), fetching it if needed.
   bool ReadChunk(u32 index, u8* dst);
   bool ReadBase(u32 index, u8* dst);
-  // Waits until every listed chunk has arrived (guest). False on timeout, detach or a chunk the
-  // host could not send.
+  // Waits until every listed chunk has arrived (guest). False on timeout, detach or a chunk no
+  // player could send.
   bool WaitForChunks(std::span<const u32> chunks, bool keep_alive);
   void BackgroundThreadFunc();
   void PruneHistory(u64 now);
@@ -301,10 +287,9 @@ private:
   const Mode m_mode;
   const std::string m_image_path;
   const std::shared_ptr<const Manifest> m_manifest;
-  const bool m_write_back;
   u64 m_size = 0;
 
-  // The image (read only), for the chunks this machine has.
+  // The image (read only), for the chunks this machine has (emulation thread).
   File::IOFile m_image;
 
   // The session's writes and their history (emulation thread only).
@@ -339,8 +324,9 @@ private:
   std::vector<bool> m_read_seen;
   std::vector<u32> m_read_order;
 
-  // ReadForPeer's own handle on the image: m_image belongs to the emulation thread.
+  // A second handle on the image for the other threads (ReadForPeer, CheckLocal): m_image
+  // belongs to the emulation thread.
   std::mutex m_serve_mutex;
   File::IOFile m_serve_image;
 };
-}  // namespace NetPlay::SDCard
+}  // namespace Machine::SDCard

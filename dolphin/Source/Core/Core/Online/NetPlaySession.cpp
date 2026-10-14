@@ -36,7 +36,6 @@
 #include "Core/IOS/FS/FileSystem.h"
 #include "Core/NetPlayClient.h"
 #include "Core/NetPlayProto.h"
-#include "Core/NetPlaySDCard.h"
 #include "Core/NetPlayServer.h"
 #include "Core/Online/Matchmaking.h"
 #include "Core/Online/OnlineSession.h"
@@ -532,28 +531,6 @@ picojson::value Status()
     for (int local = 0; local < client->NumLocalPads(); ++local)
       local_to_ingame.emplace_back(static_cast<double>(client->LocalPadToInGamePad(local)));
     result["local_port_to_ingame_port"] = picojson::value(std::move(local_to_ingame));
-
-    // The SD card this game plays on (Core/NetPlaySDCard.h).
-    if (const auto card = client->GetSDCardSession())
-    {
-      const auto stats = card->GetStats();
-      picojson::object sd;
-      const auto mode = card->GetMode();
-      sd["mode"] = picojson::value(mode == NetPlay::SDCard::SessionCard::Mode::OwnCard ? "own" :
-                                   mode == NetPlay::SDCard::SessionCard::Mode::HostCard ?
-                                                                                     "host" :
-                                                                                     "guest");
-      sd["size"] = picojson::value(static_cast<double>(stats.size));
-      sd["missing_bytes"] = picojson::value(static_cast<double>(stats.missing_bytes));
-      sd["fetched_bytes"] = picojson::value(static_cast<double>(stats.fetched_bytes));
-      sd["waits"] = picojson::value(static_cast<double>(stats.waits));
-      sd["writes"] = picojson::value(static_cast<double>(stats.writes));
-      result["sd_card"] = picojson::value(std::move(sd));
-    }
-    else
-    {
-      result["sd_card"] = picojson::value();
-    }
 
     const auto& settings = client->GetNetSettings();
     picojson::object rollback;
