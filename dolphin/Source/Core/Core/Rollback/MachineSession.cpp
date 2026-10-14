@@ -1067,7 +1067,22 @@ void NetThread()
       }
       else
       {
+        // Diagnostics (PPR_MACHINE_IMAGE_KBPS=N): the image goes out at N KiB/s, as over a slow
+        // link, so a join can take longer than the connect limits.
+        static const double image_kbps = [] {
+          const char* e = std::getenv("PPR_MACHINE_IMAGE_KBPS");
+          return e ? std::atof(e) : 0.0;
+        }();
+        static Clock::time_point image_since;
+        if (s.image_tx_sent == 0)
+          image_since = Clock::now();
+        const double image_allowed =
+            image_kbps > 0 ?
+                IMAGE_CHUNK + image_kbps * 1024 *
+                                  std::chrono::duration<double>(Clock::now() - image_since).count() :
+                1e18;
         for (int n = 0; n < 8 && s.image_tx_sent < s.image_tx.size() &&
+                        s.image_tx_sent < image_allowed &&
                         p.peer->reliableDataInTransit < 4 * IMAGE_CHUNK;
              ++n)
         {
@@ -3740,9 +3755,18 @@ Wait WaitForFrames(Core::System& system)
   constexpr auto CONNECT_LIMIT = std::chrono::seconds(60);
   auto& cpu = system.GetCPU();
   bool waited = false;
-  const auto since = Clock::now();
+  // Each limit counts from the start of its own phase: an epoch (or a joiner's wait for the
+  // machine image) can take up to EPOCH_TIMEOUT inside this same wait, and the handshake after it
+  // gets its own CONNECT_LIMIT.
+  Phase timed_phase = s.phase;
+  auto since = Clock::now();
   for (;;)
   {
+    if (s.phase != timed_phase)
+    {
+      timed_phase = s.phase;
+      since = Clock::now();
+    }
     const auto waited_for = Clock::now() - since;
     if ((s.phase == Phase::Running && waited_for > STALL_LIMIT) ||
         ((s.phase == Phase::Connecting || s.phase == Phase::Starting) &&
