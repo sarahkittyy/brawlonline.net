@@ -6893,10 +6893,14 @@ void BeginReplay(Core::System& system)
     info.stage = s.setup.stage;
     info.asl = s.setup.asl;
   }
-  // The game's id, the same in every player's file of it.
+  // The game's id, the same in every player's file of it. A room's game number is each machine's
+  // own count of the room's games (Rooms.cpp), which a player who joined after the room's first
+  // game counts differently; the session's own game is the same on every machine. (mm pairs the
+  // players' uploads by match too: builds up to 0.1.72 put the room's count here.)
   {
     std::vector<u8> id(info.meta.match_id.begin(), info.meta.match_id.end());
-    for (u32 v : {info.game, s.session_seed, s.match_index})
+    const u32 id_game = info.meta.room ? info.session_game : info.game;
+    for (u32 v : {id_game, s.session_seed, s.match_index})
     {
       for (int shift = 0; shift < 32; shift += 8)
         id.push_back(static_cast<u8>(v >> shift));

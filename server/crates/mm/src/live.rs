@@ -244,6 +244,11 @@ struct MatchInfo {
 struct Offerer {
     conn: ConnId,
     account: Uuid,
+    /// The game's id and number as this player's game knows them (`spectate-offer`). Its roles
+    /// name this id. Builds up to 0.1.72 numbered a room's games with a count of their own, which
+    /// went into the id, so the players of one room game could offer different ids.
+    uid: [u8; 16],
+    number: u32,
     paused: u32,
     rollbacks: f64,
     host: bool,
@@ -328,6 +333,9 @@ struct StreamBook {
     over_at: Option<Instant>,
     wins: HashMap<Uuid, u32>,
     started_at: Option<String>,
+    /// A room stream's latest game and its number: mm numbers a room's games itself (each
+    /// player's game counts them its own way).
+    last_game: Option<([u8; 16], u32)>,
 }
 
 impl StreamBook {
@@ -342,6 +350,7 @@ impl StreamBook {
             over_at: None,
             wins: HashMap::new(),
             started_at: None,
+            last_game: None,
         }
     }
 }
@@ -491,10 +500,11 @@ impl LiveBook {
         s
     }
 
-    fn role_msg(&self, game: &Game, role: Role, slot: u32, from: Option<u32>, headers: bool) -> RoleMsg {
+    /// `uid`: the game's id as the receiving player's game knows it.
+    fn role_msg(&self, uid: &[u8; 16], role: Role, slot: u32, from: Option<u32>, headers: bool) -> RoleMsg {
         RoleMsg {
             kind: SPECTATE_ROLE.into(),
-            game_uid: hex::encode(game.uid),
+            game_uid: hex::encode(uid),
             role,
             slot,
             from,
@@ -542,7 +552,7 @@ impl LiveBook {
         o: Offer,
         out: &mut Vec<Output>,
     ) -> Result<(), &'static str> {
-        let uid = spectate::decode_uid(&o.game_uid).ok_or(errors::INVALID)?;
+        let offered = spectate::decode_uid(&o.game_uid).ok_or(errors::INVALID)?;
         let Some(m) = self.matches.get(&o.match_id).filter(|m| now.duration_since(m.made) < self.cfg.match_ttl) else {
             return Err(errors::NOT_YOUR_MATCH);
         };
@@ -550,15 +560,19 @@ impl LiveBook {
             return Err(errors::NOT_YOUR_MATCH);
         }
         if self.cfg.mode == SpectateMode::Off {
-            self.send_none(out, conn, &uid);
+            self.send_none(out, conn, &offered);
             return Ok(());
         }
         let host = m.host == account;
         let mut stream = m.stream.clone();
         let n_players = m.players.len();
+        let is_room = m.room.is_some();
+        let uid = self.game_for_offer(&o.match_id, account, offered);
         let offerer = Offerer {
             conn,
             account,
+            uid: offered,
+            number: o.game,
             paused: o.paused,
             rollbacks: o.rollbacks,
             host,
@@ -586,12 +600,14 @@ impl LiveBook {
             if self.streams.get(&stream).is_none_or(|b| b.over_at.is_some()) {
                 stream = self.fresh_stream(now, &o.match_id);
             }
+            let number =
+                if is_room { self.room_game_number(&stream, &o.match_id, account, o.game, uid) } else { o.game };
             self.games.insert(
                 uid,
                 Game {
                     match_id: o.match_id.clone(),
                     stream,
-                    number: o.game,
+                    number,
                     uid,
                     offers: Vec::new(),
                     first_offer: now,
@@ -618,7 +634,7 @@ impl LiveBook {
             return Err(errors::NOT_YOUR_MATCH);
         }
         if !game.open() {
-            self.send_none(out, conn, &uid);
+            self.send_none(out, conn, &offered);
             return Ok(());
         }
         // A second offer from the same account replaces the first (a reconnect).
@@ -637,6 +653,57 @@ impl LiveBook {
             self.decide(now, uid, out);
         }
         Ok(())
+    }
+
+    /// The game an offer is for: the game with that id (or one this player already offered under
+    /// that id), else the match's open game when this player hasn't offered for it, else a new
+    /// game (`offered`). The players of a match play its games together, one at a time, so a
+    /// player's first offer while the match's game is open is for that game, whatever id its game
+    /// gave it: builds up to 0.1.72 put their own count of a room's games into the id, and two
+    /// players whose counts differed (one had played in another room, or joined after the room's
+    /// first game) were taken for two games, each with its own primary and no witness (production
+    /// 2026-10-14, room TLSZ: games 4 and 1, then 5 and 2). The pairing never reaches another
+    /// match, and a second id from a player who already offered for the open game is a new game,
+    /// as before.
+    fn game_for_offer(&self, match_id: &str, account: Uuid, offered: [u8; 16]) -> [u8; 16] {
+        if self.games.contains_key(&offered) {
+            return offered;
+        }
+        let of_match = || self.games.values().filter(|g| g.match_id == match_id);
+        if let Some(g) = of_match().find(|g| g.offers.iter().any(|x| x.account == account && x.uid == offered)) {
+            return g.uid;
+        }
+        match of_match().find(|g| g.open() && !g.offers.iter().any(|x| x.account == account)) {
+            Some(g) => {
+                tracing::info!(match_id, game = g.number, "spectate: an offer with another id joins the open game");
+                g.uid
+            }
+            None => offered,
+        }
+    }
+
+    /// A room game's number: the next in its stream, or the stream's latest game's again when it
+    /// is that game played again (a set's game after a desync: the player's game gave it the same
+    /// number as last time, in the same match).
+    fn room_game_number(&mut self, stream: &str, match_id: &str, account: Uuid, offered: u32, uid: [u8; 16]) -> u32 {
+        let Some(book) = self.streams.get(stream) else { return 1 };
+        let number = match book.last_game {
+            None => 1,
+            Some((last, n)) => {
+                let again = self.games.get(&last).is_some_and(|g| {
+                    g.match_id == match_id && g.offers.iter().any(|x| x.account == account && x.number == offered)
+                });
+                if again {
+                    n
+                } else {
+                    n + 1
+                }
+            }
+        };
+        if let Some(book) = self.streams.get_mut(stream) {
+            book.last_game = Some((uid, number));
+        }
+        number
     }
 
     /// Gives every offering player its role: the healthiest is the primary (fewest pauses last
@@ -684,7 +751,7 @@ impl LiveBook {
         };
         self.slots.insert(slot, Slot { conn, game: uid, role, partial: None, next_seq: 0, from });
         let game = &self.games[&uid];
-        let msg = self.role_msg(game, role, slot, from, headers);
+        let msg = self.role_msg(&game.offers[i].uid, role, slot, from, headers);
         send(out, conn, &msg);
         tracing::info!(match_id = %game.match_id, game = game.number, slot, ?role, ?from, "spectate role");
     }
@@ -1263,7 +1330,7 @@ impl LiveBook {
         let due: Vec<[u8; 16]> = self
             .games
             .values()
-            .filter(|g| !g.decided && now.duration_since(g.first_offer) >= self.cfg.decide_after)
+            .filter(|g| !g.decided && g.open() && now.duration_since(g.first_offer) >= self.cfg.decide_after)
             .map(|g| g.uid)
             .collect();
         for uid in due {
@@ -1909,5 +1976,136 @@ mod tests {
         t.book.conn_gone(t.now, A, &mut out);
         assert_eq!(role(&out, B).unwrap()["role"], "primary");
         assert_eq!(role(&out, B).unwrap()["headers"], true);
+    }
+
+    /// A room's matches for the pairing tests: each room start is a match of its own.
+    fn room_match(t: &mut T, match_id: &str) {
+        let rec = MatchRecord {
+            match_id: match_id.into(),
+            mode: Mode::Teams,
+            players: vec![t.a, t.b],
+            host: t.a,
+            stages: vec![],
+            region: String::new(),
+            room: Some(common::db::MatchRoom {
+                code: "TLSZ".into(),
+                mode: "1v1".into(),
+                ports: vec![1, 2],
+                teams: None,
+                ruleset: None,
+            }),
+        };
+        let names =
+            HashMap::from([(t.a, ("kyran".into(), "KYRN#1".into())), (t.b, ("manbat".into(), "MBAT#2".into()))]);
+        t.book.register_match(t.now, &rec, names);
+    }
+
+    fn offer_in(t: &mut T, match_id: &str, conn: ConnId, who: Uuid, uid: u8, number: u32) -> Vec<Output> {
+        let mut out = vec![];
+        let o = Offer { match_id: match_id.into(), game_uid: uid_hex(uid), game: number, paused: 0, rollbacks: 0.0 };
+        t.book.request(t.now, conn, who, SpectateRequest::Offer(o), &mut out);
+        out
+    }
+
+    fn info_in(t: &T, match_id: &str) -> Vec<u8> {
+        let v = json!({
+            "matchId": match_id, "stageId": 3, "isTeams": false,
+            "players": [{"port": 1, "uid": t.a.to_string()}, {"port": 2, "uid": t.b.to_string()}]
+        });
+        encode_chunk(b"INFO", v.to_string().as_bytes(), false)
+    }
+
+    /// Production 2026-10-14, room TLSZ: the host's game (older build) had played 3 games in
+    /// another room and offered its room game as game 4, the guest's as game 1, each with an id of
+    /// its own. mm took them for two games, made both primaries and refused one ("the game is
+    /// over"): no witness, and a pause stalled the stream. The two offers are now one game: one
+    /// primary, one witness, each told its role under the id its own game knows, and the list
+    /// numbers the room's games itself (1, 2), not 4 then 2.
+    #[test]
+    fn offers_with_other_ids_for_a_room_game_pair_up() {
+        let mut t = T::new(SpectateMode::On);
+        let (a, b) = (t.a, t.b);
+        let m1 = "mode.room-TLSZ-2026-10-14T15:20:07.812Z-1";
+        room_match(&mut t, m1);
+        assert!(role(&offer_in(&mut t, m1, A, a, 0x41, 4), A).is_none(), "waits for the other player");
+        let out = offer_in(&mut t, m1, B, b, 0x01, 1);
+        let (ra, rb) = (role(&out, A).unwrap(), role(&out, B).unwrap());
+        assert_eq!((ra["role"].as_str(), rb["role"].as_str()), (Some("primary"), Some("witness")), "the host on a tie");
+        assert_eq!(ra["gameUid"], uid_hex(0x41));
+        assert_eq!(rb["gameUid"], uid_hex(0x01), "B's game ignores a role for an id it doesn't know");
+        let slot_a = ra["slot"].as_u64().unwrap() as u32;
+        let info = info_in(&t, m1);
+        t.send_chunk(A, slot_a, 0, &info);
+        t.send_chunk(A, slot_a, 1, &encode_chunk(b"SETP", b"{}", false));
+        t.send_chunk(A, slot_a, 2, &encode_chunk(b"FRMS", &frms(120, 60, 1), true));
+        assert_eq!(t.book.store.entries()[0].game.number, 1);
+
+        // The primary breaks: the witness takes over, under its own id.
+        let mut broken = encode_chunk(b"FRMS", &frms(180, 60, 1), true);
+        let n = broken.len();
+        broken[n - 1] ^= 0xFF;
+        let out = t.send_chunk(A, slot_a, 3, &broken);
+        let rb = role(&out, B).unwrap();
+        assert_eq!((rb["role"].as_str(), rb["from"].as_u64()), (Some("primary"), Some(180)));
+        assert_eq!(rb["gameUid"], uid_hex(0x01));
+        let slot_b = rb["slot"].as_u64().unwrap() as u32;
+        t.send_chunk(B, slot_b, 0, &encode_chunk(b"FRMS", &frms(180, 60, 1), true));
+        t.send_chunk(B, slot_b, 1, &encode_chunk(b"ENDG", br#"{"endMethod":"game","winnerPort":1}"#, false));
+
+        // The room's next game (a match of its own): 5 and 2, other ids again; one game, game 2.
+        let m2 = "mode.room-TLSZ-2026-10-14T15:23:58.984Z-2";
+        room_match(&mut t, m2);
+        offer_in(&mut t, m2, B, b, 0x02, 2);
+        let out = offer_in(&mut t, m2, A, a, 0x42, 5);
+        let (ra, rb) = (role(&out, A).unwrap(), role(&out, B).unwrap());
+        assert_eq!((ra["gameUid"].as_str(), rb["gameUid"].as_str()), (Some(&*uid_hex(0x42)), Some(&*uid_hex(0x02))));
+        let mut roles = [ra["role"].as_str().unwrap(), rb["role"].as_str().unwrap()];
+        roles.sort_unstable();
+        assert_eq!(roles, ["primary", "witness"]);
+        let (conn, slot) = if ra["role"] == "primary" { (A, &ra) } else { (B, &rb) };
+        let slot = slot["slot"].as_u64().unwrap() as u32;
+        let info = info_in(&t, m2);
+        t.send_chunk(conn, slot, 0, &info);
+        let e = &t.book.store.entries()[0];
+        assert_eq!((e.game.number, e.game.place), (2, 2));
+        assert_eq!(t.book.store.entries().len(), 1, "one stream for the room");
+    }
+
+    /// A set's game played again in the same match (a desync's restart): the player's game gives
+    /// it the same number again, and so does the list. The next game is the next number.
+    #[test]
+    fn a_room_game_played_again_keeps_its_number() {
+        let mut t = T::new(SpectateMode::On);
+        let a = t.a;
+        let m = "mode.room-TLSZ-2026-10-14T16:00:00.000Z-7";
+        room_match(&mut t, m);
+        let numbers = |t: &T| -> Vec<u32> {
+            let mut v: Vec<u32> = t.book.games.values().map(|g| g.number).collect();
+            v.sort_unstable();
+            v
+        };
+        offer_in(&mut t, m, A, a, 0x51, 9);
+        offer_in(&mut t, m, A, a, 0x52, 9);
+        assert_eq!(numbers(&t), [1, 1], "game 9 again: the same game");
+        offer_in(&mut t, m, A, a, 0x53, 10);
+        assert_eq!(numbers(&t), [1, 1, 2]);
+    }
+
+    /// The pairing stays inside a match: an offer for another match's game never joins it, and a
+    /// player who already offered for the open game starts a new game with a second id.
+    #[test]
+    fn the_pairing_stays_in_its_match() {
+        let mut t = T::new(SpectateMode::On);
+        let (a, b) = (t.a, t.b);
+        let (m1, m2) = ("mode.room-TLSZ-x-1", "mode.room-TLSZ-x-2");
+        room_match(&mut t, m1);
+        room_match(&mut t, m2);
+        offer_in(&mut t, m1, A, a, 0x61, 1);
+        offer_in(&mut t, m2, B, b, 0x62, 1);
+        assert_eq!(t.book.games.len(), 2);
+        assert!(t.book.games[&[0x61; 16]].offers.iter().all(|o| o.account == a));
+        offer_in(&mut t, m1, A, a, 0x63, 2);
+        assert_eq!(t.book.games.len(), 3);
+        assert!(!t.book.games[&[0x61; 16]].open(), "A's new game closed its last one");
     }
 }

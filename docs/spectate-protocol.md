@@ -30,7 +30,7 @@ Sent at the barrier of every game when the player's "Let others stream my games"
 | Field | Meaning |
 |---|---|
 | `matchId` | the match mm made: a `get-ticket-resp`'s, or a room game's start |
-| `gameUid` | the replay's `game_uid` (`replays.md` §4.4), the same on every player's game |
+| `gameUid` | the replay's `game_uid` (`replays.md` §4.4), the same on every player's game (builds up to 0.1.72 put their own count of a room's games into it, so a room game's players could send different ids; see below) |
 | `game` | the game number the players see (INFO `gameIndex`), 1-99 |
 | `paused` | how many times this player's uploader paused in its last game (0 for the first game) |
 | `rollbacks` | its last game's average rollback depth in frames (0 for the first game) |
@@ -40,7 +40,7 @@ mm accepts an offer only:
 - for a match mm made in the last 6 hours;
 - for at most 64 games per match.
 
-A second offer for the same game from the same account replaces the first. An offer for a new game of the match closes the match's open game, if any (its upload stopped before ENDG): what was kept stays, and spectators get `bad` "The rest of this game wasn't streamed." for it.
+A second offer for the same game from the same account replaces the first. An offer whose `gameUid` mm doesn't know, from a player who hasn't offered for the match's open game, is for that game: the players of a match play its games together, one at a time. Each player's roles name the `gameUid` its own game sent. (Production 2026-10-14, room TLSZ: an older host's game offered its room game as game 4 and the guest's as game 1, under different ids; mm made two games with a primary each and no witness, and refused one upload.) An offer for a new game of the match closes the match's open game, if any (its upload stopped before ENDG): what was kept stays, and spectators get `bad` "The rest of this game wasn't streamed." for it.
 
 ### `spectate-role` (mm → game)
 
@@ -115,7 +115,7 @@ On mm's status listener (`MM_STATUS_LISTEN`):
 
 | Line | Meaning |
 |---|---|
-| `{"t":"game","game":2,"number":2,"uid":"<32 hex>"}` | the stream's 2nd game starts (`number`: the game number the players saw; a desync restart repeats it); its chunks follow. `game` in every line is this place in the stream. |
+| `{"t":"game","game":2,"number":2,"uid":"<32 hex>"}` | the stream's 2nd game starts (`number`: the game number the players saw; a desync restart repeats it. A room's games are numbered by mm, 1, 2, 3… in the stream, since each player's game counts a room's games its own way); its chunks follow. `game` in every line is this place in the stream. |
 | `{"t":"chunk","game":2,"i":5,"b":"<base64 chunk>"}` | the chunk as uploaded, header included |
 | `{"t":"end","game":2}` | the game's `ENDG` arrived |
 | `{"t":"bad","game":2,"error":"…"}` | the game can't be shown; nothing more of it comes |

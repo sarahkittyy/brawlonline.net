@@ -171,8 +171,9 @@ struct State
   u32 serial = 1;
   std::string shown;  // text + error of the last snapshot
 
-  // The room's games.
+  // The room's games: `game` is the next one's number, counted from 1 in the room `game_room`.
   u32 game = 1;
+  std::string game_room;
   u8 pickers = 0;
   RoomGame rg;
   u64 games_started = 0, games_done = 0, games_failed = 0;
@@ -440,8 +441,17 @@ void Handle(const Message& m, Actions* a, Clock::time_point now)
     }
     if (new_room)
     {
-      // A new room: its games start over (no stage pick carried from another room).
+      // A new room: its games start over (no stage pick carried from another room). The count
+      // too, unless it is the same room again (back after the connection dropped): it went on
+      // from the last room's, so a player who came from another room numbered the room's games
+      // differently from the others (prod 2026-10-14, room TLSZ: 4 against 1), and the number is
+      // in the game's id (replays, spectating).
       s.pickers = 0;
+      if (v.code != s.game_room)
+      {
+        s.game = 1;
+        s.game_room = v.code;
+      }
       RestartAway();
       Log(fmt::format("in room {} (slot {}, host {})", v.code, v.you, v.host));
     }
