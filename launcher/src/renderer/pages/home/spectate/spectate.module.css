@@ -5,10 +5,13 @@
   overflow: hidden;
 }
 
+/* Wider than 1200px the columns would drift apart: the list stays 1200px wide, centered. */
 .block {
   --live-red: #e5534b;
 
   container-type: inline-size;
+  max-width: 1200px;
+  margin: 0 auto;
   min-height: 0;
   height: 100%;
   overflow: hidden;
@@ -16,7 +19,11 @@
   flex-direction: column;
 }
 
+/* Centered on the header's line, the switch and its 13px label sit 2px above the 18.7px title's baseline: down 2px
+   so the two texts share a baseline. */
 .autoPlay {
+  position: relative;
+  top: 2px;
   margin: 0 0 0 8px;
   color: var(--text-secondary);
   white-space: nowrap;
@@ -66,6 +73,7 @@
   width: 100%;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 76px 120px 104px 48px 76px;
+  grid-template-areas: "players mode game time eye action";
   align-items: center;
   gap: 12px;
   padding: 10px 12px;
@@ -136,19 +144,23 @@
   }
 }
 
+/* Three or four players wrap onto more lines instead of shrinking to a letter each; one long name still ends in "…". */
 .players {
+  grid-area: players;
   min-width: 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 2px 8px;
   overflow: hidden;
 }
 
 .side {
   min-width: 0;
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
-  gap: 8px;
+  gap: 2px 8px;
 }
 
 .player {
@@ -181,6 +193,7 @@
 }
 
 .mode {
+  grid-area: mode;
   justify-self: start;
   padding: 2px 8px;
   border: 1px solid rgb(255 255 255 / 18%);
@@ -193,6 +206,7 @@
 }
 
 .game {
+  grid-area: game;
   min-width: 0;
   color: var(--text-secondary);
   font-size: 13px;
@@ -208,6 +222,7 @@
 }
 
 .time {
+  grid-area: time;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -227,6 +242,7 @@
 }
 
 .eye {
+  grid-area: eye;
   display: flex;
   align-items: center;
   gap: 4px;
@@ -236,6 +252,7 @@
 }
 
 .action {
+  grid-area: action;
   justify-self: end;
   display: flex;
   align-items: center;
@@ -261,13 +278,31 @@
   color: var(--live-red);
 }
 
+/* Narrower: the mode goes (the row's names and game say enough). */
 @container (width < 720px) {
   .row {
     grid-template-columns: minmax(0, 1fr) 96px 92px 40px 64px;
+    grid-template-areas: "players game time eye action";
     gap: 8px;
   }
 
   .mode {
+    display: none;
+  }
+}
+
+/* Narrower still (a small window in a dev build): two lines, the players and Watch over the game, its time and the
+   watchers, so the names keep the row's width. The header's watch status goes; the watched row shows it. */
+@container (width < 560px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    grid-template-areas:
+      "players players action"
+      "game time eye";
+    gap: 4px 12px;
+  }
+
+  .watchStatus {
     display: none;
   }
 }

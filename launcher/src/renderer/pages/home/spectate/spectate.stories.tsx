@@ -8,6 +8,8 @@ import { SpectateView } from "./spectate_view";
 export default {
   title: "pages/Home/Spectate",
   argTypes: {},
+  // The page fills the frame, so the viewport can be set to any window size.
+  parameters: { layout: "fullscreen" },
 };
 
 const NOW = Date.parse("2026-10-14T02:10:00Z");
@@ -83,7 +85,7 @@ const mockGames: LiveGameEntry[] = [
 ];
 
 const Frame = ({ children }: { children: React.ReactNode }) => (
-  <div className={styles.page} style={{ height: 560, width: 900 }}>
+  <div className={styles.page} style={{ height: "100vh", width: "100vw" }}>
     {children}
   </div>
 );
