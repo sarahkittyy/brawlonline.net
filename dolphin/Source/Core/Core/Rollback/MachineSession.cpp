@@ -4148,6 +4148,10 @@ NetPlay::NetSettings MakeNetSettings()
   ns.mem1_size = Pinned(Config::MAIN_MEM1_SIZE);
   ns.mem2_size = Pinned(Config::MAIN_MEM2_SIZE);
   ns.fallback_region = Pinned(Config::MAIN_FALLBACK_REGION);
+  // The build's: the launcher passes whether it has an SD card (part of its hash, so every player
+  // has the same). The netplay layer sets this setting too, and its default (no card) left mods
+  // that load from the card (REX, Brawl Minus) booting vanilla Brawl.
+  ns.sd_card_inserted = Config::Get(Config::MAIN_WII_SD_CARD);
   // The SD card is read-only in a session (docs/design/brawl-mods.md §4).
   ns.allow_sd_writes = false;
   ns.oc_enable = false;
