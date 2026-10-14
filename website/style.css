@@ -32,10 +32,15 @@
   box-sizing: border-box;
 }
 
+/* Elements styled with a display (the top 10 and its hint) stay hidden while [hidden]. */
+[hidden] {
+  display: none !important;
+}
+
 html,
 body {
   margin: 0;
-  height: 100%;
+  min-height: 100%;
 }
 
 body {
@@ -189,6 +194,25 @@ main {
   height: auto;
   max-height: 30vh;
   object-fit: contain;
+}
+
+/* The one-sentence pitch above the feature lines. */
+.pitch {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: clamp(14px, 2.6vh, 22px);
+}
+
+.lede {
+  margin: 0;
+  max-width: 34em;
+  font-weight: 600;
+  font-size: clamp(16px, 2.2vw, 19px);
+  line-height: 1.35;
+  text-wrap: balance;
+  color: var(--fg);
+  text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8);
 }
 
 /* What Brawl Online does: two columns of short lines, one column on phones. */
@@ -451,6 +475,226 @@ summary:focus-visible {
 .dc svg {
   width: 27px;
   height: 24px;
+}
+
+/* ---- Ranked top 10 ------------------------------------------------------------
+   Wide screens: a small panel tucked into the top right corner, never wider than the space beside the
+   centre column. Phones and narrow or short windows: a second full-screen page under the first, with
+   scroll snap between the two and a hint at the bottom of the first ("P+ top 10" and a chevron). */
+.top {
+  position: relative;
+  z-index: 2;
+}
+
+.top-card {
+  padding: 18px 24px 14px;
+  border: 1px solid rgba(241, 241, 244, 0.12);
+  border-top: 3px solid var(--pm-mid);
+  border-radius: 14px;
+  background: rgba(17, 17, 22, 0.88);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.6);
+}
+
+.top-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin-bottom: 8px;
+}
+
+.top h2 {
+  margin: 0;
+  font-family: "Barlow Condensed", system-ui, sans-serif;
+  font-style: italic;
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 1.6em;
+  line-height: 1.1;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.top-total {
+  margin: 0;
+  font-size: 0.87em;
+  color: var(--dim);
+}
+
+.top table {
+  width: 100%;
+  border-collapse: collapse;
+  font-variant-numeric: tabular-nums;
+}
+
+.top th,
+.top td {
+  padding: 0.6em 0.53em;
+  text-align: left;
+  border-bottom: 1px solid rgba(241, 241, 244, 0.08);
+}
+
+.top tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.top th {
+  font-size: 0.8em;
+  font-weight: 500;
+  color: var(--dim);
+}
+
+.top .pos,
+.top .rating {
+  text-align: right;
+  white-space: nowrap;
+}
+
+.top td.pos {
+  width: 3em;
+  font-family: "Barlow Condensed", system-ui, sans-serif;
+  font-style: italic;
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 1.15em;
+  color: var(--pm-hi);
+}
+
+.top td.name {
+  font-weight: 600;
+  overflow-wrap: anywhere;
+}
+
+.top td.code {
+  color: var(--dim);
+  white-space: nowrap;
+}
+
+/* "P+ top 10 v" at the bottom of the first screen, "^ Back up" at the top of the second. */
+.swipe {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 2px;
+  color: var(--dim);
+  text-decoration: none;
+  font-family: "Barlow Condensed", system-ui, sans-serif;
+  font-style: italic;
+  font-weight: 900;
+  font-synthesis: none;
+  font-size: 0.95rem;
+  line-height: 1;
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  -webkit-tap-highlight-color: transparent;
+}
+
+.swipe:hover {
+  color: var(--fg);
+}
+
+.swipe svg {
+  width: 26px;
+  height: 26px;
+}
+
+.swipe-down {
+  position: absolute;
+  left: 50%;
+  bottom: max(14px, calc(env(safe-area-inset-bottom) + 8px));
+  transform: translateX(-50%);
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  html {
+    scroll-behavior: smooth;
+  }
+  .swipe-down svg {
+    animation: nudge 1.8s ease-in-out infinite;
+  }
+}
+
+@keyframes nudge {
+  0%, 100% { transform: translateY(0); }
+  50% { transform: translateY(4px); }
+}
+
+/* Wide screens: the corner panel. The centre column is about 640px wide; the panel takes what is left
+   of the right half, up to 330px, and its text scales with it. */
+@media (min-width: 1180px) and (min-height: 560px) {
+  .swipe {
+    display: none;
+  }
+  .top {
+    position: fixed;
+    top: max(16px, env(safe-area-inset-top));
+    right: max(16px, env(safe-area-inset-right));
+    width: min(330px, calc((100vw - 680px) / 2 - 32px));
+    font-size: clamp(11.5px, 1vw, 14px);
+  }
+  .top-card {
+    padding: 1em 1.1em 0.5em;
+    border-radius: 12px;
+    box-shadow: 0 12px 40px rgba(0, 0, 0, 0.5);
+  }
+  .top-head {
+    flex-direction: column;
+    gap: 0.15em;
+    margin-bottom: 0.4em;
+  }
+  .top h2 {
+    font-size: 1.35em;
+  }
+  .top th,
+  .top td {
+    padding: 0.42em 0.4em;
+  }
+  .top th.code,
+  .top td.code {
+    display: none;
+  }
+}
+
+/* Phones, narrow and short windows: two snapping pages. The corner links stay on the first one. */
+@media not all and (min-width: 1180px) and (min-height: 560px) {
+  html {
+    scroll-snap-type: y mandatory;
+  }
+  main {
+    scroll-snap-align: start;
+  }
+  .corner {
+    position: absolute;
+  }
+  .top {
+    min-height: 100vh;
+    min-height: 100svh;
+    scroll-snap-align: start;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 18px;
+    padding:
+      max(20px, calc(env(safe-area-inset-top) + 12px))
+      max(16px, env(safe-area-inset-right))
+      max(28px, calc(env(safe-area-inset-bottom) + 20px))
+      max(16px, env(safe-area-inset-left));
+  }
+  .top-card {
+    width: min(560px, 100%);
+  }
+}
+
+@media (max-width: 480px) {
+  .top-card {
+    padding: 16px 14px 10px;
+  }
+  .top th.code,
+  .top td.code {
+    display: none;
+  }
 }
 
 /* ---- FAQ dialog ------------------------------------------------------------- */

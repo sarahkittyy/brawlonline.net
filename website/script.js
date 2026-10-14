@@ -174,7 +174,43 @@ function setupFaq() {
   fromHash();
 }
 
+// Ranked top 10 from the accounts API (same origin). Rating only, one decimal, as the launcher shows it.
+// Everything from the server goes in as text. If it can't be read, the section and its hint stay hidden.
+async function setupTop10() {
+  const section = document.getElementById("top10");
+  const rows = document.getElementById("top-rows");
+  if (!section || !rows) return;
+  try {
+    const res = await fetch("/v1/ranked/leaderboard?limit=10", { cache: "no-cache" });
+    if (!res.ok) return;
+    const page = await res.json();
+    const entries = Array.isArray(page.entries) ? page.entries.slice(0, 10) : [];
+    if (!entries.length) return;
+    for (const e of entries) {
+      const tr = document.createElement("tr");
+      const cell = (cls, text) => {
+        const td = document.createElement("td");
+        td.className = cls;
+        td.textContent = text;
+        tr.appendChild(td);
+      };
+      cell("pos", String(e.position));
+      cell("name", String(e.displayName || ""));
+      cell("code", String(e.connectCode || ""));
+      cell("rating", Number(e.rating).toFixed(1));
+      rows.appendChild(tr);
+    }
+    const total = Number(page.total) || 0;
+    document.getElementById("top-total").textContent = total === 1 ? "1 ranked player" : total + " ranked players";
+    section.hidden = false;
+    document.getElementById("top-hint").hidden = false;
+  } catch (e) {
+    // Offline or blocked: the page works without it.
+  }
+}
+
 window.BrawlOnline = { detectOS, parseFeed, DOWNLOADS };
 setupDownloads(currentOS());
 setupVideo();
 setupFaq();
+setupTop10();

@@ -8,7 +8,17 @@
 <meta name="color-scheme" content="dark">
 <meta name="theme-color" content="#08080b">
 <title>Brawl Online</title>
-<meta name="description" content="Play Project+ online with rollback netcode. Lobbies, matchmaking and direct connect for 2-4 players.">
+<meta name="description" content="Project+ rollback + lobbies + matchmaking. Full rollback netcode for all Wii games. 2-4 players.">
+<!-- Link previews (Discord and the like). The image is the background video's still, our own recording. -->
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="Brawl Online">
+<meta property="og:title" content="Brawl Online">
+<meta property="og:description" content="Project+ rollback + lobbies + matchmaking. Full rollback netcode for all Wii games. 2-4 players.">
+<meta property="og:url" content="https://brawlonline.net/">
+<meta property="og:image" content="https://brawlonline.net/assets/bg-poster.jpg">
+<meta property="og:image:width" content="1280">
+<meta property="og:image:height" content="720">
+<meta name="twitter:card" content="summary_large_image">
 <link rel="icon" href="favicon.ico" sizes="16x16 32x32 48x48">
 <link rel="icon" href="assets/icon-512.png" type="image/png" sizes="512x512">
 <link rel="apple-touch-icon" href="assets/icon-180.png">
@@ -44,15 +54,21 @@
       <span class="wordmark"><span class="w1">Brawl</span> <span class="w2">Online</span></span>
       <!-- <img src="assets/logo.svg" alt="Brawl Online"> -->
     </h1>
-    <p class="tagline">rollback + matchmaking for pm</p>
+    <p class="tagline">rollback netplay for the wii</p>
   </div>
 
-  <ul class="features">
-    <li>Dedicated launcher</li>
-    <li>Lobbies, matchmaking + direct connect</li>
-    <li>2&ndash;4 players: 1v1, teams, FFA</li>
-    <li>Built-in chat</li>
-  </ul>
+  <div class="pitch">
+    <p class="lede">Play P+ rollback in lobbies or ranked.<br>Rollback support for EVERY WII GAME.</p>
+
+    <ul class="features">
+      <li>Made for Project+</li>
+      <li>High-quality, optimized netcode</li>
+      <li>Lobbies, matchmaking</li>
+      <li>Spectate public games LIVE</li>
+      <li>Full Windows / Mac / Linux support</li>
+      <li>Everything in one place</li>
+    </ul>
+  </div>
 
   <div class="get">
     <!-- The script puts the visitor's OS on the button ("Download for Windows") and its newest
@@ -83,7 +99,35 @@
       </ul>
     </details>
   </div>
+
+  <!-- Phones and narrow windows: the top 10 is the next "page"; this says so. Shown once it has loaded. -->
+  <a class="swipe swipe-down" id="top-hint" href="#top10" hidden>
+    <span>P+ top 10</span>
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" d="M6 9l6 6 6-6"/></svg>
+  </a>
 </main>
+
+<!-- Ranked top 10, filled from GET /v1/ranked/leaderboard (script.js); stays hidden if that can't be read or
+     nobody is rated yet. Rating only. Wide screens: tucked into the top right corner, sized to the space beside
+     the centre column. Phones and narrow windows: a second full-screen "page" below the first (scroll snap). -->
+<section class="top" id="top10" aria-labelledby="top-title" hidden>
+  <a class="swipe swipe-up" href="#">
+    <svg viewBox="0 0 24 24" aria-hidden="true"><path fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round" d="M6 15l6-6 6 6"/></svg>
+    <span>Back up</span>
+  </a>
+  <div class="top-card">
+    <div class="top-head">
+      <h2 id="top-title">BrawlOnline P+ Top 10</h2>
+      <p class="top-total" id="top-total"></p>
+    </div>
+    <table>
+      <thead>
+        <tr><th class="pos" scope="col">#</th><th scope="col">Player</th><th class="code" scope="col">Connect code</th><th class="rating" scope="col">Rating</th></tr>
+      </thead>
+      <tbody id="top-rows"></tbody>
+    </table>
+  </div>
+</section>
 
 <!-- Discord invite, left of the source link. -->
 <a class="corner dc" href="https://discord.gg/BsR9xq5bgM" target="_blank" rel="noopener" aria-label="Discord server" title="Discord server">
@@ -107,10 +151,25 @@
   </div>
   <dl>
     <dt>What is this?</dt>
-    <dd>An app for playing Project+ online, with rollback netcode. It sets everything up for you. You just need your own Brawl ISO.</dd>
+    <dd>An app for playing Project+ online with rollback netcode: lobbies, matchmaking, ranked and spectating. You can also play any Wii game in a room with your friends. It sets everything up for you.</dd>
+
+    <dt>What do I need?</dt>
+    <dd>Your own Brawl ISO for P+, and your own copy of any other game you want to play.</dd>
+
+    <dt>Can I play other games?</dt>
+    <dd>Yes. Under <strong>Other Games</strong>, any Wii game or Brawl mod runs with full rollback in a room with your friends.</dd>
+
+    <dt>Does this support Windows, Mac and Linux?</dt>
+    <dd>Yes.</dd>
+
+    <dt>How does ranked work?</dt>
+    <dd>1v1 sets, rated with Elo. The top 10 are on this page.</dd>
+
+    <dt>Can I watch games?</dt>
+    <dd>Yes. <strong>Spectate</strong> lists the games being played right now, and every online game you play is saved as a replay.</dd>
 
     <dt>Is this Brawlback?</dt>
-    <dd>No. It's built on Brawlback's rollback code, with a launcher, lobbies, matchmaking and more added on top.</dd>
+    <dd>No. It started as a fork of Brawlback for full P+ support, and now does whole-machine rollback for any Wii game.</dd>
 
     <dt>Is this yougame.co?</dt>
     <dd>No. We're a separate project.</dd>

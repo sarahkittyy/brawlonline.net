@@ -1,12 +1,12 @@
 # brawlonline.net
 
-The landing page for Brawl Online. It is a static site with no build step, no analytics, no cookies and no external requests (a Content-Security-Policy meta tag in `index.html` enforces `'self'` only). The page shows a logo with the tagline "rollback + matchmaking for pm" under its bottom right corner, four short feature lines (`.features`), one download button for the visitor's OS ("Download for Windows", with the version and size under it), a tiny "download for other operating systems" toggle, and a dim looping gameplay video behind them. The logo and the button sit on green menu-button frames in the style of Project M's menus. A "FAQ" link at the top left opens a `<dialog>` (`#faq` in `index.html`; `/#faq` opens it too, and without JavaScript it shows through `:target`), and Discord and GitHub icons sit at the bottom right. Keep all text short.
+The landing page for Brawl Online. It is a static site with no build step, no analytics, no cookies and no external requests (a Content-Security-Policy meta tag in `index.html` enforces `'self'` only). The page shows a logo with the tagline "rollback netplay for the wii" under its bottom right corner, two lines on what it plays (`.lede`: P+ in lobbies or ranked, and every Wii game), six short feature lines (`.features`), one download button for the visitor's OS ("Download for Windows", with the version and size under it), a tiny "download for other operating systems" toggle, and a dim looping gameplay video behind them. The logo and the button sit on green menu-button frames in the style of Project M's menus. The Ranked top 10 sits in the top right corner on wide screens and is a second page under the first on phones (below). A "FAQ" link at the top left opens a `<dialog>` (`#faq` in `index.html`; `/#faq` opens it too, and without JavaScript it shows through `:target`), and Discord and GitHub icons sit at the bottom right. Keep all text short.
 
 | File | What it is |
 | --- | --- |
 | `index.html` | The page. Icons are inline SVG. |
 | `style.css` | All styles, including the menu-button frame (`.plate`). `--video-opacity` sets how dim the video is; the `--pm-*` variables set the frame colours. |
-| `script.js` | The download links (`DOWNLOADS` at the top), OS detection and video start. |
+| `script.js` | The download links (`DOWNLOADS` at the top), OS detection, video start, the FAQ dialog and the Ranked top 10. |
 | `assets/fonts/` | The wordmark font (Barlow Condensed Black Italic, OFL) and its licence. |
 | `assets/bg.webm`, `assets/bg.mp4`, `assets/bg-poster.jpg` | Background video and its still frame. **Not present yet.** |
 | `r/index.html`, `r/ruleset.js`, `r/ruleset.css` | The ruleset page, `brawlonline.net/r/<code>` (below). |
@@ -74,6 +74,17 @@ These are placeholders: there are no builds yet. Also update the three `href`s i
 The script picks the visitor's OS (Windows, macOS, Linux; the Steam Deck counts as Linux) and puts that OS's icon and link on the button. It then reads that OS's update feed (`/updates/launcher/latest.yml`, `latest-mac.yml`, `latest-linux.yml`; `FEEDS` in `script.js`), points the button at the installer the feed names and writes the version and size under it (the Windows feed gives no size, so the script asks the server with a HEAD request). This needs `connect-src 'self'` in the CSP. If the feed can't be read, the button keeps the stable `/downloads/` link and the line stays empty. Phones, tablets (iPad included), ChromeOS and anything unrecognised get a neutral download icon that opens the list of all three. `window.BrawlOnline.detectOS({ ua, platform, touchPoints, uaData })` is exposed for testing the detection with any user agent.
 
 The launcher's own update feed (electron-updater, `generic` provider) is `https://brawlonline.net/updates/launcher` (`launcher/src/common/product.ts`). The download links can point at the installers there once releases are published, or at a stable copy under `/downloads/`.
+
+## The Ranked top 10
+
+`setupTop10()` in `script.js` reads `GET /v1/ranked/leaderboard?limit=10` from the accounts API (same origin, so `connect-src 'self'` covers it; public, limited to 30 requests a minute per IP) and fills `#top10` with each player's position, name, connect code and rating (one decimal, as the launcher shows it; no win/loss record). Everything from the server goes in as text. Until it has loaded, and for good if it can't be read or nobody is rated yet, the section and its hint stay `hidden` and the page looks as it did without it.
+
+Where it goes depends on the window (`style.css`, "Ranked top 10"):
+
+- **Wide screens** (at least 1180 x 560): a small panel fixed in the top right corner. Its width is what is left of the right half beside the centre column (about 640 px wide), up to 330 px, and its text scales with the window, so it never covers the logo, the lines or the button. The connect codes are left out there.
+- **Phones, narrow and short windows:** a second full-screen page under the first, with `scroll-snap-type: y mandatory` between the two. A "P+ top 10" hint with a nudging chevron at the bottom of the first page links down to it, and a "Back up" chevron at the top of the second links back. The FAQ link and the corner icons stay on the first page (`position: absolute` there). Under 480 px the connect codes are left out.
+
+Link previews (Discord and the like) use the `og:` tags in `index.html`, with `assets/bg-poster.jpg` as the image.
 
 ## The ruleset page (`/r/<code>`)
 
