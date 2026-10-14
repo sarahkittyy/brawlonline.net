@@ -77,6 +77,7 @@
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/OnlineSession.h"
 #include "Core/Rollback/GameplayOnlineBackend.h"
+#include "Core/Rollback/ReplayPlayback.h"
 #include "Core/State.h"
 #include "Core/System.h"
 #include "Core/WiiUtils.h"
@@ -782,7 +783,7 @@ void MainWindow::ConnectRenderWidget()
 {
   m_rendering_to_main = false;
   m_render_widget->hide();
-  connect(m_render_widget, &RenderWidget::Closed, this, &MainWindow::ForceStop);
+  connect(m_render_widget, &RenderWidget::Closed, this, &MainWindow::OnRenderWidgetClosed);
   connect(m_render_widget, &RenderWidget::FocusChanged, this, [this](bool focus) {
     if (m_render_widget->isFullScreen())
       SetFullScreenResolution(focus);
@@ -1138,6 +1139,15 @@ void MainWindow::ForceStop()
   Core::Stop(m_system);
 }
 
+void MainWindow::OnRenderWidgetClosed()
+{
+  // The launcher's playback Dolphin (`-i`: replays and spectating) has nothing to offer once its
+  // game window is closed: Dolphin closes with it, as the user expects of a replay window.
+  if (Gprb::Replay::Playback::Following())
+    m_exit_requested = true;
+  ForceStop();
+}
+
 void MainWindow::Reset()
 {
   auto& movie = m_system.GetMovie();
@@ -1371,7 +1381,7 @@ void MainWindow::HideRenderWidget(bool reinit, bool is_exit)
   if (reinit)
   {
     m_render_widget->hide();
-    disconnect(m_render_widget, &RenderWidget::Closed, this, &MainWindow::ForceStop);
+    disconnect(m_render_widget, &RenderWidget::Closed, this, &MainWindow::OnRenderWidgetClosed);
 
     m_render_widget->removeEventFilter(this);
     m_render_widget->deleteLater();
@@ -1379,7 +1389,7 @@ void MainWindow::HideRenderWidget(bool reinit, bool is_exit)
     m_render_widget = new RenderWidget;
 
     m_render_widget->installEventFilter(this);
-    connect(m_render_widget, &RenderWidget::Closed, this, &MainWindow::ForceStop);
+    connect(m_render_widget, &RenderWidget::Closed, this, &MainWindow::OnRenderWidgetClosed);
     connect(m_render_widget, &RenderWidget::FocusChanged, this, [this](bool focus) {
       if (m_render_widget->isFullScreen())
         SetFullScreenResolution(focus);

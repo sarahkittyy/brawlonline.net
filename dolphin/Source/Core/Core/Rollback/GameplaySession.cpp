@@ -39,6 +39,8 @@
 #include "Core/Brawlback/include/gekkonet/GekkoLib/include/gekkonet.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
+#include "AudioCommon/AudioCommon.h"
+#include "AudioCommon/SoundStream.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/CoreTiming.h"
@@ -681,6 +683,10 @@ struct State
     bool live = false;
     bool catch_up_at_start = false;  // ArmPlayback's `catch_up`
     bool catch_up = false;
+    // The catch-up a spectator starts with (not Go Live's) runs muted: the sound stream's volume
+    // is 0 meanwhile and comes back from the user's settings after (UpdateSoundStream).
+    bool joining = false;
+    bool muted = false;
     s64 catch_frames = 0;
     Clock::time_point catch_since{};
     double catch_rate = 0;
@@ -3102,6 +3108,23 @@ GameResult ReadGameResult(Core::System& system)
 }
 void CostSessionEnd();
 
+// The sound stream at 0 volume, or back to the user's settings (never their saved settings).
+void PlaybackMute(Core::System& system, bool mute)
+{
+  if (s.pb.muted == mute)
+    return;
+  s.pb.muted = mute;
+  if (mute)
+  {
+    if (SoundStream* stream = system.GetSoundStream())
+      stream->SetVolume(0);
+  }
+  else
+  {
+    AudioCommon::UpdateSoundStream(system);
+  }
+}
+
 void EndRunning(Core::System& system, const std::string& reason)
 {
   CostSessionEnd();
@@ -3147,6 +3170,7 @@ void EndRunning(Core::System& system, const std::string& reason)
     // desync with DESYNC DETECTED, a quit of a 3-4 player match as that player's own.
     s.phase = Phase::Ended;
     s.pb.finished = true;
+    PlaybackMute(system, false);
     if (reason == "replay ended")
     {
       const std::string& m = s.pb.end_method;
@@ -5190,6 +5214,10 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
     const s64 f = first + static_cast<s64>(pb.next);
     if (pb.live)
       LiveLoopTop(f);
+    // Muted while the spectator's first catch-up runs (the user, 2026-10-14).
+    if (!pb.catch_up)
+      pb.joining = false;
+    PlaybackMute(system, pb.catch_up && pb.joining);
     const bool ff = f < pb.ff_until;
     const bool waiting = !ff && LiveWaiting(f);
     if (f > last && !ff && !waiting)
@@ -7028,6 +7056,7 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
   if (s.pb.live && s.pb.catch_up_at_start)
   {
     s.pb.catch_up = true;
+    s.pb.joining = true;
     s.pb.catch_frames = 0;
   }
   s.phase = Phase::Countdown;

@@ -124,7 +124,7 @@ On mm's status listener (`MM_STATUS_LISTEN`):
 An empty line is sent every 15 s, so idle connections stay open.
 
 A **stream** is a match: a Direct, Unranked or Ranked set, or a room's games while the same players play in the same room. Its id is 12 lowercase hex characters. A stream is over:
-- at once when its set can't go on: a game ended by a disconnect, a player leaving the match or an error (ENDG `endMethod` `disconnect`, `stopped`, `error`), a Ranked quit, or a Ranked player's second win;
+- at once when its set can't go on: a game ended by a disconnect, a player leaving the match or an error (ENDG `endMethod` `disconnect`, `stopped`, `error`), or a Ranked player's second win (a Ranked quit is a lost game, the quitter's opponent's win, not the set's end);
 - when one of its players leaves the match or the room, once no game of it is going on: mm sees them leave the match's (or room's) chat group, which Dolphin does when the game leaves the online CSS, a new search, another room or a dropped connection (`docs/chat-protocol.md` §2). Between games on the CSS the players stay in it;
 - otherwise 120 s after its last game ended with no new offer (players without in-game chat never join a group; Unranked, Direct and rooms have no set length);
 - when no game of it has been uploaded for 10 minutes.

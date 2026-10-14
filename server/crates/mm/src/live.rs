@@ -348,11 +348,12 @@ impl StreamBook {
 
 /// Whether a game that ended with `method` (ENDG's `endMethod`, `GameplaySession.cpp` EndReplay)
 /// ends its stream: nothing can follow a disconnect, a player leaving the match or an error; in
-/// Ranked a quit loses the set, and the first to `WINS_NEEDED` wins it. A desync restarts the game
-/// and runbacks and other modes' quits play on, as does a room's next game after its set.
+/// Ranked the first to `WINS_NEEDED` wins the set. A quit never ends a set (in Ranked it loses
+/// that game, docs/game-code.md "The quit per mode"; in a room's set the game didn't happen), a
+/// desync restarts the game, and runbacks play on, as does a room's next game after its set.
 fn ends_stream(mode: &str, method: &str, best_wins: u32) -> bool {
     matches!(method, "disconnect" | "stopped" | "error")
-        || (mode == "ranked" && (method == "quit" || best_wins >= common::ranked::WINS_NEEDED))
+        || (mode == "ranked" && best_wins >= common::ranked::WINS_NEEDED)
 }
 
 pub struct LiveBook {
@@ -1026,7 +1027,18 @@ impl LiveBook {
         let (stream_id, ordinal) = (game.stream.clone(), game.ordinal);
         let mode = self.matches.get(&game.match_id).map_or("", |m| m.mode);
         let method = endg.and_then(|e| e.get("endMethod")).and_then(|m| m.as_str()).unwrap_or("").to_string();
-        let winner_port = endg.and_then(|e| e.get("winnerPort")).and_then(|w| w.as_u64());
+        let mut winner_port = endg.and_then(|e| e.get("winnerPort")).and_then(|w| w.as_u64());
+        // A Ranked quit loses the game for the quitter: the other player won it, whatever the
+        // record says about a winner.
+        if mode == "ranked" && method == "quit" {
+            let quitter = endg.and_then(|e| e.get("quitterPort")).and_then(|q| q.as_u64());
+            if let Some(q) = quitter {
+                let ports = self.info_ports(&stream_id, ordinal);
+                if ports.len() == 2 {
+                    winner_port = ports.keys().map(|&p| p as u64).find(|&p| p != q).or(winner_port);
+                }
+            }
+        }
         let mut winners: Vec<String> = Vec::new();
         if let Some(port) = winner_port {
             // The winner's uid (and team mates) from the stored entry: INFO's players by port.
@@ -1702,10 +1714,17 @@ mod tests {
             t.advance(Duration::from_secs(1));
             assert!(!over(&t), "Direct {method}");
         }
+        // A Ranked quit loses that game, not the set (docs/game-code.md): the stream goes on, and
+        // the quit counts as the other player's win.
         let mut t = T::with_match_mode(SpectateMode::On, Mode::Ranked);
-        play_game(&mut t, 1, r#"{"endMethod":"quit","winnerPort":2}"#);
+        play_game(&mut t, 1, r#"{"endMethod":"quit","quitterPort":1}"#);
         t.advance(Duration::from_secs(1));
-        assert!(over(&t), "a Ranked quit loses the set");
+        assert!(!over(&t), "a Ranked quit loses one game");
+        let e = &t.book.store.entries()[0];
+        assert_eq!(e.players.iter().find(|p| p.uid == t.b.to_string()).unwrap().wins, 1, "the quitter's opponent won it");
+        play_game(&mut t, 2, r#"{"endMethod":"game","winnerPort":2}"#);
+        t.advance(Duration::from_secs(1));
+        assert!(over(&t), "2-0 after the quit");
         let mut t = T::with_match_mode(SpectateMode::On, Mode::Ranked);
         play_game(&mut t, 1, r#"{"endMethod":"game","winnerPort":1}"#);
         t.advance(Duration::from_secs(1));

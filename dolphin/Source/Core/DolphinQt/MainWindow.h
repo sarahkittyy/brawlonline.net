@@ -112,6 +112,7 @@ private:
   // May ask for confirmation. Returns whether or not it actually stopped.
   bool RequestStop();
   void ForceStop();
+  void OnRenderWidgetClosed();
   void Reset();
   void FrameAdvance();
   void StateLoad();

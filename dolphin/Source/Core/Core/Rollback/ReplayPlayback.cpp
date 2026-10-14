@@ -523,6 +523,12 @@ void SetCommFile(const std::string& path)
   EnsureThread();
 }
 
+bool Following()
+{
+  std::lock_guard lk(s_mutex);
+  return !s_comm_path.empty();
+}
+
 std::optional<std::string> PlayFile(const std::string& path, bool play_anyway, bool hold_at_end)
 {
   std::lock_guard lk(s_mutex);
