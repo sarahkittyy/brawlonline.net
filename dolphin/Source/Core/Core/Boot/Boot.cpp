@@ -48,6 +48,7 @@
 #include "Core/IOS/IOSC.h"
 #include "Core/IOS/Uids.h"
 #include "Core/NetPlayProto.h"
+#include "Core/NetPlaySDCard.h"
 #include "Core/PatchEngine.h"
 #include "Core/PowerPC/PPCAnalyst.h"
 #include "Core/PowerPC/PPCSymbolDB.h"
@@ -179,6 +180,16 @@ const NetPlay::NetSettings* BootSessionData::GetNetplaySettings() const
 void BootSessionData::SetNetplaySettings(std::unique_ptr<NetPlay::NetSettings> netplay_settings)
 {
   m_netplay_settings = std::move(netplay_settings);
+}
+
+const std::shared_ptr<NetPlay::SDCard::SessionCard>& BootSessionData::GetSDCardSession() const
+{
+  return m_sd_card_session;
+}
+
+void BootSessionData::SetSDCardSession(std::shared_ptr<NetPlay::SDCard::SessionCard> card)
+{
+  m_sd_card_session = std::move(card);
 }
 
 BootParameters::BootParameters(Parameters&& parameters_, BootSessionData boot_session_data_)

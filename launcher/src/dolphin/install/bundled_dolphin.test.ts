@@ -141,6 +141,48 @@ describe("installBundledDolphin", () => {
     expect(await read("Sys", "GameSettings", "RSBE01.ini")).toBe("ini-5");
   });
 
+  it("updates while another program holds the old Dolphin.exe open, and deletes it on a later start", async () => {
+    // prod 2026-10-13: Node opens files sharing delete, like the scanners and overlays that hold an
+    // exe open; on Windows, deleting it in place left the name taken and every install failing.
+    const v1 = await makeBundle("0.1.6", { "Dolphin.exe": "exe-6", "Sys/a.txt": "a" });
+    await installBundledDolphin({ sourceDir: v1, destDir: dest });
+    const v2 = await makeBundle("0.1.7", { "Dolphin.exe": "exe-7", "Sys/a.txt": "b" });
+    const held = await fs.promises.open(path.join(dest, "Dolphin.exe"), "r");
+    try {
+      expect((await installBundledDolphin({ sourceDir: v2, destDir: dest })).action).toBe("installed");
+      expect(await read("Dolphin.exe")).toBe("exe-7");
+      expect(await read("Sys", "a.txt")).toBe("b");
+      expect((await installBundledDolphin({ sourceDir: v2, destDir: dest })).action).toBe("unchanged");
+    } finally {
+      await held.close();
+    }
+    expect((await installBundledDolphin({ sourceDir: v2, destDir: dest })).action).toBe("unchanged");
+    expect(fs.existsSync(path.join(dest, ".old-dolphin"))).toBe(false);
+  });
+
+  it.runIf(process.platform === "win32")(
+    "says another program has Dolphin open when an old file cannot be moved or deleted",
+    async () => {
+      const v1 = await makeBundle("0.1.8", { "Dolphin.exe": "exe-8" });
+      await installBundledDolphin({ sourceDir: v1, destDir: dest });
+      const v2 = await makeBundle("0.1.9", { "Dolphin.exe": "exe-9" });
+      // Deleted while held open: the name stays taken until the handle closes.
+      const held = await fs.promises.open(path.join(dest, "Dolphin.exe"), "r");
+      try {
+        await fs.promises.rm(path.join(dest, "Dolphin.exe"));
+        await fs.promises.rm(path.join(dest, "dolphin.json"));
+        await expect(installBundledDolphin({ sourceDir: v2, destDir: dest })).rejects.toThrow(
+          /another program still has the old Dolphin open/,
+        );
+      } finally {
+        await held.close();
+      }
+      expect((await installBundledDolphin({ sourceDir: v2, destDir: dest })).action).toBe("installed");
+      expect(await read("Dolphin.exe")).toBe("exe-9");
+    },
+    30_000,
+  );
+
   it("refuses a bundle without a manifest or with an entry that would replace user data", async () => {
     const empty = path.join(root, `empty-${n}`);
     await fs.promises.mkdir(empty, { recursive: true });

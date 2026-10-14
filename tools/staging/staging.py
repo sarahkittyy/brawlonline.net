@@ -239,6 +239,9 @@ def server_env(cfg: dict) -> dict[str, str]:
         "MAILER": "file",
         "MAIL_FILE": str(STAGE / "mail.jsonl"),
         "MM_STATUS_URL": f"http://127.0.0.1:{cfg['mm_status_port']}/status",
+        # Spectating's kill switch (docs/spectate-protocol.md): on in staging unless config.json's
+        # "spectate" says otherwise (off, witness).
+        "MM_SPECTATE": cfg.get("spectate", "on"),
     })
     return env
 

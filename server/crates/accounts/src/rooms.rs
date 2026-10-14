@@ -23,17 +23,39 @@ pub const CACHE_FOR: Duration = Duration::from_secs(1);
 /// mm answers from memory; anything slower means it is not there.
 const FETCH_TIMEOUT: Duration = Duration::from_secs(2);
 
-/// Reads mm's status, with the cache.
+/// Reads mm's status, with the cache, and opens its live streams (`GET /live/{stream}` beside
+/// `/status`).
 pub struct MmStatusSource {
     url: String,
     http: reqwest::Client,
+    /// For live streams: no overall timeout (they last as long as the game).
+    live_http: reqwest::Client,
     cache: Mutex<Option<(Instant, MmStatus)>>,
 }
 
 impl MmStatusSource {
     pub fn new(url: &str) -> Self {
         let http = reqwest::Client::builder().timeout(FETCH_TIMEOUT).build().expect("reqwest client builds");
-        MmStatusSource { url: url.to_string(), http, cache: Mutex::new(None) }
+        let live_http =
+            reqwest::Client::builder().connect_timeout(FETCH_TIMEOUT).build().expect("reqwest client builds");
+        MmStatusSource { url: url.to_string(), http, live_http, cache: Mutex::new(None) }
+    }
+
+    /// Opens mm's stream of a live game from game `game` (1-based) chunk `chunk` on. The caller
+    /// checks the status (404: no such stream).
+    pub async fn open_live(
+        &self,
+        id: &str,
+        game: Option<u32>,
+        chunk: Option<u32>,
+    ) -> anyhow::Result<reqwest::Response> {
+        let base = self.url.strip_suffix("/status").unwrap_or(&self.url);
+        let mut url = format!("{base}/live/{id}?game={}", game.unwrap_or(1));
+        if let Some(c) = chunk {
+            url.push_str(&format!("&chunk={c}"));
+        }
+        // Only the answer's headers are timed: the body lasts as long as the game.
+        Ok(tokio::time::timeout(FETCH_TIMEOUT, self.live_http.get(url).send()).await??)
     }
 
     pub async fn get(&self) -> anyhow::Result<MmStatus> {

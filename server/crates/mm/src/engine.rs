@@ -74,6 +74,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::chat::{chat_error, Candidate, ChatBook, ChatConfig, ChatReportRecord, GroupKind};
+use crate::live::{LiveBook, LiveConfig, LiveStore};
 use crate::messages as msg;
 use crate::region::RegionMap;
 use crate::mod_rooms::{ModRoomBook, ModRoomsConfig};
@@ -145,6 +146,8 @@ pub struct EngineConfig {
     pub hello_window: Window,
     /// Chat: rate limits.
     pub chat: ChatConfig,
+    /// Spectating: the kill switch and the upload limits.
+    pub live: LiveConfig,
 }
 
 impl Default for EngineConfig {
@@ -172,6 +175,7 @@ impl Default for EngineConfig {
             mod_rooms: ModRoomsConfig::default(),
             hello_window: Window::new(10, Duration::from_secs(60)),
             chat: ChatConfig::default(),
+            live: LiveConfig::default(),
         }
     }
 }
@@ -210,6 +214,11 @@ pub enum Input {
     },
     Disconnected {
         conn: ConnId,
+    },
+    /// A packet on the spectate data channel (`common::spectate::DATA_CHANNEL`).
+    Data {
+        conn: ConnId,
+        data: Vec<u8>,
     },
     UserFetched {
         conn: ConnId,
@@ -382,6 +391,7 @@ pub struct Engine {
     rooms: RoomBook,
     mod_rooms: ModRoomBook,
     chat: ChatBook,
+    live: LiveBook,
     next_seq: u64,
     match_counter: u64,
     /// The newest build of each platform (`update_feed_dir`), and when it was read.
@@ -421,6 +431,7 @@ impl Engine {
         rooms_cfg.rules = cfg.rulesets.for_mode(Mode::Direct);
         let chat = ChatBook::new(cfg.chat.clone());
         let mod_rooms_cfg = cfg.mod_rooms.clone();
+        let live = LiveBook::new(cfg.live.clone());
         Engine {
             cfg,
             secret,
@@ -435,6 +446,7 @@ impl Engine {
             mod_rooms: ModRoomBook::new(mod_rooms_cfg),
             rooms: RoomBook::new(rooms_cfg),
             chat,
+            live,
             next_seq: 1,
             match_counter: 0,
             feed: FeedVersions::default(),
@@ -523,7 +535,17 @@ impl Engine {
             mod_rooms: self.mod_rooms.public_rooms(200),
             mod_room_index: self.mod_rooms.all_rooms(4000),
             members: self.rooms.member_rooms(4000),
+            live: self.live.store().entries(),
         }
+    }
+
+    /// The live store the loopback listener serves spectators from.
+    pub fn live_store(&self) -> std::sync::Arc<LiveStore> {
+        self.live.store()
+    }
+
+    pub fn live_stream_count(&self) -> usize {
+        self.live.stream_count()
     }
 
     pub fn handle(&mut self, now: Instant, wall: DateTime<Utc>, input: Input) -> Vec<Output> {
@@ -541,12 +563,19 @@ impl Engine {
                     }
                     self.unindex(conn);
                     self.chat.conn_gone(conn, &mut out);
+                    self.live.conn_gone(now, conn, &mut out);
                     self.rooms.conn_gone(now, conn, &mut out);
                     self.mod_rooms.conn_gone(conn, &mut out);
                     self.fail_room_tickets(&mut out);
                 }
             }
             Input::Packet { conn, data } => self.on_packet(now, conn, &data, &mut out),
+            Input::Data { conn, data } => {
+                // Only an online connection uploads; anything else on the data channel is dropped.
+                if matches!(self.conns.get(&conn), Some(Conn { state: State::Online(_), .. })) {
+                    self.live.data(now, conn, &data, &mut out);
+                }
+            }
             Input::UserFetched { conn, seq, result } => self.on_user(now, wall, conn, seq, result, &mut out),
             Input::RulesetFetched(f, result) => self.rooms.ruleset_fetched(f, result, &mut out),
             Input::RulesetListFetched { conn, result } => match result {
@@ -571,7 +600,27 @@ impl Engine {
             Input::Tick => self.on_tick(now, wall, &mut out),
         }
         self.sync_room_chat(&mut out);
+        self.register_live_matches(now, &out);
         out
+    }
+
+    /// Every match made (a pairing, a room's start) can be streamed: the live book learns its
+    /// players, with the names and codes of their online connections for the spectators' list.
+    fn register_live_matches(&mut self, now: Instant, out: &[Output]) {
+        for o in out {
+            let Output::RecordMatch(m) = o else { continue };
+            let names: HashMap<Uuid, (String, String)> = self
+                .conns
+                .values()
+                .filter_map(|c| match &c.state {
+                    State::Online(o) if m.players.contains(&o.user.uid) => {
+                        Some((o.user.uid, (o.user.display_name.clone(), o.code.clone())))
+                    }
+                    _ => None,
+                })
+                .collect();
+            self.live.register_match(now, m, names);
+        }
     }
 
     /// Keeps the chat group of every room whose players changed in step with it: the players
@@ -628,6 +677,9 @@ impl Engine {
     fn finish(&mut self, out: &mut Vec<Output>, conn: ConnId) {
         self.unindex(conn);
         self.chat.conn_gone(conn, out);
+        if matches!(self.conns.get(&conn), Some(Conn { state: State::Online(_), .. })) {
+            self.live.conn_gone(Instant::now(), conn, out);
+        }
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Done;
         }
@@ -702,8 +754,14 @@ impl Engine {
                 }
                 return self.on_hello(now, conn, *h, out);
             }
-            Ok(ClientMessage::Room(_) | ClientMessage::Chat(_) | ClientMessage::Mods(_)) => {
-                // Rooms and chat need an online connection: `hello` first.
+            Ok(
+                ClientMessage::Room(_)
+                | ClientMessage::Chat(_)
+                | ClientMessage::Mods(_)
+                | ClientMessage::Spectate(_),
+            ) => {
+                // Rooms, chat, Brawl Mods rooms and spectating need an online connection: `hello`
+                // first.
                 return self.fail_online(out, conn, msg::NOT_LOGGED_IN);
             }
             Ok(ClientMessage::ModsEndpoint(probe)) => {
@@ -805,6 +863,19 @@ impl Engine {
             }
             Ok(ClientMessage::ModsEndpoint(_)) => room_error(out, common::mods::MODS_ENDPOINT, msg::INVALID_REQUEST),
             Ok(ClientMessage::Chat(req)) => self.on_chat(now, conn, &o, req, out),
+            Ok(ClientMessage::Spectate(Ok(req))) => self.live.request(now, conn, o.user.uid, req, out),
+            Ok(ClientMessage::Spectate(Err((op, why)))) => {
+                tracing::warn!(conn, "bad spectate request: {why}");
+                Self::send(
+                    out,
+                    conn,
+                    &common::spectate::SpectateErrorMsg {
+                        kind: common::spectate::SPECTATE_ERROR.into(),
+                        op: op.into(),
+                        error: crate::live::errors::INVALID.into(),
+                    },
+                );
+            }
             Ok(ClientMessage::Hello(_)) => Self::send(out, conn, &hello_ok()),
             Ok(ClientMessage::CreateTicket(_)) => Self::send(out, conn, &CreateTicketResp::error(msg::INVALID_REQUEST)),
             Ok(ClientMessage::Unknown(kind)) => room_error(out, &kind, msg::UNKNOWN_REQUEST),
@@ -1201,6 +1272,7 @@ impl Engine {
         self.rooms.tick(now, out);
         self.mod_rooms.tick(now);
         self.fail_room_tickets(out);
+        self.live.tick(now, out);
     }
 
     fn try_pair(&mut self, now: Instant, wall: DateTime<Utc>, conn: ConnId, out: &mut Vec<Output>) {

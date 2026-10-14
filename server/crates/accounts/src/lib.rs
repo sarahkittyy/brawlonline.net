@@ -8,6 +8,7 @@ pub mod cursor;
 pub mod error;
 pub mod history;
 pub mod leaderboard;
+pub mod live;
 pub mod mail;
 pub mod pages;
 pub mod password;
@@ -47,6 +48,8 @@ pub struct AppState {
     pub mm_status: Arc<rooms::MmStatusSource>,
     /// The launchers online: presence, DMs and invites (`GET /v1/social/stream`).
     pub social: Arc<social::SocialHub>,
+    /// Spectators and spectator chat (`/v1/live`).
+    pub live: Arc<live::LiveHub>,
 }
 
 impl AppState {
@@ -62,6 +65,7 @@ impl AppState {
             dummy_hash: password::dummy_hash(hash_params),
             mm_status: Arc::new(rooms::MmStatusSource::new(&cfg.mm_status_url)),
             social: Arc::new(social::SocialHub::new(!cfg.disable_rate_limits)),
+            live: Arc::new(live::LiveHub::new(!cfg.disable_rate_limits)),
             cfg: Arc::new(cfg),
         })
     }
@@ -85,6 +89,8 @@ pub struct Limits {
     pub history: RateLimiter<uuid::Uuid>,
     /// Room list requests per account: [`ROOMS_WINDOWS`].
     pub rooms: RateLimiter<uuid::Uuid>,
+    /// Live game list requests per account: [`ROOMS_WINDOWS`] as well.
+    pub live: RateLimiter<uuid::Uuid>,
     /// Rulesets published per account: [`RULESET_PUBLISH_WINDOWS`].
     pub ruleset_publish: RateLimiter<uuid::Uuid>,
     /// Ruleset lookups per client IP (IPv6 per /64): [`RULESET_LOOKUP_IP_WINDOWS`].
@@ -110,6 +116,7 @@ impl Limits {
             leaderboard_ip: RateLimiter::new(&LEADERBOARD_IP_WINDOWS),
             history: RateLimiter::new(&HISTORY_WINDOWS),
             rooms: RateLimiter::new(&ROOMS_WINDOWS),
+            live: RateLimiter::new(&ROOMS_WINDOWS),
             ruleset_publish: RateLimiter::new(&RULESET_PUBLISH_WINDOWS),
             ruleset_lookup_ip: RateLimiter::new(&RULESET_LOOKUP_IP_WINDOWS),
             ruleset_edit: RateLimiter::new(&RULESET_EDIT_WINDOWS),
@@ -163,6 +170,10 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/social/dm", post(social::dm))
         .route("/v1/social/invite", post(social::invite))
         .route("/v1/social/invite/answer", post(social::answer))
+        .route("/v1/live", get(live::list))
+        .route("/v1/live/{id}/watch", get(live::watch))
+        .route("/v1/live/{id}/chat", post(live::chat))
+        .route("/v1/live/{id}/report", post(live::report))
         .route("/verify-email", get(pages::verify_email_page))
         .route("/reset-password", get(pages::reset_password_page).post(pages::reset_password_submit))
         .route("/healthz", get(api::healthz))
@@ -183,11 +194,13 @@ pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> anyhow
         std::time::Duration::from_secs(state.cfg.ranked_sweep_secs),
     );
     let room_watcher = social::room_watcher(state.clone());
+    let live_ticker = live::ticker(state.live.clone());
     let app = router(state).into_make_service_with_connect_info::<SocketAddr>();
     tokio::select! {
         r = axum::serve(listener, app) => r?,
         () = sweeper => {}
         () = room_watcher => {}
+        () = live_ticker => {}
     }
     Ok(())
 }

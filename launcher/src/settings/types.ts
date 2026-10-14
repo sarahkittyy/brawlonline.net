@@ -42,6 +42,10 @@ export interface SettingsSchema {
   // Online: the game's music in matches and menus. Synced to Dolphin.ini `[Online] Music`.
   enableMusic: boolean;
 
+  // Online: "Let others stream my games" (docs/design/spectating.md): this player's game uploads
+  // its games' inputs for spectators. Synced to Dolphin.ini `[Online] StreamGames`.
+  enableStreamGames: boolean;
+
   // Dolphin settings: the executable of our Dolphin build (null = default, see dolphin/install/paths.ts)
   netplayDolphinPath: string | null;
   playbackDolphinPath: string | null;

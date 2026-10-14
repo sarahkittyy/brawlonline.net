@@ -14,6 +14,8 @@ export type SyncedDolphinSettings = {
   inputDelay: number;
   /** The game's music (`[Online] Music`; off applies P+'s Music Off code). */
   enableMusic: boolean;
+  /** "Let others stream my games" (`[Online] StreamGames`, docs/design/spectating.md). */
+  enableStreamGames: boolean;
 };
 
 export async function addGamePath(iniFile: IniFile, gameDir: string): Promise<void> {
@@ -55,6 +57,9 @@ export async function setOnlineSettings(iniFile: IniFile, options: Partial<Synce
   if (options.enableMusic !== undefined) {
     section.set("Music", convertBooleanToIniVal(options.enableMusic));
   }
+  if (options.enableStreamGames !== undefined) {
+    section.set("StreamGames", convertBooleanToIniVal(options.enableStreamGames));
+  }
 
   await iniFile.save();
 }
@@ -67,6 +72,7 @@ export async function getOnlineSettings(iniFile: IniFile): Promise<SyncedDolphin
   const enableMonthlySubfolders = section.get("ReplayMonthlyFolders", "True") === "True";
   const inputDelay = normalizeInputDelay(section.get("InputDelay", "0"));
   const enableMusic = section.get("Music", "True") === "True";
+  const enableStreamGames = section.get("StreamGames", "True") === "True";
 
   return {
     replayPath,
@@ -74,6 +80,7 @@ export async function getOnlineSettings(iniFile: IniFile): Promise<SyncedDolphin
     enableMonthlySubfolders,
     inputDelay,
     enableMusic,
+    enableStreamGames,
   };
 }
 

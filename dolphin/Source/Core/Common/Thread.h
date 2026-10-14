@@ -39,6 +39,11 @@ inline void YieldCPU()
 
 void SetCurrentThreadName(const char* name);
 
+// Lowers the current thread below the emulator's own threads (work that may fall behind, such as
+// writing replays): when the machine is short of CPU, the OS runs the game first. Windows: lowest
+// priority; macOS: the utility QoS class; Linux: nice 10 for this thread.
+void SetCurrentThreadBackgroundPriority();
+
 #ifndef _WIN32
 // Returns the lowest address of the stack and the size of the stack
 std::tuple<void*, size_t> GetCurrentThreadStack();

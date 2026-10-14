@@ -25,6 +25,7 @@
 #include "Core/Online/Matchmaking.h"
 #include "Core/Online/ModsRoom.h"
 #include "Core/Online/OnlineClient.h"
+#include "Core/Online/Spectate.h"
 #include "Core/Online/User.h"
 #include "Core/Rollback/GameplaySession.h"
 
@@ -339,6 +340,33 @@ void Send(ENetPeer* peer, const std::string& json)
     enet_packet_destroy(packet);
 }
 
+// Reliable bytes to mm not acknowledged yet: on the wire (reliableDataInTransit) or still queued
+// in ENet (its outgoing lists), which the spectate uploader keeps small.
+size_t UnackedBytes(ENetPeer* peer)
+{
+  size_t n = peer->reliableDataInTransit;
+  for (ENetList* list : {&peer->outgoingCommands, &peer->outgoingSendReliableCommands})
+  {
+    for (ENetListIterator it = enet_list_begin(list); it != enet_list_end(list);
+         it = enet_list_next(it))
+    {
+      const auto* c = reinterpret_cast<const ENetOutgoingCommand*>(it);
+      if (c->packet)
+        n += c->fragmentLength ? c->fragmentLength : c->packet->dataLength;
+    }
+  }
+  return n;
+}
+
+// A spectate data packet (docs/spectate-protocol.md §1): reliable, on channel 1.
+constexpr enet_uint8 SPECTATE_CHANNEL = 1;
+void SendData(ENetPeer* peer, const std::vector<u8>& data)
+{
+  ENetPacket* packet = enet_packet_create(data.data(), data.size(), ENET_PACKET_FLAG_RELIABLE);
+  if (enet_peer_send(peer, SPECTATE_CHANNEL, packet) != 0)
+    enet_packet_destroy(packet);
+}
+
 // What a message asks the thread to do outside the lock.
 struct Actions
 {
@@ -542,6 +570,7 @@ void OnDropped(Clock::time_point now, const std::string& why, bool count)
   s.leave_before_pending = false;  // the server took us out of the room with the connection
   s.outbox.clear();
   Chat::OnConnectionLost();
+  Spectate::OnConnectionLost();
   ++s.serial;
   Log(fmt::format("connection down ({}); next try in {} ms", why,
                   std::chrono::duration_cast<std::chrono::milliseconds>(delay).count()));
@@ -1265,10 +1294,11 @@ void Thread()
           const std::string text(reinterpret_cast<const char*>(ev.packet->data),
                                  ev.packet->dataLength);
           enet_packet_destroy(ev.packet);
-          // Chat checks and decrypts outside the room lock (the CPU thread reads the room); Brawl
-          // Mods rooms (ModsRoom.h) are handled there too.
+          // Chat checks and decrypts outside the room lock (the CPU thread reads the room);
+          // spectating and Brawl Mods rooms (ModsRoom.h) take their own messages there too.
           lk.unlock();
-          const bool chat = Chat::OnServerMessage(text) || ModsRoom::OnServerMessage(text);
+          const bool chat = Chat::OnServerMessage(text) || Spectate::OnServerMessage(text) ||
+                            ModsRoom::OnServerMessage(text);
           lk.lock();
           if (chat)
           {
@@ -1312,6 +1342,15 @@ void Thread()
         for (std::string& m : ModsRoom::TakeOutbox(connection))
           chat_out.push_back(std::move(m));
       }
+      // Spectating's upload (Online/Spectate.h): it backs off on the game's health and on what
+      // is still unacknowledged to mm, before the game feels anything. The round trip is ENet's
+      // smoothed one (roundTripTime); lastRoundTripTime is the lowest of the last 5 s throttle
+      // window and lags a queue that builds.
+      const Gprb::Session::LinkHealth lh = Gprb::Session::GetLinkHealth();
+      const Spectate::Outgoing spectate_out = Spectate::Service(
+          now, online, online && peer ? UnackedBytes(peer) : 0,
+          Spectate::Health{lh.running, lh.late_frames, lh.rollback_avg, lh.ping_ms,
+                           online && peer ? static_cast<double>(peer->roundTripTime) : -1.0});
 
       std::lock_guard lk(s_mutex);
       if (host && (s.conn == Conn::Connecting || s.conn == Conn::Hello) &&
@@ -1349,6 +1388,13 @@ void Thread()
           Send(peer, json);
           ++s.sent;
         }
+        for (const std::string& json : spectate_out.json)
+        {
+          Send(peer, json);
+          ++s.sent;
+        }
+        for (const std::vector<u8>& data : spectate_out.data)
+          SendData(peer, data);
         while (!s.outbox.empty())
         {
           const Request r = s.outbox.front();

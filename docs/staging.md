@@ -21,7 +21,7 @@ python tools/staging/staging.py down                 # stop clients and server; 
 |---|---|---|
 | Staging database | `run/staging/pgdata` (the portable Postgres from `run/postgres-portable`, 127.0.0.1:54339) | kept; `server reset-db --yes` empties it |
 | accounts | `http://<this PC's LAN IP>:18080` | `server up` / `server down` |
-| mm | UDP `<LAN IP>:43213` | same |
+| mm | UDP `<LAN IP>:43213`, spectating on (`MM_SPECTATE`; config.json `"spectate"`: off, witness, on) | same |
 | Mail | `run/staging/mail.jsonl` (MAILER=file); `server mail` prints the links | kept |
 | Windows build | worktree `run/staging/src` (own Dolphin build), packaged to `run/staging/win/app` | rebuilt by `win build` |
 | Server binaries | `run/staging/cargo-target`, built from the same commit by `win build` | same |

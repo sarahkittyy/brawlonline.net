@@ -654,6 +654,10 @@ pub struct MmStatus {
     /// launchers (`GET /v1/rooms` sends only the fields above).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub members: Vec<RoomMember>,
+    /// The live games spectators can watch (`docs/spectate-protocol.md` §2), newest first.
+    /// accounts serves them as `GET /v1/live`, never with `/v1/rooms`.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub live: Vec<crate::spectate::LiveEntry>,
 }
 
 /// A count per queue, for [`MmStatus::queues`] and [`MmStatus::playing`].

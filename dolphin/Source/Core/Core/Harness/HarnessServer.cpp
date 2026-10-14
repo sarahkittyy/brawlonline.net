@@ -44,6 +44,7 @@
 #include "Common/Thread.h"
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
+#include "Core/Config/OnlineSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
 #include "Core/HW/CPU.h"
@@ -63,6 +64,7 @@
 #include "Core/Online/OnlineSession.h"
 #include "Core/Online/RecentCodes.h"
 #include "Core/Online/Rooms.h"
+#include "Core/Online/Spectate.h"
 #include "Core/Online/User.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
@@ -1603,6 +1605,26 @@ Result CmdReplayRecording(const Args& args)
   return r;
 }
 
+// The spectate uploader (Online/Spectate.h): the current game's role, chunks, what was sent,
+// pauses.
+Result CmdSpectateStatus(const Args&)
+{
+  return Online::Spectate::Status();
+}
+
+// The safety tests' switches, from the next game on: `stream` ([Online] StreamGames) and
+// `forced` (no backoff, 16 KB/s: Uploader::SetForced). Returns spectate_status.
+Result CmdSpectateConfig(const Args& args)
+{
+  if (args.contains("stream"))
+    Config::SetCurrent(Config::ONLINE_STREAM_GAMES, GetBool(args, "stream", true));
+  if (args.contains("forced"))
+    Online::Spectate::SetForced(GetBool(args, "forced", false));
+  Result r = Online::Spectate::Status();
+  r["stream"] = picojson::value(Config::Get(Config::ONLINE_STREAM_GAMES));
+  return r;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Online play (Core/Online)
 
@@ -2008,6 +2030,8 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"replay_status", CmdReplayStatus},
       {"replay_control", CmdReplayControl},
       {"replay_recording", CmdReplayRecording},
+      {"spectate_status", CmdSpectateStatus},
+      {"spectate_config", CmdSpectateConfig},
       {"gprb_samples", CmdGprbSamples},
       {"gpu_state", CmdGpuState},
       {"gprb_census", CmdGprbCensus},

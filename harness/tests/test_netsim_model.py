@@ -278,3 +278,43 @@ def test_netprofile_from_rtt_roundtrip_sigma():
     p = NetProfile.from_rtt(100, 20)
     # two independent normal directions with sigma 20/sqrt(2) give an RTT sigma of 20
     assert math.hypot(p.up.jitter_ms, p.down.jitter_ms) == pytest.approx(20)
+
+
+def test_shared_uplink_attributes_queueing_to_the_other_traffic() -> None:
+    """A game datagram behind upload bytes on a shared uplink: its delay caused by them is
+    counted as the upload's cost; behind its own class's bytes it costs nothing."""
+    from ppharness.netsim import SharedUplink
+    up = SharedUplink(80.0, queue_ms=1000.0)     # 10 bytes per millisecond
+    assert up.admit(0.0, 972, "upload") == pytest.approx(0.1)   # 1,000 bytes on the wire
+    assert up.admit(0.0, 72, "game") == pytest.approx(0.11)
+    assert up.admit(0.0, 72, "game") == pytest.approx(0.12)
+    game = up.report("game")
+    assert game["delay_by_others_ms"]["max"] == pytest.approx(100.0)
+    assert game["delay_by_others_ms"]["min"] == pytest.approx(100.0)
+    # Once the upload has left the link, nothing more is its fault.
+    up.admit(0.2, 72, "game")
+    assert up.report("game")["delay_by_others_ms"]["min"] == 0.0
+    # Blaming one class: another class's bytes ahead cost nothing.
+    blamed = SharedUplink(80.0, queue_ms=1000.0, blame="upload")
+    blamed.admit(0.0, 972, "online")
+    blamed.admit(0.0, 72, "game")
+    assert blamed.report("game")["delay_by_others_ms"]["max"] == 0.0
+    # A full queue drops, and says whether the other class's bytes were ahead.
+    tiny = SharedUplink(8.0, queue_ms=50.0)      # 1 byte per millisecond
+    tiny.admit(0.0, 72, "upload")
+    assert tiny.admit(0.0, 72, "game") is None
+    assert tiny.report("game")["drops_with_others_ahead"] == 1
+
+
+def test_enet_datagrams_are_classified_by_channel() -> None:
+    from ppharness.netsim import enet_channels, enet_class
+    # peer id with the sent-time flag, sent time, then SEND_RELIABLE (6, with its ack flag 0x80)
+    # on channel 1 with 3 bytes of data, then an ACKNOWLEDGE on channel 0.
+    send = bytes([0x80 | 6, 1, 0, 7]) + (3).to_bytes(2, "big") + b"abc"
+    ack = bytes([1, 0, 0, 1, 0, 2, 0, 3])
+    dgram = (0x8000 | 5).to_bytes(2, "big") + b"\x12\x34" + send + ack
+    assert enet_channels(dgram) == {1}
+    classify = enet_class(1, "upload", "online")
+    assert classify(dgram) == "upload"
+    assert classify((5).to_bytes(2, "big") + ack) == "online"
+    assert classify(b"garbage!") == "online"

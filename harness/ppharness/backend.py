@@ -95,7 +95,7 @@ class OnlineBackend:
                  latest_version: str = "0.1.0", min_app_version: str | None = None,
                  ticket_ttl_secs: int | None = None,
                  rulesets_file: str | os.PathLike[str] | None = None, keep: bool = False,
-                 mm_host: str = "127.0.0.1"):
+                 mm_host: str = "127.0.0.1", spectate: str | None = None):
         root = paths.workspace_root() / "run" / "backends"
         self.run_dir = Path(run_dir) if run_dir else root / f"be-{int(time.time())}-{secrets.token_hex(3)}"
         self.latest_version = latest_version
@@ -107,6 +107,8 @@ class OnlineBackend:
         # The address mm listens on. Dolphin skips its UPnP mapping for a server on 127.0.0.1, so
         # a test of the mapping puts mm on the machine's LAN address.
         self.mm_host = mm_host
+        # mm's spectating kill switch (MM_SPECTATE: off, witness, on); None: mm's default (off).
+        self.spectate = spectate
         self.pg_mode = ""
         self.admin_url = ""
         self.database_url = ""
@@ -330,6 +332,8 @@ class OnlineBackend:
             env["MM_TICKET_TTL_SECS"] = str(self.ticket_ttl_secs)
         if self.rulesets_file is not None:
             env["MM_RULESETS_FILE"] = str(self.rulesets_file.resolve())
+        if self.spectate is not None:
+            env["MM_SPECTATE"] = self.spectate
         mm = self._spawn("mm", env)
         deadline = time.monotonic() + 30
         while "mm listening" not in self.log_text("mm"):

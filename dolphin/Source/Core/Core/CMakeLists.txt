@@ -445,6 +445,8 @@ add_library(core
   IOS/Network/SSL.h
   IOS/Network/WD/Command.cpp
   IOS/Network/WD/Command.h
+  IOS/SDIO/SDCardStorage.cpp
+  IOS/SDIO/SDCardStorage.h
   IOS/SDIO/SDIOSlot0.cpp
   IOS/SDIO/SDIOSlot0.h
   IOS/STM/STM.cpp
@@ -515,6 +517,8 @@ add_library(core
   NetPlayClient.h
   NetPlayCommon.cpp
   NetPlayCommon.h
+  NetPlaySDCard.cpp
+  NetPlaySDCard.h
   NetPlayServer.cpp
   NetPlayServer.h
   NetworkCaptureLogger.cpp
@@ -612,6 +616,8 @@ add_library(core
   Online/ModsRoom.h
   Online/Rooms.cpp
   Online/Rooms.h
+  Online/Spectate.cpp
+  Online/Spectate.h
   Online/Timeouts.h
   Online/User.cpp
   Online/User.h

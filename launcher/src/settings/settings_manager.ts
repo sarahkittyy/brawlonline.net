@@ -134,6 +134,10 @@ export class SettingsManager extends EventEmitter {
     return this.get().settings.enableMusic;
   }
 
+  getEnableStreamGames(): boolean {
+    return this.get().settings.enableStreamGames;
+  }
+
   getDolphinPath(type: DolphinLaunchType): string | null {
     const settings = this.get().settings;
     switch (type) {

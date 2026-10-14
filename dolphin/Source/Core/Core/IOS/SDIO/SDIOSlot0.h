@@ -6,13 +6,14 @@
 #pragma once
 
 #include <array>
+#include <memory>
 #include <string>
 
 #include "Common/CommonTypes.h"
-#include "Common/IOFile.h"
 #include "Core/CPUThreadConfigCallback.h"
 #include "Core/IOS/Device.h"
 #include "Core/IOS/IOS.h"
+#include "Core/IOS/SDIO/SDCardStorage.h"
 
 class PointerWrap;
 
@@ -167,7 +168,9 @@ private:
 
   std::array<u32, 0x200 / sizeof(u32)> m_registers{};
 
-  File::IOFile m_card;
+  u64 CardSize() const { return m_card ? m_card->GetSize() : 0; }
+
+  std::shared_ptr<SDCardStorage> m_card;
 
   CPUThreadConfigCallback::ConfigChangedCallbackID m_config_callback_id;
   bool m_sd_card_inserted = false;

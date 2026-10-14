@@ -11,8 +11,14 @@
 #include <unistd.h>
 #endif
 
+#ifdef __linux__
+#include <sys/resource.h>
+#include <sys/syscall.h>
+#endif
+
 #ifdef __APPLE__
 #include <mach/mach.h>
+#include <pthread/qos.h>
 #elif defined BSD4_4 || defined __FreeBSD__ || defined __OpenBSD__
 #include <pthread_np.h>
 #elif defined __NetBSD__
@@ -223,5 +229,16 @@ std::tuple<void*, size_t> GetCurrentThreadStack()
 }
 
 #endif
+
+void SetCurrentThreadBackgroundPriority()
+{
+#ifdef _WIN32
+  SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_LOWEST);
+#elif defined __APPLE__
+  pthread_set_qos_class_self_np(QOS_CLASS_UTILITY, 0);
+#elif defined __linux__
+  setpriority(PRIO_PROCESS, static_cast<id_t>(syscall(SYS_gettid)), 10);
+#endif
+}
 
 }  // namespace Common

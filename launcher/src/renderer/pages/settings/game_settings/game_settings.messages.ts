@@ -13,6 +13,9 @@ export const GameSettingsMessages = {
   inputDelayFrames: (frames: number) => (frames === 1 ? "1 frame" : `${frames} frames`),
   enableMusic: () => "Music",
   enableMusicDescription: () => "Play the game's music in menus and matches.",
+  enableStreamGames: () => "Let others stream my games",
+  enableStreamGamesDescription: () =>
+    "Streams inputs to the server for others to spectate you. Very minimal network load. Your opponent's game may still stream the match.",
   chatKey: () => "Chat Key",
   chatKeyDescription: () => "The key that opens the chat box in game. Pick one your keyboard controls don't use.",
   chatKeyPressAKey: () => "Press a key...",

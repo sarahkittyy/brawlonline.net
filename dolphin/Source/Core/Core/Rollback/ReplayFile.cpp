@@ -335,28 +335,40 @@ bool Writer::Open(const std::string& path, const std::array<u8, 16>& uid, std::s
   return true;
 }
 
-bool Writer::Append(u32 type, u32 flags, std::span<const u8> raw)
+std::optional<std::vector<u8>> EncodeChunk(u32 type, u32 flags, std::span<const u8> raw)
 {
-  if (!m_file.IsOpen())
-    return false;
   std::vector<u8> deflated;
   std::span<const u8> stored = raw;
   if (flags & FLAG_DEFLATE)
   {
     auto d = Deflate(raw);
     if (!d)
-      return false;
+      return std::nullopt;
     deflated = std::move(*d);
     stored = deflated;
   }
-  std::vector<u8> head;
-  PutU32(head, type);
-  PutU32(head, flags);
-  PutU32(head, static_cast<u32>(stored.size()));
-  PutU32(head, static_cast<u32>(raw.size()));
-  PutU32(head, Crc(stored));
-  return WriteAll(head.data(), head.size()) && WriteAll(stored.data(), stored.size()) &&
-         m_file.Flush();
+  std::vector<u8> out;
+  out.reserve(CHUNK_HEADER_SIZE + stored.size());
+  PutU32(out, type);
+  PutU32(out, flags);
+  PutU32(out, static_cast<u32>(stored.size()));
+  PutU32(out, static_cast<u32>(raw.size()));
+  PutU32(out, Crc(stored));
+  out.insert(out.end(), stored.begin(), stored.end());
+  return out;
+}
+
+bool Writer::Append(u32 type, u32 flags, std::span<const u8> raw)
+{
+  const auto chunk = EncodeChunk(type, flags, raw);
+  return chunk && AppendChunk(*chunk);
+}
+
+bool Writer::AppendChunk(std::span<const u8> chunk)
+{
+  if (!m_file.IsOpen())
+    return false;
+  return WriteAll(chunk.data(), chunk.size()) && m_file.Flush();
 }
 
 bool Writer::Finish(std::span<const u8> endg, u32 last_frame)

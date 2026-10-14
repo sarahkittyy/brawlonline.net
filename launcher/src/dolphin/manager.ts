@@ -917,6 +917,7 @@ export class DolphinManager {
       enableMonthlySubfolders: this.settingsManager.getEnableMonthlySubfolders(),
       inputDelay: this.settingsManager.getInputDelay(),
       enableMusic: this.settingsManager.getEnableMusic(),
+      enableStreamGames: this.settingsManager.getEnableStreamGames(),
     });
   }
 
@@ -944,6 +945,11 @@ export class DolphinManager {
     );
     await this._updateLauncherSetting(this.settingsManager.getEnableMusic(), newSettings.enableMusic, (val) =>
       this.settingsManager.updateSetting("enableMusic", val),
+    );
+    await this._updateLauncherSetting(
+      this.settingsManager.getEnableStreamGames(),
+      newSettings.enableStreamGames,
+      (val) => this.settingsManager.updateSetting("enableStreamGames", val),
     );
   }
 

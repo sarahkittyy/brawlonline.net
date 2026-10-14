@@ -357,6 +357,19 @@ void SetStageDecider(std::function<StageDecision(u32 game)> decider);
 // identical to the netplay SwitchFF.rss), as srStageKind values.
 const std::vector<u16>& DefaultStages();
 
+// ---- Spectating (Online/Spectate.h) ----
+// What the spectate uploader backs off on: counters since the process started and the latest
+// averages of the running network session, published on the CPU thread with relaxed atomics (never
+// a lock) and read on the Rooms thread.
+struct LinkHealth
+{
+  bool running = false;     // a network session runs a match
+  u64 late_frames = 0;      // displayed frames that ran over their schedule
+  double rollback_avg = 0;  // rollback depth per displayed frame, averaged over about 2 s
+  double ping_ms = -1;      // the worst link's average ping, refreshed every second
+};
+LinkHealth GetLinkHealth();
+
 // ---- Playback (docs/design/replays.md §6) ----
 // A replay plays as a joiner whose host is the file: the game starts the replay's match from the
 // SESSION GameBridge writes (PPOM v8's playback request), the barrier checks the match is the one

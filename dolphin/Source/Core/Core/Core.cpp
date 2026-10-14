@@ -62,10 +62,12 @@
 #include "Core/HW/Wiimote.h"
 #include "Core/Host.h"
 #include "Core/IOS/IOS.h"
+#include "Core/IOS/SDIO/SDCardStorage.h"
 #include "Core/MemTools.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayClient.h"
 #include "Core/NetPlayProto.h"
+#include "Core/NetPlaySDCard.h"
 #include "Core/Rollback/MachineSession.h"
 #include "Core/PatchEngine.h"
 #include "Core/PowerPC/GDBStub.h"
@@ -564,15 +566,33 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
   const bool delete_savestate =
       boot_session_data.GetDeleteSavestate() == DeleteSavestateAfterBoot::Yes;
 
-  bool sync_sd_folder = system.IsWii() && Config::Get(Config::MAIN_WII_SD_CARD) &&
-                        Config::Get(Config::MAIN_WII_SD_CARD_ENABLE_FOLDER_SYNC);
+  // A netplay session plays on a card of its own (NetPlaySDCard.h): its writes reach the image
+  // only when the host keeps them, so the folder is only updated then.
+  std::shared_ptr<NetPlay::SDCard::SessionCard> sd_card_session =
+      boot_session_data.GetSDCardSession();
+  // A whole-machine session (Machine) runs other players' machine images, code from strangers:
+  // it plays on this player's own card with every write thrown away.
+  if (!sd_card_session && system.IsWii() && Machine::IsArmed())
+  {
+    sd_card_session = NetPlay::SDCard::SessionCard::CreateOwnCard(
+        File::GetUserPath(F_WIISDCARDIMAGE_IDX), false);
+    INFO_LOG_FMT(CORE, "SD card: a machine session plays on this player's own card; its writes "
+                       "are thrown away");
+  }
+  const bool sd_folder_sync = system.IsWii() && Config::Get(Config::MAIN_WII_SD_CARD) &&
+                              Config::Get(Config::MAIN_WII_SD_CARD_ENABLE_FOLDER_SYNC);
+  bool sync_sd_folder =
+      sd_folder_sync && (!sd_card_session || sd_card_session->PacksFolderAtBoot());
   if (sync_sd_folder)
   {
     sync_sd_folder = Common::SyncSDFolderToSDImage([] { return false; }, Core::WantsDeterminism());
   }
 
-  Common::ScopeGuard sd_folder_sync_guard{[sync_sd_folder] {
-    if (sync_sd_folder && Config::Get(Config::MAIN_ALLOW_SD_WRITES))
+  bool sd_card_session_kept_writes = false;
+  Common::ScopeGuard sd_folder_sync_guard{[&] {
+    const bool image_changed =
+        sd_card_session ? sd_card_session_kept_writes : sync_sd_folder;
+    if (sd_folder_sync && image_changed && Config::Get(Config::MAIN_ALLOW_SD_WRITES))
     {
       const bool sync_ok = Common::SyncSDImageToSDFolder([] { return false; });
       if (!sync_ok)
@@ -584,6 +604,14 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
             Common::GetStringT(Common::SD_UNPACK_TEXT));
       }
     }
+  }};
+
+  // Runs before the folder sync above, after the hardware has shut down (declared earlier).
+  IOS::HLE::SetSDCardSessionStorage(sd_card_session);
+  Common::ScopeGuard sd_card_session_guard{[&] {
+    IOS::HLE::SetSDCardSessionStorage(nullptr);
+    if (sd_card_session)
+      sd_card_session_kept_writes = sd_card_session->Finish();
   }};
 
   // Wiimote input config is loaded in OnESTitleChanged

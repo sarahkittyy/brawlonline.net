@@ -11,7 +11,9 @@
 //!
 //! The loop also publishes the engine's status (the online count and the public rooms) twice a
 //! second for a small HTTP listener on a local address (`MM_STATUS_LISTEN`, `GET /status`), which
-//! accounts reads to serve the launcher's `GET /v1/rooms`.
+//! accounts reads to serve the launcher's `GET /v1/rooms`. The same listener serves the live games
+//! to accounts (`GET /live/{stream}`, `docs/spectate-protocol.md` §2): mm keeps the uploaded
+//! chunks ([`crate::live::LiveStore`]) and each spectator's stream reads them from there.
 
 use std::collections::HashMap;
 use std::future::Future;
@@ -35,6 +37,7 @@ use uuid::Uuid;
 
 use crate::chat::{report_row, ChatReportRecord};
 use crate::engine::{ConnId, Engine, EngineConfig, FetchResult, Input, MatchRecord, Output};
+use crate::live::{Cursor, LiveStore};
 
 const TICK: Duration = Duration::from_millis(100);
 const IDLE_SLEEP: Duration = Duration::from_millis(2);
@@ -146,6 +149,8 @@ pub fn start(
     ));
 
     let status: SharedStatus = Arc::new(RwLock::new(MmStatus::default()));
+    let engine = Engine::new(engine_cfg, secret);
+    let live = engine.live_store();
     let (status_addr, status_task) = match status_listen {
         Some(l) => {
             let listener = std::net::TcpListener::bind(l)?;
@@ -153,7 +158,7 @@ pub fn start(
             let status_addr = listener.local_addr()?;
             let _guard = rt.enter();
             let listener = tokio::net::TcpListener::from_std(listener)?;
-            let task = rt.spawn(serve_status(listener, status.clone()));
+            let task = rt.spawn(serve_status(listener, status.clone(), live));
             tracing::info!("mm status on http://{status_addr}/status");
             (Some(status_addr), Some(task))
         }
@@ -162,7 +167,6 @@ pub fn start(
 
     let stop = Arc::new(AtomicBool::new(false));
     let stop2 = stop.clone();
-    let engine = Engine::new(engine_cfg, secret);
     let db = Db { fetches: job_tx, fetched: done_tx, rulesets: rulesets_tx, ruleset_lists: lists_tx, pool, rt };
     let thread = std::thread::Builder::new()
         .name("mm-enet".into())
@@ -171,22 +175,89 @@ pub fn start(
     Ok(MmHandle { addr, status_addr, stop, thread: Some(thread), status_task })
 }
 
-/// `GET /status`: the latest snapshot as JSON ([`MmStatus`]). Local only: accounts reads it and
-/// serves it to launchers.
-async fn serve_status(listener: tokio::net::TcpListener, status: SharedStatus) {
+/// `GET /status`: the latest snapshot as JSON ([`MmStatus`]). `GET /live/{stream}`: a live
+/// stream for accounts. Local only: accounts reads them and serves launchers.
+async fn serve_status(listener: tokio::net::TcpListener, status: SharedStatus, live: Arc<LiveStore>) {
     use axum::routing::get;
-    let app = axum::Router::new().route(
-        "/status",
-        get(move || {
-            let status = status.clone();
-            async move {
-                let snapshot = status.read().map(|s| s.clone()).unwrap_or_default();
-                axum::Json(snapshot)
-            }
-        }),
-    );
+    let app = axum::Router::new()
+        .route(
+            "/status",
+            get(move || {
+                let status = status.clone();
+                async move {
+                    let snapshot = status.read().map(|s| s.clone()).unwrap_or_default();
+                    axum::Json(snapshot)
+                }
+            }),
+        )
+        .route("/live/{stream}", get(serve_live))
+        .with_state(live);
     if let Err(e) = axum::serve(listener, app).await {
         tracing::error!("status listener stopped: {e}");
+    }
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct LiveQuery {
+    /// The game's place in the stream (1-based) to start from.
+    game: Option<u32>,
+    /// Its first chunk to send; above 0 the game's `game` line is not sent again.
+    chunk: Option<u32>,
+}
+
+/// How often an idle live stream gets an empty line (accounts passes a ping on).
+const LIVE_KEEPALIVE: Duration = Duration::from_secs(15);
+
+/// `GET /live/{stream}?game=&chunk=`: newline-delimited JSON ([`common::spectate::LiveLine`]) from
+/// there on, as chunks come, until the stream is over (or gone). 404 for an unknown stream.
+async fn serve_live(
+    axum::extract::State(store): axum::extract::State<Arc<LiveStore>>,
+    axum::extract::Path(id): axum::extract::Path<String>,
+    axum::extract::Query(q): axum::extract::Query<LiveQuery>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let Some(mut changed) = store.subscribe(&id) else {
+        return (axum::http::StatusCode::NOT_FOUND, "no such stream").into_response();
+    };
+    let chunk = q.chunk.unwrap_or(0) as usize;
+    let mut cursor = Cursor { game: q.game.unwrap_or(1).saturating_sub(1) as usize, chunk, announced: chunk > 0 };
+    let (tx, rx) = tk_mpsc::channel::<String>(64);
+    tokio::spawn(async move {
+        loop {
+            let Some((lines, done)) = store.read(&id, &mut cursor) else { return };
+            for l in lines {
+                let mut s = serde_json::to_string(&l).expect("live lines serialize");
+                s.push('\n');
+                if tx.send(s).await.is_err() {
+                    return;
+                }
+            }
+            if done {
+                return;
+            }
+            tokio::select! {
+                r = changed.changed() => if r.is_err() { return },
+                () = tokio::time::sleep(LIVE_KEEPALIVE) => {
+                    if tx.send("\n".into()).await.is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+    let body = axum::body::Body::from_stream(LineStream(rx));
+    ([(axum::http::header::CONTENT_TYPE, "application/x-ndjson")], body).into_response()
+}
+
+struct LineStream(tk_mpsc::Receiver<String>);
+
+impl futures_core::Stream for LineStream {
+    type Item = Result<String, std::convert::Infallible>;
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.0.poll_recv(cx).map(|l| l.map(Ok))
     }
 }
 
@@ -468,9 +539,14 @@ impl Loop {
                     self.feed(Input::Disconnected { conn });
                 }
             }
-            EventNoRef::Receive { peer, packet, .. } => {
+            EventNoRef::Receive { peer, channel_id, packet } => {
                 if let Some(conn) = self.peer_conn.get(&peer).copied() {
-                    self.feed(Input::Packet { conn, data: packet.data().to_vec() });
+                    let data = packet.data().to_vec();
+                    if channel_id == common::spectate::DATA_CHANNEL {
+                        self.feed(Input::Data { conn, data });
+                    } else {
+                        self.feed(Input::Packet { conn, data });
+                    }
                 }
             }
         }
@@ -550,6 +626,7 @@ fn event_loop(
                 waiting = lp.engine.waiting_count(),
                 online = lp.engine.online_count(),
                 rooms = lp.engine.room_count(),
+                live_streams = lp.engine.live_stream_count(),
                 "mm stats"
             );
         }
