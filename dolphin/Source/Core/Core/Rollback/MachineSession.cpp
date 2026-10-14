@@ -83,8 +83,10 @@
 #include "InputCommon/GCAdapter.h"
 #include "InputCommon/GCPadStatus.h"
 #include "InputCommon/InputConfig.h"
+#include "VideoCommon/AsyncRequests.h"
 #include "VideoCommon/Fifo.h"
 #include "VideoCommon/OnScreenDisplay.h"
+#include "VideoCommon/Present.h"
 #include "VideoCommon/VideoState.h"
 
 namespace HLE_Misc
@@ -3849,6 +3851,23 @@ void PaceFrame(Core::System& system, bool resim)
   s_pace.last_frame = last;
 }
 
+// A wait the game stands still in for a while (an epoch while a joiner gets the machine, a
+// joiner's own wait, a handshake): the video thread shows the last frame again about 30 times a
+// second, so the overlay keeps drawing (the chat window with a join's progress, OSD messages), as
+// in a paused replay. Before, the chat window froze with the game. Nothing reaches the machine.
+void RedrawWhileWaiting(Clock::duration waited_for)
+{
+  static Clock::time_point last;
+  const auto now = Clock::now();
+  if (waited_for < std::chrono::milliseconds(100) || now - last < std::chrono::milliseconds(33))
+    return;
+  last = now;
+  AsyncRequests::GetInstance()->PushEvent([] {
+    if (g_presenter)
+      g_presenter->RedrawLastFrame();
+  });
+}
+
 Wait WaitForFrames(Core::System& system)
 {
   // A peer that sends nothing for this long is gone (GekkoNet drops one after 5 s of silence; a
@@ -3941,6 +3960,7 @@ Wait WaitForFrames(Core::System& system)
           EnterEpoch();
       }
     }
+    RedrawWhileWaiting(Clock::now() - since);
     waited = true;
     // The lock is let go while sleeping, so status and control requests get through. OnLoopTop
     // holds it exactly once.
