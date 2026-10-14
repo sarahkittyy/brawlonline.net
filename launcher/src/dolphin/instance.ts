@@ -83,6 +83,11 @@ export class DolphinInstance extends EventEmitter {
     });
   }
 
+  /** Ends the Dolphin process (a spectated stream's end, docs/design/spectating.md §6.2). */
+  stop() {
+    this.process?.kill();
+  }
+
   private async startProcess(executablePath: string, params: string[]): Promise<ChildProcess> {
     return new Promise((resolve, reject) => {
       let started = false;

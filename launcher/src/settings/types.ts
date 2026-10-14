@@ -44,6 +44,10 @@ export interface SettingsSchema {
   // its games' inputs for spectators. Synced to Dolphin.ini `[Online] StreamGames`.
   enableStreamGames: boolean;
 
+  // Spectating: "Close Dolphin after a spectated game ends" (docs/design/spectating.md §6.2): at a stream's end the
+  // playback Dolphin holds the last frame for 5 s, then closes. Auto play overrides it.
+  closeDolphinAfterSpectating: boolean;
+
   // Dolphin settings: the executable of our Dolphin build (null = default, see dolphin/install/paths.ts)
   netplayDolphinPath: string | null;
   playbackDolphinPath: string | null;

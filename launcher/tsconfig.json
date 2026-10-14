@@ -16,7 +16,8 @@
       "@accounts/*": ["accounts/*"],
       "@brawl_assets/*": ["brawl_assets/*"],
       "@game_assets/*": ["game_assets/*"],
-      "@social/*": ["social/*"]
+      "@social/*": ["social/*"],
+      "@spectate/*": ["spectate/*"]
     },
     "baseUrl": "./src",
     "outDir": "release/app/dist",

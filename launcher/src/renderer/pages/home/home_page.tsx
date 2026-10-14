@@ -8,6 +8,7 @@ import { HomePageMessages as Messages } from "./home_page.messages";
 import { HOME_TABS } from "./home_routes";
 import { HomeOverview } from "./overview/overview";
 import { PlayButtons } from "./play_buttons/play_buttons";
+import { Spectate } from "./spectate/spectate";
 import { Tabs } from "./tabs/tabs";
 
 const Outer = styled.div`
@@ -61,13 +62,17 @@ export const HomePage = React.memo(function HomePage() {
             value={currentTab}
             highlightedTabIds={[]}
             onChange={handleTabChange}
-            tabs={[{ id: "overview", label: Messages.overview() }]}
+            tabs={[
+              { id: "overview", label: Messages.overview() },
+              { id: "spectate", label: Messages.spectate() },
+            ]}
           />
           <PlayButtons />
         </TabRow>
         <Routes>
           <Route index={true} element={<RestoreHomeScope />} />
           <Route path="overview" element={<HomeOverview />} />
+          <Route path="spectate" element={<Spectate />} />
         </Routes>
       </div>
     </Outer>

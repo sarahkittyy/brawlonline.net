@@ -138,6 +138,10 @@ export class SettingsManager extends EventEmitter {
     return this.get().settings.enableStreamGames;
   }
 
+  getCloseDolphinAfterSpectating(): boolean {
+    return this.get().settings.closeDolphinAfterSpectating;
+  }
+
   getDolphinPath(type: DolphinLaunchType): string | null {
     const settings = this.get().settings;
     switch (type) {

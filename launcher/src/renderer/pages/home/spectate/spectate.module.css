@@ -1,0 +1,273 @@
+.page {
+  height: 100%;
+  padding: 20px;
+  box-sizing: border-box;
+  overflow: hidden;
+}
+
+.block {
+  --live-red: #e5534b;
+
+  container-type: inline-size;
+  min-height: 0;
+  height: 100%;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+.autoPlay {
+  margin: 0 0 0 8px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.watchStatus {
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.centered {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  height: 100%;
+  min-height: 160px;
+  padding: 24px;
+  box-sizing: border-box;
+  text-align: center;
+  color: var(--text-dim);
+}
+
+.centered p {
+  margin: 0;
+  max-width: 420px;
+  font-size: 14px;
+  line-height: 1.5;
+}
+
+.list {
+  list-style: none;
+  margin: 0;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  align-self: start;
+}
+
+.row {
+  all: unset;
+  box-sizing: border-box;
+  width: 100%;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 76px 120px 104px 48px 76px;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: background-color 0.15s ease-in-out;
+}
+
+.row:hover {
+  background-color: rgb(255 255 255 / 5%);
+}
+
+.row:active {
+  background-color: rgb(255 255 255 / 9%);
+}
+
+.row:focus-visible {
+  outline: 2px solid var(--accent-primary-dark);
+  outline-offset: -2px;
+}
+
+.row.disabled {
+  cursor: default;
+}
+
+.row.disabled:hover,
+.row.disabled:active {
+  background-color: transparent;
+}
+
+.watchingRow {
+  cursor: default;
+  background-color: rgb(255 255 255 / 6%);
+  box-shadow: inset 3px 0 0 var(--live-red);
+}
+
+/* A game that just started slides in at the top and pulses once. */
+.fresh {
+  animation: rowIn 0.35s ease-out, rowPulse 1.2s ease-in-out 0.35s 1;
+}
+
+@keyframes rowIn {
+  from {
+    opacity: 0;
+    transform: translateY(-6px);
+  }
+
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@keyframes rowPulse {
+  0%,
+  100% {
+    background-color: transparent;
+  }
+
+  50% {
+    background-color: rgb(255 255 255 / 10%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .fresh {
+    animation: none;
+  }
+}
+
+.players {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  overflow: hidden;
+}
+
+.side {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.player {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.stock {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+  object-fit: contain;
+}
+
+.name {
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 14px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.vs {
+  flex-shrink: 0;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.mode {
+  justify-self: start;
+  padding: 2px 8px;
+  border: 1px solid rgb(255 255 255 / 18%);
+  border-radius: 10px;
+  color: var(--text-secondary);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+.game {
+  min-width: 0;
+  color: var(--text-secondary);
+  font-size: 13px;
+  white-space: nowrap;
+}
+
+.stage {
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.time {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.liveDot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  flex-shrink: 0;
+  background-color: var(--live-red);
+  box-shadow: 0 0 6px var(--live-red);
+}
+
+.eye {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--text-secondary);
+  font-size: 13px;
+  font-variant-numeric: tabular-nums;
+}
+
+.action {
+  justify-self: end;
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  color: var(--text-dim);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  white-space: nowrap;
+  transition: color 0.15s ease-in-out;
+}
+
+.row:hover .action {
+  color: var(--text-primary);
+}
+
+.row.disabled .action,
+.row.disabled:hover .action {
+  color: var(--text-dim);
+}
+
+.watchingRow .action {
+  color: var(--live-red);
+}
+
+@container (width < 720px) {
+  .row {
+    grid-template-columns: minmax(0, 1fr) 96px 92px 40px 64px;
+    gap: 8px;
+  }
+
+  .mode {
+    display: none;
+  }
+}

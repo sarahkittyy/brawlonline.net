@@ -19,12 +19,21 @@ export type ReplayCommunication = {
   queue?: ReplayQueueItem[];
   /** Ours: play a replay recorded with another version anyway (the player was asked). */
   playAnyway?: boolean;
+  /**
+   * Ours, `mirror` (spectating, docs/design/spectating.md §6.2): `queue` is the live stream's games, still growing
+   * (games are only added at its end, under the same commandId); `streamOver` once no more come; at its end, with
+   * `closeOnEnd`, Dolphin counts down and asks to be closed (status `close`), else it shows `banner`.
+   */
+  streamOver?: boolean;
+  closeOnEnd?: boolean;
+  banner?: string;
 };
 
 /** What the playback Dolphin writes to `<comm file>.status.json` (Core/Rollback/ReplayPlayback.h). */
 export type ReplayPlaybackStatus = {
   commandId?: string;
-  state?: "idle" | "loading" | "waiting" | "playing" | "ended" | "error";
+  /** `between`: a spectated set's next game is coming; `close`: a spectated stream's end asks to be closed. */
+  state?: "idle" | "loading" | "waiting" | "playing" | "between" | "ended" | "close" | "error";
   replay?: string;
   error?: string;
   needsPlayAnyway?: boolean;
@@ -32,6 +41,8 @@ export type ReplayPlaybackStatus = {
 
 export type ReplayQueueItem = {
   path: string;
+  /** Ours, `mirror`: the rest of this live game won't come (its upload stopped): what's in the file is all of it. */
+  cut?: boolean;
   startFrame?: number;
   endFrame?: number;
   gameStartAt?: string;

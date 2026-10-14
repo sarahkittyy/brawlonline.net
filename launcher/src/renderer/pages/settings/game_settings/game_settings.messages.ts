@@ -16,6 +16,9 @@ export const GameSettingsMessages = {
   enableStreamGames: () => "Let others stream my games",
   enableStreamGamesDescription: () =>
     "Streams inputs to the server for others to spectate you. Very minimal network load. Your opponent's game may still stream the match.",
+  closeDolphinAfterSpectating: () => "Close Dolphin after a spectated game ends",
+  closeDolphinAfterSpectatingDescription: () =>
+    "When a game you're watching ends, show its last moments for 5 seconds, then close Dolphin. Auto play on the Spectate tab keeps it open instead.",
   chatKey: () => "Chat Key",
   chatKeyDescription: () => "The key that opens the chat box in game. Pick one your keyboard controls don't use.",
   chatKeyPressAKey: () => "Press a key...",
