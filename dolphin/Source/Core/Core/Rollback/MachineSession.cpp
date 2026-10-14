@@ -267,6 +267,9 @@ struct State
     s64 frame = -1;
     u32 players = 0;
     std::array<Controller, MAX_PLAYERS> controllers{};
+    // Two slots that swap players at this epoch ({-1, -1}: none). `players` and `controllers`
+    // are already as after the swap.
+    std::pair<int, int> move{-1, -1};
   };
   std::optional<EpochGo> epoch_go;
   bool join_refused = false;
@@ -348,9 +351,14 @@ struct State
     int from = -1;           // the player who asked (decides the epoch)
     int admit = -1;          // the slot it admits
     Controller controller = Controller::GameCube;
+    std::pair<int, int> move{-1, -1};  // or the two slots that swap players
   } plan;
   // This player asks to admit a joiner (its input carries the request until it is planned).
   std::optional<std::pair<int, Controller>> local_request;
+  // This player (the room's host) asks two slots to swap players (RequestMove; its input carries
+  // it until it is planned), and the move it asked for that took effect (for the room).
+  std::optional<std::pair<int, int>> local_move;
+  std::optional<std::pair<int, int>> move_done;
   // At an epoch.
   Clock::time_point epoch_since{};
   u32 epoch_sum = 0;
@@ -615,6 +623,17 @@ void HandleControl(ENetPeer* peer, const u8* data, size_t size)
         go.controllers[i] = arr[i].is<std::string>() && arr[i].get<std::string>() == "wiimote" ?
                                 Controller::WiiRemote :
                                 Controller::GameCube;
+      }
+    }
+    const auto mit = msg.find("move");
+    if (mit != msg.end() && mit->second.is<picojson::array>())
+    {
+      const auto& arr = mit->second.get<picojson::array>();
+      if (arr.size() == 2 && arr[0].is<double>() && arr[1].is<double>())
+      {
+        const double a = arr[0].get<double>(), b = arr[1].get<double>();
+        if (a >= 0 && a < MAX_PLAYERS && b >= 0 && b < MAX_PLAYERS && a != b)
+          go.move = {static_cast<int>(a), static_cast<int>(b)};
       }
     }
     s.epoch_go = go;
@@ -1127,6 +1146,7 @@ bool CreateGekko()
       {
         Input fill = last.inputs[s.opts.local_slot];
         fill[INPUT_REQUEST] = 0;
+        fill[INPUT_MOVE] = 0;
         gekko_set_local_delay_input(s.gekko, s.local_handle, fill.data());
       }
     }
@@ -1465,6 +1485,11 @@ void CaptureLocalWiimote(Core::System& system, Input* in)
 
 void AddLocalRequest(Input* in)
 {
+  if (s.local_move)
+  {
+    (*in)[INPUT_MOVE] = static_cast<u8>(INPUT_MOVE_SWAP | (s.local_move->first & 3) |
+                                        ((s.local_move->second & 3) << 2));
+  }
   if (!s.local_request)
     return;
   (*in)[INPUT_REQUEST] = static_cast<u8>(
@@ -2086,6 +2111,27 @@ void PlanEpoch(s64 frame)
   {
     if (!((s.players >> slot) & 1))
       continue;
+    // A slot move: as a request to admit, from the frame that first carries it.
+    const u8 mv = s.latched[slot][INPUT_MOVE];
+    if ((mv & INPUT_MOVE_SWAP) && (mv & 3) != ((mv >> 2) & 3) &&
+        !(have_prev && prev.inputs[slot][INPUT_MOVE] == mv))
+    {
+      s.plan.active = true;
+      s.plan.request_frame = frame;
+      s.plan.frame = frame + EPOCH_LEAD;
+      s.plan.from = slot;
+      s.plan.admit = -1;
+      s.plan.move = {mv & 3, (mv >> 2) & 3};
+      SetFrameLimit();
+      if (!s.resim)
+      {
+        AddLog(fmt::format("epoch {} at frame {}: player {} moves slot {} <-> slot {}", s.epoch + 1,
+                           s.plan.frame, slot + 1, s.plan.move.first + 1, s.plan.move.second + 1));
+      }
+      if (slot == s.opts.local_slot)
+        s.local_move.reset();
+      break;
+    }
     const u8 r = s.latched[slot][INPUT_REQUEST];
     if (!(r & INPUT_REQUEST_ADMIT))
       continue;
@@ -2113,7 +2159,7 @@ void PlanEpoch(s64 frame)
 // The decider asks to admit a joiner that asked (one at a time).
 void UpdateLocalRequest()
 {
-  if (s.plan.active || s.local_request || s.phase != Phase::Running)
+  if (s.plan.active || s.local_request || s.local_move || s.phase != Phase::Running)
     return;
   std::lock_guard lk(s.net_mutex);
   int lowest = -1;
@@ -2726,9 +2772,54 @@ void LogParts(Core::System& system, s64 frame)
                frame, system.GetCoreTiming().GetTicks(), ppc.downcount, ppc.pc, ppc.Exceptions);
 }
 
+// Two slots swap players (a slot move's epoch): everything the session keeps by slot, the links
+// and the inputs history included, so the session goes on with the players in their new slots.
+void SwapSlots(int a, int b)
+{
+  std::lock_guard lk(s.net_mutex);
+  std::swap(s.peers[a], s.peers[b]);
+  for (const int slot : {a, b})
+  {
+    PeerLink& p = s.peers[slot];
+    if (p.slot >= 0)
+      p.slot = slot;
+    // ENet's peers name their slot (slot + 1, and whether this side connected).
+    for (ENetPeer* e : {p.peer, p.connecting})
+    {
+      if (!e || !e->data)
+        continue;
+      const intptr_t flags = reinterpret_cast<intptr_t>(e->data) & ~static_cast<intptr_t>(0xFF);
+      e->data = reinterpret_cast<void*>(flags | static_cast<intptr_t>(slot + 1));
+    }
+  }
+  if (s.opts.local_slot == a)
+    s.opts.local_slot = b;
+  else if (s.opts.local_slot == b)
+    s.opts.local_slot = a;
+  std::swap(s.controller[a], s.controller[b]);
+  std::swap(s.latched[a], s.latched[b]);
+  for (HistoryEntry& e : s.history)
+    std::swap(e.inputs[a], e.inputs[b]);
+  const auto swap_bits = [a, b](u32 v) {
+    const u32 ba = (v >> a) & 1, bb = (v >> b) & 1;
+    v &= ~((1u << a) | (1u << b));
+    return v | (ba << b) | (bb << a);
+  };
+  s.gone = swap_bits(s.gone);
+  s.gekko_rx.clear();
+  s.gekko_tx.clear();
+}
+
 // Every player in the epoch's set: a new GekkoNet session from the epoch's frame on.
 void StartEpoch(const State::EpochGo& go)
 {
+  if (go.move.first >= 0)
+  {
+    SwapSlots(go.move.first, go.move.second);
+    AddLog(fmt::format("slots {} and {} swapped players", go.move.first + 1, go.move.second + 1));
+    OSD::AddMessage(fmt::format("Player {} <-> player {}", go.move.first + 1, go.move.second + 1),
+                    3000, OSD::Color::CYAN);
+  }
   s.epoch = go.epoch;
   s.frame_base = go.frame;
   s.players = go.players;
@@ -2751,6 +2842,7 @@ void StartEpoch(const State::EpochGo& go)
   }
   s.plan = {};
   s.local_request.reset();
+  s.local_move.reset();
   s_image_parts.reset();
   {
     std::lock_guard lk(s.net_mutex);
@@ -2949,6 +3041,16 @@ void EpochStep(Core::System& system)
   go.controllers = s.controller;
   if (admitting && joiner_ok)
     go.controllers[joiner] = s.plan.controller;
+  if (s.plan.move.first >= 0)
+  {
+    // As after the swap (every machine swaps its own state at StartEpoch).
+    const int a = s.plan.move.first, b = s.plan.move.second;
+    const u32 ba = (go.players >> a) & 1, bb = (go.players >> b) & 1;
+    go.players = (go.players & ~((1u << a) | (1u << b))) | (ba << b) | (bb << a);
+    std::swap(go.controllers[a], go.controllers[b]);
+    go.move = s.plan.move;
+    s.move_done = s.plan.move;
+  }
   {
     std::lock_guard lk(s.net_mutex);
     picojson::object m;
@@ -2957,6 +3059,13 @@ void EpochStep(Core::System& system)
     m["frame"] = picojson::value(static_cast<double>(go.frame));
     m["players"] = picojson::value(static_cast<double>(go.players));
     m["controllers"] = picojson::value(ControllerNames(go.controllers));
+    if (go.move.first >= 0)
+    {
+      picojson::array mv;
+      mv.emplace_back(static_cast<double>(go.move.first));
+      mv.emplace_back(static_cast<double>(go.move.second));
+      m["move"] = picojson::value(mv);
+    }
     BroadcastControl(m);
     if (admitting && !joiner_ok && s.peers[joiner].hello)
     {
@@ -3632,6 +3741,8 @@ bool Arm(const Options& options, std::string* error)
   s.epoch = 0;
   s.plan = {};
   s.local_request.reset();
+  s.local_move.reset();
+  s.move_done.reset();
   s.image_built = false;
   s.image_ms = 0;
   s.image_packed = s.image_raw = 0;
@@ -3786,9 +3897,26 @@ void SetRoom(int local_slot, const std::vector<RoomMember>& members)
       by_slot[m.slot] = &m;
   }
   const RoomMember* self = by_slot[local_slot];
+  // A slot move in flight: the session swapped two players and the room has not yet (or the
+  // reverse). Those slots stay as they are until the room and the session agree again (the
+  // player is not gone, nor someone new).
+  std::array<bool, MAX_PLAYERS> settling{};
+  for (const RoomMember& m : members)
+  {
+    for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+    {
+      const bool here = slot == local_slot ? (self && self->code == m.code) :
+                                             (s.peers[slot].slot >= 0 && s.peers[slot].code == m.code);
+      if (here && slot != m.slot && m.slot >= 0 && m.slot < MAX_PLAYERS)
+      {
+        settling[slot] = true;
+        settling[m.slot] = true;
+      }
+    }
+  }
   for (int slot = 0; slot < MAX_PLAYERS; ++slot)
   {
-    if (slot == local_slot)
+    if (slot == local_slot || settling[slot])
       continue;
     PeerLink& p = s.peers[slot];
     const RoomMember* m = by_slot[slot];
@@ -4046,6 +4174,41 @@ void SetWiimoteOverride(std::optional<WiimoteOverride> value)
 void SetLocalController(Controller controller)
 {
   s.requested_controller = static_cast<int>(controller);
+}
+
+std::optional<std::string> RequestMove(int from, int to)
+{
+  if (from < 0 || from >= MAX_PLAYERS || to < 0 || to >= MAX_PLAYERS || from == to)
+    return "slots must be two different slots, 1 to 4";
+  std::lock_guard lk(s.mutex);
+  if (s.phase != Phase::Running)
+    return "the game is not running yet";
+  if (s.plan.active || s.local_request || s.local_move)
+    return "a change of players is under way: try again in a moment";
+  std::lock_guard nlk(s.net_mutex);
+  bool someone = false;
+  for (const int slot : {from, to})
+  {
+    if (Plays(slot))
+    {
+      someone = true;
+      continue;
+    }
+    // A player joining (or leaving) there: its slot is settling.
+    if (slot != s.opts.local_slot && s.peers[slot].slot >= 0)
+      return fmt::format("player {} is joining or leaving: try again in a moment", slot + 1);
+  }
+  if (!someone)
+    return "nobody plays in either slot";
+  s.local_move = std::make_pair(from, to);
+  AddLog(fmt::format("asking to move slot {} <-> slot {}", from + 1, to + 1));
+  return std::nullopt;
+}
+
+std::optional<std::pair<int, int>> TakeMoveDone()
+{
+  std::lock_guard lk(s.mutex);
+  return std::exchange(s.move_done, std::nullopt);
 }
 
 LocalControllerInfo GetLocalControllerInfo()

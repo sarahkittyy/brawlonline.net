@@ -15,7 +15,9 @@
 #include <fmt/format.h>
 
 #include "Common/FileUtil.h"
+#include "Common/HookableEvent.h"
 #include "Common/Logging/Log.h"
+#include "Core/Core.h"
 #include "Core/Config/OnlineSettings.h"
 #include "Core/Online/OnlineClient.h"
 #include "Core/Online/User.h"
@@ -83,6 +85,8 @@ struct Room
   bool ever_in = false;
   // Close Dolphin once mods-room.json says why (a join that failed before the game was shared).
   bool quit_after_write = false;
+  // This player's session ran (past its start barrier) at some point.
+  bool ever_ran = false;
   std::optional<View> view;
   std::string error;
   u64 states = 0;
@@ -101,6 +105,7 @@ struct State : Room
 
 State s;
 std::string s_command_line;  // --mods-room (before boot, then read once)
+Common::EventHook s_stop_hook;
 
 void Log(std::string line)
 {
@@ -348,6 +353,16 @@ std::optional<Machine::Options> FromEnvironment(std::string* error)
     Log(host ? fmt::format("will open a room for build {}", hash.substr(0, 8)) :
                fmt::format("will join room {} (build {})", join, hash.substr(0, 8)));
   }
+  // The game window closed (emulation stops): this player leaves the room and Dolphin closes. A
+  // member whose game is gone stayed in the room: the room outlived everyone's game, and a
+  // joiner waited on it with a black screen.
+  if (!s_stop_hook)
+  {
+    s_stop_hook = Core::AddOnStateChangedCallback([](Core::State state) {
+      if (state == Core::State::Stopping)
+        OnGameStopping();
+    });
+  }
   return opts;
 }
 
@@ -511,6 +526,29 @@ bool TakeQuitRequest()
   return s_quit_requested.exchange(false);
 }
 
+void OnGameStopping()
+{
+  {
+    std::lock_guard lk(s.mutex);
+    if (s.kind == Kind::None || s.done || s.leaving)
+      return;
+    Log("the game was closed: leaving the room");
+    if (s.view)
+    {
+      picojson::object m;
+      m["type"] = picojson::value("mods-leave");
+      s.outbox.push_back(picojson::value(m).serialize());
+    }
+    else
+    {
+      s.done = true;
+    }
+    s.leaving = true;
+    s.quit_after_write = true;
+  }
+  Machine::Stop();
+}
+
 void OnSignedInElsewhere()
 {
   bool stop = false;
@@ -538,6 +576,20 @@ bool TakeConfigureRequest()
 
 void Files(const std::string& dir)
 {
+  // A slot move this player asked for took effect in the session: the room follows.
+  if (const auto moved = Machine::TakeMoveDone())
+  {
+    std::lock_guard lk(s.mutex);
+    if (s.view)
+    {
+      picojson::object m;
+      m["type"] = picojson::value("mods-move");
+      m["from"] = picojson::value(static_cast<double>(moved->first + 1));
+      m["to"] = picojson::value(static_cast<double>(moved->second + 1));
+      s.outbox.push_back(picojson::value(m).serialize());
+      Log(fmt::format("slots {} and {} swapped: telling the room", moved->first + 1, moved->second + 1));
+    }
+  }
   {
     std::lock_guard lk(s.mutex);
     if (s.kind == Kind::None && s.log.empty())
@@ -608,6 +660,34 @@ void Files(const std::string& dir)
       }
     }
     session["peers"] = picojson::value(peers);
+  }
+
+  {
+    // A joiner whose session ended before it ever ran (nobody let it in: the room's players are
+    // gone, or their games): nothing to play, so it leaves and Dolphin closes, saying why.
+    const auto phase = session.find("phase");
+    const auto why = session.find("error");
+    std::lock_guard lk(s.mutex);
+    if (Machine::IsRunning())
+      s.ever_ran = true;
+    if (s.kind == Kind::Join && !s.ever_ran && !s.done && !s.leaving && phase != session.end() &&
+        phase->second.is<std::string>() && phase->second.get<std::string>() == "error")
+    {
+      const std::string text = why != session.end() && why->second.is<std::string>() ?
+                                   why->second.get<std::string>() :
+                                   "";
+      s.error = text.empty() ? "Could not join the game." :
+                               fmt::format("Could not join the game: {}", text);
+      Log(s.error);
+      if (s.view)
+      {
+        picojson::object m;
+        m["type"] = picojson::value("mods-leave");
+        s.outbox.push_back(picojson::value(m).serialize());
+      }
+      s.leaving = true;
+      s.quit_after_write = true;
+    }
   }
 
   picojson::object o;
@@ -738,6 +818,25 @@ std::optional<std::string> Request(const picojson::object& args)
     m["type"] = picojson::value("mods-public");
     m["public"] = picojson::value(Flag(args, "public", true));
   }
+  else if (op == "move")
+  {
+    // The host moves a player: the session swaps the two slots at an epoch (every machine at
+    // the same frame), then the room follows (Files).
+    const double from = Num(args, "from", 0), to = Num(args, "to", 0);
+    if (from < 1 || from > 4 || to < 1 || to > 4 || from == to)
+      return "from and to must be two different slots, 1 to 4";
+    {
+      std::lock_guard lk(s.mutex);
+      if (!s.view)
+        return "not in a room";
+      if (s.view->host != s.view->you)
+        return "only the room's host moves players";
+      const int f = static_cast<int>(from) - 1, t = static_cast<int>(to) - 1;
+      if ((!s.view->slots[f] && !s.view->open[f]) || (!s.view->slots[t] && !s.view->open[t]))
+        return "that slot is closed";
+    }
+    return Machine::RequestMove(static_cast<int>(from) - 1, static_cast<int>(to) - 1);
+  }
   else if (op == "configure")
   {
     s_configure_requested = true;
@@ -763,7 +862,7 @@ std::optional<std::string> Request(const picojson::object& args)
   }
   else
   {
-    return "op must be leave, kick, slot, public, controller or configure";
+    return "op must be leave, kick, slot, public, move, controller or configure";
   }
   std::lock_guard lk(s.mutex);
   if (!s.view)

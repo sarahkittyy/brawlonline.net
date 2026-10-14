@@ -26,6 +26,7 @@ pub const NOT_HOST: &str = "Only the host can do that.";
 pub const NOT_IN_ROOM: &str = "You are not in a room.";
 pub const KICKED: &str = "You were removed from this room. Try again later.";
 pub const SLOT_EMPTY: &str = "Nobody is in that slot.";
+pub const SLOT_CLOSED: &str = "That slot is closed.";
 pub const OWN_SLOT: &str = "You cannot do that to your own slot.";
 pub const TOO_MANY: &str = "Too many requests. Wait a moment.";
 pub const REMOVED: &str = "Removed from the room.";
@@ -334,6 +335,24 @@ impl ModRoomBook {
                 self.rooms.get_mut(&code).expect("host_request found it").public = public;
                 self.broadcast(&code, out);
             }
+            ModsRequest::Move { from, to } => {
+                let Some((code, _)) = self.host_request(conn, mods::MODS_MOVE, out) else { return };
+                let room = self.rooms.get_mut(&code).expect("host_request found it");
+                let (a, b) = (from as usize - 1, to as usize - 1);
+                if (room.slots[a].is_none() && !room.open[a]) || (room.slots[b].is_none() && !room.open[b]) {
+                    return mods_error(out, conn, mods::MODS_MOVE, SLOT_CLOSED);
+                }
+                if room.slots[a].is_none() && room.slots[b].is_none() {
+                    return mods_error(out, conn, mods::MODS_MOVE, SLOT_EMPTY);
+                }
+                room.slots.swap(a, b);
+                if room.host == a {
+                    room.host = b;
+                } else if room.host == b {
+                    room.host = a;
+                }
+                self.broadcast(&code, out);
+            }
             ModsRequest::Controller { controller } => {
                 let Some(code) = self.member_of.get(&conn).cloned() else {
                     return mods_error(out, conn, mods::MODS_CONTROLLER, NOT_IN_ROOM);
@@ -587,6 +606,33 @@ mod tests {
         assert_eq!(b.public_rooms(10).len(), 1);
         req(&mut b, 1, 1, ModsRequest::Public { public: false });
         assert!(b.public_rooms(10).is_empty());
+    }
+
+    #[test]
+    fn the_host_moves_players() {
+        let mut b = ModRoomBook::new(ModRoomsConfig::default());
+        let code = create(&mut b, 1);
+        join(&mut b, 2, &code);
+        // Only the host.
+        let out = req(&mut b, 2, 2, ModsRequest::Move { from: 2, to: 3 });
+        assert_eq!(msgs(&out, 2)[0]["error"], NOT_HOST);
+        // A player into an open, empty slot.
+        let out = req(&mut b, 1, 1, ModsRequest::Move { from: 2, to: 3 });
+        let st = last_state(&out, 2);
+        assert!(st["slots"][1]["player"].is_null());
+        assert_eq!(st["slots"][2]["player"]["controller"], "wiimote");
+        assert_eq!(st["you"], 3);
+        // The host swaps itself with that player: still the host, in its new slot.
+        let out = req(&mut b, 1, 1, ModsRequest::Move { from: 1, to: 3 });
+        let st = last_state(&out, 1);
+        assert_eq!(st["you"], 3);
+        assert_eq!(st["host"], 3);
+        // Two empty slots, or a closed one, move nothing.
+        let out = req(&mut b, 1, 1, ModsRequest::Move { from: 2, to: 4 });
+        assert_eq!(msgs(&out, 1)[0]["error"], SLOT_EMPTY);
+        req(&mut b, 1, 1, ModsRequest::Slot { slot: 4, open: false });
+        let out = req(&mut b, 1, 1, ModsRequest::Move { from: 1, to: 4 });
+        assert_eq!(msgs(&out, 1)[0]["error"], SLOT_CLOSED);
     }
 
     #[test]

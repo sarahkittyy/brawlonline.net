@@ -16,6 +16,7 @@ pub const MODS_SLOT: &str = "mods-slot";
 pub const MODS_KICK: &str = "mods-kick";
 pub const MODS_PUBLIC: &str = "mods-public";
 pub const MODS_CONTROLLER: &str = "mods-controller";
+pub const MODS_MOVE: &str = "mods-move";
 pub const MODS_STATE: &str = "mods-state";
 pub const MODS_LEFT: &str = "mods-left";
 pub const MODS_ERROR: &str = "mods-error";
@@ -62,6 +63,9 @@ pub enum ModsRequest {
     Public { public: bool },
     /// Any member: what it plays with now (switched mid-game: the room shows it).
     Controller { controller: Controller },
+    /// Host: two slots swap players (either may be empty, but not closed and empty). Sent once the
+    /// players' sessions made the swap (at an epoch, the same frame on every machine).
+    Move { from: u8, to: u8 },
 }
 
 fn valid_hash(h: &str) -> bool {
@@ -135,6 +139,19 @@ impl ModsRequest {
             MODS_KICK => ModsRequest::Kick { slot: slot()? },
             MODS_PUBLIC => ModsRequest::Public { public: flag("public", None)? },
             MODS_CONTROLLER => ModsRequest::Controller { controller: controller()? },
+            MODS_MOVE => {
+                let n = |key: &str| -> Result<u8, String> {
+                    match v.get(key).and_then(|s| s.as_u64()) {
+                        Some(n @ 1..=4) => Ok(n as u8),
+                        _ => Err(format!("{kind}: `{key}` must be 1 to 4")),
+                    }
+                };
+                let (from, to) = (n("from")?, n("to")?);
+                if from == to {
+                    return Err(format!("{kind}: `from` and `to` must differ"));
+                }
+                ModsRequest::Move { from, to }
+            }
             _ => return Err(format!("unknown request `{kind}`")),
         })
     }

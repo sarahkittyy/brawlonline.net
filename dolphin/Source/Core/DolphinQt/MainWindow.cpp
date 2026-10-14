@@ -263,6 +263,22 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
   connect(mods_configure_timer, &QTimer::timeout, this, [this] {
     if (Online::ModsRoom::TakeConfigureRequest())
       ShowControllersWindow();
+    // The launcher is about to start a game (Play, a room, Other Games) while this Dolphin is
+    // open without one: it closes, as when its window is closed, rather than make the player
+    // close it first. A Dolphin in a game ignores it (the launcher hands rooms to the game).
+    {
+      const std::string quit_file = File::GetUserPath(D_ONLINE_IDX) + "quit-if-idle.json";
+      if (File::Exists(quit_file))
+      {
+        File::Delete(quit_file);
+        if (Core::IsUninitialized(m_system))
+        {
+          INFO_LOG_FMT(CORE, "The launcher asked this Dolphin, which has no game, to close");
+          m_exit_requested = true;
+          RequestStop();
+        }
+      }
+    }
     // A join that failed before any game was shared: nothing to play, so Dolphin closes.
     if (Online::ModsRoom::TakeQuitRequest())
     {

@@ -60,13 +60,16 @@ constexpr int MAX_PLAYERS = 4;
 //   10-40  WiimoteEmu::SerializedWiimoteState::data
 //   41     a membership request (INPUT_REQUEST_*): the frame it first appears in starts an epoch
 //          EPOCH_LEAD frames later (docs/design/brawl-mods.md §6.3)
-//   42-47  reserved, 0
+//   42     a slot move (INPUT_MOVE_*): two slots swap players at an epoch, the same way
+//   43-47  reserved, 0
 constexpr int INPUT_SIZE = 48;
 constexpr u8 INPUT_GC_PRESENT = 1 << 0;
 constexpr u8 INPUT_WIIMOTE_CONNECTED = 1 << 1;
 constexpr int INPUT_REQUEST = 41;
 constexpr u8 INPUT_REQUEST_ADMIT = 0x80;     // admit the player in slot (bits 0-1)
 constexpr u8 INPUT_REQUEST_WIIMOTE = 1 << 2;  // ... who plays a Wii Remote
+constexpr int INPUT_MOVE = 42;
+constexpr u8 INPUT_MOVE_SWAP = 0x80;  // swap slot (bits 0-1) and slot (bits 2-3)
 using Input = std::array<u8, INPUT_SIZE>;
 
 GCPadStatus DecodePad(const Input& input);
@@ -230,6 +233,13 @@ void SetWiimoteOverride(std::optional<WiimoteOverride> value);
 // the next frame this player plays that kind of controller. The other machines see its GameCube
 // port unplugged and its Wii Remote connect, or the reverse, as when a controller is plugged in.
 void SetLocalController(Controller controller);
+// The room's host moves a player (any thread): slots `from` and `to` (0-3) swap players at an
+// epoch (either may be empty), the same frame on every machine; the game sees that player's
+// controllers unplugged from one port and plugged into the other. An error when it cannot now (no
+// running session, a change of players already planned, a player joining in either slot).
+std::optional<std::string> RequestMove(int from, int to);
+// A move this player asked for took effect (once): the slots, for the room (mm).
+std::optional<std::pair<int, int>> TakeMoveDone();
 // What this player plays with now (any thread).
 struct LocalControllerInfo
 {
