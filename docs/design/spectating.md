@@ -146,13 +146,13 @@ What the runs changed in the uploader:
 - **Late frames are judged against the game's own first 10 s** (a fixed limit paused all game on a busy PC), and stalls are not a signal (routine pacing polls).
 - mm: a new game's offer closes an unfinished one (a stopped upload blocked the rest of the set).
 
-Final T1 numbers (Null video backend; the streamer was joiner, 157 kbit/s):
+Final T1 run (2026-10-13 23:05, Null video backend; the streamer was joiner, 156 kbit/s; passed):
 
-| Uplink | Upload | Cost to the game's packets (p99 / max) | Game packets dropped with upload ahead |
+| Uplink | Shipping upload: cost to the game's packets (p99 / max), drops with upload ahead | Forced (no backoff, 16 KB/s) | Flood (16 KB/s junk) |
 |---|---|---|---|
-| 189 kbit/s (1.2x) | shipping | 12.5 / 22.3 ms (one 256 B packet is 12 ms here) | 0 |
-| 189 kbit/s | forced (no backoff, 16 KB/s) | 49 / 210 ms | 35 |
-| 189 kbit/s | flood (16 KB/s junk) | 208 / 208 ms | 11,862 |
+| 187 kbit/s (1.2x) | 0 / 12.6 ms, 0 (it held back nearly all the time) | 20 / 212 ms, 31 drops | 210 ms, 10,818 drops |
+| 249 kbit/s (1.6x) | 9.4 / 16.9 ms, 0 (one 256 B packet is 9 ms here) | 40 / 157 ms | |
+| 467 kbit/s (3x) | 3.6 / 9.0 ms, 0 | 7.7 / 21 ms | |
 
 Earlier runs (two packets in flight) at 160-2,437 kbit/s: the shipping uploader never caused a drop, cost at most 15 ms at p99, and sent nothing at all on links the game itself overflowed. T3 (mm silent, 2 s late, trickling at 1 kbit/s, for a whole game): the game's packets stayed at their 15 ms base, no drops, the online connection dropped and came back. T2 (CPU starvation) is still to run.
 
