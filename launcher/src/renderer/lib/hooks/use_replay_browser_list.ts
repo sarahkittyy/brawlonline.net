@@ -46,7 +46,12 @@ export const useReplayBrowserNavigation = () => {
 export const useReplayBrowserList = () => {
   const presenter = useReplayPresenter();
   const files = useReplays((store) => store.files);
-  const { index, total } = useReplays((store) => store.selectedFile);
+  const selectedFile = useReplays((store) => store.selectedFile);
+  // The open file's place in the list now: a refresh (opening Replays) can list new games above it
+  const openPath = selectedFile.fileResult?.fullPath;
+  const found = openPath ? files.findIndex((f) => f.fullPath === openPath) : -1;
+  const index = found >= 0 ? found : selectedFile.index;
+  const total = found >= 0 ? files.length : selectedFile.total;
   const { goToReplayStatsPage } = useReplayBrowserNavigation();
 
   const setSelectedItem = (index: number | undefined) => {

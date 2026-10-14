@@ -3,7 +3,8 @@ import { Navigate, Route, Routes, useParams } from "react-router-dom";
 
 import { useDolphinActions } from "@/lib/dolphin/use_dolphin_actions";
 import { useReplayBrowserList, useReplayBrowserNavigation } from "@/lib/hooks/use_replay_browser_list";
-import { useReplays } from "@/lib/hooks/use_replays";
+import { useReplayPresenter, useReplays } from "@/lib/hooks/use_replays";
+import { useSettings } from "@/lib/hooks/use_settings";
 import { useServices } from "@/services";
 
 import { ReplayBrowser } from "./replay_browser/replay_browser";
@@ -11,6 +12,18 @@ import { ReplayFileStats } from "./replay_file_stats/replay_file_stats";
 
 export const ReplayBrowserPage = React.memo(() => {
   const { lastPath } = useReplayBrowserNavigation();
+  const presenter = useReplayPresenter();
+
+  // Opening Replays refreshes it (like its Refresh button) so the last game is listed at once. Stays mounted
+  // between the list and a replay's stats, so going back to the list keeps its place. Skipped while a load is
+  // already running: the app's start-up one, or the one Profile's replays button starts before coming here.
+  React.useEffect(() => {
+    if (useReplays.getState().loading) {
+      return;
+    }
+    const { rootSlpPath, extraSlpPaths } = useSettings.getState().settings;
+    presenter.init(rootSlpPath, extraSlpPaths, true, useReplays.getState().currentFolder).catch(() => undefined);
+  }, [presenter]);
 
   return (
     <Routes>
@@ -31,7 +44,7 @@ const ChildPage = () => {
   const { goToReplayList } = useReplayBrowserNavigation();
 
   const onPlay = () => {
-    viewReplays({ path: decodedFilePath });
+    void viewReplays({ path: decodedFilePath });
   };
 
   return (
