@@ -224,6 +224,12 @@ struct PeerView
   u32 match_ports = 0;  // the host's match ports at the barrier (with its sync block)
   std::vector<std::vector<std::string>> task_order;
   bool task_order_valid = false;
+  // Its held buttons when it reached the barrier (its state's "hold", with at_s), and the host's
+  // countdown buttons for every port (the host's "holds", with its sync block). See CountdownSlots.
+  u16 hold = 0;
+  bool hold_valid = false;
+  std::array<u16, MAX_LOBBY_PLAYERS> holds{};
+  bool holds_valid = false;
   u32 session_seed = 0;
   u32 match_index = 0;
   // The host's gmGlobalModeMelee init block (stage, rules, stage variant) for match init_match.
@@ -383,6 +389,12 @@ struct State
   bool go = false;
   u64 setup_hash = 0;
   std::vector<u8> setup_key;  // the bytes of setup_hash (SetupKey), for the replay
+  // Start-of-match hotkeys (CountdownSlots): this player's held buttons when it reached the
+  // barrier, and every port's countdown buttons (host: fixed once every player's is in; joiner:
+  // the host's, copied with its sync block; replay: the file's).
+  u16 hold = 0;
+  std::array<u16, MAX_LOBBY_PLAYERS> holds{};
+  bool holds_valid = false;
   // This player's input delay for the current game, fixed when its GekkoNet session is created.
   int input_delay = DEFAULT_INPUT_DELAY;
   SyncBlock sync;  // host: the values the joiner copies
@@ -648,6 +660,7 @@ struct State
     std::vector<std::vector<std::string>> tasks;
     bool sync_task_order = true;
     std::vector<u8> session;
+    std::array<u16, MAX_LOBBY_PLAYERS> holds{};  // the countdown's buttons (SETP "holds")
     std::string end_method;
     s64 final_frame = -1;
     bool play_anyway = false;
@@ -975,8 +988,13 @@ std::array<u8, MAX_LOBBY_PLAYERS> MatchTeams(const Guest& g)
   return teams;
 }
 
-// The setup key and the session's start frame: peers that would start the rollback on different
-// frames (builds with different start frames) fail the barrier instead of desyncing.
+// How the countdown's input is made (CountdownSlots), in the setup hash: 1 = each player's
+// buttons held at the barrier (2026-10-14; builds before ran it neutral and hash without it).
+constexpr u8 COUNTDOWN_INPUT_VERSION = 1;
+
+// The setup key, the session's start frame and how the countdown's input is made: peers that
+// would start the rollback on different frames (builds with different start frames) or run the
+// countdown with different input fail the barrier instead of desyncing.
 u64 SetupHash(const Guest& g, u32 start_frame)
 {
   auto key = SetupKey(g);
@@ -984,6 +1002,7 @@ u64 SetupHash(const Guest& g, u32 start_frame)
     return 0;
   for (int shift = 24; shift >= 0; shift -= 8)
     key.push_back(static_cast<u8>(start_frame >> shift));
+  key.push_back(COUNTDOWN_INPUT_VERSION);
   return XXH3_64bits(key.data(), key.size());
 }
 
@@ -2119,6 +2138,8 @@ void SendState(bool tick = false)
     o["at_start"] = picojson::value(s.at_start);
     o["go"] = picojson::value(s.go);
     o["setup"] = picojson::value(fmt::format("{:016x}", s.setup_hash));
+    if (s.at_s)
+      o["hold"] = picojson::value(static_cast<double>(s.hold));
     o["lock"] = LockJson(s.local_lock);
     if (host && s.setup.game != 0)
       o["match_setup"] = SetupJson(s.setup);
@@ -2167,6 +2188,14 @@ void SendState(bool tick = false)
         lists.emplace_back(names);
       }
       o["tasks"] = picojson::value(lists);
+      // Every port's countdown buttons, once every player's hold is in (joiners wait for them).
+      if (s.holds_valid)
+      {
+        picojson::array holds;
+        for (const u16 h : s.holds)
+          holds.emplace_back(static_cast<double>(h));
+        o["holds"] = picojson::value(holds);
+      }
     }
   }
   std::string text = picojson::value(o).serialize();
@@ -2374,6 +2403,13 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
     p.go = x->get<bool>();
   if (const auto n = PeerData::JsonUInt(get("match"), 0xFFFFFFFF))
     p.match_index = static_cast<u32>(*n);
+  // Its held buttons at the barrier (start-of-match hotkeys, CountdownSlots).
+  if (const auto n = PeerData::JsonUInt(get("hold"), 0xFFFF);
+      n && p.at_s && p.match_index == s.match_index)
+  {
+    p.hold = static_cast<u16>(*n);
+    p.hold_valid = true;
+  }
   if (const auto* x = get("init"); x && x->is<std::string>())
   {
     // Exactly the block's size, or nothing (the joiner then waits for a valid one).
@@ -2507,6 +2543,26 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
     {
       p.task_order = std::move(*lists);
       p.task_order_valid = true;
+    }
+  }
+  // The host's countdown buttons, only with its sync block of this match (a late copy from the
+  // last match must not stand in for them).
+  if (const auto* x = get("holds"); x && x->is<picojson::array>() && p.at_s &&
+                                     p.match_index == s.match_index)
+  {
+    const auto& a = x->get<picojson::array>();
+    std::array<u16, MAX_LOBBY_PLAYERS> holds{};
+    bool ok = a.size() == holds.size();
+    for (size_t i = 0; ok && i < a.size(); ++i)
+    {
+      const auto n = PeerData::JsonUInt(&a[i], 0xFFFF);
+      ok = n.has_value();
+      holds[i] = static_cast<u16>(n.value_or(0));
+    }
+    if (ok)
+    {
+      p.holds = holds;
+      p.holds_valid = true;
     }
   }
   if (first)
@@ -2766,6 +2822,13 @@ void DestroyGekko()
   }
 }
 
+// The controller that pressed START to lock in plays this game (Slippi-style: any port).
+int LocalPad()
+{
+  return s.local_lock.local_pad < 4 ? s.local_lock.local_pad :
+                                      std::clamp(s.net_opts.local_pad, 0, 3);
+}
+
 bool CreateGekko(bool stress, int num_players)
 {
   DestroyGekko();
@@ -2850,9 +2913,7 @@ bool CreateGekko(bool stress, int num_players)
                                        AutoInputDelay(GameRoundTrip(rtt));
     gekko_set_local_delay(s.gekko, s.local_handles[0], static_cast<unsigned char>(s.input_delay));
     gekko_set_disconnect_timeout(s.gekko, Online::PeerSilenceTimeoutMs(s.input_delay));
-    // The controller that pressed START to lock in plays this game (Slippi-style: any port).
-    s.local_pad = s.local_lock.local_pad < 4 ? s.local_lock.local_pad :
-                                               std::clamp(s.net_opts.local_pad, 0, 3);
+    s.local_pad = LocalPad();
     INFO_LOG_FMT(BRAWLBACK,
                  "gprb: input delay {} ({}, round trip {:.0f} ms, in game {:.0f} ms), controller "
                  "port {}",
@@ -3322,9 +3383,11 @@ void EndRunning(Core::System& system, const std::string& reason)
       p.sync = {};
       p.task_order_valid = false;
       p.match_ports = 0;
+      p.hold_valid = p.holds_valid = false;
     });
     s.phase = seen && !s.peer_left ? Phase::Connected : Phase::Ended;
     s.at_s = s.applied = s.at_start = s.go = false;
+    s.holds_valid = false;
     s.did_frame0 = false;
     s.sync = {};
     s.start_at.reset();
@@ -4805,16 +4868,48 @@ u32 StartFrame()
                                     s.net_opts.start_frame;
 }
 
-// Countdown: every port reads as a neutral, connected GameCube controller (ports nobody plays as
-// unplugged), identically on both peers, and nothing is rolled back.
-PadSlots NeutralSlots()
+// Start-of-match hotkeys (Samus's ice mode: the side taunt held on entry; PM 3.6): the game reads
+// them while the fighters enter, game frames ~2-122, all before start_frame, when no input of the
+// match can be taken (see DEFAULT_START_FRAME). So each player's digital buttons are sampled once,
+// when its machine reaches the barrier (the match appears after the load), and every machine
+// gives each port its player's sample for the whole countdown: the hold must already be down
+// when the match appears. Only the digital buttons (gfPadStatus +0x0/+0x4), without START; the
+// sticks and analog triggers stay neutral (an analog shield or a tilted stick in the countdown
+// would only show an entry's wobble, and a stick at rest is never exactly centred).
+// gfPadButtons (as the game reads them; D-pad left 0x1, right 0x2, down 0x4, up 0x8): the D-pad,
+// Z, R, L, A, B, X, Y; not START (0x1000) nor 0x80.
+constexpr u16 HOLD_BUTTONS = 0x0F7F;
+
+u16 SampleHold()
+{
+  const PadSlots latest = PadsLatestRaw();
+  const u8* pad = latest.data() + LocalPad() * INPUT_SIZE;
+  if (pad[0x38] != 0)  // gfPadError: no controller (or not ready)
+    return 0;
+  return static_cast<u16>((pad[2] << 8 | pad[3]) & HOLD_BUTTONS);
+}
+
+// Countdown: every port reads as a connected GameCube controller holding its player's sampled
+// buttons (else neutral; ports nobody plays as unplugged), identically on every machine, and
+// nothing is rolled back.
+PadSlots CountdownSlots()
 {
   PadSlots slots{};
   const u32 ports = s.mode == Mode::SyncTest ? s.st_opts.ports : s.match_ports ? s.match_ports : 0x3u;
   for (u32 port = 0; port < 4; ++port)
   {
+    u8* pad = slots.data() + port * INPUT_SIZE;
     if (!(ports & (1u << port)))
-      slots[port * INPUT_SIZE + 0x38] = 0xFF;  // gfPadError NO_CONTROLLER
+    {
+      pad[0x38] = 0xFF;  // gfPadError NO_CONTROLLER
+      continue;
+    }
+    const u16 hold = s.holds_valid ? static_cast<u16>(s.holds[port] & HOLD_BUTTONS) : 0;
+    for (u32 off : {0x0u, 0x4u})  // current buttons, and its copy (both big-endian u32)
+    {
+      pad[off + 2] = static_cast<u8>(hold >> 8);
+      pad[off + 3] = static_cast<u8>(hold);
+    }
   }
   return slots;
 }
@@ -6100,7 +6195,7 @@ std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file,
     }
   }
   const auto sim = PeerData::JsonUInt(get("sim"), 0xFFFFFFFF);
-  if (!sim || (*sim != Replay::SIM_VERSION && !play_anyway))
+  if (!sim || (!Replay::SimVersionPlays(*sim) && !play_anyway))
   {
     return fmt::format("the replay was recorded with another version of the game's netcode ({}, "
                        "this one plays {})",
@@ -6144,6 +6239,21 @@ std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file,
   pb.tasks = *tasks;
   if (const auto* x = get("sync_task_order"); x && x->is<bool>())
     pb.sync_task_order = x->get<bool>();
+  // The countdown's buttons (SIM_VERSION 2); a SIM_VERSION 1 file has none: its countdown ran
+  // neutral.
+  if (const auto* x = get("holds"); x && x->is<picojson::array>())
+  {
+    const auto& a = x->get<picojson::array>();
+    if (a.size() != pb.holds.size())
+      return "the replay's match setup is damaged";
+    for (size_t i = 0; i < a.size(); ++i)
+    {
+      const auto n = PeerData::JsonUInt(&a[i], 0xFFFF);
+      if (!n)
+        return "the replay's match setup is damaged";
+      pb.holds[i] = static_cast<u16>(*n & HOLD_BUTTONS);
+    }
+  }
   if (file->pads.empty())
     return "the replay has no frames";
   if (file->ports != pb.ports)
@@ -6739,13 +6849,15 @@ std::string WaitText()
       out += " never heard";
       return;
     }
-    out += fmt::format(" heard {:.0f} ms ago, at_s {}, applied {}, at_start {}, go {}, setup {:016x}",
+    out += fmt::format(" heard {:.0f} ms ago, at_s {}, applied {}, at_start {}, go {}, "
+                       "setup {:016x}, hold {}",
                        std::chrono::duration<double, std::milli>(now - p.last_heard).count(),
-                       p.at_s, p.applied, p.at_start, p.go, p.setup_hash);
+                       p.at_s, p.applied, p.at_start, p.go, p.setup_hash, p.hold_valid);
     if (slot == host)
     {
-      out += fmt::format(", init for match {}, sync {}, ports {:#x}, task order {}", p.init_match,
-                         p.sync.valid, p.match_ports, p.task_order_valid);
+      out += fmt::format(", init for match {}, sync {}, ports {:#x}, task order {}, holds {}",
+                         p.init_match, p.sync.valid, p.match_ports, p.task_order_valid,
+                         p.holds_valid);
     }
   });
   return out;
@@ -6920,6 +7032,13 @@ void BeginReplay(Core::System& system)
   if (s.setup.game != 0)
     o["match_setup"] = SetupJson(s.setup);
   o["gone"] = picojson::value(s.gone_enabled);
+  // The countdown's buttons per port (CountdownSlots; SIM_VERSION 2).
+  {
+    picojson::array holds;
+    for (const u16 h : s.holds)
+      holds.emplace_back(static_cast<double>(s.holds_valid ? h : 0));
+    o["holds"] = picojson::value(holds);
+  }
   // SESSION as the game built this match from it (the same on every machine).
   std::vector<u8> session;
   if (const u32 sa = Online::GameBridge::SessionAddress())
@@ -7112,6 +7231,8 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
     s.quit_addr = s.session_addr + Online::GameBridge::SESSION_QUIT_PORTS;
   }
   WriteSyncBlock(system, s.pb.sync);
+  s.holds = s.pb.holds;
+  s.holds_valid = true;
   int relinked = 0;
   if (s.pb.sync_task_order)
   {
@@ -7133,7 +7254,7 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
   }
   s.phase = Phase::Countdown;
   system.GetCoreTiming().ResetThrottleToNow();
-  PadsSetCurrent(0xF, NeutralSlots());
+  PadsSetCurrent(0xF, CountdownSlots());
   PadsOnLoopTop(system);
   SetLoopDefault(ppc);
   return true;
@@ -7213,7 +7334,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       return false;
     }
     const u32 fc = g.U32(Addr::GAME_FRAME + 4).value_or(0);
-    PadsSetCurrent(0xF, NeutralSlots());
+    PadsSetCurrent(0xF, CountdownSlots());
     PadsOnLoopTop(system);
     ApplyPeerDrops();
     if (s.mode == Mode::Network && s.phase == Phase::Countdown && !PumpGekkoInCountdown(system))
@@ -7385,8 +7506,9 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     const u32 pc = g.U32(Addr::GAME_FRAME + 0x14).value_or(0);
     if (fc < 1 || pc <= fc || fc + 1 >= s.st_opts.start_frame)
       return false;
+    s.holds_valid = false;  // neutral countdown
     s.phase = Phase::Countdown;
-    PadsSetCurrent(0xF, NeutralSlots());
+    PadsSetCurrent(0xF, CountdownSlots());
     PadsOnLoopTop(system);
     return false;
   }
@@ -7491,6 +7613,8 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     }
     if (IsHost())
       s.sync = ReadSyncBlock(system);
+    s.hold = SampleHold();
+    s.holds_valid = false;
     s.at_s = true;
     s.applied = IsHost();
     s.barrier_host = HostSlot();
@@ -7501,8 +7625,9 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     ForEachPeer([](int, PeerView& p) { p.recovery.reset(); });
     s.phase = Phase::Barrier;
     SendState();
-    INFO_LOG_FMT(BRAWLBACK, "gprb: at the barrier (P{} of ports {:#x}, setup {:016x}: {})",
-                 s.local_slot + 1, s.match_ports, s.setup_hash, Hex(SetupKey(g)));
+    INFO_LOG_FMT(BRAWLBACK,
+                 "gprb: at the barrier (P{} of ports {:#x}, holding {:#06x}, setup {:016x}: {})",
+                 s.local_slot + 1, s.match_ports, s.hold, s.setup_hash, Hex(SetupKey(g)));
   }
 
   if (s.phase != Phase::Barrier)
@@ -7555,9 +7680,40 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       SetLoopDefault(ppc);
       return true;
     }
-    if (hp && !s.applied && hp->at_s && hp->sync.valid &&
+    // Host: every port's countdown buttons, fixed once every player still in the session has
+    // sent its hold (a player who left before: neutral). The joiners take these with the sync
+    // block, so every machine runs the countdown with the same ones whoever leaves meanwhile.
+    if (IsHost() && !s.holds_valid)
+    {
+      bool all_holds = true;
+      std::array<u16, MAX_LOBBY_PLAYERS> holds{};
+      holds[s.local_slot] = s.hold;
+      ForEachPeer([&](int slot, const PeerView& p) {
+        if (p.left)
+          return;
+        all_holds = all_holds && p.at_s && p.hold_valid;
+        holds[slot] = p.hold;
+      });
+      if (all_holds)
+      {
+        for (int port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+          s.holds[port] = (s.match_ports >> port) & 1 ? holds[port] & HOLD_BUTTONS : 0;
+        s.holds_valid = true;
+        INFO_LOG_FMT(BRAWLBACK, "gprb: countdown buttons {:#06x} {:#06x} {:#06x} {:#06x}",
+                     s.holds[0], s.holds[1], s.holds[2], s.holds[3]);
+        SendState();
+      }
+    }
+    if (hp && !s.applied && hp->at_s && hp->sync.valid && hp->holds_valid &&
         (!s.net_opts.sync_task_order || hp->task_order_valid))
     {
+      s.holds = hp->holds;
+      for (u16& h : s.holds)
+        h &= HOLD_BUTTONS;
+      s.holds_valid = true;
+      INFO_LOG_FMT(BRAWLBACK,
+                   "gprb: countdown buttons {:#06x} {:#06x} {:#06x} {:#06x} (the host's)",
+                   s.holds[0], s.holds[1], s.holds[2], s.holds[3]);
       WriteSyncBlock(system, hp->sync);
       int relinked = 0;
       if (s.net_opts.sync_task_order)
@@ -7596,7 +7752,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
         s.defer_initial_save = true;
       else
         WARN_LOG_FMT(BRAWLBACK, "gprb: gekko_create failed; retried at the start barrier");
-      PadsSetCurrent(0xF, NeutralSlots());
+      PadsSetCurrent(0xF, CountdownSlots());
       PadsOnLoopTop(system);
       INFO_LOG_FMT(BRAWLBACK, "gprb: barrier passed, countdown until game frame {}", StartFrame());
       SetLoopDefault(ppc);

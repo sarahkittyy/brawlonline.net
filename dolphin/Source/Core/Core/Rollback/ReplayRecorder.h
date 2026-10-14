@@ -45,7 +45,14 @@ namespace Gprb::Replay
 // writes, the countdown, pacing, the file IO wait, input anchoring and sanitising, the start
 // frame. A replay with another SIM_VERSION may not play back the same (docs/design/replays.md
 // §6.5): playback says so and offers to play it anyway.
-constexpr u32 SIM_VERSION = 1;
+// 2 (2026-10-14): the countdown runs with each player's buttons held at the barrier (SETP "holds",
+// GameplaySession's CountdownSlots). A version 1 file has no holds and plays as recorded (a
+// neutral countdown), so playback takes both (SimVersionPlays).
+constexpr u32 SIM_VERSION = 2;
+constexpr bool SimVersionPlays(u64 sim)
+{
+  return sim == 1 || sim == SIM_VERSION;
+}
 
 // Who played, by in-game port (the session's view of matchmaking's players).
 struct PlayerMeta

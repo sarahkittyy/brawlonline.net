@@ -1206,6 +1206,26 @@ Determinism: the new build's runs (`ref,mp,mp`) equal the old build's reference 
 
 **What is left** (per re-run frame, this PC): game code 1.3-1.9 ms; GPU preprocessing 0.3; waits for the GPU thread for *other* (CP status reads) about 0.25 in sessions. The game code is Brawl's own frame, its rendering included (Phase 6: skipping the render changed the simulation). The player PCs' numbers will come from the `gprb frame cost` lines in their logs.
 
+## Phase 27: start-of-match hotkeys online (players, 2026-10-14)
+
+**Report.** P+ Samus starts a match in ice mode when the side taunt is held during her entrance ("Samus can now start a match in ice mode by holding the side taunt on entry", PM 3.6); players said it never works online.
+
+**Cause.** Offline (P+ v3.2, Samus vs Samus on FD, P2 holding D-pad right): held from the stage pick, P2's forward smash is ice; held only from game frame 121, fire. Her entry subaction checks the hold at its frame 30, and the fighters enter at game frames 2 and 92 (a 1v1), so the game reads it before 120. Online every port read neutral input from the first barrier to `start_frame` (Phase 21: loads into the region set run to about frame 95 and cannot be rolled back), so no hold made before the countdown could ever reach the game, for any port or character.
+
+**Change** (`GameplaySession.cpp`):
+- Each machine samples its player's digital buttons (`SampleHold`: the lock-in's controller, gfPadStatus +0x0, START and 0x80 masked off) when it reaches the first barrier, i.e. when the match appears after the load, and sends them in its state message (`hold`, with `at_s`, only for the current match index).
+- The host fixes every port's countdown buttons once every player still in the session has sent its hold (a player who left before: none) and sends them with its sync block (`holds`, per port). A joiner applies the sync block only once it has them and takes the host's list, so every machine runs the countdown with the same buttons whoever leaves meanwhile.
+- `CountdownSlots` (was `NeutralSlots`) gives each playing port its buttons at +0x0 and +0x4 for every countdown frame; sticks and analog triggers stay neutral (a tilted stick or an analog shield in the countdown would only wobble an entrance, and a stick at rest is never exactly centred). Still no rollback before `start_frame`. Sync tests keep a neutral countdown.
+- Mixed builds: the setup hash includes `COUNTDOWN_INPUT_VERSION` (1), so a build from before fails the first barrier ("match setup differs") instead of desyncing.
+- Replays: `SETP` has `holds`, playback runs the countdown with them, and the spectate stream carries them with `SETP`. `Replay::SIM_VERSION` is 2; a version 1 file has no `holds` and ran a neutral countdown, which is what playback does without them, so playback takes 1 and 2 (`SimVersionPlays`); a version 2 file on an older build is refused, with "Play anyway".
+
+**For players.** The hold must already be down when the match appears: hold the button through the load (from the stage pick, or from locking in), and let go before GO, or the taunt comes out. Buttons pressed after the match appears count only from game frame 120, as before. This covers any character's entrance hotkey; Zelda has none in P+ v3.2 (her move scripts were checked).
+
+**Verification** (Dolphin `run/bin/starthold`, the plugin built 2026-10-14 17:27, raw logs `run/bin/starthold-test*.log`):
+- `harness/tests/test_online_start_hotkeys.py`: a Direct game, Samus against Samus, ivy holding D-pad right from her search through the load. Both machines logged countdown buttons `0x0002 0x0000 0x0000 0x0000` (D-pad right is 0x2 as the game reads it: BrawlHeaders' bitfield, not its `#define`). After GO both forward smashed: ivy's ice and flint's fire on both screens (`run/artifacts/game-bridge/start-hotkeys/`), 0 mismatches on 336 confirmed frames. A fresh Dolphin played ivy's replay with no checksum mismatch and showed the same smashes (`run/artifacts/replays/start-hotkeys/`). Passed twice with the holder as host; an earlier run with the holder as joiner (P2) logged `0x0000 0x0002 0x0000 0x0000` on both (that run then failed on the test's wrong D-pad constant).
+- `gprb_session.py --preset typical --cpu dc` (neutral holds, the harness's own barrier path): 6,639 frames, 0 mismatches on 6,624 confirmed frames, identical traces.
+- `gprb_synctest.py --scenario ps2-peach-gw --distance 2`: to game set, 0 desyncs. Its region hash differs at `0x805A0340` / `0x805B4E80` (sometimes `0x80B89DC0`) on every frame, as on the build without this change (`run/bin/switchfix`, same scenario: same addresses, 0 desyncs) and as noted in Phase 23's sync tests. Raw: `run/qa/start-hotkeys/`.
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).

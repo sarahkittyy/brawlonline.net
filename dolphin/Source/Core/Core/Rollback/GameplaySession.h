@@ -80,11 +80,12 @@ static_assert(AutoInputDelay(GameRoundTrip(-1)) == 2 && AutoInputDelay(GameRound
 // on a loader thread into heaps of the region set (the last at about game frame 95: the last
 // fighter is created at frame 92 for any player count); rolling those heaps back under an
 // in-flight load corrupts it. So from the first simulation frame (the barrier, where the RNG,
-// frame counters and task order are copied) to here, every peer runs with neutral input and no
-// rollback; GekkoNet starts here behind a second barrier, and a file read still in flight is
-// waited out before the base snapshot. The game reads input from GO on: game frame 214 (verified
-// offline, P+ v3.2, a 1v1). Was 240 (after GO): inputs were thrown away for the first
-// 26 frames of play and the start barrier's hitch (base snapshot, deterministic GPU thread, the
+// frame counters and task order are copied) to here, every peer runs with the same fixed input
+// (each player's buttons held when its machine reached the barrier, for start-of-match hotkeys:
+// GameplaySession.cpp CountdownSlots) and no rollback; GekkoNet starts here behind a second
+// barrier, and a file read still in flight is waited out before the base snapshot. The game
+// reads input from GO on: game frame 214 (verified offline, P+ v3.2, a 1v1). Was 240 (after GO):
+// inputs were thrown away for the first 26 frames of play and the start barrier's hitch (base snapshot, deterministic GPU thread, the
 // barrier's round trip) came right after GO. At 120 that hitch falls in the countdown, 1.5 s
 // before GO, and the first frame of play takes the player's input.
 constexpr u32 DEFAULT_START_FRAME = 120;
