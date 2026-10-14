@@ -92,7 +92,7 @@ constexpr u32 DEFAULT_START_FRAME = 120;
 struct SyncTestOptions
 {
   int distance = 2;                 // frames rolled back on every frame (1..MAX_ROLLBACK_FRAMES)
-  std::string region_set = "gp-v22";  // Sys/Rollback/<name>.json or a path
+  std::string region_set = "gp-v23";  // Sys/Rollback/<name>.json or a path
   bool hash_regions = true;          // also compare a hash of the whole region set per frame
   u32 start_frame = DEFAULT_START_FRAME;  // game frame the rollback starts at
   u32 ports = 3;                     // local controller ports that play (bit per port)
@@ -141,7 +141,7 @@ struct ConnectOptions
   std::vector<Peer> peers;
   // The deciding player's port as the joiners know it (-1: learned from the peers' messages).
   int host_slot = -1;
-  std::string region_set = "gp-v22";
+  std::string region_set = "gp-v23";
   // The game frame the rollback starts at (DEFAULT_START_FRAME). Every peer must use the same:
   // it is part of the setup hash the first barrier compares.
   u32 start_frame = DEFAULT_START_FRAME;
