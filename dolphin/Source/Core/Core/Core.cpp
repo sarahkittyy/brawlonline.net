@@ -602,6 +602,19 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
   IOS::HLE::SetSDCardSessionStorage(sd_card_session);
   Common::ScopeGuard sd_card_session_guard{[] { IOS::HLE::SetSDCardSessionStorage(nullptr); }};
 
+  // A stop while this thread was still starting (a session reads its whole SD card here, seconds
+  // the first time) found no CPU to stop: HW::Init powers the CPU up again, and the game booted
+  // with nobody left to end it (Dolphin hung on a black window, the session already gone). The
+  // boot ends here instead, before HW::Init and again after it (a stop from then on sticks).
+  const auto stop_requested = [] {
+    if (s_state.load() != State::Stopping)
+      return false;
+    NOTICE_LOG_FMT(CORE, "The game was stopped while it was starting: not booting it");
+    return true;
+  };
+  if (stop_requested())
+    return;
+
   // Wiimote input config is loaded in OnESTitleChanged
 
   FreeLook::LoadInputConfig();
@@ -630,6 +643,8 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
     CPUThreadGuard guard(system);
     system.GetPowerPC().GetDebugInterface().Clear(guard);
   }};
+  if (stop_requested())
+    return;
 
   // In single-core mode: This holds a video backend shutdown function.
   // In dual-core mode: This holds a GPU thread stopping function (which does the backend shutdown).

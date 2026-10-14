@@ -287,7 +287,7 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
       if (Core::IsUninitialized(m_system))
         QGuiApplication::exit(0);
       else
-        ForceStop();
+        ForceStopFor("the room closed this Dolphin");
     }
   });
   mods_configure_timer->start(250);
@@ -588,7 +588,7 @@ void MainWindow::ConnectMenuBar()
   // Emulation
   connect(m_menu_bar, &MenuBar::Pause, this, &MainWindow::Pause);
   connect(m_menu_bar, &MenuBar::Play, this, [this] { Play(); });
-  connect(m_menu_bar, &MenuBar::Stop, this, &MainWindow::RequestStop);
+  connect(m_menu_bar, &MenuBar::Stop, this, [this] { RequestStopFor("Emulation > Stop"); });
   connect(m_menu_bar, &MenuBar::Reset, this, &MainWindow::Reset);
   connect(m_menu_bar, &MenuBar::Fullscreen, this, &MainWindow::FullScreen);
   connect(m_menu_bar, &MenuBar::FrameAdvance, this, &MainWindow::FrameAdvance);
@@ -679,7 +679,8 @@ void MainWindow::ConnectHotkeys()
           &MainWindow::OnRequestGolfControl);
   connect(m_hotkey_scheduler, &HotkeyScheduler::RefreshGameListHotkey, this,
           &MainWindow::RefreshGameList);
-  connect(m_hotkey_scheduler, &HotkeyScheduler::StopHotkey, this, &MainWindow::RequestStop);
+  connect(m_hotkey_scheduler, &HotkeyScheduler::StopHotkey, this,
+          [this] { RequestStopFor("the Stop hotkey"); });
   connect(m_hotkey_scheduler, &HotkeyScheduler::ResetHotkey, this, &MainWindow::Reset);
   connect(m_hotkey_scheduler, &HotkeyScheduler::ScreenShotHotkey, this, &MainWindow::ScreenShot);
   connect(m_hotkey_scheduler, &HotkeyScheduler::FullScreenHotkey, this, &MainWindow::FullScreen);
@@ -751,7 +752,7 @@ void MainWindow::ConnectToolBar()
 
   connect(m_tool_bar, &ToolBar::PlayPressed, this, [this] { Play(); });
   connect(m_tool_bar, &ToolBar::PausePressed, this, &MainWindow::Pause);
-  connect(m_tool_bar, &ToolBar::StopPressed, this, &MainWindow::RequestStop);
+  connect(m_tool_bar, &ToolBar::StopPressed, this, [this] { RequestStopFor("the toolbar's Stop"); });
   connect(m_tool_bar, &ToolBar::FullScreenPressed, this, &MainWindow::FullScreen);
   connect(m_tool_bar, &ToolBar::ScreenShotPressed, this, &MainWindow::ScreenShot);
   connect(m_tool_bar, &ToolBar::NetPlaySetupDialogPressed, this, &MainWindow::ShowNetPlaySetupDialog);
@@ -792,7 +793,7 @@ void MainWindow::ConnectRenderWidget()
 
 void MainWindow::ConnectHost()
 {
-  connect(Host::GetInstance(), &Host::RequestStop, this, &MainWindow::RequestStop);
+  connect(Host::GetInstance(), &Host::RequestStop, this, [this] { RequestStopFor("the emulation"); });
 }
 
 void MainWindow::ConnectStack()
@@ -1139,13 +1140,33 @@ void MainWindow::ForceStop()
   Core::Stop(m_system);
 }
 
+// The reason goes to the log: a room's "the game was closed" then says what closed it.
+static void LogStopReason(Core::System& system, std::string_view why)
+{
+  const Core::State state = Core::GetState(system);
+  if (state != Core::State::Uninitialized && state != Core::State::Stopping)
+    NOTICE_LOG_FMT(CORE, "Stopping the game: {}", why);
+}
+
+void MainWindow::RequestStopFor(std::string_view why)
+{
+  LogStopReason(m_system, why);
+  RequestStop();
+}
+
+void MainWindow::ForceStopFor(std::string_view why)
+{
+  LogStopReason(m_system, why);
+  ForceStop();
+}
+
 void MainWindow::OnRenderWidgetClosed()
 {
   // The launcher's playback Dolphin (`-i`: replays and spectating) has nothing to offer once its
   // game window is closed: Dolphin closes with it, as the user expects of a replay window.
   if (Gprb::Replay::Playback::Following())
     m_exit_requested = true;
-  ForceStop();
+  ForceStopFor("the game window was closed");
 }
 
 void MainWindow::Reset()
@@ -1920,6 +1941,8 @@ bool MainWindow::eventFilter(QObject* object, QEvent* event)
 {
   if (event->type() == QEvent::Close)
   {
+    LogStopReason(m_system, object == this ? "the main window was closed" :
+                                             "the game window was closed");
     if (RequestStop() && object == this)
       m_exit_requested = true;
 

@@ -558,7 +558,11 @@ void OnGameStopping()
     }
     else
     {
+      // No room yet (it opens as the game boots): nothing to tell mm, and the room files may
+      // never be written again (the online connection starts with the game), so Dolphin closes
+      // as soon as the game has stopped.
       s.done = true;
+      s_quit_requested = true;
     }
     s.leaving = true;
     s.quit_after_write = true;

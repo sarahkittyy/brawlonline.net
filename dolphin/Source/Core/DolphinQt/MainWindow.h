@@ -10,6 +10,7 @@
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 
 #ifdef USE_RETRO_ACHIEVEMENTS
 #include "Common/Config/Config.h"
@@ -112,6 +113,9 @@ private:
   // May ask for confirmation. Returns whether or not it actually stopped.
   bool RequestStop();
   void ForceStop();
+  // Stop with the reason in the log.
+  void RequestStopFor(std::string_view why);
+  void ForceStopFor(std::string_view why);
   void OnRenderWidgetClosed();
   void Reset();
   void FrameAdvance();
