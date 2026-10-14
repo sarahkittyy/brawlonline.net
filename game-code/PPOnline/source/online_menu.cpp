@@ -6,9 +6,9 @@
 //                          WITH ANYONE  -> BASIC VERSUS = UNRANKED, TEAM BATTLE = TEAMS -> CSS
 //   CSS (sqNetAnyOkiraku)  P+'s competitive rules; status in the CSS's own rule-line window;
 //                          START = search (Unranked) or connect-code entry (Direct, Teams);
-//                          Z or B = cancel / clear error, hold Z = disconnect (Slippi);
-//                          hold B (Brawl's own) = back to the ONLINE page, which sends
-//                          CLEANUP_CONNECTION when the menu loads (Slippi OnMenuLoad.asm)
+//                          Z or B = cancel / clear error; hold B (Brawl's own) = back to the
+//                          ONLINE page, which sends CLEANUP_CONNECTION when the menu loads
+//                          (Slippi OnMenuLoad.asm): the only way to disconnect (no hold Z)
 #include <mu/mu_msg.h>
 #include <string.h>
 
@@ -79,7 +79,6 @@ namespace OnlineMenu {
         u32 startGuard;         // frames START presses are dropped after the keypad (see codeEntered)
         bool cssSeen;           // the online CSS was up last frame (holdBGuard)
         bool bGuard;            // B still held from before this CSS: taken out until released
-        int zHeld;
         u32 searchSeq;          // seq of the current FIND_OPPONENT (0 = no search)
         bool pollPending;       // a GET_MATCH_STATE (or the FIND_OPPONENT) awaits its answer
         u32 pollFrames;         // frames it has been waiting
@@ -147,7 +146,7 @@ namespace OnlineMenu {
     static const u32 BTN_START = 0x1000;
     static const u32 BTN_Z = 0x0010;
     static const u32 BTN_B = 0x0200;
-    static const int DISCONNECT_HOLD_DELAY = 0x30;   // Slippi HandleInputsOnCSS.asm:14 (48 frames)
+    static const int KICK_HOLD_DELAY = 0x30;         // a room host's hold A to remove a player (48 frames)
     static const u32 START_GUARD_FRAMES = 45;        // START ignored after a room code (codeEntered)
     static const int SE_BACK = 2, SE_ERROR = 3;      // Brawl menu sounds (cancel, buzzer)
     static const int LOCAL_PORT = 0;                 // the online CSS has one local player area
@@ -261,38 +260,6 @@ namespace OnlineMenu {
         *(volatile u32*)0x804E0074 = 0;
         *state = 0;
         PPOM::g_block.debug.scratch[15] += 0x1000000u;   // tests: Code Menu opens refused
-    }
-
-    // Hold Z (DISCONNECT_HOLD_DELAY frames) to disconnect (Slippi); true on the frame the hold
-    // is done. P+'s "Hold Z for AltZ Characters" picks a character with Z held (the user's,
-    // 2026-10-12: holding Z to pick one in a room left the room, which no longer has a hold Z),
-    // so the hold counts only while Z is the only button down and the stick is still: the stick
-    // moving starts it again (the hand on its way to a portrait; 16 is where the CSS hand starts
-    // to move), any other button (A on the portrait) ends it until Z is let go. *frames < 0: ended.
-    static const u32 PAD_BUTTONS = 0x1F7F;   // START Y X B A L R Z and the d-pad
-    static const int STICK_STILL = 16;       // gfPadStatus +0x30/+0x31, signed
-    static bool zHoldDone(u32 held, int* frames)
-    {
-        if (!(held & BTN_Z)) {
-            *frames = 0;
-            return false;
-        }
-        if (*frames < 0) return false;
-        if (held & PAD_BUTTONS & ~BTN_Z) {
-            *frames = -1;
-            return false;
-        }
-        u8* ps = padSystem();
-        for (int p = 0; ps && p < 4; p++) {
-            s8 x = *(volatile s8*)(ps + 0x244 + 0x40 * p + 0x30), y = *(volatile s8*)(ps + 0x244 + 0x40 * p + 0x31);
-            if (x > STICK_STILL || x < -STICK_STILL || y > STICK_STILL || y < -STICK_STILL) {
-                *frames = 0;
-                return false;
-            }
-        }
-        if (++*frames <= DISCONNECT_HOLD_DELAY) return false;
-        *frames = -1;
-        return true;
     }
 
     static void playSE(int id)
@@ -1501,7 +1468,6 @@ namespace OnlineMenu {
         s.rankText[0] = 0;
         s.rankFrames = 0;   // Ranked: ask for the rating at once
         s.cssMsg = NULL;
-        s.zHeld = 0;
         s.code[0] = 0;
         s.codePreset = false;
         s.startPad = 0;
@@ -1643,7 +1609,6 @@ namespace OnlineMenu {
         s.phase = PH_IDLE;
         s.searchSeq = 0;
         s.pollPending = false;
-        s.zHeld = 0;
     }
 
     static void onMatchState(const PPOM::MatchState& m)
@@ -2458,7 +2423,7 @@ namespace OnlineMenu {
             }
             // A on a slot's panel: an empty slot opens or closes at once. An occupied one closes
             // (its player removed, free to join again once a slot is open) only while A is held
-            // on it as long as Z to leave (rooms.md #10), so a press meant for something else
+            // on it for KICK_HOLD_DELAY frames (rooms.md #10), so a press meant for something else
             // there (Brawl's team flag) removes nobody; let go early, the buzzer.
             int port = host && waiting ? RoomCss::panelUnderHand() : -1;   // panels in slot order
             if ((pressed & BTN_A) && port >= 0) {
@@ -2480,7 +2445,7 @@ namespace OnlineMenu {
                 } else if (!((held | pressed) & BTN_A)) {
                     s.roomKickPort = -1;
                     playSE(SE_ERROR);
-                } else if (++s.roomKickHeld > DISCONNECT_HOLD_DELAY) {
+                } else if (++s.roomKickHeld > KICK_HOLD_DELAY) {
                     postRoom(PPOM::ROOM_SLOT, (u8)port, 0, NULL);
                     s.roomKickPort = -1;
                     playSE(1);
@@ -2979,10 +2944,12 @@ namespace OnlineMenu {
                     startSearch();
                 }
             }
-            // Z (HandleInputsOnCSS.asm:172-205, 539-561): press to cancel a search or clear an
-            // error, hold 48 frames to disconnect. B cancels and clears as well (Slippi's B does
-            // nothing while locked in); that press is used up, so the coin stays where it is and
-            // the next B takes it back. Holding on still leaves the CSS.
+            // Z (HandleInputsOnCSS.asm:172-205): press to cancel a search or clear an error. B
+            // cancels and clears as well (Slippi's B does nothing while locked in); that press is
+            // used up, so the coin stays where it is and the next B takes it back. Holding on
+            // still leaves the CSS, which disconnects. Slippi's hold Z to disconnect is not here
+            // (the user's, 2026-10-14: nobody knew it, and hold B does the same): P+'s "hold Z
+            // for AltZ" holds Z on the CSS, and a still 48-frame hold before START disconnected.
             if (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING || s.phase == PH_ERROR) {
                 if (pressed & (BTN_Z | BTN_B)) {
                     if (pressed & BTN_B) maskPressed(BTN_B);
@@ -2990,10 +2957,6 @@ namespace OnlineMenu {
                     playSE(SE_BACK);
                 }
             } else if (s.phase == PH_CONNECTED) {
-                if (zHoldDone(b | pressed, &s.zHeld)) {
-                    cleanup();
-                    playSE(SE_BACK);
-                }
                 tickConnected(pressed);
             }
         }
