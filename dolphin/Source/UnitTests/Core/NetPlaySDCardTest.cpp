@@ -831,6 +831,154 @@ TEST_F(NetPlaySDCardTest, HostToGuestEndToEnd)
   card->Detach();
 }
 
+// ------------------------------------------------- whole-machine sessions (Rollback/MachineSession)
+
+TEST_F(NetPlaySDCardTest, CanonicalManifestSurvivesTheWire)
+{
+  std::vector<u8> host = PatternCard(6, 3);
+  std::fill_n(host.begin() + 2 * CHUNK_SIZE, CHUNK_SIZE, u8{0});
+  WriteFile(Path("host.raw"), host);
+  const auto built = BuildManifest(Path("host.raw"));
+  ASSERT_TRUE(built);
+  sf::Packet wire;
+  WriteManifest(*built, wire);
+  const auto received = ReadManifest(wire);
+  ASSERT_TRUE(received);
+  // What every player of a session digests: the same on the sender and the receiver.
+  EXPECT_EQ(CanonicalManifest(*received), CanonicalManifest(*built));
+
+  host[4 * CHUNK_SIZE + 9] ^= 1;
+  WriteFile(Path("other.raw"), host);
+  EXPECT_NE(CanonicalManifest(*BuildManifest(Path("other.raw"))), CanonicalManifest(*built))
+      << "another card is another manifest";
+}
+
+TEST_F(NetPlaySDCardTest, PlayersServeOnlyTheChunksTheyHave)
+{
+  std::vector<u8> host = PatternCard(6, 4);
+  std::fill_n(host.begin() + 5 * CHUNK_SIZE, CHUNK_SIZE, u8{0});
+  std::vector<u8> guest = host;
+  guest[1 * CHUNK_SIZE + 2] ^= 1;  // differs: chunks 1 and 3 are not this guest's to serve
+  guest[3 * CHUNK_SIZE + 2] ^= 1;
+  GuestSetup g = MakeGuest(host, &guest);
+  std::vector<u8> chunk(CHUNK_SIZE);
+
+  EXPECT_TRUE(g.card->ReadForPeer(0, chunk)) << "its own chunk, the same as the session's";
+  EXPECT_TRUE(std::equal(chunk.begin(), chunk.end(), host.begin()));
+  EXPECT_FALSE(g.card->ReadForPeer(1, chunk)) << "its own differs: never sent";
+  EXPECT_FALSE(g.card->ReadForPeer(5, chunk)) << "a zero chunk holds no file";
+  EXPECT_FALSE(g.card->ReadForPeer(99, chunk));
+
+  std::vector<u8> one(CHUNK_SIZE);
+  ASSERT_TRUE(g.card->Read(3 * CHUNK_SIZE, one.data(), one.size()));
+  EXPECT_TRUE(g.card->ReadForPeer(3, chunk)) << "fetched, so it has it now";
+  EXPECT_TRUE(std::equal(chunk.begin(), chunk.end(), host.begin() + 3 * CHUNK_SIZE));
+
+  // The session's writes are this player's game only: what it serves is the card before them.
+  const std::vector<u8> scribble(16, 0xAB);
+  ASSERT_TRUE(g.card->Write(0, scribble.data(), scribble.size()));
+  ASSERT_TRUE(g.card->ReadForPeer(0, chunk));
+  EXPECT_TRUE(std::equal(chunk.begin(), chunk.end(), host.begin()));
+
+  WriteFile(Path("own.raw"), host);
+  auto own = SessionCard::CreateOwnCard(Path("own.raw"), false);
+  EXPECT_FALSE(own->ReadForPeer(0, chunk)) << "a player's own card is nobody else's";
+
+  auto starter = SessionCard::CreateHostCard(Path("host.raw"), g.manifest, false);
+  EXPECT_TRUE(starter->ReadForPeer(1, chunk));
+  EXPECT_TRUE(std::equal(chunk.begin(), chunk.end(), host.begin() + CHUNK_SIZE));
+  g.card->Detach();
+}
+
+TEST_F(NetPlaySDCardTest, ReadChunksListsFirstReadsInOrder)
+{
+  const std::vector<u8> data = PatternCard(6, 5);
+  WriteFile(Path("card.raw"), data);
+  auto card = SessionCard::CreateOwnCard(Path("card.raw"), false);
+  std::vector<u8> buffer(2 * CHUNK_SIZE);
+  ASSERT_TRUE(card->Read(3 * CHUNK_SIZE + 10, buffer.data(), 20));
+  ASSERT_TRUE(card->Read(1 * CHUNK_SIZE, buffer.data(), 8));
+  ASSERT_TRUE(card->Read(3 * CHUNK_SIZE, buffer.data(), 8));
+  ASSERT_TRUE(card->Read(CHUNK_SIZE / 2, buffer.data(), CHUNK_SIZE));  // chunks 0 and 1
+  EXPECT_EQ(card->ReadChunks(100), (std::vector<u32>{3, 1, 0}));
+  EXPECT_EQ(card->ReadChunks(2), (std::vector<u32>{3, 1}));
+}
+
+TEST_F(NetPlaySDCardTest, BackgroundFetchTakesTheGivenChunksFirst)
+{
+  const std::vector<u8> host = PatternCard(10, 6);
+  GuestSetup g = MakeGuest(host, nullptr);
+  const u32 first[] = {7, 2, 7, 99};  // a repeat and a chunk past the card are skipped
+  g.card->StartBackgroundFetch(first);
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+  while (g.card->MissingBytes() != 0 && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  EXPECT_EQ(g.card->MissingBytes(), 0u);
+  const std::vector<u32> requested = g.host->Requested();
+  ASSERT_GE(requested.size(), 3u);
+  EXPECT_EQ(requested[0], 7u);
+  EXPECT_EQ(requested[1], 2u);
+  EXPECT_EQ(requested[2], 0u);
+  g.card->Detach();
+  EXPECT_EQ(ReadAll(*g.card), host);
+}
+
+TEST_F(NetPlaySDCardTest, AGuestFetchesFromAnotherGuest)
+{
+  // A room: the session's card comes from its starter, the second joiner fetches from the first
+  // (the starter may have left), through servers that read from the players' cards.
+  std::vector<u8> host = PatternCard(9, 7);
+  std::fill_n(host.begin() + 4 * CHUNK_SIZE, CHUNK_SIZE, u8{0});
+  GuestSetup first = MakeGuest(host, nullptr);
+  first.card->StartBackgroundFetch();
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+  while (first.card->MissingBytes() != 0 && std::chrono::steady_clock::now() < deadline)
+    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  ASSERT_EQ(first.card->MissingBytes(), 0u);
+
+  constexpr u8 HEADER = 0x5A;
+  std::weak_ptr<SessionCard> second_weak;
+  std::weak_ptr<SessionCard> first_weak = first.card;
+  CardServer server(
+      first.manifest,
+      [first_weak](u32 index, std::span<u8> data) {
+        auto c = first_weak.lock();
+        return c && c->ReadForPeer(index, data);
+      },
+      [](sf::Packet& p) { p << HEADER; }, [&](u8, sf::Packet&& p) {
+        u8 header = 0;
+        p >> header;
+        ASSERT_EQ(header, HEADER);
+        auto chunk = ReadChunkData(p);
+        ASSERT_TRUE(chunk);
+        if (auto card = second_weak.lock())
+          card->Deliver(*chunk);
+      });
+
+  struct Wire final : SessionCard::Remote
+  {
+    CardServer* server;
+    void Request(std::span<const u32> chunks) override
+    {
+      sf::Packet p;
+      WriteChunkRequest(chunks, p);
+      server->OnRequest(1, p);
+    }
+  };
+  auto wire = std::make_shared<Wire>();
+  wire->server = &server;
+  std::vector<u8> mine = host;
+  mine[2 * CHUNK_SIZE] ^= 0x40;  // this joiner's own copy differs in one chunk
+  WriteFile(Path("second.raw"), mine);
+  auto second = SessionCard::CreateGuestCard(Path("second.raw"), first.manifest,
+                                             HashImage(Path("second.raw")), Path("cache2"), wire);
+  second_weak = second;
+  EXPECT_EQ(second->MissingBytes(), CHUNK_SIZE);
+  EXPECT_EQ(ReadAll(*second), host);
+  second->Detach();
+  first.card->Detach();
+}
+
 // -------------------------------------------------------------------------------- code names
 
 TEST(NetPlayCodeNames, AreCleanedAndBounded)

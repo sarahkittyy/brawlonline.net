@@ -571,13 +571,12 @@ static void EmuThread(Core::System& system, std::unique_ptr<BootParameters> boot
   std::shared_ptr<NetPlay::SDCard::SessionCard> sd_card_session =
       boot_session_data.GetSDCardSession();
   // A whole-machine session (Machine) runs other players' machine images, code from strangers:
-  // it plays on this player's own card with every write thrown away.
+  // everyone plays the session's card (the starter's), with every write thrown away.
   if (!sd_card_session && system.IsWii() && Machine::IsArmed())
   {
-    sd_card_session = NetPlay::SDCard::SessionCard::CreateOwnCard(
-        File::GetUserPath(F_WIISDCARDIMAGE_IDX), false);
-    INFO_LOG_FMT(CORE, "SD card: a machine session plays on this player's own card; its writes "
-                       "are thrown away");
+    sd_card_session = Machine::CreateSDCard(File::GetUserPath(F_WIISDCARDIMAGE_IDX));
+    INFO_LOG_FMT(CORE, "SD card: a machine session plays the session's card; its writes are "
+                       "thrown away");
   }
   const bool sd_folder_sync = system.IsWii() && Config::Get(Config::MAIN_WII_SD_CARD) &&
                               Config::Get(Config::MAIN_WII_SD_CARD_ENABLE_FOLDER_SYNC);

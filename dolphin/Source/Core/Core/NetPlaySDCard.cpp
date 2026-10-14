@@ -426,6 +426,21 @@ std::optional<Manifest> BuildManifest(const std::string& path, const std::atomic
   return manifest;
 }
 
+std::vector<u8> CanonicalManifest(const Manifest& manifest)
+{
+  std::vector<u8> out;
+  out.reserve(8 + manifest.chunks.size() * MANIFEST_ENTRY_MAX_BYTES);
+  for (int i = 0; i < 8; ++i)
+    out.push_back(static_cast<u8>(manifest.size >> (8 * i)));
+  for (const ChunkInfo& info : manifest.chunks)
+  {
+    out.push_back(info.zero ? MANIFEST_ENTRY_ZERO : MANIFEST_ENTRY_DATA);
+    if (!info.zero)
+      out.insert(out.end(), info.hash.begin(), info.hash.end());
+  }
+  return out;
+}
+
 void WriteManifest(const Manifest& manifest, sf::Packet& packet)
 {
   std::vector<u8> entries;
@@ -538,7 +553,19 @@ std::optional<ChunkData> ReadChunkData(sf::Packet& packet)
 
 CardServer::CardServer(const std::string& image_path, std::shared_ptr<const Manifest> manifest,
                        SendFunction send)
-    : m_image_path(image_path), m_manifest(std::move(manifest)), m_send(std::move(send))
+    : m_image_path(image_path), m_manifest(std::move(manifest)),
+      m_header([](sf::Packet& packet) {
+        packet << MessageID::SyncSaveData << SyncSaveDataID::SDCardChunkData;
+      }),
+      m_send(std::move(send))
+{
+  m_thread = std::thread(&CardServer::ThreadFunc, this);
+}
+
+CardServer::CardServer(std::shared_ptr<const Manifest> manifest, ReadFunction read,
+                       HeaderFunction header, SendFunction send)
+    : m_manifest(std::move(manifest)), m_read(std::move(read)), m_header(std::move(header)),
+      m_send(std::move(send))
 {
   m_thread = std::thread(&CardServer::ThreadFunc, this);
 }
@@ -585,7 +612,9 @@ void CardServer::OnRequest(u8 pid, sf::Packet& packet)
 
 void CardServer::ThreadFunc()
 {
-  File::IOFile image(m_image_path, "rb");
+  File::IOFile image;
+  if (!m_read)
+    image.Open(m_image_path, "rb");
   std::vector<u8> buffer(CHUNK_SIZE);
 
   while (true)
@@ -605,17 +634,22 @@ void CardServer::ThreadFunc()
     const u64 len = m_manifest->ChunkBytes(index);
     const std::span<u8> data(buffer.data(), len);
     sf::Packet packet;
-    packet << MessageID::SyncSaveData << SyncSaveDataID::SDCardChunkData;
-    if (image && image.Seek(static_cast<s64>(u64{index} * CHUNK_SIZE), File::SeekOrigin::Begin) &&
-        image.ReadBytes(data.data(), data.size()) &&
-        HashChunk(data) == m_manifest->chunks[index].hash)
+    m_header(packet);
+    const bool read =
+        m_read ? m_read(index, data) :
+                 image &&
+                     image.Seek(static_cast<s64>(u64{index} * CHUNK_SIZE), File::SeekOrigin::Begin) &&
+                     image.ReadBytes(data.data(), data.size());
+    if (read && HashChunk(data) == m_manifest->chunks[index].hash)
     {
       WriteChunkData(index, data, packet);
     }
     else
     {
-      // The card changed since its manifest was built (or cannot be read).
-      WARN_LOG_FMT(NETPLAY, "SD card: chunk {} no longer matches the manifest", index);
+      // The card changed since its manifest was built (or cannot be read), or this player has
+      // not got the chunk (a guest serving what it has).
+      if (!m_read || read)
+        WARN_LOG_FMT(NETPLAY, "SD card: chunk {} no longer matches the manifest", index);
       WriteChunkUnavailable(index, packet);
     }
     m_send(pid, std::move(packet));
@@ -818,6 +852,17 @@ bool SessionCard::Read(u64 offset, u8* dst, u64 size)
 
   const u32 first = static_cast<u32>(offset / CHUNK_SIZE);
   const u32 last = static_cast<u32>((offset + size - 1) / CHUNK_SIZE);
+
+  if (m_read_seen.size() != ChunkCount())
+    m_read_seen.assign(ChunkCount(), false);
+  for (u32 c = first; c <= last; ++c)
+  {
+    if (!m_read_seen[c])
+    {
+      m_read_seen[c] = true;
+      m_read_order.push_back(c);
+    }
+  }
 
   // A guest fetches everything the read needs at once.
   if (m_mode == Mode::GuestCard)
@@ -1131,11 +1176,68 @@ bool SessionCard::Prefetch(u64 budget, const std::atomic<bool>* cancel,
   return true;
 }
 
-void SessionCard::StartBackgroundFetch()
+void SessionCard::StartBackgroundFetch(std::span<const u32> first)
 {
   if (m_mode != Mode::GuestCard || m_background_thread.joinable())
     return;
+  {
+    std::lock_guard lock(m_fetch_mutex);
+    m_background_order.clear();
+    m_background_order.reserve(m_missing.size());
+    std::vector<bool> queued(ChunkCount(), false);
+    for (const u32 c : first)
+    {
+      if (c < ChunkCount() && m_sources[c] == Source::Missing && !queued[c])
+      {
+        queued[c] = true;
+        m_background_order.push_back(c);
+      }
+    }
+    for (const u32 c : m_missing)
+    {
+      if (!queued[c])
+        m_background_order.push_back(c);
+    }
+  }
   m_background_thread = std::thread(&SessionCard::BackgroundThreadFunc, this);
+}
+
+bool SessionCard::ReadForPeer(u32 index, std::span<u8> data)
+{
+  if (m_mode == Mode::OwnCard || index >= ChunkCount() || data.size() != ChunkBytes(index))
+    return false;
+  const u64 start = u64{index} * CHUNK_SIZE;
+  if (m_mode == Mode::GuestCard)
+  {
+    std::lock_guard lock(m_fetch_mutex);
+    switch (m_sources[index])
+    {
+    case Source::Local:
+      break;
+    case Source::Fetched:
+    {
+      // Deliver writes this file under the same lock.
+      const auto it = m_fetched_offsets.find(index);
+      return it != m_fetched_offsets.end() &&
+             m_fetched_file.Seek(static_cast<s64>(it->second), File::SeekOrigin::Begin) &&
+             m_fetched_file.ReadBytes(data.data(), data.size());
+    }
+    default:
+      return false;
+    }
+  }
+  std::lock_guard lock(m_serve_mutex);
+  if (!m_serve_image)
+    m_serve_image.Open(m_image_path, "rb");
+  return m_serve_image &&
+         m_serve_image.Seek(static_cast<s64>(start), File::SeekOrigin::Begin) &&
+         m_serve_image.ReadBytes(data.data(), data.size());
+}
+
+std::vector<u32> SessionCard::ReadChunks(size_t max) const
+{
+  const size_t n = std::min(max, m_read_order.size());
+  return {m_read_order.begin(), m_read_order.begin() + n};
 }
 
 void SessionCard::BackgroundThreadFunc()
@@ -1152,9 +1254,9 @@ void SessionCard::BackgroundThreadFunc()
       std::lock_guard lock(m_fetch_mutex);
       if (m_detached || m_fetched_bytes >= BACKGROUND_CAP_BYTES)
         break;
-      while (cursor < m_missing.size() && batch.size() < BATCH)
+      while (cursor < m_background_order.size() && batch.size() < BATCH)
       {
-        const u32 c = m_missing[cursor++];
+        const u32 c = m_background_order[cursor++];
         if (m_sources[c] == Source::Missing && !m_unavailable.contains(c) &&
             !m_requested_at.contains(c))
         {

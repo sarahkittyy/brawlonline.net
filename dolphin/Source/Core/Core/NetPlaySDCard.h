@@ -101,6 +101,10 @@ std::optional<ImageHashes> HashImage(const std::string& path,
 std::optional<Manifest> BuildManifest(const std::string& path,
                                       const std::atomic<bool>* cancel = nullptr);
 
+// The manifest's contents in a fixed form (its size, then each chunk's zero flag and hash, not
+// compressed): what players compare to agree on the card.
+std::vector<u8> CanonicalManifest(const Manifest& manifest);
+
 // Wire format. ReadManifest checks everything (a stranger's packet) and returns nullopt for a
 // malformed one.
 void WriteManifest(const Manifest& manifest, sf::Packet& packet);
@@ -128,8 +132,16 @@ class CardServer
 {
 public:
   using SendFunction = std::function<void(u8 pid, sf::Packet&& packet)>;
+  // Reads a chunk of the card (the server's thread); false when this machine does not have it.
+  using ReadFunction = std::function<bool(u32 index, std::span<u8> data)>;
+  // Starts each chunk's packet (the message IDs in front of WriteChunkData).
+  using HeaderFunction = std::function<void(sf::Packet& packet)>;
 
+  // Netplay's host: chunks from its card image, in netplay's SyncSaveData messages.
   CardServer(const std::string& image_path, std::shared_ptr<const Manifest> manifest,
+             SendFunction send);
+  // Any player of a whole-machine session: chunks from wherever `read` finds them.
+  CardServer(std::shared_ptr<const Manifest> manifest, ReadFunction read, HeaderFunction header,
              SendFunction send);
   ~CardServer();
   CardServer(const CardServer&) = delete;
@@ -147,6 +159,8 @@ private:
 
   std::string m_image_path;
   std::shared_ptr<const Manifest> m_manifest;
+  ReadFunction m_read;
+  HeaderFunction m_header;
   SendFunction m_send;
 
   std::mutex m_mutex;
@@ -199,6 +213,8 @@ public:
   SessionCard& operator=(const SessionCard&) = delete;
 
   Mode GetMode() const { return m_mode; }
+  // The card everyone plays on (host and guest cards), or nullptr (each player's own card).
+  const std::shared_ptr<const Manifest>& GetManifest() const { return m_manifest; }
 
   bool IsOpen() const override;
   u64 GetSize() const override;
@@ -226,8 +242,17 @@ public:
   // False if the host stopped answering or the card was detached.
   bool Prefetch(u64 budget, const std::atomic<bool>* cancel,
                 const std::function<void(u64 done, u64 total)>& progress = {});
-  // Guest, once the game runs: streams the rest in the background, up to BACKGROUND_CAP_BYTES.
-  void StartBackgroundFetch();
+  // Guest, once the game runs: streams the rest in the background, up to BACKGROUND_CAP_BYTES,
+  // the chunks in `first` (those the game is likely to read soon) before the others.
+  void StartBackgroundFetch(std::span<const u32> first = {});
+
+  // Another player's request (any thread): the chunk as this machine has it before the session's
+  // writes (its image where it matches the shared card, or fetched), or false when it has not got
+  // it. Host and guest cards only; the caller checks it against the manifest before sending.
+  bool ReadForPeer(u32 index, std::span<u8> data);
+  // The chunks the game has read so far, in the order it first read them, at most `max` (the
+  // emulation thread): a player joining later fetches these first.
+  std::vector<u32> ReadChunks(size_t max) const;
   // The connection to the host is gone (or the game stopped): waiting reads fail, no more fetches.
   void Detach();
 
@@ -299,6 +324,7 @@ private:
   std::set<u32> m_unavailable;
   std::map<u32, int> m_bad_deliveries;
   std::vector<u32> m_missing;                // the missing chunks at creation, ascending
+  std::vector<u32> m_background_order;       // m_missing, the chunks asked for first in front
   u64 m_fetched_bytes = 0;
   std::atomic<u32> m_waits{0};
   std::string m_fetched_path;
@@ -308,5 +334,13 @@ private:
 
   std::thread m_background_thread;
   std::atomic<bool> m_stop_background{false};
+
+  // The chunks the game read (emulation thread), for ReadChunks.
+  std::vector<bool> m_read_seen;
+  std::vector<u32> m_read_order;
+
+  // ReadForPeer's own handle on the image: m_image belongs to the emulation thread.
+  std::mutex m_serve_mutex;
+  File::IOFile m_serve_image;
 };
 }  // namespace NetPlay::SDCard

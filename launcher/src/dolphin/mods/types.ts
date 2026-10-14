@@ -26,8 +26,9 @@ export type DolphinControllers = { gc: SetUpController[]; wiimote: SetUpControll
 
 export type DiscPlatform = "wii" | "gamecube";
 
-/** Each part's hash (`build_hash.ts`): the disc's contents' SHA-1, the files' SHA-256s. */
-export type ModBuildParts = { disc: string; launcher: string | null; sd: string | null };
+/** Each part's hash (`build_hash.ts`): the disc's contents' SHA-1, the launcher's SHA-256, and
+ * whether there is an SD card (its contents are the room host's: not part of the build). */
+export type ModBuildParts = { disc: string; launcher: string | null; sd: boolean };
 
 /** A game or mod the player added in the tab (design §4). */
 export type ModBuild = {

@@ -71,10 +71,13 @@ void SDIOSlot0Device::DoState(PointerWrap& p)
     else
       m_event.reset();
   }
-  // A whole-machine session loads snapshots many times a second: keep the open card image.
-  if (p.IsReadMode() && !(Machine::IsArmed() && m_card && m_card->IsOpen()))
+  // A whole-machine session loads snapshots many times a second: keep the open card image, unless
+  // the session's card was swapped in (a joiner loading its machine image plays the session's).
+  if (p.IsReadMode())
   {
-    OpenInternal();
+    const std::shared_ptr<SDCardStorage> session = GetSDCardSessionStorage();
+    if (!(Machine::IsArmed() && m_card && m_card->IsOpen() && (!session || m_card == session)))
+      OpenInternal();
   }
   p.Do(m_status);
   p.Do(m_block_length);

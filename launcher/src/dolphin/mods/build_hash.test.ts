@@ -19,40 +19,55 @@ describe("build hash", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  it("is the SHA-256 of the disc's content hash and the other parts' SHA-256s, a missing part as '-'", async () => {
+  it("is the SHA-256 of the disc's content hash, the launcher's SHA-256 and whether there is an SD card", async () => {
     const disc = path.join(dir, "brawl.iso");
     const dol = path.join(dir, "minus.dol");
     await writeFile(disc, "disc bytes");
     await writeFile(dol, "launcher bytes");
     const parts = await computeBuildParts({ discPath: disc, launcherPath: dol, sdPath: null }, discDigest);
-    expect(parts).toEqual({ disc: "sha1-of-brawl.iso", launcher: sha("launcher bytes"), sd: null });
+    expect(parts).toEqual({
+      disc: "sha1-of-brawl.iso",
+      launcher: sha("launcher bytes"),
+      sd: false,
+    });
     expect(combineBuildHash(parts)).toBe(
       sha(`${BUILD_HASH_PREFIX}disc:sha1-of-brawl.iso\nlauncher:${sha("launcher bytes")}\nsd:-\n`),
     );
   });
 
-  it("differs when any part differs, or a part is added", async () => {
+  it("differs when the disc or launcher differs, or a card is added, but not with the card's contents", async () => {
     const disc = path.join(dir, "brawl.iso");
+    const dol = path.join(dir, "rex.elf");
     const sd = path.join(dir, "sd.raw");
     await writeFile(disc, "disc bytes");
+    await writeFile(dol, "launcher one");
     await writeFile(sd, "card one");
-    const a = combineBuildHash(await computeBuildParts({ discPath: disc, launcherPath: null, sdPath: sd }, discDigest));
+    const hash = async (sdPath: string | null) =>
+      combineBuildHash(await computeBuildParts({ discPath: disc, launcherPath: dol, sdPath }, discDigest));
+    const a = await hash(sd);
+    // A card the mod wrote to (played offline) is the same build: rooms play the host's card.
     await writeFile(sd, "card two");
-    const b = combineBuildHash(await computeBuildParts({ discPath: disc, launcherPath: null, sdPath: sd }, discDigest));
-    const c = combineBuildHash(
-      await computeBuildParts({ discPath: disc, launcherPath: null, sdPath: null }, discDigest),
-    );
-    expect(new Set([a, b, c]).size).toBe(3);
+    expect(await hash(sd)).toBe(a);
+    const noCard = await hash(null);
+    await writeFile(dol, "launcher two");
+    const otherLauncher = await hash(sd);
+    expect(new Set([a, noCard, otherLauncher]).size).toBe(3);
   });
 
-  it("reports the bytes of all parts and ends at the total", async () => {
+  it("reports the bytes of the disc and the launcher and ends at the total, never reading the card", async () => {
     const disc = path.join(dir, "brawl.iso");
-    const sd = path.join(dir, "sd.raw");
+    const dol = path.join(dir, "rex.elf");
     await writeFile(disc, "x".repeat(1000));
-    await writeFile(sd, "y".repeat(500));
+    await writeFile(dol, "y".repeat(500));
     const seen: Array<[number, number]> = [];
-    await computeBuildParts({ discPath: disc, launcherPath: null, sdPath: sd }, discDigest, (done, total) =>
-      seen.push([done, total]),
+    await computeBuildParts(
+      {
+        discPath: disc,
+        launcherPath: dol,
+        sdPath: path.join(dir, "not-read.raw"),
+      },
+      discDigest,
+      (done, total) => seen.push([done, total]),
     );
     expect(seen.every(([, total]) => total === 1500)).toBe(true);
     expect(seen[0]).toEqual([0, 1500]);
@@ -60,12 +75,26 @@ describe("build hash", () => {
     expect(seen[seen.length - 1]).toEqual([1500, 1500]);
   });
 
-  it("has a key that changes with a part's size or modification time", async () => {
+  it("has a key that changes with the disc's size or modification time and with a card added", async () => {
     const disc = path.join(dir, "brawl.iso");
+    const sd = path.join(dir, "sd.raw");
     await writeFile(disc, "disc bytes");
+    await writeFile(sd, "card");
     await utimes(disc, 1_700_000_000, 1_700_000_000);
-    const before = await buildHashKey({ discPath: disc, launcherPath: null, sdPath: null });
-    expect(before).toMatch(/^v2\|10:1700000000000\|-\|-$/);
+    const before = await buildHashKey({
+      discPath: disc,
+      launcherPath: null,
+      sdPath: null,
+    });
+    expect(before).toMatch(/^v3\|10:1700000000000\|-\|-$/);
+    const withCard = await buildHashKey({
+      discPath: disc,
+      launcherPath: null,
+      sdPath: sd,
+    });
+    expect(withCard).toMatch(/^v3\|10:1700000000000\|-\|card$/);
+    await writeFile(sd, "the card, written to");
+    expect(await buildHashKey({ discPath: disc, launcherPath: null, sdPath: sd })).toBe(withCard);
     await utimes(disc, 1_700_000_100, 1_700_000_100);
     expect(await buildHashKey({ discPath: disc, launcherPath: null, sdPath: null })).not.toBe(before);
   });

@@ -55,7 +55,7 @@ function cleanName(name: string, fallback: string): string {
 /** A name for a build the player did not name: the known mod's or game's, else the launcher's file
  * name for a mod, else the disc's title. */
 export function autoName(build: Pick<ModBuild, "gameTitle" | "launcherPath" | "parts" | "discPath">): string {
-  const mod = knownModName(build.parts?.launcher, build.parts?.sd);
+  const mod = knownModName(build.parts?.launcher);
   if (mod) {
     return mod;
   }
