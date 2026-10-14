@@ -23,7 +23,12 @@ import { ModsView } from "./mods_view";
 /** How long a list stays shown while polls fail (as Home > Overview). */
 const STALE_AFTER_MS = 15_000;
 
-const errorText = (err: unknown) => (err instanceof Error ? err.message : String(err));
+// The main process's message, without Electron's "Error invoking remote method '…': Error: ".
+const errorText = (err: unknown) =>
+  (err instanceof Error ? err.message : String(err)).replace(
+    /^Error invoking remote method '[^']*': (\w*Error: )?/,
+    "",
+  );
 
 /** Home > Other Games: the games, mods and the room, from the main process's ModsManager. */
 export const ModsTab = React.memo(function ModsTab() {

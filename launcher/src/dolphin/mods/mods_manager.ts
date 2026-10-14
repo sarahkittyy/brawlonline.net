@@ -65,6 +65,21 @@ export function autoName(build: Pick<ModBuild, "gameTitle" | "launcherPath" | "p
   return knownDiscName(build.parts?.disc) ?? build.gameTitle ?? path.basename(build.discPath);
 }
 
+/** A file of a build the player added earlier: still where it was, or what to do about it. */
+async function assertBuildFile(build: ModBuild, file: string | null, what: string): Promise<void> {
+  if (!file) {
+    return;
+  }
+  const s = await stat(file).catch(() => null);
+  if (!s || !s.isFile()) {
+    throw new Error(
+      `Can't find the ${what} for ${build.name}: "${path.basename(file)}" is no longer in ` +
+        `${path.dirname(file)}. If you moved or renamed it, put it back, or remove ${build.name} ` +
+        `and add it again from where it is now.`,
+    );
+  }
+}
+
 async function assertFile(file: string | null, what: string): Promise<void> {
   if (!file) {
     return;
@@ -319,9 +334,9 @@ export class ModsManager {
 
   private async doHash(id: string): Promise<ModBuild> {
     const build = this.findBuild(id);
-    await assertFile(build.discPath, "disc image");
-    await assertFile(build.launcherPath, "launcher");
-    await assertFile(build.sdPath, "SD card image");
+    await assertBuildFile(build, build.discPath, "game file");
+    await assertBuildFile(build, build.launcherPath, "launcher file");
+    await assertBuildFile(build, build.sdPath, "SD card image");
     const key = await buildHashKey(build);
     if (build.hash && build.hashKey === key) {
       return build;
