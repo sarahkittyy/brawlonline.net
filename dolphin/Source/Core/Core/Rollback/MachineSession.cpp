@@ -3824,6 +3824,11 @@ void RecheckEnvironment()
     s.env_checked = false;
 }
 
+bool JoinsRunningSession()
+{
+  return IsArmed() && s.opts.join;
+}
+
 bool IsArmed()
 {
   if (!s.env_checked)

@@ -139,7 +139,7 @@ Inputs enter where the hardware does, so nothing depends on the game:
 ### 6.5 NAND and SD
 
 - **NAND:** the session runs on a temporary NAND, as Dolphin's netplay does. A rollback must also undo file writes: a **write journal** records each file's previous contents (or absence) at its first change after a snapshot; a load undoes the journal back to the snapshot's mark (**default**; Orca and Nyx do this, `IOS/FS/HostBackend/Journal.cpp`, GPL, ported with attribution). Saves made during the session are written back to the player's own NAND at the end only if the user ticks "Keep saves from this session" (**default** off).
-- **Every player must boot with the same save.** Today each player's session NAND copies its own save of the game (`WiiRoot.cpp`), so players whose saves differ (unlocks) desync from boot. Open question 5.
+- **Saves, per build (built 2026-10-14, the user's choice):** each build (game hash) has its own save store, `<User>/Saves/<first 16 hex digits of the build hash>/`, laid out like a NAND root. A session's NAND starts from the store's save of the game (a Brawl-based build with none yet starts from P+'s template save, which the session's NAND is seeded with), and at the end the session's save goes back to the store when this player booted the game (the room's host at its start); a joiner plays the host's save, which comes with the host's machine image, and its store is never written. P+'s NAND (the netplay User folder's `Wii/`) is neither read nor written by sessions: every Brawl mod uses Brawl's title (RSBE01), so per title P+ and every mod would share one save; per build each has its own. The copy is the title's whole NAND folder with its metadata (`CopyNandTree`), not `WiiSave::Copy`, which rebuilds a save from its parts and can leave files behind. Before 2026-10-14 the session's NAND was copied back over the player's own at the end (it is not Dolphin's netplay, so nothing stopped Dolphin's cleanup), which broke P+'s Brawl save on staging ("Create a save file?").
 - **SD:** read-only (§4).
 
 ### 6.6 Desyncs
@@ -227,6 +227,6 @@ The machine image is the first thing in this project where **one player's machin
 
 1. **Which non-Brawl game to test with** (phase 8): New Super Mario Bros. Wii (USA, Rev 2), from the user (2026-10-13).
 2. **Riivolution builds** (some mods ship as Riivolution XML instead of a launcher `.dol`): later, after phase 7.
-3. **Keep saves from the session** (§6.5) off by default.
+3. **Keep saves from the session** (§6.5): answered 2026-10-14: per build, the host's (§6.5).
 4. **Who may send an image before §7 is met** (§7 step 5): friends in private rooms.
-5. **Which save everyone boots with** (§6.5): default for now: each player's own (a mismatch desyncs from boot). Options: the host's save sent before boot (as Dolphin's netplay does), or a full-unlock save per known build.
+5. **Which save everyone boots with** (§6.5): answered: the host's (its build's store), which joiners get with the machine image.

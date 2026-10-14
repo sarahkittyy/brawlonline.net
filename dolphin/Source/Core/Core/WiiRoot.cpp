@@ -24,6 +24,8 @@
 #include "Core/HW/WiiSave.h"
 #include "Core/IOS/ES/ES.h"
 #include "Core/IOS/FS/FileSystem.h"
+#include "Core/IOS/FS/HostBackend/FS.h"
+#include "Core/Online/ModsRoom.h"
 #include "Core/IOS/IOS.h"
 #include "Core/IOS/Uids.h"
 #include "Core/Movie.h"
@@ -43,9 +45,15 @@ namespace FS = IOS::HLE::FS;
 static std::string s_temp_wii_root;
 static std::string s_temp_redirect_root;
 static bool s_wii_root_initialized = false;
-// This boot's NAND is a whole-machine session's (Machine): thrown away at the end, never copied
-// back into the player's NAND.
+// This boot's NAND is a whole-machine session's (Machine): never copied back into the player's
+// NAND. Its game's save comes from the build's own store (`<User>/Saves/<build>/`, a NAND root of
+// its own: P+'s NAND is neither read nor written, and every Brawl mod, which all use Brawl's title,
+// keeps its own save), and goes back there at the end when this player booted the game (a joiner
+// plays the host's save, from the host's machine image).
 static bool s_machine_session_nand = false;
+static std::string s_store_root;
+static u64 s_store_title = 0;
+static bool s_store_write_back = false;
 static std::vector<IOS::HLE::FS::NandRedirect> s_nand_redirects;
 
 // When Temp NAND + Redirects are both active, we need to keep track of where each redirect path
@@ -96,6 +104,11 @@ static void RestoreFile(const std::string& path_in_nand)
     DeleteBackupFile(file_name);
 }
 
+// The NAND directory `path` with every file and directory in it, metadata included, from one file
+// system to another (WiiSave::Copy rebuilds a save from its parts and can leave files behind).
+static bool CopyNandTree(FS::FileSystem* source, FS::FileSystem* dest, const std::string& path,
+                         int depth = 0);
+
 static void CopySave(FS::FileSystem* source, FS::FileSystem* dest, const u64 title_id)
 {
   dest->CreateFullPath(IOS::PID_KERNEL, IOS::PID_KERNEL, Common::GetTitleDataPath(title_id) + '/',
@@ -134,6 +147,36 @@ static bool CopyNandFile(FS::FileSystem* source_fs, const std::string& source_fi
   return true;
 }
 
+static bool CopyNandTree(FS::FileSystem* source, FS::FileSystem* dest, const std::string& path,
+                         int depth)
+{
+  if (depth > 8)
+    return false;
+  const auto entries = source->ReadDirectory(IOS::PID_KERNEL, IOS::PID_KERNEL, path);
+  if (!entries)
+    return false;
+  const FS::Modes rw{FS::Mode::ReadWrite, FS::Mode::ReadWrite, FS::Mode::ReadWrite};
+  dest->CreateFullPath(IOS::PID_KERNEL, IOS::PID_KERNEL, path + '/', 0, rw);
+  dest->CreateDirectory(IOS::PID_KERNEL, IOS::PID_KERNEL, path, 0, rw);
+  bool ok = true;
+  for (const std::string& name : *entries)
+  {
+    const std::string child = path + '/' + name;
+    const auto meta = source->GetMetadata(IOS::PID_KERNEL, IOS::PID_KERNEL, child);
+    if (!meta)
+    {
+      ok = false;
+      continue;
+    }
+    if (meta->is_file)
+      ok &= CopyNandFile(source, child, dest, child);
+    else
+      ok &= CopyNandTree(source, dest, child, depth + 1);
+    dest->SetMetadata(IOS::PID_KERNEL, child, meta->uid, meta->gid, meta->attribute, meta->modes);
+  }
+  return ok;
+}
+
 static void InitializeDeterministicWiiSaves(FS::FileSystem* session_fs,
                                             const BootSessionData& boot_session_data)
 {
@@ -169,9 +212,31 @@ static void InitializeDeterministicWiiSaves(FS::FileSystem* session_fs,
       }
     }
     s_machine_session_nand = true;
-    INFO_LOG_FMT(CORE, "Wii Save Init: machine session, copying {0:016x}.", save_title);
-    if (save_title != 0)
-      CopySave(configured_fs.get(), session_fs, save_title);
+    s_store_title = save_title;
+    s_store_write_back = !Machine::JoinsRunningSession();
+    const std::string hash = Online::ModsRoom::BuildHash();
+    s_store_root = hash.size() >= 16 ?
+                       File::GetUserPath(D_USER_IDX) + "Saves" DIR_SEP + hash.substr(0, 16) + DIR_SEP :
+                       std::string{};
+    if (save_title != 0 && !s_store_root.empty())
+    {
+      FS::HostFileSystem store(s_store_root);
+      const std::string data = Common::GetTitleDataPath(save_title);
+      const auto files = store.ReadDirectory(IOS::PID_KERNEL, IOS::PID_KERNEL, data);
+      if (files && !files->empty())
+      {
+        // The build's save replaces whatever the session's NAND starts with (P+'s template save).
+        session_fs->Delete(IOS::PID_KERNEL, IOS::PID_KERNEL, data);
+        const bool ok = CopyNandTree(&store, session_fs, data);
+        INFO_LOG_FMT(CORE, "Wii Save Init: machine session, {0:016x} from the build's save in {1}{2}",
+                     save_title, s_store_root, ok ? "" : " (incomplete)");
+      }
+      else
+      {
+        INFO_LOG_FMT(CORE, "Wii Save Init: machine session, no save of {0:016x} in {1} yet",
+                     save_title, s_store_root);
+      }
+    }
     if (!CopyNandFile(configured_fs.get(), Common::GetMiiDatabasePath(), session_fs,
                       Common::GetMiiDatabasePath()))
     {
@@ -461,7 +526,24 @@ void CleanUpWiiFileSystemContents(const BootSessionData& boot_session_data)
   // file?"; staging 2026-10-14).
   if (std::exchange(s_machine_session_nand, false))
   {
+    if (s_store_write_back && s_store_title != 0 && !s_store_root.empty())
+    {
+      IOS::HLE::EmulationKernel* ios = Core::System::GetInstance().GetIOS();
+      const std::string data = Common::GetTitleDataPath(s_store_title);
+      const auto files = ios->GetFS()->ReadDirectory(IOS::PID_KERNEL, IOS::PID_KERNEL, data);
+      if (files && !files->empty())
+      {
+        File::CreateFullPath(s_store_root);
+        FS::HostFileSystem store(s_store_root);
+        store.Delete(IOS::PID_KERNEL, IOS::PID_KERNEL, data);
+        const bool ok = CopyNandTree(ios->GetFS().get(), &store, data);
+        INFO_LOG_FMT(CORE, "Wii FS Cleanup: {0:016x} kept in the build's save {1}{2}", s_store_title,
+                     s_store_root, ok ? "" : " (incomplete)");
+      }
+    }
     INFO_LOG_FMT(CORE, "Wii FS Cleanup: a machine session's NAND, thrown away");
+    s_store_root.clear();
+    s_store_title = 0;
     return;
   }
   const bool cleanup_required =

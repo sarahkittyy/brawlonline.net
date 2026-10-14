@@ -172,6 +172,8 @@ void Stop();
 // A session is armed or running: the whole-machine rollback rules apply (pinned configuration,
 // synchronous disc reads, controllers from the session).
 bool IsArmed();
+// The session was armed to join a running one (its machine comes from another player's image).
+bool JoinsRunningSession();
 // The session is past its start barrier (GekkoNet runs).
 bool IsRunning();
 

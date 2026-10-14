@@ -526,6 +526,12 @@ bool TakeQuitRequest()
   return s_quit_requested.exchange(false);
 }
 
+std::string BuildHash()
+{
+  std::lock_guard lk(s.mutex);
+  return s.kind == Kind::None ? std::string{} : s.build_hash;
+}
+
 void OnGameStopping()
 {
   {
