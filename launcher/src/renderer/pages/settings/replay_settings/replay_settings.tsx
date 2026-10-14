@@ -1,10 +1,13 @@
+import Button from "@mui/material/Button";
 import React from "react";
+import { useNavigate } from "react-router-dom";
 
 import { MultiPathInput } from "@/components/multi_path_input/multi_path_input";
 import { PathInput } from "@/components/path_input/path_input";
 import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { useExtraSlpPaths, useRootSlpPath } from "@/lib/hooks/use_settings";
 
+import { PLAYBACK_DOLPHIN_SETTINGS_PATH } from "../dolphin_settings/paths";
 import { SettingItem } from "../setting_item_section";
 import { NetplayReplayToggles } from "./netplay_replay_toggle";
 import { ReplaySettingsMessages as Messages } from "./replay_settings.messages";
@@ -13,6 +16,7 @@ export const ReplaySettings = React.memo(() => {
   const [localReplayDir, setLocalReplayDir] = useRootSlpPath();
   const [replayDirs, setReplayDirs] = useExtraSlpPaths();
   const netplayDolphinOpen = useDolphinStore((store) => store.netplayOpened);
+  const navigate = useNavigate();
 
   return (
     <div>
@@ -28,6 +32,15 @@ export const ReplaySettings = React.memo(() => {
           }}
           placeholder={Messages.noFolderSet()}
         />
+      </SettingItem>
+      <SettingItem name={Messages.replayGraphics()} description={Messages.replayGraphicsDescription()}>
+        <Button
+          variant="outlined"
+          color="primary"
+          onClick={() => navigate(PLAYBACK_DOLPHIN_SETTINGS_PATH, { replace: true })}
+        >
+          {Messages.replayGraphicsButton()}
+        </Button>
       </SettingItem>
       <SettingItem name={Messages.additionalSlpFolders()} description={Messages.additionalSlpFoldersDescription()}>
         <MultiPathInput

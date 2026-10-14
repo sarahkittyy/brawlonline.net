@@ -12,6 +12,7 @@
 
 #include <fmt/format.h>
 
+#include "Common/Config/Config.h"
 #include "Common/FileUtil.h"
 #include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
@@ -82,6 +83,7 @@ bool s_mirror_started = false;  // a game of this request was armed (the next on
 std::optional<std::chrono::steady_clock::time_point> s_close_at;
 double s_close_controls = 0;
 bool s_close_cancelled = false;
+bool s_close_saved = false;  // the settings were saved for the close
 
 // The game is running with our plugin (GameBridge found its block). The launcher's playback
 // Dolphin starts the comm file follower before it boots, and boots P+'s launcher DOL, whose game
@@ -174,6 +176,7 @@ void ArmCurrent()
   s_mirror_pending = false;
   s_close_at.reset();
   s_close_cancelled = false;
+  s_close_saved = false;
   if (s_index >= s_request.paths.size())
   {
     s_state = "ended";
@@ -368,7 +371,12 @@ void MirrorAtEnd(const picojson::object& st)
   const auto left = std::chrono::ceil<std::chrono::seconds>(*s_close_at - now).count();
   if (left <= 0)
   {
-    // The launcher closes Dolphin.
+    // The launcher closes Dolphin, by ending its process (on Windows nothing of Dolphin's runs
+    // after that): what was set while watching, e.g. the resolution with the Settings window still
+    // open, is saved first (Dolphin saves it when that window or Dolphin itself closes).
+    if (!s_close_saved)
+      Config::Save();
+    s_close_saved = true;
     s_state = "close";
     Session::SetPlaybackBanner("");
     return;

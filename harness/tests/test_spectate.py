@@ -426,7 +426,10 @@ def test_another_game_picked_mid_game_plays_it(
     request (a new commandId) to the playback Dolphin's comm file; the game must leave the match
     it is in and start the new one. Twice: once while the first game plays, then back to it while
     the second one is paused (the CPU thread waits at the loop top then). Each game plays from its
-    start with every frame checked."""
+    start with every frame checked. The last one closes at its end ("Close Dolphin after a
+    spectated game ends"): the launcher ends the process, so a setting changed while watching
+    (the resolution, its Settings window still open) must be saved by then (the user, 2026-10-14:
+    the replay Dolphin didn't remember its resolution)."""
     be = spectate_backend
     out = ARTIFACTS / "switch"
     out.mkdir(parents=True, exist_ok=True)
@@ -448,11 +451,11 @@ def test_another_game_picked_mid_game_plays_it(
     reps = [R.read(p) for p in paths]
     assert all(r.trailer for r in reps), "whole replays"
 
-    def request(command: str, path: Path) -> None:
+    def request(command: str, path: Path, close_on_end: bool = False) -> None:
         tmp = comm.with_suffix(".tmp")
         tmp.write_text(json.dumps({"mode": "mirror", "commandId": command,
                                    "queue": [{"path": str(path), "cut": False}],
-                                   "streamOver": True, "closeOnEnd": False}))
+                                   "streamOver": True, "closeOnEnd": close_on_end}))
         os.replace(tmp, comm)
 
     def file_status() -> dict[str, Any]:
@@ -491,11 +494,18 @@ def test_another_game_picked_mid_game_plays_it(
     # Back to the first while the second is paused.
     v.c.call("replay_control", action="pause")
     online_set.wait(lambda: v.c.call("replay_status")["paused"], 30, "the pause")
-    request("c3", paths[0])
+    request("c3", paths[0], close_on_end=True)
     st = playing("c3", serial, "the first game again after a switch while paused")
     v.shot("first-again")
+    # The resolution as the Settings window sets it while watching: not saved yet. (5x: the
+    # harness's User template has 3x.)
+    gfx = v.inst.user_dir / "Config" / "GFX.ini"
+    v.c.call("config_set", system="Graphics", section="Settings", key="InternalResolution", value="5")
+    assert "InternalResolution = 5" not in (gfx.read_text() if gfx.exists() else ""), "saved before the close"
     st = online_set.wait(lambda: (lambda s: s if s["at_end"] or s["finished"] else None)(
         v.c.call("replay_status")), 900, "the first game's end")
     assert st["desync_frame"] == -1, st
     assert st["frames_checked"] >= reps[0].endg["finalFrame"] - reps[0].first_frame - 1, st
     assert not st["paused"] or st["at_end"], st
+    online_set.wait(lambda: file_status().get("state") == "close", 60, "the viewer to ask to be closed")
+    assert "InternalResolution = 5" in gfx.read_text(), "the resolution wasn't saved before the close"

@@ -2,6 +2,7 @@ import { AdvancedAppSettings } from "./advanced_app_settings/advanced_app_settin
 import { AppearanceSettings } from "./appearance_settings/appearance_settings";
 import { SettingsCreateMessages as Messages } from "./create.messages";
 import { NetplayDolphinSettings } from "./dolphin_settings/netplay_dolphin_settings";
+import { PLAYBACK_DOLPHIN_SETTINGS_PATH } from "./dolphin_settings/paths";
 import { PlaybackDolphinSettings } from "./dolphin_settings/playback_dolphin_settings";
 import { GameSettings } from "./game_settings/game_settings";
 import { HelpPage } from "./help_page/help_page";
@@ -36,7 +37,7 @@ export function createSettingsPage(): { Page: React.ComponentType } {
         },
         {
           name: () => Messages.playback(),
-          path: "playback-dolphin-settings",
+          path: PLAYBACK_DOLPHIN_SETTINGS_PATH.replace("/settings/", ""),
           component: <PlaybackDolphinSettings />,
         },
       ],

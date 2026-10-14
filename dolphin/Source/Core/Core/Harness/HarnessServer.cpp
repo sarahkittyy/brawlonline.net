@@ -1637,6 +1637,20 @@ Result CmdSpectateConfig(const Args& args)
   return r;
 }
 
+// A setting in the base layer, as Dolphin's Settings window sets it: unsaved until something
+// calls Config::Save (that window's close, Dolphin's exit, a spectated stream's auto-close).
+// {"system": "Graphics", "section": "Settings", "key": "InternalResolution", "value": "3"}
+Result CmdConfigSet(const Args& args)
+{
+  const auto system = Config::GetSystemFromName(GetString(args, "system"));
+  if (!system)
+    Fail("unknown config system " + GetString(args, "system"));
+  const Config::Location loc{*system, GetString(args, "section"), GetString(args, "key")};
+  if (Config::GetLayer(Config::LayerType::Base)->Set(loc, GetString(args, "value")))
+    Config::OnConfigChanged();
+  return {};
+}
+
 // ---------------------------------------------------------------------------------------------
 // Online play (Core/Online)
 
@@ -2045,6 +2059,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"replay_recording", CmdReplayRecording},
       {"spectate_status", CmdSpectateStatus},
       {"spectate_config", CmdSpectateConfig},
+      {"config_set", CmdConfigSet},
       {"gprb_samples", CmdGprbSamples},
       {"gpu_state", CmdGpuState},
       {"gprb_census", CmdGprbCensus},

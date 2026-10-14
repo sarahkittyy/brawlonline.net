@@ -4,6 +4,7 @@ import Button from "@mui/material/Button";
 import CircularProgress from "@mui/material/CircularProgress";
 import Typography from "@mui/material/Typography";
 import React from "react";
+import { useNavigate } from "react-router-dom";
 
 import { ConfirmationModal } from "@/components/confirmation_modal/confirmation_modal";
 import { PathInput } from "@/components/path_input/path_input";
@@ -16,6 +17,7 @@ import { SettingItem } from "../setting_item_section";
 import { DolphinSettingsMessages as Messages } from "./dolphin_settings.messages";
 import { GameFilesFolder } from "./game_files_folder";
 import { GeckoCodes } from "./gecko_codes/gecko_codes";
+import { PLAYBACK_DOLPHIN_SETTINGS_PATH } from "./paths";
 
 enum ResetType {
   SOFT,
@@ -64,6 +66,7 @@ export const DolphinSettings = ({ dolphinType }: { dolphinType: DolphinLaunchTyp
   const [resetModalOpen, setResetModalOpen] = React.useState(false);
   const [isResetType, setResetType] = React.useState<ResetType | undefined>();
   const { dolphinService } = useServices();
+  const navigate = useNavigate();
   const { openConfigureDolphin, hardResetDolphin, softResetDolphin } = useDolphinActions(dolphinService);
   const dolphinIsReady = dolphinStatus === DolphinStatus.READY && !dolphinIsOpen && isResetType == null;
   const versionString: string =
@@ -120,7 +123,14 @@ export const DolphinSettings = ({ dolphinType }: { dolphinType: DolphinLaunchTyp
           tooltipText={dolphinIsOpen ? Messages.closeDolphinToChange() : ""}
         />
       </SettingItem>
-      <SettingItem name={Messages.configureDolphin(dolphinTypeName)}>
+      <SettingItem
+        name={Messages.configureDolphin(dolphinTypeName)}
+        description={
+          dolphinType === DolphinLaunchType.NETPLAY
+            ? Messages.configureNetplayDescription()
+            : Messages.configurePlaybackDescription()
+        }
+      >
         <div
           css={css`
             display: flex;
@@ -135,6 +145,15 @@ export const DolphinSettings = ({ dolphinType }: { dolphinType: DolphinLaunchTyp
           <Button variant="outlined" color="primary" onClick={openDolphinDirectoryHandler}>
             {Messages.openSettingsFolderButton()}
           </Button>
+          {dolphinType === DolphinLaunchType.NETPLAY && (
+            <Button
+              variant="outlined"
+              color="primary"
+              onClick={() => navigate(PLAYBACK_DOLPHIN_SETTINGS_PATH, { replace: true })}
+            >
+              {Messages.replayDolphinSettingsLink()}
+            </Button>
+          )}
         </div>
       </SettingItem>
       <SettingItem name={getGeckoCodesName(dolphinType)}>
