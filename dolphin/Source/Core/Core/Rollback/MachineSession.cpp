@@ -466,6 +466,16 @@ void ShowNotice(const std::string& text)
 
 void BroadcastControl(const picojson::object& msg);
 
+// The pace diagnostic's counters (PPR_MACHINE_PACE_LOG, PaceFrame).
+struct PaceStats
+{
+  Clock::time_point since{}, last_frame{};
+  u32 frames = 0, resim = 0, rollbacks = 0, waits = 0, late25 = 0, late50 = 0;
+  double wait_ms = 0, late_ms = 0, speed_sum = 0, ahead_sum = 0;
+  float ahead_min = 1e9f, ahead_max = -1e9f;
+};
+PaceStats s_pace;
+
 void Fail(std::string why)
 {
   ERROR_LOG_FMT(BRAWLBACK, "machine: {}", why);
@@ -2040,9 +2050,19 @@ void Update(Core::System& system)
     if (frames_back >= 1 && frames_back <= MAX_ROLLBACK_FRAMES && rb.m_ring_count >= 2 &&
         frames_back < rb.m_ring_count)
     {
+      // The frames it re-runs must not push the presented frame after them back in wall-clock
+      // time (CoreTimingManager::BeginRollbackBurst, as GameplaySession's BeginBurst): without it
+      // the throttle re-anchored at the presented frame and each rollback's re-run time was lost
+      // for good (prod 2026-10-14: a REX room at 57 frames/s; this PC, REX at 50 ms with 4-6
+      // rollbacks a second: 54.7 frames/s before, 58.2 after).
+      // PPR_MACHINE_OLD_THROTTLE=1 keeps the old behaviour, for comparisons.
+      static const bool old_throttle = std::getenv("PPR_MACHINE_OLD_THROTTLE") != nullptr;
+      if (!old_throttle)
+        system.GetCoreTiming().BeginRollbackBurst();
       rb.LoadFrame(system, frames_back);
       AfterLoad(system, frames_back);
       s.rollbacks++;
+      s_pace.rollbacks++;
       s.max_rollback = std::max<u64>(s.max_rollback, static_cast<u64>(frames_back));
     }
     else if (frames_back != 0)
@@ -3760,6 +3780,75 @@ enum class Wait
 // Called at iteration 0 of a pass: runs the connection, the barrier and GekkoNet until this pass
 // has a frame to run. Waits on the host, never in the guest: guest code run while waiting would
 // move emulated time in a way no other machine (and no re-run) repeats.
+// Diagnostics (PPR_MACHINE_PACE_LOG=1): where the session's wall-clock time goes, a line a
+// second: displayed and re-run frames, rollbacks, the waits for GekkoNet (no frame to run yet;
+// the throttle forgets them), displayed frames that came late, the time-sync speed and frames
+// ahead, and how far the throttle fell behind its schedule.
+
+bool PaceLogOn()
+{
+  static const bool on = std::getenv("PPR_MACHINE_PACE_LOG") != nullptr;
+  return on;
+}
+
+void PaceWait(Clock::duration waited)
+{
+  if (!PaceLogOn())
+    return;
+  s_pace.waits++;
+  s_pace.wait_ms += std::chrono::duration<double, std::milli>(waited).count();
+}
+
+void PaceFrame(Core::System& system, bool resim)
+{
+  if (!PaceLogOn())
+    return;
+  const auto now = Clock::now();
+  if (s_pace.since == Clock::time_point{})
+    s_pace.since = now;
+  if (resim)
+  {
+    s_pace.resim++;
+    return;
+  }
+  if (s_pace.last_frame != Clock::time_point{})
+  {
+    const double ms = std::chrono::duration<double, std::milli>(now - s_pace.last_frame).count();
+    if (ms > 25)
+    {
+      s_pace.late25++;
+      s_pace.late_ms += ms - 1000.0 / 59.94;
+    }
+    if (ms > 50)
+      s_pace.late50++;
+  }
+  s_pace.last_frame = now;
+  s_pace.frames++;
+  s_pace.speed_sum += s.speed;
+  s_pace.ahead_sum += s.frames_ahead;
+  s_pace.ahead_min = std::min(s_pace.ahead_min, s.frames_ahead);
+  s_pace.ahead_max = std::max(s_pace.ahead_max, s.frames_ahead);
+  const double span = std::chrono::duration<double, std::milli>(now - s_pace.since).count();
+  if (span < 1000)
+    return;
+  const double behind = std::chrono::duration<double, std::milli>(
+                            system.GetCoreTiming().TakeMaxBehindSchedule())
+                            .count();
+  const u32 n = std::max<u32>(s_pace.frames, 1);
+  NOTICE_LOG_FMT(BRAWLBACK,
+                 "machine pace: {:.0f} ms: {} frames ({:.2f}/s), {} re-run, {} rollbacks; {} waits "
+                 "{:.1f} ms; {} frames over 25 ms ({} over 50), {:.1f} ms late in all; speed "
+                 "{:.4f}; ahead {:.2f} [{:.2f}, {:.2f}]; behind schedule at most {:.1f} ms",
+                 span, s_pace.frames, s_pace.frames * 1000.0 / span, s_pace.resim, s_pace.rollbacks,
+                 s_pace.waits, s_pace.wait_ms, s_pace.late25, s_pace.late50, s_pace.late_ms,
+                 s_pace.speed_sum / n, s_pace.ahead_sum / n, s_pace.ahead_min, s_pace.ahead_max,
+                 behind);
+  const auto last = s_pace.last_frame;
+  s_pace = {};
+  s_pace.since = now;
+  s_pace.last_frame = last;
+}
+
 Wait WaitForFrames(Core::System& system)
 {
   // A peer that sends nothing for this long is gone (GekkoNet drops one after 5 s of silence; a
@@ -3860,7 +3949,10 @@ Wait WaitForFrames(Core::System& system)
     s.mutex.lock();
   }
   if (waited)
+  {
+    PaceWait(Clock::now() - since);
     system.GetCoreTiming().ResetThrottleToNow();
+  }
   return Wait::Frames;
 }
 
@@ -3994,6 +4086,7 @@ void BeginPass(Core::System& system)
   core_timing.SetRollbackResimulating(s.resim);
   UpdateTimeSync(system);
   core_timing.SetRollbackSpeedAdjustment(s.speed);
+  PaceFrame(system, s.resim);
   if (!s.resim)
     Rollback::PresentStats::OnDisplayedFrameStart(s.ops.count > 1);
   CheckPassState(system);
