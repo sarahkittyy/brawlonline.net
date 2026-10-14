@@ -521,6 +521,7 @@ impl Engine {
             },
             updated_at: wall.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             mod_rooms: self.mod_rooms.public_rooms(200),
+            mod_room_index: self.mod_rooms.all_rooms(4000),
             members: self.rooms.member_rooms(4000),
         }
     }
@@ -3029,6 +3030,7 @@ mod tests {
         h.room(2, json!({"type": "mods-create", "build": {"hash": HASH}, "public": false}));
         let status = h.e.status(Utc::now());
         assert_eq!(status.mod_rooms.len(), 1, "the private room is not listed");
+        assert_eq!(status.mod_room_index.len(), 2, "the index has the private room too");
         let r = &status.mod_rooms[0];
         assert_eq!((r.build.name.as_str(), r.players, r.open), ("Brawl Minus", 1, 4));
         assert_eq!(r.host_name, a.display_name);

@@ -618,10 +618,14 @@ void Files(const std::string& dir)
       {
         answer["result"] = picojson::value("failed");
         answer["error"] = picojson::value(*error);
+        std::lock_guard lk(s.mutex);
+        Log(fmt::format("the launcher's {}: {}", Str(o, "op", 16), *error));
       }
       else
       {
         answer["result"] = picojson::value("ok");
+        std::lock_guard lk(s.mutex);
+        Log(fmt::format("the launcher's {}", Str(o, "op", 16)));
       }
     }
     else

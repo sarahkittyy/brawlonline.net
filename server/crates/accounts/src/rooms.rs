@@ -8,7 +8,7 @@
 
 use std::time::{Duration, Instant};
 
-use axum::extract::State;
+use axum::extract::{Path, State};
 use axum::http::{HeaderMap, StatusCode};
 use axum::Json;
 use common::rooms::MmStatus;
@@ -59,8 +59,9 @@ pub async fn rooms(State(state): State<AppState>, headers: HeaderMap) -> ApiResu
             .with_message(format!("Too many requests. Try again in {} s.", wait.as_secs().max(1)))
     })?;
     match state.mm_status.get().await {
-        // Where each player is stays between mm and accounts (it names private rooms).
-        Ok(s) => Ok(Json(MmStatus { members: Vec::new(), ..s })),
+        // Where each player is stays between mm and accounts (it names private rooms), as does
+        // the index of every Brawl Mods room.
+        Ok(s) => Ok(Json(MmStatus { members: Vec::new(), mod_room_index: Vec::new(), ..s })),
         Err(e) => {
             tracing::warn!("mm status unavailable: {e}");
             Err(ApiError::new(
@@ -70,4 +71,35 @@ pub async fn rooms(State(state): State<AppState>, headers: HeaderMap) -> ApiResu
             ))
         }
     }
+}
+
+/// `GET /v1/mod-rooms/{code}`: the Brawl Mods room with this exact code, private ones too
+/// (`{code, build: {hash, name}, hostName, players, open}`), so a launcher joining by code starts
+/// the room's game; 404 `unknown_room`. Session auth, the same limit as `GET /v1/rooms`. Only a
+/// player who has the code learns the room's game.
+pub async fn mod_room(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(code): Path<String>,
+) -> ApiResult<Json<common::mods::PublicModRoom>> {
+    let user = current_user(&state, &headers).await?;
+    limit(&state, |l, now| l.rooms.check(&user.uid, now)).map_err(|wait| {
+        ApiError::rate_limited(wait)
+            .with_message(format!("Too many requests. Try again in {} s.", wait.as_secs().max(1)))
+    })?;
+    let code = code.trim().to_ascii_uppercase();
+    let status = state.mm_status.get().await.map_err(|e| {
+        tracing::warn!("mm status unavailable: {e}");
+        ApiError::new(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "mm_unavailable",
+            "The matchmaking server is not answering. Try again later.",
+        )
+    })?;
+    status
+        .mod_room_index
+        .into_iter()
+        .find(|r| r.code == code)
+        .map(Json)
+        .ok_or_else(|| ApiError::new(StatusCode::NOT_FOUND, "unknown_room", "Room not found."))
 }

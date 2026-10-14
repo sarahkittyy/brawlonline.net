@@ -211,6 +211,21 @@ impl ModRoomBook {
         list
     }
 
+    /// Every room, private and full ones too (for a lookup by code: never listed).
+    pub fn all_rooms(&self, limit: usize) -> Vec<PublicModRoom> {
+        self.rooms
+            .values()
+            .take(limit)
+            .map(|r| PublicModRoom {
+                code: r.code.clone(),
+                build: r.build.clone(),
+                host_name: r.slots[r.host].as_ref().map(|m| m.info.display_name.clone()).unwrap_or_default(),
+                players: r.members().count() as u8,
+                open: r.open.iter().filter(|&&o| o).count() as u8,
+            })
+            .collect()
+    }
+
     fn broadcast(&mut self, code: &str, out: &mut Vec<Output>) {
         let Some(room) = self.rooms.get(code) else { return };
         self.changed.push((code.to_string(), room.serial));

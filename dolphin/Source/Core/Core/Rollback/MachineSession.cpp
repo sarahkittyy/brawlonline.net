@@ -2772,6 +2772,8 @@ void LogParts(Core::System& system, s64 frame)
                frame, system.GetCoreTiming().GetTicks(), ppc.downcount, ppc.pc, ppc.Exceptions);
 }
 
+void SelfLoad(Core::System& system, s64 frame);
+
 // Two slots swap players (a slot move's epoch): everything the session keeps by slot, the links
 // and the inputs history included, so the session goes on with the players in their new slots.
 void SwapSlots(int a, int b)
@@ -2813,6 +2815,8 @@ void SwapSlots(int a, int b)
 // Every player in the epoch's set: a new GekkoNet session from the epoch's frame on.
 void StartEpoch(const State::EpochGo& go)
 {
+  // A player before this epoch (not the joiner, who just loaded the epoch's image).
+  const bool member = LocalPlays();
   if (go.move.first >= 0)
   {
     SwapSlots(go.move.first, go.move.second);
@@ -2859,6 +2863,10 @@ void StartEpoch(const State::EpochGo& go)
     }
   }
   s.start_at.reset();
+  // Diagnostics (PPR_MACHINE_EPOCH_SELFLOAD=1): every player that did not just load the epoch's
+  // machine image saves its own and loads it, so every machine goes on from an image.
+  if (const char* e = std::getenv("PPR_MACHINE_EPOCH_SELFLOAD"); e && *e == '1' && member)
+    SelfLoad(Core::System::GetInstance(), go.frame);
   DestroyGekko();
   if (!CreateGekko())
   {
