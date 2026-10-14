@@ -4,6 +4,7 @@ export const BugReportMessages = {
   describeWhatWentWrong: () =>
     "Describe what went wrong. I genuinely look at all of these, and each one helps me improve the game.",
   whatHappened: () => "What happened?",
+  placeholder: () => "game sucks plz fix",
   uploadLogs: () => "Upload Logs",
   uploading: () => "Uploading",
   cancel: () => "Cancel",

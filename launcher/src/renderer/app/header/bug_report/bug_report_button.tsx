@@ -114,7 +114,9 @@ export const BugReportDialog = ({ open, onClose }: { open: boolean; onClose: () 
       <TextField
         value={description}
         onChange={(e) => setDescription(e.target.value)}
-        placeholder={Messages.whatHappened()}
+        placeholder={Messages.placeholder()}
+        hiddenLabel={true}
+        sx={{ "& .MuiFilledInput-root": { padding: "7px 12px 12px" } }}
         multiline={true}
         minRows={6}
         maxRows={14}
