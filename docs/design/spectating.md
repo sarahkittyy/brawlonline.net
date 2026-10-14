@@ -1,6 +1,14 @@
 # Spectating
 
-Status: proposal (2026-10-13). Nothing here is built.
+Status (2026-10-14): uploading, the relay, the safety tests (§4.5), the Spectate tab and watching live are built; spectator chat in Dolphin is not. mm's `MM_SPECTATE` stays `off` in production until it is turned on.
+
+What was built, and where it differs from the plan below:
+- **Upload and relay** (§3.1, §3.2): as planned, except the watch stream is server-sent events from accounts (which relays mm's loopback `GET /live/{stream}`), not a WebSocket to mm, so no new public listener or nginx location. `docs/spectate-protocol.md` is the wire protocol.
+- **Launcher** (`launcher/src/spectate/`, `renderer/pages/home/spectate/`): Home > Spectate lists `/v1/live` every 3 s while open, newest set first, with each side's stock icons and names, the mode, "Game 2 · 1-0" and the stage, the current game's time ticking every second, and the eye with the spectator count. New rows slide in and pulse once. The player's own games say "Your game" and can't be watched; the watched one says "Watching". Auto play is a switch on the tab (off, remembered on the computer). Settings > Game has "Close Dolphin after a spectated game ends" (on). Not built: the "Most watched" sort, and "Save to Replays" for a watched set.
+- **Watching** (§6.2): the launcher writes each game to `<playback User folder>/Spectate/<stream>/<place>.brep` and drives the playback Dolphin with a `mirror` comm file (`docs/spectate-protocol.md` §4). A spectator joining mid-set starts at the game being played (`/v1/live`'s `place`); the set's earlier games aren't downloaded. Dolphin's mirror mode: waits for a game's first frames, catches up showing one frame in 15 with "Catching up to live · 2:14 / 4:05 · about 20 s", plays live 3 s behind (2-4 s by a 2 % speed nudge), "Buffering…" when frames run out, a LIVE / GO LIVE -12 s button and the End hotkey ("Go Live (Spectating)"), fast-forward stopping at the live edge, "The next game starts soon" between games, a set's next game following on, and at the stream's end the close countdown or Auto play.
+- **A game whose upload stops** (players first, §4.3: the only uploader paused three times): mm says `bad`, the launcher marks the game `cut`, and playback plays what came ("The rest of this game wasn't streamed.") and goes on with the next game. Found in the harness, where three Dolphins on one PC made the uploader stop for most games.
+- **Windows file sharing:** Dolphin's default open (`_tfopen_s`) refuses a file another program is writing, so a growing game file could only be read once its game had ended. `ReplayFile::ReadFile` now opens shared (`SharedAccess::ReadWrite`).
+- Not built yet: spectator chat in Dolphin (§6.4; the server side exists), "Lost sync with this game" reports, the launcher coming to the front when Dolphin closes, and the version check's own message for spectating (a different build gets the replay's "recorded with another version" error, without Play anyway).
 
 ## 0. What the user asked for (2026-10-13)
 
