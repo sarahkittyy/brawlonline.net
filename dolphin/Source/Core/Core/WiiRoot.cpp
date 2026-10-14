@@ -3,6 +3,8 @@
 
 #include "Core/WiiRoot.h"
 
+#include <utility>
+
 #include <optional>
 #include <string>
 #include <vector>
@@ -41,6 +43,9 @@ namespace FS = IOS::HLE::FS;
 static std::string s_temp_wii_root;
 static std::string s_temp_redirect_root;
 static bool s_wii_root_initialized = false;
+// This boot's NAND is a whole-machine session's (Machine): thrown away at the end, never copied
+// back into the player's NAND.
+static bool s_machine_session_nand = false;
 static std::vector<IOS::HLE::FS::NandRedirect> s_nand_redirects;
 
 // When Temp NAND + Redirects are both active, we need to keep track of where each redirect path
@@ -163,6 +168,7 @@ static void InitializeDeterministicWiiSaves(FS::FileSystem* session_fs,
           save_title = *disc_title;
       }
     }
+    s_machine_session_nand = true;
     INFO_LOG_FMT(CORE, "Wii Save Init: machine session, copying {0:016x}.", save_title);
     if (save_title != 0)
       CopySave(configured_fs.get(), session_fs, save_title);
@@ -449,6 +455,15 @@ void CleanUpWiiFileSystemContents(const BootSessionData& boot_session_data)
   const auto* netplay_settings = boot_session_data.GetNetplaySettings();
   const bool is_netplay_write = netplay_settings && netplay_settings->savedata_write;
   const bool is_netplay_host = netplay_settings && netplay_settings->is_hosting;
+  // A whole-machine session's NAND is thrown away (docs/design/brawl-mods.md §6.5): it is not
+  // Dolphin's netplay, so nothing above stopped it, and every save in the session's NAND was
+  // copied over the player's (losing files: a P+ Brawl save without its banner, "Create a save
+  // file?"; staging 2026-10-14).
+  if (std::exchange(s_machine_session_nand, false))
+  {
+    INFO_LOG_FMT(CORE, "Wii FS Cleanup: a machine session's NAND, thrown away");
+    return;
+  }
   const bool cleanup_required =
       wii_root_is_temporary && (!netplay_settings || (is_netplay_write && is_netplay_host));
 
