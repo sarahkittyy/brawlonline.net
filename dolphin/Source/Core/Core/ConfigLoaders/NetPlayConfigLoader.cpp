@@ -79,6 +79,7 @@ public:
     layer->Set(Config::MAIN_MEM1_SIZE, m_settings.mem1_size);
     layer->Set(Config::MAIN_MEM2_SIZE, m_settings.mem2_size);
     layer->Set(Config::MAIN_FALLBACK_REGION, m_settings.fallback_region);
+    layer->Set(Config::MAIN_WII_SD_CARD, m_settings.sd_card_inserted);
     layer->Set(Config::MAIN_ALLOW_SD_WRITES, m_settings.allow_sd_writes);
     layer->Set(Config::MAIN_DSP_JIT, m_settings.dsp_enable_jit);
 

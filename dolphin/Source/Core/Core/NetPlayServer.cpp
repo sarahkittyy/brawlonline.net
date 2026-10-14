@@ -23,11 +23,14 @@
 
 #include "Common/CommonPaths.h"
 #include "Common/ENet.h"
+#include "Common/FatFsUtil.h"
 #include "Common/FileUtil.h"
 #include "Common/Logging/Log.h"
 #include "Common/MsgHandler.h"
+#include "Common/SDCardUtil.h"
 #include "Common/SFMLHelper.h"
 #include "Common/StringUtil.h"
+#include "Common/Thread.h"
 #include "Common/UPnP.h"
 #include "Common/Version.h"
 
@@ -60,6 +63,7 @@
 #include "Core/IOS/Uids.h"
 #include "Core/NetPlayClient.h"  //for NetPlayUI
 #include "Core/NetPlayCommon.h"
+#include "Core/NetPlaySDCard.h"
 #include "Core/SyncIdentifier.h"
 
 #include "DiscIO/Enums.h"
@@ -89,6 +93,8 @@ namespace NetPlay
 {
 NetPlayServer::~NetPlayServer()
 {
+  StopSDCardSync();
+
   if (is_connected)
   {
     m_do_loop = false;
@@ -1261,6 +1267,20 @@ unsigned int NetPlayServer::OnData(sf::Packet& packet, Client& player)
     }
     break;
 
+    case SyncSaveDataID::SDCardChunkRequest:
+    {
+      std::shared_ptr<SDCard::CardServer> sd_card_server;
+      {
+        std::lock_guard lock(m_sd_card_mutex);
+        sd_card_server = m_sd_card_server;
+      }
+      // Asked for outside a sync of the host's card: ignored, like a bad request (the player is
+      // not kicked for it).
+      if (sd_card_server)
+        sd_card_server->OnRequest(player.pid, packet);
+    }
+    break;
+
     case SyncSaveDataID::Failure:
     {
       m_dialog->AppendChat(Common::FmtFormatT("{0} failed to synchronize.", player.name));
@@ -1459,6 +1479,7 @@ bool NetPlayServer::SetupNetSettings()
   settings.mem1_size = Config::Get(Config::MAIN_MEM1_SIZE);
   settings.mem2_size = Config::Get(Config::MAIN_MEM2_SIZE);
   settings.fallback_region = Config::Get(Config::MAIN_FALLBACK_REGION);
+  settings.sd_card_inserted = Config::Get(Config::MAIN_WII_SD_CARD);
   settings.allow_sd_writes = Config::Get(Config::MAIN_ALLOW_SD_WRITES);
   settings.oc_enable = Config::Get(Config::MAIN_OVERCLOCK_ENABLE);
   settings.oc_factor = Config::Get(Config::MAIN_OVERCLOCK);
@@ -1577,6 +1598,8 @@ struct SaveSyncInfo
   u8 save_count = 0;
   std::shared_ptr<const UICommon::GameFile> game;
   bool has_wii_save = false;
+  // The host's SD card goes to the guests too (as a manifest; NetPlaySDCard.h).
+  bool has_sd_card = false;
   std::unique_ptr<IOS::HLE::FS::FileSystem> configured_fs;
   std::optional<std::vector<u8>> mii_data;
   std::vector<std::pair<u64, WiiSave::StoragePointer>> wii_saves;
@@ -1587,6 +1610,8 @@ struct SaveSyncInfo
 bool NetPlayServer::RequestStartGame()
 {
   INFO_LOG_FMT(NETPLAY, "Start Game requested.");
+
+  StopSDCardSync();
 
   if (!SetupNetSettings())
     return false;
@@ -1692,6 +1717,7 @@ bool NetPlayServer::StartGame()
   spac << m_settings.mem1_size;
   spac << m_settings.mem2_size;
   spac << m_settings.fallback_region;
+  spac << m_settings.sd_card_inserted;
   spac << m_settings.allow_sd_writes;
   spac << m_settings.oc_enable;
   spac << m_settings.oc_factor;
@@ -1800,6 +1826,7 @@ void NetPlayServer::AbortGameStart()
     INFO_LOG_FMT(NETPLAY, "Aborting game start.");
     m_dialog->OnGameStartAborted();
     ChunkedDataAbort();
+    StopSDCardSync();
     m_start_pending = false;
   }
   else
@@ -1886,6 +1913,13 @@ std::optional<SaveSyncInfo> NetPlayServer::CollectSaveSyncInfo()
       }
     }
 
+    if (m_settings.sd_card_inserted)
+    {
+      INFO_LOG_FMT(NETPLAY, "Adding the SD card.");
+      sync_info.has_sd_card = true;
+      ++sync_info.save_count;
+    }
+
     if (sync_info.game->GetBlobType() == DiscIO::BlobType::MOD_DESCRIPTOR)
     {
       auto boot_params = BootParameters::GenerateFromFile(sync_info.game->GetFilePath());
@@ -1932,6 +1966,9 @@ bool NetPlayServer::SyncSaveData(const SaveSyncInfo& sync_info)
 
   if (sync_info.save_count == 0)
     return true;
+
+  if (sync_info.has_sd_card)
+    StartSDCardSync();
 
   const auto game_region = sync_info.game->GetRegion();
   const auto gamecube_region = Config::ToGameCubeRegion(game_region);
@@ -2151,6 +2188,70 @@ bool NetPlayServer::SyncSaveData(const SaveSyncInfo& sync_info)
   return true;
 }
 
+// called from ---GUI--- thread
+void NetPlayServer::StartSDCardSync()
+{
+  StopSDCardSync();
+  m_sd_card_sync_cancel = false;
+
+  m_sd_card_sync_thread = std::thread([this] {
+    Common::SetCurrentThreadName("NetPlay SD card");
+    const std::string path = File::GetUserPath(F_WIISDCARDIMAGE_IDX);
+
+    // With folder sync, the card is the folder packed into the image: pack it now, so the manifest
+    // is of the card the host plays on (the boot then leaves the image as it is).
+    bool ok = true;
+    if (Config::Get(Config::MAIN_WII_SD_CARD_ENABLE_FOLDER_SYNC))
+      ok = Common::SyncSDFolderToSDImage([this] { return m_sd_card_sync_cancel.load(); }, true);
+    if (ok && !File::Exists(path))
+      ok = Common::SDCardCreate(128, path);
+
+    std::optional<SDCard::Manifest> manifest;
+    if (ok)
+      manifest = SDCard::BuildManifest(path, &m_sd_card_sync_cancel);
+    if (m_sd_card_sync_cancel)
+      return;
+
+    sf::Packet packet;
+    packet << MessageID::SyncSaveData << SyncSaveDataID::SDCardManifest;
+    packet << manifest.has_value();
+    if (manifest)
+    {
+      auto shared = std::make_shared<const SDCard::Manifest>(std::move(*manifest));
+      SDCard::WriteManifest(*shared, packet);
+      {
+        std::lock_guard lock(m_sd_card_mutex);
+        m_sd_card_server = std::make_shared<SDCard::CardServer>(
+            path, shared, [this](u8 pid, sf::Packet&& p) {
+              SendAsync(std::move(p), pid, CHUNKED_DATA_CHANNEL);
+            });
+      }
+      // The host plays on the same card its guests see.
+      SetHostSDCardManifest(shared);
+      INFO_LOG_FMT(NETPLAY, "SD card: sending the manifest of {} ({} bytes)", path, shared->size);
+    }
+    else
+    {
+      // Each player then plays on its own card, as when the host does not load its save data.
+      m_dialog->AppendChat(Common::GetStringT("Could not read the SD card: everyone plays on "
+                                              "their own card this time."));
+    }
+    SendChunkedToClients(std::move(packet), 1, "SD Card Synchronization");
+  });
+}
+
+void NetPlayServer::StopSDCardSync()
+{
+  m_sd_card_sync_cancel = true;
+  if (m_sd_card_sync_thread.joinable())
+    m_sd_card_sync_thread.join();
+  {
+    std::lock_guard lock(m_sd_card_mutex);
+    m_sd_card_server.reset();
+  }
+  SetHostSDCardManifest(nullptr);
+}
+
 bool NetPlayServer::SyncCodes()
 {
   INFO_LOG_FMT(NETPLAY, "Sending codes to clients.");
@@ -2237,6 +2338,11 @@ bool NetPlayServer::SyncCodes()
           pac << code.data;
         }
       }
+      // Then their names, for the guests to see what the codes are (as the host named them).
+      std::vector<std::string> names;
+      for (const Gecko::GeckoCode& active_code : active_codes)
+        names.push_back(active_code.name);
+      WriteCodeNames(names, pac);
       SendAsyncToClients(std::move(pac));
     }
   }
@@ -2290,6 +2396,10 @@ bool NetPlayServer::SyncCodes()
           pac << op.value;
         }
       }
+      std::vector<std::string> names;
+      for (const ActionReplay::ARCode& active_code : active_codes)
+        names.push_back(active_code.name);
+      WriteCodeNames(names, pac);
       SendAsyncToClients(std::move(pac));
     }
   }

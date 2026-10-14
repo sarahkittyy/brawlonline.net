@@ -13,11 +13,83 @@
 #include "Common/IOFile.h"
 #include "Common/MsgHandler.h"
 #include "Common/SFMLHelper.h"
+#include "Common/StringUtil.h"
 
 namespace NetPlay
 {
 constexpr u32 LZO_IN_LEN = 1024 * 64;
 constexpr u32 LZO_OUT_LEN = LZO_IN_LEN + (LZO_IN_LEN / 16) + 64 + 3;
+
+std::string SanitizeCodeName(std::string_view name)
+{
+  std::string out;
+  for (const char c : name)
+  {
+    const u8 b = static_cast<u8>(c);
+    if (b < 0x20 || b == 0x7F)
+      continue;
+    out.push_back(c);
+  }
+  if (out.size() > MAX_CODE_NAME_BYTES)
+  {
+    out.resize(MAX_CODE_NAME_BYTES);
+    // Never end in the middle of a UTF-8 sequence: drop a trailing incomplete one.
+    size_t lead = out.size();
+    while (lead > 0 && (static_cast<u8>(out[lead - 1]) & 0xC0) == 0x80)
+      --lead;
+    if (lead > 0)
+    {
+      const u8 b = static_cast<u8>(out[lead - 1]);
+      const size_t len = b >= 0xF0 ? 4 : b >= 0xE0 ? 3 : b >= 0xC0 ? 2 : 1;
+      if (out.size() - (lead - 1) < len)
+        out.resize(lead - 1);
+    }
+  }
+  return std::string(StripWhitespace(out));
+}
+
+void WriteCodeNames(std::span<const std::string> names, sf::Packet& packet)
+{
+  const size_t count = std::min(names.size(), MAX_CODE_NAMES);
+  packet << static_cast<u16>(count);
+  for (size_t i = 0; i < count; ++i)
+    packet << SanitizeCodeName(names[i]);
+}
+
+std::vector<std::string> ReadCodeNames(sf::Packet& packet)
+{
+  std::vector<std::string> names;
+  u16 count = 0;
+  packet >> count;
+  if (!packet || count > MAX_CODE_NAMES)
+    return {};
+  for (u16 i = 0; i < count; ++i)
+  {
+    std::string name;
+    packet >> name;
+    if (!packet)
+      return {};
+    name = SanitizeCodeName(name);
+    if (!name.empty())
+      names.push_back(std::move(name));
+  }
+  return names;
+}
+
+std::string DescribeCodeNames(std::span<const std::string> names)
+{
+  constexpr size_t SHOWN = 8;
+  std::string out;
+  for (size_t i = 0; i < names.size() && i < SHOWN; ++i)
+  {
+    if (i != 0)
+      out += ", ";
+    out += names[i];
+  }
+  if (names.size() > SHOWN)
+    out += fmt::format(" and {} more", names.size() - SHOWN);
+  return out;
+}
 
 bool CompressFileIntoPacket(const std::string& file_path, sf::Packet& packet)
 {

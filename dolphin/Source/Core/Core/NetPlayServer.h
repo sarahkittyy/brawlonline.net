@@ -5,6 +5,8 @@
 
 #include <SFML/Network/Packet.hpp>
 
+#include <atomic>
+
 #include <map>
 #include <mutex>
 #include <optional>
@@ -26,6 +28,10 @@ namespace NetPlay
 {
 class NetPlayUI;
 struct SaveSyncInfo;
+namespace SDCard
+{
+class CardServer;
+}
 
 class NetPlayServer : public Common::TraversalClientClient
 {
@@ -218,5 +224,14 @@ private:
   Common::TraversalClient* m_traversal_client = nullptr;
   NetPlayUI* m_dialog = nullptr;
   NetPlayIndex m_index;
+
+  // The host's SD card for this game's guests (NetPlaySDCard.h): its manifest is built on a thread
+  // of its own (hashing a big card takes a while), then the card server answers their requests.
+  void StartSDCardSync();
+  void StopSDCardSync();
+  std::thread m_sd_card_sync_thread;
+  std::atomic<bool> m_sd_card_sync_cancel{false};
+  std::mutex m_sd_card_mutex;
+  std::shared_ptr<SDCard::CardServer> m_sd_card_server;
 };
 }  // namespace NetPlay

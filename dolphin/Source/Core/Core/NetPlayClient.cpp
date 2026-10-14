@@ -72,6 +72,7 @@
 #include "Core/IOS/Uids.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayCommon.h"
+#include "Core/NetPlaySDCard.h"
 #include "Core/Online/Timeouts.h"
 #include "Core/SyncIdentifier.h"
 #include "Core/System.h"
@@ -98,8 +99,44 @@ namespace NetPlay
 {
 using namespace WiimoteCommon;
 
+// The host's SD card reaches a guest through SDCardRemote: requests for its chunks, and the
+// gameplay connection kept alive while a read waits for them.
+class NetPlayClient::SDCardRemote final : public SDCard::SessionCard::Remote
+{
+public:
+  explicit SDCardRemote(NetPlayClient* client) : m_client(client) {}
+
+  void Request(std::span<const u32> chunks) override
+  {
+    sf::Packet packet;
+    packet << MessageID::SyncSaveData << SyncSaveDataID::SDCardChunkRequest;
+    SDCard::WriteChunkRequest(chunks, packet);
+    std::lock_guard lock(m_mutex);
+    if (m_client)
+      m_client->SendAsync(std::move(packet));
+  }
+
+  void KeepAlive() override
+  {
+    std::lock_guard lock(m_mutex);
+    if (m_client)
+      m_client->KeepGekkoAliveWhileStalled();
+  }
+
+  void Disconnect()
+  {
+    std::lock_guard lock(m_mutex);
+    m_client = nullptr;
+  }
+
+private:
+  std::mutex m_mutex;
+  NetPlayClient* m_client;
+};
+
 static std::mutex crit_netplay_client;
 static NetPlayClient* netplay_client = nullptr;
+static std::shared_ptr<const SDCard::Manifest> TakeHostSDCardManifest();
 static bool s_si_poll_batching = false;
 static std::atomic<bool> s_gekko_cpu_stalled{false};
 
@@ -249,6 +286,17 @@ NetPlayClient::~NetPlayClient()
   // not perfect
   if (m_is_running.IsSet())
     StopGame();
+
+  StopSDCardSync();
+  {
+    std::lock_guard lock(m_sd_card_mutex);
+    if (m_active_sd_card)
+      m_active_sd_card->Detach();
+    m_active_sd_card.reset();
+    if (m_sd_card_remote)
+      m_sd_card_remote->Disconnect();
+    m_sd_card_remote.reset();
+  }
 
   if (m_is_connected)
   {
@@ -1048,6 +1096,7 @@ void NetPlayClient::OnStartGame(sf::Packet& packet)
     packet >> m_net_settings.mem1_size;
     packet >> m_net_settings.mem2_size;
     packet >> m_net_settings.fallback_region;
+    packet >> m_net_settings.sd_card_inserted;
     packet >> m_net_settings.allow_sd_writes;
     packet >> m_net_settings.oc_enable;
     packet >> m_net_settings.oc_factor;
@@ -1295,6 +1344,14 @@ void NetPlayClient::OnSyncSaveData(sf::Packet& packet)
 
   case SyncSaveDataID::GBAData:
     OnSyncSaveDataGBA(packet);
+    break;
+
+  case SyncSaveDataID::SDCardManifest:
+    OnSyncSaveDataSDCard(packet);
+    break;
+
+  case SyncSaveDataID::SDCardChunkData:
+    OnSDCardChunkData(packet);
     break;
 
   default:
@@ -2293,6 +2350,9 @@ bool NetPlayClient::IsTimeSynced()
 
 void NetPlayClient::OnSyncSaveDataNotify(sf::Packet& packet)
 {
+  // A new sync: a card prepared for an earlier one is not this game's.
+  StopSDCardSync();
+
   packet >> m_sync_save_data_count;
   m_sync_save_data_success_count = 0;
 
@@ -2552,6 +2612,175 @@ void NetPlayClient::OnSyncSaveDataGBA(sf::Packet& packet)
   SyncSaveDataResponse(success);
 }
 
+void NetPlayClient::OnSyncSaveDataSDCard(sf::Packet& packet)
+{
+  bool has_card = false;
+  packet >> has_card;
+  if (!has_card)
+  {
+    // The host could not read its card: everyone plays on their own.
+    SyncSaveDataResponse(true);
+    return;
+  }
+
+  std::optional<SDCard::Manifest> manifest = SDCard::ReadManifest(packet);
+  if (!manifest)
+  {
+    ERROR_LOG_FMT(NETPLAY, "SD card: the host's manifest is malformed");
+    SyncSaveDataResponse(false);
+    return;
+  }
+
+  StopSDCardSync();
+  m_sd_card_sync_cancel = false;
+  std::shared_ptr<SDCardRemote> remote = std::make_shared<SDCardRemote>(this);
+  {
+    std::lock_guard lock(m_sd_card_mutex);
+    m_sd_card_remote = remote;
+  }
+
+  m_dialog->AppendChat(Common::GetStringT("Comparing your SD card with the host's..."));
+  auto shared_manifest = std::make_shared<const SDCard::Manifest>(std::move(*manifest));
+  m_sd_card_sync_thread = std::thread([this, shared_manifest, remote] {
+    Common::SetCurrentThreadName("NetPlay SD card");
+    const std::string path = File::GetUserPath(F_WIISDCARDIMAGE_IDX);
+    // The guest's own card only spares downloading the chunks it has the same.
+    const std::optional<SDCard::ImageHashes> local =
+        File::Exists(path) ? SDCard::HashImage(path, &m_sd_card_sync_cancel) : std::nullopt;
+    if (m_sd_card_sync_cancel)
+      return;
+
+    std::shared_ptr<SDCard::SessionCard> card = SDCard::SessionCard::CreateGuestCard(
+        path, shared_manifest, local, File::GetUserPath(D_CACHE_IDX) + "NetPlaySD", remote);
+    {
+      std::lock_guard lock(m_sd_card_mutex);
+      if (m_sd_card_sync_cancel)
+        return;
+      m_pending_sd_card = card;
+    }
+
+    const u64 missing = card->MissingBytes();
+    if (missing == 0)
+    {
+      m_dialog->AppendChat(Common::GetStringT("Your SD card matches the host's."));
+    }
+    else
+    {
+      m_dialog->AppendChat(Common::FmtFormatT(
+          "{0} MB of the host's SD card differ from yours: the game loads them when it needs "
+          "them.",
+          (missing + (1 << 20) - 1) >> 20));
+    }
+
+    const bool ok = card->Prefetch(SDCard::PREFETCH_BYTES, &m_sd_card_sync_cancel);
+    if (m_sd_card_sync_cancel)
+      return;
+    if (!ok)
+      m_dialog->AppendChat(Common::GetStringT("The host did not send its SD card."));
+    m_sd_card_sync_result = ok ? 1 : 0;
+    Common::ENet::WakeupThread(m_client);
+  });
+}
+
+void NetPlayClient::OnSDCardChunkData(sf::Packet& packet)
+{
+  const std::optional<SDCard::ChunkData> chunk = SDCard::ReadChunkData(packet);
+  if (!chunk)
+  {
+    WARN_LOG_FMT(NETPLAY, "SD card: malformed chunk from the host");
+    return;
+  }
+  std::shared_ptr<SDCard::SessionCard> card;
+  {
+    std::lock_guard lock(m_sd_card_mutex);
+    card = m_active_sd_card ? m_active_sd_card : m_pending_sd_card;
+  }
+  if (card)
+    card->Deliver(*chunk);
+}
+
+// called from ---NETPLAY--- thread (or the destructor)
+void NetPlayClient::StopSDCardSync()
+{
+  m_sd_card_sync_cancel = true;
+  {
+    // A prefetch waiting for chunks gives up at once.
+    std::lock_guard lock(m_sd_card_mutex);
+    if (m_pending_sd_card)
+      m_pending_sd_card->Detach();
+  }
+  if (m_sd_card_sync_thread.joinable())
+    m_sd_card_sync_thread.join();
+  m_sd_card_sync_result = -1;
+
+  std::lock_guard lock(m_sd_card_mutex);
+  if (m_pending_sd_card)
+    m_pending_sd_card->Detach();
+  m_pending_sd_card.reset();
+  // The running game's card (if any) is detached by StopGame; a new sync only starts after it.
+  if (m_sd_card_remote && !m_active_sd_card)
+  {
+    m_sd_card_remote->Disconnect();
+    m_sd_card_remote.reset();
+  }
+}
+
+std::shared_ptr<SDCard::SessionCard> NetPlayClient::GetSDCardSession() const
+{
+  std::lock_guard lock(m_sd_card_mutex);
+  return m_active_sd_card ? m_active_sd_card : m_pending_sd_card;
+}
+
+std::shared_ptr<SDCard::SessionCard> NetPlayClient::MakeSDCardSession()
+{
+  const std::string path = File::GetUserPath(F_WIISDCARDIMAGE_IDX);
+  // Only the host keeps the session's writes, and only with "Load and Write Host's Save Data".
+  const bool keep = m_local_player->IsHost() && m_net_settings.savedata_load &&
+                    m_net_settings.savedata_write;
+
+  // The host's server built a manifest of this card for its guests (StartSDCardSync).
+  const std::shared_ptr<const SDCard::Manifest> host_manifest =
+      m_local_player->IsHost() ? TakeHostSDCardManifest() : nullptr;
+
+  std::lock_guard lock(m_sd_card_mutex);
+  if (m_active_sd_card)
+    m_active_sd_card->Detach();
+
+  std::shared_ptr<SDCard::SessionCard> card;
+  if (host_manifest)
+  {
+    card = SDCard::SessionCard::CreateHostCard(path, host_manifest, keep);
+  }
+  else if (!m_local_player->IsHost() && m_pending_sd_card)
+  {
+    card = std::move(m_pending_sd_card);
+    card->StartBackgroundFetch();
+  }
+  else
+  {
+    card = SDCard::SessionCard::CreateOwnCard(path, keep);
+  }
+  m_active_sd_card = card;
+
+  const char* card_name = "this player's own card";
+  if (card->GetMode() == SDCard::SessionCard::Mode::HostCard)
+    card_name = "the host's card (this machine's)";
+  else if (card->GetMode() == SDCard::SessionCard::Mode::GuestCard)
+    card_name = "the host's card";
+  INFO_LOG_FMT(NETPLAY, "SD card: this game plays on {}; its writes are {}", card_name,
+               keep ? "kept" : "thrown away");
+  return card;
+}
+
+// called from ---CPU--- thread
+void NetPlayClient::KeepGekkoAliveWhileStalled()
+{
+  if (!m_use_gekko_netplay || !m_gekko_session)
+    return;
+  std::lock_guard lock(m_gekko_poll_mutex);
+  gekko_network_poll(m_gekko_session);
+}
+
 void NetPlayClient::OnSyncCodes(sf::Packet& packet)
 {
   // Receive Data Packet
@@ -2594,6 +2823,8 @@ void NetPlayClient::OnSyncCodesNotify()
   // Set both codes as unsynced
   m_sync_gecko_codes_complete = false;
   m_sync_ar_codes_complete = false;
+  m_synced_code_names.clear();
+  m_synced_ar_code_names.clear();
 }
 
 void NetPlayClient::OnSyncCodesNotifyGecko(sf::Packet& packet)
@@ -2651,6 +2882,8 @@ void NetPlayClient::OnSyncCodesDataGecko(sf::Packet& packet)
       SyncCodeResponse(true);
     }
   }
+
+  m_synced_code_names = ReadCodeNames(packet);
 
   // Add gcode containing all codes to Gecko Code vector
   synced_codes.push_back(std::move(gcode));
@@ -2717,6 +2950,9 @@ void NetPlayClient::OnSyncCodesDataAR(sf::Packet& packet)
       SyncCodeResponse(true);
     }
   }
+
+  for (std::string& name : ReadCodeNames(packet))
+    m_synced_ar_code_names.push_back(std::move(name));
 
   // Add arcode containing all codes to AR Code vector
   synced_codes.push_back(std::move(arcode));
@@ -2888,6 +3124,9 @@ void NetPlayClient::ThreadFunc()
       m_async_queue.Pop();
     }
     FlushGekkoSendQueue();
+
+    if (const int sd_card_result = m_sd_card_sync_result.exchange(-1); sd_card_result != -1)
+      SyncSaveDataResponse(sd_card_result == 1);
 
     if (net > 0)
     {
@@ -3094,6 +3333,18 @@ bool NetPlayClient::StartGame(const std::string& path)
                                         File::DeleteDirRecursively(redirect_path);
                                     });
 
+  boot_session_data->SetSDCardSession(MakeSDCardSession());
+
+  // What the host's codes are meant to do, as the host named them.
+  if (!m_local_player->IsHost() && m_net_settings.sync_codes && m_net_settings.enable_cheats)
+  {
+    if (const std::vector<std::string> names = SyncedCodeNames(); !names.empty())
+    {
+      OSD::AddMessage(fmt::format("Host's codes: {}", DescribeCodeNames(names)), 15000,
+                      OSD::Color::CYAN);
+    }
+  }
+
   m_net_settings.local_player_id = m_local_player->pid;
   boot_session_data->SetNetplaySettings(std::make_unique<NetPlay::NetSettings>(m_net_settings));
 
@@ -3126,6 +3377,13 @@ void NetPlayClient::SyncSaveDataResponse(const bool success)
   }
 }
 
+std::vector<std::string> NetPlayClient::SyncedCodeNames() const
+{
+  std::vector<std::string> names = m_synced_code_names;
+  names.insert(names.end(), m_synced_ar_code_names.begin(), m_synced_ar_code_names.end());
+  return names;
+}
+
 void NetPlayClient::SyncCodeResponse(const bool success)
 {
   // If something failed, immediately report back that code sync failed
@@ -3145,6 +3403,13 @@ void NetPlayClient::SyncCodeResponse(const bool success)
   if (m_sync_gecko_codes_complete && m_sync_ar_codes_complete)
   {
     m_dialog->AppendChat(Common::GetStringT("Codes received!"));
+    const std::vector<std::string> names = SyncedCodeNames();
+    if (!names.empty())
+    {
+      m_dialog->AppendChat(
+          Common::FmtFormatT("The host's codes (as the host named them): {0}",
+                             DescribeCodeNames(names)));
+    }
 
     sf::Packet response_packet;
     response_packet << MessageID::SyncCodes;
@@ -3661,6 +3926,14 @@ bool NetPlayClient::StopGame()
   // GekkoNet's memory and writes it at the end of the frame. Destroying the session here crashed
   // the stopping peer with an access violation (every time a dropped peer ended the game).
 
+  // A read of the SD card waiting for the host's chunks gives up, so the game can stop.
+  {
+    std::lock_guard lock(m_sd_card_mutex);
+    if (m_active_sd_card)
+      m_active_sd_card->Detach();
+    m_active_sd_card.reset();
+  }
+
   NetPlay_Disable();
 
   // stop game
@@ -4059,6 +4332,23 @@ std::string GetPlayerMappingString(PlayerId pid, const PadMappingArray& pad_map,
 bool IsNetPlayRunning()
 {
   return netplay_client != nullptr;
+}
+
+// The host's server and its own client live in the same process, but the client is only
+// registered (netplay_client) once the game runs: the manifest waits here until the boot.
+static std::mutex s_host_sd_manifest_mutex;
+static std::shared_ptr<const SDCard::Manifest> s_host_sd_manifest;
+
+void SetHostSDCardManifest(std::shared_ptr<const SDCard::Manifest> manifest)
+{
+  std::lock_guard lk(s_host_sd_manifest_mutex);
+  s_host_sd_manifest = std::move(manifest);
+}
+
+static std::shared_ptr<const SDCard::Manifest> TakeHostSDCardManifest()
+{
+  std::lock_guard lk(s_host_sd_manifest_mutex);
+  return std::move(s_host_sd_manifest);
 }
 
 void SetSIPollBatching(bool state)
