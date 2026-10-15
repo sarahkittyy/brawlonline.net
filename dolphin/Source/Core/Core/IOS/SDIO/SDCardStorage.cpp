@@ -10,7 +10,12 @@ namespace IOS::HLE
 {
 SDCardFileStorage::SDCardFileStorage(const std::string& path)
 {
-  m_file.Open(path, "r+b");
+  // Shared: the launcher's playback Dolphin (replays, spectating) boots the same card as a Play
+  // Dolphin that may be running, and the launcher reads it back before each launch. On Windows the
+  // default (_tfopen_s) let no other process open the file while a game ran, so spectating while
+  // in a game or a queue started nothing (bug report #17, 2026-10-15). Writes stay gated by
+  // [Core] WiiSDCardAllowWrites, which the playback Dolphin turns off.
+  m_file.Open(path, "r+b", File::SharedAccess::ReadWrite);
 }
 
 bool SDCardFileStorage::IsOpen() const

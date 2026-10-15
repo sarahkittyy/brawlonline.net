@@ -39,7 +39,7 @@ import {
   netplaySaveStore,
   PPLUS_RELEASE,
 } from "./install/pplus_release";
-import { installPluginOnSdCard, loadPlugin } from "./install/sd_card";
+import { installPluginOnSdCard, loadPlugin, SdCardInUseError } from "./install/sd_card";
 import { DolphinInstance, MacOsRosettaRequiredError, PlaybackDolphinInstance } from "./instance";
 import type { ModsRoomArg } from "./mods/mods_args";
 import { buildModsDolphinArgs } from "./mods/mods_args";
@@ -272,8 +272,10 @@ export class DolphinManager {
       await this._ensureBrawlSave(playbackInstallation, storeDir);
       await playbackInstallation.addGamePath(path.dirname(isoPath));
       await playbackInstallation.setDefaultIso(isoPath);
+      // A Play Dolphin (a game, a queue, a room) may have the card open: spectating then shares it.
+      const inUse = this.netplayDolphinInstance != null || this.playbackDolphinInstances.size > 0;
       const sdCardImage = await this._withProgress(DolphinLaunchType.PLAYBACK, "prepareSdCard", (onProgress) =>
-        this._installOnlinePlugin(netplayInstallation, true, onProgress),
+        this._installOnlinePlugin(netplayInstallation, true, inUse, onProgress),
       );
       const params = buildPlaybackDolphinArgs({
         userArgs: playbackInstallation.userArgs(),
@@ -369,8 +371,10 @@ export class DolphinManager {
       await netplayInstallation.setDefaultIso(isoPath);
       bootFile = netplayInstallation.netplayLauncherDol;
     }
+    // A playback Dolphin (a replay, a spectated game) may have the card open.
+    const inUse = this.playbackDolphinInstances.size > 0;
     const sdCardImage = await this._withProgress(DolphinLaunchType.NETPLAY, "prepareSdCard", (onProgress) =>
-      this._installOnlinePlugin(netplayInstallation, launchGameOnPlay, onProgress),
+      this._installOnlinePlugin(netplayInstallation, launchGameOnPlay, inUse, onProgress),
     );
     const params = buildNetplayDolphinArgs({
       userArgs: netplayInstallation.userArgs(),
@@ -879,11 +883,13 @@ export class DolphinManager {
    * Puts our game plugin on a launcher-managed copy of the user's P+ SD card
    * (`<userData>/netplay/pponline-sd/sd.raw`) and returns its path for Dolphin. The user's
    * card (`<User>/Wii/sd.raw`) and the User template are never written. Without a card,
-   * nothing is installed unless Play boots the game (`required`), which then fails.
+   * nothing is installed unless Play boots the game (`required`), which then fails. While another
+   * of our Dolphins runs (`inUse`), the copy it booted is shared as it is and never written.
    */
   private async _installOnlinePlugin(
     installation: LocalDolphinInstallation,
     required: boolean,
+    inUse: boolean,
     onProgress?: (current: number, total: number) => void,
   ): Promise<string | null> {
     const sourceImage = installation.sdCardImage;
@@ -901,11 +907,16 @@ export class DolphinManager {
         protectedPaths: template ? [template] : [],
         log: (message) => log.info(message),
         onProgress,
+        inUse,
       });
       log.info(`Online plugin ${plugin.sha256.slice(0, 12)} on ${result.image}: ${result.action}`);
       return result.image;
     } catch (err) {
       log.error(err);
+      if (err instanceof SdCardInUseError) {
+        // The launcher updated (a new plugin) or the P+ card changed while the other Dolphin ran.
+        throw new Error("The game's SD card needs an update. Close the other Dolphin window, then try again.");
+      }
       const code = (err as NodeJS.ErrnoException | undefined)?.code;
       if (code === "EBUSY" || code === "EPERM") {
         // Windows: a Dolphin started before a launcher update still has the card open
