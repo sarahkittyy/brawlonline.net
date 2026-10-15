@@ -644,8 +644,12 @@ bool Begin(Core::System& system, const BeginInfo& info)
         }
         if (out.stream)
           Online::Spectate::BeginGame(game);
-        Put(out, CHUNK_INFO, 0, Bytes(info_json), "cannot write the replay header");
-        Put(out, CHUNK_SETP, FLAG_CRITICAL, Bytes(setup_json), "cannot write the replay header");
+        // Deflated: spectators get nothing of a game before its headers, and the uploader sends
+        // one small packet a round trip (raw, they were 8.5 KB, 36 round trips; deflated 1.7 KB).
+        // Every reader inflates any chunk with FLAG_DEFLATE.
+        Put(out, CHUNK_INFO, FLAG_DEFLATE, Bytes(info_json), "cannot write the replay header");
+        Put(out, CHUNK_SETP, FLAG_DEFLATE | FLAG_CRITICAL, Bytes(setup_json),
+            "cannot write the replay header");
         if (out.save)
           Put(out, CHUNK_FTSP, 0, Bytes(spec_json), "cannot write the replay header");
         if (out.save && !out.failed)

@@ -84,6 +84,13 @@ std::optional<std::chrono::steady_clock::time_point> s_close_at;
 double s_close_controls = 0;
 bool s_close_cancelled = false;
 bool s_close_saved = false;  // the settings were saved for the close
+// Mirror: the game waiting for its first frames (its index; SIZE_MAX: none), since when, and
+// since when it is known to be cut without any.
+size_t s_wait_index = SIZE_MAX;
+std::chrono::steady_clock::time_point s_wait_since;
+std::optional<std::chrono::steady_clock::time_point> s_wait_cut_since;
+// Waiting this long for a game's first frames says why it may take a while.
+constexpr auto WAIT_EXPLAINED_AFTER = std::chrono::seconds(15);
 
 // The game is running with our plugin (GameBridge found its block). The launcher's playback
 // Dolphin starts the comm file follower before it boots, and boots P+'s launcher DOL, whose game
@@ -196,20 +203,65 @@ void ArmCurrent()
       f = ReadFile(path, ReadOptions{}, &why);
     if (!f || f->setup.empty() || f->pads.empty())
     {
+      const bool cut = s_index < s_request.cut.size() && s_request.cut[s_index];
       // A game cut before its first frames came: on to the next one, if it has come.
-      if (s_index < s_request.cut.size() && s_request.cut[s_index] &&
-          s_index + 1 < s_request.paths.size())
+      if (cut && s_index + 1 < s_request.paths.size())
       {
         ++s_index;
         ArmCurrent();
         return;
       }
       s_mirror_pending = true;
-      s_state = "loading";
-      // Retried every poll: the line stays while this waits and goes a second after (the upload
-      // holds a game's first 10 s, so a game picked at its start waits about that long).
-      OSD::AddTypedMessage(OSD::MessageType::SpectateWaiting, "Game found, waiting for data...", 1000,
-                           OSD::Color::CYAN);
+      const auto now = std::chrono::steady_clock::now();
+      if (s_wait_index != s_index)
+      {
+        s_wait_index = s_index;
+        s_wait_since = now;
+        s_wait_cut_since.reset();
+      }
+      // Retried every poll: the line stays while this waits and goes a second after.
+      const auto show = [](const std::string& text) {
+        OSD::AddTypedMessage(OSD::MessageType::SpectateWaiting, text, 1000, OSD::Color::CYAN);
+      };
+      if (!cut)
+      {
+        // The upload holds a game's first 10 s, so a game picked at its start waits about that
+        // long; longer, the players' uploads are paused for their game's sake.
+        s_state = "loading";
+        show(now - s_wait_since < WAIT_EXPLAINED_AFTER ?
+                 "Game found, waiting for data..." :
+                 "Waiting for data... The stream pauses while the players' connection is busy.");
+        return;
+      }
+      // Cut with nothing to show (production 2026-10-14: "Game found, waiting for data..." stayed
+      // 4 minutes on a room game whose upload was cut 30 s in): the set's next game, or the end
+      // of the stream as after a game that played (Auto play goes on, or Dolphin closes).
+      if (!s_wait_cut_since)
+        s_wait_cut_since = now;
+      if (!s_request.stream_over)
+      {
+        s_state = "between";
+        show("This game wasn't streamed. Waiting for the next game...");
+        return;
+      }
+      if (!s_request.close_on_end)
+      {
+        s_state = "ended";
+        show(s_request.banner.empty() ? std::string("This game wasn't streamed.") : s_request.banner);
+        return;
+      }
+      const auto left =
+          std::chrono::ceil<std::chrono::seconds>(*s_wait_cut_since + CLOSE_AFTER - now).count();
+      if (left <= 0)
+      {
+        // As MirrorAtEnd closes: what was set while watching is saved first.
+        if (s_state != "close")
+          Config::Save();
+        s_state = "close";
+        return;
+      }
+      s_state = "ended";
+      show(fmt::format("This game wasn't streamed. Closing in {} s", left));
       return;
     }
   }
@@ -491,6 +543,7 @@ void Loop()
           s_request = std::move(*r);
           s_index = 0;
           s_mirror_started = false;
+          s_wait_index = SIZE_MAX;
           s_error.clear();
           s_state = "loading";
           if (s_request.paths.empty())

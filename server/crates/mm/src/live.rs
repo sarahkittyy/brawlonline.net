@@ -81,11 +81,19 @@ pub struct LiveConfig {
     pub idle: Duration,
     /// An over stream stays readable this long.
     pub keep: Duration,
-    /// A primary that sent no frames this long, while a witness shows the game going on, is
+    /// A primary that sent nothing this long, while a witness shows the game going on, is
     /// replaced.
     pub stall: Duration,
     pub max_games_per_match: usize,
 }
+
+/// A game's uploader sends nothing during the game's first 10 s of running (Dolphin's
+/// `Online/Spectate.h` `baseline`): a primary without frames yet is stalled only once a witness
+/// is this far into the game and a stall more.
+const START_HOLD_FRAMES: u32 = 600;
+/// With nobody to take its game over, a stalled primary keeps it this many stalls before the game
+/// is cut.
+const LONE_STALLS: u32 = 6;
 
 impl Default for LiveConfig {
     fn default() -> Self {
@@ -284,7 +292,7 @@ struct Game {
     first_offer: Instant,
     decided: bool,
     primary: Option<u32>,
-    /// When the current primary got its role, or last sent frames.
+    /// When the current primary got its role, or last sent a chunk.
     progress: Instant,
     /// The game's index in its stream's store, once its first chunk is kept.
     ordinal: Option<usize>,
@@ -1032,6 +1040,10 @@ impl LiveBook {
         }
         // Kept from here on.
         game.bytes += bytes.len();
+        // Any chunk is progress: the headers come before the first frames, and a primary whose
+        // headers just arrived is not stalled (production 2026-10-14: 435 of 572 games were taken
+        // from their primary the moment its headers landed, 12-14 s in).
+        game.progress = now;
         if kind.is_header() {
             game.have.push(kind);
         }
@@ -1039,7 +1051,6 @@ impl LiveBook {
         if let Some((first, count, digest)) = frames {
             game.next_frame = Some(first + count);
             game.hashes.insert(first, digest);
-            game.progress = now;
             game.pending.retain(|(f, d)| {
                 if *f == first && *d != digest {
                     mismatch = Some(first);
@@ -1455,29 +1466,42 @@ impl LiveBook {
             self.decide(now, uid, out);
         }
         // A primary that went quiet while a witness shows the game going on.
+        let stall_frames = (self.cfg.stall.as_secs_f64() * 60.0) as u32;
         let stalled: Vec<(u32, [u8; 16], ConnId)> = self
             .games
             .values()
             .filter(|g| g.open() && now.duration_since(g.progress) >= self.cfg.stall)
             .filter(|g| match (g.witness_frame, g.next_frame) {
                 (Some(w), Some(n)) => w >= n,
-                (Some(_), None) => g.headers_done() || now.duration_since(g.progress) >= self.cfg.stall * 3,
+                (Some(w), None) => w >= START_HOLD_FRAMES + stall_frames,
                 _ => false,
             })
             .filter_map(|g| g.primary.map(|p| (p, g.uid)))
             .filter_map(|(p, uid)| self.slots.get(&p).map(|s| (p, uid, s.conn)))
             .collect();
         for (slot, uid, conn) in stalled {
-            if let Some(g) = self.games.get_mut(&uid) {
-                if let Some(o) = g.offerer_of_slot(slot) {
-                    o.standby = true;
-                    o.resumable = false;
-                    o.slot = None;
-                }
+            let Some(g) = self.games.get_mut(&uid) else { continue };
+            let Some(i) = g.offers.iter().position(|o| o.slot == Some(slot)) else { continue };
+            // With nobody to take over, the primary keeps the game a while: it may only be held
+            // up (its uploader waits out a queue on its uplink without pausing), and a cut ends
+            // the game for every spectator.
+            let other = g.offers.iter().enumerate().any(|(j, o)| j != i && !o.out && (!o.standby || o.resumable));
+            if !other && now.duration_since(g.progress) < self.cfg.stall * LONE_STALLS {
+                continue;
             }
+            let o = &mut g.offers[i];
+            o.standby = true;
+            o.resumable = false;
+            o.slot = None;
             self.slots.remove(&slot);
-            self.send_none(out, conn, &uid);
             self.takeover(now, uid, "primary stalled", out);
+            if self.games.get(&uid).is_some_and(|g| g.open() && g.primary.is_some()) {
+                // The stalled player's game sends digests again: they show whether the new
+                // primary keeps up, and a later takeover can hand the game back to it.
+                self.give_role(now, uid, i, Role::Witness, out);
+            } else {
+                self.send_none(out, conn, &uid);
+            }
         }
         // Streams: over between games or idle, then forgotten.
         let mut over = Vec::new();
@@ -1837,9 +1861,69 @@ mod tests {
         t.book.request(t.now, B, b, ahead, &mut out);
         assert!(t.advance(Duration::from_secs(2)).is_empty());
         let out = t.advance(Duration::from_secs(4));
-        assert_eq!(role(&out, A).unwrap()["role"], "none");
+        assert_eq!(role(&out, A).unwrap()["role"], "witness", "A stays a backup");
         assert_eq!(role(&out, B).unwrap()["role"], "primary");
         assert_eq!(role(&out, B).unwrap()["from"], 180);
+    }
+
+    /// The uploader holds a game's first 10 s, then sends its headers: their arrival is progress,
+    /// not a stall (production 2026-10-14: most games lost their primary 12-14 s in, the moment
+    /// its headers landed, and with it their backup).
+    #[test]
+    fn headers_after_the_start_hold_are_not_a_stall() {
+        let mut t = T::new(SpectateMode::On);
+        let (a, b) = (t.a, t.b);
+        t.offer(A, a, 1, 0);
+        let out = t.offer(B, b, 1, 0);
+        let slot_a = role(&out, A).unwrap()["slot"].as_u64().unwrap() as u32;
+        let slot_b = role(&out, B).unwrap()["slot"].as_u64().unwrap() as u32;
+        assert_eq!(role(&out, A).unwrap()["role"], "primary");
+        let digest = |t: &mut T, upto: u32| {
+            let frms = (0..=upto).step_by(60).map(|f| (f, [0; 8])).collect();
+            let mut out = vec![];
+            t.book.request(t.now, B, b, SpectateRequest::Digest { slot: slot_b, frms }, &mut out);
+        };
+        for s in 1..=12 {
+            digest(&mut t, s * 60);
+            assert!(role(&t.advance(Duration::from_secs(1)), B).is_none(), "{s} s: A is in its start hold");
+        }
+        let info = t.info(1);
+        t.send_chunk(A, slot_a, 0, &info);
+        t.send_chunk(A, slot_a, 1, &encode_chunk(b"SETP", b"{}", false));
+        digest(&mut t, 900);
+        let out = t.advance(Duration::from_secs(1));
+        assert!(role(&out, A).is_none() && role(&out, B).is_none(), "headers just came");
+        t.send_chunk(A, slot_a, 2, &encode_chunk(b"FRMS", &frms(0, 60, 1), true));
+        let out = t.advance(Duration::from_secs(3));
+        assert!(role(&out, A).is_none() && role(&out, B).is_none());
+    }
+
+    /// A primary alone (its witness stopped) keeps a stalled game for a while instead of it being
+    /// cut at once: it may only be waiting out a queue on its uplink.
+    #[test]
+    fn a_lone_stalled_primary_keeps_its_game_a_while() {
+        let mut t = T::new(SpectateMode::On);
+        let (a, b) = (t.a, t.b);
+        t.offer(A, a, 1, 0);
+        let out = t.offer(B, b, 1, 0);
+        let slot_a = role(&out, A).unwrap()["slot"].as_u64().unwrap() as u32;
+        let slot_b = role(&out, B).unwrap()["slot"].as_u64().unwrap() as u32;
+        let info = t.info(1);
+        t.send_chunk(A, slot_a, 0, &info);
+        t.send_chunk(A, slot_a, 1, &encode_chunk(b"SETP", b"{}", false));
+        t.send_chunk(A, slot_a, 2, &encode_chunk(b"FRMS", &frms(0, 60, 1), true));
+        let id = stream_id(&t);
+        let mut out = vec![];
+        t.book.request(t.now, B, b, SpectateRequest::Digest { slot: slot_b, frms: vec![(1200, [0; 8])] }, &mut out);
+        t.book.request(t.now, B, b, SpectateRequest::Stop { slot: slot_b, reason: "frame".into() }, &mut out);
+        let cut = |t: &T| read_all(&t.book.store, &id).iter().any(|l| matches!(l, LiveLine::Bad { .. }));
+        for _ in 0..28 {
+            assert!(role(&t.advance(Duration::from_secs(1)), A).is_none());
+            assert!(!cut(&t));
+        }
+        let out = t.advance(Duration::from_secs(2));
+        assert_eq!(role(&out, A).unwrap()["role"], "none");
+        assert!(cut(&t), "30 s without anything: spectators get what came");
     }
 
     #[test]
