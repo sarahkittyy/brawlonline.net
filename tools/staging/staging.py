@@ -48,6 +48,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import tarfile
 import time
 import urllib.request
 from pathlib import Path
@@ -497,6 +498,22 @@ def prepare_worktree(sha: str) -> None:
         junction(SRC / "toolchains", ROOT / "toolchains")
 
 
+# The rank badge PNGs are not in git (Layerlab's license, tools/rank-badges/fetch_badges.sh): a staging
+# build gets this checkout's copies, fetched (or placeholders) first if they are missing.
+RANK_BADGE_DIRS = ("launcher/src/renderer/components/rank_badge/images", "website/assets/ranks")
+
+
+def rank_badges_here(log: Path) -> None:
+    run([bash(), "tools/rank-badges/fetch_badges.sh"], cwd=ROOT, log=log)
+
+
+def copy_rank_badges(dest: Path, log: Path) -> None:
+    rank_badges_here(log)
+    for d in RANK_BADGE_DIRS:
+        shutil.rmtree(dest / d, ignore_errors=True)
+        shutil.copytree(ROOT / d, dest / d)
+
+
 def find_vcvars() -> Path:
     vswhere = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")) / \
         "Microsoft Visual Studio" / "Installer" / "vswhere.exe"
@@ -531,6 +548,7 @@ def win_build(args: argparse.Namespace) -> None:
     log.write_text(f"win build {args.ref} {sha}\n")
     below_normal_priority()
     prepare_worktree(sha)
+    copy_rank_badges(SRC, log)
     say(f"building {sha[:10]} ({git('log', '-1', '--format=%s', sha)[:70]})")
 
     # 1. The staging server, from the same commit. Windows locks a running .exe, so a running
@@ -747,6 +765,13 @@ def mac_build(args: argparse.Namespace) -> None:
         run([bash(), "./build.sh"], cwd=SRC / "game-code", log=log)
     run(["scp", "-q", "-i", key, "-o", "BatchMode=yes", str(plugin),
          f"{cfg['mac_user']}@{cfg['mac_host']}:brawl-staging/PPOnline.rel"], log=log)
+    rank_badges_here(log)
+    badges = STAGE / "rank-badges.tar"
+    with tarfile.open(badges, "w") as tar:
+        for d in RANK_BADGE_DIRS:
+            tar.add(ROOT / d, arcname=d)
+    run(["scp", "-q", "-i", key, "-o", "BatchMode=yes", str(badges),
+         f"{cfg['mac_user']}@{cfg['mac_host']}:brawl-staging/rank-badges.tar"], log=log)
     # 3. Dolphin and the launcher with CI's own scripts, ad-hoc signed (no identity, no notary).
     h = MAC_HOME
     script = f"""
@@ -755,6 +780,8 @@ cd {h}
 cd src
 git fetch -q origin staging
 git checkout -q --detach {sha}
+rm -rf launcher/src/renderer/components/rank_badge/images website/assets/ranks
+tar -xf {h}/rank-badges.tar
 export QT_DIR={cfg['mac_qt']} CI_CACHE={h}/cache JOBS=$(sysctl -n hw.ncpu)
 mkdir -p {h}/dolphin-bin
 printf '%s' {shlex.quote(CMAKE_SHIM)} > {h}/dolphin-bin/cmake && chmod +x {h}/dolphin-bin/cmake

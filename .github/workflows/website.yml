@@ -30,8 +30,16 @@ jobs:
         with:
           # Own folder in the runner's workspace, which all workflows of this repository share.
           path: web
-          sparse-checkout: website
+          sparse-checkout: |
+            website
+            tools/rank-badges
           persist-credentials: false
+
+      - name: Rank badges (not in git, tools/rank-badges/fetch_badges.sh)
+        working-directory: web
+        env:
+          RANK_BADGES_TOKEN: ${{ secrets.RANK_BADGES_TOKEN }}
+        run: bash tools/rank-badges/fetch_badges.sh
 
       - name: Stage
         run: |

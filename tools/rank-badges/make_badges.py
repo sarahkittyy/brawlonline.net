@@ -9,7 +9,8 @@
 # (pip install fonttools brotli). Writes <out>/256/<tier>-<division>.png with Roman numerals (the launcher's
 # large badge) and <out>/128/... with a bigger plaque and bars (small sizes: the launcher's rows and the
 # website). Copy 256 to launcher/src/renderer/components/rank_badge/images, 128 to .../images/small and
-# website/assets/ranks.
+# website/assets/ranks. Those folders are not in git (the pack's license): builds fetch them from
+# production, so a new set goes there too (docs/design/ranked-tiers.md §5.1, fetch_badges.sh).
 import sys, os
 from PIL import Image, ImageDraw, ImageFont, ImageFilter
 src, font_path, out = sys.argv[1:4]

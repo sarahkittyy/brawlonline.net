@@ -22,3 +22,8 @@ __pycache__/
 *.pyc
 .venv/
 /game-code/**/*.rel
+
+# Rank badges: Layerlab's emblems may ship in the launcher and the website but not be published as
+# files; tools/rank-badges/fetch_badges.sh puts them here at build time.
+/launcher/src/renderer/components/rank_badge/images/
+/website/assets/ranks/

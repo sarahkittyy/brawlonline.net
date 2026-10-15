@@ -130,6 +130,15 @@ Elo has no uncertainty of its own, so the server keeps one per player beside the
 - Storybook stories: `components/RankBadge` (Large, Small) and `pages/Home/RankedBox` (Narrow, Wide, Short, Leaderboard).
 - The website was checked against a mock leaderboard at 1600 × 900, 1180 × 560 and 1920 × 600, and on a 390 px phone.
 
+### 5.1 Where the art lives (not in git)
+
+Layerlab's license allows using and modifying the emblems in the project, but forbids redistributing the files, and this repository is public. Shipped inside the launcher and shown on the website is use in the product; a folder of PNGs in a public repository is the files themselves. So (the user, 2026-10-14):
+- **Not in git:** the badge folders (`rank_badge/images`, `website/assets/ranks`) are ignored. The commit that added them was dropped before it was pushed, so they are in no public history.
+- **Production keeps them:** `/var/lib/brawl-build-assets/rank-badges.tar.gz` on sarahvps2 (make_badges.py's output, laid out as in the repository), served at `https://brawlonline.net/build-assets/rank-badges` only with `Authorization: Bearer <token>`; anything else gets a 404, never cached. The token is in `/etc/nginx/snippets/brawl-online-build-assets-token.conf` (a regex map entry: a plain one overflows nginx's map hash) and in the repository secret `RANK_BADGES_TOKEN`.
+- **Builds fetch them:** `tools/rank-badges/fetch_badges.sh`, run by the client workflow's Linux, Windows and macOS jobs and the website workflow before they build. In CI a missing token fails the build, so a release never ships without the art. Without a token elsewhere (a fork, a fresh clone) it writes transparent placeholders, so everything still builds.
+- **Staging** copies this checkout's copies into its worktree (and to the Mac).
+- **New art:** run make_badges.py, copy the output into the badge folders, then tar `launcher/src/renderer/components/rank_badge/images` and `website/assets/ranks` into a new `rank-badges.tar.gz` on sarahvps2 (CI fetches only when its checkout lacks them, which is every run).
+
 ## 6. Server (built)
 
 - **Rules** in `common::ranked`: `RANK_FLOORS`, `Rank`, `held_rank` (§3), `rd_after`, `placed` and `sets_to_place` (§4), `TierState::after_set`, and `replay`, which folds `rating_events` in order. The two changes of one set use each other's RD from before the set. Unit-tested.
@@ -152,6 +161,3 @@ Elo has no uncertainty of its own, so the server keeps one per player beside the
 
 - Rank-up and rank-down animations, when there is a place players see them. An earlier draft is in git history.
 - A badge in match history beside each rating change, and the opponent's badge. Neither is asked for yet.
-- **License:** Layerlab's license allows use and modification in the project, but forbids redistributing the files.
-  - This repository is public on GitHub, so committing the PNGs (even edited) arguably makes them available for download.
-  - Before committing, decide: keep them out of git and fetch them at build time, or ask Layerlab.
