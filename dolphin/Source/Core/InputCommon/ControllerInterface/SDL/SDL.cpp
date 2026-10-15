@@ -3,15 +3,26 @@
 
 #include "InputCommon/ControllerInterface/SDL/SDL.h"
 
+#include <cwctype>
 #include <span>
+#include <string>
 #include <thread>
 #include <vector>
 
 #ifdef _WIN32
 #include <windows.h>
+
+#include <cfgmgr32.h>
+#include <initguid.h>
+// initguid.h must be included before usbiodef.h
+#include <usbiodef.h>
 #endif
 
 #include <SDL3/SDL.h>
+
+#ifdef _WIN32
+#include "Common/WindowsDevice.h"
+#endif
 
 #include "Common/Event.h"
 #include "Common/Logging/Log.h"
@@ -51,6 +62,30 @@ std::unique_ptr<ciface::InputBackend> CreateInputBackend(ControllerInterface* co
 {
   return std::make_unique<InputBackend>(controller_interface);
 }
+
+#ifdef _WIN32
+// Whether a Switch 2 controller (Pro Controller, Joy-Con 2, NSO GameCube controller) is plugged in
+// by USB, from the devices Windows' device manager has as present: nothing is asked of a device or
+// its hub, so a device that never answers cannot hold this.
+static bool IsSwitch2ControllerPluggedIn()
+{
+  GUID usb_device = GUID_DEVINTERFACE_USB_DEVICE;
+  for (const WCHAR* iface :
+       Common::GetDeviceInterfaceList(&usb_device, nullptr, CM_GET_DEVICE_INTERFACE_LIST_PRESENT))
+  {
+    std::wstring path = iface;
+    for (wchar_t& c : path)
+      c = std::towupper(c);
+    for (const wchar_t* ids : {L"VID_057E&PID_2066", L"VID_057E&PID_2067", L"VID_057E&PID_2068",
+                               L"VID_057E&PID_2069", L"VID_057E&PID_2073"})
+    {
+      if (path.contains(ids))
+        return true;
+    }
+  }
+  return false;
+}
+#endif
 
 static void EnableSDLLogging()
 {
@@ -162,13 +197,20 @@ InputBackend::InputBackend(ControllerInterface* controller_interface)
     Config::SetBase(Config::MAIN_SDL_HINT_JOYSTICK_HIDAPI_VERTICAL_JOY_CONS, "0");
 
 #ifdef _WIN32
-  // No libusb in SDL's HIDAPI, as in P+ 3.2's release (built without it): at SDL_Init it lists
-  // every USB device, asking each one's hub with blocking requests that have no timeout, and a
-  // device that never answers (an old Switch Pro Controller, staging 2026-10-11) holds SDL_Init,
-  // and the UI waiting on it below, forever. Devices are found through Windows' HID instead; only
-  // the ones SDL drives through libusb are lost (Switch 2 controllers, its GC adapter support).
-  if (Config::Get(Config::MAIN_SDL_HINT_HIDAPI_LIBUSB) == "")
-    Config::SetBase(Config::MAIN_SDL_HINT_HIDAPI_LIBUSB, "0");
+  // libusb in SDL's HIDAPI only with a Switch 2 controller plugged in ("auto"). At SDL_Init it
+  // lists every USB device, asking each one's hub with blocking requests that have no timeout, and
+  // a device that never answers (an old Switch Pro Controller, staging 2026-10-11) holds SDL_Init,
+  // and the UI waiting on it below, forever; without it devices are found through Windows' HID, as
+  // in P+ 3.2's release (built without it). But SDL's Switch 2 driver needs it: it starts a USB
+  // controller and reads its stick calibration over libusb, and without that driver the controller
+  // reads through Windows' HID uncalibrated, its sticks off center and reaching less far (a Switch 2
+  // Pro Controller felt like a large dead zone, 2026-10-15; fine in REX's Dolphin). "0" was this
+  // default from 2026-10-11 and becomes "auto"; "false" keeps libusb off, "1" always on.
+  if (const std::string libusb = Config::Get(Config::MAIN_SDL_HINT_HIDAPI_LIBUSB);
+      libusb == "" || libusb == "0")
+  {
+    Config::SetBase(Config::MAIN_SDL_HINT_HIDAPI_LIBUSB, "auto");
+  }
 #endif
 
   // Disable SDL's GC Adapter handling when we want to handle it ourselves.
@@ -197,6 +239,18 @@ InputBackend::InputBackend(ControllerInterface* controller_interface)
     if (value)
       SDL_SetHint(location.key.c_str(), value->c_str());
   }
+
+#ifdef _WIN32
+  if (Config::Get(Config::MAIN_SDL_HINT_HIDAPI_LIBUSB) == "auto")
+  {
+    // Decided once: SDL reads the hint at SDL_Init only, so a Switch 2 controller plugged in later
+    // reads through Windows' HID until Dolphin is started again.
+    const bool switch2 = IsSwitch2ControllerPluggedIn();
+    NOTICE_LOG_FMT(CONTROLLERINTERFACE, "SDL libusb {}: {}", switch2 ? "on" : "off",
+                   switch2 ? "a Switch 2 controller is plugged in" : "no Switch 2 controller");
+    SDL_SetHint(SDL_HINT_HIDAPI_LIBUSB, switch2 ? "1" : "0");
+  }
+#endif
 
   m_hotplug_thread = std::thread([this] {
     Common::SetCurrentThreadName("SDL Hotplug Thread");
