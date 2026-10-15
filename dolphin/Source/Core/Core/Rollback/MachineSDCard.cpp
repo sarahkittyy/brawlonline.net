@@ -8,9 +8,11 @@
 #include <cstring>
 #include <filesystem>
 #include <system_error>
+#include <thread>
 
 #include <fmt/format.h>
 #include <lzo/lzo1x.h>
+#include <monocypher.h>
 #include <xxhash.h>
 
 #include "Common/CommonPaths.h"
@@ -42,7 +44,8 @@ constexpr size_t MAX_OUTSTANDING_REQUESTS = 128;
 constexpr int MAX_BAD_DELIVERIES = 3;
 
 constexpr u32 HASH_CACHE_MAGIC = 0x4453534D;  // "MSSD"
-constexpr u32 HASH_CACHE_VERSION = 1;
+// 2: BLAKE2b chunk hashes (1 was XXH3-128).
+constexpr u32 HASH_CACHE_VERSION = 2;
 
 u64 NowMs()
 {
@@ -121,6 +124,11 @@ struct FatVolume
   u64 data_offset = 0;   // bytes, in the image: cluster 2
   u64 cluster_count = 0;
   bool fat32 = false;
+  u32 root_cluster = 0;      // FAT32: the root directory's first cluster
+  u64 root_dir_offset = 0;   // FAT16: the root directory's place and length, in the image
+  u64 root_dir_bytes = 0;
+
+  u64 ClusterBytes() const { return bytes_per_sector * sectors_per_cluster; }
 };
 
 // A FAT16/FAT32 boot sector at `volume_offset`, checked against the image's size.
@@ -166,6 +174,9 @@ std::optional<FatVolume> ParseBootSector(const std::array<u8, 512>& bs, u64 volu
   v.fat_offset = volume_offset + reserved * bps;
   v.fat_bytes = fat_sectors * bps;
   v.data_offset = volume_offset + data_start * bps;
+  v.root_cluster = v.fat32 ? LE32(&bs[0x2C]) : 0;
+  v.root_dir_offset = volume_offset + (reserved + num_fats * fat_sectors) * bps;
+  v.root_dir_bytes = root_dir_sectors * bps;
 
   const u64 entry_bytes = v.fat32 ? 4 : 2;
   if ((v.cluster_count + 2) * entry_bytes > v.fat_bytes)
@@ -272,17 +283,30 @@ u32 ChunkCountFor(u64 size)
 
 Hash HashChunk(std::span<const u8> data)
 {
-  const XXH128_hash_t h = XXH3_128bits(data.data(), data.size());
   Hash out;
-  for (int i = 0; i < 8; ++i)
-  {
-    out[i] = static_cast<u8>(h.low64 >> (8 * i));
-    out[8 + i] = static_cast<u8>(h.high64 >> (8 * i));
-  }
+  crypto_blake2b(out.data(), out.size(), data.data(), data.size());
   return out;
 }
 
-std::optional<std::vector<bool>> FindFreeChunks(File::IOFile& image, u64 image_size)
+namespace
+{
+// A FAT volume at the image's start or in its MBR's first FAT partition, with its first FAT.
+struct OpenedFat
+{
+  FatVolume volume;
+  std::vector<u8> fat;
+
+  // The FAT entry of cluster number `n` (2 is the data area's first).
+  u32 Entry(u64 n) const
+  {
+    if (volume.fat32)
+      return LE32(&fat[n * 4]) & 0x0FFFFFFF;
+    return LE16(&fat[n * 2]);
+  }
+  bool EndOfChain(u32 e) const { return volume.fat32 ? e >= 0x0FFFFFF8 : e >= 0xFFF8; }
+};
+
+std::optional<OpenedFat> OpenFat(File::IOFile& image, u64 image_size)
 {
   std::array<u8, 512> sector{};
   if (image_size < sector.size() || !image.Seek(0, File::SeekOrigin::Begin) ||
@@ -320,20 +344,24 @@ std::optional<std::vector<bool>> FindFreeChunks(File::IOFile& image, u64 image_s
   // Read the first FAT (at most 256 MiB: a 32 GiB card with 512-byte clusters).
   if (volume->fat_bytes > (256ull << 20))
     return std::nullopt;
-  std::vector<u8> fat(static_cast<size_t>(volume->fat_bytes));
+  OpenedFat opened{*volume, std::vector<u8>(static_cast<size_t>(volume->fat_bytes))};
   if (!image.Seek(static_cast<s64>(volume->fat_offset), File::SeekOrigin::Begin) ||
-      !image.ReadBytes(fat.data(), fat.size()))
+      !image.ReadBytes(opened.fat.data(), opened.fat.size()))
   {
     return std::nullopt;
   }
+  return opened;
+}
+}  // namespace
 
-  const u64 cluster_bytes = volume->bytes_per_sector * volume->sectors_per_cluster;
-  auto cluster_free = [&](u64 cluster) {
-    const u64 entry = cluster + 2;
-    if (volume->fat32)
-      return (LE32(&fat[entry * 4]) & 0x0FFFFFFF) == 0;
-    return LE16(&fat[entry * 2]) == 0;
-  };
+std::optional<std::vector<bool>> FindFreeChunks(File::IOFile& image, u64 image_size)
+{
+  const std::optional<OpenedFat> opened = OpenFat(image, image_size);
+  if (!opened)
+    return std::nullopt;
+  const FatVolume* volume = &opened->volume;
+  const u64 cluster_bytes = volume->ClusterBytes();
+  auto cluster_free = [&](u64 cluster) { return opened->Entry(cluster + 2) == 0; };
 
   const u32 count = ChunkCountFor(image_size);
   std::vector<bool> free(count, false);
@@ -354,7 +382,290 @@ std::optional<std::vector<bool>> FindFreeChunks(File::IOFile& image, u64 image_s
   return free;
 }
 
-std::optional<ImageHashes> HashImage(const std::string& path, const std::atomic<bool>* cancel)
+namespace
+{
+// Appends chunk `c` to `runs` (chunks come in ascending order within a file, mostly).
+void AddChunk(std::vector<std::pair<u32, u32>>* runs, u32 c)
+{
+  if (!runs->empty())
+  {
+    auto& [first, count] = runs->back();
+    if (c >= first && c < first + count)
+      return;
+    if (c == first + count)
+    {
+      ++count;
+      return;
+    }
+  }
+  runs->emplace_back(c, 1);
+}
+
+bool ValidName(std::string_view name)
+{
+  if (name.empty() || name == "." || name == "..")
+    return false;
+  return std::ranges::none_of(name, [](char ch) {
+    const auto u = static_cast<unsigned char>(ch);
+    return u < 0x20 || ch == '/' || ch == '\\';
+  });
+}
+}  // namespace
+
+std::optional<std::vector<CardFile>> ListCardFiles(File::IOFile& image, u64 image_size)
+{
+  const std::optional<OpenedFat> opened = OpenFat(image, image_size);
+  if (!opened)
+    return std::nullopt;
+  const FatVolume& v = opened->volume;
+  const u64 cluster_bytes = v.ClusterBytes();
+  const u64 last_cluster = v.cluster_count + 1;
+  // A chain of at most `limit` clusters: a loop or a crafted chain ends there.
+  auto chain = [&](u32 first, u64 limit, std::vector<u32>* out) {
+    out->clear();
+    u32 c = first;
+    while (c >= 2 && c <= last_cluster && out->size() < limit)
+    {
+      out->push_back(c);
+      const u32 e = opened->Entry(c);
+      if (opened->EndOfChain(e))
+        break;
+      c = e;
+    }
+  };
+  auto cluster_offset = [&](u32 c) { return v.data_offset + u64{c - 2} * cluster_bytes; };
+
+  struct Dir
+  {
+    u32 cluster;  // 0: FAT16's fixed root directory
+    std::string path;
+    int depth;
+  };
+  std::vector<Dir> pending{{v.fat32 ? v.root_cluster : 0, "", 0}};
+  std::vector<CardFile> files;
+  std::vector<u32> clusters;
+  std::vector<u8> dir;
+  u32 dirs = 0;
+  // A directory holds at most 65536 entries (2 MiB).
+  const u64 max_dir_clusters = (2ull << 20) / cluster_bytes + 1;
+  while (!pending.empty() && files.size() < MAX_CARD_FILES && ++dirs <= 65536)
+  {
+    const Dir d = std::move(pending.back());
+    pending.pop_back();
+    dir.clear();
+    if (d.cluster == 0)
+    {
+      if (v.fat32 || v.root_dir_bytes == 0 || v.root_dir_bytes > (2ull << 20))
+        continue;
+      dir.resize(static_cast<size_t>(v.root_dir_bytes));
+      if (!image.Seek(static_cast<s64>(v.root_dir_offset), File::SeekOrigin::Begin) ||
+          !image.ReadBytes(dir.data(), dir.size()))
+      {
+        continue;
+      }
+    }
+    else
+    {
+      chain(d.cluster, max_dir_clusters, &clusters);
+      dir.resize(clusters.size() * static_cast<size_t>(cluster_bytes));
+      bool ok = true;
+      for (size_t i = 0; i < clusters.size() && ok; ++i)
+      {
+        ok = image.Seek(static_cast<s64>(cluster_offset(clusters[i])), File::SeekOrigin::Begin) &&
+             image.ReadBytes(dir.data() + i * cluster_bytes, cluster_bytes);
+      }
+      if (!ok)
+        continue;
+    }
+
+    std::u16string long_name;
+    for (size_t pos = 0; pos + 32 <= dir.size(); pos += 32)
+    {
+      const u8* e = &dir[pos];
+      if (e[0] == 0x00)
+        break;
+      if (e[0] == 0xE5)
+      {
+        long_name.clear();
+        continue;
+      }
+      const u8 attr = e[11];
+      if (attr == 0x0F)
+      {
+        // A long name's piece: 13 UTF-16 characters; the one marked 0x40 holds the name's end.
+        std::u16string part;
+        bool ended = false;
+        for (const auto& [offset, n] : {std::pair{1, 5}, std::pair{14, 6}, std::pair{28, 2}})
+        {
+          for (int i = 0; i < n && !ended; ++i)
+          {
+            const char16_t ch = static_cast<char16_t>(LE16(e + offset + 2 * i));
+            if (ch == 0x0000 || ch == 0xFFFF)
+              ended = true;
+            else
+              part.push_back(ch);
+          }
+        }
+        long_name = (e[0] & 0x40) ? part : part + long_name;
+        continue;
+      }
+      if (attr & 0x08)
+      {
+        long_name.clear();
+        continue;
+      }
+      std::string name;
+      if (!long_name.empty())
+      {
+        name = UTF16ToUTF8(long_name);
+      }
+      else
+      {
+        std::string base(reinterpret_cast<const char*>(e), 8);
+        std::string ext(reinterpret_cast<const char*>(e + 8), 3);
+        if (static_cast<u8>(base[0]) == 0x05)
+          base[0] = static_cast<char>(0xE5);
+        base.erase(base.find_last_not_of(' ') + 1);
+        ext.erase(ext.find_last_not_of(' ') + 1);
+        name = ext.empty() ? base : base + "." + ext;
+      }
+      long_name.clear();
+      if (!ValidName(name))
+        continue;
+      const std::string path = d.path.empty() ? name : d.path + "/" + name;
+      if (path.size() > MAX_CARD_PATH)
+        continue;
+      const u32 first = (v.fat32 ? (u32{LE16(e + 20)} << 16) : 0) | LE16(e + 26);
+      if (attr & 0x10)
+      {
+        if (d.depth < 32 && first >= 2)
+          pending.push_back({first, path, d.depth + 1});
+        continue;
+      }
+      CardFile file;
+      file.path = path;
+      file.size = LE32(e + 28);
+      chain(first, file.size / cluster_bytes + 1, &clusters);
+      for (const u32 c : clusters)
+      {
+        const u64 start = cluster_offset(c);
+        for (u64 chunk = start / CHUNK_SIZE; chunk <= (start + cluster_bytes - 1) / CHUNK_SIZE;
+             ++chunk)
+        {
+          AddChunk(&file.runs, static_cast<u32>(chunk));
+        }
+      }
+      files.push_back(std::move(file));
+      if (files.size() >= MAX_CARD_FILES)
+        break;
+    }
+  }
+  return files;
+}
+
+void WriteFileList(const std::vector<CardFile>& files, sf::Packet& packet)
+{
+  std::vector<u8> raw;
+  auto put32 = [&](u32 x) {
+    for (int i = 0; i < 4; ++i)
+      raw.push_back(static_cast<u8>(x >> (8 * i)));
+  };
+  put32(static_cast<u32>(files.size()));
+  for (const CardFile& f : files)
+  {
+    put32(static_cast<u32>(f.path.size()));
+    raw.insert(raw.end(), f.path.begin(), f.path.end());
+    put32(static_cast<u32>(f.size));
+    put32(static_cast<u32>(f.size >> 32));
+    put32(static_cast<u32>(f.runs.size()));
+    for (const auto& [first, count] : f.runs)
+    {
+      put32(first);
+      put32(count);
+    }
+  }
+  NetPlay::CompressBufferIntoPacket(raw, packet);
+}
+
+std::optional<std::vector<CardFile>> ReadFileList(sf::Packet& packet, u32 chunk_count)
+{
+  // Generous for a 64 GiB card's names and runs; ReadCompressed refuses more.
+  const std::optional<std::vector<u8>> raw = ReadCompressed(packet, 256ull << 20);
+  if (!raw)
+    return std::nullopt;
+  size_t pos = 0;
+  auto get32 = [&](u32* x) {
+    if (raw->size() - pos < 4)
+      return false;
+    *x = LE32(raw->data() + pos);
+    pos += 4;
+    return true;
+  };
+  u32 count;
+  if (!get32(&count) || count > MAX_CARD_FILES)
+    return std::nullopt;
+  std::vector<CardFile> files(count);
+  for (CardFile& f : files)
+  {
+    u32 len, lo, hi, runs;
+    if (!get32(&len) || len == 0 || len > MAX_CARD_PATH || raw->size() - pos < len)
+      return std::nullopt;
+    f.path.assign(reinterpret_cast<const char*>(raw->data() + pos), len);
+    pos += len;
+    if (std::ranges::any_of(f.path, [](char ch) { return static_cast<unsigned char>(ch) < 0x20; }))
+      return std::nullopt;
+    if (!get32(&lo) || !get32(&hi) || !get32(&runs) || runs > chunk_count ||
+        (raw->size() - pos) / 8 < runs)
+    {
+      return std::nullopt;
+    }
+    f.size = (u64{hi} << 32) | lo;
+    f.runs.resize(runs);
+    for (auto& [first, n] : f.runs)
+    {
+      get32(&first);
+      get32(&n);
+      if (n == 0 || first >= chunk_count || n > chunk_count - first)
+        return std::nullopt;
+    }
+  }
+  if (pos != raw->size())
+    return std::nullopt;
+  return files;
+}
+
+std::vector<const CardFile*> FilesTouching(const std::vector<CardFile>& files,
+                                           std::span<const u32> chunks)
+{
+  std::vector<const CardFile*> out;
+  for (const CardFile& f : files)
+  {
+    const bool touches = std::ranges::any_of(f.runs, [&](const auto& run) {
+      const auto it = std::ranges::lower_bound(chunks, run.first);
+      return it != chunks.end() && *it < run.first + run.second;
+    });
+    if (touches)
+      out.push_back(&f);
+  }
+  std::ranges::stable_sort(out,
+                           [](const CardFile* a, const CardFile* b) { return a->size > b->size; });
+  return out;
+}
+
+std::optional<ImageHashes> CachedImageHashes(const std::string& path)
+{
+  File::IOFile file(path, "rb");
+  if (!file)
+    return std::nullopt;
+  const u64 size = file.GetSize();
+  const std::optional<s64> mtime = ModificationTime(path);
+  if (size == 0 || size > MAX_CARD_SIZE || !mtime)
+    return std::nullopt;
+  return LoadHashCache(path, size, *mtime);
+}
+
+std::optional<ImageHashes> HashImage(const std::string& path, const std::atomic<bool>* cancel,
+                                     const HashProgress& progress)
 {
   File::IOFile file(path, "rb");
   if (!file)
@@ -375,8 +686,11 @@ std::optional<ImageHashes> HashImage(const std::string& path, const std::atomic<
   result.size = size;
   result.hashes.resize(count);
   result.zero.resize(count);
+  std::vector<u8> zero(count);
 
-  constexpr u32 CHUNKS_PER_READ = 64;
+  // BLAKE2b takes about a second a gigabyte on one core: a read's chunks are hashed on several.
+  constexpr u32 CHUNKS_PER_READ = 512;
+  const u32 workers = std::clamp(std::thread::hardware_concurrency(), 1u, 8u);
   std::vector<u8> buffer(CHUNKS_PER_READ * CHUNK_SIZE);
   for (u32 c = 0; c < count; c += CHUNKS_PER_READ)
   {
@@ -386,14 +700,28 @@ std::optional<ImageHashes> HashImage(const std::string& path, const std::atomic<
     const u64 len = std::min<u64>(buffer.size(), size - start);
     if (!file.ReadBytes(buffer.data(), len))
       return std::nullopt;
-    for (u32 i = 0; i < CHUNKS_PER_READ && c + i < count; ++i)
-    {
-      const u64 off = u64{i} * CHUNK_SIZE;
-      const std::span<const u8> chunk(buffer.data() + off, std::min(CHUNK_SIZE, len - off));
-      result.hashes[c + i] = HashChunk(chunk);
-      result.zero[c + i] = IsAllZero(chunk);
-    }
+    const u32 n = static_cast<u32>((len + CHUNK_SIZE - 1) / CHUNK_SIZE);
+    auto hash_range = [&](u32 from, u32 to) {
+      for (u32 i = from; i < to; ++i)
+      {
+        const u64 off = u64{i} * CHUNK_SIZE;
+        const std::span<const u8> chunk(buffer.data() + off, std::min(CHUNK_SIZE, len - off));
+        result.hashes[c + i] = HashChunk(chunk);
+        zero[c + i] = IsAllZero(chunk) ? 1 : 0;
+      }
+    };
+    std::vector<std::thread> threads;
+    const u32 per = (n + workers - 1) / workers;
+    for (u32 from = per; from < n; from += per)
+      threads.emplace_back(hash_range, from, std::min(n, from + per));
+    hash_range(0, std::min(n, per));
+    for (std::thread& t : threads)
+      t.join();
+    if (progress)
+      progress(start + len, size);
   }
+  for (u32 i = 0; i < count; ++i)
+    result.zero[i] = zero[i] != 0;
 
   // Only cache what the file still is (it could have changed while it was read).
   if (mtime && ModificationTime(path) == mtime)
@@ -401,9 +729,10 @@ std::optional<ImageHashes> HashImage(const std::string& path, const std::atomic<
   return result;
 }
 
-std::optional<Manifest> BuildManifest(const std::string& path, const std::atomic<bool>* cancel)
+std::optional<Manifest> BuildManifest(const std::string& path, const std::atomic<bool>* cancel,
+                                      const HashProgress& progress)
 {
-  std::optional<ImageHashes> hashes = HashImage(path, cancel);
+  std::optional<ImageHashes> hashes = HashImage(path, cancel, progress);
   if (!hashes)
     return std::nullopt;
 
@@ -438,6 +767,23 @@ std::vector<u8> CanonicalManifest(const Manifest& manifest)
       out.insert(out.end(), info.hash.begin(), info.hash.end());
   }
   return out;
+}
+
+Root ManifestRoot(const Manifest& manifest)
+{
+  const std::vector<u8> canon = CanonicalManifest(manifest);
+  Root root;
+  crypto_blake2b(root.data(), root.size(), canon.data(), canon.size());
+  return root;
+}
+
+std::string RootHex(const Root& root)
+{
+  std::string hex;
+  hex.reserve(root.size() * 2);
+  for (const u8 b : root)
+    hex += fmt::format("{:02x}", b);
+  return hex;
 }
 
 void WriteManifest(const Manifest& manifest, sf::Packet& packet)
@@ -649,7 +995,7 @@ SessionCard::SessionCard(Mode mode, const std::string& image_path,
 std::shared_ptr<SessionCard> SessionCard::CreateOwnCard(const std::string& image_path)
 {
   std::shared_ptr<SessionCard> card(new SessionCard(Mode::OwnCard, image_path, nullptr));
-  card->m_image.Open(image_path, "rb");
+  card->m_image.Open(image_path, "rb", File::SharedAccess::ReadWrite);
   card->m_size = card->m_image ? card->m_image.GetSize() : 0;
   if (card->m_size > MAX_CARD_SIZE)
     card->m_size = 0;
@@ -661,7 +1007,7 @@ std::shared_ptr<SessionCard> SessionCard::CreateHostCard(const std::string& imag
 {
   std::shared_ptr<SessionCard> card(
       new SessionCard(Mode::HostCard, image_path, std::move(manifest)));
-  card->m_image.Open(image_path, "rb");
+  card->m_image.Open(image_path, "rb", File::SharedAccess::ReadWrite);
   card->m_size = card->m_manifest->size;
   return card;
 }
@@ -669,28 +1015,32 @@ std::shared_ptr<SessionCard> SessionCard::CreateHostCard(const std::string& imag
 std::shared_ptr<SessionCard> SessionCard::CreateGuestCard(const std::string& image_path,
                                                           std::shared_ptr<const Manifest> manifest,
                                                           const std::string& cache_dir,
-                                                          std::shared_ptr<Remote> remote)
+                                                          std::shared_ptr<Remote> remote,
+                                                          const ImageHashes* own)
 {
   std::shared_ptr<SessionCard> card(
       new SessionCard(Mode::GuestCard, image_path, std::move(manifest)));
   card->m_size = card->m_manifest->size;
   card->m_remote = std::move(remote);
-  card->m_image.Open(image_path, "rb");
+  card->m_image.Open(image_path, "rb", File::SharedAccess::ReadWrite);
   const u64 own_size = card->m_image ? card->m_image.GetSize() : 0;
 
-  // This card's hashes from an earlier check (its own session as the starter, or a join): the
-  // chunks they say differ are known now. Those they say match are still checked when read.
+  // This card's hashes: given (the join's check), or from an earlier check in the cache. With
+  // them, every chunk is known now to match or not; without, a chunk is checked when first read.
   std::optional<ImageHashes> cached;
-  if (own_size != 0)
+  if (own && own->size == own_size)
+  {
+    cached = *own;
+  }
+  else if (own_size != 0)
   {
     if (const std::optional<s64> mtime = ModificationTime(image_path))
       cached = LoadHashCache(image_path, own_size, *mtime);
   }
-  card->m_scan_done = own_size == 0 || cached.has_value();
 
   const u32 count = card->ChunkCount();
   card->m_sources.resize(count, Source::Missing);
-  u32 cached_differ = 0;
+  u32 differ = 0;
   for (u32 i = 0; i < count; ++i)
   {
     if (card->m_manifest->chunks[i].zero)
@@ -702,26 +1052,16 @@ std::shared_ptr<SessionCard> SessionCard::CreateGuestCard(const std::string& ima
     const u64 start = u64{i} * CHUNK_SIZE;
     if (start < own_size && std::min(CHUNK_SIZE, own_size - start) == card->ChunkBytes(i))
     {
-      if (cached && cached->hashes[i] != card->m_manifest->chunks[i].hash)
-      {
-        card->m_missing.push_back(i);
-        ++cached_differ;
-      }
-      else
-      {
+      if (!cached)
         card->m_sources[i] = Source::Unchecked;
-      }
-    }
-    else
-    {
-      card->m_missing.push_back(i);
+      else if (cached->hashes[i] == card->m_manifest->chunks[i].hash)
+        card->m_sources[i] = Source::Local;
+      else
+        ++differ;
     }
   }
   if (cached)
-  {
-    INFO_LOG_FMT(BRAWLBACK, "SD card: this player's card was checked before: {} chunks differ",
-                 cached_differ);
-  }
+    INFO_LOG_FMT(BRAWLBACK, "SD card: {} chunks of this player's card differ", differ);
 
   static std::atomic<u32> s_counter{0};
   card->m_fetched_path =
@@ -741,8 +1081,8 @@ std::shared_ptr<SessionCard> SessionCard::CreateGuestCard(const std::string& ima
 SessionCard::~SessionCard()
 {
   Detach();
-  if (m_background_thread.joinable())
-    m_background_thread.join();
+  if (m_sync_thread.joinable())
+    m_sync_thread.join();
   m_fetched_file.Close();
   if (!m_fetched_path.empty())
     File::Delete(m_fetched_path);
@@ -799,7 +1139,7 @@ void SessionCard::CheckLocal(std::span<const u32> chunks)
   std::vector<u8> buffer(CHUNK_SIZE);
   std::lock_guard serve_lock(m_serve_mutex);
   if (!m_serve_image)
-    m_serve_image.Open(m_image_path, "rb");
+    m_serve_image.Open(m_image_path, "rb", File::SharedAccess::ReadWrite);
   for (const u32 c : unchecked)
   {
     const std::span<u8> data(buffer.data(), ChunkBytes(c));
@@ -923,6 +1263,14 @@ bool SessionCard::Read(u64 offset, u8* dst, u64 size)
     if (!needed.empty())
     {
       ++m_waits;
+      if (!m_logged_late_fetch)
+      {
+        m_logged_late_fetch = true;
+        ERROR_LOG_FMT(BRAWLBACK,
+                      "SD card: the game read {} chunks this player had not got (from chunk {}): "
+                      "the card is synced before the join, so this is a bug; fetching them",
+                      needed.size(), needed.front());
+      }
       const u64 start = NowMs();
       RequestMissing(needed);
       // While that request is on its way: the chunks after the read that this card lacks too.
@@ -1241,31 +1589,185 @@ void SessionCard::RequestMissing(std::span<const u32> chunks)
   }
 }
 
-void SessionCard::StartBackgroundFetch(std::span<const u32> first)
+std::vector<u32> SessionCard::MissingChunks() const
 {
-  if (m_mode != Mode::GuestCard || m_background_thread.joinable())
+  std::vector<u32> out;
+  if (m_mode != Mode::GuestCard)
+    return out;
+  std::lock_guard lock(m_fetch_mutex);
+  for (u32 c = 0; c < m_sources.size(); ++c)
+  {
+    if (m_sources[c] == Source::Missing)
+      out.push_back(c);
+  }
+  return out;
+}
+
+void SessionCard::StartSync()
+{
+  if (m_mode != Mode::GuestCard || m_sync_thread.joinable())
     return;
   {
     std::lock_guard lock(m_fetch_mutex);
-    m_background_order.clear();
-    m_background_order.reserve(first.size() + m_missing.size());
-    std::vector<bool> queued(ChunkCount(), false);
-    for (const u32 c : first)
+    m_sync_start_fetched = m_fetched_bytes;
+    m_sync_total = 0;
+    for (u32 c = 0; c < m_sources.size(); ++c)
     {
-      if (c < ChunkCount() && !queued[c] &&
-          (m_sources[c] == Source::Missing || m_sources[c] == Source::Unchecked))
+      if (m_sources[c] == Source::Missing)
+        m_sync_total += ChunkBytes(c);
+    }
+    m_sync_finished = false;
+    m_sync_failed = false;
+  }
+  m_sync_thread = std::thread(&SessionCard::SyncThreadFunc, this);
+}
+
+SessionCard::SyncProgress SessionCard::GetSyncProgress() const
+{
+  std::lock_guard lock(m_fetch_mutex);
+  SyncProgress p;
+  p.total = m_sync_total;
+  p.done = std::min(m_sync_total, m_fetched_bytes - m_sync_start_fetched);
+  p.finished = m_sync_finished;
+  p.failed = m_sync_failed;
+  return p;
+}
+
+void SessionCard::SyncThreadFunc()
+{
+  // As many requests out at once as a player queues for another (CardServer): the link's
+  // congestion window (MachineSession's PaceSendWindow) sets the pace, not this.
+  while (true)
+  {
+    std::vector<u32> to_request;
+    std::shared_ptr<Remote> remote;
+    {
+      std::unique_lock lock(m_fetch_mutex);
+      if (m_detached)
       {
-        queued[c] = true;
-        m_background_order.push_back(c);
+        m_sync_failed = true;
+        break;
+      }
+      const u64 now = NowMs();
+      bool missing = false;
+      bool unavailable = false;
+      for (u32 c = 0; c < m_sources.size(); ++c)
+      {
+        if (m_sources[c] != Source::Missing)
+          continue;
+        missing = true;
+        if (m_unavailable.contains(c))
+        {
+          unavailable = true;
+          break;
+        }
+        const auto it = m_requested_at.find(c);
+        const bool due = it == m_requested_at.end() || now - it->second >= REQUEST_RETRY_MS;
+        if (due && (it != m_requested_at.end() ||
+                    m_requested_at.size() + to_request.size() < MAX_OUTSTANDING_REQUESTS))
+        {
+          to_request.push_back(c);
+        }
+      }
+      if (unavailable)
+      {
+        m_sync_failed = true;
+        break;
+      }
+      if (!missing)
+      {
+        m_sync_finished = true;
+        break;
+      }
+      for (const u32 c : to_request)
+        m_requested_at[c] = now;
+      remote = m_remote;
+      if (to_request.empty())
+        m_fetch_cv.wait_for(lock, std::chrono::milliseconds(50));
+    }
+    if (remote)
+    {
+      for (size_t i = 0; i < to_request.size(); i += MAX_REQUEST_CHUNKS)
+      {
+        const size_t n = std::min<size_t>(MAX_REQUEST_CHUNKS, to_request.size() - i);
+        remote->Request(std::span<const u32>(to_request.data() + i, n));
       }
     }
-    for (const u32 c : m_missing)
+  }
+  m_fetch_cv.notify_all();
+}
+
+bool SessionCard::WriteFetchedToImage(const ImageHashes& own, std::string* error)
+{
+  if (m_mode != Mode::GuestCard)
+  {
+    *error = "not a joiner's card";
+    return false;
+  }
+  std::lock_guard serve_lock(m_serve_mutex);
+  std::lock_guard lock(m_fetch_mutex);
+  if (std::ranges::any_of(m_sources, [](Source src) {
+        return src == Source::Missing || src == Source::Unchecked;
+      }))
+  {
+    *error = "the card has not got every chunk yet";
+    return false;
+  }
+  m_serve_image.Close();
+  if (!File::Exists(m_image_path) && !File::CreateEmptyFile(m_image_path))
+  {
+    *error = fmt::format("could not create {}", m_image_path);
+    return false;
+  }
+  File::IOFile image(m_image_path, "r+b", File::SharedAccess::ReadWrite);
+  if (!image || !image.Resize(m_size))
+  {
+    *error = fmt::format("could not open {} to write it", m_image_path);
+    return false;
+  }
+  ImageHashes hashes;
+  hashes.size = m_size;
+  hashes.hashes.resize(ChunkCount());
+  hashes.zero.resize(ChunkCount());
+  std::vector<u8> buffer(CHUNK_SIZE);
+  for (u32 c = 0; c < ChunkCount(); ++c)
+  {
+    const u64 len = ChunkBytes(c);
+    const u64 start = u64{c} * CHUNK_SIZE;
+    if (m_sources[c] == Source::Fetched)
     {
-      if (!queued[c])
-        m_background_order.push_back(c);
+      const auto it = m_fetched_offsets.find(c);
+      if (it == m_fetched_offsets.end() ||
+          !m_fetched_file.Seek(static_cast<s64>(it->second), File::SeekOrigin::Begin) ||
+          !m_fetched_file.ReadBytes(buffer.data(), len) ||
+          !image.Seek(static_cast<s64>(start), File::SeekOrigin::Begin) ||
+          !image.WriteBytes(buffer.data(), len))
+      {
+        *error = fmt::format("could not write chunk {} of {}", c, m_image_path);
+        return false;
+      }
+      hashes.hashes[c] = m_manifest->chunks[c].hash;
+      hashes.zero[c] = false;
+    }
+    else if (start + len <= own.size && c < own.hashes.size())
+    {
+      // Unchanged (it matches the session's card, or no file of it uses it).
+      hashes.hashes[c] = own.hashes[c];
+      hashes.zero[c] = own.zero[c];
+    }
+    else
+    {
+      // Past the end of the card it was before: the new zeros Resize made.
+      hashes.hashes[c] = HashChunk(std::vector<u8>(len, 0));
+      hashes.zero[c] = true;
     }
   }
-  m_background_thread = std::thread(&SessionCard::BackgroundThreadFunc, this);
+  image.Close();
+  if (const std::optional<s64> mtime = ModificationTime(m_image_path))
+    SaveHashCache(m_image_path, *mtime, hashes);
+  INFO_LOG_FMT(BRAWLBACK, "SD card: wrote {} fetched chunks into {}", m_fetched_offsets.size(),
+               m_image_path);
+  return true;
 }
 
 bool SessionCard::ReadForPeer(u32 index, std::span<u8> data)
@@ -1295,7 +1797,7 @@ bool SessionCard::ReadForPeer(u32 index, std::span<u8> data)
   }
   std::lock_guard lock(m_serve_mutex);
   if (!m_serve_image)
-    m_serve_image.Open(m_image_path, "rb");
+    m_serve_image.Open(m_image_path, "rb", File::SharedAccess::ReadWrite);
   return m_serve_image &&
          m_serve_image.Seek(static_cast<s64>(u64{index} * CHUNK_SIZE), File::SeekOrigin::Begin) &&
          m_serve_image.ReadBytes(data.data(), data.size());
@@ -1307,173 +1809,6 @@ std::vector<u32> SessionCard::ReadChunks(size_t max) const
   return {m_read_order.begin(), m_read_order.begin() + n};
 }
 
-bool SessionCard::ScanStep(File::IOFile& image, u64 own_size, std::vector<u8>& buffer,
-                           std::vector<u32>* differing)
-{
-  const u32 own_count = ChunkCountFor(own_size);
-  if (m_scan_next >= own_count)
-    return false;
-  const u32 first = m_scan_next;
-  const u32 n = std::min<u32>(static_cast<u32>(buffer.size() / CHUNK_SIZE), own_count - first);
-  const u64 offset = u64{first} * CHUNK_SIZE;
-  const u64 len = std::min<u64>(u64{n} * CHUNK_SIZE, own_size - offset);
-  if (!image.Seek(static_cast<s64>(offset), File::SeekOrigin::Begin) ||
-      !image.ReadBytes(buffer.data(), len))
-  {
-    return false;
-  }
-  for (u32 i = 0; i < n; ++i)
-  {
-    const u64 off = u64{i} * CHUNK_SIZE;
-    const std::span<const u8> chunk(buffer.data() + off, std::min(CHUNK_SIZE, len - off));
-    m_scan_hashes[first + i] = HashChunk(chunk);
-    m_scan_zero[first + i] = IsAllZero(chunk);
-  }
-  {
-    std::lock_guard lock(m_fetch_mutex);
-    for (u32 c = first; c < first + n && c < m_sources.size(); ++c)
-    {
-      // Unchecked only where this card's chunk is as long as the session's.
-      if (m_sources[c] != Source::Unchecked)
-        continue;
-      if (m_scan_hashes[c] == m_manifest->chunks[c].hash)
-      {
-        m_sources[c] = Source::Local;
-      }
-      else
-      {
-        m_sources[c] = Source::Missing;
-        differing->push_back(c);
-      }
-    }
-  }
-  m_scan_next = first + n;
-  return m_scan_next < own_count;
-}
-
-void SessionCard::BackgroundThreadFunc()
-{
-  // Small batches: a read's own request waits behind the stream's at the player who answers.
-  constexpr u32 BATCH = 4;
-  constexpr u32 SCAN_CHUNKS = 16;
-  const u64 start = NowMs();
-  u64 streamed = 0;
-  u64 scanned = 0;
-  u32 scan_differ = 0;
-  size_t cursor = 0;
-
-  File::IOFile scan_image;
-  u64 own_size = 0;
-  std::optional<s64> own_mtime;
-  std::vector<u8> scan_buffer;
-  if (!m_scan_done.load())
-  {
-    own_mtime = ModificationTime(m_image_path);
-    scan_image.Open(m_image_path, "rb");
-    own_size = scan_image ? scan_image.GetSize() : 0;
-    if (own_size == 0 || own_size > MAX_CARD_SIZE)
-    {
-      m_scan_done = true;
-    }
-    else
-    {
-      m_scan_hashes.resize(ChunkCountFor(own_size));
-      m_scan_zero.resize(ChunkCountFor(own_size));
-      scan_buffer.resize(SCAN_CHUNKS * CHUNK_SIZE);
-    }
-  }
-
-  while (!m_stop_background.load())
-  {
-    const u64 elapsed = NowMs() - start;
-    std::vector<u32> candidates;
-    bool more_to_fetch;
-    {
-      std::lock_guard lock(m_fetch_mutex);
-      if (m_detached || m_fetched_bytes >= BACKGROUND_CAP_BYTES)
-        break;
-      if (streamed * 1000 / BACKGROUND_BYTES_PER_SECOND <= elapsed)
-      {
-        while (cursor < m_background_order.size() && candidates.size() < BATCH)
-          candidates.push_back(m_background_order[cursor++]);
-      }
-      more_to_fetch = cursor < m_background_order.size();
-    }
-
-    if (!candidates.empty())
-    {
-      // This card's own chunks among them first: only those that differ are fetched.
-      CheckLocal(candidates);
-      std::vector<u32> batch;
-      {
-        std::lock_guard lock(m_fetch_mutex);
-        for (const u32 c : candidates)
-        {
-          if (m_sources[c] == Source::Missing && !m_unavailable.contains(c) &&
-              !m_requested_at.contains(c))
-          {
-            batch.push_back(c);
-          }
-        }
-      }
-      if (!batch.empty())
-      {
-        // A failed chunk only fails the reads that need it; the stream goes on.
-        WaitForChunks(batch, false);
-        for (const u32 c : batch)
-          streamed += ChunkBytes(c);
-      }
-      continue;
-    }
-
-    if (!m_scan_done.load())
-    {
-      if (scanned * 1000 / SCAN_BYTES_PER_SECOND <= elapsed)
-      {
-        std::vector<u32> differing;
-        const bool more = ScanStep(scan_image, own_size, scan_buffer, &differing);
-        scanned += scan_buffer.size();
-        scan_differ += static_cast<u32>(differing.size());
-        if (!differing.empty())
-        {
-          std::lock_guard lock(m_fetch_mutex);
-          m_background_order.insert(m_background_order.end(), differing.begin(),
-                                    differing.end());
-        }
-        if (!more)
-        {
-          const bool whole = m_scan_next >= ChunkCountFor(own_size);
-          INFO_LOG_FMT(BRAWLBACK, "SD card: checked this player's card{} in {} ms: {} chunks differ",
-                       whole ? "" : " (up to a read error)", NowMs() - start, scan_differ);
-          // Only what the file still is (it could have changed while it was read).
-          if (whole && own_mtime && ModificationTime(m_image_path) == own_mtime)
-          {
-            ImageHashes hashes;
-            hashes.size = own_size;
-            hashes.hashes = std::move(m_scan_hashes);
-            hashes.zero = std::move(m_scan_zero);
-            SaveHashCache(m_image_path, *own_mtime, hashes);
-          }
-          m_scan_hashes = {};
-          m_scan_zero = {};
-          scan_image.Close();
-          m_scan_done = true;
-        }
-        continue;
-      }
-    }
-    else if (!more_to_fetch)
-    {
-      break;
-    }
-
-    // Keep to the rates.
-    std::unique_lock lock(m_fetch_mutex);
-    m_fetch_cv.wait_for(lock, std::chrono::milliseconds(20));
-  }
-  INFO_LOG_FMT(BRAWLBACK, "SD card: background fetch done ({} bytes)", streamed);
-}
-
 void SessionCard::Detach()
 {
   {
@@ -1481,7 +1816,6 @@ void SessionCard::Detach()
     m_detached = true;
     m_remote.reset();
   }
-  m_stop_background = true;
   m_fetch_cv.notify_all();
 }
 }  // namespace Machine::SDCard

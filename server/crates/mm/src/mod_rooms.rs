@@ -31,14 +31,6 @@ pub const OWN_SLOT: &str = "You cannot do that to your own slot.";
 pub const TOO_MANY: &str = "Too many requests. Wait a moment.";
 pub const REMOVED: &str = "Removed from the room.";
 
-pub fn wrong_build(build: &Build) -> String {
-    let short = &build.hash[..8.min(build.hash.len())];
-    if build.name.is_empty() {
-        format!("You need the room's build ({short}) to join.")
-    } else {
-        format!("You need {} ({short}) to join.", build.name)
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct ModRoomsConfig {
@@ -278,7 +270,7 @@ impl ModRoomBook {
                 tracing::info!(conn, %code, "mod room created");
                 self.broadcast(&code, out);
             }
-            ModsRequest::Join { code, build_hash, controller, slot: prefer } => {
+            ModsRequest::Join { code, build: key, controller, slot: prefer } => {
                 if self.join_limiter.check(&who.uid, now).is_err() {
                     return mods_error(out, conn, mods::MODS_JOIN, TOO_MANY);
                 }
@@ -291,8 +283,8 @@ impl ModRoomBook {
                 let Some(room) = self.rooms.get(&code) else {
                     return mods_error(out, conn, mods::MODS_JOIN, NOT_FOUND);
                 };
-                if room.build.hash != build_hash {
-                    return mods_error(out, conn, mods::MODS_JOIN, &wrong_build(&room.build));
+                if let Some(why) = mods::join_mismatch(&room.build, &key) {
+                    return mods_error(out, conn, mods::MODS_JOIN, &why);
                 }
                 if let Some(&until) = self.banned.get(&(code.clone(), who.uid)).filter(|&&until| until > now) {
                     // When they can come back, in whole minutes (rounded up).
@@ -489,6 +481,10 @@ mod tests {
 
     const HASH: &str = "3f9a1c07aa00000000000000000000000000000000000000000000000000beef";
 
+    fn key(hash: &str) -> mods::BuildKey {
+        mods::BuildKey { hash: hash.into(), disc: None, sd: None }
+    }
+
     fn who(n: u8) -> MemberInfo {
         MemberInfo {
             uid: Uuid::from_bytes([n; 16]),
@@ -498,7 +494,7 @@ mod tests {
     }
 
     fn build() -> Build {
-        Build { hash: HASH.into(), name: "Brawl Minus 5.1".into() }
+        Build { hash: HASH.into(), name: "Brawl Minus 5.1".into(), ..Default::default() }
     }
 
     fn msgs(out: &[Output], conn: ConnId) -> Vec<Value> {
@@ -526,7 +522,7 @@ mod tests {
     }
 
     fn join(b: &mut ModRoomBook, conn: ConnId, code: &str) -> Vec<Output> {
-        req(b, conn, conn as u8, ModsRequest::Join { code: code.into(), build_hash: HASH.into(), controller: Controller::Wiimote, slot: None })
+        req(b, conn, conn as u8, ModsRequest::Join { code: code.into(), build: key(HASH), controller: Controller::Wiimote, slot: None })
     }
 
     #[test]
@@ -553,18 +549,45 @@ mod tests {
         join(&mut b, 3, &code);
         // Player 2's connection to mm drops; it comes back asking for slot 2 (its session's).
         let _ = req(&mut b, 2, 2, ModsRequest::Leave);
-        let out = req(&mut b, 4, 2, ModsRequest::Join { code: code.clone(), build_hash: HASH.into(), controller: Controller::Gc, slot: Some(2) });
+        let out = req(&mut b, 4, 2, ModsRequest::Join { code: code.clone(), build: key(HASH), controller: Controller::Gc, slot: Some(2) });
         assert_eq!(last_state(&out, 4)["you"], 2);
         // A slot that is taken: the lowest free one instead.
-        let out = req(&mut b, 5, 5, ModsRequest::Join { code, build_hash: HASH.into(), controller: Controller::Gc, slot: Some(3) });
+        let out = req(&mut b, 5, 5, ModsRequest::Join { code, build: key(HASH), controller: Controller::Gc, slot: Some(3) });
         assert_eq!(last_state(&out, 5)["you"], 4);
+    }
+
+    #[test]
+    fn a_room_compares_the_disc_and_syncs_the_card() {
+        // The parts (§6.5): a joiner with another SD card joins (it gets the host's before it
+        // plays); one with another disc is told to pick the same revision.
+        let mut b = ModRoomBook::new(ModRoomsConfig::default());
+        let disc = "d".repeat(40);
+        let room_build = Build {
+            disc: Some(disc.clone()),
+            disc_label: Some("RSBE01 Rev 1".into()),
+            sd: Some("5".repeat(64)),
+            ..build()
+        };
+        let out = req(&mut b, 1, 1, ModsRequest::Create { build: room_build, public: true, controller: Controller::Gc });
+        let state = last_state(&out, 1);
+        assert_eq!(state["build"]["disc"], json!(disc));
+        assert_eq!(state["build"]["discLabel"], json!("RSBE01 Rev 1"));
+        let code = state["code"].as_str().unwrap().to_string();
+        let other_card = mods::BuildKey { hash: "0".repeat(64), disc: Some(disc.clone()), sd: Some("6".repeat(64)) };
+        let out = req(&mut b, 2, 2, ModsRequest::Join { code: code.clone(), build: other_card, controller: Controller::Gc, slot: None });
+        assert_eq!(last_state(&out, 2)["you"], json!(2));
+        let other_disc = mods::BuildKey { hash: HASH.into(), disc: Some("e".repeat(40)), sd: Some("5".repeat(64)) };
+        let out = req(&mut b, 3, 3, ModsRequest::Join { code, build: other_disc, controller: Controller::Gc, slot: None });
+        let m = &msgs(&out, 3)[0];
+        assert_eq!(m["type"], "mods-error");
+        assert!(m["error"].as_str().unwrap().contains("same revision"));
     }
 
     #[test]
     fn a_different_build_cannot_join() {
         let mut b = ModRoomBook::new(ModRoomsConfig::default());
         let code = create(&mut b, 1);
-        let out = req(&mut b, 2, 2, ModsRequest::Join { code, build_hash: "0".repeat(64), controller: Controller::Gc, slot: None });
+        let out = req(&mut b, 2, 2, ModsRequest::Join { code, build: key(&"0".repeat(64)), controller: Controller::Gc, slot: None });
         let m = &msgs(&out, 2)[0];
         assert_eq!(m["type"], "mods-error");
         assert!(m["error"].as_str().unwrap().contains("Brawl Minus 5.1"));

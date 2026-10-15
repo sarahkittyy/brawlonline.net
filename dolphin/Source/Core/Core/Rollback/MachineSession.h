@@ -98,6 +98,16 @@ enum class Controller
   WiiRemote,
 };
 
+// A joiner whose SD card differs from the session's (docs/design/brawl-mods.md §6.5): download
+// the session's card before the join, also writing it into the player's own card, or leave.
+enum class SDSyncChoice
+{
+  Ask,  // the player answers (the launcher's dialog, SetSDSyncChoice)
+  Yes,
+  Overwrite,
+  No,
+};
+
 struct Peer
 {
   int slot = -1;     // the peer's in-game port (0-3)
@@ -139,6 +149,9 @@ struct Options
   // The players come from a Brawl Mods room (Online/ModsRoom.h): SetRoom gives the members and
   // their addresses as they change, and a joiner's slot. `peers` may be empty.
   bool room = false;
+  // A joiner whose SD card differs from the session's: "sd_sync" ("ask", "yes", "overwrite",
+  // "no"); the launcher asks its player.
+  SDSyncChoice sd_sync = SDSyncChoice::Ask;
 };
 
 // A Brawl Mods room's member (Online/ModsRoom.h).
@@ -250,6 +263,10 @@ void SetWiimoteOverride(std::optional<WiimoteOverride> value);
 // the next frame this player plays that kind of controller. The other machines see its GameCube
 // port unplugged and its Wii Remote connect, or the reverse, as when a controller is plugged in.
 void SetLocalController(Controller controller);
+// A joiner's player answered the SD card's dialog (any thread).
+void SetSDSyncChoice(SDSyncChoice choice);
+// "ask", "yes", "overwrite" or "no"; nullopt for anything else.
+std::optional<SDSyncChoice> ParseSDSyncChoice(std::string_view text);
 // The room's host moves a player (any thread): slots `from` and `to` (0-3) swap players at an
 // epoch (either may be empty), the same frame on every machine; the game sees that player's
 // controllers unplugged from one port and plugged into the other. An error when it cannot now (no

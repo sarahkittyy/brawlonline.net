@@ -532,3 +532,110 @@
   margin-right: 8px;
   opacity: 0.8;
 }
+
+/* A room's parts (docs/design/brawl-mods.md §6.5): "Brawl: 3f9a1c" and "SD card: 5d5d5d", green when
+   the player's game has the same, amber when the card differs (downloaded at the join), red when it
+   cannot be joined with the player's game (the disc). */
+.partChips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 4px;
+}
+
+.partChip {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  border: 1px solid rgb(255 255 255 / 14%);
+  font-family: monospace;
+  font-size: 11px;
+  line-height: 16px;
+  color: var(--text-secondary);
+  white-space: nowrap;
+}
+
+.partSame {
+  border-color: rgb(116 194 122 / 50%);
+  color: #8fd394;
+}
+
+.partDiffers {
+  border-color: rgb(242 179 61 / 60%);
+  background-color: rgb(242 179 61 / 10%);
+  color: #f2b33d;
+}
+
+.partWrong {
+  border-color: rgb(255 80 80 / 60%);
+  background-color: rgb(255 80 80 / 12%);
+  color: #ff6b6b;
+}
+
+.partClickable {
+  cursor: pointer;
+}
+
+.partClickable:hover {
+  filter: brightness(1.25);
+}
+
+.partClickable:focus-visible {
+  outline: 2px solid var(--accent-primary-bright);
+  outline-offset: 1px;
+}
+
+.partIcon {
+  font-size: 13px !important;
+  font-family: inherit;
+  font-weight: bold;
+}
+
+/* The SD card's dialog (a joiner whose card differs from the host's). */
+.sdSyncBody {
+  margin: 0 0 12px;
+}
+
+.sdSyncWarning {
+  margin: 0 0 12px;
+  color: #f2c94c;
+}
+
+.sdSyncFiles {
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.sdSyncFiles ul {
+  margin: 4px 0;
+  padding-left: 18px;
+  font-family: monospace;
+  word-break: break-all;
+}
+
+/* The field of a game a room's part pointed at: gold, pulsing, until it is clicked. */
+@keyframes fixPulse {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 rgb(245 197 66 / 0%);
+    border-color: rgb(245 197 66 / 50%);
+  }
+
+  50% {
+    box-shadow: 0 0 0 4px rgb(245 197 66 / 35%);
+    border-color: rgb(245 197 66);
+  }
+}
+
+.fixField {
+  border: 1px solid rgb(245 197 66 / 50%);
+  border-radius: 6px;
+  padding: 4px 6px;
+  animation: fixPulse 1.2s ease-in-out infinite;
+}
+
+.fixField > div:first-child {
+  color: #f5c542;
+}

@@ -85,6 +85,7 @@ const props = (state: ViewState | null, extra: Partial<ModsViewProps> = {}): Mod
   onJoin: vi.fn(),
   onJoinCode: vi.fn(),
   onMissingGame: vi.fn(),
+  onFixBuild: vi.fn(),
   onRequest: vi.fn(),
   onCopyCode: vi.fn(),
   ...extra,
@@ -238,6 +239,94 @@ describe("ModsView", () => {
     fireEvent.click(row("Keiko"));
     expect(p.onJoin).toHaveBeenCalledWith(minus, "PLNX");
     expect(getByText(Messages.roomPlayers(3, 4))).toBeTruthy();
+  });
+
+  it("shows a room's disc and SD card, and joins when only the card differs", () => {
+    const disc = "d".repeat(40);
+    const rex: ModBuild = {
+      ...minus,
+      id: "rex",
+      name: "REX",
+      gameId: "RSBE01",
+      revision: 1,
+      parts: { disc, launcher: null, sd: true, sdCard: "6".repeat(64) },
+    };
+    const card = "5".repeat(64);
+    const p = props(
+      { builds: [rex], running: false, status: null },
+      {
+        publicRooms: {
+          kind: "ready",
+          rooms: [
+            {
+              code: "SDSD",
+              build: { hash: "a".repeat(64), name: "REX", disc, discLabel: "RSBE01 Rev 1", sd: card },
+              hostName: "Sara",
+              players: 1,
+              open: 4,
+            },
+            {
+              code: "REV2",
+              build: { hash: "b".repeat(64), name: "REX", disc: "e".repeat(40), discLabel: "RSBE01 Rev 2", sd: card },
+              hostName: "Joe",
+              players: 1,
+              open: 4,
+            },
+          ],
+        },
+      },
+    );
+    const { getByText } = render(<ModsView {...p} />);
+    const row = (name: string) => getByText(Messages.roomHost(name)).closest("button") as HTMLButtonElement;
+    // Another SD card: the room is joinable (the card is downloaded at the join).
+    expect(row("Sara").textContent).toContain(Messages.partHash("Brawl", disc));
+    expect(row("Sara").textContent).toContain(Messages.partHash("SD card", card));
+    fireEvent.click(row("Sara"));
+    expect(p.onJoin).toHaveBeenCalledWith(rex, "SDSD");
+    // Its SD card's chip opens the game with that field.
+    fireEvent.click(within(row("Sara")).getByText(Messages.partHash("SD card", card)));
+    expect(p.onFixBuild).toHaveBeenCalledWith(rex, "sd");
+    // Another disc: not joinable; the row and the disc's chip point at the disc.
+    expect(row("Joe").textContent).toContain(Messages.noJoinDisc());
+    fireEvent.click(row("Joe"));
+    expect(p.onJoin).toHaveBeenCalledTimes(1);
+    expect(p.onFixBuild).toHaveBeenLastCalledWith(rex, "disc");
+  });
+
+  it("asks before downloading the host's SD card, and shows the download", () => {
+    const status = room(2);
+    status.session = {
+      phase: "joining",
+      sd_sync: {
+        step: "ask",
+        checked: 1,
+        bytes: 280 * 1024 * 1024,
+        files: 412,
+        names: ["rex_/pf/fighter/hero/FitHero.pac"],
+        eta_s: 240,
+      },
+    };
+    const p = props({ builds: [minus], running: true, status });
+    const { getByText, getByRole, rerender } = render(<ModsView {...p} />);
+    expect(getByText(Messages.sdSyncBody("280 MB", 412, "4 minutes"))).toBeTruthy();
+    expect(getByText(Messages.sdSyncWarning())).toBeTruthy();
+    expect(getByText("rex_/pf/fighter/hero/FitHero.pac")).toBeTruthy();
+    fireEvent.click(getByRole("button", { name: Messages.sdSyncOverwrite() }));
+    expect(p.onRequest).toHaveBeenCalledWith({ op: "sd-sync", choice: "overwrite" });
+    // The download, in the room.
+    const downloading = room(2);
+    downloading.session = {
+      phase: "joining",
+      sd_sync: {
+        ...status.session.sd_sync!,
+        step: "downloading",
+        done: 70 * 1024 * 1024,
+        total: 280 * 1024 * 1024,
+        eta_s: 30,
+      },
+    };
+    rerender(<ModsView {...props({ builds: [minus], running: true, status: downloading })} />);
+    expect(getByText(Messages.sdSyncDownloading(25, "30 seconds"))).toBeTruthy();
   });
 
   it("switches the controller, folding what Dolphin has set up, and opens Configure", () => {

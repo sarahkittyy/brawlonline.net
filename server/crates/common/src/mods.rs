@@ -28,13 +28,65 @@ pub const MAX_PLAYERS: usize = 4;
 /// A build hash: SHA-256, 64 lowercase hex digits.
 pub const BUILD_HASH_LEN: usize = 64;
 pub const MAX_BUILD_NAME: usize = 64;
+pub const MAX_DISC_LABEL: usize = 32;
 
-/// The build a room plays (`docs/design/brawl-mods.md` §4).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+/// The build a room plays (`docs/design/brawl-mods.md` §4), and the parts rooms compare
+/// (§6.5): the disc, which a room cannot send (its contents' SHA-1, and what it is: "RSBE01 Rev 1"),
+/// and the SD card, which a joiner gets before it plays (its root: BLAKE2b-256 of its manifest;
+/// "" for a game without one). An older launcher sends only the hash: then the hashes are compared.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
+#[serde(rename_all = "camelCase")]
 pub struct Build {
     pub hash: String,
     #[serde(default)]
     pub name: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disc: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub disc_label: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sd: Option<String>,
+}
+
+/// A joiner's build as a join compares it.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct BuildKey {
+    pub hash: String,
+    pub disc: Option<String>,
+    pub sd: Option<String>,
+}
+
+/// Why a joiner's build cannot play in a room with this build, or None when it can: the same disc
+/// and both with or without an SD card (a different card is synced before the join). Without the
+/// parts on either side, the same build hash.
+pub fn join_mismatch(room: &Build, joiner: &BuildKey) -> Option<String> {
+    let (Some(room_disc), Some(disc)) = (room.disc.as_deref(), joiner.disc.as_deref()) else {
+        return (room.hash != joiner.hash).then(|| wrong_build(room));
+    };
+    if room_disc != disc {
+        let label = room.disc_label.as_deref().filter(|l| !l.is_empty());
+        return Some(match label {
+            Some(l) => format!("Your game's disc is not the room's ({l}). Make sure you're both on the same revision."),
+            None => "Your game's disc is not the room's. Make sure you're both on the same revision.".to_string(),
+        });
+    }
+    let room_card = !room.sd.as_deref().unwrap_or("").is_empty();
+    let card = !joiner.sd.as_deref().unwrap_or("").is_empty();
+    match (room_card, card) {
+        (true, false) => Some("The room's game has an SD card, and yours has none.".to_string()),
+        (false, true) => Some("The room's game has no SD card, and yours has one.".to_string()),
+        _ => None,
+    }
+}
+
+/// "You need <name> (<short hash>) to join."
+pub fn wrong_build(build: &Build) -> String {
+    let short = &build.hash[..8.min(build.hash.len())];
+    if build.name.is_empty() {
+        format!("You need the room's build ({short}) to join.")
+    } else {
+        format!("You need {} ({short}) to join.", build.name)
+    }
 }
 
 /// What a member plays with: their GameCube port or their Wii Remote.
@@ -53,7 +105,7 @@ pub enum ModsRequest {
     /// The lowest open, empty slot of the room with this code, if the build is the same; `slot`
     /// first if it is open and empty (a member back after its connection to mm dropped, whose
     /// session still plays in that slot).
-    Join { code: String, build_hash: String, controller: Controller, slot: Option<u8> },
+    Join { code: String, build: BuildKey, controller: Controller, slot: Option<u8> },
     Leave,
     /// Host: opens or closes a slot (closing an occupied one removes its player).
     Slot { slot: u8, open: bool },
@@ -69,7 +121,36 @@ pub enum ModsRequest {
 }
 
 fn valid_hash(h: &str) -> bool {
-    h.len() == BUILD_HASH_LEN && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    hex_of_len(h, BUILD_HASH_LEN)
+}
+
+fn hex_of_len(h: &str, len: usize) -> bool {
+    h.len() == len && h.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+/// A build's disc, disc label and SD card root, as a request gave them.
+type Parts = (Option<String>, Option<String>, Option<String>);
+
+/// A build's parts (`disc`, `discLabel`, `sd`), checked: both of disc and sd or neither.
+fn parse_parts(kind: &str, b: &serde_json::Value) -> Result<Parts, String> {
+    let disc = b.get("disc").and_then(|d| d.as_str());
+    let Some(disc) = disc else { return Ok((None, None, None)) };
+    if !hex_of_len(disc, 40) {
+        return Err(format!("{kind}: `build.disc` must be 40 lowercase hex digits"));
+    }
+    let sd = b.get("sd").and_then(|s| s.as_str()).unwrap_or("");
+    if !sd.is_empty() && !hex_of_len(sd, BUILD_HASH_LEN) {
+        return Err(format!("{kind}: `build.sd` must be empty or 64 lowercase hex digits"));
+    }
+    let label: String = b
+        .get("discLabel")
+        .and_then(|l| l.as_str())
+        .unwrap_or("")
+        .chars()
+        .filter(|c| !c.is_control())
+        .take(MAX_DISC_LABEL)
+        .collect();
+    Ok((Some(disc.to_string()), Some(label.trim().to_string()), Some(sd.to_string())))
 }
 
 /// A build's display name: printable, at most [`MAX_BUILD_NAME`] characters.
@@ -102,31 +183,31 @@ impl ModsRequest {
         };
         Ok(match kind {
             MODS_CREATE => {
-                let build: Build = v
-                    .get("build")
-                    .cloned()
-                    .and_then(|b| serde_json::from_value(b).ok())
-                    .ok_or_else(|| format!("{kind}: `build` must be {{hash, name}}"))?;
-                if !valid_hash(&build.hash) {
+                let b = v.get("build").ok_or_else(|| format!("{kind}: `build` must be {{hash, name}}"))?;
+                let hash = b.get("hash").and_then(|h| h.as_str()).unwrap_or("");
+                if !valid_hash(hash) {
                     return Err(format!("{kind}: `build.hash` must be 64 lowercase hex digits"));
                 }
+                let name = b.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                let (disc, disc_label, sd) = parse_parts(kind, b)?;
                 ModsRequest::Create {
-                    build: Build { hash: build.hash, name: clean_name(&build.name) },
+                    build: Build { hash: hash.to_string(), name: clean_name(name), disc, disc_label, sd },
                     public: flag("public", Some(true))?,
                     controller: controller()?,
                 }
             }
             MODS_JOIN => {
                 let code = v.get("code").and_then(|c| c.as_str()).ok_or_else(|| format!("{kind}: `code` is missing"))?;
-                let build_hash = v
-                    .get("build")
-                    .and_then(|b| b.get("hash"))
+                let b = v.get("build").ok_or_else(|| format!("{kind}: `build.hash` must be 64 lowercase hex digits"))?;
+                let build_hash = b
+                    .get("hash")
                     .and_then(|h| h.as_str())
                     .filter(|h| valid_hash(h))
                     .ok_or_else(|| format!("{kind}: `build.hash` must be 64 lowercase hex digits"))?;
+                let (disc, _, sd) = parse_parts(kind, b)?;
                 ModsRequest::Join {
                     code: code.chars().take(16).collect(),
-                    build_hash: build_hash.to_string(),
+                    build: BuildKey { hash: build_hash.to_string(), disc, sd },
                     controller: controller()?,
                     slot: match v.get("slot") {
                         None | Some(serde_json::Value::Null) => None,
@@ -242,6 +323,54 @@ mod tests {
     use serde_json::json;
 
     const HASH: &str = "3f9a1c07aa00000000000000000000000000000000000000000000000000beef";
+    const DISC: &str = "d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1d1";
+    const CARD: &str = "5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d5d";
+
+    fn key(hash: &str) -> BuildKey {
+        BuildKey { hash: hash.into(), disc: None, sd: None }
+    }
+
+    #[test]
+    fn parts_are_parsed_and_checked() {
+        let r = ModsRequest::parse(
+            MODS_CREATE,
+            &json!({"build": {"hash": HASH, "name": "REX", "disc": DISC, "discLabel": "RSBE01 Rev 1\u{7}", "sd": CARD}}),
+        )
+        .unwrap();
+        let ModsRequest::Create { build, .. } = r else { panic!() };
+        assert_eq!(build.disc.as_deref(), Some(DISC));
+        assert_eq!(build.disc_label.as_deref(), Some("RSBE01 Rev 1"));
+        assert_eq!(build.sd.as_deref(), Some(CARD));
+        // Without a card: "".
+        let r = ModsRequest::parse(MODS_JOIN, &json!({"code": "KFQB", "build": {"hash": HASH, "disc": DISC, "sd": ""}})).unwrap();
+        let ModsRequest::Join { build, .. } = r else { panic!() };
+        assert_eq!(build, BuildKey { hash: HASH.into(), disc: Some(DISC.into()), sd: Some(String::new()) });
+        // An older launcher: no parts.
+        let r = ModsRequest::parse(MODS_JOIN, &json!({"code": "KFQB", "build": {"hash": HASH}})).unwrap();
+        let ModsRequest::Join { build, .. } = r else { panic!() };
+        assert_eq!(build, key(HASH));
+        assert!(ModsRequest::parse(MODS_CREATE, &json!({"build": {"hash": HASH, "disc": "nothex", "sd": ""}})).is_err());
+        assert!(ModsRequest::parse(MODS_CREATE, &json!({"build": {"hash": HASH, "disc": DISC, "sd": "abc"}})).is_err());
+    }
+
+    #[test]
+    fn a_join_compares_the_disc_and_whether_there_is_a_card() {
+        let room = Build { hash: HASH.into(), name: "REX".into(), disc: Some(DISC.into()), disc_label: Some("RSBE01 Rev 1".into()), sd: Some(CARD.into()) };
+        let other_card = "1".repeat(64);
+        // Another card (synced before the join), even another build hash: joins.
+        let ok = BuildKey { hash: "0".repeat(64), disc: Some(DISC.into()), sd: Some(other_card) };
+        assert_eq!(join_mismatch(&room, &ok), None);
+        // Another disc: the revision is named.
+        let disc = BuildKey { hash: HASH.into(), disc: Some("e".repeat(40)), sd: Some(CARD.into()) };
+        let why = join_mismatch(&room, &disc).unwrap();
+        assert!(why.contains("RSBE01 Rev 1") && why.contains("same revision"), "{why}");
+        // No card.
+        let none = BuildKey { hash: HASH.into(), disc: Some(DISC.into()), sd: Some(String::new()) };
+        assert!(join_mismatch(&room, &none).unwrap().contains("SD card"));
+        // An older launcher on either side: the build hash.
+        assert_eq!(join_mismatch(&room, &key(HASH)), None);
+        assert!(join_mismatch(&room, &key(&"0".repeat(64))).unwrap().contains("REX"));
+    }
 
     #[test]
     fn parses_requests() {
@@ -249,14 +378,14 @@ mod tests {
         assert_eq!(
             r,
             ModsRequest::Create {
-                build: Build { hash: HASH.into(), name: "Brawl Minus 5.1".into() },
+                build: Build { hash: HASH.into(), name: "Brawl Minus 5.1".into(), ..Default::default() },
                 public: true,
                 controller: Controller::Gc
             }
         );
         let r = ModsRequest::parse(MODS_JOIN, &json!({"code": "KFQB", "build": {"hash": HASH}, "controller": "wiimote"}))
             .unwrap();
-        assert_eq!(r, ModsRequest::Join { code: "KFQB".into(), build_hash: HASH.into(), controller: Controller::Wiimote, slot: None });
+        assert_eq!(r, ModsRequest::Join { code: "KFQB".into(), build: key(HASH), controller: Controller::Wiimote, slot: None });
         let r = ModsRequest::parse(MODS_JOIN, &json!({"code": "KFQB", "build": {"hash": HASH}, "slot": 3})).unwrap();
         assert!(matches!(r, ModsRequest::Join { slot: Some(3), .. }));
         assert!(ModsRequest::parse(MODS_JOIN, &json!({"code": "KFQB", "build": {"hash": HASH}, "slot": 0})).is_err());

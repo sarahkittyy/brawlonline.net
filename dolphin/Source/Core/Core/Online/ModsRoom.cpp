@@ -3,6 +3,7 @@
 
 #include "Core/Online/ModsRoom.h"
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <utility>
@@ -71,6 +72,9 @@ struct Room
 {
   Kind kind = Kind::None;
   std::string build_hash, build_name;
+  // The build's parts as rooms compare them (docs/design/brawl-mods.md §6.5): the disc's SHA-1,
+  // what it is ("RSBE01 Rev 1"), and the SD card's root ("" for none).
+  std::string build_disc, build_disc_label, build_sd;
   std::string join_code;
   bool is_public = true;
   std::string controller = "gc";
@@ -261,11 +265,22 @@ picojson::object RoomJson(const View& v)
   return r;
 }
 
+// The parts the launcher gave (an older launcher gives none: mm then compares the build hash).
+void AddParts(picojson::object* build)
+{
+  if (s.build_disc.empty())
+    return;
+  (*build)["disc"] = picojson::value(s.build_disc);
+  (*build)["discLabel"] = picojson::value(s.build_disc_label);
+  (*build)["sd"] = picojson::value(s.build_sd);
+}
+
 std::string CreateJson()
 {
   picojson::object build;
   build["hash"] = picojson::value(s.build_hash);
   build["name"] = picojson::value(s.build_name);
+  AddParts(&build);
   picojson::object m;
   m["type"] = picojson::value("mods-create");
   m["build"] = picojson::value(build);
@@ -278,6 +293,7 @@ std::string JoinJson(const std::string& code, int slot)
 {
   picojson::object build;
   build["hash"] = picojson::value(s.build_hash);
+  AddParts(&build);
   picojson::object m;
   m["type"] = picojson::value("mods-join");
   m["code"] = picojson::value(code);
@@ -337,9 +353,17 @@ std::optional<Machine::Options> FromEnvironment(std::string* error)
     *error = "PPR_MODS_ROOM: controller, delay, port or pad out of range";
     return std::nullopt;
   }
+  // A joiner whose SD card differs: the launcher asks its player ("ask"); the harness may answer.
+  const auto sd_sync = Machine::ParseSDSyncChoice(o.count("sd_sync") ? Str(o, "sd_sync", 16) : "ask");
+  if (!sd_sync)
+  {
+    *error = "PPR_MODS_ROOM: sd_sync must be ask, yes, overwrite or no";
+    return std::nullopt;
+  }
   Machine::Options opts;
   opts.room = true;
   opts.join = !host;
+  opts.sd_sync = *sd_sync;
   opts.local_slot = 0;  // a joiner's comes with the room
   opts.local_port = static_cast<u16>(port);
   opts.delay = delay == 0 ? Machine::AUTO_DELAY : static_cast<int>(delay);
@@ -355,6 +379,20 @@ std::optional<Machine::Options> FromEnvironment(std::string* error)
     s.kind = host ? Kind::Host : Kind::Join;
     s.build_hash = hash;
     s.build_name = Str(*build, "name", 64);
+    // Only well-formed parts: mm checks them too.
+    const std::string disc = Str(*build, "disc", 41);
+    const std::string sd = Str(*build, "sd", 65);
+    auto hex = [](const std::string& h, size_t n) {
+      return h.size() == n && std::ranges::all_of(h, [](char c) {
+               return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f');
+             });
+    };
+    if (hex(disc, 40) && (sd.empty() || hex(sd, 64)))
+    {
+      s.build_disc = disc;
+      s.build_sd = sd;
+      s.build_disc_label = Str(*build, "discLabel", 32);
+    }
     s.join_code = join;
     s.is_public = Flag(o, "public", true);
     s.controller = controller;
@@ -685,7 +723,8 @@ void Files(const std::string& dir)
     // far ahead of them it is and the speed that sets, rollbacks), so a slow room says why while
     // it is slow.
     for (const char* key : {"phase", "error", "players", "epoch", "frame", "slot", "stall_polls",
-                            "frames_ahead", "speed", "rollbacks", "frames_resimulated", "desyncs"})
+                            "frames_ahead", "speed", "rollbacks", "frames_resimulated", "desyncs",
+                            "sd_sync"})
     {
       if (const auto it = m.find(key); it != m.end())
         session[key] = it->second;
@@ -911,6 +950,16 @@ std::optional<std::string> Request(const picojson::object& args)
     s_configure_requested = true;
     return std::nullopt;
   }
+  else if (op == "sd-sync")
+  {
+    // The player's answer to the SD card's dialog (a joiner whose card differs from the host's).
+    const auto choice = Machine::ParseSDSyncChoice(Str(args, "choice", 16));
+    if (!choice || *choice == Machine::SDSyncChoice::Ask)
+      return "choice must be yes, overwrite or no";
+    Machine::SetSDSyncChoice(*choice);
+    Log(fmt::format("the SD card: {}", Str(args, "choice", 16)));
+    return std::nullopt;
+  }
   else if (op == "controller")
   {
     // This player's own: taken at the next frame, in a room or not yet; the room shows it.
@@ -931,7 +980,7 @@ std::optional<std::string> Request(const picojson::object& args)
   }
   else
   {
-    return "op must be leave, kick, slot, public, move, controller or configure";
+    return "op must be leave, kick, slot, public, move, controller, configure or sd-sync";
   }
   std::lock_guard lk(s.mutex);
   if (!s.view)

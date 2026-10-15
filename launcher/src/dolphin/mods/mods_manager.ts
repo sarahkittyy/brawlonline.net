@@ -8,18 +8,22 @@ import { throttleProgress } from "utils/copy_file";
 
 import type { DolphinManager } from "../manager";
 import { DolphinLaunchType } from "../types";
-import { buildHashKey, combineBuildHash, computeBuildParts } from "./build_hash";
+import { buildHashKey, combineBuildHash, computeBuildParts, sdHashKey } from "./build_hash";
 import { defaultControllerKind, readDolphinControllers } from "./controllers";
 import { discContentSha1WithProgress, isPlainDiscImage, readDiscInfo } from "./disc_info";
 import { findModParts } from "./folder_import";
 import { knownDiscName, knownModName } from "./known_builds";
 import type { ModsRoomArg } from "./mods_args";
 import { readModRoomStatus, writeModRoomRequest } from "./room_files";
+import { discLabel, matchRoom } from "./room_match";
+import type { SdHashFn } from "./sd_hash";
+import { sdCardRoot } from "./sd_hash";
 import type {
   DolphinControllers,
   ModBuild,
   ModBuildInput,
   ModFolderParts,
+  ModRoomBuild,
   ModRoomRequest,
   ModRoomStatus,
   ModsController,
@@ -94,6 +98,19 @@ async function assertFile(file: string | null, what: string): Promise<void> {
  * The Brawl Mods tab's state in the main process (docs/design/brawl-mods.md §3, §4, §8): the
  * player's builds (settings `modBuilds`), their hashes, and the room our Dolphin runs.
  */
+/** A build as a room shows it: its hash and name, and the parts rooms compare (docs/design/
+ * brawl-mods.md §6.5), when it has them all: the disc, and the SD card's root ("" for none). */
+export function roomBuild(build: ModBuild): ModRoomBuild {
+  const out: ModRoomBuild = { hash: build.hash!, name: build.name };
+  const parts = build.parts;
+  if (parts && (!build.sdPath || parts.sdCard)) {
+    out.disc = parts.disc;
+    out.discLabel = discLabel(build);
+    out.sd = build.sdPath ? parts.sdCard! : "";
+  }
+  return out;
+}
+
 export class ModsManager {
   private running = false;
   private status: ModRoomStatus | null = null;
@@ -114,6 +131,8 @@ export class ModsManager {
     private readonly toolPath: () => Promise<string>,
     /** The room with this code (its game), or null when there is none. */
     private readonly lookupRoom: (uid: string, code: string) => Promise<PublicModRoom | null> = async () => null,
+    /** An SD card's root (DolphinTool sdhash), its chunks' hashes kept in the netplay User folder. */
+    private readonly sdHash: SdHashFn = sdCardRoot,
   ) {}
 
   async joinByCode(options: ModsJoinByCodeOptions): Promise<ModsJoinByCodeResult> {
@@ -125,7 +144,9 @@ export class ModsManager {
     if (!room) {
       throw new Error("Room not found.");
     }
-    const build = this.builds().find((b) => b.hash === room.build.hash);
+    // The player's game on the room's disc (another SD card is synced before the join).
+    const match = matchRoom(room.build, this.builds());
+    const build = match.joinable ? match.build : null;
     if (!build) {
       return { outcome: "no-game", name: room.build.name, hash: room.build.hash };
     }
@@ -224,6 +245,7 @@ export class ModsManager {
       autoName: !named,
       ...base,
       gameId: info.gameId,
+      revision: info.revision,
       platform: info.platform,
       hash: null,
       hashKey: null,
@@ -285,6 +307,7 @@ export class ModsManager {
     if (next.discPath !== current.discPath) {
       const info = await readDiscInfo(await this.toolPath(), next.discPath);
       next.gameId = info.gameId;
+      next.revision = info.revision;
       next.gameTitle = info.title;
       next.platform = info.platform;
     }
@@ -332,7 +355,7 @@ export class ModsManager {
     const build = await this.hashBuild(options.buildId);
     await this.launch(build, {
       host: true,
-      build: { hash: build.hash!, name: build.name },
+      build: roomBuild(build),
       public: options.public,
       controller: await this.launchController(),
     });
@@ -346,7 +369,7 @@ export class ModsManager {
     const build = await this.hashBuild(options.buildId);
     await this.launch(build, {
       join: code,
-      build: { hash: build.hash!, name: build.name },
+      build: roomBuild(build),
       controller: await this.launchController(),
     });
   }
@@ -378,13 +401,34 @@ export class ModsManager {
   }
 
   private async doHash(id: string): Promise<ModBuild> {
-    const build = this.findBuild(id);
+    let build = this.findBuild(id);
     await assertBuildFile(build, build.discPath, "game file");
     await assertBuildFile(build, build.launcherPath, "launcher file");
     await assertBuildFile(build, build.sdPath, "SD card image");
+    if (build.revision === undefined) {
+      // A game added before rooms named the disc's revision ("RSBE01 Rev 1"): its header again.
+      const info = await readDiscInfo(await this.toolPath(), build.discPath);
+      build = { ...this.findBuild(id), revision: info.revision };
+      await this.saveBuilds(this.builds().map((b) => (b.id === id ? build : b)));
+    }
     const key = await buildHashKey(build);
+    const sdKey = await sdHashKey(build);
+    const sdCurrent = !build.sdPath || (build.parts?.sdCard != null && build.sdHashKey === sdKey);
     if (build.hash && build.hashKey === key) {
-      return build;
+      if (sdCurrent) {
+        return build;
+      }
+      // Only the SD card changed (or was never checked): its root, not the disc's hash again.
+      const sdCard = await this.cardRoot(id, build.sdPath!, (done, total) =>
+        this.setHashProgress(id, total > 0 ? done / total : 0),
+      );
+      const latest = this.findBuild(id);
+      if ((await sdHashKey(latest)) !== sdKey || latest.hashKey !== key || !latest.parts) {
+        return latest;
+      }
+      const updated: ModBuild = { ...latest, parts: { ...latest.parts, sdCard }, sdHashKey: sdKey };
+      await this.saveBuilds(this.builds().map((b) => (b.id === id ? updated : b)));
+      return updated;
     }
     const tool = await this.toolPath();
     // DolphinTool reports nothing while it hashes a compressed disc: the bar has no share then.
@@ -400,6 +444,10 @@ export class ModsManager {
       (disc, onDisc) => discContentSha1WithProgress(tool, disc, onDisc),
       progress,
     );
+    // The SD card's root, which rooms compare (docs/design/brawl-mods.md §6.5).
+    parts.sdCard = build.sdPath
+      ? await this.cardRoot(id, build.sdPath, (done, total) => this.setHashProgress(id, total > 0 ? done / total : 0))
+      : null;
     log.info(`Hashed ${build.name} in ${((Date.now() - started) / 1000).toFixed(1)} s`);
     const hash = combineBuildHash(parts);
     // The build may have been edited meanwhile: keep the newest, with this hash if its parts are the same.
@@ -414,13 +462,27 @@ export class ModsManager {
         this.emit({ type: "duplicate", name: twin.name });
         throw new Error(`You already have this game: ${twin.name}.`);
       }
-      updated = { ...latest, hash, parts, hashKey: key };
+      updated = { ...latest, hash, parts, hashKey: key, sdHashKey: sdKey };
       if (updated.autoName) {
         updated.name = autoName(updated);
       }
     }
     await this.saveBuilds(this.builds().map((b) => (b.id === id ? updated : b)));
     return updated;
+  }
+
+  /** The SD card's root (DolphinTool sdhash), its hashes cached in the netplay User folder. */
+  private async cardRoot(
+    id: string,
+    sdPath: string,
+    onProgress: (done: number, total: number) => void,
+  ): Promise<string> {
+    const started = Date.now();
+    const root = await this.sdHash(await this.toolPath(), sdPath, this.dolphin.netplayUserFolder(), onProgress);
+    log.info(
+      `SD card of ${this.findBuild(id).name}: ${root.slice(0, 12)} in ${((Date.now() - started) / 1000).toFixed(1)} s`,
+    );
+    return root;
   }
 
   private async launch(build: ModBuild, room: ModsRoomArg): Promise<void> {

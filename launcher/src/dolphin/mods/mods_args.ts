@@ -2,12 +2,13 @@ import type { TestModeOptions } from "@common/test_mode";
 import path from "path";
 
 import { LOGGING_CONFIG_ARGS } from "../netplay_args";
-import type { ModBuild, ModsController } from "./types";
+import type { ModBuild, ModRoomBuild, ModsController } from "./types";
 
-/** What Dolphin's `--mods-room` takes (the JSON of PPR_MODS_ROOM, docs/design/brawl-mods.md §3). */
+/** What Dolphin's `--mods-room` takes (the JSON of PPR_MODS_ROOM, docs/design/brawl-mods.md §3),
+ * the build with its parts for the room (§6.5). */
 export type ModsRoomArg =
-  | { host: true; build: { hash: string; name: string }; public: boolean; controller: ModsController }
-  | { join: string; build: { hash: string; name: string }; controller: ModsController };
+  | { host: true; build: ModRoomBuild; public: boolean; controller: ModsController }
+  | { join: string; build: ModRoomBuild; controller: ModsController };
 
 export type ModsArgsInput = {
   /** Arguments selecting the User folder (`-u <User>`), shared with Play (the login, the settings). */

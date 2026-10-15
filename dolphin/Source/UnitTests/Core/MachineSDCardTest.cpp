@@ -3,8 +3,8 @@
 
 // The SD card of a whole-machine session (Core/Rollback/MachineSDCard): the session's writes never
 // reach an image and they roll back with the machine, a joiner plays exactly the session's card
-// (its own chunks where they match, checked as they are read, the others fetched), and nothing
-// the other players send is trusted (manifests, requests and chunks are checked; deleted data on
+// (its own chunks where they match, the others fetched before its join), and nothing the other
+// players send is trusted (manifests, file lists, requests and chunks are checked; deleted data on
 // a card is never sent).
 
 #include <algorithm>
@@ -649,17 +649,107 @@ TEST_F(MachineSDCardTest, DetachEndsAWaitingRead)
   EXPECT_GT(g.host->keep_alives, 0) << "the game's connection is kept alive while it waits";
 }
 
-TEST_F(MachineSDCardTest, BackgroundFetchStreamsTheRest)
+// Waits for a sync (StartSync) to end.
+SessionCard::SyncProgress WaitForSync(SessionCard& card)
+{
+  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
+  while (std::chrono::steady_clock::now() < deadline)
+  {
+    const auto p = card.GetSyncProgress();
+    if (p.finished || p.failed)
+      return p;
+    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+  }
+  return card.GetSyncProgress();
+}
+
+TEST_F(MachineSDCardTest, SyncFetchesEverythingBeforeTheGame)
 {
   const std::vector<u8> host = PatternCard(6, 7);
   GuestSetup g = MakeGuest(host, nullptr);
-  g.card->StartBackgroundFetch();
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-  while (g.card->MissingBytes() != 0 && std::chrono::steady_clock::now() < deadline)
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  g.card->StartSync();
+  const auto p = WaitForSync(*g.card);
+  EXPECT_TRUE(p.finished);
+  EXPECT_FALSE(p.failed);
+  EXPECT_EQ(p.total, 6 * CHUNK_SIZE);
+  EXPECT_EQ(p.done, 6 * CHUNK_SIZE);
   EXPECT_EQ(g.card->MissingBytes(), 0u);
   g.card->Detach();
   EXPECT_EQ(ReadAll(*g.card), host) << "everything fetched reads without the host";
+  EXPECT_EQ(g.card->GetStats().waits, 0u) << "no read waited";
+}
+
+TEST_F(MachineSDCardTest, SyncFailsWhenNoPlayerHasAChunk)
+{
+  const std::vector<u8> host = PatternCard(6, 7);
+  GuestSetup g = MakeGuest(host, nullptr);
+  g.host->unavailable.insert(4);
+  g.card->StartSync();
+  const auto p = WaitForSync(*g.card);
+  EXPECT_TRUE(p.failed);
+  EXPECT_FALSE(p.finished);
+  g.card->Detach();
+}
+
+TEST_F(MachineSDCardTest, OwnHashesSayWhatDiffersAtOnce)
+{
+  // The join's check: the joiner's whole card hashed first, so what differs is known before
+  // anything is read, and only that is fetched.
+  const std::vector<u8> host = PatternCard(40, 3);
+  std::vector<u8> guest = host;
+  guest[2 * CHUNK_SIZE + 1] ^= 0x01;
+  guest[33 * CHUNK_SIZE + 500] ^= 0x02;
+  WriteFile(Path("host.raw"), host);
+  WriteFile(Path("guest.raw"), guest);
+  auto manifest = std::make_shared<const Manifest>(*BuildManifest(Path("host.raw")));
+  const auto own = HashImage(Path("guest.raw"));
+  ASSERT_TRUE(own);
+  auto fake = std::make_shared<FakeHost>();
+  fake->data = host;
+  fake->manifest = manifest;
+  auto card = SessionCard::CreateGuestCard(Path("guest.raw"), manifest, Path("cache"), fake, &*own);
+  fake->card = card;
+  EXPECT_EQ(card->MissingChunks(), std::vector<u32>({2, 33}));
+  EXPECT_EQ(card->UncheckedBytes(), 0u) << "every chunk known";
+  card->StartSync();
+  EXPECT_TRUE(WaitForSync(*card).finished);
+  std::vector<u32> requested = fake->Requested();
+  std::ranges::sort(requested);
+  EXPECT_EQ(requested, std::vector<u32>({2, 33}));
+  card->Detach();
+  EXPECT_EQ(ReadAll(*card), host);
+}
+
+TEST_F(MachineSDCardTest, OverwriteMakesTheCardTheSessions)
+{
+  // "Yes, and overwrite local card": a shorter card that differs in two chunks becomes the
+  // session's card, and the hash cache says so (no full read at its next session).
+  const std::vector<u8> host = PatternCard(12, 4);
+  std::vector<u8> guest(host.begin(), host.begin() + 9 * CHUNK_SIZE);
+  guest[1 * CHUNK_SIZE + 3] ^= 0x08;
+  guest[7 * CHUNK_SIZE + 3] ^= 0x08;
+  WriteFile(Path("host.raw"), host);
+  WriteFile(Path("guest.raw"), guest);
+  auto manifest = std::make_shared<const Manifest>(*BuildManifest(Path("host.raw")));
+  const auto own = HashImage(Path("guest.raw"));
+  ASSERT_TRUE(own);
+  auto fake = std::make_shared<FakeHost>();
+  fake->data = host;
+  fake->manifest = manifest;
+  auto card = SessionCard::CreateGuestCard(Path("guest.raw"), manifest, Path("cache"), fake, &*own);
+  fake->card = card;
+  EXPECT_EQ(card->MissingChunks(), std::vector<u32>({1, 7, 9, 10, 11}));
+  card->StartSync();
+  ASSERT_TRUE(WaitForSync(*card).finished);
+  std::string error;
+  ASSERT_TRUE(card->WriteFetchedToImage(*own, &error)) << error;
+  card->Detach();
+  card.reset();
+  EXPECT_EQ(ReadFile(Path("guest.raw")), host);
+  const auto cached = CachedImageHashes(Path("guest.raw"));
+  ASSERT_TRUE(cached) << "the hashes were kept";
+  EXPECT_EQ(cached->hashes, HashImage(Path("host.raw"))->hashes);
+  EXPECT_EQ(ManifestRoot(*BuildManifest(Path("guest.raw"))), ManifestRoot(*manifest));
 }
 
 // ------------------------------------------------------------------------------ the card server
@@ -882,25 +972,6 @@ TEST_F(MachineSDCardTest, ReadChunksListsFirstReadsInOrder)
   EXPECT_EQ(card->ReadChunks(2), (std::vector<u32>{3, 1}));
 }
 
-TEST_F(MachineSDCardTest, BackgroundFetchTakesTheGivenChunksFirst)
-{
-  const std::vector<u8> host = PatternCard(10, 6);
-  GuestSetup g = MakeGuest(host, nullptr);
-  const u32 first[] = {7, 2, 7, 99};  // a repeat and a chunk past the card are skipped
-  g.card->StartBackgroundFetch(first);
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-  while (g.card->MissingBytes() != 0 && std::chrono::steady_clock::now() < deadline)
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
-  EXPECT_EQ(g.card->MissingBytes(), 0u);
-  const std::vector<u32> requested = g.host->Requested();
-  ASSERT_GE(requested.size(), 3u);
-  EXPECT_EQ(requested[0], 7u);
-  EXPECT_EQ(requested[1], 2u);
-  EXPECT_EQ(requested[2], 0u);
-  g.card->Detach();
-  EXPECT_EQ(ReadAll(*g.card), host);
-}
-
 TEST_F(MachineSDCardTest, AGuestFetchesFromAnotherGuest)
 {
   // A room: the session's card comes from its starter, the second joiner fetches from the first
@@ -908,10 +979,8 @@ TEST_F(MachineSDCardTest, AGuestFetchesFromAnotherGuest)
   std::vector<u8> host = PatternCard(9, 7);
   std::fill_n(host.begin() + 4 * CHUNK_SIZE, CHUNK_SIZE, u8{0});
   GuestSetup first = MakeGuest(host, nullptr);
-  first.card->StartBackgroundFetch();
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-  while (first.card->MissingBytes() != 0 && std::chrono::steady_clock::now() < deadline)
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+  first.card->StartSync();
+  ASSERT_TRUE(WaitForSync(*first.card).finished);
   ASSERT_EQ(first.card->MissingBytes(), 0u);
 
   constexpr u8 HEADER = 0x5A;
@@ -984,56 +1053,158 @@ TEST_F(MachineSDCardTest, AFetchingReadAsksForTheChunksAfterItToo)
   EXPECT_EQ(ReadAll(*g.card), host);
 }
 
-TEST_F(MachineSDCardTest, TheBackgroundCheckFindsWhatDiffersAndIsKept)
+// ------------------------------------------------------------------------- hashes, roots, files
+
+TEST_F(MachineSDCardTest, ChunksAreHashedWithBlake2b)
 {
-  // Nothing read yet: the background check goes through the joiner's whole card, fetches the
-  // chunks that differ, and keeps its hashes, so the next join knows them at once.
-  const std::vector<u8> host = PatternCard(40, 3);
-  std::vector<u8> guest = host;
-  guest[2 * CHUNK_SIZE + 1] ^= 0x01;
-  guest[33 * CHUNK_SIZE + 500] ^= 0x02;
-  GuestSetup g = MakeGuest(host, &guest);
-  EXPECT_EQ(g.card->MissingBytes(), 0u);
-  EXPECT_FALSE(g.card->ScanDone());
-  g.card->StartBackgroundFetch();
-  const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(20);
-  while ((!g.card->ScanDone() || g.card->MissingBytes() != 0) &&
-         std::chrono::steady_clock::now() < deadline)
+  // BLAKE2b-128 of nothing (RFC 7693's parameters, 16-byte output).
+  const Hash h = HashChunk({});
+  const Hash expected = {0xca, 0xe6, 0x69, 0x41, 0xd9, 0xef, 0xbd, 0x40,
+                         0x4e, 0x4d, 0x88, 0x75, 0x8e, 0xa6, 0x76, 0x70};
+  EXPECT_EQ(h, expected);
+}
+
+TEST_F(MachineSDCardTest, TheRootFollowsWhatPlaysNotFreeSpace)
+{
+  ASSERT_TRUE(Common::SDCardCreate(64, Path("a.raw")));
+  std::vector<u8> card = ReadFile(Path("a.raw"));
+  const Root a = ManifestRoot(*BuildManifest(Path("a.raw")));
+  EXPECT_EQ(RootHex(a).size(), 64u);
+
+  // Deleted data in free space: the same card.
+  card[48 * MiB + 77] = 0x5A;
+  WriteFile(Path("b.raw"), card);
+  EXPECT_EQ(ManifestRoot(*BuildManifest(Path("b.raw"))), a);
+
+  // A byte the card uses (its FAT): another card.
+  card[32 * 512 + 100] ^= 0x01;
+  WriteFile(Path("c.raw"), card);
+  EXPECT_NE(ManifestRoot(*BuildManifest(Path("c.raw"))), a);
+}
+
+namespace
+{
+// A FAT32 directory entry: an 8.3 name, attributes, first cluster, size.
+std::array<u8, 32> ShortEntry(const char (&name11)[12], u8 attr, u32 cluster, u32 size)
+{
+  std::array<u8, 32> e{};
+  std::memcpy(e.data(), name11, 11);
+  e[11] = attr;
+  e[20] = static_cast<u8>(cluster >> 16);
+  e[21] = static_cast<u8>(cluster >> 24);
+  e[26] = static_cast<u8>(cluster);
+  e[27] = static_cast<u8>(cluster >> 8);
+  std::memcpy(&e[28], &size, 4);
+  return e;
+}
+
+// A long name's entries, in the order they precede their short entry.
+std::vector<std::array<u8, 32>> LongEntries(const std::u16string& name)
+{
+  const size_t pieces = (name.size() + 12) / 13;
+  std::vector<std::array<u8, 32>> out;
+  for (size_t k = pieces; k-- > 0;)
   {
-    std::this_thread::sleep_for(std::chrono::milliseconds(20));
+    std::array<u8, 32> e{};
+    e[0] = static_cast<u8>((k + 1) | (k + 1 == pieces ? 0x40 : 0));
+    e[11] = 0x0F;
+    int i = 0;
+    for (const auto& [offset, n] : {std::pair{1, 5}, std::pair{14, 6}, std::pair{28, 2}})
+    {
+      for (int j = 0; j < n; ++j, ++i)
+      {
+        const size_t at = k * 13 + i;
+        const char16_t ch = at < name.size() ? name[at] : at == name.size() ? 0 : 0xFFFF;
+        e[offset + 2 * j] = static_cast<u8>(ch);
+        e[offset + 2 * j + 1] = static_cast<u8>(ch >> 8);
+      }
+    }
+    out.push_back(e);
   }
-  EXPECT_TRUE(g.card->ScanDone());
-  EXPECT_EQ(g.card->UncheckedBytes(), 0u) << "every chunk checked";
-  EXPECT_EQ(g.card->MissingBytes(), 0u);
-  std::vector<u32> requested = g.host->Requested();
-  std::ranges::sort(requested);
-  EXPECT_EQ(requested, std::vector<u32>({2, 33}));
-  g.card->Detach();
-  EXPECT_EQ(ReadAll(*g.card), host) << "all of it here without the host";
+  return out;
+}
+}  // namespace
 
-  // The next join with the same card: what differs is known before anything is read.
-  auto host2 = std::make_shared<FakeHost>();
-  host2->data = host;
-  host2->manifest = g.manifest;
-  auto again = SessionCard::CreateGuestCard(Path("guest.raw"), g.manifest, Path("cache2"), host2);
-  host2->card = again;
-  EXPECT_TRUE(again->ScanDone());
-  EXPECT_EQ(again->MissingBytes(), 2 * CHUNK_SIZE);
-  EXPECT_EQ(again->UncheckedBytes(), 38 * CHUNK_SIZE) << "the rest is still checked as read";
-  EXPECT_EQ(ReadAll(*again), host);
-  std::vector<u32> requested2 = host2->Requested();
-  std::ranges::sort(requested2);
-  EXPECT_EQ(requested2, std::vector<u32>({2, 33}));
+TEST_F(MachineSDCardTest, FilesAreListedWithTheirChunks)
+{
+  ASSERT_TRUE(Common::SDCardCreate(64, Path("card.raw")));
+  std::vector<u8> card = ReadFile(Path("card.raw"));
+  u32 fat_sectors;
+  std::memcpy(&fat_sectors, &card[0x24], 4);
+  const u64 fat = 32 * 512;
+  const u64 data = (32 + 2 * u64{fat_sectors}) * 512;  // cluster 2, the root directory
+  auto set_fat = [&](u32 cluster, u32 value) {
+    std::memcpy(&card[fat + cluster * 4], &value, 4);
+    std::memcpy(&card[fat + u64{fat_sectors} * 512 + cluster * 4], &value, 4);
+  };
+  auto cluster_at = [&](u32 cluster) { return data + u64{cluster - 2} * 512; };
 
-  // A changed card is checked again (Windows: nothing may have the image open to write it).
-  again.reset();
-  g.card.reset();
-  guest[20 * CHUNK_SIZE] ^= 0x04;
-  std::this_thread::sleep_for(std::chrono::milliseconds(20));
-  WriteFile(Path("guest.raw"), guest);
-  auto changed =
-      SessionCard::CreateGuestCard(Path("guest.raw"), g.manifest, Path("cache3"), host2);
-  EXPECT_FALSE(changed->ScanDone());
-  EXPECT_EQ(changed->MissingBytes(), 0u);
-  changed->Detach();
+  // Root: "Long File Name.txt" (clusters 3, 4, 5, then one 40 MiB in), a deleted entry, "SUB".
+  const u32 far = static_cast<u32>((40 * MiB - data) / 512 + 2);
+  size_t pos = cluster_at(2);
+  for (const auto& e : LongEntries(u"Long File Name.txt"))
+  {
+    std::memcpy(&card[pos], e.data(), 32);
+    pos += 32;
+  }
+  auto put = [&](const std::array<u8, 32>& e) {
+    std::memcpy(&card[pos], e.data(), 32);
+    pos += 32;
+  };
+  put(ShortEntry("LONGFI~1TXT", 0x20, 3, 1900));
+  auto gone = ShortEntry("GONE    BIN", 0x20, 9, 10);
+  gone[0] = 0xE5;
+  put(gone);
+  put(ShortEntry("SUB        ", 0x10, 6, 0));
+  set_fat(3, 4);
+  set_fat(4, 5);
+  set_fat(5, far);
+  set_fat(far, 0x0FFFFFFF);
+  // SUB: ".", "..", "A.BIN" (cluster 7).
+  pos = cluster_at(6);
+  put(ShortEntry(".          ", 0x10, 6, 0));
+  put(ShortEntry("..         ", 0x10, 0, 0));
+  put(ShortEntry("A       BIN", 0x20, 7, 100));
+  set_fat(6, 0x0FFFFFFF);
+  set_fat(7, 0x0FFFFFFF);
+  WriteFile(Path("card.raw"), card);
+
+  File::IOFile f(Path("card.raw"), "rb");
+  auto files = ListCardFiles(f, card.size());
+  ASSERT_TRUE(files);
+  ASSERT_EQ(files->size(), 2u);
+  std::ranges::sort(*files, {}, &CardFile::path);
+  EXPECT_EQ((*files)[0].path, "Long File Name.txt");
+  EXPECT_EQ((*files)[0].size, 1900u);
+  const u32 near_chunk = static_cast<u32>(cluster_at(3) / CHUNK_SIZE);
+  const u32 far_chunk = static_cast<u32>(cluster_at(far) / CHUNK_SIZE);
+  ASSERT_GE((*files)[0].runs.size(), 2u);
+  EXPECT_EQ((*files)[0].runs.front().first, near_chunk);
+  EXPECT_EQ((*files)[0].runs.back(), std::make_pair(far_chunk, 1u));
+  EXPECT_EQ((*files)[1].path, "SUB/A.BIN");
+
+  // Which files a chunk that differs belongs to, largest first.
+  const u32 differ[] = {near_chunk, far_chunk};
+  const auto touched = FilesTouching(*files, differ);
+  ASSERT_FALSE(touched.empty());
+  EXPECT_EQ(touched[0]->path, "Long File Name.txt");
+  const u32 only_far[] = {far_chunk};
+  ASSERT_EQ(FilesTouching(*files, only_far).size(), 1u);
+
+  // The list over the wire, and a stranger's list checked.
+  sf::Packet packet;
+  WriteFileList(*files, packet);
+  const u32 chunks = static_cast<u32>(card.size() / CHUNK_SIZE);
+  auto back = ReadFileList(packet, chunks);
+  ASSERT_TRUE(back);
+  ASSERT_EQ(back->size(), 2u);
+  EXPECT_EQ((*back)[0].path, (*files)[0].path);
+  EXPECT_EQ((*back)[0].runs, (*files)[0].runs);
+  sf::Packet small;
+  WriteFileList(*files, small);
+  EXPECT_FALSE(ReadFileList(small, far_chunk)) << "a run past the card";
+  std::vector<CardFile> bad{{"a\nb", 1, {{0, 1}}}};
+  sf::Packet control;
+  WriteFileList(bad, control);
+  EXPECT_FALSE(ReadFileList(control, chunks)) << "a control character in a path";
 }

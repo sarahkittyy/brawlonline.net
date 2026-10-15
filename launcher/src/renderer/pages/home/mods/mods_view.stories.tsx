@@ -136,6 +136,7 @@ const Frame = ({ state, ...props }: Omit<Partial<ModsViewProps>, "state"> & { st
       onJoin={noop}
       onJoinCode={noop}
       onMissingGame={noop}
+      onFixBuild={noop}
       onRequest={noop}
       onCopyCode={noop}
       {...props}

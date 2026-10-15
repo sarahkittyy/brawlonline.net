@@ -1,14 +1,18 @@
 import type { PublicModRoom } from "@accounts/types";
+import type { PartMatch } from "@dolphin/mods/room_match";
+import { matchRoom } from "@dolphin/mods/room_match";
 import type {
   ModBuild,
   ModRoomRequest,
   ModRoomSlot,
   ModRoomStatus,
   ModsController,
+  ModSdSync,
   ModsState,
 } from "@dolphin/mods/types";
 import { defaultController } from "@dolphin/mods/types";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
+import CheckRoundedIcon from "@mui/icons-material/CheckRounded";
 import ChevronRightIcon from "@mui/icons-material/ChevronRight";
 import CloseRoundedIcon from "@mui/icons-material/CloseRounded";
 import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
@@ -69,6 +73,8 @@ export type ModsViewProps = {
   onJoinCode: (code: string) => void;
   /** A public room whose game the player does not have. */
   onMissingGame: (name: string, hash: string) => void;
+  /** A room's part that differs from the player's game: its edit window, that field pulsing. */
+  onFixBuild: (build: ModBuild, part: "disc" | "sd") => void;
   onRequest: (request: ModRoomRequest) => void;
   onCopyCode: (code: string) => void;
 };
@@ -85,7 +91,7 @@ export const ModsView = (props: ModsViewProps) => {
   const { state, error } = props;
   const status = state?.running ? state.status : null;
   // The running room's game, if it is one of ours: what it is made for.
-  const roomBuild = status?.room ? state?.builds.find((b) => b.hash === status.room!.build.hash) : undefined;
+  const roomBuild = status?.room ? matchRoom(status.room.build, state?.builds ?? []).build ?? undefined : undefined;
   // Why the last Dolphin closed (a kick, a failed join), until the player closes the message; a
   // new room clears it anyway.
   const [dismissed, setDismissed] = useState<string | null>(null);
@@ -149,6 +155,7 @@ export const ModsView = (props: ModsViewProps) => {
             onJoin={props.onJoin}
             onJoinCode={props.onJoinCode}
             onMissingGame={props.onMissingGame}
+            onFixBuild={props.onFixBuild}
             onLogIn={props.onLogIn}
           />
         </div>
@@ -211,9 +218,118 @@ export const ModsView = (props: ModsViewProps) => {
         </div>
       </div>
       <FaqDialog open={faqOpen} onClose={() => setFaqOpen(false)} />
+      <SdSyncDialog sync={status?.session?.sd_sync ?? null} onRequest={props.onRequest} />
     </div>
   );
 };
+
+/** A joiner whose SD card differs from the host's (docs/design/brawl-mods.md §6.5): download the
+ * host's card before the join, or leave. Dolphin waits for the answer. */
+const SdSyncDialog = ({
+  sync,
+  onRequest,
+}: {
+  sync: ModSdSync | null;
+  onRequest: (request: ModRoomRequest) => void;
+}) => {
+  const asking = sync?.step === "ask";
+  // Answered: closed until Dolphin asks again (its file says "ask" until it read the answer).
+  const [answered, setAnswered] = useState(false);
+  useEffect(() => {
+    if (!asking) {
+      setAnswered(false);
+    }
+  }, [asking]);
+  if (!sync) {
+    return null;
+  }
+  const answer = (choice: "yes" | "overwrite" | "no") => {
+    setAnswered(true);
+    onRequest({ op: "sd-sync", choice });
+  };
+  const more = sync.files - sync.names.length;
+  return (
+    <Dialog open={asking && !answered} maxWidth="sm" fullWidth={true}>
+      <DialogTitle>{Messages.sdSyncTitle()}</DialogTitle>
+      <DialogContent>
+        <p className={styles.sdSyncBody}>
+          {Messages.sdSyncBody(Messages.megabytes(sync.bytes), sync.files, Messages.duration(sync.eta_s))}
+        </p>
+        <p className={styles.sdSyncWarning}>{Messages.sdSyncWarning()}</p>
+        {sync.names.length > 0 && (
+          <div className={styles.sdSyncFiles}>
+            <div>{Messages.sdSyncFiles()}</div>
+            <ul>
+              {sync.names.slice(0, 8).map((name) => (
+                <li key={name}>{name}</li>
+              ))}
+            </ul>
+            {more + Math.max(0, sync.names.length - 8) > 0 && (
+              <div>{Messages.sdSyncMoreFiles(more + Math.max(0, sync.names.length - 8))}</div>
+            )}
+          </div>
+        )}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={() => answer("no")}>{Messages.sdSyncNo()}</Button>
+        <Button variant="outlined" onClick={() => answer("yes")}>
+          {Messages.sdSyncYes()}
+        </Button>
+        <Button variant="contained" onClick={() => answer("overwrite")}>
+          {Messages.sdSyncOverwrite()}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
+};
+
+/** One part of a game as rooms compare it ("Brawl: 3f9a1c"), with how the player's compares. */
+const PartChip = ({
+  label,
+  hash,
+  match,
+  tooltip,
+  onClick,
+}: {
+  label: string;
+  hash: string;
+  /** null: shown as it is (the player's own game). */
+  match: PartMatch | null;
+  tooltip: string;
+  onClick?: () => void;
+}) => (
+  <Tooltip title={tooltip} disableInteractive={true}>
+    <span
+      role={onClick ? "button" : undefined}
+      tabIndex={onClick ? 0 : undefined}
+      className={clsx(
+        styles.partChip,
+        match === "same" && styles.partSame,
+        match === "differs" && styles.partDiffers,
+        match === "wrong" && styles.partWrong,
+        onClick && styles.partClickable,
+      )}
+      onClick={(e) => {
+        if (onClick) {
+          e.stopPropagation();
+          onClick();
+        }
+      }}
+      onKeyDown={(e) => {
+        if (onClick && (e.key === "Enter" || e.key === " ")) {
+          e.preventDefault();
+          e.stopPropagation();
+          onClick();
+        }
+      }}
+    >
+      {Messages.partHash(label, hash)}
+      {match === "same" && <CheckRoundedIcon className={styles.partIcon} />}
+      {match === "wrong" && <CloseRoundedIcon className={styles.partIcon} />}
+      {match === "differs" && <span className={styles.partIcon}>!</span>}
+    </span>
+  </Tooltip>
+);
 
 /** "Your games"' help: questions players ask. */
 const FaqDialog = ({ open, onClose }: { open: boolean; onClose: () => void }) => (
@@ -243,6 +359,7 @@ const PublicRoomsBlock = ({
   onJoin,
   onJoinCode,
   onMissingGame,
+  onFixBuild,
   onLogIn,
 }: {
   rooms: ModsPublicRooms;
@@ -253,6 +370,7 @@ const PublicRoomsBlock = ({
   onJoin: (build: ModBuild, code: string) => void;
   onJoinCode: (code: string) => void;
   onMissingGame: (name: string, hash: string) => void;
+  onFixBuild: (build: ModBuild, part: "disc" | "sd") => void;
   onLogIn: () => void;
 }) => {
   const [code, setCode] = useState("");
@@ -278,10 +396,21 @@ const PublicRoomsBlock = ({
     content = (
       <ul className={styles.roomList}>
         {listed.map((room) => {
-          const build = builds.find((b) => b.hash === room.build.hash);
-          const label = Messages.buildName(room.build.name, room.build.hash.slice(0, 8));
+          const match = matchRoom(room.build, builds);
+          const build = match.joinable ? match.build : null;
+          const label = match.hasParts
+            ? room.build.name
+            : Messages.buildName(room.build.name, room.build.hash.slice(0, 8));
           const own = room.code === ownCode;
           const off = disabled || own;
+          const gameId = room.build.discLabel?.split(" ")[0];
+          const fix = (part: "disc" | "sd") => () => {
+            if (match.build) {
+              onFixBuild(match.build, part);
+            } else {
+              onMissingGame(room.build.name, room.build.hash);
+            }
+          };
           return (
             <li key={room.code}>
               <Tooltip
@@ -290,6 +419,10 @@ const PublicRoomsBlock = ({
                     ? Messages.yourRoomTooltip()
                     : build
                     ? Messages.joinPublicTooltip(build.name)
+                    : match.hasParts && match.disc === "wrong"
+                    ? Messages.discDiffers(room.build.discLabel)
+                    : match.hasParts && match.sd === "wrong"
+                    ? Messages.sdMissing()
                     : Messages.needBuild(room.build.name, room.build.hash.slice(0, 8))
                 }
                 placement="top"
@@ -307,6 +440,8 @@ const PublicRoomsBlock = ({
                     }
                     if (build) {
                       onJoin(build, room.code);
+                    } else if (match.build && match.hasParts) {
+                      fix(match.disc === "wrong" ? "disc" : "sd")();
                     } else {
                       onMissingGame(room.build.name, room.build.hash);
                     }
@@ -315,6 +450,42 @@ const PublicRoomsBlock = ({
                   <div className={styles.roomMain}>
                     <div className={styles.roomHost}>{Messages.roomHost(room.hostName)}</div>
                     <div className={styles.roomGame}>{label}</div>
+                    {match.hasParts && room.build.disc && (
+                      <div className={styles.partChips}>
+                        <PartChip
+                          label={Messages.discPart(gameId)}
+                          hash={room.build.disc}
+                          match={match.disc}
+                          tooltip={
+                            match.disc === "same"
+                              ? Messages.discMatches()
+                              : `${
+                                  gameId?.startsWith("RSB")
+                                    ? Messages.discDiffers(room.build.discLabel)
+                                    : Messages.discDiffersGame(room.build.discLabel)
+                                } ${Messages.fixPartTooltip()}`
+                          }
+                          onClick={match.disc === "same" ? undefined : fix("disc")}
+                        />
+                        {(room.build.sd || match.sd === "wrong") && (
+                          <PartChip
+                            label={Messages.sdPart()}
+                            hash={room.build.sd || "-"}
+                            match={match.sd}
+                            tooltip={
+                              match.sd === "same"
+                                ? Messages.sdMatches()
+                                : match.sd === "differs"
+                                ? `${Messages.sdDiffers()} ${Messages.fixPartTooltip()}`
+                                : `${
+                                    room.build.sd ? Messages.sdMissing() : Messages.sdExtra()
+                                  } ${Messages.fixPartTooltip()}`
+                            }
+                            onClick={match.sd === "same" || !match.build ? undefined : fix("sd")}
+                          />
+                        )}
+                      </div>
+                    )}
                   </div>
                   <span className={styles.roomPlayers}>
                     <PersonOutlineIcon style={{ fontSize: 16 }} />
@@ -328,6 +499,8 @@ const PublicRoomsBlock = ({
                         {Messages.join()}
                         <ChevronRightIcon style={{ fontSize: 18 }} />
                       </>
+                    ) : match.hasParts && match.build && match.disc === "wrong" ? (
+                      Messages.noJoinDisc()
                     ) : (
                       Messages.noGame()
                     )}
@@ -409,7 +582,24 @@ const BuildRow = ({
           <Tooltip title={build.name} enterDelay={600}>
             <span className={styles.name}>{build.name}</span>
           </Tooltip>
-          {build.hash ? (
+          {build.hash && build.parts ? (
+            <span className={styles.partChips}>
+              <PartChip
+                label={Messages.discPart(build.gameId ?? undefined)}
+                hash={build.parts.disc}
+                match={null}
+                tooltip={Messages.partsTooltip()}
+              />
+              {build.sdPath && build.parts.sdCard && (
+                <PartChip
+                  label={Messages.sdPart()}
+                  hash={build.parts.sdCard}
+                  match={null}
+                  tooltip={Messages.partsTooltip()}
+                />
+              )}
+            </span>
+          ) : build.hash ? (
             <Tooltip title={Messages.hashTooltip(build.hash)}>
               <span className={styles.hash}>{build.hash.slice(0, 8)}</span>
             </Tooltip>
@@ -494,6 +684,16 @@ const RoomPanel = ({
     return () => clearTimeout(timer);
   }, [publicClicked, roomPublic]);
   const sessionError = status?.session?.phase === "error" ? status.session.error : undefined;
+  const sync = status?.session?.sd_sync;
+  let syncLine: string | null = null;
+  if (sync?.step === "checking" && sync.checked < 1) {
+    syncLine = Messages.sdSyncChecking(Math.floor(sync.checked * 100));
+  } else if (sync?.step === "downloading" && sync.total) {
+    syncLine = Messages.sdSyncDownloading(
+      Math.floor(((sync.done ?? 0) * 100) / sync.total),
+      Messages.duration(sync.eta_s),
+    );
+  }
   let title: string = Messages.yourRoom();
   if (room) {
     title = Messages.inRoom(room.code);
@@ -544,6 +744,19 @@ const RoomPanel = ({
             <div className={styles.error}>{status.lastRequest.error}</div>
           )}
           {status?.state === "left" && <p className={styles.empty}>{Messages.left()}</p>}
+          {syncLine && (
+            <div className={styles.progress}>
+              <LinearProgress
+                variant="determinate"
+                value={
+                  sync?.step === "downloading"
+                    ? ((sync.done ?? 0) * 100) / (sync.total || 1)
+                    : (sync?.checked ?? 0) * 100
+                }
+              />
+              <span>{syncLine}</span>
+            </div>
+          )}
           {!room && !status?.error && <LinearProgress />}
           {room && (
             <>

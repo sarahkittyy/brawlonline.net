@@ -20,6 +20,8 @@ export const ModsMessages = {
   noBuilds: () => "Add a game or a mod folder to play.",
   notHashed: () => "Not checked yet",
   hashTooltip: (_hash: string) => "The game's hash. All your friends need the exact same hash.",
+  partsTooltip: () =>
+    "Rooms compare these: the disc must be the same, and a different SD card is downloaded from the host when you join.",
   checking: (percent: number) => `Checking files… ${percent}%`,
   checkingDisc: () => "Checking the disc…",
   hashFailed: (name: string, error: string) => `Couldn't check ${name}: ${error}`,
@@ -113,4 +115,46 @@ export const ModsMessages = {
     `This room plays ${name || "a game"} (${hash.slice(0, 8)}). Add the exact same game (or mod) to join it.`,
   ok: () => "OK",
   joinPublicTooltip: (build: string) => `Start Dolphin with ${build} and join this room.`,
+
+  // A room's parts (docs/design/brawl-mods.md §6.5): the disc must match, the SD card is synced.
+  discPart: (gameId: string | undefined) => (gameId?.startsWith("RSB") ? "Brawl" : "Disc"),
+  sdPart: () => "SD card",
+  partHash: (part: string, hash: string) => `${part}: ${hash.slice(0, 6)}`,
+  discMatches: () => "Your disc matches the room's.",
+  discDiffers: (label: string | undefined) =>
+    `Brawl ISOs don't match. Make sure you're both on the same revision.${label ? ` The room plays ${label}.` : ""}`,
+  discDiffersGame: (label: string | undefined) =>
+    `The discs don't match. Make sure you both have the same version of the game.${
+      label ? ` The room plays ${label}.` : ""
+    }`,
+  sdMatches: () => "Your SD card matches the room's.",
+  sdDiffers: () => "SD cards do not match. You can download the host's card when you join.",
+  sdMissing: () => "The room's game has an SD card, and yours has none. Add the mod's SD card to your game.",
+  sdExtra: () => "The room's game has no SD card, and yours has one.",
+  fixPartTooltip: () => "Click to change it in your game.",
+  noJoinDisc: () => "Wrong disc",
+
+  // Joining with an SD card that differs (Dolphin's sd_sync).
+  sdSyncTitle: () => "Your SD card is different",
+  sdSyncBody: (mb: string, files: number, eta: string) =>
+    `Your SD card is ${mb} different from the host's (${files} ${
+      files === 1 ? "file" : "files"
+    }). Download it? ETA: ${eta}`,
+  sdSyncWarning: () =>
+    "(!) SD cards can be used to run code on your Wii. Only download from a friend you trust, never a stranger.",
+  sdSyncFiles: () => "Files that differ:",
+  sdSyncMoreFiles: (n: number) => `…and ${n} more`,
+  sdSyncNo: () => "No",
+  sdSyncYes: () => "Yes",
+  sdSyncOverwrite: () => "Yes, and overwrite local card",
+  sdSyncChecking: (percent: number) => `Checking your SD card… ${percent}%`,
+  sdSyncDownloading: (percent: number, eta: string) => `Downloading the host's SD card… ${percent}% (${eta} left)`,
+  megabytes: (bytes: number) =>
+    bytes >= 1024 * 1024 * 1024
+      ? `${(bytes / 1024 ** 3).toFixed(1)} GB`
+      : `${Math.max(1, Math.round(bytes / 1024 ** 2))} MB`,
+  duration: (seconds: number) =>
+    seconds < 60
+      ? `${Math.max(1, Math.round(seconds))} seconds`
+      : `${Math.round(seconds / 60)} ${Math.round(seconds / 60) === 1 ? "minute" : "minutes"}`,
 };

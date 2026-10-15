@@ -6,11 +6,11 @@
 // Everyone plays the session's card: the card of the player who started the session. Nothing a
 // session does reaches anyone's image: every write goes to a throwaway layer (SessionCard) that
 // rolls back with the machine. The starter's card has a manifest (a hash per 64 KiB chunk, and
-// which chunks hold no file), which joiners get with the machine image. A joiner plays its own
-// card's chunks where they match the manifest (each checked the first time the game reads it)
-// and fetches the others from the players when the game first reads them (the emulated read
-// waits, so the game sees the same bytes on every machine), the chunks the game read before the
-// join first, in the background.
+// which chunks hold no file) and a list of its files. Before a joiner asks to join, it compares
+// its own card with the manifest and, once its player agreed, fetches every chunk it has not got
+// (StartSync) while the room plays on: the game never waits for the network. A read of a chunk
+// the joiner still has not got (a bug) fetches it and waits, so the game still sees the same
+// bytes on every machine.
 //
 // Every player is a stranger to the others: everything they send is checked (sizes, indices,
 // every chunk against its hash in the manifest), and none of it reaches anyone's own files. A
@@ -48,12 +48,6 @@ constexpr u64 MAX_CARD_SIZE = 64ull << 30;
 constexpr u32 MAX_CHUNKS = static_cast<u32>(MAX_CARD_SIZE / CHUNK_SIZE);
 // Chunks one request may ask for.
 constexpr u32 MAX_REQUEST_CHUNKS = 64;
-// The background stream stops after this much; reads still fetch what they need.
-constexpr u64 BACKGROUND_CAP_BYTES = 2ull << 30;
-// The background stream's rate, so it never crowds out the game's own traffic.
-constexpr u64 BACKGROUND_BYTES_PER_SECOND = 256 * 1024;
-// A joiner's background check of its whole card against the manifest (a disk read), at this rate.
-constexpr u64 SCAN_BYTES_PER_SECOND = 128ull << 20;
 // A read that has to fetch also asks for the chunks after it that the card lacks, up to this
 // many: a game reads a file front to back, and those come in one round trip instead of one each.
 constexpr u32 READ_AHEAD_CHUNKS = 8;
@@ -61,8 +55,16 @@ constexpr u32 READ_AHEAD_CHUNKS = 8;
 constexpr int FETCH_TIMEOUT_MS = 60'000;
 // A request with no answer after this long is sent again.
 constexpr int REQUEST_RETRY_MS = 5'000;
+// A card's file list: at most this many files, each path at most this long.
+constexpr u32 MAX_CARD_FILES = 1u << 18;
+constexpr size_t MAX_CARD_PATH = 1024;
 
+// A chunk's hash: BLAKE2b-128 (Monocypher), cryptographic, since a chunk may come from any
+// player and is checked against the host's manifest.
 using Hash = std::array<u8, 16>;
+// A whole card's: BLAKE2b-256 of its canonical manifest. Two cards with the same root play the
+// same (their free space may differ), so rooms compare cards by it (DolphinTool sdhash).
+using Root = std::array<u8, 32>;
 
 struct ChunkInfo
 {
@@ -84,6 +86,28 @@ struct Manifest
 u32 ChunkCountFor(u64 size);
 Hash HashChunk(std::span<const u8> data);
 
+// A file on a card: its path from the card's root ("rex_/pf/fighter/hero/FitHero.pac") and the
+// chunks its clusters are in, as runs of consecutive chunks (first, count).
+struct CardFile
+{
+  std::string path;
+  u64 size = 0;
+  std::vector<std::pair<u32, u32>> runs;
+};
+
+// The files of a FAT16/FAT32 image (with or without an MBR), long names included, or nullopt
+// when it is not a FAT volume this can read.
+std::optional<std::vector<CardFile>> ListCardFiles(File::IOFile& image, u64 image_size);
+
+// Wire format of a file list; ReadFileList checks everything (a stranger's bytes): the counts,
+// the paths, and every run against the card's `chunk_count`.
+void WriteFileList(const std::vector<CardFile>& files, sf::Packet& packet);
+std::optional<std::vector<CardFile>> ReadFileList(sf::Packet& packet, u32 chunk_count);
+
+// The files that hold any of `chunks` (sorted, ascending), largest first.
+std::vector<const CardFile*> FilesTouching(const std::vector<CardFile>& files,
+                                           std::span<const u32> chunks);
+
 // The chunks of a FAT16/FAT32 image (with or without an MBR) that no cluster in use touches.
 // Chunks outside the data area (MBR, reserved sectors, FATs, FAT16 root directory) are in use.
 // nullopt when the image is not a FAT volume this can read: then every chunk counts as in use.
@@ -97,16 +121,25 @@ struct ImageHashes
   std::vector<Hash> hashes;
   std::vector<bool> zero;
 };
+// `progress` (any thread) hears the bytes read so far and the image's size while it is hashed
+// (nothing when the cache has it).
+using HashProgress = std::function<void(u64 done, u64 total)>;
 std::optional<ImageHashes> HashImage(const std::string& path,
-                                     const std::atomic<bool>* cancel = nullptr);
+                                     const std::atomic<bool>* cancel = nullptr,
+                                     const HashProgress& progress = {});
+// The hashes as the cache holds them for this image now (size and modification time), or nullopt.
+std::optional<ImageHashes> CachedImageHashes(const std::string& path);
 
 // The manifest of the session starter's card image.
 std::optional<Manifest> BuildManifest(const std::string& path,
-                                      const std::atomic<bool>* cancel = nullptr);
+                                      const std::atomic<bool>* cancel = nullptr,
+                                      const HashProgress& progress = {});
 
 // The manifest's contents in a fixed form (its size, then each chunk's zero flag and hash, not
 // compressed): what players compare to agree on the card.
 std::vector<u8> CanonicalManifest(const Manifest& manifest);
+Root ManifestRoot(const Manifest& manifest);
+std::string RootHex(const Root& root);
 
 // Wire format. ReadManifest checks everything (a stranger's bytes) and returns nullopt for a
 // malformed one.
@@ -198,12 +231,14 @@ public:
   static std::shared_ptr<SessionCard> CreateOwnCard(const std::string& image_path);
   static std::shared_ptr<SessionCard> CreateHostCard(const std::string& image_path,
                                                      std::shared_ptr<const Manifest> manifest);
-  // `image_path` is the joiner's own card (it may not exist), checked chunk by chunk as the game
-  // reads it. `cache_dir` holds the file of fetched chunks, deleted with the card.
+  // `image_path` is the joiner's own card (it may not exist). With `own` (its hashes, HashImage)
+  // every chunk is known at once to match or not; without, a chunk the cache does not rule out is
+  // checked when first read. `cache_dir` holds the file of fetched chunks, deleted with the card.
   static std::shared_ptr<SessionCard> CreateGuestCard(const std::string& image_path,
                                                       std::shared_ptr<const Manifest> manifest,
                                                       const std::string& cache_dir,
-                                                      std::shared_ptr<Remote> remote);
+                                                      std::shared_ptr<Remote> remote,
+                                                      const ImageHashes* own = nullptr);
 
   ~SessionCard() override;
   SessionCard(const SessionCard&) = delete;
@@ -237,14 +272,24 @@ public:
     u64 writes = 0;         // the session's write counter
   };
   Stats GetStats() const;
-  // Guest, once the game runs: streams the missing chunks in the background, up to
-  // BACKGROUND_CAP_BYTES, the chunks in `first` (those the game is likely to read soon: checked
-  // first if this card has them) before the others. Meanwhile it checks the rest of this card
-  // from its first chunk on (the FAT and directories first, which every file's read goes
-  // through), and those that differ join the stream; the hashes are kept for the next join.
-  void StartBackgroundFetch(std::span<const u32> first = {});
-  // Guest: whether the background check has been through this whole card.
-  bool ScanDone() const { return m_scan_done.load(); }
+  // Guest: the chunks it has not got yet, ascending.
+  std::vector<u32> MissingChunks() const;
+
+  // Guest, before the join: fetches every missing chunk now (a thread of its own), as many at
+  // once as MAX_OUTSTANDING_REQUESTS, as fast as the link takes them.
+  void StartSync();
+  struct SyncProgress
+  {
+    u64 total = 0;  // the bytes missing when the sync started
+    u64 done = 0;
+    bool finished = false;
+    bool failed = false;  // a chunk no player could send, or the card detached
+  };
+  SyncProgress GetSyncProgress() const;
+  // Guest, after a finished sync: writes the fetched chunks into the player's own image (made the
+  // session card's size), so it is the session's card from now on, and records its hashes (`own`:
+  // the image's before) as the hash cache. The player chose it ("overwrite local card").
+  bool WriteFetchedToImage(const ImageHashes& own, std::string* error);
 
   // Another player's request (any thread): the chunk as this machine has it before the session's
   // writes (its image where it matches the session's card, or fetched), or false when it has not
@@ -292,11 +337,7 @@ private:
   bool WaitForChunks(std::span<const u32> chunks, bool keep_alive);
   // Asks the players for those of `chunks` still missing and not asked for yet, without waiting.
   void RequestMissing(std::span<const u32> chunks);
-  // The background check's next stretch of this card (its own handle): its chunks' hashes, and
-  // those still unchecked become Local or Missing. False at the card's end or on a read error.
-  bool ScanStep(File::IOFile& image, u64 own_size, std::vector<u8>& buffer,
-                std::vector<u32>* differing);
-  void BackgroundThreadFunc();
+  void SyncThreadFunc();
   void PruneHistory(u64 now);
 
   const Mode m_mode;
@@ -323,8 +364,6 @@ private:
   std::map<u32, u64> m_requested_at;         // chunk -> when it was last requested (ms)
   std::set<u32> m_unavailable;
   std::map<u32, int> m_bad_deliveries;
-  std::vector<u32> m_missing;                // the missing chunks at creation, ascending
-  std::vector<u32> m_background_order;       // m_missing, the chunks asked for first in front
   u64 m_fetched_bytes = 0;
   std::atomic<u32> m_waits{0};
   std::string m_fetched_path;
@@ -332,15 +371,14 @@ private:
   std::shared_ptr<Remote> m_remote;
   bool m_detached = false;
 
-  std::thread m_background_thread;
-  std::atomic<bool> m_stop_background{false};
-
-  // Guest: the background check of this card (the background thread), and the hashes it took,
-  // saved as the image's hash cache once it has been through the whole card.
-  u32 m_scan_next = 0;
-  std::vector<Hash> m_scan_hashes;
-  std::vector<bool> m_scan_zero;
-  std::atomic<bool> m_scan_done{false};
+  // Guest: the sync before the join (StartSync), its progress under m_fetch_mutex.
+  std::thread m_sync_thread;
+  u64 m_sync_total = 0;
+  u64 m_sync_start_fetched = 0;
+  bool m_sync_finished = false;
+  bool m_sync_failed = false;
+  // A read had to fetch while the game ran (a bug: the sync fetches everything first).
+  bool m_logged_late_fetch = false;
 
   // The chunks the game read (emulation thread), for ReadChunks.
   std::vector<bool> m_read_seen;

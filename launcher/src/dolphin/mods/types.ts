@@ -27,8 +27,10 @@ export type DolphinControllers = { gc: SetUpController[]; wiimote: SetUpControll
 export type DiscPlatform = "wii" | "gamecube";
 
 /** Each part's hash (`build_hash.ts`): the disc's contents' SHA-1, the launcher's SHA-256, and
- * whether there is an SD card (its contents are the room host's: not part of the build). */
-export type ModBuildParts = { disc: string; launcher: string | null; sd: boolean };
+ * whether there is an SD card (its contents are the room host's: not part of the build hash).
+ * `sdCard` is the card's root (DolphinTool sdhash: BLAKE2b-256 of its manifest), which rooms
+ * compare (docs/design/brawl-mods.md §6.5); null for no card, absent until it was hashed. */
+export type ModBuildParts = { disc: string; launcher: string | null; sd: boolean; sdCard?: string | null };
 
 /** A game or mod the player added in the tab (design §4). */
 export type ModBuild = {
@@ -45,6 +47,8 @@ export type ModBuild = {
   sdPath: string | null;
   /** From the disc's header (DolphinTool), null until read. */
   gameId?: string | null;
+  /** The disc's revision (Brawl: 0, 1 or 2), from its header; absent from older settings. */
+  revision?: number | null;
   gameTitle?: string | null;
   platform?: DiscPlatform | null;
   /** SHA-256 (64 hex digits) of the parts, null until hashed. */
@@ -53,6 +57,8 @@ export type ModBuild = {
   parts?: ModBuildParts | null;
   /** The parts' sizes and modification times when hashed: a change hashes them again. */
   hashKey: string | null;
+  /** The SD card's size and modification time when its root (`parts.sdCard`) was taken. */
+  sdHashKey?: string | null;
 };
 
 export type ModBuildInput = Pick<ModBuild, "name" | "discPath" | "launcherPath" | "sdPath">;
@@ -85,10 +91,15 @@ export type ModRoomSlot = {
   player?: ModRoomPlayer;
 };
 
+/** A room's build as the server says it (docs/design/brawl-mods.md §6.5): with its parts, from a
+ * launcher that sends them: the disc's SHA-1 and what it is ("RSBE01 Rev 1"), and the SD card's
+ * root ("" for none). */
+export type ModRoomBuild = { hash: string; name: string; disc?: string; discLabel?: string; sd?: string };
+
 export type ModRoom = {
   code: string;
   public: boolean;
-  build: { hash: string; name: string };
+  build: ModRoomBuild;
   /** The host's slot (1-4). */
   host: number;
   /** This player's slot (1-4). */
@@ -109,8 +120,27 @@ export type ModLocalInput = {
   real: boolean;
 };
 
+/** A joiner's SD card before its join (Dolphin's SDSyncStep): checking the player's own card,
+ * asking the player (the dialog), downloading the host's. */
+export type ModSdSync = {
+  step: "checking" | "ask" | "downloading" | "ready" | "failed";
+  /** The share of the player's own card checked (0-1). */
+  checked: number;
+  /** What differs from the host's card: bytes and files, and some of those files, largest first. */
+  bytes: number;
+  files: number;
+  names: string[];
+  /** Seconds the download should take (a guess from the link). */
+  eta_s: number;
+  /** While downloading. */
+  done?: number;
+  total?: number;
+};
+
 export type ModSession = {
   phase?: string;
+  /** A joiner whose SD card differs from the host's. */
+  sd_sync?: ModSdSync;
   error?: string;
   players?: number;
   epoch?: number;
@@ -153,7 +183,9 @@ export type ModRoomRequest =
   /** This player's own controller, mid-game too. */
   | { op: "controller"; controller: ModsController }
   /** Opens Dolphin's Controllers settings over the game. */
-  | { op: "configure" };
+  | { op: "configure" }
+  /** A joiner's answer to the SD card's dialog (session.sd_sync.step "ask"). */
+  | { op: "sd-sync"; choice: "yes" | "overwrite" | "no" };
 
 /** Hashing a build: the share done (0-1), or null while the step running reports none
  * (DolphinTool hashing a compressed disc image). */

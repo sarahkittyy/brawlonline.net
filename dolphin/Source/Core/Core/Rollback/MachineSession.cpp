@@ -116,10 +116,19 @@ constexpr u8 CHANNEL_CONTROL = 1;  // small JSON messages (reliable)
 constexpr u8 CHANNEL_IMAGE = 2;    // a machine image for a joiner (reliable, in chunks)
 constexpr u8 CHANNEL_SD = 3;       // the session's SD card: chunk requests and chunks (reliable)
 constexpr u8 CHANNEL_COUNT = 4;
-// A CHANNEL_SD packet: one of these, then NetPlaySDCard's chunk request or chunk.
+// A CHANNEL_SD packet: one of these, then a chunk request or a chunk, or (a joiner before it asks
+// to join) a request for the session card's manifest and file list, and those.
 constexpr u8 SD_REQUEST = 0;
 constexpr u8 SD_CHUNK = 1;
+constexpr u8 SD_MANIFEST_REQUEST = 2;
+constexpr u8 SD_MANIFEST = 3;
 constexpr size_t MAX_SD_PACKET = 2 * SDCard::CHUNK_SIZE;
+// A manifest (17 bytes a chunk of a card up to 64 GiB, compressed) and its file list.
+constexpr size_t MAX_SD_MANIFEST_PACKET = 64u << 20;
+// What a hello says this build speaks: 2 since the SD card is synced before the join and its
+// chunks are hashed with BLAKE2b (a build before says nothing: 1). Players of different
+// versions refuse each other's joins.
+constexpr int PROTOCOL_VERSION = 2;
 // The chunks the game has read that a machine image lists for the joiner to fetch first.
 constexpr size_t MAX_SD_HOT_CHUNKS = 32768;
 constexpr size_t MAX_CONTROL_SIZE = 4096;
@@ -199,6 +208,11 @@ struct PeerLink
   u16 port = 0;
   ENetPeer* peer = nullptr;  // the connection kept for this slot
   bool hello = false;        // its hello arrived on `peer`
+  int proto = 1;             // its PROTOCOL_VERSION (a hello without one: 1)
+  // Its game has an SD card, and the session card's root it plays (RootHex; "" until it has
+  // built or synced the card).
+  bool sd_card = false;
+  std::string sd_root;
   int started = -1;          // the epoch whose GekkoNet session it started (start barrier)
   int go = -1;               // the epoch whose start barrier it said go for
   bool left = false;
@@ -382,8 +396,51 @@ struct State
   std::map<u32, u8> sd_tried;
   std::map<u32, int> sd_asked;
   int sd_source = -1;
-  // A joiner's own card (CPU thread), checked chunk by chunk against the session's card.
+  // The session card's root (RootHex, for hellos) and file list (wire form, sent with the
+  // manifest), while this machine plays the session's card.
+  std::string sd_root;
+  std::vector<u8> sd_files_wire;
+  // A joiner's own card (CPU thread), compared with the session's card before the join.
   std::string sd_path;
+
+  // A joiner's sync of the session's SD card before it asks to join (SDSyncStep; CPU thread,
+  // under `mutex`, except as marked).
+  struct SDSync
+  {
+    enum class Step
+    {
+      Idle,         // nothing done yet
+      Checking,     // its own card hashing, the manifest asked for
+      Asking,       // its player decides (the launcher's dialog)
+      Downloading,  // the chunks it has not got coming in
+      Ready,        // it has the whole card (or the session has none)
+      Failed,
+    } step = Step::Idle;
+    // Its own card's hashes (a thread of their own; `own` under `own_mutex`).
+    std::thread hash_thread;
+    std::atomic<bool> hash_cancel{false};
+    std::atomic<bool> hash_finished{false};
+    std::atomic<u64> hash_done{0}, hash_total{0};
+    std::mutex own_mutex;
+    std::optional<SDCard::ImageHashes> own;
+    // The manifest asked for (under `net_mutex`: the net thread fills it in).
+    int from = -1;
+    Clock::time_point asked{};
+    bool received = false;
+    std::vector<u8> packet;
+    double packet_ms = 0;
+    // The session's card, compared with this one.
+    std::shared_ptr<SDCard::SessionCard> card;
+    std::vector<u8> files_wire;
+    u64 missing_bytes = 0;
+    u32 missing_files = 0;
+    std::vector<std::string> names;  // the differing files, largest first (some)
+    double rate = 0;                 // bytes a second the link gave the manifest
+    std::atomic<int> choice{static_cast<int>(SDSyncChoice::Ask)};
+    bool chose = false;
+    int tenths_shown = -1;
+    Clock::time_point download_since{};
+  } sd_sync;
 
   // GekkoNet and the frame loop (CPU thread).
   GekkoSession* gekko = nullptr;
@@ -656,6 +713,17 @@ void OnHello(ENetPeer* peer, const picojson::object& msg)
     p.min_rtt_ms = -1;
   p.peer = peer;
   p.hello = true;
+  {
+    const auto pr = msg.find("proto");
+    p.proto = pr != msg.end() && pr->second.is<double>() ? static_cast<int>(pr->second.get<double>()) : 1;
+    const auto card = msg.find("sd_card");
+    p.sd_card = card != msg.end() && card->second.is<bool>() && card->second.get<bool>();
+    const auto root = msg.find("sd");
+    p.sd_root = root != msg.end() && root->second.is<std::string>() &&
+                        root->second.get<std::string>().size() == 64 ?
+                    root->second.get<std::string>() :
+                    "";
+  }
   // Whether it plays in its session now: one that does not is a joiner (a room's joiner learns
   // who the session's players are this way).
   if (const auto pl = msg.find("playing"); pl != msg.end() && pl->second.is<bool>())
@@ -703,7 +771,16 @@ void HandleControl(ENetPeer* peer, const u8* data, size_t size)
     return it != msg.end() && it->second.is<double>() ? it->second.get<double>() : def;
   };
   const int epoch = static_cast<int>(num("epoch", -1));
-  if (type == "started")
+  if (type == "sd")
+  {
+    const auto root = msg.find("root");
+    if (root != msg.end() && root->second.is<std::string>() &&
+        root->second.get<std::string>().size() == 64)
+    {
+      p.sd_root = root->second.get<std::string>();
+    }
+  }
+  else if (type == "started")
     p.started = epoch;
   else if (type == "go")
     p.go = epoch;
@@ -727,6 +804,17 @@ void HandleControl(ENetPeer* peer, const u8* data, size_t size)
                                 c->second.get<std::string>() == "wiimote" ?
                             Controller::WiiRemote :
                             Controller::GameCube;
+    if (p.proto != PROTOCOL_VERSION)
+    {
+      picojson::object no;
+      no["type"] = picojson::value("join_refused");
+      no["why"] = picojson::value("this room's players have another version of Brawl Online: "
+                                  "everyone needs the latest");
+      SendControl(slot, no);
+      AddLog(fmt::format("player {} has another version of Brawl Online ({}): refused", slot + 1,
+                         p.proto));
+      return;
+    }
     // The same session clock, or its machine could never run as ours.
     if (num("rtc", 0) != static_cast<double>(s.opts.rtc))
     {
@@ -907,6 +995,37 @@ void HandleSDPacket(int slot, const u8* data, size_t size)
 {
   if (size < 1)
     return;
+  if (data[0] == SD_MANIFEST_REQUEST)
+  {
+    // A joiner before its join: the session card's manifest and file list (a player only).
+    if (s.sd_manifest_wire.empty() || !LocalPlays())
+      return;
+    std::vector<u8> out;
+    out.reserve(1 + 4 + s.sd_manifest_wire.size() + s.sd_files_wire.size());
+    out.push_back(SD_MANIFEST);
+    const u32 n = static_cast<u32>(s.sd_manifest_wire.size());
+    for (int i = 0; i < 4; ++i)
+      out.push_back(static_cast<u8>(n >> (8 * i)));
+    out.insert(out.end(), s.sd_manifest_wire.begin(), s.sd_manifest_wire.end());
+    out.insert(out.end(), s.sd_files_wire.begin(), s.sd_files_wire.end());
+    s.sd_tx.emplace_back(slot, std::move(out));
+    AddLog(fmt::format("SD card: sent player {} the card's list ({:.1f} MB)", slot + 1,
+                       (s.sd_manifest_wire.size() + s.sd_files_wire.size()) / 1048576.0));
+    return;
+  }
+  if (data[0] == SD_MANIFEST)
+  {
+    State::SDSync& y = s.sd_sync;
+    if (slot != y.from || y.received)
+      return;
+    y.packet.assign(data + 1, data + size);
+    y.packet_ms =
+        std::chrono::duration<double, std::milli>(Clock::now() - y.asked).count();
+    y.received = true;
+    return;
+  }
+  if (size > MAX_SD_PACKET)
+    return;
   sf::Packet packet;
   packet.append(data + 1, size - 1);
   if (data[0] == SD_REQUEST)
@@ -961,6 +1080,14 @@ SetSessionCardLocked(std::shared_ptr<SDCard::SessionCard> card)
   const u8* data = static_cast<const u8*>(wire.getData());
   s.sd_manifest_wire.assign(data, data + wire.getDataSize());
   s.sd_manifest_canon = SDCard::CanonicalManifest(*manifest);
+  s.sd_root = SDCard::RootHex(SDCard::ManifestRoot(*manifest));
+  if (s.host)
+  {
+    picojson::object m;
+    m["type"] = picojson::value("sd");
+    m["root"] = picojson::value(s.sd_root);
+    BroadcastControl(m);
+  }
   std::weak_ptr<SDCard::SessionCard> weak = card;
   s.sd_server = std::make_unique<SDCard::CardServer>(
       manifest,
@@ -990,6 +1117,8 @@ void ResetSD()
     card = std::move(s.sd_card);
     s.sd_manifest_wire.clear();
     s.sd_manifest_canon.clear();
+    s.sd_root.clear();
+    s.sd_files_wire.clear();
     s.sd_tx.clear();
     s.sd_tried.clear();
     s.sd_asked.clear();
@@ -999,6 +1128,33 @@ void ResetSD()
   if (card)
     card->Detach();
   s.sd_path.clear();
+  State::SDSync& y = s.sd_sync;
+  y.hash_cancel = true;
+  if (y.hash_thread.joinable())
+    y.hash_thread.join();
+  if (y.card)
+    y.card->Detach();
+  {
+    std::lock_guard lk(s.net_mutex);
+    y.from = -1;
+    y.received = false;
+    y.packet.clear();
+  }
+  y.step = State::SDSync::Step::Idle;
+  y.hash_cancel = false;
+  y.hash_finished = false;
+  y.hash_done = 0;
+  y.hash_total = 0;
+  y.own.reset();
+  y.card.reset();
+  y.files_wire.clear();
+  y.missing_bytes = 0;
+  y.missing_files = 0;
+  y.names.clear();
+  y.rate = 0;
+  y.choice = static_cast<int>(s.opts.sd_sync);
+  y.chose = false;
+  y.tenths_shown = -1;
 }
 
 // A joiner's card reaches the session's card through the players.
@@ -1177,6 +1333,16 @@ void PaceSendWindow(PeerLink& p, Clock::time_point now)
   ENetPeer* e = p.peer;
   if (!e || e->state != ENET_PEER_STATE_CONNECTED)
     return;
+  // GekkoNet's packets go unsequenced (unreliable), and ENet drops unreliable packets itself
+  // whenever a round trip comes in more than twice its deviation above the last ones (its packet
+  // throttle, enet_peer_throttle): on Wi-Fi, or with a machine image or SD card chunks on the
+  // link, it threw away a player's inputs for up to two seconds and both games froze until they
+  // got through (bug reports #2 and #4, 2026-10-14: in every freeze both machines waited for the
+  // other's inputs at once). GekkoNet resends its inputs itself and the session sends only what
+  // it must, so the throttle stays open. PPR_MACHINE_ENET_THROTTLE=1 keeps ENet's, for comparisons.
+  static const bool enet_throttle = std::getenv("PPR_MACHINE_ENET_THROTTLE") != nullptr;
+  if (!enet_throttle)
+    e->packetThrottle = e->packetThrottleLimit = ENET_PEER_PACKET_THROTTLE_SCALE;
   // PPR_MACHINE_FIXED_WINDOW=1 keeps the old fixed window, for comparisons.
   static const bool fixed = std::getenv("PPR_MACHINE_FIXED_WINDOW") != nullptr;
   if (fixed)
@@ -1251,6 +1417,27 @@ void NetThread()
     const auto now = Clock::now();
     for (PeerLink& p : s.peers)
       PaceSendWindow(p, now);
+    // Every 10 s, each link as ENet measures it: what a bug report needs to tell a bad link
+    // (round trips jumping, loss) from a machine that stalled.
+    static Clock::time_point last_link_log;
+    if (now - last_link_log >= std::chrono::seconds(10))
+    {
+      last_link_log = now;
+      for (const PeerLink& p : s.peers)
+      {
+        const ENetPeer* e = p.peer;
+        if (!e || e->state != ENET_PEER_STATE_CONNECTED || !p.hello)
+          continue;
+        INFO_LOG_FMT(BRAWLBACK,
+                     "machine: link to player {}: rtt {} ms (lowest {}, deviation {}, highest "
+                     "deviation {}), loss {:.1f}%, throttle {}/{}, window {} KB",
+                     p.slot + 1, e->roundTripTime, e->lowestRoundTripTime,
+                     e->roundTripTimeVariance, e->highestRoundTripTimeVariance,
+                     e->packetLoss * 100.0 / static_cast<double>(ENET_PEER_PACKET_LOSS_SCALE),
+                     e->packetThrottle, static_cast<int>(ENET_PEER_PACKET_THROTTLE_SCALE),
+                     e->windowSize / 1024);
+      }
+    }
     // Outgoing: GekkoNet's packets queued by the CPU thread.
     for (auto& [slot, data] : s.gekko_tx)
     {
@@ -1365,11 +1552,21 @@ void NetThread()
         if (!outgoing)
           ev.peer->data = nullptr;
         enet_peer_timeout(ev.peer, 0, 5000, 10000);
+        // The peer's side of the same (PaceSendWindow): ENet sends this to the peer, which then
+        // never lowers its throttle towards this machine either (an older build included).
+        if (!std::getenv("PPR_MACHINE_ENET_THROTTLE"))
+        {
+          enet_peer_throttle_configure(ev.peer, ENET_PEER_PACKET_THROTTLE_INTERVAL,
+                                       ENET_PEER_PACKET_THROTTLE_SCALE, 0);
+        }
         picojson::object hello;
         hello["type"] = picojson::value("hello");
         hello["slot"] = picojson::value(static_cast<double>(s.opts.local_slot));
         hello["name"] = picojson::value(s.opts.name);
         hello["playing"] = picojson::value(LocalPlays());
+        hello["proto"] = picojson::value(static_cast<double>(PROTOCOL_VERSION));
+        hello["sd_card"] = picojson::value(Config::Get(Config::MAIN_WII_SD_CARD));
+        hello["sd"] = picojson::value(s.sd_root);
         const std::string text = picojson::value(hello).serialize();
         enet_peer_send(ev.peer, CHANNEL_CONTROL,
                        enet_packet_create(text.data(), text.size(), ENET_PACKET_FLAG_RELIABLE));
@@ -1407,7 +1604,7 @@ void NetThread()
           if (slot >= 0 && slot < MAX_PLAYERS && s.peers[slot].peer == ev.peer)
             HandleImagePacket(slot, ev.packet->data, ev.packet->dataLength);
         }
-        else if (ev.channelID == CHANNEL_SD && ev.packet->dataLength <= MAX_SD_PACKET)
+        else if (ev.channelID == CHANNEL_SD && ev.packet->dataLength <= MAX_SD_MANIFEST_PACKET)
         {
           const int slot = SlotOf(ev.peer);
           if (slot >= 0 && slot < MAX_PLAYERS && s.peers[slot].peer == ev.peer &&
@@ -3328,22 +3525,24 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
     }
     if (sd_manifest)
     {
-      sd_card = SDCard::SessionCard::CreateGuestCard(s.sd_path, sd_manifest,
-                                                     File::GetUserPath(D_CACHE_IDX) + "MachineSD",
-                                                     std::make_shared<SessionCardRemote>());
-      std::unique_ptr<SDCard::CardServer> old;
+      // The card this machine already plays (a player that gets the machine again) or synced
+      // before its join: the game must never wait for the network.
       {
         std::lock_guard lk(s.net_mutex);
-        s.sd_source = rx.from;
-        old = SetSessionCardLocked(sd_card);
+        if (s.sd_card && s.sd_card->GetManifest() && s.sd_manifest_canon == sd_canon)
+        {
+          sd_card = s.sd_card;
+          s.sd_source = rx.from;
+        }
       }
-      old.reset();
+      if (!sd_card)
+      {
+        *error = "the session's SD card is not the one this player got before joining";
+        return false;
+      }
       IOS::HLE::SetSDCardSessionStorage(sd_card);
-      AddLog(fmt::format("SD card: playing the session's card; {:.1f} MB this player's card has "
-                         "not got come from the players, {:.1f} MB of it is checked as the game "
-                         "reads it",
-                         sd_card->MissingBytes() / 1048576.0,
-                         sd_card->UncheckedBytes() / 1048576.0));
+      AddLog(fmt::format("SD card: playing the session's card ({:.1f} MB still to fetch)",
+                         sd_card->MissingBytes() / 1048576.0));
     }
   }
 
@@ -3412,8 +3611,6 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
     return false;
   }
   s.epoch_sum = mine;
-  if (sd_card)
-    sd_card->StartBackgroundFetch(sd_hot);
   return true;
 }
 
@@ -3892,6 +4089,239 @@ void EpochStep(Core::System& system)
 }
 
 // A joiner, every wait loop iteration until it is admitted: ask, load the image, wait for the go.
+// A joiner's SD card before it asks to join (docs/design/brawl-mods.md §6.5): the game must
+// never wait for the network, so a joiner gets the whole session card first, while the room plays
+// on. It hashes its own card (the cache, or a full read), asks a player for the session card's
+// manifest and file list (checked against the root every player's hello gave), and works out what
+// differs. Its player agrees (the launcher's dialog, or Options::sd_sync), then it fetches every
+// chunk it has not got, and writes them into its own card if its player chose that. Returns true
+// once it has the whole card (or the session has none); until then it does not ask to join.
+bool SDSyncStep()
+{
+  using Step = State::SDSync::Step;
+  State::SDSync& y = s.sd_sync;
+  if (y.step == Step::Ready)
+    return true;
+  if (y.step == Step::Failed)
+    return false;
+  auto fail = [&](const std::string& why) {
+    y.step = Step::Failed;
+    Fail(why);
+    return false;
+  };
+
+  // The session's players and the card they play (their hellos).
+  std::string root;
+  int source = -1;
+  bool card = false, disagree = false, waiting = false;
+  std::string other_version;
+  {
+    std::lock_guard lk(s.net_mutex);
+    for (const PeerLink& p : s.peers)
+    {
+      if (p.slot < 0 || !p.hello || p.late)
+        continue;
+      if (p.proto != PROTOCOL_VERSION)
+        other_version = NameOf(p.slot);
+      card |= p.sd_card;
+      if (p.sd_card && p.sd_root.empty())
+        waiting = true;  // still hashing its card
+      if (p.sd_root.empty())
+        continue;
+      if (root.empty())
+        root = p.sd_root;
+      else if (p.sd_root != root)
+        disagree = true;
+      if (source < 0)
+        source = p.slot;
+    }
+  }
+  if (!other_version.empty())
+    return fail(fmt::format("{} has another version of Brawl Online: everyone needs the latest",
+                            other_version));
+  if (!card)
+  {
+    y.step = Step::Ready;
+    return true;
+  }
+  if (disagree)
+    return fail("the room's players do not play the same SD card");
+  if (waiting || root.empty())
+    return false;
+
+  const auto now = Clock::now();
+  if (y.step == Step::Idle)
+  {
+    if (s.sd_path.empty())
+      return fail("the room's game has an SD card, and this one has none");
+    AddLog("SD card: comparing this player's card with the session's");
+    y.hash_thread = std::thread([path = s.sd_path] {
+      State::SDSync& t = s.sd_sync;
+      std::optional<SDCard::ImageHashes> own =
+          SDCard::HashImage(path, &t.hash_cancel, [](u64 done, u64 total) {
+            s.sd_sync.hash_done = done;
+            s.sd_sync.hash_total = total;
+          });
+      // No card, or one that cannot be read: everything comes from the players.
+      if (!own)
+        own = SDCard::ImageHashes{};
+      {
+        std::lock_guard lk(t.own_mutex);
+        t.own = std::move(own);
+      }
+      t.hash_finished = true;
+    });
+    std::lock_guard lk(s.net_mutex);
+    y.from = source;
+    y.asked = now;
+    y.received = false;
+    s.sd_tx.emplace_back(source, std::vector<u8>{SD_MANIFEST_REQUEST});
+    y.step = Step::Checking;
+    return false;
+  }
+
+  if (y.step == Step::Checking)
+  {
+    const u64 total = y.hash_total.load();
+    if (!y.hash_finished && total > 0)
+    {
+      const int tenths = static_cast<int>(y.hash_done.load() * 10 / total);
+      if (tenths > y.tenths_shown)
+      {
+        y.tenths_shown = tenths;
+        ShowNotice(fmt::format("Checking your SD card: {}%", tenths * 10));
+      }
+    }
+    std::vector<u8> packet;
+    double packet_ms = 0;
+    {
+      std::lock_guard lk(s.net_mutex);
+      if (!y.received)
+      {
+        if (now - y.asked > std::chrono::seconds(60))
+          return fail("the room's host did not send its SD card's list");
+        return false;
+      }
+      if (!y.hash_finished)
+        return false;
+      packet = y.packet;
+      packet_ms = y.packet_ms;
+    }
+    // [u32 manifest size][manifest][file list], from a player.
+    if (packet.size() < 4)
+      return fail("the SD card's list from the host is not valid");
+    u32 msize;
+    std::memcpy(&msize, packet.data(), 4);
+    if (msize > packet.size() - 4)
+      return fail("the SD card's list from the host is not valid");
+    sf::Packet mp;
+    mp.append(packet.data() + 4, msize);
+    std::optional<SDCard::Manifest> manifest = SDCard::ReadManifest(mp);
+    if (!manifest)
+      return fail("the SD card's list from the host is not valid");
+    if (SDCard::RootHex(SDCard::ManifestRoot(*manifest)) != root)
+      return fail("the SD card's list from the host is not the card the room plays");
+    std::vector<SDCard::CardFile> files;
+    if (packet.size() > 4 + msize)
+    {
+      sf::Packet fp;
+      fp.append(packet.data() + 4 + msize, packet.size() - 4 - msize);
+      if (auto list = SDCard::ReadFileList(fp, manifest->ChunkCount()))
+        files = std::move(*list);
+      y.files_wire.assign(packet.begin() + 4 + msize, packet.end());
+    }
+    auto shared = std::make_shared<const SDCard::Manifest>(std::move(*manifest));
+    {
+      std::lock_guard lk(y.own_mutex);
+      y.card = SDCard::SessionCard::CreateGuestCard(
+          s.sd_path, shared, File::GetUserPath(D_CACHE_IDX) + "MachineSD",
+          std::make_shared<SessionCardRemote>(), y.own ? &*y.own : nullptr);
+    }
+    const std::vector<u32> missing = y.card->MissingChunks();
+    y.missing_bytes = y.card->MissingBytes();
+    const std::vector<const SDCard::CardFile*> touched = SDCard::FilesTouching(files, missing);
+    y.missing_files = static_cast<u32>(touched.size());
+    y.names.clear();
+    for (size_t i = 0; i < touched.size() && i < 50; ++i)
+      y.names.push_back(touched[i]->path);
+    // The link's pace, from the list's own trip (at least 64 KB/s: a guess, not a promise).
+    y.rate = std::max(64.0 * 1024, packet.size() / std::max(packet_ms / 1000.0, 0.001));
+    {
+      std::unique_ptr<SDCard::CardServer> old;
+      {
+        std::lock_guard lk(s.net_mutex);
+        s.sd_source = y.from;
+        old = SetSessionCardLocked(y.card);
+        s.sd_files_wire = y.files_wire;
+      }
+    }
+    if (missing.empty())
+    {
+      AddLog("SD card: this player's card is the session's");
+      y.step = Step::Ready;
+      return true;
+    }
+    AddLog(fmt::format("SD card: {:.1f} MB of the session's card differ from this player's ({} "
+                       "files{}{})",
+                       y.missing_bytes / 1048576.0, y.missing_files,
+                       y.names.empty() ? "" : ", ", y.names.empty() ? "" : y.names.front()));
+    y.step = Step::Asking;
+    if (y.choice.load() == static_cast<int>(SDSyncChoice::Ask))
+    {
+      ShowNotice(fmt::format("Your SD card is {:.0f} MB different from the host's: answer in the "
+                             "room window",
+                             std::ceil(y.missing_bytes / 1048576.0)));
+    }
+    return false;
+  }
+
+  if (y.step == Step::Asking)
+  {
+    const auto choice = static_cast<SDSyncChoice>(y.choice.load());
+    if (choice == SDSyncChoice::Ask)
+      return false;
+    if (choice == SDSyncChoice::No)
+      return fail("the host's SD card was not downloaded");
+    AddLog(choice == SDSyncChoice::Overwrite ?
+               "SD card: downloading the host's card, then writing it into this player's" :
+               "SD card: downloading the host's card");
+    y.card->StartSync();
+    y.download_since = now;
+    y.tenths_shown = -1;
+    y.step = Step::Downloading;
+    return false;
+  }
+
+  if (y.step == Step::Downloading)
+  {
+    const SDCard::SessionCard::SyncProgress pr = y.card->GetSyncProgress();
+    if (pr.failed)
+      return fail("could not get the host's SD card: a player stopped sending it");
+    const int tenths = pr.total ? static_cast<int>(pr.done * 10 / pr.total) : 10;
+    if (tenths > y.tenths_shown)
+    {
+      y.tenths_shown = tenths;
+      ShowNotice(fmt::format("Getting the host's SD card: {}%", tenths * 10));
+    }
+    if (!pr.finished)
+      return false;
+    const double secs = std::chrono::duration<double>(now - y.download_since).count();
+    AddLog(fmt::format("SD card: got {:.1f} MB of the host's card in {:.1f} s", pr.total / 1048576.0,
+                       secs));
+    if (static_cast<SDSyncChoice>(y.choice.load()) == SDSyncChoice::Overwrite)
+    {
+      std::string why;
+      std::lock_guard lk(y.own_mutex);
+      if (!y.card->WriteFetchedToImage(y.own ? *y.own : SDCard::ImageHashes{}, &why))
+        return fail("could not write the host's SD card into yours: " + why);
+      AddLog(fmt::format("SD card: wrote the host's card into {}", s.sd_path));
+    }
+    y.step = Step::Ready;
+    return true;
+  }
+  return false;
+}
+
 void JoinStep(Core::System& system)
 {
   if (Clock::now() - s.join_since > JOIN_TIMEOUT)
@@ -3903,6 +4333,7 @@ void JoinStep(Core::System& system)
   bool image = false;
   std::optional<std::string> refused;
   std::vector<std::string> notices;
+  bool ready_to_sync = false;
   {
     std::lock_guard lk(s.net_mutex);
     if (s.join_refused)
@@ -3937,7 +4368,8 @@ void JoinStep(Core::System& system)
       bool all = true;
       for (const PeerLink& p : s.peers)
         all &= p.slot < 0 || p.late || p.hello;
-      if (all)
+      ready_to_sync = all;
+      if (all && s.sd_sync.step == State::SDSync::Step::Ready)
       {
         picojson::object m;
         m["type"] = picojson::value("join");
@@ -3963,6 +4395,14 @@ void JoinStep(Core::System& system)
   if (refused)
   {
     Fail("Could not join: " + *refused);
+    return;
+  }
+  // The SD card first (its player may take a while to answer, and a download as long as it
+  // takes): the join's timeout counts from when it is done.
+  if (ready_to_sync && !s.join_sent && s.sd_sync.step != State::SDSync::Step::Ready)
+  {
+    s.join_since = Clock::now();
+    SDSyncStep();
     return;
   }
   if (image)
@@ -4601,6 +5041,17 @@ std::optional<Options> ParseOptions(const picojson::value& json, std::string* er
   opts.delay = auto_delay ? AUTO_DELAY : static_cast<int>(delay);
   opts.synctest = static_cast<int>(synctest);
   opts.local_pad = static_cast<int>(pad);
+  if (const auto it = o.find("sd_sync"); it != o.end())
+  {
+    const auto choice =
+        it->second.is<std::string>() ? ParseSDSyncChoice(it->second.get<std::string>()) : std::nullopt;
+    if (!choice)
+    {
+      *error = "sd_sync must be ask, yes, overwrite or no";
+      return std::nullopt;
+    }
+    opts.sd_sync = *choice;
+  }
   const double rtc = num("rtc", static_cast<double>(opts.rtc));
   if (rtc < 946684800.0 || rtc > 4102444800.0)
   {
@@ -5047,6 +5498,24 @@ bool IsRunning()
   return s.phase == Phase::Running;
 }
 
+void SetSDSyncChoice(SDSyncChoice choice)
+{
+  s.sd_sync.choice = static_cast<int>(choice);
+}
+
+std::optional<SDSyncChoice> ParseSDSyncChoice(std::string_view text)
+{
+  if (text == "ask")
+    return SDSyncChoice::Ask;
+  if (text == "yes")
+    return SDSyncChoice::Yes;
+  if (text == "overwrite")
+    return SDSyncChoice::Overwrite;
+  if (text == "no")
+    return SDSyncChoice::No;
+  return std::nullopt;
+}
+
 u64 GetInitialRTC()
 {
   return s.opts.rtc;
@@ -5078,12 +5547,27 @@ std::shared_ptr<SDCard::SessionCard> CreateSDCard(const std::string& image_path)
                      "read in {:.1f} s)",
                      manifest->size / 1073741824.0, in_use / 1048576.0,
                      std::chrono::duration<double>(Clock::now() - start).count()));
+  // Its files, for a joiner whose card differs (which files it gets).
+  std::vector<u8> files_wire;
+  {
+    File::IOFile image(image_path, "rb");
+    const std::optional<std::vector<SDCard::CardFile>> files =
+        image ? SDCard::ListCardFiles(image, manifest->size) : std::nullopt;
+    if (files)
+    {
+      sf::Packet packet;
+      SDCard::WriteFileList(*files, packet);
+      const u8* data = static_cast<const u8*>(packet.getData());
+      files_wire.assign(data, data + packet.getDataSize());
+    }
+  }
   auto shared = std::make_shared<const SDCard::Manifest>(std::move(*manifest));
   std::shared_ptr<SessionCard> card = SessionCard::CreateHostCard(image_path, shared);
   std::unique_ptr<SDCard::CardServer> old;
   {
     std::lock_guard lk(s.net_mutex);
     old = SetSessionCardLocked(card);
+    s.sd_files_wire = std::move(files_wire);
   }
   return card;
 }
@@ -5740,6 +6224,42 @@ picojson::value Status()
   o["image_raw_mb"] = picojson::value(s.image_raw / 1048576.0);
   o["room"] = picojson::value(s.opts.room);
   o["gone"] = picojson::value(static_cast<double>(s.gone.load()));
+  {
+    // A joiner's SD card before its join (SDSyncStep), for the launcher's dialog and progress.
+    using Step = State::SDSync::Step;
+    const State::SDSync& y = s.sd_sync;
+    if (y.step != Step::Idle)
+    {
+      picojson::object sd;
+      const char* step = y.step == Step::Checking    ? "checking" :
+                         y.step == Step::Asking      ? "ask" :
+                         y.step == Step::Downloading ? "downloading" :
+                         y.step == Step::Ready       ? "ready" :
+                                                       "failed";
+      sd["step"] = picojson::value(step);
+      const u64 hash_total = y.hash_total.load();
+      sd["checked"] = picojson::value(
+          y.hash_finished ? 1.0 : hash_total ? static_cast<double>(y.hash_done.load()) / hash_total : 0.0);
+      sd["bytes"] = picojson::value(static_cast<double>(y.missing_bytes));
+      sd["files"] = picojson::value(static_cast<double>(y.missing_files));
+      picojson::array names;
+      for (const std::string& n : y.names)
+        names.emplace_back(n);
+      sd["names"] = picojson::value(names);
+      sd["eta_s"] = picojson::value(y.rate > 0 ? y.missing_bytes / y.rate : 0.0);
+      if (y.card && y.step == Step::Downloading)
+      {
+        const auto pr = y.card->GetSyncProgress();
+        sd["done"] = picojson::value(static_cast<double>(pr.done));
+        sd["total"] = picojson::value(static_cast<double>(pr.total));
+        const double secs =
+            std::chrono::duration<double>(Clock::now() - y.download_since).count();
+        if (pr.done > 0 && secs > 1)
+          sd["eta_s"] = picojson::value((pr.total - pr.done) / (pr.done / secs));
+      }
+      o["sd_sync"] = picojson::value(sd);
+    }
+  }
   picojson::array peers;
   {
     std::lock_guard nlk(s.net_mutex);

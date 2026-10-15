@@ -9,6 +9,11 @@ both ways. Repeat with ``--joins N``: the joiner is stopped and started again fo
 
     python harness/tools/machine_join.py run/scratch/join/new --rtt 40 --rate-kbps 16000 --queue-ms 60 \\
         --boot "<mod>/User/Launcher/REX Rauncher.elf" --sd "<mod>/User/Wii/sd.raw" --joins 3
+
+A joiner whose SD card differs from the host's (docs/design/brawl-mods.md §6.5): ``--joiner-sd`` is
+its card, ``--sd-sync`` its answer to the download (yes, overwrite, no). It gets the host's card
+before it asks to join; ``--play-seconds`` keeps the game going after the join and reports any read
+of the card that still had to wait for the network (there must be none).
 """
 
 from __future__ import annotations
@@ -40,12 +45,19 @@ def main() -> int:
     ap.add_argument("out")
     ap.add_argument("--boot", help="what to boot (a mod's launcher .elf/.dol); the disc by default")
     ap.add_argument("--sd", help="the mod's SD card image")
+    ap.add_argument("--joiner-sd", help="the joiner's SD card image (default: --sd)")
+    ap.add_argument("--sd-sync", default="yes", choices=["ask", "yes", "overwrite", "no"],
+                    help="the joiner's answer when its SD card differs from the host's")
+    ap.add_argument("--play-seconds", type=float, default=5,
+                    help="how long both play after a join before their state is read")
     ap.add_argument("--iso", help="the disc (default: PPHARNESS_ISO or <root>/game/SSBB_NTSC.iso)")
     ap.add_argument("--exe", default=str(paths.dolphin_nogui()))
     ap.add_argument("--rtt", type=float, default=40)
     ap.add_argument("--rate-kbps", type=float, default=None)
     ap.add_argument("--queue-ms", type=float, default=60)
     ap.add_argument("--loss", type=float, default=0.0)
+    ap.add_argument("--jitter", type=float, default=1.0, help="each direction's jitter, ms (Wi-Fi: pareto)")
+    ap.add_argument("--jitter-dist", default="normal", choices=["normal", "uniform", "pareto"])
     ap.add_argument("--join-frame", type=int, default=1500)
     ap.add_argument("--joins", type=int, default=1)
     ap.add_argument("--limit", type=float, default=150, help="seconds a join may take")
@@ -64,24 +76,25 @@ def main() -> int:
     out.mkdir(parents=True)
     iso = Path(a.iso) if a.iso else (paths.game_iso() or paths.fallback_iso())
     boot = a.boot or str(iso)
-    sd_cfg = (["Dolphin.Core.WiiSDCard=True", "Dolphin.Core.WiiSDCardEnableFolderSync=False",
-               f"Dolphin.General.WiiSDCardPath={a.sd}"] if a.sd else ["Dolphin.Core.WiiSDCard=False"])
+    def sd_cfg_of(card: str | None) -> list[str]:
+        return (["Dolphin.Core.WiiSDCard=True", "Dolphin.Core.WiiSDCardEnableFolderSync=False",
+                 f"Dolphin.General.WiiSDCardPath={card}"] if card else ["Dolphin.Core.WiiSDCard=False"])
 
-    link = LinkProfile(latency_ms=a.rtt / 2, jitter_ms=1.0, loss=a.loss, rate_kbps=a.rate_kbps,
-                       queue_ms=a.queue_ms)
+    link = LinkProfile(latency_ms=a.rtt / 2, jitter_ms=a.jitter, jitter_dist=a.jitter_dist, loss=a.loss,
+                       rate_kbps=a.rate_kbps, queue_ms=a.queue_ms)
     p0, p1 = free_port(socket.SOCK_DGRAM), free_port(socket.SOCK_DGRAM)
     s01 = NetSim(("127.0.0.1", p1), ("127.0.0.1", 0), NetProfile(up=link, down=link)).start()
     s10 = NetSim(("127.0.0.1", p0), ("127.0.0.1", 0), NetProfile(up=link, down=link)).start()
     t1, t0 = s01.listen_addr[1], s10.listen_addr[1]
     print(f"link: {link.describe()}", flush=True)
 
-    def make(name: str, session: dict) -> DolphinInstance:
+    def make(name: str, session: dict, card: str | None) -> DolphinInstance:
         if a.delay is not None:
             session["delay"] = a.delay if a.delay == "auto" else int(a.delay)
         env = dict(kv.split("=", 1) for kv in a.env)
         env["PPR_MACHINE_SESSION"] = json.dumps(session)
         cfg = InstanceConfig(video_backend=a.video, standard_controllers=(0,), other_ports="none",
-                             config_args=sd_cfg + [f"Dolphin.Core.DefaultISO={iso}",
+                             config_args=sd_cfg_of(card) + [f"Dolphin.Core.DefaultISO={iso}",
                                                    "Logger.Options.WriteToFile=True", "Logger.Options.Verbosity=4",
                                                    "Logger.Logs.Brawlback=True", "Logger.Logs.CORE=True"])
         inst = DolphinInstance(name, port=free_port(socket.SOCK_STREAM), exe=a.exe, config=cfg, boot=boot,
@@ -126,7 +139,7 @@ def main() -> int:
         return ""
 
     host = make("host", {"slot": 0, "port": p0,
-                         "peers": [{"slot": 1, "host": "127.0.0.1", "port": t1, "late": True}]})
+                         "peers": [{"slot": 1, "host": "127.0.0.1", "port": t1, "late": True}]}, a.sd)
     results = []
     try:
         deadline = time.time() + 240
@@ -142,10 +155,12 @@ def main() -> int:
         if a.host_config:
             time.sleep(3)
         for k in range(a.joins):
+            host_log_at = len(log_of(host))
             failed_before = log_of(host).count("could not join")
             joined_before = len(JOINED.findall(log_of(host)))
-            joiner = make(f"joiner{k}", {"slot": 1, "port": p1, "join": True,
-                                         "peers": [{"slot": 0, "host": "127.0.0.1", "port": t0}]})
+            joiner = make(f"joiner{k}", {"slot": 1, "port": p1, "join": True, "sd_sync": a.sd_sync,
+                                         "peers": [{"slot": 0, "host": "127.0.0.1", "port": t0}]},
+                          a.joiner_sd or a.sd)
             t_start = time.time()
             outcome = "timeout"
             while time.time() - t_start < a.limit:
@@ -160,7 +175,7 @@ def main() -> int:
                     break
                 time.sleep(0.5)
             took = time.time() - t_start
-            hlog = log_of(host)
+            hlog = log_of(host)[host_log_at:]
             sent = re.findall(r"machine image for player 2: ([\d.]+) MB", hlog)
             progress = re.findall(r"(\d\d:\d\d:\d\d\d) .*Sending the game to [^:]*: (\d+)%", hlog)
             # The longest wait between two progress lines of this join (stalls).
@@ -169,11 +184,27 @@ def main() -> int:
             results.append((outcome, took, sent[-1] if sent else "?", max(gaps, default=0) / 1000))
             print(f"join {k + 1}: {outcome} in {took:.1f} s (image {sent[-1] if sent else '?'} MB, "
                   f"longest stall between progress lines {max(gaps, default=0) / 1000:.1f} s)", flush=True)
+            # The joiner's SD card before its join, and any read that still waited while it played.
+            for line in re.findall(r"SD card: (?:\d+ chunks of this|[\d.]+ MB of the session|this player's card is "
+                                   r"the session's|got [\d.]+ MB|wrote the host's|downloading).*", log_of(joiner)):
+                print(f"  joiner: SD card: {line.split('SD card: ', 1)[-1][:160]}", flush=True)
             if outcome == "joined":
-                time.sleep(5)
+                logs_at = {inst.name: len(log_of(inst)) for inst in (host, joiner)}
+                time.sleep(a.play_seconds)
+                # Freezes while they played (StallTracer: no emulated field for 250 ms or more).
+                for inst in (host, joiner):
+                    stalls = [int(x) for x in re.findall(r"Stall over: (\d+) ms", log_of(inst)[logs_at[inst.name]:])]
+                    print(f"  {inst.name}: {len(stalls)} freezes of 250 ms or more in {a.play_seconds:.0f} s"
+                          + (f" ({sum(stalls)} ms in all, longest {max(stalls)} ms)" if stalls else ""), flush=True)
                 for inst in (host, joiner):
                     st = status(inst)
                     print(f"  {inst.name}: frame {st.get('frame')}, desyncs {st.get('desyncs')}", flush=True)
+                late = re.findall(r"the game read \d+ chunks this player had not got.*|a read waited \d+ ms.*",
+                                  log_of(joiner))
+                print(f"  joiner: SD reads that waited while playing: {len(late)}"
+                      + (f" ({late[0][:120]})" if late else ""), flush=True)
+                if late:
+                    results[-1] = ("joined, but a read waited",) + results[-1][1:]
             joiner.stop()
             # The host notices the joiner is gone and its slot is free to join again.
             time.sleep(15)

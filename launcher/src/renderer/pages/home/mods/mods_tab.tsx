@@ -217,6 +217,18 @@ export const ModsTab = React.memo(function ModsTab() {
         onJoin={(build, code) => void start(build, () => modsService.join({ buildId: build.id, code }))}
         onJoinCode={(code) => void joinCode(code)}
         onMissingGame={(name, hash) => setMissing({ name, hash })}
+        onFixBuild={(build, part) => {
+          // The room's part that differs: the game's edit window, that field pulsing gold.
+          setEditingId(build.id);
+          setAdding({
+            kind: "edit",
+            name: build.autoName ? "" : build.name,
+            discPath: build.discPath,
+            launcherPath: build.launcherPath ?? null,
+            sdPath: build.sdPath ?? null,
+            highlight: part,
+          });
+        }}
         onRequest={onRequest}
         onCopyCode={(code) => {
           void navigator.clipboard.writeText(code).then(() => showSuccess(Messages.copied()));

@@ -42,6 +42,16 @@ export async function buildHashKey(build: PathsOf): Promise<string> {
   return `v3|${keys.join("|")}`;
 }
 
+/** "<size>:<mtimeMs>" of the SD card ("-" for none): when it changes, its root is taken again
+ * (`sd_hash.ts`), not the disc's hash. */
+export async function sdHashKey(build: Pick<ModBuild, "sdPath">): Promise<string> {
+  if (!build.sdPath) {
+    return "-";
+  }
+  const s = await stat(build.sdPath);
+  return `${s.size}:${Math.floor(s.mtimeMs)}`;
+}
+
 /** Combines the parts' hashes (hex, or null for a part the build does not have). */
 export function combineBuildHash(parts: ModBuildParts): string {
   const text = `${BUILD_HASH_PREFIX}disc:${parts.disc}\nlauncher:${parts.launcher ?? "-"}\nsd:${

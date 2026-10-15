@@ -10,6 +10,7 @@ import { useEffect, useState } from "react";
 import { PathInput } from "@/components/path_input/path_input";
 
 import { ModsMessages as Messages } from "./mods.messages";
+import styles from "./mods.module.css";
 
 const DISC_FILTERS = [
   { name: "Wii and GameCube disc images", extensions: ["iso", "rvz", "wbfs", "gcz", "ciso", "wia", "gcm", "nkit.iso"] },
@@ -25,6 +26,9 @@ export type AddBuildInitial = {
   discPath: string | null;
   launcherPath: string | null;
   sdPath: string | null;
+  /** The field a room pointed at (its disc or SD card differs from the room's): it pulses gold
+   * until it is clicked. */
+  highlight?: "disc" | "sd";
 };
 
 /** "Add a game" / "Add a mod" / "Edit game" (docs/design/brawl-mods.md §8): a name, the disc, an
@@ -45,6 +49,7 @@ export const AddBuildDialog = ({
   const [launcherPath, setLauncherPath] = useState<string | null>(null);
   const [sdPath, setSdPath] = useState<string | null>(null);
   const [adding, setAdding] = useState(false);
+  const [highlight, setHighlight] = useState<"disc" | "sd" | null>(null);
 
   useEffect(() => {
     if (initial) {
@@ -53,8 +58,18 @@ export const AddBuildDialog = ({
       setLauncherPath(initial.launcherPath);
       setSdPath(initial.sdPath);
       setAdding(false);
+      setHighlight(initial.highlight ?? null);
     }
   }, [initial]);
+  // The field pulses until the player clicks it.
+  const pulse = (field: "disc" | "sd") => ({
+    className: highlight === field ? styles.fixField : undefined,
+    onClickCapture: () => {
+      if (highlight === field) {
+        setHighlight(null);
+      }
+    },
+  });
 
   const add = async () => {
     if (!discPath) {
@@ -93,7 +108,7 @@ export const AddBuildDialog = ({
           onChange={(e) => setName(e.target.value)}
           margin="dense"
         />
-        <div>
+        <div {...pulse("disc")}>
           <div>{Messages.disc()}</div>
           <PathInput
             value={discPath ?? ""}
@@ -112,7 +127,7 @@ export const AddBuildDialog = ({
             endAdornment={clearButton(launcherPath, () => setLauncherPath(null))}
           />
         </div>
-        <div>
+        <div {...pulse("sd")}>
           <div>{Messages.sdCard()}</div>
           <PathInput
             value={sdPath ?? ""}
