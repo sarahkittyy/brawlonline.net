@@ -1053,6 +1053,12 @@ void VulkanContext::InitDriverDetails()
   if (driver_id == VK_DRIVER_ID_MOLTENVK)
     driver = DriverDetails::DRIVER_PORTABILITY;
 
+  // In every player's log (BOOT): what a GPU thread stall ran on.
+  NOTICE_LOG_FMT(BOOT, "Vulkan: {} (vendor {:#x}, driver id {}, driver version {:#x}, API {}.{}.{})",
+                 device_name, vendor_id, static_cast<int>(driver_id), m_device_info.driverVersion,
+                 VK_API_VERSION_MAJOR(m_device_info.apiVersion),
+                 VK_API_VERSION_MINOR(m_device_info.apiVersion),
+                 VK_API_VERSION_PATCH(m_device_info.apiVersion));
   DriverDetails::Init(DriverDetails::API_VULKAN, vendor, driver,
                       static_cast<double>(m_device_info.driverVersion),
                       DriverDetails::Family::UNKNOWN, std::move(device_name));

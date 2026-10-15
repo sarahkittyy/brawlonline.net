@@ -272,6 +272,9 @@ static void ResetRumble()
 // Called from GUI thread
 void Stop(Core::System& system)  // - Hammertime!
 {
+  // Before the lock: a stop that never finishes (a stuck emulation) ends Dolphin after a while.
+  StallTracer::OnStopRequested();
+
   {
     std::lock_guard lock(s_core_mutex);
 
