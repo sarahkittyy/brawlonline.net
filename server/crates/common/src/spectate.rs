@@ -17,6 +17,7 @@ pub const SPECTATE_DIGEST: &str = "spectate-digest";
 pub const SPECTATE_PAUSE: &str = "spectate-pause";
 pub const SPECTATE_RESUME: &str = "spectate-resume";
 pub const SPECTATE_STOP: &str = "spectate-stop";
+pub const SPECTATE_END: &str = "spectate-end";
 pub const SPECTATE_ERROR: &str = "spectate-error";
 
 /// Chunk data travels on this ENet channel (JSON stays on channel 0).
@@ -290,9 +291,43 @@ pub struct Offer {
     pub rollbacks: f64,
 }
 
+/// `spectate-end`: how a game this player offered ended, from its own `ENDG`. Every player's game
+/// sends it, whatever its role: the upload, which carries the `ENDG` too, may have been cut before
+/// it (players first), and the list's score would miss that game.
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EndReport {
+    pub match_id: String,
+    pub game_uid: String,
+    pub end_method: String,
+    /// 1-4; none for a draw or no winner.
+    #[serde(default)]
+    pub winner_port: Option<u32>,
+    #[serde(default)]
+    pub quitter_port: Option<u32>,
+    #[serde(default)]
+    pub is_teams: bool,
+    /// The game's players as its `INFO` names them.
+    #[serde(default)]
+    pub players: Vec<EndPlayer>,
+}
+
+#[derive(Debug, Clone, PartialEq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EndPlayer {
+    pub port: u32,
+    pub uid: String,
+    #[serde(default)]
+    pub team_id: Option<u32>,
+}
+
+/// `ENDG`'s `endMethod`s (`ReplayRecorder.h` EndInfo).
+const END_METHODS: [&str; 8] = ["game", "quit", "runback", "quit-left", "disconnect", "desync", "stopped", "error"];
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum SpectateRequest {
     Offer(Offer),
+    End(EndReport),
     Digest { slot: u32, frms: Vec<(u32, [u8; 8])> },
     Pause { slot: u32, reason: String },
     Resume { slot: u32 },
@@ -307,6 +342,7 @@ impl SpectateRequest {
     pub fn op(&self) -> &'static str {
         match self {
             SpectateRequest::Offer(_) => SPECTATE_OFFER,
+            SpectateRequest::End(_) => SPECTATE_END,
             SpectateRequest::Digest { .. } => SPECTATE_DIGEST,
             SpectateRequest::Pause { .. } => SPECTATE_PAUSE,
             SpectateRequest::Resume { .. } => SPECTATE_RESUME,
@@ -339,6 +375,26 @@ impl SpectateRequest {
                     return Err((op, "bad game or rollbacks".into()));
                 }
                 Ok(SpectateRequest::Offer(o))
+            }
+            SPECTATE_END => {
+                let e: EndReport = serde_json::from_value(v.clone()).map_err(|e| (op, e.to_string()))?;
+                if e.match_id.is_empty() || e.match_id.len() > 96 || decode_uid(&e.game_uid).is_none() {
+                    return Err((op, "bad matchId or gameUid".into()));
+                }
+                if !END_METHODS.contains(&e.end_method.as_str()) {
+                    return Err((op, format!("unknown endMethod {:?}", e.end_method)));
+                }
+                let port_ok = |p: Option<u32>| p.is_none_or(|p| (1..=4).contains(&p));
+                if !port_ok(e.winner_port)
+                    || !port_ok(e.quitter_port)
+                    || e.players.len() > 4
+                    || e.players.iter().any(|p| {
+                        !port_ok(Some(p.port)) || p.uid.len() > 64 || p.team_id.is_some_and(|t| t > 8)
+                    })
+                {
+                    return Err((op, "bad ports or players".into()));
+                }
+                Ok(SpectateRequest::End(e))
             }
             SPECTATE_DIGEST => {
                 let slot = slot().ok_or((op, "bad slot".to_string()))?;
@@ -374,6 +430,7 @@ impl SpectateRequest {
 pub fn op_of(kind: &str) -> &'static str {
     match kind {
         SPECTATE_OFFER => SPECTATE_OFFER,
+        SPECTATE_END => SPECTATE_END,
         SPECTATE_DIGEST => SPECTATE_DIGEST,
         SPECTATE_PAUSE => SPECTATE_PAUSE,
         SPECTATE_RESUME => SPECTATE_RESUME,
@@ -604,5 +661,16 @@ mod tests {
             SpectateRequest::Pause { slot: 1, reason: "rtt".into() }
         );
         assert_eq!(SpectateRequest::parse("spectate-nope", &json!({})).unwrap_err().0, "invalid");
+        let end = json!({"matchId": "m", "gameUid": uid, "endMethod": "game", "winnerPort": 2,
+                         "players": [{"port": 1, "uid": "a"}, {"port": 2, "uid": "b", "teamId": null}]});
+        let Ok(SpectateRequest::End(e)) = SpectateRequest::parse(SPECTATE_END, &end) else { panic!("{end}") };
+        assert_eq!((e.winner_port, e.quitter_port, e.players.len()), (Some(2), None, 2));
+        for bad in [
+            json!({"matchId": "m", "gameUid": uid, "endMethod": "won"}),
+            json!({"matchId": "m", "gameUid": uid, "endMethod": "game", "winnerPort": 5}),
+            json!({"matchId": "m", "gameUid": uid, "endMethod": "game", "players": [{"port": 0, "uid": "a"}]}),
+        ] {
+            assert_eq!(SpectateRequest::parse(SPECTATE_END, &bad).unwrap_err().0, SPECTATE_END, "{bad}");
+        }
     }
 }

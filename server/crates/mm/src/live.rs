@@ -23,8 +23,8 @@ use std::time::{Duration, Instant};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use common::spectate::{
-    self, ChunkKind, GameState, LiveEntry, LiveGame, LiveLine, LivePlayer, Offer, Role, RoleMsg, SpectateErrorMsg,
-    SpectateRequest, SPECTATE_ERROR, SPECTATE_ROLE,
+    self, ChunkKind, EndReport, GameState, LiveEntry, LiveGame, LiveLine, LivePlayer, Offer, Role, RoleMsg,
+    SpectateErrorMsg, SpectateRequest, SPECTATE_ERROR, SPECTATE_ROLE,
 };
 use tokio::sync::watch;
 use uuid::Uuid;
@@ -302,6 +302,68 @@ struct Game {
     ended: bool,
     bad: bool,
     finished_at: Option<Instant>,
+    /// Its result is in the stream's score (from its `ENDG` or a player's `spectate-end`).
+    counted: bool,
+    /// A player's `spectate-end` that came while the upload was still going: counted when the
+    /// upload ends (with its `ENDG`, or cut), so the list's score doesn't run ahead of what
+    /// spectators have seen.
+    reported: Option<EndResult>,
+}
+
+/// How a game ended, from its `ENDG` or a player's `spectate-end`.
+#[derive(Debug, Clone, Default)]
+struct EndResult {
+    method: String,
+    winner_port: Option<u32>,
+    quitter_port: Option<u32>,
+    teams: bool,
+    /// Port (1-4) → the player's uid and team, as the game's `INFO` names them.
+    ports: HashMap<u32, (Uuid, Option<u32>)>,
+}
+
+impl EndResult {
+    fn from_endg(endg: Option<&serde_json::Value>) -> EndResult {
+        let port = |k: &str| {
+            endg.and_then(|e| e.get(k)).and_then(|p| p.as_u64()).and_then(|p| u32::try_from(p).ok())
+        };
+        EndResult {
+            method: endg.and_then(|e| e.get("endMethod")).and_then(|m| m.as_str()).unwrap_or("").to_string(),
+            winner_port: port("winnerPort"),
+            quitter_port: port("quitterPort"),
+            ..Default::default()
+        }
+    }
+
+    fn from_report(e: EndReport) -> EndResult {
+        EndResult {
+            ports: e
+                .players
+                .iter()
+                .filter_map(|p| Some((p.port, (Uuid::parse_str(&p.uid).ok()?, p.team_id))))
+                .collect(),
+            method: e.end_method,
+            winner_port: e.winner_port,
+            quitter_port: e.quitter_port,
+            teams: e.is_teams,
+        }
+    }
+
+    /// The players who won: the winning port's player and, in a team battle, their team.
+    fn winners(&self, ranked: bool) -> Vec<Uuid> {
+        let mut port = self.winner_port;
+        // A Ranked quit loses the game for the quitter: the other player won it, whatever the
+        // record says about a winner.
+        if ranked && self.method == "quit" && self.ports.len() == 2 {
+            if let Some(q) = self.quitter_port {
+                port = self.ports.keys().copied().find(|&p| p != q).or(port);
+            }
+        }
+        let Some((uid, team)) = port.and_then(|p| self.ports.get(&p)) else { return Vec::new() };
+        match team.filter(|_| self.teams) {
+            Some(t) => self.ports.values().filter(|(_, pt)| *pt == Some(t)).map(|(u, _)| *u).collect(),
+            None => vec![*uid],
+        }
+    }
 }
 
 impl Game {
@@ -479,14 +541,17 @@ impl LiveBook {
     }
 
     /// A new stream for `match_id`'s next games (its own is over), with the same players and
-    /// room.
+    /// room, and the match's score and game count so far: it is the same set going on.
     fn fresh_stream(&mut self, now: Instant, match_id: &str) -> String {
         let id = new_stream_id();
-        let (players, room_key) = match self.matches.get(match_id) {
-            Some(m) => (m.players.clone(), self.streams.get(&m.stream).and_then(|b| b.room_key.clone())),
-            None => (Vec::new(), None),
-        };
-        self.streams.insert(id.clone(), StreamBook::new(now, room_key, players));
+        let old = self.matches.get(match_id).and_then(|m| self.streams.get(&m.stream));
+        let players = self.matches.get(match_id).map(|m| m.players.clone()).unwrap_or_default();
+        let mut book = StreamBook::new(now, old.and_then(|b| b.room_key.clone()), players);
+        if let Some(b) = old {
+            book.wins = b.wins.clone();
+            book.last_game = b.last_game;
+        }
+        self.streams.insert(id.clone(), book);
         if let Some(m) = self.matches.get_mut(match_id) {
             m.stream = id.clone();
         }
@@ -534,6 +599,7 @@ impl LiveBook {
         let op = req.op();
         let result = match req {
             SpectateRequest::Offer(o) => self.offer(now, conn, account, o, out),
+            SpectateRequest::End(e) => self.end_report(now, account, e),
             SpectateRequest::Digest { slot, frms } => self.digest(now, conn, slot, frms, out),
             SpectateRequest::Pause { slot, reason } => self.pause(now, conn, slot, &reason, false, out),
             SpectateRequest::Stop { slot, reason } => self.pause(now, conn, slot, &reason, true, out),
@@ -602,6 +668,12 @@ impl LiveBook {
             }
             let number =
                 if is_room { self.room_game_number(&stream, &o.match_id, account, o.game, uid) } else { o.game };
+            // A game is going on: the wait between games is over, whether or not anything of
+            // this game is ever uploaded.
+            if let Some(b) = self.streams.get_mut(&stream) {
+                b.last_end = None;
+                b.last_upload = now;
+            }
             self.games.insert(
                 uid,
                 Game {
@@ -626,6 +698,8 @@ impl LiveBook {
                     ended: false,
                     bad: false,
                     finished_at: None,
+                    counted: false,
+                    reported: None,
                 },
             );
         }
@@ -791,9 +865,9 @@ impl LiveBook {
 
     /// The game's upload ended for good with nobody to take it over (its uploader stopped for the
     /// players' sake, left, or sent a bad chunk): spectators keep what came, with "The rest of
-    /// this game wasn't streamed.", and the stream goes on as after a game's end (the match's next
-    /// game, or over once the wait between games has passed). The list's row is not "between":
-    /// the players are still playing it.
+    /// this game wasn't streamed.". The list's row is not "between" and the wait between games
+    /// doesn't start: the players are still playing it. Its end comes from the players' games
+    /// (`spectate-end`), which count its result and start the wait.
     fn cut_game(&mut self, now: Instant, uid: [u8; 16]) {
         let Some(game) = self.games.get_mut(&uid) else { return };
         if game.bad || game.ended {
@@ -809,10 +883,8 @@ impl LiveBook {
                 g.bad = Some("The rest of this game wasn't streamed.".into());
             }
         });
-        if let Some(b) = self.streams.get_mut(&stream_id) {
-            b.last_end = Some(now);
-        }
         self.slots.retain(|_, s| s.game != uid);
+        self.count_reported(now, uid);
     }
 
     /// Ends the primary's upload after a bad chunk and hands the game on.
@@ -1092,68 +1164,113 @@ impl LiveBook {
         game.finished_at = Some(now);
         game.primary = None;
         let (stream_id, ordinal) = (game.stream.clone(), game.ordinal);
-        let mode = self.matches.get(&game.match_id).map_or("", |m| m.mode);
-        let method = endg.and_then(|e| e.get("endMethod")).and_then(|m| m.as_str()).unwrap_or("").to_string();
-        let mut winner_port = endg.and_then(|e| e.get("winnerPort")).and_then(|w| w.as_u64());
-        // A Ranked quit loses the game for the quitter: the other player won it, whatever the
-        // record says about a winner.
-        if mode == "ranked" && method == "quit" {
-            let quitter = endg.and_then(|e| e.get("quitterPort")).and_then(|q| q.as_u64());
-            if let Some(q) = quitter {
-                let ports = self.info_ports(&stream_id, ordinal);
-                if ports.len() == 2 {
-                    winner_port = ports.keys().map(|&p| p as u64).find(|&p| p != q).or(winner_port);
-                }
-            }
-        }
-        let mut winners: Vec<String> = Vec::new();
-        if let Some(port) = winner_port {
-            // The winner's uid (and team mates) from the stored entry: INFO's players by port.
-            if let Some(entry) = self.store.entry(&stream_id) {
-                let by_port = self.info_ports(&stream_id, ordinal);
-                if let Some(wuid) = by_port.get(&(port as u32)) {
-                    let team = entry.players.iter().find(|p| &p.uid == wuid).and_then(|p| p.team_id);
-                    winners = entry
-                        .players
-                        .iter()
-                        .filter(|p| &p.uid == wuid || (entry.is_teams && team.is_some() && p.team_id == team))
-                        .map(|p| p.uid.clone())
-                        .collect();
-                }
-            }
-        }
-        if let Some(b) = self.streams.get_mut(&stream_id) {
-            b.last_end = Some(now);
-            for w in &winners {
-                if let Ok(u) = Uuid::parse_str(w) {
-                    *b.wins.entry(u).or_default() += 1;
-                }
-            }
-            let best = b.wins.values().copied().max().unwrap_or(0);
-            if endg.is_some() && ends_stream(mode, &method, best) {
-                tracing::info!(stream = %stream_id, mode, method, best, "spectate: the set can't go on; stream over");
-                b.set_over = true;
-            }
-        }
         self.store.change(&stream_id, |s| {
             if let Some(g) = ordinal.and_then(|o| s.games.get_mut(o)) {
                 g.ended = true;
             }
-            s.entry.game.state = GameState::Between;
+        });
+        // The game's slots are done.
+        self.slots.retain(|_, s| s.game != uid);
+        // The upload's own record; a player's report that came first is the same game's end.
+        if let Some(g) = self.games.get_mut(&uid) {
+            g.reported = None;
+        }
+        let (teams, ports) = self.info_ports(&stream_id, ordinal);
+        self.count_result(now, uid, EndResult { teams, ports, ..EndResult::from_endg(endg) });
+    }
+
+    /// A player's game says how a game it offered ended (`spectate-end`). Counted at once when
+    /// the game's upload is over (cut, or nothing came); while it still goes on, its `ENDG` is on
+    /// the way and counts, and the report waits in case it never comes.
+    fn end_report(&mut self, now: Instant, account: Uuid, e: EndReport) -> Result<(), &'static str> {
+        let offered = spectate::decode_uid(&e.game_uid).ok_or(errors::INVALID)?;
+        let Some(m) = self.matches.get(&e.match_id) else { return Ok(()) };
+        if !m.players.contains(&account) {
+            return Err(errors::NOT_YOUR_MATCH);
+        }
+        // Only a game this player offered (spectating off: there is none, and nothing to count).
+        let Some(game) = self
+            .games
+            .values_mut()
+            .find(|g| g.match_id == e.match_id && g.offers.iter().any(|o| o.account == account && o.uid == offered))
+        else {
+            return Ok(());
+        };
+        let uid = game.uid;
+        if let Some(b) = self.streams.get_mut(&game.stream) {
+            b.last_upload = now;
+        }
+        if game.counted {
+            return Ok(());
+        }
+        let result = EndResult::from_report(e);
+        if game.open() {
+            game.reported.get_or_insert(result);
+            return Ok(());
+        }
+        self.count_result(now, uid, result);
+        Ok(())
+    }
+
+    /// Counts the report a game's upload was waiting on, now that the upload is over.
+    fn count_reported(&mut self, now: Instant, uid: [u8; 16]) {
+        if let Some(r) = self.games.get_mut(&uid).and_then(|g| g.reported.take()) {
+            self.count_result(now, uid, r);
+        }
+    }
+
+    /// A game's end, once: its winners' wins, the wait between games, and whether the set can go
+    /// on. The players come from the game's kept `INFO`, else from the report (players of the
+    /// match only).
+    fn count_result(&mut self, now: Instant, uid: [u8; 16], mut r: EndResult) {
+        let Some(game) = self.games.get_mut(&uid) else { return };
+        if game.counted {
+            return;
+        }
+        game.counted = true;
+        game.reported = None;
+        let (stream_id, ordinal, number) = (game.stream.clone(), game.ordinal, game.number);
+        let (mode, players) =
+            self.matches.get(&game.match_id).map_or(("", Vec::new()), |m| (m.mode, m.players.clone()));
+        let (teams, kept) = self.info_ports(&stream_id, ordinal);
+        if !kept.is_empty() {
+            (r.teams, r.ports) = (teams, kept);
+        }
+        r.ports.retain(|_, (u, _)| players.contains(u));
+        let winners = r.winners(mode == "ranked");
+        tracing::info!(stream = %stream_id, game = number, method = r.method, ?winners, "spectate: game result");
+        if let Some(b) = self.streams.get_mut(&stream_id) {
+            b.last_end = Some(now);
+            for w in &winners {
+                *b.wins.entry(*w).or_default() += 1;
+            }
+            let best = b.wins.values().copied().max().unwrap_or(0);
+            if ends_stream(mode, &r.method, best) {
+                let method = &r.method;
+                tracing::info!(stream = %stream_id, mode, method, best, "spectate: the set can't go on; stream over");
+                b.set_over = true;
+            }
+        }
+        let winners: Vec<String> = winners.iter().map(|u| u.to_string()).collect();
+        self.store.change(&stream_id, |s| {
+            // The row shows this game (a game never listed leaves the last one there, ended).
+            if ordinal.is_some_and(|o| o + 1 == s.games.len()) {
+                s.entry.game.state = GameState::Between;
+            }
             for p in s.entry.players.iter_mut() {
                 if winners.contains(&p.uid) {
                     p.wins += 1;
                 }
             }
         });
-        // The game's slots are done.
-        self.slots.retain(|_, s| s.game != uid);
     }
 
-    /// Port (1-4) → uid from the game's kept `INFO`.
-    fn info_ports(&self, stream_id: &str, ordinal: Option<usize>) -> HashMap<u32, String> {
+    /// Whether the game's kept `INFO` is a team battle, and its players by port (1-4): uid and
+    /// team. Empty without a kept `INFO`.
+    fn info_ports(&self, stream_id: &str, ordinal: Option<usize>) -> (bool, HashMap<u32, (Uuid, Option<u32>)>) {
         let mut map = HashMap::new();
-        let Some(o) = ordinal else { return map };
+        let mut teams = false;
+        let Some(o) = ordinal else { return (teams, map) };
         self.store.with(|m| {
             let Some(g) = m.get(stream_id).and_then(|s| s.games.get(o)) else { return };
             for c in &g.chunks {
@@ -1163,16 +1280,17 @@ impl LiveBook {
                 }
                 let Ok(raw) = v.raw() else { continue };
                 let Ok(j) = serde_json::from_slice::<serde_json::Value>(&raw) else { continue };
+                teams = j.get("isTeams").and_then(|t| t.as_bool()).unwrap_or(false);
                 for p in j.get("players").and_then(|p| p.as_array()).into_iter().flatten() {
-                    if let (Some(port), Some(uid)) =
-                        (p.get("port").and_then(|x| x.as_u64()), p.get("uid").and_then(|x| x.as_str()))
-                    {
-                        map.insert(port as u32, uid.to_string());
+                    let uid = p.get("uid").and_then(|x| x.as_str()).and_then(|u| Uuid::parse_str(u).ok());
+                    if let (Some(port), Some(uid)) = (p.get("port").and_then(|x| x.as_u64()), uid) {
+                        let team = p.get("teamId").and_then(|t| t.as_u64()).map(|t| t as u32);
+                        map.insert(port as u32, (uid, team));
                     }
                 }
             }
         });
-        map
+        (teams, map)
     }
 
     /// A game whose upload stopped before its end: kept as it is, its end marked as cut (the
@@ -1192,6 +1310,7 @@ impl LiveBook {
             }
         });
         self.slots.retain(|_, s| s.game != uid);
+        self.count_reported(now, uid);
     }
 
     fn mark_bad(&mut self, now: Instant, uid: [u8; 16], why: &str) {
@@ -1211,10 +1330,9 @@ impl LiveBook {
             }
             s.entry.game.state = GameState::Between;
         });
-        if let Some(b) = self.streams.get_mut(&stream_id) {
-            b.last_end = Some(now);
-        }
+        // The players play on: the wait between games starts at the game's end (its report).
         self.slots.retain(|_, s| s.game != uid);
+        self.count_reported(now, uid);
     }
 
     fn digest(
@@ -1369,9 +1487,12 @@ impl LiveBook {
                 Some(t) if now.duration_since(t) >= self.cfg.keep => forget.push(id.clone()),
                 Some(_) => {}
                 None => {
-                    let open = self.games.values().any(|g| &g.stream == id && g.open() && g.ordinal.is_some());
+                    // A game going on holds the stream, listed or not (its upload may not have
+                    // started, or was cut): its end, reported by the players' games, starts the
+                    // wait. Without one (older games) the idle timeout ends it.
+                    let open = self.games.values().any(|g| &g.stream == id && g.open());
                     let between = !open
-                        && b.last_end.is_some_and(|t| b.set_over || now.duration_since(t) >= self.cfg.between_games);
+                        && (b.set_over || b.last_end.is_some_and(|t| now.duration_since(t) >= self.cfg.between_games));
                     let idle = now.duration_since(b.last_upload) >= self.cfg.idle;
                     if between || idle {
                         b.over_at = Some(now);
@@ -1381,6 +1502,12 @@ impl LiveBook {
             }
         }
         for id in over {
+            // Ended games' reports waiting on their uploads count first.
+            let waiting: Vec<[u8; 16]> =
+                self.games.values().filter(|g| g.stream == id && g.reported.is_some()).map(|g| g.uid).collect();
+            for uid in waiting {
+                self.count_reported(now, uid);
+            }
             self.store.change(&id, |s| {
                 s.over = true;
                 s.entry.game.state = GameState::Over;
@@ -1804,7 +1931,8 @@ mod tests {
 
     /// The only uploader stops mid-game (players first): spectators get the rest cut at once
     /// ("The rest of this game wasn't streamed.") instead of "Buffering…" until the next game; the
-    /// row stays playing (the players are), and the wait between games starts. A pause doesn't cut.
+    /// row stays playing (the players are), and the wait between games doesn't start until the
+    /// players' games report the end. A pause doesn't cut.
     #[test]
     fn a_game_whose_only_uploader_stops_is_cut_at_once() {
         let mut t = T::new(SpectateMode::On);
@@ -1827,9 +1955,164 @@ mod tests {
             "{lines:?}"
         );
         assert_eq!(t.book.store.entries()[0].game.state, GameState::Playing);
-        // Then the wait between games (Direct: no set length) ends the stream.
+        // The players play on past the wait between games: the stream stays.
+        t.advance(Duration::from_secs(121));
+        assert_eq!(t.book.store.entries()[0].game.state, GameState::Playing);
+        // Their end starts the wait (Direct: no set length), which then ends the stream.
+        report(&mut t, A, a, 1, json!({"endMethod": "game", "winnerPort": 1}));
+        assert_eq!(t.book.store.entries()[0].game.state, GameState::Between);
         t.advance(Duration::from_secs(121));
         assert_eq!(t.book.store.entries()[0].game.state, GameState::Over);
+        // Without a report (older games), nothing uploaded for 10 minutes ends it.
+        let mut t = T::new(SpectateMode::On);
+        let a = t.a;
+        t.offer(A, a, 1, 0);
+        t.advance(Duration::from_secs(3));
+        let slot = t.book.slots.keys().copied().next().unwrap();
+        let info = t.info(1);
+        t.send_chunk(A, slot, 0, &info);
+        t.book.request(t.now, A, a, SpectateRequest::Stop { slot, reason: "frame".into() }, &mut out);
+        t.advance(Duration::from_secs(590));
+        assert_eq!(t.book.store.entries()[0].game.state, GameState::Playing);
+        t.advance(Duration::from_secs(20));
+        assert_eq!(t.book.store.entries()[0].game.state, GameState::Over);
+    }
+
+    /// `spectate-end` from player `who` for game `game` (its id as in `T::offer`).
+    fn report(t: &mut T, conn: ConnId, who: Uuid, game: u8, fields: Value) -> Vec<Output> {
+        let mut v = json!({"matchId": MATCH, "gameUid": uid_hex(game), "players": [
+            {"port": 1, "uid": t.a.to_string()}, {"port": 2, "uid": t.b.to_string()}]});
+        v.as_object_mut().unwrap().extend(fields.as_object().unwrap().clone());
+        let SpectateRequest::End(e) = SpectateRequest::parse(spectate::SPECTATE_END, &v).unwrap() else { panic!() };
+        let mut out = vec![];
+        t.book.request(t.now, conn, who, SpectateRequest::End(e), &mut out);
+        out
+    }
+
+    fn wins(t: &T) -> (u32, u32) {
+        let e = &t.book.store.entries()[0];
+        let w = |u: Uuid| e.players.iter().find(|p| p.uid == u.to_string()).map_or(0, |p| p.wins);
+        (w(t.a), w(t.b))
+    }
+
+    /// Production 2026-10-15, a Ranked set listed as "Game 3 · 1-0": game 1's only uploader
+    /// stopped mid-game (late frames), so its ENDG never came and its win wasn't counted, and the
+    /// cut started the 120 s wait while the players were still playing, so game 2 opened a new
+    /// stream at 0-0. Now the players' reports count the cut game, and the set stays one stream.
+    #[test]
+    fn a_cut_game_counts_the_players_report_and_the_set_stays_one_stream() {
+        let mut t = T::with_match_mode(SpectateMode::On, Mode::Ranked);
+        let (a, b) = (t.a, t.b);
+        t.offer(A, a, 1, 0);
+        let out = t.offer(B, b, 1, 0);
+        let slot_a = role(&out, A).unwrap()["slot"].as_u64().unwrap() as u32;
+        let slot_b = role(&out, B).unwrap()["slot"].as_u64().unwrap() as u32;
+        let info = t.info(1);
+        t.send_chunk(A, slot_a, 0, &info);
+        t.send_chunk(A, slot_a, 1, &encode_chunk(b"SETP", b"{}", false));
+        t.send_chunk(A, slot_a, 2, &encode_chunk(b"FRMS", &frms(120, 60, 1), true));
+        // The witness stops, then the primary: nobody left, the game is cut.
+        let mut out = vec![];
+        t.book.request(t.now, B, b, SpectateRequest::Stop { slot: slot_b, reason: "frame".into() }, &mut out);
+        t.book.request(t.now, A, a, SpectateRequest::Stop { slot: slot_a, reason: "frame".into() }, &mut out);
+        let id = stream_id(&t);
+        assert!(read_all(&t.book.store, &id).iter().any(|l| matches!(l, LiveLine::Bad { game: 1, .. })));
+        t.advance(Duration::from_secs(100));
+        // Both games report the end; it counts once.
+        report(&mut t, B, b, 1, json!({"endMethod": "game", "winnerPort": 2}));
+        report(&mut t, A, a, 1, json!({"endMethod": "game", "winnerPort": 2}));
+        assert_eq!(wins(&t), (0, 1));
+        // A slow stage pick: 135 s after the cut, game 2 goes on in the same stream.
+        t.advance(Duration::from_secs(35));
+        play_game(&mut t, 2, r#"{"endMethod":"game","winnerPort":1}"#);
+        let entries = t.book.store.entries();
+        assert_eq!(entries.len(), 1, "{entries:?}");
+        assert_eq!((entries[0].game.number, entries[0].game.place), (2, 2));
+        assert_eq!(wins(&t), (1, 1));
+        play_game(&mut t, 3, r#"{"endMethod":"game","winnerPort":2}"#);
+        assert_eq!(wins(&t), (1, 2));
+        t.advance(Duration::from_secs(1));
+        assert_eq!(t.book.store.entries()[0].game.state, GameState::Over, "2-1 ends the Ranked set");
+    }
+
+    /// A report that comes while the game's upload still goes on waits for it: the score doesn't
+    /// run ahead of what spectators see, and the ENDG that follows counts the game once.
+    #[test]
+    fn a_report_waits_for_the_upload_and_counts_once() {
+        let mut t = T::new(SpectateMode::On);
+        let (a, b) = (t.a, t.b);
+        t.offer(A, a, 1, 0);
+        let out = t.advance(Duration::from_secs(3));
+        let slot = role(&out, A).unwrap()["slot"].as_u64().unwrap() as u32;
+        let info = t.info(1);
+        t.send_chunk(A, slot, 0, &info);
+        t.send_chunk(A, slot, 1, &encode_chunk(b"SETP", b"{}", false));
+        t.send_chunk(A, slot, 2, &encode_chunk(b"FRMS", &frms(120, 60, 1), true));
+        assert!(report(&mut t, A, a, 1, json!({"endMethod": "game", "winnerPort": 1})).is_empty());
+        assert_eq!(wins(&t), (0, 0), "spectators haven't seen the end yet");
+        assert_eq!(t.book.store.entries()[0].game.state, GameState::Playing);
+        t.send_chunk(A, slot, 3, &encode_chunk(b"ENDG", br#"{"endMethod":"game","winnerPort":1}"#, false));
+        assert_eq!(wins(&t), (1, 0));
+        report(&mut t, B, b, 1, json!({"endMethod": "game", "winnerPort": 1}));
+        assert_eq!(wins(&t), (1, 0), "once");
+        // The upload stalls after the end instead: the next game's offer counts the report.
+        t.offer(A, a, 2, 0);
+        let out = t.advance(Duration::from_secs(3));
+        let slot = role(&out, A).unwrap()["slot"].as_u64().unwrap() as u32;
+        let info = t.info(2);
+        t.send_chunk(A, slot, 0, &info);
+        report(&mut t, A, a, 2, json!({"endMethod": "game", "winnerPort": 2}));
+        assert_eq!(wins(&t), (1, 0));
+        t.offer(A, a, 3, 0);
+        assert_eq!(wins(&t), (1, 1));
+    }
+
+    /// A game nothing of was uploaded (the uploader held for its link all game) still counts,
+    /// and a team battle's win counts for the team. Strangers' reports are refused, and reports
+    /// for games mm doesn't know (spectating off) are ignored.
+    #[test]
+    fn reports_count_games_never_uploaded_and_teams() {
+        let mut t = T::new(SpectateMode::On);
+        let a = t.a;
+        t.offer(A, a, 1, 0);
+        t.advance(Duration::from_secs(3));
+        report(&mut t, A, a, 1, json!({"endMethod": "game", "winnerPort": 2}));
+        assert!(!t.book.games[&[1; 16]].counted, "the upload may still come");
+        play_game(&mut t, 2, r#"{"endMethod":"game","winnerPort":2}"#);
+        assert_eq!(wins(&t), (0, 2), "game 1's report counted when game 2 began");
+
+        let mut t = T::new(SpectateMode::On);
+        let a = t.a;
+        let c = Uuid::new_v4();
+        t.offer(A, a, 1, 0);
+        t.advance(Duration::from_secs(3));
+        let slot = t.book.slots.keys().copied().next().unwrap();
+        let mut out = vec![];
+        t.book.request(t.now, A, a, SpectateRequest::Stop { slot, reason: "rtt".into() }, &mut out);
+        let teams = json!({"endMethod": "game", "winnerPort": 3, "isTeams": true, "players": [
+            {"port": 1, "uid": t.a.to_string(), "teamId": 0}, {"port": 2, "uid": t.b.to_string(), "teamId": 1},
+            {"port": 3, "uid": c.to_string(), "teamId": 0}]});
+        report(&mut t, A, a, 1, teams);
+        let book = &t.book.streams[&t.book.games[&[1; 16]].stream];
+        assert!(book.wins.is_empty(), "port 3 isn't a player of the match: nobody's win");
+        let mut t2 = T::new(SpectateMode::On);
+        let a2 = t2.a;
+        t2.offer(A, a2, 1, 0);
+        t2.advance(Duration::from_secs(3));
+        let slot = t2.book.slots.keys().copied().next().unwrap();
+        t2.book.request(t2.now, A, a2, SpectateRequest::Stop { slot, reason: "rtt".into() }, &mut out);
+        let teams2 = json!({"endMethod": "game", "winnerPort": 2, "isTeams": true, "players": [
+            {"port": 1, "uid": t2.a.to_string(), "teamId": 1}, {"port": 2, "uid": t2.b.to_string(), "teamId": 1}]});
+        report(&mut t2, A, a2, 1, teams2);
+        let book = &t2.book.streams[&t2.book.games[&[1; 16]].stream];
+        assert_eq!((book.wins.get(&t2.a), book.wins.get(&t2.b)), (Some(&1), Some(&1)), "the winner's team");
+
+        let out = report(&mut t, 3, Uuid::new_v4(), 1, json!({"endMethod": "game"}));
+        assert_eq!(sent(&out, 3)[0]["error"], errors::NOT_YOUR_MATCH);
+        let mut t = T::new(SpectateMode::Off);
+        let a = t.a;
+        t.offer(A, a, 1, 0);
+        assert!(report(&mut t, A, a, 1, json!({"endMethod": "game", "winnerPort": 1})).is_empty());
     }
 
     /// A player leaving the match (their chat group) ends its stream once no game is going on;
@@ -1882,6 +2165,8 @@ mod tests {
         assert_eq!(entries.iter().find(|e| e.id == first).unwrap().game.state, GameState::Over);
         assert_eq!(second.game.number, 2);
         assert_eq!(second.game.place, 1);
+        let won = |e: &LiveEntry, u: Uuid| e.players.iter().find(|p| p.uid == u.to_string()).unwrap().wins;
+        assert_eq!((won(second, t.a), won(second, t.b)), (1, 1), "the match's score goes on");
         // The first is forgotten 10 minutes after it ended; the second is still there.
         t.advance(Duration::from_secs(301));
         let ids: Vec<String> = t.book.store.entries().iter().map(|e| e.id.clone()).collect();

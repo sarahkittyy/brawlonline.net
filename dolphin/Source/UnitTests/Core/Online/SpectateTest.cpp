@@ -504,3 +504,68 @@ TEST(Spectate, ANewGameReportsTheLastOnesPausesAndRollbacks)
   EXPECT_EQ(offer["paused"].get<double>(), 1.0);
   EXPECT_DOUBLE_EQ(offer["rollbacks"].get<double>(), 2.0);
 }
+
+// Production 2026-10-15: a game whose only uploader stopped (late frames) never got its ENDG to
+// mm, and the list's score missed it ("Game 3, 1-0"). Every player's game reports each
+// game's end, whatever its role and however its upload went.
+TEST(Spectate, EveryPlayerReportsTheGamesEndWhateverItsRole)
+{
+  const auto info = [] {
+    const std::string j = R"({"matchId":"m","isTeams":false,"players":[)"
+                          R"({"port":1,"uid":"aaaa","teamId":null},{"port":2,"uid":"bbbb"}]})";
+    return std::vector<u8>(j.begin(), j.end());
+  };
+  const auto endg = [](const std::string& j) { return std::vector<u8>(j.begin(), j.end()); };
+
+  // A witness (it never uploads the ENDG itself).
+  Rig t;
+  t.Add(Replay::CHUNK_INFO, info());
+  t.Tick();
+  t.Role("witness", 8);
+  t.Add(Replay::CHUNK_ENDG, endg(R"({"endMethod":"game","winnerPort":2,"players":[]})"));
+  auto out = t.Tick();
+  ASSERT_EQ(Types(out), std::vector<std::string>{"spectate-end"});
+  auto e = Parse(out.json[0]);
+  EXPECT_EQ(e["matchId"].get<std::string>(), MATCH);
+  EXPECT_EQ(e["gameUid"].get<std::string>(), UID_HEX);
+  EXPECT_EQ(e["endMethod"].get<std::string>(), "game");
+  EXPECT_EQ(e["winnerPort"].get<double>(), 2.0);
+  EXPECT_EQ(e.count("quitterPort"), 0u);
+  const auto& players = e["players"].get<picojson::array>();
+  ASSERT_EQ(players.size(), 2u);
+  EXPECT_EQ(players[1].get<picojson::object>().at("uid").get<std::string>(), "bbbb");
+  EXPECT_EQ(players[0].get<picojson::object>().count("teamId"), 0u);
+  EXPECT_TRUE(t.Tick().json.empty()) << "once";
+
+  // A primary that stopped for the players' sake; the report waits while offline, and goes out
+  // after the next game began.
+  Rig s;
+  s.AddGame(2);
+  s.Tick();
+  s.Role("primary", 7);
+  s.health.running = true;
+  s.Learn();
+  for (int pause = 1; pause <= 3; ++pause)
+  {
+    s.health.late_frames += 5;
+    s.Tick();
+    s.Tick(11s);
+    s.Tick(11s);
+  }
+  EXPECT_TRUE(s.up.Status()["stopped"].get<bool>());
+  s.Add(Replay::CHUNK_ENDG, endg(R"({"endMethod":"game","winnerPort":"draw"})"));
+  EXPECT_TRUE(s.Tick(10ms, 0, false).json.empty());
+  s.up.BeginGame({MATCH, {9}, 2});
+  out = s.Tick();
+  e = Parse(out.json.at(0));
+  EXPECT_EQ(e["type"].get<std::string>(), "spectate-end");
+  EXPECT_EQ(e.count("winnerPort"), 0u) << "a draw names no winner";
+  EXPECT_EQ(Parse(out.json.at(1))["type"].get<std::string>(), "spectate-offer");
+
+  // mm said not to stream it: nothing.
+  Rig n;
+  n.Tick();
+  n.Role("none", 0);
+  n.Add(Replay::CHUNK_ENDG, endg(R"({"endMethod":"game","winnerPort":1})"));
+  EXPECT_TRUE(n.Tick().json.empty());
+}

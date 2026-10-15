@@ -30,6 +30,10 @@
 // first frame is measured against the quiet menus before it (a lowest taken within the game alone
 // would already be the full queue's).
 //
+// Whatever its role and however the upload went, every player's game tells mm how each game it
+// offered ended (`spectate-end`, a few hundred bytes once a game): the upload may have been cut
+// before its ENDG, and the list's score would miss that game.
+//
 // All functions are thread-safe.
 
 #pragma once
@@ -195,12 +199,17 @@ private:
     u64 rollback_n = 0;
     // How long sending was held for a queue.
     double held_s = 0;
+    // INFO's players (port, uid, team), for the game's `spectate-end`.
+    picojson::array players;
+    bool teams = false;
   };
 
   std::optional<std::string> Unhealthy(Game& g, Clock::time_point now, size_t unacked,
                                        const Health& health);
   void SendData(Game& g, Clock::time_point now, size_t unacked, Outgoing* out);
   void SendDigests(Game& g, Clock::time_point now, Outgoing* out);
+  void KeepPlayers(std::span<const u8> raw);
+  void ReportEnd(std::span<const u8> raw);
   void FinishGame();
 
   // The lowest round trip to mm per minute over the last 10 minutes (LEDBAT's base delay): the
@@ -212,6 +221,8 @@ private:
   Options m_options;
   bool m_forced = false;
   std::optional<Game> m_game;
+  // Messages that go out whatever the game's role, once online (`spectate-end`).
+  std::vector<std::string> m_pending;
   // The last game's figures, offered with the next game.
   u32 m_last_paused = 0;
   double m_last_rollbacks = 0;

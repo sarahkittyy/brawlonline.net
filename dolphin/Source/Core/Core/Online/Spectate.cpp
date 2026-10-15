@@ -113,7 +113,13 @@ void Uploader::BeginGame(const GameInfo& game)
 void Uploader::AddChunk(const std::array<u8, 16>& uid, u32 type, std::vector<u8> chunk,
                         std::span<const u8> raw)
 {
-  if (!m_game || m_game->info.uid != uid || !Streamed(type) || m_game->too_big)
+  if (!m_game || m_game->info.uid != uid)
+    return;
+  if (type == Replay::CHUNK_INFO)
+    KeepPlayers(raw);
+  else if (type == Replay::CHUNK_ENDG)
+    ReportEnd(raw);
+  if (!Streamed(type) || m_game->too_big)
     return;
   Game& g = *m_game;
   if (g.bytes + chunk.size() > m_options.max_game_bytes)
@@ -136,6 +142,68 @@ void Uploader::AddChunk(const std::array<u8, 16>& uid, u32 type, std::vector<u8>
   g.bytes += chunk.size();
   c.bytes = std::make_shared<const std::vector<u8>>(std::move(chunk));
   g.chunks.push_back(std::move(c));
+}
+
+void Uploader::KeepPlayers(std::span<const u8> raw)
+{
+  picojson::value v;
+  const std::string text(raw.begin(), raw.end());
+  if (!picojson::parse(v, text).empty() || !v.is<picojson::object>())
+    return;
+  const auto& o = v.get<picojson::object>();
+  const auto teams = o.find("isTeams");
+  m_game->teams = teams != o.end() && teams->second.is<bool>() && teams->second.get<bool>();
+  const auto players = o.find("players");
+  if (players == o.end() || !players->second.is<picojson::array>())
+    return;
+  m_game->players.clear();
+  for (const auto& p : players->second.get<picojson::array>())
+  {
+    if (!p.is<picojson::object>())
+      continue;
+    const auto& po = p.get<picojson::object>();
+    const auto port = U32(po, "port");
+    const auto player_uid = Str(po, "uid", 64);
+    if (!port || !player_uid)
+      continue;
+    picojson::object kept{{"port", picojson::value(static_cast<double>(*port))},
+                          {"uid", picojson::value(*player_uid)}};
+    if (const auto team = U32(po, "teamId"))
+      kept["teamId"] = picojson::value(static_cast<double>(*team));
+    m_game->players.emplace_back(std::move(kept));
+  }
+}
+
+void Uploader::ReportEnd(std::span<const u8> raw)
+{
+  Game& g = *m_game;
+  // mm said not to stream this game (spectating off): it keeps nothing of it.
+  if (g.role == Role::None)
+    return;
+  picojson::value v;
+  const std::string text(raw.begin(), raw.end());
+  if (!picojson::parse(v, text).empty() || !v.is<picojson::object>())
+    return;
+  const auto& e = v.get<picojson::object>();
+  const auto method = Str(e, "endMethod", 16);
+  if (!method)
+    return;
+  picojson::object o{{"type", picojson::value("spectate-end")},
+                     {"matchId", picojson::value(g.info.match_id)},
+                     {"gameUid", picojson::value(Hex(g.info.uid))},
+                     {"endMethod", picojson::value(*method)},
+                     {"isTeams", picojson::value(g.teams)},
+                     {"players", picojson::value(g.players)}};
+  // A draw or no winner ("draw", null) is left out.
+  if (const auto winner = U32(e, "winnerPort"))
+    o["winnerPort"] = picojson::value(static_cast<double>(*winner));
+  if (const auto quitter = U32(e, "quitterPort"))
+    o["quitterPort"] = picojson::value(static_cast<double>(*quitter));
+  // Kept for a while offline; a few games' at most.
+  if (m_pending.size() >= 4)
+    m_pending.erase(m_pending.begin());
+  m_pending.push_back(Json(std::move(o)));
+  INFO_LOG_FMT(NETPLAY, "Spectate: game {} ended ({}); reporting it", g.info.game, *method);
 }
 
 void Uploader::EndGame(const std::array<u8, 16>& uid)
@@ -371,7 +439,11 @@ Outgoing Uploader::Service(Clock::time_point now, bool online, size_t unacked, c
   Outgoing out;
   // The round trip to mm is sampled always, games or not: the menus are when the uplink is quiet.
   if (online)
+  {
     SampleRtt(now, health.mm_rtt_ms);
+    out.json.insert(out.json.end(), m_pending.begin(), m_pending.end());
+    m_pending.clear();
+  }
   if (!m_game)
     return out;
   Game& g = *m_game;

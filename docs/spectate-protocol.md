@@ -102,9 +102,18 @@ mm compares each entry with the primary's chunk of the same `first_frame`. An en
 
 - **Pause:** mm moves the upload to a witness at once if it has one. The paused player becomes a standby and sends nothing.
 - **Resume:** a standby that resumes stays standby, unless the current primary stops and no witness is left. Then the standby takes over again.
-- **Stop:** the player sends nothing more for this game. If nobody else can take the upload over (no witness, no standby that resumed), mm cuts the game at once: spectators get `bad` "The rest of this game wasn't streamed." (they play what came), and the stream waits for the match's next game as after a game's end. The same holds when the last uploader leaves or sends a bad chunk; a pause is not cut (it comes back within seconds).
+- **Stop:** the player sends nothing more for this game. If nobody else can take the upload over (no witness, no standby that resumed), mm cuts the game at once: spectators get `bad` "The rest of this game wasn't streamed." (they play what came). The players are still playing it: the row stays playing and the wait between games starts only at the game's end (`spectate-end`). The same holds when the last uploader leaves or sends a bad chunk; a pause is not cut (it comes back within seconds).
 
 mm also starts a takeover when the primary has sent no `FRMS` for 5 s while a witness's digests show the game going on.
+
+### `spectate-end` (every player's game → mm)
+
+```json
+{"type": "spectate-end", "matchId": "mode.ranked-…", "gameUid": "<32 hex>", "endMethod": "game",
+ "winnerPort": 2, "isTeams": false, "players": [{"port": 1, "uid": "…"}, {"port": 2, "uid": "…", "teamId": 0}]}
+```
+
+How a game the player offered ended, from its own `ENDG` (`winnerPort` and `quitterPort` 1-4, left out for a draw or none; `players` from its `INFO`). Every player's game sends it once per game, whatever its role and however its upload went (not after a `none` role): an upload cut before its `ENDG` used to leave the game out of the list's score (production 2026-10-15, a Ranked set listed as "Game 3 · 1-0"). mm counts each game's result once: from the upload's `ENDG` when that comes; a report that arrives while the upload still goes on waits for it (the score doesn't run ahead of what spectators have seen), and counts when the upload is cut or the match's next game is offered. The winner's uid comes from the kept `INFO` if there is one, else from the report, players of the match only. Reports from strangers are refused; reports for a game mm doesn't know (spectating off) are ignored.
 
 ## 2. Relay (mm → accounts, loopback)
 
@@ -126,8 +135,10 @@ An empty line is sent every 15 s, so idle connections stay open.
 A **stream** is a match: a Direct, Unranked or Ranked set, or a room's games while the same players play in the same room. Its id is 12 lowercase hex characters. A stream is over:
 - at once when its set can't go on: a game ended by a disconnect, a player leaving the match or an error (ENDG `endMethod` `disconnect`, `stopped`, `error`), or a Ranked player's second win (a Ranked quit is a lost game, the quitter's opponent's win, not the set's end);
 - when one of its players leaves the match or the room, once no game of it is going on: mm sees them leave the match's (or room's) chat group, which Dolphin does when the game leaves the online CSS, a new search, another room or a dropped connection (`docs/chat-protocol.md` §2). Between games on the CSS the players stay in it;
-- otherwise 120 s after its last game ended with no new offer (players without in-game chat never join a group; Unranked, Direct and rooms have no set length);
-- when no game of it has been uploaded for 10 minutes.
+- otherwise 120 s after its last game ended (its `ENDG` or a player's `spectate-end`) with no new offer (players without in-game chat never join a group; Unranked, Direct and rooms have no set length). A game going on holds the stream, whether anything of it was uploaded or not;
+- when nothing of it (an upload, an offer, a report) has come for 10 minutes.
+
+A match's game after its stream ended starts a new stream that keeps the match's score and game count.
 
 It stays readable for 10 minutes after that.
 
