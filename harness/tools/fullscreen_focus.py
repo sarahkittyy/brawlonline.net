@@ -14,14 +14,30 @@ thread without running the UI's messages, while that thread's Present waited for
 to answer DXGI's window message.
 
     python harness/tools/fullscreen_focus.py
+    python harness/tools/fullscreen_focus.py --solo
+
+Caveat of the session mode: the harness's own requests (status, memory reads) pause the core
+from the harness thread, which holds Core's core mutex while it waits for the video thread; a
+focus change's pause on the UI thread then waits for that mutex, and the video thread's Present
+for the UI thread. That hang is of the test's making (in a player's Dolphin no other thread
+pauses the core during a match), and it hangs builds with and without the fix alike (2026-10-15:
+both hung on the 5th switch, the UI thread in Core::PauseAndLock's mutex). --solo boots the host
+alone to Brawl's menus and sends nothing while the focus moves (the P+ GameSettings'
+GPUDeterminismMode = fake-completion makes the video thread the deterministic one in any
+dual-core run); 6 cycles did not hang either build (2026-10-15), so it does not reproduce the
+report as it stands.
 
 Run it from a shell on the interactive desktop: a process in a service window station (as
-Claude Code's tool shells are) gets no visible windows and Dolphin.exe never boots. The screen
-switches to and from fullscreen while it runs; the joiner plays headless.
+Claude Code's tool shells are) gets no visible windows and Dolphin.exe never boots. A scheduled
+task with /IT runs on the desktop of the signed-in user (schtasks /Create /TN ... /TR <a .cmd>
+/SC ONCE /ST 23:59 /IT, then /Run). The screen switches to and from fullscreen while it runs; the
+joiner plays headless. Other windows taking the foreground (Steam, a browser) make a switch not
+take, which fails the run ("NOT switched").
 """
 from __future__ import annotations
 
 import argparse
+import contextlib
 import ctypes
 import ctypes.wintypes as wt
 import json
@@ -80,21 +96,51 @@ def responds(hwnd: int, timeout_s: float) -> bool:
                                            ctypes.byref(res)))
 
 
-def to_foreground(hwnd: int) -> None:
-    # Windows lets a background process take the foreground right after a key event.
-    user32.keybd_event(VK_MENU, 0, 0, 0)
-    user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
-    user32.SetForegroundWindow(hwnd)
+user32.GetForegroundWindow.restype = wt.HWND
+user32.GetWindowThreadProcessId.argtypes = [wt.HWND, ctypes.POINTER(wt.DWORD)]
+user32.SetForegroundWindow.argtypes = [wt.HWND]
+user32.BringWindowToTop.argtypes = [wt.HWND]
+user32.SendMessageTimeoutW.argtypes = [wt.HWND, wt.UINT, wt.WPARAM, wt.LPARAM, wt.UINT, wt.UINT,
+                                       ctypes.POINTER(ctypes.c_size_t)]
 
 
-def focus_cycles(host: DolphinInstance, args: argparse.Namespace, rep: Dict[str, Any], stop: threading.Event) -> None:
+def foreground() -> int:
+    return user32.GetForegroundWindow() or 0
+
+
+def title(hwnd: int) -> str:
+    buf = ctypes.create_unicode_buffer(256)
+    user32.GetWindowTextW(wt.HWND(hwnd), buf, 256)
+    return buf.value
+
+
+def to_foreground(hwnd: int) -> bool:
+    """Windows lets a background process take the foreground only with the foreground thread's
+    input attached (and right after a key event)."""
+    fg_tid = user32.GetWindowThreadProcessId(foreground(), None)
+    me = ctypes.windll.kernel32.GetCurrentThreadId()
+    attached = fg_tid and fg_tid != me and user32.AttachThreadInput(me, fg_tid, True)
+    try:
+        user32.keybd_event(VK_MENU, 0, 0, 0)
+        user32.keybd_event(VK_MENU, 0, KEYEVENTF_KEYUP, 0)
+        user32.BringWindowToTop(hwnd)
+        user32.SetForegroundWindow(hwnd)
+    finally:
+        if attached:
+            user32.AttachThreadInput(me, fg_tid, False)
+    return foreground() == hwnd
+
+
+def focus_cycles(host: DolphinInstance, args: argparse.Namespace, rep: Dict[str, Any], stop: threading.Event,
+                 wait_for: str = "gprb: session running") -> None:
+    """After ``wait_for`` is in the host's log: the switches. No harness requests to the host."""
     rep["cycles"] = []
     t0 = time.monotonic()
     while not stop.is_set():
-        if host.log_path.exists() and "gprb: session running" in host.log_path.read_text(errors="replace"):
+        if host.log_path.exists() and wait_for in host.log_path.read_text(errors="replace"):
             break
         if time.monotonic() - t0 > 600:
-            rep["focus_error"] = "the host's session never ran"
+            rep["focus_error"] = f"never in the host's log: {wait_for!r}"
             return
         time.sleep(0.5)
     time.sleep(args.settle_s)
@@ -111,17 +157,47 @@ def focus_cycles(host: DolphinInstance, args: argparse.Namespace, rep: Dict[str,
         if stop.is_set():
             break
         for what, hwnd in (("away", main), ("back", render)):
-            to_foreground(hwnd)
+            switched = to_foreground(hwnd)
             time.sleep(args.hold_s)
             t = time.monotonic()
             ok = responds(render, args.hang_s)
-            c = {"cycle": i, "switch": what, "responds": ok, "answer_s": round(time.monotonic() - t, 2),
-                 "foreground_is_render": user32.GetForegroundWindow() == render}
+            c = {"cycle": i, "switch": what, "switched": switched, "responds": ok,
+                 "answer_s": round(time.monotonic() - t, 2), "foreground_is_render": foreground() == render,
+                 "front": title(foreground())[:60]}
             rep["cycles"].append(c)
-            print(f"  cycle {i} {what}: {'responds' if ok else 'HUNG'} ({c['answer_s']} s)", flush=True)
+            print(f"  cycle {i} {what}: {'switched' if switched else 'NOT switched'}, "
+                  f"{'responds' if ok else 'HUNG'} ({c['answer_s']} s), in front: {c['front']!r}",
+                  flush=True)
             if not ok:
                 rep["hung"] = True
                 return
+
+
+def solo(a: argparse.Namespace, rep: Dict[str, Any]) -> None:
+    """The host alone, booted to Brawl's menus: no session and no harness requests while the focus
+    moves (the harness's own memory reads pause the core from its thread, holding the core mutex
+    a focus change's pause then waits for: a hang of the test's making). The P+ GameSettings'
+    GPUDeterminismMode = fake-completion makes the video thread the deterministic one in any
+    dual-core run, as in a session."""
+    inst = G.make_instance("ffocus-solo", cpu_thread=True, video="D3D11",
+                           config=["Dolphin.Display.Fullscreen=True"])
+    inst.__class__ = QtInstance
+    inst.command_prefix = [str(Path(a.exe) if a.exe else paths.dolphin_gui())]
+    inst.client_timeout = a.client_timeout_s
+    try:
+        inst.launch()
+        inst.connect()
+        inst.client.wait_state("running", timeout=120)
+        focus_cycles(inst, a, rep, threading.Event(), wait_for="Booting from executable")
+        rep["hang_watchdog"] = "Hang watchdog" in inst.log_path.read_text(errors="replace")
+    finally:
+        with contextlib.suppress(Exception):
+            inst.kill()
+        if a.log_dir:
+            with contextlib.suppress(Exception):
+                Path(a.log_dir).mkdir(parents=True, exist_ok=True)
+                (Path(a.log_dir) / "ffocus-solo.log").write_text(inst.log_path.read_text(errors="replace"))
+        inst.cleanup(True)
 
 
 def main(argv: Optional[Sequence[str]] = None) -> int:
@@ -132,21 +208,29 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--settle-s", type=float, default=5.0, help="seconds of the match before the first switch")
     ap.add_argument("--frames", type=int, default=3600, help="session frames the match lasts at most")
     ap.add_argument("--exe", default=None, help="the host's Dolphin.exe (default: the build's)")
+    ap.add_argument("--client-timeout-s", type=float, default=30.0, help="harness request timeout of both instances")
+    ap.add_argument("--solo", action="store_true",
+                    help="the host alone at Brawl's menus, no session and no harness requests during the switches")
     ap.add_argument("--json", default=None)
     a, rest = ap.parse_known_args(argv)
+    a.log_dir = next((rest[i + 1] for i, x in enumerate(rest[:-1]) if x == "--log-dir"), None)
 
     host: List[DolphinInstance] = []
     orig = G.make_instance
 
     def mk(name: str, **kw):
         if "-host-" not in name:
-            return orig(name, **kw)
+            inst = orig(name, **kw)
+            # A desktop busy with a fullscreen Dolphin (and whatever else runs) answers slower.
+            inst.client_timeout = a.client_timeout_s
+            return inst
         kw["video"] = "D3D11"
         kw["config"] = [*kw.get("config", ()), "Dolphin.Display.Fullscreen=True"]
         inst = orig(name, **kw)
         # The same instance directory, set up by make_instance; Dolphin.exe runs it.
         inst.__class__ = QtInstance
         inst.command_prefix = [str(Path(a.exe) if a.exe else paths.dolphin_gui())]
+        inst.client_timeout = a.client_timeout_s
         host.append(inst)
         return inst
 
@@ -173,14 +257,19 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 return cm.__exit__(*exc)
         return _Cm()
 
-    G.make_instance = mk
-    G.instances = instances
-    try:
-        S.main(["--cpu", "dc", "--preset", "lan", "--frames", str(a.frames), *rest])
-    finally:
-        G.make_instance, G.instances = orig, orig_instances
+    if a.solo:
+        solo(a, rep)
+    else:
+        G.make_instance = mk
+        G.instances = instances
+        try:
+            S.main(["--cpu", "dc", "--preset", "lan", "--frames", str(a.frames), *rest])
+        finally:
+            G.make_instance, G.instances = orig, orig_instances
     hung = bool(rep.get("hung"))
-    ok = not hung and not rep.get("focus_error") and len(rep.get("cycles", [])) == 2 * a.cycles
+    # A switch that did not take tested nothing.
+    ok = (not hung and not rep.get("focus_error") and len(rep.get("cycles", [])) == 2 * a.cycles
+          and all(c["switched"] for c in rep["cycles"]))
     print(f"fullscreen_focus: {'PASS' if ok else 'FAIL'}: {len(rep.get('cycles', []))} checks, "
           f"hung {hung}{', ' + rep['focus_error'] if rep.get('focus_error') else ''}")
     if a.json:
