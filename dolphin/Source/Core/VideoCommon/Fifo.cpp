@@ -216,6 +216,13 @@ void FifoManager::RunVideoThreadCaptures(const u8* write_ptr)
 
 void FifoManager::PauseAndLock()
 {
+  // Deterministic dual core: SyncGPU's plain Wait does not let the UI thread run its messages. In
+  // exclusive fullscreen (D3D) a focus change pauses from the UI thread (Host::SetRenderFocus)
+  // while the video thread's Present sends a message to that same window and waits for it: both
+  // hung for good (DR#950 on v0.1.75, 2026-10-15). Wait here first, yielding to the UI as below.
+  if (m_system.IsDualCoreMode() && m_use_deterministic_gpu_thread)
+    m_gpu_mainloop.WaitYield(std::chrono::milliseconds(100), Host_YieldToUI);
+
   SyncGPU(SyncGPUReason::Other);
   EmulatorState(false);
 

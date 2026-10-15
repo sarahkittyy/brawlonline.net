@@ -16,6 +16,7 @@
 #include <windows.h>
 #endif
 
+#include "Common/ScopeGuard.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
@@ -79,6 +80,18 @@ void Host::SetMainWindowHandle(void* handle)
 
 static void RunWithGPUThreadInactive(const std::function<void()>& f)
 {
+  // FifoManager::PauseAndLock lets the UI thread run its events while it waits for the video
+  // thread, and one of them can be another focus change. Nested, its pause would wait on the lock
+  // the outer one holds (BlockingLoop's wait lock): it runs once the outer one is done instead.
+  thread_local bool s_running = false;
+  if (s_running && qApp->thread() == QThread::currentThread())
+  {
+    QueueOnObject(Host::GetInstance(), [f] { RunWithGPUThreadInactive(f); });
+    return;
+  }
+  s_running = true;
+  Common::ScopeGuard running_guard([] { s_running = false; });
+
   // Potentially any thread which shows panic alerts can be blocked on this returning.
   // This means that, in order to avoid deadlocks, we need to be careful with how we
   // synchronize with other threads. Note that the panic alert handler temporarily declares
