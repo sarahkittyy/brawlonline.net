@@ -1,12 +1,11 @@
 # Rank badges (docs/design/ranked-tiers.md §5): bakes each division's numeral onto Layerlab's 2D League Icon
 # Pack emblems, procedurally (PIL drawing, no generative tools; the pack's license forbids any generative-AI use).
 #
-#   python make_badges.py <pack>/512 <barlow-condensed-900-italic.ttf> <out>
+#   python make_badges.py <pack>/512 <BarlowCondensed-Black.ttf> <out>
 #
 # <pack>/512 holds League_1_Bronze.Png ... League_7_Legendary.Png (Platinum is our Emerald). The font is the
-# website's (website/assets/fonts/barlow-condensed-900-italic.woff2, OFL) as TTF:
-#   python -c "from fontTools.ttLib import TTFont; f=TTFont('...woff2'); f.flavor=None; f.save('barlow.ttf')"
-# (pip install fonttools brotli). Writes <out>/256/<tier>-<division>.png with Roman numerals (the launcher's
+# upright cut of the website's (Barlow Condensed Black, OFL): google/fonts ofl/barlowcondensed/
+# BarlowCondensed-Black.ttf. Not the website's italic: slanted numerals looked wrong on the plaque. Writes <out>/256/<tier>-<division>.png with Roman numerals (the launcher's
 # large badge) and <out>/128/... with a bigger plaque and bars (small sizes: the launcher's rows and the
 # website). Copy 256 to launcher/src/renderer/components/rank_badge/images, 128 to .../images/small and
 # website/assets/ranks. Those folders are not in git (the pack's license): builds fetch them from

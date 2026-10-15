@@ -106,7 +106,7 @@ Elo has no uncertainty of its own, so the server keeps one per player beside the
 ## 5. The badge (built)
 
 **Art:** Layerlab's PNGs, with each division's numeral baked onto a plaque at the emblem's foot by a Python/PIL script. That is a procedural edit; the pack's license allows modifying the files, and it forbids any use with generative AI.
-- **Large** (256 px): Roman numerals in Barlow Condensed 900 italic, the website's font (OFL).
+- **Large** (256 px): Roman numerals in Barlow Condensed Black (900, OFL), the upright cut of the website's font. The italic was used at first and looked off on the plaque (the user, 2026-10-15).
 - **Small** (128 px): a bigger plaque with plain bars, because letters blur at 30-40 px.
 - **Plaque colours:** each tier's own palette (Bronze tan, Silver grey, Gold yellow, Emerald green, Diamond blue, Master red). Legendary has no plaque.
 
