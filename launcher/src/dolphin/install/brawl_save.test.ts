@@ -62,7 +62,7 @@ describe("ensureBrawlSave", () => {
 
   it("never touches a save the game wrote, and a second Play keeps it", async () => {
     const template = path.join(tmp, "NetplaySave");
-    await makeTemplate(template, { "advsv0.bin": "template", "autosv0.bin": "template" });
+    await makeTemplate(template, { "advsv0.bin": "template", "autosv0.bin": "template", "banner.bin": "template" });
     const nand = path.join(tmp, "Wii");
     expect((await ensureBrawlSave({ nandRoot: nand, templateRoots: [template] })).action).toBe("seeded");
 
@@ -75,8 +75,38 @@ describe("ensureBrawlSave", () => {
     expect(await readDir(brawlSaveDir(nand))).toEqual({
       "advsv0.bin": "template",
       "autosv0.bin": "written by the game",
+      "banner.bin": "template",
       "net0.bin": "new",
     });
+  });
+
+  it("replaces a save without its banner, which Brawl can only throw away", async () => {
+    // The user's PC 2026-10-15: what an old machine session left of P+'s save. Brawl deleted its
+    // own files, then "There is not enough available space in Wii system memory" on every boot.
+    const template = path.join(tmp, "NetplaySave");
+    await makeTemplate(template, { "banner.bin": "banner", "filelist.dat": "template", "wc24pubk.mod": "template" });
+    const nand = path.join(tmp, "Wii");
+    await fs.promises.mkdir(brawlSaveDir(nand), { recursive: true });
+    await fs.promises.writeFile(path.join(brawlSaveDir(nand), "filelist.dat"), "left");
+    await fs.promises.writeFile(path.join(brawlSaveDir(nand), "wc24pubk.mod"), "left");
+    const messages: string[] = [];
+
+    const result = await ensureBrawlSave({ nandRoot: nand, templateRoots: [template], log: (m) => messages.push(m) });
+    expect(result).toMatchObject({ action: "seeded", removed: ["filelist.dat", "wc24pubk.mod"] });
+    expect(await readDir(brawlSaveDir(nand))).toEqual({
+      "banner.bin": "banner",
+      "filelist.dat": "template",
+      "wc24pubk.mod": "template",
+    });
+    expect(messages.join("\n")).toContain("Removed a Brawl save without banner.bin");
+
+    // With no template, the folder is emptied so that the game can make its own save.
+    const other = path.join(tmp, "other");
+    await fs.promises.mkdir(brawlSaveDir(other), { recursive: true });
+    await fs.promises.writeFile(path.join(brawlSaveDir(other), "filelist.dat"), "left");
+    const none = await ensureBrawlSave({ nandRoot: other, templateRoots: [path.join(tmp, "missing")] });
+    expect(none).toMatchObject({ action: "no-template", removed: ["filelist.dat"] });
+    expect(await readDir(brawlSaveDir(other))).toEqual({});
   });
 
   it("keeps a partial save as it is (the game decides what to do with it)", async () => {

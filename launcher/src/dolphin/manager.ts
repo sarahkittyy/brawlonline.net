@@ -13,7 +13,7 @@ import { fileExists } from "utils/file_exists";
 import { isSubdirectory } from "utils/is_subdirectory";
 
 import { isAbnormalExit, keepCrashLog } from "./crash_log";
-import { brawlSaveDir, ensureBrawlSave } from "./install/brawl_save";
+import { brawlSaveDir, ensureBrawlSave, isUsableBrawlSave } from "./install/brawl_save";
 import { bundledDolphinSource, installBundledDolphin } from "./install/bundled_dolphin";
 import { fetchLatestVersion } from "./install/fetch_latest_version";
 import { LocalDolphinInstallation } from "./install/local_installation";
@@ -837,6 +837,9 @@ export class DolphinManager {
         ],
         log: (message) => log.info(message),
       });
+      if (result.action !== "present" && result.removed.length > 0) {
+        log.warn(`Brawl save: replaced one without its banner in ${result.dir} (${result.removed.join(", ")})`);
+      }
       if (result.action === "no-template") {
         log.warn(`Brawl save: no template for ${result.dir}`);
       } else if (result.action !== "seeded") {
@@ -856,7 +859,8 @@ export class DolphinManager {
     const hasSave = async () => {
       const dir = brawlSaveDir(await installation.nandRoot());
       try {
-        return { dir, ok: (await readdir(dir, { withFileTypes: true })).some((e) => e.isFile()) };
+        const files = (await readdir(dir, { withFileTypes: true })).filter((e) => e.isFile());
+        return { dir, ok: isUsableBrawlSave(files.map((e) => e.name)) };
       } catch {
         return { dir, ok: false };
       }

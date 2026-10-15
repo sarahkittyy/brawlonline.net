@@ -13,9 +13,15 @@
 // Dolphin writes the title's TMD itself when the disc boots, and the template's would be the
 // TMD of one disc revision.
 //
-// Never overwrites: a NAND that has any file in the save folder keeps it, so what the game
-// writes (name tags, rules, records) stays. The copy goes to a staging folder that is renamed
-// into place, so an interrupted copy never leaves a partial save that would count as present.
+// Never overwrites a save that has its banner.bin, so what the game writes (name tags, rules,
+// records) stays. A save folder with files but no banner.bin is replaced: Brawl takes such a save
+// for broken, deletes its own files and makes a new save, which it then refuses as "not enough
+// available space in Wii system memory" because the files it left (filelist.dat, wc24pubk.mod)
+// put the 128 blocks over the title's 16 MB NAND quota (NANDCheck), on every boot. Dolphin's
+// whole-machine sessions used to leave the player's save like that before 2026-10-14 (WiiRoot.cpp,
+// CleanUpWiiFileSystemContents; the user's PC 2026-10-15). The copy goes to a staging folder that
+// is renamed into place, so an interrupted copy never leaves a partial save that would count as
+// present.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -26,14 +32,21 @@ import path from "path";
 export const BRAWL_SAVE_DIR = ["title", "00010000", "52534245", "data"] as const;
 
 const STAGING_SUFFIX = ".seeding";
+/** Brawl writes it last when it makes its save, and treats a save without it as broken. */
+const BANNER = "banner.bin";
 
 export type BrawlSaveResult =
   | { action: "present"; dir: string }
-  | { action: "seeded"; dir: string; from: string; files: number; bytes: number }
-  | { action: "no-template"; dir: string };
+  | { action: "seeded"; dir: string; from: string; files: number; bytes: number; removed: string[] }
+  | { action: "no-template"; dir: string; removed: string[] };
 
 export function brawlSaveDir(nandRoot: string): string {
   return path.join(nandRoot, ...BRAWL_SAVE_DIR);
+}
+
+/** Whether a save folder's files are a save Brawl keeps (it has its banner). */
+export function isUsableBrawlSave(files: string[]): boolean {
+  return files.some((name) => name.toLowerCase() === BANNER);
 }
 
 async function listFiles(dir: string): Promise<fs.Dirent[] | null> {
@@ -60,8 +73,16 @@ export async function ensureBrawlSave({
 }): Promise<BrawlSaveResult> {
   const dir = brawlSaveDir(nandRoot);
   const existing = await listFiles(dir);
-  if (existing && existing.length > 0) {
+  if (existing && isUsableBrawlSave(existing.map((e) => e.name))) {
     return { action: "present", dir };
+  }
+  // Files without a banner: what is left of a broken save, which only stops Brawl making a new one
+  const removed = (existing ?? []).map((e) => e.name).sort();
+  if (removed.length > 0) {
+    for (const name of removed) {
+      await fs.promises.rm(path.join(dir, name), { force: true });
+    }
+    log(`Removed a Brawl save without ${BANNER} from ${dir} (${removed.join(", ")})`);
   }
 
   for (const root of templateRoots) {
@@ -80,19 +101,20 @@ export async function ensureBrawlSave({
     }
     // The game (or another Play) may have written a save meanwhile: then keep that one.
     const now = await listFiles(dir);
-    if (now && now.length > 0) {
+    if (now && isUsableBrawlSave(now.map((e) => e.name))) {
       await fs.promises.rm(staging, { recursive: true, force: true });
       return { action: "present", dir };
     }
     if (now) {
-      await fs.promises.rm(dir, { recursive: true, force: true }); // empty: Dolphin made it at a disc boot
+      // Empty (Dolphin made it at a disc boot), or what the removal above left
+      await fs.promises.rm(dir, { recursive: true, force: true });
     }
     await fs.promises.rename(staging, dir);
     log(`Seeded the Brawl save in ${dir} from ${from} (${files.length} files, ${bytes} bytes)`);
-    return { action: "seeded", dir, from, files: files.length, bytes };
+    return { action: "seeded", dir, from, files: files.length, bytes, removed };
   }
   log(`No Brawl save template found (${templateRoots.join(", ")}); P+ will offer to create a save`);
-  return { action: "no-template", dir };
+  return { action: "no-template", dir, removed };
 }
 
 /**
