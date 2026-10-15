@@ -210,6 +210,10 @@
   flex-direction: column;
   gap: 10px;
   padding: 8px 4px;
+
+  /* In ContentBlock's grid: without it a long name or file widens the column, which then scrolls
+     sideways and puts the pencil and bin out of sight. */
+  min-width: 0;
 }
 
 .controllerRow {
@@ -259,16 +263,23 @@
   display: flex;
   align-items: baseline;
   gap: 8px;
-  flex-shrink: 0;
+  flex-shrink: 1;
+  min-width: 0;
 }
 
+/* A name too long for the row gets an ellipsis (the full name in its tooltip). */
 .name {
+  min-width: 0;
+  overflow: hidden;
   color: var(--text-primary);
   font-weight: 600;
   font-size: 14px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .hash {
+  flex-shrink: 0;
   font-family: monospace;
   color: var(--text-secondary);
   font-size: 12px;
@@ -339,6 +350,31 @@
   display: flex;
   align-items: center;
   gap: 8px;
+}
+
+/* "Your games"' help, at the header's right end. */
+.help {
+  margin-left: auto;
+}
+
+.faq {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.faqQuestion {
+  margin: 0 0 6px;
+  color: var(--text-primary);
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.faqAnswer {
+  margin: 0;
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.5;
 }
 
 .roomBuild {

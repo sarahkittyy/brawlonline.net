@@ -16,8 +16,13 @@ import CreateNewFolderOutlinedIcon from "@mui/icons-material/CreateNewFolderOutl
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
 import DragIndicatorRoundedIcon from "@mui/icons-material/DragIndicatorRounded";
 import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
+import HelpOutlineRoundedIcon from "@mui/icons-material/HelpOutlineRounded";
 import PersonOutlineIcon from "@mui/icons-material/PersonOutline";
 import Button from "@mui/material/Button";
+import Dialog from "@mui/material/Dialog";
+import DialogActions from "@mui/material/DialogActions";
+import DialogContent from "@mui/material/DialogContent";
+import DialogTitle from "@mui/material/DialogTitle";
 import IconButton from "@mui/material/IconButton";
 import LinearProgress from "@mui/material/LinearProgress";
 import Switch from "@mui/material/Switch";
@@ -84,6 +89,7 @@ export const ModsView = (props: ModsViewProps) => {
   // Why the last Dolphin closed (a kick, a failed join), until the player closes the message; a
   // new room clears it anyway.
   const [dismissed, setDismissed] = useState<string | null>(null);
+  const [faqOpen, setFaqOpen] = useState(false);
   const running = !!state?.running;
   useEffect(() => {
     if (running) {
@@ -152,18 +158,30 @@ export const ModsView = (props: ModsViewProps) => {
             fill={true}
             title={Messages.yourBuilds()}
             titleAction={
-              <div className={styles.roomActions}>
-                <Tooltip title={Messages.addBuildTooltip()}>
-                  <Button size="small" startIcon={<AddRoundedIcon />} onClick={props.onAddBuild}>
-                    {Messages.addBuild()}
-                  </Button>
+              <>
+                <div className={styles.roomActions}>
+                  <Tooltip title={Messages.addBuildTooltip()}>
+                    <Button size="small" startIcon={<AddRoundedIcon />} onClick={props.onAddBuild}>
+                      {Messages.addBuild()}
+                    </Button>
+                  </Tooltip>
+                  <Tooltip title={Messages.addFolderTooltip()}>
+                    <Button size="small" startIcon={<CreateNewFolderOutlinedIcon />} onClick={props.onAddFolder}>
+                      {Messages.addFolder()}
+                    </Button>
+                  </Tooltip>
+                </div>
+                <Tooltip title={Messages.help()}>
+                  <IconButton
+                    size="small"
+                    className={styles.help}
+                    aria-label={Messages.help()}
+                    onClick={() => setFaqOpen(true)}
+                  >
+                    <HelpOutlineRoundedIcon fontSize="small" />
+                  </IconButton>
                 </Tooltip>
-                <Tooltip title={Messages.addFolderTooltip()}>
-                  <Button size="small" startIcon={<CreateNewFolderOutlinedIcon />} onClick={props.onAddFolder}>
-                    {Messages.addFolder()}
-                  </Button>
-                </Tooltip>
-              </div>
+              </>
             }
             content={
               <div className={styles.builds}>
@@ -185,9 +203,30 @@ export const ModsView = (props: ModsViewProps) => {
           />
         </div>
       </div>
+      <FaqDialog open={faqOpen} onClose={() => setFaqOpen(false)} />
     </div>
   );
 };
+
+/** "Your games"' help: questions players ask. */
+const FaqDialog = ({ open, onClose }: { open: boolean; onClose: () => void }) => (
+  <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth={true}>
+    <DialogTitle>{Messages.faqTitle()}</DialogTitle>
+    <DialogContent>
+      <div className={styles.faq}>
+        {Messages.faq().map(({ question, answer }) => (
+          <div key={question}>
+            <h4 className={styles.faqQuestion}>{question}</h4>
+            <p className={styles.faqAnswer}>{answer}</p>
+          </div>
+        ))}
+      </div>
+    </DialogContent>
+    <DialogActions>
+      <Button onClick={onClose}>{Messages.close()}</Button>
+    </DialogActions>
+  </Dialog>
+);
 
 const PublicRoomsBlock = ({
   rooms,
@@ -360,7 +399,9 @@ const BuildRow = ({
     <div className={styles.build}>
       <div className={styles.buildHead}>
         <div className={styles.buildName}>
-          <span className={styles.name}>{build.name}</span>
+          <Tooltip title={build.name} enterDelay={600}>
+            <span className={styles.name}>{build.name}</span>
+          </Tooltip>
           {build.hash ? (
             <Tooltip title={Messages.hashTooltip(build.hash)}>
               <span className={styles.hash}>{build.hash.slice(0, 8)}</span>

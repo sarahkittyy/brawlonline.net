@@ -7,6 +7,16 @@ export const ModsMessages = {
   addBuildTooltip: () => "A Wii or GameCube disc image.",
   addFolder: () => "Add a mod folder",
   addFolderTooltip: () => "A Brawl mod's Dolphin folder, like Brawl Minus or REX.",
+  help: () => "Help",
+  faqTitle: () => "Help",
+  faq: () => [
+    {
+      question: "I have the same game as my opponent, but it won't let me join!",
+      answer:
+        "For Brawl mods, check the ISO too. If you absolutely have the same mod, but the hashes differ, it's possible you've set Rev1 and they've set Rev2.",
+    },
+  ],
+  close: () => "Close",
   noBuilds: () => "Add a game or a mod folder to play.",
   notHashed: () => "Not checked yet",
   hashTooltip: (_hash: string) => "The game's hash. All your friends need the exact same hash.",

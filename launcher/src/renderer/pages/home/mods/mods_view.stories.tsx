@@ -147,6 +147,27 @@ export const NoBuilds = () => <Frame state={{ builds: [], running: false, status
 
 export const Builds = () => <Frame state={{ builds, running: false, status: null }} hashProgress={{ rex: 0.37 }} />;
 
+/** Long names and paths: they get ellipses, the pencil and bin stay in view (no sideways scroll). */
+export const LongNames = () => (
+  <Frame
+    state={{
+      builds: [
+        {
+          ...builds[1],
+          id: "long",
+          name: "Brawl Minus 5.1 Netplay Edition with every costume pack and the stage expansion",
+          discPath:
+            "C:/Users/someone/Documents/Dolphin Games/Wii/Super Smash Bros. Brawl (USA) (Rev 2) (Netplay copy for mods).iso",
+          launcherPath: "C:/Users/someone/Documents/Dolphin Games/Mods/Brawl Minus 5.1/Launcher/BrawlMinusLauncher.dol",
+        },
+        ...builds,
+      ],
+      running: false,
+      status: null,
+    }}
+  />
+);
+
 /** DolphinTool hashing a compressed disc: no share to show until it is done. */
 export const CheckingCompressedDisc = () => (
   <Frame state={{ builds, running: false, status: null }} hashProgress={{ rex: null }} />
