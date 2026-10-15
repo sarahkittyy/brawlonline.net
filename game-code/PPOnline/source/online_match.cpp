@@ -106,6 +106,13 @@ namespace OnlineMatch {
     static u8 s_matchQuitBy = 0;      // SESSION quitBy of the quit that ended the match
     static u8 s_matchQuitRunback = 0;
     static u8 s_matchQuitPorts = 0;   // 3-4 players: the ports that quit
+    // Unranked's quit without a pause (clientPause): marked on the operator, the match ended
+    // once the session is over (tickMatch); frames since, for an end without one.
+    static const u16 QUIT_MAX_FRAMES = 600;   // a quit's end without the session's (an older Dolphin)
+    static u8 s_clientQuit = 0;
+    static u16 s_clientQuitFrames = 0;
+    static u8 s_hintPorts = 0;        // Unranked: the ports whose START shows the quit hint
+    static u8 s_startPorts = 0;       // Unranked: the ports holding START last frame
     static u32 s_seen = 0;          // ports seen with stocks in this match (tickPlayers)
     static bool s_inMatch = false;  // a match ran since the last frame outside scMelee (offMatch)
     static bool s_restore = false;  // this match plays a desynced game again (SESSION restore)
@@ -372,6 +379,8 @@ namespace OnlineMatch {
         s_discFrames = -1;
         s_quitOp = NULL;
         s_matchQuitBy = s_matchQuitRunback = s_matchQuitPorts = 0;
+        s_clientQuit = s_hintPorts = s_startPorts = 0;
+        s_clientQuitFrames = 0;
         return true;
     }
 
@@ -657,11 +666,28 @@ namespace OnlineMatch {
     // The timers are in the rollback set (gp-v23), and SESSION's mode is the same on both
     // machines, so a resimulated frame does the same.
     static const u32 PPLUS_PAUSE_HOLD = 0x80584080;
+    static const u32 PPLUS_PAUSE_HOLD_FRAMES = 50;
 
-    static void noRankedPause()
+    static void clientPause();
+
+    // Unranked has no pause either (the user's, 2026-10-14), but keeps Slippi's client pause
+    // (clientPause): its quit needs START in the session's inputs, so P+'s hold is switched off
+    // instead (its word cleared, every hold timer at 50: START goes into the pad slots as it is)
+    // and START is taken out of the game's pads after the quit check. The pad thread reads the
+    // word and the timers on its own, but only this machine's controllers before the session
+    // takes their input: at worst a START press reaches the inputs a frame late.
+    static void noPause()
     {
-        if (PPOM::g_block.session.mode != PPOM::MODE_RANKED) return;
-        for (u32 pad = 0; pad < 4; pad++) *(volatile u32*)(PPLUS_PAUSE_HOLD + 8 * pad) = 0;
+        const u8 mode = PPOM::g_block.session.mode;
+        if (mode == PPOM::MODE_RANKED) {
+            for (u32 pad = 0; pad < 4; pad++) *(volatile u32*)(PPLUS_PAUSE_HOLD + 8 * pad) = 0;
+        } else if (mode == PPOM::MODE_UNRANKED) {
+            *(volatile u32*)PPLUS_PAUSE_OFF = 0;
+            for (u32 pad = 0; pad < 4; pad++) {
+                *(volatile u32*)(PPLUS_PAUSE_HOLD + 8 * pad) = PPLUS_PAUSE_HOLD_FRAMES;
+            }
+            clientPause();
+        }
     }
 
     // The HOME Menu is banned for the whole online match (the user's crash, 2026-10-12: "i paused
@@ -710,7 +736,7 @@ namespace OnlineMatch {
         s_inMatch = true;
         if (g_onlineCss && g_onlineMatchGame) {
             banHomeMenu(true);
-            noRankedPause();
+            noPause();
         }
         if ((g_onlineCss && g_onlineMatchGame) || (dbg.cfg & PPOM::CFG_TEST_GONE)) tickPlayers();
         // This player quit a 3-4 player match (pponline_pauseResult) and Dolphin has ended the
@@ -721,6 +747,18 @@ namespace OnlineMatch {
             if (oi && !(oi[0x11B] & 0x40)) {
                 oi[0x11B] |= 0x70;   // quit (0x30, as L+R+A+START) and stop now (0x40)
                 dbg.scratch[10] |= 0x200000;
+            }
+            return;
+        }
+        // Unranked's quit (clientPause): once the session has ended on it (LOCAL, set only after
+        // that, as for quitLeft), or after QUIT_MAX_FRAMES without, the match ends as the pause
+        // screen's quit does (no "GAME!", no contest), then the CSS or the runback (afterMatch).
+        if (g_onlineCss && g_onlineMatchGame && s_clientQuit) {
+            u8* oi = operatorInfo();
+            bool over = PPOM::g_block.local.state != PPOM::LS_IN_MATCH;
+            if (oi && !(oi[0x11B] & 0x40) && (over || ++s_clientQuitFrames >= QUIT_MAX_FRAMES)) {
+                oi[0x11B] |= 0x70;
+                dbg.scratch[10] |= 0x80000;
             }
             return;
         }
@@ -788,7 +826,6 @@ namespace OnlineMatch {
     // set: the quitter is in quitStays too and stays in the session until the game set ends it.
     // A paused game whose pauser has left the match (dropped or quit) resumes at once: nobody
     // else could unpause it (Slippi's PreventPauseStranding).
-    static const u16 QUIT_MAX_FRAMES = 600;
     static const int PAUSE_END_QUIT = 0x100;   // asm: the quit's flags and end, without its sound
     static const int PAUSE_RESUME = 2;
     static const u32 OP_PAUSER = 0x124;
@@ -918,6 +955,70 @@ namespace OnlineMatch {
             "ori 12, 12, 0x1908\n\t"
             "mtctr 12\n\t"
             "bctr\n\t");
+    }
+
+    // ---- Unranked: Slippi's client pause, without a pause ----
+    // Slippi's Unranked never pauses (InitPause.asm ClientPause returns -1, "so the game doesn't
+    // actually pause"); the user's, 2026-10-14: neither does ours, and nothing about the game
+    // changes for a pause (Brawl's pause moves the camera, and screen KOs depend on the camera).
+    // Every frame of an Unranked match, from the session's inputs in gfPadSystem's first pad
+    // array (port p's input in pad p, as the session writes the slots), so every machine and
+    // every resimulation does the same:
+    //  - any player holding L+R+A+START quits, as Slippi's LRAS in its client pause (no pause
+    //    first). The operator's quit bits (0x30) are set without its stop: Dolphin ends the
+    //    session on them as on the pause screen's quit (IsQuitRequested), with SESSION's quitBy
+    //    and quitRunback (L+R+Y held too: P+'s salty runback, as on the pause screen), and the
+    //    game plays on until then (MAX_ROLLBACK_FRAMES + 12 frames); tickMatch then ends the match.
+    //  - a START press switches that port's quit hint (s_hintPorts; MatchHud draws the local
+    //    player's), Slippi's client pause screen, drawn only, nothing in the game changes;
+    //  - START is taken out of every pad the game reads, so nothing pauses.
+    static const u32 BTN_START = 0x1000;
+    static const u32 QUIT_BUTTONS = 0x1160;   // L 0x40, R 0x20, A 0x100, START 0x1000
+    static const u32 PAD_SYSTEM = 0x805A0040;
+
+    static void clientPause()
+    {
+        PPOM::Session& se = PPOM::g_block.session;
+        u32 ps = *(u32*)PAD_SYSTEM;
+        if (!isPtr(ps)) return;
+        u8* oi = operatorInfo();
+        // Only while the session runs: its inputs are the same on every machine (neutral in the
+        // countdown before it starts); after it ended, this machine's own controllers.
+        bool live = PPOM::g_block.local.state == PPOM::LS_IN_MATCH;
+        for (int p = 0; p < se.numPlayers && p < 4; p++) {
+            if (!se.players[p].present) continue;
+            const u32* pad = (const u32*)(ps + 0x44 + 0x40 * p);
+            u32 held = pad[0];
+            u8 bit = (u8)(1u << p);
+            // the press from the held buttons (this array's pressed words were never seen set)
+            if ((held & BTN_START) && !(s_startPorts & bit)) s_hintPorts ^= bit;
+            s_startPorts = (u8)((held & BTN_START) ? s_startPorts | bit : s_startPorts & ~bit);
+            if (!live || s_clientQuit || !oi || (oi[0x11B] & 0x70) || (held & QUIT_BUTTONS) != QUIT_BUTTONS) continue;
+            oi[0x11B] |= 0x30;
+            s_clientQuit = 1;
+            s_clientQuitFrames = 0;
+            se.quitBy = (u8)(p + 1);
+            se.quitRunback = (held & RUNBACK_BUTTONS) == RUNBACK_BUTTONS ? 1 : 0;
+            s_matchQuitBy = se.quitBy;
+            s_matchQuitRunback = se.quitRunback;
+            if (se.quitRunback) PPOM::g_block.debug.scratch[10] |= 0x1000000;
+            playQuitSound(3);
+            PPOM::g_block.debug.scratch[10] |= 0x40000;
+        }
+        // START out of the game's pads: the first array (+0x44) and the sys pads (+0x244), six
+        // words each (current, current2, held, pressed, released, pressed2).
+        for (u32 off = 0x44; off < 0x944; off += 0x40) {
+            u32* f = (u32*)(ps + off);
+            for (int i = 0; i < 6; i++) f[i] &= ~BTN_START;
+        }
+    }
+
+    bool quitHintShown()
+    {
+        const PPOM::Session& se = PPOM::g_block.session;
+        u8 me = PPOM::g_block.local.localPort;
+        return g_onlineCss && g_onlineMatchGame && se.mode == PPOM::MODE_UNRANKED && !s_clientQuit &&
+               me < 4 && ((s_hintPorts >> me) & 1);
     }
 
     // ---- Each player's own controls (the design's port values) ----

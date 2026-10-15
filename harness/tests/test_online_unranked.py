@@ -35,6 +35,7 @@ from test_online import _make_backend, _wait
 from test_online_game import (CMD_GET_MATCH_STATE, Game, _boot, _both, _connected_direct,
                               _find_logged, _peer_shown, online_set, ppom)
 from ppharness import brawl as B
+from test_online_ranked import _paused
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 
@@ -197,20 +198,23 @@ def test_direct_loser_picks_off_the_server_list(direct_backend: OnlineBackend,
 
 
 # P+'s "Allow Pausing When Set to Off" writes 2 here in a match whose pause is off; its "Hold Start
-# to Pause" then takes START out of the pad reads, in any scene, until it is held 50 frames.
+# to Pause" then takes START out of the pad reads, in any scene, until it is held 50 frames (an
+# Unranked match clears it every frame: START reaches the inputs, and the plugin keeps it from the game).
 PPLUS_PAUSE_OFF = 0x80584084
 
 
 @pytest.mark.slow
-def test_pause_quit_in_unranked_leaves_start_working(backend: OnlineBackend,
-                                                     dolphin: Callable[..., DolphinInstance],
-                                                     gpu_backend: str) -> None:
-    """Unranked has pause off, but P+ pauses on a START held for 50 frames; from there the pause
-    screen's L+R+A+START quits. That end has no winner, and only P+'s win/loss hooks clear its
-    pause-off word, so START stayed filtered after the match: on the Direct CSS it no longer
-    opened the keypad (a user's report, 2026-10-09). The plugin clears the word when the match is
-    left (online_match.cpp offMatch)."""
-    test = "unranked-pause-quit"
+def test_unranked_quits_without_a_pause(backend: OnlineBackend,
+                                        dolphin: Callable[..., DolphinInstance],
+                                        gpu_backend: str) -> None:
+    """Unranked never pauses, as Slippi's (the user's, 2026-10-14): START held far past P+'s 50
+    frames pauses neither machine and the game runs on (the plugin only shows a quit hint, drawn on
+    A's screen). L+R+A+START quits with no pause first, Slippi's LRAS: Dolphin ends the session on
+    the quit and both games go back to the CSS; with Y held too it is P+'s runback, the same match
+    again on both. After the match START works again: P+'s pause-off
+    word, which kept START filtered after an end with no winner (a user's report, 2026-10-09), is
+    cleared (online_match.cpp offMatch), so on the Direct CSS START opens the keypad."""
+    test = "unranked-quit"
     ua, ub = backend.create_user("lena", "LENA"), backend.create_user("moss", "MOSS")
     a = _boot(dolphin, "unr-qa", backend, ua, gpu_backend, test, "gameplay")
     b = _boot(dolphin, "unr-qb", backend, ub, gpu_backend, test, "gameplay")
@@ -225,24 +229,47 @@ def test_pause_quit_in_unranked_leaves_start_working(backend: OnlineBackend,
     _search_unranked(b)
     _peer_shown(a, ub)
     _peer_shown(b, ua)
-    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)), 240,
+    players = (a, b)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
                     "the match to run on both")
-    a.steps("wait 240", "hold START 90", "wait 30")
-    a.shot("01-paused")
-    assert a.c.read_u32(PPLUS_PAUSE_OFF) == 2
-    a.steps("hold L+R+A+START 20")
-    online_set.wait(lambda: all(online_set.scene(g.c) == online_set.CSS for g in (a, b)), 60,
+    a.steps("wait 240", "hold START 120")
+    for g in players:
+        assert not _paused(g), (g.name, "paused")
+        assert not g.debug_scratch()[10] & 0x40000, (g.name, "a quit")
+        assert online_set.gstatus(g.c)["phase"] == "running", g.name
+    a.shot("01-start-hint")
+    # The quit hint, on A's screen only (drawn: scratch[10] 0x10000000).
+    assert a.debug_scratch()[10] & 0x10000000, hex(a.debug_scratch()[10])
+    assert not b.debug_scratch()[10] & 0x10000000, hex(b.debug_scratch()[10])
+    # P+'s salty runback with no pause either (L+R+Y held with the quit): straight into the same
+    # match on both, never the CSS (scratch[10]: the quit marked as a runback, state 10 into it).
+    first = online_set.gstatus(a.c)["match_index"]
+    setup = B.read_match_setup(a.c.read_mem)
+    a.steps("hold L+R+A+Y+START 20")
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" and
+                                online_set.gstatus(g.c)["match_index"] == first + 1 for g in players),
+                    90, "the same match again on both")
+    for g in players:
+        sc = g.debug_scratch()[10]
+        assert sc & 0x1000000 and sc & 0xFF == 0x1B, (g.name, hex(sc))
+        assert B.read_match_setup(g.c.read_mem) == setup, g.name
+        assert not _paused(g), (g.name, "paused")
+    a.shot("02-runback")
+    a.steps("wait 240", "hold L+R+A+START 20")
+    online_set.wait(lambda: all(online_set.scene(g.c) == online_set.CSS for g in players), 60,
                     "both back on the CSS")
-    for g in (a, b):
-        # The plugin held the quit (0x40000) and then ended the match (0x80000).
+    for g in players:
+        # The quit was marked (0x40000) and the match ended once the session had (0x80000).
         assert g.debug_scratch()[10] & 0xC0000 == 0xC0000, hex(g.debug_scratch()[10])
         assert online_set.gstatus(g.c)["end_reason"] == "quit"
         assert g.c.read_u32(PPLUS_PAUSE_OFF) == 0, g.name
+        assert g.bridge()["lost"] == 0
+    a.shot("03-back-on-css")
     # As the user did: back to the menus, then Direct, where START opens the keypad.
     a.steps("wait 60", "hold B 120", "until muMenuMain 900", "wait 90", "tap DLEFT 4", "wait 30")
     a.to_css("direct")
     a.open_keypad()
-    a.shot("02-direct-keypad")
+    a.shot("04-direct-keypad")
 
 
 def test_unranked_search_ends_with_the_server_error(backend: OnlineBackend,

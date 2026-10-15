@@ -72,6 +72,7 @@ namespace MatchHud {
     // system font at 0.9 (about 250 x 37 of the 640x480 HUD space), just below the match timer.
     static const float SCALE = 0.9f;
     static const float TOP = 70.0f;
+    static const float HINT_SCALE = 0.7f;
 
     static void setU32(u32 off, u32 v) { *(u32*)(s_cw + off) = v; }
     static void setF32(u32 off, float v) { *(float*)(s_cw + off) = v; }
@@ -222,7 +223,8 @@ namespace MatchHud {
     static void draw()
     {
         bool names = g_onlineMatchGame != 0;
-        if (!s_on && !names) {
+        bool hint = OnlineMatch::quitHintShown();
+        if (!s_on && !names && !hint) {
             forgetPanels();
             return;
         }
@@ -248,7 +250,18 @@ namespace MatchHud {
         s_gxCurrentMtx(0);
 
         if (names) drawNames();
-        if (!s_on) return;
+        if (!s_on) {
+            // Unranked: START shows how to quit (Slippi's client pause screen, which shows only
+            // L+R+A+START), white where DISCONNECTED would be; START again hides it.
+            if (hint) {
+                static const char HINT[] = "L+R+A+START to quit";
+                u16 text[sizeof(HINT)];
+                for (u32 i = 0; i < sizeof(HINT); i++) text[i] = (u8)HINT[i];
+                printCentred(text, SCREEN_W * 0.5f, TOP, HINT_SCALE, 0xFFFFFFFF);
+                PPOM::g_block.debug.scratch[10] |= 0x10000000;   // tests: the hint was drawn
+            }
+            return;
+        }
         // Red (Slippi FF0000FF), opaque, with a thin black edge so it reads on any stage.
         const char* s = s_desync ? "DESYNC DETECTED" : "DISCONNECTED";
         u16 text[16];
