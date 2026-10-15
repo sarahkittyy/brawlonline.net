@@ -147,7 +147,17 @@ constexpr u32 IMAGE_VERSION = 3;
 // 50 ms, a 22.5 MB image in 23 s with the whole room waiting (prod 2026-10-14), and a joiner's
 // chunk waiting behind the chunks asked for before it. ENet uses a peer's window only to send, so
 // each machine sets its own and a build without this still plays with one that has it.
+// The window is this machine's congestion window for the peer (PaceSendWindow), at most
+// SEND_WINDOW: ENet has no congestion control of reliable data of its own, and 1 MiB at once
+// overflows a home uplink's buffer (prod 2026-10-14, the user's REX room: IMPY#5's 18.2 MB image
+// stalled 13 s at 10 %, then ENet gave up on the link at 70 %; "iposbltngs could not join").
 constexpr enet_uint32 SEND_WINDOW = 1u << 20;
+constexpr enet_uint32 SEND_WINDOW_START = 64 * 1024;  // ENet's own window, safe on any link
+constexpr enet_uint32 SEND_WINDOW_MIN = 32 * 1024;
+constexpr enet_uint32 SEND_WINDOW_STEP = 16 * 1024;  // added each round trip after a loss
+// Resent in a round trip, taken for congestion with no queue: with 5 % random loss each way ENet
+// resends about 10 % (lost acknowledgements too), and a rate limit overrun loses far more.
+constexpr enet_uint32 SEND_LOSS_PERCENT = 25;
 // GekkoNet drops a peer it has not heard from for this long.
 constexpr unsigned int DISCONNECT_TIMEOUT_MS = 5000;
 
@@ -213,6 +223,19 @@ struct PeerLink
   // Someone new has this player's slot in the room: `left` is the previous player's until
   // GekkoNet unplugged it.
   bool reseated = false;
+  // The congestion window of what this machine sends `peer` reliably (PaceSendWindow).
+  struct
+  {
+    ENetPeer* peer = nullptr;  // the connection it is for
+    enet_uint32 window = SEND_WINDOW_START;
+    bool slow_start = true;
+    // In this round trip: reliable data waited for the window; what ENet sent and resent.
+    bool limited = false;
+    enet_uint32 sent = 0, lost = 0;
+    enet_uint32 seen_sent = 0, seen_lost = 0;  // ENet's counters when last seen
+    enet_uint32 min_rtt = 0xffffffff;  // the lowest of ENet's mean round trip (ms)
+    Clock::time_point step{};
+  } cc;
 };
 
 struct PendingOps
@@ -1075,6 +1098,135 @@ void OnProbeAnswer(ENetPeer* peer, const u8* data, size_t size)
   enet_peer_disconnect(peer, 0);
 }
 
+// The reliable data queued for `peer` that ENet has not sent yet (new and retransmitted), counted
+// up to `limit`.
+size_t QueuedReliable(ENetPeer* peer, size_t limit)
+{
+  size_t n = 0;
+  for (ENetListIterator it = enet_list_begin(&peer->outgoingSendReliableCommands);
+       it != enet_list_end(&peer->outgoingSendReliableCommands) && n < limit;
+       it = enet_list_next(it))
+  {
+    n += reinterpret_cast<ENetOutgoingCommand*>(it)->fragmentLength;
+  }
+  return n;
+}
+
+// Net thread: has ENet resend soon what `peer` evidently lost, while it is still answering. ENet
+// resends a reliable packet when it has waited its round-trip timeout, which doubles at each try,
+// and drops the whole link once one try's timeout passes 10 s or the 6th (or later) waits 5 s
+// (enet_peer_timeout), however many later packets the peer acknowledged meanwhile; and on a
+// sequenced channel nothing after that packet reaches the game. Over a link that drops what
+// exceeds its rate with little buffer (an ISP's rate limit), one packet lost a few times over
+// held a machine image for seconds, then ended the join (netsim at 16 Mbit/s with a 10 ms queue:
+// the image all sent and acknowledged but for its holes, the joiner below 10 %, the link gone
+// after 15 s). Here a packet unacknowledged for two round trips plus four deviations, while the
+// peer answered after that, gets that as its timeout, as TCP's RACK does; its resend counts as a
+// loss for the congestion window. A peer that stopped answering keeps ENet's timeouts.
+void ResendLost(ENetPeer* e)
+{
+  // ENet's clock in ms, which wraps: how far `a` is after `b`.
+  auto after = [](enet_uint32 a, enet_uint32 b) { return static_cast<s32>(a - b); };
+  const enet_uint32 now = enet_time_get();
+  if (after(now, e->lastReceiveTime) > 1000)
+    return;
+  const enet_uint32 limit =
+      std::max<enet_uint32>(2 * e->roundTripTime + 4 * e->roundTripTimeVariance, 30);
+  // Oldest sent first: the rest are younger than the first that is not overdue.
+  for (ENetListIterator it = enet_list_begin(&e->sentReliableCommands);
+       it != enet_list_end(&e->sentReliableCommands); it = enet_list_next(it))
+  {
+    auto* c = reinterpret_cast<ENetOutgoingCommand*>(it);
+    if (after(now, c->sentTime) < static_cast<s32>(limit))
+      break;
+    if (c->roundTripTimeout > limit && after(e->lastReceiveTime, c->sentTime + limit) > 0)
+    {
+      c->roundTripTimeout = limit;
+      if (after(e->nextTimeout, c->sentTime + limit) > 0)
+        e->nextTimeout = c->sentTime + limit;
+    }
+  }
+}
+
+// Net thread: the congestion window of what this machine sends a peer reliably, about as TCP's.
+// From SEND_WINDOW_START it doubles each round trip that used it, until a round trip that shows
+// congestion halves it (down to SEND_WINDOW_MIN); after that it grows by SEND_WINDOW_STEP a round
+// trip, up to SEND_WINDOW. Congestion is a loss (ENet resending a packet) while the round trip is
+// well above the link's lowest (a buffer on the way filling up), or SEND_LOSS_PERCENT of what was
+// sent lost (a rate limit that drops with little buffer). A loss alone is not: halving on any
+// loss, as TCP does, held an image to 1.2 MB/s with 1 % random loss (Wi-Fi), against 20 MB/s with
+// the window fixed.
+// It only grows in a round trip whose reliable data had to wait for it, so it does not climb while
+// idle and then burst. ENet sets a peer's window when it connects and again when any peer's
+// bandwidth limits are recalculated (every new connection), so it is set back each time.
+void PaceSendWindow(PeerLink& p, Clock::time_point now)
+{
+  ENetPeer* e = p.peer;
+  if (!e || e->state != ENET_PEER_STATE_CONNECTED)
+    return;
+  // PPR_MACHINE_FIXED_WINDOW=1 keeps the old fixed window, for comparisons.
+  static const bool fixed = std::getenv("PPR_MACHINE_FIXED_WINDOW") != nullptr;
+  if (fixed)
+  {
+    e->windowSize = std::max(e->windowSize, SEND_WINDOW);
+    return;
+  }
+  auto& cc = p.cc;
+  if (cc.peer != e)
+  {
+    cc = {};
+    cc.peer = e;
+    cc.seen_lost = e->packetsLost;
+    cc.seen_sent = e->packetsSent;
+    cc.step = now;
+  }
+  ResendLost(e);
+  // ENet counts what it sends and resends (packetsSent, packetsLost: commands) and zeroes both
+  // every 10 s (ENET_PEER_PACKET_LOSS_INTERVAL).
+  auto delta = [](enet_uint32 cur, enet_uint32* seen) {
+    const enet_uint32 d = cur >= *seen ? cur - *seen : cur;
+    *seen = cur;
+    return d;
+  };
+  cc.lost += delta(e->packetsLost, &cc.seen_lost);
+  cc.sent += delta(e->packetsSent, &cc.seen_sent);
+  cc.limited |= !enet_list_empty(&e->outgoingSendReliableCommands);
+  cc.min_rtt = std::min(cc.min_rtt, e->roundTripTime);
+  const auto rtt = std::chrono::milliseconds(std::max<enet_uint32>(e->roundTripTime, 10));
+  if (now - cc.step >= rtt)
+  {
+    // A queue building up on the way: the round trip well above the link's lowest.
+    const bool queued = e->roundTripTime > cc.min_rtt + std::max<enet_uint32>(5, cc.min_rtt / 4);
+    const bool congested = cc.lost >= 4 && cc.lost * 100 >= cc.sent * SEND_LOSS_PERCENT;
+    const enet_uint32 before = cc.window;
+    if ((cc.lost > 0 && queued) || congested)
+    {
+      cc.window = std::max(SEND_WINDOW_MIN, cc.window / 2);
+      cc.slow_start = false;
+    }
+    else if (cc.limited)
+    {
+      cc.window =
+          std::min(SEND_WINDOW, cc.slow_start ? cc.window * 2 : cc.window + SEND_WINDOW_STEP);
+    }
+    // Diagnostics (PPR_MACHINE_CC_LOG=1): a line each round trip that sent anything.
+    static const bool log = std::getenv("PPR_MACHINE_CC_LOG") != nullptr;
+    if (log && cc.sent > 0)
+    {
+      INFO_LOG_FMT(BRAWLBACK,
+                   "machine: cc slot {}: window {} -> {} KB, sent {} lost {}, rtt {} (low {}, "
+                   "var {}), in flight {} KB, throttle {}{}",
+                   p.slot, before / 1024, cc.window / 1024, cc.sent, cc.lost, e->roundTripTime,
+                   cc.min_rtt, e->roundTripTimeVariance, e->reliableDataInTransit / 1024,
+                   e->packetThrottle, cc.limited ? ", limited" : "");
+    }
+    cc.step = now;
+    cc.limited = false;
+    cc.lost = cc.sent = 0;
+  }
+  e->windowSize = cc.window;
+}
+
 void NetThread()
 {
   Common::SetCurrentThreadName("Machine session");
@@ -1083,13 +1235,9 @@ void NetThread()
     std::unique_lock lk(s.net_mutex);
     if (!s.host)
       break;
-    // ENet sets a peer's window when it connects and again when any peer's bandwidth limits are
-    // recalculated (every new connection), so it is set back here.
+    const auto now = Clock::now();
     for (PeerLink& p : s.peers)
-    {
-      if (p.peer && p.peer->windowSize < SEND_WINDOW)
-        p.peer->windowSize = SEND_WINDOW;
-    }
+      PaceSendWindow(p, now);
     // Outgoing: GekkoNet's packets queued by the CPU thread.
     for (auto& [slot, data] : s.gekko_tx)
     {
@@ -1125,9 +1273,12 @@ void NetThread()
                 IMAGE_CHUNK + image_kbps * 1024 *
                                   std::chrono::duration<double>(Clock::now() - image_since).count() :
                 1e18;
+        // Only another chunk once ENet has sent most of the last: what it sends goes at the pace
+        // of the peer's congestion window (PaceSendWindow), and what waits in its queue holds up
+        // the SD card's chunks behind it.
         for (int n = 0; n < 8 && s.image_tx_sent < s.image_tx.size() &&
                         s.image_tx_sent < image_allowed &&
-                        p.peer->reliableDataInTransit < 4 * IMAGE_CHUNK;
+                        QueuedReliable(p.peer, IMAGE_CHUNK) < IMAGE_CHUNK;
              ++n)
         {
           const size_t len = std::min(IMAGE_CHUNK, s.image_tx.size() - s.image_tx_sent);
@@ -1155,7 +1306,6 @@ void NetThread()
     }
     s.sd_tx.clear();
     // Keep connecting to every peer without a link (both sides do).
-    const auto now = Clock::now();
     StepProbe(now);
     for (PeerLink& p : s.peers)
     {
