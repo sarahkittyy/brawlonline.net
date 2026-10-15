@@ -322,11 +322,12 @@ describe("ModsView", () => {
         step: "downloading",
         done: 70 * 1024 * 1024,
         total: 280 * 1024 * 1024,
+        rate: 1.2 * 1024 * 1024,
         eta_s: 30,
       },
     };
     rerender(<ModsView {...props({ builds: [minus], running: true, status: downloading })} />);
-    expect(getByText(Messages.sdSyncDownloading(25, "30 seconds"))).toBeTruthy();
+    expect(getByText(Messages.sdSyncDownloading(25, "1.2 MB/s", "30 seconds"))).toBeTruthy();
   });
 
   it("switches the controller, folding what Dolphin has set up, and opens Configure", () => {

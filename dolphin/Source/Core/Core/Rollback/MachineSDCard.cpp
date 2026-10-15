@@ -937,6 +937,8 @@ void CardServer::OnRequest(u8 player, sf::Packet& packet)
       }
       if (queued >= MAX_QUEUED_PER_PLAYER)
         break;
+      if (!m_queued.emplace(player, c).second)
+        continue;
       m_queue.emplace_back(player, c);
       ++queued;
     }
@@ -959,6 +961,7 @@ void CardServer::ThreadFunc()
       item = m_queue.front();
       m_queue.pop_front();
       --m_queued_per_player[item.first];
+      m_queued.erase(item);
     }
 
     const auto [player, index] = item;
@@ -1635,12 +1638,18 @@ SessionCard::SyncProgress SessionCard::GetSyncProgress() const
 
 void SessionCard::SyncThreadFunc()
 {
-  // As many requests out at once as a player queues for another (CardServer): the link's
-  // congestion window (MachineSession's PaceSendWindow) sets the pace, not this.
+  // The players pace what they send (MachineSession's PaceSD, so the game they play keeps its
+  // link); the requests out at once follow what they send (Remote::Capacity).
   while (true)
   {
     std::vector<u32> to_request;
     std::shared_ptr<Remote> remote;
+    size_t capacity;
+    {
+      std::lock_guard lock(m_fetch_mutex);
+      remote = m_remote;
+    }
+    capacity = std::min(MAX_OUTSTANDING_REQUESTS, remote ? remote->Capacity() : size_t{0});
     {
       std::unique_lock lock(m_fetch_mutex);
       if (m_detached)
@@ -1661,13 +1670,14 @@ void SessionCard::SyncThreadFunc()
           unavailable = true;
           break;
         }
+        // A retry counts against the requests out too: a slow player is not asked for more.
         const auto it = m_requested_at.find(c);
-        const bool due = it == m_requested_at.end() || now - it->second >= REQUEST_RETRY_MS;
-        if (due && (it != m_requested_at.end() ||
-                    m_requested_at.size() + to_request.size() < MAX_OUTSTANDING_REQUESTS))
-        {
+        const bool asked = it != m_requested_at.end();
+        if (asked && now - it->second < SYNC_RETRY_MS)
+          continue;
+        const size_t out = m_requested_at.size() - (asked ? 1 : 0) + to_request.size();
+        if (out < capacity)
           to_request.push_back(c);
-        }
       }
       if (unavailable)
       {

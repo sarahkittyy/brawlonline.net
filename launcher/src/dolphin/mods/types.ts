@@ -132,9 +132,11 @@ export type ModSdSync = {
   names: string[];
   /** Seconds the download should take (a guess from the link). */
   eta_s: number;
-  /** While downloading. */
+  /** While downloading: bytes done of the total, and the rate over the last few seconds (bytes a
+   * second; the players pace what they send so their game keeps its link). */
   done?: number;
   total?: number;
+  rate?: number;
 };
 
 export type ModSession = {

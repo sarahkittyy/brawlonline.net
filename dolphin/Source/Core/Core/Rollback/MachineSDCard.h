@@ -22,6 +22,7 @@
 #include <array>
 #include <atomic>
 #include <condition_variable>
+#include <cstdint>
 #include <deque>
 #include <functional>
 #include <map>
@@ -55,6 +56,9 @@ constexpr u32 READ_AHEAD_CHUNKS = 8;
 constexpr int FETCH_TIMEOUT_MS = 60'000;
 // A request with no answer after this long is sent again.
 constexpr int REQUEST_RETRY_MS = 5'000;
+// In the sync before a join, where the players pace what they send (and the requests out follow
+// it), a request waits this long before it is asked of another player.
+constexpr int SYNC_RETRY_MS = 15'000;
 // A card's file list: at most this many files, each path at most this long.
 constexpr u32 MAX_CARD_FILES = 1u << 18;
 constexpr size_t MAX_CARD_PATH = 1024;
@@ -186,8 +190,9 @@ private:
   void ThreadFunc();
 
   // Requests queued per player; more than this many waiting chunks and new ones are dropped (the
-  // player asks again).
+  // player asks again). A chunk a player asks for again while it still waits is not queued twice.
   static constexpr size_t MAX_QUEUED_PER_PLAYER = 256;
+  std::set<std::pair<u8, u32>> m_queued;
 
   std::shared_ptr<const Manifest> m_manifest;
   ReadFunction m_read;
@@ -215,6 +220,10 @@ public:
     // From the emulation thread while a read waits for chunks: keeps the session's network
     // traffic going (GekkoNet), so the other players don't take the wait for a disconnect.
     virtual void KeepAlive() {}
+    // How many chunks may be asked for and not here yet, across the players (the sync asks for
+    // no more): about what they send in a few seconds, so a request is not left waiting behind a
+    // slow sender long enough to be asked again.
+    virtual size_t Capacity() { return SIZE_MAX; }
   };
 
   enum class Mode

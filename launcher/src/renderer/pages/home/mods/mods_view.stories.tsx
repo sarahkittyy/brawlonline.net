@@ -295,6 +295,7 @@ export const SdCardDownloading = () => (
         files: 412,
         names: [],
         eta_s: 150,
+        rate: 1.1 * 1024 * 1024,
         done: 112 * 1024 * 1024,
         total: 280 * 1024 * 1024,
       }),

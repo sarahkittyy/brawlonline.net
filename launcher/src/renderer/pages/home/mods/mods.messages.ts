@@ -148,7 +148,12 @@ export const ModsMessages = {
   sdSyncYes: () => "Yes",
   sdSyncOverwrite: () => "Yes, and overwrite local card",
   sdSyncChecking: (percent: number) => `Checking your SD card… ${percent}%`,
-  sdSyncDownloading: (percent: number, eta: string) => `Downloading the host's SD card… ${percent}% (${eta} left)`,
+  sdSyncDownloading: (percent: number, rate: string, eta: string) =>
+    `Downloading the host's SD card… ${percent}% · ${rate} · ${eta} left`,
+  rate: (bytesPerSecond: number) =>
+    bytesPerSecond >= 1024 * 1024
+      ? `${(bytesPerSecond / 1024 ** 2).toFixed(1)} MB/s`
+      : `${Math.max(1, Math.round(bytesPerSecond / 1024))} KB/s`,
   megabytes: (bytes: number) =>
     bytes >= 1024 * 1024 * 1024
       ? `${(bytes / 1024 ** 3).toFixed(1)} GB`

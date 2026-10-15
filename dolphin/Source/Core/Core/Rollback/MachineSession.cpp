@@ -123,9 +123,30 @@ constexpr u8 SD_REQUEST = 0;
 constexpr u8 SD_CHUNK = 1;
 constexpr u8 SD_MANIFEST_REQUEST = 2;
 constexpr u8 SD_MANIFEST = 3;
+// A slice of a larger CHANNEL_SD packet ([SD_PIECE][last: 0 or 1][bytes]): PaceSD sends a chunk (64
+// KiB) or a manifest as slices of SD_PIECE_BYTES, each at the pace, so a game packet waits behind
+// at most one slice on a slow uplink (a whole chunk is 64 ms at 8 Mbit/s). The channel is
+// sequenced: a sender's slices arrive in order, and its packets are never interleaved.
+constexpr u8 SD_PIECE = 4;
+constexpr size_t SD_PIECE_BYTES = 4096;
 constexpr size_t MAX_SD_PACKET = 2 * SDCard::CHUNK_SIZE;
 // A manifest (17 bytes a chunk of a card up to 64 GiB, compressed) and its file list.
 constexpr size_t MAX_SD_MANIFEST_PACKET = 64u << 20;
+// The SD card's upload to a joiner (PaceSD): a rate that grows while nothing queues on the way and
+// shrinks as soon as the joiner's link or the game's links to the other players show a queue
+// (their round trip above their lowest), so a download never costs the game its link.
+constexpr double SD_RATE_START = 256.0 * 1024;  // bytes a second
+constexpr double SD_RATE_MIN = 32.0 * 1024;
+constexpr double SD_RATE_MAX = 64.0 * 1024 * 1024;
+constexpr auto SD_PACE_STEP = std::chrono::milliseconds(100);
+// The queueing (ms over a link's lowest round trip) the upload aims to leave on the way, a little
+// over what ENet's own timing shows with nothing queued (3-4 ms, the upload sent in slices).
+// Three times it halves the rate at once.
+constexpr double SD_TARGET_DELAY_MS = 6;
+// After slowing down, the delays it looks at need this long to show the change.
+constexpr auto SD_SLOWDOWN_HOLD = std::chrono::milliseconds(800);
+// The window of round trips whose lowest is a link's delay now.
+constexpr auto SD_DELAY_WINDOW = std::chrono::milliseconds(500);
 // What a hello says this build speaks: 2 since the SD card is synced before the join and its
 // chunks are hashed with BLAKE2b (a build before says nothing: 1). Players of different
 // versions refuse each other's joins.
@@ -210,6 +231,8 @@ struct PeerLink
   ENetPeer* peer = nullptr;  // the connection kept for this slot
   bool hello = false;        // its hello arrived on `peer`
   int proto = 1;             // its PROTOCOL_VERSION (a hello without one: 1)
+  // ENet's round trip on this link, a sample every 10 ms (net thread), for PaceSD.
+  std::deque<std::pair<Clock::time_point, enet_uint32>> rtt_window;
   // Its game has an SD card, and the session card's root it plays (RootHex; "" until it has
   // built or synced the card).
   bool sd_card = false;
@@ -397,6 +420,25 @@ struct State
   std::map<u32, u8> sd_tried;
   std::map<u32, int> sd_asked;
   int sd_source = -1;
+  // The SD card's upload to each joiner, by its slot (PaceSD).
+  struct SDPace
+  {
+    std::deque<std::vector<u8>> queue;  // CHANNEL_SD packets waiting for the pace
+    size_t front_sent = 0;              // bytes of the front packet sent as slices
+    double rate = SD_RATE_START;
+    double tokens = 0;
+    bool limited = false;  // something waited for the rate since the last step
+    Clock::time_point filled{}, stepped{}, slowed{}, last_send{}, started{};
+    // The rate a queue last showed at (0: none yet): fast up to most of it, then a slow probe.
+    double ceiling = 0;
+    u64 sent = 0;
+    u32 slowdowns = 0;
+  };
+  std::array<SDPace, MAX_PLAYERS> sd_pace;
+  // CHANNEL_SD slices from each player, until the last of a packet (net thread).
+  std::array<std::vector<u8>, MAX_PLAYERS> sd_rx_pieces;
+  // What each player sent this joiner of the session's card lately (when, bytes).
+  std::array<std::deque<std::pair<Clock::time_point, u64>>, MAX_PLAYERS> sd_from;
   // The session card's root (RootHex, for hellos) and file list (wire form, sent with the
   // manifest), while this machine plays the session's card.
   std::string sd_root;
@@ -441,6 +483,9 @@ struct State
     bool chose = false;
     int tenths_shown = -1;
     Clock::time_point download_since{};
+    // The download's pace: bytes done at times (the last few seconds), and the rate from them.
+    std::deque<std::pair<Clock::time_point, u64>> progress;
+    double rate_now = 0;
   } sd_sync;
 
   // GekkoNet and the frame loop (CPU thread).
@@ -772,7 +817,25 @@ void HandleControl(ENetPeer* peer, const u8* data, size_t size)
     return it != msg.end() && it->second.is<double>() ? it->second.get<double>() : def;
   };
   const int epoch = static_cast<int>(num("epoch", -1));
-  if (type == "sd")
+  if (type == "sd_sync")
+  {
+    // A joiner whose SD card differs gets the session's from the players: everyone hears it (a
+    // lag while it does has a name).
+    const auto state = msg.find("state");
+    const std::string st = state != msg.end() && state->second.is<std::string>() ?
+                               state->second.get<std::string>() :
+                               "";
+    if (st == "start")
+    {
+      ShowNotice(fmt::format("{}'s SD card does not match. Sending them {:.0f} MB.", NameOf(slot),
+                             std::ceil(std::max(0.0, num("bytes", 0)) / 1048576.0)));
+    }
+    else if (st == "done")
+    {
+      ShowNotice(fmt::format("{} has the SD card now.", NameOf(slot)));
+    }
+  }
+  else if (type == "sd")
   {
     const auto root = msg.find("root");
     if (root != msg.end() && root->second.is<std::string>() &&
@@ -950,27 +1013,87 @@ void HandleImagePacket(int slot, const u8* data, size_t size)
 // Asks the players for chunks of the session's card (`net_mutex` held): the player that sent
 // this joiner its machine image first, then any other, never one that said it has not got the
 // chunk. A chunk no connected player is left to ask for is asked for again when its read retries.
+// What player `slot` sent this joiner of the card in the last few seconds, bytes a second
+// (`net_mutex` held).
+double SourceRateLocked(int slot, Clock::time_point now)
+{
+  constexpr auto WINDOW = std::chrono::seconds(3);
+  auto& from = s.sd_from[slot];
+  while (!from.empty() && now - from.front().first > WINDOW)
+    from.pop_front();
+  u64 bytes = 0;
+  for (const auto& [t, b] : from)
+    bytes += b;
+  return bytes / std::chrono::duration<double>(WINDOW).count();
+}
+
+// The chunks a player may have asked of it and not sent yet: what it sends in about three
+// seconds (at least 8, at most 128).
+size_t SourceCapacityLocked(int slot, Clock::time_point now)
+{
+  const double chunks = SourceRateLocked(slot, now) * 3 / SDCard::CHUNK_SIZE;
+  return static_cast<size_t>(std::clamp(chunks, 8.0, 128.0));
+}
+
+// A player that can send the session card's chunks to this joiner (`net_mutex` held).
+bool SDSourceUsableLocked(int slot)
+{
+  if (slot < 0 || slot >= MAX_PLAYERS || slot == s.opts.local_slot)
+    return false;
+  const PeerLink& p = s.peers[slot];
+  return p.peer && p.hello && !p.left && !p.late;
+}
+
+// Asks the players for chunks of the session's card (`net_mutex` held), spread over every player
+// that has the card (each paces its own upload, PaceSD): each chunk goes to the one with the
+// least asked of it for what it sends, not again to the one asked last (a retry), never to one
+// that said it has not got the chunk. A chunk no connected player is left to ask for is asked for
+// again when its read retries.
 void RequestChunksLocked(std::span<const u32> chunks)
 {
+  const auto now = Clock::now();
   std::array<std::vector<u32>, MAX_PLAYERS> by_slot;
+  std::array<size_t, MAX_PLAYERS> outstanding{};
+  for (const auto& [chunk, slot] : s.sd_asked)
+  {
+    if (slot >= 0 && slot < MAX_PLAYERS)
+      ++outstanding[slot];
+  }
+  std::array<double, MAX_PLAYERS> rate{};
+  for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+    rate[slot] = SourceRateLocked(slot, now);
   for (const u32 c : chunks)
   {
     const auto tried_it = s.sd_tried.find(c);
     const u8 tried = tried_it != s.sd_tried.end() ? tried_it->second : 0;
-    auto usable = [&](int slot) {
-      if (slot < 0 || slot >= MAX_PLAYERS || slot == s.opts.local_slot || (tried & (1u << slot)))
-        return false;
-      const PeerLink& p = s.peers[slot];
-      return p.peer && p.hello && !p.left;
-    };
-    int target = usable(s.sd_source) ? s.sd_source : -1;
-    for (int slot = 0; slot < MAX_PLAYERS && target < 0; ++slot)
+    const auto asked_it = s.sd_asked.find(c);
+    const int asked_before = asked_it != s.sd_asked.end() ? asked_it->second : -1;
+    auto usable = [&](int slot) { return SDSourceUsableLocked(slot) && !(tried & (1u << slot)); };
+    int target = -1;
+    double best = 0;
+    for (const bool avoid_previous : {true, false})
     {
-      if (usable(slot))
-        target = slot;
+      for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+      {
+        if (!usable(slot) || (avoid_previous && slot == asked_before))
+          continue;
+        // The image's sender first among equals (it may be the only one with the card).
+        const double load = (outstanding[slot] + 1) / std::max(rate[slot], 64.0 * 1024) -
+                            (slot == s.sd_source ? 1e-9 : 0);
+        if (target < 0 || load < best)
+        {
+          target = slot;
+          best = load;
+        }
+      }
+      if (target >= 0)
+        break;
     }
     if (target < 0)
       continue;
+    if (asked_before >= 0 && asked_before < MAX_PLAYERS && outstanding[asked_before] > 0)
+      --outstanding[asked_before];
+    ++outstanding[target];
     s.sd_asked[c] = target;
     by_slot[target].push_back(c);
   }
@@ -996,6 +1119,24 @@ void HandleSDPacket(int slot, const u8* data, size_t size)
 {
   if (size < 1)
     return;
+  if (data[0] == SD_PIECE)
+  {
+    // A slice: the packet whole once its last slice is in (checked like any packet then).
+    std::vector<u8>& buffer = s.sd_rx_pieces[slot];
+    if (size < 2 || buffer.size() + (size - 2) > MAX_SD_MANIFEST_PACKET)
+    {
+      buffer.clear();
+      return;
+    }
+    buffer.insert(buffer.end(), data + 2, data + size);
+    if (data[1] == 0)
+      return;
+    std::vector<u8> whole = std::move(buffer);
+    buffer.clear();
+    if (!whole.empty() && whole[0] != SD_PIECE)
+      HandleSDPacket(slot, whole.data(), whole.size());
+    return;
+  }
   if (data[0] == SD_MANIFEST_REQUEST)
   {
     // A joiner before its join: the session card's manifest and file list (a player only).
@@ -1064,6 +1205,7 @@ void HandleSDPacket(int slot, const u8* data, size_t size)
   if (asked != s.sd_asked.end())
     s.sd_asked.erase(asked);
   s.sd_tried.erase(chunk->index);
+  s.sd_from[slot].emplace_back(Clock::now(), chunk->data.size());
   s.sd_card->Deliver(*chunk);
 }
 
@@ -1121,6 +1263,13 @@ void ResetSD()
     s.sd_root.clear();
     s.sd_files_wire.clear();
     s.sd_tx.clear();
+    for (State::SDPace& pace : s.sd_pace)
+      pace = {};
+    for (auto& pieces : s.sd_rx_pieces)
+      pieces.clear();
+    for (auto& from : s.sd_from)
+      from.clear();
+
     s.sd_tried.clear();
     s.sd_asked.clear();
     s.sd_source = -1;
@@ -1173,6 +1322,18 @@ public:
   {
     if (Core::IsCPUThread() && s.gekko)
       gekko_network_poll(s.gekko);
+  }
+  size_t Capacity() override
+  {
+    std::lock_guard lk(s.net_mutex);
+    const auto now = Clock::now();
+    size_t total = 0;
+    for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+    {
+      if (SDSourceUsableLocked(slot))
+        total += SourceCapacityLocked(slot, now);
+    }
+    return total;
   }
 };
 
@@ -1407,6 +1568,195 @@ void PaceSendWindow(PeerLink& p, Clock::time_point now)
   e->windowSize = cc.window;
 }
 
+// The lowest of a window of round trips (ms), the old ones dropped.
+template <typename T>
+T RecentMin(std::deque<std::pair<Clock::time_point, T>>& samples, Clock::time_point now)
+{
+  while (!samples.empty() && now - samples.front().first > SD_DELAY_WINDOW)
+    samples.pop_front();
+  T low = samples.empty() ? T{} : samples.front().second;
+  for (const auto& [t, v] : samples)
+    low = std::min(low, v);
+  return low;
+}
+
+// How much a link's round trip is over its lowest now (ms; net thread): the lowest of the last
+// SD_DELAY_WINDOW of ENet's round trip against the lowest this connection has had. A queue on
+// the way (a home uplink filling) raises it; jitter alone does not (the window's lowest stays low).
+double LinkQueueMs(PeerLink& p, Clock::time_point now)
+{
+  if (!p.peer || p.cc.min_rtt == 0xffffffff || p.rtt_window.empty())
+    return 0;
+  return static_cast<double>(RecentMin(p.rtt_window, now)) - static_cast<double>(p.cc.min_rtt);
+}
+
+// The SD card's upload to the joiner in `slot` (net thread, `net_mutex` held): its packets go out
+// at a rate, a token bucket's, that grows while the way is clear and shrinks as soon as a queue
+// shows: on the joiner's link or on the game's links to the other players (LinkQueueMs: ENet's
+// round trip, which the net thread measures apart from the game's frames, kept fresh by the
+// chunks' acknowledgements and, on a game link, a ping every 50 ms). It keeps the upload a little under what the
+// links can take (as a "background" transfer such as BitTorrent's uTP or an OS update does), so
+// the players' game never waits for it. PPR_MACHINE_SD_PACE=0 sends at once (for comparisons);
+// PPR_MACHINE_SD_PACE_LOG=1 logs each step.
+void PaceSD(PeerLink& p, State::SDPace& pace, Clock::time_point now)
+{
+  static const bool off = [] {
+    const char* e = std::getenv("PPR_MACHINE_SD_PACE");
+    return e && *e == '0';
+  }();
+  static const bool log = std::getenv("PPR_MACHINE_SD_PACE_LOG") != nullptr;
+  if (!p.peer || !p.hello || p.peer->state != ENET_PEER_STATE_CONNECTED)
+  {
+    pace = {};
+    return;
+  }
+  auto send_raw = [&](const u8* data, size_t size) {
+    enet_peer_send(p.peer, CHANNEL_SD, enet_packet_create(data, size, ENET_PACKET_FLAG_RELIABLE));
+    if (pace.sent == 0)
+      pace.started = now;
+    pace.sent += size;
+    pace.last_send = now;
+  };
+  // The front packet's next slice (or all of a small one); true when the packet is done.
+  auto send_next = [&]() {
+    const std::vector<u8>& data = pace.queue.front();
+    if (data.size() <= SD_PIECE_BYTES)
+    {
+      send_raw(data.data(), data.size());
+    }
+    else
+    {
+      const size_t n = std::min(SD_PIECE_BYTES, data.size() - pace.front_sent);
+      std::vector<u8> piece(2 + n);
+      piece[0] = SD_PIECE;
+      piece[1] = pace.front_sent + n == data.size() ? 1 : 0;
+      std::memcpy(piece.data() + 2, data.data() + pace.front_sent, n);
+      send_raw(piece.data(), piece.size());
+      pace.front_sent += n;
+      if (pace.front_sent < data.size())
+        return false;
+    }
+    pace.front_sent = 0;
+    pace.queue.pop_front();
+    return true;
+  };
+  if (off)
+  {
+    while (!pace.queue.empty())
+    {
+      send_raw(pace.queue.front().data(), pace.queue.front().size());
+      pace.queue.pop_front();
+    }
+    return;
+  }
+
+  if (pace.filled == Clock::time_point{})
+    pace.filled = pace.stepped = now;
+  const double dt = std::chrono::duration<double>(now - pace.filled).count();
+  pace.filled = now;
+  // At most 50 ms of the rate ahead; a packet may take the bucket below zero (the manifest is one
+  // of megabytes), and nothing else goes until it is paid back.
+  pace.tokens = std::min(pace.tokens + pace.rate * dt, pace.rate * 0.05);
+  while (!pace.queue.empty())
+  {
+    const size_t left = pace.queue.front().size() - pace.front_sent;
+    const size_t size = std::min(left, SD_PIECE_BYTES);
+    // Requests and refusals are small: they go at once.
+    const bool small = pace.queue.front().size() <= 1024;
+    // What waits in ENet's own queue (behind its window) would not be paced: a slice or two.
+    if (!small && (pace.tokens < 0 || QueuedReliable(p.peer, 4 * SD_PIECE_BYTES) >= 2 * SD_PIECE_BYTES))
+    {
+      pace.limited = true;
+      break;
+    }
+    if (!small)
+      pace.tokens -= size;
+    send_next();
+  }
+
+  if (now - pace.stepped < SD_PACE_STEP)
+    return;
+  const bool active = pace.limited || !pace.queue.empty() || now - pace.last_send < SD_PACE_STEP;
+  if (!active)
+  {
+    if (pace.sent >= (1u << 20) && now - pace.last_send > std::chrono::seconds(5))
+    {
+      const double secs = std::chrono::duration<double>(pace.last_send - pace.started).count();
+      AddLog(fmt::format("SD card: sent player {} {:.1f} MB in {:.1f} s ({:.2f} MB/s, slowed down "
+                         "{} times)",
+                         p.slot + 1, pace.sent / 1048576.0, secs,
+                         secs > 0 ? pace.sent / 1048576.0 / secs : 0.0, pace.slowdowns));
+      pace = {};
+    }
+    pace.stepped = now;
+    return;
+  }
+  // The queue on the joiner's link, and the worst on the game's links to the other players.
+  const double own = LinkQueueMs(p, now);
+  double game = -1;
+  int game_slot = -1;
+  for (PeerLink& g : s.peers)
+  {
+    if (g.slot < 0 || g.slot == p.slot || !g.peer || !g.hello || !Plays(g.slot))
+      continue;
+    const double q = LinkQueueMs(g, now);
+    if (q > game)
+    {
+      game = q;
+      game_slot = g.slot;
+    }
+  }
+  // The joiner's link crosses this machine's own uplink one way (the joiner sends back only
+  // acknowledgements and requests): its queue is this upload's to keep at the target. A game
+  // link's round trip also carries the other player's uplink (their own upload, which they pace),
+  // so it only stops this one when it queues past three times the target.
+  // PPR_MACHINE_SD_TARGET_MS=N: another target, for measurements.
+  static const double target = [] {
+    const char* e = std::getenv("PPR_MACHINE_SD_TARGET_MS");
+    return e && std::atof(e) > 0 ? std::atof(e) : SD_TARGET_DELAY_MS;
+  }();
+  const double queued = game > 3 * target ? std::max(own, game) : own;
+  const double before = pace.rate;
+  // LEDBAT's rule (RFC 6817, as BitTorrent's uTP): the rate moves in proportion to how far the
+  // queue is from the target, up while under it (only while the rate is what holds the upload
+  // back), down while over it. The delays show a change a few hundred ms late, so a fast climb
+  // would overshoot into a queue the game feels and halve, again and again: it climbs fast only
+  // to 85 % of the rate a queue last showed at, then probes 0.2 % a step (about 8 s to that rate).
+  const double off_target = std::clamp((target - queued) / target, -2.0, 1.0);
+  if (queued > 3 * target)
+  {
+    if (now - pace.slowed >= SD_SLOWDOWN_HOLD)
+    {
+      pace.ceiling = pace.rate;
+      pace.rate *= 0.5;
+      pace.slowed = now;
+      ++pace.slowdowns;
+    }
+  }
+  else if (off_target < 0)
+  {
+    pace.rate *= 1 + 0.1 * off_target;
+  }
+  else if (pace.limited)
+  {
+    const bool probing = pace.ceiling > 0 && pace.rate >= 0.85 * pace.ceiling;
+    pace.rate += off_target * std::max(pace.rate * (probing ? 0.002 : 0.04), probing ? 2048.0 : 16384.0);
+    // Past the old ceiling with no queue: the way has room after all.
+    pace.ceiling = std::max(pace.ceiling, pace.ceiling > 0 ? pace.rate : 0.0);
+  }
+  pace.rate = std::clamp(pace.rate, SD_RATE_MIN, SD_RATE_MAX);
+  if (log)
+  {
+    INFO_LOG_FMT(BRAWLBACK,
+                 "machine: SD pace to player {}: {:.0f} -> {:.0f} KB/s, queued {:.0f} ms (own link "
+                 "{:.0f}, game link {} {:.0f}), {} packets waiting, sent {:.1f} MB",
+                 p.slot + 1, before / 1024, pace.rate / 1024, queued, own, game_slot + 1, game,
+                 pace.queue.size(), pace.sent / 1048576.0);
+  }
+  pace.stepped = now;
+  pace.limited = false;
+}
+
 void NetThread()
 {
   Common::SetCurrentThreadName("Machine session");
@@ -1417,7 +1767,16 @@ void NetThread()
       break;
     const auto now = Clock::now();
     for (PeerLink& p : s.peers)
+    {
       PaceSendWindow(p, now);
+      if (p.peer && p.peer->state == ENET_PEER_STATE_CONNECTED &&
+          (p.rtt_window.empty() || now - p.rtt_window.back().first >= std::chrono::milliseconds(10)))
+      {
+        p.rtt_window.emplace_back(now, p.peer->roundTripTime);
+        if (p.rtt_window.size() > 400)
+          p.rtt_window.pop_front();
+      }
+    }
     // Every 10 s, each link as ENet measures it: what a bug report needs to tell a bad link
     // (round trips jumping, loss) from a machine that stalled.
     static Clock::time_point last_link_log;
@@ -1495,17 +1854,18 @@ void NetThread()
         }
       }
     }
-    // The SD card's chunk requests and chunks.
+    // The SD card's chunk requests and chunks, each player's at its pace (PaceSD).
     for (auto& [slot, data] : s.sd_tx)
     {
-      PeerLink& p = s.peers[slot];
-      if (p.peer && p.hello)
-      {
-        enet_peer_send(p.peer, CHANNEL_SD,
-                       enet_packet_create(data.data(), data.size(), ENET_PACKET_FLAG_RELIABLE));
-      }
+      if (slot >= 0 && slot < MAX_PLAYERS && s.peers[slot].peer && s.peers[slot].hello)
+        s.sd_pace[slot].queue.push_back(std::move(data));
     }
     s.sd_tx.clear();
+    for (int slot = 0; slot < MAX_PLAYERS; ++slot)
+    {
+      if (s.peers[slot].slot == slot)
+        PaceSD(s.peers[slot], s.sd_pace[slot], now);
+    }
     // Keep connecting to every peer without a link (both sides do).
     StepProbe(now);
     for (PeerLink& p : s.peers)
@@ -1553,6 +1913,9 @@ void NetThread()
         if (!outgoing)
           ev.peer->data = nullptr;
         enet_peer_timeout(ev.peer, 0, 5000, 10000);
+        // A round trip every 50 ms on a link with nothing reliable to send (a game link: GekkoNet's
+        // packets are unsequenced), so PaceSD sees a queue building on it within a few hundred ms.
+        enet_peer_ping_interval(ev.peer, 50);
         // The peer's side of the same (PaceSendWindow): ENet sends this to the peer, which then
         // never lowers its throttle towards this machine either (an older build included).
         if (!std::getenv("PPR_MACHINE_ENET_THROTTLE"))
@@ -4286,9 +4649,22 @@ bool SDSyncStep()
     AddLog(choice == SDSyncChoice::Overwrite ?
                "SD card: downloading the host's card, then writing it into this player's" :
                "SD card: downloading the host's card");
+    {
+      std::lock_guard lk(s.net_mutex);
+      picojson::object m;
+      m["type"] = picojson::value("sd_sync");
+      m["state"] = picojson::value("start");
+      m["bytes"] = picojson::value(static_cast<double>(y.missing_bytes));
+      BroadcastControl(m);
+    }
+    ShowNotice(fmt::format("Your SD card does not match the host's. Getting {:.0f} MB from the "
+                           "players.",
+                           std::ceil(y.missing_bytes / 1048576.0)));
     y.card->StartSync();
     y.download_since = now;
-    y.tenths_shown = -1;
+    y.progress.clear();
+    y.rate_now = 0;
+    y.tenths_shown = 0;
     y.step = Step::Downloading;
     return false;
   }
@@ -4298,17 +4674,32 @@ bool SDSyncStep()
     const SDCard::SessionCard::SyncProgress pr = y.card->GetSyncProgress();
     if (pr.failed)
       return fail("could not get the host's SD card: a player stopped sending it");
+    // The rate over the last 3 s.
+    y.progress.emplace_back(now, pr.done);
+    while (y.progress.size() > 2 && now - y.progress.front().first > std::chrono::seconds(3))
+      y.progress.pop_front();
+    const double span = std::chrono::duration<double>(now - y.progress.front().first).count();
+    if (span > 0.5)
+      y.rate_now = (pr.done - y.progress.front().second) / span;
     const int tenths = pr.total ? static_cast<int>(pr.done * 10 / pr.total) : 10;
     if (tenths > y.tenths_shown)
     {
       y.tenths_shown = tenths;
-      ShowNotice(fmt::format("Getting the host's SD card: {}%", tenths * 10));
+      ShowNotice(fmt::format("Getting the host's SD card: {}% ({:.1f} MB/s)", tenths * 10,
+                             y.rate_now / 1048576.0));
     }
     if (!pr.finished)
       return false;
     const double secs = std::chrono::duration<double>(now - y.download_since).count();
     AddLog(fmt::format("SD card: got {:.1f} MB of the host's card in {:.1f} s", pr.total / 1048576.0,
                        secs));
+    {
+      std::lock_guard lk(s.net_mutex);
+      picojson::object m;
+      m["type"] = picojson::value("sd_sync");
+      m["state"] = picojson::value("done");
+      BroadcastControl(m);
+    }
     if (static_cast<SDSyncChoice>(y.choice.load()) == SDSyncChoice::Overwrite)
     {
       std::string why;
@@ -6253,10 +6644,9 @@ picojson::value Status()
         const auto pr = y.card->GetSyncProgress();
         sd["done"] = picojson::value(static_cast<double>(pr.done));
         sd["total"] = picojson::value(static_cast<double>(pr.total));
-        const double secs =
-            std::chrono::duration<double>(Clock::now() - y.download_since).count();
-        if (pr.done > 0 && secs > 1)
-          sd["eta_s"] = picojson::value((pr.total - pr.done) / (pr.done / secs));
+        sd["rate"] = picojson::value(y.rate_now);
+        if (y.rate_now > 0)
+          sd["eta_s"] = picojson::value((pr.total - pr.done) / y.rate_now);
       }
       o["sd_sync"] = picojson::value(sd);
     }

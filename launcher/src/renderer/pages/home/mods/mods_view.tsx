@@ -691,6 +691,7 @@ const RoomPanel = ({
   } else if (sync?.step === "downloading" && sync.total) {
     syncLine = Messages.sdSyncDownloading(
       Math.floor(((sync.done ?? 0) * 100) / sync.total),
+      Messages.rate(sync.rate ?? 0),
       Messages.duration(sync.eta_s),
     );
   }

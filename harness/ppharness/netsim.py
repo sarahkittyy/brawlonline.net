@@ -652,6 +652,7 @@ class NetSim:
         client: tuple[str, int] | None = None,
         shared_up: SharedUplink | None = None,
         shared_class: str | Callable[[bytes], str] = "game",
+        shared_down: SharedUplink | None = None,
     ):
         self.forward = parse_hostport(forward) if isinstance(forward, str) else tuple(forward)
         self.listen_requested = parse_hostport(listen) if isinstance(listen, str) else tuple(listen)
@@ -664,6 +665,9 @@ class NetSim:
         # The "up" direction's bandwidth (SharedUplink): shared with other proxies.
         self.shared_up = shared_up
         self.shared_class = shared_class
+        # The "down" direction's: the forwarded-to side's uplink, when that side's sending goes
+        # through this proxy too (a connection the client side started).
+        self.shared_down = shared_down
         self.epoch = clock()
         self.started_at = self.epoch
 
@@ -851,7 +855,8 @@ class NetSim:
         with self._cond:
             cls = self.shared_class(data) if callable(self.shared_class) else self.shared_class
             dec = sess.models[direction].decide(link, now, len(data), active,
-                                                self.shared_up if direction == "up" else None, cls)
+                                                self.shared_up if direction == "up" else self.shared_down,
+                                                cls)
             if not dec.dropped:
                 for when in dec.deliveries:
                     heapq.heappush(self._heap, (when, next(self._seq), direction, sess, data, now))
