@@ -24,6 +24,8 @@ export const DolphinSettingsMessages = {
   dolphinExecutable: (dolphinTypeName: string) => `{0} Executable`,
   dolphinExecutableDescription: () => "The Dolphin build to launch. Leave empty to use the default shown.",
   closeDolphinToChange: () => "Close Dolphin to change this setting",
+  notBrawlOnlineDolphin: () =>
+    "Requires Brawl Online's specific dolphin build to function. Any regular dolphin install will not work.",
   gameFilesFolder: () => "Game Files Folder",
   gameFilesFolderDescription: () =>
     "Where Dolphin, Project+ and its SD card are kept (about 4 GB). Choose another folder to move them there, for example to another drive.",

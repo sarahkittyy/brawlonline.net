@@ -1,3 +1,4 @@
+import { isBrawlOnlineDolphinVersion } from "@dolphin/brawl_online_build";
 import { DolphinLaunchType } from "@dolphin/types";
 import { css } from "@emotion/react";
 import Button from "@mui/material/Button";
@@ -122,6 +123,17 @@ export const DolphinSettings = ({ dolphinType }: { dolphinType: DolphinLaunchTyp
           disabled={dolphinIsOpen}
           tooltipText={dolphinIsOpen ? Messages.closeDolphinToChange() : ""}
         />
+        {!isBrawlOnlineDolphinVersion(dolphinVersion) && (
+          <Typography
+            variant="body2"
+            css={(theme) => css`
+              margin-top: 6px;
+              color: ${theme.palette.error.main};
+            `}
+          >
+            {Messages.notBrawlOnlineDolphin()}
+          </Typography>
+        )}
       </SettingItem>
       <SettingItem
         name={Messages.configureDolphin(dolphinTypeName)}
