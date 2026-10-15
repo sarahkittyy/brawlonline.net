@@ -40,6 +40,7 @@ import {
   writeLogsArchive,
 } from "./logs_archive";
 import { getNetworkDiagnostics } from "./network_diagnostics";
+import { BUG_REPORT_NETWORK_TIMEOUT_MS, networkReportText } from "./network_report";
 import { clearTempFolder } from "./util";
 
 const log = electronLog.scope("main/listeners");
@@ -101,13 +102,21 @@ export default function setupMainIpc({
   });
 
   ipc_sendBugReport.main!.handle(async ({ uid, description }) => {
+    // Runs while the report's text is sent; the zip waits for it up to BUG_REPORT_NETWORK_TIMEOUT_MS.
+    const network = bugReportNetworkText();
     const req = {
       description,
       launcherVersion: `${app.getVersion()}${app.isPackaged ? "" : " (development)"}`,
       platform: `${getAppBootstrap(flags).operatingSystem} ${process.arch}`,
     };
     const sent = await accountsManager.sendBugReport(uid, req, async () =>
-      logsArchiveBuffer(await logFiles(dolphinManager, settingsManager, flags), BUG_REPORT_MAX_FILE_BYTES),
+      logsArchiveBuffer(
+        [
+          ...(await logFiles(dolphinManager, settingsManager, flags)),
+          { name: "network.txt", source: { text: await network } },
+        ],
+        BUG_REPORT_MAX_FILE_BYTES,
+      ),
     );
     if (!sent.ok) {
       log.warn(`Bug report not sent: ${sent.error.message}`);
@@ -181,6 +190,21 @@ export default function setupMainIpc({
     await browserWindowManager.openInNewBrowserWindow(url);
     return { success: true };
   });
+}
+
+/** The network check for a bug report's network.txt; never rejects. */
+async function bugReportNetworkText(): Promise<string> {
+  let timer: NodeJS.Timeout | undefined;
+  const timeout = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), BUG_REPORT_NETWORK_TIMEOUT_MS);
+  });
+  try {
+    return networkReportText(await Promise.race([getNetworkDiagnostics(), timeout]));
+  } catch (err) {
+    return networkReportText(null, err);
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /** What a logs zip holds: system.txt, the launcher's logs, and both Dolphins' logs and config files. */

@@ -152,6 +152,10 @@ private:
 
   std::atomic<u16> m_host_port{0};
   bool m_upnp_mapped = false;  // the router forwards m_host_port (matchmaking thread only)
+  // The server saw us at another port than m_host_port: our router picks a port per
+  // destination (matchmaking thread only; for the log of a failed connect).
+  bool m_router_changed_port = false;
+  u64 m_ticket_sent_ms = 0;  // when the last create-ticket was sent (matchmaking thread only)
   std::atomic<int> m_ticket_count{0};
   std::atomic<int> m_connect_attempts{0};
 

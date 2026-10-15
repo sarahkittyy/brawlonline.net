@@ -6,6 +6,7 @@
 #ifdef USE_UPNP
 
 #include <chrono>
+#include <string>
 
 #include "Common/CommonTypes.h"
 
@@ -24,6 +25,9 @@ void StartDiscovery();
 bool MapUdpPort(u16 port, std::chrono::milliseconds wait);
 // Removes the mapping MapUdpPort made, if any.
 void UnmapUdpPort();
+// The router's internet address as it reported it over UPnP, once the discovery is done ("" before
+// that, or with no router found).
+std::string ExternalAddress();
 }  // namespace Common::UPnP
 
 #endif

@@ -198,6 +198,7 @@ struct OnlineState
   bool started = false;
   bool done = false;
   bool have_igd = false;
+  std::string external;  // the router's internet address, as it reported it ("" if none)
   UPNPUrls urls{};
   IGDdatas data{};
   std::string lan_addr;  // this machine's address toward the router
@@ -298,6 +299,7 @@ void DiscoverOnlineIGD()
   state.urls = urls;
   state.data = data;
   state.lan_addr = lan_addr.data();
+  state.external = result != 0 ? external.data() : "";
   state.done = true;
   state.discovered.notify_all();
 }
@@ -369,6 +371,13 @@ bool Common::UPnP::MapUdpPort(u16 port, std::chrono::milliseconds wait)
   state.mapped = port;
   NOTICE_LOG_FMT(NETPLAY, "UPnP: mapped UDP port {} to {}", port, state.lan_addr);
   return true;
+}
+
+std::string Common::UPnP::ExternalAddress()
+{
+  OnlineState& state = GetOnlineState();
+  std::lock_guard lk(state.mutex);
+  return state.external;
 }
 
 void Common::UPnP::UnmapUdpPort()

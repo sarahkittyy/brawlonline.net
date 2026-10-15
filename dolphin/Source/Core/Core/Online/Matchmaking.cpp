@@ -55,14 +55,59 @@ constexpr std::chrono::milliseconds UPNP_WAIT{2500};
 // Matchmaking thread only.
 std::vector<ENetAddress> s_test_blocked;
 
-int ENET_CALLBACK DropTestBlocked(ENetHost* host, ENetEvent*)
+// Every datagram that reached the P2P port during the connect, by sender: a failed connect logs
+// whether anything came from the peer, and from which port (HandleConnecting). Matchmaking
+// thread only.
+struct Heard
 {
+  ENetAddress from;
+  u32 packets;
+};
+std::vector<Heard> s_heard;
+constexpr size_t MAX_HEARD = 16;
+
+int ENET_CALLBACK OnP2PReceive(ENetHost* host, ENetEvent*)
+{
+  const ENetAddress& from = host->receivedAddress;
   for (const ENetAddress& a : s_test_blocked)
   {
-    if (a.host == host->receivedAddress.host && a.port == host->receivedAddress.port)
+    if (a.host == from.host && a.port == from.port)
       return 1;
   }
+  for (Heard& h : s_heard)
+  {
+    if (h.from.host == from.host && h.from.port == from.port)
+    {
+      h.packets++;
+      return 0;
+    }
+  }
+  if (s_heard.size() < MAX_HEARD)
+    s_heard.push_back({from, 1});
   return 0;
+}
+
+// How far an ENet handshake got. Both sides connect at once, so there are two: ours (we send
+// CONNECT, they answer VERIFY_CONNECT) and theirs (they send CONNECT, we answer and wait for the
+// acknowledgement).
+const char* PeerStateName(ENetPeerState state)
+{
+  switch (state)
+  {
+  case ENET_PEER_STATE_DISCONNECTED:
+    return "disconnected";
+  case ENET_PEER_STATE_CONNECTING:
+    return "our connect unanswered";
+  case ENET_PEER_STATE_ACKNOWLEDGING_CONNECT:
+    return "their connect arrived, our answer unacknowledged";
+  case ENET_PEER_STATE_CONNECTION_PENDING:
+  case ENET_PEER_STATE_CONNECTION_SUCCEEDED:
+    return "connected, not yet reported";
+  case ENET_PEER_STATE_CONNECTED:
+    return "connected";
+  default:
+    return "disconnecting";
+  }
 }
 
 std::string IpToString(enet_uint32 host)
@@ -180,6 +225,100 @@ enet_uint32 GetLocalAddressFallback()
     return 0;
   }
   return address.host;
+}
+
+// After a P2P connect timed out: our side, then one line per player it failed on with what came
+// from their address, how far each handshake got and the likely reason, so a bug report says why.
+void LogFailedConnect(const Match& match, const ENetHost* client,
+                      const std::vector<ENetPeer*>& servers,
+                      const std::vector<ENetAddress>& remote_addrs,
+                      const std::vector<bool>& connections, bool router_changed_port,
+                      bool upnp_mapped)
+{
+  WARN_LOG_FMT(NETPLAY,
+               "[Matchmaking] Our side: UDP port {}, {} by our router{}; {} packets sent, {} "
+               "received",
+               match.local_port, router_changed_port ? "changed" : "kept",
+               upnp_mapped ? ", UPnP-mapped" : "", client->totalSentPackets,
+               client->totalReceivedPackets);
+
+  for (size_t i = 0; i < servers.size(); i++)
+  {
+    if (connections[i])
+      continue;
+    const ENetAddress& to = remote_addrs[i];
+    const size_t p = static_cast<int>(i) >= match.local_player_index ? i + 1 : i;
+    const std::string who =
+        p < match.players.size() ?
+            fmt::format("P{} {} ({})", match.players[p].port, match.players[p].display_name,
+                        match.players[p].connect_code) :
+            "?";
+
+    // From their address, but not from another player's (players behind one public address, or
+    // on one PC, differ only by port).
+    const auto other_player = [&](const ENetAddress& a) {
+      for (size_t j = 0; j < remote_addrs.size(); j++)
+      {
+        if (j != i && remote_addrs[j].host == a.host && remote_addrs[j].port == a.port)
+          return true;
+      }
+      return false;
+    };
+    std::vector<std::string> heard;
+    bool heard_exact = false;
+    for (const Heard& h : s_heard)
+    {
+      if (h.from.host != to.host || other_player(h.from))
+        continue;
+      heard.push_back(fmt::format("{} from port {}", h.packets, h.from.port));
+      heard_exact |= h.from.port == to.port;
+    }
+
+    // Ours, and theirs if their connect got here (ENet keeps it as a peer of its own).
+    std::vector<std::string> handshakes;
+    for (size_t k = 0; k < client->peerCount; k++)
+    {
+      const ENetPeer& peer = client->peers[k];
+      if (peer.state == ENET_PEER_STATE_DISCONNECTED || peer.address.host != to.host ||
+          (&peer != servers[i] && other_player(peer.address)))
+      {
+        continue;
+      }
+      handshakes.push_back(fmt::format("{} port {}: {}, {} sent",
+                                       &peer == servers[i] ? "ours to" : "theirs from",
+                                       peer.address.port,
+                                       PeerStateName(static_cast<ENetPeerState>(peer.state)),
+                                       peer.packetsSent));
+    }
+
+    const char* reason;
+    if (heard.empty())
+    {
+      reason = "nothing came from their address: our router or firewall dropped it, or it never "
+               "left their network (UDP blocked, carrier NAT)";
+    }
+    else if (!heard_exact)
+    {
+      reason = "their packets came from another port than the server saw: their router picks a "
+               "port per destination";
+    }
+    else if (router_changed_port)
+    {
+      reason = "theirs arrive but ours do not reach them: our router changed our port, and theirs "
+               "lets in only the one the server saw";
+    }
+    else
+    {
+      reason = "theirs arrive but ours do not reach them: their router or firewall drops them";
+    }
+    WARN_LOG_FMT(NETPLAY,
+                 "[Matchmaking] No connection to {} at {}:{}. Heard: {}. Handshakes: {}. "
+                 "Likely: {}",
+                 who, IpToString(to.host), to.port,
+                 heard.empty() ? "nothing" : fmt::to_string(fmt::join(heard, ", ")),
+                 handshakes.empty() ? "none" : fmt::to_string(fmt::join(handshakes, "; ")),
+                 reason);
+  }
 }
 }  // namespace
 
@@ -578,6 +717,7 @@ void Matchmaking::StartMatchmaking()
 
   // Before we can request a ticket, we must wait for connection to be successful
   int connect_attempt_count = 0;
+  const u64 mm_connect_start = Common::Timer::NowMs();
   while (!m_is_mm_connected)
   {
     if (m_is_mm_terminated)
@@ -594,7 +734,14 @@ void Matchmaking::StartMatchmaking()
       connect_attempt_count++;
       if (connect_attempt_count >= 20)
       {
-        ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Failed to connect to mm server...");
+        // Nothing received: the server's answers never reached us (a firewall or network that
+        // blocks UDP, or the server is down). Something received but no connect: they arrive,
+        // ours are lost or refused.
+        ERROR_LOG_FMT(NETPLAY,
+                      "[Matchmaking] Failed to connect to mm server {} ({}:{}) from UDP port {}: "
+                      "{} packets sent, {} received",
+                      mm_host, IpToString(addr.host), mm_port, m_host_port.load(),
+                      m_client->totalSentPackets, m_client->totalReceivedPackets);
         m_state = State::ErrorEncountered;
         SetError(ErrorSource::Client, "Failed to connect to mm server");
         return;
@@ -603,7 +750,8 @@ void Matchmaking::StartMatchmaking()
     }
 
     m_is_mm_connected = true;
-    INFO_LOG_FMT(NETPLAY, "[Matchmaking] Connected to mm server...");
+    INFO_LOG_FMT(NETPLAY, "[Matchmaking] Connected to mm server {} ({}:{}) in {} ms", mm_host,
+                 IpToString(addr.host), mm_port, Common::Timer::NowMs() - mm_connect_start);
   }
 
   INFO_LOG_FMT(NETPLAY, "[Matchmaking] Trying to find match...");
@@ -656,6 +804,7 @@ void Matchmaking::StartMatchmaking()
   request["ipAddressLan"] = picojson::value(lan_addr);
   SendMmMessage(picojson::value(std::move(request)));
   m_ticket_count++;
+  m_ticket_sent_ms = Common::Timer::NowMs();
 
   // Get response from server
   picojson::value response;
@@ -664,7 +813,11 @@ void Matchmaking::StartMatchmaking()
     return;
   if (rcv_res != 0)
   {
-    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Did not receive response from server for create ticket");
+    ERROR_LOG_FMT(NETPLAY,
+                  "[Matchmaking] Did not receive response from server for create ticket ({} after "
+                  "{} ms; ticket {} of this search)",
+                  rcv_res == -2 ? "the server disconnected" : "no answer",
+                  Common::Timer::NowMs() - m_ticket_sent_ms, m_ticket_count.load());
     m_state = State::ErrorEncountered;
     SetError(ErrorSource::Client, "Failed to join mm queue");
     return;
@@ -713,7 +866,10 @@ void Matchmaking::HandleMatchmaking()
   if (rcv_res != 0)
   {
     // Right now the only other code is -2 meaning the server died probably?
-    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Lost connection to the mm server");
+    // ENet drops a peer it has not heard from for 5-10 s, so this is either the server going away
+    // or the network losing everything for that long.
+    ERROR_LOG_FMT(NETPLAY, "[Matchmaking] Lost connection to the mm server {} s into the search",
+                  (Common::Timer::NowMs() - m_ticket_sent_ms) / 1000);
     m_state = State::ErrorEncountered;
     SetError(ErrorSource::Connection, "Lost connection to the mm server");
     return;
@@ -804,9 +960,23 @@ void Matchmaking::HandleMatchmaking()
         const auto parts = SplitString(player.ip_address, ':');
         const bool same_port =
             parts.size() == 2 && parts[1] == std::to_string(m_host_port.load());
+        m_router_changed_port = !same_port;
         INFO_LOG_FMT(NETPLAY, "[Matchmaking] The server sees us at {} (port {}{}{})",
                      player.ip_address, m_host_port.load(), m_upnp_mapped ? ", UPnP-mapped" : "",
                      same_port ? "" : "; the router changed the port");
+#ifdef USE_UPNP
+        // The router's own internet address, if it answered UPnP. Another one than the server
+        // sees means our traffic leaves through something else too (the ISP's NAT, a second
+        // router, a VPN), whose ports the router's mapping does not open.
+        const std::string router_ip = Common::UPnP::ExternalAddress();
+        if (!router_ip.empty() && router_ip != local_external_ip)
+        {
+          WARN_LOG_FMT(NETPLAY,
+                       "[Matchmaking] The router's internet address is {}, the server sees {}: "
+                       "another NAT or a VPN is between them, and UPnP does not open it",
+                       router_ip, local_external_ip);
+        }
+#endif
       }
     }
 
@@ -818,17 +988,22 @@ void Matchmaking::HandleMatchmaking()
 
       const std::string& ext_ip = player.ip_address;
       const std::string& lan_ip = player.ip_address_lan;
-      INFO_LOG_FMT(NETPLAY, "[Matchmaking] LAN IP: {}", lan_ip);
 
       if (HostPart(ext_ip) != local_external_ip || lan_ip.empty())
       {
         // If external IPs are different, just use that address
+        INFO_LOG_FMT(NETPLAY, "[Matchmaking] P{} {} ({}): internet {}, LAN {}; using internet",
+                     player.port, player.display_name, player.connect_code, ext_ip, lan_ip);
         remote_ips.push_back(ext_ip);
         continue;
       }
 
       // Slippi: "TODO: Instead of using one or the other, it might be better to try both"
       // If external IPs are the same, try using LAN IPs
+      INFO_LOG_FMT(NETPLAY,
+                   "[Matchmaking] P{} {} ({}): internet {}, LAN {}; using LAN (same internet "
+                   "address as ours)",
+                   player.port, player.display_name, player.connect_code, ext_ip, lan_ip);
       remote_ips.push_back(lan_ip);
     }
   }
@@ -936,8 +1111,8 @@ void Matchmaking::HandleConnecting()
   std::string ip_log;
   for (const auto& r : match.remotes)
     ip_log += r.ToString() + ", ";
-  INFO_LOG_FMT(NETPLAY, "[Matchmaking] My port: {} || Remote player IPs: {}", m_host_port.load(),
-               ip_log);
+  INFO_LOG_FMT(NETPLAY, "[Matchmaking] My port: {} || Remote player IPs: {} (connect attempt {})",
+               m_host_port.load(), ip_log, m_connect_attempts.load());
 
   // --- SlippiNetplayClient constructor ---
   // Slippi: "It is important to be able to set the local port to listen on even in a client
@@ -980,6 +1155,8 @@ void Matchmaking::HandleConnecting()
   }
 
   s_test_blocked.clear();
+  s_heard.clear();
+  client->intercept = OnP2PReceive;
   if (const char* env = std::getenv("PPR_TEST_P2P_BLOCK"))
   {
     const std::string blocked = fmt::format(",{},", env);
@@ -994,8 +1171,6 @@ void Matchmaking::HandleConnecting()
         s_test_blocked.push_back(remote_addrs[i]);
       }
     }
-    if (!s_test_blocked.empty())
-      client->intercept = DropTestBlocked;
   }
 
   // --- SlippiNetplayClient::ThreadFunc, connect phase ---
@@ -1115,6 +1290,8 @@ void Matchmaking::HandleConnecting()
           failed_connections.push_back(static_cast<int>(i));
       }
       INFO_LOG_FMT(NETPLAY, "Online connection failed");
+      LogFailedConnect(match, client.get(), servers, remote_addrs, connections,
+                       m_router_changed_port, m_upnp_mapped);
 
       // Which players: by port (a room's slot), for the room's server.
       for (const int i : failed_connections)
@@ -1123,9 +1300,6 @@ void Matchmaking::HandleConnecting()
         if (p < static_cast<int>(match.players.size()))
         {
           match.unreachable_ports.push_back(match.players[p].port);
-          WARN_LOG_FMT(NETPLAY, "[Matchmaking] No connection to {} ({}, P{}) at {}",
-                       match.players[p].display_name, match.players[p].connect_code,
-                       match.players[p].port, match.remotes[i].ToString());
         }
       }
       {
@@ -1181,8 +1355,25 @@ void Matchmaking::HandleConnecting()
     }
   }
 
-  for (const ENetPeer* peer : servers)
+  for (size_t i = 0; i < servers.size(); i++)
+  {
+    const ENetPeer* peer = servers[i];
     match.connected.push_back({IpToString(peer->address.host), peer->address.port});
+    // Which of the peer's addresses worked, and whether its router changed the port on the way.
+    const size_t p = static_cast<int>(i) >= match.local_player_index ? i + 1 : i;
+    if (p < match.players.size())
+    {
+      const std::string& lan = match.players[p].ip_address_lan;
+      const std::string tried = match.remotes[i].ToString();
+      INFO_LOG_FMT(NETPLAY, "[Matchmaking] Connected to P{} {} at {}:{} ({}{})",
+                   match.players[p].port, match.players[p].connect_code,
+                   IpToString(peer->address.host), peer->address.port,
+                   tried == lan ? "LAN" : "internet",
+                   peer->address.port == remote_addrs[i].port ?
+                       "" :
+                       fmt::format("; the server gave port {}", remote_addrs[i].port));
+    }
+  }
   {
     std::lock_guard lk(m_mutex);
     m_match = match;
