@@ -195,3 +195,109 @@ export const SessionEnded = () => (
 export const LaunchError = () => (
   <Frame state={{ builds, running: false, status: null }} error="Dolphin is already open. Close it first." />
 );
+
+/** A room's parts (docs/design/brawl-mods.md §6.5): the same disc and card (green), another SD card
+ * (amber: joinable, downloaded at the join), another disc (red, greyed out). */
+const DISC = "d41e6cba05c2d1a2bb3f4cbb17a8e7f9d6c01a2b";
+const REX_CARD = "5d1a90c3e2f4b6a8c0d2e4f6a8b0c2d4e6f8a0b2c4d6e8f0a2b4c6d8e0f2a4b6";
+const rexBuild: ModBuild = {
+  id: "rex",
+  name: "REX",
+  discPath: "C:/Games/Super Smash Bros. Brawl (USA) (Rev 1).iso",
+  launcherPath: "C:/Games/REX/user/Launcher/REX Netplay Launcher.elf",
+  sdPath: "C:/Games/REX/user/Wii/sd.raw",
+  gameId: "RSBE01",
+  revision: 1,
+  hash: "aa21d0c37aa00000000000000000000000000000000000000000000000000002",
+  parts: { disc: DISC, launcher: "b".repeat(64), sd: true, sdCard: REX_CARD },
+  hashKey: "k",
+};
+
+export const RoomParts = () => (
+  <Frame
+    state={{ builds: [rexBuild, ...builds], running: false, status: null }}
+    publicRooms={{
+      kind: "ready",
+      rooms: [
+        {
+          code: "SAME",
+          build: { hash: rexBuild.hash!, name: "REX", disc: DISC, discLabel: "RSBE01 Rev 1", sd: REX_CARD },
+          hostName: "Keiko",
+          players: 2,
+          open: 4,
+        },
+        {
+          code: "SDSD",
+          build: {
+            hash: "c".repeat(64),
+            name: "REX",
+            disc: DISC,
+            discLabel: "RSBE01 Rev 1",
+            sd: "9e0c7b2a4d6f8e1c3a5b7d9f0e2c4a6b8d0f2e4c6a8b0d2f4e6c8a0b2d4f6e8a",
+          },
+          hostName: "SARA#694",
+          players: 1,
+          open: 4,
+        },
+        {
+          code: "REV2",
+          build: {
+            hash: "d".repeat(64),
+            name: "REX",
+            disc: "7c03aa9e11b2c3d4e5f60718293a4b5c6d7e8f90",
+            discLabel: "RSBE01 Rev 2",
+            sd: REX_CARD,
+          },
+          hostName: "JoeBudson",
+          players: 1,
+          open: 2,
+        },
+      ],
+    }}
+  />
+);
+
+const syncing = (sd_sync: NonNullable<ModRoomStatus["session"]["sd_sync"]>): ModRoomStatus =>
+  room(2, { session: { phase: "joining", sd_sync } });
+
+/** A joiner whose SD card differs from the host's: the download needs its consent. */
+export const SdCardDialog = () => (
+  <Frame
+    state={{
+      builds: [rexBuild],
+      running: true,
+      status: syncing({
+        step: "ask",
+        checked: 1,
+        bytes: 280 * 1024 * 1024,
+        files: 412,
+        names: [
+          "REX_/PF/Fighter/HERO/FitHeroMotionEtc.pac",
+          "REX_/PF/Fighter/NU/FitNuMotion.pac",
+          "REX_/PF/SOUND/STRM/RX_Battlefield.brstm",
+          "REX_/PF/Fighter/PICHU/FitPichu.pac",
+        ],
+        eta_s: 240,
+      }),
+    }}
+  />
+);
+
+export const SdCardDownloading = () => (
+  <Frame
+    state={{
+      builds: [rexBuild],
+      running: true,
+      status: syncing({
+        step: "downloading",
+        checked: 1,
+        bytes: 280 * 1024 * 1024,
+        files: 412,
+        names: [],
+        eta_s: 150,
+        done: 112 * 1024 * 1024,
+        total: 280 * 1024 * 1024,
+      }),
+    }}
+  />
+);
