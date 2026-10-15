@@ -4191,7 +4191,7 @@ void PaceFrame(Core::System& system, bool resim)
 // joiner's own wait, a handshake): the video thread shows the last frame again about 30 times a
 // second, so the overlay keeps drawing (the chat window with a join's progress, OSD messages), as
 // in a paused replay. Before, the chat window froze with the game. Nothing reaches the machine.
-void RedrawWhileWaiting(Clock::duration waited_for)
+void RedrawWhileWaiting(Core::System& system, Clock::duration waited_for)
 {
   static Clock::time_point last;
   const auto now = Clock::now();
@@ -4202,6 +4202,10 @@ void RedrawWhileWaiting(Clock::duration waited_for)
     if (g_presenter)
       g_presenter->RedrawLastFrame();
   });
+  // The event wakes the GPU thread, which then sleeps again only once GpuMaySleep is called. That
+  // is a CoreTiming event (1000 a second of emulated time), and emulated time stands still here:
+  // without this the GPU thread spun for the whole wait (as playback did, bug report #17).
+  system.GetFifo().GpuMaySleep();
 }
 
 Wait WaitForFrames(Core::System& system)
@@ -4296,7 +4300,7 @@ Wait WaitForFrames(Core::System& system)
           EnterEpoch();
       }
     }
-    RedrawWhileWaiting(Clock::now() - since);
+    RedrawWhileWaiting(system, Clock::now() - since);
     waited = true;
     // The lock is let go while sleeping, so status and control requests get through. OnLoopTop
     // holds it exactly once.
