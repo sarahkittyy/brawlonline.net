@@ -186,7 +186,10 @@ describe("SpectateClient", () => {
     await rm(dir, { recursive: true, force: true });
   });
 
-  function make(server: FakeServer, opts: { closeOnEnd?: boolean } = {}) {
+  function make(
+    server: FakeServer,
+    opts: { closeOnEnd?: boolean; play?: (comm: ReplayCommunication) => Promise<void> } = {},
+  ) {
     const comms: ReplayCommunication[] = [];
     let status: ReplayPlaybackStatus | null = null;
     let open = false;
@@ -197,8 +200,9 @@ describe("SpectateClient", () => {
       getToken: async () => "token",
       spectateDir: () => dir,
       play: async (comm) => {
-        open = true;
         comms.push(JSON.parse(JSON.stringify(comm)));
+        await opts.play?.(comm);
+        open = true;
       },
       playbackStatus: async () => status,
       isPlaybackOpen: () => open,
@@ -300,5 +304,49 @@ describe("SpectateClient", () => {
     setStatus({ commandId: comms.at(-1)!.commandId, state: "close" });
     await vi.waitFor(() => expect(closed()).toBe(1), { timeout: 3000 });
     expect(client.getState().status).toBe("idle");
+  });
+
+  it("says why the playback Dolphin can't open, and tries no more (bug report #19)", async () => {
+    const server = new FakeServer();
+    const why = "Another Dolphin is using the game files. Close it, then try again.";
+    const { client, comms } = make(server, {
+      play: async () => {
+        throw new Error(why);
+      },
+    });
+    const watching = client.watch(ME, STREAM);
+    await connected(server, 1);
+    server.send({ type: "welcome", stream: server.list.games[0], you: ME, chat: [] });
+    expect(await watching).toEqual({ ok: false, message: why });
+    expect(client.getState()).toMatchObject({ status: "error", message: why });
+    expect(comms).toHaveLength(1);
+  });
+
+  it("a watch another click replaced never opens or switches the playback Dolphin (bug report #19)", async () => {
+    const server = new FakeServer();
+    const OTHER = "bbbbbbbbbbbb";
+    server.list.games.push(entry(OTHER, "2026-10-14T01:05:00Z"));
+    let release!: () => void;
+    const firstOpen = new Promise<void>((resolve) => (release = resolve));
+    const { client, comms } = make(server, { play: () => (comms.length === 1 ? firstOpen : Promise.resolve()) });
+
+    // The first game's Dolphin is still opening (copying the SD card) when its game event comes.
+    const first = client.watch(ME, STREAM);
+    await connected(server, 1);
+    server.send({ type: "welcome", stream: server.list.games[0], you: ME, chat: [] });
+    await vi.waitFor(() => expect(comms).toHaveLength(1));
+    server.send({ type: "game", game: 2, number: 2, uid: UID });
+
+    // Another game clicked meanwhile: only it may play once the first start is done.
+    const second = client.watch(ME, OTHER);
+    await connected(server, 2);
+    server.send({ type: "welcome", stream: server.list.games[1], you: ME, chat: [] });
+    expect(await second).toEqual({ ok: true });
+    release();
+    expect(await first).toEqual({ ok: true });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(comms.map((c) => c.commandId!.split("-")[1])).toEqual([STREAM, OTHER]);
+    expect(client.getState()).toMatchObject({ status: "watching", stream: OTHER });
+    client.stop();
   });
 });

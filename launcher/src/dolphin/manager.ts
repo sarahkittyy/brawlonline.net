@@ -2,6 +2,7 @@ import { Preconditions } from "@common/preconditions";
 import { DOLPHIN_ONLINE_DIR, PRODUCT_NAME } from "@common/product";
 import { readTestMode } from "@common/test_mode";
 import type { SettingsManager } from "@settings/settings_manager";
+import { Mutex } from "async-mutex";
 import type { MessageBoxOptions } from "electron";
 import { app, BrowserWindow, dialog } from "electron";
 import electronLog from "electron-log";
@@ -84,6 +85,13 @@ export class DolphinManager {
   private shouldSendProgress = createProgressThrottle(PROGRESS_INTERVAL_MS);
   /** Runs before a new Dolphin starts and throws to stop it (the launcher's update check). */
   private launchGate: () => Promise<void> = async () => undefined;
+  /**
+   * Play and the playback Dolphin start one at a time: both may copy or patch the SD card copy
+   * (pponline-sd/sd.raw). Bug report #19 (2026-10-15): Spectate clicked again during the first
+   * start's 2 GB copy started a second copy, which deleted the first one's `.partial`; both failed,
+   * every time.
+   */
+  private sdCardStarts = new Mutex();
   events = Observable.from(this.eventSubject);
 
   constructor(private settingsManager: SettingsManager) {}
@@ -248,6 +256,11 @@ export class DolphinManager {
   }
 
   async launchPlaybackDolphin(id: string, replayComm: ReplayCommunication): Promise<void> {
+    // A second request waits, then finds the Dolphin the first one opened.
+    await this.sdCardStarts.runExclusive(() => this._launchPlaybackDolphin(id, replayComm));
+  }
+
+  private async _launchPlaybackDolphin(id: string, replayComm: ReplayCommunication): Promise<void> {
     const playbackInstallation = this.getInstallation(DolphinLaunchType.PLAYBACK);
     this._assertNotMoving();
     const netplayInstallation = this.getInstallation(DolphinLaunchType.NETPLAY);
@@ -343,6 +356,10 @@ export class DolphinManager {
    * booted game reads, and closing a Dolphin that never booted takes it back.
    */
   async launchNetplayDolphin(opts: { bootGame?: boolean } = {}) {
+    await this.sdCardStarts.runExclusive(() => this._launchNetplayDolphin(opts));
+  }
+
+  private async _launchNetplayDolphin(opts: { bootGame?: boolean }) {
     // An open Dolphin without a game closes first (closeNetplayIfIdle).
     if (this.netplayDolphinInstance && !(await this.closeNetplayIfIdle())) {
       throw new Error("Dolphin is already open with a game. Close it first.");

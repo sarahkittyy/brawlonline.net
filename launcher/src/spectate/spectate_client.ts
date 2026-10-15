@@ -111,6 +111,8 @@ export type Watch = {
   over: boolean;
   /** Playback asked to be closed, or was closed. */
   done: boolean;
+  /** Why the playback Dolphin could not be opened (the watch then stopped). */
+  failed?: string;
   /** The first connection's outcome, for watch(). */
   first?: (r: WatchResult) => void;
   /** Writes to the files and the comm file, one at a time. */
@@ -237,12 +239,17 @@ export class SpectateClient {
     });
     void this.loop(w);
     const r = await result;
-    if (r.ok) {
-      // The playback Dolphin starts (or switches) now, while the game's first chunks arrive: it
-      // waits for them.
-      this.enqueue(w, () => this.writeComm(w));
-      this.watchStatus();
+    if (!r.ok) {
+      return r;
     }
+    // The playback Dolphin starts (or switches) now, while the game's first chunks arrive: it
+    // waits for them. The click waits for it too, so a Dolphin that can't open is said there
+    // (bug report #19: the tab said Watching while every start failed).
+    await new Promise<void>((resolve) => this.enqueue(w, () => this.writeComm(w).finally(resolve)));
+    if (w.failed !== undefined) {
+      return { ok: false, message: w.failed };
+    }
+    this.watchStatus();
     return r;
   }
 
@@ -287,10 +294,25 @@ export class SpectateClient {
   }
 
   private async writeComm(w: Watch) {
-    if (w.done || (this.playbackSeen && !this.deps.isPlaybackOpen())) {
+    if (w.done || this.current !== w) {
+      return; // stopped, or another stream is watched: it must not open or switch playback
+    }
+    if (this.playbackSeen && !this.deps.isPlaybackOpen()) {
       return; // closed: a comm write would open it again
     }
-    await this.deps.play(this.comm(w));
+    try {
+      await this.deps.play(this.comm(w));
+    } catch (err) {
+      // Stop: each later event would only try to open it again.
+      const message = err instanceof Error ? err.message : String(err);
+      log.warn(`spectate: could not open the playback Dolphin: ${message}`);
+      if (this.current === w) {
+        // Not for a watch another click already replaced: that click says how its own went.
+        w.failed = message;
+        this.stopWatching();
+        this.update({ status: "error", message });
+      }
+    }
   }
 
   // ------------------------------------------------------------- the watch stream
