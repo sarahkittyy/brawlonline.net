@@ -77,7 +77,7 @@ export function pickAutoPlay(list: LiveList, skip: string | null, uid: string): 
     (g) => g.id !== skip && g.game.state !== "over" && !g.players.some((p) => p.uid === uid),
   );
   const between = (g: LiveGameEntry) => (g.game.state === "between" ? 1 : 0);
-  candidates.sort((a, b) => between(a) - between(b) || Date.parse(b.startedAt) - Date.parse(a.startedAt));
+  candidates.sort((a, b) => between(a) - between(b) || Date.parse(b.game.startedAt) - Date.parse(a.game.startedAt));
   return candidates[0] ?? null;
 }
 

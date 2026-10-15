@@ -61,7 +61,7 @@ describe("SpectateView", () => {
   it("lists the live games newest first, with who plays, the game, its time and how many watch", () => {
     const { container } = view({ kind: "ready", games });
     const rows = Array.from(container.querySelectorAll("button[data-stream]"));
-    expect(rows.map((r) => r.getAttribute("data-stream"))).toEqual(["bbbbbbbbbbbb", "cccccccccccc", "aaaaaaaaaaaa"]);
+    expect(rows.map((r) => r.getAttribute("data-stream"))).toEqual(["bbbbbbbbbbbb", "aaaaaaaaaaaa", "cccccccccccc"]);
     const text = (id: string) => container.querySelector(`[data-stream="${id}"]`)!.textContent!;
     expect(text("aaaaaaaaaaaa")).toContain("ann");
     expect(text("aaaaaaaaaaaa")).toContain("bob");
@@ -73,6 +73,25 @@ describe("SpectateView", () => {
     expect(text("bbbbbbbbbbbb")).toContain("Game 2 · 1-0");
     expect(text("bbbbbbbbbbbb")).toContain("1:05");
     expect(text("cccccccccccc")).toContain(Messages.betweenGames());
+  });
+
+  it("sorts by the game clock, not by when the set began", () => {
+    // Production 2026-10-15: rows by set start showed clocks of 1:26, 2:27, 0:53, 0:37 ... 7:19.
+    const later = game("dddddddddddd", "2026-10-14T01:50:00Z", {
+      game: { number: 3, place: 3, startedAt: "2026-10-14T02:09:30Z", stageId: 0x02, state: "playing" },
+    });
+    const over = game("eeeeeeeeeeee", "2026-10-14T02:09:50Z", {
+      game: { number: 1, place: 1, startedAt: "2026-10-14T02:09:50Z", stageId: 0x02, state: "over" },
+    });
+    const { container } = view({ kind: "ready", games: [over, ...games, later] });
+    const rows = Array.from(container.querySelectorAll("button[data-stream]"));
+    expect(rows.map((r) => r.getAttribute("data-stream"))).toEqual([
+      "dddddddddddd",
+      "bbbbbbbbbbbb",
+      "aaaaaaaaaaaa",
+      "cccccccccccc",
+      "eeeeeeeeeeee",
+    ]);
   });
 
   it("watches a game on a click, but not the player's own", () => {
@@ -117,8 +136,8 @@ describe("SpectateView", () => {
     const rows = Array.from(container.querySelectorAll("button[data-stream]"));
     expect(rows.map((r) => r.getAttribute("data-stream"))).toEqual([
       "bbbbbbbbbbbb",
-      "cccccccccccc",
       "aaaaaaaaaaaa",
+      "cccccccccccc",
       "dddddddddddd",
     ]);
     const time = container.querySelector('[data-stream="dddddddddddd"] [data-testid="game-time"]')!;

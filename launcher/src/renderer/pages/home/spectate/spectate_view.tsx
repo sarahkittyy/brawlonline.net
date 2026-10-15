@@ -45,12 +45,13 @@ export type SpectateViewProps = {
 };
 
 /**
- * Newest set first (docs/design/spectating.md §6.1): a set's next game doesn't move its row. Ended streams go to the
- * bottom (still newest first among them): they can still be watched from the server for a while.
+ * By how long the game being played has been going, as each row's clock shows it, newest first (the user,
+ * 2026-10-15: sorting by the set's start left the clocks out of order). Games between a set's games come after
+ * the games being played, and ended streams at the bottom (they can still be watched from the server for a while).
  */
 export function sortLiveGames(games: readonly LiveGameEntry[]): LiveGameEntry[] {
-  const ended = (g: LiveGameEntry) => (g.game.state === "over" ? 1 : 0);
-  return [...games].sort((a, b) => ended(a) - ended(b) || Date.parse(b.startedAt) - Date.parse(a.startedAt));
+  const group = (g: LiveGameEntry) => (g.game.state === "playing" ? 0 : g.game.state === "between" ? 1 : 2);
+  return [...games].sort((a, b) => group(a) - group(b) || Date.parse(b.game.startedAt) - Date.parse(a.game.startedAt));
 }
 
 /** "4:05": how long the current game has been going. */
