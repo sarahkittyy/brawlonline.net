@@ -79,6 +79,7 @@ const props = (state: ViewState | null, extra: Partial<ModsViewProps> = {}): Mod
   onRefreshControllers: vi.fn(),
   onAddBuild: vi.fn(),
   onAddFolder: vi.fn(),
+  onEditBuild: vi.fn(),
   onRemoveBuild: vi.fn(),
   onHost: vi.fn(),
   onJoin: vi.fn(),
@@ -114,14 +115,24 @@ describe("ModsView", () => {
     expect(p.onJoinCode).toHaveBeenCalledWith("KFQB");
   });
 
+  it("edits a build from its pencil, by the trash can", () => {
+    const p = props({ builds: [minus], running: false, status: null });
+    const { getByLabelText } = render(<ModsView {...p} />);
+    fireEvent.click(getByLabelText(Messages.edit()));
+    expect(p.onEditBuild).toHaveBeenCalledWith(minus);
+    fireEvent.click(getByLabelText(Messages.remove()));
+    expect(p.onRemoveBuild).toHaveBeenCalledWith(minus);
+  });
+
   it("shows hashing progress and keeps the build's buttons off meanwhile", () => {
     const p = props(
       { builds: [{ ...minus, hash: null }], running: false, status: null },
       { hashProgress: { minus: 0.42 } },
     );
-    const { getByText } = render(<ModsView {...p} />);
+    const { getByText, getByLabelText } = render(<ModsView {...p} />);
     expect(getByText(Messages.checking(42))).toBeTruthy();
     expect((getByText(Messages.host()).closest("button") as HTMLButtonElement).disabled).toBe(true);
+    expect((getByLabelText(Messages.edit()) as HTMLButtonElement).disabled).toBe(true);
   });
 
   it("shows a check whose share is not known (DolphinTool on a compressed disc) without a percentage", () => {

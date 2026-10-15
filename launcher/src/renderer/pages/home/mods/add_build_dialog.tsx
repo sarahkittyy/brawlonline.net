@@ -17,18 +17,18 @@ const DISC_FILTERS = [
 const DOL_FILTERS = [{ name: "Launchers", extensions: ["dol", "elf"] }];
 const SD_FILTERS = [{ name: "SD card images", extensions: ["raw", "img"] }];
 
-/** What the dialog opens with: a game (a disc), or a mod found in its Dolphin folder (on the Brawl
- * disc set in Settings). */
+/** What the dialog opens with: a game (a disc), a mod found in its Dolphin folder (on the Brawl
+ * disc set in Settings), or a game in the list being edited (its pencil). */
 export type AddBuildInitial = {
-  kind: "game" | "mod";
+  kind: "game" | "mod" | "edit";
   name: string;
   discPath: string | null;
   launcherPath: string | null;
   sdPath: string | null;
 };
 
-/** "Add a game" / "Add a mod" (docs/design/brawl-mods.md §8): a name, the disc, an optional
- * launcher and SD card. */
+/** "Add a game" / "Add a mod" / "Edit game" (docs/design/brawl-mods.md §8): a name, the disc, an
+ * optional launcher and SD card. */
 export const AddBuildDialog = ({
   initial,
   onClose,
@@ -77,7 +77,13 @@ export const AddBuildDialog = ({
 
   return (
     <Dialog open={open} onClose={onClose} fullWidth={true} maxWidth="sm">
-      <DialogTitle>{initial?.kind === "mod" ? Messages.addModTitle() : Messages.addBuildTitle()}</DialogTitle>
+      <DialogTitle>
+        {initial?.kind === "edit"
+          ? Messages.editBuildTitle()
+          : initial?.kind === "mod"
+          ? Messages.addModTitle()
+          : Messages.addBuildTitle()}
+      </DialogTitle>
       <DialogContent sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 1 }}>
         <TextField
           label={Messages.name()}
@@ -120,7 +126,7 @@ export const AddBuildDialog = ({
       <DialogActions>
         <Button onClick={onClose}>{Messages.cancel()}</Button>
         <Button variant="contained" disabled={!discPath || adding} onClick={() => void add()}>
-          {Messages.add()}
+          {initial?.kind === "edit" ? Messages.save() : Messages.add()}
         </Button>
       </DialogActions>
     </Dialog>

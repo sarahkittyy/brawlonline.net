@@ -15,6 +15,7 @@ import ContentCopyRoundedIcon from "@mui/icons-material/ContentCopyRounded";
 import CreateNewFolderOutlinedIcon from "@mui/icons-material/CreateNewFolderOutlined";
 import DeleteOutlineRoundedIcon from "@mui/icons-material/DeleteOutlineRounded";
 import DragIndicatorRoundedIcon from "@mui/icons-material/DragIndicatorRounded";
+import EditOutlinedIcon from "@mui/icons-material/EditOutlined";
 import PersonOutlineIcon from "@mui/icons-material/PersonOutline";
 import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
@@ -55,6 +56,7 @@ export type ModsViewProps = {
   onRefreshControllers: () => void;
   onAddBuild: () => void;
   onAddFolder: () => void;
+  onEditBuild: (build: ModBuild) => void;
   onRemoveBuild: (build: ModBuild) => void;
   onHost: (build: ModBuild, isPublic: boolean) => void;
   onJoin: (build: ModBuild, code: string) => void;
@@ -173,6 +175,7 @@ export const ModsView = (props: ModsViewProps) => {
                     progress={props.hashProgress[build.id]}
                     starting={props.startingBuildId === build.id}
                     disabled={!!state.running || props.startingBuildId !== null}
+                    onEdit={() => props.onEditBuild(build)}
                     onRemove={() => props.onRemoveBuild(build)}
                     onHost={(isPublic) => props.onHost(build, isPublic)}
                   />
@@ -338,6 +341,7 @@ const BuildRow = ({
   progress,
   starting,
   disabled,
+  onEdit,
   onRemove,
   onHost,
 }: {
@@ -346,6 +350,7 @@ const BuildRow = ({
   progress: number | null | undefined;
   starting: boolean;
   disabled: boolean;
+  onEdit: () => void;
   onRemove: () => void;
   onHost: (isPublic: boolean) => void;
 }) => {
@@ -368,6 +373,13 @@ const BuildRow = ({
           {build.gameId && <span className={styles.gameId}>{build.gameId}</span>}
           {Messages.parts(fileName(build.discPath)!, fileName(build.launcherPath), fileName(build.sdPath))}
         </div>
+        <Tooltip title={Messages.editTooltip()}>
+          <span>
+            <IconButton size="small" aria-label={Messages.edit()} onClick={onEdit} disabled={disabled || hashing}>
+              <EditOutlinedIcon fontSize="small" />
+            </IconButton>
+          </span>
+        </Tooltip>
         <Tooltip title={Messages.removeTooltip()}>
           <span>
             <IconButton size="small" aria-label={Messages.remove()} onClick={onRemove} disabled={disabled || hashing}>

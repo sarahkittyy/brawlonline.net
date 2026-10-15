@@ -130,6 +130,7 @@ const Frame = ({ state, ...props }: Omit<Partial<ModsViewProps>, "state"> & { st
       onRefreshControllers={noop}
       onAddBuild={noop}
       onAddFolder={noop}
+      onEditBuild={noop}
       onRemoveBuild={noop}
       onHost={noop}
       onJoin={noop}

@@ -13,6 +13,8 @@ export const ModsMessages = {
   checking: (percent: number) => `Checking files… ${percent}%`,
   checkingDisc: () => "Checking the disc…",
   hashFailed: (name: string, error: string) => `Couldn't check ${name}: ${error}`,
+  edit: () => "Edit",
+  editTooltip: () => "Change this game's name or files.",
   remove: () => "Remove",
   removeTooltip: () => "Remove this game from the list (your files stay where they are).",
   host: () => "Host",
@@ -63,6 +65,8 @@ export const ModsMessages = {
   // Adding a build.
   addBuildTitle: () => "Add a game",
   addModTitle: () => "Add a mod",
+  editBuildTitle: () => "Edit game",
+  save: () => "Save",
   name: () => "Name",
   namePlaceholder: () => "Leave empty to use the game's name",
   disc: () => "Disc image",

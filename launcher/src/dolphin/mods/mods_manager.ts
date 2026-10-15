@@ -244,16 +244,14 @@ export class ModsManager {
     return findModParts(folder);
   }
 
+  /** The pencil on a game (its name, disc, launcher or SD card). Changed files are hashed again in
+   * the background, as a new game is. */
   async updateBuild(id: string, input: Partial<ModBuildInput>): Promise<ModBuild> {
     const current = this.findBuild(id);
     const next: ModBuild = { ...current };
-    if (input.name !== undefined) {
-      const named = cleanName(input.name, "");
-      next.name = named || autoName(current);
-      next.autoName = !named;
-    }
+    let filesChanged = false;
     for (const key of ["discPath", "launcherPath", "sdPath"] as const) {
-      if (input[key] !== undefined && input[key] !== current[key]) {
+      if (input[key] !== undefined && (input[key] || null) !== (current[key] ?? null)) {
         await assertFile(
           input[key] ?? null,
           key === "discPath" ? "disc image" : key === "sdPath" ? "SD card image" : "launcher",
@@ -262,10 +260,27 @@ export class ModsManager {
         next.hash = null;
         next.parts = null;
         next.hashKey = null;
+        filesChanged = true;
       }
     }
     if (!next.discPath) {
       throw new Error("A build needs a disc image.");
+    }
+    if (filesChanged) {
+      // A hash running now is of the old files, and would be taken for the new ones' (hashBuild).
+      if (this.hashing.has(id)) {
+        throw new Error("This game is still being checked. Change its files when that is done.");
+      }
+      const same = this.builds().find(
+        (b) =>
+          b.id !== id &&
+          b.discPath === next.discPath &&
+          (b.launcherPath ?? null) === (next.launcherPath ?? null) &&
+          (b.sdPath ?? null) === (next.sdPath ?? null),
+      );
+      if (same) {
+        throw new Error(`You already have this game: ${same.name}.`);
+      }
     }
     if (next.discPath !== current.discPath) {
       const info = await readDiscInfo(await this.toolPath(), next.discPath);
@@ -273,7 +288,23 @@ export class ModsManager {
       next.gameTitle = info.title;
       next.platform = info.platform;
     }
+    // The name after the files: an empty one (or an automatic one kept) follows the new files.
+    if (input.name !== undefined) {
+      const named = cleanName(input.name, "");
+      next.name = named || autoName(next);
+      next.autoName = !named;
+    } else if (next.autoName) {
+      next.name = autoName(next);
+    }
     await this.saveBuilds(this.builds().map((b) => (b.id === id ? next : b)));
+    if (filesChanged) {
+      void this.hashBuild(id).catch((err) => {
+        log.warn(`hashing ${next.name}: ${err}`);
+        if (this.builds().some((b) => b.id === id)) {
+          this.emit({ type: "hashFailed", name: next.name, error: err instanceof Error ? err.message : String(err) });
+        }
+      });
+    }
     return next;
   }
 

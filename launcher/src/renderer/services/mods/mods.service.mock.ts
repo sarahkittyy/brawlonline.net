@@ -99,7 +99,10 @@ class MockModsClient implements ModsService {
   }
 
   async updateBuild(id: string, input: Partial<ModBuildInput>) {
-    this.builds = this.builds.map((b) => (b.id === id ? { ...b, ...input } : b));
+    // An empty name goes back to the automatic one (here: the one it had).
+    this.builds = this.builds.map((b) =>
+      b.id === id ? { ...b, ...input, name: input.name || b.name, autoName: input.name === "" || b.autoName } : b,
+    );
     this.emit();
     return this.builds.find((b) => b.id === id)!;
   }

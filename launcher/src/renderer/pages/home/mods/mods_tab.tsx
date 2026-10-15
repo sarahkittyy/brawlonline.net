@@ -42,8 +42,10 @@ export const ModsTab = React.memo(function ModsTab() {
   const [hashProgress, setHashProgress] = useState<Record<string, number | null>>({});
   const [startingBuildId, setStartingBuildId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  // The add dialog: closed, a game (a disc), or a mod (found in a folder, on the Brawl disc).
+  // The add dialog: closed, a game (a disc), a mod (found in a folder, on the Brawl disc), or a
+  // game being edited (editingId).
   const [adding, setAdding] = useState<AddBuildInitial | null>(null);
+  const [editingId, setEditingId] = useState<string | null>(null);
   const { uid, query } = useRoomList();
   // A room whose game the player does not have (a code typed in, or a public room).
   const [missing, setMissing] = useState<{ name: string; hash: string } | null>(null);
@@ -146,7 +148,11 @@ export const ModsTab = React.memo(function ModsTab() {
 
   const onAdd = async (input: ModBuildInput) => {
     try {
-      await modsService.addBuild(input);
+      if (editingId) {
+        await modsService.updateBuild(editingId, input);
+      } else {
+        await modsService.addBuild(input);
+      }
       setAdding(null);
     } catch (err) {
       showError(err);
@@ -161,6 +167,7 @@ export const ModsTab = React.memo(function ModsTab() {
     }
     try {
       const parts = await modsService.inspectFolder(folder);
+      setEditingId(null);
       setAdding({
         kind: "mod",
         name: parts.name,
@@ -189,7 +196,21 @@ export const ModsTab = React.memo(function ModsTab() {
         onControllerChange={(controller) => void modsService.setController(controller).catch(showError)}
         onConfigureControllers={() => void modsService.configureControllers().catch(showError)}
         onRefreshControllers={() => void modsService.refreshControllers().catch(() => undefined)}
-        onAddBuild={() => setAdding({ kind: "game", name: "", discPath: null, launcherPath: null, sdPath: null })}
+        onAddBuild={() => {
+          setEditingId(null);
+          setAdding({ kind: "game", name: "", discPath: null, launcherPath: null, sdPath: null });
+        }}
+        onEditBuild={(build) => {
+          setEditingId(build.id);
+          // A name the launcher picked shows empty, so it keeps following the game's files.
+          setAdding({
+            kind: "edit",
+            name: build.autoName ? "" : build.name,
+            discPath: build.discPath,
+            launcherPath: build.launcherPath ?? null,
+            sdPath: build.sdPath ?? null,
+          });
+        }}
         onAddFolder={() => void onAddFolder()}
         onRemoveBuild={(build) => void modsService.removeBuild(build.id).catch(showError)}
         onHost={(build, isPublic) => void start(build, () => modsService.host({ buildId: build.id, public: isPublic }))}
