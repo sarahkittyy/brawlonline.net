@@ -2196,6 +2196,10 @@ void TextureCacheBase::CopyRenderTargetToTexture(
   bool copy_to_ram =
       !(is_xfb_copy ? g_ActiveConfig.bSkipXFBCopyToRam : g_ActiveConfig.bSkipEFBCopyToRam) ||
       !copy_to_vram;
+  // A whole-machine session: never into guest RAM from this thread (PresentStats.h). Every real
+  // backend keeps the copy in VRAM; one that cannot (Null, Software) has it nowhere.
+  if (Rollback::PresentStats::CopiesLeaveGuestRAM())
+    copy_to_ram = false;
 
   // tex_w and tex_h are the native size of the texture in the GC memory.
   // The size scaled_* represents the emulated texture. Those differ
@@ -2429,7 +2433,7 @@ void TextureCacheBase::CopyRenderTargetToTexture(
       }
     }
   }
-  else
+  else if (!Rollback::PresentStats::CopiesLeaveGuestRAM())
   {
     if (is_xfb_copy)
     {

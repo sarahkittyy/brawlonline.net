@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <array>
 #include <atomic>
 #include <bitset>
 #include <cstdint>
@@ -71,6 +72,21 @@ public:
   // The granules LastSaveChecksum covers: (physical address, CRC32 of the 64 bytes), for finding
   // what differs between two machines whose checksums differ (diagnostics).
   std::vector<std::pair<u32, u32>> LastSaveDigest() const;
+  // Diagnostics (Machine's PPR_MACHINE_DIGESTS): what the last save's SaveChecksumWithSlice was
+  // made of, to tell apart two machines whose checksums differ: memory that differs, or the same
+  // memory counted differently.
+  struct ChecksumParts
+  {
+    // The granules the save found changed: physical address, CRC32 of the 64 bytes, and 0 counted,
+    // 1 skipped as GPU-written, 2 skipped as an excluded region.
+    std::vector<std::array<u32, 3>> changed;
+    u32 change_crc = 0;  // LastSaveChecksum
+    u32 slice_first = 0;
+    u32 slice_crc = 0;           // the slice's counted bytes alone
+    std::vector<u32> slice_gpu;  // the slice's granules skipped as GPU-written
+  };
+  void SetCollectChecksumParts(bool on) { m_collect_parts = on; }
+  const ChecksumParts& LastChecksumParts() const { return m_parts; }
   // Whole-machine snapshots exclude Brawl's framebuffer region (Init). Other games: nothing.
   void SetBrawlExclusions(bool brawl);
 
@@ -242,6 +258,8 @@ public:
   std::unique_ptr<uint8_t[]> m_shadow_mem2;
   bool m_shadow_valid = false;
   u32 m_last_change_crc = 0;
+  bool m_collect_parts = false;
+  mutable ChecksumParts m_parts;
   void UpdateShadowAfterSave(int slot);
 
   // The oldest slot's deltas being merged into m_base_snapshot (kicked by SaveFrame). Every reader

@@ -474,6 +474,21 @@ std::FILE* GpuRamWriteLog()
 }
 }  // namespace
 
+namespace
+{
+std::atomic<bool> s_copies_leave_guest_ram{false};
+}  // namespace
+
+void SetCopiesLeaveGuestRAM(bool on)
+{
+  s_copies_leave_guest_ram.store(on, std::memory_order_relaxed);
+}
+
+bool CopiesLeaveGuestRAM()
+{
+  return s_copies_leave_guest_ram.load(std::memory_order_relaxed);
+}
+
 void OnGpuRamWrite(GpuRamWriteKind kind, u32 address, u32 size)
 {
   if (kind != GpuRamWriteKind::EFBCopyDeferred)

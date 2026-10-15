@@ -154,6 +154,7 @@ struct CachedInterpreter::HLEFunctionOperands
   Core::System& system;
   u32 current_pc;
   u32 hook_index;
+  u32 downcount;  // the cycles of the block's instructions before the hook (not its own)
 };
 
 struct CachedInterpreter::WriteBrokenBlockNPCOperands

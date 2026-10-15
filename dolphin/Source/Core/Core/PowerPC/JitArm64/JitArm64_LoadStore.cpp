@@ -712,7 +712,9 @@ void JitArm64::dcbx(UGeckoInstruction inst)
   // - dcbx rX
   // - addi rX,rX,32
   // - bdnz+ -8
-  const bool make_loop = a == 0 && b != 0 && CanMergeNextInstructions(2) &&
+  // Not where two machines must agree on time: as Jit64::dcbx.
+  const bool make_loop = !Core::WantsDeterminism() && a == 0 && b != 0 &&
+                         CanMergeNextInstructions(2) &&
                          (js.op[1].inst.hex & 0xfc00'ffff) == 0x38000020 &&
                          js.op[1].inst.RA_6 == b && js.op[1].inst.RD_2 == b &&
                          js.op[2].inst.hex == 0x4200fff8;

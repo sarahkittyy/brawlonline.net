@@ -104,6 +104,13 @@ enum class GpuRamWriteKind
   Fill,
 };
 void OnGpuRamWrite(GpuRamWriteKind kind, u32 address, u32 size);
+// A whole-machine session (Machine::Arm to Stop): EFB and XFB copies never write guest RAM. A copy
+// kept in VRAM otherwise has its destination filled (zeros; fuchsia for an XFB), and a backend that
+// cannot keep it in VRAM (Null) writes the copy itself, both from the video thread whenever it gets
+// to the copy: in dual core a game that read that memory found the write on one machine and not
+// yet on the other, and the two machines ran apart (docs/design/brawl-mods.md §6.6).
+void SetCopiesLeaveGuestRAM(bool on);
+bool CopiesLeaveGuestRAM();
 // Video thread: an EFB copy readback (host GPU -> guest RAM) took `us` microseconds.
 void OnGpuReadback(u64 us);
 
