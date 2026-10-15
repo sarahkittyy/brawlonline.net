@@ -167,6 +167,18 @@ def run(exe, out, replay, video, made) -> int:
             samples.append({"phase": phase, "cpu": round(100 * (c1 - c0) / (t1 - t0), 1),
                             **{k: s.get(k) for k in ("shown", "buffering", "paused", "at_end", "live_edge", "complete")}})
             print(samples[-1], flush=True)
+        # While it stands still, only the redraws (Presenter::RedrawLastFrame, about 30 a second,
+        # which also draw the overlay: the seek bar, "Buffering...", chat) present a frame, and a
+        # harness screenshot is written at the next present. So each one coming within a redraw
+        # interval says the redraws go on although the GPU thread sleeps between them.
+        shots = []
+        for i in range(10):
+            t0 = time.time()
+            v.client.screenshot(out / "shots" / f"{phase}-{i}.png")
+            shots.append(round((time.time() - t0) * 1000))
+            time.sleep(0.2)
+        result[f"{phase}_screenshot_ms"] = shots
+        print(phase, "screenshots (ms):", shots, flush=True)
     result["samples"] = samples
     buf = [x["cpu"] for x in samples if x["phase"] == "run" and x["buffering"]]
     pau = [x["cpu"] for x in samples if x["phase"] == "pause"][3:]
