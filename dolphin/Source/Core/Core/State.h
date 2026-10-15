@@ -103,7 +103,8 @@ void SaveAs(Core::System& system, std::string filename);
 void WaitForPendingSaves();
 void LoadAs(Core::System& system, std::string filename);
 
-bool LoadFromBuffer(Core::System& system, std::span<u8> buffer);
+// On failure `failure`, if given, says where: after which marker, at which byte of the buffer.
+bool LoadFromBuffer(Core::System& system, std::span<u8> buffer, std::string* failure = nullptr);
 std::size_t SaveToBuffer(Core::System& system, Common::UniqueBuffer<u8>& buffer);
 
 void LoadLastSaved(Core::System& system, int i = 1);

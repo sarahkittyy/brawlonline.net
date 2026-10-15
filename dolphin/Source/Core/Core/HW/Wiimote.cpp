@@ -57,7 +57,15 @@ void OnSourceChanged(unsigned int index, WiimoteSource source)
 void RefreshConfig()
 {
   for (int i = 0; i < MAX_BBMOTES; ++i)
-    OnSourceChanged(i, Config::Get(Config::GetInfoForWiimoteSource(i)));
+  {
+    // A whole-machine session keeps its Wii Remotes emulated and no balance board, the same on
+    // every machine (a machine image of other sources does not load: DoState), whatever is
+    // written over the session's layer. The balance board's source was the player's own.
+    const WiimoteSource source = !Machine::IsArmed() ?
+                                     Config::Get(Config::GetInfoForWiimoteSource(i)) :
+                                     (i < MAX_WIIMOTES ? WiimoteSource::Emulated : WiimoteSource::None);
+    OnSourceChanged(i, source);
+  }
 }
 
 }  // namespace

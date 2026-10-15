@@ -21,6 +21,7 @@
 #include <optional>
 #include <set>
 #include <string>
+#include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
@@ -49,6 +50,20 @@ private:
   u8** m_ptr_current;
   u8* m_ptr_end;
   Mode m_mode;
+  // Where a read first failed: the last marker passed before it and the stream position (a state
+  // from another machine, a whole-machine session's image, otherwise fails without a word).
+  std::string_view m_last_marker;
+  std::string_view m_failed_after;
+  const u8* m_failed_at = nullptr;
+
+  void NoteReadFailure()
+  {
+    if (m_mode == Mode::Read && !m_failed_at)
+    {
+      m_failed_after = m_last_marker;
+      m_failed_at = *m_ptr_current;
+    }
+  }
 
 public:
   PointerWrap(u8** ptr, size_t size, Mode mode)
@@ -56,7 +71,11 @@ public:
   {
   }
 
-  void SetMeasureMode() { m_mode = Mode::Measure; }
+  void SetMeasureMode()
+  {
+    NoteReadFailure();
+    m_mode = Mode::Measure;
+  }
 
   // Read mode: a count read from the stream may not ask for more elements than the bytes left can
   // hold (each takes at least `min_bytes`); otherwise the load fails here and this returns false,
@@ -74,7 +93,14 @@ public:
     }
     return true;
   }
-  void SetVerifyMode() { m_mode = Mode::Verify; }
+  void SetVerifyMode()
+  {
+    NoteReadFailure();
+    m_mode = Mode::Verify;
+  }
+  // A failed read: the last marker before the failure ("" before the first) and the position.
+  const u8* GetReadFailurePosition() const { return m_failed_at; }
+  std::string_view GetReadFailureMarker() const { return m_failed_after; }
   bool IsReadMode() const { return m_mode == Mode::Read; }
   bool IsWriteMode() const { return m_mode == Mode::Write; }
   bool IsMeasureMode() const { return m_mode == Mode::Measure; }
@@ -328,7 +354,8 @@ public:
     }
   }
 
-  void DoMarker(const std::string& prevName, u32 arbitraryNumber = 0x42)
+  // `prevName` is a string literal (kept as the last marker passed).
+  void DoMarker(std::string_view prevName, u32 arbitraryNumber = 0x42)
   {
     u32 cookie = arbitraryNumber;
     Do(cookie);
@@ -340,7 +367,9 @@ public:
           "savestate load...",
           prevName, cookie, cookie, arbitraryNumber, arbitraryNumber);
       SetMeasureMode();
+      return;
     }
+    m_last_marker = prevName;
   }
 
   template <typename T, typename Functor>

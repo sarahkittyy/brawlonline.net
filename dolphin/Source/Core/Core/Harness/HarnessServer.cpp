@@ -1646,7 +1646,11 @@ Result CmdConfigSet(const Args& args)
   if (!system)
     Fail("unknown config system " + GetString(args, "system"));
   const Config::Location loc{*system, GetString(args, "section"), GetString(args, "key")};
-  if (Config::GetLayer(Config::LayerType::Base)->Set(loc, GetString(args, "value")))
+  // "layer": "current" writes the running game's layer, over the netplay or session layer, as
+  // Dolphin's settings windows do while a game runs (Config::SetBaseOrCurrent).
+  const auto layer = GetString(args, "layer", "base") == "current" ? Config::LayerType::CurrentRun :
+                                                                      Config::LayerType::Base;
+  if (Config::GetLayer(layer)->Set(loc, GetString(args, "value")))
     Config::OnConfigChanged();
   return {};
 }

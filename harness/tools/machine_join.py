@@ -50,6 +50,11 @@ def main() -> int:
     ap.add_argument("--joins", type=int, default=1)
     ap.add_argument("--limit", type=float, default=150, help="seconds a join may take")
     ap.add_argument("--env", action="append", default=[])
+    ap.add_argument("--video", default="Null", help="video backend (players use D3D11 or Vulkan)")
+    ap.add_argument("--host-config", action="append", default=[],
+                    help="System.Section.Key=value set on the host's running game (its current layer, as "
+                         "Dolphin's settings windows do) before the first join")
+    ap.add_argument("--platform", default="headless", help="Dolphin's window platform (win32 for a real backend)")
     a = ap.parse_args()
 
     out = Path(a.out).resolve()
@@ -72,12 +77,12 @@ def main() -> int:
     def make(name: str, session: dict) -> DolphinInstance:
         env = dict(kv.split("=", 1) for kv in a.env)
         env["PPR_MACHINE_SESSION"] = json.dumps(session)
-        cfg = InstanceConfig(video_backend="Null", standard_controllers=(0,), other_ports="none",
+        cfg = InstanceConfig(video_backend=a.video, standard_controllers=(0,), other_ports="none",
                              config_args=sd_cfg + [f"Dolphin.Core.DefaultISO={iso}",
                                                    "Logger.Options.WriteToFile=True", "Logger.Options.Verbosity=4",
                                                    "Logger.Logs.Brawlback=True", "Logger.Logs.CORE=True"])
         inst = DolphinInstance(name, port=free_port(socket.SOCK_STREAM), exe=a.exe, config=cfg, boot=boot,
-                               instances_root=out, keep=True, platform="headless", connect_timeout=120,
+                               instances_root=out, keep=True, platform=a.platform, connect_timeout=120,
                                env=env)
         inst.create()
         inst.launch()
@@ -126,6 +131,13 @@ def main() -> int:
             if time.time() > deadline or not host.is_running():
                 raise SystemExit("the host's game did not start")
             time.sleep(1)
+        for kv in a.host_config:
+            name, value = kv.split("=", 1)
+            system, section, key = name.split(".", 2)
+            host.client.call("config_set", system=system, section=section, key=key, value=value, layer="current")
+            print(f"host: {name} = {value} (current layer)", flush=True)
+        if a.host_config:
+            time.sleep(3)
         for k in range(a.joins):
             failed_before = log_of(host).count("could not join")
             joined_before = len(JOINED.findall(log_of(host)))

@@ -17,6 +17,7 @@
 #include "Core/Core.h"
 #include "Core/HW/SI/SI_Device.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 
 #include "DolphinQt/Config/Mapping/GCPadWiiUConfigDialog.h"
@@ -167,13 +168,27 @@ void GamecubeControllersWidget::OnGCPadConfigure(size_t index)
   window->show();
 }
 
+namespace
+{
+// In a whole-machine session (Brawl Mods) the session's layer makes every port a standard
+// controller, the same on every machine, and the session picks this player's controller from the
+// base layer (the player's own setup). This pane shows and changes that one: written over the
+// session's layer, a port's type changed this machine's emulated hardware, and no other player
+// could load its machine image (prod 2026-10-14: a host who set port 1 to the GameCube adapter
+// mid-session; every join failed with "the machine image's state does not load").
+SerialInterface::SIDevices ShownDevice(int port)
+{
+  const auto& info = Config::GetInfoForSIDevice(port);
+  return Machine::IsArmed() ? Config::GetBase(info) : Config::Get(info);
+}
+}  // namespace
+
 void GamecubeControllersWidget::LoadSettings(Core::State state)
 {
   const bool running = state != Core::State::Uninitialized;
   for (size_t i = 0; i < m_gc_groups.size(); i++)
   {
-    const SerialInterface::SIDevices si_device =
-        Config::Get(Config::GetInfoForSIDevice(static_cast<int>(i)));
+    const SerialInterface::SIDevices si_device = ShownDevice(static_cast<int>(i));
     const std::optional<int> gc_index = ToGCMenuIndex(si_device);
     if (gc_index)
     {
@@ -193,7 +208,11 @@ void GamecubeControllersWidget::SaveSettings()
     {
       const SerialInterface::SIDevices si_device =
           FromGCMenuIndex(m_gc_controller_boxes[i]->currentIndex());
-      Config::SetBaseOrCurrent(Config::GetInfoForSIDevice(static_cast<int>(i)), si_device);
+      const auto& info = Config::GetInfoForSIDevice(static_cast<int>(i));
+      if (Machine::IsArmed())
+        Config::SetBase(info, si_device);
+      else
+        Config::SetBaseOrCurrent(info, si_device);
     }
   }
 

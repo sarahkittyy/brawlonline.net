@@ -30,6 +30,7 @@
 #include "Core/IOS/IOS.h"
 #include "Core/IOS/USB/Bluetooth/LibUSBBluetoothAdapter.h"
 #include "Core/NetPlayProto.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 #include "Core/USBUtils.h"
 #include "Core/WiiUtils.h"
@@ -439,23 +440,45 @@ void WiimoteControllersWidget::UpdateBluetoothAdapterWidgetsEnabled(const Core::
   m_bluetooth_adapters_refresh->setEnabled(enable_adapter_refresh);
 }
 
+namespace
+{
+// In a whole-machine session (Brawl Mods) the session's layer makes every Wii Remote an emulated
+// one, the same on every machine, and the session picks this player's controller from the base
+// layer (the player's own setup). This pane shows and changes that one, never the session's: a
+// machine image whose Wii Remotes differ from a joiner's does not load (as with a GameCube port's
+// type, GamecubeControllersWidget).
+template <typename T>
+T Shown(const Config::Info<T>& info)
+{
+  return Machine::IsArmed() ? Config::GetBase(info) : Config::Get(info);
+}
+
+template <typename T, typename V>
+void Save(const Config::Info<T>& info, const V& value)
+{
+  if (Machine::IsArmed())
+    Config::SetBase(info, value);
+  else
+    Config::SetBaseOrCurrent(info, value);
+}
+}  // namespace
+
 void WiimoteControllersWidget::LoadSettings(Core::State state)
 {
   for (size_t i = 0; i < m_wiimote_groups.size(); i++)
   {
     SignalBlocking(m_wiimote_boxes[i])
-        ->setCurrentIndex(int(Config::Get(Config::GetInfoForWiimoteSource(int(i)))));
+        ->setCurrentIndex(int(Shown(Config::GetInfoForWiimoteSource(int(i)))));
   }
   SignalBlocking(m_wiimote_real_balance_board)
-      ->setChecked(Config::Get(Config::WIIMOTE_BB_SOURCE) == WiimoteSource::Real);
-  SignalBlocking(m_wiimote_speaker_data)
-      ->setChecked(Config::Get(Config::MAIN_WIIMOTE_ENABLE_SPEAKER));
+      ->setChecked(Shown(Config::WIIMOTE_BB_SOURCE) == WiimoteSource::Real);
+  SignalBlocking(m_wiimote_speaker_data)->setChecked(Shown(Config::MAIN_WIIMOTE_ENABLE_SPEAKER));
   SignalBlocking(m_wiimote_ciface)
-      ->setChecked(Config::Get(Config::MAIN_CONNECT_WIIMOTES_FOR_CONTROLLER_INTERFACE));
+      ->setChecked(Shown(Config::MAIN_CONNECT_WIIMOTES_FOR_CONTROLLER_INTERFACE));
   SignalBlocking(m_wiimote_continuous_scanning)
-      ->setChecked(Config::Get(Config::MAIN_WIIMOTE_CONTINUOUS_SCANNING));
+      ->setChecked(Shown(Config::MAIN_WIIMOTE_CONTINUOUS_SCANNING));
 
-  if (Config::Get(Config::MAIN_BLUETOOTH_PASSTHROUGH_ENABLED))
+  if (Shown(Config::MAIN_BLUETOOTH_PASSTHROUGH_ENABLED))
     SignalBlocking(m_wiimote_passthrough)->setChecked(true);
   else
     SignalBlocking(m_wiimote_emu)->setChecked(true);
@@ -507,23 +530,19 @@ void WiimoteControllersWidget::SaveSettings()
 {
   {
     Config::ConfigChangeCallbackGuard config_guard;
-    Config::SetBaseOrCurrent(Config::MAIN_WIIMOTE_ENABLE_SPEAKER,
-                             m_wiimote_speaker_data->isChecked());
-    Config::SetBaseOrCurrent(Config::MAIN_CONNECT_WIIMOTES_FOR_CONTROLLER_INTERFACE,
-                             m_wiimote_ciface->isChecked());
-    Config::SetBaseOrCurrent(Config::MAIN_WIIMOTE_CONTINUOUS_SCANNING,
-                             m_wiimote_continuous_scanning->isChecked());
-    Config::SetBaseOrCurrent(Config::MAIN_BLUETOOTH_PASSTHROUGH_ENABLED,
-                             m_wiimote_passthrough->isChecked());
+    Save(Config::MAIN_WIIMOTE_ENABLE_SPEAKER, m_wiimote_speaker_data->isChecked());
+    Save(Config::MAIN_CONNECT_WIIMOTES_FOR_CONTROLLER_INTERFACE, m_wiimote_ciface->isChecked());
+    Save(Config::MAIN_WIIMOTE_CONTINUOUS_SCANNING, m_wiimote_continuous_scanning->isChecked());
+    Save(Config::MAIN_BLUETOOTH_PASSTHROUGH_ENABLED, m_wiimote_passthrough->isChecked());
 
     const WiimoteSource bb_source =
         m_wiimote_real_balance_board->isChecked() ? WiimoteSource::Real : WiimoteSource::None;
-    Config::SetBaseOrCurrent(Config::WIIMOTE_BB_SOURCE, bb_source);
+    Save(Config::WIIMOTE_BB_SOURCE, bb_source);
 
     for (size_t i = 0; i < m_wiimote_groups.size(); i++)
     {
       const int index = m_wiimote_boxes[i]->currentIndex();
-      Config::SetBaseOrCurrent(Config::GetInfoForWiimoteSource(int(i)), WiimoteSource(index));
+      Save(Config::GetInfoForWiimoteSource(int(i)), WiimoteSource(index));
     }
   }
 

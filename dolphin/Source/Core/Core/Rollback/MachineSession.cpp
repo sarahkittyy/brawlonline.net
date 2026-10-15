@@ -3331,8 +3331,9 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
   rb.m_skip_jit_clear_in_dostate.store(true, std::memory_order_seq_cst);
   s_image_dostate = true;
   VideoCommon_SetSkipGPUReadbackForRollback(true);
+  std::string state_failure;
   const bool ok = ::State::LoadFromBuffer(
-      system, std::span<u8>(raw.data() + state_pos, static_cast<size_t>(state_size)));
+      system, std::span<u8>(raw.data() + state_pos, static_cast<size_t>(state_size)), &state_failure);
   VideoCommon_SetSkipGPUReadbackForRollback(false);
   s_image_dostate = false;
   rb.m_skip_jit_clear_in_dostate.store(false, std::memory_order_seq_cst);
@@ -3342,7 +3343,9 @@ bool LoadImage(Core::System& system, std::string* error, bool self = false)
   jit.EraseBlocksForRestoredRange(MEM2_BASE, mem2);
   if (!ok)
   {
-    *error = "the machine image's state does not load";
+    // Where it stopped (prod 2026-10-14: ANGE#858's Dolphin refused ONYX#210's REX TE image four
+    // times, and nothing said which part).
+    *error = "the machine image's state does not load (" + state_failure + ")";
     return false;
   }
   if (!UnpackNand(system, raw.data() + nand_pos, nand_size, error))

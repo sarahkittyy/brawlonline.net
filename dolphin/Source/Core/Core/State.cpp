@@ -231,11 +231,18 @@ static bool CheckIfStateLoadIsAllowed(Core::System& system)
   return true;
 }
 
-bool LoadFromBuffer(Core::System& system, std::span<u8> buffer)
+bool LoadFromBuffer(Core::System& system, std::span<u8> buffer, std::string* failure)
 {
   u8* ptr = buffer.data();
   PointerWrap p(&ptr, buffer.size(), PointerWrap::Mode::Read);
   DoState(system, p);
+  if (failure && !p.IsReadMode())
+  {
+    const u8* at = p.GetReadFailurePosition();
+    const std::string_view marker = p.GetReadFailureMarker();
+    *failure = fmt::format("after \"{}\", at byte {} of {}", marker.empty() ? "the start" : marker,
+                           at ? at - buffer.data() : -1, buffer.size());
+  }
   return p.IsReadMode();
 }
 

@@ -517,7 +517,12 @@ void SerialInterfaceManager::UpdateDevices()
   for (int i = 0; i != MAX_SI_CHANNELS; ++i)
   {
     const SIDevices current_type = GetDeviceType(i);
-    const SIDevices desired_type = Config::Get(Config::GetInfoForSIDevice(i));
+    // A whole-machine session keeps its ports standard controllers (BootManager), the same on
+    // every machine, whatever is written over the session's layer: a port of another type made
+    // this machine's image one no other player could load (prod 2026-10-14).
+    const SIDevices desired_type = Machine::IsArmed() ?
+                                       SIDEVICE_GC_CONTROLLER :
+                                       Config::Get(Config::GetInfoForSIDevice(i));
 
     if (current_type != desired_type)
     {
