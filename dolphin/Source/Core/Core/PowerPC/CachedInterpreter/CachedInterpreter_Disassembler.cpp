@@ -54,7 +54,7 @@ s32 CachedInterpreter::InterpretAndCheckExceptions(
 
 s32 CachedInterpreter::HLEFunction(std::ostream& stream, const HLEFunctionOperands& operands)
 {
-  const auto& [system, current_pc, hook_index] = operands;
+  const auto& [system, current_pc, hook_index, downcount] = operands;
   fmt::println(stream, "HLEFunction(current_pc=0x{:08x}, hook_index={}) [\"{}\"]", current_pc,
                hook_index, HLE::GetHookNameByIndex(hook_index));
   return sizeof(AnyCallback) + sizeof(operands);

@@ -17,6 +17,7 @@
 #include <optional>
 #include <set>
 #include <thread>
+#include <utility>
 
 #include <enet/enet.h>
 #if defined(_M_X86_64)
@@ -563,6 +564,7 @@ struct State
   u64 rollbacks = 0, max_rollback = 0, frames_resimulated = 0, stall_polls = 0, skipped_loads = 0;
   u64 desyncs = 0, saves = 0;
   s64 last_desync_frame = -1;
+  Clock::time_point desync_notice_at{};  // the last desync the players were told of
   float frames_ahead = 0;
   int input_delay = 0;  // this player's, in the current GekkoNet session
   std::vector<HistoryEntry> history = std::vector<HistoryEntry>(HISTORY_SIZE);
@@ -2763,17 +2765,38 @@ void ProcessSessionEvents()
       break;
     }
     case GekkoDesyncDetected:
+    {
       s.desyncs++;
       s.last_desync_frame = s.frame_base + e.data.desynced.frame;
       WARN_LOG_FMT(BRAWLBACK, "machine: desync at frame {} (local {:08x}, remote {:08x})",
                    s.last_desync_frame, e.data.desynced.local_checksum,
                    e.data.desynced.remote_checksum);
+      // The checksum counts nothing that depends on a host's timing (docs/design/brawl-mods.md
+      // §6.6), so the two machines' memory differs: the players are told, once a burst.
+      const auto now = Clock::now();
+      if (s.desync_notice_at == Clock::time_point{} || now - s.desync_notice_at > std::chrono::seconds(30))
+      {
+        s.desync_notice_at = now;
+        const int h = e.data.desynced.remote_handle;
+        const int slot = h >= 0 && h < MAX_PLAYERS ? s.handle_slot[h] : -1;
+        std::string name = "another player";
+        if (slot >= 0)
+        {
+          std::lock_guard lk(s.net_mutex);
+          name = NameOf(slot);
+        }
+        ShowNotice(fmt::format("Desync with {} at frame {}: your games differ.", name,
+                               s.last_desync_frame));
+      }
       break;
+    }
     default:
       break;
     }
   }
 }
+
+bool DigestsEnabled();
 
 // Polls GekkoNet with this frame's local input and turns its events into the passes to run.
 void Update(Core::System& system)
@@ -2877,6 +2900,19 @@ void Update(Core::System& system)
       AfterLoad(system, frames_back);
       PaceLoad(Clock::now() - load_start);
       s.rollbacks++;
+      // Diagnostics (PPR_MACHINE_DIGESTS): the first rollbacks of each epoch, to line up with the
+      // first desync after a join.
+      static int s_logged_epoch = -1, s_logged = 0;
+      if (DigestsEnabled())
+      {
+        if (s_logged_epoch != s.epoch)
+          s_logged_epoch = s.epoch, s_logged = 0;
+        if (s_logged++ < 8)
+        {
+          WARN_LOG_FMT(BRAWLBACK, "machine: rollback {} of epoch {}: to frame {} ({} back), {} pass(es)",
+                       s_logged, s.epoch, load_frame, frames_back, s.ops.count);
+        }
+      }
       s_pace.rollbacks++;
       s.max_rollback = std::max<u64>(s.max_rollback, static_cast<u64>(frames_back));
     }
@@ -2997,6 +3033,8 @@ struct FrameDigest
   u32 checksum = 0;
   std::vector<std::pair<u32, u32>> granules;
   std::map<u32, std::array<u8, ROLLBACK_PAGE_SIZE>> bytes;  // PPR_MACHINE_DIGESTS=2
+  Rollback::RollbackManager::ChecksumParts parts;  // what the checksum was made of
+  bool resim = false;  // the pass that saved it last re-ran the frame
 };
 std::array<FrameDigest, 256> s_digests;
 bool DigestsEnabled()
@@ -3170,6 +3208,7 @@ void PerformQueuedSave(Core::System& system)
   AfterSave(system);
   s.saves++;
   DiagnoseSave(s.queued_save.frame);
+  rb.SetCollectChecksumParts(DigestsEnabled());
   const u32 sum = rb.SaveChecksumWithSlice(s.queued_save.frame);
   PaceSave(Clock::now() - save_start);
   if (DigestsEnabled() && s.queued_save.frame >= 0)
@@ -3177,6 +3216,8 @@ void PerformQueuedSave(Core::System& system)
     FrameDigest& d = s_digests[static_cast<size_t>(s.queued_save.frame) % s_digests.size()];
     d.frame = s.queued_save.frame;
     d.checksum = sum;
+    d.parts = rb.LastChecksumParts();
+    d.resim = s.resim;
     d.granules = rb.LastSaveDigest();
     d.bytes.clear();
     if (DigestBytesEnabled())
@@ -5023,7 +5064,7 @@ void PaceFrame(Core::System& system, bool resim)
 // joiner's own wait, a handshake): the video thread shows the last frame again about 30 times a
 // second, so the overlay keeps drawing (the chat window with a join's progress, OSD messages), as
 // in a paused replay. Before, the chat window froze with the game. Nothing reaches the machine.
-void RedrawWhileWaiting(Clock::duration waited_for)
+void RedrawWhileWaiting(Core::System& system, Clock::duration waited_for)
 {
   static Clock::time_point last;
   const auto now = Clock::now();
@@ -5034,6 +5075,10 @@ void RedrawWhileWaiting(Clock::duration waited_for)
     if (g_presenter)
       g_presenter->RedrawLastFrame();
   });
+  // The event wakes the GPU thread, which then sleeps again only once GpuMaySleep is called. That
+  // is a CoreTiming event (1000 a second of emulated time), and emulated time stands still here:
+  // without this the GPU thread spun for the whole wait (as playback did, bug report #17).
+  system.GetFifo().GpuMaySleep();
 }
 
 Wait WaitForFrames(Core::System& system)
@@ -5128,7 +5173,7 @@ Wait WaitForFrames(Core::System& system)
           EnterEpoch();
       }
     }
-    RedrawWhileWaiting(Clock::now() - since);
+    RedrawWhileWaiting(system, Clock::now() - since);
     waited = true;
     // The lock is let go while sleeping, so status and control requests get through. OnLoopTop
     // holds it exactly once.
@@ -5631,6 +5676,7 @@ bool Arm(const Options& options, std::string* error)
   s.rollbacks = s.max_rollback = s.frames_resimulated = s.stall_polls = s.skipped_loads = 0;
   s.desyncs = s.saves = 0;
   s.last_desync_frame = -1;
+  s.desync_notice_at = {};
   s.input_log = {};
   s.pick_frame = -1;
   for (auto& e : s.history)
@@ -5640,6 +5686,8 @@ bool Arm(const Options& options, std::string* error)
     *error = s.error;
     return false;
   }
+  // Copies kept in VRAM leave guest RAM alone from the boot on (PresentStats.h).
+  Rollback::PresentStats::SetCopiesLeaveGuestRAM(true);
   s.phase = Phase::Armed;
   AddLog(fmt::format("armed: slot {}, {} peer(s), port {}, delay {}{}", options.local_slot,
                      options.peers.size(), options.local_port,
@@ -5671,6 +5719,7 @@ void Stop()
   DestroyGekko();
   ResetSD();
   Rollback::RollbackManager::Get().m_full_ios_in_snapshots = false;
+  Rollback::PresentStats::SetCopiesLeaveGuestRAM(false);
   if (auto* fs = HostFS(Core::System::GetInstance()))
     fs->JournalStop();
   s.journal_marks.clear();
@@ -6222,6 +6271,8 @@ enum class Top
 
 Top FrameTop(Core::System& system);
 
+bool s_hook_yield = false;
+
 bool OnLoopTop(const Core::CPUThreadGuard& guard)
 {
   if (!IsArmed())
@@ -6257,13 +6308,21 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
   }
   if (FrameTop(system) == Top::Yield)
   {
-    // No game logic this pass; the next loop top waits again.
-    ppc.gpr[25] = 1;
-    ppc.npc = BRAWL_LOOP_END;
+    // Back to this hook, with no game code run and no emulated time gone (TakeHookYield). It
+    // went on to the loop end and back before, 14 cycles each pass for as long as a pause held
+    // the CPU (another thread's CPUThreadGuard; the harness reading memory: 784 cycles in one
+    // frame), so that machine's frame came later than the others' and their memory parted.
+    ppc.npc = BRAWL_LOOP_TOP;
+    s_hook_yield = true;
     return true;
   }
   run_original();
   return true;
+}
+
+bool TakeHookYield()
+{
+  return std::exchange(s_hook_yield, false);
 }
 
 bool g_vi_boundary = false;
@@ -6714,6 +6773,20 @@ picojson::value Digest(s64 frame, const std::vector<u32>& addrs)
     return picojson::value(o);
   o["frame"] = picojson::value(static_cast<double>(frame));
   o["checksum"] = picojson::value(static_cast<double>(d.checksum));
+  o["resim"] = picojson::value(d.resim);
+  {
+    std::string changed;
+    for (const auto& [addr, crc, kind] : d.parts.changed)
+      changed += fmt::format("{:08x}:{:08x}:{} ", addr, crc, kind);
+    std::string slice_gpu;
+    for (const u32 addr : d.parts.slice_gpu)
+      slice_gpu += fmt::format("{:08x} ", addr);
+    o["changed"] = picojson::value(changed);
+    o["change_crc"] = picojson::value(static_cast<double>(d.parts.change_crc));
+    o["slice_first"] = picojson::value(static_cast<double>(d.parts.slice_first));
+    o["slice_crc"] = picojson::value(static_cast<double>(d.parts.slice_crc));
+    o["slice_gpu"] = picojson::value(slice_gpu);
+  }
   std::string text;
   for (const auto& [addr, crc] : d.granules)
     text += fmt::format("{:08x}:{:08x} ", addr, crc);
@@ -6863,8 +6936,9 @@ void IoLogBlock(u32 pc)
   std::lock_guard lk(s_io_mutex);
   if (!s_io_current)
     return;
-  const auto& ppc = Core::System::GetInstance().GetPPCState();
-  *s_io_current += fmt::format("B {:08x} f {:08x} g {:08x}\n", pc,
+  auto& system = Core::System::GetInstance();
+  const auto& ppc = system.GetPPCState();
+  *s_io_current += fmt::format("B {:08x} t {} f {:08x} g {:08x}\n", pc, system.GetCoreTiming().GetTicks(),
                                Common::ComputeCRC32(reinterpret_cast<const u8*>(ppc.ps), sizeof(ppc.ps)),
                                Common::ComputeCRC32(reinterpret_cast<const u8*>(ppc.gpr), sizeof(ppc.gpr)));
   // PPR_MACHINE_IOLOG_BLOCK_DUMP=pc,pc,... (hex): every FPR at those blocks' entries.

@@ -177,9 +177,17 @@ s32 CachedInterpreter::InterpretAndCheckExceptions(
 s32 CachedInterpreter::HLEFunction(PowerPC::PowerPCState& ppc_state,
                                    const HLEFunctionOperands& operands)
 {
-  const auto& [system, current_pc, hook_index] = operands;
+  const auto& [system, current_pc, hook_index, downcount] = operands;
   ppc_state.pc = current_pc;
   HLE::Execute(Core::CPUThreadGuard{system}, current_pc, hook_index);
+  // A whole-machine session's loop top gave the CPU back (Machine::TakeHookYield): end here,
+  // with the cycles of what ran before the hook only; Run sees the CPU's state and leaves.
+  if (Machine::TakeHookYield())
+  {
+    ppc_state.pc = ppc_state.npc = current_pc;
+    ppc_state.downcount -= downcount;
+    return 0;
+  }
   return sizeof(AnyCallback) + sizeof(operands);
 }
 
@@ -236,7 +244,8 @@ bool CachedInterpreter::HandleFunctionHooking(u32 address)
   if (!result)
     return false;
 
-  Write(HLEFunction, {m_system, address, result.hook_index});
+  Write(HLEFunction, {m_system, address, result.hook_index,
+                      js.downcountAmount - js.op->opinfo->num_cycles});
 
   if (result.type != HLE::HookType::Replace)
     return false;

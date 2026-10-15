@@ -10,6 +10,7 @@
 #include <cctype>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
@@ -4736,6 +4737,27 @@ bool CpuRunning(Core::System& system)
   return system.GetCPU().GetState() == CPU::State::Running;
 }
 
+// Wakes a playback waiting at its loop top (PlaybackWait): frames came, a control, a stop.
+std::condition_variable_any s_pb_wake;
+
+// A playback that stands still at its loop top (paused, held at the end, buffering a live game)
+// sleeps until what it waits for may have changed: ExtendPlayback, PlaybackControl and
+// StopPlayback wake it, and `max` bounds it so a Dolphin pause or stop is seen. HostWait polls
+// every 100 us, which is a spin: a spectator buffering a live game kept a core busy (bug report
+// #17, 2026-10-15). Called with s.mutex held once, as HostWait.
+template <typename Pred>
+bool PlaybackWait(Core::System& system, Pred pred, std::chrono::milliseconds max)
+{
+  const auto deadline = Clock::now() + max;
+  while (!pred())
+  {
+    if (!CpuRunning(system) || Clock::now() >= deadline)
+      return false;
+    s_pb_wake.wait_until(s.mutex, deadline);
+  }
+  return true;
+}
+
 // Waits on the host (not in guest code, so emulated time stands still) until `pred` holds.
 template <typename Pred>
 bool HostWait(Core::System& system, Pred pred, std::chrono::milliseconds max)
@@ -5384,7 +5406,11 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
       if (g_presenter)
         g_presenter->RedrawLastFrame();
     });
-    const bool woke = HostWait(
+    // The event wakes the GPU thread, which then sleeps again only once GpuMaySleep is called. That
+    // is a CoreTiming event (1000 a second of emulated time), and emulated time stands still here:
+    // without this the GPU thread spun until the playback went on (bug report #17).
+    system.GetFifo().GpuMaySleep();
+    const bool woke = PlaybackWait(
         system,
         [] {
           const s64 next = static_cast<s64>(s.pb.file->first_frame + s.pb.next);
@@ -6353,6 +6379,7 @@ void ExtendPlayback(std::shared_ptr<const Replay::File> file, bool hold_at_end, 
     if (!hold_at_end && pb.at_end)
       pb.paused = false;
   }
+  s_pb_wake.notify_all();
 }
 
 void SetPlaybackBanner(std::string text)
@@ -6459,6 +6486,7 @@ void PlaybackControl(PlaybackCommand command, double arg)
     pb.catch_frames = 0;
     pb.catch_rate = 0;
   }
+  s_pb_wake.notify_all();
 }
 
 PlaybackInfo GetPlaybackInfo()
@@ -6512,6 +6540,7 @@ void StopPlayback()
   {
     // Ends on the CPU thread at the next loop top (OnLoopTop).
     s.pb.stopped = true;
+    s_pb_wake.notify_all();
     return;
   }
   if (s.phase == Phase::Armed && s.did_frame0)

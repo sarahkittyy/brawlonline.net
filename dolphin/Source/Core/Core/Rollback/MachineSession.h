@@ -232,6 +232,10 @@ bool OnLoopEnd(const Core::CPUThreadGuard& guard);
 // while it waited for the players), and the CPU cores leave right after Advance so that the next
 // Advance takes the same boundary again, at the same instruction.
 extern bool g_vi_boundary;
+// Brawl's loop-top hook gave the CPU back (a pause or stop while it waited for the players): every
+// CPU core leaves for its CPU loop right after the hook, before counting the hook block's cycles,
+// and comes back to the hook (npc) at the same emulated time. Returns and clears the request.
+bool TakeHookYield();
 void OnViField();
 void OnViBoundary(Core::System& system);
 // Brawl's game-loop hooks (HLE) are for Brawl only: a disc whose ID starts with RSB, or a

@@ -5,6 +5,7 @@
 
 #include <array>
 #include <string>
+#include <utility>
 
 #include <fmt/format.h>
 
@@ -23,6 +24,7 @@
 #include "Core/PowerPC/PPCTables.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/GameplayRollback.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 
 namespace
@@ -120,6 +122,14 @@ int Interpreter::SingleStepInner()
 {
   if (HandleFunctionHooking(m_ppc_state.pc))
   {
+    // A whole-machine session's loop top gave the CPU back (Machine::TakeHookYield): no cycles,
+    // and Run leaves before the next instruction.
+    if (Machine::TakeHookYield())
+    {
+      m_hook_yield = true;
+      m_end_block = true;
+      return 0;
+    }
     UpdatePC();
     // TODO: Does it make sense to use m_prev_inst here?
     // It seems like we should use the num_cycles for the instruction at PC instead
@@ -274,6 +284,8 @@ void Interpreter::Run()
           cycles += SingleStepInner();
         }
         m_ppc_state.downcount -= cycles;
+        if (std::exchange(m_hook_yield, false))
+          return;
       }
     }
     else
@@ -289,6 +301,8 @@ void Interpreter::Run()
           cycles += SingleStepInner();
         }
         m_ppc_state.downcount -= cycles;
+        if (std::exchange(m_hook_yield, false))
+          return;
       }
     }
   }

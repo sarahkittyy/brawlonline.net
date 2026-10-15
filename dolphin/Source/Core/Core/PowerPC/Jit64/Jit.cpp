@@ -1408,6 +1408,21 @@ bool Jit64::HandleFunctionHooking(u32 address)
   if (result.type != HLE::HookType::Replace)
     return false;
 
+  // A whole-machine session's loop top gave the CPU back (Machine::TakeHookYield): leave for the
+  // CPU loop without counting this block's cycles; it comes back here at the same emulated time.
+  ABI_PushRegistersAndAdjustStack({}, 0);
+  ABI_CallFunction(&Machine::TakeHookYield);
+  ABI_PopRegistersAndAdjustStack({}, 0);
+  TEST(8, R(ABI_RETURN), R(ABI_RETURN));
+  FixupBranch no_yield = J_CC(CC_Z, Jump::Near);
+  // Only the instructions before the hook in this block ran (the hook's own cycles are counted).
+  if (const u32 before = js.downcountAmount - js.op->opinfo->num_cycles; before != 0)
+    SUB(32, PPCSTATE(downcount), Imm32(before));
+  MOV(32, PPCSTATE(pc), Imm32(address));
+  MOV(32, PPCSTATE(npc), Imm32(address));
+  JMP(asm_routines.dispatcher_exit, true);
+  SetJumpTarget(no_yield);
+
   MOV(32, R(RSCRATCH), PPCSTATE(npc));
   js.downcountAmount += js.st.numCycles;
   WriteExitDestInRSCRATCH();

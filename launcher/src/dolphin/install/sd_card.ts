@@ -67,9 +67,25 @@ export type SdInstallOptions = {
   onProgress?: ByteProgress;
   /** Test hook: the copy-on-write clone tried before the chunked copy. */
   clone?: CopyOptions["clone"];
+  /**
+   * Another of our Dolphins has the copy open (spectating while a game or a queue runs, or Play
+   * while a replay plays). The copy is then never written, removed or read back: one the manifest
+   * says is up to date is used as it is, and one that would need any change is refused
+   * (`SdCardInUseError`).
+   */
+  inUse?: boolean;
 };
 
 export class SdCardError extends Error {}
+
+/** The copy needs a change, but another of our Dolphins has it open. */
+export class SdCardInUseError extends SdCardError {}
+
+/** Windows: another process has the file open without sharing it. */
+function isBusy(err: unknown): boolean {
+  const code = (err as NodeJS.ErrnoException | undefined)?.code;
+  return code === "EBUSY" || code === "EPERM";
+}
 
 export function sha256(data: Buffer): string {
   return createHash("sha256").update(data).digest("hex");
@@ -302,6 +318,24 @@ export async function installPluginOnSdCard(opts: SdInstallOptions): Promise<SdI
     return finish("copied");
   };
 
+  if (opts.inUse) {
+    // Bug report #17 (2026-10-15): Spectate while the player's game ran read the copy back, could
+    // not open it, took it for broken and removed it to copy it again, which failed (EBUSY) after
+    // the manifest was already gone. Nothing to check here: the running Dolphin booted this copy.
+    if (
+      imageExists &&
+      !sourceChanged &&
+      manifest!.plugin.sha256 === plugin.sha256 &&
+      manifest!.plugin.sdPath === sdPath
+    ) {
+      return finish("unchanged");
+    }
+    throw new SdCardInUseError(
+      `The SD card copy ${image} needs an update, but another Dolphin has it open ` +
+        `(${!imageExists ? "no copy" : sourceChanged ? "the source card changed" : "the plugin changed"}).`,
+    );
+  }
+
   if (!imageExists || sourceChanged) {
     return freshCopy();
   }
@@ -312,6 +346,10 @@ export async function installPluginOnSdCard(opts: SdInstallOptions): Promise<SdI
       const removePaths = manifest && manifest.plugin.sdPath !== sdPath ? [manifest.plugin.sdPath] : [];
       await patchImage(image, plugin.data, sdPath, { protectedPaths, removePaths, log });
     } catch (err) {
+      if (isBusy(err)) {
+        // Open in another process: a fresh copy would fail to remove it the same way.
+        throw err;
+      }
       log(`Patching ${image} in place failed (${err instanceof Error ? err.message : String(err)}); recreating it`);
       return freshCopy();
     }

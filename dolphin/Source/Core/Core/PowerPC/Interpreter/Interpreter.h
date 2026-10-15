@@ -325,5 +325,6 @@ private:
   UGeckoInstruction m_prev_inst{};
   u32 m_last_pc = 0;
   bool m_end_block = false;
+  bool m_hook_yield = false;  // Machine::TakeHookYield: Run leaves after this block
   bool m_start_trace = false;
 };

@@ -8,7 +8,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { PLUGIN_SD_PATH } from "./paths";
 import type { PluginBinary } from "./sd_card";
-import { installPluginOnSdCard, loadPlugin, readFileHashFromImage, sha256 } from "./sd_card";
+import { installPluginOnSdCard, loadPlugin, readFileHashFromImage, SdCardInUseError, sha256 } from "./sd_card";
 
 let root: string;
 let dir: string;
@@ -135,6 +135,39 @@ describe("installPluginOnSdCard", () => {
     expect(await readOnCard(res.image, "/Project+/rp/old.rep")).toBeNull();
     expect((await readOnCard(res.image, PLUGIN_SD_PATH))!.equals(p.data)).toBe(true);
     expect(await readOnCard(source, PLUGIN_SD_PATH)).toBeNull();
+  });
+
+  it("shares a copy in use as it is, without reading it back (bug report #17)", async () => {
+    const p = plugin(11);
+    const first = await installPluginOnSdCard(opts(p));
+    // What the read-back would take for a broken plugin: in use, it is left alone.
+    await writeOnCard(first.image, PLUGIN_SD_PATH, pattern(500, 99));
+    const imgStat = await fs.promises.stat(first.image);
+    const manStat = await fs.promises.stat(first.manifest);
+
+    const res = await installPluginOnSdCard({ ...opts(p), inUse: true });
+    expect(res.action).toBe("unchanged");
+    expect(res.image).toBe(first.image);
+    expect((await fs.promises.stat(first.image)).mtimeMs).toBe(imgStat.mtimeMs);
+    expect((await fs.promises.stat(first.manifest)).mtimeMs).toBe(manStat.mtimeMs);
+  });
+
+  it("refuses a copy in use that needs a change, and leaves it and its manifest", async () => {
+    const first = await installPluginOnSdCard(opts(plugin(12)));
+    const imgHash = await fileHash(first.image);
+    const manifest = await fs.promises.readFile(first.manifest, "utf8");
+
+    await expect(installPluginOnSdCard({ ...opts(plugin(13)), inUse: true })).rejects.toBeInstanceOf(SdCardInUseError);
+    const later = new Date(Date.now() + 5000);
+    await fs.promises.utimes(source, later, later);
+    await expect(installPluginOnSdCard({ ...opts(plugin(12)), inUse: true })).rejects.toThrow(/source card changed/);
+    expect(await fileHash(first.image)).toBe(imgHash);
+    expect(await fs.promises.readFile(first.manifest, "utf8")).toBe(manifest);
+  });
+
+  it("refuses to make a first copy while another Dolphin runs", async () => {
+    await expect(installPluginOnSdCard({ ...opts(plugin(14)), inUse: true })).rejects.toThrow(/no copy/);
+    expect(fs.existsSync(path.join(out, "sd.raw"))).toBe(false);
   });
 
   it("detects and repairs a corrupted or missing plugin in the copy", async () => {

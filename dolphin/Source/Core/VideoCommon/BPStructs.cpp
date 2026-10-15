@@ -879,7 +879,11 @@ void LoadBPRegPreprocess(u8 reg, u32 value, int cycles_into_future)
     // desync checksum skips the same bytes on every machine (the GPU thread marks them too, but
     // when depends on the host). An over-estimate: a copy writes at most one stride per source
     // row (texture formats pack four rows into one stride), an XFB copy at most twice the source
-    // rows after its Y scaling.
+    // rows after its Y scaling. In a whole-machine session no copy writes guest RAM
+    // (PresentStats::CopiesLeaveGuestRAM): nothing to skip, and those bytes stay in the checksum.
+    // (A mark also stays when a rollback undoes the frame that made it: a copy only one machine
+    // predicted would leave its bytes skipped on that machine alone.)
+    if (!Rollback::PresentStats::CopiesLeaveGuestRAM())
     {
       const u32 height = ((s_pp_efb_wh >> 10) & 0x3FF) + 1;
       const u32 stride = (s_pp_efb_stride & 0x3FF) << 5;

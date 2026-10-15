@@ -15,6 +15,7 @@
 #include "Common/x64Emitter.h"
 
 #include "Core/ConfigManager.h"
+#include "Core/Core.h"
 #include "Core/CoreTiming.h"
 #include "Core/Debugger/BranchWatch.h"
 #include "Core/HW/CPU.h"
@@ -242,7 +243,14 @@ void Jit64::dcbx(UGeckoInstruction inst)
   // - dcbx rX
   // - addi rX,rX,32
   // - bdnz+ -8
-  const bool make_loop = inst.RA == 0 && inst.RB != 0 && CanMergeNextInstructions(2) &&
+  // Not where two machines must agree on time (a whole-machine session): the loop runs as many
+  // lines as the downcount allows, and inside a block that downcount is behind by the cycles the
+  // block ran before it, so where an interrupt lands depended on where this machine's block began.
+  // Two players' JIT caches differ (a joiner compiles from its join on, a rollback keeps or drops
+  // blocks): REX's character select took a decrementer interrupt 4 cycles late on one machine and
+  // 25 on the other, and their memory parted (docs/design/brawl-mods.md §6.6).
+  const bool make_loop = !Core::WantsDeterminism() && inst.RA == 0 && inst.RB != 0 &&
+                         CanMergeNextInstructions(2) &&
                          (js.op[1].inst.hex & 0xfc00'ffff) == 0x38000020 &&
                          js.op[1].inst.RA_6 == inst.RB && js.op[1].inst.RD_2 == inst.RB &&
                          js.op[2].inst.hex == 0x4200fff8;

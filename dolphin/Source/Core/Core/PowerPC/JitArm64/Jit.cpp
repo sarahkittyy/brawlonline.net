@@ -910,6 +910,24 @@ bool JitArm64::HandleFunctionHooking(u32 address)
   if (result.type != HLE::HookType::Replace)
     return false;
 
+  // A whole-machine session's loop top gave the CPU back (Machine::TakeHookYield): as Jit64.
+  ABI_CallFunction(&Machine::TakeHookYield);
+  UXTB(ARM64Reg::W0, ARM64Reg::W0);  // a bool: only its low byte is defined
+  FixupBranch no_yield = CBZ(ARM64Reg::W0);
+  // Only the instructions before the hook in this block ran (the hook's own cycles are counted).
+  if (const u32 before = js.downcountAmount - js.op->opinfo->num_cycles; before != 0)
+  {
+    const u32 all = js.downcountAmount;
+    js.downcountAmount = before;
+    DoDownCount();
+    js.downcountAmount = all;
+  }
+  MOVI2R(ARM64Reg::W0, address);
+  STR(IndexType::Unsigned, ARM64Reg::W0, PPC_REG, PPCSTATE_OFF(pc));
+  STR(IndexType::Unsigned, ARM64Reg::W0, PPC_REG, PPCSTATE_OFF(npc));
+  B(dispatcher_exit);
+  SetJumpTarget(no_yield);
+
   LDR(IndexType::Unsigned, DISPATCHER_PC, PPC_REG, PPCSTATE_OFF(npc));
   js.downcountAmount += js.st.numCycles;
   WriteExit(DISPATCHER_PC);
