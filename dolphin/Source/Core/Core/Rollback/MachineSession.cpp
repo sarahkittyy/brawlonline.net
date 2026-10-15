@@ -703,7 +703,15 @@ void HandleControl(ENetPeer* peer, const u8* data, size_t size)
   else if (type == "go")
     p.go = epoch;
   else if (type == "leave")
+  {
     p.left = true;
+    // Why its session ended, in this log too: a joiner whose machine image did not load says why
+    // only to the players (its own log never reaches them; prod 2026-10-14, ANGE#858 joining a
+    // REX TE room: four "could not join" right after the image arrived, no reason on the host).
+    const auto r = msg.find("reason");
+    if (r != msg.end() && r->second.is<std::string>() && !r->second.get<std::string>().empty())
+      AddLog(fmt::format("player {} left: {}", slot + 1, r->second.get<std::string>().substr(0, 160)));
+  }
   else if (type == "join")
   {
     // A joiner asks to play in its slot (only a peer this session expects to join: `late`).
