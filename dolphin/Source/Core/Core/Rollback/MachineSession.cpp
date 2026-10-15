@@ -77,6 +77,7 @@
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
 #include "Core/Rollback/FrameProfile.h"
+#include "Core/Rollback/GameplaySession.h"
 #include "Core/Rollback/MachineSDCard.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Rollback/RollbackManager.h"
@@ -213,6 +214,7 @@ struct PeerLink
   Clock::time_point last_connect{};
   ENetPeer* connecting = nullptr;  // this side's latest connection attempt
   double rtt_ms = -1;
+  double min_rtt_ms = -1;  // the lowest rtt_ms of this connection (PickInputDelay)
   // A room member (SetRoom): who is in this slot, and the addresses its hello may come from.
   std::string code;
   std::string name;
@@ -459,6 +461,7 @@ struct State
   u64 desyncs = 0, saves = 0;
   s64 last_desync_frame = -1;
   float frames_ahead = 0;
+  int input_delay = 0;  // this player's, in the current GekkoNet session
   std::vector<HistoryEntry> history = std::vector<HistoryEntry>(HISTORY_SIZE);
   // The NAND journal mark of each snapshot in RollbackManager's ring, oldest first: a load drops
   // the newer ones, and the journal forgets changes older than the oldest snapshot.
@@ -649,6 +652,8 @@ void OnHello(ENetPeer* peer, const picojson::object& msg)
     return;  // the other connection is the one both keep; this one idles until it drops
   if (p.peer && p.peer != peer)
     enet_peer_disconnect_later(p.peer, 0);
+  if (p.peer != peer)
+    p.min_rtt_ms = -1;
   p.peer = peer;
   p.hello = true;
   // Whether it plays in its session now: one that does not is a joiner (a room's joiner learns
@@ -1457,8 +1462,11 @@ void NetThread()
     }
     for (PeerLink& p : s.peers)
     {
-      if (p.peer)
-        p.rtt_ms = p.peer->roundTripTime;
+      if (!p.peer)
+        continue;
+      p.rtt_ms = p.peer->roundTripTime;
+      if (p.min_rtt_ms < 0 || p.rtt_ms < p.min_rtt_ms)
+        p.min_rtt_ms = p.rtt_ms;
     }
     lk.unlock();
     // ~1 ms: GekkoNet's packets go out at most this late.
@@ -1560,6 +1568,27 @@ void DestroyGekko()
   s.local_handle = -1;
 }
 
+// This player's input delay for the GekkoNet session starting now: the set value, else from the
+// round trip to the furthest player in it, as P+ picks it (Gprb::Session::AutoInputDelay); none
+// measured (no other player yet): P+'s default. Each connection's lowest round trip: a join's
+// machine image has just been sent when an epoch starts, and the inputs waiting behind it are still
+// in ENet's mean round trip.
+int PickInputDelay(double* rtt_ms)
+{
+  *rtt_ms = -1;
+  if (s.opts.delay != AUTO_DELAY)
+    return s.opts.delay;
+  {
+    std::lock_guard lk(s.net_mutex);
+    for (const PeerLink& p : s.peers)
+    {
+      if (p.slot >= 0 && ((s.players >> p.slot) & 1) && !p.left && p.min_rtt_ms >= 0)
+        *rtt_ms = std::max(*rtt_ms, p.min_rtt_ms);
+    }
+  }
+  return Gprb::Session::AutoInputDelay(Gprb::Session::GameRoundTrip(*rtt_ms));
+}
+
 bool CreateGekko()
 {
   DestroyGekko();
@@ -1612,7 +1641,13 @@ bool CreateGekko()
   }
   if (!stress)
   {
-    gekko_set_local_delay(s.gekko, s.local_handle, static_cast<unsigned char>(s.opts.delay));
+    double rtt = -1;
+    s.input_delay = PickInputDelay(&rtt);
+    gekko_set_local_delay(s.gekko, s.local_handle, static_cast<unsigned char>(s.input_delay));
+    AddLog(s.opts.delay != AUTO_DELAY ?
+               fmt::format("input delay {} (set)", s.input_delay) :
+           rtt < 0 ? fmt::format("input delay {} (auto, no round trip yet)", s.input_delay) :
+                     fmt::format("input delay {} (auto, round trip {:.0f} ms)", s.input_delay, rtt));
     gekko_set_disconnect_timeout(s.gekko, DISCONNECT_TIMEOUT_MS);
     static const Input unplugged{};
     gekko_set_disconnected_input(s.gekko, unplugged.data());
@@ -4559,7 +4594,11 @@ std::optional<Options> ParseOptions(const picojson::value& json, std::string* er
   }
   opts.local_slot = static_cast<int>(slot);
   opts.local_port = static_cast<u16>(port);
-  opts.delay = static_cast<int>(delay);
+  // "delay": "auto" picks it from the round trip (AUTO_DELAY), as a room on automatic.
+  const auto d = o.find("delay");
+  const bool auto_delay = d != o.end() && d->second.is<std::string>() &&
+                          d->second.get<std::string>() == "auto";
+  opts.delay = auto_delay ? AUTO_DELAY : static_cast<int>(delay);
   opts.synctest = static_cast<int>(synctest);
   opts.local_pad = static_cast<int>(pad);
   const double rtc = num("rtc", static_cast<double>(opts.rtc));
@@ -4760,7 +4799,8 @@ bool Arm(const Options& options, std::string* error)
   }
   s.phase = Phase::Armed;
   AddLog(fmt::format("armed: slot {}, {} peer(s), port {}, delay {}{}", options.local_slot,
-                     options.peers.size(), options.local_port, options.delay,
+                     options.peers.size(), options.local_port,
+                     options.delay == AUTO_DELAY ? "auto" : std::to_string(options.delay),
                      options.synctest ? fmt::format(", sync test {}", options.synctest) : ""));
   return true;
 }
@@ -5052,7 +5092,8 @@ NetPlay::NetSettings MakeNetSettings()
 {
   NetPlay::NetSettings ns{};
   ns.m_RollbackMode = true;
-  ns.rollback_delay = s.opts.delay;
+  ns.rollback_delay =
+      s.opts.delay == AUTO_DELAY ? Gprb::Session::DEFAULT_INPUT_DELAY : s.opts.delay;
   // The CPU thread is the player's choice: with the deterministic GPU thread (forced for rollback
   // by the netplay layer) single and dual core compute the same.
   ns.cpu_thread = Config::Get(Config::MAIN_CPU_THREAD);
@@ -5692,6 +5733,7 @@ picojson::value Status()
     }
   }
   o["frame_base"] = picojson::value(static_cast<double>(s.frame_base));
+  o["input_delay"] = picojson::value(static_cast<double>(s.input_delay));
   o["plan_frame"] = picojson::value(static_cast<double>(s.plan.active ? s.plan.frame : -1));
   o["image_ms"] = picojson::value(s.image_ms);
   o["image_mb"] = picojson::value(s.image_packed / 1048576.0);

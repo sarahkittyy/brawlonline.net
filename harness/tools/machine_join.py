@@ -54,6 +54,7 @@ def main() -> int:
     ap.add_argument("--host-config", action="append", default=[],
                     help="System.Section.Key=value set on the host's running game (its current layer, as "
                          "Dolphin's settings windows do) before the first join")
+    ap.add_argument("--delay", help="each player's input delay: 0-9 or auto (default: the session's, 2)")
     ap.add_argument("--platform", default="headless", help="Dolphin's window platform (win32 for a real backend)")
     a = ap.parse_args()
 
@@ -75,6 +76,8 @@ def main() -> int:
     print(f"link: {link.describe()}", flush=True)
 
     def make(name: str, session: dict) -> DolphinInstance:
+        if a.delay is not None:
+            session["delay"] = a.delay if a.delay == "auto" else int(a.delay)
         env = dict(kv.split("=", 1) for kv in a.env)
         env["PPR_MACHINE_SESSION"] = json.dumps(session)
         cfg = InstanceConfig(video_backend=a.video, standard_controllers=(0,), other_ports="none",

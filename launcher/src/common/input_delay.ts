@@ -2,7 +2,8 @@
  * The online input delay setting (`inputDelay`, Dolphin.ini `[Online] InputDelay`): the frames
  * between a player's button press and the game using it, for that player's own inputs, as Slippi's
  * delay frames. 0 is automatic: Dolphin picks 1-4 frames from the ping at the start of each game
- * (`Gprb::Session::AutoInputDelay`).
+ * (`Gprb::Session::AutoInputDelay`), and in an Other Games room each time someone joins
+ * (`Machine::PickInputDelay`).
  */
 export const INPUT_DELAY_AUTO = 0;
 

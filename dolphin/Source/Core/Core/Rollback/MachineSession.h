@@ -58,6 +58,7 @@ class SessionCard;
 }
 
 constexpr int MAX_PLAYERS = 4;
+constexpr int AUTO_DELAY = -1;  // Options::delay
 
 // One player's input for one frame (docs/design/brawl-mods.md §6.2).
 //   0      flags (INPUT_*)
@@ -113,7 +114,9 @@ struct Options
   int local_slot = 0;          // this player's in-game port (0-3)
   std::vector<Peer> peers;     // every other player
   u16 local_port = 0;          // UDP port to bind (0: any)
-  int delay = 2;               // this player's input delay in frames (0-9)
+  // This player's input delay in frames (0-9), or AUTO_DELAY: picked from the round trip each time
+  // a GekkoNet session starts (the session's start and every epoch), as P+ picks it.
+  int delay = 2;
   Boundary boundary = Boundary::Auto;  // "boundary": "auto", "brawl" or "vi"
   // The session's wall clock at boot, in seconds since 1970-01-01 (as Dolphin's custom RTC and
   // netplay's initial time); every player must use the same. Must be after 2000-01-01, the

@@ -90,6 +90,8 @@ def run(a: argparse.Namespace) -> int:
     sims: list[NetSim] = []
 
     def boot_one(name: str, session: dict) -> None:
+        if a.delay is not None:
+            session["delay"] = a.delay if a.delay == "auto" else int(a.delay)
         env = dict(kv.split("=", 1) for kv in a.env)
         env["PPR_MACHINE_PACE_LOG"] = "1"
         env["PPR_MACHINE_SESSION"] = json.dumps(session)
@@ -277,6 +279,7 @@ def main() -> int:
     r.add_argument("--speed", type=float, default=None, help="emulation speed (0: unlimited)")
     r.add_argument("--single-core", action="store_true")
     r.add_argument("--rtt", type=float, default=0)
+    r.add_argument("--delay", help="each player's input delay: 0-9 or auto (default: the session's, 2)")
     r.add_argument("--input", choices=["random", "none"], default="random")
     r.add_argument("--hold-max", type=int, default=20)
     r.add_argument("--seed", type=int, default=3)
