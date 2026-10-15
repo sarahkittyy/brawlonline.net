@@ -25,6 +25,7 @@
   gap: 16px;
   min-height: 0;
   overflow-y: auto;
+  container-type: inline-size;
 }
 
 .roomSlot {
@@ -352,8 +353,46 @@
   gap: 8px;
 }
 
+/* "Your games"' buttons stay on one line each: in a narrow column (a window just over 900 px
+   wide) without their icons, and if a wide system font still does not fit, with an ellipsis. */
+.addButtons {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.addButtons > button {
+  min-width: 0;
+  white-space: nowrap;
+}
+
+.addLabel {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+@container (width < 500px) {
+  .addButtons .addIcon {
+    display: none;
+  }
+}
+
+/* The narrowest two columns: the help icon's glyph at the header's edge, as MUI's edge="end". */
+@container (width < 450px) {
+  .addButtons {
+    gap: 0;
+  }
+
+  .help {
+    margin-right: -5px;
+  }
+}
+
 /* "Your games"' help, at the header's right end. */
 .help {
+  display: flex;
+  flex-shrink: 0;
   margin-left: auto;
 }
 

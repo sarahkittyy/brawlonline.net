@@ -159,28 +159,35 @@ export const ModsView = (props: ModsViewProps) => {
             title={Messages.yourBuilds()}
             titleAction={
               <>
-                <div className={styles.roomActions}>
+                <div className={styles.addButtons}>
                   <Tooltip title={Messages.addBuildTooltip()}>
-                    <Button size="small" startIcon={<AddRoundedIcon />} onClick={props.onAddBuild}>
-                      {Messages.addBuild()}
+                    <Button
+                      size="small"
+                      classes={{ startIcon: styles.addIcon }}
+                      startIcon={<AddRoundedIcon />}
+                      onClick={props.onAddBuild}
+                    >
+                      <span className={styles.addLabel}>{Messages.addBuild()}</span>
                     </Button>
                   </Tooltip>
                   <Tooltip title={Messages.addFolderTooltip()}>
-                    <Button size="small" startIcon={<CreateNewFolderOutlinedIcon />} onClick={props.onAddFolder}>
-                      {Messages.addFolder()}
+                    <Button
+                      size="small"
+                      classes={{ startIcon: styles.addIcon }}
+                      startIcon={<CreateNewFolderOutlinedIcon />}
+                      onClick={props.onAddFolder}
+                    >
+                      <span className={styles.addLabel}>{Messages.addFolder()}</span>
                     </Button>
                   </Tooltip>
                 </div>
-                <Tooltip title={Messages.help()}>
-                  <IconButton
-                    size="small"
-                    className={styles.help}
-                    aria-label={Messages.help()}
-                    onClick={() => setFaqOpen(true)}
-                  >
-                    <HelpOutlineRoundedIcon fontSize="small" />
-                  </IconButton>
-                </Tooltip>
+                <span className={styles.help}>
+                  <Tooltip title={Messages.help()}>
+                    <IconButton size="small" aria-label={Messages.help()} onClick={() => setFaqOpen(true)}>
+                      <HelpOutlineRoundedIcon fontSize="small" />
+                    </IconButton>
+                  </Tooltip>
+                </span>
               </>
             }
             content={
