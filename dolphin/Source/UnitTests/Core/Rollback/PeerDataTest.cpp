@@ -5,6 +5,7 @@
 #include <cstring>
 #include <limits>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -148,6 +149,110 @@ TEST(PeerData, InitBlockTakesOnlyTheStageVariant)
   EXPECT_TRUE(rejected);
   EXPECT_EQ(MergeInitBlock(mine, {}, &rejected), mine);
   EXPECT_FALSE(rejected);
+}
+
+namespace
+{
+// Costume lists as P+ v3.2 has them (0x80585B00 + slot * 0x10, +8; read live 2026-10-15): per
+// costume its colour and file number. The team colours: red 0, blue 1, green 3.
+std::vector<CostumeEntry> List(std::string_view hex)
+{
+  std::vector<CostumeEntry> out;
+  const auto bytes = *ParseHex(hex, hex.size() / 2);
+  for (size_t i = 0; i + 1 < bytes.size(); i += 2)
+    out.push_back({bytes[i], bytes[i + 1]});
+  return out;
+}
+const auto KIRBY = List("0600020401030001030209050406070706140015031601170818061e001f032001210722");
+const auto GANONDORF = List("040008040103030200010205071400150316011704180b19051e081f0120032100220423");
+const auto FALCON = List("05000804000103020103060502060414011e001f03200721082201280029032a072b052c");
+const auto BOWSER = List("030008040001010309050a06000703080109050a09140015031601170718");
+const auto KNUCKLES = List("00000301010209030409010a030b000c00140315011607170818001e031f012002210622");
+constexpr std::array<u8, 3> TEAM_COLOURS{0x00, 0x01, 0x03};
+
+LegacyCostumePlayer Player(const std::vector<CostumeEntry>& list, u8 costume, u8 team, u8 file)
+{
+  return {true, costume, team, file, {list}};
+}
+}  // namespace
+
+TEST(PeerData, LegacyTeamCostume)
+{
+  // Kirby's own costume 0 is pink: red gets the first red one (3), blue the first blue (2).
+  EXPECT_EQ(LegacyTeamCostume(KIRBY, 0x00, 0), 3u);
+  EXPECT_EQ(LegacyTeamCostume(KIRBY, 0x01, 0), 2u);
+  // A costume that has the team's colour already stays (the player's own shade of it): Kirby 9
+  // is a second red.
+  EXPECT_EQ(LegacyTeamCostume(KIRBY, 0x00, 9), 9u);
+  // No costume of that colour: the player's own.
+  EXPECT_EQ(LegacyTeamCostume(KIRBY, 0x0B, 4), 4u);
+  EXPECT_EQ(LegacyTeamCostume({}, 0x00, 4), 4u);
+}
+
+TEST(PeerData, OldTeamBattleCostumesAreRestored)
+{
+  // "2026-10-12 2239 Room G1" (v0.1.65): Kirby (red) + Captain Falcon (red) vs Ganondorf + Ganondorf
+  // (green). The recorded SESSION has the costumes locked in (0, 1, 0, 0), the recorded setup key
+  // the files the old plugin's team costumes load (1, 2, 2, 1): both Ganondorfs in his first green.
+  std::array<LegacyCostumePlayer, MAX_PORTS> g1{Player(KIRBY, 0, 0, 0x01), Player(GANONDORF, 1, 2, 0x02),
+                                                Player(GANONDORF, 0, 2, 0x02), Player(FALCON, 0, 0, 0x01)};
+  const auto picks = LegacyTeamCostumes(g1, TEAM_COLOURS);
+  ASSERT_TRUE(picks.has_value());
+  ASSERT_TRUE((*picks)[0] && (*picks)[1] && (*picks)[2] && (*picks)[3]);
+  EXPECT_EQ((*picks)[0]->color_no, 3);
+  EXPECT_EQ((*picks)[0]->file, 0x01);
+  EXPECT_EQ((*picks)[1]->color_no, 3);
+  EXPECT_EQ((*picks)[1]->file, 0x02);
+  EXPECT_EQ((*picks)[2]->color_no, 3);
+  EXPECT_EQ((*picks)[3]->color_no, 2);
+  EXPECT_EQ((*picks)[3]->file, 0x01);
+
+  // "2026-10-12 2248 Room G3": Bowser (blue), Knuckles (red), Ganondorf (blue), Captain Falcon (red),
+  // every costume 0 in SESSION; files 3, 0, 3, 1. Knuckles' costume 0 is red already.
+  std::array<LegacyCostumePlayer, MAX_PORTS> g3{Player(BOWSER, 0, 1, 0x03), Player(KNUCKLES, 0, 0, 0x00),
+                                                Player(GANONDORF, 0, 1, 0x03), Player(FALCON, 0, 0, 0x01)};
+  const auto p3 = LegacyTeamCostumes(g3, TEAM_COLOURS);
+  ASSERT_TRUE(p3.has_value());
+  EXPECT_EQ((*p3)[0]->color_no, 3);
+  EXPECT_EQ((*p3)[1]->color_no, 0);
+  EXPECT_EQ((*p3)[1]->file, 0x00);
+  EXPECT_EQ((*p3)[2]->color_no, 2);
+
+  // An empty port is skipped; a CSS slot list that doesn't give the file is passed over for one
+  // that does.
+  auto gap = g1;
+  gap[2] = {};
+  gap[0].lists.insert(gap[0].lists.begin(), GANONDORF);
+  const auto pg = LegacyTeamCostumes(gap, TEAM_COLOURS);
+  ASSERT_TRUE(pg.has_value());
+  EXPECT_FALSE((*pg)[2].has_value());
+  EXPECT_EQ((*pg)[0]->file, 0x01);
+}
+
+TEST(PeerData, OtherCostumesAreNotTheOldTeamCostumes)
+{
+  std::array<LegacyCostumePlayer, MAX_PORTS> g1{Player(KIRBY, 0, 0, 0x01), Player(GANONDORF, 1, 2, 0x02),
+                                                Player(GANONDORF, 0, 2, 0x02), Player(FALCON, 0, 0, 0x01)};
+  // One recorded costume the old rule does not give (a recording from another build, or a file
+  // made up): nothing is restored.
+  auto other = g1;
+  other[3].recorded_file = 0x00;
+  EXPECT_FALSE(LegacyTeamCostumes(other, TEAM_COLOURS).has_value());
+  // A team battle of today's builds, Kirby in his own pink costume on red: not the old rule's.
+  auto today = g1;
+  today[0].recorded_file = 0x00;
+  EXPECT_FALSE(LegacyTeamCostumes(today, TEAM_COLOURS).has_value());
+  // A costume with P+'s alt bits, a team out of range, no costume list, or no player at all.
+  auto alt = g1;
+  alt[0].costume = static_cast<u8>(COSTUME_ALT_Z);
+  EXPECT_FALSE(LegacyTeamCostumes(alt, TEAM_COLOURS).has_value());
+  auto team = g1;
+  team[1].team = 3;
+  EXPECT_FALSE(LegacyTeamCostumes(team, TEAM_COLOURS).has_value());
+  auto nolist = g1;
+  nolist[1].lists.clear();
+  EXPECT_FALSE(LegacyTeamCostumes(nolist, TEAM_COLOURS).has_value());
+  EXPECT_FALSE(LegacyTeamCostumes({}, TEAM_COLOURS).has_value());
 }
 
 TEST(PeerData, StartPointsMustBeAShuffle)

@@ -235,6 +235,55 @@ std::vector<u8> MergeInitBlock(const std::vector<u8>& mine, const std::vector<u8
   return out;
 }
 
+size_t LegacyTeamCostume(const std::vector<CostumeEntry>& list, u8 team_colour, size_t costume)
+{
+  std::optional<size_t> first;
+  for (size_t i = 0; i < list.size() && i < MAX_COSTUME_LIST; ++i)
+  {
+    if (list[i].colour == COSTUME_LIST_END)
+      break;
+    if (list[i].colour != team_colour)
+      continue;
+    if (i == costume)
+      return costume;
+    if (!first)
+      first = i;
+  }
+  return first.value_or(costume);
+}
+
+std::optional<std::array<std::optional<CostumePick>, MAX_PORTS>>
+LegacyTeamCostumes(const std::array<LegacyCostumePlayer, MAX_PORTS>& players,
+                   const std::array<u8, 3>& team_colours)
+{
+  std::array<std::optional<CostumePick>, MAX_PORTS> out;
+  bool any = false;
+  for (int port = 0; port < MAX_PORTS; ++port)
+  {
+    const auto& p = players[port];
+    if (!p.present)
+      continue;
+    if (p.costume > MAX_COSTUME || p.team >= team_colours.size())
+      return std::nullopt;
+    for (const auto& list : p.lists)
+    {
+      const size_t i = LegacyTeamCostume(list, team_colours[p.team], p.costume);
+      if (i < list.size() && i < MAX_COSTUME_LIST && list[i].colour != COSTUME_LIST_END &&
+          list[i].file == p.recorded_file)
+      {
+        out[port] = CostumePick{static_cast<u8>(i), list[i].file};
+        break;
+      }
+    }
+    if (!out[port])
+      return std::nullopt;
+    any = true;
+  }
+  if (!any)
+    return std::nullopt;
+  return out;
+}
+
 bool IsPermutation(const std::array<u32, 4>& mine, const std::array<u32, 4>& theirs)
 {
   return std::is_permutation(mine.begin(), mine.end(), theirs.begin(), theirs.end());

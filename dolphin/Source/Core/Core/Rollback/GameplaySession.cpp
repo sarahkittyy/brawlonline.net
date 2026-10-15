@@ -7184,8 +7184,100 @@ void EndReplay(Core::System& system, const std::string& reason, const GameResult
 
 // ---- Playback (docs/design/replays.md §6): a joiner whose host is the replay ----
 
-// The match start (ApplyMatchStart's joiner side): the recorded host's stage variant, the seeds of
-// the recorded session seed and match index, the serial counter.
+// P+'s CSS slot table (0x39 slots: docs/brawl-memory-map.md, harness brawl.py CSS_TO_CHAR_KIND):
+// per slot +0 its gmCharacterKind and +8 its costume list; the team colours (red, blue, green).
+constexpr u32 CSS_SLOT_TABLE = 0x80585B00, CSS_SLOT_SIZE = 0x10, CSS_SLOT_COSTUMES = 0x08,
+              CSS_SLOTS = 0x39;
+constexpr u32 TEAM_COLOURS = 0x805A21F0;
+constexpr u32 PI_COLOR_FILE = 0x05, PI_COLOR_NO = 0x06;  // m_colorFileNo, m_colorNo
+// The setup key (SetupKey): the init block, then per player character, state, stocks, costume
+// (m_colorFileNo) and, in a team battle, the team.
+constexpr size_t KEY_PLAYERS = 0x20, KEY_TEAMS_PLAYER = 5, KEY_COSTUME = 3;
+
+std::vector<PeerData::CostumeEntry> CostumeList(const Guest& g, u32 list)
+{
+  std::vector<PeerData::CostumeEntry> out;
+  const u8* l = g.Ptr(list, 2 * PeerData::MAX_COSTUME_LIST);
+  for (size_t i = 0; l && i < PeerData::MAX_COSTUME_LIST && l[2 * i] != PeerData::COSTUME_LIST_END; ++i)
+    out.push_back({l[2 * i], l[2 * i + 1]});
+  return out;
+}
+
+// A team battle recorded before 2026-10-12 (PeerData::LegacyTeamCostumes): its players played
+// their team's costume, the rebuilt match the recorded SESSION's (the costume they locked in). The
+// match gets the recorded costumes before it loads, when the old rule gives every one of them from
+// this game's own costume lists; else it is left as built and the barrier's setup check decides.
+void RestoreLegacyTeamCostumes(Core::System& system, const Guest& g)
+{
+  namespace GB = Online::GameBridge;
+  const auto& key = s.pb.setup_key;
+  const auto& se = s.pb.session;
+  const auto mm = ModeMeleeAddr(g);
+  const u8* p = mm ? g.Ptr(*mm, Addr::MODE_MELEE_SIZE) : nullptr;
+  if (!p || p[MM_IS_TEAMS] == 0 || key.size() < KEY_PLAYERS + MAX_LOBBY_PLAYERS * KEY_TEAMS_PLAYER ||
+      key[MM_IS_TEAMS - INIT_BLOCK_OFFSET] == 0 ||
+      se.size() < GB::SESSION_PLAYERS_OFF + MAX_LOBBY_PLAYERS * GB::SESSION_PLAYER_SIZE)
+  {
+    return;
+  }
+  const u8* colours = g.Ptr(TEAM_COLOURS, 3);
+  const u8* slots = g.Ptr(CSS_SLOT_TABLE, CSS_SLOTS * CSS_SLOT_SIZE);
+  if (!colours || !slots)
+    return;
+  std::array<PeerData::LegacyCostumePlayer, MAX_LOBBY_PLAYERS> players;
+  bool differs = false;
+  for (u32 port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    const u8* pl = p + MM_PLAYERS + port * MM_PLAYER_SIZE;
+    const u8* rec = key.data() + KEY_PLAYERS + port * KEY_TEAMS_PLAYER;
+    if (pl[PI_STATE] != 0)
+      continue;
+    // Only the costume may differ: the character, state, stocks and team are the recording's.
+    if (rec[0] != pl[0] || rec[1] != pl[PI_STATE] || rec[2] != pl[4] || rec[4] != pl[PI_TEAM])
+      return;
+    const u32 sp = GB::SESSION_PLAYERS_OFF + port * GB::SESSION_PLAYER_SIZE;
+    auto& lp = players[port];
+    lp.present = true;
+    lp.costume = se[sp + 2];  // SessionPlayer::costume
+    lp.team = pl[PI_TEAM];
+    lp.recorded_file = rec[KEY_COSTUME];
+    differs |= lp.recorded_file != pl[PI_COLOR_FILE];
+    for (u32 slot = 0; slot < CSS_SLOTS; ++slot)
+    {
+      const u8* e = slots + slot * CSS_SLOT_SIZE;
+      if (e[0] != pl[0])
+        continue;
+      const auto list = g.Ptr32(CSS_SLOT_TABLE + slot * CSS_SLOT_SIZE + CSS_SLOT_COSTUMES);
+      if (list)
+        lp.lists.push_back(CostumeList(g, *list));
+    }
+  }
+  if (!differs)
+    return;
+  const auto picks = PeerData::LegacyTeamCostumes(players, {colours[0], colours[1], colours[2]});
+  if (!picks)
+  {
+    WARN_LOG_FMT(BRAWLBACK, "replay: the recorded team costumes are not the pre-2026-10-12 team "
+                            "costumes; kept the rebuilt ones");
+    return;
+  }
+  for (u32 port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+  {
+    const auto& pick = (*picks)[port];
+    const u8* pl = p + MM_PLAYERS + port * MM_PLAYER_SIZE;
+    if (!pick || (pl[PI_COLOR_FILE] == pick->file && pl[PI_COLOR_NO] == pick->color_no))
+      continue;
+    INFO_LOG_FMT(BRAWLBACK, "replay: P{} plays its team's costume as recorded ({} file {}, was {} file {})",
+                 port + 1, pick->color_no, pick->file, pl[PI_COLOR_NO], pl[PI_COLOR_FILE]);
+    const u32 at = *mm + MM_PLAYERS + port * MM_PLAYER_SIZE;
+    system.GetMemory().CopyToEmu(at + PI_COLOR_FILE, &pick->file, 1);
+    system.GetMemory().CopyToEmu(at + PI_COLOR_NO, &pick->color_no, 1);
+  }
+}
+
+// The match start (ApplyMatchStart's joiner side): the recorded host's stage variant, the costumes
+// of a team battle recorded before 2026-10-12, the seeds of the recorded session seed and match
+// index, the serial counter.
 void ApplyPlaybackStart(Core::System& system, std::string_view when)
 {
   const Guest g(system.GetMemory());
@@ -7200,6 +7292,7 @@ void ApplyPlaybackStart(Core::System& system, std::string_view when)
   }
   if (const auto mm = ModeMeleeAddr(g); mm && merged != mine)
     system.GetMemory().CopyToEmu(*mm + INIT_BLOCK_OFFSET, merged.data(), merged.size());
+  RestoreLegacyTeamCostumes(system, g);
   PinScreenSetting(system);
   const auto seeds = MatchSeeds(s.pb.seed, s.pb.match_index);
   WriteU32(system, Addr::MTRAND_DEFAULT_SEED, seeds[0]);

@@ -165,6 +165,48 @@ constexpr u8 MAX_STAGE_VARIANT = 0x0F;
 std::vector<u8> MergeInitBlock(const std::vector<u8>& mine, const std::vector<u8>& host,
                                bool* rejected);
 
+// Team battles recorded before 2026-10-12 (v0.1.65 and older; game-code 262b064b removed it): the
+// plugin gave every player in a team battle their team's costume (teamCostume), not the one they
+// locked in, and the recording's setup key has those costumes (gmPlayerInitData +0x05
+// m_colorFileNo). Builds since play the locked-in costume, so playback restores the old rule's
+// (docs/design/replays.md §6). A character's costume list (P+'s CSS slot table, 0x80585B00 +
+// slot * 0x10, +8): per costume its colour and its file number, ending with colour 0x0C.
+struct CostumeEntry
+{
+  u8 colour = 0;
+  u8 file = 0;
+};
+constexpr u8 COSTUME_LIST_END = 0x0C;
+constexpr size_t MAX_COSTUME_LIST = 0x20;
+// The old rule: `costume` itself if it has the team's colour (the player's own shade of it), else
+// the list's first costume of that colour; `costume` unchanged when the list has none.
+size_t LegacyTeamCostume(const std::vector<CostumeEntry>& list, u8 team_colour, size_t costume);
+// One present player of the playback's team battle: the recorded SESSION's costume and team, the
+// file number the recording played (its setup key), and the costume lists of the CSS slots of the
+// player's character (P+ has more than one slot for some kinds; the game's own pick among them,
+// exchangeGmCharacterKind2MuSelchkind, is the one that gives the recorded file).
+struct LegacyCostumePlayer
+{
+  bool present = false;
+  u8 costume = 0;
+  u8 team = 0;
+  u8 recorded_file = 0;
+  std::vector<std::vector<CostumeEntry>> lists;
+};
+struct CostumePick
+{
+  u8 color_no = 0;  // gmPlayerInitData +0x06 m_colorNo
+  u8 file = 0;      // +0x05 m_colorFileNo
+};
+// Per present player the old rule's costume, when it gives every present player the recorded
+// file; nullopt otherwise (a recording whose costumes the old rule does not explain: left as is,
+// and the barrier's setup check refuses it). `team_colours`: the colour of each team (red, blue,
+// green; 0x805A21F0). A SESSION costume with P+'s alt bits is never the old rule's (no build that
+// had it had alts).
+std::optional<std::array<std::optional<CostumePick>, MAX_PORTS>>
+LegacyTeamCostumes(const std::array<LegacyCostumePlayer, MAX_PORTS>& players,
+                   const std::array<u8, 3>& team_colours);
+
 // The fighter start point table (4 words): the host's must be a permutation of ours.
 bool IsPermutation(const std::array<u32, 4>& mine, const std::array<u32, 4>& theirs);
 
