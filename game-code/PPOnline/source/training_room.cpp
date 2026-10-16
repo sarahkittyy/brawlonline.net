@@ -483,6 +483,46 @@ namespace TrainingRoom {
             "bctr\n\t");
     }
 
+    // ---- The stage module's name (bug reports #31, #32, #33, 2026-10-16) ----
+    // sora_melee's stage loader (text+0x23F5C0) keeps the stage module's name at +0x88 from
+    // moGetStageModuleName (text+0x23F734), loads that module, and when its stage is torn down
+    // destroys the module by that name (text+0x23FA54, gfModuleManager::destroy). P+'s STEX hook
+    // (Net-StageFiles.asm, 0x80043B28) returns a pointer into the stage's param file, which every
+    // stage reads into the same buffer (0x8053F000). Unranked's room ends straight into game 1,
+    // and game 1's setup reads its param before the room's scMelee is torn down: the room's loader
+    // then destroyed game 1's module (not loaded) instead of its own, the room's st_mansion.rel
+    // stayed loaded, and the next room did not load it again but had no stage class for it (the
+    // stage factory, text+0x221A44, read through NULL: the game hung as the room loaded). The
+    // loader gets its own copy of the name: it destroys the module it loaded.
+    static char s_stageModuleNames[8][40];   // (P+'s names are at most 32 characters)
+    static u8 s_stageModuleNext;
+
+    extern "C" const char* pptraining_keepStageModuleName(const char* name)
+    {
+        if (!isPtr((u32)name)) return name;
+        char* copy = s_stageModuleNames[s_stageModuleNext++ & 7];
+        strncpy(copy, name, sizeof(s_stageModuleNames[0]) - 1);
+        copy[sizeof(s_stageModuleNames[0]) - 1] = 0;
+        return copy;
+    }
+
+    // text+0x23F73C (0x8094A150) `stw r3,0x88(r31)`, after `cmpwi r3,0`: the beq after it reads
+    // cr0. r31 is the loader; nothing else volatile is live; the function saved LR.
+    __attribute__((naked)) void hookStageModuleName()
+    {
+        asm volatile(
+            "lis 12, pptraining_keepStageModuleName@ha\n\t"
+            "addi 12, 12, pptraining_keepStageModuleName@l\n\t"
+            "mtctr 12\n\t"
+            "bctrl\n\t"
+            "stw 3, 0x88(31)\n\t"
+            "cmpwi 3, 0\n\t"
+            "lis 12, 0x8094\n\t"
+            "ori 12, 12, 0xA154\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t");
+    }
+
     // The room's scMelee is the scene: the room runs (state 6 set it as the next scene).
     static void noteScene()
     {
@@ -496,5 +536,6 @@ namespace TrainingRoom {
     {
         api->sySimpleHookRel(0x000371C4, reinterpret_cast<void*>(hookAfterSetup), 1 /* SORA_SCENE */);
         api->sySimpleHookRel(0x000371FC, reinterpret_cast<void*>(hookState7), 1);
+        api->sySimpleHookRel(0x0023F73C, reinterpret_cast<void*>(hookStageModuleName), 27 /* SORA_MELEE */);
     }
 }

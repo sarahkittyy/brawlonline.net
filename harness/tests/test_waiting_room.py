@@ -26,6 +26,7 @@ pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 
 ROOT = paths.workspace_root()
 STAGE_ONLINE_TRAINING = 0x37
+ST_MANSION = "st_mansion.rel"   # P+'s module for the Online Training stage (Training.param)
 UNRANKED_STAGES = [0x21, 0x2D]   # Smashville, Dream Land (a two-stage test list)
 WIFIPR_HUD = 0x805A0300          # ifWifiprTask's HUD: the banner and the player panels
 SCREEN_ONLINE_BUSY = 4           # PPOM: an online search (the launcher shows no "In game")
@@ -143,6 +144,60 @@ def test_unranked_set_from_the_waiting_room(backend: OnlineBackend, dolphin: Cal
         assert g.bridge()["lost"] == 0
         _logs_clean(g)
         g.c.mm_cancel()
+
+
+def _modules(g: Game) -> list[str]:
+    """The modules gfModuleManager has loaded, by name (what its isLoaded and destroy compare):
+    the manager at *0x805A0038, its 16 gfModuleInfo (60 bytes) from +8, each with its gfModule
+    at +0 and its name at +0x1A."""
+    mgr = g.c.read_u32(0x805A0038)
+    names = []
+    for i in range(16):
+        info = mgr + 8 + 60 * i
+        if g.c.read_u32(info):
+            names.append(g.c.read_mem(info + 0x1A, 33).split(b"\0")[0].decode("latin-1"))
+    return names
+
+
+@pytest.mark.slow
+def test_waiting_room_again_after_unranked(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                           gpu_backend: str) -> None:
+    """Bug report #31 (2026-10-16): the room that ends straight into Unranked's game 1 left its
+    stage module (P+'s st_mansion.rel) loaded, and the next search's room hung the game as it
+    loaded (training_room.cpp, "The stage module's name"). After game 1 the module is gone, and
+    the next room loads and plays."""
+    test = "waiting-room-again"
+    ua, ub = backend.create_user("ida", "IDA"), backend.create_user("jon", "JON")
+    a = _boot(dolphin, "wr-aa", backend, ua, gpu_backend, test, "gameplay")
+    b = _boot(dolphin, "wr-ab", backend, ub, gpu_backend, test, "gameplay")
+    _both(a.to_main_menu, b.to_main_menu)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("unranked"), lambda: b.to_css("unranked"))
+    for g in (a, b):
+        B.write_rules(g.c, stocks=1, minutes=2, items_off=True)
+        ppom.allow_test_rules(g.c)
+
+    _search(a, 1)
+    assert _in_room(a)
+    _wait(lambda: ST_MANSION in _modules(a), 20, "the room's stage module loaded")
+    _search(b, 1)
+    _peer_shown(a, ub)
+    _peer_shown(b, ua)
+    online_set.play_set([a, b], games=1, mode="unranked")
+    for g in (a, b):
+        assert _room(g) & 0xF0F == 0x100 | ROOM_ENDED, hex(_room(g))   # ended into the match
+        assert ST_MANSION not in _modules(g), (g.inst.name, "the room's stage module stayed loaded", _modules(g))
+
+    # As the player in the report: B out of the CSS (the session ends; back on the ONLINE page,
+    # WITH ANYONE highlighted), Unranked again, search.
+    a.steps("hold B 90", "until muMenuMain 600", "wait 90")
+    a.steps("tap A", "wait 90", "tap A", "wait 400", "until scSelctCharacter 600", "wait 30")
+    a.steps("stick up 30", "wait 5", "tap A 8", "wait 30")
+    a.shot("02-css-again")
+    _search(a, 1)
+    assert _in_room(a)
+    _check_room(a, "03-room-again")
+    _logs_clean(a)
 
 
 @pytest.mark.slow
