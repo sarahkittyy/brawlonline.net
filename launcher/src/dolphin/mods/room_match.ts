@@ -48,8 +48,13 @@ export function matchRoom(room: ModRoomBuild, builds: ModBuild[]): RoomMatch {
   const roomCard = hasCard(room.sd);
   const sameDisc = builds.filter((b) => b.parts?.disc === room.disc);
   const cardOf = (b: ModBuild) => (b.sdPath ? b.parts?.sdCard ?? null : null);
+  // The exact build (its launcher too) before any other game on the disc with a card: that one
+  // can be another release of the mod, its whole card to download (bug #28, 2026-10-16: RUDY#60's
+  // REX room asked BUDS#979 for 8032 MB, his REX 0 FINAL BUILD's card; his 0½ Hotfix 1, the
+  // room's build, was 20 MB off).
   const best =
     sameDisc.find((b) => roomCard && cardOf(b) === room.sd) ??
+    sameDisc.find((b) => b.hash === room.hash) ??
     sameDisc.find((b) => roomCard === !!b.sdPath) ??
     sameDisc[0] ??
     null;

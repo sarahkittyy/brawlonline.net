@@ -44,6 +44,18 @@ describe("matchRoom", () => {
     expect(matchRoom(room, [other, build("rex")]).build?.id).toBe("rex");
   });
 
+  it("prefers the room's exact build when no card is the room's", () => {
+    // Bug #28: another release of the mod on the same disc came first, its whole card to fetch.
+    const final = build("final", { parts: { disc: DISC, launcher: null, sd: true, sdCard: OTHER_CARD } });
+    const hotfix = build("hotfix", {
+      hash: room.hash,
+      parts: { disc: DISC, launcher: null, sd: true, sdCard: "7".repeat(64) },
+    });
+    const m = matchRoom(room, [final, hotfix]);
+    expect(m).toMatchObject({ joinable: true, disc: "same", sd: "differs" });
+    expect(m.build?.id).toBe("hotfix");
+  });
+
   it("does not join with another disc, and names the game to fix", () => {
     const rev2 = build("rev2", { revision: 2, parts: { disc: OTHER_DISC, launcher: null, sd: true, sdCard: CARD } });
     const m = matchRoom(room, [rev2]);
