@@ -868,7 +868,7 @@ void DisplayFrame(float scale)
     OnNewView();
   }
   const bool in_match = Online::Rooms::GetScreen() == Online::Rooms::Screen::Match;
-  const bool shown = s.view && s.view->active &&
+  const bool shown = s.view && s.view->active && !Config::Get(Config::ONLINE_DISABLE_CHAT) &&
                      (!in_match || Config::Get(Config::ONLINE_CHAT_IN_MATCHES));
   if (!shown)
   {

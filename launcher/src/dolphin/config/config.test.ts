@@ -36,6 +36,23 @@ describe("online settings: music", () => {
   });
 });
 
+describe("online settings: disable chat", () => {
+  it("is off in a Dolphin.ini without the key", async () => {
+    const ini = await IniFile.init(iniPath);
+    expect((await getOnlineSettings(ini)).disableChat).toBe(false);
+  });
+
+  it("round-trips through [Online] DisableChat", async () => {
+    const ini = await IniFile.init(iniPath);
+    await setOnlineSettings(ini, { disableChat: true });
+    expect(await fs.promises.readFile(iniPath, "utf8")).toMatch(/\[Online\][^[]*DisableChat = True/);
+    expect((await getOnlineSettings(await IniFile.init(iniPath))).disableChat).toBe(true);
+
+    await setOnlineSettings(ini, { disableChat: false });
+    expect((await getOnlineSettings(await IniFile.init(iniPath))).disableChat).toBe(false);
+  });
+});
+
 describe("online settings: let others stream my games", () => {
   it("is on in a Dolphin.ini without the key", async () => {
     const ini = await IniFile.init(iniPath);

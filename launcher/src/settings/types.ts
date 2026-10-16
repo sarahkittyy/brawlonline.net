@@ -42,6 +42,10 @@ export interface SettingsSchema {
   // Online: the game's music in matches and menus. Synced to Dolphin.ini `[Online] Music`.
   enableMusic: boolean;
 
+  // Online: "Disable Chat": no chat window in the game at all (rooms, menus, matches). Synced to
+  // Dolphin.ini `[Online] DisableChat`.
+  disableChat: boolean;
+
   // Online: "Let others stream my games" (docs/design/spectating.md): this player's game uploads
   // its games' inputs for spectators. Synced to Dolphin.ini `[Online] StreamGames`.
   enableStreamGames: boolean;

@@ -19,6 +19,7 @@ import { useDolphinStore } from "@/lib/dolphin/use_dolphin_store";
 import { useIsoVerification, useIsoVerificationFraction } from "@/lib/hooks/use_iso_verification";
 import {
   useCloseDolphinAfterSpectating,
+  useDisableChat,
   useEnableMusic,
   useEnableStreamGames,
   useInputDelay,
@@ -69,6 +70,7 @@ export const GameSettings = React.memo(() => {
   const [launchMeleeOnPlay, setLaunchMelee] = useLaunchGameOnPlay();
   const [inputDelay, setInputDelay] = useInputDelay();
   const [enableMusic, setEnableMusic] = useEnableMusic();
+  const [disableChat, setDisableChat] = useDisableChat();
   const [enableStreamGames, setEnableStreamGames] = useEnableStreamGames();
   const [closeAfterSpectating, setCloseAfterSpectating] = useCloseDolphinAfterSpectating();
   const netplayDolphinOpen = useDolphinStore((store) => store.netplayOpened);
@@ -155,6 +157,19 @@ export const GameSettings = React.memo(() => {
               onChange={(checked) => setEnableMusic(checked)}
               label={Messages.enableMusic()}
               description={Messages.enableMusicDescription()}
+              disabled={netplayDolphinOpen}
+            />
+          </div>
+        </Tooltip>
+      </SettingItem>
+      <SettingItem>
+        <Tooltip title={netplayDolphinOpen ? Messages.closeDolphinToChange() : ""} placement="bottom-start">
+          <div>
+            <Toggle
+              value={disableChat}
+              onChange={(checked) => setDisableChat(checked)}
+              label={Messages.disableChat()}
+              description={Messages.disableChatDescription()}
               disabled={netplayDolphinOpen}
             />
           </div>

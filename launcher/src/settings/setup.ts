@@ -82,6 +82,11 @@ function setupSettingsSubscriptions(settingsManager: SettingsManager, dolphinMan
     await installation.updateSettings({ enableMusic });
   });
 
+  settingsManager.onSettingChange("disableChat", async (disableChat) => {
+    const installation = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
+    await installation.updateSettings({ disableChat });
+  });
+
   settingsManager.onSettingChange("enableStreamGames", async (enableStreamGames) => {
     const installation = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
     await installation.updateSettings({ enableStreamGames });

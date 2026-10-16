@@ -58,6 +58,9 @@ extern const Info<std::string> ONLINE_CHAT_WINDOW;
 // device, such as "`T`" (HotkeyManagerEmu::LoadConfig puts it on "Activate NetPlay Chat"). Empty:
 // the hotkey keeps what Hotkeys.ini has (T by default).
 extern const Info<std::string> ONLINE_CHAT_KEY;
+// The launcher's "Disable Chat": no chat window anywhere (rooms, menus, matches), and the chat
+// hotkey opens nothing.
+extern const Info<bool> ONLINE_DISABLE_CHAT;
 
 // Replays (docs/design/replays.md §4.5; the launcher's Settings > Replays writes them): every online
 // game is saved into ReplayDir (empty: <User>/Replays), in a folder per month (YYYY-MM) when

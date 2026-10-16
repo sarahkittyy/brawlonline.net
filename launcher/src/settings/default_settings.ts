@@ -43,6 +43,7 @@ export const defaultAppSettings: AppSettings = {
     launchGameOnPlay: true,
     inputDelay: INPUT_DELAY_AUTO,
     enableMusic: true,
+    disableChat: false,
     enableStreamGames: true,
     closeDolphinAfterSpectating: true,
     autoUpdateLauncher: true,

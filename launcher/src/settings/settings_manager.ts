@@ -134,6 +134,10 @@ export class SettingsManager extends EventEmitter {
     return this.get().settings.enableMusic;
   }
 
+  getDisableChat(): boolean {
+    return this.get().settings.disableChat;
+  }
+
   getEnableStreamGames(): boolean {
     return this.get().settings.enableStreamGames;
   }

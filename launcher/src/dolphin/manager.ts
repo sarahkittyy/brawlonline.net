@@ -974,6 +974,7 @@ export class DolphinManager {
       enableMonthlySubfolders: this.settingsManager.getEnableMonthlySubfolders(),
       inputDelay: this.settingsManager.getInputDelay(),
       enableMusic: this.settingsManager.getEnableMusic(),
+      disableChat: this.settingsManager.getDisableChat(),
       enableStreamGames: this.settingsManager.getEnableStreamGames(),
     });
   }
@@ -1002,6 +1003,9 @@ export class DolphinManager {
     );
     await this._updateLauncherSetting(this.settingsManager.getEnableMusic(), newSettings.enableMusic, (val) =>
       this.settingsManager.updateSetting("enableMusic", val),
+    );
+    await this._updateLauncherSetting(this.settingsManager.getDisableChat(), newSettings.disableChat, (val) =>
+      this.settingsManager.updateSetting("disableChat", val),
     );
     await this._updateLauncherSetting(
       this.settingsManager.getEnableStreamGames(),

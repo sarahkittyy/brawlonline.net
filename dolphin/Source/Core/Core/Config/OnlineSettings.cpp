@@ -34,6 +34,7 @@ const Info<bool> ONLINE_MUSIC{{System::Main, "Online", "Music"}, true};
 const Info<bool> ONLINE_CHAT_IN_MATCHES{{System::Main, "Online", "ChatInMatches"}, true};
 const Info<std::string> ONLINE_CHAT_WINDOW{{System::Main, "Online", "ChatWindow"}, ""};
 const Info<std::string> ONLINE_CHAT_KEY{{System::Main, "Online", "ChatKey"}, ""};
+const Info<bool> ONLINE_DISABLE_CHAT{{System::Main, "Online", "DisableChat"}, false};
 const Info<bool> ONLINE_SAVE_REPLAYS{{System::Main, "Online", "SaveReplays"}, true};
 const Info<std::string> ONLINE_REPLAY_DIR{{System::Main, "Online", "ReplayDir"}, ""};
 const Info<bool> ONLINE_STREAM_GAMES{{System::Main, "Online", "StreamGames"}, true};

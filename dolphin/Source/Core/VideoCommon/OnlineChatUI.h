@@ -34,7 +34,8 @@ void SetClipboard(Clipboard clipboard);
 void InstallClipboard();
 // The chat font (Noto Sans + Noto Sans JP), loaded by OnScreenUI. Under the ImGui lock.
 void SetFont(ImFont* font);
-// Draws the window if the player is in a chat group. Under the ImGui lock, once per frame.
+// Draws the window if the player is in a chat group and chat is not disabled ([Online]
+// DisableChat). Under the ImGui lock, once per frame.
 void Display(float scale);
 // The "Activate NetPlay Chat" hotkey: open the box (any thread).
 void Activate();
