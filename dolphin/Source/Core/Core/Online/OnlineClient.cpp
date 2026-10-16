@@ -16,6 +16,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/UPnP.h"
 #include "Core/Config/OnlineSettings.h"
+#include "Core/Core.h"
 #include "Core/Online/OnlineSession.h"
 #include "Core/Online/Ranked.h"
 #include "Core/Online/Rooms.h"
@@ -37,6 +38,10 @@ std::vector<std::thread> s_cleanup_threads;
 // start a session after the cleanup stopped it. Each search has a generation; Cleanup() bumps it.
 std::mutex s_session_gate;
 u64 s_generation = 0;
+// The game's search (SearchOptions::cancel_on_stop): its generation, 0 with none. Under s_mutex.
+u64 s_cancel_on_stop = 0;
+std::once_flag s_stop_hook_once;
+Common::EventHook s_stop_hook;
 
 std::mutex s_handoff_mutex;
 std::string s_handoff;  // "", "started", "kept" (no backend / not wanted), "failed"
@@ -131,6 +136,21 @@ User& GetUser()
 
 std::optional<std::string> FindMatch(const SearchOptions& options)
 {
+  if (options.cancel_on_stop)
+  {
+    // The game stopping (Dolphin's Stop, the game window closing) while its search still runs:
+    // nothing is left to play the match it finds. Without this the search went on, matched, and
+    // started a ranked set nobody played; the opponent's "opponent left" then abandoned it, the
+    // player's loss (bug report #23, 2026-10-15). A match connected already is the session's and
+    // Ranked's (their own stop hooks).
+    // Outside s_mutex, which the hook takes.
+    std::call_once(s_stop_hook_once, [] {
+      s_stop_hook = Core::AddOnStateChangedCallback([](Core::State state) {
+        if (state == Core::State::Stopping)
+          CancelGameSearch();
+      });
+    });
+  }
   std::lock_guard lk(s_mutex);
   User& user = GetUserLocked();
   if (s_matchmaking && s_matchmaking->IsSearching())
@@ -145,6 +165,7 @@ std::optional<std::string> FindMatch(const SearchOptions& options)
     std::lock_guard gate(s_session_gate);
     generation = ++s_generation;
   }
+  s_cancel_on_stop = options.cancel_on_stop ? generation : 0;
   const picojson::object selections = options.selections;
   if (s_matchmaking)
   {
@@ -177,6 +198,7 @@ void Cleanup()
     std::lock_guard lk(s_mutex);
     old = std::move(s_matchmaking);
     s_searched = false;
+    s_cancel_on_stop = 0;
   }
   SetHandoff("");
   // Slippi: doConnectionCleanup runs on its own thread so the game is not blocked while ENet
@@ -189,6 +211,25 @@ void Cleanup()
   std::lock_guard lk(s_mutex);
   if (old)
     s_cleanup_threads.emplace_back([old = std::move(old)]() mutable { old.reset(); });
+}
+
+void CancelGameSearch()
+{
+  {
+    std::lock_guard lk(s_mutex);
+    // Under the gate: a match connecting meanwhile either has been handed off (no longer searching)
+    // or is not handed off at all (the generation moves on in Cleanup()).
+    std::lock_guard gate(s_session_gate);
+    if (!s_cancel_on_stop || s_cancel_on_stop != s_generation || !s_matchmaking ||
+        !s_matchmaking->IsSearching())
+    {
+      return;
+    }
+    s_cancel_on_stop = 0;
+    ++s_generation;
+  }
+  NOTICE_LOG_FMT(NETPLAY, "Online: the game is stopping; cancelling its search");
+  Cleanup();
 }
 
 void Shutdown()

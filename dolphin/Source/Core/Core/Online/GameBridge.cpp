@@ -538,6 +538,7 @@ Response FindOpponent(const Core::CPUThreadGuard& guard, u32 payload, std::strin
   if (mode == u8(Matchmaking::Mode::Direct) || mode == u8(Matchmaking::Mode::Teams))
     options.settings.connect_code = code;
   options.hand_off = s_hand_off.load();
+  options.cancel_on_stop = true;
   options.selections["character"] = picojson::value(static_cast<double>(locked_char));
   options.selections["costume"] = picojson::value(static_cast<double>(costume));
   options.selections["team"] = picojson::value(static_cast<double>(team));

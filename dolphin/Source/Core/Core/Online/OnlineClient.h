@@ -41,6 +41,9 @@ struct SearchOptions
   int room_host_port = 0;
   bool room_teams = false;
   u8 room_pickers = 0;
+  // The game's own search (GameBridge's FIND_OPPONENT): the game stopping cancels it while it has
+  // not connected yet, as the game leaving the CSS does (CLEANUP_CONNECTION).
+  bool cancel_on_stop = false;
 };
 
 // Slippi's FIND_OPPONENT: starts a search. Fails only while a search is already running.
@@ -48,6 +51,9 @@ std::optional<std::string> FindMatch(const SearchOptions& options);
 // Slippi's CLEANUP_CONNECTION: ends the search or the connection and the session, and starts over
 // with a fresh, idle matchmaking. Returns at once; the teardown finishes in the background.
 void Cleanup();
+// The game is stopping: Cleanup() if the running search is the game's (cancel_on_stop) and has not
+// connected yet. Called on Core::State::Stopping.
+void CancelGameSearch();
 // Stops everything and waits for it (process exit).
 void Shutdown();
 
