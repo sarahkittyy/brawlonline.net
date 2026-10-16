@@ -36,6 +36,11 @@ ROOM_RUNNING, ROOM_ENDED = 3, 7
 ROOM_BANNER, ROOM_SANDBAG = 0x10000, 0x20000
 
 
+def _fade(g: Game) -> int:
+    """The alpha of the black drawn over the screen last frame (training_room.cpp fadeAlpha)."""
+    return _room(g) >> 24
+
+
 @pytest.fixture(scope="module")
 def backend(tmp_path_factory: pytest.TempPathFactory) -> Iterator[OnlineBackend]:
     rules = json.loads((ROOT / "server" / "config" / "rulesets.json").read_text(encoding="utf-8"))
@@ -80,6 +85,7 @@ def _check_room(g: Game, shot: str) -> None:
     """The room is Brawl's Online Training stage with the player's fighter, the Sandbag and the
     search line in the banner, and Dolphin runs no match in it."""
     assert _stage_kind(g) == STAGE_ONLINE_TRAINING, hex(_stage_kind(g))
+    _wait(lambda: _fade(g) == 0, 5, "the room out of the fade")
     _wait(lambda: _room(g) & ROOM_BANNER, 10, "the banner line")
     _wait(lambda: _room(g) & ROOM_SANDBAG, 10, "the Sandbag")
     x0 = _fighter_x(g)
@@ -158,9 +164,12 @@ def test_waiting_room_cancels(backend: OnlineBackend, dolphin: Callable[..., Dol
     assert _in_room(a)
     _check_room(a, "00-room-port-4")
     a.steps("wait 30", "tap START 4")
+    # The screen goes black before the room ends, and stays black through the load.
+    _wait(lambda: _fade(a) == 255, 5, "the fade to black")
     _back_on_css(a, "back on the CSS after START")
     _wait(lambda: a.c.mm_status()["state"] == "idle", 10, "the search cancelled")
     a.steps("wait 40")
+    assert _fade(a) == 0, "the CSS out of the fade"
     a.shot("01-css-after-start")
     assert a.css()["char"] == picked, (a.css(), picked)
 

@@ -31,6 +31,11 @@ namespace TrainingRoom {
     void tick();
     // The banner's text; printed when it changes.
     void setBanner(const char* text, bool red);
+    // Every drawn frame (MatchHud's frame hook): the alpha of the black over the screen that
+    // covers the loads into and out of the room (0 none, 255 black).
+    u8 fadeAlpha();
+    // The fade out for the room is complete: the CSS may leave (its last frame is black).
+    bool screenBlack();
 
     // sqNetAnyOkiraku state 3 (OnlineMatch::onSelStage): the CSS left for the room: the room's
     // setup (state 5) instead of the stage vote. 1: state set.

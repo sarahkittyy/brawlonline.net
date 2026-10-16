@@ -106,6 +106,10 @@ namespace TrainingRoom {
         }
     }
 
+    static void fadeOut();
+    static bool fadedOut();
+    static void fadeBackIn();
+
     bool active() { return s_state != ST_NONE; }
 
     bool running() { return s_state == ST_ROOM && Online::inScene("scMelee"); }
@@ -113,6 +117,7 @@ namespace TrainingRoom {
     void abandon()
     {
         if (s_state == ST_NONE) return;
+        if (s_state == ST_CSS_LEFT) fadeBackIn();   // still on the CSS: it comes back out of the fade
         restoreSlotFlags();
         s_state = ST_NONE;
         s_end = END_NONE;
@@ -131,6 +136,7 @@ namespace TrainingRoom {
         s_bannerDirty = true;
         s_sandbagStep = 0;
         s_sandbagWait = 0;
+        fadeOut();
         // tests: the room's flow: 0xF the step (State, 7 after the room), 0xF0 the room's
         // exit code, 0xF00 how it was ended, 0x10000 banner seen, 0x20000 Sandbag made, 0x40000
         // a Sandbag refused. (scratch[5] is otherwise the keypad's, which never runs meanwhile.)
@@ -163,6 +169,7 @@ namespace TrainingRoom {
         if (s_state != ST_ROOM || s_end != END_NONE) return;
         s_end = (u8)how;
         s_stopFrames = 0;
+        fadeOut();
         PPOM::g_block.debug.scratch[5] = (PPOM::g_block.debug.scratch[5] & ~0xF00u) | ((u32)how << 8);
     }
 
@@ -228,6 +235,101 @@ namespace TrainingRoom {
         s_sandbagStep = 2;
     }
 
+    // ---- The fade (the user's, 2026-10-16) ----
+    // Each way into and out of the room loads for a second or two, with the last frame frozen on
+    // the screen. The screen goes black over FADE_OUT_FRAMES instead, stays black through the load,
+    // and the next scene (the room, the match, the CSS) comes out of black over FADE_IN_FRAMES:
+    // a black quad over the frame, drawn by MatchHud's frame hook (after the frame is drawn, before
+    // its copy to the screen) with the alpha fadeAlpha gives. Out: from the START that searched,
+    // and before the room ends (end() waits for it). In: from the first frame of the first scene
+    // after a load screen. Only the picture changes; nothing of the game's state does.
+    static const u32 FADE_OUT_FRAMES = 12, FADE_IN_FRAMES = 18;
+    static const u32 FADE_MAX_FRAMES = 60 * 20;   // never stuck black: give up after 20 s
+    enum Fade { FADE_NONE = 0, FADE_OUT = 1, FADE_IN = 2 };
+    static u8 s_fade;
+    static bool s_fadeLoaded;     // a load screen has run since the fade out began
+    static bool s_fadeWaitGame;   // in the next scMelee, waiting for its first game frame
+    static u32 s_fadeGameFrame;   // the game frame counter when that scMelee was first seen
+    static const u32 GAME_FRAME = 0x901812A4;    // g_GameFrame's frame counter
+    static const u32 GAME_FRAME_P = 0x901812B4;  // its persistent counter (from the scene's start)
+    static u32 s_fadeFrames;
+    static u32 s_fadeTotal;
+
+    static void fadeOut()
+    {
+        s_fade = FADE_OUT;
+        s_fadeLoaded = false;
+        s_fadeWaitGame = false;
+        s_fadeFrames = 0;
+        s_fadeTotal = 0;
+    }
+
+    static bool fadedOut() { return s_fade == FADE_OUT && s_fadeFrames >= FADE_OUT_FRAMES; }
+
+    bool screenBlack() { return fadedOut(); }
+
+    // A fade out given up before its load (the search cancelled on the CSS): back in from as dark
+    // as it got.
+    static void fadeBackIn()
+    {
+        if (s_fade != FADE_OUT) return;
+        const u32 dark = FADE_IN_FRAMES * s_fadeFrames / FADE_OUT_FRAMES;   // in-frames of black left
+        s_fade = FADE_IN;
+        s_fadeFrames = FADE_IN_FRAMES - (dark < FADE_IN_FRAMES ? dark : FADE_IN_FRAMES);
+    }
+
+    static u8 fadeAlphaNow();
+    u8 fadeAlpha()
+    {
+        const u8 a = fadeAlphaNow();
+        // tests: the alpha drawn, scratch[5] bits 24-31
+        PPOM::g_block.debug.scratch[5] = (PPOM::g_block.debug.scratch[5] & 0x00FFFFFFu) | ((u32)a << 24);
+        return a;
+    }
+
+    static u8 fadeAlphaNow()
+    {
+        if (s_fade == FADE_NONE) return 0;
+        if (++s_fadeTotal > FADE_MAX_FRAMES) {
+            s_fade = FADE_NONE;
+            return 0;
+        }
+        const char* scene = Online::currentSceneName();
+        if (s_fade == FADE_OUT) {
+            if (strcmp(scene, "scMemoryChange") == 0) {
+                s_fadeLoaded = true;
+            } else if (s_fadeLoaded) {
+                // The next scene runs. An scMelee loads its stage and fighters first and shows
+                // nothing meanwhile: it comes out of black at its first simulation frame, as
+                // Dolphin's session finds it (GameplaySession IsSimStart: the frame counter has
+                // started again while the persistent one runs on), with a counter new to this
+                // scene (changed since the scene began).
+                bool ready = true;
+                if (strcmp(scene, "scMelee") == 0) {
+                    const u32 gf = *(u32*)GAME_FRAME, pc = *(u32*)GAME_FRAME_P;
+                    if (!s_fadeWaitGame) {
+                        s_fadeWaitGame = true;
+                        s_fadeGameFrame = gf;
+                    }
+                    ready = gf != s_fadeGameFrame && gf >= 1 && gf < 600 && pc > gf;
+                }
+                if (ready) {
+                    s_fade = FADE_IN;
+                    s_fadeFrames = 0;
+                }
+            }
+        }
+        if (s_fade == FADE_OUT) {
+            if (s_fadeFrames < FADE_OUT_FRAMES) s_fadeFrames++;
+            return (u8)(255 * s_fadeFrames / FADE_OUT_FRAMES);
+        }
+        if (++s_fadeFrames >= FADE_IN_FRAMES) {
+            s_fade = FADE_NONE;
+            return 0;
+        }
+        return (u8)(255 - 255 * s_fadeFrames / FADE_IN_FRAMES);
+    }
+
     // The room's HUD (ifWifiprTask's interface object, the global at r13-0x4120 = 0x805A0300):
     // +0x18 the banner, +0x1C.. seven player panels ("Seeking...", the players' names), each a
     // small state machine (+8 its state; setState 0x800FD96C runs the new state's entry from the
@@ -258,15 +360,17 @@ namespace TrainingRoom {
             tickSandbag();
             return;
         }
-        // Ended: the room's operator ends it, as when Brawl's own search has found everyone
-        // (its result, below); asked again until it is the operator's.
+        // Ended: once the screen is black (the fade), the room's operator ends it, as when
+        // Brawl's own search has found everyone (its result, below); asked again until it is
+        // the operator's.
+        s_stopFrames++;
+        if (!fadedOut() && s_stopFrames < FADE_OUT_FRAMES + 30) return;   // (the fade is drawn per frame)
         u8* op = roomOperator();
         if (op && op[OP_ACTIVE]) {
             op[OP_MATCHED] = s_end == END_MATCH ? 1 : 0;
             op[OP_LEFT] = s_end == END_MATCH ? 0 : 1;
             op[OP_ACTIVE] = 0;
         }
-        s_stopFrames++;
     }
 
     // The room's player from this player's lock-in (the character, Random already drawn, and the

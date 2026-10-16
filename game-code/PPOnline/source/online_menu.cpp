@@ -86,6 +86,7 @@ namespace OnlineMenu {
         bool cssSeen;           // the online CSS was up last frame (holdBGuard)
         bool bGuard;            // B still held from before this CSS: taken out until released
         u32 roomHoldB;          // the waiting room: frames B has been held (hold B cancels)
+        u32 roomLeaveFrames;    // frames on the CSS since the search started for the room
         u32 searchSeq;          // seq of the current FIND_OPPONENT (0 = no search)
         bool pollPending;       // a GET_MATCH_STATE (or the FIND_OPPONENT) awaits its answer
         u32 pollFrames;         // frames it has been waiting
@@ -1608,10 +1609,13 @@ namespace OnlineMenu {
         // Unranked and Ranked wait in Brawl's own waiting room (training_room.cpp), as Brawl's
         // "With Anyone" and Brawlback's Quickplay do (the user's, 2026-10-15): the CSS leaves
         // for it at once.
+        // The CSS fades to black first (TrainingRoom's fade) and leaves for the room once the
+        // screen is black (tickRoomLeave): the frame frozen on the screen while the room loads
+        // is black, not the CSS (the user's, 2026-10-16, after Brawlback's Quickplay).
         if (usesWaitingRoom()) {
             TrainingRoom::enter();
             s.roomHoldB = 0;
-            leaveCss(1);
+            s.roomLeaveFrames = 0;
         }
     }
 
@@ -2909,6 +2913,18 @@ namespace OnlineMenu {
         TrainingRoom::end(TrainingRoom::END_CSS);   // idle (the search ended) or an error
     }
 
+    // The search started for the waiting room: the CSS leaves once the screen is black (or after
+    // ROOM_LEAVE_MAX_FRAMES, should the fade not be drawn), once.
+    static const u32 ROOM_LEAVE_MAX_FRAMES = 30;
+    static void tickRoomLeave()
+    {
+        if (!TrainingRoom::active() || s.roomLeaveFrames > ROOM_LEAVE_MAX_FRAMES) return;
+        if (TrainingRoom::screenBlack() || ++s.roomLeaveFrames >= ROOM_LEAVE_MAX_FRAMES) {
+            s.roomLeaveFrames = ROOM_LEAVE_MAX_FRAMES + 1;
+            leaveCss(1);
+        }
+    }
+
     void waitingRoomEnded(int how)
     {
         // Ended by the game itself (not by tickWaitingRoom): no search may go on behind the CSS.
@@ -3026,6 +3042,7 @@ namespace OnlineMenu {
             return;
         }
         holdBGuard();
+        tickRoomLeave();
 
         hideHeaderArt();
         // The panel's tag, for the next online CSS (and Dolphin's, with the lock-in). Once the
@@ -3096,6 +3113,8 @@ namespace OnlineMenu {
             if (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING || s.phase == PH_ERROR) {
                 if (pressed & (BTN_Z | BTN_B)) {
                     if (pressed & BTN_B) maskPressed(BTN_B);
+                    // Cancelled while the CSS fades out for the room: no room, the CSS fades in.
+                    TrainingRoom::abandon();
                     cleanup();
                     playSE(SE_BACK);
                 }

@@ -26,6 +26,7 @@
 #include "online_menu.h"
 #include "ppom.h"
 #include "sss_portraits.h"
+#include "training_room.h"
 
 extern "C" {
     extern u8 g_onlineMatchGame;
@@ -302,11 +303,80 @@ namespace MatchHud {
         if (!s_desync) PPOM::g_block.local.hudDisconnected = 1;
     }
 
+    // The waiting room's fade (training_room.cpp, TrainingRoom::fadeAlpha): a black quad over the
+    // whole 640x480 space, in any scene, on top of everything else. Vertex colour only: the
+    // CharWriter's own 2D state first (fog off, swap tables, ...), then one TEV stage passing the
+    // vertex colour, alpha blending, and a quad of position + colour written to the FIFO.
+    // The GX functions are the DOL's (named in brawl-decomp's symbols, the others found in
+    // ms::CharWriter::SetupGX, 0x8006EEEC, which calls them with the same enums).
+    typedef void (*GxVoidFn)();
+    typedef void (*GxIntFn)(int);
+    typedef void (*GxSetVtxDescFn)(int attr, int type);
+    typedef void (*GxSetVtxAttrFmtFn)(int fmt, int attr, int cnt, int type, int frac);
+    typedef void (*GxChanCtrlFn)(int chan, int enable, int ambSrc, int matSrc, u32 lightMask, int diffFn, int attnFn);
+    typedef void (*GxTevOrderFn)(int stage, int coord, int map, int color);
+    typedef void (*GxTevOpFn)(int stage, int mode);
+    typedef void (*GxBlendModeFn)(int type, int src, int dst, int logicOp);
+    typedef void (*GxAlphaCompareFn)(int comp0, u8 ref0, int op, int comp1, u8 ref1);
+    typedef void (*GxBeginFn)(int prim, int fmt, u16 verts);
+    static const GxVoidFn s_gxClearVtxDesc = (GxVoidFn)0x801EFB10;
+    static const GxSetVtxDescFn s_gxSetVtxDesc = (GxSetVtxDescFn)0x801EF280;
+    static const GxSetVtxAttrFmtFn s_gxSetVtxAttrFmt = (GxSetVtxAttrFmtFn)0x801EFB44;
+    static const GxIntFn s_gxSetNumChans = (GxIntFn)0x801F2644;
+    static const GxChanCtrlFn s_gxSetChanCtrl = (GxChanCtrlFn)0x801F2668;
+    static const GxIntFn s_gxSetNumTexGens = (GxIntFn)0x801F0480;
+    static const GxIntFn s_gxSetNumIndStages = (GxIntFn)0x801F3ADC;
+    static const GxIntFn s_gxSetTevDirect = (GxIntFn)0x801F3AFC;
+    static const GxIntFn s_gxSetNumTevStages = (GxIntFn)0x801F41F8;
+    static const GxTevOrderFn s_gxSetTevOrder = (GxTevOrderFn)0x801F409C;
+    static const GxTevOpFn s_gxSetTevOp = (GxTevOpFn)0x801F3B9C;
+    static const GxBlendModeFn s_gxSetBlendMode = (GxBlendModeFn)0x801F46CC;
+    static const GxAlphaCompareFn s_gxSetAlphaCompare = (GxAlphaCompareFn)0x801F3FD8;
+    static const GxBeginFn s_gxBegin = (GxBeginFn)0x801F1088;
+
+    static void drawFade()
+    {
+        const u8 alpha = TrainingRoom::fadeAlpha();
+        if (!alpha) return;
+        begin2D();
+        s_cwSetupGX(s_cw);
+        s_gxClearVtxDesc();
+        s_gxSetVtxDesc(9 /* GX_VA_POS */, 1 /* GX_DIRECT */);
+        s_gxSetVtxDesc(11 /* GX_VA_CLR0 */, 1);
+        s_gxSetVtxAttrFmt(0, 9, 1 /* GX_POS_XYZ */, 4 /* GX_F32 */, 0);
+        s_gxSetVtxAttrFmt(0, 11, 1 /* GX_CLR_RGBA */, 5 /* GX_RGBA8 */, 0);
+        s_gxSetNumChans(1);
+        s_gxSetChanCtrl(4 /* GX_COLOR0A0 */, 0, 0 /* GX_SRC_REG */, 1 /* GX_SRC_VTX */, 0, 0 /* GX_DF_NONE */, 2 /* GX_AF_NONE */);
+        s_gxSetNumTexGens(0);
+        s_gxSetNumIndStages(0);
+        s_gxSetTevDirect(0);
+        s_gxSetNumTevStages(1);
+        s_gxSetTevOrder(0, 0xFF /* GX_TEXCOORD_NULL */, 0xFF /* GX_TEXMAP_NULL */, 4 /* GX_COLOR0A0 */);
+        s_gxSetTevOp(0, 4 /* GX_PASSCLR */);
+        s_gxSetBlendMode(1 /* GX_BM_BLEND */, 4 /* GX_BL_SRCALPHA */, 5 /* GX_BL_INVSRCALPHA */, 0xF);
+        s_gxSetAlphaCompare(7 /* GX_ALWAYS */, 0, 0, 7, 0);
+        s_gxZMode(0, 7 /* GX_ALWAYS */, 0);
+        s_gxCullMode(0 /* GX_CULL_NONE */);
+        static const float X0 = -8.0f, X1 = SCREEN_W + 8.0f, Y0 = -8.0f, Y1 = SCREEN_H + 8.0f;
+        const float xs[4] = {X0, X1, X1, X0};
+        const float ys[4] = {Y0, Y0, Y1, Y1};
+        volatile float* fifoF = (volatile float*)0xCC008000;   // the GX write-gather pipe
+        volatile u32* fifoU = (volatile u32*)0xCC008000;
+        s_gxBegin(0x80 /* GX_QUADS */, 0, 4);
+        for (int i = 0; i < 4; i++) {
+            *fifoF = xs[i];
+            *fifoF = ys[i];
+            *fifoF = 0.0f;
+            *fifoU = alpha;   // RGBA: black, this alpha
+        }
+    }
+
     // Inline hook at 0x8001792C (gfApplication frame loop, `addi r3, r30, 0x118`).
     static void onFrameDrawn()
     {
         OnlineMatch::onFrameDrawn();
         draw();
+        drawFade();
     }
 
     void install(CoreApi* api)
