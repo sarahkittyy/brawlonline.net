@@ -2,7 +2,8 @@
 //!
 //! **Rating.** Standard Elo on Slippi's scale: the expected score is
 //! `1 / (1 + 10^((opponent - own) / 400))` and the new rating is `own + K * (score - expected)`,
-//! with `score` 1 for a set win and 0 for a loss. One update per set, as Slippi updates once per
+//! with `score` 1 for a set win and 0 for a loss, moved at least [`MIN_CHANGE`] either way so
+//! every set counts. One update per set, as Slippi updates once per
 //! set (`ratingUpdateCount` counts sets). Each player uses their own K, as in FIDE's Elo, so a
 //! new player's big swings do not move their established opponent by the same amount.
 //!
@@ -66,9 +67,14 @@ pub fn expected(own: f64, opponent: f64) -> f64 {
     1.0 / (1.0 + 10f64.powf((opponent - own) / 400.0))
 }
 
+/// The smallest rating change a set makes: a win is worth at least this much and a loss costs at
+/// least this much, even against a far weaker or far stronger opponent.
+pub const MIN_CHANGE: f64 = 1.0;
+
 /// The rating after one set: `score` 1.0 for a win, 0.0 for a loss.
 pub fn updated(own: f64, sets_played: u32, opponent: f64, score: f64) -> f64 {
-    own + k_factor(sets_played) * (score - expected(own, opponent))
+    let change = k_factor(sets_played) * (score - expected(own, opponent));
+    own + if score > 0.5 { change.max(MIN_CHANGE) } else { change.min(-MIN_CHANGE) }
 }
 
 /// One client's report of one game.
@@ -597,8 +603,12 @@ mod tests {
         // A first set moves 100 either way against an even opponent.
         assert!(close(updated(DEFAULT_RATING, 0, DEFAULT_RATING, 1.0), DEFAULT_RATING + 100.0));
         // Beating a much weaker player is worth little; losing to them costs a lot.
-        assert!(updated(2000.0, 50, 1400.0, 1.0) - 2000.0 < 1.0);
+        assert!(updated(2000.0, 50, 1400.0, 1.0) - 2000.0 < 2.0);
         assert!(2000.0 - updated(2000.0, 50, 1400.0, 0.0) > 31.0);
+        // But never less than 1 either way.
+        assert!(close(updated(2000.0, 50, 1400.0, 1.0), 2000.0 + MIN_CHANGE));
+        assert!(close(updated(1400.0, 50, 2000.0, 0.0), 1400.0 - MIN_CHANGE));
+        assert!(close(updated(3000.0, 50, 100.0, 1.0), 3000.0 + MIN_CHANGE));
     }
 
     /// A new player leaves the default fast: ten straight wins (or losses) against opponents at
