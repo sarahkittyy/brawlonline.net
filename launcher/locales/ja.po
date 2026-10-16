@@ -7,7 +7,7 @@ msgstr ""
 "Plural-Forms: nplurals=1; plural=0\n"
 "x-generator: i18next-auto-keys CLI\n"
 "Language: ja-JP\n"
-"PO-Revision-Date: 2026-10-16T02:24:50.856Z\n"
+"PO-Revision-Date: 2026-10-16T02:43:45.706Z\n"
 
 #: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:14:26
 msgid " if you're not here for Project Plus."

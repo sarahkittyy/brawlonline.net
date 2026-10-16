@@ -15,5 +15,5 @@ export const RankBadgeMessages = {
   setsToPlace: (sets: number) => (sets === 1 ? "1 more set" : `${sets} more sets`),
   setsToPlaceShort: (sets: number) => `${sets} more`,
   placingTooltip: (sets: number) =>
-    sets === 1 ? "Placing: 1 more ranked set to get a rank" : `Placing: ${sets} more ranked sets to get a rank`,
+    sets === 1 ? "Play 1 more game to get a rank!" : `Play ${sets} more games to get a rank!`,
 };

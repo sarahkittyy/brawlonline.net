@@ -21,7 +21,7 @@ The rating stays plain Elo (`server/crates/common/src/ranked.rs`). The rank is c
 - **Distribution:** tiers should feel rewarding and be evenly spread. Divisions count down: Gold 3 → 2 → 1 → Emerald 3, and a demotion goes from Emerald 3 back to Gold 1.
 - **Placing:** a player whose rank is still too uncertain shows a dotted, unfilled outline with "3 more". The number comes from the uncertainty, within about 5-10 sets.
 - **Division on the emblem:** at first glance the tags were too big next to the emblem. The division is now drawn on the emblem itself, procedurally. The tier name ("Gold 2") shows only on hover.
-- **Wording:** the user asked for "3 more games" for placing. It counts ranked sets (best of three), so it says "3 more sets", and "3 more" where space is short. Swapping the word is one line in `rank_badge.messages.ts` and `website/script.js`.
+- **Wording:** the user asked for "3 more games" for placing. It counts ranked sets (best of three), so the badge says "3 more sets", and "3 more" where space is short. The badge's tooltip says "Play 3 more games to get a rank!" (the user's, 2026-10-15). Swapping the word is one line in `rank_badge.messages.ts` and `website/script.js`.
 
 ## 1. Answers to the user's questions
 
