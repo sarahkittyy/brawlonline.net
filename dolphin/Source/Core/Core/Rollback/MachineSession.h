@@ -218,6 +218,10 @@ NetPlay::NetSettings MakeNetSettings();
 std::shared_ptr<SDCard::SessionCard> CreateSDCard(const std::string& image_path);
 // The emulated wall clock at boot (EXI IPL), seconds since 1970.
 u64 GetInitialRTC();
+// The session stopped or failed while the game runs on: it keeps the session's clock for as long
+// as Core::WantsDeterminism holds (a joiner that declined the host's SD card read the PC's clock
+// instead and failed its assert, bug #30).
+bool KeepsSessionClock();
 
 // CPU thread, from the Brawl game-loop hooks. Each returns true when it handled the hook (the
 // session is armed); then the caller does nothing else.

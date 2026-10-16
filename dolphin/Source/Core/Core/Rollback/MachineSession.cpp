@@ -5491,6 +5491,10 @@ Wait WaitForFrames(Core::System& system)
       else if (StartBarrier())
       {
         s.phase = Phase::Running;
+        // Rush Frame Presentation's pacing, as P+ online (GameplaySession's StartRunning): each
+        // frame is shown at its copy's due time, not whenever the throttle let the CPU reach the
+        // copy (bug #30: a REX room's frames came 16 ms apart with a 21 ms gap every seventh).
+        system.GetCoreTiming().SetPresentPacing(true);
         AddLog("running");
         OSD::AddMessage("Session started", 3000, OSD::Color::GREEN);
       }
@@ -6091,6 +6095,7 @@ void Stop()
   ResetSD();
   Rollback::RollbackManager::Get().m_full_ios_in_snapshots = false;
   Rollback::PresentStats::SetCopiesLeaveGuestRAM(false);
+  Core::System::GetInstance().GetCoreTiming().SetPresentPacing(false);
   if (auto* fs = HostFS(Core::System::GetInstance()))
     fs->JournalStop();
   s.journal_marks.clear();
@@ -6331,6 +6336,11 @@ std::optional<SDSyncChoice> ParseSDSyncChoice(std::string_view text)
 u64 GetInitialRTC()
 {
   return s.opts.rtc;
+}
+
+bool KeepsSessionClock()
+{
+  return (s.phase == Phase::Stopped || s.phase == Phase::Error) && Core::WantsDeterminism();
 }
 
 std::shared_ptr<SDCard::SessionCard> CreateSDCard(const std::string& image_path)
@@ -6783,6 +6793,7 @@ Top FrameTop(Core::System& system)
   {
     system.GetCoreTiming().SetRollbackResimulating(false);
     system.GetCoreTiming().SetRollbackSpeedAdjustment(1.0);
+    system.GetCoreTiming().SetPresentPacing(false);
     return Top::Run;
   }
 
@@ -6798,6 +6809,7 @@ Top FrameTop(Core::System& system)
       // The session ended: from here the game runs on its own (as a local game).
       system.GetCoreTiming().SetRollbackResimulating(false);
       system.GetCoreTiming().SetRollbackSpeedAdjustment(1.0);
+      system.GetCoreTiming().SetPresentPacing(false);
       return Top::Run;
     case Wait::Yield:
       s.ops.count = 0;

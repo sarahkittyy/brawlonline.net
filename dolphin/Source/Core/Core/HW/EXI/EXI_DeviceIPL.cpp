@@ -411,9 +411,10 @@ u32 CEXIIPL::GetEmulatedTime(Core::System& system, u32 epoch)
     // let's keep time moving forward, regardless of what it starts at
     ltime += system.GetCoreTiming().GetTicks() / system.GetSystemTimers().GetTicksPerSecond();
   }
-  else if (Machine::IsArmed())
+  else if (Machine::IsArmed() || Machine::KeepsSessionClock())
   {
-    // A whole-machine session: the session's clock, the same on every machine.
+    // A whole-machine session: the session's clock, the same on every machine (and still after
+    // it ended, while the game runs on).
     ltime = Machine::GetInitialRTC();
     ltime += system.GetCoreTiming().GetTicks() / system.GetSystemTimers().GetTicksPerSecond();
   }
