@@ -149,8 +149,9 @@ def test_unranked_set_from_the_waiting_room(backend: OnlineBackend, dolphin: Cal
 def test_waiting_room_cancels(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                               gpu_backend: str) -> None:
     """START in the room cancels the search and goes back to the CSS, the character still
-    selected; so does holding B, while a short B is an attack. The player plays from controller
-    port 4, the one that pressed START on the CSS."""
+    selected; B, short or held, is the fighter's and cancels nothing (the user's, 2026-10-16:
+    no hold B to leave the room). The player plays from controller port 4, the one that pressed
+    START on the CSS."""
     test = "waiting-room-cancel"
     ua = backend.create_user("pia", "PIA")
     a = _boot(dolphin, "wr-c", backend, ua, gpu_backend, test, "gameplay", standard_controllers=(3,))
@@ -177,13 +178,10 @@ def test_waiting_room_cancels(backend: OnlineBackend, dolphin: Callable[..., Dol
     assert _in_room(a)
     a.steps("wait 30", "tap B 6", "wait 30")
     assert _in_room(a), "a short B is an attack, not a cancel"
-    a.steps("tap B 75")
-    _back_on_css(a, "back on the CSS after holding B")
-    _wait(lambda: a.c.mm_status()["state"] == "idle", 10, "the search cancelled")
-    a.steps("wait 40")
-    a.shot("02-css-after-hold-b")
-    assert a.scene() == "scSelctCharacter", "the held B must not also leave the CSS"
-    assert a.css()["char"] == picked, (a.css(), picked)
+    a.steps("tap B 120", "wait 30")
+    a.shot("02-room-after-hold-b")
+    assert _in_room(a), "holding B does not leave the room"
+    assert a.c.mm_status()["state"] == "matchmaking", "nor cancel the search"
 
 
 @pytest.mark.slow

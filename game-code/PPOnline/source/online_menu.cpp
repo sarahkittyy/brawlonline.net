@@ -85,7 +85,6 @@ namespace OnlineMenu {
         u32 startGuard;         // frames START presses are dropped after the keypad (see codeEntered)
         bool cssSeen;           // the online CSS was up last frame (holdBGuard)
         bool bGuard;            // B still held from before this CSS: taken out until released
-        u32 roomHoldB;          // the waiting room: frames B has been held (hold B cancels)
         u32 roomLeaveFrames;    // frames on the CSS since the search started for the room
         u32 searchSeq;          // seq of the current FIND_OPPONENT (0 = no search)
         bool pollPending;       // a GET_MATCH_STATE (or the FIND_OPPONENT) awaits its answer
@@ -1614,7 +1613,6 @@ namespace OnlineMenu {
         // is black, not the CSS (the user's, 2026-10-16, after Brawlback's Quickplay).
         if (usesWaitingRoom()) {
             TrainingRoom::enter();
-            s.roomHoldB = 0;
             s.roomLeaveFrames = 0;
         }
     }
@@ -2870,10 +2868,10 @@ namespace OnlineMenu {
     // the CSS: the search is polled, its line goes into the room's banner, and the room ends:
     //  - Unranked, once the first game is set up (SESSION): straight into the match;
     //  - Ranked, once connected: the CSS, where the game setup steps begin (Slippi's order);
-    //  - START or hold B: the search is cancelled (as B on the CSS), back to the CSS;
+    //  - START: the search is cancelled (as B on the CSS), back to the CSS (holding B no longer
+    //    does it: the user's, 2026-10-16; B is the fighter's in the room);
     //  - the search ended by itself (an error, the opponent gone): back to the CSS, which says so.
     // START is taken out of the room (it would pause it).
-    static const u32 ROOM_HOLD_B_FRAMES = 60;
     static void tickWaitingRoom()
     {
         pollMailbox();
@@ -2881,14 +2879,12 @@ namespace OnlineMenu {
         TrainingRoom::tick();
         if (!TrainingRoom::running()) return;
         blockCodeMenu();
-        const u32 held = padButtons(0x0);
         const u32 pressed = padButtons(0xC);
         maskButtons(BTN_START);
-        s.roomHoldB = (held & BTN_B) ? s.roomHoldB + 1 : 0;
         updateStatus();
         TrainingRoom::setBanner(s.status, s.statusRed);
         if (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING) {
-            if ((pressed & BTN_START) || s.roomHoldB >= ROOM_HOLD_B_FRAMES) {
+            if (pressed & BTN_START) {
                 cleanup();
                 playSE(SE_BACK);
                 TrainingRoom::end(TrainingRoom::END_CSS);
@@ -2929,7 +2925,6 @@ namespace OnlineMenu {
     {
         // Ended by the game itself (not by tickWaitingRoom): no search may go on behind the CSS.
         if (how == TrainingRoom::END_NONE && (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING)) cleanup();
-        s.roomHoldB = 0;
     }
 
     void tick()
