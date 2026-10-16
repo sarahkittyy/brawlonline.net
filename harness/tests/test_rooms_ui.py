@@ -218,42 +218,42 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     g.wait(40)
     assert sim.room.teams
     g.shot("08-teams-on")
-    # A on our own flag: the next team colour (Brawl's way).
+    # P+'s rainbow TEAM BATTLE (the user's, 2026-10-15, bug #22): A on our own flag or panel,
+    # the next team colour; X / Y the costume, the team staying (any costume on any team).
     team0 = sim.room.members[0].team
+    costume0 = g.u32(g.area(0) + AREA_COSTUME)
     g.hand_to(*MY_FLAG, tol=0.5)
     g.tap("A")
     g.wait(30)
     assert sim.room.members[0].team == (team0 + 1) % 3, sim.room.members[0]
     g.shot("08a-flag-clicked")
-    g.tap("Y")
-    g.wait(30)
-    assert sim.room.members[0].team == team0
-    # X: our team colour to the next one (red -> blue), Y back.
-    team0 = sim.room.members[0].team
-    g.tap("X")
-    g.wait(30)
-    assert sim.room.members[0].team == (team0 + 1) % 3, sim.room.members[0]
-    g.shot("08b-team-changed")
-    g.tap("Y")
-    g.wait(30)
-    assert sim.room.members[0].team == team0
-    # A on our own panel: the next costume, the team stays (any costume on any team, the user's,
-    # 2026-10-12; Brawl's team battle CSS cycles the team there). Our lock-in carries it, and
-    # while locked in A there changes nothing (as X / Y).
-    costume0 = g.u32(g.area(0) + AREA_COSTUME)
     g.hand_to(PANEL_X[0], -10.0)
     g.tap("A")
     g.wait(30)
+    team = sim.room.members[0].team
+    assert team == (team0 + 2) % 3 and g.u32(g.area(0) + AREA_COSTUME) == costume0, (sim.room.members[0], costume0)
+    g.shot("08b-team-changed")
+    g.tap("X")
+    g.wait(30)
     costume = g.u32(g.area(0) + AREA_COSTUME)
-    assert costume != costume0 and sim.room.members[0].team == team0, (costume0, costume, sim.room.members[0])
+    assert costume != costume0 and sim.room.members[0].team == team, (costume0, costume, sim.room.members[0])
+    g.tap("Y")
+    g.wait(30)
+    assert g.u32(g.area(0) + AREA_COSTUME) == costume0 and sim.room.members[0].team == team
+    g.tap("X")
+    g.wait(30)
+    assert g.u32(g.area(0) + AREA_COSTUME) == costume
     g.shot("08c-costume-on-a-team")
+    # Our lock-in carries the costume; while locked in A on the panel and X / Y change nothing.
     g.tap("START")
     g.wait(30)
     lock = ppom.read_local(c, sim.b)["lock"]
     assert lock["ready"] == 1 and lock["costume"] == costume, (lock, costume)
     g.tap("A")
     g.wait(30)
-    assert g.u32(g.area(0) + AREA_COSTUME) == costume and sim.room.members[0].team == team0
+    g.tap("X")
+    g.wait(30)
+    assert g.u32(g.area(0) + AREA_COSTUME) == costume and sim.room.members[0].team == team
     g.tap("B")
     g.wait(20)
     assert ppom.read_local(c, sim.b)["lock"]["ready"] == 0
@@ -1236,9 +1236,10 @@ def test_token_picked_up_and_placed_again(token_game: Game) -> None:
 def test_team_room_costumes_on_a_joiners_panel(game: Game) -> None:
     """Bug #22 (2026-10-15, a joiner at P4 of a Teams room: "it goes default when we start game"):
     P+'s AsyncRSP drew a team room's pictures in the team's costume, a joiner's own panel once
-    with another player's character, and after the first A on the panel kept the picture, so
+    with another player's character, and after the first costume change kept the picture, so
     the costume a joiner picked never showed. Joined at P4 of a Teams room whose P1 is ready
-    with Mario in costume 4: every A on our panel changes the costume and the picture."""
+    with Mario in costume 4: every X changes the costume and the picture (P+'s rainbow TEAM
+    BATTLE; A on the panel is the team, and leaves the costume)."""
     Image = pytest.importorskip("PIL.Image")
     g = game
     c = g.c
@@ -1279,10 +1280,16 @@ def test_team_room_costumes_on_a_joiners_panel(game: Game) -> None:
     shots = [panel("20-teams-p4-joined")]
     costumes = [g.u32(g.area(0) + AREA_COSTUME)]
     for k in range(1, 4):
-        g.tap("A", 8)
+        g.tap("X", 8)
         g.wait(40)
         costumes.append(g.u32(g.area(0) + AREA_COSTUME))
-        shots.append(panel(f"21-teams-p4-A{k}"))
+        shots.append(panel(f"21-teams-p4-X{k}"))
     assert costumes == [0, 1, 2, 3], costumes
     changes = [differs(shots[k], shots[k + 1]) for k in range(3)]
-    assert all(d > 4 for d in changes), changes   # (before the fix the 2nd and 3rd A: 0)
+    assert all(d > 4 for d in changes), changes   # (before the fix the 2nd and 3rd change: 0)
+    team0 = sim.room.members[3].team
+    g.tap("A", 8)
+    g.wait(40)
+    assert sim.room.members[3].team == (team0 + 1) % 3, sim.room.members[3]
+    assert g.u32(g.area(0) + AREA_COSTUME) == 3
+    g.shot("22-teams-p4-A-team")

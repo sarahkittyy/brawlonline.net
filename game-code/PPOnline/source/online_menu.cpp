@@ -33,6 +33,10 @@ extern "C" {
     // 1 while the player is locked in on the online CSS (searching, connecting, connected or an
     // error not yet cleared): the CSS hooks below then ignore A/B on the character.
     u8 g_onlineCssLock = 0;
+    // A team room's CSS (tickRoom): A on the local panel picks the next team (cssPanelClick
+    // notes it in g_cssPanelTeam, tickRoom sends it).
+    u8 g_cssTeamRoom = 0;
+    u8 g_cssPanelTeam = 0;
     extern u8 g_onlineMatchGame;
     extern u8 g_onlinePickStage;
 }
@@ -1319,9 +1323,13 @@ namespace OnlineMenu {
     // the costume to the team: A on the player's own panel (hand target 0x1B) cycles team and
     // P+'s team set (area+0x1C0, +0x1C4) instead of the costume, and every portrait is drawn in
     // the team's costume (setCharPic's isTeam). Online the costume stays the player's own pick
-    // and the team is ours (X / Y, the flag: tickRoom), so:
+    // and the team is the room's, so:
     // sel_char+0x88B4 `lbz r0,0x5C8(r27)`, the panel click's "team battle?" test (team: on at
-    // +0x88C0, else the costume at +0x8A24, as in a free-for-all): online, the costume. While
+    // +0x88C0, else the costume at +0x8A24, as in a free-for-all): online, the costume; in a
+    // team room the next team, as P+'s own team battle with the players' costumes (task+0x5CB
+    // 2, its VERSUS button's rainbow TEAM BATTLE, where X / Y change the costume; the user's,
+    // 2026-10-15, after bug #22: a P+ player pressed X / Y for a colour and changed team), sent
+    // by tickRoom (g_cssPanelTeam), the click itself doing nothing more (the exit). While
     // locked in, nothing (the function's exit, +0x95A0), as X / Y (cssCostume): the click
     // changed the costume shown but not the one locked in (harness, 2026-10-12; FFA too).
     __attribute__((naked)) void cssPanelClick()
@@ -1341,6 +1349,15 @@ namespace OnlineMenu {
             "mtctr 12\n\t"
             "bctr\n\t"
             "1:\n\t"
+            "lis 12, g_cssTeamRoom@ha\n\t"
+            "lbz 12, g_cssTeamRoom@l(12)\n\t"
+            "cmpwi 12, 0\n\t"
+            "beq 3f\n\t"
+            "li 0, 1\n\t"
+            "lis 12, g_cssPanelTeam@ha\n\t"
+            "stb 0, g_cssPanelTeam@l(12)\n\t"
+            "b 2f\n\t"
+            "3:\n\t"
             "lis 12, 0x8068\n\t"
             "ori 12, 12, 0xB2E8\n\t"
             "mtctr 12\n\t"
@@ -1554,6 +1571,7 @@ namespace OnlineMenu {
         g_onlineMatchGame = 0;
         g_onlinePickStage = 0;
         g_onlineCss = 0;
+        g_cssTeamRoom = 0;
         restoreRules();
         PPOM::g_block.debug.menuState = 0;
     }
@@ -1927,7 +1945,8 @@ namespace OnlineMenu {
     //   R           host, between games: Teams on / off
     //   A           host, between games, with the hand over another player's panel: open / close
     //               that slot (closing an occupied one removes the player)
-    //   X / Y       Teams on, between games: the player's own team colour, next / previous
+    //   A           Teams on, between games, on the player's own panel or its flag: the next
+    //               team colour (X / Y the costume, as in a free-for-all)
     // The others' panels (room_css.cpp) and the line come from Dolphin: SESSION's room view and
     // ROOM_POLL's answer, asked one at a time as the match state is.
 
@@ -2476,21 +2495,26 @@ namespace OnlineMenu {
                     playSE(1);
                 }
             }
-            // Teams on: A on the local panel's flag or X picks the next team colour, Y the
-            // previous one (their press is used up: the costume is A on the panel, as in a
-            // free-for-all, cssPanelClick; any costume on any team, the user's, 2026-10-12).
-            const u32 BTN_X = 0x400, BTN_Y = 0x800;
+            // Teams on: A on the local panel, its flag included, picks the next team colour; X / Y
+            // change the costume, as in a free-for-all (Brawl's costume buttons). That is P+'s own
+            // team battle with the players' costumes (its VERSUS button's rainbow TEAM BATTLE,
+            // task+0x5CB 2, which RoomCss sets); until 2026-10-15 X / Y were the team and A the
+            // costume, the other way round, and a P+ player pressing X / Y for a colour changed
+            // team (bug #22; the user's). The panel's A is Brawl's own click (cssPanelClick,
+            // g_cssPanelTeam: the plate and the hand's other targets stay theirs); the flag is no
+            // target of Brawl's, so its A is taken here.
             bool teamsOn = (se.roomFlags & PPOM::RF_TEAMS) && se.roomMode == 2;
-            u32 teamPress = pressed & (BTN_X | BTN_Y);
-            if (teamsOn && (pressed & BTN_A) && RoomCss::handOverMyFlag()) teamPress |= BTN_A;
-            if (teamsOn && teamPress && me >= 0) {
-                maskPressed(teamPress);
+            g_cssTeamRoom = teamsOn ? 1 : 0;
+            bool teamPress = g_cssPanelTeam != 0;
+            g_cssPanelTeam = 0;
+            if (teamsOn && (pressed & BTN_A) && RoomCss::handOverMyFlag()) {
+                maskPressed(BTN_A);
+                teamPress = true;
+            }
+            if (teamsOn && teamPress && me >= 0 && waiting && !roomLockedForNext()) {
                 int cur = se.players[me].roomTeam < PPOM::TEAM_COUNT ? se.players[me].roomTeam : 0;
-                if (waiting && !roomLockedForNext()) {
-                    int next = (cur + ((teamPress & BTN_Y) ? PPOM::TEAM_COUNT - 1 : 1)) % PPOM::TEAM_COUNT;
-                    postRoom(PPOM::ROOM_TEAM, (u8)next, 0, NULL);
-                    playSE(1);
-                }
+                postRoom(PPOM::ROOM_TEAM, (u8)((cur + 1) % PPOM::TEAM_COUNT), 0, NULL);
+                playSE(1);
             }
             roomMatch();
         }
@@ -2957,6 +2981,7 @@ namespace OnlineMenu {
             }
             return;
         }
+        g_cssTeamRoom = 0;   // (tickRoom sets it again in a team room)
         if (CodeEntry::active()) {
             CodeEntry::tick(pressed & BTN_START);
         } else if (roomCss()) {

@@ -452,8 +452,9 @@ def status_line(g: Game) -> str:
 def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                   gpu_backend: str) -> None:
     """Three games: the host opens slot 3 with the hand and A, R turns Teams on, picks a costume
-    with A on its own panel (its team stays), two players join by code, one with a costume picked
-    before joining, the other picking one in the room (bug #22); everyone on red (X / Y) is refused ("Pick different teams", no start although all
+    with X (its team stays), two players join by code, one with a costume picked before joining,
+    the other picking one in the room with X (bug #22); everyone on red (A on their own panels:
+    P+'s rainbow TEAM BATTLE) is refused ("Pick different teams", no start although all
     are ready); one player to blue and the room starts a 2-against-1 team battle under the
     gameplay session on all three, everyone in the costume they locked in (not the team's); blue
     walks off, and everyone is back on the room's CSS."""
@@ -472,11 +473,10 @@ def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[...,
     until_view(a, lambda v: v["slots"][2]["bits"] & ppom.SLOT_OPEN, "slot 3 open")
     a.steps("tap R 8", "wait 30")
     until_view(a, lambda v: v["flags"] & ppom.RF_TEAMS, "Teams on")
-    # Any costume on any team (the user's, 2026-10-12): A on our own panel, twice, the costume
-    # after next; the team stays (Brawl's team battle CSS cycles the team there).
+    # Any costume on any team (the user's, 2026-10-12): X twice, the costume after next; the team
+    # stays (P+'s rainbow TEAM BATTLE, the user's, 2026-10-15: X / Y the costume, A the team).
     costume0 = _u32(a, css_area(a) + 0x1BC)
-    hand_to(a, PANEL_X[0], -10.0)
-    a.steps("tap A 8", "wait 20", "tap A 8", "wait 20")
+    a.steps("tap X 8", "wait 20", "tap X 8", "wait 20")
     my_costume = _u32(a, css_area(a) + 0x1BC)
     assert my_costume not in (costume0, 0), (costume0, my_costume)
     assert room_view(a)["slots"][0]["team"] == 0, room_view(a)
@@ -503,7 +503,7 @@ def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[...,
     # C picks a costume in the room, Teams on, with its panel at P3 (bug #22: P+'s AsyncRSP drew
     # a joiner's panel in the team's costume, or another player's character, and kept it).
     hand_to(c, PANEL_X[2], -10.0)
-    c.steps("tap A 8", "wait 20", "tap A 8", "wait 20")
+    c.steps("tap X 8", "wait 20", "tap X 8", "wait 20")
     costume_c = _u32(c, css_area(c) + 0x1BC)
     assert costume_c != 0, costume_c
     c.shot("03-costume-in-the-room")
@@ -514,9 +514,10 @@ def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[...,
         g.steps("wait 40")
         g.shot("04-three-in-the-room")
 
-    # Everyone on red: B Y (blue -> red), C X (green -> red).
-    b.steps("tap Y 8", "wait 20")
-    c.steps("tap X 8", "wait 20")
+    # Everyone on red: A on their own panels, B twice (blue -> green -> red), C once (green -> red).
+    hand_to(b, PANEL_X[1], -10.0)
+    b.steps("tap A 8", "wait 20", "tap A 8", "wait 20")
+    c.steps("tap A 8", "wait 20")
     until_view(a, lambda v: [s["team"] for s in v["slots"][:3]] == [0, 0, 0], "everyone red")
     _wait(lambda: all(status_line(g) == "Pick different teams" for g in gs), 20, "Pick different teams")
     game = room_view(a)["game"]
@@ -530,10 +531,11 @@ def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[...,
     v = room_view(a)
     assert v["status"] == 0 and status_line(a) == "Pick different teams", (v, status_line(a))
 
-    # C: B takes the lock back, X to blue (red -> blue), START: 2 against 1, the room starts.
+    # C: B takes the lock back, A on its panel to blue (red -> blue), START: 2 against 1, the
+    # room starts.
     c.steps("tap B 8", "wait 20")
     until_view(a, lambda v: not v["slots"][2]["bits"] & ppom.SLOT_READY, "C not ready")
-    c.steps("tap X 8", "wait 20")
+    c.steps("tap A 8", "wait 20")
     until_view(a, lambda v: v["slots"][2]["team"] == 1, "C blue")
     c.steps("wait 20")
     c.shot("06-blue")

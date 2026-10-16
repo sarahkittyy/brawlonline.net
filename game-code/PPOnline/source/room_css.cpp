@@ -872,12 +872,12 @@ namespace RoomCss {
         // player in the team's): P+'s setCharPic (0x80571350) and AsyncRSP (the picture it draws
         // when a load is done) give a team battle's pictures the team's costume unless it is 2.
         // Without it a team room's panels showed the team's costumes, and the local player's
-        // costume changes (A on the panel, cssPanelClick) not at all (bug #22, 2026-10-15).
+        // costume changes (X / Y) not at all (bug #22, 2026-10-15).
         if (teams) task[0x5CB] = 2;
         placeAreas(task);
         // The team battle look: Brawl's own (task+0x5C8), with the flag on each panel; the local
-        // player changes team with X / Y or A on their own flag (OnlineMenu's tickRoom; A on the
-        // panel itself changes the costume, as in a free-for-all: OnlineMenu's cssPanelClick).
+        // player changes team with A on their own panel or its flag (OnlineMenu's tickRoom and
+        // cssPanelClick), the costume with X / Y, as in P+'s rainbow TEAM BATTLE.
         bool wasTeams = task[0x5C8] != 0;
         if (wasTeams != teams || s_teams != teams) {
             task[0x5C8] = teams ? 1 : 0;
@@ -913,7 +913,7 @@ namespace RoomCss {
     static const float PANEL_TOP = -1.5f, PANEL_BOTTOM = -20.0f;
     // The local player's own team flag (Brawl's, top left of the panel, drawn in a team battle):
     // A on it picks the next team. The flag is no hand target of Brawl's (the panel below it,
-    // target 0x1B from y -6 down, changes the costume online: OnlineMenu's cssPanelClick), so
+    // target 0x1B from y -6 down, picks the next team too: OnlineMenu's cssPanelClick), so
     // the plugin hit-tests the flag's upper part: found live, x -29.5..-23, y -6..-2.5.
     bool handOverMyFlag()
     {
