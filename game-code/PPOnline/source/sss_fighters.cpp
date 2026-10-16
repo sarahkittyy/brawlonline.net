@@ -72,7 +72,7 @@ extern "C" struct SssFightersDebug {
     u32 eyesCleared;     // yellow-eye bones hidden or Yellow textures bound to the normal ones
     u32 eyeMode;         // (unused)
 } g_sssFighters = {0, 0, 0, 0, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0},
-                   {{-29.0f, -16.0f, 0.0f}, {29.0f, -16.0f, 0.0f}},
+                   {{-29.0f, -15.3f, 0.0f}, {29.0f, -15.3f, 0.0f}},
                    {{0.0f, 1.0f, 0.0f}, {0.0f, -1.0f, 0.0f}},
                    {0.8f, 0.8f}, 0x10, 1, 2, 0, 1,
                    {{91.0f, 392.0f, 150.0f, 0.6f}, {549.0f, 392.0f, 150.0f, 0.6f}}, 0.0f, 0,
@@ -114,6 +114,11 @@ namespace SssFighters {
     static int s_wait[2];           // frames to the next try
     static float s_fit[2];          // by side: the size factor from measure (0: not measured)
     static int s_age[2];            // by side: frames since it was made
+    // A fighter's own turn on top of its side's (radians): Kirby's model faces about a quarter
+    // turn off the others' (at the others' turn he looked away to the left; staging feedback,
+    // 2026-10-16: +1.2 on the left is right).
+    static float s_turn[2];
+    static float turnOf(u8 kind) { return kind == 0x06 /* Kirby */ ? 1.2f : 0.0f; }
     static DtorFn s_origDtor = NULL;
 
     // The name lines ("name (rating)" under each fighter), drawn flat on the screen by match_hud.cpp
@@ -431,7 +436,9 @@ namespace SssFighters {
         float k = g_sssFighters.scale[side] * (s_fit[side] > 0.0f ? s_fit[side] : 1.0f);
         float sc[3] = {k, k, k};
         MTX_IDENTITY(m);
-        MTX_SRT(m, sc, g_sssFighters.rot[side], g_sssFighters.pos[side]);
+        float rot[3] = {g_sssFighters.rot[side][0], g_sssFighters.rot[side][1] + s_turn[side],
+                        g_sssFighters.rot[side][2]};
+        MTX_SRT(m, sc, rot, g_sssFighters.pos[side]);
         SET_MTX(*(void**)(obj + 0xC), 0, m);
         // As MuObject::setPos: the model's G3dProc 2 and 5 (its world and view matrices again).
         u8* scn = *(u8**)(obj + 0x10);
@@ -491,6 +498,7 @@ namespace SssFighters {
         }
         if (heap < 0) return;
         s_heap[side] = heap;
+        s_turn[side] = turnOf(kind);
         s_fit[side] = 0.0f;
         s_age[side] = 0;
         g_sssFighters.state[side] |= 3;
