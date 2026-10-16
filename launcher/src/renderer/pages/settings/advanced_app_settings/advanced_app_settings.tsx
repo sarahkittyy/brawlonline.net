@@ -3,7 +3,7 @@ import Button from "@mui/material/Button";
 import React from "react";
 
 import { Toggle } from "@/components/form/toggle";
-import { useAutoUpdateLauncher } from "@/lib/hooks/use_settings";
+import { useAutoUpdateLauncher, useHardwareAcceleration } from "@/lib/hooks/use_settings";
 import { useToasts } from "@/lib/hooks/use_toasts";
 
 import { SettingItem } from "../setting_item_section";
@@ -11,6 +11,7 @@ import { AdvancedAppSettingsMessages as Messages } from "./advanced_app_settings
 
 export const AdvancedAppSettings = React.memo(() => {
   const [autoUpdateLauncher, setAutoUpdateLauncher] = useAutoUpdateLauncher();
+  const [hardwareAcceleration, setHardwareAcceleration] = useHardwareAcceleration();
 
   return (
     <div>
@@ -20,6 +21,14 @@ export const AdvancedAppSettings = React.memo(() => {
           onChange={(checked) => setAutoUpdateLauncher(checked)}
           label={Messages.enableAutoUpdates()}
           description={Messages.enableAutoUpdatesDescription(PRODUCT_NAME)}
+        />
+      </SettingItem>
+      <SettingItem>
+        <Toggle
+          value={hardwareAcceleration}
+          onChange={(checked) => setHardwareAcceleration(checked)}
+          label={Messages.hardwareAcceleration()}
+          description={Messages.hardwareAccelerationDescription()}
         />
       </SettingItem>
       <ClearTempFilesForm />

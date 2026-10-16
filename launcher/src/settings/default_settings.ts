@@ -47,6 +47,7 @@ export const defaultAppSettings: AppSettings = {
     enableStreamGames: true,
     closeDolphinAfterSpectating: true,
     autoUpdateLauncher: true,
+    hardwareAcceleration: true,
     netplayDolphinPath: null,
     playbackDolphinPath: null,
     gameFilesFolder: null,

@@ -29,6 +29,7 @@ import path from "path";
 import { fileExists } from "utils/file_exists";
 
 import { getConfigFlags } from "./flags/flags";
+import { watchGpuCrashes } from "./gpu_crash";
 import { installModules } from "./install_modules";
 import { attachInterfaceZoom } from "./interface_zoom";
 import { ipc_brawlLinkEvent, ipc_takeBrawlLinks } from "./ipc";
@@ -141,6 +142,14 @@ registerGameAssetScheme();
 
 const flags = getConfigFlags();
 const { dolphinManager, settingsManager, appUpdater, browserWindowManager } = installModules(flags);
+
+// Settings > Advanced > Hardware Acceleration, before the app is ready (Electron's rule). On Linux a
+// GPU process crash turns it off for the next start (gpu_crash.ts).
+if (!settingsManager.get().settings.hardwareAcceleration) {
+  app.disableHardwareAcceleration();
+  log.warn("Hardware acceleration is off (Settings > Advanced)");
+}
+watchGpuCrashes(app, () => settingsManager.turnOffHardwareAccelerationSync(), log);
 
 if (isDevelopment) {
   require("electron-debug")();

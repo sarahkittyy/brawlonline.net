@@ -89,6 +89,8 @@ export const useLaunchGameOnPlay = () => useSetting("launchGameOnPlay");
 
 export const useAutoUpdateLauncher = () => useSetting("autoUpdateLauncher");
 
+export const useHardwareAcceleration = () => useSetting("hardwareAcceleration");
+
 export const useEnableRankDisplay = () => useSetting("enableRankDisplay");
 
 export const useNotificationSounds = () => useSetting("notificationSounds");

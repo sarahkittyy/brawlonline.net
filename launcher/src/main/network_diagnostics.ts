@@ -2,8 +2,9 @@ import type { PortMapping } from "@common/types";
 import { NatType, Presence } from "@common/types";
 import { createPmpClient, createUpnpClient } from "@xmcl/nat-api";
 import { v4DefaultGateway } from "network-default-gateway";
-import Tracer from "nodejs-traceroute";
 import { createServer, request } from "stun";
+
+import { countHops } from "./traceroute";
 
 const STUN_SERVER_URL1 = "stun1.l.google.com:19302";
 const STUN_SERVER_URL2 = "stun2.l.google.com:19302";
@@ -84,28 +85,11 @@ async function getPortMappingPresence(): Promise<PortMapping> {
   return { upnp: upnpPresence, natpmp: natpmpPresence } as PortMapping;
 }
 
+/** One hop to our own public address: the router has it. More: another NAT above the router (CGNAT). */
 async function getCgnatPresence(address: string): Promise<Presence> {
-  return new Promise((resolve, reject) => {
-    let hops = 0;
-    const tracer = new Tracer();
-    tracer.on("hop", () => {
-      hops++;
-    });
-    const timeout = setTimeout(() => {
-      if (hops > 1) {
-        resolve(Presence.PRESENT);
-      } else {
-        reject("CGNAT timeout");
-      }
-    }, 9000);
-    tracer.on("close", (code) => {
-      clearTimeout(timeout);
-      if (code === 0 && hops > 0) {
-        resolve(hops === 1 ? Presence.ABSENT : Presence.PRESENT);
-      } else {
-        reject(code);
-      }
-    });
-    tracer.trace(address);
-  });
+  const { hops, finished } = await countHops(address);
+  if (!finished && hops <= 1) {
+    throw new Error("CGNAT timeout");
+  }
+  return hops === 1 ? Presence.ABSENT : Presence.PRESENT;
 }

@@ -35,6 +35,10 @@ export interface SettingsSchema {
   launchGameOnPlay: boolean;
   autoUpdateLauncher: boolean;
 
+  // "Hardware Acceleration": the launcher draws with the graphics card. Read once at start (main.ts:
+  // off is app.disableHardwareAcceleration). On Linux a crash of the GPU process turns it off (gpu_crash.ts).
+  hardwareAcceleration: boolean;
+
   // Online: the input delay of the player's own inputs, 0 = automatic (from the ping, per game),
   // else 1-4 frames. Synced to Dolphin.ini `[Online] InputDelay`.
   inputDelay: number;
