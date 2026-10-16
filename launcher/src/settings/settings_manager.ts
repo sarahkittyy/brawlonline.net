@@ -196,15 +196,6 @@ export class SettingsManager extends EventEmitter {
   }
 
   /**
-   * Turns hardware acceleration off and stores it before returning: for a crash handler, which may
-   * be the launcher's last act (gpu_crash.ts). The renderer learns of it at the next start.
-   */
-  turnOffHardwareAccelerationSync(): void {
-    electronSettings.setSync("settings.hardwareAcceleration", false);
-    set(this.appSettings, "settings.hardwareAcceleration", false);
-  }
-
-  /**
    * NEW: Batch update multiple settings
    * More efficient than calling updateSetting multiple times
    */
