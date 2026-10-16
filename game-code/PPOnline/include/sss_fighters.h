@@ -15,4 +15,8 @@ namespace SssFighters {
     bool validPreview(const PPOM::GameStep::PreviewPlayer& pv);
     // online_match.cpp put the preview's players into gmSelCharData for Brawl's fighter preload.
     void notePreload();
+    // A side's name line on the stage select (0 this player, 1 the opponent): its text (UTF-16,
+    // NUL-ended), centre x, top y, widest and scale in the 640x480 screen space match_hud.cpp
+    // draws it in. False: nothing to draw.
+    bool labelText(int side, u16* out, int max, float* x, float* y, float* maxW, float* scale);
 }

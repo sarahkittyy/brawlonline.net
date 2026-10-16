@@ -25,6 +25,7 @@
 #include "online.h"
 #include "online_menu.h"
 #include "ppom.h"
+#include "sss_fighters.h"
 
 extern "C" {
     extern u8 g_onlineMatchGame;
@@ -220,8 +221,50 @@ namespace MatchHud {
         }
     }
 
+    // The 2D state the text is drawn in: the HUD's 640x480 space, y down, no depth test, no culling.
+    static void begin2D()
+    {
+        if (!s_constructed) {
+            s_cwCtor(s_cw);
+            s_constructed = true;
+        }
+        s_cwSetFont(s_cw, FONT_SYSTEM);
+        float proj[4][4];
+        float pos[3][4] = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}};
+        s_gxViewport(0, 0, SCREEN_W, SCREEN_H, 0, 1);
+        s_gxScissor(0, 0, (u32)SCREEN_W, (u32)SCREEN_H);
+        s_mtxOrtho(proj, 0, SCREEN_H, 0, SCREEN_W, -1.0f, 1.0f);
+        s_gxProjection(proj, 1);
+        s_gxLoadPosMtx(pos, 0);
+        s_gxCurrentMtx(0);
+    }
+
+    // Ranked's stage select: each fighter's "name (rating)" under it (sss_fighters.cpp), white with
+    // the black edge, made narrower when wider than its column.
+    static void drawStageSelect()
+    {
+        bool begun = false;
+        for (int side = 0; side < 2; side++) {
+            u16 text[48];
+            float x, y, maxW, scale;
+            if (!SssFighters::labelText(side, text, 48, &x, &y, &maxW, &scale)) continue;
+            if (!begun) {
+                begin2D();
+                begun = true;
+            }
+            setF32(0x24, scale);
+            float w = textWidth(text);
+            float sx = w > maxW && w > 0 ? scale * maxW / w : scale;
+            printCentredXY(text, x, y, sx, scale, 0xFFFFFFFF);
+        }
+    }
+
     static void draw()
     {
+        if (Online::inScene("scSelStage")) {
+            drawStageSelect();
+            return;
+        }
         bool names = g_onlineMatchGame != 0;
         bool hint = OnlineMatch::quitHintShown();
         if (!s_on && !names && !hint) {
@@ -233,21 +276,7 @@ namespace MatchHud {
             forgetPanels();
             return;
         }
-        if (!s_constructed) {
-            s_cwCtor(s_cw);
-            s_constructed = true;
-        }
-        s_cwSetFont(s_cw, FONT_SYSTEM);
-
-        // 2D: the HUD's 640x480 space, y down, no depth test, no culling.
-        float proj[4][4];
-        float pos[3][4] = {{1, 0, 0, 0}, {0, 1, 0, 0}, {0, 0, 1, 0}};
-        s_gxViewport(0, 0, SCREEN_W, SCREEN_H, 0, 1);
-        s_gxScissor(0, 0, (u32)SCREEN_W, (u32)SCREEN_H);
-        s_mtxOrtho(proj, 0, SCREEN_H, 0, SCREEN_W, -1.0f, 1.0f);
-        s_gxProjection(proj, 1);
-        s_gxLoadPosMtx(pos, 0);
-        s_gxCurrentMtx(0);
+        begin2D();
 
         if (names) drawNames();
         if (!s_on) {

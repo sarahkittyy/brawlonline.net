@@ -30,8 +30,7 @@
 #include <OS/OSCache.h>
 #include <string.h>
 
-#include <mu/mu_msg.h>
-
+#include "labels.h"
 #include "online.h"
 #include "online_menu.h"
 #include "ppom.h"
@@ -39,6 +38,8 @@
 
 // Tests and tuning (harness, through PPOnlineMain.map). Side 0 is this player (left), 1 the
 // opponent (right).
+extern "C" int sprintf(char* buf, const char* fmt, ...);
+
 extern "C" struct SssFightersDebug {
     u32 preloads;        // stage selects whose preview went into gmSelCharData
     u32 made;            // fighters made
@@ -51,32 +52,35 @@ extern "C" struct SssFightersDebug {
     u32 heap[2];         // per side: the resource heap (g_HeapInfos index) its files are in
     u32 obj[2];          // per side: the MuObject
     float pos[2][3];     // per side: where it stands (the stage select's units)
-    float rot[2][3];     // per side: rotation (degrees)
+    float rot[2][3];     // per side: rotation (radians; Y 1.0: turned toward the middle)
     float scale[2];      // per side
     int priority;        // MuObject draw priority (read when made)
     u32 enabled;         // 0: make nothing (tests)
     u32 anim;            // 0 no animation, 1 the bones' only, 2 all of Wait1's
     u32 remake;          // nonzero: delete the fighters and make them again (cleared)
     u32 init;            // ResFile::Init the model and texture files first
-    float label[2][4];   // per side: the name line's window (x1, y1, x2, y2; the stage select's
-                         // rule-line node's units, as stage_legal.cpp moves that line)
-    float labelScale;
-    u32 labels;          // label windows made
+    float label[2][4];   // per side: the name line (centre x, top y, widest, scale) in the 640x480
+                         // screen space match_hud.cpp draws it in
+    float labelScale;    // (unused)
+    u32 labels;          // name lines being drawn
     float fit[2];        // the largest a fighter may stand (width, height; the stage select's
                          // units, measured between its bones): a bigger one is scaled down
     float fitted[2];     // per side: the factor its size was scaled by (0: not measured yet)
     float bones[2][2];   // per side: its bones' extent (width, height) when measured
+    u32 srt;             // tuning: 0 no texture-scroll anim, 1 Wait2's, 2 Wait3's
+    u32 labelHost;       // (unused)
+    u32 eyesCleared;     // yellow-eye bones hidden or Yellow textures bound to the normal ones
+    u32 eyeMode;         // (unused)
 } g_sssFighters = {0, 0, 0, 0, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0}, {0, 0},
                    {{-29.0f, -16.0f, 0.0f}, {29.0f, -16.0f, 0.0f}},
-                   {{0.0f, 120.0f, 0.0f}, {0.0f, -120.0f, 0.0f}},
+                   {{0.0f, 1.0f, 0.0f}, {0.0f, -1.0f, 0.0f}},
                    {0.8f, 0.8f}, 0x10, 1, 2, 0, 1,
-                   {{-250.0f, 129.0f, 10.0f, 89.0f}, {744.0f, 158.0f, 1004.0f, 118.0f}}, 0.8f, 0,
-                   {16.0f, 14.0f}, {0.0f, 0.0f}, {{0.0f, 0.0f}, {0.0f, 0.0f}}};
+                   {{91.0f, 392.0f, 150.0f, 0.6f}, {549.0f, 392.0f, 150.0f, 0.6f}}, 0.0f, 0,
+                   {16.0f, 14.0f}, {0.0f, 0.0f}, {{0.0f, 0.0f}, {0.0f, 0.0f}}, 0, 0x80, 0, 1};
 
 namespace SssFighters {
 
     static bool isPtr(u32 p) { return (p >= 0x80000000 && p < 0x81800000) || (p >= 0x90000000 && p < 0x94000000); }
-    static bool memcmp4(const float* a, const float* b) { return a[0] == b[0] && a[1] == b[1] && a[2] == b[2] && a[3] == b[3]; }
 
     static const u32 HEAP_INFOS = 0x80494958;   // g_HeapInfos {name*, gfMemoryPool*, size, arena}
     static const int HEAP_FIGHTER1_RESOURCE = 18;
@@ -93,6 +97,7 @@ namespace SssFighters {
     static const CreateFn MU_CREATE = (CreateFn)0x800B2394;      // MuObject::create(ResFile*, const char*, ...)
     static const NameFn CHANGE_ANIM = (NameFn)0x800B534C;        // MuObject::changeAnimN
     static const NameFn CHANGE_NODE_ANIM = (NameFn)0x800B45A8;   // MuObject::changeNodeAnimN
+    static const NameFn CHANGE_SRT_ANIM_IF = (NameFn)0x800B4F98; // MuObject::changeTexSrtAnimNIf
     static const LoopFn SET_LOOP = (LoopFn)0x80028278;           // gfModelAnimation::setLoop
     static const MtxIdentFn MTX_IDENTITY = (MtxIdentFn)0x8003E35C;
     static const MtxSrtFn MTX_SRT = (MtxSrtFn)0x8003F0FC;        // as MuObject::setPos builds its matrix
@@ -111,22 +116,41 @@ namespace SssFighters {
     static int s_age[2];            // by side: frames since it was made
     static DtorFn s_origDtor = NULL;
 
-    // The name lines: a message object of our own (as the stage select makes its own: MuMsg::create
-    // (1, 0x2A, 0x2B), sel_stage text+0xC28), one window per side, attached as the stage select's
-    // rule line (window 0) is: MuMsg::attachScnMdlSimple(window, the ScnMdl of task+0x80, text
-    // node 0, 0.0625). The attach chains the message into that model's draw callback
-    // (ScnMdlSimple+0xD4); the callback from before is put back before the message is deleted.
-    typedef MuMsg* (*MsgCreateFn)(u32, u32, u32);
-    typedef void (*MsgAllocFn)(MuMsg*, u32 size, u32 count);
-    typedef void (*MsgAttachFn)(MuMsg*, u32 window, void* scnMdl, u32 textNode, float size);
-    typedef void (*MsgInitWsFn)(MuMsg*, void* ws);
-    typedef void (*MsgSetFaceFn)(MuMsg*, u32 window, u32 face);
-    typedef void (*MsgDeleteFn)(MuMsg*, int);
-    static MuMsg* s_msg = NULL;
-    static u8* s_msgMdl = NULL;        // the model the windows are on
-    static u32 s_msgOldCallback = 0, s_msgCallback = 0;
-    static bool s_labelled[2];
-    static float s_labelRect[2][4];    // the rects last set
+    // The name lines ("name (rating)" under each fighter), drawn flat on the screen by match_hud.cpp
+    // with the game's CharWriter and system font, as the names under the damage in a match: a MuMsg
+    // window on a stage select node was drawn in that node's tilted plane and was hard to read at
+    // 480p (the user's, 2026-10-16).
+    static u8 s_labelMask = 0;
+
+    bool labelText(int side, u16* out, int max, float* x, float* y, float* maxW, float* scale)
+    {
+        if (!s_havePreview || side < 0 || side > 1 || !Online::inScene("scSelStage")) return false;
+        const PPOM::GameStep::PreviewPlayer* pv = NULL;
+        for (int port = 0; port < 2; port++) {
+            if (validPreview(s_pv[port]) && (s_pv[port].local ? 0 : 1) == side) pv = &s_pv[port];
+        }
+        if (!pv) return false;
+        char line[PPOM::NAME_LEN + 16];
+        char name[PPOM::NAME_LEN + 1];
+        PPOM::u16ToAscii(name, pv->name, sizeof(name));
+        if (!name[0]) strcpy(name, pv->local ? "You" : "Opponent");
+        if (pv->rating >= 0.0f && pv->rating < 100000.0f) sprintf(line, "%s (%d)", name, (int)(pv->rating + 0.5f));
+        else strcpy(line, name);
+        int n = 0;
+        for (; line[n] && n < max - 1; n++) {
+            u8 c = (u8)line[n];
+            out[n] = c < 0x20 ? (u16)' ' : c;   // nothing the renderer reads as a command
+        }
+        out[n] = 0;
+        const float* l = g_sssFighters.label[side];
+        *x = l[0];
+        *y = l[1];
+        *maxW = l[2];
+        *scale = l[3];
+        s_labelMask |= (u8)(1 << side);
+        g_sssFighters.labels = (s_labelMask & 1) + ((s_labelMask >> 1) & 1);
+        return true;
+    }
 
     const PPOM::GameStep* previewStep()
     {
@@ -418,6 +442,7 @@ namespace SssFighters {
     }
 
     static int s_heap[2] = {-1, -1};   // by side: the resource heap its files are in (-1 none yet)
+    static void fixEyes(int side);
 
     // Fighters keep their sizes in a match (Jigglypuff is small, Bowser big), and a big one would
     // cover the stage icons: a few frames after it is made (its bones posed by Wait1), the extent of
@@ -491,11 +516,14 @@ namespace SssFighters {
         g_sssFighters.obj[side] = (u32)obj;
         g_sssFighters.state[side] |= 4;
         g_sssFighters.made++;
+        fixEyes(side);
         // The idle from the motion's brres: MuObject looks it up in its own file (+4).
         u32 own = *(u32*)(obj + 4);
         *(u32*)(obj + 4) = f.motion;
         if (g_sssFighters.anim == 1) CHANGE_NODE_ANIM(obj, IDLE);
         else if (g_sssFighters.anim == 2) CHANGE_ANIM(obj, IDLE);
+        if (g_sssFighters.srt == 1) CHANGE_SRT_ANIM_IF(obj, "Wait2");
+        else if (g_sssFighters.srt == 2) CHANGE_SRT_ANIM_IF(obj, "Wait3");
         *(u32*)(obj + 4) = own;
         void* anim = *(void**)(obj + 0x14);
         if (isPtr((u32)anim)) {
@@ -513,64 +541,175 @@ namespace SssFighters {
         place(side);
     }
 
-    static void deleteLabels()
-    {
-        if (!s_msg) return;
-        if (s_msgMdl && *(u32*)(s_msgMdl + 0xD4) == s_msgCallback) *(u32*)(s_msgMdl + 0xD4) = s_msgOldCallback;
-        ((MsgDeleteFn)0x800B8A0C)(s_msg, 1);
-        s_msg = NULL;
-        s_msgMdl = NULL;
-        s_labelled[0] = s_labelled[1] = false;
-    }
+    // The eyes. Brawl's fighters have glowing yellow eyes for some moves (EyeYellow... textures,
+    // materials and the EyeYellowM bone), which the fighter keeps out of sight in a match; drawn
+    // straight from the model they showed, and every fighter had golden eyes (the user's,
+    // 2026-10-16). Two kinds of model:
+    //   - with the normal eyes in its own materials (a material using an eye texture that is not
+    //     a Yellow one: Lucas's EyeL / EyeR, Fox's LEye / REye, Kirby's body, BodyNormal_L / R):
+    //     the yellow eyes are separate meshes over them, shown by the EyeYellow... bones; those
+    //     bones are hidden (their ResNode's visible flag, 0x100 of the node's flags at +0x14; Wait1's
+    //     visibility animation does not touch them) and shown again when the fighter goes;
+    //   - otherwise (none seen yet): a texture pattern would put the normal eye (the Yellow
+    //     texture's name without "Yellow", e.g. PlyKirby5KEye.1; or with "Iris" for it)
+    //     into them. The model is bound with each Yellow entry of the texture file's dictionary
+    //     pointing at the normal one (nw4r::g3d::ResFile::Release, then Bind as MuObject::create
+    //     does; the dictionary is put back at once), and bound again as it was when the fighter goes.
+    // The match makes its fighter from the same files: they are as it finds them by then.
+    typedef void (*ReleaseFn)(void* resFile);
+    typedef void (*BindFn)(void* resFile, void* texFile);
+    static const ReleaseFn RES_RELEASE = (ReleaseFn)0x8018E808;   // ResFile::Release
+    static const BindFn RES_BIND = (BindFn)0x8018E5D4;            // ResFile::Bind(ResFile)
+    static const u32 NODE_VISIBLE = 0x100;
+    static bool s_eyesBound[2];
+    static u32* s_hiddenNodes[2][8];   // the flags words of the bones hidden
+    static int s_nHidden[2];
 
-    static void placeLabel(int side)
+    static bool contains(const char* s, const char* word, bool anyCase)
     {
-        u8* ws = *(u8**)((u8*)s_msg + 0xC) + 0x48 * side;
-        float* rect = (float*)(ws + 4);
-        const float* want = g_sssFighters.label[side];
-        if (s_labelled[side] && memcmp4(s_labelRect[side], want)) return;
-        for (int k = 0; k < 4; k++) rect[k] = s_labelRect[side][k] = want[k];
-        float* sc = (float*)(ws + 0x30);
-        sc[0] = sc[1] = g_sssFighters.labelScale;
-    }
-
-    static void label(u8* task, int side, const PPOM::GameStep::PreviewPlayer& pv)
-    {
-        if (!s_msg) {
-            u8* host = *(u8**)(task + 0x80);
-            u8* mdl = isPtr((u32)host) ? *(u8**)(host + 0x10) : NULL;
-            if (!isPtr((u32)mdl)) return;
-            MuMsg* m = ((MsgCreateFn)0x800B8930)(1, MENU_HEAP, 0x2B);
-            if (!m) return;
-            ((MsgAllocFn)0x800B8B08)(m, 0x80, 2);
-            s_msgMdl = mdl;
-            s_msgOldCallback = *(u32*)(mdl + 0xD4);
-            for (u32 w = 0; w < 2; w++) {
-                ((MsgAttachFn)0x800B8C90)(m, w, mdl, 0, 0.0625f);
-                ((MsgInitWsFn)0x800B8BE0)(m, *(u8**)((u8*)m + 0xC) + 0x48 * w);
-                ((MsgSetFaceFn)0x800B9488)(m, w, 1);
-                m->setAlignMode(w, MuMsg::Align_Center);
-                m->setFontColor(w, 0xFF, 0xFF, 0xFF, 0xFF);
+        for (int i = 0; s[i] && i < 64; i++) {
+            int k = 0;
+            for (; word[k]; k++) {
+                char a = s[i + k], b = word[k];
+                if (anyCase) {
+                    if (a >= 'A' && a <= 'Z') a = (char)(a + 32);
+                    if (b >= 'A' && b <= 'Z') b = (char)(b + 32);
+                }
+                if (a != b) break;
             }
-            s_msgCallback = *(u32*)(mdl + 0xD4);
-            s_msg = m;
+            if (!word[k]) return true;
         }
-        placeLabel(side);
-        if (s_labelled[side]) return;
-        char name[PPOM::NAME_LEN + 1];
-        PPOM::u16ToAscii(name, pv.name, sizeof(name));
-        if (!name[0]) strcpy(name, pv.local ? "You" : "Opponent");
-        // The menu font has no ASCII parentheses: the full-width ones (as code_entry.cpp's '#').
-        if (pv.rating >= 0.0f && pv.rating < 100000.0f)
-            s_msg->printf(side, "%s \xEF\xBC\x88%d\xEF\xBC\x89", name, (int)(pv.rating + 0.5f));
-        else s_msg->printf(side, "%s", name);
-        s_labelled[side] = true;
-        g_sssFighters.labels++;
+        return false;
+    }
+
+    // `name` with "Yellow" taken out (`with` empty) or replaced by `with`, into out; false if none.
+    static bool unYellow(const char* name, const char* with, char* out, int max)
+    {
+        int i = 0, o = 0;
+        bool found = false;
+        while (name[i] && o < max - 8) {
+            if (!found && name[i] == 'Y' && name[i + 1] == 'e' && name[i + 2] == 'l' && name[i + 3] == 'l' &&
+                name[i + 4] == 'o' && name[i + 5] == 'w') {
+                for (int k = 0; with[k]; k++) out[o++] = with[k];
+                i += 6;
+                found = true;
+                continue;
+            }
+            out[o++] = name[i++];
+        }
+        out[o] = 0;
+        return found;
+    }
+
+    // An MDL0 section's dictionary (v9-v11: the section offsets from +0x10; 1 bones, 6 materials).
+    static u8* mdlDict(u8* mdl0, int section)
+    {
+        s32 off = *(s32*)(mdl0 + 0x10 + 4 * section);
+        return off > 0 ? mdl0 + off : NULL;
+    }
+
+    // Each Yellow texture's dictionary entry swapped with its normal one's for a bind of the model.
+    static int bindNormalEyes(int side)
+    {
+        u8* tex = (u8*)s_texRes[side];
+        u32 size = *(u32*)(tex + 8);
+        if (size < 0x40 || size > 0x400000) return 0;
+        Range r = {(u32)tex, (u32)tex + size};
+        u8* dict = (u8*)bresGroup(r, tex, "Textures(NW4R)");
+        int n = dictCount(r, dict);
+        if (!dict || n < 2) return 0;
+        int swaps[16][2];
+        int nSwaps = 0;
+        for (int i = 1; i <= n && nSwaps < 16; i++) {
+            const char* nm;
+            if (!dictEntry(r, dict, i, &nm)) continue;
+            char want[64];
+            const char* const subs[2] = {"", "Iris"};
+            for (int t = 0; t < 2; t++) {
+                if (!unYellow(nm, subs[t], want, sizeof(want))) break;
+                int j = 1;
+                for (; j <= n; j++) {
+                    const char* other;
+                    if (j != i && dictEntry(r, dict, j, &other) && sameName(r, other, want)) break;
+                }
+                if (j > n) continue;
+                swaps[nSwaps][0] = i;
+                swaps[nSwaps][1] = j;
+                nSwaps++;
+                break;
+            }
+        }
+        if (!nSwaps) return 0;
+        // Each pair's entries swap their data offsets (+12, both from the dictionary's start) for
+        // the bind, and back.
+        for (int pass = 0; pass < 2; pass++) {
+            for (int k = 0; k < nSwaps; k++) {
+                s32* a = (s32*)(dict + 8 + 0x10 * swaps[k][0] + 12);
+                s32* b = (s32*)(dict + 8 + 0x10 * swaps[k][1] + 12);
+                s32 t = *a;
+                *a = *b;
+                *b = t;
+            }
+            if (pass == 0) {
+                RES_RELEASE(&s_modelRes[side]);
+                RES_BIND(&s_modelRes[side], &s_texRes[side]);
+            }
+        }
+        s_eyesBound[side] = true;
+        return nSwaps;
+    }
+
+    static void fixEyes(int side)
+    {
+        s_eyesBound[side] = false;
+        s_nHidden[side] = 0;
+        u8* mdl0 = *(u8**)(s_obj[side] + 8);
+        if (!isPtr((u32)mdl0) || *(u32*)mdl0 != 0x4D444C30 /* MDL0 */ || !isPtr(s_texRes[side])) return;
+        u8* links = mdlDict(mdl0, 9);
+        u8* bones = mdlDict(mdl0, 1);
+        if (!links || !bones) return;
+        // The normal eyes are in the model when a material uses an eye texture that is not a Yellow
+        // one (the texture links, MDL0 section 9: name -> {count, {material, info}...}).
+        bool plainEyes = false;
+        u32 nLinks = *(u32*)(links + 4);
+        for (u32 i = 1; i <= nLinks && i < 512; i++) {
+            u8* e = links + 8 + 0x10 * i;
+            const char* nm = (const char*)(links + *(s32*)(e + 8));
+            u32 users = *(u32*)(links + *(s32*)(e + 12));
+            if (users && contains(nm, "eye", true) && !contains(nm, "Yellow", false)) plainEyes = true;
+        }
+        if (!plainEyes) {
+            g_sssFighters.eyesCleared += (u32)bindNormalEyes(side);
+            return;
+        }
+        u32 nBones = *(u32*)(bones + 4);
+        for (u32 i = 1; i <= nBones && i < 1024 && s_nHidden[side] < 8; i++) {
+            u8* e = bones + 8 + 0x10 * i;
+            const char* nm = (const char*)(bones + *(s32*)(e + 8));
+            if (!contains(nm, "Yellow", false)) continue;
+            u32* flags = (u32*)(bones + *(s32*)(e + 12) + 0x14);
+            if (!(*flags & NODE_VISIBLE)) continue;
+            *flags &= ~NODE_VISIBLE;
+            s_hiddenNodes[side][s_nHidden[side]++] = flags;
+            g_sssFighters.eyesCleared++;
+        }
+    }
+
+    static void restoreEyes(int side)
+    {
+        for (int i = 0; i < s_nHidden[side]; i++) *s_hiddenNodes[side][i] |= NODE_VISIBLE;
+        s_nHidden[side] = 0;
+        if (s_eyesBound[side]) {
+            RES_RELEASE(&s_modelRes[side]);
+            RES_BIND(&s_modelRes[side], &s_texRes[side]);
+            s_eyesBound[side] = false;
+        }
     }
 
     static void deleteFighters()
     {
         for (int side = 0; side < 2; side++) {
+            restoreEyes(side);
             u8* obj = s_obj[side];
             if (!obj) continue;
             typedef void (*DelFn)(u8*, int);
@@ -583,9 +722,7 @@ namespace SssFighters {
 
     static void forget()
     {
-        s_msg = NULL;   // (went with the stage select: hkTaskDtor)
-        s_msgMdl = NULL;
-        s_labelled[0] = s_labelled[1] = false;
+        s_labelMask = 0;
         s_task = NULL;
         s_obj[0] = s_obj[1] = NULL;
         s_tries[0] = s_tries[1] = 0;
@@ -616,7 +753,6 @@ namespace SssFighters {
         if (g_sssFighters.remake) {
             g_sssFighters.remake = 0;
             deleteFighters();
-            deleteLabels();
             s_heap[0] = s_heap[1] = -1;
             s_tries[0] = s_tries[1] = 0;
             s_wait[0] = s_wait[1] = 0;
@@ -633,7 +769,6 @@ namespace SssFighters {
             const PPOM::GameStep::PreviewPlayer& pv = s_pv[port];
             if (!validPreview(pv)) continue;
             int side = pv.local ? 0 : 1;
-            label(task, side, pv);
             if (!s_obj[side]) {
                 if (!g_sssFighters.enabled || !loaded || s_tries[side] >= 5) continue;
                 if (s_wait[side] > 0) {
@@ -657,7 +792,6 @@ namespace SssFighters {
     {
         if (task && task == s_task) {
             deleteFighters();
-            deleteLabels();
             s_task = NULL;
         }
         return s_origDtor(task, flags);
