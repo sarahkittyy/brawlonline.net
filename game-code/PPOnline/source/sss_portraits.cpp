@@ -261,16 +261,20 @@ namespace SssPortraits {
     // ---- The cards --------------------------------------------------------------------------
     enum { F_NONE = -1, F_PORT = -2, F_MARK = -3, F_NAME = -4, F_PLATE = -5 };
     // portClr: the part's colour animation is "<model>__<port>" (its CLR0s __0..__3+), not __0.
-    struct Part { const char* model; s16 vis, node, pat, clr; bool portClr; };
+    // priority: the CSS's draw priority for the part (its ScnObj +0xD0 / +0xD1, opaque and
+    // translucent, measured; MuObject::create's priority). The parts lie in one plane: at one
+    // priority for all they z-fought, worst with the C-stick tilting the stage select's camera
+    // (the user's, 2026-10-16).
+    struct Part { const char* model; s16 vis, node, pat, clr; bool portClr; u8 priority; };
     static const Part PARTS[] = {
-        {"MenSelchrCbase4_TopN", 15, 15, F_NONE, F_PORT, false},
-        {"MenSelchrCplynm4_TopN", F_NONE, F_NONE, F_PLATE, F_NONE, false},
-        {"MenSelchrCmark4_TopN", F_NONE, F_NONE, F_MARK, F_PORT, false},
-        {"MenSelchrCchar4_TopN", F_NONE, F_NONE, F_NONE, 0, false},
-        {"MenSelchrCchareff4_TopN", F_NONE, F_NONE, F_NONE, 20, false},
-        {"MenSelchrCname4_TopN", F_NONE, F_NONE, F_NAME, F_NONE, false},
-        {"MenSelchrCentry4_TopN", F_NONE, F_NONE, F_NONE, 0, true},
-        {"MenSelchrChuman4_TopN", 2, 1, 0, 0, true},
+        {"MenSelchrCbase4_TopN", 15, 15, F_NONE, F_PORT, false, 0x0C},
+        {"MenSelchrCplynm4_TopN", F_NONE, F_NONE, F_PLATE, F_NONE, false, 0x0D},
+        {"MenSelchrCmark4_TopN", F_NONE, F_NONE, F_MARK, F_PORT, false, 0x0D},
+        {"MenSelchrCchar4_TopN", F_NONE, F_NONE, F_NONE, 0, false, 0x0F},
+        {"MenSelchrCchareff4_TopN", F_NONE, F_NONE, F_NONE, 20, false, 0x15},
+        {"MenSelchrCname4_TopN", F_NONE, F_NONE, F_NAME, F_NONE, false, 0x10},
+        {"MenSelchrCentry4_TopN", F_NONE, F_NONE, F_NONE, 0, true, 0x10},
+        {"MenSelchrChuman4_TopN", 2, 1, 0, 0, true, 0x11},
     };
     static const int N_PARTS = sizeof(PARTS) / sizeof(PARTS[0]);
     static const int PORTRAIT_PART = 3;
@@ -367,7 +371,7 @@ namespace SssPortraits {
         u8* group = *(u8**)(task + 0x50);
         for (int i = 0; i < N_PARTS; i++) {
             const Part& p = PARTS[i];
-            u8* obj = MU_CREATE(&s_cssRes, p.model, 0x10, &s_cssRes, MENU_HEAP);
+            u8* obj = MU_CREATE(&s_cssRes, p.model, p.priority, &s_cssRes, MENU_HEAP);
             if (!isPtr((u32)obj)) {
                 g_sssPortraits.failed++;
                 continue;
