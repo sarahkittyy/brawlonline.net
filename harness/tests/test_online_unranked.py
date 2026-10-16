@@ -294,12 +294,14 @@ def test_unranked_search_ends_with_the_server_error(backend: OnlineBackend,
     st = g.c.mm_status()
     assert st["state"] == "error" and st["error"] == TIMEOUT_ERROR
     assert st["error_source"] == "get_ticket", st
+    # The search waited in the waiting room (test_waiting_room.py), which ends on the error: the
+    # CSS comes again, its hand on the panel's name plate (where A opens the name tags), as after
+    # a match. The character is still locked there.
+    _wait(lambda: g.scene() == "scSelctCharacter", 20, "the CSS after the waiting room")
     g.steps("wait 30")
     g.shot("05-unranked-timeout")
     assert g.locked()
     before = g.css()
-    g.steps("tap A 8", "wait 20")
-    assert g.css() == before
     g.press_until("B", lambda: g.c.mm_status()["state"] == "idle", "the cleanup")
     _wait(lambda: not g.locked(), 5, "the CSS to unlock")
     g.steps("wait 20")

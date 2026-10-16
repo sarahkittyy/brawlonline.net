@@ -34,6 +34,7 @@
 #include "ppom.h"
 #include "sss_fighters.h"
 #include "stage_legal.h"
+#include "training_room.h"
 
 extern "C" {
     extern u8 g_onlineCss;
@@ -459,6 +460,8 @@ namespace OnlineMatch {
 
     int onSelStage(u8* seq)
     {
+        // The CSS left for the waiting room (Unranked / Ranked search): Brawl's room setup.
+        if (g_onlineCss && TrainingRoom::onSelStage(seq)) return 1;
         if (g_onlineCss && g_onlinePickStage && !g_onlineMatchGame) {
             // Direct's loser picks the stage on P+'s stage select, opened as the Versus sequence
             // opens it (sqVsMelee state 5: text+0x3D2D8 then setNextScene("scSelStage", 0)). The
@@ -1168,6 +1171,7 @@ namespace OnlineMatch {
     void install(CoreApi* api)
     {
         MatchHud::install(api);
+        TrainingRoom::install(api);
         api->sySimpleHookRel(0x00036F64, reinterpret_cast<void*>(hookState3), 1 /* SORA_SCENE */);
         api->sySimpleHookRel(0x00036F8C, reinterpret_cast<void*>(hookState4), 1);
         api->sySimpleHookRel(0x00036FDC, reinterpret_cast<void*>(hookState5), 1);

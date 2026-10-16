@@ -31,6 +31,7 @@ namespace OnlineMenu {
     void menuPageRunning(u8* page);      // a menu page the launcher's join can leave from ran
     void topPageRunning(u8* page);       // the main menu's top page ran (the same, no Wi-Fi task)
     void noteQuit(int port);             // the last game ended by this port's quit: the CSS says so
+    void waitingRoomEnded(int how);      // the waiting room has ended (TrainingRoom::End)
 }
 
 namespace RoomCss {

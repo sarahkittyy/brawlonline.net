@@ -14,6 +14,7 @@
 
 #include "online.h"
 #include "online_menu.h"
+#include "training_room.h"
 #include "ppom.h"
 #include "netmenu.h"
 #include "room_play.h"
@@ -84,6 +85,7 @@ namespace OnlineMenu {
         u32 startGuard;         // frames START presses are dropped after the keypad (see codeEntered)
         bool cssSeen;           // the online CSS was up last frame (holdBGuard)
         bool bGuard;            // B still held from before this CSS: taken out until released
+        u32 roomHoldB;          // the waiting room: frames B has been held (hold B cancels)
         u32 searchSeq;          // seq of the current FIND_OPPONENT (0 = no search)
         bool pollPending;       // a GET_MATCH_STATE (or the FIND_OPPONENT) awaits its answer
         u32 pollFrames;         // frames it has been waiting
@@ -896,6 +898,11 @@ namespace OnlineMenu {
     }
 
     static bool usesCode() { return s.mode == PPOM::MODE_DIRECT || s.mode == PPOM::MODE_TEAMS; }
+    // Unranked and Ranked search from the waiting room (training_room.cpp); a replay never does.
+    static bool usesWaitingRoom()
+    {
+        return (s.mode == PPOM::MODE_UNRANKED || s.mode == PPOM::MODE_RANKED) && !roomCss() && !s.playback;
+    }
 
     static void updateRoomStatus();
     // Who quit the last game (noteQuit), shown over every line but an error for its first frames
@@ -1598,6 +1605,14 @@ namespace OnlineMenu {
         // behind; it is not this connection's.
         OnlineMatch::clearPickedStage();
         s.phase = PH_SEARCHING;
+        // Unranked and Ranked wait in Brawl's own waiting room (training_room.cpp), as Brawl's
+        // "With Anyone" and Brawlback's Quickplay do (the user's, 2026-10-15): the CSS leaves
+        // for it at once.
+        if (usesWaitingRoom()) {
+            TrainingRoom::enter();
+            s.roomHoldB = 0;
+            leaveCss(1);
+        }
     }
 
     int currentMode() { return s.mode; }
@@ -2547,7 +2562,8 @@ namespace OnlineMenu {
     {
         u8 screen = PPOM::SCREEN_OTHER;
         if (strcmp(scene, "scMelee") == 0) {
-            screen = PPOM::SCREEN_MATCH;
+            // The waiting room is a search, not a match (the launcher's "In game").
+            screen = TrainingRoom::active() ? PPOM::SCREEN_ONLINE_BUSY : PPOM::SCREEN_MATCH;
         } else if (strcmp(scene, "muMenuMain") == 0) {
             screen = PPOM::g_block.debug.frames - s_jumpFrame < 3 ? PPOM::SCREEN_MENUS : PPOM::SCREEN_OTHER;
         } else if (g_onlineCss && s.mode >= 0 && strcmp(scene, "scSelctCharacter") == 0) {
@@ -2845,11 +2861,84 @@ namespace OnlineMenu {
         return s.mode != PPOM::MODE_RANKED || (s.step.active && s.step.mayLock && !s.step.toSss);
     }
 
+    // The waiting room (training_room.cpp): Unranked and Ranked search from Brawl's online waiting
+    // room. Not an online match (Dolphin's session never runs in it), so the mailbox works as on
+    // the CSS: the search is polled, its line goes into the room's banner, and the room ends:
+    //  - Unranked, once the first game is set up (SESSION): straight into the match;
+    //  - Ranked, once connected: the CSS, where the game setup steps begin (Slippi's order);
+    //  - START or hold B: the search is cancelled (as B on the CSS), back to the CSS;
+    //  - the search ended by itself (an error, the opponent gone): back to the CSS, which says so.
+    // START is taken out of the room (it would pause it).
+    static const u32 ROOM_HOLD_B_FRAMES = 60;
+    static void tickWaitingRoom()
+    {
+        pollMailbox();
+        pollMatchState();
+        TrainingRoom::tick();
+        if (!TrainingRoom::running()) return;
+        blockCodeMenu();
+        const u32 held = padButtons(0x0);
+        const u32 pressed = padButtons(0xC);
+        maskButtons(BTN_START);
+        s.roomHoldB = (held & BTN_B) ? s.roomHoldB + 1 : 0;
+        updateStatus();
+        TrainingRoom::setBanner(s.status, s.statusRed);
+        if (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING) {
+            if ((pressed & BTN_START) || s.roomHoldB >= ROOM_HOLD_B_FRAMES) {
+                cleanup();
+                playSE(SE_BACK);
+                TrainingRoom::end(TrainingRoom::END_CSS);
+            }
+            return;
+        }
+        if (s.phase == PH_CONNECTED) {
+            const int game = sessionGame();
+            if (!game) return;
+            if (s.mode == PPOM::MODE_RANKED) {
+                TrainingRoom::end(TrainingRoom::END_CSS);
+                return;
+            }
+            const PPOM::Session& se = PPOM::g_block.session;
+            if (s.lockedGame == game && se.state == PPOM::SS_MATCH_READY && se.game == game) {
+                g_onlineMatchGame = (u8)game;
+                PPOM::g_block.debug.scratch[10] = 0x100 * game;   // tests: the match started
+                TrainingRoom::end(TrainingRoom::END_MATCH);
+            }
+            return;
+        }
+        TrainingRoom::end(TrainingRoom::END_CSS);   // idle (the search ended) or an error
+    }
+
+    void waitingRoomEnded(int how)
+    {
+        // Ended by the game itself (not by tickWaitingRoom): no search may go on behind the CSS.
+        if (how == TrainingRoom::END_NONE && (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING)) cleanup();
+        s.roomHoldB = 0;
+    }
+
     void tick()
     {
         AnyoneMenu::tick();
         const char* scene = Online::currentSceneName();
         reportScreen(scene);
+        if (TrainingRoom::active() && strcmp(scene, "scSelctCharacter") != 0) {
+            // The CSS has left for the room: the room's tick, also on its load screens. Anywhere
+            // else the room is over without the sequence having said so (it never was so far):
+            // forget it rather than keep the menus' own tick from running.
+            if (strcmp(scene, "scMelee") != 0 && strcmp(scene, "scMemoryChange") != 0) TrainingRoom::abandon();
+            if (TrainingRoom::active() && g_onlineCss && s.mode >= 0) {
+                if (strcmp(scene, s.lastScene) != 0) {
+                    // As below: the CSS's message windows were freed with it.
+                    strncpy(s.lastScene, scene, sizeof(s.lastScene) - 1);
+                    s.cssMsg = NULL;
+                    s.haveWindow = false;
+                    s.ownShown = false;
+                    s.roomBtnsShown = false;
+                }
+                tickWaitingRoom();
+                return;
+            }
+        }
         // In a match: nothing that differs between the machines may change the game while the
         // match runs under rollback, so no mailbox here (OnlineMatch::tickMatch only reacts to
         // a disconnect, which Dolphin reports after the rollback session has ended).
@@ -3102,6 +3191,8 @@ namespace Text {
     {
         const char* css = OnlineMenu::cssLine(msg, window, line, msbin, caller);
         if (css) return css;
+        const char* room = TrainingRoom::line(msg, window, line, msbin);   // the waiting room's banner
+        if (room) return room;
         const char* play = RoomPlay::menuText(msbin, line);   // the RULESET / SET descriptions
         if (play) return play;
         const char* sw = StageSwitch::menuText(msg, msbin, line);  // the room's STAGE SWITCH

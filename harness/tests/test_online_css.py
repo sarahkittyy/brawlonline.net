@@ -171,8 +171,10 @@ def test_status_line_is_never_squeezed(backend: OnlineBackend,
         n = requests()
         g.press_until("START", lambda: requests() > n, "START to search", tries=3)
         _serve_error(g, text)
-        _wait(lambda: phase() == 4, 5, f"the error {name!r}")
-        g.steps("wait 10")
+        # The search waited in the waiting room (test_waiting_room.py), which ends on the error:
+        # the CSS shows the phase (scratch 1) and prints the line once it is back.
+        _wait(lambda: g.scene() == "scSelctCharacter" and phase() == 4, 25, f"the error {name!r}")
+        g.steps("wait 30")
         lay = _scratch(g, SCR_STATUS)
         g.shot(name)
         results[name] = (lay >> 24, lay & 0xFFFFFF, text)

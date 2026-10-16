@@ -7989,10 +7989,17 @@ void OnStageCreate(const Core::CPUThreadGuard& guard)
   }
   if (s.mode != Mode::Network)
     return;
+  auto& system = guard.GetSystem();
+  // The online waiting room's stage (the player waits there while matchmaking connects): not
+  // the match's. Its init block must not be taken as the match's, nor its RNG seeded.
+  if (IsWaitingRoom(Guest(system.GetMemory())))
+  {
+    INFO_LOG_FMT(BRAWLBACK, "gprb: the waiting room's stage constructed (not a match)");
+    return;
+  }
   INFO_LOG_FMT(BRAWLBACK, "gprb: stage constructed (match {}, seeded {})", s.match_index, s.did_frame0);
   if (s.phase != Phase::Connected || s.await_scene_exit || !(IsHost() || s.have_seed))
     return;
-  auto& system = guard.GetSystem();
   if (!s.did_frame0)
   {
     ApplyMatchStart(system, "at the stage's construction");

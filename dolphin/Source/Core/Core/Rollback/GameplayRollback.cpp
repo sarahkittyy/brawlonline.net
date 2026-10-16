@@ -107,9 +107,28 @@ std::string CurrentSceneName(const Guest& g)
   return g.CStr(*name_ptr, 32).value_or("");
 }
 
+// Brawl's online waiting room (docs/game-code.md, "The waiting room"): the scMelee that
+// sqNetAnyOkiraku's state 5 sets up on the Online Training stage, where the player plays alone
+// while matchmaking searches. It is never an online match, so it is no match scene here: no
+// rollback session starts in it, even once the opponent is connected. gmGlobalModeMelee+0x1A is
+// the stage kind; state 5 writes it before the room loads, the match setup after the room.
+constexpr u16 STAGE_ONLINE_TRAINING = 0x37;
+
+bool IsWaitingRoom(const Guest& g)
+{
+  const auto gg = g.Ptr32(Addr::GAME_GLOBAL_PTR);
+  if (!gg)
+    return false;
+  const auto mm = g.Ptr32(*gg + Addr::GG_MODE_MELEE);
+  if (!mm)
+    return false;
+  const u8* p = g.Ptr(*mm + 0x1A, 2);
+  return p && static_cast<u16>(p[0] << 8 | p[1]) == STAGE_ONLINE_TRAINING;
+}
+
 bool IsSceneMelee(const Guest& g)
 {
-  return CurrentSceneName(g) == "scMelee";
+  return CurrentSceneName(g) == "scMelee" && !IsWaitingRoom(g);
 }
 
 bool IsNextSceneMelee(const Guest& g)
@@ -122,7 +141,7 @@ bool IsNextSceneMelee(const Guest& g)
   if (!next)
     return false;
   const auto name_ptr = g.Ptr32(*next);
-  return name_ptr && g.CStr(*name_ptr, 32).value_or("") == "scMelee";
+  return name_ptr && g.CStr(*name_ptr, 32).value_or("") == "scMelee" && !IsWaitingRoom(g);
 }
 
 std::vector<HeapInfo> ReadHeapTable(const Guest& g)
