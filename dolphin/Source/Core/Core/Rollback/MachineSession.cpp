@@ -334,6 +334,7 @@ struct HistoryEntry
   s64 frame = -1;
   std::array<Input, MAX_PLAYERS> inputs{};
   u32 checksum = 0;
+  u64 ticks = 0;  // the emulated time this frame's last pass started at
 };
 
 struct State
@@ -599,6 +600,9 @@ struct State
   u64 rollbacks = 0, max_rollback = 0, frames_resimulated = 0, stall_polls = 0, skipped_loads = 0;
   u64 desyncs = 0, saves = 0;
   s64 last_desync_frame = -1;
+  // The rollback just loaded (the pass after it must start when that frame's last run started).
+  std::optional<std::pair<int, int>> loaded;  // frames back, the ring's count
+  u64 load_mismatches = 0;
   Clock::time_point desync_notice_at{};  // the last desync the players were told of
   float frames_ahead = 0;
   int input_delay = 0;  // this player's, in the current GekkoNet session
@@ -3214,10 +3218,15 @@ void Update(Core::System& system)
   if (load_before >= 0)
   {
     // GekkoNet's load names the frame whose end state to restore; the ring's newest slot holds the
-    // end of `newest - 1` (NetPlayClient::HandleGekkoFrame explains the arithmetic).
+    // end of the last frame run (s.current_frame), as in GameplaySession. Not the frame before
+    // this update's last advance: while GekkoNet cannot advance (a player's input is missing, or
+    // every machine holds before an epoch's frame), a rollback brings only the re-run frames, up
+    // to the last frame run, and no new one. Counted from the last advance that load went one
+    // frame short: the machine ran a frame ahead of its frame numbers from then on, desynced, and
+    // at the next epoch its checksum was another frame's (bug 25, 2026-10-16: no third player
+    // could join a REX room, "player 2 does not vouch for this machine").
     auto& rb = Rollback::RollbackManager::Get();
-    const int newest = s.ops.frame[s.ops.count - 1];
-    const int frames_back = (newest - 1) - load_frame;
+    const int frames_back = static_cast<int>(s.current_frame - load_frame);
     if (frames_back >= 1 && frames_back <= MAX_ROLLBACK_FRAMES && rb.m_ring_count >= 2 &&
         frames_back < rb.m_ring_count)
     {
@@ -3231,6 +3240,7 @@ void Update(Core::System& system)
       if (!old_throttle)
         system.GetCoreTiming().BeginRollbackBurst();
       const auto load_start = Clock::now();
+      s.loaded = std::make_pair(frames_back, static_cast<int>(rb.m_ring_count));
       rb.LoadFrame(system, frames_back);
       AfterLoad(system, frames_back);
       PaceLoad(Clock::now() - load_start);
@@ -5640,6 +5650,28 @@ void CheckPassState(Core::System& system)
     s_diag.push_back(std::move(line));
 }
 
+// The first pass after a rollback's load starts from the state the ring kept for the end of the
+// frame before it: the emulated time that frame's last run started at. Another time means the
+// load restored some other frame's state while the passes kept their frame numbers.
+void CheckLoadedTime(Core::System& system)
+{
+  if (!s.loaded)
+    return;
+  const auto [back, ring] = *s.loaded;
+  s.loaded.reset();
+  const HistoryEntry& e = s.history[static_cast<size_t>(s.current_frame) % HISTORY_SIZE];
+  const u64 now = system.GetCoreTiming().GetTicks();
+  if (e.frame != s.current_frame || e.ticks == 0 || e.ticks == now)
+    return;
+  if (s.load_mismatches++ < 20)
+  {
+    WARN_LOG_FMT(BRAWLBACK,
+                 "machine: rollback {} frame(s) back (ring {}): frame {} starts at {} ticks, its last "
+                 "run at {} ({:+})",
+                 back, ring, s.current_frame, now, e.ticks, static_cast<s64>(now - e.ticks));
+  }
+}
+
 void BeginPass(Core::System& system)
 {
   // The inputs this pass runs with, for the SI (GetPad) and the Wii Remotes (GetWiimote).
@@ -5649,7 +5681,9 @@ void BeginPass(Core::System& system)
   s.resim = s.ops.count > 1 && s.iteration != s.ops.count - 1;
   SyncWiimotes(system);
   PlanEpoch(s.current_frame);
+  CheckLoadedTime(system);
   RecordHistory(s.current_frame, s.latched, 0);
+  s.history[static_cast<size_t>(s.current_frame) % HISTORY_SIZE].ticks = system.GetCoreTiming().GetTicks();
   auto& core_timing = system.GetCoreTiming();
   core_timing.SetRollbackResimulating(s.resim);
   UpdateTimeSync(system);
@@ -6009,6 +6043,8 @@ bool Arm(const Options& options, std::string* error)
   s.barrier_done = false;
   s.start_at.reset();
   s.rollbacks = s.max_rollback = s.frames_resimulated = s.stall_polls = s.skipped_loads = 0;
+  s.loaded.reset();
+  s.load_mismatches = 0;
   s.desyncs = s.saves = 0;
   s.last_desync_frame = -1;
   s.desync_notice_at = {};
