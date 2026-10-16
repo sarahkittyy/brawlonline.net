@@ -285,6 +285,8 @@ export class DolphinManager {
       await this._ensureBrawlSave(playbackInstallation, storeDir);
       await playbackInstallation.addGamePath(path.dirname(isoPath));
       await playbackInstallation.setDefaultIso(isoPath);
+      // The launcher's Music setting: off applies P+'s Music Off code here too.
+      await playbackInstallation.updateSettings({ enableMusic: this.settingsManager.getEnableMusic() });
       // A Play Dolphin (a game, a queue, a room) may have the card open: spectating then shares it.
       const inUse = this.netplayDolphinInstance != null || this.playbackDolphinInstances.size > 0;
       const sdCardImage = await this._withProgress(DolphinLaunchType.PLAYBACK, "prepareSdCard", (onProgress) =>

@@ -77,9 +77,13 @@ function setupSettingsSubscriptions(settingsManager: SettingsManager, dolphinMan
     await installation.updateSettings({ inputDelay });
   });
 
+  // Replays and spectated games play with the same music setting as the game.
   settingsManager.onSettingChange("enableMusic", async (enableMusic) => {
-    const installation = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
-    await installation.updateSettings({ enableMusic });
+    await Promise.all(
+      [DolphinLaunchType.NETPLAY, DolphinLaunchType.PLAYBACK].map((launchType) =>
+        dolphinManager.getInstallation(launchType).updateSettings({ enableMusic }),
+      ),
+    );
   });
 
   settingsManager.onSettingChange("disableChat", async (disableChat) => {
