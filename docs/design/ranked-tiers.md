@@ -41,7 +41,7 @@ The rating stays plain Elo (`server/crates/common/src/ranked.rs`). The rank is c
 - Fewer tiers would make each one a long grind. More would need art the pack doesn't have.
 - The top two are deliberately thin (Master a few percent, Legendary about one), so they stay something to chase.
 
-**Are sub-tiers worth it?** Yes. Simulated, with the 100-point buffer below:
+**Are sub-tiers worth it?** Yes. Simulated, with the buffer below at its first value, 100 points:
 
 | Option | Median sets between rank-ups (young / mature ladder) |
 |---|---|
@@ -71,24 +71,25 @@ The cutoffs aim at the grown ladder: Bronze to Diamond about a fifth of the play
 - **Ladder columns:** young is a median of 25 sets per player, mature 120, very mature 300. They come from the simulation: 1,200-1,500 players, true skill normal around 1400 with a standard deviation of 300-420, our K schedule, and matchmaking by rating. A skill fit of all prod results gives a spread in that range.
 - **Prod:** 85 rated players. The top two today, 1887 and 1827, would be Diamond 1 and Diamond 2; Master and Legendary are still empty.
 - **New players** start at 1400, which is Gold 1, the top of Gold. They are placing at first anyway (§4).
-- **Where it lives:** `common::ranked::RANK_FLOORS`. If the spread drifts, change it, and run `pp-admin ranked recompute` to fix every stored rank.
+- **Where it lives:** `common::ranked::RANK_FLOORS`. If the spread drifts, change it; accounts recomputes every stored rank when it next starts (§4).
 
 ## 3. Demotion buffer
 
 Each player has a **held rank**, which changes only after a rated set:
 - **Promotion:** when the rating reaches a higher division's floor, the held rank becomes the highest division reached. A big win can skip divisions.
-- **Demotion:** only once the rating is **100 below the held division's floor**, and then **one division down**. Formally, the held rank becomes `max(rank(rating), rank(rating + 100))`, which is never above the held rank.
-  - Example: a player promoted to Emerald 3 at 1450 drops to Gold 1 only below 1350, which is already Gold 2 territory.
-  - Each further division down needs the rating another 50 below.
+- **Demotion:** only once the rating is **50 below the held division's floor**, and then **one division down**. Formally, the held rank becomes `max(rank(rating), min(held, rank(rating + 50)))`, which is never above the held rank.
+  - Example: a player promoted to Emerald 3 at 1450 drops to Gold 1 only below 1400, which is already Gold 2 territory.
+  - Each further division down needs the rating another division's width below.
   - Someone who really declines does keep dropping.
-- 100 points is about 6-7 more even-set losses than wins in a row: two divisions in the lower tiers, less than one in Diamond and Master.
+- 50 points is about 3 more even-set losses than wins in a row: one division in the lower tiers, less than half of one in Diamond and Master.
+- **Was 100 until 2026-10-16** (the user's: "shrink the buffer to like 50"). With 100, and placement at the 5th set's rating, a player who peaked in placement kept that rank for a long time: sarahkitty placed at 1509 (Emerald 3) and still showed Emerald 3 at 1391, beside Gold 1 players rated 1405-1437. On prod then, 36 of 77 placed players showed a rank above their rating's; with 50, 30, and 23 players dropped one division on the deploy (none rose).
 
 ## 4. Placement (5 sets)
 
 - **Placed** after exactly 5 rated sets. **"X more"** is 5 minus the sets played, so it drops by one every set (the user, 2026-10-16).
 - Until 2026-10-16 placement was variance-based: placed when Glicko's rating deviation (RD) fell to 150, after 5-10 sets, and "X more" was the even sets that would get it there. Lopsided sets and sets against other new players barely lower RD, so players saw "1 more" stay "1 more" after a set.
 - The server still keeps the RD beside the rating (350 at the start, `1/RD'² = 1/RD² + 1/d²` after each set) and stores it, but it decides nothing.
-- Accounts recomputes the stored ranks at startup whenever one disagrees with the 5-set rule (`backfill_tiers`), so the switch applied itself on deploy.
+- Accounts replays the rating history at startup and recomputes the stored ranks whenever one differs from what today's rules give (`backfill_tiers`), so a rule change (this one, the buffer) applies itself on deploy.
 - While placing, the badge is the dotted outline of the emblem's silhouette with a dashed "3 more sets" tag. The buffer starts once placed.
 - Not done, possible later: RD growing during long inactivity, so a returning player re-places.
 

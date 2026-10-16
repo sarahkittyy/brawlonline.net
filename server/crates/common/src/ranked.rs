@@ -370,7 +370,7 @@ impl Tier {
 /// Legendary. Bronze 3 has no floor. Tiers: Silver 1150, Gold 1300, Emerald 1450, Diamond 1625,
 /// Master 2000, Legendary 2250, chosen so that on a grown ladder Bronze to Diamond each hold about a
 /// fifth of the players, Master a few percent and Legendary about one (docs/design/ranked-tiers.md
-/// §2). A change here needs `pp-admin ranked recompute` to apply to stored ranks.
+/// §2). A change here applies to the stored ranks when accounts next starts (`backfill_tiers`).
 pub const RANK_FLOORS: [f64; 19] = [
     f64::NEG_INFINITY,
     1050.0,
@@ -431,7 +431,7 @@ impl Rank {
 
 /// How far below its floor a rank is kept: a placed player drops a division only once their
 /// rating is this far below the held division's floor, and then one division at a time.
-pub const DEMOTION_BUFFER: f64 = 100.0;
+pub const DEMOTION_BUFFER: f64 = 50.0;
 
 /// The rank a placed player holds after a set: `held` before it, `rating` after it. A rating at a
 /// higher division's floor promotes to the highest one reached (divisions can be skipped); a rating
@@ -827,20 +827,20 @@ mod tests {
                                             // Up: the highest division reached.
         assert_eq!(held_rank(g3, 1460.0), rank(Tier::Emerald, Some(3)));
         let e3 = rank(Tier::Emerald, Some(3)); // 1450
-                                               // Down: kept until 100 below the floor...
+                                               // Down: kept until 50 below the floor...
         assert_eq!(held_rank(e3, 1440.0), e3);
-        assert_eq!(held_rank(e3, 1350.0), e3);
+        assert_eq!(held_rank(e3, 1400.0), e3);
         // ...then one division (Gold 1, though the rating is already Gold 2's).
-        assert_eq!(held_rank(e3, 1349.0), rank(Tier::Gold, Some(1)));
-        // From Gold 1 (1400) the next drop needs below 1300.
+        assert_eq!(held_rank(e3, 1399.0), rank(Tier::Gold, Some(1)));
+        // From Gold 1 (1400) the next drop needs below 1350.
         let g1 = rank(Tier::Gold, Some(1));
-        assert_eq!(held_rank(g1, 1300.0), g1);
-        assert_eq!(held_rank(g1, 1299.0), rank(Tier::Gold, Some(2)));
+        assert_eq!(held_rank(g1, 1350.0), g1);
+        assert_eq!(held_rank(g1, 1349.0), rank(Tier::Gold, Some(2)));
         // A collapse never shows a rank above what rating + buffer reaches.
-        assert_eq!(held_rank(rank(Tier::Master, Some(3)), 1500.0), rank(Tier::Emerald, Some(1)));
+        assert_eq!(held_rank(rank(Tier::Master, Some(3)), 1500.0), rank(Tier::Emerald, Some(2)));
         // Legendary keeps its buffer too.
-        assert_eq!(held_rank(Rank::HIGHEST, 2160.0), Rank::HIGHEST);
-        assert_eq!(held_rank(Rank::HIGHEST, 2140.0), rank(Tier::Master, Some(1)));
+        assert_eq!(held_rank(Rank::HIGHEST, 2200.0), Rank::HIGHEST);
+        assert_eq!(held_rank(Rank::HIGHEST, 2199.0), rank(Tier::Master, Some(1)));
     }
 
     #[test]

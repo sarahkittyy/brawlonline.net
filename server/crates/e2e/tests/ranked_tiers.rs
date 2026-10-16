@@ -2,7 +2,7 @@
 //! place both players and give them ranks; `/user/{uid}` and the leaderboard show `tier` / `rank`
 //! and `setsToPlace`; the settle's ranks and RDs are exactly what replaying the rating history gives
 //! (so `recompute_tiers` changes nothing); the backfill after the migration fills a database whose
-//! ranks are missing, once.
+//! ranks are missing or from older rules, once.
 
 use chrono::{Duration, Utc};
 use common::ranked::{self, Rank, RD_START};
@@ -160,10 +160,17 @@ async fn the_backfill_fills_missing_ranks_once() {
     assert_eq!(user_rank(&stack, &a).await, placed);
     assert!(accounts::ranked::backfill_tiers(&stack.pool).await.unwrap().is_none(), "only once");
 
-    // A stored placement from an older rule (RD-based until 2026-10-16) is recomputed too.
+    // A stored rank from an older rule (RD-based placement, the 100-point buffer, until
+    // 2026-10-16) is recomputed too, whether it is the player's or one in the history.
     sqlx::query("UPDATE ratings SET rank = NULL").execute(&stack.pool).await.unwrap();
     assert!(accounts::ranked::backfill_tiers(&stack.pool).await.unwrap().is_some(), "recomputed");
     assert_eq!(user_rank(&stack, &a).await, placed);
+    assert!(accounts::ranked::backfill_tiers(&stack.pool).await.unwrap().is_none(), "only once");
+    sqlx::query("UPDATE rating_events SET rank_after = 0 WHERE rank_after IS NOT NULL")
+        .execute(&stack.pool)
+        .await
+        .unwrap();
+    assert!(accounts::ranked::backfill_tiers(&stack.pool).await.unwrap().is_some(), "history recomputed");
     assert!(accounts::ranked::backfill_tiers(&stack.pool).await.unwrap().is_none(), "only once");
     stack.shutdown().await;
 }

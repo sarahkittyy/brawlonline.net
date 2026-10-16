@@ -26,7 +26,7 @@ use common::ranked::{
     MAX_SESSION_GAME_INDEX,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 use crate::error::{ApiError, ApiResult};
@@ -88,26 +88,7 @@ pub struct Recomputed {
 pub async fn recompute_tiers(pool: &PgPool) -> sqlx::Result<Recomputed> {
     let mut tx = pool.begin().await?;
     sqlx::query("LOCK TABLE ratings IN SHARE ROW EXCLUSIVE MODE").execute(&mut *tx).await?;
-    #[allow(clippy::type_complexity)]
-    let rows: Vec<(i64, Uuid, String, Option<Uuid>, f64, f64, f64, i32)> = sqlx::query_as(
-        "SELECT id, uid, match_id, opponent, rating_before, rating_after, opponent_rating, sets_before
-           FROM rating_events ORDER BY created_at, id",
-    )
-    .fetch_all(&mut *tx)
-    .await?;
-    let sets: Vec<RatedSet> = rows
-        .into_iter()
-        .map(|(id, uid, match_id, opponent, rating_before, rating_after, opponent_rating, n)| RatedSet {
-            id,
-            uid,
-            match_id,
-            opponent,
-            rating_before,
-            rating_after,
-            opponent_rating,
-            sets_before: n.max(0) as u32,
-        })
-        .collect();
+    let sets = rated_sets(&mut tx).await?;
     let (events, states) = ranked::replay(&sets);
 
     let ids: Vec<i64> = events.iter().map(|e| e.id).collect();
@@ -149,21 +130,61 @@ pub async fn recompute_tiers(pool: &PgPool) -> sqlx::Result<Recomputed> {
     Ok(Recomputed { sets: events.len(), players: uids.len(), ranks_changed })
 }
 
-/// Fills ranks and RDs after the migration that adds them (any `ratings.rd` still NULL), and
-/// recomputes them when a stored placement disagrees with [`ranked::PLACEMENT_SETS`] (placement
-/// went from RD-based to a set count on 2026-10-16). Run after migrating, before serving.
-pub async fn backfill_tiers(pool: &PgPool) -> sqlx::Result<Option<Recomputed>> {
-    let (missing,): (bool,) = sqlx::query_as(
-        "SELECT EXISTS (SELECT 1 FROM ratings WHERE rd IS NULL OR (rank IS NULL) = (sets_played >= $1))",
+/// Every stored rating change, oldest first, as [`ranked::replay`] takes them.
+async fn rated_sets(conn: &mut PgConnection) -> sqlx::Result<Vec<RatedSet>> {
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(i64, Uuid, String, Option<Uuid>, f64, f64, f64, i32)> = sqlx::query_as(
+        "SELECT id, uid, match_id, opponent, rating_before, rating_after, opponent_rating, sets_before
+           FROM rating_events ORDER BY created_at, id",
     )
-    .bind(ranked::PLACEMENT_SETS as i32)
-    .fetch_one(pool)
+    .fetch_all(&mut *conn)
     .await?;
-    if !missing {
+    Ok(rows
+        .into_iter()
+        .map(|(id, uid, match_id, opponent, rating_before, rating_after, opponent_rating, n)| RatedSet {
+            id,
+            uid,
+            match_id,
+            opponent,
+            rating_before,
+            rating_after,
+            opponent_rating,
+            sets_before: n.max(0) as u32,
+        })
+        .collect())
+}
+
+/// Fills ranks and RDs after the migration that adds them (any still NULL), and recomputes them
+/// when a stored rank is not what replaying the rating history under today's rules gives (the
+/// placement rule changed on 2026-10-16, the demotion buffer the same day), so a rule change
+/// applies itself on deploy. Run after migrating, before serving.
+pub async fn backfill_tiers(pool: &PgPool) -> sqlx::Result<Option<Recomputed>> {
+    let mut conn = pool.acquire().await?;
+    let (events, states) = ranked::replay(&rated_sets(&mut conn).await?);
+    #[allow(clippy::type_complexity)]
+    let stored_events: Vec<(i64, Option<i16>, Option<i16>, Option<f64>)> =
+        sqlx::query_as("SELECT id, rank_before, rank_after, rd_after FROM rating_events").fetch_all(&mut *conn).await?;
+    let stored_ratings: Vec<(Uuid, Option<i16>, Option<f64>)> =
+        sqlx::query_as("SELECT uid, rank, rd FROM ratings").fetch_all(&mut *conn).await?;
+    drop(conn);
+    let replayed: HashMap<i64, (Option<i16>, Option<i16>)> =
+        events.iter().map(|e| (e.id, (e.rank_before.map(Rank::index), e.rank_after.map(Rank::index)))).collect();
+    let events_differ = stored_events.iter().any(|(id, before, after, rd)| {
+        rd.is_none() || replayed.get(id).is_some_and(|&ranks| ranks != (*before, *after))
+    });
+    let ratings_differ = stored_ratings.iter().any(|(uid, rank, rd)| {
+        rd.is_none() || states.get(uid).copied().unwrap_or_default().rank.map(Rank::index) != *rank
+    });
+    if !events_differ && !ratings_differ {
         return Ok(None);
     }
     let done = recompute_tiers(pool).await?;
-    tracing::info!(sets = done.sets, players = done.players, "ranked tiers filled from the rating history");
+    tracing::info!(
+        sets = done.sets,
+        players = done.players,
+        ranks_changed = done.ranks_changed,
+        "ranked tiers filled from the rating history"
+    );
     Ok(Some(done))
 }
 
