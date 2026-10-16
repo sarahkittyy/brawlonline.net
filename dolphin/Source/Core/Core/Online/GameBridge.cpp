@@ -200,9 +200,9 @@ constexpr u32 RK_RATING = 4, RK_SETS = 8, RK_CHANGE = 12;
 // GameStep response payload: active, type, myTurn, count, toSss, mayLock, nKinds, seconds,
 // kinds[40], text u16[64]
 constexpr u32 GS_KINDS = 8, GS_MAX_KINDS = 40, GS_TEXT = 0x30, GS_TEXT_LEN = 64, GS_TIME_UP = 0xB0;
-// ... then the fighter preview (ppom.h GameStep pvCount / pv): the count at 0xB4, and per in-game
-// port {present, charKind, costume, local, rating f32 (negative: none), name u16[16]} from 0xB8.
-constexpr u32 GS_PREVIEW = 0xB4, GS_PREVIEW_PLAYERS = 2, GS_PREVIEW_SIZE = 0x28;
+// ... then Ranked's stage select players (ppom.h GameStep pvCount / pv): the count at 0xB4, and
+// per in-game port {present, charKind, costume, local, name u16[16]} from 0xB8.
+constexpr u32 GS_PREVIEW = 0xB4, GS_PREVIEW_PLAYERS = 2, GS_PREVIEW_SIZE = 0x24;
 constexpr u8 MODE_TEAMS = 3;
 
 // The game's OSModuleInfo list (first, last).
@@ -244,10 +244,9 @@ u32 s_session_seq = 0;
 u32 s_local_seq = 0;
 u32 s_lock_seq = 0;
 picojson::object s_lock_seen;
-// The running session's players by in-game port (names and Ranked ratings), as SESSION orders
-// them: the stage select's fighter preview (GameStepResponse).
+// The running session's players' names by in-game port, as SESSION orders them: Ranked's stage
+// select players (GameStepResponse).
 std::array<std::string, 4> s_port_names;
-std::array<std::optional<float>, 4> s_port_ratings;
 bool s_was_disconnected = false;
 // Rooms: this player's colour in the room (kept for a room game whose connection to mm dropped).
 u8 s_room_team = 0xFF;
@@ -636,9 +635,9 @@ Response GameStepResponse()
     r.payload[GS_KINDS + i] = v.selectable[i];
   WriteU16Text(r.payload, GS_TEXT, v.text, GS_TEXT_LEN);
   r.payload[GS_TIME_UP] = v.time_up ? 1 : 0;
-  // The stage select's fighter preview: each port's last lock-in (game 1: the characters locked
-  // in before the search; later games: the last game's until the character step), name and
-  // rating. The peer's bytes are its own; the game checks them before use.
+  // Ranked's stage select players: each port's last lock-in (game 1: the characters locked in
+  // before the search; later games: the last game's until the character step) and name. The
+  // peer's bytes are its own; the game checks them before use.
   int previewed = 0;
   if (v.active)
   {
@@ -653,9 +652,7 @@ Response GameStepResponse()
       r.payload[p + 1] = lock->char_kind;
       r.payload[p + 2] = lock->costume;
       r.payload[p + 3] = static_cast<int>(port) == lobby.local_port ? 1 : 0;
-      const float rating = s_port_ratings[port].value_or(-1.0f);
-      PutU32(r.payload, p + 4, std::bit_cast<u32>(rating));
-      WriteU16Text(r.payload, p + 8, s_port_names[port], NAME_LEN);
+      WriteU16Text(r.payload, p + 4, s_port_names[port], NAME_LEN);
       previewed = static_cast<int>(port) + 1;
     }
   }
@@ -1511,7 +1508,6 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   std::vector<std::string> names(SESSION_PLAYERS), codes(SESSION_PLAYERS);
   std::string peer_name;
   s_port_names = {};
-  s_port_ratings = {};
   // SESSION's rules: the running session's (its ticket's), else on the room CSS the room's
   // (what the RULES screens show and the next game will play).
   std::optional<MatchRules> rules = in_room ? room.view->rules : std::nullopt;
@@ -1553,10 +1549,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
         names[i] = order[i]->display_name;
         codes[i] = order[i]->connect_code;
         if (i < s_port_names.size())
-        {
           s_port_names[i] = order[i]->display_name;
-          s_port_ratings[i] = order[i]->rating;
-        }
         if (!order[i]->is_local && peer_name.empty())
           peer_name = order[i]->display_name;
       }

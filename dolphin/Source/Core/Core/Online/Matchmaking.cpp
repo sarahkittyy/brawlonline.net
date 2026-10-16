@@ -934,18 +934,6 @@ void Matchmaking::HandleMatchmaking()
       player.ip_address = GetStr(el, "ipAddress", "1.1.1.1:123");
       player.ip_address_lan = GetStr(el, "ipAddressLan", "1.1.1.1:123");
       player.chat_messages = User::GetDefaultChatMessages();
-      // Ranked: Slippi's `rank` object; only its rating is ours (an Elo number).
-      const auto rank = el.find("rank");
-      if (rank != el.end() && rank->second.is<picojson::object>())
-      {
-        const auto& ro = rank->second.get<picojson::object>();
-        const auto r = ro.find("rating");
-        if (r != ro.end() && r->second.is<double>() && std::isfinite(r->second.get<double>()) &&
-            std::fabs(r->second.get<double>()) < 1e6)
-        {
-          player.rating = static_cast<float>(r->second.get<double>());
-        }
-      }
       const auto chat = el.find("chatMessages");
       if (chat != el.end() && chat->second.is<picojson::array>() &&
           chat->second.get<picojson::array>().size() == 16)

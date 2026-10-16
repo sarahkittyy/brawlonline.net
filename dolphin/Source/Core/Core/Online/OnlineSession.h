@@ -59,8 +59,6 @@ struct PlayerInfo
   std::string ip_address;      // external ip:port the mm server saw
   std::string ip_address_lan;  // the LAN ip:port the player reported
   std::vector<std::string> chat_messages;
-  // Ranked: the player's Elo rating from the server (get-ticket-resp `rank.rating`).
-  std::optional<float> rating;
 };
 
 struct Endpoint

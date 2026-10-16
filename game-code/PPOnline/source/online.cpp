@@ -17,7 +17,7 @@
 #include "online_menu.h"
 #include "netmenu.h"
 #include "ppom.h"
-#include "sss_fighters.h"
+#include "sss_portraits.h"
 #include "stage_legal.h"
 
 namespace Rpc { void tick(); }
@@ -112,7 +112,7 @@ namespace Online {
         PPOM::g_block.debug.frames++;
         OnlineMenu::tick();
         StageLegal::tick();
-        SssFighters::tick();
+        SssPortraits::tick();
         Rpc::tick();
     }
 
@@ -186,7 +186,6 @@ namespace Online {
         NetMenu::install(api);
         OnlineMenu::install(api);
         StageLegal::install(api);
-        SssFighters::install(api);
         AnyoneMenu::install(api);
         BootMenu::install(api);
     }

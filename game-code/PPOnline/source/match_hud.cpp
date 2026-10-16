@@ -25,7 +25,7 @@
 #include "online.h"
 #include "online_menu.h"
 #include "ppom.h"
-#include "sss_fighters.h"
+#include "sss_portraits.h"
 
 extern "C" {
     extern u8 g_onlineMatchGame;
@@ -239,23 +239,22 @@ namespace MatchHud {
         s_gxCurrentMtx(0);
     }
 
-    // Ranked's stage select: each fighter's "name (rating)" under it (sss_fighters.cpp), white with
-    // the black edge, made narrower when wider than its column.
+    // Ranked's stage select: both players' portrait panels (sss_portraits.cpp), then each name on
+    // its panel's plate, white with the black edge, made narrower when wider than the plate.
+    static const float SSS_NAME_SCALE = 0.55f;
     static void drawStageSelect()
     {
-        bool begun = false;
+        begin2D();
+        s_cwSetupGX(s_cw);   // fog off, the swap tables and the rest the quads do not set
+        if (!SssPortraits::drawPanels()) return;
         for (int side = 0; side < 2; side++) {
-            u16 text[48];
-            float x, y, maxW, scale;
-            if (!SssFighters::labelText(side, text, 48, &x, &y, &maxW, &scale)) continue;
-            if (!begun) {
-                begin2D();
-                begun = true;
-            }
-            setF32(0x24, scale);
+            u16 text[24];
+            float x, y, maxW;
+            if (!SssPortraits::nameLine(side, text, 24, &x, &y, &maxW)) continue;
+            setF32(0x24, SSS_NAME_SCALE);
             float w = textWidth(text);
-            float sx = w > maxW && w > 0 ? scale * maxW / w : scale;
-            printCentredXY(text, x, y, sx, scale, 0xFFFFFFFF);
+            float sx = w > maxW && w > 0 ? SSS_NAME_SCALE * maxW / w : SSS_NAME_SCALE;
+            printCentredXY(text, x, y, sx, SSS_NAME_SCALE, 0xFFFFFFFF);
         }
     }
 
