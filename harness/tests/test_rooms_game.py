@@ -452,7 +452,8 @@ def status_line(g: Game) -> str:
 def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                   gpu_backend: str) -> None:
     """Three games: the host opens slot 3 with the hand and A, R turns Teams on, picks a costume
-    with A on its own panel (its team stays), two players join by code; everyone on red (X / Y) is refused ("Pick different teams", no start although all
+    with A on its own panel (its team stays), two players join by code, one with a costume picked
+    before joining, the other picking one in the room (bug #22); everyone on red (X / Y) is refused ("Pick different teams", no start although all
     are ready); one player to blue and the room starts a 2-against-1 team battle under the
     gameplay session on all three, everyone in the costume they locked in (not the team's); blue
     walks off, and everyone is back on the room's CSS."""
@@ -486,6 +487,11 @@ def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[...,
     _all(lambda: to_join_room(b), lambda: to_join_room(c))
     pick(b, right=2)
     pick(c, right=4)
+    # B picks a costume before joining (outside a room its panel is P1's).
+    hand_to(b, PANEL_X[0], -10.0)
+    b.steps("tap A 8", "wait 20", "tap A 8", "wait 20")
+    costume_b = _u32(b, css_area(b) + 0x1BC)
+    assert costume_b != 0, costume_b
     for g in gs:
         B.write_rules(g.c, stocks=1, minutes=1, items_off=True)
         ppom.allow_test_rules(g.c)
@@ -494,6 +500,13 @@ def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[...,
     type_room_code(c, code)
     vc = until_view(c, lambda v: v["flags"] & ppom.RF_IN, "C in the room")
     assert vc["local_port"] == 2 and vc["mode"] == 2, vc
+    # C picks a costume in the room, Teams on, with its panel at P3 (bug #22: P+'s AsyncRSP drew
+    # a joiner's panel in the team's costume, or another player's character, and kept it).
+    hand_to(c, PANEL_X[2], -10.0)
+    c.steps("tap A 8", "wait 20", "tap A 8", "wait 20")
+    costume_c = _u32(c, css_area(c) + 0x1BC)
+    assert costume_c != 0, costume_c
+    c.shot("03-costume-in-the-room")
     v = until_view(a, lambda v: [s["team"] for s in v["slots"][:3]] == [0, 1, 2] and
                    all(s["bits"] & ppom.SLOT_TAKEN for s in v["slots"][:3]), "three players, red blue green")
     for g in gs:
@@ -538,7 +551,7 @@ def test_room_three_players_teams(backend: OnlineBackend, dolphin: Callable[...,
     assert setups[0] == setups[1] == setups[2], setups
     # Every player in the costume they locked in, not their team's.
     locked = [pl["costume"] for pl in se["players"][:3]]
-    assert locked[0] == my_costume, (locked, my_costume)
+    assert locked == [my_costume, costume_b, costume_c], (locked, my_costume, costume_b, costume_c)
     assert [p.color_no for p in setups[0].players[:3]] == locked, (setups[0].players, locked)
     time.sleep(8)
     for g in gs:

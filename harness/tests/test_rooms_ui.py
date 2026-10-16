@@ -1231,3 +1231,58 @@ def test_token_picked_up_and_placed_again(token_game: Game) -> None:
         g.tap("A")
         g.wait(20)
     token_rounds(g, "slot3")
+
+
+def test_team_room_costumes_on_a_joiners_panel(game: Game) -> None:
+    """Bug #22 (2026-10-15, a joiner at P4 of a Teams room: "it goes default when we start game"):
+    P+'s AsyncRSP drew a team room's pictures in the team's costume, a joiner's own panel once
+    with another player's character, and after the first A on the panel kept the picture, so
+    the costume a joiner picked never showed. Joined at P4 of a Teams room whose P1 is ready
+    with Mario in costume 4: every A on our panel changes the costume and the picture."""
+    Image = pytest.importorskip("PIL.Image")
+    g = game
+    c = g.c
+    c.game_bridge_config(enabled=False)
+    g.steps("until muMenuMain 3000", "wait 60")
+    g.sim = sim = roomsim.RoomSim(c)
+    g.wait(60)
+    g.tap("A")
+    g.wait(60)
+    friends_to(g, 2)
+    g.tap("A")
+    sim.service(600, until=lambda: g.scene() == "scSelctCharacter")
+    g.wait(60)
+    g.hand_to(*FOX, tol=0.6)
+    g.tap("A")
+    g.wait(20)
+    sim.joinable["KFQB"] = roomsim.Room(code="KFQB", host=1, teams=True, open=[True, True, True, True],
+                                        members=[roomsim.Member("carol", team=0, ready=True, char=GMKIND_MARIO,
+                                                                costume=4),
+                                                 roomsim.Member("bob", team=1), roomsim.Member("dave", team=2), None])
+    g.tap("START")
+    g.wait(40)
+    keypad_type(g, "KFQB")
+    g.tap("START")
+    g.wait(90)
+    assert sim.room is not None and sim.me() == 3
+    g.hand_to(PANEL_X[3], -10.0)
+
+    def panel(name: str):
+        g.shot(name)
+        im = Image.open(g.art / f"{name}.png").convert("RGB")
+        w, h = im.size
+        return im.crop((int(w * 0.70), int(h * 0.58), int(w * 0.85), int(h * 0.86)))   # our panel's picture (P4)
+
+    def differs(p, q) -> int:
+        return sum(abs(a - b) for x, y in zip(p.getdata(), q.getdata()) for a, b in zip(x, y)) // (p.width * p.height)
+
+    shots = [panel("20-teams-p4-joined")]
+    costumes = [g.u32(g.area(0) + AREA_COSTUME)]
+    for k in range(1, 4):
+        g.tap("A", 8)
+        g.wait(40)
+        costumes.append(g.u32(g.area(0) + AREA_COSTUME))
+        shots.append(panel(f"21-teams-p4-A{k}"))
+    assert costumes == [0, 1, 2, 3], costumes
+    changes = [differs(shots[k], shots[k + 1]) for k in range(3)]
+    assert all(d > 4 for d in changes), changes   # (before the fix the 2nd and 3rd A: 0)
