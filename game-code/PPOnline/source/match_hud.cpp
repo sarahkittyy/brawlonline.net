@@ -25,7 +25,6 @@
 #include "online.h"
 #include "online_menu.h"
 #include "ppom.h"
-#include "sss_portraits.h"
 #include "training_room.h"
 
 extern "C" {
@@ -240,31 +239,8 @@ namespace MatchHud {
         s_gxCurrentMtx(0);
     }
 
-    // Ranked's stage select: both players' portrait panels (sss_portraits.cpp), then each name on
-    // its panel's plate, white with the black edge, made narrower when wider than the plate.
-    static const float SSS_NAME_SCALE = 0.55f;
-    static void drawStageSelect()
-    {
-        begin2D();
-        s_cwSetupGX(s_cw);   // fog off, the swap tables and the rest the quads do not set
-        if (!SssPortraits::drawPanels()) return;
-        for (int side = 0; side < 2; side++) {
-            u16 text[24];
-            float x, y, maxW;
-            if (!SssPortraits::nameLine(side, text, 24, &x, &y, &maxW)) continue;
-            setF32(0x24, SSS_NAME_SCALE);
-            float w = textWidth(text);
-            float sx = w > maxW && w > 0 ? SSS_NAME_SCALE * maxW / w : SSS_NAME_SCALE;
-            printCentredXY(text, x, y, sx, SSS_NAME_SCALE, 0xFFFFFFFF);
-        }
-    }
-
     static void draw()
     {
-        if (Online::inScene("scSelStage")) {
-            drawStageSelect();
-            return;
-        }
         bool names = g_onlineMatchGame != 0;
         bool hint = OnlineMatch::quitHintShown();
         if (!s_on && !names && !hint) {

@@ -2,12 +2,13 @@
 docs/game-code.md §11, "Ranked's stage select shows both players").
 
 Two instances, Fox (A) and Falco (B), are paired from the Ranked queue. On game 1's stage select
-each machine shows both players' CSS portraits left and right of the stage preview, in panels of
-their in-game port's colour, with their names: the plugin's debug block (g_sssPortraits, through
-PPOnlineMain.map) says both portraits were read and copied out, this player's on the left, and the
-two machines agree on who has which port. Game 1 is then played to its end under the gameplay
-session (online_set.play_game compares both machines' states); the portraits are freed with the
-stage select. Game 2's stage select shows them again.
+each machine shows both players' CSS cards (the CSS's own models, in their in-game port's colour,
+the portrait, the name on the plate) left and right of the stage preview: the plugin's debug block
+(g_sssPortraits, through PPOnlineMain.map) says both cards were made with nothing missing, this
+player's on the left, and the two machines agree on who has which port and portrait. Game 1 is
+then played to its end under the gameplay session (online_set.play_game compares both machines'
+states); the cards and files are gone with the stage select. Game 2's stage select shows them
+again.
 
 Screenshots go to run/artifacts/game-bridge/ranked-sss-portraits/. Needs what test_online_ranked.py
 needs.
@@ -29,8 +30,9 @@ from test_online_ranked import (SSS, STARTERS, _both_on, _paired, _search_ranked
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 
-# g_sssPortraits: shown, loads, loaded, failed, freed, drawn (u32s), texNo[2] (u16), port[2] (u8).
-DEBUG_FMT = ">6I2H2B"
+# g_sssPortraits: shown, loads, failed, made, deleted, freed (u32s), texNo[2] (u16), port[2], state,
+# remake (u8), pos[2][3], scale (floats), plateFrame, objs (u32).
+DEBUG_FMT = ">6I2H4B7fiI"
 
 
 def _sym(g: Game, name: str) -> int:
@@ -59,16 +61,18 @@ def _sym(g: Game, name: str) -> int:
 
 def _portraits(g: Game) -> dict[str, Any]:
     v = struct.unpack(DEBUG_FMT, g.c.read_mem(_sym(g, "g_sssPortraits"), struct.calcsize(DEBUG_FMT)))
-    return {"shown": v[0], "loads": v[1], "loaded": v[2], "failed": v[3], "freed": v[4], "drawn": v[5],
-            "texNo": v[6:8], "port": v[8:10]}
+    return {"shown": v[0], "loads": v[1], "failed": v[2], "made": v[3], "deleted": v[4], "freed": v[5],
+            "texNo": v[6:8], "port": v[8:10], "state": v[10], "objs": v[-1]}
 
 
-def _both_shown(g: Game, loaded_before: int) -> dict[str, Any]:
-    """Both portraits copied out on this stage select and drawn."""
+def _both_shown(g: Game, made_before: int) -> dict[str, Any]:
+    """Both cards made on this stage select (state 4: shown), every part of them."""
     def done() -> dict[str, Any] | None:
         f = _portraits(g)
-        return f if f["loaded"] >= loaded_before + 2 and all(f["texNo"]) and f["drawn"] > 0 else None
-    return _wait(done, 30, f"{g.inst.name}: both portraits")
+        return f if f["made"] >= made_before + 2 and f["state"] == 4 and all(f["texNo"]) else None
+    f = _wait(done, 30, f"{g.inst.name}: both cards")
+    assert f["objs"] == 16, f   # 8 parts a card
+    return f
 
 
 @pytest.mark.slow
@@ -107,7 +111,8 @@ def test_ranked_stage_select_shows_both_players(backend, dolphin: Callable[..., 
     B.step(b.c, 5)
     for g in (a, b):
         f = _portraits(g)
-        assert f["freed"] == f["loaded"] and f["texNo"] == (0, 0), f   # freed with the stage select
+        # Deleted and freed with the stage select: the CSS file, its archive, two portraits.
+        assert f["objs"] == 0 and f["deleted"] == 2 and f["state"] == 0 and f["freed"] >= 4, f
     online_set.play_game([a, b], 1)
 
     _both_on([a, b], SSS, "game 2: both on the stage select")

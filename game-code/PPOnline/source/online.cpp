@@ -186,6 +186,7 @@ namespace Online {
         NetMenu::install(api);
         OnlineMenu::install(api);
         StageLegal::install(api);
+        SssPortraits::install(api);
         AnyoneMenu::install(api);
         BootMenu::install(api);
     }

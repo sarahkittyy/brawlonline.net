@@ -1,22 +1,37 @@
 // Ranked's stage select shows who plays whom (the user's, 2026-10-16: game 1's strikes start the
 // moment the queue pops, so the opponent's character was never seen before striking). Left and
-// right of the stage preview, each player's CSS portrait stands in a panel of the colour of the
-// port that player gets in the match (P1 red, P2 blue), the name under it; this player on the
-// left. Games 2+ show the last game's characters. Ranked only.
+// right of the stage preview stands each player's card as the CSS shows it (the user's: "it
+// should ideally use the same in-game elements"), in the colour of the port that player gets in
+// the match, the account name on its plate; this player on the left. Games 2+ show the last
+// game's characters. Ranked only.
 //
-// The players come with Dolphin's step (GameStep pv, by in-game port). The portrait is the one
-// P+'s CSS shows: P+'s AsyncRSP plugin loads /menu/common/char_bust_tex/MenSelchrFaceB<CharNo>0.brres
-// for a CSS panel, whose textures are MenSelchrFaceB.<CharNo * 10 + 1 + colour> (sel_char's
-// muSelCharPlayerArea::setCharPic, text+0x14B68: CharNo = muMenu::getStockFrameID(
-// exchangeMuSelchkind2MuStockchkind(selchkind))), CI8 128x160 with an RGB5A3 palette. Each file
-// is read through the game's file system (gfFileIOHandle::readRequest, asynchronous: no stall),
-// into the Network heap, which lives across scenes; the one texture and palette are copied out
-// and the file freed at once. The copies are freed when the stage select ends.
+// The players come with Dolphin's step (GameStep pv, by in-game port).
 //
-// Drawn by match_hud.cpp after the frame (the HUD's 640x480 space, which the game's 16:9 picture
-// stretches 4/3 wide: the launcher pins the Wii to 16:9, SYSCONF IPL.AR), with GX directly.
+// The card is the CSS's own: the MuObjects muSelCharPlayerArea makes (area +0xB0..+0xD0, measured
+// on a live CSS) from the main brres of P+'s /menu2/sc_selcharacter.pac, each given its
+// "<model>__0" animations at the frames the CSS leaves them on:
+//   Cbase4 (the striped base: VIS0 / CHR0 15, the end of its intro; CLR0 the port), Cplynm4 (the
+//   name plate: PAT0 the port), Cmark4 (the series symbol: PAT0 fn_800AF6F0(stock) + 1, as
+//   dispMarkKind; CLR0 the port), Cchar4 (the portrait: CLR0 0), Cchareff4 (CLR0 20), Cname4 (the
+//   character's name: PAT0 CharNo * 10 + 1, as setCharPic), Centry4 (CLR0 0), Chuman4 (VIS0 2,
+//   CHR0 1, PAT0 0, CLR0 0).
+// The portrait goes onto Cchar4's materials Card06 and Card006_sdw as setCharPic puts it
+// (sel_char text+0x14B68: MuObject fn_800B7224(obj, the material's index, "MenSelchrFaceB.%03d",
+// the portrait file)), from P+'s /menu/common/char_bust_tex/MenSelchrFaceB<CharNo>0.brres (P+'s
+// AsyncRSP plugin's files; CharNo = muMenu::getStockFrameID(exchangeMuSelchkind2MuStockchkind(
+// selchkind)), the texture CharNo * 10 + 1 + the costume).
+//
+// The files are read through the game's file system (gfFileIOHandle::readRequest, asynchronous,
+// so P+'s SD redirection applies and nothing stalls): the CSS file into Fighter4Resoruce, the
+// portraits into Fighter3Resoruce (the two fighter heaps a 1v1 never uses; nothing of a match is
+// loaded during its stage select), and the CSS file is decompressed into Fighter3Resoruce a
+// slice per frame (CXReadUncompLZ, P+'s LZ). The cards are MuObjects in the stage select's scene
+// group (as its own, heap MenuInstance), deleted in the stage select task's destructor before
+// Brawl deletes its own, and every file freed then.
 #include <OS/OSCache.h>
 #include <string.h>
+
+#include <mu/mu_msg.h>
 
 #include "online.h"
 #include "online_menu.h"
@@ -25,18 +40,26 @@
 
 extern "C" int sprintf(char* buf, const char* fmt, ...);
 
-// Tests (harness, through PPOnlineMain.map).
+// Tests and tuning (harness, through PPOnlineMain.map). Side 0 is this player (left).
 extern "C" struct SssPortraitsDebug {
-    u32 shown;           // stage selects the panels were shown on
-    u32 loads;           // portrait files requested
-    u32 loaded;          // portraits copied out
-    u32 failed;          // files or textures not found
-    u32 freed;           // portrait copies freed
-    u32 drawn;           // frames drawn
-    u16 texNo[2];        // per side: the texture shown (MenSelchrFaceB.<n>), 0 none
+    u32 shown;           // stage selects the cards were made on
+    u32 loads;           // files requested
+    u32 failed;          // files, textures or objects missing
+    u32 made;            // cards made
+    u32 deleted;         // cards deleted with the stage select
+    u32 freed;           // files freed
+    u16 texNo[2];        // per side: the portrait shown (MenSelchrFaceB.<n>), 0 none
     u8 port[2];          // per side: the in-game port (its colour), 0xFF none
-    u8 _pad[2];
-} g_sssPortraits = {0, 0, 0, 0, 0, 0, {0, 0}, {0xFF, 0xFF}, {0, 0}};
+    u8 state;            // 0 idle, 1 reading, 2 decompressing, 3 ready, 4 shown
+    u8 remake;           // nonzero: delete the cards and make them again (cleared)
+    float pos[2][3];     // per side: where the card stands (the stage select's units)
+    float scale;
+    s32 plateFrame;      // Cplynm4's PAT0 frame (-1: the port's)
+    u32 objs;            // the card objects alive
+    u32 obj[2][8];       // per side: the card's MuObjects (PARTS order)
+} g_sssPortraits = {0, 0, 0, 0, 0, 0, {0, 0}, {0xFF, 0xFF}, 0, 0,
+                    {{-29.4f, 0.0f, 0.0f}, {30.0f, 0.0f, 0.0f}}, 0.92f,
+                    -1, 0, {{0}, {0}}};
 
 namespace SssPortraits {
 
@@ -71,11 +94,12 @@ namespace SssPortraits {
         return NULL;
     }
 
-    // ---- The portraits ----------------------------------------------------------------------
+    // ---- The game's functions ---------------------------------------------------------------
     typedef int (*ExchangeFn)(int);
     static const ExchangeFn GM_TO_SELCH = (ExchangeFn)0x800AF708;     // exchangeGmCharacterKind2MuSelchkind
     static const ExchangeFn SELCH_TO_STOCK = (ExchangeFn)0x800AF82C;  // exchangeMuSelchkind2MuStockchkind
     static const ExchangeFn STOCK_FRAME = (ExchangeFn)0x800AF600;     // getStockFrameID
+    static const ExchangeFn STOCK_MARK = (ExchangeFn)0x800AF6F0;      // the series symbol (dispMarkKind)
 
     typedef bool (*ReadRequestFn)(void* handle, const char* path, int heap, int length, int offset);
     typedef bool (*HandleBoolFn)(void* handle);
@@ -91,31 +115,131 @@ namespace SssPortraits {
     static const HandleVoidFn RELEASE = (HandleVoidFn)0x80021FAC;          // gfFileIOHandle::release (the request only)
     static const AllocFn HEAP_ALLOC = (AllocFn)0x800249E4;                 // gfHeapManager::alloc(HeapType, size)
     static const FreeFn HEAP_FREE = (FreeFn)0x80024A4C;                    // gfHeapManager::free
-    static const int HEAP_NETWORK = 6;
+    static const int HEAP_FIGHTER3 = 20, HEAP_FIGHTER4 = 21, MENU_HEAP = 0x2A;
 
-    static const int TEX_W = 128, TEX_H = 160;
-    static const u32 IMAGE_SIZE = TEX_W * TEX_H;   // CI8
-    static const u32 PALETTE_MAX = 256 * 2;        // RGB5A3
+    typedef u32 (*UncompSizeFn)(const void* src);
+    typedef void (*UncompInitFn)(void* ctx, void* dst);
+    typedef s32 (*UncompReadFn)(void* ctx, const void* src, u32 len);
+    static const UncompSizeFn CX_SIZE = (UncompSizeFn)0x80205FD8;          // CXGetUncompressedSize
+    static const UncompInitFn CX_INIT_LZ = (UncompInitFn)0x80205554;       // CXInitUncompContextLZ
+    static const UncompReadFn CX_READ_LZ = (UncompReadFn)0x80205860;       // CXReadUncompLZ: 0 done, <0 error
 
-    struct Portrait {
+    typedef u8* (*CreateFn)(void* modelRes, const char* name, int priority, void* texRes, int heap);
+    typedef void (*NameFn)(u8* obj, const char* name);
+    typedef void (*FrameFn)(u8* obj, float frame);
+    typedef void (*MtxIdentFn)(float* m);
+    typedef void (*MtxSrtFn)(float* m, const float* scale, const float* rot, const float* trans);
+    typedef void (*SetMtxFn)(void* scnObj, int type, const float* m);
+    typedef void (*ResInitFn)(void* resFile);
+    typedef u32 (*GetResMatFn)(void* resMdl, const char* name);
+    typedef void (*SetTexFn)(u8* obj, u32 matIndex, const char* texName, void* texRes);
+    typedef void (*SetVisFn)(void* scnObj, bool vis);
+    typedef void* (*DtorFn)(u8* task, int flags);
+    static const CreateFn MU_CREATE = (CreateFn)0x800B2394;            // MuObject::create(ResFile*, name, ...)
+    static const NameFn CHANGE_ANIM = (NameFn)0x800B534C;              // MuObject::changeAnimN
+    static const NameFn CHANGE_CLR_ANIM = (NameFn)0x800B50CC;          // MuObject::changeClrAnimN
+    static const FrameFn SET_FRAME_VIS = (FrameFn)0x800B784C;          // MuObject::setFrameVisible (anim +0x08)
+    static const FrameFn SET_FRAME_NODE = (FrameFn)0x800B7798;         // (anim +0x0C, CHR0)
+    static const FrameFn SET_FRAME_TEX = (FrameFn)0x800B7900;          // MuObject::setFrameTex (anim +0x10, PAT0)
+    static const FrameFn SET_FRAME_COL = (FrameFn)0x800B7A18;          // MuObject::setFrameMatCol (anim +0x18, CLR0)
+    static const MtxIdentFn MTX_IDENTITY = (MtxIdentFn)0x8003E35C;
+    static const MtxSrtFn MTX_SRT = (MtxSrtFn)0x8003F0FC;              // as MuObject::setPos builds its matrix
+    static const SetMtxFn SET_MTX = (SetMtxFn)0x801AAF04;              // ScnObj::SetMtx(MTX_LOCAL)
+    static const ResInitFn RES_INIT = (ResInitFn)0x8018EA08;           // nw4r::g3d::ResFile::Init
+    static const GetResMatFn GET_RES_MAT = (GetResMatFn)0x8018F258;    // nw4r::g3d::ResMdl::GetResMat(name)
+    static const SetTexFn SET_TEX = (SetTexFn)0x800B7224;              // the material's texture, as setCharPic
+    static const SetVisFn SET_VIS = (SetVisFn)0x80043D20;              // nwSMSetVisibility
+
+    // The names, as the CSS writes a name tag on a card's plate: muSelCharPlayerArea's message
+    // (sel_char text+0x11524: MuMsg::create(3, MenuInstance, 0x2B), its window 0 attached to
+    // Chuman4's ScnMdl, text node 0, size 0.0625, face 1), the window's own settings otherwise.
+    // One window per card. An attach chains the message into the model's draw callback
+    // (ScnMdlSimple+0xD4): put back before the message is deleted.
+    typedef MuMsg* (*MsgCreateFn)(u32, u32, u32);
+    typedef void (*MsgAllocFn)(MuMsg*, u32 size, u32 count);
+    typedef void (*MsgAttachFn)(MuMsg*, u32 window, void* scnMdl, u32 textNode, float size);
+    typedef void (*MsgSetFaceFn)(MuMsg*, u32 window, u32 face);
+    typedef void (*MsgDeleteFn)(MuMsg*, int);
+    static const MsgCreateFn MSG_CREATE = (MsgCreateFn)0x800B8930;
+    static const MsgAllocFn MSG_ALLOC = (MsgAllocFn)0x800B8B08;
+    static const MsgAttachFn MSG_ATTACH = (MsgAttachFn)0x800B8C90;      // attachScnMdlSimple
+    static const MsgSetFaceFn MSG_SET_FACE = (MsgSetFaceFn)0x800B9488;
+    static const MsgDeleteFn MSG_DELETE = (MsgDeleteFn)0x800B8A0C;
+    static MuMsg* s_msg = NULL;
+    static u8* s_msgMdl[2];
+    static u32 s_msgOldCallback[2], s_msgCallback[2];
+
+    // ---- Files ------------------------------------------------------------------------------
+    struct Read {
         u32 handle;          // gfFileIOHandle: its gfFileIORequest*
-        bool pending;        // a read is out
-        u8 charNo;
-        u16 texNo;           // wanted
-        u16 shownNo;         // copied out (0: none)
-        void* block;         // the copy's allocation
-        u8* image;           // 32-aligned in block
-        u8* palette;         // 32-aligned in block
-        u16 paletteEntries;
+        bool pending;
+        u8* buf;             // the file once read (freed by us)
+        u32 size;
     };
-    static Portrait s_portrait[2];   // by side
+    static Read s_cssRead, s_picRead[2];
+    static u8* s_css = NULL;         // the decompressed CSS archive
+    static u32 s_cssSize = 0, s_cssDone = 0;
+    static u8 s_ctx[0x40] __attribute__((aligned(8)));   // CXUncompContextLZ
+    static u32 s_cssRes = 0;         // its main brres (a ResFile value)
+    static u32 s_picRes[2];          // the portrait files (ResFile values)
+    static u16 s_texNo[2];
 
-    // A brres's entry `name` of `group`. nw4r's dictionaries: the root's at +0x18 ("root" at
-    // +0x10), {u32 size, u32 n, then n + 1 entries of 0x10}, each entry's name and data offsets
-    // (+8, +12) from its dictionary's start.
-    static const u8* bresEntry(const u8* b, u32 size, const char* group, const char* name)
+    static void request(Read& r, const char* path, int heap)
     {
-        if (size < 0x40 || *(const u32*)b != 0x62726573 /* bres */ || *(const u32*)(b + 0x10) != 0x726F6F74) return NULL;
+        r.handle = 0;
+        r.buf = NULL;
+        r.size = 0;
+        r.pending = READ_REQUEST(&r.handle, path, heap, 0, 0);
+        if (r.pending) g_sssPortraits.loads++;
+        else g_sssPortraits.failed++;
+    }
+
+    static bool poll(Read& r)
+    {
+        if (!r.pending || !IS_READY(&r.handle)) return false;
+        r.buf = (u8*)GET_BUFFER(&r.handle);
+        r.size = (u32)GET_SIZE(&r.handle);
+        RELEASE(&r.handle);
+        r.handle = 0;
+        r.pending = false;
+        if (!isPtr((u32)r.buf) || r.size < 0x40) {
+            r.buf = NULL;
+            g_sssPortraits.failed++;
+        }
+        return true;
+    }
+
+    static void freeBuf(u8*& p)
+    {
+        if (!p) return;
+        HEAP_FREE(p);
+        p = NULL;
+        g_sssPortraits.freed++;
+    }
+
+    // An ARC's entry (Brawl's archive: "ARC\0", u16 count at +6, entries from +0x40, a 0x20
+    // header {u16 type, u16 index, u32 size} each, 0x20-aligned) that is a brres holding `model`.
+    static bool bresHas(const u8* b, u32 size, const char* group, const char* name);
+    static u32 arcBres(const u8* arc, u32 size, const char* model)
+    {
+        if (size < 0x40 || *(const u32*)arc != 0x41524300) return 0;
+        u16 n = *(const u16*)(arc + 6);
+        u32 off = 0x40;
+        for (u16 i = 0; i < n && off + 0x20 <= size; i++) {
+            u32 sz = *(const u32*)(arc + off + 4);
+            const u8* e = arc + off + 0x20;
+            if (sz > size - off - 0x20) return 0;
+            if (*(const u32*)e == 0x62726573 /* bres */ && bresHas(e, sz, "3DModels(NW4R)", model)) return (u32)e;
+            off += 0x20 + ((sz + 0x1F) & ~0x1Fu);
+        }
+        return 0;
+    }
+
+    // nw4r's dictionaries: the root's at +0x18 ("root" at +0x10), {u32 size, u32 n, then n + 1
+    // entries of 0x10}, each entry's name and data offsets (+8, +12) from its dictionary's start.
+    static bool bresHas(const u8* b, u32 size, const char* group, const char* name)
+    {
+        if (size < 0x40 || *(const u32*)(b + 0x10) != 0x726F6F74 /* root */) return false;
         const u8* root = b + 0x18;
         u32 n = *(const u32*)(root + 4);
         for (u32 i = 1; i <= n && i < 16; i++) {
@@ -125,282 +249,341 @@ namespace SssPortraits {
             if (strcmp((const char*)(root + no), group) != 0) continue;
             const u8* d = root + dof;
             u32 m = *(const u32*)(d + 4);
-            for (u32 k = 1; k <= m && k < 512; k++) {
+            for (u32 k = 1; k <= m && k < 1024; k++) {
                 const u8* f = d + 8 + 0x10 * k;
-                s32 fn = *(const s32*)(f + 8), fd = *(const s32*)(f + 12);
-                if (fn <= 0 || fd <= 0 || (u32)(d - b) + (u32)fd + 0x40 > size) continue;
-                if (strcmp((const char*)(d + fn), name) == 0) return d + fd;
+                s32 fn = *(const s32*)(f + 8);
+                if (fn > 0 && strcmp((const char*)(d + fn), name) == 0) return true;
             }
         }
-        return NULL;
+        return false;
     }
 
-    static void freeCopy(Portrait& p)
+    // ---- The cards --------------------------------------------------------------------------
+    enum { F_NONE = -1, F_PORT = -2, F_MARK = -3, F_NAME = -4, F_PLATE = -5 };
+    // portClr: the part's colour animation is "<model>__<port>" (its CLR0s __0..__3+), not __0.
+    struct Part { const char* model; s16 vis, node, pat, clr; bool portClr; };
+    static const Part PARTS[] = {
+        {"MenSelchrCbase4_TopN", 15, 15, F_NONE, F_PORT, false},
+        {"MenSelchrCplynm4_TopN", F_NONE, F_NONE, F_PLATE, F_NONE, false},
+        {"MenSelchrCmark4_TopN", F_NONE, F_NONE, F_MARK, F_PORT, false},
+        {"MenSelchrCchar4_TopN", F_NONE, F_NONE, F_NONE, 0, false},
+        {"MenSelchrCchareff4_TopN", F_NONE, F_NONE, F_NONE, 20, false},
+        {"MenSelchrCname4_TopN", F_NONE, F_NONE, F_NAME, F_NONE, false},
+        {"MenSelchrCentry4_TopN", F_NONE, F_NONE, F_NONE, 0, true},
+        {"MenSelchrChuman4_TopN", 2, 1, 0, 0, true},
+    };
+    static const int N_PARTS = sizeof(PARTS) / sizeof(PARTS[0]);
+    static const int PORTRAIT_PART = 3;
+    static u8* s_obj[2][N_PARTS];
+    static u8* s_task = NULL;
+    static DtorFn s_origDtor = NULL;
+
+    static u8* stageSelectTask()
     {
-        if (p.block) {
-            HEAP_FREE(p.block);
-            g_sssPortraits.freed++;
-        }
-        p.block = NULL;
-        p.image = p.palette = NULL;
-        p.shownNo = 0;
+        u32 mgr = *(u32*)0x805A0060;
+        u32 scene = isPtr(mgr) ? *(u32*)(mgr + 4) : 0;
+        u32 task = isPtr(scene) ? *(u32*)(scene + 0x3AC) : 0;
+        return isPtr(task) ? (u8*)task : NULL;
     }
 
-    // The file is in: the wanted texture (else the character's first) and its palette copied out.
-    static void takeFile(int side)
+    // A frame on one of the object's animations (anim +slot), held there: rate 0 (FrameCtrl at
+    // +0x18 of nw4r's AnmObj: frame, rate, start, end).
+    static void setFrame(u8* obj, u32 slot, FrameFn set, float frame)
     {
-        Portrait& p = s_portrait[side];
-        const u8* b = (const u8*)GET_BUFFER(&p.handle);
-        int size = GET_SIZE(&p.handle);
-        RELEASE(&p.handle);
-        p.handle = 0;
-        p.pending = false;
-        if (!isPtr((u32)b) || size < 0x40) {
-            g_sssPortraits.failed++;
-            return;
-        }
-        u16 tries[2] = {p.texNo, (u16)(p.charNo * 10 + 1)};
-        for (int t = 0; t < 2 && !p.block; t++) {
-            char name[32];
-            sprintf(name, "MenSelchrFaceB.%03d", tries[t]);
-            const u8* tex = bresEntry(b, (u32)size, "Textures(NW4R)", name);
-            const u8* plt = bresEntry(b, (u32)size, "Palettes(NW4R)", name);
-            if (!tex || !plt || *(const u32*)tex != 0x54455830 /* TEX0 */ || *(const u32*)plt != 0x504C5430) continue;
-            if (*(const u16*)(tex + 0x1C) != TEX_W || *(const u16*)(tex + 0x1E) != TEX_H || *(const u32*)(tex + 0x20) != 9 /* CI8 */) continue;
-            if (*(const u32*)(plt + 0x18) != 2 /* RGB5A3 */) continue;
-            u16 entries = *(const u16*)(plt + 0x1C);
-            const u8* img = tex + *(const s32*)(tex + 0x10);
-            const u8* pal = plt + *(const s32*)(plt + 0x10);
-            if (entries == 0 || entries > 256 || img < b || img + IMAGE_SIZE > b + size || pal + 2 * entries > b + size) continue;
-            void* block = HEAP_ALLOC(HEAP_NETWORK, IMAGE_SIZE + PALETTE_MAX + 64);
-            if (!block) break;
-            u8* a = (u8*)(((u32)block + 31) & ~31u);
-            memcpy(a, img, IMAGE_SIZE);
-            memcpy(a + IMAGE_SIZE, pal, 2 * entries);
-            DCFlushRange(a, IMAGE_SIZE + PALETTE_MAX);
-            p.block = block;
-            p.image = a;
-            p.palette = a + IMAGE_SIZE;
-            p.paletteEntries = entries;
-            p.shownNo = tries[t];
-            g_sssPortraits.loaded++;
-        }
-        if (!p.block) g_sssPortraits.failed++;
-        HEAP_FREE((void*)b);
-        g_sssPortraits.texNo[side] = p.shownNo;
+        u8* anim = *(u8**)(obj + 0x14);
+        if (!isPtr((u32)anim)) return;
+        u8* a = *(u8**)(anim + slot);
+        if (!isPtr((u32)a)) return;
+        set(obj, frame);
+        *(float*)(a + 0x1C) = 0.0f;
     }
 
-    static void request(int side, const PPOM::GameStep::PreviewPlayer& pv)
+    static void place(int side)
     {
-        Portrait& p = s_portrait[side];
-        int stock = SELCH_TO_STOCK(GM_TO_SELCH(pv.charKind));
-        int charNo = STOCK_FRAME(stock);
-        if (charNo < 0 || charNo > 99) {
-            g_sssPortraits.failed++;
-            return;
-        }
-        p.charNo = (u8)charNo;
-        p.texNo = (u16)(charNo * 10 + 1 + (pv.costume & PPOM::COSTUME_COLOUR));
-        char path[64];
-        sprintf(path, "/menu/common/char_bust_tex/MenSelchrFaceB%02d0.brres", charNo);
-        p.handle = 0;
-        if (READ_REQUEST(&p.handle, path, HEAP_NETWORK, 0, 0)) {
-            p.pending = true;
-            g_sssPortraits.loads++;
-        } else {
-            g_sssPortraits.failed++;
+        float m[12];
+        float k = g_sssPortraits.scale;
+        float sc[3] = {k, k, k};
+        float rot[3] = {0, 0, 0};
+        MTX_IDENTITY(m);
+        MTX_SRT(m, sc, rot, g_sssPortraits.pos[side]);
+        for (int i = 0; i < N_PARTS; i++) {
+            u8* obj = s_obj[side][i];
+            if (!obj) continue;
+            SET_MTX(*(void**)(obj + 0xC), 0, m);
+            u8* scn = *(u8**)(obj + 0x10);
+            if (!isPtr((u32)scn)) continue;
+            typedef void (*ProcFn)(u8*, int, int);
+            ((ProcFn)(*(u32*)(*(u32*)scn + 0x20)))(scn, 2, 0);
+            ((ProcFn)(*(u32*)(*(u32*)scn + 0x20)))(scn, 5, 0);
         }
     }
 
-    void tick()
+    static const int PLATE_PART = 7;   // Chuman4
+
+    static void writeName(int side, const PPOM::GameStep::PreviewPlayer& pv)
     {
-        // A read out finishes even after the stage select (its file is freed then).
+        u8* plate = s_obj[side][PLATE_PART];
+        u8* mdl = plate ? *(u8**)(plate + 0x10) : NULL;
+        if (!isPtr((u32)mdl)) return;
+        if (!s_msg) {
+            s_msg = MSG_CREATE(3, MENU_HEAP, 0x2B);
+            if (!s_msg) return;
+            MSG_ALLOC(s_msg, 0x100, 2);
+        }
+        s_msgMdl[side] = mdl;
+        s_msgOldCallback[side] = *(u32*)(mdl + 0xD4);
+        MSG_ATTACH(s_msg, side, mdl, 0, 0.0625f);
+        MSG_SET_FACE(s_msg, side, 1);
+        s_msgCallback[side] = *(u32*)(mdl + 0xD4);
+        char name[PPOM::NAME_LEN + 1];
+        PPOM::u16ToAscii(name, pv.name, sizeof(name));
+        if (!name[0]) strcpy(name, pv.local ? "You" : "Opponent");
+        s_msg->printf(side, "%s", name);
+    }
+
+    static void deleteNames()
+    {
+        if (!s_msg) return;
         for (int side = 0; side < 2; side++) {
-            Portrait& p = s_portrait[side];
-            if (p.pending && IS_READY(&p.handle)) takeFile(side);
+            u8* mdl = s_msgMdl[side];
+            if (mdl && *(u32*)(mdl + 0xD4) == s_msgCallback[side]) *(u32*)(mdl + 0xD4) = s_msgOldCallback[side];
+            s_msgMdl[side] = NULL;
         }
-        if (!Online::inScene("scSelStage")) {
-            if (s_havePreview) {
-                s_havePreview = false;
-                for (int side = 0; side < 2; side++) {
-                    freeCopy(s_portrait[side]);
-                    g_sssPortraits.texNo[side] = 0;
-                    g_sssPortraits.port[side] = 0xFF;
+        MSG_DELETE(s_msg, 1);
+        s_msg = NULL;
+    }
+
+    static void makeCard(u8* task, int side)
+    {
+        int port = -1;
+        const PPOM::GameStep::PreviewPlayer* pv = sidePlayer(side, &port);
+        if (!pv || !s_cssRes) return;
+        int stock = SELCH_TO_STOCK(GM_TO_SELCH(pv->charKind));
+        int charNo = STOCK_FRAME(stock);
+        float portF = (float)(port + 1);
+        float markF = (float)(STOCK_MARK(stock) + 1);
+        float nameF = (float)(charNo * 10 + 1);
+        float plateF = g_sssPortraits.plateFrame >= 0 ? (float)g_sssPortraits.plateFrame : portF;
+        u8* group = *(u8**)(task + 0x50);
+        for (int i = 0; i < N_PARTS; i++) {
+            const Part& p = PARTS[i];
+            u8* obj = MU_CREATE(&s_cssRes, p.model, 0x10, &s_cssRes, MENU_HEAP);
+            if (!isPtr((u32)obj)) {
+                g_sssPortraits.failed++;
+                continue;
+            }
+            s_obj[side][i] = obj;
+            g_sssPortraits.obj[side][i] = (u32)obj;
+            g_sssPortraits.objs++;
+            char anim[48];
+            sprintf(anim, "%s__0", p.model);
+            CHANGE_ANIM(obj, anim);
+            if (p.portClr && port > 0) {
+                sprintf(anim, "%s__%d", p.model, port);
+                CHANGE_CLR_ANIM(obj, anim);
+            }
+            const s16 want[4] = {p.vis, p.node, p.pat, p.clr};
+            const u32 slots[4] = {0x08, 0x0C, 0x10, 0x18};
+            const FrameFn sets[4] = {SET_FRAME_VIS, SET_FRAME_NODE, SET_FRAME_TEX, SET_FRAME_COL};
+            for (int k = 0; k < 4; k++) {
+                if (want[k] == F_NONE) continue;
+                float f = want[k] == F_PORT ? portF : want[k] == F_MARK ? markF : want[k] == F_NAME ? nameF
+                        : want[k] == F_PLATE ? plateF : (float)want[k];
+                setFrame(obj, slots[k], sets[k], f);
+            }
+            if (i == PORTRAIT_PART && s_picRes[side]) {
+                char tex[24];
+                sprintf(tex, "MenSelchrFaceB.%03d", s_texNo[side]);
+                static const char* const MATS[2] = {"Card06", "Card006_sdw"};
+                for (int m = 0; m < 2; m++) {
+                    u32 mat = GET_RES_MAT(obj + 8, MATS[m]);
+                    if (isPtr(mat)) SET_TEX(obj, *(u32*)(mat + 0xC), tex, &s_picRes[side]);
                 }
             }
-            for (int side = 0; side < 2; side++) {
-                if (!s_portrait[side].pending) freeCopy(s_portrait[side]);   // a late one's copy
+            u8* scn = *(u8**)(obj + 0x10);
+            if (isPtr((u32)group) && isPtr((u32)scn)) {
+                typedef bool (*InsertFn)(u8*, u32, u8*);
+                ((InsertFn)(*(u32*)(*(u32*)group + 0x34)))(group, *(u32*)(group + 0xE4), scn);
             }
-            return;
         }
-        if (s_havePreview) return;
-        const PPOM::GameStep* st = previewStep();
-        if (!st) return;
-        memcpy(s_pv, st->pv, sizeof(s_pv));
-        s_havePreview = true;
+        writeName(side, *pv);
+        g_sssPortraits.made++;
+        g_sssPortraits.port[side] = (u8)port;
+        g_sssPortraits.texNo[side] = s_texNo[side];
+        place(side);
+    }
+
+    static void deleteCards()
+    {
+        deleteNames();
+        for (int side = 0; side < 2; side++) {
+            bool any = false;
+            for (int i = 0; i < N_PARTS; i++) {
+                u8* obj = s_obj[side][i];
+                if (!obj) continue;
+                typedef void (*DelFn)(u8*, int);
+                ((DelFn)(*(u32*)(*(u32*)(obj + 0x5C) + 8)))(obj, 1);
+                s_obj[side][i] = NULL;
+                g_sssPortraits.obj[side][i] = 0;
+                g_sssPortraits.objs--;
+                any = true;
+            }
+            if (any) g_sssPortraits.deleted++;
+            g_sssPortraits.texNo[side] = 0;
+            g_sssPortraits.port[side] = 0xFF;
+        }
+    }
+
+    // Everything of this stage select's: the files (a read still out is freed when it lands).
+    static void freeAll()
+    {
+        freeBuf(s_cssRead.buf);
+        freeBuf(s_css);
+        s_cssRes = 0;
+        for (int side = 0; side < 2; side++) {
+            freeBuf(s_picRead[side].buf);
+            s_picRes[side] = 0;
+        }
+        g_sssPortraits.state = 0;
+    }
+
+    static void start()
+    {
         g_sssPortraits.shown++;
+        g_sssPortraits.state = 1;
+        request(s_cssRead, "/menu2/sc_selcharacter.pac", HEAP_FIGHTER4);
         for (int side = 0; side < 2; side++) {
             int port = -1;
             const PPOM::GameStep::PreviewPlayer* pv = sidePlayer(side, &port);
-            g_sssPortraits.port[side] = pv ? (u8)port : 0xFF;
-            if (pv && !s_portrait[side].pending) request(side, *pv);
+            s_texNo[side] = 0;
+            if (!pv) continue;
+            int charNo = STOCK_FRAME(SELCH_TO_STOCK(GM_TO_SELCH(pv->charKind)));
+            if (charNo < 0 || charNo > 99) continue;
+            s_texNo[side] = (u16)(charNo * 10 + 1 + (pv->costume & PPOM::COSTUME_COLOUR));
+            char path[64];
+            sprintf(path, "/menu/common/char_bust_tex/MenSelchrFaceB%02d0.brres", charNo);
+            request(s_picRead[side], path, HEAP_FIGHTER3);
         }
     }
 
-    // ---- Drawing ----------------------------------------------------------------------------
-    // GX (DOL; the unnamed ones identified by ms::CharWriter::SetupGX's calls, 0x8006EEEC, and by
-    // the SDK's order around GXInitTexCacheRegion).
-    typedef void (*GX1)(u32);
-    typedef void (*GX2)(u32, u32);
-    typedef void (*GX3)(u32, u32, u32);
-    typedef void (*GX4)(u32, u32, u32, u32);
-    typedef void (*GX5)(u32, u32, u32, u32, u32);
-    typedef void (*GX6)(u32, u32, u32, u32, u32, u32);
-    typedef void (*GX7)(u32, u32, u32, u32, u32, u32, u32);
-    typedef void (*GXVoid)();
-    typedef void (*InitTexCIFn)(void* obj, void* image, u16 w, u16 h, u32 fmt, u32 wrapS, u32 wrapT, u8 mip, u32 tlut);
-    typedef void (*InitTlutFn)(void* obj, void* lut, u32 fmt, u16 entries);
-    typedef void (*LoadObjFn)(void* obj, u32 id);
-    static const GXVoid GX_CLEAR_VTX_DESC = (GXVoid)0x801EFB10;
-    static const GX2 GX_SET_VTX_DESC = (GX2)0x801EF280;            // (attr, type)
-    static const GX5 GX_SET_VTX_ATTR_FMT = (GX5)0x801EFB44;        // (fmt, attr, cnt, type, frac)
-    static const GX1 GX_SET_NUM_CHANS = (GX1)0x801F2644;
-    static const GX7 GX_SET_CHAN_CTRL = (GX7)0x801F2668;
-    static const GX1 GX_SET_NUM_TEX_GENS = (GX1)0x801F0480;
-    static const GX6 GX_SET_TEX_COORD_GEN2 = (GX6)0x801F0258;
-    static const GX1 GX_SET_NUM_TEV_STAGES = (GX1)0x801F41F8;
-    static const GX4 GX_SET_TEV_ORDER = (GX4)0x801F409C;           // (stage, coord, map, colour)
-    static const GX2 GX_SET_TEV_OP = (GX2)0x801F3B9C;              // (stage, mode)
-    static const GX4 GX_SET_BLEND_MODE = (GX4)0x801F46CC;
-    static const GX5 GX_SET_ALPHA_COMPARE = (GX5)0x801F3FD8;
-    static const GX3 GX_SET_Z_MODE = (GX3)0x801F4774;
-    static const GX1 GX_SET_CULL_MODE = (GX1)0x801F136C;
-    static const GX3 GX_BEGIN = (GX3)0x801F1088;                    // (primitive, vtxfmt, count)
-    static const InitTexCIFn GX_INIT_TEX_OBJ_CI = (InitTexCIFn)0x801F2AFC;
-    static const InitTlutFn GX_INIT_TLUT_OBJ = (InitTlutFn)0x801F3004;
-    static const LoadObjFn GX_LOAD_TLUT = (LoadObjFn)0x801F302C;
-    static const LoadObjFn GX_LOAD_TEX_OBJ = (LoadObjFn)0x801F2FB0;
-    static volatile u32* const FIFO = (volatile u32*)0xCC008000;
+    static const u32 SLICE = 0x10000;   // compressed bytes decompressed per frame
 
-    static void put(float f) { *(volatile float*)FIFO = f; }
-
-    // Vertex format 0: position xyz f32, colour rgba8, texture st f32.
-    static void setupGX()
+    void tick()
     {
-        GX_CLEAR_VTX_DESC();
-        GX_SET_VTX_DESC(9 /* POS */, 1 /* DIRECT */);
-        GX_SET_VTX_DESC(11 /* CLR0 */, 1);
-        GX_SET_VTX_DESC(13 /* TEX0 */, 1);
-        GX_SET_VTX_ATTR_FMT(0, 9, 1 /* XYZ */, 4 /* F32 */, 0);
-        GX_SET_VTX_ATTR_FMT(0, 11, 1 /* RGBA */, 5 /* RGBA8 */, 0);
-        GX_SET_VTX_ATTR_FMT(0, 13, 1 /* ST */, 4 /* F32 */, 0);
-        GX_SET_NUM_CHANS(1);
-        GX_SET_CHAN_CTRL(4 /* COLOR0A0 */, 0, 0 /* REG */, 1 /* VTX */, 0, 0 /* DF_NONE */, 2 /* AF_NONE */);
-        GX_SET_NUM_TEX_GENS(1);
-        GX_SET_TEX_COORD_GEN2(0, 1 /* MTX2x4 */, 4 /* TEX0 */, 60 /* IDENTITY */, 0, 125 /* PTIDENTITY */);
-        GX_SET_NUM_TEV_STAGES(1);
-        GX_SET_BLEND_MODE(1 /* BLEND */, 4 /* SRCALPHA */, 5 /* INVSRCALPHA */, 15);
-        GX_SET_ALPHA_COMPARE(7 /* ALWAYS */, 0, 0, 7, 0);
-        GX_SET_Z_MODE(0, 7, 0);
-        GX_SET_CULL_MODE(0);
-    }
-
-    static void quad(float x0, float y0, float x1, float y1, u32 rgba, float s0, float t0, float s1, float t1)
-    {
-        GX_BEGIN(0x80 /* QUADS */, 0, 4);
-        put(x0); put(y0); put(0); *FIFO = rgba; put(s0); put(t0);
-        put(x1); put(y0); put(0); *FIFO = rgba; put(s1); put(t0);
-        put(x1); put(y1); put(0); *FIFO = rgba; put(s1); put(t1);
-        put(x0); put(y1); put(0); *FIFO = rgba; put(s0); put(t1);
-    }
-
-    static void solid(float x0, float y0, float x1, float y1, u32 rgba)
-    {
-        GX_SET_TEV_ORDER(0, 0xFF /* TEXCOORD_NULL */, 0xFF /* TEXMAP_NULL */, 4 /* COLOR0A0 */);
-        GX_SET_TEV_OP(0, 4 /* PASSCLR */);
-        quad(x0, y0, x1, y1, rgba, 0, 0, 0, 0);
-    }
-
-    // Port colours, as the CSS's panels and the HUD (P1 red, P2 blue, P3 yellow, P4 green):
-    // edge, panel, name plate.
-    static const u32 COLOURS[4][3] = {
-        {0xF04848FF, 0x5C1616E6, 0x9C2424FF},
-        {0x4878F0FF, 0x16245CE6, 0x24409CFF},
-        {0xF0C848FF, 0x5C4A16E6, 0x9C7A24FF},
-        {0x48C858FF, 0x165C20E6, 0x249C34FF},
-    };
-
-    // The panels (640x480 units). The picture is 16:9: a unit across is 4/3 of one down, so the
-    // portrait's 128x160 is drawn 0.75 as wide in units. Centred left and right of the stage
-    // preview (the user's outline, 2026-10-16).
-    static const float CENTRE_X[2] = {81.0f, 559.0f};
-    static const float TOP = 132.0f;
-    static const float PORTRAIT_H = 150.0f;
-    static const float PORTRAIT_W = PORTRAIT_H * 0.8f * 0.75f;
-    static const float EDGE = 2.0f, PAD = 5.0f, PLATE_H = 24.0f;
-
-    static void panelRect(int side, float* x0, float* x1, float* plateTop, float* bottom)
-    {
-        float halfW = PORTRAIT_W * 0.5f + PAD * 0.75f;
-        *x0 = CENTRE_X[side] - halfW;
-        *x1 = CENTRE_X[side] + halfW;
-        *plateTop = TOP + PAD + PORTRAIT_H + PAD;
-        *bottom = *plateTop + PLATE_H;
-    }
-
-    bool drawPanels()
-    {
-        if (!s_havePreview || !Online::inScene("scSelStage")) return false;
-        bool any = false;
+        // Reads out land even after the stage select: freed at once then.
+        bool inSss = Online::inScene("scSelStage");
+        if (poll(s_cssRead) && (!inSss || !s_havePreview)) freeBuf(s_cssRead.buf);
         for (int side = 0; side < 2; side++) {
-            int port = -1;
-            if (!sidePlayer(side, &port) || port < 0 || port > 3) continue;
-            if (!any) setupGX();
-            any = true;
-            const u32* c = COLOURS[port];
-            float x0, x1, plateTop, bottom;
-            panelRect(side, &x0, &x1, &plateTop, &bottom);
-            float ex = EDGE * 0.75f;
-            solid(x0 - ex, TOP - EDGE, x1 + ex, bottom + EDGE, c[0]);
-            solid(x0, TOP, x1, plateTop, c[1]);
-            solid(x0, plateTop, x1, bottom, c[2]);
-            Portrait& p = s_portrait[side];
-            if (p.image) {
-                static u8 texObj[0x20] __attribute__((aligned(32)));
-                static u8 tlutObj[0xC] __attribute__((aligned(4)));
-                GX_INIT_TLUT_OBJ(tlutObj, p.palette, 2 /* RGB5A3 */, p.paletteEntries);
-                GX_LOAD_TLUT(tlutObj, 0 /* TLUT0 */);
-                GX_INIT_TEX_OBJ_CI(texObj, p.image, TEX_W, TEX_H, 9 /* C8 */, 0 /* CLAMP */, 0, 0, 0 /* TLUT0 */);
-                GX_LOAD_TEX_OBJ(texObj, 0 /* TEXMAP0 */);
-                GX_SET_TEV_ORDER(0, 0 /* TEXCOORD0 */, 0 /* TEXMAP0 */, 4);
-                GX_SET_TEV_OP(0, 0 /* MODULATE */);
-                float px0 = CENTRE_X[side] - PORTRAIT_W * 0.5f;
-                quad(px0, TOP + PAD, px0 + PORTRAIT_W, TOP + PAD + PORTRAIT_H, 0xFFFFFFFF, 0, 0, 1, 1);
-            }
+            if (poll(s_picRead[side]) && (!inSss || !s_havePreview)) freeBuf(s_picRead[side].buf);
         }
-        if (any) g_sssPortraits.drawn++;
-        return any;
+        if (!inSss) {
+            if (s_havePreview) {
+                s_havePreview = false;
+                deleteCards();   // the destructor has run (nothing left), or never made
+                freeAll();
+            }
+            return;
+        }
+        if (!s_havePreview) {
+            const PPOM::GameStep* st = previewStep();
+            if (!st) return;
+            memcpy(s_pv, st->pv, sizeof(s_pv));
+            s_havePreview = true;
+            s_task = NULL;
+            start();
+        }
+        u8* task = stageSelectTask();
+        if (!task) return;
+        if (g_sssPortraits.remake) {
+            g_sssPortraits.remake = 0;
+            deleteCards();
+            if (g_sssPortraits.state == 4) g_sssPortraits.state = 3;
+        }
+        switch (g_sssPortraits.state) {
+        case 1:   // the CSS file
+            if (s_cssRead.pending) return;
+            if (!s_cssRead.buf) {
+                g_sssPortraits.state = 0;
+                return;
+            }
+            if (*(u32*)s_cssRead.buf == 0x41524300 /* ARC: not compressed */) {
+                s_css = s_cssRead.buf;
+                s_cssRead.buf = NULL;
+                s_cssSize = s_cssRead.size;
+                s_cssDone = s_cssSize;
+            } else {
+                s_cssSize = CX_SIZE(s_cssRead.buf);
+                s_css = s_cssSize > 0x40 && s_cssSize < 0x800000 ? (u8*)HEAP_ALLOC(HEAP_FIGHTER3, s_cssSize + 0x20) : NULL;
+                if (!s_css) {
+                    g_sssPortraits.failed++;
+                    freeBuf(s_cssRead.buf);
+                    g_sssPortraits.state = 0;
+                    return;
+                }
+                CX_INIT_LZ(s_ctx, s_css);
+                s_cssDone = 0;
+            }
+            g_sssPortraits.state = 2;
+            return;
+        case 2:   // decompressing, a slice a frame
+            if (s_cssRead.buf) {
+                u32 n = s_cssRead.size - s_cssDone < SLICE ? s_cssRead.size - s_cssDone : SLICE;
+                s32 r = CX_READ_LZ(s_ctx, s_cssRead.buf + s_cssDone, n);
+                s_cssDone += n;
+                if (r > 0 && s_cssDone < s_cssRead.size) return;
+                freeBuf(s_cssRead.buf);
+                if (r < 0) {
+                    g_sssPortraits.failed++;
+                    freeAll();
+                    return;
+                }
+                DCFlushRange(s_css, s_cssSize);
+            }
+            s_cssRes = arcBres(s_css, s_cssSize, "MenSelchrCbase4_TopN");
+            if (!s_cssRes) {
+                g_sssPortraits.failed++;
+                freeAll();
+                return;
+            }
+            RES_INIT(&s_cssRes);
+            g_sssPortraits.state = 3;
+            return;
+        case 3:   // the portraits, then the cards
+            for (int side = 0; side < 2; side++) {
+                if (s_picRead[side].pending) return;
+            }
+            for (int side = 0; side < 2; side++) {
+                s_picRes[side] = (u32)s_picRead[side].buf;
+            }
+            s_task = task;
+            makeCard(task, 0);
+            makeCard(task, 1);
+            g_sssPortraits.state = 4;
+            return;
+        case 4:
+            place(0);
+            place(1);
+            return;
+        default:
+            return;
+        }
     }
 
-    bool nameLine(int side, u16* out, int max, float* x, float* y, float* maxW)
+    // The stage select task's destructor (sel_stage text+0x368): our cards first, as the task
+    // deletes its own (each MuObject: vtable at +0x5C, entry +8, with 1 = delete), while its scene
+    // group (+0x50) is still there; then the files.
+    static void* hkTaskDtor(u8* task, int flags)
     {
-        if (!s_havePreview || side < 0 || side > 1) return false;
-        const PPOM::GameStep::PreviewPlayer* pv = sidePlayer(side, NULL);
-        if (!pv) return false;
-        char name[PPOM::NAME_LEN + 1];
-        PPOM::u16ToAscii(name, pv->name, sizeof(name));
-        if (!name[0]) strcpy(name, pv->local ? "You" : "Opponent");
-        int n = 0;
-        for (; name[n] && n < max - 1; n++) {
-            u8 ch = (u8)name[n];
-            out[n] = ch < 0x20 ? (u16)' ' : ch;   // nothing the renderer reads as a command
+        if (task && task == s_task) {
+            deleteCards();
+            freeAll();
+            s_task = NULL;
         }
-        out[n] = 0;
-        float x0, x1, plateTop, bottom;
-        panelRect(side, &x0, &x1, &plateTop, &bottom);
-        *x = CENTRE_X[side];
-        *y = plateTop + 3.0f;
-        *maxW = x1 - x0 - 6.0f;
-        return true;
+        return s_origDtor(task, flags);
+    }
+
+    void install(CoreApi* api)
+    {
+        api->syReplaceFuncRel(0x368, reinterpret_cast<void*>(hkTaskDtor), (void**)&s_origDtor, 11 /* sora_menu_sel_stage */);
     }
 }
