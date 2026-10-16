@@ -27,6 +27,8 @@
 <script src="script.js" defer></script>
 <!--
   Brawl Online. Credits (full texts in LICENSES.txt):
+  - Built on Brawlback (https://github.com/Brawlback-Team); its contributors are listed in the FAQ
+    and in the repository's README.md.
   - Wordmark font: Barlow Condensed Black Italic, Copyright 2017 The Barlow Project Authors
     (https://github.com/jpt/barlow), SIL Open Font License 1.1 (assets/fonts/OFL.txt).
   - Icons: Font Awesome Free 7.3.1 by @fontawesome (https://fontawesome.com), CC BY 4.0
@@ -44,8 +46,11 @@
   <source src="assets/bg.mp4" type="video/mp4">
 </video>
 
-<!-- Opens the FAQ dialog. Without JavaScript the link shows the dialog through :target (style.css). -->
-<a class="corner faq-open" id="faq-open" href="#faq">FAQ</a>
+<!-- Open the FAQ and Credits dialogs. Without JavaScript the links show them through :target (style.css). -->
+<nav class="corner top-nav">
+  <a class="pill" href="#faq">FAQ</a>
+  <a class="pill" href="#credits">Credits</a>
+</nav>
 
 <main>
   <div class="brand">
@@ -144,7 +149,7 @@
 <dialog class="faq" id="faq" aria-labelledby="faq-title">
   <div class="faq-head">
     <h2 id="faq-title">FAQ</h2>
-    <a class="faq-close" id="faq-close" href="#" aria-label="Close">
+    <a class="faq-close" href="#" aria-label="Close">
       <!-- Font Awesome Free 7.3.1 "xmark" (solid), CC BY 4.0, https://fontawesome.com -->
       <svg viewBox="0 0 384 512" aria-hidden="true"><path fill="currentColor" d="M55.1 73.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L147.2 256 9.9 393.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192.5 301.3 329.9 438.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.8 256 375.1 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192.5 210.7 55.1 73.4z"/></svg>
     </a>
@@ -179,6 +184,48 @@
 
     <dt>Who can I ask for help?</dt>
     <dd>Add <strong>sarahkittyy</strong> on Discord.</dd>
+  </dl>
+  <div class="faq-foot">
+    <a class="pill" href="#credits">Credits</a>
+  </div>
+</dialog>
+
+<dialog class="faq" id="credits" aria-labelledby="credits-title">
+  <div class="faq-head">
+    <h2 id="credits-title">Credits</h2>
+    <a class="faq-close" href="#" aria-label="Close">
+      <!-- Font Awesome Free 7.3.1 "xmark" (solid), CC BY 4.0, https://fontawesome.com -->
+      <svg viewBox="0 0 384 512" aria-hidden="true"><path fill="currentColor" d="M55.1 73.4c-12.5-12.5-32.8-12.5-45.3 0s-12.5 32.8 0 45.3L147.2 256 9.9 393.4c-12.5 12.5-12.5 32.8 0 45.3s32.8 12.5 45.3 0L192.5 301.3 329.9 438.6c12.5 12.5 32.8 12.5 45.3 0s12.5-32.8 0-45.3L237.8 256 375.1 118.6c12.5-12.5 12.5-32.8 0-45.3s-32.8-12.5-45.3 0L192.5 210.7 55.1 73.4z"/></svg>
+    </a>
+  </div>
+  <!-- The same names as the README's Credits and the launcher's Settings > Credits; keep the three in step. -->
+  <dl>
+    <dt>Brawlback</dt>
+    <dd>Brawl Online started as a fork of <a href="https://github.com/Brawlback-Team" target="_blank" rel="noopener">Brawlback</a>. Thank you to everyone who built it:</dd>
+    <dd class="names">
+      <a href="https://github.com/WhiteTPoison" target="_blank" rel="noopener">WhiteTPoison</a>
+      <a href="https://github.com/FaultyPine" target="_blank" rel="noopener">PiNE</a>
+      <a href="https://github.com/ilazoja" target="_blank" rel="noopener">Kapedani</a>
+      <a href="https://github.com/barzamin" target="_blank" rel="noopener">barzamin</a>
+      <a href="https://github.com/Believer1" target="_blank" rel="noopener">Believer1</a>
+      <a href="https://github.com/blasphemetheus" target="_blank" rel="noopener">blasphemetheus</a>
+      <a href="https://github.com/eliasreid" target="_blank" rel="noopener">eliasreid</a>
+      <a href="https://github.com/pdeblois" target="_blank" rel="noopener">pdeblois</a>
+      <a href="https://github.com/rapito" target="_blank" rel="noopener">rapito</a>
+      <a href="https://github.com/WHellhaus" target="_blank" rel="noopener">WHellhaus</a>
+    </dd>
+
+    <dt>Also built on</dt>
+    <dd>
+      <ul>
+        <li><a href="https://github.com/NyxTheShield" target="_blank" rel="noopener">Nyx</a>'s Brawlback rollback fork</li>
+        <li><a href="https://github.com/Sammi-Husky/Syriinge" target="_blank" rel="noopener">Syriinge</a> by Sammi Husky</li>
+        <li><a href="https://github.com/HeatXD/GekkoNet" target="_blank" rel="noopener">GekkoNet</a> by HeatXD</li>
+        <li><a href="https://github.com/project-slippi/slippi-launcher" target="_blank" rel="noopener">Slippi Launcher</a> by Project Slippi</li>
+        <li><a href="https://github.com/dolphin-emu/dolphin" target="_blank" rel="noopener">Dolphin</a></li>
+        <li><a href="https://projectplusgame.com" target="_blank" rel="noopener">Project+</a> by the Project+ Development Team</li>
+      </ul>
+    </dd>
   </dl>
 </dialog>
 

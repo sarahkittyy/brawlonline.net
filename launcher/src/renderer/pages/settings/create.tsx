@@ -1,6 +1,7 @@
 import { AdvancedAppSettings } from "./advanced_app_settings/advanced_app_settings";
 import { AppearanceSettings } from "./appearance_settings/appearance_settings";
 import { SettingsCreateMessages as Messages } from "./create.messages";
+import { CreditsPage } from "./credits_page/credits_page";
 import { NetplayDolphinSettings } from "./dolphin_settings/netplay_dolphin_settings";
 import { PLAYBACK_DOLPHIN_SETTINGS_PATH } from "./dolphin_settings/paths";
 import { PlaybackDolphinSettings } from "./dolphin_settings/playback_dolphin_settings";
@@ -63,6 +64,11 @@ export function createSettingsPage(): { Page: React.ComponentType } {
           name: () => Messages.help(),
           path: "help",
           component: <HelpPage />,
+        },
+        {
+          name: () => Messages.credits(),
+          path: "credits",
+          component: <CreditsPage />,
         },
       ],
     },

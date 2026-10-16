@@ -11,6 +11,12 @@ which is based on Dolphin (https://github.com/dolphin-emu/dolphin). Upstream bas
 
 The full history of all three lives in those repositories.
 
+Brawlback's code here (Source/Core/Core/Brawlback/, including TimeSync.cpp and the
+brawlback-common headers under include/) and its changes to Dolphin are by the Brawlback team
+(https://github.com/Brawlback-Team): WhiteTPoison, PiNE (FaultyPine), Kapedani (ilazoja),
+eliasreid, rapito, Believer1 and others; see the README's Credits. Include/gekkonet is GekkoNet by
+HeatXD (its own LICENSE).
+
 License: Dolphin is GPL-2.0-or-later (see COPYING and LICENSES/); our changes are under the
 same license. Third-party code under Externals/ keeps its own licenses (Externals/licenses.md).
 

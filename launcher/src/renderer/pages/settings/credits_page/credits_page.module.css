@@ -1,0 +1,44 @@
+.container {
+  background-color: var(--surface-3);
+  color: var(--off-white);
+  border-radius: 10px;
+  padding: 15px;
+}
+
+.heading {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  margin-bottom: 10px;
+}
+
+.headingIcon {
+  margin-right: 8px;
+}
+
+.subheading {
+  margin: 20px 0 8px;
+  font-size: 1.05em;
+}
+
+.names {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 18px;
+  margin-top: 10px;
+}
+
+.list {
+  margin: 0;
+  padding-left: 20px;
+  line-height: 1.7;
+}
+
+.link {
+  color: inherit;
+  text-decoration: underline;
+}
+
+.note {
+  opacity: 0.7;
+}

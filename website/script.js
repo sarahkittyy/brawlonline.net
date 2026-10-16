@@ -138,22 +138,29 @@ async function showRelease(os, dl) {
   }
 }
 
-// FAQ dialog, opened by the "FAQ" link at the top left (and by visiting /#faq).
-function setupFaq() {
-  const dialog = document.getElementById("faq");
-  const open = document.getElementById("faq-open");
-  const close = document.getElementById("faq-close");
-  if (!dialog || typeof dialog.showModal !== "function") return; // Falls back to the :target view.
-  // Opened as a modal, the :target fallback must not show it a second time.
+// The FAQ and Credits dialogs, opened by the links at the top left (and by visiting /#faq or
+// /#credits). The Credits link at the bottom of the FAQ swaps one for the other.
+function setupDialogs() {
+  if (typeof HTMLDialogElement !== "function") return; // Falls back to the :target view.
+  // Opened as modals, the :target fallback must not show them a second time.
   document.documentElement.classList.add("js-dialog");
+  for (const id of ["faq", "credits"]) setupDialog(id);
+}
+
+function setupDialog(id) {
+  const dialog = document.getElementById(id);
+  if (!dialog) return;
   const show = () => {
+    for (const other of document.querySelectorAll("dialog[open]")) if (other !== dialog) other.close();
     if (!dialog.open) dialog.showModal();
   };
-  open.addEventListener("click", (e) => {
-    e.preventDefault();
-    show();
-  });
-  close.addEventListener("click", (e) => {
+  for (const open of document.querySelectorAll(`a[href="#${id}"]`)) {
+    open.addEventListener("click", (e) => {
+      e.preventDefault();
+      show();
+    });
+  }
+  dialog.querySelector(".faq-close").addEventListener("click", (e) => {
     e.preventDefault();
     dialog.close();
   });
@@ -165,10 +172,10 @@ function setupFaq() {
     if (!inside) dialog.close();
   });
   dialog.addEventListener("close", () => {
-    if (location.hash === "#faq") history.replaceState(null, "", location.pathname + location.search);
+    if (location.hash === `#${id}`) history.replaceState(null, "", location.pathname + location.search);
   });
   const fromHash = () => {
-    if (location.hash === "#faq") show();
+    if (location.hash === `#${id}`) show();
   };
   window.addEventListener("hashchange", fromHash);
   fromHash();
@@ -267,5 +274,5 @@ async function setupTop10() {
 window.BrawlOnline = { detectOS, parseFeed, DOWNLOADS };
 setupDownloads(currentOS());
 setupVideo();
-setupFaq();
+setupDialogs();
 setupTop10();

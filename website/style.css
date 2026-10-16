@@ -419,7 +419,7 @@ summary:focus-visible {
   width: auto;
 }
 
-/* ---- Corner links: FAQ top left, Discord and GitHub bottom right ------------ */
+/* ---- Corner links: FAQ and Credits top left, Discord and GitHub bottom right -- */
 .corner {
   position: fixed;
   z-index: 3;
@@ -432,9 +432,19 @@ summary:focus-visible {
   color: var(--fg);
 }
 
-.faq-open {
+.top-nav {
   top: max(16px, env(safe-area-inset-top));
   left: max(16px, env(safe-area-inset-left));
+  display: flex;
+  gap: 8px;
+}
+
+/* The FAQ and Credits buttons, at the top left and at the bottom of the FAQ. */
+.pill {
+  display: inline-block;
+  color: var(--dim);
+  text-decoration: none;
+  transition: color 0.15s, border-color 0.15s;
   padding: 7px 14px 6px;
   border: 1px solid rgba(241, 241, 244, 0.2);
   border-radius: 999px;
@@ -448,7 +458,8 @@ summary:focus-visible {
   background: rgba(8, 8, 11, 0.45);
 }
 
-.faq-open:hover {
+.pill:hover {
+  color: var(--fg);
   border-color: rgba(241, 241, 244, 0.5);
 }
 
@@ -878,6 +889,22 @@ summary:focus-visible {
 .faq dd a {
   color: var(--pm-hi);
   text-underline-offset: 3px;
+}
+
+.faq dd.names {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+  margin-top: 10px;
+}
+
+.faq dd ul {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.faq-foot {
+  padding: 0 28px 28px;
 }
 
 /* Phones: nearly full screen, with a margin of page around it so it still reads as a popup. */
