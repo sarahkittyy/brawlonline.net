@@ -200,6 +200,9 @@ constexpr u32 RK_RATING = 4, RK_SETS = 8, RK_CHANGE = 12;
 // GameStep response payload: active, type, myTurn, count, toSss, mayLock, nKinds, seconds,
 // kinds[40], text u16[64]
 constexpr u32 GS_KINDS = 8, GS_MAX_KINDS = 40, GS_TEXT = 0x30, GS_TEXT_LEN = 64, GS_TIME_UP = 0xB0;
+// ... then the fighter preview (ppom.h GameStep pvCount / pv): the count at 0xB4, and per in-game
+// port {present, charKind, costume, local, rating f32 (negative: none), name u16[16]} from 0xB8.
+constexpr u32 GS_PREVIEW = 0xB4, GS_PREVIEW_PLAYERS = 2, GS_PREVIEW_SIZE = 0x28;
 constexpr u8 MODE_TEAMS = 3;
 
 // The game's OSModuleInfo list (first, last).
@@ -241,6 +244,10 @@ u32 s_session_seq = 0;
 u32 s_local_seq = 0;
 u32 s_lock_seq = 0;
 picojson::object s_lock_seen;
+// The running session's players by in-game port (names and Ranked ratings), as SESSION orders
+// them: the stage select's fighter preview (GameStepResponse).
+std::array<std::string, 4> s_port_names;
+std::array<std::optional<float>, 4> s_port_ratings;
 bool s_was_disconnected = false;
 // Rooms: this player's colour in the room (kept for a room game whose connection to mm dropped).
 u8 s_room_team = 0xFF;
@@ -629,6 +636,30 @@ Response GameStepResponse()
     r.payload[GS_KINDS + i] = v.selectable[i];
   WriteU16Text(r.payload, GS_TEXT, v.text, GS_TEXT_LEN);
   r.payload[GS_TIME_UP] = v.time_up ? 1 : 0;
+  // The stage select's fighter preview: each port's last lock-in (game 1: the characters locked
+  // in before the search; later games: the last game's until the character step), name and
+  // rating. The peer's bytes are its own; the game checks them before use.
+  int previewed = 0;
+  if (v.active)
+  {
+    const Gprb::Session::Lobby lobby = Gprb::Session::GetLobby();
+    for (u32 port = 0; port < GS_PREVIEW_PLAYERS; ++port)
+    {
+      const auto lock = Gprb::Session::GetPlayerLock(static_cast<int>(port));
+      if (!lock || lock->char_kind == 0xFF)
+        continue;
+      const u32 p = GS_PREVIEW + 4 + port * GS_PREVIEW_SIZE;
+      r.payload[p + 0] = 1;
+      r.payload[p + 1] = lock->char_kind;
+      r.payload[p + 2] = lock->costume;
+      r.payload[p + 3] = static_cast<int>(port) == lobby.local_port ? 1 : 0;
+      const float rating = s_port_ratings[port].value_or(-1.0f);
+      PutU32(r.payload, p + 4, std::bit_cast<u32>(rating));
+      WriteU16Text(r.payload, p + 8, s_port_names[port], NAME_LEN);
+      previewed = static_cast<int>(port) + 1;
+    }
+  }
+  r.payload[GS_PREVIEW] = static_cast<u8>(previewed);
   r.summary = fmt::format("GP_FETCH_STEP active={} type={} turn={} count={} sss={} lock={} "
                           "time_up={} stages={} text='{}'",
                           v.active, u8(v.type), v.my_turn, v.count, v.to_sss, v.may_lock,
@@ -1479,6 +1510,8 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
   const Gprb::Session::Lobby lobby = Gprb::Session::GetLobby();
   std::vector<std::string> names(SESSION_PLAYERS), codes(SESSION_PLAYERS);
   std::string peer_name;
+  s_port_names = {};
+  s_port_ratings = {};
   // SESSION's rules: the running session's (its ticket's), else on the room CSS the room's
   // (what the RULES screens show and the next game will play).
   std::optional<MatchRules> rules = in_room ? room.view->rules : std::nullopt;
@@ -1519,6 +1552,11 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
           continue;
         names[i] = order[i]->display_name;
         codes[i] = order[i]->connect_code;
+        if (i < s_port_names.size())
+        {
+          s_port_names[i] = order[i]->display_name;
+          s_port_ratings[i] = order[i]->rating;
+        }
         if (!order[i]->is_local && peer_name.empty())
           peer_name = order[i]->display_name;
       }

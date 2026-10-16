@@ -160,7 +160,21 @@ namespace PPOM {
         u16 text[64];     // the line to show ("" = the game's own)
         u8 timeUp;        // CSS: lock in now with the character on the CSS (no START needed)
         u8 _pad[3];
-    };                    // 0xB4
+        // The stage select's fighter preview (sss_fighters.cpp), by in-game port: each player's
+        // last lock-in (game 1: the characters locked in before the search; later games the last
+        // game's until the character step), name and Ranked rating. A Dolphin without it sends
+        // zeros (pvCount 0). The other player's entry is that machine's bytes: checked before use.
+        u8 pvCount;       // ports filled (the highest present + 1), 0 none
+        u8 _pvPad[3];
+        struct PreviewPlayer {
+            u8 present;
+            u8 charKind;  // gmCharacterKind (random resolved)
+            u8 costume;   // colour number, | COSTUME_ALT_Z / COSTUME_ALT_R
+            u8 local;     // 1: this player
+            float rating; // Elo; negative: none
+            u16 name[NAME_LEN];
+        } pv[2];          // 0xB8, 0x28 each
+    };                    // 0x108
 
     // 0xB9 GET_ONLINE_STATUS response payload.
     struct OnlineStatus {

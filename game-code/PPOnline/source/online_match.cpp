@@ -32,6 +32,7 @@
 #include "online.h"
 #include "online_menu.h"
 #include "ppom.h"
+#include "sss_fighters.h"
 #include "stage_legal.h"
 
 extern "C" {
@@ -67,6 +68,10 @@ namespace OnlineMatch {
 
     static const u32 SEL_PLAYERS = 0xB8;       // gmSelCharData: gmPlayerInitData[7] at +0xB8
     static const u32 PLAYER_SIZE = 0x5C;
+    // The empty record the online CSS starts with (no character, no name tag: m_nameIndex 0x78).
+    static const u8 PLAYER_TEMPLATE[PLAYER_SIZE] = {
+        0x3E, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0x78, 0, 0, 0, 0, 0, 0, 0x08, 0, 0, 0, 0, 0, 0x96};
     static const u32 MM_PLAYERS = 0x98;        // gmGlobalModeMelee players
     static const u32 MM_TIME_LIMIT = 0x20;     // gmGlobalModeMelee: the time limit (s32 frames)
     static const u32 MM_HANDICAP = 0x26;       // gmPlayerInitData: the handicap (u16; P+: tenths of a stock)
@@ -280,11 +285,8 @@ namespace OnlineMatch {
         // that nothing of this machine's own CSS (a name tag and its controls, rumble) gets into
         // the match. Per-player name tags and controls would be the design's port values (5.1),
         // not done yet: every player has the default controls.
-        static const u8 TEMPLATE[PLAYER_SIZE] = {
-            0x3E, 0x03, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-            0x78, 0, 0, 0, 0, 0, 0, 0x08, 0, 0, 0, 0, 0, 0x96};
         u8 tmpl[PLAYER_SIZE];
-        memcpy(tmpl, TEMPLATE, PLAYER_SIZE);
+        memcpy(tmpl, PLAYER_TEMPLATE, PLAYER_SIZE);
         u8 costume[4];
         u8 alt[4] = {0, 0, 0, 0};
         for (int i = 0; i < 4; i++) {
@@ -404,6 +406,41 @@ namespace OnlineMatch {
         return true;
     }
 
+    // Ranked's stage select shows both players' fighters (sss_fighters.cpp). Brawl's Versus loads
+    // the match's fighters while its stage select runs (its ftSlots, "#ftSlot init [slot Color
+    // Kind]" in the log), from the match's players (gmGlobalModeMelee+0x98); the online sequence
+    // has only this player's fighter by then (loaded as the CSS leaves, from gmSelCharData). So
+    // each player of the step's preview goes into its in-game port's record of both, from the same
+    // template as setupMatch (the CSS's own records are saved first and come back with backToCss;
+    // setupMatch builds the match's players again). The other player's character and costume are
+    // that machine's bytes: only what this CSS could lock in is used.
+    static void preloadPreview(u8* sel)
+    {
+        const PPOM::GameStep* st = SssFighters::previewStep();
+        if (!st) return;
+        u8* mm = gg(0x08);
+        if (!s_haveSaved) {
+            memcpy(s_savedSel, sel + SEL_PLAYERS, sizeof(s_savedSel));
+            s_savedTeams = sel[SEL_TEAMS];
+            s_haveSaved = true;
+        }
+        for (int port = 0; port < 2; port++) {
+            const PPOM::GameStep::PreviewPlayer& pv = st->pv[port];
+            if (!SssFighters::validPreview(pv)) continue;
+            u8* p = sel + SEL_PLAYERS + port * PLAYER_SIZE;
+            memcpy(p, PLAYER_TEMPLATE, PLAYER_SIZE);
+            p[0x00] = pv.charKind;
+            p[0x01] = 0;                                   // human
+            p[0x05] = pv.costume & PPOM::COSTUME_COLOUR;   // colour number
+            p[0x07] = (u8)port;                            // controller
+            if (mm) memcpy(mm + MM_PLAYERS + port * PLAYER_SIZE, p, PLAYER_SIZE);
+            const u8 alt = pv.costume & PPOM::COSTUME_ALTS;
+            *(volatile u32*)(ALT_COSTUME_WORDS + port * PLAYER_SIZE) =
+                alt == PPOM::COSTUME_ALT_Z ? 1 : alt == PPOM::COSTUME_ALT_R ? 2 : 0;
+        }
+        SssFighters::notePreload();
+    }
+
     // Back from a match (or the loser's stage select): the CSS with this player's own record.
     static void backToCss(u8* seq)
     {
@@ -434,6 +471,7 @@ namespace OnlineMatch {
             // every CSS entry), 0 Versus (sqVsMelee state 3). The stage select runs its Wi-Fi
             // paths on 0x10 even when opened with 0.
             sel[4] = 0;
+            preloadPreview(sel);
             ((VoidFn)0x806F882C)();
             ((SetNextSceneFn)0x8002D5AC)(mgr, "scSelStage", 0);
             *(u32*)(seq + 8) = 4;
