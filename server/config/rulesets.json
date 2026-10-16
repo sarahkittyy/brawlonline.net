@@ -10,8 +10,8 @@
     "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "pause": "hold", "hazards": false}
   },
   "ranked": {
-    "stages": [1, 4, 9, 12, 31, 33, 35, 45, 46],
-    "starters": [1, 4, 9, 33, 46],
+    "stages": [35, 31, 12, 45, 9, 33, 1, 46, 4],
+    "starters": [9, 33, 1, 46, 4],
     "items": 0,
     "rules": {"style": "stock", "stocks": 4, "timeMinutes": 8, "pause": "hold", "hazards": false}
   }

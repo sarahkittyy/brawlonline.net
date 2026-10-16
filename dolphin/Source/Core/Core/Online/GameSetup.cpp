@@ -840,6 +840,24 @@ View Current()
       }
     }
     v.selectable = e.remaining;
+    v.striking = e.striking;
+    const auto stage_id = [](u16 k) { return k != 0 && k <= 0xFF; };
+    for (const u16 k : s_format.starters)
+    {
+      if (stage_id(k) && std::find(v.starters.begin(), v.starters.end(), k) == v.starters.end())
+        v.starters.push_back(static_cast<u8>(k));
+    }
+    if (s_format.best_of > 1 && !s_format.strike_every_game)
+    {
+      for (const u16 k : s_format.counterpicks)
+      {
+        if (stage_id(k) && std::find(v.starters.begin(), v.starters.end(), k) == v.starters.end() &&
+            std::find(v.others.begin(), v.others.end(), k) == v.others.end())
+        {
+          v.others.push_back(static_cast<u8>(k));
+        }
+      }
+    }
     if (e.step_idx >= 0)
     {
       const StepInfo& st = e.steps[e.step_idx];

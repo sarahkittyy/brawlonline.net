@@ -118,13 +118,21 @@ mod tests {
         let r = Rulesets::parse(DEFAULT_RULESETS).unwrap();
         for mode in [Mode::Direct, Mode::Unranked, Mode::Ranked] {
             let m = r.for_mode(mode);
-            assert_eq!(m.stages, nine_stages(), "{mode:?}");
+            let mut stages = m.stages.clone();
+            stages.sort();   // Ranked's are in its stage select's order
+            assert_eq!(stages, nine_stages(), "{mode:?}");
             assert_eq!(m.items, 0, "{mode:?}");
             // P+'s competitive set; normal pause only in Direct, else hold START.
             let pause = if mode == Mode::Direct { Pause::Normal } else { Pause::Hold };
             assert_eq!(m.rules, MatchRules { pause, ..Default::default() }, "{mode:?}");
         }
-        assert_eq!(r.for_mode(Mode::Ranked).starters, common::rules::PPLUS_STARTERS);
+        // Ranked's stage select's bottom row, left to right (the user's, 2026-10-16).
+        assert_eq!(r.for_mode(Mode::Ranked).starters, [9, 0x21, 1, 0x2E, 4]);
+        let mut starters = common::rules::PPLUS_STARTERS.to_vec();
+        starters.sort();
+        let mut ranked = r.for_mode(Mode::Ranked).starters.clone();
+        ranked.sort();
+        assert_eq!(ranked, starters);
         assert!(r.for_mode(Mode::Direct).starters.is_empty());
         assert!(r.for_mode(Mode::Unranked).starters.is_empty());
         assert_eq!(r.for_mode(Mode::Party), ModeRules::default());

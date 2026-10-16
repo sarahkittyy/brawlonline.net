@@ -125,7 +125,7 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
     for g in (a, b):
         _wait(lambda g=g: g.c.mm_status()["handoff"] == "started", 30, "the hand-off")
         r = _ranked(g)
-        assert r["active"] and r["match_id"] == match_id and r["setup"]["starters"] == STARTERS, r
+        assert r["active"] and r["match_id"] == match_id and sorted(r["setup"]["starters"]) == STARTERS, r
     players = [a, b]
     host = a if _ranked(a)["local_port"] == 0 else b
     join = b if host is a else a

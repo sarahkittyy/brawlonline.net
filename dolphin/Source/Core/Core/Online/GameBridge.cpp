@@ -203,6 +203,12 @@ constexpr u32 GS_KINDS = 8, GS_MAX_KINDS = 40, GS_TEXT = 0x30, GS_TEXT_LEN = 64,
 // ... then Ranked's stage select players (ppom.h GameStep pvCount / pv): the count at 0xB4, and
 // per in-game port {present, charKind, costume, local, name u16[16]} from 0xB8.
 constexpr u32 GS_PREVIEW = 0xB4, GS_PREVIEW_PLAYERS = 2, GS_PREVIEW_SIZE = 0x24;
+// ... then the stage select's page (ppom.h GameStep nStarters...): at 0x100 the starters' count,
+// the other stages' count and striking, then starters u8[16] and others u8[32] (srStageKind).
+constexpr u32 GS_PAGE = 0x100, GS_PAGE_STARTERS = 0x104, GS_PAGE_OTHERS = 0x114;
+constexpr size_t GS_MAX_STARTERS = 16, GS_MAX_OTHERS = 32;
+static_assert(GS_PAGE == GS_PREVIEW + 4 + GS_PREVIEW_PLAYERS * GS_PREVIEW_SIZE);
+static_assert(GS_PAGE_OTHERS + GS_MAX_OTHERS <= RESP_PAYLOAD);
 constexpr u8 MODE_TEAMS = 3;
 
 // The game's OSModuleInfo list (first, last).
@@ -657,6 +663,16 @@ Response GameStepResponse()
     }
   }
   r.payload[GS_PREVIEW] = static_cast<u8>(previewed);
+  // The stage select's page: lists too long for it are not sent (P+'s own page, greyed).
+  if (!v.starters.empty() && v.starters.size() <= GS_MAX_STARTERS &&
+      v.others.size() <= GS_MAX_OTHERS)
+  {
+    r.payload[GS_PAGE] = static_cast<u8>(v.starters.size());
+    r.payload[GS_PAGE + 1] = static_cast<u8>(v.others.size());
+    r.payload[GS_PAGE + 2] = v.striking ? 1 : 0;
+    std::copy(v.starters.begin(), v.starters.end(), r.payload.begin() + GS_PAGE_STARTERS);
+    std::copy(v.others.begin(), v.others.end(), r.payload.begin() + GS_PAGE_OTHERS);
+  }
   r.summary = fmt::format("GP_FETCH_STEP active={} type={} turn={} count={} sss={} lock={} "
                           "time_up={} stages={} text='{}'",
                           v.active, u8(v.type), v.my_turn, v.count, v.to_sss, v.may_lock,

@@ -2453,9 +2453,9 @@ mod tests {
         let g = &sent(&out, 3)[1];
         assert!(g["matchId"].as_str().unwrap().starts_with("mode.ranked-"), "{g}");
         assert_eq!(g["stages"].as_array().unwrap().len(), 9);
-        // The starters struck for game 1: Battlefield, Luigi's Mansion, Temple of Time, Smashville,
-        // PS2.
-        assert_eq!(g["starters"], json!([1, 4, 9, 33, 46]));
+        // The starters struck for game 1, in the stage select's order (its bottom row, the user's,
+        // 2026-10-16): Temple of Time, Smashville, Battlefield, PS2, Luigi's Mansion.
+        assert_eq!(g["starters"], json!([9, 33, 1, 46, 4]));
         let ps = g["players"].as_array().unwrap();
         for p in ps {
             let me = if p["uid"] == u[0].uid.to_string() { &u[0] } else { &u[2] };

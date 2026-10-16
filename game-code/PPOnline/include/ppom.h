@@ -173,7 +173,16 @@ namespace PPOM {
             u8 local;     // 1: this player
             u16 name[NAME_LEN];
         } pv[2];          // 0xB8, 0x24 each
-    };                    // 0x100
+        // The stage select's page in a stage step (stage_legal.cpp): the set's starters, then the
+        // other stages its counterpick games add, each in the ruleset's order (srStageKind).
+        // nStarters 0: no page (an older Dolphin): P+'s own page, the rest greyed.
+        u8 nStarters;     // at most 16
+        u8 nOthers;       // at most 32
+        u8 striking;      // this game strikes the starters: only they are shown
+        u8 _pagePad;
+        u8 starters[16];
+        u8 others[32];
+    };                    // 0x134
 
     // 0xB9 GET_ONLINE_STATUS response payload.
     struct OnlineStatus {
