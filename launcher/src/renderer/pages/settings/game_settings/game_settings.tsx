@@ -120,7 +120,7 @@ export const GameSettings = React.memo(() => {
           }
         />
       </SettingItem>
-      <SettingItem name={Messages.playButtonAction()} description={Messages.playButtonActionDescription()}>
+      <SettingItem name={Messages.playButtonAction()}>
         <RadioGroup value={launchMeleeOnPlay} onChange={(_event, value) => onLaunchMeleeChange(value)}>
           <FormControlLabel value={true} label={Messages.launchMelee(GAME_NAME)} control={<Radio />} />
           <FormControlLabel value={false} label={Messages.launchDolphin()} control={<Radio />} />

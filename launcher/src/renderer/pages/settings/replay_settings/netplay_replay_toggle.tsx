@@ -50,7 +50,7 @@ export const NetplayReplayToggles = () => {
   );
 };
 
+// The label's own colour: white, and greyed only while the checkbox is disabled.
 const CheckboxDescription = styled.span`
   font-size: 14px;
-  color: ${({ theme }) => theme.palette.text.disabled};
 `;

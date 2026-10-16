@@ -13,7 +13,6 @@ import {
   ipc_configureDolphin,
   ipc_dolphinEvent,
   ipc_downloadDolphin,
-  ipc_fetchGeckoCodes,
   ipc_getChatKey,
   ipc_getDolphinPaths,
   ipc_hardResetDolphin,
@@ -24,7 +23,6 @@ import {
   ipc_openDolphinSettingsFolder,
   ipc_prepareRoomLaunch,
   ipc_removePlayKeyFile,
-  ipc_saveGeckoCodes,
   ipc_setChatKey,
   ipc_softResetDolphin,
   ipc_storePlayKeyFile,
@@ -35,7 +33,6 @@ import { deletePlayKeyFile, writePlayKeyFile } from "./playkey";
 import { clearRoomRequest, handOffRoom, isHandOffCode, readGameStatus, writeRoomRequest } from "./room_handoff";
 import { installRosettaElevated } from "./rosetta/install_rosetta";
 import { DolphinLaunchType } from "./types";
-import { fetchGeckoCodes, saveGeckoCodes } from "./util";
 
 export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: DolphinManager }) {
   dolphinManager.events.subscribe((event) => {
@@ -167,18 +164,6 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
 
   ipc_cancelRoomLaunch.main!.handle(async ({ id }) => {
     await clearRoomRequest(dolphinManager.netplayOnlineDir(), id);
-    return { success: true };
-  });
-
-  ipc_fetchGeckoCodes.main!.handle(async ({ dolphinType }) => {
-    const installation = dolphinManager.getInstallation(dolphinType);
-    const codes = await fetchGeckoCodes(installation);
-    return { codes };
-  });
-
-  ipc_saveGeckoCodes.main!.handle(async ({ dolphinType, geckoCodes }) => {
-    const installation = dolphinManager.getInstallation(dolphinType);
-    await saveGeckoCodes(installation, geckoCodes);
     return { success: true };
   });
 

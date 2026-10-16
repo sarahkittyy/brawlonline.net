@@ -3,8 +3,7 @@ export const ReplaySettingsMessages = {
   rootSlpFolderDescription: () => "The folder where your replays should be saved.",
 
   replayGraphics: () => "Replay & Spectating Graphics",
-  replayGraphicsDescription: () =>
-    "Replays and spectated games play in their own Dolphin, with its own resolution and other graphics settings.",
+  replayGraphicsDescription: () => "Replays and spectated games play in their own Dolphin.",
   replayGraphicsButton: () => "Replay Dolphin settings",
 
   closeDolphinToChangeSetting: () => "Close Dolphin to change this setting",

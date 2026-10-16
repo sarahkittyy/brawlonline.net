@@ -14,6 +14,7 @@ export const Checkbox = ({ label, className, disabled, hoverText, ...rest }: Che
   return (
     <FormControlLabel
       className={className}
+      disabled={disabled}
       control={
         <Tooltip title={hoverText ?? ""} style={{ cursor: disabled ? "initial" : "pointer" }}>
           <div>

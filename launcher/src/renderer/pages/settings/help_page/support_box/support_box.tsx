@@ -1,9 +1,11 @@
 import { css } from "@emotion/react";
+import BugReportOutlinedIcon from "@mui/icons-material/BugReportOutlined";
 import DownloadIcon from "@mui/icons-material/Download";
 import LiveHelpIcon from "@mui/icons-material/LiveHelp";
 import log from "electron-log";
 import { useState } from "react";
 
+import { BugReportDialog } from "@/app/header/bug_report/bug_report_button";
 import { Button } from "@/components/form/button";
 import { useToasts } from "@/lib/hooks/use_toasts";
 
@@ -15,6 +17,7 @@ export const SupportBox = () => {
   const { showError, showSuccess } = useToasts();
 
   const [saving, setSaving] = useState(false);
+  const [reportOpen, setReportOpen] = useState(false);
 
   const onDownload = () => {
     setSaving(true);
@@ -50,6 +53,11 @@ export const SupportBox = () => {
         `}
       >
         <div>
+          <Button startIcon={<BugReportOutlinedIcon />} onClick={() => setReportOpen(true)}>
+            {Messages.reportBug()}
+          </Button>
+        </div>
+        <div>
           <Button startIcon={<DownloadIcon />} onClick={onDownload} disabled={saving}>
             {saving ? Messages.savingLogs() : Messages.downloadLogs()}
           </Button>
@@ -58,6 +66,7 @@ export const SupportBox = () => {
           <NetworkDiagnosticsButton />
         </div>
       </div>
+      <BugReportDialog open={reportOpen} onClose={() => setReportOpen(false)} />
     </div>
   );
 };

@@ -87,7 +87,7 @@ export const ChatKeySetting = () => {
   };
 
   return (
-    <SettingItem name={Messages.chatKey()} description={Messages.chatKeyDescription()}>
+    <SettingItem name={Messages.chatKey()}>
       <Tooltip title={netplayDolphinOpen ? Messages.closeDolphinToChange() : ""} placement="bottom-start">
         <div
           css={css`

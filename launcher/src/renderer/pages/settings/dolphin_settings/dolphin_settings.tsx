@@ -17,7 +17,6 @@ import { useServices } from "@/services";
 import { SettingItem } from "../setting_item_section";
 import { DolphinSettingsMessages as Messages } from "./dolphin_settings.messages";
 import { GameFilesFolder } from "./game_files_folder";
-import { GeckoCodes } from "./gecko_codes/gecko_codes";
 import { PLAYBACK_DOLPHIN_SETTINGS_PATH } from "./paths";
 
 enum ResetType {
@@ -40,15 +39,6 @@ const getDolphinSettingsName = (dolphinType: DolphinLaunchType) => {
       return Messages.netplayDolphinSettings();
     case DolphinLaunchType.PLAYBACK:
       return Messages.playbackDolphinSettings();
-  }
-};
-
-const getGeckoCodesName = (dolphinType: DolphinLaunchType) => {
-  switch (dolphinType) {
-    case DolphinLaunchType.NETPLAY:
-      return Messages.netplayGeckoCodes();
-    case DolphinLaunchType.PLAYBACK:
-      return Messages.playbackGeckoCodes();
   }
 };
 
@@ -167,9 +157,6 @@ export const DolphinSettings = ({ dolphinType }: { dolphinType: DolphinLaunchTyp
             </Button>
           )}
         </div>
-      </SettingItem>
-      <SettingItem name={getGeckoCodesName(dolphinType)}>
-        <GeckoCodes dolphinType={dolphinType} disabled={!dolphinIsReady} />
       </SettingItem>
       <SettingItem name={Messages.resetDolphin(dolphinTypeName)}>
         <ConfirmationModal

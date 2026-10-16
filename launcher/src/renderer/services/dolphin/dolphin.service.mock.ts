@@ -1,7 +1,6 @@
 import type { ChatKeyPress } from "@common/chat_key";
 import { chatKeyExpression, DEFAULT_CHAT_KEY } from "@common/chat_key";
 import { delay } from "@common/delay";
-import type { GeckoCode } from "@dolphin/config/gecko_code";
 import type { RoomHandOffResult } from "@dolphin/room_handoff";
 import type {
   DolphinDownloadProgressEvent,
@@ -134,15 +133,6 @@ class MockDolphinClient implements DolphinService {
       this.chatKey = chatKey;
     }
     return chatKey;
-  }
-
-  @delayAndMaybeError(SHOULD_ERROR)
-  async fetchGeckoCodes(_dolphinLaunchType: DolphinLaunchType): Promise<GeckoCode[]> {
-    throw new Error("Method not implemented.");
-  }
-  @delayAndMaybeError(SHOULD_ERROR)
-  async saveGeckoCodes(_dolphinLaunchType: DolphinLaunchType, _geckoCodes: GeckoCode[]): Promise<void> {
-    throw new Error("Method not implemented.");
   }
 
   @delayAndMaybeError(SHOULD_ERROR)

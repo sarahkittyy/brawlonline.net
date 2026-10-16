@@ -5,7 +5,6 @@ export const GameSettingsMessages = {
   noFileSet: () => "No file set",
   verifying: () => "Verifying...",
   playButtonAction: () => "Play Button Action",
-  playButtonActionDescription: () => "Choose what happens when the Play button is pressed.",
   launchMelee: (gameName: string) => "Launch {0}",
   launchDolphin: () => "Launch Dolphin",
   inputDelay: () => "Input Delay",
@@ -17,10 +16,8 @@ export const GameSettingsMessages = {
   enableStreamGamesDescription: () =>
     "Streams inputs to the server for others to spectate you. Very minimal network load. Your opponent's game may still stream the match.",
   closeDolphinAfterSpectating: () => "Close Dolphin after a spectated game ends",
-  closeDolphinAfterSpectatingDescription: () =>
-    "When a game you're watching ends, show its last moments for 5 seconds, then close Dolphin. Auto play on the Spectate tab keeps it open instead.",
+  closeDolphinAfterSpectatingDescription: () => "Auto play on the Spectate tab keeps it open.",
   chatKey: () => "Chat Key",
-  chatKeyDescription: () => "The key that opens the chat box in game. Pick one your keyboard controls don't use.",
   chatKeyPressAKey: () => "Press a key...",
   chatKeyEscToCancel: () => "Esc to cancel",
   chatKeyRefused: () => "Use a letter, number, F key or punctuation key, with no Ctrl, Alt or Shift.",

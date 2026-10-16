@@ -5,17 +5,13 @@ export const DolphinSettingsMessages = {
   version: (versionString: string) => `Version: {0}`,
   netplayDolphinSettings: () => "Netplay Dolphin Settings",
   playbackDolphinSettings: () => "Replay Dolphin Settings",
-  configureNetplayDescription: () =>
-    "Graphics, controllers and hotkeys for Play, Ranked and rooms. Replays and spectated games play in the Replay Dolphin, which has its own settings.",
-  configurePlaybackDescription: () =>
-    "Graphics (such as the resolution), hotkeys and the window for replays and spectated games. They are separate from the Netplay Dolphin's: set them here, or from this Dolphin's Options menu while watching.",
+  configureNetplayDescription: () => "Graphics, controllers, and hotkeys for Play, Ranked, and rooms.",
+  configurePlaybackDescription: () => "Graphics & hotkeys for replays and spectated games.",
   replayDolphinSettingsLink: () => "Replay Dolphin settings",
   configureDolphinButton: () => "Configure Dolphin",
   openSettingsFolderButton: () => "Open settings folder",
   notFound: () => "Not found",
   unknown: () => "Unknown",
-  netplayGeckoCodes: () => "Netplay Gecko Codes",
-  playbackGeckoCodes: () => "Replay Gecko Codes",
   resetDolphin: (dolphinTypeName: string) => `Reset {0}`,
   areYouSure: () => "Are you sure?",
   thisWillRemoveAllYourDolphinSettings: (dolphinTypeName: string) => `This will remove all your {0} settings.`,
@@ -28,7 +24,7 @@ export const DolphinSettingsMessages = {
     "Requires Brawl Online's specific dolphin build to function. Any regular dolphin install will not work.",
   gameFilesFolder: () => "Game Files Folder",
   gameFilesFolderDescription: () =>
-    "Where Dolphin, Project+ and its SD card are kept (about 4 GB). Choose another folder to move them there, for example to another drive.",
+    "Where Dolphin, Project+ and its SD card are kept (about 4 GB). Choose another folder to move them there.",
   moveGameFiles: () => "Move",
   defaultFolderButton: () => "Use default",
   waitForSetup: () => "Wait for Dolphin's set-up to finish",

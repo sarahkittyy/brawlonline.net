@@ -2,14 +2,12 @@
 
 import type { ChatKeyPress } from "@common/chat_key";
 
-import type { GeckoCode } from "./config/gecko_code";
 import {
   ipc_cancelRoomLaunch,
   ipc_checkPlayKeyExists,
   ipc_configureDolphin,
   ipc_dolphinEvent,
   ipc_downloadDolphin,
-  ipc_fetchGeckoCodes,
   ipc_getChatKey,
   ipc_getDolphinPaths,
   ipc_hardResetDolphin,
@@ -20,7 +18,6 @@ import {
   ipc_openDolphinSettingsFolder,
   ipc_prepareRoomLaunch,
   ipc_removePlayKeyFile,
-  ipc_saveGeckoCodes,
   ipc_setChatKey,
   ipc_softResetDolphin,
   ipc_storePlayKeyFile,
@@ -97,13 +94,6 @@ const dolphinApi: DolphinService = {
   async setChatKey(press: ChatKeyPress): Promise<string | null> {
     const { result } = await ipc_setChatKey.renderer!.trigger({ press });
     return result.chatKey;
-  },
-  async fetchGeckoCodes(dolphinType: DolphinLaunchType): Promise<GeckoCode[]> {
-    const { result } = await ipc_fetchGeckoCodes.renderer!.trigger({ dolphinType });
-    return result.codes;
-  },
-  async saveGeckoCodes(dolphinType: DolphinLaunchType, geckoCodes: GeckoCode[]): Promise<void> {
-    await ipc_saveGeckoCodes.renderer!.trigger({ dolphinType, geckoCodes });
   },
   onEvent<T extends DolphinEventType>(eventType: T, handle: (event: DolphinEventMap[T]) => void) {
     const { destroy } = ipc_dolphinEvent.renderer!.handle(async (result) => {

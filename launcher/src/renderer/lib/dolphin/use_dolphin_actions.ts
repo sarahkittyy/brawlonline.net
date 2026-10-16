@@ -1,4 +1,3 @@
-import type { GeckoCode } from "@dolphin/config/gecko_code";
 import type { DolphinService, ReplayQueueItem } from "@dolphin/types";
 import { DolphinLaunchType } from "@dolphin/types";
 import log from "electron-log";
@@ -151,29 +150,6 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
     [getInstallStatus, launcherIsUpToDate, dolphinService, showError],
   );
 
-  const readGeckoCodes = useCallback(
-    async (dolphinType: DolphinLaunchType) => {
-      if (getInstallStatus(dolphinType) !== DolphinStatus.READY) {
-        showError(Messages.dolphinIsUpdating());
-        return;
-      }
-      return await dolphinService.fetchGeckoCodes(dolphinType);
-    },
-    [dolphinService, getInstallStatus, showError],
-  );
-
-  const saveGeckoCodes = useCallback(
-    async (dolphinType: DolphinLaunchType, geckoCodes: GeckoCode[]) => {
-      if (getInstallStatus(dolphinType) !== DolphinStatus.READY) {
-        showError(Messages.dolphinIsUpdating());
-        return;
-      }
-
-      return await dolphinService.saveGeckoCodes(dolphinType, geckoCodes);
-    },
-    [dolphinService, getInstallStatus, showError],
-  );
-
   return {
     openConfigureDolphin,
     softResetDolphin,
@@ -181,7 +157,5 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
     launchNetplay,
     viewReplays,
     updateDolphin,
-    readGeckoCodes,
-    saveGeckoCodes,
   };
 };

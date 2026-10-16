@@ -2,7 +2,6 @@ import type { ChatKeyPress } from "@common/chat_key";
 import type { EmptyPayload, SuccessPayload } from "utils/ipc";
 import { _, makeEndpoint } from "utils/ipc";
 
-import type { GeckoCode } from "./config/gecko_code";
 import type { RoomHandOffResult } from "./room_handoff";
 import type { DolphinEvent, DolphinLaunchType, GameFilesMoveOutcome, PlayKey, ReplayQueueItem } from "./types";
 
@@ -86,18 +85,6 @@ export const ipc_prepareRoomLaunch = makeEndpoint.main(
 
 /** Takes a prepared room request back (Play did not start the game). */
 export const ipc_cancelRoomLaunch = makeEndpoint.main("cancelRoomLaunch", <{ id: string }>_, <SuccessPayload>_);
-
-export const ipc_fetchGeckoCodes = makeEndpoint.main(
-  "fetchGeckoCodes",
-  <{ dolphinType: DolphinLaunchType }>_,
-  <{ codes: GeckoCode[] }>_,
-);
-
-export const ipc_saveGeckoCodes = makeEndpoint.main(
-  "saveGeckoCodes",
-  <{ dolphinType: DolphinLaunchType; geckoCodes: GeckoCode[] }>_,
-  <SuccessPayload>_,
-);
 
 /** The key that opens the chat box, as an expression (common/chat_key.ts). */
 export const ipc_getChatKey = makeEndpoint.main("getChatKey", <EmptyPayload>_, <{ chatKey: string }>_);

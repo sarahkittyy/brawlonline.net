@@ -290,7 +290,7 @@ Shown for comparison. It is what Orca does.
 | Host in a match | The joiner plugs in at frame S, mid-match, unless that is blocked |
 | Host leaves | Every joiner is left on a copy of the host's machine; Orca's "Going home" rules |
 | Slow join | 26-30 MB per join. 5.7-7.2 s on Orca over the internet; about 25 s on a 10 Mbit/s uplink. The upload competes with the host's own rollback traffic. |
-| Version mismatch | The whole machine must match: Dolphin settings, the P+ SD card, and **every Gecko code** (our launcher keeps Slippi's Gecko code manager, so users may differ). |
+| Version mismatch | The whole machine must match: Dolphin settings, the P+ SD card, and **every Gecko code** (the launcher no longer has Slippi's Gecko code manager, but codes a player added earlier stay in `User/GameSettings/RSBE01.ini`). |
 | 3rd and 4th player | Orca tested only two. With a third, a catching-up joiner stalls the live players. |
 
 ### 6.3 Technical cost

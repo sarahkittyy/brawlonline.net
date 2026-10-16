@@ -148,6 +148,25 @@ const addOverrides = (theme: Theme, palette: ThemePalette, frames: ThemeFrames) 
           color: "primary",
         },
       },
+      // MUI's switch is the accent on a half-transparent accent track when on (lost on P+'s teal
+      // page, which has the accent's hue) and a faint white track when off (reads as disabled):
+      // off is a light thumb on a dark outlined track, on a white thumb on a solid accent track.
+      MuiSwitch: {
+        styleOverrides: {
+          switchBase: {
+            color: "#e0e0e0",
+            "&.Mui-checked": { color: "#ffffff" },
+            "&.Mui-checked + .MuiSwitch-track": { opacity: 1 },
+            "&.Mui-disabled": { color: "#7a7a7a" },
+            "&.Mui-disabled + .MuiSwitch-track": { opacity: 0.35 },
+          },
+          track: {
+            opacity: 1,
+            backgroundColor: "rgba(0, 0, 0, 0.45)",
+            boxShadow: "inset 0 0 0 1px rgba(255, 255, 255, 0.55)",
+          },
+        },
+      },
       MuiPaper: {
         styleOverrides: {
           root: {

@@ -1,7 +1,6 @@
 import type { ChatKeyPress } from "@common/chat_key";
 
 import type { SyncedDolphinSettings } from "./config/config";
-import type { GeckoCode } from "./config/gecko_code";
 import type { DolphinVersionResponse } from "./install/fetch_latest_version";
 import type { RoomHandOffResult } from "./room_handoff";
 
@@ -198,8 +197,6 @@ export interface DolphinService {
   getChatKey(): Promise<string>;
   /** Sets the chat key to the pressed key; null (nothing changed) for a key that can't open chat. */
   setChatKey(press: ChatKeyPress): Promise<string | null>;
-  fetchGeckoCodes(dolphinLaunchType: DolphinLaunchType): Promise<GeckoCode[]>;
-  saveGeckoCodes(dolphinLaunchType: DolphinLaunchType, geckoCodes: GeckoCode[]): Promise<void>;
   onEvent<T extends DolphinEventType>(eventType: T, handle: (event: DolphinEventMap[T]) => void): () => void;
 }
 

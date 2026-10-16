@@ -8,13 +8,32 @@ msgstr ""
 "n%10<=4 && (n%100<10 || n%100>=20) ? 1 : 2);\n"
 "x-generator: i18next-auto-keys CLI\n"
 "Language: ru-RU\n"
-"PO-Revision-Date: 2026-10-10T20:09:17.947Z\n"
+"PO-Revision-Date: 2026-10-16T02:24:50.841Z\n"
+
+#: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:14:26
+msgid " if you're not here for Project Plus."
+msgstr ""
 
 #: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:4:19
 msgid "#"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:12:23
+#: src/renderer/pages/home/spectate/spectate.messages.ts:16:14
+msgid "&"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:144:5
+msgid ""
+"(!) SD cards can be used to run code on your Wii. Only download from a "
+"friend you trust, never a stranger."
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:105:24
+msgid "0 is no time limit (stock only)."
+msgstr ""
+
+#: src/renderer/lib/ranked_format.messages.ts:5:19
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:18:23
 msgid "1v1"
 msgstr ""
 
@@ -26,15 +45,31 @@ msgstr "2-4 заглавные латинские буквы"
 msgid "7z files must be uncompressed to be used in Dolphin."
 msgstr "7z файлы должны быть распакованы для использования в Dolphin."
 
+#: src/renderer/pages/home/mods/mods.messages.ts:9:27
+msgid "A Brawl mod's Dolphin folder, like Brawl Minus or REX."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:7:26
+msgid "A Wii or GameCube disc image."
+msgstr ""
+
 #: src/renderer/components/verify_email_form/verify_email_form.messages.ts:7:42
 msgid "A confirmation email has been sent to:"
 msgstr "Письмо с подтверждением было отправлено на:"
+
+#: src/renderer/pages/home/mods/mods.messages.ts:87:23
+msgid "A mod's .dol or .elf. Leave empty to play the disc."
+msgstr ""
 
 #: src/renderer/listeners/listeners.messages.ts:3:23
 msgid "A network error occurred."
 msgstr "Произошла сетевая ошибка."
 
-#: src/renderer/lib/ranked_format.messages.ts:8:20
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:91:21
+msgid "A random stage every game."
+msgstr ""
+
+#: src/renderer/lib/ranked_format.messages.ts:18:20
 msgid "Abandoned"
 msgstr ""
 
@@ -43,16 +78,36 @@ msgid "Activate online play"
 msgstr "Активировать онлайн"
 
 #: src/renderer/components/multi_path_input/multi_path_input.messages.ts:3:14
-#: src/renderer/pages/settings/dolphin_settings/gecko_codes/add_codes/add_codes.messages.ts:6:14
-#: src/renderer/pages/settings/dolphin_settings/gecko_codes/gecko_codes.messages.ts:6:14
+#: src/renderer/pages/home/mods/mods.messages.ts:92:14
 msgid "Add"
 msgstr "Добавить"
+
+#: src/renderer/pages/home/mods/mods.messages.ts:78:24
+#. Adding a build.
+msgid "Add a game"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:20:19
+msgid "Add a game or a mod folder to play."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:79:22
+msgid "Add a mod"
+msgstr ""
 
 #: src/renderer/app/header/account_switcher/account_switcher.messages.ts:2:28
 msgid "Add another account"
 msgstr "Добавить аккаунт"
 
-#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:8:31
+#: src/renderer/pages/home/mods/mods.messages.ts:6:19
+msgid "Add game"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:8:20
+msgid "Add mod folder"
+msgstr ""
+
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:12:31
 msgid "Additional Replay Folders"
 msgstr ""
 
@@ -68,6 +123,14 @@ msgstr ""
 msgid "All"
 msgstr ""
 
+#: src/renderer/pages/rulesets/items_section.messages.ts:5:17
+msgid "All off"
+msgstr ""
+
+#: src/renderer/pages/rulesets/items_section.messages.ts:4:16
+msgid "All on"
+msgstr ""
+
 #: src/renderer/pages/replays/replay_browser/file_selection_toolbar/file_selection_toolbar.messages.ts:3:40
 #. {0} count: number
 msgid "All {0, plural, one {# file} other {# files}} selected"
@@ -78,6 +141,14 @@ msgstr ""
 #: src/renderer/pages/quick_start/steps/verify_email_step/verify_email_step.messages.ts:3:27
 msgid "An error occurred. The application does not have a user."
 msgstr "Произошла ошибка. У приложения нет пользователя."
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:84:19
+msgid "Any stage"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:86:23
+msgid "Any stage in game."
+msgstr ""
 
 #: src/renderer/pages/settings/appearance_settings/language_selector/language_selector.messages.ts:2:22
 msgid "App Language"
@@ -91,20 +162,29 @@ msgstr "Настройки приложения"
 msgid "Appearance"
 msgstr "Внешний вид"
 
-#: src/renderer/pages/settings/dolphin_settings/gecko_codes/manage_codes/manage_codes.messages.ts:5:21
-msgid "Are you sure you want to delete this code?"
-msgstr "Вы уверены, что хотите удалить этот код?"
-
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:9:36
 msgid "Are you sure you want to log out?"
 msgstr "Вы уверены, что хотите разлогиниться?"
 
-#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:15:21
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:16:21
 msgid "Are you sure?"
 msgstr "Вы уверены?"
 
-#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:12:25
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:11:25
 msgid "Auto"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:112:22
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:152:22
+msgid "Auto L-cancel"
+msgstr ""
+
+#: src/renderer/pages/home/spectate/spectate.messages.ts:3:19
+msgid "Auto play"
+msgstr ""
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:19:49
+msgid "Auto play on the Spectate tab keeps it open."
 msgstr ""
 
 #: src/renderer/initialize_app.messages.ts:11:38
@@ -124,6 +204,7 @@ msgid "Available"
 msgstr "Доступно"
 
 #: src/renderer/pages/quick_start/stepper_dots/stepper_dots.messages.ts:3:15
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:42:15
 msgid "Back"
 msgstr "Назад"
 
@@ -131,8 +212,20 @@ msgstr "Назад"
 msgid "Back to replays"
 msgstr "Назад к реплеям"
 
+#: src/renderer/lib/ranked_format.messages.ts:13:19
+msgid "Blue team"
+msgstr ""
+
 #: src/renderer/pages/settings/game_settings/game_settings.messages.ts:2:23
 msgid "Brawl ISO File"
+msgstr ""
+
+#: src/renderer/app/header/bug_report/bug_report.messages.ts:3:20
+msgid "Bug Report"
+msgstr ""
+
+#: src/renderer/app/header/bug_report/bug_report.messages.ts:11:17
+msgid "Bug report sent. Thank you!"
 msgstr ""
 
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:30:27
@@ -147,18 +240,30 @@ msgstr ""
 msgid "Can't find the email? Check your spam folder. Still missing? "
 msgstr "Не можете найти письмо? Проверьте спам-каталог. Все еще не пришло? "
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:6:22
+#: src/renderer/pages/home/mods/mods.messages.ts:101:33
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:11:22
+#: src/renderer/pages/home/spectate/spectate.messages.ts:7:22
 msgid "Can't reach the server right now."
 msgstr ""
 
-#: src/renderer/app/header/header.messages.ts:17:17
+#: src/renderer/app/header/bug_report/bug_report.messages.ts:10:17
+#: src/renderer/app/header/header.messages.ts:19:17
 #: src/renderer/components/confirmation_modal/confirmation_modal.messages.ts:3:17
 #: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:9:17
+#: src/renderer/pages/home/mods/mods.messages.ts:91:17
 msgid "Cancel"
 msgstr "Отмена"
 
 #: src/renderer/components/multi_path_input/multi_path_input.messages.ts:5:36
 msgid "Cannot add subfolders of the Root Replay Folder."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:29:22
+msgid "Change this game's name or files."
+msgstr ""
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:20:18
+msgid "Chat Key"
 msgstr ""
 
 #: src/renderer/components/verify_email_form/verify_email_form.messages.ts:3:28
@@ -170,7 +275,7 @@ msgid "Check for updates"
 msgstr "Проверить обновления"
 
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostics_button.messages.ts:6:29
-#: src/renderer/pages/settings/help_page/support_box/support_box.messages.ts:7:29
+#: src/renderer/pages/settings/help_page/support_box/support_box.messages.ts:8:29
 msgid "Check network issues"
 msgstr "Проверить сетевые проблемы"
 
@@ -178,21 +283,22 @@ msgstr "Проверить сетевые проблемы"
 msgid "Checking for updates..."
 msgstr "Проверка обновлений..."
 
-#: src/renderer/app/header/header.messages.ts:11:29
+#: src/renderer/pages/home/mods/mods.messages.ts:26:23
+msgid "Checking the disc…"
+msgstr ""
+
+#: src/renderer/app/header/header.messages.ts:13:29
 #: src/renderer/pages/quick_start/steps/activate_online_step/activate_online_step.messages.ts:2:29
 msgid "Choose a connect code"
 msgstr "Выберите коннект-код"
 
-#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:10:5
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:14:5
 msgid ""
 "Choose any additional replay folders that should show up in the replay "
 "browser."
 msgstr ""
 
-#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:8:38
-msgid "Choose what happens when the Play button is pressed."
-msgstr "Выберите, что должно происходить при нажатии кнопки Играть."
-
+#: src/renderer/pages/home/mods/mods.messages.ts:90:16
 #: src/renderer/pages/replays/replay_browser/file_selection_toolbar/file_selection_toolbar.messages.ts:5:16
 msgid "Clear"
 msgstr "Очистить"
@@ -209,19 +315,46 @@ msgstr "Удалить файлы"
 msgid "Clear filter"
 msgstr "Сбросить фильтр"
 
+#: src/renderer/pages/home/mods/mods.messages.ts:134:25
+msgid "Click to change it in your game."
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:25:22
+msgid "Click to show"
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:19:20
+#: src/renderer/pages/home/mods/mods.messages.ts:19:16
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:57:16
 #: src/renderer/pages/settings/settings_page.messages.ts:2:16
 msgid "Close"
 msgstr "Закрыть"
 
-#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:21:31
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:18:38
+msgid "Close Dolphin after a spectated game ends"
+msgstr ""
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:22:31
 #: src/renderer/pages/settings/game_settings/game_settings.messages.ts:4:31
-#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:5:38
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:9:38
 msgid "Close Dolphin to change this setting"
 msgstr "Закройте Dolphin для изменения этой настройки"
 
-#: src/renderer/pages/settings/dolphin_settings/gecko_codes/manage_codes/manage_codes.messages.ts:7:32
-msgid "Code copied to clipboard!"
-msgstr "Код скопирован!"
+#: src/renderer/components/social/social.messages.ts:6:22
+msgid "Close search"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:69:20
+msgid "Close slot"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:62:21
+msgid "Closed"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:67:15
+msgid "Code"
+msgstr ""
 
 #: src/renderer/lib/validate/validate.messages.ts:6:24
 msgid "Code is too long"
@@ -231,6 +364,19 @@ msgstr "Код слишком длинный"
 msgid "Code is too short"
 msgstr "Код слишком короткий"
 
+#: src/renderer/pages/home/overview/public_rooms/ruleset_box.messages.ts:7:19
+msgid "Codes are 6 letters"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:102:15
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:142:15
+msgid "Coin"
+msgstr ""
+
+#: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:7:21
+msgid "Coming soon"
+msgstr ""
+
 #: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:11:5
 #. {0} productName: string
 msgid ""
@@ -238,7 +384,11 @@ msgid ""
 "an uncompressed ISO."
 msgstr ""
 
-#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:8:33
+#: src/renderer/pages/home/mods/mods.messages.ts:43:20
+msgid "Configure"
+msgstr ""
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:11:33
 msgid "Configure Dolphin"
 msgstr "Конфигурировать Dolphin"
 
@@ -247,7 +397,7 @@ msgstr "Конфигурировать Dolphin"
 msgid "Configure {0}"
 msgstr "Конфигурирация {0}"
 
-#: src/renderer/app/header/header.messages.ts:19:18
+#: src/renderer/app/header/header.messages.ts:21:18
 #: src/renderer/components/confirmation_modal/confirmation_modal.messages.ts:2:18
 msgid "Confirm"
 msgstr "Подтвердить"
@@ -264,14 +414,27 @@ msgstr "Подтвердите код"
 msgid "Confirm password"
 msgstr "Подтвердите пароль"
 
-#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:6:22
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:7:22
 msgid "Connect code"
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:8:21
+msgid "Connecting..."
 msgstr ""
 
 #: src/renderer/components/login_form/login_form.messages.ts:15:19
 #: src/renderer/pages/quick_start/steps/setup_complete_step/setup_complete_step.messages.ts:3:19
 msgid "Continue"
 msgstr "Продолжить"
+
+#: src/renderer/pages/home/mods/mods.messages.ts:39:21
+msgid "Controller"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:59:17
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:44:17
+msgid "Copied"
+msgstr ""
 
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:7:17
 msgid "Copied!"
@@ -281,31 +444,60 @@ msgstr "Скопировано!"
 msgid "Copy"
 msgstr "Скопировать"
 
+#: src/renderer/pages/home/mods/mods.messages.ts:57:19
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:41:19
+msgid "Copy code"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:40:19
+msgid "Copy link"
+msgstr ""
+
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:8:22
 msgid "Copy results"
 msgstr "Скопировать"
 
-#: src/renderer/pages/settings/dolphin_settings/gecko_codes/manage_codes/manage_codes.messages.ts:3:26
-msgid "Copy to Clipboard"
-msgstr "Скопировать в буфер обмена"
-
 #: src/renderer/app/header/play_button/play_button.messages.ts:6:23
 msgid "Copying files"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:43:23
+msgid "Couldn't load this ruleset."
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:28:21
+msgid "Couldn't load your rulesets."
+msgstr ""
+
+#: src/renderer/pages/rulesets/stages_section.messages.ts:3:22
+msgid "Counterpick"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:158:23
+msgid "Counterpicks"
 msgstr ""
 
 #: src/renderer/components/login_form/login_form.messages.ts:2:26
 msgid "Create an account"
 msgstr "Создать аккаунт"
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:9:23
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:14:22
+msgid "Create one above! It will show up here."
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:15:23
 msgid "Create one in game:"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:6:21
+msgid "Create room"
 msgstr ""
 
 #: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:5:27
 msgid "Crunching numbers..."
 msgstr "Обрабатываем данные..."
 
-#: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:9:22
+#: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:10:22
 msgid "Current file"
 msgstr "Текущий файл"
 
@@ -313,29 +505,72 @@ msgstr "Текущий файл"
 msgid "Current folder"
 msgstr "Текущий каталог"
 
-#: src/renderer/pages/profile/profile_page.messages.ts:11:15
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:3:24
+msgid "Custom"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:133:14
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:95:14
+msgid "DSR"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:106:22
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:147:22
+msgid "Damage ratio"
+msgstr ""
+
+#: src/renderer/pages/profile/profile_page.messages.ts:12:15
 msgid "Date"
 msgstr ""
 
 #: src/renderer/pages/replays/replay_browser/file_list/file_list.messages.ts:3:17
 #: src/renderer/pages/replays/replay_browser/file_selection_toolbar/file_selection_toolbar.messages.ts:4:17
-#: src/renderer/pages/settings/dolphin_settings/gecko_codes/manage_codes/manage_codes.messages.ts:6:17
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:36:17
 msgid "Delete"
 msgstr "Удалить"
 
-#: src/renderer/pages/settings/dolphin_settings/gecko_codes/manage_codes/manage_codes.messages.ts:2:21
-msgid "Delete Code"
-msgstr "Удалить код"
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:62:27
+msgid "Delete this draft?"
+msgstr ""
+
+#: src/renderer/app/header/bug_report/bug_report.messages.ts:5:5
+msgid ""
+"Describe what went wrong. I genuinely look at all of these, and each one "
+"helps me improve the game."
+msgstr ""
 
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:33:36
 msgid "Detected (it could also be a VPN)"
 msgstr "Обнаружен (так же может быть VPN)"
 
 #: src/renderer/lib/ranked_format.messages.ts:4:17
+#: src/renderer/pages/home/spectate/spectate.messages.ts:13:21
 msgid "Direct"
 msgstr ""
 
-#: src/renderer/app/header/header.messages.ts:20:22
+#: src/renderer/pages/home/mods/mods.messages.ts:84:15
+msgid "Disc image"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:60:18
+msgid "Discard"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:58:23
+msgid "Discard changes?"
+msgstr ""
+
+#: src/renderer/app/header/header.messages.ts:11:18
+#: src/renderer/pages/home/mods/mods.messages.ts:109:18
+msgid "Discord"
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:31:18
+#: src/renderer/pages/home/mods/mods.messages.ts:58:18
+msgid "Dismiss"
+msgstr ""
+
+#: src/renderer/app/header/header.messages.ts:22:22
 #: src/renderer/components/login_form/login_form.messages.ts:5:22
 msgid "Display Name"
 msgstr "Никнейм"
@@ -374,6 +609,10 @@ msgid ""
 "the crash."
 msgstr ""
 
+#: src/renderer/pages/home/mods/mods.messages.ts:94:22
+msgid "Dolphin is already open. Close it first."
+msgstr ""
+
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:16:39
 msgid "Dolphin is currently running. Close Dolphin to switch accounts"
 msgstr "Dolphin в данный момент запущен. Закройте Dolphin для переключения аккаунтов"
@@ -388,10 +627,11 @@ msgid "Dolphin is updating. Try again later."
 msgstr "Dolphin обновляется. Попробуйте позже."
 
 #: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:13:15
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:69:15
 msgid "Done"
 msgstr ""
 
-#: src/renderer/pages/settings/help_page/support_box/support_box.messages.ts:5:23
+#: src/renderer/pages/settings/help_page/support_box/support_box.messages.ts:6:23
 msgid "Download logs"
 msgstr ""
 
@@ -413,14 +653,49 @@ msgstr ""
 msgid "Downloading version {0}..."
 msgstr "Скачивается версия {0}..."
 
-#: src/renderer/pages/settings/dolphin_settings/gecko_codes/add_codes/add_codes.messages.ts:4:28
-msgid "Duplicate code name"
-msgstr "Код с таким именем уже существует"
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:51:22
+msgid "Draft"
+msgstr ""
 
-#: src/renderer/app/header/header.messages.ts:18:26
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:7:17
+msgid "Drafts"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:106:22
+msgid "Drag to another slot to move this player."
+msgstr ""
+
+#: src/renderer/lib/ranked_format.messages.ts:11:15
+msgid "Draw"
+msgstr ""
+
+#: src/renderer/pages/home/spectate/spectate.messages.ts:19:16
+msgid "ENDED"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:115:27
+msgid ""
+"Each player picks their own stock count on their character panel (P+'s "
+"STOCKS box)."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:28:15
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:34:15
+msgid "Edit"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:35:27
+msgid "Edit (publishes a new version)"
+msgstr ""
+
+#: src/renderer/app/header/header.messages.ts:20:26
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:3:26
 msgid "Edit display name"
 msgstr "Поменять никнейм"
+
+#: src/renderer/pages/home/mods/mods.messages.ts:80:25
+msgid "Edit game"
+msgstr ""
 
 #: src/renderer/components/login_form/login_form.messages.ts:6:16
 msgid "Email"
@@ -442,23 +717,27 @@ msgstr "Email подтвержден"
 msgid "Enable Auto Updates"
 msgstr "Включить автоматические обновления"
 
-#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:12:31
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:16:31
 msgid "Enable Netplay Replays"
 msgstr "Сохранять реплеи"
-
-#: src/renderer/pages/settings/dolphin_settings/gecko_codes/gecko_codes.messages.ts:3:53
-#. {0} errorMessage: string
-msgid "Error reading gecko codes: {0}"
-msgstr "Ошибка чтения gecko-кода: {0}"
 
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostics_button.messages.ts:3:34
 msgid "Error running network diagnostics"
 msgstr "Ошибка запуска сетевой диагностики"
 
-#: src/renderer/pages/settings/dolphin_settings/gecko_codes/gecko_codes.messages.ts:4:52
-#. {0} errorMessage: string
-msgid "Error saving gecko codes: {0}"
-msgstr "Ошибка сохранения gecko-кода: {0}"
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:22:29
+msgid "Esc to cancel"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:89:21
+msgid ""
+"Every game strikes from the starters with the pattern below; the first "
+"striker is random."
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:45:17
+msgid "Export"
+msgstr ""
 
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:3:28
 msgid "External IP Address"
@@ -468,7 +747,8 @@ msgstr "Внешний IP адрес"
 msgid "Extracting Project+"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:13:18
+#: src/renderer/lib/ranked_format.messages.ts:6:14
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:19:18
 msgid "FFA"
 msgstr ""
 
@@ -513,10 +793,6 @@ msgstr ""
 "Ошибка инсталляции {0}. Попробуйте закрыть все приложения Dolphin и "
 "перезапустите лаунчер."
 
-#: src/renderer/pages/settings/dolphin_settings/gecko_codes/gecko_codes.messages.ts:2:33
-msgid "Failed to read gecko codes"
-msgstr "Не получилось прочитать gecko-коды"
-
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:11:32
 msgid "Failed to remove account"
 msgstr "Не получилось удалить аккаунт"
@@ -525,7 +801,12 @@ msgstr "Не получилось удалить аккаунт"
 msgid "Failed to switch account"
 msgstr "Не получилось переключить аккаунт"
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:23:26
+#: src/renderer/pages/home/mods/mods.messages.ts:145:22
+msgid "Files that differ:"
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:51:26
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:29:26
 msgid "Finish your current game first."
 msgstr ""
 
@@ -533,7 +814,15 @@ msgstr ""
 msgid "Forgot your password?"
 msgstr "Забыли пароль?"
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:17:15
+#: src/renderer/pages/rulesets/items_section.messages.ts:3:20
+msgid "Frequency"
+msgstr ""
+
+#: src/renderer/pages/rulesets/items_section.messages.ts:12:24
+msgid "Frequency is None, so no items appear (as in P+)."
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:23:15
 msgid "Full"
 msgstr ""
 
@@ -541,30 +830,95 @@ msgstr ""
 msgid "Game"
 msgstr "Игра"
 
-#: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:7:47
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:129:16
+msgid "Game 1"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:82:25
+msgid "Game 1 is random, then the loser of the last game picks."
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:135:21
+msgid "Game 1 random, then the loser picks any stage"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:136:25
+msgid "Game 1 random, then the loser picks from the list"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:97:18
+msgid ""
+"Game 1 strikes from the starters; after each game the winner bans, then the "
+"loser picks."
+msgstr ""
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:25:26
+msgid "Game Files Folder"
+msgstr ""
+
+#: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:8:47
 msgid "Game stats for team battles is unsupported"
 msgstr "Сбор игровой статистики для командных матчей не поддерживается"
+
+#: src/renderer/pages/home/mods/mods.messages.ts:40:19
+msgid "GameCube controller"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:131:17
+msgid "Games 2+"
+msgstr ""
+
+#: src/renderer/pages/home/spectate/spectate.messages.ts:10:22
+msgid "Games show up here as soon as they start."
+msgstr ""
 
 #: src/renderer/pages/settings/create.messages.ts:2:26
 msgid "General Settings"
 msgstr "Основные настройки"
+
+#: src/renderer/pages/home/spectate/spectate.messages.ts:27:27
+msgid "Getting the game…"
+msgstr ""
 
 #: src/renderer/components/login_form/login_form.messages.ts:17:17
 #: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:3:17
 msgid "Go back"
 msgstr "Вернуться"
 
-#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:18:20
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:9:39
+msgid "Graphics & hotkeys for replays and spectated games."
+msgstr ""
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:8:38
+msgid "Graphics, controllers, and hotkeys for Play, Ranked, and rooms."
+msgstr ""
+
+#: src/renderer/lib/ranked_format.messages.ts:14:20
+msgid "Green team"
+msgstr ""
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:19:20
 msgid "Hard reset"
 msgstr "Полный сброс"
 
+#: src/renderer/pages/home/mods/mods.messages.ts:10:15
+#: src/renderer/pages/home/mods/mods.messages.ts:11:19
 #: src/renderer/pages/settings/create.messages.ts:11:15
 msgid "Help"
 msgstr "Помощь"
 
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:32:22
+msgid "Hidden"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:37:15
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:4:15
 msgid "Hide"
 msgstr "Спрятать"
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:25:21
+msgid "Hide hidden"
+msgstr ""
 
 #: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:7:15
 msgid "Hide ranking"
@@ -574,6 +928,11 @@ msgstr "Спрятать ранк"
 msgid "Hide short games"
 msgstr "Спрятать короткие матчи"
 
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:110:20
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:150:20
+msgid "Hold START"
+msgstr ""
+
 #: src/renderer/app/create.messages.ts:2:15
 msgid "Home"
 msgstr "Главная"
@@ -581,6 +940,22 @@ msgstr "Главная"
 #: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:5:25
 msgid "Home-Run Contest"
 msgstr "Home-Run Contest"
+
+#: src/renderer/pages/home/mods/mods.messages.ts:32:15
+msgid "Host"
+msgstr ""
+
+#: src/renderer/pages/settings/appearance_settings/interface_zoom/interface_zoom.messages.ts:4:5
+msgid ""
+"How big the launcher's text and menus are. Ctrl/Cmd +/- to change, or "
+"Ctrl+Mouse Wheel. Ctrl 0 to reset."
+msgstr ""
+
+#: src/renderer/pages/settings/appearance_settings/notification_volume/notification_volume.messages.ts:4:5
+msgid ""
+"How loud chat message and invite sounds are. The bell next to the settings "
+"button turns them off."
+msgstr ""
 
 #: src/renderer/components/login_form/login_form.messages.ts:10:31
 msgid "I already have an account"
@@ -594,28 +969,42 @@ msgstr "Надеюсь, вы знаете что вы делаете..."
 msgid "If enabled, your current rank and rating will be displayed on the Home page."
 msgstr "Если включено, показывает ваш текущий ранк и рейтинг на домашней странице."
 
-#: src/renderer/pages/settings/help_page/support_box/support_box.messages.ts:4:5
-msgid ""
-"If something does not work, download your logs and send us the zip along "
-"with a description of the problem."
-msgstr ""
-
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:35:31
 msgid ""
 "If the failure persists, you can test this in your computer's terminal app. "
 "See below:"
 msgstr "Если проблема осталась, можете протестировать в командной строке. См. ниже:"
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:16:23
+#: src/renderer/components/social/social.messages.ts:16:21
+msgid "Ignore user"
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:18:18
+msgid "Ignored"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:6:21
+msgid "Import file"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:22:23
 msgid "In game"
 msgstr ""
 
-#: src/renderer/lib/ranked_format.messages.ts:6:21
+#: src/renderer/lib/ranked_format.messages.ts:16:21
 msgid "In progress"
 msgstr ""
 
-#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:11:21
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:10:21
 msgid "Input Delay"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:153:22
+msgid "Input assist"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:113:22
+msgid "Input assist (3-frame buffer)"
 msgstr ""
 
 #: src/renderer/components/persistent_notification/persistent_notification.messages.ts:3:24
@@ -639,13 +1028,13 @@ msgstr ""
 msgid "Installing... This may take a few minutes."
 msgstr ""
 
-#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:16:18
+#: src/renderer/pages/settings/appearance_settings/interface_zoom/interface_zoom.messages.ts:2:24
+msgid "Interface Size"
+msgstr ""
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:27:18
 msgid "Invalid"
 msgstr "Некорректен"
-
-#: src/renderer/pages/settings/dolphin_settings/gecko_codes/add_codes/add_codes.messages.ts:2:27
-msgid "Invalid Gecko code"
-msgstr "Некорректный gecko-код"
 
 #: src/renderer/lib/validate/validate.messages.ts:2:27
 msgid "Invalid IP address"
@@ -655,16 +1044,45 @@ msgstr "Некорректный IP адрес"
 msgid "Invalid code"
 msgstr "Некорректный код"
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:18:15
+#: src/renderer/components/social/social.messages.ts:13:25
+msgid "Invite to a Direct 1v1"
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:11:23
+msgid "Invite to game"
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:12:23
+msgid "Invite to your room"
+msgstr ""
+
+#: src/renderer/pages/rulesets/items_section.messages.ts:2:16
+msgid "Items"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:34:15
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:24:15
 msgid "Join"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:20:22
+#: src/renderer/pages/home/mods/mods.messages.ts:35:22
+msgid "Join the room with this code. Its game is found among yours."
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:26:22
 msgid "Join this room"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:21:28
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:27:28
 msgid "Join this room. You'll wait in it until the game ends."
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:28:15
+msgid "Join?"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:55:22
+msgid "Joining the room…"
 msgstr ""
 
 #: src/renderer/components/loading_screen/loading_screen.messages.ts:2:19
@@ -672,7 +1090,11 @@ msgstr ""
 msgid "Just a sec..."
 msgstr "Секунду..."
 
-#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:10:24
+#: src/renderer/pages/home/mods/mods.messages.ts:67:15
+msgid "Kick"
+msgstr ""
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:9:24
 msgid "Launch Dolphin"
 msgstr "Запустить Dolphin"
 
@@ -681,7 +1103,7 @@ msgstr "Запустить Dolphin"
 msgid "Launch replay"
 msgstr "Запустить реплей"
 
-#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:9:38
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:8:38
 #. {0} gameName: string
 msgid "Launch {0}"
 msgstr ""
@@ -695,13 +1117,41 @@ msgstr ""
 msgid "Least recent"
 msgstr "Самые старые"
 
+#: src/renderer/pages/home/mods/mods.messages.ts:71:16
+msgid "Leave"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:83:26
+msgid "Leave empty to use the game's name"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:72:23
+msgid "Leave the room. Dolphin keeps running; close it to stop."
+msgstr ""
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:15:28
+msgid "Let others stream my games"
+msgstr ""
+
 #: src/renderer/pages/quick_start/quick_start.messages.ts:3:23
 msgid "Let's get set up"
 msgstr "Начнем настройку"
 
-#: src/renderer/app/header/header.messages.ts:21:18
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:68:15
+msgid "Link"
+msgstr ""
+
+#: src/renderer/pages/home/spectate/spectate.messages.ts:2:20
+msgid "Live games"
+msgstr ""
+
+#: src/renderer/app/header/header.messages.ts:23:18
 msgid "Loading"
 msgstr "Загрузка"
+
+#: src/renderer/pages/home/mods/mods.messages.ts:100:29
+msgid "Loading rooms…"
+msgstr ""
 
 #: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:4:18
 msgid "Loading..."
@@ -710,12 +1160,35 @@ msgstr "Загрузка..."
 #: src/renderer/app/header/header.messages.ts:2:16
 #: src/renderer/components/login_form/login_form.messages.ts:3:16
 #: src/renderer/components/login_notice/login_notice.messages.ts:3:16
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:5:16
+#: src/renderer/pages/home/mods/mods.messages.ts:99:16
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:10:16
+#: src/renderer/pages/home/spectate/spectate.messages.ts:6:16
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:27:16
 msgid "Log in"
 msgstr "Войти"
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:4:20
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:26:20
+msgid "Log in to make and publish rulesets."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:98:31
+msgid "Log in to see the public rooms."
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:9:20
 msgid "Log in to see who's online and join public rooms."
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:9:20
+msgid "Log in to see who's online."
+msgstr ""
+
+#: src/renderer/pages/home/spectate/spectate.messages.ts:5:20
+msgid "Log in to watch live games."
+msgstr ""
+
+#: src/renderer/lib/rulesets/use_brawl_links.messages.ts:2:21
+msgid "Log in, then open the link again to create the room."
 msgstr ""
 
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:4:17
@@ -726,13 +1199,17 @@ msgstr "Выйти"
 msgid "Longest game"
 msgstr "Самые долгие"
 
-#: src/renderer/pages/settings/dolphin_settings/gecko_codes/gecko_codes.messages.ts:5:17
-msgid "Manage"
-msgstr "Управлять"
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:81:21
+msgid "Loser picks"
+msgstr ""
 
-#: src/renderer/pages/settings/dolphin_settings/gecko_codes/gecko_codes.messages.ts:7:27
-msgid "Manage Gecko codes"
-msgstr "Управление Gecko кодами"
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:83:25
+msgid "Loser picks from"
+msgstr ""
+
+#: src/renderer/lib/ranked_format.messages.ts:10:15
+msgid "Lost"
+msgstr ""
 
 #: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:6:23
 #: src/renderer/pages/profile/profile_page.messages.ts:6:23
@@ -744,7 +1221,24 @@ msgstr ""
 msgid "Maximum {0} accounts reached. Remove an account to add another."
 msgstr "Достигнут лимит в {0} аккаунтов. Удалите аккаунт, чтобы добавить новый."
 
-#: src/renderer/pages/profile/profile_page.messages.ts:10:15
+#: src/renderer/components/social/social.messages.ts:15:18
+#: src/renderer/components/social/social.messages.ts:21:22
+msgid "Message"
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:24:14
+msgid "Messages are end-to-end encrypted."
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:20:19
+msgid "Minimize"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:86:19
+msgid "Mod launcher (optional)"
+msgstr ""
+
+#: src/renderer/pages/profile/profile_page.messages.ts:11:15
 msgid "Mode"
 msgstr ""
 
@@ -764,6 +1258,28 @@ msgstr ""
 msgid "Most recent"
 msgstr "Самые новые"
 
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:28:24
+msgid "Move"
+msgstr ""
+
+#: src/renderer/app/header/play_button/play_button.messages.ts:11:22
+msgid "Moving files"
+msgstr ""
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:32:33
+msgid "Moving..."
+msgstr ""
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:31:53
+#. {0} done: string
+#. {1} total: string
+msgid "Moving: {0} of {1}"
+msgstr ""
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:13:22
+msgid "Music"
+msgstr ""
+
 #: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:2:20
 msgid "My Ranking"
 msgstr "Мой рейтинг"
@@ -776,9 +1292,10 @@ msgstr "Тип NAT"
 msgid "NAT-PMP."
 msgstr "NAT-PMP."
 
-#: src/renderer/pages/settings/dolphin_settings/gecko_codes/add_codes/add_codes.messages.ts:3:23
-msgid "Name is required"
-msgstr "Требуется имя"
+#: src/renderer/pages/home/mods/mods.messages.ts:82:15
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:75:15
+msgid "Name"
+msgstr ""
 
 #: src/renderer/pages/settings/help_page/support_box/support_box.messages.ts:2:19
 msgid "Need help?"
@@ -798,17 +1315,23 @@ msgstr "Netplay Dolphin"
 msgid "Netplay Dolphin Settings"
 msgstr "Настройки Netplay Dolphin"
 
-#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:12:28
-msgid "Netplay Gecko Codes"
-msgstr "Netplay Gecko коды"
-
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostics_button.messages.ts:4:29
 msgid "Network Diagnostics"
 msgstr "Сетевая диагностика"
 
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:50:20
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:5:21
+#. Editor
+msgid "New ruleset"
+msgstr ""
+
 #: src/renderer/pages/quick_start/stepper_dots/stepper_dots.messages.ts:2:15
 msgid "Next"
 msgstr "Далее"
+
+#: src/renderer/pages/home/spectate/spectate.messages.ts:18:23
+msgid "Next game soon"
+msgstr ""
 
 #: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:9:21
 msgid "Next replay"
@@ -818,6 +1341,11 @@ msgstr "Следующий реплей"
 msgid "Nice work!"
 msgstr "Отличная работа!"
 
+#: src/renderer/components/social/social.messages.ts:30:13
+#: src/renderer/pages/home/mods/mods.messages.ts:147:19
+msgid "No"
+msgstr ""
+
 #: src/renderer/app/header/header.messages.ts:7:25
 msgid "No Brawl ISO file specified"
 msgstr ""
@@ -826,28 +1354,69 @@ msgstr ""
 msgid "No additional folders added."
 msgstr "Дополнительные каталоги не были добавлены."
 
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:22:19
+msgid "No drafts."
+msgstr ""
+
 #: src/renderer/pages/settings/game_settings/game_settings.messages.ts:5:20
 msgid "No file set"
 msgstr "Файл не указан"
 
-#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:6:22
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:10:22
 msgid "No folder set"
 msgstr "Каталог не указан"
 
-#: src/renderer/pages/profile/profile_page.messages.ts:15:20
+#: src/renderer/pages/home/mods/mods.messages.ts:104:17
+msgid "No game"
+msgstr ""
+
+#: src/renderer/pages/rulesets/items_section.messages.ts:11:17
+msgid "No item is on, so no items appear (as in P+)."
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:145:18
+msgid "No limit"
+msgstr ""
+
+#: src/renderer/pages/home/spectate/spectate.messages.ts:9:18
+msgid "No live games right now."
+msgstr ""
+
+#: src/renderer/pages/profile/profile_page.messages.ts:24:20
 msgid "No matches yet."
 msgstr ""
 
-#: src/renderer/app/header/header.messages.ts:14:30
+#: src/renderer/app/header/header.messages.ts:16:30
 msgid "No network connection"
 msgstr "Нет сетевого соединения"
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:8:18
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:13:18
 msgid "No public rooms right now."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:102:26
+msgid "No public rooms right now. Host one above!"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:10:19
+msgid "No public rulesets yet."
 msgstr ""
 
 #: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:5:26
 msgid "No replay files found"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/ruleset_box.messages.ts:8:22
+msgid "No ruleset has this code"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:17:23
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:78:16
+msgid "No set"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:128:16
+msgid "No set: one game at a time"
 msgstr ""
 
 #: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:6:26
@@ -858,8 +1427,16 @@ msgstr "Нет собранных статов"
 msgid "No update available"
 msgstr "Нет доступных обновлений"
 
-#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:9:16
+#: src/renderer/components/social/social.messages.ts:4:23
+msgid "Nobody else is online right now."
+msgstr ""
+
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:10:16
 msgid "Nobody has played a ranked set yet."
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:159:15
+msgid "None"
 msgstr ""
 
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:13:20
@@ -870,11 +1447,15 @@ msgstr "Нормальный NAT"
 msgid "Not available"
 msgstr "Не доступен"
 
+#: src/renderer/pages/home/mods/mods.messages.ts:21:20
+msgid "Not checked yet"
+msgstr ""
+
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:31:22
 msgid "Not detected."
 msgstr "Не обнаружен"
 
-#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:10:19
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:13:19
 msgid "Not found"
 msgstr "Не найден"
 
@@ -882,11 +1463,61 @@ msgstr "Не найден"
 msgid "Not on the leaderboard yet: play a ranked set."
 msgstr ""
 
+#: src/renderer/pages/profile/profile_page.messages.ts:22:20
+msgid "Not on this computer"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:33:19
+msgid "Not ready"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:44:19
+msgid "Not set up yet"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:23:22
+msgid "Nothing published yet."
+msgstr ""
+
+#: src/renderer/pages/settings/appearance_settings/notification_volume/notification_volume.messages.ts:2:29
+msgid "Notification Volume"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:116:13
+msgid "OK"
+msgstr ""
+
+#: src/renderer/pages/rulesets/items_section.messages.ts:8:14
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:121:14
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:161:14
+#: src/renderer/pages/rulesets/stages_section.messages.ts:4:14
+msgid "Off"
+msgstr ""
+
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:5:18
 msgid "Offline"
 msgstr "Оффлайн"
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:11:27
+#: src/renderer/components/social/social.messages.ts:22:24
+msgid "Offline. Messages can't be sent until they're back."
+msgstr ""
+
+#: src/renderer/pages/rulesets/items_section.messages.ts:7:13
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:109:22
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:120:13
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:160:13
+msgid "On"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:155:25
+msgid "On: each player picks their stocks"
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:2:17
+msgid "Online"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:17:27
 #. The in-game menu path, kept on one line.
 msgid "Online > With Friends > Create Room"
 msgstr ""
@@ -899,26 +1530,74 @@ msgstr "Требуется онлайн активация"
 msgid "Only English characters are allowed"
 msgstr "Разрешены только латинские символы"
 
-#: src/renderer/app/header/header.messages.ts:13:41
+#: src/renderer/app/header/header.messages.ts:15:41
 msgid "Only logged in users can play online."
 msgstr "Залогиньтесь для игры онлайн."
 
-#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:9:35
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:87:24
+msgid "Only the stages enabled below, no variants."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:61:19
+msgid "Open"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:33:22
+msgid "Open a room for this game."
+msgstr ""
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:12:35
 msgid "Open settings folder"
 msgstr "Открыть каталог настроек"
 
-#: src/renderer/pages/profile/profile_page.messages.ts:14:19
-msgid "Opponent"
+#: src/renderer/pages/home/mods/mods.messages.ts:70:25
+msgid "Open slot"
 msgstr ""
 
-#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:14:60
+#: src/renderer/pages/home/play_buttons/play_buttons.messages.ts:5:28
+msgid ""
+"Opens Ranked's character select in your game, like Online > With Anyone > "
+"Ranked."
+msgstr ""
+
+#: src/renderer/pages/home/play_buttons/play_buttons.messages.ts:4:30
+msgid ""
+"Opens Unranked's character select in your game, like Online > With Anyone > "
+"Unranked."
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:7:28
+msgid "Opens a new room in your game, like Online > With Friends > Create Room."
+msgstr ""
+
+#: src/renderer/pages/profile/profile_page.messages.ts:15:19
+msgid "Opponents"
+msgstr ""
+
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:18:60
 #. {0} currentDate: string
 msgid "Organize into monthly subfolders (e.g. {0})."
 msgstr "Организовать по подкаталогам по месяцам (например, {0})."
 
+#: src/renderer/pages/home/mods/mods.messages.ts:2:19
+msgid "Other Games"
+msgstr ""
+
+#: src/renderer/pages/rulesets/stages_section.messages.ts:5:22
+msgid "Other stages"
+msgstr ""
+
 #: src/renderer/pages/home/home_page.messages.ts:2:19
 msgid "Overview"
 msgstr "Обзор"
+
+#: src/renderer/pages/home/overview/public_rooms/ruleset_box.messages.ts:5:23
+msgid "P+ default rules"
+msgstr ""
+
+#: src/renderer/pages/rulesets/items_section.messages.ts:6:19
+msgid "P+ item settings"
+msgstr ""
 
 #: src/renderer/components/login_form/login_form.messages.ts:7:19
 msgid "Password"
@@ -937,9 +1616,10 @@ msgstr "Инструкции по сбросу пароля были отпра�
 msgid "Passwords do not match"
 msgstr "Пароли не совпадают"
 
-#: src/renderer/pages/settings/dolphin_settings/gecko_codes/add_codes/add_codes.messages.ts:5:26
-msgid "Paste Gecko Codes"
-msgstr "Вставить Gecko-код"
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:108:16
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:149:16
+msgid "Pause"
+msgstr ""
 
 #: src/renderer/app/header/play_button/play_button.messages.ts:2:15
 msgid "Play"
@@ -953,29 +1633,30 @@ msgstr "Проиграть все"
 msgid "Play Button Action"
 msgstr "Функция кнопки Играть"
 
-#: src/renderer/app/header/header.messages.ts:16:22
+#: src/renderer/pages/home/mods/mods.messages.ts:4:5
+msgid ""
+"Play any Wii game with rollback (ex. NSMB Wii, REX, Brawl Minus, vBrawl). "
+"The whole game is shared. Players can drop in and out whenever they'd like, "
+"like plugging in a controller. Everyone in a room needs the exact same game."
+msgstr ""
+
+#: src/renderer/app/header/header.messages.ts:18:22
 msgid "Play offline"
 msgstr "Играть оффлайн"
 
-#: src/renderer/pages/settings/create.messages.ts:7:19
-msgid "Playback"
-msgstr "Проигрыватель"
+#: src/renderer/pages/home/play_buttons/play_buttons.messages.ts:3:21
+msgid "Play ranked"
+msgstr ""
 
-#: src/renderer/initialize_app.messages.ts:9:26
-#: src/renderer/lib/dolphin/dolphin.messages.ts:7:26
-#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:4:26
-msgid "Playback Dolphin"
-msgstr "Playback Dolphin"
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:14:33
+msgid "Play the game's music in menus and matches."
+msgstr ""
 
-#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:7:34
-msgid "Playback Dolphin Settings"
-msgstr "Настройки Playback Dolphin"
+#: src/renderer/pages/home/play_buttons/play_buttons.messages.ts:2:23
+msgid "Play unranked"
+msgstr ""
 
-#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:13:29
-msgid "Playback Gecko Codes"
-msgstr "Playback Gecko коды"
-
-#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:5:17
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:6:17
 msgid "Player"
 msgstr ""
 
@@ -998,6 +1679,10 @@ msgstr "Port mapping"
 msgid "Preparing SD card"
 msgstr ""
 
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:21:27
+msgid "Press a key..."
+msgstr ""
+
 #: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:8:25
 msgid "Previous replay"
 msgstr "Предыдущий реплей"
@@ -1006,7 +1691,7 @@ msgstr "Предыдущий реплей"
 msgid "Profile"
 msgstr ""
 
-#: src/renderer/app/create.messages.ts:5:18
+#: src/renderer/app/create.messages.ts:6:18
 msgid "Profile & match history"
 msgstr ""
 
@@ -1018,17 +1703,66 @@ msgid ""
 "Brawl ISO (revision 1 or 2)."
 msgstr ""
 
+#: src/renderer/pages/home/mods/mods.messages.ts:37:21
+msgid "Public"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:97:22
 #: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:2:22
+#. Public rooms.
 msgid "Public rooms"
 msgstr ""
 
+#: src/renderer/pages/home/mods/mods.messages.ts:38:28
+msgid "Public rooms are listed for everyone. Private rooms need the code."
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:8:25
+msgid "Public rulesets"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:55:18
+msgid "Publish"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:4:5
+msgid ""
+"Publish custom rulesets to use in your games! Create one, publish it, and "
+"you get a code for it. You can pass this code around to, e.g., standardize "
+"rulesets for tournaments. You can't change rulesets once they're published, "
+"only publish a new one."
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:21:20
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:65:25
+#. Published dialog
+msgid "Published"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:56:21
+msgid "Publishing..."
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:90:17
+msgid "Random"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:138:26
+msgid "Random every game"
+msgstr ""
+
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:5:15
+msgid "Rank"
+msgstr ""
+
 #: src/renderer/lib/ranked_format.messages.ts:2:17
+#: src/renderer/pages/home/spectate/spectate.messages.ts:11:21
 #: src/renderer/pages/profile/profile_page.messages.ts:8:17
 msgid "Ranked"
 msgstr ""
 
 #: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:4:17
-#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:7:17
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:8:17
 #: src/renderer/pages/profile/profile_page.messages.ts:3:17
 msgid "Rating"
 msgstr ""
@@ -1037,15 +1771,41 @@ msgstr ""
 msgid "Re-authenticate account"
 msgstr "Перелогинить аккаунт"
 
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:61:25
+msgid "Ready to publish."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:42:24
+msgid "Real Wii Remote"
+msgstr ""
+
+#: src/renderer/pages/home/spectate/spectate.messages.ts:28:29
+msgid "Reconnecting…"
+msgstr ""
+
+#: src/renderer/lib/ranked_format.messages.ts:12:18
+msgid "Red team"
+msgstr ""
+
 #: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:3:18
 #: src/renderer/pages/replays/replay_browser/filter_toolbar/filter_toolbar.messages.ts:2:18
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:12:18
 msgid "Refresh"
 msgstr "Обновить"
 
 #: src/renderer/app/header/account_switcher/account_switcher.messages.ts:4:17
 #: src/renderer/components/multi_path_input/multi_path_input.messages.ts:4:17
+#: src/renderer/pages/home/mods/mods.messages.ts:30:17
 msgid "Remove"
 msgstr "Удалить"
+
+#: src/renderer/pages/home/mods/mods.messages.ts:31:24
+msgid "Remove this game from the list (your files stay where they are)."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:68:22
+msgid "Remove this player from the room. They can't come back for 10 minutes."
+msgstr ""
 
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:14:44
 #. {0} accountName: string
@@ -1056,10 +1816,60 @@ msgstr "Удален {0}"
 msgid "Removes temporary downloads and files used for Dolphin communication."
 msgstr ""
 
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:5:25
+msgid "Replay & Spectating Graphics"
+msgstr ""
+
+#: src/renderer/initialize_app.messages.ts:9:26
+#: src/renderer/lib/dolphin/dolphin.messages.ts:7:26
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:4:26
+msgid "Replay Dolphin"
+msgstr ""
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:7:34
+msgid "Replay Dolphin Settings"
+msgstr ""
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:10:36
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:7:31
+msgid "Replay Dolphin settings"
+msgstr ""
+
 #: src/renderer/app/create.messages.ts:3:18
+#: src/renderer/pages/profile/profile_page.messages.ts:16:18
 #: src/renderer/pages/settings/create.messages.ts:4:18
 msgid "Replays"
 msgstr "Реплеи"
+
+#: src/renderer/pages/settings/create.messages.ts:7:19
+msgid "Replays & Spectating"
+msgstr ""
+
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:6:36
+msgid "Replays and spectated games play in their own Dolphin."
+msgstr ""
+
+#: src/renderer/pages/profile/profile_page.messages.ts:23:24
+msgid "Replays are saved by the computer that played the match (Settings > Replays)"
+msgstr ""
+
+#: src/renderer/pages/settings/help_page/support_box/support_box.messages.ts:5:20
+msgid "Report Bug"
+msgstr ""
+
+#: src/renderer/app/header/bug_report/bug_report.messages.ts:2:21
+msgid "Report a bug"
+msgstr ""
+
+#: src/renderer/pages/settings/help_page/support_box/support_box.messages.ts:4:5
+msgid ""
+"Report bugs, performance issues, desyncs, etc. here. Useful logs are sent "
+"with your report to help me fix things."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:108:26
+msgid "Report issues on the "
+msgstr ""
 
 #: src/renderer/lib/dolphin/handle_dolphin_exit_code.messages.ts:3:5
 msgid ""
@@ -1075,17 +1885,29 @@ msgid ""
 "section in the settings page for guidance."
 msgstr ""
 
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:24:5
+msgid ""
+"Requires Brawl Online's specific dolphin build to function. Any regular "
+"dolphin install will not work."
+msgstr ""
+
 #: src/renderer/components/login_form/login_form.messages.ts:16:16
 msgid "Reset"
 msgstr "Сбросить"
 
-#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:14:46
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:24:23
+msgid "Reset to T"
+msgstr ""
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:15:46
 #. {0} dolphinTypeName: string
 msgid "Reset {0}"
 msgstr "Сбросить {0}"
 
 #: src/renderer/components/paged_list_status/paged_list_status.messages.ts:4:16
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:7:16
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:12:16
+#: src/renderer/pages/home/spectate/spectate.messages.ts:8:16
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:29:16
 msgid "Retry"
 msgstr ""
 
@@ -1099,9 +1921,27 @@ msgstr "Показать"
 
 #: src/renderer/pages/replays/replay_browser/file_list/file_list.messages.ts:2:25
 #: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:3:25
-#: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:8:25
+#: src/renderer/pages/replays/replay_file_stats/replay_file_stats.messages.ts:9:25
 msgid "Reveal location"
 msgstr "Показать локацию"
+
+#: src/renderer/pages/home/spectate/spectate.messages.ts:14:19
+msgid "Room"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:36:19
+msgid "Room code"
+msgstr ""
+
+#: src/renderer/pages/profile/profile_page.messages.ts:10:16
+msgid "Rooms"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:24:5
+msgid ""
+"Rooms compare these: the disc must be the same, and a different SD card is "
+"downloaded from the host when you join."
+msgstr ""
 
 #: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:2:24
 msgid "Root Replay Folder"
@@ -1109,6 +1949,27 @@ msgstr ""
 
 #: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:2:22
 msgid "Rosetta Required"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:125:16
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:98:16
+msgid "Rules"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/ruleset_box.messages.ts:2:16
+#: src/renderer/pages/home/overview/public_rooms/ruleset_box.messages.ts:3:22
+msgid "Ruleset code"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/ruleset_box.messages.ts:4:18
+msgid ""
+"Ruleset code to use for all created rooms. Find codes at the top -> "
+"\"Rulesets\""
+msgstr ""
+
+#: src/renderer/app/create.messages.ts:5:19
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:2:19
+msgid "Rulesets"
 msgstr ""
 
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:36:25
@@ -1119,26 +1980,54 @@ msgstr "Выполните эту команду"
 msgid "Running network diagnostics..."
 msgstr "Идет сетевая диагностика..."
 
-#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:13:42
+#: src/renderer/pages/home/mods/mods.messages.ts:121:17
+msgid "SD card"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:88:17
+msgid "SD card image (optional)"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:131:20
+msgid "SD cards do not match. You can download the host's card when you join."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:81:15
+msgid "Save"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:54:15
+msgid "Save draft"
+msgstr ""
+
+#: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:17:42
 msgid "Save replays for netplay games to the Root Replay Folder."
 msgstr ""
 
-#: src/renderer/pages/settings/help_page/support_box/support_box.messages.ts:8:35
+#: src/renderer/pages/settings/help_page/support_box/support_box.messages.ts:9:35
 #. {0} zipPath: string
 msgid "Saved your logs to {0}"
 msgstr ""
 
-#: src/renderer/pages/settings/help_page/support_box/support_box.messages.ts:6:21
+#: src/renderer/pages/settings/help_page/support_box/support_box.messages.ts:7:21
 msgid "Saving logs..."
 msgstr ""
 
-#: src/renderer/pages/profile/profile_page.messages.ts:13:16
+#: src/renderer/pages/profile/profile_page.messages.ts:14:16
 msgid "Score"
 msgstr ""
 
 #: src/renderer/pages/replays/replay_browser/filter_toolbar/filter_toolbar.messages.ts:8:17
 msgid "Search"
 msgstr "Поиск"
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:9:28
+msgid "Search by name, publisher or code"
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:5:23
+msgid "Search players online"
+msgstr ""
 
 #: src/renderer/components/path_input/path_input.messages.ts:2:17
 #: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:12:17
@@ -1165,13 +2054,32 @@ msgstr "Отправить email с подтверждением заново"
 msgid "Server error"
 msgstr ""
 
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:126:14
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:77:14
+msgid "Set count"
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:10:22
+msgid "Set up online play to see who's online."
+msgstr ""
+
 #: src/renderer/app/header/header.messages.ts:10:19
 msgid "Settings"
 msgstr "Настройки"
 
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:66:24
+msgid ""
+"Share the code or the link. Opening the link creates a room with this "
+"ruleset."
+msgstr ""
+
 #: src/renderer/pages/replays/replay_browser/filter_toolbar/filter_toolbar.messages.ts:6:23
 msgid "Shortest game"
 msgstr "Самые короткие"
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:38:15
+msgid "Show"
+msgstr ""
 
 #: src/renderer/pages/settings/appearance_settings/rank_display_toggle/rank_display_toggle.messages.ts:2:22
 msgid "Show Ranking on Home Page"
@@ -1185,11 +2093,15 @@ msgstr "Показать статы"
 msgid "Sign up"
 msgstr "Зарегистрироваться"
 
+#: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:13:15
+msgid "Skip"
+msgstr ""
+
 #: src/renderer/pages/quick_start/quick_start.messages.ts:4:20
 msgid "Skip setup"
 msgstr "Пропустить настройку"
 
-#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:17:20
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:18:20
 msgid "Soft reset"
 msgstr "Частичный сброс"
 
@@ -1197,17 +2109,110 @@ msgstr "Частичный сброс"
 msgid "Some functionality of the Launcher and Dolphin will be unavailable."
 msgstr "Некоторый функционал лаунчера и Dolphin будет недоступен."
 
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:34:44
+#. {0} folder: string
+msgid "Some old files could not be deleted. You can delete {0} yourself."
+msgstr ""
+
 #: src/renderer/pages/not_found/not_found_page.messages.ts:3:29
 msgid "Something went wrong."
 msgstr "Что-то пошло не так."
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:25:26
+#: src/renderer/pages/home/home_page.messages.ts:3:19
+msgid "Spectate"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:80:22
+msgid "Stage each game"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:111:18
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:151:18
+msgid "Stage hazards"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:85:20
+msgid "Stage list"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:117:17
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:134:17
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:157:20
+msgid "Stages"
+msgstr ""
+
+#: src/renderer/pages/rulesets/stages_section.messages.ts:2:18
+msgid "Starter"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:156:19
+msgid "Starters"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:118:21
+msgid ""
+"Starters are struck for game 1; games 2+ pick from starters and "
+"counterpicks."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:54:18
+msgid "Starting Dolphin…"
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:43:28
+msgid "Starting the game. It will create a room."
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:49:26
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:31:26
 msgid "Starting the game. It will open the room."
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:100:16
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:140:16
+msgid "Stock"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:114:23
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:154:23
+msgid "Stock control"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:116:32
+msgid "Stock matches only."
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:103:17
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:143:17
+msgid "Stocks"
+msgstr ""
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:17:5
+msgid ""
+"Streams inputs to the server for others to spectate you. Very minimal "
+"network load. Your opponent's game may still stream the match."
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:88:17
+msgid "Strike"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:92:18
+msgid "Strike pattern"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:139:16
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:99:16
+msgid "Style"
 msgstr ""
 
 #: src/renderer/pages/settings/advanced_app_settings/advanced_app_settings.messages.ts:8:28
 msgid "Successfully cleared temporary files."
 msgstr "Временные файлы успешно удалены."
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:93:18
+msgid "Suggest"
+msgstr ""
 
 #: src/renderer/app/header/user_menu/user_menu.messages.ts:15:40
 #. {0} accountName: string
@@ -1218,11 +2223,21 @@ msgstr "Переключен на {0}"
 msgid "Symmetric NAT"
 msgstr "Симметричный NAT"
 
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:39:22
+msgid "Take it off the public list. Its code and link keep working."
+msgstr ""
+
 #: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:4:21
 msgid "Target Test"
 msgstr "Target Test"
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:14:20
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:107:21
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:148:21
+msgid "Team attack"
+msgstr ""
+
+#: src/renderer/lib/ranked_format.messages.ts:7:16
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:20:20
 msgid "Teams"
 msgstr ""
 
@@ -1230,21 +2245,52 @@ msgstr ""
 msgid "That folder is already included."
 msgstr "Этот каталог уже включен."
 
-#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:20:39
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:21:39
 msgid "The Dolphin build to launch. Leave empty to use the default shown."
 msgstr ""
-
-#: src/renderer/pages/settings/dolphin_settings/gecko_codes/manage_codes/manage_codes.messages.ts:4:44
-#. {0} codeName: string
-msgid "The code <{0}> will be deleted. This cannot be undone."
-msgstr "Код <{0}> будет удален безвозвратно."
 
 #: src/renderer/pages/settings/replay_settings/replay_settings.messages.ts:3:35
 msgid "The folder where your replays should be saved."
 msgstr ""
 
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:33:39
+#. {0} folder: string
+msgid "The game files are now in {0}"
+msgstr ""
+
+#: src/renderer/pages/home/spectate/spectate.messages.ts:30:21
+msgid "The game you watched has ended."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:85:19
+msgid "The game's disc image (for a Brawl mod: your Brawl disc)."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:22:35
+#. {0} _hash: string
+msgid "The game's hash. All your friends need the exact same hash."
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:96:18
+msgid "The loser can't pick a stage they already won on in this set."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:89:21
+msgid "The mod's SD card image, if it has one."
+msgstr ""
+
 #: src/renderer/pages/settings/game_settings/game_settings.messages.ts:3:34
 msgid "The path to an NTSC-U Super Smash Bros. Brawl disc image (revision 1 or 2)."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:132:20
+msgid ""
+"The room's game has an SD card, and yours has none. Add the mod's SD card "
+"to your game."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:133:18
+msgid "The room's game has no SD card, and yours has one."
 msgstr ""
 
 #: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:3:22
@@ -1259,6 +2305,10 @@ msgid ""
 "(revision 1 or 2)."
 msgstr ""
 
+#: src/renderer/pages/home/mods/mods.messages.ts:48:29
+msgid "This game may need a Wii Remote."
+msgstr ""
+
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:32:33
 msgid "This is the optimal result."
 msgstr "это оптимальный результат."
@@ -1271,14 +2321,35 @@ msgstr ""
 "это оптимальный результат. Так же известный как 'easy', 'full cone' или "
 "'open' NAT."
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:22:22
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:28:22
 msgid "This room is full."
 msgstr ""
 
-#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:16:70
+#: src/renderer/pages/home/spectate/spectate.messages.ts:26:28
+msgid "This set has ended. Watch it from its start."
+msgstr ""
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:17:70
 #. {0} dolphinTypeName: string
 msgid "This will remove all your {0} settings."
 msgstr "Это удалит все ваши настройки {0}."
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:101:15
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:141:15
+msgid "Time"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:144:20
+msgid "Time limit"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:104:20
+msgid "Time limit (minutes)"
+msgstr ""
+
+#: src/renderer/app/header/header.messages.ts:12:35
+msgid "Toggle Notification Sounds"
+msgstr ""
 
 #: src/renderer/components/login_form/login_form.messages.ts:8:35
 msgid "Toggle password visibility"
@@ -1321,13 +2392,17 @@ msgstr "Ой."
 msgid "Uh oh. We couldn't open that file. It's probably corrupted."
 msgstr "Ой. Мы не смогли открыть этот файл. Возможно, он поврежден."
 
+#: src/renderer/components/social/social.messages.ts:17:23
+msgid "Unignore user"
+msgstr ""
+
 #: src/renderer/pages/replays/replay_file_stats/game_profile_header/game_profile_header.messages.ts:3:18
-#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:11:18
-#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:15:18
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:14:18
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:26:18
 msgid "Unknown"
 msgstr "Неизвестно"
 
-#: src/renderer/lib/ranked_format.messages.ts:5:24
+#: src/renderer/lib/ranked_format.messages.ts:15:24
 msgid "Unknown player"
 msgstr ""
 
@@ -1336,11 +2411,16 @@ msgid "Unknown stage"
 msgstr "Неизвестный уровень"
 
 #: src/renderer/lib/ranked_format.messages.ts:3:19
+#: src/renderer/pages/home/spectate/spectate.messages.ts:12:23
 #: src/renderer/pages/profile/profile_page.messages.ts:9:19
 msgid "Unranked"
 msgstr ""
 
-#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:17:22
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:53:18
+msgid "Unsaved changes"
+msgstr ""
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:28:22
 msgid "Unvalidated"
 msgstr "Не проверен"
 
@@ -1348,17 +2428,45 @@ msgstr "Не проверен"
 msgid "Updating"
 msgstr "Обновление"
 
+#: src/renderer/app/header/bug_report/bug_report.messages.ts:8:21
+msgid "Upload Logs"
+msgstr ""
+
+#: src/renderer/app/header/bug_report/bug_report.messages.ts:9:20
+msgid "Uploading"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/ruleset_box.messages.ts:6:16
+msgid "Use P+ default rules"
+msgstr ""
+
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:23:25
+msgid "Use a letter, number, F key or punctuation key, with no Ctrl, Alt or Shift."
+msgstr ""
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:29:30
+msgid "Use default"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:46:21
+msgid "Use for my rooms"
+msgstr ""
+
 #: src/renderer/components/rosetta_install_dialog/rosetta_install_dialog.messages.ts:11:5
 msgid ""
 "Use of Rosetta is subject to Apple's software license agreement. A list of "
 "Apple SLAs may be found here:"
 msgstr ""
 
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:47:16
+msgid "Used for your rooms"
+msgstr ""
+
 #: src/renderer/components/login_notice/login_notice.messages.ts:2:28
 msgid "User is not logged in"
 msgstr "Пользователь не залогинен"
 
-#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:14:16
+#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:25:16
 msgid "Valid"
 msgstr "Корректный"
 
@@ -1366,7 +2474,7 @@ msgstr "Корректный"
 msgid "Verify email"
 msgstr ""
 
-#: src/renderer/app/header/header.messages.ts:22:26
+#: src/renderer/app/header/header.messages.ts:24:26
 #: src/renderer/pages/quick_start/steps/verify_email_step/verify_email_step.messages.ts:2:26
 msgid "Verify your email"
 msgstr "Подтвердите ваш email"
@@ -1406,39 +2514,102 @@ msgstr ""
 "Зайдите в ваш email, кликните на линк в письме с подтверждением, и затем "
 "нажмите проверку подтверждения"
 
-#: src/renderer/lib/ranked_format.messages.ts:12:20
+#: src/renderer/lib/ranked_format.messages.ts:22:20
 msgid "Void: no rating change"
 msgstr ""
 
-#: src/renderer/lib/ranked_format.messages.ts:11:23
+#: src/renderer/lib/ranked_format.messages.ts:21:23
 msgid "Void: no result was reported, no rating change"
 msgstr ""
 
-#: src/renderer/lib/ranked_format.messages.ts:9:25
+#: src/renderer/lib/ranked_format.messages.ts:19:25
 msgid "Void: the connection broke, no rating change"
 msgstr ""
 
-#: src/renderer/lib/ranked_format.messages.ts:10:27
+#: src/renderer/lib/ranked_format.messages.ts:20:27
 msgid "Void: the reports disagree, no rating change"
 msgstr ""
 
-#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:8:17
+#: src/renderer/pages/leaderboard/leaderboard_page.messages.ts:9:17
 msgid "W-L"
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:15:24
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:30:23
+msgid "Wait for Dolphin's set-up to finish"
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:21:24
 msgid "Waiting"
 msgstr ""
 
-#: src/renderer/app/header/header.messages.ts:15:36
+#: src/renderer/pages/home/spectate/spectate.messages.ts:29:24
+msgid "Waiting for the next live game…"
+msgstr ""
+
+#: src/renderer/pages/home/spectate/spectate.messages.ts:21:16
+msgid "Watch"
+msgstr ""
+
+#: src/renderer/pages/home/spectate/spectate.messages.ts:23:23
+msgid "Watch this game. It catches up to live, then plays live."
+msgstr ""
+
+#: src/renderer/pages/home/spectate/spectate.messages.ts:22:19
+msgid "Watching"
+msgstr ""
+
+#: src/renderer/app/header/bug_report/bug_report.messages.ts:6:23
+msgid "What happened?"
+msgstr ""
+
+#: src/renderer/pages/home/spectate/spectate.messages.ts:4:26
+msgid "When a game you watch ends, start watching the newest live game."
+msgstr ""
+
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:27:5
+msgid ""
+"Where Dolphin, Project+ and its SD card are kept (about 4 GB). Choose "
+"another folder to move them there."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:41:20
+msgid "Wii Remote"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:107:20
+msgid "Wii Rollback is in beta."
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:94:15
+msgid "Winner bans (games 2+)"
+msgstr ""
+
+#: src/renderer/lib/ranked_format.messages.ts:9:14
+msgid "Won"
+msgstr ""
+
+#: src/renderer/app/header/header.messages.ts:17:36
 msgid "Would you like to play offline?"
 msgstr "Хотите ли вы играть оффлайн?"
 
-#: src/renderer/pages/profile/profile_page.messages.ts:12:14
+#: src/renderer/pages/home/mods/mods.messages.ts:135:21
+msgid "Wrong disc"
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:29:14
+#: src/renderer/pages/home/mods/mods.messages.ts:148:20
+msgid "Yes"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:149:26
+msgid "Yes, and overwrite local card"
+msgstr ""
+
+#: src/renderer/pages/profile/profile_page.messages.ts:13:14
 msgid "You"
 msgstr ""
 
-#: src/renderer/app/header/header.messages.ts:12:28
+#: src/renderer/app/header/header.messages.ts:14:28
 msgid "You are not logged in"
 msgstr "Вы не залогинены"
 
@@ -1450,6 +2621,14 @@ msgstr "Вы оффлайн."
 #: src/renderer/pages/home/overview/my_ranking/my_ranking.messages.ts:8:36
 msgid "You can re-enable rank display in the settings."
 msgstr "Показ ранка можно включить обратно в настройках."
+
+#: src/renderer/pages/home/mods/mods.messages.ts:113:30
+msgid "You don't have any game matching this hash!"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:73:15
+msgid "You left the room."
+msgstr ""
 
 #: src/renderer/pages/settings/help_page/support_box/network_diagnostics_button/network_diagnostic_result/network_diagnostics_result.messages.ts:34:28
 msgid "You may have trouble connecting to other players."
@@ -1475,23 +2654,127 @@ msgstr "Вам потребуется залогиниться снова, ко�
 msgid "You're all set up"
 msgstr "Все готово"
 
+#: src/renderer/components/social/social.messages.ts:23:24
+msgid "You're ignoring this player. Their messages are hidden."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:110:26
+msgid "You're in this room."
+msgstr ""
+
+#: src/renderer/pages/home/spectate/spectate.messages.ts:25:26
+msgid "You're playing in this game."
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:39:19
+msgid "You're signed in on another launcher, so chat moved there."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:138:22
+#. Joining with an SD card that differs (Dolphin's sd_sync).
+msgid "Your SD card is different"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:130:20
+msgid "Your SD card matches the room's."
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:59:22
+msgid "Your changes to this ruleset aren't saved."
+msgstr ""
+
 #: src/renderer/components/activate_online_form/activate_online_form.messages.ts:2:37
 msgid "Your connect code is used for players to connect with you directly."
 msgstr ""
 "Ваш коннект-код будет использоваться другими игроками для прямого "
 "соединения с вами."
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:26:22
+#: src/renderer/pages/home/mods/mods.messages.ts:123:22
+msgid "Your disc matches the room's."
+msgstr ""
+
+#: src/renderer/pages/home/spectate/spectate.messages.ts:24:19
+msgid "Your game"
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:52:22
+msgid "Your game can't do that right now."
+msgstr ""
+
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:32:22
 msgid "Your game can't join a room right now."
 msgstr ""
 
-#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:24:24
+#: src/renderer/components/social/social.messages.ts:44:27
+msgid ""
+"Your game didn't respond. Create one in game: Online > With Friends > "
+"Create Room."
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:42:23
+msgid "Your game is creating a room."
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:41:22
+#: src/renderer/pages/home/overview/public_rooms/public_rooms.messages.ts:30:24
+#. Hand-off to the game (as a room click, docs/rooms-protocol.md §5).
 msgid "Your game is going to the room."
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:5:21
+msgid "Your games"
+msgstr ""
+
+#: src/renderer/app/header/bug_report/bug_report.messages.ts:12:40
+#. {0} reason: string
+msgid "Your report was sent, but the logs couldn't be uploaded: {0}"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:105:24
+#: src/renderer/pages/home/mods/mods.messages.ts:53:19
+#. The room.
+msgid "Your room"
+msgstr ""
+
+#: src/renderer/components/social/social.messages.ts:14:19
+msgid "Your room has no open slot."
+msgstr ""
+
+#: src/renderer/app/header/bug_report/bug_report.messages.ts:7:22
+msgid "game sucks plz fix"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:64:20
+msgid "host"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:65:24
+msgid "joining"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:18:28
+msgid "loser picks"
+msgstr ""
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:19:32
+msgid "loser picks from the list"
 msgstr ""
 
 #: src/renderer/pages/quick_start/steps/iso_selection_step/iso_selection_step.messages.ts:6:28
 msgid "or drag and drop here"
 msgstr "или перетащите сюда"
+
+#: src/renderer/pages/rulesets/rulesets_page.messages.ts:20:24
+msgid "random stage"
+msgstr ""
+
+#: src/renderer/pages/home/spectate/spectate.messages.ts:15:13
+msgid "vs"
+msgstr ""
+
+#: src/renderer/pages/home/mods/mods.messages.ts:63:14
+msgid "you"
+msgstr ""
 
 #: src/renderer/pages/replays/replay_browser/replay_browser.messages.ts:8:5
 #. {0} count: number
@@ -1550,14 +2833,9 @@ msgstr ""
 "{0, plural, one {# реплей скрыт} few {# реплея скрыто} other {# реплеев "
 "скрыто}}."
 
-#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:19:51
+#: src/renderer/pages/settings/dolphin_settings/dolphin_settings.messages.ts:20:51
 #. {0} dolphinTypeName: string
 msgid "{0} Executable"
-msgstr ""
-
-#: src/renderer/pages/settings/game_settings/game_settings.messages.ts:13:41
-#. {0} frames: number
-msgid "{0} frames"
 msgstr ""
 
 #: src/renderer/initialize_app.messages.ts:10:63
