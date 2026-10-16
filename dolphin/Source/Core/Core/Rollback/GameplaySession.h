@@ -45,9 +45,12 @@ namespace Gprb::Session
 {
 // Input delay in frames. Each player picks the delay of their own inputs, as on Slippi (in every
 // mode, ranked too): a set value, or automatic, from the round trip to the peer when the game's
-// GekkoNet session starts: 1 frame below 100 ms, 2 below 150 ms, 3 below 200 ms, else 4, in
-// GekkoNet's ping (what players see in game; GameRoundTrip). Low delay is what players feel; the
-// rollbacks it costs (a re-run frame is ~1.3 ms on a desktop) fit in the frame at these round trips.
+// GekkoNet session starts: 1 frame below 90 ms, 2 below 140 ms, 3 below 190 ms, else 4, in
+// GekkoNet's ping (what players see in game; GameRoundTrip). Low delay is what players feel, but
+// the rollbacks it costs must fit in the frame: a re-run frame is 3.7-4.2 ms on an i7-10700KF, and
+// at delay 1 and ~95 ms its ~1.7-deep rollbacks took 7-9 ms, past the present hold (bug #27,
+// 2026-10-16; was 100/150/200 ms). Skipping the render in re-run passes is not an option (docs/
+// gameplay-rollback-status.md, Phase 28).
 // A round trip not measured yet: the default.
 constexpr int DEFAULT_INPUT_DELAY = 2;
 constexpr int MAX_INPUT_DELAY = 9;
@@ -65,14 +68,14 @@ constexpr int AutoInputDelay(double rtt_ms)
 {
   if (rtt_ms < 0)
     return DEFAULT_INPUT_DELAY;
-  return rtt_ms < 100 ? 1 : rtt_ms < 150 ? 2 : rtt_ms < 200 ? 3 : 4;
+  return rtt_ms < 90 ? 1 : rtt_ms < 140 ? 2 : rtt_ms < 190 ? 3 : 4;
 }
-static_assert(AutoInputDelay(-1) == 2 && AutoInputDelay(0) == 1 && AutoInputDelay(99.9) == 1 &&
-              AutoInputDelay(100) == 2 && AutoInputDelay(149.9) == 2 &&
-              AutoInputDelay(150) == 3 && AutoInputDelay(199.9) == 3 &&
-              AutoInputDelay(200) == 4 && AutoInputDelay(400) == 4);
+static_assert(AutoInputDelay(-1) == 2 && AutoInputDelay(0) == 1 && AutoInputDelay(89.9) == 1 &&
+              AutoInputDelay(90) == 2 && AutoInputDelay(139.9) == 2 &&
+              AutoInputDelay(140) == 3 && AutoInputDelay(189.9) == 3 &&
+              AutoInputDelay(190) == 4 && AutoInputDelay(400) == 4);
 static_assert(AutoInputDelay(GameRoundTrip(-1)) == 2 && AutoInputDelay(GameRoundTrip(30)) == 1 &&
-              AutoInputDelay(GameRoundTrip(83)) == 1 && AutoInputDelay(GameRoundTrip(84)) == 2 &&
+              AutoInputDelay(GameRoundTrip(73)) == 1 && AutoInputDelay(GameRoundTrip(74)) == 2 &&
               AutoInputDelay(GameRoundTrip(90)) == 2);
 
 // The game frame the rollback starts at. The match's first frames are the countdown, during which
