@@ -203,7 +203,9 @@ publish_website() { # dir
   [ "$(stat -c %s "$tarf")" -le "$MAX_SITE" ] || die "website is larger than $MAX_SITE bytes"
   [ "${st[0]}" -eq 0 ] || die "could not read $src"
   # Only directories and regular files; no absolute names, no "..", nothing docs-like.
-  bad=$(tar -tvf "$tarf" | awk '$1 !~ /^[-d]/ {print}' | head -n5)
+  # The pipes here read all of tar's output (no grep -q, no head): SIGPIPE is ignored under the
+  # runner, so a reader that stops early makes tar print "stdout: write error" and fail the pipe.
+  bad=$(tar -tvf "$tarf" | awk '$1 !~ /^[-d]/ && n++ < 5')
   [ -z "$bad" ] || die "website has links or special files: $bad"
   while IFS= read -r n; do
     case "$n" in
@@ -213,7 +215,7 @@ publish_website() { # dir
     esac
     [[ "$n" =~ ^[A-Za-z0-9._/+-]*$ ]] || die "unexpected file name in website: $n"
   done < <(tar -tf "$tarf")
-  tar -tf "$tarf" | grep -qx './index.html' || die "website has no index.html"
+  tar -tf "$tarf" | grep -x './index.html' >/dev/null || die "website has no index.html"
   new="$STAGE/site"
   mkdir "$new"
   tar -C "$new" --no-same-owner --no-same-permissions -xf "$tarf"
@@ -233,7 +235,7 @@ FEED_RE='^latest(-linux|-mac)?\.yml$'
 ART_RE='^Brawl-Online(-Setup)?-[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?(-(x86_64|x64|arm64|universal))?(-(win|linux|mac))?\.(exe|AppImage|dmg|zip)(\.blockmap)?$'
 
 yml_field() { # file key: first "key: value" at top level
-  sed -n "s/^$2: *'\{0,1\}\([^']*\)'\{0,1\} *$/\1/p" "$1" | head -n1
+  sed -n "s/^$2: *'\{0,1\}\([^']*\)'\{0,1\} *$/\1/p" "$1" | sed -n 1p
 }
 
 publish_client() { # dir
