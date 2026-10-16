@@ -19,6 +19,9 @@ Brawl Online website (brawlonline.net): third-party material and credits
    operating systems only, and the GitHub and Discord icons link to our pages there;
    the marks belong to their owners (Microsoft, Apple, Linus Torvalds for Linux/Tux,
    GitHub and Discord).
+   Material Icons by Google (https://fonts.google.com/icons), "bug_report" (outlined), as
+   inline SVG with its unmodified path, the same icon as the launcher's bug report button.
+   Licensed under the Apache License, Version 2.0: https://www.apache.org/licenses/LICENSE-2.0
 
 3. Background video (assets/bg.webm, assets/bg.mp4, assets/bg-poster.jpg)
    Our own recording, made for this site: four level 9 CPUs (Fox, Marth, Mario, Pikachu,

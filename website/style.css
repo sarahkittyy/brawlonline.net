@@ -891,6 +891,17 @@ summary:focus-visible {
   text-underline-offset: 3px;
 }
 
+.faq dd a.link-blue {
+  color: #6cb4ff;
+}
+
+.inline-icon {
+  width: 1.15em;
+  height: 1.15em;
+  vertical-align: -0.2em;
+  color: var(--fg);
+}
+
 .faq dd.names {
   display: flex;
   flex-wrap: wrap;
