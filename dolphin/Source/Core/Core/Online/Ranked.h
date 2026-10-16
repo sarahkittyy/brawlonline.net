@@ -14,8 +14,10 @@
 // - counts the wins and says when the set is over (two wins), so the session ends once the game
 //   is back on the character select (GameBridge, GET_MATCH_STATE), as Slippi's ranked set does;
 // - reports a set that ends early (POST /v1/ranked/report-leave): "left" when this player leaves
-//   (CLEANUP_CONNECTION before the set is over), "opponent_left" when the opponent disconnects or
-//   goes silent;
+//   (CLEANUP_CONNECTION before the set is over, also a match found whose session never started),
+//   with beforeStageSelect when their game had not been sent to the stage select yet (the server
+//   does not rate such a set if no game was played); "opponent_left" when the opponent
+//   disconnects or goes silent;
 // - then fetches the set's result (GET /v1/ranked/result) for the rating change, which the game
 //   reads with GET_RANK.
 //
@@ -53,8 +55,11 @@ void OnSessionStartFailed();
 void OnGameResult(const Gprb::Session::GameResult& result);
 // The opponent disconnected or went silent (GameBridge sees the lobby's disconnected flag).
 void OnPeerGone();
+// GP_FETCH_STEP answered with a stage step: the game goes to (or is on) the set's stage select.
+void OnStageSelect();
 // Client::Cleanup(): this player leaves the connection, or the finished set is being closed.
-void OnCleanup();
+// `found`: the match the search had found, if any (also one not handed off to a session).
+void OnCleanup(const Match* found);
 // True from the game that decides the set until the cleanup after it.
 bool IsSetOver();
 

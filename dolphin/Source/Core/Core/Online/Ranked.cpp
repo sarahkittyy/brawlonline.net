@@ -96,6 +96,11 @@ std::array<int, 2> s_wins{};
 bool s_set_over = false;
 bool s_peer_gone = false;
 bool s_left_reported = false;
+// The game has been sent to the stage select in this set (GP_FETCH_STEP answered with a stage
+// step). Leaving before that does not count (bug report #37): the "left" says so.
+bool s_stage_select = false;
+// The last ranked match left before its session started (OnCleanup): reported once.
+std::string s_left_before_session;
 
 // Counters and the last result (harness, GET_RANK).
 u64 s_reports_sent = 0;
@@ -304,14 +309,18 @@ void Enqueue(Job job)
   s_cv.notify_all();
 }
 
-// Under s_mutex.
-void EnqueueLeave(const char* kind)
+// Under s_mutex. `before_stage_select`: this player leaves before their game was sent to the
+// set's stage select (only with "left"); with no game played the server does not rate the set.
+void EnqueueLeave(const std::string& match_id, const char* kind, bool before_stage_select = false)
 {
   picojson::object body;
-  body["matchId"] = picojson::value(s_match_id);
+  body["matchId"] = picojson::value(match_id);
   body["kind"] = picojson::value(kind);
+  if (before_stage_select)
+    body["beforeStageSelect"] = picojson::value(true);
   ++s_reports_sent;
-  Enqueue({fmt::format("leave '{}' of {}", kind, s_match_id),
+  Enqueue({fmt::format("leave '{}' of {}{}", kind, match_id,
+                       before_stage_select ? " (before the stage select)" : ""),
            [body] { return Post("leave", "/v1/ranked/report-leave", body); }});
 }
 
@@ -333,8 +342,9 @@ bool LeaveUnfinishedSet(const char* how)
   if (!s_active || s_set_over || s_peer_gone || s_left_reported)
     return false;
   s_left_reported = true;
-  NOTICE_LOG_FMT(NETPLAY, "Ranked: leaving set {} before it is over ({})", s_match_id, how);
-  EnqueueLeave("left");
+  NOTICE_LOG_FMT(NETPLAY, "Ranked: leaving set {} before it is over ({}{})", s_match_id, how,
+                 s_stage_select ? "" : ", before the stage select");
+  EnqueueLeave(s_match_id, "left", !s_stage_select);
   return true;
 }
 }  // namespace
@@ -436,6 +446,7 @@ void OnSessionStart(const Match& match)
   s_set_over = false;
   s_peer_gone = false;
   s_left_reported = false;
+  s_stage_select = false;
   s_change.reset();
   s_last_status = "ASSIGNED";
   if (s_active)
@@ -565,20 +576,45 @@ void OnPeerGone()
     return;
   s_peer_gone = true;
   NOTICE_LOG_FMT(NETPLAY, "Ranked: the opponent left set {}", s_match_id);
-  EnqueueLeave("opponent_left");
+  EnqueueLeave(s_match_id, "opponent_left");
   EnqueueResult();
 }
 
-void OnCleanup()
+void OnStageSelect()
+{
+  std::lock_guard lk(s_mutex);
+  if (s_active && !s_stage_select)
+  {
+    s_stage_select = true;
+    NOTICE_LOG_FMT(NETPLAY, "Ranked: set {} reached the stage select", s_match_id);
+  }
+}
+
+void OnCleanup(const Match* found)
 {
   GameSetup::End();
   std::lock_guard lk(s_mutex);
   s_reporting = false;
-  if (!s_active)
+  if (s_active)
+  {
+    if (LeaveUnfinishedSet("left the connection"))
+      EnqueueResult();
+    s_active = false;
     return;
-  if (LeaveUnfinishedSet("left the connection"))
-    EnqueueResult();
-  s_active = false;
+  }
+  // A ranked match the server made but whose session never started here: the search was
+  // cancelled as the match was made (bug report #37, 2026-10-16: START 0.2 s after it), the
+  // connection was still being made, or the session failed to start. Without a report the
+  // opponent's "opponent left" counted it as this player's abandon; it is left before the stage
+  // select, which the server does not rate.
+  if (!found || found->mode != MODE_RANKED || found->match_id.empty() ||
+      found->match_id == s_left_before_session)
+  {
+    return;
+  }
+  s_left_before_session = found->match_id;
+  NOTICE_LOG_FMT(NETPLAY, "Ranked: leaving set {} before its session started", found->match_id);
+  EnqueueLeave(found->match_id, "left", true);
 }
 
 bool IsSetOver()
@@ -619,6 +655,8 @@ picojson::object Status()
   o["set_over"] = picojson::value(s_set_over);
   o["peer_gone"] = picojson::value(s_peer_gone);
   o["left_reported"] = picojson::value(s_left_reported);
+  o["stage_select"] = picojson::value(s_stage_select);
+  o["left_before_session"] = picojson::value(s_left_before_session);
   o["reports_sent"] = picojson::value(static_cast<double>(s_reports_sent));
   o["reports_failed"] = picojson::value(static_cast<double>(s_reports_failed));
   o["pending_jobs"] = picojson::value(static_cast<double>(s_jobs.size()));

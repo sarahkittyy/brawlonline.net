@@ -87,6 +87,10 @@ pub struct GameReport {
     pub at: DateTime<Utc>,
 }
 
+/// The end reason of a set left before the stage select with no game played (not rated, and not
+/// in the match history).
+pub const LEFT_BEFORE_STAGE_SELECT: &str = "left before the stage select";
+
 /// A client's report that the set ended early.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Leave {
@@ -118,6 +122,8 @@ pub struct LeaveReport {
     pub reporter: Uuid,
     pub kind: Leave,
     pub at: DateTime<Utc>,
+    /// A `Left` made before the reporter's game was sent to the set's stage select.
+    pub before_stage_select: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -240,7 +246,7 @@ pub fn resolve(
     }
 
     let reported = |p: usize, kind: Leave| leaves.iter().find(|l| l.reporter == players[p] && l.kind == kind);
-    let left = [reported(0, Leave::Left).is_some(), reported(1, Leave::Left).is_some()];
+    let left = [reported(0, Leave::Left), reported(1, Leave::Left)];
     let opp_left = [reported(0, Leave::OpponentLeft), reported(1, Leave::OpponentLeft)];
     let played = wins.iter().sum::<u32>() > 0 || games.iter().any(|g| g.winner.is_none());
     let abandon = |leaver: usize| Outcome::Abandoned {
@@ -249,13 +255,23 @@ pub fn resolve(
         credit_other: played,
         wins,
     };
+    // A player who left before their game was sent to the stage select, with no game played,
+    // abandoned nothing: the search was cancelled as the match was made, or the connection never
+    // came up (bug report #37, 2026-10-16). Nobody is rated.
+    let left_early = |l: &LeaveReport| {
+        (!played && l.before_stage_select).then(|| Outcome::Void {
+            status: "TERMINATED",
+            reason: LEFT_BEFORE_STAGE_SELECT.into(),
+            wins,
+        })
+    };
     match left {
-        [true, true] => {
+        [Some(_), Some(_)] => {
             return Outcome::Void { status: "TERMINATED", reason: "both players left".into(), wins };
         }
-        [true, false] => return abandon(0),
-        [false, true] => return abandon(1),
-        [false, false] => {}
+        [Some(l), None] => return left_early(l).unwrap_or_else(|| abandon(0)),
+        [None, Some(l)] => return left_early(l).unwrap_or_else(|| abandon(1)),
+        [None, None] => {}
     }
     match opp_left {
         [Some(_), Some(_)] => {
@@ -646,7 +662,13 @@ mod tests {
             self.game(0, g, w, min).game(1, g, w, min)
         }
         fn leave(&mut self, by: usize, kind: Leave, min: i64) -> &mut Self {
-            let r = LeaveReport { reporter: self.p[by], kind, at: self.at(min) };
+            let r = LeaveReport { reporter: self.p[by], kind, at: self.at(min), before_stage_select: false };
+            self.leaves.push(r);
+            self
+        }
+        /// Player `by` leaves before their game was sent to the stage select.
+        fn leave_early(&mut self, by: usize, min: i64) -> &mut Self {
+            let r = LeaveReport { reporter: self.p[by], kind: Leave::Left, at: self.at(min), before_stage_select: true };
             self.leaves.push(r);
             self
         }
@@ -741,6 +763,35 @@ mod tests {
         let mut s = Set::new();
         s.leave(1, Leave::OpponentLeft, 7).leave(0, Leave::Left, 7);
         assert!(matches!(s.at_min(7), Outcome::Abandoned { credit_other: false, .. }));
+    }
+
+    #[test]
+    fn leaving_before_the_stage_select_rates_nobody() {
+        // Bug report #37: the search cancelled 0.2 s after the match was made; the opponent's
+        // "opponent left" came 22 s later.
+        let mut s = Set::new();
+        s.leave_early(0, 0).leave(1, Leave::OpponentLeft, 1);
+        let o = s.at_min(1);
+        assert_eq!(o, Outcome::Void { status: "TERMINATED", reason: LEFT_BEFORE_STAGE_SELECT.into(), wins: [0, 0] });
+        assert_eq!(scores(s.p, &o), [None, None]);
+        // Settled at once, before the opponent says anything.
+        let mut s = Set::new();
+        s.leave_early(1, 0);
+        assert!(matches!(s.at_min(0), Outcome::Void { status: "TERMINATED", .. }));
+        // After a game it is an abandon as any other leave (a later game's CSS is past the stage
+        // select anyway).
+        let mut s = Set::new();
+        s.both(1, Some(0), 5).leave_early(1, 6);
+        assert_eq!(s.at_min(6), Outcome::Abandoned { leaver: s.p[1], other: s.p[0], credit_other: true, wins: [1, 0] });
+        // A drawn game counts as played.
+        let mut s = Set::new();
+        s.both(1, None, 5).leave_early(1, 6);
+        assert!(matches!(s.at_min(6), Outcome::Abandoned { credit_other: true, .. }));
+        // Without the leaver's own report (an old client, a crash) the opponent's report decides,
+        // as before.
+        let mut s = Set::new();
+        s.leave(1, Leave::OpponentLeft, 1);
+        assert_eq!(s.at_min(3), Outcome::Abandoned { leaver: s.p[0], other: s.p[1], credit_other: false, wins: [0, 0] });
     }
 
     #[test]

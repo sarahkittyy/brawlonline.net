@@ -215,8 +215,8 @@ async fn reports(
     .bind(match_id)
     .fetch_all(&mut **tx)
     .await?;
-    let leaves: Vec<(Uuid, String, DateTime<Utc>)> =
-        sqlx::query_as("SELECT reporter, kind, created_at FROM leave_reports WHERE match_id = $1")
+    let leaves: Vec<(Uuid, String, DateTime<Utc>, bool)> =
+        sqlx::query_as("SELECT reporter, kind, created_at, before_stage_select FROM leave_reports WHERE match_id = $1")
             .bind(match_id)
             .fetch_all(&mut **tx)
             .await?;
@@ -227,7 +227,9 @@ async fn reports(
             .collect(),
         leaves
             .into_iter()
-            .filter_map(|(reporter, kind, at)| Some(LeaveReport { reporter, kind: Leave::parse(&kind)?, at }))
+            .filter_map(|(reporter, kind, at, before_stage_select)| {
+                Some(LeaveReport { reporter, kind: Leave::parse(&kind)?, at, before_stage_select })
+            })
             .collect(),
     ))
 }
@@ -583,6 +585,10 @@ pub struct ReportLeaveReq {
     pub match_id: String,
     /// `left` (this player left the set) or `opponent_left` (the opponent disconnected).
     pub kind: String,
+    /// With `left`: this player's game had not been sent to the set's stage select yet (a search
+    /// cancelled as the match was made). With no game played the set is not rated.
+    #[serde(default)]
+    pub before_stage_select: bool,
 }
 
 /// `reportOnlineMatchStatus(abandoned)`: the set ended before it was decided.
@@ -590,16 +596,19 @@ pub async fn report_leave(State(state): State<AppState>, Json(req): Json<ReportL
     let uid = reporter(&state, &req.uid, &req.play_key).await?;
     players_match(&state.pool, &req.match_id, uid).await?;
     let kind = Leave::parse(&req.kind).ok_or_else(|| ApiError::bad_request("invalid_kind", "Unknown leave kind"))?;
+    let before_stage_select = req.before_stage_select && kind == Leave::Left;
     sqlx::query(
-        "INSERT INTO leave_reports (match_id, reporter, kind, created_at) VALUES ($1, $2, $3, $4) ON CONFLICT DO NOTHING",
+        "INSERT INTO leave_reports (match_id, reporter, kind, created_at, before_stage_select)
+         VALUES ($1, $2, $3, $4, $5) ON CONFLICT DO NOTHING",
     )
     .bind(&req.match_id)
     .bind(uid)
     .bind(kind.as_str())
     .bind(Utc::now())
+    .bind(before_stage_select)
     .execute(&state.pool)
     .await?;
-    tracing::info!(match_id = %req.match_id, %uid, kind = kind.as_str(), "ranked leave reported");
+    tracing::info!(match_id = %req.match_id, %uid, kind = kind.as_str(), before_stage_select, "ranked leave reported");
     let timing = state.cfg.ranked_timing();
     settle(&state.pool, &req.match_id, Utc::now(), timing).await?;
     Ok(Json(set_state(&state.pool, &req.match_id, uid, timing).await?))

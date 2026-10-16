@@ -626,6 +626,9 @@ Response RankResponse()
 Response GameStepResponse()
 {
   const GameSetup::View v = GameSetup::Current();
+  // The game goes to the stage select on a stage step: from here leaving a ranked set counts.
+  if (v.active && v.to_sss)
+    Ranked::OnStageSelect();
   Response r;
   r.cmd = CMD_GP_FETCH_STEP;
   r.payload[0] = v.active ? 1 : 0;

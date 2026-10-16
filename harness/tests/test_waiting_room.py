@@ -203,10 +203,11 @@ def test_waiting_room_again_after_unranked(backend: OnlineBackend, dolphin: Call
 @pytest.mark.slow
 def test_waiting_room_cancels(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                               gpu_backend: str) -> None:
-    """START in the room cancels the search and goes back to the CSS, the character still
-    selected; B, short or held, is the fighter's and cancels nothing (the user's, 2026-10-16:
-    no hold B to leave the room). The player plays from controller port 4, the one that pressed
-    START on the CSS."""
+    """START held for half a second in the room cancels the search and goes back to the CSS, the
+    character still selected; a short START press does nothing (bug report #37, 2026-10-16: a
+    press as Training's pause cancelled a ranked search as its match was made). B, short or
+    held, is the fighter's and cancels nothing (the user's, 2026-10-16: no hold B to leave the
+    room). The player plays from controller port 4, the one that pressed START on the CSS."""
     test = "waiting-room-cancel"
     ua = backend.create_user("pia", "PIA")
     a = _boot(dolphin, "wr-c", backend, ua, gpu_backend, test, "gameplay", standard_controllers=(3,))
@@ -219,10 +220,13 @@ def test_waiting_room_cancels(backend: OnlineBackend, dolphin: Callable[..., Dol
     _search(a, 1)
     assert _in_room(a)
     _check_room(a, "00-room-port-4")
-    a.steps("wait 30", "tap START 4")
+    a.steps("wait 30", "tap START 4", "wait 30", "tap START 20", "wait 30")
+    assert _in_room(a), "a START press (or 20 frames) does not leave the room"
+    assert a.c.mm_status()["state"] == "matchmaking", "nor cancel the search"
+    a.steps("tap START 40")
     # The screen goes black before the room ends, and stays black through the load.
     _wait(lambda: _fade(a) == 255, 5, "the fade to black")
-    _back_on_css(a, "back on the CSS after START")
+    _back_on_css(a, "back on the CSS after holding START")
     _wait(lambda: a.c.mm_status()["state"] == "idle", 10, "the search cancelled")
     a.steps("wait 40")
     assert _fade(a) == 0, "the CSS out of the fade"
@@ -267,9 +271,46 @@ def test_ranked_game_1_from_the_waiting_room(backend: OnlineBackend, dolphin: Ca
     for g in players:
         _wait_view(g, lambda v: v["type"] == 1 and sorted(v["selectable"]) == STARTERS, "the starters")
         assert _room(g) & 0xF0F == 0x200 | ROOM_ENDED, hex(_room(g))   # ended on the CSS
+        # From here leaving the set counts (Ranked's "left" no longer says beforeStageSelect).
+        _wait(lambda: _ranked(g)["stage_select"], 10, f"{g.inst.name}: the stage select noted")
     _strike_to(host, join, 0x01)
     rep = online_set.play_game(players, 1)
     assert rep["stage"] == 0x01, rep
     assert rep["checksums"]["mismatches"] == 0, rep
     for g in players:
         _logs_clean(g)
+
+
+@pytest.mark.slow
+def test_ranked_cancel_before_the_stage_select(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                               gpu_backend: str) -> None:
+    """Bug report #37 (2026-10-16): a ranked search cancelled in the room just as its match was
+    made counted as the canceller's abandon, since only the opponent reported anything. Here the
+    two players drop each other's P2P packets (PPR_TEST_P2P_BLOCK), so the match stays at
+    "connecting"; one holds START. Its Dolphin reports "left" before the stage select, and the
+    server ends the set TERMINATED with nobody rated."""
+    test = "waiting-room-ranked-cancel"
+    ua, ub = backend.create_user("tove", "TOVE"), backend.create_user("ugo", "UGOX")
+    a = _boot(dolphin, "wr-xa", backend, ua, gpu_backend, test, "gameplay",
+              env={"PPR_TEST_P2P_BLOCK": ub.connect_code})
+    b = _boot(dolphin, "wr-xb", backend, ub, gpu_backend, test, "gameplay",
+              env={"PPR_TEST_P2P_BLOCK": ua.connect_code})
+    _both(a.to_main_menu, b.to_main_menu)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("ranked"), lambda: b.to_css("ranked"))
+
+    _search(a, 0)
+    _search(b, 0)
+    _wait(lambda: a.c.mm_status()["state"] == "opponent_connecting", 30, "matched, connecting")
+    assert _in_room(a)
+    a.steps("tap START 40")
+    left = _wait(lambda: _ranked(a)["left_before_session"] or None, 10, "the left before the session")
+    _back_on_css(a, "back on the CSS after holding START")
+    res = _wait(lambda: (lambda r: r if r["status"] != "ASSIGNED" else None)(
+        backend._http("GET", f"/v1/ranked/result?matchId={left}&uid={ua.uid}")), 30, "the set settled")
+    assert res["status"] == "TERMINATED" and res["reason"] == "left before the stage select", res
+    assert res["rating"] is None, res
+    for u in (ua, ub):
+        pub = backend._http("GET", f"/user/{u.uid}?additionalFields=rank")
+        assert pub["rank"]["ratingUpdateCount"] == 0, pub
+    _logs_clean(a)

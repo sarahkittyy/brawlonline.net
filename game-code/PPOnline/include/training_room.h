@@ -9,7 +9,7 @@ class MuMsg;
 // sequence (sqNetAnyOkiraku state 5) sets up for its "With Anyone" search, with a Sandbag in the
 // middle and the search status in the room's scrolling banner. The room ends with its fade once
 // the match is set up (Unranked: straight into the match), once the opponent is connected (Ranked:
-// the CSS, for the game setup steps), or when the player cancels (START: the CSS).
+// the CSS, for the game setup steps), or when the player cancels (START held: the CSS).
 namespace TrainingRoom {
     enum End { END_NONE = 0, END_MATCH = 1, END_CSS = 2 };
 

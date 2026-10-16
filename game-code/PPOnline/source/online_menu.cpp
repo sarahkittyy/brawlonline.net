@@ -86,6 +86,8 @@ namespace OnlineMenu {
         bool cssSeen;           // the online CSS was up last frame (holdBGuard)
         bool bGuard;            // B still held from before this CSS: taken out until released
         u32 roomLeaveFrames;    // frames on the CSS since the search started for the room
+        u32 roomHoldStart;      // the waiting room: frames START has been held (hold START cancels)
+        bool roomStartUp;       // START was up once in the room (the CSS's search press is not a hold)
         u32 searchSeq;          // seq of the current FIND_OPPONENT (0 = no search)
         bool pollPending;       // a GET_MATCH_STATE (or the FIND_OPPONENT) awaits its answer
         u32 pollFrames;         // frames it has been waiting
@@ -1614,6 +1616,8 @@ namespace OnlineMenu {
         if (usesWaitingRoom()) {
             TrainingRoom::enter();
             s.roomLeaveFrames = 0;
+            s.roomHoldStart = 0;
+            s.roomStartUp = false;
         }
     }
 
@@ -2868,10 +2872,14 @@ namespace OnlineMenu {
     // the CSS: the search is polled, its line goes into the room's banner, and the room ends:
     //  - Unranked, once the first game is set up (SESSION): straight into the match;
     //  - Ranked, once connected: the CSS, where the game setup steps begin (Slippi's order);
-    //  - START: the search is cancelled (as B on the CSS), back to the CSS (holding B no longer
-    //    does it: the user's, 2026-10-16; B is the fighter's in the room);
+    //  - START held for ROOM_HOLD_START_FRAMES: the search is cancelled (as B on the CSS), back
+    //    to the CSS. A press does nothing (bug report #37, 2026-10-16: a player pressed START in
+    //    the room, as Training's pause, just as a ranked match was made, and that set counted as
+    //    his abandon). Holding B does not cancel (the user's, 2026-10-16; B is the fighter's);
     //  - the search ended by itself (an error, the opponent gone): back to the CSS, which says so.
-    // START is taken out of the room (it would pause it).
+    // START is taken out of the room (it would pause it). A START still held from the CSS's search
+    // press counts only once it has been let go in the room.
+    static const u32 ROOM_HOLD_START_FRAMES = 30;
     static void tickWaitingRoom()
     {
         pollMailbox();
@@ -2879,12 +2887,21 @@ namespace OnlineMenu {
         TrainingRoom::tick();
         if (!TrainingRoom::running()) return;
         blockCodeMenu();
-        const u32 pressed = padButtons(0xC);
+        const bool startHeld = (padButtons(0x0) & BTN_START) != 0;
         maskButtons(BTN_START);
+        if (!startHeld) s.roomStartUp = true;
+        s.roomHoldStart = (startHeld && s.roomStartUp) ? s.roomHoldStart + 1 : 0;
         updateStatus();
-        TrainingRoom::setBanner(s.status, s.statusRed);
         if (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING) {
-            if (pressed & BTN_START) {
+            char banner[sizeof(s.status) + 32];
+            sprintf(banner, "%s - Hold START to cancel", s.status);
+            TrainingRoom::setBanner(banner, s.statusRed);
+        } else {
+            TrainingRoom::setBanner(s.status, s.statusRed);
+        }
+        if (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING) {
+            if (s.roomHoldStart >= ROOM_HOLD_START_FRAMES) {
+                s.roomHoldStart = 0;
                 cleanup();
                 playSE(SE_BACK);
                 TrainingRoom::end(TrainingRoom::END_CSS);

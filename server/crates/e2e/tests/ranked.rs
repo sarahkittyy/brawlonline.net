@@ -94,6 +94,17 @@ async fn leave(stack: &Stack, by: &UserJson, id: &str, kind: &str) -> (u16, Valu
         .await
 }
 
+/// A "left" before the leaver's game was sent to the stage select (bug report #37).
+async fn leave_early(stack: &Stack, by: &UserJson, id: &str) -> (u16, Value) {
+    stack
+        .post(
+            "/v1/ranked/report-leave",
+            None,
+            json!({"uid": by.uid, "playKey": by.play_key, "matchId": id, "kind": "left", "beforeStageSelect": true}),
+        )
+        .await
+}
+
 async fn rank(stack: &Stack, u: &UserJson) -> (f64, u64) {
     let (st, body) = stack.get(&format!("/user/{}?additionalFields=chatMessages,rank", u.uid), None).await;
     assert_eq!(st, 200);
@@ -195,6 +206,22 @@ async fn abandoning_disagreeing_and_bad_reports() {
     let ra = result(&stack, a, &id).await;
     let want = updated(DEFAULT_RATING - 100.0, 1, DEFAULT_RATING, 1.0);
     assert!(close(ra["rating"]["after"].as_f64().unwrap(), want), "{ra}");
+
+    // Leaving before the stage select with no game played (the search cancelled as the match was
+    // made, bug report #37): nobody rated, at once; the opponent's later report changes nothing.
+    let before = (rank(&stack, a).await, rank(&stack, b).await);
+    let id = direct_set(&stack, a, b, 6).await;
+    let (st, s) = leave_early(&stack, a, &id).await;
+    assert_eq!((st, s["status"].as_str()), (200, Some("TERMINATED")), "{s}");
+    assert!(s["rating"].is_null(), "{s}");
+    let (_, s) = leave(&stack, b, &id, "opponent_left").await;
+    assert_eq!(s["status"], "TERMINATED");
+    assert_eq!((rank(&stack, a).await, rank(&stack, b).await), before);
+    // After a game it is an abandon like any other.
+    let id = direct_set(&stack, a, b, 7).await;
+    both(&stack, a, b, &id, 1, a).await;
+    let (_, s) = leave_early(&stack, b, &id).await;
+    assert_eq!(s["status"], "ABANDONED", "{s}");
 
     // Both saying the other left: a broken connection, nobody rated.
     let id = direct_set(&stack, a, b, 3).await;

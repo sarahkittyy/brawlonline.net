@@ -370,6 +370,26 @@ async fn match_history_and_unrated_reports() {
         .execute(&stack.pool)
         .await
         .unwrap();
+    // 6b. Ranked, b cancelled before the stage select (bug report #37), then a's "opponent left":
+    // nobody rated, not in the history.
+    let m9 = mm_match(&stack, 0, a, b, t0, 9).await;
+    let (st, s) = stack
+        .post(
+            "/v1/ranked/report-leave",
+            None,
+            json!({"uid": b.uid, "playKey": b.play_key, "matchId": m9, "kind": "left", "beforeStageSelect": true}),
+        )
+        .await;
+    assert_eq!((st, s["status"].as_str()), (200, Some("TERMINATED")), "{s}");
+    let (st, _) = stack
+        .post(
+            "/v1/ranked/report-leave",
+            None,
+            json!({"uid": a.uid, "playKey": a.play_key, "matchId": m9, "kind": "opponent_left"}),
+        )
+        .await;
+    assert_eq!(st, 200);
+    assert_eq!(rating_events(&stack.pool, &m9).await, 0);
     // 7. Ranked, in progress after one game.
     let m7 = mm_match(&stack, 0, b, a, t0, 7).await;
     ok_report(&stack, a, &m7, 1, Some(b)).await;
@@ -408,6 +428,7 @@ async fn match_history_and_unrated_reports() {
     assert_eq!(ids(&all), vec![m7.clone(), m4.clone(), m3.clone(), m2.clone(), m1.clone()]);
     assert!(all["next"].is_null());
     assert!(!ids(&all).contains(&m5) && !ids(&all).contains(&m6) && !ids(&all).contains(&m8));
+    assert!(!ids(&all).contains(&m9));
 
     let r1 = item(&all, &m1);
     assert_eq!((r1["mode"].as_str(), r1["ranked"].as_bool()), (Some("ranked"), Some(true)));

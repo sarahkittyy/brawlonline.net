@@ -235,7 +235,7 @@ Option: serve a tiny GraphQL endpoint with exactly these operations (async-graph
 | `GET /user/{uid}?additionalFields=chatMessages,rank` (built; `rank` has the Elo rating, rated sets, leaderboard `position` and `rankedPlayers`) | users-rest | public (as Slippi) |
 | `GET /v1/dolphin/latest?purpose=&beta=` | `getLatestDolphin` | — |
 | `POST /v1/ranked/report-game` (built; Ranked, Unranked and Direct games, only Ranked rated; no `uploadUrl` yet) | `reportOnlineGame` | play key |
-| `POST /v1/ranked/report-leave {kind: left \| opponent_left}` (built) | `reportOnlineMatchStatus` (`abandoned`) | play key |
+| `POST /v1/ranked/report-leave {kind: left \| opponent_left, beforeStageSelect?}` (built; a `left` before the stage select with no game played is not rated) | `reportOnlineMatchStatus` (`abandoned`) | play key |
 | (none: the server decides the set from the game reports) | 0xC2 path | |
 | `GET /v1/ranked/result?matchId=&uid=` (built) | `getRankedMatchPersonalResult` | public |
 | `GET /v1/ranked/leaderboard?limit=&after=` (built; keyset pages, no regions or seasons) | slippi.gg | public, per-IP limit |

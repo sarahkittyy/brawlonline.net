@@ -191,8 +191,6 @@ std::optional<std::string> FindMatch(const SearchOptions& options)
 
 void Cleanup()
 {
-  // Leaving a ranked set before it is over abandons it (reported to the server).
-  Ranked::OnCleanup();
   std::unique_ptr<Matchmaking> old;
   {
     std::lock_guard lk(s_mutex);
@@ -200,12 +198,21 @@ void Cleanup()
     s_searched = false;
     s_cancel_on_stop = 0;
   }
+  const std::optional<Match> found = old ? old->GetMatch() : std::nullopt;
+  {
+    // First the generation, under the gate: a match connecting meanwhile is no longer handed off,
+    // so Ranked sees either a set that started or one that never will.
+    std::lock_guard gate(s_session_gate);
+    ++s_generation;
+    // Leaving a ranked set before it is over abandons it, and leaving one before its stage select
+    // (also one found but not handed off yet) does not count; both are reported to the server.
+    Ranked::OnCleanup(found ? &*found : nullptr);
+  }
   SetHandoff("");
   // Slippi: doConnectionCleanup runs on its own thread so the game is not blocked while ENet
   // disconnects; a fresh matchmaking (IDLE) is in place at once.
   {
     std::lock_guard gate(s_session_gate);
-    ++s_generation;
     Session::Stop();
   }
   std::lock_guard lk(s_mutex);
