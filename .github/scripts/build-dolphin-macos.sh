@@ -56,6 +56,11 @@ fi
 # Qt 6.8.3's FindWrapOpenGL.cmake links "-framework AGL" unless find_library finds it, and the
 # macOS 26 SDK (Xcode 26) has no AGL: WrapOpenGL_AGL names OpenGL.framework (linked anyway)
 # instead, so find_library is skipped.
+# Libraries come from Externals, as in Dolphin's own BuildMacOSUniversalBinary.py: with the default
+# (AUTO) CMake found Homebrew's (ccache pulls in zstd, lz4, xxhash, fmt), linked by absolute path
+# and built for the runner's macOS. macdeployqt copied them for Dolphin only, so dolphin-tool
+# failed to start on every Mac (bug #34) and the copies needed macOS 26. iconv, bzip2 and curl
+# are macOS's own.
 sdk="$(xcrun --sdk macosx --show-sdk-path)"
 cmake -S "$src" -B "$build" -G Ninja \
   -DWrapOpenGL_AGL="$sdk/System/Library/Frameworks/OpenGL.framework" \
@@ -64,6 +69,7 @@ cmake -S "$src" -B "$build" -G Ninja \
   -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache \
   -DCMAKE_OBJC_COMPILER_LAUNCHER=ccache -DCMAKE_OBJCXX_COMPILER_LAUNCHER=ccache \
   -DCMAKE_PREFIX_PATH="$qt_dir" \
+  -DUSE_SYSTEM_LIBS=OFF -DUSE_SYSTEM_ICONV=ON -DUSE_SYSTEM_BZIP2=ON -DUSE_SYSTEM_CURL=ON \
   -DENABLE_VULKAN=OFF -DMACOS_CODE_SIGNING=OFF -DPOSTPROCESS_BUNDLE=OFF \
   -DENABLE_AUTOUPDATE=OFF -DENABLE_ANALYTICS=OFF -DUSE_DISCORD_PRESENCE=OFF \
   -DENABLE_LLVM=OFF -DENABLE_TESTS=OFF -DENABLE_NOGUI=OFF \
@@ -88,6 +94,36 @@ cp "$build/Binaries/dolphin-tool" "$app/Contents/MacOS/dolphin-tool"
 # every plugin and framework into PlugIns/Frameworks and writes qt.conf, so drop those copies.
 rm -rf "$app/Contents/MacOS/platforms" "$app/Contents/MacOS/styles"
 "$qt_dir/bin/macdeployqt" "$app" -verbose=1
+
+# ---- Check -------------------------------------------------------------------------------
+# Every executable and library in the bundle loads only the system's libraries or the bundle's
+# own, searches no folder outside the bundle, and runs on $min_macos.
+bad=0
+while IFS= read -r f; do
+  file -b "$f" | grep -q '^Mach-O' || continue
+  rel="${f#"$app/"}"
+  while IFS= read -r lib; do
+    case "$lib" in
+      /System/*|/usr/lib/*|@executable_path/*|@loader_path/*|@rpath/*) ;;
+      *) echo "::error::$rel loads $lib"; bad=1 ;;
+    esac
+  done < <(otool -l "$f" | awk '$1 == "cmd" { c = $2 }
+      c ~ /^LC_(LOAD|LOAD_WEAK|REEXPORT|LAZY_LOAD|LOAD_UPWARD)_DYLIB$/ && $1 == "name" { print $2 }')
+  while IFS= read -r rpath; do
+    case "$rpath" in
+      @executable_path/*|@loader_path/*) ;;
+      *) echo "::error::$rel searches $rpath"; bad=1 ;;
+    esac
+  done < <(otool -l "$f" | awk '$1 == "cmd" { c = $2 } c == "LC_RPATH" && $1 == "path" { print $2 }')
+  while IFS= read -r minos; do
+    if awk -v v="$minos" -v m="$min_macos" 'BEGIN { split(v, a, "."); split(m, b, ".");
+        exit !(a[1] > b[1] || (a[1] == b[1] && a[2] + 0 > b[2] + 0)) }'; then
+      echo "::error::$rel needs macOS $minos (the bundle supports $min_macos)"; bad=1
+    fi
+  done < <(otool -l "$f" | awk '$1 == "cmd" { c = $2 }
+      (c == "LC_BUILD_VERSION" && $1 == "minos") || (c == "LC_VERSION_MIN_MACOSX" && $1 == "version") { print $2 }')
+done < <(find "$app" -type f)
+[ "$bad" = 0 ] || exit 1
 
 # ---- Sign -------------------------------------------------------------------------------
 # Apple silicon refuses unsigned code. Dolphin's own script signs the dylibs and frameworks, then
