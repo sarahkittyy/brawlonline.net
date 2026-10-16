@@ -210,6 +210,16 @@ TEST(PeerData, PortValuesAndNames)
   EXPECT_EQ(pv[1], 0x00);
   EXPECT_EQ(pv[0x39] | pv[0x3A] | pv[0x3B], 0);
   EXPECT_EQ(pv[0x10], 0xFF);  // the layout is the game's to sanitise
+  // The stock count picked on the STOCKS box (stock control) is kept up to 99.
+  pv[0x39] = 3;
+  SanitizePortValues(pv);
+  EXPECT_EQ(pv[0x39], 3);
+  pv[0x39] = MAX_PICKED_STOCKS;
+  SanitizePortValues(pv);
+  EXPECT_EQ(pv[0x39], 99);
+  pv[0x39] = 100;
+  SanitizePortValues(pv);
+  EXPECT_EQ(pv[0x39], 0);
 
   EXPECT_EQ(TruncateName("abc"), "abc");
   EXPECT_EQ(TruncateName(std::string(1000, 'x')).size(), MAX_NAME_LEN);

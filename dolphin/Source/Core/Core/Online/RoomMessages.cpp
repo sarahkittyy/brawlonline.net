@@ -91,9 +91,10 @@ std::optional<Player> ParsePlayer(const picojson::object& o, std::string* why)
   bool bad = false;
   const auto character = OptByte(o, "character", &bad);
   const auto costume = OptByte(o, "costume", &bad);
-  if (bad)
+  const auto stocks = OptByte(o, "stocks", &bad);
+  if (bad || (stocks && (*stocks < 1 || *stocks > MAX_PICKED_STOCKS)))
   {
-    *why = "a player's character or costume is not 0-255";
+    *why = "a player's character, costume or stocks is out of range";
     return std::nullopt;
   }
   p.name = *name;
@@ -106,6 +107,7 @@ std::optional<Player> ParsePlayer(const picojson::object& o, std::string* why)
   {
     p.character = character;
     p.costume = costume;
+    p.stocks = stocks;
   }
   return p;
 }
@@ -761,6 +763,12 @@ std::optional<std::string> RequestJson(const Request& r)
       o["character"] = picojson::value(static_cast<double>(*r.character));
     if (r.flag && r.costume)
       o["costume"] = picojson::value(static_cast<double>(*r.costume));
+    if (r.flag && r.stocks)
+    {
+      if (*r.stocks < 1 || *r.stocks > MAX_PICKED_STOCKS)
+        return std::nullopt;
+      o["stocks"] = picojson::value(static_cast<double>(*r.stocks));
+    }
     break;
   case Op::Back:
     o["type"] = picojson::value("room-back");

@@ -138,6 +138,9 @@ constexpr u32 L_QUIT_LEFT = 0x7F;
 constexpr u32 S_ROOM_FLAGS = 0x213, S_ROOM_CODE = 0x214, S_ROOM_HOST = 0x218, S_ROOM_STATUS = 0x219,
               S_ROOM_MODE = 0x21A;
 constexpr u32 SP_ROOM_SLOT = 0x38, SP_ROOM_TEAM = 0x39, SP_ROOM_CHAR = 0x3A, SP_ROOM_COSTUME = 0x3B;
+// The stock count the player picked on their panel (the rules' stock control), shown with their
+// lock-in as SP_ROOM_CHAR is (0 none; still v8, a padding byte after restoreStocks).
+constexpr u32 SP_ROOM_STOCKS = 0x3D;
 constexpr u8 SLOT_OPEN = 1, SLOT_TAKEN = 2, SLOT_READY = 4, SLOT_HOST = 8, SLOT_IN_GAME = 0x10;
 constexpr u8 RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4;
 static_assert(L_ROOM_CREATE == L_DESYNCED + 1 && L_QUIT_LEFT == L_ROOM_CREATE + 1 &&
@@ -186,6 +189,8 @@ constexpr u32 OS_NAME = 2, OS_CODE = 0x22, OS_LAST_TAG = 0x34;
 // A name tag's characters (ppom.h TAG_CHARS); PortValues: flags, rumble, tag u16[5]
 constexpr int TAG_CHARS = 5;
 constexpr u32 PV_TAG_NAME = 2;
+// PortValues' stock count picked on the STOCKS box (stock control; 0 none; still v8, was padding)
+constexpr u32 PV_STOCKS = 0x39;
 // CodeSuggestionRequest payload: mode, scroll, inputLen, pad, index u32, input u16[9]
 constexpr u32 CSQ_INDEX = 4, CSQ_INPUT = 8;
 // CodeSuggestion response payload: found, len, pad[2], index u32, code u16[9]
@@ -1095,6 +1100,7 @@ void PutRoom(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::
     session[p + SP_ROOM_TEAM] = GameSetup::NO_TEAM;
     session[p + SP_ROOM_CHAR] = 0xFF;
     session[p + SP_ROOM_COSTUME] = 0;
+    session[p + SP_ROOM_STOCKS] = 0;
     if (sl.player)
     {
       const Rooms::Player& pl = *sl.player;
@@ -1114,12 +1120,14 @@ void PutRoom(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::
           bits |= SLOT_READY;
           session[p + SP_ROOM_CHAR] = lock->char_kind;
           session[p + SP_ROOM_COSTUME] = lock->costume;
+          session[p + SP_ROOM_STOCKS] = lock->port_values[PV_STOCKS];
         }
       }
       else if (pl.ready && pl.character)
       {
         session[p + SP_ROOM_CHAR] = *pl.character;
         session[p + SP_ROOM_COSTUME] = pl.costume.value_or(0);
+        session[p + SP_ROOM_STOCKS] = pl.stocks.value_or(0);
       }
       // A session's names (the match's players) stay; the room fills in the rest.
       if (session[p + SP_NAME] == 0 && session[p + SP_NAME + 1] == 0)
@@ -1424,7 +1432,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     for (u32 i = 0; i < l.port_values.size(); ++i)
       l.port_values[i] = R8(guard, loc.local + L_OWN + i);
     l.local_pad = R8(guard, loc.local + L_LOCK_PAD);
-    Rooms::SetLocalLock(l.ready, l.game, l.char_kind, l.costume);
+    Rooms::SetLocalLock(l.ready, l.game, l.char_kind, l.costume, l.port_values[PV_STOCKS]);
     if (room.game_active)
     {
       // A room's game is a session of its own: the room's game N (SESSION `game`) is the

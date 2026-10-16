@@ -44,12 +44,18 @@ namespace RoomCss {
         u8 team;          // PPOM::Team
         u8 stars;         // Brawl's win stars by the name plate: the side's set wins during a set,
                           // else 1 for the room's host (rooms.md #8)
+        u8 stocks;        // stock control: the count the player picked (shown once ready), 0 none
         char name[NAME_CHARS + 1];
     };
     void prepareRecords();               // before the CSS is built: four full panels
     void releaseRecords();               // a room's CSS built again as another: records as before
     void reset();                        // the CSS is gone
-    void tick(const PanelView views[3], bool teams, int myTeam, int myStars, const char* myName, bool meReady);
+    // stockControl: the room's rules have P+'s STOCK CONTROL in a stock match (the STOCKS boxes);
+    // lockedStocks: while locked in, the count the lock-in carries (the local box is kept at it), -1.
+    void tick(const PanelView views[3], bool teams, int myTeam, int myStars, const char* myName, bool meReady,
+              bool stockControl, int lockedStocks);
+    u8 myStocks();                       // the count picked on the local panel's STOCKS box, 0 none
+    bool handOnMyStocks();               // the local hand is on its panel's STOCKS box
     int panelUnderHand();                // 1-3: the local hand is over that panel, else -1
     bool handOverMyFlag();               // the local hand is over the local panel's team flag
     void headerButtons(bool isPublic, bool teams);   // ITEM / STAGE as the room's two settings

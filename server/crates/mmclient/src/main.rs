@@ -389,7 +389,7 @@ fn run_room(a: RoomArgs) -> anyhow::Result<i32> {
         client.send(&RoomRequest::Team { team });
     }
     if a.ready {
-        client.send(&RoomRequest::Ready { ready: true, character: a.character, costume: a.costume });
+        client.send(&RoomRequest::Ready { ready: true, character: a.character, costume: a.costume, stocks: None });
     }
     let deadline = Instant::now() + Duration::from_secs(a.hold_secs);
     let mut ticket: Option<std::thread::JoinHandle<anyhow::Result<mmclient::SearchResult>>> = None;
@@ -435,7 +435,7 @@ fn run_room(a: RoomArgs) -> anyhow::Result<i32> {
             back_at = None;
             client.send(&RoomRequest::Back);
             if a.ready {
-                client.send(&RoomRequest::Ready { ready: true, character: a.character, costume: a.costume });
+                client.send(&RoomRequest::Ready { ready: true, character: a.character, costume: a.costume, stocks: None });
             }
         }
     }

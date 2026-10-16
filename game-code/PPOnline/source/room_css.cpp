@@ -34,6 +34,18 @@
 // The "Seeking" texture (MenSelchrWifi03, in the state model MenSelchrState0000) is drawn again
 // as "Searching" with the game's font (the model's own dots follow it), and "Selecting
 // Character..." (WifiInfWait05_0, CMPR) as "Choosing...".
+//
+// Stock control (P+'s STOCK CONTROL, the rules' stockControl; docs/game-code.md §14 "Stock
+// control on the room CSS"): every panel's STOCKS box (area+0xD4, P+'s look of Brawl's handicap
+// box) is shown or taken away with
+//   0x80697720 showStockBox(area, on)       takes the box's model out of the area's scene group
+//                                            (area+0x404) and puts it back when on
+// as the CSS does itself when P+'s rules menu closes with another handicap mode (sel_char
+// text+0x10874: task+0x5CC the mode it shows, 2 = stock control). The local hand's A on its box
+// (hand button 0x1E) opens Brawl's picker (0%, 10%, ... which P+ reads in tenths: 10% = 1
+// stock), which leaves the pick in area+0x1D0 and the box showing it; the others' boxes show
+// their picks the way the picker's close does (sel_char text+0x184D4): the box's frames set to
+// the count (MuObject 0x800B7900, 0x800B7798, 0x800B7A18) and area+0x1D0.
 #include <OS/OSCache.h>
 #include <gf/gf_heap_manager.h>
 #include <memory.h>
@@ -42,6 +54,12 @@
 #include "labels.h"
 #include "online_menu.h"
 #include "ppom.h"
+
+extern "C" {
+    // Set while showTeamAt has another player number in an area: OnlineMenu's cssCharPic then
+    // skips the picture that showTeam draws.
+    u8 g_cssPicHold = 0;
+}
 
 namespace RoomCss {
 
@@ -66,6 +84,26 @@ namespace RoomCss {
     // object is made with its panel's (so+4) and as showTeam sets it from area+0x1B0.
     static const StateColorFn STATE_COLOR = (StateColorFn)0x800FD878;
     static const SetVisFn SET_VIS = (SetVisFn)0x80043D20;   // nwSMSetVisibility
+
+    typedef void (*ShowBoxFn)(u8* area, int on);
+    typedef void (*ObjFrameFn)(u8* obj, float frame);
+    typedef u8* (*HandOfFn)(u8* task, int i);
+    typedef void (*HandCloseFn)(u8* hand, int a, int b);
+    static const ShowBoxFn SHOW_STOCK_BOX = (ShowBoxFn)0x80697720;
+    static const ObjFrameFn BOX_FRAME[3] = {(ObjFrameFn)0x800B7900, (ObjFrameFn)0x800B7798, (ObjFrameFn)0x800B7A18};
+    static const HandOfFn HAND_OF = (HandOfFn)0x806862A0;        // the CSS's hand i (task+0x648 hands)
+    static const HandCloseFn HAND_CLOSE = (HandCloseFn)0x8069CC0C;
+    static const AreaFn PICKER_CLOSE = (AreaFn)0x8069AED0;       // area+0x1FC: the list (picker) closed
+    static const u32 TASK_HANDICAP_MODE = 0x5CC, TASK_HANDS = 0x648;
+    static const u32 AREA_STOCK_BOX = 0xD4, AREA_STOCKS = 0x1D0;
+    static const u32 HAND_MODE = 0xA4, HAND_AREA = 0xA8, HAND_BUTTON = 0xAC;
+    static const int HAND_MODE_PICKER = 5, BUTTON_STOCK_BOX = 0x1E;
+    static const u8 HANDICAP_STOCK_CONTROL = 2;   // set rule +5 (P+'s STOCK CONTROL on)
+    // The box lower and further left than P+ has it (setPos units, as SLOT_POS): at P+'s place it
+    // sits under the panel's state box ("Choosing...", "Ready"), which the CSS has only online, and
+    // lower at P+'s x under the win stars (the host's star). There it is over the character
+    // picture, above the name plate (screenshots, 2026-10-15); the hand's button follows the model.
+    static const float STOCK_BOX_DX = -3.6f, STOCK_BOX_DY = -3.3f;
 
     static const int CSS_NONE = 0x28;
     enum PanelState { ST_NONE = 0, ST_SEEKING = 1, ST_SELECTING = 2, ST_CLOSED = 3, ST_READY = 4, ST_BRAWLING = 6 };
@@ -102,6 +140,12 @@ namespace RoomCss {
     static int s_localSlot = 0;       // the slot the local player's panel (area 0) is shown at
     static bool s_inRoom = false;
     static int s_colorShown[4] = {-1, -1, -1, -1};   // the slot colour each area was given
+    static int s_boxShown[4] = {-1, -1, -1, -1};     // each area's STOCKS box: 1 shown, 0 not, -1 not set
+    static int s_boxCount[4] = {-1, -1, -1, -1};     // the count shown on another player's box
+    static bool s_stockControl = false;
+    // The local player's pick, kept across the room's games (the CSS is built again after each
+    // one, its picks at 0), as Slippi keeps the character.
+    static u8 s_myStocks = 0;
 
     static u8* cssTask()
     {
@@ -174,7 +218,8 @@ namespace RoomCss {
         s_myPlateDelay = 0;
         s_meReadyShown = -1;
         s_localSlot = 0;
-        for (int i = 0; i < 4; i++) s_colorShown[i] = -1;
+        for (int i = 0; i < 4; i++) s_colorShown[i] = s_boxShown[i] = s_boxCount[i] = -1;
+        s_stockControl = false;
         for (int i = 0; i < 4; i++) {
             s_shown[i].kind = 0xFF;
             s_hidden[i] = false;
@@ -575,11 +620,12 @@ namespace RoomCss {
     // +0x3B4..+0x3D0), but those that hang from one of them (slotChild).
     static const int SLOT_OBJ_COUNT = (0x150 - 0xB0) / 4 + (0x234 - 0x204) / 4 + (0x3D4 - 0x3B4) / 4;
     // Models that hang from another and move with it (found live: moving only the parent moved
-    // them by the same amount): the character pictures and the name plate (+0xB4..+0xCC) from
-    // the panel (+0xB0), the name tag list's rows (+0x208..+0x230) from the list (+0x204).
+    // them by the same amount): the character pictures and the name plate (+0xB4..+0xCC) and the
+    // STOCKS box (+0xD4, 2026-10-15: given the slot's offset too it was drawn a slot further
+    // away) from the panel (+0xB0), the name tag list's rows (+0x208..+0x230) from the list (+0x204).
     static bool slotChild(int off)
     {
-        return (off >= 0xB4 && off <= 0xCC) || (off >= 0x208 && off <= 0x230);
+        return (off >= 0xB4 && off <= 0xCC) || off == 0xD4 || (off >= 0x208 && off <= 0x230);
     }
 
     static int slotObjOffset(int i)
@@ -600,10 +646,10 @@ namespace RoomCss {
         return a;
     }
 
-    static void placeObj(u8* obj, float dSlot)
+    static void placeObj(u8* obj, float dSlot, float dx = 0.0f)
     {
         if (!isPtr((u32)obj)) return;
-        float want = dSlot * SLOT_POS;
+        float want = dSlot * SLOT_POS + dx;
         float* pos = (float*)(obj + 0x3C);
         if (pos[0] == want) return;
         float p[3] = {want, pos[1], pos[2]};
@@ -615,11 +661,19 @@ namespace RoomCss {
     // the buffer its character picture is loaded into (setCharPic), which its picture model
     // reads (found live: with the numbers of two areas swapped, neither showed its character).
     // So it stays the area's own, and is the slot's only while showTeam colours the panel.
+    // showTeam also draws the area's picture (setCharPic, at its end), and P+'s AsyncRSP loads
+    // pictures per player number (+0x1B0): drawn with the slot's number, the load went to that
+    // player's picture and, when it was done, AsyncRSP drew it on the area with that number
+    // (bug #22, 2026-10-15: a joiner at P3 saw P1's Mario on their own panel, and their own
+    // costume changes did not show after that). So that picture is skipped (cssCharPic); the
+    // area's picture is the same before and after, as no character or costume changes here.
     static void showTeamAt(u8* ar, int a)
     {
         u32 own = *(u32*)(ar + 0x1B0);
         *(u32*)(ar + 0x1B0) = (u32)areaSlot(a);
+        g_cssPicHold = own != (u32)areaSlot(a) ? 1 : 0;
         SHOW_TEAM(ar);
+        g_cssPicHold = 0;
         *(u32*)(ar + 0x1B0) = own;
         if (a == 0) s_myTagShown = -2;   // showTeam printed the plate: the name again (myPlate)
     }
@@ -638,7 +692,7 @@ namespace RoomCss {
                 if (!isPtr((u32)o) || !isPtr(*(u32*)(o + 0xC)) || **(u32**)(o + 0xC) != 0x804663C8) continue;
                 // A child moves with its parent, so its own offset stays 0. (The name tag list's
                 // rows are given the list's offset by the game when the list opens: put back.)
-                placeObj(o, slotChild(off) ? 0.0f : (float)(slot - pa));
+                placeObj(o, slotChild(off) ? 0.0f : (float)(slot - pa), off == (int)AREA_STOCK_BOX ? STOCK_BOX_DX : 0.0f);
             }
             u8* so = stateObj(ar);
             if (so) placeObj(*(u8**)(so + 0xC), (float)(slot - pa));
@@ -704,7 +758,103 @@ namespace RoomCss {
         STATE_UPDATE(so);
     }
 
-    void tick(const PanelView views[3], bool teams, int myTeam, int myStars, const char* myName, bool meReady)
+    // ---- Stock control ----------------------------------------------------------------------
+
+    static u8* setRule()
+    {
+        u32 gg = *(u32*)0x805A00E0;
+        if (!isPtr(gg)) return NULL;
+        u32 r = *(u32*)(gg + 0x1C);
+        return isPtr(r) ? (u8*)r : NULL;
+    }
+
+    // A box's count as the picker's close leaves it (sel_char text+0x184D4): its frames and area+0x1D0.
+    static void showCount(u8* a, int n)
+    {
+        u8* box = *(u8**)(a + AREA_STOCK_BOX);
+        if (!isPtr((u32)box)) return;
+        for (int k = 0; k < 3; k++) BOX_FRAME[k](box, (float)n);
+        *(int*)(a + AREA_STOCKS) = n;
+    }
+
+    // The local hand's picker closed, as the CSS closes it when the handicap mode goes off
+    // (sel_char text+0x10874's loop).
+    static void closePickers(u8* task)
+    {
+        int hands = *(int*)(task + TASK_HANDS);
+        for (int i = 0; i < hands && i < 4; i++) {
+            u8* h = HAND_OF(task, i);
+            if (!isPtr((u32)h) || *(int*)(h + HAND_MODE) != HAND_MODE_PICKER) continue;
+            int ai = *(int*)(h + HAND_AREA);
+            HAND_CLOSE(h, 0, 0);
+            u8* a = ai >= 0 && ai < 4 ? area(task, ai) : NULL;
+            if (a) PICKER_CLOSE(a);
+        }
+    }
+
+    // The boxes: the local panel's (the player picks there) and every taken slot's (the count that
+    // player picked, once ready), with the room's stock control; the set rule's handicap mode and the
+    // CSS's own (task+0x5CC) follow it, as P+'s rules menu leaves them.
+    static void stockBoxes(u8* task, const PanelView views[3], bool on, int lockedStocks)
+    {
+        u8* rule = setRule();
+        u8 mode = on ? HANDICAP_STOCK_CONTROL : 0;
+        if (rule && rule[5] != mode) rule[5] = mode;
+        // (The CSS shows or takes away every box itself when P+'s rules menu closes with another
+        // mode than task+0x5CC, e.g. the host's style change to time: then all of them again.)
+        if (*(int*)(task + TASK_HANDICAP_MODE) != mode) {
+            if (!on) closePickers(task);
+            *(int*)(task + TASK_HANDICAP_MODE) = mode;
+            for (int i = 0; i < 4; i++) s_boxShown[i] = -1;
+        }
+        s_stockControl = on;
+        for (int i = 0; i < 4; i++) {
+            u8* a = area(task, i);
+            if (!a) continue;
+            const PanelView* v = i > 0 ? &views[i - 1] : NULL;
+            bool taken = v && (v->kind == PV_CHOOSING || v->kind == PV_READY || v->kind == PV_IN_GAME);
+            int want = on && (i == 0 || taken) ? 1 : 0;
+            if (s_boxShown[i] != want) {
+                SHOW_STOCK_BOX(a, want);
+                u8* box = *(u8**)(a + AREA_STOCK_BOX);
+                if (want && isPtr((u32)box)) {
+                    float* pos = (float*)(box + 0x3C);   // its offset (placeAreas keeps y)
+                    if (pos[1] != STOCK_BOX_DY) {
+                        float p[3] = {pos[0], STOCK_BOX_DY, pos[2]};
+                        typedef void (*SetPosFn)(u8*, float*);
+                        ((SetPosFn)0x800B6838)(box, p);
+                    }
+                }
+                s_boxShown[i] = want;
+                s_boxCount[i] = -1;
+                // A new CSS (after a game) starts with no pick: the player's own comes back.
+                if (want && i == 0 && s_myStocks && *(int*)(a + AREA_STOCKS) == 0) showCount(a, s_myStocks);
+            }
+            if (!want) continue;
+            if (i == 0) {
+                int n = *(int*)(a + AREA_STOCKS);
+                // Locked in: the pick the lock-in carries (Brawl's picker still opened while ready).
+                if (lockedStocks >= 0 && n != lockedStocks) showCount(a, n = lockedStocks);
+                if (n >= 0 && n <= PPOM::MAX_PICKED_STOCKS) s_myStocks = (u8)n;
+            } else if (s_boxCount[i] != v->stocks) {
+                showCount(a, v->stocks);
+                s_boxCount[i] = v->stocks;
+            }
+        }
+    }
+
+    u8 myStocks() { return s_stockControl ? s_myStocks : 0; }
+
+    bool handOnMyStocks()
+    {
+        u8* task = cssTask();
+        u8* a0 = task ? area(task, 0) : NULL;
+        u8* hand = a0 ? *(u8**)(a0 + 0x1A8) : NULL;
+        return s_stockControl && isPtr((u32)hand) && *(int*)(hand + HAND_BUTTON) == BUTTON_STOCK_BOX;
+    }
+
+    void tick(const PanelView views[3], bool teams, int myTeam, int myStars, const char* myName, bool meReady,
+              bool stockControl, int lockedStocks)
     {
         u8* task = cssTask();
         if (!task) return;
@@ -718,6 +868,12 @@ namespace RoomCss {
             u8* ai = area(task, i);
             if (ai) labelSeeking(ai, i);
         }
+        // P+'s team battle with the players' own costumes (task+0x5CB = 2; 0 is Brawl's, every
+        // player in the team's): P+'s setCharPic (0x80571350) and AsyncRSP (the picture it draws
+        // when a load is done) give a team battle's pictures the team's costume unless it is 2.
+        // Without it a team room's panels showed the team's costumes, and the local player's
+        // costume changes (A on the panel, cssPanelClick) not at all (bug #22, 2026-10-15).
+        if (teams) task[0x5CB] = 2;
         placeAreas(task);
         // The team battle look: Brawl's own (task+0x5C8), with the flag on each panel; the local
         // player changes team with X / Y or A on their own flag (OnlineMenu's tickRoom; A on the
@@ -745,6 +901,7 @@ namespace RoomCss {
         if (a0) myPlate(a0, myName);
         if (a0) myReady(a0, meReady, teams, myTeam);
         for (int i = 0; i < 3; i++) apply(task, i + 1, views[i], teams);
+        stockBoxes(task, views, stockControl, lockedStocks);
     }
 
     // Which of the other players' panels (1-3) the local hand points at, -1 none. The hand's

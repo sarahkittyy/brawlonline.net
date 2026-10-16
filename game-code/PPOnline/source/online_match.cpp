@@ -69,6 +69,7 @@ namespace OnlineMatch {
     static const u32 PLAYER_SIZE = 0x5C;
     static const u32 MM_PLAYERS = 0x98;        // gmGlobalModeMelee players
     static const u32 MM_TIME_LIMIT = 0x20;     // gmGlobalModeMelee: the time limit (s32 frames)
+    static const u32 MM_HANDICAP = 0x26;       // gmPlayerInitData: the handicap (u16; P+: tenths of a stock)
     static const u32 ASL_BUTTONS = 0x800B9EA2; // P+: buttons held on the stage select (u16)
     // P+'s alt costume word per slot (LegacyTE/AltCostume.asm: gmSelCharData + 0x43AD8 + slot *
     // 0x5C, which its Gecko lines read as 0x90180F20 + 0x436F8): 1 AltZ, 2 AltR, else none. Every
@@ -338,6 +339,20 @@ namespace OnlineMatch {
         for (int i = 0; i < se.numPlayers && i < 4; i++) {
             if (se.players[i].present) mm[MM_PLAYERS + i * PLAYER_SIZE + 0x07] = (u8)(i + 1);
         }
+        // Stock control (the rules' stockControl, in a stock match: set rule +5 = 2, applyRules):
+        // each player's count, picked on their panel's STOCKS box and carried by their lock-in's
+        // port values, into their match player's handicap (+0x26, u16, in tenths as the CSS keeps
+        // it: 10 = 1 stock). P+'s "Handicap = Stock Count" (Handicap.asm, hook 0x8094690C) makes
+        // that the player's stocks when the fighter is made; 0 (none picked) leaves the rules'.
+        // Written for every present player whatever the setup copied, so every machine has the
+        // same (Dolphin's setup key compares it under stock control).
+        const PPOM::Rules& ru = se.rules;
+        const bool stockControl = ru.valid && ru.stockControl && ru.style == PPOM::STYLE_STOCK;
+        for (int i = 0; i < se.numPlayers && i < 4 && stockControl; i++) {
+            if (!se.players[i].present) continue;
+            u8 n = se.players[i].pv.stocks;
+            *(u16*)(mm + MM_PLAYERS + i * PLAYER_SIZE + MM_HANDICAP) = (u16)(n <= PPOM::MAX_PICKED_STOCKS ? n * 10 : 0);
+        }
         // A desynced game played again (SESSION restore; docs/game-code.md, desync recovery): a
         // fresh game with each player's stocks at the agreed frame (a player out of the game
         // starts with one and leaves at RESTORE_FRAME, tickPlayers) and the time left then. The
@@ -347,7 +362,12 @@ namespace OnlineMatch {
             for (int i = 0; i < se.numPlayers && i < 4; i++) {
                 if (!se.players[i].present) continue;
                 u8 st = se.players[i].restoreStocks;
-                mm[MM_PLAYERS + i * PLAYER_SIZE + 0x04] = (u8)(st == 0 ? 1 : st > 99 ? 99 : st);
+                u8* pm = mm + MM_PLAYERS + i * PLAYER_SIZE;
+                pm[0x04] = (u8)(st == 0 ? 1 : st > 99 ? 99 : st);
+                // A handicap (stock control's count) would be the player's stocks instead (P+'s
+                // hook reads +0x26 when the fighter is made, over +0x04): the agreed stocks there too.
+                u16* hc = (u16*)(pm + MM_HANDICAP);
+                if (*hc != 0) *hc = (u16)(pm[0x04] * 10);
             }
             s32* limit = (s32*)(mm + MM_TIME_LIMIT);
             u32 left = se.rules.restoreFrames;

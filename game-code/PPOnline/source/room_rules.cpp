@@ -191,9 +191,10 @@ namespace RoomRules {
 
 
     // The host's edits as SESSION's Rules: what the rules menu wrote back into the set rule and
-    // the menu record (game-code.md §14's table). The rest of the record (hazards) stays the
-    // room's. Lines that are not room rules (P+'s score to win, stock control, stage choice) are
-    // not taken: applyRules writes P+'s values there for every match.
+    // the menu record (game-code.md §14's table). The rest of the record (hazards, stock control)
+    // stays the room's. Lines that are not room rules here (P+'s score to win, stage choice; stock
+    // control, whose row is the SET line, is set in a ruleset) are not taken: applyRules writes
+    // the match's values there for every match.
     static void sendEdits()
     {
         const PPOM::Rules& cur = PPOM::g_block.session.rules;

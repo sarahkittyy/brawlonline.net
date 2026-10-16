@@ -194,7 +194,7 @@ struct State
   std::optional<Clock::time_point> away_since;
   bool lock_ready = false;
   u32 lock_game = 0;
-  u8 lock_char = 0xFF, lock_costume = 0;
+  u8 lock_char = 0xFF, lock_costume = 0, lock_stocks = 0;
   bool harness_lock = false;
   bool harness_screen = false;  // tests: the harness's screen, not the game's
   Clock::time_point next_ready{};
@@ -1512,15 +1512,24 @@ void Thread()
                            (v.status == Status::InGame && me && !me->in_game);
           const bool want_ready =
               s.lock_ready && s.lock_game == (s.game & 0xFF) && s.lock_char != 0xFF;
+          // The picked stock count, only under the room's stock control (the server shows it
+          // only then, so anything else would be sent again and again).
+          const std::optional<u8> stocks =
+              v.rules && v.rules->stock_control && s.lock_stocks >= 1 &&
+                      s.lock_stocks <= MAX_PICKED_STOCKS ?
+                  std::optional<u8>(s.lock_stocks) :
+                  std::nullopt;
           if (may && me &&
               (want_ready != me->ready ||
-               (want_ready && (me->character != s.lock_char || me->costume != s.lock_costume))))
+               (want_ready && (me->character != s.lock_char || me->costume != s.lock_costume ||
+                               me->stocks != stocks))))
           {
             Request r;
             r.op = Op::Ready;
             r.flag = want_ready;
             r.character = s.lock_char;
             r.costume = s.lock_costume;
+            r.stocks = stocks;
             if (const auto json = RequestJson(r))
             {
               Send(peer, *json);
@@ -1734,7 +1743,7 @@ void SetScreenLocked(u8 screen)
 }
 }  // namespace
 
-void SetLocalLock(bool ready, u32 game, u8 char_kind, u8 costume)
+void SetLocalLock(bool ready, u32 game, u8 char_kind, u8 costume, u8 stocks)
 {
   std::lock_guard lk(s_mutex);
   if (s.harness_lock)
@@ -1743,6 +1752,7 @@ void SetLocalLock(bool ready, u32 game, u8 char_kind, u8 costume)
   s.lock_game = game;
   s.lock_char = char_kind;
   s.lock_costume = costume;
+  s.lock_stocks = stocks;
 }
 
 Snapshot GetSnapshot()
@@ -1838,6 +1848,7 @@ picojson::object Status()
   lock["game"] = picojson::value(static_cast<double>(s.lock_game));
   lock["char_kind"] = picojson::value(static_cast<double>(s.lock_char));
   lock["costume"] = picojson::value(static_cast<double>(s.lock_costume));
+  lock["stocks"] = picojson::value(static_cast<double>(s.lock_stocks));
   lock["harness"] = picojson::value(s.harness_lock);
   o["screen_harness"] = picojson::value(s.harness_screen);
   o["lock"] = picojson::value(lock);
@@ -1885,6 +1896,8 @@ picojson::object Status()
         p["costume"] = sl.player->costume ?
                            picojson::value(static_cast<double>(*sl.player->costume)) :
                            picojson::value();
+        p["stocks"] = sl.player->stocks ? picojson::value(static_cast<double>(*sl.player->stocks)) :
+                                          picojson::value();
         p["in_game"] = picojson::value(sl.player->in_game);
         so["player"] = picojson::value(p);
       }
@@ -1981,6 +1994,7 @@ std::optional<std::string> HarnessRequest(const picojson::object& args)
     s.lock_game = s.game & 0xFF;
     s.lock_char = static_cast<u8>(num("character", 0));
     s.lock_costume = static_cast<u8>(num("costume", 0));
+    s.lock_stocks = static_cast<u8>(num("stocks", 0));
     return std::nullopt;
   }
   else if (op == "release_lock")

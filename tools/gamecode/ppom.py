@@ -286,13 +286,15 @@ def read_debug(c: HarnessClient, b: Block) -> dict:
 
 PORT_VALUES_SIZE = 0x3C
 LAYOUT_SIZE = 0x2D
+PV_STOCKS = 0x39   # (still v8) the count picked on the STOCKS box under stock control, 0 none
 
 
 def port_values(d: bytes) -> dict:
     """PortValues (v3): a player's name tag and its controls (ppom.h)."""
     flags, rumble = d[0], d[1]
     return {"tag": bool(flags & 1), "rumble": rumble, "tag_name": from_u16s(d[2:12]),
-            "layout": d[12:12 + LAYOUT_SIZE].hex(), "tap_jump": bool(d[12 + 11] & 0x80)}
+            "layout": d[12:12 + LAYOUT_SIZE].hex(), "tap_jump": bool(d[12 + 11] & 0x80),
+            "stocks": d[PV_STOCKS]}
 
 
 def read_local(c: HarnessClient, b: Block) -> dict:
@@ -378,7 +380,9 @@ def read_rules(r: bytes) -> dict | None:
     return {"style": STYLES.get(r[1], r[1]), "stocks": r[2], "timeMinutes": r[3],
             "damageRatio": r[4] / 10, "teamAttack": bool(r[5]), "pause": "normal" if r[6] else "hold",
             "itemFrequency": r[7], "itemSwitch": list(r[8:0x10]), "hazards": bool(r[0x10]),
-            "autoLCancel": bool(r[0x11]), "inputAssist": bool(r[0x12])}
+            "autoLCancel": bool(r[0x11]), "inputAssist": bool(r[0x12]),
+            # (written only when on, as the server's JSON)
+            **({"stockControl": True} if r[0x13] else {})}
 
 
 # ---- v4: 3-4 player matches (docs/nplayer/setup.md) ----
@@ -433,6 +437,7 @@ SCREENS = {"unknown": 0, "menus": 1, "online-css": 2, "room": 3, "online-busy": 
            "offline": 6, "other": 7}
 S_ROOM_FLAGS, S_ROOM_CODE, S_ROOM_HOST, S_ROOM_STATUS, S_ROOM_MODE = 0x213, 0x214, 0x218, 0x219, 0x21A
 SP_ROOM_SLOT, SP_ROOM_TEAM, SP_ROOM_CHAR, SP_ROOM_COSTUME = 0x38, 0x39, 0x3A, 0x3B
+SP_ROOM_STOCKS = 0x3D   # (still v8) the stock count a ready player picked (stock control), 0 none
 SLOT_OPEN, SLOT_TAKEN, SLOT_READY, SLOT_HOST, SLOT_IN_GAME = 1, 2, 4, 8, 0x10
 RF_IN, RF_PUBLIC, RF_TEAMS = 1, 2, 4
 
@@ -464,6 +469,7 @@ def read_room(c: HarnessClient, b: Block) -> dict:
         o = 0x0C + 0x80 * i
         slots.append({"bits": se[o + SP_ROOM_SLOT], "team": se[o + SP_ROOM_TEAM],
                       "char": se[o + SP_ROOM_CHAR], "costume": se[o + SP_ROOM_COSTUME],
+                      "stocks": se[o + SP_ROOM_STOCKS],
                       "name": from_u16s(se[o + 4:o + 4 + 2 * NAME_LEN]),
                       "picks_stage": se[o + SP_PICKS_STAGE]})
     return {"flags": se[S_ROOM_FLAGS], "code": se[S_ROOM_CODE:S_ROOM_CODE + 4].decode("ascii", "replace"),

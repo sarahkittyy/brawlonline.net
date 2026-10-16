@@ -33,6 +33,11 @@ export type MatchRules = {
   hazards: boolean;
   autoLCancel: boolean;
   inputAssist: boolean;
+  /**
+   * P+'s STOCK CONTROL: each player picks their own stock count on their panel's STOCKS box (none picked: `stocks`).
+   * Stock matches only. The server writes it only when on, so older rulesets (and their hashes) stay the same.
+   */
+  stockControl?: boolean;
 };
 
 export type StageLists = {
@@ -126,6 +131,7 @@ export function defaultMatchRules(): MatchRules {
     hazards: false,
     autoLCancel: false,
     inputAssist: false,
+    stockControl: false,
   };
 }
 
@@ -359,7 +365,9 @@ export function rulesetFromJson(text: string): Ruleset {
 /** The JSON Export writes: the ruleset without `by` (the server fills it), indented. */
 export function rulesetToJson(r: Ruleset): string {
   const { by: _by, ...rest } = r;
-  return JSON.stringify(rest, null, 2) + "\n";
+  // Stock control only when on, as the server writes it: a file without it still opens in an older launcher.
+  const { stockControl, ...rules } = rest.rules;
+  return JSON.stringify({ ...rest, rules: stockControl ? { ...rules, stockControl } : rules }, null, 2) + "\n";
 }
 
 function isObject(v: unknown): v is Record<string, any> {
@@ -391,7 +399,11 @@ function checkTypes(r: Ruleset): string | null {
   if (![m.stocks, m.timeMinutes, m.itemFrequency].every(isInt) || typeof m.damageRatio !== "number") {
     return "a rule";
   }
-  if (![m.teamAttack, m.hazards, m.autoLCancel, m.inputAssist].every((b) => typeof b === "boolean")) {
+  if (
+    ![m.teamAttack, m.hazards, m.autoLCancel, m.inputAssist, m.stockControl ?? false].every(
+      (b) => typeof b === "boolean",
+    )
+  ) {
     return "a rule";
   }
   if (!isIntArray(m.itemSwitch) || m.itemSwitch.length !== 8 || m.itemSwitch.some((b) => b < 0 || b > 255)) {

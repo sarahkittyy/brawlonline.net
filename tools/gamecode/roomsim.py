@@ -31,6 +31,7 @@ class Member:
     ready: bool = False
     char: int = 0xFF          # gmCharacterKind while ready
     costume: int = 0
+    stocks: int = 0           # the stock count picked on the panel while ready (stock control)
     team: int = 0
     in_game: bool = False
     local: bool = False
@@ -176,11 +177,12 @@ class RoomSim:
     def remove_player(self, slot: int) -> None:
         self.room.members[slot] = None
 
-    def set_ready(self, slot: int, char: int | None, costume: int = 0) -> None:
+    def set_ready(self, slot: int, char: int | None, costume: int = 0, stocks: int = 0) -> None:
         m = self.room.members[slot]
         m.ready = char is not None
         m.char = char if char is not None else 0xFF
         m.costume = costume
+        m.stocks = stocks if char is not None else 0
 
     # ---- requests ---------------------------------------------------------------------------
     def handle_room(self, seq: int, p: bytes) -> None:
@@ -299,6 +301,8 @@ class RoomSim:
         m.ready = ready
         m.char = lo["char_kind"] if ready else 0xFF
         m.costume = lo["costume"] if ready else 0
+        own = ppom.read_local(self.c, self.b).get("own") or {}
+        m.stocks = own.get("stocks", 0) if ready else 0
 
     # ---- the view -----------------------------------------------------------------------------
     def write_view(self) -> None:
@@ -345,6 +349,7 @@ class RoomSim:
             se[o + ppom.SP_ROOM_TEAM] = m.team if m else 0xFF
             se[o + ppom.SP_ROOM_CHAR] = m.char if (m and m.ready) else 0xFF
             se[o + ppom.SP_ROOM_COSTUME] = m.costume if (m and m.ready) else 0
+            se[o + ppom.SP_ROOM_STOCKS] = m.stocks if (m and m.ready) else 0
             se[o + 4:o + 4 + 2 * ppom.NAME_LEN] = ppom.u16s(m.name if m else "", ppom.NAME_LEN)
             se[o + 0x24:o + 0x24 + 2 * ppom.CODE_LEN] = ppom.u16s(m.code if m else "", ppom.CODE_LEN)
         lo[ppom.L_ROOM] = self.phase

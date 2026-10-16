@@ -42,6 +42,9 @@ struct MatchRules
   bool hazards = false;  // stage hazards off by default (the user's, 2026-10-12)
   bool auto_l_cancel = false;  // MORE RULES' AUTO L-CANCEL
   bool input_assist = false;   // MORE RULES' INPUT ASSIST (P+'s 3-frame buffer)
+  // RULES' STOCK CONTROL: each player picks their own stock count on their panel (the lock-in's
+  // port values carry it); stock matches only. The server sends it only when on.
+  bool stock_control = false;
 
   bool operator==(const MatchRules&) const = default;
 };
@@ -65,7 +68,7 @@ constexpr u32 RULES_SIZE = 0x20;
 constexpr u32 RU_VALID = 0x00, RU_STYLE = 0x01, RU_STOCKS = 0x02, RU_TIME = 0x03, RU_DAMAGE = 0x04,
               RU_TEAM_ATTACK = 0x05, RU_PAUSE = 0x06, RU_ITEM_FREQUENCY = 0x07,
               RU_ITEM_SWITCH = 0x08, RU_HAZARDS = 0x10, RU_AUTO_L_CANCEL = 0x11,
-              RU_INPUT_ASSIST = 0x12;
+              RU_INPUT_ASSIST = 0x12, RU_STOCK_CONTROL = 0x13;
 std::array<u8, RULES_SIZE> SessionBytes(const std::optional<MatchRules>& rules);
 // The other way (the game's edited rules, ROOM_RULES): nullopt unless `valid` is 1 and every
 // value is in range, as ParseRules checks the server's.

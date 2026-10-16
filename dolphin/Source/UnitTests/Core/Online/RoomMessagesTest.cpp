@@ -164,6 +164,7 @@ TEST(RoomMessages, ParsesTheProtocolsRoomState)
   EXPECT_EQ(v.slots[0].player->name, "alice");
   EXPECT_EQ(v.slots[0].player->character, 12);
   EXPECT_EQ(v.slots[0].player->costume, 3);
+  EXPECT_EQ(v.slots[0].player->stocks, std::nullopt);
   ASSERT_TRUE(v.slots[1].player);
   EXPECT_EQ(v.slots[1].player->team, 1);
   // Not ready: the character is not passed on (docs/design/rooms.md #15).
@@ -173,6 +174,33 @@ TEST(RoomMessages, ParsesTheProtocolsRoomState)
   // No rules (an older server): none, and no error.
   EXPECT_FALSE(v.rules);
   EXPECT_TRUE(v.rules_error.empty());
+}
+
+TEST(RoomMessages, PickedStocks)
+{
+  // Stock control: a ready player's picked stock count (1-99), missing or null when none.
+  const auto with = [](const std::string& v) {
+    return Parse(Replace(STATE, R"("costume": 3,)", R"("costume": 3, "stocks": )" + v + ","));
+  };
+  const Message m = with("5");
+  ASSERT_EQ(m.kind, Message::Kind::RoomState) << m.why;
+  EXPECT_EQ(m.view->slots[0].player->stocks, 5);
+  EXPECT_EQ(with("null").view->slots[0].player->stocks, std::nullopt);
+  for (const char* bad : {"0", "100", "-1", "\"3\""})
+    EXPECT_EQ(with(bad).kind, Message::Kind::Invalid) << bad;
+  // Sent with a ready only.
+  Request r;
+  r.op = Op::Ready;
+  r.flag = true;
+  r.character = 12;
+  r.costume = 2;
+  r.stocks = 3;
+  EXPECT_EQ(RequestJson(r), R"({"character":12,"costume":2,"ready":true,"stocks":3,"type":"room-ready"})");
+  r.flag = false;
+  EXPECT_EQ(RequestJson(r), R"({"ready":false,"type":"room-ready"})");
+  r.flag = true;
+  r.stocks = 100;
+  EXPECT_EQ(RequestJson(r), std::nullopt);
 }
 
 TEST(RoomMessages, RoomRules)

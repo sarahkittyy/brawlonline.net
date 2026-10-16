@@ -271,12 +271,19 @@ namespace PPOM {
     const int LAYOUT_SIZE = 0x2D;
     enum PortValueFlags { PV_TAG = 1 };   // the values are a tag's (else: the game's defaults)
 
+    // The most stocks a pick on the STOCKS box can say (stock control; Dolphin's PeerData
+    // MAX_PICKED_STOCKS, the server's rules.rs).
+    const u8 MAX_PICKED_STOCKS = 99;
+
     struct PortValues {
         u8 flags;         // PortValueFlags
         u8 rumble;        // the tag's rumble byte (local only; not applied online)
         u16 tag[TAG_CHARS];          // the tag's name (UTF-16, as the save keeps it)
         u8 layout[LAYOUT_SIZE];      // the tag's controls layout
-        u8 _pad[3];
+        // The stock count picked on the panel's STOCKS box under the rules' stock control (P+'s
+        // handicap list: 1 = 10%), 0 none (the rules' stocks); still v8, this was padding.
+        u8 stocks;        // 0x39
+        u8 _pad[2];
     };                    // 0x3C
 
     // ---- LOCAL ----
@@ -380,7 +387,10 @@ namespace PPOM {
         // padding): the player's stocks (0 = out of the game) and damage at the last frame every
         // machine agreed on.
         u8 restoreStocks; // 0x3C
-        u8 _pad2[3];
+        // Rooms (Dolphin, as roomChar): the stock count the player picked on their panel (stock
+        // control), shown once they are ready; 0 none (still v8, this was padding).
+        u8 roomStocks;    // 0x3D
+        u8 _pad2[2];
         PortValues pv;    // the player's name tag and controls (from their lock-in)
         float restoreDamage;   // 0x7C
     };                    // 0x80
@@ -404,7 +414,9 @@ namespace PPOM {
         u8 hazards;       // 1 on
         u8 autoLCancel;   // MORE RULES' AUTO L-CANCEL (set rule +0xB)
         u8 inputAssist;   // MORE RULES' INPUT ASSIST (set rule +0xC, P+'s 3-frame buffer)
-        u8 _reserved0;
+        // RULES' STOCK CONTROL (set rule +5 = 2): each player's own stock count (their port
+        // values' `stocks`), in stock matches; still v8, this was reserved.
+        u8 stockControl;  // +0x13
         // Dolphin, with Session.restore: the restarted game's time limit in frames (0: the rules'
         // own; the match timer left at the agreed frame, at least 1).
         u32 restoreFrames;     // +0x14

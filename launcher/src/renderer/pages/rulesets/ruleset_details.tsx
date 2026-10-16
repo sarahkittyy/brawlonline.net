@@ -36,6 +36,9 @@ function ruleRows(r: Ruleset): [string, string][] {
   const rows: [string, string][] = [[Messages.style(), style]];
   if (m.style === "stock") {
     rows.push([Messages.stocks(), String(m.stocks)]);
+    if (m.stockControl) {
+      rows.push([Messages.stockControl(), Messages.stockControlOn()]);
+    }
   }
   rows.push(
     [Messages.timeLimit(), m.timeMinutes === 0 ? Messages.noLimit() : Messages.minutes(m.timeMinutes)],

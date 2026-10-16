@@ -71,7 +71,7 @@ ParsedRules ParseRules(const picojson::object& resp)
   static constexpr const char* KNOWN[] = {"style",         "stocks",     "timeMinutes",
                                           "damageRatio",   "teamAttack", "pause",
                                           "itemFrequency", "itemSwitch", "hazards",
-                                          "autoLCancel",   "inputAssist"};
+                                          "autoLCancel",   "inputAssist", "stockControl"};
   for (const auto& [key, value] : o)
   {
     if (std::find(std::begin(KNOWN), std::end(KNOWN), key) == std::end(KNOWN))
@@ -115,7 +115,8 @@ ParsedRules ParseRules(const picojson::object& resp)
   const auto hazards = GetFlag(o, "hazards", r.hazards, &out.detail);
   const auto alc = GetFlag(o, "autoLCancel", r.auto_l_cancel, &out.detail);
   const auto assist = GetFlag(o, "inputAssist", r.input_assist, &out.detail);
-  if (!stocks || !time || !frequency || !team_attack || !hazards || !alc || !assist)
+  const auto stock_control = GetFlag(o, "stockControl", r.stock_control, &out.detail);
+  if (!stocks || !time || !frequency || !team_attack || !hazards || !alc || !assist || !stock_control)
     return fail(INVALID_TEXT);
   r.stocks = *stocks;
   r.time_minutes = *time;
@@ -124,6 +125,7 @@ ParsedRules ParseRules(const picojson::object& resp)
   r.hazards = *hazards;
   r.auto_l_cancel = *alc;
   r.input_assist = *assist;
+  r.stock_control = *stock_control;
 
   if (const auto d = o.find("damageRatio"); d != o.end())
   {
@@ -182,6 +184,7 @@ std::array<u8, RULES_SIZE> SessionBytes(const std::optional<MatchRules>& rules)
   b[RU_HAZARDS] = r.hazards ? 1 : 0;
   b[RU_AUTO_L_CANCEL] = r.auto_l_cancel ? 1 : 0;
   b[RU_INPUT_ASSIST] = r.input_assist ? 1 : 0;
+  b[RU_STOCK_CONTROL] = r.stock_control ? 1 : 0;
   return b;
 }
 
@@ -194,7 +197,7 @@ std::optional<MatchRules> FromSessionBytes(const std::array<u8, RULES_SIZE>& b)
   {
     return std::nullopt;
   }
-  for (u32 f : {RU_TEAM_ATTACK, RU_PAUSE, RU_HAZARDS, RU_AUTO_L_CANCEL, RU_INPUT_ASSIST})
+  for (u32 f : {RU_TEAM_ATTACK, RU_PAUSE, RU_HAZARDS, RU_AUTO_L_CANCEL, RU_INPUT_ASSIST, RU_STOCK_CONTROL})
   {
     if (b[f] > 1)
       return std::nullopt;
@@ -212,6 +215,7 @@ std::optional<MatchRules> FromSessionBytes(const std::array<u8, RULES_SIZE>& b)
   r.hazards = b[RU_HAZARDS] != 0;
   r.auto_l_cancel = b[RU_AUTO_L_CANCEL] != 0;
   r.input_assist = b[RU_INPUT_ASSIST] != 0;
+  r.stock_control = b[RU_STOCK_CONTROL] != 0;
   return r;
 }
 
@@ -221,7 +225,7 @@ picojson::object ToJson(const MatchRules& r)
   picojson::array sw;
   for (u8 b : r.item_switch)
     sw.emplace_back(static_cast<double>(b));
-  return picojson::object{
+  picojson::object o{
       {"style", picojson::value(STYLES[r.style < 3 ? r.style : 1])},
       {"stocks", picojson::value(static_cast<double>(r.stocks))},
       {"timeMinutes", picojson::value(static_cast<double>(r.time_minutes))},
@@ -234,5 +238,9 @@ picojson::object ToJson(const MatchRules& r)
       {"autoLCancel", picojson::value(r.auto_l_cancel)},
       {"inputAssist", picojson::value(r.input_assist)},
   };
+  // Only when on, as the server writes it (an older server refuses a key it does not know).
+  if (r.stock_control)
+    o["stockControl"] = picojson::value(true);
+  return o;
 }
 }  // namespace Online

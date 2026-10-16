@@ -55,6 +55,17 @@ pub struct MatchRules {
     pub auto_l_cancel: bool,
     /// MORE RULES' INPUT ASSIST (P+'s 3-frame input buffer, for every player).
     pub input_assist: bool,
+    /// RULES' STOCK CONTROL (P+'s rename of Brawl's handicap): each player picks their own stock
+    /// count on their panel's STOCKS box; a player who picks none plays `stocks`. Stock matches
+    /// only, as P+'s menu (the box is hidden in time and coin). Not written when off, so that the
+    /// hash of every ruleset from before it stays the same and an older client still reads them
+    /// (one that doesn't know the key refuses the rules: "Update to play with these rules.").
+    #[serde(skip_serializing_if = "is_false")]
+    pub stock_control: bool,
+}
+
+fn is_false(b: &bool) -> bool {
+    !*b
 }
 
 /// P+ v3.2's item switch after a fresh boot (its save's default): Stage Items and EX Items on.
@@ -80,9 +91,16 @@ impl Default for MatchRules {
             hazards: false,
             auto_l_cancel: false,
             input_assist: false,
+            stock_control: false,
         }
     }
 }
+
+/// The most stocks a player's pick on their panel's STOCKS box can say (stock control). P+'s
+/// picker is Brawl's handicap list (0%, 10%, 20%, ...), which P+ reads in tenths (10% = 1 stock);
+/// 0 is "none picked" (the rules' stock count). Online the pick travels as a byte, refused above
+/// this.
+pub const MAX_PICKED_STOCKS: u8 = 99;
 
 impl MatchRules {
     /// The damage ratio as Brawl keeps it (times 10, 5-20).
@@ -460,6 +478,11 @@ mod tests {
                 "inputAssist": false
             })
         );
+        // Stock control is written only when on (the hash of older rulesets stays the same).
+        let sc = MatchRules { stock_control: true, ..Default::default() };
+        assert_eq!(serde_json::to_value(&sc).unwrap()["stockControl"], serde_json::json!(true));
+        let back: MatchRules = serde_json::from_value(serde_json::to_value(&sc).unwrap()).unwrap();
+        assert_eq!(back, sc);
         // Missing fields take the defaults; unknown ones are refused.
         let partial: MatchRules = serde_json::from_str(r#"{"stocks": 3, "style": "time"}"#).unwrap();
         assert_eq!((partial.stocks, partial.style, partial.time_minutes), (3, Style::Time, 8));

@@ -91,6 +91,8 @@ struct Member {
     team: u8,
     character: Option<u8>,
     costume: Option<u8>,
+    /// The stock count picked on the panel (stock control), with the lock-in.
+    stocks: Option<u8>,
     in_game: bool,
 }
 
@@ -407,6 +409,11 @@ impl Room {
                         // to the others not in game 1 of a set (a blind pick).
                         character: m.character.filter(|_| m.ready && (!blind || i == slot)),
                         costume: m.costume.filter(|_| m.ready && (!blind || i == slot)),
+                        // Only with the rules' stock control (a pick left from before it was
+                        // turned off shows nothing and plays nothing).
+                        stocks: m
+                            .stocks
+                            .filter(|_| m.ready && (!blind || i == slot) && self.ruleset.rules.stock_control),
                         in_game: m.in_game,
                     }),
                 })
@@ -666,6 +673,7 @@ impl RoomBook {
             team: 0,
             character: None,
             costume: None,
+            stocks: None,
             in_game: false,
         });
         tracing::info!(%code, host = %who.connect_code, public, "room created");
@@ -735,6 +743,7 @@ impl RoomBook {
             team: slot as u8 % TEAM_COUNT,
             character: None,
             costume: None,
+            stocks: None,
             in_game: false,
         });
         tracing::info!(%code, player = %who.connect_code, slot = slot + 1, "joined room");
@@ -926,7 +935,7 @@ impl RoomBook {
                     room.public = false;
                 }
             }
-            RoomRequest::Ready { ready, character, costume } => {
+            RoomRequest::Ready { ready, character, costume, stocks } => {
                 if starting {
                     return Err(msg::ROOM_STARTING);
                 }
@@ -938,6 +947,7 @@ impl RoomBook {
                 if ready {
                     m.character = character;
                     m.costume = costume;
+                    m.stocks = stocks;
                 }
             }
             RoomRequest::Team { team } => {
@@ -1515,7 +1525,7 @@ mod tests {
         assert_eq!(t.book.take_changed(), vec![(code.clone(), 1)]);
         assert!(t.book.take_changed().is_empty());
         t.req(1, RoomRequest::Slot { slot: 3, open: true });
-        t.req(1, RoomRequest::Ready { ready: true, character: None, costume: None });
+        t.req(1, RoomRequest::Ready { ready: true, character: None, costume: None, stocks: None });
         assert!(t.book.take_changed().is_empty(), "no player changed");
         join(&mut t, 3, &code);
         join(&mut t, 2, &code);
@@ -1685,7 +1695,7 @@ mod tests {
         let out = join(&mut t, 2, &code);
         // A new room plays Direct's rules (RoomsConfig::default: P+'s set).
         assert_eq!(last_state(&out, 2)["rules"], serde_json::to_value(MatchRules::default()).unwrap());
-        t.req(2, RoomRequest::Ready { ready: true, character: Some(3), costume: Some(0) });
+        t.req(2, RoomRequest::Ready { ready: true, character: Some(3), costume: Some(0), stocks: None });
         let rules = MatchRules { stocks: 3, auto_l_cancel: true, item_frequency: 1, ..Default::default() };
         // Only the host.
         let out = t.req(2, RoomRequest::Rules { rules: rules.clone() });
@@ -1698,7 +1708,7 @@ mod tests {
             assert_eq!(s["slots"][1]["player"]["ready"], false);
         }
         // The same rules again change nothing (no ready is taken back).
-        t.req(2, RoomRequest::Ready { ready: true, character: Some(3), costume: Some(0) });
+        t.req(2, RoomRequest::Ready { ready: true, character: Some(3), costume: Some(0), stocks: None });
         let out = t.req(1, RoomRequest::Rules { rules: rules.clone() });
         assert_eq!(last_state(&out, 2)["slots"][1]["player"]["ready"], true);
         // The game is played with them; no change while it starts.
@@ -1712,6 +1722,38 @@ mod tests {
         assert_eq!(done.matched.len(), 2);
         for (_, resp) in &done.matched {
             assert_eq!(resp.rules.as_ref(), Some(&rules));
+        }
+    }
+
+    #[test]
+    fn picked_stocks_show_with_the_ready_only_under_stock_control() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        join(&mut t, 2, &code);
+        let ready = |n| RoomRequest::Ready { ready: true, character: Some(3), costume: Some(0), stocks: n };
+        // Without stock control a pick shows nothing (the key is left out).
+        let out = t.req(2, ready(Some(2)));
+        assert!(last_state(&out, 1)["slots"][1]["player"].get("stocks").is_none());
+        // With it, the pick shows once the player is ready, as the character does.
+        let rules = MatchRules { stock_control: true, ..Default::default() };
+        let out = t.req(1, RoomRequest::Rules { rules: rules.clone() });
+        assert_eq!(last_state(&out, 2)["rules"]["stockControl"], true);
+        assert_eq!(last_state(&out, 1)["slots"][1]["player"]["ready"], false);
+        let out = t.req(2, ready(Some(2)));
+        assert_eq!(last_state(&out, 1)["slots"][1]["player"]["stocks"], 2);
+        let out = t.req(2, RoomRequest::Ready { ready: false, character: None, costume: None, stocks: None });
+        assert!(last_state(&out, 1)["slots"][1]["player"].get("stocks").is_none());
+        // None picked: the rules' stocks, no key.
+        let out = t.req(2, ready(None));
+        assert!(last_state(&out, 1)["slots"][1]["player"].get("stocks").is_none());
+        // The rules carry it into the game.
+        t.req(2, ready(Some(5)));
+        ready_all(&mut t, &[1]);
+        let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
+        t.book.ticket(101, addr(1), String::new(), info(1).uid, &code).unwrap();
+        let done = t.book.ticket(102, addr(2), String::new(), info(2).uid, &code).unwrap();
+        for (_, resp) in &done.matched {
+            assert!(resp.rules.as_ref().unwrap().stock_control);
         }
     }
 
@@ -1736,7 +1778,7 @@ mod tests {
         assert_eq!((s["ruleset"]["code"].as_str(), s["ruleset"]["bestOf"].as_u64()), (Some("BCDFGH"), Some(3)));
         assert!(s.get("set").is_none());
         // Game 1 is a blind pick: the other's character stays hidden even when ready.
-        let out = t.req(1, RoomRequest::Ready { ready: true, character: Some(7), costume: Some(0) });
+        let out = t.req(1, RoomRequest::Ready { ready: true, character: Some(7), costume: Some(0), stocks: None });
         assert_eq!(last_state(&out, 2)["slots"][0]["player"]["character"], Value::Null);
         assert_eq!(last_state(&out, 1)["slots"][0]["player"]["character"], 7);
         // The start makes the set; the tickets carry it.
@@ -1840,7 +1882,7 @@ mod tests {
         join(&mut t, 2, &code);
         assert_eq!(msgs(&t.req(2, RoomRequest::BestOf { best_of: 3 }), 2)[0]["error"], msg::HOST_ONLY);
         // P+'s default with sets of 3: custom, Ranked's strikes, bans and DSR; everyone unready.
-        t.req(2, RoomRequest::Ready { ready: true, character: Some(1), costume: Some(0) });
+        t.req(2, RoomRequest::Ready { ready: true, character: Some(1), costume: Some(0), stocks: None });
         let out = t.req(1, RoomRequest::BestOf { best_of: 3 });
         let s = last_state(&out, 2);
         assert_eq!((s["ruleset"]["bestOf"].as_u64(), s["ruleset"]["name"].as_str()), (Some(3), Some("Custom")));
@@ -1976,7 +2018,7 @@ mod tests {
         t.book.apply_ruleset(&code, r.clone(), Some("BCDFGH".into()), &mut out).unwrap();
         assert_eq!(last_state(&out, 1)["statusText"], msg::SETS_NEED_TWO_SIDES);
         // Once someone readies, the line is the usual one; the start is not held.
-        let out = t.req(1, RoomRequest::Ready { ready: true, character: Some(1), costume: Some(0) });
+        let out = t.req(1, RoomRequest::Ready { ready: true, character: Some(1), costume: Some(0), stocks: None });
         assert_eq!(last_state(&out, 1)["statusText"], msg::waiting_on(&["player2", "player3"]));
         let out = ready_all(&mut t, &[2, 3]);
         assert!(msgs(&out, 1).iter().any(|m| m["type"] == "room-start"));
@@ -2049,7 +2091,7 @@ mod tests {
         let mut t = T::new();
         let code = create(&mut t, 1);
         join(&mut t, 2, &code);
-        t.req(2, RoomRequest::Ready { ready: true, character: Some(2), costume: Some(0) });
+        t.req(2, RoomRequest::Ready { ready: true, character: Some(2), costume: Some(0), stocks: None });
         let req = |s: StageLists, c: Option<StageChoice>| RoomRequest::Stages { stages: s, stage_choice: c };
         let out = t.req(2, req(stages(vec![1], vec![]), None));
         assert_eq!(msgs(&out, 2)[0]["error"], msg::HOST_ONLY);
@@ -2144,7 +2186,7 @@ mod tests {
     fn ready_all(t: &mut T, conns: &[ConnId]) -> Vec<Output> {
         let mut out = vec![];
         for &c in conns {
-            out = t.req(c, RoomRequest::Ready { ready: true, character: Some(c as u8), costume: Some(0) });
+            out = t.req(c, RoomRequest::Ready { ready: true, character: Some(c as u8), costume: Some(0), stocks: None });
         }
         out
     }
@@ -2156,7 +2198,7 @@ mod tests {
         t.req(1, RoomRequest::Slot { slot: 3, open: true });
         join(&mut t, 2, &code);
         join(&mut t, 3, &code);
-        let out = t.req(1, RoomRequest::Ready { ready: true, character: Some(9), costume: Some(2) });
+        let out = t.req(1, RoomRequest::Ready { ready: true, character: Some(9), costume: Some(2), stocks: None });
         let s = last_state(&out, 2);
         assert_eq!(s["slots"][0]["player"]["character"], 9);
         assert_eq!(s["statusText"], "Waiting on: player2, player3");

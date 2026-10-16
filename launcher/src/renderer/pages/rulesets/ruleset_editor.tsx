@@ -156,6 +156,16 @@ export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (
         <Row label={Messages.stocks()}>
           <NumberInput value={r.rules.stocks} min={1} max={99} onChange={(stocks) => setRules({ stocks })} />
         </Row>
+        <Row
+          label={Messages.stockControl()}
+          help={r.rules.style === "stock" ? Messages.stockControlHelp() : Messages.stockControlStockOnly()}
+        >
+          <Switch
+            checked={r.rules.stockControl ?? false}
+            disabled={r.rules.style !== "stock"}
+            onChange={(e) => setRules({ stockControl: e.target.checked })}
+          />
+        </Row>
         <Row label={Messages.timeLimit()} help={r.rules.style === "stock" ? Messages.timeLimitHelp() : undefined}>
           <NumberInput
             value={r.rules.timeMinutes}

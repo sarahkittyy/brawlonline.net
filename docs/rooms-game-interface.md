@@ -65,7 +65,9 @@ Room fields are written whenever this player is in a room and no match runs; dur
 | player i +0x39 | `_pad2[1]` | **`roomTeam`** | 0 red, 1 blue, 2 green (the room's colour for this player, also with Teams off); 0xFF empty. |
 | player i +0x3A | `_pad2[2]` | **`roomChar`** | gmCharacterKind of the player's lock-in while `SLOT_READY` (the server passes it on), else 0xFF. Panels that need a CSS id convert it (`exchangeGmCharacterKind2MuSelchkind`, 0x800AF708). |
 | player i +0x3B | `_pad2[3]` | **`roomCostume`** | the costume of that lock-in, else 0. |
-| player i +0x3C-0x3F | `_pad2[4..7]` | `_pad2[4]` | free |
+| player i +0x3C | | `restoreStocks` | a desynced game played again (`docs/game-code.md` §11) |
+| player i +0x3D | | **`roomStocks`** (still v8, 2026-10-15) | under the rules' stock control: the stock count that player picked on their panel (room-state `stocks`), while `SLOT_READY` as `roomChar`; 0 none. The room CSS draws it on their STOCKS box. |
+| player i +0x3E-0x3F | | `_pad2[2]` | free |
 
 Indices are in-game ports (slot 1 = index 0). Ports may have gaps (P1, P3). Every value comes from mm through Dolphin, which validates it first (codes of the 20 letters, slots 1-4, teams 0-2, names cut to 15 UTF-16 units, characters and costumes 0-255 passed through only while the player is ready).
 
@@ -156,7 +158,7 @@ Dolphin also counts as busy whatever it knows itself (a search, a session, a roo
 
 **Team colour.** `ROOM_TEAM`; shown in `roomTeam` once mm confirms. Dolphin passes the room's colour to the session with the lock-in, so the game does not need to write `lockTeam` (harmless if it does). "Pick different teams" comes as the status line.
 
-**Ready.** START on the CSS = `writeLockIn(true, css, kind, costume, stagePick, asl, Session.game, &pv, pad)`, as Direct. `stagePick` is `STAGE_PENDING` when SESSION says this port `picksStage`, else 0xFFFF. Dolphin sends `room-ready {ready, character: charKind, costume}` when the lock-in for `Session.game` changes. Unlocking (a lock-in with `ready` 0) takes it back. During the start (`roomStatus == 1`) the lock-in must not change (as Direct's "character locked while searching"); mm refuses it anyway ("The game is starting.").
+**Ready.** START on the CSS = `writeLockIn(true, css, kind, costume, stagePick, asl, Session.game, &pv, pad)`, as Direct. `stagePick` is `STAGE_PENDING` when SESSION says this port `picksStage`, else 0xFFFF. Dolphin sends `room-ready {ready, character: charKind, costume, stocks}` when the lock-in for `Session.game` changes (`stocks`: the port values' `stocks`, the count picked on the panel's STOCKS box, only under the room rules' stock control and when one was picked). Unlocking (a lock-in with `ready` 0) takes it back. During the start (`roomStatus == 1`) the lock-in must not change (as Direct's "character locked while searching"); mm refuses it anyway ("The game is starting.").
 
 **The start.** When everyone is ready, mm starts the room by itself: `roomStatus` 1, line "Starting the game". Dolphin sends the room's game ticket (mode 3, a new P2P port), connects to every member and starts the gameplay session with **ports = slots** (also for 2 players, so P1 is not always the host) and **the room host as the decider**. From here it is Direct's flow: `LOCAL.state` 1 connecting, 2 connected; the picker's stage select once `LOCAL.remoteReady`; `Session.state == SS_MATCH_READY` with `Session.game` = the locked game: leave for the match. A failed start (a ticket missing for 15 s, a member left, the P2P connect failed): `roomStatus` back to 0, red line ("ALIC#4 didn't connect in time.", "A player left the room.", "Could not connect to players: ..."), `Session.game` + 1 (everyone readies again).
 

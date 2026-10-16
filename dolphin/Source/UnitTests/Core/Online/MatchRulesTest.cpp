@@ -57,6 +57,7 @@ TEST(MatchRules, EveryField)
   EXPECT_FALSE(r.hazards);
   EXPECT_TRUE(r.auto_l_cancel);
   EXPECT_TRUE(r.input_assist);
+  EXPECT_FALSE(r.stock_control);
 
   // Back to the server's shape and in again: the same rules.
   const std::string again = picojson::value(ToJson(r)).serialize();
@@ -120,13 +121,26 @@ TEST(MatchRules, BadValuesRefuseTheMatch)
   }
 }
 
+TEST(MatchRules, StockControl)
+{
+  // Sent only when on (server rules.rs): missing is off.
+  const auto p = Parse(R"({"stocks": 3, "stockControl": true})");
+  ASSERT_TRUE(p.rules) << p.detail;
+  EXPECT_TRUE(p.rules->stock_control);
+  EXPECT_EQ(SessionBytes(p.rules)[RU_STOCK_CONTROL], 1);
+  EXPECT_EQ(FromSessionBytes(SessionBytes(p.rules)), p.rules);
+  EXPECT_EQ(ToJson(*p.rules).at("stockControl").get<bool>(), true);
+  EXPECT_EQ(ToJson(MatchRules{}).count("stockControl"), 0u);
+  EXPECT_FALSE(Parse(R"({"stockControl": 1})").rules);
+}
+
 TEST(MatchRules, UnknownRuleRefusesTheMatch)
 {
   // A rule this client cannot apply: playing without it would not be the match the server set up.
-  const auto p = Parse(R"({"stocks": 3, "stockControl": true})");
+  const auto p = Parse(R"({"stocks": 3, "targetScore": 5})");
   EXPECT_FALSE(p.rules);
   EXPECT_EQ(p.error, "Update to play with these rules.");
-  EXPECT_NE(p.detail.find("stockControl"), std::string::npos);
+  EXPECT_NE(p.detail.find("targetScore"), std::string::npos);
   // The text fits the CSS status line (38 characters, docs/game-code.md).
   EXPECT_LE(p.error.size(), 38u);
   EXPECT_LE(std::string("Invalid rules from the server.").size(), 38u);
@@ -146,7 +160,7 @@ TEST(MatchRules, SessionBytes)
   for (const auto& [at, value] : std::initializer_list<std::pair<u32, u8>>{
            {RU_VALID, 0}, {RU_STYLE, 3}, {RU_STOCKS, 0}, {RU_STOCKS, 100}, {RU_TIME, 100},
            {RU_DAMAGE, 4}, {RU_DAMAGE, 21}, {RU_ITEM_FREQUENCY, 4}, {RU_PAUSE, 2},
-           {RU_AUTO_L_CANCEL, 7}, {RU_INPUT_ASSIST, 2}})
+           {RU_AUTO_L_CANCEL, 7}, {RU_INPUT_ASSIST, 2}, {RU_STOCK_CONTROL, 2}})
   {
     auto bad = SessionBytes(MatchRules{});
     bad[at] = value;

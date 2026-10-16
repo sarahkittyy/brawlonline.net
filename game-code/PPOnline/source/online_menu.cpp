@@ -25,6 +25,7 @@ extern "C" {
     extern u8 g_onlineCss;
     extern u8 g_onlineReturnPage;
     extern u8 g_onlineFriendsCursor;
+    extern u8 g_cssPicHold;   // room_css.cpp showTeamAt
     int sprintf(char* buf, const char* fmt, ...);
 }
 
@@ -102,6 +103,7 @@ namespace OnlineMenu {
         // The stage of that lock-in: 0xFFFF none, PPOM::STAGE_PENDING the loser's (the stage
         // select comes once every player is locked in), else the stage picked there.
         u16 lockStage;
+        u8 lockedStocks;   // the stock count the lock-in carries (stock control), 0 none
         // The last character and costume locked in. Brawl's Wi-Fi CSS comes back from a match or
         // the stage select with the coin in the hand (it restores no selection in Wi-Fi mode);
         // while connected, START locks in with these unless another character is picked.
@@ -140,6 +142,7 @@ namespace OnlineMenu {
     };
     static State s;
     bool roomCss();
+    static bool roomStockControl();
     static u8 s_headerPress = 0;   // the game's press on ITEM (0x19) / STAGE (0x1A) on a room's CSS
     void u16Name(char* out, const u16* in);   // a name from SESSION / Dolphin: printable ASCII
 
@@ -457,6 +460,10 @@ namespace OnlineMenu {
         int tag = picked >= 0 ? selectedTag() : s.lastTag;
         PPOM::PortValues pv;
         portValuesOf(tag, &pv);
+        // Stock control: the count picked on the panel's STOCKS box (room_css.cpp), which the match
+        // setup gives this player (online_match.cpp).
+        pv.stocks = roomCss() && roomStockControl() ? RoomCss::myStocks() : 0;
+        s.lockedStocks = pv.stocks;
         PPOM::writeLockIn(true, (u8)css, charKindOf(css), (u8)(costume | s.startAlt), stagePick, asl,
                           (u8)game, &pv, s.startPad);
         s.lockedGame = game;
@@ -802,8 +809,8 @@ namespace OnlineMenu {
     // the set rule as P+'s rules menu keeps it (docs/game-code.md section 14, Room rules RE):
     // style (+2, low 3 bits), stocks (+4), damage ratio (+6), the time limit (+8, every style; the
     // time / coin target +3 stays infinite), team attack (+9), pause (+0xA, 1 normal / 0 hold),
-    // auto L-cancel (+0xB) and input assist (+0xC); the item frequency and switches in the menu
-    // record, and the hazard switch. Without them (an older server), P+'s competitive set: the set rule's 16 bytes P+'s code writes, pause
+    // auto L-cancel (+0xB), input assist (+0xC) and stock control (+5); the item frequency and
+    // switches in the menu record, and the hazard switch. Without them (an older server), P+'s competitive set: the set rule's 16 bytes P+'s code writes, pause
     // only in Direct, item frequency 0 with P+'s default item switch, hazards off (the default
     // since 2026-10-12, the user's). Either way hazards
     // also hold for Direct's loser's pick (its hazard toggle is not part of the setup the other
@@ -834,6 +841,9 @@ namespace OnlineMenu {
             r[0xA] = ru.pause ? 1 : 0;                     // 1 normal, 0 hold START
             r[0xB] = ru.autoLCancel ? 1 : 0;
             r[0xC] = ru.inputAssist ? 1 : 0;
+            // P+'s STOCK CONTROL (+5, `m_handicap`: 2 on), stock matches only as its menu has it;
+            // each player's count is their match player's +0x26 (OnlineMatch::setupMatch).
+            r[5] = ru.stockControl && ru.style == PPOM::STYLE_STOCK ? 2 : 0;
             m[0] = ru.itemFrequency;
             memcpy(m + ITEM_SWITCH, ru.itemSwitch, sizeof(ru.itemSwitch));
             if (st) st[HAZARD] = ru.hazards ? 0 : 1;
@@ -1345,9 +1355,15 @@ namespace OnlineMenu {
     // setCharPic(area, css, kind, costume, isTeam, team, teamSet), sel_char+0x14B68 (0x8069742C)
     // `stwu r1,-0x80(r1)`, its first instruction: online, isTeam (r7) 0, so the portrait is the
     // costume's (with isTeam it is findCharTeamColorNo's, the team's). Back at +0x14B6C.
+    // While g_cssPicHold (a room panel's showTeam with another player number, RoomCss's
+    // showTeamAt) it returns at once: no picture.
     __attribute__((naked)) void cssCharPic()
     {
         asm volatile(
+            "lis 12, g_cssPicHold@ha\n\t"
+            "lbz 12, g_cssPicHold@l(12)\n\t"
+            "cmpwi 12, 0\n\t"
+            "bnelr\n\t"
             "lis 12, g_onlineCss@ha\n\t"
             "lbz 12, g_onlineCss@l(12)\n\t"
             "cmpwi 12, 0\n\t"
@@ -2037,6 +2053,14 @@ namespace OnlineMenu {
         return 0;
     }
 
+    // The room's rules have P+'s STOCK CONTROL, in a stock match (P+ shows no STOCKS box in time
+    // and coin: its hook at sel_char 0x80693138).
+    static bool roomStockControl()
+    {
+        const PPOM::Rules& ru = PPOM::g_block.session.rules;
+        return roomIn() && ru.valid && ru.stockControl && ru.style == PPOM::STYLE_STOCK;
+    }
+
     static void roomPanels(RoomCss::PanelView v[3], int* myTeam)
     {
         const PPOM::Session& se = PPOM::g_block.session;
@@ -2070,6 +2094,7 @@ namespace OnlineMenu {
                     p.kind = RoomCss::PV_READY;
                     p.css = (u8)css;
                     p.costume = pl.roomCostume & PPOM::COSTUME_COLOUR;   // (an alt shows its colour)
+                    p.stocks = pl.roomStocks <= PPOM::MAX_PICKED_STOCKS ? pl.roomStocks : 0;
                 } else if (bits & PPOM::SLOT_READY) {
                     // Ready without a character shown: game 1 of a set is a blind pick (the
                     // server keeps the character from the others, room-rules.md §2).
@@ -2483,7 +2508,11 @@ namespace OnlineMenu {
             if (in && me >= 0) u16Name(myName, se.players[me].name);
             else strcpy(myName, s.ownName);
         }
-        RoomCss::tick(views, teams, myTeam, in && me >= 0 ? roomStars(me, host) : 0, myName, roomLockedForNext());
+        // Stock control: Brawl's picker on the local STOCKS box opens while locked in too; the pick
+        // stays the one the lock-in carries (as the character, cssCoinAPress).
+        if (g_onlineCssLock && (pressed & BTN_A) && RoomCss::handOnMyStocks()) maskPressed(BTN_A);
+        RoomCss::tick(views, teams, myTeam, in && me >= 0 ? roomStars(me, host) : 0, myName, roomLockedForNext(),
+                      roomStockControl(), roomLockedForNext() ? s.lockedStocks : -1);
         roomButtons(in, host);
     }
 

@@ -31,6 +31,9 @@ constexpr u8 NUM_TEAMS = 3;  // 0 red, 1 blue, 2 green
 constexpr size_t MAX_NAME_BYTES = 64;
 constexpr size_t MAX_CODE_BYTES = 32;
 constexpr size_t MAX_TEXT_BYTES = 200;
+// The most stocks a pick on the STOCKS box (stock control) can say (server rules.rs
+// MAX_PICKED_STOCKS); 0 is no pick and is not sent.
+constexpr u8 MAX_PICKED_STOCKS = 99;
 
 // A typed or received code: ASCII or full-width letters, any case -> "KFQB"; nullopt when it is
 // not 4 letters of the 20 (the server's rule: such a code is "Room not found.").
@@ -81,6 +84,9 @@ struct Player
   u8 team = 0;                    // 0-2
   std::optional<u8> character;    // only while ready
   std::optional<u8> costume;
+  // With the rules' stock control: the stock count the player picked on their panel, shown as the
+  // lock-in is (1-99; none: not picked, the rules' stocks).
+  std::optional<u8> stocks;
   bool in_game = false;
 };
 
@@ -243,6 +249,7 @@ struct Request
   std::string ruleset;  // Create (the launcher's box), Ruleset: a ruleset code, "" none
   bool remembered = false;  // Create: the game's own Create Room (the account's remembered ruleset)
   std::optional<u8> character, costume;  // Ready
+  std::optional<u8> stocks;              // Ready: the picked stock count (stock control), 1-99
   std::optional<MatchRules> rules;        // Rules
   u32 game = 0;                           // Result: the set's game
   u8 winner_side = 0;                     // Result: 0 / 1, SIDE_DRAW, SIDE_VOID

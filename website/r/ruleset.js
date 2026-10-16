@@ -67,6 +67,7 @@
     const time = rules.timeMinutes === 0 ? "No limit" : `${rules.timeMinutes} min`;
     const rows = [["Style", style]];
     if (rules.style === "stock") rows.push(["Stocks", String(rules.stocks)]);
+    if (rules.style === "stock" && rules.stockControl) rows.push(["Stock control", "On: each player picks their stocks"]);
     rows.push(
       ["Time limit", time],
       ["Damage ratio", Number(rules.damageRatio).toFixed(1)],

@@ -44,6 +44,7 @@ describe("rulesets", () => {
       hazards: false,
       autoLCancel: false,
       inputAssist: false,
+      stockControl: false,
     });
     expect(validateRuleset(weekly())).toBeNull();
   });
@@ -142,5 +143,11 @@ describe("rulesets", () => {
     expect(rulesetFromJson(`{"name": "x", "players": "ffa"}`)).toEqual({ ...defaultRuleset(), name: "x" });
     expect("players" in rulesetFromJson(`{"players": "1v1"}`)).toBe(false);
     expect(() => rulesetFromJson(`{"rules": {"itemSwitch": [1]}}`)).toThrow("itemSwitch");
+    // Stock control is written only when on (as the server writes it), and read back.
+    expect(JSON.parse(text).rules.stockControl).toBeUndefined();
+    const sc = weekly({ rules: { ...defaultRuleset().rules, stockControl: true } });
+    expect(JSON.parse(rulesetToJson(sc)).rules.stockControl).toBe(true);
+    expect(rulesetFromJson(rulesetToJson(sc))).toEqual(sc);
+    expect(() => rulesetFromJson(`{"rules": {"stockControl": 1}}`)).toThrow("bad value");
   });
 });

@@ -140,8 +140,10 @@ pub enum RoomRequest {
     Teams { on: bool },
     /// `room-public {public}` (host only).
     Public { public: bool },
-    /// `room-ready {ready, character?, costume?}`: START on the CSS (lock-in) or taking it back.
-    Ready { ready: bool, character: Option<u8>, costume: Option<u8> },
+    /// `room-ready {ready, character?, costume?, stocks?}`: START on the CSS (lock-in) or taking it
+    /// back. `stocks`: with the rules' stock control, the count the player picked on their panel
+    /// (1-99; missing: none picked, the rules' stocks).
+    Ready { ready: bool, character: Option<u8>, costume: Option<u8>, stocks: Option<u8> },
     /// `room-team {team}`: 0 red, 1 blue, 2 green.
     Team { team: u8 },
     /// `room-back {}`: this player is back on the room's CSS after a game.
@@ -226,13 +228,16 @@ impl RoomRequest {
             RoomRequest::Slot { slot, open } => json!({ "slot": slot, "open": open }),
             RoomRequest::Teams { on } => json!({ "on": on }),
             RoomRequest::Public { public } => json!({ "public": public }),
-            RoomRequest::Ready { ready, character, costume } => {
+            RoomRequest::Ready { ready, character, costume, stocks } => {
                 let mut v = json!({ "ready": ready });
                 if let Some(c) = character {
                     v["character"] = json!(c);
                 }
                 if let Some(c) = costume {
                     v["costume"] = json!(c);
+                }
+                if let Some(n) = stocks {
+                    v["stocks"] = json!(n);
                 }
                 v
             }
@@ -311,6 +316,10 @@ impl RoomRequest {
                 ready: flag("ready")?,
                 character: small("character", 255)?,
                 costume: small("costume", 255)?,
+                stocks: match small("stocks", crate::rules::MAX_PICKED_STOCKS as u64)? {
+                    Some(0) => return Err(format!("{kind}: `stocks` must be 1 to {}", crate::rules::MAX_PICKED_STOCKS)),
+                    n => n,
+                },
             },
             ROOM_TEAM => RoomRequest::Team {
                 team: small("team", (TEAM_COUNT - 1) as u64)?.ok_or_else(|| format!("{kind}: `team` is missing"))?,
@@ -472,6 +481,10 @@ pub struct RoomPlayer {
     /// The lock-in, once ready (opaque to the server: the game's character and costume ids).
     pub character: Option<u8>,
     pub costume: Option<u8>,
+    /// With the rules' stock control: the stock count the player picked on their panel, shown as
+    /// the lock-in is (missing: none picked, or not shown yet).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub stocks: Option<u8>,
     /// Still in the last game (not back on the room's CSS).
     pub in_game: bool,
 }
@@ -777,8 +790,9 @@ mod tests {
             RoomRequest::Slot { slot: 3, open: true },
             RoomRequest::Teams { on: true },
             RoomRequest::Public { public: false },
-            RoomRequest::Ready { ready: true, character: Some(12), costume: Some(3) },
-            RoomRequest::Ready { ready: false, character: None, costume: None },
+            RoomRequest::Ready { ready: true, character: Some(12), costume: Some(3), stocks: None },
+            RoomRequest::Ready { ready: true, character: Some(12), costume: Some(3), stocks: Some(2) },
+            RoomRequest::Ready { ready: false, character: None, costume: None, stocks: None },
             RoomRequest::Team { team: 2 },
             RoomRequest::Back,
             RoomRequest::Rules { rules: crate::rules::MatchRules::default() },
@@ -837,6 +851,8 @@ mod tests {
             (ROOM_PUBLIC, json!({})),
             (ROOM_READY, json!({"ready": true, "character": 256})),
             (ROOM_READY, json!({"ready": true, "costume": -1})),
+            (ROOM_READY, json!({"ready": true, "stocks": 0})),
+            (ROOM_READY, json!({"ready": true, "stocks": 100})),
             (ROOM_TEAM, json!({"team": 3})),
             (ROOM_TEAM, json!({})),
             (ROOM_JOIN, json!({"code": 5})),

@@ -63,7 +63,7 @@ or refuses and disconnects:
 | `{"type": "room-slot", "slot": 3, "open": true}` | host | between games | Opens or closes slot 1-4. Closing an occupied slot removes its player ("Removed from the room."), who may join again once a slot is open. |
 | `{"type": "room-teams", "on": true}` | host | between games | The Teams switch. Changing it clears everyone's ready. |
 | `{"type": "room-public", "public": false}` | host | any time | Public or private (a private room is joinable by code only). |
-| `{"type": "room-ready", "ready": true, "character": 12, "costume": 0}` | member | not during the start, not while still in the last game | START on the CSS (lock-in) or taking it back. `character` and `costume` are optional numbers 0-255 the server only passes on; they are shown to the others while ready. |
+| `{"type": "room-ready", "ready": true, "character": 12, "costume": 0, "stocks": 3}` | member | not during the start, not while still in the last game | START on the CSS (lock-in) or taking it back. `character` and `costume` are optional numbers 0-255 the server only passes on; they are shown to the others while ready. `stocks` (2026-10-15, optional, 1-99): under the rules' `stockControl`, the stock count the player picked on their panel's STOCKS box (none picked: left out); shown to the others as `character` is (also withheld in a blind pick), and only while the rules have stock control. The match takes each player's count from the game's own lock-in exchange, not from here. |
 | `{"type": "room-team", "team": 1}` | member | not during the start, not while still in the last game | 0 red, 1 blue, 2 green. New members get red, blue, green, red by slot. |
 | `{"type": "room-back"}` | member | after a game | This player is back on the room's CSS. |
 | `{"type": "room-unreachable", "matchId": "mode.room-KFQB-…", "slots": [4]}` | member | after a failed connect | This player's P2P connect to these members (slots 1-4, at most 3) timed out in the room's game `matchId`. Sent by Dolphin before its `room-back`. Each new pair goes to every member as `room-unreachable` (below); the pair again (the other side's report), the sender's own slot, another game's `matchId` or a game that is over change nothing. No answer. |
@@ -80,7 +80,7 @@ A request that is refused changes nothing and is answered with `room-error`. Mal
   "type": "room-state", "code": "KFQB", "public": true, "teams": false,
   "mode": "1v1", "status": "waiting", "you": 2, "host": 1,
   "slots": [
-    {"slot": 1, "open": true, "host": true, "player": {"displayName": "alice", "connectCode": "ALIC#4", "ready": true, "team": 0, "character": 12, "costume": 0, "inGame": false}},
+    {"slot": 1, "open": true, "host": true, "player": {"displayName": "alice", "connectCode": "ALIC#4", "ready": true, "team": 0, "character": 12, "costume": 0, "stocks": 3, "inGame": false}},
     {"slot": 2, "open": true, "host": false, "player": {"displayName": "bob", "connectCode": "BO#77", "ready": false, "team": 1, "character": null, "costume": null, "inGame": false}},
     {"slot": 3, "open": false, "host": false, "player": null},
     {"slot": 4, "open": false, "host": false, "player": null}
@@ -92,6 +92,8 @@ A request that is refused changes nothing and is answered with `room-error`. Mal
 }
 ```
 
+- `stocks` is there only under the rules' `stockControl`, for a ready player who picked a count (an older client ignores it).
+- `rules.stockControl` is written only when `true` (`docs/rulesets-protocol.md`).
 - `mode`: `1v1` with two open slots (the Teams switch has no effect then), `teams` with Teams on and three or four open slots, else `ffa`.
 - `status`: `waiting`, `starting` (tickets coming in), `in-game` (until every player of the game is back).
 - `slot` is the in-game port and stays the same for the life of the room; gaps are allowed.

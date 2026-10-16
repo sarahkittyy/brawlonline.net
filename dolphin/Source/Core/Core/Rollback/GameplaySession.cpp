@@ -816,6 +816,11 @@ constexpr u32 PAD_CONFIG_KEY_SIZE = 0xB9;
 // +0x29) and the item switch (gmMeleeInitData::m_itSwitch, +0x30..+0x40).
 constexpr u32 GG_SET_RULE = 0x1C;
 constexpr u32 SET_RULE_KEY_SIZE = 0x10;
+// gmSetRule::m_handicap (P+'s STOCK CONTROL: 2 on) and gmPlayerInitData +0x26 (the handicap,
+// u16; P+ reads it in tenths of a stock).
+constexpr u32 SET_RULE_HANDICAP = 5;
+constexpr u8 HANDICAP_STOCK_CONTROL = 2;
+constexpr u32 MM_PLAYER_HANDICAP = 0x26;
 constexpr u32 MM_HAZARD = 0x29, MM_HAZARD_OFF = 0x20;
 constexpr u32 MM_ITEM_SWITCH = 0x30, ITEM_SWITCH_SIZE = 0x10;
 
@@ -902,7 +907,22 @@ std::vector<u8> SetupKey(const Guest& g)
   if (const auto rule = g.Ptr32(*gg + GG_SET_RULE))
   {
     if (const u8* r = g.Ptr(*rule, SET_RULE_KEY_SIZE))
+    {
       key.insert(key.end(), r, r + SET_RULE_KEY_SIZE);
+      // Stock control (set rule +5 = 2, P+'s "on"): each player's picked count, the match
+      // player's +0x26 halfword (tenths of a stock), which P+'s "Handicap = Stock Count" makes
+      // that player's stocks when the fighter is made. Only then, so that every other game's key
+      // is as before (replays compare it).
+      if (r[SET_RULE_HANDICAP] == HANDICAP_STOCK_CONTROL)
+      {
+        for (u32 i = 0; i < 4; ++i)
+        {
+          const u8* pl = p + 0x98 + i * 0x5C;
+          key.push_back(pl[MM_PLAYER_HANDICAP]);
+          key.push_back(pl[MM_PLAYER_HANDICAP + 1]);
+        }
+      }
+    }
   }
   key.push_back(p[MM_HAZARD] & MM_HAZARD_OFF);
   key.insert(key.end(), p + MM_ITEM_SWITCH, p + MM_ITEM_SWITCH + ITEM_SWITCH_SIZE);
