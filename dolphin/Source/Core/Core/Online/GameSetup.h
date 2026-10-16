@@ -54,12 +54,10 @@ struct View
   bool time_up = false;  // CSS: lock in now with the character on the CSS (no START needed)
   u8 seconds = 0;        // seconds left in this step (0: no timer)
   std::vector<u8> selectable;  // the stages that can still be struck / picked
-  // The stage select's page (a stage step): the set's starters, then the other stages its
-  // counterpick games add (none when every game strikes), each in the ruleset's order.
-  // `striking`: this game strikes the starters, so only they are shown.
-  std::vector<u8> starters;
-  std::vector<u8> others;
-  bool striking = false;
+  // The stage select's page (a stage step): every stage of the set, the same in every game (the
+  // ones not selectable now are struck): the counterpick list in its order, then any starter it
+  // lacks.
+  std::vector<u8> page;
   u16 stage = 0xFFFF;          // the decided stage
   std::string text;            // the status line ("" = the game's own)
   u32 game = 0;

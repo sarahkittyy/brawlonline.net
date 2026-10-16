@@ -194,21 +194,20 @@ namespace StageLegal {
     }
 
     // Ranked's (and a room set's) stage select shows only the set's stages, not P+'s pages with
-    // the rest greyed (the user's, 2026-10-16). Its page becomes the other stages of the
-    // counterpick games, then the starters, in the ruleset's order (GameStep nStarters...). P+
-    // places a page's icons with MenSelmapPos_TopN__0 (sc_selmap.pac) at frame count + 1, icon n
-    // on bone pos<n+1>: nine stages are a row of four over a row of five, so Ranked's four
-    // counterpicks are the top row and its five starters the bottom one. A game that strikes the
-    // starters (game 1, after a draw) hides the other stages' icons and leaves the starters' row.
-    // The page is written as the stage select sets its pages up (hookPageSetup, before the first
-    // page is drawn) and P+'s pages come back once the stage select is gone (tick).
+    // the rest struck (the user's, 2026-10-16): the same page in every game, the stages not
+    // selectable now struck as before (game 1 the counterpicks). Its page is the set's stages in
+    // the ruleset's order (GameStep page). P+ places a page's icons with MenSelmapPos_TopN__0
+    // (sc_selmap.pac) at frame count + 1, icon n on bone pos<n+1>: nine stages are a row of four
+    // over a row of five, so Ranked's list (its four counterpicks, then its five starters) puts
+    // the counterpicks on top and the starters below. The page is written as the stage select
+    // sets its pages up (hookPageSetup, before the first page is drawn) and P+'s pages come back
+    // once the stage select is gone (tick).
     static const int PAGE_SIZE = 0x28;
     static const int PAGE_MAX = 39;
     static u8 s_savedPages[PAGES * PAGE_SIZE];
     static bool s_pagesSaved = false;
     static bool s_pagesSeen = false;
     static bool s_page = false;   // this stage select shows the set's page
-    static int s_hidden = 0;      // its first positions hidden (a striking game's other stages)
 
     // A slot of P+'s own pages (as loaded, not ours) that shows `kind`, or -1.
     static int slotOf(int kind)
@@ -224,20 +223,11 @@ namespace StageLegal {
         return -1;
     }
 
-    static int addKinds(u8* slots, int n, const u8* kinds, int count)
-    {
-        for (int i = 0; i < count && n < PAGE_MAX; i++) {
-            int slot = slotOf(kinds[i]);
-            if (slot >= 0) slots[n++] = (u8)slot;
-        }
-        return n;
-    }
-
     static void setPage()
     {
         g_sssPage[0]++;
         const PPOM::GameStep* st = ranked();
-        g_sssPage[2] = !st ? 1 : !st->active ? 2 : !st->nStarters ? 3 : 0;
+        g_sssPage[2] = !st ? 1 : !st->active ? 2 : !st->nPage ? 3 : 0;
         if (g_sssPage[2]) return;
         int page = *(u8*)CURRENT_PAGE;
         if (page >= PAGES) {
@@ -249,37 +239,21 @@ namespace StageLegal {
             s_pagesSaved = true;
         }
         u8 slots[PAGE_MAX];
-        int nOthers = st->nOthers > sizeof(st->others) ? sizeof(st->others) : st->nOthers;
-        int nStarters = st->nStarters > sizeof(st->starters) ? sizeof(st->starters) : st->nStarters;
-        int others = addKinds(slots, 0, st->others, nOthers);
-        int n = addKinds(slots, others, st->starters, nStarters);
-        if (n == others) {
-            g_sssPage[2] = 5;   // no starter on P+'s pages: its own page, greyed
+        int n = 0;
+        int count = st->nPage > PAGE_MAX ? PAGE_MAX : st->nPage;
+        for (int i = 0; i < count; i++) {
+            int slot = slotOf(st->page[i]);
+            if (slot >= 0) slots[n++] = (u8)slot;
+        }
+        if (!n) {
+            g_sssPage[2] = 5;   // none on P+'s pages: its own page, the rest struck
             return;
         }
         u8* p = (u8*)(STAGE_PAGES + PAGE_SIZE * page);
         p[0] = (u8)n;
         memcpy(p + 1, slots, n);
         s_page = true;
-        s_hidden = st->striking ? others : 0;
         g_sssPage[1]++;
-    }
-
-    // Every frame of the set's page: the hidden icons (and their second object, as dispPage
-    // attaches both to the position's bone) stay hidden whatever P+ draws on them.
-    typedef void (*SetVisFn)(void* scnMdl, bool vis);
-    static const SetVisFn SET_VIS = (SetVisFn)0x80043D20;   // nwSMSetVisibility
-    static void hideOthers(u8* task)
-    {
-        for (int i = 0; i < s_hidden; i++) {
-            const u32 objs[2] = {*(u32*)(task + 0x8C + 4 * i), *(u32*)(task + 0x128 + 4 * i)};
-            for (int k = 0; k < 2; k++) {
-                if (objs[k] < 0x80000000 || objs[k] >= 0x81800000) continue;
-                u32 a = *(u32*)(objs[k] + 0xC), b = *(u32*)(objs[k] + 0x10);
-                if (a >= 0x80000000 && a < 0x81800000) SET_VIS((void*)a, false);
-                if (b != a && b >= 0x80000000 && b < 0x81800000) SET_VIS((void*)b, false);
-            }
-        }
     }
 
     // The allowed bits of one page: {u16 positions 31.., u32 positions 0..30}.
@@ -355,7 +329,6 @@ namespace StageLegal {
             s_pagesSaved = false;
             s_pagesSeen = false;
             s_page = false;
-            s_hidden = 0;
         }
     }
 }
@@ -385,11 +358,8 @@ extern "C" {
         if (online && mgr >= 0x80000000 && mgr < 0x81800000) *(int*)(mgr + 0x284) = 1;
         if (!st) return out;
         out &= ~(0x1000u | 0x10u);   // START (random), Z (hazards: the online rules set them)
-        if (StageLegal::s_page) {
-            StageLegal::hideOthers(task);
-            // The set's page is the only one: A on P+'s page button would show its next page.
-            if (*(u32*)(task + 0x244) == 0x35) out &= ~0x100u;
-        }
+        // The set's page is the only one: A on P+'s page button would show its next page.
+        if (StageLegal::s_page && *(u32*)(task + 0x244) == 0x35) out &= ~0x100u;
         StageLegal::showTurn(OnlineMenu::rankedText());
         s_autoLeave = !st->active || (st->type != PPOM::STEP_STRIKE && st->type != PPOM::STEP_PICK);
         if (s_autoLeave) {

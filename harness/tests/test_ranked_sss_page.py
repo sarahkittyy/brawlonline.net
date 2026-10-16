@@ -1,10 +1,10 @@
 """Ranked's stage select shows only the set's stages (game-code/PPOnline/source/stage_legal.cpp;
 docs/game-code.md §11, "Ranked's stage select page").
 
-Two instances are paired from the Ranked queue. On each stage select the page P+ shows is the
-set's: the counterpicks that are not starters, then the starters, in the server's order (P+ lays
-nine out as a row of four over a row of five). Game 1 strikes the starters, so the counterpicks'
-icons are hidden; game 2 shows all nine. Once the stage select is gone P+'s own pages are back.
+Two instances are paired from the Ranked queue. On every stage select the page P+ shows is the
+set's nine stages in the server's order (P+ lays nine out as a row of four over a row of five: the
+counterpicks over the starters); game 1 has the counterpicks struck. Once the stage select is gone
+P+'s own pages are back.
 
 Screenshots go to run/artifacts/game-bridge/ranked-sss-page/. Needs what test_online_ranked.py
 needs.
@@ -82,9 +82,9 @@ def test_ranked_stage_select_shows_only_the_sets_stages(backend, dolphin: Callab
     players = [a, b]
     host = a if _ranked(a)["local_port"] == 0 else b
     join = b if host is a else a
-    assert sorted(RANKED_STARTERS) == STARTERS
-    others = [k for k in RANKED_STAGES if k not in STARTERS]
-    page = others + RANKED_STARTERS
+    assert sorted(RANKED_STARTERS) == STARTERS and RANKED_STAGES[4:] == RANKED_STARTERS
+    others = RANKED_STAGES[:4]
+    page = RANKED_STAGES
 
     _both_on(players, SSS, "game 1: both on the stage select")
     for g in players:
