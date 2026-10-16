@@ -8,6 +8,7 @@
 #include <atomic>
 #include <chrono>
 #include <cmath>
+#include <cstddef>
 #include <cstdlib>
 #include <cstring>
 #include <deque>
@@ -144,6 +145,15 @@ constexpr auto SD_PACE_STEP = std::chrono::milliseconds(100);
 // over what ENet's own timing shows with nothing queued (3-4 ms, the upload sent in slices).
 // Three times it halves the rate at once.
 constexpr double SD_TARGET_DELAY_MS = 6;
+// A link whose round trip changes by more than SD_JITTER_MS from one send to the next beyond a
+// trend (on average, OnAck) is jittery until it is back under SD_JITTER_CLEAR_MS, and its queue
+// is the lowest of its LinkQueueMs over SD_JITTER_WINDOW (SteadyQueueMs). Through netsim: 2-4 ms
+// on a clean link (9 at most), 8-14 with normal jitter of 10 ms each way, 30-45 with pareto 25.
+constexpr double SD_JITTER_MS = 8;
+constexpr double SD_JITTER_CLEAR_MS = 5;
+constexpr auto SD_JITTER_WINDOW = std::chrono::seconds(3);
+// On a link without jitter, the window of round trips whose lowest is its delay now for PaceSD.
+constexpr auto SD_CLEAN_DELAY_WINDOW = std::chrono::milliseconds(100);
 // After slowing down, the delays it looks at need this long to show the change.
 constexpr auto SD_SLOWDOWN_HOLD = std::chrono::milliseconds(800);
 // The window of round trips whose lowest is a link's delay now.
@@ -276,6 +286,31 @@ struct PeerLink
     enet_uint32 seen_sent = 0, seen_lost = 0;  // ENet's counters when last seen
     enet_uint32 min_rtt = 0xffffffff;  // the lowest of ENet's mean round trip (ms)
     Clock::time_point step{};
+    enet_uint32 step_enet = 0;  // ENet's clock at `step`
+    // From the peer's acknowledgements, read before ENet reads them (OnAck): the latest send
+    // (ENet's clock) an acknowledgement echoed and that send's round trip (RACK), the highest round
+    // trip of each of the last four half seconds (the retransmission timeout's floor), the link's
+    // jitter (SteadyQueueMs) and this round trip's resends the peer showed were not needed.
+    bool rack_valid = false;
+    enet_uint32 rack_sent = 0, rack_rtt = 0;
+    std::array<enet_uint32, 4> rtt_high{};
+    enet_uint32 rtt_high_at = 0;  // ENet's clock when rtt_high[0] began
+    // The jitter (ms), as RTP's interarrival jitter (RFC 3550) less a trend: the mean change of
+    // the round trip from one send to one at least JITTER_SPACING_MS later, past the mean change
+    // (`trend`: a queue filling or draining moves it steadily).
+    double jitter = 0, trend = 0;
+    bool jittery = false;  // past SD_JITTER_MS, until back under SD_JITTER_CLEAR_MS
+    s32 jitter_rtt = -1;
+    enet_uint32 jitter_sent = 0;
+    enet_uint32 spurious = 0;
+    // The last cut, while the losses that made it may still prove spurious: the window and slow
+    // start before it (undo_window 0: none), its losses not shown spurious yet, and until when.
+    enet_uint32 undo_window = 0, undo_lost = 0;
+    bool undo_slow_start = false;
+    Clock::time_point undo_until{};
+    enet_uint32 undone = 0, rack_resent = 0;  // diagnostics: cuts undone, RACK's resends
+    // LinkQueueMs every 100 ms over the last SD_JITTER_WINDOW (NetThread; SteadyQueueMs).
+    std::deque<std::pair<Clock::time_point, double>> queue_readings;
   } cc;
 };
 
@@ -1445,40 +1480,260 @@ size_t QueuedReliable(ENetPeer* peer, size_t limit)
   return n;
 }
 
-// Net thread: has ENet resend soon what `peer` evidently lost, while it is still answering. ENet
-// resends a reliable packet when it has waited its round-trip timeout, which doubles at each try,
-// and drops the whole link once one try's timeout passes 10 s or the 6th (or later) waits 5 s
-// (enet_peer_timeout), however many later packets the peer acknowledged meanwhile; and on a
-// sequenced channel nothing after that packet reaches the game. Over a link that drops what
-// exceeds its rate with little buffer (an ISP's rate limit), one packet lost a few times over
-// held a machine image for seconds, then ended the join (netsim at 16 Mbit/s with a 10 ms queue:
-// the image all sent and acknowledged but for its holes, the joiner below 10 %, the link gone
-// after 15 s). Here a packet unacknowledged for two round trips plus four deviations, while the
-// peer answered after that, gets that as its timeout, as TCP's RACK does; its resend counts as a
-// loss for the congestion window. A peer that stopped answering keeps ENet's timeouts.
-void ResendLost(ENetPeer* e)
+// ENet's clock in ms, which wraps: how far `a` is after `b`.
+s32 EnetAfter(enet_uint32 a, enet_uint32 b)
 {
-  // ENet's clock in ms, which wraps: how far `a` is after `b`.
-  auto after = [](enet_uint32 a, enet_uint32 b) { return static_cast<s32>(a - b); };
+  return static_cast<s32>(a - b);
+}
+
+// The highest round trip of each half second of a peer's acknowledgements (OnAck), [0] the
+// current one, moved on to `now`.
+void RollRttHigh(decltype(PeerLink::cc)& cc, enet_uint32 now)
+{
+  constexpr enet_uint32 SPAN = 500;
+  if (EnetAfter(now, cc.rtt_high_at) >= static_cast<s32>(SPAN * cc.rtt_high.size()))
+  {
+    cc.rtt_high.fill(0);
+    cc.rtt_high_at = now;
+  }
+  while (EnetAfter(now, cc.rtt_high_at) >= static_cast<s32>(SPAN))
+  {
+    std::copy_backward(cc.rtt_high.begin(), cc.rtt_high.end() - 1, cc.rtt_high.end());
+    cc.rtt_high[0] = 0;
+    cc.rtt_high_at += SPAN;
+  }
+}
+
+// The highest round trip of the last two seconds (ms; 0 with none).
+enet_uint32 RecentHighRtt(decltype(PeerLink::cc)& cc, enet_uint32 now)
+{
+  RollRttHigh(cc, now);
+  return *std::max_element(cc.rtt_high.begin(), cc.rtt_high.end());
+}
+
+// Net thread: when ENet resends what it sent `peer` reliably. ENet resends a reliable packet when
+// it has waited its round-trip timeout, which doubles at each try, and drops the whole link once
+// one try's timeout passes 10 s or the 6th (or later) waits 5 s (enet_peer_timeout), however many
+// later packets the peer acknowledged meanwhile; and on a sequenced channel nothing after that
+// packet reaches the game. Over a link that drops what exceeds its rate with little buffer (an
+// ISP's rate limit), one packet lost a few times over held a machine image for seconds, then
+// ended the join (netsim at 16 Mbit/s with a 10 ms queue: the image all sent and acknowledged but
+// for its holes, the joiner below 10 %, the link gone after 15 s). And on a jittery link (Wi-Fi)
+// ENet's first timeout, its mean round trip plus four deviations, was far too short: it updates
+// the deviation with each acknowledgement, and a run of them arriving together (a transfer's,
+// held up behind one slow packet) shrinks it to a few ms, so the next slow packet timed out with
+// everything sent after it: through netsim at 80 ms with pareto jitter of 25 ms, a third to a
+// half of what a round trip sent was resent though the joiner had it, and each of those round
+// trips halved the congestion window (PaceSendWindow).
+// Now, as TCP's RACK (RFC 8985): a packet is lost once the peer acknowledged one sent after it
+// (the way keeps their order but for a little reordering) and it has been out that one's round
+// trip plus a quarter of the link's lowest; then it is resent at once. Otherwise its first
+// timeout is at least the highest round trip of the last two seconds plus a quarter, so jitter
+// alone seldom fires it; and a resend waits at most two round trips plus four deviations (or that
+// floor) while the peer answers. A resend counts as a loss for the congestion window unless the
+// peer's acknowledgement shows it was not needed (OnAck). A peer that stopped answering keeps
+// ENet's timeouts.
+void ResendLost(PeerLink& p)
+{
+  ENetPeer* e = p.peer;
+  auto& cc = p.cc;
   const enet_uint32 now = enet_time_get();
-  if (after(now, e->lastReceiveTime) > 1000)
+  if (EnetAfter(now, e->lastReceiveTime) > 1000)
     return;
-  const enet_uint32 limit =
-      std::max<enet_uint32>(2 * e->roundTripTime + 4 * e->roundTripTimeVariance, 30);
-  // Oldest sent first: the rest are younger than the first that is not overdue.
+  const enet_uint32 high = RecentHighRtt(cc, now);
+  const enet_uint32 floor = high + high / 4;
+  const enet_uint32 limit = std::max<enet_uint32>(
+      {2 * e->roundTripTime + 4 * e->roundTripTimeVariance, floor, 30});
+  const enet_uint32 reorder =
+      std::max<enet_uint32>(cc.min_rtt == 0xffffffff ? 0 : cc.min_rtt / 4, 2);
+  bool any = false;
+  enet_uint32 next = 0;
+  // Oldest sent first (ENet moves a command to the end when it sends it again).
   for (ENetListIterator it = enet_list_begin(&e->sentReliableCommands);
        it != enet_list_end(&e->sentReliableCommands); it = enet_list_next(it))
   {
     auto* c = reinterpret_cast<ENetOutgoingCommand*>(it);
-    if (after(now, c->sentTime) < static_cast<s32>(limit))
-      break;
-    if (c->roundTripTimeout > limit && after(e->lastReceiveTime, c->sentTime + limit) > 0)
+    const s32 age = EnetAfter(now, c->sentTime);
+    if (cc.rack_valid && EnetAfter(cc.rack_sent, c->sentTime) > 0 &&
+        age >= static_cast<s32>(cc.rack_rtt + reorder))
+    {
+      if (c->roundTripTimeout > static_cast<enet_uint32>(age))
+      {
+        c->roundTripTimeout = static_cast<enet_uint32>(std::max(age, 1));
+        ++cc.rack_resent;
+      }
+    }
+    else if (c->sendAttempts <= 1)
+    {
+      c->roundTripTimeout = std::max(c->roundTripTimeout, floor);
+    }
+    else if (c->roundTripTimeout > limit && EnetAfter(e->lastReceiveTime, c->sentTime + limit) > 0)
     {
       c->roundTripTimeout = limit;
-      if (after(e->nextTimeout, c->sentTime + limit) > 0)
-        e->nextTimeout = c->sentTime + limit;
     }
+    // ENet looks at its timeouts once its clock reaches nextTimeout.
+    const enet_uint32 due = c->sentTime + c->roundTripTimeout;
+    if (!any || EnetAfter(next, due) > 0)
+      next = due;
+    any = true;
   }
+  if (any)
+    e->nextTimeout = next;
+}
+
+// Net thread, from ENet's intercept (InterceptAcks): the peer acknowledged the reliable command
+// `seq` on `channel`, echoing the low 16 bits of the time it was sent (ENet's clock: the send
+// that reached it). Its round trip feeds RACK and the timeout's floor (ResendLost). And if that
+// command had timed out, the echo tells whether its resend was needed (Eifel's detection, RFC
+// 3522, ENet's echoed time as the timestamp): an acknowledgement of an earlier send than its last,
+// or of a command that timed out and waits to go again, shows the packet was only late. Such a
+// resend does not count as a loss: it is taken off its round trip's losses or, once that round
+// trip has cut the window, off the cut's, and a cut none of whose losses were real is undone.
+void OnAck(PeerLink& p, enet_uint32 service_time, u8 channel, u16 seq, u16 echo)
+{
+  ENetPeer* e = p.peer;
+  auto& cc = p.cc;
+  // As ENet's enet_protocol_handle_acknowledge.
+  enet_uint32 sent = echo | (service_time & 0xFFFF0000);
+  if ((sent & 0x8000) > (service_time & 0x8000))
+    sent -= 0x10000;
+  const s32 rtt = EnetAfter(service_time, sent);
+  if (rtt < 0)
+    return;
+  RollRttHigh(cc, service_time);
+  cc.rtt_high[0] = std::max(cc.rtt_high[0], static_cast<enet_uint32>(rtt));
+  // Sends close together (one datagram's acknowledgements, a burst held up behind one slow packet)
+  // have about the same round trip whatever the jitter.
+  constexpr s32 JITTER_SPACING_MS = 30;
+  if (cc.jitter_rtt < 0 || EnetAfter(sent, cc.jitter_sent) >= JITTER_SPACING_MS)
+  {
+    if (cc.jitter_rtt >= 0)
+    {
+      const double change = rtt - cc.jitter_rtt;
+      cc.trend += (change - cc.trend) / 16;
+      cc.jitter += (std::abs(change - cc.trend) - cc.jitter) / 16;
+      cc.jittery = cc.jitter > (cc.jittery ? SD_JITTER_CLEAR_MS : SD_JITTER_MS);
+    }
+    cc.jitter_rtt = rtt;
+    cc.jitter_sent = sent;
+  }
+  if (!cc.rack_valid || EnetAfter(sent, cc.rack_sent) > 0)
+  {
+    cc.rack_valid = true;
+    cc.rack_sent = sent;
+    cc.rack_rtt = static_cast<enet_uint32>(rtt);
+  }
+  auto find = [&](ENetList* list, bool sent_list) -> ENetOutgoingCommand* {
+    for (ENetListIterator it = enet_list_begin(list); it != enet_list_end(list);
+         it = enet_list_next(it))
+    {
+      auto* c = reinterpret_cast<ENetOutgoingCommand*>(it);
+      if (c->reliableSequenceNumber == seq && c->command.header.channelID == channel &&
+          (sent_list || (c->sendAttempts >= 1 &&
+                         (c->command.header.command & ENET_PROTOCOL_COMMAND_FLAG_ACKNOWLEDGE))))
+      {
+        return c;
+      }
+    }
+    return nullptr;
+  };
+  bool waiting = false;
+  ENetOutgoingCommand* c = find(&e->sentReliableCommands, true);
+  if (!c)
+  {
+    waiting = true;
+    c = find(&e->outgoingSendReliableCommands, false);
+    if (!c)
+      c = find(&e->outgoingCommands, false);
+  }
+  if (!c || (!waiting && (c->sendAttempts <= 1 || sent == c->sentTime)))
+    return;
+  // When it timed out: when it went again, or (still waiting) half its doubled timeout after it
+  // last went.
+  const enet_uint32 timed_out = waiting ? c->sentTime + c->roundTripTimeout / 2 : c->sentTime;
+  if (EnetAfter(timed_out, cc.step_enet) >= 0)
+  {
+    ++cc.spurious;
+  }
+  else if (cc.undo_window != 0 && cc.undo_lost > 0 && --cc.undo_lost == 0)
+  {
+    cc.window = std::max(cc.window, cc.undo_window);
+    cc.slow_start = cc.undo_slow_start;
+    cc.undo_window = 0;
+    ++cc.undone;
+    e->windowSize = cc.window;
+  }
+}
+
+// Net thread, ENet's intercept: each datagram the session's host receives, before ENet reads it.
+// It reads the acknowledgements in it (OnAck) and leaves the datagram to ENet as ever.
+int ENET_CALLBACK InterceptAcks(ENetHost* host, ENetEvent*)
+{
+  const u8* d = host->receivedData;
+  const size_t size = host->receivedDataLength;
+  auto u16_at = [&](size_t at) { return static_cast<u16>((d[at] << 8) | d[at + 1]); };
+  if (size < sizeof(enet_uint16))
+    return 0;
+  u16 peer_id = u16_at(0);
+  const u16 flags = peer_id & ENET_PROTOCOL_HEADER_FLAG_MASK;
+  peer_id &= ~(ENET_PROTOCOL_HEADER_FLAG_MASK | ENET_PROTOCOL_HEADER_SESSION_MASK);
+  if ((flags & ENET_PROTOCOL_HEADER_FLAG_COMPRESSED) || host->checksum ||
+      peer_id >= host->peerCount)
+  {
+    return 0;
+  }
+  ENetPeer* e = &host->peers[peer_id];
+  if (e->state != ENET_PEER_STATE_CONNECTED || e->address.host != host->receivedAddress.host ||
+      e->address.port != host->receivedAddress.port)
+  {
+    return 0;
+  }
+  PeerLink* link = nullptr;
+  for (PeerLink& p : s.peers)
+  {
+    if (p.peer == e && p.cc.peer == e)
+      link = &p;
+  }
+  if (!link)
+    return 0;
+  size_t at = (flags & ENET_PROTOCOL_HEADER_FLAG_SENT_TIME) ?
+                  sizeof(ENetProtocolHeader) :
+                  offsetof(ENetProtocolHeader, sentTime);
+  while (at + sizeof(ENetProtocolCommandHeader) <= size)
+  {
+    const u8 command = d[at] & ENET_PROTOCOL_COMMAND_MASK;
+    if (command >= ENET_PROTOCOL_COMMAND_COUNT)
+      break;
+    const size_t n = enet_protocol_command_size(command);
+    if (n == 0 || at + n > size)
+      break;
+    size_t data = 0;
+    switch (command)
+    {
+    case ENET_PROTOCOL_COMMAND_ACKNOWLEDGE:
+      OnAck(*link, host->serviceTime, d[at + offsetof(ENetProtocolCommandHeader, channelID)],
+            u16_at(at + offsetof(ENetProtocolAcknowledge, receivedReliableSequenceNumber)),
+            u16_at(at + offsetof(ENetProtocolAcknowledge, receivedSentTime)));
+      break;
+    case ENET_PROTOCOL_COMMAND_SEND_RELIABLE:
+      data = u16_at(at + offsetof(ENetProtocolSendReliable, dataLength));
+      break;
+    case ENET_PROTOCOL_COMMAND_SEND_UNRELIABLE:
+      data = u16_at(at + offsetof(ENetProtocolSendUnreliable, dataLength));
+      break;
+    case ENET_PROTOCOL_COMMAND_SEND_UNSEQUENCED:
+      data = u16_at(at + offsetof(ENetProtocolSendUnsequenced, dataLength));
+      break;
+    case ENET_PROTOCOL_COMMAND_SEND_FRAGMENT:
+    case ENET_PROTOCOL_COMMAND_SEND_UNRELIABLE_FRAGMENT:
+      data = u16_at(at + offsetof(ENetProtocolSendFragment, dataLength));
+      break;
+    default:
+      break;
+    }
+    at += n + data;
+  }
+  return 0;
 }
 
 // Net thread: the congestion window of what this machine sends a peer reliably, about as TCP's.
@@ -1488,7 +1743,10 @@ void ResendLost(ENetPeer* e)
 // well above the link's lowest (a buffer on the way filling up), or SEND_LOSS_PERCENT of what was
 // sent lost (a rate limit that drops with little buffer). A loss alone is not: halving on any
 // loss, as TCP does, held an image to 1.2 MB/s with 1 % random loss (Wi-Fi), against 20 MB/s with
-// the window fixed.
+// the window fixed. "Well above" is the lowest of ENet's round trip over the last round trip
+// (rtt_window), not its mean now, which jitter alone keeps above the lowest; and a resend the
+// peer's acknowledgement shows was not needed is no loss (OnAck), nor is a cut whose losses all
+// were such (it is undone).
 // It only grows in a round trip whose reliable data had to wait for it, so it does not climb while
 // idle and then burst. ENet sets a peer's window when it connects and again when any peer's
 // bandwidth limits are recalculated (every new connection), so it is set back each time.
@@ -1522,8 +1780,9 @@ void PaceSendWindow(PeerLink& p, Clock::time_point now)
     cc.seen_lost = e->packetsLost;
     cc.seen_sent = e->packetsSent;
     cc.step = now;
+    cc.step_enet = enet_time_get();
   }
-  ResendLost(e);
+  ResendLost(p);
   // ENet counts what it sends and resends (packetsSent, packetsLost: commands) and zeroes both
   // every 10 s (ENET_PEER_PACKET_LOSS_INTERVAL).
   auto delta = [](enet_uint32 cur, enet_uint32* seen) {
@@ -1538,12 +1797,29 @@ void PaceSendWindow(PeerLink& p, Clock::time_point now)
   const auto rtt = std::chrono::milliseconds(std::max<enet_uint32>(e->roundTripTime, 10));
   if (now - cc.step >= rtt)
   {
-    // A queue building up on the way: the round trip well above the link's lowest.
-    const bool queued = e->roundTripTime > cc.min_rtt + std::max<enet_uint32>(5, cc.min_rtt / 4);
-    const bool congested = cc.lost >= 4 && cc.lost * 100 >= cc.sent * SEND_LOSS_PERCENT;
+    // A queue building up on the way: the round trip well above the link's lowest all this round
+    // trip.
+    enet_uint32 recent = e->roundTripTime;
+    for (auto it = p.rtt_window.rbegin(); it != p.rtt_window.rend() && now - it->first <= rtt; ++it)
+      recent = std::min(recent, it->second);
+    const bool queued = recent > cc.min_rtt + std::max<enet_uint32>(5, cc.min_rtt / 4);
+    // The resends not shown needless yet.
+    const enet_uint32 lost = cc.lost - std::min(cc.lost, cc.spurious);
+    const bool congested = lost >= 4 && lost * 100 >= cc.sent * SEND_LOSS_PERCENT;
     const enet_uint32 before = cc.window;
-    if ((cc.lost > 0 && queued) || congested)
+    if (cc.undo_window != 0 && now > cc.undo_until)
+      cc.undo_window = 0;
+    if ((lost > 0 && queued) || congested)
     {
+      // Undone if all of its losses (and those of any cut right after it) prove spurious.
+      if (cc.undo_window == 0)
+      {
+        cc.undo_window = cc.window;
+        cc.undo_slow_start = cc.slow_start;
+        cc.undo_lost = 0;
+      }
+      cc.undo_lost += lost;
+      cc.undo_until = now + std::max<Clock::duration>(4 * rtt, std::chrono::seconds(1));
       cc.window = std::max(SEND_WINDOW_MIN, cc.window / 2);
       cc.slow_start = false;
     }
@@ -1557,15 +1833,19 @@ void PaceSendWindow(PeerLink& p, Clock::time_point now)
     if (log && cc.sent > 0)
     {
       INFO_LOG_FMT(BRAWLBACK,
-                   "machine: cc slot {}: window {} -> {} KB, sent {} lost {}, rtt {} (low {}, "
-                   "var {}), in flight {} KB, throttle {}{}",
-                   p.slot, before / 1024, cc.window / 1024, cc.sent, cc.lost, e->roundTripTime,
-                   cc.min_rtt, e->roundTripTimeVariance, e->reliableDataInTransit / 1024,
-                   e->packetThrottle, cc.limited ? ", limited" : "");
+                   "machine: cc slot {}: window {} -> {} KB, sent {} lost {} (needless {}), rtt {} "
+                   "(low {}, recent low {}, var {}, high {}), in flight {} KB, throttle {}, RACK "
+                   "resends {}, cuts undone {}{}{}",
+                   p.slot, before / 1024, cc.window / 1024, cc.sent, cc.lost, cc.spurious,
+                   e->roundTripTime, cc.min_rtt, recent, e->roundTripTimeVariance,
+                   RecentHighRtt(cc, enet_time_get()), e->reliableDataInTransit / 1024,
+                   e->packetThrottle, cc.rack_resent, cc.undone, queued ? ", queued" : "",
+                   cc.limited ? ", limited" : "");
     }
     cc.step = now;
+    cc.step_enet = enet_time_get();
     cc.limited = false;
-    cc.lost = cc.sent = 0;
+    cc.lost = cc.sent = cc.spurious = 0;
   }
   e->windowSize = cc.window;
 }
@@ -1592,9 +1872,49 @@ double LinkQueueMs(PeerLink& p, Clock::time_point now)
   return static_cast<double>(RecentMin(p.rtt_window, now)) - static_cast<double>(p.cc.min_rtt);
 }
 
+// A link's queue for PaceSD (ms): on a link without jitter, its lowest round trip of the last
+// SD_CLEAN_DELAY_WINDOW over the connection's lowest; on a jittery one the lowest of its
+// LinkQueueMs over the last SD_JITTER_WINDOW. LinkQueueMs sets the lowest of the last half second
+// of ENet's mean round trip against the lowest the connection ever had, and jitter alone keeps
+// the first well above the second, by an amount that wanders by tens of ms over a second or two:
+// through netsim at 80 ms with pareto jitter of 25 ms, readings of 3 to 73 ms with the upload
+// at its least, so PaceSD halved its rate at most steps and held it at 32 KB/s (the SD card's 2.3 MB
+// list took 60 s, and the joiner gives up then). Jitter shows as round trips that change a lot
+// from one send to the next (cc.jitter); a queue filling or draining moves them steadily, which
+// does not count (SteadyQueueMs would hide it).
+double SteadyQueueMs(PeerLink& p, Clock::time_point now)
+{
+  const double q = LinkQueueMs(p, now);
+  auto& r = p.cc.queue_readings;
+  while (!r.empty() && now - r.front().first > SD_JITTER_WINDOW)
+    r.pop_front();
+  if (!p.peer || p.cc.min_rtt == 0xffffffff)
+    return q;
+  if (!p.cc.jittery)
+  {
+    // Without jitter, the lowest of the last SD_CLEAN_DELAY_WINDOW: the half second's showed a
+    // queue that had just begun half a second late, and the rate went a fifth past the uplink
+    // meanwhile (netsim, an 8 Mbit/s uplink with a 200 ms buffer: game packets 195 ms late). The
+    // congestion window used to hold that back by halving on its own needless resends.
+    enet_uint32 low = 0xffffffff;
+    for (auto it = p.rtt_window.rbegin();
+         it != p.rtt_window.rend() && now - it->first <= SD_CLEAN_DELAY_WINDOW; ++it)
+    {
+      low = std::min(low, it->second);
+    }
+    if (low == 0xffffffff)
+      return q;
+    return std::max(0.0, static_cast<double>(low) - static_cast<double>(p.cc.min_rtt));
+  }
+  double low = q;
+  for (const auto& [at, v] : r)
+    low = std::min(low, v);
+  return low;
+}
+
 // The SD card's upload to the joiner in `slot` (net thread, `net_mutex` held): its packets go out
 // at a rate, a token bucket's, that grows while the way is clear and shrinks as soon as a queue
-// shows: on the joiner's link or on the game's links to the other players (LinkQueueMs: ENet's
+// shows: on the joiner's link or on the game's links to the other players (SteadyQueueMs: ENet's
 // round trip, which the net thread measures apart from the game's frames, kept fresh by the
 // chunks' acknowledgements and, on a game link, a ping every 50 ms). It keeps the upload a little under what the
 // links can take (as a "background" transfer such as BitTorrent's uTP or an OS update does), so
@@ -1666,9 +1986,13 @@ void PaceSD(PeerLink& p, State::SDPace& pace, Clock::time_point now)
     // Requests and refusals are small: they go at once.
     const bool small = pace.queue.front().size() <= 1024;
     // What waits in ENet's own queue (behind its window) would not be paced: a slice or two.
+    // Only the rate's wait counts for its growth (`limited`): one that grew while the congestion
+    // window held the upload back went far past what the way takes, and once the window opened
+    // (it no longer halves on jitter, PaceSendWindow) the upload burst at it (netsim, an 8 Mbit/s
+    // uplink: the rate at 1.5 MB/s, its 200 ms buffer full, game packets dropped).
     if (!small && (pace.tokens < 0 || QueuedReliable(p.peer, 4 * SD_PIECE_BYTES) >= 2 * SD_PIECE_BYTES))
     {
-      pace.limited = true;
+      pace.limited |= pace.tokens < 0;
       break;
     }
     if (!small)
@@ -1694,14 +2018,14 @@ void PaceSD(PeerLink& p, State::SDPace& pace, Clock::time_point now)
     return;
   }
   // The queue on the joiner's link, and the worst on the game's links to the other players.
-  const double own = LinkQueueMs(p, now);
+  const double own = SteadyQueueMs(p, now);
   double game = -1;
   int game_slot = -1;
   for (PeerLink& g : s.peers)
   {
     if (g.slot < 0 || g.slot == p.slot || !g.peer || !g.hello || !Plays(g.slot))
       continue;
-    const double q = LinkQueueMs(g, now);
+    const double q = SteadyQueueMs(g, now);
     if (q > game)
     {
       game = q;
@@ -1751,9 +2075,10 @@ void PaceSD(PeerLink& p, State::SDPace& pace, Clock::time_point now)
   {
     INFO_LOG_FMT(BRAWLBACK,
                  "machine: SD pace to player {}: {:.0f} -> {:.0f} KB/s, queued {:.0f} ms (own link "
-                 "{:.0f}, game link {} {:.0f}), {} packets waiting, sent {:.1f} MB",
-                 p.slot + 1, before / 1024, pace.rate / 1024, queued, own, game_slot + 1, game,
-                 pace.queue.size(), pace.sent / 1048576.0);
+                 "{:.0f}, half a second {:.0f}, jitter {:.0f}; game link {} {:.0f}), {} packets "
+                 "waiting, sent {:.1f} MB",
+                 p.slot + 1, before / 1024, pace.rate / 1024, queued, own, LinkQueueMs(p, now),
+                 p.cc.jitter, game_slot + 1, game, pace.queue.size(), pace.sent / 1048576.0);
   }
   pace.stepped = now;
   pace.limited = false;
@@ -1777,6 +2102,15 @@ void NetThread()
         p.rtt_window.emplace_back(now, p.peer->roundTripTime);
         if (p.rtt_window.size() > 400)
           p.rtt_window.pop_front();
+      }
+      // SteadyQueueMs's readings.
+      if (p.peer && p.peer->state == ENET_PEER_STATE_CONNECTED && p.cc.peer == p.peer &&
+          (p.cc.queue_readings.empty() ||
+           now - p.cc.queue_readings.back().first >= std::chrono::milliseconds(100)))
+      {
+        p.cc.queue_readings.emplace_back(now, LinkQueueMs(p, now));
+        if (p.cc.queue_readings.size() > 64)
+          p.cc.queue_readings.pop_front();
       }
     }
     // Every 10 s, each link as ENet measures it: what a bug report needs to tell a bad link
@@ -2051,6 +2385,7 @@ bool StartNetwork()
     s.error = fmt::format("could not bind UDP port {}", s.opts.local_port);
     return false;
   }
+  s.host->intercept = InterceptAcks;
   s.net_run = true;
   s.net_thread = std::thread(NetThread);
   return true;
