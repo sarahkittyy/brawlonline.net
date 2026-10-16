@@ -45,6 +45,12 @@ def expected(own: float, opp: float) -> float:
     return 1.0 / (1.0 + 10 ** ((opp - own) / 400.0))
 
 
+def updated(own: float, n: int, opp: float, score: float) -> float:
+    """common::ranked::updated: at least 1 point either way."""
+    change = k_factor(n) * (score - expected(own, opp))
+    return own + (max(change, 1.0) if score > 0.5 else min(change, -1.0))
+
+
 def rank_name(i: int) -> tuple[str, int | None]:
     tier = TIERS[min(i // 3, 6)]
     return tier, (None if tier == "legendary" else 3 - i % 3)
@@ -70,7 +76,7 @@ def history(goal: float, rng: random.Random, min_sets: int) -> list[tuple[float,
             phase = "up"
         aim = low if phase == "down" else goal
         score = 1.0 if r < aim else 0.0
-        after = r + k_factor(n) * (score - expected(r, opp))
+        after = updated(r, n, opp, score)
         out.append((r, after, opp, score))
         r, n = after, n + 1
         if phase == "up" and r >= goal - 12:
@@ -84,7 +90,7 @@ def placing_history(sets: int, rng: random.Random) -> list[tuple[float, float, f
     for n in range(sets):
         opp = r + rng.uniform(-80, 80)
         score = float(rng.random() < 0.5)
-        after = r + k_factor(n) * (score - expected(r, opp))
+        after = updated(r, n, opp, score)
         out.append((r, after, opp, score))
         r = after
     return out
@@ -140,7 +146,7 @@ def main() -> None:
         label = tier + (f"-{div}" if div else "")
         players.append((uuid.uuid4(), f"seed-{label}@staging.test", NAMES[i],
                         f"{NAMES[i][:4].upper()}#{100 + i}", history(target(i), rng, 14)))
-    for k, sets in enumerate((1, 3, 6)):
+    for k, sets in enumerate((1, 3, 4)):
         name = ["Rookie", "Fresh", "Newcomer"][k]
         players.append((uuid.uuid4(), f"seed-placing-{sets}@staging.test", name,
                         f"{name[:4].upper()}#{200 + k}", placing_history(sets, rng)))

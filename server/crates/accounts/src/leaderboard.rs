@@ -156,7 +156,7 @@ pub async fn page(pool: &PgPool, after: Option<Key>, limit: u32) -> sqlx::Result
                 wins: r.wins.max(0) as u32,
                 losses: r.losses.max(0) as u32,
                 rank: RankView::of(tier.rank),
-                sets_to_place: ranked::sets_to_place(tier.rd, sets_played),
+                sets_to_place: ranked::sets_to_place(sets_played),
             }
         })
         .collect();

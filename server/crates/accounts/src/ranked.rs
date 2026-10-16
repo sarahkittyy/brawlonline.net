@@ -149,11 +149,16 @@ pub async fn recompute_tiers(pool: &PgPool) -> sqlx::Result<Recomputed> {
     Ok(Recomputed { sets: events.len(), players: uids.len(), ranks_changed })
 }
 
-/// Fills ranks and RDs after the migration that adds them (any `ratings.rd` still NULL). Run after
-/// migrating, before serving.
+/// Fills ranks and RDs after the migration that adds them (any `ratings.rd` still NULL), and
+/// recomputes them when a stored placement disagrees with [`ranked::PLACEMENT_SETS`] (placement
+/// went from RD-based to a set count on 2026-10-16). Run after migrating, before serving.
 pub async fn backfill_tiers(pool: &PgPool) -> sqlx::Result<Option<Recomputed>> {
-    let (missing,): (bool,) =
-        sqlx::query_as("SELECT EXISTS (SELECT 1 FROM ratings WHERE rd IS NULL)").fetch_one(pool).await?;
+    let (missing,): (bool,) = sqlx::query_as(
+        "SELECT EXISTS (SELECT 1 FROM ratings WHERE rd IS NULL OR (rank IS NULL) = (sets_played >= $1))",
+    )
+    .bind(ranked::PLACEMENT_SETS as i32)
+    .fetch_one(pool)
+    .await?;
     if !missing {
         return Ok(None);
     }

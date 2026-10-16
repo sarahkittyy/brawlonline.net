@@ -22,8 +22,7 @@
 //! Legendary, each but Legendary in three divisions (3 lowest, 1 highest). A player's rank follows
 //! from their sets in order ([`TierState::after_set`]): none while placing, then the division the
 //! rating reaches, held until the rating falls [`DEMOTION_BUFFER`] below its floor. Placing ends
-//! when the rating's uncertainty (Glicko's rating deviation) is small enough ([`RD_PLACED`]); the
-//! RD decides nothing else.
+//! after [`PLACEMENT_SETS`] rated sets, so "N more" counts down by one every set.
 //!
 //! **Sets.** Ranked is best of three ([`WINS_NEEDED`] game wins), as on Slippi. Both clients
 //! report every game; [`resolve`] turns the reports into the set's outcome. See its docs for the
@@ -446,18 +445,14 @@ pub fn held_rank(held: Rank, rating: f64) -> Rank {
     held.min(Rank::for_rating(rating + DEMOTION_BUFFER)).max(reached)
 }
 
-/// The rating deviation (Glicko-1) of a player who has not played a ranked set.
+/// The rating deviation (Glicko-1) of a player who has not played a ranked set. The RD is kept and
+/// stored beside each rating but decides nothing today (placement until 2026-10-16; possibly
+/// re-placing players back from a long break later).
 pub const RD_START: f64 = 350.0;
-/// RD at or below which a player is placed and gets a rank.
-pub const RD_PLACED: f64 = 150.0;
 /// The lowest RD kept, so a veteran's opponents still learn something from a set.
 pub const RD_MIN: f64 = 30.0;
-/// The opponent RD assumed when counting the sets a player has left to place.
-pub const RD_ESTABLISHED: f64 = 80.0;
-/// Placing takes at least this many sets...
-pub const MIN_PLACEMENT_SETS: u32 = 5;
-/// ...and at most this many, whatever the RD (K reaches its floor here too).
-pub const MAX_PLACEMENT_SETS: u32 = 10;
+/// The rated sets a player plays before they get a rank.
+pub const PLACEMENT_SETS: u32 = 5;
 
 const GLICKO_Q: f64 = std::f64::consts::LN_10 / 400.0;
 
@@ -472,21 +467,14 @@ pub fn rd_after(rd: f64, own: f64, opponent: f64, opponent_rd: f64) -> f64 {
     (1.0 / (1.0 / (rd * rd) + d2_inv)).sqrt().max(RD_MIN)
 }
 
-/// Whether a player with this RD after `sets_played` rated sets is placed.
-pub fn placed(rd: f64, sets_played: u32) -> bool {
-    sets_played >= MAX_PLACEMENT_SETS || (sets_played >= MIN_PLACEMENT_SETS && rd <= RD_PLACED)
+/// Whether a player is placed after `sets_played` rated sets.
+pub fn placed(sets_played: u32) -> bool {
+    sets_played >= PLACEMENT_SETS
 }
 
-/// Rated sets a player still needs to place (0 once placed): even sets against an established
-/// player that would bring the RD to [`RD_PLACED`], within [`MIN_PLACEMENT_SETS`] and
-/// [`MAX_PLACEMENT_SETS`]. Lopsided sets lower the RD less, so the count can stay the same after one.
-pub fn sets_to_place(rd: f64, sets_played: u32) -> u32 {
-    let (mut rd, mut n) = (rd, sets_played);
-    while !placed(rd, n) {
-        rd = rd_after(rd, 0.0, 0.0, RD_ESTABLISHED);
-        n += 1;
-    }
-    n - sets_played
+/// Rated sets a player still needs to place (0 once placed): one fewer after every set.
+pub fn sets_to_place(sets_played: u32) -> u32 {
+    PLACEMENT_SETS.saturating_sub(sets_played)
 }
 
 /// A player's rank state: the RD, and the rank once placed.
@@ -507,7 +495,7 @@ impl TierState {
     /// `rating_after` this player's, `opponent` the opponent's rating and RD before the set.
     pub fn after_set(self, sets_before: u32, rating_before: f64, rating_after: f64, opponent: (f64, f64)) -> TierState {
         let rd = rd_after(self.rd, rating_before, opponent.0, opponent.1);
-        let rank = if !placed(rd, sets_before + 1) {
+        let rank = if !placed(sets_before + 1) {
             None
         } else {
             Some(match self.rank {
@@ -856,25 +844,22 @@ mod tests {
     }
 
     #[test]
-    fn placement_takes_five_to_ten_sets() {
-        // From scratch, even sets against established players: five.
-        assert_eq!(sets_to_place(RD_START, 0), MIN_PLACEMENT_SETS);
-        let mut rd = RD_START;
-        for n in 0..MIN_PLACEMENT_SETS {
-            assert!(!placed(rd, n));
-            rd = rd_after(rd, 1400.0, 1400.0, RD_ESTABLISHED);
+    fn placement_takes_five_sets_counting_down() {
+        for n in 0..PLACEMENT_SETS {
+            assert!(!placed(n));
+            assert_eq!(sets_to_place(n), PLACEMENT_SETS - n);
         }
-        assert!(placed(rd, MIN_PLACEMENT_SETS));
-        // Lopsided sets against other new players tell less: not placed by RD before ten.
-        let mut rd = RD_START;
-        for n in 0..MAX_PLACEMENT_SETS {
-            assert!(!placed(rd, n), "set {n}");
-            let left = sets_to_place(rd, n);
-            assert!(left >= 1 && left <= MAX_PLACEMENT_SETS - n, "set {n}: {left}");
-            rd = rd_after(rd, 1400.0, 1900.0, RD_START);
+        assert_eq!(sets_to_place(0), 5);
+        assert!(placed(PLACEMENT_SETS));
+        assert_eq!(sets_to_place(PLACEMENT_SETS), 0);
+        assert_eq!(sets_to_place(500), 0);
+        // Lopsided sets against other new players place at five too, whatever the RD.
+        let (mut st, mut rating) = (TierState::default(), DEFAULT_RATING);
+        for n in 0..PLACEMENT_SETS {
+            st = st.after_set(n, rating, rating - 5.0, (1900.0, RD_START));
+            rating -= 5.0;
+            assert_eq!(st.rank.is_some(), n + 1 == PLACEMENT_SETS, "after set {}", n + 1);
         }
-        assert!(placed(rd, MAX_PLACEMENT_SETS));
-        assert_eq!(sets_to_place(rd, MAX_PLACEMENT_SETS), 0);
         // The RD only falls, never below the floor.
         assert!(rd_after(100.0, 1400.0, 1400.0, 50.0) < 100.0);
         assert!(rd_after(RD_MIN, 1400.0, 1400.0, 50.0) >= RD_MIN);
@@ -886,16 +871,16 @@ mod tests {
         let mut rating = DEFAULT_RATING;
         for n in 0..5 {
             let after = rating + 60.0;
-            st = st.after_set(n, rating, after, (rating, RD_ESTABLISHED));
+            st = st.after_set(n, rating, after, (rating, 80.0));
             rating = after;
             assert_eq!(st.rank.is_some(), n + 1 >= 5, "after set {}", n + 1);
         }
         // Placed at 1700: Diamond 3.
         assert_eq!(st.rank, Some(rank(Tier::Diamond, Some(3))));
         // A loss to 1610 keeps Diamond 3 (buffer); a fall to 1520 drops to Emerald 1.
-        st = st.after_set(5, 1700.0, 1610.0, (1700.0, RD_ESTABLISHED));
+        st = st.after_set(5, 1700.0, 1610.0, (1700.0, 80.0));
         assert_eq!(st.rank, Some(rank(Tier::Diamond, Some(3))));
-        st = st.after_set(6, 1610.0, 1520.0, (1610.0, RD_ESTABLISHED));
+        st = st.after_set(6, 1610.0, 1520.0, (1610.0, 80.0));
         assert_eq!(st.rank, Some(rank(Tier::Emerald, Some(1))));
     }
 

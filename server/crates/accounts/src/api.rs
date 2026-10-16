@@ -535,7 +535,7 @@ pub async fn public_user(State(state): State<AppState>, Path(uid): Path<String>)
             position,
             ranked_players,
             tier: crate::ranked::RankView::of(tier.rank),
-            sets_to_place: common::ranked::sets_to_place(tier.rd, standing.sets_played),
+            sets_to_place: common::ranked::sets_to_place(standing.sets_played),
         },
     }))
 }

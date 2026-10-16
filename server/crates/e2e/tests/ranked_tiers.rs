@@ -78,37 +78,23 @@ async fn sets_place_players_and_the_settle_matches_the_replay() {
     // Before any set: no rank, five sets to place, and not on the leaderboard yet.
     let r = user_rank(&stack, &a).await;
     assert_eq!(r["tier"], Value::Null);
-    assert_eq!(r["setsToPlace"], ranked::MIN_PLACEMENT_SETS);
+    assert_eq!(r["setsToPlace"], ranked::PLACEMENT_SETS);
 
-    // Ana wins most sets. Two new players tell each other little, so they place late, between the
-    // minimum and the maximum; once placed, a player stays placed.
-    let mut left_before = u64::MAX;
-    let mut placed_at = None;
+    // Ana wins most sets. Two new players tell each other little (a high RD), but placement only
+    // counts sets: "N more" drops by one every set and the rank comes with the fifth.
     for n in 0..12i64 {
         let winner = if n % 4 == 3 { &b } else { &a };
         play_set(&stack, &a, &b, winner, n).await;
         let r = user_rank(&stack, &a).await;
         let left = r["setsToPlace"].as_u64().unwrap();
-        assert!(left <= left_before, "set {n}: {r}");
-        left_before = left;
         let played = n as u32 + 1;
+        assert_eq!(left, u64::from(ranked::PLACEMENT_SETS.saturating_sub(played)), "set {n}: {r}");
         assert_eq!(r["tier"] == Value::Null, left > 0, "set {n}: {r}");
-        if left == 0 && placed_at.is_none() {
-            placed_at = Some(played);
-        }
-        if played <= ranked::MIN_PLACEMENT_SETS {
-            assert!(left >= 1, "set {n}: {r}");
-        }
-        if played >= ranked::MAX_PLACEMENT_SETS {
-            assert_eq!(left, 0, "set {n}: {r}");
-        }
         // The leaderboard says the same.
         let e = board_entry(&stack, &a).await;
         assert_eq!(e["rank"], r["tier"], "set {n}");
         assert_eq!(e["setsToPlace"], r["setsToPlace"], "set {n}");
     }
-    let placed_at = placed_at.expect("placed");
-    assert!(placed_at > ranked::MIN_PLACEMENT_SETS && placed_at <= ranked::MAX_PLACEMENT_SETS, "{placed_at}");
 
     // Stored: every rating change has its ranks and RD; ratings has the player's.
     let (rank, rd): (Option<i16>, Option<f64>) = sqlx::query_as("SELECT rank, rd FROM ratings WHERE uid = $1")
@@ -171,6 +157,12 @@ async fn the_backfill_fills_missing_ranks_once() {
     assert_eq!(r["tier"], Value::Null);
     let filled = accounts::ranked::backfill_tiers(&stack.pool).await.unwrap().expect("filled");
     assert_eq!((filled.sets, filled.players), (20, 2));
+    assert_eq!(user_rank(&stack, &a).await, placed);
+    assert!(accounts::ranked::backfill_tiers(&stack.pool).await.unwrap().is_none(), "only once");
+
+    // A stored placement from an older rule (RD-based until 2026-10-16) is recomputed too.
+    sqlx::query("UPDATE ratings SET rank = NULL").execute(&stack.pool).await.unwrap();
+    assert!(accounts::ranked::backfill_tiers(&stack.pool).await.unwrap().is_some(), "recomputed");
     assert_eq!(user_rank(&stack, &a).await, placed);
     assert!(accounts::ranked::backfill_tiers(&stack.pool).await.unwrap().is_none(), "only once");
     stack.shutdown().await;

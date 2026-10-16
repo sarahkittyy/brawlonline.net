@@ -19,7 +19,7 @@ The rating stays plain Elo (`server/crates/common/src/ranked.rs`). The rank is c
 - **Where:** a badge on Home's ranked box, and next to each player on the launcher's Leaderboard and the website's top 10.
 - **Not now:** no rank-up or rank-down animations (many players grind ranked with the launcher closed), and no sounds.
 - **Distribution:** tiers should feel rewarding and be evenly spread. Divisions count down: Gold 3 → 2 → 1 → Emerald 3, and a demotion goes from Emerald 3 back to Gold 1.
-- **Placing:** a player whose rank is still too uncertain shows a dotted, unfilled outline with "3 more". The number comes from the uncertainty, within about 5-10 sets.
+- **Placing:** a player whose rank is still too uncertain shows a dotted, unfilled outline with "3 more". The number comes from the uncertainty, within about 5-10 sets. (Since 2026-10-16: a fixed 5 sets, see §4.)
 - **Division on the emblem:** at first glance the tags were too big next to the emblem. The division is now drawn on the emblem itself, procedurally. The tier name ("Gold 2") shows only on hover.
 - **Wording:** the user asked for "3 more games" for placing. It counts ranked sets (best of three), so the badge says "3 more sets", and "3 more" where space is short. The badge's tooltip says "Play 3 more games to get a rank!" (the user's, 2026-10-15). Swapping the word is one line in `rank_badge.messages.ts` and `website/script.js`.
 
@@ -83,23 +83,12 @@ Each player has a **held rank**, which changes only after a rated set:
   - Someone who really declines does keep dropping.
 - 100 points is about 6-7 more even-set losses than wins in a row: two divisions in the lower tiers, less than one in Diamond and Master.
 
-## 4. Placement (variance-based)
+## 4. Placement (5 sets)
 
-Elo has no uncertainty of its own, so the server keeps one per player beside the rating: Glicko's rating deviation (RD).
-- RD starts at 350.
-- After each rated set, RD shrinks by how much that set tells about the player: `1/RD'² = 1/RD² + 1/d²`, with Glicko's `d²` from the opponent's rating and RD.
-  - An even set against an established player tells the most.
-  - A lopsided set, or one against another new player, tells less.
-- RD only decides the placement badge. The rating itself still moves by the K schedule.
-- **Placed** when RD ≤ 150, or after 10 sets, whichever comes first.
-- **"X more"** is the number of even sets against an established player that would bring RD to 150. Lopsided sets bring it down more slowly, so X can stay the same after one.
-- Replayed over prod's real history, players place after 6-10 sets:
-
-| Sets to place | 6 | 7 | 8 | 9 | 10 |
-|---|---|---|---|---|---|
-| Players | 2 | 6 | 10 | 5 | 3 |
-
-  Five even sets from scratch is enough.
+- **Placed** after exactly 5 rated sets. **"X more"** is 5 minus the sets played, so it drops by one every set (the user, 2026-10-16).
+- Until 2026-10-16 placement was variance-based: placed when Glicko's rating deviation (RD) fell to 150, after 5-10 sets, and "X more" was the even sets that would get it there. Lopsided sets and sets against other new players barely lower RD, so players saw "1 more" stay "1 more" after a set.
+- The server still keeps the RD beside the rating (350 at the start, `1/RD'² = 1/RD² + 1/d²` after each set) and stores it, but it decides nothing.
+- Accounts recomputes the stored ranks at startup whenever one disagrees with the 5-set rule (`backfill_tiers`), so the switch applied itself on deploy.
 - While placing, the badge is the dotted outline of the emblem's silhouette with a dashed "3 more sets" tag. The buffer starts once placed.
 - Not done, possible later: RD growing during long inactivity, so a returning player re-places.
 
@@ -141,7 +130,7 @@ Layerlab's license allows using and modifying the emblems in the project, but fo
 
 ## 6. Server (built)
 
-- **Rules** in `common::ranked`: `RANK_FLOORS`, `Rank`, `held_rank` (§3), `rd_after`, `placed` and `sets_to_place` (§4), `TierState::after_set`, and `replay`, which folds `rating_events` in order. The two changes of one set use each other's RD from before the set. Unit-tested.
+- **Rules** in `common::ranked`: `RANK_FLOORS`, `Rank`, `held_rank` (§3), `rd_after`, `placed` and `sets_to_place` (§4, `PLACEMENT_SETS`), `TierState::after_set`, and `replay`, which folds `rating_events` in order. The two changes of one set use each other's RD from before the set. Unit-tested.
 - **Migration 0012:**
   - `ratings.rank` (smallint 0-18, null while placing) and `ratings.rd`.
   - `rating_events.rank_before`, `rank_after` and `rd_after`.
