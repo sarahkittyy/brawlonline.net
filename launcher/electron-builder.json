@@ -104,6 +104,9 @@
   "appImage": {
     "artifactName": "Brawl-Online-${version}-x86_64.${ext}"
   },
+  "toolsets": {
+    "appimage": "1.0.3"
+  },
   "directories": {
     "app": "release/app",
     "buildResources": "assets",

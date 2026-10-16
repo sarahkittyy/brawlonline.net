@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import fs from "fs";
 import http from "http";
 import type { AddressInfo } from "net";
@@ -116,18 +117,46 @@ let server: http.Server;
 let baseUrl: string;
 let served: Record<string, Buffer> = {};
 let requests: string[] = [];
+/** Each request's Range header ("" without one). */
+let ranges: string[] = [];
+/** Like a server without range support: always the whole file. */
+let ignoreRange = false;
+/** The next responses send this many bytes of the body and then drop the connection. */
+let breakOffAfter: number[] = [];
 
 beforeAll(async () => {
   root = await fs.promises.mkdtemp(path.join(os.tmpdir(), "pplus-release-"));
   server = http.createServer((req, res) => {
     requests.push(req.url ?? "");
+    ranges.push(req.headers.range ?? "");
     const body = served[req.url ?? ""];
     if (!body) {
       res.writeHead(404).end("not found");
       return;
     }
-    res.writeHead(200, { "Content-Type": "application/zip", "Content-Length": body.length });
-    res.end(body);
+    const range = /^bytes=(\d+)-$/.exec(req.headers.range ?? "");
+    let part = body;
+    if (range && !ignoreRange) {
+      const from = Number(range[1]);
+      if (from >= body.length) {
+        res.writeHead(416, { "Content-Range": `bytes */${body.length}` }).end();
+        return;
+      }
+      part = body.subarray(from);
+      res.writeHead(206, {
+        "Content-Type": "application/zip",
+        "Content-Length": part.length,
+        "Content-Range": `bytes ${from}-${body.length - 1}/${body.length}`,
+      });
+    } else {
+      res.writeHead(200, { "Content-Type": "application/zip", "Content-Length": body.length });
+    }
+    const cut = breakOffAfter.shift();
+    if (cut !== undefined) {
+      res.write(part.subarray(0, cut), () => setTimeout(() => res.destroy(), 20));
+      return;
+    }
+    res.end(part);
   });
   await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
   baseUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
@@ -151,6 +180,9 @@ beforeEach(async () => {
   };
   served = {};
   requests = [];
+  ranges = [];
+  ignoreRange = false;
+  breakOffAfter = [];
 });
 
 async function serve(zip: Buffer, name = `p${n}.zip`, overrides: Partial<PPlusRelease> = {}): Promise<PPlusRelease> {
@@ -264,6 +296,8 @@ describe("installProjectPlusFiles", () => {
       installProjectPlusFiles({ target, release: { ...release, url: `${baseUrl}/missing.zip` } }),
     ).rejects.toThrow(/HTTP 404/);
     expect(exists(target.userFolder)).toBe(false);
+    // Nothing was received, so it is not tried again.
+    expect(requests).toEqual(["/missing.zip"]);
   });
 
   it("fails when the release lacks a file we need", async () => {
@@ -320,6 +354,135 @@ describe("installProjectPlusFiles", () => {
     await fs.promises.writeFile(path.join(target.downloadDir, `pplus-${release.version}.zip`), zip.subarray(0, 100));
     await installProjectPlusFiles({ target, release });
     expect(requests).toEqual([`/p${n}.zip`]);
+  });
+});
+
+describe("installProjectPlusFiles after an interrupted download", () => {
+  const partOf = (release: PPlusRelease) => path.join(target.downloadDir, `pplus-${release.version}.zip.part`);
+  const fast = { retryDelayMs: 0, overlapBytes: 0 };
+  // Incompressible, so the zip is large enough to break off in (the other entries deflate to a few KB).
+  const bigZip = () => makeZip({ ...releaseFiles(), "Dolphin.exe": crypto.randomBytes(200_000) });
+
+  it("continues the part a crashed launcher left", async () => {
+    const zip = bigZip();
+    const release = await serve(zip);
+    await fs.promises.mkdir(target.downloadDir, { recursive: true });
+    await fs.promises.writeFile(partOf(release), zip.subarray(0, 100_000));
+    const progress: PPlusProgress[] = [];
+    const logs: string[] = [];
+
+    await installProjectPlusFiles({
+      target,
+      release,
+      downloadOptions: fast,
+      onProgress: (p) => progress.push(p),
+      log: (m) => logs.push(m),
+    });
+
+    expect(ranges).toEqual(["bytes=100000-"]);
+    expect(await read(path.join(target.userFolder, "Wii", "sd.raw"))).toEqual(SD);
+    expect(fs.readdirSync(target.downloadDir)).toEqual([]);
+    // Progress counts what the part already had.
+    const downloads = progress.filter((p) => p.phase === "download");
+    expect(downloads[0].current).toBeGreaterThan(100_000);
+    expect(downloads[downloads.length - 1]).toEqual({ phase: "download", current: zip.length, total: zip.length });
+    expect(logs).toContain(`Resuming the download of ${release.url} at 100000 of ${zip.length} bytes`);
+  });
+
+  it("fetches the part's last bytes again, in case the PC crashed while writing them", async () => {
+    const zip = bigZip();
+    const release = await serve(zip);
+    await fs.promises.mkdir(target.downloadDir, { recursive: true });
+    // A torn tail: the last 4 KB of the part never reached the disk.
+    await fs.promises.writeFile(partOf(release), Buffer.concat([zip.subarray(0, 96_000), Buffer.alloc(4_000)]));
+
+    await installProjectPlusFiles({ target, release, downloadOptions: { retryDelayMs: 0, overlapBytes: 8_000 } });
+
+    expect(ranges).toEqual(["bytes=92000-"]);
+    expect(await read(path.join(target.userFolder, "Wii", "sd.raw"))).toEqual(SD);
+  });
+
+  it("goes on where the connection broke off", async () => {
+    const zip = bigZip();
+    const release = await serve(zip);
+    breakOffAfter = [50_000, 30_000];
+    const logs: string[] = [];
+
+    await installProjectPlusFiles({ target, release, downloadOptions: fast, log: (m) => logs.push(m) });
+
+    expect(ranges).toEqual(["", "bytes=50000-", "bytes=80000-"]);
+    expect(await read(path.join(target.userFolder, "Wii", "sd.raw"))).toEqual(SD);
+    expect(logs.filter((m) => m.startsWith("The download broke off after"))).toHaveLength(2);
+  });
+
+  it("keeps the part when every attempt breaks off, and the next install continues it", async () => {
+    const zip = bigZip();
+    const release = await serve(zip);
+    breakOffAfter = [10_000, 10_000];
+
+    await expect(
+      installProjectPlusFiles({ target, release, downloadOptions: { ...fast, attempts: 2 } }),
+    ).rejects.toThrow();
+    expect(fs.statSync(partOf(release)).size).toBe(20_000);
+    expect(exists(target.userFolder)).toBe(false);
+
+    await installProjectPlusFiles({ target, release, downloadOptions: fast });
+    expect(ranges).toEqual(["", "bytes=10000-", "bytes=20000-"]);
+    expect(await read(path.join(target.userFolder, "Wii", "sd.raw"))).toEqual(SD);
+  });
+
+  it("starts over when the server sends the whole file", async () => {
+    const zip = bigZip();
+    const release = await serve(zip);
+    ignoreRange = true;
+    await fs.promises.mkdir(target.downloadDir, { recursive: true });
+    await fs.promises.writeFile(partOf(release), zip.subarray(0, 100_000));
+
+    await installProjectPlusFiles({ target, release, downloadOptions: fast });
+
+    expect(ranges).toEqual(["bytes=100000-"]);
+    expect(await read(path.join(target.userFolder, "Wii", "sd.raw"))).toEqual(SD);
+  });
+
+  it("checks a complete part without downloading, and deletes one that does not verify", async () => {
+    const zip = bigZip();
+    const release = await serve(zip);
+    await fs.promises.mkdir(target.downloadDir, { recursive: true });
+    const bad = Buffer.from(zip);
+    bad[10] ^= 1;
+    await fs.promises.writeFile(partOf(release), bad);
+
+    await expect(installProjectPlusFiles({ target, release, downloadOptions: fast })).rejects.toThrow(/corrupt/);
+    expect(requests).toEqual([]);
+    expect(exists(partOf(release))).toBe(false);
+
+    // The next install downloads it whole.
+    await installProjectPlusFiles({ target, release, downloadOptions: fast });
+    expect(ranges).toEqual([""]);
+  });
+
+  it("downloads again when the part is longer than the release", async () => {
+    const zip = bigZip();
+    const release = await serve(zip);
+    await fs.promises.mkdir(target.downloadDir, { recursive: true });
+    await fs.promises.writeFile(partOf(release), Buffer.concat([zip, Buffer.alloc(10)]));
+
+    await installProjectPlusFiles({ target, release, downloadOptions: fast });
+
+    expect(ranges).toEqual([""]);
+    expect(await read(path.join(target.userFolder, "Wii", "sd.raw"))).toEqual(SD);
+  });
+
+  it("starts over when the part reaches past the server's file (416)", async () => {
+    const zip = bigZip();
+    const release = await serve(zip);
+    await fs.promises.mkdir(target.downloadDir, { recursive: true });
+    await fs.promises.writeFile(partOf(release), zip.subarray(0, 1000));
+    // The server now has less than the part.
+    served[`/p${n}.zip`] = zip.subarray(0, 500);
+
+    await expect(installProjectPlusFiles({ target, release, downloadOptions: fast })).rejects.toThrow(/expected/);
+    expect(ranges).toEqual(["bytes=1000-", ""]);
   });
 });
 

@@ -81,6 +81,7 @@ type Downloader = (options: {
   url: string;
   destinationFile: string;
   overwrite?: boolean;
+  resume?: boolean;
   onProgress?: (progress: { transferredBytes: number; totalBytes: number }) => void;
 }) => Promise<void>;
 
@@ -147,6 +148,76 @@ export async function verifyReleaseZip(file: string, release: PPlusRelease, onPr
   }
 }
 
+/** How the release download recovers: see downloadRelease. */
+export type PPlusDownloadOptions = {
+  /** Attempts in one install while each one receives something (default 3). */
+  attempts?: number;
+  /** Wait before the next attempt (default 2 s). */
+  retryDelayMs?: number;
+  /** Bytes at the end of a kept part fetched again, in case the PC crashed while writing them (default 1 MiB). */
+  overlapBytes?: number;
+};
+
+/**
+ * Downloads the release zip to `partPath`. The part is kept when the download fails or the
+ * launcher (or the PC) dies: the next attempt continues it, so 1.9 GB never start over. An attempt
+ * that broke off after receiving something is tried again at once (a dropped connection); one that
+ * received nothing fails (HTTP errors, no network). The sha256 check after it catches a bad part,
+ * which is then deleted.
+ */
+async function downloadRelease(
+  release: PPlusRelease,
+  partPath: string,
+  downloadFile: Downloader,
+  onProgress: ((progress: PPlusProgress) => void) | undefined,
+  log: (message: string) => void,
+  { attempts = 3, retryDelayMs = 2000, overlapBytes = 1024 * 1024 }: PPlusDownloadOptions = {},
+): Promise<void> {
+  const partSize = () =>
+    fs.promises.stat(partPath).then(
+      (s) => s.size,
+      () => 0,
+    );
+  for (let attempt = 1; ; attempt++) {
+    const have = await partSize();
+    if (have >= release.size) {
+      if (have > release.size) {
+        await fs.promises.rm(partPath, { force: true });
+      } else {
+        return;
+      }
+    } else if (have > 0) {
+      const from = Math.max(0, have - overlapBytes);
+      await fs.promises.truncate(partPath, from);
+      log(`Resuming the download of ${release.url} at ${from} of ${release.size} bytes`);
+    } else {
+      log(`Downloading ${release.url}`);
+    }
+    const before = await partSize();
+    try {
+      await downloadFile({
+        url: release.url,
+        destinationFile: partPath,
+        resume: true,
+        onProgress: ({ transferredBytes, totalBytes }) =>
+          onProgress?.({ phase: "download", current: transferredBytes, total: totalBytes || release.size }),
+      });
+      return;
+    } catch (err) {
+      const received = (await partSize()) - before;
+      if (attempt >= attempts || received <= 0) {
+        throw err;
+      }
+      log(
+        `The download broke off after ${received} bytes (${
+          err instanceof Error ? err.message : String(err)
+        }); trying again`,
+      );
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    }
+  }
+}
+
 /**
  * Downloads the pinned P+ release (unless everything is in place already), verifies it and
  * extracts the files we use. Returns "present" when nothing had to be done.
@@ -157,12 +228,14 @@ export async function installProjectPlusFiles({
   onProgress,
   log = () => undefined,
   downloadFile = httpDownload,
+  downloadOptions,
 }: {
   target: PPlusTarget;
   release?: PPlusRelease;
   onProgress?: (progress: PPlusProgress) => void;
   log?: (message: string) => void;
   downloadFile?: Downloader;
+  downloadOptions?: PPlusDownloadOptions;
 }): Promise<"present" | "installed"> {
   const missing = await missingProjectPlusFiles(target, release);
   if (missing.length === 0) {
@@ -189,15 +262,7 @@ export async function installProjectPlusFiles({
     }
   }
   if (!haveZip) {
-    log(`Downloading ${release.url}`);
-    await fs.promises.rm(partPath, { force: true });
-    await downloadFile({
-      url: release.url,
-      destinationFile: partPath,
-      overwrite: true,
-      onProgress: ({ transferredBytes, totalBytes }) =>
-        onProgress?.({ phase: "download", current: transferredBytes, total: totalBytes || release.size }),
-    });
+    await downloadRelease(release, partPath, downloadFile, onProgress, log, downloadOptions);
     try {
       await verifyReleaseZip(partPath, release, verifyProgress);
     } catch (err) {
