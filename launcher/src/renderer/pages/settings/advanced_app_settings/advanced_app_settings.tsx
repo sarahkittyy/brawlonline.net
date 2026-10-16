@@ -28,7 +28,6 @@ export const AdvancedAppSettings = React.memo(() => {
           value={hardwareAcceleration}
           onChange={(checked) => setHardwareAcceleration(checked)}
           label={Messages.hardwareAcceleration()}
-          description={Messages.hardwareAccelerationDescription()}
         />
       </SettingItem>
       <ClearTempFilesForm />

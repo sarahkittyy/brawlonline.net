@@ -6,7 +6,7 @@ import React from "react";
 
 type ToggleProps = {
   label: string;
-  description: string | React.ReactNode;
+  description?: string | React.ReactNode;
   value: boolean;
   onChange: (val: boolean) => void;
   disabled?: boolean;
@@ -30,7 +30,7 @@ export const Toggle = ({ label, description, value, onChange, disabled }: Toggle
           margin-bottom: -5px;
         `}
       />
-      <Typography variant="caption">{description}</Typography>
+      {description && <Typography variant="caption">{description}</Typography>}
     </div>
   );
 };
