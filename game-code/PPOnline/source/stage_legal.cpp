@@ -46,7 +46,7 @@ extern "C" {
     extern u8 g_onlinePickStage;
     // Tests (PPOnlineMain.map): page setups, set pages, the last setup's outcome (0 the set's
     // page, 1 no ranked step, 2 inactive, 3 no lists, 4 the custom page, 5 no starter on P+'s
-    // pages), P+'s pages put back.
+    // pages, 6 a room's set), P+'s pages put back.
     __attribute__((used)) u32 g_sssPage[4];
 }
 
@@ -193,15 +193,17 @@ namespace StageLegal {
         return *(const u8*)(SLOT_KINDS + 2 * p[1 + pos]);
     }
 
-    // Ranked's (and a room set's) stage select shows only the set's stages, not P+'s pages with
-    // the rest struck (the user's, 2026-10-16): the same page in every game, the stages not
-    // selectable now struck as before (game 1 the counterpicks). Its page is the set's stages in
-    // the ruleset's order (GameStep page). P+ places a page's icons with MenSelmapPos_TopN__0
-    // (sc_selmap.pac) at frame count + 1, icon n on bone pos<n+1>: nine stages are a row of four
-    // over a row of five, so Ranked's list (its four counterpicks, then its five starters) puts
-    // the counterpicks on top and the starters below. The page is written as the stage select
-    // sets its pages up (hookPageSetup, before the first page is drawn) and P+'s pages come back
-    // once the stage select is gone (tick).
+    // Ranked's stage select shows only the set's stages, not P+'s pages with the rest struck (the
+    // user's, 2026-10-16): the same page in every game, the stages not selectable now struck as
+    // before (game 1 the counterpicks). Its page is the set's stages in the ruleset's order
+    // (GameStep page). P+ places a page's icons with MenSelmapPos_TopN__0 (sc_selmap.pac) at frame
+    // count + 1, icon n on bone pos<n+1>: nine stages are a row of four over a row of five, so
+    // Ranked's list (its four counterpicks, then its five starters) puts the counterpicks on top
+    // and the starters below. The page is written as the stage select sets its pages up
+    // (hookPageSetup, before the first page is drawn) and P+'s pages come back once the stage
+    // select is gone (tick). Not a room's set (the user's, 2026-10-16): its ruleset can have any
+    // stages, more than one page holds or a count P+ has no layout for, so it keeps P+'s pages
+    // with the rest struck.
     static const int PAGE_SIZE = 0x28;
     static const int PAGE_MAX = 39;
     static u8 s_savedPages[PAGES * PAGE_SIZE];
@@ -227,7 +229,7 @@ namespace StageLegal {
     {
         g_sssPage[0]++;
         const PPOM::GameStep* st = ranked();
-        g_sssPage[2] = !st ? 1 : !st->active ? 2 : !st->nPage ? 3 : 0;
+        g_sssPage[2] = !st ? 1 : OnlineMenu::currentMode() != PPOM::MODE_RANKED ? 6 : !st->active ? 2 : !st->nPage ? 3 : 0;
         if (g_sssPage[2]) return;
         int page = *(u8*)CURRENT_PAGE;
         if (page >= PAGES) {

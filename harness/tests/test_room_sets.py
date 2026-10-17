@@ -21,6 +21,7 @@ from ppharness.instance import DolphinInstance
 
 from test_online import _wait
 from test_online_game import Game, _boot, _p1_damage_addr, backend  # noqa: F401  (the backend fixture)
+from test_ranked_sss_page import _debug, _page
 from test_room_rules import session_rules
 from test_rooms_game import (ART, CSS, _all, launcher_answer, pick, room_view, to_join_room, type_room_code,
                              until_view, write_create)
@@ -120,6 +121,7 @@ def test_room_bo3_set(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
                       gpu_backend: str) -> None:
     a, b, code = bo3_room(backend, dolphin, gpu_backend, "bo3")
     a.shot("01-ruleset")
+    pplus_page = B.read_stage_pages(a.c.read_mem)[0]
 
     # Ready: the set starts; game 1 is a blind pick (the other's character stays hidden).
     a.steps("tap START 8", "wait 40")
@@ -131,6 +133,10 @@ def test_room_bo3_set(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
     online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "game 1: both on the stage select")
     for g in players:
         v = until_setup(g, lambda v: v["active"] and v["type"] == 1 and sorted(v["selectable"]) == STARTERS, "the starters")
+        # Not Ranked's page of the set's stages (stage_legal.cpp): a room's ruleset can have any
+        # stages, so P+'s own page with the rest struck (the user's, 2026-10-16).
+        assert _page(g) == pplus_page, (g.name, _page(g), _debug(g))
+        assert _debug(g)["outcome"] == 6 and _debug(g)["set"] == 0, _debug(g)
     a.shot("03-g1-strikes")
     play_steps(players, 1)
     games = [online_set.play_game(players, 1)]
