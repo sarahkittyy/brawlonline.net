@@ -232,6 +232,16 @@ namespace OnlineMatch {
 
     u16 pickedStage() { return s_pickedStage; }
     u8 pickedAsl() { return s_pickedAsl; }
+
+    // Every place that loads fighters from the online CSS writes all four (the match setup, the
+    // waiting room): P+ applies them every frame, and what the last match left would come back.
+    void setAltCostumes(const u8* alt)
+    {
+        for (int i = 0; i < 4; i++) {
+            *(volatile u32*)(ALT_COSTUME_WORDS + i * PLAYER_SIZE) =
+                alt[i] == PPOM::COSTUME_ALT_Z ? 1 : alt[i] == PPOM::COSTUME_ALT_R ? 2 : 0;
+        }
+    }
     void clearPickedStage() { s_pickedStage = 0xFFFF; s_pickedAsl = 0; }
     void noteSssButtons(u32 held, u32 pressed)
     {
@@ -317,10 +327,7 @@ namespace OnlineMatch {
         // without an alt 0. (Left over from offline play, P+'s CSS leaves 2 in empty slots and the
         // last offline pick's in the others, which gave this machine alone an alt costume.) Offline
         // play does not read them back: P+'s CSS writes all four again when it is left.
-        for (int i = 0; i < 4; i++) {
-            *(volatile u32*)(ALT_COSTUME_WORDS + i * PLAYER_SIZE) =
-                alt[i] == PPOM::COSTUME_ALT_Z ? 1 : alt[i] == PPOM::COSTUME_ALT_R ? 2 : 0;
-        }
+        setAltCostumes(alt);
         sel[SEL_TEAMS] = teams ? 1 : 0;
         se.outCount = 0;
         se.quitPorts = 0;

@@ -16,11 +16,13 @@ import pytest
 from ppharness import brawl as B
 from ppharness import paths
 from ppharness.backend import OnlineBackend
+from ppharness.client import PadInput
 from ppharness.instance import DolphinInstance
 
 from test_online import _make_backend, _wait
 from test_online_game import Game, _boot, _both, _find_logged, _peer_shown, online_set, ppom
 from test_online_ranked import STARTERS, _ranked, _strike_to, _wait_view
+from test_online_alt_costumes import ALT_R, ALT_Z, COSTUME_ALT_R, COSTUME_ALT_Z, _alt_words, _check_match, _mm_costumes, _stale_words
 
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 
@@ -73,10 +75,24 @@ def _in_room(g: Game) -> bool:
     return g.scene() == "scMelee" and (_room(g) & 0xF) == ROOM_RUNNING
 
 
-def _search(g: Game, mode: int) -> None:
-    """START on the CSS locks in and searches (FIND_OPPONENT); the CSS leaves for the room."""
+def _search(g: Game, mode: int, held: tuple[str, ...] = ()) -> None:
+    """START on the CSS locks in and searches (FIND_OPPONENT); the CSS leaves for the room.
+    `held`: buttons down with that START (P+'s alt costume: Z AltZ, R AltR)."""
     n = g.finds()
-    g.press_until("START", lambda: g.finds() > n, "FIND_OPPONENT")
+    if held:
+        r = 255 if "R" in held else 0
+        for _ in range(4):
+            g.c.pad_script(g.pad, [PadInput(buttons=list(held), r=r, hold=12),
+                                   PadInput(buttons=list(held) + ["START"], r=r, hold=8), PadInput(hold=6)])
+            try:
+                _wait(lambda: g.finds() > n, 3, "FIND_OPPONENT")
+                break
+            except AssertionError:
+                continue
+        else:
+            raise AssertionError(f"{'+'.join(held)}+START x4: no FIND_OPPONENT")
+    else:
+        g.press_until("START", lambda: g.finds() > n, "FIND_OPPONENT")
     _find_logged(g, mode, "")
     # (A room whose match is already set up ends as soon as it runs.)
     _wait(lambda: _in_room(g) or (_room(g) & 0xF) == ROOM_ENDED, 30, f"{g.inst.name} in the waiting room")
@@ -314,3 +330,77 @@ def test_ranked_cancel_before_the_stage_select(backend: OnlineBackend, dolphin: 
         pub = backend._http("GET", f"/user/{u.uid}?additionalFields=rank")
         assert pub["rank"]["ratingUpdateCount"] == 0, pub
     _logs_clean(a)
+
+
+def _room_alt(g: Game, want: int, shot: str) -> None:
+    """In the room, the fighter (slot 0) wears the alt held on the search's START (`want`: 0,
+    ALT_Z or ALT_R) and no other slot has one."""
+    assert online_set.local(g.c)["lock"]["costume"] & 0xC0 == want, online_set.local(g.c)
+    _wait(lambda: _fade(g) == 0, 5, "the room out of the fade")
+    words = _alt_words(g)
+    assert words == [{ALT_Z: 1, ALT_R: 2}.get(want, 0), 0, 0, 0], words
+    c = _mm_costumes(g)[0]
+    assert c == {ALT_Z: COSTUME_ALT_Z, ALT_R: COSTUME_ALT_R}.get(want, c if c < 0x20 else -1), hex(c)
+    g.shot(shot)
+
+
+@pytest.mark.slow
+def test_waiting_room_alt_costumes(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                   gpu_backend: str) -> None:
+    """Bug report #38 (2026-10-16): after a match in a Z-alt the room's fighter wore the Z-alt on
+    every later search, whatever was held, until the player left online play. P+ sets each slot's
+    costume from its alt words every frame, and only the match setup wrote them; the room took
+    what the last match had left. Here the words start as a match with P1 in AltZ (and P+'s 2 in
+    the empty slots) leaves them: a search with nothing held has no alt in the room, one with R
+    held AltR, one with Z held AltZ."""
+    test = "waiting-room-alt-costumes"
+    ua = backend.create_user("alma", "ALMA")
+    a = _boot(dolphin, "wr-alt", backend, ua, gpu_backend, test, "gameplay")
+    a.to_main_menu()
+    _stale_words([1, 2, 2, 2])(a)
+    a.to_online_page()
+    a.to_css("unranked")
+
+    for i, (held, want) in enumerate([((), 0), (("R",), ALT_R), (("Z",), ALT_Z)]):
+        _search(a, 1, held)
+        assert _in_room(a)
+        _room_alt(a, want, f"0{i}-room-{'+'.join(held) or 'none'}")
+        a.steps("tap START 40")
+        _back_on_css(a, "back on the CSS after holding START")
+        _wait(lambda: a.c.mm_status()["state"] == "idle", 10, "the search cancelled")
+        a.steps("wait 40")
+
+
+@pytest.mark.slow
+def test_ranked_game_1_alt_costumes(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                    gpu_backend: str) -> None:
+    """Bug report #38: Ranked's game 1 plays the alts held on the search's START (A Z, B R), on
+    both machines, through the room and the strikes; B's machine starts with AltZ words left
+    from an earlier match."""
+    test = "waiting-room-ranked-alts"
+    ua, ub = backend.create_user("zola", "ZOLA"), backend.create_user("remy", "REMY")
+    a = _boot(dolphin, "wr-za", backend, ua, gpu_backend, test, "gameplay")
+    b = _boot(dolphin, "wr-zb", backend, ub, gpu_backend, test, "gameplay")
+    _both(a.to_main_menu, b.to_main_menu)
+    _stale_words([1, 1, 2, 2])(b)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("ranked"), lambda: b.to_css("ranked"))
+    for g in (a, b):
+        B.write_rules(g.c, stocks=1, minutes=2, items_off=True)
+        ppom.allow_test_rules(g.c)
+
+    _search(a, 0, ("Z",))
+    _room_alt(a, ALT_Z, "01-room-a-altz")
+    _search(b, 0, ("R",))
+    _peer_shown(a, ub)
+    _peer_shown(b, ua)
+    host = a if _ranked(a)["local_port"] == 0 else b
+    join = b if host is a else a
+    for g in (a, b):
+        _wait_view(g, lambda v: v["type"] == 1 and sorted(v["selectable"]) == STARTERS, "the starters")
+    _strike_to(host, join, 0x01)
+    port_a = online_set.local(a.c)["local_port"]
+    port_b = online_set.local(b.c)["local_port"]
+    _check_match(a, b, {port_a: ALT_Z, port_b: ALT_R})
+    for g in (a, b):
+        _logs_clean(g)

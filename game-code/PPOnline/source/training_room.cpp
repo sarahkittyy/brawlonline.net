@@ -387,6 +387,11 @@ namespace TrainingRoom {
         rec[0x00] = li.charKind;
         rec[0x01] = 0;                                   // human
         rec[0x05] = li.costume & PPOM::COSTUME_COLOUR;   // colour
+        // P+'s alt (hold Z / R on the search's START) from the lock-in, and none in the other
+        // slots: P+ sets the costume from its alt words every frame, and the room's fighter (slot
+        // 0) wore whatever alt the last online match had left on that slot (bug report #38).
+        const u8 alt[4] = {(u8)(li.costume & PPOM::COSTUME_ALTS), 0, 0, 0};
+        OnlineMatch::setAltCostumes(alt);
         // The controller that searched (LOCAL lockPad, 0-3), as the match's controller numbers
         // are (OnlineMatch's setup: 1-4). State 5 copies the record's byte as it is; the Wi-Fi
         // CSS leaves 0 there, which is no controller: the room's fighter stood still.

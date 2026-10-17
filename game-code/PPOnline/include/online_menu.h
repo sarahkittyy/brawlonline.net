@@ -77,6 +77,8 @@ namespace OnlineMatch {
     u16 pickedStage();                // the loser's stage pick (0xFFFF none, PICK_CANCELLED)
     const u16 PICK_CANCELLED = 0xFFFD; // the stage select was left without a pick (B)
     u8 pickedAsl();
+    // P+'s four alt costume words (one per slot, PPOM::COSTUME_ALT_Z / _R / 0 in alt[i])
+    void setAltCostumes(const u8* alt);
     void clearPickedStage();
     void noteSssButtons(u32 held, u32 pressed);   // each frame of the online stage select
 }
