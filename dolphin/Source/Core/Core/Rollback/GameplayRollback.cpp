@@ -112,7 +112,13 @@ std::string CurrentSceneName(const Guest& g)
 // while matchmaking searches. It is never an online match, so it is no match scene here: no
 // rollback session starts in it, even once the opponent is connected. gmGlobalModeMelee+0x1A is
 // the stage kind; state 5 writes it before the room loads, the match setup after the room.
+// The stage is P+'s Training Room, which a match can be played on too (bug #35, 2026-10-16: a
+// room's loser picked it, and no session ran in that game: each machine played on alone). The
+// room is a one-player match (state 5's players 1-6 none); every online match has two players
+// or more.
 constexpr u16 STAGE_ONLINE_TRAINING = 0x37;
+constexpr u32 MM_PLAYERS = 0x98, MM_PLAYER_SIZE = 0x5C, MM_PLAYER_STATE = 0x01;
+constexpr u8 PLAYER_STATE_CPU = 1;  // 0 human, 1 CPU; above: no player
 
 bool IsWaitingRoom(const Guest& g)
 {
@@ -122,8 +128,16 @@ bool IsWaitingRoom(const Guest& g)
   const auto mm = g.Ptr32(*gg + Addr::GG_MODE_MELEE);
   if (!mm)
     return false;
-  const u8* p = g.Ptr(*mm + 0x1A, 2);
-  return p && static_cast<u16>(p[0] << 8 | p[1]) == STAGE_ONLINE_TRAINING;
+  const u8* p = g.Ptr(*mm, MM_PLAYERS + 4 * MM_PLAYER_SIZE);
+  if (!p || static_cast<u16>(p[0x1A] << 8 | p[0x1B]) != STAGE_ONLINE_TRAINING)
+    return false;
+  int players = 0;
+  for (u32 i = 0; i < 4; ++i)
+  {
+    if (p[MM_PLAYERS + i * MM_PLAYER_SIZE + MM_PLAYER_STATE] <= PLAYER_STATE_CPU)
+      ++players;
+  }
+  return players < 2;
 }
 
 bool IsSceneMelee(const Guest& g)

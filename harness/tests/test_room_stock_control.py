@@ -9,6 +9,8 @@ see it once they are ready, and the match gives each player their count
   stock control, each player's stocks in game 1, and a desync's restart keeps the agreed stocks
   (P+'s handicap code, which makes the count the player's stocks when the fighter is made, must
   not put the picked count back).
+- test_stock_control_stage_pickers_count: two instances, the real server, no set, the loser picks
+  the stage: the stage picker's own count in game 2 (bug #35).
 
 Screenshots: run/artifacts/game-code/rooms/stock-control/.
 """
@@ -309,6 +311,78 @@ def test_stock_control_set_and_desync_restore(backend, dolphin: Callable, gpu_ba
         assert _handicaps(g) == [20, 20], (g.name, _handicaps(g))
         g.shot("03-restarted")
     rep = online_set.play_game(players, 2)
+    assert rep["checksums"]["mismatches"] == 0, rep
+
+
+STOCK_ROOM = {"format": 1, "name": "Stock Control Room", "rules": {"stocks": 1, "timeMinutes": 3, "stockControl": True},
+              "bestOf": 0, "stageChoice": "loser-picks"}
+
+
+@pytest.mark.server
+@pytest.mark.slow
+def test_stock_control_stage_pickers_count(backend, dolphin: Callable, gpu_backend: str) -> None:
+    """Bug #35 (2026-10-16): a room without a set, the loser picks any stage, stock control with 1
+    stock. A picks 3, B 2. A loses game 1; in game 2 A picks the stage on the stage select and locks
+    in again there with it. That lock-in carried 0 (the rules' 1 stock: the CSS was gone), so
+    every game's stage picker played the rules' stocks; now A plays 3 and B 2 again."""
+    from test_online import _wait
+    from test_room_rules import session_rules
+    from test_room_sets import CSS, SSS, _all, _boot, _fighters, launcher_answer, pick, to_join_room, \
+        type_room_code, until_view, write_create
+    from test_room_stage_list import to_losers_stage_select
+    import online_set
+
+    sp_art = ART / "stage-picker"
+    ua, ub = backend.create_user("stpkah", "SPAH"), backend.create_user("stpkbj", "SPBJ")
+    a = _boot(dolphin, "sp-a", backend, ua, gpu_backend, "stock-picker", "gameplay", artifacts=sp_art)
+    b = _boot(dolphin, "sp-b", backend, ub, gpu_backend, "stock-picker", "gameplay", artifacts=sp_art)
+    _all(a.to_main_menu, b.to_main_menu)
+    _all(a.to_online_page, b.to_online_page)
+    rs_code = backend._http("POST", "/v1/rulesets", {"ruleset": STOCK_ROOM}, token=ua.session_token)["code"]
+    rid = write_create(a, ruleset=rs_code)
+    assert launcher_answer(a, rid)["result"] == "accepted"
+    _wait(lambda: a.scene() == CSS, 60, "A on the room's CSS")
+    code = until_view(a, lambda v: v["flags"] & ppom.RF_IN, "A in its room", timeout=60)["code"]
+    to_join_room(b)
+    pick(a)
+    pick(b, right=2)
+    type_room_code(b, code)
+    until_view(b, lambda v: v["flags"] & ppom.RF_IN, "B in the room")
+    for g in (a, b):
+        _wait(lambda g=g: (session_rules(g) or {}).get("stockControl") is True, 30, f"{g.name}: stock control")
+    _online_pick_stocks(a, 0, 3)
+    _online_pick_stocks(b, 1, 2)
+
+    players = [a, b]
+    a.steps("tap START 8", "wait 40")
+    until_view(b, lambda v: v["slots"][0]["bits"] & ppom.SLOT_READY, "B sees A ready")
+    b.steps("tap START 8", "wait 10")
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
+                    "game 1 running on both")
+    for g in players:
+        assert _handicaps(g) == [30, 20], (g.name, "game 1", _handicaps(g))
+    rep = online_set.play_game(players, 1, winner=b)
+    assert rep["checksums"]["mismatches"] == 0, rep
+    _wait(lambda: a.scene() == CSS and b.scene() == CSS, 180, "both back on the room's CSS")
+    for g in players:
+        until_view(g, lambda v: v["flags"] & ppom.RF_IN and v["status"] == 0 and v["game"] == 2,
+                   "the room waiting for game 2", timeout=60)
+
+    loser = to_losers_stage_select(a, b, 2)
+    assert loser is a, "A lost game 1 but does not pick the stage"
+    assert a.scene() == SSS
+    B.sss_pick_stage(a.c, 0x01, 0)   # Battlefield
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
+                    "game 2 running on both")
+    for g in players:
+        se = ppom.read_session(g.c, ppom.find_block(g.c))
+        assert [p["pv"]["stocks"] for p in se["players"][:2]] == [3, 2], (g.name, se["players"][:2])
+        assert _handicaps(g) == [30, 20], (g.name, "game 2: the stage picker's count", _handicaps(g))
+    a.steps("wait 200")
+    got = [_fighters(g) for g in players]
+    assert got[0] == got[1] and {p: st for p, (st, _) in got[0].items()} == {0: 3, 1: 2}, got
+    a.shot("02-game2-picker-3")
+    rep = online_set.play_game(players, 2, winner=b)
     assert rep["checksums"]["mismatches"] == 0, rep
 
 

@@ -843,7 +843,10 @@ namespace RoomCss {
         }
     }
 
-    u8 myStocks() { return s_stockControl ? s_myStocks : 0; }
+    // Also off the CSS: the stage picker locks in again on the stage select with the pick (bug
+    // #35, 2026-10-16), where reset() has turned s_stockControl off; with it here that lock-in
+    // carried 0, the rules' stocks. The caller checks the rules (roomStockControl).
+    u8 myStocks() { return s_myStocks; }
 
     bool handOnMyStocks()
     {

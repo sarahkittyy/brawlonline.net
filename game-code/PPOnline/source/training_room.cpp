@@ -17,8 +17,9 @@
 //    (state 3, g_onlineMatchGame armed: Unranked), or back to the CSS (Ranked's game setup, a
 //    cancel, an error), never to Brawl's network match setup (state 8).
 //
-// Dolphin never takes the room for the online match: its scMelee checks skip the Online
-// Training stage (GameplayRollback.cpp IsWaitingRoom).
+// Dolphin never takes the room for the online match: its scMelee checks skip a one-player match
+// on the Online Training stage (GameplayRollback.cpp IsWaitingRoom; a match on P+'s Training
+// Room, the same stage, has two players or more).
 #include <memory.h>
 #include <string.h>
 

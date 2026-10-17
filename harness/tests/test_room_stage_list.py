@@ -5,7 +5,8 @@ A published ruleset without a set, its stages Battlefield, Final Destination and
   the loser's stage select greys every other stage (P+'s strike art), refuses one, and plays a
   pick from the list on its normal layout (L held: no alternate stage);
 - loser picks any stage: nothing is struck, the pick keeps its alternate layout, and P+'s random
-  (START) draws from the room's stages.
+  (START) draws from the room's stages;
+- a game on P+'s Training Room (the waiting room's stage) is an online match like any other.
 
 Screenshots: run/artifacts/game-code/rooms/stage-list/<test>/<player>/.
 """
@@ -33,6 +34,7 @@ pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 LIST_ART = ART / "stage-list"
 SSS = "scSelStage"
 BF, FD, FOD, YS = 0x01, 0x02, 0x1F, 0x2A   # Yoshi's Story: page 1, off in P+ default
+TRAINING_ROOM = 0x37                        # also the waiting room's stage (training_room.cpp)
 STAGES = {"starters": [BF, FD], "counterpicks": [YS]}
 CHOICE_LOSER_PICKS, CHOICE_LOSER_PICKS_LIST = 0, 3
 
@@ -167,6 +169,34 @@ def test_room_loser_picks_any_stage(backend: OnlineBackend, dolphin: Callable[..
     rep = online_set.play_game([a, b], game + 1)
     assert rep["checksums"]["mismatches"] == 0, rep
     assert rep["stage"] in (BF, FD, YS), ("P+'s random left the room's stages", rep)
+
+
+@pytest.mark.slow
+def test_room_game_on_the_training_room(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                        gpu_backend: str) -> None:
+    """Bug #35 (2026-10-16): the loser picks P+'s Training Room, the stage kind (0x37) of the
+    waiting room Unranked and Ranked search in. Dolphin took every scMelee on it for the waiting
+    room, so no session ran in that game: each machine played on alone (the others stood still,
+    a pause was not seen). It is a match like any other: the session runs on both and the game is
+    played to its end with the same checksums."""
+    a, b = room_with(backend, dolphin, gpu_backend, "trng", "loser-picks")
+    game = play_first_game(a, b)
+    loser = to_losers_stage_select(a, b, game)
+    # On P+'s page 2: A on the page button below the icons turns it (sss_pick_stage stays on its page).
+    page = B.stage_positions(TRAINING_ROOM, loser.c.read_mem)[0][0]
+    B.sss_hover_item(loser.c, B.SSS_ITEM_PAGE)
+    for _ in range(4):
+        if B.read_sss(loser.c.read_mem).page == page:
+            break
+        loser.steps("tap A 6", "wait 30")
+    assert B.read_sss(loser.c.read_mem).page == page, "the stage select did not turn to the Training Room's page"
+    B.sss_pick_stage(loser.c, TRAINING_ROOM, 0)
+    _wait(lambda: online_set.gstatus(loser.c)["phase"] in ("running", "error", "ended"), 90,
+          "game 2 to start after the pick")
+    rep = online_set.play_game([a, b], game)
+    assert rep["stage"] == TRAINING_ROOM, ("the Training Room was not played", rep)
+    assert rep["checksums"]["compared"] > 0 and rep["checksums"]["mismatches"] == 0, rep
+    _wait(lambda: a.scene() == CSS and b.scene() == CSS, 180, "both back on the room's CSS after game 2")
 
 
 @pytest.mark.slow
