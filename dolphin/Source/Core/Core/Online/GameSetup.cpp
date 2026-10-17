@@ -13,6 +13,7 @@
 
 #include "Common/Logging/Log.h"
 #include "Core/Rollback/GameplaySession.h"
+#include "Core/Rollback/PeerData.h"
 
 namespace Online::GameSetup
 {
@@ -926,9 +927,13 @@ View Current()
           else if (mine && pair)
             v.text = fmt::format("Your turn: they locked in ({})", v.seconds);
           else if (mine)
+            // A winner on RANDOM sees only RANDOM until the match: so does the loser.
             v.text = fmt::format("Your turn: {} picked {} ({})",
                                  SideNames(winner_side).empty() ? "they" : SideNames(winner_side),
-                                 CharName(peer_lock ? peer_lock->char_kind : 0xFF), v.seconds);
+                                 peer_lock && peer_lock->css == Gprb::PeerData::CSS_RANDOM ?
+                                     "Random" :
+                                     CharName(peer_lock ? peer_lock->char_kind : 0xFF),
+                                 v.seconds);
           else if (!winner)
             // The loser waits for the winner's character (Slippi's order), then picks.
             v.text = fmt::format("{}, then you ({})", picking(winner_side), v.seconds);

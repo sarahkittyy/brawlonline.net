@@ -5,6 +5,12 @@
 // the match, the account name on its plate; this player on the left. Games 2+ show the last
 // game's characters. Ranked only.
 //
+// A player locked in on RANDOM gets the CSS's RANDOM card on both machines (the user's,
+// 2026-10-16): the character is drawn at lock-in, and that player sees only RANDOM until the
+// match. The CSS's frames for it, read off a live CSS with the coin on RANDOM (getStockFrameID has
+// no CharNo for it): Cname4 PAT0 501, Cmark4 PAT0 30 and CLR0 5 (grey, whatever the port), and
+// the portrait MenSelchrFaceB.501, which is in the CSS file itself (no portrait file).
+//
 // The players come with Dolphin's step (GameStep pv, by in-game port).
 //
 // The card is the CSS's own: the MuObjects muSelCharPlayerArea makes (area +0xB0..+0xD0, measured
@@ -100,6 +106,9 @@ namespace SssPortraits {
     static const ExchangeFn SELCH_TO_STOCK = (ExchangeFn)0x800AF82C;  // exchangeMuSelchkind2MuStockchkind
     static const ExchangeFn STOCK_FRAME = (ExchangeFn)0x800AF600;     // getStockFrameID
     static const ExchangeFn STOCK_MARK = (ExchangeFn)0x800AF6F0;      // the series symbol (dispMarkKind)
+    static const int RANDOM_TEX = 501, RANDOM_MARK = 30, RANDOM_MARK_CLR = 5;   // the CSS's, on RANDOM
+
+    static bool isRandom(const PPOM::GameStep::PreviewPlayer& pv) { return (pv.costume & PPOM::COSTUME_RANDOM) != 0; }
 
     typedef bool (*ReadRequestFn)(void* handle, const char* path, int heap, int length, int offset);
     typedef bool (*HandleBoolFn)(void* handle);
@@ -277,7 +286,7 @@ namespace SssPortraits {
         {"MenSelchrChuman4_TopN", 2, 1, 0, 0, true, 0x11},
     };
     static const int N_PARTS = sizeof(PARTS) / sizeof(PARTS[0]);
-    static const int PORTRAIT_PART = 3;
+    static const int MARK_PART = 2, PORTRAIT_PART = 3;
     static u8* s_obj[2][N_PARTS];
     static u8* s_task = NULL;
     static DtorFn s_origDtor = NULL;
@@ -362,11 +371,12 @@ namespace SssPortraits {
         int port = -1;
         const PPOM::GameStep::PreviewPlayer* pv = sidePlayer(side, &port);
         if (!pv || !s_cssRes) return;
+        bool random = isRandom(*pv);
         int stock = SELCH_TO_STOCK(GM_TO_SELCH(pv->charKind));
         int charNo = STOCK_FRAME(stock);
         float portF = (float)(port + 1);
-        float markF = (float)(STOCK_MARK(stock) + 1);
-        float nameF = (float)(charNo * 10 + 1);
+        float markF = random ? (float)RANDOM_MARK : (float)(STOCK_MARK(stock) + 1);
+        float nameF = random ? (float)RANDOM_TEX : (float)(charNo * 10 + 1);
         float plateF = g_sssPortraits.plateFrame >= 0 ? (float)g_sssPortraits.plateFrame : portF;
         u8* group = *(u8**)(task + 0x50);
         for (int i = 0; i < N_PARTS; i++) {
@@ -393,15 +403,17 @@ namespace SssPortraits {
                 if (want[k] == F_NONE) continue;
                 float f = want[k] == F_PORT ? portF : want[k] == F_MARK ? markF : want[k] == F_NAME ? nameF
                         : want[k] == F_PLATE ? plateF : (float)want[k];
+                if (random && i == MARK_PART && k == 3) f = (float)RANDOM_MARK_CLR;
                 setFrame(obj, slots[k], sets[k], f);
             }
-            if (i == PORTRAIT_PART && s_picRes[side]) {
+            u32* picRes = random ? &s_cssRes : &s_picRes[side];
+            if (i == PORTRAIT_PART && *picRes && s_texNo[side]) {
                 char tex[24];
                 sprintf(tex, "MenSelchrFaceB.%03d", s_texNo[side]);
                 static const char* const MATS[2] = {"Card06", "Card006_sdw"};
                 for (int m = 0; m < 2; m++) {
                     u32 mat = GET_RES_MAT(obj + 8, MATS[m]);
-                    if (isPtr(mat)) SET_TEX(obj, *(u32*)(mat + 0xC), tex, &s_picRes[side]);
+                    if (isPtr(mat)) SET_TEX(obj, *(u32*)(mat + 0xC), tex, picRes);
                 }
             }
             u8* scn = *(u8**)(obj + 0x10);
@@ -461,6 +473,10 @@ namespace SssPortraits {
             const PPOM::GameStep::PreviewPlayer* pv = sidePlayer(side, &port);
             s_texNo[side] = 0;
             if (!pv) continue;
+            if (isRandom(*pv)) {
+                s_texNo[side] = RANDOM_TEX;   // one picture, in the CSS file
+                continue;
+            }
             int charNo = STOCK_FRAME(SELCH_TO_STOCK(GM_TO_SELCH(pv->charKind)));
             if (charNo < 0 || charNo > 99) continue;
             s_texNo[side] = (u16)(charNo * 10 + 1 + (pv->costume & PPOM::COSTUME_COLOUR));

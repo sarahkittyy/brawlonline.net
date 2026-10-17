@@ -132,6 +132,12 @@ constexpr u32 MAX_COSTUME = 0x1F;
 constexpr u32 COSTUME_ALT_Z = 0x40;
 constexpr u32 COSTUME_ALT_R = 0x80;
 bool ValidCostume(u32 costume);
+// A lock-in made with the coin on RANDOM (LockIn.css): its character is drawn at lock-in, and
+// that player sees only RANDOM until the match. What the game shows of a player (Ranked's line
+// and stage select cards, a room's panels) carries COSTUME_RANDOM instead (ppom.h), never in a
+// lock-in itself.
+constexpr u8 CSS_RANDOM = 0x29;
+constexpr u32 COSTUME_RANDOM = 0x20;
 // A lock-in's team: Brawl's three team colours 0-2 (gmPlayerInitData::m_teamNo; 0 red, 1 blue,
 // 2 green), or 0xFF for none.
 bool ValidTeam(u32 team);

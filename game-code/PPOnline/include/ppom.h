@@ -169,7 +169,7 @@ namespace PPOM {
         struct PreviewPlayer {
             u8 present;
             u8 charKind;  // gmCharacterKind (random resolved)
-            u8 costume;   // colour number, | COSTUME_ALT_Z / COSTUME_ALT_R
+            u8 costume;   // colour number, | COSTUME_ALT_Z / COSTUME_ALT_R, | COSTUME_RANDOM
             u8 local;     // 1: this player
             u16 name[NAME_LEN];
         } pv[2];          // 0xB8, 0x24 each
@@ -318,7 +318,7 @@ namespace PPOM {
     struct LockIn {
         u32 seq;          // game: bumped on every change (0 = never written)
         u8 ready;         // 1 = locked in for `game`
-        u8 cssChar;       // CSS id (diagnostics)
+        u8 cssChar;       // the coin's CSS id (0x29: RANDOM, charKind drawn from it)
         u8 charKind;      // gmCharacterKind (random resolved)
         u8 costume;       // colour number (0-0x1F), | COSTUME_ALT_Z / COSTUME_ALT_R
         u16 stagePick;    // stage kind picked on the stage select (Direct loser), 0xFFFF none,
@@ -385,6 +385,10 @@ namespace PPOM {
     const u8 COSTUME_ALT_R = 0x80;
     const u8 COSTUME_ALTS = COSTUME_ALT_Z | COSTUME_ALT_R;
     const u8 COSTUME_COLOUR = 0x1F;
+    // Dolphin, in what the game shows of a player (GameStep pv, SessionPlayer roomCostume; never
+    // in a lock-in): locked in on RANDOM. Its character is drawn at lock-in (OnlineMenu's
+    // resolveCss) and that player sees only RANDOM until the match, so everyone is shown RANDOM.
+    const u8 COSTUME_RANDOM = 0x20;
 
     struct SessionPlayer {
         u8 present;
@@ -402,7 +406,7 @@ namespace PPOM {
         u8 roomSlot;      // RoomSlotBits
         u8 roomTeam;      // the player's colour (TEAM_*), TEAM_NONE empty
         u8 roomChar;      // gmCharacterKind of the player's lock-in while SLOT_READY, else 0xFF
-        u8 roomCostume;
+        u8 roomCostume;   // its costume, | COSTUME_RANDOM
         // Dolphin, with Session.restore (a desynced game played again; still v8, these were
         // padding): the player's stocks (0 = out of the game) and damage at the last frame every
         // machine agreed on.

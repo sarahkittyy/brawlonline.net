@@ -285,6 +285,53 @@ def test_room_two_players_through_the_game(backend: OnlineBackend, dolphin: Call
     _wait(lambda: not room_view(a)["flags"] & ppom.RF_IN, 20, "A out of the room")
 
 
+def test_room_panel_shows_random(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                 gpu_backend: str) -> None:
+    """A player ready on Random (the user's, 2026-10-16): the character is drawn at lock-in and
+    that player sees only RANDOM until the match, so the other panels show RANDOM too, not the
+    character drawn. A's lock-in keeps the coin's id (0x29) with the drawn character; B's SESSION
+    has A's slot ready with COSTUME_RANDOM and B's panel for A shows RANDOM. The game is then
+    played with the drawn character."""
+    test = "panel-random"
+    ua = backend.create_user("rrnda", "RRNA")
+    ub = backend.create_user("rrndb", "RRNB")
+    a = _boot(dolphin, "rnd-a", backend, ua, gpu_backend, test, "gameplay", artifacts=ART)
+    b = _boot(dolphin, "rnd-b", backend, ub, gpu_backend, test, "gameplay", artifacts=ART)
+    _all(a.to_main_menu, b.to_main_menu)
+    _all(a.to_online_page, b.to_online_page)
+    code = create_room(a)
+    to_join_room(b)
+    B.css_pick_character(a.c, 0, B.CSS_RANDOM)
+    a.steps("wait 30")
+    pick(b, right=2)
+    for g in (a, b):
+        B.write_rules(g.c, stocks=1, minutes=2, items_off=True)
+        ppom.allow_test_rules(g.c)
+    type_room_code(b, code)
+    until_view(b, lambda v: v["flags"] & ppom.RF_IN, "B in the room")
+    until_view(a, lambda v: v["slots"][1]["bits"] & ppom.SLOT_TAKEN, "A sees B")
+
+    game = room_view(a)["game"]
+    a.steps("tap START 8", "wait 40")
+    lock = lock_of(a)
+    assert lock["ready"] and lock["css"] == B.CSS_RANDOM and lock["char_kind"] != 0xFF, lock
+    v = until_view(b, lambda v: v["slots"][0]["bits"] & ppom.SLOT_READY and v["slots"][0]["char"] != 0xFF,
+                   "B sees A ready")
+    assert v["slots"][0]["costume"] & 0x20, ("no COSTUME_RANDOM", v["slots"][0])
+    b.steps("wait 30")
+    shown = []
+    for k in range(1, 4):
+        area = B.read_css_area(b.c.read_mem, k)
+        if area:
+            shown.append(b.c.read_u32(area.area + 0x1B8))
+    assert B.CSS_RANDOM in shown, ("B's panel for A does not show RANDOM", [hex(x) for x in shown], lock)
+    b.shot("01-a-ready-on-random")
+    b.steps("tap START 8", "wait 10")
+    rep = online_set.play_game([a, b], game)
+    assert rep["checksums"]["mismatches"] == 0, rep
+    assert f"port=0, character={lock['char_kind']}," in rep["setup"], (lock, rep["setup"])
+
+
 def test_room_names_follow_the_slots_after_the_host_left(backend: OnlineBackend,
                                                          dolphin: Callable[..., DolphinInstance],
                                                          gpu_backend: str) -> None:

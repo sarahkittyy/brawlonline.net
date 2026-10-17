@@ -621,6 +621,14 @@ Response RankResponse()
   return r;
 }
 
+// A lock-in's costume as the game shows it of a player: with COSTUME_RANDOM when it was made on
+// RANDOM, whose drawn character that player does not see before the match (PeerData.h).
+u8 RandomShown(const Gprb::Session::LockIn& l)
+{
+  return static_cast<u8>(l.css == Gprb::PeerData::CSS_RANDOM ? l.costume | Gprb::PeerData::COSTUME_RANDOM :
+                                                             l.costume);
+}
+
 // Ranked's game setup for the CSS and the stage select (Online/GameSetup.h; Slippi's
 // GP_FETCH_STEP): the step, whose turn it is, the selectable stages and the line to show.
 Response GameStepResponse()
@@ -659,7 +667,7 @@ Response GameStepResponse()
       const u32 p = GS_PREVIEW + 4 + port * GS_PREVIEW_SIZE;
       r.payload[p + 0] = 1;
       r.payload[p + 1] = lock->char_kind;
-      r.payload[p + 2] = lock->costume;
+      r.payload[p + 2] = RandomShown(*lock);
       r.payload[p + 3] = static_cast<int>(port) == lobby.local_port ? 1 : 0;
       WriteU16Text(r.payload, p + 4, s_port_names[port], NAME_LEN);
       previewed = static_cast<int>(port) + 1;
@@ -1163,7 +1171,7 @@ void PutRoom(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::
         {
           bits |= SLOT_READY;
           session[p + SP_ROOM_CHAR] = lock->char_kind;
-          session[p + SP_ROOM_COSTUME] = lock->costume;
+          session[p + SP_ROOM_COSTUME] = RandomShown(*lock);
           session[p + SP_ROOM_STOCKS] = lock->port_values[PV_STOCKS];
         }
       }
@@ -1476,7 +1484,7 @@ void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
     for (u32 i = 0; i < l.port_values.size(); ++i)
       l.port_values[i] = R8(guard, loc.local + L_OWN + i);
     l.local_pad = R8(guard, loc.local + L_LOCK_PAD);
-    Rooms::SetLocalLock(l.ready, l.game, l.char_kind, l.costume, l.port_values[PV_STOCKS]);
+    Rooms::SetLocalLock(l.ready, l.game, l.char_kind, RandomShown(l), l.port_values[PV_STOCKS]);
     if (room.game_active)
     {
       // A room's game is a session of its own: the room's game N (SESSION `game`) is the

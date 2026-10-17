@@ -462,7 +462,8 @@ namespace OnlineMenu {
     static void lockIn(int game, u16 stagePick, u8 asl)
     {
         int picked = selectedChar();
-        int css = resolveCss(lockChar());
+        int coin = lockChar();
+        int css = resolveCss(coin);
         if (css < 0) return;
         int costume = picked >= 0 ? selectedCostume() : s.lastCostume;
         int tag = picked >= 0 ? selectedTag() : s.lastTag;
@@ -472,7 +473,9 @@ namespace OnlineMenu {
         // setup gives this player (online_match.cpp).
         pv.stocks = roomCss() && roomStockControl() ? RoomCss::myStocks() : 0;
         s.lockedStocks = pv.stocks;
-        PPOM::writeLockIn(true, (u8)css, charKindOf(css), (u8)(costume | s.startAlt), stagePick, asl,
+        // The coin's CSS id (RANDOM's when on it, which Dolphin shows the others instead of the
+        // character drawn: COSTUME_RANDOM), the character drawn.
+        PPOM::writeLockIn(true, (u8)coin, charKindOf(css), (u8)(costume | s.startAlt), stagePick, asl,
                           (u8)game, &pv, s.startPad);
         s.lockedGame = game;
         s.lockStage = stagePick;
@@ -2134,6 +2137,12 @@ namespace OnlineMenu {
                     p.kind = RoomCss::PV_READY;
                     p.css = (u8)css;
                     p.costume = pl.roomCostume & PPOM::COSTUME_COLOUR;   // (an alt shows its colour)
+                    // Locked in on RANDOM: the panel shows RANDOM, as that player's own does (the
+                    // drawn character is not seen before the match).
+                    if (pl.roomCostume & PPOM::COSTUME_RANDOM) {
+                        p.css = 0x29;
+                        p.costume = 0;
+                    }
                     p.stocks = pl.roomStocks <= PPOM::MAX_PICKED_STOCKS ? pl.roomStocks : 0;
                 } else if (bits & PPOM::SLOT_READY) {
                     // Ready without a character shown: game 1 of a set is a blind pick (the

@@ -70,7 +70,10 @@ def _both_shown(g: Game, made_before: int) -> dict[str, Any]:
     def done() -> dict[str, Any] | None:
         f = _portraits(g)
         return f if f["made"] >= made_before + 2 and f["state"] == 4 and all(f["texNo"]) else None
-    f = _wait(done, 30, f"{g.inst.name}: both cards")
+    try:
+        f = _wait(done, 30, f"{g.inst.name}: both cards")
+    except AssertionError as e:
+        raise AssertionError(f"{e}: {_portraits(g)}") from None
     assert f["objs"] == 16, f   # 8 parts a card
     return f
 
@@ -119,3 +122,43 @@ def test_ranked_stage_select_shows_both_players(backend, dolphin: Callable[..., 
     for g in (a, b):
         _both_shown(g, 2)
         g.shot("g2-sss")
+
+
+@pytest.mark.slow
+def test_ranked_stage_select_shows_random(backend, dolphin: Callable[..., DolphinInstance],
+                                          gpu_backend: str) -> None:
+    """A locked in on Random (the user's, 2026-10-16): the character is drawn at lock-in and A
+    sees only RANDOM until the match, so both machines show A's card as the CSS's RANDOM card
+    (its picture MenSelchrFaceB.501, in the CSS file), not the character drawn; B's (Falco) as
+    usual. Game 1 is played with the drawn character."""
+    test = "ranked-sss-random"
+    ua, ub = backend.create_user("rsra", "RSRA"), backend.create_user("rsrb", "RSRB")
+    a = _boot(dolphin, "rsr-a", backend, ua, gpu_backend, test, "gameplay")
+    b = _boot(dolphin, "rsr-b", backend, ub, gpu_backend, test, "gameplay")
+    _both(a.to_main_menu, b.to_main_menu)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("ranked"), lambda: b.to_css("ranked"))
+    B.css_pick_character(b.c, 0, B.CSS_ID["falco"])
+    B.step(b.c, 10)
+    _to_ranked_css(a, b)
+    B.css_pick_character(a.c, 0, B.CSS_RANDOM)
+    B.step(a.c, 10)
+    _search_ranked(a)
+    _search_ranked(b)
+    _peer_shown(a, ub)
+    _peer_shown(b, ua)
+    _paired(a, b)
+    lock = online_set.local(a.c)["lock"]
+    assert lock["css"] == B.CSS_RANDOM and lock["char_kind"] != 0xFF, lock
+
+    _both_on([a, b], SSS, "game 1: both on the stage select")
+    fa, fb = _both_shown(a, 0), _both_shown(b, 0)
+    assert fa["failed"] == 0 and fb["failed"] == 0, (fa, fb)
+    # A's card (A's left, B's right) is RANDOM's; B's is Falco's own picture.
+    assert fa["texNo"][0] == fb["texNo"][1] == 501, (fa, fb)
+    assert fa["texNo"][1] == fb["texNo"][0] != 501, (fa, fb)
+    a.shot("g1-sss")
+    b.shot("g1-sss")
+    rep = online_set.play_game([a, b], 1)
+    port = 0 if fa["port"][0] == 0 else 1
+    assert f"port={port}, character={lock['char_kind']}," in rep["setup"], (lock, rep["setup"])

@@ -764,7 +764,10 @@ def test_ranked_random_draws_every_game(backend: OnlineBackend, dolphin: Callabl
     def note_setup(game: int, rep: dict[str, Any]) -> None:
         for g in players:
             lock = online_set.local(g.c)["lock"]
-            assert lock["game"] == game and lock["css"] != CSS_RANDOM, (g.inst.name, lock)
+            # The coin's id stays RANDOM's (what Dolphin shows the other player), the character
+            # is drawn.
+            assert lock["game"] == game and lock["css"] == CSS_RANDOM, (g.inst.name, lock)
+            assert lock["char_kind"] not in (0xFF, None), (g.inst.name, lock)
             # The match played the character drawn for it.
             assert f"port={_ranked(g)['local_port']}, character={lock['char_kind']}," in rep["setup"], (
                 g.inst.name, lock, rep["setup"])
@@ -800,7 +803,10 @@ def test_ranked_random_draws_every_game(backend: OnlineBackend, dolphin: Callabl
               f"{ {g.inst.name: hex(g.c.read_u32(G_MTRAND_SEED)) for g in players} }", flush=True)
         winner.shot(f"g{game}-css-random")
         winner.steps("tap START 8", "wait 30")
-        _wait_view(loser, lambda v: v["may_lock"], "the loser's turn")
+        v = _wait_view(loser, lambda v: v["may_lock"], "the loser's turn")
+        # The winner sees only RANDOM until the match, so the loser is not told the character
+        # drawn (the user's, 2026-10-16).
+        assert "picked Random" in v["text"], v
         loser.steps("tap START 8", "wait 30")
         note_setup(game, online_set.play_game(players, game, winner=winners[game]))
 
