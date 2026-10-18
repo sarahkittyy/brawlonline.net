@@ -750,15 +750,29 @@ namespace OnlineMenu {
     // online matches under rollback (test_code_menu_combo_spam_keeps_the_match_in_sync). With
     // the line OFF its control code never opens it (Net-CodeMenu.asm, loc_0x145). Online the
     // line is OFF; the player's own value comes back with the other lines (restoreRules).
-    static void codeMenuOff()
+    //
+    // P+'s "Autosave Replays" line (0 OFF, 1 ON; ON in the netplay menu dnet.cmnu, OFF in
+    // data.cmnu) is off online too (bug reports #48 and #49, 2026-10-18). With it ON, P+'s
+    // Control Code Menu sets 0x804E003C to 2 in a match, and its End Match code then writes the
+    // game's replay to the SD card (/Project+/rp/rp_*.bin) before the match scene ends: ~7 s
+    // after every full-length game, and on a full card the write fails and P+ tries it again
+    // every 8-16 s for good, so the game never leaves the match. Online every game is in
+    // Dolphin's own replay (.brep) already.
+    static void codeMenuSelect(const char* name, u32 value)
     {
-        static const char ACTIVATION[] = "Code Menu Activation";
+        u32 len = strlen(name);
         for (u32 p = CODE_MENU; p + 0x20 <= CODE_MENU + CODE_MENU_SIZE; p += 4) {
             if (!codeMenuLine(p) || ((u8*)p)[2] != 0) continue;
-            if (strncmp((const char*)p + ((u8*)p)[6], ACTIVATION, sizeof(ACTIVATION) - 1) != 0) continue;
-            *(u32*)(p + 8) = 2;
+            if (strncmp((const char*)p + ((u8*)p)[6], name, len) != 0) continue;
+            *(u32*)(p + 8) = value;
             return;
         }
+    }
+
+    static void codeMenuOff()
+    {
+        codeMenuSelect("Code Menu Activation", 2);
+        codeMenuSelect("Autosave Replays", 0);
     }
 
     // P+'s salty runback and results skip: its "End Match" control code (Net-CodeMenu.asm, hook at
@@ -825,8 +839,9 @@ namespace OnlineMenu {
     // only in Direct, item frequency 0 with P+'s default item switch, hazards off (the default
     // since 2026-10-12, the user's). Either way hazards
     // also hold for Direct's loser's pick (its hazard toggle is not part of the setup the other
-    // machine gets), and every other Code Menu line is at its default but its activation, which is
-    // OFF (codeMenuOff). Written when the Wi-Fi sequence starts (in place of Brawl's Wi-Fi rules) and
+    // machine gets), and every other Code Menu line is at its default but its activation and
+    // Autosave Replays, which are OFF (codeMenuOff). Written when the Wi-Fi sequence starts (in
+    // place of Brawl's Wi-Fi rules) and
     // again by every online match setup, right before sqVsMelee's setup reads them
     // (OnlineMatch::setupMatch), so a setting changed in between (or left over from offline play)
     // never reaches an online match. Dolphin compares the result on every machine before the match
@@ -870,7 +885,7 @@ namespace OnlineMenu {
             r[8] = stockTime;
         }
         int lines = codeMenuLines(1);                      // every Code Menu line at its default
-        codeMenuOff();                                     // except its activation: OFF
+        codeMenuOff();                                     // except activation and autosave: OFF
         runbackOff();                                      // and P+'s salty runback
         PPOM::g_block.debug.scratch[3] = ((u32)lines << 16) | ((PPOM::g_block.debug.scratch[3] + 1) & 0xFFFF);
     }

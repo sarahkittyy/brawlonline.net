@@ -19,6 +19,20 @@ export const PATCHED_SD_IMAGE_NAME = "sd.raw";
 export const PATCHED_SD_MANIFEST_NAME = "manifest.json";
 const SD_COPY_SYNC_BYTES = 64 * 1024 * 1024;
 
+/**
+ * P+'s own replays: with its Code Menu's "Autosave Replays" ON (the netplay menu's default) the
+ * game writes every match to `/Project+/rp/rp_YYMMDD_HHMM_SS.bin` (2-110 KB). P+'s card has
+ * about 40 MB free, and the copy keeps what the game writes, so they filled it: on a full card
+ * the write fails and P+ tries again for good, and the game never leaves the results screen (bug
+ * report #48). The plugin turns autosave off online; offline games still write them.
+ */
+export const PPLUS_REPLAY_DIR = "/Project+/rp";
+const PPLUS_REPLAY_NAME = /^rp_\d{6}_\d{4}_\d{2}\.bin$/i;
+/** Below this much free space on the copy, P+'s oldest replays are deleted... */
+export const SD_LOW_FREE_BYTES = 16 * 1024 * 1024;
+/** ...until this much is free (or none is left). */
+export const SD_PRUNED_FREE_BYTES = 32 * 1024 * 1024;
+
 export type PluginBinary = {
   data: Buffer;
   sha256: string;
@@ -67,6 +81,8 @@ export type SdInstallOptions = {
   onProgress?: ByteProgress;
   /** Test hook: the copy-on-write clone tried before the chunked copy. */
   clone?: CopyOptions["clone"];
+  /** Test hook: the free space below which P+'s replays are pruned, and the space to prune to. */
+  prune?: { lowFreeBytes: number; targetFreeBytes: number };
   /**
    * Another of our Dolphins has the copy open (spectating while a game or a queue runs, or Play
    * while a replay plays). The copy is then never written, removed or read back: one the manifest
@@ -210,6 +226,74 @@ export async function patchImage(
   }
 }
 
+export type PruneResult = { deleted: number; freeBytes: number };
+
+/**
+ * Deletes P+'s oldest replays (`PPLUS_REPLAY_DIR`, by the date and time in their names) from
+ * `image` when it has less than `lowFreeBytes` free, until `targetFreeBytes` are free or none is
+ * left. Nothing else on the card is touched, and with enough space the card is only read.
+ */
+export async function pruneGameReplays(
+  image: string,
+  opts: {
+    lowFreeBytes?: number;
+    targetFreeBytes?: number;
+    protectedPaths?: string[];
+    log?: (m: string) => void;
+  } = {},
+): Promise<PruneResult> {
+  const low = opts.lowFreeBytes ?? SD_LOW_FREE_BYTES;
+  const target = opts.targetFreeBytes ?? SD_PRUNED_FREE_BYTES;
+  const reader = await Fat32Volume.open(image);
+  let freeBytes: number;
+  try {
+    freeBytes = reader.freeClusters() * reader.clusterSize;
+  } finally {
+    await reader.close();
+  }
+  if (freeBytes >= low) {
+    return { deleted: 0, freeBytes };
+  }
+  await assertNotProtected(image, opts.protectedPaths ?? []);
+  const vol = await Fat32Volume.open(image, { writable: true });
+  let deleted = 0;
+  let before: string[];
+  let after: string[];
+  try {
+    before = await vol.check();
+    const dir = await vol.lookup(PPLUS_REPLAY_DIR);
+    const replays =
+      dir && dir.isDirectory
+        ? (await vol.listDir(dir.firstCluster))
+            .filter((e) => !e.isDirectory && PPLUS_REPLAY_NAME.test(e.name))
+            .map((e) => e.name)
+            .sort()
+        : [];
+    for (const name of replays) {
+      if (freeBytes >= target) {
+        break;
+      }
+      await vol.delete(`${PPLUS_REPLAY_DIR}/${name}`);
+      deleted++;
+      freeBytes = vol.freeClusters() * vol.clusterSize;
+    }
+    await vol.flush();
+    after = await vol.check();
+  } finally {
+    await vol.close();
+  }
+  const known = new Set(before);
+  const added = after.filter((p) => !known.has(p));
+  if (added.length > 0) {
+    throw new SdCardError(`FAT check failed after deleting P+ replays: ${added.slice(0, 5).join("; ")}`);
+  }
+  opts.log?.(
+    `SD card ${image} had little free space: deleted ${deleted} of P+'s oldest replays, ` +
+      `${(freeBytes / 1024 / 1024).toFixed(1)} MB free now`,
+  );
+  return { deleted, freeBytes };
+}
+
 async function readManifest(file: string): Promise<PatchedSdManifest | null> {
   try {
     const m = JSON.parse(await fs.promises.readFile(file, "utf8"));
@@ -239,12 +323,14 @@ async function exists(p: string): Promise<boolean> {
 
 /**
  * Makes sure `<outputDir>/sd.raw` is the user's card with the current plugin installed.
- * Idempotent: when nothing changed only the plugin is read back (~20 KB) and nothing is written.
+ * Idempotent: when nothing changed only the plugin and the FAT are read back and nothing is written.
  *
  * - copy missing, manifest missing, or source changed (path, size or mtime) → fresh copy + patch;
  * - plugin changed → the plugin is replaced inside the existing copy (keeps what the game wrote);
  * - otherwise the plugin is read back and re-written only if its sha256 does not match.
  * If patching the existing copy fails, the copy is recreated from the source once.
+ * Before the patch, a copy (or fresh copy) with little free space loses P+'s oldest replays
+ * (`pruneGameReplays`).
  * The manifest is written last, after the image verified.
  */
 export async function installPluginOnSdCard(opts: SdInstallOptions): Promise<SdInstallResult> {
@@ -273,6 +359,24 @@ export async function installPluginOnSdCard(opts: SdInstallOptions): Promise<SdI
     manifest.source.path !== source.path ||
     manifest.source.size !== source.size ||
     manifest.source.mtimeMs !== source.mtimeMs;
+
+  // A failed prune leaves the copy as it was (the FAT check after it found a problem the delete
+  // made, or the card could not be read): Play goes on, as before pruning existed.
+  const prune = async (img: string) => {
+    try {
+      await pruneGameReplays(img, {
+        lowFreeBytes: opts.prune?.lowFreeBytes,
+        targetFreeBytes: opts.prune?.targetFreeBytes,
+        protectedPaths,
+        log,
+      });
+    } catch (err) {
+      if (isBusy(err)) {
+        throw err;
+      }
+      log(`Could not delete P+'s old replays on ${img}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
 
   const finish = async (action: SdInstallAction): Promise<SdInstallResult> => {
     if (action !== "unchanged" || !manifest) {
@@ -307,6 +411,7 @@ export async function installPluginOnSdCard(opts: SdInstallOptions): Promise<SdI
         syncEvery: SD_COPY_SYNC_BYTES,
       });
       const copiedIn = ((Date.now() - started) / 1000).toFixed(1);
+      await prune(partial);
       await patchImage(partial, plugin.data, sdPath, { protectedPaths, log });
       how = `${how} in ${copiedIn} s`;
     } catch (err) {
@@ -339,6 +444,7 @@ export async function installPluginOnSdCard(opts: SdInstallOptions): Promise<SdI
   if (!imageExists || sourceChanged) {
     return freshCopy();
   }
+  await prune(image);
 
   const patchInPlace = async (action: "replaced" | "repaired"): Promise<SdInstallResult> => {
     await fs.promises.rm(manifestFile, { force: true });

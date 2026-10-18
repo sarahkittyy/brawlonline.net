@@ -8,7 +8,15 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
 import { PLUGIN_SD_PATH } from "./paths";
 import type { PluginBinary } from "./sd_card";
-import { installPluginOnSdCard, loadPlugin, readFileHashFromImage, SdCardInUseError, sha256 } from "./sd_card";
+import {
+  installPluginOnSdCard,
+  loadPlugin,
+  PPLUS_REPLAY_DIR,
+  pruneGameReplays,
+  readFileHashFromImage,
+  SdCardInUseError,
+  sha256,
+} from "./sd_card";
 
 let root: string;
 let dir: string;
@@ -320,6 +328,163 @@ describe("installPluginOnSdCard", () => {
     await expect(
       installPluginOnSdCard({ ...opts(plugin(1)), sourceImage: path.join(dir, "missing.raw") }),
     ).rejects.toThrow(/SD card was not found/);
+  });
+
+  // Bug report #48: P+'s autosaved replays filled the copy, and the game hung on the results screen.
+  it("deletes P+'s oldest replays from a copy that is nearly full before Play", async () => {
+    const p = plugin(7);
+    const first = await installPluginOnSdCard(opts(p));
+    const names = replayNames(40);
+    for (const name of names) {
+      await writeOnCard(first.image, `${PPLUS_REPLAY_DIR}/${name}`, pattern(30_000, 3));
+    }
+    await fillCard(first.image, 200_000);
+    const prune = { lowFreeBytes: 400_000, targetFreeBytes: 600_000 };
+
+    const res = await installPluginOnSdCard({ ...opts(p), prune });
+    expect(res.action).toBe("unchanged");
+    const left = await replaysOn(res.image);
+    expect(left.length).toBeGreaterThan(0);
+    expect(left.length).toBeLessThan(names.length);
+    expect(left).toEqual(names.slice(names.length - left.length)); // the newest are kept
+    expect(await freeBytes(res.image)).toBeGreaterThanOrEqual(prune.targetFreeBytes);
+    expect(await readFileHashFromImage(res.image, PLUGIN_SD_PATH)).toBe(p.sha256);
+    expect(logs.some((m) => /deleted \d+ of P\+'s oldest replays/.test(m))).toBe(true);
+    await checkCard(res.image);
+
+    // Enough space now: the next Play deletes nothing.
+    const again = await installPluginOnSdCard({ ...opts(p), prune });
+    expect(again.action).toBe("unchanged");
+    expect(await replaysOn(again.image)).toEqual(left);
+  });
+
+  it("prunes a fresh copy of a nearly full card before patching it", async () => {
+    for (const name of replayNames(20)) {
+      await writeOnCard(source, `${PPLUS_REPLAY_DIR}/${name}`, pattern(30_000, 4));
+    }
+    await fillCard(source, 100_000);
+    const srcHash = await fileHash(source);
+    const p = plugin(8, 150_000); // more than the source card has free
+
+    const res = await installPluginOnSdCard({ ...opts(p), prune: { lowFreeBytes: 400_000, targetFreeBytes: 600_000 } });
+    expect(res.action).toBe("copied");
+    expect(await readFileHashFromImage(res.image, PLUGIN_SD_PATH)).toBe(p.sha256);
+    expect((await replaysOn(res.image)).length).toBeLessThan(20);
+    expect(await fileHash(source)).toBe(srcHash); // the player's own card keeps its replays
+    await checkCard(res.image);
+  });
+});
+
+const replayNames = (n: number) =>
+  Array.from({ length: n }, (_, i) => {
+    const day = 11 + Math.floor(i / 10);
+    const minute = String(i % 10).padStart(2, "0");
+    return `rp_2610${day}_23${minute}_05.bin`;
+  });
+
+async function replaysOn(image: string): Promise<string[]> {
+  const vol = await Fat32Volume.open(image);
+  try {
+    const dir = await vol.lookup(PPLUS_REPLAY_DIR);
+    return dir
+      ? (await vol.listDir(dir.firstCluster))
+          .filter((e) => !e.isDirectory && e.name.startsWith("rp_"))
+          .map((e) => e.name)
+          .sort()
+      : [];
+  } finally {
+    await vol.close();
+  }
+}
+
+async function freeBytes(image: string): Promise<number> {
+  const vol = await Fat32Volume.open(image);
+  try {
+    return vol.freeClusters() * vol.clusterSize;
+  } finally {
+    await vol.close();
+  }
+}
+
+/** Writes a filler file so that about `leave` bytes stay free. */
+async function fillCard(image: string, leave: number) {
+  const free = await freeBytes(image);
+  await writeOnCard(image, "/Project+/pf/filler.bin", Buffer.alloc(Math.max(0, free - leave - 4096), 1));
+}
+
+async function checkCard(image: string) {
+  const vol = await Fat32Volume.open(image);
+  try {
+    expect(await vol.check()).toEqual([]);
+  } finally {
+    await vol.close();
+  }
+}
+
+describe("pruneGameReplays", () => {
+  let image: string;
+
+  beforeEach(async () => {
+    image = path.join(root, `prune-${n++}.raw`);
+    await makeEmptyFat32Image(image);
+    await writeOnCard(image, `${PPLUS_REPLAY_DIR}/Folder needed for autosave replays.txt`, Buffer.alloc(0));
+    await writeOnCard(image, "/Project+/pf/plugins/AsyncRSP.rel", pattern(7080, 1));
+  });
+
+  it("only reads a card with enough free space", async () => {
+    await writeOnCard(image, `${PPLUS_REPLAY_DIR}/rp_261011_2300_05.bin`, pattern(30_000, 2));
+    const hash = await fileHash(image);
+    const res = await pruneGameReplays(image, { lowFreeBytes: 1_000_000, targetFreeBytes: 2_000_000 });
+    expect(res.deleted).toBe(0);
+    expect(await fileHash(image)).toBe(hash);
+  });
+
+  it("deletes only P+'s replays, oldest first, and keeps the rest of the card", async () => {
+    const names = replayNames(30);
+    for (const name of [...names].reverse()) {
+      await writeOnCard(image, `${PPLUS_REPLAY_DIR}/${name}`, pattern(20_000, 5));
+    }
+    await writeOnCard(image, `${PPLUS_REPLAY_DIR}/my replay.bin`, pattern(1000, 6));
+    await fillCard(image, 50_000);
+
+    const res = await pruneGameReplays(image, { lowFreeBytes: 100_000, targetFreeBytes: 250_000 });
+    expect(res.freeBytes).toBeGreaterThanOrEqual(250_000);
+    const left = await replaysOn(image);
+    expect(left).toEqual(names.slice(res.deleted));
+    expect(res.deleted).toBeGreaterThanOrEqual(10);
+    expect(await readOnCard(image, `${PPLUS_REPLAY_DIR}/Folder needed for autosave replays.txt`)).not.toBeNull();
+    expect(await readOnCard(image, `${PPLUS_REPLAY_DIR}/my replay.bin`)).not.toBeNull();
+    expect(await readOnCard(image, "/Project+/pf/plugins/AsyncRSP.rel")).not.toBeNull();
+    await checkCard(image);
+    // The independent reader agrees.
+    const fat = await FatImage.open(image);
+    try {
+      expect(await fat.exists(`${PPLUS_REPLAY_DIR}/${names[0]}`)).toBe(false);
+      expect(await fat.exists(`${PPLUS_REPLAY_DIR}/${names[names.length - 1]}`)).toBe(true);
+    } finally {
+      await fat.close();
+    }
+  });
+
+  it("deletes every replay when that is still not enough, and stops there", async () => {
+    for (const name of replayNames(5)) {
+      await writeOnCard(image, `${PPLUS_REPLAY_DIR}/${name}`, pattern(10_000, 7));
+    }
+    await fillCard(image, 20_000);
+    const res = await pruneGameReplays(image, { lowFreeBytes: 1_000_000, targetFreeBytes: 2_000_000 });
+    expect(res.deleted).toBe(5);
+    expect(res.freeBytes).toBeLessThan(2_000_000);
+    expect(await replaysOn(image)).toEqual([]);
+    await checkCard(image);
+  });
+
+  it("does nothing on a card without a replay folder", async () => {
+    const bare = path.join(root, `prune-bare-${n++}.raw`);
+    await makeEmptyFat32Image(bare);
+    await fillCard(bare, 20_000);
+    const res = await pruneGameReplays(bare, { lowFreeBytes: 1_000_000, targetFreeBytes: 2_000_000 });
+    expect(res.deleted).toBe(0);
+    await checkCard(bare);
   });
 });
 
