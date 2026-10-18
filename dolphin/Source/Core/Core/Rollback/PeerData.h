@@ -244,6 +244,14 @@ void SanitizePortValues(std::array<u8, N>& pv)
 
 std::string TruncateName(const std::string& name);
 
+// What two machines' setup keys (GameplaySession.cpp SetupKey, whose layout this follows: keep
+// them in step) differ in, one line per field ("P2 costume 15, peer 17"), at most `max_lines`
+// and then a line saying how many more. The layout is walked by `mine`'s own flags (teams, stock
+// control); where the peer's differ, that field is named first and later offsets may not line up.
+// Empty when the keys are the same.
+std::vector<std::string> SetupKeyDiff(const std::vector<u8>& mine, const std::vector<u8>& theirs,
+                                      size_t max_lines = 16);
+
 // Why a peer's session gave up (its "leave" message's "why"), for our logs and status: printable
 // ASCII only (anything else becomes '?'), at most MAX_LEAVE_REASON_LEN characters.
 constexpr size_t MAX_LEAVE_REASON_LEN = 160;

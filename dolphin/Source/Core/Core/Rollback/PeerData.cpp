@@ -10,6 +10,8 @@
 #include <cstring>
 #include <string>
 
+#include <fmt/format.h>
+
 namespace Gprb::PeerData
 {
 bool JsonDepthOk(std::string_view text, int max_depth)
@@ -452,6 +454,84 @@ std::string LeaveReason(std::string_view why)
     if (c < 0x20 || c > 0x7E)
       c = '?';
   }
+  return out;
+}
+
+std::vector<std::string> SetupKeyDiff(const std::vector<u8>& mine, const std::vector<u8>& theirs,
+                                      size_t max_lines)
+{
+  std::vector<std::string> out;
+  size_t more = 0;
+  const auto add = [&](std::string line) {
+    if (out.size() < max_lines)
+      out.push_back(std::move(line));
+    else
+      ++more;
+  };
+  if (mine.size() != theirs.size())
+    add(fmt::format("length {} bytes, peer {}", mine.size(), theirs.size()));
+  const auto hex = [](const std::vector<u8>& k, size_t o, size_t n) {
+    if (o >= k.size())
+      return std::string("none");
+    std::string s;
+    for (size_t i = o; i < std::min(o + n, k.size()); ++i)
+      s += fmt::format("{:02x}", k[i]);
+    return s;
+  };
+  size_t o = 0;
+  const auto field = [&](size_t n, const std::string& name) {
+    const std::string a = hex(mine, o, n), b = hex(theirs, o, n);
+    if (a != b)
+      add(fmt::format("{} {}, peer {}", name, a, b));
+    o += n;
+  };
+  const auto at = [&](size_t i) -> u8 { return i < mine.size() ? mine[i] : 0; };
+
+  // The init block (gmGlobalModeMelee +0x08: stage kind, rules, time limit, stage variant).
+  constexpr size_t INIT = 0x20, INIT_TEAMS = 0x0B;
+  for (size_t i = 0; i < INIT; ++i)
+    field(1, fmt::format("init block +{:#04x}", i));
+  // Per player: character, state, stocks, costume, and in a team battle the team.
+  const bool teams = at(INIT_TEAMS) != 0;
+  for (int p = 1; p <= 4; ++p)
+  {
+    field(1, fmt::format("P{} character", p));
+    field(1, fmt::format("P{} state", p));
+    field(1, fmt::format("P{} stocks", p));
+    field(1, fmt::format("P{} costume", p));
+    if (teams)
+      field(1, fmt::format("P{} team", p));
+  }
+  // g_PadConfig: each GameCube pad's layout, then player -> pad.
+  static constexpr const char* PAD_BYTES[12] = {"L",       "R", "Z", "D-pad up", "D-pad side",
+                                                "D-pad down", "A", "B", "C-stick",  "Y",
+                                                "X",       "flags"};
+  for (int pad = 0; pad < 4; ++pad)
+  {
+    for (const char* b : PAD_BYTES)
+      field(1, fmt::format("pad {} {}", pad + 1, b));
+  }
+  for (int p = 1; p <= 4; ++p)
+    field(1, fmt::format("P{} pad", p));
+  // Brawl's set rule (16 bytes), then under stock control (+5 = 2) each player's handicap.
+  const size_t rule = o;
+  for (size_t i = 0; i < 0x10; ++i)
+    field(1, fmt::format("set rule +{:#04x}", i));
+  if (at(rule + 5) == 2)
+  {
+    for (int p = 1; p <= 4; ++p)
+      field(2, fmt::format("P{} stock control handicap", p));
+  }
+  field(1, "hazards");
+  for (size_t i = 0; i < 0x10; ++i)
+    field(1, fmt::format("item switch +{:#04x}", i));
+  // P+'s Code Menu values (4 bytes a line), then a desync restart's restored stocks, damage and
+  // time when there is one.
+  const size_t end = std::max(mine.size(), theirs.size());
+  for (int line = 0; o < end; ++line)
+    field(4, fmt::format("code menu value {} (or a restart's restore)", line));
+  if (more)
+    out.push_back(fmt::format("and {} more", more));
   return out;
 }
 }  // namespace Gprb::PeerData

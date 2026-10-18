@@ -564,3 +564,92 @@ TEST(PeerData, MalformedGekkoBundlesAreDropped)
   }
   EXPECT_FALSE(SplitGekkoBundle(flood.data(), flood.size()).has_value());
 }
+
+// A real setup key (GameplaySession SetupKey; bug report #40: KLON#285's game against SunnyPM,
+// P2 of a 1v1, no teams, no stock control).
+const char* const KEY_40 =
+    "002a81088020000000000000000000ff7800002103000000000070800000000014000400220004153e0300003e030000"
+    "0303040a0b0c00010c020b000303040a0b0c0001050a02800303040a0b0c0001050202800303040a0b0c000105020280"
+    "0001ffff0000010004000a0008010000000000002000000000000000007fffffff7fffffff0000000000000000000000"
+    "000000000000000001000000000000000000000000000000020000000000000000000000000000000000000000000000"
+    "0000000000000000010000000000000000000000000000000000000000000000003f0000000000000000000000000000"
+    "00000000000000000000000000000000003f000000000000000000000000000000000000000000000000000000000000"
+    "003f000000000000000000000000000000000000000000000000000000000000003f0000000000000000000000000000"
+    "0000000000000000000000000100000002000000033ecccccd3eaaaaab41f000003fc0000040c00000404000003f6666"
+    "663e19999a3f800000000000003f8000003f0000003f4ccccd3d50e56000000000000000000000000000000003000000"
+    "0100000e100000000040000000400000003f8000003f800000";
+
+static std::vector<u8> Key40()
+{
+  const std::string_view hex(KEY_40);
+  return *ParseHex(hex, hex.size() / 2);
+}
+
+TEST(PeerData, SetupKeyDiffNamesTheFields)
+{
+  const auto mine = Key40();
+  ASSERT_EQ(mine.size(), 457u);
+  EXPECT_TRUE(SetupKeyDiff(mine, mine).empty());
+
+  // A player's costume, a controller's C-stick and a Code Menu value (the key's +0x85 on).
+  auto theirs = mine;
+  theirs[0x23] = 0x17;
+  theirs[0x30 + 8] = 0x05;
+  theirs[0x85 + 2 * 4 + 3] = 0x01;
+  EXPECT_EQ(SetupKeyDiff(mine, theirs),
+            (std::vector<std::string>{
+                "P1 costume 00, peer 17", "pad 1 C-stick 0c, peer 05",
+                "code menu value 2 (or a restart's restore) 00000000, peer 00000001"}));
+
+  // The stage (init block +0x13) and the set rule.
+  theirs = mine;
+  theirs[0x13] = 0x04;
+  theirs[0x64 + 2] = 0x02;
+  EXPECT_EQ(SetupKeyDiff(mine, theirs),
+            (std::vector<std::string>{"init block +0x13 21, peer 04",
+                                      "set rule +0x02 01, peer 02"}));
+}
+
+TEST(PeerData, SetupKeyDiffFollowsTheKeysLayout)
+{
+  // A team battle: every player has a fifth byte, so everything after the players moves by 4.
+  auto mine = Key40();
+  mine[0x0B] = 1;
+  for (int p = 3; p >= 0; --p)
+    mine.insert(mine.begin() + 0x20 + 4 * p + 4, static_cast<u8>(p & 1));
+  auto theirs = mine;
+  theirs[0x20 + 5 + 4] = 0;           // P2 team
+  theirs[0x34 + 0x0C + 0x0B] = 0x00;  // pad 2 flags (tap jump off)
+  EXPECT_EQ(SetupKeyDiff(mine, theirs),
+            (std::vector<std::string>{"P2 team 01, peer 00", "pad 2 flags 80, peer 00"}));
+
+  // Stock control (set rule +5 = 2): each player's handicap follows the set rule.
+  mine = Key40();
+  mine[0x64 + 5] = 2;
+  const u8 handicaps[8] = {0, 30, 0, 20, 0, 0, 0, 0};
+  mine.insert(mine.begin() + 0x74, handicaps, handicaps + 8);
+  theirs = mine;
+  theirs[0x74 + 3] = 0;
+  theirs[0x74 + 8] = 0x00;  // hazards (on)
+  EXPECT_EQ(SetupKeyDiff(mine, theirs),
+            (std::vector<std::string>{"P2 stock control handicap 0014, peer 0000",
+                                      "hazards 20, peer 00"}));
+
+  // The peer's key is shorter, or ours.
+  mine = Key40();
+  theirs = mine;
+  theirs.resize(theirs.size() - 4);
+  EXPECT_EQ(SetupKeyDiff(mine, theirs),
+            (std::vector<std::string>{"length 457 bytes, peer 453",
+                                      "code menu value 80 (or a restart's restore) 3f800000, peer none"}));
+  EXPECT_EQ(SetupKeyDiff(theirs, mine).front(), "length 453 bytes, peer 457");
+
+  // At most max_lines, then how many more.
+  theirs = mine;
+  for (size_t i = 0; i < 0x10; ++i)
+    theirs[0x75 + i] = 0xFF;  // the item switch (10 of its bytes change)
+  const auto lines = SetupKeyDiff(mine, theirs, 3);
+  ASSERT_EQ(lines.size(), 4u);
+  EXPECT_EQ(lines[0], "item switch +0x00 00, peer ff");
+  EXPECT_EQ(lines[3], "and 7 more");
+}

@@ -722,6 +722,58 @@ def test_ranked_failed_start_is_a_disconnect(backend: OnlineBackend, dolphin: Ca
         assert pub["rank"]["ratingUpdateCount"] == 0, pub
 
 
+@pytest.mark.slow
+def test_setup_mismatch_logs_the_fields(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                        gpu_backend: str) -> None:
+    """Bug report #40 (2026-10-17): two players' games kept refusing their matches at the barrier
+    with "match setup differs" and only the two hashes in the logs, so which field differed was
+    not to be known without the other player's logs. Now the state message carries the setup key
+    and each machine logs the fields the other's differs in. PPR_GPRB_TEST_SETUP_DIFF=2 changes
+    P2's key's last byte (a Code Menu value): both machines must name that one field, and the
+    session still refuses the match as before."""
+    test = "setup-mismatch-fields"
+    env = {"PPR_GPRB_TEST_SETUP_DIFF": "2"}
+    ua = backend.create_user("svea", "SVEA")
+    ub = backend.create_user("sixten", "SIXT")
+    a = _boot(dolphin, "smf-a", backend, ua, gpu_backend, test, "gameplay", env=env)
+    b = _boot(dolphin, "smf-b", backend, ub, gpu_backend, test, "gameplay", env=env)
+    _both(a.to_main_menu, b.to_main_menu)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("ranked"), lambda: b.to_css("ranked"))
+    _to_ranked_css(a, b)
+    _search_ranked(a)
+    _search_ranked(b)
+    players = [a, b]
+    _paired(a, b)
+    host = a if _ranked(a)["local_port"] == 0 else b
+    join = b if host is a else a
+    _strike_to(host, join, 0x01)
+    for g in players:
+        _wait(lambda g=g: online_set.gstatus(g.c)["disconnected"] or None, 120,
+              f"{g.inst.name}: told of the drop", interval=0.05)
+    assert "PPR_GPRB_TEST_SETUP_DIFF" in _log(join)
+    field = re.compile(r"gprb: P(\d)'s setup differs from ours in: (code menu value \d+ \(or a restart's restore\) "
+                       r"([0-9a-f]{8}), peer ([0-9a-f]{8}))\n")
+    # Every machine whose own check failed names the field (one that only heard the other give up
+    # first has nothing to compare); in practice both do, as both wait at the barrier.
+    found = {}
+    for g, other_port in ((host, "2"), (join, "1")):
+        log = _log(g)
+        assert "match setup differs" in log
+        if "gprb: match setup differs (local" not in log:
+            continue
+        m = field.search(log)
+        assert m, f"{g.inst.name}: no field list in the log"
+        assert m.group(1) == other_port, m.group(0)
+        mine, theirs = int(m.group(3), 16), int(m.group(4), 16)
+        assert mine ^ theirs == 0xFF, m.group(0)   # only the last byte, all its bits
+        found[g.inst.name] = m.group(2)
+    assert found, "neither machine's check failed"
+    for g in players:
+        _wait(lambda g=g: online_set.scene(g.c) == online_set.CSS, 60, f"{g.inst.name}: back on the CSS")
+    print(found)
+
+
 G_MTRAND_SEED = 0x805A00BC   # g_mtRand's seed: randi, the match's RNG (GameplayRollback.h)
 CSS_RANDOM = 0x29
 

@@ -1258,6 +1258,19 @@ So a skipped pass cost about half a rendered one, and rollbacks of depth ~2 got 
 
 **What a deterministic version would need**, if this is picked up again: in a skipped pass, run the parts of `fn_8000E214` that change game memory and leave out only the GX command generation. At least the effect system's draw-time releases are needed, and probably g3d's world/view matrix calculation. That means mapping nw4r g3d's `ScnRoot` and nw4r ef's draw path in Brawl's DOL (no symbols for them), then the full sweep again (items, fs, ffs). Even then, depth-1 rollbacks would gain nothing unless each frame were also shown from its own pass (a change to the presentation path).
 
+## Phase 29: which fields a failed setup check differs in (bug report #40, 2026-10-18)
+
+**Report.** KLON#285 (bug #40, 2026-10-17): matched with SunnyPM three times in a row, "DISCONNECTED" each time. Every session ended at game frame 1 with `match setup differs (local ed0fb04d4e42017b, peer fd8e2b68b9b97ca0)`: the barrier's setup hashes differed. KLON's key matched its working games but for SunnyPM's tag controls, which are not the cause on their own (DR#950 plays with a custom layout). SunnyPM played no game with TIRE#6 right after either, and normally after restarting the game. DR#950's logs (bugs #49/#50) have the same failure against JMAC#179, who played no Unranked game in about 20 matches that evening while their room games (on the host's SD card) worked. Only the two hashes were exchanged and each machine logged only its own key, so which field differed could not be known without the other player's logs.
+
+**Change** (`GameplaySession.cpp`, `PeerData.cpp`):
+- At the barrier the state message carries the setup key (`setup_key`, hex, about 0.9 KB) and what else the hash covers (`setup_start`, `setup_cv`). The peer keeps the last one it got (its barrier may fail after ours has moved on).
+- When the hashes differ, each machine logs the fields the peer's key differs in (`PeerData::SetupKeyDiff`, which follows `SetupKey`'s layout: the init block's bytes, each player's character, state, stocks, costume and team, each pad's buttons and flags, the player → pad map, the set rule, stock control's handicaps, hazards, the item switch, the Code Menu values), e.g. `P1's setup differs from ours in: P1 costume 00, peer 17; pad 1 C-stick 0c, peer 05`, then the peer's key in full. With equal keys it logs the start frames and countdown input versions the hashes cover; a key that does not hash to the peer's hash is logged as stale, a missing one as an older build.
+- A replay whose match setup differs from the file's logs the same field list.
+- Nothing changes for the players: the match is refused as before.
+- Tests only: `PPR_GPRB_TEST_SETUP_DIFF=<port>` changes that player's key's last byte (a Code Menu value).
+
+**Tests.** `PeerData.SetupKeyDiffNamesTheFields` and `PeerData.SetupKeyDiffFollowsTheKeysLayout` (KLON's real key from the report: a costume, a C-stick, a Code Menu value, the stage, the set rule; a team battle's shifted layout, stock control's handicaps, keys of different lengths, the line limit). `harness/tests/test_online_ranked.py::test_setup_mismatch_logs_the_fields` (two instances, P2's key changed: the machines name that one Code Menu value).
+
 ## Open issues
 
 Resolved in Phase 6: the dual-core divergence (ground-collision list heads, gp-v11), the Peach article crash and the `GXWaitDrawDone` stalls (the GX FIFO ring tail), the 11-frame sync-test bursts (camera quake controller, gp-v12), stopping and re-attaching sounds. Resolved in Phase 8: every failure of the coverage sweep (gp-v13 to gp-v19, the file IO wait). Resolved in Phase 9: the nondeterministic render/effect hang (a load read the base snapshot while the eviction job was still merging into it). Resolved in Phase 12: the Smashville desync from frame 0 (issue 7).

@@ -27,6 +27,7 @@
 #include <SFML/Network/SocketSelector.hpp>
 #include <SFML/Network/UdpSocket.hpp>
 #include <fmt/format.h>
+#include <fmt/ranges.h>
 #include "Core/Online/Timeouts.h"
 #include <xxhash.h>
 
@@ -221,6 +222,11 @@ struct PeerView
   bool at_start = false;
   bool go = false;
   u64 setup_hash = 0;
+  // The bytes of its setup hash and what else the hash covers (its state's "setup_key",
+  // "setup_start", "setup_cv" at the barrier; older builds send none): for the log when they differ.
+  std::vector<u8> setup_key;
+  std::optional<u32> setup_start;
+  std::optional<u32> setup_cv;
   SyncBlock sync;
   u32 match_ports = 0;  // the host's match ports at the barrier (with its sync block)
   std::vector<std::vector<std::string>> task_order;
@@ -390,6 +396,7 @@ struct State
   bool go = false;
   u64 setup_hash = 0;
   std::vector<u8> setup_key;  // the bytes of setup_hash (SetupKey), for the replay
+  u32 setup_start = 0;        // the start frame setup_hash covers (StartFrame)
   // Start-of-match hotkeys (CountdownSlots): this player's held buttons when it reached the
   // barrier, and every port's countdown buttons (host: fixed once every player's is in; joiner:
   // the host's, copied with its sync block; replay: the file's).
@@ -1016,15 +1023,19 @@ constexpr u8 COUNTDOWN_INPUT_VERSION = 1;
 // The setup key, the session's start frame and how the countdown's input is made: peers that
 // would start the rollback on different frames (builds with different start frames) or run the
 // countdown with different input fail the barrier instead of desyncing.
-u64 SetupHash(const Guest& g, u32 start_frame)
+u64 HashSetupKey(std::vector<u8> key, u32 start_frame, u8 countdown_version)
 {
-  auto key = SetupKey(g);
   if (key.empty())
     return 0;
   for (int shift = 24; shift >= 0; shift -= 8)
     key.push_back(static_cast<u8>(start_frame >> shift));
-  key.push_back(COUNTDOWN_INPUT_VERSION);
+  key.push_back(countdown_version);
   return XXH3_64bits(key.data(), key.size());
+}
+
+u64 SetupHash(const Guest& g, u32 start_frame)
+{
+  return HashSetupKey(SetupKey(g), start_frame, COUNTDOWN_INPUT_VERSION);
 }
 
 std::string Hex(const std::vector<u8>& v)
@@ -2161,6 +2172,14 @@ void SendState(bool tick = false)
     o["setup"] = picojson::value(fmt::format("{:016x}", s.setup_hash));
     if (s.at_s)
       o["hold"] = picojson::value(static_cast<double>(s.hold));
+    // The setup hash's bytes while at the barrier (about 0.9 KB), so that a peer whose hash
+    // differs logs which fields do (bug report #40: only the hashes were known).
+    if (s.at_s && s.phase == Phase::Barrier && !s.setup_key.empty())
+    {
+      o["setup_key"] = picojson::value(Hex(s.setup_key));
+      o["setup_start"] = picojson::value(static_cast<double>(s.setup_start));
+      o["setup_cv"] = picojson::value(static_cast<double>(COUNTDOWN_INPUT_VERSION));
+    }
     o["lock"] = LockJson(s.local_lock);
     if (host && s.setup.game != 0)
       o["match_setup"] = SetupJson(s.setup);
@@ -2450,6 +2469,19 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
       for (u8 c : *h)
         v = (v << 8) | c;
       p.setup_hash = v;
+    }
+  }
+  // Kept until the next one: our barrier may fail after the peer has moved on from it.
+  if (const auto* x = get("setup_key"); x && x->is<std::string>())
+  {
+    const std::string& hex = x->get<std::string>();
+    if (const auto k = PeerData::ParseHex(hex, std::min<size_t>(hex.size() / 2, 4096)))
+    {
+      p.setup_key = *k;
+      const auto sf = PeerData::JsonUInt(get("setup_start"), 0xFFFFFFFF);
+      const auto cv = PeerData::JsonUInt(get("setup_cv"), 0xFF);
+      p.setup_start = sf ? std::optional<u32>(static_cast<u32>(*sf)) : std::nullopt;
+      p.setup_cv = cv ? std::optional<u32>(static_cast<u32>(*cv)) : std::nullopt;
     }
   }
   if (const auto* x = get("lock"); x && x->is<picojson::object>())
@@ -7351,6 +7383,8 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
   {
     WARN_LOG_FMT(BRAWLBACK, "replay: the match's setup differs from the recording's:\n  here {}\n  file {}",
                  Hex(key), Hex(s.pb.setup_key));
+    WARN_LOG_FMT(BRAWLBACK, "replay: it differs in (file as the peer): {}",
+                 fmt::join(PeerData::SetupKeyDiff(key, s.pb.setup_key), "; "));
     if (!s.pb.play_anyway)
       return fail("its match could not be rebuilt here (the setup differs)");
   }
@@ -7400,6 +7434,41 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
   PadsOnLoopTop(system);
   SetLoopDefault(ppc);
   return true;
+}
+
+// The barrier's setup hashes differ: which fields, from the key the peer sent with its hash (bug
+// report #40, where only the two hashes were logged and the other machine's logs were not to be
+// had). Both machines log it, each against the other's key.
+static void LogSetupDifference(int slot, const PeerView& p)
+{
+  if (p.setup_key.empty())
+  {
+    ERROR_LOG_FMT(BRAWLBACK, "gprb: P{} sent no setup key (an older build): our setup {}", slot + 1,
+                  Hex(s.setup_key));
+    return;
+  }
+  const u64 theirs = HashSetupKey(p.setup_key, p.setup_start.value_or(0),
+                                  static_cast<u8>(p.setup_cv.value_or(0)));
+  if (theirs != p.setup_hash)
+  {
+    ERROR_LOG_FMT(BRAWLBACK, "gprb: P{}'s setup key is not the one of its hash {:016x} (an older "
+                  "message): ours {}, P{}'s {}",
+                  slot + 1, p.setup_hash, Hex(s.setup_key), slot + 1, Hex(p.setup_key));
+    return;
+  }
+  const auto lines = PeerData::SetupKeyDiff(s.setup_key, p.setup_key);
+  if (lines.empty())
+  {
+    ERROR_LOG_FMT(BRAWLBACK,
+                  "gprb: P{}'s setup is the same as ours, but its hash covers start frame {} and "
+                  "countdown input v{} (ours {}, v{})",
+                  slot + 1, p.setup_start.value_or(0), p.setup_cv.value_or(0), s.setup_start,
+                  COUNTDOWN_INPUT_VERSION);
+    return;
+  }
+  ERROR_LOG_FMT(BRAWLBACK, "gprb: P{}'s setup differs from ours in: {}", slot + 1,
+                fmt::join(lines, "; "));
+  INFO_LOG_FMT(BRAWLBACK, "gprb: P{}'s setup: {}", slot + 1, Hex(p.setup_key));
 }
 
 bool OnLoopTop(const Core::CPUThreadGuard& guard)
@@ -7699,6 +7768,16 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     // The first frame of the match simulation: the barrier.
     s.setup_hash = SetupHash(g, StartFrame());
     s.setup_key = SetupKey(g);
+    s.setup_start = StartFrame();
+    // Tests (PPR_GPRB_TEST_SETUP_DIFF=<port 1-4>): that player's key has its last byte changed (a
+    // Code Menu value), as a machine that built another setup would have.
+    if (const char* diff = std::getenv("PPR_GPRB_TEST_SETUP_DIFF");
+        diff && std::atoi(diff) == s.local_slot + 1 && !s.setup_key.empty())
+    {
+      s.setup_key.back() ^= 0xFF;
+      s.setup_hash = HashSetupKey(s.setup_key, s.setup_start, COUNTDOWN_INPUT_VERSION);
+      WARN_LOG_FMT(BRAWLBACK, "gprb: PPR_GPRB_TEST_SETUP_DIFF: our setup key's last byte changed");
+    }
     s.task_order = TaskOrderNames(g);
     // The match's ports: a 1v1 is P1 and P2. With ports, the human ports of the game's own match
     // setup, which the peers compare (the setup hash): each must be this player or a peer of the
@@ -7787,6 +7866,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
       if (p.at_s && p.setup_hash != 0 && s.setup_hash != 0 && p.setup_hash != s.setup_hash &&
           differs.empty())
       {
+        LogSetupDifference(slot, p);
         differs = s.ported ? fmt::format("match setup differs (local {:016x}, P{} {:016x})",
                                          s.setup_hash, slot + 1, p.setup_hash) :
                              fmt::format("match setup differs (local {:016x}, peer {:016x})",
