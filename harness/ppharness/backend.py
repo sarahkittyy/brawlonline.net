@@ -95,7 +95,8 @@ class OnlineBackend:
                  latest_version: str = "0.1.0", min_app_version: str | None = None,
                  ticket_ttl_secs: int | None = None,
                  rulesets_file: str | os.PathLike[str] | None = None, keep: bool = False,
-                 mm_host: str = "127.0.0.1", spectate: str | None = None):
+                 mm_host: str = "127.0.0.1", spectate: str | None = None,
+                 rematch_hold_secs: int | None = 0):
         root = paths.workspace_root() / "run" / "backends"
         self.run_dir = Path(run_dir) if run_dir else root / f"be-{int(time.time())}-{secrets.token_hex(3)}"
         self.latest_version = latest_version
@@ -109,6 +110,9 @@ class OnlineBackend:
         self.mm_host = mm_host
         # mm's spectating kill switch (MM_SPECTATE: off, witness, on); None: mm's default (off).
         self.spectate = spectate
+        # MM_REMATCH_HOLD_SECS: tests pair the same two players again and again, so no hold by
+        # default; None: mm's own (30 s).
+        self.rematch_hold_secs = rematch_hold_secs
         self.pg_mode = ""
         self.admin_url = ""
         self.database_url = ""
@@ -334,6 +338,8 @@ class OnlineBackend:
             env["MM_RULESETS_FILE"] = str(self.rulesets_file.resolve())
         if self.spectate is not None:
             env["MM_SPECTATE"] = self.spectate
+        if self.rematch_hold_secs is not None:
+            env["MM_REMATCH_HOLD_SECS"] = str(self.rematch_hold_secs)
         mm = self._spawn("mm", env)
         deadline = time.monotonic() + 30
         while "mm listening" not in self.log_text("mm"):

@@ -25,14 +25,25 @@
 //!
 //! Three queues:
 //! - **Direct**: two tickets that name each other's codes are paired.
-//! - **Unranked**: a FIFO. The oldest waiting ticket is paired with the next one in arrival order
-//!   that is in its region (any region once either has waited `region_widen`) and that it did not
-//!   just fail to connect to. Slippi's tickets carry no region field, so the region comes from the
-//!   ticket's source address ([`crate::region`]); with no region table there is one bucket.
+//! - **Unranked**: a FIFO. The oldest waiting ticket is paired with the lowest-ping later ticket
+//!   (ties: arrival order) that is in its region (any region once either has waited
+//!   `region_widen`), within the ping limit, not the opponent it just played (until the hold) and
+//!   that it did not just fail to connect to. Slippi's tickets carry no region field, so the
+//!   region comes from the ticket's source address ([`crate::region`]); with no region table there
+//!   is one bucket.
 //! - **Ranked**: like Unranked, but the oldest ticket takes the closest-rated opponent whose
 //!   rating is within the rating band: `ranked_band` points, widened by `ranked_band_step` for
 //!   every `ranked_band_interval` the longer-waiting of the two has waited (design 2.3: ±150,
 //!   +50 every 15 s). The ratings are the accounts' Elo ([`common::ranked`]).
+//!
+//! Both queues hold back a pair whose estimated ping ([`crate::geo`]: GeoIP distance) is above the
+//! ping limit, `ping_limit` ms widened by `ping_limit_step` for every `ping_limit_interval` the
+//! longer-waiting of the two has waited, and no limit at all after `ping_limit_open` (100 ms,
+//! +40 every 10 s, open at 40 s: a 200 ms pair waits 30 s for someone closer). A pair without an
+//! estimate (an address the database does not place, or no database) is never held back. Two
+//! players who just played each other (each one's last Unranked or Ranked opponent, within
+//! `rematch_memory`) are held back the same way until the longer-waiting has waited
+//! `rematch_hold` (30 s), so anyone else searching meanwhile is paired first.
 //!
 //! Rooms (`crate::rooms`, `docs/rooms-protocol.md`) live on **online connections**: a game that
 //! is running and logged in keeps one connection open (`hello`, then `room-*` requests), which is
@@ -74,16 +85,19 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::chat::{chat_error, Candidate, ChatBook, ChatConfig, ChatReportRecord, GroupKind};
+use crate::geo::{estimate_rtt_ms, GeoDb, Loc};
 use crate::live::{LiveBook, LiveConfig, LiveStore};
 use crate::messages as msg;
-use crate::region::RegionMap;
 use crate::mod_rooms::{ModRoomBook, ModRoomsConfig};
+use crate::region::RegionMap;
 use crate::rooms::{MemberInfo, RoomBook, RoomsConfig};
 use crate::ruleset::Rulesets;
 use crate::versions::FeedVersions;
 
 /// How often the update feed (`update_feed_dir`) is read again.
 const FEED_REFRESH: Duration = Duration::from_secs(10);
+/// How often the GeoIP database file is checked for a new one.
+const GEOIP_REFRESH: Duration = Duration::from_secs(600);
 
 pub type ConnId = u64;
 
@@ -138,6 +152,21 @@ pub struct EngineConfig {
     pub ranked_band_step: f64,
     /// ... for every this long the longer-waiting player has waited.
     pub ranked_band_interval: Duration,
+    /// Where an address is, for the ping estimate of a pair (`MM_GEOIP_FILE`).
+    pub geoip: GeoDb,
+    /// Unranked and Ranked: the highest estimated ping (ms) of a pair at first ...
+    pub ping_limit: f64,
+    /// ... raised by this much ...
+    pub ping_limit_step: f64,
+    /// ... for every this long the longer-waiting player has waited ...
+    pub ping_limit_interval: Duration,
+    /// ... and no limit once the longer-waiting player has waited this long.
+    pub ping_limit_open: Duration,
+    /// Two players who just played each other are paired again only once the longer-waiting of
+    /// the two has waited this long ...
+    pub rematch_hold: Duration,
+    /// ... if their match was made within this long.
+    pub rematch_memory: Duration,
     /// Rooms: timeouts and limits. Their stages, items and rules are Direct's ruleset.
     pub rooms: RoomsConfig,
     /// Brawl Mods rooms (`mod_rooms.rs`).
@@ -171,6 +200,13 @@ impl Default for EngineConfig {
             ranked_band: 150.0,
             ranked_band_step: 50.0,
             ranked_band_interval: Duration::from_secs(15),
+            geoip: GeoDb::default(),
+            ping_limit: 100.0,
+            ping_limit_step: 40.0,
+            ping_limit_interval: Duration::from_secs(10),
+            ping_limit_open: Duration::from_secs(40),
+            rematch_hold: Duration::from_secs(30),
+            rematch_memory: Duration::from_secs(30 * 60),
             rooms: RoomsConfig::default(),
             mod_rooms: ModRoomsConfig::default(),
             hello_window: Window::new(10, Duration::from_secs(60)),
@@ -323,6 +359,8 @@ struct Waiting {
     target: String,
     lan: String,
     region: String,
+    /// Where the ticket's address is (GeoIP), for the ping estimate.
+    loc: Option<Loc>,
 }
 
 /// An online connection: a running, logged-in game (rooms, the online count).
@@ -385,6 +423,9 @@ pub struct Engine {
     /// Recently matched pairs (sorted uids), to space out re-pairing after a
     /// failed P2P connect.
     history: HashMap<(Uuid, Uuid), PairHistory>,
+    /// Each player's last Unranked or Ranked opponent and when that match was made, for the
+    /// rematch hold.
+    last_opponent: HashMap<Uuid, (Uuid, Instant)>,
     ticket_limiter: RateLimiter<Uuid>,
     ip_limiter: RateLimiter<IpAddr>,
     hello_limiter: RateLimiter<Uuid>,
@@ -397,6 +438,7 @@ pub struct Engine {
     /// The newest build of each platform (`update_feed_dir`), and when it was read.
     feed: FeedVersions,
     feed_read: Option<Instant>,
+    geoip_read: Option<Instant>,
 }
 
 fn hello_ok() -> HelloResp {
@@ -440,6 +482,7 @@ impl Engine {
             unranked: Vec::new(),
             ranked: Vec::new(),
             history: HashMap::new(),
+            last_opponent: HashMap::new(),
             ticket_limiter,
             ip_limiter,
             hello_limiter,
@@ -451,7 +494,16 @@ impl Engine {
             match_counter: 0,
             feed: FeedVersions::default(),
             feed_read: None,
+            geoip_read: None,
         }
+    }
+
+    fn refresh_geoip(&mut self, now: Instant) {
+        if self.geoip_read.is_some_and(|t| now.duration_since(t) < GEOIP_REFRESH) {
+            return;
+        }
+        self.geoip_read = Some(now);
+        self.cfg.geoip.refresh();
     }
 
     /// Replaces the newest build of each platform (what reading `update_feed_dir` gives).
@@ -1095,6 +1147,7 @@ impl Engine {
         Self::send(out, conn, &CreateTicketResp::ok());
         let Some(c) = self.conns.get_mut(&conn) else { return };
         let region = self.cfg.regions.region_of(c.addr);
+        let loc = self.cfg.geoip.locate(c.addr);
         c.state = State::Waiting(Waiting {
             since: now,
             user,
@@ -1103,9 +1156,10 @@ impl Engine {
             target: target.clone(),
             lan: p.lan,
             region: region.clone(),
+            loc,
         });
         if p.mode == Mode::Unranked {
-            tracing::info!(conn, %code, %region, queued = self.unranked.len() + 1, "unranked ticket waiting");
+            tracing::info!(conn, %code, %region, ?loc, queued = self.unranked.len() + 1, "unranked ticket waiting");
             self.unranked.push(conn);
             self.pair_queue(Mode::Unranked, now, wall, out);
         } else if p.mode == Mode::Ranked {
@@ -1113,7 +1167,7 @@ impl Engine {
                 State::Waiting(w) => Some(w.user.rating),
                 _ => None,
             });
-            tracing::info!(conn, %code, %region, ?rating, queued = self.ranked.len() + 1, "ranked ticket waiting");
+            tracing::info!(conn, %code, %region, ?loc, ?rating, queued = self.ranked.len() + 1, "ranked ticket waiting");
             self.ranked.push(conn);
             self.pair_queue(Mode::Ranked, now, wall, out);
         } else {
@@ -1195,6 +1249,7 @@ impl Engine {
                 target: room.clone(),
                 lan: p.lan,
                 region,
+                loc: None,
             });
         }
         if let Some(old) = outcome.replaced {
@@ -1236,6 +1291,7 @@ impl Engine {
 
     fn on_tick(&mut self, now: Instant, wall: DateTime<Utc>, out: &mut Vec<Output>) {
         self.refresh_feed(now);
+        self.refresh_geoip(now);
         let mut expired = Vec::new();
         let mut auth_late = Vec::new();
         let mut idle = Vec::new();
@@ -1265,7 +1321,7 @@ impl Engine {
             self.fail_ticket(out, id, text, None);
         }
         // Retry pairs that were held back by the re-pair backoff, and queued tickets whose
-        // region search or rating band has widened.
+        // region search, rating band or ping limit has widened or whose rematch hold is over.
         waiting.sort_unstable();
         for id in waiting {
             self.try_pair(now, wall, id, out);
@@ -1274,6 +1330,8 @@ impl Engine {
         self.pair_queue(Mode::Ranked, now, wall, out);
         let window = self.cfg.requeue_window;
         self.history.retain(|_, h| now.saturating_duration_since(h.last_match) < window);
+        let memory = self.cfg.rematch_memory;
+        self.last_opponent.retain(|_, (_, at)| now.saturating_duration_since(*at) < memory);
         self.rooms.tick(now, out);
         self.mod_rooms.tick(now);
         self.fail_room_tickets(out);
@@ -1337,6 +1395,8 @@ impl Engine {
             if self.queue(mode).len() == before {
                 break; // make_match refused; never loop forever
             }
+            self.last_opponent.insert(ua, (ub, now));
+            self.last_opponent.insert(ub, (ua, now));
         }
     }
 
@@ -1350,13 +1410,40 @@ impl Engine {
         self.cfg.ranked_band + self.cfg.ranked_band_step * steps
     }
 
+    /// The highest estimated ping (ms) a pair may have when the longer-waiting of the two has
+    /// waited `waited`.
+    fn ping_limit(&self, waited: Duration) -> f64 {
+        if waited >= self.cfg.ping_limit_open {
+            return f64::INFINITY;
+        }
+        let steps = if self.cfg.ping_limit_interval.is_zero() {
+            0.0
+        } else {
+            (waited.as_secs_f64() / self.cfg.ping_limit_interval.as_secs_f64()).floor()
+        };
+        self.cfg.ping_limit + self.cfg.ping_limit_step * steps
+    }
+
+    /// Whether `a` and `b` were each other's last opponent (within `rematch_memory`).
+    fn just_played(&self, now: Instant, a: Uuid, b: Uuid) -> bool {
+        let last = |x: Uuid, y: Uuid| {
+            self.last_opponent
+                .get(&x)
+                .is_some_and(|(o, at)| *o == y && now.saturating_duration_since(*at) < self.cfg.rematch_memory)
+        };
+        last(a, b) && last(b, a)
+    }
+
     /// The pair a queue makes next: the oldest ticket and a later one it can play. Same region
-    /// unless either has waited `region_widen`. Unranked takes the first such ticket in arrival
-    /// order; Ranked the closest-rated one within the rating band of the longer-waiting of the
-    /// two (ties: arrival order). A pair matched within `requeue_window` failed its P2P connect
-    /// (Slippi requeues with a new ticket): anyone else in the queue goes first; the same two
-    /// again only after the backoff, and not at all after `max_connect_failures`. Returns
-    /// (older, newer, failures so far).
+    /// unless either has waited `region_widen`; estimated ping within the ping limit of the
+    /// longer-waiting of the two (no estimate: always within). Unranked takes the lowest-ping
+    /// such ticket (no estimate counts as `ping_limit`; ties: arrival order); Ranked the
+    /// closest-rated one within the rating band of the longer-waiting of the two (ties: arrival
+    /// order). Two who just played each other wait until the longer-waiting has waited
+    /// `rematch_hold`. A pair matched within `requeue_window` failed its P2P connect (Slippi
+    /// requeues with a new ticket): anyone else in the queue goes first; the same two again only
+    /// after the backoff, and not at all after `max_connect_failures`. Returns (older, newer,
+    /// failures so far).
     fn next_queue_pair(&self, mode: Mode, now: Instant) -> Option<(ConnId, ConnId, u32)> {
         let ranked = mode == Mode::Ranked;
         let queue: Vec<(ConnId, &Waiting)> = self
@@ -1370,7 +1457,7 @@ impl Engine {
         let waited = |w: &Waiting| now.saturating_duration_since(w.since);
         let widened = |w: &Waiting| waited(w) >= self.cfg.region_widen;
         for (i, (a, wa)) in queue.iter().enumerate() {
-            // (ticket, rating difference); Unranked compares 0 everywhere, so the first wins.
+            // (ticket, rating difference or ping); the first of equals wins.
             let mut fresh: Option<(ConnId, f64)> = None;
             let mut retry: Option<(ConnId, u32, f64)> = None;
             for (b, wb) in &queue[i + 1..] {
@@ -1380,8 +1467,14 @@ impl Engine {
                 if wa.region != wb.region && !widened(wa) && !widened(wb) {
                     continue;
                 }
-                let diff = if ranked { (wa.user.rating - wb.user.rating).abs() } else { 0.0 };
-                if ranked && diff > self.rating_band(waited(wa).max(waited(wb))) {
+                let longer = waited(wa).max(waited(wb));
+                let ping = wa.loc.zip(wb.loc).map(|(la, lb)| estimate_rtt_ms(la, lb));
+                if ping.is_some_and(|p| p > self.ping_limit(longer)) {
+                    continue;
+                }
+                let diff =
+                    if ranked { (wa.user.rating - wb.user.rating).abs() } else { ping.unwrap_or(self.cfg.ping_limit) };
+                if ranked && diff > self.rating_band(longer) {
                     continue;
                 }
                 let recent = self
@@ -1389,6 +1482,9 @@ impl Engine {
                     .get(&pair_key(wa.user.uid, wb.user.uid))
                     .filter(|h| now.saturating_duration_since(h.last_match) < self.cfg.requeue_window);
                 let Some(h) = recent else {
+                    if longer < self.cfg.rematch_hold && self.just_played(now, wa.user.uid, wb.user.uid) {
+                        continue;
+                    }
                     if fresh.is_none_or(|(_, d)| diff < d) {
                         fresh = Some((*b, diff));
                     }
@@ -1463,9 +1559,14 @@ impl Engine {
         regions.sort_unstable();
         regions.dedup();
         let region = regions.join("+");
+        let ping_ms = match entrants.as_slice() {
+            [(_, _, a), (_, _, b)] => a.loc.zip(b.loc).map(|(la, lb)| estimate_rtt_ms(la, lb).round()),
+            _ => None,
+        };
         tracing::info!(
             %match_id,
             %region,
+            ?ping_ms,
             players = ?entrants.iter().map(|(_, a, w)| format!("{}@{}", w.code, a)).collect::<Vec<_>>(),
             "matched"
         );
@@ -2395,6 +2496,155 @@ mod tests {
         assert_eq!(m.len(), 1);
         assert_eq!(pair_of(&m[0]), pair_key(u[4].uid, u[5].uid));
         assert_eq!(m[0].region, "eu+na");
+    }
+
+    /// conn n connects from 203.0.113.n: 1-15 in New York, 16-31 in Sydney, 32-47 in London
+    /// (New York to Sydney about 240 ms, Sydney to London 250, New York to London 93).
+    fn geo_rules() -> EngineConfig {
+        let geoip = GeoDb::from_table(&[
+            ("203.0.113.0/28", 40.71, -74.01),
+            ("203.0.113.16/28", -33.87, 151.21),
+            ("203.0.113.32/28", 51.51, -0.13),
+        ]);
+        EngineConfig { geoip, ..Default::default() }
+    }
+
+    #[test]
+    fn unranked_high_ping_pair_waits_for_someone_closer() {
+        let mut h = Harness::new(geo_rules());
+        let u = h.users(6);
+        for c in [1, 16] {
+            h.connect(c, 41000);
+        }
+        // Sydney, then New York: about 240 ms apart, held back.
+        h.unranked(16, &u[0]);
+        assert!(matches(&h.unranked(1, &u[1])).is_empty());
+        // The limit is 100 ms, +40 every 10 s of the longer wait: 220 at 30 s, not enough.
+        assert!(matches(&h.advance(Duration::from_secs(25))).is_empty());
+        // Someone in London comes: 93 ms to New York, taken at once; Sydney keeps waiting.
+        h.connect(32, 41000);
+        let m = matches(&h.unranked(32, &u[2]));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[1].uid, u[2].uid));
+        assert_eq!(h.e.waiting_count(), 1);
+        // Another New York player, 26 s into Sydney's search: still held back until 40 s, when
+        // any ping will do.
+        h.now += Duration::from_secs(1);
+        h.connect(2, 41000);
+        assert!(matches(&h.unranked(2, &u[3])).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(13))).is_empty());
+        let m = matches(&h.advance(Duration::from_secs(1)));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[3].uid));
+
+        // A pair without an estimate (an address the database does not place) is never held.
+        h.connect(3, 41000);
+        h.connect_from(100, "198.51.100.7:41000");
+        h.unranked(3, &u[4]);
+        let m = matches(&h.unranked(100, &u[5]));
+        assert_eq!(pair_of(&m[0]), pair_key(u[4].uid, u[5].uid));
+    }
+
+    #[test]
+    fn unranked_takes_the_lowest_ping_of_several_opponents() {
+        let mut h = Harness::new(geo_rules());
+        let u = h.users(3);
+        for c in [16, 32] {
+            h.connect(c, 41000);
+        }
+        // Sydney and London wait (250 ms apart) until London's limit opens at 40 s ...
+        h.unranked(32, &u[0]);
+        h.unranked(16, &u[1]);
+        h.advance(Duration::from_secs(39));
+        // ... and then New York comes: London takes it (93 ms) over Sydney (any ping by now, but
+        // the higher one).
+        h.connect(1, 41000);
+        let m = matches(&h.unranked(1, &u[2]));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
+    }
+
+    #[test]
+    fn ranked_high_ping_pair_waits_too() {
+        let mut h = Harness::new(geo_rules());
+        let u = h.rated(&[1500.0, 1500.0, 1520.0]);
+        for c in [1, 16] {
+            h.connect(c, 41000);
+        }
+        h.ranked(1, &u[0]); // New York
+        assert!(matches(&h.ranked(16, &u[1])).is_empty()); // Sydney, the same rating
+        assert!(matches(&h.advance(Duration::from_secs(20))).is_empty());
+        h.connect(2, 41000);
+        // A New York player 20 points away beats the equal rating 240 ms away.
+        let m = matches(&h.ranked(2, &u[2]));
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
+    }
+
+    #[test]
+    fn players_who_just_played_wait_before_meeting_again() {
+        let mut h = Harness::new(EngineConfig::default());
+        let u = h.users(3);
+        let mut conn = 0;
+        let mut search = |h: &mut Harness, who: &MmUser| -> Vec<Output> {
+            conn += 1;
+            h.connect(conn, 41000);
+            h.unranked(conn, who)
+        };
+        search(&mut h, &u[0]);
+        assert_eq!(matches(&search(&mut h, &u[1])).len(), 1);
+
+        // Their game is over (past the failed-connect window) and both search again: held back.
+        h.now += Duration::from_secs(300);
+        h.advance(Duration::ZERO);
+        search(&mut h, &u[0]);
+        h.now += Duration::from_secs(2);
+        assert!(matches(&search(&mut h, &u[1])).is_empty());
+        // Someone else searching meanwhile is paired first.
+        h.now += Duration::from_secs(8);
+        let m = matches(&search(&mut h, &u[2]));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[2].uid));
+
+        // u1 still waits. Its last opponent was u0, but u0's is now u2: they meet at once.
+        let m = matches(&search(&mut h, &u[0]));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
+
+        // u0 and u1 just played: alone in the queue, they meet once the longer wait is 30 s.
+        h.now += Duration::from_secs(300);
+        h.advance(Duration::ZERO);
+        search(&mut h, &u[1]);
+        h.now += Duration::from_secs(5);
+        assert!(matches(&search(&mut h, &u[0])).is_empty());
+        assert!(matches(&h.advance(Duration::from_secs(24))).is_empty());
+        let m = matches(&h.advance(Duration::from_secs(1)));
+        assert_eq!(m.len(), 1);
+        assert_eq!(pair_of(&m[0]), pair_key(u[0].uid, u[1].uid));
+    }
+
+    #[test]
+    fn ranked_rematch_waits_too_and_memory_runs_out() {
+        let mut h = Harness::new(EngineConfig::default());
+        let u = h.rated(&[1500.0, 1510.0]);
+        let mut conn = 0;
+        let mut search = |h: &mut Harness, who: &MmUser| -> Vec<Output> {
+            conn += 1;
+            h.connect(conn, 41000);
+            h.ranked(conn, who)
+        };
+        search(&mut h, &u[0]);
+        assert_eq!(matches(&search(&mut h, &u[1])).len(), 1);
+        // A set later: held back for 30 s.
+        h.now += Duration::from_secs(900);
+        h.advance(Duration::ZERO);
+        search(&mut h, &u[0]);
+        assert!(matches(&search(&mut h, &u[1])).is_empty());
+        assert_eq!(matches(&h.advance(Duration::from_secs(30))).len(), 1);
+        // Over half an hour later they are strangers again.
+        h.now += Duration::from_secs(31 * 60);
+        h.advance(Duration::ZERO);
+        search(&mut h, &u[0]);
+        assert_eq!(matches(&search(&mut h, &u[1])).len(), 1);
     }
 
     #[test]

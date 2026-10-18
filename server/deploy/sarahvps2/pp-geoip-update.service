@@ -1,0 +1,28 @@
+# Monthly download of the GeoIP database mm estimates a pair's ping from (MM_GEOIP_FILE).
+# Started by pp-geoip-update.timer. mm opens the new file by itself; no restart.
+[Unit]
+Description=Brawl Online GeoIP database update (DB-IP City Lite)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ppserver
+Group=ppserver
+ExecStart=/opt/ppserver/libexec/pp-geoip-update.sh
+Environment=PP_GEOIP_DIR=/var/lib/ppserver/geoip
+UMask=0022
+Nice=19
+IOSchedulingClass=idle
+
+ReadWritePaths=/var/lib/ppserver/geoip
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+NoNewPrivileges=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+CapabilityBoundingSet=

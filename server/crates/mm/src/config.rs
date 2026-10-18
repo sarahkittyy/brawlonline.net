@@ -67,6 +67,33 @@ pub struct Config {
     #[arg(long, env = "MM_RANKED_BAND_STEP_SECS", default_value_t = 15)]
     pub ranked_band_step_secs: u64,
 
+    /// GeoIP database (DB-IP "IP to City Lite", `.mmdb`) for the ping estimate of a pair.
+    /// Replace it by renaming a new file over it; mm notices within 10 minutes. Without it no pair
+    /// is held back for ping. Production: /var/lib/ppserver/geoip/dbip-city-lite.mmdb.
+    #[arg(long, env = "MM_GEOIP_FILE")]
+    pub geoip_file: Option<std::path::PathBuf>,
+
+    /// Unranked and Ranked: the highest estimated ping (ms) of a pair at first ...
+    #[arg(long, env = "MM_PING_LIMIT_MS", default_value_t = 100.0)]
+    pub ping_limit_ms: f64,
+
+    /// ... raised by this many ms ...
+    #[arg(long, env = "MM_PING_LIMIT_STEP_MS", default_value_t = 40.0)]
+    pub ping_limit_step_ms: f64,
+
+    /// ... for every this many seconds the longer-waiting player has waited ...
+    #[arg(long, env = "MM_PING_LIMIT_STEP_SECS", default_value_t = 10)]
+    pub ping_limit_step_secs: u64,
+
+    /// ... and no limit once the longer-waiting player has waited this many seconds.
+    #[arg(long, env = "MM_PING_LIMIT_OPEN_SECS", default_value_t = 40)]
+    pub ping_limit_open_secs: u64,
+
+    /// Two players who just played each other are paired again only once the longer-waiting of
+    /// the two has waited this many seconds.
+    #[arg(long, env = "MM_REMATCH_HOLD_SECS", default_value_t = 30)]
+    pub rematch_hold_secs: u64,
+
     /// Maximum simultaneous ENet peers.
     #[arg(long, env = "MM_MAX_PEERS", default_value_t = 4000)]
     pub max_peers: usize,
@@ -120,6 +147,12 @@ impl Config {
             ranked_band: self.ranked_band.max(0.0),
             ranked_band_step: self.ranked_band_step.max(0.0),
             ranked_band_interval: Duration::from_secs(self.ranked_band_step_secs),
+            geoip: crate::geo::GeoDb::load(self.geoip_file.as_deref()),
+            ping_limit: self.ping_limit_ms.max(0.0),
+            ping_limit_step: self.ping_limit_step_ms.max(0.0),
+            ping_limit_interval: Duration::from_secs(self.ping_limit_step_secs),
+            ping_limit_open: Duration::from_secs(self.ping_limit_open_secs),
+            rematch_hold: Duration::from_secs(self.rematch_hold_secs),
             max_conns_per_ip: self.max_conns_per_ip.max(1),
             rooms: crate::rooms::RoomsConfig {
                 start_timeout: Duration::from_secs(self.room_start_timeout_secs.max(1)),
@@ -148,6 +181,12 @@ impl Config {
             ranked_band: 150.0,
             ranked_band_step: 50.0,
             ranked_band_step_secs: 15,
+            geoip_file: None,
+            ping_limit_ms: 100.0,
+            ping_limit_step_ms: 40.0,
+            ping_limit_step_secs: 10,
+            ping_limit_open_secs: 40,
+            rematch_hold_secs: 30,
             max_peers: 64,
             ticket_interval_secs: 2,
             max_conns_per_ip: 8,
