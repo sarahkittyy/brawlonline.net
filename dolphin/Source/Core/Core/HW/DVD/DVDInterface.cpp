@@ -40,7 +40,6 @@
 #include "Core/IOS/IOS.h"
 #include "Core/Movie.h"
 #include "Core/NetPlayClient.h"
-#include "Core/Rollback/MachineSession.h"
 #include "Core/System.h"
 
 #include "DiscIO/Blob.h"
@@ -1524,8 +1523,10 @@ void DVDInterface::ScheduleReads(u64 offset, u32 length, const DiscIO::Partition
     // has a chance to finish, hanging the game forever waiting on a completion that can never
     // catch up. Use a negligible latency instead so it always resolves through the real DI
     // interrupt within the same pass.
-    const bool rollback_active =
-        (NetPlay::IsNetPlayRunning() && NetPlay::IsInRollbackMode()) || Machine::IsArmed();
+    // Not in a whole-machine session (Machine::IsArmed): its rollbacks restore the read in flight
+    // with CoreTiming's events, and a game whose reads complete at once can behave differently
+    // (Cobalt 1.33's match music never started, bug report #57).
+    const bool rollback_active = NetPlay::IsNetPlayRunning() && NetPlay::IsInRollbackMode();
     const ReplyType chunk_reply_type = chunk_length == length ? reply_type : ReplyType::NoReply;
     dvd_thread.StartReadToEmulatedRAM(output_address, offset, chunk_length, partition,
                                       chunk_reply_type,
