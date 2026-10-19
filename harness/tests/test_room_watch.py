@@ -102,6 +102,13 @@ def test_a_sitter_watches_the_rooms_game(watch_backend: OnlineBackend,
     t1 = _play([a, b], 1, reports)
     _wait(lambda: _watch(c)["armed"] and c.scene() == MATCH, 120, "C watching game 1")
     assert _phase(c) != "running" or online_set.gstatus(c.c).get("mode") == "playback", online_set.gstatus(c.c)
+    # C's game is armed from the setup, which comes in the players' countdown, and the upload
+    # trickles from the game's start (2026-10-19): C's view runs a few seconds behind the players,
+    # not 13 s or more.
+    _wait(lambda: c.c.call("replay_status").get("shown", -1) >= 0, 60, "C's view of game 1 running")
+    lag = (online_set.gstatus(a.c).get("current_frame", 0) - c.c.call("replay_status")["shown"]) / 60
+    print(f"C's view of game 1 starts {lag:.1f} s behind the players", flush=True)
+    assert lag < 8, f"C's view started {lag:.1f} s behind the players"
     for g in (a, b):
         _wait(lambda: _watching_seen(g, 2), 30, f"{g.name}: C watching")
     c.steps("wait 240")

@@ -736,6 +736,7 @@ struct State
     std::shared_ptr<Replay::File> live_file;
     bool live = false;
     bool catch_up_at_start = false;  // ArmPlayback's `catch_up`
+    bool join_catch_up = false;      // ... and the barrier started that catch-up
     bool catch_up = false;
     // The catch-up a spectator starts with (not Go Live's) runs muted: the sound stream's volume
     // is 0 meanwhile and comes back from the user's settings after (UpdateSoundStream).
@@ -6782,6 +6783,7 @@ picojson::object PlaybackStatus()
     o["live_edge"] = picojson::value(static_cast<double>(LiveEdge()));
     o["buffering"] = picojson::value(s.pb.buffering);
     o["catching_up"] = picojson::value(s.pb.catch_up);
+    o["join_catch_up"] = picojson::value(s.pb.join_catch_up);
     o["catch_rate"] = picojson::value(s.pb.catch_rate);
   }
   return o;
@@ -7570,6 +7572,7 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
   // from its start watches it from the start (docs/design/spectating.md §6.2).
   if (s.pb.live && s.pb.catch_up_at_start && s.pb.file->pads.size() > LIVE_JOIN_CATCH_UP_FRAMES)
   {
+    s.pb.join_catch_up = true;
     s.pb.catch_up = true;
     s.pb.joining = true;
     s.pb.catch_frames = 0;

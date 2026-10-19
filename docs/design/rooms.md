@@ -62,9 +62,9 @@ A member who is not in the room's game (sitting out, or joined during it) watche
 
 | # | Topic | Decision |
 |---|---|---|
-| 30 | Start | **Automatic.** Everyone in the room who is not in the game is taken into watching it once its first frames come (about 10 s in: the upload's start hold, `spectating.md` §4.3), from the room CSS. No WATCH button. A player who joined well into a game catches up to the live edge first, as a spectator does. |
+| 30 | Start | **Automatic.** Everyone in the room who is not in the game is taken into watching it from the room CSS once its setup comes, in the players' countdown: the watcher's stage loads while the first frames come (about a second after the players' GO; the upload trickles from the game's start, `spectating.md` §4.3 "The start"), and its countdown starts with them, so it watches about 4-5 s behind (2026-10-19; about 13 s or more before). No WATCH button. A player who joined well into a game catches up to the live edge first, as a spectator does. |
 | 31 | Leave early | **START or B** ends the watch at once: back on the room CSS, and nothing more of that game is watched. The room's next game is watched again. |
-| 32 | The next game | **Finish, never block.** The watcher sees the game's end (normally a few seconds behind, up to about 10 s), then goes back to the room CSS. The room never waits for a watcher: while watching, a member is not waited for (a joiner who would play next too), so the next game can start without them, and they watch that one. |
+| 32 | The next game | **Finish, never block.** The watcher sees the game's end (normally about 4-5 s behind), then goes back to the room CSS. The room never waits for a watcher: while watching, a member is not waited for (a joiner who would play next too), so the next game can start without them, and they watch that one. |
 | 33 | The end line | Once the players' game is over and it still plays on the watcher's screen: **"Game ended, press B to return to CSS."**, a line top left (Dolphin's on-screen messages). |
 | 34 | Launcher | **Not busy.** A launcher click (another room, an invite, Play unranked/ranked) while watching ends the watch and goes ahead once the game is back on the room CSS. |
 | 35 | Others' cards | A watcher's card is the grey SIT OUT card with **WATCHING** on its plate (default, not asked). |

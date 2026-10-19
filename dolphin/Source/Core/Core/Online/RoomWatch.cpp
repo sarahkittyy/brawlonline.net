@@ -26,9 +26,6 @@ namespace Replay = Gprb::Replay;
 namespace Session = Gprb::Session;
 
 constexpr size_t MAX_JSON = 1024;
-// A game joined further in than this catches up to the live edge first (as spectating's mirror
-// does, Rollback/ReplayPlayback.cpp); one watched from about its start plays from its start.
-constexpr size_t JOIN_CATCH_UP_FRAMES = 20 * 60;
 // The game never left the room CSS for an armed watch (an older plugin, a menu kept open): this
 // game is not watched.
 constexpr Clock::duration LEAVE_CSS_TIMEOUT = std::chrono::seconds(10);
@@ -195,7 +192,6 @@ struct State
   bool armed = false;
   u32 armed_serial = 0;
   std::array<u8, 16> armed_uid{};
-  bool armed_catch_up = false;
   Clock::time_point armed_at{};
   size_t fed_size = 0;
   bool fed_done = false;
@@ -265,7 +261,9 @@ void EndWatch(std::vector<std::string>* out, bool done)
         r[k] = it->second;
     }
     r["left_early"] = picojson::value(s.leaving);
-    r["catch_up"] = picojson::value(s.armed_catch_up);
+    // Whether it caught up to the live edge first (decided at its barrier).
+    const auto joined = st.find("join_catch_up");
+    r["catch_up"] = joined != st.end() ? joined->second : picojson::value(false);
     if (!s.assembler.Games().empty())
       r["number"] = picojson::value(static_cast<double>(s.assembler.Games().front().number));
     s.results.emplace_back(r);
@@ -422,9 +420,14 @@ std::vector<std::string> Service(Clock::time_point now, const RoomInfo& room)
   }
   const Game& g = games.front();
   auto f = ParseGame(g);
-  if (!f || f->setup.empty() || f->pads.empty())
+  // Armed once its setup is here (it comes in the players' countdown): the match loads while its
+  // first frames come, and the playback's barrier waits for them, as spectating's mirror does
+  // (Rollback/ReplayPlayback.cpp). A game cut before any frames is not watched.
+  if (!f || f->setup.empty() || (f->pads.empty() && g.Done()))
     return out;
-  const bool catch_up = f->pads.size() > JOIN_CATCH_UP_FRAMES && f->endg.empty();
+  // A game joined well into (more than Session::LIVE_JOIN_CATCH_UP_FRAMES at its barrier) catches
+  // up to the live edge first; one watched from about its start plays from its start.
+  const bool catch_up = f->endg.empty();
   const size_t frames = f->pads.size();
   if (const auto e = Session::ArmPlayback(std::make_shared<const Replay::File>(std::move(*f)), false,
                                           false, true, catch_up, true))
@@ -444,7 +447,6 @@ std::vector<std::string> Service(Clock::time_point now, const RoomInfo& room)
   s.armed = true;
   s.armed_serial = Session::GetPlaybackView().serial;
   s.armed_uid = g.uid;
-  s.armed_catch_up = catch_up;
   s.armed_at = now;
   s.fed_size = g.bytes.size();
   s.fed_done = g.Done();
@@ -454,8 +456,8 @@ std::vector<std::string> Service(Clock::time_point now, const RoomInfo& room)
   s.next_toast = {};
   ++s.watched;
   s_watching = true;
-  INFO_LOG_FMT(NETPLAY, "RoomWatch: watching the room's game {} ({} frames so far{})", g.number,
-               frames, catch_up ? ", catching up" : "");
+  INFO_LOG_FMT(NETPLAY, "RoomWatch: watching the room's game {} ({} frames so far)", g.number,
+               frames);
   out.push_back(WatchJson(std::nullopt, true));
   s.watching_sent = true;
   return out;
