@@ -273,6 +273,12 @@ void SetWiimoteOverride(std::optional<WiimoteOverride> value);
 void SetLocalController(Controller controller);
 // A joiner's player answered the SD card's dialog (any thread).
 void SetSDSyncChoice(SDSyncChoice choice);
+// For a room's joiner (Online::ModsRoom, any thread): true while its session is not armed yet, its
+// SD card is still being compared with the session's, or its player has not agreed to download
+// the session's: its window waits (the launcher asks first); true too once its join failed (Dolphin
+// closes). False once the card is the session's or the download is agreed, and for a session that
+// is not a room's join. Its answer matters until it first says false.
+bool JoinerWaitsForSDCard();
 // "ask", "yes", "overwrite" or "no"; nullopt for anything else.
 std::optional<SDSyncChoice> ParseSDSyncChoice(std::string_view text);
 // The room's host moves a player (any thread): slots `from` and `to` (0-3) swap players at an

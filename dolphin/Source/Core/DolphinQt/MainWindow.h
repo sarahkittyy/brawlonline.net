@@ -139,6 +139,9 @@ private:
   void SetFullScreenResolution(bool fullscreen);
 
   void FullScreen();
+  // A room's joiner, minimized while the launcher asks about the SD card: shown (and fullscreen
+  // if asked for) once that is settled (Online::ModsRoom::HoldsJoinerWindow).
+  void ShowHeldModsWindow();
   void UnlockCursor();
   void ScreenShot();
 
@@ -261,6 +264,7 @@ private:
   bool m_stop_requested = false;
   bool m_exit_requested = false;
   bool m_fullscreen_requested = false;
+  bool m_mods_window_held = false;
   bool m_is_screensaver_inhibited = false;
   u32 m_state_slot = 1;
   std::unique_ptr<BootParameters> m_pending_boot;

@@ -579,6 +579,28 @@ bool TakeQuitRequest()
   return s_quit_requested.exchange(false);
 }
 
+bool HoldsJoinerWindow()
+{
+  // A join, from --mods-room (set before the main window) or PPR_MODS_ROOM: read once.
+  static const bool join = [] {
+    const char* env = !s_command_line.empty() ? s_command_line.c_str() : std::getenv("PPR_MODS_ROOM");
+    picojson::value v;
+    if (!env || !picojson::parse(v, std::string(env)).empty() || !v.is<picojson::object>())
+      return false;
+    return !Str(v.get<picojson::object>(), "join", 16).empty();
+  }();
+  if (!join)
+    return false;
+  {
+    std::lock_guard lk(s.mutex);
+    // A join that ends before its game ran (No to the SD card, the room gone): Dolphin closes
+    // without ever showing; the launcher says why.
+    if (s.done || s.leaving || s.quit_after_write)
+      return !s.ever_ran;
+  }
+  return Machine::JoinerWaitsForSDCard();
+}
+
 std::string BuildHash()
 {
   std::lock_guard lk(s.mutex);

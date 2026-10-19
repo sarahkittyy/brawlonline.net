@@ -254,7 +254,21 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
   restoreGeometry(settings.value(QStringLiteral("mainwindow/geometry")).toByteArray());
   if (!Settings::Instance().IsBatchModeEnabled())
   {
-    show();
+    // A room's joiner: minimized, without taking the focus, while the launcher asks its player
+    // about the SD card (the game boots and the card is compared meanwhile); shown by the timer
+    // below once that is settled, so it never covers the launcher's dialog.
+    if (Online::ModsRoom::HoldsJoinerWindow())
+    {
+      m_mods_window_held = true;
+      INFO_LOG_FMT(CORE, "Mods room: the window waits minimized for the SD card's answer");
+      // Not WA_ShowWithoutActivating: Qt on Windows then shows the window normally (not
+      // minimized); a first show minimized does not take the focus anyway.
+      showMinimized();
+    }
+    else
+    {
+      show();
+    }
   }
 
   InitControllers();
@@ -264,6 +278,8 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
   // game ("Configure", Online::ModsRoom).
   auto* mods_configure_timer = new QTimer(this);
   connect(mods_configure_timer, &QTimer::timeout, this, [this] {
+    if (m_mods_window_held && !Online::ModsRoom::HoldsJoinerWindow())
+      ShowHeldModsWindow();
     if (Online::ModsRoom::TakeConfigureRequest())
       ShowControllersWindow();
     // The launcher is about to start a game (Play, a room, Other Games) while this Dolphin is
@@ -499,7 +515,8 @@ void MainWindow::InitCoreCallbacks()
     if (state == Core::State::Uninitialized)
       OnStopComplete();
 
-    if (state == Core::State::Running && m_fullscreen_requested)
+    // A held joiner's window goes fullscreen once it is shown (ShowHeldModsWindow).
+    if (state == Core::State::Running && m_fullscreen_requested && !m_mods_window_held)
     {
       FullScreen();
       m_fullscreen_requested = false;
@@ -1231,6 +1248,34 @@ void MainWindow::FullScreen()
   }
 }
 
+void MainWindow::ShowHeldModsWindow()
+{
+  // The launcher (the foreground process, its player just answered there) started this Dolphin,
+  // so Windows lets it take the foreground.
+  m_mods_window_held = false;
+  INFO_LOG_FMT(CORE, "Mods room: the SD card is settled: the window shows");
+  setWindowState(windowState() & ~Qt::WindowMinimized);
+  show();
+  if (!m_rendering_to_main && m_render_widget->isMinimized())
+  {
+    // The game's own window (ShowRenderWidget held it), over the main window.
+    m_render_widget->showNormal();
+    m_render_widget->restoreGeometry(m_render_widget_geometry);
+    m_render_widget->raise();
+    m_render_widget->activateWindow();
+  }
+  else
+  {
+    raise();
+    activateWindow();
+  }
+  if (m_fullscreen_requested && Core::GetState(m_system) == Core::State::Running)
+  {
+    FullScreen();
+    m_fullscreen_requested = false;
+  }
+}
+
 void MainWindow::UnlockCursor()
 {
   if (!m_render_widget->isFullScreen())
@@ -1403,8 +1448,17 @@ void MainWindow::ShowRenderWidget()
     // Otherwise, just show it.
     m_rendering_to_main = false;
 
-    m_render_widget->showNormal();
-    m_render_widget->restoreGeometry(m_render_widget_geometry);
+    if (m_mods_window_held)
+    {
+      // A room's joiner: minimized, as the main window, until ShowHeldModsWindow (the game
+      // boots in it meanwhile).
+      m_render_widget->showMinimized();
+    }
+    else
+    {
+      m_render_widget->showNormal();
+      m_render_widget->restoreGeometry(m_render_widget_geometry);
+    }
   }
 }
 
