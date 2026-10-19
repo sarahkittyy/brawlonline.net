@@ -220,6 +220,8 @@ export type RulesetView = {
   link: string;
   /** Only in the account's own lists. */
   hidden?: boolean;
+  /** Games played with this version (each game of a set; a game without one that lasted 30 s). */
+  games: number;
 };
 
 /** An unpublished ruleset of the account's. */
@@ -234,7 +236,7 @@ export type RulesetDraft = {
   updatedAt: string;
 };
 
-/** `GET /v1/rulesets`: a page of the public list (newest first); `next` is the cursor of the page after it. */
+/** `GET /v1/rulesets`: a page of the public list (most played first, then newest); `next` is the cursor of the page after it. */
 export type RulesetPage = { rulesets: RulesetView[]; next: string | null };
 
 /** `GET /v1/me/rulesets`. */

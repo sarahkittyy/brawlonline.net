@@ -392,6 +392,12 @@ async fn record_chat_key(pool: PgPool, uid: Uuid, key: [u8; 32]) {
     }
 }
 
+async fn count_ruleset_game(pool: PgPool, code: String) {
+    if let Err(e) = db::count_ruleset_game(&pool, &code).await {
+        tracing::error!(%code, "counting a ruleset game failed: {e}");
+    }
+}
+
 /// Stores a chat report: each message's signature is checked against the reported account's
 /// identity keys (on a blocking thread: up to 20 messages × 20 keys), the texts are cleaned.
 async fn store_chat_report(pool: PgPool, r: ChatReportRecord) {
@@ -483,6 +489,9 @@ impl Loop {
             }
             Output::ChatReport(r) => {
                 self.db.rt.spawn(store_chat_report(self.db.pool.clone(), r));
+            }
+            Output::RulesetPlayed { code } => {
+                self.db.rt.spawn(count_ruleset_game(self.db.pool.clone(), code));
             }
             Output::FetchRulesetList { conn, uid } => {
                 let (pool, done) = (self.db.pool.clone(), self.db.ruleset_lists.clone());

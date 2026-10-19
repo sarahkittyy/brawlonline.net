@@ -29,6 +29,7 @@ export const RulesetsPageMessages = {
   retry: () => "Retry",
   // Rows
   version: (v: number) => `v${v}`,
+  played: (n: number) => (n === 1 ? "played 1 time" : `played ${n} times`),
   hiddenLabel: () => "Hidden",
   notReady: () => "Not ready",
   edit: () => "Edit",
@@ -43,7 +44,7 @@ export const RulesetsPageMessages = {
   lookupFailed: () => "Couldn't load this ruleset.",
   copied: () => "Copied",
   export: () => "Export",
-  forMyRooms: () => "Use for my rooms",
+  forMyRooms: () => "Use",
   inUse: () => "Used for your rooms",
   newerVersion: (v: number) => `v${v} is out`,
   // Editor

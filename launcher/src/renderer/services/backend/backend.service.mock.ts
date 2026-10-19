@@ -308,6 +308,7 @@ function mockWeekly(): RulesetView {
     createdAt: "2026-10-11T12:00:00.000Z",
     newer: null,
     link: "https://brawlonline.net/r/KFQBTR",
+    games: 1423,
   };
 }
 
@@ -407,7 +408,7 @@ class MockBackendClient implements BackendService {
   @delayAndMaybeError(SHOULD_ERROR)
   async fetchPublicRulesets(q: string, after?: string): Promise<RulesetPage> {
     const text = q.trim().toLowerCase();
-    // Each ruleset's newest visible version (same name and publisher in the mock), newest first.
+    // Each ruleset's newest visible version (same name and publisher in the mock), most played first.
     const latest = new Map<string, RulesetView>();
     for (const r of this.rulesets.filter((x) => !x.hidden)) {
       const key = `${r.ruleset.by}/${r.ruleset.name}`;
@@ -424,7 +425,7 @@ class MockBackendClient implements BackendService {
           r.ruleset.by.toLowerCase().includes(text) ||
           r.code.toLowerCase().includes(text),
       )
-      .sort((a, b) => b.createdAt.localeCompare(a.createdAt))
+      .sort((a, b) => b.games - a.games || b.createdAt.localeCompare(a.createdAt))
       .map(({ hidden: _hidden, ...r }) => ({ ...r, newer: null }));
     const start = after ? all.findIndex((r) => r.code === after) + 1 : 0;
     const rows = all.slice(start, start + 30);
@@ -467,6 +468,7 @@ class MockBackendClient implements BackendService {
       newer: null,
       link: `https://brawlonline.net/r/${code}`,
       hidden: false,
+      games: 0,
     };
     this.rulesets.push(view);
     this.drafts = this.drafts.filter((d) => d !== draft);

@@ -140,6 +140,12 @@ async fn mm_queries_work_as_pp_mm() {
     db::set_remembered_ruleset(&pool, b, None).await.unwrap();
     assert!(db::remembered_ruleset(&pool, b).await.unwrap().is_none());
     assert!(db::newer_ruleset_version(&pool, p.lineage, 1).await.unwrap().is_none());
+    // mm counts a game played with it (0014_ruleset_plays.sql), and only that.
+    assert_eq!(p.games, 0);
+    db::count_ruleset_game(&pool, code).await.unwrap();
+    assert_eq!(db::fetch_ruleset(&pool, code).await.unwrap().unwrap().games, 1);
+    let err = sqlx::query("DELETE FROM ruleset_plays").execute(&pool).await.unwrap_err();
+    assert!(err.to_string().contains("permission denied"), "{err}");
     // Drafts are not mm's, and mm can't publish or hide.
     let err = sqlx::query("SELECT json FROM ruleset_drafts").execute(&pool).await.unwrap_err();
     assert!(err.to_string().contains("permission denied"), "{err}");

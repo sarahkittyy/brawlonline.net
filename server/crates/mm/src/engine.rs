@@ -329,6 +329,10 @@ pub enum Output {
     },
     /// A `chat-report`: check its signatures and store it (`chat_reports`).
     ChatReport(ChatReportRecord),
+    /// A room game was played with this published ruleset (`ruleset_plays`).
+    RulesetPlayed {
+        code: String,
+    },
 }
 
 #[derive(Debug, Clone)]

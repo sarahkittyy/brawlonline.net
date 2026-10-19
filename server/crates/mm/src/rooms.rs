@@ -78,6 +78,9 @@ impl Default for RoomsConfig {
 
 /// How long after a room's game is over a member may still be watching it ([`RoomBook::tick`]).
 const WATCH_AFTER_GAME: Duration = Duration::from_secs(30);
+/// A room game without a set counts as played with the room's ruleset (`ruleset_plays`) when it
+/// lasted this long from its start (loading included): a quick quit does not count.
+const COUNT_GAME_AFTER: Duration = Duration::from_secs(30);
 
 /// Who a member is (from the verified account).
 #[derive(Debug, Clone, PartialEq)]
@@ -131,8 +134,15 @@ enum Phase {
     },
     /// `unreachable`: the pairs of slots (1-4, lower first) that reported they could not connect
     /// to each other (`room-unreachable`), each told to the room once. `players`: the game's
-    /// players (slot, account).
-    InGame { since: Instant, match_id: String, unreachable: BTreeSet<[u8; 2]>, players: Vec<(usize, Uuid)> },
+    /// players (slot, account). `set`: the session plays the room's set (its games are counted as
+    /// they are reported, not when it ends).
+    InGame {
+        since: Instant,
+        match_id: String,
+        unreachable: BTreeSet<[u8; 2]>,
+        players: Vec<(usize, Uuid)>,
+        set: bool,
+    },
 }
 
 #[derive(Debug, Clone)]
@@ -974,7 +984,7 @@ impl RoomBook {
         if starting {
             self.cancel_start(code, msg::PLAYER_LEFT, out);
         } else if in_game {
-            self.maybe_game_over(code);
+            self.maybe_game_over(now, code, out);
         }
         self.settle_pickers(code, before);
         self.broadcast(code, out);
@@ -1181,7 +1191,7 @@ impl RoomBook {
                     }
                     m.in_game = false;
                 }
-                self.maybe_game_over(&code);
+                self.maybe_game_over(now, &code, out);
             }
             RoomRequest::Rules { rules } => {
                 if !is_host {
@@ -1236,7 +1246,13 @@ impl RoomBook {
                 let set = room.set.as_mut().ok_or(msg::NO_SET_GAME)?;
                 match set.report(uid, game, winner_side, stage) {
                     room_set::Reported::Ignored => return Err(msg::NO_SET_GAME),
-                    r => tracing::info!(%code, game, winner_side, stage, ?r, "set game reported"),
+                    r => {
+                        tracing::info!(%code, game, winner_side, stage, ?r, "set game reported");
+                        // Each game of the set the players agree on (a quit or a runback is not one).
+                        if let (room_set::Reported::Counted, Some(ruleset)) = (r, &room.ruleset_code) {
+                            out.push(Output::RulesetPlayed { code: ruleset.clone() });
+                        }
+                    }
                 }
             }
             RoomRequest::Set { resume } => {
@@ -1443,11 +1459,17 @@ impl RoomBook {
         Ok(())
     }
 
-    /// Back to waiting once nobody is still in the game.
-    fn maybe_game_over(&mut self, code: &str) {
+    /// Back to waiting once nobody is still in the game. A game without a set that lasted
+    /// [`COUNT_GAME_AFTER`] counts as played with the room's published ruleset.
+    fn maybe_game_over(&mut self, now: Instant, code: &str, out: &mut Vec<Output>) {
         let Some(room) = self.rooms.get_mut(code) else { return };
         if matches!(room.phase, Phase::InGame { .. }) && room.members().all(|(_, m)| !m.in_game) {
             tracing::info!(%code, "room game over");
+            if let (Phase::InGame { since, set: false, .. }, Some(ruleset)) = (&room.phase, &room.ruleset_code) {
+                if now.saturating_duration_since(*since) >= COUNT_GAME_AFTER {
+                    out.push(Output::RulesetPlayed { code: ruleset.clone() });
+                }
+            }
             room.phase = Phase::Waiting;
             room.game_over_at = Some(Instant::now());
         }
@@ -1670,6 +1692,7 @@ impl RoomBook {
             match_id: match_id.clone(),
             unreachable: BTreeSet::new(),
             players: in_game.iter().map(|(i, m)| (*i, m.info.uid)).collect(),
+            set: room.set.as_ref().is_some_and(|s| s.on()),
         };
         for (i, slot) in room.slots.iter_mut().enumerate() {
             if let Some(m) = slot.as_mut().filter(|_| member_slots.contains(&i)) {
@@ -2412,9 +2435,82 @@ mod tests {
         t.book.apply_ruleset(&code, strike, Some("BCDFGH".into()), &mut out).unwrap();
         let out = t.req(1, req(stages(vec![1, 2, 0x21], vec![]), Some(StageChoice::LoserPicksList)));
         let s = last_state(&out, 1);
-        assert_eq!((s["ruleset"]["stageChoice"].clone(), s["ruleset"]["name"].clone()), ("strike".into(), "Custom".into()));
+        assert_eq!(
+            (s["ruleset"]["stageChoice"].clone(), s["ruleset"]["name"].clone()),
+            ("strike".into(), "Custom".into())
+        );
         assert_eq!(s["ruleset"]["basedOn"], "P+ default v0");
         assert_eq!(t.book.rooms[&code].ruleset.strikes, vec![1, 1]);
+    }
+
+    fn played(out: &[Output]) -> Vec<String> {
+        out.iter()
+            .filter_map(|o| match o {
+                Output::RulesetPlayed { code } => Some(code.clone()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// Games count for the room's published ruleset (`ruleset_plays`): a game without a set once
+    /// it lasted 30 s, each agreed game of a set (not a quit), never once the rules were edited.
+    #[test]
+    fn games_count_for_the_published_ruleset() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        join(&mut t, 2, &code);
+        let mut r = Ruleset { name: "Weekly".into(), version: 1, ..Default::default() };
+        r.normalize();
+        let mut out = vec![];
+        t.book.apply_ruleset(&code, r, Some("BCDFGH".into()), &mut out).unwrap();
+        let addr = |n: u8| SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16);
+        let start = |t: &mut T, ticket: ConnId| {
+            ready_all(t, &[1, 2]);
+            t.book.ticket(ticket, addr(1), String::new(), info(1).uid, &code).unwrap();
+            let done = t.book.ticket(ticket + 1, addr(2), String::new(), info(2).uid, &code).unwrap();
+            assert!(done.matched[0].1.set.is_none());
+        };
+        // A quick quit counts nothing; a game of 30 s and more counts once, when it is over.
+        start(&mut t, 101);
+        t.now += Duration::from_secs(10);
+        assert!(played(&t.req(1, RoomRequest::Back { pickers: None })).is_empty());
+        assert!(played(&t.req(2, RoomRequest::Back { pickers: None })).is_empty());
+        start(&mut t, 103);
+        t.now += Duration::from_secs(31);
+        assert!(played(&t.req(1, RoomRequest::Back { pickers: None })).is_empty());
+        assert_eq!(played(&t.req(2, RoomRequest::Back { pickers: None })), vec!["BCDFGH".to_string()]);
+        // Edited rules are Custom: nothing counts.
+        let rules = MatchRules { stocks: 2, ..t.book.rooms[&code].ruleset.rules.clone() };
+        t.req(1, RoomRequest::Rules { rules });
+        start(&mut t, 105);
+        t.now += Duration::from_secs(60);
+        t.req(1, RoomRequest::Back { pickers: None });
+        assert!(played(&t.req(2, RoomRequest::Back { pickers: None })).is_empty());
+
+        // A set: each game both report counts at once, however short; a quit (void) does not, nor
+        // does the set's end.
+        let mut r =
+            Ruleset { name: "Bo3".into(), version: 1, best_of: 3, strikes: vec![1, 2, 1], ..Default::default() };
+        r.normalize();
+        let mut out = vec![];
+        t.book.apply_ruleset(&code, r, Some("CDFGHJ".into()), &mut out).unwrap();
+        play(&mut t, &code, 107);
+        t.req(1, RoomRequest::Result { game: 1, winner_side: 0, stage: 0x21 });
+        assert_eq!(
+            played(&t.req(2, RoomRequest::Result { game: 1, winner_side: 0, stage: 0x21 })),
+            vec!["CDFGHJ".to_string()]
+        );
+        t.req(1, RoomRequest::Result { game: 2, winner_side: common::rooms::SIDE_VOID, stage: 0x21 });
+        assert!(played(&t.req(2, RoomRequest::Result { game: 2, winner_side: common::rooms::SIDE_VOID, stage: 0x21 }))
+            .is_empty());
+        t.req(1, RoomRequest::Result { game: 2, winner_side: 0, stage: 0x21 });
+        assert_eq!(
+            played(&t.req(2, RoomRequest::Result { game: 2, winner_side: 0, stage: 0x21 })),
+            vec!["CDFGHJ".to_string()]
+        );
+        t.now += Duration::from_secs(600);
+        t.req(1, RoomRequest::Back { pickers: None });
+        assert!(played(&t.req(2, RoomRequest::Back { pickers: None })).is_empty());
     }
 
     /// Players 1 and 2 ready up and their tickets come in (as `ticket..ticket+1`): the set ticket.

@@ -56,6 +56,8 @@ pub struct RulesetView {
     pub newer: Option<NewerVersion>,
     /// `<PUBLIC_BASE_URL>/r/<code>`: the page to share.
     pub link: String,
+    /// Games played with this version (`ruleset_plays`: a room's games with it unchanged).
+    pub games: i64,
     /// Only in the owner's own lists.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub hidden: Option<bool>,
@@ -73,6 +75,7 @@ async fn view(state: &AppState, p: PublishedRuleset, own: bool) -> ApiResult<Rul
         created_at: p.created_at,
         newer,
         hidden: own.then_some(p.hidden),
+        games: p.games,
     })
 }
 
@@ -272,6 +275,7 @@ pub async fn publish(
             }
             Err(e) => return Err(e.into()),
         }
+        sqlx::query("INSERT INTO ruleset_plays (code) VALUES ($1)").bind(&candidate).execute(&mut *tx).await?;
         if let Some(id) = draft {
             sqlx::query("DELETE FROM ruleset_drafts WHERE id = $1 AND owner = $2")
                 .bind(id)
@@ -355,26 +359,28 @@ pub struct BrowseQuery {
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct BrowsePage {
-    /// Newest first.
+    /// The most played first, then newest.
     pub rulesets: Vec<RulesetView>,
     /// Pass as `after` for the next page; null on the last.
     pub next: Option<String>,
 }
 
+// "r2": games, then created_at and code ("r1", without games, was the newest-first list's).
 fn browse_cursor(p: &PublishedRuleset) -> String {
-    cursor::encode("r1", &[&p.created_at.timestamp_micros().to_string(), &p.code])
+    cursor::encode("r2", &[&p.games.to_string(), &p.created_at.timestamp_micros().to_string(), &p.code])
 }
 
-fn parse_browse_cursor(c: &str) -> Option<(DateTime<Utc>, String)> {
-    let f = cursor::decode("r1", c, 2)?;
-    let at = DateTime::from_timestamp_micros(f[0].parse().ok()?)?;
-    Some((at, parse_ruleset_code(&f[1])?))
+fn parse_browse_cursor(c: &str) -> Option<(i64, DateTime<Utc>, String)> {
+    let f = cursor::decode("r2", c, 3)?;
+    let at = DateTime::from_timestamp_micros(f[1].parse().ok()?)?;
+    Some((f[0].parse().ok()?, at, parse_ruleset_code(&f[2])?))
 }
 
 /// `GET /v1/rulesets?q=&limit=&after=`: the public list (the user's decision, 2026-10-12: every
-/// published ruleset is public). Of each ruleset its newest version that is not hidden, newest
-/// first, in pages (`next`). `q` matches the name, the publisher's name and the code,
-/// case-insensitively. For anyone; limited per client IP together with the code lookup
+/// published ruleset is public). Of each ruleset its newest version that is not hidden, the most
+/// played first (that version's own games; the user's, 2026-10-19), then newest, in pages
+/// (`next`). `q` matches the name, the publisher's name and the code, case-insensitively. For
+/// anyone; limited per client IP together with the code lookup
 /// ([`common::ratelimit::RULESET_LOOKUP_IP_WINDOWS`]). 400 `bad_cursor` for a cursor it did not
 /// give out.
 pub async fn browse(
@@ -398,7 +404,7 @@ pub async fn browse(
     let mut rows = db::browse_rulesets(
         &state.pool,
         text.as_deref(),
-        after.as_ref().map(|(at, code)| (*at, code.as_str())),
+        after.as_ref().map(|(games, at, code)| (*games, *at, code.as_str())),
         n as i64 + 1,
     )
     .await?;
@@ -420,6 +426,7 @@ pub async fn browse(
             created_at: p.created_at,
             newer: None,
             hidden: None,
+            games: p.games,
         })
         .collect();
     Ok(Json(BrowsePage { rulesets, next }))

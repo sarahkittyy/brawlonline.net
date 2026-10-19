@@ -454,7 +454,7 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
         <div className={styles.editorColumn} data-testid="ruleset-view">
           <div className={styles.editorHeader}>
             <Typography variant="h6">{rulesetTitle(viewed)}</Typography>
-            <span className={clsx(styles.unsaved, styles.code)}>{viewed.code}</span>
+            <CodeCopy code={viewed.code} onCopy={copy} className={styles.headerCode} />
             {viewed.hidden && <span className={styles.unsaved}>{Messages.hiddenLabel()}</span>}
           </div>
           <div className={styles.editorScroll}>
@@ -462,11 +462,6 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
           </div>
           <div className={styles.editorFooter}>
             <div className={styles.viewActions}>
-              <Tooltip title={Messages.copyCode()}>
-                <IconButton size="small" onClick={() => copy(viewed.code)} aria-label={Messages.copyCode()}>
-                  <ContentCopyIcon fontSize="small" />
-                </IconButton>
-              </Tooltip>
               <Button color="secondary" sx={{ textTransform: "none" }} onClick={() => copy(viewed.link)}>
                 {Messages.copyLink()}
               </Button>
@@ -645,7 +640,7 @@ export const RulesetsPage = React.memo(function RulesetsPage() {
   );
 });
 
-const PublishedRow = ({
+export const PublishedRow = ({
   view,
   inUse,
   selected,
@@ -675,19 +670,14 @@ const PublishedRow = ({
         {view.ruleset.name} <span className={styles.itemVersion}>{Messages.version(view.ruleset.version)}</span>
       </span>
       <span className={styles.itemMeta}>
-        <span className={styles.code}>{view.code}</span>
-        <span>{setSummary(view.ruleset)}</span>
+        <CodeCopy code={view.code} onCopy={onCopy} />
+        <RowSummary view={view} />
         {view.hidden && <span>{Messages.hiddenLabel()}</span>}
         {view.newer && <span>{Messages.newerVersion(view.newer.version)}</span>}
         {inUse && <span className={styles.inUse}>{Messages.inUse()}</span>}
       </span>
     </button>
     <div className={styles.itemActions}>
-      <Tooltip title={Messages.copyLink()}>
-        <IconButton size="small" onClick={() => onCopy(view.link)} aria-label={Messages.copyLink()}>
-          <ContentCopyIcon fontSize="inherit" />
-        </IconButton>
-      </Tooltip>
       <Tooltip title={Messages.export()}>
         <IconButton size="small" onClick={onExport} aria-label={Messages.export()}>
           <FileDownloadOutlinedIcon fontSize="inherit" />
@@ -712,7 +702,7 @@ const PublishedRow = ({
   </div>
 );
 
-const PublicRow = ({
+export const PublicRow = ({
   view,
   inUse,
   selected,
@@ -734,17 +724,12 @@ const PublicRow = ({
         <span className={styles.itemBy}>{Messages.by(view.ruleset.by)}</span>
       </span>
       <span className={styles.itemMeta}>
-        <span className={styles.code}>{view.code}</span>
-        <span>{setSummary(view.ruleset)}</span>
+        <CodeCopy code={view.code} onCopy={onCopy} />
+        <RowSummary view={view} />
         {inUse && <span className={styles.inUse}>{Messages.inUse()}</span>}
       </span>
     </button>
     <div className={styles.itemActions}>
-      <Tooltip title={Messages.copyLink()}>
-        <IconButton size="small" onClick={() => onCopy(view.link)} aria-label={Messages.copyLink()}>
-          <ContentCopyIcon fontSize="inherit" />
-        </IconButton>
-      </Tooltip>
       {!inUse && (
         <Button size="small" color="secondary" sx={{ textTransform: "none" }} onClick={onUse}>
           {Messages.forMyRooms()}
@@ -753,6 +738,53 @@ const PublicRow = ({
     </div>
   </div>
 );
+
+/** "No set · random stage · played 1423 times": a narrow row breaks the line before "· played", not inside it. */
+export const RowSummary = ({ view }: { view: RulesetView }) => (
+  <span>
+    {setSummary(view.ruleset)} <span className={styles.noWrap}>· {Messages.played(view.games)}</span>
+  </span>
+);
+
+/**
+ * A ruleset's code with a copy icon to its left: a click on either copies the code. Inside a row's main button it is
+ * a span (a button can't hold a button) that keeps the click from opening the ruleset.
+ */
+export const CodeCopy = ({
+  code,
+  onCopy,
+  className,
+}: {
+  code: string;
+  onCopy: (text: string) => void;
+  className?: string;
+}) => {
+  const copyIt = (e: React.SyntheticEvent) => {
+    e.stopPropagation();
+    e.preventDefault();
+    onCopy(code);
+  };
+  return (
+    <Tooltip title={Messages.copyCode()}>
+      <span
+        role="button"
+        tabIndex={0}
+        className={clsx(styles.codeCopy, className)}
+        onClick={copyIt}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            copyIt(e);
+          }
+        }}
+        aria-label={`${Messages.copyCode()} ${code}`}
+        data-testid="copy-code"
+      >
+        <ContentCopyIcon className={styles.codeCopyIcon} />
+        <span className={styles.code}>{code}</span>
+      </span>
+    </Tooltip>
+  );
+};
 
 const CopyLine = ({
   label,

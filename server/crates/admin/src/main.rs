@@ -47,6 +47,33 @@ enum Cmd {
     /// Ranked: ranks and placement (docs/design/ranked-tiers.md).
     #[command(subcommand)]
     Ranked(RankedCmd),
+    /// Published rulesets (docs/rulesets-protocol.md). CODE is a ruleset code (one version).
+    #[command(subcommand)]
+    Ruleset(RulesetCmd),
+}
+
+#[derive(Subcommand)]
+enum RulesetCmd {
+    /// Delete a published version for good (its /r/ link stops working): its game count, and
+    /// every account's remembered or recent use of it; drafts made from it keep their rules.
+    Delete {
+        code: String,
+        /// Every version of the ruleset, not only CODE.
+        #[arg(long)]
+        all_versions: bool,
+        /// Required: confirms the deletion.
+        #[arg(long)]
+        yes: bool,
+    },
+    /// Rename a published version (its JSON and hash too). The name must pass the publisher's
+    /// own rule. Match history keeps the name it was played under.
+    Rename {
+        code: String,
+        name: String,
+        /// Every version of the ruleset, not only CODE.
+        #[arg(long)]
+        all_versions: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -311,6 +338,21 @@ async fn main() -> anyhow::Result<()> {
                 println!("  ... {} more", v.moved.len() - 15);
             }
         }
+        Cmd::Ruleset(RulesetCmd::Delete { code, all_versions, yes }) => {
+            anyhow::ensure!(yes, "this deletes ruleset {code} for good; add --yes to confirm");
+            let c = admin::delete_ruleset(&pool, &actor, &code, all_versions).await?;
+            for (code, version, name) in &c.changed {
+                println!("deleted {code} ({name:?} v{version})");
+            }
+            print_other_versions(&c.others);
+        }
+        Cmd::Ruleset(RulesetCmd::Rename { code, name, all_versions }) => {
+            let c = admin::rename_ruleset(&pool, &actor, &code, &name, all_versions).await?;
+            for (code, version, from) in &c.changed {
+                println!("{code} v{version} renamed from {from:?} to {name:?}");
+            }
+            print_other_versions(&c.others);
+        }
         Cmd::ChatReports { limit } => {
             let reports = admin::unhandled_chat_reports(&pool, limit.clamp(1, 1000)).await?;
             if reports.is_empty() {
@@ -481,4 +523,11 @@ async fn main() -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+fn print_other_versions(others: &[(String, i32)]) {
+    if !others.is_empty() {
+        let list: Vec<String> = others.iter().map(|(c, v)| format!("{c} (v{v})")).collect();
+        println!("left alone: {} (--all-versions includes them)", list.join(", "));
+    }
 }

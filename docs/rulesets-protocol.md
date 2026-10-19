@@ -37,12 +37,28 @@ _Phase 3a of `docs/design/room-rules.md` §8 (2026-10-11): the ruleset format, p
 
 | Table | What |
 |---|---|
-| `rulesets` | Published versions: `code` (PK), `owner` (NULL once the account is deleted), `lineage` (every version of one ruleset), `version`, `name`, `publisher_name`, `json` (canonical, text), `hash`, `hidden`, `created_at`. A trigger refuses every change but `hidden` (and the owner going to NULL) and every delete. |
+| `rulesets` | Published versions: `code` (PK), `owner` (NULL once the account is deleted), `lineage` (every version of one ruleset), `version`, `name`, `publisher_name`, `json` (canonical, text), `hash`, `hidden`, `created_at`. A trigger refuses every change but `hidden` (and the owner going to NULL) and every delete, except in an operator's transaction (`pp-admin ruleset`, §2.2). |
+| `ruleset_plays` | `code` (PK, the version), `games`: games played with it (§2.1). `0014_ruleset_plays.sql`; a row per version, 0 when published. |
 | `ruleset_drafts` | The owner's unpublished rulesets (`json` as sent; may not validate), `based_on` (the published version it edits). |
 | `remembered_rulesets` | One per account (decision 11). No row: P+ default. |
 | `ruleset_recent` | The rulesets the account made its remembered one, newest 10 kept. |
 
-mm's role `pp_mm` may read `rulesets` and read and write `remembered_rulesets` and `ruleset_recent` (`common::db::fetch_ruleset`, `remembered_ruleset`, `set_remembered_ruleset`, `recent_rulesets`, `newer_ruleset_version`), never drafts; `e2e/tests/mm_grants.rs` checks it.
+mm's role `pp_mm` may read `rulesets` and read and write `remembered_rulesets` and `ruleset_recent` (`common::db::fetch_ruleset`, `remembered_ruleset`, `set_remembered_ruleset`, `recent_rulesets`, `newer_ruleset_version`), never drafts; it reads `ruleset_plays` and adds to `games` (`count_ruleset_game`). `e2e/tests/mm_grants.rs` checks it.
+
+### 2.1 Games played (the user's, 2026-10-19)
+
+Each published version counts the games played with it, for the public list's order (most played first) and the rows' "played N times". mm adds one (`Output::RulesetPlayed`, `server/crates/mm/src/rooms.rs`) for a game in a room that plays the version unchanged:
+
+- **In a set**, each game both sides report the same (`room-result`, `Reported::Counted`), however short. A quit (void) or a salty runback is no game; a game lost by leaving mid-game is not counted either.
+- **Without a set**, a game that lasted 30 s (`COUNT_GAME_AFTER`, from the match start, loading included) once everyone is back. A runback restarts the same match: one game. A game that ran past `game_max` without its end reported counts nothing.
+- **Never** once the host edits the room's rules, stages or best-of (the room plays Custom), nor in Ranked, Unranked, Direct, a P+-default room or Other Games rooms. One game is one count, whatever the number of players; watchers add nothing.
+- **A new version starts at 0**: its predecessors' games stay theirs (the user's: a version with one rule changed "doesn't deserve the plays").
+
+Counting is best effort (a database error is logged). The migration seeded every version **once** with the estimate the match records gave: every room match recorded with its code since `0009_match_rulesets.sql` (2026-10-11), one per match, so a whole set counted as one game and quick quits counted too. From then on only mm adds.
+
+### 2.2 Operator changes (`pp-admin ruleset`)
+
+`pp-admin ruleset rename CODE NAME [--all-versions]` renames a version (with the flag, every version of its ruleset): the `name` column, the JSON and so the hash. The name must pass the publisher's rule (`Ruleset::validate`). `pp-admin ruleset delete CODE [--all-versions] --yes` deletes it for good: its `/r/` link stops working, its game count goes, and so does every account's remembered or recent use of it; a draft made from it keeps its rules but no longer edits it. Both print the ruleset's versions they left alone and write an audit row (`ruleset.rename`, `ruleset.delete`). They set `pp.ruleset_admin` for their transaction, which the trigger lets through. Match history keeps the name and hash a game was played under (a deleted one's link finds nothing). A room playing a deleted version in mm plays it on until its rules change, and counts nothing.
 
 ## 3. accounts API
 
@@ -58,16 +74,17 @@ A **ruleset view** (`RulesetView`):
   "createdAt": "2026-10-11T21:30:00Z",
   "newer": { "code": "MNPQRS", "version": 4 },
   "link": "https://brawlonline.net/r/KFQBTR",
-  "hidden": false
+  "hidden": false,
+  "games": 1423
 }
 ```
 
-`newer` is the newest later version that is not hidden (null if none). `hidden` is only in the owner's own lists.
+`newer` is the newest later version that is not hidden (null if none). `hidden` is only in the owner's own lists. `games` is how many games were played with this version (§2.1).
 
 | Endpoint | What |
 |---|---|
 | `POST /v1/rulesets` | Publish. Body `{"draftId": "<uuid>"}` (the draft is deleted once published) or `{"ruleset": {...}, "basedOn": "<code>"?}`. Based on one of the account's own rulesets: that ruleset's next version (409 `unchanged` if it plays the same as the newest version, ignoring `version` and `by`); based on someone else's, or on nothing: version 1 of a new ruleset. 201 with the view. 400 `invalid_ruleset` with the reason; 404 `unknown_ruleset` for a `basedOn` nobody published. Needs an account that can play online: 403 `email_not_verified` (when verification is required), 403 `not_activated` (no connect code yet). |
-| `GET /v1/rulesets?q=&limit=&after=` | Public: the public list (the user's decision, 2026-10-12: **every published ruleset is public**). Of each ruleset (lineage) its newest version that is not hidden, newest first, in pages of `limit` (default 30, at most 100; **defaults**): `{"rulesets": [view...], "next": cursor | null}`, `after` = the last page's `next`. `q` (64 characters at most) matches the name, the publisher's name and the code, case-insensitively, anywhere in them (`%` and `_` are plain text). Limited per IP together with the code lookup (**default**). 400 `bad_cursor`. Indexes: `0010_rulesets_browse.sql`. |
+| `GET /v1/rulesets?q=&limit=&after=` | Public: the public list (the user's decision, 2026-10-12: **every published ruleset is public**). Of each ruleset (lineage) its newest version that is not hidden, the most played first (that version's own `games`, §2.1), then newest, in pages of `limit` (default 30, at most 100; **defaults**): `{"rulesets": [view...], "next": cursor | null}`, `after` = the last page's `next`. `q` (64 characters at most) matches the name, the publisher's name and the code, case-insensitively, anywhere in them (`%` and `_` are plain text). Limited per IP together with the code lookup (**default**). 400 `bad_cursor`. Indexes: `0010_rulesets_browse.sql`. |
 | `GET /v1/rulesets/<code>` | Public: any published ruleset, hidden ones too. 404 `unknown_ruleset`. Limited per IP. |
 | `GET /v1/rulesets/<code>/preview` | Public: an HTML page for link previews (Discord and the like), titled `<name> v<version> by <publisher>` (also `og:title`), with no description, so the embed shows only that. nginx sends unfurlers' `/r/<code>` here (§4). 404 `unknown_ruleset`. Limited per IP with the lookup. |
 | `GET /v1/me/rulesets` | `{"drafts": [draft...], "published": [view...]}`: drafts newest edit first, published newest first, hidden ones included. |
@@ -84,7 +101,7 @@ Published versions are never changed or deleted, by the API or by hand (the trig
 
 ## 4. Launcher and links
 
-- **Rulesets page** (launcher, `/rulesets`), one column top to bottom (the user's layout, 2026-10-12): drafts (create, edit every field, save, delete), the account's published rulesets (hide / show, edit as a new version, copy the link), then **Public rulesets** with a search bar (300 ms debounce, **default**) and infinite scrolling over `GET /v1/rulesets`. Each row: name, version, "by <publisher>", code and the set ("Bo3 · strikes 1-2-1 · 2 bans"). A published or public row opens the read-only preview (rules, set, strikes, bans, stages, items with icons) with copy code / link and Use for my rooms, plus edit and hide for the account's own; a draft opens in the editor. Both lists refresh with the refresh button, when the page opens and when the window comes back into focus. Import and export of a ruleset as a JSON file (the format above; `by`, `version` ignored on import).
+- **Rulesets page** (launcher, `/rulesets`), one column top to bottom (the user's layout, 2026-10-12): drafts (create, edit every field, save, delete), the account's published rulesets (hide / show, edit as a new version, copy the link), then **Public rulesets** with a search bar (300 ms debounce, **default**) and infinite scrolling over `GET /v1/rulesets`. Each row: name, version, "by <publisher>", the code with a copy icon to its left (a click on either copies the code; 2026-10-19), and the set and its games ("Bo3 · strikes 1-2-1 · 2 bans · played 1423 times"); "Use" (was "Use for my rooms") and no copy-link icon on the row. A published or public row opens the read-only preview (rules, set, strikes, bans, stages, items with icons) with the same code chip in its header (no copy-code button at the bottom), Copy link and Use, plus edit and hide for the account's own; a draft opens in the editor. Both lists refresh with the refresh button, when the page opens and when the window comes back into focus. Import and export of a ruleset as a JSON file (the format above; `by`, `version` ignored on import).
 - **Code box** next to Home's **Create room**: the remembered ruleset's code with its name and publisher beside it, read from and saved to `GET`/`PUT /v1/me/ruleset`; X clears it (P+ default). Create room writes the code into `join-room.json` (`docs/rooms-game-interface.md`): `{"kind": "create", "ruleset": "<code>"}`.
 - **URL scheme** `brawlonline://`, registered on Windows, macOS and Linux (electron-builder `protocols`; `app.setAsDefaultProtocolClient` for unpackaged and AppImage runs). `brawlonline://room/create?ruleset=<code>` makes the code the remembered ruleset (when logged in) and creates a room with it, as Create room does. Anything else is ignored (logged).
 - **`https://brawlonline.net/r/<code>`** (`website/r/index.html`): the ruleset (name, by, version, every rule, the stages, the set format, a "newer version" link) from `GET /v1/rulesets/<code>`, with **Create room with this ruleset** (opens `brawlonline://room/create?ruleset=<code>`) and a download link for visitors without the launcher. nginx serves `r/index.html` for every `/r/<code>`, except to link previews (a `User-Agent` with Discordbot, Twitterbot, Slackbot, facebookexternalhit, TelegramBot, WhatsApp, ... in it; `$brawl_unfurler` in the nginx site): they don't run the script, so they get `GET /v1/rulesets/<code>/preview`, and the embed reads e.g. "Auto L Cancel v1 by sarahkitty" with no description (the user's, 2026-10-12). The static page has no description either.

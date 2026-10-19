@@ -191,6 +191,8 @@ pub struct PublishedRuleset {
     pub hash: String,
     pub hidden: bool,
     pub created_at: DateTime<Utc>,
+    /// Games played with this version (`ruleset_plays`).
+    pub games: i64,
 }
 
 #[derive(sqlx::FromRow)]
@@ -204,6 +206,7 @@ struct RulesetRow {
     hash: String,
     hidden: bool,
     created_at: DateTime<Utc>,
+    games: i64,
 }
 
 impl RulesetRow {
@@ -220,13 +223,15 @@ impl RulesetRow {
             hash: self.hash,
             hidden: self.hidden,
             created_at: self.created_at,
+            games: self.games,
         })
     }
 }
 
 /// The columns of [`RulesetRow`], for `FROM rulesets r LEFT JOIN users u ON u.uid = r.owner`.
 pub const RULESET_COLS: &str = "r.code, r.owner, r.lineage, r.version, \
-     COALESCE(u.display_name, r.publisher_name) AS by, r.json, r.hash, r.hidden, r.created_at";
+     COALESCE(u.display_name, r.publisher_name) AS by, r.json, r.hash, r.hidden, r.created_at, \
+     COALESCE((SELECT p.games FROM ruleset_plays p WHERE p.code = r.code), 0) AS games";
 
 /// A published ruleset by its code (already normalized: [`crate::rules::parse_ruleset_code`]).
 pub async fn fetch_ruleset(pool: &sqlx::PgPool, code: &str) -> sqlx::Result<Option<PublishedRuleset>> {
@@ -347,32 +352,42 @@ fn like_escape(s: &str) -> String {
 }
 
 /// The public list of rulesets (`GET /v1/rulesets`): of every ruleset (lineage) its newest version
-/// that is not hidden, newest first (`created_at`, then `code`, both descending). `query` matches
-/// the name, the publisher's name and the code, case-insensitively, anywhere in them. `after` is
-/// the last row of the previous page; at most `limit` rows.
+/// that is not hidden, the most played first (that version's own games), then newest (`created_at`,
+/// then `code`, both descending). `query` matches the name, the publisher's name and the code,
+/// case-insensitively, anywhere in them. `after` is the last row of the previous page (its games,
+/// `created_at` and code); at most `limit` rows.
 pub async fn browse_rulesets(
     pool: &sqlx::PgPool,
     query: Option<&str>,
-    after: Option<(DateTime<Utc>, &str)>,
+    after: Option<(i64, DateTime<Utc>, &str)>,
     limit: i64,
 ) -> sqlx::Result<Vec<PublishedRuleset>> {
     let pattern = query.map(|q| format!("%{}%", like_escape(q)));
     let rows: Vec<RulesetRow> = sqlx::query_as(&format!(
         "WITH latest AS (
-             SELECT DISTINCT ON (lineage) code FROM rulesets WHERE NOT hidden ORDER BY lineage, version DESC)
-         SELECT {RULESET_COLS} FROM latest l
-           JOIN rulesets r ON r.code = l.code LEFT JOIN users u ON u.uid = r.owner
-          WHERE ($1::text IS NULL OR r.name ILIKE $1 OR COALESCE(u.display_name, r.publisher_name) ILIKE $1
-                 OR r.code ILIKE $1)
-            AND ($2::timestamptz IS NULL OR (r.created_at, r.code) < ($2, $3))
-          ORDER BY r.created_at DESC, r.code DESC
-          LIMIT $4"
+             SELECT DISTINCT ON (lineage) code FROM rulesets WHERE NOT hidden ORDER BY lineage, version DESC),
+         listed AS (
+             SELECT {RULESET_COLS} FROM latest l
+               JOIN rulesets r ON r.code = l.code LEFT JOIN users u ON u.uid = r.owner
+              WHERE ($1::text IS NULL OR r.name ILIKE $1 OR COALESCE(u.display_name, r.publisher_name) ILIKE $1
+                     OR r.code ILIKE $1))
+         SELECT * FROM listed
+          WHERE $2::bigint IS NULL OR (games, created_at, code) < ($2, $3, $4)
+          ORDER BY games DESC, created_at DESC, code DESC
+          LIMIT $5"
     ))
     .bind(pattern)
     .bind(after.map(|a| a.0))
-    .bind(after.map(|a| a.1.to_string()).unwrap_or_default())
+    .bind(after.map(|a| a.1))
+    .bind(after.map(|a| a.2.to_string()).unwrap_or_default())
     .bind(limit)
     .fetch_all(pool)
     .await?;
     rows.into_iter().map(RulesetRow::into_published).collect()
+}
+
+/// One more game played with the published ruleset `code` (mm, best effort): a version deleted
+/// since (pp-admin) has no row and counts nothing.
+pub async fn count_ruleset_game(pool: &sqlx::PgPool, code: &str) -> sqlx::Result<()> {
+    sqlx::query("UPDATE ruleset_plays SET games = games + 1 WHERE code = $1").bind(code).execute(pool).await.map(|_| ())
 }

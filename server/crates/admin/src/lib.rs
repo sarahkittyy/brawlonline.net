@@ -464,3 +464,128 @@ pub async fn delete_bug_reports(
     }
     Ok(found)
 }
+
+/// What `ruleset delete` / `ruleset rename` changed: the versions (code, version, name before),
+/// and the ruleset's other versions it left alone.
+#[derive(Debug)]
+pub struct RulesetChange {
+    pub changed: Vec<(String, i32, String)>,
+    pub others: Vec<(String, i32)>,
+}
+
+/// The published versions `code` names: itself, or with `all_versions` every version of its
+/// ruleset; and the ruleset's other versions. Locked for the transaction.
+async fn ruleset_versions(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    code: &str,
+    all_versions: bool,
+) -> anyhow::Result<RulesetChange> {
+    let code = common::rules::parse_ruleset_code(code).ok_or_else(|| anyhow::anyhow!("{code:?} is no ruleset code"))?;
+    let lineage: uuid::Uuid = sqlx::query_scalar("SELECT lineage FROM rulesets WHERE code = $1")
+        .bind(&code)
+        .fetch_optional(&mut **tx)
+        .await?
+        .ok_or_else(|| anyhow::anyhow!("no ruleset {code}"))?;
+    let rows: Vec<(String, i32, String)> =
+        sqlx::query_as("SELECT code, version, name FROM rulesets WHERE lineage = $1 ORDER BY version FOR UPDATE")
+            .bind(lineage)
+            .fetch_all(&mut **tx)
+            .await?;
+    let (changed, others): (Vec<_>, Vec<_>) = rows.into_iter().partition(|r| all_versions || r.0 == code);
+    Ok(RulesetChange { changed, others: others.into_iter().map(|(c, v, _)| (c, v)).collect() })
+}
+
+/// Lets this transaction change published rulesets (0014_ruleset_plays.sql).
+async fn ruleset_admin(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> sqlx::Result<()> {
+    sqlx::query("SET LOCAL pp.ruleset_admin = 'on'").execute(&mut **tx).await.map(|_| ())
+}
+
+async fn audit_tx(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    actor: &str,
+    action: &str,
+    target: &str,
+    detail: serde_json::Value,
+) -> sqlx::Result<()> {
+    sqlx::query("INSERT INTO audit_log (actor, action, target, detail) VALUES ($1, $2, $3, $4)")
+        .bind(actor)
+        .bind(action)
+        .bind(target)
+        .bind(sqlx::types::Json(detail))
+        .execute(&mut **tx)
+        .await
+        .map(|_| ())
+}
+
+/// Deletes a published ruleset version (with `all_versions`, the whole ruleset) for good: its
+/// game count, and every account's remembered or recent use of it; drafts made from it keep their
+/// rules but no longer edit it. Match history keeps the name it was played under (its link finds
+/// nothing). A room playing it in mm plays it on until its rules change.
+pub async fn delete_ruleset(
+    pool: &PgPool,
+    actor: &str,
+    code: &str,
+    all_versions: bool,
+) -> anyhow::Result<RulesetChange> {
+    let mut tx = pool.begin().await?;
+    ruleset_admin(&mut tx).await?;
+    let change = ruleset_versions(&mut tx, code, all_versions).await?;
+    let codes: Vec<&str> = change.changed.iter().map(|r| r.0.as_str()).collect();
+    sqlx::query("DELETE FROM remembered_rulesets WHERE code = ANY($1)").bind(&codes).execute(&mut *tx).await?;
+    sqlx::query("DELETE FROM ruleset_recent WHERE code = ANY($1)").bind(&codes).execute(&mut *tx).await?;
+    sqlx::query("UPDATE ruleset_drafts SET based_on = NULL WHERE based_on = ANY($1)")
+        .bind(&codes)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("DELETE FROM rulesets WHERE code = ANY($1)").bind(&codes).execute(&mut *tx).await?;
+    audit_tx(
+        &mut tx,
+        actor,
+        "ruleset.delete",
+        &codes.join(","),
+        serde_json::json!({"versions": change.changed.iter().map(|(c, v, n)| serde_json::json!({"code": c, "version": v, "name": n})).collect::<Vec<_>>()}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(change)
+}
+
+/// Renames a published ruleset version (with `all_versions`, every version of the ruleset): the
+/// name in its row and its JSON, and so its hash (`Ruleset::hash` covers the name). The name must
+/// pass the publisher's own rule (`Ruleset::validate`). Match history keeps the name and hash it
+/// was played under.
+pub async fn rename_ruleset(
+    pool: &PgPool,
+    actor: &str,
+    code: &str,
+    name: &str,
+    all_versions: bool,
+) -> anyhow::Result<RulesetChange> {
+    let mut tx = pool.begin().await?;
+    ruleset_admin(&mut tx).await?;
+    let change = ruleset_versions(&mut tx, code, all_versions).await?;
+    for (code, _, _) in &change.changed {
+        let json: String =
+            sqlx::query_scalar("SELECT json FROM rulesets WHERE code = $1").bind(code).fetch_one(&mut *tx).await?;
+        let mut r: common::rules::Ruleset = serde_json::from_str(&json)?;
+        r.name = name.to_string();
+        r.validate().map_err(|e| anyhow::anyhow!("{name:?}: {e}"))?;
+        sqlx::query("UPDATE rulesets SET name = $2, json = $3, hash = $4 WHERE code = $1")
+            .bind(code)
+            .bind(name)
+            .bind(r.canonical_json())
+            .bind(r.hash())
+            .execute(&mut *tx)
+            .await?;
+    }
+    audit_tx(
+        &mut tx,
+        actor,
+        "ruleset.rename",
+        &change.changed.iter().map(|r| r.0.as_str()).collect::<Vec<_>>().join(","),
+        serde_json::json!({"to": name, "versions": change.changed.iter().map(|(c, v, n)| serde_json::json!({"code": c, "version": v, "from": n})).collect::<Vec<_>>()}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(change)
+}

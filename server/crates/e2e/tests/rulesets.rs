@@ -464,7 +464,33 @@ async fn public_list_and_search() {
     let (_, page) = s.get("/v1/rulesets", None).await;
     assert_eq!(codes(&page), vec![code_of(&b1), code_of(&a2)]);
 
+    // The most played first (the user's, 2026-10-19), each version counting only its own games:
+    // a1's games don't lift a2, a2's do; pages follow the same order.
+    assert_eq!(page_games(&s, "/v1/rulesets").await, vec![(code_of(&b1), 0), (code_of(&a2), 0)]);
+    for _ in 0..3 {
+        common::db::count_ruleset_game(&s.pool, &code_of(&a1)).await.unwrap();
+    }
+    assert_eq!(page_games(&s, "/v1/rulesets").await, vec![(code_of(&b1), 0), (code_of(&a2), 0)]);
+    for _ in 0..2 {
+        common::db::count_ruleset_game(&s.pool, &code_of(&a2)).await.unwrap();
+    }
+    common::db::count_ruleset_game(&s.pool, &code_of(&b1)).await.unwrap();
+    assert_eq!(page_games(&s, "/v1/rulesets").await, vec![(code_of(&a2), 2), (code_of(&b1), 1)]);
+    let (_, first) = s.get("/v1/rulesets?limit=1", None).await;
+    let (_, second) = s.get(&format!("/v1/rulesets?limit=1&after={}", first["next"].as_str().unwrap()), None).await;
+    assert_eq!((codes(&first), codes(&second)), (vec![code_of(&a2)], vec![code_of(&b1)]));
+    assert!(second["next"].is_null());
+    let (_, one) = s.get(&format!("/v1/rulesets/{}", code_of(&a1)), None).await;
+    assert_eq!(one["games"], 3);
+
     s.shutdown().await;
+}
+
+/// The (code, games) of a public list page, in order.
+async fn page_games(s: &Stack, path: &str) -> Vec<(String, i64)> {
+    let (st, page) = s.get(path, None).await;
+    assert_eq!(st, 200, "{page}");
+    page["rulesets"].as_array().unwrap().iter().map(|r| (code_of(r), r["games"].as_i64().unwrap())).collect()
 }
 
 fn urlencode(s: &str) -> String {
