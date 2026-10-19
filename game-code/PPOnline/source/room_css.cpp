@@ -119,9 +119,20 @@ namespace RoomCss {
 
     struct Shown {
         u8 kind;          // PanelView kind shown (0xFF: not set up yet)
-        u8 css, costume, team, stars, inRoom;
+        u8 css, costume, team, stars, inRoom, sittingOut;
         char name[NAME_CHARS + 1];
     };
+
+    // SIT OUT (the user's, 2026-10-18: "the sitting out player's portrait nameplate turns grey,
+    // like as if they were a CPU"): the card in a CPU's grey, which Brawl's own showTeam
+    // (0x80698A1C) draws for an area whose player kind (area+0x1B4, m_playerKind) is 2, CPU: the
+    // backplate, the franchise icon and the name plate (a CPU's plate is more than a colour frame:
+    // set by hand, colour, texture pattern and visibility frames left the plate in the port's
+    // colour, probes 2026-10-18). showTeamAt gives showTeam that kind for a card that sits out.
+    static const u32 AREA_PLAYER_KIND = 0x1B4;
+    static const int KIND_CPU = 2;
+    static bool s_grey[4];
+    static const char* const SIT_OUT_PLATE = "SIT OUT";
     static Shown s_shown[4];
     static int s_myStarsShown = -1;
     static u8* s_task = NULL;      // the CSS these panels belong to
@@ -137,6 +148,7 @@ namespace RoomCss {
     static int s_myHandMode = -1;
     static int s_myPlateDelay = 0;
     static int s_meReadyShown = -1;   // myReady's last state (ready | teams | team)
+    static int s_meSitShown = -1;     // the local card's SIT OUT as last shown (1 / 0)
     static int s_localSlot = 0;       // the slot the local player's panel (area 0) is shown at
     static bool s_inRoom = false;
     static int s_colorShown[4] = {-1, -1, -1, -1};   // the slot colour each area was given
@@ -220,10 +232,22 @@ namespace RoomCss {
         s_localSlot = 0;
         for (int i = 0; i < 4; i++) s_colorShown[i] = s_boxShown[i] = s_boxCount[i] = -1;
         s_stockControl = false;
+        s_meSitShown = -1;
         for (int i = 0; i < 4; i++) {
             s_shown[i].kind = 0xFF;
             s_hidden[i] = false;
+            s_grey[i] = false;
         }
+    }
+
+    static void showTeamAt(u8* ar, int a);
+    // Area `ai`'s card grey (sitting out) or in its port's colours again. (showTeam prints the
+    // plate too: the caller prints it again.)
+    static void setGrey(u8* a, int ai, bool on)
+    {
+        if (on == s_grey[ai]) return;
+        s_grey[ai] = on;
+        showTeamAt(a, ai);
     }
 
     // A closed slot: the area's models hidden. nwSMSetVisibility (0x80043D20) is ScnObj's
@@ -554,14 +578,19 @@ namespace RoomCss {
             *(u32*)a = 2;   // the plugin's panel (see above)
         }
         u8* so = stateObj(a);
+        bool sitting = v.sittingOut && (v.kind == PV_CHOOSING || v.kind == PV_READY);
         bool changed = sh.kind != v.kind || sh.inRoom != (u8)s_inRoom || sh.css != v.css || sh.costume != v.costume ||
-                       sh.team != v.team || sh.stars != v.stars || strcmp(sh.name, v.name) != 0;
+                       sh.team != v.team || sh.stars != v.stars || strcmp(sh.name, v.name) != 0 ||
+                       sh.sittingOut != (u8)sitting;
         if (changed) {
-            int st = (v.kind == PV_CLOSED && !s_inRoom) ? ST_NONE : stateOf(v.kind);
+            // Sitting out: no state box ("Choosing..." is not what they do), the card grey.
+            int st = (v.kind == PV_CLOSED && !s_inRoom) || sitting ? ST_NONE : stateOf(v.kind);
             if (so && (sh.kind == 0xFF || *(int*)(so + 8) != st)) STATE_SET(so, st);   // (so+8: the state shown)
             *(u32*)(a + 0x1C0) = v.team < PPOM::TEAM_COUNT ? v.team : 0;
-            if (v.kind == PV_READY && v.css != CSS_NONE) {
-                bool fresh = sh.kind != PV_READY || sh.css != v.css;
+            // The character: a ready player's lock-in, or the coin a choosing one has placed (the
+            // user's, 2026-10-18: seen before they ready).
+            if ((v.kind == PV_READY || v.kind == PV_CHOOSING) && v.css != CSS_NONE) {
+                bool fresh = sh.kind == 0xFF || sh.css != v.css;
                 SET_CHAR(a, v.css);
                 *(u32*)(a + 0x1BC) = v.costume;
                 // The player's own costume in a team battle too (not the team's: OnlineMenu's
@@ -582,8 +611,10 @@ namespace RoomCss {
                 u8* scn = isPtr((u32)mo) ? *(u8**)(mo + 0xC) : NULL;
                 if (isPtr((u32)scn)) scn[0xD0] = scn[0xD1] = STATE_PRIORITY_FRONT;
             }
-            plate(a, v.kind == PV_CLOSED || v.kind == PV_SEARCHING ? "" : v.name);
+            setGrey(a, i, sitting);
+            plate(a, v.kind == PV_CLOSED || v.kind == PV_SEARCHING ? "" : sitting ? SIT_OUT_PLATE : v.name);
             SHOW_STARS(a, v.kind != PV_CLOSED && v.kind != PV_SEARCHING ? v.stars : 0, 1);
+            sh.sittingOut = (u8)sitting;
             sh.stars = v.stars;
             sh.inRoom = (u8)s_inRoom;
             sh.kind = v.kind;
@@ -672,7 +703,11 @@ namespace RoomCss {
         u32 own = *(u32*)(ar + 0x1B0);
         *(u32*)(ar + 0x1B0) = (u32)areaSlot(a);
         g_cssPicHold = own != (u32)areaSlot(a) ? 1 : 0;
+        // Sitting out: showTeam draws a CPU's grey card (its kind for the call only).
+        int kind = *(int*)(ar + AREA_PLAYER_KIND);
+        if (s_grey[a]) *(int*)(ar + AREA_PLAYER_KIND) = KIND_CPU;
         SHOW_TEAM(ar);
+        *(int*)(ar + AREA_PLAYER_KIND) = kind;
         g_cssPicHold = 0;
         *(u32*)(ar + 0x1B0) = own;
         if (a == 0) s_myTagShown = -2;   // showTeam printed the plate: the name again (myPlate)
@@ -857,7 +892,7 @@ namespace RoomCss {
     }
 
     void tick(const PanelView views[3], bool teams, int myTeam, int myStars, const char* myName, bool meReady,
-              bool stockControl, int lockedStocks)
+              bool stockControl, int lockedStocks, bool meSittingOut)
     {
         u8* task = cssTask();
         if (!task) return;
@@ -901,8 +936,13 @@ namespace RoomCss {
             SHOW_STARS(a0, myStars, 1);
             s_myStarsShown = myStars;
         }
-        if (a0) myPlate(a0, myName);
-        if (a0) myReady(a0, meReady, teams, myTeam);
+        // Sitting out: the local card grey with "SIT OUT" on its plate, as the others see it.
+        if (a0 && (int)meSittingOut != s_meSitShown) {
+            setGrey(a0, 0, meSittingOut);
+            s_meSitShown = meSittingOut ? 1 : 0;
+        }
+        if (a0) myPlate(a0, meSittingOut ? SIT_OUT_PLATE : myName);
+        if (a0) myReady(a0, meReady && !meSittingOut, teams, myTeam);
         for (int i = 0; i < 3; i++) apply(task, i + 1, views[i], teams);
         stockBoxes(task, views, stockControl, lockedStocks);
     }
@@ -927,6 +967,33 @@ namespace RoomCss {
         if (!isPtr((u32)hand)) return false;
         float x = *(float*)(hand + HAND_X) - PANEL_STEP * s_localSlot, y = *(float*)(hand + HAND_Y);
         return x >= PANEL_X0 - 7.5f && x <= PANEL_X0 - 1.0f && y > -6.0f && y <= -2.5f;
+    }
+
+    // A card's name plate under the hand. Offline the plate is Brawl's hand button 0x1D (a slot to
+    // player / CPU / none) and its pencil 0x1C (the name tags); on the Wi-Fi CSS the local card's
+    // pencil and plate are both 0x1C and the others' cards have no button there (found live,
+    // harness probes 2026-10-18: offline the plate x -26..-16 and the pencil -30..-28 on P1's card,
+    // y -18.5..-22). So the plate is hit-tested here, from just right of the pencil to the plate's
+    // end; the pencil keeps opening the name tags (the user's: "you can still change the controls as
+    // normal"), and the hand on anything else of Brawl's (the tag list's rows) is not on a plate.
+    static const int BUTTON_TAGS = 0x1C;
+    static const float PLATE_DX0 = -4.5f, PLATE_DX1 = 6.5f, PLATE_TOP = -18.5f, PLATE_BOTTOM = -22.5f;
+    int plateUnderHand()
+    {
+        u8* task = cssTask();
+        if (!task) return -1;
+        u8* a0 = area(task, 0);
+        u8* hand = a0 ? *(u8**)(a0 + 0x1A8) : NULL;
+        if (!isPtr((u32)hand)) return -1;
+        int button = *(int*)(hand + HAND_BUTTON);
+        if (button != 0 && button != BUTTON_TAGS) return -1;
+        float x = *(float*)(hand + HAND_X), y = *(float*)(hand + HAND_Y);
+        if (y > PLATE_TOP || y < PLATE_BOTTOM) return -1;
+        for (int i = 0; i < 4; i++) {
+            float dx = x - (PANEL_X0 + PANEL_STEP * i);
+            if (dx >= PLATE_DX0 && dx <= PLATE_DX1) return i;
+        }
+        return -1;
     }
 
     int panelUnderHand()

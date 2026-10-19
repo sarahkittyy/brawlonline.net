@@ -1,7 +1,8 @@
 // The room CSS's RULES button (docs/design/room-rules.md decision 4; docs/game-code.md §14
-// "RULES button"): a third button in the bar, next to the room's PUBLIC / PRIVATE and FFA /
-// TEAMS (Brawl's ITEM and STAGE buttons, room_css.cpp headerButtons), made, labelled, lit and
-// hit-tested the way Brawl does those two.
+// "RULES button") and its SIT OUT / PLAY button (the user's, 2026-10-18; docs/design/rooms.md
+// "Sitting out"): two more buttons in the bar, left of the room's PUBLIC / PRIVATE and FFA /
+// TEAMS (Brawl's ITEM and STAGE buttons, room_css.cpp headerButtons), RULES level with PUBLIC
+// and SIT OUT with FFA, made, labelled, lit and hit-tested the way Brawl does those two.
 //
 // How Brawl's CSS (sora_menu_sel_char, module 10, .text 0x806828C4) does its buttons:
 //   - Its models are MuObjects in muSelCharTask+0x13C + 4 * index (0xBC slots), made from tables
@@ -25,16 +26,17 @@
 //     at rate 1 from frame 0 (the button pulses); otherwise setFrameMatCol(0) (0x800B7A18) and
 //     rate 0.
 //
-// RULES is a clone of ITEM's model, made the same way (same archive, name, priority, heap,
+// Each is a clone of ITEM's model, made the same way (same archive, name, priority, heap,
 // animation), kept in the plugin (not in a task slot: those are Brawl's) and deleted in the
-// task's destructor before Brawl deletes its own. Its label is ITEM's label texture
-// (MenSelchrWifi00Button11, CMPR 48x24) copied, "RULES" drawn in the border as room_css.cpp
-// draws PUBLIC / FFA, and only this model's ScnMdl pointed at the copy (ITEM's own label is
-// room_css.cpp's). It is moved left of the two (MuObject::setPos, 0x800B6838). Brawl's hit test
-// is replaced by one that asks Brawl's first and, when nothing was hit, tests RULES's colL /
-// colR rect (BUTTON_RULES), so the hand's +0xAC, its look and the highlight work as for ITEM;
-// and buttonProcInAllArea's dispatch (text+0x7AF0) takes BUTTON_RULES as ITEM's press is taken:
-// noted for pressed(), then the function's exit (A on it does not reach the coin).
+// task's destructor before Brawl deletes its own. Its labels are ITEM's label texture
+// (MenSelchrWifi00Button11, CMPR 48x24) copied, the word drawn in the border as room_css.cpp
+// draws PUBLIC / FFA ("RULES"; "SIT OUT" / "PLAY", the button's two states), and only that
+// model's ScnMdl pointed at the copy (ITEM's own label is room_css.cpp's). They are moved left of
+// the two (MuObject::setPos, 0x800B6838). Brawl's hit test is replaced by one that asks Brawl's
+// first and, when nothing was hit, tests each one's colL / colR rect (BUTTON_RULES,
+// BUTTON_SIT_OUT), so the hand's +0xAC, its look and the highlight work as for ITEM; and
+// buttonProcInAllArea's dispatch (text+0x7AF0) takes them as ITEM's press is taken: noted for
+// pressed(), then the function's exit (A on them does not reach the coin).
 #include <OS/OSCache.h>
 #include <gf/gf_heap_manager.h>
 #include <memory.h>
@@ -42,27 +44,32 @@
 #include "labels.h"
 #include "rules_button.h"
 
-// Tests (harness/tests/test_rooms_ui.py test_rules_button), read through PPOnlineMain.map.
-extern "C" struct RulesButtonDebug {
+// Tests (harness/tests/test_rooms_ui.py test_rules_button, test_room_sit_out_ui.py), read through
+// PPOnlineMain.map.
+struct ButtonDebug {
     u32 made;         // models made
     u32 presses;      // A presses taken
     u32 hits;         // frames a hand was on it
     float rect[4];    // its colL / colR rect last frame (left, right, top, bottom; hand units)
     float place[3];   // its offset from ITEM (MuObject::setPos; here in the hand's units)
-} g_rulesButton = {0, 0, 0, {0, 0, 0, 0}, {-5.3f, -1.25f, 0.0f}};
+};
+// ITEM to STAGE is about 2.5 down in these units: RULES level with PUBLIC (ITEM), SIT OUT with
+// FFA (STAGE), both one button's width to the left.
+extern "C" ButtonDebug g_rulesButton = {0, 0, 0, {0, 0, 0, 0}, {-5.3f, 0.0f, 0.0f}};
+extern "C" ButtonDebug g_sitOutButton = {0, 0, 0, {0, 0, 0, 0}, {-5.3f, -2.5f, 0.0f}};
 
-namespace RulesButton {
+namespace {
 
-    static bool isPtr(u32 p) { return (p >= 0x80000000 && p < 0x81800000) || (p >= 0x90000000 && p < 0x94000000); }
+    bool isPtr(u32 p) { return (p >= 0x80000000 && p < 0x81800000) || (p >= 0x90000000 && p < 0x94000000); }
 
-    // A hand button number Brawl does not use: its table has 2-0x1A, the panels 0x1B-0x26.
-    static const int BUTTON_RULES = 0x30;
-    static const u32 ITEM_OBJ = 0x420;               // muSelCharTask: MenSelchrState0005 (ITEM)
-    static const char* const MODEL = "MenSelchrState0005_TopN";
-    static const char* const ANIM = "MenSelchrState0005_TopN__0";
-    static const char* const LABEL_TEX = "MenSelchrWifi00Button11";
-    static const int MODEL_PRIORITY = 0x0A, MODEL_HEAP = 0x2A;
-    static const u32 TASK_RULES_OPEN = 0x630;        // muSelCharTask: P+'s rules menu is open
+    // Hand button numbers Brawl does not use: its table has 2-0x1A, the panels 0x1B-0x26.
+    const int BUTTON_RULES = 0x30, BUTTON_SIT_OUT = 0x31;
+    const u32 ITEM_OBJ = 0x420;               // muSelCharTask: MenSelchrState0005 (ITEM)
+    const char* const MODEL = "MenSelchrState0005_TopN";
+    const char* const ANIM = "MenSelchrState0005_TopN__0";
+    const char* const LABEL_TEX = "MenSelchrWifi00Button11";
+    const int MODEL_PRIORITY = 0x0A, MODEL_HEAP = 0x2A;
+    const u32 TASK_RULES_OPEN = 0x630;        // muSelCharTask: P+'s rules menu is open
 
     typedef u8* (*CreateFn)(void* modelRes, const char* name, int priority, void* texRes, int heap);
     typedef void (*NameFn)(u8* obj, const char* name);
@@ -73,26 +80,39 @@ namespace RulesButton {
     typedef void (*SetVisFn)(void* scnMdl, bool vis);
     typedef int (*HitFn)(u8* task, float* rect, float* pos);
     typedef void* (*DtorFn)(u8* task, int flags);
-    static const CreateFn MU_CREATE = (CreateFn)0x800B2394;          // MuObject::create(ResFile*, const char*, ...)
-    static const NameFn CHANGE_ANIM = (NameFn)0x800B534C;            // MuObject::changeAnimN
-    static const RateFn SET_UPDATE_RATE = (RateFn)0x80028650;        // gfModelAnimation::setUpdateRate
-    static const ObjFloatFn SET_FRAME_MATCOL = (ObjFloatFn)0x800B7A18;   // MuObject::setFrameMatCol
-    static const SetPosFn SET_POS = (SetPosFn)0x800B6838;            // MuObject::setPos
-    static const RectFn GET_RECT = (RectFn)0x800B68F0;
-    static const SetVisFn SET_VIS = (SetVisFn)0x80043D20;            // nwSMSetVisibility
+    const CreateFn MU_CREATE = (CreateFn)0x800B2394;          // MuObject::create(ResFile*, const char*, ...)
+    const NameFn CHANGE_ANIM = (NameFn)0x800B534C;            // MuObject::changeAnimN
+    const RateFn SET_UPDATE_RATE = (RateFn)0x80028650;        // gfModelAnimation::setUpdateRate
+    const ObjFloatFn SET_FRAME_MATCOL = (ObjFloatFn)0x800B7A18;   // MuObject::setFrameMatCol
+    const SetPosFn SET_POS = (SetPosFn)0x800B6838;            // MuObject::setPos
+    const RectFn GET_RECT = (RectFn)0x800B68F0;
+    const SetVisFn SET_VIS = (SetVisFn)0x80043D20;            // nwSMSetVisibility
 
-    static u8* s_task = NULL;      // the CSS the model belongs to
-    static u8* s_obj = NULL;       // our MuObject
-    static bool s_show = false, s_enabled = true;
-    static bool s_visible = true;  // what nwSMSetVisibility was last given
-    static bool s_pressed = false;
-    static bool s_lit = false;     // its highlight playing
-    static u8* s_label[2];         // our TEX0s (32-byte aligned): white "RULES", grey "RULES"
-    static u32 s_fromWord = 0;     // the label image the model had when it was made
-    static HitFn s_origHit = NULL;
-    static DtorFn s_origDtor = NULL;
+    // One of the buttons: its two states' words (RULES has one), and per state a white and a grey
+    // label (disabled: greyed, and the hand passes over it).
+    struct Button {
+        int id;
+        const char* words[2];
+        ButtonDebug* dbg;
+        u8* task;          // the CSS the model belongs to
+        u8* obj;           // our MuObject
+        bool show, enabled, state;
+        bool visible;      // what nwSMSetVisibility was last given
+        bool pressed;
+        bool lit;          // its highlight playing
+        u8* label[2][2];   // our TEX0s (32-byte aligned): [state][grey]
+        u32 fromWord;      // the label image the model had when it was made
+    };
+    Button s_buttons[2] = {
+        {BUTTON_RULES, {"RULES", "RULES"}, &g_rulesButton, NULL, NULL, false, true, false, true, false, false,
+         {{NULL, NULL}, {NULL, NULL}}, 0},
+        {BUTTON_SIT_OUT, {"SIT OUT", "PLAY"}, &g_sitOutButton, NULL, NULL, false, true, false, true, false, false,
+         {{NULL, NULL}, {NULL, NULL}}, 0},
+    };
+    HitFn s_origHit = NULL;
+    DtorFn s_origDtor = NULL;
 
-    static u8* cssTask()
+    u8* cssTask()
     {
         u32 mgr = *(u32*)0x805A0060;
         if (!isPtr(mgr)) return NULL;
@@ -102,17 +122,17 @@ namespace RulesButton {
         return isPtr(task) ? (u8*)task : NULL;
     }
 
-    static u32 imageWord(const u8* tex) { return ((u32)(tex + 0x40) & 0x1FFFFFFF) >> 5; }
+    u32 imageWord(const u8* tex) { return ((u32)(tex + 0x40) & 0x1FFFFFFF) >> 5; }
 
     // ------------------------------------------------------------------------------------------
-    // The labels: ITEM's label texture copied twice, "RULES" drawn in the border of both
-    // (Labels::renderInBox, the game's font, as room_css.cpp's PUBLIC / FFA); in the second the
-    // letters' white is made grey (CMPR: inside the box every 4x4 sub-block is c0 black, c1
-    // white, in 3-colour mode; a grey c1 keeps that mode).
-    static const int BOX[4] = {4, 4, 44, 20};
-    static const u16 GREY_565 = 0x8C51;   // (140, 138, 140)
+    // The labels: ITEM's label texture copied, the word drawn in the border (Labels::renderInBox,
+    // the game's font, as room_css.cpp's PUBLIC / FFA); in the grey ones the letters' white is
+    // made grey (CMPR: inside the box every 4x4 sub-block is c0 black, c1 white, in 3-colour mode;
+    // a grey c1 keeps that mode).
+    const int BOX[4] = {4, 4, 44, 20};
+    const u16 GREY_565 = 0x8C51;   // (140, 138, 140)
 
-    static void greyLetters(u8* tex)
+    void greyLetters(u8* tex)
     {
         int w = *(u16*)(tex + 0x1C), h = *(u16*)(tex + 0x1E);
         u8* data = tex + *(u32*)(tex + 0x10);
@@ -130,21 +150,22 @@ namespace RulesButton {
         DCFlushRange(data, (u32)(bpr * bpc * 32));
     }
 
-    static bool makeLabels(u8* mdl)
+    bool makeLabels(Button& b, u8* mdl)
     {
-        if (s_label[0] && s_label[1]) return true;
         u8* cur = Labels::boundTexture(mdl, LABEL_TEX);
         if (!cur || *(u32*)(cur + 0x20) != 14 || *(u32*)(cur + 0x10) != 0x40) return false;   // CMPR
         int w = *(u16*)(cur + 0x1C), h = *(u16*)(cur + 0x1E);
         u32 bytes = (u32)(((w + 7) / 8) * ((h + 7) / 8) * 32);
-        for (int k = 0; k < 2; k++) {
-            if (s_label[k]) continue;
-            u8* m = (u8*)gfHeapManager::alloc(Heaps::Network, 0x40 + bytes + 32);
-            if (!m) return false;
-            s_label[k] = (u8*)(((u32)m + 31) & ~31u);
-            memcpy(s_label[k], cur, 0x40 + bytes);
-            Labels::renderInBox(s_label[k], "RULES", BOX[0], BOX[1], BOX[2], BOX[3], 1);
-            if (k == 1) greyLetters(s_label[k]);
+        for (int st = 0; st < 2; st++) {
+            for (int k = 0; k < 2; k++) {
+                if (b.label[st][k]) continue;
+                u8* m = (u8*)gfHeapManager::alloc(Heaps::Network, 0x40 + bytes + 32);
+                if (!m) return false;
+                b.label[st][k] = (u8*)(((u32)m + 31) & ~31u);
+                memcpy(b.label[st][k], cur, 0x40 + bytes);
+                Labels::renderInBox(b.label[st][k], b.words[st], BOX[0], BOX[1], BOX[2], BOX[3], 1);
+                if (k == 1) greyLetters(b.label[st][k]);
+            }
         }
         return true;
     }
@@ -153,13 +174,21 @@ namespace RulesButton {
     // << 24 | image >> 5: in the ScnMdl and its material buffers +0x14C / +0x140, as room_css.cpp
     // showHeaderLabel); ours are pointed at the label for the state. The model's MDL0 is ITEM's
     // and stays as room_css.cpp has it.
-    static void pointLabel(u8* obj, u8* mdl, bool enabled)
+    void pointLabel(Button& b, u8* mdl)
     {
-        u8* scn = *(u8**)(obj + 0xC);
-        if (!isPtr((u32)scn) || !s_label[0] || !s_label[1]) return;
+        u8* scn = *(u8**)(b.obj + 0xC);
+        u8* want = b.label[b.state ? 1 : 0][b.enabled ? 0 : 1];
+        if (!isPtr((u32)scn) || !want) return;
         u8* bound = Labels::boundTexture(mdl, LABEL_TEX);
-        u32 to = imageWord(s_label[enabled ? 0 : 1]);
-        u32 from[3] = {s_fromWord, bound ? imageWord(bound) : 0, imageWord(s_label[enabled ? 1 : 0])};
+        u32 to = imageWord(want);
+        // What the model may point at now: the game's label, or any of ours.
+        u32 from[6] = {b.fromWord, bound ? imageWord(bound) : 0, 0, 0, 0, 0};
+        int n = 2;
+        for (int st = 0; st < 2; st++) {
+            for (int k = 0; k < 2; k++) {
+                if (b.label[st][k]) from[n++] = imageWord(b.label[st][k]);
+            }
+        }
         u8* bufs[3] = {scn, *(u8**)(scn + 0x14C), *(u8**)(scn + 0x140)};
         for (int i = 0; i < 3; i++) {
             u8* p = bufs[i];
@@ -170,21 +199,27 @@ namespace RulesButton {
                 u32 r = w >> 24;
                 if (!((r >= 0x94 && r <= 0x97) || (r >= 0xB4 && r <= 0xB7))) continue;
                 u32 a = w & 0xFFFFFF;
-                if (a != to && a && (a == from[0] || a == from[1] || a == from[2])) *(u32*)(p + off) = (w & 0xFF000000u) | to;
+                if (a == to || !a) continue;
+                for (int k = 0; k < n; k++) {
+                    if (a == from[k]) {
+                        *(u32*)(p + off) = (w & 0xFF000000u) | to;
+                        break;
+                    }
+                }
             }
         }
     }
 
     // ------------------------------------------------------------------------------------------
-    static u8* make(u8* task)
+    u8* make(Button& b, u8* task)
     {
         u8* item = *(u8**)(task + ITEM_OBJ);
         if (!isPtr((u32)item)) return NULL;
         u8* itemMdl = *(u8**)(item + 8);
         if (!isPtr((u32)itemMdl) || *(u32*)itemMdl != 0x4D444C30 /* MDL0 */) return NULL;
-        if (!makeLabels(itemMdl)) return NULL;
+        if (!makeLabels(b, itemMdl)) return NULL;
         u8* bound = Labels::boundTexture(itemMdl, LABEL_TEX);
-        s_fromWord = bound ? imageWord(bound) : 0;
+        b.fromWord = bound ? imageWord(bound) : 0;
         // As text+0xC154 makes ITEM: its archive (MuObject+4, m_resFile), its name and priority,
         // no separate texture file, the menu's heap; its animation, stopped.
         u8* obj = MU_CREATE(item + 4, MODEL, MODEL_PRIORITY, NULL, MODEL_HEAP);
@@ -200,23 +235,23 @@ namespace RulesButton {
             typedef bool (*InsertFn)(u8*, u32, u8*);
             ((InsertFn)(*(u32*)(*(u32*)group + 0x34)))(group, *(u32*)(group + 0xE4), scn);
         }
-        g_rulesButton.made++;
-        s_visible = true;
-        s_lit = false;
+        b.dbg->made++;
+        b.visible = true;
+        b.lit = false;
         return obj;
     }
 
-    static void place(u8* obj)
+    void place(Button& b)
     {
-        float* pos = (float*)(obj + 0x3C);
-        const float* want = g_rulesButton.place;
+        float* pos = (float*)(b.obj + 0x3C);
+        const float* want = b.dbg->place;
         if (pos[0] == want[0] && pos[1] == want[1] && pos[2] == want[2]) return;
         float p[3] = {want[0], want[1], want[2]};
-        SET_POS(obj, p);
+        SET_POS(b.obj, p);
     }
 
     // The colour animation's frame controller (MuObject+0x14 -> +0x18), or NULL.
-    static u8* clrAnim(u8* obj)
+    u8* clrAnim(u8* obj)
     {
         u8* anim = *(u8**)(obj + 0x14);
         if (!isPtr((u32)anim)) return NULL;
@@ -225,9 +260,9 @@ namespace RulesButton {
     }
 
     // As text+0x9A2C does for ITEM and STAGE.
-    static void light(u8* obj, bool on)
+    void light(Button& b, bool on)
     {
-        u8* ctl = clrAnim(obj);
+        u8* ctl = clrAnim(b.obj);
         if (!ctl) return;
         typedef float (*GetFn)(u8*);
         typedef void (*SetFn)(u8*, float);
@@ -236,113 +271,133 @@ namespace RulesButton {
         if (on) {
             if (frame == 0.0f) ((SetFn)(*(u32*)(vt + 0x28)))(ctl, 1.0f);
         } else if (frame > 0.0f) {
-            SET_FRAME_MATCOL(obj, 0.0f);
-            ctl = clrAnim(obj);
+            SET_FRAME_MATCOL(b.obj, 0.0f);
+            ctl = clrAnim(b.obj);
             if (ctl) ((SetFn)(*(u32*)(*(u32*)ctl + 0x28)))(ctl, 0.0f);
         }
-        s_lit = on;
+        b.lit = on;
     }
 
-    static bool handOnIt(u8* task)
+    bool handOnIt(u8* task, int id)
     {
         int n = *(int*)(task + 0x648);   // the task's areas
         for (int i = 0; i < n && i < 4; i++) {
             u8* a = *(u8**)(task + 0x44 + 4 * i);
             if (!isPtr((u32)a)) continue;
             u8* hand = *(u8**)(a + 0x1A8);
-            if (isPtr((u32)hand) && *(int*)(hand + 0xAC) == BUTTON_RULES) return true;
+            if (isPtr((u32)hand) && *(int*)(hand + 0xAC) == id) return true;
         }
         return false;
     }
 
-    static bool live(u8* task) { return s_obj && task == s_task && s_show && s_enabled && *(u32*)(task + TASK_RULES_OPEN) == 0; }
-
-    void tick(bool show, bool enabled)
+    bool live(const Button& b, u8* task)
     {
-        u8* task = cssTask();
-        if (task != s_task) {
-            s_task = task;
-            s_obj = NULL;   // (the old one went with its task: hkTaskDtor)
-            s_pressed = false;
-        }
-        s_show = show;
-        s_enabled = enabled;
-        if (!task) return;
-        if (!s_obj && show) s_obj = make(task);
-        if (!s_obj) return;
-        u8* scn = *(u8**)(s_obj + 0xC);
-        if (isPtr((u32)scn) && show != s_visible) {
-            SET_VIS(scn, show);
-            s_visible = show;
-        }
-        if (!show) {
-            if (s_lit) light(s_obj, false);
-            s_pressed = false;
-            return;
-        }
-        place(s_obj);
-        u8* item = *(u8**)(task + ITEM_OBJ);
-        if (isPtr((u32)item)) pointLabel(s_obj, *(u8**)(item + 8), enabled);
-        GET_RECT(s_obj, g_rulesButton.rect, "colL", "colR");
-        bool on = live(task) && handOnIt(task);
-        if (on) g_rulesButton.hits++;
-        if (on || s_lit) light(s_obj, on);
+        return b.obj && task == b.task && b.show && b.enabled && *(u32*)(task + TASK_RULES_OPEN) == 0;
     }
 
-    bool pressed()
+    void tickButton(Button& b, bool show, bool enabled, bool state)
     {
-        bool p = s_pressed;
-        s_pressed = false;
+        u8* task = cssTask();
+        if (task != b.task) {
+            b.task = task;
+            b.obj = NULL;   // (the old one went with its task: hkTaskDtor)
+            b.pressed = false;
+        }
+        b.show = show;
+        b.enabled = enabled;
+        b.state = state;
+        if (!task) return;
+        if (!b.obj && show) b.obj = make(b, task);
+        if (!b.obj) return;
+        u8* scn = *(u8**)(b.obj + 0xC);
+        if (isPtr((u32)scn) && show != b.visible) {
+            SET_VIS(scn, show);
+            b.visible = show;
+        }
+        if (!show) {
+            if (b.lit) light(b, false);
+            b.pressed = false;
+            return;
+        }
+        place(b);
+        u8* item = *(u8**)(task + ITEM_OBJ);
+        if (isPtr((u32)item)) pointLabel(b, *(u8**)(item + 8));
+        GET_RECT(b.obj, b.dbg->rect, "colL", "colR");
+        bool on = live(b, task) && handOnIt(task, b.id);
+        if (on) b.dbg->hits++;
+        if (on || b.lit) light(b, on);
+    }
+
+    bool takePressed(Button& b)
+    {
+        bool p = b.pressed;
+        b.pressed = false;
         return p;
     }
 
     // ------------------------------------------------------------------------------------------
-    // The hand's hit test (sel_char text+0xDC78): Brawl's buttons first, then RULES.
-    static int hkHit(u8* task, float* rect, float* pos)
+    // The hand's hit test (sel_char text+0xDC78): Brawl's buttons first, then ours.
+    int hkHit(u8* task, float* rect, float* pos)
     {
-        int b = s_origHit(task, rect, pos);
-        if (b || !live(task)) return b;
-        float r[4];
-        GET_RECT(s_obj, r, "colL", "colR");
-        if (r[0] <= pos[0] && r[1] >= pos[0] && r[3] <= pos[1] && r[2] >= pos[1]) {
-            for (int i = 0; i < 4; i++) rect[i] = r[i];
-            return BUTTON_RULES;
+        int hit = s_origHit(task, rect, pos);
+        if (hit) return hit;
+        for (int i = 0; i < 2; i++) {
+            Button& b = s_buttons[i];
+            if (!live(b, task)) continue;
+            float r[4];
+            GET_RECT(b.obj, r, "colL", "colR");
+            if (r[0] <= pos[0] && r[1] >= pos[0] && r[3] <= pos[1] && r[2] >= pos[1]) {
+                for (int k = 0; k < 4; k++) rect[k] = r[k];
+                return b.id;
+            }
         }
         return 0;
     }
 
     // muSelCharTask's destructor (text+0x434): ours first, as the task deletes its own (each
     // slot's MuObject: vtable at +0x5C, entry +8, with 1 = delete).
-    static void* hkTaskDtor(u8* task, int flags)
+    void* hkTaskDtor(u8* task, int flags)
     {
-        if (task && task == s_task && s_obj) {
-            // Deleted as the task deletes its own: the scene group (task+0x6C) is already gone
-            // by now (taking ours out of it first jumped through its freed vtable).
-            typedef void (*DelFn)(u8*, int);
-            ((DelFn)(*(u32*)(*(u32*)(s_obj + 0x5C) + 8)))(s_obj, 1);
-            s_obj = NULL;
-            s_task = NULL;
-            s_pressed = false;
+        for (int i = 0; i < 2; i++) {
+            Button& b = s_buttons[i];
+            if (task && task == b.task && b.obj) {
+                // Deleted as the task deletes its own: the scene group (task+0x6C) is already
+                // gone by now (taking ours out of it first jumped through its freed vtable).
+                typedef void (*DelFn)(u8*, int);
+                ((DelFn)(*(u32*)(*(u32*)(b.obj + 0x5C) + 8)))(b.obj, 1);
+                b.obj = NULL;
+                b.task = NULL;
+                b.pressed = false;
+            }
         }
         return s_origDtor(task, flags);
     }
+}
 
-    extern "C" void pponline_rulesPressed(u8* task)
-    {
-        if (live(task)) {
-            s_pressed = true;
-            g_rulesButton.presses++;
+extern "C" void pponline_rulesPressed(u8* task, int id)
+{
+    for (int i = 0; i < 2; i++) {
+        Button& b = s_buttons[i];
+        if (b.id == id && live(b, task)) {
+            b.pressed = true;
+            b.dbg->presses++;
         }
     }
+}
+
+namespace RulesButton {
 
     // buttonProcInAllArea, sel_char text+0x7AF0 (0x8068A3B4) `cmpwi r29,2`, reached when A was
-    // pressed (r29 = the hit test's button, r31 = the task): BUTTON_RULES is noted and goes to
-    // the function's exit (+0x8334), as ITEM's press does (online_menu.cpp cssSwitchButtons);
-    // left to the rest, an unknown button went on as A on nothing (the coin's handling).
+    // pressed (r29 = the hit test's button, r31 = the task): BUTTON_RULES and BUTTON_SIT_OUT are
+    // noted and go to the function's exit (+0x8334), as ITEM's press does (online_menu.cpp
+    // cssSwitchButtons); left to the rest, an unknown button went on as A on nothing (the coin's
+    // handling).
     __attribute__((naked)) void rulesButtonPress()
     {
         asm volatile(
             "cmpwi 29, 0x30\n\t"   // BUTTON_RULES
+            "beq 2f\n\t"
+            "cmpwi 29, 0x31\n\t"   // BUTTON_SIT_OUT
             "beq 2f\n\t"
             "cmpwi 29, 2\n\t"
             "lis 12, 0x8068\n\t"
@@ -351,6 +406,7 @@ namespace RulesButton {
             "bctr\n\t"
             "2:\n\t"
             "mr 3, 31\n\t"
+            "mr 4, 29\n\t"
             "lis 12, pponline_rulesPressed@ha\n\t"
             "addi 12, 12, pponline_rulesPressed@l\n\t"
             "mtctr 12\n\t"
@@ -361,10 +417,18 @@ namespace RulesButton {
             "bctr\n\t");
     }
 
+    void tick(bool show, bool enabled) { tickButton(s_buttons[0], show, enabled, false); }
+    bool pressed() { return takePressed(s_buttons[0]); }
+
     void install(CoreApi* api)
     {
         api->syReplaceFuncRel(0xDC78, reinterpret_cast<void*>(hkHit), (void**)&s_origHit, 10 /* sora_menu_sel_char */);
         api->syReplaceFuncRel(0x434, reinterpret_cast<void*>(hkTaskDtor), (void**)&s_origDtor, 10);
         api->sySimpleHookRel(0x7AF0, reinterpret_cast<void*>(rulesButtonPress), 10);
     }
+}
+
+namespace SitOutButton {
+    void tick(bool show, bool enabled, bool sittingOut) { tickButton(s_buttons[1], show, enabled, sittingOut); }
+    bool pressed() { return takePressed(s_buttons[1]); }
 }

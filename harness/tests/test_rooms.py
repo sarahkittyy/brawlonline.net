@@ -337,8 +337,10 @@ def test_room_requests_errors_and_the_launcher(backend: OnlineBackend,
         assert v["mode"] == 0   # two open slots: 1v1 whatever the switch says
         a.room("slot", 2, 1)
         v = a.until_view(lambda v: v["slots"][2]["bits"] == ppom.SLOT_OPEN, "slot 3 open")
-        assert v["mode"] == 2
-        a.until_text("Waiting for players (2/3)")
+        # Two players play a 1v1 whatever the open slots (an empty open slot waits for nobody:
+        # docs/design/rooms.md §1.2, 2026-10-18; until then 3 open slots were Teams, "2/3").
+        assert v["mode"] == 0
+        a.until_text("Waiting on: anna, bert")
         a.room("team", 2)
         a.until_view(lambda v: v["slots"][0]["team"] == 2, "anna green")
         cleo = MmClient(backend, uc, tmp_path, "room", "--join", code, "--hold-secs", "120")

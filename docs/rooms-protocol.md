@@ -63,9 +63,10 @@ or refuses and disconnects:
 | `{"type": "room-slot", "slot": 3, "open": true}` | host | between games | Opens or closes slot 1-4. Closing an occupied slot removes its player ("Removed from the room."), who may join again once a slot is open. |
 | `{"type": "room-teams", "on": true}` | host | between games | The Teams switch. Changing it clears everyone's ready. |
 | `{"type": "room-public", "public": false}` | host | any time | Public or private (a private room is joinable by code only). |
-| `{"type": "room-ready", "ready": true, "character": 12, "costume": 0, "stocks": 3}` | member | not during the start, not while still in the last game | START on the CSS (lock-in) or taking it back. `character` and `costume` are optional numbers 0-255 the server only passes on; they are shown to the others while ready. `stocks` (2026-10-15, optional, 1-99): under the rules' `stockControl`, the stock count the player picked on their panel's STOCKS box (none picked: left out); shown to the others as `character` is (also withheld in a blind pick), and only while the rules have stock control. The match takes each player's count from the game's own lock-in exchange, not from here. |
+| `{"type": "room-ready", "ready": true, "character": 12, "costume": 0, "stocks": 3}` | member | not during the start, not while still in the last game | START on the CSS (lock-in) or taking it back. `character` and `costume` are optional numbers 0-255 the server only passes on; they are shown to the others, ready or not: with `ready: false` they are the coin the player has put down on the CSS (no `character`: the coin is in the hand), so the others see the pick before START (2026-10-18; withheld from the others in a set's blind game 1). A ready also plays again (clears `sittingOut`); refused for a player outside a set that is on (`Wait for the set to end.`). `stocks` (2026-10-15, optional, 1-99): under the rules' `stockControl`, the stock count the player picked on their panel's STOCKS box (none picked: left out); shown to the others as `character` is (also withheld in a blind pick), and only while the rules have stock control. The match takes each player's count from the game's own lock-in exchange, not from here. |
 | `{"type": "room-team", "team": 1}` | member | not during the start, not while still in the last game | 0 red, 1 blue, 2 green. New members get red, blue, green, red by slot. |
-| `{"type": "room-back"}` | member | after a game | This player is back on the room's CSS. |
+| `{"type": "room-back", "pickers": 2}` | member | after a game | This player is back on the room's CSS. `pickers` (2026-10-18, optional, 0-15): the ports (bits) that pick the next game's stage as this player's game saw it end (the loser; 0 none). The server keeps the last one a player of that game sends, without the ports of players who left meanwhile, and carries it to the next game (`room-state.pickers`). |
+| `{"type": "room-sit-out", "slot": 3, "sitOut": true}` | the player in `slot` for themselves; the host for anyone | not during the start; not for a player still in the last game; not while a set is on | SIT OUT (2026-10-18, `docs/design/rooms.md` §1.2): the player sits out the room's games (the others start without them) or plays again. Sitting out takes their ready back. It lasts until they play again (this, or a ready). Refused while a set is on: `Wait for the set to end.`. |
 | `{"type": "room-unreachable", "matchId": "mode.room-KFQB-…", "slots": [4]}` | member | after a failed connect | This player's P2P connect to these members (slots 1-4, at most 3) timed out in the room's game `matchId`. Sent by Dolphin before its `room-back`. Each new pair goes to every member as `room-unreachable` (below); the pair again (the other side's report), the sender's own slot, another game's `matchId` or a game that is over change nothing. No answer. |
 | `{"type": "room-rules", "rules": {...}}` | host | between games | The room's match rules (`common::rules::MatchRules`, `docs/design/room-rules.md` §3; missing fields are P+'s defaults, unknown ones and bad values are refused). A change takes back everyone's ready; the same rules again change nothing. A new room has Direct's rules. |
 
@@ -94,7 +95,9 @@ A request that is refused changes nothing and is answered with `room-error`. Mal
 
 - `stocks` is there only under the rules' `stockControl`, for a ready player who picked a count (an older client ignores it).
 - `rules.stockControl` is written only when `true` (`docs/rulesets-protocol.md`).
-- `mode`: `1v1` with two open slots (the Teams switch has no effect then), `teams` with Teams on and three or four open slots, else `ffa`.
+- `mode`: from the players who play (not sitting out), or the open slots while fewer than two play: `1v1` with two (the Teams switch has no effect then), `teams` with Teams on and three or four, else `ffa`.
+- `sittingOut` (each player, 2026-10-18): the player sits out (their SIT OUT, or outside a set that is on). An older mm sends none: the client then sends no pick before the ready.
+- `pickers` (2026-10-18, optional, 0-15): the ports that pick the next game's stage: the last game's loser (`room-back.pickers`) when they play it, else one of its players, drawn once per game so every member shows the same; it moves when players sit out or play again (and whoever gained or lost the pick has their ready taken back, their lock-in said whether they pick). Absent: no report yet, or a ruleset that leaves no stage to the loser; the client then uses its own.
 - `status`: `waiting`, `starting` (tickets coming in), `in-game` (until every player of the game is back).
 - `slot` is the in-game port and stays the same for the life of the room; gaps are allowed.
 - `statusText` is the CSS status line (`docs/design/rooms.md` §3), short enough for the game's line (unit-tested like the other messages):
@@ -102,8 +105,8 @@ A request that is refused changes nothing and is answered with `room-error`. Mal
 | Situation | `statusText` |
 |---|---|
 | Only the receiver is in the room | `Waiting for players` |
-| Open slots are still empty | `Waiting for players (2/4)` |
-| Everyone is there, some are not ready | `Waiting on: bob, carol` (names that do not fit become `+N`) |
+| Everyone but one sits out | `Need 2 players` |
+| Some players are not ready (those sitting out are not waited for; nor are open slots) | `Waiting on: bob, carol` (names that do not fit become `+N`) |
 | Teams, three or more players, all one colour | `Pick different teams` |
 | The start is under way | `Starting the game` |
 | The room plays, the receiver is in the game | `In game` |
@@ -130,7 +133,7 @@ A request that is refused changes nothing and is answered with `room-error`. Mal
 
 **`room-left`**, to a member who is no longer in the room: `{"type": "room-left", "code": "KFQB"}` after `room-leave`, or with `"reason": "Removed from the room."` after the host closed their slot. Members whose connection dropped are not told (they are gone).
 
-**`room-start`**, to every member: `{"type": "room-start", "code": "KFQB", "matchId": "mode.room-KFQB-2026-10-09T15:00:00.000Z-1", "timeoutSecs": 15}`. Send the room game ticket now (section 3).
+**`room-start`**, to every player of the game: `{"type": "room-start", "code": "KFQB", "matchId": "mode.room-KFQB-2026-10-09T15:00:00.000Z-1", "timeoutSecs": 15, "players": [1, 3], "host": 1, "pickers": 4}`. Send the room game ticket now (section 3). `players` (2026-10-18): the slots that play it; members sitting it out get no `room-start` and send no ticket (an older client that gets one anyway is refused `You are not in this game.`). `host`: the game's decider, the room's host if they play it, else its earliest-joined player. `pickers`: as `room-state.pickers` at the start. All three are absent from an older mm (every member plays, the room's host decides, each client its own pickers).
 
 **`room-unreachable`**, to every member when a member reported a pair that is new for the game: `{"type": "room-unreachable", "code": "KFQB", "matchId": "mode.room-KFQB-…", "pairs": [[1, 4]]}`, every pair of slots (lower first) reported so far in that game. mm logs each one (`room pair could not connect`, both connect codes). Dolphin ends its part in that game if its match has not started (the others' sessions would wait for a player who never comes), shows `No connection between <name> and <name>.` on the CSS line, and adds `<name> and <name> couldn't connect to each other. A VPN or firewall can block it.` to the room's chat, once per pair (prod 2026-10-14: a VPN's player and the host of a 4-player room could not connect; the other two waited on the CSS until they closed Dolphin, and the room looked broken).
 
@@ -148,7 +151,9 @@ A request that is refused changes nothing and is answered with `room-error`. Mal
 | The host closes their own slot | `You can't close your own slot.` |
 | Closing an empty slot would leave fewer than 2 open | `At least 2 slots stay open.` |
 | A room request from someone in no room | `You are not in a room.` |
-| Ready or team during the start | `The game is starting.` |
+| Ready, team or SIT OUT during the start | `The game is starting.` |
+| SIT OUT while a set is on, or a ready from outside it | `Wait for the set to end.` |
+| A game ticket from a member who does not play that game | `You are not in this game.` |
 | More than 5 rooms a minute or 30 an hour (per account) | `Too many rooms. Wait a moment.` |
 | More than 10 joins a minute or 60 an hour (per account, counted before the code is looked up) | `Too many tries. Wait a moment.` |
 | More than 40 room requests in 10 s (per connection) | `Too many requests. Wait a moment.` |
@@ -159,7 +164,7 @@ A request that is refused changes nothing and is answered with `room-error`. Mal
 
 ## 3. Starting a game
 
-The room starts by itself once **every open slot is taken, every player is ready, nobody is still in the last game** and, with Teams on and three or more players, not everyone is on one colour. Then:
+The room starts by itself once **two or more members play (not sitting out), every one of them is ready, nobody is still in the last game** and, with Teams on and three or more players, not everyone among them is on one colour. Empty open slots are not waited for (until 2026-10-18 they were). Then:
 
 1. mm sends `room-start` to every member; `status` is `starting`; no request can change the room except leaving and the public flag.
 2. Each member's game opens a **new** ENet host on its P2P port (Slippi's `41000 + rand % 10000`, or the forced port) and sends the ordinary ticket from it, keeping the online connection open:
@@ -177,7 +182,7 @@ The room starts by itself once **every open slot is taken, every player is ready
 
 If a ticket is missing after 15 s, or a member leaves during the start, the tickets that did come in get `get-ticket-resp {error}`, every member gets `room-error {op: "room-start"}`, the room is `waiting` and everyone has to ready up again.
 
-**Joining during a game.** A player whose game closes during a match leaves the room (their online connection drops), so their slot is open and empty. Someone can join into it while the others play; they wait with `Waiting for the game to end`, and the room starts again only when the players are back and the open slots are full and ready.
+**Joining during a game.** Into any open, empty slot (also one a player whose game closed left). The joiner waits with `Waiting for the game to end` (they may ready meanwhile) and plays the next game, which waits for them as for anyone who plays. A member who joins during the start is not in that game. A member sitting out who leaves during the start cancels nothing; a player of the game who leaves cancels it.
 
 **Host hand-over.** When the host leaves, the earliest-joined player becomes host (`host` and the slot's `host` flag move). The code stays. The room closes when its last player leaves.
 

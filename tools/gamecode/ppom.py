@@ -428,7 +428,7 @@ def write_session(c: HarnessClient, b: Block, *, game: int, stage: int, players:
 CMD_ROOM = 0xD0
 CMD_RULESETS = 0xD1   # v6: the Ruleset line's list (RulesetList)
 ROOM_OPS = {"poll": 0, "create": 1, "join": 2, "leave": 3, "slot": 4, "teams": 5, "public": 6,
-            "team": 7, "rules": 8, "set": 9, "ruleset": 10, "best_of": 11}
+            "team": 7, "rules": 8, "set": 9, "ruleset": 10, "best_of": 11, "stages": 12, "sit_out": 13}
 L_SCREEN, L_ROOM_JOIN, L_ROOM = 0x36, 0x37, 0x38
 # The launcher's Direct invite (still v5): counter, the code's letters (4, NUL-padded), its number.
 L_DIRECT_JOIN, L_DIRECT_PREFIX, L_DIRECT_NUMBER = 0x39, 0x3A, 0x3E
@@ -439,7 +439,7 @@ SCREENS = {"unknown": 0, "menus": 1, "online-css": 2, "room": 3, "online-busy": 
 S_ROOM_FLAGS, S_ROOM_CODE, S_ROOM_HOST, S_ROOM_STATUS, S_ROOM_MODE = 0x213, 0x214, 0x218, 0x219, 0x21A
 SP_ROOM_SLOT, SP_ROOM_TEAM, SP_ROOM_CHAR, SP_ROOM_COSTUME = 0x38, 0x39, 0x3A, 0x3B
 SP_ROOM_STOCKS = 0x3D   # (still v8) the stock count a ready player picked (stock control), 0 none
-SLOT_OPEN, SLOT_TAKEN, SLOT_READY, SLOT_HOST, SLOT_IN_GAME = 1, 2, 4, 8, 0x10
+SLOT_OPEN, SLOT_TAKEN, SLOT_READY, SLOT_HOST, SLOT_IN_GAME, SLOT_SITTING_OUT = 1, 2, 4, 8, 0x10, 0x20
 RF_IN, RF_PUBLIC, RF_TEAMS = 1, 2, 4
 
 

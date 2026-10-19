@@ -62,6 +62,9 @@ constexpr auto FILE_POLL = 500ms;
 constexpr auto STATUS_EVERY = 5s;
 constexpr auto READY_RETRY = 1s;         // a room-ready not answered yet
 constexpr auto READY_REFUSED = 3s;
+// A coin placed on the CSS goes to the others once it has stayed put this long (a player sweeping
+// the coin across the grid sends one pick, not one per portrait).
+constexpr auto PICK_SETTLE = 250ms;
 constexpr auto MATCH_SCENE_GRACE = 5s;   // after a match, with no screen reported by the game
 constexpr auto START_GUARD = 90s;        // room-start .. session connected
 constexpr auto GAME_GUARD = 30min;       // a room game that never ends
@@ -195,6 +198,7 @@ struct State
   bool lock_ready = false;
   u32 lock_game = 0;
   u8 lock_char = 0xFF, lock_costume = 0, lock_stocks = 0;
+  Clock::time_point pick_changed{};  // the lock-in's character or costume last changed
   bool harness_lock = false;
   bool harness_screen = false;  // tests: the harness's screen, not the game's
   Clock::time_point next_ready{};
@@ -533,17 +537,31 @@ void Handle(const Message& m, Actions* a, Clock::time_point now)
       Log("room-start while a room game runs: ignored");
       return;
     }
+    // Sitting this game out (SIT OUT): no ticket; the room's line says it plays. (mm sends
+    // room-start only to the players; an older mm names none, and everyone plays.)
+    if (!m.start_players.empty() &&
+        std::find(m.start_players.begin(), m.start_players.end(), s.view->you) ==
+            m.start_players.end())
+    {
+      Log("room-start: sitting this game out");
+      return;
+    }
     s.rg = RoomGame{};
     s.rg.active = true;
     s.rg.code = m.code;
     s.rg.match_id = m.match_id;
-    s.rg.host = s.view->host;
+    // The game's host is one of its players: the room's host, or another when they sit out.
+    s.rg.host = m.start_host ? m.start_host : s.view->host;
     s.rg.teams = s.view->teams;
     s.rg.started = now;
     ++s.games_started;
     a->start_game = true;
     a->start = s.rg;
-    a->pickers = s.view && !s.view->ruleset.LoserPicks() ? 0 : s.pickers;
+    // The server's pickers (the loser, or a player drawn when the loser sits out), else this
+    // machine's own (an older mm).
+    a->pickers = m.start_pickers ? *m.start_pickers :
+                 s.view && !s.view->ruleset.LoserPicks() ? 0 :
+                                                           s.pickers;
     ++s.serial;
     return;
   case Message::Kind::RoomUnreachable:
@@ -1047,6 +1065,9 @@ void EndGame(bool played, const std::string& error, std::optional<u8> pickers, b
   {
     Request r;
     r.op = Op::Back;
+    // Who picks the next stage as this game saw it end: mm carries it to the next game's
+    // players, who may not have played this one.
+    r.pickers = s.pickers;
     s.outbox.push_back(r);
   }
   if (!error.empty())
@@ -1510,8 +1531,22 @@ void Thread()
           const auto& me = v.slots[v.you - 1].player;
           const bool may = v.status == Status::Waiting ||
                            (v.status == Status::InGame && me && !me->in_game);
-          const bool want_ready =
-              s.lock_ready && s.lock_game == (s.game & 0xFF) && s.lock_char != 0xFF;
+          // Never a ready while sitting out: mm would take it as playing again, and the host's SIT
+          // OUT on a ready player would be undone by the lock-in the game has not taken back yet.
+          const bool want_ready = s.lock_ready && s.lock_game == (s.game & 0xFF) &&
+                                  s.lock_char != 0xFF && !(me && me->sitting_out);
+          // Not ready: the coin placed on the CSS (the game's lock-in without its ready), shown to
+          // the others; none while it is in the hand. Only to an mm that shows it (an older one
+          // keeps no pick, so it would be sent again and again).
+          const bool placed = s.lock_game == (s.game & 0xFF) && s.lock_char != 0xFF &&
+                              (want_ready || v.sit_out_known);
+          const std::optional<u8> want_char =
+              placed ? std::optional<u8>(s.lock_char) : std::nullopt;
+          const std::optional<u8> want_costume =
+              placed ? std::optional<u8>(s.lock_costume) : std::nullopt;
+          const bool pick_differs = me && (me->character != want_char ||
+                                           (want_char && me->costume != want_costume));
+          const bool pick_settled = want_ready || now - s.pick_changed >= PICK_SETTLE;
           // The picked stock count, only under the room's stock control (the server shows it
           // only then, so anything else would be sent again and again).
           const std::optional<u8> stocks =
@@ -1520,16 +1555,15 @@ void Thread()
                   std::optional<u8>(s.lock_stocks) :
                   std::nullopt;
           if (may && me &&
-              (want_ready != me->ready ||
-               (want_ready && (me->character != s.lock_char || me->costume != s.lock_costume ||
-                               me->stocks != stocks))))
+              (want_ready != me->ready || (want_ready && me->stocks != stocks) ||
+               (pick_differs && (want_ready || v.sit_out_known) && pick_settled)))
           {
             Request r;
             r.op = Op::Ready;
             r.flag = want_ready;
-            r.character = s.lock_char;
-            r.costume = s.lock_costume;
-            r.stocks = stocks;
+            r.character = want_char;
+            r.costume = want_costume;
+            r.stocks = want_ready ? stocks : std::nullopt;
             if (const auto json = RequestJson(r))
             {
               Send(peer, *json);
@@ -1748,6 +1782,8 @@ void SetLocalLock(bool ready, u32 game, u8 char_kind, u8 costume, u8 stocks)
   std::lock_guard lk(s_mutex);
   if (s.harness_lock)
     return;
+  if (char_kind != s.lock_char || costume != s.lock_costume)
+    s.pick_changed = Clock::now();
   s.lock_ready = ready;
   s.lock_game = game;
   s.lock_char = char_kind;
@@ -1762,7 +1798,10 @@ Snapshot GetSnapshot()
   snap.phase = s.phase;
   snap.view = s.view;
   snap.game = s.game;
-  snap.pickers = s.view && !s.view->ruleset.LoserPicks() ? 0 : s.pickers;
+  // The server's (who picks when the last game's loser sits out), else this machine's own.
+  snap.pickers = s.view && s.view->pickers          ? *s.view->pickers :
+                 s.view && !s.view->ruleset.LoserPicks() ? 0 :
+                                                           s.pickers;
   snap.join_seq = s.join_seq;
   snap.direct_seq = s.direct_seq;
   snap.direct_code = s.direct_code;
@@ -1814,6 +1853,11 @@ picojson::object Status()
   o["serial"] = picojson::value(static_cast<double>(s.serial));
   o["game"] = picojson::value(static_cast<double>(s.game));
   o["pickers"] = picojson::value(static_cast<double>(s.pickers));
+  // What the game shows (picksStage): the server's when it sends them.
+  o["next_pickers"] = picojson::value(static_cast<double>(
+      s.view && s.view->pickers ? *s.view->pickers :
+      s.view && !s.view->ruleset.LoserPicks() ? 0 :
+                                                s.pickers));
   if (s.view)
   {
     picojson::object rs;
@@ -1899,6 +1943,7 @@ picojson::object Status()
         p["stocks"] = sl.player->stocks ? picojson::value(static_cast<double>(*sl.player->stocks)) :
                                           picojson::value();
         p["in_game"] = picojson::value(sl.player->in_game);
+        p["sitting_out"] = picojson::value(sl.player->sitting_out);
         so["player"] = picojson::value(p);
       }
       else
@@ -1988,14 +2033,27 @@ std::optional<std::string> HarnessRequest(const picojson::object& args)
   }
   else if (op == "ready")
   {
+    // Not ready, a character is a placed coin; none, the coin is in the hand.
     std::lock_guard lk(s_mutex);
     s.harness_lock = true;
     s.lock_ready = flag("ready", true);
     s.lock_game = s.game & 0xFF;
-    s.lock_char = static_cast<u8>(num("character", 0));
-    s.lock_costume = static_cast<u8>(num("costume", 0));
+    const u8 c = static_cast<u8>(num("character", s.lock_ready ? 0 : 0xFF));
+    const u8 costume = static_cast<u8>(num("costume", 0));
+    if (c != s.lock_char || costume != s.lock_costume)
+      s.pick_changed = Clock::now();
+    s.lock_char = c;
+    s.lock_costume = costume;
     s.lock_stocks = static_cast<u8>(num("stocks", 0));
     return std::nullopt;
+  }
+  else if (op == "sit_out")
+  {
+    r.op = Op::SitOut;
+    r.slot = static_cast<int>(num("slot", 0));
+    r.flag = flag("sit_out", true);
+    if (r.slot < 1 || r.slot > ROOM_SLOTS)
+      return "slot must be 1-4";
   }
   else if (op == "release_lock")
   {
@@ -2019,8 +2077,8 @@ std::optional<std::string> HarnessRequest(const picojson::object& args)
   }
   else
   {
-    return "op must be create, join, leave, slot, teams, public, team, ready, release_lock, "
-           "screen or release_screen";
+    return "op must be create, join, leave, slot, teams, public, team, ready, sit_out, "
+           "release_lock, screen or release_screen";
   }
   Submit(r);
   return std::nullopt;

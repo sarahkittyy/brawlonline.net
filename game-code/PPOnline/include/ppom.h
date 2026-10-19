@@ -210,6 +210,8 @@ namespace PPOM {
         ROOM_BEST_OF = 11,  // v6, host: arg = the set's length, 0 (no set) / 3 / 5 / 7 (the room's
                             // rules become Custom); not while a set is on
         ROOM_STAGES = 12,   // v7, host: RoomStagesRequest (the STAGE SWITCH); not while a set is on
+        ROOM_SIT_OUT = 13,  // v8, SIT OUT: arg = in-game port 0-3, arg2 = 1 sits out / 0 plays (the
+                            // player themselves; the host anyone)
     };
 
     // CMD_ROOM request payload.
@@ -247,7 +249,11 @@ namespace PPOM {
     };
 
     // SessionPlayer.roomSlot bits and Session.roomFlags.
-    enum RoomSlotBits { SLOT_OPEN = 1, SLOT_TAKEN = 2, SLOT_READY = 4, SLOT_HOST = 8, SLOT_IN_GAME = 0x10 };
+    // SLOT_SITTING_OUT: the room's games start without this player (the panel's SIT OUT, or outside
+    // a set that is on). A taken slot that is not SLOT_READY may still have a roomChar: the coin
+    // placed on that player's CSS, shown before they ready.
+    enum RoomSlotBits { SLOT_OPEN = 1, SLOT_TAKEN = 2, SLOT_READY = 4, SLOT_HOST = 8, SLOT_IN_GAME = 0x10,
+                        SLOT_SITTING_OUT = 0x20 };
     enum RoomFlags { RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4 };
     enum RoomStatusKind { RS_WAITING = 0, RS_STARTING = 1, RS_IN_GAME = 2 };
     enum RoomMode { RM_1V1 = 0, RM_FFA = 1, RM_TEAMS = 2 };

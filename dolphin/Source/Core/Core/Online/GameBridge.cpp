@@ -141,7 +141,8 @@ constexpr u32 SP_ROOM_SLOT = 0x38, SP_ROOM_TEAM = 0x39, SP_ROOM_CHAR = 0x3A, SP_
 // The stock count the player picked on their panel (the rules' stock control), shown with their
 // lock-in as SP_ROOM_CHAR is (0 none; still v8, a padding byte after restoreStocks).
 constexpr u32 SP_ROOM_STOCKS = 0x3D;
-constexpr u8 SLOT_OPEN = 1, SLOT_TAKEN = 2, SLOT_READY = 4, SLOT_HOST = 8, SLOT_IN_GAME = 0x10;
+constexpr u8 SLOT_OPEN = 1, SLOT_TAKEN = 2, SLOT_READY = 4, SLOT_HOST = 8, SLOT_IN_GAME = 0x10,
+             SLOT_SITTING_OUT = 0x20;
 constexpr u8 RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4;
 static_assert(L_ROOM_CREATE == L_DESYNCED + 1 && L_QUIT_LEFT == L_ROOM_CREATE + 1 &&
               L_QUIT_LEFT < LOCAL_SIZE);
@@ -786,6 +787,14 @@ Response RoomResponse(const Core::CPUThreadGuard& guard, u32 payload, std::strin
     r.best_of = arg;
     ok = arg == 0 || arg == 3 || arg == 5 || arg == 7;
     break;
+  case 13:
+    // v8, SIT OUT (the user's, 2026-10-18): arg = the in-game port 0-3, arg2 = 1 sits out / 0
+    // plays (the player themselves, or the host anyone; mm decides).
+    r.op = Rooms::Op::SitOut;
+    r.slot = arg + 1;
+    r.flag = arg2 != 0;
+    ok = arg < SESSION_PLAYERS;
+    break;
   case 12:
   {
     // v7, the host's STAGE SWITCH: the room's stages and the loser's choice.
@@ -1164,6 +1173,8 @@ void PutRoom(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::
       const bool in_session = lock.has_value();
       if (pl.in_game && !in_session)
         bits |= SLOT_IN_GAME;
+      if (pl.sitting_out)
+        bits |= SLOT_SITTING_OUT;
       session[p + SP_ROOM_TEAM] = pl.team < Rooms::NUM_TEAMS ? pl.team : GameSetup::NO_TEAM;
       if (in_session)
       {
@@ -1175,11 +1186,12 @@ void PutRoom(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::
           session[p + SP_ROOM_STOCKS] = lock->port_values[PV_STOCKS];
         }
       }
-      else if (pl.ready && pl.character)
+      else if (pl.character)
       {
+        // Ready (the lock-in), or not yet: the coin placed on their CSS.
         session[p + SP_ROOM_CHAR] = *pl.character;
         session[p + SP_ROOM_COSTUME] = pl.costume.value_or(0);
-        session[p + SP_ROOM_STOCKS] = pl.stocks.value_or(0);
+        session[p + SP_ROOM_STOCKS] = pl.ready ? pl.stocks.value_or(0) : 0;
       }
       // A session's names (the match's players) stay; the room fills in the rest.
       if (session[p + SP_NAME] == 0 && session[p + SP_NAME + 1] == 0)

@@ -40,12 +40,13 @@ namespace RoomCss {
     const int NAME_CHARS = 15;
     struct PanelView {
         u8 kind;          // PanelKind
-        u8 css;           // CSS id of the character (PV_READY), else 0x28
+        u8 css;           // CSS id of the character (PV_READY; PV_CHOOSING: the coin placed), else 0x28
         u8 costume;
         u8 team;          // PPOM::Team
         u8 stars;         // Brawl's win stars by the name plate: the side's set wins during a set,
                           // else 1 for the room's host (rooms.md #8)
         u8 stocks;        // stock control: the count the player picked (shown once ready), 0 none
+        u8 sittingOut;    // SIT OUT: a CPU's grey card, "SIT OUT" on the plate
         char name[NAME_CHARS + 1];
     };
     void prepareRecords();               // before the CSS is built: four full panels
@@ -53,11 +54,15 @@ namespace RoomCss {
     void reset();                        // the CSS is gone
     // stockControl: the room's rules have P+'s STOCK CONTROL in a stock match (the STOCKS boxes);
     // lockedStocks: while locked in, the count the lock-in carries (the local box is kept at it), -1.
+    // meSittingOut: the local player sits out (their own card grey, "SIT OUT" on its plate).
     void tick(const PanelView views[3], bool teams, int myTeam, int myStars, const char* myName, bool meReady,
-              bool stockControl, int lockedStocks);
+              bool stockControl, int lockedStocks, bool meSittingOut);
     u8 myStocks();                       // the count picked on the local panel's STOCKS box, 0 none
     bool handOnMyStocks();               // the local hand is on its panel's STOCKS box
     int panelUnderHand();                // 1-3: the local hand is over that panel, else -1
+    // The slot (0-3) whose name plate the local hand is on (Brawl's hand button 0x1D, the plate a
+    // CPU / player toggle is offline), else -1.
+    int plateUnderHand();
     bool handOverMyFlag();               // the local hand is over the local panel's team flag
     void headerButtons(bool isPublic, bool teams);   // ITEM / STAGE as the room's two settings
     void setLocalSlot(int slot, bool inRoom);   // the room slot the local player's panel is shown at

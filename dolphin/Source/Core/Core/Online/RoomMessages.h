@@ -82,12 +82,17 @@ struct Player
   std::string code;
   bool ready = false;
   u8 team = 0;                    // 0-2
-  std::optional<u8> character;    // only while ready
+  // The coin placed on the CSS (ready or not: the others see a pick before the ready), or the
+  // lock-in; none while the coin is in the hand, or hidden (a set's blind game 1).
+  std::optional<u8> character;
   std::optional<u8> costume;
   // With the rules' stock control: the stock count the player picked on their panel, shown as the
   // lock-in is (1-99; none: not picked, the rules' stocks).
   std::optional<u8> stocks;
   bool in_game = false;
+  // The panel's SIT OUT: the room's games start without this player (by choice, or outside a set
+  // that is on).
+  bool sitting_out = false;
 };
 
 struct Slot
@@ -154,6 +159,13 @@ struct View
   std::string rules_error;
   RulesetView ruleset;
   std::optional<SetView> set;
+  // The ports (bits 0-3) that pick the next game's stage, as the server decided them (the last
+  // game's loser if they play, else a player drawn for this game); nullopt from an older mm (or
+  // none to pick): this machine's own.
+  std::optional<u8> pickers;
+  // The server knows SIT OUT and shows a placed coin (players carry `sittingOut`): an older mm
+  // ignores a pick that is not a ready, so none is sent to it.
+  bool sit_out_known = false;
 };
 
 // One ruleset of `ruleset-list` (the game's Ruleset line).
@@ -194,6 +206,11 @@ struct Message
   std::string reason;      // RoomLeft
   std::string match_id;    // RoomStart / RoomUnreachable
   int timeout_secs = 15;   // RoomStart
+  // RoomStart: the slots (1-4) that play the game (empty from an older mm: every member), its host
+  // (the session's decider, 0: the room's) and its stage pickers (bits; nullopt: this machine's).
+  std::vector<int> start_players;
+  int start_host = 0;
+  std::optional<u8> start_pickers;
   std::optional<View> view;  // RoomState
   std::vector<RulesetEntry> rulesets;  // RulesetList
   // RoomUnreachable: every pair of slots (1-4, lower first) of the game `match_id` that could not
@@ -227,6 +244,8 @@ enum class Op : u8
   RulesetList = 11,  // the player's rulesets to offer (room-rulesets)
   BestOf = 12,       // the host's set length (`best_of` 0 / 3 / 5 / 7; the game's ROOM_BEST_OF)
   Stages = 13,       // v7, the host's STAGE SWITCH (`starters`, `counterpicks`, `stage_choice`)
+  SitOut = 14,       // v8, SIT OUT: `slot` 1-4 sits out (`flag`) or plays (a player themselves,
+                     // the host anyone)
   // Dolphin's own (not game ops)
   Ready = 100,
   Back = 101,
@@ -242,14 +261,16 @@ constexpr u8 SIDE_VOID = 0xFD;
 struct Request
 {
   Op op = Op::Poll;
-  bool flag = false;   // Create: public; Slot: open; Teams: on; Public: public; Ready: ready
-  int slot = 0;        // Slot: 1-4
+  bool flag = false;   // Create: public; Slot: open; Teams: on; Public: public; Ready: ready;
+                       // SitOut: sits out
+  int slot = 0;        // Slot, SitOut: 1-4
   u8 team = 0;         // Team
   std::string code;    // Join (normalised)
   std::string ruleset;  // Create (the launcher's box), Ruleset: a ruleset code, "" none
   bool remembered = false;  // Create: the game's own Create Room (the account's remembered ruleset)
   std::optional<u8> character, costume;  // Ready
   std::optional<u8> stocks;              // Ready: the picked stock count (stock control), 1-99
+  std::optional<u8> pickers;             // Back: the next game's stage pickers as this game saw it
   std::optional<MatchRules> rules;        // Rules
   u32 game = 0;                           // Result: the set's game
   u8 winner_side = 0;                     // Result: 0 / 1, SIDE_DRAW, SIDE_VOID

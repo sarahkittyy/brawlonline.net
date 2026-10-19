@@ -16,3 +16,13 @@ namespace RulesButton {
     // (online_menu.cpp tickRoom: RoomRules::open(), which also plays the decide sound).
     bool pressed();
 }
+
+namespace SitOutButton {
+    // The room CSS's SIT OUT / PLAY button (the user's, 2026-10-18; rules_button.cpp): under
+    // RULES, level with FFA / TEAMS. It reads SIT OUT while the player plays and PLAY while they
+    // sit out; enabled = false greys it (in the player's own game, while a set is on).
+    // RulesButton::install installs it too.
+    void tick(bool show, bool enabled, bool sittingOut);
+    // True once per A press on it (the game's own handling of that press is skipped).
+    bool pressed();
+}

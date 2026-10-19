@@ -152,6 +152,10 @@ namespace OnlineMenu {
     bool roomCss();
     static bool roomStockControl();
     static u8 s_headerPress = 0;   // the game's press on ITEM (0x19) / STAGE (0x1A) on a room's CSS
+    // A press that sat the player out or in (START, A) does nothing more until it is let go: the
+    // pad's pressed field can still have it on the next frame, when the room may already say
+    // otherwise (with Dolphin answering at once, START played again and then readied).
+    static u32 s_sitPressHeld = 0;
     void u16Name(char* out, const u16* in);   // a name from SESSION / Dolphin: printable ASCII
 
     static const u32 BTN_START = 0x1000;
@@ -303,10 +307,14 @@ namespace OnlineMenu {
         return isPtr(area) ? (u8*)area : NULL;
     }
 
+    // The character only once the coin is put down: with the coin in the hand (+0x1F8) or flying
+    // to its place (+0x1F9), +0x1B8 is the portrait the hand is over, and START readied the player
+    // with whatever the hand was passing (the user's, 2026-10-18).
     static int selectedChar()
     {
         u8* area = playerArea();
         if (!area) return -1;
+        if (area[0x1F8] || area[0x1F9]) return -1;
         int c = *(int*)(area + 0x1B8);
         return (c >= 0 && c < 0x40 && c != 0x28) ? c : -1;
     }
@@ -2049,14 +2057,12 @@ namespace OnlineMenu {
     }
 
     // Every open slot has a player (the room can start once all are ready, rooms.md #7).
-    static bool roomFull()
+    // This player sits out the room's games (SIT OUT, or outside a set that is on).
+    static bool roomSittingOut()
     {
         const PPOM::Session& se = PPOM::g_block.session;
-        for (int i = 0; i < PPOM::SESSION_PLAYERS; i++) {
-            u8 b = se.players[i].roomSlot;
-            if ((b & PPOM::SLOT_OPEN) && !(b & PPOM::SLOT_TAKEN)) return false;
-        }
-        return true;
+        int me = roomMe();
+        return roomIn() && me >= 0 && (se.players[me].roomSlot & PPOM::SLOT_SITTING_OUT);
     }
 
     // This player picks the next room game's stage (the last game's loser; of several pickers,
@@ -2145,11 +2151,13 @@ namespace OnlineMenu {
                 taken |= (u8)(1 << i);
                 u16Name(p.name, pl.name);
                 p.stars = (u8)roomStars(i, (bits & PPOM::SLOT_HOST) || se.roomHost == i);
-                int css = (bits & PPOM::SLOT_READY) && pl.roomChar != 0xFF ? cssOfKind(pl.roomChar) : -1;
+                // Ready: the lock-in; not yet: the coin they have placed (the user's, 2026-10-18).
+                int css = pl.roomChar != 0xFF ? cssOfKind(pl.roomChar) : -1;
+                p.sittingOut = (bits & PPOM::SLOT_SITTING_OUT) ? 1 : 0;
                 if (bits & PPOM::SLOT_IN_GAME) {
                     p.kind = RoomCss::PV_IN_GAME;
                 } else if (css >= 0) {
-                    p.kind = RoomCss::PV_READY;
+                    p.kind = (bits & PPOM::SLOT_READY) ? RoomCss::PV_READY : RoomCss::PV_CHOOSING;
                     p.css = (u8)css;
                     p.costume = pl.roomCostume & PPOM::COSTUME_COLOUR;   // (an alt shows its colour)
                     // Locked in on RANDOM: the panel shows RANDOM, as that player's own does (the
@@ -2219,7 +2227,7 @@ namespace OnlineMenu {
             return;
         }
         if (roomIn() && se.roomStatus == 0 && roomPicksStage() && !roomLockedForNext() && lockChar() >= 0 &&
-            !s.roomError && roomFull()) {
+            !s.roomError && !roomSittingOut()) {
             setStatus("Press START to select stage", false);   // Direct's (rooms.md §3)
             return;
         }
@@ -2408,6 +2416,25 @@ namespace OnlineMenu {
         s.roomBtnPrinted[0][sizeof(s.roomBtnPrinted[0]) - 1] = 0;
     }
 
+    // Not ready: the coin placed on the CSS goes to the others before START (the user's,
+    // 2026-10-18), as a lock-in without its ready (Dolphin sends it as room-ready {ready: false,
+    // character}; the gameplay session takes only a ready lock-in). Its character is the coin's,
+    // never drawn: RANDOM is sent as RANDOM (cssChar 0x29), which Dolphin shows the others as
+    // RANDOM. The coin in the hand: no character. Only between games outside a session (a set's
+    // session takes its lock-ins itself), and never while locked in.
+    static void roomPreview(bool may)
+    {
+        if (!may || roomLocked() || stepSession() || CodeEntry::active()) return;
+        int c = selectedChar();
+        if (c < 0) {
+            PPOM::writeLockIn(false, 0xFF, 0xFF, 0, 0xFFFF, 0, 0, NULL, s.startPad);
+            return;
+        }
+        int coin = plainCss(c);
+        u8 kind = charKindOf(coin == 0x29 ? 0x00 : coin);
+        PPOM::writeLockIn(false, (u8)coin, kind, (u8)selectedCostume(), 0xFFFF, 0, (u8)roomGame(), NULL, s.startPad);
+    }
+
     static void tickRoom(u32 pressed, u32 held)
     {
         const PPOM::Session& se = PPOM::g_block.session;
@@ -2433,6 +2460,13 @@ namespace OnlineMenu {
         // RULES next to PUBLIC / FFA (rules_button.cpp); greyed while the menu would not open
         // (a game starting, no room rules), and passed over by the hand under the open menu.
         RulesButton::tick(in, (waiting || setBetween) && se.rules.valid);
+        // SIT OUT / PLAY under it (the user's, 2026-10-18): greyed in this player's own game and
+        // while a set is on (its sides play it to the end; mm refuses it then).
+        const bool sitting = roomSittingOut();
+        const bool meInGame = in && me >= 0 && (se.players[me].roomSlot & PPOM::SLOT_IN_GAME);
+        const bool setOn = play.valid && play.setOn && !(play.setFlags & PPOM::SET_FINISHED);
+        const bool maySitOut = in && me >= 0 && se.roomStatus != 1 && !meInGame && !g_onlineMatchGame && !setOn;
+        SitOutButton::tick(in, maySitOut, sitting);
         // The ruleset and the set on the RULES page's RULESET / SET lines (room_play.cpp).
         RoomPlay::tick(in, host);
         // rules.md #5: a change of the rules or of the ruleset (its set length) took back every ready
@@ -2472,11 +2506,51 @@ namespace OnlineMenu {
             }
             s.roomKickPort = -1;
         } else {
+            // Sitting out (the host's, or a set that started without us) takes back a ready. So
+            // does the stage pick moving to or from this player (someone sat out or plays again;
+            // mm took the ready back): the lock-in said whether they pick (STAGE_PENDING).
+            if (roomLockedForNext() && !setStep && !g_onlineMatchGame && waiting &&
+                (sitting || (s.lockStage == PPOM::STAGE_PENDING) != roomPicksStage())) {
+                unlock();
+            }
+            s_sitPressHeld &= held | pressed;
+            pressed &= ~s_sitPressHeld;
             if (pressed & BTN_START) {
                 if (setStep) {
                     if (!roomLockedForNext() && s.step.mayLock && lockChar() >= 0) lockIn(roomGame(), 0xFFFF, 0);
+                } else if (sitting) {
+                    // START while sitting out plays again; it does not ready (the user's, 2026-10-18).
+                    if (maySitOut) {
+                        postRoom(PPOM::ROOM_SIT_OUT, (u8)me, 0, NULL);
+                        s_sitPressHeld |= BTN_START;
+                        playSE(1);
+                    } else {
+                        playSE(SE_ERROR);
+                    }
                 } else if (!roomLockedForNext() && waiting && lockChar() >= 0) {
                     lockIn(roomGame(), roomPicksStage() ? PPOM::STAGE_PENDING : 0xFFFF, 0);
+                }
+            }
+            // SIT OUT / PLAY, and A on a card's name plate (Brawl's player / CPU switch offline):
+            // the player's own, or the host's on anyone's. Sitting out takes a ready back first.
+            int plate = (pressed & BTN_A) ? RoomCss::plateUnderHand() : -1;
+            if (plate >= 0 && !(se.players[plate].roomSlot & PPOM::SLOT_TAKEN)) plate = -1;   // (an empty slot: the host's open / close below)
+            int sitSlot = SitOutButton::pressed() && !(s_sitPressHeld & BTN_A) ? me : -1;
+            if (plate >= 0) {
+                maskPressed(BTN_A);
+                if (plate == me || host) sitSlot = plate;
+                else playSE(SE_ERROR);
+            }
+            if (sitSlot >= 0) {
+                bool now = (se.players[sitSlot].roomSlot & PPOM::SLOT_SITTING_OUT) != 0;
+                bool slotInGame = (se.players[sitSlot].roomSlot & PPOM::SLOT_IN_GAME) != 0;
+                if (!in || se.roomStatus == 1 || slotInGame || setOn || (sitSlot == me && !maySitOut)) {
+                    playSE(SE_ERROR);
+                } else {
+                    if (sitSlot == me && !now && roomLockedForNext()) unlock();
+                    postRoom(PPOM::ROOM_SIT_OUT, (u8)sitSlot, now ? 0 : 1, NULL);
+                    s_sitPressHeld |= BTN_A;
+                    playSE(1);
                 }
             }
             if ((pressed & BTN_B) && roomLockedForNext() && waiting && !g_onlineMatchGame) {
@@ -2515,7 +2589,7 @@ namespace OnlineMenu {
             // on it for KICK_HOLD_DELAY frames (rooms.md #10), so a press meant for something else
             // there (Brawl's team flag) removes nobody; let go early, the buzzer.
             int port = host && waiting ? RoomCss::panelUnderHand() : -1;   // panels in slot order
-            if ((pressed & BTN_A) && port >= 0) {
+            if ((pressed & BTN_A) && port >= 0 && plate < 0) {
                 maskPressed(BTN_A);
                 u8 bits = se.players[port].roomSlot;
                 if (bits & PPOM::SLOT_TAKEN) {
@@ -2562,6 +2636,7 @@ namespace OnlineMenu {
                 playSE(1);
             }
             roomMatch();
+            roomPreview(me >= 0 && !meInGame && se.roomStatus != 1 && !g_onlineMatchGame);
         }
         RoomCss::setLocalSlot(in && me >= 0 ? me : 0, in);
         RoomCss::PanelView views[3];
@@ -2581,7 +2656,7 @@ namespace OnlineMenu {
         // stays the one the lock-in carries (as the character, cssCoinAPress).
         if (g_onlineCssLock && (pressed & BTN_A) && RoomCss::handOnMyStocks()) maskPressed(BTN_A);
         RoomCss::tick(views, teams, myTeam, in && me >= 0 ? roomStars(me, host) : 0, myName, roomLockedForNext(),
-                      roomStockControl(), roomLockedForNext() ? s.lockedStocks : -1);
+                      roomStockControl(), roomLockedForNext() ? s.lockedStocks : -1, sitting);
         roomButtons(in, host);
     }
 
@@ -2883,7 +2958,8 @@ namespace OnlineMenu {
             }
             if (stepSession() && s.step.active)
                 return s.step.mayLock && !roomLockedForNext() && lockChar() >= 0;
-            return se.roomStatus == 0 && !roomLocked() && lockChar() >= 0;
+            // Sitting out, START plays again: it does not ready.
+            return se.roomStatus == 0 && !roomLocked() && lockChar() >= 0 && !roomSittingOut();
         }
         if (s.phase == PH_IDLE) return selectedChar() >= 0;
         if (s.phase != PH_CONNECTED || !sessionGame() || lockedIn() || lockChar() < 0) return false;

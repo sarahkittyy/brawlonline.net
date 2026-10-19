@@ -119,6 +119,10 @@ pub const STAGES_NOT_POSSIBLE: &str = "The room can't play these stages.";
 /// games, on a random stage of the ruleset's (room-rules.md decision G). Nothing waits for it.
 pub const SETS_NEED_TWO_SIDES: &str = "Sets need 1v1 or 2v2";
 pub const STRIKES_NEED_TWO_SIDES: &str = "Strikes need 1v1 or 2v2";
+/// The same with more players than two sides take (three, or four without two teams of two): a
+/// set is played once the others sit out (their panels' SIT OUT).
+pub const SETS_SIT_OUT: &str = "Sets need 1v1 or 2v2: SIT OUT";
+pub const STRIKES_SIT_OUT: &str = "Strikes need 1v1 or 2v2: SIT OUT";
 /// `room-ruleset` / a create with a code: no published ruleset has it.
 pub const RULESET_NOT_FOUND: &str = "Ruleset not found.";
 /// The ruleset lookup failed (the database).
@@ -146,10 +150,15 @@ pub const CHAT_REPORTS_TOO_OFTEN: &str = "Too many reports. Try later.";
 /// line stays short enough for the status line's large one-line text next to the room's buttons.
 pub const ROOM_WAITING: &str = "Waiting for players";
 
-/// Room status line: open slots are still empty.
-pub fn waiting_for_players(players: usize, open: usize) -> String {
-    format!("Waiting for players ({players}/{open})")
-}
+/// Room status line: everyone but one player sits out (a game needs two who play).
+pub const NEED_TWO_PLAYERS: &str = "Need 2 players";
+
+/// `room-sit-out` for a set's player, or to bring in someone outside a set that is on: the set's
+/// sides play it to the end.
+pub const SET_SIT_OUT: &str = "Wait for the set to end.";
+/// A room game ticket from a member who is not in that game (sitting out, or joined after it
+/// started).
+pub const NOT_IN_THIS_GAME: &str = "You are not in this game.";
 
 /// Room status line: everyone is there, these players are not ready. When the names do not fit
 /// the line, as many as fit and "+N" for the rest (display names can be 15 wide characters).
@@ -280,6 +289,8 @@ mod tests {
             STAGES_NOT_POSSIBLE.to_string(),
             SETS_NEED_TWO_SIDES.to_string(),
             STRIKES_NEED_TWO_SIDES.to_string(),
+            SETS_SIT_OUT.to_string(),
+            STRIKES_SIT_OUT.to_string(),
             RULESET_NOT_FOUND.to_string(),
             RULESETS_UNAVAILABLE.to_string(),
             SIGNED_IN_ELSEWHERE.to_string(),
@@ -291,7 +302,9 @@ mod tests {
             CHAT_TOO_FAST.to_string(),
             CHAT_REPORTS_TOO_OFTEN.to_string(),
             ROOM_WAITING.to_string(),
-            waiting_for_players(3, 4),
+            NEED_TWO_PLAYERS.to_string(),
+            SET_SIT_OUT.to_string(),
+            NOT_IN_THIS_GAME.to_string(),
             waiting_on(&["WWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWW", "WWWWWWWWWWWWWWW"]),
             PICK_TEAMS.to_string(),
             WAITING_FOR_GAME.to_string(),

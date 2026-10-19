@@ -433,7 +433,7 @@ fn run_room(a: RoomArgs) -> anyhow::Result<i32> {
         }
         if back_at.is_some_and(|t| Instant::now() >= t) {
             back_at = None;
-            client.send(&RoomRequest::Back);
+            client.send(&RoomRequest::Back { pickers: None });
             if a.ready {
                 client.send(&RoomRequest::Ready { ready: true, character: a.character, costume: a.costume, stocks: None });
             }

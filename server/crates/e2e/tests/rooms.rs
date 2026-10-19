@@ -299,8 +299,8 @@ async fn a_room_plays_with_every_member_and_takes_a_joiner_during_the_game() {
     assert_eq!(room_error(&mut a)["error"], msg::BETWEEN_GAMES);
 
     // Both players come back: the room waits again, nobody is ready.
-    a.send(&RoomRequest::Back);
-    b.send(&RoomRequest::Back);
+    a.send(&RoomRequest::Back { pickers: None });
+    b.send(&RoomRequest::Back { pickers: None });
     let s = room_state_where(&mut d, |s| s["status"] == "waiting");
     assert_eq!(s["statusText"], msg::waiting_on(&["alice", "bob", "dave"]));
     for x in [a, b, d] {

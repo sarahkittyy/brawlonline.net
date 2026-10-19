@@ -29,12 +29,13 @@ class Member:
     name: str
     code: str = ""
     ready: bool = False
-    char: int = 0xFF          # gmCharacterKind while ready
+    char: int = 0xFF          # gmCharacterKind: the lock-in while ready, else the coin placed
     costume: int = 0
     stocks: int = 0           # the stock count picked on the panel while ready (stock control)
     team: int = 0
     in_game: bool = False
     local: bool = False
+    sitting_out: bool = False  # SIT OUT (ROOM_SIT_OUT): the room's games start without them
 
 
 DIRECT_RULES = bytes([1, 1, 4, 8, 10, 1, 1, 0, 0, 6, 0, 0, 0, 0, 0, 0, 1, 0, 0]).ljust(ppom.RULES_SIZE, b"\0")
@@ -110,9 +111,11 @@ class RoomSim:
         return 0xFF
 
     def mode(self) -> int:
+        """As mm: from the players who play (the open slots while fewer than two play)."""
         r = self.room
-        n_open = sum(1 for o in r.open if o)
-        if n_open <= 2:
+        playing = sum(1 for m in r.members if m and not m.sitting_out)
+        n = playing if playing >= 2 else sum(1 for o in r.open if o)
+        if n <= 2:
             return 0
         return 2 if r.teams else 1
 
@@ -123,15 +126,16 @@ class RoomSim:
         if r.status == 1:
             return "Starting the game"
         players = [m for m in r.members if m]
-        n_open = sum(1 for o in r.open if o)
+        # As mm (docs/rooms-protocol.md): empty open slots wait for nobody, nor do players who
+        # sit out.
+        playing = [m for m in players if not m.sitting_out]
         if len(players) == 1:
             return "Waiting for players"
-        empty = sum(1 for i in range(4) if r.open[i] and not r.members[i])
-        if empty:
-            return f"Waiting for players ({len(players)}/{n_open})"
-        if r.teams and len(players) >= 3 and len({m.team for m in players}) == 1:
+        if len(playing) < 2:
+            return "Need 2 players"
+        if r.teams and len(playing) >= 3 and len({m.team for m in playing}) == 1:
             return "Pick different teams"
-        waiting = [m.name for m in players if not m.ready]
+        waiting = [m.name for m in playing if not m.ready]
         if waiting:
             return "Waiting on: " + ", ".join(waiting)
         return ""
@@ -184,6 +188,15 @@ class RoomSim:
         m.costume = costume
         m.stocks = stocks if char is not None else 0
 
+    def set_pick(self, slot: int, char: int | None, costume: int = 0) -> None:
+        """Another player's coin placed (not ready): shown before they ready (mm's room-ready
+        {ready: false, character})."""
+        m = self.room.members[slot]
+        m.ready = False
+        m.char = char if char is not None else 0xFF
+        m.costume = costume if char is not None else 0
+        m.stocks = 0
+
     # ---- requests ---------------------------------------------------------------------------
     def handle_room(self, seq: int, p: bytes) -> None:
         op, arg, arg2 = p[0], p[1], p[2]
@@ -225,6 +238,14 @@ class RoomSim:
                 self.set_error("Only the host can do that.")
         elif op == 7 and r and arg < 3:
             r.members[self.me()].team = arg
+        elif op == 13 and r and arg < 4 and r.members[arg]:   # ROOM_SIT_OUT (v8): slot, 1 sits out / 0 plays
+            if arg != self.me() and not host:
+                self.set_error("Only the host can do that.")
+            else:
+                r.members[arg].sitting_out = bool(arg2)
+                if arg2:
+                    r.members[arg].ready = False
+                self.text, self.error = "", 0
         elif op == 9 and r:   # ROOM_SET (v6), results differed: 1 replay the game / 0 end the set
             if not host:
                 self.set_error("Only the host can do that.")
@@ -297,10 +318,13 @@ class RoomSim:
             return
         lo = ppom.read_local(self.c, self.b)["lock"]
         m = self.room.members[self.me()]
-        ready = bool(lo["ready"]) and lo["game"] == self.room.game
+        mine = lo["game"] == self.room.game and lo["char_kind"] != 0xFF
+        # (Dolphin sends no ready while the player sits out.)
+        ready = bool(lo["ready"]) and mine and not m.sitting_out
         m.ready = ready
-        m.char = lo["char_kind"] if ready else 0xFF
-        m.costume = lo["costume"] if ready else 0
+        # Not ready: the coin placed (the lock-in without its ready), else none.
+        m.char = lo["char_kind"] if mine else 0xFF
+        m.costume = lo["costume"] if mine else 0
         own = ppom.read_local(self.c, self.b).get("own") or {}
         m.stocks = own.get("stocks", 0) if ready else 0
 
@@ -343,12 +367,13 @@ class RoomSim:
                 bits |= ppom.SLOT_OPEN
             if m:
                 bits |= ppom.SLOT_TAKEN | (ppom.SLOT_READY if m.ready else 0) | (ppom.SLOT_IN_GAME if m.in_game else 0)
+                bits |= ppom.SLOT_SITTING_OUT if m.sitting_out else 0
                 if i == r.host:
                     bits |= ppom.SLOT_HOST
             se[o + ppom.SP_ROOM_SLOT] = bits
             se[o + ppom.SP_ROOM_TEAM] = m.team if m else 0xFF
-            se[o + ppom.SP_ROOM_CHAR] = m.char if (m and m.ready) else 0xFF
-            se[o + ppom.SP_ROOM_COSTUME] = m.costume if (m and m.ready) else 0
+            se[o + ppom.SP_ROOM_CHAR] = m.char if m else 0xFF
+            se[o + ppom.SP_ROOM_COSTUME] = m.costume if (m and m.char != 0xFF) else 0
             se[o + ppom.SP_ROOM_STOCKS] = m.stocks if (m and m.ready) else 0
             se[o + 4:o + 4 + 2 * ppom.NAME_LEN] = ppom.u16s(m.name if m else "", ppom.NAME_LEN)
             se[o + 0x24:o + 0x24 + 2 * ppom.CODE_LEN] = ppom.u16s(m.code if m else "", ppom.CODE_LEN)

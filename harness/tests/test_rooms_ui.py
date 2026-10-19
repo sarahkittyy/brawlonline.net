@@ -210,7 +210,11 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     g.wait(30)
     assert sim.room.open[2], sim.room.open
     g.shot("07-slot-3-opened")
-    # The FFA button (the bar's STAGE button; A on it, as R): Teams on (three open slots: a team battle);
+    # cleo takes it: three players, so Teams is a team battle (two play a 1v1 whatever the switch
+    # and the open slots: docs/design/rooms.md §1.2).
+    sim.add_player(2, "cleo")
+    g.wait(30)
+    # The FFA button (the bar's STAGE button; A on it, as R): Teams on (three players: a team battle);
     # the panels in team colours. A room starts as FFA.
     assert not sim.room.teams
     g.hand_to(*MODE_BUTTON, tol=0.5)
@@ -263,7 +267,9 @@ def test_room_ui_with_a_scripted_dolphin(game: Game) -> None:
     g.wait(30)
     assert not sim.room.public
     g.shot("09-private")
-    # A on the third panel again closes it ("Closed" on it); R Teams off.
+    # cleo leaves; A on the third panel again closes it ("Closed" on it); R Teams off.
+    sim.remove_player(2)
+    g.wait(30)
     g.hand_to(PANEL_X[2], -10.0)
     g.tap("A")
     g.wait(30)
@@ -542,11 +548,12 @@ def test_rules_button(rules_game: Game) -> None:
     sim = g.sim
     rb = RulesButton(g)
 
-    # Made once, left of PUBLIC / FFA, between them in height.
+    # Made once, left of PUBLIC / FFA, level with PUBLIC (SIT OUT is under it, level with FFA:
+    # test_room_sit_out_ui.py).
     st = rb.read()
     l, r, t, b = st["rect"]
     assert st["made"] == 1, st
-    assert r < PUBLIC_BUTTON[0] - 2.0 and r - l > 3.0 and MODE_BUTTON[1] < (t + b) / 2 < PUBLIC_BUTTON[1], st
+    assert r < PUBLIC_BUTTON[0] - 2.0 and r - l > 3.0 and b < PUBLIC_BUTTON[1] < t, st
     g.shot("01-room-css")
 
     # The hand on it: its button in the hand (+0xAC), the highlight playing, as on PUBLIC.
@@ -591,12 +598,13 @@ def test_rules_button(rules_game: Game) -> None:
     g.wait(20)
 
     # The status line ends before it: "Waiting on: Sarah, alice" (397 font units) no longer fits
-    # on one line there and takes two (DEBUG scratch[14] >> 24: online_menu.cpp LAYOUT_TWO).
+    # there at full size and is one smaller line (DEBUG scratch[14] >> 24: online_menu.cpp
+    # LAYOUT_ONE_SMALL, since ONE_LINE_MIN; it took two lines before).
     sim.add_player(1, "alice")
     g.wait(40)
     g.hand_to(20.0, 12.0, tol=0.5)
     g.wait(10)
-    assert sim.status_line() == "Waiting on: Sarah, alice" and g.scratch(14) >> 24 == 2, hex(g.scratch(14))
+    assert sim.status_line() == "Waiting on: Sarah, alice" and g.scratch(14) >> 24 == 3, hex(g.scratch(14))
     g.shot("06-status-line")
 
     # Not the host: A opens the same menu (read-only, RoomRules), B closes it, nothing is sent.
@@ -687,10 +695,10 @@ class RoomPlayView:
 
 def panel_stars(g: Game) -> list[int]:
     """The stars each panel shows, in slot order with the local player in slot 0 (room_css.cpp:
-    s_myStarsShown for the local panel, s_shown[area].stars, Shown +4, 22 bytes each)."""
+    s_myStarsShown for the local panel, s_shown[area].stars, Shown +4, 23 bytes each)."""
     me = struct.unpack(">i", g.c.read_mem(ppom_sym(g, "s_myStarsShown__7RoomCss"), 4))[0]
-    shown = g.c.read_mem(ppom_sym(g, "s_shown__7RoomCss"), 22 * 4)
-    return [me] + [shown[22 * i + 4] for i in range(1, 4)]
+    shown = g.c.read_mem(ppom_sym(g, "s_shown__7RoomCss"), 23 * 4)
+    return [me] + [shown[23 * i + 4] for i in range(1, 4)]
 
 
 def open_rules_line(g: Game, line: int) -> None:

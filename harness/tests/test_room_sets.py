@@ -694,9 +694,12 @@ def test_room_2v2_set(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
     for k, g in enumerate(gs[1:], 1):
         type_room_code(g, code)
         until_view(g, lambda v: v["flags"] & ppom.RF_IN, f"player {k + 1} in the room")
-    # Slot 3 green -> red, slot 4 red -> blue (X): red 1 + 3, blue 2 + 4.
-    c.steps("tap X 8", "wait 20")
-    d.steps("tap X 8", "wait 20")
+    # Slot 3 green -> red, slot 4 red -> blue (A on one's own panel since 2026-10-15; X / Y are
+    # the costume): red 1 + 3, blue 2 + 4.
+    for slot, g in ((2, c), (3, d)):
+        hand_to(g, PANEL_X[slot], -10.0)
+        g.steps("tap A 8", "wait 20")
+        hand_to(g, -23.0, 10.5)
     until_view(a, lambda v: [s["team"] for s in v["slots"]] == [0, 1, 0, 1], "two teams of two")
     for g in gs:
         _wait(lambda g=g: rooms(g).get("ruleset", {}).get("code") == rs_code, 30, f"{g.name}: the room's ruleset")

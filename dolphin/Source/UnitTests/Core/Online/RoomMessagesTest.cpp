@@ -167,8 +167,13 @@ TEST(RoomMessages, ParsesTheProtocolsRoomState)
   EXPECT_EQ(v.slots[0].player->stocks, std::nullopt);
   ASSERT_TRUE(v.slots[1].player);
   EXPECT_EQ(v.slots[1].player->team, 1);
-  // Not ready: the character is not passed on (docs/design/rooms.md #15).
-  EXPECT_EQ(v.slots[1].player->character, std::nullopt);
+  // Not ready: the coin placed on the CSS, shown before the ready (the user's, 2026-10-18).
+  EXPECT_EQ(v.slots[1].player->character, 9);
+  EXPECT_EQ(v.slots[1].player->costume, std::nullopt);
+  EXPECT_FALSE(v.slots[1].player->sitting_out);
+  // An older mm: no SIT OUT, no pickers of its own.
+  EXPECT_FALSE(v.sit_out_known);
+  EXPECT_EQ(v.pickers, std::nullopt);
   EXPECT_FALSE(v.slots[2].open);
   EXPECT_FALSE(v.slots[2].player);
   // No rules (an older server): none, and no error.
@@ -197,7 +202,7 @@ TEST(RoomMessages, PickedStocks)
   r.stocks = 3;
   EXPECT_EQ(RequestJson(r), R"({"character":12,"costume":2,"ready":true,"stocks":3,"type":"room-ready"})");
   r.flag = false;
-  EXPECT_EQ(RequestJson(r), R"({"ready":false,"type":"room-ready"})");
+  EXPECT_EQ(RequestJson(r), R"({"character":12,"costume":2,"ready":false,"type":"room-ready"})");
   r.flag = true;
   r.stocks = 100;
   EXPECT_EQ(RequestJson(r), std::nullopt);
@@ -423,6 +428,57 @@ TEST(RoomMessages, OtherMessages)
   EXPECT_EQ(KindOf(std::string(20000, ' ') + "{}"), Message::Kind::Invalid);
 }
 
+// SIT OUT and the stage pickers (the user's, 2026-10-18): the server says who sits out, who picks
+// the next stage, and which slots play a starting game and who hosts it.
+TEST(RoomMessages, SitOutAndPickers)
+{
+  const Message m = Parse(Replace(Replace(STATE, R"("costume": 3, "inGame": false)",
+                                          R"("costume": 3, "inGame": false, "sittingOut": true)"),
+                                  R"("statusText")", R"("pickers": 2, "statusText")"));
+  ASSERT_EQ(m.kind, Message::Kind::RoomState) << m.why;
+  EXPECT_TRUE(m.view->slots[0].player->sitting_out);
+  EXPECT_FALSE(m.view->slots[1].player->sitting_out);
+  EXPECT_TRUE(m.view->sit_out_known);
+  EXPECT_EQ(m.view->pickers, 2);
+  // Pickers out of range are left out (this machine's own then).
+  EXPECT_EQ(Parse(Replace(STATE, R"("statusText")", R"("pickers": 16, "statusText")")).view->pickers,
+            std::nullopt);
+
+  Message st = Parse(R"({"type": "room-start", "code": "KFQB", "matchId": "m", "players": [1, 3],
+                         "host": 3, "pickers": 4})");
+  ASSERT_EQ(st.kind, Message::Kind::RoomStart) << st.why;
+  EXPECT_EQ(st.start_players, (std::vector<int>{1, 3}));
+  EXPECT_EQ(st.start_host, 3);
+  EXPECT_EQ(st.start_pickers, 4);
+  // An older mm: every member plays, the room's host, this machine's pickers.
+  st = Parse(R"({"type": "room-start", "code": "KFQB", "matchId": "m"})");
+  EXPECT_TRUE(st.start_players.empty());
+  EXPECT_EQ(st.start_host, 0);
+  EXPECT_EQ(st.start_pickers, std::nullopt);
+  for (const char* bad : {R"("players": [1, 1])", R"("players": [0])", R"("players": [1, 2], "host": 3)",
+                          R"("players": "1,2")"})
+  {
+    EXPECT_EQ(KindOf(std::string(R"({"type": "room-start", "code": "KFQB", "matchId": "m", )") + bad + "}"),
+              Message::Kind::Invalid)
+        << bad;
+  }
+
+  Request r;
+  r.op = Op::SitOut;
+  r.slot = 3;
+  r.flag = true;
+  EXPECT_EQ(RequestJson(r), R"({"sitOut":true,"slot":3,"type":"room-sit-out"})");
+  r.slot = 0;
+  EXPECT_EQ(RequestJson(r), std::nullopt);
+  r = {};
+  r.op = Op::Back;
+  EXPECT_EQ(RequestJson(r), R"({"type":"room-back"})");
+  r.pickers = 2;
+  EXPECT_EQ(RequestJson(r), R"({"pickers":2,"type":"room-back"})");
+  r.pickers = 16;
+  EXPECT_EQ(RequestJson(r), std::nullopt);
+}
+
 TEST(RoomMessages, Requests)
 {
   Request r;
@@ -449,6 +505,9 @@ TEST(RoomMessages, Requests)
   r.costume = 2;
   EXPECT_EQ(RequestJson(r), R"({"character":12,"costume":2,"ready":true,"type":"room-ready"})");
   r.flag = false;
+  // Not ready: the placed coin; in the hand, none.
+  EXPECT_EQ(RequestJson(r), R"({"character":12,"costume":2,"ready":false,"type":"room-ready"})");
+  r.character.reset();
   EXPECT_EQ(RequestJson(r), R"({"ready":false,"type":"room-ready"})");
   r = {};
   r.op = Op::Rules;

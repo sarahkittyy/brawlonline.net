@@ -61,9 +61,9 @@ Room fields are written whenever this player is in a room and no match runs; dur
 | player i +0x04 `name` | name in a session | also every **taken slot's** member name in a room | UTF-16, 15 units max + NUL. In a room's game, port i's is slot i's player (the ticket's ports), also with 2 players: Direct's decider-first order put the new host's name under P1 after the host left and came back to slot 1 (staging, 2026-10-10; `test_room_names_follow_the_slots_after_the_host_left`). |
 | player i +0x24 `code` | code in a session | also every taken slot's connect code | |
 | player i +0x36 `picksStage` | the session's pickers | in a room between games: this port picks the next room game's stage (the last room game's loser, carried by Dolphin) | as Direct |
-| player i +0x38 | `_pad2[0]` | **`roomSlot`** | bits: `SLOT_OPEN` 0x01, `SLOT_TAKEN` 0x02 (a player is in it), `SLOT_READY` 0x04, `SLOT_HOST` 0x08, `SLOT_IN_GAME` 0x10 (still in the last game). Closed = not `SLOT_OPEN`; "Searching..." = `SLOT_OPEN` without `SLOT_TAKEN`. |
+| player i +0x38 | `_pad2[0]` | **`roomSlot`** | bits: `SLOT_OPEN` 0x01, `SLOT_TAKEN` 0x02 (a player is in it), `SLOT_READY` 0x04, `SLOT_HOST` 0x08, `SLOT_IN_GAME` 0x10 (still in the last game), `SLOT_SITTING_OUT` 0x20 (2026-10-18: the player sits out, `room-state` `sittingOut`; a plugin without it ignores the bit). Closed = not `SLOT_OPEN`; "Searching..." = `SLOT_OPEN` without `SLOT_TAKEN`. |
 | player i +0x39 | `_pad2[1]` | **`roomTeam`** | 0 red, 1 blue, 2 green (the room's colour for this player, also with Teams off); 0xFF empty. |
-| player i +0x3A | `_pad2[2]` | **`roomChar`** | gmCharacterKind of the player's lock-in while `SLOT_READY` (the server passes it on), else 0xFF. Panels that need a CSS id convert it (`exchangeGmCharacterKind2MuSelchkind`, 0x800AF708). |
+| player i +0x3A | `_pad2[2]` | **`roomChar`** | gmCharacterKind of the player's lock-in while `SLOT_READY` (the server passes it on); not ready, the coin they have put down (2026-10-18), else 0xFF. Panels that need a CSS id convert it (`exchangeGmCharacterKind2MuSelchkind`, 0x800AF708). |
 | player i +0x3B | `_pad2[3]` | **`roomCostume`** | the costume of that lock-in, else 0. |
 | player i +0x3C | | `restoreStocks` | a desynced game played again (`docs/game-code.md` §11) |
 | player i +0x3D | | **`roomStocks`** (still v8, 2026-10-15) | under the rules' stock control: the stock count that player picked on their panel (room-state `stocks`), while `SLOT_READY` as `roomChar`; 0 none. The room CSS draws it on their STOCKS box. |
@@ -158,6 +158,10 @@ Dolphin also counts as busy whatever it knows itself (a search, a session, a roo
 
 **Team colour.** `ROOM_TEAM`; shown in `roomTeam` once mm confirms. Dolphin passes the room's colour to the session with the lock-in, so the game does not need to write `lockTeam` (harmless if it does). "Pick different teams" comes as the status line.
 
+**The placed coin (2026-10-18).** Not locked in, the game writes the coin it has put down as a lock-in without its ready: `writeLockIn(false, coin, kind, costume, 0xFFFF, 0, Session.game, NULL, pad)` (RANDOM as the coin 0x29, never drawn), and `writeLockIn(false, 0xFF, 0xFF, ...)` with the coin in the hand; only between games outside a session. Dolphin sends it as `room-ready {ready: false, character, costume}` once it has stayed put 250 ms, and only to an mm whose `room-state` has `sittingOut` (an older one keeps no pick). The gameplay session takes only a ready lock-in.
+
+**SIT OUT (2026-10-18).** `CMD_ROOM` op `ROOM_SIT_OUT` (13): `arg` the in-game port 0-3, `arg2` 1 sits out / 0 plays (the player themselves, the host anyone; mm decides). Dolphin sends `room-sit-out`; it sends no ready while the room says the player sits out (the game takes its lock-in back when it sees `SLOT_SITTING_OUT`). A `room-start` whose `players` leave this player out starts no room game here. The room game's host and stage pickers are `room-start`'s; `picksStage` between games is `room-state.pickers` when mm sends it. `room-back` carries the session's next pickers.
+
 **Ready.** START on the CSS = `writeLockIn(true, css, kind, costume, stagePick, asl, Session.game, &pv, pad)`, as Direct. `stagePick` is `STAGE_PENDING` when SESSION says this port `picksStage`, else 0xFFFF. Dolphin sends `room-ready {ready, character: charKind, costume, stocks}` when the lock-in for `Session.game` changes (`stocks`: the port values' `stocks`, the count picked on the panel's STOCKS box, only under the room rules' stock control and when one was picked). Unlocking (a lock-in with `ready` 0) takes it back. During the start (`roomStatus == 1`) the lock-in must not change (as Direct's "character locked while searching"); mm refuses it anyway ("The game is starting.").
 
 **The start.** When everyone is ready, mm starts the room by itself: `roomStatus` 1, line "Starting the game". Dolphin sends the room's game ticket (mode 3, a new P2P port), connects to every member and starts the gameplay session with **ports = slots** (also for 2 players, so P1 is not always the host) and **the room host as the decider**. From here it is Direct's flow: `LOCAL.state` 1 connecting, 2 connected; the picker's stage select once `LOCAL.remoteReady`; `Session.state == SS_MATCH_READY` with `Session.game` = the locked game: leave for the match. A failed start (a ticket missing for 15 s, a member left, the P2P connect failed): `roomStatus` back to 0, red line ("ALIC#4 didn't connect in time.", "A player left the room.", "Could not connect to players: ..."), `Session.game` + 1 (everyone readies again).
@@ -220,7 +224,8 @@ struct SessionPlayer {             // only 0x38-0x3F change
     PortValues pv;                 // 0x40
     u32 _pad3;
 };
-enum RoomSlotBits { SLOT_OPEN = 1, SLOT_TAKEN = 2, SLOT_READY = 4, SLOT_HOST = 8, SLOT_IN_GAME = 0x10 };
+enum RoomSlotBits { SLOT_OPEN = 1, SLOT_TAKEN = 2, SLOT_READY = 4, SLOT_HOST = 8, SLOT_IN_GAME = 0x10,
+                    SLOT_SITTING_OUT = 0x20 };   // (0x20: 2026-10-18)
 enum RoomFlags { RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4 };
 struct Session {                   // only 0x213-0x21F change
     ...

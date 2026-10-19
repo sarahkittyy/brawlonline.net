@@ -7,10 +7,13 @@
 //!
 //! Members are online connections ([`crate::engine`] state `Online`): one per account. A room has
 //! four slots; a slot is the in-game port and stays the same for the life of the room. A new room
-//! has slots 1-2 open and 3-4 closed. The game starts by itself once every open slot is taken,
-//! every member is ready and nobody is still in the last game. Then each member sends a room game
-//! ticket (`create-ticket`, mode 3, the room code as `search.connectCode`) from its P2P port, and
-//! once all are in, every member gets one `get-ticket-resp` listing all of them, ports = slots.
+//! has slots 1-2 open and 3-4 closed. A member either plays or sits out (the panel's SIT OUT, and
+//! everyone outside a set that is on). The game starts by itself once at least two members play,
+//! every one of them is ready and nobody is still in the last game; empty open slots wait for
+//! nobody (players join them during a game and play the next). Then each player of the game sends
+//! a room game ticket (`create-ticket`, mode 3, the room code as `search.connectCode`) from its
+//! P2P port, and once all are in, each gets one `get-ticket-resp` listing all of them, ports =
+//! slots.
 //!
 //! [`RoomBook`] sends the room messages to members itself (`Output::Send`). Answers to tickets go
 //! through the engine, which owns ticket connections: [`RoomBook::ticket`] returns them, and
@@ -94,6 +97,8 @@ struct Member {
     /// The stock count picked on the panel (stock control), with the lock-in.
     stocks: Option<u8>,
     in_game: bool,
+    /// The panel's SIT OUT: the room's games start without this member until they play again.
+    sitting_out: bool,
 }
 
 #[derive(Debug, Clone)]
@@ -106,10 +111,19 @@ struct StartTicket {
 #[derive(Debug, Clone)]
 enum Phase {
     Waiting,
-    Starting { match_id: String, since: Instant, tickets: BTreeMap<usize, StartTicket> },
+    /// `players`: the slots (0-3) that play this game, the others sit it out; `host`: the game's
+    /// host (the session's decider), one of them.
+    Starting {
+        match_id: String,
+        since: Instant,
+        tickets: BTreeMap<usize, StartTicket>,
+        players: Vec<usize>,
+        host: usize,
+    },
     /// `unreachable`: the pairs of slots (1-4, lower first) that reported they could not connect
-    /// to each other (`room-unreachable`), each told to the room once.
-    InGame { since: Instant, match_id: String, unreachable: BTreeSet<[u8; 2]> },
+    /// to each other (`room-unreachable`), each told to the room once. `players`: the game's
+    /// players (slot, account).
+    InGame { since: Instant, match_id: String, unreachable: BTreeSet<[u8; 2]>, players: Vec<(usize, Uuid)> },
 }
 
 #[derive(Debug, Clone)]
@@ -139,6 +153,15 @@ struct Room {
     /// While a set waits for a player who left the room is private (room-rules.md A): whether it
     /// was public before, to go back to when the set goes on.
     public_before_pause: Option<bool>,
+    /// The ports (bits) that pick the next game's stage, as the last game's players reported it
+    /// with `room-back` (none from an older Dolphin: the players' games keep their own); a player
+    /// who left is taken out. `pick_owed`: the last game left someone a pick, so a game its
+    /// pickers sit out (or left) gives it to one of its players.
+    pickers: Option<u8>,
+    pick_owed: bool,
+    /// Draws the player who picks when the pickers do not play (the same for the whole time
+    /// between two games, so the room's CSS and the start agree).
+    pick_draw: usize,
 }
 
 impl Room {
@@ -154,8 +177,19 @@ impl Room {
     fn slot_of(&self, conn: ConnId) -> Option<usize> {
         self.members().find(|(_, m)| m.conn == conn).map(|(i, _)| i)
     }
+    /// Sits out the room's games: by choice, or outside the sides of a set that is on (they play
+    /// it to the end).
+    fn sits_out(&self, m: &Member) -> bool {
+        m.sitting_out || self.set.as_ref().is_some_and(|s| s.on() && s.side_of(m.info.uid).is_none())
+    }
+    /// The slots of the members who play the next game.
+    fn playing(&self) -> Vec<usize> {
+        self.members().filter(|(_, m)| !self.sits_out(m)).map(|(i, _)| i).collect()
+    }
+    /// From the players (the open slots while fewer than two play: what the room is for).
     fn mode(&self) -> RoomMode {
-        RoomMode::of(self.open_count(), self.teams)
+        let n = self.playing().len();
+        RoomMode::of(if n >= 2 { n } else { self.open_count() }, self.teams)
     }
     fn free_slot(&self) -> Option<usize> {
         (0..ROOM_SLOTS).find(|&i| self.open[i] && self.slots[i].is_none())
@@ -172,17 +206,48 @@ impl Room {
         if self.mode() != RoomMode::Teams {
             return false;
         }
-        let mut teams = self.members().map(|(_, m)| m.team);
+        let mut teams = self.members().filter(|(_, m)| !self.sits_out(m)).map(|(_, m)| m.team);
         let Some(first) = teams.next() else { return false };
         teams.all(|t| t == first)
     }
+    /// Two or more play, all of them ready, and nobody is still in the last game. Empty open slots
+    /// and the members who sit out are not waited for.
     fn can_start(&self) -> bool {
+        let playing = self.playing();
         matches!(self.phase, Phase::Waiting)
-            && self.player_count() >= 2
-            && (0..ROOM_SLOTS).all(|i| self.open[i] == self.slots[i].is_some())
-            && self.members().all(|(_, m)| m.ready && !m.in_game)
+            && playing.len() >= 2
+            && playing.iter().all(|&i| self.slots[i].as_ref().is_some_and(|m| m.ready))
+            && self.members().all(|(_, m)| !m.in_game)
             && !self.one_colour()
             && !self.set.as_ref().is_some_and(|s| s.paused())
+    }
+
+    /// The game's host (the session's decider): the room's host when they play it, else its
+    /// earliest-joined player.
+    fn game_host(&self, players: &[usize]) -> usize {
+        if players.contains(&self.host) {
+            return self.host;
+        }
+        players
+            .iter()
+            .copied()
+            .min_by_key(|&i| self.slots[i].as_ref().map_or(u64::MAX, |m| m.joined))
+            .unwrap_or(self.host)
+    }
+
+    /// The loser picks: the ports that pick the stage of a game `players` play. The last game's
+    /// pickers who play it; when none does (they sit out or left), one of its players at random
+    /// (the user's, 2026-10-18). `None`: the players' games decide (no report from them, or the
+    /// ruleset leaves no stage to the loser).
+    fn next_pickers(&self, players: &[usize]) -> Option<u8> {
+        let loser_picks = self.ruleset.best_of == 0
+            && matches!(self.ruleset.stage_choice, StageChoice::LoserPicks | StageChoice::LoserPicksList);
+        let reported = self.pickers.filter(|_| loser_picks)?;
+        let mask = players.iter().fold(0u8, |m, &i| m | 1 << i);
+        Some(match reported & mask {
+            0 if self.pick_owed && !players.is_empty() => 1 << players[self.pick_draw % players.len()],
+            q => q,
+        })
     }
 
     /// A set that waits for a player makes the room private; when it goes on (or ends) the room
@@ -272,9 +337,15 @@ impl Room {
     /// whatever the Teams switch), or four on two teams of two (Teams on). A set or a struck game
     /// is played between them; any other room plays single games.
     fn set_sides(&self) -> Option<[Vec<room_set::Seat>; 2]> {
+        self.sides_of(&self.playing())
+    }
+
+    /// The two sides `players` (slots) make, as [`Self::set_sides`].
+    fn sides_of(&self, players: &[usize]) -> Option<[Vec<room_set::Seat>; 2]> {
         let seat =
             |i: usize, m: &Member| room_set::Seat { slot: i, uid: m.info.uid, name: m.info.display_name.clone() };
-        let members: Vec<(usize, &Member)> = self.members().collect();
+        let members: Vec<(usize, &Member)> =
+            players.iter().filter_map(|&i| self.slots[i].as_ref().map(|m| (i, m))).collect();
         match members.as_slice() {
             [(a, ma), (b, mb)] => Some([vec![seat(*a, ma)], vec![seat(*b, mb)]]),
             [_, _, _, _] if self.teams => {
@@ -305,10 +376,12 @@ impl Room {
         if self.set_sides().is_some() {
             return None;
         }
+        // More players than two sides take: the others can sit out.
+        let more = self.playing().len() > 2;
         if self.ruleset.best_of > 0 {
-            Some(msg::SETS_NEED_TWO_SIDES)
+            Some(if more { msg::SETS_SIT_OUT } else { msg::SETS_NEED_TWO_SIDES })
         } else if room_set::strikes_every_game(&self.ruleset) {
-            Some(msg::STRIKES_NEED_TWO_SIDES)
+            Some(if more { msg::STRIKES_SIT_OUT } else { msg::STRIKES_NEED_TWO_SIDES })
         } else {
             None
         }
@@ -343,7 +416,8 @@ impl Room {
             Phase::InGame { .. } if me.in_game => msg::IN_GAME.into(),
             Phase::InGame { .. } => msg::WAITING_FOR_GAME.into(),
             Phase::Waiting => {
-                let (players, open) = (self.player_count(), self.open_count());
+                let players = self.player_count();
+                let playing = self.playing();
                 if let Some(set) = self.set.as_ref().filter(|s| s.paused()) {
                     let view = set.view();
                     return match view.waiting_for {
@@ -354,25 +428,27 @@ impl Room {
                 }
                 // After a set: its result until someone readies for the next one (decision B).
                 if let Some((set, w)) = self.set.as_ref().and_then(|s| s.winner.map(|w| (s, w))) {
-                    if players == open && self.members().all(|(_, m)| !m.ready) {
+                    if self.members().all(|(_, m)| !m.ready) {
                         return msg::set_won(&set.side_name(w), set.wins[w], set.wins[1 - w]);
                     }
                 }
                 if players == 1 {
                     msg::ROOM_WAITING.to_string()
-                } else if players < open {
-                    msg::waiting_for_players(players, open)
+                } else if playing.len() < 2 {
+                    msg::NEED_TWO_PLAYERS.into()
                 } else if self.one_colour() {
                     msg::PICK_TEAMS.into()
                 } else {
+                    // The players not ready yet, and anyone still in the last game.
                     let waiting: Vec<&str> = self
                         .members()
-                        .filter(|(_, m)| !m.ready || m.in_game)
+                        .filter(|(i, m)| m.in_game || (!m.ready && playing.contains(i)))
                         .map(|(_, m)| m.info.display_name.as_str())
                         .collect();
+                    let none_ready = playing.iter().all(|&i| self.slots[i].as_ref().is_some_and(|m| !m.ready));
                     if waiting.is_empty() {
                         msg::STARTING_GAME.into()
-                    } else if let Some(note) = self.two_sides_note().filter(|_| waiting.len() == players) {
+                    } else if let Some(note) = self.two_sides_note().filter(|_| none_ready) {
                         // Nobody ready yet: why this room plays single games.
                         note.into()
                     } else {
@@ -405,16 +481,18 @@ impl Room {
                         connect_code: m.info.connect_code.clone(),
                         ready: m.ready,
                         team: m.team,
-                        // The lock-in shows once the player is ready (`docs/design/rooms.md` #15),
-                        // to the others not in game 1 of a set (a blind pick).
-                        character: m.character.filter(|_| m.ready && (!blind || i == slot)),
-                        costume: m.costume.filter(|_| m.ready && (!blind || i == slot)),
+                        // The coin placed on the CSS, before the player readies too (the user's,
+                        // 2026-10-18; `docs/design/rooms.md` #15 showed only the lock-in), but not
+                        // to the others in game 1 of a set (a blind pick).
+                        character: m.character.filter(|_| !blind || i == slot),
+                        costume: m.costume.filter(|_| !blind || i == slot),
                         // Only with the rules' stock control (a pick left from before it was
                         // turned off shows nothing and plays nothing).
                         stocks: m
                             .stocks
                             .filter(|_| m.ready && (!blind || i == slot) && self.ruleset.rules.stock_control),
                         in_game: m.in_game,
+                        sitting_out: self.sits_out(m),
                     }),
                 })
                 .collect(),
@@ -422,6 +500,7 @@ impl Room {
             rules: self.ruleset.rules.clone(),
             ruleset: self.ruleset_view(),
             set: self.set.as_ref().map(|s| s.view()),
+            pickers: self.next_pickers(&self.playing()),
         })
     }
 
@@ -586,6 +665,27 @@ impl RoomBook {
         list
     }
 
+    /// The next game's pickers changed (someone sits out, plays again, joins or left): whoever
+    /// gained or lost the pick readies again, since their lock-in said whether they pick (the
+    /// game's STAGE_PENDING).
+    fn settle_pickers(&mut self, code: &str, before: Option<u8>) {
+        let Some(room) = self.rooms.get_mut(code) else { return };
+        if !matches!(room.phase, Phase::Waiting) {
+            return;
+        }
+        let changed = before.unwrap_or(0) ^ room.next_pickers(&room.playing()).unwrap_or(0);
+        for (i, slot) in room.slots.iter_mut().enumerate() {
+            if let Some(m) = slot.as_mut().filter(|m| m.ready && changed & (1 << i) != 0) {
+                tracing::info!(%code, slot = i + 1, "room stage pick moved: ready taken back");
+                m.ready = false;
+            }
+        }
+    }
+
+    fn pickers_now(&self, code: &str) -> Option<u8> {
+        self.rooms.get(code).and_then(|r| r.next_pickers(&r.playing()))
+    }
+
     fn broadcast(&self, code: &str, out: &mut Vec<Output>) {
         let Some(room) = self.rooms.get(code) else { return };
         for (slot, m) in room.members() {
@@ -675,6 +775,7 @@ impl RoomBook {
             costume: None,
             stocks: None,
             in_game: false,
+            sitting_out: false,
         });
         tracing::info!(%code, host = %who.connect_code, public, "room created");
         self.rooms.insert(
@@ -694,6 +795,9 @@ impl RoomBook {
                 based_on: None,
                 set: None,
                 public_before_pause: None,
+                pickers: None,
+                pick_owed: false,
+                pick_draw: 0,
             },
         );
         self.changed.push((code.clone(), self.room_counter));
@@ -731,6 +835,7 @@ impl RoomBook {
         if let Some(old) = self.member_of.get(&conn).cloned() {
             self.leave(now, &old, conn, None, true, out);
         }
+        let before = self.pickers_now(&code);
         self.join_seq += 1;
         let seq = self.join_seq;
         let Some(room) = self.rooms.get_mut(&code) else { return Err(msg::ROOM_NOT_FOUND) };
@@ -745,6 +850,8 @@ impl RoomBook {
             costume: None,
             stocks: None,
             in_game: false,
+            // Joiners play (the user's, 2026-10-18): the next game waits for them to ready.
+            sitting_out: false,
         });
         tracing::info!(%code, player = %who.connect_code, slot = slot + 1, "joined room");
         if let Some(set) = room.set.as_mut() {
@@ -755,6 +862,7 @@ impl RoomBook {
         room.settle_privacy();
         self.changed.push((code.clone(), room.serial));
         self.member_of.insert(conn, code.clone());
+        self.settle_pickers(&code, before);
         self.broadcast(&code, out);
         Ok(())
     }
@@ -771,6 +879,7 @@ impl RoomBook {
         out: &mut Vec<Output>,
     ) {
         self.member_of.remove(&conn);
+        let before = self.pickers_now(code);
         if notify {
             send(
                 out,
@@ -796,6 +905,10 @@ impl RoomBook {
             }
         }
         room.settle_privacy();
+        // A picker who left picks nothing (the pick is owed to the next game's players).
+        if let Some(p) = room.pickers.as_mut() {
+            *p &= !(1 << slot);
+        }
         self.changed.push((code.to_string(), room.serial));
         tracing::info!(
             %code,
@@ -827,13 +940,17 @@ impl RoomBook {
                 room.host = next;
             }
         }
-        let (starting, in_game) =
-            (matches!(room.phase, Phase::Starting { .. }), matches!(room.phase, Phase::InGame { .. }));
+        // A start waits only for its players' tickets: someone who sits it out may leave.
+        let (starting, in_game) = (
+            matches!(&room.phase, Phase::Starting { players, .. } if players.contains(&slot)),
+            matches!(room.phase, Phase::InGame { .. }),
+        );
         if starting {
             self.cancel_start(code, msg::PLAYER_LEFT, out);
         } else if in_game {
             self.maybe_game_over(code);
         }
+        self.settle_pickers(code, before);
         self.broadcast(code, out);
         self.maybe_start(now, code, out);
     }
@@ -847,6 +964,7 @@ impl RoomBook {
         out: &mut Vec<Output>,
     ) -> Result<(), &'static str> {
         let code = self.member_of.get(&conn).cloned().ok_or(msg::NOT_IN_ROOM)?;
+        let before = self.pickers_now(&code);
         let room = self.rooms.get_mut(&code).ok_or(msg::NOT_IN_ROOM)?;
         let me = room.slot_of(conn).ok_or(msg::NOT_IN_ROOM)?;
         let is_host = me == room.host;
@@ -939,15 +1057,47 @@ impl RoomBook {
                 if starting {
                     return Err(msg::ROOM_STARTING);
                 }
+                let outside_set = room.slots[me].as_ref().is_some_and(|m| !m.sitting_out && room.sits_out(m));
                 let m = room.slots[me].as_mut().ok_or(msg::NOT_IN_ROOM)?;
                 if m.in_game {
                     return Err(msg::BETWEEN_GAMES);
                 }
+                if ready && outside_set {
+                    return Err(msg::SET_SIT_OUT);
+                }
+                // Ready or not, the coin's character (none: in the hand), shown to the others.
                 m.ready = ready;
+                m.character = character;
+                m.costume = costume;
+                m.stocks = stocks.filter(|_| ready);
+                // A ready plays (the game sends `room-sit-out` first; an older one only readies).
                 if ready {
-                    m.character = character;
-                    m.costume = costume;
-                    m.stocks = stocks;
+                    m.sitting_out = false;
+                }
+            }
+            RoomRequest::SitOut { slot, sit_out } => {
+                let s = slot as usize - 1;
+                if s != me && !is_host {
+                    return Err(msg::HOST_ONLY);
+                }
+                if starting {
+                    return Err(msg::ROOM_STARTING);
+                }
+                let m = room.slots[s].as_ref().ok_or(msg::INVALID_REQUEST)?;
+                if m.in_game {
+                    return Err(msg::BETWEEN_GAMES);
+                }
+                // A set that is on is played by its sides to the end; everyone else waits for it.
+                if room.set_on() {
+                    return Err(msg::SET_SIT_OUT);
+                }
+                let m = room.slots[s].as_mut().ok_or(msg::INVALID_REQUEST)?;
+                if m.sitting_out != sit_out {
+                    tracing::info!(%code, slot, sit_out, by = me + 1, "room sit out");
+                }
+                m.sitting_out = sit_out;
+                if sit_out {
+                    m.ready = false;
                 }
             }
             RoomRequest::Team { team } => {
@@ -960,8 +1110,24 @@ impl RoomBook {
                 }
                 m.team = team.min(TEAM_COUNT - 1);
             }
-            RoomRequest::Back => {
+            RoomRequest::Back { pickers } => {
+                // Only a player of the game knows who picks next (the last to come back saw the
+                // game end); of its pickers, those who left the room meanwhile pick nothing.
+                let still_here = match &room.phase {
+                    Phase::InGame { players, .. } => players
+                        .iter()
+                        .filter(|(i, uid)| room.slots[*i].as_ref().is_some_and(|m| m.info.uid == *uid))
+                        .fold(0u8, |bits, (i, _)| bits | 1 << i),
+                    _ => 0,
+                };
                 if let Some(m) = room.slots[me].as_mut() {
+                    if m.in_game {
+                        if let Some(p) = pickers {
+                            room.pickers = Some(p & still_here);
+                            room.pick_owed = p != 0;
+                            room.pick_draw = rand::random();
+                        }
+                    }
                     m.in_game = false;
                 }
                 self.maybe_game_over(&code);
@@ -1118,6 +1284,7 @@ impl RoomBook {
             // Broadcasts the new state (without the kicked player) too.
             self.leave(now, &code, k, Some(msg::REMOVED), true, out);
         } else {
+            self.settle_pickers(&code, before);
             self.broadcast(&code, out);
             self.maybe_start(now, &code, out);
         }
@@ -1234,19 +1401,29 @@ impl RoomBook {
         }
     }
 
-    /// Starts the game once every open slot is taken and everyone is ready.
+    /// Starts the game once two or more play and all of them are ready.
     fn maybe_start(&mut self, now: Instant, code: &str, out: &mut Vec<Output>) {
         let Some(room) = self.rooms.get_mut(code) else { return };
         if !room.can_start() {
             return;
         }
+        let players = room.playing();
+        let host = room.game_host(&players);
+        let pickers = room.next_pickers(&players);
         self.match_counter += 1;
         let match_id = format!(
             "mode.room-{code}-{}-{:x}",
             Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             self.match_counter
         );
-        tracing::info!(%code, %match_id, players = room.player_count(), "room starting");
+        tracing::info!(
+            %code,
+            %match_id,
+            players = ?players.iter().map(|i| i + 1).collect::<Vec<_>>(),
+            host = host + 1,
+            ?pickers,
+            "room starting"
+        );
         if room.set.as_ref().is_none_or(|s| s.finished) {
             room.set = match room.set_sides() {
                 Some(sides) if room.ruleset.best_of > 0 => {
@@ -1258,15 +1435,27 @@ impl RoomBook {
                 _ => room.set.take(),
             };
         }
-        room.phase = Phase::Starting { match_id: match_id.clone(), since: now, tickets: BTreeMap::new() };
+        room.phase = Phase::Starting {
+            match_id: match_id.clone(),
+            since: now,
+            tickets: BTreeMap::new(),
+            players: players.clone(),
+            host,
+        };
         let start = RoomStart {
             kind: rooms::ROOM_START.into(),
             code: code.into(),
             match_id,
             timeout_secs: self.cfg.start_timeout.as_secs(),
+            players: players.iter().map(|&i| i as u8 + 1).collect(),
+            host: Some(host as u8 + 1),
+            pickers,
         };
-        for (_, m) in room.members() {
-            send(out, m.conn, &start);
+        // Only the game's players send a ticket; the others see it start in `room-state`.
+        for &i in &players {
+            if let Some(m) = room.slots[i].as_ref() {
+                send(out, m.conn, &start);
+            }
         }
         self.broadcast(code, out);
     }
@@ -1274,7 +1463,7 @@ impl RoomBook {
     /// A start that will not happen: its tickets fail, everyone has to ready up again.
     fn cancel_start(&mut self, code: &str, why: &str, out: &mut Vec<Output>) {
         let Some(room) = self.rooms.get_mut(code) else { return };
-        let Phase::Starting { tickets, .. } = std::mem::replace(&mut room.phase, Phase::Waiting) else {
+        let Phase::Starting { tickets, players, .. } = std::mem::replace(&mut room.phase, Phase::Waiting) else {
             return;
         };
         tracing::info!(%code, "room start cancelled: {why}");
@@ -1282,9 +1471,11 @@ impl RoomBook {
             self.ticket_of.remove(&t.conn);
             self.failed_tickets.push((t.conn, why.into()));
         }
-        for m in room.slots.iter_mut().flatten() {
-            m.ready = false;
-            room_error(out, m.conn, rooms::ROOM_START, why);
+        for (i, slot) in room.slots.iter_mut().enumerate() {
+            if let Some(m) = slot.as_mut().filter(|_| players.contains(&i)) {
+                m.ready = false;
+                room_error(out, m.conn, rooms::ROOM_START, why);
+            }
         }
     }
 
@@ -1300,14 +1491,15 @@ impl RoomBook {
     ) -> Result<TicketOutcome, &'static str> {
         let room = self.rooms.get_mut(code).ok_or(msg::ROOM_NOT_FOUND)?;
         let slot = room.members().find(|(_, m)| m.info.uid == uid).map(|(i, _)| i).ok_or(msg::NOT_A_MEMBER)?;
-        let host = room.host;
-        let member_slots: Vec<usize> = room.members().map(|(i, _)| i).collect();
-        let (match_id, tickets, old) = {
-            let Phase::Starting { match_id, tickets, .. } = &mut room.phase else {
+        let (match_id, tickets, old, member_slots, host) = {
+            let Phase::Starting { match_id, tickets, players, host, .. } = &mut room.phase else {
                 return Err(msg::ROOM_NOT_STARTING);
             };
+            if !players.contains(&slot) {
+                return Err(msg::NOT_IN_THIS_GAME);
+            }
             let old = tickets.insert(slot, StartTicket { conn, addr, lan });
-            (match_id.clone(), tickets.clone(), old)
+            (match_id.clone(), tickets.clone(), old, players.clone(), *host)
         };
         let mut outcome = TicketOutcome::default();
         if let Some(old) = old {
@@ -1324,13 +1516,15 @@ impl RoomBook {
         let set_ticket = if let Some(set) = room.set.as_ref().filter(|s| s.on()) {
             Some(set.ticket(&room.ruleset))
         } else if room_set::strikes_every_game(&room.ruleset) {
-            room.set_sides().map(|sides| room_set::strike_ticket(&room.ruleset, sides, rand::random()))
+            room.sides_of(&member_slots).map(|sides| room_set::strike_ticket(&room.ruleset, sides, rand::random()))
         } else {
             None
         };
-        let players: Vec<Player> = room
-            .members()
-            .map(|(i, m)| {
+        let in_game: Vec<(usize, &Member)> =
+            member_slots.iter().filter_map(|&i| room.slots[i].as_ref().map(|m| (i, m))).collect();
+        let players: Vec<Player> = in_game
+            .iter()
+            .map(|&(i, m)| {
                 let t = &tickets[&i];
                 Player {
                     uid: m.info.uid.to_string(),
@@ -1374,10 +1568,10 @@ impl RoomBook {
             players = ?players.iter().map(|p| format!("{}@{}", p.connect_code, p.ip_address)).collect::<Vec<_>>(),
             "room matched"
         );
-        let mode = room.mode();
+        let mode = RoomMode::of(in_game.len(), room.teams);
         outcome.record = Some(RoomRecord {
             match_id: match_id.clone(),
-            players: room.members().map(|(_, m)| m.info.uid).collect(),
+            players: in_game.iter().map(|(_, m)| m.info.uid).collect(),
             host: room.slots[host].as_ref().map_or(Uuid::nil(), |m| m.info.uid),
             stages: room.ruleset.stages.all().collect(),
             room: common::db::MatchRoom {
@@ -1388,8 +1582,8 @@ impl RoomBook {
                     RoomMode::Teams => "teams",
                 }
                 .into(),
-                ports: room.members().map(|(i, _)| i as i16 + 1).collect(),
-                teams: (mode == RoomMode::Teams).then(|| room.members().map(|(_, m)| i16::from(m.team)).collect()),
+                ports: in_game.iter().map(|(i, _)| *i as i16 + 1).collect(),
+                teams: (mode == RoomMode::Teams).then(|| in_game.iter().map(|(_, m)| i16::from(m.team)).collect()),
                 ruleset: room.ruleset_code.as_ref().map(|code| common::db::MatchRuleset {
                     code: code.clone(),
                     name: room.ruleset.name.clone(),
@@ -1398,10 +1592,17 @@ impl RoomBook {
                 }),
             },
         });
-        room.phase = Phase::InGame { since: Instant::now(), match_id: match_id.clone(), unreachable: BTreeSet::new() };
-        for m in room.slots.iter_mut().flatten() {
-            m.in_game = true;
-            m.ready = false;
+        room.phase = Phase::InGame {
+            since: Instant::now(),
+            match_id: match_id.clone(),
+            unreachable: BTreeSet::new(),
+            players: in_game.iter().map(|(i, m)| (*i, m.info.uid)).collect(),
+        };
+        for (i, slot) in room.slots.iter_mut().enumerate() {
+            if let Some(m) = slot.as_mut().filter(|_| member_slots.contains(&i)) {
+                m.in_game = true;
+                m.ready = false;
+            }
         }
         Ok(outcome)
     }
@@ -1429,13 +1630,14 @@ impl RoomBook {
         let mut stale = Vec::new();
         for room in self.rooms.values() {
             match &room.phase {
-                Phase::Starting { since, tickets, .. }
+                Phase::Starting { since, tickets, players, .. }
                     if now.saturating_duration_since(*since) >= self.cfg.start_timeout =>
                 {
-                    let missing = room
-                        .members()
-                        .find(|(i, _)| !tickets.contains_key(i))
-                        .map(|(_, m)| m.info.connect_code.clone())
+                    let missing = players
+                        .iter()
+                        .find(|i| !tickets.contains_key(i))
+                        .and_then(|&i| room.slots[i].as_ref())
+                        .map(|m| m.info.connect_code.clone())
                         .unwrap_or_default();
                     late.push((room.code.clone(), msg::did_not_connect(&missing)));
                 }
@@ -1615,12 +1817,12 @@ mod tests {
         assert_eq!(s["slots"][1]["open"], true);
         assert_eq!(msgs(&t.req(1, RoomRequest::Slot { slot: 2, open: false }), 1)[0]["error"], msg::MIN_OPEN_SLOTS);
         join(&mut t, 2, &code);
-        // Open 3 and 4: four slots, FFA.
+        // Open 3 and 4: two play a 1v1, the empty slots wait for nobody (the user's, 2026-10-18).
         t.req(1, RoomRequest::Slot { slot: 3, open: true });
         let out = t.req(1, RoomRequest::Slot { slot: 4, open: true });
         let s = last_state(&out, 2);
-        assert_eq!(s["mode"], "ffa");
-        assert_eq!(s["statusText"], "Waiting for players (2/4)");
+        assert_eq!(s["mode"], "1v1");
+        assert_eq!(s["statusText"], msg::waiting_on(&["player1", "player2"]));
         join(&mut t, 3, &code);
         // Closing an occupied slot removes its player.
         let out = t.req(1, RoomRequest::Slot { slot: 2, open: false });
@@ -1804,7 +2006,7 @@ mod tests {
             .req(2, RoomRequest::Step { game: 2, actions: [vec![0x02, 0x03], vec![]], match_started: false })
             .is_empty());
         t.req(2, RoomRequest::Leave);
-        let out = t.req(1, RoomRequest::Back);
+        let out = t.req(1, RoomRequest::Back { pickers: None });
         let s = last_state(&out, 1);
         assert_eq!((s["set"]["paused"].as_bool(), s["set"]["waitingFor"].as_str()), (Some(true), Some("player2")));
         assert_eq!((s["statusText"].as_str(), s["public"].as_bool()), (Some("Set paused: player2 left"), Some(false)));
@@ -1827,7 +2029,7 @@ mod tests {
         // (2-0) is over. Back in the room, the result shows until someone readies.
         t.req(1, RoomRequest::Step { game: 2, actions: [vec![0x02, 0x03], vec![0x21]], match_started: true });
         t.req(2, RoomRequest::Leave);
-        let out = t.req(1, RoomRequest::Back);
+        let out = t.req(1, RoomRequest::Back { pickers: None });
         let s = last_state(&out, 1);
         assert_eq!((s["set"]["finished"].as_bool(), s["set"]["winner"].as_u64()), (Some(true), Some(0)));
         assert_eq!((s["set"]["score"].clone(), s["public"].as_bool()), (serde_json::json!([2, 0]), Some(true)));
@@ -1840,8 +2042,8 @@ mod tests {
         t.req(1, RoomRequest::Result { game: 1, winner_side: 0, stage: 0x02 });
         let out = t.req(2, RoomRequest::Result { game: 1, winner_side: 1, stage: 0x02 });
         assert_eq!(last_state(&out, 1)["set"]["paused"], true);
-        t.req(1, RoomRequest::Back);
-        let out = t.req(2, RoomRequest::Back);
+        t.req(1, RoomRequest::Back { pickers: None });
+        let out = t.req(2, RoomRequest::Back { pickers: None });
         assert_eq!(last_state(&out, 1)["statusText"], msg::SET_HOST_DECIDES);
         assert_eq!(last_state(&out, 1)["set"]["canResume"], true);
         assert_eq!(msgs(&t.req(2, RoomRequest::Set { resume: true }), 2)[0]["error"], msg::HOST_ONLY);
@@ -1897,8 +2099,8 @@ mod tests {
         // While it is on, the length waits.
         let mut out = vec![];
         t.book.announce(&code, &mut out);
-        t.req(1, RoomRequest::Back);
-        t.req(2, RoomRequest::Back);
+        t.req(1, RoomRequest::Back { pickers: None });
+        t.req(2, RoomRequest::Back { pickers: None });
         assert_eq!(msgs(&t.req(1, RoomRequest::BestOf { best_of: 5 }), 1)[0]["error"], msg::SET_ON);
         // The host ends the set that is on (End set): no result, the room is free again. (In its
         // session, between games, too: see the_host_ends_a_running_set_between_games.)
@@ -1946,8 +2148,8 @@ mod tests {
         // Replay (resume) still only between games.
         assert_eq!(msgs(&t.req(1, RoomRequest::Set { resume: true }), 1)[0]["error"], msg::BETWEEN_GAMES);
         // Their games end the session; the room waits again, and the next all-ready starts a new set.
-        t.req(1, RoomRequest::Back);
-        let out = t.req(2, RoomRequest::Back);
+        t.req(1, RoomRequest::Back { pickers: None });
+        let out = t.req(2, RoomRequest::Back { pickers: None });
         assert_eq!(last_state(&out, 1)["status"], "waiting");
         let set = play(&mut t, &code, 103);
         assert_eq!((set.game, set.wins), (1, [0, 0]));
@@ -2016,7 +2218,7 @@ mod tests {
         r.normalize();
         let mut out = vec![];
         t.book.apply_ruleset(&code, r.clone(), Some("BCDFGH".into()), &mut out).unwrap();
-        assert_eq!(last_state(&out, 1)["statusText"], msg::SETS_NEED_TWO_SIDES);
+        assert_eq!(last_state(&out, 1)["statusText"], msg::SETS_SIT_OUT);
         // Once someone readies, the line is the usual one; the start is not held.
         let out = t.req(1, RoomRequest::Ready { ready: true, character: Some(1), costume: Some(0), stocks: None });
         assert_eq!(last_state(&out, 1)["statusText"], msg::waiting_on(&["player2", "player3"]));
@@ -2033,12 +2235,12 @@ mod tests {
         assert!(last_state(&out, 1).get("set").is_none());
         // Striking every game: the same, with its own note.
         for n in 1..=3 {
-            t.req(n, RoomRequest::Back);
+            t.req(n, RoomRequest::Back { pickers: None });
         }
         let strike = Ruleset { best_of: 0, stage_choice: common::rules::StageChoice::Strike, ..r };
         let mut out = vec![];
         t.book.apply_ruleset(&code, strike, Some("CDFGHJ".into()), &mut out).unwrap();
-        assert_eq!(last_state(&out, 1)["statusText"], msg::STRIKES_NEED_TWO_SIDES);
+        assert_eq!(last_state(&out, 1)["statusText"], msg::STRIKES_SIT_OUT);
     }
 
     /// The room's stages go to its members with the ruleset, and a ruleset whose loser picks from
@@ -2059,7 +2261,7 @@ mod tests {
         assert_eq!(s["ruleset"]["stages"]["starters"], serde_json::json!([1, 4, 9, 0x21, 0x2E]));
         assert_eq!(start(&mut t, &code, 100).pick_from_stages, None);
         for n in 1..=2 {
-            t.req(n, RoomRequest::Back);
+            t.req(n, RoomRequest::Back { pickers: None });
         }
 
         let mut r = Ruleset {
@@ -2168,7 +2370,7 @@ mod tests {
         // A teammate who leaves mid-match loses the game for the team.
         t.req(2, RoomRequest::Step { game: 2, actions: [vec![], vec![]], match_started: true });
         t.req(3, RoomRequest::Leave);
-        let out = t.req(1, RoomRequest::Back);
+        let out = t.req(1, RoomRequest::Back { pickers: None });
         let s = last_state(&out, 1);
         assert_eq!(
             (s["set"]["score"].clone(), s["set"]["finished"].as_bool()),
@@ -2176,7 +2378,7 @@ mod tests {
         );
         assert_eq!(s["set"]["winner"], 1);
         for n in [2, 4] {
-            t.req(n, RoomRequest::Back);
+            t.req(n, RoomRequest::Back { pickers: None });
         }
         join(&mut t, 3, &code);
         let out = t.req(3, RoomRequest::Team { team: 0 });
@@ -2189,6 +2391,345 @@ mod tests {
             out = t.req(c, RoomRequest::Ready { ready: true, character: Some(c as u8), costume: Some(0), stocks: None });
         }
         out
+    }
+
+    fn addr(n: u8) -> SocketAddrV4 {
+        SocketAddrV4::new([203, 0, 113, n].into(), 41000 + n as u16)
+    }
+
+    fn sit(t: &mut T, by: ConnId, slot: u8, sit_out: bool) -> Vec<Output> {
+        t.req(by, RoomRequest::SitOut { slot, sit_out })
+    }
+
+    fn start_of(out: &[Output], conn: ConnId) -> Option<Value> {
+        msgs(out, conn).into_iter().find(|m| m["type"] == "room-start")
+    }
+
+    /// The tickets of `conns` (as `100 + conn`); the last one's outcome.
+    fn tickets(t: &mut T, code: &str, conns: &[ConnId]) -> TicketOutcome {
+        let mut done = TicketOutcome::default();
+        for &c in conns {
+            done = t.book.ticket(100 + c, addr(c as u8), String::new(), info(c as u8).uid, code).unwrap();
+        }
+        done
+    }
+
+    /// A room of four open slots with two players starts as soon as both are ready (the user's,
+    /// 2026-10-18: "you can always play with open slots"); a third who joins during the game plays
+    /// the next one, which waits for them.
+    #[test]
+    fn two_players_start_with_open_slots_empty() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
+        t.req(1, RoomRequest::Slot { slot: 4, open: true });
+        join(&mut t, 2, &code);
+        let out = ready_all(&mut t, &[1, 2]);
+        let start = start_of(&out, 1).expect("room-start");
+        assert_eq!(start["players"], serde_json::json!([1, 2]));
+        assert_eq!(start["host"], 1);
+        // Joined during the start: not in this game (no ticket), waits for it.
+        let out = join(&mut t, 3, &code);
+        assert_eq!(last_state(&out, 3)["statusText"], msg::STARTING_GAME);
+        assert_eq!(
+            t.book.ticket(103, addr(3), String::new(), info(3).uid, &code).unwrap_err(),
+            msg::NOT_IN_THIS_GAME
+        );
+        let done = tickets(&mut t, &code, &[1, 2]);
+        assert_eq!(done.matched.len(), 2);
+        assert_eq!(done.record.as_ref().unwrap().room.mode, "1v1");
+        let mut out = vec![];
+        t.book.announce(&code, &mut out);
+        assert_eq!(last_state(&out, 3)["statusText"], msg::WAITING_FOR_GAME);
+        assert_eq!(last_state(&out, 3)["slots"][2]["player"]["inGame"], false);
+        // They can ready during the game; back, the next game waits only for the two.
+        t.req(3, RoomRequest::Ready { ready: true, character: Some(3), costume: Some(0), stocks: None });
+        t.req(1, RoomRequest::Back { pickers: Some(2) });
+        let out = t.req(2, RoomRequest::Back { pickers: Some(2) });
+        assert_eq!(last_state(&out, 1)["statusText"], msg::waiting_on(&["player1", "player2"]));
+        assert_eq!(last_state(&out, 1)["mode"], "ffa");
+        let out = ready_all(&mut t, &[1, 2]);
+        let start = start_of(&out, 3).expect("room-start");
+        assert_eq!(start["players"], serde_json::json!([1, 2, 3]));
+        assert_eq!(start["pickers"], 2, "the last game's loser (P2) plays and picks");
+    }
+
+    /// SIT OUT (the user's, 2026-10-18): the game starts without who sits out, they get no
+    /// `room-start` and their ticket is refused; a player sits only themselves out, the host
+    /// anyone; sitting out takes the ready back, a ready plays again.
+    #[test]
+    fn a_player_who_sits_out_is_left_out_of_the_game() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
+        join(&mut t, 2, &code);
+        join(&mut t, 3, &code);
+        t.req(3, RoomRequest::Ready { ready: true, character: Some(3), costume: Some(0), stocks: None });
+        // Not the host: only themselves.
+        assert_eq!(msgs(&sit(&mut t, 2, 3, true), 2)[0]["error"], msg::HOST_ONLY);
+        let out = sit(&mut t, 3, 3, true);
+        let s = last_state(&out, 1);
+        assert_eq!(s["slots"][2]["player"]["sittingOut"], true);
+        assert_eq!(s["slots"][2]["player"]["ready"], false, "sitting out takes the ready back");
+        assert_eq!(s["statusText"], msg::waiting_on(&["player1", "player2"]));
+        // The host sits P2 out too: one player left, nothing starts.
+        let out = sit(&mut t, 1, 2, true);
+        assert_eq!(last_state(&out, 2)["statusText"], msg::NEED_TWO_PLAYERS);
+        assert!(start_of(&ready_all(&mut t, &[1]), 1).is_none());
+        // and back in.
+        sit(&mut t, 1, 2, false);
+        let out = ready_all(&mut t, &[2]);
+        let start = start_of(&out, 1).expect("room-start");
+        assert_eq!(start["players"], serde_json::json!([1, 2]));
+        assert!(start_of(&out, 3).is_none(), "who sits out sends no ticket");
+        assert_eq!(last_state(&out, 3)["status"], "starting");
+        // During the start a player can't sit out; the one sitting out leaving cancels nothing.
+        assert_eq!(msgs(&sit(&mut t, 2, 2, true), 2)[0]["error"], msg::ROOM_STARTING);
+        let out = t.req(3, RoomRequest::Leave);
+        assert_eq!(last_state(&out, 1)["status"], "starting");
+        join(&mut t, 3, &code);
+        assert_eq!(
+            t.book.ticket(103, addr(3), String::new(), info(3).uid, &code).unwrap_err(),
+            msg::NOT_IN_THIS_GAME
+        );
+        let done = tickets(&mut t, &code, &[1, 2]);
+        let rec = done.record.as_ref().unwrap();
+        assert_eq!((rec.players.len(), rec.room.mode.as_str(), rec.room.ports.clone()), (2, "1v1", vec![1, 2]));
+        // In the game: its players can't sit out; who sits out can play the next one.
+        assert_eq!(msgs(&sit(&mut t, 1, 1, true), 1)[0]["error"], msg::BETWEEN_GAMES);
+        sit(&mut t, 3, 3, true);
+        let out = t.req(3, RoomRequest::Ready { ready: true, character: Some(3), costume: Some(0), stocks: None });
+        assert_eq!(last_state(&out, 1)["slots"][2]["player"]["sittingOut"], false, "a ready plays");
+        assert_eq!(last_state(&out, 3)["statusText"], msg::WAITING_FOR_GAME);
+    }
+
+    /// Sitting out stays until the player plays again: the next games start without them.
+    #[test]
+    fn sitting_out_lasts_across_games() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
+        join(&mut t, 2, &code);
+        join(&mut t, 3, &code);
+        sit(&mut t, 3, 3, true);
+        for _ in 0..2 {
+            let out = ready_all(&mut t, &[1, 2]);
+            assert_eq!(start_of(&out, 1).expect("room-start")["players"], serde_json::json!([1, 2]));
+            tickets(&mut t, &code, &[1, 2]);
+            t.req(1, RoomRequest::Back { pickers: Some(1) });
+            let out = t.req(2, RoomRequest::Back { pickers: Some(1) });
+            assert_eq!(last_state(&out, 1)["slots"][2]["player"]["sittingOut"], true);
+        }
+    }
+
+    /// The host sits out: the game's host (the session's decider) is the earliest-joined player
+    /// of the game; the room's host stays the host.
+    #[test]
+    fn the_host_sits_out_and_the_game_has_another_host() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
+        join(&mut t, 2, &code);
+        join(&mut t, 3, &code);
+        sit(&mut t, 1, 1, true);
+        let out = ready_all(&mut t, &[3, 2]);
+        let start = start_of(&out, 2).expect("room-start");
+        assert_eq!((start["players"].clone(), start["host"].clone()), (serde_json::json!([2, 3]), 2.into()));
+        let done = tickets(&mut t, &code, &[2, 3]);
+        for (conn, resp) in &done.matched {
+            assert_eq!(resp.is_host, Some(*conn == 102));
+        }
+        assert_eq!(done.record.as_ref().unwrap().host, info(2).uid);
+        let mut out = vec![];
+        t.book.announce(&code, &mut out);
+        assert_eq!(last_state(&out, 2)["host"], 1);
+        // Still the host: sits P3 out between games.
+        t.req(2, RoomRequest::Back { pickers: None });
+        t.req(3, RoomRequest::Back { pickers: None });
+        let out = sit(&mut t, 1, 3, true);
+        assert_eq!(last_state(&out, 3)["slots"][2]["player"]["sittingOut"], true);
+    }
+
+    /// The loser picks: the last game's loser when they play the next game, else one of its
+    /// players at random (the user's, 2026-10-18), also when the loser left; nothing from an older
+    /// Dolphin (no `pickers` in `room-back`), so the players' games decide as before.
+    #[test]
+    fn the_stage_pick_goes_to_a_player_when_the_loser_sits_out() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
+        join(&mut t, 2, &code);
+        join(&mut t, 3, &code);
+        sit(&mut t, 3, 3, true);
+        let out = ready_all(&mut t, &[1, 2]);
+        assert!(start_of(&out, 1).unwrap().get("pickers").is_none(), "game 1: no report yet");
+        tickets(&mut t, &code, &[1, 2]);
+        t.req(1, RoomRequest::Back { pickers: Some(0b10) });
+        t.req(2, RoomRequest::Back { pickers: Some(0b10) });
+        // Who sits out reporting changes nothing (they were not in the game).
+        t.req(3, RoomRequest::Back { pickers: Some(0b1) });
+        // P2 lost and sits out; P1 and P3 play: one of them picks.
+        sit(&mut t, 2, 2, true);
+        sit(&mut t, 3, 3, false);
+        let mut seen = HashSet::new();
+        for draw in 0..40 {
+            let mut room = t.book.rooms[&code].clone();
+            room.pick_draw = draw;
+            assert_eq!(room.next_pickers(&room.playing()), room.next_pickers(&room.playing()), "stable");
+            let p = room.next_pickers(&room.playing()).unwrap();
+            assert!(p == 0b1 || p == 0b100, "{p:#b}");
+            seen.insert(p);
+        }
+        assert_eq!(seen.len(), 2, "drawn among the players");
+        // The room's CSS shows who picks before anyone readies, and the start agrees.
+        let mut out = vec![];
+        t.book.announce(&code, &mut out);
+        let shown = last_state(&out, 1)["pickers"].as_u64().unwrap();
+        assert!(shown == 0b1 || shown == 0b100, "{shown:#b}");
+        let out = ready_all(&mut t, &[1, 3]);
+        assert_eq!(start_of(&out, 1).unwrap()["pickers"].as_u64(), Some(shown));
+        tickets(&mut t, &code, &[1, 3]);
+        // A draw left both picking; one of them sits out: the other picks.
+        t.req(1, RoomRequest::Back { pickers: Some(0b101) });
+        t.req(3, RoomRequest::Back { pickers: Some(0b101) });
+        sit(&mut t, 3, 3, true);
+        sit(&mut t, 2, 2, false);
+        let out = ready_all(&mut t, &[1, 2]);
+        assert_eq!(start_of(&out, 1).unwrap()["pickers"], 0b1);
+        tickets(&mut t, &code, &[1, 2]);
+        // The loser plays again after the others readied: they pick, and the one the pick was
+        // drawn for readies again (their lock-in said they pick); the other keeps their ready.
+        t.req(1, RoomRequest::Back { pickers: Some(0b10) });
+        t.req(2, RoomRequest::Back { pickers: Some(0b10) });
+        sit(&mut t, 2, 2, true);
+        sit(&mut t, 3, 3, false);
+        let mut out = vec![];
+        t.book.announce(&code, &mut out);
+        let drawn = last_state(&out, 1)["pickers"].as_u64().unwrap() as u8;
+        let (drawn_conn, other) = if drawn == 0b1 { (1, 3) } else { (3, 1) };
+        ready_all(&mut t, &[drawn_conn, other]);
+        // (P2 sitting out, both ready: that game starts.) P3 loses it and sits out; P1 and P2
+        // play, and one of them gets the pick.
+        tickets(&mut t, &code, &[1, 3]);
+        t.req(1, RoomRequest::Back { pickers: Some(0b100) });
+        t.req(3, RoomRequest::Back { pickers: Some(0b100) });
+        sit(&mut t, 3, 3, true);
+        sit(&mut t, 2, 2, false);
+        let mut out = vec![];
+        t.book.announce(&code, &mut out);
+        let drawn = last_state(&out, 1)["pickers"].as_u64().unwrap() as u8;
+        assert!(drawn == 0b1 || drawn == 0b10, "{drawn:#b}");
+        let (drawn_conn, other) = if drawn == 0b1 { (1usize, 2usize) } else { (2, 1) };
+        // The one with the pick readies; then P3 plays again and takes the pick back: that
+        // ready is taken back (their lock-in said they pick), the other's is kept.
+        ready_all(&mut t, &[drawn_conn as ConnId]);
+        let out = sit(&mut t, 3, 3, false);
+        let s = last_state(&out, 1);
+        assert_eq!(s["pickers"], 0b100);
+        assert_eq!(s["slots"][drawn_conn - 1]["player"]["ready"], false, "the pick moved away: {s}");
+        ready_all(&mut t, &[other as ConnId]);
+        let s = last_state(&sit(&mut t, 3, 3, false), 1);
+        assert_eq!(s["slots"][other - 1]["player"]["ready"], true, "no pick, no change: {s}");
+        let out = ready_all(&mut t, &[3, drawn_conn as ConnId]);
+        let start = start_of(&out, 1).unwrap();
+        assert_eq!((start["pickers"].clone(), start["players"].clone()), (0b100.into(), serde_json::json!([1, 2, 3])));
+        tickets(&mut t, &code, &[1, 2, 3]);
+        // The loser left: the pick is still someone's.
+        t.req(1, RoomRequest::Back { pickers: Some(0b10) });
+        t.req(2, RoomRequest::Back { pickers: Some(0b10) });
+        t.req(2, RoomRequest::Leave);
+        t.req(3, RoomRequest::Back { pickers: Some(0b10) });
+        let out = ready_all(&mut t, &[1, 3]);
+        let p = start_of(&out, 1).unwrap()["pickers"].as_u64().unwrap();
+        assert!(p == 0b1 || p == 0b100, "{p:#b}");
+        tickets(&mut t, &code, &[1, 3]);
+        // Game 1's random stage (no picker) stays random.
+        t.req(1, RoomRequest::Back { pickers: Some(0) });
+        t.req(3, RoomRequest::Back { pickers: Some(0) });
+        let out = ready_all(&mut t, &[1, 3]);
+        assert_eq!(start_of(&out, 1).unwrap()["pickers"], 0);
+        tickets(&mut t, &code, &[1, 3]);
+        // A ruleset that strikes leaves no stage to the loser: nothing sent.
+        t.req(1, RoomRequest::Back { pickers: Some(0b1) });
+        t.req(3, RoomRequest::Back { pickers: Some(0b1) });
+        let strike = Ruleset { stage_choice: StageChoice::Random, ..Default::default() };
+        t.book.apply_ruleset(&code, strike, None, &mut vec![]).unwrap();
+        let out = ready_all(&mut t, &[1, 3]);
+        assert!(start_of(&out, 1).unwrap().get("pickers").is_none());
+    }
+
+    /// The coin placed on the CSS shows to the others before the player readies (the user's,
+    /// 2026-10-18), taken in the hand it is gone; game 1 of a set still hides it (a blind pick).
+    #[test]
+    fn the_placed_character_shows_before_the_ready() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        join(&mut t, 2, &code);
+        let pick = |c: Option<u8>| RoomRequest::Ready { ready: false, character: c, costume: c.map(|_| 2), stocks: None };
+        let out = t.req(2, pick(Some(7)));
+        let p = &last_state(&out, 1)["slots"][1]["player"];
+        assert_eq!((p["ready"].clone(), p["character"].clone(), p["costume"].clone()), (false.into(), 7.into(), 2.into()));
+        let out = t.req(2, pick(None));
+        assert!(last_state(&out, 1)["slots"][1]["player"]["character"].is_null());
+        // Stocks show only with a ready.
+        let out = t.req(2, RoomRequest::Ready { ready: false, character: Some(7), costume: Some(0), stocks: Some(3) });
+        assert!(last_state(&out, 1)["slots"][1]["player"].get("stocks").is_none());
+        // Game 1 of a set: the others see nothing, the player their own pick.
+        t.req(1, RoomRequest::BestOf { best_of: 3 });
+        let out = t.req(2, pick(Some(7)));
+        assert!(last_state(&out, 1)["slots"][1]["player"]["character"].is_null());
+        assert_eq!(last_state(&out, 2)["slots"][1]["player"]["character"], 7);
+    }
+
+    /// A 1v1 set in a room of three (the user's, 2026-10-18): the third sits out and the set is
+    /// played by the other two to the end; meanwhile the third (and anyone who joins) sits out and
+    /// can't play, and the set's players can't sit out. After the set the third is as they chose.
+    #[test]
+    fn a_set_in_a_room_of_three_is_played_by_two() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
+        t.req(1, RoomRequest::Slot { slot: 4, open: true });
+        join(&mut t, 2, &code);
+        join(&mut t, 3, &code);
+        t.req(1, RoomRequest::BestOf { best_of: 3 });
+        let out = sit(&mut t, 3, 3, true);
+        assert_eq!(last_state(&out, 1)["statusText"], msg::waiting_on(&["player1", "player2"]));
+        let set = play(&mut t, &code, 200);
+        assert_eq!(set.best_of, 3);
+        let mut out = vec![];
+        t.book.announce(&code, &mut out);
+        let s = last_state(&out, 3);
+        assert_eq!(s["set"]["members"], serde_json::json!([[1], [2]]));
+        assert_eq!(s["slots"][2]["player"]["sittingOut"], true);
+        // Locked until the set is over: the third, a joiner, the set's players.
+        assert_eq!(msgs(&sit(&mut t, 3, 3, false), 3)[0]["error"], msg::SET_SIT_OUT);
+        assert_eq!(msgs(&sit(&mut t, 1, 3, false), 1)[0]["error"], msg::SET_SIT_OUT);
+        let out = join(&mut t, 4, &code);
+        assert_eq!(last_state(&out, 4)["slots"][3]["player"]["sittingOut"], true);
+        let ready4 = RoomRequest::Ready { ready: true, character: Some(4), costume: Some(0), stocks: None };
+        assert_eq!(msgs(&t.req(4, ready4.clone()), 4)[0]["error"], msg::SET_SIT_OUT);
+        // A pick still shows (not in the set's blind game 1 to the others, but to themselves).
+        let out = t.req(4, RoomRequest::Ready { ready: false, character: Some(4), costume: Some(0), stocks: None });
+        assert_eq!(last_state(&out, 4)["slots"][3]["player"]["character"], 4);
+        // The set's games end: its players back, then win it 2-0.
+        for g in 1..=2u32 {
+            for c in [1, 2] {
+                t.req(c, RoomRequest::Result { game: g, winner_side: 0, stage: 1 });
+            }
+        }
+        for c in [1, 2] {
+            t.req(c, RoomRequest::Back { pickers: None });
+        }
+        assert_eq!(msgs(&sit(&mut t, 2, 2, true), 2).iter().find(|m| m["type"] == "room-error"), None);
+        let mut out = vec![];
+        t.book.announce(&code, &mut out);
+        let s = last_state(&out, 1);
+        assert_eq!(s["set"]["finished"], true);
+        // P3 chose to sit out, P4 joined playing: P4 plays now.
+        assert_eq!(s["slots"][2]["player"]["sittingOut"], true);
+        assert_eq!(s["slots"][3]["player"]["sittingOut"], false);
+        assert_eq!(s["slots"][1]["player"]["sittingOut"], true);
     }
 
     #[test]
@@ -2263,8 +2804,8 @@ mod tests {
         let out = join(&mut t, 4, &code);
         assert_eq!(last_state(&out, 4)["statusText"], msg::WAITING_FOR_GAME);
         assert!(t.book.public_rooms(10)[0].joinable || t.book.public_rooms(10)[0].players == 3);
-        t.req(1, RoomRequest::Back);
-        let out = t.req(2, RoomRequest::Back);
+        t.req(1, RoomRequest::Back { pickers: None });
+        let out = t.req(2, RoomRequest::Back { pickers: None });
         assert_eq!(last_state(&out, 1)["status"], "waiting");
         assert_eq!(last_state(&out, 1)["statusText"], msg::waiting_on(&["player1", "player2", "player4"]));
         assert_eq!(msg::waiting_on(&["player1", "player2", "player4"]), "Waiting on: player1, player2 +1");
@@ -2314,7 +2855,7 @@ mod tests {
         assert!(t.req(2, RoomRequest::Unreachable { match_id: "mode.room-old".into(), slots: vec![4] }).is_empty());
         // Once the game is over, a late report changes nothing either.
         for c in 1..=4 {
-            t.req(c, RoomRequest::Back);
+            t.req(c, RoomRequest::Back { pickers: None });
         }
         assert!(t.req(2, unreachable(vec![1])).is_empty());
     }

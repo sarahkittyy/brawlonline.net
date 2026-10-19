@@ -32,6 +32,7 @@ pub const ROOM_PUBLIC: &str = "room-public";
 pub const ROOM_READY: &str = "room-ready";
 pub const ROOM_TEAM: &str = "room-team";
 pub const ROOM_BACK: &str = "room-back";
+pub const ROOM_SIT_OUT: &str = "room-sit-out";
 pub const ROOM_RULES: &str = "room-rules";
 pub const ROOM_RESULT: &str = "room-result";
 pub const ROOM_SET: &str = "room-set";
@@ -142,12 +143,19 @@ pub enum RoomRequest {
     Public { public: bool },
     /// `room-ready {ready, character?, costume?, stocks?}`: START on the CSS (lock-in) or taking it
     /// back. `stocks`: with the rules' stock control, the count the player picked on their panel
-    /// (1-99; missing: none picked, the rules' stocks).
+    /// (1-99; missing: none picked, the rules' stocks). With `ready: false` the character and
+    /// costume are the coin placed on the CSS (missing: the coin is in the hand), shown to the
+    /// others before the player readies.
     Ready { ready: bool, character: Option<u8>, costume: Option<u8>, stocks: Option<u8> },
+    /// `room-sit-out {slot, sitOut}`: the player in slot 1-4 sits out the room's next games (the
+    /// others start without them) or plays again. A player for themselves, the host for anyone.
+    SitOut { slot: u8, sit_out: bool },
     /// `room-team {team}`: 0 red, 1 blue, 2 green.
     Team { team: u8 },
-    /// `room-back {}`: this player is back on the room's CSS after a game.
-    Back,
+    /// `room-back {pickers?}`: this player is back on the room's CSS after a game. `pickers`: the
+    /// ports (bits 0-3) that pick the next game's stage as this player's game saw the game end (the
+    /// last game's loser), which the server carries to the next game's players.
+    Back { pickers: Option<u8> },
     /// `room-rules {rules}` (host only, between games): the room's match rules
     /// (`docs/design/room-rules.md`), checked by `MatchRules::validate`.
     Rules { rules: crate::rules::MatchRules },
@@ -196,7 +204,8 @@ impl RoomRequest {
             RoomRequest::Public { .. } => ROOM_PUBLIC,
             RoomRequest::Ready { .. } => ROOM_READY,
             RoomRequest::Team { .. } => ROOM_TEAM,
-            RoomRequest::Back => ROOM_BACK,
+            RoomRequest::SitOut { .. } => ROOM_SIT_OUT,
+            RoomRequest::Back { .. } => ROOM_BACK,
             RoomRequest::Rules { .. } => ROOM_RULES,
             RoomRequest::Result { .. } => ROOM_RESULT,
             RoomRequest::Set { .. } => ROOM_SET,
@@ -224,7 +233,12 @@ impl RoomRequest {
                 v
             }
             RoomRequest::Join { code } => json!({ "code": code }),
-            RoomRequest::Leave | RoomRequest::Back | RoomRequest::RulesetList => json!({}),
+            RoomRequest::Leave | RoomRequest::RulesetList => json!({}),
+            RoomRequest::Back { pickers } => match pickers {
+                Some(p) => json!({ "pickers": p }),
+                None => json!({}),
+            },
+            RoomRequest::SitOut { slot, sit_out } => json!({ "slot": slot, "sitOut": sit_out }),
             RoomRequest::Slot { slot, open } => json!({ "slot": slot, "open": open }),
             RoomRequest::Teams { on } => json!({ "on": on }),
             RoomRequest::Public { public } => json!({ "public": public }),
@@ -324,7 +338,13 @@ impl RoomRequest {
             ROOM_TEAM => RoomRequest::Team {
                 team: small("team", (TEAM_COUNT - 1) as u64)?.ok_or_else(|| format!("{kind}: `team` is missing"))?,
             },
-            ROOM_BACK => RoomRequest::Back,
+            ROOM_BACK => RoomRequest::Back { pickers: small("pickers", 0x0F)? },
+            ROOM_SIT_OUT => {
+                let slot = small("slot", ROOM_SLOTS as u64)?
+                    .filter(|s| *s >= 1)
+                    .ok_or_else(|| format!("{kind}: `slot` must be 1 to {ROOM_SLOTS}"))?;
+                RoomRequest::SitOut { slot, sit_out: flag("sitOut")? }
+            }
             ROOM_RULES => {
                 let raw = v.get("rules").ok_or_else(|| format!("{kind}: `rules` is missing"))?;
                 let rules: crate::rules::MatchRules =
@@ -434,8 +454,9 @@ impl RoomRequest {
     }
 }
 
-/// How a room plays, from its open slots and the Teams switch: two open slots are 1v1 whatever
-/// the switch says (`docs/design/rooms.md` #12).
+/// How a room plays, from the number of players and the Teams switch: two are 1v1 whatever the
+/// switch says (`docs/design/rooms.md` #12). The server counts the players who play (not sitting
+/// out), or the open slots while fewer than two do.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum RoomMode {
@@ -446,8 +467,8 @@ pub enum RoomMode {
 }
 
 impl RoomMode {
-    pub fn of(open_slots: usize, teams: bool) -> RoomMode {
-        if open_slots <= 2 {
+    pub fn of(players: usize, teams: bool) -> RoomMode {
+        if players <= 2 {
             RoomMode::OneVsOne
         } else if teams {
             RoomMode::Teams
@@ -487,6 +508,9 @@ pub struct RoomPlayer {
     pub stocks: Option<u8>,
     /// Still in the last game (not back on the room's CSS).
     pub in_game: bool,
+    /// Sits out the room's games (the panel's SIT OUT), by choice or outside a set that is on.
+    #[serde(default)]
+    pub sitting_out: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -526,6 +550,11 @@ pub struct RoomState {
     /// The room's set, while its ruleset plays one (`docs/design/room-rules.md` §5).
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub set: Option<RoomSet>,
+    /// The ports (bits 0-3) that pick the next game's stage (the loser picks): the last game's
+    /// loser when they play it, else one of its players drawn once a game. Absent: the players'
+    /// games decide (an older mm, no report yet, or a ruleset that leaves no stage to the loser).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pickers: Option<u8>,
 }
 
 /// What a room plays, as its members see it (`room-state.ruleset`).
@@ -627,6 +656,18 @@ pub struct RoomStart {
     pub match_id: String,
     /// Seconds mm waits for every member's ticket.
     pub timeout_secs: u64,
+    /// The slots (1-4) that play this game; the others sit it out and send no ticket. Empty from
+    /// an older mm: every member.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub players: Vec<u8>,
+    /// The game's host (the session's decider): the room's host when it plays, else the
+    /// earliest-joined player of the game.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub host: Option<u8>,
+    /// The ports (bits 0-3) that pick this game's stage: the last game's loser when they play,
+    /// else one player of this game drawn at random. Absent: the players' own (an older mm).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pickers: Option<u8>,
 }
 
 /// `room-unreachable`, server → every member: the pairs of the room's game `match_id` (slots,
@@ -794,7 +835,11 @@ mod tests {
             RoomRequest::Ready { ready: true, character: Some(12), costume: Some(3), stocks: Some(2) },
             RoomRequest::Ready { ready: false, character: None, costume: None, stocks: None },
             RoomRequest::Team { team: 2 },
-            RoomRequest::Back,
+            RoomRequest::Back { pickers: None },
+            RoomRequest::Back { pickers: Some(2) },
+            RoomRequest::SitOut { slot: 3, sit_out: true },
+            RoomRequest::SitOut { slot: 1, sit_out: false },
+            RoomRequest::Ready { ready: false, character: Some(7), costume: Some(1), stocks: None },
             RoomRequest::Rules { rules: crate::rules::MatchRules::default() },
             RoomRequest::Rules {
                 rules: crate::rules::MatchRules {
@@ -823,6 +868,9 @@ mod tests {
             (ROOM_SLOT, json!({"slot": 2})),
             (ROOM_SLOT, json!({"slot": "2", "open": true})),
             (ROOM_TEAMS, json!({"on": "yes"})),
+            (ROOM_SIT_OUT, json!({"slot": 0, "sitOut": true})),
+            (ROOM_SIT_OUT, json!({"slot": 2})),
+            (ROOM_BACK, json!({"pickers": 16})),
             (ROOM_RULES, json!({})),
             (ROOM_RULES, json!({"rules": {"stocks": 0}})),
             (ROOM_RULES, json!({"rules": {"stonks": 4}})),

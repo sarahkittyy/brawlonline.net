@@ -14,15 +14,15 @@ _2026-10-09. The user's decisions from a question round, plus the defaults chose
 | 4 | Joining | Join Room opens the room CSS; START opens Brawl's keypad in a **room-code mode**; START on the keypad joins. Same screens as Direct. |
 | 5 | Room code | **4 letters, no vowels** (20 letters: `BCDFGHJKLMNPQRSTVWXZ`, Y left out too; 160,000 codes), e.g. `KFQB`. Letters page only, no '#', no page switching. Unique among live rooms; freed when the room empties (**default**). Shown at the top of the CSS, in the window that shows the connect code in Direct (**default**). |
 | 6 | Slots | 4 panels. A new room has slots 1-2 open, 3-4 **closed**. Open and empty = "Searching...". **Only the host** opens and closes slots, between games only. |
-| 7 | Open slots | **Open slots must fill before a game starts.** The open slots are the player count; to play 3, the host closes a slot. |
+| 7 | Open slots | ~~Open slots must fill before a game starts.~~ **Replaced 2026-10-18** (§1.2): open slots wait for nobody. A game starts once every player in the room is ready or sitting out and at least two play; an open slot is only where someone can join. |
 | 8 | Host | The creator. **Marked with a reused Brawl icon** next to their name plate (which icon: RE, §4). |
 | 9 | Host leaves | **Host passes to the earliest-joined player**; the icon moves; the room keeps its code. The room closes when the last player leaves. |
 | 10 | Kick | **Host closes an occupied slot = kick**, between games only, by **holding A** on the player's panel (48 frames; a tap only buzzes, so a press meant for the team flag kicks nobody). With only 2 slots open the kick leaves the slot open (a 1v1 room's player can be removed too; player feedback 2026-10-12). An empty slot opens or closes with a press. The kicked player goes idle with "Removed from the room." **Not a ban** (user decision, 2026-10-10): they may join again once a slot is open, so a misclick is undone by opening the slot. |
 | 11 | Teams or FFA | **Host toggles Teams on/off** for the room. With Teams on, **each player picks their own color** on their own panel (Slippi Teams): A on their panel or its flag, as P+'s team battle. **Any costume on any team** (the user's, 2026-10-12): X / Y change the costume, as in FFA and in P+'s rainbow TEAM BATTLE (the user's, 2026-10-15, after bug #22; until then X / Y were the team and A the costume), and the game plays the costume picked, not the team's. |
 | 12 | Splits | **Any split except everyone on one color** (2v2, 2v1, 3v1 allowed, as Brawl's Versus). All on one color: status "Pick different teams", no start. With 2 players the Teams switch has no effect: 1v1 (**default**). |
-| 13 | Start | **Automatic once every open slot is filled and every player is ready.** START = lock in (ready); unlocking takes the ready back. As Direct. |
+| 13 | Start | **Automatic once every player is ready or sits out, and two or more play** (§1.2; until 2026-10-18 every open slot had to be filled). START = lock in (ready); unlocking takes the ready back. As Direct. |
 | 14 | Stage | Game 1 random from the legal list (Slippi). Then the **loser picks**: 1v1 the loser; Teams the losing team's lower slot; FFA last place (a tie: the lower slot, **default**). A draw: the lower slot picks (2026-10-09: everyone locks in first, then one player picks). |
-| 15 | Other players' panels | **Username, "Ready" / "Choosing...", and their character and costume once they are ready** (carried by the lock-in that already exists). No live cursor or hover sync. |
+| 15 | Other players' panels | **Username, "Ready" / "Choosing...", and their character and costume** as soon as their coin is put down (§1.2, 2026-10-18; until then only once they were ready). No live cursor or hover sync: a coin still in the hand shows nothing. |
 | 16 | Sounds | **Join: an existing Brawl menu sound. Leave: the back sound** used today when an opponent leaves. |
 
 ### 1.1 Launcher: players online and public rooms
@@ -38,13 +38,31 @@ The two empty columns of Home > Overview (where Slippi shows news and tournament
 
 Defaults: "online" counts players whose game is running and logged in (Dolphin keeps a heartbeat with the server), not launchers left open. The list updates live (server push or a few-second poll). Full rooms are shown but can't be clicked; "In game" rooms can be clicked only if a slot is open and empty (the joiner waits on the CSS). The launcher hands the room code to Dolphin through a file next to `user.json`, which Dolphin already watches; the game reads it from the mailbox.
 
+### 1.2 Open slots, sitting out and the placed coin (the user's, 2026-10-18)
+
+Asked for by players: start a 3-4 slot room with two people and let others join meanwhile; see the opponent's character before readying; rotations in a room of three (one sits out each game, by whatever rotation the players use: loser out, even turns).
+
+| # | Topic | Decision |
+|---|---|---|
+| 21 | Open slots | **Always play with open slots.** All players fully readying up starts the game; nobody waits for an empty slot. A player who joins during a game waits on the CSS ("Waiting for the game to end") and plays the next one, which waits for them as for anyone. |
+| 22 | Placed coin | **The character goes to the others when the coin is put down (A), not at START.** Others see it on that player's card with "Choosing...". START with the coin still in the hand readies nobody (it readied the player with the portrait under the hand; all online CSSs, Direct and Unranked too). Game 1 of a set stays a blind pick (the server withholds it). |
+| 23 | SIT OUT | **A SIT OUT / PLAY button** under RULES (level with FFA), **the player's own name plate** (offline Brawl's player / CPU switch; its pencil still opens the name tags and their controls), or START toggle it. **START while sitting out plays again, it does not ready.** The host may toggle anyone (A on their plate); the others only themselves. Sitting out takes a ready back. |
+| 24 | Look | A card sitting out is **a CPU's grey card**, its plate reading **SIT OUT** for everyone, no state box. |
+| 25 | Lasts | **Sitting out stays until the player plays again** (START, the plate, the button); ready is still cleared after every game. |
+| 26 | Joiners | **Join playing** (not sitting out). |
+| 27 | Stage pick | Loser picks: **when the last game's loser sits out (or left), a random player of the next game picks** (mm's draw, one per game, the same on every screen). A player sitting out never picks. A draw's other picker still picks. |
+| 28 | Sets | A set starts between the players who play then (a 1v1 set in a room of three: one sits out). **Everyone else sits out until the set is over** (joiners too) and can't play; the set's players can't sit out ("Wait for the set to end."). With more players than two sides, the note reads "Sets need 1v1 or 2v2: SIT OUT". |
+| 29 | Too few | Only one player not sitting out: **"Need 2 players"**. |
+
+Defaults chosen without asking: the room's host who sits out stays the host; the game's decider is then the earliest-joined player of the game (mm's `room-start.host`). A player who sits out can toggle back during a game they are not in. Their coin still shows (grey card). Not built yet: **watching the game in progress while sitting out** (the user's, 2026-10-18: "i think yes"), with the spectating relay (`spectating.md`).
+
 ## 2. Defaults (not asked)
 
 | Topic | Default |
 |---|---|
 | Who may join | Anyone with the room code. The random code is the consent; no friends list. |
 | Errors (status line, red, server text) | "Room not found.", "This room is full.", "Removed from the room." Version mismatch: the server refuses with its text, as Direct. |
-| Joining during a game | Only into an open, empty slot (one freed by someone leaving). The joiner waits on their own CSS: "Waiting for the game to end". |
+| Joining during a game | Into an open, empty slot. The joiner waits on their own CSS: "Waiting for the game to end", and plays the next game (§1.2). |
 | Ports | Slot = in-game port, stable for the life of the room. Port gaps allowed (P1, P3). |
 | Rules | P+ competitive (4 stocks, 8 minutes, items off), pause on, as Direct. |
 | After a game | Everyone back on the room CSS, characters kept, ready cleared. |

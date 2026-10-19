@@ -102,13 +102,13 @@ std::optional<Player> ParsePlayer(const picojson::object& o, std::string* why)
   p.ready = *ready;
   p.team = static_cast<u8>(*team);
   p.in_game = *in_game;
-  // Shown only while ready (docs/design/rooms.md #15).
+  p.sitting_out = Bool(o, "sittingOut").value_or(false);
+  // The placed coin shows before the ready too (the user's, 2026-10-18; docs/design/rooms.md #15
+  // had only the lock-in); the picked stocks only with the ready.
+  p.character = character;
+  p.costume = character ? costume : std::nullopt;
   if (p.ready)
-  {
-    p.character = character;
-    p.costume = costume;
     p.stocks = stocks;
-  }
   return p;
 }
 
@@ -399,6 +399,8 @@ std::optional<View> ParseView(const picojson::object& o, std::string* why)
   v.you = static_cast<int>(*you);
   v.host = static_cast<int>(*host);
   v.status_text = *text;
+  if (const auto pickers = Int(o, "pickers", 0, 0x0F))
+    v.pickers = static_cast<u8>(*pickers);
   // The room's rules: not fatal for the room when unusable (its games refuse them at the start).
   const ParsedRules rules = ParseRules(o);
   v.rules = rules.rules;
@@ -525,6 +527,8 @@ std::optional<View> ParseView(const picojson::object& o, std::string* why)
       slot.player = ParsePlayer(pv->get<picojson::object>(), why);
       if (!slot.player)
         return std::nullopt;
+      if (Find(pv->get<picojson::object>(), "sittingOut"))
+        v.sit_out_known = true;
     }
     else if (pv && !pv->is<picojson::null>())
     {
@@ -608,6 +612,30 @@ Message Parse(const std::string& packet)
     m.code = *code;
     m.match_id = *match_id;
     m.timeout_secs = static_cast<int>(Int(o, "timeoutSecs", 1, 120).value_or(15));
+    if (const picojson::value* ps = Find(o, "players"); ps && !ps->is<picojson::null>())
+    {
+      if (!ps->is<picojson::array>())
+        return invalid("room-start: players is not a list of slots 1-4");
+      for (const picojson::value& e : ps->get<picojson::array>())
+      {
+        const auto slot = Int(e, 1, ROOM_SLOTS);
+        if (!slot || m.start_players.size() >= ROOM_SLOTS ||
+            std::find(m.start_players.begin(), m.start_players.end(), *slot) != m.start_players.end())
+        {
+          return invalid("room-start: players is not a list of slots 1-4");
+        }
+        m.start_players.push_back(static_cast<int>(*slot));
+      }
+    }
+    m.start_host = static_cast<int>(Int(o, "host", 1, ROOM_SLOTS).value_or(0));
+    // The host plays the game.
+    if (m.start_host && !m.start_players.empty() &&
+        std::find(m.start_players.begin(), m.start_players.end(), m.start_host) == m.start_players.end())
+    {
+      return invalid("room-start: its host does not play");
+    }
+    if (const auto pickers = Int(o, "pickers", 0, 0x0F))
+      m.start_pickers = static_cast<u8>(*pickers);
   }
   else if (m.type == "room-unreachable")
   {
@@ -759,9 +787,10 @@ std::optional<std::string> RequestJson(const Request& r)
   case Op::Ready:
     o["type"] = picojson::value("room-ready");
     o["ready"] = picojson::value(r.flag);
-    if (r.flag && r.character)
+    // Not ready: the placed coin (none: in the hand).
+    if (r.character)
       o["character"] = picojson::value(static_cast<double>(*r.character));
-    if (r.flag && r.costume)
+    if (r.character && r.costume)
       o["costume"] = picojson::value(static_cast<double>(*r.costume));
     if (r.flag && r.stocks)
     {
@@ -772,6 +801,19 @@ std::optional<std::string> RequestJson(const Request& r)
     break;
   case Op::Back:
     o["type"] = picojson::value("room-back");
+    if (r.pickers)
+    {
+      if (*r.pickers > 0x0F)
+        return std::nullopt;
+      o["pickers"] = picojson::value(static_cast<double>(*r.pickers));
+    }
+    break;
+  case Op::SitOut:
+    if (r.slot < 1 || r.slot > ROOM_SLOTS)
+      return std::nullopt;
+    o["type"] = picojson::value("room-sit-out");
+    o["slot"] = picojson::value(static_cast<double>(r.slot));
+    o["sitOut"] = picojson::value(r.flag);
     break;
   case Op::Unreachable:
   {
@@ -898,6 +940,8 @@ const char* OpName(Op op)
     return "ready";
   case Op::Back:
     return "back";
+  case Op::SitOut:
+    return "sit-out";
   case Op::Rules:
     return "rules";
   case Op::Result:
