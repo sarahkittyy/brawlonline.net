@@ -694,30 +694,40 @@ export class DolphinManager {
 
   /**
    * Game files moved into the launcher's install folder (before Settings refused it) are deleted
-   * by the next launcher update: the User folder with the player's Dolphin settings, hotkeys,
-   * controller settings and custom textures (a player report 2026-10-19). At start-up they are
-   * moved back to `<userData>/netplay`, or to `<userData>/game-files` when that already has game
-   * files of its own. True if they were moved; a failed move leaves them where they are this run.
+   * by every launcher update: the User folder with the player's Dolphin settings, hotkeys,
+   * controller settings and custom textures, and the SD card (LUCA#19, bug report #42 and
+   * 2026-10-19: the launcher in `D:\Emulation\...\Brawl Online`, the game files moved to its
+   * `netplay` folder for the second SSD's space). At start-up they are moved next to the install
+   * folder, on the same drive (`<parent>\Brawl Online Game Files`), else to `<userData>/netplay`
+   * (or `<userData>/game-files` when that already has game files of its own). True if they were
+   * moved; when no move works they stay where they are for this run.
    */
   private _moveGameFilesOutOfInstallFolder(): Promise<boolean> {
     if (!this.installFolderRescue) {
       this.installFolderRescue = (async () => {
+        const installFolder = this._launcherInstallFolder();
         const userData = app.getPath("userData");
-        const picked = (await fileExists(path.join(defaultNetplayFolder(userData), "User")))
+        const fallback = (await fileExists(path.join(defaultNetplayFolder(userData), "User")))
           ? path.join(userData, "game-files")
           : null;
-        log.warn(
-          `The game files (${this.netplayFolder()}) are inside the launcher's install folder ` +
-            `(${this._launcherInstallFolder()}), which every update deletes: moving them to ` +
-            `${picked ?? defaultNetplayFolder(userData)}`,
-        );
-        try {
-          const result = await this.moveGameFiles(picked);
-          return result.action !== "cancelled";
-        } catch (err) {
-          log.error(`Could not move the game files out of the install folder: ${err}`);
-          return false;
+        const targets: (string | null)[] = [
+          ...(installFolder ? [path.join(path.dirname(installFolder), `${PRODUCT_NAME} Game Files`)] : []),
+          fallback,
+        ];
+        for (const picked of targets) {
+          log.warn(
+            `The game files (${this.netplayFolder()}) are inside the launcher's install folder ` +
+              `(${installFolder}), which every update deletes: moving them to ` +
+              `${picked ?? defaultNetplayFolder(userData)}`,
+          );
+          try {
+            const result = await this.moveGameFiles(picked);
+            return result.action !== "cancelled";
+          } catch (err) {
+            log.error(`Could not move the game files out of the install folder: ${err}`);
+          }
         }
+        return false;
       })().finally(() => {
         this.installFolderRescue = null;
       });
