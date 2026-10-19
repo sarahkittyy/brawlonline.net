@@ -6,6 +6,8 @@ import React from "react";
 import type { LinkProps } from "react-router-dom";
 import { Link, useMatch, useResolvedPath } from "react-router-dom";
 
+import { useRouteMemory } from "@/lib/hooks/use_route_memory";
+
 export type MenuItem = {
   subpath: string;
   title: () => string;
@@ -44,6 +46,15 @@ type CustomLinkProps = LinkProps & {
 const CustomLink = ({ title, children, to, ...props }: CustomLinkProps) => {
   const resolved = useResolvedPath(to);
   const match = useMatch({ path: resolved.pathname, end: false });
+  const clearLastRoute = useRouteMemory((s) => s.clearLastRoute);
+
+  // Clicking the page you're already on opens its first tab (Home > Spectate -> Overview);
+  // coming back from another page still opens the tab you left it on.
+  const onClick = () => {
+    if (match != null && typeof to === "string") {
+      clearLastRoute(to);
+    }
+  };
 
   return (
     <MenuButton selected={match != null}>
@@ -51,6 +62,7 @@ const CustomLink = ({ title, children, to, ...props }: CustomLinkProps) => {
         <Button
           component={Link}
           to={to}
+          onClick={onClick}
           {...(props as any)}
           sx={{ color: "var(--off-white)", "&:hover": { backgroundColor: "rgba(255, 255, 255, 0.16)" } }}
         >
