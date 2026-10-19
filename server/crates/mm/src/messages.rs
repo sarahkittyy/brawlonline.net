@@ -120,8 +120,8 @@ pub const STAGES_NOT_POSSIBLE: &str = "The room can't play these stages.";
 pub const SETS_NEED_TWO_SIDES: &str = "Sets need 1v1 or 2v2";
 pub const STRIKES_NEED_TWO_SIDES: &str = "Strikes need 1v1 or 2v2";
 /// The same with more players than two sides take (three, or four without two teams of two): a
-/// set is played once the others sit out (their panels' SIT OUT).
-pub const SETS_SIT_OUT: &str = "Sets need 1v1 or 2v2: SIT OUT";
+/// set is played once the others sit out (their panels' SIT OUT). The user's wording, 2026-10-19.
+pub const SETS_SIT_OUT: &str = "Sets require 2 or 4 players.";
 pub const STRIKES_SIT_OUT: &str = "Strikes need 1v1 or 2v2: SIT OUT";
 /// `room-ruleset` / a create with a code: no published ruleset has it.
 pub const RULESET_NOT_FOUND: &str = "Ruleset not found.";

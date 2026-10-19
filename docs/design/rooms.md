@@ -51,7 +51,7 @@ Asked for by players: start a 3-4 slot room with two people and let others join 
 | 25 | Lasts | **Sitting out stays until the player plays again** (START, the plate, the button); ready is still cleared after every game. |
 | 26 | Joiners | **Join playing** (not sitting out). |
 | 27 | Stage pick | Loser picks: **when the last game's loser sits out (or left), a random player of the next game picks** (mm's draw, one per game, the same on every screen). A player sitting out never picks. A draw's other picker still picks. |
-| 28 | Sets | A set starts between the players who play then (a 1v1 set in a room of three: one sits out). **Everyone else sits out until the set is over** (joiners too) and can't play; the set's players can't sit out ("Wait for the set to end."). With more players than two sides, the note reads "Sets need 1v1 or 2v2: SIT OUT". |
+| 28 | Sets | A set starts between the players who play then (a 1v1 set in a room of three: one sits out). **Everyone else sits out until the set is over** (joiners too) and can't play; the set's players can't sit out ("Wait for the set to end."). With more players than two sides, the note reads "Sets require 2 or 4 players." (the user's wording, 2026-10-19). |
 | 29 | Too few | Only one player not sitting out: **"Need 2 players"**. |
 
 Defaults chosen without asking: the room's host who sits out stays the host; the game's decider is then the earliest-joined player of the game (mm's `room-start.host`). A player who sits out can toggle back during a game they are not in. Their coin still shows (grey card). Watching the game in progress while sitting out (the user's, 2026-10-18: "i think yes") is §1.3.
