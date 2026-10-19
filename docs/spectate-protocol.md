@@ -8,6 +8,8 @@ Three legs:
 2. **Relay:** mm → accounts, on mm's loopback listener. Launchers never reach mm over HTTP.
 3. **Watch:** accounts → the spectator's launcher (`/v1/live*`, session auth).
 
+And for a room's own members (2026-10-19): mm → the game of a member who is not in the room's game, on that game's online connection (channel 2, `docs/rooms-protocol.md` §2 "Watching the room's game"): the same kept chunks, played in that member's own Dolphin from the room CSS (`docs/design/rooms.md` §1.3). It reads only what mm keeps for spectators; the players' games do nothing more for it.
+
 Replay chunks travel exactly as `.brep` stores them (`ReplayFile.h`): a 20-byte header (FourCC, flags, stored length, raw length, CRC-32 of the stored bytes), then the stored bytes. Only `INFO`, `SETP`, `SYNC`, `FRMS`, `EVNT` and `ENDG` are sent, never `FTSP` or `FTRM`.
 
 ## 1. Upload (game ↔ mm)

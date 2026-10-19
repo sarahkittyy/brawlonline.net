@@ -133,6 +133,8 @@ namespace RoomCss {
     static const int KIND_CPU = 2;
     static bool s_grey[4];
     static const char* const SIT_OUT_PLATE = "SIT OUT";
+    // Watching the room's game from the room CSS (2026-10-19): the same grey card.
+    static const char* const WATCHING_PLATE = "WATCHING";
     static Shown s_shown[4];
     static int s_myStarsShown = -1;
     static u8* s_task = NULL;      // the CSS these panels belong to
@@ -579,9 +581,10 @@ namespace RoomCss {
         }
         u8* so = stateObj(a);
         bool sitting = v.sittingOut && (v.kind == PV_CHOOSING || v.kind == PV_READY);
+        u8 sitShown = sitting ? v.sittingOut : 0;   // 1 SIT OUT, 2 WATCHING
         bool changed = sh.kind != v.kind || sh.inRoom != (u8)s_inRoom || sh.css != v.css || sh.costume != v.costume ||
                        sh.team != v.team || sh.stars != v.stars || strcmp(sh.name, v.name) != 0 ||
-                       sh.sittingOut != (u8)sitting;
+                       sh.sittingOut != sitShown;
         if (changed) {
             // Sitting out: no state box ("Choosing..." is not what they do), the card grey.
             int st = (v.kind == PV_CLOSED && !s_inRoom) || sitting ? ST_NONE : stateOf(v.kind);
@@ -612,9 +615,12 @@ namespace RoomCss {
                 if (isPtr((u32)scn)) scn[0xD0] = scn[0xD1] = STATE_PRIORITY_FRONT;
             }
             setGrey(a, i, sitting);
-            plate(a, v.kind == PV_CLOSED || v.kind == PV_SEARCHING ? "" : sitting ? SIT_OUT_PLATE : v.name);
+            plate(a, v.kind == PV_CLOSED || v.kind == PV_SEARCHING ? "" :
+                     sitShown == 2                                ? WATCHING_PLATE :
+                     sitting                                      ? SIT_OUT_PLATE :
+                                                                    v.name);
             SHOW_STARS(a, v.kind != PV_CLOSED && v.kind != PV_SEARCHING ? v.stars : 0, 1);
-            sh.sittingOut = (u8)sitting;
+            sh.sittingOut = sitShown;
             sh.stars = v.stars;
             sh.inRoom = (u8)s_inRoom;
             sh.kind = v.kind;

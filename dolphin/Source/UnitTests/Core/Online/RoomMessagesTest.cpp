@@ -430,6 +430,24 @@ TEST(RoomMessages, OtherMessages)
 
 // SIT OUT and the stage pickers (the user's, 2026-10-18): the server says who sits out, who picks
 // the next stage, and which slots play a starting game and who hosts it.
+TEST(RoomMessages, Watch)
+{
+  const Message m = Parse(Replace(STATE, R"("costume": 3, "inGame": false)",
+                                  R"("costume": 3, "inGame": false, "watching": true)"));
+  ASSERT_EQ(m.kind, Message::Kind::RoomState) << m.why;
+  EXPECT_TRUE(m.view->slots[0].player->watching);
+  EXPECT_FALSE(m.view->slots[1].player->watching);
+  Request r;
+  r.op = Op::Watch;
+  EXPECT_EQ(RequestJson(r), std::nullopt);
+  r.want = true;
+  EXPECT_EQ(RequestJson(r), R"({"type":"room-watch","want":true})");
+  r.want.reset();
+  r.watching = false;
+  EXPECT_EQ(RequestJson(r), R"({"type":"room-watch","watching":false})");
+  EXPECT_STREQ(OpName(Op::Watch), "watch");
+}
+
 TEST(RoomMessages, SitOutAndPickers)
 {
   const Message m = Parse(Replace(Replace(STATE, R"("costume": 3, "inGame": false)",

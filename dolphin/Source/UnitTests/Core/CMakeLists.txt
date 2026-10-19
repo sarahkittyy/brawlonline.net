@@ -72,6 +72,8 @@ add_dolphin_test(SpectateTest Online/SpectateTest.cpp)
 add_dolphin_test(NPlayerSetupTest Online/NPlayerSetupTest.cpp)
 # Rooms: the mm server's room messages, validated before they reach the game (Core/Online/RoomMessages).
 add_dolphin_test(RoomMessagesTest Online/RoomMessagesTest.cpp)
+# Watching the room's game: the watch channel's packets into a live replay (Core/Online/RoomWatch).
+add_dolphin_test(RoomWatchTest Online/RoomWatchTest.cpp)
 # Match rules: get-ticket-resp's `rules`, checked before they reach the game (Core/Online/MatchRules).
 add_dolphin_test(MatchRulesTest Online/MatchRulesTest.cpp)
 # Sets: the stage steps of a set's format (Core/Online/SetFormat).

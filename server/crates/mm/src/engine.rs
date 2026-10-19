@@ -291,6 +291,13 @@ pub enum Output {
         conn: ConnId,
         json: String,
     },
+    /// Send these bytes reliably on `channel` (a room's game to its watchers:
+    /// `common::spectate::WATCH_CHANNEL`).
+    SendData {
+        conn: ConnId,
+        channel: u8,
+        data: Vec<u8>,
+    },
     /// Disconnect after queued packets are delivered.
     Disconnect {
         conn: ConnId,
@@ -1336,6 +1343,10 @@ impl Engine {
         self.mod_rooms.tick(now);
         self.fail_room_tickets(out);
         self.live.tick(now, out);
+        // Room members watching their room's game (`room-watch`): its chunks as they are kept.
+        let stops = self.rooms.take_watch_stops();
+        let targets = self.rooms.watch_targets();
+        self.live.feed_watchers(&targets, &stops, out);
     }
 
     fn try_pair(&mut self, now: Instant, wall: DateTime<Utc>, conn: ConnId, out: &mut Vec<Output>) {

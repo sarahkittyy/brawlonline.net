@@ -616,6 +616,8 @@ add_library(core
   Online/ModsRoom.h
   Online/Rooms.cpp
   Online/Rooms.h
+  Online/RoomWatch.cpp
+  Online/RoomWatch.h
   Online/Spectate.cpp
   Online/Spectate.h
   Online/Timeouts.h

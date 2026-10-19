@@ -443,6 +443,34 @@ pub struct LiveBook {
     slots: HashMap<u32, Slot>,
     streams: HashMap<String, StreamBook>,
     next_slot: u32,
+    /// Room members watching their room's game on the watch channel ([`Self::feed_watchers`]).
+    watchers: HashMap<ConnId, Watcher>,
+}
+
+/// The most of a room's game sent to one watcher per [`LiveBook::feed_watchers`] (a tick): a
+/// member who joined late gets the game so far within a few ticks.
+const WATCH_BYTES_PER_FEED: usize = 64 * 1024;
+
+/// A room member watching the room's games they are not in (`room-watch`, 2026-10-19,
+/// `docs/rooms-protocol.md` §2): where the watch channel is in them.
+#[derive(Debug, Clone, Default)]
+struct Watcher {
+    match_id: String,
+    /// The room's next game, to go on with once this match has nothing more to send.
+    next: Option<String>,
+    /// The game being sent (its uid) and how many of its chunks went out; its `WATCH_BEGIN` did.
+    game: Option<[u8; 16]>,
+    chunk: usize,
+    /// The match's games sent in full, or over before the watch began (a watcher starts with the
+    /// game being played, not the match's earlier games).
+    done: Vec<[u8; 16]>,
+}
+
+fn watch_packet(kind: u8, body: &[u8]) -> Vec<u8> {
+    let mut v = Vec::with_capacity(1 + body.len());
+    v.push(kind);
+    v.extend_from_slice(body);
+    v
 }
 
 fn send(out: &mut Vec<Output>, conn: ConnId, m: &impl serde::Serialize) {
@@ -471,6 +499,7 @@ impl LiveBook {
             slots: HashMap::new(),
             streams: HashMap::new(),
             next_slot: 1,
+            watchers: HashMap::new(),
         }
     }
 
@@ -1438,6 +1467,7 @@ impl LiveBook {
     /// An online connection went away: its uploads end, and games it was the primary of are
     /// handed on.
     pub fn conn_gone(&mut self, now: Instant, conn: ConnId, out: &mut Vec<Output>) {
+        self.watchers.remove(&conn);
         let gone: Vec<(u32, [u8; 16], Role)> =
             self.slots.iter().filter(|(_, s)| s.conn == conn).map(|(k, s)| (*k, s.game, s.role)).collect();
         for g in self.games.values_mut() {
@@ -1451,6 +1481,130 @@ impl LiveBook {
             if role == Role::Primary {
                 self.takeover(now, uid, "primary disconnected", out);
             }
+        }
+    }
+
+    /// Room members watching their room's game (`targets`: each one's connection and the match of
+    /// the room's game going on; `stops`: watches that stopped): every kept chunk of that game goes
+    /// to them on the watch channel as it comes, the game's start and end around them. A watcher
+    /// starts with the game being played (its chunks so far first), goes on to the match's next
+    /// game (a room's set), and to the room's next game once the one it watches is sent in full:
+    /// the upload runs behind the players, so a game's end may come after the room's next game
+    /// started. Nothing comes for a game that isn't streamed (`MM_SPECTATE` off, every player's
+    /// "Let others stream my games" off): its watchers just wait.
+    pub fn feed_watchers(&mut self, targets: &[(ConnId, String)], stops: &[ConnId], out: &mut Vec<Output>) {
+        for conn in stops {
+            self.watchers.remove(conn);
+        }
+        for (conn, match_id) in targets {
+            match self.watchers.get_mut(conn) {
+                Some(w) if w.match_id == *match_id => {}
+                Some(w) => w.next = Some(match_id.clone()),
+                None => {
+                    let done = self.games_of(match_id).into_iter().filter(|g| !self.game_open(g)).collect();
+                    self.watchers
+                        .insert(*conn, Watcher { match_id: match_id.clone(), done, ..Default::default() });
+                }
+            }
+        }
+        let conns: Vec<ConnId> = self.watchers.keys().copied().collect();
+        for conn in conns {
+            self.feed_watcher(conn, out);
+        }
+    }
+
+    /// The games of a match that have chunks kept, in the order they were played.
+    fn games_of(&self, match_id: &str) -> Vec<[u8; 16]> {
+        let mut v: Vec<&Game> =
+            self.games.values().filter(|g| g.match_id == match_id && g.ordinal.is_some()).collect();
+        v.sort_by_key(|g| g.first_offer);
+        v.into_iter().map(|g| g.uid).collect()
+    }
+
+    /// The game's chunks still come (in the store, neither ended nor bad).
+    fn game_open(&self, uid: &[u8; 16]) -> bool {
+        let Some(g) = self.games.get(uid) else { return false };
+        let Some(o) = g.ordinal else { return true };
+        self.store
+            .with(|m| m.get(&g.stream).and_then(|s| s.games.get(o)).is_some_and(|v| !v.ended && v.bad.is_none()))
+    }
+
+    fn feed_watcher(&mut self, conn: ConnId, out: &mut Vec<Output>) {
+        let mut budget = WATCH_BYTES_PER_FEED;
+        loop {
+            let Some(w) = self.watchers.get(&conn) else { return };
+            let current = match w.game {
+                Some(uid) => uid,
+                None => {
+                    let next_game = self.games_of(&w.match_id).into_iter().find(|g| !w.done.contains(g));
+                    match (next_game, w.next.clone()) {
+                        (Some(uid), _) => {
+                            let number = self.games.get(&uid).map_or(0, |g| g.number);
+                            let begin = serde_json::json!({
+                                "matchId": w.match_id, "number": number, "uid": hex::encode(uid),
+                            });
+                            out.push(Output::SendData {
+                                conn,
+                                channel: spectate::WATCH_CHANNEL,
+                                data: watch_packet(spectate::WATCH_BEGIN, begin.to_string().as_bytes()),
+                            });
+                            let w = self.watchers.get_mut(&conn).expect("present");
+                            w.game = Some(uid);
+                            w.chunk = 0;
+                            uid
+                        }
+                        (None, Some(next)) => {
+                            // This match has nothing more: the room's next game.
+                            let done = self.games_of(&next).into_iter().filter(|g| !self.game_open(g)).collect();
+                            self.watchers.insert(conn, Watcher { match_id: next, done, ..Default::default() });
+                            continue;
+                        }
+                        (None, None) => return,
+                    }
+                }
+            };
+            let (stream, ordinal) = match self.games.get(&current) {
+                Some(g) => (g.stream.clone(), g.ordinal),
+                None => (String::new(), None),
+            };
+            let from = self.watchers.get(&conn).map_or(0, |w| w.chunk);
+            // The chunks not sent yet, and how the game stands (gone from the store: over).
+            let (chunks, ended, bad) = self.store.with(|m| {
+                match m.get(&stream).and_then(|s| ordinal.and_then(|o| s.games.get(o))) {
+                    Some(v) => (v.chunks.get(from..).unwrap_or_default().to_vec(), v.ended, v.bad.clone()),
+                    None => (Vec::new(), false, Some("This game is no longer kept.".to_string())),
+                }
+            });
+            let mut sent = 0;
+            for c in &chunks {
+                if budget < c.len() && sent > 0 {
+                    break;
+                }
+                let mut data = Vec::with_capacity(5 + c.len());
+                data.push(spectate::WATCH_CHUNK);
+                data.extend_from_slice(&((from + sent) as u32).to_le_bytes());
+                data.extend_from_slice(c);
+                out.push(Output::SendData { conn, channel: spectate::WATCH_CHANNEL, data });
+                budget = budget.saturating_sub(c.len());
+                sent += 1;
+            }
+            let w = self.watchers.get_mut(&conn).expect("present");
+            w.chunk += sent;
+            if sent < chunks.len() || !(ended || bad.is_some()) {
+                return;
+            }
+            let mut end = serde_json::json!({ "matchId": w.match_id, "uid": hex::encode(current) });
+            if let Some(why) = bad {
+                end["bad"] = serde_json::json!(why);
+            }
+            out.push(Output::SendData {
+                conn,
+                channel: spectate::WATCH_CHANNEL,
+                data: watch_packet(spectate::WATCH_END, end.to_string().as_bytes()),
+            });
+            w.done.push(current);
+            w.game = None;
+            w.chunk = 0;
         }
     }
 
@@ -1725,6 +1879,95 @@ mod tests {
         assert_eq!(e.players.iter().find(|p| p.uid == b.to_string()).unwrap().wins, 1);
         assert_eq!(e.players.iter().find(|p| p.uid == a.to_string()).unwrap().wins, 0);
         assert!(matches!(read_all(&t.book.store, &e.id).last(), Some(LiveLine::End { game: 1 })));
+    }
+
+    /// What a watcher got on the watch channel: (kind, the chunk index or the JSON).
+    fn watched(out: &[Output], conn: ConnId) -> Vec<(u8, Value)> {
+        out.iter()
+            .filter_map(|o| match o {
+                Output::SendData { conn: c, channel, data } if *c == conn && *channel == spectate::WATCH_CHANNEL => {
+                    Some(match data[0] {
+                        spectate::WATCH_CHUNK => {
+                            (data[0], json!(u32::from_le_bytes(data[1..5].try_into().unwrap())))
+                        }
+                        k => (k, serde_json::from_slice(&data[1..]).unwrap()),
+                    })
+                }
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// A room member who is not in the room's game (`room-watch`) gets its kept chunks on the watch
+    /// channel: what came so far when the watch starts, then each one as it comes, the game's
+    /// start and end around them; also after the room's next game started (the upload runs behind
+    /// the players), then that next game. A stopped watch gets nothing more.
+    #[test]
+    fn room_watchers_get_the_game_on_the_watch_channel() {
+        const W: ConnId = 9;
+        let mut t = T::new(SpectateMode::On);
+        let (a, b) = (t.a, t.b);
+        let m1 = "mode.room-TLSZ-2026-10-19T15:20:07.812Z-1";
+        room_match(&mut t, m1);
+        offer_in(&mut t, m1, A, a, 0x01, 1);
+        let out = offer_in(&mut t, m1, B, b, 0x01, 1);
+        let slot = role(&out, A).filter(|r| r["role"] == "primary").or_else(|| role(&out, B)).unwrap()["slot"]
+            .as_u64()
+            .unwrap() as u32;
+        let up = if role(&out, A).unwrap()["role"] == "primary" { A } else { B };
+        // Nothing streamed yet: nothing to send.
+        let mut out = vec![];
+        t.book.feed_watchers(&[(W, m1.into())], &[], &mut out);
+        assert!(watched(&out, W).is_empty());
+        let info = info_in(&t, m1);
+        t.send_chunk(up, slot, 0, &info);
+        t.send_chunk(up, slot, 1, &encode_chunk(b"SETP", b"{}", false));
+        t.send_chunk(up, slot, 2, &encode_chunk(b"FRMS", &frms(0, 60, 1), true));
+        let mut out = vec![];
+        t.book.feed_watchers(&[(W, m1.into())], &[], &mut out);
+        let got = watched(&out, W);
+        assert_eq!(got[0].0, spectate::WATCH_BEGIN);
+        assert_eq!(got[0].1["matchId"], m1);
+        assert_eq!(got[1..].iter().map(|(k, i)| (*k, i.as_u64().unwrap())).collect::<Vec<_>>(), vec![
+            (spectate::WATCH_CHUNK, 0),
+            (spectate::WATCH_CHUNK, 1),
+            (spectate::WATCH_CHUNK, 2)
+        ]);
+        // The players are back and the room's next game started: the first one's end still comes.
+        let m2 = "mode.room-TLSZ-2026-10-19T15:25:00.000Z-2";
+        room_match(&mut t, m2);
+        t.send_chunk(up, slot, 3, &encode_chunk(b"FRMS", &frms(60, 60, 2), true));
+        let endg = encode_chunk(b"ENDG", json!({"winnerPort": 2}).to_string().as_bytes(), false);
+        t.send_chunk(up, slot, 4, &endg);
+        let mut out = vec![];
+        t.book.feed_watchers(&[(W, m2.into())], &[], &mut out);
+        let kinds: Vec<u8> = watched(&out, W).iter().map(|(k, _)| *k).collect();
+        assert_eq!(kinds, vec![spectate::WATCH_CHUNK, spectate::WATCH_CHUNK, spectate::WATCH_END]);
+        // The next game.
+        offer_in(&mut t, m2, A, a, 0x02, 2);
+        let out = offer_in(&mut t, m2, B, b, 0x02, 2);
+        let r = [role(&out, A).unwrap(), role(&out, B).unwrap()];
+        let (up2, r2) = if r[0]["role"] == "primary" { (A, &r[0]) } else { (B, &r[1]) };
+        let slot2 = r2["slot"].as_u64().unwrap() as u32;
+        t.send_chunk(up2, slot2, 0, &info_in(&t, m2));
+        let mut out = vec![];
+        t.book.feed_watchers(&[(W, m2.into())], &[], &mut out);
+        let got = watched(&out, W);
+        assert_eq!((got[0].0, got[0].1["matchId"].as_str()), (spectate::WATCH_BEGIN, Some(m2)));
+        assert_eq!(got.len(), 2);
+        // Stopped (left early): nothing more of it.
+        t.send_chunk(up2, slot2, 1, &encode_chunk(b"SETP", b"{}", false));
+        let mut out = vec![];
+        t.book.feed_watchers(&[], &[W], &mut out);
+        assert!(watched(&out, W).is_empty());
+        // A member who starts watching mid-game gets that game from its start, not the match's
+        // games before it.
+        const L: ConnId = 10;
+        let mut out = vec![];
+        t.book.feed_watchers(&[(L, m2.into())], &[], &mut out);
+        let got = watched(&out, L);
+        assert_eq!(got.iter().filter(|(k, _)| *k == spectate::WATCH_CHUNK).count(), 2);
+        assert_eq!(got[0].1["matchId"], m2);
     }
 
     #[test]

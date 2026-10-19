@@ -11,7 +11,7 @@ Postgres, in this order:
    module started the container it runs ``docker compose down`` (never ``-v``) afterwards.
 
 ``accounts`` and ``mm`` are the debug binaries in ``server/target/debug`` (``cargo build
---workspace`` first). They run as plain processes with their working directory in the run dir,
+--workspace`` first; ``PPHARNESS_SERVER_BIN`` names another directory of them). They run as plain processes with their working directory in the run dir,
 so no ``server/.env`` is read; every setting comes from the environment given here.
 
 Usage::
@@ -53,7 +53,10 @@ def server_dir() -> Path:
 
 
 def server_binary(name: str) -> Path:
-    return server_dir() / "target" / "debug" / _platform.exe_name(name)
+    # PPHARNESS_SERVER_BIN: another build's binaries (e.g. a CARGO_TARGET_DIR's debug dir), for a
+    # checkout whose own are in use by another backend.
+    bin_dir = os.environ.get("PPHARNESS_SERVER_BIN")
+    return (Path(bin_dir) if bin_dir else server_dir() / "target" / "debug") / _platform.exe_name(name)
 
 
 def portable_pg_bin() -> Path:

@@ -28,6 +28,7 @@
 #include "Core/Online/Matchmaking.h"
 #include "Core/Online/ModsRoom.h"
 #include "Core/Online/OnlineClient.h"
+#include "Core/Online/RoomWatch.h"
 #include "Core/Online/Spectate.h"
 #include "Core/Online/User.h"
 #include "Core/Rollback/GameplaySession.h"
@@ -843,6 +844,18 @@ void DecideLaunch(const DolphinBusy& busy, bool logged_in, const std::string& ow
     }
     return;
   }
+  // Watching the room's game is not busy (the user's, 2026-10-19): the watch ends first, and the
+  // click goes ahead once the game is back on the room CSS.
+  if (RoomWatch::Watching())
+  {
+    RoomWatch::Abort();
+    if (!l.answered)
+    {
+      s.launch->answered = true;
+      AnswerLaunch(l.id, "accepted", "");
+    }
+    return;
+  }
   if (dolphin_busy || BusyScreen(s.screen))
   {
     s.launch.reset();
@@ -1403,6 +1416,16 @@ void Thread()
           ++s.hellos;
           conn_started = now;
         }
+        else if (ev.type == ENET_EVENT_TYPE_RECEIVE && ev.channelID == RoomWatch::CHANNEL)
+        {
+          // The room's game this player watches (Online/RoomWatch.h): binary, outside the lock.
+          const std::vector<u8> data(ev.packet->data, ev.packet->data + ev.packet->dataLength);
+          enet_packet_destroy(ev.packet);
+          ++s.received;
+          lk.unlock();
+          RoomWatch::OnPacket(data);
+          lk.lock();
+        }
         else if (ev.type == ENET_EVENT_TYPE_RECEIVE)
         {
           const std::string text(reinterpret_cast<const char*>(ev.packet->data),
@@ -1469,6 +1492,24 @@ void Thread()
           now, online, online && peer ? UnackedBytes(peer) : 0,
           Spectate::Health{lh.running, lh.late_frames, lh.rollback_avg, lh.ping_ms,
                            online && peer ? static_cast<double>(peer->roundTripTime) : -1.0});
+      // Watching the room's game from the room CSS (Online/RoomWatch.h).
+      RoomWatch::RoomInfo watch;
+      {
+        std::lock_guard lk(s_mutex);
+        watch.online = online;
+        watch.connection = connection;
+        watch.in_room = s.phase == Phase::In && s.view.has_value();
+        if (watch.in_room)
+        {
+          const View& v = *s.view;
+          watch.room_in_game = v.status == Status::InGame;
+          const auto& me = v.slots[v.you - 1].player;
+          watch.me_in_game = me && me->in_game;
+        }
+        watch.own_game = s.rg.active;
+        watch.screen = s.screen;
+      }
+      const std::vector<std::string> watch_out = RoomWatch::Service(now, watch);
 
       std::lock_guard lk(s_mutex);
       if (host && (s.conn == Conn::Connecting || s.conn == Conn::Hello) &&
@@ -1513,6 +1554,12 @@ void Thread()
         }
         for (const std::vector<u8>& data : spectate_out.data)
           SendData(peer, data);
+        for (const std::string& json : watch_out)
+        {
+          Send(peer, json);
+          ++s.sent;
+          Log(fmt::format("sent {}", json));
+        }
         while (!s.outbox.empty())
         {
           const Request r = s.outbox.front();
@@ -1833,6 +1880,7 @@ picojson::object Status()
   const auto now = Clock::now();
   picojson::object o;
   o["running"] = picojson::value(s_run.load());
+  o["watch"] = picojson::value(RoomWatch::Status());
   o["connection"] = picojson::value(ConnName(s.conn));
   o["connection_error"] = picojson::value(s.conn_error);
   o["connection_hold"] = picojson::value(s.conn_hold);
@@ -1944,6 +1992,7 @@ picojson::object Status()
                                           picojson::value();
         p["in_game"] = picojson::value(sl.player->in_game);
         p["sitting_out"] = picojson::value(sl.player->sitting_out);
+        p["watching"] = picojson::value(sl.player->watching);
         so["player"] = picojson::value(p);
       }
       else
@@ -2055,6 +2104,12 @@ std::optional<std::string> HarnessRequest(const picojson::object& args)
     if (r.slot < 1 || r.slot > ROOM_SLOTS)
       return "slot must be 1-4";
   }
+  else if (op == "watch_leave")
+  {
+    // As START / B while watching the room's game (Online/RoomWatch.h).
+    RoomWatch::Abort();
+    return std::nullopt;
+  }
   else if (op == "release_lock")
   {
     std::lock_guard lk(s_mutex);
@@ -2078,7 +2133,7 @@ std::optional<std::string> HarnessRequest(const picojson::object& args)
   else
   {
     return "op must be create, join, leave, slot, teams, public, team, ready, sit_out, "
-           "release_lock, screen or release_screen";
+           "watch_leave, release_lock, screen or release_screen";
   }
   Submit(r);
   return std::nullopt;

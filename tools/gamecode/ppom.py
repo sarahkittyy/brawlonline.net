@@ -440,7 +440,9 @@ S_ROOM_FLAGS, S_ROOM_CODE, S_ROOM_HOST, S_ROOM_STATUS, S_ROOM_MODE = 0x213, 0x21
 SP_ROOM_SLOT, SP_ROOM_TEAM, SP_ROOM_CHAR, SP_ROOM_COSTUME = 0x38, 0x39, 0x3A, 0x3B
 SP_ROOM_STOCKS = 0x3D   # (still v8) the stock count a ready player picked (stock control), 0 none
 SLOT_OPEN, SLOT_TAKEN, SLOT_READY, SLOT_HOST, SLOT_IN_GAME, SLOT_SITTING_OUT = 1, 2, 4, 8, 0x10, 0x20
+SLOT_WATCHING = 0x40   # 2026-10-19: watching the room's game from the room CSS
 RF_IN, RF_PUBLIC, RF_TEAMS = 1, 2, 4
+RF_WATCH = 8           # 2026-10-19: SESSION holds a room game this player watches
 
 
 def room_request(op: str, arg: int = 0, arg2: int = 0, code: str = "") -> bytes:

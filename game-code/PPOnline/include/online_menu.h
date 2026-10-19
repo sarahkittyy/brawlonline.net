@@ -46,7 +46,8 @@ namespace RoomCss {
         u8 stars;         // Brawl's win stars by the name plate: the side's set wins during a set,
                           // else 1 for the room's host (rooms.md #8)
         u8 stocks;        // stock control: the count the player picked (shown once ready), 0 none
-        u8 sittingOut;    // SIT OUT: a CPU's grey card, "SIT OUT" on the plate
+        u8 sittingOut;    // SIT OUT: a CPU's grey card, "SIT OUT" on the plate; 2: "WATCHING"
+                          // (watching the room's game), the same card
         char name[NAME_CHARS + 1];
     };
     void prepareRecords();               // before the CSS is built: four full panels

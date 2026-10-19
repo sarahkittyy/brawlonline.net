@@ -141,9 +141,14 @@ constexpr u32 SP_ROOM_SLOT = 0x38, SP_ROOM_TEAM = 0x39, SP_ROOM_CHAR = 0x3A, SP_
 // The stock count the player picked on their panel (the rules' stock control), shown with their
 // lock-in as SP_ROOM_CHAR is (0 none; still v8, a padding byte after restoreStocks).
 constexpr u32 SP_ROOM_STOCKS = 0x3D;
+// SLOT_WATCHING (2026-10-19): the player watches the room's game from the room CSS (room-state
+// `watching`): the next game does not wait for them.
 constexpr u8 SLOT_OPEN = 1, SLOT_TAKEN = 2, SLOT_READY = 4, SLOT_HOST = 8, SLOT_IN_GAME = 0x10,
-             SLOT_SITTING_OUT = 0x20;
-constexpr u8 RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4;
+             SLOT_SITTING_OUT = 0x20, SLOT_WATCHING = 0x40;
+constexpr u8 SCREEN_ROOM_CSS = static_cast<u8>(Rooms::Screen::Room);
+// RF_WATCH (2026-10-19): SESSION holds a room game this player watches from the room CSS
+// (Online/RoomWatch.h); the room CSS leaves for its match once it is SS_MATCH_READY.
+constexpr u8 RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4, RF_WATCH = 8;
 static_assert(L_ROOM_CREATE == L_DESYNCED + 1 && L_QUIT_LEFT == L_ROOM_CREATE + 1 &&
               L_QUIT_LEFT < LOCAL_SIZE);
 static_assert(L_ROOM < L_DIRECT_JOIN && L_DIRECT_NUMBER + 2 == L_OWN &&
@@ -1175,6 +1180,8 @@ void PutRoom(std::vector<u8>& session, const Rooms::Snapshot& room, const Gprb::
         bits |= SLOT_IN_GAME;
       if (pl.sitting_out)
         bits |= SLOT_SITTING_OUT;
+      if (pl.watching)
+        bits |= SLOT_WATCHING;
       session[p + SP_ROOM_TEAM] = pl.team < Rooms::NUM_TEAMS ? pl.team : GameSetup::NO_TEAM;
       if (in_session)
       {
@@ -1458,14 +1465,72 @@ void SyncPlayback(const Core::CPUThreadGuard& guard, const Located& loc,
              &s_session_seq);
 }
 
+// A room's game watched from the room CSS (Online/RoomWatch.h, docs/rooms-game-interface.md
+// "Watching the room's game"): the game is still in its room, so LOCAL keeps the room (its phase,
+// the launcher's counters) and nothing asks for a playback. Until its match starts SESSION is the
+// watched game's, rebuilt as for any replay, with RF_WATCH: the room CSS leaves for it as for the
+// room's own game. During the match nothing is written; after it, until the game is back on the
+// room CSS, SESSION is the same without RF_WATCH and SS_NONE (no second match starts from it), and
+// LOCAL says connected, as after a playback. Back on the room CSS, the room is written as usual.
+// Returns false when the room is to be written as usual.
+bool SyncRoomWatch(const Core::CPUThreadGuard& guard, const Located& loc,
+                   const Gprb::Session::PlaybackView& pv)
+{
+  const u8 screen = R8(guard, loc.local + L_SCREEN);
+  const bool on_css = screen == SCREEN_ROOM_CSS;
+  if (!pv.starting && !pv.in_match && !pv.stopping && on_css)
+    return false;
+  if (loc.version >= 5)
+    Rooms::SetScreen(screen);
+  const Rooms::Snapshot room = Rooms::GetSnapshot();
+  const bool in_room = room.phase == Rooms::Phase::In && room.view.has_value();
+  std::vector<u8> local(LOCAL_SIZE, 0);
+  local[L_STATE] = pv.in_match ? 3 : on_css ? 0 : 2;
+  local[L_LOCAL_PORT] = on_css && in_room ? static_cast<u8>(room.view->you - 1) :
+                                            static_cast<u8>(pv.local_port);
+  local[L_REMOTE_READY] = on_css ? 0 : 1;
+  local[L_DISCONNECTED] = pv.disconnected ? 1 : 0;
+  for (u32 i = L_LOCK; i < LOCAL_SIZE; ++i)
+    local[i] = R8(guard, loc.local + i);
+  local[L_DESYNCED] = pv.desynced ? 1 : 0;
+  local[L_QUIT_LEFT] = pv.quit_left ? 1 : 0;
+  local[L_ROOM_JOIN] = room.join_seq;
+  local[L_ROOM] = static_cast<u8>(room.phase);
+  PutDirectInvite(local, room.direct_seq, room.direct_code, room.direct_queue);
+  local[L_ROOM_CREATE] = room.create_seq;
+  WriteBlock(guard, loc.local, local, &s_local_written, &s_local_seq);
+  if (pv.in_match || pv.stopping)
+  {
+    s_session_written.clear();
+    return true;
+  }
+  std::vector<u8> session = PlaybackSession(pv.session, loc.version);
+  if (pv.starting)
+  {
+    session[S_ROOM_FLAGS] |= RF_IN | RF_WATCH;
+  }
+  else
+  {
+    session[S_STATE] = 0;  // SS_NONE
+    session[S_ROOM_FLAGS] &= ~RF_WATCH;
+  }
+  WriteBlock(guard, loc.session, session, &s_session_written, &s_session_seq);
+  return true;
+}
+
 // The SESSION and LOCAL blocks (design 5.2): the game's lock-in to the gameplay session, the
 // session's lobby and match setup back to the game.
 void SyncSession(const Core::CPUThreadGuard& guard, const Located& loc)
 {
   if (const auto pv = Gprb::Session::GetPlaybackView(); pv.active)
   {
-    SyncPlayback(guard, loc, pv);
-    return;
+    if (!pv.room_watch)
+    {
+      SyncPlayback(guard, loc, pv);
+      return;
+    }
+    if (SyncRoomWatch(guard, loc, pv))
+      return;
   }
   // Rooms (v5): the game's screen in, the room out (LOCAL and SESSION's spare bytes).
   const bool v5 = loc.version >= 5;

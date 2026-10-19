@@ -2153,7 +2153,7 @@ namespace OnlineMenu {
                 p.stars = (u8)roomStars(i, (bits & PPOM::SLOT_HOST) || se.roomHost == i);
                 // Ready: the lock-in; not yet: the coin they have placed (the user's, 2026-10-18).
                 int css = pl.roomChar != 0xFF ? cssOfKind(pl.roomChar) : -1;
-                p.sittingOut = (bits & PPOM::SLOT_SITTING_OUT) ? 1 : 0;
+                p.sittingOut = (bits & PPOM::SLOT_WATCHING) ? 2 : (bits & PPOM::SLOT_SITTING_OUT) ? 1 : 0;
                 if (bits & PPOM::SLOT_IN_GAME) {
                     p.kind = RoomCss::PV_IN_GAME;
                 } else if (css >= 0) {
@@ -2481,6 +2481,18 @@ namespace OnlineMenu {
         // The RULESET line's "Enter code": the keypad's ruleset mode once the menu has closed.
         if (RoomPlay::takeKeypadRequest() && in && host && waiting) {
             CodeEntry::openRuleset(LOCAL_PORT);
+            return;
+        }
+        // Watching the room's game (the user's, 2026-10-19; docs/rooms-game-interface.md): Dolphin
+        // put a game this player is not in into SESSION (RF_WATCH). Its match starts from here as
+        // the room's own game does, and the game comes back to this CSS after it. A ready from
+        // before is taken back: the room does not wait for a watcher, so it would not hold.
+        if (in && (se.roomFlags & PPOM::RF_WATCH) && se.state == PPOM::SS_MATCH_READY && se.game &&
+            !g_onlineMatchGame && !CodeEntry::active()) {
+            if (roomLockedForNext()) unlock();
+            g_onlineMatchGame = se.game;
+            PPOM::g_block.debug.scratch[9] += 0x10000;   // tests: (with launcher joins) the CSS left
+            leaveCss(1);
             return;
         }
         // Back on the CSS: no stage select for the steps any more.

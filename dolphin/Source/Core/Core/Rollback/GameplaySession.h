@@ -391,9 +391,12 @@ LinkHealth GetLinkHealth();
 // behind the players as the stream is (about 10 s: the upload's hold at a game's start), unless
 // `catch_up`: a spectator who joined a game well under way runs to the live edge (the newest frame
 // less a 3 s buffer) first. Go Live, the seek bar and fast-forward reach the live edge any time.
+// `room_watch`: a room's game watched from the room CSS (Online/RoomWatch.h): GameBridge keeps the
+// room in LOCAL and SESSION and marks the replay's SESSION RF_WATCH instead of asking the game for a
+// playback; it is a live playback otherwise.
 std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file, bool play_anyway,
                                        bool hold_at_end = false, bool live = false,
-                                       bool catch_up = false);
+                                       bool catch_up = false, bool room_watch = false);
 // A live playback's file as read again: its frames past those already known are added, and its
 // ENDG once there. `hold_at_end` replaces the armed value (a set's next game arrived: the game
 // ends its match and the next one plays). `cut`: the stream says the rest of the game won't come
@@ -417,6 +420,9 @@ struct PlaybackView
   bool disconnected = false;   // after the last frame: the live game ended with DISCONNECTED
   bool desynced = false;       // ... with DESYNC DETECTED
   bool quit_left = false;      // ... with this player's quit of a 3-4 player match
+  bool room_watch = false;     // ArmPlayback's `room_watch`
+  bool starting = false;       // armed, its match not started yet (the game is on its way to it)
+  bool stopping = false;       // PlaybackStopping
 };
 PlaybackView GetPlaybackView();
 // For the harness and the launcher: phase, frame, last frame, desync, error.

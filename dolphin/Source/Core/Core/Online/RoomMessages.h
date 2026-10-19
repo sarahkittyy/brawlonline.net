@@ -93,6 +93,9 @@ struct Player
   // The panel's SIT OUT: the room's games start without this player (by choice, or outside a set
   // that is on).
   bool sitting_out = false;
+  // Watching the room's game from the room CSS (room-watch `watching`, 2026-10-19): the next game
+  // does not wait for them.
+  bool watching = false;
 };
 
 struct Slot
@@ -252,6 +255,7 @@ enum class Op : u8
   Result = 102,  // a game of the room's set (room-result)
   Step = 103,    // the set's game being set up (room-step)
   Unreachable = 104,  // the room's game could not connect to these players (room-unreachable)
+  Watch = 105,        // the room's games this player is not in (room-watch: `want`, `watching`)
 };
 // room-result winnerSide: a draw, and a game that was quit (it did not happen; the server plays it
 // again from its first step once every player of the set reported it, room_set.rs).
@@ -282,6 +286,7 @@ struct Request
                                            // its match started)
   std::string match_id;     // Unreachable: the room's game
   std::vector<int> ports;   // Unreachable: the players' slots (1-4)
+  std::optional<bool> want, watching;  // Watch (at least one)
 };
 // The JSON for `r`, or nullopt for Poll and anything out of range.
 std::optional<std::string> RequestJson(const Request& r);

@@ -21,6 +21,8 @@ enum class MessageType
   BrawlbackBuffer,
   // Spectating: a live game was picked and its first frames haven't come yet.
   SpectateWaiting,
+  // Watching the room's game from the room CSS: the players' game is over (Online/RoomWatch.h).
+  RoomWatch,
 
   // This entry must be kept last so that persistent typed messages are
   // displayed before other messages

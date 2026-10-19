@@ -252,9 +252,14 @@ namespace PPOM {
     // SLOT_SITTING_OUT: the room's games start without this player (the panel's SIT OUT, or outside
     // a set that is on). A taken slot that is not SLOT_READY may still have a roomChar: the coin
     // placed on that player's CSS, shown before they ready.
+    // SLOT_WATCHING (2026-10-19): the player watches the room's game from the room CSS; the next
+    // game does not wait for them.
     enum RoomSlotBits { SLOT_OPEN = 1, SLOT_TAKEN = 2, SLOT_READY = 4, SLOT_HOST = 8, SLOT_IN_GAME = 0x10,
-                        SLOT_SITTING_OUT = 0x20 };
-    enum RoomFlags { RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4 };
+                        SLOT_SITTING_OUT = 0x20, SLOT_WATCHING = 0x40 };
+    // RF_WATCH (2026-10-19): SESSION holds the room's game this player is not in, to watch (Dolphin
+    // plays it as a live replay): the room CSS leaves for its match once SS_MATCH_READY, as for
+    // the room's own game, and comes back after it.
+    enum RoomFlags { RF_IN = 1, RF_PUBLIC = 2, RF_TEAMS = 4, RF_WATCH = 8 };
     enum RoomStatusKind { RS_WAITING = 0, RS_STARTING = 1, RS_IN_GAME = 2 };
     enum RoomMode { RM_1V1 = 0, RM_FFA = 1, RM_TEAMS = 2 };
 

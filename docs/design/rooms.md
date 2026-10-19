@@ -54,7 +54,22 @@ Asked for by players: start a 3-4 slot room with two people and let others join 
 | 28 | Sets | A set starts between the players who play then (a 1v1 set in a room of three: one sits out). **Everyone else sits out until the set is over** (joiners too) and can't play; the set's players can't sit out ("Wait for the set to end."). With more players than two sides, the note reads "Sets need 1v1 or 2v2: SIT OUT". |
 | 29 | Too few | Only one player not sitting out: **"Need 2 players"**. |
 
-Defaults chosen without asking: the room's host who sits out stays the host; the game's decider is then the earliest-joined player of the game (mm's `room-start.host`). A player who sits out can toggle back during a game they are not in. Their coin still shows (grey card). Not built yet: **watching the game in progress while sitting out** (the user's, 2026-10-18: "i think yes"), with the spectating relay (`spectating.md`).
+Defaults chosen without asking: the room's host who sits out stays the host; the game's decider is then the earliest-joined player of the game (mm's `room-start.host`). A player who sits out can toggle back during a game they are not in. Their coin still shows (grey card). Watching the game in progress while sitting out (the user's, 2026-10-18: "i think yes") is §1.3.
+
+### 1.3 Watching the room's game (the user's, 2026-10-19)
+
+A member who is not in the room's game (sitting out, or joined during it) watches it live in their own game, from the room CSS, and is back on the room CSS for the next game.
+
+| # | Topic | Decision |
+|---|---|---|
+| 30 | Start | **Automatic.** Everyone in the room who is not in the game is taken into watching it once its first frames come (about 10 s in: the upload's start hold, `spectating.md` §4.3), from the room CSS. No WATCH button. A player who joined well into a game catches up to the live edge first, as a spectator does. |
+| 31 | Leave early | **START or B** ends the watch at once: back on the room CSS, and nothing more of that game is watched. The room's next game is watched again. |
+| 32 | The next game | **Finish, never block.** The watcher sees the game's end (normally a few seconds behind, up to about 10 s), then goes back to the room CSS. The room never waits for a watcher: while watching, a member is not waited for (a joiner who would play next too), so the next game can start without them, and they watch that one. |
+| 33 | The end line | Once the players' game is over and it still plays on the watcher's screen: **"Game ended, press B to return to CSS."**, a line top left (Dolphin's on-screen messages). |
+| 34 | Launcher | **Not busy.** A launcher click (another room, an invite, Play unranked/ranked) while watching ends the watch and goes ahead once the game is back on the room CSS. |
+| 35 | Others' cards | A watcher's card is the grey SIT OUT card with **WATCHING** on its plate (default, not asked). |
+
+How it works (`docs/rooms-protocol.md` §2 `room-watch`, `docs/rooms-game-interface.md` "Watching the room's game"): the players' games upload the game exactly as for spectators (nothing changes on their side, so their games are unaffected); mm sends the kept chunks to the room's watchers on the online connection's watch channel (ENet channel 2), and the watcher's Dolphin plays them as a live replay (`Online/RoomWatch.cpp`, the playback of `spectating.md` §6.2 in the netplay Dolphin). A game nobody streams (`MM_SPECTATE` off, or every player's "Let others stream my games" off) is not watched: the watcher stays on the CSS with "Waiting for the game to end", as before.
 
 ## 2. Defaults (not asked)
 

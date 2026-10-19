@@ -455,6 +455,13 @@ impl Loop {
                     }
                 }
             }
+            Output::SendData { conn, channel, data } => {
+                if let Some(pid) = self.conn_peer.get(&conn) {
+                    if let Err(e) = self.host.peer_mut(*pid).send(channel, &Packet::reliable(&data[..])) {
+                        tracing::warn!(conn, "send failed: {e:?}");
+                    }
+                }
+            }
             Output::Disconnect { conn } => {
                 if self.conn_peer.contains_key(&conn) && !self.pending_disconnects.iter().any(|(c, _)| *c == conn) {
                     self.pending_disconnects.push((conn, Instant::now() + DISCONNECT_GRACE));

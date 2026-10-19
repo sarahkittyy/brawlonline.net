@@ -22,6 +22,16 @@ pub const SPECTATE_ERROR: &str = "spectate-error";
 
 /// Chunk data travels on this ENet channel (JSON stays on channel 0).
 pub const DATA_CHANNEL: u8 = 1;
+/// A room's game going to the room's members who are not in it (2026-10-19, `docs/rooms-protocol.md`
+/// §2 `room-watch`): mm → game, reliable, binary. Each packet is one byte of kind, then:
+/// [`WATCH_BEGIN`] UTF-8 JSON `{matchId, game, number, uid}` (a game of the match starts; its
+/// chunks follow), [`WATCH_CHUNK`] the chunk's index in its game (u32, little-endian) and the
+/// chunk as uploaded (its 20-byte header included), [`WATCH_END`] UTF-8 JSON `{matchId, game,
+/// bad?}` (the game's ENDG came, or `bad`: nothing more of it comes).
+pub const WATCH_CHANNEL: u8 = 2;
+pub const WATCH_BEGIN: u8 = 1;
+pub const WATCH_CHUNK: u8 = 2;
+pub const WATCH_END: u8 = 3;
 /// `slot`, `seq`, `offset`, `total`.
 pub const DATA_HEADER: usize = 16;
 /// The largest data packet a game sends (header included).

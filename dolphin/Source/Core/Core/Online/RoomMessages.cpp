@@ -103,6 +103,7 @@ std::optional<Player> ParsePlayer(const picojson::object& o, std::string* why)
   p.team = static_cast<u8>(*team);
   p.in_game = *in_game;
   p.sitting_out = Bool(o, "sittingOut").value_or(false);
+  p.watching = Bool(o, "watching").value_or(false);
   // The placed coin shows before the ready too (the user's, 2026-10-18; docs/design/rooms.md #15
   // had only the lock-in); the picked stocks only with the ready.
   p.character = character;
@@ -808,6 +809,15 @@ std::optional<std::string> RequestJson(const Request& r)
       o["pickers"] = picojson::value(static_cast<double>(*r.pickers));
     }
     break;
+  case Op::Watch:
+    if (!r.want && !r.watching)
+      return std::nullopt;
+    o["type"] = picojson::value("room-watch");
+    if (r.want)
+      o["want"] = picojson::value(*r.want);
+    if (r.watching)
+      o["watching"] = picojson::value(*r.watching);
+    break;
   case Op::SitOut:
     if (r.slot < 1 || r.slot > ROOM_SLOTS)
       return std::nullopt;
@@ -942,6 +952,8 @@ const char* OpName(Op op)
     return "back";
   case Op::SitOut:
     return "sit-out";
+  case Op::Watch:
+    return "watch";
   case Op::Rules:
     return "rules";
   case Op::Result:

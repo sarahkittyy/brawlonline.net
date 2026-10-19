@@ -76,6 +76,9 @@ impl Default for RoomsConfig {
     }
 }
 
+/// How long after a room's game is over a member may still be watching it ([`RoomBook::tick`]).
+const WATCH_AFTER_GAME: Duration = Duration::from_secs(30);
+
 /// Who a member is (from the verified account).
 #[derive(Debug, Clone, PartialEq)]
 pub struct MemberInfo {
@@ -99,6 +102,12 @@ struct Member {
     in_game: bool,
     /// The panel's SIT OUT: the room's games start without this member until they play again.
     sitting_out: bool,
+    /// `room-watch` `want` (2026-10-19, `docs/design/rooms.md` §1.3): the room's games this member
+    /// is not in go to their game ([`RoomBook::watch_targets`]).
+    watch: bool,
+    /// `room-watch` `watching`: their game shows one of the room's games now, since then. The
+    /// room's next game does not wait for them ([`Room::playing`]).
+    watching: Option<Instant>,
 }
 
 #[derive(Debug, Clone)]
@@ -162,6 +171,9 @@ struct Room {
     /// Draws the player who picks when the pickers do not play (the same for the whole time
     /// between two games, so the room's CSS and the start agree).
     pick_draw: usize,
+    /// When its last game was over (every player back): a member still marked watching long
+    /// after that (their game never said it stopped) is waited for again ([`RoomBook::tick`]).
+    game_over_at: Option<Instant>,
 }
 
 impl Room {
@@ -183,8 +195,10 @@ impl Room {
         m.sitting_out || self.set.as_ref().is_some_and(|s| s.on() && s.side_of(m.info.uid).is_none())
     }
     /// The slots of the members who play the next game.
+    /// A member watching the room's game (a few seconds behind its players) is not waited for (the
+    /// user's, 2026-10-19: "finish, never block"): the next game starts without them.
     fn playing(&self) -> Vec<usize> {
-        self.members().filter(|(_, m)| !self.sits_out(m)).map(|(i, _)| i).collect()
+        self.members().filter(|(_, m)| !self.sits_out(m) && m.watching.is_none()).map(|(i, _)| i).collect()
     }
     /// From the players (the open slots while fewer than two play: what the room is for).
     fn mode(&self) -> RoomMode {
@@ -493,6 +507,7 @@ impl Room {
                             .filter(|_| m.ready && (!blind || i == slot) && self.ruleset.rules.stock_control),
                         in_game: m.in_game,
                         sitting_out: self.sits_out(m),
+                        watching: m.watching.is_some(),
                     }),
                 })
                 .collect(),
@@ -551,6 +566,8 @@ pub struct RoomBook {
     /// Room game ticket connection → the code of its room.
     ticket_of: HashMap<ConnId, String>,
     failed_tickets: Vec<(ConnId, String)>,
+    /// [`Self::take_watch_stops`].
+    watch_stops: Vec<ConnId>,
     /// Rooms whose players changed (code, serial), for [`Self::take_changed`].
     changed: Vec<(String, u64)>,
     join_seq: u64,
@@ -581,6 +598,7 @@ impl RoomBook {
             member_of: HashMap::new(),
             ticket_of: HashMap::new(),
             failed_tickets: Vec::new(),
+            watch_stops: Vec::new(),
             changed: Vec::new(),
             join_seq: 0,
             match_counter: 0,
@@ -776,6 +794,8 @@ impl RoomBook {
             stocks: None,
             in_game: false,
             sitting_out: false,
+            watch: false,
+            watching: None,
         });
         tracing::info!(%code, host = %who.connect_code, public, "room created");
         self.rooms.insert(
@@ -798,6 +818,7 @@ impl RoomBook {
                 pickers: None,
                 pick_owed: false,
                 pick_draw: 0,
+                game_over_at: None,
             },
         );
         self.changed.push((code.clone(), self.room_counter));
@@ -852,6 +873,8 @@ impl RoomBook {
             in_game: false,
             // Joiners play (the user's, 2026-10-18): the next game waits for them to ready.
             sitting_out: false,
+            watch: false,
+            watching: None,
         });
         tracing::info!(%code, player = %who.connect_code, slot = slot + 1, "joined room");
         if let Some(set) = room.set.as_mut() {
@@ -890,6 +913,9 @@ impl RoomBook {
         let Some(room) = self.rooms.get_mut(code) else { return };
         let Some(slot) = room.slot_of(conn) else { return };
         let gone = room.slots[slot].take();
+        if gone.as_ref().is_some_and(|m| m.watch) {
+            self.watch_stops.push(conn);
+        }
         if let (Some(set), Some(m)) = (room.set.as_mut(), gone.as_ref()) {
             if let Some(side) = set.side_of(m.info.uid) {
                 if !set.on() {
@@ -1070,9 +1096,11 @@ impl RoomBook {
                 m.character = character;
                 m.costume = costume;
                 m.stocks = stocks.filter(|_| ready);
-                // A ready plays (the game sends `room-sit-out` first; an older one only readies).
+                // A ready plays (the game sends `room-sit-out` first; an older one only readies),
+                // and is back from watching.
                 if ready {
                     m.sitting_out = false;
+                    m.watching = None;
                 }
             }
             RoomRequest::SitOut { slot, sit_out } => {
@@ -1097,6 +1125,29 @@ impl RoomBook {
                 }
                 m.sitting_out = sit_out;
                 if sit_out {
+                    m.ready = false;
+                }
+            }
+            RoomRequest::Watch { want, watching } => {
+                let m = room.slots[me].as_mut().ok_or(msg::NOT_IN_ROOM)?;
+                if let Some(w) = want {
+                    if m.watch && !w {
+                        self.watch_stops.push(conn);
+                    }
+                    m.watch = w;
+                }
+                let Some(w) = watching else {
+                    // Nothing the room shows changed.
+                    return Ok(());
+                };
+                if w != m.watching.is_some() {
+                    tracing::info!(%code, slot = me + 1, watching = w, "room watch");
+                }
+                // A player of the game is in it, not watching it.
+                let since = m.watching.unwrap_or(now);
+                m.watching = (w && !m.in_game).then_some(since);
+                // Their game shows the match, not the CSS: no ready from before stays.
+                if m.watching.is_some() {
                     m.ready = false;
                 }
             }
@@ -1398,7 +1449,29 @@ impl RoomBook {
         if matches!(room.phase, Phase::InGame { .. }) && room.members().all(|(_, m)| !m.in_game) {
             tracing::info!(%code, "room game over");
             room.phase = Phase::Waiting;
+            room.game_over_at = Some(Instant::now());
         }
+    }
+
+    /// The room games to send to watchers now: each member who wants them (`room-watch` `want`)
+    /// and is not in their room's game, with that game's match id. The live book sends each one
+    /// that game's kept chunks, also after the game is over (the upload runs behind the players).
+    pub fn watch_targets(&self) -> Vec<(ConnId, String)> {
+        let mut v = Vec::new();
+        for room in self.rooms.values() {
+            let Phase::InGame { match_id, .. } = &room.phase else { continue };
+            for (_, m) in room.members() {
+                if m.watch && !m.in_game {
+                    v.push((m.conn, match_id.clone()));
+                }
+            }
+        }
+        v
+    }
+
+    /// Members whose watch stopped (`want: false`, or they left the room) since the last call.
+    pub fn take_watch_stops(&mut self) -> Vec<ConnId> {
+        std::mem::take(&mut self.watch_stops)
     }
 
     /// Starts the game once two or more play and all of them are ready.
@@ -1649,6 +1722,29 @@ impl RoomBook {
         }
         for (code, why) in late {
             self.cancel_start(&code, &why, out);
+            self.broadcast(&code, out);
+        }
+        // A watcher runs a few seconds behind the players (up to the upload's 10 s hold at a
+        // game's start, and its backoff): one still watching well after the room's game is over,
+        // with no other game going on, lost its way back and is waited for again; so is one
+        // watching for longer than any game.
+        let mut unwatched = Vec::new();
+        for room in self.rooms.values_mut() {
+            let over = matches!(room.phase, Phase::Waiting)
+                && room.game_over_at.is_some_and(|t| now.saturating_duration_since(t) >= WATCH_AFTER_GAME);
+            let mut changed = false;
+            for m in room.slots.iter_mut().flatten() {
+                if m.watching.is_some_and(|t| over || now.saturating_duration_since(t) >= self.cfg.game_max) {
+                    tracing::info!(code = %room.code, player = %m.info.connect_code, "room watch timed out");
+                    m.watching = None;
+                    changed = true;
+                }
+            }
+            if changed {
+                unwatched.push(room.code.clone());
+            }
+        }
+        for code in unwatched {
             self.broadcast(&code, out);
         }
         for code in stale {
@@ -2501,6 +2597,82 @@ mod tests {
         let out = t.req(3, RoomRequest::Ready { ready: true, character: Some(3), costume: Some(0), stocks: None });
         assert_eq!(last_state(&out, 1)["slots"][2]["player"]["sittingOut"], false, "a ready plays");
         assert_eq!(last_state(&out, 3)["statusText"], msg::WAITING_FOR_GAME);
+    }
+
+    /// A member who is not in the room's game and wants it (`room-watch`) is a watch target with
+    /// the game's match (the live book sends it); one watching it is not waited for: the next game
+    /// starts without them (the user's, 2026-10-19: "finish, never block"), and once they are back
+    /// they are waited for again. Stopping or leaving ends the watch.
+    #[test]
+    fn a_member_watching_the_game_is_not_waited_for() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
+        join(&mut t, 2, &code);
+        for c in 1..=2 {
+            t.req(c, RoomRequest::Watch { want: Some(true), watching: None });
+        }
+        ready_all(&mut t, &[1, 2]);
+        tickets(&mut t, &code, &[1, 2]);
+        assert!(t.book.watch_targets().is_empty(), "the players are in the game");
+        // A joiner during the game watches it.
+        join(&mut t, 3, &code);
+        assert!(t.req(3, RoomRequest::Watch { want: Some(true), watching: None }).is_empty(), "nothing to show");
+        let targets = t.book.watch_targets();
+        assert_eq!(targets.len(), 1);
+        assert_eq!(targets[0].0, 3);
+        assert!(targets[0].1.starts_with(&format!("mode.room-{code}-")));
+        let out = t.req(3, RoomRequest::Watch { want: None, watching: Some(true) });
+        assert_eq!(last_state(&out, 1)["slots"][2]["player"]["watching"], true);
+        // The players are back while it still watches: the next game starts without it.
+        t.req(1, RoomRequest::Back { pickers: None });
+        let out = t.req(2, RoomRequest::Back { pickers: None });
+        assert_eq!(last_state(&out, 1)["statusText"], msg::waiting_on(&["player1", "player2"]));
+        let out = ready_all(&mut t, &[1, 2]);
+        assert_eq!(start_of(&out, 1).expect("room-start")["players"], serde_json::json!([1, 2]));
+        tickets(&mut t, &code, &[1, 2]);
+        assert_eq!(t.book.watch_targets().len(), 1, "and watches that one too");
+        // Back on the CSS: the next game waits for it.
+        let out = t.req(3, RoomRequest::Watch { want: None, watching: Some(false) });
+        assert!(last_state(&out, 1)["slots"][2]["player"].get("watching").is_none());
+        t.req(1, RoomRequest::Back { pickers: None });
+        let out = t.req(2, RoomRequest::Back { pickers: None });
+        assert_eq!(last_state(&out, 1)["statusText"], msg::waiting_on(&["player1", "player2", "player3"]));
+        let out = ready_all(&mut t, &[1, 2]);
+        assert!(start_of(&out, 1).is_none());
+        assert_eq!(last_state(&out, 1)["statusText"], msg::waiting_on(&["player3"]));
+        // Left early: no longer a target, and its watch stops.
+        assert!(t.book.take_watch_stops().is_empty());
+        t.req(3, RoomRequest::Watch { want: Some(false), watching: None });
+        assert_eq!(t.book.take_watch_stops(), vec![3]);
+        t.req(3, RoomRequest::Watch { want: Some(true), watching: None });
+        t.req(3, RoomRequest::Leave);
+        assert_eq!(t.book.take_watch_stops(), vec![3]);
+    }
+
+    /// A member still marked watching 30 s after the room's game is over (their game never said it
+    /// is back) is waited for again; a ready brings them back too.
+    #[test]
+    fn a_watch_that_never_ends_times_out() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        t.req(1, RoomRequest::Slot { slot: 3, open: true });
+        join(&mut t, 2, &code);
+        ready_all(&mut t, &[1, 2]);
+        tickets(&mut t, &code, &[1, 2]);
+        join(&mut t, 3, &code);
+        t.req(3, RoomRequest::Watch { want: Some(true), watching: Some(true) });
+        t.req(1, RoomRequest::Back { pickers: None });
+        t.req(2, RoomRequest::Back { pickers: None });
+        let mut out = vec![];
+        t.book.tick(t.now + Duration::from_secs(5), &mut out);
+        assert!(out.is_empty(), "still within the game's tail");
+        t.book.tick(t.now + Duration::from_secs(31), &mut out);
+        assert!(last_state(&out, 1)["slots"][2]["player"].get("watching").is_none());
+        assert_eq!(last_state(&out, 1)["statusText"], msg::waiting_on(&["player1", "player2", "player3"]));
+        t.req(3, RoomRequest::Watch { want: None, watching: Some(true) });
+        let out = t.req(3, RoomRequest::Ready { ready: true, character: Some(3), costume: Some(0), stocks: None });
+        assert!(last_state(&out, 1)["slots"][2]["player"].get("watching").is_none(), "a ready is back");
     }
 
     /// Sitting out stays until the player plays again: the next games start without them.

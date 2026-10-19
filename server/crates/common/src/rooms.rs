@@ -33,6 +33,7 @@ pub const ROOM_READY: &str = "room-ready";
 pub const ROOM_TEAM: &str = "room-team";
 pub const ROOM_BACK: &str = "room-back";
 pub const ROOM_SIT_OUT: &str = "room-sit-out";
+pub const ROOM_WATCH: &str = "room-watch";
 pub const ROOM_RULES: &str = "room-rules";
 pub const ROOM_RESULT: &str = "room-result";
 pub const ROOM_SET: &str = "room-set";
@@ -150,6 +151,12 @@ pub enum RoomRequest {
     /// `room-sit-out {slot, sitOut}`: the player in slot 1-4 sits out the room's next games (the
     /// others start without them) or plays again. A player for themselves, the host for anyone.
     SitOut { slot: u8, sit_out: bool },
+    /// `room-watch {want?, watching?}` (2026-10-19, `docs/design/rooms.md` §1.3): `want`: send this
+    /// member the room's games they are not in (the watch channel, [`crate::spectate::WATCH_CHANNEL`]),
+    /// from now on; false stops the one being sent (the player left it early) until it is sent
+    /// again. `watching`: this member's game shows one of them now: the room's next game does not
+    /// wait for them. Absent: unchanged.
+    Watch { want: Option<bool>, watching: Option<bool> },
     /// `room-team {team}`: 0 red, 1 blue, 2 green.
     Team { team: u8 },
     /// `room-back {pickers?}`: this player is back on the room's CSS after a game. `pickers`: the
@@ -205,6 +212,7 @@ impl RoomRequest {
             RoomRequest::Ready { .. } => ROOM_READY,
             RoomRequest::Team { .. } => ROOM_TEAM,
             RoomRequest::SitOut { .. } => ROOM_SIT_OUT,
+            RoomRequest::Watch { .. } => ROOM_WATCH,
             RoomRequest::Back { .. } => ROOM_BACK,
             RoomRequest::Rules { .. } => ROOM_RULES,
             RoomRequest::Result { .. } => ROOM_RESULT,
@@ -239,6 +247,16 @@ impl RoomRequest {
                 None => json!({}),
             },
             RoomRequest::SitOut { slot, sit_out } => json!({ "slot": slot, "sitOut": sit_out }),
+            RoomRequest::Watch { want, watching } => {
+                let mut v = json!({});
+                if let Some(w) = want {
+                    v["want"] = json!(w);
+                }
+                if let Some(w) = watching {
+                    v["watching"] = json!(w);
+                }
+                v
+            }
             RoomRequest::Slot { slot, open } => json!({ "slot": slot, "open": open }),
             RoomRequest::Teams { on } => json!({ "on": on }),
             RoomRequest::Public { public } => json!({ "public": public }),
@@ -344,6 +362,13 @@ impl RoomRequest {
                     .filter(|s| *s >= 1)
                     .ok_or_else(|| format!("{kind}: `slot` must be 1 to {ROOM_SLOTS}"))?;
                 RoomRequest::SitOut { slot, sit_out: flag("sitOut")? }
+            }
+            ROOM_WATCH => {
+                let opt = |key: &str| match v.get(key) {
+                    None | Some(serde_json::Value::Null) => Ok(None),
+                    Some(_) => flag(key).map(Some),
+                };
+                RoomRequest::Watch { want: opt("want")?, watching: opt("watching")? }
             }
             ROOM_RULES => {
                 let raw = v.get("rules").ok_or_else(|| format!("{kind}: `rules` is missing"))?;
@@ -511,6 +536,10 @@ pub struct RoomPlayer {
     /// Sits out the room's games (the panel's SIT OUT), by choice or outside a set that is on.
     #[serde(default)]
     pub sitting_out: bool,
+    /// Watching the room's game in their own game (`room-watch` `watching`, 2026-10-19): the next
+    /// game does not wait for them. Written only when true.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub watching: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -839,6 +868,9 @@ mod tests {
             RoomRequest::Back { pickers: Some(2) },
             RoomRequest::SitOut { slot: 3, sit_out: true },
             RoomRequest::SitOut { slot: 1, sit_out: false },
+            RoomRequest::Watch { want: Some(true), watching: None },
+            RoomRequest::Watch { want: Some(false), watching: Some(false) },
+            RoomRequest::Watch { want: None, watching: Some(true) },
             RoomRequest::Ready { ready: false, character: Some(7), costume: Some(1), stocks: None },
             RoomRequest::Rules { rules: crate::rules::MatchRules::default() },
             RoomRequest::Rules {

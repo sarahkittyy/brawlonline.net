@@ -694,6 +694,9 @@ struct State
     std::string end_method;
     s64 final_frame = -1;
     bool play_anyway = false;
+    // A room's game watched from the room CSS (ArmPlayback's `room_watch`, Online/RoomWatch.h):
+    // the game leaves the room CSS for its match and comes back to it.
+    bool room_watch = false;
     u32 serial = 0;  // bumped for every replay armed (the game starts each one once)
     size_t next = 0;
     s64 desync_frame = -1;
@@ -6300,7 +6303,7 @@ void ReadPlaybackEnd(const std::string& endg, std::string* method, s64* final_fr
 }
 
 std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file, bool play_anyway,
-                                       bool hold_at_end, bool live, bool catch_up)
+                                       bool hold_at_end, bool live, bool catch_up, bool room_watch)
 {
   if (!file)
     return "no replay";
@@ -6428,6 +6431,7 @@ std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file,
   ReadPlaybackEnd(file->endg, &pb.end_method, &pb.final_frame);
   pb.live = live;
   pb.catch_up_at_start = live && catch_up;
+  pb.room_watch = room_watch;
   if (live)
   {
     // Its own copy, which ExtendPlayback grows; it starts by waiting for a buffer's frames.
@@ -6718,6 +6722,9 @@ PlaybackView GetPlaybackView()
   v.disconnected = s.pb.end_disconnected;
   v.desynced = s.pb.end_desynced;
   v.quit_left = s.pb.end_quit_left;
+  v.room_watch = s.pb.room_watch;
+  v.starting = s.phase == Phase::Armed && !s.pb.stopped && !s.await_scene_exit;
+  v.stopping = PlaybackStoppingLocked();
   return v;
 }
 
