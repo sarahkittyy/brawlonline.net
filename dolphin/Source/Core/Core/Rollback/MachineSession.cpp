@@ -495,9 +495,7 @@ struct State
       Downloading,  // the chunks it has not got coming in
       Ready,        // it has the whole card (or the session has none)
       Failed,
-    };
-    // Atomic: the UI thread reads it too (JoinerWaitsForSDCard: the window waits for the answer).
-    std::atomic<Step> step{Step::Idle};
+    } step = Step::Idle;
     // Its own card's hashes (a thread of their own; `own` under `own_mutex`).
     std::thread hash_thread;
     std::atomic<bool> hash_cancel{false};
@@ -5065,9 +5063,13 @@ bool SDSyncStep()
                        "files{}{})",
                        y.missing_bytes / 1048576.0, y.missing_files,
                        y.names.empty() ? "" : ", ", y.names.empty() ? "" : y.names.front()));
-    // The launcher's dialog asks its player; Dolphin's window waits minimized until then
-    // (JoinerWaitsForSDCard), so nothing to say in it.
     y.step = Step::Asking;
+    if (y.choice.load() == static_cast<int>(SDSyncChoice::Ask))
+    {
+      ShowNotice(fmt::format("Your SD card is {:.0f} MB different from the host's: answer in the "
+                             "room window",
+                             std::ceil(y.missing_bytes / 1048576.0)));
+    }
     return false;
   }
 
@@ -6365,32 +6367,6 @@ bool IsRunning()
 void SetSDSyncChoice(SDSyncChoice choice)
 {
   s.sd_sync.choice = static_cast<int>(choice);
-}
-
-bool JoinerWaitsForSDCard()
-{
-  // The UI thread asks every 250 ms. The waiting CPU thread lets the lock go between passes; one
-  // that holds it longer (an SD step comparing a whole card) is asked again next time.
-  std::unique_lock lk(s.mutex, std::chrono::milliseconds(20));
-  if (!lk.owns_lock())
-    return true;
-  // Not armed yet: its boot arms it (asking must not arm it first, as IsArmed would).
-  if (!s.env_checked)
-    return true;
-  if (!s.opts.room || !s.opts.join)
-    return false;
-  // A join that failed ("No" to the card, the room gone) before it ran: ModsRoom closes Dolphin.
-  if (s.phase == Phase::Error)
-    return true;
-  if (!Active())
-    return false;
-  using Step = State::SDSync::Step;
-  const Step step = s.sd_sync.step;
-  if (step == Step::Downloading || step == Step::Ready)
-    return false;
-  // Its player agreed (the download starts at the next step).
-  const auto choice = static_cast<SDSyncChoice>(s.sd_sync.choice.load());
-  return choice != SDSyncChoice::Yes && choice != SDSyncChoice::Overwrite;
 }
 
 std::optional<SDSyncChoice> ParseSDSyncChoice(std::string_view text)

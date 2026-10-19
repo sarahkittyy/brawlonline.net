@@ -50,10 +50,6 @@ bool TakeConfigureRequest();
 // UI thread: Dolphin should close (a join that failed before any game was shared; the launcher
 // shows why from mods-room.json, written first). True once.
 bool TakeQuitRequest();
-// UI thread: a joiner's window stays minimized, behind the launcher, until its SD card is the
-// session's or its player agreed to download it in the launcher's dialog (docs/design/brawl-mods.md
-// §6.5); a join that ends first closes Dolphin unseen. False for anything but a join.
-bool HoldsJoinerWindow();
 // The room's build hash (64 hex digits) once a room was asked for (--mods-room), else "".
 std::string BuildHash();
 // The game is stopping (its window closed): this player leaves the room, Dolphin closes.
