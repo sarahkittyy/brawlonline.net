@@ -558,6 +558,8 @@ struct State
   } queued_save;
   std::array<Input, MAX_PLAYERS> latched{};  // the inputs of the frame running now
   Input local_input{};
+  // The local controller played the boot (LatchBootInput): the session starts with it plugged in.
+  bool boot_local = false;
   s64 current_frame = -1;
   // GekkoNet's sessions start at frame 0; a session after an epoch continues the global frame
   // count from the epoch's frame.
@@ -2491,6 +2493,45 @@ int PickInputDelay(double* rtt_ms)
   return Gprb::Session::AutoInputDelay(Gprb::Session::GameRoundTrip(*rtt_ms));
 }
 
+// A Wii Remote at rest, no extension (the struct has no assignment).
+void ResetWiimoteState(WiimoteEmu::DesiredWiimoteState* state)
+{
+  state->buttons = {};
+  state->acceleration = WiimoteEmu::DesiredWiimoteState::DEFAULT_ACCELERATION;
+  state->camera_points = WiimoteEmu::DesiredWiimoteState::DEFAULT_CAMERA;
+  state->motion_plus.reset();
+  state->extension.data = std::monostate{};
+}
+
+void EncodeWiimote(const WiimoteEmu::DesiredWiimoteState& state, Input* in)
+{
+  const WiimoteEmu::SerializedWiimoteState ser = WiimoteEmu::SerializeDesiredState(state);
+  const u8 len = std::min<u8>(ser.length, 31);
+  (*in)[0] |= INPUT_WIIMOTE_CONNECTED;
+  (*in)[9] = len;
+  std::memcpy(in->data() + 10, ser.data.data(), len);
+}
+
+// A controller of the kind plugged in (a Wii Remote connected) and at rest.
+Input RestingInput(Controller kind)
+{
+  Input in{};
+  if (kind == Controller::WiiRemote)
+  {
+    WiimoteEmu::DesiredWiimoteState state;
+    ResetWiimoteState(&state);
+    EncodeWiimote(state, &in);
+    return in;
+  }
+  GCPadStatus pad{};
+  pad.stickX = GCPadStatus::MAIN_STICK_CENTER_X;
+  pad.stickY = GCPadStatus::MAIN_STICK_CENTER_Y;
+  pad.substickX = GCPadStatus::C_STICK_CENTER_X;
+  pad.substickY = GCPadStatus::C_STICK_CENTER_Y;
+  EncodePad(pad, &in);
+  return in;
+}
+
 bool CreateGekko()
 {
   DestroyGekko();
@@ -2566,6 +2607,13 @@ bool CreateGekko()
         fill[INPUT_MOVE] = 0;
         gekko_set_local_delay_input(s.gekko, s.local_handle, fill.data());
       }
+    }
+    // After a boot this player played: its controller at rest, so it is not unplugged for the
+    // first frames (a Wii Remote would disconnect and connect again).
+    else if (s.boot_local)
+    {
+      const Input fill = RestingInput(s.controller[s.opts.local_slot]);
+      gekko_set_local_delay_input(s.gekko, s.local_handle, fill.data());
     }
   }
   else
@@ -2908,11 +2956,7 @@ void CaptureLocalWiimote(Core::System& system, Input* in)
       state.extension.data = std::monostate{};
     }
   }
-  const WiimoteEmu::SerializedWiimoteState ser = WiimoteEmu::SerializeDesiredState(state);
-  const u8 len = std::min<u8>(ser.length, 31);
-  (*in)[0] |= INPUT_WIIMOTE_CONNECTED;
-  (*in)[9] = len;
-  std::memcpy(in->data() + 10, ser.data.data(), len);
+  EncodeWiimote(state, in);
 }
 
 void AddLocalRequest(Input* in)
@@ -3033,16 +3077,15 @@ bool TestInput(GCPadStatus* pad)
   return true;
 }
 
-void CaptureLocalInput()
+// The local controller as the session's input (no requests).
+Input ReadLocalInput()
 {
   UpdateLocalController();
+  Input in{};
   if (s.controller[s.opts.local_slot] == Controller::WiiRemote)
   {
-    Input in{};
     CaptureLocalWiimote(Core::System::GetInstance(), &in);
-    AddLocalRequest(&in);
-    s.local_input = in;
-    return;
+    return in;
   }
   GCPadStatus pad;
   if (s.local_adapter)
@@ -3058,8 +3101,13 @@ void CaptureLocalInput()
   }
   TestInput(&pad);
   LogLocalInput(pad);
-  Input in{};
   EncodePad(pad, &in);
+  return in;
+}
+
+void CaptureLocalInput()
+{
+  Input in = ReadLocalInput();
   AddLocalRequest(&in);
   s.local_input = in;
 }
@@ -6019,6 +6067,7 @@ bool Arm(const Options& options, std::string* error)
   s.queued_save = {};
   s.latched = {};
   s.local_input = {};
+  s.boot_local = false;
   s.current_frame = -1;
   s.frame_base = 0;
   s.epoch = 0;
@@ -6507,19 +6556,9 @@ bool GetPad(int port, GCPadStatus* status)
   if (port < 0 || port >= MAX_PLAYERS)
     return false;
   // Every port is a standard controller on every machine; whether one is plugged in this frame is
-  // its player's input (nothing before the session runs).
+  // its player's input (before the session runs: nothing, or the boot's player, LatchBootInput).
   *status = DecodePad(s.latched[port]);
   return true;
-}
-
-// A Wii Remote at rest, no extension (the struct has no assignment).
-void ResetWiimoteState(WiimoteEmu::DesiredWiimoteState* state)
-{
-  state->buttons = {};
-  state->acceleration = WiimoteEmu::DesiredWiimoteState::DEFAULT_ACCELERATION;
-  state->camera_points = WiimoteEmu::DesiredWiimoteState::DEFAULT_CAMERA;
-  state->motion_plus.reset();
-  state->extension.data = std::monostate{};
 }
 
 bool GetWiimote(int index, WiimoteEmu::DesiredWiimoteState* state)
@@ -6529,7 +6568,8 @@ bool GetWiimote(int index, WiimoteEmu::DesiredWiimoteState* state)
   // Every Wii Remote is the session's: one nobody plays is at rest (no button connects it).
   const Input& in = s.latched[index];
   ResetWiimoteState(state);
-  // Before the session runs (boot), or a player who sent nothing yet: a Wii Remote at rest.
+  // Before the session runs (unless the boot's player plays one), or a player who sent nothing
+  // yet: a Wii Remote at rest.
   if (!(in[0] & INPUT_WIIMOTE_CONNECTED))
     return true;
   WiimoteEmu::SerializedWiimoteState ser{};
@@ -6624,6 +6664,8 @@ Boundary SessionBoundary()
 bool EnterFirstBoundary(const char* where)
 {
   auto& rb = Rollback::RollbackManager::Get();
+  // The boot's local input (LatchBootInput) ends here: from here on every input is the session's.
+  s.latched = {};
   // Brawl's hard-coded exclusions are Brawl's addresses; any other game keeps all of its RAM.
   rb.SetBrawlExclusions(s.boundary == Boundary::BrawlLoop);
   rb.m_full_ios_in_snapshots = true;
@@ -6672,7 +6714,8 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
   }
 
   // The hook fires only for main.dol's loop; until the game reaches scBoot it runs freely, the
-  // same on every machine (no input, the session's pinned settings and clock).
+  // same on every machine (no input but a lone player's, BootIsLocal; the session's pinned
+  // settings and clock).
   if (s.phase == Phase::Armed)
   {
     if (system.GetMemory().Read_U32(BRAWL_LOOP_TOP) != BRAWL_LOOP_TOP_OPCODE ||
@@ -6706,6 +6749,30 @@ bool TakeHookYield()
   return std::exchange(s_hook_yield, false);
 }
 
+// Before the first boundary nothing is the session's yet. A session this machine starts alone (a
+// room's host) or that joins a running one (its machine then comes from another player's image)
+// has no other machine to boot the same as, so its player plays the boot: a mod's own menu before
+// Brawl's scBoot waits for a button (bug report #61: Balanced Brawl's Gecko menu, forever).
+// Players who start together still boot with no input, the same on every machine.
+bool BootIsLocal()
+{
+  return s.phase == Phase::Armed &&
+         (s.opts.join || s.players.load() == (1u << s.opts.local_slot));
+}
+
+// Every VI field of such a boot (CPU thread): the local controller is GameCube port 1 or Wii
+// Remote 1, as for a console of one, until the first boundary (EnterFirstBoundary).
+void LatchBootInput(Core::System& system)
+{
+  // UpdateLocalController counts frames to pick the controller again, and none run yet.
+  if (s.pick_countdown > 0)
+    --s.pick_countdown;
+  s.latched = {};
+  s.latched[0] = ReadLocalInput();
+  s.boot_local = true;
+  SyncWiimotes(system);
+}
+
 bool g_vi_boundary = false;
 
 void OnViField()
@@ -6717,6 +6784,9 @@ void OnViField()
 void OnViBoundary(Core::System& system)
 {
   std::lock_guard lk(s.mutex);
+  // A VI-field session's first boundary is the game's first field: it has no boot to play.
+  if (BootIsLocal() && SessionBoundary() == Boundary::BrawlLoop)
+    LatchBootInput(system);
   if (!Active() || SessionBoundary() != Boundary::ViField)
   {
     g_vi_boundary = false;

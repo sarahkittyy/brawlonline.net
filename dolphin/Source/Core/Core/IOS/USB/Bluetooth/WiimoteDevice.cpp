@@ -73,7 +73,7 @@ WiimoteDevice::WiimoteDevice(BluetoothEmuDevice* host, bdaddr_t bd, unsigned int
   if (hid_source && Machine::IsArmed())
   {
     // A whole-machine session has every Wii Remote (the same on every machine) and connects one
-    // when a player's input says it is on (Machine::SyncWiimotes), not at boot.
+    // when a player's input says it is on (Machine::SyncWiimotes), at boot only a lone player's.
     hid_source->SetWiimoteDeviceIndex(GetNumber());
     m_hid_source = hid_source;
     m_hid_source->SetInterruptCallback(
