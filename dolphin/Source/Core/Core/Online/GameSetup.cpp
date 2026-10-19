@@ -34,6 +34,7 @@ constexpr int CHAR_SECONDS = 45;
 constexpr int TIMER_WINNER_CHAR = 100;
 constexpr int TIMER_LOSER_CHAR = 101;
 constexpr int TIMER_RESUME = 102;
+constexpr int TIMER_BOTH_CHARS = 103;
 
 // Lock order: never call into Gprb::Session while holding s_mutex (the session calls the stage
 // decider with its own lock held).
@@ -42,6 +43,8 @@ bool s_active = false;
 int s_local = 0;       // this player's side
 int s_local_port = 0;  // this player's in-game port
 Format s_format;
+// Ranked: the set's game 1 starts with both players choosing characters, blind (CharOrder).
+bool s_both_pick_first = false;
 SetState s_set;
 // A room's set: the set's game of the session's game 1, and each side's in-game port.
 u32 s_first_game = 1;
@@ -470,6 +473,60 @@ std::string SideNames(int side)
   return out;
 }
 
+using Locks = std::array<std::optional<Gprb::Session::LockIn>, MAX_PORTS>;
+
+// Every port's lock-in. Called without s_mutex.
+Locks PlayerLocks()
+{
+  Locks out;
+  for (int p = 0; p < MAX_PORTS; ++p)
+    out[p] = Gprb::Session::GetPlayerLock(p);
+  return out;
+}
+
+// Under s_mutex: every player of `side` is locked in for the session's `game`.
+bool SideLocked(int side, u32 game, const Locks& locks)
+{
+  for (const u8 p : s_members[side])
+  {
+    if (p >= MAX_PORTS)
+      return false;
+    const auto& l = locks[p];
+    if (!l || !l->ready || l->game != game || l->char_kind == 0xFF)
+      return false;
+  }
+  return true;
+}
+
+// How the session's `game` chooses its characters, before its stages (P+ is character first, the
+// user's, 2026-10-19).
+enum class CharOrder
+{
+  None,         // chosen before (a room's game 1, readied on the room's CSS), or kept (a draw)
+  WinnerFirst,  // after a win: the winner's side, then the loser's, seeing it (Slippi's order)
+  Together,     // Ranked's game 1: both at once, blind, once the opponent's name shows
+};
+
+// Under s_mutex.
+CharOrder CharOrderOf(u32 game)
+{
+  const u32 set_game = s_first_game - 1 + game;
+  if (s_format.strike_every_game)
+    return CharOrder::None;
+  if (set_game > 1 && s_set.last_winner <= 1)
+    return CharOrder::WinnerFirst;
+  if (s_both_pick_first && set_game <= 1 && s_set.last_winner == 0xFF)
+    return CharOrder::Together;
+  return CharOrder::None;
+}
+
+// Under s_mutex: the session's `game` still waits for characters before its stage steps.
+bool CharsPending(u32 game, const Locks& locks)
+{
+  return CharOrderOf(game) != CharOrder::None &&
+         !(SideLocked(0, game, locks) && SideLocked(1, game, locks));
+}
+
 Gprb::Session::StageDecision Decide(u32 game)
 {
   // Called by the session with its lock held: read the players' extras first, then take ours.
@@ -527,6 +584,8 @@ void Begin(int local_port, std::vector<u16> starters, std::vector<u16> counterpi
   Begin(local_port, RankedFormat(starters.empty() ? DefaultStarters() : std::move(starters),
                                  counterpicks.empty() ? Gprb::Session::DefaultStages() :
                                                         std::move(counterpicks)));
+  std::lock_guard lk(s_mutex);
+  s_both_pick_first = true;
 }
 
 void Begin(int local_port, const SetTicket& ticket, int host_port)
@@ -616,6 +675,7 @@ void Begin(int local_port, Format format)
     s_local = local_port == 1 ? 1 : 0;
     s_local_port = s_local;
     s_format = std::move(format);
+    s_both_pick_first = false;
     s_set = SetState{};
     s_first_game = 1;
     s_side_ports = {0, 1};
@@ -711,12 +771,16 @@ bool Act(u8 kind)
 {
   const Gprb::Session::Lobby lobby = Gprb::Session::GetLobby();
   const Extras extras = PlayerExtras();
+  const Locks locks = PlayerLocks();
   std::optional<picojson::object> publish;
   {
     std::lock_guard lk(s_mutex);
     if (!s_active || !lobby.active || lobby.in_match || lobby.setup_ready)
       return false;
     const u32 game = lobby.game;
+    // No stage before the characters (a stage select still open from before).
+    if (CharsPending(game, locks))
+      return false;
     EnterGame(game);
     const Steps e = EvaluateShown(game, extras);
     if (e.step_idx < 0 || e.steps[e.step_idx].player != s_local ||
@@ -749,9 +813,7 @@ View Current()
 {
   const Gprb::Session::Lobby lobby = Gprb::Session::GetLobby();
   const Extras extras = PlayerExtras();
-  std::array<std::optional<Gprb::Session::LockIn>, MAX_PORTS> locks;
-  for (int p = 0; p < MAX_PORTS; ++p)
-    locks[p] = Gprb::Session::GetPlayerLock(p);
+  const Locks locks = PlayerLocks();
   View v;
   std::optional<picojson::object> publish;
   {
@@ -820,73 +882,27 @@ View Current()
       s_last_view = v;
       return v;
     }
-    Steps e = EvaluateShown(game, extras);
-    if (e.step_idx >= 0)
+    // P+ is character first (the user's, 2026-10-19): the characters on the CSS, then the stage
+    // steps on the stage select.
+    const CharOrder order = CharOrderOf(game);
+    if (order != CharOrder::None && !(SideLocked(0, game, locks) && SideLocked(1, game, locks)))
     {
-      const StepInfo& st = e.steps[e.step_idx];
-      // Slippi: a step whose time runs out is completed with a random selection, by the player
-      // whose step it is (1v1), or for sides of two by the host's machine, which decides them.
-      const bool decides = Shared() ? IsHost() : st.player == s_local;
-      std::vector<u8>& list = Shared() ? s_host.actions[st.player] : s_actions;
-      if (decides && Elapsed(game, e.step_idx) >= st.seconds + GRACE_SECONDS &&
-          !e.remaining.empty() && list.size() < MAX_ACTIONS)
+      const bool pair = s_members[0].size() > 1;
+      v.type = StepType::Char;
+      if (order == CharOrder::Together)
       {
-        std::uniform_int_distribution<size_t> pick(0, e.remaining.size() - 1);
-        const u8 k = e.remaining[pick(s_rng)];
-        list.push_back(k);
-        ++s_auto_actions;
-        NOTICE_LOG_FMT(NETPLAY, "GameSetup: game {}: time is up, {} {:#x} for side {}", game,
-                       st.type == StepType::Pick ? "picked" : "struck", k, st.player);
-        e = EvaluateShown(game, extras);
-      }
-    }
-    v.selectable = e.remaining;
-    for (const std::vector<u16>* list : {&s_format.counterpicks, &s_format.starters})
-    {
-      for (const u16 k : *list)
-      {
-        if (k != 0 && k <= 0xFF && std::find(v.page.begin(), v.page.end(), k) == v.page.end())
-          v.page.push_back(static_cast<u8>(k));
-      }
-    }
-    if (e.step_idx >= 0)
-    {
-      const StepInfo& st = e.steps[e.step_idx];
-      // Sides of two: either teammate presses for the side.
-      const bool mine = st.player == s_local;
-      v.type = st.type;
-      v.my_turn = mine;
-      v.count = static_cast<u8>(e.left);
-      v.to_sss = true;
-      v.may_lock = false;
-      v.seconds = TimerShown(st.seconds, Elapsed(game, e.step_idx), mine);
-      const char* who = s_members[1 - s_local].size() > 1 ? "Opponents are" : "Opponent is";
-      std::string what;
-      if (st.type == StepType::Pick)
-        what = mine ? "Pick a stage" : fmt::format("{} picking", who);
-      else if (!e.striking && mine)
-        what = e.left == 1 ? "Ban 1 stage" : fmt::format("Ban {} stages", e.left);
-      else if (!e.striking)
-        what = fmt::format("{} banning", who);
-      else if (mine)
-        what = e.left == 1 ? "Strike 1 stage" : fmt::format("Strike {} stages", e.left);
-      else
-        what = fmt::format("{} striking", who);
-      // A press of ours the host's machine dropped (the partner was first): said for 2 s, while
-      // the stage it showed goes back (the step has usually gone on to the other team).
-      if (s_overruled && Clock::now() - *s_overruled < std::chrono::seconds(2))
-        what = "Partner was first";
-      v.text = fmt::format("{} ({})", what, v.seconds);
-    }
-    else
-    {
-      v.stage = e.stage;
-      if (e.striking)
-      {
-        // Game 1: the characters locked in for the search. After a draw: the last game's (Slippi
-        // strikes again without a character step), so the CSS locks in again at once.
-        v.type = StepType::Done;
-        v.time_up = true;
+        // Ranked's game 1: the opponent's name, never their character (blind, as Slippi's game 1);
+        // both choose at once, 45 s, then the character on the CSS is taken.
+        const bool mine = !SideLocked(s_local, game, locks);
+        const int elapsed = Elapsed(game, TIMER_BOTH_CHARS);
+        v.my_turn = mine;
+        v.seconds = TimerShown(CHAR_SECONDS, elapsed, mine);
+        v.time_up = mine && elapsed >= CHAR_SECONDS + GRACE_SECONDS;
+        const std::string names = SideNames(1 - s_local);
+        const std::string who =
+            names.empty() ? (pair ? "Opponents found" : "Opponent found") :
+                            fmt::format("{}: {}", pair ? "Opponents" : "Opponent", names);
+        v.text = fmt::format("{} - {} ({})", who, mine ? "Press START" : "Waiting", v.seconds);
       }
       else
       {
@@ -894,19 +910,8 @@ View Current()
         // then the character on the CSS is taken. In 2v2 each side's players together.
         const u8 winner_side = s_set.last_winner <= 1 ? s_set.last_winner : 0;
         const bool winner = winner_side == s_local;
-        const auto side_locked = [&](int side) {
-          for (const u8 p : s_members[side])
-          {
-            const auto& l = locks[p];
-            if (!l || !l->ready || l->game != game || l->char_kind == 0xFF)
-              return false;
-          }
-          return true;
-        };
-        const bool winner_locked = side_locked(winner_side);
-        const bool loser_locked = side_locked(1 - winner_side);
+        const bool winner_locked = SideLocked(winner_side, game, locks);
         const auto& peer_lock = locks[s_side_ports[winner_side]];
-        const bool pair = s_members[0].size() > 1;
         // Who is picking, by name ("alice is picking", "alice & bo are picking").
         const auto picking = [&](int side) {
           const std::string names = SideNames(side);
@@ -914,33 +919,98 @@ View Current()
             return std::string(pair ? "Opponents are picking" : "Opponent is picking");
           return names + (pair ? " are picking" : " is picking");
         };
-        v.type = StepType::Char;
-        if (!winner_locked || !loser_locked)
+        const bool mine = winner != winner_locked;  // the winner's step, then the loser's
+        const int elapsed = Elapsed(game, winner_locked ? TIMER_LOSER_CHAR : TIMER_WINNER_CHAR);
+        v.my_turn = mine;
+        v.seconds = TimerShown(CHAR_SECONDS, elapsed, mine);
+        v.time_up = mine && elapsed >= CHAR_SECONDS + GRACE_SECONDS;
+        if (mine && winner)
+          v.text = fmt::format("Press START to lock in ({})", v.seconds);
+        else if (mine && pair)
+          v.text = fmt::format("Your turn: they locked in ({})", v.seconds);
+        else if (mine)
+          // A winner on RANDOM sees only RANDOM until the match: so does the loser.
+          v.text = fmt::format("Your turn: {} picked {} ({})",
+                               SideNames(winner_side).empty() ? "they" : SideNames(winner_side),
+                               peer_lock && peer_lock->css == Gprb::PeerData::CSS_RANDOM ?
+                                   "Random" :
+                                   CharName(peer_lock ? peer_lock->char_kind : 0xFF),
+                               v.seconds);
+        else if (!winner)
+          // The loser waits for the winner's character (Slippi's order), then picks.
+          v.text = fmt::format("{}, then you ({})", picking(winner_side), v.seconds);
+        else
+          v.text = fmt::format("{} ({})", picking(1 - winner_side), v.seconds);
+      }
+      v.may_lock = v.my_turn;
+    }
+    else
+    {
+      Steps e = EvaluateShown(game, extras);
+      if (e.step_idx >= 0)
+      {
+        const StepInfo& st = e.steps[e.step_idx];
+        // Slippi: a step whose time runs out is completed with a random selection, by the player
+        // whose step it is (1v1), or for sides of two by the host's machine, which decides them.
+        const bool decides = Shared() ? IsHost() : st.player == s_local;
+        std::vector<u8>& list = Shared() ? s_host.actions[st.player] : s_actions;
+        if (decides && Elapsed(game, e.step_idx) >= st.seconds + GRACE_SECONDS &&
+            !e.remaining.empty() && list.size() < MAX_ACTIONS)
         {
-          const bool mine = winner != winner_locked;  // the winner's step, then the loser's
-          const int elapsed = Elapsed(game, winner_locked ? TIMER_LOSER_CHAR : TIMER_WINNER_CHAR);
-          v.my_turn = mine;
-          v.seconds = TimerShown(CHAR_SECONDS, elapsed, mine);
-          v.time_up = mine && elapsed >= CHAR_SECONDS + GRACE_SECONDS;
-          if (mine && winner)
-            v.text = fmt::format("Press START to lock in ({})", v.seconds);
-          else if (mine && pair)
-            v.text = fmt::format("Your turn: they locked in ({})", v.seconds);
-          else if (mine)
-            // A winner on RANDOM sees only RANDOM until the match: so does the loser.
-            v.text = fmt::format("Your turn: {} picked {} ({})",
-                                 SideNames(winner_side).empty() ? "they" : SideNames(winner_side),
-                                 peer_lock && peer_lock->css == Gprb::PeerData::CSS_RANDOM ?
-                                     "Random" :
-                                     CharName(peer_lock ? peer_lock->char_kind : 0xFF),
-                                 v.seconds);
-          else if (!winner)
-            // The loser waits for the winner's character (Slippi's order), then picks.
-            v.text = fmt::format("{}, then you ({})", picking(winner_side), v.seconds);
-          else
-            v.text = fmt::format("{} ({})", picking(1 - winner_side), v.seconds);
+          std::uniform_int_distribution<size_t> pick(0, e.remaining.size() - 1);
+          const u8 k = e.remaining[pick(s_rng)];
+          list.push_back(k);
+          ++s_auto_actions;
+          NOTICE_LOG_FMT(NETPLAY, "GameSetup: game {}: time is up, {} {:#x} for side {}", game,
+                         st.type == StepType::Pick ? "picked" : "struck", k, st.player);
+          e = EvaluateShown(game, extras);
         }
-        v.may_lock = v.my_turn;
+      }
+      v.selectable = e.remaining;
+      for (const std::vector<u16>* list : {&s_format.counterpicks, &s_format.starters})
+      {
+        for (const u16 k : *list)
+        {
+          if (k != 0 && k <= 0xFF && std::find(v.page.begin(), v.page.end(), k) == v.page.end())
+            v.page.push_back(static_cast<u8>(k));
+        }
+      }
+      if (e.step_idx >= 0)
+      {
+        const StepInfo& st = e.steps[e.step_idx];
+        // Sides of two: either teammate presses for the side.
+        const bool mine = st.player == s_local;
+        v.type = st.type;
+        v.my_turn = mine;
+        v.count = static_cast<u8>(e.left);
+        v.to_sss = true;
+        v.may_lock = false;
+        v.seconds = TimerShown(st.seconds, Elapsed(game, e.step_idx), mine);
+        const char* who = s_members[1 - s_local].size() > 1 ? "Opponents are" : "Opponent is";
+        std::string what;
+        if (st.type == StepType::Pick)
+          what = mine ? "Pick a stage" : fmt::format("{} picking", who);
+        else if (!e.striking && mine)
+          what = e.left == 1 ? "Ban 1 stage" : fmt::format("Ban {} stages", e.left);
+        else if (!e.striking)
+          what = fmt::format("{} banning", who);
+        else if (mine)
+          what = e.left == 1 ? "Strike 1 stage" : fmt::format("Strike {} stages", e.left);
+        else
+          what = fmt::format("{} striking", who);
+        // A press of ours the host's machine dropped (the partner was first): said for 2 s, while
+        // the stage it showed goes back (the step has usually gone on to the other team).
+        if (s_overruled && Clock::now() - *s_overruled < std::chrono::seconds(2))
+          what = "Partner was first";
+        v.text = fmt::format("{} ({})", what, v.seconds);
+      }
+      else
+      {
+        // The stage is decided and the characters are locked in (after a draw: the last game's,
+        // as Slippi strikes again without a character step, so the CSS locks in again at once).
+        v.stage = e.stage;
+        v.type = StepType::Done;
+        v.time_up = true;
       }
     }
   }

@@ -640,8 +640,10 @@ u8 RandomShown(const Gprb::Session::LockIn& l)
 Response GameStepResponse()
 {
   const GameSetup::View v = GameSetup::Current();
-  // The game goes to the stage select on a stage step: from here leaving a ranked set counts.
-  if (v.active && v.to_sss)
+  // The game shows the opponent's name (game 1's character step) or goes to the stage select on a
+  // stage step: from here leaving a ranked set counts (the user's, 2026-10-19: no free dodge once
+  // the name is shown).
+  if (v.active && (v.to_sss || v.type == GameSetup::StepType::Char))
     Ranked::OnStageSelect();
   Response r;
   r.cmd = CMD_GP_FETCH_STEP;

@@ -1,6 +1,7 @@
 """Scratch repro (not to commit): a ranked set forced to 1-1 so that game 3's winner is the
-player who lost game 1; on the stage select that winner moves and presses buttons while the
-loser picks, as a person would, and back on the CSS the hand must move and START lock in."""
+player who lost game 1; on the CSS the winner's hand must move and START lock in (characters
+first, the user's, 2026-10-19), then on the stage select that winner moves and presses buttons
+while the loser picks, as a person would, and the match starts."""
 
 from __future__ import annotations
 
@@ -93,16 +94,20 @@ def test_ranked_game3_winner_after_pick(backend: OnlineBackend, dolphin: Callabl
 
     _both_on(players, SSS, "game 1: both on the stage select")
     _wait_view(host, lambda v: v["type"] == 1 and v["my_turn"], "host strikes")
-    _strike(host, 0x02, join)
+    _strike(host, 0x04, join)
     _wait_view(join, lambda v: v["my_turn"], "join strikes")
     _strike(join, 0x21, host)
     _strike(join, 0x2E, host)
-    _strike(host, 0x2D, join)
+    _strike(host, 0x09, join)
     online_set.play_game(players, 1, winner=a)
 
     for game, winner, loser in ((2, a, b), (3, b, a)):
         _wait(lambda: all(sum(_ranked(g)["wins"]) >= game - 1 for g in players), 30, f"game {game - 1} counted")
         assert _ranked(a)["setup"]["last_winner"] == _ranked(winner)["local_port"], _ranked(a)
+        _both_on(players, online_set.CSS, f"game {game}: both on the CSS")
+        _check_css(winner, loser, game)
+        _wait_view(loser, lambda v: v["may_lock"], "the loser's turn")
+        loser.steps("tap START 8", "wait 30")
         _both_on(players, SSS, f"game {game}: both on the stage select")
         while True:
             v = _wait_view(winner, lambda v: v["game"] == game and v["type"] in (1, 2), "a stage step")
@@ -116,15 +121,9 @@ def test_ranked_game3_winner_after_pick(backend: OnlineBackend, dolphin: Callabl
         th.start()
         try:
             B.sss_pick_stage(loser.c, v["selectable"][0], 0)
-            # The winner keeps going for a moment on the CSS too.
-            online_set.wait(lambda: online_set.scene(winner.c) == online_set.CSS, 60, "winner on the CSS")
-            B.step(winner.c, 40)
+            online_set.wait(lambda: online_set.scene(winner.c) != SSS, 60, "the winner's stage select left")
         finally:
             stop.set()
             th.join()
         print(f"game {game}: wander log tail {log[-8:]}")
-        _both_on(players, online_set.CSS, f"game {game}: both back on the CSS")
-        _check_css(winner, loser, game)
-        _wait_view(loser, lambda v: v["may_lock"], "the loser's turn")
-        loser.steps("tap START 8", "wait 30")
         online_set.play_game(players, game, winner=loser if game == 2 else None)

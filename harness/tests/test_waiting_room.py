@@ -75,6 +75,21 @@ def _in_room(g: Game) -> bool:
     return g.scene() == "scMelee" and (_room(g) & 0xF) == ROOM_RUNNING
 
 
+def _lock_in_held(g: Game, held: tuple[str, ...]) -> None:
+    """START with `held` down on the connected CSS (game 1's character step): locks in."""
+    n = online_set.local(g.c)["lock"]["seq"]
+    r = 255 if "R" in held else 0
+    for _ in range(4):
+        g.c.pad_script(g.pad, [PadInput(buttons=list(held), r=r, hold=12),
+                               PadInput(buttons=list(held) + ["START"], r=r, hold=8), PadInput(hold=6)])
+        try:
+            _wait(lambda: online_set.local(g.c)["lock"]["seq"] > n, 3, "the lock-in")
+            return
+        except AssertionError:
+            continue
+    raise AssertionError(f"{'+'.join(held)}+START x4: no lock-in")
+
+
 def _search(g: Game, mode: int, held: tuple[str, ...] = ()) -> None:
     """START on the CSS locks in and searches (FIND_OPPONENT); the CSS leaves for the room.
     `held`: buttons down with that START (P+'s alt costume: Z AltZ, R AltR)."""
@@ -263,7 +278,8 @@ def test_waiting_room_cancels(backend: OnlineBackend, dolphin: Callable[..., Dol
 def test_ranked_game_1_from_the_waiting_room(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                              gpu_backend: str) -> None:
     """Ranked waits in the room too; once connected both rooms end on the CSS, the game setup
-    begins (the strikes on the stage select) and game 1 plays."""
+    begins (game 1's characters, "Opponent: <name>", then the strikes on the stage select) and
+    game 1 plays."""
     test = "waiting-room-ranked"
     ua, ub = backend.create_user("rhea", "RHEA"), backend.create_user("sven", "SVEN")
     a = _boot(dolphin, "wr-ra", backend, ua, gpu_backend, test, "gameplay")
@@ -285,10 +301,13 @@ def test_ranked_game_1_from_the_waiting_room(backend: OnlineBackend, dolphin: Ca
     host = a if _ranked(a)["local_port"] == 0 else b
     join = b if host is a else a
     for g in players:
-        _wait_view(g, lambda v: v["type"] == 1 and sorted(v["selectable"]) == STARTERS, "the starters")
+        other = b if g is a else a
+        v = _wait_view(g, lambda v: v["game"] == 1 and v["type"] == 3, "game 1's character step")
+        assert v["text"].startswith(f"Opponent: {other.name} - Press START ("), v
         assert _room(g) & 0xF0F == 0x200 | ROOM_ENDED, hex(_room(g))   # ended on the CSS
-        # From here leaving the set counts (Ranked's "left" no longer says beforeStageSelect).
-        _wait(lambda: _ranked(g)["stage_select"], 10, f"{g.inst.name}: the stage select noted")
+        # The opponent's name is shown: from here leaving the set counts (Ranked's "left" no
+        # longer says beforeStageSelect).
+        _wait(lambda: _ranked(g)["stage_select"], 10, f"{g.inst.name}: the game setup noted")
     _strike_to(host, join, 0x01)
     rep = online_set.play_game(players, 1)
     assert rep["stage"] == 0x01, rep
@@ -374,9 +393,9 @@ def test_waiting_room_alt_costumes(backend: OnlineBackend, dolphin: Callable[...
 @pytest.mark.slow
 def test_ranked_game_1_alt_costumes(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                     gpu_backend: str) -> None:
-    """Bug report #38: Ranked's game 1 plays the alts held on the search's START (A Z, B R), on
-    both machines, through the room and the strikes; B's machine starts with AltZ words left
-    from an earlier match."""
+    """Bug report #38: Ranked's game 1 plays the alts held on its START (A Z, B R), on both
+    machines, through the room, game 1's character step (whose START is game 1's, the user's,
+    2026-10-19) and the strikes; B's machine starts with AltZ words left from an earlier match."""
     test = "waiting-room-ranked-alts"
     ua, ub = backend.create_user("zola", "ZOLA"), backend.create_user("remy", "REMY")
     a = _boot(dolphin, "wr-za", backend, ua, gpu_backend, test, "gameplay")
@@ -396,8 +415,9 @@ def test_ranked_game_1_alt_costumes(backend: OnlineBackend, dolphin: Callable[..
     _peer_shown(b, ua)
     host = a if _ranked(a)["local_port"] == 0 else b
     join = b if host is a else a
-    for g in (a, b):
-        _wait_view(g, lambda v: v["type"] == 1 and sorted(v["selectable"]) == STARTERS, "the starters")
+    for g, held in ((a, ("Z",)), (b, ("R",))):
+        _wait_view(g, lambda v: v["game"] == 1 and v["type"] == 3 and v["my_turn"], "game 1's character step")
+        _lock_in_held(g, held)
     _strike_to(host, join, 0x01)
     port_a = online_set.local(a.c)["local_port"]
     port_b = online_set.local(b.c)["local_port"]

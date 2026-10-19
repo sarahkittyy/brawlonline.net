@@ -114,7 +114,7 @@ Identity: the code (user-facing) and SHA-256 of the canonical JSON (machines: SE
 
 ## 5. Sets
 
-Ranked already runs the whole flow (`Online/GameSetup.cpp`: 1-2-1 strikes, winner bans, loser picks, DSR, timers, the CSS order). Sets make it follow the ruleset instead of constants; Ranked becomes a built-in ruleset (Bo3, its starters, `[1,2,1]`, 2 bans, DSR) and `config/rulesets.json` moves to this format. The room shows the score in the top window ("Bo3 · 1-0").
+Ranked already runs the whole flow (`Online/GameSetup.cpp`: 1-2-1 strikes, winner bans, loser picks, DSR, timers, the CSS order). **Characters first** (the user's, 2026-10-19: P+ is character first): game 1's characters are the ones readied with (blind, the server withholds them); games 2+ the winner picks a character, then the loser, seeing it, and only then the winner bans and the loser picks the stage, as in Ranked. After a draw the starters are struck again with the same characters. Sets make it follow the ruleset instead of constants; Ranked becomes a built-in ruleset (Bo3, its starters, `[1,2,1]`, 2 bans, DSR) and `config/rulesets.json` moves to this format. The room shows the score in the top window ("Bo3 · 1-0").
 
 ## 6. Protocol (sketch; `rooms-protocol.md` gets the real one)
 

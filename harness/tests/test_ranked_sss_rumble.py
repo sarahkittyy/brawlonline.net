@@ -10,7 +10,8 @@ on), and gfPadSystem::startMotor stores the 10 to m_padMotorMasks[-1], the low h
 pointer to the pad thread the pad alarm resumes (+0xB54: 0x805BA100 became 0x805B000A, the value
 in both players' logs). Rumble for a record without a tag is the save's byte before port 0's
 (+0x81F), 0 on the harness's fresh save, so the harness never saw it; the test sets it. The plugin
-now ignores a motor port outside 0-7 (online.cpp): the pointer stays and the winner locks in.
+now ignores a motor port outside 0-7 (online.cpp): the pointer stays, and the winner's controller
+plays game 2 (both are locked in before the stages, P+'s character first: the CSS is passed through).
 """
 
 from __future__ import annotations
@@ -77,21 +78,20 @@ def test_stage_select_leaving_by_itself_keeps_the_pad_thread(backend, dolphin: C
     _both_on(players, SSS, "game 1: both on the stage select")
     for g in players:
         _wait_view(g, lambda v: v["type"] == 1 and sorted(v["selectable"]) == STARTERS, "the starters")
-    _strike(host, 0x02, join)
+    _strike(host, 0x04, join)
     _wait_view(join, lambda v: v["my_turn"], "the joiner's turn")
     _strike(join, 0x21, host)
     _strike(join, 0x2E, host)
-    _strike(host, 0x2D, join)
+    _strike(host, 0x09, join)
     online_set.play_game(players, 1, winner=join)   # the guest wins, as in the players' reports
     winner, loser = join, host
 
     _both_on(players, SSS, "game 2: both on the stage select")
-    _wait_view(winner, lambda v: v["game"] == 2 and v["type"] == 1 and v["my_turn"], "the ban")
-    _strike(winner, 0x06, loser)
-    _wait_view(winner, lambda v: v["type"] == 1 and v["my_turn"] and v["count"] == 1, "the second ban")
-    _strike(winner, 0x02, loser)
+    v = _wait_view(winner, lambda v: v["game"] == 2 and v["type"] == 1 and v["my_turn"], "the ban")
+    _strike(winner, v["selectable"][0], loser)
+    v = _wait_view(winner, lambda v: v["type"] == 1 and v["my_turn"] and v["count"] == 1, "the second ban")
+    _strike(winner, v["selectable"][0], loser)
     v = _wait_view(loser, lambda v: v["type"] == 2 and v["my_turn"], "the pick")
-    n = _locks(winner)
     ps = _u32(winner, PAD_SYSTEM_PTR)
     assert _u32(winner, ps + PAD_SYS_THREAD_OFF) == PAD_THREAD_OBJ
     _rumble_for_port_minus_one(winner)
@@ -99,7 +99,7 @@ def test_stage_select_leaving_by_itself_keeps_the_pad_thread(backend, dolphin: C
 
     # The loser picks; the winner's stage select leaves by itself.
     B.sss_pick_stage(loser.c, v["selectable"][0], 0)
-    _both_on(players, online_set.CSS, "game 2: both on the CSS")
+    online_set.wait(lambda: online_set.scene(winner.c) != SSS, 30, "game 2: the winner's stage select left")
     # Read before waiting on frames: with the pointer broken every OS alarm stops too, and the
     # harness's frame waits time out.
     time.sleep(0.5)
@@ -110,6 +110,5 @@ def test_stage_select_leaving_by_itself_keeps_the_pad_thread(backend, dolphin: C
     log = winner.inst.log.read()[since:]
     assert "pad watchdog: the pad thread made no pass" not in log, log[-3000:]
 
-    # The winner's controller still works: START locks in.
-    winner.steps("tap START 8", "wait 40")
-    assert _locks(winner) > n, "the winner could not lock in"
+    # The winner's controller still works: it walks off in game 2.
+    online_set.play_game(players, 2, winner=loser)

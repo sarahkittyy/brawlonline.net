@@ -983,8 +983,10 @@ namespace OnlineMenu {
             return;
         case PH_CONNECTED:
             // Ranked's game setup has its own line (whose turn it is, the opponent's character;
-            // after a desync, also once locked in: who is not ready yet and the seconds left).
-            if (rankedStep() && s.step.active && s.stepText[0] && (!lockedForNext() || resumeStep())) {
+            // in a character step or after a desync, also once locked in: who is still choosing
+            // or not ready yet, and the seconds left).
+            if (rankedStep() && s.step.active && s.stepText[0] &&
+                (!lockedForNext() || resumeStep() || s.step.type == PPOM::STEP_CHAR)) {
                 setStatus(s.stepText, false);
                 return;
             }
@@ -1626,8 +1628,11 @@ namespace OnlineMenu {
         // the keypad afterwards as in a plain Direct (the code is in the recent codes then).
         s.codePreset = false;
         // The search locks the player in for game 1 (Slippi FN_LOCK_IN_AND_SEARCH); the session
-        // gets the lock-in from LOCAL as soon as it exists.
-        lockIn(1, 0xFFFF, 0);
+        // gets the lock-in from LOCAL as soon as it exists. Ranked's lock-in is for no game (0):
+        // its game 1 starts with a character step on the CSS once the opponent's name shows (the
+        // user's, 2026-10-19; Dolphin GameSetup), and the CSS starts on this character. The
+        // waiting room plays it either way (TrainingRoom::fillPlayer).
+        lockIn(s.mode == PPOM::MODE_RANKED ? 0 : 1, 0xFFFF, 0);
         s.searchSeq = PPOM::post(PPOM::CMD_FIND_OPPONENT, &req, sizeof(req));
         s.pollPending = true;   // Dolphin answers FIND_OPPONENT with the match state
         s.pollFrames = 0;
@@ -2217,8 +2222,8 @@ namespace OnlineMenu {
     static void updateRoomStatus()
     {
         const PPOM::Session& se = PPOM::g_block.session;
-        if (stepSession() && s.step.active && s.stepText[0] && (!roomLockedForNext() || resumeStep()) &&
-            !s.roomError) {
+        if (stepSession() && s.step.active && s.stepText[0] &&
+            (!roomLockedForNext() || resumeStep() || s.step.type == PPOM::STEP_CHAR) && !s.roomError) {
             setStatus(s.stepText, false);   // the set's step: whose turn, the seconds left
             return;
         }

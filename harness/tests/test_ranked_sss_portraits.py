@@ -130,7 +130,7 @@ def test_ranked_stage_select_shows_random(backend, dolphin: Callable[..., Dolphi
     """A locked in on Random (the user's, 2026-10-16): the character is drawn at lock-in and A
     sees only RANDOM until the match, so both machines show A's card as the CSS's RANDOM card
     (its picture MenSelchrFaceB.501, in the CSS file), not the character drawn; B's (Falco) as
-    usual. Game 1 is played with the drawn character."""
+    usual. Game 1 is played with the character drawn at game 1's lock-in."""
     test = "ranked-sss-random"
     ua, ub = backend.create_user("rsra", "RSRA"), backend.create_user("rsrb", "RSRB")
     a = _boot(dolphin, "rsr-a", backend, ua, gpu_backend, test, "gameplay")
@@ -148,10 +148,12 @@ def test_ranked_stage_select_shows_random(backend, dolphin: Callable[..., Dolphi
     _peer_shown(a, ub)
     _peer_shown(b, ua)
     _paired(a, b)
-    lock = online_set.local(a.c)["lock"]
-    assert lock["css"] == B.CSS_RANDOM and lock["char_kind"] != 0xFF, lock
 
+    # Game 1's lock-in is its character step's START (the search's is for no game), which draws
+    # Random again.
     _both_on([a, b], SSS, "game 1: both on the stage select")
+    lock = online_set.local(a.c)["lock"]
+    assert lock["game"] == 1 and lock["css"] == B.CSS_RANDOM and lock["char_kind"] != 0xFF, lock
     fa, fb = _both_shown(a, 0), _both_shown(b, 0)
     assert fa["failed"] == 0 and fb["failed"] == 0, (fa, fb)
     # A's card (A's left, B's right) is RANDOM's; B's is Falco's own picture.

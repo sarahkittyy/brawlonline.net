@@ -7,14 +7,17 @@ Ranked queue. Then, as Slippi's ranked game setup (slippi-ssbm-c ``Scenes/Ranked
 on P+'s own stage select with its stage striking (Dolphin ``Online/GameSetup.cpp``, plugin
 ``stage_legal.cpp``):
 
-- game 1: both games go to the stage select by themselves; only the five starters are selectable;
-  player 1 (the host) strikes one, player 2 two, player 1 one, with X, each only on their turn
-  (an X out of turn changes nothing); the strikes show on both; START and B do nothing there (the
-  stage select used to leave for the CSS mid-strike); the stage left is played;
-- games 2+: the winner of the last game bans two stages (X), the loser picks the stage (A); then the
-  winner locks in a character first: the loser's START does nothing until then, and the loser's
-  line names the winner's character; in game 2 the loser lets the 45 s (and Slippi's 3 s of grace)
-  run out and the CSS locks in the character on it;
+- P+ is character first (the user's, 2026-10-19): every game's characters before its stages;
+- game 1: back on the CSS once paired, each status line names the opponent ("Opponent: sven -
+  Press START"), never their character (a blind pick); leaving from here is rated; both lock in,
+  in any order; then both games go to the stage select by themselves; only the five starters are
+  selectable; player 1 (the host) strikes one, player 2 two, player 1 one, with X, each only on
+  their turn (an X out of turn changes nothing); the strikes show on both; START and B do nothing
+  there (the stage select used to leave for the CSS mid-strike); the stage left is played;
+- games 2+: the winner locks in a character first: the loser's START does nothing until then, and
+  the loser's line names the winner's character; in game 2 the loser lets the 45 s (and Slippi's
+  3 s of grace) run out and the CSS locks in the character on it; then the winner of the last game
+  bans two stages (X), the loser picks the stage (A), and the match starts;
 - until one player has two wins. Both Dolphins report every game, the server rates the set once,
   the connection closes on the CSS after the set, and both CSSs show the rating and its change.
 
@@ -91,8 +94,27 @@ def _strike(g: Game, kind: int, other: Game) -> None:
                    f"{kind:#x} struck")
 
 
+def _char_turn(g: Game) -> bool:
+    v = _view(g)
+    return online_set.scene(g.c) == online_set.CSS and v["active"] and v["type"] == 3 and v["my_turn"]
+
+
 def _both_on(players: list[Game], scene: str, what: str) -> None:
-    online_set.wait(lambda: all(online_set.scene(p.c) == scene for p in players), 120, what)
+    """Every player on `scene`. On the way to the stage select, whoever has a character turn on the
+    CSS presses START (P+ is character first: game 1's blind pick, the winner's, then the loser's)."""
+    def there() -> bool:
+        if all(online_set.scene(p.c) == scene for p in players):
+            return True
+        for p in players:
+            if scene == SSS and _char_turn(p):
+                p.steps("tap START 8", "wait 30")
+        return False
+    online_set.wait(there, 120, what)
+    if scene == SSS:
+        # The scene is scSelStage a few frames before the stage select makes its task and sets
+        # its pages up (the set's page): a pick read before that aims at P+'s own page.
+        for p in players:
+            _wait(lambda p=p: B.read_sss(p.c.read_mem), 30, f"{p.inst.name}: the stage select's task")
 
 
 def _locks(g: Game) -> int:
@@ -130,7 +152,27 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
     host = a if _ranked(a)["local_port"] == 0 else b
     join = b if host is a else a
 
-    # Game 1: both on the stage select by themselves; strikes 1-2-1 over the five starters.
+    # Game 1: on the CSS, the opponent's name, never their character; both lock in at once.
+    _both_on(players, online_set.CSS, "game 1: both on the CSS")
+    for g in players:
+        other = b if g is a else a
+        v = _wait_view(g, lambda v: v["game"] == 1 and v["type"] == 3, "game 1's character step")
+        assert v["my_turn"] and v["may_lock"] and v["text"].startswith(f"Opponent: {other.name} - Press START ("), v
+        # The opponent's name is shown: leaving from here is rated (no free dodge).
+        assert _ranked(g)["stage_select"], _ranked(g)
+    host.steps("wait 30")
+    host.shot("g1-css-opponent")
+    join.steps("tap START 8", "wait 30")
+    v = _wait_view(join, lambda v: not v["my_turn"], "the joiner locked in")
+    assert v["type"] == 3 and not v["may_lock"] and v["text"].startswith(f"Opponent: {host.name} - Waiting ("), v
+    # Blind: the host's line names no character, and nobody leaves before the host locks in.
+    v = _view(host)
+    assert v["my_turn"] and v["text"].startswith(f"Opponent: {join.name} - Press START ("), v
+    join.steps("wait 60")
+    assert all(online_set.scene(g.c) == online_set.CSS for g in players)
+    join.shot("g1-css-join-waits")
+    host.steps("tap START 8", "wait 30")
+    # Then both on the stage select by themselves; strikes 1-2-1 over the five starters.
     _both_on(players, SSS, "game 1: both on the stage select")
     for g in players:
         v = _wait_view(g, lambda v: v["type"] == 1 and sorted(v["selectable"]) == STARTERS, "the starters")
@@ -177,7 +219,36 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
         winner = a if _ranked(a)["local_port"] == winner_port else b
         loser = b if winner is a else a
 
-        # The winner bans two stages, the loser picks one.
+        # Characters first (P+): the winner; the loser's START does nothing until then.
+        _both_on(players, online_set.CSS, f"game {game}: both on the CSS")
+        v = _wait_view(loser, lambda v: v["game"] == game and v["type"] == 3, "the character step")
+        # The winner by name, and that the loser is next (staging 2026-10-12).
+        assert not v["may_lock"] and v["text"].startswith(f"{winner.name} is picking, then you ("), v
+        n = _locks(loser)
+        loser.steps("tap START 8", "wait 40")
+        assert _locks(loser) == n, "the loser locked in before the winner"
+        loser.shot(f"g{game}-css-loser-waits")
+        # The loser's token stays put during the winner's turn; the winner locks in, and then A
+        # and B on the winner's locked-in token do nothing either (staging 2026-10-12).
+        loser.steps("tap B 8", "wait 30")
+        lt = B.read_css_area(loser.c.read_mem, 0)
+        assert lt is not None and lt.placed, lt
+        winner.steps("tap START 8", "wait 30")
+        for k in ("A", "B"):
+            winner.steps(f"tap {k} 8", "wait 30")
+            wt = B.read_css_area(winner.c.read_mem, 0)
+            assert wt is None or wt.placed, (k, wt)
+        v = _wait_view(loser, lambda v: v["may_lock"], "the loser's turn")
+        assert v["text"].startswith(f"Your turn: {winner.name} picked "), v
+        # The winner, locked in, sees who is still choosing.
+        assert _view(winner)["text"].startswith(f"{loser.name} is picking ("), _view(winner)
+        loser.shot(f"g{game}-css-loser-turn")
+        if game == 2:
+            # Slippi's character step: 45 s, then 3 s of grace, then the character selected.
+            _wait(lambda: _locks(loser) > n, 75, "the loser's time ran out")
+        else:
+            loser.steps("tap START 8", "wait 30")
+        # Then the winner bans two stages, the loser picks one, and the match starts.
         _both_on(players, SSS, f"game {game}: both on the stage select")
         v = _wait_view(winner, lambda v: v["game"] == game and v["type"] == 1 and v["my_turn"], "the ban")
         assert v["text"].startswith("Ban 2 stages") and v["count"] == 2, v
@@ -201,34 +272,7 @@ def test_ranked_set_is_rated(backend: OnlineBackend, dolphin: Callable[..., Dolp
             return online_set.scene(winner.c) != SSS or (v is not None and v.page != page)
         online_set.wait(left_or_turned, 20, f"game {game}: the winner leaves the stage select")
         assert online_set.scene(winner.c) != SSS, ("the winner's stage select turned the page", page)
-        _both_on(players, online_set.CSS, f"game {game}: both back on the CSS")
 
-        # Characters: the winner first; the loser's START does nothing until then.
-        v = _wait_view(loser, lambda v: v["type"] == 3, "the character step")
-        # The winner by name, and that the loser is next (staging 2026-10-12).
-        assert not v["may_lock"] and v["text"].startswith(f"{winner.name} is picking, then you ("), v
-        n = _locks(loser)
-        loser.steps("tap START 8", "wait 40")
-        assert _locks(loser) == n, "the loser locked in before the winner"
-        loser.shot(f"g{game}-css-loser-waits")
-        # The loser's token stays put during the winner's turn; the winner locks in, and then A
-        # and B on the winner's locked-in token do nothing either (staging 2026-10-12).
-        loser.steps("tap B 8", "wait 30")
-        lt = B.read_css_area(loser.c.read_mem, 0)
-        assert lt is not None and lt.placed, lt
-        winner.steps("tap START 8", "wait 30")
-        for k in ("A", "B"):
-            winner.steps(f"tap {k} 8", "wait 30")
-            wt = B.read_css_area(winner.c.read_mem, 0)
-            assert wt is None or wt.placed, (k, wt)
-        v = _wait_view(loser, lambda v: v["may_lock"], "the loser's turn")
-        assert v["text"].startswith(f"Your turn: {winner.name} picked "), v
-        loser.shot(f"g{game}-css-loser-turn")
-        if game == 2:
-            # Slippi's character step: 45 s, then 3 s of grace, then the character selected.
-            _wait(lambda: _locks(loser) > n, 75, "the loser's time ran out")
-        else:
-            loser.steps("tap START 8", "wait 30")
         rep = online_set.play_game(players, game)
         assert rep["stage"] == pick, (hex(rep["stage"]), hex(pick))
         games.append(rep)
@@ -838,16 +882,8 @@ def test_ranked_random_draws_every_game(backend: OnlineBackend, dolphin: Callabl
         winner_port = _ranked(a)["setup"]["last_winner"]
         winner = a if _ranked(a)["local_port"] == winner_port else b
         loser = b if winner is a else a
-        _both_on(players, SSS, f"game {game}: both on the stage select")
-        v = _wait_view(winner, lambda v: v["game"] == game and v["type"] == 1 and v["my_turn"], "the ban")
-        bans, pick = v["selectable"][:2], v["selectable"][2]
-        _strike(winner, bans[0], loser)
-        _wait_view(winner, lambda v: v["type"] == 1 and v["my_turn"] and v["count"] == 1, "the second ban")
-        _strike(winner, bans[1], loser)
-        _wait_view(loser, lambda v: v["type"] == 2 and v["my_turn"], "the pick")
-        B.sss_pick_stage(loser.c, pick, 0)
-        _both_on(players, online_set.CSS, f"game {game}: both back on the CSS")
-        _wait_view(loser, lambda v: v["type"] == 3, "the character step")
+        _both_on(players, online_set.CSS, f"game {game}: both on the CSS")
+        _wait_view(loser, lambda v: v["game"] == game and v["type"] == 3, "the character step")
         for g in players:
             g.steps("wait 30")
             assert online_set.css_panel(g.c)["char"] == CSS_RANDOM, (g.inst.name, "Random kept")
@@ -860,6 +896,14 @@ def test_ranked_random_draws_every_game(backend: OnlineBackend, dolphin: Callabl
         # drawn (the user's, 2026-10-16).
         assert "picked Random" in v["text"], v
         loser.steps("tap START 8", "wait 30")
+        _both_on(players, SSS, f"game {game}: both on the stage select")
+        v = _wait_view(winner, lambda v: v["game"] == game and v["type"] == 1 and v["my_turn"], "the ban")
+        bans, pick = v["selectable"][:2], v["selectable"][2]
+        _strike(winner, bans[0], loser)
+        _wait_view(winner, lambda v: v["type"] == 1 and v["my_turn"] and v["count"] == 1, "the second ban")
+        _strike(winner, bans[1], loser)
+        _wait_view(loser, lambda v: v["type"] == 2 and v["my_turn"], "the pick")
+        B.sss_pick_stage(loser.c, pick, 0)
         note_setup(game, online_set.play_game(players, game, winner=winners[game]))
 
     assert game == 3, drawn

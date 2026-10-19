@@ -149,20 +149,15 @@ def test_room_bo3_set(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
             break
         game += 1
         assert game <= 3, set_
+        # Characters first: the winner, then the loser; then the bans and the pick.
+        v = until_setup(a, lambda v: v["game"] == game and v["type"] == 3, "the character step")
+        assert not v["to_sss"], v
+        pick_characters(players, game)
         online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120,
                         f"game {game}: both on the stage select")
         v = until_setup(a, lambda v: v["game"] == game and v["type"] in (1, 2), "the bans")
         a.shot(f"04-g{game}-bans")
         play_steps(players, game)
-        online_set.wait(lambda: all(online_set.scene(g.c) == CSS for g in players), 120,
-                        f"game {game}: both back on the CSS")
-        # Characters: the winner first, then the loser.
-        for _ in range(2):
-            mover = _wait(lambda: next((g for g in players if setup_view(g)["type"] == 3 and
-                                        setup_view(g)["my_turn"]), None), 60, "a character turn")
-            mover.steps("tap START 8", "wait 30")
-            if all(not setup_view(g)["active"] or setup_view(g)["type"] != 3 for g in players):
-                break
         games.append(online_set.play_game(players, game))
 
     for rep in games:
@@ -198,6 +193,19 @@ def to_stage_select(players: list[Game], game: int, timeout: float = 120) -> Non
                 g.steps("tap START 8", "wait 30")
         return False
     _wait(step, timeout, f"game {game}: both on the stage select")
+
+
+def pick_characters(players: list[Game], game: int) -> None:
+    """The set's `game`'s characters on the CSS (P+ is character first, the user's, 2026-10-19):
+    the winner's side presses START on its turn, then the loser's."""
+    online_set.wait(lambda: all(online_set.scene(g.c) == CSS for g in players), 120,
+                    f"game {game}: all on the CSS")
+    for _ in range(4):
+        mover = _wait(lambda: next((g for g in players if setup_view(g)["type"] == 3 and
+                                    setup_view(g)["my_turn"]), None), 60, f"game {game}: a character turn")
+        mover.steps("tap START 8", "wait 30")
+        if all(not setup_view(g)["active"] or setup_view(g)["type"] != 3 for g in players):
+            return
 
 
 def quit_match(g: Game, buttons: str) -> None:
@@ -258,16 +266,9 @@ def test_room_set_quit_and_runback(backend: OnlineBackend, dolphin: Callable[...
     _wait(lambda: (lambda st: st if st and sum(st["score"]) == 1 else None)(rooms(a).get("set")), 30,
           "game 1 counted by the server")
 
-    # Game 2: the bans, the characters (the winner first), then a runback.
+    # Game 2: the characters (the winner first), the bans, then a runback.
     to_stage_select(players, 2)
     play_steps(players, 2)
-    online_set.wait(lambda: all(online_set.scene(g.c) == CSS for g in players), 120, "game 2: both back on the CSS")
-    for _ in range(2):
-        mover = _wait(lambda: next((g for g in players if setup_view(g)["type"] == 3 and setup_view(g)["my_turn"]), None),
-                      60, "a character turn")
-        mover.steps("tap START 8", "wait 30")
-        if all(not setup_view(g)["active"] or setup_view(g)["type"] != 3 for g in players):
-            break
     online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
                     "game 2 running on both")
     before = [online_set.gstatus(g.c)["match_index"] for g in players]
@@ -782,29 +783,31 @@ def test_room_2v2_set(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
                "game 1 counted for red")
     assert st["game"] == 2 and not st["paused"], st
 
-    # Game 2: red's captain bans, blue's captain picks, then both red players choose characters.
-    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in gs), 180, "game 2: all on the stage select")
-    v = until_setup(a, lambda v: v["active"] and v["game"] >= 2 and v["type"] == 1, "red bans")
-    assert v["my_turn"] and setup_view(c)["my_turn"], (v, setup_view(c))
-    assert setup_view(b)["text"].startswith("Opponents are banning"), setup_view(b)
-    a.shot("03-g2-red-bans")
-    play_steps(gs, 2)
-    online_set.wait(lambda: all(online_set.scene(g.c) == CSS for g in gs), 120, "game 2: all back on the CSS")
+    # Game 2: both red players choose characters, then both blue ones; then red's captain bans and
+    # blue's captain picks.
+    online_set.wait(lambda: all(online_set.scene(g.c) == CSS for g in gs), 180, "game 2: all on the CSS")
     movers = _wait(lambda: (lambda m: m if len(m) == 2 else None)(
         [g.name for g in gs if setup_view(g)["type"] == 3 and setup_view(g)["my_turn"]]), 60, "red's character turn")
     assert sorted(movers) == sorted([a.name, c.name]), movers
     for g in gs:
         g.steps("wait 40")
-        g.shot("04-g2-red-characters")
+        g.shot("03-g2-red-characters")
+    pick_characters(gs, 2)
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in gs), 180, "game 2: all on the stage select")
+    v = until_setup(a, lambda v: v["active"] and v["game"] >= 2 and v["type"] == 1, "red bans")
+    assert v["my_turn"] and setup_view(c)["my_turn"], (v, setup_view(c))
+    assert setup_view(b)["text"].startswith("Opponents are banning"), setup_view(b)
+    a.shot("04-g2-red-bans")
+    play_steps(gs, 2)
 
 
 @pytest.mark.slow
 def test_room_set_ended_between_games(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
                                       gpu_backend: str) -> None:
     """End set on the CSS between a running set's games (the user's, 2026-10-11): game 1 played,
-    game 2's bans and pick made, and on the CSS (the characters) the host's RULES > SET > End set
-    ends the set with no result: the session ends for both, both are back on the room's CSS with
-    no set, and the next all-ready starts a new set at game 1."""
+    and on the CSS (game 2's characters, before its stages) the host's RULES > SET > End set ends
+    the set with no result: the session ends for both, both are back on the room's CSS with no
+    set, and the next all-ready starts a new set at game 1."""
     from test_room_rules import menu_open, open_rules, tap
     a, b, code = bo3_room(backend, dolphin, gpu_backend, "ended")
     players = [a, b]
@@ -813,9 +816,8 @@ def test_room_set_ended_between_games(backend: OnlineBackend, dolphin: Callable[
     play_steps(players, 1)
     games = [online_set.play_game(players, 1)]
     _wait(lambda: (lambda st: st if st and sum(st["score"]) == 1 else None)(rooms(a).get("set")), 60, "game 1 counted")
-    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "game 2: both on the stage select")
-    play_steps(players, 2)
-    online_set.wait(lambda: all(online_set.scene(g.c) == CSS for g in players), 120, "game 2: both back on the CSS")
+    online_set.wait(lambda: all(online_set.scene(g.c) == CSS for g in players), 120, "game 2: both on the CSS")
+    until_setup(a, lambda v: v["active"] and v["game"] == 2 and v["type"] == 3, "game 2's characters")
     assert rooms(a)["room_game"]["active"] and rooms(b)["room_game"]["active"]
     a.steps("wait 30")
     open_rules(a)
@@ -847,16 +849,15 @@ def test_room_set_characters_between_games(backend: OnlineBackend, dolphin: Call
     for the whole session). Slippi's order, kept by the user: the winner picks first; the line
     names them ("<winner> is picking, then you") and the loser's token stays where it is until
     their turn (B does not call it back). Then the loser sees the winner's character, changes
-    theirs and locks in; game 2 starts with the loser's new character."""
+    theirs and locks in; then the stages (P+ is character first, 2026-10-19); game 2 starts with
+    the loser's new character."""
     a, b, code = bo3_room(backend, dolphin, gpu_backend, "chars")
     players = [a, b]
     _all(lambda: a.steps("tap START 8", "wait 30"), lambda: b.steps("tap START 8", "wait 30"))
     online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "game 1: the stage select")
     play_steps(players, 1)
     online_set.play_game(players, 1, winner=a)
-    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 180, "game 2: the stage select")
-    play_steps(players, 2)
-    online_set.wait(lambda: all(online_set.scene(g.c) == CSS for g in players), 120, "game 2: the CSS")
+    online_set.wait(lambda: all(online_set.scene(g.c) == CSS for g in players), 180, "game 2: the CSS")
     a.steps("wait 30")
     for g, other in ((a, 1), (b, 0)):
         bits = room_view(g)["slots"][other]["bits"]
@@ -892,10 +893,13 @@ def test_room_set_characters_between_games(backend: OnlineBackend, dolphin: Call
     _wait(lambda: room_view(b)["slots"][0]["bits"] & ppom.SLOT_READY and room_view(b)["slots"][0]["char"] != 0xFF,
           10, "B sees A ready with a character")
     b.shot("02-winner-ready")
-    # The loser locks in and presses A on the token at once: it stays put (the match is on its way).
+    # The loser locks in and presses A on the token at once: it stays put (the stage select is on
+    # its way). Then the bans and the pick.
     b.steps("tap START 8", "wait 4", "tap A 8", "wait 6")
     held = B.read_css_area(b.c.read_mem, 0)
     assert held is None or (held.placed and held.character == placed.character), held
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "game 2: the stage select")
+    play_steps(players, 2)
     online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in players), 240,
                     "game 2 running")
     # The loser (port 1) plays the new character, on both machines.
@@ -979,9 +983,7 @@ def test_room_set_token_picked_up_between_games(backend: OnlineBackend, dolphin:
     online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "game 1: the stage select")
     play_steps(players, 1)
     online_set.play_game(players, 1, winner=a)
-    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 180, "game 2: the stage select")
-    play_steps(players, 2)
-    online_set.wait(lambda: all(online_set.scene(g.c) == CSS for g in players), 120, "game 2: the CSS")
+    online_set.wait(lambda: all(online_set.scene(g.c) == CSS for g in players), 180, "game 2: the CSS")
     b.steps("wait 30")
     # The winner's turn: A on the loser's token leaves it where it is (ebcb3ac7).
     a0 = hand_onto_own_token(b)

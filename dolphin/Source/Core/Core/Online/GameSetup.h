@@ -4,19 +4,24 @@
 // Ranked's game setup: Slippi's stage striking and counterpicking (slippi-ssbm-c
 // Scenes/Ranked/GameSetup.c), played on P+'s own stage select.
 //
-// Game 1 (and the game after a draw): the five starter stages are struck 1-2-1: player 1 (the
-// host, in-game port 0) strikes one, player 2 strikes two, player 1 strikes one; the stage left is
-// played. The characters are the ones locked in on the CSS before the search (after a draw: the
-// last game's; the CSS locks in again at once, time_up).
-// Games 2+: the winner of the last game bans two stages of the counterpick list, then the loser
-// picks the stage from the rest; the loser cannot pick the stage they last won on once they have
-// won a game (Slippi's "Dave's stupid rule"). Then the winner may change character, and after the
-// winner has locked in, the loser (who sees the winner's choice).
+// P+ is character first (the user's, 2026-10-19): every game's characters are locked in before
+// its stages are struck or picked.
+// Game 1: Ranked's players choose their characters on the CSS once the opponent's name shows
+// ("Opponent: alice"), both at once and blind (the search's lock-in is for no game; the CSS starts
+// on the character the player searched with). A room's players chose theirs before readying. Then
+// the five starter stages are struck 1-2-1: player 1 (the host, in-game port 0) strikes one,
+// player 2 strikes two, player 1 strikes one; the stage left is played. After a draw the starters
+// are struck again with the last game's characters (Slippi; the CSS locks in again at once,
+// time_up).
+// Games 2+: the winner of the last game may change character, and after the winner has locked
+// in, the loser (who sees the winner's choice). Then the winner bans two stages of the
+// counterpick list, and the loser picks the stage from the rest; the loser cannot pick the stage
+// they last won on once they have won a game (Slippi's "Dave's stupid rule").
 // Each step has Slippi's timer (strikes 30 s, the last game-1 strike 10 s, ban and pick 30 s,
-// each character 45 s). When it runs out (plus Slippi's 3 s of grace) this player's step is done
-// for them: a random stage, or the character on the CSS (time_up). An opponent whose step has
-// not ended 15 s after that is gone (Slippi's wait timeout): the set ends as if they had left.
-// Once a player has two wins there are no more steps.
+// each character 45 s, game 1's 45 s for both). When it runs out (plus Slippi's 3 s of grace)
+// this player's step is done for them: a random stage, or the character on the CSS (time_up). An
+// opponent whose step has not ended 15 s after that is gone (Slippi's wait timeout): the set ends
+// as if they had left. Once a player has two wins there are no more steps.
 //
 // Every player's own actions (struck / banned / picked stages, in order) travel in its gameplay
 // session control messages (Gprb::Session::SetLocalExtra). Only one player acts at a time, so both
@@ -65,7 +70,7 @@ struct View
 
 // The ranked set starts: this player's in-game port (0 host, 1 joiner) and the stage lists.
 // Empty or unusable lists (not five starters, fewer than four counterpicks) fall back to P+'s
-// starters / the legal list.
+// starters / the legal list. Game 1 starts with the blind character step.
 void Begin(int local_port, std::vector<u16> starters, std::vector<u16> counterpicks);
 // A set in another format (SetFormat.h: a room's set, a ruleset's). A format that cannot be played
 // (CheckFormat) is logged and Ranked's is used, the same on every machine.
