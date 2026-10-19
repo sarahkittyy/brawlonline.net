@@ -60,6 +60,22 @@ describe("buildModsDolphinArgs", () => {
     });
   });
 
+  it("tells Dolphin the player's answer to the SD card question, asked before it started", () => {
+    const room = {
+      join: "KFQB",
+      build: { hash, name: "REX" },
+      controller: "gc" as const,
+      sd_sync: "overwrite" as const,
+    };
+    const args = buildModsDolphinArgs({
+      userArgs,
+      build: { discPath: disc, launcherPath: dol, sdPath: sd },
+      room,
+      testMode: INACTIVE_TEST_MODE,
+    });
+    expect(JSON.parse(args[args.length - 1]).sd_sync).toBe("overwrite");
+  });
+
   it("refuses a path Dolphin would cut at its '='", () => {
     expect(() =>
       buildModsDolphinArgs({

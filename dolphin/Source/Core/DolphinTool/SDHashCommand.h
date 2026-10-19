@@ -9,4 +9,5 @@
 namespace DolphinTool
 {
 int SDHashCommand(const std::vector<std::string>& args);
+int SDCompareCommand(const std::vector<std::string>& args);
 }  // namespace DolphinTool

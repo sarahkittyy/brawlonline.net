@@ -563,7 +563,7 @@ std::optional<std::vector<CardFile>> ListCardFiles(File::IOFile& image, u64 imag
   return files;
 }
 
-void WriteFileList(const std::vector<CardFile>& files, sf::Packet& packet)
+std::vector<u8> EncodeFileList(const std::vector<CardFile>& files)
 {
   std::vector<u8> raw;
   auto put32 = [&](u32 x) {
@@ -584,20 +584,31 @@ void WriteFileList(const std::vector<CardFile>& files, sf::Packet& packet)
       put32(count);
     }
   }
-  NetPlay::CompressBufferIntoPacket(raw, packet);
+  return raw;
+}
+
+void WriteFileList(const std::vector<CardFile>& files, sf::Packet& packet)
+{
+  NetPlay::CompressBufferIntoPacket(EncodeFileList(files), packet);
 }
 
 std::optional<std::vector<CardFile>> ReadFileList(sf::Packet& packet, u32 chunk_count)
 {
-  // Generous for a 64 GiB card's names and runs; ReadCompressed refuses more.
-  const std::optional<std::vector<u8>> raw = ReadCompressed(packet, 256ull << 20);
+  const std::optional<std::vector<u8>> raw = ReadCompressed(packet, MAX_FILE_LIST_BYTES);
   if (!raw)
+    return std::nullopt;
+  return DecodeFileList(*raw, chunk_count);
+}
+
+std::optional<std::vector<CardFile>> DecodeFileList(std::span<const u8> bytes, u32 chunk_count)
+{
+  if (bytes.size() > MAX_FILE_LIST_BYTES)
     return std::nullopt;
   size_t pos = 0;
   auto get32 = [&](u32* x) {
-    if (raw->size() - pos < 4)
+    if (bytes.size() - pos < 4)
       return false;
-    *x = LE32(raw->data() + pos);
+    *x = LE32(bytes.data() + pos);
     pos += 4;
     return true;
   };
@@ -608,14 +619,14 @@ std::optional<std::vector<CardFile>> ReadFileList(sf::Packet& packet, u32 chunk_
   for (CardFile& f : files)
   {
     u32 len, lo, hi, runs;
-    if (!get32(&len) || len == 0 || len > MAX_CARD_PATH || raw->size() - pos < len)
+    if (!get32(&len) || len == 0 || len > MAX_CARD_PATH || bytes.size() - pos < len)
       return std::nullopt;
-    f.path.assign(reinterpret_cast<const char*>(raw->data() + pos), len);
+    f.path.assign(reinterpret_cast<const char*>(bytes.data() + pos), len);
     pos += len;
     if (std::ranges::any_of(f.path, [](char ch) { return static_cast<unsigned char>(ch) < 0x20; }))
       return std::nullopt;
     if (!get32(&lo) || !get32(&hi) || !get32(&runs) || runs > chunk_count ||
-        (raw->size() - pos) / 8 < runs)
+        (bytes.size() - pos) / 8 < runs)
     {
       return std::nullopt;
     }
@@ -629,7 +640,7 @@ std::optional<std::vector<CardFile>> ReadFileList(sf::Packet& packet, u32 chunk_
         return std::nullopt;
     }
   }
-  if (pos != raw->size())
+  if (pos != bytes.size())
     return std::nullopt;
   return files;
 }
@@ -845,6 +856,102 @@ std::optional<Manifest> ReadManifest(sf::Packet& packet)
   if (pos != entries->size())
     return std::nullopt;
   return manifest;
+}
+
+std::optional<Manifest> ParseCanonicalManifest(std::span<const u8> bytes)
+{
+  if (bytes.size() < 8)
+    return std::nullopt;
+  Manifest manifest;
+  for (int i = 0; i < 8; ++i)
+    manifest.size |= u64{bytes[i]} << (8 * i);
+  if (manifest.size == 0 || manifest.size > MAX_CARD_SIZE)
+    return std::nullopt;
+  const u32 count = ChunkCountFor(manifest.size);
+  manifest.chunks.resize(count);
+  size_t pos = 8;
+  for (u32 i = 0; i < count; ++i)
+  {
+    if (pos >= bytes.size())
+      return std::nullopt;
+    const u8 kind = bytes[pos++];
+    if (kind == MANIFEST_ENTRY_ZERO)
+    {
+      manifest.chunks[i].zero = true;
+    }
+    else if (kind == MANIFEST_ENTRY_DATA)
+    {
+      if (bytes.size() - pos < sizeof(Hash))
+        return std::nullopt;
+      std::copy_n(bytes.begin() + pos, sizeof(Hash), manifest.chunks[i].hash.begin());
+      pos += sizeof(Hash);
+    }
+    else
+    {
+      return std::nullopt;
+    }
+  }
+  if (pos != bytes.size())
+    return std::nullopt;
+  return manifest;
+}
+
+std::vector<u8> EncodeCardListing(const Manifest& manifest, const std::vector<CardFile>& files)
+{
+  const std::vector<u8> canon = CanonicalManifest(manifest);
+  const std::vector<u8> list = EncodeFileList(files);
+  std::vector<u8> out;
+  out.reserve(4 + canon.size() + list.size());
+  const u32 canon_size = static_cast<u32>(canon.size());
+  for (int i = 0; i < 4; ++i)
+    out.push_back(static_cast<u8>(canon_size >> (8 * i)));
+  out.insert(out.end(), canon.begin(), canon.end());
+  out.insert(out.end(), list.begin(), list.end());
+  return out;
+}
+
+std::optional<CardListing> DecodeCardListing(std::span<const u8> bytes)
+{
+  if (bytes.size() < 4)
+    return std::nullopt;
+  const u32 canon_size = LE32(bytes.data());
+  if (canon_size > bytes.size() - 4)
+    return std::nullopt;
+  std::optional<Manifest> manifest = ParseCanonicalManifest(bytes.subspan(4, canon_size));
+  if (!manifest)
+    return std::nullopt;
+  CardListing listing;
+  // No list at all: the files are not known (the sizes still are).
+  if (const std::span<const u8> list = bytes.subspan(4 + canon_size); !list.empty())
+  {
+    std::optional<std::vector<CardFile>> files = DecodeFileList(list, manifest->ChunkCount());
+    if (!files)
+      return std::nullopt;
+    listing.files = std::move(*files);
+  }
+  listing.manifest = std::move(*manifest);
+  return listing;
+}
+
+CardDifference CompareWithManifest(const Manifest& manifest, const ImageHashes& own)
+{
+  // SessionCard::CreateGuestCard's rule: a chunk is this card's when it is as long as the
+  // session's there and its hash matches; any other chunk that holds data is fetched.
+  CardDifference diff;
+  for (u32 i = 0; i < manifest.ChunkCount(); ++i)
+  {
+    const ChunkInfo& info = manifest.chunks[i];
+    if (info.zero)
+      continue;
+    const u64 start = u64{i} * CHUNK_SIZE;
+    const bool same_length =
+        start < own.size && std::min(CHUNK_SIZE, own.size - start) == manifest.ChunkBytes(i);
+    if (same_length && i < own.hashes.size() && own.hashes[i] == info.hash)
+      continue;
+    diff.chunks.push_back(i);
+    diff.bytes += manifest.ChunkBytes(i);
+  }
+  return diff;
 }
 
 void WriteChunkRequest(std::span<const u32> chunks, sf::Packet& packet)

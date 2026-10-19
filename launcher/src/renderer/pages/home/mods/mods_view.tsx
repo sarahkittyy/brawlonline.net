@@ -223,8 +223,9 @@ export const ModsView = (props: ModsViewProps) => {
   );
 };
 
-/** A joiner whose SD card differs from the host's (docs/design/brawl-mods.md §6.5): download the
- * host's card before the join, or leave. Dolphin waits for the answer. */
+/** Dolphin asks about the SD card itself (docs/design/brawl-mods.md §6.5) only when the card turned
+ * out different there after the launcher's own check before the join (SdCardDialog in mods_tab):
+ * download the host's card, or leave. Dolphin waits for the answer. */
 const SdSyncDialog = ({
   sync,
   onRequest,
@@ -243,39 +244,63 @@ const SdSyncDialog = ({
   if (!sync) {
     return null;
   }
-  const answer = (choice: "yes" | "overwrite" | "no") => {
-    setAnswered(true);
-    onRequest({ op: "sd-sync", choice });
-  };
-  const more = sync.files - sync.names.length;
   return (
-    <Dialog open={asking && !answered} maxWidth="sm" fullWidth={true}>
+    <SdCardDialog
+      open={asking && !answered}
+      body={Messages.sdSyncBody(Messages.megabytes(sync.bytes), sync.files, Messages.duration(sync.eta_s))}
+      names={sync.names}
+      files={sync.files}
+      onAnswer={(choice) => {
+        setAnswered(true);
+        onRequest({ op: "sd-sync", choice });
+      }}
+    />
+  );
+};
+
+/** The SD card question (a room's card that differs from the player's): how much differs, the
+ * warning, the largest files that differ, and No / Yes / Yes, and overwrite local card. */
+export const SdCardDialog = ({
+  open,
+  body,
+  names,
+  files,
+  onAnswer,
+}: {
+  open: boolean;
+  body: string;
+  /** Some of the files that differ, largest first. */
+  names: string[];
+  /** How many files differ in all. */
+  files: number;
+  onAnswer: (choice: "yes" | "overwrite" | "no") => void;
+}) => {
+  const shown = names.slice(0, 8);
+  const more = Math.max(files, names.length) - shown.length;
+  return (
+    <Dialog open={open} maxWidth="sm" fullWidth={true}>
       <DialogTitle>{Messages.sdSyncTitle()}</DialogTitle>
       <DialogContent>
-        <p className={styles.sdSyncBody}>
-          {Messages.sdSyncBody(Messages.megabytes(sync.bytes), sync.files, Messages.duration(sync.eta_s))}
-        </p>
+        <p className={styles.sdSyncBody}>{body}</p>
         <p className={styles.sdSyncWarning}>{Messages.sdSyncWarning()}</p>
-        {sync.names.length > 0 && (
+        {shown.length > 0 && (
           <div className={styles.sdSyncFiles}>
             <div>{Messages.sdSyncFiles()}</div>
             <ul>
-              {sync.names.slice(0, 8).map((name) => (
+              {shown.map((name) => (
                 <li key={name}>{name}</li>
               ))}
             </ul>
-            {more + Math.max(0, sync.names.length - 8) > 0 && (
-              <div>{Messages.sdSyncMoreFiles(more + Math.max(0, sync.names.length - 8))}</div>
-            )}
+            {more > 0 && <div>{Messages.sdSyncMoreFiles(more)}</div>}
           </div>
         )}
       </DialogContent>
       <DialogActions>
-        <Button onClick={() => answer("no")}>{Messages.sdSyncNo()}</Button>
-        <Button variant="outlined" onClick={() => answer("yes")}>
+        <Button onClick={() => onAnswer("no")}>{Messages.sdSyncNo()}</Button>
+        <Button variant="outlined" onClick={() => onAnswer("yes")}>
           {Messages.sdSyncYes()}
         </Button>
-        <Button variant="contained" onClick={() => answer("overwrite")}>
+        <Button variant="contained" onClick={() => onAnswer("overwrite")}>
           {Messages.sdSyncOverwrite()}
         </Button>
       </DialogActions>

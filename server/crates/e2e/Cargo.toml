@@ -13,6 +13,7 @@ accounts.workspace = true
 mm.workspace = true
 mmclient.workspace = true
 anyhow.workspace = true
+blake2.workspace = true
 chrono.workspace = true
 rand.workspace = true
 reqwest.workspace = true

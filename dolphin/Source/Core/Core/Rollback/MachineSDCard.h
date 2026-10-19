@@ -62,6 +62,8 @@ constexpr int SYNC_RETRY_MS = 15'000;
 // A card's file list: at most this many files, each path at most this long.
 constexpr u32 MAX_CARD_FILES = 1u << 18;
 constexpr size_t MAX_CARD_PATH = 1024;
+// A file list's encoding (EncodeFileList): generous for a 64 GiB card's names and runs.
+constexpr u64 MAX_FILE_LIST_BYTES = 256ull << 20;
 
 // A chunk's hash: BLAKE2b-128 (Monocypher), cryptographic, since a chunk may come from any
 // player and is checked against the host's manifest.
@@ -107,6 +109,10 @@ std::optional<std::vector<CardFile>> ListCardFiles(File::IOFile& image, u64 imag
 // the paths, and every run against the card's `chunk_count`.
 void WriteFileList(const std::vector<CardFile>& files, sf::Packet& packet);
 std::optional<std::vector<CardFile>> ReadFileList(sf::Packet& packet, u32 chunk_count);
+// The same list not compressed (little-endian: the count, then each file's path length, path,
+// size and runs), as a card listing holds it; DecodeFileList checks it as ReadFileList does.
+std::vector<u8> EncodeFileList(const std::vector<CardFile>& files);
+std::optional<std::vector<CardFile>> DecodeFileList(std::span<const u8> bytes, u32 chunk_count);
 
 // The files that hold any of `chunks` (sorted, ascending), largest first.
 std::vector<const CardFile*> FilesTouching(const std::vector<CardFile>& files,
@@ -149,6 +155,29 @@ std::string RootHex(const Root& root);
 // malformed one.
 void WriteManifest(const Manifest& manifest, sf::Packet& packet);
 std::optional<Manifest> ReadManifest(sf::Packet& packet);
+// The manifest back from CanonicalManifest's bytes, checked (nullopt for a malformed one).
+std::optional<Manifest> ParseCanonicalManifest(std::span<const u8> bytes);
+
+// A card's listing, which a host's launcher puts on the server so a joiner's launcher can tell
+// its player what differs before Dolphin starts (DolphinTool sdhash --listing, sdcompare): a
+// little-endian u32 with the canonical manifest's length, the canonical manifest (so the server
+// checks it against the card's root), then the file list (EncodeFileList; empty when unknown).
+struct CardListing
+{
+  Manifest manifest;
+  std::vector<CardFile> files;
+};
+std::vector<u8> EncodeCardListing(const Manifest& manifest, const std::vector<CardFile>& files);
+std::optional<CardListing> DecodeCardListing(std::span<const u8> bytes);
+
+// What a joiner whose own card has `own` would fetch of the session's card `manifest`
+// (SessionCard::CreateGuestCard's rule): the chunks, ascending, and their bytes.
+struct CardDifference
+{
+  u64 bytes = 0;
+  std::vector<u32> chunks;
+};
+CardDifference CompareWithManifest(const Manifest& manifest, const ImageHashes& own);
 
 // A chunk request: the chunk indices, at most MAX_REQUEST_CHUNKS.
 void WriteChunkRequest(std::span<const u32> chunks, sf::Packet& packet);

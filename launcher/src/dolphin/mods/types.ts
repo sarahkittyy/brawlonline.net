@@ -234,12 +234,35 @@ export type ModSaveInfo = {
 /** The save imported, and where the one it replaced went (null: there was none). */
 export type ModSaveImportResult = { save: ModSaveInfo; backup: string | null };
 
-export type ModsHostOptions = { buildId: string; public: boolean };
-export type ModsJoinOptions = { buildId: string; code: string };
+/** `uid`: the account that hosts, whose launcher puts the game's SD card listing on the server
+ * (docs/design/brawl-mods.md §6.5), so joiners see what differs before their Dolphin starts. */
+export type ModsHostOptions = { buildId: string; public: boolean; uid?: string };
+
+/** What a joiner would download of a room's SD card, asked in the launcher before Dolphin starts
+ * (docs/design/brawl-mods.md §6.5; the user's, 2026-10-19). */
+export type ModSdCardCheck =
+  /** The player's card is the room's (or one side has none): nothing to ask. */
+  | { kind: "same" }
+  /** From the host's listing: the bytes and files that differ, the largest named first
+   * (`filesKnown` false when the host's card is not a FAT volume the tool reads). */
+  | { kind: "differs"; bytes: number; files: number; names: string[]; filesKnown: boolean }
+  /** The host's listing is not on the server (a host on an older launcher): asked without sizes. */
+  | { kind: "unknown" };
+/** The player's answer to the SD card question: download it, or download it and write it into
+ * their own card. */
+export type ModsSdChoice = "yes" | "overwrite";
+
+/** `sdSync`: the player's answer to the SD card question, once asked; without it a join whose card
+ * differs answers `sd-card` instead of starting Dolphin. `uid`: the account that joins. */
+export type ModsJoinOptions = { buildId: string; code: string; uid?: string; sdSync?: ModsSdChoice };
+export type ModsJoinResult =
+  | { outcome: "joining" }
+  /** The room's SD card differs: ask the player, then join again with `sdSync`. */
+  | { outcome: "sd-card"; buildId: string; code: string; check: ModSdCardCheck };
 /** A room code typed in: the room's game is looked up (`uid`: the account that asks). */
 export type ModsJoinByCodeOptions = { uid: string; code: string };
 export type ModsJoinByCodeResult =
-  | { outcome: "joining" }
+  | ModsJoinResult
   /** No game in the list has the room's hash. */
   | { outcome: "no-game"; name: string; hash: string };
 
@@ -253,7 +276,7 @@ export interface ModsService {
   /** Hashes the build's parts (when they changed since): progress comes as events. */
   hashBuild(id: string): Promise<ModBuild>;
   host(options: ModsHostOptions): Promise<void>;
-  join(options: ModsJoinOptions): Promise<void>;
+  join(options: ModsJoinOptions): Promise<ModsJoinResult>;
   /** Joins the room with this code with the game whose hash it needs, if the player has it. */
   joinByCode(options: ModsJoinByCodeOptions): Promise<ModsJoinByCodeResult>;
   request(request: ModRoomRequest): Promise<void>;

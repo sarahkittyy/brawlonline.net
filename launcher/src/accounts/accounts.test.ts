@@ -153,6 +153,38 @@ describe("accounts", () => {
     expect(res).toEqual({ ok: true, value: { id: 7, logsSent: false, logsError: "disk full" } });
   });
 
+  it("puts a room's SD card listing on the server and fetches it back as bytes", async () => {
+    const root = "ab".repeat(32);
+    const stored: Uint8Array[] = [];
+    const calls: { method: string; url: string; headers: Record<string, string> }[] = [];
+    const impl = (async (url: string, init: any) => {
+      calls.push({ method: init.method, url, headers: init.headers });
+      if (init.method === "PUT") {
+        stored.push(init.body);
+        return new Response(null, { status: 201 });
+      }
+      return stored.length > 0
+        ? new Response(stored[0], { status: 200, headers: { "content-type": "application/octet-stream" } })
+        : new Response(JSON.stringify({ error: { code: "not_found", message: "Not found" } }), { status: 404 });
+    }) as unknown as typeof fetch;
+    const store = new SessionStore(path.join(dir, "sessions.json"), null);
+    await store.set(UID, "tok-1");
+    const manager = new AccountsManager(new AccountsHttpClient("http://api", "test", impl), store);
+
+    // None yet: a 404 the mods manager reads as "no listing".
+    const none = await manager.sdListing(UID, root);
+    expect(none.ok).toBe(false);
+    expect(!none.ok && none.error.status).toBe(404);
+
+    const listing = new Uint8Array([4, 0, 0, 0, 1, 2, 3, 4, 0xff]);
+    expect(await manager.uploadSdListing(UID, root, listing)).toEqual({ ok: true, value: undefined });
+    expect(calls[1].url).toBe(`http://api/v1/sd-cards/${root}/listing`);
+    expect(calls[1].headers["content-type"]).toBe("application/octet-stream");
+    expect(calls[1].headers.authorization).toBe("Bearer tok-1");
+    const back = await manager.sdListing(UID, root);
+    expect(back.ok && Array.from(back.value)).toEqual(Array.from(listing));
+  });
+
   it("returns the server's error message and forgets a rejected session", async () => {
     const { impl } = fakeFetch({
       "POST /v1/auth/login": () => ({

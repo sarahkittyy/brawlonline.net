@@ -1,4 +1,12 @@
-import type { ModBuild, ModBuildInput, ModRoomRequest, ModSaveInfo, ModsState } from "@dolphin/mods/types";
+import type {
+  ModBuild,
+  ModBuildInput,
+  ModRoomRequest,
+  ModSaveInfo,
+  ModSdCardCheck,
+  ModsSdChoice,
+  ModsState,
+} from "@dolphin/mods/types";
 import Button from "@mui/material/Button";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
@@ -18,7 +26,7 @@ import type { AddBuildInitial, SaveSectionProps } from "./add_build_dialog";
 import { AddBuildDialog, formatSaveSummary } from "./add_build_dialog";
 import { ModsMessages as Messages } from "./mods.messages";
 import type { ModsPublicRooms } from "./mods_view";
-import { ModsView } from "./mods_view";
+import { ModsView, SdCardDialog } from "./mods_view";
 
 /** How long a list stays shown while polls fail (as Home > Overview). */
 const STALE_AFTER_MS = 15_000;
@@ -55,6 +63,8 @@ export const ModsTab = React.memo(function ModsTab() {
   const saveFor = useRef<string | null>(null);
   // A room whose game the player does not have (a code typed in, or a public room).
   const [missing, setMissing] = useState<{ name: string; hash: string } | null>(null);
+  // A room whose SD card differs from the player's: asked before Dolphin starts (sd_listing.ts).
+  const [sdAsk, setSdAsk] = useState<{ buildId: string; code: string; check: ModSdCardCheck } | null>(null);
   const openLogin = useLoginModal((s) => s.openModal);
   const outdated = query.isError && Date.now() - query.dataUpdatedAt > STALE_AFTER_MS;
   let publicRooms: ModsPublicRooms;
@@ -135,6 +145,14 @@ export const ModsTab = React.memo(function ModsTab() {
     [ensureOnline],
   );
 
+  // Joins a room; one whose SD card differs comes back to ask first (Dolphin starts on Yes).
+  const joinRoom = async (buildId: string, code: string, sdSync?: ModsSdChoice) => {
+    const result = await modsService.join({ buildId, code, uid: uid ?? undefined, sdSync });
+    if (result.outcome === "sd-card") {
+      setSdAsk({ buildId: result.buildId, code: result.code, check: result.check });
+    }
+  };
+
   // A code typed by the public rooms: the room's game is looked up, then joined with the player's
   // game with the same hash (or the popup says there is none).
   const joinCode = async (code: string) => {
@@ -146,10 +164,30 @@ export const ModsTab = React.memo(function ModsTab() {
       const result = await modsService.joinByCode({ uid, code });
       if (result.outcome === "no-game") {
         setMissing({ name: result.name, hash: result.hash });
+      } else if (result.outcome === "sd-card") {
+        setSdAsk({ buildId: result.buildId, code: result.code, check: result.check });
       }
     } catch (err) {
       setError(errorText(err));
     }
+  };
+
+  const sdAskBody = (check: ModSdCardCheck) => {
+    if (check.kind !== "differs") {
+      return Messages.sdAskBodyUnknown();
+    }
+    const mb = Messages.megabytes(check.bytes);
+    return check.filesKnown ? Messages.sdAskBody(mb, check.files) : Messages.sdAskBodyNoFiles(mb);
+  };
+
+  const onSdAnswer = (choice: "yes" | "overwrite" | "no") => {
+    const ask = sdAsk;
+    setSdAsk(null);
+    const build = ask && state?.builds.find((b) => b.id === ask.buildId);
+    if (!ask || !build || choice === "no") {
+      return;
+    }
+    void start(build, () => joinRoom(ask.buildId, ask.code, choice));
   };
 
   const onAdd = async (input: ModBuildInput) => {
@@ -274,8 +312,10 @@ export const ModsTab = React.memo(function ModsTab() {
         onEditBuild={(build) => openEdit(build)}
         onAddFolder={() => void onAddFolder()}
         onRemoveBuild={(build) => void modsService.removeBuild(build.id).catch(showError)}
-        onHost={(build, isPublic) => void start(build, () => modsService.host({ buildId: build.id, public: isPublic }))}
-        onJoin={(build, code) => void start(build, () => modsService.join({ buildId: build.id, code }))}
+        onHost={(build, isPublic) =>
+          void start(build, () => modsService.host({ buildId: build.id, public: isPublic, uid: uid ?? undefined }))
+        }
+        onJoin={(build, code) => void start(build, () => joinRoom(build.id, code))}
         onJoinCode={(code) => void joinCode(code)}
         onMissingGame={(name, hash) => setMissing({ name, hash })}
         // The room's part that differs: the game's edit window, that field pulsing gold.
@@ -320,6 +360,13 @@ export const ModsTab = React.memo(function ModsTab() {
           </Button>
         </DialogActions>
       </Dialog>
+      <SdCardDialog
+        open={sdAsk !== null}
+        body={sdAsk ? sdAskBody(sdAsk.check) : ""}
+        names={sdAsk?.check.kind === "differs" ? sdAsk.check.names : []}
+        files={sdAsk?.check.kind === "differs" ? sdAsk.check.files : 0}
+        onAnswer={onSdAnswer}
+      />
       <Dialog open={missing !== null} onClose={() => setMissing(null)} maxWidth="xs" fullWidth={true}>
         <DialogTitle>{Messages.noMatchingGameTitle()}</DialogTitle>
         <DialogContent>{missing && Messages.noMatchingGame(missing.name, missing.hash)}</DialogContent>

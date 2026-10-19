@@ -1208,3 +1208,96 @@ TEST_F(MachineSDCardTest, FilesAreListedWithTheirChunks)
   WriteFileList(bad, control);
   EXPECT_FALSE(ReadFileList(control, chunks)) << "a control character in a path";
 }
+
+TEST_F(MachineSDCardTest, ListingRoundTripsAndKeepsItsRoot)
+{
+  // A host's listing as its launcher puts it on the server: the manifest comes back with the same
+  // root (so the server and the joiner check it), and the files with their runs.
+  const std::vector<u8> host = PatternCard(12, 4);
+  WriteFile(Path("host.raw"), host);
+  const auto manifest = BuildManifest(Path("host.raw"));
+  ASSERT_TRUE(manifest);
+  const std::vector<CardFile> files{{"rex_/pf/a.pac", 3 * CHUNK_SIZE, {{1, 3}}},
+                                    {"rex_/pf/sound/b.brstm", 100, {{9, 1}}}};
+  const std::vector<u8> bytes = EncodeCardListing(*manifest, files);
+  const auto listing = DecodeCardListing(bytes);
+  ASSERT_TRUE(listing);
+  EXPECT_EQ(ManifestRoot(listing->manifest), ManifestRoot(*manifest));
+  ASSERT_EQ(listing->files.size(), 2u);
+  EXPECT_EQ(listing->files[1].path, "rex_/pf/sound/b.brstm");
+  EXPECT_EQ(listing->files[0].runs, files[0].runs);
+
+  // The canonical manifest is the part the server hashes: its bytes are the root's input.
+  const std::vector<u8> canon = CanonicalManifest(*manifest);
+  ASSERT_GE(bytes.size(), 4 + canon.size());
+  EXPECT_TRUE(std::equal(canon.begin(), canon.end(), bytes.begin() + 4));
+
+  // No file list (a card that is not FAT): still a listing, with no files.
+  const auto bare = DecodeCardListing(EncodeCardListing(*manifest, {}));
+  ASSERT_TRUE(bare);
+  EXPECT_TRUE(bare->files.empty());
+}
+
+TEST_F(MachineSDCardTest, HostileListingsAreRefused)
+{
+  const std::vector<u8> host = PatternCard(6, 5);
+  WriteFile(Path("host.raw"), host);
+  const auto manifest = BuildManifest(Path("host.raw"));
+  ASSERT_TRUE(manifest);
+  const std::vector<CardFile> files{{"a.bin", CHUNK_SIZE, {{2, 1}}}};
+  const std::vector<u8> good = EncodeCardListing(*manifest, files);
+
+  EXPECT_FALSE(DecodeCardListing({}));
+  std::vector<u8> long_canon = good;
+  long_canon[0] = 0xFF;
+  long_canon[1] = 0xFF;
+  long_canon[2] = 0xFF;
+  long_canon[3] = 0x7F;
+  EXPECT_FALSE(DecodeCardListing(long_canon)) << "a manifest longer than the listing";
+  std::vector<u8> cut(good.begin(), good.end() - 3);
+  EXPECT_FALSE(DecodeCardListing(cut)) << "a file list cut short";
+  std::vector<u8> bad_kind = good;
+  bad_kind[4 + 8] = 7;
+  EXPECT_FALSE(DecodeCardListing(bad_kind)) << "an unknown chunk kind";
+  const std::vector<CardFile> past{{"a.bin", CHUNK_SIZE, {{5, 2}}}};
+  EXPECT_FALSE(DecodeCardListing(EncodeCardListing(*manifest, past))) << "a run past the card";
+  std::vector<u8> huge = good;
+  for (int i = 0; i < 8; ++i)
+    huge[4 + i] = 0xFF;
+  EXPECT_FALSE(DecodeCardListing(huge)) << "a card over MAX_CARD_SIZE";
+}
+
+TEST_F(MachineSDCardTest, ComparingWithAListingFindsWhatAGuestFetches)
+{
+  // The launcher's question before Dolphin starts (sdcompare) must name exactly what the session
+  // then downloads: the guest card's own rule, from the same hashes.
+  std::vector<u8> host = PatternCard(40, 6);
+  std::memset(&host[10 * CHUNK_SIZE], 0, CHUNK_SIZE);  // all zero: never fetched
+  std::vector<u8> guest = host;
+  guest[3 * CHUNK_SIZE + 9] ^= 0x01;
+  guest[21 * CHUNK_SIZE] ^= 0x80;
+  guest.resize(35 * CHUNK_SIZE + 100);  // shorter: chunk 35 is cut, 36-39 are not there
+  WriteFile(Path("host.raw"), host);
+  WriteFile(Path("guest.raw"), guest);
+  auto manifest = std::make_shared<const Manifest>(*BuildManifest(Path("host.raw")));
+  const auto own = HashImage(Path("guest.raw"));
+  ASSERT_TRUE(own);
+
+  const CardDifference diff = CompareWithManifest(*manifest, *own);
+  EXPECT_EQ(diff.chunks, std::vector<u32>({3, 21, 35, 36, 37, 38, 39}));
+  EXPECT_EQ(diff.bytes, 7 * CHUNK_SIZE);
+
+  auto fake = std::make_shared<FakeHost>();
+  fake->data = host;
+  fake->manifest = manifest;
+  auto card = SessionCard::CreateGuestCard(Path("guest.raw"), manifest, Path("cache"), fake, &*own);
+  fake->card = card;
+  EXPECT_EQ(card->MissingChunks(), diff.chunks);
+  EXPECT_EQ(card->MissingBytes(), diff.bytes);
+  card->Detach();
+
+  // No card of its own: every chunk with data.
+  const CardDifference none = CompareWithManifest(*manifest, ImageHashes{});
+  EXPECT_EQ(none.chunks.size(), 39u);
+  EXPECT_EQ(none.bytes, 39 * CHUNK_SIZE);
+}

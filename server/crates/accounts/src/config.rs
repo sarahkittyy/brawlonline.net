@@ -245,6 +245,16 @@ pub struct Config {
     /// and its zip is refused (507) until `admin bug clear` / `admin bug delete` makes room.
     #[arg(long, env = "BUG_REPORTS_MAX_TOTAL_BYTES", default_value_t = 4 * 1024 * 1024 * 1024)]
     pub bug_reports_max_total_bytes: u64,
+
+    /// The largest SD card listing one upload may send (bytes; default 64 MiB): an 8 GB card's is
+    /// about 3 MB, a 64 GB card's manifest alone about 17 MB.
+    #[arg(long, env = "SD_LISTING_MAX_BYTES", default_value_t = 64 * 1024 * 1024)]
+    pub sd_listing_max_bytes: u64,
+
+    /// All SD card listings together (bytes; default 4 GiB). Past it new cards' listings are
+    /// refused (507) until unused ones (90 days) are deleted; joiners then ask without the sizes.
+    #[arg(long, env = "SD_LISTINGS_MAX_TOTAL_BYTES", default_value_t = 4 * 1024 * 1024 * 1024)]
+    pub sd_listings_max_total_bytes: u64,
 }
 
 impl Config {
@@ -282,6 +292,8 @@ impl Config {
             bug_reports_dir: std::env::temp_dir().join("pp-accounts-test-bug-reports"),
             bug_report_max_logs_bytes: 32 * 1024 * 1024,
             bug_reports_max_total_bytes: 4 * 1024 * 1024 * 1024,
+            sd_listing_max_bytes: 64 * 1024 * 1024,
+            sd_listings_max_total_bytes: 4 * 1024 * 1024 * 1024,
         }
     }
 }

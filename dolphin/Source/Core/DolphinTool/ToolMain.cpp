@@ -52,6 +52,8 @@ int main(int argc, char* argv[])
     return DolphinTool::Extract(args);
   else if (command_str == "sdhash")
     return DolphinTool::SDHashCommand(args);
+  else if (command_str == "sdcompare")
+    return DolphinTool::SDCompareCommand(args);
   PrintUsage();
   return EXIT_FAILURE;
 }

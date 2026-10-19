@@ -19,6 +19,8 @@ import { discLabel, matchRoom } from "./room_match";
 import { importSave, saveStoreDir, summarizeSave, titleDataDir } from "./save_import";
 import type { SdHashFn } from "./sd_hash";
 import { sdCardRoot } from "./sd_hash";
+import type { SdListingStore } from "./sd_listing";
+import { checkRoomCard, compareSdListing, noListings, readSdListing } from "./sd_listing";
 import type {
   DolphinControllers,
   ModBuild,
@@ -30,11 +32,13 @@ import type {
   ModSaveImportResult,
   ModSaveInfo,
   ModsController,
+  ModSdCardCheck,
   ModsEvent,
   ModsHostOptions,
   ModsJoinByCodeOptions,
   ModsJoinByCodeResult,
   ModsJoinOptions,
+  ModsJoinResult,
   ModsState,
 } from "./types";
 
@@ -126,6 +130,8 @@ export class ModsManager {
   private controllers: DolphinControllers = { gc: [], wiimote: [] };
   private lastError: string | null = null;
   private controllersRead = false;
+  /** The SD card listings this launcher put on the server (by root), not sent again. */
+  private readonly listingsSent = new Set<string>();
 
   /** `toolPath` resolves DolphinTool (the bundled Dolphin's, once it is installed). */
   constructor(
@@ -136,6 +142,8 @@ export class ModsManager {
     private readonly lookupRoom: (uid: string, code: string) => Promise<PublicModRoom | null> = async () => null,
     /** An SD card's root (DolphinTool sdhash), its chunks' hashes kept in the netplay User folder. */
     private readonly sdHash: SdHashFn = sdCardRoot,
+    /** Room cards' listings on the accounts server (sd_listing.ts). */
+    private readonly listings: SdListingStore = noListings,
   ) {}
 
   async joinByCode(options: ModsJoinByCodeOptions): Promise<ModsJoinByCodeResult> {
@@ -153,8 +161,7 @@ export class ModsManager {
     if (!build) {
       return { outcome: "no-game", name: room.build.name, hash: room.build.hash };
     }
-    await this.join({ buildId: build.id, code });
-    return { outcome: "joining" };
+    return await this.join({ buildId: build.id, code, uid: options.uid });
   }
 
   onEvent(listener: (event: ModsEvent) => void): () => void {
@@ -364,19 +371,85 @@ export class ModsManager {
       public: options.public,
       controller: await this.launchController(),
     });
+    // While Dolphin boots and opens the room: the card's listing, for joiners whose card differs.
+    if (options.uid && build.sdPath) {
+      void this.sendListing(options.uid, build).catch((err) =>
+        log.warn(`SD card listing of ${build.name} not sent: ${err}`),
+      );
+    }
   }
 
-  async join(options: ModsJoinOptions): Promise<void> {
+  /** Puts the build's SD card listing on the server, once per card per run of the launcher. */
+  private async sendListing(uid: string, build: ModBuild): Promise<void> {
+    const root = build.parts?.sdCard;
+    if (!root || this.listingsSent.has(root) || !build.sdPath) {
+      return;
+    }
+    const started = Date.now();
+    const read = await readSdListing(await this.toolPath(), build.sdPath, this.dolphin.netplayUserFolder());
+    if (read.root !== root) {
+      // The card changed since it was hashed: the room shows the old root, so its listing is no use.
+      log.warn(
+        `SD card of ${build.name} changed since it was checked (${root.slice(0, 12)} -> ${read.root.slice(0, 12)})`,
+      );
+      return;
+    }
+    await this.listings.upload(uid, root, read.listing);
+    this.listingsSent.add(root);
+    log.info(
+      `SD card listing of ${build.name} (${root.slice(0, 12)}, ${(read.listing.byteLength / 1048576).toFixed(
+        1,
+      )} MB) sent in ${((Date.now() - started) / 1000).toFixed(1)} s`,
+    );
+  }
+
+  /** What joining room `code` with `build` would download of the room's SD card. */
+  private async checkCard(build: ModBuild, code: string, uid: string | undefined): Promise<ModSdCardCheck> {
+    if (!build.sdPath || !uid) {
+      return { kind: "same" };
+    }
+    const room = await this.lookupRoom(uid, code);
+    if (!room) {
+      throw new Error("Room not found.");
+    }
+    const roomRoot = room.build.sd ?? "";
+    const toolPath = await this.toolPath();
+    const userDir = this.dolphin.netplayUserFolder();
+    const sdPath = build.sdPath;
+    return await checkRoomCard({
+      ownRoot: build.parts?.sdCard ?? null,
+      roomRoot,
+      fetchListing: () => this.listings.fetch(uid, roomRoot),
+      compare: (listing) => compareSdListing(toolPath, sdPath, userDir, listing, roomRoot),
+      log: (message) => log.warn(message),
+    });
+  }
+
+  async join(options: ModsJoinOptions): Promise<ModsJoinResult> {
     const code = normalizeRoomCode(options.code);
     if (!code) {
       throw new Error("Enter the room's code.");
     }
     const build = await this.hashBuild(options.buildId);
+    // A card that differs from the room's: the player says yes before Dolphin starts.
+    if (!options.sdSync) {
+      const check = await this.checkCard(build, code, options.uid);
+      if (check.kind !== "same") {
+        log.info(
+          `room ${code}'s SD card differs from ${build.name}'s: ${
+            check.kind === "differs" ? `${check.bytes} bytes, ${check.files} files` : "no listing"
+          }`,
+        );
+        return { outcome: "sd-card", buildId: build.id, code, check };
+      }
+    }
     await this.launch(build, {
       join: code,
       build: roomBuild(build),
       controller: await this.launchController(),
+      ...(options.sdSync ? { sd_sync: options.sdSync } : {}),
     });
+    return { outcome: "joining" };
   }
 
   async request(request: ModRoomRequest): Promise<void> {

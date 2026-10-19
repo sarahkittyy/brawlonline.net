@@ -56,6 +56,25 @@ export default function setupModsIpc({
       }
       throw new Error(result.error.message);
     },
+    undefined,
+    {
+      upload: async (uid, root, listing) => {
+        const result = await accountsManager.uploadSdListing(uid, root, listing);
+        if (!result.ok) {
+          throw new Error(result.error.message);
+        }
+      },
+      fetch: async (uid, root) => {
+        const result = await accountsManager.sdListing(uid, root);
+        if (result.ok) {
+          return result.value;
+        }
+        if (result.error.status === 404) {
+          return null;
+        }
+        throw new Error(result.error.message);
+      },
+    },
   );
   mods.onEvent((event) => {
     void ipc_modsEvent.main!.trigger(event).catch(log.error);
@@ -74,10 +93,7 @@ export default function setupModsIpc({
     await mods.host(options);
     return { success: true };
   });
-  ipc_modsJoin.main!.handle(async (options) => {
-    await mods.join(options);
-    return { success: true };
-  });
+  ipc_modsJoin.main!.handle(async (options) => await mods.join(options));
   ipc_modsJoinByCode.main!.handle(async (options) => await mods.joinByCode(options));
   ipc_modsRequest.main!.handle(async ({ request }) => {
     await mods.request(request);

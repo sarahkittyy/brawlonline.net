@@ -68,6 +68,14 @@ pub const RULESET_EDIT_WINDOWS: [Window; 1] = [Window::new(120, MINUTE)];
 /// one address can fill (with `BUG_REPORTS_MAX_TOTAL_BYTES` as the cap for everyone).
 pub const BUG_REPORT_IP_WINDOWS: [Window; 2] = [Window::new(5, HOUR), Window::new(20, DAY)];
 
+/// SD card listings a host's launcher uploads (`PUT /v1/sd-cards/<root>/listing`, at each Host of
+/// a game with a card) per account: 30 per hour and 100 per day.
+pub const SD_LISTING_UPLOAD_WINDOWS: [Window; 2] = [Window::new(30, HOUR), Window::new(100, DAY)];
+
+/// SD card listings a joiner's launcher fetches (`GET /v1/sd-cards/<root>/listing`, at each join
+/// whose card differs) per account: 60 per hour and 300 per day.
+pub const SD_LISTING_FETCH_WINDOWS: [Window; 2] = [Window::new(60, HOUR), Window::new(300, DAY)];
+
 #[derive(Debug)]
 pub struct RateLimiter<K> {
     windows: Vec<Window>,

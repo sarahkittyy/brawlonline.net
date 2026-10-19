@@ -14,6 +14,7 @@ import type {
   ModsJoinByCodeOptions,
   ModsJoinByCodeResult,
   ModsJoinOptions,
+  ModsJoinResult,
   ModsState,
 } from "./types";
 
@@ -39,7 +40,7 @@ export const ipc_modsInspectFolder = makeEndpoint.main(
 
 export const ipc_modsHost = makeEndpoint.main("mods_host", <ModsHostOptions>_, <SuccessPayload>_);
 
-export const ipc_modsJoin = makeEndpoint.main("mods_join", <ModsJoinOptions>_, <SuccessPayload>_);
+export const ipc_modsJoin = makeEndpoint.main("mods_join", <ModsJoinOptions>_, <ModsJoinResult>_);
 
 export const ipc_modsJoinByCode = makeEndpoint.main(
   "mods_joinByCode",

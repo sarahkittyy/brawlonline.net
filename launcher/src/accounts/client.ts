@@ -181,6 +181,25 @@ export class AccountsHttpClient {
     });
   }
 
+  /** An Other Games room's SD card listing (accounts `sd_cards.rs`): the host's launcher, when it
+   * hosts a game with a card, so joiners see what differs before Dolphin starts. */
+  async uploadSdListing(token: string, root: string, listing: Uint8Array<ArrayBuffer>): Promise<void> {
+    await this._request("PUT", `/v1/sd-cards/${encodeURIComponent(root)}/listing`, {
+      token,
+      raw: { data: listing, contentType: "application/octet-stream" },
+      timeoutMs: UPLOAD_TIMEOUT_MS,
+    });
+  }
+
+  /** The listing of the room card `root` (a 404 `AccountsHttpError` when the server has none). */
+  sdListing(token: string, root: string): Promise<Uint8Array> {
+    return this._request("GET", `/v1/sd-cards/${encodeURIComponent(root)}/listing`, {
+      token,
+      binary: true,
+      timeoutMs: UPLOAD_TIMEOUT_MS,
+    });
+  }
+
   private async _request<T>(
     method: "GET" | "POST" | "PUT" | "DELETE",
     path: string,
@@ -190,6 +209,8 @@ export class AccountsHttpClient {
       raw?: { data: Uint8Array<ArrayBuffer>; contentType: string };
       headers?: Record<string, string>;
       timeoutMs?: number;
+      /** The answer's bytes (a `Uint8Array`) instead of its JSON. */
+      binary?: boolean;
     },
   ): Promise<T> {
     const headers: Record<string, string> = {
@@ -222,6 +243,9 @@ export class AccountsHttpClient {
       throw new AccountsHttpError("network", `Could not reach the account server (${reason}).`);
     }
 
+    if (opts.binary && res.ok) {
+      return new Uint8Array(await res.arrayBuffer()) as T;
+    }
     const text = await res.text();
     if (!res.ok) {
       throw parseError(res.status, text, parseRetryAfter(res.headers.get("retry-after")));

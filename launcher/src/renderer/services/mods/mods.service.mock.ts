@@ -11,6 +11,7 @@ import type {
   ModsEvent,
   ModsHostOptions,
   ModsJoinOptions,
+  ModsJoinResult,
   ModsService,
   ModsState,
 } from "@dolphin/mods/types";
@@ -186,9 +187,26 @@ class MockModsClient implements ModsService {
     this.open(build, "KFQB", true, this.controller);
   }
 
-  async join(options: ModsJoinOptions) {
+  async join(options: ModsJoinOptions): Promise<ModsJoinResult> {
     const build = await this.hashBuild(options.buildId);
-    this.open(build, options.code.toUpperCase(), false, this.controller);
+    const code = options.code.toUpperCase();
+    // "SDSD": a room whose SD card differs, asked before joining.
+    if (code === "SDSD" && !options.sdSync) {
+      return {
+        outcome: "sd-card",
+        buildId: build.id,
+        code,
+        check: {
+          kind: "differs",
+          bytes: 280 * 1024 * 1024,
+          files: 412,
+          names: ["rex_/pf/sound/strm/battlefield.brstm", "rex_/pf/fighter/hero/FitHero.pac"],
+          filesKnown: true,
+        },
+      };
+    }
+    this.open(build, code, false, this.controller);
+    return { outcome: "joining" };
   }
 
   async joinByCode(options: { uid: string; code: string }) {
@@ -196,8 +214,7 @@ class MockModsClient implements ModsService {
     if (!build || options.code.toUpperCase() === "NOPE") {
       return { outcome: "no-game" as const, name: "Some Mod", hash: "9".repeat(64) };
     }
-    await this.join({ buildId: build.id, code: options.code });
-    return { outcome: "joining" as const };
+    return await this.join({ buildId: build.id, code: options.code });
   }
 
   async request(request: ModRoomRequest) {

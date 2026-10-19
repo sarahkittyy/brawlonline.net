@@ -16,6 +16,7 @@ pub mod password;
 pub mod ranked;
 pub mod rooms;
 pub mod rulesets;
+pub mod sd_cards;
 pub mod social;
 pub mod store;
 
@@ -28,7 +29,7 @@ use common::playkey::PlayKeySecret;
 use common::ratelimit::{
     RateLimiter, Window, AUTH_WINDOWS, BUG_REPORT_IP_WINDOWS, DAY, HISTORY_WINDOWS, LEADERBOARD_IP_WINDOWS,
     MAIL_RECIPIENT_WINDOWS, ROOMS_WINDOWS, RULESET_EDIT_WINDOWS, RULESET_LOOKUP_IP_WINDOWS, RULESET_PUBLISH_WINDOWS,
-    SIGNUP_IP_WINDOWS,
+    SD_LISTING_FETCH_WINDOWS, SD_LISTING_UPLOAD_WINDOWS, SIGNUP_IP_WINDOWS,
 };
 use sqlx::postgres::PgPoolOptions;
 use sqlx::PgPool;
@@ -101,6 +102,10 @@ pub struct Limits {
     pub ruleset_edit: RateLimiter<uuid::Uuid>,
     /// Bug reports per client IP (IPv6 per /64): [`BUG_REPORT_IP_WINDOWS`].
     pub bug_report_ip: RateLimiter<IpAddr>,
+    /// SD card listings uploaded per account: [`SD_LISTING_UPLOAD_WINDOWS`].
+    pub sd_listing_upload: RateLimiter<uuid::Uuid>,
+    /// SD card listings fetched per account: [`SD_LISTING_FETCH_WINDOWS`].
+    pub sd_listing_fetch: RateLimiter<uuid::Uuid>,
 }
 
 impl Limits {
@@ -125,6 +130,8 @@ impl Limits {
             ruleset_lookup_ip: RateLimiter::new(&RULESET_LOOKUP_IP_WINDOWS),
             ruleset_edit: RateLimiter::new(&RULESET_EDIT_WINDOWS),
             bug_report_ip: RateLimiter::new(&BUG_REPORT_IP_WINDOWS),
+            sd_listing_upload: RateLimiter::new(&SD_LISTING_UPLOAD_WINDOWS),
+            sd_listing_fetch: RateLimiter::new(&SD_LISTING_FETCH_WINDOWS),
         }
     }
 
@@ -144,6 +151,11 @@ pub fn router(state: AppState) -> Router {
     let uploads = Router::new()
         .route("/v1/bug-reports/{id}/logs", put(bug_reports::upload_logs))
         .layer(RequestBodyLimitLayer::new(logs_limit));
+    // An SD card listing (a few MB for an 8 GB card): its own limit, checked in the upload too.
+    let listing_limit = usize::try_from(state.cfg.sd_listing_max_bytes).unwrap_or(usize::MAX);
+    let listings = Router::new()
+        .route("/v1/sd-cards/{root}/listing", get(sd_cards::download).put(sd_cards::upload))
+        .layer(RequestBodyLimitLayer::new(listing_limit));
     Router::new()
         .route("/v1/auth/signup", post(api::signup))
         .route("/v1/auth/login", post(api::login))
@@ -192,6 +204,7 @@ pub fn router(state: AppState) -> Router {
         .route("/v1/bug-reports", post(bug_reports::create))
         .layer(RequestBodyLimitLayer::new(16 * 1024))
         .merge(uploads)
+        .merge(listings)
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

@@ -11,6 +11,7 @@ dependencies = [
  "async-trait",
  "axum",
  "base64 0.22.1",
+ "blake2",
  "chrono",
  "clap",
  "common",
@@ -629,6 +630,7 @@ version = "0.1.0"
 dependencies = [
  "accounts",
  "anyhow",
+ "blake2",
  "chrono",
  "common",
  "mm",

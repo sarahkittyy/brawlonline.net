@@ -47,7 +47,8 @@ const modsApi: ModsService = {
     await ipc_modsHost.renderer!.trigger(options);
   },
   async join(options) {
-    await ipc_modsJoin.renderer!.trigger(options);
+    const { result } = await ipc_modsJoin.renderer!.trigger(options);
+    return result;
   },
   async joinByCode(options) {
     const { result } = await ipc_modsJoinByCode.renderer!.trigger(options);

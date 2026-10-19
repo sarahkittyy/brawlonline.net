@@ -154,8 +154,13 @@ export const ModsMessages = {
   fixPartTooltip: () => "Click to change it in your game.",
   noJoinDisc: () => "Wrong disc",
 
-  // Joining with an SD card that differs (Dolphin's sd_sync).
+  // Joining with an SD card that differs: asked before Dolphin starts (sd_listing.ts), or by
+  // Dolphin (its sd_sync) for a card that only turned out different there.
   sdSyncTitle: () => "Your SD card is different",
+  sdAskBody: (mb: string, files: number) =>
+    `Your SD card is ${mb} different from the host's (${files} ${files === 1 ? "file" : "files"}). Download it?`,
+  sdAskBodyNoFiles: (mb: string) => `Your SD card is ${mb} different from the host's. Download it?`,
+  sdAskBodyUnknown: () => "Your SD card is different from the host's. Download theirs?",
   sdSyncBody: (mb: string, files: number, eta: string) =>
     `Your SD card is ${mb} different from the host's (${files} ${
       files === 1 ? "file" : "files"

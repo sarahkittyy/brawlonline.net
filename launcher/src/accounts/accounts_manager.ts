@@ -110,6 +110,16 @@ export class AccountsManager {
     return this._withSession(uid, (token) => this.client.modRoom(token, code));
   }
 
+  /** An Other Games room's SD card listing, put on the server by its host (dolphin/mods/sd_listing.ts). */
+  uploadSdListing(uid: string, root: string, listing: Uint8Array<ArrayBuffer>): Promise<AccountsResult<void>> {
+    return this._withSession(uid, (token) => this.client.uploadSdListing(token, root, listing));
+  }
+
+  /** A room card's listing; an error with status 404 when the server has none. */
+  sdListing(uid: string, root: string): Promise<AccountsResult<Uint8Array>> {
+    return this._withSession(uid, (token) => this.client.sdListing(token, root));
+  }
+
   ruleset(code: string): Promise<AccountsResult<RulesetView>> {
     return wrap(() => this.client.ruleset(code));
   }

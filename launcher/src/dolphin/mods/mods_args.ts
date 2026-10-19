@@ -2,13 +2,16 @@ import type { TestModeOptions } from "@common/test_mode";
 import path from "path";
 
 import { LOGGING_CONFIG_ARGS } from "../netplay_args";
-import type { ModBuild, ModRoomBuild, ModsController } from "./types";
+import type { ModBuild, ModRoomBuild, ModsController, ModsSdChoice } from "./types";
 
 /** What Dolphin's `--mods-room` takes (the JSON of PPR_MODS_ROOM, docs/design/brawl-mods.md §3),
  * the build with its parts for the room (§6.5). */
 export type ModsRoomArg =
   | { host: true; build: ModRoomBuild; public: boolean; controller: ModsController }
-  | { join: string; build: ModRoomBuild; controller: ModsController };
+  /** `sd_sync`: the player's answer to the SD card question, asked before Dolphin started (Dolphin
+   * asks through the room's status when it is left out: a card that only turned out different
+   * there). */
+  | { join: string; build: ModRoomBuild; controller: ModsController; sd_sync?: ModsSdChoice };
 
 export type ModsArgsInput = {
   /** Arguments selecting the User folder (`-u <User>`), shared with Play (the login, the settings). */
