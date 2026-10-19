@@ -296,6 +296,7 @@ admin user ban IDENT [--days N] [--reason TEXT]  # permanent without --days; end
 admin user unban IDENT
 admin user verify-email IDENT
 admin user rotate-play-key IDENT
+admin user rename IDENT NAME                   # the launcher's name rule; others see it once the player reconnects
 admin user set-code IDENT CODE
 admin user delete IDENT --yes                  # with its sessions and email tokens; the connect code is free again at once
 admin chat-reports [--limit N]                 # unhandled chat reports, newest first: who, group, reason, verified/total, the texts

@@ -139,6 +139,12 @@ enum UserCmd {
     RotatePlayKey {
         ident: String,
     },
+    /// Change the display name, with the launcher's rule (at most 15 characters the game's font
+    /// draws). Others see it once the player reconnects; the player can still rename themselves.
+    Rename {
+        ident: String,
+        name: String,
+    },
     /// Change the connect code (the one admin-approved change).
     SetCode {
         ident: String,
@@ -430,6 +436,20 @@ async fn main() -> anyhow::Result<()> {
             store::audit(&pool, &actor, "user.rotate_play_key", Some(&u.uid.to_string()), serde_json::json!({}))
                 .await?;
             println!("play key rotated for {}", u.email);
+        }
+        Cmd::User(UserCmd::Rename { ident, name }) => {
+            let u = find(&pool, &ident).await?;
+            common::codes::validate_display_name(&name).map_err(|e| anyhow::anyhow!("{name:?}: {e}"))?;
+            store::rename(&pool, u.uid, &name).await?;
+            store::audit(
+                &pool,
+                &actor,
+                "user.rename",
+                Some(&u.uid.to_string()),
+                serde_json::json!({"from": u.display_name, "to": name}),
+            )
+            .await?;
+            println!("{} renamed from {:?} to {name:?}", u.email, u.display_name);
         }
         Cmd::User(UserCmd::SetCode { ident, code }) => {
             let u = find(&pool, &ident).await?;
