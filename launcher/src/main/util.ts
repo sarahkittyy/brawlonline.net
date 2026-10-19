@@ -28,9 +28,10 @@ export const getAssetPath = (...paths: string[]): string => {
 };
 
 // The window icon on Windows and Linux (macOS uses the bundle's icon.icns). Undefined where the
-// assets aren't next to the build (an unpackaged production build).
+// assets aren't next to the build (an unpackaged production build). Windows gets the .ico, whose
+// title-bar and taskbar sizes are the ball alone; the 1024 px png scaled down keeps the white glow.
 export const getWindowIcon = (): string | undefined => {
-  const icon = getAssetPath("icon.png");
+  const icon = getAssetPath(process.platform === "win32" ? "icon.ico" : "icon.png");
   return existsSync(icon) ? icon : undefined;
 };
 
