@@ -2,7 +2,7 @@ import type { PublicModRoom } from "@accounts/types";
 import type { SettingsManager } from "@settings/settings_manager";
 import { randomUUID } from "crypto";
 import electronLog from "electron-log";
-import { stat } from "fs/promises";
+import { mkdir, stat } from "fs/promises";
 import path from "path";
 import { throttleProgress } from "utils/copy_file";
 
@@ -16,6 +16,7 @@ import { knownDiscName, knownModName } from "./known_builds";
 import type { ModsRoomArg } from "./mods_args";
 import { readModRoomStatus, writeModRoomRequest } from "./room_files";
 import { discLabel, matchRoom } from "./room_match";
+import { importSave, saveStoreDir, summarizeSave, titleDataDir } from "./save_import";
 import type { SdHashFn } from "./sd_hash";
 import { sdCardRoot } from "./sd_hash";
 import type {
@@ -26,6 +27,8 @@ import type {
   ModRoomBuild,
   ModRoomRequest,
   ModRoomStatus,
+  ModSaveImportResult,
+  ModSaveInfo,
   ModsController,
   ModsEvent,
   ModsHostOptions,
@@ -247,6 +250,7 @@ export class ModsManager {
       gameId: info.gameId,
       revision: info.revision,
       platform: info.platform,
+      titleId: info.titleId,
       hash: null,
       hashKey: null,
     };
@@ -310,6 +314,7 @@ export class ModsManager {
       next.revision = info.revision;
       next.gameTitle = info.title;
       next.platform = info.platform;
+      next.titleId = info.titleId;
     }
     // The name after the files: an empty one (or an automatic one kept) follows the new files.
     if (input.name !== undefined) {
@@ -379,6 +384,64 @@ export class ModsManager {
       throw new Error("No Brawl Mods room is open.");
     }
     await writeModRoomRequest(this.dolphin.netplayOnlineDir(), request);
+  }
+
+  /** The game's save in rooms: null for a GameCube game (memory cards are not kept) or a game
+   * not hashed yet (its store is named by its hash). */
+  async saveInfo(id: string): Promise<ModSaveInfo | null> {
+    const build = this.findBuild(id);
+    if (build.platform === "gamecube" || !build.hash) {
+      return null;
+    }
+    return summarizeSave(await this.saveDataDir(id));
+  }
+
+  /** The save's folder, made if it is not there yet (an empty one plays as no save). */
+  async saveFolder(id: string): Promise<string> {
+    const folder = await this.saveDataDir(id);
+    await mkdir(folder, { recursive: true });
+    return folder;
+  }
+
+  async importSave(id: string, source: string): Promise<ModSaveImportResult> {
+    // A room's game writes its save back when it closes, over an import made meanwhile.
+    if (this.running) {
+      throw new Error("Close the room first: its game saves when it closes, and would undo the import.");
+    }
+    const folder = await this.saveDataDir(id);
+    const build = this.findBuild(id);
+    const result = await importSave({
+      source,
+      titleId: build.titleId!,
+      userFolder: this.dolphin.netplayUserFolder(),
+      buildHash: build.hash!,
+    });
+    log.info(
+      `Imported a save of ${build.name} (${result.save.files} files) into ${folder}` +
+        (result.backup ? `; the one before is in ${result.backup}` : ""),
+    );
+    return result;
+  }
+
+  /** The build's save folder in its store (`title/<hi>/<lo>/data`): its title ID read from the
+   * disc's header for a game added before the launcher kept it. */
+  private async saveDataDir(id: string): Promise<string> {
+    let build = this.findBuild(id);
+    if (build.platform === "gamecube") {
+      throw new Error("GameCube games keep their saves on memory cards, which rooms don't keep.");
+    }
+    if (!build.hash) {
+      throw new Error(`${build.name} is still being checked. Try again when that is done.`);
+    }
+    if (!build.titleId) {
+      const info = await readDiscInfo(await this.toolPath(), build.discPath);
+      if (!info.titleId) {
+        throw new Error("GameCube games keep their saves on memory cards, which rooms don't keep.");
+      }
+      build = { ...this.findBuild(id), titleId: info.titleId };
+      await this.saveBuilds(this.builds().map((b) => (b.id === id ? build : b)));
+    }
+    return titleDataDir(saveStoreDir(this.dolphin.netplayUserFolder(), build.hash!), build.titleId!);
   }
 
   /** The controller to start with, from Dolphin's settings as they are now. */

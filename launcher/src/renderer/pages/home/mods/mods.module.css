@@ -639,3 +639,23 @@
 .fixField > div:first-child {
   color: #f5c542;
 }
+
+/* The edit window's save data (add_build_dialog.tsx). */
+.saveLine {
+  margin-top: 4px;
+  color: var(--text-secondary);
+  font-size: 14px;
+}
+
+.saveHelp {
+  margin-top: 2px;
+  color: var(--text-dim);
+  font-size: 12px;
+}
+
+.saveButtons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 8px;
+}

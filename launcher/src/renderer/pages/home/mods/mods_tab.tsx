@@ -1,10 +1,10 @@
-import type { ModBuild, ModBuildInput, ModRoomRequest, ModsState } from "@dolphin/mods/types";
+import type { ModBuild, ModBuildInput, ModRoomRequest, ModSaveInfo, ModsState } from "@dolphin/mods/types";
 import Button from "@mui/material/Button";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 
 import { usePlayDialogs } from "@/lib/dolphin/use_play";
 import { useAccount } from "@/lib/hooks/use_account";
@@ -14,8 +14,8 @@ import { useToasts } from "@/lib/hooks/use_toasts";
 import { useRoomList } from "@/lib/social/use_room_list";
 import { useServices } from "@/services";
 
-import type { AddBuildInitial } from "./add_build_dialog";
-import { AddBuildDialog } from "./add_build_dialog";
+import type { AddBuildInitial, SaveSectionProps } from "./add_build_dialog";
+import { AddBuildDialog, formatSaveSummary } from "./add_build_dialog";
 import { ModsMessages as Messages } from "./mods.messages";
 import type { ModsPublicRooms } from "./mods_view";
 import { ModsView } from "./mods_view";
@@ -47,6 +47,12 @@ export const ModsTab = React.memo(function ModsTab() {
   const [adding, setAdding] = useState<AddBuildInitial | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const { uid, query } = useRoomList();
+  // The edited Wii game's save in rooms (null: no save section), and a save picked to replace it.
+  const [saveInfo, setSaveInfo] = useState<SaveSectionProps["info"] | null>(null);
+  const [saveBusy, setSaveBusy] = useState(false);
+  const [replacing, setReplacing] = useState<{ source: string; current: ModSaveInfo } | null>(null);
+  // The game whose save is being read: an answer for another one (opened before) is dropped.
+  const saveFor = useRef<string | null>(null);
   // A room whose game the player does not have (a code typed in, or a public room).
   const [missing, setMissing] = useState<{ name: string; hash: string } | null>(null);
   const openLogin = useLoginModal((s) => s.openModal);
@@ -180,6 +186,71 @@ export const ModsTab = React.memo(function ModsTab() {
     }
   };
 
+  // The edit window: the game's files, and a Wii game's save.
+  const openEdit = (build: ModBuild, highlight?: AddBuildInitial["highlight"]) => {
+    setEditingId(build.id);
+    // A name the launcher picked shows empty, so it keeps following the game's files.
+    setAdding({
+      kind: "edit",
+      name: build.autoName ? "" : build.name,
+      discPath: build.discPath,
+      launcherPath: build.launcherPath ?? null,
+      sdPath: build.sdPath ?? null,
+      highlight,
+    });
+    saveFor.current = build.id;
+    if (build.platform === "gamecube") {
+      setSaveInfo(null);
+      return;
+    }
+    setSaveInfo("loading");
+    modsService
+      .saveInfo(build.id)
+      .then((info) => saveFor.current === build.id && setSaveInfo(info ?? "not-ready"))
+      .catch((err) => {
+        if (saveFor.current === build.id) {
+          setSaveInfo(null);
+          showError(errorText(err));
+        }
+      });
+  };
+
+  const runImport = async (source: string) => {
+    if (!editingId) {
+      return;
+    }
+    setSaveBusy(true);
+    try {
+      const result = await modsService.importSave(editingId, source);
+      if (saveFor.current === editingId) {
+        setSaveInfo(result.save);
+      }
+      showSuccess(Messages.saveImported());
+    } catch (err) {
+      showError(errorText(err));
+    } finally {
+      setSaveBusy(false);
+    }
+  };
+
+  const onImportSave = async (from: "file" | "folder") => {
+    const result = await window.electron.common.showOpenDialog(
+      from === "file"
+        ? { properties: ["openFile"], filters: [{ name: Messages.saveFileFilter(), extensions: ["bin"] }] }
+        : { properties: ["openDirectory"] },
+    );
+    const source = result.canceled ? null : result.filePaths[0];
+    if (!source) {
+      return;
+    }
+    // A save the game has already is replaced only once the player says so (it is kept aside).
+    if (saveInfo && typeof saveInfo === "object" && saveInfo.files > 0) {
+      setReplacing({ source, current: saveInfo });
+      return;
+    }
+    await runImport(source);
+  };
+
   const onRequest = (request: ModRoomRequest) => {
     void modsService.request(request).catch(showError);
   };
@@ -200,41 +271,55 @@ export const ModsTab = React.memo(function ModsTab() {
           setEditingId(null);
           setAdding({ kind: "game", name: "", discPath: null, launcherPath: null, sdPath: null });
         }}
-        onEditBuild={(build) => {
-          setEditingId(build.id);
-          // A name the launcher picked shows empty, so it keeps following the game's files.
-          setAdding({
-            kind: "edit",
-            name: build.autoName ? "" : build.name,
-            discPath: build.discPath,
-            launcherPath: build.launcherPath ?? null,
-            sdPath: build.sdPath ?? null,
-          });
-        }}
+        onEditBuild={(build) => openEdit(build)}
         onAddFolder={() => void onAddFolder()}
         onRemoveBuild={(build) => void modsService.removeBuild(build.id).catch(showError)}
         onHost={(build, isPublic) => void start(build, () => modsService.host({ buildId: build.id, public: isPublic }))}
         onJoin={(build, code) => void start(build, () => modsService.join({ buildId: build.id, code }))}
         onJoinCode={(code) => void joinCode(code)}
         onMissingGame={(name, hash) => setMissing({ name, hash })}
-        onFixBuild={(build, part) => {
-          // The room's part that differs: the game's edit window, that field pulsing gold.
-          setEditingId(build.id);
-          setAdding({
-            kind: "edit",
-            name: build.autoName ? "" : build.name,
-            discPath: build.discPath,
-            launcherPath: build.launcherPath ?? null,
-            sdPath: build.sdPath ?? null,
-            highlight: part,
-          });
-        }}
+        // The room's part that differs: the game's edit window, that field pulsing gold.
+        onFixBuild={(build, part) => openEdit(build, part)}
         onRequest={onRequest}
         onCopyCode={(code) => {
           void navigator.clipboard.writeText(code).then(() => showSuccess(Messages.copied()));
         }}
       />
-      <AddBuildDialog initial={adding} onClose={() => setAdding(null)} onAdd={onAdd} />
+      <AddBuildDialog
+        initial={adding}
+        onClose={() => setAdding(null)}
+        onAdd={onAdd}
+        save={
+          saveInfo && editingId
+            ? {
+                info: saveInfo,
+                busy: saveBusy,
+                onImport: (from) => void onImportSave(from).catch((err) => showError(errorText(err))),
+                onOpenFolder: () =>
+                  void modsService.openSaveFolder(editingId).catch((err) => showError(errorText(err))),
+              }
+            : null
+        }
+      />
+      <Dialog open={replacing !== null} onClose={() => setReplacing(null)} maxWidth="xs" fullWidth={true}>
+        <DialogTitle>{Messages.replaceSaveTitle()}</DialogTitle>
+        <DialogContent>{replacing && Messages.replaceSave(formatSaveSummary(replacing.current))}</DialogContent>
+        <DialogActions>
+          <Button onClick={() => setReplacing(null)}>{Messages.cancel()}</Button>
+          <Button
+            variant="contained"
+            onClick={() => {
+              const source = replacing?.source;
+              setReplacing(null);
+              if (source) {
+                void runImport(source);
+              }
+            }}
+          >
+            {Messages.replace()}
+          </Button>
+        </DialogActions>
+      </Dialog>
       <Dialog open={missing !== null} onClose={() => setMissing(null)} maxWidth="xs" fullWidth={true}>
         <DialogTitle>{Messages.noMatchingGameTitle()}</DialogTitle>
         <DialogContent>{missing && Messages.noMatchingGame(missing.name, missing.hash)}</DialogContent>

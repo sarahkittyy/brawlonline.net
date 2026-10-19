@@ -19,9 +19,16 @@ describe("disc info", () => {
     const wii = parseHeaderJson(
       '{"country":"USA","game_id":"SMNE01","internal_name":"New SUPER MARIO BROS. Wii","region":"NTSC-U","revision":2,"title_id":281476374285893}',
     );
-    expect(wii).toEqual({ gameId: "SMNE01", title: "New SUPER MARIO BROS. Wii", revision: 2, platform: "wii" });
+    expect(wii).toEqual({
+      gameId: "SMNE01",
+      title: "New SUPER MARIO BROS. Wii",
+      revision: 2,
+      platform: "wii",
+      titleId: "00010000534d4e45",
+    });
     const gc = parseHeaderJson('{"game_id":"GALE01","internal_name":"Super Smash Bros Melee","revision":2}');
     expect(gc.platform).toBe("gamecube");
+    expect(gc.titleId).toBeNull();
   });
 
   it("refuses what is not a disc", () => {

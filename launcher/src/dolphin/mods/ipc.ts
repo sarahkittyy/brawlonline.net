@@ -6,6 +6,8 @@ import type {
   ModBuildInput,
   ModFolderParts,
   ModRoomRequest,
+  ModSaveImportResult,
+  ModSaveInfo,
   ModsController,
   ModsEvent,
   ModsHostOptions,
@@ -64,6 +66,16 @@ export const ipc_modsConfigureControllers = makeEndpoint.main(
   <EmptyPayload>_,
   <SuccessPayload>_,
 );
+
+export const ipc_modsSaveInfo = makeEndpoint.main("mods_saveInfo", <{ id: string }>_, <{ save: ModSaveInfo | null }>_);
+
+export const ipc_modsImportSave = makeEndpoint.main(
+  "mods_importSave",
+  <{ id: string; source: string }>_,
+  <ModSaveImportResult>_,
+);
+
+export const ipc_modsOpenSaveFolder = makeEndpoint.main("mods_openSaveFolder", <{ id: string }>_, <SuccessPayload>_);
 
 // Events
 

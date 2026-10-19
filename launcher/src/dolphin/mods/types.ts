@@ -51,6 +51,8 @@ export type ModBuild = {
   revision?: number | null;
   gameTitle?: string | null;
   platform?: DiscPlatform | null;
+  /** A Wii disc's title ID (16 hex digits), which names its save; absent from older settings. */
+  titleId?: string | null;
   /** SHA-256 (64 hex digits) of the parts, null until hashed. */
   hash: string | null;
   /** The parts' hashes, with `hash`. */
@@ -219,6 +221,19 @@ export type ModsEvent =
   /** The check started when a game was added failed (Host checks it again). */
   | { type: "hashFailed"; name: string; error: string };
 
+/** A Wii game's save in its build's store (`save_import.ts`), which the game plays in rooms. */
+export type ModSaveInfo = {
+  /** The save's folder. */
+  folder: string;
+  files: number;
+  bytes: number;
+  /** The newest file's change (ISO), or null when the game has no save yet. */
+  modified: string | null;
+};
+
+/** The save imported, and where the one it replaced went (null: there was none). */
+export type ModSaveImportResult = { save: ModSaveInfo; backup: string | null };
+
 export type ModsHostOptions = { buildId: string; public: boolean };
 export type ModsJoinOptions = { buildId: string; code: string };
 /** A room code typed in: the room's game is looked up (`uid`: the account that asks). */
@@ -248,5 +263,11 @@ export interface ModsService {
   refreshControllers(): Promise<void>;
   /** Opens Dolphin's Controllers settings: over the game while one runs, else in a Dolphin of its own. */
   configureControllers(): Promise<void>;
+  /** The game's save in rooms (a Wii game, once hashed), or null when it has none to show. */
+  saveInfo(id: string): Promise<ModSaveInfo | null>;
+  /** Puts a save (a data.bin or a folder with one) in the game's store, the old one kept aside. */
+  importSave(id: string, source: string): Promise<ModSaveImportResult>;
+  /** Opens the game's save folder (made if it is not there yet). */
+  openSaveFolder(id: string): Promise<void>;
   onEvent(handle: (event: ModsEvent) => void): () => void;
 }

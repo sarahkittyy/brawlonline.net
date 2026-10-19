@@ -1,5 +1,6 @@
 import type { AccountsManager } from "@accounts/accounts_manager";
 import type { SettingsManager } from "@settings/settings_manager";
+import { shell } from "electron";
 import electronLog from "electron-log";
 
 import { dolphinToolNextTo } from "../dolphin_tool";
@@ -12,12 +13,15 @@ import {
   ipc_modsGetState,
   ipc_modsHashBuild,
   ipc_modsHost,
+  ipc_modsImportSave,
   ipc_modsInspectFolder,
   ipc_modsJoin,
   ipc_modsJoinByCode,
+  ipc_modsOpenSaveFolder,
   ipc_modsRefreshControllers,
   ipc_modsRemoveBuild,
   ipc_modsRequest,
+  ipc_modsSaveInfo,
   ipc_modsSetController,
   ipc_modsUpdateBuild,
 } from "./ipc";
@@ -89,6 +93,15 @@ export default function setupModsIpc({
   });
   ipc_modsConfigureControllers.main!.handle(async () => {
     await mods.configureControllers();
+    return { success: true };
+  });
+  ipc_modsSaveInfo.main!.handle(async ({ id }) => ({ save: await mods.saveInfo(id) }));
+  ipc_modsImportSave.main!.handle(async ({ id, source }) => await mods.importSave(id, source));
+  ipc_modsOpenSaveFolder.main!.handle(async ({ id }) => {
+    const error = await shell.openPath(await mods.saveFolder(id));
+    if (error) {
+      throw new Error(error);
+    }
     return { success: true };
   });
   return mods;

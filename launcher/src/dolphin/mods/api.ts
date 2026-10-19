@@ -6,12 +6,15 @@ import {
   ipc_modsGetState,
   ipc_modsHashBuild,
   ipc_modsHost,
+  ipc_modsImportSave,
   ipc_modsInspectFolder,
   ipc_modsJoin,
   ipc_modsJoinByCode,
+  ipc_modsOpenSaveFolder,
   ipc_modsRefreshControllers,
   ipc_modsRemoveBuild,
   ipc_modsRequest,
+  ipc_modsSaveInfo,
   ipc_modsSetController,
   ipc_modsUpdateBuild,
 } from "./ipc";
@@ -61,6 +64,17 @@ const modsApi: ModsService = {
   },
   async configureControllers() {
     await ipc_modsConfigureControllers.renderer!.trigger({});
+  },
+  async saveInfo(id) {
+    const { result } = await ipc_modsSaveInfo.renderer!.trigger({ id });
+    return result.save;
+  },
+  async importSave(id, source) {
+    const { result } = await ipc_modsImportSave.renderer!.trigger({ id, source });
+    return result;
+  },
+  async openSaveFolder(id) {
+    await ipc_modsOpenSaveFolder.renderer!.trigger({ id });
   },
   onEvent(handle) {
     const { destroy } = ipc_modsEvent.renderer!.handle(async (event) => handle(event));

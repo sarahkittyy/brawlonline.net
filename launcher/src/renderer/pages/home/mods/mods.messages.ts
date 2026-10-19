@@ -93,6 +93,26 @@ export const ModsMessages = {
   duplicate: (name: string) => `You already have this game: ${name}.`,
   dolphinOpen: () => "Dolphin is already open. Close it first.",
 
+  // The game's save in rooms (the edit window).
+  saveData: () => "Save data",
+  saveNone: () => "No save yet. Rooms you host make one, or import your own.",
+  saveSummary: (files: number, modified: string) =>
+    `${files} ${files === 1 ? "file" : "files"}, last changed ${modified}`,
+  saveLoading: () => "Reading the save…",
+  saveNotReady: () => "You can import a save once the game has been checked.",
+  saveHelp: () =>
+    "Rooms you host play this save and keep your progress. When you join someone else's room, you play their save.",
+  importSave: () => "Import save",
+  importSaveFile: () => "From a data.bin file…",
+  importSaveFolder: () => "From a Dolphin folder…",
+  saveFileFilter: () => "Wii save (data.bin)",
+  openSaveLocation: () => "Open save location",
+  replaceSaveTitle: () => "Replace this save?",
+  replaceSave: (summary: string) =>
+    `This game already has a save (${summary}). It will be moved to a backup folder, and the save you picked takes its place.`,
+  replace: () => "Replace",
+  saveImported: () => "Save imported. Rooms you host will use it.",
+
   // Public rooms.
   publicRooms: () => "Public rooms",
   publicRoomsLoggedOut: () => "Log in to see the public rooms.",

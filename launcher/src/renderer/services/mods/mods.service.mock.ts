@@ -5,6 +5,8 @@ import type {
   ModFolderParts,
   ModRoomRequest,
   ModRoomStatus,
+  ModSaveImportResult,
+  ModSaveInfo,
   ModsController,
   ModsEvent,
   ModsHostOptions,
@@ -57,6 +59,7 @@ class MockModsClient implements ModsService {
   private listeners = new Set<(event: ModsEvent) => void>();
   private hashing: Record<string, number | null> = {};
   private controller: ModsController = "gc";
+  private saves: Record<string, ModSaveInfo> = {};
   private readonly controllers: DolphinControllers = {
     gc: [{ index: 1, device: "GameCube adapter", label: "GameCube adapter" }],
     wiimote: [{ index: 1, device: "", label: "Real Wii Remote", real: true }],
@@ -234,6 +237,29 @@ class MockModsClient implements ModsService {
 
   async refreshControllers() {
     // Nothing to read in dev mode.
+  }
+
+  async saveInfo(id: string): Promise<ModSaveInfo | null> {
+    const build = this.builds.find((b) => b.id === id);
+    if (!build?.hash || build.platform === "gamecube") {
+      return null;
+    }
+    const folder = `C:/Users/me/AppData/Roaming/Brawl Online/netplay/User/Saves/${build.hash.slice(0, 16)}`;
+    return this.saves[id] ?? { folder, files: 0, bytes: 0, modified: null };
+  }
+
+  async importSave(id: string, _source: string): Promise<ModSaveImportResult> {
+    const before = await this.saveInfo(id);
+    if (!before) {
+      throw new Error("That game has no save to import into.");
+    }
+    const save = { ...before, files: 2, bytes: 31_000, modified: new Date().toISOString() };
+    this.saves[id] = save;
+    return { save, backup: before.files > 0 ? `${before.folder}.backup` : null };
+  }
+
+  async openSaveFolder(_id: string) {
+    // Nothing to open in dev mode.
   }
 
   async configureControllers() {

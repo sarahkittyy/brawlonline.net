@@ -1,9 +1,13 @@
-import type { ModBuildInput } from "@dolphin/mods/types";
+import type { ModBuildInput, ModSaveInfo } from "@dolphin/mods/types";
+import ArrowDropDownRoundedIcon from "@mui/icons-material/ArrowDropDownRounded";
 import Button from "@mui/material/Button";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
+import Divider from "@mui/material/Divider";
+import Menu from "@mui/material/Menu";
+import MenuItem from "@mui/material/MenuItem";
 import TextField from "@mui/material/TextField";
 import { useEffect, useState } from "react";
 
@@ -31,17 +35,76 @@ export type AddBuildInitial = {
   highlight?: "disc" | "sd";
 };
 
+/** The edit window's save data of a Wii game (`save_import.ts`): what rooms play, imported from a
+ * data.bin or a Dolphin folder, and its folder. */
+export type SaveSectionProps = {
+  /** "loading", "not-ready" (the game is not hashed yet: its store is named by its hash), or the
+   * save as it is. */
+  info: ModSaveInfo | "loading" | "not-ready";
+  busy: boolean;
+  onImport: (from: "file" | "folder") => void;
+  onOpenFolder: () => void;
+};
+
+export const formatSaveSummary = (info: ModSaveInfo) =>
+  Messages.saveSummary(info.files, info.modified ? new Date(info.modified).toLocaleString() : "");
+
+const SaveSection = ({ info, busy, onImport, onOpenFolder }: SaveSectionProps) => {
+  const [menuAnchor, setMenuAnchor] = useState<HTMLElement | null>(null);
+  const ready = info !== "loading" && info !== "not-ready";
+  let line: string;
+  if (info === "loading") {
+    line = Messages.saveLoading();
+  } else if (info === "not-ready") {
+    line = Messages.saveNotReady();
+  } else {
+    line = info.files > 0 ? formatSaveSummary(info) : Messages.saveNone();
+  }
+  const pick = (from: "file" | "folder") => {
+    setMenuAnchor(null);
+    onImport(from);
+  };
+  return (
+    <div>
+      <div>{Messages.saveData()}</div>
+      <div className={styles.saveLine}>{line}</div>
+      <div className={styles.saveHelp}>{Messages.saveHelp()}</div>
+      <div className={styles.saveButtons}>
+        <Button
+          variant="outlined"
+          size="small"
+          disabled={!ready || busy}
+          endIcon={<ArrowDropDownRoundedIcon />}
+          onClick={(e) => setMenuAnchor(e.currentTarget)}
+        >
+          {Messages.importSave()}
+        </Button>
+        <Button variant="outlined" size="small" disabled={!ready || busy} onClick={onOpenFolder}>
+          {Messages.openSaveLocation()}
+        </Button>
+      </div>
+      <Menu anchorEl={menuAnchor} open={menuAnchor !== null} onClose={() => setMenuAnchor(null)}>
+        <MenuItem onClick={() => pick("file")}>{Messages.importSaveFile()}</MenuItem>
+        <MenuItem onClick={() => pick("folder")}>{Messages.importSaveFolder()}</MenuItem>
+      </Menu>
+    </div>
+  );
+};
+
 /** "Add a game" / "Add a mod" / "Edit game" (docs/design/brawl-mods.md §8): a name, the disc, an
- * optional launcher and SD card. */
+ * optional launcher and SD card; editing a Wii game, its save data too. */
 export const AddBuildDialog = ({
   initial,
   onClose,
   onAdd,
+  save,
 }: {
   /** null: closed. */
   initial: AddBuildInitial | null;
   onClose: () => void;
   onAdd: (input: ModBuildInput) => Promise<void>;
+  /** The edited game's save (a Wii game); absent otherwise. */
+  save?: SaveSectionProps | null;
 }) => {
   const open = initial !== null;
   const [name, setName] = useState("");
@@ -137,6 +200,12 @@ export const AddBuildDialog = ({
             endAdornment={clearButton(sdPath, () => setSdPath(null))}
           />
         </div>
+        {initial?.kind === "edit" && save && (
+          <>
+            <Divider />
+            <SaveSection {...save} />
+          </>
+        )}
       </DialogContent>
       <DialogActions>
         <Button onClick={onClose}>{Messages.cancel()}</Button>

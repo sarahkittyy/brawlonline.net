@@ -19,6 +19,7 @@ import { hashFileWithProgress } from "utils/copy_file";
 
 import type { ExecFn } from "../dolphin_tool";
 import { execTool } from "../dolphin_tool";
+import { titleIdHex } from "./save_import";
 import type { DiscPlatform } from "./types";
 
 export type DiscInfo = {
@@ -27,6 +28,8 @@ export type DiscInfo = {
   title: string;
   revision: number;
   platform: DiscPlatform;
+  /** A Wii disc's title ID (16 hex digits), where its save is kept; null for a GameCube disc. */
+  titleId: string | null;
 };
 
 const HEADER_TIMEOUT_MS = 60_000;
@@ -49,8 +52,9 @@ export function parseHeaderJson(text: string): DiscInfo {
   const title = typeof o.internal_name === "string" ? o.internal_name.trim() : "";
   const revision = typeof o.revision === "number" && Number.isInteger(o.revision) ? o.revision : 0;
   // Only a Wii disc has a title ID.
+  const titleId = typeof o.title_id === "number" && Number.isSafeInteger(o.title_id) ? titleIdHex(o.title_id) : null;
   const platform: DiscPlatform = typeof o.title_id === "number" ? "wii" : "gamecube";
-  return { gameId, title: title || gameId, revision, platform };
+  return { gameId, title: title || gameId, revision, platform, titleId };
 }
 
 export async function readDiscInfo(toolPath: string, discPath: string, exec: ExecFn = execTool): Promise<DiscInfo> {
