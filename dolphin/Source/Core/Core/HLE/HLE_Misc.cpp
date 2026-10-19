@@ -662,9 +662,9 @@ void GprbPacingElapsedHook(const Core::CPUThreadGuard& guard)
     guard.GetSystem().GetPPCState().gpr[20] = 1;
 }
 
-// mtRand::generate entry, patched only with PPR_GPRB_RNG_LOG: logs every call during a session
-// pass (which generator, the caller, the state before the call), to find the first call two
-// peers make differently.
+// mtRand::generate entry: every call during a session pass (which generator, the callers, the
+// state before the call) goes to the session, which keeps recent frames' calls for its desync log
+// and, with PPR_GPRB_RNG_LOG, logs them all, to find the first call two peers make differently.
 void GprbRngTraceHook(const Core::CPUThreadGuard& guard)
 {
   auto& ppc = guard.GetSystem().GetPPCState();

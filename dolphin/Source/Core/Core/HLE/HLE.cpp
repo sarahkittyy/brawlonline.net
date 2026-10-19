@@ -151,8 +151,9 @@ void PatchFixedFunctions(Core::System& system)
   Patch(system, 0x8002ba84, "GprbPadThreadLoopHook"); // pad thread loop, after updateLow and P+'s post-updateLow code
   Patch(system, 0x800172d0, "GprbPacingElapsedHook"); // mainLoop: before consumeFrameCounter(r20 = VI fields elapsed)
   Patch(system, 0x8001730c, "GprbPacingStepsHook");   // mainLoop: before the logic-step accumulator update
-  if (std::getenv("PPR_GPRB_RNG_LOG"))
-    Patch(system, 0x8003fac4, "GprbRngTraceHook");    // mtRand::generate entry (diagnostics)
+  // mtRand::generate entry: the session keeps each recent frame's calls for its desync log;
+  // PPR_GPRB_RNG_LOG logs every call (diagnostics).
+  Patch(system, 0x8003fac4, "GprbRngTraceHook");
   // PPR_GPRB_PROBE=addr[,addr...]: log registers whenever the CPU reaches these addresses during a
   // gameplay session (diagnostics; also works for REL code once it is loaded there).
   if (const char* probes = std::getenv("PPR_GPRB_PROBE"))

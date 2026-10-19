@@ -329,6 +329,9 @@ struct State
   // The two machines' game states differ (GekkoNet's checksums, or the peer's "desync"): the
   // CPU thread ends the match at its next loop top, as Slippi ends a game on a hard desync.
   bool desync_end = false;
+  // The first frame whose checksums differ, ours or the one in the peer's "desync" (-1: not known,
+  // an older peer's message): the frame of the desync's rng log (LogRngCalls).
+  s64 desync_frame = -1;
   // The last match ended on a desync: reported to the game (LOCAL `desynced`, DESYNC DETECTED
   // and the end without "GAME!") until it has left the match scene.
   bool desynced = false;
@@ -604,6 +607,25 @@ struct State
   std::array<u64, 3> snd_gone_why{};  // diagnostics: reallocated, other id, not allocated
   u64 sound_moved = 0;               // re-attached from another handle (playSE table slots)
   u64 sound_stops_ignored = 0;       // stops of sounds the resimulated timeline has not started
+  // The mtRand calls of each recent frame's newest pass (OnRngCall), written to the log when a
+  // desync is seen (LogRngCalls): which code drew how many numbers, so that the diverging
+  // machine's own log names the call that one machine made and the other did not.
+  struct RngCall
+  {
+    u32 rng = 0;    // the generator (g_mtRand, g_mtRandOther, ...)
+    u32 state = 0;  // its seed before the call
+    std::array<u32, 6> callers{};  // [0] is randi/randf's (mtRand::generate's LR), then up the stack
+  };
+  struct RngFrame
+  {
+    s64 frame = -1;
+    u64 pass = 0;
+    bool first_run = false;
+    u32 count = 0;  // calls in the pass (more than the array holds: the rest are counted only)
+    std::array<RngCall, 48> calls{};
+  };
+  std::array<RngFrame, 64> rng_frames{};
+  bool rng_logged = false;  // the calls were logged for this match's first desync
   // A guest call (BasicSound::Stop) made from the loop top: the registers to restore when it
   // returns there.
   bool gcall_active = false;
@@ -1409,11 +1431,13 @@ int GekkoAddrSlot(const GekkoNetAddress* addr)
 // Tells the other players that this machine found the game states differ, so they end the match
 // too even if their own check has not (yet) seen it. UDP: sent a few times; `m` keeps a late copy
 // from ending the next match.
-void SendDesync()
+void SendDesync(s64 frame)
 {
   if (!s.socket)
     return;
-  const std::string text = fmt::format(R"({{"t":"desync","v":1,"m":{}}})", s.match_index);
+  // "f": the first frame whose checksums differ (older builds ignore it).
+  const std::string text =
+      fmt::format(R"({{"t":"desync","v":1,"m":{},"f":{}}})", s.match_index, frame);
   SendControlToAll(text, 3);
 }
 
@@ -2387,8 +2411,15 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
     if (s.phase == Phase::Running && !s.desync_end && m != o.end() && m->second.is<double>() &&
         m->second.get<double>() == static_cast<double>(s.match_index))
     {
+      const auto f = o.find("f");
+      if (f != o.end() && f->second.is<double>() && f->second.get<double>() >= 0 &&
+          f->second.get<double>() < 1e9)
+      {
+        s.desync_frame = static_cast<s64>(f->second.get<double>());
+      }
       s.desync_end = true;
-      WARN_LOG_FMT(BRAWLBACK, "gprb: the peer found the game states differ: the game ends");
+      WARN_LOG_FMT(BRAWLBACK, "gprb: the peer found the game states differ from frame {}: the game ends",
+                   s.desync_frame);
     }
     return;
   }
@@ -3127,6 +3158,9 @@ void ResetRunStats()
   s.snd_gone_why.fill(0);
   s.sound_moved = 0;
   s.sound_stops_ignored = 0;
+  for (auto& r : s.rng_frames)
+    r.frame = -1;
+  s.rng_logged = false;
   s.io_wait_active = false;
   s.io_wait_n = 0;
   s.io_waits = s.io_wait_retraces = s.io_wait_timeouts = 0;
@@ -3639,6 +3673,8 @@ u32 ChunkAddress(size_t index)
   return 0;
 }
 
+void LogRngCalls(s64 frame, std::string_view why);
+
 void PerformQueuedSave(Core::System& system)
 {
   if (!s.queued_save.pending)
@@ -3678,6 +3714,7 @@ void PerformQueuedSave(Core::System& system)
             rec.rng[2], rec.fighters_crc, parts);
         WARN_LOG_FMT(BRAWLBACK, "replay: playback differs from the recording from {}",
                      s.pb.desync_text);
+        LogRngCalls(f, "difference from the recording");
         const s64 seconds = std::max<s64>(f, 0) / 60;
         OSD::AddMessage(fmt::format("The replay desynced at {}:{:02} (frame {}). From here the game "
                                     "may differ from what was played.",
@@ -4297,6 +4334,49 @@ bool HandleGekkoFrame(Core::System& system)
   return ProcessGekkoUpdate(system, events, count);
 }
 
+// The mtRand calls of `frame` and the 3 frames before it, from each frame's newest pass (State::
+// rng_frames), to the log: once per match, at its first desync. Both machines log them, so a
+// player's log shows which code drew how many numbers where the game states parted; a replay of
+// the game played back with PPR_GPRB_RNG_LOG shows what a fresh machine draws there.
+void LogRngCalls(s64 frame, std::string_view why)
+{
+  if (s.rng_logged)
+    return;
+  s.rng_logged = true;
+  const auto gen = [](u32 rng) -> std::string {
+    if (rng == Addr::MTRAND_DEFAULT_SEED - 4)
+      return "mtRand";
+    if (rng == Addr::MTRAND_OTHER_SEED - 4)
+      return "mtRandOther";
+    return fmt::format("{:08x}", rng);
+  };
+  WARN_LOG_FMT(BRAWLBACK, "gprb rng calls before the {} at frame {} (each frame's newest pass):", why,
+               frame);
+  for (s64 f = std::max<s64>(frame - 3, 0); f <= frame; ++f)
+  {
+    const State::RngFrame& rf = s.rng_frames[static_cast<size_t>(f) % s.rng_frames.size()];
+    if (rf.frame != f)
+    {
+      WARN_LOG_FMT(BRAWLBACK, "gprb rng frame {}: not kept", f);
+      continue;
+    }
+    WARN_LOG_FMT(BRAWLBACK, "gprb rng frame {}: {} calls ({} pass {})", f, rf.count,
+                 rf.first_run ? "first" : "again", rf.pass);
+    const u32 n = std::min<u32>(rf.count, static_cast<u32>(rf.calls.size()));
+    for (u32 i = 0; i < n; ++i)
+    {
+      const State::RngCall& c = rf.calls[i];
+      WARN_LOG_FMT(BRAWLBACK,
+                   "gprb rng frame {} #{}: {} state {:08x} lr {:08x} < {:08x} < {:08x} < {:08x} < "
+                   "{:08x} < {:08x}",
+                   f, i, gen(c.rng), c.state, c.callers[0], c.callers[1], c.callers[2],
+                   c.callers[3], c.callers[4], c.callers[5]);
+    }
+    if (rf.count > n)
+      WARN_LOG_FMT(BRAWLBACK, "gprb rng frame {}: {} more calls not kept", f, rf.count - n);
+  }
+}
+
 // The session events and game events of one gekko_update_session: fills s.ops, performs the
 // load and the initial save.
 bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count)
@@ -4367,15 +4447,17 @@ bool ProcessGekkoUpdate(Core::System& system, GekkoGameEvent** events, int count
         ev["remote"] = picojson::value(static_cast<double>(sev[i]->data.desynced.remote_checksum));
         Replay::AddEvent(sev[i]->data.desynced.frame, ev);
       }
+      LogRngCalls(sev[i]->data.desynced.frame, "desync");
       if (s.mode == Mode::Network && !s.desync_end)
       {
         // A desync does not heal: the machines play different games from here on, and one
         // of them may reach game set while the other plays on and waits for inputs that never
         // come. End the game on both (the peer detects it too; the message makes sure).
+        s.desync_frame = sev[i]->data.desynced.frame;
         s.desync_end = true;
         WARN_LOG_FMT(BRAWLBACK, "gprb: the game states differ from frame {}: the game ends",
                      sev[i]->data.desynced.frame);
-        SendDesync();
+        SendDesync(sev[i]->data.desynced.frame);
       }
       break;
     default:
@@ -5733,6 +5815,12 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
     }
     s.snd_new.clear();
     s.snd_pass_open = true;
+    // This pass's mtRand calls replace the frame's earlier pass's.
+    State::RngFrame& rf = s.rng_frames[static_cast<size_t>(f) % s.rng_frames.size()];
+    rf.frame = f;
+    rf.pass = s.pass_serial;
+    rf.first_run = s.snd_first_run;
+    rf.count = 0;
   }
   ct.SetRollbackResimulating(s.resim_pass);
   ct.SetRollbackAudioWaits(PauseResimAudio());
@@ -5980,6 +6068,7 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   s.state_size_logged = false;
   s.disconnected = false;
   s.desync_end = false;
+  s.desync_frame = -1;
   s.desynced = false;
   s.recovery = {};
   s.quit_left = false;
@@ -7521,6 +7610,12 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
   // DESYNC DETECTED and goes back to the character select for the next game.
   if (s.mode == Mode::Network && s.desync_end && s.phase == Phase::Running)
   {
+    // The peer found it first (our own detection logged the calls already): the frame it named,
+    // or, from an older peer, the newest frames.
+    if (s.desync_frame >= 0)
+      LogRngCalls(s.desync_frame, "desync");
+    else
+      LogRngCalls(s.snd_max_frame, "desync the peer found (frame not known; the newest frames)");
     EndRunning(system, "desync");
     s.desync_end = false;
     s.desynced = true;
@@ -8686,8 +8781,23 @@ void OnProbe(u32 pc, const std::array<u32, 7>& r)
 
 void OnRngCall(u32 rng, const std::array<u32, 8>& callers, u32 state)
 {
-  // Every phase of a match (the load and the countdown included); PPR_GPRB_RNG_LOG is diagnostics.
   if (s.phase == Phase::Idle)
+    return;
+  if (s.phase == Phase::Running && s.snd_pass_open && s.snd_frame >= 0)
+  {
+    State::RngFrame& rf = s.rng_frames[static_cast<size_t>(s.snd_frame) % s.rng_frames.size()];
+    if (rf.frame == s.snd_frame)
+    {
+      if (rf.count < rf.calls.size())
+        rf.calls[rf.count] = {rng, state,
+                              {callers[0], callers[1], callers[2], callers[3], callers[4], callers[5]}};
+      ++rf.count;
+    }
+  }
+  // PPR_GPRB_RNG_LOG (diagnostics): every call of every phase of a match (the load and the
+  // countdown included).
+  static const bool verbose = std::getenv("PPR_GPRB_RNG_LOG") != nullptr;
+  if (!verbose)
     return;
   INFO_LOG_FMT(BRAWLBACK,
                "gprb rng: frame {} {} pass {} rng {:08x} lr {:08x} state {:08x} up {:08x} {:08x} "

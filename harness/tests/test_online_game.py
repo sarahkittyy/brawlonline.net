@@ -981,6 +981,78 @@ def test_desync_ends_the_game_on_both(backend: OnlineBackend, dolphin: Callable[
             sim.stop()
 
 
+MTRAND_SEED = 0x805A00BC   # g_mtRand's seed (LCG s * 0x41C64E6D + 0x3039, 31 bits)
+RNG_CALL = re.compile(r"gprb rng frame (\d+) #(\d+): (\S+) state ([0-9a-f]{8}) lr ((?:[0-9a-f]{8}(?: < )?)+)")
+
+
+def _rng_block(g: Game) -> tuple[int, dict[int, list[tuple[str, str, str]]]]:
+    """The desync's mtRand calls from the instance's log: the desync frame and, per frame, the
+    calls (generator, state before, callers)."""
+    text = (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+    m = re.search(r"gprb rng calls before the desync at frame (\d+)", text)
+    assert m, f"{g.name}: no rng calls logged for the desync"
+    frames: dict[int, list[tuple[str, str, str]]] = {}
+    for c in RNG_CALL.finditer(text[m.end():]):
+        frames.setdefault(int(c.group(1)), []).append((c.group(3), c.group(4), c.group(5).strip()))
+    return int(m.group(1)), frames
+
+
+@pytest.mark.slow
+def test_desync_logs_each_machines_rng_calls(backend: OnlineBackend,
+                                             dolphin: Callable[..., DolphinInstance],
+                                             gpu_backend: str) -> None:
+    """At a desync each machine logs the mtRand calls (generator, seed before, callers) of the
+    desync frame and the 3 frames before it, so that a player's bug report names the code that
+    drew numbers on one machine only (prod bug #50, 2026-10-18: Drsmsh's machine made 12 more
+    g_mtRand draws than Greg's in one frame of Din's Fire, and nothing in his log said which code
+    made them). Here A's g_mtRand is moved 12 draws ahead on A only: both logs have the block for
+    the same frame, its earlier frames are the same calls on both, and at the desync frame A's
+    seeds are B's 12 draws later."""
+    a, b, ua, ub = _connected_direct(backend, dolphin, gpu_backend, "gameplay-desync-rng",
+                                     ("rhea", "seth"), stocks=4)
+    online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)), 240,
+                    "the match to run on both")
+    walk = [PadInput(main=(40, 128), hold=7), PadInput(main=(216, 128), hold=7)]
+    b.c.pad_script(0, walk * 80)
+    a.steps("wait 240")
+    assert all(not online_set.gstatus(g.c)["desyncs_detected"] for g in (a, b))
+    def step(s: int, n: int) -> int:
+        for _ in range(n):
+            s = (s * 0x41C64E6D + 0x3039) & 0x7FFFFFFF
+        return s
+    # (Again until GekkoNet sees it: a rollback may load a state from before the write.)
+    for _ in range(6):
+        seed = struct.unpack(">I", a.c.read_mem(MTRAND_SEED, 4))[0]
+        a.c.write_mem(MTRAND_SEED, struct.pack(">I", step(seed, 12)))
+        a.steps("wait 30")
+        if online_set.gstatus(a.c)["desyncs_detected"]:
+            break
+    online_set.wait(lambda: all(g.debug_scratch()[10] & 0x100000 for g in (a, b)), 30,
+                    "DESYNC DETECTED on both")
+    online_set.wait(lambda: all(online_set.scene(g.c) == online_set.CSS for g in (a, b)), 45,
+                    "both back on the CSS")
+    (fa, ca), (fb, cb) = _rng_block(a), _rng_block(b)
+    print("desync frames", fa, fb, "calls per frame", {f: len(v) for f, v in ca.items()},
+          {f: len(v) for f, v in cb.items()})
+    assert fa == fb, (fa, fb)
+    assert sorted(ca) == sorted(cb) == list(range(max(fa - 3, 0), fa + 1)), (sorted(ca), sorted(cb))
+    for f in range(max(fa - 3, 0), fa):
+        assert ca[f] == cb[f], (f, ca[f], cb[f])   # before the change: the same calls on both
+    assert ca[fa] and cb[fa], "the desync frame drew numbers"
+    assert "mtRand" in {c[0] for c in ca[fa] + cb[fa]}
+    assert all(len(c[2].split(" < ")) == 6 and int(c[2].split(" < ")[1], 16) for c in ca[fa] + cb[fa])
+    assert [c[2] for c in ca[fa]] == [c[2] for c in cb[fa]], "the same code drew on both"
+    # The write landed before one of the frame's draws (A's seeds from there on are B's 12 n draws
+    # later) or after its last one (the same calls; the frame's end state differs).
+    sa = [int(c[1], 16) for c in ca[fa] if c[0] == "mtRand"]
+    sb = [int(c[1], 16) for c in cb[fa] if c[0] == "mtRand"]
+    later = [i for i, (x, y) in enumerate(zip(sa, sb)) if x != y]
+    if later:
+        i = later[0]
+        assert any(sa[i] == step(sb[i], 12 * n) for n in range(1, 7)), (f"{sa[i]:08x}", f"{sb[i]:08x}")
+    print("A's seeds differ from call", later[0] if later else "none (after the last draw)")
+
+
 def _p1_damage_addr(g: Game) -> int:
     m = B.Mem(g.c.read_mem)
     entries = m.ptr(B.FT_ENTRY_MANAGER)

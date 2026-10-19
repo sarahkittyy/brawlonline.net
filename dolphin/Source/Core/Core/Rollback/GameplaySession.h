@@ -533,7 +533,7 @@ void ConfigureSamples(u32 every, std::vector<std::pair<u32, u32>> watch);
 // {ranges: [[addr, size]...], frames: [...], digests: [...]} and, for `frames_full`, the chunk
 // hashes and watch bytes (hex) of those frames.
 picojson::value Samples(const std::vector<s64>& frames_full);
-// Diagnostics (PPR_GPRB_RNG_LOG): one mtRand::generate call.
+// One mtRand::generate call: kept for the desync log (recent frames), logged with PPR_GPRB_RNG_LOG.
 void OnRngCall(u32 rng, const std::array<u32, 8>& callers, u32 state);
 // Diagnostics (PPR_GPRB_PROBE): r3, r4, r12, ctr, lr at a probed address.
 void OnProbe(u32 pc, const std::array<u32, 7>& regs);
