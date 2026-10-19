@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Every page meant for search results. The FAQ and Credits are dialogs on / (no own URLs); /r/<code> pages are noindex. -->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://brawlonline.net/</loc>
+  </url>
+</urlset>

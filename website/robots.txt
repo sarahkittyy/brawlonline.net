@@ -1,0 +1,11 @@
+# brawlonline.net. Cloudflare puts its content signals above this file.
+# The accounts API (/v1/) stays allowed: the page's Ranked top 10 is read from it when Google renders it.
+# Ruleset pages (/r/) are allowed so crawlers can read their noindex tag.
+User-agent: *
+Disallow: /updates/
+Disallow: /build-assets/
+Disallow: /user/
+Disallow: /verify-email
+Disallow: /reset-password
+
+Sitemap: https://brawlonline.net/sitemap.xml

@@ -10,6 +10,7 @@ The landing page for Brawl Online. It is a static site with no build step, no an
 | `assets/fonts/` | The wordmark font (Barlow Condensed Black Italic, OFL) and its licence. |
 | `assets/bg.webm`, `assets/bg.mp4`, `assets/bg-poster.jpg` | Background video and its still frame. **Not present yet.** |
 | `r/index.html`, `r/ruleset.js`, `r/ruleset.css` | The ruleset page, `brawlonline.net/r/<code>` (below). |
+| `robots.txt`, `sitemap.xml` | For search engines (below). |
 | `LICENSES.txt` | Credits for the font, the icons and (later) the video. Deploy it with the site. |
 
 Without the video files the page is plain dark and still looks right. The browser logs 404s for the three missing files until they exist.
@@ -84,7 +85,17 @@ Where it goes depends on the window (`style.css`, "Ranked top 10"):
 - **Wide screens** (at least 1180 x 560): a small panel fixed in the top right corner. Its width is what is left of the right half beside the centre column (about 640 px wide), up to 330 px, and its text scales with the window, so it never covers the logo, the lines or the button. The connect codes are left out there.
 - **Phones, narrow and short windows:** a second full-screen page under the first, with `scroll-snap-type: y mandatory` between the two. A "P+ top 10" hint with a nudging chevron at the bottom of the first page links down to it, and a "Back up" chevron at the top of the second links back. The FAQ link and the corner icons stay on the first page (`position: absolute` there). Under 480 px the connect codes are left out.
 
-Link previews (Discord and the like) use the `og:` tags in `index.html`, with `assets/bg-poster.jpg` as the image.
+## Search engines and link previews
+
+`index.html`'s `<head>` has what search engines and link previews read; keep its pieces in step when the pitch changes:
+
+- `<title>` and `<meta name="description">`: the search result's title (about 60 characters before Google cuts it) and snippet (about 160). The `og:` tags say the same for link previews (Discord and the like), with `assets/bg-poster.jpg` as the image.
+- `<link rel="canonical">`: `https://brawlonline.net/`, so `/index.html` and `/?anything` count as the same page.
+- A JSON-LD block (`application/ld+json`): the site's name (Google shows it above the result instead of the domain), the project's GitHub and Discord, and the app (free, Windows / macOS / Linux). It is data, not a script, so the CSP doesn't block it.
+
+`robots.txt` keeps crawlers out of the update feed, the build assets and the account email-link pages, and names `sitemap.xml`, which lists the one page meant for search results (`/`). Cloudflare's managed robots.txt puts its content signals above our file. The ruleset pages (`/r/<code>`) are `noindex`: every code, real or not, gets the same page.
+
+Google Search Console (and Bing Webmaster Tools) is where to see what is indexed and submit the sitemap; the domain is verified with a DNS TXT record in Cloudflare.
 
 ## The ruleset page (`/r/<code>`)
 
