@@ -612,6 +612,39 @@ def test_launcher_join_waiting_at_start_up(backend: OnlineBackend,
         owner.stop()
 
 
+def test_closing_the_game_leaves_the_room(backend: OnlineBackend,
+                                          dolphin: Callable[..., DolphinInstance],
+                                          tmp_path: Path) -> None:
+    """The game window closed (emulation stops) while Dolphin's main window stays open: the player
+    leaves the room then, not when Dolphin exits (the user's, 2026-10-19). The game's last screen
+    was the room CSS, so the away leave never came. The online connection stays."""
+    uh, ur = backend.create_user("host", "HOST"), backend.create_user("rita", "RITA")
+    owner = MmClient(backend, uh, tmp_path, "room", "--create", "--hold-secs", "300")
+    try:
+        code = owner.code()
+        p = _boot(dolphin, "rooms-stop", backend, ur)
+        _to_versus_css(p)
+        _online(p)
+        p.screen("room")
+        p.room("join", code=code)
+        p.until_view(lambda v: v["flags"] & ppom.RF_IN and v["code"] == code, "in the room")
+        owner.until(lambda m: m.get("type") == "room-state" and m["slots"][1]["player"] and
+                    m["slots"][1]["player"]["displayName"] == "rita", "rita seen by the host")
+        seen = len(owner.lines)
+        p.c.call("emu_stop")   # as the game window's X: the process (Qt: its main window) stays
+        t0 = time.monotonic()
+        _wait(lambda: any(m.get("type") == "room-state" and not m["slots"][1]["player"]
+                          for m in owner.lines[seen:]), 10, "rita gone from the host's room")
+        took = time.monotonic() - t0
+        assert took < 3, f"the leave took {took:.1f} s"
+        _wait(lambda: p.c.status().state == "uninitialized", 20, "emulation stopped")
+        st = p.rooms()
+        assert st["phase"] == 0 and st["connection"] == "online", st
+        assert p.inst.process.poll() is None   # Dolphin itself still runs
+    finally:
+        owner.stop()
+
+
 def _write_request(p: Player, body: dict[str, Any]) -> str:
     """join-room.json with `body` over a fresh id and createdAt (None removes a field)."""
     rid = str(uuid.uuid4())

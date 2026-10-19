@@ -23,6 +23,7 @@
 #include "Common/Logging/Log.h"
 #include "Common/Thread.h"
 #include "Core/Config/OnlineSettings.h"
+#include "Core/Core.h"
 #include "Core/Online/Chat.h"
 #include "Core/Online/GameSetup.h"
 #include "Core/Online/Matchmaking.h"
@@ -235,6 +236,8 @@ State s;
 std::thread s_thread;
 std::atomic<bool> s_run{false};
 std::mutex s_start_mutex;
+std::once_flag s_stop_hook_once;
+Common::EventHook s_stop_hook;
 
 void Log(std::string line)
 {
@@ -1664,6 +1667,30 @@ void Thread()
 
 void Start()
 {
+  // The game window closed (emulation stops): the player leaves the room. The connection is kept
+  // while Dolphin runs, so the room kept a member whose game was gone until Dolphin's main window
+  // closed too (the user's, 2026-10-19): the game's last screen was the room CSS, so the away
+  // leave never came, and the others waited on a player who could not ready up. A room game
+  // stopping is left as well (its session leaves on the same stop, GameplayOnlineBackend).
+  // Not the whole-machine backend's room game: it stops the menus' game to boot the match.
+  // Outside s_mutex, which the hook takes.
+  std::call_once(s_stop_hook_once, [] {
+    s_stop_hook = Core::AddOnStateChangedCallback([](Core::State state) {
+      if (state != Core::State::Stopping)
+        return;
+      {
+        std::lock_guard lk(s_mutex);
+        if (s.phase == Phase::None && !s.pending && s.rejoin.empty())
+          return;
+        if (s.rg.active && Config::Get(Config::ONLINE_SESSION_BACKEND) == "netplay")
+          return;
+        Log("the game was closed: leaving the room");
+      }
+      Request r;
+      r.op = Op::Leave;
+      Submit(r);
+    });
+  });
   std::lock_guard lk(s_start_mutex);
   if (s_run)
     return;

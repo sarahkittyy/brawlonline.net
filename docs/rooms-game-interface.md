@@ -140,7 +140,7 @@ Dolphin also counts as busy whatever it knows itself (a search, a session, a roo
 
 **Join.** Join Room > the keypad in room-code mode > START posts `ROOM_JOIN` with the code. `room` 1 ("Joining room KFQB"; "Connecting to room KFQB" while the online connection is still coming up), then 2, or back to 0 with the server's error in red ("Room not found.", "This room is full.").
 
-**Leave.** Hold B: `ROOM_LEAVE`, then the menus (a room has no hold Z since 2026-10-12: P+ picks AltZ characters with Z held). The game must send `ROOM_LEAVE` whenever it leaves the room CSS other than for the room's match. Safety net: if the game reports `SCREEN_MENUS`, `SCREEN_ONLINE_*` or `SCREEN_OFFLINE` for 5 s while in a waiting room, Dolphin leaves the room itself.
+**Leave.** Hold B: `ROOM_LEAVE`, then the menus (a room has no hold Z since 2026-10-12: P+ picks AltZ characters with Z held). The game must send `ROOM_LEAVE` whenever it leaves the room CSS other than for the room's match. Safety net: if the game reports `SCREEN_MENUS`, `SCREEN_ONLINE_*` or `SCREEN_OFFLINE` for 5 s while in a waiting room, Dolphin leaves the room itself. The game closing (its window's X, Stop: emulation stops while Dolphin's main window stays open) leaves the room at once (2026-10-19, a `Core::State::Stopping` hook in `Online/Rooms.cpp`, as Other Games rooms and the gameplay session do), also in the room's game; the online connection stays. Before, the room kept the player until Dolphin itself closed: the game's last screen was the room CSS, so the safety net never fired.
 
 **Kicked / host gone.** "Removed from the room.": `room` 0, `roomFlags` 0, red line. Host hand-over: `roomHost` and `SLOT_HOST` move.
 
