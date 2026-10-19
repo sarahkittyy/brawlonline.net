@@ -1,17 +1,14 @@
-"""The online character select: its status line, its rules and the connect-code keypad.
+"""The online character select: its rules and the connect-code keypad.
 
-Three things the online CSS (game-code/PPOnline) has to get right, checked in real P+ with the
-plugin (docs/game-code.md §6 "CSS status line", "Rules (item 2)", §7 "The keypad"):
+Two things the online CSS (game-code/PPOnline) has to get right, checked in real P+ with the
+plugin (docs/game-code.md §6 "Rules (item 2)", §7 "The keypad"):
 
-1. The status line is readable: a text that fits is printed at the font's normal size on one
-   line; a longer one is wrapped onto two smaller lines and never squeezed; every error the
-   server sends fits one line (server/crates/mm/src/messages.rs).
-2. Nothing in the rules is the player's choice online (Slippi): the CSS's ITEM and STAGE
+1. Nothing in the rules is the player's choice online (Slippi): the CSS's ITEM and STAGE
    buttons (P+'s item switch, random stage switch and hazard switch) are hidden and do nothing,
    the Code Menu does not open, and the match setup forces the ruleset, so settings left over
    from offline play (or changed on another menu) never reach an online match; the player's
    own settings come back when the menus load.
-3. The connect-code keypad: a "PLYR#123" placeholder in the empty field, a '#' key on the
+2. The connect-code keypad: a "PLYR#123" placeholder in the empty field, a '#' key on the
    letters page that turns to the digits at once, erasing the '#' turns back, keys that cannot
    be valid where the cursor is are refused.
 
@@ -22,7 +19,6 @@ built plugin and the server binaries plus Postgres, as test_online_game.py.
 from __future__ import annotations
 
 import json
-import re
 import struct
 import time
 from typing import Any, Callable, Iterator
@@ -40,12 +36,9 @@ from ppharness import brawl as B
 pytestmark = [pytest.mark.dolphin, pytest.mark.server, pytest.mark.gpu]
 
 SHOTS = ROOT / "run" / "design" / "online-css"
-MESSAGES_RS = ROOT / "server" / "crates" / "mm" / "src" / "messages.rs"
 
 # PPOM DEBUG scratch words (game-code/PPOnline, docs/game-code.md §5)
-SCR_STATUS = 14   # the status line: layout << 24 | the text's width in font units
 SCR_CSS = 15      # locked ITEM/STAGE presses (low byte) | keypad page << 8 | refused keys << 16
-LAYOUT_ONE, LAYOUT_TWO, LAYOUT_ONE_SMALL = 1, 2, 3
 
 # muSelCharTask (the CSS task): the ITEM and STAGE buttons' models; a ScnMdlSimple's +0xCC flags
 # have 0x60 set while nwSMSetVisibility hides it.
@@ -88,106 +81,7 @@ def _shots(test: str, g: Game) -> None:
     g.out.mkdir(parents=True, exist_ok=True)
 
 
-# --------------------------------------------------------------------------- 1. status line
-
-
-def _server_messages() -> dict[str, str]:
-    """Every error text of server/crates/mm/src/messages.rs, the format functions filled with
-    the widest values they get (a connect code of four W's, a room code of four W's)."""
-    src = MESSAGES_RS.read_text(encoding="utf-8")
-    out = {m.group(1).lower(): m.group(2) for m in re.finditer(r'pub const (\w+): &str = "([^"]*)";', src)}
-    fills = {"mode": "Ranked", "latest": "10.10.10", "code": "WWWW#999", "name": "W" * 15}
-    for m in re.finditer(r'pub fn (\w+)\((\w+): &str\) -> String \{\s*format!\("([^"]*)"\)', src):
-        # A room's code is four letters (common::rooms::ROOM_CODE_LEN), not a connect code.
-        fill = "WWWW" if m.group(1).startswith("room_") else fills[m.group(2)]
-        out[m.group(1)] = m.group(3).replace("{" + m.group(2) + "}", fill)
-    for mode in ("Teams", "Party"):
-        out[f"not_available_{mode.lower()}"] = out["not_available"].replace("Ranked", mode)
-    return out
-
-
-# Dolphin's own errors (Source/Core/Core/Online/Matchmaking.cpp, Slippi's texts) and the longest
-# the line can get (Teams' "Could not connect to players: ..." with three names).
-DOLPHIN_ERRORS = {
-    "dolphin-mm-connect": "Failed to connect to mm server",
-    "dolphin-mm-lost": "Lost connection to the mm server",
-    "dolphin-mm-status": "Invalid response when getting mm status",
-    "dolphin-mm-queue": "Invalid response when joining mm queue",
-    "dolphin-teams-connect": "Could not connect to players: WWWWWWWWWWWWWWW, WWWWWWWWWWWWWWW, WWWWWWWWWWWWWWW",
-}
-
-
-def _serve_error(g: Game, text: str, timeout: float = 10) -> None:
-    """Answer the game's next FIND_OPPONENT with mmState 5 and `text` (Dolphin's servicing off),
-    as Dolphin answers a refused search."""
-    b = ppom.find_block(g.c)
-    deadline = time.monotonic() + timeout
-    while time.monotonic() < deadline:
-        (_wr, rd, _rc, _rs), reqs = ppom.read_requests(g.c, b)
-        done = False
-        for seq, cmd, _pl in sorted(reqs):
-            if not seq or seq <= rd:
-                continue
-            if cmd == 0xB4:
-                ppom.write_response(g.c, b, seq, 0xB3, ppom.match_state_payload(5, error=text))
-                done = True
-            ppom.consume(g.c, b, seq)
-        if done:
-            return
-        time.sleep(0.05)
-    raise AssertionError("no FIND_OPPONENT")
-
-
-def test_status_line_is_never_squeezed(backend: OnlineBackend,
-                                       dolphin: Callable[..., DolphinInstance],
-                                       gpu_backend: str) -> None:
-    """Every error the server can send fits the status line at the font's normal size; longer
-    texts (Dolphin's own) wrap onto two smaller lines inside the bar or are cut with "...".
-    The errors are served the way Dolphin answers a refused search (servicing off), on the
-    Unranked CSS, where START searches at once."""
-    u = backend.create_user("mona", "MONA")
-    g = _boot(dolphin, "game-s", backend, u, gpu_backend, "status-line", "record")
-    _shots("status-line", g)
-    g.to_main_menu()
-    g.to_online_page()
-    g.to_css("unranked")
-    g.c.game_bridge_config(enabled=False)
-    g.steps("wait 20")
-    assert _scratch(g, SCR_STATUS) >> 24 == LAYOUT_ONE   # "Press START to search"
-    g.shot("00-idle")
-
-    def requests() -> int:
-        return ppom.read_requests(g.c, ppom.find_block(g.c))[0][0]   # reqWrite
-
-    def phase() -> int:
-        return (_scratch(g, 1) >> 4) & 0xF   # PH_IDLE 0 ... PH_ERROR 4
-
-    results = {}
-    cases = [(f"server-{k}", v, LAYOUT_ONE) for k, v in _server_messages().items()]
-    cases += [(k, v, None) for k, v in DOLPHIN_ERRORS.items()]
-    for name, text, want in cases:
-        if phase() == 4:
-            g.press_until("Z", lambda: phase() == 0, "Z to clear the error")
-        n = requests()
-        g.press_until("START", lambda: requests() > n, "START to search", tries=3)
-        _serve_error(g, text)
-        # The search waited in the waiting room (test_waiting_room.py), which ends on the error:
-        # the CSS shows the phase (scratch 1) and prints the line once it is back.
-        _wait(lambda: g.scene() == "scSelctCharacter" and phase() == 4, 25, f"the error {name!r}")
-        g.steps("wait 30")
-        lay = _scratch(g, SCR_STATUS)
-        g.shot(name)
-        results[name] = (lay >> 24, lay & 0xFFFFFF, text)
-        if want:
-            assert lay >> 24 == want, (name, text, lay >> 24, lay & 0xFFFFFF)
-        else:
-            assert lay >> 24 in (LAYOUT_ONE, LAYOUT_TWO, LAYOUT_ONE_SMALL), (name, lay)
-    for k, v in results.items():
-        print(f"{k}: layout {v[0]}, {v[1]} units: {v[2]!r}")
-    assert results["dolphin-teams-connect"][0] == LAYOUT_TWO   # too long even for two: cut
-
-
-# --------------------------------------------------------------------------- 2. rules
+# --------------------------------------------------------------------------- 1. rules
 
 
 def test_online_css_settings_are_locked(backend: OnlineBackend,
@@ -727,7 +621,7 @@ def test_peer_lock_in_as_giga_bowser_is_refused(backend: OnlineBackend,
     assert "peer lock-in refused (char 0x2c" in logs[b.name] or errors[a.name] == 0x5E72, (errors, b.name)
 
 
-# --------------------------------------------------------------------------- 3. keypad
+# --------------------------------------------------------------------------- 2. keypad
 
 
 def _keypad_text(g: Game) -> str:

@@ -1380,7 +1380,7 @@ def test_room_three_players_second_game_on_the_losers_pick(backend: OnlineBacken
     START must open the stage select; the pick is played."""
     test = "three-players-second-game"
     import secrets
-    users = [backend.create_user(n, f"R2{'ABC'[k]}P", email=f"room2g{k}-{secrets.token_hex(4)}@example.test")
+    users = [backend.create_user(n, f"RT{'ABC'[k]}P", email=f"room2g{k}-{secrets.token_hex(4)}@example.test")
              for k, n in enumerate(["r2ga", "r2gb", "r2gc"])]
     a, b, c = gs = [_boot(dolphin, f"room2g-{x}", backend, u, gpu_backend, test, "gameplay", artifacts=ART)
                     for x, u in zip("abc", users)]
