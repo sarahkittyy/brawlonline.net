@@ -69,6 +69,9 @@ export const ipc_launchNetplayDolphin = makeEndpoint.main(
   <SuccessPayload>_,
 );
 
+/** Closes the netplay Dolphin if it is open without a game (quit_if_idle.ts); `closed`: none is open now. */
+export const ipc_closeNetplayIfIdle = makeEndpoint.main("closeNetplayIfIdle", <EmptyPayload>_, <{ closed: boolean }>_);
+
 /** A room in the list was clicked while the game may be running (docs/rooms-protocol.md). */
 export const ipc_joinRoomInGame = makeEndpoint.main(
   "joinRoomInGame",

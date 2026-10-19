@@ -22,6 +22,7 @@
 #include <QByteArray>
 
 #include <fmt/format.h>
+#include <picojson.h>
 
 #include <future>
 #include <optional>
@@ -267,13 +268,34 @@ MainWindow::MainWindow(Core::System& system, std::unique_ptr<BootParameters> boo
       ShowControllersWindow();
     // The launcher is about to start a game (Play, a room, Other Games) while this Dolphin is
     // open without one: it closes, as when its window is closed, rather than make the player
-    // close it first. A Dolphin in a game ignores it (the launcher hands rooms to the game).
+    // close it first. A Dolphin in a game stays (the launcher hands rooms to the game). Either
+    // way it answers in quit-if-idle-answer.json ({version, id, result: "closing" | "in-game"}):
+    // the launcher cannot tell from game-status.json, which the rooms thread keeps writing after
+    // the game stopped.
     {
-      const std::string quit_file = File::GetUserPath(D_ONLINE_IDX) + "quit-if-idle.json";
+      const std::string online_dir = File::GetUserPath(D_ONLINE_IDX);
+      const std::string quit_file = online_dir + "quit-if-idle.json";
       if (File::Exists(quit_file))
       {
+        std::string text;
+        File::ReadFileToString(quit_file, text);
         File::Delete(quit_file);
-        if (Core::IsUninitialized(m_system))
+        picojson::value request;
+        picojson::parse(request, text);
+        const bool idle = Core::IsUninitialized(m_system);
+        picojson::object answer;
+        answer["version"] = picojson::value(1.0);
+        answer["id"] = request.is<picojson::object>() && request.get("id").is<std::string>() ?
+                           request.get("id") :
+                           picojson::value();
+        answer["result"] = picojson::value(idle ? "closing" : "in-game");
+        const std::string answer_file = online_dir + "quit-if-idle-answer.json";
+        if (!File::WriteStringToFile(answer_file + ".tmp", picojson::value(answer).serialize()) ||
+            !File::Rename(answer_file + ".tmp", answer_file))
+        {
+          WARN_LOG_FMT(CORE, "Cannot write {}", answer_file);
+        }
+        if (idle)
         {
           INFO_LOG_FMT(CORE, "The launcher asked this Dolphin, which has no game, to close");
           m_exit_requested = true;

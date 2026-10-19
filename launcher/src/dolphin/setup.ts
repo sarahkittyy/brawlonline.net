@@ -10,6 +10,7 @@ import { fileExists } from "utils/file_exists";
 import {
   ipc_cancelRoomLaunch,
   ipc_checkPlayKeyExists,
+  ipc_closeNetplayIfIdle,
   ipc_configureDolphin,
   ipc_dolphinEvent,
   ipc_downloadDolphin,
@@ -30,7 +31,7 @@ import {
 } from "./ipc";
 import type { DolphinManager } from "./manager";
 import { deletePlayKeyFile, writePlayKeyFile } from "./playkey";
-import { clearRoomRequest, handOffRoom, isHandOffCode, readGameStatus, writeRoomRequest } from "./room_handoff";
+import { clearRoomRequest, handOffRoom, isHandOffCode, writeRoomRequest } from "./room_handoff";
 import { installRosettaElevated } from "./rosetta/install_rosetta";
 import { DolphinLaunchType } from "./types";
 
@@ -136,6 +137,10 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     return { success: true };
   });
 
+  ipc_closeNetplayIfIdle.main!.handle(async () => {
+    return { closed: await dolphinManager.closeNetplayIfIdle() };
+  });
+
   ipc_joinRoomInGame.main!.handle(async ({ code, ruleset }) => {
     if (!isHandOffCode(code)) {
       throw new Error(`Not a room or connect code: ${code}`);
@@ -143,12 +148,13 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
     if (!dolphinManager.isNetplayRunning()) {
       return { outcome: "not-running" };
     }
-    const onlineDir = dolphinManager.netplayOnlineDir();
-    await mkdir(onlineDir, { recursive: true });
-    // A Dolphin open without a game (no game writes the status) closes, and the room starts one.
-    if ((await readGameStatus(onlineDir)).kind !== "fresh" && (await dolphinManager.closeNetplayIfIdle())) {
+    // A Dolphin open without a game (its game was stopped, or Configure's) closes, and the click
+    // starts one. Dolphin itself says (quit_if_idle.ts): game-status.json stays fresh after a
+    // stopped game, so a hand-off to it was "accepted" and never happened.
+    if (await dolphinManager.closeNetplayIfIdle()) {
       return { outcome: "not-running" };
     }
+    const onlineDir = dolphinManager.netplayOnlineDir();
     const result = await handOffRoom(onlineDir, code, { ruleset });
     log.info(`Room ${code}${ruleset ? ` (ruleset ${ruleset})` : ""} handed to the running game: ${result.outcome}`);
     return result;

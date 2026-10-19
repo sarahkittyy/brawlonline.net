@@ -189,6 +189,8 @@ export interface DolphinService {
    * a create request's ruleset code.
    */
   joinRoomInGame(code: string, ruleset?: string): Promise<RoomHandOffResult>;
+  /** Closes the netplay Dolphin if it is open without a game; true when none is open now. */
+  closeNetplayIfIdle(): Promise<boolean>;
   /** Leaves a room request (a create with its ruleset code, if any) for the game that Play is about to start. */
   prepareRoomLaunch(code: string, ruleset?: string): Promise<{ id: string }>;
   /** Takes a prepared room request back. */

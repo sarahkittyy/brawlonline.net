@@ -25,7 +25,7 @@ import { UserMenuItems } from "./user_menu_items";
 const MAX_ACCOUNTS = 5;
 
 export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (error: any) => void }) => {
-  const { authService, backendService } = useServices();
+  const { authService, backendService, dolphinService } = useServices();
   const userData = useAccount((store) => store.userData);
   const displayName = useAccount((store) => store.displayName);
   const loading = useAccount((store) => store.loading);
@@ -78,7 +78,8 @@ export const UserMenu = ({ user, handleError }: { user: AuthUser; handleError: (
       return;
     }
 
-    if (netplayOpened) {
+    // A Dolphin open without a game closes; one in a game would log in as the other account.
+    if (netplayOpened && !(await dolphinService.closeNetplayIfIdle().catch(() => false))) {
       showError(Messages.closeDolphinToSwitchAccounts());
       return;
     }

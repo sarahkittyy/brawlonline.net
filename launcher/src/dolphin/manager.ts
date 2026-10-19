@@ -7,7 +7,7 @@ import type { MessageBoxOptions } from "electron";
 import { app, BrowserWindow, dialog } from "electron";
 import electronLog from "electron-log";
 import { existsSync } from "fs";
-import { mkdir, readdir, unlink, writeFile } from "fs/promises";
+import { mkdir, readdir } from "fs/promises";
 import { Observable, Subject } from "observable-fns";
 import path from "path";
 import { fileExists } from "utils/file_exists";
@@ -48,6 +48,7 @@ import { clearModRoomFiles } from "./mods/room_files";
 import { clearTemplateSeededSaves } from "./mods/template_saves";
 import type { ModBuild } from "./mods/types";
 import { buildNetplayDolphinArgs, buildPlaybackDolphinArgs } from "./netplay_args";
+import { closeIfIdle } from "./quit_if_idle";
 import { clearRoomRequest } from "./room_handoff";
 import { createProgressThrottle, runWithProgress } from "./setup_progress";
 import type { DolphinEvent, DolphinSetupPhase, ReplayCommunication, ReplayPlaybackStatus } from "./types";
@@ -107,27 +108,19 @@ export class DolphinManager {
   }
 
   /**
-   * Closes the open netplay Dolphin if it has no game (its main window only, after the game window
-   * closed, or Configure), so Play, a room or Other Games can start one without the player closing
-   * it first: `quit-if-idle.json` in its online folder, which a Dolphin without a game answers by
-   * closing (MainWindow) and one in a game ignores. True when no netplay Dolphin is open (any more).
+   * Closes the open netplay Dolphin if it has no game (its main window only, after the game was
+   * stopped, or Configure), so Play, a room or Other Games can start one without the player closing
+   * it first (quit_if_idle.ts). True when no netplay Dolphin is open (any more); false while one is
+   * in a game. A playback Dolphin (a replay, a spectated game) is never asked: it has its own User
+   * folder and is not the game.
    */
-  async closeNetplayIfIdle(timeoutMs = 4000): Promise<boolean> {
+  async closeNetplayIfIdle(): Promise<boolean> {
     if (!this.netplayDolphinInstance) {
       return true;
     }
     const dir = this.netplayOnlineDir();
-    const file = path.join(dir, "quit-if-idle.json");
     await mkdir(dir, { recursive: true });
-    await writeFile(file, JSON.stringify({ version: 1, createdAt: new Date().toISOString() }), "utf8");
-    const deadline = Date.now() + timeoutMs;
-    while (this.netplayDolphinInstance && Date.now() < deadline) {
-      await new Promise((resolve) => setTimeout(resolve, 100));
-    }
-    await unlink(file).catch(() => undefined);
-    const closed = !this.netplayDolphinInstance;
-    log.info(closed ? "The open Dolphin had no game and closed" : "The open Dolphin is in a game");
-    return closed;
+    return await closeIfIdle(dir, () => this.netplayDolphinInstance != null, { log: (message) => log.info(message) });
   }
 
   /** The netplay User folder (its `Config` has the controller settings). */

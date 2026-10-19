@@ -107,6 +107,11 @@ class MockDolphinClient implements DolphinService {
   }
 
   @delayAndMaybeError(SHOULD_ERROR)
+  async closeNetplayIfIdle(): Promise<boolean> {
+    return true;
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
   async prepareRoomLaunch(_code: string, _ruleset?: string): Promise<{ id: string }> {
     return { id: "mock-request" };
   }

@@ -5,6 +5,7 @@ import type { ChatKeyPress } from "@common/chat_key";
 import {
   ipc_cancelRoomLaunch,
   ipc_checkPlayKeyExists,
+  ipc_closeNetplayIfIdle,
   ipc_configureDolphin,
   ipc_dolphinEvent,
   ipc_downloadDolphin,
@@ -75,6 +76,10 @@ const dolphinApi: DolphinService = {
   },
   async launchNetplayDolphin(opts?: { bootGame?: boolean }): Promise<void> {
     await ipc_launchNetplayDolphin.renderer!.trigger({ bootGame: opts?.bootGame });
+  },
+  async closeNetplayIfIdle() {
+    const { result } = await ipc_closeNetplayIfIdle.renderer!.trigger({});
+    return result.closed;
   },
   async joinRoomInGame(code: string, ruleset?: string) {
     const { result } = await ipc_joinRoomInGame.renderer!.trigger({ code, ruleset });

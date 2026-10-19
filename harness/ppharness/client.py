@@ -676,6 +676,10 @@ class HarnessClient:
     def log_mark(self, text: str) -> None:
         self.call("log_mark", text=str(text))
 
+    def stop_game(self) -> None:
+        """Stop the game as the player's Stop does; a Qt Dolphin's main window stays open."""
+        self.call("stop_game")
+
     def quit(self, timeout: float = 10.0) -> None:
         """Ask Dolphin to shut down cleanly. The connection is closed afterwards."""
         try:

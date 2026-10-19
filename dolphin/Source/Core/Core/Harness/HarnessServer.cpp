@@ -54,6 +54,7 @@
 #include "Core/HW/SI/SI_Device.h"
 #include "Core/Harness/Harness.h"
 #include "Core/Harness/HarnessInternal.h"
+#include "Core/Host.h"
 #include "Core/NetPlayClient.h"
 #include "Core/Online/Chat.h"
 #include "Core/Online/GameBridge.h"
@@ -1979,6 +1980,17 @@ Result CmdEmuStop(const Args&)
   return {};
 }
 
+// Stops the game as the player's Stop does (Host_Message: the frontend's own stop, a Qt
+// Dolphin keeping its main window open), unlike quit. For the launcher's "Dolphin open without a
+// game" checks (harness/tools/e2e_game_stopped.py).
+Result CmdStopGame(const Args&)
+{
+  RequireRunning();
+  INFO_LOG_FMT(HARNESS, "Stop requested by harness client");
+  Host_Message(HostMessageID::WMUserStop);
+  return {};
+}
+
 Result CmdQuit(const Args&)
 {
   s_quit_requested = true;
@@ -2071,6 +2083,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"rollback_timings", CmdRollbackTimings},
       {"log_mark", CmdLogMark},
       {"emu_stop", CmdEmuStop},
+      {"stop_game", CmdStopGame},
       {"quit", CmdQuit},
   };
   return handlers;

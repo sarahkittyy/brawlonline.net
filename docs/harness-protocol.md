@@ -85,6 +85,7 @@ Let automated scripts (and Claude) run Dolphin instances end to end with no huma
 | `online_recent_codes` | `mode`: `"direct"` (default) \| `"teams"`, optional `clear` (bool), `add` (a code or a list, oldest first), `prefix` with optional `index`, `scroll` (0 none, 1 older, 2 newer, 3 reset; default 3) | The logged-in account's recent connect codes (`<User>/Online/<uid>/direct-codes.json` / `teams-codes.json`): `{"mode", "path", "codes": [newest first], "suggestion"?: {"found", "index", "code"}}`. `suggestion` is what the keypad's `FETCH_CODE_SUGGESTION` (0xBE) would get for that input. Errors when no user.json has been read. See "Online play" |
 | `log_mark` | `text` | `{}`. Writes `[HARNESS] <text>` into dolphin.log, used to correlate log lines with test steps |
 | `emu_stop` | — | `{}` at once; then emulation stops on the host thread as closing the game window does (`MainWindow::ForceStop`), and the process stays (poll `status` for `"uninitialized"`). A network gameplay session is left as emulation stops (`test_online_leave.py`) |
+| `stop_game` | — | `{}`; the game stops as the player's Stop does (`Host_Message(WMUserStop)`): a Qt Dolphin keeps its main window, the process stays. Fails when emulation is not running |
 | `quit` | — | `{}`, then a clean shutdown (flushes logs and exits the process) |
 
 ## Notes
