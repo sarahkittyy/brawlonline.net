@@ -684,17 +684,17 @@ export const PublishedRow = ({
         </IconButton>
       </Tooltip>
       {!inUse && (
-        <Button size="small" color="secondary" sx={{ textTransform: "none" }} onClick={onUse}>
+        <Button size="small" color="secondary" sx={rowButtonSx} onClick={onUse}>
           {Messages.forMyRooms()}
         </Button>
       )}
       <Tooltip title={Messages.editAsNewVersion()}>
-        <Button size="small" color="secondary" sx={{ textTransform: "none" }} onClick={onEdit}>
+        <Button size="small" color="secondary" sx={rowButtonSx} onClick={onEdit}>
           {Messages.edit()}
         </Button>
       </Tooltip>
       <Tooltip title={view.hidden ? "" : Messages.hideTooltip()}>
-        <Button size="small" color="secondary" sx={{ textTransform: "none" }} onClick={onToggleHidden}>
+        <Button size="small" color="secondary" sx={rowButtonSx} onClick={onToggleHidden}>
           {view.hidden ? Messages.show() : Messages.hide()}
         </Button>
       </Tooltip>
@@ -731,7 +731,7 @@ export const PublicRow = ({
     </button>
     <div className={styles.itemActions}>
       {!inUse && (
-        <Button size="small" color="secondary" sx={{ textTransform: "none" }} onClick={onUse}>
+        <Button size="small" color="secondary" sx={rowButtonSx} onClick={onUse}>
           {Messages.forMyRooms()}
         </Button>
       )}
@@ -739,12 +739,18 @@ export const PublicRow = ({
   </div>
 );
 
-/** "No set · random stage · played 1423 times": a narrow row breaks the line before "· played", not inside it. */
-export const RowSummary = ({ view }: { view: RulesetView }) => (
-  <span>
-    {setSummary(view.ruleset)} <span className={styles.noWrap}>· {Messages.played(view.games)}</span>
-  </span>
-);
+/** "No set · random stage · played 1423 times", on one line (cut short only in a very narrow window). */
+export const RowSummary = ({ view }: { view: RulesetView }) => {
+  const text = `${setSummary(view.ruleset)} · ${Messages.played(view.games)}`;
+  return (
+    <span className={styles.itemSummary} title={text}>
+      {text}
+    </span>
+  );
+};
+
+/** A row's text buttons, without MUI's 64 px minimum width, so the row's text keeps the room. */
+const rowButtonSx = { textTransform: "none", minWidth: 0, px: 1 } as const;
 
 /**
  * A ruleset's code with a copy icon to its left: a click on either copies the code. Inside a row's main button it is

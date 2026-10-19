@@ -134,6 +134,7 @@ button.itemMain {
   align-items: center;
   flex-shrink: 0;
   gap: 4px;
+  font-size: 14px;
   cursor: pointer;
   border-radius: 4px;
   outline: none;
@@ -148,17 +149,20 @@ button.itemMain {
   box-shadow: 0 0 0 1px currentcolor;
 }
 
-.noWrap {
+.itemSummary {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
 .codeCopyIcon {
-  font-size: 12px !important;
+  font-size: 0.85em !important;
 }
 
-/* The viewed ruleset's code in the header (the row's chip, at the header's secondary size). */
+/* The viewed ruleset's code in the header: the row's chip at the title's size (h6). */
 .headerCode {
-  font-size: 12px;
+  font-size: 1.43rem;
   color: var(--text-secondary);
 }
 
