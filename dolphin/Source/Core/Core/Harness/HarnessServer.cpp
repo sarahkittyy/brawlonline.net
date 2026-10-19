@@ -1625,14 +1625,21 @@ Result CmdSpectateStatus(const Args&)
   return Online::Spectate::Status();
 }
 
-// The safety tests' switches, from the next game on: `stream` ([Online] StreamGames) and
-// `forced` (no backoff, 16 KB/s: Uploader::SetForced). Returns spectate_status.
+// The safety tests' switches, from the next game on: `stream` ([Online] StreamGames), `forced`
+// (no backoff, 16 KB/s: Uploader::SetForced) and `start_rate` (bytes a second during a game's first
+// 10 s, 0 holds them; null: mm's or the default; Uploader::SetStartRate). Returns spectate_status.
 Result CmdSpectateConfig(const Args& args)
 {
   if (args.contains("stream"))
     Config::SetCurrent(Config::ONLINE_STREAM_GAMES, GetBool(args, "stream", true));
   if (args.contains("forced"))
     Online::Spectate::SetForced(GetBool(args, "forced", false));
+  if (const picojson::value* v = Find(args, "start_rate"))
+  {
+    Online::Spectate::SetStartRate(
+        v->is<picojson::null>() ? std::nullopt :
+                                  std::optional<double>(static_cast<double>(GetU64(args, "start_rate"))));
+  }
   Result r = Online::Spectate::Status();
   r["stream"] = picojson::value(Config::Get(Config::ONLINE_STREAM_GAMES));
   return r;

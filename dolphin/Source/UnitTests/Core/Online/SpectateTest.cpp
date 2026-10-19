@@ -93,7 +93,7 @@ struct Rig
   }
 
   void Role(const std::string& role, u32 slot, std::optional<u32> from = std::nullopt,
-            bool headers = true)
+            bool headers = true, std::optional<double> start_rate = std::nullopt)
   {
     picojson::object o{{"type", picojson::value("spectate-role")},
                        {"gameUid", picojson::value(UID_HEX)},
@@ -102,6 +102,8 @@ struct Rig
                        {"headers", picojson::value(headers)},
                        {"rate", picojson::value(2048.0)}};
     o["from"] = from ? picojson::value(static_cast<double>(*from)) : picojson::value();
+    if (start_rate)
+      o["startRate"] = picojson::value(*start_rate);
     EXPECT_TRUE(up.OnMessage(o));
   }
 
@@ -177,19 +179,91 @@ TEST(Spectate, ThePrimarySendsEveryChunkPacedInSmallPackets)
   EXPECT_EQ(Rig::Join(packets, 7), t.chunks);
 }
 
-TEST(Spectate, NothingIsSentDuringTheGamesFirstTenSeconds)
+namespace
+{
+size_t Bytes(const Sp::Outgoing& o)
+{
+  size_t n = 0;
+  for (const auto& p : o.data)
+    n += p.size();
+  return n;
+}
+}  // namespace
+
+TEST(Spectate, TheHeadersGoAtTheCountdownAndTheFirstTenSecondsTrickle)
+{
+  Rig t;
+  // Stored raw, so there is always more to send than the pacer lets through.
+  t.Add(Replay::CHUNK_INFO, std::vector<u8>(300, '{'));
+  t.Add(Replay::CHUNK_SETP, std::vector<u8>(700, 's'));
+  for (int i = 0; i < 8; ++i)
+    t.Add(Replay::CHUNK_FRMS, Frames(120 + 60 * i, 60));
+  // The role comes in the countdown (the session isn't running yet): the role's rate, its 1 s
+  // burst first, so the headers are there before the match runs.
+  t.Tick();
+  t.Role("primary", 7);
+  std::vector<std::vector<u8>> packets;
+  size_t countdown = 0;
+  for (int i = 0; i < 10; ++i)
+  {
+    auto out = t.Tick(100ms);
+    countdown += Bytes(out);
+    packets.insert(packets.end(), out.data.begin(), out.data.end());
+  }
+  EXPECT_GE(countdown, 2048u) << "the burst and the role's rate in the countdown";
+  EXPECT_GE(Rig::Join(packets, 7).size(), 2u) << "INFO and SETP are through";
+  // The match runs: its first 10 s go at the start rate (1,536 B/s), never more.
+  t.health.running = true;
+  size_t start = 0;
+  for (int i = 0; i < 95; ++i)
+  {
+    auto out = t.Tick(100ms);
+    start += Bytes(out);
+    packets.insert(packets.end(), out.data.begin(), out.data.end());
+  }
+  EXPECT_GT(start, 1536u * 8) << "something goes out during the start";
+  EXPECT_LE(start, 1536u * 10 + 2048u) << "but no more than the trickle";
+  // After them the role's rate.
+  for (int i = 0; i < 10; ++i)
+    t.Tick(100ms);
+  size_t after = 0;
+  for (int i = 0; i < 20; ++i)
+    after += Bytes(t.Tick(100ms));
+  EXPECT_GT(after, 1536u * 2 + 256u) << "faster than the trickle";
+  EXPECT_LE(after, 2048u * 2 + 512u);
+}
+
+TEST(Spectate, AStartRateOfZeroSendsNothingDuringTheGamesFirstTenSeconds)
 {
   Rig t;
   t.AddGame(5);
   t.health.running = true;
   t.Tick();
-  t.Role("primary", 7);
+  t.Role("primary", 7, std::nullopt, true, 0.0);
   for (int i = 0; i < 95; ++i)
     EXPECT_TRUE(t.Tick(100ms).data.empty()) << i;
   bool sent = false;
   for (int i = 0; i < 10 && !sent; ++i)
     sent = !t.Tick(100ms).data.empty();
   EXPECT_TRUE(sent) << "sending starts once the first 10 s are over";
+}
+
+TEST(Spectate, AQueueOnTheUplinkHoldsTheTrickleToo)
+{
+  Rig t;
+  t.AddGame(30);
+  t.health.mm_rtt_ms = 30;  // the menus
+  t.Tick();
+  t.health.running = true;
+  t.health.mm_rtt_ms = 120;  // the match fills the uplink from its first frame
+  t.Role("primary", 7);
+  for (int i = 0; i < 50; ++i)
+    EXPECT_TRUE(t.Tick(100ms).data.empty()) << i;
+  t.health.mm_rtt_ms = 35;
+  bool sent = false;
+  for (int i = 0; i < 5 && !sent; ++i)
+    sent = !t.Tick(100ms).data.empty();
+  EXPECT_TRUE(sent);
 }
 
 TEST(Spectate, AQueueOnTheUplinkHoldsTheUpload)

@@ -388,6 +388,13 @@ def test_a_spectator_joins_a_set_mid_game_and_watches_it_live(
     assert g2 and not any(s.get("catching_up") for s in g2), "game 2 caught up by itself"
     shown = [s["shown"] for s in g2 if s.get("shown", -1) >= 0]
     assert shown and min(shown) < 120, f"game 2 didn't start at its start: {shown[:5]}"
+    # Armed from its setup, its countdown waited for the first frames (2026-10-19): it plays from
+    # GO with the live buffer in hand, never stopping for "Buffering" in its first 5 s.
+    early = [s for s in g2 if min(shown) < s.get("shown", -1) < min(shown) + 300]
+    lead = [(s.get("live_edge", 0) + 180 - s["shown"]) / 60 for s in early]
+    print(f"game 2 at its start: {lead[:1] and round(lead[0], 1)} s behind the newest frame received")
+    assert not any(s.get("buffering") for s in early), [
+        (s["shown"], s.get("live_edge"), s.get("buffering")) for s in early]
     behind = max(s.get("live_edge", 0) - s.get("shown", 0) for s in g2 if s.get("shown", -1) >= 0)
     print(f"game 2 behind the live edge before Go Live: {behind / 60:.1f} s")
     assert behind > 120, "game 2 was never behind live: nothing to test Go Live on"

@@ -53,11 +53,11 @@ struct Request
 
 // A spectated game's end: how long the last frame shows before Dolphin closes.
 constexpr auto CLOSE_AFTER = std::chrono::seconds(5);
-// A spectator whose first game already has more than this much (20 s) when it starts joined it
-// well under way: it catches up to live. One there from about its start (the stream comes about
-// 10 s behind the players) watches it from the start at normal speed, as every next game of the
-// stream is (the user, 2026-10-14: tournaments watch the whole game; anyone can go live).
-constexpr size_t JOIN_CATCH_UP_FRAMES = 20 * 60;
+// A spectator whose first game already has more than 20 s at its barrier
+// (Session::LIVE_JOIN_CATCH_UP_FRAMES) joined it well under way: it catches up to live. One there
+// from about its start (the stream comes a few seconds behind the players) watches it from the
+// start at normal speed, as every next game of the stream is (the user, 2026-10-14: tournaments
+// watch the whole game; anyone can go live).
 
 std::mutex s_mutex;
 std::string s_comm_path;
@@ -197,15 +197,17 @@ void ArmCurrent()
   const u64 size = ::File::Exists(path) ? ::File::GetSize(path) : 0;
   if (s_request.mirror)
   {
-    // A live game's file fills from its start: until it has the setup and a first second of
-    // frames, wait (the launcher shows that it is getting the game).
+    // A live game's file fills from its start: until it has the setup, wait (the launcher shows
+    // that it is getting the game). With the setup it is armed: its match loads while its first
+    // frames come, and the barrier waits for them.
     std::string why;
     std::optional<File> f;
     if (UsablePath(path))
       f = ReadFile(path, ReadOptions{}, &why);
-    if (!f || f->setup.empty() || f->pads.empty())
+    const bool cut_now = s_index < s_request.cut.size() && s_request.cut[s_index];
+    if (!f || f->setup.empty() || (cut_now && f->pads.empty()))
     {
-      const bool cut = s_index < s_request.cut.size() && s_request.cut[s_index];
+      const bool cut = cut_now;
       // A game cut before its first frames came: on to the next one, if it has come.
       if (cut && s_index + 1 < s_request.paths.size())
       {
@@ -227,8 +229,8 @@ void ArmCurrent()
       };
       if (!cut)
       {
-        // The upload holds a game's first 10 s, so a game picked at its start waits about that
-        // long; longer, the players' uploads are paused for their game's sake.
+        // The setup comes in the players' countdown; much later, the players' uploads are paused
+        // for their game's sake.
         s_state = "loading";
         show(now - s_wait_since < WAIT_EXPLAINED_AFTER ?
                  "Game found, waiting for data..." :
@@ -298,9 +300,8 @@ void ArmCurrent()
       const bool last = s_index + 1 == s_request.paths.size();
       const bool hold = last && s_request.hold_at_end;
       // (A game that has already ended, e.g. a finished stream watched afterwards, plays from its
-      // start.)
-      const bool catch_up = s_request.mirror && !s_mirror_started &&
-                            file->pads.size() > JOIN_CATCH_UP_FRAMES && file->endg.empty();
+      // start. Whether it catches up is decided at its barrier, from the frames there by then.)
+      const bool catch_up = s_request.mirror && !s_mirror_started && file->endg.empty();
       if (const auto e =
               Session::ArmPlayback(file, s_request.play_anyway, hold, s_request.mirror, catch_up))
       {

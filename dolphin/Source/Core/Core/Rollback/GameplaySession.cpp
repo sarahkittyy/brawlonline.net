@@ -6424,9 +6424,11 @@ std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file,
       pb.holds[i] = static_cast<u16>(*n & HOLD_BUTTONS);
     }
   }
-  if (file->pads.empty())
+  // A live game may be armed from its setup alone: its match loads while its first frames come,
+  // and the barrier waits for them (PlaybackLoopTop).
+  if (file->pads.empty() && !live)
     return "the replay has no frames";
-  if (file->ports != pb.ports)
+  if (!file->pads.empty() && file->ports != pb.ports)
     return "the replay's frames do not match its players";
   ReadPlaybackEnd(file->endg, &pb.end_method, &pb.final_frame);
   pb.live = live;
@@ -6504,6 +6506,13 @@ void ExtendPlayback(std::shared_ptr<const Replay::File> file, bool hold_at_end, 
   if (s.mode != Mode::Playback || !pb.live || !pb.live_file)
     return;
   Replay::File& have = *pb.live_file;
+  // A game armed from its setup alone: its first frames say where its frames start.
+  if (file && have.pads.empty() && !file->pads.empty() && file->uid == have.uid &&
+      file->ports == pb.ports)
+  {
+    have.first_frame = file->first_frame;
+    have.ports = file->ports;
+  }
   if (file && (file->uid != have.uid || file->first_frame != have.first_frame ||
                file->ports != have.ports || file->checksums.size() != file->pads.size()))
   {
@@ -6748,8 +6757,8 @@ picojson::object PlaybackStatus()
   if (s.pb.file)
   {
     o["first_frame"] = picojson::value(static_cast<double>(s.pb.file->first_frame));
-    o["last_frame"] = picojson::value(
-        static_cast<double>(s.pb.file->first_frame + s.pb.file->pads.size() - 1));
+    // (first_frame - 1 while a live game armed from its setup has no frames yet)
+    o["last_frame"] = picojson::value(static_cast<double>(PlaybackLast()));
   }
   o["final_frame"] = picojson::value(static_cast<double>(s.pb.final_frame));
   o["frames_checked"] = picojson::value(static_cast<double>(s.pb.frames_checked));
@@ -7460,6 +7469,47 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
   if (!IsSimStart(g, &fc))
     return false;
 
+  // A live game armed from its setup alone (spectating): its stage loaded while the players'
+  // first frames were on their way, and its countdown starts once they are here. The stream comes
+  // at the speed of play, so by the countdown's end the live buffer's 2 s are too, and GO does not
+  // stop for "Buffering".
+  if (s.pb.live && s.pb.file->pads.empty())
+  {
+    if (s.pb.cut || s.pb.stopped)
+    {
+      // Cut before any frames came: the game leaves the match as after a stop on the way in.
+      if (s.pb.cut)
+      {
+        INFO_LOG_FMT(BRAWLBACK, "replay: the live game was cut before its first frames");
+        OSD::AddMessage("This game wasn't streamed.", OSD::Duration::NORMAL, OSD::Color::YELLOW);
+      }
+      s.pb.stopped = true;
+      s.pb.finished = true;
+      s.pb.end_quit_left = true;
+      s.phase = Phase::Ended;
+      s.await_scene_exit = true;
+      return false;
+    }
+    s.cpu_where = "replay waiting for frames";
+    OSD::AddTypedMessage(OSD::MessageType::SpectateWaiting, "Game found, waiting for data...",
+                         1000, OSD::Color::CYAN);
+    AsyncRequests::GetInstance()->PushEvent([] {
+      if (g_presenter)
+        g_presenter->RedrawLastFrame();
+    });
+    system.GetFifo().GpuMaySleep();
+    PlaybackWait(
+        system,
+        [] {
+          return s.phase != Phase::Armed || s.pb.stopped || s.pb.cut || !s.pb.file->pads.empty();
+        },
+        std::chrono::milliseconds(33));
+    if (s.phase != Phase::Armed)
+      return false;
+    Spin(ppc);
+    return true;
+  }
+
   // The barrier: the match must be the recorded one (the setup the live peers compared), then the
   // recorded host's sync block and task order, as a joiner applies its host's.
   const auto fail = [&](std::string why) {
@@ -7518,7 +7568,7 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
   s.pb.started = true;
   // A spectator who joined a game well under way catches up to the live edge at once; one there
   // from its start watches it from the start (docs/design/spectating.md §6.2).
-  if (s.pb.live && s.pb.catch_up_at_start)
+  if (s.pb.live && s.pb.catch_up_at_start && s.pb.file->pads.size() > LIVE_JOIN_CATCH_UP_FRAMES)
   {
     s.pb.catch_up = true;
     s.pb.joining = true;

@@ -296,6 +296,10 @@ bool Uploader::OnMessage(const picojson::object& o)
     const auto headers = o.find("headers");
     g.headers = headers == o.end() || !headers->second.is<bool>() || headers->second.get<bool>();
     g.rate = std::clamp(Num(o, "rate").value_or(2048), MIN_RATE, MAX_RATE);
+    // During the game's first `baseline`: a trickle, never over the role's rate (0: nothing).
+    g.start_rate = std::clamp(m_start_rate ? *m_start_rate :
+                                             Num(o, "startRate").value_or(m_options.start_rate),
+                              0.0, g.rate);
     g.next = 0;
     g.offset = 0;
     g.seq = 0;
@@ -338,9 +342,8 @@ std::optional<std::string> Uploader::Unhealthy(Game& g, Clock::time_point now, s
   return std::nullopt;
 }
 
-void Uploader::SendData(Game& g, Clock::time_point now, size_t unacked, Outgoing* out)
+void Uploader::SendData(Game& g, Clock::time_point now, size_t unacked, double rate, Outgoing* out)
 {
-  const double rate = m_forced ? 16384.0 : g.rate;
   const size_t packet = m_forced ? 1200 : m_options.packet;
   const size_t max_unacked = m_forced ? (1u << 20) : m_options.max_unacked;
   if (g.refilled != Clock::time_point{})
@@ -553,11 +556,13 @@ Outgoing Uploader::Service(Clock::time_point now, bool online, size_t unacked, c
   }
   if (m_forced)
   {
-    SendData(g, now, unacked, &out);
+    SendData(g, now, unacked, 16384.0, &out);
     return out;
   }
-  // Nothing during the game's first `baseline` of running (the start is its busiest time).
-  if (health.running && !g.baseline_done)
+  // During the game's first `baseline` of running (the start is its busiest time, and its normal
+  // is being learned) only a trickle, and only while the uplink shows no queue (below).
+  const bool starting = health.running && !g.baseline_done;
+  if (starting && g.start_rate <= 0)
     return out;
   // A queue on the uplink: hold until it drains (the pacer's tokens wait, capped at its burst).
   const double base = RttBase();
@@ -568,7 +573,7 @@ Outgoing Uploader::Service(Clock::time_point now, bool online, size_t unacked, c
     g.refilled = now;
     return out;
   }
-  SendData(g, now, unacked, &out);
+  SendData(g, now, unacked, starting ? g.start_rate : g.rate, &out);
   return out;
 }
 
@@ -674,5 +679,11 @@ void SetForced(bool forced)
 {
   std::lock_guard lk(s_mutex);
   The().SetForced(forced);
+}
+
+void SetStartRate(std::optional<double> rate)
+{
+  std::lock_guard lk(s_mutex);
+  The().SetStartRate(rate);
 }
 }  // namespace Online::Spectate

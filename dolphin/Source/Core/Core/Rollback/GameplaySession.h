@@ -387,13 +387,17 @@ LinkHealth GetLinkHealth();
 // instead of ending its match.
 // `live`: spectating (docs/design/spectating.md §6.2, `mirror`): the file is still growing.
 // ExtendPlayback adds what arrives; playback holds with "Buffering" when the frames run out, and
-// ends only once the game's ENDG has come. It plays from the game's start at normal speed, as far
-// behind the players as the stream is (about 10 s: the upload's hold at a game's start), unless
-// `catch_up`: a spectator who joined a game well under way runs to the live edge (the newest frame
-// less a 3 s buffer) first. Go Live, the seek bar and fast-forward reach the live edge any time.
+// ends only once the game's ENDG has come. A live file may have no frames yet (only its setup): its
+// match loads, and the barrier waits for its first frames. It plays from the game's start at
+// normal speed, as far behind the players as the stream is (a few seconds: the upload trickles
+// during a game's first 10 s), unless `catch_up` and the file has more than
+// LIVE_JOIN_CATCH_UP_FRAMES at the barrier: a spectator who joined a game well under way runs to
+// the live edge (the newest frame less a 3 s buffer) first. Go Live, the seek bar and
+// fast-forward reach the live edge any time.
 // `room_watch`: a room's game watched from the room CSS (Online/RoomWatch.h): GameBridge keeps the
 // room in LOCAL and SESSION and marks the replay's SESSION RF_WATCH instead of asking the game for a
 // playback; it is a live playback otherwise.
+constexpr size_t LIVE_JOIN_CATCH_UP_FRAMES = 20 * 60;
 std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file, bool play_anyway,
                                        bool hold_at_end = false, bool live = false,
                                        bool catch_up = false, bool room_watch = false);

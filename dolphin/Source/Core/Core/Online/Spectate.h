@@ -18,9 +18,13 @@
 // a PC that always shows some late frames (a slower PC, a busy one) is not held to a stranger's
 // normal; the start itself (its hitch at GO) is that normal.
 //
-// Everything is measured against the game's first 10 s of running (`baseline`), and nothing is
-// sent during them: a match's start is when its link is busiest (the safety tests: an upload
-// starting with the match tipped a link 85% full into a queue that never drained).
+// Everything is measured against the game's first 10 s of running (`baseline`). During them only
+// a trickle goes out (`start_rate`, about what the game records, so no backlog builds) and only
+// the queue and the round-trip yield below can hold it: a match's start is when its link is
+// busiest. (The safety tests of 2026-10-13 sent nothing then: an upload starting with the match
+// tipped a link 85% full into a queue that never drained. The game sent 150-750 kbit/s then, 45
+// since that day's fix, and the uploader had neither the yield nor one packet in flight.)
+// Spectators get a game's first frames a second or two after its countdown instead of 13 s.
 //
 // The upload also yields to any queue on the player's uplink, as LEDBAT background transfers do:
 // its own round trip to mm crosses the same queue as the game's packets, so when that round trip
@@ -101,6 +105,9 @@ struct Options
   double rate_factor = 2.0;
   double late_margin = 4;
   Clock::duration baseline = std::chrono::seconds(10);        // a game's normal is its first 10 s
+  // The pacer's rate during `baseline` (bytes per second; mm's `startRate` overrides it, 0: send
+  // nothing then). A busy 1v1 records about 600 B a second, four players about twice that.
+  double start_rate = 1536;
   double rollback_margin = 1.0;          // frames above the normal that pause ("rollback")
   double ping_margin_ms = 20.0;          // ms above the normal that pause ("rtt")
   double rtt_target_ms = 25.0;           // queueing (mm round trip over its lowest) that holds
@@ -136,6 +143,9 @@ public:
   // no limit on what is unacknowledged. What the safety tests compare against: it must hurt a
   // weak uplink where the normal uploader does not.
   void SetForced(bool forced) { m_forced = forced; }
+  // Tests only (harness `spectate_config`): the rate during a game's first `baseline` instead of
+  // mm's `startRate` or the default, from the next role on; 0 holds them as before 2026-10-19.
+  void SetStartRate(std::optional<double> rate) { m_start_rate = rate; }
 
 private:
   enum class Role
@@ -171,6 +181,7 @@ private:
     std::optional<u32> from;
     bool headers = true;
     double rate = 2048;
+    double start_rate = 0;  // the rate during the game's first `baseline` (0: nothing then)
     // The primary's position: the next chunk, the bytes of it already sent, its sequence number,
     // and whether `from` was reached.
     size_t next = 0;
@@ -206,7 +217,7 @@ private:
 
   std::optional<std::string> Unhealthy(Game& g, Clock::time_point now, size_t unacked,
                                        const Health& health);
-  void SendData(Game& g, Clock::time_point now, size_t unacked, Outgoing* out);
+  void SendData(Game& g, Clock::time_point now, size_t unacked, double rate, Outgoing* out);
   void SendDigests(Game& g, Clock::time_point now, Outgoing* out);
   void KeepPlayers(std::span<const u8> raw);
   void ReportEnd(std::span<const u8> raw);
@@ -220,6 +231,7 @@ private:
 
   Options m_options;
   bool m_forced = false;
+  std::optional<double> m_start_rate;
   std::optional<Game> m_game;
   // Messages that go out whatever the game's role, once online (`spectate-end`).
   std::vector<std::string> m_pending;
@@ -243,6 +255,7 @@ Outgoing Service(Clock::time_point now, bool online, size_t unacked, const Healt
 void OnConnectionLost();
 
 picojson::object Status();
-// Tests only: see Uploader::SetForced.
+// Tests only: see Uploader::SetForced and SetStartRate.
 void SetForced(bool forced);
+void SetStartRate(std::optional<double> rate);
 }  // namespace Online::Spectate

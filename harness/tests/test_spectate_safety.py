@@ -10,6 +10,8 @@ game of the set runs one mode, switched between games (harness `spectate_config`
 
 - ``off``: StreamGames off, nothing uploaded (the baseline);
 - ``on``: the uploader as it ships (2 KB/s pacer, 512-byte packets, backoff);
+- ``hold``: as ``on`` but sending nothing during the game's first 10 s of running (the uploader
+  before 2026-10-19; `spectate_config` start_rate 0), to compare ``on``'s trickle with;
 - ``forced``: no backoff, no start delay, 16 KB/s in 1,200-byte packets, nothing held back: the
   same data sent the naive way;
 - ``flood``: StreamGames off and a stand-in for a harmful upload: 1,200-byte datagrams at 16 KB/s
@@ -26,7 +28,10 @@ player's rollbacks, late frames and the confirmed checksums are reported too. Be
 the last game's upload is let finish, so a game in one mode never carries another's upload.
 
 T1 (shared uplink): a game with no cap measures the game's own upload rate; then off/on/forced at
-uplinks of 1.2x, 1.6x and 3x it (PPHARNESS_T1_FACTORS), and a flood at the first. T2 (CPU starvation): off/on/forced with a CPU burner per
+uplinks of 1.2x, 1.6x and 3x it (PPHARNESS_T1_FACTORS), and a flood at the first. Each game's
+start (from its lock-in through the stage load, the countdown and its first START_WINDOW_S of
+running: the headers, then the uploader's trickle while it learns the game's normal) is judged on
+its own as well as the whole game: a start's few seconds of cost would vanish in a game's p99. T2 (CPU starvation): off/on/forced with a CPU burner per
 core. T3 (misbehaving server): the mm relay drops everything from mm for a game (no
 acknowledgements, the online connection times out), delays it 2 s, or is slow; the game must be
 as off's.
@@ -66,6 +71,7 @@ ONE_WAY_MS = 15.0       # P2P latency each way (30 ms ping) before any queueing
 MM_ONE_WAY_MS = 10.0
 UNLIMITED_KBPS = 1_000_000.0
 UPLOAD_PACKET = 256 + 28      # the uploader's largest datagram on the wire
+START_WINDOW_S = 12.0         # a game's start: its first 10 s of running (the trickle) and 2 more
 LATE = re.compile(r"gprb net: session: .*?late frames (\d+)")
 
 
@@ -109,6 +115,7 @@ class Rig:
     panels: dict[str, Any]
     games: int = 0
     late_seen: dict[str, int] = field(default_factory=dict)
+    start: dict[str, Any] = field(default_factory=dict)  # the last game's start (snap_start)
 
     def stop(self, test: str = "") -> None:
         for sim in (self.p2p, self.mm):
@@ -153,6 +160,49 @@ def make_rig(be: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu: st
     return Rig(a, b, p2p, mm, uplink, panels={g.name: g.panel for g in (a, b)})
 
 
+BARRIER = "gprb: barrier passed"
+RUNNING = "gprb: session running"
+
+
+def snap_start(rig: Rig, kbps: float) -> Any:
+    """From a thread that reads the streamer's log (the harness client is the test's): the uplink is
+    capped at `kbps` once the match's barrier has passed, and the game's start is measured once its
+    session has run START_WINDOW_S (the counters started at its lock-in, uncapped until the
+    countdown). Since the game's bandwidth fix (2026-10-13) the host's barrier messages don't fit
+    a link of 1.2x the game's own rate with 250 ms of queue, and a capped barrier times out whatever
+    the upload does; the upload's headers go in the countdown and its trickle after it, both
+    capped."""
+    import threading
+    log = rig.a.inst.user_dir / "Logs" / "dolphin.log"
+
+    def count(what: str) -> int:
+        try:
+            return log.read_text(errors="replace").count(what)
+        except OSError:
+            return 0
+    before = count(BARRIER), count(RUNNING)
+
+    def wait_for(what: str, n: int) -> bool:
+        deadline = time.monotonic() + 300
+        while count(what) == n:
+            if time.monotonic() > deadline:
+                return False
+            time.sleep(0.05)
+        return True
+
+    def run() -> None:
+        if not wait_for(BARRIER, before[0]):
+            return
+        rig.uplink.set_rate(kbps)
+        if not wait_for(RUNNING, before[1]):
+            return
+        time.sleep(START_WINDOW_S)
+        rig.start = {"game": rig.uplink.report("game"), "upload": rig.uplink.report("upload")}
+    t = threading.Thread(target=run, daemon=True)
+    t.start()
+    return t
+
+
 def late_frames(g: Any, rig: Rig) -> int:
     """The late frames of the game that just ended (its session's summary line)."""
     text = (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
@@ -164,7 +214,8 @@ def late_frames(g: Any, rig: Rig) -> int:
 
 
 def play(rig: Rig, mode: str, kbps: float = UNLIMITED_KBPS,
-         during: Callable[[Rig], Any] | None = None, after: Callable[[Rig], Any] | None = None) -> dict[str, Any]:
+         during: Callable[[Rig], Any] | None = None, after: Callable[[Rig], Any] | None = None,
+         start: bool = False) -> dict[str, Any]:
     """One game of the set in `mode` with the streamer's uplink at `kbps`."""
     a, b = rig.a, rig.b
 
@@ -173,21 +224,24 @@ def play(rig: Rig, mode: str, kbps: float = UNLIMITED_KBPS,
         return (s.get("game") is None or s.get("role") != "primary" or s.get("stopped")
                 or s.get("sent") == s.get("chunks"))
     online_set.wait(idle, 300, "the last game's upload to finish", every=1.0)
-    stream = mode in ("on", "forced")
-    st = a.c.call("spectate_config", stream=stream, forced=mode == "forced")
+    stream = mode in ("on", "hold", "forced")
+    st = a.c.call("spectate_config", stream=stream, forced=mode == "forced",
+                  start_rate=0 if mode == "hold" else None)
     assert st["stream"] == stream, st
     rig.games += 1
     n = rig.games
     if n > 1:
         online_set.lock_in_next([a, b], n, "direct", print, rig.panels)
-    rig.uplink.set_rate(kbps)
+    rig.uplink.set_rate(UNLIMITED_KBPS if start else kbps)
     drops0 = rig.uplink.drops
     rig.p2p.reset_stats()
     rig.mm.reset_stats()
     rig.uplink.reset_counters()
+    rig.start = {}
     flood_stop = None
     if mode == "flood":
         flood_stop = start_flood(rig.mm.listen_addr)
+    snapper = snap_start(rig, kbps) if start else None
     if during:
         online_set.wait(lambda: online_set.gstatus(a.c)["phase"] == "running", 240, "the match")
         during(rig)
@@ -198,6 +252,9 @@ def play(rig: Rig, mode: str, kbps: float = UNLIMITED_KBPS,
         if flood_stop:
             flood_stop.set()
     secs = time.monotonic() - t0
+    if snapper:
+        snapper.join(30)
+        assert rig.start, "the game's start was not measured"
     p2p, mm = rig.p2p.stats(), rig.mm.stats()
     spec = a.c.call("spectate_status")
     rooms = a.c.call("rooms_status")
@@ -220,6 +277,7 @@ def play(rig: Rig, mode: str, kbps: float = UNLIMITED_KBPS,
         # What the upload cost the game's packets on the shared uplink.
         "cost": rig.uplink.report("game"),
         "upload_wire": rig.uplink.report("upload"),
+        "start": rig.start,
         "uploader": spec,
         # The streamer's online connection to mm (the upload's way), and how often it dropped.
         "online": {"connection": rooms.get("connection"), "drops": rooms.get("drops"),
@@ -291,8 +349,8 @@ def test_t1_shared_uplink(spectate_backend: OnlineBackend, dolphin: Callable[...
         factors = [float(f) for f in os.environ.get("PPHARNESS_T1_FACTORS", "1.2,1.6,3").split(",")]
         for i, f in enumerate(factors):
             kbps = round(game_kbps * f, 1)
-            for mode in ("off", "on", "forced") + (("flood",) if i == 0 else ()):
-                rep = play(rig, mode, kbps)
+            for mode in ("off", "on", "hold", "forced") + (("flood",) if i == 0 else ()):
+                rep = play(rig, mode, kbps, start=True)
                 rep["factor"] = f
                 results.append(rep)
                 save("t1", {"game_kbps": game_kbps, "games": results})
@@ -311,7 +369,18 @@ def test_t1_shared_uplink(spectate_backend: OnlineBackend, dolphin: Callable[...
              "on_drops_by_upload": on["cost"]["drops_with_others_ahead"],
              "on_upload_bytes": on["upload_wire"]["bytes"],
              "forced_cost_p99_ms": cost(forced, "p99"), "forced_cost_max_ms": cost(forced, "max"),
-             "forced_drops_by_upload": forced["cost"]["drops_with_others_ahead"]}
+             "forced_drops_by_upload": forced["cost"]["drops_with_others_ahead"],
+             # The start alone (the headers and the trickle).
+             "on_start_cost_p99_ms": round(on["start"]["game"]["delay_by_others_ms"].get("p99", 0.0), 1),
+             "on_start_cost_max_ms": round(on["start"]["game"]["delay_by_others_ms"].get("max", 0.0), 1),
+             "on_start_drops_by_upload": on["start"]["game"]["drops_with_others_ahead"],
+             "on_start_upload_bytes": on["start"]["upload"]["bytes"],
+             "hold_cost_p99_ms": cost(by["hold"], "p99"), "hold_cost_max_ms": cost(by["hold"], "max"),
+             "hold_drops_by_upload": by["hold"]["cost"]["drops_with_others_ahead"],
+             "hold_start_cost_p99_ms": round(
+                 by["hold"]["start"]["game"]["delay_by_others_ms"].get("p99", 0.0), 1),
+             "forced_start_cost_p99_ms": round(
+                 forced["start"]["game"]["delay_by_others_ms"].get("p99", 0.0), 1)}
         if "flood" in by:
             fl = by["flood"]
             v.update(flood_cost_p99_ms=cost(fl, "p99"), flood_cost_max_ms=cost(fl, "max"),
@@ -327,6 +396,10 @@ def test_t1_shared_uplink(spectate_backend: OnlineBackend, dolphin: Callable[...
         assert v["on_drops_by_upload"] == 0, v
         assert v["on_cost_p99_ms"] <= 1.5 * pkt, v
         assert v["on_cost_max_ms"] <= 3 * pkt + 1.0, v
+        # The same for the game's start alone, where the uploader trickles instead of holding.
+        assert v["on_start_drops_by_upload"] == 0, v
+        assert v["on_start_cost_p99_ms"] <= 1.5 * pkt, v
+        assert v["on_start_cost_max_ms"] <= 3 * pkt + 1.0, v
     # On a full uplink the uploader rightly sends nothing; where there is room it does upload, or
     # the test proves nothing.
     assert any(v["on_upload_bytes"] > 20000 for v in verdicts), verdicts
