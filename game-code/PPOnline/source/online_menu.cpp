@@ -1053,10 +1053,12 @@ namespace OnlineMenu {
     static const int ROOM_STATUS_FIT = 378;
     static const float STATUS_X2 = 330.0f;
     static const float WRAP_SCALE = 0.7f;
-    // A text a little too wide for one line at scale 1 is one line, smaller (down to this),
-    // rather than two lines at WRAP_SCALE (staging feedback 2026-10-12: "Press START to select
-    // stage" on two lines in a room).
-    static const float ONE_LINE_MIN = 0.75f;
+    // A text too wide for one line at scale 1 is one line, smaller (down to this), rather than
+    // two lines at WRAP_SCALE (staging feedback 2026-10-12: "Press START to select stage" on two
+    // lines in a room). Down to the two lines' own size (the user's, 2026-10-19: "sarahkitty3 quit
+    // - Press START" broke onto two lines at 0.75; two lines are only for what one line at that
+    // size can't hold).
+    static const float ONE_LINE_MIN = WRAP_SCALE;
     static const float WRAP_LINE_SPACE = 22.0f; // two lines at 0.7 inside the bar
     static const float WRAP_Y = 27.0f;          // the rule window's own is +-18.4
     // Font units that fit in the widened window at scale 1: at scale 1 a font unit is a window

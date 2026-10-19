@@ -1061,6 +1061,24 @@ def long_set_line(g: Game) -> None:
     g.wait(30)
 
 
+def test_status_line_one_smaller_line_before_two(game: Game) -> None:
+    """The room's status line (the user's, 2026-10-19): "sarahkitty3 quit - Press START" broke
+    onto two lines. A text that one line holds at the two lines' size (WRAP_SCALE) is one smaller
+    line; only a longer one takes two (DEBUG scratch[14] >> 24: online_menu.cpp LAYOUT_*)."""
+    g = game
+    g.c.game_bridge_config(enabled=False)
+    create_room(g)
+    sim = g.sim
+    sim.add_player(1, "alice")
+    g.wait(30)
+    for text, layout, shot in (("sarahkitty3 quit - Press START", 3, "20-quit-one-small-line"),
+                               ("WWWWWWWWWWWWWWW quit - Press START to play again", 2, "21-long-two-lines")):
+        sim.set_error(text)
+        g.wait(30)
+        g.shot(shot)
+        assert g.scratch(14) >> 24 == layout, (text, hex(g.scratch(14)))
+
+
 def test_room_play_line_long_names(play_game: Game) -> None:
     g = play_game
     g.c.game_bridge_config(enabled=False)
