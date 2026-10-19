@@ -981,6 +981,65 @@ def test_desync_ends_the_game_on_both(backend: OnlineBackend, dolphin: Callable[
             sim.stop()
 
 
+SNAPSHOT_REFUSED = 0x20000000   # debug scratch[10]: the plugin refused IfPhoto's snapshot
+
+
+def _log(g: Game) -> str:
+    return (g.inst.user_dir / "Logs" / "dolphin.log").read_text(errors="replace")
+
+
+@pytest.mark.slow
+def test_pause_snapshot_is_off_online(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                      gpu_backend: str) -> None:
+    """Bug report #53 (CISS#598, "screenshot crashes the game"): Z on the pause screen takes
+    Brawl's snapshot ("SE Snapshot if_photo.cpp"), which reads the NAND album (collect.vff) and
+    encodes the picture outside the rollback set. Under latency the machine that rolled back
+    across the snapshot's frame never reached another frame, and its peer dropped it. Online the
+    plugin refuses the snapshot on both machines (the same frame, no sound): here, through netsim's
+    bad_wifi, A pauses and presses Z while B keeps moving. Neither logs the snapshot or touches
+    the album, both sessions run on with no checksum mismatch, and after the unpause the game goes
+    on. Screenshots: run/artifacts/game-bridge/gameplay-snapshot/."""
+    sims, inis = _p2p_through_netsim("bad_wifi")
+    try:
+        a, b, _, _ = _connected_direct(backend, dolphin, gpu_backend, "gameplay-snapshot",
+                                       ("snap", "shot"), stocks=4, dolphin_ini=inis)
+        online_set.wait(lambda: all(online_set.gstatus(g.c)["phase"] == "running" for g in (a, b)),
+                        240, "the match to run on both")
+        walk = [PadInput(main=(40, 128), hold=7), PadInput(main=(216, 128), hold=7)]
+        b.c.pad_script(0, walk * 120)
+        a.steps("wait 240")
+        # The boot reads the album too: only what is logged from the pause on counts.
+        marks = [len(_log(g)) for g in (a, b)]
+        a.steps("tap START 8", "wait 60")
+        a.steps("tap Z 8", "wait 30", "tap Z 8", "wait 120")
+        for g in (a, b):
+            g.shot("01-paused-after-z")
+        frames = [online_set.gstatus(g.c)["current_frame"] for g in (a, b)]
+        a.steps("tap START 8")
+        a.c.pad_script(0, walk * 30)
+        a.steps("wait 360")
+        for g in (a, b):
+            g.shot("02-unpaused")
+        ends = [online_set.gstatus(g.c) for g in (a, b)]
+        print("frames", frames, [s["current_frame"] for s in ends], "rollbacks", [s["rollbacks"] for s in ends])
+        for g, st, f, mark in zip((a, b), ends, frames, marks):
+            assert st["phase"] == "running", (g.name, st["phase"], st.get("error"), st.get("end_reason"))
+            assert st["current_frame"] > f + 240, (g.name, f, st["current_frame"])
+            assert st["rollbacks"] > 0, (g.name, st["rollbacks"])
+            # Z reached IfPhoto on both machines, and the plugin refused the snapshot there.
+            assert g.debug_scratch()[10] & SNAPSHOT_REFUSED, (g.name, hex(g.debug_scratch()[10]))
+            log = _log(g)[mark:]
+            assert "SE Snapshot" not in log and "collect.vff" not in log, g.name
+        ck = _confirmed_checksums(a, b)
+        print(ck)
+        assert ck["mismatches"] == 0 and ck["compared"] > 300, ck
+        for g in (a, b):
+            g.c.mm_cancel()
+    finally:
+        for sim in sims:
+            sim.stop()
+
+
 MTRAND_SEED = 0x805A00BC   # g_mtRand's seed (LCG s * 0x41C64E6D + 0x3039, 31 bits)
 RNG_CALL = re.compile(r"gprb rng frame (\d+) #(\d+): (\S+) state ([0-9a-f]{8}) lr ((?:[0-9a-f]{8}(?: < )?)+)")
 

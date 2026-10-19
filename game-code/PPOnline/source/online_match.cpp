@@ -987,6 +987,46 @@ namespace OnlineMatch {
             "bctr\n\t");
     }
 
+    // ---- No snapshot online ----
+    // Z on the pause screen takes Brawl's snapshot (bug report #53, 2026-10-18: CISS#598
+    // "screenshot crashes the game"). IfPhoto's update (DOL 0x800F157C) plays its sound, logs
+    // "SE Snapshot if_photo.cpp", starts the photo (0x800F0954) and goes to state 2, which reads
+    // the NAND album (/title/00010000/52534245/data/collect.vff) and encodes the picture. The
+    // album and the file system are outside the rollback set: the machine that rolled back across
+    // that frame never reached another frame, and its peer dropped it ("peer timed out"). Online
+    // the snapshot never starts: the update goes on as if Z were not pressed (no sound, the pause
+    // stays as it is). Only SESSION's mode and the match decide it, the same on every machine and
+    // in every resimulated frame. The rest of the pause (its camera, L+R+A+START) is unchanged.
+    extern "C" int pponline_noSnapshot()
+    {
+        if (!g_onlineCss || !g_onlineMatchGame) return 0;
+        PPOM::g_block.debug.scratch[10] |= 0x20000000;   // tests: a snapshot was refused
+        return 1;
+    }
+
+    // 0x800F16DC `cmpwi r30,0`, once IfPhoto has decided to take the snapshot (P+'s Pause.asm
+    // hooks 0x800F1680, before it). Only r29/r30 (non-volatile) are live and the function saved
+    // LR. A refusal goes to 0x800F1728, the path of a frame without the press.
+    __attribute__((naked)) void hookSnapshot()
+    {
+        asm volatile(
+            "lis 12, pponline_noSnapshot@ha\n\t"
+            "addi 12, 12, pponline_noSnapshot@l\n\t"
+            "mtctr 12\n\t"
+            "bctrl\n\t"
+            "cmpwi 3, 0\n\t"
+            "lis 12, 0x800F\n\t"
+            "beq 1f\n\t"
+            "ori 12, 12, 0x1728\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t"
+            "1:\n\t"
+            "cmpwi 30, 0\n\t"
+            "ori 12, 12, 0x16E0\n\t"
+            "mtctr 12\n\t"
+            "bctr\n\t");
+    }
+
     // ---- Unranked: Slippi's client pause, without a pause ----
     // Slippi's Unranked never pauses (InitPause.asm ClientPause returns -1, "so the game doesn't
     // actually pause"); the user's, 2026-10-14: neither does ours, and nothing about the game
@@ -1146,6 +1186,7 @@ namespace OnlineMatch {
         api->sySimpleHookRel(0x00036FDC, reinterpret_cast<void*>(hookState5), 1);
         api->sySimpleHookRel(0x00037580, reinterpret_cast<void*>(hookState10), 1);
         api->sySimpleHook(0x80110550, reinterpret_cast<void*>(hookPadConfigSet));
+        api->sySimpleHook(0x800F16DC, reinterpret_cast<void*>(hookSnapshot));
         api->sySimpleHookRel(0x00256EF0, reinterpret_cast<void*>(hookPauseResult), 27 /* SORA_MELEE */);
     }
 }
