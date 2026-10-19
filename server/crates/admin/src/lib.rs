@@ -116,6 +116,248 @@ pub async fn recompute_ranked_tiers(pool: &PgPool, actor: &str) -> anyhow::Resul
     Ok(done)
 }
 
+/// What `admin ranked void` did (or, with `dry_run`, would do).
+#[derive(Debug, Clone)]
+pub struct Voided {
+    /// The set's status before (`COMPLETE` or `ABANDONED`).
+    pub previous_status: String,
+    /// The set's own rating changes, deleted.
+    pub deleted: usize,
+    /// Rating changes settled since the set (the replayed window, the set's own included).
+    pub window: usize,
+    /// Later rating changes whose values changed.
+    pub rerated: usize,
+    /// Players whose rating changed: (uid, connect code, before, after), biggest change first.
+    pub moved: Vec<(uuid::Uuid, Option<String>, f64, f64)>,
+    pub ranks: accounts::ranked::Recomputed,
+}
+
+/// `admin ranked void`: voids a rated ranked set as if it had never been played, in one
+/// transaction with `ratings` locked against settles.
+///
+/// Elo depends on the order of sets, so every rating change settled since the set is replayed
+/// without it ([`common::ranked::rerate`]): the set's players' later sets, their opponents' later
+/// sets, and so on. First the window is replayed unchanged, and the void is refused unless that
+/// reproduces every stored row and every player's `ratings` row exactly (a history corrected by
+/// hand, or rated under rules `rerate` does not know, needs a look first). Then the later rows and
+/// the moved players' ratings are rewritten, the set's own rows deleted (its players get back the
+/// rated set, and the win or loss), the set marked `TERMINATED` with `voided by admin: <reason>`,
+/// ranks and RDs recomputed, and an audit row (`ranked.void_set`) keeps every old value.
+/// `dry_run` does all of it and rolls back.
+pub async fn void_ranked_set(
+    pool: &PgPool,
+    actor: &str,
+    match_id: &str,
+    reason: &str,
+    dry_run: bool,
+) -> anyhow::Result<Voided> {
+    use common::ranked::{rerate, StoredChange};
+    use std::collections::HashMap;
+    use uuid::Uuid;
+
+    anyhow::ensure!(!reason.trim().is_empty(), "a reason is required");
+    let mut tx = pool.begin().await?;
+    // EXCLUSIVE, not recompute's SHARE ROW EXCLUSIVE: a settle's `SELECT ... FOR UPDATE` on two
+    // rows waits here too, so it cannot hold a row this rewrites.
+    sqlx::query("LOCK TABLE ratings IN EXCLUSIVE MODE").execute(&mut *tx).await?;
+    let row: Option<(i16, String, Option<Uuid>, Option<String>)> =
+        sqlx::query_as("SELECT mode, status, winner, end_reason FROM mm_matches WHERE match_id = $1 FOR UPDATE")
+            .bind(match_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    let Some((mode, status, winner, end_reason)) = row else { anyhow::bail!("no match {match_id:?}") };
+    anyhow::ensure!(mode == accounts::ranked::MODE_RANKED, "{match_id} is not a ranked set");
+    anyhow::ensure!(
+        status == "COMPLETE" || status == "ABANDONED",
+        "{match_id} is {status}: only a COMPLETE or ABANDONED set is rated"
+    );
+
+    #[allow(clippy::type_complexity)]
+    let rows: Vec<(i64, Uuid, String, Option<Uuid>, f64, f64, f64, f64, f64, i32, chrono::DateTime<chrono::Utc>)> =
+        sqlx::query_as(
+            "SELECT id, uid, match_id, opponent, score, rating_before, rating_after, opponent_rating, k,
+                    sets_before, created_at
+               FROM rating_events
+              WHERE created_at >= (SELECT min(created_at) FROM rating_events WHERE match_id = $1)
+              ORDER BY created_at, id",
+        )
+        .bind(match_id)
+        .fetch_all(&mut *tx)
+        .await?;
+    let window: Vec<StoredChange> = rows
+        .into_iter()
+        .map(|(id, uid, match_id, opponent, score, rating_before, rating_after, opponent_rating, k, n, at)| {
+            StoredChange {
+                id,
+                uid,
+                match_id,
+                opponent,
+                score,
+                rating_before,
+                rating_after,
+                opponent_rating,
+                k,
+                sets_before: n.max(0) as u32,
+                at,
+            }
+        })
+        .collect();
+    let own: Vec<&StoredChange> = window.iter().filter(|s| s.match_id == match_id).collect();
+    anyhow::ensure!(!own.is_empty(), "{match_id} changed nobody's rating");
+
+    // The stored history must be what replaying it gives, and end where `ratings` stands.
+    let (same, _) = rerate(&window, &[]);
+    if let Some((r, s)) = same.iter().zip(&window).find(|(r, s)| !r.matches(s)) {
+        anyhow::bail!(
+            "replaying the rating history does not reproduce rating_events row {} ({} in {}): stored \
+             {} -> {} against {} (k {}, {} sets before), replayed {} -> {} against {} (k {}, {} sets before); \
+             nothing was changed",
+            s.id,
+            s.uid,
+            s.match_id,
+            s.rating_before,
+            s.rating_after,
+            s.opponent_rating,
+            s.k,
+            s.sets_before,
+            r.rating_before,
+            r.rating_after,
+            r.opponent_rating,
+            r.k,
+            r.sets_before
+        );
+    }
+    let mut last: HashMap<Uuid, &StoredChange> = HashMap::new();
+    for s in &window {
+        last.insert(s.uid, s);
+    }
+    let uids: Vec<Uuid> = last.keys().copied().collect();
+    let stored: Vec<(Uuid, f64, i32)> =
+        sqlx::query_as("SELECT uid, rating, sets_played FROM ratings WHERE uid = ANY($1)")
+            .bind(&uids)
+            .fetch_all(&mut *tx)
+            .await?;
+    for (uid, rating, n) in &stored {
+        let s = last[uid];
+        anyhow::ensure!(
+            *rating == s.rating_after && *n == s.sets_before as i32 + 1,
+            "ratings row of {uid} ({rating}, {n} sets) is not where its last rating change left it \
+             ({}, {} sets); nothing was changed",
+            s.rating_after,
+            s.sets_before + 1
+        );
+    }
+
+    let removed: Vec<i64> = own.iter().map(|s| s.id).collect();
+    let (rerated, finals) = rerate(&window, &removed);
+    let by_id: HashMap<i64, &StoredChange> = window.iter().map(|s| (s.id, s)).collect();
+    let changed: Vec<_> = rerated.iter().filter(|r| !r.matches(by_id[&r.id])).collect();
+    sqlx::query(
+        "UPDATE rating_events e
+            SET rating_before = v.rb, rating_after = v.ra, opponent_rating = v.o, k = v.k, sets_before = v.n
+           FROM unnest($1::bigint[], $2::float8[], $3::float8[], $4::float8[], $5::float8[], $6::int[])
+                AS v(id, rb, ra, o, k, n)
+          WHERE e.id = v.id",
+    )
+    .bind(changed.iter().map(|r| r.id).collect::<Vec<_>>())
+    .bind(changed.iter().map(|r| r.rating_before).collect::<Vec<_>>())
+    .bind(changed.iter().map(|r| r.rating_after).collect::<Vec<_>>())
+    .bind(changed.iter().map(|r| r.opponent_rating).collect::<Vec<_>>())
+    .bind(changed.iter().map(|r| r.k).collect::<Vec<_>>())
+    .bind(changed.iter().map(|r| r.sets_before as i32).collect::<Vec<_>>())
+    .execute(&mut *tx)
+    .await?;
+
+    // Every player of the window ends where the replay leaves them; the set's players also get
+    // back the rated set and its win or loss.
+    let score: HashMap<Uuid, f64> = own.iter().map(|s| (s.uid, s.score)).collect();
+    let mut moved = vec![];
+    for uid in &uids {
+        let (before, after) = (last[uid].rating_after, finals[uid]);
+        let s = score.get(uid);
+        sqlx::query(
+            "UPDATE ratings SET rating = $2, sets_played = $3, wins = wins - $4, losses = losses - $5
+              WHERE uid = $1",
+        )
+        .bind(uid)
+        .bind(after.rating)
+        .bind(after.sets_played as i32)
+        .bind(i32::from(s.is_some_and(|&s| s > 0.5)))
+        .bind(i32::from(s.is_some_and(|&s| s < 0.5)))
+        .execute(&mut *tx)
+        .await?;
+        if after.rating != before {
+            moved.push((*uid, before, after.rating));
+        }
+    }
+    let deleted = sqlx::query("DELETE FROM rating_events WHERE match_id = $1")
+        .bind(match_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected() as usize;
+    sqlx::query("UPDATE mm_matches SET status = 'TERMINATED', winner = NULL, end_reason = $2 WHERE match_id = $1")
+        .bind(match_id)
+        .bind(format!("voided by admin: {reason}"))
+        .execute(&mut *tx)
+        .await?;
+    let ranks = accounts::ranked::recompute_tiers_in(&mut tx).await?;
+
+    let values = |s: &StoredChange| {
+        serde_json::json!({
+            "rating_before": s.rating_before, "rating_after": s.rating_after,
+            "opponent_rating": s.opponent_rating, "sets_before": s.sets_before,
+        })
+    };
+    let detail = serde_json::json!({
+        "reason": reason,
+        "previous_status": status,
+        "previous_winner": winner,
+        "previous_end_reason": end_reason,
+        "events": own.iter().map(|s| serde_json::json!({
+            "id": s.id, "uid": s.uid, "score": s.score, "rating_before": s.rating_before,
+            "rating_after": s.rating_after, "sets_before": s.sets_before,
+        })).collect::<Vec<_>>(),
+        "rerated": changed.iter().map(|r| serde_json::json!({
+            "id": r.id, "uid": by_id[&r.id].uid, "match_id": by_id[&r.id].match_id,
+            "before": values(by_id[&r.id]),
+            "after": {
+                "rating_before": r.rating_before, "rating_after": r.rating_after,
+                "opponent_rating": r.opponent_rating, "sets_before": r.sets_before,
+            },
+        })).collect::<Vec<_>>(),
+        "ratings": moved.iter().map(|(u, b, a)| (u.to_string(), serde_json::json!([b, a])))
+            .collect::<serde_json::Map<_, _>>(),
+    });
+    sqlx::query("INSERT INTO audit_log (actor, action, target, detail) VALUES ($1, 'ranked.void_set', $2, $3)")
+        .bind(actor)
+        .bind(match_id)
+        .bind(&detail)
+        .execute(&mut *tx)
+        .await?;
+
+    let codes: HashMap<Uuid, Option<String>> =
+        sqlx::query_as::<_, (Uuid, Option<String>)>("SELECT uid, connect_code FROM users WHERE uid = ANY($1)")
+            .bind(&uids)
+            .fetch_all(&mut *tx)
+            .await?
+            .into_iter()
+            .collect();
+    if dry_run {
+        tx.rollback().await?;
+    } else {
+        tx.commit().await?;
+    }
+    moved.sort_by(|a, b| (b.2 - b.1).abs().total_cmp(&(a.2 - a.1).abs()));
+    Ok(Voided {
+        previous_status: status,
+        deleted,
+        window: window.len(),
+        rerated: changed.len(),
+        moved: moved.into_iter().map(|(u, b, a)| (u, codes.get(&u).cloned().flatten(), b, a)).collect(),
+        ranks,
+    })
+}
+
 /// A bug report as `admin bug list` / `admin bug show` print it (`migrations/0011_bug_reports.sql`).
 #[derive(Debug, Clone, sqlx::FromRow)]
 pub struct BugReportRow {

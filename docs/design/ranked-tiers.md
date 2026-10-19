@@ -142,7 +142,7 @@ Layerlab's license allows using and modifying the emblems in the project, but fo
   - Leaderboard entries: `rank` and `setsToPlace`.
   - `GET /user/{uid}`: `rank.tier` and `rank.setsToPlace`.
   - Match history doesn't show ranks yet.
-- **`pp-admin ranked recompute`:** replays every player with `ratings` locked against settles, and writes an audit row. Run it after a cutoff change or a manual void or re-rate (the prod corrections procedure).
+- **`pp-admin ranked recompute`:** replays every player with `ratings` locked against settles, and writes an audit row. Run it after a cutoff change or a manual re-rate. `pp-admin ranked void` (server/README.md) recomputes ranks itself, in the void's transaction.
 - **Tests:**
   - e2e `ranked_tiers.rs`: sets through the report endpoint place both players. The API fields match, and recompute after real settles changes nothing. The backfill fills once.
   - admin `ranked_recompute.rs`: `migrate` fills, `recompute` fixes a wrong rank, and the audit row is written.

@@ -76,6 +76,112 @@ pub fn updated(own: f64, sets_played: u32, opponent: f64, score: f64) -> f64 {
     own + if score > 0.5 { change.max(MIN_CHANGE) } else { change.min(-MIN_CHANGE) }
 }
 
+/// When production started rating with [`MIN_CHANGE`] (57e90fed, accounts restarted 2026-10-16
+/// 06:15:39 UTC). Sets settled before it moved by `K * (score - expected)` alone, sometimes less
+/// than a point; [`rerate`] replays them that way.
+pub const MIN_CHANGE_SINCE_UNIX: i64 = 1_792_131_339;
+
+/// [`updated`] under the rules of a set settled at `at`: without [`MIN_CHANGE`] before
+/// [`MIN_CHANGE_SINCE_UNIX`].
+pub fn updated_at(own: f64, sets_played: u32, opponent: f64, score: f64, at: DateTime<Utc>) -> f64 {
+    if at.timestamp() < MIN_CHANGE_SINCE_UNIX {
+        return own + k_factor(sets_played) * (score - expected(own, opponent));
+    }
+    updated(own, sets_played, opponent, score)
+}
+
+/// One stored rating change (a `rating_events` row) as [`rerate`] reads it.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StoredChange {
+    pub id: i64,
+    pub uid: Uuid,
+    pub match_id: String,
+    pub opponent: Option<Uuid>,
+    pub score: f64,
+    pub rating_before: f64,
+    pub rating_after: f64,
+    pub opponent_rating: f64,
+    pub k: f64,
+    pub sets_before: u32,
+    pub at: DateTime<Utc>,
+}
+
+/// What [`rerate`] computes for one rating change.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct RecomputedChange {
+    pub id: i64,
+    pub rating_before: f64,
+    pub rating_after: f64,
+    pub opponent_rating: f64,
+    pub k: f64,
+    pub sets_before: u32,
+}
+
+impl RecomputedChange {
+    /// Whether the stored row holds exactly these values.
+    pub fn matches(&self, s: &StoredChange) -> bool {
+        self.rating_before == s.rating_before
+            && self.rating_after == s.rating_after
+            && self.opponent_rating == s.opponent_rating
+            && self.k == s.k
+            && self.sets_before == s.sets_before
+    }
+}
+
+/// Re-rates the rating changes `window` (every change settled from some point on, in settle order:
+/// `created_at`, then `id`) as if the changes in `removed` (those of one voided set, which must be
+/// in `window`) had never been made. Elo depends on the order of sets, so every later set of the
+/// voided set's players changes, and through them their opponents' later sets, and so on.
+///
+/// Each player starts from their first change in the window (a voided set's players from before
+/// it). A player who has no change of their own in a set (the other player of an abandon before any
+/// game) stands at the stored opponent rating until a change of theirs is replayed. Both changes of
+/// a set use the ratings from before the set, as `settle` does.
+///
+/// Returns every change of `window` not in `removed`, in order, and each player's rating and
+/// rated-set count after the window. With `removed` empty it reproduces the stored rows exactly
+/// when the history follows today's rules ([`updated_at`]), which callers check first.
+pub fn rerate(window: &[StoredChange], removed: &[i64]) -> (Vec<RecomputedChange>, HashMap<Uuid, Standing>) {
+    let mut state: HashMap<Uuid, Standing> = HashMap::new();
+    for s in window.iter().filter(|s| removed.contains(&s.id)) {
+        state.insert(s.uid, Standing { rating: s.rating_before, sets_played: s.sets_before });
+    }
+    let mut out = Vec::with_capacity(window.len());
+    let mut i = 0;
+    while i < window.len() {
+        let mut j = i + 1;
+        while j < window.len() && window[j].match_id == window[i].match_id {
+            j += 1;
+        }
+        let group: Vec<&StoredChange> = window[i..j].iter().filter(|s| !removed.contains(&s.id)).collect();
+        for s in &group {
+            state.entry(s.uid).or_insert(Standing { rating: s.rating_before, sets_played: s.sets_before });
+        }
+        let before: HashMap<Uuid, Standing> = group
+            .iter()
+            .flat_map(|s| [Some(s.uid), s.opponent])
+            .flatten()
+            .filter_map(|u| state.get(&u).map(|st| (u, *st)))
+            .collect();
+        for s in group {
+            let me = before[&s.uid];
+            let opponent = s.opponent.and_then(|o| before.get(&o)).map(|o| o.rating).unwrap_or(s.opponent_rating);
+            let after = updated_at(me.rating, me.sets_played, opponent, s.score, s.at);
+            out.push(RecomputedChange {
+                id: s.id,
+                rating_before: me.rating,
+                rating_after: after,
+                opponent_rating: opponent,
+                k: k_factor(me.sets_played),
+                sets_before: me.sets_played,
+            });
+            state.insert(s.uid, Standing { rating: after, sets_played: me.sets_played + 1 });
+        }
+        i = j;
+    }
+    (out, state)
+}
+
 /// One client's report of one game.
 #[derive(Debug, Clone, PartialEq)]
 pub struct GameReport {
@@ -933,6 +1039,88 @@ mod tests {
         assert_eq!(st.rank, Some(rank(Tier::Diamond, Some(3))));
         st = st.after_set(6, 1610.0, 1520.0, (1610.0, 80.0));
         assert_eq!(st.rank, Some(rank(Tier::Emerald, Some(1))));
+    }
+
+    /// A set as [`settled`] plays it: match id, its rated players as (uid, opponent, score), settle
+    /// time.
+    type PlayedSet<'a> = (&'a str, Vec<(Uuid, Uuid, f64)>, DateTime<Utc>);
+
+    /// Plays `sets` as `settle` stores them.
+    fn settled(sets: &[PlayedSet]) -> Vec<StoredChange> {
+        let mut st: HashMap<Uuid, Standing> = HashMap::new();
+        let mut out = vec![];
+        for (m, rated, at) in sets {
+            let before = st.clone();
+            for &(me, opp, score) in rated {
+                let (s, o) =
+                    (before.get(&me).copied().unwrap_or_default(), before.get(&opp).copied().unwrap_or_default());
+                let after = updated_at(s.rating, s.sets_played, o.rating, score, *at);
+                out.push(StoredChange {
+                    id: out.len() as i64 + 1,
+                    uid: me,
+                    match_id: m.to_string(),
+                    opponent: Some(opp),
+                    score,
+                    rating_before: s.rating,
+                    rating_after: after,
+                    opponent_rating: o.rating,
+                    k: k_factor(s.sets_played),
+                    sets_before: s.sets_played,
+                    at: *at,
+                });
+                st.insert(me, Standing { rating: after, sets_played: s.sets_played + 1 });
+            }
+        }
+        out
+    }
+
+    #[test]
+    fn rerate_reproduces_the_history_and_removes_a_set() {
+        let (a, b, c) = (uid(1), uid(2), uid(3));
+        let t = |s: i64| DateTime::from_timestamp(MIN_CHANGE_SINCE_UNIX + s, 0).unwrap();
+        fn win(m: &str, w: Uuid, l: Uuid, at: DateTime<Utc>) -> PlayedSet<'_> {
+            (m, vec![(w, l, 1.0), (l, w, 0.0)], at)
+        }
+        // Before MIN_CHANGE a far stronger player gains under a point; after it, at least one.
+        let names: Vec<String> = (0..80).map(|n| format!("a{n}")).collect();
+        let mut sets = vec![];
+        for (n, m) in names.iter().enumerate() {
+            sets.push(win(m, a, c, t(-200 + n as i64)));
+        }
+        sets.push(win("ab", a, b, t(-50)));
+        // The set to void: b abandons before any game, only b is rated.
+        sets.push(("void", vec![(b, a, 0.0)], t(-40)));
+        sets.push(win("bc", b, c, t(-30)));
+        sets.push(win("ac", a, c, t(10)));
+        sets.push(win("ba", b, a, t(20)));
+        let history = settled(&sets);
+        assert!(history.iter().any(|s| s.at < t(0) && (s.rating_after - s.rating_before).abs() < MIN_CHANGE));
+
+        let (same, finals) = rerate(&history, &[]);
+        assert_eq!(same.len(), history.len());
+        assert!(same.iter().zip(&history).all(|(r, s)| r.matches(s)));
+        assert_eq!(finals[&a].rating, history.iter().rev().find(|s| s.uid == a).unwrap().rating_after);
+
+        // From the voided set on, as if it never happened.
+        let start = history.iter().position(|s| s.match_id == "void").unwrap();
+        let void_id = history[start].id;
+        let (rerated, finals) = rerate(&history[start..], &[void_id]);
+        let without: Vec<_> = sets.iter().filter(|s| s.0 != "void").cloned().collect();
+        let expected = settled(&without);
+        let expected_later: Vec<&StoredChange> = expected.iter().skip(start).collect();
+        assert_eq!(rerated.len(), expected_later.len());
+        for (r, e) in rerated.iter().zip(expected_later) {
+            assert_eq!(
+                (r.rating_before, r.rating_after, r.opponent_rating, r.k, r.sets_before),
+                (e.rating_before, e.rating_after, e.opponent_rating, e.k, e.sets_before)
+            );
+        }
+        let last = |u: Uuid| expected.iter().rev().find(|s| s.uid == u).unwrap();
+        for u in [a, b, c] {
+            assert_eq!(finals[&u], Standing { rating: last(u).rating_after, sets_played: last(u).sets_before + 1 });
+        }
+        // b played one rated set fewer.
+        assert_eq!(finals[&b].sets_played, 3);
     }
 
     #[test]

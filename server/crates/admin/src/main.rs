@@ -54,6 +54,19 @@ enum RankedCmd {
     /// Recompute every player's rank and placement from the rating history. Run it after changing
     /// the rank cutoffs, or after a manual correction of ratings or rating_events.
     Recompute,
+    /// Void a rated set (COMPLETE or ABANDONED) as if it was never played: its rating changes are
+    /// taken back and every set settled since is re-rated without it, ranks recomputed, all in one
+    /// transaction and audit-logged. Refused if the stored history does not replay exactly.
+    Void {
+        /// The set's match id (mm_matches.match_id).
+        match_id: String,
+        /// Why (stored in the set's end_reason and the audit row).
+        #[arg(long)]
+        reason: String,
+        /// Do everything, print what changes, and roll it back.
+        #[arg(long)]
+        dry_run: bool,
+    },
 }
 
 #[derive(Subcommand)]
@@ -267,6 +280,30 @@ async fn main() -> anyhow::Result<()> {
                 "ranked tiers recomputed: {} players from {} rating changes, {} rank(s) changed",
                 done.players, done.sets, done.ranks_changed
             );
+        }
+        Cmd::Ranked(RankedCmd::Void { match_id, reason, dry_run }) => {
+            let v = admin::void_ranked_set(&pool, &actor, &match_id, &reason, dry_run).await?;
+            println!(
+                "{}{match_id} ({}) voided: {} rating change(s) deleted, {} of {} later ones re-rated, \
+                 {} player(s) moved, {} rank(s) changed",
+                if dry_run { "DRY RUN, rolled back: " } else { "" },
+                v.previous_status,
+                v.deleted,
+                v.rerated,
+                v.window - v.deleted,
+                v.moved.len(),
+                v.ranks.ranks_changed
+            );
+            for (uid, code, before, after) in v.moved.iter().take(15) {
+                println!(
+                    "  {:<12} {uid}  {before:.2} -> {after:.2} ({:+.2})",
+                    code.as_deref().unwrap_or("-"),
+                    after - before
+                );
+            }
+            if v.moved.len() > 15 {
+                println!("  ... {} more", v.moved.len() - 15);
+            }
         }
         Cmd::ChatReports { limit } => {
             let reports = admin::unhandled_chat_reports(&pool, limit.clamp(1, 1000)).await?;

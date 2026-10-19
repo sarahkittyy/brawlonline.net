@@ -307,7 +307,10 @@ admin bug reopen ID
 admin bug delete ID...                         # the reports and their zips, for good
 admin bug clear --yes                          # every resolved report and its zip, for good
 admin ranked recompute                         # every rank and placement again from rating_events (after a cutoff change or a manual correction)
+admin ranked void MATCH_ID --reason TEXT [--dry-run]  # take a rated set back and re-rate every set settled since (below)
 ```
+
+`ranked void` voids a COMPLETE or ABANDONED ranked set as if it was never played (a client bug forced a player out, say). Elo depends on the order of sets, so taking a set's rating changes back also changes every later set of its players, their opponents' later sets, and so on: every `rating_events` row settled since the set is replayed without it (`common::ranked::rerate`, the rules of each set's time: no `MIN_CHANGE` before 2026-10-16 06:15:39 UTC). Then the later rows and the `ratings` rows are rewritten, the set's own rows deleted (its players get the rated set, and the win or loss, back), the set marked `TERMINATED` with `voided by admin: TEXT`, ranks and RDs recomputed, and an audit row (`ranked.void_set`) keeps every old value, all in one transaction with `ratings` locked against settles. It refuses, changing nothing, unless replaying the window unchanged reproduces every stored row and every `ratings` row exactly. A history corrected by hand needs a look first. `--dry-run` prints what would change and rolls back. On a copy of prod's ranked tables it reproduced the hand void of bug report #60 (2026-10-19) exactly: 2,405 later changes re-rated, 211 players moved, most by less than a point.
 
 `bug` reads `BUG_REPORTS_DIR` like accounts (default `bug-reports`, relative to the working directory, which `pp-admin` sets to `/var/lib/ppserver`).
 

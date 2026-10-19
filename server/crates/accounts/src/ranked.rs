@@ -34,7 +34,7 @@ use crate::store;
 use crate::AppState;
 
 /// `mm_matches.mode` of a ranked set (Slippi's mode numbers).
-pub(crate) const MODE_RANKED: i16 = 0;
+pub const MODE_RANKED: i16 = 0;
 
 // ---------------------------------------------------------------- store
 
@@ -88,7 +88,15 @@ pub struct Recomputed {
 pub async fn recompute_tiers(pool: &PgPool) -> sqlx::Result<Recomputed> {
     let mut tx = pool.begin().await?;
     sqlx::query("LOCK TABLE ratings IN SHARE ROW EXCLUSIVE MODE").execute(&mut *tx).await?;
-    let sets = rated_sets(&mut tx).await?;
+    let done = recompute_tiers_in(&mut tx).await?;
+    tx.commit().await?;
+    Ok(done)
+}
+
+/// [`recompute_tiers`] inside the caller's transaction, which holds `ratings` locked against
+/// settles (a void does it as its last step).
+pub async fn recompute_tiers_in(tx: &mut PgConnection) -> sqlx::Result<Recomputed> {
+    let sets = rated_sets(&mut *tx).await?;
     let (events, states) = ranked::replay(&sets);
 
     let ids: Vec<i64> = events.iter().map(|e| e.id).collect();
@@ -126,7 +134,6 @@ pub async fn recompute_tiers(pool: &PgPool) -> sqlx::Result<Recomputed> {
     .bind(&rds)
     .execute(&mut *tx)
     .await?;
-    tx.commit().await?;
     Ok(Recomputed { sets: events.len(), players: uids.len(), ranks_changed })
 }
 
