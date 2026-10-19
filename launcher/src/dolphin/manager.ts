@@ -19,13 +19,20 @@ import { bundledDolphinSource, installBundledDolphin } from "./install/bundled_d
 import { fetchLatestVersion } from "./install/fetch_latest_version";
 import { LocalDolphinInstallation } from "./install/local_installation";
 import type { GameFilesTarget } from "./install/move_game_files";
-import { chooseGameFilesTarget, GameFilesMoveError, moveGameFiles, removeGameFiles } from "./install/move_game_files";
+import {
+  chooseGameFilesTarget,
+  GameFilesMoveError,
+  isInInstallFolder,
+  moveGameFiles,
+  removeGameFiles,
+} from "./install/move_game_files";
 import type { DolphinPathEnv } from "./install/paths";
 import {
   defaultDolphinExecutable,
   defaultNetplayFolder,
   defaultPluginLocation,
   defaultUserTemplate,
+  launcherInstallFolder,
   launchTypeFolder,
   netplayFolder,
   patchedSdCardFolder,
@@ -82,6 +89,8 @@ export class DolphinManager {
   private projectPlusInstall: Promise<void> | null = null;
   /** True while Settings moves the game files (moveGameFiles): nothing may start Dolphin. */
   private movingGameFiles = false;
+  /** Start-up's move of game files out of the launcher's install folder, while it runs. */
+  private installFolderRescue: Promise<boolean> | null = null;
   private eventSubject = new Subject<DolphinEvent>();
   private shouldSendProgress = createProgressThrottle(PROGRESS_INTERVAL_MS);
   /** Runs before a new Dolphin starts and throws to stop it (the launcher's update check). */
@@ -177,6 +186,11 @@ export class DolphinManager {
     });
     if (update) {
       log.info(`Dolphin ${update.version} is available, but installing updates is not implemented yet`);
+    }
+
+    if (this._gameFilesInInstallFolder() && (await this._moveGameFilesOutOfInstallFolder())) {
+      // The move installs both Dolphins again in the new folder.
+      return;
     }
 
     const dolphinInstall = this.getInstallation(dolphinType);
@@ -612,7 +626,7 @@ export class DolphinManager {
     const target: GameFilesTarget =
       picked == null
         ? await defaultGameFilesTarget(defaultFolder, from)
-        : await chooseGameFilesTarget(picked, from, PRODUCT_NAME);
+        : await chooseGameFilesTarget(picked, from, PRODUCT_NAME, this._launcherInstallFolder());
     if (target.kind === "adopt" && !(await confirmAdoptGameFiles(target.folder, from))) {
       return { action: "cancelled", folder: from, leftBehind: null };
     }
@@ -662,6 +676,53 @@ export class DolphinManager {
       void this.installDolphin(dolphinType).catch((err) => log.error(err));
     }
     return { action: target.kind === "move" ? "moved" : "adopted", folder: target.folder, leftBehind };
+  }
+
+  /** The folder every launcher update deletes or replaces (paths.ts launcherInstallFolder). */
+  private _launcherInstallFolder(): string | null {
+    return launcherInstallFolder({
+      platform: process.platform,
+      isPackaged: app.isPackaged,
+      exePath: app.getPath("exe"),
+    });
+  }
+
+  private _gameFilesInInstallFolder(): boolean {
+    const folder = this.settingsManager.get().settings.gameFilesFolder;
+    return folder != null && isInInstallFolder(folder, this._launcherInstallFolder());
+  }
+
+  /**
+   * Game files moved into the launcher's install folder (before Settings refused it) are deleted
+   * by the next launcher update: the User folder with the player's Dolphin settings, hotkeys,
+   * controller settings and custom textures (a player report 2026-10-19). At start-up they are
+   * moved back to `<userData>/netplay`, or to `<userData>/game-files` when that already has game
+   * files of its own. True if they were moved; a failed move leaves them where they are this run.
+   */
+  private _moveGameFilesOutOfInstallFolder(): Promise<boolean> {
+    if (!this.installFolderRescue) {
+      this.installFolderRescue = (async () => {
+        const userData = app.getPath("userData");
+        const picked = (await fileExists(path.join(defaultNetplayFolder(userData), "User")))
+          ? path.join(userData, "game-files")
+          : null;
+        log.warn(
+          `The game files (${this.netplayFolder()}) are inside the launcher's install folder ` +
+            `(${this._launcherInstallFolder()}), which every update deletes: moving them to ` +
+            `${picked ?? defaultNetplayFolder(userData)}`,
+        );
+        try {
+          const result = await this.moveGameFiles(picked);
+          return result.action !== "cancelled";
+        } catch (err) {
+          log.error(`Could not move the game files out of the install folder: ${err}`);
+          return false;
+        }
+      })().finally(() => {
+        this.installFolderRescue = null;
+      });
+    }
+    return this.installFolderRescue;
   }
 
   private _assertNotMoving() {

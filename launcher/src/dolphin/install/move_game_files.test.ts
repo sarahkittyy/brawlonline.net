@@ -3,7 +3,13 @@ import os from "os";
 import path from "path";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 
-import { chooseGameFilesTarget, GameFilesMoveError, moveGameFiles, removeGameFiles } from "./move_game_files";
+import {
+  chooseGameFilesTarget,
+  GameFilesMoveError,
+  isInInstallFolder,
+  moveGameFiles,
+  removeGameFiles,
+} from "./move_game_files";
 
 let root: string;
 let n = 0;
@@ -102,6 +108,35 @@ describe("chooseGameFilesTarget", () => {
     await expect(chooseGameFilesTarget(current, current, "Brawl Online")).rejects.toThrow("already in");
     await expect(chooseGameFilesTarget(path.join(current, "sub"), current, "Brawl Online")).rejects.toThrow("outside");
     await expect(chooseGameFilesTarget(path.join(dir, "data"), current, "Brawl Online")).rejects.toThrow("outside");
+  });
+});
+
+describe("the launcher's install folder", () => {
+  // A player report 2026-10-19: an update deleted the custom textures, Dolphin settings, hotkeys
+  // and controller settings. Every update deletes the install folder (NSIS: RMDir /r $INSTDIR).
+  it("is never a target, nor a folder inside it", async () => {
+    const install = path.join(dir, "Brawl Online");
+    await write(path.join(install, "Brawl Online.exe"), "x");
+    const current = path.join(dir, "netplay");
+    await expect(chooseGameFilesTarget(install, current, "Brawl Online", install)).rejects.toThrow("install folder");
+    await expect(chooseGameFilesTarget(path.join(install, "game"), current, "Brawl Online", install)).rejects.toThrow(
+      "install folder",
+    );
+    await expect(
+      chooseGameFilesTarget(path.join(install, "resources"), current, "Brawl Online", install),
+    ).rejects.toThrow(GameFilesMoveError);
+  });
+
+  it("a folder next to it or around it is fine", async () => {
+    const install = path.join(dir, "Games", "brawl-online");
+    await write(path.join(install, "Brawl Online.exe"), "x");
+    expect(
+      await chooseGameFilesTarget(path.join(dir, "Games"), path.join(dir, "netplay"), "Brawl Online", install),
+    ).toEqual({ folder: path.join(dir, "Games", "Brawl Online"), kind: "move" });
+    expect(isInInstallFolder(path.join(dir, "Games"), install)).toBe(false);
+    expect(isInInstallFolder(path.join(install, "x", "netplay"), install)).toBe(true);
+    expect(isInInstallFolder(install, install)).toBe(true);
+    expect(isInInstallFolder(install, null)).toBe(false);
   });
 });
 

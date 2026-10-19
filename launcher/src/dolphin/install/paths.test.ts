@@ -9,6 +9,7 @@ import {
   defaultUserTemplate,
   dolphinExecutableName,
   installedDolphinExecutable,
+  launcherInstallFolder,
   netplayFolder,
   patchedSdCardFolder,
   PLUGIN_SD_PATH,
@@ -90,5 +91,30 @@ describe("dolphin paths", () => {
       path.join(path.resolve("/userdata"), "netplay", "pponline-sd"),
     );
     expect(PLUGIN_SD_PATH).toBe("/Project+/pf/plugins/PPOnline.rel");
+  });
+});
+
+describe("launcherInstallFolder", () => {
+  it("is the folder an update deletes: Windows' install folder, macOS' app bundle", () => {
+    const win = String.raw`D:\Games\Brawl Online\Brawl Online.exe`;
+    expect(launcherInstallFolder({ platform: "win32", isPackaged: true, exePath: win })).toBe(
+      String.raw`D:\Games\Brawl Online`,
+    );
+    expect(
+      launcherInstallFolder({
+        platform: "darwin",
+        isPackaged: true,
+        exePath: "/Applications/Brawl Online.app/Contents/MacOS/Brawl Online",
+      }),
+    ).toBe("/Applications/Brawl Online.app");
+  });
+
+  it("is none for the AppImage and in development", () => {
+    expect(launcherInstallFolder({ platform: "linux", isPackaged: true, exePath: "/tmp/.mount_x/brawl-online" })).toBe(
+      null,
+    );
+    expect(launcherInstallFolder({ platform: "win32", isPackaged: false, exePath: String.raw`C:\electron.exe` })).toBe(
+      null,
+    );
   });
 });

@@ -207,7 +207,10 @@ var StartMenuShortcutCheckbox
     Delete "$oldStartMenuLink"
   ${EndIf}
 
-  MessageBox MB_YESNO|MB_DEFBUTTON2|MB_ICONQUESTION "Would you like to also clear ${PRODUCT_NAME} application data (including its Dolphin settings)?" \
+  ; Updates run this silently (/S): /SD answers No, so an update never deletes the player's data.
+  ; Spelled out because Yes takes the Dolphin User folder with it (a player report 2026-10-19 lost
+  ; custom textures, Dolphin settings, hotkeys and controller settings).
+  MessageBox MB_YESNO|MB_DEFBUTTON2|MB_ICONQUESTION "Also delete your ${PRODUCT_NAME} data?$\r$\n$\r$\nThis deletes your Dolphin settings, hotkeys, controller settings, custom textures, Project+ save and SD card, and your login. Choose No to keep them for a reinstall." \
     /SD IDNO IDNO Done IDYES Accepted
 
   Accepted:

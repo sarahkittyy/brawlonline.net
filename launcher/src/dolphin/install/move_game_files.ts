@@ -54,14 +54,26 @@ async function holdsGameFiles(dir: string): Promise<boolean> {
 }
 
 /**
+ * True if `folder` is the launcher's install folder or inside it (paths.ts launcherInstallFolder),
+ * where every launcher update deletes it.
+ */
+export function isInInstallFolder(folder: string, installFolder: string | null): boolean {
+  return installFolder != null && (samePath(folder, installFolder) || isSubdirectory(installFolder, folder));
+}
+
+/**
  * Where the game files go when the player picks `picked`: the folder itself when it is empty (or
  * missing) or already holds game files, else a `<subfolderName>` folder inside it (picking
- * `D:\Games` gives `D:\Games\Brawl Online`). `current` is the netplay folder in use.
+ * `D:\Games` gives `D:\Games\Brawl Online`). `current` is the netplay folder in use. Never the
+ * launcher's install folder or a folder inside it (`installFolder`): a player report 2026-10-19
+ * lost the custom textures, Dolphin settings, hotkeys and controller settings in the User folder
+ * to an update.
  */
 export async function chooseGameFilesTarget(
   picked: string,
   current: string,
   subfolderName: string,
+  installFolder: string | null = null,
 ): Promise<GameFilesTarget> {
   const check = async (folder: string): Promise<GameFilesTarget | null> => {
     if (samePath(folder, current)) {
@@ -69,6 +81,12 @@ export async function chooseGameFilesTarget(
     }
     if (isSubdirectory(current, folder) || isSubdirectory(folder, current)) {
       throw new GameFilesMoveError(`Choose a folder outside ${current}.`);
+    }
+    if (isInInstallFolder(folder, installFolder)) {
+      throw new GameFilesMoveError(
+        `${folder} is inside the launcher's install folder (${installFolder}), which every launcher ` +
+          `update deletes. Choose a folder outside it.`,
+      );
     }
     if (await holdsGameFiles(folder)) {
       return { folder, kind: "adopt" };

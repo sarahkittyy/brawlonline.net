@@ -138,6 +138,29 @@ export function defaultNetplayFolder(userDataDir: string): string {
 }
 
 /**
+ * The folder a launcher update replaces as a whole, or null where there is none: on Windows the
+ * install folder (the old version's uninstaller runs `RMDir /r $INSTDIR` on every update, so
+ * anything put inside it is deleted), on macOS the app bundle. The AppImage is read-only.
+ */
+export function launcherInstallFolder(ctx: {
+  platform: NodeJS.Platform;
+  isPackaged: boolean;
+  exePath: string;
+}): string | null {
+  if (!ctx.isPackaged) {
+    return null;
+  }
+  if (ctx.platform === "win32") {
+    return path.win32.dirname(ctx.exePath);
+  }
+  if (ctx.platform === "darwin") {
+    const appIndex = ctx.exePath.lastIndexOf(".app/");
+    return appIndex === -1 ? null : ctx.exePath.slice(0, appIndex + 4);
+  }
+  return null;
+}
+
+/**
  * The launcher-managed copy of the user's P+ SD card with the plugin installed:
  * `<netplay folder>/pponline-sd/sd.raw`, plus `manifest.json` next to it.
  */
