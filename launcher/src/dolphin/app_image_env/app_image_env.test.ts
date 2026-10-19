@@ -94,4 +94,29 @@ describe("sanitizeAppImageEnv", () => {
     const env = sanitizeAppImageEnv();
     expect(env).not.toHaveProperty("QT_PLUGIN_PATH");
   });
+
+  it("gives Dolphin back the LD_PRELOAD Steam started the launcher with", () => {
+    const steam =
+      "/home/deck/.local/share/Steam/ubuntu12_32/gameoverlayrenderer.so:/home/deck/.local/share/Steam/ubuntu12_64/gameoverlayrenderer.so";
+    vi.stubEnv("PPO_STEAM_LD_PRELOAD", steam);
+    vi.stubEnv("LD_PRELOAD", "");
+    const env = sanitizeAppImageEnv();
+    expect(env.LD_PRELOAD).toEqual(steam);
+    expect(env).not.toHaveProperty("PPO_STEAM_LD_PRELOAD");
+  });
+
+  it("restores the whole saved LD_PRELOAD, other preloads included", () => {
+    vi.stubEnv("PPO_STEAM_LD_PRELOAD", "/usr/lib/libfoo.so:/s/ubuntu12_64/gameoverlayrenderer.so");
+    vi.stubEnv("LD_PRELOAD", "/usr/lib/libfoo.so");
+    const env = sanitizeAppImageEnv();
+    expect(env.LD_PRELOAD).toEqual("/usr/lib/libfoo.so:/s/ubuntu12_64/gameoverlayrenderer.so");
+  });
+
+  it("leaves LD_PRELOAD alone when the launcher was not started by Steam", () => {
+    vi.stubEnv("PPO_STEAM_LD_PRELOAD", "");
+    vi.stubEnv("LD_PRELOAD", "/usr/lib/libfoo.so");
+    const env = sanitizeAppImageEnv();
+    expect(env.LD_PRELOAD).toEqual("/usr/lib/libfoo.so");
+    expect(env).not.toHaveProperty("PPO_STEAM_LD_PRELOAD");
+  });
 });

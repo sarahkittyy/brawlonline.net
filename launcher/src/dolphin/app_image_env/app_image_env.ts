@@ -21,9 +21,17 @@
  * variables for library/plugin discovery (using patchelf rpath or ld-linux
  * --library-path instead), but that change has been stalled upstream since 2017.
  * In the meantime, this sanitization is the pragmatic fix on the launcher side.
+ *
+ * Steam's overlay: Steam starts a non-Steam game with gameoverlayrenderer.so in
+ * LD_PRELOAD, which crashes Electron's sandboxed zygote in the AppImage. The AppImage's
+ * launcher binary is a wrapper (.erb/scripts/linux-steam-wrapper.js) that takes the
+ * overlay out and saves the original LD_PRELOAD in PPO_STEAM_LD_PRELOAD; Dolphin gets
+ * that value back, so it has the Steam overlay as a Steam game does.
  */
 
 const appImageEnvVars = new Set(["APPDIR", "APPIMAGE", "ARGV0", "OWD"]);
+
+export const STEAM_LD_PRELOAD_VAR = "PPO_STEAM_LD_PRELOAD";
 
 const appImagePathVars = [
   "LD_LIBRARY_PATH",
@@ -74,6 +82,12 @@ export function sanitizeAppImageEnv(): NodeJS.ProcessEnv {
         delete env[varName];
       }
     }
+  }
+
+  const steamPreload = env[STEAM_LD_PRELOAD_VAR];
+  delete env[STEAM_LD_PRELOAD_VAR];
+  if (steamPreload) {
+    env.LD_PRELOAD = steamPreload;
   }
 
   return env;
