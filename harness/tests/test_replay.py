@@ -272,18 +272,11 @@ def test_three_player_room_game_plays_back(backend: OnlineBackend,
     assert st["frames_checked"] >= files[1].endg["finalFrame"] - files[1].first_frame, st
 
 
-@pytest.mark.slow
-def test_launcher_comm_file_plays_from_a_fresh_boot(backend: OnlineBackend,
-                                                   dolphin: Callable[..., DolphinInstance],
-                                                   gpu_backend: str) -> None:
-    """The launcher's way (docs/design/replays.md §6.2): a Direct game on the server's rules,
-    then a Dolphin started with `-i <comm.json>` (written before it starts, as
-    PlaybackDolphinInstance does) and no account. Nothing drives it: the game boots to the ONLINE
-    page by itself, Dolphin arms the replay once the plugin runs (not at the boot DOL, whose game
-    ID is not the disc's), the plugin opens the CSS and starts the match, and the replay plays to
-    its end with no checksum differing. The status file next to the comm file says so."""
-    test = "comm"
-    a, b, _, _ = _connected_direct(backend, dolphin, gpu_backend, "replay-comm", ("lena", "otto"),
+def _recorded_direct_game(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                          gpu_backend: str, test: str, names: tuple[str, str]) -> tuple[R.Replay, Path]:
+    """A Direct game on the server's rules, played to its end; A's file, copied to the test's
+    artifacts, and that folder."""
+    a, b, _, _ = _connected_direct(backend, dolphin, gpu_backend, f"replay-{test}", names,
                                    test_rules=False)
     online_set.play_set([a, b], games=1, mode="direct", panels={g.name: g.panel for g in (a, b)})
     online_set.wait(lambda: not any(g.c.call("replay_recording")["recording"] for g in (a, b)), 60,
@@ -295,14 +288,23 @@ def test_launcher_comm_file_plays_from_a_fresh_boot(backend: OnlineBackend,
     shutil.copy2(fa.path, out / fa.path.name)
     for g in (a, b):
         g.c.mm_cancel()
+    return fa, out
 
+
+def _comm_viewer(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str,
+                 fa: R.Replay, out: Path, gcpad_ini: dict[str, dict[str, Any]] | None = None,
+                 ) -> tuple[Game, DolphinInstance, Callable[[], dict[str, Any]]]:
+    """The launcher's playback Dolphin: started with `-i <comm.json>` (written before it starts,
+    as PlaybackDolphinInstance does), no account, nothing driving it. Returns it, its instance
+    and a reader of the status file next to the comm file."""
     comm = out / "playback-comms.json"
     status = Path(str(comm) + ".status.json")
     status.unlink(missing_ok=True)
     comm.write_text(json.dumps({"mode": "normal", "replay": str(fa.path), "commandId": "c1"}))
     cfg = InstanceConfig(cpu_thread=True, video_backend=gpu_backend, extra_args=("-i", str(comm)),
                          dolphin_ini={"Online": {"UseDevServer": True, "MatchmakingPort": backend.mm_port,
-                                                 "DevAccountsUrl": backend.accounts_url}})
+                                                 "DevAccountsUrl": backend.accounts_url}},
+                         gcpad_ini=gcpad_ini or {})
     inst = dolphin("viewer", config=cfg, client_timeout=60.0)
     d = inst.create()
     patch_sd.patch_image(d / "Wii" / "sd.raw", [(PLUGIN.read_bytes(), patch_sd.plugin_sd_path(PLUGIN))])
@@ -315,6 +317,11 @@ def test_launcher_comm_file_plays_from_a_fresh_boot(backend: OnlineBackend,
             return json.loads(status.read_text())
         except (OSError, ValueError):
             return {}
+    return v, inst, file_status
+
+
+def _comm_replay_plays(v: Game, fa: R.Replay, file_status: Callable[[], dict[str, Any]]) -> None:
+    """The comm file's replay starts by itself and plays to its end, no checksum differing."""
     seen: set[str] = set()
 
     def started() -> dict[str, Any] | None:
@@ -334,3 +341,40 @@ def test_launcher_comm_file_plays_from_a_fresh_boot(backend: OnlineBackend,
     assert st["frames_checked"] >= fa.endg["finalFrame"] - fa.first_frame, st
     fs = file_status()
     assert fs.get("commandId") == "c1" and fs.get("state") in ("playing", "ended"), fs
+
+
+@pytest.mark.slow
+def test_launcher_comm_file_plays_from_a_fresh_boot(backend: OnlineBackend,
+                                                   dolphin: Callable[..., DolphinInstance],
+                                                   gpu_backend: str) -> None:
+    """The launcher's way (docs/design/replays.md §6.2): a Direct game on the server's rules,
+    then a Dolphin started with `-i <comm.json>` (written before it starts, as
+    PlaybackDolphinInstance does) and no account. Nothing drives it: the game boots to the ONLINE
+    page by itself, Dolphin arms the replay once the plugin runs (not at the boot DOL, whose game
+    ID is not the disc's), the plugin opens the CSS and starts the match, and the replay plays to
+    its end with no checksum differing. The status file next to the comm file says so."""
+    fa, out = _recorded_direct_game(backend, dolphin, gpu_backend, "comm", ("lena", "otto"))
+    v, _, file_status = _comm_viewer(backend, dolphin, gpu_backend, fa, out)
+    _comm_replay_plays(v, fa, file_status)
+
+
+@pytest.mark.slow
+def test_launcher_comm_file_ignores_the_players_controller(backend: OnlineBackend,
+                                                          dolphin: Callable[..., DolphinInstance],
+                                                          gpu_backend: str) -> None:
+    """Bug report #59 (BEAN#66, launcher 0.1.87: "spectating ... sends me to training mode CSS"):
+    the player's playback controller had `Triggers/Threshold = 0.`, which holds L and R on every
+    frame, and P+'s boot (Boot Directly to CSS) took them for "boot to Training": the viewer sat on
+    the Training CSS and never asked for the replay. The playback Dolphin's GameCube controllers
+    now read neutral (only the replay plays it), so the same setting on port 1 boots through the
+    title and menus as usual and the replay plays to its end. (Always Connected: the harness's pads
+    have no device, so without it the pad reads unplugged and its triggers are never read; no
+    pad_set, whose override would replace the setting's L and R.)"""
+    fa, out = _recorded_direct_game(backend, dolphin, gpu_backend, "comm-pad", ("rhea", "theo"))
+    v, inst, file_status = _comm_viewer(backend, dolphin, gpu_backend, fa, out,
+                                        gcpad_ini={"GCPad1": {"Triggers/Threshold": "0.",
+                                                              "Options/Always Connected": True}})
+    _comm_replay_plays(v, fa, file_status)
+    log = inst.log.read()
+    assert "sqBoot -> sqTraining" not in log, "the viewer booted to Training"
+    assert "sqBoot -> sqPrizeCheck" in log, "the viewer's boot was not seen"

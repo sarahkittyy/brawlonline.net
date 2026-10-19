@@ -47,6 +47,9 @@ GCPadStatus CSIDevice_GCAdapter::GetPadStatus()
     Harness::ApplyPadOverride(m_device_number, &pad_status);
   }
 
+  if (NeutralForPlayback(&pad_status))
+    return pad_status;
+
   HandleMoviePadStatus(m_system.GetMovie(), m_device_number, &pad_status);
 
   // Our GCAdapter code sets PAD_GET_ORIGIN when a new device has been connected.

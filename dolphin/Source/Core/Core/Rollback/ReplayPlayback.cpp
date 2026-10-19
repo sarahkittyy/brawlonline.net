@@ -61,6 +61,8 @@ constexpr size_t JOIN_CATCH_UP_FRAMES = 20 * 60;
 
 std::mutex s_mutex;
 std::string s_comm_path;
+// s_comm_path is set (Following): read on every pad poll, so without s_mutex.
+std::atomic<bool> s_following{false};
 std::thread s_thread;
 std::atomic<bool> s_run{false};
 // The request being played (under s_mutex).
@@ -588,14 +590,14 @@ void SetCommFile(const std::string& path)
     std::lock_guard lk(s_mutex);
     s_comm_path = path;
   }
+  s_following = !path.empty();
   NOTICE_LOG_FMT(BRAWLBACK, "replay: following {}", path);
   EnsureThread();
 }
 
 bool Following()
 {
-  std::lock_guard lk(s_mutex);
-  return !s_comm_path.empty();
+  return s_following.load(std::memory_order_relaxed);
 }
 
 std::optional<std::string> PlayFile(const std::string& path, bool play_anyway, bool hold_at_end)

@@ -18,6 +18,7 @@
 #include "Core/NetPlayClient.h"
 #include "Core/NetPlayProto.h"
 #include "Core/Rollback/MachineSession.h"
+#include "Core/Rollback/ReplayPlayback.h"
 #include "Core/System.h"
 #include "InputCommon/GCPadStatus.h"
 
@@ -153,6 +154,9 @@ GCPadStatus CSIDevice_GCController::GetPadStatus()
     pad_status = Pad::GetStatus(m_device_number);
   }
 
+  if (NeutralForPlayback(&pad_status))
+    return pad_status;
+
   HandleMoviePadStatus(m_system.GetMovie(), m_device_number, &pad_status);
 
   // Our GCAdapter code sets PAD_GET_ORIGIN when a new device has been connected.
@@ -161,6 +165,23 @@ GCPadStatus CSIDevice_GCController::GetPadStatus()
     SetOrigin(pad_status);
 
   return pad_status;
+}
+
+// The launcher's playback Dolphin (`-i`: replays and spectating) is played by the replay alone:
+// the session writes the recorded inputs into the game's pad slots, GameBridge drives the menus,
+// and the viewer's controls are Dolphin hotkeys. The player's controller, or a setting of it, must
+// not steer the game: P+'s boot (Boot Directly to CSS) takes a held L or R for Training and Z for
+// Replays, and a trigger threshold of 0 holds both on every frame, so the viewer booted to the
+// Training CSS and never played the replay (bug report #59). Every GameCube controller reads
+// neutral there, still connected or not as it is.
+bool CSIDevice_GCController::NeutralForPlayback(GCPadStatus* pad_status)
+{
+  if (!Gprb::Replay::Playback::Following())
+    return false;
+  const bool connected = pad_status->isConnected;
+  *pad_status = {};
+  pad_status->isConnected = connected;
+  return true;
 }
 
 // GetData

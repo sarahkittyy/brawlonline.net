@@ -29,7 +29,8 @@ namespace Gprb::Replay::Playback
 {
 // Starts following the comm file (from the command line, before the game boots).
 void SetCommFile(const std::string& path);
-// Whether this Dolphin follows a comm file (the launcher's playback Dolphin).
+// Whether this Dolphin follows a comm file (the launcher's playback Dolphin). Its GameCube
+// controllers read neutral (SI_DeviceGCController.cpp): nothing but the replay plays the game.
 bool Following();
 // Plays one file at once (the harness); an error when it cannot be played.
 std::optional<std::string> PlayFile(const std::string& path, bool play_anyway, bool hold_at_end = false);

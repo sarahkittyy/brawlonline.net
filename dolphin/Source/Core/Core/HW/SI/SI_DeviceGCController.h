@@ -84,6 +84,8 @@ public:
 
   static void HandleMoviePadStatus(Movie::MovieManager& movie, int device_number,
                                    GCPadStatus* pad_status);
+  // The launcher's playback Dolphin: the pad reads neutral (true), as nothing but the replay plays.
+  static bool NeutralForPlayback(GCPadStatus* pad_status);
 
 protected:
   void SetOrigin(const GCPadStatus& pad_status);
