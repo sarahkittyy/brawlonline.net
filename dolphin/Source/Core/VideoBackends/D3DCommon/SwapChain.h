@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <dxgi1_5.h>
 #include <wrl/client.h>
 
@@ -35,11 +36,13 @@ public:
   u32 GetWidth() const { return m_width; }
   u32 GetHeight() const { return m_height; }
 
-  // Mode switches.
+  // Mode switches. Any thread may call these: SetFullscreen only records the request, and the
+  // video thread applies it in CheckForFullscreenChange. (DXGI's mode switch sends messages to the
+  // render window, so the thread that applies it must not hold up the one pumping them.)
   bool GetFullscreen() const;
   void SetFullscreen(bool request);
 
-  // Checks for loss of exclusive fullscreen.
+  // Applies a fullscreen request and checks for loss of exclusive fullscreen.
   bool CheckForFullscreenChange();
 
   // Presents the swap chain to the screen.
@@ -71,8 +74,8 @@ protected:
   bool m_stereo = false;
   bool m_hdr = false;
   bool m_allow_tearing_supported = false;
-  bool m_has_fullscreen = false;
-  bool m_fullscreen_request = false;
+  std::atomic<bool> m_has_fullscreen = false;
+  std::atomic<bool> m_fullscreen_request = false;
 };
 
 }  // namespace D3DCommon

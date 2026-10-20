@@ -262,31 +262,39 @@ void SwapChain::SetHDR(bool hdr)
 
 bool SwapChain::GetFullscreen() const
 {
-  return GetFullscreenState(m_swap_chain.Get());
+  return m_has_fullscreen;
 }
 
 void SwapChain::SetFullscreen(bool request)
 {
-  m_swap_chain->SetFullscreenState(request, nullptr);
+  m_fullscreen_request = request;
 }
 
 bool SwapChain::CheckForFullscreenChange()
 {
-  if (m_fullscreen_request != m_has_fullscreen)
+  bool request = m_fullscreen_request;
+  if (request != m_has_fullscreen)
   {
-    HRESULT hr = m_swap_chain->SetFullscreenState(m_fullscreen_request, nullptr);
+    HRESULT hr = m_swap_chain->SetFullscreenState(request, nullptr);
     if (SUCCEEDED(hr))
     {
-      m_has_fullscreen = m_fullscreen_request;
+      m_has_fullscreen = request;
       return true;
     }
+
+    // If it fails (e.g. the window lost the focus meanwhile), don't keep trying every frame.
+    WARN_LOG_FMT(VIDEO, "SetFullscreenState({}) failed: {}", request, Common::HRWrap(hr));
+    m_fullscreen_request.compare_exchange_strong(request, m_has_fullscreen);
   }
 
   const bool new_fullscreen_state = GetFullscreenState(m_swap_chain.Get());
   if (new_fullscreen_state != m_has_fullscreen)
   {
+    // Left (or entered) exclusive fullscreen on its own, e.g. on a focus loss. A request made
+    // meanwhile is kept.
+    request = m_has_fullscreen;
     m_has_fullscreen = new_fullscreen_state;
-    m_fullscreen_request = new_fullscreen_state;
+    m_fullscreen_request.compare_exchange_strong(request, new_fullscreen_state);
     return true;
   }
 

@@ -16,7 +16,6 @@
 #include <windows.h>
 #endif
 
-#include "Common/ScopeGuard.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Core.h"
@@ -78,58 +77,6 @@ void Host::SetMainWindowHandle(void* handle)
   m_main_window_handle = handle;
 }
 
-static void RunWithGPUThreadInactive(const std::function<void()>& f)
-{
-  // FifoManager::PauseAndLock lets the UI thread run its events while it waits for the video
-  // thread, and one of them can be another focus change. Nested, its pause would wait on the lock
-  // the outer one holds (BlockingLoop's wait lock): it runs once the outer one is done instead.
-  thread_local bool s_running = false;
-  if (s_running && qApp->thread() == QThread::currentThread())
-  {
-    QueueOnObject(Host::GetInstance(), [f] { RunWithGPUThreadInactive(f); });
-    return;
-  }
-  s_running = true;
-  Common::ScopeGuard running_guard([] { s_running = false; });
-
-  // Potentially any thread which shows panic alerts can be blocked on this returning.
-  // This means that, in order to avoid deadlocks, we need to be careful with how we
-  // synchronize with other threads. Note that the panic alert handler temporarily declares
-  // us as the CPU and/or GPU thread if the panic alert was requested by that thread.
-
-  // TODO: What about the unlikely case where the GPU thread calls the panic alert handler
-  // while the panic alert handler is processing a panic alert from the CPU thread?
-
-  if (Core::IsGPUThread())
-  {
-    // If we are the GPU thread, we can't call Core::PauseAndLock without getting a deadlock,
-    // since it would try to pause the GPU thread while that thread is waiting for us.
-    // However, since we know that the GPU thread is inactive, we can just run f directly.
-
-    f();
-  }
-  else if (Core::IsCPUThread())
-  {
-    // If we are the CPU thread in dual core mode, we can't call Core::PauseAndLock, for the
-    // same reason as above. Instead, we use Fifo::PauseAndLock to pause the GPU thread only.
-    // (Note that this case cannot be reached in single core mode, because in single core mode,
-    // the CPU and GPU threads are the same thread, and we already checked for the GPU thread.)
-
-    auto& system = Core::System::GetInstance();
-    const bool was_running = Core::GetState(system) == Core::State::Running;
-    auto& fifo = system.GetFifo();
-    fifo.PauseAndLock();
-    f();
-    fifo.RestoreState(was_running);
-  }
-  else
-  {
-    // If we reach here, we can call Core::PauseAndLock (which we do using a CPUThreadGuard).
-    const Core::CPUThreadGuard guard(Core::System::GetInstance());
-    f();
-  }
-}
-
 bool Host::GetRenderFocus()
 {
 #ifdef _WIN32
@@ -151,12 +98,14 @@ bool Host::GetRenderFullFocus()
 void Host::SetRenderFocus(bool focus)
 {
   m_render_focus = focus;
-  if (g_gfx && m_render_fullscreen && g_ActiveConfig.ExclusiveFullscreenEnabled())
+  // The backend only records the request: the video thread switches the mode at its next frame.
+  // This must not pause the emulation and wait for it here. The video thread can be in Present,
+  // where DXGI leaving exclusive fullscreen sends a message to the render window and waits for
+  // this (the UI) thread to answer it, while the CPU thread waits for the video thread.
+  if (g_gfx && m_render_fullscreen && g_ActiveConfig.ExclusiveFullscreenEnabled() &&
+      !Config::Get(Config::MAIN_RENDER_TO_MAIN))
   {
-    RunWithGPUThreadInactive([focus] {
-      if (!Config::Get(Config::MAIN_RENDER_TO_MAIN))
-        g_gfx->SetFullscreen(focus);
-    });
+    g_gfx->SetFullscreen(focus);
   }
 }
 
@@ -188,10 +137,9 @@ void Host::SetRenderFullscreen(bool fullscreen)
 {
   m_render_fullscreen = fullscreen;
 
-  if (g_gfx && g_gfx->IsFullscreen() != fullscreen && g_ActiveConfig.ExclusiveFullscreenEnabled())
-  {
-    RunWithGPUThreadInactive([fullscreen] { g_gfx->SetFullscreen(fullscreen); });
-  }
+  // Applied by the video thread, as in SetRenderFocus.
+  if (g_gfx && g_ActiveConfig.ExclusiveFullscreenEnabled())
+    g_gfx->SetFullscreen(fullscreen);
 }
 
 void Host::SetTASInputFocus(const bool focus)

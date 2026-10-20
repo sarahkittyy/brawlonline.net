@@ -3,6 +3,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <vector>
 
@@ -99,7 +100,7 @@ private:
   bool m_vsync_enabled = false;
   bool m_fullscreen_supported = false;
   bool m_current_fullscreen_state = false;
-  bool m_next_fullscreen_state = false;
+  std::atomic<bool> m_next_fullscreen_state = false;
   bool m_current_swap_chain_image_is_valid = false;
 
   VkSwapchainKHR m_swap_chain = VK_NULL_HANDLE;

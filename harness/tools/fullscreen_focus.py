@@ -15,17 +15,31 @@ to answer DXGI's window message.
 
     python harness/tools/fullscreen_focus.py
     python harness/tools/fullscreen_focus.py --solo
+    python harness/tools/fullscreen_focus.py --solo --solo-gpu fake-completion
+
+Bug report #62 (2026-10-19, launcher 0.1.89, Ranked game 1's character screen): the same hang
+one step earlier. Outside a session the video thread is not the deterministic one (GPU
+determinism "auto", the installs' default since Phase 13), so the CPU thread idling at the CSS
+waits for the video thread in FifoManager::FlushGpu; the UI thread's pause waited in
+CPU::PauseAndLock for the CPU thread, and the video thread's Present for the UI thread. The fix:
+the UI thread no longer pauses for a fullscreen change at all, it only records the request
+(SwapChain::SetFullscreen) and the video thread applies it at its next frame.
 
 Caveat of the session mode: the harness's own requests (status, memory reads) pause the core
 from the harness thread, which holds Core's core mutex while it waits for the video thread; a
-focus change's pause on the UI thread then waits for that mutex, and the video thread's Present
-for the UI thread. That hang is of the test's making (in a player's Dolphin no other thread
-pauses the core during a match), and it hangs builds with and without the fix alike (2026-10-15:
-both hung on the 5th switch, the UI thread in Core::PauseAndLock's mutex). --solo boots the host
-alone to Brawl's menus and sends nothing while the focus moves (the P+ GameSettings'
-GPUDeterminismMode = fake-completion makes the video thread the deterministic one in any
-dual-core run); 6 cycles did not hang either build (2026-10-15), so it does not reproduce the
-report as it stands.
+focus change's pause on the UI thread then waited for that mutex, and the video thread's Present
+for the UI thread. That hang was of the test's making (in a player's Dolphin no other thread
+pauses the core during a match): both builds with and without 6de3ac60 hung on the 5th switch
+(2026-10-15). A focus change no longer pauses, and the session mode passes (2026-10-19).
+--solo boots the host alone and sends nothing while the focus moves. --solo-at css (the default)
+first walks to the Versus CSS, as in bug #62; --solo-at menus stays at Brawl's menus.
+--solo-gpu unset (the default) leaves GPU determinism to the installs' default ("auto": not
+deterministic outside a session, bug #62's case); --solo-gpu fake-completion makes the video
+thread the deterministic one, as in a match (DR#950's case). The report's
+"deterministic_gpu_thread" says which one ran. 2026-10-19: --solo (CSS, deterministic GPU thread
+false) hung the build before the fix (6914e018) on the 2nd switch, its hang watchdog firing as in
+bug #62; with the fix it passed 12 checks, as did --solo-at menus --solo-gpu fake-completion and
+the session mode.
 
 Run it from a shell on the interactive desktop: a process in a service window station (as
 Claude Code's tool shells are) gets no visible windows and Dolphin.exe never boots. A scheduled
@@ -41,6 +55,7 @@ import contextlib
 import ctypes
 import ctypes.wintypes as wt
 import json
+import re
 import sys
 import threading
 import time
@@ -51,8 +66,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import gameplay_rollback as G  # noqa: E402
 import gprb_session as S  # noqa: E402
+from ppharness import brawl as B  # noqa: E402
 from ppharness import paths  # noqa: E402
 from ppharness.instance import DolphinInstance  # noqa: E402
+from ppharness.inifile import IniFile  # noqa: E402
 
 user32 = ctypes.windll.user32
 WM_NULL = 0
@@ -174,13 +191,22 @@ def focus_cycles(host: DolphinInstance, args: argparse.Namespace, rep: Dict[str,
 
 
 def solo(a: argparse.Namespace, rep: Dict[str, Any]) -> None:
-    """The host alone, booted to Brawl's menus: no session and no harness requests while the focus
-    moves (the harness's own memory reads pause the core from its thread, holding the core mutex
-    a focus change's pause then waits for: a hang of the test's making). The P+ GameSettings'
-    GPUDeterminismMode = fake-completion makes the video thread the deterministic one in any
-    dual-core run, as in a session."""
-    inst = G.make_instance("ffocus-solo", cpu_thread=True, video="D3D11",
-                           config=["Dolphin.Display.Fullscreen=True"])
+    """The host alone, at Brawl's menus or the Versus CSS: no session and no harness requests while
+    the focus moves (the harness's own memory reads pause the core from its thread). ``--solo-gpu``
+    picks the GPU determinism mode: unset (the installs' default, a non-deterministic video thread
+    outside a session, as at bug #62's CSS) or fake-completion (the deterministic one, as in a
+    match)."""
+    name = f"ffocus-solo-{a.solo_at}-{a.solo_gpu}"
+    # Logs.VIDEO: FifoManager's "deterministic GPU thread true/false" line, read back below.
+    inst = G.make_instance(name, cpu_thread=True, video="D3D11", gpu_determinism=a.solo_gpu,
+                           config=["Dolphin.Display.Fullscreen=True", "Logger.Logs.VIDEO=True"])
+    if a.solo_gpu == "unset":
+        # make_instance only edits the launcher's and RSBE01's INIs; the template's others (e.g.
+        # 00000000.ini, a DOL boot's) still say fake-completion. Installs set it in none of them.
+        for p in (inst.user_dir / "GameSettings").glob("*.ini"):
+            ini = IniFile.load(p)
+            if ini.remove("Core", "GPUDeterminismMode"):
+                ini.save(p)
     inst.__class__ = QtInstance
     inst.command_prefix = [str(Path(a.exe) if a.exe else paths.dolphin_gui())]
     inst.client_timeout = a.client_timeout_s
@@ -188,6 +214,13 @@ def solo(a: argparse.Namespace, rep: Dict[str, Any]) -> None:
         inst.launch()
         inst.connect()
         inst.client.wait_state("running", timeout=120)
+        if a.solo_at == "css":
+            B.boot_to_css(inst.client, 0, timeout_frames=60 * 180)
+            B.neutral(inst.client, 0)
+            rep["at_css"] = True
+        log = inst.log_path.read_text(errors="replace")
+        modes = re.findall(r"deterministic GPU thread (true|false)", log)
+        rep["deterministic_gpu_thread"] = modes[-1] == "true" if modes else None
         focus_cycles(inst, a, rep, threading.Event(), wait_for="Booting from executable")
         rep["hang_watchdog"] = "Hang watchdog" in inst.log_path.read_text(errors="replace")
     finally:
@@ -196,7 +229,7 @@ def solo(a: argparse.Namespace, rep: Dict[str, Any]) -> None:
         if a.log_dir:
             with contextlib.suppress(Exception):
                 Path(a.log_dir).mkdir(parents=True, exist_ok=True)
-                (Path(a.log_dir) / "ffocus-solo.log").write_text(inst.log_path.read_text(errors="replace"))
+                (Path(a.log_dir) / f"{name}.log").write_text(inst.log_path.read_text(errors="replace"))
         inst.cleanup(True)
 
 
@@ -210,7 +243,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--exe", default=None, help="the host's Dolphin.exe (default: the build's)")
     ap.add_argument("--client-timeout-s", type=float, default=30.0, help="harness request timeout of both instances")
     ap.add_argument("--solo", action="store_true",
-                    help="the host alone at Brawl's menus, no session and no harness requests during the switches")
+                    help="the host alone, no session and no harness requests during the switches")
+    ap.add_argument("--solo-at", choices=("css", "menus"), default="css",
+                    help="--solo: switch at the Versus CSS (bug #62) or at Brawl's menus")
+    ap.add_argument("--solo-gpu", choices=("unset", "fake-completion"), default="unset",
+                    help="--solo: GPU determinism; unset = the installs' default (not deterministic "
+                         "outside a session), fake-completion = deterministic as in a match")
     ap.add_argument("--json", default=None)
     a, rest = ap.parse_known_args(argv)
     a.log_dir = next((rest[i + 1] for i, x in enumerate(rest[:-1]) if x == "--log-dir"), None)
@@ -270,7 +308,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     # A switch that did not take tested nothing.
     ok = (not hung and not rep.get("focus_error") and len(rep.get("cycles", [])) == 2 * a.cycles
           and all(c["switched"] for c in rep["cycles"]))
-    print(f"fullscreen_focus: {'PASS' if ok else 'FAIL'}: {len(rep.get('cycles', []))} checks, "
+    mode = (f" ({a.solo_at}, deterministic GPU thread {rep.get('deterministic_gpu_thread')})"
+            if a.solo else "")
+    print(f"fullscreen_focus{mode}: {'PASS' if ok else 'FAIL'}: {len(rep.get('cycles', []))} checks, "
           f"hung {hung}{', ' + rep['focus_error'] if rep.get('focus_error') else ''}")
     if a.json:
         Path(a.json).write_text(json.dumps(rep, indent=1))
