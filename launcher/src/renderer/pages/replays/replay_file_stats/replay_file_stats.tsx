@@ -1,3 +1,4 @@
+import { stageInfo as pplusStageInfo } from "@common/stages";
 import ErrorIcon from "@mui/icons-material/Error";
 import FolderIcon from "@mui/icons-material/Folder";
 import HelpIcon from "@mui/icons-material/Help";
@@ -6,7 +7,7 @@ import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import type { FileResult } from "@replays/types";
 import { STATS_NOT_AVAILABLE } from "@replays/types";
-import { frameToGameTimer, GameMode, stages as stageUtils } from "@slippi/slippi-js";
+import { frameToGameTimer, GameMode } from "@slippi/slippi-js";
 import { useQuery } from "@tanstack/react-query";
 import React from "react";
 
@@ -115,14 +116,10 @@ export const ReplayFileStats = (props: ReplayFileStatsProps) => {
   }
 
   const { game } = file;
-  const stageImage = game.stageId != null ? getStageImage(game.stageId) : undefined;
-
-  let stageName = HeaderMessages.unknown();
-  try {
-    stageName = stageUtils.getStageName(game.stageId != null ? game.stageId : 0);
-  } catch (err) {
-    console.error(err);
-  }
+  // Our replays name P+'s stage ids (the stage select's, @common/stages), not Melee's: as the replay list's row.
+  const stageInfo = game.stageId != null ? pplusStageInfo(game.stageId) : undefined;
+  const stageImage = stageInfo != null ? getStageImage(stageInfo.id) : undefined;
+  const stageName = stageInfo != null ? stageInfo.name : HeaderMessages.unknown();
 
   const platform = game.consoleNickname || game.platform || HeaderMessages.unknown();
   const startAtDisplay = new Date(game.startTime ? Date.parse(game.startTime) : 0);
