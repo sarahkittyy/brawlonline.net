@@ -3,7 +3,8 @@ tools/gamecode/roomsim.py (as test_rooms_ui.py). The user's, 2026-10-18 (docs/de
 "Sitting out"):
 
 - START with the coin still in the hand readies nobody (it readied the player with the portrait
-  under the hand); the coin put down goes to the others before START (a lock-in without its ready),
+  under the hand); it puts the coin down there, as A (bug reports #63-#65, 2026-10-19). The coin
+  put down goes to the others before START (a lock-in without its ready),
   and another player's placed coin shows on their card, "Choosing...".
 - SIT OUT / PLAY (under RULES, level with FFA), START, or A on one's own name plate (Brawl's
   player / CPU switch offline; its pencil still opens the name tags) sits the player out or back in; sitting out takes a ready back, and
@@ -73,23 +74,20 @@ def test_sit_out_and_the_placed_coin(game: Game) -> None:
     sim.add_player(1, "alice")
     g.wait(30)
 
-    # The coin in the hand over Fox: START readies nobody.
+    # The coin in the hand over Fox: START puts it down there (as A) and readies nobody; the
+    # others see Fox before START (bug reports #63-#65). Then START readies.
     if css_area(g).placed:
         g.tap("B")
         g.wait(20)
     g.hand_to(*FOX, tol=0.6)
     g.wait(5)
     assert css_area(g).in_hand
+    assert me.char == 0xFF, "no coin placed: nothing shown"
     g.tap("START")
     g.wait(30)
     g.shot("01-start-coin-in-hand")
-    assert not me.ready and not lock(g)["ready"], lock(g)
-    assert me.char == 0xFF, "no coin placed: nothing shown"
-
-    # Put down: the others see Fox before START; then START readies.
-    g.tap("A")
-    g.wait(30)
     assert css_area(g).placed
+    assert not me.ready and not lock(g)["ready"], lock(g)
     assert (me.ready, me.char) == (False, GMKIND_FOX), (me, lock(g))
     g.tap("START")
     g.wait(30)

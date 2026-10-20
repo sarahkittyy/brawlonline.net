@@ -32,6 +32,7 @@ from ppharness.backend import OnlineBackend
 from ppharness.instance import DolphinInstance
 
 from test_online import _make_backend, _wait
+from ppharness.client import PadInput
 from test_online_game import (CMD_GET_MATCH_STATE, Game, _boot, _both, _connected_direct,
                               _find_logged, _peer_shown, online_set, ppom)
 from ppharness import brawl as B
@@ -165,6 +166,82 @@ def test_unranked_pairs_strangers_on_a_server_stage(backend: OnlineBackend,
         _setup_logged(host, game, stage, r"\(random from 2 stages, server list\)")
     for g in (a, b):
         assert g.bridge()["lost"] == 0
+        g.c.mm_cancel()
+
+
+def _hover_other(g: Game, direction: str, old: int) -> int:
+    """The coin taken back to the hand (B) and the hand moved over another character of the grid,
+    without A: the CSS id now under the hand."""
+    g.press_until("B", lambda: B.read_css_area(g.c.read_mem, 0).in_hand, "B to take the coin back")
+    for _ in range(30):
+        a = B.read_css_area(g.c.read_mem, 0)
+        if a.hand_target == B.CSS_HAND_GRID_HOLDING and a.character not in (old, B.CSS_NONE, 0x29):
+            g.steps("wait 10")
+            a = B.read_css_area(g.c.read_mem, 0)
+            if a.hand_target == B.CSS_HAND_GRID_HOLDING and a.character not in (old, B.CSS_NONE, 0x29):
+                return a.character
+        g.steps(f"stick {direction} 4")
+    raise AssertionError(f"{g.name}: the hand found no other character ({a})")
+
+
+def test_unranked_start_with_the_coin_in_the_hand(backend: OnlineBackend,
+                                                  dolphin: Callable[..., DolphinInstance],
+                                                  gpu_backend: str) -> None:
+    """Bug reports #63-#65 (launcher 0.1.89): between games, START with the coin still in the hand
+    over another character locked in the last game's character, while the panel showed the one
+    under the hand. Now that START puts the coin down on the character under the hand (as A) and
+    locks in nothing; START again locks in with it. A START right after A, while the coin flies to
+    its place, waits for it and locks in the new character."""
+    test = "unranked-coin-start"
+    ua, ub = backend.create_user("pia", "PIA"), backend.create_user("quinn", "QUIN")
+    a = _boot(dolphin, "unr-a", backend, ua, gpu_backend, test, "gameplay")
+    b = _boot(dolphin, "unr-b", backend, ub, gpu_backend, test, "gameplay")
+    _both(a.to_main_menu, b.to_main_menu)
+    _both(a.to_online_page, b.to_online_page)
+    _both(lambda: a.to_css("unranked"), lambda: b.to_css("unranked"))
+    for g in (a, b):
+        B.write_rules(g.c, stocks=1, minutes=2, items_off=True)
+        ppom.allow_test_rules(g.c)
+    _search_unranked(a)
+    _search_unranked(b)
+    for g in (a, b):
+        _wait(lambda g=g: g.c.mm_status()["handoff"] == "started", 60, f"{g.name}: the hand-off")
+    first = {g.name: online_set.local(g.c)["lock"]["css"] for g in (a, b)}
+    online_set.play_game([a, b], 1)
+    online_set.back_on_css([a, b], 1)
+
+    # A: the coin in the hand over another character, START: the coin goes down there, no lock-in.
+    new_a = _hover_other(a, "right", first[a.name])
+    a.shot("01-coin-in-hand-over-another")
+    a.steps("tap START 8", "wait 30")
+    area = B.read_css_area(a.c.read_mem, 0)
+    a.shot("02-start-put-the-coin-down")
+    assert area.placed and area.character == new_a, (hex(new_a), area)
+    lock = online_set.local(a.c)["lock"]
+    assert not (lock["ready"] and lock["game"] == 2), ("START with the coin in the hand locked in", lock)
+    # START again: locked in with the character on the coin.
+    a.steps("tap START 8")
+    lock = online_set.wait(lambda: (lambda l: l if l["ready"] and l["game"] == 2 else None)(
+        online_set.local(a.c)["lock"]), 10, "A locked in for game 2")
+    assert lock["css"] == new_a, (hex(new_a), lock)
+    a.shot("03-start-locked-in")
+
+    # B: A and START a few frames apart, the coin still flying on START.
+    new_b = _hover_other(b, "right", first[b.name])
+    b.c.pad_script(b.pad, [PadInput(buttons=["A"], hold=2), PadInput(hold=2),
+                           PadInput(buttons=["START"], hold=2), PadInput(hold=6)])
+    lock = online_set.wait(lambda: (lambda l: l if l["ready"] and l["game"] == 2 else None)(
+        online_set.local(b.c)["lock"]), 10, "B locked in for game 2")
+    assert lock["css"] == new_b, (hex(new_b), lock)
+    b.shot("04-a-then-start-locked-in")
+
+    # Game 2 is set up with both new characters.
+    se = online_set.wait(lambda: (lambda s: s if s["state"] == 2 and s["game"] == 2 else None)(
+        online_set.session(a.c)), 30, "game 2 set up")
+    for g in (a, b):
+        lo = online_set.local(g.c)
+        assert se["players"][lo["local_port"]]["char_kind"] == lo["lock"]["char_kind"], (g.name, se, lo)
+    for g in (a, b):
         g.c.mm_cancel()
 
 

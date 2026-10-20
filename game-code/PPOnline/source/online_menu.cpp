@@ -85,6 +85,8 @@ namespace OnlineMenu {
         u32 startGuard;         // frames START presses are dropped after the keypad (see codeEntered)
         bool cssSeen;           // the online CSS was up last frame (holdBGuard)
         bool bGuard;            // B still held from before this CSS: taken out until released
+        bool startOnLanding;    // START pressed while the coin flew to its place (startWithCoinUp)
+        bool startDropHeld;     // the START that put the coin down is still held
         u32 roomLeaveFrames;    // frames on the CSS since the search started for the room
         u32 roomHoldStart;      // the waiting room: frames START has been held (hold START cancels)
         bool roomStartUp;       // START was up once in the room (the CSS's search press is not a hold)
@@ -251,6 +253,19 @@ namespace OnlineMenu {
             u32* f = (u32*)(ps + off);
             f[3] &= ~mask;
             f[5] &= ~mask;
+        }
+    }
+
+    // Adds `mask` to this frame's presses (pressed, pressed2) of one controller port, in each of
+    // its pad statuses (sys, game, menu), as if it had been pressed there.
+    static void addPressed(int port, u32 mask)
+    {
+        u8* ps = padSystem();
+        if (!ps || port < 0 || port > 3) return;
+        for (u32 off = 0x244; off < 0x844; off += 0x200) {
+            u32* f = (u32*)(ps + off + 0x40 * port);
+            f[3] |= mask;
+            f[5] |= mask;
         }
     }
 
@@ -3063,6 +3078,49 @@ namespace OnlineMenu {
         if (how == TrainingRoom::END_NONE && (s.phase == PH_SEARCHING || s.phase == PH_CONNECTING)) cleanup();
     }
 
+    // START with the coin not put down (the user's, 2026-10-19, bug reports #63-#65: since
+    // 4a39b3be such a START locked in, connected, the last game's character, while the panel
+    // showed the one under the hand). With the coin in the hand over the character grid, START is
+    // A on that controller: the coin goes down on the character under the hand; it locks in
+    // nothing, START again does. While the coin flies to its place (A just pressed), a START waits
+    // for it to land. Not while the CSS is locked (A does nothing then), nor for a room's player
+    // sitting out (START plays again). The START that put the coin down does nothing more until
+    // it is let go (the pad's pressed field can have it again on the next frame, which readied).
+    static const u32 HAND_TARGET = 0x80;            // muSelCharHand: what the hand is over
+    static const int HAND_GRID_HOLDING = 7;         // the character grid, holding the coin
+    static void startWithCoinUp(u32& pressed, u32 held)
+    {
+        if (s.startDropHeld) {
+            if ((held | pressed) & BTN_START) pressed &= ~BTN_START;
+            else s.startDropHeld = false;
+        }
+        u8* area = playerArea();
+        if (!area || g_onlineCssLock || CodeEntry::active() || (roomCss() && roomSittingOut())) {
+            s.startOnLanding = false;
+            return;
+        }
+        if (area[0x1F9]) {
+            if (pressed & BTN_START) s.startOnLanding = true;
+            pressed &= ~BTN_START;
+            return;
+        }
+        if (area[0x1F8]) {
+            s.startOnLanding = false;
+            if (!(pressed & BTN_START)) return;
+            pressed &= ~BTN_START;
+            u8* hand = *(u8**)(area + 0x1A8);
+            if (isPtr((u32)hand) && *(int*)(hand + HAND_TARGET) == HAND_GRID_HOLDING) {
+                addPressed(s.startPad, 0x100);
+                s.startDropHeld = true;
+            }
+            return;
+        }
+        if (s.startOnLanding) {
+            s.startOnLanding = false;
+            if (selectedChar() >= 0) pressed |= BTN_START;
+        }
+    }
+
     void tick()
     {
         AnyoneMenu::tick();
@@ -3169,6 +3227,7 @@ namespace OnlineMenu {
         if (strcmp(scene, "scSelctCharacter") != 0 && !CodeEntry::active()) CodeEntry::forgetLabels();
         if (!onCss) {
             s.cssSeen = false;
+            s.startOnLanding = false;
             PPOM::g_block.debug.scratch[1] = 0;
             return;
         }
@@ -3218,6 +3277,7 @@ namespace OnlineMenu {
             }
             return;
         }
+        startWithCoinUp(pressed, b);
         g_cssTeamRoom = 0;   // (tickRoom sets it again in a team room)
         if (CodeEntry::active()) {
             CodeEntry::tick(pressed & BTN_START);
