@@ -308,7 +308,8 @@ describe("ModsView", () => {
     };
     const p = props({ builds: [minus], running: true, status });
     const { getByText, getByRole, rerender } = render(<ModsView {...p} />);
-    expect(getByText(Messages.sdSyncBody("280 MB", 412, "4 minutes"))).toBeTruthy();
+    // Over 50 MB: maybe another release of the mod altogether.
+    expect(getByText(`${Messages.sdSyncBody("280 MB", 412, "4 minutes")} ${Messages.sdBigDifference()}`)).toBeTruthy();
     expect(getByText(Messages.sdSyncWarning())).toBeTruthy();
     expect(getByText("rex_/pf/fighter/hero/FitHero.pac")).toBeTruthy();
     fireEvent.click(getByRole("button", { name: Messages.sdSyncOverwrite() }));
@@ -328,6 +329,32 @@ describe("ModsView", () => {
     };
     rerender(<ModsView {...props({ builds: [minus], running: true, status: downloading })} />);
     expect(getByText(Messages.sdSyncDownloading(25, "1.2 MB/s", "30 seconds"))).toBeTruthy();
+    expect(getByText(Messages.sdBigDifference())).toBeTruthy();
+  });
+
+  it("says nothing about versions for a small SD card difference", () => {
+    const status = room(2);
+    const sd_sync = {
+      step: "ask" as const,
+      checked: 1,
+      bytes: 2 * 1024 * 1024,
+      files: 31,
+      names: ["rex_/pf/movie/OPMovie.thp"],
+      eta_s: 3,
+    };
+    status.session = { phase: "joining", sd_sync };
+    const { getByText, queryByText, rerender } = render(
+      <ModsView {...props({ builds: [minus], running: true, status })} />,
+    );
+    expect(getByText(Messages.sdSyncBody("2 MB", 31, "3 seconds"))).toBeTruthy();
+    expect(queryByText(Messages.sdBigDifference(), { exact: false })).toBeNull();
+    const downloading = room(2);
+    downloading.session = {
+      phase: "joining",
+      sd_sync: { ...sd_sync, step: "downloading", done: 1024 * 1024, total: 2 * 1024 * 1024, rate: 1024 * 1024 },
+    };
+    rerender(<ModsView {...props({ builds: [minus], running: true, status: downloading })} />);
+    expect(queryByText(Messages.sdBigDifference(), { exact: false })).toBeNull();
   });
 
   it("switches the controller, folding what Dolphin has set up, and opens Configure", () => {

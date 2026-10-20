@@ -223,6 +223,11 @@ export const ModsView = (props: ModsViewProps) => {
   );
 };
 
+/** An SD card difference this big is rarely a few changed files: more likely another release of the
+ * mod (the user's, 2026-10-19), so the question and the download say so. Dolphin's chat uses the
+ * same 50 MB (MachineSession.cpp SD_BIG_DIFFERENCE_BYTES). */
+export const SD_BIG_DIFFERENCE_BYTES = 50 * 1024 * 1024;
+
 /** Dolphin asks about the SD card itself (docs/design/brawl-mods.md §6.5) only when the card turned
  * out different there after the launcher's own check before the join (SdCardDialog in mods_tab):
  * download the host's card, or leave. Dolphin waits for the answer. */
@@ -248,6 +253,7 @@ const SdSyncDialog = ({
     <SdCardDialog
       open={asking && !answered}
       body={Messages.sdSyncBody(Messages.megabytes(sync.bytes), sync.files, Messages.duration(sync.eta_s))}
+      bigDifference={sync.bytes > SD_BIG_DIFFERENCE_BYTES}
       names={sync.names}
       files={sync.files}
       onAnswer={(choice) => {
@@ -263,12 +269,15 @@ const SdSyncDialog = ({
 export const SdCardDialog = ({
   open,
   body,
+  bigDifference,
   names,
   files,
   onAnswer,
 }: {
   open: boolean;
   body: string;
+  /** Over SD_BIG_DIFFERENCE_BYTES: "Too big? ..." after the body. */
+  bigDifference: boolean;
   /** Some of the files that differ, largest first. */
   names: string[];
   /** How many files differ in all. */
@@ -281,7 +290,10 @@ export const SdCardDialog = ({
     <Dialog open={open} maxWidth="sm" fullWidth={true}>
       <DialogTitle>{Messages.sdSyncTitle()}</DialogTitle>
       <DialogContent>
-        <p className={styles.sdSyncBody}>{body}</p>
+        <p className={styles.sdSyncBody}>
+          {body}
+          {bigDifference && ` ${Messages.sdBigDifference()}`}
+        </p>
         <p className={styles.sdSyncWarning}>{Messages.sdSyncWarning()}</p>
         {shown.length > 0 && (
           <div className={styles.sdSyncFiles}>
@@ -782,6 +794,9 @@ const RoomPanel = ({
               />
               <span>{syncLine}</span>
             </div>
+          )}
+          {sync?.step === "downloading" && (sync.total ?? 0) > SD_BIG_DIFFERENCE_BYTES && (
+            <div className={styles.sdBigDifference}>{Messages.sdBigDifference()}</div>
           )}
           {!room && !status?.error && <LinearProgress />}
           {room && (

@@ -155,7 +155,7 @@ describe("accounts", () => {
 
   it("puts a room's SD card listing on the server and fetches it back as bytes", async () => {
     const root = "ab".repeat(32);
-    const stored: Uint8Array[] = [];
+    const stored: Uint8Array<ArrayBuffer>[] = [];
     const calls: { method: string; url: string; headers: Record<string, string> }[] = [];
     const impl = (async (url: string, init: any) => {
       calls.push({ method: init.method, url, headers: init.headers });

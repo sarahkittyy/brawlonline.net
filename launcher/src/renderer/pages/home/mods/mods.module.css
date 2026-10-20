@@ -603,6 +603,12 @@
   color: #f2c94c;
 }
 
+/* Under the SD card download's progress, for a difference over 50 MB. */
+.sdBigDifference {
+  color: #f2c94c;
+  font-size: 12px;
+}
+
 .sdSyncFiles {
   color: var(--text-dim);
   font-size: 12px;

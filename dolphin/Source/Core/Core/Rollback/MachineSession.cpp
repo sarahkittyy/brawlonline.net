@@ -643,6 +643,21 @@ void ShowNotice(const std::string& text)
   Online::Chat::AddNotice(text);
 }
 
+// An SD card difference this big is rarely a few changed files: more likely another release of the
+// mod (the user's, 2026-10-19; bug reports #2 and #4, a REX card 280 MB different). Said with the
+// size wherever it shows; the launcher says it too (mods.messages.ts sdBigDifference).
+constexpr u64 SD_BIG_DIFFERENCE_BYTES = 50ull << 20;
+
+// " Too big? ..." after a notice about a difference of `bytes`, or "" for a small one. `joiner`:
+// said to the player whose card differs, else to the others about them.
+std::string SDBigDifferenceNote(u64 bytes, bool joiner)
+{
+  if (bytes <= SD_BIG_DIFFERENCE_BYTES)
+    return "";
+  return joiner ? " Too big? You might have an entirely different version than the host." :
+                  " Too big? They might have an entirely different version than the host.";
+}
+
 void BroadcastControl(const picojson::object& msg);
 
 // The pace diagnostic's counters (PPR_MACHINE_PACE_LOG, PaceFrame).
@@ -870,8 +885,10 @@ void HandleControl(ENetPeer* peer, const u8* data, size_t size)
                                "";
     if (st == "start")
     {
-      ShowNotice(fmt::format("{}'s SD card does not match. Sending them {:.0f} MB.", NameOf(slot),
-                             std::ceil(std::max(0.0, num("bytes", 0)) / 1048576.0)));
+      const double bytes = std::max(0.0, num("bytes", 0));
+      ShowNotice(fmt::format("{}'s SD card does not match. Sending them {:.0f} MB.{}", NameOf(slot),
+                             std::ceil(bytes / 1048576.0),
+                             SDBigDifferenceNote(static_cast<u64>(bytes), false)));
     }
     else if (st == "done")
     {
@@ -5067,8 +5084,9 @@ bool SDSyncStep()
     if (y.choice.load() == static_cast<int>(SDSyncChoice::Ask))
     {
       ShowNotice(fmt::format("Your SD card is {:.0f} MB different from the host's: answer in the "
-                             "room window",
-                             std::ceil(y.missing_bytes / 1048576.0)));
+                             "room window.{}",
+                             std::ceil(y.missing_bytes / 1048576.0),
+                             SDBigDifferenceNote(y.missing_bytes, true)));
     }
     return false;
   }
@@ -5092,8 +5110,9 @@ bool SDSyncStep()
       BroadcastControl(m);
     }
     ShowNotice(fmt::format("Your SD card does not match the host's. Getting {:.0f} MB from the "
-                           "players.",
-                           std::ceil(y.missing_bytes / 1048576.0)));
+                           "players.{}",
+                           std::ceil(y.missing_bytes / 1048576.0),
+                           SDBigDifferenceNote(y.missing_bytes, true)));
     y.card->StartSync();
     y.download_since = now;
     y.progress.clear();

@@ -26,7 +26,7 @@ import type { AddBuildInitial, SaveSectionProps } from "./add_build_dialog";
 import { AddBuildDialog, formatSaveSummary } from "./add_build_dialog";
 import { ModsMessages as Messages } from "./mods.messages";
 import type { ModsPublicRooms } from "./mods_view";
-import { ModsView, SdCardDialog } from "./mods_view";
+import { ModsView, SD_BIG_DIFFERENCE_BYTES, SdCardDialog } from "./mods_view";
 
 /** How long a list stays shown while polls fail (as Home > Overview). */
 const STALE_AFTER_MS = 15_000;
@@ -363,6 +363,7 @@ export const ModsTab = React.memo(function ModsTab() {
       <SdCardDialog
         open={sdAsk !== null}
         body={sdAsk ? sdAskBody(sdAsk.check) : ""}
+        bigDifference={sdAsk?.check.kind === "differs" && sdAsk.check.bytes > SD_BIG_DIFFERENCE_BYTES}
         names={sdAsk?.check.kind === "differs" ? sdAsk.check.names : []}
         files={sdAsk?.check.kind === "differs" ? sdAsk.check.files : 0}
         onAnswer={onSdAnswer}

@@ -161,6 +161,8 @@ export const ModsMessages = {
     `Your SD card is ${mb} different from the host's (${files} ${files === 1 ? "file" : "files"}). Download it?`,
   sdAskBodyNoFiles: (mb: string) => `Your SD card is ${mb} different from the host's. Download it?`,
   sdAskBodyUnknown: () => "Your SD card is different from the host's. Download theirs?",
+  // Said with a difference over SD_BIG_DIFFERENCE_BYTES (Dolphin's chat says it too).
+  sdBigDifference: () => "Too big? You might have an entirely different version than the host.",
   sdSyncBody: (mb: string, files: number, eta: string) =>
     `Your SD card is ${mb} different from the host's (${files} ${
       files === 1 ? "file" : "files"
