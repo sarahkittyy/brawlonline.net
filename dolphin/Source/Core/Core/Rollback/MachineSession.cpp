@@ -174,6 +174,7 @@ constexpr size_t HISTORY_SIZE = 1 << 14;
 // carries its request: more than GekkoNet's prediction window, so every machine has run that
 // frame with its real input before it can get to the epoch, and all of them stop at the same one.
 constexpr s64 EPOCH_LEAD = MAX_ROLLBACK_FRAMES + 3;
+constexpr int NO_DELAY_REQUEST = -2;  // State::requested_delay
 // How long the players wait at an epoch for the image to reach a joiner and load there.
 constexpr auto EPOCH_TIMEOUT = std::chrono::seconds(120);
 // A joiner gives up after this long without being admitted.
@@ -608,6 +609,9 @@ struct State
   Clock::time_point desync_notice_at{};  // the last desync the players were told of
   float frames_ahead = 0;
   int input_delay = 0;  // this player's, in the current GekkoNet session
+  // The player's setting changed while the session runs (SetInputDelay, any thread): AUTO_DELAY
+  // or 0-9, NO_DELAY_REQUEST for none.
+  std::atomic<int> requested_delay{NO_DELAY_REQUEST};
   std::vector<HistoryEntry> history = std::vector<HistoryEntry>(HISTORY_SIZE);
   // The NAND journal mark of each snapshot in RollbackManager's ring, oldest first: a load drops
   // the newer ones, and the journal forgets changes older than the oldest snapshot.
@@ -3202,11 +3206,38 @@ void ProcessSessionEvents()
 
 bool DigestsEnabled();
 
+// CPU thread, before the frame's local input: the player's new setting (SetInputDelay) is the
+// session's from now on, and the running GekkoNet session's at once. GekkoNet repeats this
+// player's last input for the frames a higher delay adds and drops its next inputs for the frames
+// a lower one takes away (they already went out): every machine gets the same inputs, and only
+// this player's own are delayed, so nobody else needs to know (no epoch).
+void ApplyRequestedDelay()
+{
+  const int requested = s.requested_delay.exchange(NO_DELAY_REQUEST);
+  if (requested == NO_DELAY_REQUEST)
+    return;
+  s.opts.delay = requested;
+  if (!s.gekko || s.opts.synctest > 0 || s.local_handle < 0)
+    return;
+  double rtt = -1;
+  const int delay = PickInputDelay(&rtt);
+  if (delay == s.input_delay)
+    return;
+  AddLog(requested != AUTO_DELAY ?
+             fmt::format("input delay {} -> {} (set)", s.input_delay, delay) :
+         rtt < 0 ? fmt::format("input delay {} -> {} (auto, no round trip yet)", s.input_delay, delay) :
+                   fmt::format("input delay {} -> {} (auto, round trip {:.0f} ms)", s.input_delay,
+                               delay, rtt));
+  s.input_delay = delay;
+  gekko_set_local_delay(s.gekko, s.local_handle, static_cast<unsigned char>(delay));
+}
+
 // Polls GekkoNet with this frame's local input and turns its events into the passes to run.
 void Update(Core::System& system)
 {
   s.ops.Clear();
   gekko_network_poll(s.gekko);
+  ApplyRequestedDelay();
   gekko_add_local_input(s.gekko, s.local_handle, s.local_input.data());
   int count = 0;
   GekkoGameEvent** events = gekko_update_session(s.gekko, &count);
@@ -6386,6 +6417,16 @@ bool IsRunning()
 void SetSDSyncChoice(SDSyncChoice choice)
 {
   s.sd_sync.choice = static_cast<int>(choice);
+}
+
+void SetInputDelay(int delay)
+{
+  s.requested_delay = delay == AUTO_DELAY ? AUTO_DELAY : std::clamp(delay, 0, 9);
+}
+
+int CurrentInputDelay()
+{
+  return IsRunning() && s.gekko ? s.input_delay : -1;
 }
 
 std::optional<SDSyncChoice> ParseSDSyncChoice(std::string_view text)

@@ -75,6 +75,8 @@ function setupSettingsSubscriptions(settingsManager: SettingsManager, dolphinMan
   settingsManager.onSettingChange("inputDelay", async (inputDelay) => {
     const installation = dolphinManager.getInstallation(DolphinLaunchType.NETPLAY);
     await installation.updateSettings({ inputDelay });
+    // A running game changes it at once, mid-game too.
+    await dolphinManager.sendInputDelayToGame(inputDelay);
   });
 
   // Replays and spectated games play with the same music setting as the game.

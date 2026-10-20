@@ -14,6 +14,7 @@ import { fileExists } from "utils/file_exists";
 import { isSubdirectory } from "utils/is_subdirectory";
 
 import { isAbnormalExit, keepCrashLog } from "./crash_log";
+import { clearInputDelayRequest, writeInputDelayRequest } from "./input_delay_handoff";
 import { brawlSaveDir, ensureBrawlSave, isUsableBrawlSave } from "./install/brawl_save";
 import { bundledDolphinSource, installBundledDolphin } from "./install/bundled_dolphin";
 import { fetchLatestVersion } from "./install/fetch_latest_version";
@@ -131,6 +132,20 @@ export class DolphinManager {
     const dir = this.netplayOnlineDir();
     await mkdir(dir, { recursive: true });
     return await closeIfIdle(dir, () => this.netplayDolphinInstance != null, { log: (message) => log.info(message) });
+  }
+
+  /**
+   * The Input Delay setting changed: a running netplay Dolphin (Play, a room, Other Games) takes
+   * it from the next frame of its game (input_delay_handoff.ts). Its Dolphin.ini has it already.
+   */
+  async sendInputDelayToGame(inputDelay: number): Promise<void> {
+    if (!this.netplayDolphinInstance) {
+      return;
+    }
+    const dir = this.netplayOnlineDir();
+    await mkdir(dir, { recursive: true });
+    const req = await writeInputDelayRequest(dir, inputDelay);
+    log.info(`Input delay ${inputDelay} sent to the running game (request ${req.id})`);
   }
 
   /** The netplay User folder (its `Config` has the controller settings). */
@@ -1044,6 +1059,10 @@ export class DolphinManager {
       disableChat: this.settingsManager.getDisableChat(),
       enableStreamGames: this.settingsManager.getEnableStreamGames(),
     });
+    if (launchType === DolphinLaunchType.NETPLAY && !this.netplayDolphinInstance) {
+      // A change the last Dolphin never took is in Dolphin.ini now.
+      await clearInputDelayRequest(this.netplayOnlineDir());
+    }
   }
 
   private async _updateLauncherSettings(launchType: DolphinLaunchType) {
@@ -1065,9 +1084,8 @@ export class DolphinManager {
       newSettings.enableMonthlySubfolders,
       (val) => this.settingsManager.updateSetting("useMonthlySubfolders", val),
     );
-    await this._updateLauncherSetting(this.settingsManager.getInputDelay(), newSettings.inputDelay, (val) =>
-      this.settingsManager.updateSetting("inputDelay", val),
-    );
+    // Not Input Delay: only the launcher sets it, also while Dolphin runs, and a Dolphin that never
+    // took the change (Configure, no game booted) saves its old value when it closes.
     await this._updateLauncherSetting(this.settingsManager.getEnableMusic(), newSettings.enableMusic, (val) =>
       this.settingsManager.updateSetting("enableMusic", val),
     );

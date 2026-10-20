@@ -406,8 +406,11 @@ struct State
   u16 hold = 0;
   std::array<u16, MAX_LOBBY_PLAYERS> holds{};
   bool holds_valid = false;
-  // This player's input delay for the current game, fixed when its GekkoNet session is created.
+  // This player's input delay for the current game, picked when its GekkoNet session is created
+  // and changed mid-game by the player's setting (ApplyLiveDelay).
   int input_delay = DEFAULT_INPUT_DELAY;
+  // The last change of the setting this session took (s_live_delay's sequence number).
+  u32 live_delay_seq = 0;
   SyncBlock sync;  // host: the values the joiner copies
   std::vector<std::vector<std::string>> task_order;
   bool did_frame0 = false;
@@ -1910,6 +1913,11 @@ u16 DrawRandomStage(u32 game)
 std::mutex s_result_callback_mutex;
 std::function<void(const GameResult&)> s_result_callback;
 std::atomic<bool> s_quit_loses{false};  // SetQuitLoses
+// The player's setting as it changed while Dolphin runs (SetInputDelay): a sequence number (0:
+// never changed) << 8 | the setting (0 automatic, 1-MAX_INPUT_DELAY).
+std::atomic<u32> s_live_delay{0};
+// The running game's input delay for other threads (CurrentInputDelay), -1 without one.
+std::atomic<int> s_current_delay{-1};
 std::atomic<bool> s_desync_recovery{false};  // SetDesyncRecovery
 std::function<StageDecision(u32)> s_stage_decider;  // under s_result_callback_mutex
 picojson::object s_local_extra;                      // under s.mutex
@@ -2892,11 +2900,59 @@ void CloseNetwork()
 // ---------------------------------------------------------------------------------------------
 // Session start / end (CPU thread)
 
+// This player's input delay for a game: the set value, else from the round trip to the furthest
+// player still in the session (`rtt_ms`, -1 for none), as GekkoNet will see it in the game.
+int PickInputDelay(double* rtt_ms)
+{
+  *rtt_ms = -1;
+  ForEachPeer([&](int, const PeerView& p) {
+    if (!p.left && p.rtt_ms >= 0)
+      *rtt_ms = std::max(*rtt_ms, p.rtt_ms);
+  });
+  return s.net_opts.delay ? std::clamp(*s.net_opts.delay, 0, MAX_INPUT_DELAY) :
+                            AutoInputDelay(GameRoundTrip(*rtt_ms));
+}
+
+// A change of the player's setting since this session last looked (SetInputDelay) becomes the
+// session's: this game's from its next frame, and every later game's. False when none.
+bool TakeLiveDelay()
+{
+  const u32 live = s_live_delay.load();
+  if (live >> 8 == s.live_delay_seq)
+    return false;
+  s.live_delay_seq = live >> 8;
+  const int setting = static_cast<int>(live & 0xFF);
+  s.net_opts.delay = setting > 0 ? std::optional<int>(setting) : std::nullopt;
+  return true;
+}
+
+// CPU thread, before the frame's local input: a running game takes a new setting at once.
+// GekkoNet repeats this player's last input for the frames a higher delay adds, and drops its
+// next inputs for the frames a lower one takes away (they already went out); every machine
+// gets the same inputs either way. Only this player's own inputs are delayed, so the others need
+// not know.
+void ApplyLiveDelay()
+{
+  if (!TakeLiveDelay() || s.mode != Mode::Network || !s.gekko || s.local_handles.empty())
+    return;
+  double rtt = -1;
+  const int delay = PickInputDelay(&rtt);
+  if (delay == s.input_delay)
+    return;
+  INFO_LOG_FMT(BRAWLBACK, "gprb: input delay {} -> {} at frame {} ({}, round trip {:.0f} ms)",
+               s.input_delay, delay, s.current_frame, s.net_opts.delay ? "set" : "auto", rtt);
+  s.input_delay = delay;
+  s_current_delay = delay;
+  gekko_set_local_delay(s.gekko, s.local_handles[0], static_cast<unsigned char>(delay));
+  gekko_set_disconnect_timeout(s.gekko, Online::PeerSilenceTimeoutMs(delay));
+}
+
 void DestroyGekko()
 {
   if (s.gekko)
     gekko_destroy(&s.gekko);
   s.gekko = nullptr;
+  s_current_delay = -1;
   s.gekko_started = false;
   s.ops_prefetched = false;
   s.defer_initial_save = false;
@@ -2993,14 +3049,12 @@ bool CreateGekko(bool stress, int num_players)
     }
     // Each player picks the delay of their own inputs (Slippi): the set value, else from the
     // round trip measured now, to the furthest player still in the session, as GekkoNet will see
-    // it in the game (GameRoundTrip). It stays for the whole game.
+    // it in the game (GameRoundTrip). The player's setting may change it mid-game
+    // (ApplyLiveDelay).
+    TakeLiveDelay();
     double rtt = -1;
-    ForEachPeer([&](int, const PeerView& p) {
-      if (!p.left && p.rtt_ms >= 0)
-        rtt = std::max(rtt, p.rtt_ms);
-    });
-    s.input_delay = s.net_opts.delay ? std::clamp(*s.net_opts.delay, 0, MAX_INPUT_DELAY) :
-                                       AutoInputDelay(GameRoundTrip(rtt));
+    s.input_delay = PickInputDelay(&rtt);
+    s_current_delay = s.input_delay;
     gekko_set_local_delay(s.gekko, s.local_handles[0], static_cast<unsigned char>(s.input_delay));
     gekko_set_disconnect_timeout(s.gekko, Online::PeerSilenceTimeoutMs(s.input_delay));
     s.local_pad = LocalPad();
@@ -4335,6 +4389,7 @@ bool HandleGekkoFrame(Core::System& system)
     GekkoBatch batch;
     if (s.mode == Mode::Network)
       gekko_network_poll(s.gekko);
+    ApplyLiveDelay();
     for (int h : s.local_handles)
       gekko_add_local_input(s.gekko, h, s.local_inputs.data() + s.handle_port[h] * INPUT_SIZE);
     events = gekko_update_session(s.gekko, &count);
@@ -6035,6 +6090,8 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   CloseNetwork();
   s.mode = Mode::Network;
   s.net_opts = options;
+  // A setting changed before this session is in `options` already (the backend reads it).
+  s.live_delay_seq = s_live_delay.load() >> 8;
   s.peers = peers;
   s.local_slot = local_slot;
   s.host_slot = host_slot;
@@ -6138,6 +6195,20 @@ void SetQuitLoses(bool loses)
 void SetDesyncRecovery(bool on)
 {
   s_desync_recovery = on;
+}
+
+void SetInputDelay(int setting)
+{
+  const u32 value = static_cast<u32>(std::clamp(setting, 0, MAX_INPUT_DELAY));
+  u32 live = s_live_delay.load();
+  while (!s_live_delay.compare_exchange_weak(live, (((live >> 8) + 1) << 8) | value))
+  {
+  }
+}
+
+int CurrentInputDelay()
+{
+  return s_current_delay.load();
 }
 
 void SetGameResultCallback(std::function<void(const GameResult&)> callback)

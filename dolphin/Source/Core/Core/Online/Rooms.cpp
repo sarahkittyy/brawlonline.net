@@ -33,6 +33,7 @@
 #include "Core/Online/Spectate.h"
 #include "Core/Online/User.h"
 #include "Core/Rollback/GameplaySession.h"
+#include "Core/Rollback/MachineSession.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -224,6 +225,7 @@ struct State
   std::vector<RulesetEntry> list;
   std::optional<Clock::time_point> list_asked;
   picojson::value last_request;  // null or {id, result, message}
+  std::string delay_request;     // the id of the last input-delay.json taken
   std::string status_written;
   Clock::time_point status_at{};
   u64 requests_seen = 0;
@@ -794,6 +796,53 @@ void PollJoinRequest()
   Log(fmt::format("launcher asks to {}{} (request {})", what, *target, s.launch->id));
 }
 
+// input-delay.json (docs/rooms-protocol.md §5): the player changed the launcher's Input Delay
+// while this Dolphin runs. The setting is Dolphin's from now on (Dolphin.ini, which the launcher
+// writes too: Dolphin's own save of its settings keeps it), and a running game takes it from its
+// next frame, a P+ game or an Other Games room's session alike. Read and deleted.
+void PollInputDelayRequest()
+{
+  const std::string path = OnlineDir() + "input-delay.json";
+  if (!File::Exists(path))
+    return;
+  std::string text;
+  const bool read = File::GetSize(path) <= MAX_REQUEST_FILE && File::ReadFileToString(path, text);
+  File::Delete(path, File::IfAbsentBehavior::NoConsoleWarning);
+  std::unique_lock lk(s_mutex);
+  picojson::value v;
+  if (!read || !picojson::parse(v, text).empty() || !v.is<picojson::object>())
+  {
+    Log("input-delay.json unreadable or not a JSON object: ignored");
+    return;
+  }
+  const auto& o = v.get<picojson::object>();
+  const auto get = [&](const char* k) -> const picojson::value* {
+    const auto it = o.find(k);
+    return it == o.end() ? nullptr : &it->second;
+  };
+  const picojson::value* version = get("version");
+  const picojson::value* id = get("id");
+  const picojson::value* delay = get("inputDelay");
+  if (!version || !version->is<double>() || version->get<double>() != 1 || !id ||
+      !id->is<std::string>() || id->get<std::string>().empty() ||
+      id->get<std::string>().size() > 100 || !delay || !delay->is<double>() ||
+      delay->get<double>() != static_cast<int>(delay->get<double>()) ||
+      delay->get<double>() < 0 || delay->get<double>() > Gprb::Session::MAX_INPUT_DELAY)
+  {
+    Log("input-delay.json: not version 1 with an id and an inputDelay of 0-9: ignored");
+    return;
+  }
+  const int setting = static_cast<int>(delay->get<double>());
+  s.delay_request = CleanText(id->get<std::string>(), 100);
+  Log(setting == 0 ? fmt::format("launcher: input delay automatic (request {})", s.delay_request) :
+                     fmt::format("launcher: input delay {} (request {})", setting, s.delay_request));
+  // Outside s_mutex: the config's change callbacks run here.
+  lk.unlock();
+  Config::SetBaseOrCurrent(Config::ONLINE_INPUT_DELAY, setting);
+  Gprb::Session::SetInputDelay(setting);
+  Machine::SetInputDelay(setting == 0 ? Machine::AUTO_DELAY : setting);
+}
+
 bool BusyScreen(u8 screen)
 {
   return screen >= static_cast<u8>(Screen::OnlineBusy);
@@ -965,6 +1014,9 @@ void WriteGameStatus(const DolphinBusy& busy, Clock::time_point now, bool force)
 {
   picojson::object o;
   std::string content_key;
+  const int delay_setting = Config::Get(Config::ONLINE_INPUT_DELAY);
+  const int machine_delay = Machine::CurrentInputDelay();
+  const int current = machine_delay >= 0 ? machine_delay : Gprb::Session::CurrentInputDelay();
   {
     std::lock_guard lk(s_mutex);
     const Screen screen = static_cast<Screen>(s.screen);
@@ -1008,6 +1060,13 @@ void WriteGameStatus(const DolphinBusy& busy, Clock::time_point now, bool force)
     o["room"] = s.phase == Phase::In && s.view ? picojson::value(s.view->code) : picojson::value();
     o["pid"] = picojson::value(static_cast<double>(Pid()));
     o["lastRequest"] = s.last_request;
+    // The Input Delay setting this Dolphin plays with (0: automatic), the running game's delay
+    // (null: none runs), and the last input-delay.json taken.
+    picojson::object delay;
+    delay["setting"] = picojson::value(static_cast<double>(delay_setting));
+    delay["current"] = current >= 0 ? picojson::value(static_cast<double>(current)) : picojson::value();
+    delay["request"] = s.delay_request.empty() ? picojson::value() : picojson::value(s.delay_request);
+    o["inputDelay"] = picojson::value(delay);
     content_key = picojson::value(o).serialize();
     if (!force && content_key == s.status_written && now - s.status_at < STATUS_EVERY)
       return;
@@ -1646,6 +1705,7 @@ void Thread()
     {
       next_file = now + FILE_POLL;
       PollJoinRequest();
+      PollInputDelayRequest();
       ModsRoom::Files(OnlineDir());
       const DolphinBusy busy = QueryBusy();
       {
