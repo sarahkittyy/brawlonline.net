@@ -21,6 +21,7 @@ target/
 __pycache__/
 *.pyc
 .venv/
+.claude
 /game-code/**/*.rel
 
 # Rank badges: Layerlab's emblems may ship in the launcher and the website but not be published as
