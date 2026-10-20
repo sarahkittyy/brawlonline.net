@@ -68,6 +68,7 @@ describe("rulesets", () => {
       [{ ...defaultRuleset(), strikes: [1, 2, 1] }, "doesn't strike"],
       [weekly({ bans: 4 }), "bans"],
       [{ ...defaultRuleset(), dsr: true }, "for sets"],
+      [{ ...defaultRuleset(), stageChoice: "random", alternateStages: true }, "Alternate stages"],
       [
         weekly({
           stages: { starters: [1, 2, 3], counterpicks: [] },
@@ -100,6 +101,14 @@ describe("rulesets", () => {
     expect(normalizeRuleset(weekly({ stageChoice: "random" })).stageChoice).toBe("loser-picks");
     expect(rulesetProblem({ ...defaultRuleset(), bans: 2 })).toBeNull();
     expect(normalizeRuleset(weekly())).toEqual(weekly());
+    // Alternate stages: kept with a pick (a set, the loser), cleared where nobody picks.
+    expect(defaultRuleset().alternateStages).toBe(false);
+    expect(normalizeRuleset(weekly({ alternateStages: true })).alternateStages).toBe(true);
+    expect(
+      normalizeRuleset({ ...defaultRuleset(), stageChoice: "loser-picks-list", alternateStages: true }).alternateStages,
+    ).toBe(true);
+    expect(normalizeRuleset({ ...n, alternateStages: true }).alternateStages).toBe(false);
+    expect(rulesetProblem({ ...defaultRuleset(), stageChoice: "random", alternateStages: true })).toBeNull();
   });
 
   it("suggests strike patterns that leave one stage", () => {
@@ -149,5 +158,12 @@ describe("rulesets", () => {
     expect(JSON.parse(rulesetToJson(sc)).rules.stockControl).toBe(true);
     expect(rulesetFromJson(rulesetToJson(sc))).toEqual(sc);
     expect(() => rulesetFromJson(`{"rules": {"stockControl": 1}}`)).toThrow("bad value");
+    // Alternate stages too: written only when on, read back.
+    expect("alternateStages" in JSON.parse(text)).toBe(false);
+    const alts = weekly({ alternateStages: true });
+    expect(JSON.parse(rulesetToJson(alts)).alternateStages).toBe(true);
+    expect(rulesetFromJson(rulesetToJson(alts))).toEqual(alts);
+    expect(rulesetFromJson(`{"name": "x", "alternateStages": true}`).alternateStages).toBe(true);
+    expect(() => rulesetFromJson(`{"alternateStages": "yes"}`)).toThrow("bad value");
   });
 });

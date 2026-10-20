@@ -121,6 +121,7 @@ public:
     // legal list (the session's DefaultStages(), as Slippi falls back to its default list).
     o.stages = match.stages;
     o.pick_from_stages = match.pick_from_stages && !match.stages.empty();
+    o.alternate_stages = match.alternate_stages;
     if (match.stages.empty())
       WARN_LOG_FMT(BRAWLBACK, "gprb: the server sent no stage list; using P+'s legal list");
     for (const auto& p : match.players)

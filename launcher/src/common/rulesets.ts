@@ -9,9 +9,9 @@ import { stageInfo } from "./stages";
 export type RuleStyle = "time" | "stock" | "coin";
 export type RulePause = "normal" | "hold";
 /**
- * Without a set: `loser-picks` (game 1 random, then the loser picks any stage, alternate layouts too; the list only
- * feeds random stages), `loser-picks-list` (the same, held to the list on each stage's normal layout), `strike`
- * (every game struck from the starters) or `random` (every game).
+ * Without a set: `loser-picks` (game 1 random, then the loser picks any stage; the list only feeds random stages),
+ * `loser-picks-list` (the same, held to the list), `strike` (every game struck from the starters) or `random` (every
+ * game).
  */
 export type StageChoice = "loser-picks" | "loser-picks-list" | "strike" | "random";
 
@@ -63,6 +63,12 @@ export type Ruleset = {
    */
   bestOf: number;
   stageChoice: StageChoice;
+  /**
+   * P+'s alternate stages: every stage pick (a loser's, a set's counterpick) plays the layout the picker's held L, R or
+   * Z selects; off, every stage on its normal layout. Only with a pick (`picksUsed`). The server writes it only when
+   * on, so older rulesets (and their hashes) stay the same.
+   */
+  alternateStages?: boolean;
   strikes: number[];
   bans: number;
   dsr: boolean;
@@ -149,6 +155,7 @@ export function defaultRuleset(): Ruleset {
     },
     bestOf: 0,
     stageChoice: "loser-picks",
+    alternateStages: false,
     strikes: [],
     bans: 0,
     dsr: false,
@@ -158,6 +165,11 @@ export function defaultRuleset(): Ruleset {
 /** Whether the ruleset strikes (game 1 of a set, or every game with `strike`), in rooms with two sides. */
 export function strikesUsed(r: Ruleset): boolean {
   return r.bestOf > 0 || r.stageChoice === "strike";
+}
+
+/** Whether a player picks a stage in some game: a set's games 2+, or a loser without a set. */
+export function picksUsed(r: Ruleset): boolean {
+  return r.bestOf > 0 || r.stageChoice === "loser-picks" || r.stageChoice === "loser-picks-list";
 }
 
 /**
@@ -192,6 +204,9 @@ export function normalizeRuleset(r: Ruleset): Ruleset {
   }
   if (!strikesUsed(n)) {
     n.strikes = [];
+  }
+  if (!picksUsed(n)) {
+    n.alternateStages = false;
   }
   return n;
 }
@@ -269,6 +284,9 @@ export function validateRuleset(r: Ruleset): string | null {
   }
   if (r.bestOf > 0 && r.stageChoice !== "loser-picks") {
     return "The stage choice is for rulesets without a set";
+  }
+  if (r.alternateStages && !picksUsed(r)) {
+    return "Alternate stages need a stage pick: a set, or the loser picks";
   }
   if (strikesUsed(r)) {
     const left = r.stages.starters.length - 1;
@@ -364,10 +382,12 @@ export function rulesetFromJson(text: string): Ruleset {
 
 /** The JSON Export writes: the ruleset without `by` (the server fills it), indented. */
 export function rulesetToJson(r: Ruleset): string {
-  const { by: _by, ...rest } = r;
-  // Stock control only when on, as the server writes it: a file without it still opens in an older launcher.
+  const { by: _by, alternateStages, ...rest } = r;
+  // Stock control and alternate stages only when on, as the server writes them: a file without them still opens in an
+  // older launcher.
   const { stockControl, ...rules } = rest.rules;
-  return JSON.stringify({ ...rest, rules: stockControl ? { ...rules, stockControl } : rules }, null, 2) + "\n";
+  const out = { ...rest, ...(alternateStages ? { alternateStages } : {}) };
+  return JSON.stringify({ ...out, rules: stockControl ? { ...rules, stockControl } : rules }, null, 2) + "\n";
 }
 
 function isObject(v: unknown): v is Record<string, any> {
@@ -388,6 +408,9 @@ function checkTypes(r: Ruleset): string | null {
   }
   if (!isInt(r.bestOf) || !isInt(r.bans) || typeof r.dsr !== "boolean") {
     return "the set";
+  }
+  if (typeof (r.alternateStages ?? false) !== "boolean") {
+    return "alternateStages";
   }
   if (!isIntArray(r.strikes) || !isIntArray(r.stages.starters) || !isIntArray(r.stages.counterpicks)) {
     return "a list";

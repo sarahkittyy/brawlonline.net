@@ -2138,8 +2138,9 @@ void MaybeDecideSetup()
   else if (pick)
   {
     st.stage = pick->stage_pick;
-    // From the list: the stage's normal layout, whatever alternate-stage buttons were held.
-    st.asl = s.net_opts.pick_from_stages ? 0 : pick->asl;
+    // The alternate stage the held buttons select only where the match plays them; else the
+    // stage's normal layout, whatever was held.
+    st.asl = s.net_opts.alternate_stages ? pick->asl : 0;
   }
   else
   {
@@ -2570,11 +2571,12 @@ void HandleControl(std::string_view text, const sf::IpAddress& from, u16 from_po
     {
       if (st->game == NextGame() && s.setup.game != st->game)
       {
-        if (const StageDecision d = DecideStage(st->game); d.applies && !d.wait && d.stage != st->stage)
+        if (const StageDecision d = DecideStage(st->game);
+            d.applies && !d.wait && (d.stage != st->stage || d.asl != st->asl))
         {
-          WARN_LOG_FMT(BRAWLBACK, "gprb lobby: game {}: the host set up stage {:#x}, the stage "
-                                  "strikes decided {:#x}",
-                       st->game, st->stage, d.stage);
+          WARN_LOG_FMT(BRAWLBACK, "gprb lobby: game {}: the host set up stage {:#x} (alternate {:#x}), "
+                                  "the stage strikes decided {:#x} ({:#x})",
+                       st->game, st->stage, st->asl, d.stage, d.asl);
         }
         s.setup = *st;
         s.last_stage = st->stage;
@@ -3238,6 +3240,7 @@ GameResult ReadGameResult(Core::System& system)
   GameResult r;
   r.game = NextGame();
   r.stage = s.setup.stage;
+  r.asl = s.setup.asl;
   r.frames = s.end_game_frame;
   const auto f = ReadFighterFields(g);
   const auto teams = MatchTeams(g);
@@ -3462,6 +3465,7 @@ void EndRunning(Core::System& system, const std::string& reason)
       r.end = GameEnd::Desync;
       r.game = NextGame();
       r.stage = s.setup.stage;
+      r.asl = s.setup.asl;
       r.frames = s.end_game_frame;
       ReportGameResult(r);
     }
@@ -6969,6 +6973,7 @@ picojson::value Status()
     lobby["stages"] = picojson::value(stages);
     lobby["stages_from_server"] = picojson::value(!s.net_opts.stages.empty());
     lobby["pick_from_stages"] = picojson::value(s.net_opts.pick_from_stages);
+    lobby["alternate_stages"] = picojson::value(s.net_opts.alternate_stages);
     o["lobby"] = picojson::value(lobby);
     o["local_port"] = picojson::value(
         static_cast<double>(s.socket ? s.socket->getLocalPort() : 0));

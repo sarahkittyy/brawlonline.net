@@ -182,12 +182,12 @@ impl<'de> Deserialize<'de> for Dropped {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum StageChoice {
-    /// Game 1 random, then the loser picks any stage of P+'s stage select, alternate layouts too
-    /// (today's rooms); the stage list only feeds the random stages.
+    /// Game 1 random, then the loser picks any stage of P+'s stage select; the stage list only
+    /// feeds the random stages.
     #[default]
     LoserPicks,
-    /// Game 1 random, then the loser picks from the stage list, on the stage's normal layout: the
-    /// stage select greys the other stages (the user's, 2026-10-12, `room-rules.md` §2).
+    /// Game 1 random, then the loser picks from the stage list: the stage select greys the other
+    /// stages (the user's, 2026-10-12, `room-rules.md` §2).
     LoserPicksList,
     /// Strike from the starters with the ruleset's pattern, the first striker random each game
     /// (a tournament's Bo1). Not for FFA.
@@ -248,6 +248,12 @@ pub struct Ruleset {
     pub best_of: u8,
     /// No set only (with a set it is [`StageChoice::LoserPicks`] and unused).
     pub stage_choice: StageChoice,
+    /// P+'s alternate stages: every stage pick (a loser's, a set's counterpick) plays the layout
+    /// the picker's held L, R or Z selects. Off (the default, the user's, 2026-10-19): every pick
+    /// plays the stage's normal layout. Only with a pick (a set, or a loser who picks). Not written
+    /// when off, so the hash of every ruleset from before it stays the same.
+    #[serde(skip_serializing_if = "is_false")]
+    pub alternate_stages: bool,
     /// The strike pattern over the starters, players taking turns (`[1, 2, 1]`: the first striker
     /// strikes one, the other two, the first one): it leaves exactly one stage. Used by game 1 of
     /// a set and by [`StageChoice::Strike`]; empty otherwise.
@@ -272,6 +278,7 @@ impl Default for Ruleset {
             legacy_players: Dropped,
             best_of: 0,
             stage_choice: StageChoice::LoserPicks,
+            alternate_stages: false,
             strikes: Vec::new(),
             bans: 0,
             dsr: false,
@@ -285,16 +292,21 @@ impl Ruleset {
         self.best_of > 0 || self.stage_choice == StageChoice::Strike
     }
 
-    /// Whether a loser's stage pick is held to the stage list, on the stage's normal layout
-    /// ([`StageChoice::LoserPicksList`]; a set picks from its list in its own steps).
+    /// Whether a player picks a stage in some game: a set's games 2+, or a loser without a set.
+    pub fn picks_used(&self) -> bool {
+        self.best_of > 0 || matches!(self.stage_choice, StageChoice::LoserPicks | StageChoice::LoserPicksList)
+    }
+
+    /// Whether a loser's stage pick is held to the stage list ([`StageChoice::LoserPicksList`]; a
+    /// set picks from its list in its own steps).
     pub fn pick_from_stages(&self) -> bool {
         self.best_of == 0 && self.stage_choice == StageChoice::LoserPicksList
     }
 
     /// Clears what the set format leaves unused, so two rulesets that play the same have the same
     /// JSON (and hash): trims the name; with a set the stage choice is `loser-picks`; without one
-    /// no bans and no DSR; no strike pattern unless one is used. The server normalizes before it
-    /// validates and publishes.
+    /// no bans and no DSR; no strike pattern unless one is used; no alternate stages without a
+    /// pick. The server normalizes before it validates and publishes.
     pub fn normalize(&mut self) {
         self.name = self.name.trim().to_string();
         if self.best_of > 0 {
@@ -305,6 +317,9 @@ impl Ruleset {
         }
         if !self.strikes_used() {
             self.strikes.clear();
+        }
+        if !self.picks_used() {
+            self.alternate_stages = false;
         }
     }
 
@@ -348,6 +363,9 @@ impl Ruleset {
         }
         if self.best_of > 0 && self.stage_choice != StageChoice::LoserPicks {
             return Err("The stage choice is for rulesets without a set".into());
+        }
+        if self.alternate_stages && !self.picks_used() {
+            return Err("Alternate stages need a stage pick: a set, or the loser picks".into());
         }
 
         if self.strikes_used() {
@@ -567,6 +585,32 @@ mod tests {
         r.strikes = vec![1, 2, 1];
         r.normalize();
         assert_eq!((r.stage_choice, r.pick_from_stages()), (StageChoice::LoserPicks, false));
+        // Alternate stages: off by default and not written then (earlier hashes stay); on with a
+        // pick; normalized away where nobody picks (strike, random without a set).
+        assert!(!Ruleset::default().alternate_stages);
+        assert!(serde_json::to_value(Ruleset::default()).unwrap().get("alternateStages").is_none());
+        let mut a: Ruleset = serde_json::from_str(r#"{"name": "x", "alternateStages": true}"#).unwrap();
+        a.normalize();
+        a.validate().unwrap();
+        assert_eq!(serde_json::to_value(&a).unwrap()["alternateStages"], true);
+        assert_ne!(a.hash(), Ruleset { name: "x".into(), ..Default::default() }.hash());
+        a.stage_choice = StageChoice::LoserPicksList;
+        a.validate().unwrap();
+        a.best_of = 3;
+        a.strikes = vec![1, 2, 1];
+        a.normalize();
+        assert!(a.alternate_stages);
+        a.validate().unwrap();
+        for choice in [StageChoice::Strike, StageChoice::Random] {
+            let mut b = Ruleset { name: "x".into(), stage_choice: choice, alternate_stages: true, ..Default::default() };
+            if choice == StageChoice::Strike {
+                b.strikes = vec![1, 2, 1];
+            }
+            assert!(b.validate().unwrap_err().contains("Alternate stages"));
+            b.normalize();
+            assert!(!b.alternate_stages);
+            b.validate().unwrap();
+        }
         // The old `players` key (any value) is read and dropped: older drafts, files and published
         // rulesets still load, and play the same as without it.
         for old in [r#""1v1""#, r#""ffa""#, r#""3v3""#, "7"] {

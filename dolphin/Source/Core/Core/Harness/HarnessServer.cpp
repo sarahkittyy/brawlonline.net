@@ -1775,14 +1775,18 @@ Result CmdRoomsStatus(const Args&)
 }
 
 // A set's stage step as the game's GP_COMPLETE_STEP makes it (GameSetup::Act): `kind` struck,
-// banned or picked now, so a test can press on two machines within the same few frames.
+// banned or picked now (optional `asl`: the alternate-stage buttons held on a pick), so a test
+// can press on two machines within the same few frames.
 Result CmdGameSetupAct(const Args& args)
 {
   const u64 kind = GetU64(args, "kind");
   if (kind < 1 || kind > 0xFF)
     Fail("kind must be a stage kind (1-255)");
+  const u64 asl = args.count("asl") ? GetU64(args, "asl") : 0;
+  if (asl > 0xFF)
+    Fail("asl must be 0-255");
   picojson::object o;
-  o["ok"] = picojson::value(Online::GameSetup::Act(static_cast<u8>(kind)));
+  o["ok"] = picojson::value(Online::GameSetup::Act(static_cast<u8>(kind), static_cast<u8>(asl)));
   o["setup"] = picojson::value(Online::GameSetup::Status());
   return o;
 }

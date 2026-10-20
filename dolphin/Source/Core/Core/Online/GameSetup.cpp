@@ -60,6 +60,10 @@ std::array<std::vector<u8>, 2> s_seed;
 std::optional<StepReport> s_reported;
 u32 s_act_game = 0;
 std::vector<u8> s_actions;  // 1v1: this player's actions for s_act_game, in order
+// The room's ruleset plays P+'s alternate stages: a pick's held L/R/Z. This player's last pick's
+// buttons for s_act_game (published as `gs.l`).
+bool s_alternates = false;
+u8 s_pick_asl = 0;
 // Sides of two: this player's presses for s_act_game; on the host, its lists for s_host_game; on
 // the others, how many of their presses the host has answered, and when it last dropped one.
 std::vector<Press> s_presses;
@@ -77,6 +81,7 @@ bool s_opponent_stalled = false;
 // its stage.
 u32 s_resume_game = 0;
 u16 s_resume_stage = NO_STAGE;
+u8 s_resume_asl = 0;
 View s_last_view;  // the last Current() (harness)
 std::mt19937 s_rng{std::random_device{}()};
 
@@ -253,6 +258,7 @@ bool EnterGame(u32 game)
     return false;
   s_act_game = game;
   s_actions = game == 1 && !Shared() ? s_seed[s_local] : std::vector<u8>{};
+  s_pick_asl = 0;
   s_presses.clear();
   s_seen_taken = 0;
   s_overruled.reset();
@@ -385,6 +391,8 @@ std::optional<picojson::object> ToPublish(u32 game)
 {
   picojson::object gs;
   gs["g"] = picojson::value(static_cast<double>(game));
+  if (s_act_game == game && s_pick_asl)
+    gs["l"] = picojson::value(static_cast<double>(s_pick_asl));
   if (!Shared())
   {
     gs["a"] = KindsJson(s_act_game == game ? s_actions : std::vector<u8>{});
@@ -527,6 +535,52 @@ bool CharsPending(u32 game, const Locks& locks)
          !(SideLocked(0, game, locks) && SideLocked(1, game, locks));
 }
 
+// A player's alternate-stage buttons on their pick of `game` (`gs.l`; 0: none).
+u8 AslFrom(const picojson::object& extra, u32 game)
+{
+  const picojson::object* gs = GsOf(extra, game);
+  const picojson::value* l = gs ? Field(*gs, "l") : nullptr;
+  return l && l->is<double>() && l->get<double>() >= 0 && l->get<double>() <= 0xFF ?
+             static_cast<u8>(l->get<double>()) :
+             0;
+}
+
+// Under s_mutex: the alternate-stage buttons of the pick that decided `e`'s stage: the picking
+// side's player's (sides of two: the teammate whose press of it the host took); 0 without
+// alternate stages or without a pick (a struck game 1).
+u8 PickAsl(u32 game, const Extras& extras, const Steps& e)
+{
+  if (!s_alternates)
+    return 0;
+  int pick_idx = -1;
+  for (size_t i = 0; i < e.steps.size(); ++i)
+  {
+    if (e.steps[i].type == StepType::Pick)
+      pick_idx = static_cast<int>(i);
+  }
+  if (pick_idx < 0)
+    return 0;
+  const int side = e.steps[pick_idx].player;
+  if (side < 0 || side > 1)
+    return 0;
+  for (const u8 port : s_members[side])
+  {
+    if (port >= MAX_PORTS)
+      continue;
+    const bool local = port == s_local_port;
+    if (Shared())
+    {
+      const Press made{static_cast<u8>(pick_idx), static_cast<u8>(e.stage)};
+      const std::vector<Press> presses = local ? (s_act_game == game ? s_presses : std::vector<Press>{}) :
+                                                 PressesFrom(extras[port], game);
+      if (std::find(presses.begin(), presses.end(), made) == presses.end())
+        continue;
+    }
+    return local ? (s_act_game == game ? s_pick_asl : 0) : AslFrom(extras[port], game);
+  }
+  return 0;
+}
+
 Gprb::Session::StageDecision Decide(u32 game)
 {
   // Called by the session with its lock held: read the players' extras first, then take ours.
@@ -546,6 +600,7 @@ Gprb::Session::StageDecision Decide(u32 game)
   {
     // A desynced game played again: its stage.
     d.stage = s_resume_stage;
+    d.asl = s_resume_asl;
     return d;
   }
   const Steps e = Evaluate(game, extras);
@@ -555,6 +610,7 @@ Gprb::Session::StageDecision Decide(u32 game)
     return d;
   }
   d.stage = e.stage;
+  d.asl = PickAsl(game, extras, e);
   return d;
 }
 }  // namespace
@@ -588,7 +644,7 @@ void Begin(int local_port, std::vector<u16> starters, std::vector<u16> counterpi
   s_both_pick_first = true;
 }
 
-void Begin(int local_port, const SetTicket& ticket, int host_port)
+void Begin(int local_port, const SetTicket& ticket, int host_port, bool alternate_stages)
 {
   const int side =
       std::find(ticket.members[1].begin(), ticket.members[1].end(), local_port) != ticket.members[1].end() ? 1 : 0;
@@ -601,12 +657,14 @@ void Begin(int local_port, const SetTicket& ticket, int host_port)
   s_members = ticket.members;
   s_seed = ticket.actions;
   s_host_port = host_port;
+  s_alternates = alternate_stages;
   NOTICE_LOG_FMT(NETPLAY,
                  "GameSetup: from the set's game {} ({}-{}), sides on ports {} and {}, {} and {} "
-                 "steps made{}",
+                 "steps made{}{}",
                  s_first_game, s_set.wins[0], s_set.wins[1], fmt::join(s_members[0], "+"),
                  fmt::join(s_members[1], "+"), s_seed[0].size(), s_seed[1].size(),
-                 Shared() ? fmt::format(", either teammate presses, P{} decides", host_port + 1) : "");
+                 Shared() ? fmt::format(", either teammate presses, P{} decides", host_port + 1) : "",
+                 alternate_stages ? ", alternate stages on" : "");
 }
 
 void SetPortNames(const std::array<std::string, MAX_PORTS>& names)
@@ -697,6 +755,9 @@ void Begin(int local_port, Format format)
     s_opponent_stalled = false;
     s_resume_game = 0;
     s_resume_stage = NO_STAGE;
+    s_resume_asl = 0;
+    s_alternates = false;
+    s_pick_asl = 0;
   }
   Gprb::Session::SetLocalExtra({});
   Gprb::Session::SetStageDecider(Decide);
@@ -753,7 +814,7 @@ void OnGameNotCounted()
   s_resume_game = 0;  // a quit of a restarted game: the set game from its first step
 }
 
-void OnGameRestarting(u32 session_game, u16 stage)
+void OnGameRestarting(u32 session_game, u16 stage, u8 asl)
 {
   std::lock_guard lk(s_mutex);
   if (!s_active)
@@ -762,12 +823,13 @@ void OnGameRestarting(u32 session_game, u16 stage)
   s_reported.reset();
   s_resume_game = session_game + 1;
   s_resume_stage = stage;
+  s_resume_asl = asl;
   NOTICE_LOG_FMT(NETPLAY, "GameSetup: set game {} desynced: it starts again (session game {}) on "
-                          "stage {:#x}, once every player is ready",
-                 s_first_game - 1 + s_resume_game, s_resume_game, stage);
+                          "stage {:#x} (alternate {:#x}), once every player is ready",
+                 s_first_game - 1 + s_resume_game, s_resume_game, stage, asl);
 }
 
-bool Act(u8 kind)
+bool Act(u8 kind, u8 asl)
 {
   const Gprb::Session::Lobby lobby = Gprb::Session::GetLobby();
   const Extras extras = PlayerExtras();
@@ -789,6 +851,9 @@ bool Act(u8 kind)
     {
       return false;
     }
+    const bool pick = e.steps[e.step_idx].type == StepType::Pick;
+    if (pick)
+      s_pick_asl = asl;
     if (Shared())
     {
       // Shown at once; it counts once the host's machine takes it (the host's own at once).
@@ -800,8 +865,8 @@ bool Act(u8 kind)
     {
       s_actions.push_back(kind);
     }
-    INFO_LOG_FMT(NETPLAY, "GameSetup: game {}: {} {:#x}", game,
-                 e.steps[e.step_idx].type == StepType::Pick ? "picked" : "struck", kind);
+    INFO_LOG_FMT(NETPLAY, "GameSetup: game {}: {} {:#x}{}", game, pick ? "picked" : "struck", kind,
+                 pick && asl ? fmt::format(" (alternate-stage buttons {:#x})", asl) : "");
     publish = ToPublish(game);
   }
   if (publish)

@@ -173,8 +173,11 @@ struct ConnectOptions
   // not checked against it: Slippi does not restrict Direct's stage select ...
   std::vector<u16> stages;
   // ... unless set (a room whose loser picks from the list): a pick must be one of `stages` (else
-  // the stage is drawn as without a pick) and is played on its normal layout (asl 0).
+  // the stage is drawn as without a pick).
   bool pick_from_stages = false;
+  // A pick plays P+'s alternate stage its held L/R/Z selects (the server's `alternateStages`:
+  // Direct, Teams, a room whose ruleset has them on); else the stage's normal layout (asl 0).
+  bool alternate_stages = false;
   // The room's Teams switch (docs/nplayer/setup.md): 3-4 players play a team battle with each
   // player's lock-in team (Online::GameSetup::DecideTeams); with 2 players it has no effect.
   bool teams = false;
@@ -326,6 +329,7 @@ struct GameResult
   std::array<u8, MAX_LOBBY_PLAYERS> char_kind{};
   std::array<u8, MAX_LOBBY_PLAYERS> team{};
   u16 stage = NO_STAGE;
+  u8 asl = 0;      // P+ alternate-stage buttons it was played with
   u32 frames = 0;  // game frames the match ran
 };
 // Called on the CPU thread for every such game; must not block. nullptr removes it.

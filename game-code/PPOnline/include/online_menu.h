@@ -87,6 +87,7 @@ namespace OnlineMatch {
     void setAltCostumes(const u8* alt);
     void clearPickedStage();
     void noteSssButtons(u32 held, u32 pressed);   // each frame of the online stage select
+    u8 sssAsl();                      // the buttons held at the last A/START there (P+'s ASL byte)
 }
 
 namespace MatchHud {

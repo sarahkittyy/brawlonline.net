@@ -1073,9 +1073,12 @@ void Service(const Core::CPUThreadGuard& guard, u32 mailbox)
     }
     case CMD_GP_COMPLETE_STEP:
     {
+      // {kind, asl}: a game before the alternate stage sent only the kind (the rest is zeroed).
       const u8 kind = R8(guard, payload);
-      const bool ok = GameSetup::Act(kind);
-      request = fmt::format("GP_COMPLETE_STEP stage={:#x}{}", kind, ok ? "" : " (refused)");
+      const u8 asl = R8(guard, payload + 1);
+      const bool ok = GameSetup::Act(kind, asl);
+      request = fmt::format("GP_COMPLETE_STEP stage={:#x}{}{}", kind,
+                            asl ? fmt::format(" asl={:#x}", asl) : "", ok ? "" : " (refused)");
       break;
     }
     default:

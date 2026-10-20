@@ -13,6 +13,10 @@ describe("ruleset rows", () => {
     expect(setSummary({ ...r, stageChoice: "loser-picks-list" })).toBe("No set · loser picks from the list");
     expect(setSummary({ ...r, stageChoice: "strike", strikes: [1, 1] })).toBe("No set · strikes 1-1");
     expect(setSummary({ ...r, stageChoice: "random" })).toBe("No set · random stage");
+    expect(setSummary({ ...r, alternateStages: true })).toBe("No set · loser picks · alternate stages");
+    expect(setSummary({ ...r, bestOf: 3, strikes: [1, 2, 1], bans: 2, alternateStages: true })).toBe(
+      "Bo3 · strikes 1-2-1 · 2 bans · alternate stages",
+    );
   });
 
   it("say how often the version was played", () => {

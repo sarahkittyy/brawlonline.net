@@ -247,6 +247,7 @@ namespace OnlineMatch {
     {
         if (g_onlineCss && g_onlinePickStage && (pressed & (0x100u | 0x1000u))) s_sssAsl = (u8)held;
     }
+    u8 sssAsl() { return s_sssAsl; }
 
     // Fill gmSelCharData from SESSION and run the Versus setup.
     static bool setupMatch(u8* seq)
@@ -485,9 +486,9 @@ namespace OnlineMatch {
             u8* st = gg(0x14);
             bool picked = (code == 1 || code == 3) && st;
             s_pickedStage = picked ? *(u16*)(st + 0x22) : OnlineMatch::PICK_CANCELLED;
-            // From a room's list: the stage's normal layout (alternate layouts only in a room
-            // whose loser picks any stage; Dolphin's host holds to it too).
-            s_pickedAsl = picked && !StageLegal::roomPicksFromList() ? s_sssAsl : 0;
+            // The held buttons always: Dolphin's host plays them only where the match has
+            // alternate stages (Direct, Teams, a room whose ruleset has them on).
+            s_pickedAsl = picked ? s_sssAsl : 0;
         }
         s_sssAsl = 0;
         backToCss(seq);

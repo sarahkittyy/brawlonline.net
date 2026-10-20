@@ -55,9 +55,9 @@ def strike(g: Game, kind: int) -> None:
     B.sss_pick_stage(g.c, kind, 0, button="X")
 
 
-def play_steps(players: list[Game], game: int) -> None:
-    """Whoever's turn it is strikes or bans the first selectable stage, or picks one, until the
-    stage is decided (both machines see every step)."""
+def play_steps(players: list[Game], game: int, pick_held: tuple[str, ...] = ()) -> None:
+    """Whoever's turn it is strikes or bans the first selectable stage, or picks one (holding
+    `pick_held`, P+'s alternate stages), until the stage is decided (both machines see every step)."""
     for _ in range(12):
         views = {g.name: setup_view(g) for g in players}
         mover = next((g for g in players if views[g.name]["active"] and views[g.name]["my_turn"] and
@@ -71,7 +71,7 @@ def play_steps(players: list[Game], game: int) -> None:
         assert v["game"] >= 1 and v["selectable"], v
         kind = v["selectable"][0]
         if v["type"] == 2:
-            B.sss_pick_stage(mover.c, kind, 0)
+            B.sss_pick_stage(mover.c, kind, 0, held=pick_held)
         else:
             strike(mover, kind)
         mover.steps("wait 30")
@@ -88,7 +88,7 @@ def join_by_code(g: Game, code: str) -> None:
 
 
 def bo3_room(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str,
-             test: str) -> tuple[Game, Game, str]:
+             test: str, ruleset: dict[str, Any] = BO3) -> tuple[Game, Game, str]:
     """A and B in a room playing a published Bo3 (created from the launcher's ruleset box): A, B and
     the room code."""
     ua, ub = backend.create_user(f"{test[:4]}ah", "STAH"), backend.create_user(f"{test[:4]}bj", "STBJ")
@@ -97,7 +97,7 @@ def bo3_room(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gp
     _all(a.to_main_menu, b.to_main_menu)
     _all(a.to_online_page, b.to_online_page)
     # The host publishes the Bo3 and creates a room with it from the launcher (its ruleset box).
-    view = backend._http("POST", "/v1/rulesets", {"ruleset": BO3}, token=ua.session_token)
+    view = backend._http("POST", "/v1/rulesets", {"ruleset": ruleset}, token=ua.session_token)
     rs_code = view["code"]
     rid = write_create(a, ruleset=rs_code)
     assert launcher_answer(a, rid)["result"] == "accepted"
@@ -114,6 +114,36 @@ def bo3_room(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gp
         _wait(lambda g=g: (session_rules(g) or {}).get("stocks") == 1, 20, f"{g.name}: the ruleset's rules")
     assert room_view(a)["code"] == code
     return a, b, code
+
+
+BO3_ALTS = dict(BO3, name="Alt Stage Set Test", alternateStages=True)
+
+
+@pytest.mark.slow
+def test_room_set_alternate_stages(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                   gpu_backend: str) -> None:
+    """A Bo3 whose ruleset has alternate stages on: game 1 is struck (no pick: normal layout); game 2's
+    counterpick with L held plays the L layout on both machines (GP_COMPLETE_STEP's buttons, the
+    pick's `gs.l`, the host's stage decision)."""
+    a, b, _code = bo3_room(backend, dolphin, gpu_backend, "salt", BO3_ALTS)
+    players = [a, b]
+    a.steps("tap START 8", "wait 40")
+    _wait(lambda: ppom.read_room(b.c, ppom.find_block(b.c))["slots"][0]["bits"] & ppom.SLOT_READY, 20, "B sees A ready")
+    b.steps("tap START 8", "wait 10")
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "game 1: both on the stage select")
+    play_steps(players, 1, pick_held=("L",))
+    g1 = online_set.play_game(players, 1)
+    assert g1["checksums"]["mismatches"] == 0, g1
+    assert g1["asl"] == [0, 0], ("game 1 is struck, no pick", g1)
+    _wait(lambda: (rooms(a).get("set") or {}).get("score") and sum(rooms(a)["set"]["score"]) >= 1, 30,
+          "game 1 counted by the server")
+    until_setup(a, lambda v: v["game"] == 2 and v["type"] == 3, "game 2's character step")
+    pick_characters(players, 2)
+    online_set.wait(lambda: all(online_set.scene(g.c) == SSS for g in players), 120, "game 2: both on the stage select")
+    play_steps(players, 2, pick_held=("L",))
+    g2 = online_set.play_game(players, 2)
+    assert g2["checksums"]["mismatches"] == 0, g2
+    assert g2["asl"] == [0x40, 0x40], ("the counterpick's L layout was not played", g2)
 
 
 @pytest.mark.slow

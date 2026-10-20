@@ -412,8 +412,11 @@ extern "C" {
         int kind = StageLegal::kindAt(page, pos);
         if (StageLegal::allowedKind(kind)) {
             if (st) {
-                u8 k = (u8)kind;
-                PPOM::post(PPOM::CMD_GP_COMPLETE_STEP, &k, 1);   // the loser's pick
+                // The loser's pick, with the alternate-stage buttons held on this A/START (the
+                // tick noted them before the stage select read the pads); Dolphin plays them only
+                // where the room's ruleset has alternate stages.
+                u8 k[2] = {(u8)kind, OnlineMatch::sssAsl()};
+                PPOM::post(PPOM::CMD_GP_COMPLETE_STEP, k, 2);
             }
             return pos;
         }

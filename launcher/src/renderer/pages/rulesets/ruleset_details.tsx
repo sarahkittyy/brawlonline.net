@@ -1,5 +1,5 @@
 import type { Ruleset } from "@common/rulesets";
-import { stageName } from "@common/rulesets";
+import { picksUsed, stageName } from "@common/rulesets";
 import Typography from "@mui/material/Typography";
 
 import { ItemsSection } from "./items_section";
@@ -26,6 +26,9 @@ function formatRows(r: Ruleset): [string, string][] {
         ? Messages.loserPicksList()
         : Messages.loserPicks();
     rows.push([Messages.stages(), choice]);
+  }
+  if (picksUsed(r)) {
+    rows.push([Messages.alternateStages(), r.alternateStages ? Messages.alternateStagesOn() : Messages.off()]);
   }
   return rows;
 }

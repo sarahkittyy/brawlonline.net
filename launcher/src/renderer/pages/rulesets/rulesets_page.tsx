@@ -1,6 +1,13 @@
 import type { RulesetDraft, RulesetView } from "@accounts/types";
 import type { Ruleset } from "@common/rulesets";
-import { defaultRuleset, normalizeRuleset, rulesetFromJson, rulesetProblem, rulesetToJson } from "@common/rulesets";
+import {
+  defaultRuleset,
+  normalizeRuleset,
+  picksUsed,
+  rulesetFromJson,
+  rulesetProblem,
+  rulesetToJson,
+} from "@common/rulesets";
 import AddRoundedIcon from "@mui/icons-material/AddRounded";
 import ContentCopyIcon from "@mui/icons-material/ContentCopy";
 import FileDownloadOutlinedIcon from "@mui/icons-material/FileDownloadOutlined";
@@ -60,6 +67,9 @@ export function setSummary(r: Ruleset): string {
     if (r.bans > 0) {
       parts.push(Messages.summaryBans(r.bans));
     }
+    if (r.alternateStages) {
+      parts.push(Messages.summaryAlternateStages());
+    }
     return parts.join(" · ");
   }
   const choice =
@@ -70,7 +80,8 @@ export function setSummary(r: Ruleset): string {
       : r.stageChoice === "loser-picks-list"
       ? Messages.summaryLoserPicksList()
       : Messages.summaryLoserPicks();
-  return `${Messages.summaryNoSet()} · ${choice}`;
+  const alts = r.alternateStages && picksUsed(r) ? ` · ${Messages.summaryAlternateStages()}` : "";
+  return `${Messages.summaryNoSet()} · ${choice}${alts}`;
 }
 
 /**

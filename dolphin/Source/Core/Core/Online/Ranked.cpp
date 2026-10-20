@@ -387,7 +387,7 @@ void OnSessionStart(const Match& match)
   if (match.set && match.players.size() == match.set->members[0].size() + match.set->members[1].size())
   {
     // A room's set (docs/design/room-rules.md §5; 1v1 or 2v2): in-game ports are the room's slots.
-    GameSetup::Begin(room_local_port, *match.set, match.room_host_port - 1);
+    GameSetup::Begin(room_local_port, *match.set, match.room_host_port - 1, match.alternate_stages);
     std::array<std::string, GameSetup::MAX_PORTS> names;
     for (const auto& p : match.players)
     {
@@ -475,7 +475,7 @@ void OnGameResult(const Gprb::Session::GameResult& r)
     // A desync in Ranked or a room's set (SetDesyncRecovery): no result; the session plays the
     // same set game again, on its stage with its characters, from the agreed state.
     if (GameSetup::IsActive())
-      GameSetup::OnGameRestarting(r.game, r.stage);
+      GameSetup::OnGameRestarting(r.game, r.stage, r.asl);
     NOTICE_LOG_FMT(NETPLAY, "Ranked: game {} desynced: it starts again", r.game);
     return;
   }

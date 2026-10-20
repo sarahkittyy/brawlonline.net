@@ -173,9 +173,14 @@ pub struct GetTicketResp {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub set: Option<SetTicket>,
     /// A room whose loser picks from the stage list (`StageChoice::LoserPicksList`): a stage pick
-    /// must be one of `stages`, played on its normal layout. Absent: any stage, any layout.
+    /// must be one of `stages`. Absent: any stage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pick_from_stages: Option<bool>,
+    /// P+'s alternate stages: a stage pick (a loser's, a set's counterpick) plays the layout the
+    /// picker's held L, R or Z selects (Direct, Teams, a room whose ruleset has them on). Absent:
+    /// every pick plays the stage's normal layout.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alternate_stages: Option<bool>,
 }
 
 /// A room's set as its session starts it (ours; Dolphin's `Online/SetFormat.h` `Format` and

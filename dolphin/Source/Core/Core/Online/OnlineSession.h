@@ -81,8 +81,11 @@ struct Match
   std::vector<PlayerInfo> players;  // in server order
   std::vector<u16> stages;
   // A room whose loser picks from the stage list (get-ticket-resp `pickFromStages`): a stage pick
-  // must be one of `stages`, played on its normal layout.
+  // must be one of `stages`.
   bool pick_from_stages = false;
+  // P+'s alternate stages (get-ticket-resp `alternateStages`: Direct, Teams, a room whose ruleset
+  // has them on): a stage pick plays the layout its held L/R/Z selects; else the normal layout.
+  bool alternate_stages = false;
   // Ranked: the starter stages struck for game 1 (get-ticket-resp `starters`, ours; Slippi's
   // client has them built in). Empty: Online::GameSetup's default.
   std::vector<u16> starters;

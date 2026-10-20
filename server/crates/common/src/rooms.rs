@@ -602,6 +602,9 @@ pub struct RoomRuleset {
     /// The ruleset's stages (an older mm sent none: P+'s default lists).
     #[serde(default)]
     pub stages: crate::rules::StageLists,
+    /// The picks play P+'s alternate stages (`Ruleset::alternate_stages`).
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub alternate_stages: bool,
 }
 
 /// A room's set (`room-state.set`): the score by side, side 0 being the lower slot.

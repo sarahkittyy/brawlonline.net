@@ -80,7 +80,9 @@ void Begin(int local_port, Format format);
 // port. In 2v2 the sides are teams: either teammate strikes, bans and picks for the side, and the
 // session host's machine (`host_port`) decides which presses count (SetFormat.h TakePresses);
 // every player of the winning side, then of the losing one, chooses a character.
-void Begin(int local_port, const SetTicket& ticket, int host_port);
+// `alternate_stages`: a pick plays the alternate stage its held L/R/Z selects (the room's ruleset);
+// else every stage on its normal layout.
+void Begin(int local_port, const SetTicket& ticket, int host_port, bool alternate_stages);
 // The set's game a session game is (a room's session starts at the set's game N).
 u32 SetGameOf(u32 session_game);
 // The side an in-game port plays (0xFE stays a draw); nullopt for no side.
@@ -107,11 +109,13 @@ void OnGameNotCounted();
 // A game of the set (Ranked or a room's) desynced and starts again from the state every machine
 // agreed on (Gprb::Session::SetDesyncRecovery): the session's next game is the same set game, on
 // the same stage, with the same characters. No steps: every player readies up on the CSS
-// (StepType::Resume, RESUME_SECONDS, then the character is locked in for them).
-void OnGameRestarting(u32 session_game, u16 stage);
+// (StepType::Resume, RESUME_SECONDS, then the character is locked in for them). `asl`: the
+// alternate stage it was played on.
+void OnGameRestarting(u32 session_game, u16 stage, u8 asl);
 constexpr int RESUME_SECONDS = 45;
-// The game's GP_COMPLETE_STEP: this player strikes, bans or picks `kind`. False if refused.
-bool Act(u8 kind);
+// The game's GP_COMPLETE_STEP: this player strikes, bans or picks `kind`; `asl` is P+'s
+// alternate-stage buttons held on a pick (played only with alternate stages on). False if refused.
+bool Act(u8 kind, u8 asl = 0);
 // GP_FETCH_STEP; also runs the step timers. CPU thread.
 View Current();
 // The opponent's step ran out long ago without their game completing it (Slippi's wait timeout):

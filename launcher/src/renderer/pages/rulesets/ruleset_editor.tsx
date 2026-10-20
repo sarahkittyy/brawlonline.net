@@ -1,5 +1,5 @@
 import type { MatchRules, Ruleset, StageChoice } from "@common/rulesets";
-import { MAX_BANS, MAX_RULESET_NAME_LEN, strikesUsed, suggestStrikes } from "@common/rulesets";
+import { MAX_BANS, MAX_RULESET_NAME_LEN, picksUsed, strikesUsed, suggestStrikes } from "@common/rulesets";
 import Button from "@mui/material/Button";
 import MenuItem from "@mui/material/MenuItem";
 import Switch from "@mui/material/Switch";
@@ -136,6 +136,15 @@ export const RulesetEditor = ({ value, onChange }: { value: Ruleset; onChange: (
               <Switch checked={r.dsr} onChange={(e) => set({ dsr: e.target.checked })} />
             </Row>
           </>
+        )}
+        {picksUsed(r) && (
+          <Row label={Messages.alternateStages()} help={Messages.alternateStagesHelp()}>
+            <Switch
+              checked={r.alternateStages ?? false}
+              onChange={(e) => set({ alternateStages: e.target.checked })}
+              inputProps={{ "aria-label": Messages.alternateStages() }}
+            />
+          </Row>
         )}
       </Section>
 

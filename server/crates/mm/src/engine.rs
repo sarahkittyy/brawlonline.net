@@ -1597,6 +1597,9 @@ impl Engine {
                 starters: (mode == Mode::Ranked && !rules.starters.is_empty()).then(|| rules.starters.clone()),
                 items: Some(rules.items),
                 rules: Some(rules.rules.clone()),
+                // The friends' modes keep P+'s alternate stages on the loser's pick (Slippi does
+                // not restrict Direct's pick); Unranked has no pick, Ranked's steps none.
+                alternate_stages: matches!(mode, Mode::Direct | Mode::Teams).then_some(true),
                 ..Default::default()
             };
             Self::send(out, *conn, &resp);
@@ -1747,6 +1750,8 @@ mod tests {
         assert_eq!(ga["matchId"], gb["matchId"]);
         assert!(ga["matchId"].as_str().unwrap().starts_with("mode.direct-"));
         assert_ne!(ga["isHost"], gb["isHost"]);
+        // Direct's loser picks P+'s alternate stages (Unranked and Ranked never).
+        assert_eq!((&ga["alternateStages"], &gb["alternateStages"]), (&json!(true), &json!(true)));
         assert_eq!(ga["players"].as_array().unwrap().len(), 2);
         // Same player list for both, except the isLocalPlayer flag.
         for i in 0..2 {
@@ -2376,6 +2381,7 @@ mod tests {
         let msgs = sent(&out, 1);
         assert_eq!(msgs.len(), 1);
         assert_eq!(msgs[0]["type"], "get-ticket-resp");
+        assert!(msgs[0].get("alternateStages").is_none());
         assert_eq!(msgs[0]["error"], msg::NO_OPPONENT);
         assert!(disconnected(&out, 1));
         assert_eq!(h.e.waiting_count(), 0);

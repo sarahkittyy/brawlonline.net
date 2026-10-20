@@ -4,8 +4,11 @@ A published ruleset without a set, its stages Battlefield, Final Destination and
 - loser picks from the list: SESSION has the room's stages, game 1 is drawn from them, and in game 2
   the loser's stage select greys every other stage (P+'s strike art), refuses one, and plays a
   pick from the list on its normal layout (L held: no alternate stage);
-- loser picks any stage: nothing is struck, the pick keeps its alternate layout, and P+'s random
-  (START) draws from the room's stages;
+- loser picks any stage: nothing is struck, the pick is played on its normal layout (L held:
+  alternate stages are off unless the ruleset turns them on), and P+'s random (START) draws from
+  the room's stages;
+- a ruleset with alternate stages on: the loser's pick keeps the layout L selects, from any stage
+  or from the list;
 - a game on P+'s Training Room (the waiting room's stage) is an online match like any other.
 
 Screenshots: run/artifacts/game-code/rooms/stage-list/<test>/<player>/.
@@ -39,9 +42,12 @@ STAGES = {"starters": [BF, FD], "counterpicks": [YS]}
 CHOICE_LOSER_PICKS, CHOICE_LOSER_PICKS_LIST = 0, 3
 
 
-def ruleset(choice: str) -> dict:
-    return {"format": 1, "name": f"Stage List {choice[-4:]}", "rules": {"stocks": 1, "timeMinutes": 2},
-            "bestOf": 0, "stageChoice": choice, "stages": STAGES}
+def ruleset(choice: str, alternates: bool = False) -> dict:
+    r = {"format": 1, "name": f"Stage List {choice[-4:]}{' Alts' if alternates else ''}",
+         "rules": {"stocks": 1, "timeMinutes": 2}, "bestOf": 0, "stageChoice": choice, "stages": STAGES}
+    if alternates:
+        r["alternateStages"] = True
+    return r
 
 
 def session(g: Game) -> dict:
@@ -49,14 +55,15 @@ def session(g: Game) -> dict:
 
 
 def room_with(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str, test: str,
-              choice: str) -> tuple[Game, Game]:
+              choice: str, alternates: bool = False) -> tuple[Game, Game]:
     """A creates a room with the published ruleset from the launcher, B joins by its code."""
     ua, ub = backend.create_user(f"{test[:4]}ah", "SLAH"), backend.create_user(f"{test[:4]}bj", "SLBJ")
     a = _boot(dolphin, "list-a", backend, ua, gpu_backend, test, "gameplay", artifacts=LIST_ART)
     b = _boot(dolphin, "list-b", backend, ub, gpu_backend, test, "gameplay", artifacts=LIST_ART)
     _all(a.to_main_menu, b.to_main_menu)
     _all(a.to_online_page, b.to_online_page)
-    code = backend._http("POST", "/v1/rulesets", {"ruleset": ruleset(choice)}, token=ua.session_token)["code"]
+    code = backend._http("POST", "/v1/rulesets", {"ruleset": ruleset(choice, alternates)},
+                         token=ua.session_token)["code"]
     rid = write_create(a, ruleset=code)
     assert launcher_answer(a, rid)["result"] == "accepted"
     _wait(lambda: a.scene() == CSS, 60, "A on the room's CSS")
@@ -146,7 +153,7 @@ def test_room_loser_picks_any_stage(backend: OnlineBackend, dolphin: Callable[..
         assert se["stages"] == STAGES, se["stages"]
     game = play_first_game(a, b)
 
-    # Game 2: nothing struck; a stage off the list keeps its alternate layout (L).
+    # Game 2: nothing struck; a stage off the list, L held: its normal layout (alternate stages off).
     loser = to_losers_stage_select(a, b, game)
     assert loser.c.read_mem(online_set.STRIKE_TABLE, 30) == bytes(30), "stages struck with any stage"
     loser.shot("02-stage-select")
@@ -155,7 +162,8 @@ def test_room_loser_picks_any_stage(backend: OnlineBackend, dolphin: Callable[..
           "game 2 to start after the pick")
     rep = online_set.play_game([a, b], game)
     assert rep["checksums"]["mismatches"] == 0, rep
-    assert rep["stage"] == FOD and rep["asl"] == [0x40, 0x40], ("the pick or its layout was not played", rep)
+    assert rep["stage"] == FOD, ("the pick was not played", rep)
+    assert rep["asl"] == [0, 0] and rep["asl_loaded"] == [0, 0], ("an alternate layout without alternates", rep)
     _wait(lambda: a.scene() == CSS and b.scene() == CSS, 180, "both back on the room's CSS after game 2")
     for g in (a, b):
         until_view(g, lambda v: v["flags"] & ppom.RF_IN and v["status"] == 0 and v["game"] == game + 1,
@@ -169,6 +177,23 @@ def test_room_loser_picks_any_stage(backend: OnlineBackend, dolphin: Callable[..
     rep = online_set.play_game([a, b], game + 1)
     assert rep["checksums"]["mismatches"] == 0, rep
     assert rep["stage"] in (BF, FD, YS), ("P+'s random left the room's stages", rep)
+
+
+@pytest.mark.slow
+def test_room_alternate_stages_on(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                  gpu_backend: str) -> None:
+    """A ruleset with alternate stages on (the user's, 2026-10-19: off by default): the loser's pick
+    with L held plays the L layout on both machines."""
+    a, b = room_with(backend, dolphin, gpu_backend, "alts", "loser-picks", alternates=True)
+    game = play_first_game(a, b)
+    loser = to_losers_stage_select(a, b, game)
+    B.sss_pick_stage(loser.c, FOD, 0, held=["L"])
+    _wait(lambda: online_set.gstatus(loser.c)["phase"] in ("running", "error", "ended"), 90,
+          "game 2 to start after the pick")
+    rep = online_set.play_game([a, b], game)
+    assert rep["checksums"]["mismatches"] == 0, rep
+    assert rep["stage"] == FOD and rep["asl"] == [0x40, 0x40], ("the pick or its layout was not played", rep)
+    assert rep["asl_loaded"][0] == rep["asl_loaded"][1] == 0x40, ("P+ did not load the L layout", rep)
 
 
 @pytest.mark.slow

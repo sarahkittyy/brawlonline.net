@@ -431,6 +431,7 @@ impl Room {
             best_of: self.ruleset.best_of,
             stage_choice: self.ruleset.stage_choice,
             stages: self.ruleset.stages.clone(),
+            alternate_stages: self.ruleset.alternate_stages,
         }
     }
 
@@ -1652,6 +1653,7 @@ impl RoomBook {
                     rules: Some(room.ruleset.rules.clone()),
                     set: set_ticket.clone(),
                     pick_from_stages: room.ruleset.pick_from_stages().then_some(true),
+                    alternate_stages: room.ruleset.alternate_stages.then_some(true),
                     ..Default::default()
                 },
             ));
@@ -2378,7 +2380,8 @@ mod tests {
         let s = last_state(&out, 1);
         assert_eq!(s["ruleset"]["stageChoice"], "loser-picks");
         assert_eq!(s["ruleset"]["stages"]["starters"], serde_json::json!([1, 4, 9, 0x21, 0x2E]));
-        assert_eq!(start(&mut t, &code, 100).pick_from_stages, None);
+        let resp = start(&mut t, &code, 100);
+        assert_eq!((resp.pick_from_stages, resp.alternate_stages), (None, None));
         for n in 1..=2 {
             t.req(n, RoomRequest::Back { pickers: None });
         }
@@ -2400,6 +2403,20 @@ mod tests {
         let resp = start(&mut t, &code, 200);
         assert!(serde_json::to_string(&resp).unwrap().contains(r#""pickFromStages":true"#));
         assert_eq!((resp.pick_from_stages, resp.stages), (Some(true), Some(vec![1, 2, 0x2A])));
+        assert_eq!(resp.alternate_stages, None);
+
+        // A ruleset with alternate stages on: the picks play the held L/R/Z layouts.
+        for n in 1..=2 {
+            t.req(n, RoomRequest::Back { pickers: None });
+        }
+        let r = Ruleset { name: "Alts".into(), version: 1, alternate_stages: true, ..Default::default() };
+        r.validate().unwrap();
+        let mut out = vec![];
+        t.book.apply_ruleset(&code, r, Some("BCDFGJ".into()), &mut out).unwrap();
+        assert_eq!(last_state(&out, 2)["ruleset"]["alternateStages"], true);
+        let resp = start(&mut t, &code, 300);
+        assert!(serde_json::to_string(&resp).unwrap().contains(r#""alternateStages":true"#));
+        assert_eq!(resp.alternate_stages, Some(true));
     }
 
     /// The host's STAGE SWITCH (`room-stages`): the room's stages and the loser's choice between any
