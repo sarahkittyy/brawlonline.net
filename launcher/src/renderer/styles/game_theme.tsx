@@ -19,8 +19,8 @@ import { SYSTEM_FONT_STACK } from "./with_font";
  * - Brawl's menu frames are greyscale masks the game tints at runtime. We tint
  *   them the same way (multiply) with colours sampled from P+'s own menu
  *   background gradient texture, so every colour also comes from the game.
- * - The page background is that gradient with P+'s grid tile over it, as on
- *   P+'s character and stage select screens.
+ * - The page background is the gradient's dark middle colour with P+'s grid
+ *   tile over it; the gradient itself is not drawn.
  *
  * Without a manifest the plain fallback from _variables.scss / theme.ts stays.
  */
@@ -129,16 +129,9 @@ export function buildThemeCss(manifest: GameAssetManifest, prepared: PreparedThe
   }
 
   if (prepared) {
-    const layers: string[] = [];
+    // The gradient itself is not drawn (it hid controls at its bright top): the tile goes over the flat page colour.
     if (prepared.images.backgroundTile) {
-      layers.push(`url("${prepared.images.backgroundTile}") repeat top left / 32px 32px`);
-    }
-    const bg = manifest.textures.background;
-    if (bg) {
-      layers.push(`url("${assetUrl(bg.file)}") no-repeat center / 100% 100%`);
-    }
-    if (layers.length > 0) {
-      vars.push(`--theme-background: ${layers.join(", ")};`);
+      vars.push(`--theme-background: url("${prepared.images.backgroundTile}") repeat top left / 32px 32px;`);
     }
     for (const key of FRAME_KEYS) {
       const frame = preparedFrameCss(manifest, key, prepared);
