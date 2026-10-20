@@ -309,7 +309,9 @@ describe("ModsView", () => {
     const p = props({ builds: [minus], running: true, status });
     const { getByText, getByRole, rerender } = render(<ModsView {...p} />);
     // Over 50 MB: maybe another release of the mod altogether.
-    expect(getByText(`${Messages.sdSyncBody("280 MB", 412, "4 minutes")} ${Messages.sdBigDifference()}`)).toBeTruthy();
+    expect(
+      getByText(`${Messages.sdSyncBody("280 MB", 412, "4 minutes")} ${Messages.sdBigDifferenceQuestion()}`),
+    ).toBeTruthy();
     expect(getByText(Messages.sdSyncWarning())).toBeTruthy();
     expect(getByText("rex_/pf/fighter/hero/FitHero.pac")).toBeTruthy();
     fireEvent.click(getByRole("button", { name: Messages.sdSyncOverwrite() }));
@@ -347,7 +349,7 @@ describe("ModsView", () => {
       <ModsView {...props({ builds: [minus], running: true, status })} />,
     );
     expect(getByText(Messages.sdSyncBody("2 MB", 31, "3 seconds"))).toBeTruthy();
-    expect(queryByText(Messages.sdBigDifference(), { exact: false })).toBeNull();
+    expect(queryByText(Messages.sdBigDifferenceQuestion(), { exact: false })).toBeNull();
     const downloading = room(2);
     downloading.session = {
       phase: "joining",

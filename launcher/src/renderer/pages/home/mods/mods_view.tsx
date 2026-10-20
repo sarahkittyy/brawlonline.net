@@ -276,7 +276,7 @@ export const SdCardDialog = ({
 }: {
   open: boolean;
   body: string;
-  /** Over SD_BIG_DIFFERENCE_BYTES: "Too big? ..." after the body. */
+  /** Over SD_BIG_DIFFERENCE_BYTES: "If it's too big, ..." after the body. */
   bigDifference: boolean;
   /** Some of the files that differ, largest first. */
   names: string[];
@@ -292,7 +292,7 @@ export const SdCardDialog = ({
       <DialogContent>
         <p className={styles.sdSyncBody}>
           {body}
-          {bigDifference && ` ${Messages.sdBigDifference()}`}
+          {bigDifference && ` ${Messages.sdBigDifferenceQuestion()}`}
         </p>
         <p className={styles.sdSyncWarning}>{Messages.sdSyncWarning()}</p>
         {shown.length > 0 && (
