@@ -5,6 +5,7 @@ import { EventEmitter } from "events";
 import fs from "fs";
 import merge from "lodash/merge";
 import set from "lodash/set";
+import path from "path";
 
 import { defaultAppSettings } from "./default_settings";
 import { ipc_settingChangedEvent } from "./ipc";
@@ -144,6 +145,12 @@ export class SettingsManager extends EventEmitter {
 
   getCloseDolphinAfterSpectating(): boolean {
     return this.get().settings.closeDolphinAfterSpectating;
+  }
+
+  /** Where rendered highlight and clip videos go (Settings > Clips): `<Root Replay Folder>/Highlights` by default. */
+  getClipsFolder(): string {
+    const { clipsFolder, rootSlpPath } = this.get().settings;
+    return clipsFolder ?? path.join(rootSlpPath, "Highlights");
   }
 
   getDolphinPath(type: DolphinLaunchType): string | null {

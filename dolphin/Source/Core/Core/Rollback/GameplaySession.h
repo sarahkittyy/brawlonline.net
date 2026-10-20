@@ -412,6 +412,13 @@ std::optional<std::string> ArmPlayback(std::shared_ptr<const Replay::File> file,
 void ExtendPlayback(std::shared_ptr<const Replay::File> file, bool hold_at_end, bool cut = false);
 // A line the overlay shows above the bar (spectating: "Game 3 starts soon", the close countdown).
 void SetPlaybackBanner(std::string text);
+// Highlights (the launcher's stats page, ReplayPlayback.h `highlights`): plays frames `start` to
+// `end` of the armed replay. A seek to `start` (a fast-forward, or a keyframe put back when it is
+// behind; while the match is still loading, it runs once frames do), then play, paused at `end`
+// (PlaybackStatus' `clip_done`; a clip past the replay's last frame holds there, `at_end`). While
+// the fast-forward runs the game is muted and every CLIP_SHOW_EVERY-th frame is presented, so the
+// screen visibly moves and the progress line shows. false: no replay is armed.
+bool SetPlaybackClip(s64 start, s64 end);
 // Ends a playback (its match ends at the next loop top, and the game then leaves it).
 void StopPlayback();
 // A stopped playback's game is still in its match: the next replay arms once this is false

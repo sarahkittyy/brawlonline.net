@@ -343,6 +343,10 @@ export class DolphinManager {
           .catch((err) => log.error(err));
       };
 
+      instance.onStatus = (status) => {
+        this.eventSubject.next({ type: DolphinEventType.PLAYBACK_STATUS, instanceId: id, status });
+      };
+
       this.playbackDolphinInstances.set(id, playbackInstance);
     }
 

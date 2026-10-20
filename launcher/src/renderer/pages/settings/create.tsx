@@ -1,5 +1,6 @@
 import { AdvancedAppSettings } from "./advanced_app_settings/advanced_app_settings";
 import { AppearanceSettings } from "./appearance_settings/appearance_settings";
+import { ClipsSettings } from "./clips_settings/clips_settings";
 import { SettingsCreateMessages as Messages } from "./create.messages";
 import { CreditsPage } from "./credits_page/credits_page";
 import { NetplayDolphinSettings } from "./dolphin_settings/netplay_dolphin_settings";
@@ -25,6 +26,11 @@ export function createSettingsPage(): { Page: React.ComponentType } {
           name: () => Messages.replays(),
           path: "replay-options",
           component: <ReplaySettings />,
+        },
+        {
+          name: () => Messages.clips(),
+          path: "clips-options",
+          component: <ClipsSettings />,
         },
       ],
     },

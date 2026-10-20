@@ -378,3 +378,88 @@ def test_launcher_comm_file_ignores_the_players_controller(backend: OnlineBacken
     log = inst.log.read()
     assert "sqBoot -> sqTraining" not in log, "the viewer booted to Training"
     assert "sqBoot -> sqPrizeCheck" in log, "the viewer's boot was not seen"
+
+
+@pytest.mark.slow
+def test_launcher_comm_file_plays_highlights(backend: OnlineBackend,
+                                             dolphin: Callable[..., DolphinInstance],
+                                             gpu_backend: str) -> None:
+    """The stats page's highlights (docs/design/replays.md §6.2, ReplayPlayback.h `highlights`):
+    the launcher's playback Dolphin gets a queue of clips of one replay, each from its startFrame to
+    its endFrame. The first fast-forwards from the match's start (its progress in the status file:
+    state `seeking`, `seekFrom`, the frame), plays the clip and pauses at its end; the next one of
+    the same replay goes on in the same match: back (a keyframe put back) or forward (a
+    fast-forward). A new request for the replay already playing does too. The last clip past the
+    replay's end holds at its last frame. No checksum differs."""
+    fa, out = _recorded_direct_game(backend, dolphin, gpu_backend, "highlights", ("hana", "ivan"))
+    last = fa.last_frame
+    assert last > 1200, last
+    mid, early, late = last // 2, last // 5, (last * 4) // 5
+    clips = [(mid, mid + 120), (early, early + 90), (late, late + 60)]
+    v, inst, file_status = _comm_viewer(backend, dolphin, gpu_backend, fa, out)
+    comm = out / "playback-comms.json"
+
+    def request(command: str, cs: list[tuple[int, int]]) -> None:
+        comm.write_text(json.dumps({"mode": "highlights", "commandId": command, "queue": [
+            {"path": str(fa.path), "startFrame": a, "endFrame": b} for a, b in cs]}))
+
+    request("h1", clips)
+    states: list[tuple[int, str]] = []
+    seek_progress: list[tuple[int, int, int]] = []
+    shot_seeking = False
+    serial = None
+
+    def follow(index: int, state: str, timeout: float, command: str = "h1") -> dict[str, Any]:
+        """Polls until the status file has request `command`'s `index` in `state`; records what it saw."""
+        nonlocal shot_seeking, serial
+        end = time.time() + timeout
+        while time.time() < end:
+            fs = file_status()
+            assert fs.get("state") != "error", fs
+            if fs.get("commandId", "").startswith("h"):
+                key = (fs.get("index", -1), fs.get("state", ""))
+                if not states or states[-1] != key:
+                    states.append(key)
+                if fs.get("state") == "seeking" and fs.get("seekFrom", -1) >= 0:
+                    seek_progress.append((fs["index"], fs["seekFrom"], fs.get("frame", -1)))
+                    if not shot_seeking and fs.get("frame", 0) > fs["seekFrom"] + 300:
+                        v.shot("seeking")
+                        shot_seeking = True
+                if fs.get("commandId") == command and fs.get("index") == index and fs.get("state") == state:
+                    st = _status(v)
+                    if serial is None:
+                        serial = st["serial"]
+                    assert st["serial"] == serial, ("a new match was armed", st)
+                    return fs
+            time.sleep(0.05)
+        raise AssertionError(f"no {state} for clip {index}: {states[-8:]}")
+
+    follow(0, "playing", 600)
+    st = _wait(lambda: (lambda s: s if s["clip_done"] or s["clip_start"] != clips[0][0] else None)(_status(v)),
+               60, "the first clip to end")
+    v.shot("clip1-end")
+    # The first one fast-forwarded from the match's first frames to its start.
+    assert any(i == 0 and f > a for i, a, f in seek_progress), seek_progress[:5]
+    t0 = time.time()
+    follow(1, "playing", 120)
+    back = time.time() - t0
+    follow(2, "playing", 300)
+    fs = follow(2, "ended", 60)
+    st = _status(v)
+    assert st["paused"] and st["clip_done"] and st["shown"] == clips[2][1], st
+    assert fs["clipStart"] == clips[2][0] and fs["clipEnd"] == clips[2][1], fs
+    v.shot("clip3-end")
+    # A new request for the replay already playing: the same match seeks back, plays, pauses.
+    request("h2", [(early + 30, early + 60)])
+    follow(0, "ended", 60, "h2")
+    st = _status(v)
+    assert st["shown"] == early + 60 and st["paused"], st
+    # A clip past the replay's last frame holds at it.
+    request("h3", [(last - 90, last + 600)])
+    follow(0, "ended", 120, "h3")
+    st = _status(v)
+    assert st["at_end"] and st["shown"] == last, st
+    assert st["desync_frame"] == -1, st
+    log = inst.log.read()
+    assert log.count("replay: 1 of ") == 1, "one match armed for all of them"
+    print(f"states {states}; back to clip 2 in {back:.2f} s")

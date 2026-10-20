@@ -139,8 +139,25 @@ export type PlayerRecord = Selectable<PlayerTable>;
 export type NewPlayer = Insertable<PlayerTable>;
 export type PlayerUpdate = Updateable<PlayerTable>;
 
+/**
+ * Highlight cache schema
+ *
+ * A replay's highlights and L+R+Z clips (src/replays/highlights), as JSON (ReplayHighlights). A row
+ * is used while the file's size and modification time, the detector version and the mode (what was
+ * looked for) are the same.
+ */
+export type HighlightCacheTable = {
+  path: string; // the replay's full path (primary key)
+  size_bytes: number;
+  mtime_ms: number;
+  detector_version: number;
+  mode: string;
+  result: string;
+};
+
 export type Database = {
   file: FileTable;
   game: GameTable;
   player: PlayerTable;
+  highlight_cache: HighlightCacheTable;
 };

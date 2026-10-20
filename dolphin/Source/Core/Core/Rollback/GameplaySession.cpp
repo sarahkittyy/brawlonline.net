@@ -725,6 +725,12 @@ struct State
     double speed = 1.0;
     bool hold_at_end = false;
     bool at_end = false;
+    // A highlight's frames (SetPlaybackClip): paused once frame clip_end has run (-1: none);
+    // clip_ff while the fast-forward to its start runs.
+    s64 clip_start = -1;
+    s64 clip_end = -1;
+    bool clip_done = false;
+    bool clip_ff = false;
     // For the overlay: who played (INFO), the mode and game.
     std::array<std::string, MAX_LOBBY_PLAYERS> names{};
     std::array<u8, MAX_LOBBY_PLAYERS> chars{};
@@ -5353,6 +5359,9 @@ constexpr s64 LIVE_LOW = 120;
 constexpr s64 LIVE_HIGH = 240;
 constexpr s64 LIVE_NEAR = 60;
 constexpr s64 CATCH_UP_SHOW_EVERY = 15;
+// A highlight's fast-forward (SetPlaybackClip) shows one frame in 30: about 20 a second at the
+// ~650 frames a second it runs.
+constexpr s64 CLIP_SHOW_EVERY = 30;
 
 // The frame on screen (the last one run), and the next one.
 s64 PlaybackShown()
@@ -5513,9 +5522,19 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
     // Muted while the spectator's first catch-up runs (the user, 2026-10-14).
     if (!pb.catch_up)
       pb.joining = false;
-    PlaybackMute(system, pb.catch_up && pb.joining);
     const bool ff = f < pb.ff_until;
+    if (!ff)
+      pb.clip_ff = false;
+    PlaybackMute(system, (pb.catch_up && pb.joining) || pb.clip_ff);
     const bool waiting = !ff && LiveWaiting(f);
+    // A highlight's end: paused there (the launcher plays the next one, or it stays).
+    if (pb.clip_end >= 0 && !ff && f > pb.clip_end && !pb.paused)
+    {
+      pb.clip_end = -1;
+      pb.clip_done = true;
+      pb.paused = true;
+      pb.step = 0;
+    }
     if (f > last && !ff && !waiting)
     {
       if (pb.live && pb.cut && pb.file->endg.empty() && !pb.at_end)
@@ -5727,9 +5746,11 @@ bool RunFrame(const Core::CPUThreadGuard& guard)
   // A replay's seek runs the frames before its target unpresented (as a rollback's resimulation).
   // A live playback running ahead (catching up, a seek, a jump) shows a frame in
   // CATCH_UP_SHOW_EVERY, so the game visibly moves instead of freezing until its target.
+  // A highlight's fast-forward shows a frame in CLIP_SHOW_EVERY the same way.
   s.resim_pass = s.mode == Mode::Playback ?
                      static_cast<s64>(s.ops.adv_frame[i]) < s.pb.ff_until &&
-                         !(s.pb.live && s.ops.adv_frame[i] % CATCH_UP_SHOW_EVERY == 0) :
+                         !(s.pb.live && s.ops.adv_frame[i] % CATCH_UP_SHOW_EVERY == 0) &&
+                         !(s.pb.clip_ff && s.ops.adv_frame[i] % CLIP_SHOW_EVERY == 0) :
                      s.ops.adv_count > 1 && i != s.ops.adv_count - 1;
 
   if (s.force_final_at_active)
@@ -6547,6 +6568,27 @@ void SetPlaybackBanner(std::string text)
   s.pb.banner = std::move(text);
 }
 
+bool SetPlaybackClip(s64 start, s64 end)
+{
+  std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
+  auto& pb = s.pb;
+  if (s.mode != Mode::Playback || !pb.file || pb.stopped || pb.live)
+    return false;
+  const s64 first = pb.file->first_frame;
+  start = std::clamp<s64>(start, first, Replay::MAX_FRAMES);
+  pb.clip_start = start;
+  pb.clip_end = std::max(end, start);
+  pb.clip_done = false;
+  pb.clip_ff = true;
+  pb.paused = false;
+  pb.step = 0;
+  pb.seek_to = start;
+  ++pb.controls;
+  INFO_LOG_FMT(BRAWLBACK, "replay: clip {}-{}", start, pb.clip_end);
+  s_pb_wake.notify_all();
+  return true;
+}
+
 void PlaybackControl(PlaybackCommand command, double arg)
 {
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
@@ -6775,6 +6817,9 @@ picojson::object PlaybackStatus()
   o["speed"] = picojson::value(s.pb.speed);
   o["at_end"] = picojson::value(s.pb.at_end);
   o["seeking"] = picojson::value(s.pb.seek_to >= 0 || s.pb.ff_until >= 0);
+  o["clip_start"] = picojson::value(static_cast<double>(s.pb.clip_start));
+  o["clip_end"] = picojson::value(static_cast<double>(s.pb.clip_end));
+  o["clip_done"] = picojson::value(s.pb.clip_done);
   o["shown"] = picojson::value(static_cast<double>(
       playback && s.pb.file && s.phase == Phase::Running ? PlaybackShown() : -1));
   o["keyframes"] = picojson::value(static_cast<double>(s.pb_keys->Count()));

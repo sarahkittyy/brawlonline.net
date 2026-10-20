@@ -58,6 +58,13 @@ export interface SettingsSchema {
   // playback Dolphin holds the last frame for 5 s, then closes. Auto play overrides it.
   closeDolphinAfterSpectating: boolean;
 
+  // Clips (DESIGN.md, the user 2026-10-20): "L+R+Z to clip" (Project Clippi's button-input
+  // highlights, found after the game in the replay's recorded pads); "Disable automatic highlight
+  // detection"; where rendered videos go (null = <rootSlpPath>/Highlights).
+  clipOnLrz: boolean;
+  disableHighlightDetection: boolean;
+  clipsFolder: string | null;
+
   // Dolphin settings: the executable of our Dolphin build (null = default, see dolphin/install/paths.ts)
   netplayDolphinPath: string | null;
   playbackDolphinPath: string | null;

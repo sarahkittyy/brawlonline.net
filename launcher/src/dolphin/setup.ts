@@ -22,6 +22,7 @@ import {
   ipc_launchNetplayDolphin,
   ipc_moveGameFiles,
   ipc_openDolphinSettingsFolder,
+  ipc_playHighlights,
   ipc_prepareRoomLaunch,
   ipc_removePlayKeyFile,
   ipc_setChatKey,
@@ -129,6 +130,11 @@ export default function setupDolphinIpc({ dolphinManager }: { dolphinManager: Do
       mode: "queue",
       queue: files,
     });
+    return { success: true };
+  });
+
+  ipc_playHighlights.main!.handle(async ({ items, commandId }) => {
+    await dolphinManager.launchPlaybackDolphin("playback", { mode: "highlights", queue: items, commandId });
     return { success: true };
   });
 

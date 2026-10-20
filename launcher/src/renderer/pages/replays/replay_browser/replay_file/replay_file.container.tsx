@@ -157,6 +157,9 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
           cursor: pointer;
         `}
         onClick={onReplayClick}
+        // A double-click opens the stats page, as the stats button does (its two clicks select
+        // and deselect the row, leaving the selection as it was).
+        onDoubleClick={onShowStats}
       >
         <ReplayFileImpl
           fileName={fileName}

@@ -3,8 +3,10 @@
 
 #include "Core/Rollback/ReplayPlayback.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <cmath>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -49,6 +51,10 @@ struct Request
   bool stream_over = false;
   bool close_on_end = false;
   std::string banner;
+  // Highlights (`highlights`): each path plays from its clip's first frame to its last, then the
+  // next one; the same replay as the one before goes on in the running match.
+  bool highlights = false;
+  std::vector<std::pair<s64, s64>> clips;
 };
 
 // A spectated game's end: how long the last frame shows before Dolphin closes.
@@ -93,6 +99,10 @@ std::chrono::steady_clock::time_point s_wait_since;
 std::optional<std::chrono::steady_clock::time_point> s_wait_cut_since;
 // Waiting this long for a game's first frames says why it may take a while.
 constexpr auto WAIT_EXPLAINED_AFTER = std::chrono::seconds(15);
+// Highlights: the armed replay's clip was given to the session; the frame its fast-forward
+// started from (-1: not seen yet), for the progress.
+bool s_clip_applied = false;
+s64 s_seek_from = -1;
 
 // The game is running with our plugin (GameBridge found its block). The launcher's playback
 // Dolphin starts the comm file follower before it boots, and boots P+'s launcher DOL, whose game
@@ -150,7 +160,37 @@ std::optional<Request> ReadComm(const std::string& path)
     r.close_on_end = flag("closeOnEnd");
     r.banner = str("banner").substr(0, 120);
   }
-  if (str("mode") == "queue" || r.mirror)
+  r.highlights = str("mode") == "highlights";
+  if (r.highlights)
+  {
+    const auto q = o.find("queue");
+    if (q != o.end() && q->second.is<picojson::array>())
+    {
+      const auto frame = [](const picojson::object& io, const char* k) -> std::optional<s64> {
+        const auto it = io.find(k);
+        if (it == io.end() || !it->second.is<double>())
+          return std::nullopt;
+        const double v = it->second.get<double>();
+        if (!std::isfinite(v) || v < 0 || v > static_cast<double>(MAX_FRAMES))
+          return std::nullopt;
+        return static_cast<s64>(v);
+      };
+      for (const auto& item : q->second.get<picojson::array>())
+      {
+        if (r.paths.size() >= MAX_QUEUE || !item.is<picojson::object>())
+          continue;
+        const auto& io = item.get<picojson::object>();
+        const auto p = io.find("path");
+        const auto start = frame(io, "startFrame");
+        const auto end = frame(io, "endFrame");
+        if (p == io.end() || !p->second.is<std::string>() || !start || !end || *end < *start)
+          continue;
+        r.paths.push_back(p->second.get<std::string>());
+        r.clips.emplace_back(*start, *end);
+      }
+    }
+  }
+  else if (str("mode") == "queue" || r.mirror)
   {
     const auto q = o.find("queue");
     if (q != o.end() && q->second.is<picojson::array>())
@@ -181,6 +221,8 @@ std::optional<Request> ReadComm(const std::string& path)
 void ArmCurrent()
 {
   s_armed = false;
+  s_clip_applied = false;
+  s_seek_from = -1;
   s_needs_play_anyway = false;
   s_mirror_pending = false;
   s_close_at.reset();
@@ -298,7 +340,8 @@ void ArmCurrent()
     {
       file = std::make_shared<const File>(std::move(*f));
       const bool last = s_index + 1 == s_request.paths.size();
-      const bool hold = last && s_request.hold_at_end;
+      // (A highlight's replay holds at its end: the next highlight may be of the same replay.)
+      const bool hold = (last || s_request.highlights) && s_request.hold_at_end;
       // (A game that has already ended, e.g. a finished stream watched afterwards, plays from its
       // start. Whether it catches up is decided at its barrier, from the frames there by then.)
       const bool catch_up = s_request.mirror && !s_mirror_started && file->endg.empty();
@@ -345,6 +388,13 @@ picojson::object StatusLocked()
   o["error"] = picojson::value(s_error);
   o["needsPlayAnyway"] = picojson::value(s_needs_play_anyway);
   o["mirror"] = picojson::value(s_request.mirror);
+  if (s_request.highlights && s_index < s_request.clips.size())
+  {
+    o["highlights"] = picojson::value(true);
+    o["clipStart"] = picojson::value(static_cast<double>(s_request.clips[s_index].first));
+    o["clipEnd"] = picojson::value(static_cast<double>(s_request.clips[s_index].second));
+    o["seekFrom"] = picojson::value(static_cast<double>(s_seek_from));
+  }
   if (s_close_at)
   {
     o["closeIn"] = picojson::value(std::max(0.0, std::chrono::duration<double>(
@@ -440,6 +490,92 @@ void MirrorAtEnd(const picojson::object& st)
       fmt::format("Closing in {} s - press any replay key to stay", std::max<long long>(left, 1)));
 }
 
+// Highlights (under s_mutex): the line on screen while the next one loads or is fast-forwarded to.
+void ShowHighlightProgress(const std::string& what)
+{
+  const std::string of =
+      s_request.paths.size() > 1 ? fmt::format(" ({} of {})", s_index + 1, s_request.paths.size()) : "";
+  OSD::AddTypedMessage(OSD::MessageType::HighlightSeek, fmt::format("{}{}", what, of), 600,
+                       OSD::Color::CYAN);
+}
+
+// Highlights (under s_mutex, the armed replay running): its clip to the session, then on to the
+// next one once it is done.
+void StepHighlights(const picojson::object& st)
+{
+  const auto get_bool = [&](const char* k) {
+    const auto it = st.find(k);
+    return it != st.end() && it->second.is<bool>() && it->second.get<bool>();
+  };
+  const auto get_num = [&](const char* k) {
+    const auto it = st.find(k);
+    return it != st.end() && it->second.is<double>() ? static_cast<s64>(it->second.get<double>()) : -1;
+  };
+  const auto [start, end] = s_request.clips[s_index];
+  if (!s_clip_applied)
+  {
+    s_clip_applied = Session::SetPlaybackClip(start, end);
+    s_seek_from = -1;
+    if (!s_clip_applied)
+    {
+      s_state = "waiting";
+      return;
+    }
+    // (The session takes it at its next loop top: until then it is on the way there.)
+    s_state = get_bool("started") && get_num("shown") >= 0 ? "seeking" : "waiting";
+    return;
+  }
+  if (get_bool("finished"))
+  {
+    // Played on past its held end (the replay controls): the match is over.
+    s_state = "ended";
+    return;
+  }
+  const bool started = get_bool("started");
+  const bool seeking = get_bool("seeking");
+  const s64 frame = get_num("frame");
+  // Until the match's frames run (its loading and countdown), `frame` is still the last match's.
+  if (!started || get_num("shown") < 0)
+  {
+    s_state = "waiting";
+    ShowHighlightProgress("Loading the highlight's replay...");
+    return;
+  }
+  if (seeking)
+  {
+    if (s_seek_from < 0 || frame < s_seek_from)
+      s_seek_from = std::max<s64>(frame, 0);
+    s_state = "seeking";
+    const double span = static_cast<double>(std::max<s64>(start - s_seek_from, 1));
+    const int pct = static_cast<int>(std::clamp((frame - s_seek_from) / span, 0.0, 1.0) * 100);
+    ShowHighlightProgress(fmt::format("Fast-forwarding to the highlight... {}%", pct));
+    return;
+  }
+  if (!get_bool("clip_done") && !get_bool("at_end"))
+  {
+    s_state = "playing";
+    return;
+  }
+  if (s_index + 1 >= s_request.paths.size())
+  {
+    s_state = "ended";
+    return;
+  }
+  ++s_index;
+  s_clip_applied = false;
+  s_seek_from = -1;
+  if (s_request.paths[s_index] == s_request.paths[s_index - 1])
+  {
+    s_state = "seeking";
+    return;
+  }
+  // Another replay: this match ends first (the loop arms the next once the game is out of it).
+  Session::StopPlayback();
+  s_armed = false;
+  s_state = "loading";
+  s_wait_boot = true;
+}
+
 // One step of the loop (under s_mutex): follow the session, go on with the queue.
 void Step()
 {
@@ -472,6 +608,11 @@ void Step()
     s_error = st.at("error").is<std::string>() ? st.at("error").get<std::string>() : "";
     s_needs_play_anyway = s_error.find("setup differs") != std::string::npos;
     s_armed = false;
+    return;
+  }
+  if (s_request.highlights)
+  {
+    StepHighlights(st);
     return;
   }
   if (get_bool("finished"))
@@ -538,6 +679,20 @@ void Loop()
           s_request.stream_over = r->stream_over;
           s_request.close_on_end = r->close_on_end;
           s_request.banner = std::move(r->banner);
+        }
+        else if (r && r->command_id != last_command && r->highlights && !r->paths.empty() &&
+                 s_armed && !s_request.mirror && s_index < s_request.paths.size() &&
+                 s_request.paths[s_index] == r->paths[0] && !Session::PlaybackStopping())
+        {
+          // Highlights of the replay already playing (the next row, Play all): its match goes on,
+          // and the session seeks (forward: on from where it is; back: a keyframe put back).
+          last_command = r->command_id;
+          s_request = std::move(*r);
+          s_index = 0;
+          s_clip_applied = false;
+          s_seek_from = -1;
+          s_error.clear();
+          s_state = "seeking";
         }
         else if (r && r->command_id != last_command)
         {

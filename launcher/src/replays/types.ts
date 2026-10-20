@@ -1,6 +1,8 @@
 import type { ReplayFilter } from "@database/filters/types";
 import type { StadiumStatsType, StatsType } from "@slippi/slippi-js";
 
+import type { ReplayHighlights } from "./highlights/types";
+
 /** The stats call's error for a replay whose stats are not decoded yet (.brep): the stats page says "Coming soon". */
 export const STATS_NOT_AVAILABLE = "Stats are not available for this replay format yet.";
 
@@ -129,6 +131,8 @@ export interface ReplayService {
    * first). A match without any is left out.
    */
   findReplaysForMatches(matchIds: string[], folders: string[]): Promise<Record<string, string[]>>;
+  /** A .brep's highlights and L+R+Z clips (found the first time, then cached). */
+  getHighlights(filePath: string): Promise<ReplayHighlights>;
   onReplayLoadProgressUpdate(handle: (progress: Progress) => void): () => void;
   onStatsPageRequest(handle: (filePath: string) => void): () => void;
 }

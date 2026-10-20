@@ -1,11 +1,13 @@
 import type { ChatKeyPress } from "@common/chat_key";
+import type { HighlightPlayItem } from "@replays/highlights/types";
 
 import type { SyncedDolphinSettings } from "./config/config";
 import type { DolphinVersionResponse } from "./install/fetch_latest_version";
 import type { RoomHandOffResult } from "./room_handoff";
 
 export type ReplayCommunication = {
-  mode: "normal" | "mirror" | "queue"; // default normal
+  /** Ours, `highlights`: the queue's replays from each item's startFrame to its endFrame (ReplayPlayback.h). */
+  mode: "normal" | "mirror" | "queue" | "highlights"; // default normal
   replay?: string; // path to the replay if in normal or mirror mode
   startFrame?: number; // when to start watching the replay
   endFrame?: number; // when to stop watching the replay
@@ -32,10 +34,23 @@ export type ReplayCommunication = {
 export type ReplayPlaybackStatus = {
   commandId?: string;
   /** `between`: a spectated set's next game is coming; `close`: a spectated stream's end asks to be closed. */
-  state?: "idle" | "loading" | "waiting" | "playing" | "between" | "ended" | "close" | "error";
+  /** `seeking`: highlights, on the way to the clip's first frame (a fast-forward). */
+  state?: "idle" | "loading" | "waiting" | "seeking" | "playing" | "between" | "ended" | "close" | "error";
   replay?: string;
   error?: string;
   needsPlayAnyway?: boolean;
+  /** Which of the request's replays (or highlights) plays, of how many. */
+  index?: number;
+  count?: number;
+  /** The session's frame (the last one run). */
+  frame?: number;
+  first_frame?: number;
+  last_frame?: number;
+  /** Highlights: the playing one's frames, and the frame its fast-forward started from (-1: not yet). */
+  highlights?: boolean;
+  clipStart?: number;
+  clipEnd?: number;
+  seekFrom?: number;
 };
 
 export type ReplayQueueItem = {
@@ -74,6 +89,8 @@ export const enum DolphinEventType {
   DOWNLOAD_PROGRESS = "DOWNLOAD_PROGRESS",
   DOWNLOAD_COMPLETE = "DOWNLOAD_COMPLETE",
   ERROR = "ERROR",
+  /** The playback Dolphin's status changed (`<comm>.status.json`; for highlights' progress). */
+  PLAYBACK_STATUS = "PLAYBACK_STATUS",
 }
 
 export const enum DolphinErrorType {
@@ -148,12 +165,19 @@ export type DolphinRosettaRequiredEvent = {
   dolphinType?: DolphinLaunchType;
 };
 
+export type DolphinPlaybackStatusEvent = {
+  type: DolphinEventType.PLAYBACK_STATUS;
+  instanceId: string;
+  status: ReplayPlaybackStatus;
+};
+
 export type DolphinEventMap = {
   [DolphinEventType.CLOSED]: DolphinNetplayClosedEvent | DolphinPlaybackClosedEvent;
   [DolphinEventType.DOWNLOAD_START]: DolphinDownloadStartEvent;
   [DolphinEventType.DOWNLOAD_PROGRESS]: DolphinDownloadProgressEvent;
   [DolphinEventType.DOWNLOAD_COMPLETE]: DolphinDownloadCompleteEvent;
   [DolphinEventType.ERROR]: DolphinNetworkErrorEvent | DolphinRosettaRequiredEvent;
+  [DolphinEventType.PLAYBACK_STATUS]: DolphinPlaybackStatusEvent;
 };
 
 export type DolphinEvent = DolphinEventMap[DolphinEventType];
@@ -184,6 +208,12 @@ export interface DolphinService {
   checkPlayKeyExists(key: PlayKey): Promise<boolean>;
   removePlayKeyFile(): Promise<void>;
   viewSlpReplay(files: ReplayQueueItem[]): Promise<void>;
+  /**
+   * Plays highlights (or L+R+Z clips) one after another in the playback Dolphin, each from its
+   * startFrame to its endFrame; one of the replay already playing goes on in its running match.
+   * Progress: PLAYBACK_STATUS events with this `commandId`.
+   */
+  playHighlights(items: HighlightPlayItem[], commandId: string): Promise<void>;
   /** `bootGame`: boot P+ even when the Play button is set to open Dolphin only. */
   launchNetplayDolphin(opts?: { bootGame?: boolean }): Promise<void>;
   /**

@@ -17,6 +17,15 @@
 // stream's end. The status adds "mirror", "at_end", "live_edge", "buffering", "catching_up",
 // "catch_rate", "complete", "closeIn", and the states "between" (the set's next game is coming)
 // and "close" (the end's countdown ran out: the launcher closes Dolphin).
+//
+// Ours, `highlights` (the launcher's stats page): {"mode": "highlights", "queue": [{"path",
+// "startFrame", "endFrame"}, ...]}: each replay plays from startFrame to endFrame (its frames, as
+// the seek bar's), paused there, then the next one; a next one of the same replay goes on in the
+// running match (a seek forward, or a keyframe put back), and so does a new request whose first one
+// is of the replay already playing. The way there is a fast-forward (Session::SetPlaybackClip) with
+// its progress on screen. Every replay holds at its last frame. The status adds "highlights",
+// "clipStart", "clipEnd", "seekFrom" (the frame the fast-forward started from; -1 not yet) and the
+// state "seeking" (on the way to the clip's start; "playing" is the clip, "ended" the last one's end).
 
 #pragma once
 

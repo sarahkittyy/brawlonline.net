@@ -23,6 +23,7 @@ import { useServices } from "@/services";
 import { GameProfile } from "./game_profile";
 import { GameProfileHeader } from "./game_profile_header/game_profile_header";
 import { GameProfileHeaderMessages as HeaderMessages } from "./game_profile_header/game_profile_header.messages";
+import { HighlightList } from "./highlights/highlight_list";
 import { HomeRunProfile } from "./home_run_profile";
 import { ReplayFileStatsMessages as Messages } from "./replay_file_stats.messages";
 import styles from "./replay_file_stats.module.css";
@@ -172,6 +173,9 @@ export const ReplayFileStats = (props: ReplayFileStatsProps) => {
           <TargetTestProfile file={file} stats={stadiumStats} />
         ) : game.mode === GameMode.HOME_RUN_CONTEST ? (
           <HomeRunProfile file={file} stats={stadiumStats} />
+        ) : filePath.toLowerCase().endsWith(".brep") ? (
+          // Ours (.brep): no stats yet, the game's highlights and L+R+Z clips.
+          <HighlightList filePath={filePath} />
         ) : numPlayers !== 2 ? (
           <IconMessage Icon={ErrorIcon} label={Messages.gameStatsForTeamBattlesIsUnsupported()} />
         ) : errorMessage?.includes(STATS_NOT_AVAILABLE) ? (

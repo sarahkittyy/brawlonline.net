@@ -1,6 +1,7 @@
 import type { StadiumStatsType, StatsType } from "@slippi/slippi-js/node";
 import { _, makeEndpoint } from "utils/ipc";
 
+import type { ReplayHighlights } from "./highlights/types";
 import type {
   BulkDeleteOptions,
   BulkDeleteResult,
@@ -49,6 +50,12 @@ export const ipc_findReplaysForMatches = makeEndpoint.main(
   "findReplaysForMatches",
   <{ matchIds: string[]; folders: string[] }>_,
   <Record<string, string[]>>_,
+);
+
+export const ipc_getReplayHighlights = makeEndpoint.main(
+  "getReplayHighlights",
+  <{ filePath: string }>_,
+  <ReplayHighlights>_,
 );
 
 // Events

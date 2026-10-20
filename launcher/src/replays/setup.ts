@@ -1,10 +1,12 @@
 import { createDatabase } from "@database/create_database";
+import type { SettingsManager } from "@settings/settings_manager";
 import { app } from "electron";
 import log from "electron-log";
 import path from "path";
 
 import { DatabaseReplayProvider } from "./database_replay_provider/database_replay_provider";
 import { FolderTreeService } from "./folder_tree_service";
+import { HighlightService } from "./highlights/highlight_service";
 import {
   ipc_bulkDeleteReplays,
   ipc_calculateGameStats,
@@ -12,6 +14,7 @@ import {
   ipc_deleteReplays,
   ipc_findReplaysForMatches,
   ipc_getAllFilePaths,
+  ipc_getReplayHighlights,
   ipc_initializeFolderTree,
   ipc_loadProgressUpdatedEvent,
   ipc_searchGames,
@@ -47,19 +50,31 @@ async function createReplayProvider() {
 
   try {
     const database = await createDatabase(isDevelopment ? undefined : replayDatabaseFolder);
-    return new DatabaseReplayProvider(database, workerPoolManager);
+    return { database, provider: new DatabaseReplayProvider(database, workerPoolManager) };
   } catch (err) {
     log.error(
       `Failed to initialize replay database at ${replayDatabaseFolder}: ${err}. Using in-memory database instead.`,
     );
     const database = await createDatabase(undefined);
-    return new DatabaseReplayProvider(database, workerPoolManager);
+    return { database, provider: new DatabaseReplayProvider(database, workerPoolManager) };
   }
 }
 
-export default function setupReplaysIpc() {
+export default function setupReplaysIpc({ settingsManager }: { settingsManager: SettingsManager }) {
   const treeService = new FolderTreeService();
-  const replayProviderPromise = createReplayProvider();
+  const created = createReplayProvider();
+  const replayProviderPromise = created.then(({ provider }) => provider);
+  const highlightService = new HighlightService(
+    created.then(({ database }) => database),
+    () => {
+      const { disableHighlightDetection, clipOnLrz } = settingsManager.get().settings;
+      return { detectHighlights: !disableHighlightDetection, clipOnLrz };
+    },
+  );
+
+  ipc_getReplayHighlights.main!.handle(async ({ filePath }) => {
+    return await highlightService.getHighlights(filePath);
+  });
 
   ipc_initializeFolderTree.main!.handle(async ({ folders }) => {
     return treeService.init(folders);

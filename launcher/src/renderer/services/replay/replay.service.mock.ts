@@ -1,3 +1,4 @@
+import type { ReplayHighlights } from "@replays/highlights/types";
 import type {
   BulkDeleteOptions,
   BulkDeleteResult,
@@ -67,6 +68,35 @@ class MockReplayClient implements ReplayService {
   @delayAndMaybeError(SHOULD_ERROR)
   async findReplaysForMatches(_matchIds: string[], _folders: string[]): Promise<Record<string, string[]>> {
     return {};
+  }
+
+  @delayAndMaybeError(SHOULD_ERROR)
+  async getHighlights(_filePath: string): Promise<ReplayHighlights> {
+    const player = (port: number, displayName: string, characterId: number) => ({
+      port,
+      displayName,
+      connectCode: "",
+      characterId,
+      costume: 0,
+      teamId: null,
+    });
+    const highlight = (attackerPort: number, victimPort: number, frame: number, score: number) => ({
+      kind: "highlight" as const,
+      attackerPort,
+      victimPort,
+      firstHitFrame: frame,
+      startFrame: frame - 90,
+      endFrame: frame + 400,
+      kill: score > 15,
+      score,
+    });
+    return {
+      detectorVersion: 2,
+      players: [player(1, "sarahkitty", 2), player(2, "Smear", 22)],
+      isTeams: false,
+      highlights: [highlight(1, 2, 4200, 19.3), highlight(2, 1, 1800, 15.2), highlight(1, 2, 9100, 12.1)],
+      clips: [{ kind: "clip", port: 1, frame: 6000, startFrame: 4770, endFrame: 6120 }],
+    };
   }
 
   onReplayLoadProgressUpdate(_handle: (progress: Progress) => void): () => void {

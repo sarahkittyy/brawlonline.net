@@ -1,6 +1,7 @@
 /* eslint-disable import/no-default-export */
 
 import type { ChatKeyPress } from "@common/chat_key";
+import type { HighlightPlayItem } from "@replays/highlights/types";
 
 import {
   ipc_cancelRoomLaunch,
@@ -17,6 +18,7 @@ import {
   ipc_launchNetplayDolphin,
   ipc_moveGameFiles,
   ipc_openDolphinSettingsFolder,
+  ipc_playHighlights,
   ipc_prepareRoomLaunch,
   ipc_removePlayKeyFile,
   ipc_setChatKey,
@@ -73,6 +75,9 @@ const dolphinApi: DolphinService = {
   },
   async viewSlpReplay(files: ReplayQueueItem[]): Promise<void> {
     await ipc_viewSlpReplay.renderer!.trigger({ files });
+  },
+  async playHighlights(items: HighlightPlayItem[], commandId: string): Promise<void> {
+    await ipc_playHighlights.renderer!.trigger({ items, commandId });
   },
   async launchNetplayDolphin(opts?: { bootGame?: boolean }): Promise<void> {
     await ipc_launchNetplayDolphin.renderer!.trigger({ bootGame: opts?.bootGame });

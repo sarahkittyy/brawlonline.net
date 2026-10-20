@@ -1,5 +1,6 @@
 import type { DolphinService, ReplayQueueItem } from "@dolphin/types";
 import { DolphinLaunchType } from "@dolphin/types";
+import type { HighlightPlayItem } from "@replays/highlights/types";
 import log from "electron-log";
 import { useCallback } from "react";
 
@@ -150,12 +151,39 @@ export const useDolphinActions = (dolphinService: DolphinService) => {
     [getInstallStatus, launcherIsUpToDate, dolphinService, showError],
   );
 
+  /**
+   * Plays highlights in the playback Dolphin (the next one at once: an open Dolphin is not started
+   * again, so the launcher's update check is only made when it is not open). Resolves to whether the
+   * request was made.
+   */
+  const playHighlights = useCallback(
+    async (items: HighlightPlayItem[], commandId: string): Promise<boolean> => {
+      if (getInstallStatus(DolphinLaunchType.PLAYBACK) !== DolphinStatus.READY) {
+        showError(Messages.dolphinIsUpdating());
+        return false;
+      }
+      if (!useDolphinStore.getState().playbackOpened && !(await launcherIsUpToDate())) {
+        return false;
+      }
+      try {
+        await dolphinService.playHighlights(items, commandId);
+        setDolphinOpened(DolphinLaunchType.PLAYBACK);
+        return true;
+      } catch (err) {
+        showError(err);
+        return false;
+      }
+    },
+    [getInstallStatus, launcherIsUpToDate, dolphinService, showError],
+  );
+
   return {
     openConfigureDolphin,
     softResetDolphin,
     hardResetDolphin,
     launchNetplay,
     viewReplays,
+    playHighlights,
     updateDolphin,
   };
 };

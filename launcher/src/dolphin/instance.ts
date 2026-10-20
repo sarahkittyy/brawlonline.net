@@ -135,6 +135,9 @@ export class DolphinInstance extends EventEmitter {
   }
 }
 
+/** How often the playback Dolphin's status file is read (it writes it every 200 ms at most). */
+const STATUS_POLL_MS = 250;
+
 export class PlaybackDolphinInstance extends DolphinInstance {
   private commPath: string;
   private lastWriteMs: number;
@@ -147,6 +150,9 @@ export class PlaybackDolphinInstance extends DolphinInstance {
    * plays it all the same (docs/design/replays.md §6.5).
    */
   onNeedsPlayAnyway: ((status: ReplayPlaybackStatus) => void) | null = null;
+  /** Every change of Dolphin's status (highlights show their progress from it). */
+  onStatus: ((status: ReplayPlaybackStatus) => void) | null = null;
+  private lastStatusText = "";
 
   constructor(execPath: string, baseParams: string[] = []) {
     super(execPath, baseParams);
@@ -176,7 +182,14 @@ export class PlaybackDolphinInstance extends DolphinInstance {
     try {
       const text = await readFile(`${this.commPath}.status.json`, "utf8");
       const status = JSON.parse(text);
-      return status !== null && typeof status === "object" ? (status as ReplayPlaybackStatus) : null;
+      if (status === null || typeof status !== "object") {
+        return null;
+      }
+      if (text !== this.lastStatusText) {
+        this.lastStatusText = text;
+        this.onStatus?.(status as ReplayPlaybackStatus);
+      }
+      return status as ReplayPlaybackStatus;
     } catch {
       return null;
     }
@@ -195,17 +208,26 @@ export class PlaybackDolphinInstance extends DolphinInstance {
         this.askedFor.add(id);
         this.onNeedsPlayAnyway?.(status);
       });
-    }, 500);
+    }, STATUS_POLL_MS);
   }
 
   /** Plays the last request again, as one recorded with another version. */
   async playAnyway() {
     if (this.lastOptions) {
-      await this.play({ ...this.lastOptions, commandId: undefined, playAnyway: true });
+      // A new request (Dolphin acts on a new commandId) that still starts with the one it replaces.
+      const id = this.lastOptions.commandId;
+      await this.play({ ...this.lastOptions, commandId: id ? `${id}+anyway` : undefined, playAnyway: true });
     }
   }
 
   private async writeCommsFile(options: ReplayCommunication) {
+    // Ours reads the whole file every 200 ms and acts on a new commandId (ReplayPlayback.cpp), so
+    // highlights (the next row, at once) need no wait.
+    if (options.mode === "highlights") {
+      await writeFile(this.commPath, JSON.stringify(options));
+      this.lastWriteMs = Date.now();
+      return;
+    }
     // Playback Dolphin can't pick up comms file changes within the same second, so
     // defer writing comms file if it's been less than 1 second since last write.
     //

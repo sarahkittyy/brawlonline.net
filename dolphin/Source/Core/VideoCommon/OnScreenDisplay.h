@@ -23,6 +23,8 @@ enum class MessageType
   SpectateWaiting,
   // Watching the room's game from the room CSS: the players' game is over (Online/RoomWatch.h).
   RoomWatch,
+  // Highlights (Rollback/ReplayPlayback.h): loading or fast-forwarding to the next one.
+  HighlightSeek,
 
   // This entry must be kept last so that persistent typed messages are
   // displayed before other messages

@@ -6,6 +6,7 @@ import {
   ipc_deleteReplays,
   ipc_findReplaysForMatches,
   ipc_getAllFilePaths,
+  ipc_getReplayHighlights,
   ipc_initializeFolderTree,
   ipc_loadProgressUpdatedEvent,
   ipc_searchGames,
@@ -48,6 +49,10 @@ const replayApi: ReplayService = {
   },
   async findReplaysForMatches(matchIds: string[], folders: string[]) {
     const { result } = await ipc_findReplaysForMatches.renderer!.trigger({ matchIds, folders });
+    return result;
+  },
+  async getHighlights(filePath: string) {
+    const { result } = await ipc_getReplayHighlights.renderer!.trigger({ filePath });
     return result;
   },
   onReplayLoadProgressUpdate(handle: (progress: Progress) => void) {
