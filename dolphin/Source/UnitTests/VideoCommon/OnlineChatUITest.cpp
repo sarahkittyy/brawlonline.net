@@ -5,6 +5,8 @@
 // the mouse as the render widget passes it (OnScreenUI::SetMousePos / SetMousePress): a room's chat
 // with another player, whose name is clicked in the menu bar and on a message line.
 
+#include <array>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -14,7 +16,10 @@
 #include <picojson.h>
 
 #include "Common/CommonPaths.h"
+#include "Common/Config/Config.h"
+#include "Common/Config/Layer.h"
 #include "Common/FileUtil.h"
+#include "Core/Config/OnlineSettings.h"
 #include "Core/Online/Chat.h"
 #include "Core/Online/ChatCrypto.h"
 #include "Core/Online/Rooms.h"
@@ -41,6 +46,25 @@ std::string Json(const picojson::object& o)
 {
   return picojson::value(o).serialize();
 }
+
+// A base layer that keeps what was last saved to it (Dolphin's own writes the SYSCONF too, which
+// needs a NAND).
+class SavedLayer final : public Config::ConfigLayerLoader
+{
+public:
+  explicit SavedLayer(std::optional<std::string>* chat_text_size)
+      : ConfigLayerLoader(Config::LayerType::Base), m_chat_text_size(chat_text_size)
+  {
+  }
+  void Load(Config::Layer*) override {}
+  void Save(Config::Layer* layer) override
+  {
+    *m_chat_text_size = layer->Get<std::string>(Config::ONLINE_CHAT_TEXT_SIZE.GetLocation());
+  }
+
+private:
+  std::optional<std::string>* m_chat_text_size;
+};
 
 class OnlineChatUITest : public ::testing::Test
 {
@@ -147,6 +171,19 @@ protected:
     io.AddMouseButtonEvent(button, true);
     Frame();
     io.AddMouseButtonEvent(button, false);
+    Frame();
+  }
+
+  // The middle of an item's rectangle (x0, y0, x1, y1).
+  static ImVec2 Centre(const std::array<float, 4>& r)
+  {
+    return ImVec2((r[0] + r[2]) / 2, (r[1] + r[3]) / 2);
+  }
+  void ClickItem(const std::array<float, 4>& r)
+  {
+    const ImVec2 at = Centre(r);
+    Click(at.x, at.y, 0);
+    Frame();
     Frame();
   }
 
@@ -305,4 +342,61 @@ TEST_F(OnlineChatUITest, ClicksDontMoveOrResizeTheWindow)
     EXPECT_EQ(f.h, before.h);
     EXPECT_FALSE(f.collapsed);
   }
+}
+
+// Options > Increase / Decrease font size: the menu stays open between clicks, each click is one
+// step, and the size is saved ([Online] ChatTextSize), so the next game's window has it too.
+TEST_F(OnlineChatUITest, OptionsMenuChangesTheTextSizeAndKeepsIt)
+{
+  std::optional<std::string> saved;
+  Config::AddLayer(std::make_unique<SavedLayer>(&saved));
+  struct ConfigBack
+  {
+    ~ConfigBack() { Config::Shutdown(); }
+  } config_back;
+
+  JoinWithBob();
+  for (int i = 0; i < 5; ++i)
+    Frame();
+  const float base = m_frames.back().font_px;
+  ASSERT_GT(base, 0.0f);
+  EXPECT_EQ(Config::Get(Config::ONLINE_CHAT_TEXT_SIZE), 100);
+
+  ClickItem(m_frames.back().options_menu);
+  ASSERT_TRUE(m_frames.back().options_menu_open);
+  for (int expected : {110, 125})
+  {
+    SCOPED_TRACE(testing::Message() << "increase to " << expected);
+    ClickItem(m_frames.back().increase_item);
+    EXPECT_TRUE(m_frames.back().options_menu_open);
+    EXPECT_EQ(Config::Get(Config::ONLINE_CHAT_TEXT_SIZE), expected);
+    EXPECT_NEAR(m_frames.back().font_px, base * expected / 100.0f, 0.01f);
+  }
+  ClickItem(m_frames.back().decrease_item);
+  EXPECT_TRUE(m_frames.back().options_menu_open);
+  EXPECT_EQ(Config::Get(Config::ONLINE_CHAT_TEXT_SIZE), 110);
+
+  Click(1200, 700, 0);
+  Frame();
+  ASSERT_FALSE(Frame().options_menu_open);
+
+  // Saved (to Dolphin.ini in Dolphin), and a new window starts at that size.
+  EXPECT_EQ(saved, "110");
+  UI::ResetForTesting();
+  for (int i = 0; i < 3; ++i)
+    Frame();
+  EXPECT_NEAR(m_frames.back().font_px, base * 1.1f, 0.01f);
+
+  // A value between two steps steps to the next one; one out of range is kept within them.
+  Config::SetBaseOrCurrent(Config::ONLINE_CHAT_TEXT_SIZE, 117);
+  ClickItem(m_frames.back().options_menu);
+  ASSERT_TRUE(m_frames.back().options_menu_open);
+  ClickItem(m_frames.back().decrease_item);
+  EXPECT_EQ(Config::Get(Config::ONLINE_CHAT_TEXT_SIZE), 110);
+  Config::SetBaseOrCurrent(Config::ONLINE_CHAT_TEXT_SIZE, 1000);
+  Frame();
+  EXPECT_NEAR(m_frames.back().font_px, base * 2.0f, 0.01f);
+  Config::SetBaseOrCurrent(Config::ONLINE_CHAT_TEXT_SIZE, 0);
+  Frame();
+  EXPECT_NEAR(m_frames.back().font_px, base * 0.7f, 0.01f);
 }

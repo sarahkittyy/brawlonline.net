@@ -33,6 +33,7 @@ const Info<int> ONLINE_INPUT_DELAY{{System::Main, "Online", "InputDelay"}, 0};
 const Info<bool> ONLINE_MUSIC{{System::Main, "Online", "Music"}, true};
 const Info<bool> ONLINE_CHAT_IN_MATCHES{{System::Main, "Online", "ChatInMatches"}, true};
 const Info<std::string> ONLINE_CHAT_WINDOW{{System::Main, "Online", "ChatWindow"}, ""};
+const Info<int> ONLINE_CHAT_TEXT_SIZE{{System::Main, "Online", "ChatTextSize"}, 100};
 const Info<std::string> ONLINE_CHAT_KEY{{System::Main, "Online", "ChatKey"}, ""};
 const Info<bool> ONLINE_DISABLE_CHAT{{System::Main, "Online", "DisableChat"}, false};
 const Info<bool> ONLINE_SAVE_REPLAYS{{System::Main, "Online", "SaveReplays"}, true};

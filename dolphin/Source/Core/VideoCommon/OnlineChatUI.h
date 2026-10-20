@@ -60,6 +60,12 @@ struct TestFrame
   bool member_menu_open = false;
   std::string menu_uid;
   std::array<float, 4> ignore_item{};  // the menu's Ignore / Unignore item (x0, y0, x1, y1)
+  // The menu bar's Options (its label), whether its menu is open, and its text size items.
+  std::array<float, 4> options_menu{};
+  bool options_menu_open = false;
+  std::array<float, 4> increase_item{};
+  std::array<float, 4> decrease_item{};
+  float font_px = 0;  // the chat's text height, screen pixels
   float x = 0, y = 0, w = 0, h = 0;
   bool collapsed = false;
   bool focused = false;

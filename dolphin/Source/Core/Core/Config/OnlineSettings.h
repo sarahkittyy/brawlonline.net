@@ -54,6 +54,8 @@ extern const Info<bool> ONLINE_MUSIC;
 // ("x y w h collapsed", the first four as fractions of the window; empty: the default place).
 extern const Info<bool> ONLINE_CHAT_IN_MATCHES;
 extern const Info<std::string> ONLINE_CHAT_WINDOW;
+// The chat's text size, a percentage of its usual size (Options > Increase / Decrease font size).
+extern const Info<int> ONLINE_CHAT_TEXT_SIZE;
 // The key that opens the chat box (the launcher's setting): an input expression for the hotkeys'
 // device, such as "`T`" (HotkeyManagerEmu::LoadConfig puts it on "Activate NetPlay Chat"). Empty:
 // the hotkey keeps what Hotkeys.ini has (T by default).
