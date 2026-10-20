@@ -6580,6 +6580,17 @@ bool GetPad(int port, GCPadStatus* status)
   return true;
 }
 
+int LocalRumblePad(int port, bool* adapter)
+{
+  if (port != s.opts.local_slot || s.controller[s.opts.local_slot] != Controller::GameCube ||
+      s.opts.local_pad < 0 || s.opts.local_pad >= 4)
+  {
+    return -1;
+  }
+  *adapter = s.local_adapter;
+  return s.opts.local_pad;
+}
+
 bool GetWiimote(int index, WiimoteEmu::DesiredWiimoteState* state)
 {
   if (!IsArmed() || index < 0 || index >= MAX_PLAYERS)

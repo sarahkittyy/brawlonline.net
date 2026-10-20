@@ -27,6 +27,7 @@ namespace OnlineMenu {
     void enterRoom(int entry);           // WITH FRIENDS > Create Room / Join Room
     bool roomCss();                      // the online CSS is a room's
     bool stepsDecideStage();             // Ranked or a room's set: GameSetup's steps pick the stage
+    bool nobodyPlaysHere();              // the online match is a replay or a watched room game
     void prepareCss();                   // the CSS is about to be built (sqNetAnyOkiraku)
     void menuPageRunning(u8* page);      // a menu page the launcher's join can leave from ran
     void topPageRunning(u8* page);       // the main menu's top page ran (the same, no Wi-Fi task)

@@ -42,6 +42,8 @@ namespace
 HostCallbacks s_host;
 
 std::atomic<u64> s_frame{0};
+std::array<std::atomic<u64>, 4> s_rumble_starts{};
+std::array<std::atomic<bool>, 4> s_rumble_on{};
 std::atomic<u64> s_input_polls{0};
 std::atomic<u64> s_si_polls{0};
 // Index of the poll whose pad state is currently presented to the game.
@@ -173,6 +175,14 @@ void OnStateChanged(Core::State state)
 
 namespace detail
 {
+void NoteRumbleSlow(int pad, bool on)
+{
+  if (pad < 0 || pad > 3)
+    return;
+  if (!s_rumble_on[pad].exchange(on, std::memory_order_relaxed) && on)
+    s_rumble_starts[pad].fetch_add(1, std::memory_order_relaxed);
+}
+
 void ApplyPadOverrideSlow(int port, GCPadStatus* status)
 {
   if (port < 0 || port > 3)
@@ -368,6 +378,14 @@ u64 GetFrame()
 u64 GetInputPolls()
 {
   return s_input_polls.load(std::memory_order_relaxed);
+}
+
+RumbleStatus PadRumbleStatus(int port)
+{
+  if (port < 0 || port > 3)
+    return {};
+  return {s_rumble_starts[port].load(std::memory_order_relaxed),
+          s_rumble_on[port].load(std::memory_order_relaxed)};
 }
 
 u64 GetSIPolls()

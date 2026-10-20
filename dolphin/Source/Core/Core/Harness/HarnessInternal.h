@@ -54,6 +54,13 @@ struct ScriptStatus
   u64 remaining;
 };
 ScriptStatus PadScriptStatus(int port);
+// The rumble a local port got since the boot: motor starts (off -> on) and whether it is on.
+struct RumbleStatus
+{
+  u64 starts;
+  bool on;
+};
+RumbleStatus PadRumbleStatus(int port);
 
 // Frame advance: request a CPU break once the frame counter reaches `target`.
 void RequestBreakAtFrame(u64 target);

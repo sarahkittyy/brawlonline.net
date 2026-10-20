@@ -565,6 +565,10 @@ class HarnessClient:
         r = self.call("pad_script_status", port=_check_port(port))
         return ScriptStatus(bool(r["active"]), int(r["remaining"]))
 
+    def rumble_status(self) -> list[dict[str, Any]]:
+        """Per local controller port 0-3: ``{"starts": motor starts since the boot, "on": bool}``."""
+        return list(self.call("rumble_status")["pads"])
+
     def wait_frame(self, frame: int | None = None, *, input_polls: int | None = None,
                    timeout_ms: int = protocol.DEFAULT_WAIT_TIMEOUT_MS) -> FrameInfo:
         """Block until ``frame`` or ``input_polls`` is reached (exactly one must be given)."""

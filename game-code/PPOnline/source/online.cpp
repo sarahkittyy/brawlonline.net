@@ -8,6 +8,8 @@
 //   gfSceneManager::setNextSequence 0x8002D640 replace -> boot to the ONLINE page (boot_menu.cpp)
 //   gfPadSystem::startMotor x2 0x8002A9E8 / 0x8002A948, stopMotor 0x8002AA8C, stopMotorH 0x8002AB00
 //                          replace -> a port outside 0-7 does nothing (it overwrote the pad thread)
+//   PADControlMotor        0x802162A4  replace  -> online match: only this player's port rumbles,
+//                          on the controller they locked in with
 #include <gf/gf_scene.h>
 #include <memory.h>
 #include <mu/mu_msg.h>
@@ -150,6 +152,44 @@ namespace Online {
         if ((u32)port < 8) s_origStopMotorH(ps, port);
     }
 
+    // PADControlMotor(chan, command) 0x802162A4 (0 stop, 1 rumble, 2 stop hard) is where every
+    // rumble reaches a GameCube controller: gfPadSystem's startMotor / stopMotor / stopMotorH /
+    // stopMotorAllForce / maskMotor, the pad thread's motor timers (updateGame) and pauseNotify,
+    // all with the in-game port as the channel. It sends the command only to a channel with a
+    // controller plugged in (the SDK's EnabledBits). Online the in-game ports are the session's
+    // players, not this machine's controllers: this player's controller is the one that locked in
+    // (LOCAL lockPad, which Dolphin's session reads), at any port. So P2 playing with the controller
+    // in port 1 got P1's rumble, and none of their own (bug report, 2026-10-20). In an online
+    // match (setRumblePorts) only this player's in-game port rumbles, on their controller; every
+    // other port's commands are dropped (also in a replay or a watched game: nobody's).
+    typedef void (*PadMotorFn)(int, u32);
+    static PadMotorFn s_origPadControlMotor = NULL;
+    static volatile u8 s_rumbleMapped = 0;
+    static volatile u8 s_rumblePort = 0xFF;
+    static volatile u8 s_rumblePad = 0xFF;
+
+    static void hkPadControlMotor(int chan, u32 command)
+    {
+        if (s_rumbleMapped) {
+            if ((u32)chan != s_rumblePort || s_rumblePad >= 4) return;
+            chan = s_rumblePad;
+        }
+        s_origPadControlMotor(chan, command);
+    }
+
+    void setRumblePorts(bool mapped, u8 port, u8 pad)
+    {
+        if (!mapped) port = pad = 0xFF;
+        if ((mapped ? 1 : 0) == s_rumbleMapped && port == s_rumblePort && pad == s_rumblePad) return;
+        // A change (into or out of an online match): stop every motor, so none started under the
+        // old mapping keeps running (its stop would now go elsewhere or be dropped).
+        s_rumbleMapped = 0;
+        for (int c = 0; c < 4; c++) s_origPadControlMotor(c, 0);
+        s_rumblePort = port;
+        s_rumblePad = pad;
+        s_rumbleMapped = mapped ? 1 : 0;
+    }
+
     // MuMsg::beginPrint: log MuMsg::printf calls (line = -2, data = printf's caller).
     static void hkBeginPrint(MuMsg* self, u32 window)
     {
@@ -183,6 +223,7 @@ namespace Online {
         api->syReplaceFunc(0x8002A948, reinterpret_cast<void*>(hkStartMotor), (void**)&s_origStartMotor);
         api->syReplaceFunc(0x8002AA8C, reinterpret_cast<void*>(hkStopMotor), (void**)&s_origStopMotor);
         api->syReplaceFunc(0x8002AB00, reinterpret_cast<void*>(hkStopMotorH), (void**)&s_origStopMotorH);
+        api->syReplaceFunc(0x802162A4, reinterpret_cast<void*>(hkPadControlMotor), (void**)&s_origPadControlMotor);
         NetMenu::install(api);
         OnlineMenu::install(api);
         StageLegal::install(api);

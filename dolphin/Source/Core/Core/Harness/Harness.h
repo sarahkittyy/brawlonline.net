@@ -61,6 +61,7 @@ void ApplyPadOverrideSlow(int port, GCPadStatus* status);
 void OnSIPollSlow();
 void OnGamePadReadSlow();
 void OnVIFieldSlow(Core::System& system);
+void NoteRumbleSlow(int pad, bool on);
 }  // namespace detail
 
 inline bool IsActive()
@@ -102,5 +103,13 @@ inline void OnVIField(Core::System& system)
 {
   if (IsActive())
     detail::OnVIFieldSlow(system);
+}
+
+// CPU thread: a local GameCube controller's motor is switched on or off (the game's rumble, after
+// the session's port mapping). The harness counts them per local port ("rumble_status").
+inline void NoteRumble(int pad, bool on)
+{
+  if (IsActive())
+    detail::NoteRumbleSlow(pad, on);
 }
 }  // namespace Harness

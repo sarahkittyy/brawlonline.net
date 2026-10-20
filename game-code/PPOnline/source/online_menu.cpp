@@ -1893,6 +1893,11 @@ namespace OnlineMenu {
 
     bool stepsDecideStage() { return s.mode == PPOM::MODE_RANKED || (roomCss() && s.roomStepSss); }
 
+    bool nobodyPlaysHere()
+    {
+        return s.playback || (roomCss() && (PPOM::g_block.session.roomFlags & PPOM::RF_WATCH));
+    }
+
     // On the stage select (Ranked, a room's set) the step's line, after the quit notice while it is
     // on: the steps can follow a quit at once, and the CSS is then only passed through.
     const char* rankedText()

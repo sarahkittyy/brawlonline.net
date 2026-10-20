@@ -324,11 +324,25 @@ void CSIDevice_GCController::SendCommand(u32 command, u8 poll)
     const u32 type = controller_command.parameter1;  // 0 = stop, 1 = rumble, 2 = stop hard
 
     // get the correct pad number that should rumble locally when using netplay
-    const int pad_num = NetPlay_InGamePadToLocalPad(m_device_number);
-
-    if (pad_num < 4)
+    int pad_num = NetPlay_InGamePadToLocalPad(m_device_number);
+    SIDevices device = pad_num >= 0 && pad_num < 4 ?
+                           m_system.GetSerialInterface().GetDeviceType(pad_num) :
+                           SIDEVICE_NONE;
+    if (Machine::IsArmed())
     {
-      const SIDevices device = m_system.GetSerialInterface().GetDeviceType(pad_num);
+      // A machine session: every port is a standard controller played by the session's players
+      // (SI.cpp), so the port's own device says nothing; only this player's port rumbles, on the
+      // controller they play with.
+      bool adapter = false;
+      pad_num = Machine::LocalRumblePad(m_device_number, &adapter);
+      device = adapter ? SIDEVICE_WIIU_ADAPTER : SIDEVICE_GC_CONTROLLER;
+    }
+    // The playback Dolphin: nobody plays (its controllers read neutral), nothing rumbles.
+    if (Gprb::Replay::Playback::Following())
+      pad_num = -1;
+
+    if (pad_num >= 0 && pad_num < 4)
+    {
       if (type == 1)
         CSIDevice_GCController::Rumble(pad_num, 1.0, device);
       else

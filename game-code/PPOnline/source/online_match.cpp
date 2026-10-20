@@ -749,6 +749,7 @@ namespace OnlineMatch {
     void offMatch()
     {
         s_seen = 0;
+        Online::setRumblePorts(false, 0, 0);
         if (s_inMatch) {
             *(volatile u32*)PPLUS_PAUSE_OFF = 0;
             banHomeMenu(false);
@@ -765,6 +766,11 @@ namespace OnlineMatch {
     {
         PPOM::Debug& dbg = PPOM::g_block.debug;
         s_inMatch = true;
+        // Rumble: only this player's port, on their controller (online.cpp, PADControlMotor). It
+        // differs between the machines but only reaches the controllers, never the game.
+        const PPOM::Local& me = PPOM::g_block.local;
+        Online::setRumblePorts(g_onlineCss && g_onlineMatchGame,
+                               OnlineMenu::nobodyPlaysHere() ? 0xFF : me.localPort, me.lockPad);
         if (g_onlineCss && g_onlineMatchGame) {
             banHomeMenu(true);
             noPause();

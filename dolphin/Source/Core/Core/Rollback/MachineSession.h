@@ -252,6 +252,11 @@ bool IsResimulationPass();
 // CPU thread: the GameCube controller in `port` for the frame running now. False when the session
 // is not armed (the caller reads the local controller as usual).
 bool GetPad(int port, GCPadStatus* status);
+// CPU thread, while armed: the local GameCube controller that gets in-game port `port`'s rumble
+// (the SI's motor commands), -1 for none. Only this player's own port rumbles, on the controller
+// they play with (`adapter`: a GameCube controller adapter's port); every other port is another
+// player's.
+int LocalRumblePad(int port, bool* adapter);
 // CPU thread, from the emulated Bluetooth stack's Wii Remote update: replaces `state` with Wii
 // Remote `index`'s state for the frame running now. False when the session is not armed or no
 // player plays that Wii Remote.

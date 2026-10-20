@@ -49,6 +49,7 @@ Let automated scripts (and Claude) run Dolphin instances end to end with no huma
 | `pad_clear` | `port` | `{}`. Hands the port back to the real or configured controller |
 | `pad_script` | `port`, `frames`: `[{buttons, main, c, l, r, hold}, ...]` (`hold` = number of polls, default 1), `start`: `"next"` or an absolute `input_polls` value | `{"starts_at": n, "ends_at": n}`. **Replaces** any script on that port; `ends_at` is exclusive. Played poll by poll; afterwards the port returns to its `pad_set` state, or to neutral (released, not cleared) if there is none. Until a replacing script starts, the port keeps presenting what it presented when the script was submitted (it stays overridden) |
 | `pad_script_status` | `port` | `{"active": bool, "remaining": n}` |
+| `rumble_status` | — | `{"pads": [{"starts": n, "on": bool}, x4]}`: per local controller port, the motor starts (off to on) since the boot and whether it is on now, as the game's rumble reaches the controllers (after a session's port mapping) |
 | `wait_frame` | `frame` **or** `input_polls`, `timeout_ms` (default 10000) | `{"frame": n, "input_polls": n}` once reached; error `"timeout"` otherwise |
 | `pause` / `resume` | — | `{}` |
 | `frame_advance` | `n` (default 1) | `{"frame": n}` after advancing while paused |

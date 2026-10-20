@@ -11,6 +11,10 @@ namespace Online {
     const char* currentSceneName();
     bool inScene(const char* name);
 
+    // Rumble (online.cpp, PADControlMotor): mapped, only in-game port `port`'s rumble reaches a
+    // controller, the one in port `pad` (0-3); port 0xFF: none. Not mapped: every port's own.
+    void setRumblePorts(bool mapped, u8 port, u8 pad);
+
     // Message system.
     const char* msbinLine(const void* msbin, int line, int* outLen);
     bool msbinLineContains(const void* msbin, int line, const char* needle);

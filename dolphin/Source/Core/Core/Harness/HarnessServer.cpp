@@ -783,6 +783,22 @@ Result CmdPadScriptStatus(const Args& args)
   return r;
 }
 
+Result CmdRumbleStatus(const Args&)
+{
+  picojson::array pads;
+  for (int port = 0; port < 4; ++port)
+  {
+    const RumbleStatus status = PadRumbleStatus(port);
+    picojson::object o;
+    o["starts"] = Num(status.starts);
+    o["on"] = picojson::value(status.on);
+    pads.emplace_back(std::move(o));
+  }
+  Result r;
+  r["pads"] = picojson::value(std::move(pads));
+  return r;
+}
+
 Result CmdWaitFrame(const Args& args)
 {
   const bool has_frame = Find(args, "frame") != nullptr;
@@ -2023,6 +2039,7 @@ const std::vector<std::pair<std::string_view, Handler>>& Handlers()
       {"pad_clear", CmdPadClear},
       {"pad_script", CmdPadScript},
       {"pad_script_status", CmdPadScriptStatus},
+      {"rumble_status", CmdRumbleStatus},
       {"wait_frame", CmdWaitFrame},
       {"pause", CmdPause},
       {"resume", CmdResume},
