@@ -19,6 +19,17 @@
 // which clobbers only r12 and CTR, volatile at every hook site the plugin uses (each of its naked
 // hooks writes r12 and CTR itself before reading them). The plugin gets a CoreApi of ours (same
 // vtable layout as sy_core's) that makes the thunk and passes it on to sy_core's.
+//
+// Inline hooks' thunks end in fixInlineStub instead of bctr. P+ v3.2.1's sy_core (still "0.6.0",
+// file 18 of common2.pac) builds its inline hook stubs with two words swapped:
+//     3.2.0:  bl hook; lwz r0,0x94(r1); mtlr r0; lwz r0,0x8(r1); lmw r3,0xC(r1); ...
+//     3.2.1:  bl hook; lwz r0,0x8(r1);  mtlr r0; lwz r0,0x94(r1); lmw r3,0xC(r1); ...
+// so every inline hook returned to the hooked code with r0 and LR exchanged. Ours rely on both
+// (the title skip sets r0 through the stub's frame: on 3.2.1 the title's state got the caller's
+// return address and the boot sat on a white screen). fixInlineStub looks at the stub words after
+// its return address (the stub's bl) and, when they are 3.2.1's pair, writes 3.2.0's order back,
+// once, before the hook runs. It uses r0 (here a copy of LR, already saved by the stub), r12, CTR
+// and cr0, which the hook may clobber anyway. Stubs in 3.2.0's order are left alone.
 #include <OS/OSCache.h>
 #include <OS/OSError.h>
 #include <gf/gf_file_io_handle.h>
@@ -59,10 +70,40 @@ namespace Loader {
     static int s_used = 0;
     static CoreApi* s_api = 0;
 
-    static const void* thunk(const void* target)
+    // Entered from an inline hook's thunk, with the hook in CTR and LR at the stub's word after its
+    // bl (see the top of this file).
+    extern "C" __attribute__((naked)) void fixInlineStub()
+    {
+        asm volatile(
+            "mflr 12\n\t"
+            "lwz 0, 0(12)\n\t"           // lwz r0,0x8(r1) where 3.2.0 has lwz r0,0x94(r1)?
+            "xoris 0, 0, 0x8001\n\t"
+            "cmplwi 0, 0x0008\n\t"
+            "bnectr\n\t"
+            "lwz 0, 8(12)\n\t"           // and lwz r0,0x94(r1) where 3.2.0 has lwz r0,0x8(r1)?
+            "xoris 0, 0, 0x8001\n\t"
+            "cmplwi 0, 0x0094\n\t"
+            "bnectr\n\t"
+            "lis 0, 0x8001\n\t"
+            "ori 0, 0, 0x0094\n\t"
+            "stw 0, 0(12)\n\t"           // lwz r0,0x94(r1): LR
+            "lis 0, 0x8001\n\t"
+            "ori 0, 0, 0x0008\n\t"
+            "stw 0, 8(12)\n\t"           // lwz r0,0x8(r1): r0
+            "li 0, 8\n\t"
+            "dcbst 0, 12\n\t"
+            "dcbst 12, 0\n\t"
+            "sync\n\t"
+            "icbi 0, 12\n\t"
+            "icbi 12, 0\n\t"
+            "isync\n\t"
+            "bctr\n\t");
+    }
+
+    static const void* thunk(const void* target, bool inlineHook = false)
     {
         u32 t = (u32)target;
-        if (t < 0x90000000) return target;   // already in MEM1: no thunk needed
+        if (t < 0x90000000 && !inlineHook) return target;   // already in MEM1: no thunk needed
         if (s_used >= THUNKS) {
             OSReport("[PPOnline] out of hook thunks\n");
             return 0;
@@ -72,6 +113,10 @@ namespace Loader {
         w[1] = 0x618C0000 | (t & 0xFFFF);    // ori r12, r12, t@l
         w[2] = 0x7D8903A6;                   // mtctr r12
         w[3] = 0x4E800420;                   // bctr
+        if (inlineHook) {
+            // b fixInlineStub (both in MEM1, well within a relative branch)
+            w[3] = 0x48000000 | (((u32)&fixInlineStub - (u32)&w[3]) & 0x03FFFFFC);
+        }
         DCFlushRange(w, 16);
         ICInvalidateRange(w, 16);
         return w;
@@ -81,11 +126,11 @@ namespace Loader {
     public:
         virtual void syInlineHook(const u32 address, const void* replacement)
         {
-            s_api->syInlineHook(address, thunk(replacement));
+            s_api->syInlineHook(address, thunk(replacement, true));
         }
         virtual void syInlineHookRel(const u32 offset, const void* replacement, int moduleId)
         {
-            s_api->syInlineHookRel(offset, thunk(replacement), moduleId);
+            s_api->syInlineHookRel(offset, thunk(replacement, true), moduleId);
         }
         virtual void sySimpleHook(const u32 address, const void* replacement)
         {

@@ -22,8 +22,11 @@
 //
 // Both rewrites are made in the setNextSequence call itself (DOL 0x8002D640, replaced), never in
 // the codeset's memory, and only while P+'s default case is exactly the words of BootToCSS v5.4
-// (the guard Orca's PPLUS32.patches uses, at 0x80559C20 for NETBOOST.GCT and 0x80559C30 for
-// BOOST.GCT). Another codeset (a P+ update, a player's own boot code) keeps its own boot.
+// (the guard Orca's PPLUS32.patches uses). They are looked for in the expansion codeset's memory
+// (0x80550010 up to 0x80560000), not at one address: P+ v3.2.0 had them at 0x80559C20
+// (NETBOOST.GCT) and 0x80559C30 (BOOST.GCT), v3.2.1's longer codesets at 0x80559C08 and
+// 0x80559C18, and with the fixed addresses v3.2.1 booted to its Versus CSS. A codeset without
+// those words (a player's own boot code) keeps its own boot.
 //
 // The approach and the addresses are Orca's (GPL-3.0-or-later; ORCA.md "Boot and friends from
 // the menus", Data/Sys/Orca/PPLUS32.patches: the BootToCSS default case to sqPrizeCheck 0x14, the
@@ -73,10 +76,16 @@ namespace BootMenu {
             && w[4] == 0x38951C94 && w[5] == 0x38A00014;
     }
 
+    // NETBOOST.GCT (Netplay Launcher) or BOOST.GCT (Offline Launcher), as loaded (62 KB in v3.2).
+    static const u32 EXPANSION_CODESET_START = 0x80550010;
+    static const u32 EXPANSION_CODESET_END = 0x80560000;
+
     static bool pplusBootsToCss()
     {
-        return bootToCssDefaultAt(0x80559C20)    // NETBOOST.GCT (Netplay Launcher)
-            || bootToCssDefaultAt(0x80559C30);   // BOOST.GCT (Offline Launcher)
+        for (u32 addr = EXPANSION_CODESET_START; addr + 6 * 4 <= EXPANSION_CODESET_END; addr += 4) {
+            if (bootToCssDefaultAt(addr)) return true;
+        }
+        return false;
     }
 
     static void hkSetNextSequence(void* mgr, const char* name, int arg)
