@@ -11,7 +11,9 @@
 //
 // The zip is checked against the pinned size and sha256 before anything is extracted, and every
 // entry's CRC is checked while it is extracted. Files already in the User folder are never
-// overwritten: the SD card holds what the game wrote to it.
+// overwritten: the SD card holds what the game wrote to it. A card on the previous P+ release is
+// updated instead (pplus_card_update.ts: only the files P+ changed), from the new release's card,
+// which is extracted to the download folder for that and deleted afterwards.
 //
 // SPDX-License-Identifier: GPL-3.0-or-later
 
@@ -22,6 +24,8 @@ import { pipeline } from "stream/promises";
 import type { ByteProgress } from "utils/copy_file";
 import { hashFileWithProgress } from "utils/copy_file";
 import { download as httpDownload } from "utils/download";
+
+import { cardRelease, cardUpdateTo, updateProjectPlusCard } from "./pplus_card_update";
 
 export type PPlusRelease = {
   /** P+'s release tag. */
@@ -40,13 +44,14 @@ export type PPlusRelease = {
  *
  * To move to a newer P+ release: take the asset's URL, size and sha256 ("digest") from that API,
  * check that the entries below still exist, and bump `version` (installed users then download the
- * new DOLs and save template; their SD card is kept).
+ * new DOLs and save template; their SD card is kept). When the release's user/Wii/sd.raw changed,
+ * add a card update for it (pplus_card_update.ts), or installed users keep the old game files.
  */
 export const PPLUS_RELEASE: PPlusRelease = {
-  version: "v3.2.0",
-  url: "https://github.com/Project-Plus-Development-Team/Project-Plus-Dolphin/releases/download/v3.2.0/Project%2B.v3.2.Netplay.Windows.zip",
-  size: 1858812257,
-  sha256: "7121a0bc482e2a10bb84c693b23e4eb4d592cb8e51166089ca564e332d27b2d6",
+  version: "v3.2.1",
+  url: "https://github.com/Project-Plus-Development-Team/Project-Plus-Dolphin/releases/download/v3.2.1/Project%2B.v3.2.1.Netplay.Windows.zip",
+  size: 1854400373,
+  sha256: "f55fb3307c6dfdbc62a85e76df846093d1a9ca1c5b1c8712a677e8675a0520ec",
 };
 
 export const PPLUS_SD_CARD_ENTRY = "user/Wii/sd.raw";
@@ -74,8 +79,11 @@ export type PPlusTarget = {
 
 export type PPlusMarker = { version: string; sha256: string; installedAt: string };
 
-/** `download`: bytes received; `verify`: bytes of the zip hashed; `extract`: bytes written. */
-export type PPlusProgress = { phase: "download" | "verify" | "extract"; current: number; total: number };
+/**
+ * `download`: bytes received; `verify`: bytes of the zip hashed; `extract`: bytes written; `update`:
+ * an existing SD card brought to the release (bytes copied and written).
+ */
+export type PPlusProgress = { phase: "download" | "verify" | "extract" | "update"; current: number; total: number };
 
 type Downloader = (options: {
   url: string;
@@ -116,6 +124,8 @@ export async function missingProjectPlusFiles(target: PPlusTarget, release = PPL
   const missing: string[] = [];
   if (!(await exists(sdCardPath(target.userFolder)))) {
     missing.push("Wii/sd.raw");
+  } else if (await cardNeedsUpdate(target, release)) {
+    missing.push(`Wii/sd.raw (update to Project+ ${release.version})`);
   }
   for (const entry of PPLUS_LAUNCHER_DOL_ENTRIES) {
     if (!(await exists(launcherDolPath(target.userFolder, entry)))) {
@@ -127,6 +137,19 @@ export async function missingProjectPlusFiles(target: PPlusTarget, release = PPL
     missing.push(NETPLAY_SAVE_DIR);
   }
   return missing;
+}
+
+/** The User folder's card is on the release before `release`, which changed the card's files. */
+async function cardNeedsUpdate(target: PPlusTarget, release: PPlusRelease): Promise<boolean> {
+  const update = cardUpdateTo(release.version);
+  if (!update) {
+    return false;
+  }
+  const marker = await readMarker(target.storeDir);
+  if (marker?.version === release.version) {
+    return false; // updated (or left alone as another release's card) when the marker was written
+  }
+  return (await cardRelease(sdCardPath(target.userFolder), update)) === "from";
 }
 
 export async function sha256File(file: string, onProgress?: ByteProgress): Promise<string> {
@@ -302,11 +325,18 @@ export async function extractProjectPlusFiles(
       throw new Error(`The Project+ ${release.version} release has no ${PPLUS_NETPLAY_SAVE_PREFIX}.`);
     }
 
-    // Plan: only what is missing in the User folder; the save template always (it is ours).
+    // Plan: only what is missing in the User folder; the save template always (it is ours). A card
+    // on the previous release gets the new release's card next to the zip, to update it from.
     const jobs: { entry: string; dest: string }[] = [];
     const sd = sdCardPath(target.userFolder);
+    const cardUpdate = cardUpdateTo(release.version);
+    const newCard = path.join(target.downloadDir, `sd-${release.version}.raw`);
+    let updateCard = false;
     if (!(await exists(sd))) {
       jobs.push({ entry: PPLUS_SD_CARD_ENTRY, dest: sd });
+    } else if (cardUpdate && (await cardRelease(sd, cardUpdate)) === "from") {
+      jobs.push({ entry: PPLUS_SD_CARD_ENTRY, dest: newCard });
+      updateCard = true;
     }
     for (const entry of PPLUS_LAUNCHER_DOL_ENTRIES) {
       const dest = launcherDolPath(target.userFolder, entry);
@@ -349,6 +379,20 @@ export async function extractProjectPlusFiles(
       await fs.promises.rename(partial, job.dest);
       if (!job.entry.startsWith(PPLUS_NETPLAY_SAVE_PREFIX)) {
         log(`Extracted ${job.entry} -> ${job.dest}`);
+      }
+    }
+
+    if (updateCard && cardUpdate) {
+      try {
+        await updateProjectPlusCard({
+          card: sd,
+          newCard,
+          update: cardUpdate,
+          onProgress: (current, total) => onProgress?.({ phase: "update", current, total }),
+          log,
+        });
+      } finally {
+        await fs.promises.rm(newCard, { force: true });
       }
     }
 

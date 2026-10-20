@@ -68,6 +68,7 @@ const PPLUS_PHASES: Record<PPlusProgress["phase"], DolphinSetupPhase> = {
   download: "downloadProjectPlus",
   verify: "verifyProjectPlus",
   extract: "extractProjectPlus",
+  update: "updateProjectPlus",
 };
 
 const log = electronLog.scope("dolphin/manager");

@@ -105,6 +105,7 @@ export type DolphinDownloadStartEvent = {
  * - `installDolphin`: the bundled Dolphin copied into the netplay folder (bytes);
  * - `copyUserFolder`: development only, a new User folder seeded from the template (bytes);
  * - `downloadProjectPlus`, `verifyProjectPlus`, `extractProjectPlus`: P+'s release zip (bytes);
+ * - `updateProjectPlus`: an installed SD card brought to a newer P+ release (bytes);
  * - `prepareSdCard`: the first Play's copy of the 2 GB SD card (bytes);
  * - `moveGameFiles`: Settings moving the netplay folder to another drive (bytes; nothing on one drive).
  */
@@ -114,6 +115,7 @@ export type DolphinSetupPhase =
   | "downloadProjectPlus"
   | "verifyProjectPlus"
   | "extractProjectPlus"
+  | "updateProjectPlus"
   | "prepareSdCard"
   | "moveGameFiles";
 

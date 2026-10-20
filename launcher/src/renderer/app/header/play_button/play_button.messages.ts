@@ -7,6 +7,7 @@ export const PlayButtonMessages = {
   downloadingProjectPlus: () => "Downloading Project+",
   verifyingProjectPlus: () => "Verifying Project+",
   extractingProjectPlus: () => "Extracting Project+",
+  updatingProjectPlus: () => "Updating Project+",
   preparingSdCard: () => "Preparing SD card",
   movingFiles: () => "Moving files",
 };
