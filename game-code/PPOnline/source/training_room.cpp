@@ -393,6 +393,11 @@ namespace TrainingRoom {
         // 0) wore whatever alt the last online match had left on that slot (bug report #38).
         const u8 alt[4] = {(u8)(li.costume & PPOM::COSTUME_ALTS), 0, 0, 0};
         OnlineMatch::setAltCostumes(alt);
+        // The name tag the search locked in with, whose controls the room's fighter gets (the
+        // match setup gives the player's controller the tag's layout). The record still had the
+        // tag the CSS was built with (OnlineMenu::restoreTag): the last lock-in's, none on the
+        // boot's first CSS, so the room played a search behind (bug report #73).
+        rec[0x18] = OnlineMenu::lockedTagRecord();
         // The controller that searched (LOCAL lockPad, 0-3), as the match's controller numbers
         // are (OnlineMatch's setup: 1-4). State 5 copies the record's byte as it is; the Wi-Fi
         // CSS leaves 0 there, which is no controller: the room's fighter stood still.

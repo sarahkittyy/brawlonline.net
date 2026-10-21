@@ -549,6 +549,12 @@ namespace OnlineMenu {
         rec[0x18] = tagRecord(s.lastTag) ? (u8)s.lastTag : 0x78;
     }
 
+    // The tag of the last lock-in (the search's START), as a record's +0x18: 0x78 for none.
+    u8 lockedTagRecord()
+    {
+        return tagRecord(s.lastTag) ? (u8)s.lastTag : 0x78;
+    }
+
     void prepareCss()
     {
         if (roomCss()) RoomCss::prepareRecords();

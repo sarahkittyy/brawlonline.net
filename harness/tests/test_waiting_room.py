@@ -20,7 +20,7 @@ from ppharness.client import PadInput
 from ppharness.instance import DolphinInstance
 
 from test_online import _make_backend, _wait
-from test_online_game import Game, _boot, _both, _find_logged, _peer_shown, online_set, ppom
+from test_online_game import NOTAP_TAG, Game, _boot, _both, _find_logged, _peer_shown, online_set, ppom
 from test_online_ranked import STARTERS, _ranked, _strike_to, _wait_view
 from test_online_alt_costumes import ALT_R, ALT_Z, COSTUME_ALT_R, COSTUME_ALT_Z, _alt_words, _check_match, _mm_costumes, _stale_words
 
@@ -388,6 +388,54 @@ def test_waiting_room_alt_costumes(backend: OnlineBackend, dolphin: Callable[...
         _back_on_css(a, "back on the CSS after holding START")
         _wait(lambda: a.c.mm_status()["state"] == "idle", 10, "the search cancelled")
         a.steps("wait 40")
+
+
+PAD_CONFIG = 0x805B7480   # ipPadConfig: GameCube layouts 12 bytes a pad, player -> pad at +0xB5
+
+
+def _room_tap_jump(g: Game) -> bool:
+    """Whether the room's fighter (player 0) has tap jump on: its controller's layout in
+    ipPadConfig, given at the room's setup from the name tag in its record (+0x18)."""
+    _wait(lambda: _fade(g) == 0, 5, "the room out of the fade")
+    cfg = g.c.read_mem(PAD_CONFIG, 0xB9)
+    return bool(cfg[cfg[0xB5] * 0xC + 11] & 0x80)
+
+
+def _clear_tag(g: Game) -> None:
+    """A on the name plate opens the tag list on the current tag; UP to PLAYER 1 (no tag), A."""
+    g.steps("tap A 8", "wait 40", "tap DUP 8", "wait 20", "tap A 8", "wait 40")
+    assert g.tag() == -1, g.tag()
+
+
+@pytest.mark.slow
+def test_waiting_room_tag_controls(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
+                                   gpu_backend: str) -> None:
+    """Bug report #73 (2026-10-21): the room's fighter played with the controls of the tag the CSS
+    was built with (the last lock-in's, none on the boot's first CSS), not of the tag picked
+    before the search: a search behind. The first CSS of the boot with "NoTap" picked: tap jump
+    off in the room; back on the CSS with the tag cleared: tap jump on in the next room."""
+    test = "waiting-room-tag-controls"
+    ua = backend.create_user("tara", "TARA")
+    a = _boot(dolphin, "wr-tag", backend, ua, gpu_backend, test, "gameplay")
+    a.to_main_menu()
+    a.to_online_page()
+    a.to_css("unranked", tag=NOTAP_TAG)
+    assert a.picked_tag == 0, a.picked_tag   # the save's slot 0, "NoTap"
+
+    _search(a, 1)
+    assert _in_room(a)
+    assert not _room_tap_jump(a), "the room's fighter has NoTap's controls (tap jump off)"
+    a.shot("01-room-notap")
+    a.steps("tap START 40")
+    _back_on_css(a, "back on the CSS after holding START")
+    _wait(lambda: a.c.mm_status()["state"] == "idle", 10, "the search cancelled")
+    a.steps("wait 40")
+
+    _clear_tag(a)
+    _search(a, 1)
+    assert _in_room(a)
+    assert _room_tap_jump(a), "the room's fighter has the default controls (tap jump on)"
+    a.shot("02-room-no-tag")
 
 
 @pytest.mark.slow

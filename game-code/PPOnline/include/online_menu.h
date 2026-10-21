@@ -35,6 +35,7 @@ namespace OnlineMenu {
     void topPageRunning(u8* page);       // the main menu's top page ran (the same, no Wi-Fi task)
     void noteQuit(int port);             // the last game ended by this port's quit: the CSS says so
     void waitingRoomEnded(int how);      // the waiting room has ended (TrainingRoom::End)
+    u8 lockedTagRecord();                // the last lock-in's name tag (record +0x18, 0x78 none)
 }
 
 namespace RoomCss {
