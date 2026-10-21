@@ -99,6 +99,11 @@ namespace OnlineMatch {
     // colour, else the character's first costume of it (as P+'s CSS gives it); `costume` if the
     // character has none.
     u8 teamCostume(u8 charKind, u8 team, u8 costume);
+    // Which of the character's costumes of the team's colour `costume` is (P+'s "team set", 0 the
+    // first), -1 if it is not of that colour; and the costume of a shade (wrapping round the
+    // character's costumes of the colour; `costume` if it has none).
+    int teamShadeOf(u8 charKind, u8 team, u8 costume);
+    u8 teamShadeCostume(u8 charKind, u8 team, int shade, u8 costume);
     void clearPickedStage();
     void noteSssButtons(u32 held, u32 pressed);   // each frame of the online stage select
     u8 sssAsl();                      // the buttons held at the last A/START there (P+'s ASL byte)

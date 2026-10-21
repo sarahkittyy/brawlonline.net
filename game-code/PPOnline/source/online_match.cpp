@@ -191,6 +191,39 @@ namespace OnlineMatch {
     // team's colour is the byte at r2 - 0x7130 + team (0x805A21F0: 0 red, 1 blue, 3 green). The
     // same walk here: the player's own costume if it already has the team's colour (they picked
     // that shade, e.g. P+'s second green), else the character's first costume of it.
+    int teamShadeOf(u8 charKind, u8 team, u8 costume)
+    {
+        if (team >= PPOM::TEAM_COUNT) return -1;
+        u8 colours[0x20];
+        int n = costumeList(charKind, colours);
+        u8 colour = *(u8*)(0x805A21F0 + team);
+        if (costume >= n || colours[costume] != colour) return -1;
+        int shade = 0;
+        for (int i = 0; i < costume; i++) {
+            if (colours[i] == colour) shade++;
+        }
+        return shade;
+    }
+
+    u8 teamShadeCostume(u8 charKind, u8 team, int shade, u8 costume)
+    {
+        if (team >= PPOM::TEAM_COUNT) return costume;
+        u8 colours[0x20];
+        int n = costumeList(charKind, colours);
+        u8 colour = *(u8*)(0x805A21F0 + team);
+        int count = 0;
+        for (int i = 0; i < n; i++) {
+            if (colours[i] == colour) count++;
+        }
+        if (!count) return costume;
+        shade %= count;
+        if (shade < 0) shade += count;
+        for (int i = 0; i < n; i++) {
+            if (colours[i] == colour && shade-- == 0) return (u8)i;
+        }
+        return costume;
+    }
+
     u8 teamCostume(u8 charKind, u8 team, u8 costume)
     {
         if (team >= PPOM::TEAM_COUNT) return costume;

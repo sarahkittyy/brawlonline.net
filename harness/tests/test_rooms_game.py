@@ -663,7 +663,8 @@ def test_room_team_colours(backend: OnlineBackend, dolphin: Callable[..., Dolphi
     """The host's FFA / TEAMS button goes FFA, TEAMS in rainbow letters, TEAMS (the user's,
     2026-10-21). In the rainbow team battle two players pick costumes of another colour than their
     team's and one of them readies; the host's next press (TEAMS, the teams' costumes) takes the
-    lock-in back and every panel goes back to a costume of its team's colour. A 2-against-1 team
+    lock-in back and every panel goes back to a costume of its team's colour; X / Y then step the
+    team (blue, green, red, green, blue), the costume following. A 2-against-1 team
     battle in the teams' costumes: SESSION teams 3, gmSelCharData+0x33 1 (no glow), every player's
     match costume of their team's colour; blue walks off, 0 checksum mismatches, back in the room,
     and one more press is FFA."""
@@ -738,10 +739,19 @@ def test_room_team_colours(backend: OnlineBackend, dolphin: Callable[..., Dolphi
         g.steps("wait 30")
         g.shot("04-team-colours")
     assert _u32(b, css_area(b) + 0x1BC) != costume_b and _u32(c, css_area(c) + 0x1BC) != costume_c
-    # X onto another colour comes back to the team's.
-    b.steps("tap X 8", "wait 20")
-    area = css_area(b)
-    assert costume_colour(b, _u32(b, area + 0x1B8), _u32(b, area + 0x1BC)) == team_colour(b, 1)
+    # X / Y step the team, as P+'s TEAM BATTLE: blue -> green -> red (round past green: the next
+    # shade of red, if B's character has one) -> green -> blue, the costume following each.
+    def b_on(team: int) -> int:
+        until_view(a, lambda v: v["slots"][1]["team"] == team, f"B on team {team}")
+        def costume() -> int | None:
+            area = css_area(b)
+            cost = _u32(b, area + 0x1BC)
+            return cost if costume_colour(b, _u32(b, area + 0x1B8), cost) == team_colour(b, team) else None
+        return _wait(costume, 10, f"B in a costume of team {team}'s colour")
+    for button, team in (("X", 2), ("X", 0), ("Y", 2), ("Y", 1)):
+        b.steps(f"tap {button} 8", "wait 20")
+        b_on(team)
+    b.shot("04b-x-y-teams")
     css = [_u32(g, css_area(g) + 0x1B8) for g in gs]
 
     game = room_view(a)["game"]
