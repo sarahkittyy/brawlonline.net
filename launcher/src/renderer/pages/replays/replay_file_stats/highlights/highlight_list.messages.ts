@@ -19,12 +19,11 @@ export const HighlightListMessages = {
   done: () => "Done",
   ofTotal: (index: number, total: number) => "{0} of {1}",
   playbackError: (error: string) => "Can't play it: {0}",
-  versionReady: (version: string) =>
-    "Recorded on Project+ {0}. Its files are on this PC, so it plays on {0}, the way the game happened.",
-  versionNeeded: (version: string, current: string, size: string) =>
-    "Recorded on Project+ {0} (you have {1}). Playing it first gets Project+ {0}'s files for replays ({2}, once).",
+  versionReady: (version: string) => "Recorded on Project+ {0}.",
+  versionNeeded: (version: string, size: string) =>
+    "Replay recorded on P+ {0}. You can download a small patch that will be used to play these anyway ({1}, one time).",
   versionUnplayable: (version: string) =>
-    "Recorded on Project+ {0}, which this version of Brawl Online can't play the way it happened.",
+    "Recorded on Project+ {0}, which is unsupported. You can still try to play them on this version.",
   versionGetNow: () => "Get it now",
   endedBefore: () => "The replay ended before the highlight: it plays differently here.",
 };

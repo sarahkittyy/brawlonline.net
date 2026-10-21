@@ -1,4 +1,5 @@
 import { exists } from "@common/exists";
+import { pplusReleaseLabel } from "@common/pplus_releases";
 import { stageInfo as pplusStageInfo } from "@common/stages";
 import { css } from "@emotion/react";
 import EqualizerIcon from "@mui/icons-material/Equalizer";
@@ -137,7 +138,7 @@ export const ReplayFileContainer = React.memo(function ReplayFileContainer({
       stageName,
     });
     if (olderRelease) {
-      list.push({ Icon: HistoryIcon, label: Messages.pplusRelease(olderRelease.replace(/^v/, "")) });
+      list.push({ Icon: HistoryIcon, label: Messages.pplusRelease(pplusReleaseLabel(olderRelease)) });
     }
     return list;
   }, [game.lastFrame, game.mode, game.startTime, game.startingTimerSeconds, game.timerType, stageName, olderRelease]);

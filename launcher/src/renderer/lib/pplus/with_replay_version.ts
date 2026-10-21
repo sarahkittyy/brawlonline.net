@@ -1,11 +1,9 @@
 // Plays replays on the Project+ release they were recorded on (docs/design/pplus-versions.md):
-// main says what a request needs (ReplayPlayResult); this asks the player (or, with "Don't ask
-// again", just gets it), shows the download and the card being made, and plays. Rendering (later)
+// main says what a request needs (ReplayPlayResult); this asks the player, shows the download and
+// the card being made, and plays. Rendering (later)
 // goes through `ensureReplayRelease` the same way.
 import { pplusReleaseLabel } from "@common/pplus_releases";
 import type { ReplayPlayChoice, ReplayPlayResult } from "@dolphin/types";
-
-import { useSettingsStore } from "@/lib/hooks/use_settings";
 
 import type { AskAnswer, VersionPurpose } from "./replay_version_dialog";
 import {
@@ -21,7 +19,7 @@ import { refreshPPlusVersions, usePPlusVersions } from "./use_pplus_versions";
 type NeedsFiles = Extract<ReplayPlayResult, { status: "needs-files" }>;
 
 /**
- * Gets `need.release` ready (asks first unless "Don't ask again"). Resolves to `ready`, `current`
+ * Gets `need.release` ready (asks first). Resolves to `ready`, `current`
  * (the player chose to play on the launcher's release), or `cancel`.
  */
 export async function ensureReplayRelease(
@@ -29,10 +27,8 @@ export async function ensureReplayRelease(
   purpose: VersionPurpose = "play",
 ): Promise<"ready" | "current" | "cancel"> {
   const { release, current } = need;
-  let auto = useSettingsStore.getState().settings.pplusAutoDownload;
   for (;;) {
-    const ask: AskAnswer = auto ? { action: "download" } : await askForRelease({ ...need, purpose });
-    auto = false;
+    const ask: AskAnswer = await askForRelease({ ...need, purpose });
     if (ask.action === "cancel") {
       closeReleaseDialog();
       return "cancel";
@@ -75,13 +71,7 @@ export async function withReplayVersion(
   for (let tries = 0; tries < 3; tries++) {
     if (result.status === "playing") {
       if (result.skipped > 0 && notify) {
-        const skipped = pplusReleaseLabel(result.skippedRelease ?? "");
-        const played = pplusReleaseLabel(result.release ?? usePPlusVersions.getState().current ?? "");
-        notify(
-          result.skipped === 1
-            ? Messages.skippedOne(skipped, played)
-            : Messages.skippedMany(result.skipped, skipped, played),
-        );
+        notify(Messages.skipped(pplusReleaseLabel(result.release ?? usePPlusVersions.getState().current ?? "")));
       }
       return result;
     }

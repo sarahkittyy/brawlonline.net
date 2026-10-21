@@ -29,8 +29,8 @@ export function replayPPlusRelease(build: { pplus?: unknown; dolphin?: unknown }
   return Number(m[1]) <= LAST_V3_2_0_BUILD ? "v3.2.0" : "v3.2.1";
 }
 
-/** "v3.2.0" -> "3.2.0", as the launcher shows a release ("Project+ 3.2.0"). */
-export const pplusReleaseLabel = (release: string): string => release.replace(/^v/, "");
+/** A release as the launcher shows it: with its "v" ("Project+ v3.2.0"). */
+export const pplusReleaseLabel = (release: string): string => (release.startsWith("v") ? release : `v${release}`);
 
 /** Orders releases: negative when `a` is older than `b`. */
 export function comparePPlusReleases(a: string, b: string): number {

@@ -10,17 +10,13 @@ import CheckCircleIcon from "@mui/icons-material/CheckCircle";
 import CloudDownloadIcon from "@mui/icons-material/CloudDownload";
 import SdStorageIcon from "@mui/icons-material/SdStorage";
 import Button from "@mui/material/Button";
-import Checkbox from "@mui/material/Checkbox";
 import Dialog from "@mui/material/Dialog";
 import DialogActions from "@mui/material/DialogActions";
 import DialogContent from "@mui/material/DialogContent";
 import DialogTitle from "@mui/material/DialogTitle";
-import FormControlLabel from "@mui/material/FormControlLabel";
 import LinearProgress from "@mui/material/LinearProgress";
 import { useEffect, useState } from "react";
 import { create } from "zustand";
-
-import { useSetting } from "@/lib/hooks/use_settings";
 
 import { ReplayVersionDialogMessages as Messages } from "./replay_version_dialog.messages";
 
@@ -114,7 +110,6 @@ const Step = ({
 
 export const ReplayVersionDialog = () => {
   const view = useReplayVersionDialog((s) => s.view);
-  const [autoDownload, setAutoDownload] = useSetting("pplusAutoDownload");
   const [progress, setProgress] = useState<{ phase: string; current: number; total: number } | null>(null);
 
   useEffect(() => {
@@ -163,14 +158,9 @@ export const ReplayVersionDialog = () => {
           </div>
           <div style={{ display: "flex", alignItems: "center", gap: 8, margin: "6px 0", opacity: 0.85 }}>
             <SdStorageIcon fontSize="small" />
-            {Messages.diskSpace()}
+            {Messages.diskSpace(version)}
           </div>
-          <FormControlLabel
-            style={{ marginTop: 8 }}
-            control={<Checkbox checked={autoDownload} onChange={(e) => void setAutoDownload(e.target.checked)} />}
-            label={<span style={{ fontSize: 14 }}>{Messages.dontAsk()}</span>}
-          />
-          <div>
+          <div style={{ marginTop: 8 }}>
             <Button size="small" onClick={() => void chooseFolder()} style={{ paddingLeft: 0, textTransform: "none" }}>
               {Messages.haveIt(version)}
             </Button>
@@ -202,7 +192,7 @@ export const ReplayVersionDialog = () => {
             progress={progress}
             done={files}
             active={downloading}
-            label={view.importing ? Messages.stepImport(version) : Messages.stepFiles(version)}
+            label={view.importing ? Messages.stepImport() : Messages.stepFiles()}
             extra={
               downloading && progress?.phase === "download" && progress.total > 0
                 ? `${formatBytes(progress.current)} / ${formatBytes(progress.total)}`
@@ -216,7 +206,6 @@ export const ReplayVersionDialog = () => {
             label={Messages.stepCard()}
             extra={files && progress && progress.total > 0 ? `${Math.round(progressValue(progress))}%` : undefined}
           />
-          <p style={{ opacity: 0.7, fontSize: 13, marginBottom: 0 }}>{Messages.workingNote()}</p>
         </DialogContent>
       </Dialog>
     );
@@ -256,9 +245,7 @@ export const ReplayVersionDialog = () => {
     <Dialog open={true} onClose={cancel} maxWidth="sm" fullWidth={true}>
       <DialogTitle>{Messages.unplayableTitle(version)}</DialogTitle>
       <DialogContent>
-        <p style={{ marginTop: 0 }}>
-          {render ? Messages.unplayableRender(version) : Messages.unplayable(version, current)}
-        </p>
+        <p style={{ marginTop: 0 }}>{render ? Messages.unplayableRender(version) : Messages.unplayable(version)}</p>
       </DialogContent>
       <DialogActions>
         <Button onClick={cancel}>{render ? Messages.ok() : Messages.cancel()}</Button>

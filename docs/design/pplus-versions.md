@@ -7,7 +7,7 @@ checksums differed from frame 948, in plain playback too). The launcher moved ev
 to v3.2.1 (pplus_card_update.ts), so almost every existing replay is from v3.2.0.
 
 The user's decisions (2026-10-20): a small diff hosted by us (unlisted on brawlonline.net), ask
-once and then "Don't ask again", keep the replay card and make it removable, work whether or not
+before every download (a "Don't ask again" option was dropped on the user's review the same day), keep the replay card and make it removable, work whether or not
 the player has v3.2.0 on their PC, and be future-proof for the next P+ release. Whether the plugin
 supports a given release is the one part that can't be future-proof.
 
@@ -84,8 +84,9 @@ from the other release were left out. The playback Dolphin runs on one card at a
 for another release closes it and starts it again on that release's card (about 11 s, the same as
 a cold start). Within a release nothing changes, so highlights stay instant.
 
-**Renderer** (`lib/pplus`). `withReplayVersion` asks with `ReplayVersionDialog`. With "Don't ask
-again" (Settings' "Get older versions for replays without asking") it just gets the files instead.
+**Renderer** (`lib/pplus`). `withReplayVersion` asks with `ReplayVersionDialog` whenever a release's files are
+missing (the user's wording, 2026-10-20: "You can download a small patch to have access to replays
+from v3.2.0.").
 It shows the download (in its compressed bytes) and the card being made. On a failure it says why
 (offline, damaged, not that release's card) and offers Try again, Play on <current> anyway, and
 Cancel. `ensureReplayRelease(need, "render")` does the same for rendering (later): its wording
@@ -94,7 +95,7 @@ talks about clips and rendering, and it offers no "anyway".
 **Where players see it:**
 - Settings > Replays > Older Project+ Versions lists the releases with their size, Download and
   Remove.
-- Replay rows show "Project+ 3.2.0" for a replay from another release.
+- Replay rows show "Project+ v3.2.0" for a replay from another release.
 - The stats page says whether the replay plays on that release's files, or that playing it gets
   them first ("Get it now").
 

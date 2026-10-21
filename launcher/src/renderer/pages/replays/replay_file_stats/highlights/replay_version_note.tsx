@@ -21,7 +21,6 @@ export const ReplayVersionNote = ({ release }: { release: string | undefined }) 
     return null;
   }
   const version = pplusReleaseLabel(release);
-  const mine = pplusReleaseLabel(current);
   if (state === "unknown" || !state.playable) {
     return (
       <div className={styles.versionNote}>
@@ -49,7 +48,7 @@ export const ReplayVersionNote = ({ release }: { release: string | undefined }) 
   return (
     <div className={styles.versionNote}>
       <HistoryIcon fontSize="small" />
-      <span>{Messages.versionNeeded(version, mine, formatBytes(state.downloadBytes || 51_400_000))}</span>
+      <span>{Messages.versionNeeded(version, formatBytes(state.downloadBytes || 51_400_000))}</span>
       <Button
         size="small"
         variant="outlined"

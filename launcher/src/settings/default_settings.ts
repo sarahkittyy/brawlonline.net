@@ -49,7 +49,6 @@ export const defaultAppSettings: AppSettings = {
     clipOnLrz: true,
     disableHighlightDetection: false,
     clipsFolder: null,
-    pplusAutoDownload: false,
     autoUpdateLauncher: true,
     hardwareAcceleration: true,
     netplayDolphinPath: null,

@@ -65,10 +65,6 @@ export interface SettingsSchema {
   disableHighlightDetection: boolean;
   clipsFolder: string | null;
 
-  // Replays from an older Project+ release play on that release's files (docs/design/
-  // pplus-versions.md): true downloads them when needed without asking ("Don't ask again").
-  pplusAutoDownload: boolean;
-
   // Dolphin settings: the executable of our Dolphin build (null = default, see dolphin/install/paths.ts)
   netplayDolphinPath: string | null;
   playbackDolphinPath: string | null;

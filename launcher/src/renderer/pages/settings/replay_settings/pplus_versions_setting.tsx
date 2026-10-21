@@ -1,12 +1,10 @@
 // Settings > Replays > Older Project+ versions (docs/design/pplus-versions.md): the releases kept
-// for replays, what they take on disk, download / remove, and "Don't ask again".
+// for replays, what they take on disk, download / remove.
 import { pplusReleaseLabel } from "@common/pplus_releases";
 import type { PPlusVersionInfo } from "@dolphin/types";
 import Button from "@mui/material/Button";
 import { useEffect, useState } from "react";
 
-import { Toggle } from "@/components/form/toggle";
-import { useSetting } from "@/lib/hooks/use_settings";
 import { useToasts } from "@/lib/hooks/use_toasts";
 import { formatBytes } from "@/lib/pplus/replay_version_dialog";
 import { refreshPPlusVersions, usePPlusVersions } from "@/lib/pplus/use_pplus_versions";
@@ -18,7 +16,6 @@ import { ReplaySettingsMessages as Messages } from "./replay_settings.messages";
 export const PPlusVersionsSetting = () => {
   const current = usePPlusVersions((s) => s.current);
   const states = usePPlusVersions((s) => s.states);
-  const [autoDownload, setAutoDownload] = useSetting("pplusAutoDownload");
   const [busy, setBusy] = useState<string | null>(null);
   const { showError } = useToasts();
 
@@ -60,10 +57,10 @@ export const PPlusVersionsSetting = () => {
       {older.map((s) => {
         const version = pplusReleaseLabel(s.release);
         const status = !s.playable
-          ? Messages.versionUnplayable()
+          ? Messages.versionUnsupported()
           : s.filesReady
-          ? Messages.versionReady(formatBytes(s.filesBytes + s.cardBytes))
-          : Messages.versionNotHere(formatBytes(s.downloadBytes));
+          ? formatBytes(s.filesBytes + s.cardBytes)
+          : Messages.versionNotDownloaded();
         return (
           <div
             key={s.release}
@@ -77,9 +74,9 @@ export const PPlusVersionsSetting = () => {
               background: "rgba(0, 0, 0, 0.25)",
             }}
           >
-            <div style={{ flex: 1 }}>
-              <div style={{ fontWeight: 600 }}>{Messages.versionName(version)}</div>
-              <div style={{ fontSize: 13, opacity: 0.8 }}>{status}</div>
+            <div style={{ flex: 1, display: "flex", alignItems: "baseline", gap: 10 }}>
+              <span style={{ fontWeight: 600 }}>{Messages.versionName(version)}</span>
+              <span style={{ fontSize: 13, opacity: 0.6 }}>{status}</span>
             </div>
             {s.playable && !s.filesReady && (
               <Button variant="contained" size="small" disabled={busy != null} onClick={() => void get(s)}>
@@ -94,14 +91,6 @@ export const PPlusVersionsSetting = () => {
           </div>
         );
       })}
-      <div style={{ marginTop: 8 }}>
-        <Toggle
-          value={autoDownload}
-          onChange={(checked) => void setAutoDownload(checked)}
-          label={Messages.autoDownload()}
-          description={Messages.autoDownloadDescription()}
-        />
-      </div>
     </SettingItem>
   );
 };
