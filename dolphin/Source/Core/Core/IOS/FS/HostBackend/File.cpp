@@ -46,6 +46,14 @@ std::shared_ptr<File::IOFile> HostFileSystem::OpenHostFile(const std::string& ho
   File::IOFile file;
   while (!file.Open(host_path, "r+b"))
   {
+    // Asking again cannot bring back a file that is gone, and with panic handlers off (as our
+    // Dolphins run) the question answers itself with yes: the CPU thread asked forever, writing
+    // thousands of these lines a second (bug #82, a joiner restoring an open handle).
+    if (!File::Exists(host_path))
+    {
+      ERROR_LOG_FMT(IOS_FS, "OpenHostFile {}: the file does not exist", host_path);
+      return nullptr;
+    }
     const bool try_again =
         PanicYesNoFmt("File \"{}\" could not be opened!\n"
                       "This may happen with improper permissions or use by another process.\n"
@@ -133,7 +141,7 @@ Result<u32> HostFileSystem::ReadBytesFromFile(Fd fd, u8* ptr, u32 count)
   std::lock_guard lock(m_handles_mutex);
 
   Handle* handle = GetHandleFromFd(fd);
-  if (!handle || !handle->host_file->IsOpen())
+  if (!handle || !handle->host_file || !handle->host_file->IsOpen())
     return std::unexpected{ResultCode::Invalid};
 
   if ((u8(handle->mode) & u8(Mode::Read)) == 0)
@@ -162,7 +170,7 @@ Result<u32> HostFileSystem::WriteBytesToFile(Fd fd, const u8* ptr, u32 count)
   std::lock_guard lock(m_handles_mutex);
 
   Handle* handle = GetHandleFromFd(fd);
-  if (!handle || !handle->host_file->IsOpen())
+  if (!handle || !handle->host_file || !handle->host_file->IsOpen())
     return std::unexpected{ResultCode::Invalid};
 
   if ((u8(handle->mode) & u8(Mode::Write)) == 0)
@@ -192,7 +200,7 @@ Result<u32> HostFileSystem::SeekFile(Fd fd, std::uint32_t offset, SeekMode mode)
   std::lock_guard lock(m_handles_mutex);
 
   Handle* handle = GetHandleFromFd(fd);
-  if (!handle || !handle->host_file->IsOpen())
+  if (!handle || !handle->host_file || !handle->host_file->IsOpen())
     return std::unexpected{ResultCode::Invalid};
 
   u32 new_position = 0;
@@ -224,7 +232,7 @@ Result<FileStatus> HostFileSystem::GetFileStatus(Fd fd)
   std::lock_guard lock(m_handles_mutex);
 
   const Handle* handle = GetHandleFromFd(fd);
-  if (!handle || !handle->host_file->IsOpen())
+  if (!handle || !handle->host_file || !handle->host_file->IsOpen())
     return std::unexpected{ResultCode::Invalid};
 
   FileStatus status;

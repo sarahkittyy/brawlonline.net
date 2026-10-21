@@ -6249,6 +6249,9 @@ bool LoadImageStateForTest(Core::System& system, std::vector<u8> state)
   const bool ok = ::State::LoadFromBuffer(system, std::span<u8>(state.data(), state.size()));
   VideoCommon_SetSkipGPUReadbackForRollback(false);
   s_image_dostate = false;
+  // An image load leaves the NAND files closed (a joiner opens them after UnpackNand).
+  if (auto* fs = HostFS(system))
+    fs->ReopenHostFiles();
   return ok;
 }
 

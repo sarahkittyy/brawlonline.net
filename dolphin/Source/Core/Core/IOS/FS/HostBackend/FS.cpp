@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-2.0-or-later
 
 #include "Core/IOS/FS/HostBackend/FS.h"
+#include "Core/Rollback/MachineSession.h"
 #include "Core/Rollback/RollbackManager.h"
 
 #include <algorithm>
@@ -452,6 +453,11 @@ void HostFileSystem::DoState(PointerWrap& p)
       handle.opened = false;
       continue;
     }
+    // A joiner loading a machine image: the files its handles name are the host's NAND, which
+    // UnpackNand writes after this load and then opens them (ReopenHostFiles). Its own NAND may
+    // not have them yet (bug #82: the host's game held the Wii Menu's play_rec.dat open).
+    if (p.IsReadMode() && Machine::InImageDoState())
+      continue;
     handle.host_file = OpenHostFile(host_path);
   }
 }

@@ -68,6 +68,9 @@ def main() -> int:
                          "Dolphin's settings windows do) before the first join")
     ap.add_argument("--delay", help="each player's input delay: 0-9 or auto (default: the session's, 2)")
     ap.add_argument("--platform", default="headless", help="Dolphin's window platform (win32 for a real backend)")
+    ap.add_argument("--host-play-record", action="store_true",
+                    help="the host's session NAND starts with the Wii Menu's play_rec.dat (a disc boot's BS2 "
+                         "writes it) and the joiner's without: the game keeps it open (bug #82)")
     a = ap.parse_args()
 
     out = Path(a.out).resolve()
@@ -101,6 +104,11 @@ def main() -> int:
                                instances_root=out, keep=True, platform=a.platform, connect_timeout=120,
                                env=env)
         inst.create()
+        if a.host_play_record and name == "host":
+            # WiiRoot.cpp copies <User>/NetplaySave into the session's NAND.
+            rec = Path(inst.user_dir) / "NetplaySave" / "title" / "00000001" / "00000002" / "data" / "play_rec.dat"
+            rec.parent.mkdir(parents=True, exist_ok=True)
+            rec.write_bytes(bytes(0x80))
         inst.launch()
         below_normal(inst.process.pid)
         # A loaded PC can leave the first connection half open ("another harness client is
