@@ -4,9 +4,11 @@ import os from "os";
 import path from "path";
 import { describe, expect, it } from "vitest";
 
+import { BRAWL_NTSC_U_DISC } from "../game_data";
 import {
   discContentSha1,
   discContentSha1WithProgress,
+  discIdentity,
   isBrawlGameId,
   isPlainDiscImage,
   parseHeaderJson,
@@ -99,6 +101,43 @@ describe("disc info", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  it("names a disc by its game data: Brawl Rev 1 and Rev 2 as one, a disc without game data by its contents", async () => {
+    const data =
+      (gameData: string | null, platform: "wii" | "gamecube" = "wii") =>
+      async () => ({
+        gameId: "RSBE01",
+        revision: 1,
+        platform,
+        dataOffset: 0xf800000,
+        tmdSha1: null,
+        h3Ok: true,
+        usedBlockErrors: 0,
+        unusedBlockErrors: 0,
+        gameData,
+      });
+    const contents = async () => "c".repeat(40);
+    const rev1 = await discIdentity(
+      "tool",
+      "rev1.iso",
+      undefined,
+      data("0d79fc54ef81e223b65eb8d4b1854643fc677554"),
+      contents,
+    );
+    const rev2 = await discIdentity(
+      "tool",
+      "rev2.wbfs",
+      undefined,
+      data("e6ae2404f96cff10be1c4dda8559001c3a7dfd34"),
+      contents,
+    );
+    expect(rev1).toBe(BRAWL_NTSC_U_DISC);
+    expect(rev2).toBe(BRAWL_NTSC_U_DISC);
+    expect(await discIdentity("tool", "nsmbw.rvz", undefined, data("8".repeat(40)), contents)).toBe("8".repeat(40));
+    // Damaged or modified, or a GameCube disc: its contents, as before.
+    expect(await discIdentity("tool", "damaged.wbfs", undefined, data(null), contents)).toBe("c".repeat(40));
+    expect(await discIdentity("tool", "melee.iso", undefined, data(null, "gamecube"), contents)).toBe("c".repeat(40));
   });
 
   it("knows what controller a game is made for", () => {

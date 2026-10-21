@@ -27,6 +27,7 @@ import {
   useLaunchGameOnPlay,
 } from "@/lib/hooks/use_settings";
 
+import { DISC_IMAGE_EXTENSIONS } from "../../quick_start/steps/iso_selection_step/iso_file";
 import { SettingItem } from "../setting_item_section";
 import { ChatKeySetting } from "./chat_key_setting";
 import { GameSettingsMessages as Messages } from "./game_settings.messages";
@@ -91,7 +92,7 @@ export const GameSettings = React.memo(() => {
           placeholder={Messages.noFileSet()}
           disabled={verifying || netplayDolphinOpen || playbackDolphinOpen}
           options={{
-            filters: [{ name: "Brawl ISO", extensions: ["iso"] }],
+            filters: [{ name: "Brawl disc image", extensions: [...DISC_IMAGE_EXTENSIONS] }],
           }}
           endAdornment={
             <ValidationContainer className={verifying ? undefined : isoValidity.toLowerCase()}>

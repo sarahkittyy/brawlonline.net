@@ -64,6 +64,26 @@ export function saveStoreDir(userFolder: string, buildHash: string): string {
   return path.join(userFolder, "Saves", buildHash.slice(0, 16).toLowerCase());
 }
 
+/**
+ * A build hashed again to another hash (a newer launcher's build hash) keeps its save: the store
+ * of its old hash becomes its new hash's, unless the new one has a store already. Returns whether
+ * it moved.
+ */
+export async function moveSaveStore(userFolder: string, fromHash: string, toHash: string): Promise<boolean> {
+  const from = saveStoreDir(userFolder, fromHash);
+  const to = saveStoreDir(userFolder, toHash);
+  const present = (dir: string) =>
+    stat(dir).then(
+      () => true,
+      () => false,
+    );
+  if (from === to || !(await present(from)) || (await present(to))) {
+    return false;
+  }
+  await rename(from, to);
+  return true;
+}
+
 function titleParts(titleId: string): [string, string] {
   if (!/^[0-9a-f]{16}$/i.test(titleId)) {
     throw new Error(`Not a Wii title ID: ${titleId}`);

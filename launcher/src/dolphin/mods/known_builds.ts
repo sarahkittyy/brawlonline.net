@@ -1,15 +1,18 @@
+import { BRAWL_NTSC_U_DISC } from "../game_data";
+
 /**
  * Names for common discs and mods (docs/design/brawl-mods.md §4). Only names: an unknown disc or
  * mod plays the same way, under the name the player gave it.
  *
- * Discs by the SHA-1 of their contents (`disc_info.ts`, the dump hash); mods by the SHA-256 of
- * their launcher file (their SD card is not part of a build: rooms play the host's).
+ * Discs by their part in a build (`disc_info.ts` discIdentity: a Wii disc's game data, in any
+ * format); mods by the SHA-256 of their launcher file (their SD card is not part of a build: rooms
+ * play the host's).
  */
 
 export const KNOWN_DISCS: Readonly<Record<string, string>> = {
-  "0e95949ac585f357e79fcd34b20670b5dca97ac2": "Super Smash Bros. Brawl (USA, Rev 1)",
-  "59432f150bf6b871ab378bb5b28e92005e0862f6": "Super Smash Bros. Brawl (USA, Rev 2)",
-  "9ac7242a5feebe1d0a6e2775c21f482c471b2240": "New Super Mario Bros. Wii (USA, Rev 2)",
+  [BRAWL_NTSC_U_DISC]: "Super Smash Bros. Brawl (USA)",
+  "8703334493028a1dbd8a72ce59914b2eed8d2ddd": "New Super Mario Bros. Wii (USA, Rev 2)",
+  "479693e6d3100011f5941e40afaa6143e8750c1a": "Mario Kart Wii (USA)",
 };
 
 /** The launcher's SHA-256 -> the mod's name. */

@@ -573,7 +573,7 @@ mod tests {
     #[test]
     fn a_room_compares_the_disc_and_syncs_the_card() {
         // The parts (§6.5): a joiner with another SD card joins (it gets the host's before it
-        // plays); one with another disc is told to pick the same revision.
+        // plays); one with another disc is told to get the room's.
         let mut b = ModRoomBook::new(ModRoomsConfig::default());
         let disc = "d".repeat(40);
         let room_build = Build {
@@ -594,7 +594,7 @@ mod tests {
         let out = req(&mut b, 3, 3, ModsRequest::Join { code, build: other_disc, controller: Controller::Gc, slot: None });
         let m = &msgs(&out, 3)[0];
         assert_eq!(m["type"], "mods-error");
-        assert!(m["error"].as_str().unwrap().contains("same revision"));
+        assert!(m["error"].as_str().unwrap().contains("same version of the game"));
     }
 
     #[test]

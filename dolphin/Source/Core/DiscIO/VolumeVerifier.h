@@ -134,6 +134,16 @@ public:
   void Finish();
   const Result& GetResult() const;
 
+  // Brawl Online (DolphinTool gamedata): after Finish, how many of a partition's blocks failed
+  // their hash check, those the game uses and those a scrubber may drop; nullopt for a partition
+  // whose blocks were not checked.
+  struct BlockErrors
+  {
+    size_t used = 0;
+    size_t unused = 0;
+  };
+  std::optional<BlockErrors> GetBlockErrors(const Partition& partition) const;
+
 private:
   struct GroupToVerify
   {

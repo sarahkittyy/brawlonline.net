@@ -11,6 +11,7 @@
 
 #include "DolphinTool/ConvertCommand.h"
 #include "DolphinTool/ExtractCommand.h"
+#include "DolphinTool/GameDataCommand.h"
 #include "DolphinTool/HeaderCommand.h"
 #include "DolphinTool/SDHashCommand.h"
 #include "DolphinTool/VerifyCommand.h"
@@ -23,7 +24,7 @@ static void PrintUsage()
 {
   fmt::print(std::cerr, "usage: dolphin-tool COMMAND -h\n"
                         "\n"
-                        "commands supported: [convert, verify, header, extract, sdhash]\n");
+                        "commands supported: [convert, verify, header, extract, gamedata, sdhash]\n");
 }
 
 #ifdef _WIN32
@@ -50,6 +51,8 @@ int main(int argc, char* argv[])
     return DolphinTool::HeaderCommand(args);
   else if (command_str == "extract")
     return DolphinTool::Extract(args);
+  else if (command_str == "gamedata")
+    return DolphinTool::GameDataCommand(args);
   else if (command_str == "sdhash")
     return DolphinTool::SDHashCommand(args);
   else if (command_str == "sdcompare")

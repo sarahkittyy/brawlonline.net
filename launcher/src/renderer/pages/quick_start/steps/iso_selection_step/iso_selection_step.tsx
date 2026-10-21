@@ -16,7 +16,7 @@ import { useToasts } from "@/lib/hooks/use_toasts";
 import { hasBorder } from "@/styles/has_border";
 
 import { QuickStartHeader } from "../../step_container";
-import { findNativeFile, getIsoFileKind, ISO_STEP_EXTENSIONS } from "./iso_file";
+import { DISC_IMAGE_EXTENSIONS, findNativeFile, getIsoFileKind, ISO_STEP_EXTENSIONS } from "./iso_file";
 import { IsoSelectionStepMessages as Messages } from "./iso_selection_step.messages";
 
 const getColor = (props: any, defaultColor = "#eeeeee") => {
@@ -88,7 +88,7 @@ export const IsoSelectionStep = () => {
   });
 
   const loading = validIsoPathQuery.isLoading;
-  // Hashing the image takes ~25 s the first time: show how far along it is.
+  // Reading the image takes ~25 s the first time: show how far along it is.
   const verifyFraction = useIsoVerificationFraction(tempIsoPath);
   const [, setIsoPath] = useIsoPath();
   const nativeFilesRef = React.useRef<File[] | null>(null);
@@ -97,13 +97,9 @@ export const IsoSelectionStep = () => {
     if (loading || !filePath) {
       return;
     }
-    switch (getIsoFileKind(filePath)) {
-      case "7z":
-        showError(Messages.sevenZFilesMustBeUncompressed());
-        return;
-      case "compressed":
-        showError(Messages.rvzFilesAreIncompatible(PRODUCT_NAME));
-        return;
+    if (getIsoFileKind(filePath) === "7z") {
+      showError(Messages.sevenZFilesMustBeUncompressed());
+      return;
     }
     setTempIsoPath(filePath);
   };
@@ -126,7 +122,7 @@ export const IsoSelectionStep = () => {
   const onSelect = async () => {
     const result = await window.electron.common.showOpenDialog({
       properties: ["openFile"],
-      filters: [{ name: "Brawl ISO", extensions: [...ISO_STEP_EXTENSIONS] }],
+      filters: [{ name: "Brawl disc image", extensions: [...ISO_STEP_EXTENSIONS] }],
     });
     if (result.canceled || result.filePaths.length === 0) {
       return;
@@ -138,7 +134,7 @@ export const IsoSelectionStep = () => {
 
   const { getRootProps, getInputProps, isDragActive, isDragAccept, isDragReject } = useDropzone({
     accept: {
-      "application/octet-stream": [".iso", ".wbfs", ".rvz"],
+      "application/octet-stream": DISC_IMAGE_EXTENSIONS.map((ext) => `.${ext}`),
       "application/x-7z-compressed": [".7z"],
     },
     onDrop,

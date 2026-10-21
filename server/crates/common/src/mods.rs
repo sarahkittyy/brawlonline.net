@@ -66,8 +66,8 @@ pub fn join_mismatch(room: &Build, joiner: &BuildKey) -> Option<String> {
     if room_disc != disc {
         let label = room.disc_label.as_deref().filter(|l| !l.is_empty());
         return Some(match label {
-            Some(l) => format!("Your game's disc is not the room's ({l}). Make sure you're both on the same revision."),
-            None => "Your game's disc is not the room's. Make sure you're both on the same revision.".to_string(),
+            Some(l) => format!("Your game's disc is not the room's ({l}). Make sure you both have the same version of the game."),
+            None => "Your game's disc is not the room's. Make sure you both have the same version of the game.".to_string(),
         });
     }
     let room_card = !room.sd.as_deref().unwrap_or("").is_empty();
@@ -360,10 +360,10 @@ mod tests {
         // Another card (synced before the join), even another build hash: joins.
         let ok = BuildKey { hash: "0".repeat(64), disc: Some(DISC.into()), sd: Some(other_card) };
         assert_eq!(join_mismatch(&room, &ok), None);
-        // Another disc: the revision is named.
+        // Another disc: the room's is named.
         let disc = BuildKey { hash: HASH.into(), disc: Some("e".repeat(40)), sd: Some(CARD.into()) };
         let why = join_mismatch(&room, &disc).unwrap();
-        assert!(why.contains("RSBE01 Rev 1") && why.contains("same revision"), "{why}");
+        assert!(why.contains("RSBE01 Rev 1") && why.contains("same version of the game"), "{why}");
         // No card.
         let none = BuildKey { hash: HASH.into(), disc: Some(DISC.into()), sd: Some(String::new()) };
         assert!(join_mismatch(&room, &none).unwrap().contains("SD card"));

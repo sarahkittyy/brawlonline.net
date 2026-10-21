@@ -1,11 +1,12 @@
 /**
  * Which of the player's games plays a room, part by part (docs/design/brawl-mods.md §6.5). A room
  * shows its disc's hash and its SD card's: a different disc keeps the player out (a disc cannot be
- * sent: "make sure you're both on the same revision"), a different SD card does not (Dolphin gets
- * the host's before the join, with the player's consent). A room from an older launcher has no
- * parts: then only a game with its exact build hash plays it.
+ * sent), a different SD card does not (Dolphin gets the host's before the join, with the player's
+ * consent). A room from an older launcher has no parts: then only a game with its exact build hash
+ * plays it.
  */
 
+import { BRAWL_NTSC_U_DISC } from "../game_data";
 import type { ModBuild, ModRoomBuild } from "./types";
 
 /** How one part of the player's game compares with the room's. */
@@ -82,10 +83,14 @@ export function matchRoom(room: ModRoomBuild, builds: ModBuild[]): RoomMatch {
   return { build: near, joinable: false, disc: "wrong", sd, hasParts: true };
 }
 
-/** "RSBE01 Rev 1": what a disc is, as rooms name it. */
-export function discLabel(build: Pick<ModBuild, "gameId" | "revision">): string {
+/** "SMNE01 Rev 2": what a disc is, as rooms name it. NTSC-U Brawl's Rev 1 and Rev 2 are one disc
+ * in rooms (`disc_info.ts` discIdentity): "RSBE01". */
+export function discLabel(build: Pick<ModBuild, "gameId" | "revision" | "parts">): string {
   if (!build.gameId) {
     return "";
+  }
+  if (build.parts?.disc === BRAWL_NTSC_U_DISC) {
+    return build.gameId;
   }
   return `${build.gameId} Rev ${build.revision ?? 0}`;
 }

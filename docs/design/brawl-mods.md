@@ -21,7 +21,7 @@ Why: Brawl Minus, REX, vanilla Brawl and other mods have no online play with rol
 | 1 | Where | A **"Brawl Mods" tab next to Overview** on the launcher's home page, with a short explanation. Overview stays the default and the launcher stays P+-first. This is new UI that Slippi does not have; the user asked for it (2026-10-12). |
 | 2 | Which games | **Any build of Brawl** first (vanilla Rev 1 and Rev 2, Brawl Minus, REX, P+ itself). **Any GameCube or Wii game** that Dolphin's own netplay keeps in sync, as a later step. Games that desync on Dolphin netplay are expected to desync here too; players understand that (user, 2026-10-12). |
 | 3 | Identity of a build | **A build hash** replaces the ruleset: the disc, the launcher `.dol` (if any) and whether there is an SD card (its contents are the room host's, §6.5). A table of known hashes names the common builds ("Brawl Minus 5.1.0b", "Vanilla Brawl (Rev 1)"); anything else is "Unknown build" with its short hash. Hover shows the full hash; the tab shows the player's own builds and their hashes. Only players with the same hash can join. (To change, 2026-10-15: rooms show the disc's and the SD card's hashes apart, and only a different disc keeps a player out; a different card is synced before the join, §6.5.) |
-| 4 | Rev 1 and Rev 2 | **Allowed together if testing shows it works** (**default**). The two discs differ in one instruction (the DVD ID check, `0x8001BC9C`) and the bss word it fills; whole-game rollback keeps each machine's own copy and the desync check skips that word. Not allowed together until tested. |
+| 4 | Rev 1 and Rev 2 | **Allowed together** (the user, 2026-10-21: "some guy with rex and rev1 could play with some guy with rex and rev2/wbfs/somethin else"). The two discs leave 4 bytes of RAM different, all the disc revision; a Brawl session's checksums read them as zero, and a disc is named by its game data in any image format (docs/design/disc-images.md). |
 | 5 | Session | **Whole-machine rollback from boot**, menus included, built on our Dolphin's whole-machine snapshots (dirty-granule saves, dual core with the split video state: `docs/rollback-fixes-status.md`). |
 | 6 | Players | **1 to 4**. A room's host plays at once; others plug in and out at any time (decision 8). |
 | 7 | Controllers | **GameCube controllers and Wii Remotes**, with Nunchuk, Classic Controller and MotionPlus (user, 2026-10-12). Each player's own controller config and profile, as in Dolphin's netplay. |
@@ -58,7 +58,7 @@ A build is what the player picks once in the Brawl Mods tab ("Add a build"):
 
 | Part | What | Hash |
 |---|---|---|
-| Disc | The game's disc image (Brawl: `RSBE01`) | The game ID, revision and Dolphin's disc hash (the same hash the P+ disc check uses) |
+| Disc | The game's disc image (Brawl: `RSBE01`), any format Dolphin reads | A Wii disc's game data (`DolphinTool gamedata`: the same in an ISO, an RVZ, a WBFS or a scrubbed image; NTSC-U Brawl Rev 1 and Rev 2 are one disc), else its contents' SHA-1 (docs/design/disc-images.md §4) |
 | Launcher | Optional `.dol` booted instead of the disc (Minus Launcher, P+ launchers). Riivolution is a later option | SHA-256 of the file |
 | SD card | Optional: an image (`sd.raw`) | Only whether there is one: everyone in a room plays the host's card (§6.5) |
 | Settings that change what the game computes | Dolphin's emulation settings a session pins anyway (§6.8) | not part of the hash: the session forces them |
@@ -258,7 +258,7 @@ The machine image is the first thing in this project where **one player's machin
 | 6 | mm: mod rooms and signaling; Dolphin room client; local control channel | Host and join through a local mm, two machines on the LAN (this PC and the Mac). **mm and the Dolphin room client built 2026-10-12** (§3, §5): through a local mm, a host and three joiners (one on a Wii Remote), a member leaving and a new one taking the slot; the control channel and the LAN test not yet |
 | 7 | Launcher: tab, builds and hashes, room window, public list | Staging run (`tools/staging/staging.py`) with Windows and Mac clients. **Tab, builds, hashes, the room and the public list built 2026-10-12** (§8). **Staging run passed 2026-10-13** (70d86d7b): the packaged Windows and macOS clients on fresh profiles (login, rules, Brawl ISO), each adds New Super Mario Bros. Wii in Other Games (the same hash on both, its known name; adding it again is refused), the PC hosts, the Mac types the code and joins (machine image 14 MB in 5 s), both play on Wii Remotes for 2 minutes: 7,254 frames compared, 0 mismatches. Found and fixed on the way: the tab never wrote Dolphin's user.json |
 | 8 | VI boundary for non-Brawl games | A non-Brawl game boots and stays in sync (which game: §10). **Built 2026-10-13** (§6.1): New Super Mario Bros. Wii in a room of two on Wii Remotes, 0 mismatches; cross-host and 3-4 players not yet |
-| 9 | Desync repair by resend, Rev 1 / Rev 2 interop test, Linux and Steam Deck | — |
+| 9 | Desync repair by resend, Rev 1 / Rev 2 interop test, Linux and Steam Deck | **Rev 1 / Rev 2 built 2026-10-21** (docs/design/disc-images.md §5): booted together and late joins, vanilla and REX, Rev 1 ISO / Rev 2 WBFS / scrubbed RVZ, 0 desyncs. Repair by resend, Linux and Steam Deck not yet |
 
 ## 10. Open questions (defaults in effect until answered)
 

@@ -1294,6 +1294,16 @@ void VolumeVerifier::Process()
   m_progress += byte_increment;
 }
 
+std::optional<VolumeVerifier::BlockErrors>
+VolumeVerifier::GetBlockErrors(const Partition& partition) const
+{
+  const auto used = m_block_errors.find(partition);
+  if (used == m_block_errors.end())
+    return std::nullopt;
+  const auto unused = m_unused_block_errors.find(partition);
+  return BlockErrors{used->second, unused == m_unused_block_errors.end() ? 0 : unused->second};
+}
+
 u64 VolumeVerifier::GetBytesProcessed() const
 {
   return m_progress;

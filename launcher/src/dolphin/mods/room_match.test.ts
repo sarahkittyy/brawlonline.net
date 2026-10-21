@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 
+import { BRAWL_NTSC_U_DISC } from "../game_data";
 import { discLabel, matchRoom } from "./room_match";
 import type { ModBuild } from "./types";
 
@@ -85,6 +86,18 @@ describe("matchRoom", () => {
     });
   });
 
+  it("joins a Brawl Rev 2 room with a Rev 1 game: both discs are NTSC-U Brawl", () => {
+    const rev1 = build("rex-rev1", {
+      revision: 1,
+      parts: { disc: BRAWL_NTSC_U_DISC, launcher: null, sd: true, sdCard: CARD },
+    });
+    const match = matchRoom(
+      { hash: "x".repeat(64), name: "REX", disc: BRAWL_NTSC_U_DISC, discLabel: "RSBE01", sd: CARD },
+      [rev1],
+    );
+    expect(match).toMatchObject({ build: rev1, joinable: true, disc: "same", sd: "same" });
+  });
+
   it("has nothing to offer without a game of that kind", () => {
     const zelda = build("zelda", {
       gameId: "RZDE01",
@@ -100,5 +113,11 @@ describe("discLabel", () => {
     expect(discLabel({ gameId: "RSBE01", revision: 2 })).toBe("RSBE01 Rev 2");
     expect(discLabel({ gameId: "RSBE01" })).toBe("RSBE01 Rev 0");
     expect(discLabel({ gameId: null })).toBe("");
+  });
+
+  it("names NTSC-U Brawl without its revision: Rev 1 and Rev 2 are one disc in rooms", () => {
+    const parts = { disc: BRAWL_NTSC_U_DISC, launcher: null, sd: false };
+    expect(discLabel({ gameId: "RSBE01", revision: 1, parts })).toBe("RSBE01");
+    expect(discLabel({ gameId: "RSBE01", revision: 2, parts })).toBe("RSBE01");
   });
 });

@@ -14,7 +14,7 @@ import path from "path";
 import type { AppUpdater } from "./app_updater";
 import { getAppBootstrap } from "./bootstrap";
 import type { BrowserWindowManager } from "./browser_window_manager";
-import { checkIso } from "./check_iso";
+import { checkIso, isoGameDataReader } from "./check_iso";
 import type { ConfigFlags } from "./flags/flags";
 import {
   ipc_checkForUpdate,
@@ -84,7 +84,7 @@ export default function setupMainIpc({
       return { path: isoPath, valid: IsoValidity.UNVALIDATED };
     }
 
-    return { path: isoPath, valid: await checkIso(isoPath) };
+    return { path: isoPath, valid: await checkIso(isoPath, isoGameDataReader(dolphinManager)) };
   });
 
   ipc_downloadLogs.main!.handle(async () => {

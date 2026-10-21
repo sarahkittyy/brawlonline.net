@@ -160,9 +160,21 @@ constexpr auto SD_SLOWDOWN_HOLD = std::chrono::milliseconds(800);
 // The window of round trips whose lowest is a link's delay now.
 constexpr auto SD_DELAY_WINDOW = std::chrono::milliseconds(500);
 // What a hello says this build speaks: 2 since the SD card is synced before the join and its
-// chunks are hashed with BLAKE2b (a build before says nothing: 1). Players of different
-// versions refuse each other's joins.
-constexpr int PROTOCOL_VERSION = 2;
+// chunks are hashed with BLAKE2b (a build before says nothing: 1), 3 since a Brawl session's
+// checksums leave out the disc revision (BRAWL_DISC_REVISION). Players of different versions
+// refuse each other's joins.
+constexpr int PROTOCOL_VERSION = 3;
+// The disc revision a Brawl disc leaves in RAM: the only bytes a Rev 1 and a Rev 2 disc leave
+// different (both booted to the same frame and diffed, docs/design/disc-images.md): the disc ID's
+// revision in low memory, in the DVD library's copy and in the game's, and the operand of
+// main.dol's revision check. A Brawl session's checksums read them as zero, so Rev 1 and Rev 2
+// players share a room (a joiner takes the room's with the machine image).
+const std::vector<Rollback::MemoryRegion> BRAWL_DISC_REVISION = {
+    Rollback::MemoryRegion::FromVirt(0x80000007, 1, "disc ID revision"),
+    Rollback::MemoryRegion::FromVirt(0x8001BC9F, 1, "main.dol revision check"),
+    Rollback::MemoryRegion::FromVirt(0x8049493F, 1, "DVD library disc ID revision"),
+    Rollback::MemoryRegion::FromVirt(0x804E4585, 1, "game's disc ID revision"),
+};
 // The chunks the game has read that a machine image lists for the joiner to fetch first.
 constexpr size_t MAX_SD_HOT_CHUNKS = 32768;
 constexpr size_t MAX_CONTROL_SIZE = 4096;
@@ -6194,6 +6206,7 @@ void Stop()
   DestroyGekko();
   ResetSD();
   Rollback::RollbackManager::Get().m_full_ios_in_snapshots = false;
+  Rollback::RollbackManager::Get().SetChecksumMasks({});
   Rollback::PresentStats::SetCopiesLeaveGuestRAM(false);
   Core::System::GetInstance().GetCoreTiming().SetPresentPacing(false);
   if (auto* fs = HostFS(Core::System::GetInstance()))
@@ -6761,6 +6774,8 @@ bool EnterFirstBoundary(const char* where)
   s.latched = {};
   // Brawl's hard-coded exclusions are Brawl's addresses; any other game keeps all of its RAM.
   rb.SetBrawlExclusions(s.boundary == Boundary::BrawlLoop);
+  rb.SetChecksumMasks(s.boundary == Boundary::BrawlLoop ? BRAWL_DISC_REVISION :
+                                                         std::vector<Rollback::MemoryRegion>{});
   rb.m_full_ios_in_snapshots = true;
   s.journal_marks.clear();
   if (!rb.m_frame_save_enabled.load(std::memory_order_relaxed))

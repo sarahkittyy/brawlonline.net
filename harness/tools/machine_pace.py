@@ -83,13 +83,14 @@ def run(a: argparse.Namespace) -> int:
         shutil.rmtree(out)
     out.mkdir(parents=True)
     iso = Path(a.iso) if a.iso else (paths.game_iso() or paths.fallback_iso())
-    boot = a.boot or str(iso)
+    # --iso2: the second player's disc (another revision or image format of the same game).
+    iso2 = Path(a.iso2) if a.iso2 else iso
     sd_cfg = (["Dolphin.Core.WiiSDCard=True", "Dolphin.Core.WiiSDCardEnableFolderSync=False",
                f"Dolphin.General.WiiSDCardPath={a.sd}"] if a.sd else ["Dolphin.Core.WiiSDCard=False"])
     insts: dict[str, DolphinInstance] = {}
     sims: list[NetSim] = []
 
-    def boot_one(name: str, session: dict) -> None:
+    def boot_one(name: str, session: dict, disc: Path = iso) -> None:
         if a.delay is not None:
             session["delay"] = a.delay if a.delay == "auto" else int(a.delay)
         env = dict(kv.split("=", 1) for kv in a.env)
@@ -97,11 +98,12 @@ def run(a: argparse.Namespace) -> int:
         env["PPR_MACHINE_SESSION"] = json.dumps(session)
         cfg = InstanceConfig(cpu_thread=not a.single_core, video_backend=a.video, emulation_speed=a.speed,
                              standard_controllers=(0,), other_ports="none",
-                             config_args=sd_cfg + [f"Dolphin.Core.DefaultISO={iso}",
+                             config_args=sd_cfg + [f"Dolphin.Core.DefaultISO={disc}",
                                                    "Logger.Options.WriteToFile=True", "Logger.Options.Verbosity=4",
                                                    "Logger.Logs.Brawlback=True", "Logger.Logs.CORE=True"]
                              + list(a.cfg))
-        inst = DolphinInstance(name, port=free_port(socket.SOCK_STREAM), exe=a.exe, config=cfg, boot=boot,
+        inst = DolphinInstance(name, port=free_port(socket.SOCK_STREAM), exe=a.exe, config=cfg,
+                               boot=a.boot or str(disc),
                                instances_root=out, keep=True, platform=a.platform, connect_timeout=120,
                                env=env)
         d = inst.create()
@@ -149,7 +151,7 @@ def run(a: argparse.Namespace) -> int:
                 sims += [s01, s10]
                 t1, t0 = s01.listen_addr[1], s10.listen_addr[1]
             boot_one("m0", {"slot": 0, "port": p0, "peers": [{"slot": 1, "host": "127.0.0.1", "port": t1}]})
-            boot_one("m1", {"slot": 1, "port": p1, "peers": [{"slot": 0, "host": "127.0.0.1", "port": t0}]})
+            boot_one("m1", {"slot": 1, "port": p1, "peers": [{"slot": 0, "host": "127.0.0.1", "port": t0}]}, iso2)
         names = list(insts)
         deadline = time.time() + 240
         while not all(call(n, "machine_status").get("phase") == "running" for n in names):
@@ -272,6 +274,7 @@ def main() -> int:
     r.add_argument("--sd", help="the mod's SD card image")
     r.add_argument("--save-from", help="a folder with the game's save files (title 00010000/52534245)")
     r.add_argument("--iso", help="the disc (default: PPHARNESS_ISO or <root>/game/SSBB_NTSC.iso)")
+    r.add_argument("--iso2", help="pair: the second player's disc (default: --iso)")
     r.add_argument("--exe", default=str(paths.dolphin_nogui()))
     r.add_argument("--video", default="Null")
     r.add_argument("--platform", default="headless", help="win32 for a real video backend on Windows")

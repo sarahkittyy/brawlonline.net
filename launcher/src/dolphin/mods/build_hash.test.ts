@@ -75,6 +75,28 @@ describe("build hash", () => {
     expect(seen[seen.length - 1]).toEqual([1500, 1500]);
   });
 
+  it("reports a compressed disc's bytes read as a share of its file", async () => {
+    const disc = path.join(dir, "brawl.rvz");
+    await writeFile(disc, "x".repeat(600));
+    const seen: Array<[number, number]> = [];
+    // DolphinTool reads the whole disc (1000 bytes here) from the smaller file.
+    const reading = async (_p: string, onProgress?: (done: number, total: number) => void) => {
+      onProgress?.(500, 1000);
+      onProgress?.(1000, 1000);
+      return "game-data";
+    };
+    await computeBuildParts({ discPath: disc, launcherPath: null, sdPath: null }, reading, (done, total) =>
+      seen.push([done, total]),
+    );
+    expect(seen).toEqual([
+      [0, 600],
+      [300, 600],
+      [600, 600],
+      [600, 600],
+      [600, 600],
+    ]);
+  });
+
   it("has a key that changes with the disc's size or modification time and with a card added", async () => {
     const disc = path.join(dir, "brawl.iso");
     const sd = path.join(dir, "sd.raw");
@@ -86,13 +108,13 @@ describe("build hash", () => {
       launcherPath: null,
       sdPath: null,
     });
-    expect(before).toMatch(/^v3\|10:1700000000000\|-\|-$/);
+    expect(before).toMatch(/^v4\|10:1700000000000\|-\|-$/);
     const withCard = await buildHashKey({
       discPath: disc,
       launcherPath: null,
       sdPath: sd,
     });
-    expect(withCard).toMatch(/^v3\|10:1700000000000\|-\|card$/);
+    expect(withCard).toMatch(/^v4\|10:1700000000000\|-\|card$/);
     await writeFile(sd, "the card, written to");
     expect(await buildHashKey({ discPath: disc, launcherPath: null, sdPath: sd })).toBe(withCard);
     await utimes(disc, 1_700_000_100, 1_700_000_100);

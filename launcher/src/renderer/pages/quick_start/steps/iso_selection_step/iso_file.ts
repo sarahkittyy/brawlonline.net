@@ -1,23 +1,19 @@
 /**
- * Files the quick start's ISO step takes, by extension: the disc image itself, plus the formats it
- * explains (compressed images Dolphin's netplay cannot use, and 7z archives). The native "Select"
- * dialog filters by these (by extension, not by MIME type, which differs for .iso between Windows,
- * macOS and Linux); the drop zone accepts the same extensions.
+ * Disc images the launcher takes for Brawl, by extension: every format Dolphin reads a Wii disc
+ * from (the check reads the game's data, not the file, docs/design/disc-images.md). Settings >
+ * Game's dialog filters by these too (by extension, not by MIME type, which differs for .iso
+ * between Windows, macOS and Linux).
  */
-export const ISO_STEP_EXTENSIONS = ["iso", "wbfs", "rvz", "7z"] as const;
+export const DISC_IMAGE_EXTENSIONS = ["iso", "rvz", "wbfs", "wia", "gcz", "ciso"] as const;
 
-export type IsoFileKind = "iso" | "7z" | "compressed";
+/** The quick start's ISO step also takes 7z archives, to explain them. */
+export const ISO_STEP_EXTENSIONS = [...DISC_IMAGE_EXTENSIONS, "7z"] as const;
+
+export type IsoFileKind = "iso" | "7z";
 
 /** What the ISO step does with a chosen file: verify it ("iso") or explain why it cannot be used. */
 export function getIsoFileKind(filePath: string): IsoFileKind {
-  const lower = filePath.toLowerCase();
-  if (lower.endsWith(".7z")) {
-    return "7z";
-  }
-  if (lower.endsWith(".rvz") || lower.endsWith(".wbfs")) {
-    return "compressed";
-  }
-  return "iso";
+  return filePath.toLowerCase().endsWith(".7z") ? "7z" : "iso";
 }
 
 type FileIdentity = Pick<File, "name" | "size" | "lastModified">;

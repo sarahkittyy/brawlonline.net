@@ -90,6 +90,12 @@ public:
   // Whole-machine snapshots exclude Brawl's framebuffer region (Init). Other games: nothing.
   void SetBrawlExclusions(bool brawl);
 
+  // Bytes the desync checksums read as zero, which still roll back: what two machines may hold
+  // differently and play the same. A whole-machine Brawl session masks the disc revision, the
+  // only bytes a Brawl Rev 1 and a Rev 2 disc leave different in RAM (MachineSession). Empty
+  // otherwise; Init keeps it.
+  void SetChecksumMasks(std::vector<MemoryRegion> masks) { m_checksum_masks = std::move(masks); }
+
   void AddExcludeRegion(uint32_t virt_addr, uint32_t size_bytes);
   // The game<->Dolphin mailbox (Online/GameBridge.h): never part of rollback state. Kept across
   // Init(); size 0 removes it. CPU thread only.
@@ -206,6 +212,10 @@ public:
   DeltaSaveSlot m_slots[NUM_SAVE_SLOTS];
 
   std::vector<MemoryRegion> m_exclude_regions;
+  std::vector<MemoryRegion> m_checksum_masks;
+  // A granule's bytes as the checksums read them: `src`, or its copy in `scratch` with the masked
+  // bytes zeroed.
+  const u8* ForChecksum(u32 phys, const u8* src, u8* scratch) const;
   std::optional<MemoryRegion> m_mailbox_region;
   bool m_brawl_exclusions = true;
 

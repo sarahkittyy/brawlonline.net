@@ -75,6 +75,9 @@ def main() -> int:
     ap.add_argument("--boot", help="what to boot (a mod's launcher .elf/.dol); the disc by default")
     ap.add_argument("--sd", help="the mod's SD card image")
     ap.add_argument("--iso", help="the disc (default: PPHARNESS_ISO or <root>/game/SSBB_NTSC.iso)")
+    ap.add_argument("--joiner-iso", help="the joiner's disc (default: --iso)")
+    ap.add_argument("--together", action="store_true",
+                    help="both players boot together (each its own disc), no late join")
     ap.add_argument("--exe", default=str(paths.dolphin_nogui()))
     ap.add_argument("--rtt", type=float, default=167)
     ap.add_argument("--jitter", type=float, default=4.0, help="ms each way")
@@ -102,7 +105,8 @@ def main() -> int:
         shutil.rmtree(out)
     out.mkdir(parents=True)
     iso = Path(a.iso) if a.iso else (paths.game_iso() or paths.fallback_iso())
-    boot = a.boot or str(iso)
+    # --joiner-iso: the joiner's disc (another revision or image format of the same game).
+    joiner_iso = Path(a.joiner_iso) if a.joiner_iso else iso
     sd_cfg = (["Dolphin.Core.WiiSDCard=True", "Dolphin.Core.WiiSDCardEnableFolderSync=False",
                f"Dolphin.General.WiiSDCardPath={a.sd}"] if a.sd else ["Dolphin.Core.WiiSDCard=False"])
     link = LinkProfile(latency_ms=a.rtt / 2, jitter_ms=a.jitter)
@@ -112,15 +116,16 @@ def main() -> int:
     t1, t0 = s01.listen_addr[1], s10.listen_addr[1]
     print(f"link: {link.describe()}", flush=True)
 
-    def make(name: str, session: dict) -> DolphinInstance:
+    def make(name: str, session: dict, disc: Path = iso) -> DolphinInstance:
         env = {} if a.no_diag else {"PPR_MACHINE_DIGESTS": "2" if a.bytes else "1"}
         env.update(dict(kv.split("=", 1) for kv in a.env))
         env["PPR_MACHINE_SESSION"] = json.dumps({**session, "delay": a.delay})
         cfg = InstanceConfig(video_backend=a.video, standard_controllers=(0,), other_ports="none",
-                             config_args=sd_cfg + [f"Dolphin.Core.DefaultISO={iso}",
+                             config_args=sd_cfg + [f"Dolphin.Core.DefaultISO={disc}",
                                                    "Logger.Options.WriteToFile=True", "Logger.Options.Verbosity=4",
                                                    "Logger.Logs.Brawlback=True", "Logger.Logs.CORE=True"])
-        inst = DolphinInstance(name, port=free_port(socket.SOCK_STREAM), exe=a.exe, config=cfg, boot=boot,
+        inst = DolphinInstance(name, port=free_port(socket.SOCK_STREAM), exe=a.exe, config=cfg,
+                               boot=a.boot or str(disc),
                                instances_root=out, keep=True, platform=a.platform, connect_timeout=120,
                                env=env)
         inst.create()
@@ -194,9 +199,13 @@ def main() -> int:
         B.wait_scene(host_seat.client, [B.Scene.IN_MATCH], 60 * 60, every=4, on_frame=press)
 
     rng = random.Random(a.seed)
+    # --together: both boot together, each from its own disc, instead of a late join.
     host = make("host", {"slot": 0, "port": p0,
-                         "peers": [{"slot": 1, "host": "127.0.0.1", "port": t1, "late": True}]})
+                         "peers": [{"slot": 1, "host": "127.0.0.1", "port": t1, **({} if a.together else {"late": True})}]})
     joiner = None
+    if a.together:
+        joiner = make("joiner", {"slot": 1, "port": p1, "peers": [{"slot": 0, "host": "127.0.0.1", "port": t0}]},
+                      joiner_iso)
     reports = []
     try:
         deadline = time.time() + 240
@@ -208,8 +217,9 @@ def main() -> int:
             B.boot_to_css(host.client, 0)
             B.wait_css_ready(host.client, [0])
             print(f"host at the character select, frame {call(host, 'machine_status').get('frame')}", flush=True)
-        joiner = make("joiner", {"slot": 1, "port": p1, "join": True,
-                                 "peers": [{"slot": 0, "host": "127.0.0.1", "port": t0}]})
+        if not a.together:
+            joiner = make("joiner", {"slot": 1, "port": p1, "join": True,
+                                     "peers": [{"slot": 0, "host": "127.0.0.1", "port": t0}]}, joiner_iso)
         deadline = time.time() + 180
         while call(joiner, "machine_status").get("phase") != "running":
             if time.time() > deadline or not joiner.is_running():

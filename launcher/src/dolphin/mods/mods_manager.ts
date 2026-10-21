@@ -10,13 +10,13 @@ import type { DolphinManager } from "../manager";
 import { DolphinLaunchType } from "../types";
 import { buildHashKey, combineBuildHash, computeBuildParts, sdHashKey } from "./build_hash";
 import { defaultControllerKind, readDolphinControllers } from "./controllers";
-import { discContentSha1WithProgress, isPlainDiscImage, readDiscInfo } from "./disc_info";
+import { discIdentity, readDiscInfo } from "./disc_info";
 import { findModParts } from "./folder_import";
 import { knownDiscName, knownModName } from "./known_builds";
 import type { ModsRoomArg } from "./mods_args";
 import { readModRoomStatus, writeModRoomRequest } from "./room_files";
 import { discLabel, matchRoom } from "./room_match";
-import { importSave, saveStoreDir, summarizeSave, titleDataDir } from "./save_import";
+import { importSave, moveSaveStore, saveStoreDir, summarizeSave, titleDataDir } from "./save_import";
 import type { SdHashFn } from "./sd_hash";
 import { sdCardRoot } from "./sd_hash";
 import type { SdListingStore } from "./sd_listing";
@@ -567,17 +567,22 @@ export class ModsManager {
       return updated;
     }
     const tool = await this.toolPath();
-    // DolphinTool reports nothing while it hashes a compressed disc: the bar has no share then.
-    const plain = await isPlainDiscImage(build.discPath);
+    // Until the disc's check reports (DolphinTool's SHA-1 of a compressed GameCube disc reports
+    // nothing), the bar has no share.
+    let discReports = false;
     const discSize = (await stat(build.discPath)).size;
     const progress = throttleProgress((done, total) => {
-      this.setHashProgress(id, !plain && done < discSize ? null : total > 0 ? done / total : 0);
+      this.setHashProgress(id, !discReports && done < discSize ? null : total > 0 ? done / total : 0);
     }, 200);
     const started = Date.now();
-    log.info(`Hashing ${build.name} (${plain ? "plain disc image" : "DolphinTool"}): ${build.discPath}`);
+    log.info(`Hashing ${build.name}: ${build.discPath}`);
     const parts = await computeBuildParts(
       build,
-      (disc, onDisc) => discContentSha1WithProgress(tool, disc, onDisc),
+      (disc, onDisc) =>
+        discIdentity(tool, disc, (done, of) => {
+          discReports = true;
+          onDisc?.(done, of);
+        }),
       progress,
     );
     // The SD card's root, which rooms compare (docs/design/brawl-mods.md §6.5).
@@ -601,6 +606,18 @@ export class ModsManager {
       updated = { ...latest, hash, parts, hashKey: key, sdHashKey: sdKey };
       if (updated.autoName) {
         updated.name = autoName(updated);
+      }
+      // Hashed again by a newer launcher (its disc part changed): its save follows its hash.
+      if (latest.hash && latest.hash !== hash) {
+        const moved = await moveSaveStore(this.dolphin.netplayUserFolder(), latest.hash, hash).catch((err) => {
+          log.warn(`moving the save of ${latest.name} to its new hash: ${err}`);
+          return false;
+        });
+        if (moved) {
+          log.info(
+            `The save of ${latest.name} moved with its hash ${latest.hash.slice(0, 16)} -> ${hash.slice(0, 16)}`,
+          );
+        }
       }
     }
     await this.saveBuilds(this.builds().map((b) => (b.id === id ? updated : b)));

@@ -1101,11 +1101,31 @@ bool IsResimulating()
   return Machine::IsResimulationPass();
 }
 
+const u8* RollbackManager::ForChecksum(u32 phys, const u8* src, u8* scratch) const
+{
+  const u8* out = src;
+  for (const MemoryRegion& m : m_checksum_masks)
+  {
+    if (m.phys_start >= phys + ROLLBACK_PAGE_SIZE || m.phys_end <= phys)
+      continue;
+    if (out == src)
+    {
+      std::memcpy(scratch, src, ROLLBACK_PAGE_SIZE);
+      out = scratch;
+    }
+    const u32 from = std::max(m.phys_start, phys) - phys;
+    const u32 to = std::min<u32>(m.phys_end, phys + ROLLBACK_PAGE_SIZE) - phys;
+    std::memset(scratch + from, 0, to - from);
+  }
+  return out;
+}
+
 void RollbackManager::UpdateShadowAfterSave(int slot)
 {
   const DeltaSaveSlot& saved = m_slots[slot];
   const u8* gpu = GPUWrittenBitmap::Get().entries;
   u32 crc = Common::StartCRC32();
+  u8 scratch[ROLLBACK_PAGE_SIZE];
   m_parts.changed.clear();
   for (const auto& [delta, first_page, shadow] :
        {std::tuple{&saved.m_mem1_delta, 0u, m_shadow_mem1.get()},
@@ -1123,8 +1143,9 @@ void RollbackManager::UpdateShadowAfterSave(int slot)
       std::memcpy(before, now, ROLLBACK_PAGE_SIZE);
       const u32 page = first_page + index;
       const u32 phys = page << ROLLBACK_PAGE_SHIFT;
+      const u8* counted = ForChecksum(phys, now, scratch);
       if (m_collect_parts)
-        m_parts.changed.push_back({phys, Common::ComputeCRC32(now, ROLLBACK_PAGE_SIZE), gpu[page] ? 1u : 0u});
+        m_parts.changed.push_back({phys, Common::ComputeCRC32(counted, ROLLBACK_PAGE_SIZE), gpu[page] ? 1u : 0u});
       // Rendered output (GPU copies to RAM) and the regions snapshots exclude are not game state.
       if (gpu[page])
         continue;
@@ -1138,7 +1159,7 @@ void RollbackManager::UpdateShadowAfterSave(int slot)
         continue;
       }
       crc = Common::UpdateCRC32(crc, reinterpret_cast<const u8*>(&page), sizeof(page));
-      crc = Common::UpdateCRC32(crc, now, ROLLBACK_PAGE_SIZE);
+      crc = Common::UpdateCRC32(crc, counted, ROLLBACK_PAGE_SIZE);
     }
   }
   m_last_change_crc = crc ? crc : 1;
@@ -1153,6 +1174,7 @@ u32 RollbackManager::LastSaveChecksum() const
   const DeltaSaveSlot& saved = m_slots[Wrap(m_ring_next - 1, NUM_SAVE_SLOTS)];
   const u8* gpu = GPUWrittenBitmap::Get().entries;
   u32 crc = Common::StartCRC32();
+  u8 scratch[ROLLBACK_PAGE_SIZE];
   for (const auto& [delta, first_page] :
        {std::pair{&saved.m_mem1_delta, 0u}, std::pair{&saved.m_mem2_delta, MEM2_FIRST_PAGE}})
   {
@@ -1175,8 +1197,11 @@ u32 RollbackManager::LastSaveChecksum() const
       if (excluded)
         continue;
       crc = Common::UpdateCRC32(crc, reinterpret_cast<const u8*>(&page), sizeof(page));
-      crc = Common::UpdateCRC32(crc, delta->page_data.data() + static_cast<size_t>(i) * ROLLBACK_PAGE_SIZE,
-                                ROLLBACK_PAGE_SIZE);
+      crc = Common::UpdateCRC32(
+          crc,
+          ForChecksum(phys, delta->page_data.data() + static_cast<size_t>(i) * ROLLBACK_PAGE_SIZE,
+                      scratch),
+          ROLLBACK_PAGE_SIZE);
     }
   }
   // GekkoNet takes 0 as "no checksum"; never report a real one as 0.
@@ -1196,6 +1221,7 @@ u32 RollbackManager::SaveChecksumWithSlice(s64 frame) const
   const u32 last = std::min(total, first + per);
   const u8* gpu = GPUWrittenBitmap::Get().entries;
   u32 slice_crc = Common::StartCRC32();
+  u8 scratch[ROLLBACK_PAGE_SIZE];
   if (m_collect_parts)
   {
     m_parts.slice_first = first;
@@ -1217,8 +1243,11 @@ u32 RollbackManager::SaveChecksumWithSlice(s64 frame) const
       excluded |= phys < r.phys_end && phys + ROLLBACK_PAGE_SIZE > r.phys_start;
     if (excluded)
       continue;
-    const u8* src = mem2 ? m_mem2_ptr + static_cast<size_t>(g - mem1_pages) * ROLLBACK_PAGE_SIZE :
-                           m_mem1_ptr + static_cast<size_t>(g) * ROLLBACK_PAGE_SIZE;
+    const u8* src = ForChecksum(
+        phys,
+        mem2 ? m_mem2_ptr + static_cast<size_t>(g - mem1_pages) * ROLLBACK_PAGE_SIZE :
+               m_mem1_ptr + static_cast<size_t>(g) * ROLLBACK_PAGE_SIZE,
+        scratch);
     crc = Common::UpdateCRC32(crc, src, ROLLBACK_PAGE_SIZE);
     if (m_collect_parts)
       slice_crc = Common::UpdateCRC32(slice_crc, src, ROLLBACK_PAGE_SIZE);
@@ -1239,6 +1268,7 @@ u32 RollbackManager::FullChecksum() const
   const u32 mem2_pages = static_cast<u32>(m_mem2_size / ROLLBACK_PAGE_SIZE);
   const u8* gpu = GPUWrittenBitmap::Get().entries;
   u32 crc = Common::StartCRC32();
+  u8 scratch[ROLLBACK_PAGE_SIZE];
   for (u32 g = 0; g < mem1_pages + mem2_pages; ++g)
   {
     const bool mem2 = g >= mem1_pages;
@@ -1251,8 +1281,11 @@ u32 RollbackManager::FullChecksum() const
       excluded |= phys < r.phys_end && phys + ROLLBACK_PAGE_SIZE > r.phys_start;
     if (excluded)
       continue;
-    const u8* src = mem2 ? m_mem2_ptr + static_cast<size_t>(g - mem1_pages) * ROLLBACK_PAGE_SIZE :
-                           m_mem1_ptr + static_cast<size_t>(g) * ROLLBACK_PAGE_SIZE;
+    const u8* src = ForChecksum(
+        phys,
+        mem2 ? m_mem2_ptr + static_cast<size_t>(g - mem1_pages) * ROLLBACK_PAGE_SIZE :
+               m_mem1_ptr + static_cast<size_t>(g) * ROLLBACK_PAGE_SIZE,
+        scratch);
     crc = Common::UpdateCRC32(crc, src, ROLLBACK_PAGE_SIZE);
   }
   return crc ? crc : 1;
@@ -1265,6 +1298,7 @@ std::vector<std::pair<u32, u32>> RollbackManager::LastSaveDigest() const
     return out;
   const DeltaSaveSlot& saved = m_slots[Wrap(m_ring_next - 1, NUM_SAVE_SLOTS)];
   const u8* gpu = GPUWrittenBitmap::Get().entries;
+  u8 scratch[ROLLBACK_PAGE_SIZE];
   for (const auto& [delta, first_page] :
        {std::pair{&saved.m_mem1_delta, 0u}, std::pair{&saved.m_mem2_delta, MEM2_FIRST_PAGE}})
   {
@@ -1279,9 +1313,12 @@ std::vector<std::pair<u32, u32>> RollbackManager::LastSaveDigest() const
         excluded |= phys < r.phys_end && phys + ROLLBACK_PAGE_SIZE > r.phys_start;
       if (excluded)
         continue;
-      out.emplace_back(phys, Common::ComputeCRC32(delta->page_data.data() +
-                                                      static_cast<size_t>(i) * ROLLBACK_PAGE_SIZE,
-                                                  ROLLBACK_PAGE_SIZE));
+      out.emplace_back(
+          phys, Common::ComputeCRC32(
+                    ForChecksum(phys,
+                                delta->page_data.data() + static_cast<size_t>(i) * ROLLBACK_PAGE_SIZE,
+                                scratch),
+                    ROLLBACK_PAGE_SIZE));
     }
   }
   return out;

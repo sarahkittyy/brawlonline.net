@@ -19,6 +19,8 @@ import { hashFileWithProgress } from "utils/copy_file";
 
 import type { ExecFn } from "../dolphin_tool";
 import { execTool } from "../dolphin_tool";
+import type { GameData } from "../game_data";
+import { BRAWL_NTSC_U_DISC, BRAWL_NTSC_U_GAME_DATA, readGameData } from "../game_data";
 import { titleIdHex } from "./save_import";
 import type { DiscPlatform } from "./types";
 
@@ -111,6 +113,28 @@ export async function discContentSha1(toolPath: string, discPath: string, exec: 
     throw new Error(`Could not check the disc: ${out.trim().slice(0, 200)}`);
   }
   return hash;
+}
+
+/**
+ * A build's disc part, as rooms compare discs (docs/design/disc-images.md): what the disc gives the
+ * game, whatever file holds it. A Wii disc is its game data, so an ISO, an RVZ, a WBFS, a scrubbed
+ * image and an image converted back to an ISO of one disc are one disc, and NTSC-U Brawl's Rev 1
+ * and Rev 2 are one too (BRAWL_NTSC_U_DISC). A GameCube disc (no hashes to check) or a Wii disc
+ * whose game data does not check out (damaged, modified) is its contents' SHA-1, as before.
+ * `onProgress` gets the disc's bytes read; the SHA-1 of a compressed GameCube image reports none.
+ */
+export async function discIdentity(
+  toolPath: string,
+  discPath: string,
+  onProgress?: ByteProgress,
+  read: (toolPath: string, discPath: string, onProgress?: ByteProgress) => Promise<GameData> = readGameData,
+  contentSha1: typeof discContentSha1WithProgress = discContentSha1WithProgress,
+): Promise<string> {
+  const data = await read(toolPath, discPath, onProgress);
+  if (data.gameData) {
+    return BRAWL_NTSC_U_GAME_DATA.has(data.gameData) ? BRAWL_NTSC_U_DISC : data.gameData;
+  }
+  return contentSha1(toolPath, discPath, onProgress);
 }
 
 /** A Brawl disc (any region or revision): mods for Brawl boot it through their launcher. */

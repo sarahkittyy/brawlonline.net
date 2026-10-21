@@ -9,6 +9,7 @@ import {
   findNandSave,
   importSave,
   KEEP_BACKUPS,
+  moveSaveStore,
   readDataBin,
   saveStoreDir,
   titleDataDir,
@@ -108,6 +109,21 @@ describe("save import", () => {
     expect(titleIdHex(281476374285893)).toBe(NSMBW);
     expect(titleGameId(NSMBW)).toBe("SMNE");
     expect(titleGameId("0001000100000002")).toBe("0001000100000002");
+  });
+
+  it("moves a build's save to its new hash, unless that one has a save already", async () => {
+    const NEW = "f".repeat(64);
+    await mkdir(storeData(), { recursive: true });
+    await writeFile(path.join(storeData(), "save.bin"), "progress");
+    expect(await moveSaveStore(user, HASH, NEW)).toBe(true);
+    expect(await readFile(path.join(titleDataDir(saveStoreDir(user, NEW), NSMBW), "save.bin"), "utf8")).toBe(
+      "progress",
+    );
+    // Nothing left to move; and a store the new hash has is never overwritten.
+    expect(await moveSaveStore(user, HASH, NEW)).toBe(false);
+    await mkdir(storeData(), { recursive: true });
+    expect(await moveSaveStore(user, HASH, NEW)).toBe(false);
+    expect(await moveSaveStore(user, NEW, NEW)).toBe(false);
   });
 
   it("escapes NAND names as Dolphin's host file system does", () => {

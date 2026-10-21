@@ -19,11 +19,11 @@ import { hashFileWithProgress } from "utils/copy_file";
 
 import type { ModBuild, ModBuildParts } from "./types";
 
-export const BUILD_HASH_PREFIX = "brawl-mods-build-v3\n";
+export const BUILD_HASH_PREFIX = "brawl-mods-build-v4\n";
 
 type PathsOf = Pick<ModBuild, "discPath" | "launcherPath" | "sdPath">;
 
-/** The SHA-1 of a disc's contents (`disc_info.ts`), reporting the disc's bytes done if it can. */
+/** The disc's part (`disc_info.ts` discIdentity), reporting the disc's bytes done if it can. */
 export type DiscDigest = (discPath: string, onProgress?: ByteProgress) => Promise<string>;
 
 /** "<size>:<mtimeMs>" of the disc and the launcher ("-" for none), and whether there is an SD card:
@@ -39,7 +39,8 @@ export async function buildHashKey(build: PathsOf): Promise<string> {
     keys.push(`${s.size}:${Math.floor(s.mtimeMs)}`);
   }
   keys.push(build.sdPath ? "card" : "-");
-  return `v3|${keys.join("|")}`;
+  // v4: the disc is its game data (disc_info.ts discIdentity), not its contents' SHA-1.
+  return `v4|${keys.join("|")}`;
 }
 
 /** "<size>:<mtimeMs>" of the SD card ("-" for none): when it changes, its root is taken again
@@ -73,7 +74,10 @@ export async function computeBuildParts(
   const launcherSize = build.launcherPath ? (await stat(build.launcherPath)).size : 0;
   const total = discSize + launcherSize;
   onProgress?.(0, total);
-  const disc = await discDigest(build.discPath, (done) => onProgress?.(Math.min(done, discSize), total));
+  // The disc's bytes read, as a share of the file (a compressed image is smaller than the disc).
+  const disc = await discDigest(build.discPath, (done, of) =>
+    onProgress?.(Math.min(discSize, of > 0 ? Math.round((done / of) * discSize) : done), total),
+  );
   onProgress?.(discSize, total);
   const launcher = build.launcherPath
     ? await hashFileWithProgress(build.launcherPath, "sha256", (done) => onProgress?.(discSize + done, total))

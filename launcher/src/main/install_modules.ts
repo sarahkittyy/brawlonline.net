@@ -11,7 +11,7 @@ import setupSpectateIpc from "@spectate/setup";
 
 import { AppUpdater } from "./app_updater";
 import { BrowserWindowManager } from "./browser_window_manager";
-import { checkIso } from "./check_iso";
+import { checkIso, isoGameDataReader } from "./check_iso";
 import type { ConfigFlags } from "./flags/flags";
 import setupMainIpc from "./setup";
 
@@ -27,7 +27,8 @@ export function installModules(flags: ConfigFlags) {
   setupReplaysIpc({ settingsManager });
   setupSettingsIpc({ settingsManager, dolphinManager });
   setupModsIpc({ settingsManager, dolphinManager, accountsManager });
-  setupGameAssetsIpc({ settingsManager, dolphinManager, checkIso });
+  const isoGameData = isoGameDataReader(dolphinManager);
+  setupGameAssetsIpc({ settingsManager, dolphinManager, checkIso: (isoPath) => checkIso(isoPath, isoGameData) });
   const browserWindowManager = new BrowserWindowManager();
   setupMainIpc({ dolphinManager, settingsManager, flags, browserWindowManager, appUpdater, accountsManager });
   return { dolphinManager, settingsManager, browserWindowManager, appUpdater };

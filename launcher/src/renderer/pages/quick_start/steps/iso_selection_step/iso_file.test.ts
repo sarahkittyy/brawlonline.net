@@ -1,27 +1,31 @@
 import { describe, expect, it } from "vitest";
 
-import { findNativeFile, getIsoFileKind, ISO_STEP_EXTENSIONS } from "./iso_file";
+import { DISC_IMAGE_EXTENSIONS, findNativeFile, getIsoFileKind, ISO_STEP_EXTENSIONS } from "./iso_file";
 
 describe("getIsoFileKind", () => {
-  it("verifies disc images, whatever the case of the extension", () => {
+  it("verifies disc images in any format Dolphin reads, whatever the case of the extension", () => {
     expect(getIsoFileKind("D:\\games\\SSBB_NTSC.iso")).toBe("iso");
     expect(getIsoFileKind("/Users/me/Brawl.ISO")).toBe("iso");
     expect(getIsoFileKind("/home/me/Super Smash Bros. Brawl (USA) (Rev 2).iso")).toBe("iso");
+    expect(getIsoFileKind("/Users/me/Brawl.rvz")).toBe("iso");
+    expect(getIsoFileKind("C:\\Brawl.WBFS")).toBe("iso");
   });
 
-  it("explains archives and compressed images", () => {
+  it("explains archives", () => {
     expect(getIsoFileKind("C:\\Brawl.7z")).toBe("7z");
     expect(getIsoFileKind("/Users/me/Brawl.7Z")).toBe("7z");
-    expect(getIsoFileKind("/Users/me/Brawl.rvz")).toBe("compressed");
-    expect(getIsoFileKind("C:\\Brawl.WBFS")).toBe("compressed");
   });
 
-  it("lets Select pick the ISO and every file it has a message for", () => {
+  it("lets Select pick every disc image and the archives it explains", () => {
     // Electron's dialog filters take extensions without the dot.
+    expect(DISC_IMAGE_EXTENSIONS).toEqual(["iso", "rvz", "wbfs", "wia", "gcz", "ciso"]);
     expect(ISO_STEP_EXTENSIONS.map((ext) => getIsoFileKind(`Brawl.${ext}`))).toEqual([
       "iso",
-      "compressed",
-      "compressed",
+      "iso",
+      "iso",
+      "iso",
+      "iso",
+      "iso",
       "7z",
     ]);
   });
