@@ -19,7 +19,7 @@ const log = electronLog.scope("highlights");
 
 /**
  * Whose L+R+Z presses make clips: only the recording player's (this machine's), so an opponent
- * can't put clips in someone else's replays. (The user may decide every player's.)
+ * can't put clips in someone else's replays (the user's decision, 2026-10-20).
  */
 export const CLIP_PLAYERS: AnalyzeOptions["clipPlayers"] = "local";
 
