@@ -75,7 +75,7 @@ var StartMenuShortcutCheckbox
     ${Else}
         ${NSD_Check} $1 ; Select skip by default
     ${EndIf}
-    ${NSD_CreateLabel} 0 0 100% 30u "Would you like to also install GameCube adapter drivers? This would allow you to use GameCube controllers with a compatible adapter (in Switch/Wii U mode) on your PC. Skip this if you already have GameCube adapter drivers installed."
+    ${NSD_CreateLabel} 0 0 100% 45u "Would you like to also install GameCube adapter drivers? This would allow you to use GameCube controllers with a compatible adapter (in Switch/Wii U mode) on your PC. If the adapter already has its driver (for example from Slippi), it is left as it is, overclock included."
     pop $3
     ${NSD_CreateCheckbox} 0 95u 100% 10u "Create a desktop shortcut"
     Pop $DesktopShortcutCheckbox
@@ -160,12 +160,49 @@ var StartMenuShortcutCheckbox
   ClearErrors
 !macroend
 
+; Sets $R0 to 1 when a GameCube adapter (057E:0337) this PC has seen already runs on WinUSB, else 0.
+; Windows keeps the Enum key of an adapter that is unplugged now.
+!macro gcAdapterHasWinUSB
+  Push $R1
+  Push $R2
+  Push $R3
+  StrCpy $R0 0
+  StrCpy $R1 0
+  ${Do}
+    EnumRegKey $R2 HKLM "SYSTEM\CurrentControlSet\Enum\USB\VID_057E&PID_0337" $R1
+    ${If} $R2 == ""
+      ${Break}
+    ${EndIf}
+    ReadRegStr $R3 HKLM "SYSTEM\CurrentControlSet\Enum\USB\VID_057E&PID_0337\$R2" "Service"
+    ${If} $R3 == "WinUSB"
+      StrCpy $R0 1
+      ${Break}
+    ${EndIf}
+    IntOp $R1 $R1 + 1
+  ${Loop}
+  ClearErrors
+  Pop $R3
+  Pop $R2
+  Pop $R1
+!macroend
+
 !macro customInstall
   ; Check if we should also install the GC drivers
   ${If} $InstallType == INSTALL
-    ; Automatically run gamecube adapter driver installer
-    File /oname=$PLUGINSDIR\${GC_INSTALLER} "${BUILD_RESOURCES_DIR}\${GC_INSTALLER}"
-    ExecShellWait "" "$PLUGINSDIR\${GC_INSTALLER}" SW_HIDE
+    ; gc-driver-install.exe (libwdi, Zadig's engine) reinstalls WinUSB on the adapter, and a driver
+    ; install drops the device's filter drivers: that takes away HIDUSBF, the 1000 Hz adapter
+    ; overclock most players with a Slippi setup have ("Rolling back everything" in the overclock
+    ; guide is exactly this). An adapter that already runs on WinUSB needs nothing, so it is left alone.
+    Push $R0
+    !insertmacro gcAdapterHasWinUSB
+    ${If} $R0 == 1
+      DetailPrint "The GameCube adapter already uses WinUSB, so its driver is left as it is."
+    ${Else}
+      ; Automatically run gamecube adapter driver installer
+      File /oname=$PLUGINSDIR\${GC_INSTALLER} "${BUILD_RESOURCES_DIR}\${GC_INSTALLER}"
+      ExecShellWait "" "$PLUGINSDIR\${GC_INSTALLER}" SW_HIDE
+    ${EndIf}
+    Pop $R0
   ${EndIf}
 
   ${If} ${isUpdated}
