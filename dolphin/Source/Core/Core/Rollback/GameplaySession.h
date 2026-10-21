@@ -423,8 +423,10 @@ void SetPlaybackBanner(std::string text);
 // behind; while the match is still loading, it runs once frames do), then play, paused at `end`
 // (PlaybackStatus' `clip_done`; a clip past the replay's last frame holds there, `at_end`). While
 // the fast-forward runs the game is muted and every CLIP_SHOW_EVERY-th frame is presented, so the
-// screen visibly moves and the progress line shows. false: no replay is armed.
-bool SetPlaybackClip(s64 start, s64 end);
+// screen visibly moves and the progress line shows. `record`: the clip's frames, from its first
+// to the pause, are a segment of the video being rendered (ClipRecorder.h). false: no replay is
+// armed.
+bool SetPlaybackClip(s64 start, s64 end, bool record = false);
 // Ends a playback (its match ends at the next loop top, and the game then leaves it).
 void StopPlayback();
 // A stopped playback's game is still in its match: the next replay arms once this is false

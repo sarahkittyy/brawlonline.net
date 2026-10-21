@@ -16,6 +16,8 @@
 #include "Common/Swap.h"
 #include "Core/Config/MainSettings.h"
 #include "Core/Core.h"
+#include "Core/CoreTiming.h"
+#include "Core/Rollback/ClipRecorder.h"
 #include "Core/System.h"
 
 static u32 DPL2QualityToFrameBlockSize(AudioCommon::DPL2Quality quality)
@@ -225,6 +227,13 @@ void Mixer::PushSamples(const s16* samples, std::size_t num_samples)
       m_dma_mixer.PushSample(Common::swap16(ptr[1]), Common::swap16(ptr[0]));
       ptr += 2;
     }
+  }
+
+  // A replay's clip being rendered (Rollback/ClipRecorder.h): the game's audio, in emulated time.
+  if (Gprb::Clip::WantsFrames())
+  {
+    Gprb::Clip::AddAudioSamples(samples, num_samples, m_dma_mixer.GetInputSampleRateDivisor(),
+                                Core::System::GetInstance().GetCoreTiming().GetTicks());
   }
 
   if (m_log_dsp_audio)

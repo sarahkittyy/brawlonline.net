@@ -55,6 +55,7 @@
 #include "Core/Online/GameSetup.h"
 #include "Core/PowerPC/MMU.h"
 #include "Core/PowerPC/PowerPC.h"
+#include "Core/Rollback/ClipRecorder.h"
 #include "Core/Rollback/FrameProfile.h"
 #include "Core/Rollback/GameplayRollback.h"
 #include "Core/Rollback/PeerData.h"
@@ -729,11 +730,14 @@ struct State
     bool hold_at_end = false;
     bool at_end = false;
     // A highlight's frames (SetPlaybackClip): paused once frame clip_end has run (-1: none);
-    // clip_ff while the fast-forward to its start runs.
+    // clip_ff while the fast-forward to its start runs. clip_record: rendered to video
+    // (ClipRecorder.h), its segment open while clip_recording.
     s64 clip_start = -1;
     s64 clip_end = -1;
     bool clip_done = false;
     bool clip_ff = false;
+    bool clip_record = false;
+    bool clip_recording = false;
     // For the overlay: who played (INFO), the mode and game.
     std::array<std::string, MAX_LOBBY_PLAYERS> names{};
     std::array<u8, MAX_LOBBY_PLAYERS> chars{};
@@ -5596,6 +5600,16 @@ enum class PlaybackStep
   End,   // the last frame has run
 };
 
+// A clip rendered to video (SetPlaybackClip's `record`): its segment ends here, in emulated time
+// (the frames presented up to now are its last).
+void EndClipSegment(Core::System& system)
+{
+  if (!s.pb.clip_recording)
+    return;
+  s.pb.clip_recording = false;
+  Gprb::Clip::MarkSegmentEnd(system.GetCoreTiming().GetTicks());
+}
+
 PlaybackStep PlaybackLoopTopControls(Core::System& system)
 {
   auto& pb = s.pb;
@@ -5628,9 +5642,11 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
       pb.clip_done = true;
       pb.paused = true;
       pb.step = 0;
+      EndClipSegment(system);
     }
     if (f > last && !ff && !waiting)
     {
+      EndClipSegment(system);
       if (pb.live && pb.cut && pb.file->endg.empty() && !pb.at_end)
         OSD::AddMessage("The rest of this game wasn't streamed.", OSD::Duration::NORMAL, OSD::Color::YELLOW);
       // The last frame has run: the match ends as it did for its player, unless this is the last
@@ -5679,6 +5695,12 @@ PlaybackStep PlaybackLoopTopControls(Core::System& system)
   }
   const s64 f = first + static_cast<s64>(pb.next);
   const bool ff = f < pb.ff_until;
+  // A clip rendered to video: its segment starts with its first frame, in emulated time.
+  if (pb.clip_record && !pb.clip_recording && pb.clip_end >= 0 && !ff && f >= pb.clip_start)
+  {
+    Gprb::Clip::BeginSegment(system.GetCoreTiming().GetTicks());
+    pb.clip_recording = true;
+  }
   // Keyframes: the state before frame f.
   if ((f - first) % KEYFRAME_EVERY == 0 ||
       (ff && pb.ff_until - f <= KEYFRAME_EVERY && (f - first) % DENSE_EVERY == 0))
@@ -6678,7 +6700,7 @@ void SetPlaybackBanner(std::string text)
   s.pb.banner = std::move(text);
 }
 
-bool SetPlaybackClip(s64 start, s64 end)
+bool SetPlaybackClip(s64 start, s64 end, bool record)
 {
   std::lock_guard<std::recursive_timed_mutex> lk(s.mutex);
   auto& pb = s.pb;
@@ -6690,11 +6712,13 @@ bool SetPlaybackClip(s64 start, s64 end)
   pb.clip_end = std::max(end, start);
   pb.clip_done = false;
   pb.clip_ff = true;
+  pb.clip_record = record;
+  pb.clip_recording = false;
   pb.paused = false;
   pb.step = 0;
   pb.seek_to = start;
   ++pb.controls;
-  INFO_LOG_FMT(BRAWLBACK, "replay: clip {}-{}", start, pb.clip_end);
+  INFO_LOG_FMT(BRAWLBACK, "replay: clip {}-{}{}", start, pb.clip_end, record ? " (rendered)" : "");
   s_pb_wake.notify_all();
   return true;
 }

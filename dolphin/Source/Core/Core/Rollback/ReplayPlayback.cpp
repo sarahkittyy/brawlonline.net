@@ -21,6 +21,7 @@
 #include "Common/Thread.h"
 #include "Core/ConfigManager.h"
 #include "Core/Online/GameBridge.h"
+#include "Core/Rollback/ClipRecorder.h"
 #include "Core/Rollback/GameplaySession.h"
 #include "Core/Rollback/PeerData.h"
 #include "Core/Rollback/ReplayFile.h"
@@ -55,6 +56,9 @@ struct Request
   // next one; the same replay as the one before goes on in the running match.
   bool highlights = false;
   std::vector<std::pair<s64, s64>> clips;
+  // Rendering (`render`): highlights whose clips are written, one after another, to `output`.
+  bool render = false;
+  std::string output;
 };
 
 // A spectated game's end: how long the last frame shows before Dolphin closes.
@@ -103,6 +107,16 @@ constexpr auto WAIT_EXPLAINED_AFTER = std::chrono::seconds(15);
 // started from (-1: not seen yet), for the progress.
 bool s_clip_applied = false;
 s64 s_seek_from = -1;
+// Rendering: the output is open; the clip that ended, its frames still coming (the frame dumper
+// hands them over a frame late; while paused the last one is shown again) since when, and how many
+// had come; clips written.
+bool s_render_open = false;
+bool s_render_draining = false;
+std::chrono::steady_clock::time_point s_drain_since;
+u64 s_drain_frames = 0;
+size_t s_rendered = 0;
+// A clip's frames have all come once none has for this long.
+constexpr auto DRAIN_QUIET = std::chrono::milliseconds(500);
 
 // The game is running with our plugin (GameBridge found its block). The launcher's playback
 // Dolphin starts the comm file follower before it boots, and boots P+'s launcher DOL, whose game
@@ -160,7 +174,14 @@ std::optional<Request> ReadComm(const std::string& path)
     r.close_on_end = flag("closeOnEnd");
     r.banner = str("banner").substr(0, 120);
   }
-  r.highlights = str("mode") == "highlights";
+  r.render = str("mode") == "render";
+  r.highlights = str("mode") == "highlights" || r.render;
+  if (r.render)
+  {
+    r.output = str("output");
+    if (r.output.size() > 4096)
+      r.output.clear();
+  }
   if (r.highlights)
   {
     const auto q = o.find("queue");
@@ -361,6 +382,11 @@ void ArmCurrent()
   }
   if (!error.empty())
   {
+    if (s_render_open)
+    {
+      Clip::Close(true);
+      s_render_open = false;
+    }
     s_state = "error";
     s_error = error;
     ERROR_LOG_FMT(BRAWLBACK, "replay: cannot play {}: {}", path, error);
@@ -394,6 +420,13 @@ picojson::object StatusLocked()
     o["clipStart"] = picojson::value(static_cast<double>(s_request.clips[s_index].first));
     o["clipEnd"] = picojson::value(static_cast<double>(s_request.clips[s_index].second));
     o["seekFrom"] = picojson::value(static_cast<double>(s_seek_from));
+  }
+  if (s_request.render)
+  {
+    o["render"] = picojson::value(true);
+    o["output"] = picojson::value(s_request.output);
+    o["rendered"] = picojson::value(static_cast<double>(s_rendered));
+    o["framesWritten"] = picojson::value(static_cast<double>(Clip::FramesWritten()));
   }
   if (s_close_at)
   {
@@ -490,6 +523,52 @@ void MirrorAtEnd(const picojson::object& st)
       fmt::format("Closing in {} s - press any replay key to stay", std::max<long long>(left, 1)));
 }
 
+void NextHighlight();
+
+// Rendering (under s_mutex): the output file is written out (or deleted, `error`), and the state
+// says how it went.
+void RenderFinish(const std::string& error)
+{
+  if (!s_render_open)
+    return;
+  s_render_open = false;
+  s_render_draining = false;
+  const auto close_error = Clip::Close(!error.empty());
+  if (!error.empty() || close_error)
+  {
+    s_state = "error";
+    s_error = !error.empty() ? error : *close_error;
+    ERROR_LOG_FMT(BRAWLBACK, "replay: render to {} failed: {}", s_request.output, s_error);
+    return;
+  }
+  s_state = "ended";
+  NOTICE_LOG_FMT(BRAWLBACK, "replay: rendered {} clips to {}", s_rendered, s_request.output);
+}
+
+// Rendering (under s_mutex): a clip that ended, once its frames have all come: its segment ends
+// and the next clip plays.
+void RenderDrain()
+{
+  const u64 frames = Clip::SegmentFrames();
+  const auto now = std::chrono::steady_clock::now();
+  if (frames != s_drain_frames)
+  {
+    s_drain_frames = frames;
+    s_drain_since = now;
+  }
+  if (const std::string e = Clip::LastError(); !e.empty())
+  {
+    RenderFinish(e);
+    return;
+  }
+  if (now - s_drain_since < DRAIN_QUIET)
+    return;
+  s_render_draining = false;
+  Clip::EndSegment();
+  ++s_rendered;
+  NextHighlight();
+}
+
 // Highlights (under s_mutex): the line on screen while the next one loads or is fast-forwarded to.
 void ShowHighlightProgress(const std::string& what)
 {
@@ -512,9 +591,14 @@ void StepHighlights(const picojson::object& st)
     return it != st.end() && it->second.is<double>() ? static_cast<s64>(it->second.get<double>()) : -1;
   };
   const auto [start, end] = s_request.clips[s_index];
+  if (s_render_draining)
+  {
+    RenderDrain();
+    return;
+  }
   if (!s_clip_applied)
   {
-    s_clip_applied = Session::SetPlaybackClip(start, end);
+    s_clip_applied = Session::SetPlaybackClip(start, end, s_request.render);
     s_seek_from = -1;
     if (!s_clip_applied)
     {
@@ -529,6 +613,8 @@ void StepHighlights(const picojson::object& st)
   {
     // Played on past its held end (the replay controls): the match is over.
     s_state = "ended";
+    if (s_request.render)
+      RenderFinish("the replay ended before its clip");
     return;
   }
   const bool started = get_bool("started");
@@ -556,9 +642,25 @@ void StepHighlights(const picojson::object& st)
     s_state = "playing";
     return;
   }
+  if (s_request.render)
+  {
+    // The clip's last frames are still on their way to the file: on once they are in.
+    s_render_draining = true;
+    s_drain_since = std::chrono::steady_clock::now();
+    s_drain_frames = Clip::SegmentFrames();
+    return;
+  }
+  NextHighlight();
+}
+
+// Highlights (under s_mutex): the queue's next one, or the end.
+void NextHighlight()
+{
   if (s_index + 1 >= s_request.paths.size())
   {
     s_state = "ended";
+    if (s_request.render)
+      RenderFinish("");
     return;
   }
   ++s_index;
@@ -597,6 +699,8 @@ void Step()
   {
     s_armed = false;
     s_state = "ended";
+    if (s_request.render)
+      RenderFinish("the replay stopped before its clips were rendered");
     return;
   }
   if (s_request.mirror)
@@ -608,6 +712,11 @@ void Step()
     s_error = st.at("error").is<std::string>() ? st.at("error").get<std::string>() : "";
     s_needs_play_anyway = s_error.find("setup differs") != std::string::npos;
     s_armed = false;
+    if (s_render_open)
+    {
+      Clip::Close(true);
+      s_render_open = false;
+    }
     return;
   }
   if (s_request.highlights)
@@ -680,8 +789,8 @@ void Loop()
           s_request.close_on_end = r->close_on_end;
           s_request.banner = std::move(r->banner);
         }
-        else if (r && r->command_id != last_command && r->highlights && !r->paths.empty() &&
-                 s_armed && !s_request.mirror && s_index < s_request.paths.size() &&
+        else if (r && r->command_id != last_command && r->highlights && !r->render &&
+                 !s_request.render && !r->paths.empty() && s_armed && !s_request.mirror && s_index < s_request.paths.size() &&
                  s_request.paths[s_index] == r->paths[0] && !Session::PlaybackStopping())
         {
           // Highlights of the replay already playing (the next row, Play all): its match goes on,
@@ -698,6 +807,14 @@ void Loop()
         {
           last_command = r->command_id;
           Session::StopPlayback();
+          // (A render still going is given up: its file deleted.)
+          if (s_render_open)
+          {
+            Clip::Close(true);
+            s_render_open = false;
+          }
+          s_render_draining = false;
+          s_rendered = 0;
           s_request = std::move(*r);
           s_index = 0;
           s_mirror_started = false;
@@ -708,6 +825,24 @@ void Loop()
           {
             s_state = "error";
             s_error = "nothing to play";
+          }
+          else if (s_request.render && s_request.output.empty())
+          {
+            s_state = "error";
+            s_error = "no output file";
+          }
+          else if (s_request.render)
+          {
+            if (auto e = Clip::Open(s_request.output))
+            {
+              s_state = "error";
+              s_error = *e;
+            }
+            else
+            {
+              s_render_open = true;
+              s_wait_boot = true;
+            }
           }
           else
           {
@@ -786,5 +921,12 @@ void Shutdown()
     return;
   if (s_thread.joinable())
     s_thread.join();
+  // (A render that did not finish: its partial file is deleted.)
+  std::lock_guard lk(s_mutex);
+  if (s_render_open)
+  {
+    Clip::Close(true);
+    s_render_open = false;
+  }
 }
 }  // namespace Gprb::Replay::Playback

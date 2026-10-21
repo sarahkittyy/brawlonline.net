@@ -983,6 +983,16 @@ void Settings::SetBatchModeEnabled(bool batch)
   m_batch = batch;
 }
 
+bool Settings::IsRenderOnly() const
+{
+  return m_render_only;
+}
+
+void Settings::SetRenderOnly(bool render_only)
+{
+  m_render_only = render_only;
+}
+
 bool Settings::IsSDCardInserted() const
 {
   return Config::Get(Config::MAIN_WII_SD_CARD);

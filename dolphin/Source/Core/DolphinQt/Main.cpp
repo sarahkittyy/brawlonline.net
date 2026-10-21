@@ -199,6 +199,7 @@ int main(int argc, char* argv[])
   UICommon::Init();
   Resources::Init();
   Settings::Instance().SetBatchModeEnabled(options.is_set("batch"));
+  Settings::Instance().SetRenderOnly(options.is_set("batch") && options.is_set("render"));
 
   // Hook up alerts from core
   Common::RegisterMsgAlertHandler(QtMsgAlertHandler);

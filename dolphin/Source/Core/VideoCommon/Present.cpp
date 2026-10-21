@@ -8,6 +8,7 @@
 #include "Core/Config/MainSettings.h"
 #include "Core/CoreTiming.h"
 #include "Core/HW/VideoInterface.h"
+#include "Core/Rollback/ClipRecorder.h"
 #include "Core/Rollback/FrameProfile.h"
 #include "Core/Rollback/PresentStats.h"
 #include "Core/Host.h"
@@ -237,6 +238,11 @@ void Presenter::ViSwap(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height,
 
     video_events.after_present_event.Trigger(present_info);
   }
+  else if (Gprb::Clip::WantsFrames())
+  {
+    // A replay's clip being rendered keeps every field's frame, repeated ones too.
+    ProcessFrameDumping(ticks);
+  }
 }
 
 void Presenter::ImmediateSwap(u32 xfb_addr, u32 fb_width, u32 fb_stride, u32 fb_height)
@@ -296,6 +302,21 @@ void Presenter::ProcessFrameDumping(u64 ticks) const
   if (g_frame_dumper->IsFrameDumping() && m_xfb_entry)
   {
     MathUtil::Rectangle<int> target_rect;
+    // A replay's clip being rendered (Rollback/ClipRecorder.h): the frame with its aspect ratio
+    // corrected, scaled to fit 1280x720 (the recorder pads it).
+    if (Gprb::Clip::WantsFrames())
+    {
+      const bool allow_stretch = false;
+      auto [float_width, float_height] =
+          ScaleToDisplayAspectRatio(m_xfb_rect.GetWidth(), m_xfb_rect.GetHeight(), allow_stretch);
+      int width = 0, height = 0;
+      Gprb::Clip::FitSize(static_cast<int>(float_width + 0.5f), static_cast<int>(float_height + 0.5f),
+                          &width, &height);
+      g_frame_dumper->DumpCurrentFrame(m_xfb_entry->texture.get(), m_xfb_rect,
+                                       MathUtil::Rectangle<int>(0, 0, width, height), ticks,
+                                       static_cast<int>(m_frame_count));
+      return;
+    }
     switch (Config::Get(Config::GFX_FRAME_DUMPS_RESOLUTION_TYPE))
     {
     default:

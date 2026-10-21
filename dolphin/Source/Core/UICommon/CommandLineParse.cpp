@@ -140,6 +140,10 @@ std::unique_ptr<optparse::OptionParser> CreateParser(ParserOptions options)
         .action("store_true")
         .help("Run Dolphin without the user interface (Requires --exec or --nand-title)");
     parser->add_option("-c", "--confirm").action("store_true").help("Set Confirm on Stop");
+    parser->add_option("--render")
+        .action("store_true")
+        .help("With --batch and --replay-comm: show no window at all, the comm file's clips are "
+              "rendered to video (docs/design/highlights.md)");
   }
 
   parser->set_defaults("harness_port", "");

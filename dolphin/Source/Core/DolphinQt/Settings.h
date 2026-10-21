@@ -121,6 +121,10 @@ public:
   void SetStateSlot(int);
   bool IsBatchModeEnabled() const;
   void SetBatchModeEnabled(bool batch);
+  // `--render` (with --batch): the game renders with no window at all, for the comm file's
+  // clips to be written to video (Rollback/ClipRecorder.h).
+  bool IsRenderOnly() const;
+  void SetRenderOnly(bool render_only);
 
   bool IsSDCardInserted() const;
   void SetSDCardInserted(bool inserted);
@@ -243,6 +247,7 @@ private:
   Settings();
 
   bool m_batch = false;
+  bool m_render_only = false;
   std::atomic<bool> m_continuously_frame_stepping = false;
 
   std::shared_ptr<NetPlay::NetPlayClient> m_client;

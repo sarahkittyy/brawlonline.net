@@ -9,6 +9,7 @@
 
 #include "Core/Config/GraphicsSettings.h"
 #include "Core/Config/MainSettings.h"
+#include "Core/Rollback/ClipRecorder.h"
 
 #include "VideoCommon/AbstractFramebuffer.h"
 #include "VideoCommon/AbstractGfx.h"
@@ -67,6 +68,8 @@ void FrameDumper::DumpCurrentFrame(const AbstractTexture* src_texture,
   m_frame_dump_readback_texture->CopyFromTexture(src_texture, copy_rect, 0, 0,
                                                  m_frame_dump_readback_texture->GetRect());
   m_last_frame_state = m_ffmpeg_dump.FetchState(ticks, frame_number);
+  // (Without FFmpeg the state is empty; a replay's clip needs the frame's ticks.)
+  m_last_frame_state.ticks = ticks;
   m_frame_dump_needs_flush = true;
 }
 
@@ -235,6 +238,10 @@ void FrameDumper::FrameDumpThreadFunc()
       m_screenshots_completed++;
     }
 
+    // A replay rendered to video (Rollback/ClipRecorder.h): the frame goes to its encoder.
+    if (Gprb::Clip::IsOpen())
+      Gprb::Clip::AddVideoFrame(frame.data, frame.width, frame.height, frame.stride, frame.state.ticks);
+
     if (Config::Get(Config::MAIN_MOVIE_DUMP_FRAMES))
     {
       if (!frame_dump_started)
@@ -352,6 +359,10 @@ bool FrameDumper::IsFrameDumping() const
     return true;
 
   if (Config::Get(Config::MAIN_MOVIE_DUMP_FRAMES))
+    return true;
+
+  // A replay's clip being rendered (Rollback/ClipRecorder.h).
+  if (Gprb::Clip::WantsFrames())
     return true;
 
   return false;

@@ -652,6 +652,11 @@ add_library(core
   Rollback/ReplayKeyframes.cpp
   Rollback/ReplayKeyframes.h
   Rollback/ReplayPlayback.cpp
+  Rollback/ClipEncoder.h
+  Rollback/ClipEncoderFFmpeg.cpp
+  Rollback/ClipEncoderMF.cpp
+  Rollback/ClipRecorder.cpp
+  Rollback/ClipRecorder.h
   Rollback/ReplayPlayback.h
   Rollback/ReplayRecorder.cpp
   Rollback/ReplayRecorder.h
@@ -877,6 +882,13 @@ elseif (ANDROID)
   PRIVATE
     androidcommon
   )
+endif()
+
+# Rendering replays to video (Rollback/ClipRecorder.h): Media Foundation on Windows, FFmpeg elsewhere.
+if(WIN32)
+  target_link_libraries(core PRIVATE mfplat mfreadwrite mfuuid)
+elseif(FFmpeg_FOUND)
+  target_link_libraries(core PRIVATE FFmpeg::avcodec FFmpeg::avformat FFmpeg::avutil FFmpeg::swscale)
 endif()
 
 if(ENABLE_CUBEB)

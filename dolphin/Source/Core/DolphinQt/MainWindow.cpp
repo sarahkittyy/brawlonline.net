@@ -1335,9 +1335,12 @@ void MainWindow::StartGame(std::unique_ptr<BootParameters>&& parameters)
   // We need the render widget before booting.
   ShowRenderWidget();
 
-  // Boot up, show an error if it fails to load the game.
-  if (!BootManager::BootCore(m_system, std::move(parameters),
-                             ::GetWindowSystemInfo(m_render_widget->windowHandle())))
+  // Boot up, show an error if it fails to load the game. (Rendering clips to video: no window,
+  // the video backend draws to its own textures only.)
+  const bool render_only = Settings::Instance().IsRenderOnly();
+  if (!BootManager::BootCore(
+          m_system, std::move(parameters),
+          ::GetWindowSystemInfo(render_only ? nullptr : m_render_widget->windowHandle())))
   {
     ModalMessageBox::critical(this, tr("Error"), tr("Failed to init core"), QMessageBox::Ok);
     HideRenderWidget();
@@ -1383,6 +1386,10 @@ void MainWindow::SetFullScreenResolution(bool fullscreen)
 
 void MainWindow::ShowRenderWidget()
 {
+  // Rendering clips to video (--render): nothing is shown.
+  if (Settings::Instance().IsRenderOnly())
+    return;
+
   SetFullScreenResolution(false);
   Host::GetInstance()->SetRenderFullscreen(false);
 
