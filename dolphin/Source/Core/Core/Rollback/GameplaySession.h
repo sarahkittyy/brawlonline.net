@@ -494,6 +494,7 @@ struct PlaybackInfo
   bool buffering = false;    // no frames to play yet
   bool catching_up = false;  // running to the live edge
   double catch_rate = 0;     // frames run per real frame while catching up (0: not measured yet)
+  s64 catch_from = -1;       // the frame the catch-up started from (-1: not running yet)
   std::string banner;
 };
 PlaybackInfo GetPlaybackInfo();

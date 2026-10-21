@@ -220,7 +220,8 @@ The ballpark: CPU, RAM and disk allow **thousands** of concurrent games, far bey
   - Frames run as fast as the machine can, without drawing them (the seek's resimulation mode), with sound off.
   - **Progress is visible:** one frame in every 15 is drawn, so the game visibly fast-forwards. An overlay bar reads "Catching up to live · 2:14 / 4:05 · about 20 s". Its end is the moving live edge, and the time left comes from the measured catch-up rate. The seek bar's playhead runs toward the live edge.
   - At the live edge the overlay fades, sound comes on and normal live play starts.
-  - Any control (pause, seek, step) stops the catch-up where it is, and LIVE starts it again.
+  - (2026-10-21) The top-left corner also shows "Catching up to live (5%). Click to watch", as a highlight's fast-forward does. The percentage runs from where the catch-up started to the moving live edge.
+  - Any control (pause, seek, step) stops the catch-up where it is, and LIVE starts it again. A click on the game (not on the overlay) is Play there (the user, 2026-10-21), not pause: the catch-up stops and the game plays on at normal speed from that frame, behind live.
   - The catch-up rate has to stay well above 1x, because the live edge keeps moving. That rate isn't measured yet (§8 P0). If a slow machine runs under about 1.5x, the overlay says so ("Your computer is catching up slowly") instead of looking stuck.
 - **Sets** (Direct, Unranked, Ranked and room sets alike; in a room without a set, the room's next game with the same players): at the end of a game, a spectator at the live edge sees the last frame held with "Game 2 starts soon". The next game's `SETP` starts it through `queue` mode's next-game path. A spectator who is behind keeps watching, with the next game queued. Every earlier game of the set stays available and can be watched again.
 - **When the stream ends** (the set is over, a room's players change, or every uploader left):

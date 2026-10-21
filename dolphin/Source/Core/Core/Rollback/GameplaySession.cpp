@@ -760,6 +760,7 @@ struct State
     s64 catch_frames = 0;
     Clock::time_point catch_since{};
     double catch_rate = 0;
+    s64 catch_from = -1;  // the frame it started from (the overlay's percentage)
     bool buffering = false;
     double nudge = 1.0;
     std::string banner;
@@ -5577,7 +5578,10 @@ void LiveLoopTop(s64 f)
       pb.ff_until = edge;
       const auto now = Clock::now();
       if (pb.catch_frames++ == 0)
+      {
         pb.catch_since = now;
+        pb.catch_from = f;
+      }
       const double secs = std::chrono::duration<double>(now - pb.catch_since).count();
       if (secs >= 1.0)
         pb.catch_rate = static_cast<double>(pb.catch_frames) / (secs * 60.0);
@@ -6787,11 +6791,13 @@ void PlaybackControl(PlaybackCommand command, double arg)
   const s64 shown = s.phase == Phase::Running ? PlaybackShown() : static_cast<s64>(pb.file->first_frame);
   static constexpr std::array<double, 6> SPEEDS{0.25, 0.5, 0.75, 1.0, 1.5, 2.0};
   ++pb.controls;
-  // Any other control stops a catch-up to the live edge where it is (GoLive starts it again).
+  // Any other control stops a catch-up to the live edge where it is (GoLive starts it again), Go
+  // Live's seek to the edge too when the loop has not taken it yet.
   if (command != PlaybackCommand::GoLive && pb.catch_up)
   {
     pb.catch_up = false;
     pb.ff_until = -1;
+    pb.seek_to = -1;
   }
   switch (command)
   {
@@ -6910,6 +6916,7 @@ PlaybackInfo GetPlaybackInfo()
     info.buffering = s.pb.buffering;
     info.catching_up = s.pb.catch_up;
     info.catch_rate = s.pb.catch_rate;
+    info.catch_from = s.pb.catch_frames > 0 ? s.pb.catch_from : -1;
     info.at_live = !info.ended && !s.pb.paused && !s.pb.catch_up && s.pb.seek_to < 0 &&
                    info.shown >= info.live_edge - LIVE_NEAR;
   }

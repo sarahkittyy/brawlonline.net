@@ -14,6 +14,7 @@
 
 #include "Core/Online/GameSetup.h"
 #include "Core/Rollback/GameplaySession.h"
+#include "VideoCommon/OnScreenDisplay.h"
 
 namespace VideoCommon::ReplayOverlayUI
 {
@@ -80,10 +81,27 @@ void Display(float scale)
   }
   // A click on the game (not on the overlay) pauses or plays, whether the overlay shows or not.
   // A double click (Dolphin's fullscreen) is two clicks: it toggles twice. Held at the end, where
-  // Play ends the replay, a click does nothing (the button and Space still end it).
+  // Play ends the replay, a click does nothing (the button and Space still end it). Catching up to
+  // live, a click stops the catch-up and plays on from there (the user, 2026-10-21: "Click to
+  // watch"), not paused.
+  const bool catching_up = info.live && !info.ended && info.catching_up;
   if (io.MouseClicked[0] && !s_dragging && !info.at_end &&
       !ImGui::IsWindowHovered(ImGuiHoveredFlags_AnyWindow))
-    Gprb::Session::PlaybackControl(Gprb::Session::PlaybackCommand::TogglePause, 0);
+  {
+    Gprb::Session::PlaybackControl(catching_up ? Gprb::Session::PlaybackCommand::Play :
+                                                 Gprb::Session::PlaybackCommand::TogglePause,
+                                   0);
+  }
+  // The catch-up's progress at the top, as a highlight's fast-forward has it.
+  if (catching_up)
+  {
+    const s64 from = info.catch_from >= 0 ? info.catch_from : info.shown;
+    const double span = static_cast<double>(std::max<s64>(info.live_edge - from, 1));
+    const int pct = static_cast<int>(std::clamp((info.shown - from) / span, 0.0, 1.0) * 100);
+    OSD::AddTypedMessage(OSD::MessageType::SpectateCatchUp,
+                         fmt::format("Catching up to live ({}%). Click to watch", pct), 600,
+                         OSD::Color::CYAN);
+  }
   // Spectating: also while catching up, buffering, or with something to say (the banner).
   const bool wanted = info.paused || info.seeking || s_dragging || info.catching_up ||
                       info.buffering || !info.banner.empty() || now - s_mouse_moved < SHOW_AFTER_MOUSE;

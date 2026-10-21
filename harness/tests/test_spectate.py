@@ -293,6 +293,7 @@ class Sampler:
         self.v, self.status_file = v, status_file
         self.samples: list[dict[str, Any]] = []
         self.went_live_at: int | None = None   # the sample index when Go Live was pressed
+        self.clicked: dict[str, Any] = {}      # click_during_catch_up's statuses
         self._stop = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
         self._thread.start()
@@ -310,8 +311,41 @@ class Sampler:
                         and not st.get("complete", True) and st.get("shown", -1) >= 300):
                     self.v.c.call("replay_control", action="live")
                     self.went_live_at = len(self.samples)
+                    self.click_during_catch_up()
             except Exception:  # noqa: BLE001 - a missed sample
                 pass
+
+    def click_during_catch_up(self) -> None:
+        """A click on the game while it catches up ("Catching up to live (N%). Click to watch",
+        the user 2026-10-21) is Play: the catch-up stops where it is and the game plays on at 1x
+        from there, not paused. Then Go Live again, for the rest of the test."""
+        deadline = time.monotonic() + 5
+        st: dict[str, Any] = {}
+        while time.monotonic() < deadline:
+            st = self.v.c.call("replay_status")
+            if st.get("catching_up") and st.get("shown", -1) >= 0:
+                break
+            time.sleep(0.02)
+        else:
+            self.clicked = {"error": f"never seen catching up: {st}"}
+            return
+        try:
+            self.v.shot("catching-up")
+        except Exception:  # noqa: BLE001 - the picture is only for looking at
+            pass
+        self.v.c.call("replay_control", action="play")
+        at = self.v.c.call("replay_status")
+        time.sleep(2)
+        later = self.v.c.call("replay_status")
+        self.clicked = {"before": st, "at": at, "later": later}
+        # (Kept as samples too: this thread took no others meanwhile.)
+        for s in (st, at, later):
+            try:
+                s["file"] = json.loads(self.status_file.read_text())
+            except (OSError, ValueError):
+                s["file"] = {}
+            self.samples.append(s)
+        self.v.c.call("replay_control", action="live")
 
     def stop(self) -> None:
         self._stop.set()
@@ -401,6 +435,15 @@ def test_a_spectator_joins_a_set_mid_game_and_watches_it_live(
     # ... until Go Live: then it catches up and plays at the live edge (before the game ended).
     after = samples[sampler.went_live_at:]
     assert any(s.get("catching_up") for s in after), "Go Live didn't catch up"
+    # A click while catching up: stopped there and played on at 1x (not paused, not live).
+    clicked = sampler.clicked
+    assert "error" not in clicked and clicked, clicked
+    at, later = clicked["at"], clicked["later"]
+    print(f"click while catching up: at frame {at['shown']}, "
+          f"{(at['live_edge'] - at['shown']) / 60:.1f} s behind live; 2 s later frame {later['shown']}")
+    assert not at["catching_up"] and not at["paused"], at
+    assert not later["catching_up"] and not later["paused"], later
+    assert 60 <= later["shown"] - at["shown"] <= 200, (at["shown"], later["shown"])
     live = [s for s in after
             if s.get("live") and not s.get("catching_up") and not s.get("complete", True) and
             not s.get("buffering") and s.get("live_edge", 0) - s.get("shown", 0) <= 90]

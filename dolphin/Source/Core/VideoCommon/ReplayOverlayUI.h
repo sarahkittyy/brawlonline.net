@@ -4,7 +4,8 @@
 // The replay overlay (docs/design/replays.md §6.3, Slippi's seek bar): what is playing, the time,
 // pause and speed, a play / pause button and a bar to click or drag to seek, drawn with the OSD's
 // ImGui over the game while a replay plays (Gprb::Session::GetPlaybackInfo). A click on the game
-// itself pauses or plays.
+// itself pauses or plays; while a spectated game catches up to live it plays on from there (the
+// top-left "Catching up to live (5%). Click to watch").
 //
 // It shows while paused or seeking and for a few seconds after the mouse moves, and hides itself
 // while the replay just plays, so a capture of the window (OBS) has only the game. The "Show /

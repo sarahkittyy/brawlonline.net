@@ -21,6 +21,8 @@ enum class MessageType
   BrawlbackBuffer,
   // Spectating: a live game was picked and its first frames haven't come yet.
   SpectateWaiting,
+  // Spectating: catching up to the live edge ("Catching up to live (5%). Click to watch").
+  SpectateCatchUp,
   // Watching the room's game from the room CSS: the players' game is over (Online/RoomWatch.h).
   RoomWatch,
   // Highlights (Rollback/ReplayPlayback.h): loading or fast-forwarding to the next one.
