@@ -406,8 +406,11 @@ struct State
   u16 hold = 0;
   std::array<u16, MAX_LOBBY_PLAYERS> holds{};
   bool holds_valid = false;
-  // This player's input delay for the current game, fixed when its GekkoNet session is created.
+  // This player's input delay for the current game, picked when its GekkoNet session is created
+  // and changed mid-game by the player's setting (ApplyLiveDelay).
   int input_delay = DEFAULT_INPUT_DELAY;
+  // The last change of the setting this session took (s_live_delay's sequence number).
+  u32 live_delay_seq = 0;
   SyncBlock sync;  // host: the values the joiner copies
   std::vector<std::vector<std::string>> task_order;
   bool did_frame0 = false;
@@ -870,13 +873,21 @@ constexpr u32 MM_ITEM_SWITCH = 0x30, ITEM_SWITCH_SIZE = 0x10;
 // found by the same layout the plugin uses (fudgepop's: +0 size u16, +2 type, +6 text offset,
 // +8 value, a selection's options pointer at +0x18). The per-player Character Select lines are
 // left out: P+ keeps the fighter being played in them.
-constexpr u32 CODE_MENU = 0x804E0000, CODE_MENU_SIZE = 0x2520;
+constexpr u32 CODE_MENU = 0x804E0000, CODE_MENU_SIZE = 0x2520, CODE_MENU_VALUE = 8;
 
-void AppendCodeMenuValues(const Guest& g, std::vector<u8>& key)
+struct CodeMenuLine
 {
+  u32 addr;
+  std::string text;
+};
+
+// The value lines in the setup key's order.
+std::vector<CodeMenuLine> CodeMenuValueLines(const Guest& g)
+{
+  std::vector<CodeMenuLine> out;
   const u8* m = g.Ptr(CODE_MENU, CODE_MENU_SIZE);
   if (!m)
-    return;
+    return out;
   for (u32 o = 0; o + 0x20 <= CODE_MENU_SIZE; o += 4)
   {
     const u8* l = m + o;
@@ -902,8 +913,39 @@ void AppendCodeMenuValues(const Guest& g, std::vector<u8>& key)
     }
     if (t.substr(0, percent).find("Character Select") != std::string_view::npos)
       continue;
-    key.insert(key.end(), l + 8, l + 12);
+    out.push_back({CODE_MENU + o, std::string(t.substr(0, percent))});
   }
+  return out;
+}
+
+void AppendCodeMenuValues(const Guest& g, std::vector<u8>& key)
+{
+  for (const auto& line : CodeMenuValueLines(g))
+  {
+    if (const u8* v = g.Ptr(line.addr + CODE_MENU_VALUE, 4))
+      key.insert(key.end(), v, v + 4);
+  }
+}
+
+// P+'s slot colour lines (QuickLava's PlayerSlotColorChangers): one pointer per port to its line
+// (online_menu.cpp slotColourLine).
+constexpr u32 SLOT_COLOUR_LINES = 0x804E02F4;
+
+// What playback does with each value line that differs from the recording's (PeerData).
+std::vector<PeerData::ReplayCodeMenuLine> ReplayCodeMenuLines(const Guest& g,
+                                                             const std::vector<CodeMenuLine>& lines)
+{
+  std::array<u32, MAX_LOBBY_PLAYERS> slot_colours{};
+  for (u32 port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+    slot_colours[port] = g.Ptr32(SLOT_COLOUR_LINES + 4 * port).value_or(0);
+  std::vector<PeerData::ReplayCodeMenuLine> out;
+  for (const auto& line : lines)
+  {
+    const bool slot_colour =
+        std::find(slot_colours.begin(), slot_colours.end(), line.addr) != slot_colours.end();
+    out.push_back(PeerData::ClassifyReplayCodeMenuLine(line.text, slot_colour));
+  }
+  return out;
 }
 
 // gmGlobalModeMelee fields both peers must agree on: rules/stage block and per player the
@@ -1916,6 +1958,11 @@ u16 DrawRandomStage(u32 game)
 std::mutex s_result_callback_mutex;
 std::function<void(const GameResult&)> s_result_callback;
 std::atomic<bool> s_quit_loses{false};  // SetQuitLoses
+// The player's setting as it changed while Dolphin runs (SetInputDelay): a sequence number (0:
+// never changed) << 8 | the setting (0 automatic, 1-MAX_INPUT_DELAY).
+std::atomic<u32> s_live_delay{0};
+// The running game's input delay for other threads (CurrentInputDelay), -1 without one.
+std::atomic<int> s_current_delay{-1};
 std::atomic<bool> s_desync_recovery{false};  // SetDesyncRecovery
 std::function<StageDecision(u32)> s_stage_decider;  // under s_result_callback_mutex
 picojson::object s_local_extra;                      // under s.mutex
@@ -2898,11 +2945,59 @@ void CloseNetwork()
 // ---------------------------------------------------------------------------------------------
 // Session start / end (CPU thread)
 
+// This player's input delay for a game: the set value, else from the round trip to the furthest
+// player still in the session (`rtt_ms`, -1 for none), as GekkoNet will see it in the game.
+int PickInputDelay(double* rtt_ms)
+{
+  *rtt_ms = -1;
+  ForEachPeer([&](int, const PeerView& p) {
+    if (!p.left && p.rtt_ms >= 0)
+      *rtt_ms = std::max(*rtt_ms, p.rtt_ms);
+  });
+  return s.net_opts.delay ? std::clamp(*s.net_opts.delay, 0, MAX_INPUT_DELAY) :
+                            AutoInputDelay(GameRoundTrip(*rtt_ms));
+}
+
+// A change of the player's setting since this session last looked (SetInputDelay) becomes the
+// session's: this game's from its next frame, and every later game's. False when none.
+bool TakeLiveDelay()
+{
+  const u32 live = s_live_delay.load();
+  if (live >> 8 == s.live_delay_seq)
+    return false;
+  s.live_delay_seq = live >> 8;
+  const int setting = static_cast<int>(live & 0xFF);
+  s.net_opts.delay = setting > 0 ? std::optional<int>(setting) : std::nullopt;
+  return true;
+}
+
+// CPU thread, before the frame's local input: a running game takes a new setting at once.
+// GekkoNet repeats this player's last input for the frames a higher delay adds, and drops its
+// next inputs for the frames a lower one takes away (they already went out); every machine
+// gets the same inputs either way. Only this player's own inputs are delayed, so the others need
+// not know.
+void ApplyLiveDelay()
+{
+  if (!TakeLiveDelay() || s.mode != Mode::Network || !s.gekko || s.local_handles.empty())
+    return;
+  double rtt = -1;
+  const int delay = PickInputDelay(&rtt);
+  if (delay == s.input_delay)
+    return;
+  INFO_LOG_FMT(BRAWLBACK, "gprb: input delay {} -> {} at frame {} ({}, round trip {:.0f} ms)",
+               s.input_delay, delay, s.current_frame, s.net_opts.delay ? "set" : "auto", rtt);
+  s.input_delay = delay;
+  s_current_delay = delay;
+  gekko_set_local_delay(s.gekko, s.local_handles[0], static_cast<unsigned char>(delay));
+  gekko_set_disconnect_timeout(s.gekko, Online::PeerSilenceTimeoutMs(delay));
+}
+
 void DestroyGekko()
 {
   if (s.gekko)
     gekko_destroy(&s.gekko);
   s.gekko = nullptr;
+  s_current_delay = -1;
   s.gekko_started = false;
   s.ops_prefetched = false;
   s.defer_initial_save = false;
@@ -2999,14 +3094,12 @@ bool CreateGekko(bool stress, int num_players)
     }
     // Each player picks the delay of their own inputs (Slippi): the set value, else from the
     // round trip measured now, to the furthest player still in the session, as GekkoNet will see
-    // it in the game (GameRoundTrip). It stays for the whole game.
+    // it in the game (GameRoundTrip). The player's setting may change it mid-game
+    // (ApplyLiveDelay).
+    TakeLiveDelay();
     double rtt = -1;
-    ForEachPeer([&](int, const PeerView& p) {
-      if (!p.left && p.rtt_ms >= 0)
-        rtt = std::max(rtt, p.rtt_ms);
-    });
-    s.input_delay = s.net_opts.delay ? std::clamp(*s.net_opts.delay, 0, MAX_INPUT_DELAY) :
-                                       AutoInputDelay(GameRoundTrip(rtt));
+    s.input_delay = PickInputDelay(&rtt);
+    s_current_delay = s.input_delay;
     gekko_set_local_delay(s.gekko, s.local_handles[0], static_cast<unsigned char>(s.input_delay));
     gekko_set_disconnect_timeout(s.gekko, Online::PeerSilenceTimeoutMs(s.input_delay));
     s.local_pad = LocalPad();
@@ -4341,6 +4434,7 @@ bool HandleGekkoFrame(Core::System& system)
     GekkoBatch batch;
     if (s.mode == Mode::Network)
       gekko_network_poll(s.gekko);
+    ApplyLiveDelay();
     for (int h : s.local_handles)
       gekko_add_local_input(s.gekko, h, s.local_inputs.data() + s.handle_port[h] * INPUT_SIZE);
     events = gekko_update_session(s.gekko, &count);
@@ -6056,6 +6150,8 @@ std::optional<std::string> Connect(const ConnectOptions& options)
   CloseNetwork();
   s.mode = Mode::Network;
   s.net_opts = options;
+  // A setting changed before this session is in `options` already (the backend reads it).
+  s.live_delay_seq = s_live_delay.load() >> 8;
   s.peers = peers;
   s.local_slot = local_slot;
   s.host_slot = host_slot;
@@ -6159,6 +6255,20 @@ void SetQuitLoses(bool loses)
 void SetDesyncRecovery(bool on)
 {
   s_desync_recovery = on;
+}
+
+void SetInputDelay(int setting)
+{
+  const u32 value = static_cast<u32>(std::clamp(setting, 0, MAX_INPUT_DELAY));
+  u32 live = s_live_delay.load();
+  while (!s_live_delay.compare_exchange_weak(live, (((live >> 8) + 1) << 8) | value))
+  {
+  }
+}
+
+int CurrentInputDelay()
+{
+  return s_current_delay.load();
 }
 
 void SetGameResultCallback(std::function<void(const GameResult&)> callback)
@@ -7464,9 +7574,53 @@ void RestoreLegacyTeamCostumes(Core::System& system, const Guest& g)
   }
 }
 
+// The Code Menu lines a replay takes from its recording (PeerData::ReplayCodeMenuLine::Recorded:
+// the slot colours, only drawn), written before the match loads: the players' colours as the
+// recorder saw them, whatever this plugin made of the recorded SESSION.
+void ApplyRecordedCodeMenu(Core::System& system, const Guest& g)
+{
+  const auto lines = CodeMenuValueLines(g);
+  const auto values = PeerData::RecordedCodeMenuValues(s.pb.setup_key, ReplayCodeMenuLines(g, lines));
+  for (size_t i = 0; i < lines.size(); ++i)
+  {
+    const auto mine = g.U32(lines[i].addr + CODE_MENU_VALUE);
+    if (!values[i] || !mine || *mine == *values[i])
+      continue;
+    INFO_LOG_FMT(BRAWLBACK, "replay: Code Menu line \"{}\" {} as recorded (was {})", lines[i].text,
+                 *values[i], *mine);
+    WriteU32(system, lines[i].addr + CODE_MENU_VALUE, *values[i]);
+  }
+}
+
+// Tests (PPR_GPRB_TEST_CODE_MENU="Autosave Replays=1;Player 1=7"): at the live barrier, before the
+// setup is compared and recorded, the first value line whose text starts with each name gets that
+// value, as a machine with another plugin (or other settings) would have had. Every peer of the
+// match needs the same, or the barrier refuses it.
+void WriteTestCodeMenuValues(Core::System& system, const Guest& g)
+{
+  const char* env = std::getenv("PPR_GPRB_TEST_CODE_MENU");
+  if (!env)
+    return;
+  const auto lines = CodeMenuValueLines(g);
+  for (const auto& item : SplitString(env, ';'))
+  {
+    const size_t eq = item.find('=');
+    if (eq == std::string::npos)
+      continue;
+    const std::string name = item.substr(0, eq);
+    const auto line = std::find_if(lines.begin(), lines.end(),
+                                   [&](const CodeMenuLine& l) { return l.text.starts_with(name); });
+    if (line == lines.end())
+      continue;
+    const u32 value = static_cast<u32>(std::strtoul(item.c_str() + eq + 1, nullptr, 0));
+    WriteU32(system, line->addr + CODE_MENU_VALUE, value);
+    WARN_LOG_FMT(BRAWLBACK, "gprb: PPR_GPRB_TEST_CODE_MENU: \"{}\" = {}", line->text, value);
+  }
+}
+
 // The match start (ApplyMatchStart's joiner side): the recorded host's stage variant, the costumes
-// of a team battle recorded before 2026-10-12, the seeds of the recorded session seed and match
-// index, the serial counter.
+// of a team battle recorded before 2026-10-12, the recorded slot colours, the seeds of the recorded
+// session seed and match index, the serial counter.
 void ApplyPlaybackStart(Core::System& system, std::string_view when)
 {
   const Guest g(system.GetMemory());
@@ -7482,6 +7636,7 @@ void ApplyPlaybackStart(Core::System& system, std::string_view when)
   if (const auto mm = ModeMeleeAddr(g); mm && merged != mine)
     system.GetMemory().CopyToEmu(*mm + INIT_BLOCK_OFFSET, merged.data(), merged.size());
   RestoreLegacyTeamCostumes(system, g);
+  ApplyRecordedCodeMenu(system, g);
   PinScreenSetting(system);
   const auto seeds = MatchSeeds(s.pb.seed, s.pb.match_index);
   WriteU32(system, Addr::MTRAND_DEFAULT_SEED, seeds[0]);
@@ -7576,15 +7731,26 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
     s.pb.end_disconnected = true;
     return false;
   };
+  // The Code Menu lines the match never reads (PeerData::ReplayCodeMenuLine) are not compared:
+  // the recorder's plugin may have written other values in them (Autosave Replays was ON before
+  // 2026-10-18). Live peers still compare every line.
   const auto key = SetupKey(g);
-  if (key != s.pb.setup_key)
+  const auto recorded =
+      PeerData::ReplaySetupKey(key, s.pb.setup_key, ReplayCodeMenuLines(g, CodeMenuValueLines(g)));
+  if (key != recorded)
   {
     WARN_LOG_FMT(BRAWLBACK, "replay: the match's setup differs from the recording's:\n  here {}\n  file {}",
                  Hex(key), Hex(s.pb.setup_key));
     WARN_LOG_FMT(BRAWLBACK, "replay: it differs in (file as the peer): {}",
-                 fmt::join(PeerData::SetupKeyDiff(key, s.pb.setup_key), "; "));
+                 fmt::join(PeerData::SetupKeyDiff(key, recorded), "; "));
     if (!s.pb.play_anyway)
       return fail("its match could not be rebuilt here (the setup differs)");
+  }
+  else if (key != s.pb.setup_key)
+  {
+    INFO_LOG_FMT(BRAWLBACK, "replay: Code Menu lines the match does not read differ from the "
+                            "recording's (not compared): {}",
+                 fmt::join(PeerData::SetupKeyDiff(key, s.pb.setup_key), "; "));
   }
   const u32 human = HumanPorts(g);
   if (human != s.pb.ports)
@@ -7971,6 +8137,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     if (s.phase != Phase::Connected || !IsSimStart(g, &fc))
       return false;
     // The first frame of the match simulation: the barrier.
+    WriteTestCodeMenuValues(system, g);
     s.setup_hash = SetupHash(g, StartFrame());
     s.setup_key = SetupKey(g);
     s.setup_start = StartFrame();

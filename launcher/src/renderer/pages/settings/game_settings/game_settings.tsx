@@ -128,26 +128,18 @@ export const GameSettings = React.memo(() => {
           <FormControlLabel value={false} label={Messages.launchDolphin()} control={<Radio />} />
         </RadioGroup>
       </SettingItem>
-      <SettingItem name={Messages.inputDelay()}>
-        <Tooltip title={netplayDolphinOpen ? Messages.closeDolphinToChange() : ""} placement="bottom-start">
-          <RadioGroup row={true} value={inputDelay} onChange={(_event, value) => setInputDelay(Number(value))}>
+      <SettingItem name={Messages.inputDelay()} description={Messages.inputDelayDescription()}>
+        <RadioGroup row={true} value={inputDelay} onChange={(_event, value) => setInputDelay(Number(value))}>
+          <FormControlLabel value={INPUT_DELAY_AUTO} label={Messages.inputDelayAuto()} control={<Radio />} />
+          {INPUT_DELAY_CHOICES.map((frames) => (
             <FormControlLabel
-              value={INPUT_DELAY_AUTO}
-              label={Messages.inputDelayAuto()}
+              key={frames}
+              value={frames}
+              label={Messages.inputDelayFrames(frames)}
               control={<Radio />}
-              disabled={netplayDolphinOpen}
             />
-            {INPUT_DELAY_CHOICES.map((frames) => (
-              <FormControlLabel
-                key={frames}
-                value={frames}
-                label={Messages.inputDelayFrames(frames)}
-                control={<Radio />}
-                disabled={netplayDolphinOpen}
-              />
-            ))}
-          </RadioGroup>
-        </Tooltip>
+          ))}
+        </RadioGroup>
       </SettingItem>
       <SettingItem>
         <Tooltip title={netplayDolphinOpen ? Messages.closeDolphinToChange() : ""} placement="bottom-start">

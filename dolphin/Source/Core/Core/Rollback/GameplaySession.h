@@ -338,6 +338,12 @@ void SetGameResultCallback(std::function<void(const GameResult&)> callback);
 // When it does not, a runback (the quit with L+R+Y) sets the next game up as the same match on
 // every machine, and the game goes straight into it.
 void SetQuitLoses(bool loses);
+// The player's input delay setting changed while Dolphin runs (any thread; the launcher's
+// input-delay.json, Online::Rooms): 0 automatic, 1-MAX_INPUT_DELAY frames. A running game takes
+// it from its next frame, and so does every later game, over an option the session started with.
+void SetInputDelay(int setting);
+// This player's input delay in the running game (any thread), -1 when none runs.
+int CurrentInputDelay();
 
 // A small JSON object of another module (Online/GameSetup.h: Ranked's stage strikes) carried in
 // this player's control messages, and the peer's latest one ({} before any). Sizes are capped.

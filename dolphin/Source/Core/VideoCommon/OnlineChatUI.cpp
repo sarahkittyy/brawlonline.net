@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <deque>
+#include <iterator>
 #include <mutex>
 #include <optional>
 #include <set>
@@ -66,6 +67,9 @@ constexpr float FONT_BASE_HEIGHT = 720.0f;
 constexpr float FONT_GROWTH = 0.3f;
 constexpr float MIN_FONT_PX = 12.0f;
 constexpr float MAX_FONT_PX = 18.0f;
+// The player's text size (Options > Increase / Decrease font size, [Online] ChatTextSize), a
+// percentage of that height. A saved value between two steps goes to the next step from it.
+constexpr std::array<int, 9> TEXT_SIZE_STEPS = {70, 80, 90, 100, 110, 125, 150, 175, 200};
 
 #ifdef __APPLE__
 constexpr const char* SHORTCUT_PREFIX = "Cmd+";
@@ -170,6 +174,58 @@ float FontPx(float display_h, float scale)
   const float logical_h = std::max(display_h / dpi, 1.0f);
   return dpi * std::clamp(FONT_BASE_PX * std::pow(logical_h / FONT_BASE_HEIGHT, FONT_GROWTH),
                           MIN_FONT_PX, MAX_FONT_PX);
+}
+
+int TextSizePercent()
+{
+  return std::clamp(Config::Get(Config::ONLINE_CHAT_TEXT_SIZE), TEXT_SIZE_STEPS.front(),
+                    TEXT_SIZE_STEPS.back());
+}
+
+// The step above (up) or below the current size, the same one at the end of the steps.
+int NextTextSize(int percent, bool up)
+{
+  if (up)
+  {
+    const auto it = std::ranges::upper_bound(TEXT_SIZE_STEPS, percent);
+    return it == TEXT_SIZE_STEPS.end() ? TEXT_SIZE_STEPS.back() : *it;
+  }
+  const auto it = std::ranges::lower_bound(TEXT_SIZE_STEPS, percent);
+  return it == TEXT_SIZE_STEPS.begin() ? TEXT_SIZE_STEPS.front() : *std::prev(it);
+}
+
+void SetTextSize(int percent)
+{
+  Config::SetBaseOrCurrent(Config::ONLINE_CHAT_TEXT_SIZE, percent);
+  Config::Save();
+}
+
+// The Options menu's text size items. They leave the menu open, so several clicks in a row step
+// through the sizes.
+void DrawTextSizeItems()
+{
+  const int percent = TextSizePercent();
+  ImGui::PushItemFlag(ImGuiItemFlags_AutoClosePopups, false);
+  if (ImGui::MenuItem("Increase font size", nullptr, false, percent < TEXT_SIZE_STEPS.back()))
+    SetTextSize(NextTextSize(percent, true));
+  if (s_recording)
+  {
+    s_frame.increase_item = {ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                             ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y};
+  }
+  if (ImGui::MenuItem("Decrease font size", nullptr, false, percent > TEXT_SIZE_STEPS.front()))
+    SetTextSize(NextTextSize(percent, false));
+  if (s_recording)
+  {
+    s_frame.decrease_item = {ImGui::GetItemRectMin().x, ImGui::GetItemRectMin().y,
+                             ImGui::GetItemRectMax().x, ImGui::GetItemRectMax().y};
+  }
+  if (ImGui::MenuItem(fmt::format("Reset font size ({}%)", percent).c_str(), nullptr, false,
+                      percent != 100))
+  {
+    SetTextSize(100);
+  }
+  ImGui::PopItemFlag();
 }
 
 std::optional<Geometry> LoadGeometry(ImVec2 display)
@@ -879,7 +935,7 @@ void DisplayFrame(float scale)
 
   const ImGuiIO& io = ImGui::GetIO();
   const u64 now = Common::Timer::NowMs();
-  const float font_px = FontPx(io.DisplaySize.y, scale);
+  const float font_px = FontPx(io.DisplaySize.y, scale) * TextSizePercent() / 100.0f;
 
   // Where: the saved place (fractions of the window), else the default; again when the window
   // changes size.
@@ -940,14 +996,24 @@ void DisplayFrame(float scale)
 
     if (ImGui::BeginMenuBar())
     {
+      if (s_recording)
+      {
+        const ImVec2 at = ImGui::GetCursorScreenPos();
+        const ImVec2 label = ImGui::CalcTextSize("Options");
+        s_frame.options_menu = {at.x, at.y, at.x + label.x, at.y + ImGui::GetFrameHeight()};
+      }
       if (ImGui::BeginMenu("Options"))
       {
+        if (s_recording)
+          s_frame.options_menu_open = true;
         bool in_matches = Config::Get(Config::ONLINE_CHAT_IN_MATCHES);
         if (ImGui::Checkbox("Show during matches", &in_matches))
         {
           Config::SetBaseOrCurrent(Config::ONLINE_CHAT_IN_MATCHES, in_matches);
           Config::Save();
         }
+        ImGui::Separator();
+        DrawTextSizeItems();
         ImGui::EndMenu();
       }
       DrawMenuBarPlayers(scale);
@@ -1037,6 +1103,7 @@ void DisplayFrame(float scale)
     s_frame.shown = true;
     s_frame.focused = ImGui::IsWindowFocused(ImGuiFocusedFlags_RootAndChildWindows);
     s_frame.alpha = ImGui::GetStyle().Alpha;
+    s_frame.font_px = font_px;
   }
   const Geometry now_geometry{ImGui::GetWindowPos(), ImGui::GetWindowSize(),
                               s.auto_collapsed ? s.applied.collapsed : ImGui::IsWindowCollapsed()};

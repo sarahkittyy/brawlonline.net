@@ -4,10 +4,12 @@
 #include <array>
 #include <cstring>
 #include <limits>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include <fmt/format.h>
 #include <gtest/gtest.h>
 
 #include "Core/Rollback/PeerData.h"
@@ -325,6 +327,18 @@ TEST(PeerData, PortValuesAndNames)
   pv[0x39] = 100;
   SanitizePortValues(pv);
   EXPECT_EQ(pv[0x39], 0);
+  // P+'s slot colour picked on the CSS (1-13, 0 none) is kept; the last byte is padding.
+  pv[0x3A] = 1;
+  pv[0x3B] = 0xFF;
+  SanitizePortValues(pv);
+  EXPECT_EQ(pv[0x3A], 1);
+  EXPECT_EQ(pv[0x3B], 0);
+  pv[0x3A] = MAX_SLOT_COLOUR;
+  SanitizePortValues(pv);
+  EXPECT_EQ(pv[0x3A], 13);
+  pv[0x3A] = 14;
+  SanitizePortValues(pv);
+  EXPECT_EQ(pv[0x3A], 0);
 
   EXPECT_EQ(TruncateName("abc"), "abc");
   EXPECT_EQ(TruncateName(std::string(1000, 'x')).size(), MAX_NAME_LEN);
@@ -652,4 +666,146 @@ TEST(PeerData, SetupKeyDiffFollowsTheKeysLayout)
   ASSERT_EQ(lines.size(), 4u);
   EXPECT_EQ(lines[0], "item switch +0x00 00, peer ff");
   EXPECT_EQ(lines[3], "and 7 more");
+}
+
+TEST(PeerData, SetupKeyCodeMenuAtFollowsTheKeysLayout)
+{
+  auto key = Key40();
+  EXPECT_EQ(SetupKeyCodeMenuAt(key), 0x85u);
+  // A team battle: a fifth byte per player.
+  key[0x0B] = 1;
+  EXPECT_EQ(SetupKeyCodeMenuAt(key), 0x89u);
+  // Stock control (set rule +5 = 2): each player's handicap after the set rule.
+  key = Key40();
+  key[0x64 + 5] = 2;
+  EXPECT_EQ(SetupKeyCodeMenuAt(key), 0x8Du);
+  // Too short for the set rule, or for the item switch.
+  key = Key40();
+  key.resize(0x70);
+  EXPECT_EQ(SetupKeyCodeMenuAt(key), std::nullopt);
+  key = Key40();
+  key.resize(0x84);
+  EXPECT_EQ(SetupKeyCodeMenuAt(key), std::nullopt);
+  key.resize(0x85);
+  EXPECT_EQ(SetupKeyCodeMenuAt(key), 0x85u);
+}
+
+TEST(PeerData, ReplayCodeMenuLinesByKind)
+{
+  using L = ReplayCodeMenuLine;
+  EXPECT_EQ(ClassifyReplayCodeMenuLine("Autosave Replays:  ", false), L::Ours);
+  EXPECT_EQ(ClassifyReplayCodeMenuLine("Code Menu Activation:  ", false), L::Ours);
+  EXPECT_EQ(ClassifyReplayCodeMenuLine("Player 2:  ", true), L::Recorded);
+  EXPECT_EQ(ClassifyReplayCodeMenuLine("Player 2:  ", false), L::Compared);
+  // Gameplay, the debug displays and everything not known to stay out of the match: compared.
+  for (const char* text : {"Hitstun Multiplier:  ", "Automatic L-Cancelling:  ", "Alternate Stages:  ",
+                           "Debug Mode:  ", "Save Previous Replay:  ", "Autosave:  ", "HUD:  "})
+  {
+    EXPECT_EQ(ClassifyReplayCodeMenuLine(text, false), L::Compared) << text;
+  }
+}
+
+// P+ v3.2's 81 value lines in key order (KEY_40's): Autosave Replays (4), Code Menu Activation (8),
+// the slot colours Player 1-4 (52-55).
+static std::vector<ReplayCodeMenuLine> PPlusLines()
+{
+  std::vector<ReplayCodeMenuLine> lines(81, ReplayCodeMenuLine::Compared);
+  lines[4] = lines[8] = ReplayCodeMenuLine::Ours;
+  for (size_t i = 52; i <= 55; ++i)
+    lines[i] = ReplayCodeMenuLine::Recorded;
+  return lines;
+}
+
+constexpr size_t CODE_MENU_AT = 0x85;
+
+static void SetLine(std::vector<u8>& key, size_t line, u32 value)
+{
+  for (int b = 0; b < 4; ++b)
+    key[CODE_MENU_AT + 4 * line + b] = static_cast<u8>(value >> (24 - 8 * b));
+}
+
+TEST(PeerData, ReplaySetupKeyKeepsOurLinesTheMatchDoesNotRead)
+{
+  // The 2026-10-15 Ranked replay (launcher v0.1.79): its recorder's plugin had Autosave Replays
+  // ON (line 4 = 1), this one writes OFF. The rest of the setup is the same.
+  const auto recorded = Key40();
+  ASSERT_EQ(recorded.size(), CODE_MENU_AT + 81 * 4);
+  auto here = recorded;
+  SetLine(here, 4, 0);
+  ASSERT_NE(here, recorded);
+  EXPECT_EQ(ReplaySetupKey(here, recorded, PPlusLines()), here);
+
+  // Also the activation and the slot colours (written in from the recording before the match;
+  // compared or not, a colour never refuses a replay).
+  SetLine(here, 8, 0);
+  SetLine(here, 53, 7);
+  EXPECT_EQ(ReplaySetupKey(here, recorded, PPlusLines()), here);
+
+  // A gameplay line still refuses it: Hitstun Multiplier (56) and P2's Automatic L-Cancelling
+  // (30). The diff names it.
+  for (const size_t line : {56u, 30u})
+  {
+    auto other = here;
+    SetLine(other, line, 1);
+    const auto key = ReplaySetupKey(here, other, PPlusLines());
+    EXPECT_NE(key, here) << line;
+    EXPECT_EQ(SetupKeyDiff(here, key),
+              (std::vector<std::string>{fmt::format(
+                  "code menu value {} (or a restart's restore) {:08x}, peer 00000001", line,
+                  line == 56 ? 0x3ecccccd : 0)}))
+        << line;
+  }
+
+  // A restart's restore after the lines does not move them.
+  auto here_restore = here, recorded_restore = recorded;
+  for (const int b : {3, 0, 0, 0, 0, 2, 0, 0, 0, 0})
+  {
+    here_restore.push_back(static_cast<u8>(b));
+    recorded_restore.push_back(static_cast<u8>(b));
+  }
+  EXPECT_EQ(ReplaySetupKey(here_restore, recorded_restore, PPlusLines()), here_restore);
+}
+
+TEST(PeerData, ReplaySetupKeyLeavesOtherLayoutsAlone)
+{
+  const auto recorded = Key40();
+  auto here = recorded;
+  SetLine(here, 4, 0);
+  // Not as many lines in the keys as this game has: nothing is taken.
+  auto lines = PPlusLines();
+  lines.push_back(ReplayCodeMenuLine::Ours);
+  EXPECT_EQ(ReplaySetupKey(here, recorded, lines), recorded);
+  // The values start elsewhere in the recording (a team battle here, not there).
+  auto teams = here;
+  teams[0x0B] = 1;
+  teams.insert(teams.begin() + 0x24, 0);
+  EXPECT_EQ(ReplaySetupKey(teams, recorded, PPlusLines()), recorded);
+  // Keys too short for any Code Menu.
+  EXPECT_EQ(ReplaySetupKey({}, recorded, PPlusLines()), recorded);
+  EXPECT_TRUE(ReplaySetupKey(here, {}, PPlusLines()).empty());
+}
+
+TEST(PeerData, RecordedCodeMenuValuesAreSlotColours)
+{
+  auto recorded = Key40();
+  SetLine(recorded, 52, 7);
+  SetLine(recorded, 53, 12);
+  SetLine(recorded, 54, 13);          // not a colour
+  SetLine(recorded, 55, 0x01000002);  // nor this
+  const auto values = RecordedCodeMenuValues(recorded, PPlusLines());
+  ASSERT_EQ(values.size(), 81u);
+  EXPECT_EQ(values[52], 7u);
+  EXPECT_EQ(values[53], 12u);
+  EXPECT_EQ(values[54], std::nullopt);
+  EXPECT_EQ(values[55], std::nullopt);
+  // Only Recorded lines: Autosave Replays (1 in this key) is never written in.
+  for (size_t i = 0; i < values.size(); ++i)
+  {
+    if (i < 52 || i > 55)
+      EXPECT_EQ(values[i], std::nullopt) << i;
+  }
+  // A key without the lines.
+  recorded.resize(CODE_MENU_AT + 80 * 4);
+  for (const auto& v : RecordedCodeMenuValues(recorded, PPlusLines()))
+    EXPECT_EQ(v, std::nullopt);
 }

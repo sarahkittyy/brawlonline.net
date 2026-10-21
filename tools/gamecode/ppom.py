@@ -288,6 +288,7 @@ def read_debug(c: HarnessClient, b: Block) -> dict:
 PORT_VALUES_SIZE = 0x3C
 LAYOUT_SIZE = 0x2D
 PV_STOCKS = 0x39   # (still v8) the count picked on the STOCKS box under stock control, 0 none
+PV_SLOT_COLOUR = 0x3A   # (still v8) P+'s slot colour picked on the CSS + 1, 0 none
 
 
 def port_values(d: bytes) -> dict:
@@ -295,7 +296,7 @@ def port_values(d: bytes) -> dict:
     flags, rumble = d[0], d[1]
     return {"tag": bool(flags & 1), "rumble": rumble, "tag_name": from_u16s(d[2:12]),
             "layout": d[12:12 + LAYOUT_SIZE].hex(), "tap_jump": bool(d[12 + 11] & 0x80),
-            "stocks": d[PV_STOCKS]}
+            "stocks": d[PV_STOCKS], "slot_colour": d[PV_SLOT_COLOUR]}
 
 
 def read_local(c: HarnessClient, b: Block) -> dict:

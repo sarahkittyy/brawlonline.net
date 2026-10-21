@@ -728,6 +728,7 @@ def _connected_direct(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
                       before_online: tuple[Any, Any] = (None, None),
                       on_css: tuple[Any, Any] = (None, None),
                       after_first_search: Any = None,
+                      env: tuple[Any, Any] = (None, None),
                       ) -> tuple[Game, Game, OnlineUser, OnlineUser]:
     """Two games on the Direct CSS with the gameplay backend (the default), searching for each
     other from the keypad until both are connected. Shorter rules than P+'s (`stocks` stocks,
@@ -737,13 +738,13 @@ def _connected_direct(backend: OnlineBackend, dolphin: Callable[..., DolphinInst
     stocks and times. `before_online`: a function per game, run on its main menu (offline)
     before it goes online. `on_css`: a function per game, run on its CSS after the character
     pick, before the search. `after_first_search`: run on the first game once it searches,
-    before the second one does."""
+    before the second one does. `env`: each Dolphin's extra environment."""
     ua = backend.create_user(names[0], names[0][:4].upper())
     ub = backend.create_user(names[1], names[1][:4].upper())
     a = _boot(dolphin, inst_names[0], backend, ua, gpu_backend, test, "gameplay",
-              gcpad_ini=gcpad_ini[0], dolphin_ini=dolphin_ini[0])
+              gcpad_ini=gcpad_ini[0], dolphin_ini=dolphin_ini[0], env=env[0])
     b = _boot(dolphin, inst_names[1], backend, ub, gpu_backend, test, "gameplay",
-              gcpad_ini=gcpad_ini[1], dolphin_ini=dolphin_ini[1])
+              gcpad_ini=gcpad_ini[1], dolphin_ini=dolphin_ini[1], env=env[1])
     _both(a.to_main_menu, b.to_main_menu)
     for g, fn in zip((a, b), before_online):
         if fn:

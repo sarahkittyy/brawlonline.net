@@ -12,6 +12,7 @@
 #include <cstdlib>
 #include <cstring>
 #include <deque>
+#include <map>
 #include <optional>
 #include <random>
 #include <utility>
@@ -123,6 +124,8 @@ struct Pair
   int advances_b = 0;
   // the newest inputs A's session handed its game for player 0 (A's own player)
   std::vector<unsigned char> a_local_inputs_seen;
+  // the first byte of player 0's input in each frame's newest advance, on each side
+  std::map<int, unsigned char> a_frames, b_frames;
 
   Pair()
   {
@@ -162,7 +165,7 @@ struct Pair
   }
 
   static int Update(GekkoSession* s, int player, unsigned char fill,
-                    std::vector<unsigned char>* seen_player0)
+                    std::vector<unsigned char>* seen_player0, std::map<int, unsigned char>* frames)
   {
     std::array<unsigned char, INPUT_SIZE> input;
     input.fill(fill);
@@ -185,6 +188,8 @@ struct Pair
         ++advances;
         if (seen_player0 && e->data.adv.inputs)
           seen_player0->assign(e->data.adv.inputs, e->data.adv.inputs + INPUT_SIZE);
+        if (e->data.adv.inputs)
+          (*frames)[e->data.adv.frame] = e->data.adv.inputs[0];
       }
     }
     int scount = 0;
@@ -205,8 +210,8 @@ struct Pair
     }
     gekko_network_poll(a);
     gekko_network_poll(b);
-    advances_a += Update(a, 0, a_fill, &a_local_inputs_seen);
-    advances_b += Update(b, 1, b_fill, nullptr);
+    advances_a += Update(a, 0, a_fill, &a_local_inputs_seen, &a_frames);
+    advances_b += Update(b, 1, b_fill, nullptr, &b_frames);
   }
 
   // Runs until both sides have simulated `frames` frames (the handshake first).
@@ -538,4 +543,62 @@ TEST(GekkoNetTraffic, LostPacketsAreRepairedByTheNextFrame)
     pair.Step();
   EXPECT_GE(pair.advances_a - a0, 590);
   EXPECT_GE(pair.advances_b - b0, 590);
+}
+
+// The local input delay changed mid-session (the launcher's setting while a game runs): both
+// sides still see the same input for A's player on every confirmed frame. Raising it from 2 to 4
+// repeats A's last input for the 2 frames it grew by and drops nothing; lowering it from 4 to 1
+// drops A's next 3 inputs (their frames already went out) and repeats nothing. Before the fix,
+// the raise repeated the input for the whole new delay (4 frames) and then dropped 2 inputs.
+TEST(GekkoNetDelay, ChangeMidSessionKeepsBothSidesTogether)
+{
+  // A's inputs after the start: FIRST + 1 .. FIRST + 200, apart from the start's 0x11 and the
+  // end's 0xF0.
+  constexpr int FIRST = 0x20;
+  Pair pair;
+  ASSERT_TRUE(pair.RunUntil(120));
+  for (int i = 1; i <= 200; ++i)
+  {
+    if (i == 50)
+      gekko_set_local_delay(pair.a, 0, 4);
+    if (i == 120)
+      gekko_set_local_delay(pair.a, 0, 1);
+    pair.Step(static_cast<unsigned char>(FIRST + i));
+  }
+  for (int i = 0; i < 60; ++i)
+    pair.Step(0xF0);
+  const int confirmed = std::min(gekko_confirmed_frame(pair.a), gekko_confirmed_frame(pair.b));
+  ASSERT_GT(confirmed, 300);
+  int compared = 0;
+  for (const auto& [frame, value] : pair.b_frames)
+  {
+    if (frame > confirmed)
+      break;
+    const auto it = pair.a_frames.find(frame);
+    ASSERT_NE(it, pair.a_frames.end()) << "frame " << frame;
+    EXPECT_EQ(it->second, value) << "frame " << frame;
+    ++compared;
+  }
+  EXPECT_GT(compared, 300);
+  // A's inputs in frame order, as B played them.
+  std::vector<int> seq;
+  for (const auto& [frame, value] : pair.b_frames)
+  {
+    if (frame <= confirmed && value > FIRST && value <= FIRST + 200)
+      seq.push_back(value - FIRST);
+  }
+  ASSERT_FALSE(seq.empty());
+  int repeats = 0, skipped = 0;
+  for (size_t i = 1; i < seq.size(); ++i)
+  {
+    ASSERT_GE(seq[i], seq[i - 1]) << "at " << i;
+    if (seq[i] == seq[i - 1])
+      ++repeats;
+    else
+      skipped += seq[i] - seq[i - 1] - 1;
+  }
+  EXPECT_EQ(seq.front(), 1);
+  EXPECT_EQ(seq.back(), 200);
+  EXPECT_EQ(repeats, 2);
+  EXPECT_EQ(skipped, 3);
 }

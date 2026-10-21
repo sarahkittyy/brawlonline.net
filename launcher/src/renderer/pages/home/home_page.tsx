@@ -3,6 +3,7 @@ import React, { useCallback, useEffect } from "react";
 import { Route, Routes, useNavigate, useParams } from "react-router-dom";
 
 import { useRouteMemory } from "@/lib/hooks/use_route_memory";
+import { useRoomList } from "@/lib/social/use_room_list";
 
 import { HomePageMessages as Messages } from "./home_page.messages";
 import { HOME_TABS } from "./home_routes";
@@ -43,6 +44,8 @@ export const HomePage = React.memo(function HomePage() {
   const params = useParams();
   const navigate = useNavigate();
   const setLastRoute = useRouteMemory((s) => s.setLastRoute);
+  // The public Other Games rooms, from the room list Home already polls (the Play buttons' query).
+  const modRoomCount = useRoomList().query.data?.modRooms?.length;
 
   const splat = params["*"] || "";
   const firstSegment = splat.split("/")[0] || "";
@@ -67,7 +70,10 @@ export const HomePage = React.memo(function HomePage() {
             tabs={[
               { id: "overview", label: Messages.overview() },
               { id: "spectate", label: Messages.spectate() },
-              { id: "mods", label: ModsMessages.tabLabel() },
+              {
+                id: "mods",
+                label: modRoomCount == null ? ModsMessages.tabLabel() : ModsMessages.tabLabelWithCount(modRoomCount),
+              },
             ]}
           />
           <PlayButtons />

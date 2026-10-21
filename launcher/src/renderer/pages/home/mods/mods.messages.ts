@@ -1,5 +1,7 @@
 export const ModsMessages = {
   tabLabel: () => "Other Games",
+  /** The tab with the number of public rooms, once the room list has loaded. */
+  tabLabelWithCount: (count: number) => `Other Games (${count})`,
   intro: () =>
     "Play any Wii game with rollback (ex. NSMB Wii, REX, Brawl Minus, vBrawl). The whole game is shared. Players can drop in and out whenever they'd like, like plugging in a controller. Everyone in a room needs the exact same game.",
   yourBuilds: () => "Your games",

@@ -226,20 +226,26 @@ constexpr size_t PAD_SIZE = 0x40;
 void SanitizePad(u8* pad);
 
 // Port values (ppom.h PortValues, 0x3C bytes) from the peer: only the flag the game knows
-// (PV_TAG) is kept, the rumble byte (local only) and the padding are cleared, and a picked stock
-// count (stock control) above MAX_PICKED_STOCKS is none. The controls layout itself is sanitised
-// by the game (online_match.cpp layoutByte), the same on both machines.
+// (PV_TAG) is kept, the rumble byte (local only) and the padding are cleared, a picked stock
+// count (stock control) above MAX_PICKED_STOCKS and a slot colour above MAX_SLOT_COLOUR are none.
+// The controls layout itself is sanitised by the game (online_match.cpp layoutByte), the same on
+// both machines.
 constexpr u8 MAX_PICKED_STOCKS = 99;
+// P+'s slot colours 0-12 as PortValues.slotColour 1-13 (ppom.h SLOT_COLOURS; 0 none).
+constexpr u8 MAX_SLOT_COLOUR = 13;
 template <size_t N>
 void SanitizePortValues(std::array<u8, N>& pv)
 {
   static_assert(N == 0x3C);
   pv[0] &= 0x01;      // flags: PV_TAG
   pv[1] = 0;          // rumble
-  // The stock count picked on the STOCKS box (the rules' stock control; 0 none), then padding.
+  // The stock count picked on the STOCKS box (the rules' stock control; 0 none).
   if (pv[0x39] > MAX_PICKED_STOCKS)
     pv[0x39] = 0;
-  pv[0x3A] = pv[0x3B] = 0;
+  // The slot colour picked on the CSS (L / R on the player box; 0 none), then padding.
+  if (pv[0x3A] > MAX_SLOT_COLOUR)
+    pv[0x3A] = 0;
+  pv[0x3B] = 0;
 }
 
 std::string TruncateName(const std::string& name);
@@ -251,6 +257,37 @@ std::string TruncateName(const std::string& name);
 // Empty when the keys are the same.
 std::vector<std::string> SetupKeyDiff(const std::vector<u8>& mine, const std::vector<u8>& theirs,
                                       size_t max_lines = 16);
+
+// Where P+'s Code Menu values (4 bytes a line) start in a setup key: after the init block, the
+// players (5 bytes each in a team battle), the pad layouts, the set rule (then under stock control
+// each player's handicap), the hazard bit and the item switch. nullopt for a shorter key.
+std::optional<size_t> SetupKeyCodeMenuAt(const std::vector<u8>& key);
+
+// A replay's Code Menu value lines (docs/design/replays.md §6.1 step 7): what the barrier does with one
+// whose value differs from the recording's. The recorder's machine had the lines its plugin wrote
+// (an older plugin wrote other values: Autosave Replays ON before 2026-10-18).
+enum class ReplayCodeMenuLine : u8
+{
+  Compared,  // read by P+'s codes in the match: must be the recording's, as between live peers
+  Ours,      // never read in the match (P+'s replay autosave, the menu's activation): ours kept
+  Recorded,  // only drawn (the slot colours): the recording's, written in before the match loads
+};
+// `slot_colour`: the line is one of the four the slot colour pointers (0x804E02F4) point at.
+ReplayCodeMenuLine ClassifyReplayCodeMenuLine(std::string_view text, bool slot_colour);
+// A Recorded line's values: P+'s slot colours 0-12.
+constexpr u32 MAX_RECORDED_SLOT_COLOUR = MAX_SLOT_COLOUR - 1;
+
+// The recording's setup key as playback compares it with `here` (both SetupKey; `lines`: this
+// game's value lines in key order): the values of the lines that are not Compared taken from
+// `here`. Unchanged when the two keys' Code Menu values do not start at the same place or either
+// is too short for the lines.
+std::vector<u8> ReplaySetupKey(const std::vector<u8>& here, const std::vector<u8>& recorded,
+                               const std::vector<ReplayCodeMenuLine>& lines);
+
+// Per line (`lines` as above) the recorded value to write in before the match: the Recorded lines
+// whose recorded value is a slot colour; nullopt for the others or when the key is too short.
+std::vector<std::optional<u32>> RecordedCodeMenuValues(const std::vector<u8>& recorded,
+                                                       const std::vector<ReplayCodeMenuLine>& lines);
 
 // Why a peer's session gave up (its "leave" message's "why"), for our logs and status: printable
 // ASCII only (anything else becomes '?'), at most MAX_LEAVE_REASON_LEN characters.

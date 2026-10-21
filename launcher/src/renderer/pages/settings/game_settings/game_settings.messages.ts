@@ -8,6 +8,7 @@ export const GameSettingsMessages = {
   launchMelee: (gameName: string) => "Launch {0}",
   launchDolphin: () => "Launch Dolphin",
   inputDelay: () => "Input Delay",
+  inputDelayDescription: () => "Takes effect right away, even in the middle of a game.",
   inputDelayAuto: () => "Auto",
   inputDelayFrames: (frames: number) => (frames === 1 ? "1 frame" : `${frames} frames`),
   enableMusic: () => "Music",

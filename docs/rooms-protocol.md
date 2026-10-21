@@ -298,6 +298,15 @@ What the launcher shows (suggested): `accepted`: "Creating a room in your game."
 | `screen` | `menus`, `online-css`, `room`, `match`, `searching`, `single-player`, `other` (for logs and later UI). |
 | `room` | The room the player is in, or null. |
 | `lastRequest` | The answer to the last `join-room.json` (a room request, a Direct invite or a create): `accepted`, `refused` (with `message`), or `failed` (with `message`, e.g. the server's "Room not found."). |
+| `inputDelay` | `{setting, current, request}`: the Input Delay setting Dolphin plays with (0 automatic, 1-9 frames), the running game's delay (null when no game runs: a P+ game or an Other Games room's session), and the `id` of the last `input-delay.json` taken (null for none). |
+
+**`input-delay.json`**, launcher → game (2026-10-20, the user's: the launcher's Input Delay while Dolphin is open, mid-game too, everywhere), written atomically when the setting changes while the netplay Dolphin runs (Play, a room, Other Games):
+
+```json
+{"version": 1, "id": "5b0f3f0e-…", "inputDelay": 3, "createdAt": "2026-10-20T15:00:00.000Z"}
+```
+
+`inputDelay` is 0 (automatic) or 1-9 frames; anything else, a missing `id` or another `version`, and the file is ignored with a log line. The rooms thread reads it within 500 ms, deletes it and: keeps the setting (Dolphin's `[Online] InputDelay`, so Dolphin's own save of its settings keeps it; the launcher has written Dolphin.ini already), and hands it to the running session, which changes this player's delay before its next frame's local input (`Gprb::Session::SetInputDelay`, `Machine::SetInputDelay`); every later game of the session (an Other Games session: every epoch) plays with it. Automatic is picked again from the round trip at that moment. It is not busy-gated and needs no answer: `game-status.json`'s `inputDelay` shows it taken. A higher delay repeats the player's last input for the frames it adds; a lower one drops the player's next inputs for the frames it takes away (those frames went out already). Every machine gets the same inputs either way, and only the player's own inputs are delayed, so the others need not know: nothing is sent to them, and nothing restarts. A Dolphin that has not booted a game yet (Configure) takes the file at its first boot; the launcher removes it before each start, and it no longer reads Input Delay back from Dolphin.ini when Dolphin closes (only the launcher sets it).
 
 ### What Dolphin and the game must do (next phase)
 

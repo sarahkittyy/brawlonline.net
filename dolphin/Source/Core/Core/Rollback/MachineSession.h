@@ -278,6 +278,12 @@ void SetWiimoteOverride(std::optional<WiimoteOverride> value);
 void SetLocalController(Controller controller);
 // A joiner's player answered the SD card's dialog (any thread).
 void SetSDSyncChoice(SDSyncChoice choice);
+// The player's input delay setting changed (any thread; the launcher's input-delay.json,
+// Online::Rooms): AUTO_DELAY or 0-9 frames, as Options::delay. The running GekkoNet session
+// takes it from the next frame, and so does every later one (each epoch).
+void SetInputDelay(int delay);
+// This player's input delay in the running GekkoNet session (any thread), -1 when none runs.
+int CurrentInputDelay();
 // "ask", "yes", "overwrite" or "no"; nullopt for anything else.
 std::optional<SDSyncChoice> ParseSDSyncChoice(std::string_view text);
 // The room's host moves a player (any thread): slots `from` and `to` (0-3) swap players at an

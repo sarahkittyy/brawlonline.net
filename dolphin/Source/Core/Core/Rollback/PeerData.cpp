@@ -534,4 +534,72 @@ std::vector<std::string> SetupKeyDiff(const std::vector<u8>& mine, const std::ve
     out.push_back(fmt::format("and {} more", more));
   return out;
 }
+
+std::optional<size_t> SetupKeyCodeMenuAt(const std::vector<u8>& key)
+{
+  constexpr size_t INIT = 0x20, INIT_TEAMS = 0x0B, PADS = 4 * 12 + 4, RULE = 0x10,
+                   RULE_HANDICAP = 5, HANDICAPS = 4 * 2, ITEM_SWITCH = 0x10;
+  if (key.size() < INIT)
+    return std::nullopt;
+  size_t o = INIT + MAX_PORTS * (key[INIT_TEAMS] != 0 ? 5 : 4) + PADS;
+  if (key.size() < o + RULE)
+    return std::nullopt;
+  const bool stock_control = key[o + RULE_HANDICAP] == 2;
+  o += RULE + (stock_control ? HANDICAPS : 0) + 1 + ITEM_SWITCH;
+  if (key.size() < o)
+    return std::nullopt;
+  return o;
+}
+
+ReplayCodeMenuLine ClassifyReplayCodeMenuLine(std::string_view text, bool slot_colour)
+{
+  if (slot_colour)
+    return ReplayCodeMenuLine::Recorded;
+  // P+'s replay autosave writes the game's replay to the SD card after the match (playback keeps
+  // its own, OFF: no write to the playback card); the activation only lets the menu open.
+  for (const std::string_view ours : {"Autosave Replays:", "Code Menu Activation:"})
+  {
+    if (text.starts_with(ours))
+      return ReplayCodeMenuLine::Ours;
+  }
+  return ReplayCodeMenuLine::Compared;
+}
+
+std::vector<u8> ReplaySetupKey(const std::vector<u8>& here, const std::vector<u8>& recorded,
+                               const std::vector<ReplayCodeMenuLine>& lines)
+{
+  std::vector<u8> out = recorded;
+  const auto at = SetupKeyCodeMenuAt(here);
+  const size_t size = 4 * lines.size();
+  if (!at || SetupKeyCodeMenuAt(recorded) != at || here.size() < *at + size ||
+      recorded.size() < *at + size)
+  {
+    return out;
+  }
+  for (size_t i = 0; i < lines.size(); ++i)
+  {
+    if (lines[i] != ReplayCodeMenuLine::Compared)
+      std::copy_n(here.begin() + *at + 4 * i, 4, out.begin() + *at + 4 * i);
+  }
+  return out;
+}
+
+std::vector<std::optional<u32>> RecordedCodeMenuValues(const std::vector<u8>& recorded,
+                                                       const std::vector<ReplayCodeMenuLine>& lines)
+{
+  std::vector<std::optional<u32>> out(lines.size());
+  const auto at = SetupKeyCodeMenuAt(recorded);
+  if (!at || recorded.size() < *at + 4 * lines.size())
+    return out;
+  for (size_t i = 0; i < lines.size(); ++i)
+  {
+    if (lines[i] != ReplayCodeMenuLine::Recorded)
+      continue;
+    const u8* v = recorded.data() + *at + 4 * i;
+    const u32 value = u32(v[0]) << 24 | u32(v[1]) << 16 | u32(v[2]) << 8 | v[3];
+    if (value <= MAX_RECORDED_SLOT_COLOUR)
+      out[i] = value;
+  }
+  return out;
+}
 }  // namespace Gprb::PeerData
