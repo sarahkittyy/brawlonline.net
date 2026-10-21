@@ -27,8 +27,8 @@ constexpr int WIDTH = 1280;
 constexpr int HEIGHT = 720;
 constexpr int AUDIO_RATE = 48000;
 
-// Opens `path` for writing (an existing file is replaced once the first frame comes). An error
-// when no encoder could be made.
+// Opens `path` for writing: the video is written to `<path>.part`, named `path` once complete (an
+// existing file is then replaced). An error when no encoder could be made.
 std::optional<std::string> Open(const std::string& path);
 // Writes out what is queued and closes the file; an error when it could not be written. With
 // `discard` the file is deleted instead.

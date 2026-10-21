@@ -44,6 +44,11 @@ void FrameDumper::DumpCurrentFrame(const AbstractTexture* src_texture,
                                    const MathUtil::Rectangle<int>& target_rect, u64 ticks,
                                    int frame_number)
 {
+  // A replay's clip being rendered keeps every frame: one still waiting for the end of its frame
+  // (two presents before an XFB copy) goes to the dumper's thread first instead of being replaced.
+  if (m_frame_dump_needs_flush && Gprb::Clip::WantsFrames())
+    FlushFrameDump();
+
   int source_width = src_rect.GetWidth();
   int source_height = src_rect.GetHeight();
   int target_width = target_rect.GetWidth();

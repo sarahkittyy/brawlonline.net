@@ -1,12 +1,13 @@
 // Copyright 2026 Dolphin Emulator Project
 // SPDX-License-Identifier: GPL-2.0-or-later
 
-// ClipEncoder on macOS and Linux: FFmpeg as Dolphin links it there (the system's or the bundled
-// libraries), H.264 with the first encoder it has (VideoToolbox on macOS, libx264 or OpenH264 on
-// Linux; MPEG-4 Part 2 when none), AAC audio, MP4. Windows uses Media Foundation
-// (ClipEncoderMF.cpp): Dolphin's own Windows FFmpeg has neither H.264 nor MP4.
+// ClipEncoder on Linux: FFmpeg as Dolphin links it there (the system's libraries, bundled into
+// the AppImage), H.264 with the first encoder it has (libx264 or OpenH264; MPEG-4 Part 2
+// when none), AAC audio, MP4. Windows uses Media Foundation (ClipEncoderMF.cpp): Dolphin's own
+// Windows FFmpeg has neither H.264 nor MP4; macOS uses AVFoundation (ClipEncoderAVF.mm): our macOS
+// build has no FFmpeg.
 
-#if !defined(_WIN32)
+#if !defined(_WIN32) && !defined(__APPLE__)
 
 #include "Core/Rollback/ClipEncoder.h"
 
@@ -137,7 +138,7 @@ private:
   bool OpenVideo(std::string* error)
   {
     const AVCodec* codec = nullptr;
-    for (const char* name : {"h264_videotoolbox", "libx264", "libopenh264", "h264_mf", "mpeg4"})
+    for (const char* name : {"libx264", "libopenh264", "mpeg4"})
     {
       if ((codec = avcodec_find_encoder_by_name(name)))
         break;

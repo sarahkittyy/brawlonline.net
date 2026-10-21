@@ -77,5 +77,7 @@ struct MacOSVersion  // NSOperatingSystemVersion
 // Helper function to get the current macOS version, which is easy to do with
 // from Objective-C code, but a little harder from C++.
 MacOSVersion GetMacOSVersion();
+// No Dock icon or menu bar: a background process (rendering clips to video, DolphinQt --render).
+void HideFromDock();
 #endif
 }  // namespace Common

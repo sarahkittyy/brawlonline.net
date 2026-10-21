@@ -19,6 +19,7 @@
 #include "Common/IOFile.h"
 #include "Common/Logging/Log.h"
 #include "Common/Thread.h"
+#include "Core/Config/GraphicsSettings.h"
 #include "Core/ConfigManager.h"
 #include "Core/Online/GameBridge.h"
 #include "Core/Rollback/ClipRecorder.h"
@@ -569,6 +570,27 @@ void RenderDrain()
   NextHighlight();
 }
 
+// Rendering: opens the request's output (under s_mutex); the error when it could not. Frames must
+// carry the time of the VI field they were shown in: Immediately Present XFB (on by default, for
+// latency) stamps them with an estimate of the next field instead, wrong whenever the GPU thread
+// is ahead of or behind the CPU's (on macOS most frames came with an earlier one's time). It is
+// turned off in the command line's layer, which every frontend has from the start, and in the
+// game's run once there is one (a request comes before the game boots, when there is none).
+std::optional<std::string> OpenRender()
+{
+  if (s_request.output.empty())
+    return "no output file";
+  for (const auto layer : {Config::LayerType::CommandLine, Config::LayerType::CurrentRun})
+  {
+    if (Config::GetLayer(layer))
+      Config::Set(layer, Config::GFX_HACK_IMMEDIATE_XFB, false);
+  }
+  if (auto e = Clip::Open(s_request.output))
+    return e;
+  s_render_open = true;
+  return std::nullopt;
+}
+
 // Highlights (under s_mutex): the line on screen while the next one loads or is fast-forwarded to.
 void ShowHighlightProgress(const std::string& what)
 {
@@ -590,6 +612,9 @@ void StepHighlights(const picojson::object& st)
     const auto it = st.find(k);
     return it != st.end() && it->second.is<double>() ? static_cast<s64>(it->second.get<double>()) : -1;
   };
+  // (A render whose file is written, or was given up: nothing more to do.)
+  if (s_request.render && !s_render_open)
+    return;
   const auto [start, end] = s_request.clips[s_index];
   if (s_render_draining)
   {
@@ -721,7 +746,9 @@ void Step()
   }
   if (s_request.highlights)
   {
-    StepHighlights(st);
+    // (Nothing left of a request that failed at once: its output could not be opened.)
+    if (s_index < s_request.clips.size())
+      StepHighlights(st);
     return;
   }
   if (get_bool("finished"))
@@ -789,19 +816,32 @@ void Loop()
           s_request.close_on_end = r->close_on_end;
           s_request.banner = std::move(r->banner);
         }
-        else if (r && r->command_id != last_command && r->highlights && !r->render &&
-                 !s_request.render && !r->paths.empty() && s_armed && !s_request.mirror && s_index < s_request.paths.size() &&
+        else if (r && r->command_id != last_command && r->highlights && !r->paths.empty() &&
+                 s_armed && !s_request.mirror && !s_render_open && s_index < s_request.paths.size() &&
                  s_request.paths[s_index] == r->paths[0] && !Session::PlaybackStopping())
         {
-          // Highlights of the replay already playing (the next row, Play all): its match goes on,
-          // and the session seeks (forward: on from where it is; back: a keyframe put back).
+          // Highlights of the replay already playing (the next row, Play all; the next render of
+          // the render Dolphin, once the last one's file is written): its match goes on, and the
+          // session seeks (forward: on from where it is; back: a keyframe put back).
           last_command = r->command_id;
           s_request = std::move(*r);
           s_index = 0;
           s_clip_applied = false;
           s_seek_from = -1;
           s_error.clear();
+          s_render_draining = false;
+          s_rendered = 0;
           s_state = "seeking";
+          if (s_request.render)
+          {
+            if (auto e = OpenRender())
+            {
+              s_state = "error";
+              s_error = *e;
+              s_request.paths.clear();
+              s_request.clips.clear();
+            }
+          }
         }
         else if (r && r->command_id != last_command)
         {
@@ -826,21 +866,15 @@ void Loop()
             s_state = "error";
             s_error = "nothing to play";
           }
-          else if (s_request.render && s_request.output.empty())
-          {
-            s_state = "error";
-            s_error = "no output file";
-          }
           else if (s_request.render)
           {
-            if (auto e = Clip::Open(s_request.output))
+            if (auto e = OpenRender())
             {
               s_state = "error";
               s_error = *e;
             }
             else
             {
-              s_render_open = true;
               s_wait_boot = true;
             }
           }

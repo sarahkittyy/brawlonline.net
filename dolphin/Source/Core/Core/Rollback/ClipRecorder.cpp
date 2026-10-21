@@ -109,10 +109,14 @@ private:
   void Run(std::promise<std::optional<std::string>> made)
   {
     Common::SetCurrentThreadName("Clip encoder");
+    // Written as <path>.part and named <path> once complete: a render cut short (Dolphin ended
+    // with it) leaves no half-written video under the real name.
+    const std::string part = m_path + ".part";
     std::string error;
-    std::unique_ptr<Encoder> encoder = CreateEncoder(m_path, WIDTH, HEIGHT, AUDIO_RATE, &error);
+    std::unique_ptr<Encoder> encoder = CreateEncoder(part, WIDTH, HEIGHT, AUDIO_RATE, &error);
     if (!encoder)
     {
+      File::Delete(part);
       made.set_value(error.empty() ? std::string("no video encoder") : error);
       return;
     }
@@ -121,6 +125,7 @@ private:
     for (;;)
     {
       Job job;
+      bool discard;
       {
         std::unique_lock lk(m_mutex);
         m_work.wait(lk, [&] { return !m_jobs.empty() || m_stop; });
@@ -133,8 +138,9 @@ private:
           --m_queued_frames;
           m_space.notify_all();
         }
+        discard = m_discard;
       }
-      if (!ok || m_discard)
+      if (!ok || discard)
         continue;
       if (job.kind == Job::Kind::Video)
       {
@@ -155,14 +161,22 @@ private:
         ERROR_LOG_FMT(BRAWLBACK, "clip: encoding {} failed: {}", m_path, m_error);
       }
     }
-    if (ok && !m_discard && !encoder->Finish())
+    bool discard;
     {
       std::lock_guard lk(m_mutex);
-      m_error = encoder->Error();
+      discard = m_discard;
     }
+    std::string finish_error;
+    if (ok && !discard && !encoder->Finish())
+      finish_error = encoder->Error();
     encoder.reset();
-    if (m_discard || !m_error.empty())
-      File::Delete(m_path);
+    if (ok && !discard && finish_error.empty() && !File::Rename(part, m_path))
+      finish_error = "the finished video could not be named " + m_path;
+    std::lock_guard lk(m_mutex);
+    if (!finish_error.empty())
+      m_error = finish_error;
+    if (discard || !m_error.empty())
+      File::Delete(part);
   }
 
   std::string m_path;
@@ -198,6 +212,8 @@ struct Segment
   bool have_prev = false;
   std::vector<s16> pending;
   u64 audio_frames = 0;
+  // Frames that came and were left out: before or after it, or not later than the last.
+  u64 early = 0, late = 0, repeated = 0;
 };
 Segment s_seg;
 std::atomic<bool> s_segment_open{false};
@@ -315,8 +331,8 @@ bool EndSegment()
   else if (have > want)
     s_seg.pending.resize(static_cast<size_t>(std::max<u64>(want, s_seg.audio_frames) - s_seg.audio_frames) * 2);
   FlushAudio(true);
-  INFO_LOG_FMT(BRAWLBACK, "clip: segment of {:.3f} s, {} frames", static_cast<double>(length) / UNITS,
-               s_seg.frames);
+  INFO_LOG_FMT(BRAWLBACK, "clip: segment of {:.3f} s, {} frames (left out: {} before, {} after, {} repeated)",
+               static_cast<double>(length) / UNITS, s_seg.frames, s_seg.early, s_seg.late, s_seg.repeated);
   s_offset += length;
   s_seg = {};
   s_segment_open = false;
@@ -347,9 +363,11 @@ void AddVideoFrame(const u8* rgba, int width, int height, int stride, u64 ticks)
   s64 pts;
   {
     std::lock_guard lk(s_mutex);
-    if (!s_seg.open || !s_writer || ticks < s_seg.start || ticks >= s_seg.end ||
-        (s_seg.frames > 0 && ticks <= s_seg.last_video_ticks))
+    if (!s_seg.open || !s_writer)
+      return;
+    if (ticks < s_seg.start || ticks >= s_seg.end || (s_seg.frames > 0 && ticks <= s_seg.last_video_ticks))
     {
+      ++(ticks < s_seg.start ? s_seg.early : ticks >= s_seg.end ? s_seg.late : s_seg.repeated);
       return;
     }
     s_seg.last_video_ticks = ticks;

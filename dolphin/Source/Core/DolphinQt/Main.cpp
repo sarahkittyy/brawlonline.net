@@ -20,6 +20,7 @@
 #include <QPushButton>
 #include <QWidget>
 
+#include "Common/CommonFuncs.h"
 #include "Common/Config/Config.h"
 #include "Common/MsgHandler.h"
 #include "Common/ScopeGuard.h"
@@ -200,6 +201,11 @@ int main(int argc, char* argv[])
   Resources::Init();
   Settings::Instance().SetBatchModeEnabled(options.is_set("batch"));
   Settings::Instance().SetRenderOnly(options.is_set("batch") && options.is_set("render"));
+#ifdef __APPLE__
+  // (No window at all: no Dock icon either.)
+  if (Settings::Instance().IsRenderOnly())
+    Common::HideFromDock();
+#endif
 
   // Hook up alerts from core
   Common::RegisterMsgAlertHandler(QtMsgAlertHandler);

@@ -16,8 +16,10 @@ from __future__ import annotations
 
 import concurrent.futures
 import json
+import re
 import shutil
 import struct
+import subprocess
 import sys
 import time
 import types
@@ -467,6 +469,69 @@ def test_launcher_comm_file_plays_highlights(backend: OnlineBackend,
     log = inst.log.read()
     assert log.count("replay: 1 of ") == 1, "one match armed for all of them"
     print(f"states {states}; back to clip 2 in {back:.2f} s")
+
+
+@pytest.mark.slow
+def test_launcher_comm_file_renders_highlights(backend: OnlineBackend,
+                                              dolphin: Callable[..., DolphinInstance],
+                                              gpu_backend: str) -> None:
+    """Rendering highlights to video (docs/design/highlights.md §5, ReplayPlayback.h `render`): the
+    render Dolphin gets clips of one replay and an output file; each clip is fast-forwarded to and
+    played as for highlights, and its frames and samples, timed in emulated time, are written one
+    clip after another to one MP4 (Rollback/ClipRecorder.h). The status counts the clips written
+    and ends once the file is complete. A second request for the same replay goes on in the running
+    match into a new file. With ffprobe on PATH, the file is H.264 1280x720 at 59.94 with AAC at
+    48 kHz, as long as its clips; frames as many as the clips have."""
+    fa, out = _recorded_direct_game(backend, dolphin, gpu_backend, "render", ("rhea", "sven"))
+    last = fa.last_frame
+    assert last > 1200, last
+    clips = [(last // 2, last // 2 + 180), (last // 5, last // 5 + 120)]
+    v, inst, file_status = _comm_viewer(backend, dolphin, gpu_backend, fa, out)
+    comm = out / "playback-comms.json"
+    files = [out / "render-1.mp4", out / "render-2.mp4"]
+    for f in files:
+        f.unlink(missing_ok=True)
+
+    def render(command: str, output: Path, cs: list[tuple[int, int]]) -> dict[str, Any]:
+        comm.write_text(json.dumps({"mode": "render", "commandId": command, "output": str(output), "queue": [
+            {"path": str(fa.path), "startFrame": a, "endFrame": b} for a, b in cs]}))
+
+        def done() -> dict[str, Any] | None:
+            fs = file_status()
+            if fs.get("commandId") != command:
+                return None
+            assert fs.get("state") != "error", fs
+            return fs if fs.get("state") == "ended" else None
+        return _wait(done, 600, f"render {command} to finish")
+
+    fs = render("r1", files[0], clips)
+    assert fs["render"] and fs["rendered"] == len(clips), fs
+    fs2 = render("r2", files[1], clips[:1])
+    assert fs2["rendered"] == 1, fs2
+    log = inst.log.read()
+    assert log.count("replay: 1 of ") <= 2, "the second render went on in the running match"
+    frames = [int(m) for m in re.findall(r"clip: written \((\d+) frames\)", log)]
+    expected = sum(b - a + 1 for a, b in clips)
+    assert frames and abs(frames[0] - expected) <= 2 * len(clips), (frames, expected)
+    for f in files:
+        assert f.stat().st_size > 100_000, f
+    ffprobe = shutil.which("ffprobe")
+    if not ffprobe:
+        print("no ffprobe: file contents not checked")
+        return
+    probe = json.loads(subprocess.run(
+        [ffprobe, "-v", "error", "-show_entries", "stream=codec_type,codec_name,width,height,r_frame_rate,"
+         "sample_rate,nb_frames,duration", "-of", "json", str(files[0])],
+        check=True, capture_output=True, text=True).stdout)
+    streams = {st["codec_type"]: st for st in probe["streams"]}
+    video, audio = streams["video"], streams["audio"]
+    assert (video["codec_name"], video["width"], video["height"]) == ("h264", 1280, 720), video
+    assert audio["codec_name"] == "aac" and int(audio["sample_rate"]) == 48000, audio
+    seconds = expected * 1001 / 60000
+    assert abs(float(video["duration"]) - seconds) < 0.25, (video, seconds)
+    assert abs(float(audio["duration"]) - float(video["duration"])) < 0.1, (audio, video)
+    assert abs(int(video["nb_frames"]) - frames[0]) <= 2, (video, frames)
+    print(f"rendered {frames} frames, {video['duration']} s")
 
 
 @pytest.mark.slow
