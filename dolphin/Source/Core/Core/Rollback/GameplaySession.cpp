@@ -867,13 +867,21 @@ constexpr u32 MM_ITEM_SWITCH = 0x30, ITEM_SWITCH_SIZE = 0x10;
 // found by the same layout the plugin uses (fudgepop's: +0 size u16, +2 type, +6 text offset,
 // +8 value, a selection's options pointer at +0x18). The per-player Character Select lines are
 // left out: P+ keeps the fighter being played in them.
-constexpr u32 CODE_MENU = 0x804E0000, CODE_MENU_SIZE = 0x2520;
+constexpr u32 CODE_MENU = 0x804E0000, CODE_MENU_SIZE = 0x2520, CODE_MENU_VALUE = 8;
 
-void AppendCodeMenuValues(const Guest& g, std::vector<u8>& key)
+struct CodeMenuLine
 {
+  u32 addr;
+  std::string text;
+};
+
+// The value lines in the setup key's order.
+std::vector<CodeMenuLine> CodeMenuValueLines(const Guest& g)
+{
+  std::vector<CodeMenuLine> out;
   const u8* m = g.Ptr(CODE_MENU, CODE_MENU_SIZE);
   if (!m)
-    return;
+    return out;
   for (u32 o = 0; o + 0x20 <= CODE_MENU_SIZE; o += 4)
   {
     const u8* l = m + o;
@@ -899,8 +907,39 @@ void AppendCodeMenuValues(const Guest& g, std::vector<u8>& key)
     }
     if (t.substr(0, percent).find("Character Select") != std::string_view::npos)
       continue;
-    key.insert(key.end(), l + 8, l + 12);
+    out.push_back({CODE_MENU + o, std::string(t.substr(0, percent))});
   }
+  return out;
+}
+
+void AppendCodeMenuValues(const Guest& g, std::vector<u8>& key)
+{
+  for (const auto& line : CodeMenuValueLines(g))
+  {
+    if (const u8* v = g.Ptr(line.addr + CODE_MENU_VALUE, 4))
+      key.insert(key.end(), v, v + 4);
+  }
+}
+
+// P+'s slot colour lines (QuickLava's PlayerSlotColorChangers): one pointer per port to its line
+// (online_menu.cpp slotColourLine).
+constexpr u32 SLOT_COLOUR_LINES = 0x804E02F4;
+
+// What playback does with each value line that differs from the recording's (PeerData).
+std::vector<PeerData::ReplayCodeMenuLine> ReplayCodeMenuLines(const Guest& g,
+                                                             const std::vector<CodeMenuLine>& lines)
+{
+  std::array<u32, MAX_LOBBY_PLAYERS> slot_colours{};
+  for (u32 port = 0; port < MAX_LOBBY_PLAYERS; ++port)
+    slot_colours[port] = g.Ptr32(SLOT_COLOUR_LINES + 4 * port).value_or(0);
+  std::vector<PeerData::ReplayCodeMenuLine> out;
+  for (const auto& line : lines)
+  {
+    const bool slot_colour =
+        std::find(slot_colours.begin(), slot_colours.end(), line.addr) != slot_colours.end();
+    out.push_back(PeerData::ClassifyReplayCodeMenuLine(line.text, slot_colour));
+  }
+  return out;
 }
 
 // gmGlobalModeMelee fields both peers must agree on: rules/stage block and per player the
@@ -7490,9 +7529,53 @@ void RestoreLegacyTeamCostumes(Core::System& system, const Guest& g)
   }
 }
 
+// The Code Menu lines a replay takes from its recording (PeerData::ReplayCodeMenuLine::Recorded:
+// the slot colours, only drawn), written before the match loads: the players' colours as the
+// recorder saw them, whatever this plugin made of the recorded SESSION.
+void ApplyRecordedCodeMenu(Core::System& system, const Guest& g)
+{
+  const auto lines = CodeMenuValueLines(g);
+  const auto values = PeerData::RecordedCodeMenuValues(s.pb.setup_key, ReplayCodeMenuLines(g, lines));
+  for (size_t i = 0; i < lines.size(); ++i)
+  {
+    const auto mine = g.U32(lines[i].addr + CODE_MENU_VALUE);
+    if (!values[i] || !mine || *mine == *values[i])
+      continue;
+    INFO_LOG_FMT(BRAWLBACK, "replay: Code Menu line \"{}\" {} as recorded (was {})", lines[i].text,
+                 *values[i], *mine);
+    WriteU32(system, lines[i].addr + CODE_MENU_VALUE, *values[i]);
+  }
+}
+
+// Tests (PPR_GPRB_TEST_CODE_MENU="Autosave Replays=1;Player 1=7"): at the live barrier, before the
+// setup is compared and recorded, the first value line whose text starts with each name gets that
+// value, as a machine with another plugin (or other settings) would have had. Every peer of the
+// match needs the same, or the barrier refuses it.
+void WriteTestCodeMenuValues(Core::System& system, const Guest& g)
+{
+  const char* env = std::getenv("PPR_GPRB_TEST_CODE_MENU");
+  if (!env)
+    return;
+  const auto lines = CodeMenuValueLines(g);
+  for (const auto& item : SplitString(env, ';'))
+  {
+    const size_t eq = item.find('=');
+    if (eq == std::string::npos)
+      continue;
+    const std::string name = item.substr(0, eq);
+    const auto line = std::find_if(lines.begin(), lines.end(),
+                                   [&](const CodeMenuLine& l) { return l.text.starts_with(name); });
+    if (line == lines.end())
+      continue;
+    const u32 value = static_cast<u32>(std::strtoul(item.c_str() + eq + 1, nullptr, 0));
+    WriteU32(system, line->addr + CODE_MENU_VALUE, value);
+    WARN_LOG_FMT(BRAWLBACK, "gprb: PPR_GPRB_TEST_CODE_MENU: \"{}\" = {}", line->text, value);
+  }
+}
+
 // The match start (ApplyMatchStart's joiner side): the recorded host's stage variant, the costumes
-// of a team battle recorded before 2026-10-12, the seeds of the recorded session seed and match
-// index, the serial counter.
+// of a team battle recorded before 2026-10-12, the recorded slot colours, the seeds of the recorded
+// session seed and match index, the serial counter.
 void ApplyPlaybackStart(Core::System& system, std::string_view when)
 {
   const Guest g(system.GetMemory());
@@ -7508,6 +7591,7 @@ void ApplyPlaybackStart(Core::System& system, std::string_view when)
   if (const auto mm = ModeMeleeAddr(g); mm && merged != mine)
     system.GetMemory().CopyToEmu(*mm + INIT_BLOCK_OFFSET, merged.data(), merged.size());
   RestoreLegacyTeamCostumes(system, g);
+  ApplyRecordedCodeMenu(system, g);
   PinScreenSetting(system);
   const auto seeds = MatchSeeds(s.pb.seed, s.pb.match_index);
   WriteU32(system, Addr::MTRAND_DEFAULT_SEED, seeds[0]);
@@ -7602,15 +7686,26 @@ bool PlaybackLoopTop(const Core::CPUThreadGuard& guard)
     s.pb.end_disconnected = true;
     return false;
   };
+  // The Code Menu lines the match never reads (PeerData::ReplayCodeMenuLine) are not compared:
+  // the recorder's plugin may have written other values in them (Autosave Replays was ON before
+  // 2026-10-18). Live peers still compare every line.
   const auto key = SetupKey(g);
-  if (key != s.pb.setup_key)
+  const auto recorded =
+      PeerData::ReplaySetupKey(key, s.pb.setup_key, ReplayCodeMenuLines(g, CodeMenuValueLines(g)));
+  if (key != recorded)
   {
     WARN_LOG_FMT(BRAWLBACK, "replay: the match's setup differs from the recording's:\n  here {}\n  file {}",
                  Hex(key), Hex(s.pb.setup_key));
     WARN_LOG_FMT(BRAWLBACK, "replay: it differs in (file as the peer): {}",
-                 fmt::join(PeerData::SetupKeyDiff(key, s.pb.setup_key), "; "));
+                 fmt::join(PeerData::SetupKeyDiff(key, recorded), "; "));
     if (!s.pb.play_anyway)
       return fail("its match could not be rebuilt here (the setup differs)");
+  }
+  else if (key != s.pb.setup_key)
+  {
+    INFO_LOG_FMT(BRAWLBACK, "replay: Code Menu lines the match does not read differ from the "
+                            "recording's (not compared): {}",
+                 fmt::join(PeerData::SetupKeyDiff(key, s.pb.setup_key), "; "));
   }
   const u32 human = HumanPorts(g);
   if (human != s.pb.ports)
@@ -7997,6 +8092,7 @@ bool OnLoopTop(const Core::CPUThreadGuard& guard)
     if (s.phase != Phase::Connected || !IsSimStart(g, &fc))
       return false;
     // The first frame of the match simulation: the barrier.
+    WriteTestCodeMenuValues(system, g);
     s.setup_hash = SetupHash(g, StartFrame());
     s.setup_key = SetupKey(g);
     s.setup_start = StartFrame();

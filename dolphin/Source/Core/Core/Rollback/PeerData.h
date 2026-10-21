@@ -258,6 +258,37 @@ std::string TruncateName(const std::string& name);
 std::vector<std::string> SetupKeyDiff(const std::vector<u8>& mine, const std::vector<u8>& theirs,
                                       size_t max_lines = 16);
 
+// Where P+'s Code Menu values (4 bytes a line) start in a setup key: after the init block, the
+// players (5 bytes each in a team battle), the pad layouts, the set rule (then under stock control
+// each player's handicap), the hazard bit and the item switch. nullopt for a shorter key.
+std::optional<size_t> SetupKeyCodeMenuAt(const std::vector<u8>& key);
+
+// A replay's Code Menu value lines (docs/design/replays.md §6.1 step 7): what the barrier does with one
+// whose value differs from the recording's. The recorder's machine had the lines its plugin wrote
+// (an older plugin wrote other values: Autosave Replays ON before 2026-10-18).
+enum class ReplayCodeMenuLine : u8
+{
+  Compared,  // read by P+'s codes in the match: must be the recording's, as between live peers
+  Ours,      // never read in the match (P+'s replay autosave, the menu's activation): ours kept
+  Recorded,  // only drawn (the slot colours): the recording's, written in before the match loads
+};
+// `slot_colour`: the line is one of the four the slot colour pointers (0x804E02F4) point at.
+ReplayCodeMenuLine ClassifyReplayCodeMenuLine(std::string_view text, bool slot_colour);
+// A Recorded line's values: P+'s slot colours 0-12.
+constexpr u32 MAX_RECORDED_SLOT_COLOUR = MAX_SLOT_COLOUR - 1;
+
+// The recording's setup key as playback compares it with `here` (both SetupKey; `lines`: this
+// game's value lines in key order): the values of the lines that are not Compared taken from
+// `here`. Unchanged when the two keys' Code Menu values do not start at the same place or either
+// is too short for the lines.
+std::vector<u8> ReplaySetupKey(const std::vector<u8>& here, const std::vector<u8>& recorded,
+                               const std::vector<ReplayCodeMenuLine>& lines);
+
+// Per line (`lines` as above) the recorded value to write in before the match: the Recorded lines
+// whose recorded value is a slot colour; nullopt for the others or when the key is too short.
+std::vector<std::optional<u32>> RecordedCodeMenuValues(const std::vector<u8>& recorded,
+                                                       const std::vector<ReplayCodeMenuLine>& lines);
+
 // Why a peer's session gave up (its "leave" message's "why"), for our logs and status: printable
 // ASCII only (anything else becomes '?'), at most MAX_LEAVE_REASON_LEN characters.
 constexpr size_t MAX_LEAVE_REASON_LEN = 160;

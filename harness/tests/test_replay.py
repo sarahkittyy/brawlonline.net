@@ -17,15 +17,18 @@ from __future__ import annotations
 import concurrent.futures
 import json
 import shutil
+import struct
 import sys
 import time
 import types
+import zlib
 from pathlib import Path
 from typing import Any, Callable
 
 import pytest
 
 from ppharness.backend import OnlineBackend
+from ppharness.client import HarnessCommandError, HarnessConnectionError
 from ppharness.instance import DolphinInstance, InstanceConfig
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -273,11 +276,12 @@ def test_three_player_room_game_plays_back(backend: OnlineBackend,
 
 
 def _recorded_direct_game(backend: OnlineBackend, dolphin: Callable[..., DolphinInstance],
-                          gpu_backend: str, test: str, names: tuple[str, str]) -> tuple[R.Replay, Path]:
+                          gpu_backend: str, test: str, names: tuple[str, str],
+                          env: dict[str, str] | None = None) -> tuple[R.Replay, Path]:
     """A Direct game on the server's rules, played to its end; A's file, copied to the test's
-    artifacts, and that folder."""
+    artifacts, and that folder. `env`: both players' Dolphins' extra environment."""
     a, b, _, _ = _connected_direct(backend, dolphin, gpu_backend, f"replay-{test}", names,
-                                   test_rules=False)
+                                   test_rules=False, env=(env, env))
     online_set.play_set([a, b], games=1, mode="direct", panels={g.name: g.panel for g in (a, b)})
     online_set.wait(lambda: not any(g.c.call("replay_recording")["recording"] for g in (a, b)), 60,
                     "both recordings to end")
@@ -378,3 +382,145 @@ def test_launcher_comm_file_ignores_the_players_controller(backend: OnlineBacken
     log = inst.log.read()
     assert "sqBoot -> sqTraining" not in log, "the viewer booted to Training"
     assert "sqBoot -> sqPrizeCheck" in log, "the viewer's boot was not seen"
+
+
+def _key_code_menu_values(key: bytes) -> list[int]:
+    """The Code Menu values of a setup key (PeerData::SetupKeyCodeMenuAt's layout), in key order
+    (a desync restart's restore after them, if any, read as more values)."""
+    at = 0x20 + 4 * (5 if key[0x0B] else 4) + 0x34
+    at += 0x10 + (8 if key[at + 5] == 2 else 0) + 1 + 0x10
+    return [struct.unpack_from(">I", key, o)[0] for o in range(at, len(key) - 3, 4)]
+
+
+def _key_lines(v: Game) -> list[tuple[str, int]]:
+    """The viewer's Code Menu value lines in setup key order (GameplaySession CodeMenuValueLines:
+    no per-player Character Select lines)."""
+    from test_online_css import _code_menu_lines
+    return [(t, a) for t, a in _code_menu_lines(v) if "Character Select" not in t.split("%")[0]]
+
+
+SLOT_COLOUR_LINES = 0x804E02F4   # P+'s per-port pointers to the slot colour lines
+
+
+def _with_setup_key(src: Path, dst: Path, key: bytes) -> None:
+    """A copy of the replay `src` whose SETP chunk has `key` as the setup key (its CRC, and the
+    trailer's offset of ENDG, written again)."""
+    data = src.read_bytes()
+    _, _, header_size = struct.unpack_from("<HHI", data, 8)
+    trailer = data[-16:]
+    magic, endg_off, last, crc = struct.unpack("<4sIII", trailer)
+    assert magic == b"BRPT" and crc == zlib.crc32(trailer[:12])
+    out = bytearray(data[:header_size])
+    off, new_endg = header_size, 0
+    while off < len(data) - 16:
+        typ, flags, stored_len, _, _ = struct.unpack_from("<4sIIII", data, off)
+        stored = data[off + 20:off + 20 + stored_len]
+        if off == endg_off:
+            new_endg = len(out)
+        if typ == b"SETP":
+            raw = zlib.decompress(stored) if flags & R.FLAG_DEFLATE else stored
+            setp = json.loads(raw)
+            setp["setup_key"] = key.hex()
+            raw = json.dumps(setp, separators=(",", ":")).encode()
+            stored = zlib.compress(raw) if flags & R.FLAG_DEFLATE else raw
+            out += struct.pack("<4sIIII", typ, flags, len(stored), len(raw), zlib.crc32(stored))
+        else:
+            out += data[off:off + 20]
+        out += stored
+        off += 20 + stored_len
+    t = struct.pack("<4sII", b"BRPT", new_endg, last)
+    out += t + struct.pack("<I", zlib.crc32(t))
+    dst.write_bytes(bytes(out))
+
+
+def _call(v: Game, cmd: str, **kw: Any) -> dict[str, Any]:
+    """v.c.call, connecting again once when the loopback connection was reset (WinError 10054
+    every so often on this machine, not by Dolphin)."""
+    try:
+        return v.c.call(cmd, **kw)
+    except HarnessConnectionError:
+        v.c = v.inst.connect()
+        return v.c.call(cmd, **kw)
+
+
+def _mem_u32(v: Game, addr: int) -> int:
+    try:
+        data = v.c.read_mem(addr, 4)
+    except HarnessConnectionError:
+        v.c = v.inst.connect()
+        data = v.c.read_mem(addr, 4)
+    return struct.unpack(">I", data)[0]
+
+
+@pytest.mark.slow
+def test_replay_keeps_the_viewers_code_menu_lines_the_match_does_not_read(
+        backend: OnlineBackend, dolphin: Callable[..., DolphinInstance], gpu_backend: str) -> None:
+    """A replay whose recorders' Code Menus had other values in lines the match never reads plays
+    without "Play anyway" (docs/design/replays.md §6.1 step 7). Players' replays from before 2026-10-18
+    were refused for "code menu value 4": their plugin had P+'s Autosave Replays ON, today's writes
+    it OFF. Both players here have it ON and P1's slot colour 7 at the barrier (as another plugin
+    would have had: PPR_GPRB_TEST_CODE_MENU; the SESSION says no colour). The launcher's playback
+    Dolphin keeps its own Autosave Replays (OFF: P+ writes no replay of its own to its card),
+    shows P1 in the recorded colour, and plays the game to its end with no checksum differing. A
+    copy of the file with another Hitstun Multiplier (a line P+'s codes read in the match) is
+    still refused."""
+    env = {"PPR_GPRB_TEST_CODE_MENU": "Autosave Replays=1;Player 1=7"}
+    fa, out = _recorded_direct_game(backend, dolphin, gpu_backend, "code-menu", ("cora", "mena"), env=env)
+    v, inst, file_status = _comm_viewer(backend, dolphin, gpu_backend, fa, out)
+
+    def started() -> dict[str, Any] | None:
+        fs = file_status()
+        assert fs.get("state") != "error", fs
+        st = _call(v, "replay_status")
+        assert st["phase"] != "error", st
+        return st if st["started"] else None
+    _wait(started, 300, "the replay's match to start by itself")
+
+    # The recording has the recorders' values; the match here the viewer's Autosave Replays and
+    # the recorded slot colour.
+    lines = _key_lines(v)
+    names = [t for t, _ in lines]
+    autosave = next(k for k, t in enumerate(names) if t.startswith("Autosave Replays"))
+    slot_line = _mem_u32(v, SLOT_COLOUR_LINES)
+    p1_colour = next(k for k, (_, a) in enumerate(lines) if a == slot_line)
+    key = bytes.fromhex(fa.setup["setup_key"])
+    recorded = _key_code_menu_values(key)
+    assert len(recorded) == len(lines), (len(recorded), len(lines))
+    assert recorded[autosave] == 1 and recorded[p1_colour] == 7, (recorded[autosave], recorded[p1_colour])
+    here = [_mem_u32(v, a + 8) for _, a in lines]
+    assert here[autosave] == 0, here[autosave]
+    assert here[p1_colour] == 7, here[p1_colour]
+    assert [h for k, h in enumerate(here) if k not in (autosave, p1_colour)] == \
+        [r for k, r in enumerate(recorded) if k not in (autosave, p1_colour)]
+    v.shot("started")
+    st = _wait(lambda: (lambda s: s if s["at_end"] or s["finished"] else None)(_call(v, "replay_status")), 900,
+               "the replay's last frame")
+    v.shot("end")
+    assert st["phase"] != "error" and not st.get("play_anyway"), st
+    assert st["desync_frame"] == -1, st
+    assert st["frames_checked"] >= fa.endg["finalFrame"] - fa.first_frame, st
+    assert "setup differs" not in inst.log.read()
+
+    # A gameplay line still has to be the recording's.
+    hitstun = next(k for k, t in enumerate(names) if t.startswith("Hitstun Multiplier"))
+    at = len(key) - 4 * len(lines)
+    bad = bytearray(key)
+    bad[at + 4 * hitstun:at + 4 * hitstun + 4] = struct.pack(">f", 0.5)
+    bad_path = out / f"hitstun-{fa.path.name}"
+    _with_setup_key(fa.path, bad_path, bytes(bad))
+    assert R.read(bad_path).trailer
+    if not st["finished"]:
+        _call(v, "replay_control", action="play")   # held at its end: the match ends
+    _wait(lambda: _call(v, "replay_status")["finished"], 120, "the replay to end")
+
+    def armed() -> bool:
+        try:
+            _call(v, "replay_play", path=str(bad_path))
+            return True
+        except HarnessCommandError as e:   # the last replay's match is still ending
+            assert "ending" in str(e) or "playing" in str(e), e
+            return False
+    _wait(armed, 120, "the hitstun copy armed")
+    st = _wait(lambda: (lambda s: s if s["phase"] == "error" or (s["started"] and s.get("shown", -1) > 0)
+                        else None)(_call(v, "replay_status")), 300, "the hitstun copy refused or played")
+    assert st["phase"] == "error" and "setup differs" in st.get("error", ""), st
