@@ -250,8 +250,16 @@ impl LiveHub {
     }
 
     /// A spectator's chat line: checked, cleaned, rate-limited, then sent to every spectator of
-    /// the stream (and kept for late joiners and reports).
-    pub fn chat(&self, stream: &str, author: &Author, text: &str, now: Instant) -> Result<ChatLine, LiveError> {
+    /// the stream (and kept for late joiners and reports). A `muted` author's line (`pp-admin
+    /// mute`, a shadowban) goes only to the author's own streams and is not kept.
+    pub fn chat(
+        &self,
+        stream: &str,
+        author: &Author,
+        text: &str,
+        muted: bool,
+        now: Instant,
+    ) -> Result<ChatLine, LiveError> {
         let text = common::chat::clean_text(text.as_bytes(), 100).ok_or(LiveError::Invalid)?;
         let mut hub = self.lock();
         let Hub { rooms, chat, .. } = &mut *hub;
@@ -287,11 +295,17 @@ impl LiveHub {
             text,
             at: now_rfc3339(),
         };
+        let event = json!({"type": "chat", "line": line}).to_string();
+        if muted {
+            for w in room.watchers.values().filter(|w| w.uid == author.uid) {
+                let _ = w.tx.try_send(event.clone());
+            }
+            return Ok(line);
+        }
         if room.lines.len() >= HISTORY {
             room.lines.pop_front();
         }
         room.lines.push_back(line.clone());
-        let event = json!({"type": "chat", "line": line}).to_string();
         Self::deliver(room, &event);
         Ok(line)
     }
@@ -510,7 +524,7 @@ pub async fn chat(
         display_name: user.display_name.clone(),
         connect_code: profile.connect_code.unwrap_or_default(),
     };
-    state.live.chat(&id, &author, &body.text, Instant::now())?;
+    state.live.chat(&id, &author, &body.text, user.chat_muted_at.is_some(), Instant::now())?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -595,7 +609,7 @@ mod tests {
         let (mut b, n) = (w.rx, w.count);
         let mut other = hub.watch("s2", "u3", now).unwrap().rx;
         assert_eq!(n, 2);
-        hub.chat("s1", &author(1), "  hi\u{200b} there ", now).unwrap();
+        hub.chat("s1", &author(1), "  hi\u{200b} there ", false, now).unwrap();
         for rx in [&mut a, &mut b] {
             let ev = events(rx);
             assert_eq!(ev.len(), 1);
@@ -605,8 +619,26 @@ mod tests {
         }
         assert!(events(&mut other).is_empty());
         // Not watching that stream: refused.
-        assert_eq!(hub.chat("s1", &author(3), "x", now), Err(LiveError::NotWatching));
-        assert_eq!(hub.chat("s1", &author(1), "\u{200b} ", now), Err(LiveError::Invalid));
+        assert_eq!(hub.chat("s1", &author(3), "x", false, now), Err(LiveError::NotWatching));
+        assert_eq!(hub.chat("s1", &author(1), "\u{200b} ", false, now), Err(LiveError::Invalid));
+    }
+
+    /// A muted spectator (`pp-admin mute`) sees its own line as sent; nobody else gets it, and
+    /// late joiners don't either.
+    #[test]
+    fn a_muted_spectators_lines_reach_only_itself() {
+        let hub = LiveHub::new(true);
+        let now = Instant::now();
+        let mut a = hub.watch("s1", "u1", now).unwrap().rx;
+        let mut b = hub.watch("s1", "u2", now).unwrap().rx;
+        events(&mut a);
+        events(&mut b);
+        hub.chat("s1", &author(1), "psst", true, now).unwrap();
+        let ev = events(&mut a);
+        assert_eq!((ev.len(), ev[0]["line"]["text"].as_str()), (1, Some("psst")));
+        assert!(events(&mut b).is_empty());
+        let mut c = hub.watch("s1", "u3", now).unwrap().rx;
+        assert!(events(&mut c).iter().all(|e| e["type"] != "chat"));
     }
 
     #[test]
@@ -616,7 +648,7 @@ mod tests {
         let _w = hub.watch("s", "u1", now).unwrap();
         for i in 0..30 {
             now += Duration::from_secs(1);
-            hub.chat("s", &author(1), &format!("line {i}"), now).unwrap();
+            hub.chat("s", &author(1), &format!("line {i}"), false, now).unwrap();
         }
         let lines = hub.watch("s", "u2", now).unwrap().chat;
         assert_eq!(lines.len(), WELCOME_LINES);
@@ -630,21 +662,21 @@ mod tests {
         let now = Instant::now();
         let _w: Vec<_> = (1..=7u8).map(|n| hub.watch("s", &format!("u{n}"), now).unwrap()).collect();
         for n in 1..=5u8 {
-            hub.chat("s", &author(n), "hello", now).unwrap();
+            hub.chat("s", &author(n), "hello", false, now).unwrap();
         }
-        assert_eq!(hub.chat("s", &author(6), "hello", now), Err(LiveError::Busy));
+        assert_eq!(hub.chat("s", &author(6), "hello", false, now), Err(LiveError::Busy));
         let later = now + Duration::from_secs(1);
-        hub.chat("s", &author(6), "hello", later).unwrap();
+        hub.chat("s", &author(6), "hello", false, later).unwrap();
         // One account: 5 in 5 s.
         let mut t = later;
         for _ in 0..4 {
             t += Duration::from_millis(250);
-            hub.chat("s", &author(7), "x", t).unwrap();
+            hub.chat("s", &author(7), "x", false, t).unwrap();
         }
         t += Duration::from_millis(250);
-        hub.chat("s", &author(7), "x", t).unwrap();
+        hub.chat("s", &author(7), "x", false, t).unwrap();
         t += Duration::from_millis(250);
-        assert!(matches!(hub.chat("s", &author(7), "x", t), Err(LiveError::TooFast(_))));
+        assert!(matches!(hub.chat("s", &author(7), "x", false, t), Err(LiveError::TooFast(_))));
     }
 
     #[test]
@@ -659,9 +691,9 @@ mod tests {
             keep.push(hub.watch("s", &format!("u{n}"), now).unwrap());
         }
         let a = Author { uid: "u1".into(), display_name: "a".into(), connect_code: "A#1".into() };
-        hub.chat("s", &a, "one", now).unwrap();
-        assert!(matches!(hub.chat("s", &a, "two", now + Duration::from_secs(2)), Err(LiveError::TooFast(_))));
-        hub.chat("s", &a, "two", now + Duration::from_secs(3)).unwrap();
+        hub.chat("s", &a, "one", false, now).unwrap();
+        assert!(matches!(hub.chat("s", &a, "two", false, now + Duration::from_secs(2)), Err(LiveError::TooFast(_))));
+        hub.chat("s", &a, "two", false, now + Duration::from_secs(3)).unwrap();
     }
 
     #[test]
@@ -673,7 +705,7 @@ mod tests {
         let mut last = 0;
         for i in 0..25 {
             now += Duration::from_secs(2);
-            last = hub.chat("s", &author(if i % 2 == 0 { 1 } else { 2 }), &format!("m{i}"), now).unwrap().id;
+            last = hub.chat("s", &author(if i % 2 == 0 { 1 } else { 2 }), &format!("m{i}"), false, now).unwrap().id;
         }
         let (who, lines) = hub.report_lines("s", last, "u2", now).unwrap();
         assert_eq!(who, "u1");

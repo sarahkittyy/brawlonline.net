@@ -248,6 +248,8 @@ End-to-end encrypted free-text chat between the players of a room or of a Direct
 
 - `hello.chatKey` registers the install's identity key; mm records each one in `chat_identity_keys` (migration `0006_chat.sql`, the 20 most recent per account).
 - `chat-report` is stored in `chat_reports` with each message's signature checked against the reported account's identity keys (`verified` of `total`). `admin chat-reports` lists the unhandled ones; `admin chat-report-done <id>` marks one handled.
+- `admin mute` (`users.chat_muted_at`) is a shadowban: mm checks a muted sender's `chat-send` and answers it as anyone's (errors, rate limit), then relays nothing; the game shows its own lines itself, so it looks sent. Launcher DMs (`SocialHub::dm`) and spectator chat (only the sender's own streams get the line, and it is not kept) do the same.
+- mm and accounts read the accounts changed since their last look every 3 s (`common::db::changed_users`, `users.updated_at`): a ban ends the account's mm connections with `This account is banned.` (its room's set forfeited) and its social stream with `banned`; a rename reaches its room, chat group and the online list, and its launcher gets `account` to read `/v1/me` again. `pp-admin` writes only the database.
 - `pp_mm` gets only what mm's chat queries need (upsert, read and prune identity keys; insert reports), granted in the migration like `0005_mm_grants.sql`.
 
 ## Ranked
@@ -296,15 +298,17 @@ admin gen-secret
 admin user list
 admin user show IDENT                          # IDENT = uid, email or connect code
 admin user reset-password IDENT [--send-email] # prints a one-time link valid 24 h, or sends it with the MAILER accounts uses
-admin user ban IDENT [--days N] [--reason TEXT]  # permanent without --days; ends sessions, rotates play key
+admin user ban IDENT [--days N] [--reason TEXT]  # permanent without --days; ends sessions, rotates play key; within seconds out of its room (a set forfeited), queue and chat, its game closes, its launcher logs out
 admin user unban IDENT
 admin user verify-email IDENT
 admin user rotate-play-key IDENT
-admin user rename IDENT NAME                   # the launcher's name rule; others see it once the player reconnects
+admin user rename IDENT NAME                   # the launcher's name rule; rooms, chat, the online list and the player's launcher show it within seconds
 admin user set-code IDENT CODE
 admin user delete IDENT --yes                  # with its sessions and email tokens; the connect code is free again at once
 admin chat-reports [--limit N]                 # unhandled chat reports, newest first: who, group, reason, verified/total, the texts
 admin chat-report-done ID                      # mark a chat report handled
+admin mute IDENT [--reason TEXT]               # chat shadowban: room/match/spectator chat and DMs reach nobody, its own game and launcher show them as sent
+admin unmute IDENT
 admin bug list [--all] [--limit N]             # unresolved bug reports, newest first: id, when, who, zip size, first line
 admin bug show ID                              # one report in full: launcher version, platform, the zip's path, the text
 admin bug resolve ID [--note TEXT]             # off the list (the zip stays)

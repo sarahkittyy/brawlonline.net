@@ -65,6 +65,14 @@ async fn mm_queries_work_as_pp_mm() {
     assert_eq!(ub.rating, 1234.5);
     assert_eq!(ub.ranked_sets, 3);
 
+    // A mute and the changed-accounts look (0017_chat_mute.sql).
+    let before: chrono::DateTime<chrono::Utc> =
+        sqlx::query_scalar("SELECT now()").fetch_one(&stack.pool).await.unwrap();
+    accounts::store::set_muted(&stack.pool, b, true).await.unwrap();
+    assert!(db::fetch_mm_user(&pool, b).await.unwrap().unwrap().chat_muted);
+    let (changed, _) = db::changed_users(&pool, before).await.unwrap();
+    assert_eq!(changed.iter().map(|u| (u.uid, u.chat_muted)).collect::<Vec<_>>(), vec![(b, true)]);
+
     let id = format!("mode.ranked-grants-{}", Uuid::new_v4());
     db::insert_match(&pool, &id, 0, &[a, b], a, &[1, 2], "test", None).await.unwrap();
     // A second insert of the same match is a no-op (ON CONFLICT needs SELECT (match_id)).

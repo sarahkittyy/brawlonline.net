@@ -140,6 +140,8 @@ pub fn start(
     let (done_tx, done_rx) = std_mpsc::channel::<Fetched>();
     let (rulesets_tx, rulesets_rx) = std_mpsc::channel::<RulesetFetched>();
     let (lists_tx, lists_rx) = std_mpsc::channel::<RulesetListFetched>();
+    let (accounts_tx, accounts_rx) = std_mpsc::channel::<Vec<db::MmUser>>();
+    rt.spawn(watch_accounts(pool.clone(), accounts_tx));
     let fetch_pool = pool.clone();
     rt.spawn(fetch_worker(
         move |uid| fetch_user(fetch_pool.clone(), uid),
@@ -170,7 +172,7 @@ pub fn start(
     let db = Db { fetches: job_tx, fetched: done_tx, rulesets: rulesets_tx, ruleset_lists: lists_tx, pool, rt };
     let thread = std::thread::Builder::new()
         .name("mm-enet".into())
-        .spawn(move || event_loop(host, engine, db, done_rx, rulesets_rx, lists_rx, stop2, status))?;
+        .spawn(move || event_loop(host, engine, db, done_rx, rulesets_rx, lists_rx, accounts_rx, stop2, status))?;
     tracing::info!("mm listening on udp://{addr}");
     Ok(MmHandle { addr, status_addr, stop, thread: Some(thread), status_task })
 }
@@ -362,6 +364,28 @@ async fn fetch_ruleset_list(pool: &PgPool, uid: Uuid) -> Result<Vec<common::room
         Ok(Ok(r)) => Ok(r),
         Ok(Err(e)) => Err(e.to_string()),
         Err(_) => Err("ruleset list timed out".into()),
+    }
+}
+
+/// Reads the accounts that changed every [`db::ACCOUNT_POLL`] and hands them to the loop
+/// ([`Input::AccountsChanged`]): `pp-admin` bans, renames and mutes write only the database. Ends
+/// when the loop has gone.
+async fn watch_accounts(pool: PgPool, changed: std_mpsc::Sender<Vec<db::MmUser>>) {
+    let mut since = Utc::now() - db::ACCOUNT_POLL_OVERLAP;
+    let mut every = tokio::time::interval(db::ACCOUNT_POLL);
+    every.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    loop {
+        every.tick().await;
+        match tokio::time::timeout(Duration::from_secs(10), db::changed_users(&pool, since)).await {
+            Ok(Ok((users, now))) => {
+                since = now - db::ACCOUNT_POLL_OVERLAP;
+                if !users.is_empty() && changed.send(users).is_err() {
+                    return;
+                }
+            }
+            Ok(Err(e)) => tracing::warn!("reading changed accounts failed: {e}"),
+            Err(_) => tracing::warn!("reading changed accounts timed out"),
+        }
     }
 }
 
@@ -605,6 +629,7 @@ fn event_loop(
     done: std_mpsc::Receiver<Fetched>,
     rulesets: std_mpsc::Receiver<RulesetFetched>,
     ruleset_lists: std_mpsc::Receiver<RulesetListFetched>,
+    accounts: std_mpsc::Receiver<Vec<db::MmUser>>,
     stop: Arc<AtomicBool>,
     status: SharedStatus,
 ) {
@@ -648,6 +673,10 @@ fn event_loop(
         while let Ok((conn, result)) = ruleset_lists.try_recv() {
             busy = true;
             lp.feed(Input::RulesetListFetched { conn, result });
+        }
+        while let Ok(users) = accounts.try_recv() {
+            busy = true;
+            lp.feed(Input::AccountsChanged(users));
         }
         if lp.run_pending_disconnects(Instant::now()) {
             busy = true;

@@ -41,6 +41,17 @@ enum Cmd {
     },
     /// Mark a chat report handled (it leaves `chat-reports`).
     ChatReportDone { id: i64 },
+    /// Shadowban an account from chat (IDENT as for `user`): its room, match and spectator chat
+    /// messages and launcher DMs reach nobody, while its own game and launcher show them as sent
+    /// and it still sees everyone else's. Takes effect within seconds, also mid-conversation.
+    Mute {
+        ident: String,
+        /// Why (kept in audit_log).
+        #[arg(long)]
+        reason: Option<String>,
+    },
+    /// Lift a `mute`.
+    Unmute { ident: String },
     /// Bug reports from the launcher's bug button, with their logs zips.
     #[command(subcommand)]
     Bug(BugCmd),
@@ -147,7 +158,9 @@ enum UserCmd {
         #[command(flatten)]
         mail: Box<MailConfig>,
     },
-    /// Ban an account (permanent unless --days). Ends its sessions and rotates its play key.
+    /// Ban an account (permanent unless --days). Ends its sessions and rotates its play key, and
+    /// within seconds takes it out of its room (forfeiting a set that is on), queue, chat and
+    /// running game; its launcher logs out and its game stops reconnecting.
     Ban {
         ident: String,
         #[arg(long)]
@@ -167,7 +180,8 @@ enum UserCmd {
         ident: String,
     },
     /// Change the display name, with the launcher's rule (at most 15 characters the game's font
-    /// draws). Others see it once the player reconnects; the player can still rename themselves.
+    /// draws). Rooms, chat, the online list and the player's own launcher show it within seconds
+    /// (their running game shows it after a restart); the player can still rename themselves.
     Rename {
         ident: String,
         name: String,
@@ -280,6 +294,10 @@ fn print_user(u: &UserRow) {
         ),
         _ => println!("banned:         no"),
     }
+    match u.chat_muted_at {
+        Some(t) => println!("chat muted:     since {}", t.format("%Y-%m-%d %H:%M UTC")),
+        None => println!("chat muted:     no"),
+    }
 }
 
 #[tokio::main]
@@ -366,6 +384,29 @@ async fn main() -> anyhow::Result<()> {
             anyhow::ensure!(admin::chat_report_done(&pool, &actor, id).await?, "no unhandled chat report #{id}");
             println!("chat report #{id} handled");
         }
+        Cmd::Mute { ident, reason } => {
+            let u = find(&pool, &ident).await?;
+            store::set_muted(&pool, u.uid, true).await?;
+            store::audit(&pool, &actor, "user.mute", Some(&u.uid.to_string()), serde_json::json!({"reason": reason}))
+                .await?;
+            println!(
+                "muted {} ({}){}",
+                u.display_name,
+                u.connect_code.as_deref().unwrap_or("-"),
+                if u.chat_muted_at.is_some() { "; it already was" } else { "" }
+            );
+        }
+        Cmd::Unmute { ident } => {
+            let u = find(&pool, &ident).await?;
+            store::set_muted(&pool, u.uid, false).await?;
+            store::audit(&pool, &actor, "user.unmute", Some(&u.uid.to_string()), serde_json::json!({})).await?;
+            println!(
+                "unmuted {} ({}){}",
+                u.display_name,
+                u.connect_code.as_deref().unwrap_or("-"),
+                if u.chat_muted_at.is_none() { "; it was not muted" } else { "" }
+            );
+        }
         Cmd::Bug(BugCmd::List { all, limit }) => {
             let reports = admin::bug_reports(&pool, all, limit.clamp(1, 1000)).await?;
             if reports.is_empty() {
@@ -401,16 +442,17 @@ async fn main() -> anyhow::Result<()> {
             println!("deleted {} resolved bug report(s)", deleted.len());
         }
         Cmd::User(UserCmd::List) => {
-            println!("{:<36} {:<10} {:<16} {:<30} {:<5} banned", "uid", "code", "name", "email", "ver.");
+            println!("{:<36} {:<10} {:<16} {:<30} {:<5} {:<6} muted", "uid", "code", "name", "email", "ver.", "banned");
             for u in store::list_users(&pool).await? {
                 println!(
-                    "{:<36} {:<10} {:<16} {:<30} {:<5} {}",
+                    "{:<36} {:<10} {:<16} {:<30} {:<5} {:<6} {}",
                     u.uid,
                     u.connect_code.as_deref().unwrap_or("-"),
                     u.display_name,
                     u.email,
                     if u.email_verified() { "yes" } else { "no" },
-                    if u.is_banned() { "yes" } else { "" }
+                    if u.is_banned() { "yes" } else { "" },
+                    if u.chat_muted_at.is_some() { "yes" } else { "" }
                 );
             }
         }

@@ -79,7 +79,11 @@ export type SocialEvent =
   | { type: "message"; uid: string }
   | { type: "invite"; invite: Invite }
   | { type: "invite-answer"; player: SocialPlayer; kind: "room" | "direct"; accept: boolean }
-  | { type: "replaced" };
+  | { type: "replaced" }
+  /** The account changed on the server (an admin rename): read it again. */
+  | { type: "account" }
+  /** The account was banned: the stream is over, and the session too. */
+  | { type: "banned" };
 
 export type SendResult = { ok: true } | { ok: false; message: string };
 

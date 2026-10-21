@@ -20,6 +20,8 @@ pub struct MmUser {
     pub rating: f64,
     /// Rated ranked sets played.
     pub ranked_sets: i32,
+    /// Chat shadowban (`pp-admin mute`): mm drops the account's chat messages without a word.
+    pub chat_muted: bool,
 }
 
 impl MmUser {
@@ -28,18 +30,38 @@ impl MmUser {
     }
 }
 
+const MM_USER_SELECT: &str = "SELECT u.uid, u.display_name, u.connect_code, u.play_key_version, u.banned_until,
+        u.email_verified_at IS NOT NULL AS email_verified,
+        COALESCE(r.rating, $2) AS rating, COALESCE(r.sets_played, 0) AS ranked_sets,
+        u.chat_muted_at IS NOT NULL AS chat_muted
+   FROM users u LEFT JOIN ratings r ON r.uid = u.uid";
+
 pub async fn fetch_mm_user(pool: &sqlx::PgPool, uid: Uuid) -> sqlx::Result<Option<MmUser>> {
-    sqlx::query_as::<_, MmUser>(
-        "SELECT u.uid, u.display_name, u.connect_code, u.play_key_version, u.banned_until,
-                u.email_verified_at IS NOT NULL AS email_verified,
-                COALESCE(r.rating, $2) AS rating, COALESCE(r.sets_played, 0) AS ranked_sets
-           FROM users u LEFT JOIN ratings r ON r.uid = u.uid
-          WHERE u.uid = $1",
-    )
-    .bind(uid)
-    .bind(crate::ranked::DEFAULT_RATING)
-    .fetch_optional(pool)
-    .await
+    sqlx::query_as::<_, MmUser>(&format!("{MM_USER_SELECT} WHERE u.uid = $1"))
+        .bind(uid)
+        .bind(crate::ranked::DEFAULT_RATING)
+        .fetch_optional(pool)
+        .await
+}
+
+/// How often mm and accounts look for changed accounts ([`changed_users`]).
+pub const ACCOUNT_POLL: std::time::Duration = std::time::Duration::from_secs(3);
+/// How far back each look reaches before the previous one's time: a change whose transaction
+/// began before that look but committed after it still has an older `updated_at`. Changes are
+/// seen more than once; the services act only on what differs from what they hold.
+pub const ACCOUNT_POLL_OVERLAP: chrono::Duration = chrono::Duration::seconds(30);
+
+/// The accounts whose row changed (`users.updated_at`) after `since`, and the database's time
+/// now (the next look's `since`, less [`ACCOUNT_POLL_OVERLAP`]). A ban, a rename or a mute is
+/// carried to connected players this way (`pp-admin` writes only the database).
+pub async fn changed_users(pool: &sqlx::PgPool, since: DateTime<Utc>) -> sqlx::Result<(Vec<MmUser>, DateTime<Utc>)> {
+    let now: DateTime<Utc> = sqlx::query_scalar("SELECT now()").fetch_one(pool).await?;
+    let users = sqlx::query_as::<_, MmUser>(&format!("{MM_USER_SELECT} WHERE u.updated_at > $1"))
+        .bind(since)
+        .bind(crate::ranked::DEFAULT_RATING)
+        .fetch_all(pool)
+        .await?;
+    Ok((users, now))
 }
 
 /// A room's game (`migrations/0007_room_matches.sql`): the room and, in the order of the

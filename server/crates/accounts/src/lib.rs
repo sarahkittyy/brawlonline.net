@@ -221,12 +221,14 @@ pub async fn serve(listener: tokio::net::TcpListener, state: AppState) -> anyhow
         std::time::Duration::from_secs(state.cfg.ranked_sweep_secs),
     );
     let room_watcher = social::room_watcher(state.clone());
+    let account_watcher = social::account_watcher(state.clone());
     let live_ticker = live::ticker(state.live.clone());
     let app = router(state).into_make_service_with_connect_info::<SocketAddr>();
     tokio::select! {
         r = axum::serve(listener, app) => r?,
         () = sweeper => {}
         () = room_watcher => {}
+        () = account_watcher => {}
         () = live_ticker => {}
     }
     Ok(())

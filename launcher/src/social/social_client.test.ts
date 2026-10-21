@@ -288,6 +288,16 @@ describe("social client", () => {
     expect(client.getState().message).toMatch(/another launcher/);
     expect(events.at(-1)).toEqual({ type: "replaced" });
   });
+
+  it("passes an account change on, and stops for good on a ban", async () => {
+    server.send({ type: "account" });
+    await until(() => events.some((e) => e.type === "account"));
+    expect(client.getState().status).toBe("online");
+    server.send({ type: "banned" });
+    await until(() => client.getState().status === "off");
+    expect(client.getState().message).toBe("This account is banned.");
+    expect(events.at(-1)).toEqual({ type: "banned" });
+  });
 });
 
 describe("shared chat files", () => {

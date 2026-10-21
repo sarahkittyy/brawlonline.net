@@ -293,8 +293,9 @@ impl SocialHub {
     }
 
     /// Relays a DM box from `from` (connected) to `to` (online): `dm {from, kx, box}`, with the
-    /// sender's session key so the recipient can tell which key it was sealed with.
-    pub fn dm(&self, from: &str, to: &str, sealed: &[u8], now: Instant) -> Result<(), SocialError> {
+    /// sender's session key so the recipient can tell which key it was sealed with. A `muted`
+    /// sender (`pp-admin mute`) is checked and answered as anyone, and its box goes nowhere.
+    pub fn dm(&self, from: &str, to: &str, sealed: &[u8], muted: bool, now: Instant) -> Result<(), SocialError> {
         let mut hub = self.hub.lock().unwrap();
         let kx = hub.clients.get(from).ok_or(SocialError::NotConnected)?.member.kx.clone();
         if from == to {
@@ -305,6 +306,10 @@ impl SocialHub {
         }
         if self.limits {
             hub.dms.check(&from.to_string(), now).map_err(SocialError::TooFast)?;
+        }
+        if muted {
+            tracing::debug!(%from, "muted sender: DM dropped");
+            return Ok(());
         }
         let event = json!({"type": "dm", "from": from, "kx": kx, "box": hex_lower(sealed)}).to_string();
         if Self::send_to(&mut hub, to, event) {
@@ -382,6 +387,34 @@ impl SocialHub {
             Ok(pending.kind)
         } else {
             Err(SocialError::Offline)
+        }
+    }
+
+    /// Accounts changed in the database (`common::db::changed_users`). A banned one's stream gets
+    /// `banned` and ends, and the rest see it go offline. A renamed one is listed again with the
+    /// new name (`online`), and its own launcher gets `account` to read `/v1/me` again (its name,
+    /// and the `user.json` its game reads). A mute changes nothing here: [`Self::dm`] reads it from
+    /// the sender's account with each DM, and the muted player must not be able to tell.
+    pub fn accounts_changed(&self, users: &[common::db::MmUser], wall: chrono::DateTime<chrono::Utc>) {
+        let mut hub = self.hub.lock().unwrap();
+        for u in users {
+            let uid = u.uid.to_string();
+            if u.is_banned(wall) {
+                let Some(old) = hub.clients.remove(&uid) else { continue };
+                tracing::info!(%uid, "account banned: social stream ended");
+                // Its stream ends once the event is read (the sender goes with `old`).
+                let _ = old.tx.try_send(json!({"type": "banned"}).to_string());
+                hub.pending.retain(|(from, to), _| *from != uid && *to != uid);
+                Self::broadcast(&mut hub, &uid, &json!({"type": "offline", "uid": uid}).to_string());
+                continue;
+            }
+            let Some(c) = hub.clients.get_mut(&uid).filter(|c| c.member.display_name != u.display_name) else {
+                continue;
+            };
+            c.member.display_name = u.display_name.clone();
+            let listed = json!({"type": "online", "member": c.member}).to_string();
+            Self::broadcast(&mut hub, &uid, &listed);
+            Self::send_to(&mut hub, &uid, json!({"type": "account"}).to_string());
         }
     }
 
@@ -499,7 +532,7 @@ pub async fn dm(State(state): State<AppState>, headers: HeaderMap, Json(body): J
     let sealed = decode_hex(&body.sealed, MAX_BOX_BYTES)
         .filter(|b| b.len() >= MIN_BOX_BYTES)
         .ok_or_else(|| ApiError::bad_request("invalid", "Invalid message."))?;
-    state.social.dm(&user.uid.to_string(), &body.to, &sealed, Instant::now())?;
+    state.social.dm(&user.uid.to_string(), &body.to, &sealed, user.chat_muted_at.is_some(), Instant::now())?;
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -558,6 +591,26 @@ pub async fn answer(
 
 /// Reads mm's status every [`ROOM_POLL`] while launchers are connected and passes the rooms to
 /// the hub. An unreachable mm changes nothing (the last rooms stay).
+/// Reads the accounts that changed every [`common::db::ACCOUNT_POLL`] for
+/// [`SocialHub::accounts_changed`] (`pp-admin` bans and renames write only the database).
+pub async fn account_watcher(state: AppState) {
+    let mut since = chrono::Utc::now() - common::db::ACCOUNT_POLL_OVERLAP;
+    loop {
+        tokio::time::sleep(common::db::ACCOUNT_POLL).await;
+        let read = common::db::changed_users(&state.pool, since);
+        match tokio::time::timeout(Duration::from_secs(10), read).await {
+            Ok(Ok((users, now))) => {
+                since = now - common::db::ACCOUNT_POLL_OVERLAP;
+                if !users.is_empty() {
+                    state.social.accounts_changed(&users, chrono::Utc::now());
+                }
+            }
+            Ok(Err(e)) => tracing::warn!("reading changed accounts failed: {e}"),
+            Err(_) => tracing::warn!("reading changed accounts timed out"),
+        }
+    }
+}
+
 pub async fn room_watcher(state: AppState) {
     let mut failing = false;
     loop {
@@ -604,6 +657,61 @@ mod tests {
         serde_json::from_str(&rx.try_recv().expect("an event")).unwrap()
     }
 
+    fn account(m: &Member, name: &str, banned: bool) -> common::db::MmUser {
+        common::db::MmUser {
+            uid: m.uid.parse().unwrap(),
+            display_name: name.into(),
+            connect_code: Some(m.connect_code.clone()),
+            play_key_version: 1,
+            banned_until: banned.then(|| chrono::Utc::now() + chrono::Duration::days(1)),
+            email_verified: true,
+            rating: 0.0,
+            ranked_sets: 0,
+            chat_muted: false,
+        }
+    }
+
+    /// A rename is listed to the others and tells the renamed launcher to read its account again;
+    /// a ban ends the banned launcher's stream and takes it off the list.
+    #[test]
+    fn renames_and_bans_reach_the_launchers() {
+        let hub = SocialHub::new(true);
+        let now = Instant::now();
+        let (a, b) = (member(1), member(2));
+        let (_, mut ra) = hub.connect(a.clone(), now).unwrap();
+        let (_, mut rb) = hub.connect(b.clone(), now).unwrap();
+        while ra.try_recv().is_ok() {}
+        while rb.try_recv().is_ok() {}
+        hub.accounts_changed(&[account(&b, "Bee", false), account(&a, &a.display_name, false)], chrono::Utc::now());
+        let ev = next(&mut ra);
+        assert_eq!((ev["type"].as_str(), ev["member"]["displayName"].as_str()), (Some("online"), Some("Bee")));
+        assert!(ra.try_recv().is_err(), "nothing for an unchanged account");
+        assert_eq!(next(&mut rb), json!({"type": "account"}));
+        // Seen again by the next look: nothing.
+        hub.accounts_changed(&[account(&b, "Bee", false)], chrono::Utc::now());
+        assert!(ra.try_recv().is_err() && rb.try_recv().is_err());
+        hub.accounts_changed(&[account(&b, "Bee", true)], chrono::Utc::now());
+        assert_eq!(next(&mut rb), json!({"type": "banned"}));
+        assert!(rb.try_recv().is_err(), "its stream is over");
+        assert_eq!(next(&mut ra), json!({"type": "offline", "uid": b.uid}));
+        assert_eq!(hub.online_count(), 1);
+    }
+
+    /// A muted sender's DM is answered as sent and goes nowhere.
+    #[test]
+    fn a_muted_senders_dms_go_nowhere() {
+        let hub = SocialHub::new(true);
+        let now = Instant::now();
+        let (a, b) = (member(1), member(2));
+        let (_, _ra) = hub.connect(a.clone(), now).unwrap();
+        let (_, mut rb) = hub.connect(b.clone(), now).unwrap();
+        while rb.try_recv().is_ok() {}
+        let sealed = vec![7u8; MIN_BOX_BYTES];
+        hub.dm(&a.uid, &b.uid, &sealed, true, now).unwrap();
+        assert!(rb.try_recv().is_err());
+        assert_eq!(hub.dm(&a.uid, &member(3).uid, &sealed, true, now), Err(SocialError::Offline));
+    }
+
     fn room(uid: &str, code: &str, joinable: bool) -> RoomMember {
         RoomMember {
             uid: uid.into(),
@@ -631,19 +739,19 @@ mod tests {
         assert_eq!((ev["type"].as_str(), ev["member"]["kx"].as_str()), (Some("online"), Some(b.kx.as_str())));
 
         let sealed = vec![7u8; MIN_BOX_BYTES];
-        hub.dm(&a.uid, &b.uid, &sealed, now).unwrap();
+        hub.dm(&a.uid, &b.uid, &sealed, false, now).unwrap();
         let ev = next(&mut rb);
         assert_eq!(ev["type"], "dm");
         assert_eq!(ev["from"], a.uid.as_str());
         assert_eq!(ev["kx"], a.kx.as_str());
         assert_eq!(ev["box"], "07".repeat(MIN_BOX_BYTES));
-        assert_eq!(hub.dm(&a.uid, &a.uid, &sealed, now), Err(SocialError::ToSelf));
-        assert_eq!(hub.dm(&a.uid, &member(3).uid, &sealed, now), Err(SocialError::Offline));
-        assert_eq!(hub.dm(&member(3).uid, &a.uid, &sealed, now), Err(SocialError::NotConnected));
+        assert_eq!(hub.dm(&a.uid, &a.uid, &sealed, false, now), Err(SocialError::ToSelf));
+        assert_eq!(hub.dm(&a.uid, &member(3).uid, &sealed, false, now), Err(SocialError::Offline));
+        assert_eq!(hub.dm(&member(3).uid, &a.uid, &sealed, false, now), Err(SocialError::NotConnected));
         for _ in 0..4 {
-            hub.dm(&a.uid, &b.uid, &sealed, now).unwrap();
+            hub.dm(&a.uid, &b.uid, &sealed, false, now).unwrap();
         }
-        assert!(matches!(hub.dm(&a.uid, &b.uid, &sealed, now), Err(SocialError::TooFast(_))));
+        assert!(matches!(hub.dm(&a.uid, &b.uid, &sealed, false, now), Err(SocialError::TooFast(_))));
 
         // B logs in elsewhere: the old stream gets `replaced` and ends; A sees B's new key only.
         let mut b2 = b.clone();
@@ -756,7 +864,7 @@ mod tests {
         let sealed = vec![1u8; MIN_BOX_BYTES];
         // A's queue holds `welcome`, `online` and then fills up.
         let mut sent = 0;
-        while hub.dm(&b.uid, &a.uid, &sealed, now).is_ok() {
+        while hub.dm(&b.uid, &a.uid, &sealed, false, now).is_ok() {
             sent += 1;
             assert!(sent <= QUEUE);
         }

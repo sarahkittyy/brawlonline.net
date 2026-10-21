@@ -393,3 +393,38 @@ async fn hello_needs_a_current_game_and_a_valid_login() {
     a.close();
     stack.shutdown().await;
 }
+
+/// `pp-admin user rename` and `user ban` write only the database: mm reads the changed accounts
+/// every few seconds, so a room shows the new name, and a banned player is told, disconnected and
+/// out of the room, without anyone reconnecting.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn admin_renames_and_bans_reach_a_room_at_once() {
+    let stack = Stack::start(StackOptions::default()).await.unwrap();
+    let (_, alice) = stack.create_player("alice@example.test", "alice", "alic").await;
+    let (_, bob) = stack.create_player("bob@example.test", "bob", "bo").await;
+    let mut a = online(&stack, &alice);
+    let mut b = online(&stack, &bob);
+    let code = create(&mut a);
+    join(&mut b, &code);
+    room_state_where(&mut a, |s| s["slots"][1]["player"].is_object());
+    let poll = common::db::ACCOUNT_POLL + Duration::from_secs(5);
+
+    accounts::store::rename(&stack.pool, bob.uid.parse().unwrap(), "Bee").await.unwrap();
+    let s = a
+        .wait_for(poll, |m| {
+            m["type"] == "room-state"
+                && m["slots"].as_array().is_some_and(|sl| sl.iter().any(|x| x["player"]["displayName"] == "Bee"))
+        })
+        .expect("the new name in the room");
+    assert_eq!(s["code"], code.as_str());
+
+    let forever = accounts::store::permanent_ban();
+    accounts::store::set_ban(&stack.pool, bob.uid.parse().unwrap(), Some(forever), Some("test")).await.unwrap();
+    let e = b.wait_for(poll, |m| m["type"] == "error").expect("the ban's error");
+    assert_eq!(e["error"], msg::BANNED);
+    room_state_where(&mut a, |s| {
+        s["slots"]
+            .as_array()
+            .is_some_and(|sl| sl.iter().all(|x| x["player"]["connectCode"] != bob.connect_code.as_str()))
+    });
+}

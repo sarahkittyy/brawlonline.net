@@ -62,6 +62,8 @@ export const SocialRoot = React.memo(function SocialRoot() {
         }
       } else if (event.type === "replaced") {
         showWarning(Messages.replaced());
+      } else if (event.type === "banned") {
+        showWarning(Messages.banned());
       }
     });
   }, [handOff, showInfo, showWarning]);

@@ -37,6 +37,7 @@ export const SocialMessages = {
   acceptedDirect: (name: string) => `${name} accepted. Your game is going to Direct 1v1.`,
   declined: (name: string) => `${name} declined your invite.`,
   replaced: () => "You're signed in on another launcher, so chat moved there.",
+  banned: () => "This account is banned.",
   // Hand-off to the game (as a room click, docs/rooms-protocol.md §5).
   goingToRoom: () => "Your game is going to the room.",
   creatingRoom: () => "Your game is creating a room.",

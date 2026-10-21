@@ -932,8 +932,9 @@ impl RoomBook {
                 if !set.on() {
                     // Another player after this set: the next one starts from 0-0 (decision B).
                     room.set = None;
-                } else if reason == Some(msg::REMOVED) {
-                    // The host closed their slot: their side forfeits the set (decision A).
+                } else if reason == Some(msg::REMOVED) || reason == Some(msg::BANNED) {
+                    // The host closed their slot, or the account was banned: their side forfeits
+                    // the set (decision A) instead of the set waiting for them.
                     set.forfeit(side);
                     tracing::info!(%code, side, "room set forfeited");
                 } else if set.left(m.info.uid) {
@@ -1708,6 +1709,28 @@ impl RoomBook {
     /// Sends every member the state again (after a ticket matched, the engine calls this).
     pub fn announce(&self, code: &str, out: &mut Vec<Output>) {
         self.broadcast(code, out);
+    }
+
+    /// An account's display name changed (`pp-admin user rename`): its room shows the new one.
+    pub fn rename(&mut self, uid: Uuid, name: &str, out: &mut Vec<Output>) {
+        let mut renamed = Vec::new();
+        for room in self.rooms.values_mut() {
+            for m in room.slots.iter_mut().flatten().filter(|m| m.info.uid == uid && m.info.display_name != name) {
+                m.info.display_name = name.to_string();
+                renamed.push(room.code.clone());
+            }
+        }
+        for code in renamed {
+            self.broadcast(&code, out);
+        }
+    }
+
+    /// The account on this online connection was banned: it leaves its room as a removed player
+    /// does (its side forfeits a set that is on) rather than as a dropped connection (waited for).
+    pub fn banned(&mut self, now: Instant, conn: ConnId, out: &mut Vec<Output>) {
+        if let Some(code) = self.member_of.get(&conn).cloned() {
+            self.leave(now, &code, conn, Some(msg::BANNED), false, out);
+        }
     }
 
     /// An online connection or a ticket connection went away.
@@ -2539,6 +2562,27 @@ mod tests {
         let mut out = vec![];
         t.book.announce(code, &mut out);
         done.matched[0].1.set.clone().expect("the set ticket")
+    }
+
+    /// A banned player (`pp-admin user ban`) leaves like a removed one: their side forfeits the set
+    /// that is on, instead of the set pausing for them with their slot held.
+    #[test]
+    fn a_banned_player_forfeits_the_set() {
+        let mut t = T::new();
+        let code = create(&mut t, 1);
+        join(&mut t, 2, &code);
+        let mut r =
+            Ruleset { name: "Weekly".into(), version: 3, best_of: 3, strikes: vec![1, 2, 1], ..Default::default() };
+        r.normalize();
+        t.book.apply_ruleset(&code, r, Some("BCDFGH".into()), &mut vec![]).unwrap();
+        play(&mut t, &code, 101);
+        t.req(1, RoomRequest::Back { pickers: None });
+        let mut out = vec![];
+        t.book.banned(t.now, 2, &mut out);
+        assert!(msgs(&out, 2).is_empty(), "the ban's own error tells them");
+        let s = last_state(&out, 1);
+        assert_eq!((s["set"]["finished"].as_bool(), s["set"]["winner"].as_u64()), (Some(true), Some(0)), "{s}");
+        assert!(s["slots"][1]["player"].is_null());
     }
 
     #[test]

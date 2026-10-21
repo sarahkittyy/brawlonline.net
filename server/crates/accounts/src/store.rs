@@ -21,6 +21,8 @@ pub struct UserRow {
     pub banned_until: Option<DateTime<Utc>>,
     pub ban_reason: Option<String>,
     pub created_at: DateTime<Utc>,
+    /// Chat shadowban (`pp-admin mute`): its chat messages and DMs go nowhere, unknown to it.
+    pub chat_muted_at: Option<DateTime<Utc>>,
 }
 
 impl UserRow {
@@ -33,7 +35,7 @@ impl UserRow {
 }
 
 const USER_COLS: &str = "uid, email, email_verified_at, pw_hash, display_name, connect_code, \
-                         play_key_version, rules_version, role, banned_until, ban_reason, created_at";
+                         play_key_version, rules_version, role, banned_until, ban_reason, created_at,                          chat_muted_at";
 
 /// "Banned forever" is stored as a far-future timestamp.
 pub fn permanent_ban() -> DateTime<Utc> {
@@ -396,6 +398,20 @@ pub async fn set_ban(pool: &PgPool, uid: Uuid, until: Option<DateTime<Utc>>, rea
             .await?;
     }
     tx.commit().await
+}
+
+/// Mutes (a shadowban, `pp-admin mute`) or unmutes the account's chat. mm and the social hub see
+/// it with their next look at the changed accounts (`common::db::changed_users`).
+pub async fn set_muted(pool: &PgPool, uid: Uuid, muted: bool) -> sqlx::Result<()> {
+    sqlx::query(
+        "UPDATE users SET chat_muted_at = CASE WHEN $2 THEN COALESCE(chat_muted_at, now()) END, updated_at = now()
+          WHERE uid = $1",
+    )
+    .bind(uid)
+    .bind(muted)
+    .execute(pool)
+    .await
+    .map(|_| ())
 }
 
 pub async fn rotate_play_key(pool: &PgPool, uid: Uuid) -> sqlx::Result<()> {

@@ -452,6 +452,20 @@ impl ModRoomBook {
         self.leave(conn, out);
     }
 
+    /// An account's display name changed (`pp-admin user rename`): its room shows the new one.
+    pub fn rename(&mut self, uid: Uuid, name: &str, out: &mut Vec<Output>) {
+        let mut renamed = Vec::new();
+        for room in self.rooms.values_mut() {
+            for m in room.slots.iter_mut().flatten().filter(|m| m.info.uid == uid && m.info.display_name != name) {
+                m.info.display_name = name.to_string();
+                renamed.push(room.code.clone());
+            }
+        }
+        for code in renamed {
+            self.broadcast(&code, out);
+        }
+    }
+
     /// The rooms whose members changed since the last call (each once), for their chat groups.
     pub fn take_changed(&mut self) -> Vec<(String, u64)> {
         let mut changed = std::mem::take(&mut self.changed);

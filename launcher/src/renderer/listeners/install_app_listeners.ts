@@ -1,4 +1,5 @@
 import type { Progress, ReplayService } from "@replays/types";
+import log from "electron-log";
 import throttle from "lodash/throttle";
 
 import { getReplayPresenter } from "@/lib/hooks/use_replays";
@@ -62,6 +63,15 @@ export function installAppListeners(services: Services) {
   installReplayListeners({ replayService, authService });
   installSettingsChangeListeners({ replayService, authService });
   installSocialListeners();
+
+  // The server changed this account: an admin rename (the header, the account list and the
+  // user.json the game reads all take the new name) or a ban (its session is gone, so reading the
+  // account logs it out and the login page shows why).
+  window.electron.social.onEvent((event) => {
+    if ((event.type === "account" || event.type === "banned") && authService.getCurrentUser()) {
+      authService.refreshUser().catch((err) => log.warn("Could not read the account again:", err));
+    }
+  });
 }
 
 export function installReplayListeners({

@@ -34,6 +34,8 @@ The answer is server-sent events: one JSON object per `data:` line, a `: ping` c
 | `invite-answer` | `by`, `kind`, `accept`, `connectCode` (the invitee's) |
 | `room` | `room`: the receiver's room changed (joined, left, slots, status) or null |
 | `replaced` | another launcher took over the account |
+| `account` | an admin renamed the account (`pp-admin user rename`): read `/v1/me` again; the others got its `online` again with the new name |
+| `banned` | the account was banned (`pp-admin user ban`): the stream ends and its session is gone; the others get its `offline` |
 
 A member is `{uid, displayName, connectCode, idKey, kx, kxSig}`. A room is `{code, players, openSlots, mode, status, joinable}` (`status` `waiting`, `starting` or `in-game`; `joinable`: an open slot is empty).
 

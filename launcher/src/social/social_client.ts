@@ -441,6 +441,12 @@ export class SocialClient {
       case "replaced":
         this.emit({ type: "replaced" });
         throw new StreamEnd(true, "You're signed in on another launcher.");
+      case "account":
+        this.emit({ type: "account" });
+        return;
+      case "banned":
+        this.emit({ type: "banned" });
+        throw new StreamEnd(true, "This account is banned.");
     }
   }
 

@@ -268,6 +268,9 @@ pub enum Input {
         conn: ConnId,
         result: Result<Vec<common::rooms::RulesetEntry>, String>,
     },
+    /// Accounts whose row changed in the database (`common::db::changed_users`): a ban ends
+    /// everything the account has on mm, a rename and a mute apply to its connections at once.
+    AccountsChanged(Vec<MmUser>),
     Tick,
 }
 
@@ -659,6 +662,11 @@ impl Engine {
                 }
             }
             Input::UserFetched { conn, seq, result } => self.on_user(now, wall, conn, seq, result, &mut out),
+            Input::AccountsChanged(users) => {
+                for u in users {
+                    self.on_account_changed(now, wall, u, &mut out);
+                }
+            }
             Input::RulesetFetched(f, result) => self.rooms.ruleset_fetched(f, result, &mut out),
             Input::RulesetListFetched { conn, result } => match result {
                 Ok(rulesets) => Self::send(
@@ -809,6 +817,57 @@ impl Engine {
         tracing::info!(conn, "online connection ended: {msg}");
         Self::send(out, conn, &serde_json::json!({"type": common::rooms::ERROR, "error": clamp_error(msg.into())}));
         self.finish(out, conn);
+    }
+
+    /// An account changed in the database. Banned: its online connection is told
+    /// [`msg::BANNED`] and closed (its game leaves its room or match and stops trying to
+    /// reconnect), and a waiting ticket ends the same way, so it is out of every room, queue and
+    /// chat at once. Otherwise a new name reaches its room and chat group, and a mute its chat.
+    fn on_account_changed(&mut self, now: Instant, wall: DateTime<Utc>, user: MmUser, out: &mut Vec<Output>) {
+        let mine: Vec<(ConnId, bool)> = self
+            .conns
+            .iter()
+            .filter_map(|(id, c)| match &c.state {
+                State::Online(o) if o.user.uid == user.uid => Some((*id, true)),
+                State::Waiting(w) if w.user.uid == user.uid => Some((*id, false)),
+                _ => None,
+            })
+            .collect();
+        if user.is_banned(wall) {
+            if !mine.is_empty() {
+                tracing::info!(uid = %user.uid, conns = mine.len(), "account banned: its connections end");
+            }
+            for (conn, online) in mine {
+                if online {
+                    self.rooms.banned(now, conn, out);
+                    self.fail_online(out, conn, msg::BANNED);
+                } else {
+                    self.fail_ticket(out, conn, msg::BANNED, None);
+                }
+            }
+            self.fail_room_tickets(out);
+            return;
+        }
+        self.chat.set_muted(user.uid, user.chat_muted);
+        let mut renamed = false;
+        for (conn, _) in mine {
+            let Some(c) = self.conns.get_mut(&conn) else { continue };
+            let held = match &mut c.state {
+                State::Online(o) => &mut o.user,
+                State::Waiting(w) => &mut w.user,
+                _ => continue,
+            };
+            renamed |= held.display_name != user.display_name;
+            // The rest (play key version, rating) is read again with the next ticket.
+            held.display_name = user.display_name.clone();
+            held.chat_muted = user.chat_muted;
+        }
+        if renamed {
+            tracing::info!(uid = %user.uid, "account renamed: its room and chat show the new name");
+            self.rooms.rename(user.uid, &user.display_name, out);
+            self.mod_rooms.rename(user.uid, &user.display_name, out);
+            self.chat.rename(user.uid, &user.display_name, out);
+        }
     }
 
     fn unindex(&mut self, conn: ConnId) {
@@ -1264,6 +1323,7 @@ impl Engine {
             out.push(Output::RecordChatKey { uid: user.uid, key });
         }
         let uid = user.uid;
+        self.chat.set_muted(uid, user.chat_muted);
         if let Some(c) = self.conns.get_mut(&conn) {
             c.state = State::Online(Online { user, code, client: p.client, chat_key: p.chat_key });
         }
@@ -1693,6 +1753,7 @@ mod tests {
             email_verified: true,
             rating: common::ranked::DEFAULT_RATING,
             ranked_sets: 0,
+            chat_muted: false,
         }
     }
 
@@ -2876,6 +2937,66 @@ mod tests {
         let out = h.raw(3, b"{");
         assert_eq!(sent(&out, 3)[0]["type"], "room-error");
         assert!(!disconnected(&out, 3));
+    }
+
+    /// `pp-admin user ban` while the player is in a room and another of their games searches:
+    /// both connections are told and closed, the room goes on without them, and the next hello
+    /// is refused.
+    #[test]
+    fn a_ban_ends_everything_the_account_has() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b) = (user("AA#1", "a"), user("BB#1", "b"));
+        h.add(&a);
+        h.add(&b);
+        for (conn, u) in [(1, &a), (2, &b)] {
+            h.connect(conn, conn as u16);
+            h.hello(conn, u, "3.4.0");
+        }
+        let out = h.room(1, json!({"type": "room-create"}));
+        let code = state_of(&out, 1)["code"].as_str().unwrap().to_string();
+        h.room(2, json!({"type": "room-join", "code": code}));
+        h.connect(3, 3);
+        h.unranked(3, &b);
+        assert_eq!(h.e.waiting_count(), 1);
+        let mut banned = b.clone();
+        banned.banned_until = Some(Utc::now() + chrono::Duration::days(1));
+        h.add(&banned);
+        let out = h.input(Input::AccountsChanged(vec![banned.clone()]));
+        assert_eq!(sent(&out, 2), vec![json!({"type": "error", "error": msg::BANNED})]);
+        assert!(disconnected(&out, 2) && disconnected(&out, 3));
+        assert_eq!(sent(&out, 3)[0]["error"], msg::BANNED);
+        assert_eq!(h.e.waiting_count(), 0);
+        assert_eq!(h.e.online_count(), 1);
+        let s = state_of(&out, 1);
+        assert!(s["slots"].as_array().unwrap().iter().all(|sl| sl["player"]["connectCode"] != "BB#1"), "{s}");
+        // Seen again by the next look: nothing more happens.
+        assert!(h.input(Input::AccountsChanged(vec![banned.clone()])).is_empty());
+        h.connect(4, 4);
+        let out = h.hello(4, &banned, "3.4.0");
+        assert_eq!(sent(&out, 4)[0]["error"], msg::BANNED);
+    }
+
+    /// A rename reaches the player's room at once; the same row seen again sends nothing.
+    #[test]
+    fn a_rename_reaches_the_room() {
+        let mut h = Harness::new(EngineConfig::default());
+        let (a, b) = (user("AA#1", "a"), user("BB#1", "b"));
+        h.add(&a);
+        h.add(&b);
+        for (conn, u) in [(1, &a), (2, &b)] {
+            h.connect(conn, conn as u16);
+            h.hello(conn, u, "3.4.0");
+        }
+        let out = h.room(1, json!({"type": "room-create"}));
+        let code = state_of(&out, 1)["code"].as_str().unwrap().to_string();
+        h.room(2, json!({"type": "room-join", "code": code}));
+        let mut renamed = b.clone();
+        renamed.display_name = "Bee".into();
+        let out = h.input(Input::AccountsChanged(vec![renamed.clone(), a.clone()]));
+        assert!(!disconnected(&out, 2));
+        let s = state_of(&out, 1);
+        assert!(s["slots"].as_array().unwrap().iter().any(|sl| sl["player"]["displayName"] == "Bee"), "{s}");
+        assert!(h.input(Input::AccountsChanged(vec![renamed])).is_empty());
     }
 
     #[test]

@@ -20,7 +20,7 @@
 //! lengths and hex, and the rate limits. Signatures are the clients' job (and the report task's,
 //! [`crate::server`]).
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::time::{Duration, Instant};
 
 use common::chat::{
@@ -118,6 +118,8 @@ pub struct ChatBook {
     /// Who left which group since the engine last asked ([`ChatBook::take_left`]): spectating
     /// ends a stream whose players left their match or room (`live.rs`).
     left: Vec<(GroupKind, String, Uuid)>,
+    /// Shadowbanned accounts (`pp-admin mute`): their `chat-send` is accepted and goes nowhere.
+    muted: HashSet<Uuid>,
 }
 
 fn send(out: &mut Vec<Output>, conn: ConnId, m: &impl serde::Serialize) {
@@ -140,6 +142,7 @@ impl ChatBook {
             report_limiter: RateLimiter::new(&cfg.report_windows),
             key_limiter: RateLimiter::new(&cfg.key_windows),
             left: Vec::new(),
+            muted: HashSet::new(),
         }
     }
 
@@ -254,6 +257,31 @@ impl ChatBook {
         self.detach(uid, notify, out, &mut dirty);
         self.settle(dirty, out);
         true
+    }
+
+    /// Mutes or unmutes an account's chat (`pp-admin mute`, a shadowban): a muted sender's messages
+    /// are checked and counted as usual, then dropped, so its game shows them as sent (it shows
+    /// its own messages itself; mm never echoes them) and nobody receives them.
+    pub fn set_muted(&mut self, uid: Uuid, muted: bool) {
+        if muted {
+            self.muted.insert(uid);
+        } else {
+            self.muted.remove(&uid);
+        }
+    }
+
+    /// An account's display name changed (`pp-admin user rename`): its group shows the new one.
+    pub fn rename(&mut self, uid: Uuid, name: &str, out: &mut Vec<Output>) {
+        let Some(id) = self.group_of.get(&uid).cloned() else { return };
+        let Some(g) = self.groups.get_mut(&id) else { return };
+        let mut changed = false;
+        for m in g.members.iter_mut().filter(|m| m.who.uid == uid && m.who.display_name != name) {
+            m.who.display_name = name.to_string();
+            changed = true;
+        }
+        if changed {
+            self.push(&id, out);
+        }
     }
 
     /// An online connection went away (closed, dropped or replaced): it leaves its group, nobody
@@ -394,6 +422,10 @@ impl ChatBook {
                 }
                 if self.send_limiter.check(&uid, now).is_err() {
                     return Err(msg::CHAT_TOO_FAST);
+                }
+                if self.muted.contains(&uid) {
+                    tracing::debug!(conn, group = %group, "muted sender: message dropped");
+                    return Ok(());
                 }
                 for (c, sealed) in to {
                     send(
@@ -620,6 +652,40 @@ mod tests {
         // Back and forth.
         let out = say(&mut book, now, 2, id, &[1]);
         assert_eq!(msgs(&out, 1)[0]["from"], cand(2).uid.to_string());
+    }
+
+    /// A muted sender (`pp-admin mute`) is told nothing and nobody gets its messages; it still
+    /// gets everyone else's, and unmuting lets its messages through again.
+    #[test]
+    fn muted_senders_are_shadowbanned() {
+        let mut book = ChatBook::new(ChatConfig::default());
+        let now = Instant::now();
+        let id = "room-KFQB-1";
+        book.sync_room(id, &[cand(1), cand(2)], &mut vec![]);
+        key(&mut book, now, 1, id);
+        key(&mut book, now, 2, id);
+        book.set_muted(cand(1).uid, true);
+        let out = say(&mut book, now, 1, id, &[2]);
+        assert!(out.is_empty(), "no error, no relay: {out:?}");
+        // Its own checks still answer as for anyone (it cannot tell it is muted by them either).
+        assert_eq!(errors(&say(&mut book, now, 1, id, &[9]), 1), [msg::CHAT_NOT_A_MEMBER]);
+        let out = say(&mut book, now, 2, id, &[1]);
+        assert_eq!(msgs(&out, 1)[0]["from"], cand(2).uid.to_string());
+        book.set_muted(cand(1).uid, false);
+        assert_eq!(msgs(&say(&mut book, now, 1, id, &[2]), 2).len(), 1);
+    }
+
+    #[test]
+    fn renames_reach_the_group() {
+        let mut book = ChatBook::new(ChatConfig::default());
+        let id = "room-KFQB-1";
+        book.sync_room(id, &[cand(1), cand(2)], &mut vec![]);
+        let mut out = vec![];
+        book.rename(cand(1).uid, "Renamed", &mut out);
+        assert_eq!(last_group(&out, 2)["members"][0]["displayName"], "Renamed");
+        let mut out = vec![];
+        book.rename(cand(1).uid, "Renamed", &mut out);
+        assert!(out.is_empty(), "the same name again pushes nothing");
     }
 
     #[test]

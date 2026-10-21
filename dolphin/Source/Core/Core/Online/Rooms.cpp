@@ -34,6 +34,7 @@
 #include "Core/Online/User.h"
 #include "Core/Rollback/GameplaySession.h"
 #include "Core/Rollback/MachineSession.h"
+#include "VideoCommon/OnScreenDisplay.h"
 
 #ifdef _WIN32
 #include <windows.h>
@@ -607,6 +608,16 @@ void Handle(const Message& m, Actions* a, Clock::time_point now)
     {
       s.conn_hold = true;
       ModsRoom::OnSignedInElsewhere();
+    }
+    else if (m.error == "This account is banned.")
+    {
+      // mm's BANNED (`pp-admin user ban`): mm already took this account out of its room, queue
+      // and chat. The game closes, as when its window closes (a Ranked set is abandoned, the
+      // match's session and a mod room are left on the way), and the connection is not tried
+      // again: the play key is no longer valid, and the launcher logs the account out.
+      s.conn_hold = true;
+      OSD::AddMessage("This account is banned.", 10000, OSD::Color::RED);
+      Core::QueueHostJob([](Core::System& system) { Core::Stop(system); }, false);
     }
     SetError(m.error.empty() ? std::string(TEXT_LOST) : m.error);
     a->drop = true;
